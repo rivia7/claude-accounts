@@ -1,0 +1,2176 @@
+#!/usr/bin/env bash
+# cca — Claude Code 多账号启动器（macOS + 旁路由 OpenClash 按端口分流）
+#
+#   cca                    方向键选择账号（光标默认在上次用的账号上，菜单里也能新增）后启动 Claude Code
+#   cca @<账号> [参数]      直接用该账号启动（账号可写别名、邮箱、编号或唯一前缀），参数原样交给 claude
+#   cca help               全部命令
+#
+# 账号配置表 ~/.cca/accounts.json：{"别名(邮箱)": "代理节点", ...}，别名可省略；节点只能从 config.json 的 nodes 里选。
+#
+# 原理
+#   · 每个账号一个 CLAUDE_CONFIG_DIR（官方文档的多账号做法），目录按邮箱命名，改别名不影响登录。登录走
+#     官方流程，凭证由 Claude Code 自己存进钥匙串；本脚本不读取、不保存、不转发任何 token。登录页预填
+#     账号表里的邮箱，并拒绝"槽位里登录的不是这个邮箱"的情况，避免一个账号走了另一个账号的出口。
+#   · 账号目录里除账号/进程状态外，全部用符号链接指向 ~/.claude（记忆、会话历史、设置、技能、插件、
+#     命令…）；~/.claude.json 里与账号无关的键（项目信任、MCP、偏好）在每次启动和退出时三方合并。
+#   · 每个账号对应旁路由 OpenClash 上的一个 mixed 入站端口（listener → 账号表里的节点）。Claude Code 走
+#     HTTPS_PROXY；网页版和登录页用带 --proxy-server 的独立 Chrome 实例。同一端口，同一出口。
+#   · 启动前经该端口取 claude.ai 看到的出口 IP，用 ip.net.coffee/claude 的数据检测纯净度和地区。
+#   · 路由器侧文件放在 /etc/cca（不属于 OpenClash 包）。OpenClash 覆写脚本里的一行钩子在每次生成
+#     配置时注入端口池；cron 每 2 分钟自检，升级/重装/恢复默认弄丢钩子时自动补回（不会自动重载）。
+#   · 自动更新：每天在后台查一次 GitHub Releases，只装用发布密钥签过名、版本号更新的脚本，下次启动生效。
+
+VERSION="2.2.0"
+UPDATE_REPO="https://github.com/rivia7/claude-accounts"
+# 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
+RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
+CCA_HOME="${CCA_HOME:-$HOME/.cca}"
+CFG="$CCA_HOME/config.json"
+TABLE="$CCA_HOME/accounts.json"
+RDIR='${CCA_ROOT:-}/etc/cca'   # 路由器上的目录，由远端 shell 展开
+
+# 输出一律用 UTF-8：当前 locale 不是 UTF-8（如 zh_CN.GBK、GB18030）时，Python 等会按 GBK 编码输出，
+# 在 UTF-8 终端里就是乱码。这里给本脚本及其子进程换成同语言的 UTF-8 locale。
+case "$(locale charmap 2>/dev/null)" in
+	UTF-8|utf8|UTF8) ;;
+	*)
+		_l="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+		for _l in "${_l%%.*}.UTF-8" en_US.UTF-8 C.UTF-8; do
+			if locale -a 2>/dev/null | grep -qx "$_l"; then export LC_ALL="$_l"; break; fi
+		done
+		unset _l ;;
+esac
+
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
+	C_B=$'\033[1m' C_D=$'\033[2m' C_R=$'\033[31m' C_G=$'\033[32m' C_Y=$'\033[33m' C_0=$'\033[0m'
+else
+	C_B= C_D= C_R= C_G= C_Y= C_0=
+fi
+say()  { printf '%s\n' "$*" >&2; }
+info() { printf '%s\n' "${C_G}•${C_0} $*" >&2; }
+warn() { printf '%s\n' "${C_Y}!${C_0} $*" >&2; }
+die()  { printf '%s\n' "${C_R}✗${C_0} $*" >&2; exit 1; }
+
+# 交互输入统一从 fd 3 读：默认是终端；CCA_TTY=文件 时按行读取预置答案（脚本化/测试用）
+TTY_OK=0
+if [ -n "${CCA_TTY:-}" ]; then
+	exec 3<"$CCA_TTY" && TTY_OK=1
+elif { exec 3</dev/tty; } 2>/dev/null; then
+	TTY_OK=1
+fi
+interactive() { [ "$TTY_OK" = 1 ] && { [ -t 0 ] || [ -n "${CCA_TTY:-}" ]; }; }
+need_tty() {   # 需要交互的命令：没有终端时（例如 Claude Code 里的 ! 前缀）直接说明，不要带着默认值乱跑
+	interactive && return 0
+	if [ -n "${CLAUDECODE:-}" ]; then
+		die "这个命令需要交互：请在单独的终端标签里直接运行 cca（Claude Code 里的 ! 前缀不能交互）"
+	fi
+	die "这个命令需要在终端里交互运行"
+}
+
+# x=$(ask "提示: " 默认值)；提示走 stderr，没有终端时返回默认值。
+# 真终端用 readline（read -e）：终端默认 -iutf8，普通 read 退格只删掉中文字符的一个字节，留下乱码
+ask() {
+	local v=""
+	if [ "$TTY_OK" = 1 ]; then
+		if [ -z "${CCA_TTY:-}" ] && [ -t 3 ]; then
+			IFS= read -e -r -p "$1" v <&3 || v=""
+		else
+			printf '%s' "$1" >&2
+			IFS= read -r v <&3 || v=""
+		fi
+	fi
+	[ -n "$v" ] || v="$2"
+	printf '%s' "$v"
+}
+confirm() {  # confirm "问题" [y|n]
+	local d="${2:-y}" hint="[Y/n]" a
+	[ "$d" = n ] && hint="[y/N]"
+	a=$(ask "$1 $hint " "$d")
+	case "$a" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+okay() { printf '%s\n' "${C_G}✓${C_0} $*" >&2; }
+
+# 能画方向键菜单的条件：有真终端（不是 CCA_TTY 预置答案）且终端支持光标控制
+fancy_ok() { [ "$TTY_OK" = 1 ] && [ -z "${CCA_TTY:-}" ] && [ -t 2 ] && [ "${TERM:-dumb}" != dumb ]; }
+term_cols() { tput cols 2>/dev/null || echo 80; }
+
+# 方向键菜单：arrow_menu 默认项(从 0 起) 选项...
+#   ↑↓（或 k/j）移动，回车确认，数字键直接选，q / Esc 退出；结果放在 MENU_PICK（-1 = 退出）
+arrow_menu() {
+	local cur="$1" n i key rest drawn=0
+	shift
+	local -a items=("$@")
+	n=${#items[@]}
+	MENU_PICK=-1
+	printf '\033[?25l' >&2
+	trap 'printf "\033[?25h" >&2; exit 130' INT TERM
+	while :; do
+		[ $drawn = 1 ] && printf '\033[%dA' "$n" >&2
+		drawn=1
+		for ((i = 0; i < n; i++)); do
+			if [ $i -eq "$cur" ]; then printf '\r\033[2K  %s❯ %s%s\n' "$C_G$C_B" "${items[i]}" "$C_0" >&2
+			else printf '\r\033[2K    %s\n' "${items[i]}" >&2; fi
+		done
+		key=""
+		IFS= read -rsn1 key <&3 || break
+		case "$key" in
+			$'\033')
+				rest=""
+				IFS= read -rsn2 -t 1 rest <&3
+				case "$rest" in
+					'[A'|'OA') cur=$(( (cur + n - 1) % n )) ;;
+					'[B'|'OB') cur=$(( (cur + 1) % n )) ;;
+					'') break ;;
+				esac ;;
+			'') MENU_PICK=$cur; break ;;
+			k|K) cur=$(( (cur + n - 1) % n )) ;;
+			j|J) cur=$(( (cur + 1) % n )) ;;
+			q|Q) break ;;
+			[1-9]) if [ "$key" -le "$n" ]; then cur=$((key - 1)); MENU_PICK=$cur; break; fi ;;
+		esac
+	done
+	printf '\033[%dA' "$n" >&2   # 收尾重画：选中项打勾，其余变暗
+	for ((i = 0; i < n; i++)); do
+		if [ $i -eq "$MENU_PICK" ]; then printf '\r\033[2K  %s✓ %s%s\n' "$C_G" "${items[i]}" "$C_0" >&2
+		else printf '\r\033[2K    %s%s%s\n' "$C_D" "${items[i]}" "$C_0" >&2; fi
+	done
+	printf '\033[?25h' >&2
+	trap - INT TERM
+}
+
+with_timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+self_path() {
+	local p="${BASH_SOURCE[0]}" d
+	while [ -L "$p" ]; do
+		d=$(cd -P "$(dirname "$p")" && pwd)
+		p=$(readlink "$p")
+		case "$p" in /*) ;; *) p="$d/$p" ;; esac
+	done
+	printf '%s/%s\n' "$(cd -P "$(dirname "$p")" && pwd)" "$(basename "$p")"
+}
+SELF=$(self_path)
+PYTHON="${CCA_PYTHON:-$(command -v python3 2>/dev/null)}"
+CLAUDE_BIN=$(command -v claude 2>/dev/null)
+
+# ---------------------------------------------------------------------------
+# Python 辅助：配置/账号表、共享链接、.claude.json 三方合并、出口检测解析
+# ---------------------------------------------------------------------------
+PY_SRC=$(cat <<'PY'
+import fcntl, filecmp, hashlib, json, os, re, shlex, shutil, sys, time, unicodedata
+
+HOME = os.path.expanduser('~')
+CCA_HOME = os.path.abspath(os.environ.get('CCA_HOME') or os.path.join(HOME, '.cca'))
+CFG = os.path.join(CCA_HOME, 'config.json')
+TABLE = os.path.join(CCA_HOME, 'accounts.json')
+MASTER = os.path.join(HOME, '.claude')
+MASTER_JSON = os.path.join(HOME, '.claude.json')
+KEY_RE = re.compile(r'^[^\s"\\]{1,100}$')
+EMAIL_RE = re.compile(r'^[^@\s"\\()（）]+@[^@\s"\\()（）]+\.[^@\s"\\()（）]+$')
+PAIR_RE = re.compile(r'^(.*?)[(（]([^()（）]*)[)）]$')
+ALIAS_BAD = re.compile(r'[\s"\\()（）@]')
+FIRST_PORT = 7901
+# 与 ip.net.coffee/claude 页面一致：这些地区直接判 0 分
+RESTRICTED = {'CN': '中国大陆', 'HK': '香港', 'MO': '澳门', 'RU': '俄罗斯', 'KP': '朝鲜', 'IR': '伊朗',
+              'SY': '叙利亚', 'CU': '古巴', 'BY': '白俄罗斯', 'VE': '委内瑞拉'}
+MISSING = object()
+
+# ~/.claude 下属于账号或进程的条目，不共享；其余条目一律链接到 ~/.claude
+PER_ACCOUNT = {
+    'backups', 'cache', 'daemon', 'debug', 'downloads', 'jobs', 'logs', 'sessions', 'state',
+    'statsig', 'telemetry', 'stats-cache.json', 'policy-limits.json', 'remote-settings.json',
+    '.last-cleanup', '.last-update-result.json', '.session_ingress_token',
+}
+# ~/.claude 里还没有也先建好、并在账号目录里链接的共享目录
+PRECREATE = ['projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'plans', 'file-history', 'ide']
+# ~/.claude.json 里与账号无关、跨账号同步的键；其余（oauthAccount、订阅、功能开关缓存等）留在各账号
+SHARED_KEYS = [
+    'projects', 'mcpServers', 'githubRepoPaths',
+    'hasCompletedOnboarding', 'lastOnboardingVersion', 'installMethod', 'autoUpdates',
+    'autoUpdatesProtectedForNative', 'theme', 'editorMode', 'verbose', 'preferredNotifChannel',
+    'autoCompactEnabled', 'autoConnectIde', 'autoInstallIdeExtension', 'diffTool',
+    'diffSidebarOpen', 'showSpinnerTree', 'fileCheckpointingEnabled', 'terminalProgressBarEnabled',
+    'respectGitignore', 'hasIdeOnboardingBeenShown', 'hasCompletedClaudeInChromeOnboarding',
+    'claudeInChromeDefaultEnabled', 'shiftEnterKeyBindingInstalled', 'optionAsMetaKeyInstalled',
+    'hasUsedBackslashReturn', 'lastReleaseNotesSeen', 'tipsHistory',
+    'officialMarketplaceAutoInstallAttempted', 'officialMarketplaceAutoInstalled',
+]
+
+
+def die(msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(1)
+
+
+def is_per_account(n):
+    return (n in PER_ACCOUNT or n.startswith('.cca') or n.startswith('.credentials')
+            or (n.startswith('.claude') and '.json' in n) or n.endswith('.lock') or n.endswith('.tmp'))
+
+
+def load_json(path, default):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+    except ValueError as e:
+        die('JSON 格式错误 %s：%s' % (path, e))
+
+
+def save_json(path, data, mode=None):
+    path = os.path.realpath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if mode is None:
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except FileNotFoundError:
+            mode = 0o600
+    tmp = '%s.cca-%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write('\n')
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+class Lock:
+    def __enter__(self):
+        os.makedirs(CCA_HOME, exist_ok=True)
+        self.f = open(os.path.join(CCA_HOME, 'sync.lock'), 'w')
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
+def sh(**kv):
+    for k, v in kv.items():
+        print('%s=%s' % (k, shlex.quote(str(v))))
+
+
+# --- 配置与账号表 -----------------------------------------------------------
+def cfg_load():
+    c = load_json(CFG, None) or {}
+    c.setdefault('version', 2)
+    c.setdefault('router', {})
+    c.setdefault('proxy_host', '')
+    c.setdefault('no_proxy', 'localhost,127.0.0.1,::1,.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16')
+    c.setdefault('nodes', [])          # 账号可选的出口节点，cca router setup 时从路由器的节点里选
+    c.setdefault('min_trust', 50)
+    c.setdefault('update', 'auto')     # auto：自动安装新版本；notify：只提示；off：不检查
+    c.setdefault('ports', {})
+    c.setdefault('last', '')
+    c.setdefault('synced', '')
+    return c
+
+
+def table_load():
+    t = load_json(TABLE, {})
+    if not isinstance(t, dict):
+        die('%s 应该是 {"别名(邮箱)": "节点"} 形式的 JSON 对象' % TABLE)
+    return t
+
+
+def parse_key(key):
+    """账号表的键 → (别名, 邮箱)。键可以是「别名(邮箱)」、只写邮箱，或只写别名（登录页不预填邮箱）"""
+    m = PAIR_RE.match(key)
+    if m and EMAIL_RE.match(m.group(2)):
+        return m.group(1), m.group(2)
+    return ('', key) if EMAIL_RE.match(key) else (key, '')
+
+
+def name_of(key):
+    """菜单和提示里的短名字：有别名用别名，否则用邮箱"""
+    a, e = parse_key(key)
+    return a or e
+
+
+def label_of(key):
+    a, e = parse_key(key)
+    return '%s（%s）' % (a, e) if a and e else a or e
+
+
+def acct_id(key):
+    k = parse_key(key)[1] or key   # 有邮箱就按邮箱认账号：改别名不换账号目录，登录和浏览器资料都还在
+    s = re.sub(r'[^a-z0-9]+', '-', k.lower()).strip('-')[:20].strip('-') or 'acct'
+    return '%s-%s' % (s, hashlib.sha1(k.encode('utf-8')).hexdigest()[:6])
+
+
+def adir(key):
+    return os.path.join(CCA_HOME, 'accounts', acct_id(key))
+
+
+def cdir(key):
+    return os.path.join(adir(key), 'claude')
+
+
+def reconcile(c, t):
+    """校验账号表；给新账号分配固定端口，回收已删除账号的端口。返回错误列表。
+    只改了别名的账号按邮箱认出来：端口和"上次使用"跟着走。"""
+    errs, emails, aliases = [], {}, {}
+    if t and not c['nodes']:
+        errs.append('config.json 里还没有可选节点（nodes）：运行 cca router setup 从路由器的节点里选')
+    for k, node in t.items():
+        if not KEY_RE.match(k):
+            errs.append('「%s」：不能含空格、引号或反斜杠，最长 100 个字符' % k)
+        a, e = parse_key(k)
+        if not e and re.search('[()（）]', k):
+            errs.append('「%s」：括号里应该是登录邮箱，例如 主号(name@example.com)' % k)
+        if e:
+            if e.lower() in emails:
+                errs.append('邮箱 %s 同时出现在「%s」和「%s」里' % (e, emails[e.lower()], k))
+            emails.setdefault(e.lower(), k)
+        if a:
+            if a in aliases:
+                errs.append('别名「%s」同时用在「%s」和「%s」上' % (a, aliases[a], k))
+            aliases.setdefault(a, k)
+        if not isinstance(node, str) or not node:
+            errs.append('%s：节点必须是非空字符串' % k)
+        elif c['nodes'] and node not in c['nodes']:
+            errs.append('%s：节点「%s」不在可选列表（%s）' % (k, node, '、'.join(c['nodes'])))
+    old = c['ports']
+    by_id = {acct_id(k): p for k, p in old.items()}
+    ports, used = {}, set()
+    for k in t:
+        p = old.get(k) or by_id.get(acct_id(k))
+        if isinstance(p, int) and p not in used:
+            ports[k] = p
+            used.add(p)
+    for k in t:
+        if k not in ports:
+            p = FIRST_PORT
+            while p in used:
+                p += 1
+            ports[k] = p
+            used.add(p)
+    c['ports'] = ports
+    if c.get('last') not in t:
+        lid = acct_id(c['last']) if c.get('last') else ''
+        c['last'] = next((k for k in t if acct_id(k) == lid), '')
+    return errs
+
+
+def ctx():
+    c, t = cfg_load(), table_load()
+    errs = reconcile(c, t)
+    if c != load_json(CFG, None):
+        cfg_save(c)
+    return c, t, errs
+
+
+def cfg_save(c):
+    save_json(CFG, c, 0o600)
+
+
+def email_of(key):
+    j = load_json(os.path.join(cdir(key), '.claude.json'), {}) or {}
+    return (j.get('oauthAccount') or {}).get('emailAddress') or ''
+
+
+POOL_STEP = 8   # 路由器上的端口池按 8 个槽位一档；槽位够用时增删账号、换节点都不用重载 OpenClash
+
+
+def pool_size(c, t):
+    slots = [c['ports'][k] - FIRST_PORT + 1 for k in t]
+    return max(POOL_STEP, -(-max(slots) // POOL_STEP) * POOL_STEP) if slots else 0
+
+
+def slot_nodes(c, t):
+    """每个槽位应选中的节点：分给账号的用账号的节点，空槽位用 REJECT"""
+    m = {c['ports'][k] - FIRST_PORT + 1: n for k, n in t.items()}
+    return [m.get(s, 'REJECT') for s in range(1, pool_size(c, t) + 1)]
+
+
+def char_w(ch):
+    return 2 if unicodedata.east_asian_width(ch) in 'WF' else 1
+
+
+def dw(s):
+    return sum(char_w(ch) for ch in s)
+
+
+def fit(s, w, pad=True):
+    """按终端显示宽度截断/补齐（中文、全角字符算 2 格）；超长时以 … 结尾"""
+    total = sum(char_w(ch) for ch in s)
+    if total <= w:
+        return s + (' ' * (w - total) if pad else '')
+    out, n = '', 0
+    for ch in s:
+        if n + char_w(ch) > w - 1:
+            break
+        out += ch
+        n += char_w(ch)
+    return out + '…' + (' ' * (w - n - 1) if pad else '')
+
+
+def short_state(key):
+    e = email_of(key)
+    if not e:
+        return '未登录'
+    want = parse_key(key)[1]
+    return '邮箱不符' if want and e.lower() != want.lower() else '已登录'
+
+
+def cmd_rows(cols='80'):
+    """菜单里每个账号一行：别名、邮箱、登录状态、出口节点，按显示宽度对齐（没有别名的账号别名列留空）"""
+    c, t, _ = ctx()
+    if not t:
+        return
+    width = max(int(cols) if str(cols).isdigit() else 80, 40) - 6
+    parts = {k: parse_key(k) for k in t}
+    aw = min(max(dw(a) for a, _ in parts.values()), 16)
+    ew = min(max(dw(e) for _, e in parts.values()), 32)
+    for k, node in t.items():
+        a, e = parts[k]
+        cells = ([fit(a, aw)] if aw else []) + ([fit(e, ew)] if ew else []) + [fit(short_state(k), 8), node]
+        line = '   '.join(cells)
+        if k == c.get('last'):
+            line += '   · 上次使用'
+        print(fit(line, width, pad=False))
+
+
+def cmd_node_rows(onrouter='', cols='80'):
+    """选节点菜单：每个可选节点一行，注明已被哪些账号使用、路由器上是否存在"""
+    c, t, _ = ctx()
+    have = set(onrouter.split('\n')) if onrouter else None
+    width = max(int(cols) if str(cols).isdigit() else 80, 40) - 6
+    nw = max([dw(n) for n in c['nodes']] + [8])
+    for n in c['nodes']:
+        notes = []
+        users = [name_of(k) for k, v in t.items() if v == n]
+        if users:
+            notes.append('已被 %s 使用' % '、'.join(users))
+        if have is not None and n not in have:
+            notes.append('路由器上没有这个节点')
+        print(fit('%s   %s' % (fit(n, nw), '；'.join(notes)), width, pad=False).rstrip())
+
+
+def cmd_node_default():
+    """默认选中第一个还没被任何账号用的节点"""
+    c, t, _ = ctx()
+    used = set(t.values())
+    print(next((i for i, n in enumerate(c['nodes']) if n not in used), 0))
+
+
+def router_accounts(c, t):
+    return {'base': FIRST_PORT - 1, 'slots': pool_size(c, t), 'nodes': c['nodes'],
+            'accounts': [{'slot': c['ports'][k] - FIRST_PORT + 1, 'name': acct_id(k), 'node': n} for k, n in t.items()]}
+
+
+# --- .claude.json 三方合并 --------------------------------------------------
+def eq(a, b):
+    if a is MISSING or b is MISSING:
+        return a is b
+    return a == b
+
+
+def merge3(base, ours, theirs):
+    """ours=账号副本，theirs=~/.claude.json。只有一边改过取改过的一边；两边都改过的字典逐键合并，
+    其余冲突以 ~/.claude.json 为准。"""
+    if eq(ours, theirs):
+        return ours
+    if eq(ours, base):
+        return theirs
+    if eq(theirs, base):
+        return ours
+    if isinstance(ours, dict) and isinstance(theirs, dict):
+        b = base if isinstance(base, dict) else {}
+        out = {}
+        for k in list(theirs) + [k for k in ours if k not in theirs]:
+            v = merge3(b.get(k, MISSING), ours.get(k, MISSING), theirs.get(k, MISSING))
+            if v is not MISSING:
+                out[k] = v
+        return out
+    return theirs
+
+
+def cmd_sync(key):
+    cd = cdir(key)
+    aj, bj = os.path.join(cd, '.claude.json'), os.path.join(cd, '.cca-sync-base.json')
+    with Lock():
+        m = load_json(MASTER_JSON, {}) or {}
+        a = load_json(aj, {}) or {}
+        b = load_json(bj, {}) or {}
+        base, ch_a, ch_m = {}, False, False
+        for k in SHARED_KEYS:
+            v = merge3(b.get(k, MISSING), a.get(k, MISSING), m.get(k, MISSING))
+            if v is MISSING:
+                ch_a |= a.pop(k, MISSING) is not MISSING
+                ch_m |= m.pop(k, MISSING) is not MISSING
+                continue
+            base[k] = v
+            if not eq(a.get(k, MISSING), v):
+                a[k], ch_a = v, True
+            if not eq(m.get(k, MISSING), v):
+                m[k], ch_m = v, True
+        if ch_a or not os.path.exists(aj):
+            save_json(aj, a, 0o600)
+        if ch_m:
+            save_json(MASTER_JSON, m)
+        save_json(bj, base, 0o600)
+
+
+# --- 共享目录链接 -----------------------------------------------------------
+def aside(src, key):
+    d = os.path.join(CCA_HOME, 'conflicts', acct_id(key))
+    os.makedirs(d, exist_ok=True)
+    dst = os.path.join(d, '%s.%d' % (os.path.basename(src), int(time.time())))
+    shutil.move(src, dst)
+    sys.stderr.write('cca: %s 与 ~/.claude 中的同名条目类型不同，已移到 %s\n' % (os.path.basename(src), dst))
+
+
+def copy_over(src, dst):
+    real = os.path.realpath(dst)
+    tmp = '%s.cca-%d.tmp' % (real, os.getpid())
+    shutil.copy2(src, tmp)
+    os.replace(tmp, real)
+
+
+def merge_lines(src, dst):
+    with open(dst, 'rb') as f:
+        have = f.read()
+    seen = set(have.splitlines())
+    with open(src, 'rb') as f:
+        extra = [l for l in f.read().splitlines() if l not in seen]
+    if extra:
+        with open(os.path.realpath(dst), 'ab') as f:
+            f.write((b'\n' if have and not have.endswith(b'\n') else b'') + b'\n'.join(extra) + b'\n')
+
+
+def merge_file(src, dst):
+    if src.endswith('.jsonl'):
+        merge_lines(src, dst)
+    elif not filecmp.cmp(src, dst, shallow=False) and os.path.getmtime(src) > os.path.getmtime(dst):
+        copy_over(src, dst)
+
+
+def merge_tree(src, dst):
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        troot = dst if rel == '.' else os.path.join(dst, rel)
+        os.makedirs(troot, exist_ok=True)
+        for n in [d for d in dirs if os.path.islink(os.path.join(root, d))] + files:
+            sp, tp = os.path.join(root, n), os.path.join(troot, n)
+            if os.path.islink(sp):
+                if not os.path.lexists(tp):
+                    os.symlink(os.readlink(sp), tp)
+            elif not os.path.lexists(tp):
+                shutil.copy2(sp, tp)
+            elif os.path.isfile(tp):
+                merge_file(sp, tp)
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+
+
+def adopt(src, dst, key):
+    """会话里新建的、或被原子写替换掉链接的真实条目：并回 ~/.claude 后改回链接。"""
+    if not os.path.lexists(dst):
+        shutil.move(src, dst)
+    elif os.path.isdir(src):
+        if not os.path.isdir(dst):
+            return aside(src, key)
+        merge_tree(src, dst)
+        shutil.rmtree(src)
+    elif os.path.isdir(dst):
+        return aside(src, key)
+    else:
+        merge_file(src, dst)
+        os.unlink(src)
+
+
+def cmd_link(key):
+    cd = cdir(key)
+    os.makedirs(cd, exist_ok=True)
+    for d in PRECREATE:
+        os.makedirs(os.path.join(MASTER, d), exist_ok=True)
+    with Lock():
+        for n in sorted(os.listdir(cd)):
+            if is_per_account(n):
+                continue
+            p, t = os.path.join(cd, n), os.path.join(MASTER, n)
+            if os.path.islink(p):
+                if os.readlink(p) != t:
+                    os.unlink(p)
+                continue
+            adopt(p, t, key)
+        for n in sorted(os.listdir(MASTER)):
+            p = os.path.join(cd, n)
+            if not is_per_account(n) and not os.path.lexists(p):
+                os.symlink(os.path.join(MASTER, n), p)
+
+
+# --- 命令 -------------------------------------------------------------------
+def cmd_init():
+    os.makedirs(CCA_HOME, exist_ok=True)
+    if not os.path.exists(TABLE):
+        save_json(TABLE, {}, 0o600)
+    ctx()
+
+
+def need(t, key):
+    if key not in t:
+        die('没有账号: %s' % key)
+
+
+def cmd_env(key):
+    c, t, _ = ctx()
+    if key not in t:   # 会话开着时改了别名：按邮箱找回同一个账号
+        key = next((k for k in t if acct_id(k) == acct_id(key)), key)
+    need(t, key)
+    host = c.get('proxy_host') or (c.get('router') or {}).get('host', '')
+    port = c['ports'][key]
+    a, e = parse_key(key)
+    sh(ACC_KEY=key, ACC_ID=acct_id(key), ACC_ALIAS=a, ACC_EMAIL=e, ACC_NAME=a or e, ACC_LABEL=label_of(key),
+       ACC_NODE=t[key], ACC_PORT=port, ACC_PROXY='http://%s:%d' % (host, port) if host else '',
+       ACC_CLAUDE_DIR=cdir(key), ACC_CHROME_DIR=os.path.join(adir(key), 'chrome'),
+       CCA_NO_PROXY=c['no_proxy'], CCA_MIN_TRUST=c['min_trust'])
+
+
+def cmd_router_env():
+    c = cfg_load()
+    r = c.get('router') or {}
+    sh(ROUTER_HOST=r.get('host', ''), ROUTER_PORT=r.get('port') or 22, ROUTER_USER=r.get('user') or 'root',
+       ROUTER_KEY=r.get('key', ''), PROXY_HOST=c.get('proxy_host') or r.get('host', ''))
+
+
+def cmd_router_set(host, port, user, key):
+    c = cfg_load()
+    c['router'] = {'host': host, 'port': int(port), 'user': user, 'key': key}
+    c['proxy_host'] = host
+    cfg_save(c)
+
+
+def cmd_keys():
+    for k in ctx()[1]:
+        print(k)
+
+
+def cmd_resolve(q=''):
+    """按完整的键、编号、别名或邮箱找账号，其次按它们的唯一前缀"""
+    if not q:
+        die('需要指定账号（别名、邮箱、编号或唯一前缀）')
+    t = ctx()[1]
+    keys = list(t)
+    if q in t:
+        return print(q)
+    if q.isdigit() and 1 <= int(q) <= len(keys):
+        return print(keys[int(q) - 1])
+    ql = q.lower()
+    names = {k: [x.lower() for x in (k,) + parse_key(k) if x] for k in keys}
+    for hit in (lambda x: x == ql, lambda x: x.startswith(ql)):
+        hits = [k for k in keys if any(hit(x) for x in names[k])]
+        if len(hits) == 1:
+            return print(hits[0])
+        if hits:
+            die('「%s」匹配到多个账号: %s' % (q, '、'.join(label_of(k) for k in hits)))
+    die('没有匹配的账号: %s' % q)
+
+
+def cmd_validate():
+    errs = ctx()[2]
+    for e in errs:
+        sys.stderr.write('! %s\n' % e)
+    sys.exit(1 if errs else 0)
+
+
+def cmd_email(key):
+    print(email_of(key))
+
+
+def email_problem(t, email):
+    if not EMAIL_RE.match(email):
+        return '这不像邮箱地址（例如 name@example.com）'
+    for k in t:
+        if parse_key(k)[1].lower() == email.lower():
+            return '这个邮箱已经添加过了：%s' % label_of(k)
+    return ''
+
+
+def alias_problem(t, alias):
+    if ALIAS_BAD.search(alias):
+        return '别名里不能有空格、引号、括号、反斜杠或 @'
+    if dw(alias) > 24:
+        return '别名太长了（最多 12 个汉字或 24 个字母）'
+    for k in t:
+        if parse_key(k)[0] == alias:
+            return '别名「%s」已经用在 %s 上了' % (alias, label_of(k))
+    return ''
+
+
+def cmd_check(field, value):
+    """新增账号时逐项校验：合格时打印规范化后的值（邮箱转小写），不合格时打印原因并返回 1"""
+    value = value.strip()
+    if field == 'email':
+        value = value.lower()
+    p = (email_problem if field == 'email' else alias_problem)(table_load(), value) if value else ''
+    print(p or value)
+    sys.exit(1 if p else 0)
+
+
+def cmd_add(email, alias, node):
+    """新增账号，打印账号表里的键：有别名是「别名(邮箱)」，没有就是邮箱"""
+    c, t, _ = ctx()
+    email, alias = email.strip().lower(), alias.strip()
+    p = email_problem(t, email) or (alias_problem(t, alias) if alias else '')
+    if p:
+        die(p)
+    if c['nodes'] and node not in c['nodes']:
+        die('节点「%s」不在可选列表' % node)
+    key = '%s(%s)' % (alias, email) if alias else email
+    t[key] = node
+    save_json(TABLE, t, 0o600)
+    ctx()
+    print(key)
+
+
+def cmd_rm(key):
+    t = table_load()
+    need(t, key)
+    del t[key]
+    save_json(TABLE, t, 0o600)
+    ctx()
+
+
+def cmd_set_last(key):
+    c = cfg_load()
+    c['last'] = key
+    cfg_save(c)
+
+
+def cmd_name(key):
+    print(name_of(key) if key else '')
+
+
+def cmd_login_url(key, url):
+    """Claude Code 打开的登录地址（OAuth authorize）没带 login_hint 时补上账号邮箱，登录页就会预填它。
+    claude auth login --email 自己会带；会话里执行 /login 时不带。"""
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    e = parse_key(key)[1]
+    u = urlsplit(url)
+    if (e and u.scheme == 'https' and u.path.endswith('/oauth/authorize')
+            and u.hostname in ('claude.com', 'claude.ai', 'platform.claude.com', 'console.anthropic.com')
+            and 'login_hint' not in dict(parse_qsl(u.query, keep_blank_values=True))):
+        url = urlunsplit(u._replace(query=(u.query + '&' if u.query else '') + urlencode({'login_hint': e})))
+    print(url)
+
+
+def cmd_get(field):
+    v = ctx()[0].get(field)
+    print('' if v is None else v)
+
+
+def cmd_set(field, value):
+    c = cfg_load()
+    c[field] = value
+    cfg_save(c)
+
+
+def cmd_nodes_allowed():
+    c, t, _ = ctx()
+    for n in c['nodes']:
+        print('%s\t%s' % (n, '、'.join(name_of(k) for k, v in t.items() if v == n)))
+
+
+def cmd_accounts_json():
+    c, t, errs = ctx()
+    if errs:
+        die('账号表有错误，未同步：\n  ' + '\n  '.join(errs))
+    print(json.dumps(router_accounts(c, t), ensure_ascii=False))
+
+
+def cmd_ports(named=''):
+    """named：账号名与端口（给 Mac 端检查）；否则：端口池里所有端口（给路由器自检）"""
+    c, t, _ = ctx()
+    if named:
+        for k in t:
+            print('%s\t%d' % (name_of(k), c['ports'][k]))
+    else:
+        for s in range(1, pool_size(c, t) + 1):
+            print(FIRST_PORT - 1 + s)
+
+
+def cmd_select_lines():
+    c, t, _ = ctx()
+    for s, n in enumerate(slot_nodes(c, t), 1):
+        print('CCA-%d\t%s' % (s, n))
+
+
+def cmd_digest():
+    """账号表 + 路由器端代码（从 stdin 读）的摘要：cca 更新改了路由器脚本，下次启动也会重新部署"""
+    c, t, _ = ctx()
+    code = hashlib.sha1(sys.stdin.read().encode('utf-8')).hexdigest()
+    s = json.dumps([c.get('proxy_host'), router_accounts(c, t), code], ensure_ascii=False, sort_keys=True)
+    print(hashlib.sha1(s.encode('utf-8')).hexdigest())
+
+
+def cmd_set_nodes(*nodes):
+    nodes = [n for n in dict.fromkeys(nodes) if n]
+    if not nodes:
+        die('至少选一个节点')
+    c = cfg_load()
+    c['nodes'] = nodes
+    cfg_save(c)
+
+
+def cmd_keychain(key):
+    p = unicodedata.normalize('NFC', cdir(key))
+    print('Claude Code-credentials-' + hashlib.sha256(p.encode('utf-8')).hexdigest()[:8])
+
+
+def cmd_settings_check():
+    bad = []
+    for fn in ('settings.json', 'settings.local.json'):
+        env = (load_json(os.path.join(MASTER, fn), {}) or {}).get('env') or {}
+        bad += ['%s:%s' % (fn, k) for k in env if k.lower() in ('https_proxy', 'http_proxy', 'all_proxy')]
+    if bad:
+        print(' '.join(bad))
+        sys.exit(1)
+
+
+def cmd_coffee(min_trust, trace, risk):
+    """解析 claude.ai trace 与 ip.net.coffee /api/iprisk 结果。
+    退出码：0 正常，1 纯净度偏低，2 受限地区，3 拿不到出口 IP，4 没有评分数据"""
+    kv = dict(l.split('=', 1) for l in trace.splitlines() if '=' in l)
+    ip, loc = kv.get('ip', ''), kv.get('loc', '').upper()
+    if not ip:
+        print('拿不到 claude.ai 看到的出口 IP（端口或节点不通）')
+        sys.exit(3)
+    try:
+        d = json.loads(risk) if risk else {}
+    except ValueError:
+        d = {}
+    if not isinstance(d, dict):
+        d = {}
+    cc = (d.get('countryCode') or loc or '').upper()
+    score = d.get('trust_score') if isinstance(d.get('trust_score'), (int, float)) else None
+    tags = []
+    if d.get('isResidential') is True:
+        tags.append('住宅IP')
+    elif d.get('is_datacenter') is True:
+        tags.append('机房IP')
+    for f, name in (('is_vpn', 'VPN'), ('is_proxy', '代理'), ('is_tor', 'Tor'), ('is_abuser', '有滥用记录')):
+        if d.get(f) is True:
+            tags.append(name)
+    if cc in RESTRICTED:
+        score = 0
+    if score is None:
+        level = '纯净度 无数据'
+    else:
+        label = ('极度纯净' if score >= 95 else '纯净' if score >= 80 else '良好' if score >= 50
+                 else '中性' if score >= 25 else '可疑')
+        level = '纯净度 %s（%s）' % (score, label)
+    print(' · '.join(x for x in [ip, cc or '?', d.get('asOrganization') or d.get('company_name') or '', level] + tags if x))
+    if cc in RESTRICTED:
+        print('出口在%s：Claude 不可用地区，会被严格风控' % RESTRICTED[cc])
+        sys.exit(2)
+    if score is None:
+        print('ip.net.coffee 没有返回评分（检测服务可能暂时不可用）')
+        sys.exit(4)
+    if score < int(min_trust):
+        print('纯净度低于设定的 %s' % min_trust)
+        sys.exit(1)
+
+
+CMDS = {
+    'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
+    'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
+    'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm,
+    'set-last': cmd_set_last, 'name': cmd_name, 'login-url': cmd_login_url,
+    'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
+    'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
+    'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'coffee': cmd_coffee,
+    'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
+    'link': cmd_link, 'sync': cmd_sync,
+}
+if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+    die('cca(py): 未知子命令 %s' % sys.argv[1:])
+CMDS[sys.argv[1]](*sys.argv[2:])
+PY
+)
+py() { "$PYTHON" -I -X utf8 -c "$PY_SRC" "$@"; }   # -X utf8：不管 locale 是什么都按 UTF-8 输出
+
+# ---------------------------------------------------------------------------
+# 路由器侧：cca-router.sh（busybox ash）与 apply.rb（OpenClash 自带 ruby）
+# ---------------------------------------------------------------------------
+router_sh() {
+	cat <<'SH'
+#!/bin/sh
+# cca-router：由 Mac 上的 cca 部署和管理，请勿手改（会被覆盖）。
+# 在 OpenClash(mihomo) 里维护一个账号端口池：槽位 n = mixed 入站 cca-n（端口 base+n）+ select 策略组 CCA-n。
+# 账号分到哪个槽位、用哪个节点，只靠 API 切换 CCA-n 的选中项，不需要重载；
+# 只有槽位数量或可选节点变化（即"结构"变化）才需要重载，且必须由 Mac 端征得同意（CCA_ALLOW_RELOAD=1）。
+# 重载期间（本机约 20 秒）内核只处理内部连接，局域网的新连接会失败，所以 cron 自愈从不自动重载。
+R="${CCA_ROOT:-}"
+D="$R/etc/cca"
+ACC="$D/accounts.yaml"
+PORTS="$D/ports"
+SEL="$D/select"
+OW="$R/etc/openclash/custom/openclash_custom_overwrite.sh"
+CRON="$R/etc/crontabs/root"
+SYSUP="$R/etc/sysupgrade.conf"
+LOG="$R/tmp/cca-router.log"
+CTLOUT="$R/tmp/cca.ctl.$$"
+TAB=$(printf '\t')
+MB='# >>> cca >>>'
+ME='# <<< cca <<<'
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+rewrite() { cat "$2" > "$1" && rm -f "$2"; }   # 原地覆盖，保留属主和权限
+
+runtime_config() {
+	p=$(uci -q get openclash.config.config_path 2>/dev/null)
+	if [ -n "$p" ]; then echo "$R/etc/openclash/${p##*/}"; return; fi
+	ls -t "$R"/etc/openclash/*.yaml "$R"/etc/openclash/*.yml 2>/dev/null | head -n 1
+}
+core_bin() {   # 优先用 OpenClash 实际在跑的那份内核
+	for c in "$R/etc/openclash/clash" "$R/etc/openclash/core/clash_meta" "$R/tmp/etc/openclash/core/clash_meta"; do
+		[ -x "$c" ] && { echo "$c"; return 0; }
+	done
+	return 1
+}
+running() { pidof clash >/dev/null 2>&1; }
+safe_paths() {   # 和 OpenClash 启动内核时的 SAFE_PATHS 保持一致，否则 -t 会拒绝 external-ui 等路径
+	sp=$(tr '\0' '\n' < "/proc/$(pidof clash | awk '{print $1}')/environ" 2>/dev/null | sed -n 's/^SAFE_PATHS=//p')
+	echo "${sp:-/usr/share/openclash:/etc/ssl}"
+}
+listening() { netstat -lnt 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"; }
+missing_ports() {
+	m=""
+	if [ -s "$PORTS" ]; then
+		while read -r p; do
+			[ -n "$p" ] && ! listening "$p" && m="$m $p"
+		done < "$PORTS"
+	fi
+	echo "$m"
+}
+
+# --- mihomo 控制接口 ---------------------------------------------------------
+ctl_init() {
+	[ -n "$CPORT" ] && return 0
+	cf=$(runtime_config)
+	out=$(ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; puts c["external-controller"].to_s.split(":").last; puts c["secret"].to_s' "$cf" 2>/dev/null)
+	CPORT=$(printf '%s\n' "$out" | sed -n 1p)
+	CSEC=$(printf '%s\n' "$out" | sed -n 2p)
+	CPORT="${CPORT:-9090}"
+}
+ctl() {   # ctl 方法 路径 [JSON]：响应体在 ${CTLOUT}，状态码在 $CODE
+	ctl_init
+	if [ -n "$3" ]; then
+		CODE=$(curl -s -m "${CTL_TIMEOUT:-10}" -o "$CTLOUT" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $CSEC" \
+			-H 'Content-Type: application/json' --data "$3" "http://127.0.0.1:$CPORT$2")
+	else
+		CODE=$(curl -s -m "${CTL_TIMEOUT:-10}" -o "$CTLOUT" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $CSEC" \
+			"http://127.0.0.1:$CPORT$2")
+	fi
+}
+json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+now_of() { sed -n 's/.*"now":"\([^"]*\)".*/\1/p' "$CTLOUT" 2>/dev/null; }
+
+# 按 ${SEL}（"CCA-n<TAB>节点"）把每个槽位切到账号的节点；节点不可用时切到 REJECT（宁可断开也不换出口）。
+# 返回 0 全部就绪；2 有策略组不在运行中的内核里（需要重载）；1 其它失败
+select_all() {
+	[ -s "$SEL" ] || return 0
+	rc=0
+	while IFS="$TAB" read -r g node; do
+		[ -n "$g" ] || continue
+		ctl GET "/proxies/$g"
+		if [ "$CODE" != 200 ]; then rc=2; continue; fi
+		[ "$(now_of)" = "$node" ] && continue
+		ctl PUT "/proxies/$g" "{\"name\":\"$(json_str "$node")\"}"
+		case "$CODE" in
+			2??) echo "${g} → ${node}" ;;
+			*)
+				echo "${g} 切换到 ${node} 失败（HTTP ${CODE}），改为 REJECT"
+				ctl PUT "/proxies/$g" '{"name":"REJECT"}'
+				[ $rc -eq 0 ] && rc=1 ;;
+		esac
+	done < "$SEL"
+	rm -f "$CTLOUT"
+	return $rc
+}
+
+install_hook() {
+	if [ ! -f "$OW" ]; then
+		mkdir -p "${OW%/*}"
+		printf '#!/bin/sh\nCONFIG_FILE="$1"\n\nexit 0\n' > "$OW"
+	fi
+	grep -qxF "$MB" "$OW" && return 0
+	b="$D/hook.block"
+	{
+		echo "$MB"
+		echo "# 由 Mac 上的 cca 管理（Claude 多账号端口分流）；移除请运行 cca router uninstall 或 cca restore"
+		echo "[ -x $D/cca-router.sh ] && $D/cca-router.sh hook \"\${CONFIG_FILE:-\$1}\""
+		echo "$ME"
+	} > "$b"
+	n=$(grep -n -E '^[[:space:]]*exit[[:space:]]+0[[:space:]]*$' "$OW" | tail -n 1 | cut -d: -f1)
+	t="$OW.cca.$$"
+	if [ -n "$n" ]; then
+		{ head -n $((n - 1)) "$OW"; cat "$b"; tail -n +"$n" "$OW"; } > "$t"
+	else
+		{ cat "$OW"; [ -n "$(tail -c 1 "$OW")" ] && echo; cat "$b"; } > "$t"
+	fi
+	rewrite "$OW" "$t"
+	chmod 755 "$OW"
+	log "已在 ${OW} 安装钩子"
+}
+remove_hook() {   # 用 head/tail 拼回，其余字节原样保留（包括文件末尾有没有换行）
+	[ -f "$OW" ] || return 0
+	s=$(grep -n -x -F "$MB" "$OW" | head -n 1 | cut -d: -f1)
+	e=$(grep -n -x -F "$ME" "$OW" | head -n 1 | cut -d: -f1)
+	[ -n "$s" ] && [ -n "$e" ] && [ "$e" -ge "$s" ] || return 0
+	{ head -n $((s - 1)) "$OW"; tail -n +$((e + 1)) "$OW"; } > "$OW.cca.$$"
+	rewrite "$OW" "$OW.cca.$$"
+	log "已移除钩子"
+}
+install_cron() {
+	mkdir -p "${CRON%/*}"
+	touch "$CRON"
+	grep -qF "$D/cca-router.sh ensure" "$CRON" && return 0
+	echo "*/2 * * * * $D/cca-router.sh ensure >/dev/null 2>&1" >> "$CRON"
+	"$R/etc/init.d/cron" restart >/dev/null 2>&1
+	log "已安装自愈 cron"
+}
+remove_cron() {
+	[ -f "$CRON" ] && grep -qF "$D/cca-router.sh ensure" "$CRON" || return 0
+	grep -vF "$D/cca-router.sh ensure" "$CRON" > "$CRON.cca.$$"
+	rewrite "$CRON" "$CRON.cca.$$"
+	"$R/etc/init.d/cron" restart >/dev/null 2>&1
+}
+install_keep() {   # 刷固件(sysupgrade)时保留 /etc/cca
+	touch "$SYSUP"
+	grep -qxF /etc/cca/ "$SYSUP" || echo /etc/cca/ >> "$SYSUP"
+}
+remove_keep() {
+	[ -f "$SYSUP" ] && grep -qxF /etc/cca/ "$SYSUP" || return 0
+	grep -vxF /etc/cca/ "$SYSUP" > "$SYSUP.cca.$$"
+	rewrite "$SYSUP" "$SYSUP.cca.$$"
+}
+
+# OpenClash 生成配置时调用（启动时本来就会加载配置，不额外重载）。任何失败都保留原配置
+hook() {
+	f="$1"
+	[ -f "$f" ] && [ -s "$PORTS" ] || return 0   # 没有账号端口就完全不碰配置
+	cp -f "$f" "$f.cca.bak"
+	if ruby -E UTF-8 "$D/apply.rb" "$f" "$ACC" >> "$LOG" 2>&1; then
+		rm -f "$f.cca.bak"
+		echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$R/tmp/openclash.log"
+	else
+		mv -f "$f.cca.bak" "$f"
+		log "hook: apply.rb 失败，配置保持原样"
+	fi
+}
+
+structure() {   # 端口池的"结构"：cca- 入站和 CCA- 策略组的成员（不含选中哪个），结构变了才需要重载
+	ruby -E UTF-8 -ryaml -e '
+		c = YAML.load_file(ARGV[0]) || {}
+		(c["listeners"] || []).each { |l| puts "L|#{l["name"]}|#{l["port"]}|#{l["proxy"]}" if l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }
+		(c["proxy-groups"] || []).each { |g| puts "G|#{g["name"]}|#{(g["proxies"] || []).map(&:to_s).sort.join(",")}" if g.is_a?(Hash) && g["name"].to_s.start_with?("CCA-") }' "$1" 2>/dev/null | sort
+}
+cca_ports() {
+	ruby -E UTF-8 -ryaml -e 'puts((YAML.load_file(ARGV[0]) || {})["listeners"].to_a.select { |l| l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }.map { |l| l["port"].to_i })' "$1" 2>/dev/null
+}
+
+# 通过 mihomo API 重载配置（不带 force：只补丁 listeners，不重建 OpenClash 自己的 7890-7895 等入站）。
+# 整套重载要二十多秒才返回，超时给足 90 秒；拿不到响应（000）时以端口实际状态为准。
+reload() {
+	ctl_init
+	RELOAD_CODE=$(curl -s -m 90 -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $CSEC" \
+		-H 'Content-Type: application/json' --data "{\"path\":\"$1\"}" "http://127.0.0.1:$CPORT/configs")
+	case "$RELOAD_CODE" in 2??|000|"") return 0 ;; esac
+	echo "mihomo 拒绝了新配置（HTTP ${RELOAD_CODE}）"
+	return 1
+}
+reload_wait() {   # 拿到 2xx 时入站已经补丁完，只需确认一下；拿不到响应时多等一会
+	case "$RELOAD_CODE" in 2??) wait_ports "$1" "$2" 4 ;; *) wait_ports "$1" "$2" ;; esac
+}
+wait_ports() {   # wait_ports "应监听的端口" "应关闭的端口" [最多等几秒，默认 CCA_WAIT 或 60]
+	n=$(( ${3:-${CCA_WAIT:-60}} / 2 ))
+	while :; do
+		ok=1
+		for p in $1; do listening "$p" || ok=0; done
+		for p in $2; do listening "$p" && ok=0; done
+		[ $ok = 1 ] && return 0
+		[ $n -gt 0 ] || return 1
+		n=$((n - 1))
+		sleep 2
+	done
+}
+
+# 把 accounts.yaml 落到正在运行的 OpenClash：结构没变只切节点；结构变了且获准才重载。
+# 返回 0 成功；3 需要重载但没获准；1 失败
+apply_now() {
+	cf=$(runtime_config)
+	if [ -z "$cf" ] || [ ! -f "$cf" ]; then
+		echo "还没有 OpenClash 运行配置：端口池会在 OpenClash 启动时由钩子注入"
+		return 0
+	fi
+	if ! running; then
+		echo "OpenClash 未运行：端口池会在它下次启动时由钩子注入"
+		return 0
+	fi
+	t="$R/tmp/cca.apply.$$.yaml"
+	cp -f "$cf" "$t"
+	if ! ruby -E UTF-8 "$D/apply.rb" "$t" "$ACC"; then
+		rm -f "$t"
+		echo "生成配置失败，运行配置未改动"
+		return 1
+	fi
+	if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
+		rewrite "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
+		select_all
+		case $? in
+			0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
+			1) return 1 ;;
+		esac
+		echo "运行中的内核里缺少账号策略组"   # 文件和内核不一致，落到下面的重载
+		cp -f "$cf" "$t"
+	fi
+	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
+		rm -f "$t"
+		echo "需要让 OpenClash 重载一次配置，用来建立或调整账号端口池：约 20 秒，期间局域网的新连接会中断"
+		return 3
+	fi
+	if c=$(core_bin); then
+		if ! out=$(SAFE_PATHS="$(safe_paths)" "$c" -t -d "$R/etc/openclash" -f "$t" 2>&1); then
+			rm -f "$t"
+			echo "mihomo 校验未通过，运行配置未改动："
+			echo "$out" | tail -n 3
+			return 1
+		fi
+	fi
+	newp=$(cca_ports "$t" | tr '\n' ' ')
+	gonep=""
+	for p in $(cca_ports "$cf"); do
+		case " $newp " in *" $p "*) ;; *) gonep="$gonep $p" ;; esac
+	done
+	cp -f "$cf" "$D/runtime.bak.yaml"
+	rewrite "$cf" "$t"
+	echo "正在重载 OpenClash 配置（约 20 秒）…"
+	if reload "$cf"; then
+		ok=0
+		if reload_wait "$newp" "$gonep"; then
+			ok=1
+		else
+			# 端口还被名字不同的旧入站占着时，内核先起新入站（绑定失败）再关旧入站。端口此时已释放，再重载一次就能绑上
+			echo "有端口刚被旧的入站释放，再重载一次（约 20 秒）…"
+			reload "$cf" && reload_wait "$newp" "$gonep" && ok=1
+		fi
+		if [ $ok = 1 ]; then
+			select_all >/dev/null
+			echo "已重载并建立账号端口池（未重启 OpenClash）"
+			return 0
+		fi
+	fi
+	cp -f "$D/runtime.bak.yaml" "$cf"
+	echo "重载后端口没有按预期变化，运行配置已还原。可以在 OpenClash 页面手动重启一次：钩子会在启动时注入端口池"
+	return 1
+}
+
+ensure() {   # cron：补钩子、纠正被改掉的选中节点；端口池缺失时只记录，不自动重载（避免打断局域网）
+	[ -s "$PORTS" ] || return 0
+	install_hook
+	running || return 0
+	if [ -n "$(missing_ports)" ]; then
+		[ -f "$R/tmp/cca.missing" ] || { log "账号端口池不在运行中的 OpenClash 里：等它下次启动由钩子注入，或在 Mac 上运行 cca router sync"; : > "$R/tmp/cca.missing"; }
+		return 0
+	fi
+	rm -f "$R/tmp/cca.missing"
+	out=$(select_all)
+	[ -n "$out" ] && log "纠正选中节点：$(echo $out)"
+	return 0
+}
+ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（快）；不在则交给 apply_now（需要重载时返回 3）
+	install_hook
+	if [ -z "$(missing_ports)" ]; then
+		select_all
+		case $? in 0) return 0 ;; 1) return 1 ;; esac
+	fi
+	apply_now
+}
+
+status() {
+	if running; then echo "OpenClash：运行中"; else echo "OpenClash：未运行"; fi
+	echo "运行配置：$(runtime_config)"
+	if grep -qxF "$MB" "$OW" 2>/dev/null; then echo "钩子：已安装"; else echo "钩子：未安装"; fi
+	if grep -qF "$D/cca-router.sh ensure" "$CRON" 2>/dev/null; then echo "自愈 cron：已安装"; else echo "自愈 cron：未安装"; fi
+	if [ -s "$SEL" ] && running; then
+		i=0
+		while IFS="$TAB" read -r g node; do
+			[ -n "$g" ] || continue
+			i=$((i + 1))
+			p=$(sed -n "${i}p" "$PORTS")
+			ctl GET "/proxies/$g"
+			now=$(now_of)
+			if listening "$p"; then st="监听中"; else st="未监听"; fi
+			if [ "$CODE" != 200 ]; then now="（内核里没有）"; fi
+			echo "槽位 ${g} :${p} ${st} → ${now:-?}$([ "$now" != "$node" ] && echo "（应为 ${node}）")"
+		done < "$SEL"
+		rm -f "$CTLOUT"
+	fi
+	if [ -f "$LOG" ]; then echo "最近日志："; tail -n 5 "$LOG"; fi
+	return 0
+}
+nodes() {
+	cf=$(runtime_config)
+	[ -n "$cf" ] && [ -f "$cf" ] || { echo "找不到 OpenClash 运行配置" >&2; return 1; }
+	ruby -E UTF-8 -ryaml -e '
+		c = YAML.load_file(ARGV[0]) || {}
+		(c["proxies"] || []).each { |p| puts "P\t#{p["name"]}" if p.is_a?(Hash) }
+		(c["proxy-groups"] || []).each { |g| puts "G\t#{g["name"]}\t#{g["type"]}" if g.is_a?(Hash) && !g["name"].to_s.start_with?("CCA-") }' "$cf"
+}
+uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 时立即移除端口池，否则等 OpenClash 下次重启
+	key=""
+	[ -t 0 ] || key=$(cat)
+	remove_hook
+	remove_cron
+	remove_keep
+	if [ -f "$ACC" ]; then
+		echo '{"base": 0, "slots": 0, "nodes": [], "accounts": []}' > "$ACC"
+		: > "$PORTS"
+		: > "$SEL"
+		apply_now || echo "端口池会在 OpenClash 下次重启后消失（钩子已移除）"
+	fi
+	if [ -n "$key" ]; then
+		for f in "$R/etc/dropbear/authorized_keys" "$HOME/.ssh/authorized_keys"; do
+			[ -f "$f" ] && grep -qxF "$key" "$f" || continue
+			grep -vxF "$key" "$f" > "$f.cca.$$"
+			rewrite "$f" "$f.cca.$$"
+		done
+	fi
+	rm -rf "$D" "$R/tmp/cca.missing"
+	echo "路由器上的 cca 已移除"
+}
+
+case "$1" in
+	hook) hook "$2"; exit 0 ;;
+	install) install_hook && install_cron && install_keep ;;
+	apply) apply_now ;;
+	ensure) ensure ;;
+	ensure-now) ensure_now ;;
+	status) status ;;
+	nodes) nodes ;;
+	uninstall) uninstall ;;
+	*) echo "用法: $0 hook <配置>|install|apply|ensure|ensure-now|status|nodes|uninstall" >&2; exit 2 ;;
+esac
+SH
+}
+
+router_rb() {
+	cat <<'RB'
+# cca：在 OpenClash 配置里生成账号端口池。槽位 n = mixed 入站 cca-n（端口 base+n，不认证）→ select 策略组 CCA-n，
+# 组成员是可选节点 + REJECT；分到账号的槽位把它的节点排第一（OpenClash 启动后默认就选中它），空槽位默认 REJECT。
+require 'yaml'
+cfg_file, acc_file = ARGV
+begin
+  cfg = YAML.load_file(cfg_file) || {}
+  acc = (File.exist?(acc_file) && YAML.load_file(acc_file)) || {}
+rescue StandardError, Psych::SyntaxError => e
+  $stderr.puts "cca: 读取配置失败：#{e.message.lines.first.strip}"
+  exit 1
+end
+ours = lambda { |x, prefix| x.is_a?(Hash) && x['name'].to_s.start_with?(prefix) }
+listeners = (cfg['listeners'] || []).reject { |l| ours.call(l, 'cca-') }
+groups = (cfg['proxy-groups'] || []).reject { |g| ours.call(g, 'CCA-') }
+known = { 'DIRECT' => true, 'REJECT' => true }
+(cfg['proxies'] || []).each { |p| known[p['name'].to_s] = true if p.is_a?(Hash) }
+groups.each { |g| known[g['name'].to_s] = true if g.is_a?(Hash) }
+wanted = (acc['nodes'] || []).map(&:to_s)
+members = wanted.select { |n| known[n] }
+(wanted - members).each { |n| $stderr.puts "cca: 路由器上没有节点「#{n}」，已从可选列表里跳过" }
+assign = {}
+(acc['accounts'] || []).each { |a| assign[a['slot'].to_i] = a['node'].to_s }
+port_of = lambda { |v| v.to_s.split(':').last.to_i }
+used = %w[port socks-port mixed-port redir-port tproxy-port].map { |k| cfg[k].to_i }
+used << port_of.call(cfg['external-controller']) << port_of.call((cfg['dns'] || {})['listen'])
+listeners.each { |l| used << l['port'].to_i if l.is_a?(Hash) }
+base = acc['base'].to_i
+(1..acc['slots'].to_i).each do |k|
+  port = base + k
+  if used.include?(port)
+    $stderr.puts "cca: 端口 #{port} 已被占用，槽位 #{k} 跳过"
+    next
+  end
+  node = assign[k]
+  if node && !members.include?(node)
+    $stderr.puts "cca: 槽位 #{k} 的节点「#{node}」不可用，该端口改为 REJECT（宁可断开也不换出口）"
+    node = nil
+  end
+  first = node || 'REJECT'
+  order = [first] + (members - [first]) + (first == 'REJECT' ? [] : ['REJECT'])
+  groups << { 'name' => "CCA-#{k}", 'type' => 'select', 'proxies' => order }
+  listeners << { 'name' => "cca-#{k}", 'type' => 'mixed', 'port' => port.to_s,
+                 'listen' => '0.0.0.0', 'users' => [], 'proxy' => "CCA-#{k}" }
+  used << port
+end
+cfg['proxy-groups'] = groups unless groups.empty? && cfg['proxy-groups'].nil?
+if listeners.empty? then cfg.delete('listeners') else cfg['listeners'] = listeners end
+tmp = "#{cfg_file}.cca.tmp"
+File.open(tmp, 'w') { |f| f.write(YAML.dump(cfg)) }
+File.rename(tmp, cfg_file)
+RB
+}
+
+# 一次 SSH 会话完成部署：写入脚本和账号表、装钩子/cron、热加载
+router_bundle() {
+	local acc
+	acc=$(py accounts-json) || return 1
+	echo 'set -e'
+	echo 'R="${CCA_ROOT:-}"'
+	echo 'for c in ruby uci netstat curl; do command -v "$c" >/dev/null 2>&1 || { echo "路由器缺少命令: $c"; exit 1; }; done'
+	echo '[ -d "$R/etc/openclash" ] || { echo "路由器上没有 /etc/openclash（没装 OpenClash？）"; exit 1; }'
+	echo 'mkdir -p "$R/etc/cca"'
+	echo "cat > \"\$R/etc/cca/cca-router.sh.new\" <<'CCA_EOF_SH'"; router_sh; echo 'CCA_EOF_SH'
+	echo 'chmod 755 "$R/etc/cca/cca-router.sh.new" && mv -f "$R/etc/cca/cca-router.sh.new" "$R/etc/cca/cca-router.sh"'
+	echo "cat > \"\$R/etc/cca/apply.rb\" <<'CCA_EOF_RB'"; router_rb; echo 'CCA_EOF_RB'
+	echo "cat > \"\$R/etc/cca/accounts.yaml\" <<'CCA_EOF_ACC'"; printf '%s\n' "$acc"; echo 'CCA_EOF_ACC'
+	echo "cat > \"\$R/etc/cca/ports\" <<'CCA_EOF_PORTS'"; py ports; echo 'CCA_EOF_PORTS'
+	echo "cat > \"\$R/etc/cca/select\" <<'CCA_EOF_SEL'"; py select-lines; echo 'CCA_EOF_SEL'
+	echo '"$R/etc/cca/cca-router.sh" install'
+	echo '"$R/etc/cca/cca-router.sh" apply'
+}
+digest() { { router_sh; router_rb; } | py digest; }   # 账号表 + 路由器端代码的摘要（见 cmd_digest）
+
+# 路由器说"需要重载"（返回 3）时征求同意：重载期间局域网新连接会失败约 20 秒
+allow_reload() {
+	[ -n "${CCA_YES:-}" ] && return 0
+	interactive || return 1
+	confirm "现在重载吗？" y
+}
+router_reload() {   # 获准后在路由器上执行带重载的 apply
+	local out rc
+	out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh apply" 2>&1); rc=$?
+	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
+	return $rc
+}
+
+# ---------------------------------------------------------------------------
+# 路由器 SSH
+# ---------------------------------------------------------------------------
+load_router() { eval "$(py router-env)"; }
+router_ready() { load_router; [ -n "$ROUTER_HOST" ] && [ -f "$ROUTER_KEY" ]; }
+SSH_COMMON=(-o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ConnectTimeout=6)
+rsh() {
+	ssh -i "$ROUTER_KEY" -p "$ROUTER_PORT" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
+		-o IdentitiesOnly=yes -o BatchMode=yes -o ServerAliveInterval=15 \
+		-o ControlMaster=auto -o ControlPath="$CCA_HOME/cm-%C" -o ControlPersist=60 \
+		"$ROUTER_USER@$ROUTER_HOST" "$@"
+}
+rsh_close() {   # 关掉复用的 SSH 主连接
+	ssh -O exit -o ControlPath="$CCA_HOME/cm-%C" -p "$ROUTER_PORT" "$ROUTER_USER@$ROUTER_HOST" >/dev/null 2>&1
+}
+port_open() {
+	if [ "$(uname)" = Darwin ]; then nc -z -G 3 "$1" "$2" >/dev/null 2>&1; else nc -z -w 3 "$1" "$2" >/dev/null 2>&1; fi
+}
+
+# 首次用密码登录一次，把公钥写进 dropbear / OpenSSH 的 authorized_keys
+REMOTE_ADD_KEY='k=$(cat); add() { mkdir -p "${1%/*}"; touch "$1"; chmod 600 "$1"; grep -qxF "$k" "$1" || echo "$k" >> "$1"; }; [ -d /etc/dropbear ] && add /etc/dropbear/authorized_keys; add "$HOME/.ssh/authorized_keys"; chmod 700 "$HOME/.ssh"; echo ok'
+
+cmd_router_setup() {
+	need_tty
+	load_router
+	local host="" user port key i list="" nd
+	if [ -n "$ROUTER_HOST" ]; then
+		host=$(ask "路由器地址 [${ROUTER_HOST}]: " "$ROUTER_HOST")
+	else
+		for i in 1 2 3; do
+			host=$(ask "装了 OpenClash 的路由器地址（例如 192.168.1.2）: " "")
+			[ -n "$host" ] && break
+		done
+		[ -n "$host" ] || die "需要路由器地址"
+	fi
+	user=$(ask "SSH 用户 [${ROUTER_USER:-root}]: " "${ROUTER_USER:-root}")
+	port=$(ask "SSH 端口 [${ROUTER_PORT:-22}]: " "${ROUTER_PORT:-22}")
+	key="$CCA_HOME/router_ed25519"
+	[ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C "cca@$(hostname -s)" -f "$key" || die "生成 SSH 密钥失败"
+	py router-set "$host" "$port" "$user" "$key" || die "保存路由器配置失败"
+	load_router
+	if rsh true 2>/dev/null; then
+		info "已能用密钥登录 $user@$host"
+	else
+		info "需要输入一次 $user@$host 的密码来安装 SSH 公钥（密码不会被保存）"
+		ssh -p "$port" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
+			-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password \
+			"$user@$host" "$REMOTE_ADD_KEY" < "$key.pub" >/dev/null || die "安装公钥失败"
+		rsh true || die "公钥已写入，但密钥登录仍然失败"
+		info "密钥登录成功，之后免密"
+	fi
+	router_sync
+	case $? in 0|3) ;; *) return 1 ;; esac
+	while IFS= read -r nd; do list="${list:+${list}、}${nd}"; done < <(py nodes-allowed | cut -f1)
+	if [ -z "$list" ]; then
+		pick_allowed_nodes || return 1
+	elif confirm "账号可选的出口节点：${list}。要重新选吗？" n; then
+		pick_allowed_nodes || return 1
+		[ -z "$(py keys)" ] || router_sync   # 可选节点变了要重建端口池（需要重载，会先问）
+	fi
+	return 0
+}
+
+pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出口，存进 config.json 的 nodes
+	local -a all picked
+	local n=0 i nd sel w tries=0 list=""
+	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | awk -F '\t' '$1 == "P" { print $2 }')
+	[ $n -gt 0 ] || { warn "没从路由器读到节点（OpenClash 在运行吗？）"; return 1; }
+	say ""
+	say "  选出允许账号使用的出口节点（之后每个账号从这些里面挑一个）："
+	say ""
+	for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${all[i]}"; done
+	say ""
+	while [ $tries -lt 5 ]; do
+		tries=$((tries + 1))
+		sel=$(ask "  输入编号，用空格分隔（例如 1 3 4）：" "" | sed 's/,/ /g; s/，/ /g; s/、/ /g')
+		picked=()
+		for w in $sel; do
+			case "$w" in *[!0-9]*) warn "「${w}」不是编号"; continue 2 ;; esac
+			if [ "$w" -lt 1 ] || [ "$w" -gt $n ]; then warn "没有编号 ${w}"; continue 2; fi
+			picked[${#picked[@]}]="${all[w - 1]}"
+		done
+		[ ${#picked[@]} -gt 0 ] || { warn "至少选一个"; continue; }
+		py set-nodes "${picked[@]}" || return 1
+		for nd in "${picked[@]}"; do list="${list:+${list}、}${nd}"; done
+		okay "账号可选的出口节点：${list}"
+		return 0
+	done
+	return 1
+}
+
+router_sync() {   # 0 成功；3 需要重载但没获同意（账号表已上传，端口池等下次）；1 失败
+	local out rc bundle
+	router_ready || { warn "还没配置路由器（cca router setup）"; return 1; }
+	py validate || { warn "账号表有错误，先运行 cca edit 修正"; return 1; }
+	bundle=$(router_bundle) || { warn "生成路由器部署内容失败"; return 1; }
+	info "正在同步账号到路由器 ${ROUTER_HOST} …"
+	out=$(printf '%s\n' "$bundle" | rsh 'sh -s' 2>&1); rc=$?
+	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
+	if [ $rc -eq 3 ]; then
+		if allow_reload; then
+			router_reload; rc=$?
+		else
+			warn "没有重载：新的端口池要等 OpenClash 下次重启（或再运行 cca router sync）才生效"
+			return 3
+		fi
+	fi
+	[ $rc -eq 0 ] || { warn "路由器端执行失败"; return 1; }
+	py set synced "$(digest)"
+	verify_ports
+}
+
+verify_ports() {
+	local k p rc=0
+	load_router
+	while IFS=$'\t' read -r k p; do
+		[ -n "$p" ] || continue
+		if port_open "$PROXY_HOST" "$p"; then okay "${k} 的出口端口 ${p} 已就绪"; else warn "${k} 的出口端口 ${p} 不通"; rc=1; fi
+	done < <(py ports named)
+	return $rc
+}
+
+cmd_router() {
+	case "${1:-status}" in
+		setup) cmd_router_setup ;;
+		sync) [ "${2:-}" = -y ] && CCA_YES=1; router_sync ;;
+		status) router_ready || die "还没配置路由器（cca router setup）"; rsh "$RDIR/cca-router.sh status" ;;
+		nodes) router_ready || die "还没配置路由器（cca router setup）"; rsh "$RDIR/cca-router.sh nodes" | cut -f2 ;;
+		log) router_ready || die "还没配置路由器（cca router setup）"; rsh 'tail -n 50 "${CCA_ROOT:-}/tmp/cca-router.log"' ;;
+		ssh)
+			router_ready || die "还没配置路由器（cca router setup）"
+			exec ssh -t -i "$ROUTER_KEY" -p "$ROUTER_PORT" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
+				-o IdentitiesOnly=yes "$ROUTER_USER@$ROUTER_HOST" ;;
+		uninstall)
+			router_ready || die "还没配置路由器（cca router setup）"
+			need_tty
+			confirm "从路由器移除 cca（钩子、cron、端口池、/etc/cca、SSH 公钥）？立即移除端口池要让 OpenClash 重载一次（约 20 秒）" n || return 0
+			rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" ;;
+		*) die "用法: cca router setup|sync|status|nodes|log|ssh|uninstall" ;;
+	esac
+}
+
+# ---------------------------------------------------------------------------
+# 账号
+# ---------------------------------------------------------------------------
+pick_node() {   # 从可选节点里选一个，打印节点名；标出已被哪些账号使用、路由器上是否存在
+	local onrouter def n=0 i node sel
+	local -a nodes rows
+	onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | cut -f2)
+	while IFS= read -r node; do [ -n "$node" ] && { nodes[n]="$node"; n=$((n + 1)); }; done < <(py nodes-allowed | cut -f1)
+	[ $n -gt 0 ] || { warn "config.json 里没有可选节点（nodes）"; return 1; }
+	i=0
+	while IFS= read -r node; do rows[i]="$node"; i=$((i + 1)); done < <(py node-rows "$onrouter" "$(term_cols)")
+	def=$(py node-default)
+	if fancy_ok; then
+		arrow_menu "$def" "${rows[@]}"
+		[ "$MENU_PICK" -ge 0 ] || return 1
+		printf '%s' "${nodes[MENU_PICK]}"
+		return 0
+	fi
+	for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${rows[i]}"; done
+	while :; do
+		sel=$(ask "  选择节点编号 [$((def + 1))]：" "$((def + 1))")
+		case "$sel" in
+			*[!0-9]*) warn "请输入编号" ;;
+			*) if [ "$sel" -ge 1 ] && [ "$sel" -le $n ]; then printf '%s' "${nodes[sel - 1]}"; return 0; fi
+			   warn "没有编号 ${sel}" ;;
+		esac
+	done
+}
+
+cmd_add() {
+	local email alias key node out
+	need_tty
+	router_ready || { info "先配置路由器"; cmd_router_setup || return 1; }
+	say ""
+	say "${C_B}添加 Claude 账号${C_0}"
+	say ""
+	while :; do   # 登录邮箱：登录时自动填进登录页
+		email=$(ask "  登录邮箱：" "")
+		[ -n "$email" ] || { say "  已取消"; return 1; }
+		if out=$(py check email "$email"); then email="$out"; break; fi
+		warn "$out"
+	done
+	while :; do   # 别名：只用来在菜单里认出账号，可以不填
+		alias=$(ask "  别名（可选，回车跳过）：" "")
+		if out=$(py check alias "$alias"); then alias="$out"; break; fi
+		warn "$out"
+	done
+	say ""
+	say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
+	say ""
+	node=$(pick_node) || return 1
+	say ""
+	key=$(py add "$email" "$alias" "$node") || return 1
+	eval "$(py env "$key")"
+	router_sync || warn "路由器同步没完成：修好后运行 cca router sync"
+	py link "$key" && py sync "$key" || die "初始化账号目录失败"
+	okay "已添加 ${ACC_LABEL}，出口 ${node}"
+	info "第一次使用时会在它专属的浏览器窗口里登录，登录页会预填 ${ACC_EMAIL}"
+	ADDED_KEY="$key"
+}
+
+cmd_edit() {
+	local before
+	need_tty
+	before=$(digest)
+	${EDITOR:-vi} "$TABLE" <&3 3<&-
+	while ! py validate; do
+		confirm "账号表有错误，重新编辑？" y || return 1
+		${EDITOR:-vi} "$TABLE" <&3 3<&-
+	done
+	if [ "$(digest)" != "$before" ] || [ "$(digest)" != "$(py get synced)" ]; then
+		router_sync
+	else
+		info "账号表没有变化"
+	fi
+}
+
+child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS 两个数组里
+	UNSETS=(-u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ALL_PROXY -u all_proxy)
+	SETS=(CLAUDE_CONFIG_DIR="$ACC_CLAUDE_DIR" CCA_ACCOUNT="$ACC_KEY" BROWSER="$CCA_HOME/bin/open-url"
+		https_proxy="$ACC_PROXY" HTTPS_PROXY="$ACC_PROXY" http_proxy="$ACC_PROXY" HTTP_PROXY="$ACC_PROXY"
+		no_proxy="$CCA_NO_PROXY" NO_PROXY="$CCA_NO_PROXY")
+}
+
+logout_account() {   # 需要先 eval "$(py env 名称)"
+	if [ -d "$ACC_CLAUDE_DIR" ] && [ -n "$CLAUDE_BIN" ]; then
+		child_env
+		with_timeout 30 env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth logout </dev/null >/dev/null 2>&1
+	fi
+	security delete-generic-password -s "$(py keychain "$ACC_KEY")" >/dev/null 2>&1
+	return 0
+}
+
+auth_email() {   # 已登录的邮箱：先读账号目录的 .claude.json，读不到再问 claude auth status
+	local e
+	e=$(py email "$ACC_KEY")
+	if [ -z "$e" ]; then
+		child_env
+		e=$(env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth status --json 2>/dev/null 3<&- </dev/null | "$PYTHON" -I -X utf8 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+print((d.get("email") or "") if d.get("loggedIn") else "")')
+	fi
+	printf '%s' "$e"
+}
+
+# 账号表里有邮箱时：没登录就用这个邮箱登录（登录页预填）；登录的不是它就拒绝（否则会让别的账号走这个出口）
+ensure_login() {
+	local e tries=0
+	while :; do
+		e=$(auth_email)
+		if [ -z "$e" ]; then
+			interactive || { warn "${ACC_NAME} 还没登录，需要在终端里运行 cca @${ACC_NAME} 完成登录"; return 1; }
+			[ $tries -lt 2 ] || return 1
+			tries=$((tries + 1))
+			info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开登录页${ACC_EMAIL:+（已预填 ${ACC_EMAIL}）}，登录完成后会自动继续"
+			local -a em=()
+			[ -n "$ACC_EMAIL" ] && em=(--email "$ACC_EMAIL")
+			child_env
+			env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth login --claudeai "${em[@]}" 3<&- || { warn "登录没有完成"; return 1; }
+			continue
+		fi
+		[ -z "$ACC_EMAIL" ] && return 0
+		[ "$(lower "$e")" = "$(lower "$ACC_EMAIL")" ] && return 0
+		warn "这个账号目录登录的是 ${e}，不是 ${ACC_EMAIL}（继续会让 ${e} 走 ${ACC_NAME} 的出口）"
+		interactive && confirm "退出 ${e}，改用 ${ACC_EMAIL} 登录？" y || return 1
+		child_env
+		env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth logout </dev/null >/dev/null 2>&1
+		security delete-generic-password -s "$(py keychain "$ACC_KEY")" >/dev/null 2>&1
+		"$PYTHON" -I -X utf8 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop("oauthAccount",None); json.dump(j,open(p,"w"),indent=2)' "$ACC_CLAUDE_DIR/.claude.json" 2>/dev/null
+	done
+}
+
+cmd_rm() {
+	local key
+	key=$(py resolve "${1:-}") || die "用法: cca rm <账号>"
+	need_tty
+	eval "$(py env "$key")"
+	confirm "删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证和浏览器资料；共享的记忆/会话不受影响）" n || return 0
+	py link "$key" >/dev/null 2>&1   # 先把会话里新产生的共享内容并回 ~/.claude
+	py sync "$key" >/dev/null 2>&1
+	logout_account
+	rm -rf "${CCA_HOME:?}/accounts/${ACC_ID:?}"
+	py rm "$key"
+	router_sync
+	info "已删除账号 ${ACC_LABEL}"
+}
+
+cmd_list() {
+	local i=0 r
+	[ -n "$(py keys)" ] || { info "还没有账号（cca add）"; return 0; }
+	say ""
+	while IFS= read -r r; do i=$((i + 1)); say "  ${i}. ${r}"; done < <(py rows "$(term_cols)")
+	say ""
+	router_ready && verify_ports
+	return 0
+}
+
+menu() {   # 选中的账号别名打印到 stdout
+	local last cur=0 n=0 i k choice
+	local -a keys rows
+	while IFS= read -r k; do [ -n "$k" ] && { keys[n]="$k"; n=$((n + 1)); }; done < <(py keys)
+	i=0
+	while IFS= read -r k; do rows[i]="$k"; i=$((i + 1)); done < <(py rows "$(term_cols)")
+	last=$(py get last)
+	for ((i = 0; i < n; i++)); do [ "${keys[i]}" = "$last" ] && cur=$i; done
+	if fancy_ok; then
+		say ""
+		say "${C_B}选择 Claude 账号${C_0}    ${C_D}↑↓ 移动 · 回车确认 · 数字键直接选 · q 退出${C_0}"
+		say ""
+		arrow_menu "$cur" "${rows[@]}" "＋ 添加新账号" "退出"
+		say ""
+		[ "$MENU_PICK" -ge 0 ] || return 1
+		if [ "$MENU_PICK" -lt "$n" ]; then echo "${keys[MENU_PICK]}"; return 0; fi
+		[ "$MENU_PICK" -eq "$n" ] || return 1
+		cmd_add >&2 && { py keys | tail -n 1; return 0; }
+		return 1
+	fi
+	while :; do   # 没有完整终端时：输入编号
+		say ""
+		say "${C_B}选择 Claude 账号${C_0}"
+		say ""
+		for ((i = 0; i < n; i++)); do say "  $((i + 1)). ${rows[i]}"; done
+		say ""
+		[ -n "$last" ] && say "  回车   继续使用 $(py name "$last")"
+		say "  编号   切换到对应账号"
+		say "  a      添加新账号"
+		say "  q      退出"
+		say ""
+		choice=$(ask "请选择：" "")
+		if [ -z "$choice" ]; then
+			[ -n "$last" ] && { echo "$last"; return 0; }
+			choice=1
+		fi
+		case "$choice" in
+			q|Q) return 1 ;;
+			a|A|n|N) cmd_add >&2 && { py keys | tail -n 1; return 0; } ;;
+			*[!0-9]*) warn "没看懂「${choice}」：请输入编号、a 或 q" ;;
+			*) if [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ]; then echo "${keys[choice - 1]}"; return 0; fi
+			   warn "没有编号 ${choice}" ;;
+		esac
+	done
+}
+
+pick_account() {   # 参数给了就解析参数，否则交互选择
+	if [ -n "${1:-}" ]; then py resolve "$1"; return; fi
+	[ -n "$(py keys)" ] || die "还没有账号（cca add）"
+	menu
+}
+
+# 经账号端口检测出口：claude.ai 看到的 IP + ip.net.coffee/claude 的风险数据（不上报会话）
+coffee_check() {
+	local trace ip risk="" out rc
+	trace=$(curl -s -m 8 -x "$ACC_PROXY" https://claude.ai/cdn-cgi/trace 2>/dev/null)
+	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
+	[ -n "$ip" ] && risk=$(curl -s -m 12 -x "$ACC_PROXY" "https://ip.net.coffee/api/iprisk/$ip" 2>/dev/null)
+	out=$(py coffee "$CCA_MIN_TRUST" "$trace" "$risk")
+	rc=$?
+	COFFEE_IP="$ip"
+	COFFEE_LINE=$(printf '%s\n' "$out" | head -n 1)
+	COFFEE_NOTE=$(printf '%s\n' "$out" | sed -n '2,$p')
+	return $rc
+}
+
+preflight() {   # 账号的出口必须可用且干净，否则不启动（避免走错出口）
+	local bad rc
+	COFFEE_LINE=""
+	[ -n "$ACC_PROXY" ] || { warn "还没配置路由器（cca router setup）"; return 1; }
+	load_router
+	if router_ready; then   # 让路由器确认端口池在，并把槽位切到账号的节点（API，无需重载）
+		local out
+		out=$(rsh "$RDIR/cca-router.sh ensure-now" 2>&1); rc=$?
+		[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
+		[ $rc -eq 3 ] && allow_reload && router_reload
+	fi
+	port_open "$PROXY_HOST" "$ACC_PORT" || {
+		warn "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
+		return 1
+	}
+	if ! bad=$(py settings-check); then
+		warn "共享的设置里配置了代理（${bad}），会覆盖账号端口。删掉后再用 cca 启动。"
+		return 1
+	fi
+	[ -n "${CCA_SKIP_CHECK:-}" ] && return 0
+	coffee_check
+	rc=$?
+	case $rc in
+		0) ;;
+		4) warn "出口检测没拿到评分（${COFFEE_LINE}），先继续" ;;
+		1)
+			warn "出口纯净度偏低：${COFFEE_LINE}"
+			interactive && confirm "仍然用这个出口启动吗？" n || return 1 ;;
+		*)
+			warn "${COFFEE_LINE}"
+			[ -n "$COFFEE_NOTE" ] && warn "$COFFEE_NOTE"
+			warn "已停止启动。可以用 cca edit 给这个账号换个节点"
+			return 1 ;;
+	esac
+	return 0
+}
+
+has_chrome() { [ -d "/Applications/Google Chrome.app" ] || [ -d "$HOME/Applications/Google Chrome.app" ]; }
+
+open_chrome() {   # 需要先 eval "$(py env 名称)"
+	local url="$1"
+	if ! has_chrome; then
+		warn "没装 Google Chrome，改用默认浏览器打开（不会走账号端口）"
+		open "$url"
+		return
+	fi
+	mkdir -p "$ACC_CHROME_DIR"
+	open -na "Google Chrome" --args --user-data-dir="$ACC_CHROME_DIR" --no-first-run --no-default-browser-check \
+		--proxy-server="$ACC_PROXY" "$url"
+}
+
+cmd_web() {
+	local key
+	key=$(pick_account "${1:-}") || return 0
+	eval "$(py env "$key")"
+	CCA_SKIP_CHECK=1 preflight || exit 1
+	# 还没登录就先走 Claude Code 的登录（登录页预填邮箱）：网页版用同一个浏览器实例，登录一次两边都能用
+	if [ -n "$ACC_EMAIL" ] && [ -n "$CLAUDE_BIN" ] && interactive && [ -z "$(auth_email)" ]; then
+		py link "$ACC_KEY" && py sync "$ACC_KEY" || die "初始化账号目录失败"
+		ensure_login || exit 1
+	fi
+	open_chrome "${2:-https://claude.ai/}"
+	info "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-claude.ai}（经 ${ACC_PROXY} → ${ACC_NODE}）"
+}
+
+cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的浏览器实例里打开，登录地址没带邮箱时补上
+	local key="${CCA_ACCOUNT:-$(py get last)}" url
+	eval "$(py env "$key")" || exit 1
+	url=$(py login-url "$ACC_KEY" "$1") || url="$1"
+	open_chrome "$url"
+}
+
+cmd_check() {
+	local keys key ips="" rc
+	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
+	[ -n "$keys" ] || { info "还没有账号"; return 0; }
+	load_router
+	while IFS= read -r key; do
+		eval "$(py env "$key")" || continue
+		if ! port_open "$PROXY_HOST" "$ACC_PORT"; then
+			say "  ${ACC_NAME}  ${ACC_NODE}  ${C_R}端口 ${ACC_PORT} 不通${C_0}"
+			continue
+		fi
+		coffee_check
+		rc=$?
+		case $rc in 0) ;; *) COFFEE_LINE="$COFFEE_LINE ${C_Y}(${COFFEE_NOTE//$'\n'/; })${C_0}" ;; esac
+		say "  ${ACC_NAME}  ${ACC_NODE}  :${ACC_PORT}  ${COFFEE_LINE}"
+		[ -n "$COFFEE_IP" ] && ips="$ips$COFFEE_IP"$'\n'
+	done <<< "$keys"
+	local dup
+	dup=$(printf '%s' "$ips" | sort | uniq -d)
+	[ -n "$dup" ] && warn "有账号共用同一个出口 IP：$(echo $dup)"
+	return 0
+}
+
+run_account() {
+	local key="$1" rc e
+	shift
+	[ -n "$CLAUDE_BIN" ] || die "找不到 claude 命令"
+	eval "$(py env "$key")" || die "读取账号失败: $key"
+	key="$ACC_KEY"
+	preflight || exit 1
+	py link "$key" || die "链接共享目录失败"
+	py sync "$key" || die "同步 .claude.json 失败"
+	ensure_login || exit 1
+	py set-last "$key"
+	e=$(py email "$key")
+	if [ -n "$ACC_EMAIL" ]; then e="已登录"; else e="已登录 ${e}"; fi
+	say ""
+	if [ -n "$ACC_ALIAS" ] && [ -n "$ACC_EMAIL" ]; then
+		say "  ${C_B}${ACC_ALIAS}${C_0}  ${ACC_EMAIL}   ${C_D}${e} · 端口 ${ACC_PORT}${C_0}"
+	else
+		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}${e} · 端口 ${ACC_PORT}${C_0}"
+	fi
+	if [ -n "$COFFEE_LINE" ]; then say "  ${C_D}出口${C_0}  ${ACC_NODE} · ${COFFEE_LINE}"
+	else say "  ${C_D}出口${C_0}  ${ACC_NODE}（未检测）"; fi
+	say ""
+	[ -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ] &&
+		warn "已为本次启动屏蔽环境里的 API key / OAuth token，避免覆盖账号登录"
+	child_env
+	trap ':' INT TERM HUP
+	env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" "$@" 3<&-
+	rc=$?
+	trap - INT TERM HUP
+	py link "$key" >/dev/null || warn "退出后链接共享目录失败"
+	py sync "$key" >/dev/null || warn "退出后同步 .claude.json 失败"
+	e=$(py email "$key")
+	if [ -n "$ACC_EMAIL" ] && [ -n "$e" ] && [ "$(lower "$e")" != "$(lower "$ACC_EMAIL")" ]; then
+		warn "会话里切换成了 ${e}，和账号表里的 ${ACC_EMAIL} 不符；下次启动会要求改回"
+	fi
+	return $rc
+}
+
+launch() {
+	local sel=""
+	if [ -z "$(py keys)" ]; then
+		info "还没有账号，先新增一个"
+		cmd_add || exit 1
+		sel="$ADDED_KEY"
+	fi
+	py validate || die "账号表有错误：运行 cca edit 修正"
+	if [ "$(digest)" != "$(py get synced)" ]; then
+		info "账号表或路由器端脚本有变化，先同步到路由器"
+		router_sync
+		case $? in 0|3) ;; *) die "同步失败，已停止（避免走错出口）" ;; esac
+	fi
+	if [ -n "${OPT_ACCOUNT:-}" ]; then
+		sel=$(py resolve "$OPT_ACCOUNT") || exit 1
+	elif [ -z "$sel" ]; then
+		if interactive; then
+			sel=$(menu) || exit 0
+		else
+			sel=$(py get last)
+			[ -n "$sel" ] || sel=$(py keys | head -n 1)
+		fi
+	fi
+	run_account "$sel" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# 自动更新：GitHub Releases 上的 cca + cca.sig，只装签名有效、版本号更新的脚本
+#   · 启动时：有已经下载校验好的新版本（cca.next）就换上，并用新版本重新执行这次命令
+#   · 距上次检查超过一天：在脱离终端的新会话里后台检查和下载，不拖慢启动，Ctrl-C 也打断不了它
+#   · cca 就在 git 仓库根目录里（开发用的工作区）时不自动更新，免得覆盖还没发布的改动
+# ---------------------------------------------------------------------------
+UPD="$CCA_HOME/update"
+
+is_ver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+ver_gt() {   # ver_gt 2.10.0 2.9.1 → 真
+	local IFS=. i
+	local -a a b
+	a=($1)
+	b=($2)
+	for ((i = 0; i < 3; i++)); do
+		[ "${a[i]}" -gt "${b[i]}" ] && return 0
+		[ "${a[i]}" -lt "${b[i]}" ] && return 1
+	done
+	return 1
+}
+dev_mode() { [ -e "${SELF%/*}/.git" ]; }
+
+verify_release() {   # verify_release 脚本 签名：签名有效、语法正确时打印脚本里的版本号
+	local v
+	mkdir -p "$UPD" && printf 'cca-release %s\n' "$RELEASE_KEY" > "$UPD/allowed_signers" || return 1
+	ssh-keygen -Y verify -f "$UPD/allowed_signers" -I cca-release -n cca-release -s "$2" < "$1" >/dev/null 2>&1 || return 1
+	"$BASH" -n "$1" 2>/dev/null || return 1
+	v=$(sed -n 's/^VERSION="\([0-9.]*\)"$/\1/p' "$1" | head -n 1)
+	is_ver "$v" && printf '%s' "$v"
+}
+
+latest_version() {   # releases/latest 会 302 到 …/releases/tag/vX.Y.Z
+	local u
+	u=$(curl -fsS -o /dev/null -m 15 -w '%{redirect_url}' "$UPDATE_REPO/releases/latest" 2>/dev/null) || return 1
+	u="${u##*/tag/v}"
+	is_ver "$u" && printf '%s' "$u"
+}
+
+fetch_release() {   # fetch_release 版本：下载并校验，成功后放在 $UPD/cca.next；失败原因在 FETCH_ERR
+	local v="$1" tmp got rc=1
+	FETCH_ERR="下载失败（网络不通，或 GitHub 暂时不可用）"
+	mkdir -p "$UPD" && tmp=$(mktemp -d "$UPD/dl.XXXXXX") || return 1
+	if curl -fsSL -m 120 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&
+		curl -fsSL -m 30 -o "$tmp/cca.sig" "$UPDATE_REPO/releases/download/v$v/cca.sig" 2>/dev/null; then
+		FETCH_ERR="签名校验没通过（文件可能被篡改或不完整），没有安装"
+		if got=$(verify_release "$tmp/cca" "$tmp/cca.sig") && [ "$got" = "$v" ]; then
+			mv -f "$tmp/cca.sig" "$UPD/cca.next.sig" && mv -f "$tmp/cca" "$UPD/cca.next" && rc=0
+		fi
+	fi
+	rm -rf "$tmp"
+	return $rc
+}
+
+# 再校验一次 cca.next，然后原子替换当前脚本。bash 是边读边执行脚本的，原地覆盖会让正在运行的 cca
+# 读到半截新代码；mv 换上的是新文件，正在运行的 cca 还读着旧文件。旧版本留着，可以 cca update --rollback
+install_next() {
+	local v tmp="$SELF.new.$$"
+	if ! v=$(verify_release "$UPD/cca.next" "$UPD/cca.next.sig") || ! ver_gt "$v" "$VERSION"; then
+		rm -f "$UPD/cca.next" "$UPD/cca.next.sig"
+		return 1
+	fi
+	if ! { cp -p "$SELF" "$UPD/cca.prev" && printf '%s\n' "$VERSION" > "$UPD/cca.prev.version" &&
+		cp "$UPD/cca.next" "$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$SELF"; }; then
+		rm -f "$tmp"
+		warn "替换 $SELF 失败，没有更新"
+		return 1
+	fi
+	rm -f "$UPD/cca.next" "$UPD/cca.next.sig"
+	NEW_VERSION="$v"
+}
+
+update_hook() {   # 启动时调用，参数是这次命令的参数
+	local mode v
+	dev_mode && return 0
+	mode=$(py get update)
+	[ "$mode" = off ] && return 0
+	if [ -f "$UPD/cca.next" ]; then
+		if [ "$mode" = auto ]; then
+			if install_next; then
+				info "cca 已自动更新：${VERSION} → ${NEW_VERSION}（不想要这个版本：cca update --rollback）"
+				exec "$SELF" "$@"
+			fi
+		else
+			v=$(sed -n 's/^VERSION="\([0-9.]*\)"$/\1/p' "$UPD/cca.next" | head -n 1)
+			info "cca 有新版本 ${v}（当前 ${VERSION}），运行 cca update 安装"
+		fi
+	fi
+	if [ -z "$(find "$UPD/checked" -mmin -1440 2>/dev/null)" ]; then
+		mkdir -p "$UPD" && touch "$UPD/checked"
+		( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _update-fetch </dev/null >"$UPD/log" 2>&1 3<&- & )
+	fi
+	return 0
+}
+
+cmd_update_fetch() {   # 后台任务：有新版本就下载校验好，下次启动时换上
+	local v
+	mkdir -p "$UPD" || return 1
+	[ -n "$(find "$UPD/lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$UPD/lock"   # 上次异常退出留下的锁
+	mkdir "$UPD/lock" 2>/dev/null || return 0
+	trap 'rmdir "$UPD/lock" 2>/dev/null' EXIT
+	echo "$(date '+%F %T') 检查更新，当前 ${VERSION}"
+	v=$(latest_version) || { echo "拿不到最新版本号"; return 1; }
+	if ! ver_gt "$v" "$VERSION"; then echo "已是最新（${v}）"; return 0; fi
+	if [ "$v" = "$(cat "$UPD/skip" 2>/dev/null)" ]; then echo "${v} 被回退过，不再自动安装"; return 0; fi
+	if fetch_release "$v"; then echo "已下载并校验 ${v}，下次启动时安装"; else echo "${v}：${FETCH_ERR}"; return 1; fi
+}
+
+update_rollback() {
+	local pv tmp="$SELF.new.$$"
+	dev_mode && die "开发模式：用 git 切换版本"
+	[ -f "$UPD/cca.prev" ] || die "没有可以退回的版本"
+	pv=$(cat "$UPD/cca.prev.version" 2>/dev/null)
+	"$BASH" -n "$UPD/cca.prev" 2>/dev/null || die "旧版本文件损坏，没有退回"
+	cp "$UPD/cca.prev" "$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$SELF" || { rm -f "$tmp"; die "退回失败"; }
+	printf '%s\n' "$VERSION" > "$UPD/skip"
+	rm -f "$UPD/cca.prev" "$UPD/cca.prev.version" "$UPD/cca.next" "$UPD/cca.next.sig"
+	okay "已退回 ${pv:-上一个版本}；${VERSION} 不会再自动安装，有更新的版本时照常更新"
+}
+
+cmd_update() {
+	local v
+	case "${1:-}" in
+		auto|notify|off)
+			py set update "$1" || return 1
+			case "$1" in
+				auto) okay "自动更新：每天检查，有新版本就在下次启动时安装" ;;
+				notify) okay "自动更新：每天检查，有新版本只提示，运行 cca update 才安装" ;;
+				off) okay "自动更新已关闭（cca update 仍可手动更新）" ;;
+			esac
+			return 0 ;;
+		--rollback) update_rollback; return ;;
+		''|--check) ;;
+		*) die "用法: cca update [--check | --rollback | auto | notify | off]" ;;
+	esac
+	if dev_mode && [ "${1:-}" != --check ]; then
+		info "开发模式：${SELF} 在 git 仓库里，用 git pull 更新"
+		return 0
+	fi
+	info "正在检查最新版本（${UPDATE_REPO}）…"
+	v=$(latest_version) || die "拿不到最新版本号（网络不通，或 GitHub 暂时不可用）"
+	if ! ver_gt "$v" "$VERSION"; then okay "已是最新版本 ${VERSION}"; return 0; fi
+	if [ "${1:-}" = --check ]; then info "有新版本 ${v}（当前 ${VERSION}），运行 cca update 安装"; return 0; fi
+	fetch_release "$v" || die "${v}：${FETCH_ERR}"
+	install_next || die "安装 ${v} 失败"
+	rm -f "$UPD/skip"
+	okay "已更新到 ${NEW_VERSION}（原来是 ${VERSION}）。更新说明：${UPDATE_REPO}/releases/tag/v${NEW_VERSION}"
+	info "路由器端脚本如果有变化，下次启动时会自动同步"
+}
+
+# ---------------------------------------------------------------------------
+# 安装 / 还原
+# ---------------------------------------------------------------------------
+need_deps() {
+	local c miss=""
+	for c in python3 ssh ssh-keygen nc curl perl; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
+	[ -n "$PYTHON" ] || miss="$miss python3"
+	[ -n "$CLAUDE_BIN" ] || miss="$miss claude"
+	[ -z "$miss" ] || die "缺少依赖:$miss"
+	[ "$(uname)" = Darwin ] || warn "本脚本按 macOS 编写（钥匙串、open、Chrome 路径），其它系统需自行调整"
+}
+
+cmd_install() {
+	need_deps
+	need_tty
+	mkdir -p "$CCA_HOME/accounts" "$CCA_HOME/bin" "$CCA_HOME/backup" || die "无法创建 $CCA_HOME"
+	chmod 700 "$CCA_HOME"
+	py init || die "初始化配置失败"
+	if [ -f "$HOME/.claude.json" ] && [ -z "$(ls -A "$CCA_HOME/backup" 2>/dev/null)" ]; then
+		cp -p "$HOME/.claude.json" "$CCA_HOME/backup/claude.json.$(date +%Y%m%d-%H%M%S)"
+	fi
+	local target="$SELF" bin="$HOME/.local/bin"
+	if ! dev_mode && [ "$SELF" != "$CCA_HOME/bin/cca" ]; then   # 发布版复制到 ~/.cca/bin/cca，自动更新替换的是这一份
+		{ cp "$SELF" "$CCA_HOME/bin/cca.new.$$" && chmod 755 "$CCA_HOME/bin/cca.new.$$" &&
+			mv -f "$CCA_HOME/bin/cca.new.$$" "$CCA_HOME/bin/cca"; } || die "复制到 $CCA_HOME/bin/cca 失败"
+		target="$CCA_HOME/bin/cca"
+	fi
+	printf '#!/bin/sh\nexec %q _browser "$@"\n' "$target" > "$CCA_HOME/bin/open-url"
+	chmod 755 "$CCA_HOME/bin/open-url"
+	mkdir -p "$bin"
+	if [ "$(readlink "$bin/cca" 2>/dev/null)" != "$target" ]; then
+		[ -e "$bin/cca" ] && [ ! -L "$bin/cca" ] && die "$bin/cca 已存在且不是本脚本，请先处理"
+		ln -sf "$target" "$bin/cca"
+	fi
+	case ":$PATH:" in *":$bin:"*) ;; *) warn "$bin 不在 PATH 里，请加进 PATH" ;; esac
+	info "已安装：$bin/cca → $target"
+	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
+	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
+	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
+	if ! router_ready && confirm "现在配置 OpenClash 路由器（SSH 免密 + 按端口分流）？" y; then
+		cmd_router_setup || warn "路由器配置没完成，稍后可运行 cca router setup"
+	fi
+	if [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
+		cmd_add || true
+	fi
+	info "完成。以后用 cca 启动 Claude Code（cca help 查看全部命令）"
+}
+
+cmd_restore() {
+	local key bk out rc
+	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
+	need_tty
+	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
+	say "  · 每个账号：把会话里新产生的共享内容并回 ~/.claude，然后退出登录、删除它的钥匙串凭证"
+	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
+	say "  · 本机：先打包备份配置（不含浏览器资料和私钥），再删除 ~/.local/bin/cca 和 $CCA_HOME"
+	say "  · ~/.claude 与 ~/.claude.json 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
+	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
+	while IFS= read -r key; do
+		[ -n "$key" ] || continue
+		eval "$(py env "$key")"
+		py link "$key" >/dev/null 2>&1
+		py sync "$key" >/dev/null 2>&1
+		logout_account
+		info "已退出账号 ${ACC_LABEL}"
+	done < <(py keys)
+	if router_ready; then
+		out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" 2>&1); rc=$?
+		[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  │ /' >&2
+		if [ $rc -eq 0 ]; then
+			info "路由器已还原"
+		else
+			warn "路由器还原失败（SSH 密钥还在，修好网络后可重新运行 cca restore）"
+			confirm "仍然继续还原本机？之后需要 ssh 到路由器手动执行 /etc/cca/cca-router.sh uninstall </dev/null" n || return 1
+		fi
+		rsh_close
+	fi
+	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+	tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' . 2>/dev/null &&
+		info "配置备份：$bk"
+	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
+	rm -rf "${CCA_HOME:?}"
+	info "已还原。原来的 claude 命令和 ~/.claude 不受影响"
+}
+
+usage() {
+	cat >&2 <<EOF
+cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每个账号走 OpenClash 的独立端口）
+
+启动
+  cca [claude 参数]          弹出账号菜单：↑↓ 选择、回车确认、数字键直接选、q 退出；
+                             光标默认停在上次用的账号，菜单里也能直接添加新账号
+  cca @<账号> [claude 参数]   跳过选择；账号可写别名、邮箱、编号或唯一前缀
+                             启动前经该账号端口检测出口（claude.ai 看到的 IP + ip.net.coffee 纯净度）
+
+账号表  $TABLE    {"别名(邮箱)": "节点"}，别名可省略（只写邮箱）；端口自动分配
+  cca add                    新增账号：分两行填登录邮箱和别名（可选），再选出口节点；
+                             登录时邮箱会预填在登录页里
+  cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
+  cca ls                     列出账号、登录状态和端口
+  cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
+  cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）
+  cca check [账号]           检测各账号出口 IP、地区、纯净度，提示共用出口
+
+路由器
+  cca router setup           SSH 免密（只输一次密码）+ 部署分流
+  cca router sync [-y]       同步账号到路由器：换节点、增删账号走 API 即时生效；只有端口池要扩容
+                             或可选节点变了才需重载 OpenClash（约 20 秒），会先问你（-y 直接同意）
+  cca router status|nodes|log|ssh|uninstall
+
+其它
+  cca install                安装或修复（链接到 ~/.local/bin/cca）
+  cca update                 立即更新到最新版本；平时每天自动检查一次，新版本在下次启动时自动安装
+  cca update --check | --rollback | auto | notify | off
+                             只检查 / 退回上一版 / 自动安装（默认）/ 只提示 / 关闭
+  cca restore                一键还原 cca 的全部改动
+  配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）
+EOF
+}
+
+main() {
+	[ -n "$PYTHON" ] || die "需要 python3"
+	case "${1:-}" in
+		install) cmd_install ;;
+		help|-h|--help) usage ;;
+		version|--cca-version) echo "$VERSION" ;;
+		_browser) shift; cmd_browser "$@" ;;
+		_update-fetch) cmd_update_fetch ;;
+		update) shift; cmd_update "$@" ;;
+		restore) cmd_restore ;;
+		*)
+			if [ ! -f "$CFG" ]; then
+				interactive || die "还没安装：请在终端里运行 $SELF install"
+				info "第一次使用，先安装"
+				cmd_install
+				exit 0
+			fi
+			update_hook "$@"
+			case "${1:-}" in
+				add) cmd_add ;;
+				edit) cmd_edit ;;
+				ls|list) cmd_list ;;
+				rm|remove) shift; cmd_rm "$@" ;;
+				web) shift; cmd_web "$@" ;;
+				check) shift; cmd_check "$@" ;;
+				router) shift; cmd_router "$@" ;;
+				@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;
+				--) shift; launch "$@" ;;
+				*) launch "$@" ;;
+			esac ;;
+	esac
+}
+
+main "$@"
