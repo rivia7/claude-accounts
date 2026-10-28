@@ -27,8 +27,9 @@ printf 'cca-release %s\n' "$pub" > "$out/allowed"
 ssh-keygen -Y verify -f "$out/allowed" -I cca-release -n cca-release -s "$out/cca.sig" < "$out/cca" >/dev/null ||
 	fail "签名自检失败"
 
+git push origin HEAD || fail "推送失败"
 git tag -a "v$v" -m "v$v"
-git push origin HEAD "refs/tags/v$v"
+git push origin "refs/tags/v$v" || { git tag -d "v$v" >/dev/null; fail "推送 tag 失败，本地 tag 已删除，修好后重新运行"; }
 notes=(--generate-notes)
 [ -n "${1:-}" ] && notes=(--notes "$1")
 gh release create "v$v" "$out/cca" "$out/cca.sig" --title "v$v" "${notes[@]}"
