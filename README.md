@@ -57,7 +57,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 选账号，启动 Claude Code | `cca` |
 | 直接用某个账号启动 | `cca @工作`（写别名、邮箱或开头几个字都行） |
 | 打开某个账号的网页版 | `cca web 工作` |
-| 打开某个账号的 Claude App（桌面版） | `cca app 工作`，或者在启动台、聚焦搜索里点「Claude · 工作」 |
+| 打开某个账号的 Claude App（桌面版） | `cca app 工作`，或者在启动台、聚焦搜索里点「Claude 工作」 |
 | 添加账号 | `cca add`，或者在菜单里选"＋ 添加新账号" |
 | 查看所有账号 | `cca ls` |
 | 改别名、换节点 | `cca edit` |
@@ -86,7 +86,7 @@ Claude 的 Mac 桌面 App 也能每个账号开一份：
 cca app 工作
 ```
 
-也可以在启动台、聚焦搜索里点「Claude · 工作」。cca 会给每个账号生成一个这样的启动器（放在 `~/Applications`），账号改名、删除时自动跟着改。
+也可以在启动台、聚焦搜索里点「Claude 工作」。cca 会给每个账号生成一个这样的启动器（放在 `~/Applications`），名字是"Claude"加别名，没起别名的用邮箱 @ 前面的部分（比如「Claude me」）；账号改名、删除时自动跟着改。
 
 - 每个账号的 App 有自己独立的资料（登录状态、设置），整个 App 都走这个账号的出口，打开前同样会检查出口。
 - App 里的 Code 标签页和 `cca @工作` 用同一个账号配置，记忆、技能、设置照样共享。

@@ -61,7 +61,7 @@ ok "会话里 /login 打开的登录地址没带邮箱时补上 login_hint，其
 
 # 3c. Claude App 多开：每个账号一份资料目录、走自己的端口；启动器跟着账号表走
 L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
-ok "启动器：每个账号一个，改别名后自动改名，图标用 Claude App 的" '[ -x "$L/Claude · alice@example.com.app/Contents/MacOS/cca-launcher" ] && [ -d "$L/Claude · 副号.app" ] && [ ! -e "$L/Claude · 工作.app" ] && plutil -extract CFBundleIdentifier raw "$L/Claude · 副号.app/Contents/Info.plist" | grep -q "^local.cca.launcher.bob-example-com-" && cmp -s "$T/Claude.app/Contents/Resources/electron.icns" "$L/Claude · 副号.app/Contents/Resources/AppIcon.icns"'
+ok "启动器：每个账号一个，改别名后自动改名，图标用 Claude App 的" '[ -x "$L/Claude alice.app/Contents/MacOS/cca-launcher" ] && [ -d "$L/Claude 副号.app" ] && [ ! -e "$L/Claude 工作.app" ] && plutil -extract CFBundleIdentifier raw "$L/Claude 副号.app/Contents/Info.plist" | grep -q "^local.cca.launcher.bob-example-com-" && cmp -s "$T/Claude.app/Contents/Resources/electron.icns" "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"'
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
 ok "cca app：账号自己的资料目录、端口和 CLAUDE_CONFIG_DIR，启动前做出口检测" '[ $rc -eq 0 ] && grep -qF -- "[-n] [-a] [$T/Claude.app] [--env] [CLAUDE_CONFIG_DIR=$BD/claude]" open.log && grep -qF -- "[--args] [--user-data-dir=$BD/desktop] [--proxy-server=http://192.0.2.10:7902] [--proxy-bypass-list=localhost;127.0.0.1;[::1];*.local;10.0.0.0/8;172.16.0.0/12;192.168.0.0/16]" open.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log && printf "%s" "$out" | grep -q "已打开 副号（bob@example.com） 的 Claude App，出口 US-B（端口 7902）" && printf "%s" "$out" | grep -q "第一次打开要登录 bob@example.com"'
 mkdir -p "$T/fakerun/Contents/MacOS"; printf '#!/bin/bash\nsleep 30\n' > "$T/fakerun/Contents/MacOS/Claude"; chmod 755 "$T/fakerun/Contents/MacOS/Claude"
@@ -76,12 +76,19 @@ touch "$T/open_noprofile"
 out=$(run CCA_TTY="$(ans)" cca app alice 2>&1); rc=$?
 ok "cca app：Claude App 不认独立资料目录时关掉并说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有用 alice@example.com 自己的资料目录启动"'
 rm -f "$T/open_noprofile"; : > osascript.log
-run "$L/Claude · 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
+run "$L/Claude 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
 ok "启动器：调用 cca app 打开对应账号" '[ $rc -eq 0 ] && [ ! -s osascript.log ] && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = $((n_open + 1)) ]'
 printf '{"countryCode":"CN","trust_score":90}' > "$T/risk/203.0.113.2.json"
-run "$L/Claude · 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
-ok "启动器：打不开时弹窗说明原因" '[ $rc -ne 0 ] && grep -q "副号 的 Claude App 没有打开" osascript.log && grep -q "中国大陆" osascript.log'
+run "$L/Claude 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
+ok "启动器：打不开时弹窗说明原因" '[ $rc -ne 0 ] && grep -q "Claude 副号 没有打开" osascript.log && grep -q "中国大陆" osascript.log'
 rm -f "$T/risk/203.0.113.2.json"
+
+edit_table 'j["alice@corp.example"] = "US-A"'
+run cca app --launchers >/dev/null 2>&1
+ok "启动器重名：邮箱 @ 前面一样、又都没有别名时，改用完整邮箱" '[ -d "$L/Claude alice@example.com.app" ] && [ -d "$L/Claude alice@corp.example.app" ] && [ ! -e "$L/Claude alice.app" ] && [ -d "$L/Claude 副号.app" ]'
+edit_table 'j.pop("alice@corp.example")'
+run cca app --launchers >/dev/null 2>&1
+ok "启动器：不再重名后改回短名字" '[ -d "$L/Claude alice.app" ] && [ ! -e "$L/Claude alice@corp.example.app" ] && [ ! -e "$L/Claude alice@example.com.app" ]'
 
 # 4. 选中节点被改动（仪表盘手动切 / 缓存恢复错）→ 启动前自动纠正，不重载
 printf US-D > "$R/sel/CCA-1"
@@ -98,7 +105,7 @@ ok "手改账号表换节点：启动时同步，CCA-2 → US-C，不重载" '[ 
 # 6. 删除账号：槽位回到 REJECT，不重载
 run CCA_TTY="$(ans y)" cca rm bob >/dev/null 2>&1
 ok "rm bob：退出登录、删钥匙串；CCA-2 → REJECT；不重载" 'grep -q "delete-generic-password -s Claude Code-credentials-" security.log && [ "$(sel CCA-2)" = REJECT ] && [ "$(reloads)" = 1 ] && ! grep -q bob "$H/.cca/accounts.json"'
-ok "rm：账号的启动器一起删掉，别的账号的还在" '[ ! -e "$H/Applications/Claude · 副号.app" ] && [ -d "$H/Applications/Claude · alice@example.com.app" ]'
+ok "rm：账号的启动器一起删掉，别的账号的还在" '[ ! -e "$H/Applications/Claude 副号.app" ] && [ -d "$H/Applications/Claude alice.app" ]'
 
 # 7. 端口池不够（第 9 个账号）：需要重载 → 非交互时不重载，交互时问
 edit_table 'j.update({"u%d@example.com" % i: "US-D" for i in range(2, 10)})'

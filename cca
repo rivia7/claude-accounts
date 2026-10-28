@@ -17,7 +17,7 @@
 #     HTTPS_PROXY；网页版和登录页用带 --proxy-server 的独立 Chrome 实例。同一端口，同一出口。
 #   · 启动前经该端口取 claude.ai 看到的出口 IP，用 ip.net.coffee/claude 的数据检测纯净度和地区。
 #   · Claude App（桌面版）：每个账号一份独立的资料目录（--user-data-dir），整个实例走账号的端口；
-#     ~/Applications 里每个账号有一个「Claude · 账号名」启动器。
+#     ~/Applications 里每个账号有一个「Claude 别名」启动器。
 #   · 路由器侧文件放在 /etc/cca（不属于 OpenClash 包）。OpenClash 覆写脚本里的一行钩子在每次生成
 #     配置时注入端口池；cron 每 2 分钟自检，升级/重装/恢复默认弄丢钩子时自动补回（不会自动重载）。
 #   · 自动更新：每天在后台查一次 GitHub Releases，只装用发布密钥签过名、版本号更新的脚本，下次启动生效。
@@ -45,7 +45,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.3.0"
+VERSION="2.3.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -865,8 +865,21 @@ exit 1
 """
 
 
-def launcher_path(ldir, key):
-    return os.path.join(ldir, 'Claude · %s.app' % re.sub(r'[/:]', '-', name_of(key)))
+def launcher_names(t):
+    """启动器的名字："Claude 别名"；没有别名用邮箱 @ 前面的部分，和别的账号重名时改用完整邮箱"""
+    short = {}
+    for k in t:
+        a, e = parse_key(k)
+        short[k] = a or e.split('@')[0] or k
+    count = {}
+    for n in short.values():
+        count[n] = count.get(n, 0) + 1
+    out = {}
+    for k, n in short.items():
+        if count[n] > 1 and not parse_key(k)[0]:
+            n = parse_key(k)[1] or k
+        out[k] = 'Claude ' + re.sub(r'[/:]', '-', n)
+    return out
 
 
 def put(path, data, mode=0o644):
@@ -883,9 +896,8 @@ def put(path, data, mode=0o644):
     return True
 
 
-def write_launcher(b, key, cca, app):
+def write_launcher(b, key, cca, app, name):
     import plistlib
-    name = 'Claude · ' + name_of(key)
     res = os.path.join(b, 'Contents', 'Resources')
     os.makedirs(os.path.join(b, 'Contents', 'MacOS'), exist_ok=True)
     os.makedirs(res, exist_ok=True)
@@ -895,7 +907,7 @@ def write_launcher(b, key, cca, app):
             'NSHighResolutionCapable': True}
     put(os.path.join(b, 'Contents', 'Info.plist'), plistlib.dumps(info))
     sh_ = LAUNCHER_SH % {'label': label_of(key), 'cca': shlex.quote(cca), 'key': shlex.quote(key),
-                         'title': shlex.quote('%s 的 Claude App 没有打开' % name_of(key))}
+                         'title': shlex.quote('%s 没有打开' % name)}
     put(os.path.join(b, 'Contents', 'MacOS', 'cca-launcher'), sh_.encode('utf-8'), 0o755)
     try:   # 图标用本机 Claude App 自带的
         with open(os.path.join(app, 'Contents', 'Info.plist'), 'rb') as f:
@@ -909,11 +921,12 @@ def write_launcher(b, key, cca, app):
 
 
 def cmd_launchers(ldir, cca, app='', mode=''):
-    """~/Applications 里每个账号一个"Claude · 账号名"启动器：按账号表新建、改名、删除。
+    """~/Applications 里每个账号一个"Claude 别名"启动器：按账号表新建、改名、删除。
     只动带 cca 标记的 .app；没装 Claude App（app 为空）或 mode=remove-all 时只删不建。
     输出：+ 新建、- 删除、! 同名但不是 cca 生成的（跳过）"""
     t = table_load()
-    want = {} if mode == 'remove-all' or not app else {launcher_path(ldir, k): k for k in t}
+    names = launcher_names(t)
+    want = {} if mode == 'remove-all' or not app else {os.path.join(ldir, names[k] + '.app'): k for k in t}
     if os.path.isdir(ldir):
         for n in sorted(os.listdir(ldir)):
             p = os.path.join(ldir, n)
@@ -926,7 +939,7 @@ def cmd_launchers(ldir, cca, app='', mode=''):
             print('!\t' + os.path.basename(p)[:-4])
             continue
         os.makedirs(ldir, exist_ok=True)
-        write_launcher(p, k, cca, app)
+        write_launcher(p, k, cca, app, names[k])
         if new:
             print('+\t' + os.path.basename(p)[:-4])
 
@@ -2344,7 +2357,8 @@ cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每
   cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
-                             每个账号在 ~/Applications 里有一个「Claude · 账号名」启动器（cca app --launchers 重新生成）
+                             每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
+                             部分；cca app --launchers 重新生成）
   cca check [账号]           检测各账号出口 IP、地区、纯净度，提示共用出口
 
 路由器
