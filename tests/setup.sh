@@ -202,11 +202,14 @@ S
 cat > "$T/bin/osascript" <<'S'
 #!/bin/bash
 { printf 'OSA'; printf ' [%s]' "$@"; echo; [ "${1:-}" = - ] && cat; } >> "$CCA_T/osascript.log"
+[ "${1:-}" = -l ] && exec /usr/bin/osascript "$@"   # JavaScript（画启动器图标、切换窗口）交给真的 osascript
+exit 0
 S
 # 假的 Claude App（只用到 Info.plist 里的图标名和图标文件）
 mkdir -p "$T/Claude.app/Contents/Resources" "$T/Claude.app/Contents/MacOS"
 plutil -create xml1 "$T/Claude.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string electron "$T/Claude.app/Contents/Info.plist"
-printf 'fake-icns' > "$T/Claude.app/Contents/Resources/electron.icns"
+cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns "$T/Claude.app/Contents/Resources/electron.icns" 2>/dev/null ||
+	printf 'fake-icns' > "$T/Claude.app/Contents/Resources/electron.icns"
 cat > "$T/bin/security" <<'S'
 #!/bin/bash
 echo "SECURITY $*" >> "$CCA_T/security.log"

@@ -45,7 +45,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.3.1"
+VERSION="2.3.2"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -849,6 +849,15 @@ def cmd_set_nodes(*nodes):
 
 
 LAUNCHER_MARK = 'cca-launcher.json'
+LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
+
+
+def subprocess_quiet(*a):
+    import subprocess
+    try:
+        subprocess.run(a, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
 LAUNCHER_SH = r"""#!/bin/bash
 # cca 生成的 Claude App 启动器：用账号 %(label)s 专属的资料目录和出口打开 Claude App。
 # 账号改名或删除时 cca 会自动更新或删掉它，不用手改。
@@ -896,7 +905,74 @@ def put(path, data, mode=0o644):
     return True
 
 
-def write_launcher(b, key, cca, app, name):
+BADGE_VERSION = 1
+BADGE_COLORS = ['#0A84FF', '#30A46C', '#8E4EC6', '#12A594', '#D6409F', '#3E63DD', '#E5484D', '#B2610B']
+# 在 Claude 图标右下角画账号标识（AppKit，经 osascript 的 JavaScript 运行；输出 PNG）
+BADGE_JS = r"""ObjC.import('AppKit');
+function run(argv) {
+  var src = argv[0], out = argv[1], label = argv[2], hex = argv[3], S = 1024;
+  var base = $.NSImage.alloc.initWithContentsOfFile(src);
+  if (base.isNil()) throw new Error('no base icon');
+  var img = $.NSImage.alloc.initWithSize($.NSMakeSize(S, S));
+  img.lockFocus;
+  base.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, S, S), $.NSMakeRect(0, 0, 0, 0), 2, 1.0);
+  var d = S * 0.42, x = S - d - S * 0.035, y = S * 0.035;
+  var c = parseInt(hex.slice(1), 16);
+  var o = $.NSBezierPath.bezierPathWithOvalInRect($.NSMakeRect(x, y, d, d));
+  $.NSColor.colorWithSRGBRedGreenBlueAlpha((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255, 1).setFill;
+  o.fill;
+  o.setLineWidth(S * 0.022);
+  $.NSColor.whiteColor.setStroke;
+  o.stroke;
+  var font = $.NSFont.boldSystemFontOfSize(d * (label.length > 1 ? 0.36 : 0.52));
+  var attrs = $.NSMutableDictionary.dictionary;
+  attrs.setObjectForKey(font, 'NSFont');
+  attrs.setObjectForKey($.NSColor.whiteColor, 'NSColor');
+  var s = $.NSString.alloc.initWithUTF8String(label);
+  var ts = s.sizeWithAttributes(attrs);
+  s.drawAtPointWithAttributes($.NSMakePoint(x + (d - ts.width) / 2, y + (d - ts.height) / 2), attrs);
+  img.unlockFocus;
+  var rep = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+  var png = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary);
+  if (!png.writeToFileAtomically(out, true)) throw new Error('write failed');
+}"""
+
+
+def launcher_badges(t, names):
+    """图标右下角的账号标识：中文名取头两个字，其它取首字母大写；颜色按账号固定，尽量不和别的账号重复"""
+    out, used = {}, set()
+    for k in t:
+        n = names[k][len('Claude '):] or '?'
+        wide = ''.join(ch for ch in n[:2] if char_w(ch) == 2)
+        label = wide if char_w(n[0]) == 2 else n[0].upper()
+        i = int(hashlib.sha1(acct_id(k).encode('utf-8')).hexdigest(), 16)
+        free = [c for c in BADGE_COLORS if c not in used] or BADGE_COLORS
+        color = free[i % len(free)]
+        used.add(color)
+        out[k] = (label, color)
+    return out
+
+
+def render_icon(src, label, color):
+    """返回画好标识的 .icns 内容：osascript 画 1024 的 PNG，sips 缩成各个尺寸，iconutil 打包"""
+    import subprocess, tempfile
+    def run(*a):
+        subprocess.run(a, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=60)
+    with tempfile.TemporaryDirectory() as d:
+        js, png, iset = os.path.join(d, 'badge.js'), os.path.join(d, 'icon.png'), os.path.join(d, 'AppIcon.iconset')
+        with open(js, 'w', encoding='utf-8') as f:
+            f.write(BADGE_JS)
+        run('osascript', '-l', 'JavaScript', js, src, png, label, color)
+        os.mkdir(iset)
+        for n in (16, 32, 128, 256, 512):
+            run('sips', '-z', str(n), str(n), png, '--out', os.path.join(iset, 'icon_%dx%d.png' % (n, n)))
+            run('sips', '-z', str(2 * n), str(2 * n), png, '--out', os.path.join(iset, 'icon_%dx%d@2x.png' % (n, n)))
+        run('iconutil', '-c', 'icns', iset, '-o', os.path.join(d, 'AppIcon.icns'))
+        with open(os.path.join(d, 'AppIcon.icns'), 'rb') as f:
+            return f.read()
+
+
+def write_launcher(b, key, cca, app, name, badge):
     import plistlib
     res = os.path.join(b, 'Contents', 'Resources')
     os.makedirs(os.path.join(b, 'Contents', 'MacOS'), exist_ok=True)
@@ -909,15 +985,31 @@ def write_launcher(b, key, cca, app, name):
     sh_ = LAUNCHER_SH % {'label': label_of(key), 'cca': shlex.quote(cca), 'key': shlex.quote(key),
                          'title': shlex.quote('%s 没有打开' % name)}
     put(os.path.join(b, 'Contents', 'MacOS', 'cca-launcher'), sh_.encode('utf-8'), 0o755)
-    try:   # 图标用本机 Claude App 自带的
+    mark_path, icns = os.path.join(res, LAUNCHER_MARK), os.path.join(res, 'AppIcon.icns')
+    mark = {'id': acct_id(key), 'key': key, 'badge': list(badge)}
+    try:   # 图标：本机 Claude App 的图标，右下角加账号标识；原图标或标识变了才重画
         with open(os.path.join(app, 'Contents', 'Info.plist'), 'rb') as f:
             icon = plistlib.load(f).get('CFBundleIconFile') or ''
         icon = os.path.join(app, 'Contents', 'Resources', icon if icon.endswith('.icns') else icon + '.icns')
         with open(icon, 'rb') as f:
-            put(os.path.join(res, 'AppIcon.icns'), f.read())
+            src = f.read()
+        mark['icon'] = hashlib.sha1(src + ('|%s|%s|%d' % (badge[0], badge[1], BADGE_VERSION)).encode('utf-8')).hexdigest()
+        try:
+            with open(mark_path, encoding='utf-8') as f:
+                old = json.load(f)
+        except (OSError, ValueError):
+            old = {}
+        if old.get('icon') != mark['icon'] or not os.path.exists(icns):
+            try:
+                data = render_icon(icon, *badge)
+            except Exception:   # 画不出来就用原图标，启动器照常能用
+                data = src
+            if put(icns, data):
+                os.utime(b)   # 让 Finder、启动台换掉缓存里的旧图标
+                subprocess_quiet(LSREGISTER, '-f', b)
     except (OSError, ValueError):
         pass
-    put(os.path.join(res, LAUNCHER_MARK), json.dumps({'id': acct_id(key), 'key': key}, ensure_ascii=False).encode('utf-8'))
+    put(mark_path, json.dumps(mark, ensure_ascii=False).encode('utf-8'))
 
 
 def cmd_launchers(ldir, cca, app='', mode=''):
@@ -926,6 +1018,7 @@ def cmd_launchers(ldir, cca, app='', mode=''):
     输出：+ 新建、- 删除、! 同名但不是 cca 生成的（跳过）"""
     t = table_load()
     names = launcher_names(t)
+    badges = launcher_badges(t, names)
     want = {} if mode == 'remove-all' or not app else {os.path.join(ldir, names[k] + '.app'): k for k in t}
     if os.path.isdir(ldir):
         for n in sorted(os.listdir(ldir)):
@@ -939,7 +1032,7 @@ def cmd_launchers(ldir, cca, app='', mode=''):
             print('!\t' + os.path.basename(p)[:-4])
             continue
         os.makedirs(ldir, exist_ok=True)
-        write_launcher(p, k, cca, app, names[k])
+        write_launcher(p, k, cca, app, names[k], badges[k])
         if new:
             print('+\t' + os.path.basename(p)[:-4])
 
