@@ -68,3 +68,7 @@ cca restore               一键还原
 
 - `bash tests/regress.sh`：全流程回归。用假的路由器、claude、curl、ssh 和 GitHub，不联网，也不碰真实的 `~/.cca`。
 - 发布：改 `cca` 里的 `VERSION` 并提交，然后运行 `./release.sh "更新说明"`。它会跑回归、签名、打 tag、推送并创建 GitHub Release。签名私钥默认在 `~/.ssh/cca_release_ed25519`。
+
+## 许可证
+
+[MIT](LICENSE)
