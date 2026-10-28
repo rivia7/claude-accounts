@@ -20,7 +20,7 @@
 #     配置时注入端口池；cron 每 2 分钟自检，升级/重装/恢复默认弄丢钩子时自动补回（不会自动重载）。
 #   · 自动更新：每天在后台查一次 GitHub Releases，只装用发布密钥签过名、版本号更新的脚本，下次启动生效。
 
-VERSION="2.2.0"
+VERSION="2.2.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -1902,9 +1902,11 @@ verify_release() {   # verify_release 脚本 签名：签名有效、语法正�
 	is_ver "$v" && printf '%s' "$v"
 }
 
+retry3() { "$@" && return 0; sleep 2; "$@" && return 0; sleep 2; "$@"; }   # 有的网络偶尔会丢新连接
+
 latest_version() {   # releases/latest 会 302 到 …/releases/tag/vX.Y.Z
 	local u
-	u=$(curl -fsS -o /dev/null -m 15 -w '%{redirect_url}' "$UPDATE_REPO/releases/latest" 2>/dev/null) || return 1
+	u=$(retry3 curl -fsS -o /dev/null -m 15 -w '%{redirect_url}' "$UPDATE_REPO/releases/latest" 2>/dev/null) || return 1
 	u="${u##*/tag/v}"
 	is_ver "$u" && printf '%s' "$u"
 }
@@ -1913,8 +1915,8 @@ fetch_release() {   # fetch_release 版本：下载并校验，成功后放在 $
 	local v="$1" tmp got rc=1
 	FETCH_ERR="下载失败（网络不通，或 GitHub 暂时不可用）"
 	mkdir -p "$UPD" && tmp=$(mktemp -d "$UPD/dl.XXXXXX") || return 1
-	if curl -fsSL -m 120 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&
-		curl -fsSL -m 30 -o "$tmp/cca.sig" "$UPDATE_REPO/releases/download/v$v/cca.sig" 2>/dev/null; then
+	if retry3 curl -fsSL -m 120 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&
+		retry3 curl -fsSL -m 30 -o "$tmp/cca.sig" "$UPDATE_REPO/releases/download/v$v/cca.sig" 2>/dev/null; then
 		FETCH_ERR="签名校验没通过（文件可能被篡改或不完整），没有安装"
 		if got=$(verify_release "$tmp/cca" "$tmp/cca.sig") && [ "$got" = "$v" ]; then
 			mv -f "$tmp/cca.sig" "$UPD/cca.next.sig" && mv -f "$tmp/cca" "$UPD/cca.next" && rc=0
