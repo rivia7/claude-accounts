@@ -16,6 +16,8 @@
 #   · 每个账号对应旁路由 OpenClash 上的一个 mixed 入站端口（listener → 账号表里的节点）。Claude Code 走
 #     HTTPS_PROXY；网页版和登录页用带 --proxy-server 的独立 Chrome 实例。同一端口，同一出口。
 #   · 启动前经该端口取 claude.ai 看到的出口 IP，用 ip.net.coffee/claude 的数据检测纯净度和地区。
+#   · Claude App（桌面版）：每个账号一份独立的资料目录（--user-data-dir），整个实例走账号的端口；
+#     ~/Applications 里每个账号有一个「Claude · 账号名」启动器。
 #   · 路由器侧文件放在 /etc/cca（不属于 OpenClash 包）。OpenClash 覆写脚本里的一行钩子在每次生成
 #     配置时注入端口池；cron 每 2 分钟自检，升级/重装/恢复默认弄丢钩子时自动补回（不会自动重载）。
 #   · 自动更新：每天在后台查一次 GitHub Releases，只装用发布密钥签过名、版本号更新的脚本，下次启动生效。
@@ -43,7 +45,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.2.3"
+VERSION="2.3.0"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -647,7 +649,17 @@ def cmd_env(key):
     sh(ACC_KEY=key, ACC_ID=acct_id(key), ACC_ALIAS=a, ACC_EMAIL=e, ACC_NAME=a or e, ACC_LABEL=label_of(key),
        ACC_NODE=t[key], ACC_PORT=port, ACC_PROXY='http://%s:%d' % (host, port) if host else '',
        ACC_CLAUDE_DIR=cdir(key), ACC_CHROME_DIR=os.path.join(adir(key), 'chrome'),
-       CCA_NO_PROXY=c['no_proxy'], CCA_MIN_TRUST=c['min_trust'])
+       ACC_DESKTOP_DIR=os.path.join(adir(key), 'desktop'),
+       CCA_NO_PROXY=c['no_proxy'], CCA_PROXY_BYPASS=bypass_list(c['no_proxy']), CCA_MIN_TRUST=c['min_trust'])
+
+
+def bypass_list(no_proxy):
+    """NO_PROXY 写法 → Chromium --proxy-bypass-list 写法（和 Claude App 自己的转换一致）"""
+    out = []
+    for e in (x.strip() for x in no_proxy.split(',')):
+        if e:
+            out.append('[%s]' % e if ':' in e else '*' + e if e.startswith('.') else e)
+    return ';'.join(out)
 
 
 def cmd_router_env():
@@ -836,6 +848,89 @@ def cmd_set_nodes(*nodes):
     cfg_save(c)
 
 
+LAUNCHER_MARK = 'cca-launcher.json'
+LAUNCHER_SH = r"""#!/bin/bash
+# cca 生成的 Claude App 启动器：用账号 %(label)s 专属的资料目录和出口打开 Claude App。
+# 账号改名或删除时 cca 会自动更新或删掉它，不用手改。
+export PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+CCA="$HOME/.local/bin/cca"
+[ -x "$CCA" ] || CCA=%(cca)s
+out=$(CCA_GUI=1 "$CCA" app %(key)s 2>&1 </dev/null) && exit 0
+osascript - %(title)s "$(printf '%%s\n' "$out" | tail -n 8)" <<'OSA' >/dev/null 2>&1
+on run argv
+	display alert (item 1 of argv) message (item 2 of argv) as critical
+end run
+OSA
+exit 1
+"""
+
+
+def launcher_path(ldir, key):
+    return os.path.join(ldir, 'Claude · %s.app' % re.sub(r'[/:]', '-', name_of(key)))
+
+
+def put(path, data, mode=0o644):
+    """内容没变就不写（不打扰 Spotlight / 启动台）；返回是否写了"""
+    try:
+        with open(path, 'rb') as f:
+            if f.read() == data:
+                return False
+    except FileNotFoundError:
+        pass
+    with open(path, 'wb') as f:
+        f.write(data)
+    os.chmod(path, mode)
+    return True
+
+
+def write_launcher(b, key, cca, app):
+    import plistlib
+    name = 'Claude · ' + name_of(key)
+    res = os.path.join(b, 'Contents', 'Resources')
+    os.makedirs(os.path.join(b, 'Contents', 'MacOS'), exist_ok=True)
+    os.makedirs(res, exist_ok=True)
+    info = {'CFBundleName': name, 'CFBundleDisplayName': name, 'CFBundleIdentifier': 'local.cca.launcher.' + acct_id(key),
+            'CFBundleExecutable': 'cca-launcher', 'CFBundleIconFile': 'AppIcon', 'CFBundlePackageType': 'APPL',
+            'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '1', 'LSUIElement': True,
+            'NSHighResolutionCapable': True}
+    put(os.path.join(b, 'Contents', 'Info.plist'), plistlib.dumps(info))
+    sh_ = LAUNCHER_SH % {'label': label_of(key), 'cca': shlex.quote(cca), 'key': shlex.quote(key),
+                         'title': shlex.quote('%s 的 Claude App 没有打开' % name_of(key))}
+    put(os.path.join(b, 'Contents', 'MacOS', 'cca-launcher'), sh_.encode('utf-8'), 0o755)
+    try:   # 图标用本机 Claude App 自带的
+        with open(os.path.join(app, 'Contents', 'Info.plist'), 'rb') as f:
+            icon = plistlib.load(f).get('CFBundleIconFile') or ''
+        icon = os.path.join(app, 'Contents', 'Resources', icon if icon.endswith('.icns') else icon + '.icns')
+        with open(icon, 'rb') as f:
+            put(os.path.join(res, 'AppIcon.icns'), f.read())
+    except (OSError, ValueError):
+        pass
+    put(os.path.join(res, LAUNCHER_MARK), json.dumps({'id': acct_id(key), 'key': key}, ensure_ascii=False).encode('utf-8'))
+
+
+def cmd_launchers(ldir, cca, app='', mode=''):
+    """~/Applications 里每个账号一个"Claude · 账号名"启动器：按账号表新建、改名、删除。
+    只动带 cca 标记的 .app；没装 Claude App（app 为空）或 mode=remove-all 时只删不建。
+    输出：+ 新建、- 删除、! 同名但不是 cca 生成的（跳过）"""
+    t = table_load()
+    want = {} if mode == 'remove-all' or not app else {launcher_path(ldir, k): k for k in t}
+    if os.path.isdir(ldir):
+        for n in sorted(os.listdir(ldir)):
+            p = os.path.join(ldir, n)
+            if n.endswith('.app') and p not in want and os.path.isfile(os.path.join(p, 'Contents', 'Resources', LAUNCHER_MARK)):
+                shutil.rmtree(p)
+                print('-\t' + n[:-4])
+    for p, k in want.items():
+        new = not os.path.exists(p)
+        if not new and not os.path.isfile(os.path.join(p, 'Contents', 'Resources', LAUNCHER_MARK)):
+            print('!\t' + os.path.basename(p)[:-4])
+            continue
+        os.makedirs(ldir, exist_ok=True)
+        write_launcher(p, k, cca, app)
+        if new:
+            print('+\t' + os.path.basename(p)[:-4])
+
+
 def cmd_keychain(key):
     p = unicodedata.normalize('NFC', cdir(key))
     print('Claude Code-credentials-' + hashlib.sha256(p.encode('utf-8')).hexdigest()[:8])
@@ -904,7 +999,7 @@ CMDS = {
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
-    'link': cmd_link, 'sync': cmd_sync,
+    'link': cmd_link, 'sync': cmd_sync, 'launchers': cmd_launchers,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -1566,6 +1661,7 @@ cmd_add() {
 	router_sync || warn "路由器同步没完成：修好后运行 cca router sync"
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
 	okay "已添加 ${ACC_LABEL}，出口 ${node}"
+	launchers_sync
 	info "第一次使用时会在它专属的浏览器窗口里登录，登录页会预填 ${ACC_EMAIL}"
 	ADDED_KEY="$key"
 }
@@ -1584,6 +1680,7 @@ cmd_edit() {
 	else
 		info "账号表没有变化"
 	fi
+	launchers_sync
 }
 
 child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS 两个数组里
@@ -1650,13 +1747,15 @@ cmd_rm() {
 	key=$(py resolve "${1:-}") || die "用法: cca rm <账号>"
 	need_tty
 	eval "$(py env "$key")"
-	confirm "删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证和浏览器资料；共享的记忆/会话不受影响）" n || return 0
+	[ -z "$(app_pid "$ACC_DESKTOP_DIR")" ] || die "${ACC_LABEL} 的 Claude App 还开着：先退出它再删除"
+	confirm "删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）" n || return 0
 	py link "$key" >/dev/null 2>&1   # 先把会话里新产生的共享内容并回 ~/.claude
 	py sync "$key" >/dev/null 2>&1
 	logout_account
 	rm -rf "${CCA_HOME:?}/accounts/${ACC_ID:?}"
 	py rm "$key"
 	router_sync
+	launchers_sync
 	info "已删除账号 ${ACC_LABEL}"
 }
 
@@ -1808,6 +1907,72 @@ cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的
 	open_chrome "$url"
 }
 
+# ---------------------------------------------------------------------------
+# Claude App（桌面版）多开：每个账号一份独立的资料目录（--user-data-dir），整个实例走账号的端口。
+# Claude App 正常启动时不加单实例锁，同一个资料目录开两份会抢同一份数据库，所以先按进程查。
+# ---------------------------------------------------------------------------
+LAUNCHER_DIR="$HOME/Applications"
+claude_app() {   # Claude App 装在哪（CCA_CLAUDE_APP 可指定）
+	local d
+	if [ -n "${CCA_CLAUDE_APP:-}" ]; then [ -d "$CCA_CLAUDE_APP" ] && printf '%s' "$CCA_CLAUDE_APP"; return; fi
+	for d in /Applications/Claude.app "$HOME/Applications/Claude.app"; do
+		[ -d "$d" ] && { printf '%s' "$d"; return 0; }
+	done
+	return 1
+}
+app_pid() { pgrep -f "Contents/MacOS/Claude .*--user-data-dir=$1( |\$)" | head -n 1; }   # 用这个资料目录的主进程
+activate_pid() {   # 多开时 open -a 分不清是哪一个，按进程号切到前面
+	osascript -l JavaScript -e "ObjC.import('AppKit'); var a = \$.NSRunningApplication.runningApplicationWithProcessIdentifier($1); a.unhide; a.activateWithOptions(\$.NSApplicationActivateAllWindows)" </dev/null >/dev/null 2>&1
+}
+
+launchers_sync() {   # 按账号表新建、改名、删除 ~/Applications 里的启动器；参数 remove-all 时全部删掉
+	local app out op n
+	app=$(claude_app) || app=""
+	out=$(py launchers "$LAUNCHER_DIR" "$SELF" "$app" "${1:-}") || return 1
+	while IFS=$'\t' read -r op n; do
+		case "$op" in
+			+) info "已生成启动器「${n}」：在聚焦搜索、启动台或 ${LAUNCHER_DIR} 里找" ;;
+			-) info "已删除启动器「${n}」" ;;
+			!) warn "${LAUNCHER_DIR}/${n}.app 已存在且不是 cca 生成的，没有覆盖" ;;
+		esac
+	done <<< "$out"
+	return 0
+}
+
+cmd_app() {   # 用账号专属的资料目录和出口打开 Claude App；这个账号的已经开着就切到它
+	local key app dir pid first="" i p
+	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
+	app=$(claude_app) || die "没找到 Claude App：先从 https://claude.ai/download 下载安装"
+	key=$(pick_account "${1:-}") || return 0
+	eval "$(py env "$key")"
+	key="$ACC_KEY" dir="$ACC_DESKTOP_DIR"
+	pid=$(app_pid "$dir")
+	if [ -n "$pid" ]; then
+		activate_pid "$pid"
+		info "${ACC_NAME} 的 Claude App 已经开着，已切到前面"
+		return 0
+	fi
+	sync_if_changed
+	launchers_sync
+	preflight || exit 1
+	py link "$key" && py sync "$key" || die "初始化账号目录失败"
+	[ -e "$dir/Local State" ] || first=1
+	mkdir -p "$dir" && chmod 700 "$dir"
+	open -n -a "$app" --env CLAUDE_CONFIG_DIR="$ACC_CLAUDE_DIR" \
+		--env HTTPS_PROXY="$ACC_PROXY" --env https_proxy="$ACC_PROXY" --env HTTP_PROXY="$ACC_PROXY" --env http_proxy="$ACC_PROXY" \
+		--env NO_PROXY="$CCA_NO_PROXY" --env no_proxy="$CCA_NO_PROXY" \
+		--args --user-data-dir="$dir" --proxy-server="$ACC_PROXY" --proxy-bypass-list="$CCA_PROXY_BYPASS" ||
+		die "打开 Claude App 失败"
+	for i in $(seq 1 40); do [ -e "$dir/Local State" ] && break; sleep 0.25; done
+	if [ ! -e "$dir/Local State" ]; then   # 不认 --user-data-dir 的话，它会用默认资料（你主账号的登录）走这个账号的出口
+		for p in $(pgrep -f -- "--user-data-dir=$dir( |\$)"); do kill "$p" 2>/dev/null; done
+		die "Claude App 没有用 ${ACC_NAME} 自己的资料目录启动（可能是新版本不再支持多开），已经关掉，免得用错账号或出口"
+	fi
+	okay "已打开 ${ACC_LABEL} 的 Claude App，出口 ${ACC_NODE}（端口 ${ACC_PORT}）"
+	[ -n "$first" ] && info "第一次打开要登录 ${ACC_EMAIL:-这个账号}：用邮箱登录全程走这个账号的出口；用 Google 登录时，那一次会走系统网络"
+	return 0
+}
+
 cmd_check() {
 	local keys key ips="" rc
 	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
@@ -1869,6 +2034,15 @@ run_account() {
 	return $rc
 }
 
+sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）
+	py validate || die "账号表有错误：运行 cca edit 修正"
+	if [ "$(digest)" != "$(py get synced)" ]; then
+		info "账号表或路由器端脚本有变化，先同步到路由器"
+		router_sync
+		case $? in 0|3) ;; *) die "同步失败，已停止（避免走错出口）" ;; esac
+	fi
+}
+
 launch() {
 	local sel=""
 	if [ -z "$(py keys)" ]; then
@@ -1876,12 +2050,8 @@ launch() {
 		cmd_add || exit 1
 		sel="$ADDED_KEY"
 	fi
-	py validate || die "账号表有错误：运行 cca edit 修正"
-	if [ "$(digest)" != "$(py get synced)" ]; then
-		info "账号表或路由器端脚本有变化，先同步到路由器"
-		router_sync
-		case $? in 0|3) ;; *) die "同步失败，已停止（避免走错出口）" ;; esac
-	fi
+	sync_if_changed
+	launchers_sync   # 只改别名时摘要不变，启动器的名字也要跟上
 	if [ -n "${OPT_ACCOUNT:-}" ]; then
 		sel=$(py resolve "$OPT_ACCOUNT") || exit 1
 	elif [ -z "$sel" ]; then
@@ -2113,13 +2283,19 @@ cmd_install() {
 }
 
 cmd_restore() {
-	local key bk out rc
+	local key bk out rc running=""
 	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
 	need_tty
+	while IFS= read -r key; do   # 账号的 Claude App 开着时删它的资料目录会出问题
+		[ -n "$key" ] || continue
+		eval "$(py env "$key")"
+		[ -n "$(app_pid "$ACC_DESKTOP_DIR")" ] && running="${running:+${running}、}${ACC_NAME}"
+	done < <(py keys)
+	[ -z "$running" ] || die "这些账号的 Claude App 还开着：${running}。先退出它们再还原"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号：把会话里新产生的共享内容并回 ~/.claude，然后退出登录、删除它的钥匙串凭证"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
-	say "  · 本机：先打包备份配置（不含浏览器资料和私钥），再删除 ~/.local/bin/cca 和 $CCA_HOME"
+	say "  · 本机：先打包备份配置（不含浏览器资料和私钥），再删除 ~/.local/bin/cca、${CCA_HOME} 和各账号的 Claude App 启动器"
 	say "  · ~/.claude 与 ~/.claude.json 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
 	while IFS= read -r key; do
@@ -2142,9 +2318,10 @@ cmd_restore() {
 		rsh_close
 	fi
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-	tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' . 2>/dev/null &&
+	tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' . 2>/dev/null &&
 		info "配置备份：$bk"
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
+	launchers_sync remove-all
 	rm -rf "${CCA_HOME:?}"
 	info "已还原。原来的 claude 命令和 ~/.claude 不受影响"
 }
@@ -2166,6 +2343,8 @@ cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每
   cca ls                     列出账号、登录状态和端口
   cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）
+  cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
+                             每个账号在 ~/Applications 里有一个「Claude · 账号名」启动器（cca app --launchers 重新生成）
   cca check [账号]           检测各账号出口 IP、地区、纯净度，提示共用出口
 
 路由器
@@ -2208,6 +2387,7 @@ main() {
 				ls|list) cmd_list ;;
 				rm|remove) shift; cmd_rm "$@" ;;
 				web) shift; cmd_web "$@" ;;
+				app) shift; cmd_app "$@" ;;
 				check) shift; cmd_check "$@" ;;
 				router) shift; cmd_router "$@" ;;
 				@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;

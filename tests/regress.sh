@@ -3,16 +3,16 @@
 # 用法：bash tests/regress.sh（只在 macOS 上跑；全部用假命令，不联网、不碰真实的 ~/.cca 和路由器）
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
-T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX"); H=$T/home; R=$T/router
+T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）
 trap '[ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
 ok() { if eval "$2"; then echo "PASS  $1"; pass=$((pass + 1)); else echo "FAIL  $1   [$2]"; fail=$((fail + 1)); fi; }
-edit_table() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); $1; json.dump(j,open(p,'w'),indent=2)" "$H/.cca/accounts.json"; }
+edit_table() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); $1; json.dump(j,open(p,'w'),indent=2,ensure_ascii=False)" "$H/.cca/accounts.json"; }
 RC="$R/etc/openclash/custom.yaml"
 nl_() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); print((c["listeners"]||[]).count { |l| l["name"].start_with?("cca-") })' "$RC"; }
 first() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); g=(c["proxy-groups"]||[]).find { |x| x["name"]==ARGV[1] }; print(g ? g["proxies"][0] : "-")' "$RC" "$1"; }
@@ -59,6 +59,30 @@ run CCA_ACCOUNT='副号(bob@example.com)' "$H/.cca/bin/open-url" 'https://claude
 run CCA_ACCOUNT='副号(bob@example.com)' "$H/.cca/bin/open-url" 'https://example.com/a?b=1' >/dev/null 2>&1
 ok "会话里 /login 打开的登录地址没带邮箱时补上 login_hint，其它地址原样打开" 'grep -q "authorize?code=true&client_id=c&state=s&login_hint=bob%40example.com" open.log && grep -q "login_hint=x%40y.z\]" open.log && [ "$(grep -c login_hint open.log)" = 2 ] && grep -q "https://example.com/a?b=1\]" open.log'
 
+# 3c. Claude App 多开：每个账号一份资料目录、走自己的端口；启动器跟着账号表走
+L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
+ok "启动器：每个账号一个，改别名后自动改名，图标用 Claude App 的" '[ -x "$L/Claude · alice@example.com.app/Contents/MacOS/cca-launcher" ] && [ -d "$L/Claude · 副号.app" ] && [ ! -e "$L/Claude · 工作.app" ] && plutil -extract CFBundleIdentifier raw "$L/Claude · 副号.app/Contents/Info.plist" | grep -q "^local.cca.launcher.bob-example-com-" && cmp -s "$T/Claude.app/Contents/Resources/electron.icns" "$L/Claude · 副号.app/Contents/Resources/AppIcon.icns"'
+out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
+ok "cca app：账号自己的资料目录、端口和 CLAUDE_CONFIG_DIR，启动前做出口检测" '[ $rc -eq 0 ] && grep -qF -- "[-n] [-a] [$T/Claude.app] [--env] [CLAUDE_CONFIG_DIR=$BD/claude]" open.log && grep -qF -- "[--args] [--user-data-dir=$BD/desktop] [--proxy-server=http://192.0.2.10:7902] [--proxy-bypass-list=localhost;127.0.0.1;[::1];*.local;10.0.0.0/8;172.16.0.0/12;192.168.0.0/16]" open.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log && printf "%s" "$out" | grep -q "已打开 副号（bob@example.com） 的 Claude App，出口 US-B（端口 7902）" && printf "%s" "$out" | grep -q "第一次打开要登录 bob@example.com"'
+mkdir -p "$T/fakerun/Contents/MacOS"; printf '#!/bin/bash\nsleep 30\n' > "$T/fakerun/Contents/MacOS/Claude"; chmod 755 "$T/fakerun/Contents/MacOS/Claude"
+"$T/fakerun/Contents/MacOS/Claude" --user-data-dir="$BD/desktop" --proxy-server=x & FAKEPID=$!
+sleep 0.5; n_open=$(grep -c "user-data-dir=$BD/desktop" open.log)
+out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1)
+ok "cca app：这个账号的已经开着，只切到它，不开第二份" 'printf "%s" "$out" | grep -q "副号 的 Claude App 已经开着，已切到前面" && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = "$n_open" ]'
+out=$(run CCA_TTY="$(ans y)" cca rm 副号 2>&1); rc=$?
+ok "cca rm：这个账号的 Claude App 开着时不删" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "Claude App 还开着" && grep -q "副号(bob@example.com)" "$H/.cca/accounts.json"'
+kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
+touch "$T/open_noprofile"
+out=$(run CCA_TTY="$(ans)" cca app alice 2>&1); rc=$?
+ok "cca app：Claude App 不认独立资料目录时关掉并说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有用 alice@example.com 自己的资料目录启动"'
+rm -f "$T/open_noprofile"; : > osascript.log
+run "$L/Claude · 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
+ok "启动器：调用 cca app 打开对应账号" '[ $rc -eq 0 ] && [ ! -s osascript.log ] && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = $((n_open + 1)) ]'
+printf '{"countryCode":"CN","trust_score":90}' > "$T/risk/203.0.113.2.json"
+run "$L/Claude · 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
+ok "启动器：打不开时弹窗说明原因" '[ $rc -ne 0 ] && grep -q "副号 的 Claude App 没有打开" osascript.log && grep -q "中国大陆" osascript.log'
+rm -f "$T/risk/203.0.113.2.json"
+
 # 4. 选中节点被改动（仪表盘手动切 / 缓存恢复错）→ 启动前自动纠正，不重载
 printf US-D > "$R/sel/CCA-1"
 run cca @alice --version >/dev/null 2>&1
@@ -74,6 +98,7 @@ ok "手改账号表换节点：启动时同步，CCA-2 → US-C，不重载" '[ 
 # 6. 删除账号：槽位回到 REJECT，不重载
 run CCA_TTY="$(ans y)" cca rm bob >/dev/null 2>&1
 ok "rm bob：退出登录、删钥匙串；CCA-2 → REJECT；不重载" 'grep -q "delete-generic-password -s Claude Code-credentials-" security.log && [ "$(sel CCA-2)" = REJECT ] && [ "$(reloads)" = 1 ] && ! grep -q bob "$H/.cca/accounts.json"'
+ok "rm：账号的启动器一起删掉，别的账号的还在" '[ ! -e "$H/Applications/Claude · 副号.app" ] && [ -d "$H/Applications/Claude · alice@example.com.app" ]'
 
 # 7. 端口池不够（第 9 个账号）：需要重载 → 非交互时不重载，交互时问
 edit_table 'j.update({"u%d@example.com" % i: "US-D" for i in range(2, 10)})'
@@ -202,6 +227,7 @@ ok "install.sh 只下载了一半：什么都不执行" '[ "$(grep -c "GH latest
 K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_keys"
 run CCA_TTY="$(ans restore)" cca restore >/dev/null 2>&1; rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
+ok "restore：启动器全部删掉" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ]'
 ok "restore：本机还原，共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

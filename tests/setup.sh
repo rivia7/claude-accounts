@@ -194,7 +194,19 @@ S
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"
+# 像 Chromium/Electron 一样在 --user-data-dir 里建资料（open_noprofile：模拟 Claude App 不认这个参数）
+for a in "$@"; do
+	case "$a" in --user-data-dir=*) [ -f "$CCA_T/open_noprofile" ] || { mkdir -p "${a#--user-data-dir=}"; : > "${a#--user-data-dir=}/Local State"; } ;; esac
+done
 S
+cat > "$T/bin/osascript" <<'S'
+#!/bin/bash
+{ printf 'OSA'; printf ' [%s]' "$@"; echo; [ "${1:-}" = - ] && cat; } >> "$CCA_T/osascript.log"
+S
+# 假的 Claude App（只用到 Info.plist 里的图标名和图标文件）
+mkdir -p "$T/Claude.app/Contents/Resources" "$T/Claude.app/Contents/MacOS"
+plutil -create xml1 "$T/Claude.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string electron "$T/Claude.app/Contents/Info.plist"
+printf 'fake-icns' > "$T/Claude.app/Contents/Resources/electron.icns"
 cat > "$T/bin/security" <<'S'
 #!/bin/bash
 echo "SECURITY $*" >> "$CCA_T/security.log"
