@@ -121,7 +121,7 @@ ok "钩子：启动时把 8 个槽位注入配置，CCA-1 默认 US-A" '[ "$(rub
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
-ok "lint：脚本里没有 \$变量 紧跟非 ASCII 字符" '[ "$(python3 -I -c "import re,sys; print(len(re.findall(r\"\\\$[A-Za-z_][A-Za-z0-9_]*(?=[^\\x00-\\x7f])\", open(sys.argv[1], encoding=\"utf-8\").read())))" "$CCA")" = 0 ]'
+ok "lint：cca 和 install.sh 里没有 \$变量 紧跟非 ASCII 字符" '[ "$(python3 -I -c "import re,sys; print(sum(len(re.findall(r\"\\\$[A-Za-z_][A-Za-z0-9_]*(?=[^\\x00-\\x7f])\", open(f, encoding=\"utf-8\").read())) for f in sys.argv[1:]))" "$CCA" "$D/../install.sh")" = 0 ]'
 out=$(run cca router status 2>&1)
 ok "router status：列出槽位、端口和选中节点" 'printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A" && printf "%s" "$out" | grep -q "槽位 CCA-2 :7902 监听中 → REJECT"'
 
@@ -180,6 +180,23 @@ rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
 out=$(run cca ls 2>&1)
 ok "notify：只提示有新版本，不自动安装" 'printf "%s" "$out" | grep -q "cca 有新版本 9.9.13（当前 9.9.10）" && [ "$(ver)" = 9.9.10 ]'
 run cca update auto >/dev/null 2>&1
+
+# 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
+H3="$T/home3"; mkdir -p "$H3"
+sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
+r3() { env -i LANG=en_US.UTF-8 HOME="$H3" CCA_T="$T" SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+publish 9.9.20
+out=$(r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
+ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.20 ] && [ "$(readlink "$H3/.local/bin/cca")" = "$H3/.cca/bin/cca" ] && printf "%s" "$out" | grep -q "已下载 cca 9.9.20，签名校验通过"'
+ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
+out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?
+ok "再运行一次：修复/重装，不重复写 PATH" '[ $rc -eq 0 ] && [ "$(grep -c "\.local/bin" "$H3/.zshrc")" = 1 ] && printf "%s" "$out" | grep -q "已经写在"'
+publish 9.9.21; echo "# 篡改" >> "$G/v9.9.21/cca"; rm -rf "$H3"; mkdir -p "$H3"
+out=$(r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
+ok "一键安装：签名不对就不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "签名校验没通过" && [ ! -e "$H3/.cca" ]'
+n_gh=$(grep -c "GH latest-get" gh.log)
+r3 bash -c "head -c 1500 '$T/install.sh' | bash" >/dev/null 2>&1
+ok "install.sh 只下载了一半：什么都不执行" '[ "$(grep -c "GH latest-get" gh.log)" = "$n_gh" ] && [ ! -e "$H3/.cca" ]'
 
 # 12. 一键还原：移除端口池需要重载（restore 已确认）
 K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_keys"

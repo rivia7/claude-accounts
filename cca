@@ -43,7 +43,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.2.2"
+VERSION="2.2.3"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -176,6 +176,7 @@ self_path() {
 SELF=$(self_path)
 PYTHON="${CCA_PYTHON:-$(command -v python3 2>/dev/null)}"
 CLAUDE_BIN=$(command -v claude 2>/dev/null)
+[ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ] && CLAUDE_BIN="$HOME/.local/bin/claude"   # PATH 里还没加 ~/.local/bin 时
 
 # ---------------------------------------------------------------------------
 # Python 辅助：配置/账号表、共享链接、.claude.json 三方合并、出口检测解析
@@ -2050,11 +2051,28 @@ cmd_update() {
 # ---------------------------------------------------------------------------
 need_deps() {
 	local c miss=""
-	for c in python3 ssh ssh-keygen nc curl perl; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
-	[ -n "$PYTHON" ] || miss="$miss python3"
-	[ -n "$CLAUDE_BIN" ] || miss="$miss claude"
-	[ -z "$miss" ] || die "缺少依赖:$miss"
+	for c in ssh ssh-keygen nc curl perl; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
+	[ -z "$miss" ] || die "缺少命令:$miss"
+	# macOS 的 /usr/bin/python3 只是个占位，没装命令行工具时一运行就弹安装窗口
+	if [ -z "$PYTHON" ] || { [ "$PYTHON" = /usr/bin/python3 ] && [ "$(uname)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; }; then
+		die "需要 python3：先运行 xcode-select --install 装上苹果的命令行工具，装好后重新安装"
+	fi
+	[ -n "$CLAUDE_BIN" ] || die "没找到 Claude Code：先运行 curl -fsSL https://claude.ai/install.sh | bash 安装它，再重新安装 cca"
 	[ "$(uname)" = Darwin ] || warn "本脚本按 macOS 编写（钥匙串、open、Chrome 路径），其它系统需自行调整"
+}
+
+path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的启动文件
+	local bin="$1" rc="$HOME/.zshrc"
+	case "${SHELL:-}" in */bash) rc="$HOME/.bash_profile" ;; esac
+	if grep -qs '\.local/bin' "$rc"; then
+		warn "${bin} 已经写在 ${rc} 里，只是当前终端还没生效：打开一个新的终端标签再用 cca"
+	elif confirm "把 ${bin} 加进 PATH（写入 ${rc}），以后直接输入 cca 就能用？" y; then
+		printf '\n# cca（Claude Code 多账号）\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc" || return 1
+		info "已写入 ${rc}"
+		CCA_PATH_ADDED=1
+	else
+		warn "${bin} 不在 PATH 里：可以用 ${bin}/cca 运行，或者自己把它加进 PATH"
+	fi
 }
 
 cmd_install() {
@@ -2079,7 +2097,7 @@ cmd_install() {
 		[ -e "$bin/cca" ] && [ ! -L "$bin/cca" ] && die "$bin/cca 已存在且不是本脚本，请先处理"
 		ln -sf "$target" "$bin/cca"
 	fi
-	case ":$PATH:" in *":$bin:"*) ;; *) warn "$bin 不在 PATH 里，请加进 PATH" ;; esac
+	case ":$PATH:" in *":$bin:"*) ;; *) path_hint "$bin" ;; esac
 	info "已安装：$bin/cca → $target"
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
@@ -2090,7 +2108,8 @@ cmd_install() {
 	if [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
 		cmd_add || true
 	fi
-	info "完成。以后用 cca 启动 Claude Code（cca help 查看全部命令）"
+	if [ -n "${CCA_PATH_ADDED:-}" ]; then info "完成。打开一个新的终端标签，输入 cca 就能用（cca help 查看全部命令）"
+	else info "完成。以后输入 cca 启动 Claude Code（cca help 查看全部命令）"; fi
 }
 
 cmd_restore() {

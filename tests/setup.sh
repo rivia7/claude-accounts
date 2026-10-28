@@ -155,6 +155,12 @@ proxy=""; prev=""; url=""; out=""
 for a in "$@"; do case "$prev" in -x) proxy="$a" ;; -o) out="$a" ;; esac; case "$a" in http*) url="$a";; esac; prev="$a"; done
 # 假的 GitHub Releases：$CCA_T/gh/latest 是最新版本号，$CCA_T/gh/v<版本>/ 下是发布文件；其它 GitHub 地址一律失败（不联网）
 case "$url" in
+	https://github.com/rivia7/claude-accounts/releases/latest/download/*)
+		asset="${url##*/}"; v=$(cat "$CCA_T/gh/latest" 2>/dev/null)
+		echo "GH latest-get $asset" >> "$CCA_T/gh.log"
+		[ -f "$CCA_T/gh/v$v/$asset" ] || exit 22
+		cp "$CCA_T/gh/v$v/$asset" "$out"
+		exit 0 ;;
 	https://github.com/rivia7/claude-accounts/releases/latest)
 		echo "GH latest" >> "$CCA_T/gh.log"
 		[ -f "$CCA_T/gh/latest" ] || exit 22
