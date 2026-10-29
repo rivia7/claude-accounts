@@ -168,6 +168,75 @@ grep -v '^\. /usr/share\|LOG_OUT' "$R/etc/openclash/custom/openclash_custom_over
 env CCA_ROOT="$R" CCA_T="$T" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin" /bin/dash ow_run.sh "$R/tmp/custom.yaml"
 ok "钩子：启动时把 8 个槽位注入配置，CCA-1 默认 US-A" '[ "$(ruby -ryaml -e "c=YAML.load_file(ARGV[0]); print c[\"listeners\"].size" "$R/tmp/custom.yaml")" = 8 ] && ruby -ryaml -e "c=YAML.load_file(ARGV[0]); exit(c[\"proxy-groups\"].find { |g| g[\"name\"]==\"CCA-1\" }[\"proxies\"][0]==\"US-A\" ? 0 : 1)" "$R/tmp/custom.yaml"'
 
+# 10b. 出门在外：连不上路由器时改走本机 Clash Verge（全局扩展脚本 + 热加载，不重启它），回家后自动走回路由器
+V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VS="$V/profiles/Script.js"
+vreloads() { grep -c '^RELOAD$' "$T/verge/verge.log" 2>/dev/null || echo 0; }
+vsel() { cat "$T/verge/sel/$1" 2>/dev/null || echo -; }
+lastenv() { grep "^ENV: " claude.log | tail -n 1; }
+touch "$T/away"; : > ssh.log
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在外面、还没配置本机 Clash、非交互：说明原因，不启动，也不去连路由器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "连不上路由器 192.0.2.10" && printf "%s" "$out" | grep -q "cca local setup" && [ ! -s ssh.log ] && [ "$(vreloads)" = 0 ]'
+out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
+ok "在外面：问过之后配置 Clash Verge（全局扩展脚本末尾加一段，热加载一次，不重启它）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "现在配置 Clash Verge 吗" && grep -q ">>> cca >>>" "$VS" && [ "$(vreloads)" = 1 ] && grep -qx 7908 "$T/verge/listening" && ! grep -q clash-verge-rev open.log'
+ok "在外面：经本机 7901 出去（CCA-1 切到 US-A），Claude Code 拿到的代理也是它" '[ "$(vsel CCA-1)" = US-A ] && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log && lastenv | grep -q "https_proxy=http://127.0.0.1:7901" && lastenv | grep -q "CCA_PROXY=http://127.0.0.1:7901" && [ ! -s ssh.log ]'
+ok "热加载的配置：原来的节点、组和规则都在，CCA 组接在后面；Clash Verge 里没有的 US-D 不放进组" 'ruby -ryaml -rjson -e "c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))[\"payload\"]); g = c[\"proxy-groups\"]; exit(c[\"proxies\"].size == 4 && g[0][\"name\"] == \"Proxy\" && g.size == 9 && c[\"rules\"] == [\"MATCH,Proxy\"] && c[\"listeners\"].size == 8 && g[1][\"proxies\"] == %w[US-A US-B US-C REJECT] && g[2][\"proxies\"] == %w[REJECT US-A US-B US-C] ? 0 : 1)" "$T/verge/last_put.json"'
+"$T/verge_regen"
+ok "全局扩展脚本：用真的 JavaScript 引擎跑一遍（像 Clash Verge 重新生成配置），结果和热加载的一样，选中的节点保留" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); g = c[\"proxy-groups\"]; exit(g[0][\"name\"] == \"Proxy\" && g.size == 9 && c[\"rules\"] == [\"MATCH,Proxy\"] && c[\"listeners\"].map { |l| l[\"port\"] } == (7901..7908).to_a && c[\"listeners\"].all? { |l| l[\"listen\"] == \"127.0.0.1\" && l[\"users\"] == [] } && g[1] == {\"name\" => \"CCA-1\", \"type\" => \"select\", \"proxies\" => %w[US-A US-B US-C REJECT]} ? 0 : 1)" "$T/verge/regen.json" && [ "$(vsel CCA-1)" = US-A ]'
+ok "全局扩展脚本：在已经带端口池的配置上再跑一次，结果不变" '/usr/bin/osascript -l JavaScript "$T/verge/run_script.js" "$VS" "$T/verge/regen.json" > "$T/verge/regen2.json" && ruby -rjson -e "exit(JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1])) ? 0 : 1)" "$T/verge/regen.json" "$T/verge/regen2.json"'
+sed -i '' '4s|.*|  config.rules.unshift("DOMAIN,user.example,DIRECT"); return config;|' "$VS"; "$T/verge_regen"
+ok "全局扩展脚本：用户自己的 main 照常执行，端口池加在它的结果上" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); exit(c[\"rules\"] == [\"DOMAIN,user.example,DIRECT\", \"MATCH,Proxy\"] && c[\"listeners\"].size == 8 ? 0 : 1)" "$T/verge/regen.json"'
+sed -i '' '4s|.*|  return config;|' "$VS"
+n0=$(vreloads)
+run cca @alice --version >/dev/null 2>&1
+ok "在外面再启动：不再重载，只确认选中节点" '[ "$(vreloads)" = "$n0" ]'
+printf US-B > "$T/verge/sel/CCA-1"
+run cca @alice --version >/dev/null 2>&1
+ok "选中被改：启动前经控制接口纠正回 US-A，不重载" '[ "$(vsel CCA-1)" = US-A ] && [ "$(vreloads)" = "$n0" ]'
+edit_table 'j["alice@example.com"] = "US-C"'
+out=$(run cca @alice --version 2>&1)
+ok "在外面换节点：经控制接口切到 US-C，不重载；脚本里 CCA-1 默认的节点跟着改；路由器等回家再同步" '[ "$(vsel CCA-1)" = US-C ] && [ "$(vreloads)" = "$n0" ] && grep -qF "[\"CCA-1\", 7901, [\"US-C\"" "$VS" && printf "%s" "$out" | grep -q "回到家里的网络后再同步" && [ ! -s ssh.log ]'
+edit_table 'j["alice@example.com"] = "US-D"'
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在外面：Clash Verge 里没有账号的节点时不启动（宁可断开也不换出口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有节点「US-D」" && [ "$(vsel CCA-1)" = REJECT ]'
+edit_table 'j["alice@example.com"] = "US-A"'
+out=$(run CCA_TTY="$(ans carol@example.com 小号 2)" cca add 2>&1)
+ok "在外面加账号：不连路由器，回家后下次启动再同步" 'printf "%s" "$out" | grep -q "回到家里的网络后" && grep -q "小号(carol@example.com)" "$H/.cca/accounts.json" && [ ! -s ssh.log ]'
+: > open.log
+run CCA_TTY="$(ans)" cca web 小号 >/dev/null 2>&1
+ok "在外面：网页版和第一次登录也走本机端口（CCA-2 切到 US-B）" '[ "$(vsel CCA-2)" = US-B ] && grep -q "LOGIN carol@example.com" claude.log && tail -n 1 open.log | grep -qF -- "--proxy-server=http://127.0.0.1:7902"'
+: > open.log
+run CCA_ACCOUNT='小号(carol@example.com)' CCA_PROXY=http://127.0.0.1:7902 "$H/.cca/bin/open-url" 'https://claude.com/cai/oauth/authorize?code=true' >/dev/null 2>&1
+ok "登录时打开的浏览器用启动它的 cca 选好的出口（在外面是本机端口）" 'grep -qF -- "--proxy-server=http://127.0.0.1:7902" open.log'
+out=$(run cca check 2>&1)
+ok "在外面 cca check：经本机端口检测各账号的出口" 'printf "%s" "$out" | grep -q "198.51.100.1" && printf "%s" "$out" | grep -q "198.51.100.2" && [ ! -s ssh.log ]'
+out=$(run cca ls 2>&1)
+ok "在外面 cca ls：看本机端口" 'printf "%s" "$out" | grep -q "alice@example.com 的本机端口 7901 已就绪"'
+out=$(run cca local 2>&1)
+ok "cca local：现在走哪条路、各端口的监听状态和选中的节点" 'printf "%s" "$out" | grep -q "现在连不上路由器 192.0.2.10" && printf "%s" "$out" | grep -q "CCA-1  127.0.0.1:7901  监听中  → US-A   alice@example.com"'
+touch "$T/verge/down"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "Clash Verge 没在运行、非交互：说明后停止" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "Clash Verge 没在运行"'
+n0=$(vreloads)
+run CCA_TTY="$(ans y)" cca @alice --version >/dev/null 2>&1; rc=$?
+ok "Clash Verge 没在运行、交互：问过之后打开它（它按全局扩展脚本生成端口池），不用再热加载" '[ $rc -eq 3 ] && grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log && [ "$(vreloads)" = $((n0 + 1)) ] && [ "$(vsel CCA-1)" = US-A ]'
+edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(3, 10)})'
+n0=$(vreloads)
+run cca @alice --version >/dev/null 2>&1
+ok "在外面端口池要扩容（第 9 个账号）：自动热加载一次 Clash Verge，变成 16 个端口" '[ "$(vreloads)" = $((n0 + 1)) ] && grep -qx 7916 "$T/verge/listening" && [ "$(vsel CCA-9)" = US-B ]'
+edit_table '[j.pop("u%d@example.com" % i) for i in range(3, 10)]'
+touch "$T/verge/reload_reject"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "Clash Verge 的内核拒绝新配置：说明原因，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没接受新配置（HTTP 400）"'
+rm -f "$T/verge/reload_reject"
+rm -f "$T/away"; n0=$(vreloads); : > ssh.log
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
+ok "回到家：自动走回路由器，补同步在外面改过的账号表（CCA-2 → US-B），不碰 Clash Verge" '[ $rc -eq 3 ] && grep -q "sh -s" ssh.log && [ "$(sel CCA-2)" = US-B ] && [ "$(vreloads)" = "$n0" ] && lastenv | grep -q "https_proxy=http://192.0.2.10:7901"'
+run cca local off >/dev/null 2>&1
+ok "cca local off：全局扩展脚本逐字节还原，端口池从内核里移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening" && [ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"local\"])" "$H/.cca/config.json")" = "{}" ]'
+run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1
+ok "cca local setup：在家也能先配置好" 'grep -q ">>> cca >>>" "$VS" && grep -qx 7901 "$T/verge/listening"'
+run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
+
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
@@ -253,6 +322,7 @@ K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_key
 run CCA_TTY="$(ans restore)" cca restore >/dev/null 2>&1; rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器全部删掉" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ]'
+ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字节还原），本机端口池移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening"'
 ok "restore：本机还原，共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

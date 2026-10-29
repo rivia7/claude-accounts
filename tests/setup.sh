@@ -139,20 +139,82 @@ while [ $i -lt $n ]; do
 done
 dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
+# 出门在外（$CCA_T/away）：连不上路由器
+[ -f "$CCA_T/away" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }
 [ -n "$cmd" ] || exit 0
 if [ -f "$CCA_T/ssh_fail_uninstall" ]; then case "$cmd" in *uninstall*) echo "ssh: Connection refused" >&2; exit 255 ;; esac; fi
 exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=4 HOME="$CCA_T/router/root" PATH="$CCA_T/rbin:$PATH" /bin/dash -c "$cmd"
 S
 cat > "$T/bin/nc" <<'S'
 #!/bin/bash
-port="${@: -1}"
-grep -qx "$port" "$CCA_T/router/listening"
+# 127.0.0.1：假 Clash Verge 内核的监听端口；路由器：出门在外（$CCA_T/away）时一律连不上，平时 SSH 端口 22 连得上
+port="${@: -1}"; host="${@: -2:1}"
+case "$host" in
+	127.0.0.1) [ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening" ;;
+	*) [ -f "$CCA_T/away" ] && exit 1; [ "$port" = 22 ] && exit 0; grep -qx "$port" "$CCA_T/router/listening" ;;
+esac
 S
 # claude.ai trace：出口 IP = 203.0.113.(端口-7900)，7903 故意与 7901 同出口；iprisk：默认干净，可按 IP 放 risk/<ip>.json 覆盖
 cat > "$T/bin/curl" <<'S'
 #!/bin/bash
-proxy=""; prev=""; url=""; out=""
-for a in "$@"; do case "$prev" in -x) proxy="$a" ;; -o) out="$a" ;; esac; case "$a" in http*) url="$a";; esac; prev="$a"; done
+proxy=""; prev=""; url=""; out=""; sock=""; method=GET; data=""
+for a in "$@"; do
+	case "$prev" in -x) proxy="$a" ;; -o) out="$a" ;; --unix-socket) sock="$a" ;; -X) method="$a" ;; --data|--data-binary) data="$a" ;; esac
+	case "$a" in http*) url="$a";; esac; prev="$a"
+done
+# 假的 Clash Verge 内核控制接口（--unix-socket）：状态在 $CCA_T/verge（down=没在运行，listening=监听端口，
+# groups/CCA-n=组成员，sel/CCA-n=选中的节点）；输出"响应体\n状态码"（cca 用 -w '\n%{http_code}'）
+if [ -n "$sock" ]; then
+	[ -d "${CCA_T:-}/verge" ] || { echo "假 curl：没有测试沙箱（CCA_T）" >&2; exit 2; }
+	VD="$CCA_T/verge"; mkdir -p "$VD/groups" "$VD/sel"
+	reply() { printf '%s\n%s' "$2" "$1"; }
+	[ -f "$VD/down" ] && { printf '\n000'; exit 7; }
+	path="${url#http://localhost}"
+	case "$method $path" in
+		"GET /version") reply 200 '{"meta":true,"version":"v1.19.32"}' ;;
+		"GET /configs") reply 200 "{\"mode\":\"$(cat "$VD/mode")\",\"mixed-port\":7897}" ;;
+		"PATCH /configs") echo "PATCH $data" >> "$VD/verge.log"; printf '%s' "$data" | sed -n 's/.*"mode":"\([a-z]*\)".*/\1/p' > "$VD/mode"; reply 204 "" ;;
+		"PUT /configs?force=true")
+			[ -f "$VD/reload_reject" ] && { echo "RELOAD rejected" >> "$VD/verge.log"; reply 400 '{"message":"bad"}'; exit 0; }
+			cp "${data#@}" "$VD/last_put.json"
+			if err=$(ruby -ryaml -rjson -e '
+				c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))["payload"]) || {}
+				known = { "DIRECT" => 1, "REJECT" => 1 }
+				(c["proxies"] || []).each { |p| known[p["name"]] = 1 }
+				gs = c["proxy-groups"] || []
+				gs.each { |g| known[g["name"]] = 1 }
+				seen = {}
+				gs.each do |g|
+				  abort "proxy group #{g["name"]}: duplicate" if seen[g["name"]]
+				  seen[g["name"]] = 1
+				  (g["proxies"] || []).each { |m| abort "proxy group #{g["name"]}: #{m} not found" unless known[m] }
+				end
+				File.write(ARGV[1], ([c["mixed-port"]] + (c["listeners"] || []).map { |l| l["port"] }).compact.map { |p| "#{p}\n" }.join)
+				Dir.glob(File.join(ARGV[2], "CCA-*")).each { |f| File.delete(f) }
+				gs.select { |g| g["name"].to_s.start_with?("CCA-") }.each do |g|
+				  File.write(File.join(ARGV[2], g["name"]), g["proxies"].map { |m| "#{m}\n" }.join)
+				  s = File.join(ARGV[3], g["name"]); old = File.exist?(s) ? File.read(s) : nil
+				  File.write(s, g["proxies"].include?(old) ? old : g["proxies"][0])   # 像 store-selected：还在组里就保留原来选中的
+				end
+				Dir.glob(File.join(ARGV[3], "CCA-*")).each { |f| File.delete(f) unless File.exist?(File.join(ARGV[2], File.basename(f))) }' \
+				"${data#@}" "$VD/listening" "$VD/groups" "$VD/sel" 2>&1); then
+				echo RELOAD >> "$VD/verge.log"; reply 204 ""
+			else
+				echo "RELOAD failed: $err" >> "$VD/verge.log"; reply 400 "{\"message\":\"$err\"}"
+			fi ;;
+		"GET /proxies/"*)
+			g="${path#/proxies/}"
+			[ -f "$VD/groups/$g" ] || { reply 404 '{"message":"resource not found"}'; exit 0; }
+			reply 200 "{\"name\":\"$g\",\"type\":\"Selector\",\"now\":\"$(cat "$VD/sel/$g")\"}" ;;
+		"PUT /proxies/"*)
+			g="${path#/proxies/}"; name=$(printf '%s' "$data" | sed -n 's/^{"name":"\(.*\)"}$/\1/p')
+			if [ -f "$VD/groups/$g" ] && grep -qx "$name" "$VD/groups/$g"; then
+				printf '%s' "$name" > "$VD/sel/$g"; echo "SELECT $g $name" >> "$VD/verge.log"; reply 204 ""
+			else reply 400 '{"message":"Selector update error: proxy not exist"}'; fi ;;
+		*) reply 404 '{"message":"not found"}' ;;
+	esac
+	exit 0
+fi
 # 假的 GitHub Releases：$CCA_T/gh/latest 是最新版本号，$CCA_T/gh/v<版本>/ 下是发布文件；其它 GitHub 地址一律失败（不联网）
 case "$url" in
 	https://github.com/rivia7/claude-accounts/releases/latest/download/*)
@@ -175,12 +237,20 @@ case "$url" in
 	https://github.com/*|https://*.githubusercontent.com/*) echo "GH unexpected $url" >> "$CCA_T/gh.log"; exit 22 ;;
 esac
 if [ -n "$proxy" ]; then
-	port="${proxy##*:}"; grep -qx "$port" "$CCA_T/router/listening" || exit 7
-	echo "CURL via :$port $url" >> "$CCA_T/curl.log"
+	port="${proxy##*:}"; phost="${proxy#*://}"; phost="${phost%:*}"
+	if [ "$phost" = 127.0.0.1 ]; then   # 本机 Clash Verge 的端口：出口 IP 换成 198.51.100.x，选中 REJECT 时连接被拒
+		[ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening" || exit 7
+		s=$(cat "$CCA_T/verge/sel/CCA-$((port - 7900))" 2>/dev/null); [ -n "$s" ] && [ "$s" != REJECT ] || exit 56
+		echo "CURL via local:$port $url" >> "$CCA_T/curl.log"; net=198.51.100
+	else
+		[ -f "$CCA_T/away" ] && exit 7
+		grep -qx "$port" "$CCA_T/router/listening" || exit 7
+		echo "CURL via :$port $url" >> "$CCA_T/curl.log"; net=203.0.113
+	fi
 	case "$url" in
 		https://claude.ai/cdn-cgi/trace)
 			last=$((port - 7900)); [ "$port" = 7903 ] && last=1
-			printf 'fl=1\nip=203.0.113.%s\nloc=US\n' "$last" ;;
+			printf 'fl=1\nip=%s.%s\nloc=US\n' "$net" "$last" ;;
 		https://ip.net.coffee/api/iprisk/*)
 			ip="${url##*/}"
 			if [ -f "$CCA_T/risk/$ip.json" ]; then cat "$CCA_T/risk/$ip.json"
@@ -194,6 +264,8 @@ S
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"
+# 打开 Clash Verge：内核起来，并像它启动时那样按全局扩展脚本重新生成配置
+case " $* " in *" io.github.clash-verge-rev.clash-verge-rev "*) rm -f "$CCA_T/verge/down"; "$CCA_T/verge_regen"; exit 0 ;; esac
 # 像 Chromium/Electron 一样在 --user-data-dir 里建资料（open_noprofile：模拟 Claude App 不认这个参数）
 for a in "$@"; do
 	case "$a" in --user-data-dir=*) [ -f "$CCA_T/open_noprofile" ] || { mkdir -p "${a#--user-data-dir=}"; : > "${a#--user-data-dir=}/Local State"; } ;; esac
@@ -218,7 +290,7 @@ cat > "$T/bin/claude" <<'S'
 #!/bin/bash
 LOG="$CCA_T/claude.log"
 echo "ARGS: $*" >> "$LOG"
-echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
+echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset}" >> "$LOG"
 P="$CLAUDE_CONFIG_DIR/.claude.json"
 if [ "$1" = auth ]; then
 	case "$2" in
@@ -257,5 +329,79 @@ open(os.path.join(cd, 'projects', '-p1', 'memory', tag + '.md'), 'w').write('mem
 PY
 exit 3
 S
-chmod +x "$T"/bin/* "$T"/rbin/*
+# --- 假的 Clash Verge（Rev）：数据目录里的 profiles.yaml、全局扩展脚本、运行配置（节点同名，但没有 US-D）
+V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"
+mkdir -p "$V/profiles" "$T/verge/groups" "$T/verge/sel"
+printf '%s\n' '# Profiles Config for Clash Verge' '' 'current: Lprofile1' 'items:' '- uid: Merge' '  type: merge' '  file: Merge.yaml' \
+	'- uid: Script' '  type: script' '  file: Script.js' > "$V/profiles.yaml"
+printf '// Define main function (script entry)\n\nfunction main(config, profileName) {\n  return config;\n}\n' > "$V/profiles/Script.js"
+cp "$V/profiles/Script.js" "$T/pristine_script.js"
+cat > "$T/verge/base.yaml" <<Y
+# Clash Verge
+
+mode: rule
+mixed-port: 7897
+external-controller: ''
+secret: set-your-secret
+profile:
+  store-selected: true
+external-controller-unix: $T/verge.sock
+proxies:
+- name: US-A
+  type: ss
+  server: 192.0.2.1
+  port: 8388
+  cipher: aes-128-gcm
+  password: x
+- name: US-B
+  type: ss
+  server: 192.0.2.2
+  port: 8388
+  cipher: aes-128-gcm
+  password: x
+- name: US-C
+  type: ss
+  server: 192.0.2.3
+  port: 8388
+  cipher: aes-128-gcm
+  password: x
+- name: HK-A
+  type: ss
+  server: 192.0.2.5
+  port: 8388
+  cipher: aes-128-gcm
+  password: x
+proxy-groups:
+- name: Proxy
+  type: select
+  proxies:
+  - US-A
+  - DIRECT
+rules:
+- MATCH,Proxy
+Y
+cp "$T/verge/base.yaml" "$V/clash-verge.yaml"
+printf 'rule' > "$T/verge/mode"
+printf '7897\n' > "$T/verge/listening"
+# 模拟 Clash Verge 重新生成配置：用真的 JavaScript 引擎（osascript）跑全局扩展脚本，结果写成运行配置并交给假内核
+cat > "$T/verge/run_script.js" <<'S'
+ObjC.import('Foundation');
+function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, $.NSUTF8StringEncoding, null).js; }
+function run(argv) {   // 和 Clash Verge 一样：脚本源码后面接上 main(配置, 名字) 的调用
+  globalThis.__verge_config__ = read(argv[1]);
+  return (0, eval)(read(argv[0]) + "\n;JSON.stringify(main(JSON.parse(globalThis.__verge_config__),'test')||'')");
+}
+S
+cat > "$T/verge_regen" <<'S'
+#!/bin/bash
+# 路径全从脚本自己的位置推出来，不看 $HOME 和 $CCA_T：测试脚本直接调用时 $HOME 是真实的主目录，绝不能碰真的 Clash Verge
+T=$(cd "$(dirname "$0")" && pwd -P) && [ -d "$T/verge" ] && [ -d "$T/home" ] || exit 1
+V="$T/home/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VD="$T/verge"
+ruby -ryaml -rjson -e 'print JSON.generate(YAML.load_file(ARGV[0]))' "$VD/base.yaml" > "$VD/base.json" || exit 1
+/usr/bin/osascript -l JavaScript "$VD/run_script.js" "$V/profiles/Script.js" "$VD/base.json" > "$VD/regen.json" || exit 1
+ruby -ryaml -rjson -e 'c = JSON.parse(File.read(ARGV[0])); File.write(ARGV[1], YAML.dump(c)); File.write(ARGV[2], JSON.generate("payload" => YAML.dump(c)))' \
+	"$VD/regen.json" "$V/clash-verge.yaml" "$VD/regen.put" || exit 1
+CCA_T="$T" "$T/bin/curl" -s --unix-socket "$T/verge.sock" -X PUT --data-binary "@$VD/regen.put" 'http://localhost/configs?force=true' >/dev/null
+S
+chmod +x "$T"/bin/* "$T"/rbin/* "$T/verge_regen"
 echo "sandbox ready: $T"

@@ -45,7 +45,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.3.3"
+VERSION="2.4.0"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -285,6 +285,8 @@ def cfg_load():
     c.setdefault('nodes', [])          # 账号可选的出口节点，cca router setup 时从路由器的节点里选
     c.setdefault('min_trust', 50)
     c.setdefault('update', 'auto')     # auto：自动安装新版本；notify：只提示；off：不检查
+    c.setdefault('route', 'auto')      # auto：连得上路由器走路由器，连不上走本机 Clash；router / local：固定一种
+    c.setdefault('local', {})          # 本机 Clash 客户端（cca local setup）
     c.setdefault('ports', {})
     c.setdefault('last', '')
     c.setdefault('synced', '')
@@ -647,7 +649,7 @@ def cmd_env(key):
     port = c['ports'][key]
     a, e = parse_key(key)
     sh(ACC_KEY=key, ACC_ID=acct_id(key), ACC_ALIAS=a, ACC_EMAIL=e, ACC_NAME=a or e, ACC_LABEL=label_of(key),
-       ACC_NODE=t[key], ACC_PORT=port, ACC_PROXY='http://%s:%d' % (host, port) if host else '',
+       ACC_NODE=t[key], ACC_PORT=port, ACC_SLOT=port - FIRST_PORT + 1, ACC_PROXY='http://%s:%d' % (host, port) if host else '',
        ACC_CLAUDE_DIR=cdir(key), ACC_CHROME_DIR=os.path.join(adir(key), 'chrome'),
        ACC_DESKTOP_DIR=os.path.join(adir(key), 'desktop'),
        CCA_NO_PROXY=c['no_proxy'], CCA_PROXY_BYPASS=bypass_list(c['no_proxy']), CCA_MIN_TRUST=c['min_trust'])
@@ -666,7 +668,8 @@ def cmd_router_env():
     c = cfg_load()
     r = c.get('router') or {}
     sh(ROUTER_HOST=r.get('host', ''), ROUTER_PORT=r.get('port') or 22, ROUTER_USER=r.get('user') or 'root',
-       ROUTER_KEY=r.get('key', ''), PROXY_HOST=c.get('proxy_host') or r.get('host', ''))
+       ROUTER_KEY=r.get('key', ''), PROXY_HOST=c.get('proxy_host') or r.get('host', ''),
+       ROUTE_PREF=c.get('route') or 'auto', POOL_FIRST=FIRST_PORT)
 
 
 def cmd_router_set(host, port, user, key):
@@ -846,6 +849,277 @@ def cmd_set_nodes(*nodes):
     c = cfg_load()
     c['nodes'] = nodes
     cfg_save(c)
+
+
+# --- 出门在外：本机 Clash 客户端的端口池 -----------------------------------------
+VERGE_DIR = os.path.join(HOME, 'Library', 'Application Support', 'io.github.clash-verge-rev.clash-verge-rev')
+VERGE_SCRIPT = '// Define main function (script entry)\n\nfunction main(config, profileName) {\n  return config;\n}\n'
+LOCAL_BLOCK = re.compile(r'\n// >>> cca >>>.*?// <<< cca <<<\n', re.S)
+# 加在 Clash Verge 全局扩展脚本末尾：包住原来的 main，在它的结果上加端口池（重复执行结果不变）
+LOCAL_JS = r"""// >>> cca >>> 本机分流端口池（cca 自动维护，不要手改这一段；cca local off 会删掉它）
+// 127.0.0.1 上的入站 cca-n → 策略组 CCA-n，启动账号前 cca 会把组切到它的节点；原来的配置和规则不变
+var ccaUserMain = typeof main === 'function' ? main : function (config) { return config; };
+main = function (config, profileName) {
+  var pool = @POOL@, have = {}, keep = function (re) { return function (x) { return !(x && re.test(x.name)); }; };
+  config = ccaUserMain(config, profileName) || config;
+  (config.proxies || []).concat(config['proxy-groups'] || []).forEach(function (p) { if (p && p.name) have[p.name] = 1; });
+  config['proxy-groups'] = (config['proxy-groups'] || []).filter(keep(/^CCA-\d+$/));
+  config.listeners = (config.listeners || []).filter(keep(/^cca-\d+$/));
+  pool.forEach(function (s) {
+    var m = s[2].filter(function (n) { return n === 'REJECT' || have[n]; });
+    if (m[0] !== s[2][0]) m = ['REJECT'].concat(m.filter(function (n) { return n !== 'REJECT'; }));   // 分到的节点不在：宁可断开也不换出口
+    config['proxy-groups'].push({ name: s[0], type: 'select', proxies: m });
+    config.listeners.push({ name: s[0].toLowerCase(), type: 'mixed', listen: '127.0.0.1', port: s[1], users: [], proxy: s[0] });
+  });
+  return config;
+};
+// <<< cca <<<"""
+
+
+def slot_orders(c, t):
+    """端口池每个槽位：(组名, 端口, 成员顺序)。和路由器上一样，分到账号的槽位把它的节点排第一（客户端重新加载后默认就选中它），
+    空槽位 REJECT 排第一"""
+    out = []
+    for s, node in enumerate(slot_nodes(c, t), 1):
+        rest = [n for n in c['nodes'] if n != node]
+        out.append(('CCA-%d' % s, FIRST_PORT - 1 + s, [node] + rest + ([] if node == 'REJECT' else ['REJECT'])))
+    return out
+
+
+def local_members(order, have):
+    """和全局扩展脚本里的算法一样：只留客户端里有的节点；分到的节点不在时 REJECT 排第一"""
+    m = [n for n in order if n == 'REJECT' or n in have]
+    return m if m[0] == order[0] else ['REJECT'] + [n for n in m if n != 'REJECT']
+
+
+def local_want(c, t):
+    """端口池的结构（可选节点 + 槽位数）：变了才需要让客户端重新加载；只换节点走控制接口"""
+    return hashlib.sha1(json.dumps([sorted(c['nodes']), pool_size(c, t)]).encode('utf-8')).hexdigest()
+
+
+def verge_sock():
+    """Clash Verge 运行配置里内核控制接口的 Unix socket（它默认只开这个，不开 HTTP）"""
+    try:
+        with open(os.path.join(VERGE_DIR, 'clash-verge.yaml'), encoding='utf-8') as f:
+            for line in f:
+                m = re.match(r'external-controller-unix:\s*[\x22\x27]?([^\x22\x27\s]+)', line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return ''
+
+
+def verge_found():
+    """装了 Clash Verge（Rev），并且有全局扩展脚本"""
+    try:
+        with open(os.path.join(VERGE_DIR, 'profiles.yaml'), encoding='utf-8') as f:
+            return re.search(r'^- uid: [\x22\x27]?Script[\x22\x27]?\s*$', f.read(), re.M) is not None
+    except OSError:
+        return False
+
+
+def cmd_local_env():
+    c, t, _ = ctx()
+    loc = c['local']
+    client = loc.get('client', '')
+    n = pool_size(c, t)
+    sh(LOCAL_CLIENT=client, LOCAL_NAME='Clash Verge' if client == 'clash-verge' else '本机 Clash',
+       LOCAL_CTL='unix:' + verge_sock() if client == 'clash-verge' else loc.get('controller', ''),
+       LOCAL_SECRET=loc.get('secret', ''), LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=local_want(c, t),
+       LOCAL_SLOTS=n, LOCAL_FIRST=FIRST_PORT, LOCAL_LAST=FIRST_PORT + n - 1,
+       VERGE_DIR=VERGE_DIR, VERGE_FOUND=1 if verge_found() else 0)
+
+
+def cmd_local_set(*kv):
+    """local-set 键 值 …；换客户端（或 client 设成空）时清掉旧的设置"""
+    c = cfg_load()
+    loc = c['local']
+    for k, v in zip(kv[::2], kv[1::2]):
+        if k == 'client' and v != loc.get('client'):
+            loc.clear()
+        if v or k != 'client':
+            loc[k] = v
+    cfg_save(c)
+
+
+def write_text(path, text):
+    """原子替换文本文件，保留原来的权限（客户端随时可能来读）"""
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except FileNotFoundError:
+        mode = 0o644
+    tmp = '%s.cca-%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def cmd_local_script(path, action='install'):
+    """Clash Verge 全局扩展脚本里 cca 的那一段：install 写入或更新，remove 删掉（删后和原文件逐字节一致）。
+    内容没变就不写。main 是 const/let 定义的（包不住）时返回 3"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            old = f.read()
+    except FileNotFoundError:
+        old = ''
+    base = LOCAL_BLOCK.sub('', old)
+    new = base
+    if action == 'install':
+        if re.search(r'\b(?:const|let)\s+main\b', base):
+            sys.exit(3)
+        bk = os.path.join(CCA_HOME, 'backup', 'clash-verge-Script.js')
+        if old and old == base and not os.path.exists(bk):   # 第一次加之前留一份原样
+            os.makedirs(os.path.dirname(bk), exist_ok=True)
+            shutil.copyfile(path, bk)
+        if not base.strip():
+            base = VERGE_SCRIPT
+        c, t, _ = ctx()
+        pool = json.dumps([list(x) for x in slot_orders(c, t)], ensure_ascii=False)
+        new = base + ('' if base.endswith('\n') else '\n') + '\n' + LOCAL_JS.replace('@POOL@', pool) + '\n'
+    if new != old:
+        write_text(path, new)
+
+
+YAML_KEY = re.compile(r'^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:[ \t]+(.*?))?[ \t]*$')
+
+
+def yaml_sections(lines):
+    """顶层键 → [起始行, 结束行)。只认 serde_yaml 那样的块写法：顶层键顶格写，列表条目也从第 0 列的 "- " 开始"""
+    secs, cur = {}, None
+    for i, line in enumerate(lines):
+        if YAML_KEY.match(line):
+            if cur:
+                secs[cur][1] = i
+            cur = YAML_KEY.match(line).group(1)
+            secs[cur] = [i, len(lines)]
+    return secs
+
+
+def yaml_unquote(v):
+    # 引号写成 \x22 / \x27：这段 Python 嵌在 bash 的 $(…) 里，macOS 的 bash 3.2 会数引号，落单的引号会让它认错结尾
+    v = v.strip()
+    if v.startswith('\x22'):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return v.strip('\x22')
+    if v.startswith('\x27'):
+        return v[1:-1].replace('\x27\x27', '\x27')
+    return v
+
+
+def yaml_items(lines, sec):
+    """块列表里的条目 [[起, 止, name]]：`- name: X` 加缩进的续行，或一行的 `- {name: X, …}`"""
+    items = []
+    for i in range(sec[0] + 1, sec[1]):
+        if lines[i].startswith('- ') or lines[i] == '-':
+            items.append([i, i + 1, None])
+        elif items and (lines[i].startswith(' ') or not lines[i].strip()):
+            items[-1][1] = i + 1
+    for it in items:
+        first = lines[it[0]][2:].strip()
+        if first.startswith('{'):
+            m = re.search(r'(?:^|[{,])\s*[\x22\x27]?name[\x22\x27]?\s*:\s*(\x22(?:[^\x22\\]|\\.)*\x22|\x27(?:[^\x27]|\x27\x27)*\x27|[^,}]*)', first)
+            it[2] = yaml_unquote(m.group(1)) if m else None
+            continue
+        for j in range(it[0], it[1]):   # 条目自己的键：第一行 "- " 后面，或正好缩进两格的续行
+            line = lines[j]
+            if j == it[0] or (line.startswith('  ') and line[2:3] not in (' ', '-')):
+                m = re.match(r'name:\s*(.*)$', line[2:])
+                if m:
+                    it[2] = yaml_unquote(m.group(1))
+                    break
+    return items
+
+
+def yaml_names(lines, secs):
+    return {n for k in ('proxies', 'proxy-groups') if k in secs for _, _, n in yaml_items(lines, secs[k]) if n}
+
+
+def cmd_local_patch(path, mode='install'):
+    """给 PUT /configs 用的 JSON：Clash Verge 当前的运行配置加上端口池（mode=remove 时去掉）。
+    只动 proxy-groups 和 listeners 里 cca 的条目，其余逐字保留；看不懂格式时返回 1"""
+    c, t, _ = ctx()
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        sys.exit(1)
+    secs = yaml_sections(lines)
+    if 'proxies' not in secs and 'proxy-providers' not in secs:
+        sys.exit(1)
+    have = yaml_names(lines, secs)
+    add = {'proxy-groups': [], 'listeners': []}
+    if mode != 'remove':
+        for g, p, order in slot_orders(c, t):
+            add['proxy-groups'].append('- ' + json.dumps({'name': g, 'type': 'select', 'proxies': local_members(order, have)},
+                                                         ensure_ascii=False))
+            add['listeners'].append('- ' + json.dumps({'name': g.lower(), 'type': 'mixed', 'listen': '127.0.0.1', 'port': p,
+                                                       'users': [], 'proxy': g}))
+    ours = {'proxy-groups': re.compile(r'CCA-\d+$'), 'listeners': re.compile(r'cca-\d+$')}
+    tail = []
+    for key in sorted(ours, key=lambda k: -secs.get(k, [-1])[0]):   # 从后往前改，前面段落的行号不受影响
+        if key not in secs:
+            tail += [key + ':'] + add[key] if add[key] else []
+            continue
+        s, e = secs[key]
+        if (YAML_KEY.match(lines[s]).group(2) or '') not in ('', '[]', 'null', '~'):
+            sys.exit(1)   # 行内写法的非空列表，不去改它
+        # 重建这一段：去掉 cca 原来的条目，新的接在最后（和全局扩展脚本 push 到末尾一致），段尾的空行留在最后
+        starts = {a: (b, n) for a, b, n in yaml_items(lines, secs[key])}
+        new, i = [key + ':'], s + 1
+        while i < e:
+            if i in starts:
+                b, n = starts[i]
+                if not (n and ours[key].match(n)):
+                    new += lines[i:b]
+                i = b
+            else:
+                new.append(lines[i])
+                i += 1
+        blank = []
+        while len(new) > 1 and not new[-1].strip():
+            blank.append(new.pop())
+        lines[s:e] = new + add[key] + blank
+    if tail:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += tail + ['']
+    print(json.dumps({'payload': '\n'.join(lines)}))
+
+
+def cmd_local_missing(path):
+    """账号可选的节点里，Clash Verge 运行配置中没有的（顿号连起来）"""
+    c = cfg_load()
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return
+    have = yaml_names(lines, yaml_sections(lines))
+    print('、'.join(n for n in c['nodes'] if n not in have))
+
+
+def cmd_local_snippet():
+    """其它 Clash 客户端要手动加的配置"""
+    c, t, _ = ctx()
+    rows = slot_orders(c, t)
+    print('listeners:')
+    for g, p, _ in rows:
+        print('  - {name: %s, type: mixed, listen: 127.0.0.1, port: %d, users: [], proxy: %s}' % (g.lower(), p, g))
+    print('proxy-groups:')
+    for g, _, order in rows:
+        print('  - {name: %s, type: select, proxies: [%s]}' % (g, ', '.join(json.dumps(n, ensure_ascii=False) for n in order)))
+
+
+def cmd_slot_rows():
+    """端口池每个槽位：组名、端口、应选中的节点、用它的账号"""
+    c, t, _ = ctx()
+    who = {c['ports'][k]: name_of(k) for k in t}
+    for g, p, order in slot_orders(c, t):
+        print('%s\t%d\t%s\t%s' % (g, p, order[0], who.get(p, '')))
 
 
 LAUNCHER_MARK = 'cca-launcher.json'
@@ -1109,6 +1383,9 @@ CMDS = {
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'launchers': cmd_launchers,
+    'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
+    'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet,
+    'slot-rows': cmd_slot_rows,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -1683,14 +1960,22 @@ router_sync() {   # 0 成功；3 需要重载但没获同意（账号表已上�
 	verify_ports
 }
 
-verify_ports() {
-	local k p rc=0
-	load_router
+verify_ports() {   # verify_ports [127.0.0.1]：各账号的出口端口通不通（默认看路由器上的，给了 127.0.0.1 看本机 Clash 的）
+	local k p rc=0 host="${1:-}" what="出口端口"
+	if [ -n "$host" ]; then what="本机端口"; else load_router; host="$PROXY_HOST"; fi
 	while IFS=$'\t' read -r k p; do
 		[ -n "$p" ] || continue
-		if port_open "$PROXY_HOST" "$p"; then okay "${k} 的出口端口 ${p} 已就绪"; else warn "${k} 的出口端口 ${p} 不通"; rc=1; fi
+		if port_open "$host" "$p"; then okay "${k} 的${what} ${p} 已就绪"; else warn "${k} 的${what} ${p} 不通"; rc=1; fi
 	done < <(py ports named)
 	return $rc
+}
+
+router_sync_soon() {   # 增删改账号后同步到路由器；在外面连不上路由器时，等回家后的下次启动（摘要对不上会自动补同步）
+	if router_ready && ! at_home; then
+		info "现在连不上路由器 ${ROUTER_HOST}：回到家里的网络后，下次启动 cca 时会自动同步"
+		return 0
+	fi
+	router_sync
 }
 
 cmd_router() {
@@ -1717,9 +2002,9 @@ cmd_router() {
 # 账号
 # ---------------------------------------------------------------------------
 pick_node() {   # 从可选节点里选一个，打印节点名；标出已被哪些账号使用、路由器上是否存在
-	local onrouter def n=0 i node sel
+	local onrouter="" def n=0 i node sel
 	local -a nodes rows
-	onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | cut -f2)
+	at_home && onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | cut -f2)
 	while IFS= read -r node; do [ -n "$node" ] && { nodes[n]="$node"; n=$((n + 1)); }; done < <(py nodes-allowed | cut -f1)
 	[ $n -gt 0 ] || { warn "config.json 里没有可选节点（nodes）"; return 1; }
 	i=0
@@ -1767,7 +2052,7 @@ cmd_add() {
 	say ""
 	key=$(py add "$email" "$alias" "$node") || return 1
 	eval "$(py env "$key")"
-	router_sync || warn "路由器同步没完成：修好后运行 cca router sync"
+	router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
 	okay "已添加 ${ACC_LABEL}，出口 ${node}"
 	launchers_sync
@@ -1785,7 +2070,7 @@ cmd_edit() {
 		${EDITOR:-vi} "$TABLE" <&3 3<&-
 	done
 	if [ "$(digest)" != "$before" ] || [ "$(digest)" != "$(py get synced)" ]; then
-		router_sync
+		router_sync_soon
 	else
 		info "账号表没有变化"
 	fi
@@ -1794,7 +2079,7 @@ cmd_edit() {
 
 child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS 两个数组里
 	UNSETS=(-u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ALL_PROXY -u all_proxy)
-	SETS=(CLAUDE_CONFIG_DIR="$ACC_CLAUDE_DIR" CCA_ACCOUNT="$ACC_KEY" BROWSER="$CCA_HOME/bin/open-url"
+	SETS=(CLAUDE_CONFIG_DIR="$ACC_CLAUDE_DIR" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY" BROWSER="$CCA_HOME/bin/open-url"
 		https_proxy="$ACC_PROXY" HTTPS_PROXY="$ACC_PROXY" http_proxy="$ACC_PROXY" HTTP_PROXY="$ACC_PROXY"
 		no_proxy="$CCA_NO_PROXY" NO_PROXY="$CCA_NO_PROXY")
 }
@@ -1863,7 +2148,7 @@ cmd_rm() {
 	logout_account
 	rm -rf "${CCA_HOME:?}/accounts/${ACC_ID:?}"
 	py rm "$key"
-	router_sync
+	router_sync_soon
 	launchers_sync
 	info "已删除账号 ${ACC_LABEL}"
 }
@@ -1874,7 +2159,12 @@ cmd_list() {
 	say ""
 	while IFS= read -r r; do i=$((i + 1)); say "  ${i}. ${r}"; done < <(py rows "$(term_cols)")
 	say ""
-	router_ready && verify_ports
+	if ! want_local; then
+		router_ready && verify_ports
+	else
+		load_local
+		if local_ready; then verify_ports 127.0.0.1; else info "现在连不上路由器：在外面要先配置本机 Clash（cca local setup）"; fi
+	fi
 	return 0
 }
 
@@ -1930,6 +2220,53 @@ pick_account() {   # 参数给了就解析参数，否则交互选择
 	menu
 }
 
+# 这次走哪条路：在家走路由器的端口池；连不上路由器（出门在外）走本机 Clash 客户端的端口池（见下面"出门在外"一节）
+probe() {   # probe 主机 端口…：任一端口 1 秒内连得上就返回 0（并行探测，在外面时最多等 1 秒）
+	local h="$1" p ok=1
+	local -a pids=()
+	shift
+	for p in "$@"; do
+		if [ "$(uname)" = Darwin ]; then nc -z -G 1 "$h" "$p" >/dev/null 2>&1 & else nc -z -w 1 "$h" "$p" >/dev/null 2>&1 & fi
+		pids+=($!)
+	done
+	for p in "${pids[@]}"; do wait "$p" && ok=0; done
+	return $ok
+}
+at_home() {   # 连得上路由器（SSH 端口或端口池的第一个端口）就算在家；一次命令只探测一次
+	if [ -z "${AT_HOME:-}" ]; then
+		load_router
+		AT_HOME=no
+		[ -n "$ROUTER_HOST" ] && probe "$ROUTER_HOST" "$ROUTER_PORT" "$POOL_FIRST" && AT_HOME=yes
+	fi
+	[ "$AT_HOME" = yes ]
+}
+want_local() {   # 这次走本机 Clash 吗：按 config.json 的 route（CCA_ROUTE 可临时指定）；auto 时看连不连得上路由器
+	load_router
+	case "${CCA_ROUTE:-$ROUTE_PREF}" in router) return 1 ;; local) return 0 ;; esac
+	! at_home
+}
+pick_route() {   # 需要先 eval "$(py env 名称)"；结果在 ROUTE（router|local）和 ACC_PROXY 里
+	if want_local; then route_local; else route_router; fi
+}
+route_router() {   # 在家：让路由器确认端口池在，并把槽位切到账号的节点（API，无需重载）
+	local out rc
+	[ -n "$ACC_PROXY" ] || { warn "还没配置路由器（cca router setup）"; return 1; }
+	load_router
+	if router_ready; then
+		out=$(rsh "$RDIR/cca-router.sh ensure-now" 2>&1); rc=$?
+		[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
+		[ $rc -eq 3 ] && allow_reload && router_reload
+	fi
+	port_open "$PROXY_HOST" "$ACC_PORT" || {
+		warn "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
+		return 1
+	}
+	ROUTE=router
+}
+route_note() {   # 给提示用：走的是哪个端口
+	if [ "${ROUTE:-}" = local ]; then printf '本机 %s 端口 %s' "$LOCAL_NAME" "$ACC_PORT"; else printf '端口 %s' "$ACC_PORT"; fi
+}
+
 # 经账号端口检测出口：claude.ai 看到的 IP + ip.net.coffee/claude 的风险数据（不上报会话）
 coffee_check() {
 	local trace ip risk="" out rc
@@ -1947,18 +2284,7 @@ coffee_check() {
 preflight() {   # 账号的出口必须可用且干净，否则不启动（避免走错出口）
 	local bad rc
 	COFFEE_LINE=""
-	[ -n "$ACC_PROXY" ] || { warn "还没配置路由器（cca router setup）"; return 1; }
-	load_router
-	if router_ready; then   # 让路由器确认端口池在，并把槽位切到账号的节点（API，无需重载）
-		local out
-		out=$(rsh "$RDIR/cca-router.sh ensure-now" 2>&1); rc=$?
-		[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
-		[ $rc -eq 3 ] && allow_reload && router_reload
-	fi
-	port_open "$PROXY_HOST" "$ACC_PORT" || {
-		warn "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
-		return 1
-	}
+	pick_route || return 1
 	if ! bad=$(py settings-check); then
 		warn "共享的设置里配置了代理（${bad}），会覆盖账号端口。删掉后再用 cca 启动。"
 		return 1
@@ -2012,6 +2338,7 @@ cmd_web() {
 cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的浏览器实例里打开，登录地址没带邮箱时补上
 	local key="${CCA_ACCOUNT:-$(py get last)}" url
 	eval "$(py env "$key")" || exit 1
+	[ -n "${CCA_PROXY:-}" ] && ACC_PROXY="$CCA_PROXY"   # 启动它的 cca 选好的出口（在外面时是本机 Clash 的端口）
 	url=$(py login-url "$ACC_KEY" "$1") || url="$1"
 	open_chrome "$url"
 }
@@ -2077,19 +2404,248 @@ cmd_app() {   # 用账号专属的资料目录和出口打开 Claude App；这�
 		for p in $(pgrep -f -- "--user-data-dir=$dir( |\$)"); do kill "$p" 2>/dev/null; done
 		die "Claude App 没有用 ${ACC_NAME} 自己的资料目录启动（可能是新版本不再支持多开），已经关掉，免得用错账号或出口"
 	fi
-	okay "已打开 ${ACC_LABEL} 的 Claude App，出口 ${ACC_NODE}（端口 ${ACC_PORT}）"
+	okay "已打开 ${ACC_LABEL} 的 Claude App，出口 ${ACC_NODE}（$(route_note)）"
 	[ -n "$first" ] && info "第一次打开要登录 ${ACC_EMAIL:-这个账号}：用邮箱登录全程走这个账号的出口；用 Google 登录时，那一次会走系统网络"
 	return 0
 }
 
+# ---------------------------------------------------------------------------
+# 出门在外：连不上路由器时改走本机的 Clash 客户端。端口池和路由器上的一样：127.0.0.1 上的 mixed 入站 cca-n
+# （端口 7900+n）→ select 策略组 CCA-n，启动账号前经客户端内核的控制接口把组切到账号的节点（不用重载）。
+# Clash Verge 自动配置：在它的全局扩展脚本末尾加一段（它重新生成配置时带上端口池），再把端口池热加载进
+# 正在运行的内核（PUT /configs，和它自己改完配置后的做法一样，不用重启）；其它基于 mihomo 的客户端由用户
+# 手动加配置，cca 经它的外部控制接口切换节点。
+# ---------------------------------------------------------------------------
+VERGE_ID="io.github.clash-verge-rev.clash-verge-rev"
+load_local() {
+	eval "$(py local-env)"
+	[ "$LOCAL_CTL" = unix: ] && LOCAL_CTL="unix:$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)verge-mihomo.sock"
+	return 0
+}
+local_ready() { [ -n "$LOCAL_CLIENT" ]; }
+json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+json_get() { printf '%s' "$LBODY" | sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p'; }   # 响应里的字符串字段
+lctl() {   # lctl 方法 路径 [JSON 或 @文件]：本机 Clash 内核的控制接口；响应体在 ${LBODY}，HTTP 状态码在 ${LCODE}
+	local out url nl=$'\n'
+	local -a a=(-s -m "${LCTL_TIMEOUT:-8}" -X "$1" -w '\n%{http_code}')
+	case "$LOCAL_CTL" in
+		unix:*) a+=(--unix-socket "${LOCAL_CTL#unix:}"); url="http://localhost$2" ;;
+		*) url="${LOCAL_CTL%/}$2"; [ -n "$LOCAL_SECRET" ] && a+=(-H "Authorization: Bearer $LOCAL_SECRET") ;;
+	esac
+	[ -n "${3:-}" ] && a+=(-H 'Content-Type: application/json' --data-binary "$3")
+	out=$(curl "${a[@]}" "$url" 2>/dev/null)
+	LCODE=${out##*$nl}
+	LBODY=${out%$nl*}
+	case "$LCODE" in [1-5][0-9][0-9]) ;; *) LCODE=000; LBODY="" ;; esac
+}
+local_up() {   # 本机 Clash 内核的控制接口能用；Clash Verge 没在运行时（交互）问要不要打开它
+	local i
+	lctl GET /version
+	[ "$LCODE" = 200 ] && return 0
+	if [ "$LOCAL_CLIENT" != clash-verge ]; then
+		warn "连不上本机 Clash 的控制接口 ${LOCAL_CTL}：确认客户端在运行（地址或密钥变了就重新运行 cca local setup）"
+		return 1
+	fi
+	warn "Clash Verge 没在运行"
+	interactive && confirm "现在打开 Clash Verge 吗？" y || return 1
+	open -g -b "$VERGE_ID" || return 1
+	for i in $(seq 1 40); do
+		sleep 0.5
+		load_local
+		lctl GET /version
+		[ "$LCODE" = 200 ] && return 0
+	done
+	warn "等了 20 秒，Clash Verge 的内核还没就绪"
+	return 1
+}
+local_ports_ok() {   # 端口池的每个端口都在本机监听
+	local p
+	for p in $(seq "$LOCAL_FIRST" "$LOCAL_LAST"); do port_open 127.0.0.1 "$p" || return 1; done
+}
+verge_script() {   # 全局扩展脚本里 cca 的那一段保持最新（内容变了才写；Clash Verge 下次重新生成配置时用上）
+	py local-script "$VERGE_DIR/profiles/Script.js" install
+	case $? in
+		0) return 0 ;;
+		3) warn "Clash Verge 全局扩展脚本里的 main 是用 const/let 定义的，cca 接不上：改成 function main(config, profileName) { … } 再试" ;;
+		*) warn "写 Clash Verge 的全局扩展脚本失败" ;;
+	esac
+	return 1
+}
+verge_apply() {   # verge_apply [remove]：在 Clash Verge 当前的运行配置里加上（或去掉）端口池，交给内核重新加载
+	local f="$CCA_HOME/local.put.$$" mode
+	( umask 077; py local-patch "$VERGE_DIR/clash-verge.yaml" "${1:-install}" > "$f" ) ||   # 里面有节点的密钥，只给自己读
+		{ rm -f "$f"; warn "读不懂 Clash Verge 的运行配置：退出再打开 Clash Verge，它会按全局扩展脚本重新生成"; return 1; }
+	lctl GET /configs
+	mode=$(json_get mode)
+	lctl PUT '/configs?force=true' "@$f"
+	rm -f "$f"
+	case "$LCODE" in
+		2??) [ -n "$mode" ] && lctl PATCH /configs "{\"mode\":\"$mode\"}"   # 运行配置文件里的模式可能比界面上切换过的旧
+		     return 0 ;;
+	esac
+	warn "Clash Verge 的内核没接受新配置（HTTP ${LCODE}）：$(printf '%s' "$LBODY" | head -c 200)"
+	return 1
+}
+local_apply() {   # 把端口池放进正在运行的本机 Clash 内核
+	local i
+	if [ "$LOCAL_CLIENT" != clash-verge ]; then
+		warn "本机 Clash 里的端口池和账号表对不上（可选节点或账号数变了）：重新运行 cca local setup，按提示更新客户端的配置"
+		return 1
+	fi
+	info "正在把 cca 的端口池加进 Clash Verge（127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}），它会重新加载一次配置"
+	verge_apply || return 1
+	for i in $(seq 1 20); do local_ports_ok && break; sleep 0.25; done
+	local_ports_ok || { warn "Clash Verge 重新加载了配置，但端口 ${LOCAL_FIRST}–${LOCAL_LAST} 没有全部监听（可能被别的程序占用了）"; return 1; }
+	py local-set applied "$LOCAL_WANT"
+}
+local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽位切到 REJECT。返回 2：有策略组不在运行中的内核里
+	local g node
+	while IFS=$'\t' read -r g node; do
+		[ -n "$g" ] || continue
+		lctl GET "/proxies/$g"
+		[ "$LCODE" = 200 ] || return 2
+		[ "$(json_get now)" = "$node" ] && continue
+		lctl PUT "/proxies/$g" "{\"name\":\"$(json_esc "$node")\"}"
+		case "$LCODE" in 2??) ;; *) lctl PUT "/proxies/$g" '{"name":"REJECT"}' ;; esac   # 客户端里没有这个节点：宁可断开也不换出口
+	done < <(py select-lines)
+	return 0
+}
+local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本最新、端口池在运行中的内核里、每个槽位切到账号的节点
+	load_local
+	local_up || return 1
+	if [ "$LOCAL_CLIENT" = clash-verge ]; then verge_script || return 1; fi
+	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || ! local_ports_ok; then local_apply || return 1; fi
+	local_select_all && return 0
+	local_apply && local_select_all   # 组不在运行中的内核里（客户端重新生成过配置，却没带上端口池）
+}
+local_offer() {   # 在外面、还没配置本机 Clash：说明情况；交互时接着配置
+	warn "连不上路由器${ROUTER_HOST:+ ${ROUTER_HOST}}（可能不在家里的网络）"
+	if ! interactive; then
+		warn "在外面要改走本机的 Clash 客户端（例如 Clash Verge）：在终端里运行 cca local setup 配置一次"
+		return 1
+	fi
+	say "  在外面可以改走本机的 Clash 客户端：每个账号在本机开一个端口，走它自己的节点。"
+	cmd_local_setup
+}
+route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval "$(py env 名称)"）
+	load_local
+	local_ready || local_offer || return 1
+	local_ensure || return 1
+	lctl GET "/proxies/CCA-${ACC_SLOT}"
+	if [ "$(json_get now)" != "$ACC_NODE" ]; then
+		warn "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 cca edit 换一个两边都有的节点）"
+		return 1
+	fi
+	port_open 127.0.0.1 "$ACC_PORT" || { warn "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
+	ACC_PROXY="http://127.0.0.1:${ACC_PORT}"
+	ROUTE=local
+}
+cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户端按提示手动加配置
+	local miss
+	need_tty
+	py validate || die "账号表有错误：运行 cca edit 修正"
+	load_local
+	[ "$LOCAL_SLOTS" -gt 0 ] || { warn "还没有账号（cca add）"; return 1; }
+	[ "$VERGE_FOUND" = 1 ] || { manual_setup; return; }
+	say ""
+	say "  检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
+	say "  开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组 CCA-n，启动账号前 cca 把它切到账号的节点；然后让 Clash Verge 重新加载一次配置。"
+	say "  原来的配置、规则和系统代理都不变；不想用了运行 cca local off 删掉。"
+	confirm "现在配置 Clash Verge 吗？" y || return 1
+	py local-set client clash-verge || return 1
+	local_ensure || return 1
+	miss=$(py local-missing "$VERGE_DIR/clash-verge.yaml")
+	[ -n "$miss" ] && warn "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名节点"
+	okay "本机端口池已就绪：Clash Verge 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
+}
+manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：用户把配置加进去，cca 经它的外部控制接口切换节点
+	local ctl secret
+	say ""
+	say "  没找到 Clash Verge。其它基于 mihomo（Clash Meta 内核）的客户端也可以，要手动做两件事："
+	say "  1. 把下面 listeners 和 proxy-groups 的条目，分别追加到客户端配置（或覆写）里的同名列表，保存并重新加载："
+	say ""
+	py local-snippet | sed 's/^/       /' >&2
+	say ""
+	say "  2. 打开客户端的外部控制（external-controller），cca 用它切换各账号的节点"
+	confirm "这两件都做好了吗？" y || return 1
+	ctl=$(ask "  外部控制地址（例如 127.0.0.1:9090；Unix socket 写 unix:/路径）：" "")
+	[ -n "$ctl" ] || return 1
+	case "$ctl" in unix:*|http://*|https://*) ;; *) ctl="http://$ctl" ;; esac
+	secret=$(ask "  密钥 secret（没有就直接回车）：" "")
+	py local-set client manual controller "$ctl" secret "$secret" || return 1
+	load_local
+	lctl GET /version
+	if [ "$LCODE" != 200 ]; then
+		py local-set client ''
+		warn "连不上 ${ctl}（HTTP ${LCODE}）：检查地址和密钥后重新运行 cca local setup"
+		return 1
+	fi
+	py local-set applied "$LOCAL_WANT"
+	local_ensure || return 1
+	okay "本机端口池已就绪：127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
+}
+local_remove() {   # 删掉 Clash Verge 全局扩展脚本里 cca 的那一段，并从运行中的内核里移除端口池
+	load_local
+	if [ "$LOCAL_CLIENT" = clash-verge ]; then
+		py local-script "$VERGE_DIR/profiles/Script.js" remove || warn "改 Clash Verge 的全局扩展脚本失败"
+		lctl GET /version
+		if [ "$LCODE" = 200 ]; then verge_apply remove || warn "端口池要等 Clash Verge 下次重新加载配置后才消失"; fi
+	elif local_ready; then
+		info "请自己从本机 Clash 客户端的配置里删掉 cca-1… 入站和 CCA-1… 策略组"
+	fi
+	py local-set client ''
+}
+cmd_local_status() {
+	local g p node name st now
+	load_local
+	if at_home; then info "现在连得上路由器 ${ROUTER_HOST}：账号走路由器的端口"
+	else info "现在连不上路由器${ROUTER_HOST:+ ${ROUTER_HOST}}：账号走本机 Clash 的端口"; fi
+	if ! local_ready; then
+		if [ "$VERGE_FOUND" = 1 ]; then info "检测到 Clash Verge，还没配置（cca local setup）"
+		else info "还没配置本机 Clash 客户端（cca local setup）"; fi
+		return 0
+	fi
+	lctl GET /version
+	[ "$LCODE" = 200 ] || { warn "${LOCAL_NAME} 没在运行（控制接口 ${LOCAL_CTL}）"; return 0; }
+	say ""
+	say "  ${LOCAL_NAME}（控制接口 ${LOCAL_CTL}）"
+	while IFS=$'\t' read -r g p node name; do
+		if port_open 127.0.0.1 "$p"; then st="监听中"; else st="${C_R}不通${C_0}"; fi
+		lctl GET "/proxies/$g"
+		if [ "$LCODE" = 200 ]; then now=$(json_get now); else now="（不在内核里）"; fi
+		say "  ${g}  127.0.0.1:${p}  ${st}  → ${now}${name:+   ${C_D}${name}${C_0}}"
+	done < <(py slot-rows)
+	say ""
+}
+cmd_local() {
+	case "${1:-status}" in
+		status) cmd_local_status ;;
+		setup) cmd_local_setup ;;
+		off)
+			load_local
+			local_ready || { info "还没配置本机 Clash"; return 0; }
+			local_remove
+			okay "已移除本机 Clash 的端口池（之后在外面连不上路由器时会再问）" ;;
+		*) die "用法: cca local [status|setup|off]" ;;
+	esac
+}
+
 cmd_check() {
-	local keys key ips="" rc
+	local keys key ips="" rc host
 	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
 	[ -n "$keys" ] || { info "还没有账号"; return 0; }
 	load_router
+	host="$PROXY_HOST"
+	if want_local; then   # 在外面：先让本机端口池就绪、切好节点
+		load_local
+		local_ready || die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
+		local_ensure || return 1
+		host=127.0.0.1
+	fi
 	while IFS= read -r key; do
 		eval "$(py env "$key")" || continue
-		if ! port_open "$PROXY_HOST" "$ACC_PORT"; then
+		ACC_PROXY="http://${host}:${ACC_PORT}"
+		if ! port_open "$host" "$ACC_PORT"; then
 			say "  ${ACC_NAME}  ${ACC_NODE}  ${C_R}端口 ${ACC_PORT} 不通${C_0}"
 			continue
 		fi
@@ -2120,9 +2676,9 @@ run_account() {
 	if [ -n "$ACC_EMAIL" ]; then e="已登录"; else e="已登录 ${e}"; fi
 	say ""
 	if [ -n "$ACC_ALIAS" ] && [ -n "$ACC_EMAIL" ]; then
-		say "  ${C_B}${ACC_ALIAS}${C_0}  ${ACC_EMAIL}   ${C_D}${e} · 端口 ${ACC_PORT}${C_0}"
+		say "  ${C_B}${ACC_ALIAS}${C_0}  ${ACC_EMAIL}   ${C_D}${e} · $(route_note)${C_0}"
 	else
-		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}${e} · 端口 ${ACC_PORT}${C_0}"
+		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}${e} · $(route_note)${C_0}"
 	fi
 	if [ -n "$COFFEE_LINE" ]; then say "  ${C_D}出口${C_0}  ${ACC_NODE} · ${COFFEE_LINE}"
 	else say "  ${C_D}出口${C_0}  ${ACC_NODE}（未检测）"; fi
@@ -2143,9 +2699,13 @@ run_account() {
 	return $rc
 }
 
-sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）
+sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）；在外面就等回家
 	py validate || die "账号表有错误：运行 cca edit 修正"
 	if [ "$(digest)" != "$(py get synced)" ]; then
+		if router_ready && ! at_home; then
+			info "账号表或路由器端脚本有变化：现在连不上路由器，回到家里的网络后再同步"
+			return 0
+		fi
 		info "账号表或路由器端脚本有变化，先同步到路由器"
 		router_sync
 		case $? in 0|3) ;; *) die "同步失败，已停止（避免走错出口）" ;; esac
@@ -2404,6 +2964,7 @@ cmd_restore() {
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号：把会话里新产生的共享内容并回 ~/.claude，然后退出登录、删除它的钥匙串凭证"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
+	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池"
 	say "  · 本机：先打包备份配置（不含浏览器资料和私钥），再删除 ~/.local/bin/cca、${CCA_HOME} 和各账号的 Claude App 启动器"
 	say "  · ~/.claude 与 ~/.claude.json 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
@@ -2426,6 +2987,8 @@ cmd_restore() {
 		fi
 		rsh_close
 	fi
+	load_local
+	if local_ready; then local_remove; info "本机 ${LOCAL_NAME} 里 cca 的端口池已移除"; fi
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
 	tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' . 2>/dev/null &&
 		info "配置备份：$bk"
@@ -2437,7 +3000,7 @@ cmd_restore() {
 
 usage() {
 	cat >&2 <<EOF
-cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每个账号走 OpenClash 的独立端口）
+cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每个账号走 OpenClash 的独立端口，在外面走本机 Clash）
 
 启动
   cca [claude 参数]          弹出账号菜单：↑↓ 选择、回车确认、数字键直接选、q 退出；
@@ -2462,6 +3025,14 @@ cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每
   cca router sync [-y]       同步账号到路由器：换节点、增删账号走 API 即时生效；只有端口池要扩容
                              或可选节点变了才需重载 OpenClash（约 20 秒），会先问你（-y 直接同意）
   cca router status|nodes|log|ssh|uninstall
+
+出门在外（连不上路由器时改走本机的 Clash 客户端，例如 Clash Verge）
+  cca local [status]         现在走哪条路；本机端口池各端口的监听状态和选中的节点
+  cca local setup            配置本机 Clash：Clash Verge 自动配置（全局扩展脚本里加一段，不用重启它）；
+                             其它基于 mihomo 的客户端按提示手动加配置。在外面第一次启动时也会问
+  cca local off              删掉 Clash Verge 全局扩展脚本里 cca 的那一段，移除本机端口池
+                             平时自动判断：连得上路由器走路由器，连不上走本机 Clash；
+                             想固定一种，把 ${CFG} 的 route 改成 router 或 local
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca）
@@ -2500,6 +3071,7 @@ main() {
 				app) shift; cmd_app "$@" ;;
 				check) shift; cmd_check "$@" ;;
 				router) shift; cmd_router "$@" ;;
+				local) shift; cmd_local "$@" ;;
 				@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;
 				--) shift; launch "$@" ;;
 				*) launch "$@" ;;

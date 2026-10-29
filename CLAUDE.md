@@ -20,9 +20,14 @@
 - 改动要发版才会到达已安装的机器（包括维护者自己的 Mac）；`cca` 旁边有 `.git` 时是开发模式，不自动更新
 - Claude App 多开只认 `--user-data-dir`（签名版忽略 `CLAUDE_USER_DATA_DIR`）；App 不加单实例锁，同一个资料目录绝不能开两份，`cmd_app` 先用 `app_pid` 查
 - 启动器图标的轮廓必须和原图标一样：标识伸出圆角方形，macOS 26 起会把整个图标缩小、关进灰框。看效果要导出 `NSWorkspace.iconForFile`（系统实际显示的样子），只看 icns 本身发现不了
+- `PY_SRC=$(cat <<'PY' … PY)` 里不能有落单的 `'` 或 `"`：bash 3.2 扫描 `$(…)` 时会数引号，认错结尾后报错的行号在后面毫不相干的地方。正则和字符串里写 `\x22` / `\x27`
+- 出门在外（连不上路由器）走本机 Clash：Clash Verge 的 Merge 会整个替换列表，所以端口池写进全局扩展脚本（包住用户的 main）；生效靠 `PUT /configs` 热加载它当前的运行配置（文本插入，不重写），不重启 Clash Verge。它的内核控制接口默认只有 Unix socket（运行配置里的 `external-controller-unix`）
+- 在外面不连路由器：路由器同步留到回家后的下次启动（摘要对不上会自动补）；`at_home` 只探测 1 秒
 
 ## 测试写法
 - 交互流程：`CCA_TTY="$(ans 答案1 答案2 …)"`，一行一个答案
 - 方向键菜单和 readline 输入要在真 pty 里测：`script -q 日志 bash 驱动脚本`，配合定时输入
 - 自动更新：用 `tests/regress.sh` 里的 `mkver`/`publish`（临时发布密钥 + `$CCA_T/gh` 下的假 GitHub）
 - Claude App：`run` 里的 `CCA_CLAUDE_APP` 指向假的 Claude.app；假 `open` 遇到 `--user-data-dir` 会建 `Local State`（有 `open_noprofile` 时不建）
+- 出门在外：`touch "$T/away"` 让假 `nc`/`ssh` 连不上路由器；假 Clash Verge 的内核由假 `curl` 的 `--unix-socket` 分支模拟（状态在 `$T/verge`）；`$T/verge_regen` 用真的 JavaScript 引擎（osascript）跑全局扩展脚本，模拟它重新生成配置
+- 测试辅助脚本只用沙箱里的路径，不能靠 `$HOME`：在 `run` 外面直接调用时 `$HOME` 是真实的主目录（会碰到真的 Clash Verge 等）
