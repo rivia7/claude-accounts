@@ -64,6 +64,20 @@ L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
 ok "启动器：每个账号一个，改别名后自动改名" '[ -x "$L/Claude alice.app/Contents/MacOS/cca-launcher" ] && [ -d "$L/Claude 副号.app" ] && [ ! -e "$L/Claude 工作.app" ] && plutil -extract CFBundleIdentifier raw "$L/Claude 副号.app/Contents/Info.plist" | grep -q "^local.cca.launcher.bob-example-com-"'
 badge() { python3 -c "import json,sys; print(\" \".join(json.load(open(sys.argv[1]))[\"badge\"]))" "$L/$1.app/Contents/Resources/cca-launcher.json"; }
 ok "启动器图标：Claude 图标右下角加了账号标识（中文取头两个字，其它取首字母），各账号颜色不同" '[ "$(badge "Claude 副号" | cut -d" " -f1)" = 副号 ] && [ "$(badge "Claude alice" | cut -d" " -f1)" = A ] && [ "$(badge "Claude 副号" | cut -d" " -f2)" != "$(badge "Claude alice" | cut -d" " -f2)" ] && [ "$(sips -g pixelWidth "$L/Claude 副号.app/Contents/Resources/AppIcon.icns" | awk "/pixelWidth/ {print \$2}")" = 1024 ] && ! cmp -s "$T/Claude.app/Contents/Resources/electron.icns" "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"'
+cat > "$T/alpha.js" <<'EOF'
+ObjC.import('AppKit');
+function run(argv) {   // 第二张图哪儿都不比第一张更不透明（按比例坐标取 64×64 个点）就输出 ok
+  var r = argv.map(function (p) { return $.NSBitmapImageRep.imageRepWithData($.NSData.dataWithContentsOfFile(p)); }), m = 0;
+  for (var i = 0; i < 64; i++) for (var j = 0; j < 64; j++) {
+    var a = r.map(function (x) { return x.colorAtXY(Math.floor((i + 0.5) / 64 * x.pixelsWide), Math.floor((j + 0.5) / 64 * x.pixelsHigh)).alphaComponent; });
+    m = Math.max(m, a[1] - a[0]);
+  }
+  return m < 0.05 ? 'ok' : m.toFixed(2);
+}
+EOF
+sips -s format png "$T/Claude.app/Contents/Resources/electron.icns" --out "$T/icon-src.png" >/dev/null 2>&1
+sips -s format png "$L/Claude 副号.app/Contents/Resources/AppIcon.icns" --out "$T/icon-out.png" >/dev/null 2>&1
+ok "启动器图标：账号标识整个在原图标的轮廓里（伸出去的话 macOS 26 起会把图标缩小、关进灰框）" '[ "$(osascript -l JavaScript "$T/alpha.js" "$T/icon-src.png" "$T/icon-out.png")" = ok ]'
 m0=$(stat -f %m "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"); sleep 1; run cca app --launchers >/dev/null 2>&1
 ok "启动器图标：账号标识没变时不重画" '[ "$(stat -f %m "$L/Claude 副号.app/Contents/Resources/AppIcon.icns")" = "$m0" ]'
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?

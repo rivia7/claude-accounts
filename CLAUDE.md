@@ -19,6 +19,7 @@
 - `cca` 和 `install.sh` 里各有一份 `RELEASE_KEY`，必须和 `~/.ssh/cca_release_ed25519.pub` 一致（release.sh 会检查）
 - 改动要发版才会到达已安装的机器（包括维护者自己的 Mac）；`cca` 旁边有 `.git` 时是开发模式，不自动更新
 - Claude App 多开只认 `--user-data-dir`（签名版忽略 `CLAUDE_USER_DATA_DIR`）；App 不加单实例锁，同一个资料目录绝不能开两份，`cmd_app` 先用 `app_pid` 查
+- 启动器图标的轮廓必须和原图标一样：标识伸出圆角方形，macOS 26 起会把整个图标缩小、关进灰框。看效果要导出 `NSWorkspace.iconForFile`（系统实际显示的样子），只看 icns 本身发现不了
 
 ## 测试写法
 - 交互流程：`CCA_TTY="$(ans 答案1 答案2 …)"`，一行一个答案

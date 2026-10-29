@@ -45,7 +45,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.3.2"
+VERSION="2.3.3"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -905,23 +905,25 @@ def put(path, data, mode=0o644):
     return True
 
 
-BADGE_VERSION = 1
+BADGE_VERSION = 2
 BADGE_COLORS = ['#0A84FF', '#30A46C', '#8E4EC6', '#12A594', '#D6409F', '#3E63DD', '#E5484D', '#B2610B']
-# 在 Claude 图标右下角画账号标识（AppKit，经 osascript 的 JavaScript 运行；输出 PNG）
+# 在 Claude 图标右下角画账号标识（AppKit，经 osascript 的 JavaScript 运行；输出 PNG）。
+# 标识必须整个落在原图标的圆角方形里：轮廓一变，macOS 26 起会把整个图标缩小、关进灰色底框
 BADGE_JS = r"""ObjC.import('AppKit');
 function run(argv) {
   var src = argv[0], out = argv[1], label = argv[2], hex = argv[3], S = 1024;
   var base = $.NSImage.alloc.initWithContentsOfFile(src);
   if (base.isNil()) throw new Error('no base icon');
-  var img = $.NSImage.alloc.initWithSize($.NSMakeSize(S, S));
+  var img = $.NSImage.alloc.initWithSize($.NSMakeSize(S, S)), all = $.NSMakeRect(0, 0, S, S), zero = $.NSMakeRect(0, 0, 0, 0);
   img.lockFocus;
-  base.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, S, S), $.NSMakeRect(0, 0, 0, 0), 2, 1.0);
-  var d = S * 0.42, x = S - d - S * 0.035, y = S * 0.035;
+  base.drawInRectFromRectOperationFraction(all, zero, 2, 1.0);
+  // 苹果图标网格里圆角方形离画布边 0.0977·S，标识再往里缩 0.022·S（e 是标识外沿离画布边的距离）
+  var e = S * (0.0977 + 0.022), w = S * 0.02, d = S * 0.40 - w, x = S - e - d - w / 2, y = e + w / 2;
   var c = parseInt(hex.slice(1), 16);
   var o = $.NSBezierPath.bezierPathWithOvalInRect($.NSMakeRect(x, y, d, d));
   $.NSColor.colorWithSRGBRedGreenBlueAlpha((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255, 1).setFill;
   o.fill;
-  o.setLineWidth(S * 0.022);
+  o.setLineWidth(w);
   $.NSColor.whiteColor.setStroke;
   o.stroke;
   var font = $.NSFont.boldSystemFontOfSize(d * (label.length > 1 ? 0.36 : 0.52));
@@ -931,6 +933,7 @@ function run(argv) {
   var s = $.NSString.alloc.initWithUTF8String(label);
   var ts = s.sizeWithAttributes(attrs);
   s.drawAtPointWithAttributes($.NSMakePoint(x + (d - ts.width) / 2, y + (d - ts.height) / 2), attrs);
+  base.drawInRectFromRectOperationFraction(all, zero, 7, 1.0);   // DestinationIn：按原图标的透明度再裁一遍，轮廓分毫不差
   img.unlockFocus;
   var rep = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
   var png = rep.representationUsingTypeProperties(4, $.NSDictionary.dictionary);
