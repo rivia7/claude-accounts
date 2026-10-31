@@ -248,9 +248,12 @@ if [ -n "$proxy" ]; then
 		echo "CURL via :$port $url" >> "$CCA_T/curl.log"; net=203.0.113
 	fi
 	case "$url" in
-		https://claude.ai/cdn-cgi/trace)
+		https://claude.ai/cdn-cgi/trace)   # 出口地区默认 US，$CCA_T/loc/<端口> 可以改（模拟节点跑到受限地区）
 			last=$((port - 7900)); [ "$port" = 7903 ] && last=1
-			printf 'fl=1\nip=%s.%s\nloc=US\n' "$net" "$last" ;;
+			printf 'fl=1\nip=%s.%s\nloc=%s\n' "$net" "$last" "$(cat "$CCA_T/loc/$port" 2>/dev/null || echo US)" ;;
+		https://api*.example.com/*)   # 第三方 API 的接口：不带 key 访问回 401；$CCA_T/api_down 时连不上
+			[ -f "$CCA_T/api_down" ] && { printf 000; exit 7; }
+			printf 401 ;;
 		https://ip.net.coffee/api/iprisk/*)
 			ip="${url##*/}"
 			if [ -f "$CCA_T/risk/$ip.json" ]; then cat "$CCA_T/risk/$ip.json"
@@ -259,7 +262,19 @@ if [ -n "$proxy" ]; then
 	esac
 	exit 0
 fi
+case "$url" in   # 直连的第三方 API 接口（不能落到下面真的 curl 上：测试不联网）
+	https://api*.example.com/*)
+		echo "CURL api direct $url" >> "$CCA_T/curl.log"
+		[ -f "$CCA_T/api_down" ] && { printf 000; exit 7; }
+		printf 401; exit 0 ;;
+esac
 exec /usr/bin/curl "$@"
+S
+# 记下每次 env 的命令行参数（检查 key 从没出现在任何进程的命令行里），再交给真的 env
+cat > "$T/bin/env" <<'S'
+#!/bin/bash
+{ printf 'ENV'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/env.log"
+exec /usr/bin/env "$@"
 S
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
@@ -282,15 +297,99 @@ mkdir -p "$T/Claude.app/Contents/Resources" "$T/Claude.app/Contents/MacOS"
 plutil -create xml1 "$T/Claude.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string electron "$T/Claude.app/Contents/Info.plist"
 cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns "$T/Claude.app/Contents/Resources/electron.icns" 2>/dev/null ||
 	printf 'fake-icns' > "$T/Claude.app/Contents/Resources/electron.icns"
+# 假的钥匙串：条目存在 $CCA_T/keychain/<服务名>/<账户名>（文件内容就是密码；cca 的账户名是接口的域名）。
+# 命令行参数记在 security.log；-i 模式从 stdin 读命令（cca 存 key 用它，key 不进命令行），读到的命令记在 security.stdin
 cat > "$T/bin/security" <<'S'
 #!/bin/bash
 echo "SECURITY $*" >> "$CCA_T/security.log"
+KC="$CCA_T/keychain"; mkdir -p "$KC"
+one() {
+	local cmd="$1" svc="" acct="" hex="" pw="" w=0 prev="" a f
+	shift
+	for a in "$@"; do
+		case "$prev" in -s) svc="$a" ;; -a) acct="$a" ;; -X) hex="$a" ;; -w) pw="$a" ;; esac
+		[ "$a" = -w ] && w=1
+		prev="$a"
+	done
+	[ -n "$svc" ] || return 1
+	if [ -n "$acct" ]; then f="$KC/$svc/$acct"; else f=$(ls "$KC/$svc/"* 2>/dev/null | head -n 1); fi   # 不给 -a：第一条
+	case "$cmd" in
+		add-generic-password)
+			[ -f "$CCA_T/keychain_locked" ] && return 36
+			mkdir -p "$KC/$svc"; f="$KC/$svc/${acct:-_}"
+			if [ -n "$hex" ]; then printf '%s' "$hex" | xxd -r -p > "$f"; else printf '%s' "$pw" > "$f"; fi ;;
+		find-generic-password)
+			[ -n "$f" ] && [ -f "$f" ] || return 44
+			[ $w = 1 ] && { cat "$f"; echo; } ;;
+		delete-generic-password)
+			[ -n "$f" ] && [ -f "$f" ] || return 44
+			rm -f "$f"; rmdir "$KC/$svc" 2>/dev/null; return 0 ;;
+	esac
+}
+if [ "${1:-}" = -i ]; then
+	while IFS= read -r line; do
+		echo "$line" >> "$CCA_T/security.stdin"
+		read -r -a words <<< "$line"
+		one "${words[@]}"
+	done
+	exit 0   # 和真的一样：-i 里的命令失败了也返回 0
+fi
+one "$@"
+S
+# 假的 get_usage：按账号目录里登录的邮箱回 $CCA_T/usage/<邮箱>.json（没有这个文件就当没有订阅用量）；
+# usage/unsupported：回"不支持"；usage/hang：卡住不回
+cat > "$T/fake_usage.py" <<'S'
+import json, os, sys, time
+t, cd = os.environ['CCA_T'], os.environ.get('CLAUDE_CONFIG_DIR', '')
+try:
+    j = json.load(open(os.path.join(cd, '.claude.json')))
+except Exception:
+    j = {}
+email = (j.get('oauthAccount') or {}).get('emailAddress') or ''
+with open(os.path.join(t, 'claude.log'), 'a') as f:
+    f.write('USAGE: email=%s https_proxy=%s cwd=%s\n' % (email or '-', os.environ.get('https_proxy', 'unset'), os.getcwd()))
+print(json.dumps({'type': 'system', 'subtype': 'init'}), flush=True)
+for line in sys.stdin:
+    try:
+        m = json.loads(line)
+    except ValueError:
+        continue
+    if m.get('type') != 'control_request':
+        continue
+    rid, sub = m.get('request_id'), (m.get('request') or {}).get('subtype')
+    if os.path.exists(os.path.join(t, 'usage', 'hang')):
+        time.sleep(60)
+    p = os.path.join(t, 'usage', email + '.json')
+    if os.path.exists(os.path.join(t, 'usage', 'unsupported')) or sub != 'get_usage':
+        r = {'subtype': 'error', 'request_id': rid, 'error': 'Unsupported control request subtype: %s' % sub}
+    elif email and os.path.exists(p):
+        r = {'subtype': 'success', 'request_id': rid, 'response': dict(json.load(open(p)), session={}, behaviors=None)}
+    else:
+        r = {'subtype': 'success', 'request_id': rid, 'response': {'session': {}, 'subscription_type': None,
+             'rate_limits_available': False, 'rate_limits': None, 'behaviors': None}}
+    print(json.dumps({'type': 'control_response', 'response': r}), flush=True)
 S
 cat > "$T/bin/claude" <<'S'
 #!/bin/bash
 LOG="$CCA_T/claude.log"
 echo "ARGS: $*" >> "$LOG"
-echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset}" >> "$LOG"
+echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL-unset} ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN-unset} ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset} CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} CLAUDECODE=${CLAUDECODE-unset} CLAUDE_CODE_USE_MANTLE=${CLAUDE_CODE_USE_MANTLE-unset} CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST-unset}" >> "$LOG"
+# 第三方 API 账号：cca 经 --settings 传地址、模型和 apiKeyHelper。记下 env；像 Claude Code 一样执行 apiKeyHelper 取 key
+# （取到的 key 写进 claude.key，不进日志）
+prev=""; settings=""
+for a in "$@"; do [ "$prev" = --settings ] && settings="$a"; prev="$a"; done
+if [ -n "$settings" ]; then
+	python3 - "$settings" "$CCA_T" >> "$LOG" <<'PY'
+import json, subprocess, sys
+s, t = json.loads(sys.argv[1]), sys.argv[2]
+print('SETTINGS: env=%s' % json.dumps(s.get('env'), sort_keys=True))
+if s.get('apiKeyHelper'):
+    r = subprocess.run(['/bin/sh', '-c', s['apiKeyHelper']], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    open(t + '/claude.key', 'w').write(r.stdout)
+    print('HELPER: rc=%d' % r.returncode)
+PY
+fi
+case " $* " in *" --input-format stream-json "*) exec python3 "$CCA_T/fake_usage.py" ;; esac
 P="$CLAUDE_CONFIG_DIR/.claude.json"
 if [ "$1" = auth ]; then
 	case "$2" in
@@ -403,5 +502,13 @@ ruby -ryaml -rjson -e 'c = JSON.parse(File.read(ARGV[0])); File.write(ARGV[1], Y
 	"$VD/regen.json" "$V/clash-verge.yaml" "$VD/regen.put" || exit 1
 CCA_T="$T" "$T/bin/curl" -s --unix-socket "$T/verge.sock" -X PUT --data-binary "@$VD/regen.put" 'http://localhost/configs?force=true' >/dev/null
 S
-chmod +x "$T"/bin/* "$T"/rbin/* "$T/verge_regen"
+cat > "$T/edit.py" <<'S'
+#!/usr/bin/env python3
+# 假的编辑器（cca edit 用）：按环境变量 CCA_TEST_EDIT 里的一句 Python 改账号表（表在变量 j 里）
+import json, os, sys
+p = sys.argv[1]; j = json.load(open(p))
+exec(os.environ['CCA_TEST_EDIT'])
+json.dump(j, open(p, 'w'), indent=2, ensure_ascii=False)
+S
+chmod +x "$T"/bin/* "$T"/rbin/* "$T/verge_regen" "$T/edit.py"
 echo "sandbox ready: $T"

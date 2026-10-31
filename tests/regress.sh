@@ -1,5 +1,6 @@
 #!/bin/bash
-# 全流程回归：端口池（槽位 + 策略组，API 切换不重载）、重载需同意、账号表、出口检测、登录校验、自动更新、还原
+# 全流程回归：端口池（槽位 + 策略组，API 切换不重载）、重载需同意、账号表、出口检测、登录校验、第三方 API 账号、
+# 订阅用量、自动更新、还原
 # 用法：bash tests/regress.sh（只在 macOS 上跑；全部用假命令，不联网、不碰真实的 ~/.cca 和路由器）
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
@@ -237,6 +238,208 @@ run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1
 ok "cca local setup：在家也能先配置好" 'grep -q ">>> cca >>>" "$VS" && grep -qx 7901 "$T/verge/listening"'
 run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
 
+# 10c. 第三方 API 账号：直连 / 走节点；key 存钥匙串，经 apiKeyHelper 交给 Claude Code（不进命令行，也不进环境变量）
+kcd() { ls -d "$T/keychain/cca-api-$1-"* 2>/dev/null | head -n 1; }   # 钥匙串里这个账号的条目（目录里一个服务商一个文件）
+kc() { local d; d=$(kcd "$1"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
+kch() { local d; d=$(kcd "$1"); [ -n "$d" ] && ls "$d"; }   # 存它的服务商（接口的域名）
+lastline() { grep "^$1: " claude.log | tail -n 1; }
+S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
+: > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
+out=$(run CCA_TTY="$(ans kimi https://api.example.com/anthropic/ "$S1" kimi-k2 '')" cca add api 2>&1); rc=$?
+ok "add api：表里是对象（地址去掉末尾的 /，带 id，没有 key），直连不占端口、不同步路由器" '[ $rc -eq 0 ] && python3 -c "import json,sys; e=json.load(open(sys.argv[1]))[\"kimi\"]; c=json.load(open(sys.argv[2])); sys.exit(0 if e==dict(base_url=\"https://api.example.com/anthropic\", model=\"kimi-k2\", node=\"\", id=\"kimi\") and \"kimi\" not in c[\"ports\"] else 1)" "$H/.cca/accounts.json" "$H/.cca/config.json" && ! grep -q "sh -s" ssh.log && printf "%s" "$out" | grep -q "已添加第三方 API 账号 kimi"'
+ok "add api：key 经 security -i 的 stdin（十六进制）存进钥匙串，按接口的域名存，不出现在任何命令行里" '[ "$(kc kimi)" = "$S1" ] && [ "$(kch kimi)" = api.example.com ] && grep -q "add-generic-password -U -a api.example.com -s cca-api-kimi-" "$T/security.stdin" && ! grep -q "$S1" "$T/security.stdin" security.log "$T/env.log" ssh.log'
+n_trace=$(grep -c "cdn-cgi/trace" curl.log); n_login=$(grep -c "ARGS: auth login" claude.log); : > "$T/env.log"; rm -f "$T/claude.key"
+out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid ANTHROPIC_AUTH_TOKEN=sk-evil-0000 ANTHROPIC_MODEL=evil CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_CODE_USE_MANTLE=1 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 https_proxy=http://192.0.2.99:3128 HTTPS_PROXY=http://192.0.2.99:3128 cca @kimi --version 2>&1); rc=$?
+ok "API 账号启动：继承来的接口地址、凭证、模型、云厂商开关和代理都不带进去，并提示" '[ $rc -eq 3 ] && lastenv | grep -q "https_proxy=unset" && lastenv | grep -q "HTTPS_PROXY=unset" && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "ANTHROPIC_AUTH_TOKEN=unset" && lastenv | grep -q "ANTHROPIC_MODEL=unset" && lastenv | grep -q "CLAUDE_CODE_USE_BEDROCK=unset" && lastenv | grep -q "CLAUDE_CODE_USE_MANTLE=unset" && lastenv | grep -q "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=unset" && lastenv | grep -q "BROWSER=unset" && printf "%s" "$out" | grep -q "已为本次启动屏蔽环境里继承的"'
+ok "API 账号启动：地址、模型、关遥测经 --settings 的 env 传；apiKeyHelper 回调 cca 取到钥匙串里的 key" 'lastline SETTINGS | grep -qF "\"ANTHROPIC_BASE_URL\": \"https://api.example.com/anthropic\"" && lastline SETTINGS | grep -qF "\"ANTHROPIC_MODEL\": \"kimi-k2\"" && lastline SETTINGS | grep -qF "\"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"kimi-k2\"" && lastline SETTINGS | grep -qF "\"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"1\"" && [ "$(lastline HELPER)" = "HELPER: rc=0" ] && [ "$(cat "$T/claude.key")" = "$S1" ]'
+ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不走官方登录、不同步路由器；key 不出现在任何日志和命令行里" '! grep -q "sh -s" ssh.log && grep -q "CURL api direct https://api.example.com/anthropic" curl.log && [ "$(grep -c "cdn-cgi/trace" curl.log)" = "$n_trace" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && ! grep -q "$S1" claude.log "$T/env.log" security.log ssh.log curl.log open.log'
+out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
+ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址），也不加 --settings" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && ! lastline ARGS | grep -q -- --settings && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
+cp "$H/.claude/settings.json" "$T/settings.bak"; n_args=$(grep -c "^ARGS: " claude.log)
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "共享 settings.json 的 env 里有 ANTHROPIC_BASE_URL：拒绝启动并指出来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:ANTHROPIC_BASE_URL" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
+cp "$T/settings.bak" "$H/.claude/settings.json"
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j[\"apiKeyHelper\"]=\"echo x\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
+out=$(run CCA_TTY="$(ans)" cca @kimi --version 2>&1); rc=$?
+ok "共享 settings.json 里有 apiKeyHelper：第三方 API 账号也拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:apiKeyHelper"'
+cp "$T/settings.bak" "$H/.claude/settings.json"
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"NO_PROXY\"]=\"*\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "共享 settings.json 的 env 里有 NO_PROXY：拒绝启动（会让请求绕过账号的端口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:NO_PROXY"'
+cp "$T/settings.bak" "$H/.claude/settings.json"
+edit_table "j['kimi']['key'] = '$S2'"
+rm -f "$T/claude.key"; n_find=$(grep -c "find-generic-password" security.log)
+run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; rc=$?
+ok "账号表里写了 key 字段：用表里的，不去读钥匙串" '[ $rc -eq 3 ] && [ "$(cat "$T/claude.key")" = "$S2" ] && [ "$(grep -c "find-generic-password" security.log)" = "$n_find" ]'
+edit_table "j['kimi'].pop('key')"
+rm -rf "$(kcd kimi)"
+out=$(run cca @kimi --version 2>&1 </dev/null); rc=$?
+ok "钥匙串里没有 key、非交互：说明怎么补上，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca key kimi"'
+run CCA_TTY="$(ans "$S3")" cca key kimi >/dev/null 2>&1
+run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; rc=$?
+ok "cca key：重新输入 key 存进钥匙串，之后照常启动" '[ $rc -eq 3 ] && [ "$(kc kimi)" = "$S3" ] && [ "$(cat "$T/claude.key")" = "$S3" ]'
+edit_table "j['kimi']['base_url'] = 'https://api2.example.com/anthropic'"
+n_args=$(grep -c "^ARGS: " claude.log)
+out=$(run cca @kimi --version 2>&1 </dev/null); rc=$?
+ok "接口地址换成别的服务商：钥匙串里旧服务商的 key 不拿去用，要重新输入" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "换了服务商" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
+edit_table "j['kimi']['base_url'] = 'https://api.example.com/anthropic'"
+d1=$(lastenv | sed 's/.*CLAUDE_CONFIG_DIR=\([^ ]*\).*/\1/')
+edit_table 'j["月之暗面"] = j.pop("kimi")'
+out=$(run CCA_TTY="$(ans)" cca @月之暗面 --version 2>&1); rc=$?
+d2=$(lastenv | sed 's/.*CLAUDE_CONFIG_DIR=\([^ ]*\).*/\1/')
+ok "改别名：按 id 认出同一个账号，账号目录和钥匙串里的 key 都还在，不用重新输入" '[ $rc -eq 3 ] && [ "$d1" = "$d2" ] && [ "$(cat "$T/claude.key")" = "$S3" ] && ! printf "%s" "$out" | grep -q "还没有"'
+edit_table 'j["kimi"] = j.pop("月之暗面")'
+edit_table 'j.update({"bad1": {"model": "x"}, "bad2": {"base_url": "http://api.example.com"}, "bad3": {"base_url": "https://api.example.com", "baseurl": "x"}, "bad4": {"base_url": "https://api.example.com", "env": {"ANTHROPIC_API_KEY": "x"}}, "bad5@example.com": {"base_url": "https://api.example.com"}, "bad6": {"base_url": "https://api.example.com", "node": "HK-A"}, "bad7": {"base_url": "https://api.example.com", "key": "short"}, "bad8": {"base_url": "https://api.example.com", "id": "kimi"}, "bad9": {"base_url": "https://api.example.com", "env": {"FOO_API_KEY": "x", "API_TIMEOUT_MS": "600000"}}})'
+out=$(run cca @alice --version 2>&1 </dev/null); rc=$?
+ok "校验第三方 API 账号：缺地址、公网 http、不认识的字段、env 里设凭证或放密钥、键是邮箱、节点不在列表、key 不合格、id 重复" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "「bad1」：缺少 base_url" && printf "%s" "$out" | grep -q "「bad2」：base_url 要用 https" && printf "%s" "$out" | grep -q "「bad3」：不认识的字段 baseurl" && printf "%s" "$out" | grep -q "「bad4」：env 里不能设 ANTHROPIC_API_KEY" && printf "%s" "$out" | grep -q "「bad5@example.com」：第三方 API 账号的键只写别名" && printf "%s" "$out" | grep -q "「bad6」：节点「HK-A」不在可选列表" && printf "%s" "$out" | grep -q "「bad7」：key 应该是" && printf "%s" "$out" | grep -q "「kimi」和「bad8」会用同一个账号目录" && printf "%s" "$out" | grep -q "「bad9」：env 里不要放密钥（FOO_API_KEY）" && ! printf "%s" "$out" | grep -q API_TIMEOUT_MS'
+edit_table '[j.pop(k) for k in list(j) if k.startswith("bad")]'
+out=$(run CCA_TTY="$(ans tmp2 http://api.example.com/x https://api.example.com/x 'bad key' "$S1" 'bad model' m1 '')" cca add api 2>&1); rc=$?
+ok "add api：公网 http 地址、带空格的 key、带空格的模型名都会说明原因并重填" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "base_url 要用 https" && printf "%s" "$out" | grep -q "key 应该是一串可见的 ASCII 字符" && printf "%s" "$out" | grep -q "模型名里不能有空格或引号" && grep -q "\"tmp2\"" "$H/.cca/accounts.json"'
+run CCA_TTY="$(ans y)" cca rm tmp2 >/dev/null 2>&1
+run CCA_TTY="$(ans tmp3 https://api.example.com/x "$S1" '' '')" cca add api >/dev/null 2>&1
+run CCA_TTY="$(ans tmp4 https://api.example.com/y "$S2" '' '')" cca add api >/dev/null 2>&1
+ok "（准备）两个临时的第三方 API 账号，key 都在钥匙串里" '[ "$(kc tmp3)" = "$S1" ] && [ "$(kc tmp4)" = "$S2" ]'
+run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j.pop("tmp3")' cca edit >/dev/null 2>&1
+ok "在 cca edit 里删掉第三方 API 账号：钥匙串里它的 key 一起删" '[ -z "$(kc tmp3)" ] && [ "$(kc tmp4)" = "$S2" ]'
+edit_table 'j.pop("tmp4")'
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
+ok "直接改账号表删掉的：下次启动时清掉钥匙串里留下的 key" '[ -z "$(kc tmp4)" ]'
+touch "$T/keychain_locked"
+out=$(run CCA_TTY="$(ans tmp1 https://api.example.com/x "$S1" '' '')" cca add api 2>&1); rc=$?
+ok "key 存不进钥匙串（security -i 失败也返回 0，读回来比对才发现）：说明原因，不留下半个账号" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没存进钥匙串" && ! grep -q tmp1 "$H/.cca/accounts.json"'
+rm -f "$T/keychain_locked"
+: > ssh.log; n0=$(reloads)
+out=$(run CCA_TTY="$(ans relay https://api.example.com/v1 "$S2" '' 4)" cca add api 2>&1); rc=$?
+ok "add api 走节点：分到端口 7902，CCA-2 经 API 切到 US-C，不重载" '[ $rc -eq 0 ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"ports\"].get(\"relay\")==7902 else 1)" "$H/.cca/config.json" && [ "$(sel CCA-2)" = US-C ] && [ "$(reloads)" = "$n0" ]'
+run CCA_TTY="$(ans)" cca @relay --version >/dev/null 2>&1; rc=$?
+ok "走节点的 API 账号：Claude Code 和接口检测都经 7902；没填模型就不设模型变量" '[ $rc -eq 3 ] && lastenv | grep -q "https_proxy=http://192.0.2.10:7902" && grep -q "CURL via :7902 https://api.example.com/v1" curl.log && ! lastline SETTINGS | grep -q ANTHROPIC_MODEL && [ "$(cat "$T/claude.key")" = "$S2" ]'
+touch "$T/api_down"
+out=$(run CCA_TTY="$(ans)" cca @relay --version 2>&1); rc=$?
+ok "接口连不上：不启动，说明可以用 CCA_SKIP_CHECK=1 跳过" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "连不上 https://api.example.com/v1" && printf "%s" "$out" | grep -q CCA_SKIP_CHECK'
+run CCA_TTY="$(ans)" CCA_SKIP_CHECK=1 cca @relay --version >/dev/null 2>&1; rc=$?
+ok "CCA_SKIP_CHECK=1：跳过接口检测照常启动" '[ $rc -eq 3 ]'
+rm -f "$T/api_down"
+: > open.log
+out=$(run CCA_TTY="$(ans)" cca web kimi 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans)" cca app kimi 2>&1); rc2=$?
+ok "第三方 API 账号：cca web / cca app 说明只能用官方账号；也没有 Claude App 启动器" '[ $rc -ne 0 ] && [ $rc2 -ne 0 ] && printf "%s" "$out" | grep -q "网页版只能用官方账号" && printf "%s" "$out2" | grep -q "Claude App 只能用官方账号" && [ ! -s open.log ] && [ ! -e "$H/Applications/Claude kimi.app" ] && [ ! -e "$H/Applications/Claude relay.app" ] && [ -d "$H/Applications/Claude alice.app" ]'
+out=$(run CCA_TTY="$(ans)" cca @kimi --settings '{}' --version 2>&1); rc=$?
+ok "第三方 API 账号不能再加 --settings（会把 cca 传的地址和 key 整个顶掉）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不能再加 --settings"'
+m=$(run CCA_TTY="$(ans q)" cca 2>&1)
+ok "菜单：第三方 API 账号显示接口的域名、API、直连或节点；菜单里能直接添加第三方 API 账号" 'printf "%s" "$m" | grep -qE "kimi +api.example.com +API +直连" && printf "%s" "$m" | grep -qE "relay +api.example.com +API +US-C" && printf "%s" "$m" | grep -q "p      添加第三方 API 账号"'
+out=$(run cca check 2>&1)
+ok "cca check：第三方 API 账号检测接口连不连得上（走节点的经它的端口）" 'printf "%s" "$out" | grep -qE "kimi +直连 +接口连得上" && printf "%s" "$out" | grep -qE "relay +US-C +:7902 +接口连得上"'
+run CCA_TTY="$(ans edge https://api.example.com/e "$S3" '' 5)" cca add api >/dev/null 2>&1
+run CCA_TTY="$(ans y)" cca rm relay >/dev/null 2>&1
+ok "rm 第三方 API 账号：删掉钥匙串里的 key 和账号目录，槽位回到 REJECT" '[ -z "$(kc relay)" ] && [ "$(sel CCA-2)" = REJECT ] && ! grep -q relay "$H/.cca/accounts.json" && [ -z "$(ls -d "$H"/.cca/accounts/relay-* 2>/dev/null)" ]'
+portof() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"ports\"].get(sys.argv[2], \"-\"))" "$H/.cca/config.json" "$1"; }
+p0=$(portof edge)
+edit_table 'j["edge2"] = j.pop("edge")'; run cca ls >/dev/null 2>&1
+edit_table 'j["edge3"] = j.pop("edge2")'; run cca ls >/dev/null 2>&1
+ok "走节点的 API 账号改了两次别名：端口不变（7902 空出来了也不挪过去，开着的会话不会换出口），key 还在" '[ "$p0" = 7903 ] && [ "$(portof edge3)" = 7903 ] && [ "$(kc edge)" = "$S3" ]'
+run CCA_TTY="$(ans y)" cca rm edge3 >/dev/null 2>&1
+
+# 10d. 订阅用量：经每个官方账号自己的出口，让 Claude Code 自己查（get_usage），查不到时显示缓存；菜单里附上最近一次的
+setoa() {   # setoa .claude.json 字段=值…：改 oauthAccount（套餐、accountUuid）
+	python3 - "$@" <<'PY'
+import json, sys
+p = sys.argv[1]; j = json.load(open(p)); oa = j.setdefault('oauthAccount', {})
+for kv in sys.argv[2:]:
+    k, v = kv.split('=', 1); oa[k] = v
+json.dump(j, open(p, 'w'), indent=2)
+PY
+}
+canned() {   # canned 邮箱 5小时% 本周% [订阅] [额外的窗口 JSON]：假 claude 给这个账号的 get_usage 回应
+	mkdir -p "$T/usage"
+	python3 - "$T/usage/$1.json" "$2" "$3" "${4:-max}" "${5:-}" <<'PY'
+import json, sys, time
+p, five, week, sub, extra = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], json.loads(sys.argv[5] or '{}')
+at = lambda s: time.strftime('%Y-%m-%dT%H:%M:%S.123456+00:00', time.gmtime(time.time() + s))
+rl = {'five_hour': {'utilization': five, 'resets_at': at(2 * 3600 + 13 * 60 + 30)},
+      'seven_day': {'utilization': week, 'resets_at': at(3 * 86400 + 5 * 3600)}, 'seven_day_opus': None, 'seven_day_sonnet': None}
+rl.update(extra)
+json.dump({'subscription_type': sub, 'rate_limits_available': True, 'rate_limits': rl}, open(p, 'w'))
+PY
+}
+AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); AJ="$AD/claude/.claude.json"
+setoa "$AJ" organizationType=claude_max organizationRateLimitTier=default_claude_max_5x accountUuid=u-alice
+run CCA_TTY="$(ans bob@example.com '' 2)" cca add >/dev/null 2>&1
+run CCA_TTY="$(ans)" cca @bob --version >/dev/null 2>&1
+BJ=$(ls -d "$H"/.cca/accounts/bob-example-com-*)/claude/.claude.json
+setoa "$BJ" organizationType=claude_pro organizationRateLimitTier=default_claude_ai accountUuid=u-bob
+canned alice@example.com 13 41
+canned bob@example.com 98 72 pro '{"seven_day_sonnet": {"utilization": 60, "resets_at": "2099-01-01T00:00:00Z"}}'
+out=$(run cca usage 2>&1); rc=$?
+ok "cca usage：两个官方账号一起查，表里有套餐、5 小时和本周用量、分模型额度；注明第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Max 5x +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -q "Sonnet 本周 60%" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi"'
+ok "cca usage：每个账号经自己的端口、用自己的配置目录无界面查询（--safe-mode），查之前先看出口地区" 'grep -q "^ARGS: -p --safe-mode --no-session-persistence --strict-mcp-config --input-format stream-json --output-format stream-json --verbose$" claude.log && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=alice@example.com https_proxy=http://192.0.2.10:7901" && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=bob@example.com https_proxy=http://192.0.2.10:7902" && grep -q "CURL via :7902 https://claude.ai/cdn-cgi/trace" curl.log'
+out=$(run cca usage --json 2>/dev/null)
+ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a={x[\"account\"]: x for x in d[\"accounts\"]}; sys.exit(0 if a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max 5x\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] else 1)"'
+ok "cca usage：查到的存进账号目录的 usage.json（菜单和查不到时用）" '[ -f "$AD/usage.json" ]'
+m=$(run CCA_TTY="$(ans q)" cca 2>&1)
+ok "菜单：官方账号附上最近一次的用量（读缓存，不联网）" 'printf "%s" "$m" | grep -q "5h 13% · 周 41%" && printf "%s" "$m" | grep -q "5h 98% · 周 72%"'
+cp "$R/listening" "$T/listening.bak"; grep -vx 7902 "$T/listening.bak" > "$R/listening"; canned bob@example.com 50 50 pro
+out=$(run cca usage 2>&1)
+ok "出口端口不通：显示上次的缓存（注明多久前）和原因，不拿账号走别的路" 'printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -qE "缓存（[0-9]+ 分钟前）：出口端口 7902 不通"'
+cp "$T/listening.bak" "$R/listening"
+touch "$T/usage/unsupported"
+out=$(run cca usage alice 2>&1)
+ok "Claude Code 不支持 get_usage：提示升级，用缓存顶上" 'printf "%s" "$out" | grep -q "这个版本的 Claude Code 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Max 5x +13%"'
+rm -f "$T/usage/unsupported"; touch "$T/usage/hang"; t0=$(date +%s)
+out=$(run CCA_USAGE_TIMEOUT=2 cca usage alice 2>&1); t1=$(date +%s)
+ok "查询卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
+rm -f "$T/usage/hang"; mkdir -p "$T/loc"; printf CN > "$T/loc/7901"; n_usage=$(grep -c "^USAGE: " claude.log)
+out=$(run cca usage alice 2>&1)
+ok "出口在受限地区：不拿账号去查，说明原因" 'printf "%s" "$out" | grep -q "出口在中国大陆" && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
+rm -f "$T/loc/7901"
+out=$(run cca usage kimi 2>&1); rc=$?
+ok "cca usage 第三方 API 账号：说明它没有订阅用量" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有订阅用量可查"'
+touch "$T/away"
+run cca usage alice >/dev/null 2>&1
+ok "在外面 cca usage：经本机 Clash 的端口查" 'grep "^USAGE: " claude.log | tail -n 1 | grep -q "email=alice@example.com https_proxy=http://127.0.0.1:7901"'
+rm -f "$T/away"
+run CLAUDECODE=1 cca usage alice >/dev/null 2>&1
+ok "在 Claude Code 里（! 前缀）运行 cca usage：查询的子进程不带 CLAUDECODE" 'lastenv | grep -q "CLAUDECODE=unset"'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop(\"oauthAccount\"); json.dump(j, open(p, \"w\"))" "$BJ"
+n_usage=$(grep -c "^USAGE: " claude.log)
+out=$(run cca usage 2>&1)
+ok "没登录的账号：不启动查询，提示先登录" 'printf "%s" "$out" | grep -q "还没登录（cca @bob@example.com 登录）" && [ "$(grep -c "^USAGE: " claude.log)" = $((n_usage + 1)) ]'
+python3 - "$AD/usage.json" <<'PY'
+import json, sys, time
+p = sys.argv[1]; j = json.load(open(p))
+j['fetchedAtMs'] = int((time.time() - 3 * 3600 - 60) * 1000)
+j['utilization']['five_hour']['resets_at'] = '2000-01-01T00:00:00Z'
+json.dump(j, open(p, 'w'))
+PY
+m=$(run COLUMNS=160 CCA_TTY="$(ans q)" cca 2>&1)
+ok "菜单：缓存旧了注明多久前；重置时间过了的窗口写已重置" 'printf "%s" "$m" | grep -q "5h 已重置 · 周 41%（3 小时前）"'
+rm -f "$AD/usage.json"
+python3 - "$AJ" <<'PY'
+import json, sys, time
+p = sys.argv[1]; j = json.load(open(p))
+w = {'utilization': 7, 'resets_at': '2099-01-01T00:00:00Z'}
+j['cachedUsageUtilization'] = {'fetchedAtMs': int(time.time() * 1000), 'accountUuid': 'u-alice',
+                               'utilization': {'five_hour': w, 'seven_day': dict(w, utilization=9)}}
+json.dump(j, open(p, 'w'))
+PY
+m=$(run COLUMNS=160 CCA_TTY="$(ans q)" cca 2>&1)
+ok "菜单：也认 Claude Code 自己的缓存（cachedUsageUtilization）" 'printf "%s" "$m" | grep -q "5h 7% · 周 9%"'
+setoa "$AJ" accountUuid=u-other
+m=$(run COLUMNS=160 CCA_TTY="$(ans q)" cca 2>&1)
+ok "菜单：缓存是别的登录存的（accountUuid 对不上）时不显示" '! printf "%s" "$m" | grep -q "5h 7%"'
+run CCA_TTY="$(ans y)" cca rm bob >/dev/null 2>&1
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
+
+# 10e. 不用路由器、只用直连的第三方 API 账号
+H4="$T/home4"; mkdir -p "$H4/.claude"
+r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r4 CCA_TTY="$(ans n n)" bash "$CCA" install >/dev/null 2>&1
+out=$(r4 CCA_TTY="$(ans solo https://api.example.com/anthropic "$S1" '')" cca add api 2>&1); rc=$?
+out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
+out3=$(r4 cca ls 2>&1)
+ok "不配置路由器、只有直连的第三方 API 账号：照样能添加、启动和列出，不提路由器" '[ $rc -eq 0 ] && [ $rc2 -eq 3 ] && ! printf "%s%s%s" "$out" "$out2" "$out3" | grep -q "路由器" && printf "%s" "$out3" | grep -qE "solo +api.example.com +API +直连"'
+r4 CCA_TTY="$(ans y)" cca rm solo >/dev/null 2>&1
+
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
@@ -324,5 +527,6 @@ ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写�
 ok "restore：启动器全部删掉" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ]'
 ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字节还原），本机端口池移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening"'
 ok "restore：本机还原，共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
+ok "restore：第三方 API 账号的 key 从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ -z "$(ls "$T/keychain" | grep "^cca-api-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

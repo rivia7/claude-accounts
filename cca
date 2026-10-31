@@ -3,14 +3,20 @@
 #
 #   cca                    方向键选择账号（光标默认在上次用的账号上，菜单里也能新增）后启动 Claude Code
 #   cca @<账号> [参数]      直接用该账号启动（账号可写别名、邮箱、编号或唯一前缀），参数原样交给 claude
+#   cca usage              查各官方账号的订阅用量（5 小时 / 本周额度）
 #   cca help               全部命令
 #
 # 账号配置表 ~/.cca/accounts.json：{"别名(邮箱)": "代理节点", ...}，别名可省略；节点只能从 config.json 的 nodes 里选。
+# 第三方 API（兼容 Anthropic 接口的地址 + key）也算一个账号：{"别名": {"base_url": "…", "model": "…", "node": ""}}，
+# node 为空是直连。
 #
 # 原理
 #   · 每个账号一个 CLAUDE_CONFIG_DIR（官方文档的多账号做法），目录按邮箱命名，改别名不影响登录。登录走
-#     官方流程，凭证由 Claude Code 自己存进钥匙串；本脚本不读取、不保存、不转发任何 token。登录页预填
-#     账号表里的邮箱，并拒绝"槽位里登录的不是这个邮箱"的情况，避免一个账号走了另一个账号的出口。
+#     官方流程，凭证由 Claude Code 自己存进钥匙串；本脚本不读取、不保存、不转发任何 token（查用量也是让
+#     Claude Code 自己去查）。登录页预填账号表里的邮箱，并拒绝"槽位里登录的不是这个邮箱"的情况，避免一个
+#     账号走了另一个账号的出口。
+#   · 第三方 API 账号的 key 由本脚本存进钥匙串（或写在账号表的 key 字段），经 apiKeyHelper 交给 Claude Code：
+#     不出现在命令行参数和环境变量里；地址、模型经 --settings 传入，共享的 settings.json 盖不掉。
 #   · 账号目录里除账号/进程状态外，全部用符号链接指向 ~/.claude（记忆、会话历史、设置、技能、插件、
 #     命令…）；~/.claude.json 里与账号无关的键（项目信任、MCP、偏好）在每次启动和退出时三方合并。
 #   · 每个账号对应旁路由 OpenClash 上的一个 mixed 入站端口（listener → 账号表里的节点）。Claude Code 走
@@ -45,7 +51,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.4.0"
+VERSION="2.5.0"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -112,6 +118,20 @@ confirm() {  # confirm "问题" [y|n]
 	[ "$d" = n ] && hint="[y/N]"
 	a=$(ask "$1 $hint " "$d")
 	case "$a" in [Yy]*) return 0 ;; *) return 1 ;; esac
+}
+# x=$(ask_secret "提示: ")：输入不回显（不用 readline，免得它回显）；CCA_TTY 答案文件时照常按行读
+ask_secret() {
+	local v=""
+	if [ "$TTY_OK" = 1 ]; then
+		printf '%s' "$1" >&2
+		if [ -z "${CCA_TTY:-}" ] && [ -t 3 ]; then
+			IFS= read -r -s v <&3 || v=""
+			printf '\n' >&2
+		else
+			IFS= read -r v <&3 || v=""
+		fi
+	fi
+	printf '%s' "$v"
 }
 okay() { printf '%s\n' "${C_G}✓${C_0} $*" >&2; }
 
@@ -196,6 +216,23 @@ KEY_RE = re.compile(r'^[^\s"\\]{1,100}$')
 EMAIL_RE = re.compile(r'^[^@\s"\\()（）]+@[^@\s"\\()（）]+\.[^@\s"\\()（）]+$')
 PAIR_RE = re.compile(r'^(.*?)[(（]([^()（）]*)[)）]$')
 ALIAS_BAD = re.compile(r'[\s"\\()（）@]')
+# 第三方 API 账号：账号表里值是对象的那一项
+API_FIELDS = ('base_url', 'model', 'node', 'env', 'key', 'id')
+SECRET_RE = re.compile(r'^[\x21-\x7e]{8,4096}$')   # 只收可见的 ASCII：别的字符 security -w 会改成输出十六进制
+MODEL_RE = re.compile(r'^[^\s\x22\x27\\]{1,100}$')
+ENV_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
+SECRET_MSG = 'key 应该是一串可见的 ASCII 字符（至少 8 个，不能有空格或中文）'
+MODEL_MSG = '模型名里不能有空格或引号'
+# 会盖掉账号自己的代理、接口地址、凭证，或者把请求转去别的服务商（云厂商、网关）的变量。
+# 共享的 settings.json 的 env 里不能有，第三方 API 账号的 env 里也不能设；bash 的 INHERITED_RE 跟着改
+CRED_ENV = (r'(HTTPS?|ALL|NO)_PROXY|ANTHROPIC_(BASE_URL|AUTH_TOKEN|API_KEY)|CLAUDE_CODE_OAUTH_TOKEN'
+            r'|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)'
+            r'|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST')
+SETTINGS_BAD = re.compile(r'^(%s)$' % CRED_ENV, re.I)
+ENV_RESERVED = re.compile(r'^(%s|CLAUDE_CONFIG_DIR|CCA_\w*|BROWSER)$' % CRED_ENV, re.I)
+# env 的内容会出现在 claude 的命令行里（--settings），像密钥的变量名不收
+ENV_SECRETISH = re.compile(r'(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$', re.I)
+SELF_PATH = os.environ.get('CCA_SELF') or os.path.join(CCA_HOME, 'bin', 'cca')   # 本脚本（apiKeyHelper 回调它）
 FIRST_PORT = 7901
 # 与 ip.net.coffee/claude 页面一致：这些地区直接判 0 分
 RESTRICTED = {'CN': '中国大陆', 'HK': '香港', 'MO': '澳门', 'RU': '俄罗斯', 'KP': '朝鲜', 'IR': '伊朗',
@@ -242,6 +279,15 @@ def load_json(path, default):
         return default
     except ValueError as e:
         die('JSON 格式错误 %s：%s' % (path, e))
+
+
+def load_quiet(path):
+    """读不了、格式不对都当作没有（缓存之类，不值得为它报错退出）"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 def save_json(path, data, mode=None):
@@ -297,7 +343,60 @@ def table_load():
     t = load_json(TABLE, {})
     if not isinstance(t, dict):
         die('%s 应该是 {"别名(邮箱)": "节点"} 形式的 JSON 对象' % TABLE)
+    set_ids(t)
     return t
+
+
+API_IDS = {}   # 第三方 API 账号：账号表的键 → id（改别名时 id 不变，账号目录、钥匙串里的 key 和端口都跟着 id 走）
+
+
+def set_ids(t):
+    API_IDS.clear()
+    API_IDS.update({k: v['id'] for k, v in t.items() if is_api(v) and isinstance(v.get('id'), str) and v['id']})
+
+
+def load_ids():
+    """不读账号表的子命令（link、sync、email…）也要按 id 认第三方 API 账号；账号表读不了时当作没有"""
+    t = load_quiet(TABLE)
+    if isinstance(t, dict):
+        set_ids(t)
+
+
+def is_api(v):
+    return isinstance(v, dict)
+
+
+def node_of(v):
+    """账号走的出口节点；直连的第三方 API 账号是空字符串"""
+    n = v.get('node') if is_api(v) else v
+    return n if isinstance(n, str) else ''
+
+
+def routed(c, t):
+    """走节点、有端口的账号 [(键, 值, 端口)]；直连的第三方 API 账号没有端口"""
+    return [(k, v, c['ports'][k]) for k, v in t.items() if k in c['ports']]
+
+
+def api_url(v):
+    return str(v.get('base_url') or '').rstrip('/')
+
+
+def api_host(v):
+    """接口地址的域名：菜单里显示它；钥匙串里的 key 也按它存取（换了服务商，旧 key 不会被发过去）"""
+    from urllib.parse import urlsplit
+    u = api_url(v)
+    try:
+        return urlsplit(u).hostname or u
+    except ValueError:
+        return u
+
+
+def secret_ok(s):
+    return isinstance(s, str) and bool(SECRET_RE.match(s))
+
+
+def model_ok(m):
+    return isinstance(m, str) and bool(MODEL_RE.match(m))
 
 
 def parse_key(key):
@@ -319,10 +418,14 @@ def label_of(key):
     return '%s（%s）' % (a, e) if a and e else a or e
 
 
-def acct_id(key):
-    k = parse_key(key)[1] or key   # 有邮箱就按邮箱认账号：改别名不换账号目录，登录和浏览器资料都还在
+def ident(k):
     s = re.sub(r'[^a-z0-9]+', '-', k.lower()).strip('-')[:20].strip('-') or 'acct'
     return '%s-%s' % (s, hashlib.sha1(k.encode('utf-8')).hexdigest()[:6])
+
+
+def acct_id(key):
+    # 有邮箱就按邮箱认账号：改别名不换账号目录，登录和浏览器资料都还在；第三方 API 账号按 id 认
+    return ident(parse_key(key)[1] or API_IDS.get(key) or key)
 
 
 def adir(key):
@@ -333,13 +436,80 @@ def cdir(key):
     return os.path.join(adir(key), 'claude')
 
 
+def url_problem(u):
+    """第三方 API 的地址有什么问题；没问题返回空字符串"""
+    from urllib.parse import urlsplit
+    import ipaddress
+    if not u or re.search(r'[\s\x22\x27\\]', u):
+        return 'base_url 不能为空，也不能有空格或引号'
+    try:
+        p = urlsplit(u)
+        host = p.hostname or ''
+        p.port   # 端口写错时这里抛 ValueError
+    except ValueError:
+        return 'base_url 不像网址（例如 https://api.example.com/anthropic）'
+    if p.scheme not in ('http', 'https') or not host:
+        return 'base_url 要以 https:// 开头（例如 https://api.example.com/anthropic）'
+    if p.username or p.password or p.query or p.fragment:
+        return 'base_url 里不能带用户名、密码、? 参数或 # 片段'
+    if p.scheme == 'http':
+        try:
+            ip = ipaddress.ip_address(host)
+            local = ip.is_private or ip.is_loopback
+        except ValueError:
+            local = host == 'localhost' or host.endswith('.local')
+        if not local:
+            return 'base_url 要用 https（http 只能用于本机、局域网地址或 .local，免得 key 明文传出去）'
+    return ''
+
+
+def api_problems(c, k, v):
+    """第三方 API 账号这一项的问题（不带账号名的前缀，不回显 key 的值）"""
+    errs = []
+    if parse_key(k)[1] or ALIAS_BAD.search(k):
+        errs.append('第三方 API 账号的键只写别名（不能有邮箱、括号、空格、引号或 @）')
+    bad = [f for f in v if f not in API_FIELDS]
+    if bad:
+        errs.append('不认识的字段 %s（能用的有 %s）' % ('、'.join(bad), '、'.join(API_FIELDS)))
+    u = v.get('base_url')
+    p = url_problem(u) if isinstance(u, str) else '缺少 base_url（第三方 API 的地址）'
+    if p:
+        errs.append(p)
+    if v.get('model') is not None and not model_ok(v['model']):
+        errs.append('model：' + MODEL_MSG)
+    node = v.get('node')
+    if node not in (None, ''):
+        if not isinstance(node, str):
+            errs.append('node 应该是节点名，直连写空字符串')
+        elif c['nodes'] and node not in c['nodes']:
+            errs.append('节点「%s」不在可选列表（%s）' % (node, '、'.join(c['nodes'])))
+    env = v.get('env')
+    if env is not None and not isinstance(env, dict):
+        errs.append('env 应该是 {"变量名": "值"} 形式')
+    for x, val in (env.items() if isinstance(env, dict) else []):
+        if not ENV_NAME_RE.match(x):
+            errs.append('env 里的变量名「%s」不合法' % x)
+        elif ENV_RESERVED.match(x):
+            errs.append('env 里不能设 %s（由 cca 管：地址写 base_url，key 存钥匙串或写 key 字段）' % x)
+        elif ENV_SECRETISH.search(x):
+            errs.append('env 里不要放密钥（%s）：env 的内容会出现在 claude 的命令行里；key 写 key 字段或存钥匙串' % x)
+        if isinstance(val, bool) or not isinstance(val, (str, int, float)) or re.search(r'[\x00\r\n]', str(val)):
+            errs.append('env 里 %s 的值应该是一行文字或数字' % x)
+    if v.get('key') is not None and not secret_ok(v['key']):
+        errs.append(SECRET_MSG)
+    i = v.get('id')
+    if i is not None and not (isinstance(i, str) and KEY_RE.match(i) and '@' not in i):
+        errs.append('id 应该是不含空格、引号和 @ 的一串文字（改别名时别动它）')
+    return errs
+
+
 def reconcile(c, t):
-    """校验账号表；给新账号分配固定端口，回收已删除账号的端口。返回错误列表。
-    只改了别名的账号按邮箱认出来：端口和"上次使用"跟着走。"""
-    errs, emails, aliases = [], {}, {}
-    if t and not c['nodes']:
+    """校验账号表；给走节点的账号分配固定端口（直连的第三方 API 账号不占端口），回收已删除账号的端口。
+    返回错误列表。只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。"""
+    errs, emails, aliases, ids = [], {}, {}, {}
+    if not c['nodes'] and any(node_of(v) or not is_api(v) for v in t.values()):
         errs.append('config.json 里还没有可选节点（nodes）：运行 cca router setup 从路由器的节点里选')
-    for k, node in t.items():
+    for k, v in t.items():
         if not KEY_RE.match(k):
             errs.append('「%s」：不能含空格、引号或反斜杠，最长 100 个字符' % k)
         a, e = parse_key(k)
@@ -353,19 +523,28 @@ def reconcile(c, t):
             if a in aliases:
                 errs.append('别名「%s」同时用在「%s」和「%s」上' % (a, aliases[a], k))
             aliases.setdefault(a, k)
-        if not isinstance(node, str) or not node:
+        if is_api(v):
+            errs += ['「%s」：%s' % (k, m) for m in api_problems(c, k, v)]
+        elif not isinstance(v, str) or not v:
             errs.append('%s：节点必须是非空字符串' % k)
-        elif c['nodes'] and node not in c['nodes']:
-            errs.append('%s：节点「%s」不在可选列表（%s）' % (k, node, '、'.join(c['nodes'])))
+        elif c['nodes'] and v not in c['nodes']:
+            errs.append('%s：节点「%s」不在可选列表（%s）' % (k, v, '、'.join(c['nodes'])))
+        i = acct_id(k)
+        if i in ids and (is_api(v) or is_api(t[ids[i]])):   # 官方账号的邮箱重复上面已经报过
+            errs.append('「%s」和「%s」会用同一个账号目录（id 或邮箱重复了）' % (ids[i], k))
+        ids.setdefault(i, k)
+    # 第三方 API 账号的键 → 账号目录名，记在 config.json：改过不止一次别名也认得出旧的端口和"上次使用"
+    known = c.get('api_ids') if isinstance(c.get('api_ids'), dict) else {}
     old = c['ports']
-    by_id = {acct_id(k): p for k, p in old.items()}
+    by_id = {known.get(k) or acct_id(k): p for k, p in old.items()}
+    wanted = [k for k, v in t.items() if node_of(v)]
     ports, used = {}, set()
-    for k in t:
+    for k in wanted:
         p = old.get(k) or by_id.get(acct_id(k))
         if isinstance(p, int) and p not in used:
             ports[k] = p
             used.add(p)
-    for k in t:
+    for k in wanted:
         if k not in ports:
             p = FIRST_PORT
             while p in used:
@@ -374,8 +553,11 @@ def reconcile(c, t):
             used.add(p)
     c['ports'] = ports
     if c.get('last') not in t:
-        lid = acct_id(c['last']) if c.get('last') else ''
+        lid = (known.get(c['last']) or acct_id(c['last'])) if c.get('last') else ''
         c['last'] = next((k for k in t if acct_id(k) == lid), '')
+    now = {k: acct_id(k) for k, v in t.items() if is_api(v)}
+    if now or known:
+        c['api_ids'] = now
     return errs
 
 
@@ -391,22 +573,37 @@ def cfg_save(c):
     save_json(CFG, c, 0o600)
 
 
+ACCT_JSON = {}
+
+
+def acct_json(key):
+    """账号目录里的 .claude.json（一次进程里只读一次）"""
+    if key not in ACCT_JSON:
+        j = load_json(os.path.join(cdir(key), '.claude.json'), {})
+        ACCT_JSON[key] = j if isinstance(j, dict) else {}
+    return ACCT_JSON[key]
+
+
+def oauth_of(key):
+    oa = acct_json(key).get('oauthAccount')
+    return oa if isinstance(oa, dict) else {}
+
+
 def email_of(key):
-    j = load_json(os.path.join(cdir(key), '.claude.json'), {}) or {}
-    return (j.get('oauthAccount') or {}).get('emailAddress') or ''
+    return oauth_of(key).get('emailAddress') or ''
 
 
 POOL_STEP = 8   # 路由器上的端口池按 8 个槽位一档；槽位够用时增删账号、换节点都不用重载 OpenClash
 
 
 def pool_size(c, t):
-    slots = [c['ports'][k] - FIRST_PORT + 1 for k in t]
+    slots = [p - FIRST_PORT + 1 for _, _, p in routed(c, t)]
     return max(POOL_STEP, -(-max(slots) // POOL_STEP) * POOL_STEP) if slots else 0
 
 
 def slot_nodes(c, t):
     """每个槽位应选中的节点：分给账号的用账号的节点，空槽位用 REJECT"""
-    m = {c['ports'][k] - FIRST_PORT + 1: n for k, n in t.items()}
+    m = {p - FIRST_PORT + 1: node_of(v) for _, v, p in routed(c, t)}
     return [m.get(s, 'REJECT') for s in range(1, pool_size(c, t) + 1)]
 
 
@@ -441,18 +638,26 @@ def short_state(key):
 
 
 def cmd_rows(cols='80'):
-    """菜单里每个账号一行：别名、邮箱、登录状态、出口节点，按显示宽度对齐（没有别名的账号别名列留空）"""
+    """菜单里每个账号一行：别名、邮箱（第三方 API 账号写接口的域名）、状态、出口节点，官方账号再附上最近一次的
+    用量（只读缓存，不联网）；按显示宽度对齐（没有别名的账号别名列留空）"""
     c, t, _ = ctx()
     if not t:
         return
     width = max(int(cols) if str(cols).isdigit() else 80, 40) - 6
-    parts = {k: parse_key(k) for k in t}
-    aw = min(max(dw(a) for a, _ in parts.values()), 16)
-    ew = min(max(dw(e) for _, e in parts.values()), 32)
-    for k, node in t.items():
-        a, e = parts[k]
-        cells = ([fit(a, aw)] if aw else []) + ([fit(e, ew)] if ew else []) + [fit(short_state(k), 8), node]
-        line = '   '.join(cells)
+    now, rows = time.time(), []
+    for k, v in t.items():
+        a, e = parse_key(k)
+        if is_api(v):
+            rows.append((k, a, api_host(v), 'API', node_of(v) or '直连', ''))
+        else:
+            st = short_state(k)
+            rows.append((k, a, e, st, node_of(v), usage_cell(k, now) if st == '已登录' else ''))
+    aw = min(max(dw(r[1]) for r in rows), 16)
+    ew = min(max(dw(r[2]) for r in rows), 32)
+    nw = max(dw(r[4]) for r in rows)
+    for k, a, e, state, node, used in rows:
+        cells = ([fit(a, aw)] if aw else []) + ([fit(e, ew)] if ew else []) + [fit(state, 8), fit(node, nw)]
+        line = '   '.join(cells + ([used] if used else [])).rstrip()
         if k == c.get('last'):
             line += '   · 上次使用'
         print(fit(line, width, pad=False))
@@ -466,7 +671,7 @@ def cmd_node_rows(onrouter='', cols='80'):
     nw = max([dw(n) for n in c['nodes']] + [8])
     for n in c['nodes']:
         notes = []
-        users = [name_of(k) for k, v in t.items() if v == n]
+        users = [name_of(k) for k, v in t.items() if node_of(v) == n]
         if users:
             notes.append('已被 %s 使用' % '、'.join(users))
         if have is not None and n not in have:
@@ -477,13 +682,14 @@ def cmd_node_rows(onrouter='', cols='80'):
 def cmd_node_default():
     """默认选中第一个还没被任何账号用的节点"""
     c, t, _ = ctx()
-    used = set(t.values())
+    used = {node_of(v) for v in t.values()}
     print(next((i for i, n in enumerate(c['nodes']) if n not in used), 0))
 
 
 def router_accounts(c, t):
+    """路由器端口池的内容：只有走节点的账号（直连的第三方 API 账号不占槽位）"""
     return {'base': FIRST_PORT - 1, 'slots': pool_size(c, t), 'nodes': c['nodes'],
-            'accounts': [{'slot': c['ports'][k] - FIRST_PORT + 1, 'name': acct_id(k), 'node': n} for k, n in t.items()]}
+            'accounts': [{'slot': p - FIRST_PORT + 1, 'name': acct_id(k), 'node': node_of(v)} for k, v, p in routed(c, t)]}
 
 
 # --- .claude.json 三方合并 --------------------------------------------------
@@ -645,14 +851,42 @@ def cmd_env(key):
     if key not in t:   # 会话开着时改了别名：按邮箱找回同一个账号
         key = next((k for k in t if acct_id(k) == acct_id(key)), key)
     need(t, key)
+    v = t[key]
+    api = is_api(v)
     host = c.get('proxy_host') or (c.get('router') or {}).get('host', '')
-    port = c['ports'][key]
+    port = c['ports'].get(key)   # 直连的第三方 API 账号没有端口
     a, e = parse_key(key)
+    # 每个账号都输出全部变量（不适用的为空）：bash 里循环 eval 时不会留着上一个账号的值
     sh(ACC_KEY=key, ACC_ID=acct_id(key), ACC_ALIAS=a, ACC_EMAIL=e, ACC_NAME=a or e, ACC_LABEL=label_of(key),
-       ACC_NODE=t[key], ACC_PORT=port, ACC_SLOT=port - FIRST_PORT + 1, ACC_PROXY='http://%s:%d' % (host, port) if host else '',
+       ACC_KIND='api' if api else 'oauth', ACC_NODE=node_of(v) or '直连', ACC_PORT=port or '',
+       ACC_SLOT=port - FIRST_PORT + 1 if port else '', ACC_PROXY='http://%s:%d' % (host, port) if host and port else '',
+       ACC_BASE_URL=api_url(v) if api else '', ACC_MODEL=(v.get('model') or '') if api else '',
+       ACC_SETTINGS=api_settings(key, v) if api else '',
        ACC_CLAUDE_DIR=cdir(key), ACC_CHROME_DIR=os.path.join(adir(key), 'chrome'),
        ACC_DESKTOP_DIR=os.path.join(adir(key), 'desktop'),
        CCA_NO_PROXY=c['no_proxy'], CCA_PROXY_BYPASS=bypass_list(c['no_proxy']), CCA_MIN_TRUST=c['min_trust'])
+
+
+def api_env(v):
+    """第三方 API 账号交给 Claude Code 的环境：接口地址、关掉发往 Anthropic 的遥测和更新检查、模型；
+    表里 env 写的变量最后覆盖（地址和凭证除外，校验时已经拒绝）"""
+    env = {'ANTHROPIC_BASE_URL': api_url(v), 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'}
+    m = v.get('model')
+    if model_ok(m):
+        for n in ('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL'):
+            env[n] = m
+    x = v.get('env')
+    for k, val in (x.items() if isinstance(x, dict) else []):
+        if ENV_NAME_RE.match(k) and not ENV_RESERVED.match(k):
+            env[k] = str(val)
+    return env
+
+
+def api_settings(key, v):
+    """第三方 API 账号的 claude --settings：key 由 apiKeyHelper 现取（回调 cca _api-key，不进环境变量），
+    地址、模型写在 env 里。--settings 的优先级高于共享的 settings.json 和进程环境，谁也盖不掉它们"""
+    helper = '%s _api-key %s' % (shlex.quote(SELF_PATH), shlex.quote(acct_id(key)))
+    return json.dumps({'apiKeyHelper': helper, 'env': api_env(v)}, ensure_ascii=False)
 
 
 def bypass_list(no_proxy):
@@ -679,9 +913,11 @@ def cmd_router_set(host, port, user, key):
     cfg_save(c)
 
 
-def cmd_keys():
-    for k in ctx()[1]:
-        print(k)
+def cmd_keys(kind=''):
+    """账号表里的键；kind=official 时只列官方账号（查订阅用量用）"""
+    for k, v in ctx()[1].items():
+        if kind != 'official' or not is_api(v):
+            print(k)
 
 
 def cmd_resolve(q=''):
@@ -741,7 +977,16 @@ def cmd_check(field, value):
     value = value.strip()
     if field == 'email':
         value = value.lower()
-    p = (email_problem if field == 'email' else alias_problem)(table_load(), value) if value else ''
+    elif field == 'url':
+        value = value.rstrip('/')
+    if not value:
+        p = ''
+    elif field == 'url':
+        p = url_problem(value)
+    elif field == 'model':
+        p = '' if model_ok(value) else MODEL_MSG
+    else:
+        p = (email_problem if field == 'email' else alias_problem)(table_load(), value)
     print(p or value)
     sys.exit(1 if p else 0)
 
@@ -762,12 +1007,147 @@ def cmd_add(email, alias, node):
     print(key)
 
 
+def cmd_add_api(alias, url, model='', node=''):
+    """新增第三方 API 账号，打印账号表里的键（就是别名）。id 取别名（和别的账号目录撞了就加数字），改别名时它不变"""
+    c, t, _ = ctx()
+    alias, e = alias.strip(), {'base_url': url.strip().rstrip('/')}
+    if model.strip():
+        e['model'] = model.strip()
+    e['node'] = node
+    p = (alias_problem(t, alias) if alias else '需要一个别名') or '；'.join(api_problems(c, alias, e))
+    if p:
+        die(p)
+    taken, i, n = {acct_id(k) for k in t}, alias, 2
+    while ident(i) in taken:
+        i, n = '%s-%d' % (alias, n), n + 1
+    e['id'] = i
+    t[alias] = e
+    save_json(TABLE, t, 0o600)
+    ctx()
+    print(alias)
+
+
 def cmd_rm(key):
     t = table_load()
     need(t, key)
     del t[key]
     save_json(TABLE, t, 0o600)
     ctx()
+
+
+# --- 第三方 API 账号的 key（下面叫 secret，免得和账号表的键混了）：存在钥匙串里，服务名 cca-api-账号目录名、
+# 账户名是接口地址的域名——地址换成别的服务商，旧 key 就取不到，不会被发过去。账号表里写了 key 字段时用表里的。
+# cca 存过 key 的账号记在 config.json 的 api_keys：删账号（包括在 cca edit 里删、直接改账号表删）后据此清掉钥匙串里的 key
+def security(*args, data=None):
+    """运行 security，返回 (退出码, stdout)；data 从 stdin 交给它（security -i）"""
+    import subprocess
+    try:
+        r = subprocess.run(('security',) + args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30,
+                           **({'input': data} if data is not None else {'stdin': subprocess.DEVNULL}))
+    except (OSError, subprocess.SubprocessError):
+        return 1, b''
+    return r.returncode, r.stdout
+
+
+def kc_svc(aid):
+    return 'cca-api-' + aid
+
+
+def kc_get(aid, host):
+    """钥匙串里这个账号、这个服务商的 key；没有、读不了或不是可见的 ASCII 时返回空字符串"""
+    rc, out = security('find-generic-password', '-a', host, '-s', kc_svc(aid), '-w')
+    s = out.decode('utf-8', 'replace').strip()
+    return s if rc == 0 and SECRET_RE.match(s) else ''
+
+
+def kc_put(aid, host, s):
+    """先删掉这个账号的旧 key（不管哪个服务商的），再存新的。命令和十六进制的 key 都从 stdin 交给 security -i，
+    key 不出现在任何进程的命令行里；security -i 里的命令失败了它也返回 0，所以存完读回来比对"""
+    if not host or re.search(r'\s', host):
+        return False
+    kc_del(aid)
+    security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid), s.encode('ascii').hex())).encode('ascii'))
+    if kc_get(aid, host) != s:
+        return False
+    c = cfg_load()
+    c['api_keys'] = sorted(set(c.get('api_keys') or []) | {aid})
+    cfg_save(c)
+    return True
+
+
+def kc_del(aid):
+    """删掉这个账号在钥匙串里的 key（每次删一条，不管哪个服务商的，删到没有为止）"""
+    for _ in range(20):
+        if security('delete-generic-password', '-s', kc_svc(aid))[0] != 0:
+            break
+    c = cfg_load()
+    if aid in (c.get('api_keys') or []):
+        c['api_keys'] = [x for x in c['api_keys'] if x != aid]
+        cfg_save(c)
+
+
+def api_secret(k, v):
+    s = v.get('key')
+    return s if secret_ok(s) else kc_get(acct_id(k), api_host(v))
+
+
+def cmd_api_key_out(aid=''):
+    """apiKeyHelper 回调（Claude Code 启动时和之后每 5 分钟左右来取一次）：把 key 打到 stdout。
+    只给账号表里现有的账号：删掉的账号钥匙串里就算还留着 key 也不给"""
+    t = table_load()
+    k = next((k for k, v in t.items() if is_api(v) and acct_id(k) == aid), None)
+    s = api_secret(k, t[k]) if k else ''
+    if not s:
+        die('cca：没找到这个第三方 API 账号的 key（运行 cca key 账号名 重新存一下）')
+    sys.stdout.write(s)
+
+
+def cmd_secret_check():
+    """从 stdin 读一个 key：合格时什么也不打印；不合格时打印原因、返回 1"""
+    if not secret_ok(sys.stdin.read().strip()):
+        print(SECRET_MSG)
+        sys.exit(1)
+
+
+def cmd_secret_set(key):
+    """从 stdin 读 key，按账号现在的接口地址存进钥匙串"""
+    t = table_load()
+    need(t, key)
+    s = sys.stdin.read().strip()
+    if not secret_ok(s):
+        die(SECRET_MSG)
+    if not is_api(t[key]) or not kc_put(acct_id(key), api_host(t[key]), s):
+        die('API key 存进钥匙串失败（钥匙串被锁住了？）')
+
+
+def cmd_secret_del(key):
+    kc_del(acct_id(key))
+
+
+def cmd_secret_status(key):
+    """key 在哪：table（账号表的 key 字段）、keychain，或者什么也不打印（还没有）"""
+    v = table_load().get(key)
+    if not is_api(v):
+        return
+    if secret_ok(v.get('key')):
+        print('table')
+    elif api_secret(key, v):
+        print('keychain')
+
+
+def cmd_secrets_missing():
+    """还没有 key 的第三方 API 账号（手写进账号表的、换了服务商的，或者钥匙串里的被删了）"""
+    for k, v in table_load().items():
+        if is_api(v) and not api_secret(k, v):
+            print(k)
+
+
+def cmd_secrets_forget(scope=''):
+    """清掉钥匙串里已经不在账号表里的账号的 key；scope=all 时全部清掉（cca restore）"""
+    c, t, _ = ctx()
+    keep = set() if scope == 'all' else {acct_id(k) for k, v in t.items() if is_api(v)}
+    for aid in sorted(set(c.get('api_keys') or []) - keep):
+        kc_del(aid)
 
 
 def cmd_set_last(key):
@@ -807,7 +1187,7 @@ def cmd_set(field, value):
 def cmd_nodes_allowed():
     c, t, _ = ctx()
     for n in c['nodes']:
-        print('%s\t%s' % (n, '、'.join(name_of(k) for k, v in t.items() if v == n)))
+        print('%s\t%s' % (n, '、'.join(name_of(k) for k, v in t.items() if node_of(v) == n)))
 
 
 def cmd_accounts_json():
@@ -821,8 +1201,8 @@ def cmd_ports(named=''):
     """named：账号名与端口（给 Mac 端检查）；否则：端口池里所有端口（给路由器自检）"""
     c, t, _ = ctx()
     if named:
-        for k in t:
-            print('%s\t%d' % (name_of(k), c['ports'][k]))
+        for k, _, p in routed(c, t):
+            print('%s\t%d' % (name_of(k), p))
     else:
         for s in range(1, pool_size(c, t) + 1):
             print(FIRST_PORT - 1 + s)
@@ -1117,7 +1497,7 @@ def cmd_local_snippet():
 def cmd_slot_rows():
     """端口池每个槽位：组名、端口、应选中的节点、用它的账号"""
     c, t, _ = ctx()
-    who = {c['ports'][k]: name_of(k) for k in t}
+    who = {p: name_of(k) for k, _, p in routed(c, t)}
     for g, p, order in slot_orders(c, t):
         print('%s\t%d\t%s\t%s' % (g, p, order[0], who.get(p, '')))
 
@@ -1292,8 +1672,8 @@ def write_launcher(b, key, cca, app, name, badge):
 def cmd_launchers(ldir, cca, app='', mode=''):
     """~/Applications 里每个账号一个"Claude 别名"启动器：按账号表新建、改名、删除。
     只动带 cca 标记的 .app；没装 Claude App（app 为空）或 mode=remove-all 时只删不建。
-    输出：+ 新建、- 删除、! 同名但不是 cca 生成的（跳过）"""
-    t = table_load()
+    输出：+ 新建、- 删除、! 同名但不是 cca 生成的（跳过）。第三方 API 账号用不了 Claude App，没有启动器"""
+    t = {k: v for k, v in table_load().items() if not is_api(v)}
     names = launcher_names(t)
     badges = launcher_badges(t, names)
     want = {} if mode == 'remove-all' or not app else {os.path.join(ldir, names[k] + '.app'): k for k in t}
@@ -1320,10 +1700,16 @@ def cmd_keychain(key):
 
 
 def cmd_settings_check():
+    """共享的设置里会盖掉每个账号自己的代理、接口地址或凭证的配置"""
     bad = []
     for fn in ('settings.json', 'settings.local.json'):
-        env = (load_json(os.path.join(MASTER, fn), {}) or {}).get('env') or {}
-        bad += ['%s:%s' % (fn, k) for k in env if k.lower() in ('https_proxy', 'http_proxy', 'all_proxy')]
+        j = load_json(os.path.join(MASTER, fn), {}) or {}
+        if not isinstance(j, dict):
+            continue
+        env = j.get('env') if isinstance(j.get('env'), dict) else {}
+        bad += ['%s:%s' % (fn, k) for k in env if SETTINGS_BAD.match(k)]
+        if j.get('apiKeyHelper'):
+            bad.append('%s:apiKeyHelper' % fn)
     if bad:
         print(' '.join(bad))
         sys.exit(1)
@@ -1373,6 +1759,347 @@ def cmd_coffee(min_trust, trace, risk):
         sys.exit(1)
 
 
+# --- 订阅用量（cca usage、菜单）：让 Claude Code 自己查（get_usage 控制请求），cca 不碰登录凭证 ---------------
+USAGE_REQ = 'cca-usage'
+WEEKDAYS = '一二三四五六日'
+USAGE_WHY = {
+    'login': '还没登录（cca @{name} 登录）',
+    'mismatch': '登录的是 {msg}，不是这个账号（cca @{name} 改回）',
+    'route': '连不上路由器，本机 Clash 也不可用',
+    'port': '出口端口 {msg} 不通',
+    'trace': '出口连不上 claude.ai',
+    'region': '{msg}，没有查询',
+    'unsupported': '这个版本的 Claude Code 查不了用量（claude update 升级后再试）',
+    'timeout': '查询超时',
+    'nolimits': '没有订阅用量（按量计费的账号，或者登录过期了：cca @{name} 重新登录）',
+    'error': '查询失败：{msg}',
+}
+
+
+def cmd_usage_query(claude, timeout='25'):
+    """在账号的环境里（bash 的 child_env 已经设好 CLAUDE_CONFIG_DIR 和出口）无界面启动 claude，发 get_usage 控制
+    请求取用量。--safe-mode 不加载 hooks、MCP、插件；不发消息、不耗额度；token 由 Claude Code 自己读取和刷新。
+    拿到回应之前 stdin 一直开着（太早关掉请求可能被取消）。stdout 打印一行 JSON：
+    {ok: true, usage: 回应} 或 {ok: false, why: unsupported|timeout|error, msg: 说明}"""
+    import queue, subprocess, tempfile, threading
+    cd = os.environ.get('CLAUDE_CONFIG_DIR') or ''
+    err = tempfile.TemporaryFile()
+    try:
+        p = subprocess.Popen([claude, '-p', '--safe-mode', '--no-session-persistence', '--strict-mcp-config',
+                              '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
+                             cwd=os.path.dirname(cd) if os.path.isdir(cd) else CCA_HOME)
+    except OSError as e:
+        print(json.dumps({'ok': False, 'why': 'error', 'msg': str(e)}, ensure_ascii=False))
+        return
+    q = queue.Queue()
+
+    def pump():
+        for line in p.stdout:
+            q.put(line)
+        q.put(None)
+    threading.Thread(target=pump, daemon=True).start()
+    req = {'type': 'control_request', 'request_id': USAGE_REQ, 'request': {'subtype': 'get_usage', 'skip_behaviors': True}}
+    try:
+        p.stdin.write((json.dumps(req) + '\n').encode('utf-8'))
+        p.stdin.flush()
+    except OSError:
+        pass
+    out, end = {'ok': False, 'why': 'timeout', 'msg': ''}, time.time() + float(timeout)
+    while True:
+        try:
+            line = q.get(timeout=max(end - time.time(), 0.01))
+        except queue.Empty:
+            break
+        if line is None:   # 没回应就退出了：多半是太老的版本（不认 --safe-mode 等参数）
+            try:
+                p.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+            err.seek(0)
+            tail = err.read()[-800:].decode('utf-8', 'replace').strip().splitlines()
+            old = re.search(r'unknown option|nsupported', ' '.join(tail))
+            out = {'ok': False, 'why': 'unsupported' if old else 'error',
+                   'msg': tail[-1][:200] if tail else '没有回应就退出了（退出码 %s）' % p.returncode}
+            break
+        try:
+            m = json.loads(line)
+        except ValueError:
+            continue
+        r = m.get('response') if isinstance(m, dict) and m.get('type') == 'control_response' else None
+        if not isinstance(r, dict) or r.get('request_id') != USAGE_REQ:
+            continue
+        if r.get('subtype') == 'success':
+            u = r.get('response')
+            out = {'ok': True, 'usage': u if isinstance(u, dict) else {}}
+        else:
+            e = str(r.get('error') or '')
+            out = {'ok': False, 'why': 'unsupported' if 'nsupported' in e else 'error', 'msg': e[:200]}
+        break
+    if out.get('why') == 'timeout':
+        p.kill()
+    try:
+        p.stdin.close()
+    except OSError:
+        pass
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+    print(json.dumps(out, ensure_ascii=False))
+
+
+def parse_ts(s):
+    """ISO 时间（小数秒、Z、时区都行）或秒/毫秒数 → 秒；看不懂返回 None（Python 3.9 的 fromisoformat 认不了这些写法）"""
+    if isinstance(s, bool):
+        return None
+    if isinstance(s, (int, float)):
+        return s / 1000.0 if s > 1e11 else float(s)
+    if not isinstance(s, str):
+        return None
+    m = re.match(r'^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(\.\d+)?)?\s*(Z|[+-]\d\d:?\d\d)?$', s.strip())
+    if not m:
+        return None
+    import calendar
+    y, mo, d, h, mi, sec, frac, tz = m.groups()
+    ts = calendar.timegm((int(y), int(mo), int(d), int(h), int(mi), int(sec or 0), 0, 0, 0)) + float(frac or 0)
+    if tz and tz != 'Z':
+        z = tz.replace(':', '')
+        ts -= (1 if z[0] == '+' else -1) * (int(z[1:3]) * 3600 + int(z[3:5]) * 60)
+    return ts
+
+
+def iso(ts):
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
+
+
+def win(w, now):
+    """一个用量窗口 → {pct, at, reset}；at 是重置时间（秒），reset 表示重置时间已经过了（缓存里的数不算数了）"""
+    if not isinstance(w, dict):
+        return None
+    p = w.get('utilization')
+    if isinstance(p, bool) or not isinstance(p, (int, float)):
+        return None
+    at = parse_ts(w.get('resets_at'))
+    return {'pct': p, 'at': at, 'reset': at is not None and at <= now}
+
+
+def span(secs):
+    """一段时长：不到 1 分钟 / 25 分钟 / 2 小时 13 分 / 3 天 4 小时"""
+    m = int(max(secs, 0) // 60)
+    if m < 1:
+        return '不到 1 分钟'
+    if m < 60:
+        return '%d 分钟' % m
+    h, m = divmod(m, 60)
+    if h < 24:
+        return '%d 小时 %d 分' % (h, m) if m else '%d 小时' % h
+    d, h = divmod(h, 24)
+    return '%d 天 %d 小时' % (d, h) if h else '%d 天' % d
+
+
+def resets(at, now):
+    """重置时间：一天以内写还有多久，再远写星期几、几点（本地时间）"""
+    if at - now < 86400:
+        return '%s后重置' % span(at - now)
+    lt = time.localtime(at)
+    return '周%s %02d:%02d 重置' % (WEEKDAYS[lt.tm_wday], lt.tm_hour, lt.tm_min)
+
+
+def ago(secs):
+    m = int(max(secs, 0) // 60)
+    if m < 60:
+        return '%d 分钟' % max(m, 1)
+    if m < 1440:
+        return '%d 小时' % (m // 60)
+    return '%d 天' % (m // 1440)
+
+
+def plan_label(oa, sub=None):
+    """套餐：Pro、Max 5x、Max 20x、Team、Enterprise（看 oauthAccount，其次是查询结果里的 subscription_type）"""
+    t = str(oa.get('organizationType') or '').lower()
+    kind = t[len('claude_'):] if t.startswith('claude_') else str(sub or '').lower()
+    name = {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}.get(kind, kind.capitalize())
+    m = re.search(r'(\d+)x\b', '%s %s' % (oa.get('organizationRateLimitTier') or '', oa.get('userRateLimitTier') or ''))
+    if m and kind in ('max', 'team'):
+        name += ' %sx' % m.group(1)
+    return name or '—'
+
+
+def usage_file(key):
+    return os.path.join(adir(key), 'usage.json')
+
+
+def usage_cached(key):
+    """最近一次的用量：cca 存的 usage.json 和 Claude Code 的 cachedUsageUtilization 取新的那份；
+    登录的已经不是存它的那个账号时不算。返回 {at: 秒, rl: 用量窗口} 或 None"""
+    uuid, best = oauth_of(key).get('accountUuid'), None
+    for x in (load_quiet(usage_file(key)), acct_json(key).get('cachedUsageUtilization')):
+        if not isinstance(x, dict) or not isinstance(x.get('utilization'), dict):
+            continue
+        at = x.get('fetchedAtMs')
+        if isinstance(at, bool) or not isinstance(at, (int, float)):
+            continue
+        if uuid and x.get('accountUuid') and x['accountUuid'] != uuid:
+            continue
+        if not best or at / 1000.0 > best['at']:
+            best = {'at': at / 1000.0, 'rl': x['utilization']}
+    return best
+
+
+def usage_save(key, rl):
+    try:
+        save_json(usage_file(key), {'fetchedAtMs': int(time.time() * 1000), 'accountUuid': oauth_of(key).get('accountUuid'),
+                                    'utilization': rl}, 0o600)
+    except OSError:
+        pass
+
+
+def usage_cell(key, now):
+    """菜单里的一格（只读缓存，不联网；只给登录着的账号）：5h 13% · 周 41%；数据旧了注明多久前，
+    重置时间过了的窗口写已重置"""
+    u = usage_cached(key)
+    if not u:
+        return ''
+    cells = []
+    for label, k in (('5h', 'five_hour'), ('周', 'seven_day')):
+        w = win(u['rl'].get(k), now)
+        if w:
+            cells.append('%s %s' % (label, '已重置' if w['reset'] else '%d%%' % round(w['pct'])))
+    if not cells:
+        return ''
+    return ' · '.join(cells) + ('（%s前）' % ago(now - u['at']) if now - u['at'] >= 600 else '')
+
+
+def usage_result(tmp, i):
+    """后台查询的结果：{ok: true, usage} 或 {ok: false, why, msg}（bash 跳过时把原因写在 i.skip）"""
+    try:
+        with open(os.path.join(tmp, '%d.skip' % i), encoding='utf-8') as f:
+            why, _, msg = f.read().rstrip('\n').partition('\t')
+        return {'ok': False, 'why': why, 'msg': msg}
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(tmp, '%d.json' % i), encoding='utf-8') as f:
+            r = json.loads(f.read().strip().splitlines()[-1])
+        if isinstance(r, dict):
+            return r
+    except (OSError, ValueError, IndexError):
+        pass
+    return {'ok': False, 'why': 'error', 'msg': '没有拿到结果'}
+
+
+def usage_why(r):
+    return USAGE_WHY.get(r['why'], USAGE_WHY['error']).format(name=r['name'], msg=r['msg'] or '原因不明')
+
+
+def usage_notes(rl, now):
+    """表格的备注：分模型的每周额度、额外用量"""
+    ms = rl.get('model_scoped')
+    pairs = [('Opus', rl.get('seven_day_opus')), ('Sonnet', rl.get('seven_day_sonnet'))]
+    pairs += [(m.get('display_name'), m) for m in (ms if isinstance(ms, list) else []) if isinstance(m, dict)]
+    out, seen = [], set()
+    for label, w in pairs:   # 没用过的（0%）不写，免得一排 0%；JSON 里照样都有
+        x = win(w, now)
+        if x and label and not x['reset'] and x['pct'] > 0 and str(label).lower() not in seen:
+            seen.add(str(label).lower())
+            out.append('%s 本周 %d%%' % (label, round(x['pct'])))
+    e = rl.get('extra_usage')
+    if isinstance(e, dict) and e.get('is_enabled'):
+        p = e.get('utilization')
+        out.append('额外用量 %d%%' % round(p) if isinstance(p, (int, float)) and not isinstance(p, bool) else '额外用量已开启')
+    return out
+
+
+def usage_json(rows, now, api):
+    def w(x):
+        v = win(x, now)
+        return {'utilization': v['pct'], 'resets_at': x.get('resets_at'), 'reset': v['reset']} if v else None
+    out = []
+    for r in rows:
+        rl = r['rl']
+        a = {'account': r['name'], 'key': r['key'], 'email': r['email'] or None, 'plan': r['plan'], 'source': r['source'],
+             'fetched_at': iso(r['at']) if r['at'] else None, 'age_seconds': int(now - r['at']) if r['at'] else None,
+             'error': usage_why(r) if r['why'] else None}
+        for k in ('five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'seven_day_oauth_apps'):
+            a[k] = w(rl.get(k))
+        ms = rl.get('model_scoped')
+        a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name')) for m in ms if isinstance(m, dict)] if isinstance(ms, list) else None
+        a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
+        out.append(a)
+    return {'version': 1, 'generated_at': iso(now), 'accounts': out, 'skipped_api_accounts': api}
+
+
+def usage_table(rows, now, cols, color, api):
+    width = max(int(cols) if str(cols).isdigit() else 80, 40) - 2
+    paint = (lambda s, code: '\033[%sm%s\033[0m' % (code, s) if code and s.strip() else s) if color else (lambda s, code: s)
+
+    def cell(w):
+        if not w:
+            return '—', ''
+        if w['reset']:
+            return '已重置', ''
+        p = round(w['pct'])
+        return ('%3d%%  %s' % (p, resets(w['at'], now)) if w['at'] else '%3d%%' % p), ('31' if p >= 90 else '33' if p >= 70 else '')
+    table = []
+    for r in rows:
+        five, week, notes = cell(win(r['rl'].get('five_hour'), now)), cell(win(r['rl'].get('seven_day'), now)), usage_notes(r['rl'], now)
+        if r['source'] == 'none':
+            five = week = ('—', '')
+            notes = [usage_why(r)]
+        elif r['source'] == 'cache':
+            notes.insert(0, '缓存（%s前）%s' % (ago(now - r['at']), '：' + usage_why(r) if r['why'] else ''))
+        table.append((r, five, week, '；'.join(notes)))
+    hd = ('账号', '套餐', '5 小时', '本周')
+    cw = [min(max([dw(hd[0])] + [dw(r['name']) for r in rows]), 20), max([dw(hd[1])] + [dw(r['plan']) for r in rows]),
+         max([dw(hd[2])] + [dw(x[1][0]) for x in table]), max([dw(hd[3])] + [dw(x[2][0]) for x in table])]
+    room = width - 2 - sum(cw) - 2 * len(cw)   # 同一行里留给备注的宽度；放不下就挪到下一行
+    print(paint(('  ' + '  '.join(fit(h, cw[i]) for i, h in enumerate(hd)) + ('  备注' if room >= 12 else '')).rstrip(), '2'))
+    for r, five, week, note in table:
+        dim = '' if r['source'] == 'live' else '2'
+        cells = [(r['name'], dim), (r['plan'], dim), (five[0], five[1] or dim), (week[0], week[1] or dim)]
+        s = '  ' + '  '.join(paint(fit(text, cw[i]), code) for i, (text, code) in enumerate(cells))
+        ncode = '2' if dim else ''
+        if not note:
+            print(s.rstrip())
+        elif dw(note) <= room:
+            print(s + '  ' + paint(note, ncode))
+        else:
+            print(s.rstrip())
+            print(' ' * (4 + cw[0]) + paint(fit(note, max(width - 4 - cw[0], 20), pad=False), ncode))
+    if api:
+        print(paint('  第三方 API 账号没有订阅用量，不查：%s' % '、'.join(name_of(k) for k in api), '2'))
+
+
+def cmd_usage_render(tmp, mode, cols, color, *keys):
+    """把后台查询的结果整理成表格或 JSON（stdout）；查到的存进 usage.json，查不到的用缓存顶上（注明多久前）"""
+    c, t, _ = ctx()
+    now, rows = time.time(), []
+    for i, k in enumerate(keys):
+        r = usage_result(tmp, i)
+        u = r.get('usage') if r.get('ok') else None
+        if isinstance(u, dict) and not (u.get('rate_limits_available') and isinstance(u.get('rate_limits'), dict)):
+            r, u = {'ok': False, 'why': 'nolimits', 'msg': ''}, None
+        row = {'key': k, 'name': name_of(k), 'email': parse_key(k)[1] or email_of(k),
+               'plan': plan_label(oauth_of(k), (u or {}).get('subscription_type')),
+               'source': 'none', 'at': None, 'rl': {}, 'why': None if u else (r.get('why') or 'error'), 'msg': r.get('msg') or ''}
+        if u:
+            row.update(source='live', at=now, rl=u['rate_limits'])
+            usage_save(k, u['rate_limits'])
+        elif row['why'] not in ('login', 'mismatch'):
+            x = usage_cached(k)
+            if x:
+                row.update(source='cache', at=x['at'], rl=x['rl'])
+        rows.append(row)
+    official = {k for k, v in t.items() if not is_api(v)}
+    api = [k for k, v in t.items() if is_api(v)] if set(keys) == official else []
+    if mode == 'json':
+        print(json.dumps(usage_json(rows, now, api), ensure_ascii=False, indent=2))
+    else:
+        usage_table(rows, now, cols, color == '1', api)
+    sys.exit(0 if any(r['source'] != 'none' for r in rows) else 1)
+
+
 CMDS = {
     'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
     'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
@@ -1385,14 +2112,19 @@ CMDS = {
     'link': cmd_link, 'sync': cmd_sync, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
     'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet,
-    'slot-rows': cmd_slot_rows,
+    'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
+    'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
+    'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
+    'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
+load_ids()
 CMDS[sys.argv[1]](*sys.argv[2:])
 PY
 )
-py() { "$PYTHON" -I -X utf8 -c "$PY_SRC" "$@"; }   # -X utf8：不管 locale 是什么都按 UTF-8 输出
+PYRUN=("$PYTHON" -I -X utf8 -c "$PY_SRC")   # -X utf8：不管 locale 是什么都按 UTF-8 输出
+py() { CCA_SELF="$SELF" "${PYRUN[@]}" "$@"; }
 
 # ---------------------------------------------------------------------------
 # 路由器侧：cca-router.sh（busybox ash）与 apply.rb（OpenClash 自带 ruby）
@@ -2001,15 +2733,17 @@ cmd_router() {
 # ---------------------------------------------------------------------------
 # 账号
 # ---------------------------------------------------------------------------
-pick_node() {   # 从可选节点里选一个，打印节点名；标出已被哪些账号使用、路由器上是否存在
-	local onrouter="" def n=0 i node sel
+pick_node() {   # pick_node [direct]：从可选节点里选一个，打印节点名；标出已被哪些账号使用、路由器上是否存在。
+	                # direct 时第一项（默认）是"直连"，选它打印空字符串
+	local onrouter="" def n=0 i node sel off=0
 	local -a nodes rows
+	if [ "${1:-}" = direct ]; then nodes[0]=""; rows[0]="直连（不经代理）"; n=1; off=1; fi
 	at_home && onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | cut -f2)
 	while IFS= read -r node; do [ -n "$node" ] && { nodes[n]="$node"; n=$((n + 1)); }; done < <(py nodes-allowed | cut -f1)
 	[ $n -gt 0 ] || { warn "config.json 里没有可选节点（nodes）"; return 1; }
-	i=0
+	i=$off
 	while IFS= read -r node; do rows[i]="$node"; i=$((i + 1)); done < <(py node-rows "$onrouter" "$(term_cols)")
-	def=$(py node-default)
+	if [ $off = 1 ]; then def=0; else def=$(py node-default); fi
 	if fancy_ok; then
 		arrow_menu "$def" "${rows[@]}"
 		[ "$MENU_PICK" -ge 0 ] || return 1
@@ -2027,24 +2761,19 @@ pick_node() {   # 从可选节点里选一个，打印节点名；标出已被�
 	done
 }
 
-cmd_add() {
+cmd_add() {   # cca add [api]
 	local email alias key node out
+	[ "${1:-}" = api ] && { cmd_add_api; return; }
 	need_tty
-	router_ready || { info "先配置路由器"; cmd_router_setup || return 1; }
+	if ! router_ready; then
+		info "官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 cca add api）"
+		cmd_router_setup || return 1
+	fi
 	say ""
-	say "${C_B}添加 Claude 账号${C_0}"
+	say "${C_B}添加 Claude 账号${C_0}    ${C_D}第三方 API 用 cca add api${C_0}"
 	say ""
-	while :; do   # 登录邮箱：登录时自动填进登录页
-		email=$(ask "  登录邮箱：" "")
-		[ -n "$email" ] || { say "  已取消"; return 1; }
-		if out=$(py check email "$email"); then email="$out"; break; fi
-		warn "$out"
-	done
-	while :; do   # 别名：只用来在菜单里认出账号，可以不填
-		alias=$(ask "  别名（可选，回车跳过）：" "")
-		if out=$(py check alias "$alias"); then alias="$out"; break; fi
-		warn "$out"
-	done
+	email=$(ask_valid email "  登录邮箱：") || return 1   # 登录时自动填进登录页
+	alias=$(ask_valid alias "  别名（可选，回车跳过）：" optional)   # 只用来在菜单里认出账号
 	say ""
 	say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
 	say ""
@@ -2060,6 +2789,101 @@ cmd_add() {
 	ADDED_KEY="$key"
 }
 
+# 第三方 API 账号：兼容 Anthropic 接口的地址 + key，在菜单里和官方账号一样选用。直连时不需要路由器
+cmd_add_api() {
+	local alias url model secret node="" key
+	need_tty
+	say ""
+	say "${C_B}添加第三方 API 账号${C_0}    ${C_D}兼容 Anthropic 接口的服务：填地址和 key，模型可选${C_0}"
+	say ""
+	alias=$(ask_valid alias "  别名（在菜单里显示，例如 kimi）：") || return 1
+	url=$(ask_valid url "  接口地址（ANTHROPIC_BASE_URL，例如 https://api.example.com/anthropic）：") || return 1
+	secret=$(api_key_ask "  API key（输入时不显示）：") || { say "  已取消"; return 1; }
+	model=$(ask_valid model "  模型（可选，回车跳过；填了会同时用作 opus / sonnet / haiku）：" optional)
+	if [ -n "$(py nodes-allowed)" ]; then
+		say ""
+		say "  ${alias} 走哪个出口？国内的服务一般直连；要经代理的选一个节点："
+		say ""
+		node=$(pick_node direct) || return 1
+		say ""
+		if [ -n "$node" ] && ! router_ready; then info "走节点要先配置路由器"; cmd_router_setup || return 1; fi
+	fi
+	key=$(py add-api "$alias" "$url" "$model" "$node") || return 1
+	if ! printf '%s' "$secret" | py secret-set "$key"; then
+		py rm "$key"
+		die "API key 没存进钥匙串，没有添加 ${alias}"
+	fi
+	secret=""
+	eval "$(py env "$key")"
+	[ -z "$ACC_PORT" ] || router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
+	py link "$key" && py sync "$key" || die "初始化账号目录失败"
+	okay "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}），key 存在钥匙串里"
+	info "用 cca @${ACC_NAME} 启动；改地址、模型或加环境变量用 cca edit，换 key 用 cca key ${ACC_NAME}"
+}
+
+# x=$(ask_valid 字段 提示 [optional])：问到 py check 通过为止，打印规范化后的值；
+# 直接回车：optional 时打印空字符串，否则说"已取消"并返回 1
+ask_valid() {
+	local v out
+	while :; do
+		v=$(ask "$2" "")
+		if [ -z "$v" ]; then
+			[ "${3:-}" = optional ] && return 0
+			say "  已取消"
+			return 1
+		fi
+		if out=$(py check "$1" "$v"); then printf '%s' "$out"; return 0; fi
+		warn "$out"
+	done
+}
+
+api_key_ask() {   # api_key_ask 提示：读一个合格的 API key 打到 stdout（不回显）；空输入返回 1
+	local s out
+	while :; do
+		s=$(ask_secret "$1")
+		[ -n "$s" ] || return 1
+		if out=$(printf '%s' "$s" | py secret-check); then printf '%s' "$s"; return 0; fi
+		warn "$out"
+	done
+}
+
+api_key_prompt() {   # 输入 key 存进钥匙串（需要先 eval "$(py env 名称)"）
+	local s
+	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：") || { say "  已取消"; return 1; }
+	printf '%s' "$s" | py secret-set "$ACC_KEY" || return 1
+	okay "已把 ${ACC_NAME} 的 API key 存进钥匙串"
+}
+
+api_key_ready() {   # 启动前：key 在账号表里或钥匙串里（按现在的接口域名）；都没有时在终端里问
+	[ -n "$(py secret-status "$ACC_KEY")" ] && return 0
+	interactive || { warn "钥匙串里没有 ${ACC_NAME} 的 API key（接口地址换了服务商时也要重新输入）：在终端里运行 cca key ${ACC_NAME}"; return 1; }
+	warn "钥匙串里还没有 ${ACC_NAME} 的 API key（第一次用，或者接口地址换了服务商）"
+	api_key_prompt
+}
+
+api_keys_ensure() {   # cca edit 之后：手写进账号表、换了服务商、还没有 key 的第三方 API 账号，现在输入
+	local key
+	while IFS= read -r key; do
+		[ -n "$key" ] || continue
+		eval "$(py env "$key")"
+		info "第三方 API 账号 ${ACC_NAME} 还没有 key"
+		api_key_prompt || warn "先跳过：启动 ${ACC_NAME} 时会再问"
+	done < <(py secrets-missing)
+}
+
+cmd_key() {   # cca key <账号>：重新输入第三方 API 账号的 key（存进钥匙串）
+	local key
+	key=$(py resolve "${1:-}") || die "用法: cca key <第三方 API 账号>"
+	need_tty
+	eval "$(py env "$key")"
+	[ "$ACC_KIND" = api ] || die "${ACC_NAME} 是官方账号：登录凭证由 Claude Code 自己管（在 cca @${ACC_NAME} 里用 /login 重新登录）"
+	[ "$(py secret-status "$ACC_KEY")" = table ] && warn "账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 cca edit"
+	api_key_prompt
+}
+
+# 账号表、端口池有变化时要不要同步路由器：配置过路由器，或者有走端口的账号（只有直连的第三方 API 账号时不用）
+router_needed() { router_ready || [ -n "$(py ports)" ]; }
+
 cmd_edit() {
 	local before
 	need_tty
@@ -2069,22 +2893,38 @@ cmd_edit() {
 		confirm "账号表有错误，重新编辑？" y || return 1
 		${EDITOR:-vi} "$TABLE" <&3 3<&-
 	done
+	chmod 600 "$TABLE" 2>/dev/null   # 编辑器可能另存再改名（权限会变）；表里可能写着 key
+	py secrets-forget   # 删掉的第三方 API 账号：钥匙串里的 key 一起删
 	if [ "$(digest)" != "$before" ] || [ "$(digest)" != "$(py get synced)" ]; then
-		router_sync_soon
+		router_needed && router_sync_soon
 	else
-		info "账号表没有变化"
+		info "端口和节点没有变化，不用同步路由器"
 	fi
 	launchers_sync
+	api_keys_ensure
 }
 
-child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS 两个数组里
-	UNSETS=(-u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN -u ALL_PROXY -u all_proxy)
-	SETS=(CLAUDE_CONFIG_DIR="$ACC_CLAUDE_DIR" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY" BROWSER="$CCA_HOME/bin/open-url"
-		https_proxy="$ACC_PROXY" HTTPS_PROXY="$ACC_PROXY" http_proxy="$ACC_PROXY" HTTP_PROXY="$ACC_PROXY"
-		no_proxy="$CCA_NO_PROXY" NO_PROXY="$CCA_NO_PROXY")
+# 继承来的、会盖掉账号自己的登录/接口/模型，或者把请求转去别的服务商的变量（和 PY_SRC 里的 CRED_ENV 对应）
+INHERITED_RE='^(ANTHROPIC_.*|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)$'
+child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS 两个数组里，屏蔽掉的继承变量名在 DROPPED 里
+	local v
+	# 继承来的接口地址、凭证、模型一律不带进去：例如 shell 里 export 过 ANTHROPIC_BASE_URL，官方账号的登录 token
+	# 就会被发到那个地址。第三方 API 账号自己的地址和模型经 --settings 传，key 经 apiKeyHelper 取
+	UNSETS=(-u ALL_PROXY -u all_proxy)
+	DROPPED=""
+	for v in $(compgen -e | grep -E "$INHERITED_RE"); do UNSETS+=(-u "$v"); DROPPED="${DROPPED:+${DROPPED} }${v}"; done
+	SETS=(CLAUDE_CONFIG_DIR="$ACC_CLAUDE_DIR" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
+	[ "$ACC_KIND" = api ] || SETS+=(BROWSER="$CCA_HOME/bin/open-url")
+	if [ -n "$ACC_PROXY" ]; then
+		SETS+=(https_proxy="$ACC_PROXY" HTTPS_PROXY="$ACC_PROXY" http_proxy="$ACC_PROXY" HTTP_PROXY="$ACC_PROXY"
+			no_proxy="$CCA_NO_PROXY" NO_PROXY="$CCA_NO_PROXY")
+	else   # 直连：也不用 shell 里继承来的代理，出口不随环境变
+		UNSETS+=(-u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u no_proxy -u NO_PROXY)
+	fi
 }
 
-logout_account() {   # 需要先 eval "$(py env 名称)"
+logout_account() {   # 需要先 eval "$(py env 名称)"；第三方 API 账号只删钥匙串里它的 key
+	if [ "$ACC_KIND" = api ]; then py secret-del "$ACC_KEY"; return 0; fi
 	if [ -d "$ACC_CLAUDE_DIR" ] && [ -n "$CLAUDE_BIN" ]; then
 		child_env
 		with_timeout 30 env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth logout </dev/null >/dev/null 2>&1
@@ -2142,13 +2982,17 @@ cmd_rm() {
 	need_tty
 	eval "$(py env "$key")"
 	[ -z "$(app_pid "$ACC_DESKTOP_DIR")" ] || die "${ACC_LABEL} 的 Claude App 还开着：先退出它再删除"
-	confirm "删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）" n || return 0
+	if [ "$ACC_KIND" = api ]; then
+		confirm "删除第三方 API 账号 ${ACC_LABEL}？（删除钥匙串里它的 key 和账号目录；共享的记忆/会话不受影响）" n || return 0
+	else
+		confirm "删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）" n || return 0
+	fi
 	py link "$key" >/dev/null 2>&1   # 先把会话里新产生的共享内容并回 ~/.claude
 	py sync "$key" >/dev/null 2>&1
 	logout_account
 	rm -rf "${CCA_HOME:?}/accounts/${ACC_ID:?}"
 	py rm "$key"
-	router_sync_soon
+	[ -z "$ACC_PORT" ] || router_sync_soon   # 直连的第三方 API 账号不占端口，路由器那边没有要改的
 	launchers_sync
 	info "已删除账号 ${ACC_LABEL}"
 }
@@ -2159,6 +3003,7 @@ cmd_list() {
 	say ""
 	while IFS= read -r r; do i=$((i + 1)); say "  ${i}. ${r}"; done < <(py rows "$(term_cols)")
 	say ""
+	[ -n "$(py ports)" ] || return 0   # 只有直连的第三方 API 账号：没有端口要看
 	if ! want_local; then
 		router_ready && verify_ports
 	else
@@ -2180,12 +3025,14 @@ menu() {   # 选中的账号别名打印到 stdout
 		say ""
 		say "${C_B}选择 Claude 账号${C_0}    ${C_D}↑↓ 移动 · 回车确认 · 数字键直接选 · q 退出${C_0}"
 		say ""
-		arrow_menu "$cur" "${rows[@]}" "＋ 添加新账号" "退出"
+		arrow_menu "$cur" "${rows[@]}" "＋ 添加新账号" "＋ 添加第三方 API 账号" "退出"
 		say ""
 		[ "$MENU_PICK" -ge 0 ] || return 1
 		if [ "$MENU_PICK" -lt "$n" ]; then echo "${keys[MENU_PICK]}"; return 0; fi
-		[ "$MENU_PICK" -eq "$n" ] || return 1
-		cmd_add >&2 && { py keys | tail -n 1; return 0; }
+		case $((MENU_PICK - n)) in
+			0) cmd_add >&2 && { py keys | tail -n 1; return 0; } ;;
+			1) cmd_add_api >&2 && { py keys | tail -n 1; return 0; } ;;
+		esac
 		return 1
 	fi
 	while :; do   # 没有完整终端时：输入编号
@@ -2197,6 +3044,7 @@ menu() {   # 选中的账号别名打印到 stdout
 		[ -n "$last" ] && say "  回车   继续使用 $(py name "$last")"
 		say "  编号   切换到对应账号"
 		say "  a      添加新账号"
+		say "  p      添加第三方 API 账号"
 		say "  q      退出"
 		say ""
 		choice=$(ask "请选择：" "")
@@ -2207,7 +3055,8 @@ menu() {   # 选中的账号别名打印到 stdout
 		case "$choice" in
 			q|Q) return 1 ;;
 			a|A|n|N) cmd_add >&2 && { py keys | tail -n 1; return 0; } ;;
-			*[!0-9]*) warn "没看懂「${choice}」：请输入编号、a 或 q" ;;
+			p|P) cmd_add_api >&2 && { py keys | tail -n 1; return 0; } ;;
+			*[!0-9]*) warn "没看懂「${choice}」：请输入编号、a、p 或 q" ;;
 			*) if [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ]; then echo "${keys[choice - 1]}"; return 0; fi
 			   warn "没有编号 ${choice}" ;;
 		esac
@@ -2248,15 +3097,18 @@ want_local() {   # 这次走本机 Clash 吗：按 config.json 的 route（CCA_R
 pick_route() {   # 需要先 eval "$(py env 名称)"；结果在 ROUTE（router|local）和 ACC_PROXY 里
 	if want_local; then route_local; else route_router; fi
 }
-route_router() {   # 在家：让路由器确认端口池在，并把槽位切到账号的节点（API，无需重载）
+router_ensure() {   # 让路由器确认端口池在，并把各槽位切到账号的节点（API，无需重载；要重载时先问）
 	local out rc
+	router_ready || return 0
+	out=$(rsh "$RDIR/cca-router.sh ensure-now" 2>&1); rc=$?
+	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
+	[ $rc -eq 3 ] && allow_reload && router_reload
+	return 0
+}
+route_router() {   # 在家：经路由器的端口池
 	[ -n "$ACC_PROXY" ] || { warn "还没配置路由器（cca router setup）"; return 1; }
 	load_router
-	if router_ready; then
-		out=$(rsh "$RDIR/cca-router.sh ensure-now" 2>&1); rc=$?
-		[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
-		[ $rc -eq 3 ] && allow_reload && router_reload
-	fi
+	router_ensure
 	port_open "$PROXY_HOST" "$ACC_PORT" || {
 		warn "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
 		return 1
@@ -2264,16 +3116,35 @@ route_router() {   # 在家：让路由器确认端口池在，并把槽位切�
 	ROUTE=router
 }
 route_note() {   # 给提示用：走的是哪个端口
-	if [ "${ROUTE:-}" = local ]; then printf '本机 %s 端口 %s' "$LOCAL_NAME" "$ACC_PORT"; else printf '端口 %s' "$ACC_PORT"; fi
+	case "${ROUTE:-}" in
+		local) printf '本机 %s 端口 %s' "$LOCAL_NAME" "$ACC_PORT" ;;
+		direct) printf '直连' ;;
+		*) printf '端口 %s' "$ACC_PORT" ;;
+	esac
 }
 
+# 第三方 API 账号：接口地址经账号的出口连得上（不带 key；收到任何 HTTP 响应都算连得上）。结果在 COFFEE_LINE
+api_check() {
+	local code i
+	local -a via=(--noproxy '*')
+	[ -n "$ACC_PROXY" ] && via=(-x "$ACC_PROXY")
+	for i in 1 2; do
+		code=$(curl -s -o /dev/null -m 8 -w '%{http_code}' "${via[@]}" "$ACC_BASE_URL" 2>/dev/null)
+		case "$code" in ''|000) ;; *) COFFEE_LINE="接口连得上"; return 0 ;; esac
+	done
+	COFFEE_LINE="连不上 ${ACC_BASE_URL}（$(route_note)）"
+	return 1
+}
+settings_warn() { warn "共享的设置里有会盖掉每个账号自己的代理、接口地址或凭证的配置（${1}）。删掉后再用 cca 启动（第三方 API 用 cca add api 加成账号）"; }
+
 # 经账号端口检测出口：claude.ai 看到的 IP + ip.net.coffee/claude 的风险数据（不上报会话）
-coffee_check() {
-	local trace ip risk="" out rc
+coffee_check() {   # coffee_check [region]：region 时只看出口地区（不查 ip.net.coffee 的纯净度，查用量前用）
+	local trace ip risk="" out rc min="$CCA_MIN_TRUST"
 	trace=$(curl -s -m 8 -x "$ACC_PROXY" https://claude.ai/cdn-cgi/trace 2>/dev/null)
 	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
-	[ -n "$ip" ] && risk=$(curl -s -m 12 -x "$ACC_PROXY" "https://ip.net.coffee/api/iprisk/$ip" 2>/dev/null)
-	out=$(py coffee "$CCA_MIN_TRUST" "$trace" "$risk")
+	if [ "${1:-}" = region ]; then min=0
+	elif [ -n "$ip" ]; then risk=$(curl -s -m 12 -x "$ACC_PROXY" "https://ip.net.coffee/api/iprisk/$ip" 2>/dev/null); fi
+	out=$(py coffee "$min" "$trace" "$risk")
 	rc=$?
 	COFFEE_IP="$ip"
 	COFFEE_LINE=$(printf '%s\n' "$out" | head -n 1)
@@ -2284,12 +3155,15 @@ coffee_check() {
 preflight() {   # 账号的出口必须可用且干净，否则不启动（避免走错出口）
 	local bad rc
 	COFFEE_LINE=""
-	pick_route || return 1
-	if ! bad=$(py settings-check); then
-		warn "共享的设置里配置了代理（${bad}），会覆盖账号端口。删掉后再用 cca 启动。"
+	if [ -n "$ACC_PORT" ]; then pick_route || return 1; else ROUTE=direct; fi   # 直连的第三方 API 账号不经端口
+	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
+	[ -n "${CCA_SKIP_CHECK:-}" ] && return 0
+	if [ "$ACC_KIND" = api ]; then   # claude.ai 的出口检测和第三方服务无关：只看接口连不连得上
+		api_check && return 0
+		warn "${COFFEE_LINE}"
+		warn "已停止启动：确认地址没写错、服务商没出问题（确定没问题可以加 CCA_SKIP_CHECK=1 跳过检测）"
 		return 1
 	fi
-	[ -n "${CCA_SKIP_CHECK:-}" ] && return 0
 	coffee_check
 	rc=$?
 	case $rc in
@@ -2325,6 +3199,7 @@ cmd_web() {
 	local key
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
+	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
 	CCA_SKIP_CHECK=1 preflight || exit 1
 	# 还没登录就先走 Claude Code 的登录（登录页预填邮箱）：网页版用同一个浏览器实例，登录一次两边都能用
 	if [ -n "$ACC_EMAIL" ] && [ -n "$CLAUDE_BIN" ] && interactive && [ -z "$(auth_email)" ]; then
@@ -2381,6 +3256,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开 Claude App；这�
 	app=$(claude_app) || die "没找到 Claude App：先从 https://claude.ai/download 下载安装"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
+	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号：Claude App 只能用官方账号"
 	key="$ACC_KEY" dir="$ACC_DESKTOP_DIR"
 	pid=$(app_pid "$dir")
 	if [ -n "$pid" ]; then
@@ -2631,22 +3507,32 @@ cmd_local() {
 }
 
 cmd_check() {
-	local keys key ips="" rc host
+	local keys key ips="" rc host="" route=""
 	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
 	[ -n "$keys" ] || { info "还没有账号"; return 0; }
-	load_router
-	host="$PROXY_HOST"
-	if want_local; then   # 在外面：先让本机端口池就绪、切好节点
-		load_local
-		local_ready || die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
-		local_ensure || return 1
-		host=127.0.0.1
-	fi
 	while IFS= read -r key; do
 		eval "$(py env "$key")" || continue
-		ACC_PROXY="http://${host}:${ACC_PORT}"
-		if ! port_open "$host" "$ACC_PORT"; then
-			say "  ${ACC_NAME}  ${ACC_NODE}  ${C_R}端口 ${ACC_PORT} 不通${C_0}"
+		if [ -n "$ACC_PORT" ] && [ -z "$route" ]; then   # 第一个走端口的账号：选好路
+			load_router
+			host="$PROXY_HOST" route=router
+			if want_local; then   # 在外面：先让本机端口池就绪、切好节点
+				load_local
+				local_ready || die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
+				local_ensure || return 1
+				host=127.0.0.1 route=local
+			fi
+		fi
+		ROUTE=direct
+		if [ -n "$ACC_PORT" ]; then
+			ACC_PROXY="http://${host}:${ACC_PORT}" ROUTE="$route"
+			if ! port_open "$host" "$ACC_PORT"; then
+				say "  ${ACC_NAME}  ${ACC_NODE}  ${C_R}端口 ${ACC_PORT} 不通${C_0}"
+				continue
+			fi
+		fi
+		if [ "$ACC_KIND" = api ]; then   # 第三方 API：只看接口连不连得上
+			api_check
+			say "  ${ACC_NAME}  ${ACC_NODE}${ACC_PORT:+  :${ACC_PORT}}  ${COFFEE_LINE}"
 			continue
 		fi
 		coffee_check
@@ -2662,32 +3548,45 @@ cmd_check() {
 }
 
 run_account() {
-	local key="$1" rc e
+	local key="$1" rc e dropped
+	local -a extra=()
 	shift
 	[ -n "$CLAUDE_BIN" ] || die "找不到 claude 命令"
 	eval "$(py env "$key")" || die "读取账号失败: $key"
 	key="$ACC_KEY"
+	if [ "$ACC_KIND" = api ]; then   # 地址、模型和 apiKeyHelper 经 --settings 交给 claude；再传一个 --settings 会把它整个顶掉
+		case " $* " in *" --settings "*|*" --settings="*) die "${ACC_NAME} 是第三方 API 账号：cca 用 --settings 传它的地址和 key，不能再加 --settings" ;; esac
+		api_key_ready || exit 1
+		extra=(--settings "$ACC_SETTINGS")
+	fi
 	preflight || exit 1
 	py link "$key" || die "链接共享目录失败"
 	py sync "$key" || die "同步 .claude.json 失败"
-	ensure_login || exit 1
+	[ "$ACC_KIND" = api ] || ensure_login || exit 1
 	py set-last "$key"
-	e=$(py email "$key")
-	if [ -n "$ACC_EMAIL" ]; then e="已登录"; else e="已登录 ${e}"; fi
 	say ""
-	if [ -n "$ACC_ALIAS" ] && [ -n "$ACC_EMAIL" ]; then
-		say "  ${C_B}${ACC_ALIAS}${C_0}  ${ACC_EMAIL}   ${C_D}${e} · $(route_note)${C_0}"
+	if [ "$ACC_KIND" = api ]; then
+		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}第三方 API · ${ACC_BASE_URL}${ACC_MODEL:+ · ${ACC_MODEL}}${C_0}"
+		say "  ${C_D}出口${C_0}  ${ACC_NODE}$([ -n "$ACC_PORT" ] && printf '（%s）' "$(route_note)") · ${COFFEE_LINE:-未检测}"
 	else
-		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}${e} · $(route_note)${C_0}"
+		e=$(py email "$key")
+		if [ -n "$ACC_EMAIL" ]; then e="已登录"; else e="已登录 ${e}"; fi
+		if [ -n "$ACC_ALIAS" ] && [ -n "$ACC_EMAIL" ]; then
+			say "  ${C_B}${ACC_ALIAS}${C_0}  ${ACC_EMAIL}   ${C_D}${e} · $(route_note)${C_0}"
+		else
+			say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}${e} · $(route_note)${C_0}"
+		fi
+		if [ -n "$COFFEE_LINE" ]; then say "  ${C_D}出口${C_0}  ${ACC_NODE} · ${COFFEE_LINE}"
+		else say "  ${C_D}出口${C_0}  ${ACC_NODE}（未检测）"; fi
 	fi
-	if [ -n "$COFFEE_LINE" ]; then say "  ${C_D}出口${C_0}  ${ACC_NODE} · ${COFFEE_LINE}"
-	else say "  ${C_D}出口${C_0}  ${ACC_NODE}（未检测）"; fi
 	say ""
-	[ -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ] &&
-		warn "已为本次启动屏蔽环境里的 API key / OAuth token，避免覆盖账号登录"
 	child_env
+	if [ -n "$DROPPED" ]; then
+		if [ "$ACC_KIND" = api ]; then warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（这个账号的接口、key 和模型由 cca 设定）"
+		else warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（官方账号用它自己的登录；要换模型写进 ~/.claude/settings.json 或用 /model）"; fi
+	fi
 	trap ':' INT TERM HUP
-	env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" "$@" 3<&-
+	env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" "${extra[@]}" "$@" 3<&-
 	rc=$?
 	trap - INT TERM HUP
 	py link "$key" >/dev/null || warn "退出后链接共享目录失败"
@@ -2701,7 +3600,9 @@ run_account() {
 
 sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）；在外面就等回家
 	py validate || die "账号表有错误：运行 cca edit 修正"
+	py secrets-forget   # 直接改账号表删掉的第三方 API 账号：钥匙串里的 key 一起删
 	if [ "$(digest)" != "$(py get synced)" ]; then
+		router_needed || return 0   # 只有直连的第三方 API 账号、也没配置路由器：没有要同步的
 		if router_ready && ! at_home; then
 			info "账号表或路由器端脚本有变化：现在连不上路由器，回到家里的网络后再同步"
 			return 0
@@ -2732,6 +3633,83 @@ launch() {
 		fi
 	fi
 	run_account "$sel" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# 订阅用量：每个官方账号经它自己的出口，让 Claude Code 自己查（get_usage 控制请求，token 由它读取和刷新，
+# cca 不碰登录凭证）。几个账号并行查；查不到的显示上次的缓存（注明多久前）
+# ---------------------------------------------------------------------------
+usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过的原因写到 $1.skip；需要先 eval "$(py env 名称)" 并设好 ACC_PROXY
+	local o="$1" e trace out rc
+	e=$(py email "$ACC_KEY")
+	if [ -z "$e" ]; then printf 'login\t\n' > "$o.skip"; return 0; fi
+	if [ -n "$ACC_EMAIL" ] && [ "$(lower "$e")" != "$(lower "$ACC_EMAIL")" ]; then   # 登错号：不拿别的账号走这个出口
+		printf 'mismatch\t%s\n' "$e" > "$o.skip"; return 0
+	fi
+	if [ -z "$ACC_PROXY" ]; then printf 'route\t\n' > "$o.skip"; return 0; fi
+	if ! port_open "$USAGE_HOST" "$ACC_PORT"; then printf 'port\t%s\n' "$ACC_PORT" > "$o.skip"; return 0; fi
+	if [ -z "${CCA_SKIP_CHECK:-}" ]; then   # 出口在受限地区时不拿账号去查（和启动前的检测一样，只是不看纯净度）
+		coffee_check region
+		case $? in
+			2) printf 'region\t%s\n' "$COFFEE_NOTE" > "$o.skip"; return 0 ;;
+			3) printf 'trace\t\n' > "$o.skip"; return 0 ;;
+		esac
+	fi
+	child_env
+	env "${UNSETS[@]}" -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SSE_PORT "${SETS[@]}" \
+		"${PYRUN[@]}" usage-query "$CLAUDE_BIN" "${CCA_USAGE_TIMEOUT:-25}" > "$o.json" 2>/dev/null
+}
+
+cmd_usage() {   # cca usage [账号] [--json]
+	local json="" q="" key i tmp rc bad color=""
+	local -a keys=() pids=()
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--json) json=json ;;
+			-h|--help) say "用法: cca usage [账号] [--json]"; return 0 ;;
+			-*) die "用法: cca usage [账号] [--json]" ;;
+			*) [ -z "$q" ] || die "用法: cca usage [账号] [--json]（写一个账号，或者不写查全部）"; q="$1" ;;
+		esac
+		shift
+	done
+	[ -n "$CLAUDE_BIN" ] || die "找不到 claude 命令"
+	if [ -n "$q" ]; then
+		key=$(py resolve "$q") || exit 1
+		eval "$(py env "$key")"
+		[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号，没有订阅用量可查（用量看服务商的控制台）"
+		keys=("$key")
+	else
+		while IFS= read -r key; do [ -n "$key" ] && keys+=("$key"); done < <(py keys official)
+		[ ${#keys[@]} -gt 0 ] || { info "还没有官方账号（cca add）"; return 0; }
+	fi
+	sync_if_changed
+	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
+	USAGE_HOST=""
+	if want_local; then
+		load_local
+		if local_ready && local_ensure; then USAGE_HOST=127.0.0.1
+		else warn "现在连不上路由器，本机 Clash 也用不了：只能显示上次的用量（cca local setup 配置本机 Clash）"; fi
+	else
+		router_ensure
+		USAGE_HOST="$PROXY_HOST"
+	fi
+	tmp=$(mktemp -d "$CCA_HOME/usage.XXXXXX") || die "建临时目录失败"
+	# Ctrl-C、关掉终端：后台的查询忽略 SIGINT，要自己停掉它们（连同它们起的 python、curl；claude 的 stdin 一断也就退出了）
+	trap 'for i in "${pids[@]}"; do pkill -P "$i"; kill "$i"; done 2>/dev/null; rm -rf "$tmp"; exit 130' INT TERM HUP
+	[ -n "$json" ] || info "正在经各账号自己的出口查询用量（${#keys[@]} 个账号）…"
+	for ((i = 0; i < ${#keys[@]}; i++)); do   # 最多同时查 4 个
+		eval "$(py env "${keys[i]}")"
+		ACC_PROXY="${USAGE_HOST:+http://${USAGE_HOST}:${ACC_PORT}}"
+		usage_one "$tmp/$i" </dev/null 3<&- &
+		pids+=($!)
+		if [ ${#pids[@]} -ge 4 ]; then wait "${pids[0]}"; pids=("${pids[@]:1}"); fi
+	done
+	wait
+	trap - INT TERM HUP
+	[ -t 1 ] && [ -z "${NO_COLOR:-}" ] && color=1
+	py usage-render "$tmp" "${json:-table}" "$(term_cols)" "$color" "${keys[@]}"; rc=$?
+	rm -rf "$tmp"
+	return $rc
 }
 
 # ---------------------------------------------------------------------------
@@ -2962,7 +3940,7 @@ cmd_restore() {
 	done < <(py keys)
 	[ -z "$running" ] || die "这些账号的 Claude App 还开着：${running}。先退出它们再还原"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
-	say "  · 每个账号：把会话里新产生的共享内容并回 ~/.claude，然后退出登录、删除它的钥匙串凭证"
+	say "  · 每个账号：把会话里新产生的共享内容并回 ~/.claude，然后退出登录、删除它的钥匙串凭证（第三方 API 账号删掉钥匙串里的 key）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池"
 	say "  · 本机：先打包备份配置（不含浏览器资料和私钥），再删除 ~/.local/bin/cca、${CCA_HOME} 和各账号的 Claude App 启动器"
@@ -2976,6 +3954,7 @@ cmd_restore() {
 		logout_account
 		info "已退出账号 ${ACC_LABEL}"
 	done < <(py keys)
+	py secrets-forget all   # 账号表里已经没有、钥匙串里还留着的第三方 API key 也删掉
 	if router_ready; then
 		out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" 2>&1); rc=$?
 		[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  │ /' >&2
@@ -2990,7 +3969,8 @@ cmd_restore() {
 	load_local
 	if local_ready; then local_remove; info "本机 ${LOCAL_NAME} 里 cca 的端口池已移除"; fi
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-	tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' . 2>/dev/null &&
+	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥
+	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' . 2>/dev/null ) &&
 		info "配置备份：$bk"
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
 	launchers_sync remove-all
@@ -3008,17 +3988,27 @@ cca $VERSION — Claude Code 多账号（账号独立登录，其余共享；每
   cca @<账号> [claude 参数]   跳过选择；账号可写别名、邮箱、编号或唯一前缀
                              启动前经该账号端口检测出口（claude.ai 看到的 IP + ip.net.coffee 纯净度）
 
+用量
+  cca usage [账号] [--json]   查官方账号的订阅用量：5 小时、本周（含分模型）额度用了多少、什么时候重置；
+                             经每个账号自己的出口、让 Claude Code 自己去查（不发消息、不耗额度），
+                             查不到时显示上次的缓存。菜单和 cca ls 里也会附上最近一次的用量
+
 账号表  $TABLE    {"别名(邮箱)": "节点"}，别名可省略（只写邮箱）；端口自动分配
   cca add                    新增账号：分两行填登录邮箱和别名（可选），再选出口节点；
                              登录时邮箱会预填在登录页里
+  cca add api                新增第三方 API 账号（兼容 Anthropic 接口的地址 + key，模型可选）：
+                             直连或走节点；key 存进钥匙串，经 apiKeyHelper 交给 Claude Code
+                             表里写法：{"别名": {"base_url": "…", "model": "…", "node": "", "env": {…}}}
+  cca key <账号>             重新输入第三方 API 账号的 key
   cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
   cca ls                     列出账号、登录状态和端口
   cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
-  cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）
+  cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
+                             只用于官方账号
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
-                             部分；cca app --launchers 重新生成）
-  cca check [账号]           检测各账号出口 IP、地区、纯净度，提示共用出口
+                             部分；cca app --launchers 重新生成）。只用于官方账号
+  cca check [账号]           检测各账号出口 IP、地区、纯净度，提示共用出口；第三方 API 账号只检测接口连不连得上
 
 路由器
   cca router setup           SSH 免密（只输一次密码）+ 部署分流
@@ -3051,6 +4041,7 @@ main() {
 		help|-h|--help) usage ;;
 		version|--cca-version) echo "$VERSION" ;;
 		_browser) shift; cmd_browser "$@" ;;
+		_api-key) shift; py api-key-out "${1:-}" ;;   # Claude Code 的 apiKeyHelper 回调：只打印 key
 		_update-fetch) cmd_update_fetch ;;
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
@@ -3063,7 +4054,9 @@ main() {
 			fi
 			update_hook "$@"
 			case "${1:-}" in
-				add) cmd_add ;;
+				add) shift; cmd_add "$@" ;;
+				key) shift; cmd_key "$@" ;;
+				usage) shift; cmd_usage "$@" ;;
 				edit) cmd_edit ;;
 				ls|list) cmd_list ;;
 				rm|remove) shift; cmd_rm "$@" ;;
