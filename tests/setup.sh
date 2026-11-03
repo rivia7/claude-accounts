@@ -71,8 +71,22 @@ chmod +x "$R/etc/init.d/cron" "$R/etc/openclash/clash"
 printf '#!/bin/sh\nexec /bin/dash "$@"\n' > "$T/rbin/sh"
 cat > "$T/rbin/uci" <<'S'
 #!/bin/sh
-case "$*" in *"get openclash.config.config_path"*) echo /etc/openclash/config/custom.yaml ;; esac
+case "$*" in
+	*"get openclash.config.config_path"*) echo /etc/openclash/config/custom.yaml ;;
+	*"get openclash.config.cn_port"*) echo 9090 ;;
+	*"get openclash.config.dashboard_password"*) echo test-secret ;;
+esac
 S
+# 假的 OpenClash 重启：按 OpenClash 自己的配置重新生成运行配置，跑 cca 的钩子（真实路由器上由覆写脚本调用），再让内核加载
+cat > "$R/etc/init.d/openclash" <<'S'
+#!/bin/sh
+[ "$1" = restart ] || exit 0
+R="$CCA_T/router"; RCF="$R/etc/openclash/custom.yaml"
+cp "$R/etc/openclash/config/custom.yaml" "$RCF"
+CCA_ROOT="$R" /bin/dash "$R/etc/cca/cca-router.sh" hook "$RCF"
+CCA_FAKE_RESTART=1 "$CCA_T/rbin/curl" -s -X PUT --data "{\"path\":\"$RCF\"}" http://127.0.0.1:9090/configs >/dev/null
+S
+chmod +x "$R/etc/init.d/openclash"
 cat > "$T/rbin/pidof" <<'S'
 #!/bin/sh
 [ -f "$CCA_T/router/stopped" ] && exit 1
@@ -85,26 +99,37 @@ while read -r p; do echo "tcp 0 0 0.0.0.0:$p 0.0.0.0:* LISTEN"; done < "$CCA_T/r
 S
 cat > "$T/rbin/curl" <<'S'
 #!/bin/bash
-# 假的 mihomo 控制接口：PUT /configs（重载）、GET/PUT /proxies/<组>（读/切换选中节点），选中状态存在 router/sel/<组>
-method=GET; data=""; url=""; out=""; prev=""
+# 假的 mihomo 控制接口：PUT /configs（重载）、GET/PUT /proxies/<组>（读/切换选中节点），选中状态存在 router/sel/<组>。
+# 和真的一样要密钥（运行配置里的 secret，也是 uci 的 dashboard_password）：密钥不对回 401
+method=GET; data=""; url=""; out=""; prev=""; auth=""
 for a in "$@"; do
-	case "$prev" in -X) method="$a" ;; --data) data="$a" ;; -o) out="$a" ;; esac
+	case "$prev" in -X) method="$a" ;; --data) data="$a" ;; -o) out="$a" ;; -H) case "$a" in "Authorization: Bearer "*) auth="${a#Authorization: Bearer }" ;; esac ;; esac
 	case "$a" in http*) url="$a" ;; esac
 	prev="$a"
 done
+case "$url" in
+	*/configs*|*/proxies/*)
+		if [ -z "${CCA_FAKE_RESTART:-}" ] && [ "$auth" != test-secret ]; then
+			[ -n "$out" ] && printf '{"message":"Unauthorized"}' > "$out"; printf 401; exit 0
+		fi ;;
+esac
 RCF="$CCA_T/router/etc/openclash/custom.yaml"; SELD="$CCA_T/router/sel"; mkdir -p "$SELD"
+CORE="$CCA_T/router/core.yaml"   # 内核加载的那份配置（运行配置文件被删了，内核里的组照样在）
 emit() { [ -n "$out" ] && printf '%s' "$2" > "$out"; printf '%s' "$1"; }
 case "$url" in
   *"/configs"|*"/configs?force=true")
     # reload_reject：明确拒绝（400，不生效）；reload_noop：断开且不生效；reload_drop：断开但生效（像真实路由器超时）
-    if [ -f "$CCA_T/router/reload_reject" ]; then echo "RELOAD rejected" >> "$CCA_T/router.log"; emit 400 '{"message":"bad"}'; exit 22; fi
-    if [ -f "$CCA_T/router/reload_noop" ]; then echo "RELOAD dropped-noop" >> "$CCA_T/router.log"; printf 000; exit 28; fi
+    # CCA_FAKE_RESTART：假的 OpenClash 重启让内核加载新生成的运行配置（记成 RESTART，不算重载）
+    if [ -z "${CCA_FAKE_RESTART:-}" ] && [ -f "$CCA_T/router/reload_reject" ]; then echo "RELOAD rejected" >> "$CCA_T/router.log"; emit 400 '{"message":"bad"}'; exit 22; fi
+    if [ -z "${CCA_FAKE_RESTART:-}" ] && [ -f "$CCA_T/router/reload_noop" ]; then echo "RELOAD dropped-noop" >> "$CCA_T/router.log"; printf 000; exit 28; fi
     path=$(printf '%s' "$data" | sed -n 's/^{"path":"\(.*\)"}$/\1/p')
+    cp "$path" "$CORE"
     ruby -ryaml -e '
       c = YAML.load_file(ARGV[0]) || {}
       File.write(ARGV[1], ([c["port"], c["socks-port"], c["redir-port"], c["mixed-port"], c["tproxy-port"], 9090] + (c["listeners"] || []).map { |l| l["port"] }).compact.map { |p| "#{p}\n" }.join)
       Dir.glob(File.join(ARGV[2], "CCA-*")).each { |f| File.delete(f) }
       (c["proxy-groups"] || []).each { |g| File.write(File.join(ARGV[2], g["name"]), g["proxies"][0]) if g["name"].to_s.start_with?("CCA-") }' "$path" "$CCA_T/router/listening" "$SELD"
+    if [ -n "${CCA_FAKE_RESTART:-}" ]; then echo "RESTART" >> "$CCA_T/router.log"; emit 204 ""; exit 0; fi
     # reload_conflict_once：模拟真实路由器上旧入站占着 7901——第一次重载时 7901 绑定失败，再重载才绑上
     if [ -f "$CCA_T/router/reload_conflict_once" ]; then rm -f "$CCA_T/router/reload_conflict_once"; grep -vx 7901 "$CCA_T/router/listening" > "$CCA_T/router/l.tmp"; mv "$CCA_T/router/l.tmp" "$CCA_T/router/listening"; echo "RELOAD conflict-7901" >> "$CCA_T/router.log"; emit 204 ""; exit 0; fi
     if [ -f "$CCA_T/router/reload_drop" ]; then echo "RELOAD dropped-but-applied" >> "$CCA_T/router.log"; printf 000; exit 28; fi
@@ -115,7 +140,7 @@ case "$url" in
     [ -f "$f" ] || { emit 404 '{"message":"resource not found"}'; exit 0; }
     if [ "$method" = PUT ]; then
       name=$(printf '%s' "$data" | sed -n 's/^{"name":"\(.*\)"}$/\1/p')
-      if ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); g = (c["proxy-groups"] || []).find { |x| x["name"] == ARGV[1] }; exit((g && g["proxies"].include?(ARGV[2])) ? 0 : 1)' "$RCF" "$g" "$name"; then
+      if ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); g = (c["proxy-groups"] || []).find { |x| x["name"] == ARGV[1] }; exit((g && g["proxies"].include?(ARGV[2])) ? 0 : 1)' "$([ -f "$RCF" ] && echo "$RCF" || echo "$CORE")" "$g" "$name"; then
         printf '%s' "$name" > "$f"; echo "SELECT $g $name" >> "$CCA_T/router.log"; emit 204 ""
       else emit 400 '{"message":"Selector update error: proxy not exist"}'; fi
     else
@@ -143,6 +168,9 @@ echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
 [ -f "$CCA_T/away" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }
 [ -n "$cmd" ] || exit 0
 if [ -f "$CCA_T/ssh_fail_uninstall" ]; then case "$cmd" in *uninstall*) echo "ssh: Connection refused" >&2; exit 255 ;; esac; fi
+# 像真的 ssh 一样把 stdin 读走（cca 在 while … <<< 循环里调用 ssh 又没加 </dev/null 时，会吞掉循环后面的输入）。
+# 只读普通文件（bash 3.2 的 here-string 就是）：终端、管道不碰，免得测试卡住
+case "$cmd" in "sh -s"*|*uninstall*) ;; *) [ -f /dev/stdin ] && cat > /dev/null ;; esac
 exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=4 HOME="$CCA_T/router/root" PATH="$CCA_T/rbin:$PATH" /bin/dash -c "$cmd"
 S
 cat > "$T/bin/nc" <<'S'

@@ -30,6 +30,8 @@
 - `PY_SRC=$(cat <<'PY' … PY)` 里不能有落单的 `'` 或 `"`：bash 3.2 扫描 `$(…)` 时会数引号，认错结尾后报错的行号在后面毫不相干的地方。正则和字符串里写 `\x22` / `\x27`
 - 出门在外（连不上路由器）走本机 Clash：Clash Verge 的 Merge 会整个替换列表，所以端口池写进全局扩展脚本（包住用户的 main）；生效靠 `PUT /configs` 热加载它当前的运行配置（文本插入，不重写），不重启 Clash Verge。它的内核控制接口默认只有 Unix socket（运行配置里的 `external-controller-unix`）
 - 在外面不连路由器：路由器同步留到回家后的下次启动（摘要对不上会自动补）；`at_home` 只探测 1 秒
+- 节点按「类型 + 服务器 + 端口 + TLS 域名」的摘要认（`node_fp`；TLS 域名分开走 CDN、共用服务器地址的节点；config.json 的 `node_ids` 只存摘要，不存地址），名字只是叫法：路由器上改了名，`nodes_follow`（`router_sync` 先跑它；`router_ensure` 有槽位切不过去、`sync_if_changed` 校验不过时也跑）按摘要把可选节点和各工具的账号表改成新名字，并记下 `node_renames`（维护者的映射里还写着旧名字时，`policy_map` 经 `node_alias` 换算，否则 `reconcile` 会把账号表改回旧名字、整张表校验不过）。认不出的（名字和地址都变了；或者认到的是另一个还在用的可选节点、好几个旧名字认到同一个新名字：这些不是改名，自动合过去会让账号悄悄换节点）交互时让用户选一个代替，用户选的不记进 `node_renames`（映射照样要求原来的节点）；旧名字在路由器上又出现了，那条换算作废。`node_replace` 要在 `while … <<<` 循环外面调用：循环里 fd 0 是 here-string，`interactive` 会把真实的终端当成非交互（同理 `cmd_check` 的循环从 fd 4 读）；循环里调 `rsh` 要加 `</dev/null`，不然 ssh 会把循环后面的输入读走。本机 Clash Verge 里名字不同时按摘要换算（`local_names`：端口池、切换、启动前核对都用它那边的叫法），不改账号表。节点列表用 `router_node_list`：把这一版的 `router_sh` 经 `sh -s nodes` 现跑，不依赖路由器上部署的版本
+- OpenClash 的运行配置文件可能被删掉（真实路由器上遇到过，内核照跑）：`ctl_init` 改从 uci 读控制接口的端口和密钥（`cn_port`、`dashboard_password`），`nodes` 改读 OpenClash 自己的配置；`apply_now` 各槽位切得过去就不动它，要建立或调整端口池时返回 3，获准后 `restart_now` 重启 OpenClash（钩子在启动时注入），不再报"成功"；切不过去的节点 OpenClash 自己的配置里也没有时（`in_source`），重启也没用，不提重启。Mac 端 `allow_reload "$out"` 看路由器的说明，要重启时问的是"现在重启 OpenClash 吗"
 - 维护者的账号 → 节点映射（`cca policy`）：映射在维护者的私有 GitHub 仓库里，每台机器一把只读 deploy key（`~/.cca/policy/id_ed25519`），`policy_clone` 拉取时 `ssh -F /dev/null`、`IdentitiesOnly`、`IdentityAgent=none`、`GIT_CONFIG_GLOBAL=/dev/null`，主机公钥钉死（`GITHUB_HOST_KEYS`，`StrictHostKeyChecking=yes`）：ssh 先拿用户自己的 GitHub 密钥登录上的话，私有仓库只会回"不存在"。验签用 `RELEASE_KEY`、命名空间 `cca-policy`，通过才换上 `~/.cca/policy/policy.json`。强制在 PY_SRC 的 `reconcile`（每条命令读账号表都经过它）：映射里的官方账号节点不一致就改回并写回账号表。只有配置了映射仓库，config.json 才有 `policy` 这一项；每天的后台拉取（`policy_hook`）和自动更新的开关、开发模式无关
 
 ## 两种工具（Claude / Codex）
@@ -49,6 +51,9 @@
 - 方向键菜单和 readline 输入要在真 pty 里测：`script -q 日志 bash 驱动脚本`，配合定时输入
 - 自动更新：用 `tests/regress.sh` 里的 `mkver`/`publish`（临时发布密钥 + `$CCA_T/gh` 下的假 GitHub）
 - Claude App：`run` 里的 `CCA_CLAUDE_APP` 指向假的 Claude.app；假 `open` 遇到 `--user-data-dir` 会建 `Local State`（有 `open_noprofile` 时不建）
+- 假 `ssh` 像真的一样把 stdin 读走（只读普通文件，也就是 bash 3.2 的 here-string，终端、管道不碰）：循环里调 ssh 吞掉后面输入的问题测得出来。假的路由器控制接口要密钥（`test-secret`，uci 的 `dashboard_password` 也是它），密钥不对回 401
+- 真终端里的提问（不设 `CCA_TTY`）：`{ printf 答案; 等完成标记; } | script -q 日志 env -i … bash -c 'cca …; touch 完成标记'`，左边要一直开着到命令跑完（macOS 的 script 读到 EOF 会先送一个 ^D，打乱输入）。见 regress.sh 10a
+- OpenClash 重启：假的 `$R/etc/init.d/openclash restart` 按 OpenClash 自己的配置重新生成运行配置、跑钩子、让内核加载（router.log 记 `RESTART`，不算重载）；内核加载过的配置存在 `$R/core.yaml`，运行配置被删后切节点按它判断。regress.sh 10a 里 `node_rn` 改路由器上节点的名字和地址、`oc_restart` 模拟重启（这一节结束时还原路由器和账号表）
 - 出门在外：`touch "$T/away"` 让假 `nc`/`ssh` 连不上路由器；假 Clash Verge 的内核由假 `curl` 的 `--unix-socket` 分支模拟（状态在 `$T/verge`）；`$T/verge_regen` 用真的 JavaScript 引擎（osascript）跑全局扩展脚本，模拟它重新生成配置
 - 测试辅助脚本只用沙箱里的路径，不能靠 `$HOME`：在 `run` 外面直接调用时 `$HOME` 是真实的主目录（会碰到真的 Clash Verge 等）
 - 钥匙串：假 `security` 把条目存在 `$T/keychain/<服务名>/<账户名>`，命令行记在 `security.log`、`-i` 读到的命令记在 `security.stdin`；`touch "$T/keychain_locked"` 模拟存不进去。假 `env` 把每次的命令行记在 `$T/env.log`（检查 key 没进命令行）。`cca edit` 用 `EDITOR="$T/edit.py" CCA_TEST_EDIT='j.pop("x")'` 这样改表

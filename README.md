@@ -108,6 +108,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 - **安装时配置**：`curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/install.sh | CCA_POLICY_REPO=维护者/cca-policy bash`。已经装好的运行 `cca policy setup 维护者/cca-policy`。
 - **把公钥交给维护者**：cca 会给这台机器生成一把只读的 deploy key，并显示它的公钥。把这一行发给维护者，他加到仓库上之后，cca 每天自动拉一次映射；想马上拉，运行 `cca policy pull`。`cca policy` 查看状态。
 - **固定出口**：映射里的账号，添加时直接用映射的节点，不让选；账号表里改成别的节点，下次运行 cca 时会改回来，并提示一句。映射的节点不在这台机器的可选节点里时，运行 `cca router setup` 重新选可选节点。
+- **节点改名**：路由器上的节点改了名（服务器地址没变）时，映射里还写着旧名字也照样能用：cca 跟着改名时记下了新旧名字的对应。维护者之后把映射更新成新名字就好。
 - **验签**：映射要有发布 cca 用的那把密钥的签名才会被采用，签名不对、格式不对都不用，接着用上次拉到的。只管官方账号（按邮箱），第三方 API 账号不受影响。
 - 这些检查都在你自己的 Mac 上做，用来防止配错，不防有意改动。`cca restore` 会删掉本机的 deploy key，记得让维护者把它从仓库上撤掉。
 - 每台机器拉到的是整份映射（`~/.cca/policy/policy.json`，只有自己能读），里面有映射里所有人的邮箱和节点；不想让大家互相看到的话，维护者要分开建仓库。
@@ -233,7 +234,7 @@ cca local setup
 
 需要知道的几点：
 
-- Clash Verge 里要有和路由器上同名的节点。没有的话，用这个节点的账号在外面会停下并提示，不会换成别的出口。
+- Clash Verge 里的节点可以和路由器上叫不同的名字：cca 按服务器地址（类型、服务器、端口和 TLS 域名）认出是同一个节点，切换时用 Clash Verge 里的名字，账号表不动。名字和地址都对不上的，用这个节点的账号在外面会停下并提示，不会换成别的出口。
 - 在家里打开的 Claude Code、网页版和 Claude App 走的是路由器的端口，出门后要关掉，用 cca 重新打开。在外面打开的，只要 Clash Verge 开着，回家后也能接着用。
 - 判断"在不在家"看的是能不能连上路由器，所以在外面如果经 ZeroTier 之类能连到路由器，会照常走路由器。想固定走一种，把 `~/.cca/config.json` 里的 `route` 改成 `router` 或 `local`（默认 `auto`）。
 
@@ -260,11 +261,11 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
 
-- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.4`
+- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.5`
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh
-  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.4/install.sh | bash -s 2.6.0-beta.4
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.5/install.sh | bash -s 2.6.0-beta.5
   ```
 
 - 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。
@@ -306,6 +307,12 @@ cca restore
 
 **OpenClash 升级了会不会失效？**
 不会。cca 在路由器上的文件放在 `/etc/cca`，不属于 OpenClash。OpenClash 升级或重装后，cca 会自动把钩子补回去；如果端口需要重建，下次启动 cca 时会先问你同不同意重载。
+
+**在路由器上给节点改了名怎么办？**
+不用管。cca 记着每个可选节点的服务器地址（类型、服务器、端口和 TLS 域名，只存摘要，不存地址本身）。下次启动或同步时，cca 按地址认出改名后的节点，把可选节点和账号表一起改过来，并提示一句；端口池要跟着重建时，会先问你同不同意重载。名字和地址都变了的认不出来，在终端里会让你从路由器上的节点里选一个代替；两个可选节点地址一样、其中一个没了时，也不会自动合到另一个上，同样让你选。选之前，用这个节点的账号暂时用不了（宁可断开也不换出口）。
+
+**OpenClash 的运行配置文件被删了会怎样？**
+切换节点照常（控制接口的端口和密钥改从 OpenClash 的设置里读）。要建立或调整端口池时，没有运行配置就没法热加载，cca 会问你要不要重启一次 OpenClash（约 20 秒），重启时由钩子注入端口池。`cca router status` 会注明运行配置不见了。
 
 ## 它是怎么做到的
 

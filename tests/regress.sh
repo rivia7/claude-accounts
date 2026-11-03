@@ -12,13 +12,19 @@ run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.a
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
-ok() { if eval "$2"; then echo "PASS  $1"; pass=$((pass + 1)); else echo "FAIL  $1   [$2]"; fail=$((fail + 1)); fi; }
+ok() {   # ok 说明 '断言'：断言写丢了（比如说明和断言之间少了空格，连成了一个参数）也算失败，不会空过
+	if [ $# -eq 2 ] && [ -n "$2" ] && eval "$2"; then echo "PASS  $1"; pass=$((pass + 1)); else echo "FAIL  $1   [${2:-没有断言}]"; fail=$((fail + 1)); fi
+}
 edit_table() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); $1; json.dump(j,open(p,'w'),indent=2,ensure_ascii=False)" "${2:-$H/.cca/accounts.json}"; }   # [账号表]
 RC="$R/etc/openclash/custom.yaml"
 nl_() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); print((c["listeners"]||[]).count { |l| l["name"].start_with?("cca-") })' "$RC"; }
 first() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); g=(c["proxy-groups"]||[]).find { |x| x["name"]==ARGV[1] }; print(g ? g["proxies"][0] : "-")' "$RC" "$1"; }
 sel() { cat "$R/sel/$1" 2>/dev/null || echo -; }
 reloads() { grep -c '^RELOAD' router.log 2>/dev/null || echo 0; }
+restarts() { grep -c '^RESTART' router.log 2>/dev/null || echo 0; }   # OpenClash 重启（假的 init 脚本记的）
+cfgv() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$H/.cca/config.json" "$1"; }
+cfgok() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "$H/.cca/config.json" "$1"; }   # config.json（c）满足条件
+tblok() { python3 -c "import json,sys; t=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "${2:-$H/.cca/accounts.json}" "$1"; }   # 账号表（t）满足条件
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -177,6 +183,54 @@ grep -v '^\. /usr/share\|LOG_OUT' "$R/etc/openclash/custom/openclash_custom_over
 env CCA_ROOT="$R" CCA_T="$T" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin" /bin/dash ow_run.sh "$R/tmp/custom.yaml"
 ok "钩子：启动时把 8 个槽位注入配置，CCA-1 默认 US-A" '[ "$(ruby -ryaml -e "c=YAML.load_file(ARGV[0]); print c[\"listeners\"].size" "$R/tmp/custom.yaml")" = 8 ] && ruby -ryaml -e "c=YAML.load_file(ARGV[0]); exit(c[\"proxy-groups\"].find { |g| g[\"name\"]==\"CCA-1\" }[\"proxies\"][0]==\"US-A\" ? 0 : 1)" "$R/tmp/custom.yaml"'
 
+# 10a. 路由器上给节点改了名：按服务器地址认出来，可选节点和账号表跟着改；认不出时交互让用户选一个代替。
+#      运行配置文件被删了：切换节点照常，要调整端口池时征得同意后重启 OpenClash（这一节结束时整个还原）
+cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
+SRC="$R/etc/openclash/config/custom.yaml"
+oc_restart() { env CCA_ROOT="$R" CCA_T="$T" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/sh "$R/etc/init.d/openclash" restart; }
+node_rn() { sed -i '' "s/{name: $1, type: ss, server: $2,/{name: $3, type: ss, server: $4,/" "$SRC"; }   # 改 OpenClash 自己的配置里节点的名字、地址
+ok "选可选节点时记下了各节点的地址摘要（config.json 里只有摘要，没有服务器地址）" 'cfgok "sorted(c[\"node_ids\"]) == [\"US-A\", \"US-B\", \"US-C\", \"US-D\"] and len(set(c[\"node_ids\"].values())) == 4" && ! grep -q "192.0.2.2" "$H/.cca/config.json"'
+out=$(run cca router nodes 2>&1)
+ok "cca router nodes：只列名字" 'printf "%s" "$out" | grep -qx US-A && printf "%s" "$out" | grep -qx HK-A && ! printf "%s" "$out" | grep -q "192.0.2"'
+node_rn US-A 192.0.2.1 US-A2 192.0.2.1; oc_restart
+ok "（前提）OpenClash 重启后找不到 US-A：CCA-1 只能 REJECT" '[ "$(sel CCA-1)" = REJECT ] && grep -q "路由器上没有节点「US-A」" "$R/tmp/cca-router.log"'
+n0=$(reloads)
+out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
+ok "节点在路由器上改了名：启动时按服务器地址认出 US-A2，可选节点和账号表跟着改，征得同意后重载一次，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "节点「US-A」在路由器上改名为「US-A2」（服务器地址没变）：可选节点和 .* 的出口已跟着改" && tblok "\"US-A2\" in t.values() and \"US-A\" not in t.values()" && cfgok "c[\"nodes\"] == [\"US-A2\", \"US-B\", \"US-C\", \"US-D\"] and c[\"node_renames\"] == {\"US-A\": \"US-A2\"} and \"US-A2\" in c[\"node_ids\"]" && [ "$(sel CCA-1)" = US-A2 ] && [ "$(reloads)" = $((n0 + 1)) ]'
+edit_table 'j.update({k: "US-C" for k in j})'
+run cca router sync >/dev/null 2>&1
+node_rn US-C 192.0.2.3 US-C9 192.0.2.30; oc_restart
+out=$(run cca @alice --version 2>&1)
+ok "名字和服务器地址都变了（认不出）、非交互：说明哪个节点找不到、哪些账号暂时用不了，账号表不动" 'printf "%s" "$out" | grep -q "路由器上找不到节点「US-C」了（也认不出它改成了哪个）" && tblok "\"US-C\" in t.values()" && [ "$(sel CCA-1)" = REJECT ]'
+# 在真的终端里（pty，不设 CCA_TTY）："换成哪个节点"和"现在重载吗"都要问得出来
+rm -f "$T/pty.done"
+{ printf '%s\n' 3 y; for i in $(seq 1 300); do [ -f "$T/pty.done" ] && break; sleep 0.1; done; } |
+	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
+	PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; touch "$CCA_T/pty.done"' >/dev/null 2>&1
+ok "认不出、在真的终端里：列出路由器上的节点让用户选一个代替（选 US-C9），账号表跟着改，问过之后重载，照常启动" '[ -f "$T/pty.done" ] && grep -q "3\. US-C9" "$T/pty.log" && grep -q "「US-C」换成了「US-C9」" "$T/pty.log" && grep -q "现在重载吗" "$T/pty.log" && tblok "t[\"alice@example.com\"] == \"US-C9\"" && [ "$(sel CCA-1)" = US-C9 ]'
+ok "用户自己选的代替节点不算改名（维护者的映射里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
+rm -f "$RC"
+out=$(run cca router status 2>&1)
+ok "运行配置文件被删了：cca router status 说明情况，各槽位照样读得到（控制接口的端口和密钥改从 uci 读）" 'printf "%s" "$out" | grep -q "文件不见了" && printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-C9"'
+edit_table 'j["alice@example.com"] = "US-B"'; n0=$(reloads); r0=$(restarts)
+out=$(run cca router sync 2>&1); rc=$?
+ok "运行配置文件被删了、只换节点：经控制接口切过去，不重载也不重启" '[ $rc -eq 0 ] && [ "$(sel CCA-1)" = US-B ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = "$r0" ]'
+edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(2, 10)})'
+out=$(run cca router sync 2>&1); rc=$?
+ok "运行配置文件被删了、端口池要扩容 + 非交互：不重启，返回 3，说明要重启一次 OpenClash" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "要建立或调整账号端口池只能重启一次 OpenClash" && [ "$(restarts)" = "$r0" ]'
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "同意后重启 OpenClash：重新生成运行配置，钩子注入 16 个槽位" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && [ -f "$RC" ] && [ "$(nl_)" = 16 ] && [ "$(sel CCA-9)" = US-B ] && printf "%s" "$out" | grep -q "已重启 OpenClash"'
+# 两个可选节点地址一样（US-D 换到 US-B 的服务器上），之后 US-D 没了：不能当成改名，把它的账号合到 US-B 上
+node_rn US-D 192.0.2.4 US-D 192.0.2.2; oc_restart
+edit_table 'j["alice@example.com"] = "US-D"'; run cca router sync >/dev/null 2>&1
+sed -i '' '/{name: US-D,/d' "$SRC"; oc_restart
+out=$(run cca @alice --version 2>&1)
+ok "两个可选节点地址一样、其中一个没了：不当成改名合到另一个上（账号不会悄悄换节点），说明找不到" 'printf "%s" "$out" | grep -q "路由器上找不到节点「US-D」" && tblok "t[\"alice@example.com\"] == \"US-D\"" && cfgok "\"US-D\" in c[\"nodes\"] and \"US-D\" not in c.get(\"node_renames\", {})" && [ "$(sel CCA-1)" = REJECT ]'
+rm -f "$RC"; r0=$(restarts)
+out=$(run cca router sync 2>&1); rc=$?
+ok "运行配置文件被删了、账号的节点 OpenClash 的配置里也没有：重启也没用，不提重启，同步判失败" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "切换到 US-D 失败" && ! printf "%s" "$out" | grep -q "重启一次 OpenClash" && [ "$(restarts)" = "$r0" ]'
+rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
+
 # 10b. 出门在外：连不上路由器时改走本机 Clash Verge（全局扩展脚本 + 热加载，不重启它），回家后自动走回路由器
 V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VS="$V/profiles/Script.js"
 vreloads() { grep -c '^RELOAD$' "$T/verge/verge.log" 2>/dev/null || echo 0; }
@@ -237,6 +291,16 @@ touch "$T/verge/reload_reject"
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "Clash Verge 的内核拒绝新配置：说明原因，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没接受新配置（HTTP 400）"'
 rm -f "$T/verge/reload_reject"
+# Clash Verge 里同一个节点叫别的名字（US-B 改叫 Verge-B，地址不变）：按服务器地址换算成 Verge 里的叫法，账号表不动
+cp "$T/verge/base.yaml" "$T/verge/base.orig"
+sed -i '' 's/^- name: US-B$/- name: Verge-B/' "$T/verge/base.yaml"; "$T/verge_regen"
+out=$(run cca @小号 --version 2>&1); rc=$?
+ok "在外面：Clash Verge 里 US-B 叫 Verge-B（地址一样）：换算成 Verge-B 照常启动，账号表不动，端口池里也用 Verge 的叫法" '[ $rc -eq 3 ] && [ "$(vsel CCA-2)" = Verge-B ] && grep -q "\"小号(carol@example.com)\": \"US-B\"" "$H/.cca/accounts.json" && ! printf "%s" "$out" | grep -q "没有节点" && grep -qF "[\"CCA-2\", 7902, [\"Verge-B\"" "$VS"'
+out=$(run cca local 2>&1)
+ok "cca local：选中的是 Verge 里叫 Verge-B 的节点" 'printf "%s" "$out" | grep -q "CCA-2  127.0.0.1:7902  监听中  → Verge-B   小号"'
+cp "$T/verge/base.orig" "$T/verge/base.yaml"; "$T/verge_regen"
+run cca @小号 --version >/dev/null 2>&1
+ok "Verge 里改回 US-B：跟着换算回来" '[ "$(vsel CCA-2)" = US-B ] && grep -qF "[\"CCA-2\", 7902, [\"US-B\"" "$VS"'
 rm -f "$T/away"; n0=$(vreloads); : > ssh.log
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
 ok "回到家：自动走回路由器，补同步在外面改过的账号表（CCA-2 → US-B），不碰 Clash Verge" '[ $rc -eq 3 ] && grep -q "sh -s" ssh.log && [ "$(sel CCA-2)" = US-B ] && [ "$(vreloads)" = "$n0" ] && lastenv | grep -q "https_proxy=http://192.0.2.10:7901"'
@@ -462,7 +526,6 @@ r4 CCA_TTY="$(ans y)" cca rm solo >/dev/null 2>&1
 X="$H/.codex"; CX="$H/.cca/codex.json"
 clast() { lastline "$1" codex.log; }
 cedit() { edit_table "$1" "$CX"; }
-cfgv() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$H/.cca/config.json" "$1"; }
 ckc() { kc "$1" cca-codex-api-; }
 ok "（准备）只有 Claude 账号时 config.json 里没有 codex 一节" '[ "$(cfgv "\"codex\" in c")" = False ]'
 : > ssh.log; n0=$(reloads); rm -f "$H/.local/bin/cxa"   # 模拟以前装的 cca：那时还没有 cxa
@@ -752,6 +815,13 @@ n0=$(reloads)
 out=$(run CCA_TTY="$(ans '' '' '' '1 2 3 4 5' y)" cca router setup 2>&1); rc=$?
 out2=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc2=$?
 ok "这时 cca router setup 不会因为账号表有错误就退出：直接让重新选可选节点，选上 HK-A 后同步（端口池变了，问过再重载），照常启动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "先重新选可选节点" && [ "$(cfgv "c[\"nodes\"] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A\"]")" = True ] && [ "$(sel CCA-1)" = HK-A ] && [ "$(reloads)" -gt "$n0" ] && [ $rc2 -eq 3 ]'
+# 路由器上 HK-A 改名叫 HK-A2（地址不变），维护者的映射还写着 HK-A：账号表跟着改名，映射里的旧名字按记下的改名换算，不会被改回去
+node_rn HK-A 192.0.2.5 HK-A2 192.0.2.5; oc_restart
+out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
+out2=$(run cca policy 2>&1)
+ok "映射里的节点在路由器上改了名、映射还没更新：账号表跟着改成 HK-A2，不会被映射改回旧名字，照常启动" '[ $rc -eq 3 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && [ "$(sel CCA-1)" = HK-A2 ] && ! printf "%s" "$out" | grep -q "按维护者的映射固定为" && printf "%s" "$out2" | grep -q "Claude  alice@example.com → HK-A2（映射里写的是 HK-A，路由器上已经改名）"'
+pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
+ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
 
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3"

@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0-beta.4"
+VERSION="2.6.0-beta.5"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -717,13 +717,34 @@ def api_problems(c, k, v, tool=None):
 POLICY_FILE = os.path.join(CCA_HOME, 'policy', 'policy.json')   # 维护者的账号 → 节点映射（bash 的 policy_fetch 验签后才放进来）
 
 
-def policy_map(tool):
-    """维护者的映射里这个工具的官方账号：{邮箱（小写）: 节点}。没配置、读不了、格式不对都当作没有"""
+def policy_raw(tool):
+    """维护者的映射里这个工具的官方账号：{邮箱（小写）: 映射里写的节点}。没配置、读不了、格式不对都当作没有"""
     j = load_quiet(POLICY_FILE)
     s = j.get(tool.name) if isinstance(j, dict) else None
     if not isinstance(s, dict):
         return {}
     return {e.lower(): n for e, n in s.items() if isinstance(e, str) and isinstance(n, str) and n}
+
+
+def policy_map(tool, c=None):
+    """policy_raw，节点换成现在的名字：映射里写的是路由器上改名前的旧名字（cca 跟着改过名，维护者还没更新映射）时
+    按记下的改名换算（node_alias），免得账号表被改回旧名字、整张表因为节点不在可选列表而用不了"""
+    if c is None:
+        c = load_quiet(CFG)
+    return {e: node_alias(c, n) for e, n in policy_raw(tool).items()}
+
+
+def node_alias(c, n):
+    """节点名 n 不在可选节点里、又是 cca 跟着改过名的旧名字时，换成现在的名字（可能改过不止一次）"""
+    if not isinstance(c, dict):
+        return n
+    nodes = c.get('nodes') or []
+    ren = c.get('node_renames') if isinstance(c.get('node_renames'), dict) else {}
+    seen = set()
+    while n not in nodes and isinstance(ren.get(n), str) and n not in seen:
+        seen.add(n)
+        n = ren[n]
+    return n
 
 
 def policy_problems(j, strict=False):
@@ -759,7 +780,7 @@ def reconcile(c, t, tool, reserved=()):
     维护者的映射里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，说一声）：每条命令都经过这里，
     添加、cca edit、启动、同步前都管得到"""
     st = tool.state(c, create=True)
-    pm = policy_map(tool)
+    pm = policy_map(tool, c)
     fixed = [k for k, v in t.items() if not is_api(v) and pm.get(parse_key(k)[1].lower(), v) != v]
     for k in fixed:
         want = pm[parse_key(k)[1].lower()]
@@ -1311,12 +1332,14 @@ def cmd_policy_rows():
     """这台机器上受映射约束的账号（各工具一起）；节点不在可选列表时注明这个账号用不了"""
     c = ctx()[0]
     for tool in TOOLS:
-        pm = policy_map(tool)
+        pm, raw = policy_map(tool, c), policy_raw(tool)
         for k, v in (TABS.get(tool.name) or {}).items():
-            n = None if is_api(v) else pm.get(parse_key(k)[1].lower())
+            e = parse_key(k)[1].lower()
+            n = None if is_api(v) else pm.get(e)
             if n:
                 bad = c['nodes'] and n not in c['nodes']
-                print('    %s  %s → %s%s' % (tool.label, label_of(k), n, '（不在可选节点里，这个账号用不了）' if bad else ''))
+                note = '（映射里写的是 %s，路由器上已经改名）' % raw[e] if raw.get(e) != n else ''
+                print('    %s  %s → %s%s%s' % (tool.label, label_of(k), n, note, '（不在可选节点里，这个账号用不了）' if bad else ''))
 
 
 def cmd_email(key):
@@ -1590,10 +1613,12 @@ def cmd_ports(named='', scope=''):
             print(FIRST_PORT - 1 + s)
 
 
-def cmd_select_lines():
+def cmd_select_lines(where=''):
+    """每个槽位应选中的节点；local 时用本机 Clash Verge 里的叫法"""
     c, t, _ = ctx()
+    m = local_names(c) if where == 'local' else {}
     for s, n in enumerate(slot_nodes(c), 1):
-        print('CCA-%d\t%s' % (s, n))
+        print('CCA-%d\t%s' % (s, m.get(n, n)))
 
 
 def cmd_digest():
@@ -1610,6 +1635,151 @@ def cmd_set_nodes(*nodes):
         die('至少选一个节点')
     c = cfg_load()
     c['nodes'] = nodes
+    cfg_save(c)
+
+
+# --- 节点改名跟随：节点按「类型 + 服务器 + 端口 + TLS 域名」认，名字只是叫法 -----------------
+# 路由器（OpenClash）上给节点改了名，旧名字一找不到，账号的端口就只能 REJECT（宁可断开也不换出口）。
+# cca 记下每个可选节点的摘要（config.json 的 node_ids，只存摘要，不存服务器地址），名字对不上时按摘要认出新名字，
+# 可选节点和各工具的账号表跟着改；本机 Clash Verge 里叫法不同时按摘要换算（不改账号表，见 local_names）。
+# TLS 域名（servername / sni）也算进去：走 CDN 的节点常常共用同一个服务器地址和端口，靠它分出是哪一个
+def node_fp(kind='', server='', port='', sni=''):
+    server = str(server or '').strip().lower().rstrip('.')
+    if not server:
+        return ''
+    s = '%s|%s|%s|%s' % (str(kind or '').strip().lower(), server, str(port or '').strip(),
+                         str(sni or '').strip().lower().rstrip('.'))
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()[:16]
+
+
+def node_ids(c):
+    return c.get('node_ids') if isinstance(c.get('node_ids'), dict) else {}
+
+
+def parse_node_list(text):
+    """路由器上 cca-router.sh nodes 的输出 → [(名字, 摘要)]；只给名字的（读不到地址）摘要是空的"""
+    out = []
+    for line in text.split('\n'):
+        f = line.split('\t')
+        if f[0] == 'P' and len(f) > 1 and f[1]:
+            out.append((f[1], node_fp(*f[2:6])))
+    return out
+
+
+def node_match(n, f, have):
+    """可选节点 n（记下的摘要 f）在节点列表 have=[(名字, 摘要)] 里现在叫什么：地址对上一个节点就是它（名字改没改都算，
+    两个节点互换名字也认得出），对上好几个时同名的优先；地址对不上（换了服务器，或者以前没记摘要）再按名字。找不到返回空"""
+    cand = [m for m, g in have if f and g == f]
+    if n in cand:
+        return n
+    if len(cand) == 1:
+        return cand[0]
+    return n if any(m == n for m, _ in have) else ''
+
+
+def nodes_rename(c, ren, alias=True):
+    """把改名 {旧名: 新名} 用到可选节点和各工具的账号表上（第三方 API 账号的 node 也改）。alias：按地址认出的改名，
+    记下来（维护者的映射里还写着旧名字时靠它换算，见 node_alias）；用户自己选的代替节点不记，映射照样要求旧节点。
+    返回 {旧名: [受影响的账号]}"""
+    hit = {o: [] for o in ren}
+    for tool in TOOLS:
+        t = load_quiet(tool.table) if os.path.exists(tool.table) else None
+        if not isinstance(t, dict):
+            continue
+        changed = False
+        for k, v in t.items():
+            n = node_of(v)
+            if n not in ren:
+                continue
+            if is_api(v):
+                v['node'] = ren[n]
+            else:
+                t[k] = ren[n]
+            hit[n].append(shown(tool, k))
+            changed = True
+        if changed:
+            save_json(tool.table, t, 0o600)
+    c['nodes'] = list(dict.fromkeys(ren.get(n, n) for n in c['nodes']))
+    if alias:
+        r = dict(c.get('node_renames') if isinstance(c.get('node_renames'), dict) else {})
+        for o, n in ren.items():
+            r.pop(n, None)   # 新名字以前是别的节点的旧名字：那条换算作废
+            r[o] = n
+        c['node_renames'] = dict(list(r.items())[-50:])
+    return hit
+
+
+def nodes_record(c, have):
+    """记下各可选节点现在的摘要；暂时找不到的保留以前记的（它回来了、或者改了名都还认得出）"""
+    fp = {n: f for n, f in have if f}
+    old = node_ids(c)
+    ids = {n: fp.get(n) or old.get(n) for n in c['nodes'] if fp.get(n) or old.get(n)}
+    if ids:
+        c['node_ids'] = ids
+    else:
+        c.pop('node_ids', None)
+
+
+def node_users_all():
+    """各工具的账号表里，每个节点被哪些账号用着（跨工具的显示名）"""
+    out = {}
+    for tool in TOOLS:
+        t = load_quiet(tool.table) if os.path.exists(tool.table) else None
+        for k, v in (t.items() if isinstance(t, dict) else ()):
+            if node_of(v):
+                out.setdefault(node_of(v), []).append(shown(tool, k))
+    return out
+
+
+def cmd_nodes_follow():
+    """stdin 是路由器上的节点列表。可选节点改了名的（按服务器地址认），可选节点和各工具的账号表跟着改；记下各可选节点的摘要。
+    stdout：每个改名一行 R<TAB>旧名<TAB>新名；找不到、又有账号在用的一行 L<TAB>旧名<TAB>用它的账号（顿号连起来）。
+    没读到节点（OpenClash 的配置读不了）时什么都不改，返回 1。不经过 ctx：账号表这时可能正因为节点名对不上而校验不过"""
+    have = parse_node_list(sys.stdin.read())
+    if not have:
+        sys.exit(1)
+    c = cfg_load()
+    before = json.dumps(c, sort_keys=True)
+    ren, lost = {}, []
+    for n in c['nodes']:
+        m = node_match(n, node_ids(c).get(n, ''), have)
+        if not m:
+            lost.append(n)
+        elif m != n:
+            ren[n] = m
+    # 不自动合并：认到的新名字同时是好几个旧名字的、或者是另一个还在用的可选节点（地址一样的两个节点没了一个）。
+    # 这不是改名，自动改过去会让账号悄悄换到另一个节点上，交给用户选
+    for o in [o for o, m in ren.items() if list(ren.values()).count(m) > 1 or (m in c['nodes'] and m not in ren)]:
+        del ren[o]
+        lost.append(o)
+    hit = nodes_rename(c, ren) if ren else {}
+    nodes_record(c, have)
+    names = {n for n, _ in have}
+    r = c.get('node_renames') if isinstance(c.get('node_renames'), dict) else {}
+    for o in [o for o in r if o in names]:   # 旧名字在路由器上又出现了（给了新节点）：那条换算作废
+        del r[o]
+    if not r:
+        c.pop('node_renames', None)
+    if json.dumps(c, sort_keys=True) != before:
+        cfg_save(c)
+    for o, n in ren.items():
+        sys.stderr.write('! 节点「%s」在路由器上改名为「%s」（服务器地址没变）：可选节点%s已跟着改\n'
+                         % (o, n, '和 %s 的出口' % '、'.join(hit[o]) if hit[o] else ''))
+        print('R\t%s\t%s' % (o, n))
+    users = node_users_all()
+    for o in lost:
+        if users.get(o):
+            print('L\t%s\t%s' % (o, '、'.join(users[o])))
+
+
+def cmd_nodes_rename(old, new):
+    """可选节点 old 在路由器上找不到了，用户选了 new 代替（stdin 是路由器上的节点列表）：可选节点和账号表跟着改"""
+    have = parse_node_list(sys.stdin.read())
+    if new not in [n for n, _ in have]:
+        die('路由器上没有节点「%s」' % new)
+    c = cfg_load()
+    nodes_rename(c, {old: new}, alias=False)
+    nodes_record(c, have)
     cfg_save(c)
 
 
@@ -1638,12 +1808,15 @@ main = function (config, profileName) {
 // <<< cca <<<"""
 
 
-def slot_orders(c):
+def slot_orders(c, local=False):
     """端口池每个槽位：(组名, 端口, 成员顺序)。和路由器上一样，分到账号的槽位把它的节点排第一（客户端重新加载后默认就选中它），
-    空槽位 REJECT 排第一"""
+    空槽位 REJECT 排第一。local：给本机 Clash Verge 用，节点名换成它那边的叫法（local_names）"""
+    m = local_names(c) if local else {}
+    nodes = list(dict.fromkeys(m.get(n, n) for n in c['nodes']))
     out = []
     for s, node in enumerate(slot_nodes(c), 1):
-        rest = [n for n in c['nodes'] if n != node]
+        node = m.get(node, node)
+        rest = [n for n in nodes if n != node]
         out.append(('CCA-%d' % s, FIRST_PORT - 1 + s, [node] + rest + ([] if node == 'REJECT' else ['REJECT'])))
     return out
 
@@ -1655,8 +1828,35 @@ def local_members(order, have):
 
 
 def local_want(c):
-    """端口池的结构（可选节点 + 槽位数）：变了才需要让客户端重新加载；只换节点走控制接口"""
-    return hashlib.sha1(json.dumps([sorted(c['nodes']), pool_size(c)]).encode('utf-8')).hexdigest()
+    """端口池的结构（可选节点在客户端里的叫法 + 槽位数）：变了才需要让客户端重新加载；只换节点走控制接口。
+    Clash Verge 里给节点改了名，换算出来的叫法变了，也要重新加载（端口池的组成员要换成新名字）"""
+    m = local_names(c)
+    return hashlib.sha1(json.dumps([sorted(m.get(n, n) for n in c['nodes']), pool_size(c)]).encode('utf-8')).hexdigest()
+
+
+def local_names(c):
+    """账号表里的节点名（路由器上的叫法）→ 本机 Clash Verge 运行配置里的叫法：按服务器地址认（node_match），
+    对不上的不在结果里（照原名，客户端里没有就拒绝连接）。不是 Clash Verge（手动配置的客户端看不到它的配置）、
+    读不了运行配置时不换算"""
+    if (c.get('local') or {}).get('client') != 'clash-verge':
+        return {}
+    try:
+        with open(os.path.join(VERGE_DIR, 'clash-verge.yaml'), encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return {}
+    have = yaml_proxies(lines, yaml_sections(lines))
+    out = {}
+    for n in c['nodes']:
+        m = node_match(n, node_ids(c).get(n, ''), have)
+        if m:
+            out[n] = m
+    return out
+
+
+def cmd_local_node(n):
+    """账号的节点在本机 Clash Verge 里的叫法（换算不了就是原名）"""
+    print(local_names(cfg_load()).get(n, n))
 
 
 def verge_sock():
@@ -1738,7 +1938,7 @@ def cmd_local_script(path, action='install'):
         if not base.strip():
             base = VERGE_SCRIPT
         c, t, _ = ctx()
-        slots = json.dumps([list(x) for x in slot_orders(c)], ensure_ascii=False)
+        slots = json.dumps([list(x) for x in slot_orders(c, local=True)], ensure_ascii=False)
         new = base + ('' if base.endswith('\n') else '\n') + '\n' + LOCAL_JS.replace('@POOL@', slots) + '\n'
     if new != old:
         write_text(path, new)
@@ -1783,8 +1983,7 @@ def yaml_items(lines, sec):
     for it in items:
         first = lines[it[0]][2:].strip()
         if first.startswith('{'):
-            m = re.search(r'(?:^|[{,])\s*[\x22\x27]?name[\x22\x27]?\s*:\s*(\x22(?:[^\x22\\]|\\.)*\x22|\x27(?:[^\x27]|\x27\x27)*\x27|[^,}]*)', first)
-            it[2] = yaml_unquote(m.group(1)) if m else None
+            it[2] = flow_get(first, 'name')
             continue
         for j in range(it[0], it[1]):   # 条目自己的键：第一行 "- " 后面，或正好缩进两格的续行
             line = lines[j]
@@ -1796,8 +1995,37 @@ def yaml_items(lines, sec):
     return items
 
 
+def flow_get(text, key):
+    """一行写完的条目 {name: X, type: ss, …} 里某个键的值；没有返回 None"""
+    m = re.search(r'(?:^|[{,])\s*[\x22\x27]?%s[\x22\x27]?\s*:\s*(\x22(?:[^\x22\\]|\\.)*\x22|\x27(?:[^\x27]|\x27\x27)*\x27|[^,}]*)'
+                  % re.escape(key), text)
+    return yaml_unquote(m.group(1)) if m else None
+
+
 def yaml_names(lines, secs):
     return {n for k in ('proxies', 'proxy-groups') if k in secs for _, _, n in yaml_items(lines, secs[k]) if n}
+
+
+def yaml_proxies(lines, secs):
+    """运行配置 proxies 里的节点：[(名字, 摘要)]，摘要和路由器那边一样按类型、服务器、端口、TLS 域名算（node_fp）"""
+    keys = ('type', 'server', 'port', 'servername', 'sni')
+    out = []
+    for a, b, n in (yaml_items(lines, secs['proxies']) if 'proxies' in secs else []):
+        if not n:
+            continue
+        first = lines[a][2:].strip()
+        if first.startswith('{'):
+            v = {k: flow_get(first, k) for k in keys}
+        else:
+            v = {}
+            for j in range(a, b):   # 条目自己的键：第一行 "- " 后面，或正好缩进两格的续行（同 yaml_items）
+                line = lines[j]
+                if j == a or (line.startswith('  ') and line[2:3] not in (' ', '-')):
+                    m = re.match(r'(%s):\s*(.*)$' % '|'.join(keys), line[2:])
+                    if m:
+                        v.setdefault(m.group(1), yaml_unquote(m.group(2)))
+        out.append((n, node_fp(v.get('type'), v.get('server'), v.get('port'), v.get('servername') or v.get('sni'))))
+    return out
 
 
 def cmd_local_patch(path, mode='install'):
@@ -1815,7 +2043,7 @@ def cmd_local_patch(path, mode='install'):
     have = yaml_names(lines, secs)
     add = {'proxy-groups': [], 'listeners': []}
     if mode != 'remove':
-        for g, p, order in slot_orders(c):
+        for g, p, order in slot_orders(c, local=True):
             add['proxy-groups'].append('- ' + json.dumps({'name': g, 'type': 'select', 'proxies': local_members(order, have)},
                                                          ensure_ascii=False))
             add['listeners'].append('- ' + json.dumps({'name': g.lower(), 'type': 'mixed', 'listen': '127.0.0.1', 'port': p,
@@ -1853,15 +2081,16 @@ def cmd_local_patch(path, mode='install'):
 
 
 def cmd_local_missing(path):
-    """账号可选的节点里，Clash Verge 运行配置中没有的（顿号连起来）"""
+    """账号可选的节点里，Clash Verge 运行配置中没有的（顿号连起来）：名字和服务器地址都对不上才算没有"""
     c = cfg_load()
     try:
         with open(path, encoding='utf-8') as f:
             lines = f.read().split('\n')
     except OSError:
         return
-    have = yaml_names(lines, yaml_sections(lines))
-    print('、'.join(n for n in c['nodes'] if n not in have))
+    secs = yaml_sections(lines)
+    have, px = yaml_names(lines, secs), yaml_proxies(lines, secs)
+    print('、'.join(n for n in c['nodes'] if n not in have and not node_match(n, node_ids(c).get(n, ''), px)))
 
 
 def cmd_local_snippet():
@@ -1880,7 +2109,7 @@ def cmd_slot_rows():
     """端口池每个槽位：组名、端口、应选中的节点、用它的账号"""
     c, t, _ = ctx()
     who = {p: shown(tool, k) for tool, k, _, p in pool(c)}
-    for g, p, order in slot_orders(c):
+    for g, p, order in slot_orders(c, local=True):
         print('%s\t%d\t%s\t%s' % (g, p, order[0], who.get(p, '')))
 
 
@@ -2962,12 +3191,13 @@ CMDS = {
     'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm,
     'set-last': cmd_set_last, 'name': cmd_name, 'login-url': cmd_login_url,
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
+    'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
-    'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet,
+    'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet, 'local-node': cmd_local_node,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
@@ -3034,6 +3264,16 @@ runtime_config() {
 	if [ -n "$p" ]; then echo "$R/etc/openclash/${p##*/}"; return; fi
 	ls -t "$R"/etc/openclash/*.yaml "$R"/etc/openclash/*.yml 2>/dev/null | head -n 1
 }
+source_config() {   # OpenClash 自己的配置（运行配置由它生成）：运行配置不见了时，节点列表从这里读
+	p=$(uci -q get openclash.config.config_path 2>/dev/null)
+	[ -n "$p" ] && [ -f "$R$p" ] && echo "$R$p"
+}
+in_source() {   # in_source "节点<TAB>节点…"：这些节点 OpenClash 自己的配置里都有（重启后钩子才能把它们放进端口池）
+	src=$(source_config) || return 1
+	printf '%s' "$1" | ruby -E UTF-8 -ryaml -e '
+		have = ((YAML.load_file(ARGV[0]) || {})["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) }
+		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" 2>/dev/null
+}
 core_bin() {   # 优先用 OpenClash 实际在跑的那份内核
 	for c in "$R/etc/openclash/clash" "$R/etc/openclash/core/clash_meta" "$R/tmp/etc/openclash/core/clash_meta"; do
 		[ -x "$c" ] && { echo "$c"; return 0; }
@@ -3057,12 +3297,16 @@ missing_ports() {
 }
 
 # --- mihomo 控制接口 ---------------------------------------------------------
-ctl_init() {
+ctl_init() {   # 控制接口的端口和密钥：从运行配置读；运行配置不见了时用 OpenClash 的设置（它生成运行配置时就是写的这两项）
 	[ -n "$CPORT" ] && return 0
 	cf=$(runtime_config)
-	out=$(ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; puts c["external-controller"].to_s.split(":").last; puts c["secret"].to_s' "$cf" 2>/dev/null)
-	CPORT=$(printf '%s\n' "$out" | sed -n 1p)
-	CSEC=$(printf '%s\n' "$out" | sed -n 2p)
+	if out=$(ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; puts c["external-controller"].to_s.split(":").last; puts c["secret"].to_s' "$cf" 2>/dev/null); then
+		CPORT=$(printf '%s\n' "$out" | sed -n 1p)
+		CSEC=$(printf '%s\n' "$out" | sed -n 2p)
+	else
+		CPORT=$(uci -q get openclash.config.cn_port 2>/dev/null)
+		CSEC=$(uci -q get openclash.config.dashboard_password 2>/dev/null)
+	fi
 	CPORT="${CPORT:-9090}"
 }
 ctl() {   # ctl 方法 路径 [JSON]：响应体在 ${CTLOUT}，状态码在 $CODE
@@ -3079,8 +3323,9 @@ json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 now_of() { sed -n 's/.*"now":"\([^"]*\)".*/\1/p' "$CTLOUT" 2>/dev/null; }
 
 # 按 ${SEL}（"CCA-n<TAB>节点"）把每个槽位切到账号的节点；节点不可用时切到 REJECT（宁可断开也不换出口）。
-# 返回 0 全部就绪；2 有策略组不在运行中的内核里（需要重载）；1 其它失败
+# 返回 0 全部就绪；2 有策略组不在运行中的内核里（需要重载）；1 其它失败（切不过去的节点记在 FAILED，TAB 分隔）
 select_all() {
+	FAILED=""
 	[ -s "$SEL" ] || return 0
 	rc=0
 	while IFS="$TAB" read -r g node; do
@@ -3093,6 +3338,7 @@ select_all() {
 			2??) echo "${g} → ${node}" ;;
 			*)
 				echo "${g} 切换到 ${node} 失败（HTTP ${CODE}），改为 REJECT"
+				FAILED="${FAILED}${node}${TAB}"
 				ctl PUT "/proxies/$g" '{"name":"REJECT"}'
 				[ $rc -eq 0 ] && rc=1 ;;
 		esac
@@ -3208,13 +3454,43 @@ wait_ports() {   # wait_ports "应监听的端口" "应关闭的端口" [最多�
 	done
 }
 
-# 把 accounts.yaml 落到正在运行的 OpenClash：结构没变只切节点；结构变了且获准才重载。
+restart_now() {   # 运行配置不见了时让端口池生效：重启 OpenClash（和重载一样要 Mac 端征得同意）。返回值同 apply_now
+	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
+		echo "OpenClash 的运行配置文件不见了，要建立或调整账号端口池只能重启一次 OpenClash：约 20 秒，期间局域网的连接都会中断"
+		return 3
+	fi
+	echo "正在重启 OpenClash（约 20 秒）…"
+	log "运行配置不见了，重启 OpenClash 让钩子注入端口池"
+	( trap '' HUP; "$R/etc/init.d/openclash" restart ) >/dev/null 2>&1   # SSH 中途断了也要重启完（不然 OpenClash 停在一半）
+	CPORT=""   # 重启后重新读控制接口的端口和密钥
+	if wait_ports "$(tr '\n' ' ' < "$PORTS")" "" && select_all >/dev/null; then
+		echo "已重启 OpenClash，账号端口池已就绪"
+		return 0
+	fi
+	echo "重启 OpenClash 后账号端口池没有就绪：在 OpenClash 页面看一下日志"
+	return 1
+}
+
+# 把 accounts.yaml 落到正在运行的 OpenClash：结构没变只切节点；结构变了且获准才重载（运行配置不见了时是重启）。
 # 返回 0 成功；3 需要重载但没获准；1 失败
 apply_now() {
 	cf=$(runtime_config)
 	if [ -z "$cf" ] || [ ! -f "$cf" ]; then
-		echo "还没有 OpenClash 运行配置：端口池会在 OpenClash 启动时由钩子注入"
-		return 0
+		if ! running; then
+			echo "还没有 OpenClash 运行配置：端口池会在 OpenClash 启动时由钩子注入"
+			return 0
+		fi
+		# OpenClash 在运行，运行配置文件却不见了（被删掉了）：各槽位切得过去就不用动它；要建立或调整端口池，
+		# 没有运行配置就没法热加载，只能重启 OpenClash（它重新生成运行配置，启动时由钩子注入端口池）
+		if [ -z "$(missing_ports)" ]; then
+			select_all
+			case $? in
+				0) return 0 ;;
+				1) in_source "$FAILED" || return 1 ;;   # 切不过去的节点 OpenClash 自己的配置里也没有：重启也没用
+			esac
+		fi
+		restart_now
+		return $?
 	fi
 	if ! running; then
 		echo "OpenClash 未运行：端口池会在它下次启动时由钩子注入"
@@ -3302,7 +3578,10 @@ ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（
 
 status() {
 	if running; then echo "OpenClash：运行中"; else echo "OpenClash：未运行"; fi
-	echo "运行配置：$(runtime_config)"
+	cf=$(runtime_config)
+	if [ -f "$cf" ]; then echo "运行配置：${cf}"
+	elif running; then echo "运行配置：${cf}（文件不见了：切换节点照常，建立或调整端口池要重启一次 OpenClash）"
+	else echo "运行配置：${cf}（还没有，OpenClash 启动时生成）"; fi
 	if grep -qxF "$MB" "$OW" 2>/dev/null; then echo "钩子：已安装"; else echo "钩子：未安装"; fi
 	if grep -qF "$D/cca-router.sh ensure" "$CRON" 2>/dev/null; then echo "自愈 cron：已安装"; else echo "自愈 cron：未安装"; fi
 	if [ -s "$SEL" ] && running; then
@@ -3322,12 +3601,14 @@ status() {
 	if [ -f "$LOG" ]; then echo "最近日志："; tail -n 5 "$LOG"; fi
 	return 0
 }
-nodes() {
+nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型
 	cf=$(runtime_config)
+	[ -n "$cf" ] && [ -f "$cf" ] || cf=$(source_config)   # 运行配置不见了：OpenClash 自己的配置里节点一样
 	[ -n "$cf" ] && [ -f "$cf" ] || { echo "找不到 OpenClash 运行配置" >&2; return 1; }
 	ruby -E UTF-8 -ryaml -e '
 		c = YAML.load_file(ARGV[0]) || {}
-		(c["proxies"] || []).each { |p| puts "P\t#{p["name"]}" if p.is_a?(Hash) }
+		f = lambda { |v| v.to_s.tr("\t\n", "  ") }
+		(c["proxies"] || []).each { |p| puts ["P", p["name"], p["type"], p["server"], p["port"], p["servername"] || p["sni"]].map(&f).join("\t") if p.is_a?(Hash) }
 		(c["proxy-groups"] || []).each { |g| puts "G\t#{g["name"]}\t#{g["type"]}" if g.is_a?(Hash) && !g["name"].to_s.start_with?("CCA-") }' "$cf"
 }
 uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 时立即移除端口池，否则等 OpenClash 下次重启
@@ -3442,15 +3723,19 @@ router_bundle() {
 }
 digest() { { router_sh; router_rb; } | py digest; }   # 账号表 + 路由器端代码的摘要（见 cmd_digest）
 
-# 路由器说"需要重载"（返回 3）时征求同意：重载期间局域网新连接会失败约 20 秒
+# 路由器说"需要重载"（返回 3）时征求同意：重载期间局域网新连接会失败约 20 秒。allow_reload [路由器的说明]：
+# 运行配置不见了时路由器要的是重启 OpenClash（连接都会断开），问的时候说清楚
 allow_reload() {
 	[ -n "${CCA_YES:-}" ] && return 0
 	interactive || return 1
-	confirm "现在重载吗？" y
+	case "${1:-}" in
+		*"只能重启一次 OpenClash"*) confirm "现在重启 OpenClash 吗？" y ;;
+		*) confirm "现在重载吗？" y ;;
+	esac
 }
-router_reload() {   # 获准后在路由器上执行带重载的 apply
+router_reload() {   # 获准后在路由器上执行带重载的 apply（运行配置不见了时是重启 OpenClash）
 	local out rc
-	out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh apply" 2>&1); rc=$?
+	out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh apply" </dev/null 2>&1); rc=$?
 	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
 	return $rc
 }
@@ -3507,7 +3792,8 @@ cmd_router_setup() {
 		info "密钥登录成功，之后免密"
 	fi
 	# 账号表现在有错误时先别同步（同步前会校验，过不去就走不到下面）：例如维护者的映射要的节点不在可选节点里，
-	# cca edit 改不了，只能在这里重新选可选节点
+	# cca edit 改不了，只能在这里重新选可选节点。只是路由器上的节点改了名的话，先跟上就好了
+	py validate all >/dev/null 2>&1 || nodes_follow || true
 	if py validate all >/dev/null 2>&1; then
 		router_sync
 		case $? in 0|3) ;; *) return 1 ;; esac
@@ -3525,10 +3811,11 @@ cmd_router_setup() {
 	return 0
 }
 
-pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出口，存进 config.json 的 nodes
+pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出口，存进 config.json 的 nodes（同时记下各节点的服务器地址摘要）
 	local -a all picked
-	local n=0 i nd sel w tries=0 list=""
-	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | awk -F '\t' '$1 == "P" { print $2 }')
+	local n=0 i nd sel w tries=0 list="" raw
+	raw=$(router_node_list 2>/dev/null)
+	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(printf '%s\n' "$raw" | awk -F '\t' '$1 == "P" { print $2 }')
 	[ $n -gt 0 ] || { warn "没从路由器读到节点（OpenClash 在运行吗？）"; return 1; }
 	say ""
 	say "  选出允许账号使用的出口节点（之后每个账号从这些里面挑一个）："
@@ -3546,6 +3833,7 @@ pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出�
 		done
 		[ ${#picked[@]} -gt 0 ] || { warn "至少选一个"; continue; }
 		py set-nodes "${picked[@]}" || return 1
+		printf '%s\n' "$raw" | py nodes-follow >/dev/null   # 记下各可选节点的摘要：以后在路由器上改了名也认得出
 		for nd in "${picked[@]}"; do list="${list:+${list}、}${nd}"; done
 		okay "账号可选的出口节点：${list}"
 		return 0
@@ -3553,7 +3841,62 @@ pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出�
 	return 1
 }
 
-router_sync() {   # 0 成功；3 需要重载但没获同意（账号表已上传，端口池等下次）；1 失败
+router_node_list() {   # 路由器上的节点（P<TAB>名字<TAB>类型<TAB>服务器<TAB>端口）：拿这一版的路由器脚本现跑，不依赖路由器上部署的版本
+	router_sh | rsh 'sh -s nodes'
+}
+nodes_follow() {   # 路由器上的节点改了名：按服务器地址认出来，可选节点和各工具的账号表跟着改；认不出、又有账号在用的，
+	                # 交互时让用户从路由器上的节点里选一个代替。有改动返回 0
+	local list out kind old who changed=1 i
+	local -a lost=() users=()
+	router_ready || return 1
+	list=$(router_node_list 2>/dev/null) || return 1
+	out=$(printf '%s\n' "$list" | py nodes-follow) || return 1
+	while IFS=$'\t' read -r kind old who; do
+		case "$kind" in
+			R) changed=0 ;;
+			L) lost[${#lost[@]}]="$old"; users[${#users[@]}]="$who" ;;
+		esac
+	done <<< "$out"
+	# 认不出的到循环外面再问：循环里 fd 0 是 here-string，interactive 会把真实的终端也当成非交互
+	for ((i = 0; i < ${#lost[@]}; i++)); do
+		node_replace "$list" "${lost[i]}" "${users[i]}" && changed=0
+	done
+	return $changed
+}
+node_replace() {   # node_replace 节点列表 旧节点 用它的账号：旧节点在路由器上找不到了（也认不出改成了哪个），交互时选一个代替
+	local list="$1" old="$2" who="$3" n=0 i w nd tries
+	local -a all
+	if ! interactive; then
+		warn "路由器上找不到节点「${old}」了（也认不出它改成了哪个）：${who} 暂时用不了。在终端里运行 cca router sync 选一个节点代替它"
+		return 1
+	fi
+	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(printf '%s\n' "$list" | awk -F '\t' '$1 == "P" { print $2 }')
+	[ $n -gt 0 ] || return 1
+	say ""
+	say "  路由器上找不到节点「${old}」了（也认不出它改成了哪个），${who} 在用它。换成哪个节点？"
+	for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${all[i]}"; done
+	say ""
+	for tries in 1 2 3 4 5; do
+		w=$(ask "  输入编号（直接回车先不换，这些账号暂时用不了）：" "")
+		[ -n "$w" ] || return 1
+		case "$w" in *[!0-9]*) warn "「${w}」不是编号"; continue ;; esac
+		if [ "$w" -ge 1 ] && [ "$w" -le $n ]; then
+			nd="${all[w - 1]}"
+			printf '%s\n' "$list" | py nodes-rename "$old" "$nd" || return 1
+			okay "「${old}」换成了「${nd}」：${who} 改走它"
+			return 0
+		fi
+		warn "没有编号 ${w}"
+	done
+	return 1
+}
+
+router_sync() {   # 先跟上路由器上节点的改名，再同步。0 成功；3 需要重载但没获同意（账号表已上传，端口池等下次）；1 失败
+	router_ready || { warn "还没配置路由器（cca router setup）"; return 1; }
+	nodes_follow
+	router_push
+}
+router_push() {   # 把账号表和路由器端脚本部署到路由器（返回值同 router_sync）
 	local out rc bundle
 	router_ready || { warn "还没配置路由器（cca router setup）"; return 1; }
 	py validate all || { warn "账号表有错误，先修正（Claude 账号用 cca edit，Codex 账号用 cca codex edit）"; return 1; }
@@ -3562,7 +3905,7 @@ router_sync() {   # 0 成功；3 需要重载但没获同意（账号表已上�
 	out=$(printf '%s\n' "$bundle" | rsh 'sh -s' 2>&1); rc=$?
 	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
 	if [ $rc -eq 3 ]; then
-		if allow_reload; then
+		if allow_reload "$out"; then
 			router_reload; rc=$?
 		else
 			warn "没有重载：新的端口池要等 OpenClash 下次重启（或再运行 cca router sync）才生效"
@@ -3598,7 +3941,7 @@ cmd_router() {
 		setup) cmd_router_setup ;;
 		sync) [ "${2:-}" = -y ] && CCA_YES=1; router_sync ;;
 		status) router_ready || die "还没配置路由器（cca router setup）"; rsh "$RDIR/cca-router.sh status" ;;
-		nodes) router_ready || die "还没配置路由器（cca router setup）"; rsh "$RDIR/cca-router.sh nodes" | cut -f2 ;;
+		nodes) router_ready || die "还没配置路由器（cca router setup）"; router_node_list | cut -f2 ;;
 		log) router_ready || die "还没配置路由器（cca router setup）"; rsh 'tail -n 50 "${CCA_ROOT:-}/tmp/cca-router.log"' ;;
 		ssh)
 			router_ready || die "还没配置路由器（cca router setup）"
@@ -4067,9 +4410,15 @@ pick_route() {   # 需要先 eval "$(py env 名称)"；结果在 ROUTE（router|
 router_ensure() {   # 让路由器确认端口池在，并把各槽位切到账号的节点（API，无需重载；要重载时先问）
 	local out rc
 	router_ready || return 0
-	out=$(rsh "$RDIR/cca-router.sh ensure-now" 2>&1); rc=$?
+	out=$(rsh "$RDIR/cca-router.sh ensure-now" </dev/null 2>&1); rc=$?   # </dev/null：不让 ssh 读走调用方的 stdin
 	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
-	[ $rc -eq 3 ] && allow_reload && router_reload
+	# 有槽位切不过去（或要重载）：可能是节点在路由器上改了名。账号表跟上之后重新同步（结构变了要重载，会先问）
+	if [ $rc -ne 0 ] && [ $rc -ne 255 ] && nodes_follow; then
+		router_push
+		[ -z "${ACC_KEY:-}" ] || eval "$(py env "$ACC_KEY")"   # 当前账号的节点名可能跟着改了
+		return 0
+	fi
+	[ $rc -eq 3 ] && allow_reload "$out" && router_reload
 	return 0
 }
 route_router() {   # 在家：经路由器的端口池
@@ -4408,7 +4757,7 @@ local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽�
 		[ "$(json_get now)" = "$node" ] && continue
 		lctl PUT "/proxies/$g" "{\"name\":\"$(json_esc "$node")\"}"
 		case "$LCODE" in 2??) ;; *) lctl PUT "/proxies/$g" '{"name":"REJECT"}' ;; esac   # 客户端里没有这个节点：宁可断开也不换出口
-	done < <(py select-lines)
+	done < <(py select-lines local)   # 节点名用 Clash Verge 里的叫法（同一个节点名字不同时按服务器地址换算）
 	return 0
 }
 local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本最新、端口池在运行中的内核里、每个槽位切到账号的节点
@@ -4433,8 +4782,8 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 	local_ready || local_offer || return 1
 	local_ensure || return 1
 	lctl GET "/proxies/CCA-${ACC_SLOT}"
-	if [ "$(json_get now)" != "$ACC_NODE" ]; then
-		warn "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 ${CMD} edit 换一个两边都有的节点）"
+	if [ "$(json_get now)" != "$(py local-node "$ACC_NODE")" ]; then
+		warn "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」（名字和服务器地址都对不上）：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 ${CMD} edit 换一个两边都有的节点）"
 		return 1
 	fi
 	port_open 127.0.0.1 "$ACC_PORT" || { warn "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
@@ -4456,7 +4805,7 @@ cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户
 	py local-set client clash-verge || return 1
 	local_ensure || return 1
 	miss=$(py local-missing "$VERGE_DIR/clash-verge.yaml")
-	[ -n "$miss" ] && warn "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名节点"
+	[ -n "$miss" ] && warn "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名（或服务器地址相同）的节点"
 	okay "本机端口池已就绪：Clash Verge 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
 }
 manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：用户把配置加进去，cca 经它的外部控制接口切换节点
@@ -4536,7 +4885,8 @@ cmd_check() {
 	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
 	[ -n "$keys" ] || { info "还没有账号"; return 0; }
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，测到的才是账号现在的出口
-	while IFS= read -r key; do
+	# 账号列表从 fd 4 读：循环里要连路由器（ssh 会把 stdin 读走）、要问用户（interactive 看 fd 0 是不是终端）
+	while IFS= read -r key <&4; do
 		eval "$(py env "$key")" || continue
 		if [ -n "$ACC_PORT" ] && [ -z "$route" ]; then   # 第一个走端口的账号：选好路
 			load_router
@@ -4546,6 +4896,8 @@ cmd_check() {
 				local_ready || die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
 				local_ensure || return 1
 				host=127.0.0.1 route=local
+			else
+				router_ensure   # 和启动前一样：各槽位切到账号的节点（节点在路由器上改了名会跟着改）
 			fi
 		fi
 		ROUTE=direct
@@ -4566,7 +4918,7 @@ cmd_check() {
 		case $rc in 0) ;; *) COFFEE_LINE="$COFFEE_LINE ${C_Y}(${COFFEE_NOTE//$'\n'/; })${C_0}" ;; esac
 		say "  ${ACC_NAME}  ${ACC_NODE}  :${ACC_PORT}  ${COFFEE_LINE}"
 		[ -n "$COFFEE_IP" ] && ips="$ips$COFFEE_IP"$'\n'
-	done <<< "$keys"
+	done 4<<< "$keys"
 	local dup
 	dup=$(printf '%s' "$ips" | sort | uniq -d)
 	[ -n "$dup" ] && warn "有账号共用同一个出口 IP：$(echo $dup)"
@@ -4626,7 +4978,10 @@ run_account() {
 }
 
 sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）；在外面就等回家
-	py validate || die "账号表有错误：运行 ${CMD} edit 修正"
+	if ! py validate 2>/dev/null; then   # 可能是路由器上的节点改了名（比如维护者的映射已经换成新名字）：先跟上再校验
+		if router_ready && at_home; then nodes_follow; fi
+		py validate || die "账号表有错误：运行 ${CMD} edit 修正"
+	fi
 	py secrets-forget   # 直接改账号表删掉的第三方 API 账号：钥匙串里的 key 一起删
 	if [ "$(digest)" != "$(py get synced)" ]; then
 		router_needed || return 0   # 只有直连的第三方 API 账号、也没配置路由器：没有要同步的
@@ -5268,7 +5623,9 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
 路由器
   cca router setup           SSH 免密（只输一次密码）+ 部署分流
   cca router sync [-y]       同步账号到路由器：换节点、增删账号走 API 即时生效；只有端口池要扩容
-                             或可选节点变了才需重载 OpenClash（约 20 秒），会先问你（-y 直接同意）
+                             或可选节点变了才需重载 OpenClash（约 20 秒），会先问你（-y 直接同意）。
+                             路由器上的节点改了名会跟着改（按服务器地址认，认不出的让你选）；
+                             OpenClash 的运行配置文件不见了时，重载换成重启 OpenClash（同样先问）
   cca router status|nodes|log|ssh|uninstall
 
 出门在外（连不上路由器时改走本机的 Clash 客户端，例如 Clash Verge）
