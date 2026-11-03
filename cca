@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0-beta.1"
+VERSION="2.6.0-beta.2"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -896,21 +896,21 @@ def cmd_rows(cols='80'):
         print(fit(line, width, pad=False))
 
 
-def node_users(n):
-    """用这个节点的账号：当前工具的只写名字，别的工具的注明是哪个工具的"""
-    return [name_of(k) if tool is T else '%s（%s）' % (name_of(k), tool.label)
-            for tool in TOOLS for k, v in (TABS.get(tool.name) or {}).items() if node_of(v) == n]
+def node_users(t, n):
+    """账号表 t 里用这个节点的账号。选节点只看当前工具的：每个账号最好用不同的出口，是免得同一家服务商把几个账号
+    关联起来，Claude 账号和 Codex 账号是两家的，共用一个出口不要紧"""
+    return [name_of(k) for k, v in t.items() if node_of(v) == n]
 
 
 def cmd_node_rows(onrouter='', cols='80'):
-    """选节点菜单：每个可选节点一行，注明已被哪些账号使用（包括别的工具的账号）、路由器上是否存在"""
+    """选节点菜单：每个可选节点一行，注明已被当前工具的哪些账号使用、路由器上是否存在"""
     c, t, _ = ctx()
     have = set(onrouter.split('\n')) if onrouter else None
     width = max(int(cols) if str(cols).isdigit() else 80, 40) - 6
     nw = max([dw(n) for n in c['nodes']] + [8])
     for n in c['nodes']:
         notes = []
-        users = node_users(n)
+        users = node_users(t, n)
         if users:
             notes.append('已被 %s 使用' % '、'.join(users))
         if have is not None and n not in have:
@@ -919,9 +919,9 @@ def cmd_node_rows(onrouter='', cols='80'):
 
 
 def cmd_node_default():
-    """默认选中第一个还没被任何账号（不分工具）用的节点"""
+    """默认选中第一个还没被当前工具的账号用的节点（别的工具的账号不算，见 node_users）"""
     c, t, _ = ctx()
-    used = {node_of(v) for tool in TOOLS for v in (TABS.get(tool.name) or {}).values()}
+    used = {node_of(v) for v in t.values()}
     print(next((i for i, n in enumerate(c['nodes']) if n not in used), 0))
 
 
@@ -1469,7 +1469,7 @@ def cmd_set(field, value):
 def cmd_nodes_allowed():
     c, t, _ = ctx()
     for n in c['nodes']:
-        print('%s\t%s' % (n, '、'.join(node_users(n))))
+        print('%s\t%s' % (n, '、'.join(node_users(t, n))))
 
 
 def cmd_accounts_json():
@@ -2398,11 +2398,15 @@ def usage_why(r):
 
 
 def usage_notes(rl, now):
-    """表格的备注：分模型的每周额度、额外用量"""
+    """表格的备注：Codex 还能重置几次额度，分模型的每周额度、额外用量，Codex 的 credits"""
+    out, seen = [], set()
+    rc = rl.get('reset_credits')   # Codex：0 次也写；codex 没给（旧版本）就不写
+    n = rc.get('availableCount') if isinstance(rc, dict) else None
+    if isinstance(n, int) and not isinstance(n, bool):
+        out.append('剩余重置 %d 次' % n)
     ms = rl.get('model_scoped')
     pairs = [('Opus', rl.get('seven_day_opus')), ('Sonnet', rl.get('seven_day_sonnet'))]
     pairs += [(m.get('display_name'), m) for m in (ms if isinstance(ms, list) else []) if isinstance(m, dict)]
-    out, seen = [], set()
     for label, w in pairs:   # 没用过的（0%）不写，免得一排 0%；JSON 里照样都有
         x = win(w, now)
         if x and label and not x['reset'] and x['pct'] > 0 and str(label).lower() not in seen:
@@ -2435,8 +2439,9 @@ def usage_json(rows, now, api):
         ms = rl.get('model_scoped')
         a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name')) for m in ms if isinstance(m, dict)] if isinstance(ms, list) else None
         a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
-        if T is not CLAUDE:
-            a['credits'] = rl.get('credits') if isinstance(rl.get('credits'), dict) else None
+        if T is not CLAUDE:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
+            for k in ('credits', 'reset_credits'):
+                a[k] = rl.get(k) if isinstance(rl.get(k), dict) else None
         out.append(a)
     j = {'version': 1, 'generated_at': iso(now), 'accounts': out, 'skipped_api_accounts': api}
     if T is not CLAUDE:   # Claude 的输出和以前一样，不加这个字段
@@ -2539,11 +2544,22 @@ def codex_claims(key):
             'account': str(auth.get('chatgpt_account_id') or '')}
 
 
+# ChatGPT 套餐的叫法，和 codex 的 /status 一样（codex-rs/tui/src/subscription.rs 里 SubscriptionDisplay::Status
+# 那一列；OpenAI 加了新套餐照着补）。用量查询的 planType 和 id_token 的 chatgpt_plan_type 都是这些值，hc、education
+# 是 id_token 里的别名
+CODEX_PLANS = {
+    'free': 'Free', 'go': 'Go', 'plus': 'Plus', 'pro': 'Pro 200', 'prolite': 'Pro 100', 'promax': 'Pro 500',
+    'team': 'Business', 'self_serve_business_usage_based': 'Business', 'self_serve_business_prolite': 'Business Premium',
+    'business': 'Enterprise', 'enterprise': 'Enterprise', 'hc': 'Enterprise', 'ent26': 'Enterprise',
+    'enterprise_cbp_usage_based': 'Enterprise', 'enterprise_cbp_automation': 'Enterprise (Automation)',
+    'edu': 'Edu', 'education': 'Edu', 'edu_plus': 'Edu Plus', 'edu_pro': 'Edu Pro',
+    'sci': 'Academic Researchers', 'sci_plus': 'Academic Researchers Plus'}
+
+
 def codex_plan_label(plan):
-    """ChatGPT 的套餐：Plus、Pro、Team、Business、Enterprise、Edu、Free"""
+    """ChatGPT 的套餐：Plus、Pro 100 / 200 / 500、Business、Enterprise…；表里没有的新套餐只把首字母大写"""
     p = str(plan or '').strip().lower()
-    return {'plus': 'Plus', 'pro': 'Pro', 'team': 'Team', 'business': 'Business', 'enterprise': 'Enterprise',
-            'edu': 'Edu', 'education': 'Edu', 'free': 'Free', 'go': 'Go'}.get(p, p.capitalize()) or '—'
+    return CODEX_PLANS.get(p, p.capitalize()) or '—'
 
 
 def codex_probe(bin_):
@@ -2743,6 +2759,8 @@ def codex_usage_query(bin_, timeout='25'):
             rl['model_scoped'] = ms
         if isinstance(main.get('credits'), dict):
             rl['credits'] = main['credits']
+        if isinstance(res.get('rateLimitResetCredits'), dict):   # 还能重置几次额度（codex 里 /usage 的 Redeem reset）和明细
+            rl['reset_credits'] = res['rateLimitResetCredits']
         if main.get('planType'):
             rl['plan'] = main['planType']   # 存进缓存：查不到时显示上次查到的套餐（登录凭证里记的可能是旧的）
         has = 'five_hour' in rl or 'seven_day' in rl
@@ -3477,7 +3495,7 @@ cmd_router() {
 # ---------------------------------------------------------------------------
 # 账号
 # ---------------------------------------------------------------------------
-pick_node() {   # pick_node [direct]：从可选节点里选一个，打印节点名；标出已被哪些账号使用、路由器上是否存在。
+pick_node() {   # pick_node [direct]：从可选节点里选一个，打印节点名；标出已被当前工具的哪些账号使用、路由器上是否存在。
 	                # direct 时第一项（默认）是"直连"，选它打印空字符串
 	local onrouter="" def n=0 i node sel off=0
 	local -a nodes rows
@@ -4927,7 +4945,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca codex add [api]        新增 Codex 账号（用 ChatGPT 登录，第一次启动时在它专属的浏览器窗口里登录）；
                              api：兼容 OpenAI Responses 接口的第三方服务（地址 + key，模型可选）
   cca codex usage [账号] [--json]
-                             查 Codex 账号的 5 小时、每周额度：经各自的出口让 codex 自己去查，不耗额度
+                             查 Codex 账号的 5 小时、每周额度和剩余的重置次数：
+                             经各自的出口让 codex 自己去查，不耗额度
   cca codex ls | edit | rm | key | login | web | check
                              和上面同名的命令一样，作用于 Codex 账号（web 打开 chatgpt.com）
   cca codex app [账号]       用该账号自己的资料目录、登录和出口打开 ChatGPT App（Codex 桌面版）；

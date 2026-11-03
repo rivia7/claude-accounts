@@ -40,6 +40,7 @@ ok "add bob：不重载，CCA-2 经 API 切到 US-B，文件里默认顺序同�
 ok "add：邮箱和别名分两行，账号表的键是 别名(邮箱)" 'printf "%s" "$out" | grep -q "登录邮箱：" && printf "%s" "$out" | grep -q "别名（可选，回车跳过）：" && grep -q "\"工作(bob@example.com)\": \"US-B\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "已添加 工作（bob@example.com），出口 US-B"'
 out=$(run CCA_TTY="$(ans alice@example.com nope carol@example.com '工 作' 'a(b)' 工作 小号 3)" cca add 2>&1)
 ok "add：重复邮箱、不像邮箱、别名带空格/括号/重名都会说明原因并重填" 'printf "%s" "$out" | grep -q "这个邮箱已经添加过了：alice@example.com" && printf "%s" "$out" | grep -q "这不像邮箱地址" && printf "%s" "$out" | grep -q "别名里不能有空格" && printf "%s" "$out" | grep -q "别名「工作」已经用在 工作（bob@example.com） 上了" && grep -q "\"小号(carol@example.com)\"" "$H/.cca/accounts.json"'
+ok "add 选节点：注明已被哪些账号使用（有别名的写别名），默认选中第一个还没人用的 US-C" 'printf "%s" "$out" | grep -qE "1\. US-A +已被 alice@example.com 使用$" && printf "%s" "$out" | grep -qE "2\. US-B +已被 工作 使用$" && printf "%s" "$out" | grep -q "选择节点编号 \[3\]"'
 m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "菜单：别名、邮箱分两列，没有别名的别名列留空" 'printf "%s" "$m" | grep -q "1\. *alice@example.com   未登录" && printf "%s" "$m" | grep -q "2\. 工作   bob@example.com     未登录"'
 run CCA_TTY="$(ans)" cca web 小号 >/dev/null 2>&1
@@ -380,7 +381,7 @@ out=$(run cca usage 2>&1); rc=$?
 ok "cca usage：两个官方账号一起查，表里有套餐、5 小时和本周用量、分模型额度；注明第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Max 5x +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -qE "bob@example.com +Pro +98%" && printf "%s" "$out" | grep -q "Sonnet 本周 60%" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi"'
 ok "cca usage：每个账号经自己的端口、用自己的配置目录无界面查询（--safe-mode），查之前先看出口地区" 'grep -q "^ARGS: -p --safe-mode --no-session-persistence --strict-mcp-config --input-format stream-json --output-format stream-json --verbose$" claude.log && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=alice@example.com https_proxy=http://192.0.2.10:7901" && grep "^USAGE: " claude.log | tail -n 2 | grep -q "email=bob@example.com https_proxy=http://192.0.2.10:7902" && grep -q "CURL via :7902 https://claude.ai/cdn-cgi/trace" curl.log'
 out=$(run cca usage --json 2>/dev/null)
-ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a={x[\"account\"]: x for x in d[\"accounts\"]}; sys.exit(0 if a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max 5x\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] else 1)"'
+ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a={x[\"account\"]: x for x in d[\"accounts\"]}; sys.exit(0 if a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max 5x\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] and \"reset_credits\" not in a[\"alice@example.com\"] else 1)"'
 ok "cca usage：查到的存进账号目录的 usage.json（菜单和查不到时用）" '[ -f "$AD/usage.json" ]'
 m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "菜单：官方账号附上最近一次的用量（读缓存，不联网）" 'printf "%s" "$m" | grep -q "5h 13% · 周 41%" && printf "%s" "$m" | grep -q "5h 98% · 周 72%"'
@@ -522,37 +523,46 @@ out=$(run cca codex @kimi --version 2>&1 </dev/null); rc=$?
 cedit 'j["kimi"].pop("env")'
 ok "Codex 第三方 API 账号没有 env 字段（说明能用的字段）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不认识的字段 env"'
 # 用量
-ccanned() {   # ccanned 邮箱 5小时% 本周% [套餐]：假 app-server 给这个账号的 account/rateLimits/read 回应
+ccanned() {   # ccanned 邮箱 5小时% 本周% [套餐] [剩余重置次数]：假 app-server 给这个账号的 account/rateLimits/read 回应；
+	            # 不给剩余重置次数就是旧版本的 codex（回应里没有 rateLimitResetCredits）
 	mkdir -p "$T/codex_usage"
-	python3 - "$T/codex_usage/$1.json" "$2" "$3" "${4:-plus}" <<'PY'
+	python3 - "$T/codex_usage/$1.json" "$2" "$3" "${4:-plus}" "${5:-}" <<'PY'
 import json, sys, time
-p, five, week, plan = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+p, five, week, plan, resets = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], sys.argv[5]
 now = int(time.time())
 rl = {'limitId': 'codex', 'primary': {'usedPercent': five, 'windowDurationMins': 300, 'resetsAt': now + 2 * 3600 + 13 * 60 + 30},
       'secondary': {'usedPercent': week, 'windowDurationMins': 10080, 'resetsAt': now + 3 * 86400 + 5 * 3600},
       'credits': {'hasCredits': True, 'unlimited': False, 'balance': '12.5'}, 'planType': plan}
 other = {'limitId': 'codex_other', 'limitName': 'GPT-5-Pro', 'primary': None,
          'secondary': {'usedPercent': 30, 'windowDurationMins': 10080, 'resetsAt': now + 86400 * 2}}
-json.dump({'rateLimits': rl, 'rateLimitsByLimitId': {'codex': rl, 'codex_other': other}}, open(p, 'w'))
+j = {'rateLimits': rl, 'rateLimitsByLimitId': {'codex': rl, 'codex_other': other}}
+if resets:
+    j['rateLimitResetCredits'] = {'availableCount': int(resets), 'credits': [
+        {'id': 'rc-%d' % i, 'resetType': 'codexRateLimits', 'status': 'available', 'grantedAt': now - 86400,
+         'expiresAt': now + 30 * 86400, 'title': None, 'description': None} for i in range(int(resets))]}
+json.dump(j, open(p, 'w'))
 PY
 }
-ccanned alice@example.com 13 41 pro; n_usage=$(grep -c "^USAGE: " claude.log)
+ccanned alice@example.com 13 41 pro 2; n_usage=$(grep -c "^USAGE: " claude.log)
 out=$(run cca codex usage 2>&1); rc=$?
-ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐、5 小时、本周、别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -q "GPT-5-Pro 本周 30%" && printf "%s" "$out" | grep -q "credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
+ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐（叫法和 codex 的 /status 一样，pro 是 Pro 200）、5 小时、本周，备注里先写剩余的重置次数，再是别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -q "剩余重置 2 次；GPT-5-Pro 本周 30%；credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
 out=$(run cca codex usage --json 2>/dev/null)
-ok "cca codex usage --json：注明 tool=codex，窗口和 Claude 的一样写法" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a=d[\"accounts\"][0]; sys.exit(0 if d[\"tool\"]==\"codex\" and a[\"plan\"]==\"Pro\" and a[\"five_hour\"][\"utilization\"]==13 and a[\"seven_day\"][\"utilization\"]==41 and a[\"credits\"][\"balance\"]==\"12.5\" and a[\"source\"]==\"live\" else 1)"'
+ok "cca codex usage --json：注明 tool=codex，窗口和 Claude 的一样写法；credits、reset_credits（剩余重置次数和明细）是 codex 原样给的" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a=d[\"accounts\"][0]; sys.exit(0 if d[\"tool\"]==\"codex\" and a[\"plan\"]==\"Pro 200\" and a[\"five_hour\"][\"utilization\"]==13 and a[\"seven_day\"][\"utilization\"]==41 and a[\"credits\"][\"balance\"]==\"12.5\" and a[\"reset_credits\"][\"availableCount\"]==2 and len(a[\"reset_credits\"][\"credits\"])==2 and a[\"source\"]==\"live\" else 1)"'
 out=$(run cca usage 2>&1)
 ok "cca usage 只查 Claude 账号，不带 Codex 的" '! printf "%s" "$out" | grep -q "Pro" && printf "%s" "$out" | grep -q "alice@example.com"'
 m=$(run CCA_TTY="$(ans q)" cca codex 2>&1)
 ok "cca codex 菜单：附上最近一次的用量" 'printf "%s" "$m" | grep -q "5h 13% · 周 41%"'
 touch "$T/codex_usage/unsupported"
-out=$(run cca codex usage alice 2>&1)
+out=$(run COLUMNS=200 cca codex usage alice 2>&1)
 rm -f "$T/codex_usage/unsupported"
-ok "codex 不支持查用量：提示升级，用缓存顶上" 'printf "%s" "$out" | grep -q "这个版本的 Codex 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Pro +13%"'
+ok "codex 不支持查用量：提示升级，用缓存顶上（套餐、剩余重置次数也取缓存里的）" 'printf "%s" "$out" | grep -q "这个版本的 Codex 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%" && printf "%s" "$out" | grep -q "升级后再试）；剩余重置 2 次；GPT-5-Pro"'
 touch "$T/codex_usage/hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca codex usage alice 2>&1); t1=$(date +%s)
 rm -f "$T/codex_usage/hang"
 ok "codex 查用量卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
+ccanned alice@example.com 13 41 promax 0; out=$(run cca codex usage alice 2>&1)
+ccanned alice@example.com 13 41 prolite; out2=$(run cca codex usage alice 2>&1)
+ok "套餐叫法和 codex 的一样：promax 是 Pro 500、prolite 是 Pro 100；剩余 0 次也写上，codex 没给重置次数（旧版本）就不写" 'printf "%s" "$out" | grep -qE "alice@example.com +Pro 500 +13%" && printf "%s" "$out" | grep -q "剩余重置 0 次；GPT-5-Pro" && printf "%s" "$out2" | grep -qE "alice@example.com +Pro 100 +13%" && printf "%s" "$out2" | grep -q "GPT-5-Pro 本周 30%" && ! printf "%s" "$out2" | grep -q "剩余重置"'
 ok "Codex 的 access / refresh token 从没出现在 cca 写的文件、日志和命令行里（cca 只从 id_token 读邮箱和套餐）" '! grep -rqF -e at-SECRET -e rt-SECRET --exclude auth.json "$H/.cca" && ! grep -qF -e at-SECRET -e rt-SECRET "$T/env.log" codex.log curl.log security.log open.log'
 # 网页版、桌面 App 和启动器
 : > open.log
@@ -577,7 +587,8 @@ out2=$(run CCA_TTY="$(ans y)" cca codex rm alice 2>&1); rc2=$?
 kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 ok "ChatGPT App：这个账号的已经开着就切过去；开着时不能删账号" 'printf "%s" "$out" | grep -q "alice@example.com 的 ChatGPT App 已经开着" && [ "$(grep -c "user-data-dir=$CD/desktop" open.log)" = "$n_open" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "ChatGPT App 还开着"'
 # 删除：退出登录、删账号目录（同一个邮箱的 Claude 账号不受影响），端口回收；会话还在
-run CCA_TTY="$(ans dave@example.com '' 3)" cca codex add >/dev/null 2>&1
+out=$(run CCA_TTY="$(ans dave@example.com '' 3)" cca codex add 2>&1)
+ok "选节点只看同一种工具的账号：US-B 注明已被 Codex 的 alice 使用，US-A 上 Claude 的 alice 不提；默认选中第一个没有 Codex 账号用的 US-A" 'printf "%s" "$out" | grep -qE "2\. US-B +已被 alice@example.com 使用$" && printf "%s" "$out" | grep -qE "1\. US-A$" && ! printf "%s" "$out" | grep -q "（Claude）" && printf "%s" "$out" | grep -q "选择节点编号 \[1\]"'
 ok "（准备）再加一个 Codex 账号，分到 7903" '[ "$(cfgv "c[\"codex\"][\"ports\"].get(\"dave@example.com\")")" = 7903 ]'
 out=$(run CCA_TTY="$(ans y)" cca codex rm alice 2>&1); rc=$?
 ok "cca codex rm：提醒 git 工作树会一起删；退出登录、删掉它的目录和启动器；同一个邮箱的 Claude 账号、启动器都不动；7902 回到 REJECT" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "git 工作树" && grep -q "LOGOUT $CH" codex.log && [ ! -e "$CD" ] && [ ! -e "$L/ChatGPT alice.app" ] && [ -d "$L/Claude alice.app" ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && [ "$(sel CCA-2)" = REJECT ] && [ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ]'

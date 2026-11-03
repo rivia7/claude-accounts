@@ -152,15 +152,15 @@ OpenAI 的 Codex（`codex` 命令和 ChatGPT 桌面 App）也能多账号，用�
 ```sh
 cca codex add          # 添加 Codex 账号：填登录邮箱、别名（可选），选出口节点
 cca codex              # 选账号启动 codex（cca codex @工作 直接启动，后面的参数原样交给 codex）
-cca codex usage        # 查各账号的 5 小时、每周额度
+cca codex usage        # 查各账号的 5 小时、每周额度和剩余的重置次数
 ```
 
-- **账号表分开记**：Codex 账号记在 `~/.cca/codex.json`，格式和 `accounts.json` 一样。同一个人的 Claude 号和 ChatGPT 号可以用同一个别名、同一个邮箱，`cca @工作` 启动 Claude，`cca codex @工作` 启动 Codex。两种账号共用路由器（或本机 Clash）上的同一组端口，每个账号还是一个端口、一个出口。
+- **账号表分开记**：Codex 账号记在 `~/.cca/codex.json`，格式和 `accounts.json` 一样。同一个人的 Claude 号和 ChatGPT 号可以用同一个别名、同一个邮箱，`cca @工作` 启动 Claude，`cca codex @工作` 启动 Codex。两种账号共用路由器（或本机 Clash）上的同一组端口，每个账号还是一个端口、一个出口。选节点时只看同一种账号：Codex 账号之间最好各用各的节点，和 Claude 账号用同一个节点没关系（两家服务商互不相干）。
 - **各自登录**：每个账号有自己的 `CODEX_HOME`（`~/.cca/codex/accounts/…/codex`），登录凭证（`auth.json`）只在这里。第一次启动时，cca 让 codex 生成登录网址，在**这个账号专属的 Chrome 窗口**里打开，整个登录都走这个账号的出口；登录网址里会带上账号的邮箱（`login_hint`，OpenAI 的登录页认的话会预填），登录后 cca 还会核对邮箱，登成别的号就不启动。要换登录用 `cca codex login 工作`。你原来 `~/.codex` 里的登录不受影响，直接敲 `codex` 用的还是它。
 - **其余共用**：`~/.codex` 里的 `config.toml`、`AGENTS.md`、会话记录、历史、技能、规则、提示词、插件、记忆等，所有账号共用一份；会话和记忆的数据库也共用（`CODEX_SQLITE_HOME` 指向 `~/.codex`），在一个账号里开的会话，换个账号 `codex resume` 照样能接着聊。
 - **不共用的**：登录凭证、`installation_id`（codex 每个请求都带着它，共用会把几个账号关联起来）、按账号缓存的模型列表和应用列表、日志、`codex` 自己装在 `packages/` 里的程序，以及 git 工作树（`worktrees/`，macOS 的沙箱不让它的路径里有链接）。ChatGPT 桌面 App 放在 `~/.codex` 里的运行状态（自动化任务、内置浏览器等）也各账号一份。
 - **出口不会悄悄换**：cca 启动 codex 时关掉它的两个开关：`system_proxy_fallback`（连不上代理时改走 macOS 的系统代理）和 `respect_system_proxy`（系统代理优先）；也不让它挂到常驻的后台进程上（`--no-daemon`，那个进程的代理在它启动时就定死了）。代价是在 cca 启动的 Codex 里用不了靠后台进程的功能（例如 `codex agents`）。
-- **查用量**：`cca codex usage [账号] [--json]` 经每个账号自己的出口，让 codex 自己去查（和它的 `/status` 一样，不发消息、不耗额度），显示 5 小时、本周额度、单独计的额度和 credits 余额；菜单里也附上最近一次的。`cca usage` 只查 Claude 账号。
+- **查用量**：`cca codex usage [账号] [--json]` 经每个账号自己的出口，让 codex 自己去查（和它的 `/status` 一样，不发消息、不耗额度），显示套餐（叫法和 codex 里一样：Plus、Pro 100、Pro 200、Pro 500…）、5 小时、本周额度、单独计的额度、剩余的重置次数（在 codex 里用 `/usage` → Redeem reset 兑换）和 credits 余额；`--json` 里另有 codex 原样给的 `credits` 和 `reset_credits`（`availableCount` 是剩余次数）。菜单里也附上最近一次的用量。`cca usage` 只查 Claude 账号。
 - **第三方 API**：`cca codex add api` 添加兼容 OpenAI **Responses 接口**（`/v1/responses`）的服务，填地址（例如 `https://api.example.com/v1`）、key、模型。key 存在钥匙串里（条目名 `cca-codex-api-…`），启动时由 codex 的 `auth.command` 回调 cca 现取，不出现在命令行参数和环境变量里；地址和模型经 `-c` 交给 codex。只提供 Chat Completions 接口的服务用不了。
 - **ChatGPT App（Codex 桌面版）**：`cca codex app 工作`，或者在启动台、聚焦搜索里点「ChatGPT 工作」。每个账号一份资料目录，用这个账号的 `CODEX_HOME`（和 `cca codex @工作` 同一份登录），整个 App 走这个账号的出口。App 自己启动 codex 时 cca 加不了参数，所以第一次打开时会征求你同意，用 Codex 自带的 `codex features disable system_proxy_fallback` 在共享的 `~/.codex/config.toml` 里关掉回退到系统代理（之后直接敲 `codex` 也不再回退）。没登录时先在账号专属的 Chrome 里登录，App 打开时就是登录状态。如果 App 里还要你登录（比如登录过期了），别在 App 里登：它的登录页会在系统默认浏览器里打开，那一次不经账号的出口；关掉 App，运行 `cca codex login 工作`，再打开 App。
 - **其它命令**：`cca codex ls`、`edit`、`check`、`web`（用账号专属的浏览器打开 chatgpt.com）、`key`（换第三方 API 账号的 key），和 Claude 账号的同名命令一样。
@@ -239,11 +239,11 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
 
-- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.1`
+- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.2`
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh
-  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.1/install.sh | bash -s 2.6.0-beta.1
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.2/install.sh | bash -s 2.6.0-beta.2
   ```
 
 - 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。
