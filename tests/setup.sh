@@ -248,7 +248,7 @@ if [ -n "$proxy" ]; then
 		echo "CURL via :$port $url" >> "$CCA_T/curl.log"; net=203.0.113
 	fi
 	case "$url" in
-		https://claude.ai/cdn-cgi/trace)   # 出口地区默认 US，$CCA_T/loc/<端口> 可以改（模拟节点跑到受限地区）
+		https://claude.ai/cdn-cgi/trace|https://chatgpt.com/cdn-cgi/trace)   # 出口地区默认 US，$CCA_T/loc/<端口> 可以改（模拟节点跑到受限地区）
 			last=$((port - 7900)); [ "$port" = 7903 ] && last=1
 			printf 'fl=1\nip=%s.%s\nloc=%s\n' "$net" "$last" "$(cat "$CCA_T/loc/$port" 2>/dev/null || echo US)" ;;
 		https://api*.example.com/*)   # 第三方 API 的接口：不带 key 访问回 401；$CCA_T/api_down 时连不上
@@ -428,6 +428,181 @@ open(os.path.join(cd, 'projects', '-p1', 'memory', tag + '.md'), 'w').write('mem
 PY
 exit 3
 S
+# 假的 codex：记下参数和环境；features list / --help / --version 给 cca 探测参数；app-server 交给 fake_codex_server.py
+# （登录、查用量）；logout 删掉 auth.json；login 是 cca 退回 codex login 时的登录（直接写 auth.json）；其余当作一次会话：
+# 像真的 codex 那样写 CODEX_HOME 里的文件和会话库，退出码 3。codex_noflags：这个版本不认识 cca 要关的两个开关
+cat > "$T/bin/codex" <<'S'
+#!/bin/bash
+LOG="$CCA_T/codex.log"
+echo "ARGS: $*" >> "$LOG"
+echo "ENV: CODEX_HOME=${CODEX_HOME-unset} CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} OPENAI_API_KEY=${OPENAI_API_KEY-unset} OPENAI_BASE_URL=${OPENAI_BASE_URL-unset} CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN-unset} CODEX_API_KEY=${CODEX_API_KEY-unset} CODEX_CA_CERTIFICATE=${CODEX_CA_CERTIFICATE-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
+args=("$@"); i=0
+while [ $i -lt ${#args[@]} ]; do   # 跳过 cca 加在前面的全局参数
+	case "${args[$i]}" in
+		--no-daemon) i=$((i + 1)) ;;
+		--disable|--enable|-c)
+			if [ "${args[$i]}" = --disable ] && [ -f "$CCA_T/codex_noflags" ]; then echo "Error: Unknown feature flag: ${args[$((i + 1))]}" >&2; exit 1; fi
+			i=$((i + 2)) ;;
+		*) break ;;
+	esac
+done
+sub="${args[$i]:-}"
+[ $i -gt 0 ] && case "$sub" in --version|--help) sub=session ;; esac   # 前面带着 cca 的参数：是启动会话（参数原样交给 codex），不是 cca 在探测
+case "$sub" in
+	--version) echo "codex-cli 0.161.0"; exit 0 ;;
+	--help) echo "      --no-daemon"; echo "          Run without the shared background server"; exit 0 ;;
+	features)
+		echo "FEATURES ${args[*]:$((i + 1))} @ $CODEX_HOME" >> "$LOG"
+		case "${args[$((i + 1))]:-}" in
+			list)
+				echo "daemon_auto_start                        stable             true"
+				[ -f "$CCA_T/codex_noflags" ] || printf '%s\n' "respect_system_proxy                     under development  false" "system_proxy_fallback                    stable             true" ;;
+			disable)   # 像真的 codex：顺着链接写回原文件（临时文件 + 改名，放在原文件旁边）
+				python3 - "$CODEX_HOME/config.toml" "${args[$((i + 2))]}" <<'PY'
+import os, sys
+p = os.path.realpath(sys.argv[1]); s = open(p).read() if os.path.exists(p) else ''
+s += ('' if s.endswith('\n') or not s else '\n') + '\n[features]\n%s = false\n' % sys.argv[2]
+open(p + '.tmp', 'w').write(s); os.replace(p + '.tmp', p)
+PY
+				;;
+		esac
+		exit 0 ;;
+	app-server) exec python3 "$CCA_T/fake_codex_server.py" ;;
+	logout) echo "LOGOUT $CODEX_HOME" >> "$LOG"; rm -f "$CODEX_HOME/auth.json"; exit 0 ;;
+	login) echo "LOGIN-CLI $CODEX_HOME" >> "$LOG"; python3 "$CCA_T/fake_codex_server.py" --write-auth; exit 0 ;;
+esac
+# 第三方 API 账号：像 codex 一样执行 -c model_providers.cca={…} 里 auth 的 command + args 取 key（写进 codex.key，不进日志）
+prov=""; prev=""
+for a in "$@"; do [ "$prev" = -c ] && case "$a" in model_providers.cca=*) prov="${a#model_providers.cca=}" ;; esac; prev="$a"; done
+if [ -n "$prov" ]; then
+	python3 - "$prov" "$CCA_T" >> "$LOG" <<'PY'
+import json, re, subprocess, sys
+s, t = sys.argv[1], sys.argv[2]
+cmd = json.loads(re.search(r'command = ("(?:[^"\\]|\\.)*")', s).group(1))
+args = json.loads('[' + re.search(r'args = \[(.*?)\]', s).group(1) + ']')
+print('PROVIDER: base_url=%s wire_api=%s' % (json.loads(re.search(r'base_url = ("(?:[^"\\]|\\.)*")', s).group(1)), re.search(r'wire_api = "(\w+)"', s).group(1)))
+r = subprocess.run([cmd] + args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+open(t + '/codex.key', 'w').write(r.stdout)
+print('AUTHCMD: rc=%d' % r.returncode)
+PY
+fi
+# 当作一次会话
+python3 - "$CODEX_HOME" "${CODEX_SQLITE_HOME:-$CODEX_HOME}" "${CCA_ACCOUNT:-x}" <<'PY'
+import json, os, sqlite3, sys, time, uuid
+home, dbhome, acct = sys.argv[1:4]
+tag = acct.split('(')[-1].split('@')[0].strip(')')
+def atomic(p, text):   # 像 codex 改 config.toml：顺着链接，在原文件旁边写临时文件再改名
+    p = os.path.realpath(p); open(p + '.tmp', 'w').write(text); os.replace(p + '.tmp', p)
+cfg = os.path.join(home, 'config.toml')
+atomic(cfg, (open(cfg).read() if os.path.exists(cfg) else '') + '# touched by %s\n' % tag)
+open(os.path.join(home, 'history.jsonl'), 'a').write(json.dumps({'text': 'hi from ' + tag}) + '\n')
+idx = os.path.join(home, 'session_index.jsonl')   # 像 codex delete：整个重写再改名（不顺着链接，会把链接换成普通文件）
+lines = open(idx).read().splitlines() if os.path.exists(idx) else []
+open(idx + '.tmp', 'w').write('\n'.join(lines + [json.dumps({'id': tag, 'thread_name': 'from ' + tag})]) + '\n'); os.replace(idx + '.tmp', idx)
+tid = str(uuid.uuid4())
+d = os.path.join(home, 'sessions', '2026', '11', '03'); os.makedirs(d, exist_ok=True)
+rollout = os.path.join(d, 'rollout-%s.jsonl' % tid); open(rollout, 'w').write('{}\n')
+for n, v in (('installation_id', str(uuid.uuid4())), ('models_cache.json', '{}')):
+    if not os.path.exists(os.path.join(home, n)):
+        open(os.path.join(home, n), 'w').write(v)
+os.makedirs(os.path.join(home, 'worktrees', tag), exist_ok=True)
+os.makedirs(os.path.join(home, 'skills', 'from-' + tag), exist_ok=True)
+con = sqlite3.connect(os.path.join(dbhome, 'state_5.sqlite'))
+con.execute('CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, title TEXT)')
+con.execute('INSERT INTO threads VALUES (?, ?, ?)', (tid, rollout, tag)); con.commit(); con.close()
+PY
+exit 3
+S
+# 假的 codex app-server（JSON-RPC，一行一个 JSON）：initialize；account/login/start 回登录网址，等 cca 在账号的浏览器里
+# 打开它（出现在 open.log 里）就当用户登录完了，写 auth.json（假的 id_token，邮箱默认取 CCA_ACCOUNT 里的，
+# 一次性的 codex_login_as 模拟登错号）；account/rateLimits/read 按登录的邮箱回 codex_usage/<邮箱>.json。
+# codex_rpc_off：不支持 app-server；codex_usage/unsupported、hang：不支持查用量、卡住
+cat > "$T/fake_codex_server.py" <<'S'
+import base64, json, os, re, sys, time
+t, home = os.environ['CCA_T'], os.environ.get('CODEX_HOME', '')
+def log(s):
+    open(os.path.join(t, 'codex.log'), 'a').write(s + '\n')
+def b64(d):
+    return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
+def email_now():
+    try:
+        tok = json.load(open(os.path.join(home, 'auth.json')))['tokens']['id_token'].split('.')[1]
+        return json.loads(base64.urlsafe_b64decode(tok + '=' * (-len(tok) % 4)))['email']
+    except Exception:
+        return ''
+def write_auth():
+    p = os.path.join(t, 'codex_login_as')
+    if os.path.exists(p):
+        email = open(p).read().strip(); os.remove(p)
+    else:
+        a = os.environ.get('CCA_ACCOUNT', '')
+        m = re.search(r'\(([^()]+@[^()]+)\)$', a)
+        email = m.group(1) if m else (a if '@' in a else 'someone@example.com')
+    claims = {'email': email, 'https://api.openai.com/auth': {'chatgpt_plan_type': 'plus', 'chatgpt_account_id': 'ws-' + email}}
+    auth = {'auth_mode': 'chatgpt', 'OPENAI_API_KEY': None, 'last_refresh': '2026-11-03T00:00:00Z',
+            'tokens': {'id_token': '%s.%s.sig' % (b64({'alg': 'none'}), b64(claims)), 'access_token': 'at-SECRET', 'refresh_token': 'rt-SECRET', 'account_id': 'ws-' + email}}
+    json.dump(auth, open(os.path.join(home, 'auth.json'), 'w'))
+    log('LOGIN %s @ %s' % (email, home))
+if '--write-auth' in sys.argv:
+    write_auth(); sys.exit(0)
+log('APPSERVER: CODEX_HOME=%s https_proxy=%s NO_PROXY=%s' % (home, os.environ.get('https_proxy', 'unset'), os.environ.get('NO_PROXY', 'unset')))
+if os.path.exists(os.path.join(t, 'codex_rpc_off')):
+    sys.stderr.write("error: unrecognized subcommand 'app-server'\n"); sys.exit(2)
+def send(m):
+    print(json.dumps(m), flush=True)
+for line in sys.stdin:
+    try:
+        m = json.loads(line)
+    except ValueError:
+        continue
+    meth, rid = m.get('method'), m.get('id')
+    if meth == 'initialize':
+        log('RPC initialize client=%s' % m['params']['clientInfo']['name']); send({'id': rid, 'result': {'userAgent': 'x'}})
+    elif meth == 'initialized':
+        pass
+    elif meth == 'account/login/start':
+        url = 'https://auth.openai.com/oauth/authorize?client_id=app_x&state=s%d' % os.getpid()
+        send({'id': rid, 'result': {'type': 'chatgpt', 'loginId': 'L1', 'authUrl': url}})
+        for _ in range(100):   # 等 cca 在账号的浏览器里打开登录页
+            if os.path.exists(os.path.join(t, 'open.log')) and url in open(os.path.join(t, 'open.log')).read():
+                break
+            time.sleep(0.1)
+        else:
+            send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': False, 'error': 'browser never opened'}}); continue
+        write_auth()
+        send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': True, 'error': None}})
+    elif meth == 'account/rateLimits/read':
+        u = os.path.join(t, 'codex_usage')
+        log('RPC rateLimits email=%s https_proxy=%s' % (email_now() or '-', os.environ.get('https_proxy', 'unset')))
+        if os.path.exists(os.path.join(u, 'hang')):
+            time.sleep(60)
+        if os.path.exists(os.path.join(u, 'unsupported')):
+            send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found: account/rateLimits/read'}}); continue
+        p = os.path.join(u, email_now() + '.json')
+        if not email_now():
+            send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required'}})
+        elif os.path.exists(p):
+            send({'id': rid, 'result': json.load(open(p))})
+        else:
+            send({'id': rid, 'result': {'rateLimits': {'limitId': 'codex', 'primary': None, 'secondary': None, 'planType': 'free'}}})
+    elif rid is not None:
+        send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found'}})
+S
+# 假的 ChatGPT App（Codex 桌面版，只用到 Info.plist 里的图标名和图标文件）
+mkdir -p "$T/ChatGPT.app/Contents/Resources" "$T/ChatGPT.app/Contents/MacOS"
+plutil -create xml1 "$T/ChatGPT.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string app "$T/ChatGPT.app/Contents/Info.plist" &&
+	plutil -insert CFBundleIdentifier -string com.openai.codex "$T/ChatGPT.app/Contents/Info.plist"
+cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns "$T/ChatGPT.app/Contents/Resources/app.icns" 2>/dev/null ||
+	printf 'fake-icns' > "$T/ChatGPT.app/Contents/Resources/app.icns"
+# 假 ~/.codex：共享的配置、会话、技能；还有不该被链接进账号目录的（登录、installation_id、桌面 App 的运行状态）
+X="$H/.codex"; mkdir -p "$X"/{sessions,skills/s1,rules,automations,browser}
+printf 'model = "gpt-5"\nnotify = ["notify-send"]\n\n[mcp_servers.m1]\ncommand = "x"\n' > "$X/config.toml"
+echo "# codex global instructions" > "$X/AGENTS.md"
+printf '%s\n' '{"text":"old codex 1"}' > "$X/history.jsonl"
+echo "skill" > "$X/skills/s1/SKILL.md"
+echo "allow" > "$X/rules/default.rules"
+echo '{"tokens":{"id_token":"master"}}' > "$X/auth.json"; echo master-install > "$X/installation_id"
+echo '{}' > "$X/.codex-global-state.json"
 # --- 假的 Clash Verge（Rev）：数据目录里的 profiles.yaml、全局扩展脚本、运行配置（节点同名，但没有 US-D）
 V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"
 mkdir -p "$V/profiles" "$T/verge/groups" "$T/verge/sel"

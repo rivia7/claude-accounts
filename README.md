@@ -1,19 +1,21 @@
-# cca：一台 Mac 同时用多个 Claude 账号
+# cca：一台 Mac 同时用多个 Claude、Codex 账号
 
-有好几个 Claude 账号（比如个人号和工作号）？cca 让它们在同一台 Mac 上各用各的：
+有好几个 Claude 账号（比如个人号和工作号）？cca 让它们在同一台 Mac 上各用各的（OpenAI 的 Codex 也一样，见「Codex 账号」一节）：
 
 - **各自登录**：每个账号单独登录、互不影响，切换账号不用退出重登。
 - **各走各的网络**：每个账号的流量从你指定的代理节点出去，出口 IP 固定，不会混用。在家走路由器；出门在外连不上路由器时，自动改走 Mac 上的 Clash 客户端（例如 Clash Verge）。
 - **其余共用**：对话记录、记忆、设置、插件、技能、MCP 等，所有账号共用一份。在一个账号里配好的东西，换个账号照样能用。
 - **一眼看清用量**：`cca usage` 列出每个账号的 5 小时、本周额度用了多少、什么时候重置，挑个还有余量的账号接着干。
 - **第三方 API 也能当账号用**：兼容 Anthropic 接口的服务（填地址和 key），和官方账号一起出现在菜单里，可以直连，也可以走节点。
+- **Codex 也能多账号**：`cca codex` 管 ChatGPT 账号的 Codex（命令行和 ChatGPT 桌面 App），同样各自登录、各走各的出口、其余共用 `~/.codex`。
 
-终端里的 Claude Code（`claude` 命令）、网页版 claude.ai 和 Claude 的 Mac 桌面 App 都支持（第三方 API 账号只用于 Claude Code）。
+终端里的 Claude Code（`claude` 命令）、网页版 claude.ai 和 Claude 的 Mac 桌面 App 都支持（第三方 API 账号只用于 Claude Code）。Codex 那边支持 `codex` 命令、网页版 chatgpt.com 和 ChatGPT 桌面 App（Codex 的第三方 API 账号只用于 `codex` 命令）。
 
 ## 需要准备什么
 
 - 一台 Mac
 - 装好 Claude Code（没装的话先运行 `curl -fsSL https://claude.ai/install.sh | bash`）
+- 用 Codex 的话：装好 `codex` 命令（npm、Homebrew 或 OpenAI 的安装脚本都行，cca 会在 PATH、`~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找）；要用桌面版的话装好 ChatGPT App
 - Google Chrome（登录和网页版都用它）
 - 局域网里有一台装了 **OpenClash** 的 OpenWrt 路由器（常说的"旁路由"），开着 SSH，你知道它的 IP 和 root 密码（只用直连的第三方 API 账号的话不需要，见「第三方 API 账号」一节）
 - 出门在外也要用的话：Mac 上装 **Clash Verge**（或其它基于 mihomo 的 Clash 客户端），里面有和路由器上同名的节点
@@ -73,6 +75,8 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 检查每个账号的出口 IP | `cca check` |
 | 出门在外：配置本机的 Clash 客户端（第一次在外面启动时也会问） | `cca local setup` |
 | 看现在走路由器还是本机 Clash | `cca local` |
+| 退出某个账号的登录、重新登录 | `cca login 工作` |
+| Codex：选账号启动 / 直接启动 / 添加账号 / 查用量 | `cca codex` / `cca codex @工作` / `cca codex add` / `cca codex usage` |
 | 查看全部命令 | `cca help` |
 
 ## 账号表
@@ -141,6 +145,29 @@ cca add api
 - 改别名不影响它的 key 和配置（cca 按 `id` 认账号，改别名时别动 `id`）。
 - 记忆、对话记录、设置、技能等照样和官方账号共用：在一个账号里聊到一半，可以换到另一个账号 `claude --resume` 接着聊。
 
+## Codex 账号
+
+OpenAI 的 Codex（`codex` 命令和 ChatGPT 桌面 App）也能多账号，用法和 Claude 账号一样，只是前面加个 `codex`：
+
+```sh
+cca codex add          # 添加 Codex 账号：填登录邮箱、别名（可选），选出口节点
+cca codex              # 选账号启动 codex（cca codex @工作 直接启动，后面的参数原样交给 codex）
+cca codex usage        # 查各账号的 5 小时、每周额度
+```
+
+- **账号表分开记**：Codex 账号记在 `~/.cca/codex.json`，格式和 `accounts.json` 一样。同一个人的 Claude 号和 ChatGPT 号可以用同一个别名、同一个邮箱，`cca @工作` 启动 Claude，`cca codex @工作` 启动 Codex。两种账号共用路由器（或本机 Clash）上的同一组端口，每个账号还是一个端口、一个出口。
+- **各自登录**：每个账号有自己的 `CODEX_HOME`（`~/.cca/codex/accounts/…/codex`），登录凭证（`auth.json`）只在这里。第一次启动时，cca 让 codex 生成登录网址，在**这个账号专属的 Chrome 窗口**里打开，整个登录都走这个账号的出口；登录网址里会带上账号的邮箱（`login_hint`，OpenAI 的登录页认的话会预填），登录后 cca 还会核对邮箱，登成别的号就不启动。要换登录用 `cca codex login 工作`。你原来 `~/.codex` 里的登录不受影响，直接敲 `codex` 用的还是它。
+- **其余共用**：`~/.codex` 里的 `config.toml`、`AGENTS.md`、会话记录、历史、技能、规则、提示词、插件、记忆等，所有账号共用一份；会话和记忆的数据库也共用（`CODEX_SQLITE_HOME` 指向 `~/.codex`），在一个账号里开的会话，换个账号 `codex resume` 照样能接着聊。
+- **不共用的**：登录凭证、`installation_id`（codex 每个请求都带着它，共用会把几个账号关联起来）、按账号缓存的模型列表和应用列表、日志、`codex` 自己装在 `packages/` 里的程序，以及 git 工作树（`worktrees/`，macOS 的沙箱不让它的路径里有链接）。ChatGPT 桌面 App 放在 `~/.codex` 里的运行状态（自动化任务、内置浏览器等）也各账号一份。
+- **出口不会悄悄换**：cca 启动 codex 时关掉它的两个开关：`system_proxy_fallback`（连不上代理时改走 macOS 的系统代理）和 `respect_system_proxy`（系统代理优先）；也不让它挂到常驻的后台进程上（`--no-daemon`，那个进程的代理在它启动时就定死了）。代价是在 cca 启动的 Codex 里用不了靠后台进程的功能（例如 `codex agents`）。
+- **查用量**：`cca codex usage [账号] [--json]` 经每个账号自己的出口，让 codex 自己去查（和它的 `/status` 一样，不发消息、不耗额度），显示 5 小时、本周额度、单独计的额度和 credits 余额；菜单里也附上最近一次的。`cca usage` 只查 Claude 账号。
+- **第三方 API**：`cca codex add api` 添加兼容 OpenAI **Responses 接口**（`/v1/responses`）的服务，填地址（例如 `https://api.example.com/v1`）、key、模型。key 存在钥匙串里（条目名 `cca-codex-api-…`），启动时由 codex 的 `auth.command` 回调 cca 现取，不出现在命令行参数和环境变量里；地址和模型经 `-c` 交给 codex。只提供 Chat Completions 接口的服务用不了。
+- **ChatGPT App（Codex 桌面版）**：`cca codex app 工作`，或者在启动台、聚焦搜索里点「ChatGPT 工作」。每个账号一份资料目录，用这个账号的 `CODEX_HOME`（和 `cca codex @工作` 同一份登录），整个 App 走这个账号的出口。App 自己启动 codex 时 cca 加不了参数，所以第一次打开时会征求你同意，用 Codex 自带的 `codex features disable system_proxy_fallback` 在共享的 `~/.codex/config.toml` 里关掉回退到系统代理（之后直接敲 `codex` 也不再回退）。没登录时先在账号专属的 Chrome 里登录，App 打开时就是登录状态。如果 App 里还要你登录（比如登录过期了），别在 App 里登：它的登录页会在系统默认浏览器里打开，那一次不经账号的出口；关掉 App，运行 `cca codex login 工作`，再打开 App。
+- **其它命令**：`cca codex ls`、`edit`、`check`、`web`（用账号专属的浏览器打开 chatgpt.com）、`key`（换第三方 API 账号的 key），和 Claude 账号的同名命令一样。
+- **删除**：`cca codex rm 工作` 退出登录、删掉账号目录（包括它的 git 工作树，删之前会提醒）；它开过的会话留在 `~/.codex` 里，cca 平时就把会话库里的路径写成 `~/.codex` 下的，删了账号也找得到。
+
+启动前同样会检查：出口地区和纯净度（看 chatgpt.com 看到的 IP）；shell 里继承的 `OPENAI_*`、`CODEX_*`（例如会直接顶替登录的 `CODEX_ACCESS_TOKEN`）一律不带进去，只留公司网络根证书 `CODEX_CA_CERTIFICATE`；共享的 `~/.codex/config.toml` 里如果写了 `chatgpt_base_url`、`openai_base_url`、`experimental_realtime_ws_base_url`、`experimental_realtime_webrtc_call_base_url`、不是 `openai` 的 `model_provider`、不是 `file` 的 `cli_auth_credentials_store`、`forced_chatgpt_workspace_id`、`forced_login_method = "api"`、打开了 `respect_system_proxy`（包括 `profile` 选中的那一节），或者 `~/.codex/.env` 里写了代理、`OPENAI_*`，cca 会拒绝启动并指出来。
+
 ## Claude App（桌面版）
 
 Claude 的 Mac 桌面 App 也能每个账号开一份：
@@ -204,9 +231,23 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 不用管它。cca 每天会在后台检查一次新版本，下载好之后，在下一次启动时自动换上。
 
-- 只会安装带有效签名的正式版本，被篡改的文件不会装。
+- 只会安装带有效签名的正式版本，被篡改的文件不会装，测试版也不会自动装。
 - 新版本有问题：`cca update --rollback` 退回上一版。
 - 立即更新：`cca update`；只提示、不自动装：`cca update notify`；完全关闭：`cca update off`。
+
+### 测试版
+
+新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
+
+- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.1`
+- 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
+
+  ```sh
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.1/install.sh | bash -s 2.6.0-beta.1
+  ```
+
+- 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。
+- 装了测试版之后，不会自动更新到别的测试版；出了更新的正式版（比如 2.6.0）时照常自动更新。
 
 ## 卸载
 
@@ -214,7 +255,7 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号退出登录，并删除钥匙串里的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉；最后删除本机的 cca 和各账号的 Claude App 启动器（删除前会把配置打包备份到你的主目录）。你原来的 `~/.claude`（对话记录、设置等）不受影响。卸载前先退出各账号的 Claude App。
+撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉；最后删除本机的 cca 和各账号的 App 启动器（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
@@ -223,6 +264,9 @@ cca restore
 
 **cca 会碰我的 Claude 登录凭证吗？**
 不会。登录完全走官方的 `claude auth login`，凭证由 Claude Code 自己存进 macOS 钥匙串；cca 不读取、不保存，也不转发任何登录凭证。`cca usage` 查用量也是让 Claude Code 自己去查。
+
+**Codex 的登录凭证呢？**
+登录、刷新都由 codex 自己完成，凭证由它写进账号目录里的 `auth.json`。cca 只从里面的 id_token 读出邮箱、套餐和工作空间 ID（核对登录的是不是这个账号），不碰真正用来访问的 access / refresh token，也不保存、不转发。
 
 **第三方 API 的 key 存在哪？**
 默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
@@ -249,6 +293,7 @@ cca restore
 - **网页版**：每个账号有一个专属的 Chrome 窗口（独立的浏览器资料，走同一个端口），所以网页版和 Claude Code 的出口一致。
 - **用量**：cca 以账号的配置目录、经账号的端口无界面地启动 Claude Code（`--safe-mode`，不加载插件、hooks、MCP），发一个 `get_usage` 控制请求，拿到和 `/usage` 一样的数据；登录 token 的读取和刷新都由 Claude Code 自己完成。
 - **第三方 API 账号**：接口地址、模型经 `claude --settings` 传入（优先级高于共享的 settings.json），key 由 `apiKeyHelper` 回调 cca 从钥匙串取，不进环境变量。
+- **Codex**：每个账号一个 `CODEX_HOME`，`~/.codex` 里白名单上的条目链接进去（白名单以外的默认各账号一份，新版本 Codex 加了文件也不会误共享）；数据库经 `CODEX_SQLITE_HOME` 共用。登录和查用量都经 codex 自己的 app-server（`account/login/start`、`account/rateLimits/read`），报的客户端名和 `codex login` 一样。
 - **路由器端**：改动放在 `/etc/cca`，通过 OpenClash 的"覆写脚本"注入；每 2 分钟自检一次，刷固件时保留。
 - **出门在外**：本机的端口池和路由器上的一样（127.0.0.1:7901 起，每个端口一个策略组），写在 Clash Verge 的全局扩展脚本里，它每次重新生成配置都会带上；cca 经它内核的控制接口切换节点，第一次配置时把端口池直接热加载进正在运行的内核。
 

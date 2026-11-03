@@ -1,11 +1,11 @@
 # CLAUDE.md
 
-`cca` 按 GitHub Releases 分发，是单个签名文件：bash 3.2 主体 + 内嵌 Python 辅助（`PY_SRC`，由 `py` 以 `-I -X utf8` 运行）+ 路由器端 busybox ash（`router_sh`）和 ruby（`router_rb`）。新功能也写进这个文件。
+`cca` 按 GitHub Releases 分发，是单个签名文件：bash 3.2 主体 + 内嵌 Python 辅助（`PY_SRC`，由 `py` 以 `-I -X utf8` 运行）+ 路由器端 busybox ash（`router_sh`）和 ruby（`router_rb`）。新功能也写进这个文件。管两种工具的账号：Claude Code（`cca …`）和 Codex（`cca codex …`）。
 
 ## 命令
 - `bash tests/regress.sh` — 全流程回归，约 2 分钟；全用假的路由器/claude/curl/ssh/GitHub，不联网、不碰真实 `~/.cca`；`KEEP=1` 保留沙箱；只能在 macOS 上跑（BSD sed、/bin/dash、ruby）
 - `bash -n cca && bash -n install.sh` — 快速语法检查
-- `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、打 tag、推送，发布 cca、cca.sig、install.sh
+- `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、打 tag、推送，发布 cca、cca.sig、install.sh。`VERSION` 写成 `X.Y.Z-beta.N` 时发成测试版（GitHub pre-release、不设为 Latest）：`releases/latest` 不指向它，自动更新和一键安装都不装，只能 `cca update X.Y.Z-beta.N` 或 `install.sh` 后面跟版本号手动装；版本比较里同号的测试版比正式版旧（`ver_gt`）
 
 ## 约定和坑
 - 非 ASCII 字符前的变量一律写 `${VAR}`：macOS bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名（回归里有 lint）
@@ -14,7 +14,7 @@
 - 替换已安装的脚本只能用 `mv`：bash 边读边执行，原地覆盖会让正在运行的 cca 读到半截代码
 - 改了 `router_sh`/`router_rb` 会改变同步摘要，已安装的机器下次启动会自动重新部署路由器端
 - 账号身份按邮箱（`acct_id`）；账号表的键是 `别名(邮箱)`，改别名不能影响登录目录和端口
-- 账号表的值是字符串（官方账号，值是节点）或对象（第三方 API 账号：`base_url`/`model`/`node`/`env`/`key`/`id`）。读值一律用 `is_api`/`node_of`，不要假设是节点字符串；`c['ports']` 里只有走节点的账号（直连的 API 账号没端口），要端口时用 `routed(c, t)`。第三方 API 账号按 `id` 认（`API_IDS`，派发子命令前 `load_ids()` 读好；config.json 的 `api_ids` 记着上次的 键 → 账号目录名，改几次别名端口和"上次使用"都认得出），改别名时目录、key、端口不变
+- 账号表的值是字符串（官方账号，值是节点）或对象（第三方 API 账号：`base_url`/`model`/`node`/`env`/`key`/`id`，Codex 的没有 `env`）。读值一律用 `is_api`/`node_of`，不要假设是节点字符串；端口表（`T.state(c)['ports']`）里只有走节点的账号（直连的 API 账号没端口），要端口时用 `routed(c, t, tool)`，跨工具用 `pool(c)`。第三方 API 账号按 `id` 认（各工具的 `tool.ids`，派发子命令前 `load_ids()` 读好；config.json 的 `api_ids` 记着上次的 键 → 账号目录名，改几次别名端口和"上次使用"都认得出；跨工具时用 `acct_id(key, tool)`），改别名时目录、key、端口不变
 - 只有官方账号的账号表，`router_accounts` 的输出必须和以前逐字节一样：否则所有已安装的机器升级后都会重新部署路由器端
 - 密钥绝不进任何进程的命令行和环境变量：存钥匙串用 `security -i` 从 stdin 读命令、`-X` 十六进制（`-i` 里的命令失败也返回 0，必须读回来比对；只收可见 ASCII，否则 `-w` 输出十六进制）；交给 Claude Code 用 `--settings` 里的 `apiKeyHelper`（回调 `cca _api-key <账号目录名>`，只给账号表里现有的账号），地址和模型也放在这份 `--settings` 的 env 里（优先级高于共享 settings.json 和进程环境；第二个 `--settings` 会把它整个顶掉）。env 会出现在命令行上，所以像密钥的变量名（`ENV_SECRETISH`）不收
 - 钥匙串里第三方 API 的 key：服务名 `cca-api-<账号目录名>`，账户名是接口的域名（换服务商就取不到旧 key）。代码里叫 secret（`secret-*` 子命令），免得和账号表的"键"混了。cca 存过的记在 config.json 的 `api_keys`，`secrets-forget` 据此清掉已经不在账号表里的（`cca edit` 之后、每次启动、`cca restore` 时全部清）
@@ -30,6 +30,16 @@
 - 出门在外（连不上路由器）走本机 Clash：Clash Verge 的 Merge 会整个替换列表，所以端口池写进全局扩展脚本（包住用户的 main）；生效靠 `PUT /configs` 热加载它当前的运行配置（文本插入，不重写），不重启 Clash Verge。它的内核控制接口默认只有 Unix socket（运行配置里的 `external-controller-unix`）
 - 在外面不连路由器：路由器同步留到回家后的下次启动（摘要对不上会自动补）；`at_home` 只探测 1 秒
 
+## 两种工具（Claude / Codex）
+- 工具差异集中在两处：PY_SRC 的 `Tool`（Claude，取值和只支持 Claude 时一样）/ `CodexTool`，按 `CCA_TOOL` 选出 `T`；bash 的 `TOOL`（`use_tool codex` 切换，账号表、命令前缀 `CMD`、文案变量由 `py tool-env` 给，`py` 自动带上 `CCA_TOOL`），不同的步骤写成成对的 `claude_xxx` / `codex_xxx`，用 `tool xxx` 调用。`cca codex <子命令>` 复用同一套 `dispatch`；提示里的命令前缀用 `${CMD}`。再加工具：照 `CodexTool` 加子类、补同名前缀的函数，再查一遍只是文案不同的 `case "$TOOL"` / `[ "$TOOL" = codex ]`（添加账号的问答、`cmd_key`、`cmd_rm`、`settings_warn` 等）和 `cmd_restore` 里的 `for t in claude codex`
+- Codex 账号表是 `~/.cca/codex.json`（格式同 accounts.json），账号目录在 `~/.cca/codex/accounts/<acct_id>/`（`acct_id` 算法不变，同一个邮箱的 Claude 账号不会撞），config.json 里它的 ports / last / api_ids / api_keys 放在 `"codex"` 子对象（空了 `cfg_clean` 会删掉）。读写这些一律经 `T.state(c)`，不要直接碰 `c['ports']`
+- 两张表共用一个端口池：`reconcile_all` 一起对账（各自已有的端口不动，新端口避开对方的），`pool(c)` 先 Claude 后 Codex。路由器和本机 Clash 的端口池、摘要都按 `pool`；只有 Claude 账号时输出必须和以前逐字节一样（回归里有 accounts.yaml 的固定对照）。钥匙串前缀 `cca-codex-api-`、路由器账号名前缀 `codex-`、启动器「ChatGPT 别名」（bundle id `local.cca.launcher.codex.…`，标记里带 `"tool": "codex"`；各工具的启动器同步只动自己的）
+- `CODEX_HOME` 共享是白名单（`CODEX_SHARED`），不是 Claude 那样的黑名单：~/.codex 里有登录、按账号的缓存、installation_id、桌面 App 和后台进程的状态，新文件默认不共享才安全。`worktrees/`、`visualizations/` 是 macOS 沙箱的可写目录，路径里不能有链接。数据库不靠链接：`CODEX_SQLITE_HOME` 指向 ~/.codex；会话库 threads 表里经账号目录的 `rollout_path` 每次 `py link` 都改写成 ~/.codex 下的（`codex_fix_rollouts`），否则删账号后会话从 `codex resume` 的全部列表里消失
+- 启动 codex 一律加 `--no-daemon` 和关掉 `system_proxy_fallback`、`respect_system_proxy` 的 `--disable`（都会让请求换出口）；codex 不认识的开关会直接报错，所以按 codex 程序文件缓存探测结果（`codex_probe`，`~/.cca/codex/probe.json`），只加它认识的。ChatGPT App 自己启动 codex，只能征得同意后用 `codex features disable system_proxy_fallback` 写进共享的 config.toml
+- Codex 登录和查用量都经 codex 自己的 app-server（`Rpc`：`account/login/start` 拿到网址后回调 `cca _browser` 在账号的 Chrome 里开，`cmd_login_url` 按 `T.login_hosts` 补 `login_hint`；`account/rateLimits/read`），客户端名用 `codex_cli_rs`（和 `codex login` 一样，登录页认这个 originator）。登录身份只从 auth.json 的 id_token 读邮箱/套餐/工作空间（`codex_claims`），不碰 access/refresh token
+- Codex 子进程不带继承来的 `CODEX_*`、`OPENAI_*`（`CODEX_INHERITED_RE`，只留 `CODEX_CA_CERTIFICATE`）；共享 config.toml / .env 里会串号的设置见 `codex_settings_problems`（没有 tomllib，`toml_entries` 是粗扫描）。Codex 新增会改地址、换凭证的设置或环境变量时两边一起补
+- Codex 的第三方 API 账号只能用 Responses 接口：`-c model_provider="cca"` + `-c model_providers.cca={…auth={command=cca, args=["_api-key","codex",账号目录名]}}`，key 不进命令行；没有 `env` 字段
+
 ## 测试写法
 - 交互流程：`CCA_TTY="$(ans 答案1 答案2 …)"`，一行一个答案
 - 方向键菜单和 readline 输入要在真 pty 里测：`script -q 日志 bash 驱动脚本`，配合定时输入
@@ -41,3 +51,4 @@
 - 第三方 API：假 `curl` 对 `https://api*.example.com/*` 回 401（直连记 `CURL api direct`），`touch "$T/api_down"` 连不上；假 `claude` 遇到 `--settings` 记下 `SETTINGS: env=…`，并像 Claude Code 一样执行 apiKeyHelper，取到的 key 写进 `$T/claude.key`（不进日志）
 - 用量：假 `claude` 的 stream-json 分支是 `$T/fake_usage.py`，按登录的邮箱回 `$T/usage/<邮箱>.json`（`canned` 生成），`$T/usage/unsupported`、`$T/usage/hang` 模拟不支持和卡住；`$T/loc/<端口>` 改 claude.ai trace 里的出口地区
 - 菜单行很宽：要看行尾的内容时用 `run COLUMNS=160 …`（`tput cols` 认 `COLUMNS`）
+- Codex：假 `codex` 把参数和环境记在 `$T/codex.log`（`ARGS:` / `ENV:`），前面带 cca 的参数时是启动会话（模拟写 CODEX_HOME 和会话库，退出码 3）；`app-server` 由 `$T/fake_codex_server.py` 扮演，登录时等登录网址出现在 open.log 里再写 auth.json（邮箱取 `CCA_ACCOUNT`，一次性的 `$T/codex_login_as` 模拟登错号），用量回 `$T/codex_usage/<邮箱>.json`（`unsupported`、`hang` 同 Claude）；`$T/codex_rpc_off` 模拟不支持 app-server，`$T/codex_noflags` 模拟不认识那两个开关（记得删 `~/.cca/codex/probe.json`）；假 ChatGPT App 用 `CCA_CODEX_APP`

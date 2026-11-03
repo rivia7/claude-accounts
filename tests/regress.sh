@@ -1,6 +1,6 @@
 #!/bin/bash
 # 全流程回归：端口池（槽位 + 策略组，API 切换不重载）、重载需同意、账号表、出口检测、登录校验、第三方 API 账号、
-# 订阅用量、自动更新、还原
+# 订阅用量、Codex 账号、自动更新、还原
 # 用法：bash tests/regress.sh（只在 macOS 上跑；全部用假命令，不联网、不碰真实的 ~/.cca 和路由器）
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
@@ -8,12 +8,12 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T
 trap '[ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
 ok() { if eval "$2"; then echo "PASS  $1"; pass=$((pass + 1)); else echo "FAIL  $1   [$2]"; fail=$((fail + 1)); fi; }
-edit_table() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); $1; json.dump(j,open(p,'w'),indent=2,ensure_ascii=False)" "$H/.cca/accounts.json"; }
+edit_table() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); $1; json.dump(j,open(p,'w'),indent=2,ensure_ascii=False)" "${2:-$H/.cca/accounts.json}"; }   # [账号表]
 RC="$R/etc/openclash/custom.yaml"
 nl_() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); print((c["listeners"]||[]).count { |l| l["name"].start_with?("cca-") })' "$RC"; }
 first() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); g=(c["proxy-groups"]||[]).find { |x| x["name"]==ARGV[1] }; print(g ? g["proxies"][0] : "-")' "$RC" "$1"; }
@@ -26,6 +26,12 @@ ok "install：从路由器的节点里选可选节点" 'python3 -c "import json,
 ok "install：建端口池前先问，提示重载约 20 秒" 'printf "%s" "$out" | grep -q "约 20 秒，期间局域网的新连接会中断"'
 ok "install：8 个槽位 7901-7908，CCA-1 默认 US-A，空槽位默认 REJECT" '[ "$(nl_)" = 8 ] && [ "$(first CCA-1)" = US-A ] && [ "$(first CCA-8)" = REJECT ] && [ "$(sel CCA-1)" = US-A ]'
 ok "install：只重载了一次" '[ "$(reloads)" = 1 ]'
+python3 - > "$T/accounts.golden" <<'PY'
+import hashlib, json
+n = 'alice-example-com-' + hashlib.sha1(b'alice@example.com').hexdigest()[:6]
+print(json.dumps({'base': 7900, 'slots': 8, 'nodes': ['US-A', 'US-B', 'US-C', 'US-D'], 'accounts': [{'slot': 1, 'name': n, 'node': 'US-A'}]}))
+PY
+ok "install：路由器上的账号表和以前的版本逐字节一样（只有 Claude 账号时它变了，已安装的机器都会重新部署路由器端）" 'cmp -s "$T/accounts.golden" "$R/etc/cca/accounts.yaml"'
 ok "install：钩子 / cron / sysupgrade" 'grep -q ">>> cca >>>" "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && grep -q ensure "$R/etc/crontabs/root" && grep -qx /etc/cca/ "$R/etc/sysupgrade.conf"'
 
 # 2. 再加账号（邮箱、别名分两行填）：不重载，API 切换
@@ -239,10 +245,10 @@ ok "cca local setup：在家也能先配置好" 'grep -q ">>> cca >>>" "$VS" && 
 run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
 
 # 10c. 第三方 API 账号：直连 / 走节点；key 存钥匙串，经 apiKeyHelper 交给 Claude Code（不进命令行，也不进环境变量）
-kcd() { ls -d "$T/keychain/cca-api-$1-"* 2>/dev/null | head -n 1; }   # 钥匙串里这个账号的条目（目录里一个服务商一个文件）
-kc() { local d; d=$(kcd "$1"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
+kcd() { ls -d "$T/keychain/${2:-cca-api-}$1-"* 2>/dev/null | head -n 1; }   # 钥匙串里这个账号的条目（目录里一个服务商一个文件）[服务名前缀]
+kc() { local d; d=$(kcd "$1" "${2:-}"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
 kch() { local d; d=$(kcd "$1"); [ -n "$d" ] && ls "$d"; }   # 存它的服务商（接口的域名）
-lastline() { grep "^$1: " claude.log | tail -n 1; }
+lastline() { grep "^$1: " "${2:-claude.log}" | tail -n 1; }   # [日志]
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
 : > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/anthropic/ "$S1" kimi-k2 '')" cca add api 2>&1); rc=$?
@@ -440,6 +446,149 @@ out3=$(r4 cca ls 2>&1)
 ok "不配置路由器、只有直连的第三方 API 账号：照样能添加、启动和列出，不提路由器" '[ $rc -eq 0 ] && [ $rc2 -eq 3 ] && ! printf "%s%s%s" "$out" "$out2" "$out3" | grep -q "路由器" && printf "%s" "$out3" | grep -qE "solo +api.example.com +API +直连"'
 r4 CCA_TTY="$(ans y)" cca rm solo >/dev/null 2>&1
 
+# 10f. Codex 账号：单独的账号表 codex.json，和 Claude 账号共用端口池；每个账号一个 CODEX_HOME，~/.codex 里白名单上的
+# 条目共享；登录经 codex 的 app-server、在账号专属的浏览器里；用量经 app-server 查
+X="$H/.codex"; CX="$H/.cca/codex.json"
+clast() { lastline "$1" codex.log; }
+cedit() { edit_table "$1" "$CX"; }
+cfgv() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$H/.cca/config.json" "$1"; }
+ckc() { kc "$1" cca-codex-api-; }
+ok "（准备）只有 Claude 账号时 config.json 里没有 codex 一节" '[ "$(cfgv "\"codex\" in c")" = False ]'
+: > ssh.log; n0=$(reloads)
+out=$(run CCA_TTY="$(ans alice@example.com '' 2)" cca codex add 2>&1); rc=$?
+CD=$(ls -d "$H"/.cca/codex/accounts/alice-example-com-*); CH="$CD/codex"
+ok "codex add：和 Claude 账号同一个邮箱也能加，记在 codex.json；账号目录在 ~/.cca/codex/accounts 下，不碰 Claude 的" '[ $rc -eq 0 ] && grep -q "\"alice@example.com\": \"US-B\"" "$CX" && [ -d "$CH" ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && printf "%s" "$out" | grep -q "添加 Codex 账号" && printf "%s" "$out" | grep -q "用 alice@example.com 登录，登录后 cca 会核对"'
+ok "codex add：和 Claude 账号共用端口池（Claude 的 7901 不动，Codex 分到 7902），路由器的端口池先 Claude 后 Codex，不重载" '[ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ] && [ "$(cfgv "c[\"codex\"][\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7902}" ] && grep -q "\"slot\": 2, \"name\": \"codex-alice-example-com-" "$R/etc/cca/accounts.yaml" && [ "$(sel CCA-2)" = US-B ] && [ "$(reloads)" = "$n0" ]'
+out=$(run cca ls 2>&1); out2=$(run cca codex ls 2>&1)
+ok "cca ls / cca codex ls：各列各的账号；两边轮流用不会反复同步路由器" '! printf "%s%s" "$out" "$out2" | grep -q "正在同步" && printf "%s" "$out2" | grep -qE "1\. alice@example.com +未登录 +US-B" && ! printf "%s" "$out" | grep -q "US-B"'
+: > open.log; : > curl.log
+out=$(run CCA_TTY="$(ans)" OPENAI_API_KEY=sk-evil-1 CODEX_ACCESS_TOKEN=tok-evil CODEX_HOME="$T/evil" CODEX_CA_CERTIFICATE="$T/ca.pem" ALL_PROXY=socks5://evil.invalid cca codex @alice --version 2>&1); rc=$?
+ok "Codex 第一次启动：经 app-server 拿登录网址（客户端名和 codex login 一样），在账号专属的浏览器里打开，走账号的端口" '[ $rc -eq 3 ] && grep -q "RPC initialize client=codex_cli_rs" codex.log && grep -F "auth.openai.com/oauth/authorize" open.log | grep -qF -- "--user-data-dir=$CD/chrome" && grep -F "auth.openai.com/oauth/authorize" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7902" && grep -q "APPSERVER: CODEX_HOME=$CH https_proxy=http://192.0.2.10:7902" codex.log'
+ok "Codex 登录网址补上账号的邮箱（login_hint，登录页认的话会预填）" 'grep -F "auth.openai.com/oauth/authorize" open.log | grep -qF "login_hint=alice%40example.com"'
+ok "Codex 登录：凭证只在账号自己的 CODEX_HOME 里，~/.codex 原来的登录不动" '[ -f "$CH/auth.json" ] && [ ! -L "$CH/auth.json" ] && grep -q master "$X/auth.json"'
+ok "Codex 启动：--no-daemon、关掉改走系统代理的两个开关；CODEX_HOME 是账号目录，数据库在 ~/.codex；走账号的端口" 'clast ARGS | grep -qx "ARGS: --no-daemon --disable system_proxy_fallback --disable respect_system_proxy --version" && clast ENV | grep -q "CODEX_HOME=$CH CODEX_SQLITE_HOME=$X https_proxy=http://192.0.2.10:7902 HTTPS_PROXY=http://192.0.2.10:7902"'
+ok "Codex 启动：继承来的 OPENAI_*、CODEX_*（会顶替登录或改地址）和 ALL_PROXY 不带进去并提示，公司根证书 CODEX_CA_CERTIFICATE 留着；fd 3 关着" 'clast ENV | grep -q "OPENAI_API_KEY=unset" && clast ENV | grep -q "CODEX_ACCESS_TOKEN=unset" && clast ENV | grep -q "ALL_PROXY=unset" && clast ENV | grep -q "CODEX_CA_CERTIFICATE=$T/ca.pem" && clast ENV | grep -q "fd3=closed" && printf "%s" "$out" | grep -q "已为本次启动屏蔽环境里继承的" && printf "%s" "$out" | grep -q "~/.codex/config.toml"'
+ok "Codex 启动前的出口检测：经 7902 取 chatgpt.com 看到的 IP" 'grep -q "CURL via :7902 https://chatgpt.com/cdn-cgi/trace" curl.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log'
+lk() { [ -L "$CH/$1" ] && [ "$(readlink "$CH/$1")" = "$X/$1" ]; }
+ok "共享：config.toml、AGENTS.md、会话、历史、技能、规则链接到 ~/.codex" 'lk config.toml && lk AGENTS.md && lk sessions && lk history.jsonl && lk skills && lk rules && lk session_index.jsonl'
+ok "不共享：登录、installation_id、模型缓存、git 工作树各账号一份；桌面 App 的运行状态不链接" '[ ! -L "$CH/installation_id" ] && ! cmp -s "$CH/installation_id" "$X/installation_id" && [ ! -L "$CH/models_cache.json" ] && [ -d "$CH/worktrees" ] && [ ! -L "$CH/worktrees" ] && [ ! -e "$CH/automations" ] && [ ! -e "$CH/browser" ] && [ ! -e "$CH/.codex-global-state.json" ] && [ ! -e "$X/worktrees" ]'
+ok "会话里写的共享内容回到 ~/.codex：改 config.toml 不断链接，原子写替换掉的 session_index.jsonl 并回去再链接上" 'grep -q "touched by alice" "$X/config.toml" && grep -q "hi from alice" "$X/history.jsonl" && grep -q "from alice" "$X/session_index.jsonl" && [ -d "$X/skills/from-alice" ] && ls "$X"/sessions/2026/11/03/rollout-*.jsonl >/dev/null 2>&1'
+ok "会话库里的路径改写到 ~/.codex（账号删了也找得到）" '[ "$(sqlite3 "$X/state_5.sqlite" "select count(*) from threads where rollout_path like '"'"'$X/sessions/%'"'"'")" = 1 ] && [ "$(sqlite3 "$X/state_5.sqlite" "select count(*) from threads where rollout_path like '"'"'$H/.cca/%'"'"'")" = 0 ]'
+m=$(run CCA_TTY="$(ans q)" cca codex 2>&1)
+ok "cca codex 菜单：标题是 Codex，账号已登录；cca 的菜单里没有 Codex 账号" 'printf "%s" "$m" | grep -q "选择 Codex 账号" && printf "%s" "$m" | grep -qE "1\. alice@example.com +已登录 +US-B" && printf "%s" "$m" | grep -q "a      添加新账号"'
+n_args=$(grep -c "^ARGS: " codex.log)
+for bad in 'chatgpt_base_url = "https://evil.invalid"' 'model_provider = "evil"' 'cli_auth_credentials_store = "keyring"' 'profile = "p1"
+[profiles.p1]
+openai_base_url = "https://evil.invalid"' '[features]
+respect_system_proxy = true   # 系统代理优先'; do
+	cp "$X/config.toml" "$T/codex-config.bak"; { printf '%s\n' "$bad"; cat "$T/codex-config.bak"; } > "$X/config.toml"   # 插在开头：顶层的键
+	out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
+	cp "$T/codex-config.bak" "$X/config.toml"
+	[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "共享的 ~/.codex 里有" || { echo "  没拒绝：$bad"; rc=0; }
+	[ $rc -ne 0 ] || break
+done
+ok "共享的 config.toml 里有会把登录发到别处、换账号或改走系统代理的设置（含 profile 选中的那一节、行尾带注释的）：拒绝启动" '[ $rc -ne 0 ] && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
+printf 'HTTPS_PROXY=http://evil.invalid:1\n' > "$X/.env"
+out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
+rm -f "$X/.env"
+ok "共享的 ~/.codex/.env 里有代理（会盖掉账号的出口）：拒绝启动并指出来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q ".env:HTTPS_PROXY"'
+cp "$X/config.toml" "$T/codex-config.bak"; { printf 'model_provider = "openai"   # 默认\ncli_auth_credentials_store = "file" # 存文件\n'; cat "$T/codex-config.bak"; } > "$X/config.toml"
+run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; rc=$?
+ok "model_provider = \"openai\"（行尾带注释也认得）、notify、MCP 这些正常的设置照常启动" '[ $rc -eq 3 ]'
+echo mallory@example.com > "$T/codex_login_as"
+out=$(run CCA_TTY="$(ans n)" cca codex login alice 2>&1); rc=$?
+ok "cca codex login：先退出原来的登录；登成了别的邮箱就不用，问过之后不继续" '[ $rc -ne 0 ] && grep -q "LOGOUT $CH" codex.log && printf "%s" "$out" | grep -q "登录的是 mallory@example.com，不是 alice@example.com"'
+out=$(run CCA_TTY="$(ans y)" cca codex login alice 2>&1); rc=$?
+ok "cca codex login：用对的邮箱重新登录" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "alice@example.com 已重新登录" && grep -q "LOGIN alice@example.com @ $CH" codex.log'
+rm -f "$CH/auth.json"; touch "$T/codex_rpc_off"
+out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
+rm -f "$T/codex_rpc_off"
+ok "这个版本的 codex 不支持经 app-server 登录：退回 codex login（说明登录页走系统默认浏览器）" '[ $rc -eq 3 ] && grep -q "LOGIN-CLI $CH" codex.log && printf "%s" "$out" | grep -q "改用 codex login"'
+rm -f "$H/.cca/codex/probe.json"; touch "$T/codex_noflags"
+run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; rc=$?
+rm -f "$T/codex_noflags" "$H/.cca/codex/probe.json"
+ok "codex 不认识要关的开关时（删掉了）就不加 --disable（否则它直接报错退出）；按 codex 程序缓存，不每次都问" '[ $rc -eq 3 ] && clast ARGS | grep -qx "ARGS: --no-daemon --version" && [ "$(grep -c "FEATURES list" codex.log)" -ge 1 ]'
+n_f=$(grep -c "FEATURES list" codex.log); run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1
+ok "（探测结果按 codex 程序缓存）" '[ "$(grep -c "FEATURES list" codex.log)" = $((n_f + 1)) ]'
+# 第三方 API 账号（Codex）：兼容 Responses 接口；key 存钥匙串，经 auth.command 回调 cca 取（不进命令行、环境变量）
+: > "$T/env.log"; rm -f "$T/security.stdin" "$T/codex.key"
+out=$(run CCA_TTY="$(ans kimi https://api.example.com/v1/ "$S1" kimi-k2 '')" cca codex add api 2>&1); rc=$?
+ok "codex add api：和 Claude 的第三方 API 账号同名也行；key 存在钥匙串里 Codex 自己的条目" '[ $rc -eq 0 ] && python3 -c "import json,sys; e=json.load(open(sys.argv[1]))[\"kimi\"]; sys.exit(0 if e==dict(base_url=\"https://api.example.com/v1\", model=\"kimi-k2\", node=\"\", id=\"kimi\") else 1)" "$CX" && [ "$(ckc kimi)" = "$S1" ] && [ "$(kc kimi)" = "$S3" ] && grep -q "add-generic-password -U -a api.example.com -s cca-codex-api-kimi-" "$T/security.stdin"'
+out=$(run CCA_TTY="$(ans)" cca codex @kimi --version 2>&1); rc=$?
+ok "Codex 第三方 API 账号启动：-c 定义模型服务（Responses），auth.command 回调 cca 取到钥匙串里的 key；直连（NO_PROXY=*，不让它用系统代理）" '[ $rc -eq 3 ] && clast ARGS | grep -qF "model_provider=\"cca\"" && clast ARGS | grep -qF "model=\"kimi-k2\"" && grep -q "PROVIDER: base_url=https://api.example.com/v1 wire_api=responses" codex.log && [ "$(cat "$T/codex.key")" = "$S1" ] && clast ENV | grep -q "https_proxy=unset" && clast ENV | grep -q "NO_PROXY=\*" && grep -q "CURL api direct https://api.example.com/v1" curl.log'
+ok "Codex 第三方 API 账号：key 不出现在任何命令行、环境变量和日志里" '! grep -qF "$S1" "$T/env.log" codex.log security.log curl.log && ! clast ARGS | grep -q "sk-"'
+cedit 'j["kimi"]["env"] = {"X": "1"}'
+out=$(run cca codex @kimi --version 2>&1 </dev/null); rc=$?
+cedit 'j["kimi"].pop("env")'
+ok "Codex 第三方 API 账号没有 env 字段（说明能用的字段）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不认识的字段 env"'
+# 用量
+ccanned() {   # ccanned 邮箱 5小时% 本周% [套餐]：假 app-server 给这个账号的 account/rateLimits/read 回应
+	mkdir -p "$T/codex_usage"
+	python3 - "$T/codex_usage/$1.json" "$2" "$3" "${4:-plus}" <<'PY'
+import json, sys, time
+p, five, week, plan = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+now = int(time.time())
+rl = {'limitId': 'codex', 'primary': {'usedPercent': five, 'windowDurationMins': 300, 'resetsAt': now + 2 * 3600 + 13 * 60 + 30},
+      'secondary': {'usedPercent': week, 'windowDurationMins': 10080, 'resetsAt': now + 3 * 86400 + 5 * 3600},
+      'credits': {'hasCredits': True, 'unlimited': False, 'balance': '12.5'}, 'planType': plan}
+other = {'limitId': 'codex_other', 'limitName': 'GPT-5-Pro', 'primary': None,
+         'secondary': {'usedPercent': 30, 'windowDurationMins': 10080, 'resetsAt': now + 86400 * 2}}
+json.dump({'rateLimits': rl, 'rateLimitsByLimitId': {'codex': rl, 'codex_other': other}}, open(p, 'w'))
+PY
+}
+ccanned alice@example.com 13 41 pro; n_usage=$(grep -c "^USAGE: " claude.log)
+out=$(run cca codex usage 2>&1); rc=$?
+ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐、5 小时、本周、别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -q "GPT-5-Pro 本周 30%" && printf "%s" "$out" | grep -q "credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
+out=$(run cca codex usage --json 2>/dev/null)
+ok "cca codex usage --json：注明 tool=codex，窗口和 Claude 的一样写法" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a=d[\"accounts\"][0]; sys.exit(0 if d[\"tool\"]==\"codex\" and a[\"plan\"]==\"Pro\" and a[\"five_hour\"][\"utilization\"]==13 and a[\"seven_day\"][\"utilization\"]==41 and a[\"credits\"][\"balance\"]==\"12.5\" and a[\"source\"]==\"live\" else 1)"'
+out=$(run cca usage 2>&1)
+ok "cca usage 只查 Claude 账号，不带 Codex 的" '! printf "%s" "$out" | grep -q "Pro" && printf "%s" "$out" | grep -q "alice@example.com"'
+m=$(run CCA_TTY="$(ans q)" cca codex 2>&1)
+ok "cca codex 菜单：附上最近一次的用量" 'printf "%s" "$m" | grep -q "5h 13% · 周 41%"'
+touch "$T/codex_usage/unsupported"
+out=$(run cca codex usage alice 2>&1)
+rm -f "$T/codex_usage/unsupported"
+ok "codex 不支持查用量：提示升级，用缓存顶上" 'printf "%s" "$out" | grep -q "这个版本的 Codex 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Pro +13%"'
+touch "$T/codex_usage/hang"; t0=$(date +%s)
+out=$(run CCA_USAGE_TIMEOUT=2 cca codex usage alice 2>&1); t1=$(date +%s)
+rm -f "$T/codex_usage/hang"
+ok "codex 查用量卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
+ok "Codex 的 access / refresh token 从没出现在 cca 写的文件、日志和命令行里（cca 只从 id_token 读邮箱和套餐）" '! grep -rqF -e at-SECRET -e rt-SECRET --exclude auth.json "$H/.cca" && ! grep -qF -e at-SECRET -e rt-SECRET "$T/env.log" codex.log curl.log security.log open.log'
+# 网页版、桌面 App 和启动器
+: > open.log
+run CCA_TTY="$(ans)" cca codex web alice >/dev/null 2>&1
+ok "cca codex web：用账号专属的浏览器打开 chatgpt.com" 'grep -F "https://chatgpt.com/" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
+L="$H/Applications"
+ok "启动器：Codex 账号是「ChatGPT 别名」，和 Claude 账号的「Claude 别名」各管各的" '[ -x "$L/ChatGPT alice.app/Contents/MacOS/cca-launcher" ] && grep -q "codex app" "$L/ChatGPT alice.app/Contents/MacOS/cca-launcher" && [ -d "$L/Claude alice.app" ] && plutil -extract CFBundleIdentifier raw "$L/ChatGPT alice.app/Contents/Info.plist" | grep -q "^local.cca.launcher.codex.alice-example-com-"'
+run cca app --launchers >/dev/null 2>&1; run cca codex app --launchers >/dev/null 2>&1
+ok "启动器：两边各自重新生成时不删对方的" '[ -d "$L/ChatGPT alice.app" ] && [ -d "$L/Claude alice.app" ]'
+out=$(run cca codex app alice 2>&1 </dev/null); rc=$?
+ok "ChatGPT App：共享的 config.toml 里还没关 system_proxy_fallback、又不能问时：不打开，说明要在终端里运行一次" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "system_proxy_fallback"'
+: > open.log
+out=$(run CCA_TTY="$(ans y)" cca codex app alice 2>&1); rc=$?
+ok "ChatGPT App：问过之后用 codex 自己的命令关掉 system_proxy_fallback（写进共享的 ~/.codex/config.toml）" '[ $rc -eq 0 ] && grep -q "FEATURES disable system_proxy_fallback @ $X" codex.log && grep -q "system_proxy_fallback = false" "$X/config.toml" && [ ! -L "$X/config.toml" ]'
+ok "ChatGPT App：账号自己的 CODEX_HOME、资料目录（CODEX_ELECTRON_USER_DATA_PATH + --user-data-dir）和端口" 'grep -qF -- "[-n] [-a] [$T/ChatGPT.app] [--env] [CODEX_HOME=$CH] [--env] [CODEX_SQLITE_HOME=$X] [--env] [CODEX_ELECTRON_USER_DATA_PATH=$CD/desktop]" open.log && grep -qF -- "[--args] [--user-data-dir=$CD/desktop] [--proxy-server=http://192.0.2.10:7902]" open.log && printf "%s" "$out" | grep -q "已打开 alice@example.com 的 ChatGPT App，出口 US-B（端口 7902）"'
+ok "ChatGPT App 第一次打开：说明 App 里要求登录时别在 App 里登，改用 cca codex login" 'printf "%s" "$out" | grep -q "运行 cca codex login alice@example.com，再打开 App"'
+cp "$T/fakerun/Contents/MacOS/Claude" "$T/fakerun/Contents/MacOS/ChatGPT"   # 和上面假的 Claude App 进程一样，换个名字
+"$T/fakerun/Contents/MacOS/ChatGPT" --user-data-dir="$CD/desktop" --x & FAKEPID=$!
+sleep 0.5; n_open=$(grep -c "user-data-dir=$CD/desktop" open.log)
+out=$(run CCA_TTY="$(ans)" cca codex app alice 2>&1)
+out2=$(run CCA_TTY="$(ans y)" cca codex rm alice 2>&1); rc2=$?
+kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
+ok "ChatGPT App：这个账号的已经开着就切过去；开着时不能删账号" 'printf "%s" "$out" | grep -q "alice@example.com 的 ChatGPT App 已经开着" && [ "$(grep -c "user-data-dir=$CD/desktop" open.log)" = "$n_open" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "ChatGPT App 还开着"'
+# 删除：退出登录、删账号目录（同一个邮箱的 Claude 账号不受影响），端口回收；会话还在
+run CCA_TTY="$(ans dave@example.com '' 3)" cca codex add >/dev/null 2>&1
+ok "（准备）再加一个 Codex 账号，分到 7903" '[ "$(cfgv "c[\"codex\"][\"ports\"].get(\"dave@example.com\")")" = 7903 ]'
+out=$(run CCA_TTY="$(ans y)" cca codex rm alice 2>&1); rc=$?
+ok "cca codex rm：提醒 git 工作树会一起删；退出登录、删掉它的目录和启动器；同一个邮箱的 Claude 账号、启动器都不动；7902 回到 REJECT" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "git 工作树" && grep -q "LOGOUT $CH" codex.log && [ ! -e "$CD" ] && [ ! -e "$L/ChatGPT alice.app" ] && [ -d "$L/Claude alice.app" ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && [ "$(sel CCA-2)" = REJECT ] && [ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ]'
+ok "删掉账号后它开过的会话在 ~/.codex 里照样找得到（会话库里的路径早已改写）" '[ "$(sqlite3 "$X/state_5.sqlite" "select count(*) from threads where rollout_path like '"'"'$H/.cca/%'"'"'")" = 0 ] && for p in $(sqlite3 "$X/state_5.sqlite" "select rollout_path from threads"); do [ -f "$p" ] || exit 1; done'
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
+ok "删了 Codex 账号之后 Claude 的同名账号照常启动" '[ $rc -eq 3 ]'
+run CCA_TTY="$(ans)" cca codex @dave --version >/dev/null 2>&1
+DD=$(ls -d "$H"/.cca/codex/accounts/dave-example-com-*)
+mkdir -p "$H/.cca/codex/accounts/orphan-000000/codex/worktrees/w"; printf '{"tokens": {"access_token": "at-SECRET"}}' > "$H/.cca/codex/accounts/orphan-000000/codex/auth.json"
+ok "（准备一键还原）dave 登录着、建过 git 工作树；另有一个从账号表里直接删掉、目录还留着登录凭证的账号" '[ -f "$DD/codex/auth.json" ] && [ -d "$DD/codex/worktrees/dave" ]'
+
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
@@ -456,10 +605,10 @@ mkver() {   # mkver 版本 输出文件 [路由器脚本标记]：换成测试�
 	[ -n "${3:-}" ] && sed -i '' "s|^# cca-router：|# cca-router（$3）：|" "$2"
 	chmod 755 "$2"
 }
-publish() {   # publish 版本 [路由器脚本标记] [签名密钥]
+publish() {   # publish 版本 [路由器脚本标记] [签名密钥]；测试版（-beta.N）像 GitHub 的 pre-release，不成为 latest
 	mkdir -p "$G/v$1"; mkver "$1" "$G/v$1/cca" "${2:-}"; rm -f "$G/v$1/cca.sig"
 	ssh-keygen -Y sign -q -n cca-release -f "${3:-$T/relkey}" "$G/v$1/cca" 2>/dev/null
-	echo "$1" > "$G/latest"
+	case "$1" in *-beta.*) ;; *) echo "$1" > "$G/latest" ;; esac
 }
 wait_next() { local i; for i in $(seq 1 50); do [ -f "$H/.cca/update/cca.next" ] && [ ! -d "$H/.cca/update/lock" ] && return 0; sleep 0.2; done; return 1; }
 ver() { run cca version; }
@@ -502,6 +651,23 @@ rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
 out=$(run cca ls 2>&1)
 ok "notify：只提示有新版本，不自动安装" 'printf "%s" "$out" | grep -q "cca 有新版本 9.9.13（当前 9.9.10）" && [ "$(ver)" = 9.9.10 ]'
 run cca update auto >/dev/null 2>&1
+# 测试版：GitHub 上是 pre-release（releases/latest 不指向它），自动更新不装，只能 cca update 版本号 手动装，能退回
+run cca ls >/dev/null 2>&1   # auto：换上已经下载好的 9.9.13
+publish 9.9.14-beta.1
+rm -f "$H/.cca/update/checked" "$H/.cca/update/log"; run cca ls >/dev/null 2>&1
+for i in $(seq 1 50); do grep -q "已是最新" "$H/.cca/update/log" 2>/dev/null && break; sleep 0.2; done
+ok "测试版：自动更新看不到它（releases/latest 还是正式版），不下载也不装" '[ "$(ver)" = 9.9.13 ] && grep -q "已是最新（9.9.13）" "$H/.cca/update/log" && [ ! -f "$H/.cca/update/cca.next" ]'
+out=$(run cca update 9.9.14-beta.1 2>&1)
+ok "cca update 版本号：手动装测试版（照样验签），说明之后怎么更新、怎么退回" '[ "$(ver)" = 9.9.14-beta.1 ] && printf "%s" "$out" | grep -q "这是测试版" && printf "%s" "$out" | grep -q "cca update --rollback"'
+out=$(run cca update 9.9.12 2>&1); rc=$?
+out2=$(run cca update 9.9.14-beta.2 2>&1); rc2=$?
+ok "cca update 版本号：不比现在新的不装（退回用 --rollback），没有这个版本时说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不比现在的 9.9.14-beta.1 新" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有这个版本" && [ "$(ver)" = 9.9.14-beta.1 ]'
+out=$(run cca update --rollback 2>&1)
+ok "测试版 → 退回原来的正式版" '[ "$(ver)" = 9.9.13 ] && printf "%s" "$out" | grep -q "已退回 9.9.13"'
+run cca update 9.9.14-beta.1 >/dev/null 2>&1; publish 9.9.14
+rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
+out=$(run cca @alice --version 2>&1)
+ok "装了测试版之后，出了更新的正式版照常自动更新" 'printf "%s" "$out" | grep -q "cca 已自动更新：9.9.14-beta.1 → 9.9.14" && [ "$(ver)" = 9.9.14 ]'
 
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3"
@@ -519,14 +685,23 @@ ok "一键安装：签名不对就不装" '[ $rc -ne 0 ] && printf "%s" "$out" |
 n_gh=$(grep -c "GH latest-get" gh.log)
 r3 bash -c "head -c 1500 '$T/install.sh' | bash" >/dev/null 2>&1
 ok "install.sh 只下载了一半：什么都不执行" '[ "$(grep -c "GH latest-get" gh.log)" = "$n_gh" ] && [ ! -e "$H3/.cca" ]'
+publish 9.9.22; publish 9.9.23-beta.1
+r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" >/dev/null 2>&1
+out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 9.9.23-beta.1 2>&1); rc=$?
+ok "一键安装默认装最新的正式版；指定版本号时装那个测试版，换下来的正式版留着" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.23-beta.1 ] && printf "%s" "$out" | grep -q "正在下载 cca 9.9.23-beta.1" && [ "$(cat "$H3/.cca/update/cca.prev.version")" = 9.9.22 ]'
+out=$(r3 "$H3/.cca/bin/cca" update --rollback 2>&1)
+ok "一键安装装上的测试版也能退回" '[ "$("$H3/.cca/bin/cca" version)" = 9.9.22 ] && printf "%s" "$out" | grep -q "已退回 9.9.22"'
 
 # 12. 一键还原：移除端口池需要重载（restore 已确认）
 K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_keys"
-run CCA_TTY="$(ans restore)" cca restore >/dev/null 2>&1; rc=$?
+out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器全部删掉" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ]'
 ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字节还原），本机端口池移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening"'
 ok "restore：本机还原，共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key 从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ -z "$(ls "$T/keychain" | grep "^cca-api-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
+BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
+ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees" && ! tar -xzOf "$BK" 2>/dev/null | grep -qF at-SECRET'
+ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

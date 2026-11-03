@@ -2,13 +2,17 @@
 # 发布当前提交（版本号取自 cca 里的 VERSION）：跑回归 → 签名 → 打 tag → 推送 → 创建 GitHub Release
 # （附件：cca、cca.sig、一键安装脚本 install.sh）
 # 用法：./release.sh ["更新说明"]；签名私钥默认 ~/.ssh/cca_release_ed25519（可用 CCA_RELEASE_KEY 指定）
+# VERSION 是 X.Y.Z-beta.N 时发成测试版（GitHub 的 pre-release，不设为 Latest）：自动更新和一键安装都不会装它，
+# 只能 cca update X.Y.Z-beta.N 或 install.sh 指定版本手动装
 set -euo pipefail
 cd "$(dirname "$0")"
 KEY="${CCA_RELEASE_KEY:-$HOME/.ssh/cca_release_ed25519}"
 fail() { echo "✗ $*" >&2; exit 1; }
 
-v=$(sed -n 's/^VERSION="\([0-9.]*\)"$/\1/p' cca | head -n 1)
-[[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "cca 里的 VERSION 不对：${v}"
+v=$(sed -n 's/^VERSION="\([0-9][0-9a-z.-]*\)"$/\1/p' cca | head -n 1)
+[[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || fail "cca 里的 VERSION 不对：${v}"
+pre=()
+case "$v" in *-beta.*) pre=(--prerelease --latest=false) ;; esac
 [ -z "$(git status --porcelain)" ] || fail "有未提交的改动，先提交"
 ! git rev-parse -q --verify "refs/tags/v$v" >/dev/null || fail "v$v 已经发布过，先改 VERSION"
 # 嵌在 cca 里的公钥必须和签名私钥是一对，否则发出去的版本谁也装不上
@@ -35,5 +39,5 @@ git tag -a "v$v" -m "v$v"
 git push origin "refs/tags/v$v" || { git tag -d "v$v" >/dev/null; fail "推送 tag 失败，本地 tag 已删除，修好后重新运行"; }
 notes=(--generate-notes)
 [ -n "${1:-}" ] && notes=(--notes "$1")
-gh release create "v$v" "$out/cca" "$out/cca.sig" "$out/install.sh" --title "v$v" "${notes[@]}"
-echo "✓ 已发布 v$v"
+gh release create "v$v" "$out/cca" "$out/cca.sig" "$out/install.sh" --title "v$v" "${notes[@]}" ${pre[@]+"${pre[@]}"}
+if [ ${#pre[@]} -gt 0 ]; then echo "✓ 已发布测试版 v$v（手动装：cca update $v）"; else echo "✓ 已发布 v$v"; fi
