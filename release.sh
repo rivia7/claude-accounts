@@ -40,4 +40,4 @@ git push origin "refs/tags/v$v" || { git tag -d "v$v" >/dev/null; fail "推送 t
 notes=(--generate-notes)
 [ -n "${1:-}" ] && notes=(--notes "$1")
 gh release create "v$v" "$out/cca" "$out/cca.sig" "$out/install.sh" --title "v$v" "${notes[@]}" ${pre[@]+"${pre[@]}"}
-if [ ${#pre[@]} -gt 0 ]; then echo "✓ 已发布测试版 v$v（手动装：cca update $v）"; else echo "✓ 已发布 v$v"; fi
+if [ ${#pre[@]} -gt 0 ]; then echo "✓ 已发布测试版 v${v}（手动装：cca update ${v}）"; else echo "✓ 已发布 v${v}"; fi
