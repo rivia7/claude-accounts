@@ -8,7 +8,7 @@ T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T
 trap '[ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -205,7 +205,7 @@ ok "名字和服务器地址都变了（认不出）、非交互：说明哪个�
 # 在真的终端里（pty，不设 CCA_TTY）："换成哪个节点"和"现在重载吗"都要问得出来
 rm -f "$T/pty.done"
 { printf '%s\n' 3 y; for i in $(seq 1 300); do [ -f "$T/pty.done" ] && break; sleep 0.1; done; } |
-	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
+	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
 	PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; touch "$CCA_T/pty.done"' >/dev/null 2>&1
 ok "认不出、在真的终端里：列出路由器上的节点让用户选一个代替（选 US-C9），账号表跟着改，问过之后重载，照常启动" '[ -f "$T/pty.done" ] && grep -q "3\. US-C9" "$T/pty.log" && grep -q "「US-C」换成了「US-C9」" "$T/pty.log" && grep -q "现在重载吗" "$T/pty.log" && tblok "t[\"alice@example.com\"] == \"US-C9\"" && [ "$(sel CCA-1)" = US-C9 ]'
 ok "用户自己选的代替节点不算改名（维护者的映射里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
@@ -513,7 +513,7 @@ run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 
 # 10e. 不用路由器、只用直连的第三方 API 账号
 H4="$T/home4"; mkdir -p "$H4/.claude"
-r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 r4 CCA_TTY="$(ans n n)" bash "$CCA" install >/dev/null 2>&1
 out=$(r4 CCA_TTY="$(ans solo https://api.example.com/anthropic "$S1" '')" cca add api 2>&1); rc=$?
 out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
@@ -768,9 +768,31 @@ pol() {   # pol JSON [签名密钥]：写进假的私有映射仓库并签名
 	ssh-keygen -Y sign -q -n cca-policy -f "${2:-$T/relkey}" "$PR/policy.json" 2>/dev/null
 }
 pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
+# 终端里启动账号时，还没配置映射就引导（默认仓库用 CCA_POLICY_DEFAULT 换成假的；平时的用例里它是空的，不引导）
+P=CCA_POLICY_DEFAULT=example/cca-policy
+out=$(run $P cca @alice --version 2>&1); rc=$?
+ok "还没配置映射、非交互启动（启动器、脚本）：不引导，照常启动" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "还没配置维护者的账号"'
+out=$(run $P CCA_TTY="$(ans 2)" cca @alice --version 2>&1); rc=$?
+ok "还没配置映射、终端里启动：先引导（选「这次先跳过」），照常启动，什么都不改" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "这台机器还没配置维护者的账号 → 节点映射（example/cca-policy）" && printf "%s" "$out" | grep -q "这次先跳过，下次启动再问" && [ ! -f "$PK" ] && [ "$(cfgv "c.get(\"policy\", \"\")")" = "" ]'
+out=$(run $P CCA_TTY="$(ans 3)" cca @alice --version 2>&1); rc=$?
+out2=$(run $P CCA_TTY="$(ans)" cca @alice --version 2>&1); out3=$(run $P cca policy 2>&1)
+ok "选「不用映射」：记下来，以后启动不再问；cca policy 里说明" '[ $rc -eq 3 ] && [ "$(cfgv "c.get(\"policy_declined\")")" = True ] && ! printf "%s" "$out2" | grep -q "还没配置维护者的账号" && printf "%s" "$out3" | grep -q "选过不用，启动时不再问"'
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_declined'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+printf 2 > "$T/policy_denied_n"; : > git.log; rm -f "$T/clipboard"
+out=$(run $P CCA_TTY="$(ans 1 '' '')" cca @alice --version 2>&1); rc=$?
+ok "选「现在配置」：生成 deploy key，显示公钥（复制到剪贴板）和维护者要运行的命令；等维护者加好按回车重新拉取，拉到后照常启动" '[ $rc -eq 3 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && [ "$(cat "$T/clipboard")" = "$(cat "$PK.pub")" ] && printf "%s" "$out" | grep -q "公钥已复制到剪贴板" && [ "$(printf "%s" "$out" | grep -o "维护者加好之后按回车重新拉取" | wc -l | tr -d " ")" = 2 ] && printf "%s" "$out" | grep -q "已更新映射（Claude 1 个账号" && [ "$(grep -c "^GIT clone" git.log)" = 3 ] && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/accounts.json" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
+printf 1 > "$T/policy_denied_n"
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+rm -rf "$H/.cca/policy"
+out=$(run $P CCA_TTY="$(ans 1 s)" cca @alice --version 2>&1); rc=$?
+ok "引导里输入 s 先跳过：照常启动，说明之后每天自动拉" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "先跳过：维护者加上公钥之后，cca 每天会自动拉一次映射" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ] && [ ! -f "$H/.cca/policy/policy.json" ]'
+# 还原成没配置映射（账号表改回 US-A），接着测 cca policy setup
+rm -f "$T/policy_denied_n"
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+rm -rf "$H/.cca/policy"; edit_table 'j["alice@example.com"] = "US-A"'; run cca router sync >/dev/null 2>&1
 touch "$T/policy_denied"; : > git.log
-out=$(run CCA_TTY="$(ans)" cca policy setup example/cca-policy 2>&1); rc=$?
-ok "cca policy setup：给这台机器生成 deploy key，显示公钥和维护者要运行的命令；公钥还没加上时说明之后会自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "gh repo deploy-key add .* -R example/cca-policy" && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ ! -f "$H/.cca/policy/policy.json" ] && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
+out=$(run $P CCA_TTY="$(ans)" cca policy setup 2>&1); rc=$?
+ok "cca policy setup（不写仓库就是维护者的默认仓库）：给这台机器生成 deploy key，显示公钥和维护者要运行的命令；公钥还没加上时说明之后会自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "gh repo deploy-key add .* -R example/cca-policy" && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ ! -f "$H/.cca/policy/policy.json" ] && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
 ok "拉映射只用这台机器的 deploy key：不读用户的 ssh / git 配置和 ssh-agent，只认 GitHub 的主机公钥；GitHub 拒绝了就不再重试" '[ "$(grep -c "^GIT clone" git.log)" = 1 ] && grep -q "^GIT clone git@github.com:example/cca-policy.git SSH=ssh -F /dev/null -i $PK -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=$H/.cca/policy/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes .* GLOBAL=/dev/null$" git.log && grep -qx "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" "$H/.cca/policy/known_hosts"'
 rm -f "$T/policy_denied"
 out=$(run cca policy pull 2>&1); rc=$?
@@ -826,7 +848,7 @@ ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'g
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
-r3() { env -i LANG=en_US.UTF-8 HOME="$H3" CCA_T="$T" SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r3() { env -i LANG=en_US.UTF-8 HOME="$H3" CCA_T="$T" CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射"'

@@ -105,8 +105,8 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 如果有人替你维护"哪个账号必须走哪个节点"，映射放在他的**私有** GitHub 仓库里，cca 自己去拉，映射里的账号出口就固定下来：
 
-- **安装时配置**：`curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/install.sh | CCA_POLICY_REPO=维护者/cca-policy bash`。已经装好的运行 `cca policy setup 维护者/cca-policy`。
-- **把公钥交给维护者**：cca 会给这台机器生成一把只读的 deploy key，并显示它的公钥。把这一行发给维护者，他加到仓库上之后，cca 每天自动拉一次映射；想马上拉，运行 `cca policy pull`。`cca policy` 查看状态。
+- **启动时引导**：还没配置映射时，在终端里启动账号，cca 会先引导你配置；可以这次先跳过，也可以选「不用映射」，以后不再问。随时也可以运行 `cca policy setup`（不写仓库就是维护者的默认仓库 `rivia7/cca-policy`，别的仓库写成 `cca policy setup 维护者/仓库`）。一键安装时带上 `CCA_POLICY_REPO=维护者/仓库` 也会配置。
+- **把公钥交给维护者**：cca 会给这台机器生成一把只读的 deploy key，显示它的公钥并复制到剪贴板。把它发给维护者，他加到仓库上之后，在引导里按回车就能马上拉到；也可以先跳过，cca 每天自动拉一次（`cca policy pull` 马上拉）。`cca policy` 查看状态。
 - **固定出口**：映射里的账号，添加时直接用映射的节点，不让选；账号表里改成别的节点，下次运行 cca 时会改回来，并提示一句。映射的节点不在这台机器的可选节点里时，运行 `cca router setup` 重新选可选节点。
 - **节点改名**：路由器上的节点改了名（服务器地址没变）时，映射里还写着旧名字也照样能用：cca 跟着改名时记下了新旧名字的对应。维护者之后把映射更新成新名字就好。
 - **验签**：映射要有发布 cca 用的那把密钥的签名才会被采用，签名不对、格式不对都不用，接着用上次拉到的。只管官方账号（按邮箱），第三方 API 账号不受影响。
@@ -117,7 +117,8 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 1. 建一个私有仓库（例如 `cca-policy`），放一个 `policy.json`：`{"version": 1, "claude": {"name@example.com": "US-A"}, "codex": {"name@example.com": "US-B"}}`。
 2. 改好后在 cca 的仓库里运行 `./policy.sh 映射仓库的目录`：它会检查格式、确认仓库是私有的，然后用发布密钥签名，提交并推送。
-3. 用户发来的公钥存成文件，运行 `gh repo deploy-key add 文件 -R 你/cca-policy -t 名字` 加上，默认就是只读。不想让谁再拉，就在仓库的 Settings → Deploy keys 里删掉他的。
+3. 用户发来的公钥存成文件，运行 `gh repo deploy-key add 文件 -R 你/cca-policy -t 名字` 加上，默认就是只读（你自己的机器上，公钥文件就是 `~/.cca/policy/id_ed25519.pub`）。不想让谁再拉，就在仓库的 Settings → Deploy keys 里删掉他的。
+4. 默认仓库写在 `cca` 里（`POLICY_REPO_DEFAULT`）：用户运行 `cca policy setup` 不写仓库、启动时的引导，都用它。
 
 ## 查看用量
 
@@ -261,11 +262,11 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
 
-- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.5`
+- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.6`
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh
-  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.5/install.sh | bash -s 2.6.0-beta.5
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.6/install.sh | bash -s 2.6.0-beta.6
   ```
 
 - 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。

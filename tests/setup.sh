@@ -312,7 +312,9 @@ cat > "$T/bin/git" <<'S'
 if [ "$1" = clone ]; then
 	dst="${@: -1}"; url="${@: -2:1}"
 	echo "GIT clone $url SSH=${GIT_SSH_COMMAND:-unset} GLOBAL=${GIT_CONFIG_GLOBAL:-unset}" >> "$CCA_T/git.log"
-	if [ -e "$CCA_T/policy_denied" ]; then
+	n=$(cat "$CCA_T/policy_denied_n" 2>/dev/null)   # policy_denied_n：先拒绝这么多次（模拟维护者中途才把公钥加上）
+	if [ "${n:-0}" -gt 0 ] || [ -e "$CCA_T/policy_denied" ]; then
+		[ "${n:-0}" -gt 0 ] && echo $((n - 1)) > "$CCA_T/policy_denied_n"
 		echo "git@github.com: Permission denied (publickey)." >&2; echo "fatal: Could not read from remote repository." >&2; exit 128
 	fi
 	if [ -e "$CCA_T/policy_offline" ]; then
@@ -325,6 +327,8 @@ if [ "$1" = clone ]; then
 fi
 exec /usr/bin/git "$@"
 S
+# 假的剪贴板（不碰真的）：复制的内容写进 $CCA_T/clipboard
+printf '#!/bin/bash\ncat > "$CCA_T/clipboard"\n' > "$T/bin/pbcopy"
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"

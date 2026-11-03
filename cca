@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0-beta.5"
+VERSION="2.6.0-beta.6"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -1316,6 +1316,28 @@ def cmd_policy_repo():
     """配置的映射仓库。只读 config.json，不经过 ctx()：后台拉取时不碰账号表，免得和前台的命令抢着写"""
     c = load_quiet(CFG)
     print((c.get('policy') or '') if isinstance(c, dict) else '')
+
+
+def cmd_policy_ask():
+    """终端里启动账号时要不要引导配置映射：还没配置映射仓库、也没选过「不用映射」（退出码 0 = 要问）。不经过 ctx"""
+    c = load_quiet(CFG)
+    c = c if isinstance(c, dict) else {}
+    sys.exit(0 if not c.get('policy') and not c.get('policy_declined') else 1)
+
+
+def cmd_policy_decline():
+    """引导里选了「不用映射」：以后启动不再问（cca policy setup 会清掉这个标记）"""
+    c = cfg_load()
+    c['policy_declined'] = True
+    cfg_save(c)
+
+
+def cmd_policy_set(repo):
+    """配置映射仓库（清掉「不用映射」的标记）"""
+    c = cfg_load()
+    c['policy'] = repo
+    c.pop('policy_declined', None)
+    cfg_save(c)
 
 
 def cmd_policy_node(email):
@@ -3205,6 +3227,7 @@ CMDS = {
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
     'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
+    'policy-ask': cmd_policy_ask, 'policy-decline': cmd_policy_decline, 'policy-set': cmd_policy_set,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -4997,6 +5020,7 @@ sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路�
 
 launch() {
 	local sel=""
+	policy_offer   # 还没配置维护者的映射：先引导（加账号时映射里的账号直接用映射的节点）
 	if [ -z "$(py keys)" ]; then
 		info "还没有账号，先新增一个"
 		cmd_add || exit 1
@@ -5264,10 +5288,13 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 # ---------------------------------------------------------------------------
 # 维护者的账号 → 节点映射（可选）：映射放在维护者的私有 GitHub 仓库里（policy.json，和用发布密钥签的 policy.json.sig），
 # 每台机器用自己的只读 deploy key 去拉，验签通过才换上；映射里的账号出口固定为指定的节点（PY_SRC 的 reconcile 强制）
-#   · cca policy setup 仓库：生成 deploy key，把公钥交给维护者加到仓库上；安装时带 CCA_POLICY_REPO=仓库 也会做这一步
+#   · cca policy setup [仓库]：生成 deploy key，把公钥交给维护者加到仓库上；不写仓库就是维护者的默认仓库。
+#     安装时带 CCA_POLICY_REPO=仓库 也会做这一步；终端里启动账号时，还没配置、也没说过不用，就手把手引导（可以跳过）
 #   · 每天在后台拉一次（和自动更新的开关、开发模式无关）；cca policy pull、cca update 时也拉；拉不到就接着用上次的
 # ---------------------------------------------------------------------------
 POLICY_DIR="$CCA_HOME/policy"
+# 维护者的默认映射仓库（仓库是私有的，写在这里只暴露名字）。CCA_POLICY_DEFAULT 可以换掉，设成空就不引导（回归测试里默认是空的）
+POLICY_REPO_DEFAULT="${CCA_POLICY_DEFAULT-rivia7/cca-policy}"
 GITHUB_HOST_KEYS=(   # GitHub 公布的 SSH 主机公钥（api.github.com/meta）；ssh.github.com:443 用的是同一组
 	'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
 	'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg='
@@ -5304,7 +5331,7 @@ policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-pol
 	                 # 失败时原来的照用，原因在 POLICY_ERR
 	local repo tmp rc i err
 	repo=$(py policy-repo)
-	[ -n "$repo" ] || { POLICY_ERR="还没配置映射仓库（cca policy setup 仓库）"; return 1; }
+	[ -n "$repo" ] || { POLICY_ERR="还没配置映射仓库（cca policy setup）"; return 1; }
 	[ -f "$POLICY_DIR/id_ed25519" ] || { POLICY_ERR="这台机器还没有 deploy key：运行 cca policy setup ${repo}"; return 1; }
 	command -v git >/dev/null 2>&1 || { POLICY_ERR="需要 git：运行 xcode-select --install 装上苹果的命令行工具"; return 1; }
 	tmp=$(mktemp -d "$POLICY_DIR/tmp.XXXXXX") || { POLICY_ERR="建不了临时目录"; return 1; }
@@ -5357,9 +5384,8 @@ policy_pull() {   # 现在就拉一次，说明结果；拉不到时说明原因
 	return 1
 }
 
-policy_setup() {   # policy_setup 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，说明把公钥交给维护者，再试着拉一次
-	local repo="${1:-}" old host
-	[[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "用法: cca policy setup <仓库>，例如 cca policy setup someone/cca-policy"
+policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，显示公钥（复制到剪贴板）和维护者要运行的命令
+	local repo="$1" old host
 	mkdir -p "$POLICY_DIR" && chmod 700 "$POLICY_DIR" || die "建不了 ${POLICY_DIR}"
 	old=$(py policy-repo)
 	if [ -n "$old" ] && [ "$old" != "$repo" ]; then   # GitHub 的 deploy key 只能加在一个仓库上：换了仓库就换一把，旧仓库的映射也不再用
@@ -5369,22 +5395,64 @@ policy_setup() {   # policy_setup 仓库（owner/name）：记下仓库、生成
 	if [ ! -f "$POLICY_DIR/id_ed25519" ]; then
 		ssh-keygen -q -t ed25519 -N '' -C "cca-policy@${host}" -f "$POLICY_DIR/id_ed25519" || die "生成 deploy key 失败"
 	fi
-	py set policy "$repo" || die "保存配置失败"
+	py policy-set "$repo" || die "保存配置失败"
 	say ""
 	say "  映射仓库：${repo}。把这台机器的公钥发给维护者，请他加成这个仓库的只读 deploy key："
 	say ""
 	say "    $(cat "$POLICY_DIR/id_ed25519.pub")"
 	say ""
+	if pbcopy < "$POLICY_DIR/id_ed25519.pub" 2>/dev/null; then say "  （公钥已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
 	say "  ${C_D}维护者：把这一行存成文件（例如 ${host}.pub），运行 gh repo deploy-key add ${host}.pub -R ${repo} -t ${host}（不要加 -w）${C_0}"
 	say ""
+}
+policy_setup() {   # policy_setup [仓库]：配置映射仓库（不写就是维护者的默认仓库），再试着拉一次
+	local repo="${1:-$POLICY_REPO_DEFAULT}"
+	[[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "用法: cca policy setup [仓库]，例如 cca policy setup someone/cca-policy"
+	policy_prepare "$repo"
 	policy_pull && return 0
 	info "维护者加上公钥之后，cca 每天会自动拉一次映射（也可以运行 cca policy pull 马上拉）"
+}
+
+policy_offer() {   # 终端里启动账号时：还没配置映射、也没说过不用，就引导配置（可以跳过）。启动器、脚本里（非交互）不问
+	local w
+	[ -n "$POLICY_REPO_DEFAULT" ] && interactive && py policy-ask || return 0
+	say ""
+	say "  这台机器还没配置维护者的账号 → 节点映射（${POLICY_REPO_DEFAULT}）。配置之后，映射里的账号出口由维护者固定，"
+	say "  cca 每天自动拉取更新；你只要把这台机器的一把只读公钥发给维护者。"
+	say ""
+	say "    1. 现在配置（推荐）"
+	say "    2. 这次先跳过（下次启动再问）"
+	say "    3. 不用映射（以后不再问；想用时运行 cca policy setup）"
+	say ""
+	w=$(ask "  选择 [1]：" 1)
+	case "$w" in
+		1) policy_guide ;;
+		3) py policy-decline && info "以后启动不再问；想用时运行 cca policy setup" ;;
+		*) info "这次先跳过，下次启动再问" ;;
+	esac
+	return 0
+}
+policy_guide() {   # 手把手配置：生成 deploy key、显示公钥，等维护者加好之后按回车重新拉取（可以先跳过：之后每天自动拉）
+	local w i
+	policy_prepare "$POLICY_REPO_DEFAULT"
+	policy_pull && return 0   # 这台机器的公钥以前就加过（比如重装了 cca）：直接拉到了
+	for i in 1 2 3 4 5 6 7 8 9 10; do
+		printf '%s' "  维护者加好之后按回车重新拉取；输入 s 先跳过：" >&2
+		IFS= read -r w <&3 || break   # 读到头（终端关了、答案用完了）就当跳过
+		case "$w" in s|S|q|Q) break ;; esac
+		policy_pull && return 0
+	done
+	info "先跳过：维护者加上公钥之后，cca 每天会自动拉一次映射（也可以运行 cca policy pull 马上拉）"
 }
 
 policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、上次拉到的映射、最近一次拉取的结果、受约束的账号
 	local repo
 	repo=$(py policy-repo)
-	if [ -z "$repo" ]; then info "没有配置维护者的账号 → 节点映射（cca policy setup <仓库>）"; return 0; fi
+	if [ -z "$repo" ]; then
+		if [ -n "$(py get policy_declined)" ]; then info "没有配置维护者的账号 → 节点映射（选过不用，启动时不再问；想用时运行 cca policy setup）"
+		else info "没有配置维护者的账号 → 节点映射（cca policy setup）"; fi
+		return 0
+	fi
 	say "  映射仓库：${repo}"
 	if [ -f "$POLICY_DIR/id_ed25519.pub" ]; then say "  这台机器的 deploy key：$(cat "$POLICY_DIR/id_ed25519.pub")"
 	else say "  这台机器还没有 deploy key：运行 cca policy setup ${repo}"; fi
@@ -5408,12 +5476,12 @@ cmd_policy_fetch() {   # 后台任务：拉一次映射，结果记在 $POLICY_D
 	if policy_fetch; then policy_log "拉取成功"; else policy_log "$POLICY_ERR"; fi
 }
 
-cmd_policy() {   # cca policy [setup <仓库> | pull]
+cmd_policy() {   # cca policy [setup [仓库] | pull]
 	case "${1:-}" in
 		setup) shift; policy_setup "$@" ;;
 		pull) policy_pull ;;
 		''|status) policy_status ;;
-		*) die "用法: cca policy [setup <仓库> | pull]" ;;
+		*) die "用法: cca policy [setup [仓库] | pull]" ;;
 	esac
 }
 
@@ -5637,8 +5705,9 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              想固定一种，把 ${CFG} 的 route 改成 router 或 local
 
 维护者的账号 → 节点映射（可选）
-  cca policy setup <仓库>    映射放在维护者的私有 GitHub 仓库里（例如 someone/cca-policy）：给这台机器生成只读的
-                             deploy key，把公钥交给维护者加到仓库上；安装时带 CCA_POLICY_REPO=仓库 也会做这一步
+  cca policy setup [仓库]    映射放在维护者的私有 GitHub 仓库里（不写就是 ${POLICY_REPO_DEFAULT:-维护者的仓库}）：给这台机器
+                             生成只读的 deploy key，把公钥交给维护者加到仓库上。还没配置时，终端里启动账号会先引导
+                             （可以跳过，也可以选不再问）；安装时带 CCA_POLICY_REPO=仓库 也会做这一步
   cca policy [pull]          看映射的状态 / 马上拉一次（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
                              指定的节点，账号表里改成别的会被改回
 
