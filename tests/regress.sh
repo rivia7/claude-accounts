@@ -620,7 +620,7 @@ ok "（准备一键还原）dave 登录着、建过 git 工作树；另有一个
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
-ok "lint：cca、install.sh 和 release.sh 里没有 \$变量 紧跟非 ASCII 字符" '[ "$(python3 -I -c "import re,sys; print(sum(len(re.findall(r\"\\\$[A-Za-z_][A-Za-z0-9_]*(?=[^\\x00-\\x7f])\", open(f, encoding=\"utf-8\").read())) for f in sys.argv[1:]))" "$CCA" "$D/../install.sh" "$D/../release.sh")" = 0 ]'
+ok "lint：cca、install.sh、release.sh 和 policy.sh 里没有 \$变量 紧跟非 ASCII 字符" '[ "$(python3 -I -c "import re,sys; print(sum(len(re.findall(r\"\\\$[A-Za-z_][A-Za-z0-9_]*(?=[^\\x00-\\x7f])\", open(f, encoding=\"utf-8\").read())) for f in sys.argv[1:]))" "$CCA" "$D/../install.sh" "$D/../release.sh" "$D/../policy.sh")" = 0 ]'
 out=$(run cca router status 2>&1)
 ok "router status：列出槽位、端口和选中节点" 'printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A" && printf "%s" "$out" | grep -q "槽位 CCA-2 :7902 监听中 → REJECT"'
 
@@ -697,12 +697,69 @@ rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
 out=$(run CCA_TTY="$(ans)" cxa @dave --version 2>&1); rc=$?
 ok "装了测试版之后，出了更新的正式版照常自动更新；这次是用 cxa 启动的，换上新版本重新执行后启动的照样是 Codex" 'printf "%s" "$out" | grep -q "cca 已自动更新：9.9.14-beta.1 → 9.9.14" && [ "$(ver)" = 9.9.14 ] && [ $rc -eq 3 ] && clast ARGS | grep -q -- " --version$" && clast ENV | grep -q "CODEX_HOME=$DD/codex "'
 
+# 11b2. 维护者的账号 → 节点映射：私有仓库（假 git）+ 这台机器的 deploy key + 发布密钥签名
+# （这时装着的是 mkver 换成测试密钥的版本，映射用 $T/relkey 签）
+PR="$T/policy_repo"; mkdir -p "$PR"; PK="$H/.cca/policy/id_ed25519"
+pol() {   # pol JSON [签名密钥]：写进假的私有映射仓库并签名
+	printf '%s\n' "$1" > "$PR/policy.json"; rm -f "$PR/policy.json.sig"
+	ssh-keygen -Y sign -q -n cca-policy -f "${2:-$T/relkey}" "$PR/policy.json" 2>/dev/null
+}
+pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
+touch "$T/policy_denied"; : > git.log
+out=$(run CCA_TTY="$(ans)" cca policy setup example/cca-policy 2>&1); rc=$?
+ok "cca policy setup：给这台机器生成 deploy key，显示公钥和维护者要运行的命令；公钥还没加上时说明之后会自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "gh repo deploy-key add .* -R example/cca-policy" && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ ! -f "$H/.cca/policy/policy.json" ] && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
+ok "拉映射只用这台机器的 deploy key：不读用户的 ssh / git 配置和 ssh-agent，只认 GitHub 的主机公钥；GitHub 拒绝了就不再重试" '[ "$(grep -c "^GIT clone" git.log)" = 1 ] && grep -q "^GIT clone git@github.com:example/cca-policy.git SSH=ssh -F /dev/null -i $PK -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=$H/.cca/policy/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes .* GLOBAL=/dev/null$" git.log && grep -qx "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" "$H/.cca/policy/known_hosts"'
+rm -f "$T/policy_denied"
+out=$(run cca policy pull 2>&1); rc=$?
+ok "cca policy pull：验签通过才换上（只有自己能读），马上按映射改账号表并说明" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新映射（Claude 1 个账号、Codex 0 个账号）" && [ "$(stat -f %Lp "$H/.cca/policy/policy.json")" = 600 ] && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "alice@example.com 的出口按维护者的映射固定为 US-C（账号表里写的是 US-A，已改回）" && printf "%s" "$out" | grep -q "Claude  alice@example.com → US-C"'
+n0=$(reloads); out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "映射换了出口：启动前同步到路由器（只换节点，不重载），照常启动" '[ $rc -eq 3 ] && [ "$(sel CCA-1)" = US-C ] && [ "$(reloads)" = "$n0" ]'
+out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j["alice@example.com"] = "US-B"' cca edit 2>&1)
+ok "cca edit 把映射里的账号改成别的节点：改回映射的节点并说明" 'grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "按维护者的映射固定为 US-C（账号表里写的是 US-B，已改回）"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-D"}}' "$T/evilkey"
+out=$(run cca policy pull 2>&1); rc=$?
+pol '{"version": 1, "claude": {"not-an-email": "US-D", "alice@example.com": "US-C", "ALICE@example.com": "US-D"}}'
+out2=$(run cca policy pull 2>&1); rc2=$?
+pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'; printf '{"version": 1, "claude": {"alice@example.com": "US-D"}}\n' > "$PR/policy.json"
+out3=$(run cca policy pull 2>&1); rc3=$?
+ok "不是发布密钥签的、签过之后又被改过的、格式不对的映射都不用，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "映射的格式不对：claude：「not-an-email」不像邮箱" && printf "%s" "$out2" | grep -q "claude：ALICE@example.com 写了不止一次（邮箱不分大小写）" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "签名不对" && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/policy/policy.json"'
+touch "$T/policy_offline"; : > git.log
+out=$(run cca policy pull 2>&1); rc=$?
+rm -f "$T/policy_offline"
+ok "连不上 GitHub：22 端口不通就改走 ssh.github.com:443，一共试三轮；说出真正的原因（不是 git 的套话），原来的映射照用" '[ $rc -ne 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 6 ] && grep -q "^GIT clone ssh://git@ssh.github.com:443/example/cca-policy.git " git.log && printf "%s" "$out" | grep -q "连不上 GitHub：ssh: connect to host github.com port 22: Operation timed out（接着用上次拉到的）" && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/policy/policy.json"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": "US-D"}}'; run cca policy pull >/dev/null 2>&1
+out=$(run CCA_TTY="$(ans erin@example.com '')" cca add 2>&1); rc=$?
+ok "添加映射里的账号：出口直接用映射的节点，不让选" '[ $rc -eq 0 ] && grep -q "\"erin@example.com\": \"US-D\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "erin@example.com 的出口按维护者的映射固定为 US-D" && ! printf "%s" "$out" | grep -q "选择节点编号"'
+run CCA_TTY="$(ans y)" cca rm erin >/dev/null 2>&1
+# 后台拉到了新映射（这里直接写进去，模拟后台拉取的结果）：账号表在下一条命令里才改，cca web / check 要先让路由器跟上
+printf '{"version": 1, "claude": {"alice@example.com": "US-D"}}\n' > "$H/.cca/policy/policy.json"
+run CCA_TTY="$(ans)" cca web alice >/dev/null 2>&1; s1=$(sel CCA-1)
+printf '{"version": 1, "claude": {"alice@example.com": "US-B"}}\n' > "$H/.cca/policy/policy.json"
+run cca check alice >/dev/null 2>&1; s2=$(sel CCA-1)
+ok "映射在后台换了之后，cca web、cca check 先把路由器同步到映射的节点，不经旧的节点出去" '[ "$s1" = US-D ] && [ "$s2" = US-B ]'
+pol '{"version": 1, "claude": {"alice@example.com": "US-A"}, "codex": {"dave@example.com": "US-D"}}'
+run cca update off >/dev/null 2>&1; rm -f "$H/.cca/policy/checked"; run cca ls >/dev/null 2>&1
+for i in $(seq 1 50); do grep -q US-A "$H/.cca/policy/policy.json" 2>/dev/null && break; sleep 0.2; done
+run cca update auto >/dev/null 2>&1
+ok "每天在后台自动拉一次映射（关了自动更新也拉）" 'grep -q "\"alice@example.com\": \"US-A\"" "$H/.cca/policy/policy.json" && [ -f "$H/.cca/policy/checked" ] && tail -n 1 "$H/.cca/policy/log" | grep -q "拉取成功"'
+out=$(run cca policy 2>&1)
+ok "cca policy：映射仓库、deploy key、映射摘要、最近一次拉取，以及这台机器上按映射固定出口的账号（Claude、Codex 都列）" 'printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "映射：Claude 1 个账号、Codex 1 个账号" && printf "%s" "$out" | grep -q "最近一次拉取：.*拉取成功" && printf "%s" "$out" | grep -q "Claude  alice@example.com → US-A" && printf "%s" "$out" | grep -q "Codex  dave@example.com → US-D" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json"'
+# 映射要的节点不在这台机器的可选节点里（路由器上有 HK-A，装的时候只选了 US-A…US-D）
+pol '{"version": 1, "claude": {"alice@example.com": "HK-A"}}'; run cca policy pull >/dev/null 2>&1
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "映射要的节点不在可选节点里：不启动，说明 cca edit 改不了、要用 cca router setup 重新选可选节点" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的映射要求它走「HK-A」，可这个节点不在可选列表" && printf "%s" "$out" | grep -q "运行 cca router setup 重新选可选节点"'
+n0=$(reloads)
+out=$(run CCA_TTY="$(ans '' '' '' '1 2 3 4 5' y)" cca router setup 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc2=$?
+ok "这时 cca router setup 不会因为账号表有错误就退出：直接让重新选可选节点，选上 HK-A 后同步（端口池变了，问过再重载），照常启动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "先重新选可选节点" && [ "$(cfgv "c[\"nodes\"] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A\"]")" = True ] && [ "$(sel CCA-1)" = HK-A ] && [ "$(reloads)" -gt "$n0" ] && [ $rc2 -eq 3 ]'
+
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
 r3() { env -i LANG=en_US.UTF-8 HOME="$H3" CCA_T="$T" SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
-out=$(r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
+out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
+ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射"'
 ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.20 ] && [ "$(readlink "$H3/.local/bin/cca")" = "$H3/.cca/bin/cca" ] && [ "$(readlink "$H3/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "已下载 cca 9.9.20，签名校验通过"'
 ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
 out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?
@@ -729,7 +786,7 @@ ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字�
 ok "restore：本机还原（cca、cxa 都删掉），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key 从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ -z "$(ls "$T/keychain" | grep "^cca-api-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
-ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees" && ! tar -xzOf "$BK" 2>/dev/null | grep -qF at-SECRET'
+ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$" && ! tar -xzOf "$BK" 2>/dev/null | grep -qF at-SECRET'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

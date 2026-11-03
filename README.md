@@ -101,6 +101,23 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 }
 ```
 
+## 维护者的账号 → 节点映射（可选）
+
+如果有人替你维护"哪个账号必须走哪个节点"，映射放在他的**私有** GitHub 仓库里，cca 自己去拉，映射里的账号出口就固定下来：
+
+- **安装时配置**：`curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/install.sh | CCA_POLICY_REPO=维护者/cca-policy bash`。已经装好的运行 `cca policy setup 维护者/cca-policy`。
+- **把公钥交给维护者**：cca 会给这台机器生成一把只读的 deploy key，并显示它的公钥。把这一行发给维护者，他加到仓库上之后，cca 每天自动拉一次映射；想马上拉，运行 `cca policy pull`。`cca policy` 查看状态。
+- **固定出口**：映射里的账号，添加时直接用映射的节点，不让选；账号表里改成别的节点，下次运行 cca 时会改回来，并提示一句。映射的节点不在这台机器的可选节点里时，运行 `cca router setup` 重新选可选节点。
+- **验签**：映射要有发布 cca 用的那把密钥的签名才会被采用，签名不对、格式不对都不用，接着用上次拉到的。只管官方账号（按邮箱），第三方 API 账号不受影响。
+- 这些检查都在你自己的 Mac 上做，用来防止配错，不防有意改动。`cca restore` 会删掉本机的 deploy key，记得让维护者把它从仓库上撤掉。
+- 每台机器拉到的是整份映射（`~/.cca/policy/policy.json`，只有自己能读），里面有映射里所有人的邮箱和节点；不想让大家互相看到的话，维护者要分开建仓库。
+
+维护者这边：
+
+1. 建一个私有仓库（例如 `cca-policy`），放一个 `policy.json`：`{"version": 1, "claude": {"name@example.com": "US-A"}, "codex": {"name@example.com": "US-B"}}`。
+2. 改好后在 cca 的仓库里运行 `./policy.sh 映射仓库的目录`：它会检查格式、确认仓库是私有的，然后用发布密钥签名，提交并推送。
+3. 用户发来的公钥存成文件，运行 `gh repo deploy-key add 文件 -R 你/cca-policy -t 名字` 加上，默认就是只读。不想让谁再拉，就在仓库的 Settings → Deploy keys 里删掉他的。
+
 ## 查看用量
 
 ```sh
@@ -243,11 +260,11 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
 
-- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.3`
+- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.4`
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh
-  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.3/install.sh | bash -s 2.6.0-beta.3
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.4/install.sh | bash -s 2.6.0-beta.4
   ```
 
 - 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。

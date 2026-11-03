@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0-beta.3"
+VERSION="2.6.0-beta.4"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -714,11 +714,59 @@ def api_problems(c, k, v, tool=None):
     return errs
 
 
+POLICY_FILE = os.path.join(CCA_HOME, 'policy', 'policy.json')   # 维护者的账号 → 节点映射（bash 的 policy_fetch 验签后才放进来）
+
+
+def policy_map(tool):
+    """维护者的映射里这个工具的官方账号：{邮箱（小写）: 节点}。没配置、读不了、格式不对都当作没有"""
+    j = load_quiet(POLICY_FILE)
+    s = j.get(tool.name) if isinstance(j, dict) else None
+    if not isinstance(s, dict):
+        return {}
+    return {e.lower(): n for e, n in s.items() if isinstance(e, str) and isinstance(n, str) and n}
+
+
+def policy_problems(j, strict=False):
+    """映射文件的问题：{"version": 1, "claude": {"邮箱": "节点"}, "codex": {…}}。strict（维护者发布前查）时
+    不认识的字段也算：客户端照样忽略它们，免得以后加了新工具，旧版本的 cca 就整个不认"""
+    if not isinstance(j, dict):
+        return ['应该是 JSON 对象，例如 {"version": 1, "claude": {"name@example.com": "节点"}, "codex": {}}']
+    names = [tool.name for tool in TOOLS]
+    errs = [] if j.get('version') == 1 else ['version 应该是 1']
+    for n in names:
+        s = j.get(n, {})
+        if not isinstance(s, dict):
+            errs.append('%s 应该是 {"邮箱": "节点"} 形式的对象' % n)
+            continue
+        seen = set()
+        for e, node in s.items():
+            if not EMAIL_RE.match(e):
+                errs.append('%s：「%s」不像邮箱' % (n, e))
+            if e.lower() in seen:
+                errs.append('%s：%s 写了不止一次（邮箱不分大小写）' % (n, e))
+            seen.add(e.lower())
+            if not isinstance(node, str) or not node.strip():
+                errs.append('%s：%s 的节点应该是非空字符串' % (n, e))
+    if strict:
+        errs += ['不认识的字段 %s（只能有 version、%s）' % (k, '、'.join(names)) for k in j if k != 'version' and k not in names]
+    return errs
+
+
 def reconcile(c, t, tool, reserved=()):
     """校验一个工具的账号表；给走节点的账号分配固定端口（直连的第三方 API 账号不占端口），回收已删除账号的端口。
     reserved 是别的工具占着的端口（大家共用一个端口池），不分给这张表。返回错误列表。
-    只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。"""
+    只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。
+    维护者的映射里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，说一声）：每条命令都经过这里，
+    添加、cca edit、启动、同步前都管得到"""
     st = tool.state(c, create=True)
+    pm = policy_map(tool)
+    fixed = [k for k, v in t.items() if not is_api(v) and pm.get(parse_key(k)[1].lower(), v) != v]
+    for k in fixed:
+        want = pm[parse_key(k)[1].lower()]
+        sys.stderr.write('! %s 的出口按维护者的映射固定为 %s（账号表里写的是 %s，已改回）\n' % (label_of(k), want, t[k]))
+        t[k] = want
+    if fixed:
+        save_json(tool.table, t, 0o600)
     errs, emails, aliases, ids = [], {}, {}, {}
     if not c['nodes'] and any(node_of(v) or not is_api(v) for v in t.values()):
         errs.append('config.json 里还没有可选节点（nodes）：运行 cca router setup 从路由器的节点里选')
@@ -741,7 +789,9 @@ def reconcile(c, t, tool, reserved=()):
         elif not isinstance(v, str) or not v:
             errs.append('%s：节点必须是非空字符串' % k)
         elif c['nodes'] and v not in c['nodes']:
-            errs.append('%s：节点「%s」不在可选列表（%s）' % (k, v, '、'.join(c['nodes'])))
+            errs.append(('%s：维护者的映射要求它走「%s」，可这个节点不在可选列表（%s）。cca edit 改不了它：'
+                          '运行 cca router setup 重新选可选节点（路由器上也没有这个节点的话，请联系维护者）'
+                         if e and e.lower() in pm else '%s：节点「%s」不在可选列表（%s）') % (k, v, '、'.join(c['nodes'])))
         i = acct_id(k, tool)
         if i in ids and (is_api(v) or is_api(t[ids[i]])):   # 官方账号的邮箱重复上面已经报过
             errs.append('「%s」和「%s」会用同一个账号目录（id 或邮箱重复了）' % (ids[i], k))
@@ -1227,6 +1277,48 @@ def cmd_validate(scope=''):
     sys.exit(1 if errs else 0)
 
 
+def cmd_policy_check(path, strict=''):
+    """检查映射文件（拉下来验签之后、维护者发布之前）：有问题就打印出来（stdout）并返回 1"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            j = json.load(f)
+    except (OSError, ValueError) as e:
+        print('读不了，或者不是正确的 JSON：%s' % e)
+        sys.exit(1)
+    errs = policy_problems(j, strict == 'strict')
+    for e in errs:
+        print(e)
+    sys.exit(1 if errs else 0)
+
+
+def cmd_policy_repo():
+    """配置的映射仓库。只读 config.json，不经过 ctx()：后台拉取时不碰账号表，免得和前台的命令抢着写"""
+    c = load_quiet(CFG)
+    print((c.get('policy') or '') if isinstance(c, dict) else '')
+
+
+def cmd_policy_node(email):
+    """维护者的映射给这个邮箱（当前工具）定的节点；没有就打印空行"""
+    print(policy_map(T).get(email.strip().lower(), ''))
+
+
+def cmd_policy_summary():
+    """映射里各工具有几个账号，例如：Claude 3 个账号、Codex 1 个账号"""
+    print('、'.join('%s %d 个账号' % (tool.label, len(policy_map(tool))) for tool in TOOLS))
+
+
+def cmd_policy_rows():
+    """这台机器上受映射约束的账号（各工具一起）；节点不在可选列表时注明这个账号用不了"""
+    c = ctx()[0]
+    for tool in TOOLS:
+        pm = policy_map(tool)
+        for k, v in (TABS.get(tool.name) or {}).items():
+            n = None if is_api(v) else pm.get(parse_key(k)[1].lower())
+            if n:
+                bad = c['nodes'] and n not in c['nodes']
+                print('    %s  %s → %s%s' % (tool.label, label_of(k), n, '（不在可选节点里，这个账号用不了）' if bad else ''))
+
+
 def cmd_email(key):
     print(email_of(key))
 
@@ -1271,14 +1363,16 @@ def cmd_check(field, value):
 
 
 def cmd_add(email, alias, node):
-    """新增账号，打印账号表里的键：有别名是「别名(邮箱)」，没有就是邮箱"""
+    """新增账号，打印账号表里的键：有别名是「别名(邮箱)」，没有就是邮箱。维护者的映射里有这个邮箱时，节点用映射的"""
     c, t, _ = ctx()
     email, alias = email.strip().lower(), alias.strip()
     p = email_problem(t, email) or (alias_problem(t, alias) if alias else '')
     if p:
         die(p)
+    want = policy_map(T).get(email)
+    node = want or node
     if c['nodes'] and node not in c['nodes']:
-        die('节点「%s」不在可选列表' % node)
+        die('节点「%s」不在可选列表%s' % (node, '（维护者的映射要求这个账号走它：运行 cca router setup 重新选可选节点）' if want else ''))
     key = '%s(%s)' % (alias, email) if alias else email
     t[key] = node
     save_json(T.table, t, 0o600)
@@ -2879,6 +2973,8 @@ CMDS = {
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
     'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
+    'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
+    'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -3384,7 +3480,7 @@ REMOTE_ADD_KEY='k=$(cat); add() { mkdir -p "${1%/*}"; touch "$1"; chmod 600 "$1"
 cmd_router_setup() {
 	need_tty
 	load_router
-	local host="" user port key i list="" nd
+	local host="" user port key i list="" nd bad=""
 	if [ -n "$ROUTER_HOST" ]; then
 		host=$(ask "路由器地址 [${ROUTER_HOST}]: " "$ROUTER_HOST")
 	else
@@ -3410,12 +3506,19 @@ cmd_router_setup() {
 		rsh true || die "公钥已写入，但密钥登录仍然失败"
 		info "密钥登录成功，之后免密"
 	fi
-	router_sync
-	case $? in 0|3) ;; *) return 1 ;; esac
+	# 账号表现在有错误时先别同步（同步前会校验，过不去就走不到下面）：例如维护者的映射要的节点不在可选节点里，
+	# cca edit 改不了，只能在这里重新选可选节点
+	if py validate all >/dev/null 2>&1; then
+		router_sync
+		case $? in 0|3) ;; *) return 1 ;; esac
+	else
+		bad=1
+	fi
 	while IFS= read -r nd; do list="${list:+${list}、}${nd}"; done < <(py nodes-allowed | cut -f1)
 	if [ -z "$list" ]; then
 		pick_allowed_nodes || return 1
-	elif confirm "账号可选的出口节点：${list}。要重新选吗？" n; then
+	elif [ -n "$bad" ] || confirm "账号可选的出口节点：${list}。要重新选吗？" n; then
+		[ -z "$bad" ] || { py validate all; warn "账号表现在有错误（见上面），先重新选可选节点：账号可选的出口节点现在是 ${list}"; }
 		pick_allowed_nodes || return 1
 		[ -z "$(py keys)" ] || router_sync   # 可选节点变了要重建端口池（需要重载，会先问）
 	fi
@@ -3555,9 +3658,14 @@ cmd_add() {   # cca [codex] add [api]
 	email=$(ask_valid email "  登录邮箱：") || return 1   # Claude 登录时自动填进登录页；Codex 登录后核对
 	alias=$(ask_valid alias "  别名（可选，回车跳过）：" optional)   # 只用来在菜单里认出账号
 	say ""
-	say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
-	say ""
-	node=$(pick_node) || return 1
+	node=$(py policy-node "$email")
+	if [ -n "$node" ]; then
+		info "${alias:-$email} 的出口按维护者的映射固定为 ${node}"
+	else
+		say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
+		say ""
+		node=$(pick_node) || return 1
+	fi
 	say ""
 	key=$(py add "$email" "$alias" "$node") || return 1
 	eval "$(py env "$key")"
@@ -4064,6 +4172,7 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
 	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
+	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
 	CCA_SKIP_CHECK=1 preflight || exit 1
 	# 还没登录就先登录（同一个浏览器实例，登录一次两边都能用；Claude 的登录页预填邮箱）
 	if [ -n "$ACC_EMAIL" ] && [ -n "$TOOL_BIN" ] && interactive && [ -z "$(auth_email)" ]; then
@@ -4426,6 +4535,7 @@ cmd_check() {
 	local keys key ips="" rc host="" route=""
 	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
 	[ -n "$keys" ] || { info "还没有账号"; return 0; }
+	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，测到的才是账号现在的出口
 	while IFS= read -r key; do
 		eval "$(py env "$key")" || continue
 		if [ -n "$ACC_PORT" ] && [ -z "$route" ]; then   # 第一个走端口的账号：选好路
@@ -4767,7 +4877,8 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 			esac
 			return 0 ;;
 		--rollback) update_rollback; return ;;
-		''|--check) ;;
+		'') [ ! -f "$POLICY_DIR/id_ed25519" ] || policy_pull || true ;;   # 配置了维护者的映射：顺便拉一次
+		--check) ;;
 		*) is_ver "$1" || die "用法: cca update [版本号 | --check | --rollback | auto | notify | off]"
 		   want="$1" ;;   # 手动装指定的版本，例如测试版 2.6.0-beta.1
 	esac
@@ -4793,6 +4904,162 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 		*-beta.*) info "这是测试版：不会自动更新到别的测试版，出了更新的正式版时照常自动更新；退回原来的版本：cca update --rollback" ;;
 	esac
 	info "路由器端脚本如果有变化，下次启动时会自动同步"
+}
+
+# ---------------------------------------------------------------------------
+# 维护者的账号 → 节点映射（可选）：映射放在维护者的私有 GitHub 仓库里（policy.json，和用发布密钥签的 policy.json.sig），
+# 每台机器用自己的只读 deploy key 去拉，验签通过才换上；映射里的账号出口固定为指定的节点（PY_SRC 的 reconcile 强制）
+#   · cca policy setup 仓库：生成 deploy key，把公钥交给维护者加到仓库上；安装时带 CCA_POLICY_REPO=仓库 也会做这一步
+#   · 每天在后台拉一次（和自动更新的开关、开发模式无关）；cca policy pull、cca update 时也拉；拉不到就接着用上次的
+# ---------------------------------------------------------------------------
+POLICY_DIR="$CCA_HOME/policy"
+GITHUB_HOST_KEYS=(   # GitHub 公布的 SSH 主机公钥（api.github.com/meta）；ssh.github.com:443 用的是同一组
+	'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
+	'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg='
+)
+
+policy_log() { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$POLICY_DIR/log" 2>/dev/null; }
+
+policy_clone() {   # policy_clone 仓库 目录：0 拉到了；1 连不上（可以重试）；2 GitHub 拒绝了（重试也没用）。原因在 POLICY_ERR
+	# 只用这台机器的 deploy key、只认 GitHub 的主机公钥，不读用户自己的 git / ssh 配置和 ssh-agent：ssh 要是先拿用户
+	# 自己的 GitHub 密钥登录上了，这个私有仓库只会回"不存在"。22 端口连不上时改走 ssh.github.com:443
+	local url err k ssh_cmd
+	for k in "${GITHUB_HOST_KEYS[@]}"; do printf 'github.com %s\n[ssh.github.com]:443 %s\n' "$k" "$k"; done > "$POLICY_DIR/known_hosts.$$"
+	mv -f "$POLICY_DIR/known_hosts.$$" "$POLICY_DIR/known_hosts"   # 前台、后台同时在拉时也不会读到写了一半的
+	ssh_cmd="ssh -F /dev/null -i $(printf %q "$POLICY_DIR/id_ed25519") -o IdentitiesOnly=yes -o IdentityAgent=none"
+	ssh_cmd="$ssh_cmd -o UserKnownHostsFile=$(printf %q "$POLICY_DIR/known_hosts") -o GlobalKnownHostsFile=/dev/null"
+	ssh_cmd="$ssh_cmd -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR"
+	for url in "git@github.com:$1.git" "ssh://git@ssh.github.com:443/$1.git"; do
+		rm -rf "$2"
+		err=$(GIT_SSH_COMMAND="$ssh_cmd" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+			git clone --quiet --depth 1 "$url" "$2" 2>&1 >/dev/null) && return 0
+		case "$err" in
+			*"Permission denied"*) POLICY_ERR="GitHub 不认这台机器的 deploy key：维护者还没把公钥加到 ${1} 上，或者已经撤销了"; return 2 ;;
+			*"not found"*|*"not appear to be a git repository"*) POLICY_ERR="仓库 ${1} 不存在，或者这台机器的 deploy key 不是加在它上面的"; return 2 ;;
+			*"Host key verification failed"*|*"IDENTIFICATION HAS CHANGED"*) POLICY_ERR="GitHub 的主机密钥对不上（网络可能被劫持了），没有拉取"; return 2 ;;
+		esac
+		# 原因在 ssh 那一行（例如 ssh: connect to host github.com port 22: Operation timed out），git 后面跟的是套话
+		POLICY_ERR="连不上 GitHub：$(printf '%s\n' "$err" | grep -v -e '^[[:space:]]*$' -e '^fatal: Could not read from remote' \
+			-e '^Please make sure you have the correct access' -e '^and the repository exists' | tail -n 1)"
+	done
+	return 1
+}
+
+policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-policy）、检查格式后换上 $POLICY_DIR/policy.json；
+	                 # 失败时原来的照用，原因在 POLICY_ERR
+	local repo tmp rc i err
+	repo=$(py policy-repo)
+	[ -n "$repo" ] || { POLICY_ERR="还没配置映射仓库（cca policy setup 仓库）"; return 1; }
+	[ -f "$POLICY_DIR/id_ed25519" ] || { POLICY_ERR="这台机器还没有 deploy key：运行 cca policy setup ${repo}"; return 1; }
+	command -v git >/dev/null 2>&1 || { POLICY_ERR="需要 git：运行 xcode-select --install 装上苹果的命令行工具"; return 1; }
+	tmp=$(mktemp -d "$POLICY_DIR/tmp.XXXXXX") || { POLICY_ERR="建不了临时目录"; return 1; }
+	for i in 1 2 3; do   # 有的网络偶尔会丢新连接；GitHub 拒绝了的不用再试
+		policy_clone "$repo" "$tmp/repo"; rc=$?
+		[ $rc -eq 1 ] && [ $i -lt 3 ] || break
+		sleep 2
+	done
+	if [ $rc -eq 0 ]; then
+		rc=1
+		printf 'cca-release %s\n' "$RELEASE_KEY" > "$tmp/allowed"
+		if ! ssh-keygen -Y verify -f "$tmp/allowed" -I cca-release -n cca-policy -s "$tmp/repo/policy.json.sig" \
+			< "$tmp/repo/policy.json" >/dev/null 2>&1; then
+			POLICY_ERR="签名不对（不是维护者签发的，或者文件被改过），没有换上"
+		elif ! err=$(py policy-check "$tmp/repo/policy.json"); then
+			POLICY_ERR="映射的格式不对：${err//$'\n'/；}"
+		elif ( umask 077; cp "$tmp/repo/policy.json" "$POLICY_DIR/policy.json.$$" ) &&
+			mv -f "$POLICY_DIR/policy.json.$$" "$POLICY_DIR/policy.json"; then
+			rc=0
+		else
+			POLICY_ERR="写不进 ${POLICY_DIR}"
+		fi
+	fi
+	rm -rf "$tmp"
+	return $rc
+}
+
+policy_rows() {   # 这台机器上按映射固定出口的账号（顺便让账号表照映射改好：py 每次读账号表都会改）
+	local rows
+	rows=$(py policy-rows)
+	[ -z "$rows" ] || { say "  这台机器上按映射固定出口的账号："; say "$rows"; }
+}
+
+policy_pull() {   # 现在就拉一次，说明结果；拉不到时说明原因（上次拉到的照用）
+	local before
+	before=$(cat "$POLICY_DIR/policy.json" 2>/dev/null)
+	if policy_fetch; then
+		policy_log "拉取成功"
+		if [ "$(cat "$POLICY_DIR/policy.json")" = "$before" ]; then okay "映射没有变化（$(py policy-summary)）"
+		else okay "已更新映射（$(py policy-summary)）"; fi
+		policy_rows
+		# 账号表刚照映射改过：马上同步到路由器（后台拉取不做这一步，它不能问、不能重载，留给下一条命令）
+		if [ "$(digest)" != "$(py get synced)" ] && router_needed; then
+			router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
+		fi
+		return 0
+	fi
+	policy_log "$POLICY_ERR"
+	warn "没有拉到映射：${POLICY_ERR}${before:+（接着用上次拉到的）}"
+	return 1
+}
+
+policy_setup() {   # policy_setup 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，说明把公钥交给维护者，再试着拉一次
+	local repo="${1:-}" old host
+	[[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "用法: cca policy setup <仓库>，例如 cca policy setup someone/cca-policy"
+	mkdir -p "$POLICY_DIR" && chmod 700 "$POLICY_DIR" || die "建不了 ${POLICY_DIR}"
+	old=$(py policy-repo)
+	if [ -n "$old" ] && [ "$old" != "$repo" ]; then   # GitHub 的 deploy key 只能加在一个仓库上：换了仓库就换一把，旧仓库的映射也不再用
+		rm -f "$POLICY_DIR/id_ed25519" "$POLICY_DIR/id_ed25519.pub" "$POLICY_DIR/policy.json"
+	fi
+	host=$(hostname -s 2>/dev/null); host="${host:-mac}"
+	if [ ! -f "$POLICY_DIR/id_ed25519" ]; then
+		ssh-keygen -q -t ed25519 -N '' -C "cca-policy@${host}" -f "$POLICY_DIR/id_ed25519" || die "生成 deploy key 失败"
+	fi
+	py set policy "$repo" || die "保存配置失败"
+	say ""
+	say "  映射仓库：${repo}。把这台机器的公钥发给维护者，请他加成这个仓库的只读 deploy key："
+	say ""
+	say "    $(cat "$POLICY_DIR/id_ed25519.pub")"
+	say ""
+	say "  ${C_D}维护者：把这一行存成文件（例如 ${host}.pub），运行 gh repo deploy-key add ${host}.pub -R ${repo} -t ${host}（不要加 -w）${C_0}"
+	say ""
+	policy_pull && return 0
+	info "维护者加上公钥之后，cca 每天会自动拉一次映射（也可以运行 cca policy pull 马上拉）"
+}
+
+policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、上次拉到的映射、最近一次拉取的结果、受约束的账号
+	local repo
+	repo=$(py policy-repo)
+	if [ -z "$repo" ]; then info "没有配置维护者的账号 → 节点映射（cca policy setup <仓库>）"; return 0; fi
+	say "  映射仓库：${repo}"
+	if [ -f "$POLICY_DIR/id_ed25519.pub" ]; then say "  这台机器的 deploy key：$(cat "$POLICY_DIR/id_ed25519.pub")"
+	else say "  这台机器还没有 deploy key：运行 cca policy setup ${repo}"; fi
+	if [ -f "$POLICY_DIR/policy.json" ]; then say "  映射：$(py policy-summary)（$(date -r "$POLICY_DIR/policy.json" '+%F %T') 拉到的）"
+	else say "  还没拉到映射"; fi
+	[ ! -f "$POLICY_DIR/log" ] || say "  最近一次拉取：$(tail -n 1 "$POLICY_DIR/log")"
+	policy_rows
+}
+
+policy_hook() {   # 启动时：配置了映射仓库、距上次拉取超过一天，就在后台拉一次（和自动更新的开关、开发模式无关）
+	[ -f "$POLICY_DIR/id_ed25519" ] || return 0
+	[ -z "$(find "$POLICY_DIR/checked" -mmin -1440 2>/dev/null)" ] || return 0
+	touch "$POLICY_DIR/checked"
+	( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _policy-fetch </dev/null >/dev/null 2>&1 3<&- & )
+}
+
+cmd_policy_fetch() {   # 后台任务：拉一次映射，结果记在 $POLICY_DIR/log；账号表在下一条命令读它时照新映射改
+	[ -n "$(find "$POLICY_DIR/lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$POLICY_DIR/lock"   # 上次异常退出留下的锁
+	mkdir "$POLICY_DIR/lock" 2>/dev/null || return 0
+	trap 'rmdir "$POLICY_DIR/lock" 2>/dev/null' EXIT
+	if policy_fetch; then policy_log "拉取成功"; else policy_log "$POLICY_ERR"; fi
+}
+
+cmd_policy() {   # cca policy [setup <仓库> | pull]
+	case "${1:-}" in
+		setup) shift; policy_setup "$@" ;;
+		pull) policy_pull ;;
+		''|status) policy_status ;;
+		*) die "用法: cca policy [setup <仓库> | pull]" ;;
+	esac
 }
 
 # ---------------------------------------------------------------------------
@@ -4871,6 +5138,9 @@ cmd_install() {
 	case ":$PATH:" in *":$bin:"*) ;; *) path_hint "$bin" ;; esac
 	info "已安装：$bin/cca → $target"
 	codex_alias_ensure
+	if [ -n "${CCA_POLICY_REPO:-}" ]; then   # 一键安装时带上维护者的映射仓库：curl … | CCA_POLICY_REPO=仓库 bash
+		( policy_setup "$CCA_POLICY_REPO" ) || warn "映射仓库没配置好：稍后运行 cca policy setup ${CCA_POLICY_REPO}"
+	fi
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
 	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
@@ -4936,7 +5206,7 @@ cmd_restore() {
 	if local_ready; then local_remove; info "本机 ${LOCAL_NAME} 里 cca 的端口池已移除"; fi
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥
-	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' \
+	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null ) &&
 		info "配置备份：$bk"
 	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
@@ -5009,6 +5279,12 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              平时自动判断：连得上路由器走路由器，连不上走本机 Clash；
                              想固定一种，把 ${CFG} 的 route 改成 router 或 local
 
+维护者的账号 → 节点映射（可选）
+  cca policy setup <仓库>    映射放在维护者的私有 GitHub 仓库里（例如 someone/cca-policy）：给这台机器生成只读的
+                             deploy key，把公钥交给维护者加到仓库上；安装时带 CCA_POLICY_REPO=仓库 也会做这一步
+  cca policy [pull]          看映射的状态 / 马上拉一次（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
+                             指定的节点，账号表里改成别的会被改回
+
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
   cca update                 立即更新到最新版本；平时每天自动检查一次，新版本在下次启动时自动安装
@@ -5037,6 +5313,8 @@ main() {
 			if [ "${1:-}" = codex ]; then shift; use_tool codex; fi
 			py api-key-out "${1:-}" ;;
 		_update-fetch) cmd_update_fetch ;;
+		_policy-fetch) cmd_policy_fetch ;;
+		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
 		*)
@@ -5047,6 +5325,7 @@ main() {
 				exit 0
 			fi
 			update_hook "$@"
+			policy_hook
 			if [ "${1:-}" = codex ]; then   # cca codex …：后面的子命令都作用于 Codex 账号
 				shift
 				use_tool codex
@@ -5071,6 +5350,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		check) shift; cmd_check "$@" ;;
 		router) shift; cmd_router "$@" ;;
 		local) shift; cmd_local "$@" ;;
+		policy) shift; cmd_policy "$@" ;;
 		@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;
 		--) shift; launch "$@" ;;
 		*) launch "$@" ;;

@@ -6,6 +6,7 @@
 - `bash tests/regress.sh` — 全流程回归，约 2 分钟；全用假的路由器/claude/curl/ssh/GitHub，不联网、不碰真实 `~/.cca`；`KEEP=1` 保留沙箱；只能在 macOS 上跑（BSD sed、/bin/dash、ruby）
 - `bash -n cca && bash -n install.sh` — 快速语法检查
 - `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、打 tag、推送，发布 cca、cca.sig、install.sh。`VERSION` 写成 `X.Y.Z-beta.N` 时发成测试版（GitHub pre-release、不设为 Latest）：`releases/latest` 不指向它，自动更新和一键安装都不装，只能 `cca update X.Y.Z-beta.N` 或 `install.sh` 后面跟版本号手动装；版本比较里同号的测试版比正式版旧（`ver_gt`）
+- `./policy.sh 映射仓库的目录 ["提交说明"]` — 发布维护者的账号 → 节点映射：检查格式（`cca _policy-check`）、确认仓库是私有的，用发布密钥签名（命名空间 `cca-policy`），提交并推送
 
 ## 约定和坑
 - 非 ASCII 字符前的变量一律写 `${VAR}`：macOS bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名（回归里有 lint）
@@ -29,6 +30,7 @@
 - `PY_SRC=$(cat <<'PY' … PY)` 里不能有落单的 `'` 或 `"`：bash 3.2 扫描 `$(…)` 时会数引号，认错结尾后报错的行号在后面毫不相干的地方。正则和字符串里写 `\x22` / `\x27`
 - 出门在外（连不上路由器）走本机 Clash：Clash Verge 的 Merge 会整个替换列表，所以端口池写进全局扩展脚本（包住用户的 main）；生效靠 `PUT /configs` 热加载它当前的运行配置（文本插入，不重写），不重启 Clash Verge。它的内核控制接口默认只有 Unix socket（运行配置里的 `external-controller-unix`）
 - 在外面不连路由器：路由器同步留到回家后的下次启动（摘要对不上会自动补）；`at_home` 只探测 1 秒
+- 维护者的账号 → 节点映射（`cca policy`）：映射在维护者的私有 GitHub 仓库里，每台机器一把只读 deploy key（`~/.cca/policy/id_ed25519`），`policy_clone` 拉取时 `ssh -F /dev/null`、`IdentitiesOnly`、`IdentityAgent=none`、`GIT_CONFIG_GLOBAL=/dev/null`，主机公钥钉死（`GITHUB_HOST_KEYS`，`StrictHostKeyChecking=yes`）：ssh 先拿用户自己的 GitHub 密钥登录上的话，私有仓库只会回"不存在"。验签用 `RELEASE_KEY`、命名空间 `cca-policy`，通过才换上 `~/.cca/policy/policy.json`。强制在 PY_SRC 的 `reconcile`（每条命令读账号表都经过它）：映射里的官方账号节点不一致就改回并写回账号表。只有配置了映射仓库，config.json 才有 `policy` 这一项；每天的后台拉取（`policy_hook`）和自动更新的开关、开发模式无关
 
 ## 两种工具（Claude / Codex）
 - 工具差异集中在两处：PY_SRC 的 `Tool`（Claude，取值和只支持 Claude 时一样）/ `CodexTool`，按 `CCA_TOOL` 选出 `T`；bash 的 `TOOL`（`use_tool codex` 切换，账号表、命令前缀 `CMD`、文案变量由 `py tool-env` 给，`py` 自动带上 `CCA_TOOL`），不同的步骤写成成对的 `claude_xxx` / `codex_xxx`，用 `tool xxx` 调用。`cca codex <子命令>` 复用同一套 `dispatch`；提示里的命令前缀用 `${CMD}`。再加工具：照 `CodexTool` 加子类、补同名前缀的函数，再查一遍只是文案不同的 `case "$TOOL"` / `[ "$TOOL" = codex ]`（添加账号的问答、`cmd_key`、`cmd_rm`、`settings_warn` 等）和 `cmd_restore` 里的 `for t in claude codex`
@@ -43,6 +45,7 @@
 
 ## 测试写法
 - 交互流程：`CCA_TTY="$(ans 答案1 答案2 …)"`，一行一个答案
+- 映射：假 `git` 只管 `clone`，把 `$T/policy_repo` 里的文件拷过去，网址和 `GIT_SSH_COMMAND` 记在 `$T/git.log`；`touch "$T/policy_denied"` 模拟 deploy key 还没加上，`policy_offline` 模拟连不上 GitHub（带 git 自己的套话）。验签要用测试发布密钥，所以映射的用例放在自动更新那一节后面（那时装着的是 `mkver` 换成测试密钥的版本），映射用 `pol` 写进假仓库并签名
 - 方向键菜单和 readline 输入要在真 pty 里测：`script -q 日志 bash 驱动脚本`，配合定时输入
 - 自动更新：用 `tests/regress.sh` 里的 `mkver`/`publish`（临时发布密钥 + `$CCA_T/gh` 下的假 GitHub）
 - Claude App：`run` 里的 `CCA_CLAUDE_APP` 指向假的 Claude.app；假 `open` 遇到 `--user-data-dir` 会建 `Local State`（有 `open_noprofile` 时不建）

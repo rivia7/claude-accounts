@@ -276,6 +276,27 @@ cat > "$T/bin/env" <<'S'
 { printf 'ENV'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/env.log"
 exec /usr/bin/env "$@"
 S
+# 假 git：只管 clone（cca 拉维护者的映射用）：记下网址、GIT_SSH_COMMAND 和 GIT_CONFIG_GLOBAL；policy_denied 时像
+# deploy key 还没加上那样拒绝，policy_offline 时像连不上 GitHub（带着 git 自己的套话），否则把 $CCA_T/policy_repo
+# 里的文件拷过去。别的子命令交给真的 git
+cat > "$T/bin/git" <<'S'
+#!/bin/bash
+if [ "$1" = clone ]; then
+	dst="${@: -1}"; url="${@: -2:1}"
+	echo "GIT clone $url SSH=${GIT_SSH_COMMAND:-unset} GLOBAL=${GIT_CONFIG_GLOBAL:-unset}" >> "$CCA_T/git.log"
+	if [ -e "$CCA_T/policy_denied" ]; then
+		echo "git@github.com: Permission denied (publickey)." >&2; echo "fatal: Could not read from remote repository." >&2; exit 128
+	fi
+	if [ -e "$CCA_T/policy_offline" ]; then
+		printf '%s\n' "ssh: connect to host github.com port 22: Operation timed out" "fatal: Could not read from remote repository." "" \
+			"Please make sure you have the correct access rights" "and the repository exists." >&2
+		exit 128
+	fi
+	mkdir -p "$dst" && cp "$CCA_T"/policy_repo/* "$dst"/ && exit 0
+	exit 128
+fi
+exec /usr/bin/git "$@"
+S
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"
