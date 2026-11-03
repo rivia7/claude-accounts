@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0-beta.2"
+VERSION="2.6.0-beta.3"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -213,6 +213,7 @@ unset _c
 # （claude_login / codex_login …），用 tool 步骤名 调用；Python 那边按 CCA_TOOL 选同一个工具
 TOOL=claude CMD=cca TOOL_LABEL=Claude TOOL_BIN="$CLAUDE_BIN" TOOL_SETTINGS='~/.claude/settings.json' TRACE_HOST=claude.ai APP_LABEL='Claude App'
 tool() { local s="$1"; shift; "${TOOL}_${s}" "$@"; }
+CODEX_ALIAS=cxa   # cxa …：等于 cca codex …（~/.local/bin/cxa 是指向同目录 cca 的相对链接，main 按调用名换成 codex 参数）
 
 # ---------------------------------------------------------------------------
 # Python 辅助：配置/账号表、共享链接、.claude.json 三方合并、出口检测解析
@@ -2318,15 +2319,27 @@ def ago(secs):
     return '%d 天' % (m // 1440)
 
 
+# Claude Code 收 profile 接口给的套餐名（planDisplayName）的规矩：字母数字开头，中间可以有空格和 .+-，最长 40 个字
+PLAN_NAME_RE = re.compile(r'^[^\W_](?:(?:[^\W_]|[ .+-]){0,38}(?:[^\W_]|\+))?$')
+
+
 def plan_label(oa, sub=None):
-    """套餐：Pro、Max 5x、Max 20x、Team、Enterprise（看 oauthAccount，其次是查询结果里的 subscription_type）"""
+    """套餐，叫法和官网一样：Free、Pro、Max、Ultra、Team、Team Premium、Enterprise。
+    先用 oauthAccount 里的 planDisplayName：profile 接口给的官方名字，新版 Claude Code 才存，它自己也显示这个，官方再改名
+    也跟得上。没有的话按 organizationType 和额度档位推：原来的 Max 20x 现在叫 Ultra，Max 5x 就叫 Max；Team 的 5x 档位是
+    Premium 席位（Claude Code 的 isTeamPremiumSubscriber）。都没有时看查询结果里的 subscription_type（分不出档位）"""
+    n = oa.get('planDisplayName')
+    if isinstance(n, str) and PLAN_NAME_RE.match(n):
+        return n
     t = str(oa.get('organizationType') or '').lower()
     kind = t[len('claude_'):] if t.startswith('claude_') else str(sub or '').lower()
-    name = {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}.get(kind, kind.capitalize())
     m = re.search(r'(\d+)x\b', '%s %s' % (oa.get('organizationRateLimitTier') or '', oa.get('userRateLimitTier') or ''))
-    if m and kind in ('max', 'team'):
-        name += ' %sx' % m.group(1)
-    return name or '—'
+    x = m.group(1) if m else ''
+    if kind == 'max' and x == '20':
+        return 'Ultra'
+    if kind == 'team' and x == '5':
+        return 'Team Premium'
+    return {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}.get(kind, kind.capitalize()) or '—'
 
 
 def usage_file(key):
@@ -2469,14 +2482,19 @@ def usage_table(rows, now, cols, color, api):
         elif r['source'] == 'cache':
             notes.insert(0, '缓存（%s前）%s' % (ago(now - r['at']), '：' + usage_why(r) if r['why'] else ''))
         table.append((r, five, week, '；'.join(notes)))
+    aw = min(max(dw(r['alias']) for r in rows), 16)   # 账号一格：别名、邮箱各占一小列，和菜单一样（都没有别名就只写邮箱）
+    ew = min(max(dw(r['email']) for r in rows), 32)
+
+    def acct(r):
+        return '  '.join(([fit(r['alias'], aw)] if aw else []) + ([fit(r['email'], ew)] if ew else []))
     hd = ('账号', '套餐', '5 小时', '本周')
-    cw = [min(max([dw(hd[0])] + [dw(r['name']) for r in rows]), 20), max([dw(hd[1])] + [dw(r['plan']) for r in rows]),
+    cw = [max([dw(hd[0])] + [dw(acct(r)) for r in rows]), max([dw(hd[1])] + [dw(r['plan']) for r in rows]),
          max([dw(hd[2])] + [dw(x[1][0]) for x in table]), max([dw(hd[3])] + [dw(x[2][0]) for x in table])]
     room = width - 2 - sum(cw) - 2 * len(cw)   # 同一行里留给备注的宽度；放不下就挪到下一行
     print(paint(('  ' + '  '.join(fit(h, cw[i]) for i, h in enumerate(hd)) + ('  备注' if room >= 12 else '')).rstrip(), '2'))
     for r, five, week, note in table:
         dim = '' if r['source'] == 'live' else '2'
-        cells = [(r['name'], dim), (r['plan'], dim), (five[0], five[1] or dim), (week[0], week[1] or dim)]
+        cells = [(acct(r), dim), (r['plan'], dim), (five[0], five[1] or dim), (week[0], week[1] or dim)]
         s = '  ' + '  '.join(paint(fit(text, cw[i]), code) for i, (text, code) in enumerate(cells))
         ncode = '2' if dim else ''
         if not note:
@@ -2499,7 +2517,7 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
         u = r.get('usage') if r.get('ok') else None
         if isinstance(u, dict) and not (u.get('rate_limits_available') and isinstance(u.get('rate_limits'), dict)):
             r, u = {'ok': False, 'why': 'nolimits', 'msg': ''}, None
-        row = {'key': k, 'name': name_of(k), 'email': parse_key(k)[1] or email_of(k),
+        row = {'key': k, 'name': name_of(k), 'alias': parse_key(k)[0], 'email': parse_key(k)[1] or email_of(k),
                'plan': T.plan(k, (u or {}).get('subscription_type')),
                'source': 'none', 'at': None, 'rl': {}, 'why': None if u else (r.get('why') or 'error'), 'msg': r.get('msg') or ''}
         if u:
@@ -3548,7 +3566,8 @@ cmd_add() {   # cca [codex] add [api]
 	okay "已添加 ${ACC_LABEL}，出口 ${node}"
 	launchers_sync
 	case "$TOOL" in
-		codex) info "第一次使用时会在它专属的浏览器窗口里登录 ChatGPT（用 ${ACC_EMAIL} 登录，登录后 cca 会核对）" ;;
+		codex) info "第一次使用时会在它专属的浏览器窗口里登录 ChatGPT（用 ${ACC_EMAIL} 登录，登录后 cca 会核对）"
+		       codex_alias_ensure "$ACC_NAME" ;;
 		*) info "第一次使用时会在它专属的浏览器窗口里登录，登录页会预填 ${ACC_EMAIL}" ;;
 	esac
 	ADDED_KEY="$key"
@@ -3591,6 +3610,7 @@ cmd_add_api() {
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
 	okay "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}），key 存在钥匙串里"
 	info "用 ${CMD} @${ACC_NAME} 启动；改地址、模型${env_hint}用 ${CMD} edit，换 key 用 ${CMD} key ${ACC_NAME}"
+	if [ "$TOOL" = codex ]; then codex_alias_ensure "$ACC_NAME"; fi
 }
 
 # x=$(ask_valid 字段 提示 [optional])：问到 py check 通过为止，打印规范化后的值；
@@ -4804,6 +4824,24 @@ path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的
 	fi
 }
 
+codex_alias_ensure() {   # codex_alias_ensure [账号名]：没有就建 ~/.local/bin/cxa（指向同目录 cca 的相对链接，cca 指向哪它就跟到哪）；
+	                       # 那里已经有别的文件、或者 PATH 里已经有别的 cxa 时不建，提示一句。总是返回 0
+	local bin="$HOME/.local/bin" other
+	[ "$(readlink "$bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && return 0
+	[ -e "$bin/cca" ] || return 0   # cca 没装在 ~/.local/bin 里（直接运行的这份脚本）：不建
+	if [ -e "$bin/$CODEX_ALIAS" ] || [ -L "$bin/$CODEX_ALIAS" ]; then
+		warn "${bin}/${CODEX_ALIAS} 已经存在，不是 cca 建的：没有建 ${CODEX_ALIAS} 这个简写（照样可以用 cca codex）"
+		return 0
+	fi
+	other=$(type -P "$CODEX_ALIAS" 2>/dev/null)
+	if [ -n "$other" ]; then
+		warn "已经有别的 ${CODEX_ALIAS} 命令（${other}）：没有建 ${CODEX_ALIAS} 这个简写（照样可以用 cca codex）"
+		return 0
+	fi
+	ln -s cca "$bin/$CODEX_ALIAS" 2>/dev/null || { warn "没能建 ${bin}/${CODEX_ALIAS}（照样可以用 cca codex）"; return 0; }
+	info "以后可以直接用 ${CODEX_ALIAS} 代替 cca codex：${CODEX_ALIAS} @${1:-别名} 直接启动，${CODEX_ALIAS} usage 查用量"
+}
+
 cmd_install() {
 	need_deps
 	need_tty
@@ -4832,6 +4870,7 @@ cmd_install() {
 	fi
 	case ":$PATH:" in *":$bin:"*) ;; *) path_hint "$bin" ;; esac
 	info "已安装：$bin/cca → $target"
+	codex_alias_ensure
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
 	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
@@ -4864,7 +4903,7 @@ cmd_restore() {
 	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证（第三方 API 账号删掉钥匙串里的 key）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池"
-	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin/cca、${CCA_HOME} 和各账号的 App 启动器"
+	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器"
 	say "  · ~/.claude、~/.claude.json 和 ~/.codex 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
 	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
@@ -4900,6 +4939,7 @@ cmd_restore() {
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null ) &&
 		info "配置备份：$bk"
+	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
 	rm -rf "${CCA_HOME:?}"
 	info "已还原。原来的 claude、codex 命令和 ~/.claude、~/.codex 不受影响"
@@ -4942,6 +4982,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca codex [codex 参数]     弹出 Codex 账号菜单，选中后启动 codex；cca codex @<账号> [codex 参数] 跳过选择。
                              每个账号一个 CODEX_HOME，登录各自独立；~/.codex 里的 config.toml、AGENTS.md、会话、
                              技能、记忆等所有账号共用。启动前经该账号端口检测出口（chatgpt.com 看到的 IP）
+  cxa [codex 参数]           等于 cca codex：cxa @<账号>、cxa usage、cxa add 等都一样（cca install 时和 cca
+                             一起建在 ~/.local/bin；添加 Codex 账号时没有的话也会补上）
   cca codex add [api]        新增 Codex 账号（用 ChatGPT 登录，第一次启动时在它专属的浏览器窗口里登录）；
                              api：兼容 OpenAI Responses 接口的第三方服务（地址 + key，模型可选）
   cca codex usage [账号] [--json]
@@ -4968,7 +5010,7 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              想固定一种，把 ${CFG} 的 route 改成 router 或 local
 
 其它
-  cca install                安装或修复（链接到 ~/.local/bin/cca）
+  cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
   cca update                 立即更新到最新版本；平时每天自动检查一次，新版本在下次启动时自动安装
   cca update <版本号>        手动装指定的版本，例如测试版 2.6.0-beta.1（测试版不会自动装，只能这样装）
   cca update --check | --rollback | auto | notify | off
@@ -4980,6 +5022,8 @@ EOF
 
 main() {
 	[ -n "$PYTHON" ] || die "需要 python3"
+	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
+	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;

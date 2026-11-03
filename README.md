@@ -76,7 +76,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 出门在外：配置本机的 Clash 客户端（第一次在外面启动时也会问） | `cca local setup` |
 | 看现在走路由器还是本机 Clash | `cca local` |
 | 退出某个账号的登录、重新登录 | `cca login 工作` |
-| Codex：选账号启动 / 直接启动 / 添加账号 / 查用量 | `cca codex` / `cca codex @工作` / `cca codex add` / `cca codex usage` |
+| Codex：选账号启动 / 直接启动 / 添加账号 / 查用量 | `cca codex` / `cca codex @工作` / `cca codex add` / `cca codex usage`（`cca codex` 可以简写成 `cxa`） |
 | 查看全部命令 | `cca help` |
 
 ## 账号表
@@ -108,12 +108,14 @@ cca usage
 ```
 
 ```text
-  账号   套餐     5 小时                    本周                  备注
-  工作   Max 5x    13%  2 小时 13 分后重置    41%  周四 09:00 重置
-  个人   Pro       98%  25 分钟后重置         72%  周六 02:30 重置   Sonnet 本周 60%
+  账号                     套餐  5 小时                    本周                   备注
+  工作  bob@example.com    Max    13%  2 小时 13 分后重置   41%  周四 09:00 重置
+  个人  alice@example.com  Pro    98%  25 分钟后重置        72%  周六 02:30 重置  Sonnet 本周 60%
 ```
 
 - 每个官方账号经它**自己的出口**查询，和在 Claude Code 里打开 `/usage` 看到的一样：5 小时额度、本周额度，以及按模型单独计的每周额度。几个账号一起查，一般几秒钟。
+- 「账号」一列和菜单一样写别名和邮箱，没起别名的只写邮箱。
+- 套餐的叫法和官网一样：Pro、Max（原来的 Max 5x）、Ultra（原来的 Max 20x）、Team、Team Premium（Team 的 Premium 席位）、Enterprise。新版 Claude Code 在账号里记了官方给的套餐名时，直接照它写。
 - 查询由 Claude Code 自己完成（cca 让它以账号的配置无界面地查一下，不加载插件、hooks、MCP），**不发消息、不耗额度**，cca 也不碰登录凭证。
 - 查之前同样会确认出口：端口不通、出口跑到了受限地区的账号不去查。查不到时显示上次查到的数据，并注明是多久前的。
 - 菜单和 `cca ls` 里每个账号后面也会附上最近一次的用量（只读缓存，不联网，不拖慢菜单）。
@@ -153,6 +155,7 @@ OpenAI 的 Codex（`codex` 命令和 ChatGPT 桌面 App）也能多账号，用�
 cca codex add          # 添加 Codex 账号：填登录邮箱、别名（可选），选出口节点
 cca codex              # 选账号启动 codex（cca codex @工作 直接启动，后面的参数原样交给 codex）
 cca codex usage        # 查各账号的 5 小时、每周额度和剩余的重置次数
+cxa @工作              # 简写：cxa 就是 cca codex（cxa、cxa usage、cxa add 也都行）
 ```
 
 - **账号表分开记**：Codex 账号记在 `~/.cca/codex.json`，格式和 `accounts.json` 一样。同一个人的 Claude 号和 ChatGPT 号可以用同一个别名、同一个邮箱，`cca @工作` 启动 Claude，`cca codex @工作` 启动 Codex。两种账号共用路由器（或本机 Clash）上的同一组端口，每个账号还是一个端口、一个出口。选节点时只看同一种账号：Codex 账号之间最好各用各的节点，和 Claude 账号用同一个节点没关系（两家服务商互不相干）。
@@ -164,6 +167,7 @@ cca codex usage        # 查各账号的 5 小时、每周额度和剩余的重�
 - **第三方 API**：`cca codex add api` 添加兼容 OpenAI **Responses 接口**（`/v1/responses`）的服务，填地址（例如 `https://api.example.com/v1`）、key、模型。key 存在钥匙串里（条目名 `cca-codex-api-…`），启动时由 codex 的 `auth.command` 回调 cca 现取，不出现在命令行参数和环境变量里；地址和模型经 `-c` 交给 codex。只提供 Chat Completions 接口的服务用不了。
 - **ChatGPT App（Codex 桌面版）**：`cca codex app 工作`，或者在启动台、聚焦搜索里点「ChatGPT 工作」。每个账号一份资料目录，用这个账号的 `CODEX_HOME`（和 `cca codex @工作` 同一份登录），整个 App 走这个账号的出口。App 自己启动 codex 时 cca 加不了参数，所以第一次打开时会征求你同意，用 Codex 自带的 `codex features disable system_proxy_fallback` 在共享的 `~/.codex/config.toml` 里关掉回退到系统代理（之后直接敲 `codex` 也不再回退）。没登录时先在账号专属的 Chrome 里登录，App 打开时就是登录状态。如果 App 里还要你登录（比如登录过期了），别在 App 里登：它的登录页会在系统默认浏览器里打开，那一次不经账号的出口；关掉 App，运行 `cca codex login 工作`，再打开 App。
 - **其它命令**：`cca codex ls`、`edit`、`check`、`web`（用账号专属的浏览器打开 chatgpt.com）、`key`（换第三方 API 账号的 key），和 Claude 账号的同名命令一样。
+- **简写 `cxa`**：`cxa` 就是 `cca codex`，后面接什么都一样（`cxa`、`cxa @工作`、`cxa usage`、`cxa add`……）。`cca install` 时和 `cca` 一起放进 `~/.local/bin`；以前装的 cca 升级后，添加 Codex 账号时会补上（或者运行一次 `cca install`）。已经有别的 `cxa` 命令时不会覆盖它。
 - **删除**：`cca codex rm 工作` 退出登录、删掉账号目录（包括它的 git 工作树，删之前会提醒）；它开过的会话留在 `~/.codex` 里，cca 平时就把会话库里的路径写成 `~/.codex` 下的，删了账号也找得到。
 
 启动前同样会检查：出口地区和纯净度（看 chatgpt.com 看到的 IP）；shell 里继承的 `OPENAI_*`、`CODEX_*`（例如会直接顶替登录的 `CODEX_ACCESS_TOKEN`）一律不带进去，只留公司网络根证书 `CODEX_CA_CERTIFICATE`；共享的 `~/.codex/config.toml` 里如果写了 `chatgpt_base_url`、`openai_base_url`、`experimental_realtime_ws_base_url`、`experimental_realtime_webrtc_call_base_url`、不是 `openai` 的 `model_provider`、不是 `file` 的 `cli_auth_credentials_store`、`forced_chatgpt_workspace_id`、`forced_login_method = "api"`、打开了 `respect_system_proxy`（包括 `profile` 选中的那一节），或者 `~/.codex/.env` 里写了代理、`OPENAI_*`，cca 会拒绝启动并指出来。
@@ -239,11 +243,11 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
 
-- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.2`
+- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.3`
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh
-  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.2/install.sh | bash -s 2.6.0-beta.2
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.3/install.sh | bash -s 2.6.0-beta.3
   ```
 
 - 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。
@@ -255,7 +259,7 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉；最后删除本机的 cca 和各账号的 App 启动器（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉；最后删除本机的 cca（包括 `cxa`）和各账号的 App 启动器（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
