@@ -844,10 +844,15 @@ out=$(run CCA_TTY="$(ans frank@example.com '')" cca add 2>&1); rc=$?
 ok "用 cca add 加回来：出口直接用映射的节点，不让选；以后照常跟着映射" '[ $rc -eq 0 ] && tblok "t.get(\"frank@example.com\") == \"US-B\"" && printf "%s" "$out" | grep -q "frank@example.com 的出口按维护者的映射固定为 US-B" && ! printf "%s" "$out" | grep -q "选择节点编号" && cfgok "\"policy_skip\" not in c"'
 out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j.pop("frank@example.com")' cca edit 2>&1)
 ok "cca edit 里删掉映射里的账号：同样记下来，不会马上又按映射加回来" '! grep -q frank "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "frank@example.com 在维护者的映射里：删掉了就不再自动加回来" && ! printf "%s" "$out" | grep -q "按维护者的映射添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]"'
+# 先按没写别名的映射加进来、只有邮箱的账号（这里直接写进账号表），维护者后来在 aliases 里补了别名
+edit_table 'j["hank@example.com"] = "US-B"'; run cca ls >/dev/null 2>&1; p0=$(cfgv 'c["ports"].get("hank@example.com")')
+pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": "US-D", "hank@example.com": "US-B"}, "aliases": {"erin@example.com": "E2", "hank@example.com": "Hank"}}'
+out=$(run cca policy pull 2>&1); rc=$?; out2=$(run cca ls 2>&1)
+ok "映射里给账号起了别名：这台机器上还没有别名的补上（端口不变，只说一次），已经起过别名的不改" '[ $rc -eq 0 ] && [ "$p0" != None ] && tblok "\"Hank(hank@example.com)\" in t and \"hank@example.com\" not in t and \"Erin(erin@example.com)\" in t" && [ "$(cfgv "c[\"ports\"].get(\"Hank(hank@example.com)\")")" = "$p0" ] && printf "%s" "$out" | grep -q "按维护者的映射给 Claude 账号 hank@example.com 起了别名 Hank" && ! printf "%s" "$out" | grep -q "起了别名 E2" && ! printf "%s" "$out2" | grep -q "起了别名"'
 pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
 out=$(run cca policy pull 2>&1); rc=$?
 ok "维护者从映射里删掉了账号：这台机器上的账号留着（登录还在），只是不再固定出口" '[ $rc -eq 0 ] && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\"" && ! printf "%s" "$out" | grep -q "Erin（erin@example.com） →"'
-run CCA_TTY="$(ans y)" cca rm erin >/dev/null 2>&1; run CCA_TTY="$(ans y)" cca rm 自己 >/dev/null 2>&1
+run CCA_TTY="$(ans y)" cca rm erin >/dev/null 2>&1; run CCA_TTY="$(ans y)" cca rm 自己 >/dev/null 2>&1; run CCA_TTY="$(ans y)" cca rm Hank >/dev/null 2>&1
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_skip'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 # 映射里的 Codex 账号要到第一次用 cca codex 时才加（模拟还没用过 Codex 的机器：先把 Codex 的账号表挪开，测完还原）
 cp "$H/.cca/config.json" "$T/config.pre"; mv "$H/.cca/codex.json" "$T/codex.pre"

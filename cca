@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.7.0"
+VERSION="2.7.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -809,6 +809,29 @@ def policy_merge(c, t, tool):
     return added
 
 
+def policy_alias_fill(t, tool):
+    """映射里的账号在这台机器上还没有别名（键只是邮箱）、映射里给它起了别名：补上，返回 [(旧键, 新键)]。比如先按没写
+    别名的映射加进来的账号，维护者后来在 aliases 里补了别名。这台机器上起过别名的不改，别名和这台机器上别的账号重名的
+    不补。只改键：账号目录、端口和上次使用都按邮箱认，跟着走（reconcile 里随后的端口分配按 acct_id 找回原来的端口）"""
+    pm, names = policy_raw(tool), policy_names()
+    ren, used = {}, set()
+    for k, v in t.items():
+        a, e = parse_key(k)
+        al = names.get(e.lower(), '') if e else ''
+        if is_api(v) or a or not al or e.lower() not in pm or al in used:
+            continue
+        new = '%s(%s)' % (al, e)
+        if alias_problem(t, al) or not KEY_RE.match(new):
+            continue
+        ren[k] = new
+        used.add(al)
+    if ren:   # 原地改（t 是 TABS 里的那张表），顺序不变
+        items = [(ren.get(k, k), v) for k, v in t.items()]
+        t.clear()
+        t.update(items)
+    return list(ren.items())
+
+
 def policy_skip_add(tool, emails):
     """这台机器上删掉的映射里的账号记进 policy_skip：以后不再自动加回来（cca add 加回来时清掉）"""
     c = cfg_load()
@@ -882,18 +905,22 @@ def reconcile(c, t, tool, reserved=()):
     reserved 是别的工具占着的端口（大家共用一个端口池），不分给这张表。返回错误列表。
     只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。
     维护者的映射里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，说一声）；映射里有、这台机器上还没有的
-    加进来（policy_merge，这台机器自己的账号不动）：每条命令都经过这里，添加、cca edit、启动、同步前都管得到"""
+    加进来（policy_merge，这台机器自己的账号不动），还没有别名的按映射补上别名（policy_alias_fill）：每条命令都经过
+    这里，添加、cca edit、启动、同步前都管得到"""
     st = tool.state(c, create=True)
     added = policy_merge(c, t, tool)
     for k in added:
         sys.stderr.write('• 按维护者的映射添加了 %s 账号 %s，出口 %s\n' % (tool.label, label_of(k), t[k]))
+    renamed = policy_alias_fill(t, tool)
+    for k, new in renamed:
+        sys.stderr.write('• 按维护者的映射给 %s 账号 %s 起了别名 %s\n' % (tool.label, k, parse_key(new)[0]))
     pm = policy_map(tool, c)
     fixed = [k for k, v in t.items() if not is_api(v) and pm.get(parse_key(k)[1].lower(), v) != v]
     for k in fixed:
         want = pm[parse_key(k)[1].lower()]
         sys.stderr.write('! %s 的出口按维护者的映射固定为 %s（账号表里写的是 %s，已改回）\n' % (label_of(k), want, t[k]))
         t[k] = want
-    if fixed or added:
+    if fixed or added or renamed:
         save_json(tool.table, t, 0o600)
     errs, emails, aliases, ids = [], {}, {}, {}
     if not c['nodes'] and any(node_of(v) or not is_api(v) for v in t.values()):
