@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.7.0-beta.2"
+VERSION="2.7.0-beta.3"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -5692,9 +5692,11 @@ path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的
 	fi
 }
 
-codex_alias_ensure() {   # codex_alias_ensure [账号名]：没有就建 ~/.local/bin/cxa（指向同目录 cca 的相对链接，cca 指向哪它就跟到哪）；
-	                       # 那里已经有别的文件、或者 PATH 里已经有别的 cxa 时不建，提示一句。总是返回 0
-	local bin="$HOME/.local/bin" other
+codex_alias_ensure() {   # codex_alias_ensure [账号名] [quiet]：没有就建 ~/.local/bin/cxa（指向同目录 cca 的相对链接，cca 指向哪它就跟到哪）；
+	                       # 那里已经有别的文件、或者 PATH 里已经有别的 cxa 时不建，提示一句。quiet 是平时每次运行时的检查：
+	                       # 那里有东西（不管是不是 cca 建的）就不动，建不了也不说，免得每次都提示。总是返回 0
+	local bin="$HOME/.local/bin" other quiet="${2:-}"
+	if [ -n "$quiet" ]; then { [ -e "$bin/$CODEX_ALIAS" ] || [ -L "$bin/$CODEX_ALIAS" ]; } && return 0; fi
 	[ "$(readlink "$bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && return 0
 	[ -e "$bin/cca" ] || return 0   # cca 没装在 ~/.local/bin 里（直接运行的这份脚本）：不建
 	if [ -e "$bin/$CODEX_ALIAS" ] || [ -L "$bin/$CODEX_ALIAS" ]; then
@@ -5703,10 +5705,10 @@ codex_alias_ensure() {   # codex_alias_ensure [账号名]：没有就建 ~/.loca
 	fi
 	other=$(type -P "$CODEX_ALIAS" 2>/dev/null)
 	if [ -n "$other" ]; then
-		warn "已经有别的 ${CODEX_ALIAS} 命令（${other}）：没有建 ${CODEX_ALIAS} 这个简写（照样可以用 cca codex）"
+		[ -n "$quiet" ] || warn "已经有别的 ${CODEX_ALIAS} 命令（${other}）：没有建 ${CODEX_ALIAS} 这个简写（照样可以用 cca codex）"
 		return 0
 	fi
-	ln -s cca "$bin/$CODEX_ALIAS" 2>/dev/null || { warn "没能建 ${bin}/${CODEX_ALIAS}（照样可以用 cca codex）"; return 0; }
+	ln -s cca "$bin/$CODEX_ALIAS" 2>/dev/null || { [ -n "$quiet" ] || warn "没能建 ${bin}/${CODEX_ALIAS}（照样可以用 cca codex）"; return 0; }
 	info "以后可以直接用 ${CODEX_ALIAS} 代替 cca codex：${CODEX_ALIAS} @${1:-别名} 直接启动，${CODEX_ALIAS} usage 查用量"
 }
 
@@ -5932,6 +5934,8 @@ main() {
 			fi
 			update_hook "$@"
 			policy_hook
+			# 用着 Codex（有 Codex 的账号表，或者这次就是 cca codex …）而 cxa 不见了（以前装的 cca 升级上来、被删掉了）：补上
+			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then codex_alias_ensure "" quiet; fi
 			if [ "${1:-}" = codex ]; then   # cca codex …：后面的子命令都作用于 Codex 账号
 				shift
 				use_tool codex

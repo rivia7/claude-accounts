@@ -537,15 +537,19 @@ clast() { lastline "$1" codex.log; }
 cedit() { edit_table "$1" "$CX"; }
 ckc() { kc "$1" cca-codex-api-; }
 ok "（准备）只有 Claude 账号时 config.json 里没有 codex 一节" '[ "$(cfgv "\"codex\" in c")" = False ]'
-: > ssh.log; n0=$(reloads); rm -f "$H/.local/bin/cxa"   # 模拟以前装的 cca：那时还没有 cxa
+rm -f "$H/.local/bin/cxa"; out0=$(run cca ls 2>&1)   # 模拟以前装的 cca：那时还没有 cxa
+[ -e "$H/.local/bin/cxa" ] || [ -L "$H/.local/bin/cxa" ] && cx0=yes || cx0=no
+: > ssh.log; n0=$(reloads)
 out=$(run CCA_TTY="$(ans alice@example.com '' 2)" cca codex add 2>&1); rc=$?
 CD=$(ls -d "$H"/.cca/codex/accounts/alice-example-com-*); CH="$CD/codex"
 ok "codex add：和 Claude 账号同一个邮箱也能加，记在 codex.json；账号目录在 ~/.cca/codex/accounts 下，不碰 Claude 的" '[ $rc -eq 0 ] && grep -q "\"alice@example.com\": \"US-B\"" "$CX" && [ -d "$CH" ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && printf "%s" "$out" | grep -q "添加 Codex 账号" && printf "%s" "$out" | grep -q "用 alice@example.com 登录，登录后 cca 会核对"'
 ok "codex add：和 Claude 账号共用端口池（Claude 的 7901 不动，Codex 分到 7902），路由器的端口池先 Claude 后 Codex，不重载" '[ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ] && [ "$(cfgv "c[\"codex\"][\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7902}" ] && grep -q "\"slot\": 2, \"name\": \"codex-alice-example-com-" "$R/etc/cca/accounts.yaml" && [ "$(sel CCA-2)" = US-B ] && [ "$(reloads)" = "$n0" ]'
-ok "以前装的 cca 升级后还没有 cxa：添加 Codex 账号时补上，并说明怎么用" '[ "$(readlink "$H/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 cxa 代替 cca codex：cxa @alice@example.com 直接启动"'
+ok "以前装的 cca 升级后还没有 cxa：没用过 Codex 时不补；第一次用 cca codex 时补上，并说明怎么用" '[ $cx0 = no ] && ! printf "%s" "$out0" | grep -q "cxa" && [ "$(readlink "$H/.local/bin/cxa")" = cca ] && [ "$(printf "%s" "$out" | grep -c "以后可以直接用 cxa 代替 cca codex：cxa @别名 直接启动")" = 1 ]'
 out=$(run cca ls 2>&1); out2=$(run cca codex ls 2>&1); out3=$(run cxa ls 2>&1)
 ok "cca ls / cca codex ls：各列各的账号；两边轮流用不会反复同步路由器" '! printf "%s%s" "$out" "$out2" | grep -q "正在同步" && printf "%s" "$out2" | grep -qE "1\. alice@example.com +未登录 +US-B" && ! printf "%s" "$out" | grep -q "US-B"'
 ok "cxa ls 就是 cca codex ls" '[ -n "$out3" ] && [ "$out3" = "$out2" ]'
+rm -f "$H/.local/bin/cxa"; out=$(run cca ls 2>&1); out2=$(run cca ls 2>&1)
+ok "用着 Codex 的机器上 cxa 不见了：下一次运行 cca（哪个子命令都行）就补上，只说一次" '[ "$(readlink "$H/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 cxa 代替 cca codex" && ! printf "%s" "$out2" | grep -q "以后可以直接用 cxa"'
 : > open.log; : > curl.log
 out=$(run CCA_TTY="$(ans)" OPENAI_API_KEY=sk-evil-1 CODEX_ACCESS_TOKEN=tok-evil CODEX_HOME="$T/evil" CODEX_CA_CERTIFICATE="$T/ca.pem" ALL_PROXY=socks5://evil.invalid cca codex @alice --version 2>&1); rc=$?
 ok "Codex 第一次启动：经 app-server 拿登录网址（客户端名和 codex login 一样），在账号专属的浏览器里打开，走账号的端口" '[ $rc -eq 3 ] && grep -q "RPC initialize client=codex_cli_rs" codex.log && grep -F "auth.openai.com/oauth/authorize" open.log | grep -qF -- "--user-data-dir=$CD/chrome" && grep -F "auth.openai.com/oauth/authorize" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7902" && grep -q "APPSERVER: CODEX_HOME=$CH https_proxy=http://192.0.2.10:7902" codex.log'
@@ -677,6 +681,8 @@ rm -f "$H/.local/bin/cxa"; printf '#!/bin/sh\necho mine\n' > "$H/.local/bin/cxa"
 out=$(run CCA_TTY="$(ans dave@example.com '' 3)" cca codex add 2>&1)
 ok "选节点只看同一种工具的账号：US-B 注明已被 Codex 的 alice 使用，US-A 上 Claude 的 alice 不提；默认选中第一个没有 Codex 账号用的 US-A" 'printf "%s" "$out" | grep -qE "2\. US-B +已被 alice@example.com 使用$" && printf "%s" "$out" | grep -qE "1\. US-A$" && ! printf "%s" "$out" | grep -q "（Claude）" && printf "%s" "$out" | grep -q "选择节点编号 \[1\]"'
 ok "~/.local/bin/cxa 已经是别人的命令：不覆盖，说明一声" '[ ! -L "$H/.local/bin/cxa" ] && grep -q "echo mine" "$H/.local/bin/cxa" && printf "%s" "$out" | grep -q "已经存在，不是 cca 建的：没有建 cxa 这个简写"'
+out=$(run cca ls 2>&1)
+ok "别人的 cxa 还在：平时运行 cca 不覆盖，也不每次都提示（添加 Codex 账号、cca install 时才说）" '[ ! -L "$H/.local/bin/cxa" ] && grep -q "echo mine" "$H/.local/bin/cxa" && ! printf "%s" "$out" | grep -q "不是 cca 建的"'
 rm -f "$H/.local/bin/cxa"; ln -s cca "$H/.local/bin/cxa"
 ok "（准备）再加一个 Codex 账号，分到 7903" '[ "$(cfgv "c[\"codex\"][\"ports\"].get(\"dave@example.com\")")" = 7903 ]'
 out=$(run CCA_TTY="$(ans y)" cca codex rm alice 2>&1); rc=$?
