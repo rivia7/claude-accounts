@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0-beta.6"
+VERSION="2.6.0-beta.7"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -5385,7 +5385,7 @@ policy_pull() {   # 现在就拉一次，说明结果；拉不到时说明原因
 }
 
 policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，显示公钥（复制到剪贴板）和维护者要运行的命令
-	local repo="$1" old host
+	local repo="$1" old host opt=""
 	mkdir -p "$POLICY_DIR" && chmod 700 "$POLICY_DIR" || die "建不了 ${POLICY_DIR}"
 	old=$(py policy-repo)
 	if [ -n "$old" ] && [ "$old" != "$repo" ]; then   # GitHub 的 deploy key 只能加在一个仓库上：换了仓库就换一把，旧仓库的映射也不再用
@@ -5397,12 +5397,14 @@ policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、�
 	fi
 	py policy-set "$repo" || die "保存配置失败"
 	say ""
-	say "  映射仓库：${repo}。把这台机器的公钥发给维护者，请他加成这个仓库的只读 deploy key："
+	say "  映射仓库：${repo}。把这台机器的公钥发给维护者（顺便说一声是谁的哪台机器），由维护者加成这个仓库的只读 deploy key："
 	say ""
 	say "    $(cat "$POLICY_DIR/id_ed25519.pub")"
 	say ""
 	if pbcopy < "$POLICY_DIR/id_ed25519.pub" 2>/dev/null; then say "  （公钥已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
-	say "  ${C_D}维护者：把这一行存成文件（例如 ${host}.pub），运行 gh repo deploy-key add ${host}.pub -R ${repo} -t ${host}（不要加 -w）${C_0}"
+	# 维护者那边：policy.sh key add 读剪贴板里的公钥，提示起个别名（之后按别名查、删、改），默认就管 POLICY_REPO_DEFAULT
+	[ "$repo" = "$POLICY_REPO_DEFAULT" ] || opt=" -R ${repo}"
+	say "  ${C_D}维护者：复制这一行，在 cca 的仓库里运行 ./policy.sh key add${opt}（读剪贴板里的公钥，提示起个别名）${C_0}"
 	say ""
 }
 policy_setup() {   # policy_setup [仓库]：配置映射仓库（不写就是维护者的默认仓库），再试着拉一次

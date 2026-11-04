@@ -792,7 +792,7 @@ python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'
 rm -rf "$H/.cca/policy"; edit_table 'j["alice@example.com"] = "US-A"'; run cca router sync >/dev/null 2>&1
 touch "$T/policy_denied"; : > git.log
 out=$(run $P CCA_TTY="$(ans)" cca policy setup 2>&1); rc=$?
-ok "cca policy setup（不写仓库就是维护者的默认仓库）：给这台机器生成 deploy key，显示公钥和维护者要运行的命令；公钥还没加上时说明之后会自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "gh repo deploy-key add .* -R example/cca-policy" && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ ! -f "$H/.cca/policy/policy.json" ] && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
+ok "cca policy setup（不写仓库就是维护者的默认仓库）：给这台机器生成 deploy key，显示公钥和维护者要运行的命令；公钥还没加上时说明之后会自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "说一声是谁的哪台机器" && printf "%s" "$out" | grep -q "维护者：复制这一行，在 cca 的仓库里运行 ./policy.sh key add（读剪贴板里的公钥，提示起个别名）" &&printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ ! -f "$H/.cca/policy/policy.json" ] && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
 ok "拉映射只用这台机器的 deploy key：不读用户的 ssh / git 配置和 ssh-agent，只认 GitHub 的主机公钥；GitHub 拒绝了就不再重试" '[ "$(grep -c "^GIT clone" git.log)" = 1 ] && grep -q "^GIT clone git@github.com:example/cca-policy.git SSH=ssh -F /dev/null -i $PK -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=$H/.cca/policy/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes .* GLOBAL=/dev/null$" git.log && grep -qx "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" "$H/.cca/policy/known_hosts"'
 rm -f "$T/policy_denied"
 out=$(run cca policy pull 2>&1); rc=$?
@@ -845,13 +845,67 @@ ok "映射里的节点在路由器上改了名、映射还没更新：账号表�
 pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
 ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
 
+# 11b3. 维护者管理各台机器的 deploy key（policy.sh key）：假 gh 模拟 GitHub 的 deploy key 接口（存在 $T/deploy_keys.json），
+# 有 $T/policy_keys 时假 git 按它认 deploy key（没加上就拒绝，认出来了记下最近使用）
+PS="$D/../policy.sh"; touch "$T/policy_keys"; : > ghcli.log
+pks() { local a="$1"; shift; run $P CCA_TTY="$a" bash "$PS" key "$@"; }   # pks 答案文件 子命令…
+dkt() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(\"|\".join(\"%s:%s\" % (k[\"title\"], \"ro\" if k[\"read_only\"] else \"rw\") for k in d[\"repos\"].get(\"example/cca-policy\", [])))" "$T/deploy_keys.json" 2>/dev/null; }   # 假 GitHub 上的 key：别名:ro|rw
+dkk() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(\"\".join(k[\"key\"] for k in d[\"repos\"][\"example/cca-policy\"] if k[\"title\"] == sys.argv[2]))" "$T/deploy_keys.json" "$1"; }   # dkk 别名：那把 key 的公钥
+posts() { grep -c '^GH api POST' ghcli.log; }
+out=$(pks "$(ans)" 2>&1); rc=$?
+ok "policy.sh key：仓库上还没有 deploy key 时说明怎么加" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上还没有 deploy key：有人发来公钥后复制它，运行 ./policy.sh key add"'
+rm -f "$T/clipboard"
+out=$(run $P CCA_TTY="$(ans)" cca policy setup 2>&1)
+ok "这台机器的公钥还没加到仓库上：拉不到映射；公钥复制到了剪贴板" '[ "$(cat "$T/clipboard")" = "$(cat "$PK.pub")" ] && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key"'
+out=$(pks "$(ans alice-mbp)" add 2>&1); rc=$?
+ok "policy.sh key add：读剪贴板里的公钥（认出是这台机器的），提示起别名，加成只读 deploy key" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "要加的公钥：SHA256:.*（cca-policy@.*），是这台机器的" && printf "%s" "$out" | grep -q "给它起个别名（谁的哪台机器，以后按别名查、删、改） \[" && printf "%s" "$out" | grep -q "已把「alice-mbp」加成 example/cca-policy 的只读 deploy key" && [ "$(dkt)" = alice-mbp:ro ] && [ "$(dkk alice-mbp)" = "$(cut -d" " -f1,2 "$PK.pub")" ]'
+out=$(run cca policy pull 2>&1); rc=$?
+ok "维护者加上之后：这台机器拉得到映射" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "映射没有变化"'
+out=$(pks "$(ans)" add 2>&1); rc=$?
+ok "同一把公钥再加一次：说已经加过了、别名是什么，不重复加" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "这把公钥已经加过了，别名「alice-mbp」" && [ "$(posts)" = 1 ]'
+ssh-keygen -q -t ed25519 -N "" -C "cca-policy@bob-mini" -f "$T/bob"; ssh-keygen -q -t ed25519 -N "" -C "cca-policy@carol-air" -f "$T/carol"
+out=$(pks "$(ans " alice-mbp " '')" add "$T/bob.pub" 2>&1); rc=$?
+ok "从文件加：别名重复了（不计首尾空格）要换一个；直接回车用公钥备注里的机器名" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "别名「alice-mbp」已经有了，换一个" && [ "$(dkt)" = "alice-mbp:ro|bob-mini:ro" ]'
+cp "$T/bob" "$T/clipboard"
+out=$(pks "$(ans x)" add 2>&1); rc=$?
+ok "剪贴板里是私钥：不加，提醒别再外传" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "剪贴板里是私钥，不是公钥" && [ "$(posts)" = 2 ]'
+out=$(printf '这是我的公钥：%s 谢谢\n' "$(cat "$T/carol.pub")" | run $P bash "$PS" key add - "Carol 的 Air" 2>&1); rc=$?
+ok "从标准输入加、别名写在命令后面（不提问）；夹在聊天消息里的公钥也认得出" '[ $rc -eq 0 ] && [ "$(dkt)" = "alice-mbp:ro|bob-mini:ro|Carol 的 Air:ro" ] && [ "$(dkk "Carol 的 Air")" = "$(cut -d" " -f1,2 "$T/carol.pub")" ]'
+out=$(pks "$(ans)" ls 2>&1); rc=$?; today=$(date +%F)
+ok "policy.sh key：列出各台机器的 key（添加时间、最近一次拉取、别名），标出这台机器的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上有 3 把 deploy key" && printf "%s\n" "$out" | grep -qx "  $today  $today  alice-mbp（这台机器）" && printf "%s\n" "$out" | grep -qx "  $today  还没用过    bob-mini" && printf "%s\n" "$out" | grep -qx "  $today  还没用过    Carol 的 Air"'
+out=$(pks "$(ans)" mv bob-mini "Bob 的 mini" 2>&1); rc=$?
+ok "policy.sh key mv：改别名（GitHub 的 deploy key 不能改：删掉后用同一把公钥重新加上，还是只读）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「bob-mini」改叫「Bob 的 mini」" && [ "$(dkt)" = "alice-mbp:ro|Carol 的 Air:ro|Bob 的 mini:ro" ] && [ "$(dkk "Bob 的 mini")" = "$(cut -d" " -f1,2 "$T/bob.pub")" ]'
+out=$(pks "$(ans "Carol 的 Air" '' carol)" mv alice-mbp 2>&1); rc=$?
+ok "改别名不写新别名就提示；新别名已经有了、是空的都要重输" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「alice-mbp」的新别名：" && printf "%s" "$out" | grep -q "别名「Carol 的 Air」已经有了，换一个" && printf "%s" "$out" | grep -q "别名不能是空的" && [ "$(dkt)" = "Carol 的 Air:ro|Bob 的 mini:ro|carol:ro" ]'
+out=$(pks "$(ans)" mv carol "Bob 的 mini" 2>&1); rc=$?
+ok "命令里写的新别名已经有了：不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "别名「Bob 的 mini」已经有了" && [ "$(dkt)" = "Carol 的 Air:ro|Bob 的 mini:ro|carol:ro" ]'
+pks "$(ans)" mv carol alice-mbp >/dev/null 2>&1
+out=$(pks "$(ans)" rm "Carol 的 Air" 2>&1); rc=$?
+out2=$(pks "$(ans y)" rm "Carol 的 Air" 2>&1); rc2=$?
+ok "policy.sh key rm：先确认（默认不删）；确认后删掉，并给出它的公钥（要加回来时用）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "删掉「Carol 的 Air」吗？" && printf "%s" "$out" | grep -q "没删" && [ $rc2 -eq 0 ] && [ "$(dkt)" = "Bob 的 mini:ro|alice-mbp:ro" ] && printf "%s" "$out2" | grep -qF "$(cut -d" " -f1,2 "$T/carol.pub")"'
+out=$(pks "$(ans)" rm nobody 2>&1); rc=$?
+ok "没有这个别名：说明现有哪些" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上没有叫「nobody」的 key（现有：Bob 的 mini、alice-mbp）"'
+out=$(pks "$(ans)" rm -y alice-mbp 2>&1); rc=$?
+out2=$(run cca policy pull 2>&1); rc2=$?
+ok "删掉这台机器的 key（-y 不问）：这台机器拉不到新映射了，已经拉到的照用" '[ $rc -eq 0 ] && [ "$(dkt)" = "Bob 的 mini:ro" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "GitHub 不认这台机器的 deploy key" && [ -f "$H/.cca/policy/policy.json" ]'
+touch "$T/gh_post_fail"; out=$(pks "$(ans)" mv "Bob 的 mini" bob 2>&1); rc=$?; rm -f "$T/gh_post_fail"
+ok "改别名时旧的删掉了、新的没加上（GitHub 出错，试了三次）：说清楚，并给出公钥好加回来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "旧的「Bob 的 mini」已经删了，可新的没加上：Server Error" && printf "%s" "$out" | grep -qF "$(cut -d" " -f1,2 "$T/bob.pub")" && [ "$(dkt)" = "" ] && [ "$(grep -c "^GH api POST .* title=bob$" ghcli.log)" = 3 ]'
+touch "$T/gh_down"; out=$(pks "$(ans)" 2>&1); rc=$?; rm -f "$T/gh_down"
+ok "连不上 GitHub：说明原因" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "读不到 example/cca-policy 上的 deploy key：连不上 GitHub（error connecting to api.github.com）"'
+defrepo=$(sed -n 's/^POLICY_REPO_DEFAULT="\${CCA_POLICY_DEFAULT-\([^}]*\)}"$/\1/p' "$CCA")
+out=$(run CCA_TTY="$(ans)" bash "$PS" key 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
+: > ghcli.log; env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_TTY="$(ans)" PATH="$T/bin:/usr/bin:/bin" bash "$PS" key >/dev/null 2>&1
+ok "仓库：CCA_POLICY_DEFAULT 设成空、又没写 -R 时不猜；-R 指定别的仓库；都没设时用 cca 里写的默认仓库" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不知道是哪个映射仓库：加上 -R 维护者/仓库" && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "example/other 上还没有 deploy key" && [ -n "$defrepo" ] && grep -q "^GH api GET repos/$defrepo/keys" ghcli.log'
+rm -f "$T/policy_keys"
+
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
 r3() { env -i LANG=en_US.UTF-8 HOME="$H3" CCA_T="$T" CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
-ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射"'
+ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射；仓库不是默认的那个时，给维护者的命令带上 -R" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射" && printf "%s" "$out" | grep -q "./policy.sh key add -R example/cca-policy（"'
 ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.20 ] && [ "$(readlink "$H3/.local/bin/cca")" = "$H3/.cca/bin/cca" ] && [ "$(readlink "$H3/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "已下载 cca 9.9.20，签名校验通过"'
 ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
 out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?

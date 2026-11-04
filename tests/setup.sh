@@ -313,8 +313,15 @@ if [ "$1" = clone ]; then
 	dst="${@: -1}"; url="${@: -2:1}"
 	echo "GIT clone $url SSH=${GIT_SSH_COMMAND:-unset} GLOBAL=${GIT_CONFIG_GLOBAL:-unset}" >> "$CCA_T/git.log"
 	n=$(cat "$CCA_T/policy_denied_n" 2>/dev/null)   # policy_denied_n：先拒绝这么多次（模拟维护者中途才把公钥加上）
+	denied=""
 	if [ "${n:-0}" -gt 0 ] || [ -e "$CCA_T/policy_denied" ]; then
 		[ "${n:-0}" -gt 0 ] && echo $((n - 1)) > "$CCA_T/policy_denied_n"
+		denied=1
+	elif [ -e "$CCA_T/policy_keys" ]; then   # 按假 GitHub 上的 deploy key 认（policy.sh key 加、删的那些）：认出来了记下最近使用
+		idf=$(printf '%s\n' "$GIT_SSH_COMMAND" | sed -n 's/.* -i \([^ ]*\) .*/\1/p')
+		python3 "$CCA_T/fake_gh.py" _use "$url" "$idf.pub" || denied=1
+	fi
+	if [ -n "$denied" ]; then
 		echo "git@github.com: Permission denied (publickey)." >&2; echo "fatal: Could not read from remote repository." >&2; exit 128
 	fi
 	if [ -e "$CCA_T/policy_offline" ]; then
@@ -327,8 +334,104 @@ if [ "$1" = clone ]; then
 fi
 exec /usr/bin/git "$@"
 S
-# 假的剪贴板（不碰真的）：复制的内容写进 $CCA_T/clipboard
+# 假的剪贴板（不碰真的）：复制的内容写进 $CCA_T/clipboard，粘贴时从那里读
 printf '#!/bin/bash\ncat > "$CCA_T/clipboard"\n' > "$T/bin/pbcopy"
+printf '#!/bin/bash\ncat "$CCA_T/clipboard" 2>/dev/null\n' > "$T/bin/pbpaste"
+# 假 gh：只模拟 gh api 里 deploy key 的几个接口（列出、添加、删除，policy.sh key 用），key 存在 $CCA_T/deploy_keys.json，
+# 调用记在 ghcli.log（不记公钥）。gh_down 时像连不上 GitHub，gh_post_fail 时添加一律 502。
+# 假 git 用 _use 问"这把公钥加在这个仓库上了吗"（加上了就记下最近使用）
+printf '#!/bin/bash\nexec python3 "$CCA_T/fake_gh.py" "$@"\n' > "$T/bin/gh"
+cat > "$T/fake_gh.py" <<'S'
+import json, os, re, sys, time
+T = os.environ["CCA_T"]
+DB = os.path.join(T, "deploy_keys.json")
+def flag(n):
+    return os.path.exists(os.path.join(T, n))
+def now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def load():
+    try:
+        return json.load(open(DB))
+    except Exception:
+        return {"next": 1, "repos": {}}
+def save(d):
+    json.dump(d, open(DB, "w"), indent=1, ensure_ascii=False)
+def http(status, msg, errors=None):   # 和真的 gh api 一样：回应的 JSON 写 stdout，"gh: 说明 (HTTP 状态码)" 写 stderr
+    body = {"message": msg, "documentation_url": "https://docs.github.com/rest/deploy-keys/deploy-keys", "status": str(status)}
+    if errors:
+        body["errors"] = errors
+    print(json.dumps(body))
+    sys.stderr.write("gh: %s (HTTP %d)\n" % (msg, status))
+    sys.exit(1)
+a = sys.argv[1:]
+if a[:1] == ["_use"]:
+    m = re.search(r"(?:git@github\.com:|ssh://git@ssh\.github\.com:443/)([^/]+/[^/]+?)(?:\.git)?$", a[1])
+    try:
+        pub = " ".join(open(a[2]).read().split()[:2])
+    except Exception:
+        sys.exit(1)
+    d = load()
+    for k in d["repos"].get(m.group(1) if m else "", []):
+        if k["key"] == pub:
+            k["last_used"] = now()
+            save(d)
+            sys.exit(0)
+    sys.exit(1)
+if a[:1] != ["api"]:
+    sys.stderr.write("fake gh: only gh api is simulated: %s\n" % " ".join(a))
+    sys.exit(1)
+method, path, fields, i = "GET", "", {}, 1
+while i < len(a):
+    x = a[i]
+    if x == "-X":
+        method = a[i + 1]; i += 2
+    elif x in ("-f", "-F"):
+        k, _, v = a[i + 1].partition("=")
+        fields[k] = (v == "true") if x == "-F" and v in ("true", "false") else v
+        i += 2
+    elif x == "--paginate":
+        i += 1
+    else:
+        path = x; i += 1
+with open(os.path.join(T, "ghcli.log"), "a") as f:
+    f.write("GH api %s %s%s\n" % (method, path, "".join(" %s=%s" % (k, fields[k]) for k in sorted(fields) if k != "key")))
+if flag("gh_down"):
+    sys.stderr.write("error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n")
+    sys.exit(1)
+m = re.match(r"^repos/([^/]+/[^/?]+)/keys(?:/(\d+))?(?:\?.*)?$", path)
+if not m:
+    http(404, "Not Found")
+repo, kid = m.group(1), m.group(2)
+d = load()
+keys = d["repos"].setdefault(repo, [])
+if method == "GET" and not kid:
+    print(json.dumps(keys))
+    sys.exit(0)
+if method == "POST" and not kid:
+    if flag("gh_post_fail"):
+        http(502, "Server Error")
+    k = " ".join(str(fields.get("key", "")).split()[:2])   # GitHub 不存公钥的备注
+    if not re.match(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) AAAA[A-Za-z0-9+/]+=*$", k):
+        http(422, "Validation Failed", [{"resource": "PublicKey", "code": "custom", "field": "key", "message": "key is invalid. You must supply a key in OpenSSH public key format"}])
+    if any(x["key"] == k for r in d["repos"].values() for x in r):
+        http(422, "Validation Failed", [{"resource": "PublicKey", "code": "custom", "field": "key", "message": "key is already in use"}])
+    new = {"id": d["next"], "key": k, "url": "https://api.github.com/repos/%s/keys/%d" % (repo, d["next"]),
+           "title": fields.get("title", ""), "verified": True, "created_at": now(),
+           "read_only": fields.get("read_only", False) is True,   # 不写 read_only 时 GitHub 给的是能写的
+           "added_by": "maintainer", "last_used": None, "enabled": True}
+    d["next"] += 1
+    keys.append(new)
+    save(d)
+    print(json.dumps(new))
+    sys.exit(0)
+if method == "DELETE" and kid:
+    if not any(x["id"] == int(kid) for x in keys):
+        http(404, "Not Found")
+    d["repos"][repo] = [x for x in keys if x["id"] != int(kid)]
+    save(d)
+    sys.exit(0)
+http(404, "Not Found")
+S
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"
