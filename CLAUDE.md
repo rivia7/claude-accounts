@@ -22,6 +22,7 @@
 - 钥匙串里第三方 API 的 key：服务名 `cca-api-<账号目录名>`，账户名是接口的域名（换服务商就取不到旧 key）。代码里叫 secret（`secret-*` 子命令），免得和账号表的"键"混了。cca 存过的记在 config.json 的 `api_keys`，`secrets-forget` 据此清掉已经不在账号表里的（`cca edit` 之后、每次启动、`cca restore` 时全部清）
 - `child_env` 一律不带继承来的 `ANTHROPIC_*`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商/网关开关（`CLAUDE_CODE_USE_BEDROCK` 等，见 `INHERITED_RE`）：shell 里的 `ANTHROPIC_BASE_URL` 会把官方账号的登录 token 发到别的地址。`INHERITED_RE`（bash）和 `CRED_ENV`（PY_SRC，共享设置检查和 env 校验用）是同一份名单的两种写法，要一起改；Claude Code 新增 provider 开关时补上（`strings` 二进制里的 `CLAUDE_CODE_USE_` 能查到）
 - `cca usage` 用的 `get_usage` 是 Claude Code 标为实验性的 SDK 控制请求：`claude -p --safe-mode --no-session-persistence --strict-mcp-config --input-format stream-json --output-format stream-json --verbose`，stdin 写一行请求，拿到 `control_response` 之前别关 stdin；字段要宽松解析，不支持时返回 `error: Unsupported control request subtype`。查询必须经账号自己的端口（和启动一样），登错号、出口在受限地区时不查
+- cca 启动的 Claude Code 默认对 ~/.cca 放开权限（`cca_dir_args`，在 `Tool.run_args` 里，官方和第三方 API 账号都加）：`--add-dir=` 加成工作目录（读不用确认，改照权限模式），`--disallowedTools=` 挡住 `CCA_DIR_PRIVATE`（deploy key 私钥、Codex 的 auth.json、Chrome / 桌面 App 资料目录；规则里 `//` 开头是绝对路径，Read 规则也管 cat、head 这类命令）。两个参数必须写成 `--x=值`：都能跟好几个值，写成 `--add-dir 目录` 会把后面用户写的提示词也当成目录吞掉（真 Claude Code 2.1.318 验证过：报 Input must be provided）。config.json 的 `claude_add_dir: false` 关掉；~/.cca 里新加了凭证类的文件，要补进 `CCA_DIR_PRIVATE`
 - 联网下载一律用 `retry3`（有些网络会丢新连接）
 - 仓库是公开的：代码和测试里不放真实节点名、路由器 IP、邮箱；测试用 `US-A`…`US-D`、`HK-A`、`192.0.2.10`、`example.com`
 - `cca` 和 `install.sh` 里各有一份 `RELEASE_KEY`，必须和 `~/.ssh/cca_release_ed25519.pub` 一致（release.sh 会检查）

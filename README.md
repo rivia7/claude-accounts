@@ -306,6 +306,9 @@ cca restore
 **第三方 API 的 key 存在哪？**
 默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
 
+**cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
+能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
+
 **cca 会改我的 Clash Verge 配置吗？**
 只在它的全局扩展脚本末尾加一段带标记的代码，不碰你的订阅、规则和其它设置。`cca local off` 或 `cca restore` 会把这段原样删掉，脚本恢复成原来的样子。
 

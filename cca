@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.7.0-beta.1"
+VERSION="2.7.0-beta.2"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -424,8 +424,9 @@ class Tool:
         return []
 
     def run_args(self, key, v):
-        """启动账号时加在用户参数前面的：第三方 API 账号的 --settings（地址、模型和 apiKeyHelper）"""
-        return ['--settings', api_settings(key, v)] if is_api(v) else []
+        """启动账号时加在用户参数前面的：~/.cca 加成工作目录（cca_dir_args）；第三方 API 账号再加 --settings（地址、模型和
+        apiKeyHelper）"""
+        return cca_dir_args() + (['--settings', api_settings(key, v)] if is_api(v) else [])
 
     def settings_problems(self):
         return claude_settings_problems()
@@ -1313,6 +1314,25 @@ def api_settings(key, v):
     地址、模型写在 env 里。--settings 的优先级高于共享的 settings.json 和进程环境，谁也盖不掉它们"""
     helper = '%s _api-key %s' % (shlex.quote(SELF_PATH), shlex.quote(acct_id(key)))
     return json.dumps({'apiKeyHelper': helper, 'env': api_env(v)}, ensure_ascii=False)
+
+
+# ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、Codex 的登录 token、各账号的 Chrome 和
+# 桌面 App 资料目录里的 cookie）
+CCA_DIR_PRIVATE = ('policy/id_ed25519', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
+                   'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**')
+
+
+def cca_dir_args():
+    """Claude Code 默认对 ~/.cca 放开权限：加成工作目录（--add-dir），账号表、配置、映射、日志读起来不用确认，改动照
+    权限模式走；登录凭证和浏览器资料用 --disallowedTools 挡住（CCA_DIR_PRIVATE，规则里 // 开头是绝对路径，Read 规则
+    也管 cat、head 这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
+    路径里有空格、逗号、括号、引号时规则写不准，就整个不加。config.json 的 claude_add_dir 设成 false 不加"""
+    c = load_quiet(CFG)
+    root = os.path.realpath(CCA_HOME)
+    if (isinstance(c, dict) and c.get('claude_add_dir') is False) or re.search(r'[\s,()\x22\x27\\]', root):
+        return []
+    rules = ['%s(/%s/%s)' % (tool, root, p) for p in CCA_DIR_PRIVATE for tool in ('Read', 'Edit')]
+    return ['--add-dir=' + CCA_HOME, '--disallowedTools=' + ','.join(rules)]
 
 
 def toml_str(s):
@@ -5877,7 +5897,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca update --check | --rollback | auto | notify | off
                              只检查 / 退回上一版 / 自动安装（默认）/ 只提示 / 关闭
   cca restore                一键还原 cca 的全部改动
-  配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）
+  配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
+                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）
 EOF
 }
 
