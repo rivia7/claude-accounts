@@ -4,7 +4,8 @@
 #   ./policy.sh 映射仓库的目录 ["提交说明"]
 #     在私有映射仓库的工作目录里改好 policy.json 后发布：检查格式 → 确认仓库是私有的 → 用发布密钥签名（命名空间
 #     cca-policy）→ 自检 → 提交并推送。签名私钥默认 ~/.ssh/cca_release_ed25519（可用 CCA_RELEASE_KEY 指定），和发版
-#     用的是同一把。policy.json 的格式：{"version": 1, "claude": {"name@example.com": "节点"}, "codex": {"name@example.com": "节点"}}
+#     用的是同一把。policy.json 的格式：{"version": 1, "claude": {"name@example.com": "节点"}, "codex": {"name@example.com": "节点"},
+#     "aliases": {"name@example.com": "别名"}}。aliases 可以不写：各台机器按映射自动加账号时用的别名（Claude、Codex 通用）
 #
 #   ./policy.sh key [ls]                       列出各台机器的 deploy key：添加时间、最近一次拉取、别名
 #   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥（- 是从标准输入读），

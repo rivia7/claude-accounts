@@ -812,10 +812,36 @@ touch "$T/policy_offline"; : > git.log
 out=$(run cca policy pull 2>&1); rc=$?
 rm -f "$T/policy_offline"
 ok "连不上 GitHub：22 端口不通就改走 ssh.github.com:443，一共试三轮；说出真正的原因（不是 git 的套话），原来的映射照用" '[ $rc -ne 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 6 ] && grep -q "^GIT clone ssh://git@ssh.github.com:443/example/cca-policy.git " git.log && printf "%s" "$out" | grep -q "连不上 GitHub：ssh: connect to host github.com port 22: Operation timed out（接着用上次拉到的）" && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/policy/policy.json"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": "US-D"}}'; run cca policy pull >/dev/null 2>&1
-out=$(run CCA_TTY="$(ans erin@example.com '')" cca add 2>&1); rc=$?
-ok "添加映射里的账号：出口直接用映射的节点，不让选" '[ $rc -eq 0 ] && grep -q "\"erin@example.com\": \"US-D\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "erin@example.com 的出口按维护者的映射固定为 US-D" && ! printf "%s" "$out" | grep -q "选择节点编号"'
-run CCA_TTY="$(ans y)" cca rm erin >/dev/null 2>&1
+# 映射和这台机器的账号表合并：映射里有、这台机器上还没有的官方账号自动加进来（别名用映射里 aliases 写的），
+# 这台机器自己的账号不动；删掉的不再自动加回来（cca add 加回来）
+edit_table 'j["自己(own@example.com)"] = "US-A"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": "US-D", "frank@example.com": "US-B", "gina@example.com": "HK-A"}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'
+out=$(run cca policy pull 2>&1); rc=$?
+ok "合并：映射里有、这台机器上还没有的账号自动加进账号表并分到端口（别名用映射里写的，和这台机器上的别名重名时只写邮箱）；这台机器自己的账号不动" '[ $rc -eq 0 ] && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\" and t.get(\"frank@example.com\") == \"US-B\" and t.get(\"自己(own@example.com)\") == \"US-A\" and \"kimi\" in t" && cfgok "\"Erin(erin@example.com)\" in c[\"ports\"] and \"frank@example.com\" in c[\"ports\"]" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 Erin（erin@example.com），出口 US-D" && printf "%s" "$out" | grep -q "Claude  Erin（erin@example.com） → US-D"'
+ok "映射要的节点不在这台机器的可选节点里：先不加（加进来整张表就校验不过），cca policy 里注明怎么办" '! grep -q gina "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "映射里还没加到这台机器上的账号：" && printf "%s" "$out" | grep -q "Claude  gina@example.com → HK-A：节点 HK-A 不在这台机器的可选节点里（运行 cca router setup 选上它）"'
+p=$(cfgv 'c["ports"]["Erin(erin@example.com)"]')
+out=$(run CCA_TTY="$(ans)" cca @erin --version 2>&1); rc=$?
+ok "加进来的账号照常启动：先用它的邮箱登录，路由器同步到映射的节点" '[ $rc -eq 3 ] && grep -q "ARGS: auth login --claudeai --email erin@example.com" claude.log && [ "$(sel "CCA-$((p - 7900))")" = US-D ]'
+out=$(run CCA_TTY="$(ans y)" cca rm frank 2>&1); rc=$?
+out2=$(run cca ls 2>&1); out3=$(run cca policy 2>&1)
+ok "删掉映射里的账号：记下来，以后不再自动加回来；cca policy 里注明怎么加回来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "frank@example.com 在维护者的映射里：这台机器上不会再自动加回来（要加回来：cca add）" && ! grep -q frank "$H/.cca/accounts.json" && ! printf "%s" "$out2" | grep -q "按维护者的映射添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]" && printf "%s" "$out3" | grep -q "Claude  kimi（frank@example.com） → US-B：这台机器上删掉过（要加回来：cca add）"'
+out=$(run CCA_TTY="$(ans frank@example.com '')" cca add 2>&1); rc=$?
+ok "用 cca add 加回来：出口直接用映射的节点，不让选；以后照常跟着映射" '[ $rc -eq 0 ] && tblok "t.get(\"frank@example.com\") == \"US-B\"" && printf "%s" "$out" | grep -q "frank@example.com 的出口按维护者的映射固定为 US-B" && ! printf "%s" "$out" | grep -q "选择节点编号" && cfgok "\"policy_skip\" not in c"'
+out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j.pop("frank@example.com")' cca edit 2>&1)
+ok "cca edit 里删掉映射里的账号：同样记下来，不会马上又按映射加回来" '! grep -q frank "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "frank@example.com 在维护者的映射里：删掉了就不再自动加回来" && ! printf "%s" "$out" | grep -q "按维护者的映射添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
+out=$(run cca policy pull 2>&1); rc=$?
+ok "维护者从映射里删掉了账号：这台机器上的账号留着（登录还在），只是不再固定出口" '[ $rc -eq 0 ] && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\"" && ! printf "%s" "$out" | grep -q "Erin（erin@example.com） →"'
+run CCA_TTY="$(ans y)" cca rm erin >/dev/null 2>&1; run CCA_TTY="$(ans y)" cca rm 自己 >/dev/null 2>&1
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_skip'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+# 映射里的 Codex 账号要到第一次用 cca codex 时才加（模拟还没用过 Codex 的机器：先把 Codex 的账号表挪开，测完还原）
+cp "$H/.cca/config.json" "$T/config.pre"; mv "$H/.cca/codex.json" "$T/codex.pre"
+pol '{"version": 1, "claude": {"alice@example.com": "US-C"}, "codex": {"gina@example.com": "US-A"}, "aliases": {"gina@example.com": "Gina"}}'
+out=$(run cca policy pull 2>&1); rc=$?; [ -f "$H/.cca/codex.json" ] && cx1=yes || cx1=no
+out2=$(run cca codex ls 2>&1)
+ok "映射里的 Codex 账号：这台机器还没用过 cca codex 时不加（cca policy 里注明），第一次用 cca codex 时加进来" '[ $rc -eq 0 ] && [ $cx1 = no ] && printf "%s" "$out" | grep -q "Codex  1 个账号：第一次用 cca codex 时加进来" && printf "%s" "$out2" | grep -q "按维护者的映射添加了 Codex 账号 Gina（gina@example.com），出口 US-A" && tblok "t == {\"Gina(gina@example.com)\": \"US-A\"}" "$H/.cca/codex.json"'
+printf '{"version": 1, "claude": {"alice@example.com": "US-C"}}\n' > "$H/.cca/policy/policy.json"
+mv "$T/codex.pre" "$H/.cca/codex.json"; cp "$T/config.pre" "$H/.cca/config.json"
 # 后台拉到了新映射（这里直接写进去，模拟后台拉取的结果）：账号表在下一条命令里才改，cca web / check 要先让路由器跟上
 printf '{"version": 1, "claude": {"alice@example.com": "US-D"}}\n' > "$H/.cca/policy/policy.json"
 run CCA_TTY="$(ans)" cca web alice >/dev/null 2>&1; s1=$(sel CCA-1)

@@ -55,7 +55,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.6.0"
+VERSION="2.7.0-beta.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -747,9 +747,84 @@ def node_alias(c, n):
     return n
 
 
+def alias_ok(a):
+    return isinstance(a, str) and bool(a) and not ALIAS_BAD.search(a) and dw(a) <= 24
+
+
+def policy_names():
+    """映射里给账号起的别名（可选的 aliases 一节，{"邮箱": "别名"}，各工具通用）：{邮箱（小写）: 别名}。不合规的不用。
+    旧版本的 cca 不认识这一节、照样忽略它：加了别名，旧版本也照常拉得到映射"""
+    j = load_quiet(POLICY_FILE)
+    s = j.get('aliases') if isinstance(j, dict) else None
+    if not isinstance(s, dict):
+        return {}
+    return {e.lower(): a for e, a in s.items() if isinstance(e, str) and alias_ok(a)}
+
+
+def policy_in_use(tool):
+    """这台机器用着这个工具吗：当前的工具，或者已经有它的账号表。映射里的 Codex 账号要到第一次用 cca codex 时
+    才加进来，免得不用 Codex 的机器白占路由器上的端口"""
+    return tool is T or os.path.exists(tool.table)
+
+
+def policy_missing(c, t, tool):
+    """映射里有、这台机器的账号表里没有的官方账号 [(邮箱, 节点, 不加的原因)]；原因是空的，下一次 ctx 就把它加进来"""
+    have = {parse_key(k)[1].lower() for k, v in t.items() if not is_api(v)}
+    skip = set(tool.state(c).get('policy_skip') or [])
+    out = []
+    for e, n in policy_map(tool, c).items():
+        if e in have:
+            continue
+        if not policy_in_use(tool):
+            why = '第一次用 %s 时加进来' % tool.cmd
+        elif e in skip:
+            why = '这台机器上删掉过（要加回来：%s add）' % tool.cmd
+        elif not c.get('nodes'):
+            why = '这台机器还没有可选节点（运行 cca router setup）'
+        elif n not in c['nodes']:
+            why = '节点 %s 不在这台机器的可选节点里（运行 cca router setup 选上它）' % n
+        elif not KEY_RE.match(e):
+            why = '邮箱太长，账号表里放不下'
+        else:
+            why = ''
+        out.append((e, n, why))
+    return out
+
+
+def policy_merge(c, t, tool):
+    """维护者的映射和这台机器的账号表合并：映射里有、这台机器上还没有的官方账号加进账号表，返回加进来的键。
+    别名用映射里 aliases 写的（和这台机器上别的账号重名时只写邮箱）。这台机器自己的账号（映射里没有的）、
+    这台机器上改过的别名都不动；不加的见 policy_missing 的原因（cca policy 里列出来）"""
+    names, added = policy_names(), []
+    for e, n, why in policy_missing(c, t, tool):
+        if why:
+            continue
+        a = names.get(e, '')
+        k = '%s(%s)' % (a, e) if a else e
+        if a and (alias_problem(t, a) or not KEY_RE.match(k)):
+            k = e
+        t[k] = n
+        added.append(k)
+    return added
+
+
+def policy_skip_add(tool, emails):
+    """这台机器上删掉的映射里的账号记进 policy_skip：以后不再自动加回来（cca add 加回来时清掉）"""
+    c = cfg_load()
+    st = tool.state(c, create=True)
+    st['policy_skip'] = sorted(set(st.get('policy_skip') or []) | set(emails))
+    cfg_save(c)
+
+
+def table_emails(t):
+    """账号表里官方账号的邮箱（小写）"""
+    return {parse_key(k)[1].lower() for k, v in t.items() if not is_api(v)} - {''}
+
+
 def policy_problems(j, strict=False):
-    """映射文件的问题：{"version": 1, "claude": {"邮箱": "节点"}, "codex": {…}}。strict（维护者发布前查）时
-    不认识的字段也算：客户端照样忽略它们，免得以后加了新工具，旧版本的 cca 就整个不认"""
+    """映射文件的问题：{"version": 1, "claude": {"邮箱": "节点"}, "codex": {…}, "aliases": {"邮箱": "别名"}}。
+    strict（维护者发布前查）时不认识的字段、aliases 里的问题也算：客户端照样忽略它们（不合规的别名不用），免得以后
+    加了新东西，旧版本的 cca 就整个不认、拉不到新的节点"""
     if not isinstance(j, dict):
         return ['应该是 JSON 对象，例如 {"version": 1, "claude": {"name@example.com": "节点"}, "codex": {}}']
     names = [tool.name for tool in TOOLS]
@@ -769,7 +844,35 @@ def policy_problems(j, strict=False):
             if not isinstance(node, str) or not node.strip():
                 errs.append('%s：%s 的节点应该是非空字符串' % (n, e))
     if strict:
-        errs += ['不认识的字段 %s（只能有 version、%s）' % (k, '、'.join(names)) for k in j if k != 'version' and k not in names]
+        errs += alias_problems(j, names)
+        errs += ['不认识的字段 %s（只能有 version、%s、aliases）' % (k, '、'.join(names))
+                 for k in j if k not in ('version', 'aliases') and k not in names]
+    return errs
+
+
+def alias_problems(j, names):
+    """映射里 aliases 一节的问题（维护者发布前查）：邮箱要在映射里，别名要合规，同一个工具里的两个账号不能同名"""
+    al = j.get('aliases', {})
+    if not isinstance(al, dict):
+        return ['aliases 应该是 {"邮箱": "别名"} 形式的对象']
+    errs, low = [], {}
+    mapped = {e.lower() for n in names if isinstance(j.get(n), dict) for e in j[n]}
+    for e, a in al.items():
+        if e.lower() not in mapped:
+            errs.append('aliases：%s 不在映射里（%s 里都没有这个邮箱）' % (e, '、'.join(names)))
+        if e.lower() in low:
+            errs.append('aliases：%s 写了不止一次（邮箱不分大小写）' % e)
+        low.setdefault(e.lower(), a)
+        if not alias_ok(a):
+            errs.append('aliases：%s 的别名「%s」不行：不能是空的，不能有空格、引号、括号、反斜杠或 @，最多 12 个汉字或 24 个字母' % (e, a))
+    for n in names:
+        seen = {}
+        for e in (j.get(n) if isinstance(j.get(n), dict) else {}):
+            a = low.get(e.lower())
+            if alias_ok(a) and a in seen:
+                errs.append('aliases：%s 里的 %s 和 %s 起了同一个别名「%s」' % (n, seen[a], e, a))
+            elif alias_ok(a):
+                seen[a] = e
     return errs
 
 
@@ -777,16 +880,19 @@ def reconcile(c, t, tool, reserved=()):
     """校验一个工具的账号表；给走节点的账号分配固定端口（直连的第三方 API 账号不占端口），回收已删除账号的端口。
     reserved 是别的工具占着的端口（大家共用一个端口池），不分给这张表。返回错误列表。
     只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。
-    维护者的映射里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，说一声）：每条命令都经过这里，
-    添加、cca edit、启动、同步前都管得到"""
+    维护者的映射里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，说一声）；映射里有、这台机器上还没有的
+    加进来（policy_merge，这台机器自己的账号不动）：每条命令都经过这里，添加、cca edit、启动、同步前都管得到"""
     st = tool.state(c, create=True)
+    added = policy_merge(c, t, tool)
+    for k in added:
+        sys.stderr.write('• 按维护者的映射添加了 %s 账号 %s，出口 %s\n' % (tool.label, label_of(k), t[k]))
     pm = policy_map(tool, c)
     fixed = [k for k, v in t.items() if not is_api(v) and pm.get(parse_key(k)[1].lower(), v) != v]
     for k in fixed:
         want = pm[parse_key(k)[1].lower()]
         sys.stderr.write('! %s 的出口按维护者的映射固定为 %s（账号表里写的是 %s，已改回）\n' % (label_of(k), want, t[k]))
         t[k] = want
-    if fixed:
+    if fixed or added:
         save_json(tool.table, t, 0o600)
     errs, emails, aliases, ids = [], {}, {}, {}
     if not c['nodes'] and any(node_of(v) or not is_api(v) for v in t.values()):
@@ -869,7 +975,7 @@ def cfg_clean(c):
     """没有 Codex 账号时不在 config.json 里留下空的 codex 一节：只有 Claude 账号时 config.json 和以前一样"""
     for tool in TOOLS:
         s = c.get(tool.state_key) if tool.state_key else None
-        if isinstance(s, dict) and not any(s.get(k) for k in ('ports', 'last', 'api_ids', 'api_keys')):
+        if isinstance(s, dict) and not any(s.get(k) for k in ('ports', 'last', 'api_ids', 'api_keys', 'policy_skip')):
             del c[tool.state_key]
 
 
@@ -1351,17 +1457,49 @@ def cmd_policy_summary():
 
 
 def cmd_policy_rows():
-    """这台机器上受映射约束的账号（各工具一起）；节点不在可选列表时注明这个账号用不了"""
+    """这台机器上受映射约束的账号（各工具一起），节点不在可选列表时注明这个账号用不了；映射里有、这台机器上
+    没加的也列出来，注明原因（能加的 ctx 已经加进来了）"""
     c = ctx()[0]
+    rows, todo, names = [], [], policy_names()
     for tool in TOOLS:
-        pm, raw = policy_map(tool, c), policy_raw(tool)
-        for k, v in (TABS.get(tool.name) or {}).items():
+        if tool.name not in TABS:
+            continue
+        t, pm, raw = TABS[tool.name], policy_map(tool, c), policy_raw(tool)
+        for k, v in t.items():
             e = parse_key(k)[1].lower()
             n = None if is_api(v) else pm.get(e)
             if n:
                 bad = c['nodes'] and n not in c['nodes']
                 note = '（映射里写的是 %s，路由器上已经改名）' % raw[e] if raw.get(e) != n else ''
-                print('    %s  %s → %s%s%s' % (tool.label, label_of(k), n, note, '（不在可选节点里，这个账号用不了）' if bad else ''))
+                rows.append('    %s  %s → %s%s%s' % (tool.label, label_of(k), n, note, '（不在可选节点里，这个账号用不了）' if bad else ''))
+        miss = policy_missing(c, t, tool)
+        if miss and not policy_in_use(tool):
+            todo.append('    %s  %d 个账号：第一次用 %s 时加进来' % (tool.label, len(miss), tool.cmd))
+        else:
+            todo += ['    %s  %s → %s：%s' % (tool.label, label_of('%s(%s)' % (names[e], e)) if e in names else e, n, why)
+                     for e, n, why in miss if why]
+    if rows:
+        print('  这台机器上按映射固定出口的账号：\n' + '\n'.join(rows))
+    if todo:
+        print('  映射里还没加到这台机器上的账号：\n' + '\n'.join(todo))
+
+
+def cmd_policy_have():
+    """编辑账号表之前：映射里有、账号表里也有的官方账号的邮箱（一行一个）。只读现在的表，不经过 ctx"""
+    t = load_quiet(T.table)
+    if isinstance(t, dict):
+        for e in sorted(table_emails(t) & set(policy_raw(T))):
+            print(e)
+
+
+def cmd_policy_forget(had=''):
+    """编辑账号表之后、ctx 按映射把账号加回来之前：编辑前在、现在不在了的映射里的账号记进 policy_skip，以后不再自动加回来"""
+    t = load_quiet(T.table)
+    gone = sorted(set(had.split()) - table_emails(t)) if isinstance(t, dict) else []
+    if gone:
+        policy_skip_add(T, gone)
+        for e in gone:
+            sys.stderr.write('• %s 在维护者的映射里：删掉了就不再自动加回来（要加回来：%s add）\n' % (e, T.cmd))
 
 
 def cmd_email(key):
@@ -1421,6 +1559,14 @@ def cmd_add(email, alias, node):
     key = '%s(%s)' % (alias, email) if alias else email
     t[key] = node
     save_json(T.table, t, 0o600)
+    st = T.state(c)
+    if email in (st.get('policy_skip') or []):   # 删掉过的映射里的账号又加回来了：以后照常跟着映射
+        rest = [e for e in st['policy_skip'] if e != email]
+        if rest:
+            st['policy_skip'] = rest
+        else:
+            del st['policy_skip']
+        cfg_save(c)
     ctx()
     print(key)
 
@@ -1448,6 +1594,10 @@ def cmd_add_api(alias, url, model='', node=''):
 def cmd_rm(key):
     t = table_load()
     need(t, key)
+    e = '' if is_api(t[key]) else parse_key(key)[1].lower()
+    if e and e in policy_raw(T):   # 映射里的账号：记下来，不然下一条命令又按映射把它加回来
+        policy_skip_add(T, [e])
+        sys.stderr.write('• %s 在维护者的映射里：这台机器上不会再自动加回来（要加回来：%s add）\n' % (label_of(key), T.cmd))
     del t[key]
     save_json(T.table, t, 0o600)
     ctx()
@@ -3228,6 +3378,7 @@ CMDS = {
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
     'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
     'policy-ask': cmd_policy_ask, 'policy-decline': cmd_policy_decline, 'policy-set': cmd_policy_set,
+    'policy-have': cmd_policy_have, 'policy-forget': cmd_policy_forget,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -4156,13 +4307,16 @@ cmd_key() {   # cca [codex] key <账号>：重新输入第三方 API 账号的 k
 router_needed() { router_ready || [ -n "$(py ports)" ]; }
 
 cmd_edit() {
-	local before
+	local before had
 	need_tty
 	before=$(digest)
+	had=$(py policy-have)   # 映射里的账号：编辑时删掉的要记下来，不然 validate（经过 ctx）又会按映射把它加回来
 	${EDITOR:-vi} "$TABLE" <&3 3<&-
+	py policy-forget "$had"
 	while ! py validate; do
 		confirm "账号表有错误，重新编辑？" y || return 1
 		${EDITOR:-vi} "$TABLE" <&3 3<&-
+		py policy-forget "$had"
 	done
 	chmod 600 "$TABLE" 2>/dev/null   # 编辑器可能另存再改名（权限会变）；表里可能写着 key
 	py secrets-forget   # 删掉的第三方 API 账号：钥匙串里的 key 一起删
@@ -5287,7 +5441,8 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 
 # ---------------------------------------------------------------------------
 # 维护者的账号 → 节点映射（可选）：映射放在维护者的私有 GitHub 仓库里（policy.json，和用发布密钥签的 policy.json.sig），
-# 每台机器用自己的只读 deploy key 去拉，验签通过才换上；映射里的账号出口固定为指定的节点（PY_SRC 的 reconcile 强制）
+# 每台机器用自己的只读 deploy key 去拉，验签通过才换上；映射里的账号出口固定为指定的节点（PY_SRC 的 reconcile 强制），
+# 映射和这台机器的账号表合并：映射里有、这台机器上还没有的官方账号自动加进来，这台机器自己的账号不动（policy_merge）
 #   · cca policy setup [仓库]：生成 deploy key，把公钥交给维护者加到仓库上；不写仓库就是维护者的默认仓库。
 #     安装时带 CCA_POLICY_REPO=仓库 也会做这一步；终端里启动账号时，还没配置、也没说过不用，就手把手引导（可以跳过）
 #   · 每天在后台拉一次（和自动更新的开关、开发模式无关）；cca policy pull、cca update 时也拉；拉不到就接着用上次的
@@ -5359,10 +5514,11 @@ policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-pol
 	return $rc
 }
 
-policy_rows() {   # 这台机器上按映射固定出口的账号（顺便让账号表照映射改好：py 每次读账号表都会改）
+policy_rows() {   # 这台机器上按映射固定出口的账号、映射里还没加到这台机器上的账号（顺便让账号表照映射改好、
+	                  # 加上映射里的账号：py 每次读账号表都会做）
 	local rows
 	rows=$(py policy-rows)
-	[ -z "$rows" ] || { say "  这台机器上按映射固定出口的账号："; say "$rows"; }
+	[ -z "$rows" ] || say "$rows"
 }
 
 policy_pull() {   # 现在就拉一次，说明结果；拉不到时说明原因（上次拉到的照用）
@@ -5711,7 +5867,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              生成只读的 deploy key，把公钥交给维护者加到仓库上。还没配置时，终端里启动账号会先引导
                              （可以跳过，也可以选不再问）；安装时带 CCA_POLICY_REPO=仓库 也会做这一步
   cca policy [pull]          看映射的状态 / 马上拉一次（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
-                             指定的节点，账号表里改成别的会被改回
+                             指定的节点，账号表里改成别的会被改回；映射里有、这台机器上还没有的账号自动加进来
+                             （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
