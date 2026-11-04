@@ -266,17 +266,17 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 ### 测试版
 
-新功能有时先发测试版（版本号像 `2.6.0-beta.1`，在 GitHub 上标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装：
+新功能有时先发测试版（版本号像 `2.7.0-beta.1`，在 [GitHub Releases](https://github.com/rivia7/claude-accounts/releases) 里标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装（下面的 `X.Y.Z-beta.N` 换成那个测试版的版本号）：
 
-- 已经装着 2.6.0-beta.1 或更新的版本：`cca update 2.6.0-beta.7`
+- 已经装着 2.6.0 或更新的版本（2.6.0 的测试版也行）：`cca update X.Y.Z-beta.N`
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh
-  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v2.6.0-beta.7/install.sh | bash -s 2.6.0-beta.7
+  curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/vX.Y.Z-beta.N/install.sh | bash -s X.Y.Z-beta.N
   ```
 
 - 退回原来的版本：`cca update --rollback`（退回后这个测试版不会再被装上）。
-- 装了测试版之后，不会自动更新到别的测试版；出了更新的正式版（比如 2.6.0）时照常自动更新。
+- 装了测试版之后，不会自动更新到别的测试版；出了更新的正式版（比如装着 2.7.0-beta.2 时出了 2.7.0）时照常自动更新。
 
 ## 卸载
 
