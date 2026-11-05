@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.2"
+VERSION="2.8.0-beta.3"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -251,12 +251,16 @@ RESTRICTED = {'CN': '中国大陆', 'HK': '香港', 'MO': '澳门', 'RU': '俄�
               'SY': '叙利亚', 'CU': '古巴', 'BY': '白俄罗斯', 'VE': '委内瑞拉'}
 MISSING = object()
 
-# ~/.claude 下属于账号或进程的条目，不共享；其余条目一律链接到 ~/.claude
-PER_ACCOUNT = {
-    'backups', 'cache', 'daemon', 'debug', 'downloads', 'jobs', 'logs', 'sessions', 'state',
-    'statsig', 'telemetry', 'stats-cache.json', 'policy-limits.json', 'remote-settings.json',
-    '.last-cleanup', '.last-update-result.json', '.session_ingress_token',
+# 工作资料明确共享，新增未知条目默认留在账号目录，避免客户端升级后把身份/运行状态共享出去。
+# projects 包含完整会话和项目记忆；保留这些目录才能跨账号续接。
+CLAUDE_SHARED = {
+    'projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'plans', 'file-history', 'ide',
+    'settings.json', 'settings.local.json', 'history.jsonl', 'CLAUDE.md', 'CLAUDE.local.md',
+    'AGENTS.md', 'AGENTS.override.md', 'keybindings.json', 'rules', 'output-styles', 'themes',
+    'workflows', 'agent-memory', 'agent-memory-local', 'memory', 'memories', 'prompts', 'hooks',
 }
+CLAUDE_SHARED_CONFIG = {'settings.json', 'settings.local.json', 'keybindings.json',
+                        'CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'}
 # ~/.claude 里还没有也先建好、并在账号目录里链接的共享目录
 PRECREATE = ['projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'plans', 'file-history', 'ide']
 # ~/.claude.json 里与账号无关、跨账号同步的键；其余（oauthAccount、订阅、功能开关缓存等）留在各账号
@@ -280,6 +284,7 @@ CODEX_SHARED = {
     'sessions', 'archived_sessions', 'memories', 'skills', 'rules', 'prompts', 'plugins', 'agents', 'themes',
 }
 CODEX_PRECREATE = ['sessions', 'archived_sessions', 'memories', 'skills', 'rules', 'plugins']
+CODEX_SHARED_CONFIG = {'config.toml', 'hooks.json', '.env', 'AGENTS.md', 'AGENTS.override.md'}
 # cca 启动的 codex（以及它的 app-server）都加上：连不上账号的代理时不许改走 macOS 的系统代理，也不许系统代理
 # 排在环境变量前面——两种都会让这个账号的请求从别的出口出去
 CODEX_FLAGS = ['--disable', 'system_proxy_fallback', '--disable', 'respect_system_proxy']
@@ -292,9 +297,8 @@ def die(msg):
     sys.exit(1)
 
 
-def is_per_account(n):
-    return (n in PER_ACCOUNT or n.startswith('.cca') or n.startswith('.credentials')
-            or (n.startswith('.claude') and '.json' in n) or n.endswith('.lock') or n.endswith('.tmp'))
+def codex_profile_file(name):
+    return os.path.basename(name) == name and not name.startswith('.') and name.endswith('.config.toml')
 
 
 def load_json(path, default):
@@ -401,7 +405,10 @@ class Tool:
 
     def shares(self, n):
         """账号目录里的这个条目链接到共享主目录吗"""
-        return not is_per_account(n)
+        return n in CLAUDE_SHARED
+
+    def shared_config(self, n):
+        return n in CLAUDE_SHARED_CONFIG
 
     def email(self, key):
         """登录的邮箱（只读账号目录里的状态，不联网）"""
@@ -466,7 +473,10 @@ class CodexTool(Tool):
     update_cmd = 'codex update'
 
     def shares(self, n):
-        return n in CODEX_SHARED
+        return n in CODEX_SHARED or codex_profile_file(n)
+
+    def shared_config(self, n):
+        return n in CODEX_SHARED_CONFIG or codex_profile_file(n)
 
     def email(self, key):
         return codex_claims(key).get('email') or ''
@@ -1261,26 +1271,6 @@ def eq(a, b):
     return a == b
 
 
-def merge3(base, ours, theirs):
-    """ours=账号副本，theirs=~/.claude.json。只有一边改过取改过的一边；两边都改过的字典逐键合并，
-    其余冲突以 ~/.claude.json 为准。"""
-    if eq(ours, theirs):
-        return ours
-    if eq(ours, base):
-        return theirs
-    if eq(theirs, base):
-        return ours
-    if isinstance(ours, dict) and isinstance(theirs, dict):
-        b = base if isinstance(base, dict) else {}
-        out = {}
-        for k in list(theirs) + [k for k in ours if k not in theirs]:
-            v = merge3(b.get(k, MISSING), ours.get(k, MISSING), theirs.get(k, MISSING))
-            if v is not MISSING:
-                out[k] = v
-        return out
-    return theirs
-
-
 def cmd_sync(key):
     T.sync(key)
 
@@ -1293,9 +1283,10 @@ def claude_sync(key):
         m = load_json(MASTER_JSON, {}) or {}
         a = load_json(aj, {}) or {}
         b = load_json(bj, {}) or {}
-        base, ch_a, ch_m = {}, False, False
+        base, ch_a, ch_m, conflict = {}, False, False, False
         for k in SHARED_KEYS:
-            v = merge3(b.get(k, MISSING), a.get(k, MISSING), m.get(k, MISSING))
+            v, collided = merge_config_json(b.get(k, MISSING), a.get(k, MISSING), m.get(k, MISSING))
+            conflict |= collided
             if v is MISSING:
                 ch_a |= a.pop(k, MISSING) is not MISSING
                 ch_m |= m.pop(k, MISSING) is not MISSING
@@ -1305,6 +1296,8 @@ def claude_sync(key):
                 a[k], ch_a = v, True
             if not eq(m.get(k, MISSING), v):
                 m[k], ch_m = v, True
+        if conflict:
+            config_conflict(aj, key)
         if ch_a or not os.path.exists(aj):
             save_json(aj, a, 0o600, follow_symlinks=False)
         if ch_m:
@@ -1379,6 +1372,102 @@ def adopt(src, dst, key):
         os.unlink(src)
 
 
+def detach_legacy_shared(path, shared):
+    """只拆旧版 cca 指向共享主目录同名项的链接，用户自己建的外部链接不动。"""
+    if not os.path.islink(path):
+        return
+    target = os.readlink(path)
+    if os.path.abspath(os.path.join(os.path.dirname(path), target)) != os.path.abspath(shared):
+        return
+    if not os.path.exists(path):
+        os.unlink(path)
+        return
+    if os.path.isdir(path):
+        for root, dirs, files in os.walk(path):
+            if any(os.path.islink(os.path.join(root, n)) for n in dirs + files):
+                die('旧共享目录包含内部符号链接，无法自动拆分，原目录未改动：%s' % path)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='.cca-unshare-', dir=os.path.dirname(path)) as work:
+        copied = os.path.join(work, 'copy')
+        if os.path.isdir(path):
+            shutil.copytree(path, copied, symlinks=True)
+        else:
+            shutil.copy2(path, copied)
+        # 目录不能直接 rename 覆盖符号链接；复制成功后再移走旧链接，失败则恢复。
+        old = os.path.join(work, 'link')
+        os.replace(path, old)
+        try:
+            os.replace(copied, path)
+        except OSError:
+            os.replace(old, path)
+            raise
+
+
+def shared_text(path):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def config_conflict(src, key):
+    """冲突副本完整保存；文件可能包含用户私有配置，不输出内容。"""
+    directory = os.path.join(T.sroot, 'conflicts', acct_id(key))
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    dst = os.path.join(directory, '%s.%s' % (os.path.basename(src), uuid.uuid4().hex))
+    shutil.copy2(src, dst)
+    os.chmod(dst, 0o600)
+    sys.stderr.write('cca: 共享配置 %s 有冲突或无法合并，冲突部分保留共享版本，账号副本已保存到 %s\n' % (os.path.basename(src), dst))
+
+
+def merge_config_json(base, ours, theirs):
+    """按基线逐字段合并；双方对同一字段作不同修改时保留共享值并报告冲突。"""
+    if eq(ours, theirs) or eq(ours, base):
+        return theirs, False
+    if eq(theirs, base):
+        return ours, False
+    if isinstance(ours, dict) and isinstance(theirs, dict):
+        before = base if isinstance(base, dict) else {}
+        merged, conflict = {}, False
+        for name in list(theirs) + [n for n in ours if n not in theirs]:
+            value, changed = merge_config_json(before.get(name, MISSING), ours.get(name, MISSING), theirs.get(name, MISSING))
+            if value is not MISSING:
+                merged[name] = value
+            conflict |= changed
+        return merged, conflict
+    return theirs, True
+
+
+def merge_shared_config(src, dst, key, base):
+    ours, theirs = shared_text(src), shared_text(dst)
+    if ours == theirs or ours == base:
+        return
+    if src.endswith('.json'):
+        try:
+            parsed = json.loads(ours)
+        except ValueError:
+            config_conflict(src, key)
+            return
+    if theirs == base or (base is MISSING and theirs is None):
+        copy_over(src, dst)
+        return
+    if base is not MISSING and src.endswith('.json'):
+        try:
+            merged, conflict = merge_config_json(json.loads(base) if base is not None else MISSING,
+                                                 parsed, json.loads(theirs) if theirs is not None else MISSING)
+        except ValueError:
+            pass   # 无法解析的配置保留原文，不能拿不完整 JSON 覆盖共享版本。
+        else:
+            if conflict:
+                config_conflict(src, key)
+            if merged is not MISSING:
+                save_json(dst, merged)
+            return
+    # TOML/普通文本不按行拼接，避免合成重复的 key/table；无基线也不猜哪份更新。
+    config_conflict(src, key)
+
+
 def cmd_link(key):
     cd, master = cdir(key), T.master
     os.makedirs(cd, exist_ok=True)
@@ -1387,19 +1476,34 @@ def cmd_link(key):
         os.makedirs(os.path.join(master, d), exist_ok=True)
     with Lock():
         prepare_device(key)
+        snapshot = os.path.join(cd, '.cca-shared-base.json')
+        base = load_json(snapshot, {})
+        if not isinstance(base, dict) or any(v is not None and not isinstance(v, str) for v in base.values()):
+            die('共享配置基线格式错误：%s' % snapshot)
         for n in sorted(os.listdir(cd)):
-            if not T.shares(n):
-                continue
             p, t = os.path.join(cd, n), os.path.join(master, n)
+            if not T.shares(n):
+                if T is CLAUDE:
+                    detach_legacy_shared(p, t)
+                continue
             if os.path.islink(p):
                 if os.readlink(p) != t:
                     os.unlink(p)
                 continue
-            adopt(p, t, key)
+            if T.shared_config(n) and os.path.isfile(p) and (not os.path.lexists(t) or os.path.isfile(t)):
+                merge_shared_config(p, t, key, base.get(n, MISSING))
+                os.unlink(p)
+            else:
+                adopt(p, t, key)
         for n in sorted(os.listdir(master)):
             p = os.path.join(cd, n)
             if T.shares(n) and not os.path.lexists(p):
                 os.symlink(os.path.join(master, n), p)
+        names = set(CLAUDE_SHARED_CONFIG if T is CLAUDE else CODEX_SHARED_CONFIG)
+        names.update(n for n in list(base) + os.listdir(master) if T.shared_config(n))
+        saved = {n: shared_text(os.path.join(master, n)) for n in sorted(names) if not os.path.isdir(os.path.join(master, n))}
+        if saved != base or not os.path.exists(snapshot):
+            save_json(snapshot, saved, 0o600, follow_symlinks=False)
     T.after_link(key)
 
 
@@ -2750,13 +2854,19 @@ def toml_values(path):
 
 
 def codex_settings_problems():
-    vals, bad = toml_values(os.path.join(CODEX.master, 'config.toml')), []
-    prof = vals.get('profile') or ''
-    for pre in [''] + (['profiles.%s.' % prof] if prof else []):   # 顶层，以及 profile 选中的那一节（它的设置会盖过顶层）
-        at = 'config.toml:' + pre
-        bad += [at + k for k in CODEX_BAD_KEYS if pre + k in vals]
-        bad += [at + k for k, want in CODEX_MUST_BE.items() if pre + k in vals and vals[pre + k] != want]
-        bad += [at + k for k, no in CODEX_MUST_NOT.items() if vals.get(pre + k) == no]
+    bad = []
+    files = ['config.toml']
+    if os.path.isdir(CODEX.master):
+        files += sorted(n for n in os.listdir(CODEX.master) if codex_profile_file(n))
+    for name in files:
+        vals = toml_values(os.path.join(CODEX.master, name))
+        prof = vals.get('profile') or ''
+        # 同时兼容旧版内嵌 profiles 和新版独立配置；检查全部共享 profile，CLI 可临时选择任一个。
+        for pre in [''] + (['profiles.%s.' % prof] if prof else []):
+            at = name + ':' + pre
+            bad += [at + k for k in CODEX_BAD_KEYS if pre + k in vals]
+            bad += [at + k for k, want in CODEX_MUST_BE.items() if pre + k in vals and vals[pre + k] != want]
+            bad += [at + k for k, no in CODEX_MUST_NOT.items() if vals.get(pre + k) == no]
     try:
         with open(os.path.join(CODEX.master, '.env'), encoding='utf-8') as f:
             for line in f:
@@ -4846,7 +4956,7 @@ cmd_login() {   # cca [codex] login <账号>：退出这个账号现在的登录
 	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号，不用登录（换 key 用 ${CMD} key ${ACC_NAME}）"
 	sync_if_changed
 	preflight || exit 1
-	py link "$key" && py sync "$key" || die "初始化账号目录失败"
+	prepare_account "$key" || die "初始化账号目录失败"
 	[ -n "$(auth_email)" ] && tool wipe
 	ensure_login || exit 1
 	okay "${ACC_LABEL} 已重新登录"
@@ -5043,6 +5153,12 @@ coffee_check() {   # coffee_check [region]：region 时只看出口地区（不�
 	return $rc
 }
 
+prepare_account() {   # 合并账号内原子保存的共享配置后，再校验实际将使用的配置。
+	local bad
+	py link "$1" && py sync "$1" || return 1
+	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
+}
+
 preflight() {   # 账号的出口必须可用且干净，否则不启动（避免走错出口）
 	local bad rc
 	COFFEE_LINE=""
@@ -5096,7 +5212,7 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 	py device "$ACC_KEY" || die "初始化账号设备标识失败"
 	# 还没登录就先登录（同一个浏览器实例，登录一次两边都能用；Claude 的登录页预填邮箱）
 	if [ -n "$ACC_EMAIL" ] && [ -n "$TOOL_BIN" ] && interactive && [ -z "$(auth_email)" ]; then
-		py link "$ACC_KEY" && py sync "$ACC_KEY" || die "初始化账号目录失败"
+		prepare_account "$ACC_KEY" || die "初始化账号目录失败"
 		ensure_login || exit 1
 	fi
 	open_chrome "${2:-https://${site}/}"
@@ -5215,7 +5331,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	sync_if_changed
 	launchers_sync
 	preflight || exit 1
-	py link "$key" && py sync "$key" || die "初始化账号目录失败"
+	prepare_account "$key" || die "初始化账号目录失败"
 	tool app_prepare
 	[ -e "$dir/Local State" ] || first=1
 	mkdir -p "$dir" && chmod 700 "$dir"
@@ -5510,8 +5626,7 @@ run_account() {
 		api_key_ready || exit 1
 	fi
 	preflight || exit 1
-	py link "$key" || die "链接共享目录失败"
-	py sync "$key" || die "同步 .claude.json 失败"
+	prepare_account "$key" || die "初始化账号目录失败"
 	[ "$ACC_KIND" = api ] || ensure_login || exit 1
 	py set-last "$key"
 	say ""
@@ -6195,7 +6310,7 @@ cmd_restore() {
 
 usage() {
 	cat >&2 <<EOF
-cca $VERSION — Claude Code / Codex 多账号（账号独立登录，其余共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，在外面走本机 Clash）
+cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记忆/配置共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，在外面走本机 Clash）
 
 启动
   cca [claude 参数]          弹出账号菜单：↑↓ 选择、回车确认、数字键直接选、q 退出；

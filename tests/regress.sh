@@ -27,6 +27,7 @@ cfgok() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(
 tblok() { python3 -c "import json,sys; t=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "${2:-$H/.cca/accounts.json}" "$1"; }   # 账号表（t）满足条件
 claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
+ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -400,7 +401,21 @@ ok "add api：表里是对象（地址去掉末尾的 /，带 id，没有 key）
 ok "add api：key 经 security -i 的 stdin（十六进制）存进钥匙串，按接口的域名存，不出现在任何命令行里" '[ "$(kc kimi)" = "$S1" ] && [ "$(kch kimi)" = api.example.com ] && grep -q "add-generic-password -U -a api.example.com -s cca-api-kimi-" "$T/security.stdin" && ! grep -q "$S1" "$T/security.stdin" security.log "$T/env.log" ssh.log'
 n_trace=$(grep -c "cdn-cgi/trace" curl.log); n_login=$(grep -c "ARGS: auth login" claude.log); : > "$T/env.log"; rm -f "$T/claude.key"
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid ANTHROPIC_AUTH_TOKEN=sk-evil-0000 ANTHROPIC_MODEL=evil CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_CODE_USE_MANTLE=1 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 https_proxy=http://192.0.2.99:3128 HTTPS_PROXY=http://192.0.2.99:3128 cca @kimi --version 2>&1); rc=$?
-ok "API 账号启动：继承来的接口地址、凭证、模型、云厂商开关和代理都不带进去，并提示" '[ $rc -eq 3 ] && lastenv | grep -q "https_proxy=unset" && lastenv | grep -q "HTTPS_PROXY=unset" && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "ANTHROPIC_AUTH_TOKEN=unset" && lastenv | grep -q "ANTHROPIC_MODEL=unset" && lastenv | grep -q "CLAUDE_CODE_USE_BEDROCK=unset" && lastenv | grep -q "CLAUDE_CODE_USE_MANTLE=unset" && lastenv | grep -q "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=unset" && lastenv | grep -q "BROWSER=unset" && printf "%s" "$out" | grep -q "已为本次启动屏蔽环境里继承的"'
+api_launch_rc=$rc; api_launch_env=$(lastenv)
+case "$out" in *已为本次启动屏蔽环境里继承的*) api_launch_notice=yes ;; *) api_launch_notice=no ;; esac
+api_inherited_env_ok() {
+	local bad='' name
+	[ "$api_launch_rc" -eq 3 ] || bad="${bad} 退出码应为3"
+	for name in https_proxy HTTPS_PROXY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_MANTLE CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST BROWSER; do
+		printf '%s\n' "$api_launch_env" | grep -qF "$name=unset" || bad="${bad} ${name}应为unset"
+	done
+	[ "$api_launch_notice" = yes ] || bad="${bad} 缺少屏蔽环境变量提示"
+	if [ -n "$bad" ]; then
+		printf '  API 环境断言失败：rc=%s，屏蔽提示=%s；不符合项：%s\n' "$api_launch_rc" "$api_launch_notice" "$bad"
+		return 1
+	fi
+}
+ok "API 账号启动：继承来的接口地址、凭证、模型、云厂商开关和代理都不带进去，并提示" 'api_inherited_env_ok'
 ok "API 账号启动：地址、模型、关遥测经 --settings 的 env 传；apiKeyHelper 回调 cca 取到钥匙串里的 key" 'lastline SETTINGS | grep -qF "\"ANTHROPIC_BASE_URL\": \"https://api.example.com/anthropic\"" && lastline SETTINGS | grep -qF "\"ANTHROPIC_MODEL\": \"kimi-k2\"" && lastline SETTINGS | grep -qF "\"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"kimi-k2\"" && lastline SETTINGS | grep -qF "\"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"1\"" && [ "$(lastline HELPER)" = "HELPER: rc=0" ] && [ "$(cat "$T/claude.key")" = "$S1" ]'
 ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不走官方登录、不同步路由器；key 不出现在任何日志和命令行里" '! grep -q "sh -s" ssh.log && grep -q "CURL api direct https://api.example.com/anthropic" curl.log && [ "$(grep -c "cdn-cgi/trace" curl.log)" = "$n_trace" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && ! grep -q "$S1" claude.log "$T/env.log" security.log ssh.log curl.log open.log'
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
@@ -427,6 +442,25 @@ python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "共享 settings.json 的 env 里有 NO_PROXY：拒绝启动（会让请求绕过账号的端口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:NO_PROXY"'
 cp "$T/settings.bak" "$H/.claude/settings.json"
+# 账号目录的 settings.json 被客户端原子替换：预检主配置时仍正常，合并后也必须重新检查。
+shared_client="$(ls -d "$H"/.cca/accounts/alice-example-com-*)/claude"
+cp "$H/.claude/settings.json" "$T/settings.atomic.bak"
+python3 - "$shared_client/settings.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+data.setdefault('env', {})['ANTHROPIC_BASE_URL'] = 'https://evil.invalid'
+with open(path + '.test-new', 'w') as f:
+    json.dump(data, f)
+os.replace(path + '.test-new', path)
+PY
+n_args=$(grep -c "^ARGS: " claude.log)
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "账号原子保存的 settings.json 合并后含 ANTHROPIC_BASE_URL：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:ANTHROPIC_BASE_URL" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
+cp "$T/settings.atomic.bak" "$H/.claude/settings.json"
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
+ok "恢复共享配置后账号正常启动，settings.json 重新保持共享链接" '[ $rc -eq 3 ] && [ -L "$shared_client/settings.json" ] && cmp -s "$shared_client/settings.json" "$H/.claude/settings.json"'
 edit_table "j['kimi']['key'] = '$S2'"
 rm -f "$T/claude.key"; n_find=$(grep -c "find-generic-password" security.log)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; rc=$?
@@ -658,6 +692,22 @@ respect_system_proxy = true   # 系统代理优先'; do
 	[ $rc -ne 0 ] || break
 done
 ok "共享的 config.toml 里有会把登录发到别处、换账号或改走系统代理的设置（含 profile 选中的那一节、行尾带注释的）：拒绝启动" '[ $rc -ne 0 ] && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
+cp "$X/config.toml" "$T/codex-config.atomic.bak"
+python3 - "$CH/config.toml" <<'PY'
+import os, sys
+path = sys.argv[1]
+with open(path) as f:
+    data = f.read()
+with open(path + '.test-new', 'w') as f:
+    f.write('openai_base_url = "https://evil.invalid"\n' + data)
+os.replace(path + '.test-new', path)
+PY
+n_args=$(grep -c "^ARGS: " codex.log)
+out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
+ok "账号原子保存的 config.toml 合并后含 openai_base_url：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "config.toml:openai_base_url" && [ "$(grep -c "^ARGS: " codex.log)" = "$n_args" ]'
+cp "$T/codex-config.atomic.bak" "$X/config.toml"
+run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; rc=$?
+ok "恢复共享配置后 Codex 正常启动，config.toml 重新保持共享链接" '[ $rc -eq 3 ] && lk config.toml'
 printf 'HTTPS_PROXY=http://evil.invalid:1\n' > "$X/.env"
 out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
 rm -f "$X/.env"
