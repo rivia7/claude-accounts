@@ -25,6 +25,8 @@ restarts() { grep -c '^RESTART' router.log 2>/dev/null || echo 0; }   # OpenClas
 cfgv() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$H/.cca/config.json" "$1"; }
 cfgok() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "$H/.cca/config.json" "$1"; }   # config.json（c）满足条件
 tblok() { python3 -c "import json,sys; t=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "${2:-$H/.cca/accounts.json}" "$1"; }   # 账号表（t）满足条件
+claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
+ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -40,11 +42,15 @@ print(json.dumps({'base': 7900, 'slots': 8, 'nodes': ['US-A', 'US-B', 'US-C', 'U
 PY
 ok "install：路由器上的账号表和以前的版本逐字节一样（只有 Claude 账号时它变了，已安装的机器都会重新部署路由器端）" 'cmp -s "$T/accounts.golden" "$R/etc/cca/accounts.yaml"'
 ok "install：钩子 / cron / sysupgrade" 'grep -q ">>> cca >>>" "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && grep -q ensure "$R/etc/crontabs/root" && grep -qx /etc/cca/ "$R/etc/sysupgrade.conf"'
+AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); alice_device=$(claude_device "$AD")
+ok "install：未登录时已生成账号自己的设备标识" 'printf "%s\n" "$alice_device" | grep -Eq "^[0-9a-f]{64}:[0-9a-f]{64}$" && [ -f "$AD/device.json" ]'
 
 # 2. 再加账号（邮箱、别名分两行填）：不重载，API 切换
 out=$(run CCA_TTY="$(ans bob@example.com 工作 2)" cca add 2>&1)
 ok "add bob：不重载，CCA-2 经 API 切到 US-B，文件里默认顺序同步更新" '[ "$(reloads)" = 1 ] && [ "$(sel CCA-2)" = US-B ] && [ "$(first CCA-2)" = US-B ]'
 ok "add：邮箱和别名分两行，账号表的键是 别名(邮箱)" 'printf "%s" "$out" | grep -q "登录邮箱：" && printf "%s" "$out" | grep -q "别名（可选，回车跳过）：" && grep -q "\"工作(bob@example.com)\": \"US-B\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "已添加 工作（bob@example.com），出口 US-B"'
+BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*); bob_device=$(claude_device "$BD")
+ok "不同账号：userID 和 machineID 都独立" '[ "${alice_device%:*}" != "${bob_device%:*}" ] && [ "${alice_device#*:}" != "${bob_device#*:}" ]'
 out=$(run CCA_TTY="$(ans alice@example.com nope carol@example.com '工 作' 'a(b)' 工作 小号 3)" cca add 2>&1)
 ok "add：重复邮箱、不像邮箱、别名带空格/括号/重名都会说明原因并重填" 'printf "%s" "$out" | grep -q "这个邮箱已经添加过了：alice@example.com" && printf "%s" "$out" | grep -q "这不像邮箱地址" && printf "%s" "$out" | grep -q "别名里不能有空格" && printf "%s" "$out" | grep -q "别名「工作」已经用在 工作（bob@example.com） 上了" && grep -q "\"小号(carol@example.com)\"" "$H/.cca/accounts.json"'
 ok "add 选节点：注明已被哪些账号使用（有别名的写别名），默认选中第一个还没人用的 US-C" 'printf "%s" "$out" | grep -qE "1\. US-A +已被 alice@example.com 使用$" && printf "%s" "$out" | grep -qE "2\. US-B +已被 工作 使用$" && printf "%s" "$out" | grep -q "选择节点编号 \[3\]"'
@@ -57,6 +63,7 @@ run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
 # 3. 登录 + 启动 + 出口检测
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
 ok "alice：预填邮箱登录 → 启动，退出码透传" '[ $rc -eq 3 ] && grep -q "ARGS: auth login --claudeai --email alice@example.com" claude.log'
+ok "Claude 登录时已读到固定设备标识，退出同步不改变" 'grep -qF "LOGIN-DEVICE $alice_device @ $AD/claude" claude.log && [ "$(claude_device "$AD")" = "$alice_device" ]'
 ok "alice：出口检测经 :7901（trace + iprisk）" 'grep -q "CURL via :7901 https://ip.net.coffee/api/iprisk/203.0.113.1" curl.log'
 
 # 3b. 有别名的账号：按邮箱登录；只改别名不换账号目录、不重新登录、端口和"上次使用"跟着走
@@ -68,6 +75,8 @@ edit_table 'j["副号(bob@example.com)"] = j.pop("工作(bob@example.com)")'
 run CCA_TTY="$(ans)" cca @副号 --version >/dev/null 2>&1; rc=$?
 d2=$(grep "^ENV: " claude.log | tail -n 1 | sed 's/.*CLAUDE_CONFIG_DIR=\([^ ]*\).*/\1/')
 ok "改别名：同一个账号目录、不重新登录、端口仍是 7902、上次使用跟着改" '[ $rc -eq 3 ] && [ "$d1" = "$d2" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c[\"ports\"].get(\"副号(bob@example.com)\")==7902 and c[\"last\"]==\"副号(bob@example.com)\" else 1)" "$H/.cca/config.json"'
+out=$(run CCA_TTY="$(ans)" cca login 副号 2>&1); rc=$?
+ok "Claude 改别名、退出再登录：设备标识保持不变" '[ $rc -eq 0 ] && [ "$(claude_device "$BD")" = "$bob_device" ] && [ "$(grep -cF "LOGIN-DEVICE $bob_device @ $BD/claude" claude.log)" = 2 ]'
 : > open.log
 run CCA_ACCOUNT='副号(bob@example.com)' "$H/.cca/bin/open-url" 'https://claude.com/cai/oauth/authorize?code=true&client_id=c&state=s' >/dev/null 2>&1
 run CCA_ACCOUNT='副号(bob@example.com)' "$H/.cca/bin/open-url" 'https://claude.com/cai/oauth/authorize?code=true&login_hint=x%40y.z' >/dev/null 2>&1
@@ -611,6 +620,8 @@ rm -f "$H/.local/bin/cxa"; out0=$(run cca ls 2>&1)   # 模拟以前装的 cca：
 : > ssh.log; n0=$(reloads)
 out=$(run CCA_TTY="$(ans alice@example.com '' 2)" cca codex add 2>&1); rc=$?
 CD=$(ls -d "$H"/.cca/codex/accounts/alice-example-com-*); CH="$CD/codex"
+codex_device=$(cat "$CH/installation_id")
+ok "codex add：登录前已生成独立 installation_id" 'printf "%s\n" "$codex_device" | grep -Eq "^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$" && [ -f "$CD/device.json" ]'
 ok "codex add：和 Claude 账号同一个邮箱也能加，记在 codex.json；账号目录在 ~/.cca/codex/accounts 下，不碰 Claude 的" '[ $rc -eq 0 ] && grep -q "\"alice@example.com\": \"US-B\"" "$CX" && [ -d "$CH" ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && printf "%s" "$out" | grep -q "添加 Codex 账号" && printf "%s" "$out" | grep -q "用 alice@example.com 登录，登录后 cca 会核对"'
 ok "codex add：和 Claude 账号共用端口池（Claude 的 7901 不动，Codex 分到 7902），路由器的端口池先 Claude 后 Codex，不重载" '[ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ] && [ "$(cfgv "c[\"codex\"][\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7902}" ] && grep -q "\"slot\": 2, \"name\": \"codex-alice-example-com-" "$R/etc/cca/accounts.yaml" && [ "$(sel CCA-2)" = US-B ] && [ "$(reloads)" = "$n0" ]'
 ok "以前装的 cca 升级后还没有 cxa：没用过 Codex 时不补；第一次用 cca codex 时补上，并说明怎么用" '[ $cx0 = no ] && ! printf "%s" "$out0" | grep -q "cxa" && [ "$(readlink "$H/.local/bin/cxa")" = cca ] && [ "$(printf "%s" "$out" | grep -c "以后可以直接用 cxa 代替 cca codex：cxa @别名 直接启动")" = 1 ]'
@@ -630,6 +641,7 @@ ok "Codex 启动前的出口检测：经 7902 取 chatgpt.com 看到的 IP" 'gre
 lk() { [ -L "$CH/$1" ] && [ "$(readlink "$CH/$1")" = "$X/$1" ]; }
 ok "共享：config.toml、AGENTS.md、会话、历史、技能、规则链接到 ~/.codex" 'lk config.toml && lk AGENTS.md && lk sessions && lk history.jsonl && lk skills && lk rules && lk session_index.jsonl'
 ok "不共享：登录、installation_id、模型缓存、git 工作树各账号一份；桌面 App 的运行状态不链接" '[ ! -L "$CH/installation_id" ] && ! cmp -s "$CH/installation_id" "$X/installation_id" && [ ! -L "$CH/models_cache.json" ] && [ -d "$CH/worktrees" ] && [ ! -L "$CH/worktrees" ] && [ ! -e "$CH/automations" ] && [ ! -e "$CH/browser" ] && [ ! -e "$CH/.codex-global-state.json" ] && [ ! -e "$X/worktrees" ]'
+ok "Codex 登录时已读到固定设备标识，启动退出不改变" 'grep -qF "LOGIN-DEVICE $codex_device @ $CH" codex.log && [ "$(cat "$CH/installation_id")" = "$codex_device" ]'
 ok "会话里写的共享内容回到 ~/.codex：改 config.toml 不断链接，原子写替换掉的 session_index.jsonl 并回去再链接上" 'grep -q "touched by alice" "$X/config.toml" && grep -q "hi from alice" "$X/history.jsonl" && grep -q "from alice" "$X/session_index.jsonl" && [ -d "$X/skills/from-alice" ] && ls "$X"/sessions/2026/11/03/rollout-*.jsonl >/dev/null 2>&1'
 ok "会话库里的路径改写到 ~/.codex（账号删了也找得到）" '[ "$(sqlite3 "$X/state_5.sqlite" "select count(*) from threads where rollout_path like '"'"'$X/sessions/%'"'"'")" = 1 ] && [ "$(sqlite3 "$X/state_5.sqlite" "select count(*) from threads where rollout_path like '"'"'$H/.cca/%'"'"'")" = 0 ]'
 m=$(run CCA_TTY="$(ans q)" cca codex 2>&1)
@@ -660,6 +672,7 @@ out=$(run CCA_TTY="$(ans n)" cca codex login alice 2>&1); rc=$?
 ok "cca codex login：先退出原来的登录；登成了别的邮箱就不用，问过之后不继续" '[ $rc -ne 0 ] && grep -q "LOGOUT $CH" codex.log && printf "%s" "$out" | grep -q "登录的是 mallory@example.com，不是 alice@example.com"'
 out=$(run CCA_TTY="$(ans y)" cca codex login alice 2>&1); rc=$?
 ok "cca codex login：用对的邮箱重新登录" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "alice@example.com 已重新登录" && grep -q "LOGIN alice@example.com @ $CH" codex.log'
+ok "Codex 登错号后重新登录：设备标识保持不变" '[ "$(cat "$CH/installation_id")" = "$codex_device" ] && [ "$(grep -cF "LOGIN-DEVICE $codex_device @ $CH" codex.log)" = 3 ]'
 rm -f "$CH/auth.json"; touch "$T/codex_rpc_off"
 out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
 rm -f "$T/codex_rpc_off"

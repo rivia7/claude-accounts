@@ -16,6 +16,7 @@
 - 替换已安装的脚本只能用 `mv`：bash 边读边执行，原地覆盖会让正在运行的 cca 读到半截代码
 - 改了 `router_sh`/`router_rb` 会改变同步摘要，已安装的机器下次启动会自动重新部署路由器端
 - 账号身份按邮箱（`acct_id`）；账号表的键是 `别名(邮箱)`，改别名不能影响登录目录和端口
+- 客户端设备标识由账号目录的 `device.json` 固定保存：Claude 的 `userID` / `machineID` 是 64 位小写 hex，Codex 的 `installation_id` 是 UUID 文本。`prepare_device` 必须在 `Lock` 内调用（`py device`、`py link`、Claude 的 `py sync`）；先于登录和查用量初始化，重新登录/改别名不重置。首次接管保留合法独立旧值，重复值和共享链接迁移；写设备文件用原子替换且 `save_json(..., follow_symlinks=False)`，不能写穿共享源。浏览器 profile 隔离不等于 Canvas/WebGL/硬件指纹隔离。
 - 账号表的值是字符串（官方账号，值是节点）或对象（第三方 API 账号：`base_url`/`model`/`node`/`env`/`key`/`id`，Codex 的没有 `env`）。读值一律用 `is_api`/`node_of`，不要假设是节点字符串；端口表（`T.state(c)['ports']`）里只有走节点的账号（直连的 API 账号没端口），要端口时用 `routed(c, t, tool)`，跨工具用 `pool(c)`。第三方 API 账号按 `id` 认（各工具的 `tool.ids`，派发子命令前 `load_ids()` 读好；config.json 的 `api_ids` 记着上次的 键 → 账号目录名，改几次别名端口和"上次使用"都认得出；跨工具时用 `acct_id(key, tool)`），改别名时目录、key、端口不变
 - 只有官方账号的账号表，`router_accounts` 的输出必须和以前逐字节一样：否则所有已安装的机器升级后都会重新部署路由器端
 - 密钥绝不进任何进程的命令行和环境变量：存钥匙串用 `security -i` 从 stdin 读命令、`-X` 十六进制（`-i` 里的命令失败也返回 0，必须读回来比对；只收可见 ASCII，否则 `-w` 输出十六进制）；交给 Claude Code 用 `--settings` 里的 `apiKeyHelper`（回调 `cca _api-key <账号目录名>`，只给账号表里现有的账号），地址和模型也放在这份 `--settings` 的 env 里（优先级高于共享 settings.json 和进程环境；第二个 `--settings` 会把它整个顶掉）。env 会出现在命令行上，所以像密钥的变量名（`ENV_SECRETISH`）不收

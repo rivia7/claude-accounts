@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.1"
+VERSION="2.8.0-beta.2"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -220,7 +220,7 @@ CODEX_ALIAS=cxa   # cxa …：等于 cca codex …（~/.local/bin/cxa 是指向�
 # Python 辅助：配置/账号表、共享链接、.claude.json 三方合并、出口检测解析
 # ---------------------------------------------------------------------------
 PY_SRC=$(cat <<'PY'
-import base64, fcntl, filecmp, hashlib, json, os, re, shlex, shutil, sys, time, unicodedata
+import base64, fcntl, filecmp, hashlib, json, os, re, shlex, shutil, sys, time, unicodedata, uuid
 
 HOME = os.path.expanduser('~')
 CCA_HOME = os.path.abspath(os.environ.get('CCA_HOME') or os.path.join(HOME, '.cca'))
@@ -316,8 +316,8 @@ def load_quiet(path):
         return None
 
 
-def save_json(path, data, mode=None):
-    path = os.path.realpath(path)
+def save_json(path, data, mode=None, follow_symlinks=True):
+    path = os.path.realpath(path) if follow_symlinks else os.path.abspath(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if mode is None:
         try:
@@ -1139,6 +1139,121 @@ def router_accounts(c):
                          for tool, k, v, p in pool(c)]}
 
 
+# --- 账号设备标识：先于登录准备，重新登录和改别名都不换 -------------------------
+def device_fields():
+    return ('installation_id',) if T is CODEX else ('userID', 'machineID')
+
+
+def device_value(name, value):
+    if not isinstance(value, str):
+        return None
+    if name == 'installation_id':
+        try:
+            return str(uuid.UUID(value.strip()))
+        except ValueError:
+            return None
+    return value if re.fullmatch(r'[0-9a-f]{64}', value) else None
+
+
+def device_native(cd):
+    if T is CLAUDE:
+        j = load_quiet(os.path.join(cd, '.claude.json'))
+        return j if isinstance(j, dict) else {}
+    try:
+        with open(os.path.join(cd, 'installation_id'), encoding='utf-8') as f:
+            return {'installation_id': f.read().strip()}
+    except (OSError, UnicodeError):
+        return {}
+
+
+def private_file(path):
+    # 旧配置可能把设备文件链到共享目录；不能沿用共享值，更不能写穿链接。
+    return not os.path.islink(path) and (not os.path.exists(path) or os.stat(path).st_nlink == 1)
+
+
+def device_identity(key, native):
+    """调用方持有 Lock。device.json 是账号的固定标识；首次接管保留合法、独立的客户端旧值。"""
+    account = adir(key)
+    path = os.path.join(account, 'device.json')
+    saved = load_json(path, {})
+    if not isinstance(saved, dict) or saved.get('version', 1) != 1:
+        die('无法读取账号设备标识：%s' % path)
+    own = saved if private_file(path) else {}
+    fields = device_fields()
+    used = {n: set() for n in fields}
+    legacy = {n: set() for n in fields}
+    master = load_quiet(MASTER_JSON) if T is CLAUDE else device_native(T.master)
+    for n in fields:
+        value = device_value(n, master.get(n)) if isinstance(master, dict) else None
+        if value:
+            used[n].add(value)
+    root = os.path.join(T.sroot, 'accounts')
+    for name in os.listdir(root):
+        other = os.path.join(root, name)
+        if other == account or os.path.islink(other) or not os.path.isdir(other):
+            continue
+        old = device_native(os.path.join(other, T.sub))
+        record = os.path.join(other, 'device.json')
+        fixed = load_quiet(record)
+        isolated = private_file(record)
+        # 已由 cca 接管的账号以固定记录为准，客户端暂时删改了字段也不影响其它账号。
+        for n in fields:
+            value = device_value(n, fixed.get(n)) if isinstance(fixed, dict) else None
+            if value and isolated:
+                used[n].add(value)
+            else:
+                if value:
+                    legacy[n].add(value)   # 共享记录断开硬链接后会变成普通文件，迁移时就要计入去重
+                value = device_value(n, old.get(n))
+                if value:
+                    legacy[n].add(value)
+    identity = {'version': 1}
+    for n in fields:
+        fixed = device_value(n, own.get(n))
+        value = fixed or device_value(n, native.get(n))
+        # 未迁移的副本不能迫使已有固定标识的账号换设备；轮到副本首次启动时再为它分配。
+        if not value or value in used[n] or (not fixed and value in legacy[n]):
+            value = str(uuid.uuid4()) if n == 'installation_id' else os.urandom(32).hex()
+            while value in used[n] or value in legacy[n]:
+                value = str(uuid.uuid4()) if n == 'installation_id' else os.urandom(32).hex()
+        identity[n] = value
+    if identity != saved or not private_file(path):
+        save_json(path, identity, 0o600, follow_symlinks=False)
+    return identity
+
+
+def prepare_device(key):
+    """调用方持有 Lock；只修复设备字段，保留客户端的登录和其它配置。"""
+    cd = cdir(key)
+    if os.path.islink(adir(key)) or os.path.islink(cd):
+        die('账号目录不能是符号链接，无法隔离设备标识：%s' % cd)
+    os.makedirs(cd, exist_ok=True)
+    if T is CLAUDE:
+        path = os.path.join(cd, '.claude.json')
+        native = load_json(path, {})
+        if not isinstance(native, dict):
+            die('账号配置必须是 JSON 对象：%s' % path)
+    else:
+        path = os.path.join(cd, 'installation_id')
+        native = device_native(cd)
+    identity = device_identity(key, native if private_file(path) else {})
+    if not private_file(path) or any(native.get(n) != identity[n] for n in device_fields()):
+        if T is CLAUDE:
+            native.update({n: identity[n] for n in device_fields()})
+            save_json(path, native, 0o600, follow_symlinks=False)
+        else:
+            tmp = '%s.cca-%d.tmp' % (path, os.getpid())
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(identity['installation_id'] + '\n')
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+
+
+def cmd_device(key):
+    with Lock():
+        prepare_device(key)
+
+
 # --- .claude.json 三方合并 --------------------------------------------------
 def eq(a, b):
     if a is MISSING or b is MISSING:
@@ -1174,6 +1289,7 @@ def claude_sync(key):
     cd = cdir(key)
     aj, bj = os.path.join(cd, '.claude.json'), os.path.join(cd, '.cca-sync-base.json')
     with Lock():
+        prepare_device(key)
         m = load_json(MASTER_JSON, {}) or {}
         a = load_json(aj, {}) or {}
         b = load_json(bj, {}) or {}
@@ -1190,7 +1306,7 @@ def claude_sync(key):
             if not eq(m.get(k, MISSING), v):
                 m[k], ch_m = v, True
         if ch_a or not os.path.exists(aj):
-            save_json(aj, a, 0o600)
+            save_json(aj, a, 0o600, follow_symlinks=False)
         if ch_m:
             save_json(MASTER_JSON, m)
         save_json(bj, base, 0o600)
@@ -1270,6 +1386,7 @@ def cmd_link(key):
     for d in T.precreate:
         os.makedirs(os.path.join(master, d), exist_ok=True)
     with Lock():
+        prepare_device(key)
         for n in sorted(os.listdir(cd)):
             if not T.shares(n):
                 continue
@@ -3415,7 +3532,7 @@ CMDS = {
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
-    'link': cmd_link, 'sync': cmd_sync, 'launchers': cmd_launchers,
+    'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
     'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet, 'local-node': cmd_local_node,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
@@ -4679,6 +4796,7 @@ codex_email() { py email "$ACC_KEY"; }   # auth.json 里 id_token 的邮箱（�
 ensure_login() {
 	local e tries=0
 	while :; do
+		py device "$ACC_KEY" || return 1   # logout 可能清掉客户端配置，登录前恢复该账号的固定设备标识
 		e=$(auth_email)
 		if [ -z "$e" ]; then
 			interactive || { warn "${ACC_NAME} 还没登录，需要在终端里运行 ${CMD} @${ACC_NAME} 完成登录"; return 1; }
@@ -4975,6 +5093,7 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
 	CCA_SKIP_CHECK=1 preflight || exit 1
+	py device "$ACC_KEY" || die "初始化账号设备标识失败"
 	# 还没登录就先登录（同一个浏览器实例，登录一次两边都能用；Claude 的登录页预填邮箱）
 	if [ -n "$ACC_EMAIL" ] && [ -n "$TOOL_BIN" ] && interactive && [ -z "$(auth_email)" ]; then
 		py link "$ACC_KEY" && py sync "$ACC_KEY" || die "初始化账号目录失败"
@@ -5490,6 +5609,7 @@ usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过
 			3) printf 'trace\t\n' > "$o.skip"; return 0 ;;
 		esac
 	fi
+	py device "$ACC_KEY" || return 1
 	child_env
 	env "${UNSETS[@]}" -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SSE_PORT "${SETS[@]}" CCA_TOOL="$TOOL" \
 		"${PYRUN[@]}" usage-query "$TOOL_BIN" "${CCA_USAGE_TIMEOUT:-25}" > "$o.json" 2>/dev/null

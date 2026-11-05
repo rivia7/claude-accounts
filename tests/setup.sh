@@ -608,6 +608,12 @@ P="$CLAUDE_CONFIG_DIR/.claude.json"
 if [ "$1" = auth ]; then
 	case "$2" in
 		login)
+			python3 - "$P" >> "$LOG" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+j = json.load(open(p)) if os.path.exists(p) else {}
+print('LOGIN-DEVICE %s:%s @ %s' % (j.get('userID', ''), j.get('machineID', ''), os.path.dirname(p)))
+PY
 			email=""; prev=""; for a in "$@"; do [ "$prev" = --email ] && email="$a"; prev="$a"; done
 			if [ -f "$CCA_T/login_as" ]; then email=$(cat "$CCA_T/login_as"); rm -f "$CCA_T/login_as"; fi   # 一次性：模拟登错号
 			[ -n "$email" ] || email="someone@example.com"
@@ -745,6 +751,8 @@ def email_now():
     except Exception:
         return ''
 def write_auth():
+    device = os.path.join(home, 'installation_id')
+    log('LOGIN-DEVICE %s @ %s' % (open(device).read().strip() if os.path.exists(device) else '', home))
     p = os.path.join(t, 'codex_login_as')
     if os.path.exists(p):
         email = open(p).read().strip(); os.remove(p)
