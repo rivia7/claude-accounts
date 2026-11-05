@@ -17,7 +17,7 @@
 - 装好 Claude Code（没装的话先运行 `curl -fsSL https://claude.ai/install.sh | bash`）
 - 用 Codex 的话：装好 `codex` 命令（npm、Homebrew 或 OpenAI 的安装脚本都行，cca 会在 PATH、`~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找）；要用桌面版的话装好 ChatGPT App
 - Google Chrome（登录和网页版都用它）
-- 局域网里有一台装了 **OpenClash** 的 OpenWrt 路由器（常说的"旁路由"），开着 SSH，你知道它的 IP 和 root 密码（只用直连的第三方 API 账号的话不需要，见「第三方 API 账号」一节）
+- 局域网里有一台装了 **OpenClash** 或 **ShellCrash** 的 OpenWrt 路由器（常说的"旁路由"），开着 SSH，你知道它的 IP 和 root 密码（只用直连的第三方 API 账号的话不需要，见「第三方 API 账号」一节）。用的是哪个 cca 会自动认出来；ShellCrash 要 1.9 或更新的版本、用 Meta（mihomo）内核，路由器上还要装好 ruby（`opkg update && opkg install ruby ruby-yaml`，OpenClash 自带）
 - 出门在外也要用的话：Mac 上装 **Clash Verge**（或其它基于 mihomo 的 Clash 客户端），里面有和路由器上同名的节点
 
 ## 一键安装
@@ -30,11 +30,11 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 安装过程中会问几个问题，照着回答就行：
 
-1. **路由器地址**：装了 OpenClash 的那台路由器的 IP，例如 `192.168.1.2`。用户名（一般是 `root`）和端口（一般是 `22`）直接回车。
+1. **路由器地址**：装了 OpenClash（或 ShellCrash）的那台路由器的 IP，例如 `192.168.1.2`。用户名（一般是 `root`）和端口（一般是 `22`）直接回车。
 2. **路由器密码**：只输入这一次，用来装一把免密登录的钥匙。密码本身不会被保存。
 3. **出口节点**：屏幕上会列出路由器上的全部节点，输入编号选出允许账号使用的，例如 `1 3 4`。
 4. **第一个账号**：填登录邮箱，再起个别名（比如"工作"，不想起可以直接回车），然后选一个出口节点。
-5. **重载 OpenClash**：第一次需要让 OpenClash 重新加载一次配置，大约 20 秒，这期间局域网里的设备新开的网络连接会断一下。以后加账号、换节点都不用再重载。
+5. **重载 OpenClash / ShellCrash**：第一次需要让它重新加载一次配置，大约 20 秒，这期间局域网里的设备新开的网络连接会断一下。以后加账号、换节点都不用再重载。
 
 装好后打开一个新的终端标签，输入 `cca` 就能用了。
 
@@ -312,7 +312,7 @@ cca restore
 **cca 会改我的 Clash Verge 配置吗？**
 只在它的全局扩展脚本末尾加一段带标记的代码，不碰你的订阅、规则和其它设置。`cca local off` 或 `cca restore` 会把这段原样删掉，脚本恢复成原来的样子。
 
-**为什么第一次要重载 OpenClash？**
+**为什么第一次要重载 OpenClash / ShellCrash？**
 第一次要在路由器上建好一组端口。之后只要账号不超过 8 个，加账号、换节点都不用重载。账号超过 8 个，或者改了可选节点，才需要再重载一次，到时候会先问你。
 
 **提示"端口不通"怎么办？**
@@ -321,24 +321,30 @@ cca restore
 **提示出口纯净度低怎么办？**
 用 `cca edit` 给这个账号换一个节点。
 
-**OpenClash 升级了会不会失效？**
-不会。cca 在路由器上的文件放在 `/etc/cca`，不属于 OpenClash。OpenClash 升级或重装后，cca 会自动把钩子补回去；如果端口需要重建，下次启动 cca 时会先问你同不同意重载。
+**OpenClash / ShellCrash 升级了会不会失效？**
+不会。cca 在路由器上的文件放在 `/etc/cca`，不属于它们。升级、重装或者在 ShellCrash 的任务菜单里清空了任务之后，cca 会自动把钩子补回去；如果端口需要重建，下次启动 cca 时会先问你同不同意重载。
+
+**路由器上 OpenClash 和 ShellCrash 都装了怎么办？**
+不用管。cca 看哪个在运行（都没在运行时看哪个开机自启），切换节点、重载都对它做；两边的钩子都装上，换着用也不会丢端口池。
+
+**ShellCrash 里有什么限制？**
+要 ShellCrash 1.9 或更新的版本（下一版挪了任务文件和运行目录的位置，也认得），1.8 及更早的不行；要用 Meta（mihomo）内核，sing-box 内核不行。能选作出口的是订阅配置里的节点和策略组；在 ShellCrash 里另外添加的自定义节点不行（它们启动时才拼进配置，配置出错时又会被去掉），选了的话这个账号的端口会断开，不会经别的节点出去。在 ShellCrash 的 `yamls/others.yaml` 里自己写了 `listeners` 的话，启动时没法注入端口池（会重复），要等 cca 问过后热加载。
 
 **在路由器上给节点改了名怎么办？**
 不用管。cca 记着每个可选节点的服务器地址（类型、服务器、端口和 TLS 域名，只存摘要，不存地址本身）。下次启动或同步时，cca 按地址认出改名后的节点，把可选节点和账号表一起改过来，并提示一句；端口池要跟着重建时，会先问你同不同意重载。名字和地址都变了的认不出来，在终端里会让你从路由器上的节点里选一个代替；两个可选节点地址一样、其中一个没了时，也不会自动合到另一个上，同样让你选。选之前，用这个节点的账号暂时用不了（宁可断开也不换出口）。
 
-**OpenClash 的运行配置文件被删了会怎样？**
-切换节点照常（控制接口的端口和密钥改从 OpenClash 的设置里读）。要建立或调整端口池时，没有运行配置就没法热加载，cca 会问你要不要重启一次 OpenClash（约 20 秒），重启时由钩子注入端口池。`cca router status` 会注明运行配置不见了。
+**运行配置文件被删了会怎样？**
+切换节点照常（控制接口的端口和密钥改从 OpenClash / ShellCrash 的设置里读）。要建立或调整端口池时，没有运行配置就没法热加载，cca 会问你要不要重启一次 OpenClash / ShellCrash（约 20 秒），重启时由钩子注入端口池。`cca router status` 会注明运行配置不见了。
 
 ## 它是怎么做到的
 
 - **分开登录**：每个账号有自己的 Claude Code 配置目录（`CLAUDE_CONFIG_DIR`，按邮箱命名）。目录里除了登录信息，其余文件都链接到你原来的 `~/.claude`；`~/.claude.json` 里和账号无关的设置，每次启动和退出时自动合并。
-- **分开出口**：cca 在路由器上开一组端口（从 7901 开始，8 个一组），每个端口绑定一个出口节点，每个账号用自己的端口上网。换节点通过 OpenClash 的接口直接切换，不用重启。
+- **分开出口**：cca 在路由器上开一组端口（从 7901 开始，8 个一组），每个端口绑定一个出口节点，每个账号用自己的端口上网。换节点通过 OpenClash / ShellCrash 内核的接口直接切换，不用重启。
 - **网页版**：每个账号有一个专属的 Chrome 窗口（独立的浏览器资料，走同一个端口），所以网页版和 Claude Code 的出口一致。
 - **用量**：cca 以账号的配置目录、经账号的端口无界面地启动 Claude Code（`--safe-mode`，不加载插件、hooks、MCP），发一个 `get_usage` 控制请求，拿到和 `/usage` 一样的数据；登录 token 的读取和刷新都由 Claude Code 自己完成。
 - **第三方 API 账号**：接口地址、模型经 `claude --settings` 传入（优先级高于共享的 settings.json），key 由 `apiKeyHelper` 回调 cca 从钥匙串取，不进环境变量。
 - **Codex**：每个账号一个 `CODEX_HOME`，`~/.codex` 里白名单上的条目链接进去（白名单以外的默认各账号一份，新版本 Codex 加了文件也不会误共享）；数据库经 `CODEX_SQLITE_HOME` 共用。登录和查用量都经 codex 自己的 app-server（`account/login/start`、`account/rateLimits/read`），报的客户端名和 `codex login` 一样。
-- **路由器端**：改动放在 `/etc/cca`，通过 OpenClash 的"覆写脚本"注入；每 2 分钟自检一次，刷固件时保留。
+- **路由器端**：改动放在 `/etc/cca`。OpenClash 通过它的"覆写脚本"注入；ShellCrash 通过它的"启动前任务"（`task/bfstart` 里的一行，下一版起是 `configs/task/bfstart`）把订阅配置换成插好端口池的副本，订阅配置本身不动。每 2 分钟自检一次，刷固件时保留。
 - **出门在外**：本机的端口池和路由器上的一样（127.0.0.1:7901 起，每个端口一个策略组），写在 Clash Verge 的全局扩展脚本里，它每次重新生成配置都会带上；cca 经它内核的控制接口切换节点，第一次配置时把端口池直接热加载进正在运行的内核。
 
 <details>

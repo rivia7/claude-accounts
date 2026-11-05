@@ -87,9 +87,63 @@ CCA_ROOT="$R" /bin/dash "$R/etc/cca/cca-router.sh" hook "$RCF"
 CCA_FAKE_RESTART=1 "$CCA_T/rbin/curl" -s -X PUT --data "{\"path\":\"$RCF\"}" http://127.0.0.1:9090/configs >/dev/null
 S
 chmod +x "$R/etc/init.d/openclash"
+
+# --- 假的 ShellCrash（juewuy/ShellCrash 1.9）：模板放在 $T/shellcrash，ShellCrash 那一节测试才拷进路由器根目录
+S="$T/shellcrash"; mkdir -p "$S"/etc/ShellCrash/{configs,yamls,task} "$S"/etc/rc.d "$S"/tmp/ShellCrash
+printf '%s\n' 'alias crash="ash /etc/ShellCrash/menu.sh"' 'export CRASHDIR="/etc/ShellCrash"' > "$S/etc/profile"
+: > "$S/etc/rc.d/S99shellcrash"
+printf '%s\n' '#ShellCrash配置文件，不明勿动！' 'crashcore=meta' 'secret=test-secret' 'redir_mod=混合模式' > "$S/etc/ShellCrash/configs/ShellCrash.cfg"
+printf '%s\n' 'TMPDIR=/tmp/ShellCrash' 'BINDIR=/etc/ShellCrash' 'COMMAND="$TMPDIR/CrashCore -d $BINDIR -f $TMPDIR/config.yaml"' > "$S/etc/ShellCrash/configs/command.env"
+{
+	printf '%s\n' 'port: 7890' 'socks-port: 7891' 'allow-lan: true' 'mode: Rule' 'external-controller: :9090' 'proxies:'
+	for n in US-A:1 US-B:2 US-C:3 US-D:4 HK-A:5; do
+		printf '  - name: %s\n    type: ss\n    server: 192.0.2.%s\n    port: 8388\n    cipher: aes-128-gcm\n    password: x\n' "${n%%:*}" "${n##*:}"
+	done
+	printf '%s\n' 'proxy-groups:' '  - name: Proxy' '    type: select' '    proxies:' '      - US-A' '      - US-B' 'rules:' '  - MATCH,Proxy'
+} > "$S/etc/ShellCrash/yamls/config.yaml"
+# ShellCrash 的自定义节点：启动时才接到节点后面（# 后面是要加进的策略组），cca 用不上
+echo '- {name: SC-X, type: ss, server: 192.0.2.9, port: 8388, cipher: aes-128-gcm, password: x} #Proxy' > "$S/etc/ShellCrash/yamls/proxies.yaml"
+printf '#!/bin/sh\necho "TASK $*" >> "%s/router.log"\n' "$T" > "$S/etc/ShellCrash/task/task.sh"
+echo '$CRASHDIR/task/task.sh 201 启动前测试任务' > "$S/etc/ShellCrash/task/bfstart"   # 用户自己的启动前任务
+printf '#!/bin/sh\necho "SCCORE $*" >> "%s/router.log"\n[ -f "%s/router/core_fail" ] && { echo "level=error msg=parse config error"; exit 1; }\nexit 0\n' "$T" "$T" > "$S/tmp/ShellCrash/CrashCore"
+# start.sh restart|start 像真的一样：先 source task/bfstart（cca 的钩子在这里把 $core_config 换成插好端口池的副本），
+# 再按 ShellCrash 的做法把订阅配置按顶格的键拆成几段、和它自己的设置拼成运行配置：自定义节点接在节点那段后面；
+# 有 router/sc_vmess 时像它的 meta_listeners 一样追加一个两格缩进的入站。拼好的读不出来记 SCBAD。最后让（假的）内核加载
+cat > "$S/etc/ShellCrash/start.sh" <<'S'
+#!/bin/sh
+case "$1" in start|restart) ;; *) exit 0 ;; esac
+R="$CCA_T/router"; CRASHDIR="$R/etc/ShellCrash"; TMPDIR="$R/tmp/ShellCrash"; BINDIR="$CRASHDIR"
+mkdir -p "$TMPDIR"
+core_config="$CRASHDIR/yamls/config.yaml"
+[ -s "$CRASHDIR/task/bfstart" ] && . "$CRASHDIR/task/bfstart"
+echo "$core_config" > "$CCA_T/sc_core_config"
+{
+	printf 'mixed-port: 7890\nredir-port: 7892\ntproxy-port: 7893\nallow-lan: true\nexternal-controller: :9999\nsecret: test-secret\n'
+	for s in proxies proxy-groups rules listeners; do
+		sed -n "/^$s:/,/^[a-z]/{ /^[a-z]/d; p; }" "$core_config" > "$TMPDIR/$s.part"
+		if [ "$s" = proxies ] && [ -s "$CRASHDIR/yamls/proxies.yaml" ]; then
+			sp=$(grep -E '^ *- ' "$TMPDIR/$s.part" | head -n 1 | sed 's/-.*//')
+			sed -e '/^#/d' -e "s/^ *- /$sp- /" -e 's/#.*/ #自定义代理/' "$CRASHDIR/yamls/proxies.yaml" >> "$TMPDIR/$s.part"
+		fi
+		[ "$s" = listeners ] && [ -f "$R/sc_vmess" ] && printf '  - name: "vmess-in"\n    type: vmess\n    port: 7999\n    listen:\n    users:\n      - uuid: 00000000-0000-4000-8000-000000000000\n        alterId: 0\n' >> "$TMPDIR/$s.part"
+		[ -s "$TMPDIR/$s.part" ] && { echo "$s:"; cat "$TMPDIR/$s.part"; }
+		rm -f "$TMPDIR/$s.part"
+	done
+} > "$TMPDIR/config.yaml"
+ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); exit(c.is_a?(Hash) && (c["listeners"] || []).all? { |l| l.is_a?(Hash) } ? 0 : 1)' "$TMPDIR/config.yaml" 2>/dev/null || echo SCBAD >> "$CCA_T/router.log"
+ln -sf "$TMPDIR/config.yaml" "$BINDIR/config.yaml"
+CCA_FAKE_RESTART=1 "$CCA_T/rbin/curl" -s -X PUT --data "{\"path\":\"$BINDIR/config.yaml\"}" http://127.0.0.1:9999/configs >/dev/null
+S
+# 下一版（GitHub 上的 dev 分支）的启动脚本：启动前的任务文件在 $TASKCFGDIR（configs/task/）里，别的一样。测试里"升级"时拿它换掉 start.sh
+awk '$0 == "[ -s \"$CRASHDIR/task/bfstart\" ] && . \"$CRASHDIR/task/bfstart\"" { print "TASKCFGDIR=\"$CRASHDIR\"/configs/task"; print "[ -s \"$TASKCFGDIR\"/bfstart ] && . \"$TASKCFGDIR\"/bfstart"; next } { print }' \
+	"$S/etc/ShellCrash/start.sh" > "$S/etc/ShellCrash/start.next.sh"
+grep -q 'TASKCFGDIR"/bfstart' "$S/etc/ShellCrash/start.next.sh"   # set -e：没换成功就让 setup 失败
+chmod +x "$S/etc/ShellCrash/start.sh" "$S/etc/ShellCrash/start.next.sh" "$S/etc/ShellCrash/task/task.sh" "$S/tmp/ShellCrash/CrashCore"
+# 在跑的内核进程名写在 router/core 里（默认 OpenClash 的 clash；ShellCrash 的叫 CrashCore）；router/stopped 时都不在跑
 cat > "$T/rbin/pidof" <<'S'
 #!/bin/sh
 [ -f "$CCA_T/router/stopped" ] && exit 1
+[ "$1" = "$(cat "$CCA_T/router/core" 2>/dev/null || echo clash)" ] || exit 1
 echo 4242
 S
 cat > "$T/rbin/netstat" <<'S'
@@ -114,6 +168,8 @@ case "$url" in
 		fi ;;
 esac
 RCF="$CCA_T/router/etc/openclash/custom.yaml"; SELD="$CCA_T/router/sel"; mkdir -p "$SELD"
+# 在跑的是 ShellCrash 的内核时：运行配置在 /tmp/ShellCrash；和真的 mihomo 一样只肯重载主目录（-d /etc/ShellCrash）里的文件
+SCK=""; [ "$(cat "$CCA_T/router/core" 2>/dev/null)" = CrashCore ] && { SCK=1; RCF="$CCA_T/router/tmp/ShellCrash/config.yaml"; }
 CORE="$CCA_T/router/core.yaml"   # 内核加载的那份配置（运行配置文件被删了，内核里的组照样在）
 emit() { [ -n "$out" ] && printf '%s' "$2" > "$out"; printf '%s' "$1"; }
 case "$url" in
@@ -123,6 +179,8 @@ case "$url" in
     if [ -z "${CCA_FAKE_RESTART:-}" ] && [ -f "$CCA_T/router/reload_reject" ]; then echo "RELOAD rejected" >> "$CCA_T/router.log"; emit 400 '{"message":"bad"}'; exit 22; fi
     if [ -z "${CCA_FAKE_RESTART:-}" ] && [ -f "$CCA_T/router/reload_noop" ]; then echo "RELOAD dropped-noop" >> "$CCA_T/router.log"; printf 000; exit 28; fi
     path=$(printf '%s' "$data" | sed -n 's/^{"path":"\(.*\)"}$/\1/p')
+    if [ -n "$SCK" ]; then case "$path" in "$CCA_T/router/etc/ShellCrash/"*) ;; *)
+      echo "UNSAFE_PATH $path" >> "$CCA_T/router.log"; emit 400 "{\"message\":\"path is not subpath of home directory or SAFE_PATHS: $path\"}"; exit 0 ;; esac; fi
     cp "$path" "$CORE"
     ruby -ryaml -e '
       c = YAML.load_file(ARGV[0]) || {}

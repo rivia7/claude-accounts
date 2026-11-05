@@ -231,6 +231,75 @@ out=$(run cca router sync 2>&1); rc=$?
 ok "运行配置文件被删了、账号的节点 OpenClash 的配置里也没有：重启也没用，不提重启，同步判失败" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "切换到 US-D 失败" && ! printf "%s" "$out" | grep -q "重启一次 OpenClash" && [ "$(restarts)" = "$r0" ]'
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
+# 10a2. ShellCrash（juewuy/ShellCrash）：自动认出在跑的是它（OpenClash 也装着但没在跑）；端口池在它启动时由 task/bfstart
+#       里的一行钩子注入（订阅配置一个字节不动），热加载经它主目录里的链接（mihomo 不肯重载 /tmp 里的文件）。这一节结束时整个还原
+rm -rf "$T/router.snap"; cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
+cp -R "$T/shellcrash/." "$R/"; echo CrashCore > "$R/core"
+SCD="$R/etc/ShellCrash"; SCR="$R/tmp/ShellCrash/config.yaml"; cp "$SCD/yamls/config.yaml" "$T/sc_base.orig"
+sc_restart() { env CCA_ROOT="$R" CCA_T="$T" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/sh "$SCD/start.sh" restart; }
+scl() { ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); print((c["listeners"] || []).count { |l| l["name"].to_s.start_with?("cca-") })' "$SCR" 2>/dev/null || echo -; }
+sc_restart
+ok "（前提）ShellCrash 照常启动：还没有 cca 的钩子，运行配置里没有端口池，用户自己的启动前任务照跑" '[ "$(scl)" = 0 ] && ! grep -qx 7901 "$R/listening" && grep -q "TASK 201" router.log'
+n0=$(reloads)
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "ShellCrash：认出在跑的是它，钩子装进 task/bfstart（用户原来的那行不动），问过后热加载一次建好端口池" '[ $rc -eq 0 ] && [ "$(reloads)" = $((n0 + 1)) ] && printf "%s" "$out" | grep -q "正在重载 ShellCrash 配置" && grep -qF "cca-router.sh sc-hook" "$SCD/task/bfstart" && [ "$(head -n 1 "$SCD/task/bfstart")" = "\$CRASHDIR/task/task.sh 201 启动前测试任务" ] && [ "$(scl)" = 8 ] && [ "$(sel CCA-1)" = US-A ] && grep -qx 7908 "$R/listening"'
+ok "ShellCrash：热加载的是主目录里指向运行配置的链接，没碰 /tmp 里的路径；重载前用它的内核、它的主目录做了 -t 校验" '! grep -q UNSAFE_PATH router.log && [ -L "$SCD/config.yaml" ] && grep -q "^SCCORE -t -d $SCD -f " router.log'
+out=$(run cca router status 2>&1)
+ok "cca router status：说明在用的是 ShellCrash、钩子装好了，各槽位照常列出" 'printf "%s" "$out" | grep -q "ShellCrash：运行中" && printf "%s" "$out" | grep -q "钩子：已安装" && printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A"'
+out=$(run cca router nodes 2>&1)
+ok "cca router nodes：只列订阅配置里的节点（ShellCrash 的自定义节点 SC-X 启动时才拼进来，钩子用不上）" 'printf "%s" "$out" | grep -qx US-A && printf "%s" "$out" | grep -qx HK-A && ! printf "%s" "$out" | grep -q SC-X'
+printf '%s\n' 'CCA-1,US-D' 'Proxy,US-B' > "$SCD/configs/web_save"
+n0=$(reloads); r0=$(restarts)
+sc_restart
+ok "ShellCrash 重启：钩子把订阅配置换成插好端口池的副本，运行配置里就有 8 个槽位，不额外重载；订阅配置一个字节没动" '[ "$(scl)" = 8 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(cat "$T/sc_core_config")" = "$R/tmp/cca.shellcrash.yaml" ] && cmp -s "$SCD/yamls/config.yaml" "$T/sc_base.orig" && ! grep -q SCBAD router.log && grep -q "【cca】已注入 Claude 账号端口池" "$R/tmp/ShellCrash/ShellCrash.log"'
+ok "ShellCrash 重启：自定义节点照样拼进来，CCA-1 默认 US-A；面板保存的选中项里 CCA- 的去掉（不让它还原成旧节点），别的不动" 'grep -q "SC-X" "$SCR" && [ "$(sel CCA-1)" = US-A ] && [ "$(cat "$SCD/configs/web_save")" = "Proxy,US-B" ]'
+touch "$R/sc_vmess"; sc_restart
+ok "ShellCrash 自己追加的入站（两格缩进）和端口池的接在同一段里也读得出来" '! grep -q SCBAD router.log && [ "$(ruby -ryaml -e "print YAML.load_file(ARGV[0])[\"listeners\"].size" "$SCR")" = 9 ] && grep -qx 7999 "$R/listening"'
+rm -f "$R/sc_vmess"; sc_restart
+edit_table 'j["alice@example.com"] = "US-B"'; n0=$(reloads)
+out=$(run cca router sync 2>&1); rc=$?
+ok "ShellCrash：换节点只经控制接口切（CCA-1 → US-B），不重载" '[ $rc -eq 0 ] && [ "$(sel CCA-1)" = US-B ] && [ "$(reloads)" = "$n0" ]'
+edit_table 'j["nodes"].append("SC-X")' "$H/.cca/config.json"; edit_table 'j["alice@example.com"] = "SC-X"'
+out=$(run cca router sync 2>&1); rc=$?
+ok "拿 ShellCrash 的自定义节点当出口：说明路由器上找不到它，端口 REJECT（不会经别的节点出去）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "找不到节点「SC-X」" && [ "$(sel CCA-1)" = REJECT ]'
+edit_table 'j["nodes"].remove("SC-X")' "$H/.cca/config.json"; edit_table 'j["alice@example.com"] = "US-A"'; run cca router sync >/dev/null 2>&1
+grep -vF sc-hook "$SCD/task/bfstart" > "$T/bf.tmp"; cat "$T/bf.tmp" > "$SCD/task/bfstart"; rr ensure
+ok "cron 自愈：task/bfstart 里的钩子没了（比如在 ShellCrash 的任务菜单里清空过）会补回，只补一行" '[ "$(grep -cF "cca-router.sh sc-hook" "$SCD/task/bfstart")" = 1 ]'
+touch "$R/stopped"
+ok "ShellCrash 和 OpenClash 都没在跑：按开机自启认出是 ShellCrash" 'rr status | grep -q "ShellCrash：未运行"'
+rm -f "$R/stopped"
+awk '{ print } /^proxy-groups:$/ { print "  - {name: CCA-1, type: select, proxies: [US-A]}" }' "$T/sc_base.orig" > "$SCD/yamls/config.yaml"; sc_restart
+ok "订阅配置里已经有叫 CCA-1 的策略组：钩子不插入（免得重名、ShellCrash 起不来），照原样启动并记下原因" '[ "$(cat "$T/sc_core_config")" = "$SCD/yamls/config.yaml" ] && [ "$(grep -c "name: CCA-1" "$SCR")" = 1 ] && ! grep -q SCBAD router.log && grep -q "已经有 cca 的端口池" "$R/tmp/cca-router.log"'
+cp "$T/sc_base.orig" "$SCD/yamls/config.yaml"; printf '%s\n' 'listeners:' '  - {name: my-in, type: socks, port: 7998}' > "$SCD/yamls/others.yaml"; sc_restart
+ok "ShellCrash 的 others.yaml 里自己写了 listeners：启动时不注入（会和端口池的重复），记下原因" '[ "$(cat "$T/sc_core_config")" = "$SCD/yamls/config.yaml" ] && grep -q "others.yaml 里自己写了 listeners" "$R/tmp/cca-router.log"'
+rm -f "$SCD/yamls/others.yaml"; sc_restart
+rm -f "$SCR"; edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(2, 10)})'; r0=$(restarts)
+out=$(run cca router sync 2>&1); rc=$?
+ok "ShellCrash 的运行配置文件不见了、端口池要扩容 + 非交互：不重启，返回 3，说明要重启一次 ShellCrash" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "只能重启一次 ShellCrash" && printf "%s" "$out" | grep -q "要等 ShellCrash 下次重启" && [ "$(restarts)" = "$r0" ]'
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "同意后重启 ShellCrash：它重新拼运行配置，钩子注入 16 个槽位" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(scl)" = 16 ] && [ "$(sel CCA-9)" = US-B ] && printf "%s" "$out" | grep -q "已重启 ShellCrash"'
+out=$(run CCA_TTY="$(ans y)" cca router uninstall 2>&1)
+ok "cca router uninstall：task/bfstart 只删 cca 那一行（逐字节还原），OpenClash 的钩子也删掉，热加载移除端口池" 'cmp -s "$SCD/task/bfstart" "$T/shellcrash/etc/ShellCrash/task/bfstart" && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ "$(scl)" = 0 ] && ! grep -qx 7901 "$R/listening" && [ ! -e "$R/etc/cca" ]'
+# 下一版 ShellCrash（GitHub 上的 dev 分支）：启动前的任务文件挪到 configs/task/，运行目录挪到 configs/directories.env。
+# 重新部署后像它的 init.sh 那样升级：旧的任务文件（连同 cca 那一行）mv 过去，TMPDIR/BINDIR 从 command.env 挪进 directories.env
+run cca router sync -y >/dev/null 2>&1
+mkdir -p "$SCD/configs/task"; mv -f "$SCD/task/bfstart" "$SCD/configs/task/bfstart"; cp "$SCD/start.next.sh" "$SCD/start.sh"
+grep -E '^(TMPDIR|BINDIR)=' "$SCD/configs/command.env" > "$SCD/configs/directories.env"; sed -i '' -E '/^(TMPDIR|BINDIR)=/d' "$SCD/configs/command.env"
+rr ensure
+ok "下一版 ShellCrash（任务文件在 configs/task/）：升级时搬过去的钩子照用，cron 自愈不会在旧位置再写一份，status 认得" '[ "$(grep -cF "cca-router.sh sc-hook" "$SCD/configs/task/bfstart")" = 1 ] && [ ! -e "$SCD/task/bfstart" ] && rr status | grep -q "钩子：已安装"'
+n0=$(reloads); sc_restart
+ok "下一版 ShellCrash 重启：从 configs/task/bfstart 跑钩子，16 个槽位照样注入，不额外重载" '[ "$(cat "$T/sc_core_config")" = "$R/tmp/cca.shellcrash.yaml" ] && [ "$(scl)" = 16 ] && [ "$(reloads)" = "$n0" ] && [ "$(sel CCA-9)" = US-B ]'
+hl=$(grep -F sc-hook "$SCD/configs/task/bfstart"); grep -vF sc-hook "$SCD/configs/task/bfstart" > "$T/bf.tmp"; cat "$T/bf.tmp" > "$SCD/configs/task/bfstart"
+mkdir -p "$SCD/task"; printf '%s\n' "$hl" > "$SCD/task/bfstart"   # 旧版 cca 的 cron 照旧位置补上的那一份
+run cca router sync >/dev/null 2>&1
+ok "下一版 ShellCrash 上重新部署：钩子装进 configs/task/bfstart（用户原来那行不动）；旧位置上旧版 cca 留下的删掉（不然它下次升级会拿旧文件盖掉新的）" '[ "$(grep -cF "cca-router.sh sc-hook" "$SCD/configs/task/bfstart")" = 1 ] && [ "$(head -n 1 "$SCD/configs/task/bfstart")" = "\$CRASHDIR/task/task.sh 201 启动前测试任务" ] && [ ! -e "$SCD/task/bfstart" ]'
+sed -i '' 's|^TMPDIR=.*|TMPDIR=/tmp/ShellCrash-next|' "$SCD/configs/directories.env"
+ok "下一版 ShellCrash：运行目录从 configs/directories.env 读" 'rr status | grep -q "运行配置：$R/tmp/ShellCrash-next/config.yaml"'
+sed -i '' 's|^TMPDIR=.*|TMPDIR=/tmp/ShellCrash|' "$SCD/configs/directories.env"
+out=$(run CCA_TTY="$(ans y)" cca router uninstall 2>&1)
+ok "下一版 ShellCrash 上 cca router uninstall：configs/task/bfstart 只删 cca 那一行（逐字节还原），端口池移除" 'cmp -s "$SCD/configs/task/bfstart" "$T/shellcrash/etc/ShellCrash/task/bfstart" && [ ! -e "$SCD/task/bfstart" ] && [ "$(scl)" = 0 ] && [ ! -e "$R/etc/cca" ]'
+rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
+
 # 10b. 出门在外：连不上路由器时改走本机 Clash Verge（全局扩展脚本 + 热加载，不重启它），回家后自动走回路由器
 V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VS="$V/profiles/Script.js"
 vreloads() { grep -c '^RELOAD$' "$T/verge/verge.log" 2>/dev/null || echo 0; }

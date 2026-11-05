@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cca — Claude Code / Codex 多账号启动器（macOS + 旁路由 OpenClash 按端口分流）
+# cca — Claude Code / Codex 多账号启动器（macOS + 旁路由 OpenClash / ShellCrash 按端口分流）
 #
 #   cca                    方向键选择账号（光标默认在上次用的账号上，菜单里也能新增）后启动 Claude Code
 #   cca @<账号> [参数]      直接用该账号启动（账号可写别名、邮箱、编号或唯一前缀），参数原样交给 claude
@@ -20,13 +20,14 @@
 #     不出现在命令行参数和环境变量里；地址、模型经 --settings 传入，共享的 settings.json 盖不掉。
 #   · 账号目录里除账号/进程状态外，全部用符号链接指向 ~/.claude（记忆、会话历史、设置、技能、插件、
 #     命令…）；~/.claude.json 里与账号无关的键（项目信任、MCP、偏好）在每次启动和退出时三方合并。
-#   · 每个账号对应旁路由 OpenClash 上的一个 mixed 入站端口（listener → 账号表里的节点）。Claude Code 走
+#   · 每个账号对应旁路由（OpenClash 或 ShellCrash 的 mihomo）上的一个 mixed 入站端口（listener → 账号表里的节点）。Claude Code 走
 #     HTTPS_PROXY；网页版和登录页用带 --proxy-server 的独立 Chrome 实例。同一端口，同一出口。
 #   · 启动前经该端口取 claude.ai 看到的出口 IP，用 ip.net.coffee/claude 的数据检测纯净度和地区。
 #   · Claude App（桌面版）：每个账号一份独立的资料目录（--user-data-dir），整个实例走账号的端口；
 #     ~/Applications 里每个账号有一个「Claude 别名」启动器。
-#   · 路由器侧文件放在 /etc/cca（不属于 OpenClash 包）。OpenClash 覆写脚本里的一行钩子在每次生成
-#     配置时注入端口池；cron 每 2 分钟自检，升级/重装/恢复默认弄丢钩子时自动补回（不会自动重载）。
+#   · 路由器侧文件放在 /etc/cca（不属于 OpenClash / ShellCrash）。OpenClash 覆写脚本里的一段钩子、ShellCrash
+#     启动前任务文件里的一行钩子在每次生成配置时注入端口池（用哪套自动检测）；cron 每 2 分钟自检，升级/重装/
+#     恢复默认弄丢钩子时自动补回（不会自动重载）。
 #   · Codex 账号（cca codex …）：每个账号一个 CODEX_HOME，~/.codex 里白名单上的条目链接进去，会话等数据库经
 #     CODEX_SQLITE_HOME 共用；登录、查用量都经 codex 自己的 app-server（登录页在账号专属的 Chrome 里开），启动时
 #     不让它改走 macOS 的系统代理、不挂到常驻的后台进程上。ChatGPT App（Codex 桌面版）每个账号一份资料目录。
@@ -55,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.7.1"
+VERSION="2.8.0-beta.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -1032,7 +1033,7 @@ def email_of(key):
     return T.email(key)
 
 
-POOL_STEP = 8   # 路由器上的端口池按 8 个槽位一档；槽位够用时增删账号、换节点都不用重载 OpenClash
+POOL_STEP = 8   # 路由器上的端口池按 8 个槽位一档；槽位够用时增删账号、换节点都不用重载 OpenClash / ShellCrash
 
 
 def pool_size(c):
@@ -1858,7 +1859,7 @@ def cmd_set_nodes(*nodes):
 
 
 # --- 节点改名跟随：节点按「类型 + 服务器 + 端口 + TLS 域名」认，名字只是叫法 -----------------
-# 路由器（OpenClash）上给节点改了名，旧名字一找不到，账号的端口就只能 REJECT（宁可断开也不换出口）。
+# 路由器（OpenClash / ShellCrash）上给节点改了名，旧名字一找不到，账号的端口就只能 REJECT（宁可断开也不换出口）。
 # cca 记下每个可选节点的摘要（config.json 的 node_ids，只存摘要，不存服务器地址），名字对不上时按摘要认出新名字，
 # 可选节点和各工具的账号表跟着改；本机 Clash Verge 里叫法不同时按摘要换算（不改账号表，见 local_names）。
 # TLS 域名（servername / sni）也算进去：走 CDN 的节点常常共用同一个服务器地址和端口，靠它分出是哪一个
@@ -1953,7 +1954,7 @@ def node_users_all():
 def cmd_nodes_follow():
     """stdin 是路由器上的节点列表。可选节点改了名的（按服务器地址认），可选节点和各工具的账号表跟着改；记下各可选节点的摘要。
     stdout：每个改名一行 R<TAB>旧名<TAB>新名；找不到、又有账号在用的一行 L<TAB>旧名<TAB>用它的账号（顿号连起来）。
-    没读到节点（OpenClash 的配置读不了）时什么都不改，返回 1。不经过 ctx：账号表这时可能正因为节点名对不上而校验不过"""
+    没读到节点（路由器上的配置读不了）时什么都不改，返回 1。不经过 ctx：账号表这时可能正因为节点名对不上而校验不过"""
     have = parse_node_list(sys.stdin.read())
     if not have:
         sys.exit(1)
@@ -3453,13 +3454,14 @@ need_bin() {   # 要运行工具本身的命令：没装就说明怎么装
 }
 
 # ---------------------------------------------------------------------------
-# 路由器侧：cca-router.sh（busybox ash）与 apply.rb（OpenClash 自带 ruby）
+# 路由器侧：cca-router.sh（busybox ash）与 apply.rb（ruby：OpenClash 自带，ShellCrash 的路由器上要先装）
 # ---------------------------------------------------------------------------
 router_sh() {
 	cat <<'SH'
 #!/bin/sh
 # cca-router：由 Mac 上的 cca 部署和管理，请勿手改（会被覆盖）。
-# 在 OpenClash(mihomo) 里维护一个账号端口池：槽位 n = mixed 入站 cca-n（端口 base+n）+ select 策略组 CCA-n。
+# 在路由器的 mihomo 里维护一个账号端口池：槽位 n = mixed 入站 cca-n（端口 base+n）+ select 策略组 CCA-n。
+# 支持 OpenClash 和 ShellCrash，自动检测在用的是哪个；两个都装了时钩子都装上，换着用也不丢端口池。
 # 账号分到哪个槽位、用哪个节点，只靠 API 切换 CCA-n 的选中项，不需要重载；
 # 只有槽位数量或可选节点变化（即"结构"变化）才需要重载，且必须由 Mac 端征得同意（CCA_ALLOW_RELOAD=1）。
 # 重载期间（本机约 20 秒）内核只处理内部连接，局域网的新连接会失败，所以 cron 自愈从不自动重载。
@@ -3476,35 +3478,88 @@ CTLOUT="$R/tmp/cca.ctl.$$"
 TAB=$(printf '\t')
 MB='# >>> cca >>>'
 ME='# <<< cca <<<'
+SCHOOK='cca-router.sh sc-hook'   # ShellCrash 的钩子是它启动前任务文件（sc_task）里不带 # 的一行：它的任务菜单"清空旧版任务"会删掉带 # 的行
+# ruby 里读 YAML 用 yl：配置里可以有锚点（ShellCrash 的 others.yaml 就是写锚点的地方），新版 Psych 要 aliases: true 才肯读，旧版不认这个参数
+YL='def yl(f); YAML.load(File.read(f), aliases: true); rescue ArgumentError; YAML.load_file(f); end'
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 rewrite() { cat "$2" > "$1" && rm -f "$2"; }   # 原地覆盖，保留属主和权限
+put_runtime() {   # put_runtime 运行配置 新文件：原地覆盖；运行配置是链接时（ShellCrash 关了覆写，链到订阅配置）换成文件，不写穿过去
+	[ -L "$1" ] && rm -f "$1"
+	if [ -e "$1" ]; then rewrite "$1" "$2"; else mv -f "$2" "$1"; fi
+}
 
-runtime_config() {
+# --- 在用的是哪套：OpenClash 还是 ShellCrash ----------------------------------------------
+sc_find() {   # ShellCrash（juewuy/ShellCrash）的目录：和它自己的 init 脚本一样从 /etc/profile 的 CRASHDIR 读
+	SC=""
+	sd=$(sed -n 's/^export CRASHDIR="\(.*\)"$/\1/p' "$R/etc/profile" 2>/dev/null | tail -n 1)
+	[ -n "$sd" ] && [ -f "$R$sd/start.sh" ] || sd=/etc/ShellCrash
+	[ -f "$R$sd/start.sh" ] || return 1
+	SC="$R$sd"
+	# 运行目录：1.9.x 写在 configs/command.env，下一版起挪到 configs/directories.env。和它自己一样先读后者、再读前者（有就以前者为准）
+	st=$(cat "$SC/configs/directories.env" "$SC/configs/command.env" 2>/dev/null | sed -n 's/^TMPDIR=//p' | tail -n 1 | tr -d "\"'")
+	sb=$(cat "$SC/configs/directories.env" "$SC/configs/command.env" 2>/dev/null | sed -n 's/^BINDIR=//p' | tail -n 1 | tr -d "\"'")
+	SCT="$R${st:-/tmp/ShellCrash}"   # 运行配置和内核在这里
+	SCB="$R${sb:-$sd}"               # 内核的主目录（-d）
+}
+sc_task() {   # ShellCrash 启动前 source 的任务文件：1.9.x 是 task/bfstart，下一版起是 configs/task/bfstart（看它的启动脚本里写的是哪个；
+	           # 目录在不在不算数：有的 1.9.4 上本来就有 configs/task/）
+	if grep -qs 'TASKCFGDIR[}"]*/bfstart' "$SC/starts/bfstart.sh" "$SC/start.sh"; then echo "$SC/configs/task/bfstart"; else echo "$SC/task/bfstart"; fi
+}
+backend() {   # 在跑的优先（ShellCrash 的内核进程叫 CrashCore，OpenClash 的叫 clash）；都没在跑时看哪个开机自启，再看装了哪个
+	sc_find
+	if [ -n "$SC" ] && pidof CrashCore >/dev/null 2>&1; then BK=sc
+	elif pidof clash >/dev/null 2>&1; then BK=oc
+	elif [ -d "$R/etc/openclash" ] && [ "$(uci -q get openclash.config.enable 2>/dev/null)" = 1 ]; then BK=oc
+	elif [ -n "$SC" ] && ls "$R"/etc/rc.d/S*shellcrash >/dev/null 2>&1; then BK=sc
+	elif [ -n "$SC" ] && [ ! -d "$R/etc/openclash" ]; then BK=sc
+	else BK=oc; fi
+	if [ "$BK" = sc ]; then NAME=ShellCrash; else NAME=OpenClash; fi
+}
+sc_cfg() {   # sc_cfg 名字 [默认值]：ShellCrash 的设置（configs/ShellCrash.cfg，它自己也是 source 这个文件）
+	( [ -f "$SC/configs/ShellCrash.cfg" ] && . "$SC/configs/ShellCrash.cfg" >/dev/null 2>&1; eval "printf '%s' \"\${$1:-$2}\"" )
+}
+sc_meta() {   # cca 只支持 ShellCrash 的 mihomo（Meta）内核：sing-box 的配置是另一套，原版 clash 没有 listeners
+	[ "$(sc_cfg crashcore meta)" = meta ]
+}
+
+runtime_config() {   # 内核在用的那份配置
+	if [ "$BK" = sc ]; then echo "$SCT/config.yaml"; return; fi
 	p=$(uci -q get openclash.config.config_path 2>/dev/null)
 	if [ -n "$p" ]; then echo "$R/etc/openclash/${p##*/}"; return; fi
 	ls -t "$R"/etc/openclash/*.yaml "$R"/etc/openclash/*.yml 2>/dev/null | head -n 1
 }
-source_config() {   # OpenClash 自己的配置（运行配置由它生成）：运行配置不见了时，节点列表从这里读
-	p=$(uci -q get openclash.config.config_path 2>/dev/null)
-	[ -n "$p" ] && [ -f "$R$p" ] && echo "$R$p"
+source_config() {   # 运行配置由它生成：OpenClash 自己的配置；ShellCrash 订阅下来的 yamls/config.yaml（启动时拿它拼出运行配置）
+	if [ "$BK" = sc ]; then p="$SC/yamls/config.yaml"
+	else p=$(uci -q get openclash.config.config_path 2>/dev/null); [ -n "$p" ] && p="$R$p"; fi
+	[ -n "$p" ] && [ -f "$p" ] && echo "$p"
 }
-in_source() {   # in_source "节点<TAB>节点…"：这些节点 OpenClash 自己的配置里都有（重启后钩子才能把它们放进端口池）
+in_source() {   # in_source "节点<TAB>节点…"：这些节点生成运行配置的那份配置里都有（重启后钩子才能把它们放进端口池）
 	src=$(source_config) || return 1
-	printf '%s' "$1" | ruby -E UTF-8 -ryaml -e '
-		have = ((YAML.load_file(ARGV[0]) || {})["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) }
+	printf '%s' "$1" | ruby -E UTF-8 -ryaml -e "$YL"'
+		have = ((yl(ARGV[0]) || {})["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) }
 		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" 2>/dev/null
 }
-core_bin() {   # 优先用 OpenClash 实际在跑的那份内核
+core_bin() {   # 优先用实际在跑的那份内核
+	if [ "$BK" = sc ]; then   # ShellCrash 保守模式启动后会删掉 /tmp 里的内核文件，在跑的进程经 /proc 还找得到
+		for c in "$SCT/CrashCore" "/proc/$(pidof CrashCore | awk '{print $1}')/exe"; do [ -x "$c" ] && { echo "$c"; return 0; }; done
+		return 1
+	fi
 	for c in "$R/etc/openclash/clash" "$R/etc/openclash/core/clash_meta" "$R/tmp/etc/openclash/core/clash_meta"; do
 		[ -x "$c" ] && { echo "$c"; return 0; }
 	done
 	return 1
 }
-running() { pidof clash >/dev/null 2>&1; }
+running() { if [ "$BK" = sc ]; then pidof CrashCore >/dev/null 2>&1; else pidof clash >/dev/null 2>&1; fi; }
 safe_paths() {   # 和 OpenClash 启动内核时的 SAFE_PATHS 保持一致，否则 -t 会拒绝 external-ui 等路径
 	sp=$(tr '\0' '\n' < "/proc/$(pidof clash | awk '{print $1}')/environ" 2>/dev/null | sed -n 's/^SAFE_PATHS=//p')
 	echo "${sp:-/usr/share/openclash:/etc/ssl}"
+}
+core_test() {   # core_test 配置：内核自己的 -t 校验（主目录和启动时一样；找不到内核时跳过），输出在 $out
+	out=""
+	c=$(core_bin) || return 0
+	if [ "$BK" = sc ]; then out=$("$c" -t -d "$SCB" -f "$1" 2>&1)
+	else out=$(SAFE_PATHS="$(safe_paths)" "$c" -t -d "$R/etc/openclash" -f "$1" 2>&1); fi
 }
 listening() { netstat -lnt 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"; }
 missing_ports() {
@@ -3518,12 +3573,15 @@ missing_ports() {
 }
 
 # --- mihomo 控制接口 ---------------------------------------------------------
-ctl_init() {   # 控制接口的端口和密钥：从运行配置读；运行配置不见了时用 OpenClash 的设置（它生成运行配置时就是写的这两项）
+ctl_init() {   # 控制接口的端口和密钥：从运行配置读；运行配置不见了时用 OpenClash / ShellCrash 的设置（生成运行配置时就是写的这两项）
 	[ -n "$CPORT" ] && return 0
 	cf=$(runtime_config)
-	if out=$(ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; puts c["external-controller"].to_s.split(":").last; puts c["secret"].to_s' "$cf" 2>/dev/null); then
+	if out=$(ruby -ryaml -e "$YL"'; c = yl(ARGV[0]) || {}; puts c["external-controller"].to_s.split(":").last; puts c["secret"].to_s' "$cf" 2>/dev/null); then
 		CPORT=$(printf '%s\n' "$out" | sed -n 1p)
 		CSEC=$(printf '%s\n' "$out" | sed -n 2p)
+	elif [ "$BK" = sc ]; then
+		CPORT=$(sc_cfg db_port 9999)
+		CSEC=$(sc_cfg secret)
 	else
 		CPORT=$(uci -q get openclash.config.cn_port 2>/dev/null)
 		CSEC=$(uci -q get openclash.config.dashboard_password 2>/dev/null)
@@ -3568,7 +3626,9 @@ select_all() {
 	return $rc
 }
 
-install_hook() {
+install_hook() {   # 装了哪套就给哪套装钩子（两套都装了就都装上）
+	[ -n "$SC" ] && sc_install_hook
+	[ -d "$R/etc/openclash" ] || return 0
 	if [ ! -f "$OW" ]; then
 		mkdir -p "${OW%/*}"
 		printf '#!/bin/sh\nCONFIG_FILE="$1"\n\nexit 0\n' > "$OW"
@@ -3593,6 +3653,7 @@ install_hook() {
 	log "已在 ${OW} 安装钩子"
 }
 remove_hook() {   # 用 head/tail 拼回，其余字节原样保留（包括文件末尾有没有换行）
+	[ -n "$SC" ] && sc_remove_hook
 	[ -f "$OW" ] || return 0
 	s=$(grep -n -x -F "$MB" "$OW" | head -n 1 | cut -d: -f1)
 	e=$(grep -n -x -F "$ME" "$OW" | head -n 1 | cut -d: -f1)
@@ -3600,6 +3661,24 @@ remove_hook() {   # 用 head/tail 拼回，其余字节原样保留（包括文�
 	{ head -n $((s - 1)) "$OW"; tail -n +$((e + 1)) "$OW"; } > "$OW.cca.$$"
 	rewrite "$OW" "$OW.cca.$$"
 	log "已移除钩子"
+}
+# ShellCrash 启动时（starts/bfstart.sh）先 source 启动前的任务文件，再拿 $core_config 拼运行配置：这一行把它换成插好端口池的副本
+sc_install_hook() {
+	f=$(sc_task)
+	# 另一处（换过版本留下的）有 cca 这一行就删掉：升级时 ShellCrash 会拿旧位置的文件 mv -f 盖掉新位置的，用户的任务就没了
+	for x in "$SC/task/bfstart" "$SC/configs/task/bfstart"; do [ "$x" = "$f" ] || sc_unhook "$x"; done
+	grep -qF "$SCHOOK" "$f" 2>/dev/null && return 0
+	mkdir -p "${f%/*}"
+	[ -s "$f" ] && [ -n "$(tail -c 1 "$f")" ] && echo >> "$f"
+	echo "cca_cfg=\$($D/$SCHOOK \"\$core_config\" 2>/dev/null) && [ -s \"\$cca_cfg\" ] && core_config=\"\$cca_cfg\"" >> "$f"
+	log "已在 ${f} 安装钩子"
+}
+sc_remove_hook() { sc_unhook "$SC/task/bfstart"; sc_unhook "$SC/configs/task/bfstart"; }
+sc_unhook() {   # sc_unhook 任务文件：只删 cca 那一行；文件里只剩它（是 cca 建的）就整个删掉
+	grep -qF "$SCHOOK" "$1" 2>/dev/null || return 0
+	grep -vF "$SCHOOK" "$1" > "$1.cca.$$"
+	if [ -s "$1.cca.$$" ]; then rewrite "$1" "$1.cca.$$"; else rm -f "$1" "$1.cca.$$"; fi
+	log "已从 ${1} 移除钩子"
 }
 install_cron() {
 	mkdir -p "${CRON%/*}"
@@ -3639,22 +3718,58 @@ hook() {
 	fi
 }
 
+# ShellCrash 启动时由它启动前的任务文件调用（它拼运行配置之前）：订阅配置复制一份、只插入端口池的几行，输出这份的路径，
+# ShellCrash 接着就拿它拼出运行配置（启动时本来就会加载配置，不额外重载）。没有账号端口、不支持、出了问题都输出原来的路径
+sc_hook() {
+	f="$1"; o="$R/tmp/cca.shellcrash.yaml"
+	if [ -n "$SC" ] && [ -s "$PORTS" ] && [ -f "$f" ]; then
+		if ! sc_meta; then
+			log "sc-hook: ShellCrash 用的不是 mihomo（Meta）内核，没有注入端口池"
+		elif grep -qs '^listeners:' "$SC/yamls/user.yaml" "$SC/yamls/others.yaml"; then
+			log "sc-hook: ShellCrash 的 yamls/user.yaml 或 others.yaml 里自己写了 listeners，和端口池的会重复，启动时没有注入（在 Mac 上运行 cca router sync，问过再热加载）"
+		elif ruby -E UTF-8 "$D/apply.rb" --insert "$o" --ports "$(sc_ports)" "$f" "$ACC" >> "$LOG" 2>&1; then
+			sc_unsave
+			echo "$(date '+%Y-%m-%d_%H:%M:%S')~【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$SCT/ShellCrash.log"
+			echo "$o"
+			return 0
+		else
+			log "sc-hook: 生成端口池失败，ShellCrash 照原样启动"
+		fi
+	fi
+	echo "$f"
+}
+sc_ports() {   # ShellCrash 自己要占的端口（默认值和它的 libs/get_config.sh 一样）：端口池避开它们
+	( for x in ShellCrash.cfg gateway.cfg; do [ -f "$SC/configs/$x" ] && . "$SC/configs/$x" >/dev/null 2>&1; done   # . 一个不存在的文件会让 sh 直接退出
+	  echo "${mix_port:-7890} ${redir_port:-7892} ${tproxy_port:-7893} ${db_port:-9999} ${dns_port:-1053} ${vms_port:-} ${sss_port:-}" )
+}
+sc_unsave() {   # ShellCrash 停止时把面板上改过的选中项存进 configs/web_save、启动后还原：CCA-n 的不让它还原（cca 自己按账号表切）
+	w="$SC/configs/web_save"
+	grep -q '^CCA-[0-9]*,' "$w" 2>/dev/null || return 0
+	grep -v '^CCA-[0-9]*,' "$w" > "$w.cca.$$"
+	rewrite "$w" "$w.cca.$$"
+}
+
 structure() {   # 端口池的"结构"：cca- 入站和 CCA- 策略组的成员（不含选中哪个），结构变了才需要重载
-	ruby -E UTF-8 -ryaml -e '
-		c = YAML.load_file(ARGV[0]) || {}
+	ruby -E UTF-8 -ryaml -e "$YL"'
+		c = yl(ARGV[0]) || {}
 		(c["listeners"] || []).each { |l| puts "L|#{l["name"]}|#{l["port"]}|#{l["proxy"]}" if l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }
 		(c["proxy-groups"] || []).each { |g| puts "G|#{g["name"]}|#{(g["proxies"] || []).map(&:to_s).sort.join(",")}" if g.is_a?(Hash) && g["name"].to_s.start_with?("CCA-") }' "$1" 2>/dev/null | sort
 }
 cca_ports() {
-	ruby -E UTF-8 -ryaml -e 'puts((YAML.load_file(ARGV[0]) || {})["listeners"].to_a.select { |l| l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }.map { |l| l["port"].to_i })' "$1" 2>/dev/null
+	ruby -E UTF-8 -ryaml -e "$YL"'; puts((yl(ARGV[0]) || {})["listeners"].to_a.select { |l| l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }.map { |l| l["port"].to_i })' "$1" 2>/dev/null
 }
 
-# 通过 mihomo API 重载配置（不带 force：只补丁 listeners，不重建 OpenClash 自己的 7890-7895 等入站）。
+# 通过 mihomo API 重载配置（不带 force：只补丁 listeners，不重建 OpenClash / ShellCrash 自己的 7890 等入站）。
 # 整套重载要二十多秒才返回，超时给足 90 秒；拿不到响应（000）时以端口实际状态为准。
 reload() {
 	ctl_init
+	p="$1"
+	if [ "$BK" = sc ]; then   # mihomo 只肯重载它主目录（-d）里的文件：ShellCrash 的运行配置在 /tmp，经它在主目录里放的链接 config.yaml
+		[ -L "$SCB/config.yaml" ] || [ ! -e "$SCB/config.yaml" ] && ! [ "$SCB/config.yaml" -ef "$1" ] && ln -sf "$1" "$SCB/config.yaml"
+		[ "$SCB/config.yaml" -ef "$1" ] && p="$SCB/config.yaml"
+	fi
 	RELOAD_CODE=$(curl -s -m 90 -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $CSEC" \
-		-H 'Content-Type: application/json' --data "{\"path\":\"$1\"}" "http://127.0.0.1:$CPORT/configs")
+		-H 'Content-Type: application/json' --data "{\"path\":\"$p\"}" "http://127.0.0.1:$CPORT/configs")
 	case "$RELOAD_CODE" in 2??|000|"") return 0 ;; esac
 	echo "mihomo 拒绝了新配置（HTTP ${RELOAD_CODE}）"
 	return 1
@@ -3675,57 +3790,64 @@ wait_ports() {   # wait_ports "应监听的端口" "应关闭的端口" [最多�
 	done
 }
 
-restart_now() {   # 运行配置不见了时让端口池生效：重启 OpenClash（和重载一样要 Mac 端征得同意）。返回值同 apply_now
+restart_now() {   # 运行配置不见了时让端口池生效：重启 OpenClash / ShellCrash（和重载一样要 Mac 端征得同意）。返回值同 apply_now
 	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
-		echo "OpenClash 的运行配置文件不见了，要建立或调整账号端口池只能重启一次 OpenClash：约 20 秒，期间局域网的连接都会中断"
+		echo "${NAME} 的运行配置文件不见了，要建立或调整账号端口池只能重启一次 ${NAME}：约 20 秒，期间局域网的连接都会中断"
 		return 3
 	fi
-	echo "正在重启 OpenClash（约 20 秒）…"
-	log "运行配置不见了，重启 OpenClash 让钩子注入端口池"
-	( trap '' HUP; "$R/etc/init.d/openclash" restart ) >/dev/null 2>&1   # SSH 中途断了也要重启完（不然 OpenClash 停在一半）
+	echo "正在重启 ${NAME}（约 20 秒）…"
+	log "运行配置不见了，重启 ${NAME} 让钩子注入端口池"
+	if [ "$BK" = sc ]; then sv="$SC/start.sh"; else sv="$R/etc/init.d/openclash"; fi
+	( trap '' HUP; "$sv" restart ) >/dev/null 2>&1   # SSH 中途断了也要重启完（不然停在一半）
 	CPORT=""   # 重启后重新读控制接口的端口和密钥
 	if wait_ports "$(tr '\n' ' ' < "$PORTS")" "" && select_all >/dev/null; then
-		echo "已重启 OpenClash，账号端口池已就绪"
+		echo "已重启 ${NAME}，账号端口池已就绪"
 		return 0
 	fi
-	echo "重启 OpenClash 后账号端口池没有就绪：在 OpenClash 页面看一下日志"
+	echo "重启 ${NAME} 后账号端口池没有就绪：看一下 ${NAME} 的日志"
 	return 1
 }
 
-# 把 accounts.yaml 落到正在运行的 OpenClash：结构没变只切节点；结构变了且获准才重载（运行配置不见了时是重启）。
+# 把 accounts.yaml 落到正在运行的 OpenClash / ShellCrash：结构没变只切节点；结构变了且获准才重载（运行配置不见了时是重启）。
 # 返回 0 成功；3 需要重载但没获准；1 失败
 apply_now() {
+	if [ "$BK" = sc ] && ! sc_meta; then
+		echo "ShellCrash 现在用的不是 mihomo（Meta）内核：cca 的端口池只支持 Meta 内核（ShellCrash 的菜单里可以换内核）"
+		return 1
+	fi
 	cf=$(runtime_config)
 	if [ -z "$cf" ] || [ ! -f "$cf" ]; then
 		if ! running; then
-			echo "还没有 OpenClash 运行配置：端口池会在 OpenClash 启动时由钩子注入"
+			echo "还没有 ${NAME} 运行配置：端口池会在 ${NAME} 启动时由钩子注入"
 			return 0
 		fi
-		# OpenClash 在运行，运行配置文件却不见了（被删掉了）：各槽位切得过去就不用动它；要建立或调整端口池，
-		# 没有运行配置就没法热加载，只能重启 OpenClash（它重新生成运行配置，启动时由钩子注入端口池）
+		# 在运行，运行配置文件却不见了（被删掉了）：各槽位切得过去就不用动它；要建立或调整端口池，
+		# 没有运行配置就没法热加载，只能重启一次（重新生成运行配置，启动时由钩子注入端口池）
 		if [ -z "$(missing_ports)" ]; then
 			select_all
 			case $? in
 				0) return 0 ;;
-				1) in_source "$FAILED" || return 1 ;;   # 切不过去的节点 OpenClash 自己的配置里也没有：重启也没用
+				1) in_source "$FAILED" || return 1 ;;   # 切不过去的节点生成运行配置的那份配置里也没有：重启也没用
 			esac
 		fi
 		restart_now
 		return $?
 	fi
 	if ! running; then
-		echo "OpenClash 未运行：端口池会在它下次启动时由钩子注入"
+		echo "${NAME} 未运行：端口池会在它下次启动时由钩子注入"
 		return 0
 	fi
 	t="$R/tmp/cca.apply.$$.yaml"
 	cp -f "$cf" "$t"
-	if ! ruby -E UTF-8 "$D/apply.rb" "$t" "$ACC"; then
+	# ShellCrash：节点只用订阅配置里也有的（它的自定义节点启动时才拼进来，钩子用不上），和启动时注入的一致
+	if [ "$BK" = sc ] && src=$(source_config); then set -- --base "$src"; else set --; fi
+	if ! ruby -E UTF-8 "$D/apply.rb" "$@" "$t" "$ACC"; then
 		rm -f "$t"
 		echo "生成配置失败，运行配置未改动"
 		return 1
 	fi
 	if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
-		rewrite "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
+		put_runtime "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
 		select_all
 		case $? in
 			0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
@@ -3736,16 +3858,14 @@ apply_now() {
 	fi
 	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
 		rm -f "$t"
-		echo "需要让 OpenClash 重载一次配置，用来建立或调整账号端口池：约 20 秒，期间局域网的新连接会中断"
+		echo "需要让 ${NAME} 重载一次配置，用来建立或调整账号端口池：约 20 秒，期间局域网的新连接会中断"
 		return 3
 	fi
-	if c=$(core_bin); then
-		if ! out=$(SAFE_PATHS="$(safe_paths)" "$c" -t -d "$R/etc/openclash" -f "$t" 2>&1); then
-			rm -f "$t"
-			echo "mihomo 校验未通过，运行配置未改动："
-			echo "$out" | tail -n 3
-			return 1
-		fi
+	if ! core_test "$t"; then
+		rm -f "$t"
+		echo "mihomo 校验未通过，运行配置未改动："
+		echo "$out" | tail -n 3
+		return 1
 	fi
 	newp=$(cca_ports "$t" | tr '\n' ' ')
 	gonep=""
@@ -3753,8 +3873,8 @@ apply_now() {
 		case " $newp " in *" $p "*) ;; *) gonep="$gonep $p" ;; esac
 	done
 	cp -f "$cf" "$D/runtime.bak.yaml"
-	rewrite "$cf" "$t"
-	echo "正在重载 OpenClash 配置（约 20 秒）…"
+	put_runtime "$cf" "$t"
+	echo "正在重载 ${NAME} 配置（约 20 秒）…"
 	if reload "$cf"; then
 		ok=0
 		if reload_wait "$newp" "$gonep"; then
@@ -3766,12 +3886,12 @@ apply_now() {
 		fi
 		if [ $ok = 1 ]; then
 			select_all >/dev/null
-			echo "已重载并建立账号端口池（未重启 OpenClash）"
+			echo "已重载并建立账号端口池（未重启 ${NAME}）"
 			return 0
 		fi
 	fi
 	cp -f "$D/runtime.bak.yaml" "$cf"
-	echo "重载后端口没有按预期变化，运行配置已还原。可以在 OpenClash 页面手动重启一次：钩子会在启动时注入端口池"
+	echo "重载后端口没有按预期变化，运行配置已还原。可以手动重启一次 ${NAME}：钩子会在启动时注入端口池"
 	return 1
 }
 
@@ -3780,7 +3900,7 @@ ensure() {   # cron：补钩子、纠正被改掉的选中节点；端口池缺�
 	install_hook
 	running || return 0
 	if [ -n "$(missing_ports)" ]; then
-		[ -f "$R/tmp/cca.missing" ] || { log "账号端口池不在运行中的 OpenClash 里：等它下次启动由钩子注入，或在 Mac 上运行 cca router sync"; : > "$R/tmp/cca.missing"; }
+		[ -f "$R/tmp/cca.missing" ] || { log "账号端口池不在运行中的 ${NAME} 里：等它下次启动由钩子注入，或在 Mac 上运行 cca router sync"; : > "$R/tmp/cca.missing"; }
 		return 0
 	fi
 	rm -f "$R/tmp/cca.missing"
@@ -3797,13 +3917,17 @@ ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（
 	apply_now
 }
 
+hook_ok() {   # 在用的那套装着 cca 的钩子
+	if [ "$BK" = sc ]; then grep -qF "$SCHOOK" "$(sc_task)" 2>/dev/null; else grep -qxF "$MB" "$OW" 2>/dev/null; fi
+}
 status() {
-	if running; then echo "OpenClash：运行中"; else echo "OpenClash：未运行"; fi
+	if running; then echo "${NAME}：运行中"; else echo "${NAME}：未运行"; fi
+	[ "$BK" = sc ] && ! sc_meta && echo "ShellCrash 用的不是 mihomo（Meta）内核：cca 的端口池用不了"
 	cf=$(runtime_config)
 	if [ -f "$cf" ]; then echo "运行配置：${cf}"
-	elif running; then echo "运行配置：${cf}（文件不见了：切换节点照常，建立或调整端口池要重启一次 OpenClash）"
-	else echo "运行配置：${cf}（还没有，OpenClash 启动时生成）"; fi
-	if grep -qxF "$MB" "$OW" 2>/dev/null; then echo "钩子：已安装"; else echo "钩子：未安装"; fi
+	elif running; then echo "运行配置：${cf}（文件不见了：切换节点照常，建立或调整端口池要重启一次 ${NAME}）"
+	else echo "运行配置：${cf}（还没有，${NAME} 启动时生成）"; fi
+	if hook_ok; then echo "钩子：已安装"; else echo "钩子：未安装"; fi
 	if grep -qF "$D/cca-router.sh ensure" "$CRON" 2>/dev/null; then echo "自愈 cron：已安装"; else echo "自愈 cron：未安装"; fi
 	if [ -s "$SEL" ] && running; then
 		i=0
@@ -3823,16 +3947,22 @@ status() {
 	return 0
 }
 nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型
-	cf=$(runtime_config)
-	[ -n "$cf" ] && [ -f "$cf" ] || cf=$(source_config)   # 运行配置不见了：OpenClash 自己的配置里节点一样
-	[ -n "$cf" ] && [ -f "$cf" ] || { echo "找不到 OpenClash 运行配置" >&2; return 1; }
-	ruby -E UTF-8 -ryaml -e '
-		c = YAML.load_file(ARGV[0]) || {}
+	if [ "$BK" = sc ]; then
+		# ShellCrash 只列订阅配置里的：它的自定义节点、策略组启动时才拼进来（自定义配置出错时又会去掉），钩子用不上
+		sc_meta || { echo "ShellCrash 用的不是 mihomo（Meta）内核：cca 只支持 Meta 内核" >&2; return 1; }
+		cf=$(source_config)
+	else
+		cf=$(runtime_config)
+		[ -n "$cf" ] && [ -f "$cf" ] || cf=$(source_config)   # 运行配置不见了：OpenClash 自己的配置里节点一样
+	fi
+	[ -n "$cf" ] && [ -f "$cf" ] || { echo "找不到 ${NAME} 的配置" >&2; return 1; }
+	ruby -E UTF-8 -ryaml -e "$YL"'
+		c = yl(ARGV[0]) || {}
 		f = lambda { |v| v.to_s.tr("\t\n", "  ") }
 		(c["proxies"] || []).each { |p| puts ["P", p["name"], p["type"], p["server"], p["port"], p["servername"] || p["sni"]].map(&f).join("\t") if p.is_a?(Hash) }
 		(c["proxy-groups"] || []).each { |g| puts "G\t#{g["name"]}\t#{g["type"]}" if g.is_a?(Hash) && !g["name"].to_s.start_with?("CCA-") }' "$cf"
 }
-uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 时立即移除端口池，否则等 OpenClash 下次重启
+uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 时立即移除端口池，否则等 OpenClash / ShellCrash 下次重启
 	key=""
 	[ -t 0 ] || key=$(cat)
 	remove_hook
@@ -3842,7 +3972,7 @@ uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 �
 		echo '{"base": 0, "slots": 0, "nodes": [], "accounts": []}' > "$ACC"
 		: > "$PORTS"
 		: > "$SEL"
-		apply_now || echo "端口池会在 OpenClash 下次重启后消失（钩子已移除）"
+		apply_now || echo "端口池会在 ${NAME} 下次重启后消失（钩子已移除）"
 	fi
 	if [ -n "$key" ]; then
 		for f in "$R/etc/dropbear/authorized_keys" "$HOME/.ssh/authorized_keys"; do
@@ -3855,8 +3985,10 @@ uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 �
 	echo "路由器上的 cca 已移除"
 }
 
+backend
 case "$1" in
 	hook) hook "$2"; exit 0 ;;
+	sc-hook) sc_hook "$2"; exit 0 ;;
 	install) install_hook && install_cron && install_keep ;;
 	apply) apply_now ;;
 	ensure) ensure ;;
@@ -3864,42 +3996,75 @@ case "$1" in
 	status) status ;;
 	nodes) nodes ;;
 	uninstall) uninstall ;;
-	*) echo "用法: $0 hook <配置>|install|apply|ensure|ensure-now|status|nodes|uninstall" >&2; exit 2 ;;
+	*) echo "用法: $0 hook <配置>|sc-hook <配置>|install|apply|ensure|ensure-now|status|nodes|uninstall" >&2; exit 2 ;;
 esac
 SH
 }
 
 router_rb() {
 	cat <<'RB'
-# cca：在 OpenClash 配置里生成账号端口池。槽位 n = mixed 入站 cca-n（端口 base+n，不认证）→ select 策略组 CCA-n，
-# 组成员是可选节点 + REJECT；分到账号的槽位把它的节点排第一（OpenClash 启动后默认就选中它），空槽位默认 REJECT。
+# cca：在 mihomo 配置里生成账号端口池。槽位 n = mixed 入站 cca-n（端口 base+n，不认证）→ select 策略组 CCA-n，
+# 组成员是可选节点 + REJECT；分到账号的槽位把它的节点排第一（内核启动后默认就选中它），空槽位默认 REJECT。
+#   ruby apply.rb [--base 订阅配置] 配置 账号表
+#     改写配置：OpenClash 的运行配置；ShellCrash 热加载前的运行配置（节点只用订阅配置里也有的，和它启动时一样）
+#   ruby apply.rb --insert 输出 --ports "端口 …" 订阅配置 账号表
+#     ShellCrash 启动前用：订阅配置原样复制到输出，只插入端口池的几行。ShellCrash 按文本把订阅配置拆成几段、
+#     再和它自己的设置拼起来，整份重排的话它自己追加的入站缩进会对不上；--ports 是它自己要占的端口
 require 'yaml'
+opt = {}
+while ARGV[0].to_s.start_with?('--')
+  k = ARGV.shift
+  opt[k] = ARGV.shift
+end
 cfg_file, acc_file = ARGV
+yload = lambda do |f|   # 订阅配置里常有锚点：新版 Psych 要 aliases: true 才肯读，旧版不认这个参数
+  s = File.read(f, encoding: 'UTF-8')
+  begin
+    YAML.load(s, aliases: true)
+  rescue ArgumentError
+    YAML.load(s)
+  end
+end
 begin
-  cfg = YAML.load_file(cfg_file) || {}
+  cfg = yload.call(cfg_file) || {}
   acc = (File.exist?(acc_file) && YAML.load_file(acc_file)) || {}
+  base = opt['--base'] && (yload.call(opt['--base']) || {})
+  raise '顶层不是映射' unless cfg.is_a?(Hash) && (base.nil? || base.is_a?(Hash))
 rescue StandardError, Psych::SyntaxError => e
-  $stderr.puts "cca: 读取配置失败：#{e.message.lines.first.strip}"
+  $stderr.puts "cca: 读取配置失败：#{e.message.lines.first.to_s.strip}"
   exit 1
 end
+list = lambda { |v| v.is_a?(Array) ? v : [] }
 ours = lambda { |x, prefix| x.is_a?(Hash) && x['name'].to_s.start_with?(prefix) }
-listeners = (cfg['listeners'] || []).reject { |l| ours.call(l, 'cca-') }
-groups = (cfg['proxy-groups'] || []).reject { |g| ours.call(g, 'CCA-') }
+names = lambda do |c|   # 节点和（cca 以外的）策略组的名字
+  list.call(c['proxies']).select { |p| p.is_a?(Hash) }.map { |p| p['name'].to_s } +
+    list.call(c['proxy-groups']).select { |g| g.is_a?(Hash) && !ours.call(g, 'CCA-') }.map { |g| g['name'].to_s }
+end
+listeners = list.call(cfg['listeners']).reject { |l| ours.call(l, 'cca-') }
+groups = list.call(cfg['proxy-groups']).reject { |g| ours.call(g, 'CCA-') }
 known = { 'DIRECT' => true, 'REJECT' => true }
-(cfg['proxies'] || []).each { |p| known[p['name'].to_s] = true if p.is_a?(Hash) }
-groups.each { |g| known[g['name'].to_s] = true if g.is_a?(Hash) }
-wanted = (acc['nodes'] || []).map(&:to_s)
+names.call(cfg).each { |n| known[n] = true }
+if base
+  in_base = {}
+  names.call(base).each { |n| in_base[n] = true }
+  known.keep_if { |n, _| n == 'DIRECT' || n == 'REJECT' || in_base[n] }
+end
+wanted = list.call(acc['nodes']).map(&:to_s)
 members = wanted.select { |n| known[n] }
 (wanted - members).each { |n| $stderr.puts "cca: 路由器上没有节点「#{n}」，已从可选列表里跳过" }
 assign = {}
-(acc['accounts'] || []).each { |a| assign[a['slot'].to_i] = a['node'].to_s }
+list.call(acc['accounts']).each { |a| assign[a['slot'].to_i] = a['node'].to_s }
 port_of = lambda { |v| v.to_s.split(':').last.to_i }
-used = %w[port socks-port mixed-port redir-port tproxy-port].map { |k| cfg[k].to_i }
-used << port_of.call(cfg['external-controller']) << port_of.call((cfg['dns'] || {})['listen'])
+if opt['--insert']   # ShellCrash 不用订阅配置里的 port 这些设置，用它自己的（--ports）
+  used = opt['--ports'].to_s.split.map(&:to_i)
+else
+  used = %w[port socks-port mixed-port redir-port tproxy-port].map { |k| cfg[k].to_i }
+  used << port_of.call(cfg['external-controller']) << port_of.call((cfg['dns'].is_a?(Hash) ? cfg['dns'] : {})['listen'])
+end
 listeners.each { |l| used << l['port'].to_i if l.is_a?(Hash) }
-base = acc['base'].to_i
+slots = []
 (1..acc['slots'].to_i).each do |k|
-  port = base + k
+  port = acc['base'].to_i + k
   if used.include?(port)
     $stderr.puts "cca: 端口 #{port} 已被占用，槽位 #{k} 跳过"
     next
@@ -3910,17 +4075,75 @@ base = acc['base'].to_i
     node = nil
   end
   first = node || 'REJECT'
-  order = [first] + (members - [first]) + (first == 'REJECT' ? [] : ['REJECT'])
-  groups << { 'name' => "CCA-#{k}", 'type' => 'select', 'proxies' => order }
-  listeners << { 'name' => "cca-#{k}", 'type' => 'mixed', 'port' => port.to_s,
-                 'listen' => '0.0.0.0', 'users' => [], 'proxy' => "CCA-#{k}" }
+  slots << [k, port, [first] + (members - [first]) + (first == 'REJECT' ? [] : ['REJECT'])]
   used << port
 end
-cfg['proxy-groups'] = groups unless groups.empty? && cfg['proxy-groups'].nil?
-if listeners.empty? then cfg.delete('listeners') else cfg['listeners'] = listeners end
-tmp = "#{cfg_file}.cca.tmp"
-File.open(tmp, 'w') { |f| f.write(YAML.dump(cfg)) }
-File.rename(tmp, cfg_file)
+new_groups = slots.map { |k, _, order| { 'name' => "CCA-#{k}", 'type' => 'select', 'proxies' => order } }
+unless opt['--insert']
+  groups.concat(new_groups)
+  slots.each do |k, port, _|
+    listeners << { 'name' => "cca-#{k}", 'type' => 'mixed', 'port' => port.to_s,
+                   'listen' => '0.0.0.0', 'users' => [], 'proxy' => "CCA-#{k}" }
+  end
+  cfg['proxy-groups'] = groups unless groups.empty? && cfg['proxy-groups'].nil?
+  if listeners.empty? then cfg.delete('listeners') else cfg['listeners'] = listeners end
+  tmp = "#{cfg_file}.cca.tmp"
+  File.open(tmp, 'w') { |f| f.write(YAML.dump(cfg)) }
+  File.rename(tmp, cfg_file)
+  exit 0
+end
+
+# --- ShellCrash：订阅配置一个字节不改地复制，只在 proxy-groups、listeners 两段的开头插入端口池（一项一行）---
+begin
+  if groups.size != list.call(cfg['proxy-groups']).size || listeners.size != list.call(cfg['listeners']).size
+    raise '里面已经有 cca 的端口池（CCA- 策略组或 cca- 入站）'
+  end
+  q = lambda { |s| '"' + s.to_s.gsub(/["\\]/) { |c| "\\#{c}" }.gsub(/[\x00-\x1f\x7f]/) { |c| format('\x%02x', c.ord) } + '"' }
+  new_listeners = slots.map do |k, port, _|
+    { 'name' => "cca-#{k}", 'type' => 'mixed', 'port' => port, 'listen' => '0.0.0.0', 'users' => [], 'proxy' => "CCA-#{k}" }
+  end
+  # 写成 {name: "…"} 的样子：ShellCrash 往策略组里加自定义节点时按 "- name: 组名" 找组，碰不到这几行
+  g_lines = new_groups.map { |g| "{name: #{q.call(g['name'])}, type: select, proxies: [#{g['proxies'].map { |m| q.call(m) }.join(', ')}]}" }
+  l_lines = new_listeners.map { |l| "{name: #{q.call(l['name'])}, type: mixed, port: #{l['port']}, listen: \"0.0.0.0\", users: [], proxy: #{q.call(l['proxy'])}}" }
+  insert = lambda do |text, key, items|   # 段落的认法和 ShellCrash 一样：顶格的 "key:" 开始，到下一个顶格的小写字母开头的行为止
+    return text if items.empty?
+    lines = text.lines
+    heads = lines.each_index.select { |i| lines[i].start_with?("#{key}:") }
+    raise "#{key} 出现了不止一次" if heads.size > 1
+    if heads.empty?   # 没有这一段：加在最后，缩进和 ShellCrash 自己追加入站时一样（两个空格）
+      text += "\n" unless text.empty? || text.end_with?("\n")
+      return text + "#{key}:\n" + items.map { |s| "  - #{s}\n" }.join
+    end
+    i = heads[0]
+    raise "#{key} 不是一行一项的列表" unless lines[i] =~ /\A#{Regexp.escape(key)}:[ \t]*(#.*)?\r?\n?\z/
+    j = (i + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
+    first = lines[i + 1...j].find { |l| l =~ /\A *- / }
+    ind = first ? first[/\A */] : '  '   # 和这一段原有的项对齐
+    nl = lines[i].end_with?("\r\n") ? "\r\n" : "\n"
+    lines[i] += nl unless lines[i].end_with?("\n")
+    lines[i + 1, 0] = items.map { |s| "#{ind}- #{s}#{nl}" }
+    lines.join
+  end
+  text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8')
+  out = insert.call(insert.call(text, 'proxy-groups', g_lines), 'listeners', l_lines)
+  tmp = "#{opt['--insert']}.tmp"
+  File.open(tmp, 'wb') { |f| f.write(out) }
+  # 插好的再读一遍：端口池一项不差、其余的和原来完全一样，才交给 ShellCrash
+  chk = yload.call(tmp)
+  rest = lambda do |c|
+    c.merge('proxy-groups' => list.call(c['proxy-groups']).reject { |g| ours.call(g, 'CCA-') },
+            'listeners' => list.call(c['listeners']).reject { |l| ours.call(l, 'cca-') })
+  end
+  unless chk.is_a?(Hash) && list.call(chk['proxy-groups']).select { |g| ours.call(g, 'CCA-') } == new_groups &&
+         list.call(chk['listeners']).select { |l| ours.call(l, 'cca-') } == new_listeners && rest.call(chk) == rest.call(cfg)
+    raise '插好后读出来和预期的不一样'
+  end
+  File.rename(tmp, opt['--insert'])
+rescue StandardError => e
+  File.delete(tmp) if tmp && File.exist?(tmp)
+  $stderr.puts "cca: 没能在订阅配置里插入端口池（#{e.message.lines.first.to_s.strip}）"
+  exit 1
+end
 RB
 }
 
@@ -3930,8 +4153,10 @@ router_bundle() {
 	acc=$(py accounts-json) || return 1
 	echo 'set -e'
 	echo 'R="${CCA_ROOT:-}"'
-	echo 'for c in ruby uci netstat curl; do command -v "$c" >/dev/null 2>&1 || { echo "路由器缺少命令: $c"; exit 1; }; done'
-	echo '[ -d "$R/etc/openclash" ] || { echo "路由器上没有 /etc/openclash（没装 OpenClash？）"; exit 1; }'
+	echo 'for c in netstat curl; do command -v "$c" >/dev/null 2>&1 || { echo "路由器缺少命令: $c"; exit 1; }; done'
+	echo '[ -d "$R/etc/openclash" ] || [ -f "$R/etc/ShellCrash/start.sh" ] || grep -q "^export CRASHDIR=" "$R/etc/profile" 2>/dev/null || { echo "路由器上没有 OpenClash，也没有 ShellCrash"; exit 1; }'
+	# OpenClash 自带 ruby；只装了 ShellCrash 的路由器要先装上
+	echo 'ruby -ryaml -e 1 >/dev/null 2>&1 || { echo "路由器上没有 ruby（或缺它的 YAML 库）：在路由器上运行 opkg update && opkg install ruby ruby-yaml"; exit 1; }'
 	echo 'mkdir -p "$R/etc/cca"'
 	echo "cat > \"\$R/etc/cca/cca-router.sh.new\" <<'CCA_EOF_SH'"; router_sh; echo 'CCA_EOF_SH'
 	echo 'chmod 755 "$R/etc/cca/cca-router.sh.new" && mv -f "$R/etc/cca/cca-router.sh.new" "$R/etc/cca/cca-router.sh"'
@@ -3944,17 +4169,20 @@ router_bundle() {
 }
 digest() { { router_sh; router_rb; } | py digest; }   # 账号表 + 路由器端代码的摘要（见 cmd_digest）
 
+clash_name() {   # clash_name 路由器的输出：说的是 OpenClash 还是 ShellCrash（路由器端按在用的那套写）
+	case "${1:-}" in *ShellCrash*) echo ShellCrash ;; *) echo OpenClash ;; esac
+}
 # 路由器说"需要重载"（返回 3）时征求同意：重载期间局域网新连接会失败约 20 秒。allow_reload [路由器的说明]：
-# 运行配置不见了时路由器要的是重启 OpenClash（连接都会断开），问的时候说清楚
+# 运行配置不见了时路由器要的是重启 OpenClash / ShellCrash（连接都会断开），问的时候说清楚
 allow_reload() {
 	[ -n "${CCA_YES:-}" ] && return 0
 	interactive || return 1
 	case "${1:-}" in
-		*"只能重启一次 OpenClash"*) confirm "现在重启 OpenClash 吗？" y ;;
+		*"只能重启一次 "*) confirm "现在重启 $(clash_name "$1") 吗？" y ;;
 		*) confirm "现在重载吗？" y ;;
 	esac
 }
-router_reload() {   # 获准后在路由器上执行带重载的 apply（运行配置不见了时是重启 OpenClash）
+router_reload() {   # 获准后在路由器上执行带重载的 apply（运行配置不见了时是重启 OpenClash / ShellCrash）
 	local out rc
 	out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh apply" </dev/null 2>&1); rc=$?
 	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
@@ -3991,7 +4219,7 @@ cmd_router_setup() {
 		host=$(ask "路由器地址 [${ROUTER_HOST}]: " "$ROUTER_HOST")
 	else
 		for i in 1 2 3; do
-			host=$(ask "装了 OpenClash 的路由器地址（例如 192.168.1.2）: " "")
+			host=$(ask "装了 OpenClash 或 ShellCrash 的路由器地址（例如 192.168.1.2）: " "")
 			[ -n "$host" ] && break
 		done
 		[ -n "$host" ] || die "需要路由器地址"
@@ -4037,7 +4265,7 @@ pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出�
 	local n=0 i nd sel w tries=0 list="" raw
 	raw=$(router_node_list 2>/dev/null)
 	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(printf '%s\n' "$raw" | awk -F '\t' '$1 == "P" { print $2 }')
-	[ $n -gt 0 ] || { warn "没从路由器读到节点（OpenClash 在运行吗？）"; return 1; }
+	[ $n -gt 0 ] || { warn "没从路由器读到节点（路由器上的 OpenClash / ShellCrash 导入过配置了吗？）"; return 1; }
 	say ""
 	say "  选出允许账号使用的出口节点（之后每个账号从这些里面挑一个）："
 	say ""
@@ -4129,7 +4357,7 @@ router_push() {   # 把账号表和路由器端脚本部署到路由器（返回
 		if allow_reload "$out"; then
 			router_reload; rc=$?
 		else
-			warn "没有重载：新的端口池要等 OpenClash 下次重启（或再运行 cca router sync）才生效"
+			warn "没有重载：新的端口池要等 $(clash_name "$out") 下次重启（或再运行 cca router sync）才生效"
 			return 3
 		fi
 	fi
@@ -4171,7 +4399,7 @@ cmd_router() {
 		uninstall)
 			router_ready || die "还没配置路由器（cca router setup）"
 			need_tty
-			confirm "从路由器移除 cca（钩子、cron、端口池、/etc/cca、SSH 公钥）？立即移除端口池要让 OpenClash 重载一次（约 20 秒）" n || return 0
+			confirm "从路由器移除 cca（钩子、cron、端口池、/etc/cca、SSH 公钥）？立即移除端口池要让 OpenClash / ShellCrash 重载一次（约 20 秒）" n || return 0
 			rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" ;;
 		*) die "用法: cca router setup|sync|status|nodes|log|ssh|uninstall" ;;
 	esac
@@ -5774,7 +6002,7 @@ cmd_install() {
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
 	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
-	if ! router_ready && confirm "现在配置 OpenClash 路由器（SSH 免密 + 按端口分流）？" y; then
+	if ! router_ready && confirm "现在配置路由器（OpenClash 或 ShellCrash；SSH 免密 + 按端口分流）？" y; then
 		cmd_router_setup || warn "路由器配置没完成，稍后可运行 cca router setup"
 	fi
 	if [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
@@ -5801,7 +6029,7 @@ cmd_restore() {
 	[ -z "$running" ] || die "这些账号的桌面 App 还开着：${running}。先退出它们再还原"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证（第三方 API 账号删掉钥匙串里的 key）"
-	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
+	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池"
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器"
 	say "  · ~/.claude、~/.claude.json 和 ~/.codex 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
@@ -5847,7 +6075,7 @@ cmd_restore() {
 
 usage() {
 	cat >&2 <<EOF
-cca $VERSION — Claude Code / Codex 多账号（账号独立登录，其余共享；每个账号走 OpenClash 的独立端口，在外面走本机 Clash）
+cca $VERSION — Claude Code / Codex 多账号（账号独立登录，其余共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，在外面走本机 Clash）
 
 启动
   cca [claude 参数]          弹出账号菜单：↑↓ 选择、回车确认、数字键直接选、q 退出；
@@ -5896,11 +6124,12 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              别在 App 里登：关掉它，cca codex login 账号 登录后再打开
 
 路由器
-  cca router setup           SSH 免密（只输一次密码）+ 部署分流
+  cca router setup           SSH 免密（只输一次密码）+ 部署分流；路由器上用 OpenClash 还是 ShellCrash 自动检测
+                             （ShellCrash 要 Meta 内核，路由器上还要装 ruby：opkg install ruby ruby-yaml）
   cca router sync [-y]       同步账号到路由器：换节点、增删账号走 API 即时生效；只有端口池要扩容
-                             或可选节点变了才需重载 OpenClash（约 20 秒），会先问你（-y 直接同意）。
+                             或可选节点变了才需重载 OpenClash / ShellCrash（约 20 秒），会先问你（-y 直接同意）。
                              路由器上的节点改了名会跟着改（按服务器地址认，认不出的让你选）；
-                             OpenClash 的运行配置文件不见了时，重载换成重启 OpenClash（同样先问）
+                             运行配置文件不见了时，重载换成重启 OpenClash / ShellCrash（同样先问）
   cca router status|nodes|log|ssh|uninstall
 
 出门在外（连不上路由器时改走本机的 Clash 客户端，例如 Clash Verge）
