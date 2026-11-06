@@ -5,10 +5,11 @@
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
 T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）
-trap '[ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
+STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
+trap '[ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -132,6 +133,46 @@ ok "启动器重名：邮箱 @ 前面一样、又都没有别名时，改用完�
 edit_table 'j.pop("alice@corp.example")'
 run cca app --launchers >/dev/null 2>&1
 ok "启动器：不再重名后改回短名字" '[ -d "$L/Claude alice.app" ] && [ ! -e "$L/Claude alice@corp.example.app" ] && [ ! -e "$L/Claude alice@example.com.app" ]'
+
+# 3d. DNS / WebRTC 泄露检测（照 ip.net.coffee 的 DNS、WebRTC 检测页）：和出口检测同时在后台跑，只提示不拦。DNS 经账号的端口测，
+#     结果按 线路|节点 缓存（启动不用每次等它），cca check 重新测；WebRTC 直连问 STUN（平时 CCA_STUN 指向不通的端口）
+rm -f "$H/.cca/leak.json"; : > curl.log; mkdir -p "$T/dns" "$T/geo"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "启动时顺带测泄露：DNS 经账号的端口解析一次性的子域名、再问是哪些解析器来查的（归属地也经它查）；WebRTC 直连问 STUN（UDP 出不去算无泄露）；横幅里一句话" '[ $rc -eq 3 ] && grep -qE "^CURL via :7901 https://[0-9a-f]{20}-1\.d\.ip\.net\.coffee/pixel\.gif$" curl.log && grep -qE "^CURL via :7901 https://ip\.net\.coffee/api/dns/result/[0-9a-f]{20}$" curl.log && grep -q "^CURL via :7901 https://ip.net.coffee/api/geoip/203.0.113.53$" curl.log && printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 无泄露" && [ "$(stat -f %Lp "$H/.cca/leak.json")" = 600 ]'
+n0=$(grep -c "pixel.gif" curl.log)
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
+ok "DNS 的结果按 线路|节点 缓存：再启动不再测（不拖慢启动），横幅照样有" '[ "$(grep -c "pixel.gif" curl.log)" = "$n0" ] && printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 无泄露"'
+printf '%s\n' 223.5.5.5 203.0.113.53 > "$T/dns/7902"
+printf '{"country": "China", "region": "Zhejiang", "city": "Hangzhou", "isp": "Alibaba", "country_code": "cn"}' > "$T/geo/223.5.5.5.json"
+out=$(run CCA_TTY="$(ans)" cca @副号 --version 2>&1); rc=$?
+ok "DNS 泄露（账号出口那边用了中国大陆的解析器）：说明是哪个解析器、该查哪个节点，横幅里标出来，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口访问网站时，域名是中国大陆的 DNS 服务器解析的（223.5.5.5 China · Alibaba）" && printf "%s" "$out" | grep -q "上的节点 US-B：" && printf "%s" "$out" | grep -q "泄露  DNS 泄露（1 个解析器在中国大陆） · WebRTC 无泄露"'
+n0=$(grep -c "pixel.gif" curl.log)
+out=$(run cca check 2>&1)
+ok "cca check：DNS 重新测（不用启动时缓存的），注明解析器在哪；有泄露的那个账号另外说明" '[ "$(grep -c "pixel.gif" curl.log)" = $((n0 + 4)) ] && printf "%s" "$out" | grep -q "DNS 无泄露（1 个解析器：United States） · WebRTC 无泄露（UDP 直连拿不到公网 IP）" && printf "%s" "$out" | grep -q "DNS 泄露（1 个解析器在中国大陆）" && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口"'
+python3 -I "$T/fake_stun.py" "$T" & STUN_PID=$!
+for i in $(seq 1 50); do [ -s "$T/stun.port" ] && break; sleep 0.1; done; STUN="127.0.0.1:$(cat "$T/stun.port")"
+echo 192.0.2.77 > "$T/stun_ip"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "WebRTC 泄露（直连 STUN 看到的不是账号的出口）：横幅里注明会暴露哪个 IP、在哪（归属地直连查，不经账号的出口）；命令行启动不另外警告" '[ $rc -eq 3 ] && grep -qx "STUN 192.0.2.77" "$T/stun.log" && printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 会暴露 192.0.2.77（United States · Example ISP）" && grep -qx "CURL direct https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! grep -q "via :7901 https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! printf "%s" "$out" | grep -q "WebRTC 泄露："'
+out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
+ok "cca app：WebRTC 泄露另外说明（App 里的网页拿得到这个 IP、怎么拦），照常打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "WebRTC 泄露：浏览器用 UDP 直连 STUN 服务器时，对方看到的是 192.0.2.77（United States · Example ISP），不是账号的出口：账号的网页版、Claude App 里的网页" && printf "%s" "$out" | grep -q "UDP 3478、19302 端口"'
+edit_table 'j["carol@example.com"] = "US-C"'
+out=$(run CCA_TTY="$(ans)" cca @carol --version 2>&1); rc=$?
+ok "要在账号的浏览器里登录时，WebRTC 泄露先说一声（登录页在那个浏览器里打开）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 泄露：" && grep -q "ARGS: auth login --claudeai --email carol@example.com" claude.log'
+run CCA_TTY="$(ans y)" cca rm carol >/dev/null 2>&1
+echo 203.0.113.1 > "$T/stun_ip"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
+ok "直连 STUN 看到的就是账号的出口：WebRTC 无泄露" 'printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 无泄露"'
+kill "$STUN_PID" 2>/dev/null; wait "$STUN_PID" 2>/dev/null; STUN="" STUN_PID=""
+edit_table 'j["leak_check"] = False' "$H/.cca/config.json"; rm -f "$H/.cca/leak.json"; n0=$(grep -c "pixel.gif" curl.log)
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+edit_table 'j.pop("leak_check")' "$H/.cca/config.json"
+ok "config.json 的 leak_check 设成 false：不测泄露（一个请求都不发），横幅里没有这一行" '[ $rc -eq 3 ] && [ "$(grep -c "pixel.gif" curl.log)" = "$n0" ] && ! printf "%s" "$out" | grep -q "泄露  "'
+touch "$T/dns_down"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+rm -f "$T/dns_down"
+ok "ip.net.coffee 的 DNS 检测接口连不上：注明没测成，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "泄露  DNS 没测成 · WebRTC 无泄露"'
+rm -rf "$T/dns" "$T/geo" "$T/stun_ip" "$H/.cca/leak.json"
 
 # 4. 选中节点被改动（仪表盘手动切 / 缓存恢复错）→ 启动前自动纠正，不重载
 printf US-D > "$R/sel/CCA-1"
@@ -421,7 +462,7 @@ ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不�
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
 ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址），也不加 --settings" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && ! lastline ARGS | grep -q -- --settings && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
 # Claude 默认对 ~/.cca 放开权限（加成工作目录），登录凭证和浏览器资料除外
-P1="--add-dir=$H/.cca --disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**)"
+P1="--add-dir=$H/.cca --disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**)"
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
 ok "Claude 默认对 ~/.cca 放开权限：--add-dir 加成工作目录，登录凭证和浏览器资料用 --disallowedTools 挡住；都写成 --x=值，后面的提示词不会被当成目录" '[ $rc -eq 3 ] && [ "$(lastline ARGS)" = "ARGS: $P1 看看 ~/.cca 里的配置" ]'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
@@ -1022,6 +1063,114 @@ out2=$(run cca policy 2>&1)
 ok "映射里的节点在路由器上改了名、映射还没更新：账号表跟着改成 HK-A2，不会被映射改回旧名字，照常启动" '[ $rc -eq 3 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && [ "$(sel CCA-1)" = HK-A2 ] && ! printf "%s" "$out" | grep -q "按维护者的映射固定为" && printf "%s" "$out2" | grep -q "Claude  alice@example.com → HK-A2（映射里写的是 HK-A，路由器上已经改名）"'
 pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
 ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
+
+# 11b2b. 维护者参考配置里的节点：./policy.sh 从维护者的 custom.yaml 抽出策略组 OpenAi 和它引用的节点（nodes.json，命名空间
+#        cca-nodes 签名），各台机器拉映射时一起拉；路由器（OpenClash / ShellCrash）和本机 Clash Verge 的配置里缺的补进 proxies，
+#        名字补进同名策略组，用户自己的配置文件不动。这一节结束时路由器、账号表、Clash Verge 都还原
+rm -rf "$T/router.snap"; cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
+cp "$T/verge/base.yaml" "$T/verge/base.snap"
+nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签名（参考节点和映射用不同的命名空间）
+	rm -f "$PR/nodes.json.sig"; ssh-keygen -Y sign -q -n cca-nodes -f "${1:-$T/relkey}" "$PR/nodes.json" 2>/dev/null
+}
+rget() {   # rget 配置 'Ruby 表达式'：c 是读出来的配置，g 是它的 OpenAi 组成员，px 是节点名
+	ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; g = ((c["proxy-groups"] || []).find { |x| x["name"] == "OpenAi" } || {})["proxies"]; px = (c["proxies"] || []).map { |p| p["name"] }; exit(eval(ARGV[1]) ? 0 : 1)' "$1" "$2"
+}
+cat > "$T/custom.yaml" <<'Y'
+proxies:
+  - {name: AI-A, type: ss, server: 192.0.2.21, port: 8388, cipher: aes-128-gcm, password: x}
+  - name: AI-B
+    type: vless
+    server: 192.0.2.22
+    port: 443
+    uuid: 00000000-0000-4000-8000-000000000001
+    tls: true
+    servername: www.example.com
+    flow: xtls-rprx-vision
+    reality-opts:
+      public-key: -test-public-key
+      short-id: '0a1b2c3d4e5f6789'
+  - {name: US-A, type: ss, server: 192.0.2.1, port: 8388, cipher: aes-128-gcm, password: other}
+  - {name: AI-B2, type: ss, server: 192.0.2.2, port: 8388, cipher: aes-128-gcm, password: x}
+  - {name: LAN-ONLY, type: ss, server: 192.0.2.99, port: 8388, cipher: aes-128-gcm, password: x}
+proxy-groups:
+  - {name: Proxy, type: select, proxies: [LAN-ONLY, AI-A]}
+  - name: OpenAi
+    type: select
+    proxies:
+      - Proxy
+      - AI-A
+      - AI-B
+      - US-A
+      - AI-B2
+rules:
+  - SRC-IP-CIDR,192.0.2.100/32,Proxy
+  - MATCH,Proxy
+Y
+out=$(run bash "$D/../policy.sh" nodes "$T/custom.yaml" 2>"$T/pn.err"); rc=$?
+printf '%s\n' "$out" > "$PR/nodes.json"
+ok "policy.sh nodes：从维护者的配置里只抽出策略组 OpenAi 引用的节点（组成员里的策略组不算，规则、别的节点都不带），格式检查通过" '[ $rc -eq 0 ] && grep -q "参考节点：策略组「OpenAi」里的 4 个节点（Proxy 不是节点，不算）" "$T/pn.err" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j[\"version\"] == 1 and j[\"group\"] == \"OpenAi\" and [p[\"name\"] for p in j[\"proxies\"]] == [\"AI-A\", \"AI-B\", \"US-A\", \"AI-B2\"] and j[\"proxies\"][1][\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" else 1)" "$PR/nodes.json" && ! grep -q "LAN-ONLY\|SRC-IP" "$PR/nodes.json" && run bash "$CCA" _fill-check "$PR/nodes.json" >/dev/null'
+nodes_pub
+# 用户路由器上的配置：有 OpenAi 组（只有 US-A），没有 AI-A、AI-B；AI-B2 和 US-B 是同一个节点（地址一样）
+awk '{ print } /^proxy-groups:$/ { print "  - {name: OpenAi, type: select, proxies: [US-A]}" }' "$SRC" > "$T/src.tmp" && cat "$T/src.tmp" > "$SRC"; oc_restart
+cp "$SRC" "$T/src.fill"; n0=$(reloads)
+out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "拉映射时一起拉参考节点（验签通过才换上，只有自己能读），马上同步：说明要重载是为了补节点，问过后重载一次" '[ $rc -eq 0 ] && [ "$(stat -f %Lp "$H/.cca/policy/nodes.json")" = 600 ] && printf "%s" "$out" | grep -q "已更新映射（.*；参考节点：策略组 OpenAi 的 4 个节点）" && printf "%s" "$out" | grep -q "需要让 OpenClash 重载一次配置，用来补上维护者参考配置里的节点" && [ "$(reloads)" = $((n0 + 1)) ]'
+ok "OpenClash：缺的 AI-A、AI-B 补进运行配置，名字接在 OpenAi 组后面；US-A 是用户自己的（定义不动、不重复）；AI-B2 地址和 US-B 一样，组里加的是 US-B" 'printf "%s" "$out" | grep -q "维护者参考配置里的节点：补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B" && rget "$RC" "px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\" && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" && g == %w[US-A AI-A AI-B US-B]"'
+ok "OpenClash 自己的配置一个字节没动；补之前用内核 -t 校验过这份，记下了这一版参考节点的 id" 'cmp -s "$SRC" "$T/src.fill" && grep -q "^CORE .* -t -d $R/etc/openclash -f $R/tmp/cca.apply" router.log && [ -s "$R/etc/cca/fill.ok" ] && grep -qF "\"id\": \"$(cat "$R/etc/cca/fill.ok")\"" "$R/etc/cca/accounts.yaml"'
+out=$(run cca router nodes 2>&1); out2=$(run cca router status 2>&1); out3=$(run cca policy 2>&1)
+ok "cca router nodes 列得出补上的节点；cca router status、cca policy 说明参考节点" 'printf "%s" "$out" | grep -qx AI-A && printf "%s" "$out" | grep -qx AI-B && printf "%s" "$out2" | grep -q "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，运行配置里都有$" && printf "%s" "$out3" | grep -q "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点"'
+edit_table 'j["nodes"].append("AI-A")' "$H/.cca/config.json"; edit_table 'j["ai@example.com"] = "AI-A"'
+out=$(run cca router sync -y 2>&1); rc=$?; s=$(( $(cfgv 'c["ports"]["ai@example.com"]') - 7900 ))
+ok "补上的节点可以当账号的出口：选进可选节点、账号用它，端口切到 AI-A" '[ $rc -eq 0 ] && [ "$(sel "CCA-$s")" = AI-A ]'
+c0=$(grep -c '^CORE' router.log); r0=$(restarts); oc_restart
+ok "OpenClash 重启：钩子在生成运行配置时补上（这一版校验过，不再拿内核试），账号的端口照常走 AI-A" '[ "$(restarts)" = $((r0 + 1)) ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && rget "$RC" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$s")" = AI-A ] && cmp -s "$SRC" "$T/src.fill"'
+echo 192.0.2.22 > "$R/core_reject"; rm -f "$R/etc/cca/fill.ok"; oc_restart
+ok "这台路由器的内核不认参考配置里的节点（还没校验过的这一版）：启动时先拿内核试，不通过就不补（OpenClash 照常起来，端口池照常），用它的账号宁可断开" '! rget "$RC" "px.include?(\"AI-A\")" && [ "$(nl_)" -gt 0 ] && [ "$(sel "CCA-$s")" = REJECT ] && grep -q "参考节点没通过 OpenClash 内核的校验，这次启动不补" "$R/tmp/cca-router.log" && [ ! -e "$R/etc/cca/fill.ok" ]'
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "同步时内核还是不认：说明这次不补，端口池照常（不重载），用它的账号断开" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者参考配置里的节点没通过 OpenClash 内核的校验，这次不补它们" && ! rget "$RC" "px.include?(\"AI-A\")" && [ "$(sel "CCA-$s")" = REJECT ] && [ ! -e "$R/etc/cca/fill.ok" ]'
+rm -f "$R/core_reject"; n0=$(reloads)
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "内核认了（比如升级了）：补上并重载，账号的端口回到 AI-A" '[ $rc -eq 0 ] && [ "$(reloads)" = $((n0 + 1)) ] && rget "$RC" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$s")" = AI-A ] && [ -s "$R/etc/cca/fill.ok" ]'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(port=8443) for x in j['proxies'] if x['name'] == 'AI-B']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
+n0=$(reloads); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "维护者改了参考配置里的节点：补进去的那个跟着更新（不会多出一个），问过后重载" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "按参考配置更新了节点 AI-B" && [ "$(reloads)" = $((n0 + 1)) ] && rget "$RC" "px.count(\"AI-B\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443"'
+cp "$H/.cca/policy/nodes.json" "$T/nodes.good"; nodes_pub "$T/evilkey"
+out=$(run cca policy pull 2>&1); rc=$?
+nodes_pub; python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'][0].pop('server'); json.dump(j, open(p, 'w'))" "$PR/nodes.json"; nodes_pub
+out2=$(run cca policy pull 2>&1); rc2=$?
+ok "参考节点不是发布密钥签的、格式不对：映射和参考节点都不换，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "参考节点（nodes.json）的签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参考节点（nodes.json）的格式不对：第 1 个节点「AI-A」：server 不对" && cmp -s "$H/.cca/policy/nodes.json" "$T/nodes.good"'
+cp "$T/nodes.good" "$PR/nodes.json"
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'].append({'name': 'SC-X', 'type': 'ss', 'server': '192.0.2.29', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x'}); json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
+# ShellCrash：订阅配置里有 OpenAi 组（块写法）；参考节点里的 SC-X 和它的自定义节点重名，不补
+rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp -R "$T/shellcrash/." "$R/"; echo CrashCore > "$R/core"
+awk '{ sub(/^  - name: HK-A$/, "  - name: HK-A2") } /^rules:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" } { print }' "$T/shellcrash/etc/ShellCrash/yamls/config.yaml" > "$SCD/yamls/config.yaml"
+cp "$SCD/yamls/config.yaml" "$T/sc_base.fill"; sc_restart; n0=$(reloads)
+out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "ShellCrash 热加载：缺的补进运行配置、名字补进 OpenAi 组；和它的自定义节点重名的 SC-X 不补（说明原因，只有一个 SC-X）" '[ $rc -eq 0 ] && [ "$(reloads)" = $((n0 + 1)) ] && rget "$SCR" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B]" && printf "%s" "$out" | grep -q "参考节点「SC-X」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有补" && [ "$(sel "CCA-$s")" = AI-A ]'
+n0=$(reloads); r0=$(restarts); sc_restart
+ok "ShellCrash 重启：钩子把参考节点按文本插进订阅配置的副本（订阅配置一个字节不动），拼出来的运行配置读得出来，自定义节点照常接上" '[ "$(cat "$T/sc_core_config")" = "$R/tmp/cca.shellcrash.yaml" ] && ! grep -q SCBAD router.log && cmp -s "$SCD/yamls/config.yaml" "$T/sc_base.fill" && rget "$SCR" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B]" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ] && [ "$(sel "CCA-$s")" = AI-A ]'
+out=$(run cca router sync 2>&1); rc=$?
+out2=$(run cca router nodes 2>&1)
+ok "ShellCrash 重启后再同步：和热加载补的一样，不用再重载；cca router nodes 列得出参考节点，不列自定义节点" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && printf "%s" "$out2" | grep -qx AI-A && ! printf "%s" "$out2" | grep -q SC-X'
+python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); b='  - name: OpenAi\n    type: select\n    proxies:\n      - US-A\n'; assert s.count(b) == 1; open(p, 'w').write(s.replace(b, '  - {name: OpenAi, type: select, proxies: [US-A]}\n'))" "$SCD/yamls/config.yaml"
+sc_restart; n0=$(reloads)
+out=$(run cca router sync 2>&1); rc=$?
+ok "订阅配置里 OpenAi 组写成一行的：启动时只补节点、组不动；热加载也照这样补，重启后不会又要重载" 'grep -q "改成只补节点、不动策略组" "$R/tmp/cca-router.log" && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A]" && ! grep -q SCBAD router.log && [ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ]'
+rm -rf "$R"; cp -R "$T/router.snap" "$R"
+# 本机 Clash Verge：在外面时全局扩展脚本和热加载都补上（Verge 里也有 OpenAi 组）
+awk '/^rules:$/ { print "- name: OpenAi"; print "  type: select"; print "  proxies:"; print "  - US-A" } { print }' "$T/verge/base.snap" > "$T/verge/base.yaml"; "$T/verge_regen"
+touch "$T/away"; n0=$(vreloads)
+out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
+ok "在外面：Clash Verge 里也补上参考节点（热加载一次），走 AI-A 的账号照常启动" '[ $rc -eq 3 ] && [ "$(vreloads)" = $((n0 + 1)) ] && [ "$(vsel "CCA-$s")" = AI-A ] && ruby -ryaml -rjson -e "c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))[\"payload\"]); px = c[\"proxies\"].map { |p| p[\"name\"] }; g = c[\"proxy-groups\"].find { |x| x[\"name\"] == \"OpenAi\" }[\"proxies\"]; exit(px.include?(\"AI-A\") && px.include?(\"AI-B\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X] ? 0 : 1)" "$T/verge/last_put.json"'
+"$T/verge_regen"
+ok "全局扩展脚本（真的 JavaScript 引擎）补的和热加载的一样；在补好的配置上再跑一次结果不变" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); px = c[\"proxies\"].map { |p| p[\"name\"] }; g = c[\"proxy-groups\"].find { |x| x[\"name\"] == \"OpenAi\" }[\"proxies\"]; exit(px.include?(\"AI-A\") && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X] && c[\"proxy-groups\"].find { |x| x[\"name\"] == \"CCA-$s\" }[\"proxies\"][0] == \"AI-A\" ? 0 : 1)" "$T/verge/regen.json" && /usr/bin/osascript -l JavaScript "$T/verge/run_script.js" "$VS" "$T/verge/regen.json" > "$T/verge/regen2.json" && ruby -rjson -e "exit(JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1])) ? 0 : 1)" "$T/verge/regen.json" "$T/verge/regen2.json" && [ "$(vsel "CCA-$s")" = AI-A ]'
+out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
+ok "cca local setup：cca 会补上的参考节点不算 Clash Verge 里没有的" '! printf "%s" "$out" | grep "Clash Verge 里没有这些节点" | grep -q AI-A'
+# 还原：维护者不再发布参考节点（映射仓库里删掉 nodes.json），拉下来后这台机器上的也删掉
+rm -f "$PR/nodes.json" "$PR/nodes.json.sig"; out=$(run cca policy pull 2>&1)
+ok "映射仓库里没有 nodes.json 了：这台机器上的参考节点也删掉" '[ ! -e "$H/.cca/policy/nodes.json" ] && ! printf "%s" "$out" | grep -q "参考节点："'
+rm -f "$T/away"; cp "$T/verge/base.snap" "$T/verge/base.yaml"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
+run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"   # 全局扩展脚本里也不再带参考节点
 
 # 11b3. 维护者管理各台机器的 deploy key（policy.sh key）：假 gh 模拟 GitHub 的 deploy key 接口（存在 $T/deploy_keys.json），
 # 有 $T/policy_keys 时假 git 按它认 deploy key（没加上就拒绝，认出来了记下最近使用）

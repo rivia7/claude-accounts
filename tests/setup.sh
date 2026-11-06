@@ -64,7 +64,19 @@ cp "$R/etc/openclash/custom/openclash_custom_overwrite.sh" "$T/pristine_overwrit
 printf '%s\n' '/root/.ssh/' > "$R/etc/sysupgrade.conf"
 printf '7890\n7891\n7892\n7893\n7895\n9090\n' > "$R/listening"
 printf '#!/bin/sh\necho "cron $1" >> "%s/router.log"\n' "$T" > "$R/etc/init.d/cron"
-printf '#!/bin/sh\necho "CORE SAFE_PATHS=$SAFE_PATHS $*" >> "%s/router.log"\n[ -f "%s/router/core_fail" ] && { echo "level=error msg=parse config error"; exit 1; }\nexit 0\n' "$T" "$T" > "$R/etc/openclash/clash"
+# 假的 mihomo 内核（只管 -t 校验）：有 router/core_fail 时一律不通过；router/core_reject 里写着一段文字时，
+# 要校验的配置里有它就不通过（模拟这台路由器的内核不认参考配置里的某个节点）
+fake_core() {
+	cat <<C
+#!/bin/sh
+echo "$1 \$*" >> "$T/router.log"
+[ -f "$T/router/core_fail" ] && { echo "level=error msg=parse config error"; exit 1; }
+f=""; p=""; for a in "\$@"; do [ "\$p" = -f ] && f="\$a"; p="\$a"; done
+[ -f "$T/router/core_reject" ] && [ -n "\$f" ] && grep -qF "\$(cat "$T/router/core_reject")" "\$f" && { echo "level=error msg=proxy 3: unsupport proxy type"; exit 1; }
+exit 0
+C
+}
+fake_core 'CORE SAFE_PATHS=$SAFE_PATHS' > "$R/etc/openclash/clash"
 chmod +x "$R/etc/init.d/cron" "$R/etc/openclash/clash"
 
 # --- 路由器侧假命令（rbin）
@@ -105,7 +117,7 @@ printf '%s\n' 'TMPDIR=/tmp/ShellCrash' 'BINDIR=/etc/ShellCrash' 'COMMAND="$TMPDI
 echo '- {name: SC-X, type: ss, server: 192.0.2.9, port: 8388, cipher: aes-128-gcm, password: x} #Proxy' > "$S/etc/ShellCrash/yamls/proxies.yaml"
 printf '#!/bin/sh\necho "TASK $*" >> "%s/router.log"\n' "$T" > "$S/etc/ShellCrash/task/task.sh"
 echo '$CRASHDIR/task/task.sh 201 启动前测试任务' > "$S/etc/ShellCrash/task/bfstart"   # 用户自己的启动前任务
-printf '#!/bin/sh\necho "SCCORE $*" >> "%s/router.log"\n[ -f "%s/router/core_fail" ] && { echo "level=error msg=parse config error"; exit 1; }\nexit 0\n' "$T" "$T" > "$S/tmp/ShellCrash/CrashCore"
+fake_core SCCORE > "$S/tmp/ShellCrash/CrashCore"
 # start.sh restart|start 像真的一样：先 source task/bfstart（cca 的钩子在这里把 $core_config 换成插好端口池的副本），
 # 再按 ShellCrash 的做法把订阅配置按顶格的键拆成几段、和它自己的设置拼成运行配置：自定义节点接在节点那段后面；
 # 有 router/sc_vmess 时像它的 meta_listeners 一样追加一个两格缩进的入站。拼好的读不出来记 SCBAD。最后让（假的）内核加载
@@ -344,6 +356,18 @@ if [ -n "$proxy" ]; then
 			ip="${url##*/}"
 			if [ -f "$CCA_T/risk/$ip.json" ]; then cat "$CCA_T/risk/$ip.json"
 			else printf '{"is_datacenter":false,"isResidential":true,"is_vpn":false,"is_proxy":false,"is_tor":false,"is_abuser":false,"asOrganization":"Example Networks","countryCode":"us","trust_score":97}'; fi ;;
+		https://*.d.ip.net.coffee/pixel.gif)   # DNS 泄露检测：一次性的子域名经哪个端口解析，记在 $CCA_T/dnsq/<token>
+			tok="${url#https://}"; tok="${tok%%.d.ip.net.coffee/*}"; tok="${tok%-*}"
+			mkdir -p "$CCA_T/dnsq"; echo "$port" > "$CCA_T/dnsq/$tok" ;;
+		https://ip.net.coffee/api/dns/result/*)   # 来查这个 token 的解析器：$CCA_T/dns/<端口>（一行一个），默认是出口那边的 <网段>.53；dns_down 时连不上
+			[ -f "$CCA_T/dns_down" ] && exit 7
+			tok="${url##*/}"; p=$(cat "$CCA_T/dnsq/$tok" 2>/dev/null)
+			if [ -z "$p" ]; then list=""; elif [ -f "$CCA_T/dns/$p" ]; then list=$(cat "$CCA_T/dns/$p"); else list="$net.53"; fi
+			printf '{"token": "%s", "dns_servers": [%s]}' "$tok" "$(printf '%s\n' $list | sed '/^$/d; s/.*/"&"/' | paste -sd, -)" ;;
+		https://ip.net.coffee/api/geoip/*)   # 归属地：$CCA_T/geo/<IP>.json，默认美国
+			ip="${url##*/}"
+			if [ -f "$CCA_T/geo/$ip.json" ]; then cat "$CCA_T/geo/$ip.json"
+			else printf '{"country": "United States", "region": "", "city": "", "isp": "Example ISP", "country_code": "us"}'; fi ;;
 		*) exit 6 ;;
 	esac
 	exit 0
@@ -353,6 +377,13 @@ case "$url" in   # 直连的第三方 API 接口（不能落到下面真的 curl
 		echo "CURL api direct $url" >> "$CCA_T/curl.log"
 		[ -f "$CCA_T/api_down" ] && { printf 000; exit 7; }
 		printf 401; exit 0 ;;
+	https://ip.net.coffee/api/geoip/*)   # WebRTC 暴露的 IP 直连查归属地
+		echo "CURL direct $url" >> "$CCA_T/curl.log"
+		ip="${url##*/}"
+		if [ -f "$CCA_T/geo/$ip.json" ]; then cat "$CCA_T/geo/$ip.json"
+		else printf '{"country": "United States", "region": "", "city": "", "isp": "Example ISP", "country_code": "us"}'; fi
+		exit 0 ;;
+	https://*ip.net.coffee/*) echo "CURL direct $url" >> "$CCA_T/curl.log"; exit 7 ;;   # 别的 ip.net.coffee 接口不该直连
 esac
 exec /usr/bin/curl "$@"
 S
@@ -898,6 +929,30 @@ ruby -ryaml -rjson -e 'print JSON.generate(YAML.load_file(ARGV[0]))' "$VD/base.y
 ruby -ryaml -rjson -e 'c = JSON.parse(File.read(ARGV[0])); File.write(ARGV[1], YAML.dump(c)); File.write(ARGV[2], JSON.generate("payload" => YAML.dump(c)))' \
 	"$VD/regen.json" "$V/clash-verge.yaml" "$VD/regen.put" || exit 1
 CCA_T="$T" "$T/bin/curl" -s --unix-socket "$T/verge.sock" -X PUT --data-binary "@$VD/regen.put" 'http://localhost/configs?force=true' >/dev/null
+S
+# 假的 STUN 服务器（只在 127.0.0.1 上，泄露检测那一节才开）：回答 Binding 请求，说对方的公网 IP 是 $T/stun_ip 里写的（IPv4），
+# 端口写进 $T/stun.port；每次回答记在 $T/stun.log
+cat > "$T/fake_stun.py" <<'S'
+import os, socket, struct, sys
+T = sys.argv[1]
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(('127.0.0.1', 0))
+with open(os.path.join(T, 'stun.port.tmp'), 'w') as f:
+    f.write(str(s.getsockname()[1]))
+os.replace(os.path.join(T, 'stun.port.tmp'), os.path.join(T, 'stun.port'))
+while True:
+    d, a = s.recvfrom(2048)
+    if len(d) < 20 or d[:2] != b'\x00\x01':
+        continue
+    try:
+        ip = open(os.path.join(T, 'stun_ip')).read().strip()
+    except OSError:
+        continue
+    with open(os.path.join(T, 'stun.log'), 'a') as f:
+        f.write('STUN %s\n' % ip)
+    x = bytes(p ^ q for p, q in zip(socket.inet_aton(ip), d[4:8]))
+    attr = struct.pack('!HHBBH', 0x0020, 8, 0, 1, a[1] ^ 0x2112) + x
+    s.sendto(struct.pack('!HH', 0x0101, len(attr)) + d[4:20] + attr, a)
 S
 cat > "$T/edit.py" <<'S'
 #!/usr/bin/env python3

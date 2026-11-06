@@ -133,6 +133,19 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
    - 默认管第 4 步说的默认仓库，别的仓库加 `-R 你/仓库`。
 4. 默认仓库写在 `cca` 里（`POLICY_REPO_DEFAULT`）：用户运行 `cca policy setup` 不写仓库、启动时的引导，都用它。
 
+### 参考节点：自动补全 OpenAi 分流组
+
+维护者还可以顺带发布自己 Clash 配置里的一个策略组（默认 `OpenAi`）和它引用的节点。各台机器拉映射时一起拉下来（同样要有发布密钥的签名，存在 `~/.cca/policy/nodes.json`，只有自己能读），你的配置里缺的自动补上：
+
+- **补什么**：这个组里的节点，你的配置里没有的，定义补进 `proxies`，名字接在你的同名策略组后面。你已经有的不动：同名的节点照你自己的定义（只补进组）；同一个节点（类型、服务器、端口和 TLS 域名一样）在你那里叫别的名字，补进组的是你的名字；名字被你的策略组占了的不补。你的配置里没有这个组时只补节点。补上的节点也能选作账号的出口（`cca router setup`）。
+- **补到哪**：路由器上由 cca 的钩子在 OpenClash / ShellCrash 生成运行配置时补上，你自己的配置文件（OpenClash 的配置、ShellCrash 的订阅）一个字节不动，订阅更新以后照样补；出门在外用的 Clash Verge 经 cca 的全局扩展脚本补上。维护者改了某个节点，补进去的跟着更新。补上、更新都要让 OpenClash / ShellCrash 重载一次（约 20 秒），会先问你。
+- **先校验**：每一版参考节点都先用你路由器上的内核做一次 `-t` 校验，通过了才补（别处的节点你的内核不一定认，认不出的话整个 OpenClash / ShellCrash 都起不来）；不通过就这次不补，端口池照常，用这些节点的账号暂时断开。`cca router status` 里能看到还缺哪些。
+- ShellCrash 订阅配置里的这个组要是写成一行（`{name: OpenAi, …, proxies: […]}`），只补节点、不动组；和 ShellCrash 的自定义节点（`yamls/proxies.yaml`）同名的不补。
+- 维护者不再发布、或者删掉了某个参考节点：之前补进运行配置的，OpenClash / ShellCrash 下次重启后消失（卸载 cca 之后也一样）。
+- 参考节点里是节点的完整定义（服务器、UUID、密钥），每台拉得到映射的机器都拿得到。
+
+维护者这边：把你自己的 Clash 配置复制成映射仓库目录里的 `custom.yaml`，照常运行 `./policy.sh 映射仓库的目录`。它从里面抽出策略组 `OpenAi`（别的组名用 `CCA_FILL_GROUP=组名 ./policy.sh …`）引用的节点（组里的策略组、内置出站不算；规则、别的节点都不带），写成 `nodes.json`，签名后一起推上去。`custom.yaml` 本身不提交（里面有你全部的规则和局域网设备；已经提交过的会拒绝发布），也会加进这个仓库的 `.git/info/exclude`。想先看看会发布哪些：`./policy.sh nodes custom.yaml`。不再发布：删掉目录里的 `custom.yaml` 和 `nodes.json`，再运行一次。
+
 ## 查看用量
 
 ```sh
@@ -258,6 +271,10 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 - **出口所在地区**：如果出口在 Claude 不提供服务的地区（例如中国大陆、香港、俄罗斯），直接停止。
 - **IP 纯净度**（数据来自 ip.net.coffee）：分数太低会先问你还要不要继续。
+- **DNS / WebRTC 泄露**（照 ip.net.coffee 的 [DNS](https://ip.net.coffee/dns/)、[WebRTC](https://ip.net.coffee/webrtc/) 检测页的做法）：和出口检测同时在后台测，结果写在启动时的「泄露」那一行；只提示，不拦着启动。
+  - **DNS**：经这个账号的端口访问一次性的子域名，看是哪些 DNS 服务器来解析的。出口不在中国大陆、解析器却在中国大陆，就是泄露（网站的 DNS 能看出查询来自中国大陆），一般是节点在本地把域名解析好再发出去（比如直连、WireGuard 节点）。要几秒，所以结果按节点记 6 小时，平时启动不用等它。
+  - **WebRTC**：不经代理直接问 STUN 服务器（UDP）这台 Mac 的公网 IP，就是浏览器的 WebRTC 直连时网页拿得到的 IP；和账号的出口不一样就是泄露：账号的网页版、Claude App 里的网页（还有实时语音这类功能）都拿得到它，几个账号会露出同一个 IP。它和出口检测同时完成，不额外花时间。打开 App、要在浏览器里登录时会另外说明；可以在路由器上拦掉 STUN（UDP 3478、19302 端口）。
+  - `cca check` 每次都重新测，并写出解析器在哪；不想测的话在 `~/.cca/config.json` 里加上 `"leak_check": false`。`cca web` 照旧不做启动前检测（打开得快）。
 - **登录的是不是这个账号**：如果这个账号的窗口里登录成了别的邮箱，会拒绝启动并提示你重新登录，免得一个账号用了另一个账号的出口。
 - **共享设置有没有"串号"的配置**：`~/.claude/settings.json`（或 `settings.local.json`）的 env 里如果写了代理（包括 `NO_PROXY`）、`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商开关（`CLAUDE_CODE_USE_BEDROCK` / `VERTEX` / `FOUNDRY` / `MANTLE` 等），或者写了 `apiKeyHelper`，会盖掉每个账号自己的设置（官方账号的登录 token 甚至会被发到别的地址），cca 会拒绝启动并指出来。
 - **shell 环境**：shell 里 export 的 `ANTHROPIC_*`（包括 `ANTHROPIC_MODEL`）、`CLAUDE_CODE_OAUTH_TOKEN` 和云厂商开关，cca 启动时一律不带进去，并提示屏蔽了哪些。官方账号要换模型，写进 `~/.claude/settings.json` 或在会话里用 `/model`。
@@ -320,7 +337,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
 
 **cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
-能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
+能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
 
 **cca 会改我的 Clash Verge 配置吗？**
 只在它的全局扩展脚本末尾加一段带标记的代码，不碰你的订阅、规则和其它设置。`cca local off` 或 `cca restore` 会把这段原样删掉，脚本恢复成原来的样子。
@@ -355,10 +372,11 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 - **分开设备标识**：各账号的 `device.json` 固定保存客户端标识，初始化和旧配置迁移使用文件锁；Claude 的标识不参加共享设置合并，Codex 的 `installation_id` 不在共享白名单里。旧的设备文件若是软链接或硬链接，会原子替换为该账号自己的文件，避免写到共享源。
 - **分开出口**：cca 在路由器上开一组端口（从 7901 开始，8 个一组），每个端口绑定一个出口节点，每个账号用自己的端口上网。换节点通过 OpenClash / ShellCrash 内核的接口直接切换，不用重启。
 - **网页版**：每个账号有一个专属的 Chrome 窗口（独立的浏览器资料，走同一个端口），所以网页版和 Claude Code 的出口一致。
+- **泄露检测**：DNS 那项经账号的端口访问 `<随机串>-1.d.ip.net.coffee`，ip.net.coffee 的权威 DNS 记下来查的解析器，再经同一个端口问它要结果、查归属地（按网段记 7 天）；WebRTC 那项是 Python 直接发 STUN Binding 请求（IPv4、IPv6 都试），对方看到的 IP 不经账号的出口查归属地。结果在 `~/.cca/leak.json`。
 - **用量**：cca 以账号的配置目录、经账号的端口无界面地启动 Claude Code（`--safe-mode`，不加载插件、hooks、MCP），发一个 `get_usage` 控制请求，拿到和 `/usage` 一样的数据；登录 token 的读取和刷新都由 Claude Code 自己完成。
 - **第三方 API 账号**：接口地址、模型经 `claude --settings` 传入（优先级高于共享的 settings.json），key 由 `apiKeyHelper` 回调 cca 从钥匙串取，不进环境变量。
 - **Codex**：每个账号一个 `CODEX_HOME`，`~/.codex` 里白名单上的条目链接进去（白名单以外的默认各账号一份，新版本 Codex 加了文件也不会误共享）；数据库经 `CODEX_SQLITE_HOME` 共用。登录和查用量都经 codex 自己的 app-server（`account/login/start`、`account/rateLimits/read`），报的客户端名和 `codex login` 一样。
-- **路由器端**：改动放在 `/etc/cca`。OpenClash 通过它的"覆写脚本"注入；ShellCrash 通过它的"启动前任务"（`task/bfstart` 里的一行，下一版起是 `configs/task/bfstart`）把订阅配置换成插好端口池的副本，订阅配置本身不动。每 2 分钟自检一次，刷固件时保留。
+- **路由器端**：改动放在 `/etc/cca`。OpenClash 通过它的"覆写脚本"注入；ShellCrash 通过它的"启动前任务"（`task/bfstart` 里的一行，下一版起是 `configs/task/bfstart`）把订阅配置换成插好端口池的副本，订阅配置本身不动。维护者的参考节点也是这时补上的（每一版先用内核校验过，记在 `/etc/cca/fill.ok`）。每 2 分钟自检一次，刷固件时保留。
 - **出门在外**：本机的端口池和路由器上的一样（127.0.0.1:7901 起，每个端口一个策略组），写在 Clash Verge 的全局扩展脚本里，它每次重新生成配置都会带上；cca 经它内核的控制接口切换节点，第一次配置时把端口池直接热加载进正在运行的内核。
 
 <details>

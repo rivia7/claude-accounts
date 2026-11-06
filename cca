@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.3"
+VERSION="2.8.0-beta.4"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -911,6 +911,99 @@ def alias_problems(j, names):
     return errs
 
 
+# --- 维护者参考配置里的节点（映射仓库里的 nodes.json，./policy.sh 从维护者的 custom.yaml 抽出一个策略组和它引用的节点）：
+# 路由器和本机 Clash Verge 的配置里缺的补进 proxies，名字补进同名策略组。三处做法一样：路由器端的 apply.rb、
+# 全局扩展脚本里的 ccaFill、这里的 fill_plan（热加载 Clash Verge、合并路由器的节点列表时用）
+FILL_FILE = os.path.join(CCA_HOME, 'policy', 'nodes.json')   # bash 的 policy_fetch 验签后才放进来
+FILL_BUILTIN = ('DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL')
+
+
+def fill_name_ok(n):
+    """策略组、节点的名字：不能是空的，首尾不能有空格，不能有控制字符（路由器上按 TAB 分列），不能以 CCA- 开头（cca 自己的组）"""
+    return (isinstance(n, str) and 0 < len(n) <= 128 and n == n.strip() and not re.search(r'[\x00-\x1f\x7f]', n)
+            and not n.startswith('CCA-'))
+
+
+def fill_problems(j):
+    """参考节点文件的问题：{"version": 1, "group": "策略组", "proxies": [节点定义, …]}（节点定义和 Clash 配置里的一样）。
+    客户端和维护者发布前查的是同一套：文件是签过名的，有问题就整个不用"""
+    if not isinstance(j, dict):
+        return ['应该是 JSON 对象，例如 {"version": 1, "group": "OpenAi", "proxies": [{"name": "节点", "type": "vless", …}]}']
+    errs = [] if j.get('version') == 1 else ['version 应该是 1']
+    if not fill_name_ok(j.get('group')):
+        errs.append('group 应该是策略组的名字（不能是空的，不能有控制字符，不能以 CCA- 开头）')
+    px = j.get('proxies')
+    if not isinstance(px, list) or not px:
+        return errs + ['proxies 应该是节点定义的列表（至少一个）']
+    seen = set()
+    for i, p in enumerate(px, 1):
+        n = p.get('name') if isinstance(p, dict) else None
+        where = '第 %d 个节点%s' % (i, '「%s」' % n if isinstance(n, str) else '')
+        if not isinstance(p, dict):
+            errs.append('%s应该是对象' % where)
+            continue
+        if not fill_name_ok(n) or n in FILL_BUILTIN:
+            errs.append('%s：name 不能是空的，首尾不能有空格，不能有控制字符，不能以 CCA- 开头，也不能是 DIRECT、REJECT 这些内置的名字' % where)
+        elif n in seen:
+            errs.append('%s：名字重复了' % where)
+        seen.add(n)
+        if not (isinstance(p.get('type'), str) and re.match(r'^[A-Za-z0-9_-]{1,32}$', p['type'])):
+            errs.append('%s：type 不对' % where)
+        if not (isinstance(p.get('server'), str) and re.match(r'^[^\s\x00-\x1f\x7f]{1,255}$', p['server'])):
+            errs.append('%s：server 不对' % where)
+        port = p.get('port')
+        if isinstance(port, str) and re.match(r'^\d{1,5}$', port):
+            port = int(port)
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+            errs.append('%s：port 应该是 1–65535' % where)
+    return errs
+
+
+def policy_fill():
+    """维护者的参考节点：{'id': 摘要, 'group': 策略组, 'proxies': [节点定义…]}；没有、读不了、格式不对都是 None。
+    id 随内容变：路由器按它认这一版有没有在自己的内核上校验过"""
+    j = load_quiet(FILL_FILE)
+    if fill_problems(j):
+        return None
+    s = json.dumps([j['group'], j['proxies']], ensure_ascii=False, sort_keys=True)
+    return {'id': hashlib.sha256(s.encode('utf-8')).hexdigest()[:16], 'group': j['group'], 'proxies': j['proxies']}
+
+
+def fill_fp(p):
+    return node_fp(p.get('type'), p.get('server'), p.get('port'), p.get('servername') or p.get('sni'))
+
+
+def fill_plan(have, names, f=MISSING):
+    """参考节点怎么补进一份配置：have 是配置里的节点 [(名字, 摘要)]，names 是节点和策略组的全部名字。返回
+    (要加的节点定义, 要补进策略组的名字, 策略组名)。同名的节点是用户自己的（只补进组），名字被策略组占了的不补，
+    用户已经有同一个节点（摘要一样）只是叫法不同的用他的名字，要经别的节点连接（dialer-proxy）而那个节点没有的不补"""
+    f = policy_fill() if f is MISSING else f
+    if not f:
+        return [], [], ''
+    px = {n for n, _ in have}
+    by = {}
+    for n, g in have:
+        if g:
+            by.setdefault(g, n)
+    taken = set(names) | px | set(FILL_BUILTIN)
+    ok = {p['name'] for p in f['proxies'] if p['name'] not in taken and not by.get(fill_fp(p))}
+    add, members = [], []
+    for p in f['proxies']:
+        n, g, dp = p['name'], fill_fp(p), p.get('dialer-proxy')
+        if n in px:
+            members.append(n)
+        elif n in taken:
+            continue
+        elif g and g in by:
+            members.append(by[g])
+        elif dp and (not isinstance(dp, str) or (dp not in taken and dp not in ok)):
+            continue
+        else:
+            add.append(p)
+            members.append(n)
+    return add, list(dict.fromkeys(members)), f['group']
+
+
 def reconcile(c, t, tool, reserved=()):
     """校验一个工具的账号表；给走节点的账号分配固定端口（直连的第三方 API 账号不占端口），回收已删除账号的端口。
     reserved 是别的工具占着的端口（大家共用一个端口池），不分给这张表。返回错误列表。
@@ -1143,10 +1236,15 @@ def cmd_node_default():
 
 
 def router_accounts(c):
-    """路由器端口池的内容：各工具走节点的账号（直连的第三方 API 账号不占槽位）"""
-    return {'base': FIRST_PORT - 1, 'slots': pool_size(c), 'nodes': c['nodes'],
-            'accounts': [{'slot': p - FIRST_PORT + 1, 'name': tool.pool_prefix + acct_id(k, tool), 'node': node_of(v)}
-                         for tool, k, v, p in pool(c)]}
+    """路由器端口池的内容：各工具走节点的账号（直连的第三方 API 账号不占槽位）。有维护者的参考节点时带上 fill：
+    路由器生成运行配置时把缺的补上（没有参考节点时和以前逐字节一样）"""
+    out = {'base': FIRST_PORT - 1, 'slots': pool_size(c), 'nodes': c['nodes'],
+           'accounts': [{'slot': p - FIRST_PORT + 1, 'name': tool.pool_prefix + acct_id(k, tool), 'node': node_of(v)}
+                        for tool, k, v, p in pool(c)]}
+    f = policy_fill()
+    if f:
+        out['fill'] = f
+    return out
 
 
 # --- 账号设备标识：先于登录准备，重新登录和改别名都不换 -------------------------
@@ -1565,9 +1663,9 @@ def api_settings(key, v):
     return json.dumps({'apiKeyHelper': helper, 'env': api_env(v)}, ensure_ascii=False)
 
 
-# ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、Codex 的登录 token、各账号的 Chrome 和
-# 桌面 App 资料目录里的 cookie）
-CCA_DIR_PRIVATE = ('policy/id_ed25519', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
+# ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、维护者参考节点里的节点密钥、Codex 的登录 token、
+# 各账号的 Chrome 和桌面 App 资料目录里的 cookie）
+CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
                    'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**')
 
 
@@ -1685,6 +1783,45 @@ def cmd_policy_check(path, strict=''):
     for e in errs:
         print(e)
     sys.exit(1 if errs else 0)
+
+
+def cmd_fill_check(path):
+    """检查参考节点文件（拉下来验签之后、维护者发布之前）：有问题就打印出来（stdout）并返回 1"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            j = json.load(f)
+    except (OSError, ValueError) as e:
+        print('读不了，或者不是正确的 JSON：%s' % e)
+        sys.exit(1)
+    errs = fill_problems(j)
+    for e in errs:
+        print(e)
+    sys.exit(1 if errs else 0)
+
+
+def cmd_fill_summary():
+    """参考节点的摘要，例如：策略组 OpenAi 的 11 个节点；没有参考节点时什么都不打印"""
+    f = policy_fill()
+    if f:
+        print('策略组 %s 的 %d 个节点' % (f['group'], len(f['proxies'])))
+
+
+def cmd_nodes_fill():
+    """stdin 是路由器上的节点列表（cca-router.sh nodes 的输出），原样输出，后面接上参考节点里路由器上还没有的：
+    同步时路由器会补上它们，可选节点里先就选得到，改名跟随也不会把它们当成丢了。没读到节点时只原样输出"""
+    text = sys.stdin.read()
+    sys.stdout.write(text)
+    have = parse_node_list(text)
+    if not have:
+        return
+    if not text.endswith('\n'):
+        sys.stdout.write('\n')
+    names = {f[1] for f in (line.split('\t') for line in text.split('\n')) if len(f) > 1 and f[0] in ('P', 'G', 'C')}
+
+    def col(v):
+        return str('' if v is None else v).replace('\t', ' ').replace('\n', ' ')
+    for p in fill_plan(have, names)[0]:
+        print('\t'.join(['P'] + [col(p.get(k)) for k in ('name', 'type', 'server', 'port')] + [col(p.get('servername') or p.get('sni'))]))
 
 
 def cmd_policy_repo():
@@ -2230,11 +2367,39 @@ VERGE_SCRIPT = '// Define main function (script entry)\n\nfunction main(config, 
 LOCAL_BLOCK = re.compile(r'\n// >>> cca >>>.*?// <<< cca <<<\n', re.S)
 # 加在 Clash Verge 全局扩展脚本末尾：包住原来的 main，在它的结果上加端口池（重复执行结果不变）
 LOCAL_JS = r"""// >>> cca >>> 本机分流端口池（cca 自动维护，不要手改这一段；cca local off 会删掉它）
-// 127.0.0.1 上的入站 cca-n → 策略组 CCA-n，启动账号前 cca 会把组切到它的节点；原来的配置和规则不变
+// 127.0.0.1 上的入站 cca-n → 策略组 CCA-n，启动账号前 cca 会把组切到它的节点；原来的配置和规则不变。
+// 有维护者参考配置里的节点（fill）时：配置里没有的（名字和服务器地址都对不上）补进 proxies，名字补进同名策略组
 var ccaUserMain = typeof main === 'function' ? main : function (config) { return config; };
+var ccaFill = function (config, fill) {
+  var px = config.proxies = config.proxies || [], gs = config['proxy-groups'] || [], add = [];
+  var seen = Object.create(null), by = Object.create(null), ok = Object.create(null);
+  var norm = function (v) { return String(v == null ? '' : v).trim().toLowerCase(); };
+  var key = function (p) {   // 和 cca 认节点一样：类型、服务器、端口、TLS 域名
+    var s = norm(p.server).replace(/\.+$/, '');
+    return s ? [norm(p.type), s, norm(p.port), norm(p.servername || p.sni).replace(/\.+$/, '')].join('|') : '';
+  };
+  px.forEach(function (p) { if (p && p.name) { seen[p.name] = 'p'; if (key(p) && !by[key(p)]) by[key(p)] = p.name; } });
+  gs.concat(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL'].map(function (n) { return { name: n }; }))
+    .forEach(function (g) { if (g && g.name && !seen[g.name]) seen[g.name] = 'g'; });
+  fill.proxies.forEach(function (p) { if (!seen[p.name] && !by[key(p)]) ok[p.name] = 1; });
+  fill.proxies.forEach(function (p) {
+    var k = key(p), d = p['dialer-proxy'];
+    if (seen[p.name] === 'p') add.push(p.name);   // 同名的是用户自己的节点：只补进组
+    else if (seen[p.name]) return;               // 名字被策略组占了
+    else if (k && by[k]) add.push(by[k]);        // 同一个节点，用户那边叫别的名字
+    else if (d && !seen[d] && !ok[d]) return;    // 要经别的节点连接，那个节点没有
+    else { px.push(JSON.parse(JSON.stringify(p))); seen[p.name] = 'p'; add.push(p.name); }
+  });
+  gs.forEach(function (g) {
+    if (!g || g.name !== fill.group || g.type === 'relay' || g['include-all'] === true || g['include-all-proxies'] === true) return;
+    g.proxies = g.proxies || [];
+    add.forEach(function (n) { if (g.proxies.indexOf(n) < 0) g.proxies.push(n); });
+  });
+};
 main = function (config, profileName) {
-  var pool = @POOL@, have = {}, keep = function (re) { return function (x) { return !(x && re.test(x.name)); }; };
+  var pool = @POOL@, fill = @FILL@, have = {}, keep = function (re) { return function (x) { return !(x && re.test(x.name)); }; };
   config = ccaUserMain(config, profileName) || config;
+  if (fill) ccaFill(config, fill);
   (config.proxies || []).concat(config['proxy-groups'] || []).forEach(function (p) { if (p && p.name) have[p.name] = 1; });
   config['proxy-groups'] = (config['proxy-groups'] || []).filter(keep(/^CCA-\d+$/));
   config.listeners = (config.listeners || []).filter(keep(/^cca-\d+$/));
@@ -2272,7 +2437,11 @@ def local_want(c):
     """端口池的结构（可选节点在客户端里的叫法 + 槽位数）：变了才需要让客户端重新加载；只换节点走控制接口。
     Clash Verge 里给节点改了名，换算出来的叫法变了，也要重新加载（端口池的组成员要换成新名字）"""
     m = local_names(c)
-    return hashlib.sha1(json.dumps([sorted(m.get(n, n) for n in c['nodes']), pool_size(c)]).encode('utf-8')).hexdigest()
+    want = [sorted(m.get(n, n) for n in c['nodes']), pool_size(c)]
+    f = policy_fill()
+    if f:   # 维护者的参考节点变了也要重新加载（没有参考节点时摘要和以前一样）
+        want.append(f['id'])
+    return hashlib.sha1(json.dumps(want).encode('utf-8')).hexdigest()
 
 
 def local_names(c):
@@ -2286,7 +2455,9 @@ def local_names(c):
             lines = f.read().split('\n')
     except OSError:
         return {}
-    have = yaml_proxies(lines, yaml_sections(lines))
+    secs = yaml_sections(lines)
+    have = yaml_proxies(lines, secs)
+    have += [(p['name'], fill_fp(p)) for p in fill_plan(have, yaml_names(lines, secs))[0]]   # cca 会补进去的参考节点也算有
     out = {}
     for n in c['nodes']:
         m = node_match(n, node_ids(c).get(n, ''), have)
@@ -2380,7 +2551,10 @@ def cmd_local_script(path, action='install'):
             base = VERGE_SCRIPT
         c, t, _ = ctx()
         slots = json.dumps([list(x) for x in slot_orders(c, local=True)], ensure_ascii=False)
-        new = base + ('' if base.endswith('\n') else '\n') + '\n' + LOCAL_JS.replace('@POOL@', slots) + '\n'
+        f = policy_fill()   # 参考节点按 ASCII 写（JSON 里的 U+2028 这类字符在 JavaScript 源码里会断行）
+        fill = json.dumps({'group': f['group'], 'proxies': f['proxies']}, sort_keys=True) if f else 'null'
+        new = (base + ('' if base.endswith('\n') else '\n') + '\n'
+               + LOCAL_JS.replace('@POOL@', slots).replace('@FILL@', fill) + '\n')
     if new != old:
         write_text(path, new)
 
@@ -2469,9 +2643,42 @@ def yaml_proxies(lines, secs):
     return out
 
 
+def fill_members(item, names):
+    """运行配置里一个策略组条目（serde_yaml 的块写法：键缩进两格，proxies 的成员一行一个 "  - 名字"）末尾补上 names 里
+    还没有的。一行写完的条目、proxies 写成 […] 的、relay 和 include-all 的组不动（Clash Verge 下次按全局扩展脚本重新
+    生成配置时会补上）"""
+    if item[0][1:].lstrip().startswith('{'):
+        return item
+    keys = {}
+    for j, line in enumerate(item):
+        if j == 0 or (line.startswith('  ') and line[2:3] not in (' ', '-')):
+            m = re.match(r'(?:- |  )([A-Za-z0-9_-]+):\s*(.*)$', line)
+            if m:
+                keys.setdefault(m.group(1), (j, yaml_unquote(m.group(2))))
+    if (keys.get('type', (0, ''))[1] == 'relay' or 'true' in (keys.get('include-all', (0, ''))[1],
+                                                               keys.get('include-all-proxies', (0, ''))[1])):
+        return item
+    if 'proxies' not in keys:
+        end = len(item)
+        while end > 1 and not item[end - 1].strip():
+            end -= 1
+        return item[:end] + ['  proxies:'] + ['  - ' + json.dumps(n, ensure_ascii=False) for n in names] + item[end:]
+    j, v = keys['proxies']
+    if v not in ('', '[]'):
+        return item
+    k, cur = j + 1, []
+    while v == '' and k < len(item) and item[k].startswith('  - '):
+        cur.append(yaml_unquote(item[k][4:]))
+        k += 1
+    more = [n for n in names if n not in cur]
+    if not more:
+        return item
+    return item[:j] + ['  proxies:'] + item[j + 1:k] + ['  - ' + json.dumps(n, ensure_ascii=False) for n in more] + item[k:]
+
+
 def cmd_local_patch(path, mode='install'):
-    """给 PUT /configs 用的 JSON：Clash Verge 当前的运行配置加上端口池（mode=remove 时去掉）。
-    只动 proxy-groups 和 listeners 里 cca 的条目，其余逐字保留；看不懂格式时返回 1"""
+    """给 PUT /configs 用的 JSON：Clash Verge 当前的运行配置加上端口池（mode=remove 时去掉），有维护者的参考节点时把缺的
+    补进 proxies、名字补进同名策略组（和全局扩展脚本做的一样）。只动这几处，其余逐字保留；看不懂格式时返回 1"""
     c, t, _ = ctx()
     try:
         with open(path, encoding='utf-8') as f:
@@ -2482,14 +2689,20 @@ def cmd_local_patch(path, mode='install'):
     if 'proxies' not in secs and 'proxy-providers' not in secs:
         sys.exit(1)
     have = yaml_names(lines, secs)
-    add = {'proxy-groups': [], 'listeners': []}
+    add = {'proxy-groups': [], 'listeners': [], 'proxies': []}
+    fmem, fgrp = [], None
     if mode != 'remove':
+        fadd, fmem, fgrp = fill_plan(yaml_proxies(lines, secs), have)
+        add['proxies'] = ['- ' + json.dumps(p, ensure_ascii=False) for p in fadd]
+        have |= {p['name'] for p in fadd}
         for g, p, order in slot_orders(c, local=True):
             add['proxy-groups'].append('- ' + json.dumps({'name': g, 'type': 'select', 'proxies': local_members(order, have)},
                                                          ensure_ascii=False))
             add['listeners'].append('- ' + json.dumps({'name': g.lower(), 'type': 'mixed', 'listen': '127.0.0.1', 'port': p,
                                                        'users': [], 'proxy': g}))
     ours = {'proxy-groups': re.compile(r'CCA-\d+$'), 'listeners': re.compile(r'cca-\d+$')}
+    if add['proxies']:
+        ours['proxies'] = None   # 节点只往后加，原来的一个不动
     tail = []
     for key in sorted(ours, key=lambda k: -secs.get(k, [-1])[0]):   # 从后往前改，前面段落的行号不受影响
         if key not in secs:
@@ -2504,8 +2717,8 @@ def cmd_local_patch(path, mode='install'):
         while i < e:
             if i in starts:
                 b, n = starts[i]
-                if not (n and ours[key].match(n)):
-                    new += lines[i:b]
+                if not (n and ours[key] and ours[key].match(n)):
+                    new += fill_members(lines[i:b], fmem) if key == 'proxy-groups' and fmem and n == fgrp else lines[i:b]
                 i = b
             else:
                 new.append(lines[i])
@@ -2531,6 +2744,9 @@ def cmd_local_missing(path):
         return
     secs = yaml_sections(lines)
     have, px = yaml_names(lines, secs), yaml_proxies(lines, secs)
+    extra = fill_plan(px, have)[0]   # cca 会补进去的参考节点不算没有
+    have |= {p['name'] for p in extra}
+    px += [(p['name'], fill_fp(p)) for p in extra]
     print('、'.join(n for n in c['nodes'] if n not in have and not node_match(n, node_ids(c).get(n, ''), px)))
 
 
@@ -2926,6 +3142,269 @@ def cmd_coffee(min_trust, trace, risk):
     if score < int(min_trust):
         print('纯净度低于设定的 %s' % min_trust)
         sys.exit(1)
+
+
+# --- DNS / WebRTC 泄露检测（照 ip.net.coffee 的 DNS、WebRTC 检测页的做法）：和出口检测同时在后台跑，不拖慢启动 ------------------
+# DNS：经账号的端口访问两个一次性的子域名（<token>-n.d.ip.net.coffee），由账号出口那边去解析，ip.net.coffee 的权威 DNS 记下是哪些
+# 解析器来查的（/api/dns/result/<token>）；有中国大陆的解析器、出口又不在中国大陆就是泄露。要几秒，结果按 线路|节点 缓存。
+# WebRTC：直连（不经代理）问 STUN 服务器自己的公网 IP，就是浏览器的 WebRTC 用 UDP 直连时网页拿得到的 IP，和账号的出口不同就是泄露
+LEAK_FILE = os.path.join(CCA_HOME, 'leak.json')   # 缓存：DNS 的结果（按 线路|节点）、IP 归属地
+LEAK_DNS_TTL = 6 * 3600   # DNS 怎么解析取决于节点和路由器的设置，不常变
+LEAK_FAIL_TTL = 600       # 没测成的过 10 分钟再测
+LEAK_GEO_TTL = 7 * 86400
+LEAK_DEADLINE = 5         # 后台检测最多这么多秒（和出口检测同时跑）
+STUN_SERVERS = (('stun.cloudflare.com', 3478), ('stun.l.google.com', 19302))   # 和检测页用的一样
+COFFEE = 'https://ip.net.coffee'
+IP_TEXT = re.compile(r'^[0-9A-Fa-f:.]{2,45}$')
+
+
+def leak_curl(url, proxy='', timeout=4.0):
+    """经 curl 取网址（测试里的假 curl 照样管得到）：proxy 是账号的端口，空的是直连。拿不到返回 None"""
+    import subprocess
+    timeout = max(float(timeout), 0.5)
+    try:
+        r = subprocess.run(['curl', '-s', '-m', '%.1f' % timeout] + (['-x', proxy] if proxy else []) + [url],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout + 2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 else None
+
+
+def leak_json(text):
+    try:
+        return json.loads(text) if text else None
+    except ValueError:
+        return None
+
+
+def leak_cache():
+    j = load_quiet(LEAK_FILE)
+    return j if isinstance(j, dict) else {}
+
+
+def ip_prefix(ip):
+    """归属地按网段记：IPv4 的 /24、IPv6 的 /48（公共 DNS 的解析器常在几个网段里换着来，按 IP 记几乎每次都对不上）"""
+    if ':' in ip:
+        import ipaddress
+        try:
+            return str(ipaddress.ip_network(ip + '/48', strict=False))
+        except ValueError:
+            return ip
+    p = ip.split('.')
+    return '.'.join(p[:3]) + '.0/24' if len(p) == 4 else ip
+
+
+def leak_geo(ips, proxy, known):
+    """这些 IP 所在网段的归属地 {网段: {t, cc, country, isp}}：known 里有的不再查，别的每个网段挑一个 IP 同时查 ip.net.coffee 的 /api/geoip"""
+    import threading
+    want = {}
+    for ip in ips:
+        if IP_TEXT.match(ip):
+            want.setdefault(ip_prefix(ip), ip)
+    out = {k: known[k] for k in want if k in known}
+
+    def one(k, ip):
+        j = leak_json(leak_curl('%s/api/geoip/%s' % (COFFEE, ip), proxy, 4 if proxy else 2))
+        if isinstance(j, dict):
+            out[k] = {'t': time.time(), 'cc': str(j.get('country_code') or '').lower(),
+                      'country': str(j.get('country') or ''), 'isp': str(j.get('isp') or '')}
+        else:   # 查不到也记下（一小时）：ip.net.coffee 连不上时别每次启动都等它
+            out[k] = {'t': time.time(), 'cc': '', 'country': '', 'isp': '', 'miss': True}
+    ts = [threading.Thread(target=one, args=(k, ip)) for k, ip in want.items() if k not in out]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    return out
+
+
+def geo_fresh(g, now):
+    return isinstance(g, dict) and now - g.get('t', 0) < (3600 if g.get('miss') else LEAK_GEO_TTL)
+
+
+def leak_where(g):
+    """归属地写成一句：国家 · ISP"""
+    return ' · '.join(x for x in ((g or {}).get('country'), (g or {}).get('isp')) if x)
+
+
+def stun_parse(data, tid):
+    """STUN Binding 成功响应里的地址：XOR-MAPPED-ADDRESS 优先，旧服务器的 MAPPED-ADDRESS 也认"""
+    import socket, struct
+    if len(data) < 20 or data[8:20] != tid or struct.unpack('!HHI', data[:8])[::2] != (0x0101, 0x2112A442):
+        return ''
+    got, i, end = {}, 20, min(len(data), 20 + struct.unpack('!H', data[2:4])[0])
+    while i + 4 <= end:
+        kind, size = struct.unpack('!HH', data[i:i + 4])
+        v = data[i + 4:i + 4 + size]
+        if kind in (0x0001, 0x0020, 0x8020) and len(v) >= 8 and v[1] in (1, 2):
+            n = 4 if v[1] == 1 else 16
+            a = v[4:4 + n]
+            if len(a) == n:
+                if kind != 0x0001:   # 和魔数（IPv6 还要加上事务号）异或过
+                    a = bytes(x ^ y for x, y in zip(a, data[4:8] + tid))
+                got[kind] = socket.inet_ntop(socket.AF_INET if n == 4 else socket.AF_INET6, a)
+        i += 4 + size + (-size % 4)
+    return got.get(0x0020) or got.get(0x8020) or got.get(0x0001) or ''
+
+
+def stun_probe(host, port, family, timeout):
+    """直连发一个 STUN Binding 请求，返回对方看到的公网 IP；没有回应、没有这种地址（没有真的 IPv6）是空的"""
+    import socket, struct
+    try:
+        af, _, _, _, addr = socket.getaddrinfo(host, port, family, socket.SOCK_DGRAM)[0]
+    except (OSError, IndexError):
+        return ''
+    if af == socket.AF_INET6 and addr[0].lower().startswith('::ffff:'):
+        return ''
+    tid = os.urandom(12)
+    s = socket.socket(af, socket.SOCK_DGRAM)
+    try:   # connect 过的 UDP 套接字：端口不通时马上报错，不用干等
+        s.settimeout(timeout)
+        s.connect(addr)
+        s.send(struct.pack('!HHI', 1, 0, 0x2112A442) + tid)
+        end = time.time() + timeout
+        while time.time() < end:
+            s.settimeout(max(end - time.time(), 0.01))
+            ip = stun_parse(s.recv(2048), tid)
+            if ip:
+                return ip
+    except OSError:
+        pass
+    finally:
+        s.close()
+    return ''
+
+
+def stun_ips(timeout=1.0):
+    """浏览器的 WebRTC 用 UDP 直连时网页拿得到的公网 IP：同时问几个 STUN 服务器（IPv4、IPv6 都试）。CCA_STUN=主机:端口,… 换服务器（测试用）"""
+    import socket, threading
+    env = os.environ.get('CCA_STUN', '')
+    servers = [(h, int(p)) for h, p in (x.rsplit(':', 1) for x in env.split(',') if re.match(r'^[^:,]+:\d+$', x))] if env else STUN_SERVERS
+    got = []
+    ts = [threading.Thread(target=lambda h=h, p=p, f=f: got.append(stun_probe(h, p, f, timeout)), daemon=True)
+          for h, p in servers for f in (socket.AF_INET, socket.AF_INET6)]
+    for t in ts:
+        t.start()
+    end = time.time() + timeout + 0.5   # STUN 服务器的域名解析卡住时也不等（getaddrinfo 自己没有超时）
+    for t in ts:
+        t.join(max(end - time.time(), 0))
+    return sorted({ip for ip in list(got) if ip})
+
+
+def leak_dns(proxy, deadline):
+    """经账号的端口解析两个一次性的子域名，再问 ip.net.coffee 是哪些解析器来查的：{ok, servers}。
+    要的只是那边的解析器来查过：不等图片请求做完（HTTPS 往返要一两秒），最多一秒就开始问"""
+    import threading
+    tok = uuid.uuid4().hex[:20]
+    ts = [threading.Thread(target=leak_curl, daemon=True, args=('https://%s-%d.d.ip.net.coffee/pixel.gif' % (tok, i), proxy,
+                                                                min(2.5, deadline - time.time()))) for i in (1, 2)]
+    for t in ts:
+        t.start()
+    end = min(time.time() + 1.0, deadline)
+    for t in ts:
+        t.join(max(end - time.time(), 0))
+    ok, servers = False, []
+    for n in range(4):   # 一般第一次就有；没有时稍等再问
+        if deadline - time.time() < 0.5:
+            break
+        j = leak_json(leak_curl('%s/api/dns/result/%s' % (COFFEE, tok), proxy, min(3, deadline - time.time())))
+        if isinstance(j, dict) and isinstance(j.get('dns_servers'), list):
+            ok = True
+            servers = [s for s in j['dns_servers'] if isinstance(s, str) and IP_TEXT.match(s)]
+            if servers:
+                break
+        if n < 3:
+            time.sleep(min(0.5, max(deadline - time.time() - 0.5, 0)))
+    return {'ok': ok, 'servers': list(dict.fromkeys(servers))[:16]}
+
+
+def leak_dns_fresh(d, since=0.0):
+    """缓存的 DNS 结果还能用：没测成的 10 分钟、测成的 6 小时；since（cca check 开始的时间）之前测的不算"""
+    if not isinstance(d, dict) or not isinstance(d.get('t'), (int, float)) or d['t'] < since:
+        return False
+    return time.time() - d['t'] < (LEAK_DNS_TTL if d.get('ok') else LEAK_FAIL_TTL)
+
+
+def cmd_leak_probe(proxy, key, since=''):
+    """后台跑（和出口检测同时）：STUN 直连看 WebRTC 会暴露的 IP；DNS 的缓存不能用时经账号的端口测一次（解析器的归属地也经它查）。
+    结果（JSON）打到 stdout，由 leak-verdict 汇总、写缓存。config.json 的 leak_check 设成 false 时什么都不测"""
+    import threading
+    c = load_quiet(CFG)
+    if isinstance(c, dict) and c.get('leak_check') is False:
+        print(json.dumps({'off': True}))
+        return
+    cache = leak_cache()
+    deadline, res = time.time() + LEAK_DEADLINE, {}
+    known = {k: g for k, g in (cache.get('geo') or {}).items() if geo_fresh(g, time.time())}
+
+    def dns():
+        r = leak_dns(proxy, deadline)
+        r['geo'] = leak_geo(r['servers'], proxy, known)
+        res['dns'] = r
+
+    def webrtc():
+        res['stun'] = {'ips': stun_ips()}
+    jobs = [webrtc] + ([] if leak_dns_fresh((cache.get('dns') or {}).get(key), float(since or 0)) else [dns])
+    ts = [threading.Thread(target=j, daemon=True) for j in jobs]
+    for t in ts:
+        t.start()
+    for t in ts:   # 到时间还没做完的不要了（没有它的结果，汇总时就不提）
+        t.join(max(deadline + 1 - time.time(), 0))
+    print(json.dumps(dict(res)))
+
+
+def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
+    """汇总 leak-probe 的结果（exit_ip / exit_cc 是这次出口检测拿到的）：第一行是给横幅的一句话，每个泄露再一行
+    W<TAB>dns|webrtc<TAB>说明；把新结果写进缓存。detail（cca check）时一句话里多写点。WebRTC 暴露的 IP 直连查归属地：
+    别让账号的出口和它一起出现在别人那里"""
+    p = load_quiet(path)
+    if not isinstance(p, dict) or p.get('off'):
+        return
+    now, cache = time.time(), leak_cache()
+    geo = {k: g for k, g in (cache.get('geo') or {}).items() if geo_fresh(g, now)}
+    dns = {k: v for k, v in (cache.get('dns') or {}).items() if leak_dns_fresh(v)}
+    if isinstance(p.get('dns'), dict):
+        geo.update(p['dns'].get('geo') or {})
+        dns[key] = {'t': now, 'ok': bool(p['dns'].get('ok')), 'servers': [s for s in p['dns'].get('servers') or [] if isinstance(s, str)]}
+    st = p.get('stun') if isinstance(p.get('stun'), dict) else {}
+    ips = [ip for ip in st.get('ips') or [] if isinstance(ip, str)]
+    leaked = [ip for ip in ips if ip != exit_ip]
+    geo.update(leak_geo(leaked, '', geo))
+    parts, warns, d = [], [], dns.get(key)
+    if isinstance(d, dict):
+        sv = d.get('servers') or []
+        cn = [s for s in sv if (geo.get(ip_prefix(s)) or {}).get('cc') == 'cn']
+        if not d.get('ok'):
+            parts.append('DNS 没测成')
+        elif cn and exit_cc.upper() != 'CN':
+            parts.append('DNS 泄露（%d 个解析器在中国大陆）' % len(cn))
+            warns.append(('dns', 'DNS 泄露：经这个账号的端口访问网站时，域名是中国大陆的 DNS 服务器解析的（%s），网站的 DNS 服务'
+                          '能看出查询来自中国大陆。检查路由器（在外面是本机 Clash）上的节点 %s：mihomo 把域名在本地解析好再交给节点时'
+                          '（比如直连、WireGuard 这类节点），用的是它自己的 DNS' % ('、'.join(('%s %s' % (s, leak_where(geo.get(ip_prefix(s))))).strip()
+                                                                       for s in cn[:3]), key.split('|', 1)[-1])))
+        elif not sv:
+            parts.append('DNS 无泄露' + ('（没看到解析器，可能用的是加密 DNS）' if detail else ''))
+        else:
+            cs = list(dict.fromkeys((geo.get(ip_prefix(s)) or {}).get('country') or '?' for s in sv))
+            parts.append('DNS 无泄露' + ('（%d 个解析器：%s%s）' % (len(sv), '、'.join(cs[:3]), '等' if len(cs) > 3 else '') if detail else ''))
+    if leaked:
+        w = leak_where(geo.get(ip_prefix(leaked[0])))
+        parts.append('WebRTC 会暴露 %s%s' % (leaked[0], '（%s）' % w if w else ''))
+        warns.append(('webrtc', 'WebRTC 泄露：浏览器用 UDP 直连 STUN 服务器时，对方看到的是 %s，不是账号的出口：账号的网页版、'
+                      '%s 里的网页（还有实时语音这类用 WebRTC 的功能）都拿得到它，几个账号会露出同一个 IP。可以在路由器上拦掉 STUN'
+                      '（UDP 3478、19302 端口），或者让这类 UDP 也走账号的节点' % ('、'.join(leaked[:2]) + ('（%s）' % w if w else ''), T.app_label)))
+    elif 'stun' in p:
+        parts.append('WebRTC 无泄露' + ('（UDP 直连拿不到公网 IP）' if detail and not ips else ''))
+    keep = sorted(geo.items(), key=lambda x: -x[1].get('t', 0))[:300]
+    cache.update({'dns': dns, 'geo': dict(keep)})
+    try:
+        save_json(LEAK_FILE, cache, 0o600)
+    except OSError:
+        pass
+    if parts:
+        print(' · '.join(parts))
+        for kind, msg in warns:
+            print('W\t%s\t%s' % (kind, msg))
 
 
 # --- 订阅用量（cca usage、菜单）：让 Claude Code 自己查（get_usage 控制请求），cca 不碰登录凭证 ---------------
@@ -3654,6 +4133,8 @@ CMDS = {
     'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
     'policy-ask': cmd_policy_ask, 'policy-decline': cmd_policy_decline, 'policy-set': cmd_policy_set,
     'policy-have': cmd_policy_have, 'policy-forget': cmd_policy_forget,
+    'fill-check': cmd_fill_check, 'fill-summary': cmd_fill_summary, 'nodes-fill': cmd_nodes_fill,
+    'leak-probe': cmd_leak_probe, 'leak-verdict': cmd_leak_verdict,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -3697,6 +4178,7 @@ D="$R/etc/cca"
 ACC="$D/accounts.yaml"
 PORTS="$D/ports"
 SEL="$D/select"
+FILLOK="$D/fill.ok"   # 维护者参考配置里的节点（accounts.yaml 的 fill）：这一版在这台路由器的内核上校验通过了，记着它的 id
 OW="$R/etc/openclash/custom/openclash_custom_overwrite.sh"
 CRON="$R/etc/crontabs/root"
 SYSUP="$R/etc/sysupgrade.conf"
@@ -3761,11 +4243,13 @@ source_config() {   # 运行配置由它生成：OpenClash 自己的配置；She
 	else p=$(uci -q get openclash.config.config_path 2>/dev/null); [ -n "$p" ] && p="$R$p"; fi
 	[ -n "$p" ] && [ -f "$p" ] && echo "$p"
 }
-in_source() {   # in_source "节点<TAB>节点…"：这些节点生成运行配置的那份配置里都有（重启后钩子才能把它们放进端口池）
+in_source() {   # in_source "节点<TAB>节点…"：这些节点生成运行配置的那份配置里都有，或者是参考节点（重启后钩子才能把它们放进端口池）
 	src=$(source_config) || return 1
 	printf '%s' "$1" | ruby -E UTF-8 -ryaml -e "$YL"'
 		have = ((yl(ARGV[0]) || {})["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) }
-		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" 2>/dev/null
+		f = (yl(ARGV[1]) || {})["fill"]
+		have += (f["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) } if f.is_a?(Hash)
+		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" "$ACC" 2>/dev/null
 }
 core_bin() {   # 优先用实际在跑的那份内核
 	if [ "$BK" = sc ]; then   # ShellCrash 保守模式启动后会删掉 /tmp 里的内核文件，在跑的进程经 /proc 还找得到
@@ -3787,6 +4271,26 @@ core_test() {   # core_test 配置：内核自己的 -t 校验（主目录和启
 	c=$(core_bin) || return 0
 	if [ "$BK" = sc ]; then out=$("$c" -t -d "$SCB" -f "$1" 2>&1)
 	else out=$(SAFE_PATHS="$(safe_paths)" "$c" -t -d "$R/etc/openclash" -f "$1" 2>&1); fi
+}
+
+# 维护者参考配置里的节点：补进运行配置之前，这一版要先在这台路由器的内核上校验通过（别处的节点这里的内核不一定认，
+# 认不出的话 OpenClash / ShellCrash 整个起不来）。热加载前的 -t 校验通过时记下；启动时还没记下的，钩子先拿内核试一次
+fill_id() { ruby -E UTF-8 -ryaml -e "$YL"'; f = (yl(ARGV[0]) || {})["fill"]; print f["id"] if f.is_a?(Hash)' "$ACC" 2>/dev/null; }
+fill_mark() { id=$(fill_id); [ -n "$id" ] && core_bin >/dev/null && echo "$id" > "$FILLOK"; return 0; }   # 刚用内核校验过补上了它们的配置
+fill_pending() {   # 有参考节点，这一版还没在这台路由器的内核上校验过（id 在 $id 里）
+	id=$(fill_id)
+	[ -n "$id" ] && [ "$(cat "$FILLOK" 2>/dev/null)" != "$id" ]
+}
+fill_gate() {   # fill_gate 校验用的文件 apply.rb 的参数…：fill_pending 时钩子调用。按参数生成一份补上参考节点的配置，内核校验通过才记下；
+	             # 找不到内核、校验不过就这次启动不补（端口池照常注入）。不往 stdout 写（ShellCrash 的钩子靠 stdout 拿配置的路径）
+	v="$1"; shift
+	if ! core_bin >/dev/null; then log "参考节点：找不到 ${NAME} 的内核，没法先校验，这次启动不补"; rm -f "$v"; return 0; fi
+	if ruby -E UTF-8 "$D/apply.rb" "$@" >> "$LOG" 2>&1 && core_test "$v"; then
+		echo "$id" > "$FILLOK"
+	else
+		log "参考节点没通过 ${NAME} 内核的校验，这次启动不补：$(printf '%s\n' "$out" | tail -n 1)"
+	fi
+	rm -f "$v"
 }
 listening() { netstat -lnt 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"; }
 missing_ports() {
@@ -3936,7 +4440,8 @@ hook() {
 	f="$1"
 	[ -f "$f" ] && [ -s "$PORTS" ] || return 0   # 没有账号端口就完全不碰配置
 	cp -f "$f" "$f.cca.bak"
-	if ruby -E UTF-8 "$D/apply.rb" "$f" "$ACC" >> "$LOG" 2>&1; then
+	if fill_pending; then cp -f "$f" "$R/tmp/cca.fill.$$.yaml" && fill_gate "$R/tmp/cca.fill.$$.yaml" "$R/tmp/cca.fill.$$.yaml" "$ACC"; fi
+	if ruby -E UTF-8 "$D/apply.rb" --fill-ok "$FILLOK" "$f" "$ACC" >> "$LOG" 2>&1; then
 		rm -f "$f.cca.bak"
 		echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$R/tmp/openclash.log"
 	else
@@ -3954,12 +4459,16 @@ sc_hook() {
 			log "sc-hook: ShellCrash 用的不是 mihomo（Meta）内核，没有注入端口池"
 		elif grep -qs '^listeners:' "$SC/yamls/user.yaml" "$SC/yamls/others.yaml"; then
 			log "sc-hook: ShellCrash 的 yamls/user.yaml 或 others.yaml 里自己写了 listeners，和端口池的会重复，启动时没有注入（在 Mac 上运行 cca router sync，问过再热加载）"
-		elif ruby -E UTF-8 "$D/apply.rb" --insert "$o" --ports "$(sc_ports)" "$f" "$ACC" >> "$LOG" 2>&1; then
-			sc_unsave
-			echo "$(date '+%Y-%m-%d_%H:%M:%S')~【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$SCT/ShellCrash.log"
-			echo "$o"
-			return 0
 		else
+			# 参考节点不占用 ShellCrash 自定义节点（yamls/proxies.yaml，它随后才接进来）的名字
+			set -- --ports "$(sc_ports)" --custom "$SC/yamls/proxies.yaml" "$f" "$ACC"
+			fill_pending && fill_gate "$R/tmp/cca.fill.$$.yaml" --insert "$R/tmp/cca.fill.$$.yaml" "$@"
+			if ruby -E UTF-8 "$D/apply.rb" --insert "$o" --fill-ok "$FILLOK" "$@" >> "$LOG" 2>&1; then
+				sc_unsave
+				echo "$(date '+%Y-%m-%d_%H:%M:%S')~【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$SCT/ShellCrash.log"
+				echo "$o"
+				return 0
+			fi
 			log "sc-hook: 生成端口池失败，ShellCrash 照原样启动"
 		fi
 	fi
@@ -3976,11 +4485,19 @@ sc_unsave() {   # ShellCrash 停止时把面板上改过的选中项存进 confi
 	rewrite "$w" "$w.cca.$$"
 }
 
-structure() {   # 端口池的"结构"：cca- 入站和 CCA- 策略组的成员（不含选中哪个），结构变了才需要重载
+structure() {   # 端口池的"结构"：cca- 入站和 CCA- 策略组的成员（不含选中哪个），结构变了才需要重载。
+	             # 有参考节点时还有它们的定义（N|，没有是 -）和要补进的那个策略组的成员（F|）：补了、改了也要重载
 	ruby -E UTF-8 -ryaml -e "$YL"'
 		c = yl(ARGV[0]) || {}
 		(c["listeners"] || []).each { |l| puts "L|#{l["name"]}|#{l["port"]}|#{l["proxy"]}" if l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }
-		(c["proxy-groups"] || []).each { |g| puts "G|#{g["name"]}|#{(g["proxies"] || []).map(&:to_s).sort.join(",")}" if g.is_a?(Hash) && g["name"].to_s.start_with?("CCA-") }' "$1" 2>/dev/null | sort
+		(c["proxy-groups"] || []).each { |g| puts "G|#{g["name"]}|#{(g["proxies"] || []).map(&:to_s).sort.join(",")}" if g.is_a?(Hash) && g["name"].to_s.start_with?("CCA-") }
+		f = (yl(ARGV[1]) || {})["fill"]
+		if f.is_a?(Hash)
+		  px = (c["proxies"] || []).select { |p| p.is_a?(Hash) }
+		  (f["proxies"] || []).each { |q| p = px.find { |x| x["name"].to_s == q["name"].to_s } if q.is_a?(Hash); puts "N|#{q["name"] if q.is_a?(Hash)}|#{p ? p.sort_by { |k, _| k.to_s }.inspect : "-"}" }
+		  g = (c["proxy-groups"] || []).find { |x| x.is_a?(Hash) && x["name"].to_s == f["group"].to_s }
+		  puts "F|#{f["group"]}|#{g ? (g["proxies"] || []).map(&:to_s).join(",") : "-"}"
+		end' "$1" "$ACC" 2>/dev/null | sort
 }
 cca_ports() {
 	ruby -E UTF-8 -ryaml -e "$YL"'; puts((yl(ARGV[0]) || {})["listeners"].to_a.select { |l| l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }.map { |l| l["port"].to_i })' "$1" 2>/dev/null
@@ -4065,35 +4582,56 @@ apply_now() {
 		return 0
 	fi
 	t="$R/tmp/cca.apply.$$.yaml"
-	cp -f "$cf" "$t"
-	# ShellCrash：节点只用订阅配置里也有的（它的自定义节点启动时才拼进来，钩子用不上），和启动时注入的一致
-	if [ "$BK" = sc ] && src=$(source_config); then set -- --base "$src"; else set --; fi
-	if ! ruby -E UTF-8 "$D/apply.rb" "$@" "$t" "$ACC"; then
-		rm -f "$t"
-		echo "生成配置失败，运行配置未改动"
-		return 1
-	fi
-	if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
-		put_runtime "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
-		select_all
-		case $? in
-			0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
-			1) return 1 ;;
-		esac
-		echo "运行中的内核里缺少账号策略组"   # 文件和内核不一致，落到下面的重载
+	# ShellCrash：节点只用订阅配置里也有的（它的自定义节点启动时才拼进来，钩子用不上），和启动时注入的一致；参考节点
+	# 不占用它自定义节点的名字。OpenClash：参考节点按它自己的配置认哪些是用户的（运行配置里多出来的同名节点是以前补进去的，
+	# 参考配置改了就跟着改）
+	if [ "$BK" = sc ] && src=$(source_config); then set -- --base "$src" --custom "$SC/yamls/proxies.yaml"
+	elif [ "$BK" = oc ] && src=$(source_config); then set -- --source "$src"
+	else set --; fi
+	nofill=""   # 参考节点没通过内核的校验时：不补它们，只调整端口池
+	while :; do
 		cp -f "$cf" "$t"
-	fi
-	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
-		rm -f "$t"
-		echo "需要让 ${NAME} 重载一次配置，用来建立或调整账号端口池：约 20 秒，期间局域网的新连接会中断"
-		return 3
-	fi
-	if ! core_test "$t"; then
+		if ! ruby -E UTF-8 "$D/apply.rb" "$@" ${nofill:+--fill-ok /dev/null} "$t" "$ACC"; then
+			rm -f "$t"
+			echo "生成配置失败，运行配置未改动"
+			return 1
+		fi
+		why=""
+		if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
+			put_runtime "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
+			select_all
+			case $? in
+				0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
+				1) return 1 ;;
+			esac
+			echo "运行中的内核里缺少账号策略组"   # 文件和内核不一致，落到下面的重载
+			cp -f "$cf" "$t"
+			why="建立或调整账号端口池"
+		fi
+		if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
+			if [ -z "$why" ]; then   # 端口池没变、只是要补参考节点时照实说
+				why="建立或调整账号端口池"
+				[ -z "$(missing_ports)" ] && [ "$(structure "$cf" | grep -v '^[FN]|')" = "$(structure "$t" | grep -v '^[FN]|')" ] &&
+					why="补上维护者参考配置里的节点"
+			fi
+			rm -f "$t"
+			echo "需要让 ${NAME} 重载一次配置，用来${why}：约 20 秒，期间局域网的新连接会中断"
+			return 3
+		fi
+		core_test "$t" && break
+		if [ -z "$nofill" ] && [ -n "$(fill_id)" ]; then
+			echo "维护者参考配置里的节点没通过 ${NAME} 内核的校验，这次不补它们："
+			echo "$out" | tail -n 3
+			rm -f "$FILLOK"
+			nofill=1
+			continue
+		fi
 		rm -f "$t"
 		echo "mihomo 校验未通过，运行配置未改动："
 		echo "$out" | tail -n 3
 		return 1
-	fi
+	done
+	[ -n "$nofill" ] || fill_mark
 	newp=$(cca_ports "$t" | tr '\n' ' ')
 	gonep=""
 	for p in $(cca_ports "$cf"); do
@@ -4147,6 +4685,21 @@ ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（
 hook_ok() {   # 在用的那套装着 cca 的钩子
 	if [ "$BK" = sc ]; then grep -qF "$SCHOOK" "$(sc_task)" 2>/dev/null; else grep -qxF "$MB" "$OW" 2>/dev/null; fi
 }
+fill_status() {   # 参考节点在运行配置里齐不齐（同一个节点在这里叫别的名字也算有）
+	ruby -E UTF-8 -ryaml -e "$YL"'
+		f = (yl(ARGV[0]) || {})["fill"]
+		exit 0 unless f.is_a?(Hash)
+		c = (File.file?(ARGV[1]) ? yl(ARGV[1]) : nil) || {}
+		key = lambda { |p| s = p["server"].to_s.strip.downcase.sub(/\.+\z/, ""); s.empty? ? nil : [p["type"].to_s.strip.downcase, s, p["port"].to_s.strip, (p["servername"] || p["sni"]).to_s.strip.downcase.sub(/\.+\z/, "")].join("|") }
+		px = (c["proxies"] || []).select { |p| p.is_a?(Hash) }
+		names = px.map { |p| p["name"].to_s }
+		keys = px.map { |p| key.call(p) }.compact
+		all = (f["proxies"] || []).select { |p| p.is_a?(Hash) }
+		miss = all.reject { |p| names.include?(p["name"].to_s) || keys.include?(key.call(p)) }.map { |p| p["name"] }
+		ok = (File.read(ARGV[2]).strip rescue "") == f["id"].to_s
+		puts "参考节点：维护者参考配置里策略组 #{f["group"]} 的 #{all.size} 个节点，" + (miss.empty? ? "运行配置里都有" : "运行配置里还缺 #{miss.join("、")}") +
+		  (ok ? "" : "（这一版还没在这台路由器的内核上校验过）")' "$ACC" "$1" "$FILLOK" 2>/dev/null
+}
 status() {
 	if running; then echo "${NAME}：运行中"; else echo "${NAME}：未运行"; fi
 	[ "$BK" = sc ] && ! sc_meta && echo "ShellCrash 用的不是 mihomo（Meta）内核：cca 的端口池用不了"
@@ -4156,6 +4709,7 @@ status() {
 	else echo "运行配置：${cf}（还没有，${NAME} 启动时生成）"; fi
 	if hook_ok; then echo "钩子：已安装"; else echo "钩子：未安装"; fi
 	if grep -qF "$D/cca-router.sh ensure" "$CRON" 2>/dev/null; then echo "自愈 cron：已安装"; else echo "自愈 cron：未安装"; fi
+	fill_status "$cf"
 	if [ -s "$SEL" ] && running; then
 		i=0
 		while IFS="$TAB" read -r g node; do
@@ -4173,11 +4727,14 @@ status() {
 	if [ -f "$LOG" ]; then echo "最近日志："; tail -n 5 "$LOG"; fi
 	return 0
 }
-nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型
+nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型；
+	         # ShellCrash 的自定义节点 C<TAB>名字（不能当出口，Mac 端补参考节点时不占用它们的名字）
+	cust=""
 	if [ "$BK" = sc ]; then
 		# ShellCrash 只列订阅配置里的：它的自定义节点、策略组启动时才拼进来（自定义配置出错时又会去掉），钩子用不上
 		sc_meta || { echo "ShellCrash 用的不是 mihomo（Meta）内核：cca 只支持 Meta 内核" >&2; return 1; }
 		cf=$(source_config)
+		cust="$SC/yamls/proxies.yaml"
 	else
 		cf=$(runtime_config)
 		[ -n "$cf" ] && [ -f "$cf" ] || cf=$(source_config)   # 运行配置不见了：OpenClash 自己的配置里节点一样
@@ -4187,7 +4744,13 @@ nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（
 		c = yl(ARGV[0]) || {}
 		f = lambda { |v| v.to_s.tr("\t\n", "  ") }
 		(c["proxies"] || []).each { |p| puts ["P", p["name"], p["type"], p["server"], p["port"], p["servername"] || p["sni"]].map(&f).join("\t") if p.is_a?(Hash) }
-		(c["proxy-groups"] || []).each { |g| puts "G\t#{g["name"]}\t#{g["type"]}" if g.is_a?(Hash) && !g["name"].to_s.start_with?("CCA-") }' "$cf"
+		(c["proxy-groups"] || []).each { |g| puts "G\t#{g["name"]}\t#{g["type"]}" if g.is_a?(Hash) && !g["name"].to_s.start_with?("CCA-") }
+		if ARGV[1] && File.file?(ARGV[1])
+		  File.foreach(ARGV[1], encoding: "UTF-8") do |l|
+		    m = l =~ /\A\s*#/ ? nil : l.match(/\bname:\s*("(?:[^"\\]|\\.)*"|\x27(?:[^\x27]|\x27\x27)*\x27|[^,}#]+)/)
+		    puts "C\t#{f.call(m[1].strip.sub(/\A["\x27](.*)["\x27]\z/, "\\1"))}" if m
+		  end
+		end' "$cf" ${cust:+"$cust"}
 }
 uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 时立即移除端口池，否则等 OpenClash / ShellCrash 下次重启
 	key=""
@@ -4232,11 +4795,15 @@ router_rb() {
 	cat <<'RB'
 # cca：在 mihomo 配置里生成账号端口池。槽位 n = mixed 入站 cca-n（端口 base+n，不认证）→ select 策略组 CCA-n，
 # 组成员是可选节点 + REJECT；分到账号的槽位把它的节点排第一（内核启动后默认就选中它），空槽位默认 REJECT。
-#   ruby apply.rb [--base 订阅配置] 配置 账号表
-#     改写配置：OpenClash 的运行配置；ShellCrash 热加载前的运行配置（节点只用订阅配置里也有的，和它启动时一样）
-#   ruby apply.rb --insert 输出 --ports "端口 …" 订阅配置 账号表
-#     ShellCrash 启动前用：订阅配置原样复制到输出，只插入端口池的几行。ShellCrash 按文本把订阅配置拆成几段、
+# 账号表里有维护者参考配置里的节点（fill）时，配置里缺的也补上（见下面「参考节点」）。
+#   ruby apply.rb [--source 配置 | --base 订阅配置 [--custom 自定义节点]] [--fill-ok 文件] 配置 账号表
+#     改写配置：OpenClash 的运行配置；ShellCrash 热加载前的运行配置（节点只用订阅配置里也有的，和它启动时一样）。
+#     --source 是 OpenClash 自己的配置：参考节点按它认哪些节点是用户的
+#   ruby apply.rb --insert 输出 --ports "端口 …" [--custom 自定义节点] [--fill-ok 文件] 订阅配置 账号表
+#     ShellCrash 启动前用：订阅配置原样复制到输出，只插入端口池和参考节点的几行。ShellCrash 按文本把订阅配置拆成几段、
 #     再和它自己的设置拼起来，整份重排的话它自己追加的入站缩进会对不上；--ports 是它自己要占的端口
+#   --custom：ShellCrash 的自定义节点（yamls/proxies.yaml，它随后才接进来），参考节点不占用它们的名字；
+#   --fill-ok：文件里记的不是这一版参考节点的 id（还没在这台路由器的内核上校验过）就不补
 require 'yaml'
 opt = {}
 while ARGV[0].to_s.start_with?('--')
@@ -4244,14 +4811,14 @@ while ARGV[0].to_s.start_with?('--')
   opt[k] = ARGV.shift
 end
 cfg_file, acc_file = ARGV
-yload = lambda do |f|   # 订阅配置里常有锚点：新版 Psych 要 aliases: true 才肯读，旧版不认这个参数
-  s = File.read(f, encoding: 'UTF-8')
+yparse = lambda do |s|   # 订阅配置里常有锚点：新版 Psych 要 aliases: true 才肯读，旧版不认这个参数
   begin
     YAML.load(s, aliases: true)
   rescue ArgumentError
     YAML.load(s)
   end
 end
+yload = lambda { |f| yparse.call(File.read(f, encoding: 'UTF-8')) }
 begin
   cfg = yload.call(cfg_file) || {}
   acc = (File.exist?(acc_file) && YAML.load_file(acc_file)) || {}
@@ -4267,13 +4834,226 @@ names = lambda do |c|   # 节点和（cca 以外的）策略组的名字
   list.call(c['proxies']).select { |p| p.is_a?(Hash) }.map { |p| p['name'].to_s } +
     list.call(c['proxy-groups']).select { |g| g.is_a?(Hash) && !ours.call(g, 'CCA-') }.map { |g| g['name'].to_s }
 end
+q = lambda { |s| '"' + s.to_s.gsub(/["\\]/) { |c| "\\#{c}" }.gsub(/[\x00-\x1f\x7f]/) { |c| format('\x%02x', c.ord) } + '"' }
+insert = lambda do |text, key, items|   # 段落的认法和 ShellCrash 一样：顶格的 "key:" 开始，到下一个顶格的小写字母开头的行为止
+  return text if items.empty?
+  lines = text.lines
+  heads = lines.each_index.select { |i| lines[i].start_with?("#{key}:") }
+  raise "#{key} 出现了不止一次" if heads.size > 1
+  if heads.empty?   # 没有这一段：加在最后，缩进和 ShellCrash 自己追加入站时一样（两个空格）
+    text += "\n" unless text.empty? || text.end_with?("\n")
+    return text + "#{key}:\n" + items.map { |s| "  - #{s}\n" }.join
+  end
+  i = heads[0]
+  raise "#{key} 不是一行一项的列表" unless lines[i] =~ /\A#{Regexp.escape(key)}:[ \t]*(#.*)?\r?\n?\z/
+  j = (i + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
+  first = lines[i + 1...j].find { |l| l =~ /\A *- / }
+  ind = first ? first[/\A */] : '  '   # 和这一段原有的项对齐
+  nl = lines[i].end_with?("\r\n") ? "\r\n" : "\n"
+  lines[i] += nl unless lines[i].end_with?("\n")
+  lines[i + 1, 0] = items.map { |s| "#{ind}- #{s}#{nl}" }
+  lines.join
+end
+
+# --- 参考节点：账号表的 fill（Mac 上的 cca 从维护者的映射仓库拉下来、验过签的）= 维护者配置里的一个策略组和它引用的节点。
+# 配置里缺的节点补进 proxies，名字补进同名策略组（接在原有成员后面）。这些不补：同名的是用户自己的节点（只补进组）；名字被
+# 策略组、内置的出站、ShellCrash 的自定义节点占了；用户已经有同一个节点（类型、服务器、端口和 TLS 域名一样）、只是叫法
+# 不同（补进组的是他的名字）；要经别的节点连接（dialer-proxy）而那个节点没有。和 Mac 上 cca 的 fill_plan 是同一套规则
+fill = acc['fill'].is_a?(Hash) ? acc['fill'] : nil
+fill = nil if fill && opt.key?('--fill-ok') && (File.read(opt['--fill-ok']).strip rescue '') != fill['id'].to_s
+custom = []   # ShellCrash 的自定义节点：一行一个 "- {name: 节点, …} #策略组"
+if fill && opt['--custom'] && File.file?(opt['--custom'])
+  File.foreach(opt['--custom'], encoding: 'UTF-8') do |l|
+    m = l =~ /\A\s*#/ ? nil : l.match(/\bname:\s*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,}#]+)/)
+    next unless m
+    v = m[1].strip
+    v = (yparse.call(v) rescue v) if v.start_with?('"', "'")
+    custom << v.to_s.strip
+  end
+end
+own = base || cfg   # 按哪份认用户自己的节点：ShellCrash 是订阅配置，OpenClash 是它自己的配置（--source），都没有时是要改的这份
+if fill && !base && opt['--source']
+  begin
+    src = yload.call(opt['--source'])
+    own = src if src.is_a?(Hash)
+  rescue StandardError, Psych::SyntaxError
+    $stderr.puts 'cca: 读不了 OpenClash 自己的配置，参考节点按运行配置认'
+  end
+end
+key = lambda do |p|   # 和 Mac 上的 cca 认节点一样：类型、服务器、端口、TLS 域名
+  s = p['server'].to_s.strip.downcase.sub(/\.+\z/, '')
+  s.empty? ? nil : [p['type'].to_s.strip.downcase, s, p['port'].to_s.strip, (p['servername'] || p['sni']).to_s.strip.downcase.sub(/\.+\z/, '')].join('|')
+end
+plan_add = []   # 要补的节点定义
+plan_mem = []   # 要补进策略组的名字
+if fill
+  mine = list.call(own['proxies']).select { |p| p.is_a?(Hash) }
+  pn = {}
+  mine.each { |p| pn[p['name'].to_s] = true }
+  taken = {}
+  (names.call(own) + %w[DIRECT REJECT REJECT-DROP PASS COMPATIBLE GLOBAL] + custom).each { |n| taken[n] = true }
+  by = {}
+  mine.each { |p| k = key.call(p); by[k] ||= p['name'].to_s if k }
+  cand = list.call(fill['proxies']).select { |p| p.is_a?(Hash) && !p['name'].to_s.empty? }
+  okn = {}
+  cand.each { |p| okn[p['name'].to_s] = true unless taken[p['name'].to_s] || by[key.call(p)] }
+  cand.each do |p|
+    n = p['name'].to_s
+    k = key.call(p)
+    dp = p['dialer-proxy']
+    if pn[n]
+      plan_mem << n
+    elsif taken[n]
+      $stderr.puts "cca: 参考节点「#{n}」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有补"
+    elsif k && by[k]
+      plan_mem << by[k]
+    elsif dp && (!dp.is_a?(String) || (!taken[dp] && !okn[dp]))
+      $stderr.puts "cca: 参考节点「#{n}」要经「#{dp}」连接，这里没有它，没有补"
+    else
+      plan_add << p
+      plan_mem << n
+    end
+  end
+  plan_mem.uniq!
+end
+fgroup = lambda do |c|   # 要补进名字的那个策略组（relay、include-all 的不动）
+  g = fill && list.call(c['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == fill['group'].to_s && !ours.call(x, 'CCA-') }
+  g && g['type'].to_s != 'relay' && g['include-all'] != true && g['include-all-proxies'] != true ? g : nil
+end
+put_fill = lambda do |c, add, mem|   # 补进 YAML 读出来的配置 c；返回做了什么（没做是 nil）
+  done = []
+  unless add.empty?
+    px = list.call(c['proxies']).dup
+    fresh = []
+    upd = []
+    add.each do |p|
+      i = px.index { |x| x.is_a?(Hash) && x['name'].to_s == p['name'].to_s }
+      if i.nil?
+        px << p
+        fresh << p['name']
+      elsif px[i] != p   # 以前补进来的（用户自己的配置里没有它），参考配置改过了
+        px[i] = p
+        upd << p['name']
+      end
+    end
+    c['proxies'] = px
+    done << "补上节点 #{fresh.join('、')}" unless fresh.empty?
+    done << "按参考配置更新了节点 #{upd.join('、')}" unless upd.empty?
+  end
+  g = fgroup.call(c)
+  more = g ? mem - list.call(g['proxies']).map(&:to_s) : []
+  unless more.empty?
+    g['proxies'] = list.call(g['proxies']) + more
+    done << "策略组 #{g['name']} 里加上 #{more.join('、')}"
+  end
+  done.empty? ? nil : "cca: 维护者参考配置里的节点：#{done.join('；')}"
+end
+fkey = lambda { |k| s = k.to_s; s =~ /\A[A-Za-z_][A-Za-z0-9_-]*\z/ && s !~ /\A(y|yes|n|no|true|false|on|off|null)\z/i ? s : q.call(s) }
+flow = lambda do |v|   # 写成一行（YAML 的流式写法）：节点插进订阅配置时一个一行
+  case v
+  when Hash then '{' + v.map { |k, x| "#{fkey.call(k)}: #{flow.call(x)}" }.join(', ') + '}'
+  when Array then '[' + v.map { |x| flow.call(x) }.join(', ') + ']'
+  when nil then 'null'
+  when true, false, Integer, Float then v.to_s
+  else q.call(v)
+  end
+end
+add_members = lambda do |text, gname, items|   # 策略组 gname 的 proxies 列表末尾接上 items：只认一行一项的块写法
+  lines = text.lines                             # （ShellCrash 往组里加自定义节点也只认这种）
+  heads = lines.each_index.select { |i| lines[i].start_with?('proxy-groups:') }
+  raise 'proxy-groups 出现了不止一次' if heads.size > 1
+  raise '没有 proxy-groups 这一段' if heads.empty?
+  i = heads[0]
+  j = (i + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
+  first = (i + 1...j).find { |n| lines[n] =~ /\A *- / }
+  raise '一个策略组都没有' unless first
+  ind = lines[first][/\A */]
+  starts = (i + 1...j).select { |n| lines[n].start_with?("#{ind}- ") }
+  s = e = nil
+  starts.each_with_index do |a, k|
+    b = starts[k + 1] || j
+    y = (yparse.call(lines[a...b].join) rescue nil)
+    next unless y.is_a?(Array) && y.size == 1 && y[0].is_a?(Hash) && y[0]['name'].to_s == gname
+    s = a
+    e = b
+    break
+  end
+  raise "找不到策略组 #{gname}" unless s
+  ki = ' ' * lines[s][/\A *- */].size
+  pk = (s + 1...e).find { |n| lines[n] =~ /\A#{ki}proxies:[ \t]*(#.*)?\r?\n?\z/ }
+  raise "策略组 #{gname} 的 proxies 不是一行一项的列表" unless pk
+  m = pk + 1
+  li = nil
+  while m < e && (md = lines[m].match(/\A( *)- /)) && md[1].size >= ki.size && (li.nil? || md[1] == li)
+    li ||= md[1]
+    m += 1
+  end
+  li ||= ki + '  '
+  nl = lines[pk].end_with?("\r\n") ? "\r\n" : "\n"
+  lines[m - 1] += nl unless lines[m - 1].end_with?("\n")
+  lines[m, 0] = items.map { |n| "#{li}- #{q.call(n)}#{nl}" }
+  lines.join
+end
+rest = lambda do |c, an, gname, mem|   # 去掉 cca 插进去的（端口池、参考节点）之后的样子：插好的读出来，这部分要和原来一模一样
+  c.merge('proxies' => list.call(c['proxies']).reject { |p| p.is_a?(Hash) && an.include?(p['name'].to_s) },
+          'proxy-groups' => list.call(c['proxy-groups']).reject { |g| ours.call(g, 'CCA-') }.map { |g|
+            g.is_a?(Hash) && g['name'].to_s == gname ? g.merge('proxies' => list.call(g['proxies']).reject { |n| mem.include?(n.to_s) }) : g },
+          'listeners' => list.call(c['listeners']).reject { |l| ours.call(l, 'cca-') })
+end
+fill_in = lambda do |chk, add, gname, mem|   # 插进去的参考节点一个不差：定义原样，名字都在组里
+  an = add.map { |p| p['name'].to_s }
+  g = list.call(chk['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gname } || {}
+  list.call(chk['proxies']).select { |p| p.is_a?(Hash) && an.include?(p['name'].to_s) } == add &&
+    (mem - list.call(g['proxies']).map(&:to_s)).empty?
+end
+fill_text = lambda do |text, c, add, mem|   # 在文本里插参考节点：节点一个一行插在 proxies 段开头，名字接在策略组的 proxies 后面。
+  g = fgroup.call(c)                        # 插好的读一遍核对，不对就退一步只插节点，还不行就不插（端口池照常）。
+  gname = g ? g['name'].to_s : ''           # 返回 [新文本, 插进去的节点, 补进策略组的名字]
+  more = g ? mem - list.call(g['proxies']).map(&:to_s) : []
+  tries = [[add, more], [add, []]].uniq.reject { |a, m| a.empty? && m.empty? }
+  tries.each_with_index do |(a, m), n|
+    begin
+      out = insert.call(text, 'proxies', a.map { |p| flow.call(p) })
+      out = add_members.call(out, gname, m) unless m.empty?
+      chk = yparse.call(out)
+      an = a.map { |p| p['name'].to_s }
+      raise '插好后读出来和预期的不一样' unless chk.is_a?(Hash) && rest.call(chk, an, gname, m) == rest.call(c, an, gname, m) && fill_in.call(chk, a, gname, m)
+      return [out, a, m]
+    rescue StandardError => e
+      $stderr.puts "cca: 参考节点没能插进订阅配置（#{e.message.lines.first.to_s.strip}）#{n + 1 < tries.size ? '，改成只补节点、不动策略组' : '，这次不补'}"
+    end
+  end
+  [text, [], []]
+end
+
+text = nil   # --insert：订阅配置的原文（参考节点按文本插进去）
+fill_add = []   # 实际补上的节点
+fill_mem = []   # 实际补进策略组的名字
+fill_note = nil
+text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8') if opt['--insert']
+if fill && opt['--insert']
+  text, fill_add, fill_mem = fill_text.call(text, cfg, plan_add, plan_mem)
+  done = []
+  done << "补上节点 #{fill_add.map { |p| p['name'] }.join('、')}" unless fill_add.empty?
+  done << "策略组 #{fill['group']} 里加上 #{fill_mem.join('、')}" unless fill_mem.empty?
+  fill_note = "cca: 维护者参考配置里的节点：#{done.join('；')}" unless done.empty?
+elsif fill && base   # ShellCrash 热加载：照它下次启动时钩子按文本插得进去的来补，两边一样，重启后不会又要重载
+  _, fill_add, fill_mem = fill_text.call(File.read(opt['--base'], mode: 'rb').force_encoding('UTF-8'), base, plan_add, plan_mem)
+  fill_note = put_fill.call(cfg, fill_add, fill_mem)
+elsif fill
+  fill_add = plan_add
+  fill_mem = plan_mem
+  fill_note = put_fill.call(cfg, fill_add, fill_mem)
+end
+fill_names = fill_add.map { |p| p['name'].to_s }
+
 listeners = list.call(cfg['listeners']).reject { |l| ours.call(l, 'cca-') }
 groups = list.call(cfg['proxy-groups']).reject { |g| ours.call(g, 'CCA-') }
 known = { 'DIRECT' => true, 'REJECT' => true }
-names.call(cfg).each { |n| known[n] = true }
+(names.call(cfg) + fill_names).each { |n| known[n] = true }   # --insert 时参考节点还只在文本里
 if base
   in_base = {}
-  names.call(base).each { |n| in_base[n] = true }
+  (names.call(base) + fill_names).each { |n| in_base[n] = true }   # 参考节点启动时也由钩子补上
   known.keep_if { |n, _| n == 'DIRECT' || n == 'REJECT' || in_base[n] }
 end
 wanted = list.call(acc['nodes']).map(&:to_s)
@@ -4306,6 +5086,7 @@ slots = []
   used << port
 end
 new_groups = slots.map { |k, _, order| { 'name' => "CCA-#{k}", 'type' => 'select', 'proxies' => order } }
+$stderr.puts fill_note if fill_note
 unless opt['--insert']
   groups.concat(new_groups)
   slots.each do |k, port, _|
@@ -4325,44 +5106,21 @@ begin
   if groups.size != list.call(cfg['proxy-groups']).size || listeners.size != list.call(cfg['listeners']).size
     raise '里面已经有 cca 的端口池（CCA- 策略组或 cca- 入站）'
   end
-  q = lambda { |s| '"' + s.to_s.gsub(/["\\]/) { |c| "\\#{c}" }.gsub(/[\x00-\x1f\x7f]/) { |c| format('\x%02x', c.ord) } + '"' }
   new_listeners = slots.map do |k, port, _|
     { 'name' => "cca-#{k}", 'type' => 'mixed', 'port' => port, 'listen' => '0.0.0.0', 'users' => [], 'proxy' => "CCA-#{k}" }
   end
   # 写成 {name: "…"} 的样子：ShellCrash 往策略组里加自定义节点时按 "- name: 组名" 找组，碰不到这几行
   g_lines = new_groups.map { |g| "{name: #{q.call(g['name'])}, type: select, proxies: [#{g['proxies'].map { |m| q.call(m) }.join(', ')}]}" }
   l_lines = new_listeners.map { |l| "{name: #{q.call(l['name'])}, type: mixed, port: #{l['port']}, listen: \"0.0.0.0\", users: [], proxy: #{q.call(l['proxy'])}}" }
-  insert = lambda do |text, key, items|   # 段落的认法和 ShellCrash 一样：顶格的 "key:" 开始，到下一个顶格的小写字母开头的行为止
-    return text if items.empty?
-    lines = text.lines
-    heads = lines.each_index.select { |i| lines[i].start_with?("#{key}:") }
-    raise "#{key} 出现了不止一次" if heads.size > 1
-    if heads.empty?   # 没有这一段：加在最后，缩进和 ShellCrash 自己追加入站时一样（两个空格）
-      text += "\n" unless text.empty? || text.end_with?("\n")
-      return text + "#{key}:\n" + items.map { |s| "  - #{s}\n" }.join
-    end
-    i = heads[0]
-    raise "#{key} 不是一行一项的列表" unless lines[i] =~ /\A#{Regexp.escape(key)}:[ \t]*(#.*)?\r?\n?\z/
-    j = (i + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
-    first = lines[i + 1...j].find { |l| l =~ /\A *- / }
-    ind = first ? first[/\A */] : '  '   # 和这一段原有的项对齐
-    nl = lines[i].end_with?("\r\n") ? "\r\n" : "\n"
-    lines[i] += nl unless lines[i].end_with?("\n")
-    lines[i + 1, 0] = items.map { |s| "#{ind}- #{s}#{nl}" }
-    lines.join
-  end
-  text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8')
   out = insert.call(insert.call(text, 'proxy-groups', g_lines), 'listeners', l_lines)
   tmp = "#{opt['--insert']}.tmp"
   File.open(tmp, 'wb') { |f| f.write(out) }
-  # 插好的再读一遍：端口池一项不差、其余的和原来完全一样，才交给 ShellCrash
+  # 插好的再读一遍：端口池和参考节点一项不差、其余的和原来完全一样，才交给 ShellCrash
   chk = yload.call(tmp)
-  rest = lambda do |c|
-    c.merge('proxy-groups' => list.call(c['proxy-groups']).reject { |g| ours.call(g, 'CCA-') },
-            'listeners' => list.call(c['listeners']).reject { |l| ours.call(l, 'cca-') })
-  end
+  gname = fill ? fill['group'].to_s : ''
   unless chk.is_a?(Hash) && list.call(chk['proxy-groups']).select { |g| ours.call(g, 'CCA-') } == new_groups &&
-         list.call(chk['listeners']).select { |l| ours.call(l, 'cca-') } == new_listeners && rest.call(chk) == rest.call(cfg)
+         list.call(chk['listeners']).select { |l| ours.call(l, 'cca-') } == new_listeners &&
+         rest.call(chk, fill_names, gname, fill_mem) == rest.call(cfg, fill_names, gname, fill_mem) && fill_in.call(chk, fill_add, gname, fill_mem)
     raise '插好后读出来和预期的不一样'
   end
   File.rename(tmp, opt['--insert'])
@@ -4517,8 +5275,11 @@ pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出�
 	return 1
 }
 
-router_node_list() {   # 路由器上的节点（P<TAB>名字<TAB>类型<TAB>服务器<TAB>端口）：拿这一版的路由器脚本现跑，不依赖路由器上部署的版本
-	router_sh | rsh 'sh -s nodes'
+router_node_list() {   # 路由器上的节点（P<TAB>名字<TAB>类型<TAB>服务器<TAB>端口）：拿这一版的路由器脚本现跑，不依赖路由器上部署的版本。
+	                    # 后面接上维护者参考配置里、路由器上还没有的节点（同步时补上，先就能选）
+	local out
+	out=$(router_sh | rsh 'sh -s nodes') || return 1
+	printf '%s\n' "$out" | py nodes-fill
 }
 nodes_follow() {   # 路由器上的节点改了名：按服务器地址认出来，可选节点和各工具的账号表跟着改；认不出、又有账号在用的，
 	                # 交互时让用户从路由器上的节点里选一个代替。有改动返回 0
@@ -4584,7 +5345,7 @@ router_push() {   # 把账号表和路由器端脚本部署到路由器（返回
 		if allow_reload "$out"; then
 			router_reload; rc=$?
 		else
-			warn "没有重载：新的端口池要等 $(clash_name "$out") 下次重启（或再运行 cca router sync）才生效"
+			warn "没有重载：这次的改动要等 $(clash_name "$out") 下次重启（或再运行 cca router sync）才生效"
 			return 3
 		fi
 	fi
@@ -4617,7 +5378,7 @@ cmd_router() {
 		setup) cmd_router_setup ;;
 		sync) [ "${2:-}" = -y ] && CCA_YES=1; router_sync ;;
 		status) router_ready || die "还没配置路由器（cca router setup）"; rsh "$RDIR/cca-router.sh status" ;;
-		nodes) router_ready || die "还没配置路由器（cca router setup）"; router_node_list | cut -f2 ;;
+		nodes) router_ready || die "还没配置路由器（cca router setup）"; router_node_list | awk -F '\t' '$1 != "C" { print $2 }' ;;   # C 是 ShellCrash 的自定义节点，不能当出口
 		log) router_ready || die "还没配置路由器（cca router setup）"; rsh 'tail -n 50 "${CCA_ROOT:-}/tmp/cca-router.log"' ;;
 		ssh)
 			router_ready || die "还没配置路由器（cca router setup）"
@@ -4640,7 +5401,7 @@ pick_node() {   # pick_node [direct]：从可选节点里选一个，打印节�
 	local onrouter="" def n=0 i node sel off=0
 	local -a nodes rows
 	if [ "${1:-}" = direct ]; then nodes[0]=""; rows[0]="直连（不经代理）"; n=1; off=1; fi
-	at_home && onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | cut -f2)
+	at_home && onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | py nodes-fill | awk -F '\t' '$1 != "C" { print $2 }')   # 参考节点同步时补上，不算"路由器上没有"
 	while IFS= read -r node; do [ -n "$node" ] && { nodes[n]="$node"; n=$((n + 1)); }; done < <(py nodes-allowed | cut -f1)
 	[ $n -gt 0 ] || { warn "config.json 里没有可选节点（nodes）"; return 1; }
 	i=$off
@@ -4912,6 +5673,7 @@ ensure_login() {
 			interactive || { warn "${ACC_NAME} 还没登录，需要在终端里运行 ${CMD} @${ACC_NAME} 完成登录"; return 1; }
 			[ $tries -lt 2 ] || return 1
 			tries=$((tries + 1))
+			[ $tries -gt 1 ] || [ -z "${LEAK_WEBRTC:-}" ] || warn "$LEAK_WEBRTC"   # 登录页在账号的浏览器里打开
 			tool login || { warn "登录没有完成"; return 1; }
 			continue
 		fi
@@ -5139,10 +5901,14 @@ settings_warn() {
 }
 
 # 经账号端口检测出口：claude.ai（Codex 账号是 chatgpt.com）看到的 IP + ip.net.coffee 的风险数据（不上报会话）
-coffee_check() {   # coffee_check [region]：region 时只看出口地区（不查 ip.net.coffee 的纯净度，查用量前用）
-	local trace ip risk="" out rc min="$CCA_MIN_TRUST"
+coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出口地区（不查 ip.net.coffee 的纯净度、不测泄露，查用量前用）；
+	               # 别的时候同时在后台测 DNS / WebRTC 泄露（给了开始时间时 DNS 不用那之前的缓存：cca check），结果在 LEAK_*
+	local trace ip loc risk="" out rc min="$CCA_MIN_TRUST"
+	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC=""
+	[ "${1:-}" = region ] || leak_start "${1:-}"
 	trace=$(curl -s -m 8 -x "$ACC_PROXY" "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
 	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
+	loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p')
 	if [ "${1:-}" = region ]; then min=0
 	elif [ -n "$ip" ]; then risk=$(curl -s -m 12 -x "$ACC_PROXY" "https://ip.net.coffee/api/iprisk/$ip" 2>/dev/null); fi
 	out=$(py coffee "$min" "$trace" "$risk")
@@ -5150,7 +5916,34 @@ coffee_check() {   # coffee_check [region]：region 时只看出口地区（不�
 	COFFEE_IP="$ip"
 	COFFEE_LINE=$(printf '%s\n' "$out" | head -n 1)
 	COFFEE_NOTE=$(printf '%s\n' "$out" | sed -n '2,$p')
+	case $rc in 0|1|4) leak_finish "$ip" "$loc" "${1:-}" ;; *) leak_finish ;; esac   # 出口本身就不对（受限地区、拿不到 IP）时不用等它
 	return $rc
+}
+leak_start() {   # leak_start [cca check 开始的时间]：后台开始 DNS / WebRTC 泄露检测（py leak-probe，最多 5 秒左右）
+	LEAK_PID="" LEAK_OUT=""
+	LEAK_OUT=$(mktemp -t cca-leak 2>/dev/null) || return 0
+	py leak-probe "$ACC_PROXY" "${ROUTE}|${ACC_NODE}" "${1:-}" > "$LEAK_OUT" 2>/dev/null &
+	LEAK_PID=$!
+}
+leak_finish() {   # leak_finish [出口IP 出口地区 [cca check 开始的时间]]：等后台的检测，汇总成 LEAK_LINE（横幅里的一句）、
+	                # LEAK_DNS / LEAK_WEBRTC（泄露时的说明）。不给出口 IP 时不等它、不汇总（它自己几秒内就结束）
+	local out kind tag msg
+	[ -n "${LEAK_PID:-}" ] || return 0
+	if [ -n "${1:-}" ]; then
+		wait "$LEAK_PID" 2>/dev/null
+		out=$(py leak-verdict "$LEAK_OUT" "${ROUTE}|${ACC_NODE}" "$1" "${2:-}" "${3:-}")
+		LEAK_LINE=$(printf '%s\n' "$out" | head -n 1)
+		while IFS=$'\t' read -r kind tag msg; do
+			[ "$kind" = W ] || continue
+			case "$tag" in dns) LEAK_DNS="$msg" ;; webrtc) LEAK_WEBRTC="$msg" ;; esac
+		done <<< "$out"
+	fi
+	rm -f "$LEAK_OUT"
+	LEAK_PID="" LEAK_OUT=""
+}
+leak_show() {   # leak_show 缩进：横幅（cca check 的每一行）下面那一句；有泄露时用黄色
+	[ -n "$LEAK_LINE" ] || return 0
+	if [ -n "$LEAK_DNS$LEAK_WEBRTC" ]; then say "${1}${C_Y}${LEAK_LINE}${C_0}"; else say "${1}${LEAK_LINE}"; fi
 }
 
 prepare_account() {   # 合并账号内原子保存的共享配置后，再校验实际将使用的配置。
@@ -5159,7 +5952,8 @@ prepare_account() {   # 合并账号内原子保存的共享配置后，再校�
 	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
 }
 
-preflight() {   # 账号的出口必须可用且干净，否则不启动（避免走错出口）
+preflight() {   # preflight [app]：账号的出口必须可用且干净，否则不启动（避免走错出口）。顺带测 DNS / WebRTC 泄露（只提示，不拦）：
+	             # DNS 泄露影响这个账号的一切；WebRTC 泄露在网页和 App 里，打开 App 时（app）、要在浏览器里登录时才另外说明
 	local bad rc
 	COFFEE_LINE=""
 	if [ -n "$ACC_PORT" ]; then pick_route || return 1; else ROUTE=direct; fi   # 直连的第三方 API 账号不经端口
@@ -5173,6 +5967,8 @@ preflight() {   # 账号的出口必须可用且干净，否则不启动（避�
 	fi
 	coffee_check
 	rc=$?
+	[ -z "$LEAK_DNS" ] || warn "$LEAK_DNS"
+	[ -z "$LEAK_WEBRTC" ] || [ "${1:-}" != app ] || warn "$LEAK_WEBRTC"
 	case $rc in
 		0) ;;
 		4) warn "出口检测没拿到评分（${COFFEE_LINE}），先继续" ;;
@@ -5330,7 +6126,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	fi
 	sync_if_changed
 	launchers_sync
-	preflight || exit 1
+	preflight app || exit 1   # App 里的网页也会用 WebRTC：泄露时另外说明
 	prepare_account "$key" || die "初始化账号目录失败"
 	tool app_prepare
 	[ -e "$dir/Local State" ] || first=1
@@ -5567,8 +6363,9 @@ cmd_local() {
 	esac
 }
 
-cmd_check() {
-	local keys key ips="" rc host="" route=""
+cmd_check() {   # cca check [账号]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
+	local keys key ips="" rc host="" route="" since webrtc=""
+	since=$(date +%s)
 	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
 	[ -n "$keys" ] || { info "还没有账号"; return 0; }
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，测到的才是账号现在的出口
@@ -5600,15 +6397,19 @@ cmd_check() {
 			say "  ${ACC_NAME}  ${ACC_NODE}${ACC_PORT:+  :${ACC_PORT}}  ${COFFEE_LINE}"
 			continue
 		fi
-		coffee_check
+		coffee_check "$since"
 		rc=$?
 		case $rc in 0) ;; *) COFFEE_LINE="$COFFEE_LINE ${C_Y}(${COFFEE_NOTE//$'\n'/; })${C_0}" ;; esac
 		say "  ${ACC_NAME}  ${ACC_NODE}  :${ACC_PORT}  ${COFFEE_LINE}"
+		leak_show "      "
+		[ -z "$LEAK_DNS" ] || warn "$LEAK_DNS"
+		[ -z "$LEAK_WEBRTC" ] || webrtc="$LEAK_WEBRTC"   # 这台 Mac 上都一样：最后说一次
 		[ -n "$COFFEE_IP" ] && ips="$ips$COFFEE_IP"$'\n'
 	done 4<<< "$keys"
 	local dup
 	dup=$(printf '%s' "$ips" | sort | uniq -d)
 	[ -n "$dup" ] && warn "有账号共用同一个出口 IP：$(echo $dup)"
+	[ -z "$webrtc" ] || warn "$webrtc"
 	return 0
 }
 
@@ -5643,6 +6444,7 @@ run_account() {
 		fi
 		if [ -n "$COFFEE_LINE" ]; then say "  ${C_D}出口${C_0}  ${ACC_NODE} · ${COFFEE_LINE}"
 		else say "  ${C_D}出口${C_0}  ${ACC_NODE}（未检测）"; fi
+		leak_show "  ${C_D}泄露${C_0}  "
 	fi
 	say ""
 	child_env
@@ -5992,9 +6794,10 @@ policy_clone() {   # policy_clone 仓库 目录：0 拉到了；1 连不上（�
 	return 1
 }
 
-policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-policy）、检查格式后换上 $POLICY_DIR/policy.json；
-	                 # 失败时原来的照用，原因在 POLICY_ERR
-	local repo tmp rc i err
+policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-policy）、检查格式后换上 $POLICY_DIR/policy.json；仓库里有
+	                 # 维护者参考配置里的节点（nodes.json，命名空间 cca-nodes）时同样验过换上，没有了就删掉。
+	                 # 两份都没问题才换（任何一份不对都不换），失败时原来的照用，原因在 POLICY_ERR
+	local repo tmp rc i err nodes
 	repo=$(py policy-repo)
 	[ -n "$repo" ] || { POLICY_ERR="还没配置映射仓库（cca policy setup）"; return 1; }
 	[ -f "$POLICY_DIR/id_ed25519" ] || { POLICY_ERR="这台机器还没有 deploy key：运行 cca policy setup ${repo}"; return 1; }
@@ -6007,16 +6810,24 @@ policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-pol
 	done
 	if [ $rc -eq 0 ]; then
 		rc=1
+		nodes="$tmp/repo/nodes.json"
 		printf 'cca-release %s\n' "$RELEASE_KEY" > "$tmp/allowed"
 		if ! ssh-keygen -Y verify -f "$tmp/allowed" -I cca-release -n cca-policy -s "$tmp/repo/policy.json.sig" \
 			< "$tmp/repo/policy.json" >/dev/null 2>&1; then
 			POLICY_ERR="签名不对（不是维护者签发的，或者文件被改过），没有换上"
 		elif ! err=$(py policy-check "$tmp/repo/policy.json"); then
 			POLICY_ERR="映射的格式不对：${err//$'\n'/；}"
-		elif ( umask 077; cp "$tmp/repo/policy.json" "$POLICY_DIR/policy.json.$$" ) &&
-			mv -f "$POLICY_DIR/policy.json.$$" "$POLICY_DIR/policy.json"; then
+		elif [ -f "$nodes" ] && ! ssh-keygen -Y verify -f "$tmp/allowed" -I cca-release -n cca-nodes -s "$nodes.sig" \
+			< "$nodes" >/dev/null 2>&1; then
+			POLICY_ERR="参考节点（nodes.json）的签名不对（不是维护者签发的，或者文件被改过），映射和参考节点都没有换上"
+		elif [ -f "$nodes" ] && ! err=$(py fill-check "$nodes"); then
+			POLICY_ERR="参考节点（nodes.json）的格式不对：${err//$'\n'/；}"
+		elif ( umask 077; cp "$tmp/repo/policy.json" "$POLICY_DIR/policy.json.$$" && { [ ! -f "$nodes" ] || cp "$nodes" "$POLICY_DIR/nodes.json.$$"; } ) &&
+			mv -f "$POLICY_DIR/policy.json.$$" "$POLICY_DIR/policy.json" &&
+			if [ -f "$nodes" ]; then mv -f "$POLICY_DIR/nodes.json.$$" "$POLICY_DIR/nodes.json"; else rm -f "$POLICY_DIR/nodes.json"; fi; then
 			rc=0
 		else
+			rm -f "$POLICY_DIR/policy.json.$$" "$POLICY_DIR/nodes.json.$$"
 			POLICY_ERR="写不进 ${POLICY_DIR}"
 		fi
 	fi
@@ -6032,12 +6843,13 @@ policy_rows() {   # 这台机器上按映射固定出口的账号、映射里还
 }
 
 policy_pull() {   # 现在就拉一次，说明结果；拉不到时说明原因（上次拉到的照用）
-	local before
-	before=$(cat "$POLICY_DIR/policy.json" 2>/dev/null)
+	local before fill
+	before=$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)
 	if policy_fetch; then
 		policy_log "拉取成功"
-		if [ "$(cat "$POLICY_DIR/policy.json")" = "$before" ]; then okay "映射没有变化（$(py policy-summary)）"
-		else okay "已更新映射（$(py policy-summary)）"; fi
+		fill=$(py fill-summary)
+		if [ "$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)" = "$before" ]; then okay "映射没有变化（$(py policy-summary)${fill:+；参考节点：${fill}}）"
+		else okay "已更新映射（$(py policy-summary)${fill:+；参考节点：${fill}}）"; fi
 		policy_rows
 		# 账号表刚照映射改过：马上同步到路由器（后台拉取不做这一步，它不能问、不能重载，留给下一条命令）
 		if [ "$(digest)" != "$(py get synced)" ] && router_needed; then
@@ -6055,7 +6867,7 @@ policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、�
 	mkdir -p "$POLICY_DIR" && chmod 700 "$POLICY_DIR" || die "建不了 ${POLICY_DIR}"
 	old=$(py policy-repo)
 	if [ -n "$old" ] && [ "$old" != "$repo" ]; then   # GitHub 的 deploy key 只能加在一个仓库上：换了仓库就换一把，旧仓库的映射也不再用
-		rm -f "$POLICY_DIR/id_ed25519" "$POLICY_DIR/id_ed25519.pub" "$POLICY_DIR/policy.json"
+		rm -f "$POLICY_DIR/id_ed25519" "$POLICY_DIR/id_ed25519.pub" "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json"
 	fi
 	host=$(hostname -s 2>/dev/null); host="${host:-mac}"
 	if [ ! -f "$POLICY_DIR/id_ed25519" ]; then
@@ -6113,8 +6925,8 @@ policy_guide() {   # 手把手配置：生成 deploy key、显示公钥，等维
 	info "先跳过：维护者加上公钥之后，cca 每天会自动拉一次映射（也可以运行 cca policy pull 马上拉）"
 }
 
-policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、上次拉到的映射、最近一次拉取的结果、受约束的账号
-	local repo
+policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、上次拉到的映射和参考节点、最近一次拉取的结果、受约束的账号
+	local repo fill
 	repo=$(py policy-repo)
 	if [ -z "$repo" ]; then
 		if [ -n "$(py get policy_declined)" ]; then info "没有配置维护者的账号 → 节点映射（选过不用，启动时不再问；想用时运行 cca policy setup）"
@@ -6126,6 +6938,8 @@ policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、�
 	else say "  这台机器还没有 deploy key：运行 cca policy setup ${repo}"; fi
 	if [ -f "$POLICY_DIR/policy.json" ]; then say "  映射：$(py policy-summary)（$(date -r "$POLICY_DIR/policy.json" '+%F %T') 拉到的）"
 	else say "  还没拉到映射"; fi
+	fill=$(py fill-summary)
+	[ -z "$fill" ] || say "  参考节点：维护者参考配置里${fill}（路由器和本机 Clash Verge 的配置里缺的自动补上）"
 	[ ! -f "$POLICY_DIR/log" ] || say "  最近一次拉取：$(tail -n 1 "$POLICY_DIR/log")"
 	policy_rows
 }
@@ -6338,7 +7152,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
                              部分；cca app --launchers 重新生成）。只用于官方账号
-  cca check [账号]           检测各账号出口 IP、地区、纯净度，提示共用出口；第三方 API 账号只检测接口连不连得上
+  cca check [账号]           检测各账号出口 IP、地区、纯净度和 DNS / WebRTC 泄露，提示共用出口；第三方 API 账号只检测接口连不连得上
   cca login <账号>           退出这个账号现在的登录，在它专属的浏览器窗口里重新登录
 
 Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人的两种账号可以用同一个别名、同一个邮箱）
@@ -6391,7 +7205,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              只检查 / 退回上一版 / 自动安装（默认）/ 只提示 / 关闭
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
-                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）
+                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
+                             leak_check（设成 false：启动前不测 DNS / WebRTC 泄露）
 EOF
 }
 
@@ -6414,6 +7229,7 @@ main() {
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) cmd_policy_fetch ;;
 		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
+		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
 		*)

@@ -6,6 +6,12 @@
 #     cca-policy）→ 自检 → 提交并推送。签名私钥默认 ~/.ssh/cca_release_ed25519（可用 CCA_RELEASE_KEY 指定），和发版
 #     用的是同一把。policy.json 的格式：{"version": 1, "claude": {"name@example.com": "节点"}, "codex": {"name@example.com": "节点"},
 #     "aliases": {"name@example.com": "别名"}}。aliases 可以不写：各台机器按映射自动加账号时用的别名（Claude、Codex 通用）
+#     目录里放着你自己的 Clash 配置 custom.yaml 时，顺带发布其中策略组 OpenAi（别的组名用 CCA_FILL_GROUP=组名 指定）
+#     引用的节点：抽出来写成 nodes.json，同样签名（命名空间 cca-nodes）推上去；各台机器把它们补进自己的路由器和本机
+#     Clash Verge 的配置里缺的地方，名字补进同名策略组。custom.yaml 本身不提交（里面有你全部的规则和设备），已经提交了会拒绝
+#
+#   ./policy.sh nodes 参考配置 [策略组]
+#     只看不发布：打印会写进 nodes.json 的内容（策略组默认 OpenAi）
 #
 #   ./policy.sh key [ls]                       列出各台机器的 deploy key：添加时间、最近一次拉取、别名
 #   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥（- 是从标准输入读），
@@ -22,7 +28,8 @@ fail() { echo "✗ $*" >&2; exit 1; }
 usage() {
 	cat >&2 <<'U'
 用法：
-  ./policy.sh 映射仓库的目录 ["提交说明"]     发布映射（目录里要有 policy.json）
+  ./policy.sh 映射仓库的目录 ["提交说明"]     发布映射（目录里要有 policy.json；有 custom.yaml 时顺带发布参考节点）
+  ./policy.sh nodes 参考配置 [策略组]          只看不发布：打印会写进 nodes.json 的参考节点（策略组默认 OpenAi）
   ./policy.sh key [ls]                         列出各台机器的 deploy key：添加时间、最近一次拉取、别名
   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥，不写别名就提示起一个
   ./policy.sh key rm 别名 [-y]                 删掉一把
@@ -315,8 +322,37 @@ key_cmd() {
 	esac
 }
 
+# ---------------------------------------------------------------------------
+# 参考节点：维护者配置里的一个策略组（默认 OpenAi）和它引用的节点，各台机器补进自己配置里缺的地方
+# ---------------------------------------------------------------------------
+GROUP="${CCA_FILL_GROUP:-OpenAi}"
+nodes_extract() {   # nodes_extract 参考配置 策略组：打印 nodes.json 的内容（说明写 stderr）。组里的策略组、内置出站不算节点
+	ruby -E UTF-8 -ryaml -rjson -e '
+		s = File.read(ARGV[0], encoding: "UTF-8")
+		c = begin
+		  YAML.load(s, aliases: true)
+		rescue ArgumentError
+		  YAML.load(s)
+		end
+		abort "✗ #{ARGV[0]} 不像 Clash 的配置" unless c.is_a?(Hash)
+		g = (c["proxy-groups"] || []).find { |x| x.is_a?(Hash) && x["name"].to_s == ARGV[1] }
+		abort "✗ #{ARGV[0]} 里没有叫「#{ARGV[1]}」的策略组（别的组名用 CCA_FILL_GROUP=组名 指定）" unless g
+		px = {}
+		(c["proxies"] || []).each { |p| px[p["name"].to_s] ||= p if p.is_a?(Hash) }
+		mem = (g["proxies"] || []).map(&:to_s).uniq
+		out = mem.select { |n| px[n] }.map { |n| px[n].merge("name" => n) }
+		abort "✗ 策略组「#{ARGV[1]}」里没有节点（只有策略组、内置出站，或者节点来自 proxy-providers）" if out.empty?
+		skip = mem.reject { |n| px[n] }
+		$stderr.puts "• 参考节点：策略组「#{ARGV[1]}」里的 #{out.size} 个节点" + (skip.empty? ? "" : "（#{skip.join("、")} 不是节点，不算）")
+		puts JSON.pretty_generate("version" => 1, "group" => ARGV[1], "proxies" => out)' "$1" "$2"
+}
+
 case "${1:-}" in
 	key|keys) shift; key_cmd "$@"; exit 0 ;;
+	nodes)
+		[ -f "${2:-}" ] || fail "用法：./policy.sh nodes 参考配置 [策略组]"
+		command -v ruby >/dev/null 2>&1 || fail "要用 ruby 读 Clash 的配置（macOS 自带；没有的话 brew install ruby）"
+		nodes_extract "$2" "${3:-$GROUP}"; exit 0 ;;
 	''|-h|--help|help) usage ;;
 esac
 
@@ -332,6 +368,22 @@ pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' cca)
 out=$(bash ./cca _policy-check "$dir/policy.json") || fail "policy.json 有问题：
 ${out}"
 
+# 参考节点：目录里有 custom.yaml 就重新抽一遍（custom.yaml 本身绝不提交）；只有 nodes.json 时照它发布
+if [ -f "$dir/custom.yaml" ]; then
+	! git -C "$dir" ls-files --error-unmatch custom.yaml >/dev/null 2>&1 ||
+		fail "custom.yaml 已经提交进映射仓库了：里面是你的整份配置（规则、局域网设备……），每台机器都拉得到。先运行 git -C '${dir}' rm --cached custom.yaml 再发布（推上去过的话，历史里的也要清掉）"
+	ex=$(git -C "$dir" rev-parse --git-path info/exclude) || fail "${dir} 不是 git 仓库"
+	case "$ex" in /*) ;; *) ex="$dir/$ex" ;; esac
+	grep -qx '/custom.yaml' "$ex" 2>/dev/null || { mkdir -p "${ex%/*}" && echo '/custom.yaml' >> "$ex"; }   # 以后 git add -A 也不会带上它
+	command -v ruby >/dev/null 2>&1 || fail "要用 ruby 读 custom.yaml（macOS 自带；没有的话 brew install ruby）"
+	nodes_extract "$dir/custom.yaml" "$GROUP" > "$dir/nodes.json.tmp" || { rm -f "$dir/nodes.json.tmp"; exit 1; }
+	mv -f "$dir/nodes.json.tmp" "$dir/nodes.json"
+fi
+if [ -f "$dir/nodes.json" ]; then
+	out=$(bash ./cca _fill-check "$dir/nodes.json") || fail "nodes.json 有问题：
+${out}"
+fi
+
 # 映射里有邮箱和节点名：只往私有仓库推（看的是 origin 实际推送的地址）
 url=$(git -C "$dir" remote get-url --push origin) || fail "${dir} 不是 git 仓库，或者没有 origin"
 repo=$(printf '%s' "$url" | sed -E 's#^(git@github\.com:|ssh://git@(ssh\.)?github\.com(:443)?/|https://github\.com/)##; s#\.git$##')
@@ -345,9 +397,20 @@ trap 'rm -f "$allowed"' EXIT
 printf 'cca-release %s\n' "$pub" > "$allowed"
 ssh-keygen -Y verify -f "$allowed" -I cca-release -n cca-policy -s "$dir/policy.json.sig" < "$dir/policy.json" >/dev/null ||
 	fail "签名自检失败"
+files=(policy.json policy.json.sig)
+if [ -f "$dir/nodes.json" ]; then   # 参考节点用另一个命名空间签：两份文件的签名不能互相顶替
+	rm -f "$dir/nodes.json.sig"
+	ssh-keygen -Y sign -q -n cca-nodes -f "$KEY" "$dir/nodes.json"
+	ssh-keygen -Y verify -f "$allowed" -I cca-release -n cca-nodes -s "$dir/nodes.json.sig" < "$dir/nodes.json" >/dev/null ||
+		fail "参考节点的签名自检失败"
+	files+=(nodes.json nodes.json.sig)
+elif git -C "$dir" ls-files --error-unmatch nodes.json >/dev/null 2>&1; then   # 删掉了 nodes.json：不再发布参考节点
+	rm -f "$dir/nodes.json.sig"
+	files+=(nodes.json nodes.json.sig)
+fi
 
-git -C "$dir" add policy.json policy.json.sig
-if git -C "$dir" diff --cached --quiet; then echo "• 映射没有变化，不用推送"; exit 0; fi
+git -C "$dir" add -A -- "${files[@]}"
+if git -C "$dir" diff --cached --quiet; then echo "• 映射和参考节点都没有变化，不用推送"; exit 0; fi
 git -C "$dir" commit -q -m "${2:-更新账号 → 节点映射}"
 git -C "$dir" push -q origin HEAD
 echo "✓ 已发布到 ${repo}：配置了这个仓库的 cca 下次拉取时换上（每天自动拉，cca policy pull 马上拉）"
