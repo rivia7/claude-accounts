@@ -972,7 +972,9 @@ out2=$(run cca update 9.9.14-beta.2 2>&1); rc2=$?
 ok "cca update 版本号：不比现在新的不装（退回用 --rollback），没有这个版本时说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不比现在的 9.9.14-beta.1 新" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有这个版本" && [ "$(ver)" = 9.9.14-beta.1 ]'
 out=$(run cca update --rollback 2>&1)
 ok "测试版 → 退回原来的正式版" '[ "$(ver)" = 9.9.13 ] && printf "%s" "$out" | grep -q "已退回 9.9.13"'
-run cca update 9.9.14-beta.1 >/dev/null 2>&1; publish 9.9.14
+out=$(run cca update v9.9.14-beta.1 2>&1); rc=$?
+ok "cca update 的版本号照 GitHub 上 tag 的样子写成 v9.9.14-beta.1 也认" '[ $rc -eq 0 ] && [ "$(ver)" = 9.9.14-beta.1 ]'
+publish 9.9.14
 rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
 out=$(run CCA_TTY="$(ans)" cxa @dave --version 2>&1); rc=$?
 ok "装了测试版之后，出了更新的正式版照常自动更新；这次是用 cxa 启动的，换上新版本重新执行后启动的照样是 Codex" 'printf "%s" "$out" | grep -q "cca 已自动更新：9.9.14-beta.1 → 9.9.14" && [ "$(ver)" = 9.9.14 ] && [ $rc -eq 3 ] && clast ARGS | grep -q -- " --version$" && clast ENV | grep -q "CODEX_HOME=$DD/codex "'
@@ -1311,8 +1313,8 @@ r3 bash -c "head -c 1500 '$T/install.sh' | bash" >/dev/null 2>&1
 ok "install.sh 只下载了一半：什么都不执行" '[ "$(grep -c "GH latest-get" gh.log)" = "$n_gh" ] && [ ! -e "$H3/.cca" ]'
 publish 9.9.22; publish 9.9.23-beta.1
 r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" >/dev/null 2>&1
-out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 9.9.23-beta.1 2>&1); rc=$?
-ok "一键安装默认装最新的正式版；指定版本号时装那个测试版，换下来的正式版留着" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.23-beta.1 ] && printf "%s" "$out" | grep -q "正在下载 cca 9.9.23-beta.1" && [ "$(cat "$H3/.cca/update/cca.prev.version")" = 9.9.22 ]'
+out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" v9.9.23-beta.1 2>&1); rc=$?
+ok "一键安装默认装最新的正式版；指定版本号时（写成 tag 的样子 v9.9.23-beta.1 也认）装那个测试版，换下来的正式版留着" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.23-beta.1 ] && printf "%s" "$out" | grep -q "正在下载 cca 9.9.23-beta.1" && [ "$(cat "$H3/.cca/update/cca.prev.version")" = 9.9.22 ]'
 out=$(r3 "$H3/.cca/bin/cca" update --rollback 2>&1)
 ok "一键安装装上的测试版也能退回" '[ "$("$H3/.cca/bin/cca" version)" = 9.9.22 ] && printf "%s" "$out" | grep -q "已退回 9.9.22"'
 

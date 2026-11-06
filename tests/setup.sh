@@ -81,6 +81,8 @@ chmod +x "$R/etc/init.d/cron" "$R/etc/openclash/clash"
 
 # --- 路由器侧假命令（rbin）
 printf '#!/bin/sh\nexec /bin/dash "$@"\n' > "$T/rbin/sh"
+# OpenWrt 默认的 busybox 没有 cksum（真实路由器上遇到过）：假路由器上也没有，路由器端脚本用了就测得出来
+printf '#!/bin/sh\necho "cksum: not found" >&2\nexit 127\n' > "$T/rbin/cksum"
 cat > "$T/rbin/uci" <<'S'
 #!/bin/sh
 case "$*" in

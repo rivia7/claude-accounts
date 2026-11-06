@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.5"
+VERSION="2.8.0-beta.6"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -4340,8 +4340,15 @@ core_test() {   # core_test 配置：内核自己的 -t 校验（主目录和启
 fill_has() { grep -qs '"fill": {' "$ACC"; }   # 账号表（JSON）里有参考节点
 fill_id() { ruby -E UTF-8 -ryaml -e "$YL"'; f = (yl(ARGV[0]) || {})["fill"]; print f["id"] if f.is_a?(Hash)' "$ACC" 2>/dev/null; }
 fill_waiting() { [ -f "$FILLPEND" ] && running; }   # 配置文件里新写了参考节点，在跑的还没用上
-fill_sig() {   # fill_sig 配置文件：账号表 + 配置文件 + 内核（大小和修改时间：升级了内核，没通过校验的再试一次）的校验和
-	{ cat "$ACC" "$1"; fsg_c=$(core_bin) && ls -lnL "$fsg_c" 2>/dev/null | awk '{ print $5, $6, $7, $8 }'; } | cksum
+sum_in() {   # stdin 的摘要（只用来认有没有变）：OpenWrt 默认的 busybox 不带 cksum（真实路由器上遇到过），md5sum、sha256sum 一般都有
+	if command -v md5sum >/dev/null 2>&1; then md5sum
+	elif command -v sha256sum >/dev/null 2>&1; then sha256sum
+	elif command -v cksum >/dev/null 2>&1; then cksum
+	else ruby -e 'h = 14695981039346656037; $stdin.each_byte { |b| h = ((h ^ b) * 1099511628211) & 0xffffffffffffffff }; print h'
+	fi
+}
+fill_sig() {   # fill_sig 配置文件：账号表 + 配置文件 + 内核（大小和修改时间：升级了内核，没通过校验的再试一次）的摘要
+	{ cat "$ACC" "$1"; fsg_c=$(core_bin) && ls -lnL "$fsg_c" 2>/dev/null | awk '{ print $5, $6, $7, $8 }'; } | sum_in
 }
 fmsg() { log "$*"; [ -n "${FQUIET:-}" ] || echo "$*"; }   # 钩子里只记日志（ShellCrash 的钩子靠 stdout 拿配置的路径）
 fill_fail() { echo "$*" > "$FILLWHY"; fmsg "$*"; }
@@ -4352,7 +4359,7 @@ fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置�
 	fs_src="${1:-$(source_config)}"
 	[ -n "$fs_src" ] && [ -f "$fs_src" ] || return 0
 	fs_sig=$(fill_sig "$fs_src")
-	[ -z "${FILLFORCE:-}" ] && [ "$fs_sig" = "$(cat "$FILLSEEN" 2>/dev/null)" ] && return 0
+	[ -z "${FILLFORCE:-}" ] && [ -n "$fs_sig" ] && [ "$fs_sig" = "$(cat "$FILLSEEN" 2>/dev/null)" ] && return 0   # 算不出摘要时不当成没变
 	fs_o="$R/tmp/cca.src.$$.yaml"; fs_v="$R/tmp/cca.fill.$$.yaml"
 	fs_tb=$(runtime_config); [ -n "$fs_tb" ] && [ -f "$fs_tb" ] || fs_tb="$fs_src"   # 拿正在用的运行配置加上这些节点给内核校验（它本来就校验得过）
 	set -- --fill-source "$fs_o" --test "$fs_tb" --test-out "$fs_v"
@@ -6929,8 +6936,8 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 		--rollback) update_rollback; return ;;
 		'') [ ! -f "$POLICY_DIR/id_ed25519" ] || policy_pull || true ;;   # 配置了维护者的映射：顺便拉一次
 		--check) ;;
-		*) is_ver "$1" || die "用法: cca update [版本号 | --check | --rollback | auto | notify | off]"
-		   want="$1" ;;   # 手动装指定的版本，例如测试版 2.6.0-beta.1
+		*) want="${1#[vV]}"   # 手动装指定的版本，例如测试版 2.6.0-beta.1（照 GitHub 上 tag 的样子写成 v2.6.0-beta.1 也认）
+		   is_ver "$want" || die "用法: cca update [版本号 | --check | --rollback | auto | notify | off]" ;;
 	esac
 	if dev_mode && [ "${1:-}" != --check ]; then
 		info "开发模式：${SELF} 在 git 仓库里，用 git pull 更新"

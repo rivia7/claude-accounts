@@ -294,7 +294,7 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 新功能有时先发测试版（版本号像 `2.8.0-beta.1`，在 [GitHub Releases](https://github.com/rivia7/claude-accounts/releases) 里标为 Pre-release）。自动更新和一键安装都不会装测试版，想试的话手动装（下面的 `X.Y.Z-beta.N` 换成那个测试版的版本号）：
 
-- 已经装着 2.6.0 或更新的版本（2.6.0 的测试版也行）：`cca update X.Y.Z-beta.N`
+- 已经装着 2.6.0 或更新的版本（2.6.0 的测试版也行）：`cca update X.Y.Z-beta.N`（照 GitHub 上 tag 的样子写成 `vX.Y.Z-beta.N` 也行；装着的是 2.8.0-beta.5 或更早的版本时，只认不带 v 的写法）
 - 2.5.0 及更早的版本不认这个写法，还没装 cca 的也一样：用一键安装，在后面写上版本号（账号和配置都保留）：
 
   ```sh

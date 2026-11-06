@@ -5,7 +5,7 @@
 #
 # 下载最新版 cca，校验发布签名，然后运行 cca install（会在终端里问几个问题：路由器、可选节点、第一个账号）。
 # 已经装过的，再运行一次就是修复/重装，账号和配置都保留。
-# 装指定的版本（例如测试版）：… | bash -s 2.6.0-beta.1；换下来的版本留着，可以 cca update --rollback 退回。
+# 装指定的版本（例如测试版）：… | bash -s 2.6.0-beta.1（写成 tag 的样子 v2.6.0-beta.1 也认）；换下来的版本留着，可以 cca update --rollback 退回。
 #
 # https://github.com/rivia7/claude-accounts · SPDX-License-Identifier: MIT
 
@@ -14,7 +14,7 @@ RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44s
 
 # 整个安装过程包在函数里，脚本最后一行才执行：curl | bash 下载到一半断了也不会执行半截脚本
 main() {
-	local c py tmp f i v want="${1:-}" from="$REPO/releases/latest/download"
+	local c py tmp f i v want="${1#[vV]}" from="$REPO/releases/latest/download"
 	fail() { printf '\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 	info() { printf '\033[32m•\033[0m %s\n' "$*" >&2; }
 
