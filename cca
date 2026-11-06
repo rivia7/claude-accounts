@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.7"
+VERSION="2.8.0-beta.8"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -2521,8 +2521,8 @@ def verge_profile():
 
 
 def fill_marked(path):
-    """配置文件里 cca 写进去的（行尾带「# cca」的行）：(节点名的集合, 补进策略组的名字的列表)。节点在 proxies 段里一个一行，
-    组成员在 proxy-groups 段里（都是补进参考节点的那个组的）"""
+    """配置文件里 cca 写进去的（行尾带「# cca」的行）：(节点名的集合, 补进策略组的名字的列表)。节点在 proxies 段里（块写法的
+    记号在 name 那一行），组成员在 proxy-groups 段里（都是补进参考节点的那个组的）"""
     try:
         with open(path, encoding='utf-8') as f:
             lines = f.read().split('\n')
@@ -2536,8 +2536,12 @@ def fill_marked(path):
         m = re.match(r' *- (.*?)[ \t]+# cca[ \t]*\r?$', line)
         if not m:
             continue
-        if sec == 'proxies' and m.group(1).startswith('{'):
-            n = flow_get(m.group(1), 'name')
+        if sec == 'proxies':   # 一项的第一行：块写法的 "- name: 节点"，或者以前写成一行的 "- {name: 节点, …}"
+            if m.group(1).startswith('{'):
+                n = flow_get(m.group(1), 'name')
+            else:
+                nm = re.match(r'name:\s*(.*)$', m.group(1))
+                n = yaml_unquote(nm.group(1)) if nm else None
             if n:
                 nodes.add(n)
         elif sec == 'proxy-groups' and not m.group(1).startswith('{'):
@@ -4395,6 +4399,12 @@ fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置�
 	[ -n "${FQUIET:-}" ] || sed -n 's/^cca: \(参考节点「.*没有写\)$/\1/p' "$fs_o.err"   # 哪些没写、为什么
 	cat "$fs_o.err" >> "$LOG"; rm -f "$fs_o.err"
 	if [ $fs_rc -eq 2 ]; then rm -f "$fs_o" "$fs_v" "$FILLWHY"; echo "$fs_sig" > "$FILLSEEN"; return 0; fi
+	if [ $fs_rc -eq 3 ]; then   # 只是把 cca 以前写成一行的节点改成块写法：内容没变，不用校验，也不用重启
+		rm -f "$fs_v" "$FILLWHY"
+		cp -f "$fs_src" "$SRCBAK"
+		if rewrite "$fs_src" "$fs_o" 2>/dev/null; then fill_sig "$fs_src" > "$FILLSEEN"; log "参考节点：${fs_what}"; else rm -f "$fs_o"; fi
+		return 0
+	fi
 	if [ $fs_rc -ne 0 ]; then   # 配置文件改了（或参考节点换了）再试
 		rm -f "$fs_o" "$fs_v"; echo "$fs_sig" > "$FILLSEEN"
 		fill_fail "维护者参考配置里的节点没能写进 ${NAME} 的配置文件 ${fs_src}${fs_why:+（${fs_why}）}"
@@ -4941,7 +4951,7 @@ router_rb() {
 #   ruby apply.rb --fill-source 输出 [--custom 自定义节点] [--test 配置 --test-out 输出] 配置文件 账号表
 #     把账号表里维护者参考配置的节点（fill）直接写进用户的配置文件（见下面「参考节点」）：写好的新内容放到输出（输出是 -
 #     时只看不写：第一行是参考节点的概况，第二行是还要做什么，第三行是改不了的），做了什么打印到 stdout；退出码 0 有改动，
-#     2 不用改，1 改不了。
+#     3 只是把 cca 以前写成一行的节点改成了块写法（内容没变），2 不用改，1 改不了。
 #     --custom：ShellCrash 的自定义节点（yamls/proxies.yaml，它随后才接进来），参考节点不占用它们的名字；
 #     --test：另写一份「这份配置 + 要写的节点」到 --test-out，给内核 -t 校验（别处的节点这里的内核不一定认）
 require 'yaml'
@@ -4975,14 +4985,13 @@ names = lambda do |c|   # 节点和（cca 以外的）策略组的名字
     list.call(c['proxy-groups']).select { |g| g.is_a?(Hash) && !ours.call(g, 'CCA-') }.map { |g| g['name'].to_s }
 end
 q = lambda { |s| '"' + s.to_s.gsub(/["\\]/) { |c| "\\#{c}" }.gsub(/[\x00-\x1f\x7f]/) { |c| format('\x%02x', c.ord) } + '"' }
-insert = lambda do |text, key, items|   # 段落的认法和 ShellCrash 一样：顶格的 "key:" 开始，到下一个顶格的小写字母开头的行为止
-  return text if items.empty?
-  lines = text.lines
+insert_lines = lambda do |text, key, make|   # 段落 key 开头插入几项：make.call(缩进, 换行) 给出要插的行（和这一段原有的项对齐）。
+  lines = text.lines                          # 段落的认法和 ShellCrash 一样：顶格的 "key:" 开始，到下一个顶格的小写字母开头的行为止
   heads = lines.each_index.select { |i| lines[i].start_with?("#{key}:") }
   raise "#{key} 出现了不止一次" if heads.size > 1
   if heads.empty?   # 没有这一段：加在最后，缩进和 ShellCrash 自己追加入站时一样（两个空格）
     text += "\n" unless text.empty? || text.end_with?("\n")
-    return text + "#{key}:\n" + items.map { |s| "  - #{s}\n" }.join
+    return text + "#{key}:\n" + make.call('  ', "\n").join
   end
   i = heads[0]
   nl = lines[i].end_with?("\r\n") ? "\r\n" : "\n"
@@ -4990,10 +4999,13 @@ insert = lambda do |text, key, items|   # 段落的认法和 ShellCrash 一样�
   raise "#{key} 不是一行一项的列表" unless lines[i] =~ /\A#{Regexp.escape(key)}:[ \t]*(#.*)?\r?\n?\z/
   j = (i + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
   first = lines[i + 1...j].find { |l| l =~ /\A *- / }
-  ind = first ? first[/\A */] : '  '   # 和这一段原有的项对齐
+  ind = first ? first[/\A */] : '  '
   lines[i] += nl unless lines[i].end_with?("\n")
-  lines[i + 1, 0] = items.map { |s| "#{ind}- #{s}#{nl}" }
+  lines[i + 1, 0] = make.call(ind, nl)
   lines.join
+end
+insert = lambda do |text, key, items|   # 一项一行的
+  items.empty? ? text : insert_lines.call(text, key, ->(ind, nl) { items.map { |s| "#{ind}- #{s}#{nl}" } })
 end
 fkey = lambda { |k| s = k.to_s; s =~ /\A[A-Za-z_][A-Za-z0-9_-]*\z/ && s !~ /\A(y|yes|n|no|true|false|on|off|null)\z/i ? s : q.call(s) }
 flow = lambda do |v|   # 写成一行（YAML 的流式写法）：写进配置文件的节点一个一行
@@ -5004,6 +5016,38 @@ flow = lambda do |v|   # 写成一行（YAML 的流式写法）：写进配置�
   when true, false, Integer, Float then v.to_s
   else q.call(v)
   end
+end
+scalar = lambda do |v|   # 块写法里的一个值：能不加引号就不加（交给 Psych 判断），有换行的写成双引号
+  case v
+  when nil then 'null'
+  when true, false, Integer, Float then v.to_s
+  else
+    s = v.to_s
+    d = s =~ /[\r\n]/ ? "\n" : YAML.dump(s, line_width: -1).sub(/\A--- /, '').sub(/\n(\.\.\.\n)?\z/, '')
+    d.include?("\n") ? q.call(s) : d
+  end
+end
+emit = lambda do |h, ind, out|   # 映射的块写法：一键一行，子映射、列表往里缩两格（和手写的 Clash 配置一样）
+  h.each do |k, v|
+    if v.is_a?(Hash) && !v.empty?
+      out << "#{ind}#{fkey.call(k)}:"
+      emit.call(v, ind + '  ', out)
+    elsif v.is_a?(Array) && !v.empty?
+      out << "#{ind}#{fkey.call(k)}:"
+      v.each do |x|
+        if x.is_a?(Hash) && !x.empty?
+          sub = emit.call(x, ind + '    ', [])
+          sub[0] = "#{ind}  - #{sub[0].lstrip}"
+          out.concat(sub)
+        else
+          out << "#{ind}  - #{x.is_a?(Hash) || x.is_a?(Array) ? flow.call(x) : scalar.call(x)}"
+        end
+      end
+    else
+      out << "#{ind}#{fkey.call(k)}: #{v.is_a?(Hash) || v.is_a?(Array) ? flow.call(v) : scalar.call(v)}"
+    end
+  end
+  out
 end
 add_members = lambda do |text, gname, items, suffix|   # 策略组 gname 的 proxies 列表末尾接上 items：只认一行一项的块写法
   lines = text.lines                                     # （ShellCrash 往组里加自定义节点也只认这种）
@@ -5038,13 +5082,19 @@ add_members = lambda do |text, gname, items, suffix|   # 策略组 gname 的 pro
   li ||= ki + '  '
   nl = lines[pk].end_with?("\r\n") ? "\r\n" : "\n"
   lines[m - 1] += nl unless lines[m - 1].end_with?("\n")
-  lines[m, 0] = items.map { |n| "#{li}- #{q.call(n)}#{suffix}#{nl}" }
+  last = m - 1 > pk ? lines[m - 1] : ''   # 和组里原有的成员一样：带双引号、单引号，还是不带
+  one = if last =~ /\A *- "/ then q
+        elsif last =~ /\A *- '/ then ->(n) { "'" + n.to_s.gsub("'", "''") + "'" }
+        else scalar
+        end
+  lines[m, 0] = items.map { |n| "#{li}- #{one.call(n)}#{suffix}#{nl}" }
   lines.join
 end
 
 # --- 参考节点：账号表的 fill（Mac 上的 cca 从维护者的映射仓库拉下来、验过签的）= 维护者配置里的一个策略组和它引用的节点。
-# 直接写进用户的配置文件（OpenClash 选用的那份、ShellCrash 的订阅配置、Clash Verge 当前的配置）：缺的节点一个一行插在
-# proxies 开头，名字接在同名策略组的 proxies 后面，行尾都带「# cca」；维护者改了节点，带这个记号的那一行跟着改。这些不写：
+# 直接写进用户的配置文件（OpenClash 选用的那份、ShellCrash 的订阅配置、Clash Verge 当前的配置）：缺的节点按块写法（和手写的
+# 节点一样一键一行）插在 proxies 开头，name 那一行行尾带「# cca」；名字接在同名策略组的 proxies 后面（照组里原有的引号写法），
+# 行尾也带「# cca」。维护者改了节点，带记号的那一项整个换掉；以前写成一行的（2.8.0-beta.5～7）改成块写法。这些不写：
 # 同名的是用户自己的节点（只补进组）；名字被策略组、内置的出站、ShellCrash 的自定义节点占了；用户已经有同一个节点（类型、
 # 服务器、端口和 TLS 域名一样）、只是叫法不同（补进组的是他的名字）；要经别的节点连接（dialer-proxy）而那个节点没有。
 # 和 Mac 上 cca 的 fill_plan 是同一套规则。原文的其余部分一个字节不动，写好的读一遍核对
@@ -5064,15 +5114,33 @@ if opt.key?('--fill-source')
     end
   end
   lines = text.lines
-  marked = {}   # cca 以前写进来的节点（行尾带记号）：名字 → 行号
+  marked = {}   # cca 以前写进来的节点（第一行行尾带记号）：名字 → [行号, 是不是写成了一行]（2.8.0-beta.5～7 写的是一行）
   ph = lines.index { |l| l.start_with?('proxies:') }
   if ph
     pe = (ph + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
     (ph + 1...pe).each do |n|
-      m = lines[n].match(/\A *- (\{.*\})[ \t]+# cca[ \t]*\r?\n?\z/) or next
+      m = lines[n].match(/\A *- (.*?)[ \t]+# cca[ \t]*\r?\n?\z/) or next
       y = (yparse.call(m[1]) rescue nil)
-      marked[y['name'].to_s] = n if y.is_a?(Hash) && !y['name'].to_s.empty?
+      marked[y['name'].to_s] = [n, m[1].start_with?('{')] if y.is_a?(Hash) && !y['name'].to_s.empty?
     end
+  end
+  span_end = lambda do |ls, n|   # 列表里从第 n 行起的这一项到哪一行为止（不含）：缩进更深的行都算它的，末尾的空行不算
+    ind = ls[n][/\A */].size
+    last = n
+    e = n + 1
+    while e < ls.size
+      unless ls[e].strip.empty?
+        break if ls[e][/\A */].size <= ind
+        last = e
+      end
+      e += 1
+    end
+    last + 1
+  end
+  node_lines = lambda do |p, ind, nl|   # 节点写成列表里的一项（块写法，name 排第一，那一行行尾带记号）
+    sub = emit.call({ 'name' => p['name'] }.merge(p), ind + '  ', [])
+    sub[0] = "#{ind}- #{sub[0].lstrip}#{mark}"
+    sub.map { |l| l + nl }
   end
   key = lambda do |p|   # 和 Mac 上的 cca 认节点一样：类型、服务器、端口、TLS 域名
     s = p['server'].to_s.strip.downcase.sub(/\.+\z/, '')
@@ -5090,6 +5158,7 @@ if opt.key?('--fill-source')
   cand.each { |p| okn[p['name'].to_s] = true unless taken[p['name'].to_s] || by[key.call(p)] }
   add = []   # 要插进去的节点
   upd = []   # cca 以前写进来、参考配置又改过的节点
+  fmt = []   # cca 以前写成一行的（内容没变）
   mem = []   # 要在策略组里的名字
   cand.each do |p|
     n = p['name'].to_s
@@ -5097,6 +5166,7 @@ if opt.key?('--fill-source')
     dp = p['dialer-proxy']
     if have[n]
       upd << p if marked[n] && have[n] != p
+      fmt << p if marked[n] && marked[n][1] && have[n] == p   # 以前写成一行的：改成和别的节点一样的块写法
       mem << n
     elsif taken[n]
       $stderr.puts "cca: 参考节点「#{n}」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写"
@@ -5136,7 +5206,7 @@ if opt.key?('--fill-source')
     puts gnote.to_s
     exit(add.empty? && upd.empty? && more.empty? ? 2 : 0)
   end
-  exit 2 if add.empty? && upd.empty? && more.empty?
+  exit 2 if add.empty? && upd.empty? && more.empty? && fmt.empty?
   rest = lambda do |c, an, m|   # 去掉写进去的之后的样子：写好的读出来，这部分要和原来一模一样
     c.merge('proxies' => list.call(c['proxies']).reject { |p| p.is_a?(Hash) && an.include?(p['name'].to_s) },
             'proxy-groups' => list.call(c['proxy-groups']).map { |x|
@@ -5149,20 +5219,20 @@ if opt.key?('--fill-source')
     gm = list.call((list.call(c['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gname } || {})['proxies']).map(&:to_s)
     px.size == want.size && px.all? { |p| want[p['name'].to_s] == p } && (m - gm).empty?
   end
-  an = (add + upd).map { |p| p['name'].to_s }
+  an = (add + upd + fmt).map { |p| p['name'].to_s }
   tries = [more]
-  tries << [] unless more.empty? || an.empty?   # 策略组改不了时退一步：只写节点
+  tries << [] unless more.empty? || (add + upd).empty?   # 策略组改不了时退一步：只写节点
   tries.each_with_index do |m, i|
     begin
       ls = text.lines
-      upd.each do |p|
-        n = marked[p['name'].to_s]
-        ls[n] = "#{ls[n][/\A */]}- #{flow.call(p)}#{mark}#{ls[n][/\r?\n\z/] || "\n"}"
+      (upd + fmt).sort_by { |p| -marked[p['name'].to_s][0] }.each do |p|   # 从后往前换，前面的行号不变
+        n = marked[p['name'].to_s][0]
+        ls[n...span_end.call(ls, n)] = node_lines.call(p, ls[n][/\A */], ls[n][/\r?\n\z/] || "\n")
       end
-      out = insert.call(ls.join, 'proxies', add.map { |p| flow.call(p) + mark })
+      out = add.empty? ? ls.join : insert_lines.call(ls.join, 'proxies', ->(ind, nl) { add.flat_map { |p| node_lines.call(p, ind, nl) } })
       out = add_members.call(out, gname, m, mark) unless m.empty?
       chk = yparse.call(out)
-      raise '写好后读出来和预期的不一样' unless chk.is_a?(Hash) && rest.call(chk, an, m) == rest.call(cfg, an, m) && got.call(chk, add + upd, m)
+      raise '写好后读出来和预期的不一样' unless chk.is_a?(Hash) && rest.call(chk, an, m) == rest.call(cfg, an, m) && got.call(chk, add + upd + fmt, m)
       File.open(opt['--fill-source'], 'wb') { |f| f.write(out) }
       if opt['--test'] && opt['--test-out']   # 给内核校验的：拿来校验的那份配置里换上（或加上）要写的节点
         if File.expand_path(opt['--test']) == File.expand_path(cfg_file)
@@ -5178,6 +5248,10 @@ if opt.key?('--fill-source')
           t['proxies'] = px
           File.open(opt['--test-out'], 'w') { |f| f.write(YAML.dump(t)) }
         end
+      end
+      if add.empty? && upd.empty? && m.empty?   # 只是改了写法：内容没变，不用校验，也不用重启
+        puts "把 cca 以前写成一行的节点 #{fmt.map { |p| p['name'] }.join('、')} 改成了和别的节点一样的写法"
+        exit 3
       end
       puts said.call(m) + (m == more ? gnote.to_s : "（策略组 #{gname} 没能改，没往组里加 #{more.join('、')}）")
       exit 0
@@ -6400,6 +6474,10 @@ verge_fill_prepare() {   # 维护者参考配置里的节点要写进 Clash Verg
 	case $rc in
 		0) VFILL_NEW="$CCA_HOME/local.fill.$$"; mv -f "$tmp/new.yaml" "$VFILL_NEW" && VFILL="$VFILL_NEW" ;;
 		2) py local-set fill_seen "$sig" fill "$FILL_ID" ;;
+		3) # 只是把 cca 以前写成一行的节点改成块写法：内容没变，直接换上，不用热加载
+		   if mkdir -p "$CCA_HOME/backup" && cp -p "$VFILL_PROF" "$CCA_HOME/backup/clash-verge-${VFILL_PROF##*/}" && py file-replace "$tmp/new.yaml" "$VFILL_PROF"; then
+			   py local-set fill_seen "$(cat "$POLICY_DIR/nodes.json" "$VFILL_PROF" 2>/dev/null | cksum)" fill "$FILL_ID"
+		   fi ;;
 		*) warn "维护者参考配置里的节点没能写进 Clash Verge 当前的配置「${VFILL_NAME}」：$(sed -n 's/^cca: //p' "$tmp/err" | tail -n 1)"
 		   py local-set fill_seen "$sig" fill "" ;;
 	esac

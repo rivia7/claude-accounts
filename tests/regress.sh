@@ -1106,8 +1106,12 @@ nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签�
 rget() {   # rget 配置 'Ruby 表达式'：c 是读出来的配置，g 是它的 OpenAi 组成员，px 是节点名
 	ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; g = ((c["proxy-groups"] || []).find { |x| x["name"] == "OpenAi" } || {})["proxies"]; px = (c["proxies"] || []).map { |p| p["name"] }; exit(eval(ARGV[1]) ? 0 : 1)' "$1" "$2"
 }
-added() {   # added 原来的 现在的：现在的只是在原来的基础上加了行，加的行都带 # cca；输出加了几行
-	diff "$1" "$2" | awk '/^</ || /^---/ { bad = 1 } /^>/ { n++; if ($0 !~ / # cca$/) bad = 1 } END { if (bad) print "x"; else print n + 0 }'
+added() {   # added 原来的 现在的：现在的只是在原来的基础上加了行（原来的一行没删、没改）；输出加的行里带 # cca 的有几行
+	          # （块写法的节点只有 name 那一行带，组成员每行都带）
+	diff "$1" "$2" | awk '/^</ || /^---/ { bad = 1 } /^>/ && / # cca$/ { n++ } END { if (bad) print "x"; else print n + 0 }'
+}
+one_line() {   # one_line 配置文件 节点 一行写法 [缩进]：把 cca 写成块写法的节点换回 2.8.0-beta.5～7 写的一行（模拟旧版本写的）
+	python3 -c "import re,sys; p, n, f, i = sys.argv[1:5]; s = open(p).read(); t = re.sub(r\"(?m)^%s- name: %s # cca\\n(?:%s  .*\\n)*\" % (i, re.escape(n), i), lambda m: i + \"- \" + f + \" # cca\\n\", s, count=1); assert t != s; open(p, \"w\").write(t)" "$1" "$2" "$3" "${4:-}"
 }
 fill_tmp() { ls "$R"/tmp/cca.src.* "$R"/tmp/cca.fill.* 2>/dev/null; }   # 参考节点用过的临时文件（应该都删了）
 cat > "$T/custom.yaml" <<'Y'
@@ -1157,6 +1161,9 @@ ok "cca router nodes 列得出写进去的节点；cca router status、cca polic
 cp "$SRC" "$T/src.filled"; c0=$(grep -c '^CORE' router.log); r0=$(restarts); n0=$(reloads)
 out=$(run cca router sync 2>&1); rc=$?
 ok "再同步一次：配置文件里都有了，不再写、不重启也不重载，也不再拿内核校验" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && ! printf "%s" "$out" | grep -q "写进 OpenClash 的配置文件"'
+one_line "$SRC" AI-A '{name: "AI-A", type: "ss", server: "192.0.2.21", port: 8388, cipher: "aes-128-gcm", password: "x"}' '  '
+out=$(run cca router sync 2>&1); rc=$?
+ok "2.8.0-beta.5～7 写成一行的参考节点：同步时改成和别的节点一样的块写法（内容没变：不重启、不重载、不再拿内核校验）" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && [ ! -e "$R/etc/cca/fill.pending" ]'
 edit_table 'j["nodes"].append("AI-A")' "$H/.cca/config.json"; edit_table 'j["ai@example.com"] = "AI-A"'
 out=$(run cca router sync -y 2>&1); rc=$?; s=$(( $(cfgv 'c["ports"]["ai@example.com"]') - 7900 ))
 ok "写进去的节点可以当账号的出口：选进可选节点、账号用它，端口切到 AI-A" '[ $rc -eq 0 ] && [ "$(sel "CCA-$s")" = AI-A ]'
@@ -1223,6 +1230,15 @@ ok "热加载的运行配置照写好的配置补上：节点一个不多、名�
 ok "Clash Verge 重新生成配置（真的 JavaScript 引擎跑全局扩展脚本）：参考节点来自它的配置文件，和热加载的一样" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); px = c[\"proxies\"].map { |p| p[\"name\"] }; g = c[\"proxy-groups\"].find { |x| x[\"name\"] == \"OpenAi\" }[\"proxies\"]; exit(px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X] && c[\"proxy-groups\"].find { |x| x[\"name\"] == \"CCA-$s\" }[\"proxies\"][0] == \"AI-A\" ? 0 : 1)" "$T/verge/regen.json" && [ "$(vsel "CCA-$s")" = AI-A ]'
 n0=$(vreloads); out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
 ok "再在外面启动：配置里都有了，不再写、也不再热加载" '[ $rc -eq 3 ] && [ "$(vreloads)" = "$n0" ] && ! printf "%s" "$out" | grep -q "写进 Clash Verge" && [ "$(vsel "CCA-$s")" = AI-A ]'
+cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.filled"
+python3 - "$H/.cca/policy/nodes.json" > "$T/ai_a.flow" <<'PY'
+import json, sys
+p = [x for x in json.load(open(sys.argv[1]))["proxies"] if x["name"] == "AI-A"][0]
+print("{" + ", ".join("%s: %s" % (k, json.dumps(v)) for k, v in p.items()) + "}")
+PY
+one_line "$V/profiles/Lprofile1.yaml" AI-A "$(cat "$T/ai_a.flow")"
+n0=$(vreloads); out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
+ok "Clash Verge 配置里以前写成一行的参考节点：改成块写法（内容没变，不用热加载）" '[ $rc -eq 3 ] && cmp -s "$V/profiles/Lprofile1.yaml" "$T/verge/prof.filled" && [ "$(vreloads)" = "$n0" ]'
 out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1); out2=$(run cca local 2>&1)
 ok "cca local setup：参考节点不算 Clash Verge 里没有的；cca local 说参考节点已经写进配置" '! printf "%s" "$out" | grep "Clash Verge 里没有这些节点" | grep -q AI-A && printf "%s" "$out2" | grep -q "参考节点：已写进 Clash Verge 当前的配置「测试配置」"'
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(port=9443) for x in j['proxies'] if x['name'] == 'AI-B']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
