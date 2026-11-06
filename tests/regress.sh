@@ -1233,6 +1233,11 @@ python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'].a
 run cca policy pull >/dev/null 2>&1; echo 192.0.2.23 > "$T/verge/reject_text"; cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.prev"; n0=$(vreloads)
 out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
 ok "Clash Verge 的内核不认新加的参考节点：配置文件不写，照配置里原有的再热加载一次，账号照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "Clash Verge 的内核不认维护者参考配置里的节点，没有写进它的配置" && grep -q "RELOAD rejected text" "$T/verge/verge.log" && [ "$(vreloads)" = $((n0 + 1)) ] && cmp -s "$T/verge/prof.prev" "$V/profiles/Lprofile1.yaml" && [ "$(vsel "CCA-$s")" = AI-A ] && [ -z "$(ls "$H/.cca" | grep "^local\.fill\.\|^fill\.")" ]'
+# 维护者的映射要某个账号走参考节点，这台机器的可选节点里还没有它：自动加进可选节点（记下摘要），账号随后照常加进来
+pol '{"version": 1, "claude": {"alice@example.com": "HK-A2", "bea@example.com": "AI-B"}}'
+out=$(run cca policy pull 2>&1); rc=$?
+ok "映射要的节点是维护者的参考节点、还不在可选节点里：自动加进可选节点（说一声），映射里的账号照常加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "维护者的映射要 bea@example.com 走节点 AI-B：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 bea@example.com，出口 AI-B" && cfgok "\"AI-B\" in c[\"nodes\"] and c[\"node_ids\"].get(\"AI-B\")" && tblok "t.get(\"bea@example.com\") == \"AI-B\""'
+pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'
 # 还原：维护者不再发布参考节点（映射仓库里删掉 nodes.json），拉下来后这台机器上的也删掉
 rm -f "$PR/nodes.json" "$PR/nodes.json.sig"; out=$(run cca policy pull 2>&1)
 ok "映射仓库里没有 nodes.json 了：这台机器上的参考节点也删掉" '[ ! -e "$H/.cca/policy/nodes.json" ] && ! printf "%s" "$out" | grep -q "参考节点："'

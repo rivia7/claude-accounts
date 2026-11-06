@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.6"
+VERSION="2.8.0-beta.7"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -1084,10 +1084,36 @@ def reconcile(c, t, tool, reserved=()):
     return errs
 
 
+def policy_nodes_fill(c):
+    """维护者的映射要用、还不在可选节点里的节点，是维护者参考配置里的（同步时 cca 把它写进路由器的配置）：自动加进
+    可选节点、记下摘要，说一声，映射里的账号随后就能加进来。还没有可选节点（没配置路由器）、这台机器删掉过的账号不算"""
+    f = policy_fill()
+    if not f or not c.get('nodes'):
+        return
+    fp = {p['name']: fill_fp(p) for p in f['proxies']}
+    want = {}
+    for tool in TOOLS:
+        if not policy_in_use(tool):
+            continue
+        skip = set(tool.state(c).get('policy_skip') or [])
+        for e, n in policy_map(tool, c).items():
+            if n in fp and n not in c['nodes'] and e not in skip:
+                want.setdefault(n, []).append(e)
+    for n, who in want.items():
+        c['nodes'] = c['nodes'] + [n]
+        if fp[n]:
+            ids = dict(node_ids(c))
+            ids[n] = fp[n]
+            c['node_ids'] = ids
+        sys.stderr.write('• 维护者的映射要 %s 走节点 %s：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点\n'
+                         % ('、'.join(who), n))
+
+
 def reconcile_all(c):
     """各工具的账号表一起对账（大家共用一个端口池）：各自已有的端口不动，新端口避开别的工具占着的。
-    账号表读不了的工具不对账，它记着的端口照样留着"""
+    账号表读不了的工具不对账，它记着的端口照样留着。映射要的参考节点先加进可选节点（policy_nodes_fill）"""
     ERRS.clear()
+    policy_nodes_fill(c)
     for tool in TOOLS:
         if tool.name in TABS:
             reserved = {p for o in TOOLS if o is not tool for p in (o.state(c).get('ports') or {}).values()}
