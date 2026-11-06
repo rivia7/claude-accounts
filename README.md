@@ -135,13 +135,15 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 ### 参考节点：自动补全 OpenAi 分流组
 
-维护者还可以顺带发布自己 Clash 配置里的一个策略组（默认 `OpenAi`）和它引用的节点。各台机器拉映射时一起拉下来（同样要有发布密钥的签名，存在 `~/.cca/policy/nodes.json`，只有自己能读），你的配置里缺的自动补上：
+维护者还可以顺带发布自己 Clash 配置里的一个策略组（默认 `OpenAi`）和它引用的节点。各台机器拉映射时一起拉下来（同样要有发布密钥的签名，存在 `~/.cca/policy/nodes.json`，只有自己能读），你的配置里缺的直接写进你正在用的配置文件：
 
-- **补什么**：这个组里的节点，你的配置里没有的，定义补进 `proxies`，名字接在你的同名策略组后面。你已经有的不动：同名的节点照你自己的定义（只补进组）；同一个节点（类型、服务器、端口和 TLS 域名一样）在你那里叫别的名字，补进组的是你的名字；名字被你的策略组占了的不补。你的配置里没有这个组时只补节点。补上的节点也能选作账号的出口（`cca router setup`）。
-- **补到哪**：路由器上由 cca 的钩子在 OpenClash / ShellCrash 生成运行配置时补上，你自己的配置文件（OpenClash 的配置、ShellCrash 的订阅）一个字节不动，订阅更新以后照样补；出门在外用的 Clash Verge 经 cca 的全局扩展脚本补上。维护者改了某个节点，补进去的跟着更新。补上、更新都要让 OpenClash / ShellCrash 重载一次（约 20 秒），会先问你。
-- **先校验**：每一版参考节点都先用你路由器上的内核做一次 `-t` 校验，通过了才补（别处的节点你的内核不一定认，认不出的话整个 OpenClash / ShellCrash 都起不来）；不通过就这次不补，端口池照常，用这些节点的账号暂时断开。`cca router status` 里能看到还缺哪些。
-- ShellCrash 订阅配置里的这个组要是写成一行（`{name: OpenAi, …, proxies: […]}`），只补节点、不动组；和 ShellCrash 的自定义节点（`yamls/proxies.yaml`）同名的不补。
-- 维护者不再发布、或者删掉了某个参考节点：之前补进运行配置的，OpenClash / ShellCrash 下次重启后消失（卸载 cca 之后也一样）。
+- **写到哪**：路由器上是 OpenClash 当前选用的配置文件（例如 `/etc/openclash/config/custom.yaml`），ShellCrash 是它的订阅配置 `yamls/config.yaml`；出门在外用的 Clash Verge 是它当前选用的配置（订阅或本地配置）。写进去的就是配置的一部分，打开配置文件就看得到。
+- **怎么写**：缺的节点一个一行插在 `proxies` 开头，名字接在你的同名策略组后面，行尾都带 `# cca`；别的内容一个字节不动。改之前的配置留一份：路由器上在 `/etc/cca/source.bak.yaml`，Clash Verge 的在 `~/.cca/backup/`。
+- **补什么**：这个组里的节点，你的配置里没有的。你已经有的不动：同名的节点照你自己的定义（只补进组）；同一个节点（类型、服务器、端口和 TLS 域名一样）在你那里叫别的名字，补进组的是你的名字；名字被你的策略组占了的不补；和 ShellCrash 自定义节点（`yamls/proxies.yaml`）同名的不补。你的配置里没有这个组，或者组写成了一行（`{name: OpenAi, …, proxies: […]}`），就只补节点。补上的节点也能选作账号的出口（`cca router setup`）。
+- **先校验**：每一版参考节点都先用你路由器上的内核做一次 `-t` 校验，通过了才写（别处的节点你的内核不一定认，认不出的话整个 OpenClash / ShellCrash 都起不来）。不通过就不写，端口池照常，用这些节点的账号暂时断开；内核升级以后会再试。Clash Verge 那边是热加载时它的内核收下了才写。`cca router status` 里能看到还缺哪些、为什么没写。
+- **什么时候生效**：路由器上的配置文件写好后，在跑的 OpenClash / ShellCrash 要重启一次才用得上（约 20 秒，期间局域网的连接都会中断），cca 会先问你；不同意的话，就等它下次自己重启。Clash Verge 不用重启：cca 把这几个节点热加载进它当前的运行配置。
+- **维护者改了节点**：行尾带 `# cca` 的那一行跟着改（同样先校验，路由器上同样要重启一次才用上）。你自己的同名节点、去掉了 `# cca` 的行都不动。维护者不再发布、或者删掉了某个参考节点，写进去的留着（卸载 cca 之后也一样），不要了就自己删。
+- **订阅更新**：订阅更新会把配置文件整个换掉，写进去的节点也跟着没了。OpenClash / ShellCrash 更新完重启时，cca 再写回去，这次启动就能用上。注意 OpenClash 更新订阅时会拿新下载的和现有的配置文件比对，现有的多了这几行，所以订阅内容没变，也会被当成有更新、重启一次。
 - 参考节点里是节点的完整定义（服务器、UUID、密钥），每台拉得到映射的机器都拿得到。
 
 维护者这边：把你自己的 Clash 配置复制成映射仓库目录里的 `custom.yaml`，照常运行 `./policy.sh 映射仓库的目录`。它从里面抽出策略组 `OpenAi`（别的组名用 `CCA_FILL_GROUP=组名 ./policy.sh …`）引用的节点（组里的策略组、内置出站不算；规则、别的节点都不带），写成 `nodes.json`，签名后一起推上去。`custom.yaml` 本身不提交（里面有你全部的规则和局域网设备；已经提交过的会拒绝发布），也会加进这个仓库的 `.git/info/exclude`。想先看看会发布哪些：`./policy.sh nodes custom.yaml`。不再发布：删掉目录里的 `custom.yaml` 和 `nodes.json`，再运行一次。
@@ -308,7 +310,7 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉；最后删除本机的 cca（包括 `cxa`）和各账号的 App 启动器（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）和各账号的 App 启动器（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
@@ -337,10 +339,10 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
 
 **cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
-能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
+能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、写参考节点前留的 Clash Verge 配置备份（`backup/clash-verge-*.yaml`）、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
 
 **cca 会改我的 Clash Verge 配置吗？**
-只在它的全局扩展脚本末尾加一段带标记的代码，不碰你的订阅、规则和其它设置。`cca local off` 或 `cca restore` 会把这段原样删掉，脚本恢复成原来的样子。
+端口池只在它的全局扩展脚本末尾加一段带标记的代码，不碰你的订阅、规则和其它设置；`cca local off` 或 `cca restore` 会把这段原样删掉，脚本恢复成原来的样子。维护者发布了参考节点时，你当前选用的配置里缺的那几个节点会直接写进去（行尾带 `# cca`，改之前的留一份在 `~/.cca/backup/`），见上面的「参考节点」。
 
 **为什么第一次要重载 OpenClash / ShellCrash？**
 第一次要在路由器上建好一组端口。之后只要账号不超过 8 个，加账号、换节点都不用重载。账号超过 8 个，或者改了可选节点，才需要再重载一次，到时候会先问你。
@@ -376,7 +378,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 - **用量**：cca 以账号的配置目录、经账号的端口无界面地启动 Claude Code（`--safe-mode`，不加载插件、hooks、MCP），发一个 `get_usage` 控制请求，拿到和 `/usage` 一样的数据；登录 token 的读取和刷新都由 Claude Code 自己完成。
 - **第三方 API 账号**：接口地址、模型经 `claude --settings` 传入（优先级高于共享的 settings.json），key 由 `apiKeyHelper` 回调 cca 从钥匙串取，不进环境变量。
 - **Codex**：每个账号一个 `CODEX_HOME`，`~/.codex` 里白名单上的条目链接进去（白名单以外的默认各账号一份，新版本 Codex 加了文件也不会误共享）；数据库经 `CODEX_SQLITE_HOME` 共用。登录和查用量都经 codex 自己的 app-server（`account/login/start`、`account/rateLimits/read`），报的客户端名和 `codex login` 一样。
-- **路由器端**：改动放在 `/etc/cca`。OpenClash 通过它的"覆写脚本"注入；ShellCrash 通过它的"启动前任务"（`task/bfstart` 里的一行，下一版起是 `configs/task/bfstart`）把订阅配置换成插好端口池的副本，订阅配置本身不动。维护者的参考节点也是这时补上的（每一版先用内核校验过，记在 `/etc/cca/fill.ok`）。每 2 分钟自检一次，刷固件时保留。
+- **路由器端**：改动放在 `/etc/cca`。OpenClash 通过它的"覆写脚本"注入；ShellCrash 通过它的"启动前任务"（`task/bfstart` 里的一行，下一版起是 `configs/task/bfstart`）把订阅配置换成插好端口池的副本，端口池不写进订阅配置。维护者的参考节点直接写进 OpenClash 选用的配置文件、ShellCrash 的订阅配置（每一版先用内核校验过，记在 `/etc/cca/fill.ok`）；同步、每次在家启动、OpenClash / ShellCrash 启动时都核对一遍（配置文件和参考节点都没变时只算一下校验和）。每 2 分钟自检一次，刷固件时保留。
 - **出门在外**：本机的端口池和路由器上的一样（127.0.0.1:7901 起，每个端口一个策略组），写在 Clash Verge 的全局扩展脚本里，它每次重新生成配置都会带上；cca 经它内核的控制接口切换节点，第一次配置时把端口池直接热加载进正在运行的内核。
 
 <details>

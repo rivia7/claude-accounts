@@ -274,6 +274,8 @@ if [ -n "$sock" ]; then
 		"PATCH /configs") echo "PATCH $data" >> "$VD/verge.log"; printf '%s' "$data" | sed -n 's/.*"mode":"\([a-z]*\)".*/\1/p' > "$VD/mode"; reply 204 "" ;;
 		"PUT /configs?force=true")
 			[ -f "$VD/reload_reject" ] && { echo "RELOAD rejected" >> "$VD/verge.log"; reply 400 '{"message":"bad"}'; exit 0; }
+			# reject_text 里写着一段文字时，新配置里有它就不收（模拟内核不认参考配置里的某个节点）
+			[ -s "$VD/reject_text" ] && grep -qF "$(cat "$VD/reject_text")" "${data#@}" && { echo "RELOAD rejected text" >> "$VD/verge.log"; reply 400 '{"message":"proxy 3: unsupport proxy type"}'; exit 0; }
 			cp "${data#@}" "$VD/last_put.json"
 			if err=$(ruby -ryaml -rjson -e '
 				c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))["payload"]) || {}
@@ -924,7 +926,8 @@ cat > "$T/verge_regen" <<'S'
 # 路径全从脚本自己的位置推出来，不看 $HOME 和 $CCA_T：测试脚本直接调用时 $HOME 是真实的主目录，绝不能碰真的 Clash Verge
 T=$(cd "$(dirname "$0")" && pwd -P) && [ -d "$T/verge" ] && [ -d "$T/home" ] || exit 1
 V="$T/home/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VD="$T/verge"
-ruby -ryaml -rjson -e 'print JSON.generate(YAML.load_file(ARGV[0]))' "$VD/base.yaml" > "$VD/base.json" || exit 1
+P="$V/profiles/Lprofile1.yaml"; [ -f "$P" ] || P="$VD/base.yaml"   # 当前选用的配置（参考节点那一节才有这个文件）
+ruby -ryaml -rjson -e 'print JSON.generate(YAML.load_file(ARGV[0]))' "$P" > "$VD/base.json" || exit 1
 /usr/bin/osascript -l JavaScript "$VD/run_script.js" "$V/profiles/Script.js" "$VD/base.json" > "$VD/regen.json" || exit 1
 ruby -ryaml -rjson -e 'c = JSON.parse(File.read(ARGV[0])); File.write(ARGV[1], YAML.dump(c)); File.write(ARGV[2], JSON.generate("payload" => YAML.dump(c)))' \
 	"$VD/regen.json" "$V/clash-verge.yaml" "$VD/regen.put" || exit 1

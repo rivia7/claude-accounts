@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.4"
+VERSION="2.8.0-beta.5"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -912,8 +912,9 @@ def alias_problems(j, names):
 
 
 # --- 维护者参考配置里的节点（映射仓库里的 nodes.json，./policy.sh 从维护者的 custom.yaml 抽出一个策略组和它引用的节点）：
-# 路由器和本机 Clash Verge 的配置里缺的补进 proxies，名字补进同名策略组。三处做法一样：路由器端的 apply.rb、
-# 全局扩展脚本里的 ccaFill、这里的 fill_plan（热加载 Clash Verge、合并路由器的节点列表时用）
+# 直接写进路由器（OpenClash 选用的配置、ShellCrash 的订阅配置）和本机 Clash Verge 当前选用的配置文件，缺的补进 proxies、
+# 名字补进同名策略组。两处做法一样：路由器端 apply.rb 的 --fill-source（写配置文件，Clash Verge 的也是拿它在 Mac 上跑）、
+# 这里的 fill_plan（合并路由器的节点列表、认 Clash Verge 里的节点时把会写进去的算上）
 FILL_FILE = os.path.join(CCA_HOME, 'policy', 'nodes.json')   # bash 的 policy_fetch 验签后才放进来
 FILL_BUILTIN = ('DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL')
 
@@ -1665,7 +1666,7 @@ def api_settings(key, v):
 
 # ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、维护者参考节点里的节点密钥、Codex 的登录 token、
 # 各账号的 Chrome 和桌面 App 资料目录里的 cookie）
-CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
+CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'backup/clash-verge-*.yaml', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
                    'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**')
 
 
@@ -2367,39 +2368,11 @@ VERGE_SCRIPT = '// Define main function (script entry)\n\nfunction main(config, 
 LOCAL_BLOCK = re.compile(r'\n// >>> cca >>>.*?// <<< cca <<<\n', re.S)
 # 加在 Clash Verge 全局扩展脚本末尾：包住原来的 main，在它的结果上加端口池（重复执行结果不变）
 LOCAL_JS = r"""// >>> cca >>> 本机分流端口池（cca 自动维护，不要手改这一段；cca local off 会删掉它）
-// 127.0.0.1 上的入站 cca-n → 策略组 CCA-n，启动账号前 cca 会把组切到它的节点；原来的配置和规则不变。
-// 有维护者参考配置里的节点（fill）时：配置里没有的（名字和服务器地址都对不上）补进 proxies，名字补进同名策略组
+// 127.0.0.1 上的入站 cca-n → 策略组 CCA-n，启动账号前 cca 会把组切到它的节点；原来的配置和规则不变
 var ccaUserMain = typeof main === 'function' ? main : function (config) { return config; };
-var ccaFill = function (config, fill) {
-  var px = config.proxies = config.proxies || [], gs = config['proxy-groups'] || [], add = [];
-  var seen = Object.create(null), by = Object.create(null), ok = Object.create(null);
-  var norm = function (v) { return String(v == null ? '' : v).trim().toLowerCase(); };
-  var key = function (p) {   // 和 cca 认节点一样：类型、服务器、端口、TLS 域名
-    var s = norm(p.server).replace(/\.+$/, '');
-    return s ? [norm(p.type), s, norm(p.port), norm(p.servername || p.sni).replace(/\.+$/, '')].join('|') : '';
-  };
-  px.forEach(function (p) { if (p && p.name) { seen[p.name] = 'p'; if (key(p) && !by[key(p)]) by[key(p)] = p.name; } });
-  gs.concat(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL'].map(function (n) { return { name: n }; }))
-    .forEach(function (g) { if (g && g.name && !seen[g.name]) seen[g.name] = 'g'; });
-  fill.proxies.forEach(function (p) { if (!seen[p.name] && !by[key(p)]) ok[p.name] = 1; });
-  fill.proxies.forEach(function (p) {
-    var k = key(p), d = p['dialer-proxy'];
-    if (seen[p.name] === 'p') add.push(p.name);   // 同名的是用户自己的节点：只补进组
-    else if (seen[p.name]) return;               // 名字被策略组占了
-    else if (k && by[k]) add.push(by[k]);        // 同一个节点，用户那边叫别的名字
-    else if (d && !seen[d] && !ok[d]) return;    // 要经别的节点连接，那个节点没有
-    else { px.push(JSON.parse(JSON.stringify(p))); seen[p.name] = 'p'; add.push(p.name); }
-  });
-  gs.forEach(function (g) {
-    if (!g || g.name !== fill.group || g.type === 'relay' || g['include-all'] === true || g['include-all-proxies'] === true) return;
-    g.proxies = g.proxies || [];
-    add.forEach(function (n) { if (g.proxies.indexOf(n) < 0) g.proxies.push(n); });
-  });
-};
 main = function (config, profileName) {
-  var pool = @POOL@, fill = @FILL@, have = {}, keep = function (re) { return function (x) { return !(x && re.test(x.name)); }; };
+  var pool = @POOL@, have = {}, keep = function (re) { return function (x) { return !(x && re.test(x.name)); }; };
   config = ccaUserMain(config, profileName) || config;
-  if (fill) ccaFill(config, fill);
   (config.proxies || []).concat(config['proxy-groups'] || []).forEach(function (p) { if (p && p.name) have[p.name] = 1; });
   config['proxy-groups'] = (config['proxy-groups'] || []).filter(keep(/^CCA-\d+$/));
   config.listeners = (config.listeners || []).filter(keep(/^cca-\d+$/));
@@ -2439,8 +2412,8 @@ def local_want(c):
     m = local_names(c)
     want = [sorted(m.get(n, n) for n in c['nodes']), pool_size(c)]
     f = policy_fill()
-    if f:   # 维护者的参考节点变了也要重新加载（没有参考节点时摘要和以前一样）
-        want.append(f['id'])
+    if f and (c.get('local') or {}).get('fill') == f['id']:   # 参考节点写进了 Clash Verge 的配置：变了也要重新加载
+        want.append(f['id'])                                   # （没有参考节点时摘要和以前一样）
     return hashlib.sha1(json.dumps(want).encode('utf-8')).hexdigest()
 
 
@@ -2484,6 +2457,84 @@ def verge_sock():
     return ''
 
 
+def verge_items(text):
+    """profiles.yaml 里 items 的每一项：{键: 值}，只读每一项自己那一层、值是一行写完的键（serde_yaml 的写法）"""
+    items, cur, inside = [], None, False
+    for line in text.split('\n'):
+        if re.match(r'items:\s*$', line):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if line and not line.startswith((' ', '-', '#')):   # 下一个顶层的键
+            break
+        if line.startswith('- '):
+            cur = {}
+            items.append(cur)
+            line = '  ' + line[2:]
+        m = re.match(r'  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*?)[ \t]*$', line)
+        if cur is not None and m and m.group(2):
+            cur.setdefault(m.group(1), yaml_unquote(m.group(2)))
+    return items
+
+
+def verge_profile():
+    """Clash Verge 当前选用的配置（订阅或本地配置）：(文件路径, 名字)；没选、选的不是这两种、文件不在时是 None"""
+    try:
+        with open(os.path.join(VERGE_DIR, 'profiles.yaml'), encoding='utf-8') as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = re.search(r'^current:[ \t]*(\S.*?)[ \t]*$', text, re.M)
+    cur = yaml_unquote(m.group(1)) if m else ''
+    for it in verge_items(text):
+        if cur and it.get('uid') == cur and it.get('type') in ('local', 'remote') and it.get('file'):
+            path = os.path.join(VERGE_DIR, 'profiles', os.path.basename(it['file']))
+            return (path, it.get('name') or it['file']) if os.path.isfile(path) else None
+    return None
+
+
+def fill_marked(path):
+    """配置文件里 cca 写进去的（行尾带「# cca」的行）：(节点名的集合, 补进策略组的名字的列表)。节点在 proxies 段里一个一行，
+    组成员在 proxy-groups 段里（都是补进参考节点的那个组的）"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return set(), []
+    nodes, members, sec = set(), [], ''
+    for line in lines:
+        if re.match(r'[a-z]', line):
+            sec = line.split(':', 1)[0]
+            continue
+        m = re.match(r' *- (.*?)[ \t]+# cca[ \t]*\r?$', line)
+        if not m:
+            continue
+        if sec == 'proxies' and m.group(1).startswith('{'):
+            n = flow_get(m.group(1), 'name')
+            if n:
+                nodes.add(n)
+        elif sec == 'proxy-groups' and not m.group(1).startswith('{'):
+            members.append(yaml_unquote(m.group(1)))
+    return nodes, members
+
+
+def cmd_fill_acc():
+    """给 Mac 上跑的 apply.rb --fill-source 的账号表：只有参考节点"""
+    f = policy_fill()
+    if not f:
+        sys.exit(1)
+    print(json.dumps({'fill': f}, ensure_ascii=False))
+
+
+def cmd_file_replace(src, dst):
+    """把 src 的内容原子地换进 dst（保留 dst 的权限），然后删掉 src"""
+    with open(src, encoding='utf-8', newline='') as f:
+        text = f.read()
+    write_text(dst, text)
+    os.remove(src)
+
+
 def verge_found():
     """装了 Clash Verge（Rev），并且有全局扩展脚本"""
     try:
@@ -2497,10 +2548,13 @@ def cmd_local_env():
     c, t, _ = ctx()
     loc = c['local']
     client = loc.get('client', '')
+    prof = (verge_profile() if client == 'clash-verge' else None) or ('', '')
     n = pool_size(c)
     sh(LOCAL_CLIENT=client, LOCAL_NAME='Clash Verge' if client == 'clash-verge' else '本机 Clash',
        LOCAL_CTL='unix:' + verge_sock() if client == 'clash-verge' else loc.get('controller', ''),
        LOCAL_SECRET=loc.get('secret', ''), LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=local_want(c),
+       LOCAL_FILL=loc.get('fill', ''), LOCAL_FILL_SEEN=loc.get('fill_seen', ''), FILL_ID=(policy_fill() or {}).get('id', ''),
+       VERGE_PROFILE=prof[0], VERGE_PROFILE_NAME=prof[1],
        LOCAL_SLOTS=n, LOCAL_FIRST=FIRST_PORT, LOCAL_LAST=FIRST_PORT + n - 1,
        VERGE_DIR=VERGE_DIR, VERGE_FOUND=1 if verge_found() else 0)
 
@@ -2551,10 +2605,7 @@ def cmd_local_script(path, action='install'):
             base = VERGE_SCRIPT
         c, t, _ = ctx()
         slots = json.dumps([list(x) for x in slot_orders(c, local=True)], ensure_ascii=False)
-        f = policy_fill()   # 参考节点按 ASCII 写（JSON 里的 U+2028 这类字符在 JavaScript 源码里会断行）
-        fill = json.dumps({'group': f['group'], 'proxies': f['proxies']}, sort_keys=True) if f else 'null'
-        new = (base + ('' if base.endswith('\n') else '\n') + '\n'
-               + LOCAL_JS.replace('@POOL@', slots).replace('@FILL@', fill) + '\n')
+        new = base + ('' if base.endswith('\n') else '\n') + '\n' + LOCAL_JS.replace('@POOL@', slots) + '\n'
     if new != old:
         write_text(path, new)
 
@@ -2676,9 +2727,10 @@ def fill_members(item, names):
     return item[:j] + ['  proxies:'] + item[j + 1:k] + ['  - ' + json.dumps(n, ensure_ascii=False) for n in more] + item[k:]
 
 
-def cmd_local_patch(path, mode='install'):
-    """给 PUT /configs 用的 JSON：Clash Verge 当前的运行配置加上端口池（mode=remove 时去掉），有维护者的参考节点时把缺的
-    补进 proxies、名字补进同名策略组（和全局扩展脚本做的一样）。只动这几处，其余逐字保留；看不懂格式时返回 1"""
+def cmd_local_patch(path, mode='install', fill_src=''):
+    """给 PUT /configs 用的 JSON：Clash Verge 当前的运行配置加上端口池（mode=remove 时去掉）。fill_src 是写进了参考节点的
+    配置文件（Clash Verge 当前的配置，或热加载成功后才换上去的新内容）：照它把参考节点补进运行配置，和 Clash Verge 下次按它
+    重新生成的一样（cca 写的那几个按参考配置的定义换上，名字补进同名策略组）。只动这几处，其余逐字保留；看不懂格式时返回 1"""
     c, t, _ = ctx()
     try:
         with open(path, encoding='utf-8') as f:
@@ -2691,18 +2743,23 @@ def cmd_local_patch(path, mode='install'):
     have = yaml_names(lines, secs)
     add = {'proxy-groups': [], 'listeners': [], 'proxies': []}
     fmem, fgrp = [], None
+    managed = set()
+    f = policy_fill() if mode != 'remove' and fill_src else None
+    if f:   # 照配置文件里 cca 写的（行尾带 # cca 的）来：节点去掉运行配置里原来的、按参考配置的定义加上，组成员接上
+        nodes, members = fill_marked(fill_src)
+        managed = nodes & {p['name'] for p in f['proxies']}
+        have |= managed
+        fmem, fgrp = [n for n in members if n in have], f['group']
+        add['proxies'] = ['- ' + json.dumps(p, ensure_ascii=False) for p in f['proxies'] if p['name'] in managed]
     if mode != 'remove':
-        fadd, fmem, fgrp = fill_plan(yaml_proxies(lines, secs), have)
-        add['proxies'] = ['- ' + json.dumps(p, ensure_ascii=False) for p in fadd]
-        have |= {p['name'] for p in fadd}
         for g, p, order in slot_orders(c, local=True):
             add['proxy-groups'].append('- ' + json.dumps({'name': g, 'type': 'select', 'proxies': local_members(order, have)},
                                                          ensure_ascii=False))
             add['listeners'].append('- ' + json.dumps({'name': g.lower(), 'type': 'mixed', 'listen': '127.0.0.1', 'port': p,
                                                        'users': [], 'proxy': g}))
     ours = {'proxy-groups': re.compile(r'CCA-\d+$'), 'listeners': re.compile(r'cca-\d+$')}
-    if add['proxies']:
-        ours['proxies'] = None   # 节点只往后加，原来的一个不动
+    if add['proxies']:   # cca 写的那几个节点：去掉原来的，按参考配置的定义接在最后；别的节点一个不动
+        ours['proxies'] = re.compile('(?:%s)$' % '|'.join(re.escape(n) for n in sorted(managed)))
     tail = []
     for key in sorted(ours, key=lambda k: -secs.get(k, [-1])[0]):   # 从后往前改，前面段落的行号不受影响
         if key not in secs:
@@ -4124,6 +4181,7 @@ CMDS = {
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
     'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet, 'local-node': cmd_local_node,
+    'fill-acc': cmd_fill_acc, 'file-replace': cmd_file_replace,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
@@ -4178,7 +4236,12 @@ D="$R/etc/cca"
 ACC="$D/accounts.yaml"
 PORTS="$D/ports"
 SEL="$D/select"
-FILLOK="$D/fill.ok"   # 维护者参考配置里的节点（accounts.yaml 的 fill）：这一版在这台路由器的内核上校验通过了，记着它的 id
+# 维护者参考配置里的节点（accounts.yaml 的 fill）直接写进 OpenClash / ShellCrash 的配置文件（见 fill_source）
+FILLOK="$D/fill.ok"       # 这一版在这台路由器的内核上校验通过了，记着它的 id
+FILLPEND="$D/fill.pending"   # 刚写进配置文件，在跑的 OpenClash / ShellCrash 还是按之前的配置生成的：重启后才用得上
+FILLSEEN="$D/fill.seen"   # 上次核对时账号表、配置文件和内核的校验和：都没变就不用再读一遍配置文件（每次在家启动 cca 都核对）
+FILLWHY="$D/fill.why"     # 上次没写成的原因（cca router status 里说）
+SRCBAK="$D/source.bak.yaml"   # 写之前的配置文件
 OW="$R/etc/openclash/custom/openclash_custom_overwrite.sh"
 CRON="$R/etc/crontabs/root"
 SYSUP="$R/etc/sysupgrade.conf"
@@ -4243,13 +4306,11 @@ source_config() {   # 运行配置由它生成：OpenClash 自己的配置；She
 	else p=$(uci -q get openclash.config.config_path 2>/dev/null); [ -n "$p" ] && p="$R$p"; fi
 	[ -n "$p" ] && [ -f "$p" ] && echo "$p"
 }
-in_source() {   # in_source "节点<TAB>节点…"：这些节点生成运行配置的那份配置里都有，或者是参考节点（重启后钩子才能把它们放进端口池）
+in_source() {   # in_source "节点<TAB>节点…"：这些节点生成运行配置的那份配置里都有（参考节点也写在这里，重启后都用得上）
 	src=$(source_config) || return 1
 	printf '%s' "$1" | ruby -E UTF-8 -ryaml -e "$YL"'
 		have = ((yl(ARGV[0]) || {})["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) }
-		f = (yl(ARGV[1]) || {})["fill"]
-		have += (f["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) } if f.is_a?(Hash)
-		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" "$ACC" 2>/dev/null
+		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" 2>/dev/null
 }
 core_bin() {   # 优先用实际在跑的那份内核
 	if [ "$BK" = sc ]; then   # ShellCrash 保守模式启动后会删掉 /tmp 里的内核文件，在跑的进程经 /proc 还找得到
@@ -4263,7 +4324,7 @@ core_bin() {   # 优先用实际在跑的那份内核
 }
 running() { if [ "$BK" = sc ]; then pidof CrashCore >/dev/null 2>&1; else pidof clash >/dev/null 2>&1; fi; }
 safe_paths() {   # 和 OpenClash 启动内核时的 SAFE_PATHS 保持一致，否则 -t 会拒绝 external-ui 等路径
-	sp=$(tr '\0' '\n' < "/proc/$(pidof clash | awk '{print $1}')/environ" 2>/dev/null | sed -n 's/^SAFE_PATHS=//p')
+	sp=$({ tr '\0' '\n' < "/proc/$(pidof clash | awk '{print $1}')/environ"; } 2>/dev/null | sed -n 's/^SAFE_PATHS=//p')
 	echo "${sp:-/usr/share/openclash:/etc/ssl}"
 }
 core_test() {   # core_test 配置：内核自己的 -t 校验（主目录和启动时一样；找不到内核时跳过），输出在 $out
@@ -4273,24 +4334,63 @@ core_test() {   # core_test 配置：内核自己的 -t 校验（主目录和启
 	else out=$(SAFE_PATHS="$(safe_paths)" "$c" -t -d "$R/etc/openclash" -f "$1" 2>&1); fi
 }
 
-# 维护者参考配置里的节点：补进运行配置之前，这一版要先在这台路由器的内核上校验通过（别处的节点这里的内核不一定认，
-# 认不出的话 OpenClash / ShellCrash 整个起不来）。热加载前的 -t 校验通过时记下；启动时还没记下的，钩子先拿内核试一次
+# 维护者参考配置里的节点：直接写进生成运行配置的那份配置文件（OpenClash 选用的配置、ShellCrash 的订阅配置），
+# OpenClash / ShellCrash 下次启动（重启）时就和用户自己的节点一样用上。每一版先在这台路由器的内核上校验（别处的节点这里的
+# 内核不一定认，认不出的话 OpenClash / ShellCrash 整个起不来），通过了才写，记下 id 以后不再校验
+fill_has() { grep -qs '"fill": {' "$ACC"; }   # 账号表（JSON）里有参考节点
 fill_id() { ruby -E UTF-8 -ryaml -e "$YL"'; f = (yl(ARGV[0]) || {})["fill"]; print f["id"] if f.is_a?(Hash)' "$ACC" 2>/dev/null; }
-fill_mark() { id=$(fill_id); [ -n "$id" ] && core_bin >/dev/null && echo "$id" > "$FILLOK"; return 0; }   # 刚用内核校验过补上了它们的配置
-fill_pending() {   # 有参考节点，这一版还没在这台路由器的内核上校验过（id 在 $id 里）
-	id=$(fill_id)
-	[ -n "$id" ] && [ "$(cat "$FILLOK" 2>/dev/null)" != "$id" ]
+fill_waiting() { [ -f "$FILLPEND" ] && running; }   # 配置文件里新写了参考节点，在跑的还没用上
+fill_sig() {   # fill_sig 配置文件：账号表 + 配置文件 + 内核（大小和修改时间：升级了内核，没通过校验的再试一次）的校验和
+	{ cat "$ACC" "$1"; fsg_c=$(core_bin) && ls -lnL "$fsg_c" 2>/dev/null | awk '{ print $5, $6, $7, $8 }'; } | cksum
 }
-fill_gate() {   # fill_gate 校验用的文件 apply.rb 的参数…：fill_pending 时钩子调用。按参数生成一份补上参考节点的配置，内核校验通过才记下；
-	             # 找不到内核、校验不过就这次启动不补（端口池照常注入）。不往 stdout 写（ShellCrash 的钩子靠 stdout 拿配置的路径）
-	v="$1"; shift
-	if ! core_bin >/dev/null; then log "参考节点：找不到 ${NAME} 的内核，没法先校验，这次启动不补"; rm -f "$v"; return 0; fi
-	if ruby -E UTF-8 "$D/apply.rb" "$@" >> "$LOG" 2>&1 && core_test "$v"; then
-		echo "$id" > "$FILLOK"
-	else
-		log "参考节点没通过 ${NAME} 内核的校验，这次启动不补：$(printf '%s\n' "$out" | tail -n 1)"
+fmsg() { log "$*"; [ -n "${FQUIET:-}" ] || echo "$*"; }   # 钩子里只记日志（ShellCrash 的钩子靠 stdout 拿配置的路径）
+fill_fail() { echo "$*" > "$FILLWHY"; fmsg "$*"; }
+fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置文件、cca 写过的跟着参考配置更新，写了时 FILLWROTE=1。
+	               # 说明写到 stdout（Mac 上能看到）。配置文件、参考节点、内核都没变时不再读一遍（${FILLSEEN}；同步时 FILLFORCE 照读）
+	FILLWROTE=""
+	if ! fill_has; then rm -f "$FILLPEND" "$FILLSEEN" "$FILLWHY"; return 0; fi
+	fs_src="${1:-$(source_config)}"
+	[ -n "$fs_src" ] && [ -f "$fs_src" ] || return 0
+	fs_sig=$(fill_sig "$fs_src")
+	[ -z "${FILLFORCE:-}" ] && [ "$fs_sig" = "$(cat "$FILLSEEN" 2>/dev/null)" ] && return 0
+	fs_o="$R/tmp/cca.src.$$.yaml"; fs_v="$R/tmp/cca.fill.$$.yaml"
+	fs_tb=$(runtime_config); [ -n "$fs_tb" ] && [ -f "$fs_tb" ] || fs_tb="$fs_src"   # 拿正在用的运行配置加上这些节点给内核校验（它本来就校验得过）
+	set -- --fill-source "$fs_o" --test "$fs_tb" --test-out "$fs_v"
+	[ "$BK" = sc ] && set -- "$@" --custom "$SC/yamls/proxies.yaml"   # 不占用 ShellCrash 自定义节点的名字
+	fs_what=$(ruby -E UTF-8 "$D/apply.rb" "$@" "$fs_src" "$ACC" 2>"$fs_o.err"); fs_rc=$?
+	fs_why=$(sed -n 's/^cca: 参考节点没能写进配置文件（\(.*\)）$/\1/p; s/^cca: 读取配置失败：//p' "$fs_o.err" | tail -n 1)
+	[ -n "${FQUIET:-}" ] || sed -n 's/^cca: \(参考节点「.*没有写\)$/\1/p' "$fs_o.err"   # 哪些没写、为什么
+	cat "$fs_o.err" >> "$LOG"; rm -f "$fs_o.err"
+	if [ $fs_rc -eq 2 ]; then rm -f "$fs_o" "$fs_v" "$FILLWHY"; echo "$fs_sig" > "$FILLSEEN"; return 0; fi
+	if [ $fs_rc -ne 0 ]; then   # 配置文件改了（或参考节点换了）再试
+		rm -f "$fs_o" "$fs_v"; echo "$fs_sig" > "$FILLSEEN"
+		fill_fail "维护者参考配置里的节点没能写进 ${NAME} 的配置文件 ${fs_src}${fs_why:+（${fs_why}）}"
+		return 1
 	fi
-	rm -f "$v"
+	fs_id=$(fill_id)
+	if [ "$(cat "$FILLOK" 2>/dev/null)" != "$fs_id" ]; then
+		if ! core_bin >/dev/null; then   # 内核找到了再试
+			rm -f "$fs_o" "$fs_v"
+			fill_fail "找不到 ${NAME} 的内核，没法先校验维护者参考配置里的节点，没有写进配置文件"
+			return 1
+		fi
+		if ! core_test "$fs_v"; then   # 内核升级了（或参考节点换了）再试
+			rm -f "$fs_o" "$fs_v"; echo "$fs_sig" > "$FILLSEEN"
+			fill_fail "维护者参考配置里的节点没通过 ${NAME} 内核的校验，没有写进配置文件：$(printf '%s\n' "$out" | tail -n 1)"
+			return 1
+		fi
+		echo "$fs_id" > "$FILLOK"
+	fi
+	rm -f "$fs_v" "$FILLWHY"
+	cp -f "$fs_src" "$SRCBAK"
+	if ! rewrite "$fs_src" "$fs_o" 2>/dev/null; then   # 原地覆盖：属主、权限不变。写不了的同步时再试
+		rm -f "$fs_o"; echo "$fs_sig" > "$FILLSEEN"
+		fill_fail "写不了 ${NAME} 的配置文件 ${fs_src}，维护者参考配置里的节点没有写进去"
+		return 1
+	fi
+	fill_sig "$fs_src" > "$FILLSEEN"
+	FILLWROTE=1
+	fmsg "已把维护者参考配置里的节点写进 ${NAME} 的配置文件 ${fs_src}：${fs_what}（行尾带 # cca；改之前的在 ${SRCBAK}）"
 }
 listening() { netstat -lnt 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"; }
 missing_ports() {
@@ -4437,33 +4537,46 @@ remove_keep() {
 
 # OpenClash 生成配置时调用（启动时本来就会加载配置，不额外重载）。任何失败都保留原配置
 hook() {
-	f="$1"
-	[ -f "$f" ] && [ -s "$PORTS" ] || return 0   # 没有账号端口就完全不碰配置
-	cp -f "$f" "$f.cca.bak"
-	if fill_pending; then cp -f "$f" "$R/tmp/cca.fill.$$.yaml" && fill_gate "$R/tmp/cca.fill.$$.yaml" "$R/tmp/cca.fill.$$.yaml" "$ACC"; fi
-	if ruby -E UTF-8 "$D/apply.rb" --fill-ok "$FILLOK" "$f" "$ACC" >> "$LOG" 2>&1; then
-		rm -f "$f.cca.bak"
-		echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$R/tmp/openclash.log"
-	else
-		mv -f "$f.cca.bak" "$f"
-		log "hook: apply.rb 失败，配置保持原样"
+	f="$1"; FQUIET=1
+	# 参考节点：OpenClash 自己的配置（订阅更新会整个换掉）里缺了就写回去。这次的运行配置已经按写之前的那份生成好了，
+	# 生成端口池时照配置文件把这些节点也写进它（--mirror，和下次按配置文件生成的一样），不用为这个再重启一次
+	fill_source
+	rm -f "$FILLPEND"   # 这次的运行配置是按写好的配置文件生成的
+	mir=""
+	if [ -n "$FILLWROTE" ]; then
+		mir=$(source_config)
+		echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已把维护者参考配置里的节点写进配置文件 ${mir}" >> "$R/tmp/openclash.log"
 	fi
+	[ -f "$f" ] && { [ -s "$PORTS" ] || [ -n "$mir" ]; } || return 0   # 没有账号端口（也不用写参考节点）就完全不碰配置
+	cp -f "$f" "$f.cca.bak"
+	ruby -E UTF-8 "$D/apply.rb" ${mir:+--mirror "$mir"} "$f" "$ACC" >> "$LOG" 2>&1; hk_rc=$?
+	case $hk_rc in
+		0|3)
+			[ $hk_rc -eq 3 ] && : > "$FILLPEND"
+			rm -f "$f.cca.bak"
+			[ -s "$PORTS" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$R/tmp/openclash.log" ;;
+		*)
+			mv -f "$f.cca.bak" "$f"
+			[ -n "$mir" ] && : > "$FILLPEND"   # 参考节点没写进这次的运行配置：重启后才用上
+			log "hook: apply.rb 失败，配置保持原样" ;;
+	esac
 }
 
 # ShellCrash 启动时由它启动前的任务文件调用（它拼运行配置之前）：订阅配置复制一份、只插入端口池的几行，输出这份的路径，
 # ShellCrash 接着就拿它拼出运行配置（启动时本来就会加载配置，不额外重载）。没有账号端口、不支持、出了问题都输出原来的路径
 sc_hook() {
-	f="$1"; o="$R/tmp/cca.shellcrash.yaml"
+	f="$1"; o="$R/tmp/cca.shellcrash.yaml"; FQUIET=1
+	if [ -n "$SC" ] && [ -f "$f" ] && sc_meta; then
+		fill_source "$f"   # 参考节点：在 ShellCrash 读订阅配置之前写进去（订阅更新会整个换掉），这次启动就用上
+		rm -f "$FILLPEND"
+	fi
 	if [ -n "$SC" ] && [ -s "$PORTS" ] && [ -f "$f" ]; then
 		if ! sc_meta; then
 			log "sc-hook: ShellCrash 用的不是 mihomo（Meta）内核，没有注入端口池"
 		elif grep -qs '^listeners:' "$SC/yamls/user.yaml" "$SC/yamls/others.yaml"; then
 			log "sc-hook: ShellCrash 的 yamls/user.yaml 或 others.yaml 里自己写了 listeners，和端口池的会重复，启动时没有注入（在 Mac 上运行 cca router sync，问过再热加载）"
 		else
-			# 参考节点不占用 ShellCrash 自定义节点（yamls/proxies.yaml，它随后才接进来）的名字
-			set -- --ports "$(sc_ports)" --custom "$SC/yamls/proxies.yaml" "$f" "$ACC"
-			fill_pending && fill_gate "$R/tmp/cca.fill.$$.yaml" --insert "$R/tmp/cca.fill.$$.yaml" "$@"
-			if ruby -E UTF-8 "$D/apply.rb" --insert "$o" --fill-ok "$FILLOK" "$@" >> "$LOG" 2>&1; then
+			if ruby -E UTF-8 "$D/apply.rb" --insert "$o" --ports "$(sc_ports)" "$f" "$ACC" >> "$LOG" 2>&1; then
 				sc_unsave
 				echo "$(date '+%Y-%m-%d_%H:%M:%S')~【cca】已注入 Claude 账号端口池: $(tr '\n' ' ' < "$PORTS")" >> "$SCT/ShellCrash.log"
 				echo "$o"
@@ -4485,19 +4598,11 @@ sc_unsave() {   # ShellCrash 停止时把面板上改过的选中项存进 confi
 	rewrite "$w" "$w.cca.$$"
 }
 
-structure() {   # 端口池的"结构"：cca- 入站和 CCA- 策略组的成员（不含选中哪个），结构变了才需要重载。
-	             # 有参考节点时还有它们的定义（N|，没有是 -）和要补进的那个策略组的成员（F|）：补了、改了也要重载
+structure() {   # 端口池的"结构"：cca- 入站和 CCA- 策略组的成员（不含选中哪个），结构变了才需要重载
 	ruby -E UTF-8 -ryaml -e "$YL"'
 		c = yl(ARGV[0]) || {}
 		(c["listeners"] || []).each { |l| puts "L|#{l["name"]}|#{l["port"]}|#{l["proxy"]}" if l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }
-		(c["proxy-groups"] || []).each { |g| puts "G|#{g["name"]}|#{(g["proxies"] || []).map(&:to_s).sort.join(",")}" if g.is_a?(Hash) && g["name"].to_s.start_with?("CCA-") }
-		f = (yl(ARGV[1]) || {})["fill"]
-		if f.is_a?(Hash)
-		  px = (c["proxies"] || []).select { |p| p.is_a?(Hash) }
-		  (f["proxies"] || []).each { |q| p = px.find { |x| x["name"].to_s == q["name"].to_s } if q.is_a?(Hash); puts "N|#{q["name"] if q.is_a?(Hash)}|#{p ? p.sort_by { |k, _| k.to_s }.inspect : "-"}" }
-		  g = (c["proxy-groups"] || []).find { |x| x.is_a?(Hash) && x["name"].to_s == f["group"].to_s }
-		  puts "F|#{f["group"]}|#{g ? (g["proxies"] || []).map(&:to_s).join(",") : "-"}"
-		end' "$1" "$ACC" 2>/dev/null | sort
+		(c["proxy-groups"] || []).each { |g| puts "G|#{g["name"]}|#{(g["proxies"] || []).map(&:to_s).sort.join(",")}" if g.is_a?(Hash) && g["name"].to_s.start_with?("CCA-") }' "$1" 2>/dev/null | sort
 }
 cca_ports() {
 	ruby -E UTF-8 -ryaml -e "$YL"'; puts((yl(ARGV[0]) || {})["listeners"].to_a.select { |l| l.is_a?(Hash) && l["name"].to_s.start_with?("cca-") }.map { |l| l["port"].to_i })' "$1" 2>/dev/null
@@ -4534,13 +4639,14 @@ wait_ports() {   # wait_ports "应监听的端口" "应关闭的端口" [最多�
 	done
 }
 
-restart_now() {   # 运行配置不见了时让端口池生效：重启 OpenClash / ShellCrash（和重载一样要 Mac 端征得同意）。返回值同 apply_now
+restart_now() {   # restart_now 为什么要重启：重启 OpenClash / ShellCrash（和重载一样要 Mac 端征得同意，Mac 端按"只能重启一次"认出
+	               # 问的是重启）。用在运行配置不见了、要调整端口池时，和配置文件里新写了参考节点时。返回值同 apply_now
 	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
-		echo "${NAME} 的运行配置文件不见了，要建立或调整账号端口池只能重启一次 ${NAME}：约 20 秒，期间局域网的连接都会中断"
+		echo "${1}只能重启一次 ${NAME}：约 20 秒，期间局域网的连接都会中断"
 		return 3
 	fi
 	echo "正在重启 ${NAME}（约 20 秒）…"
-	log "运行配置不见了，重启 ${NAME} 让钩子注入端口池"
+	log "重启 ${NAME}：${1}"
 	if [ "$BK" = sc ]; then sv="$SC/start.sh"; else sv="$R/etc/init.d/openclash"; fi
 	( trap '' HUP; "$sv" restart ) >/dev/null 2>&1   # SSH 中途断了也要重启完（不然停在一半）
 	CPORT=""   # 重启后重新读控制接口的端口和密钥
@@ -4553,12 +4659,14 @@ restart_now() {   # 运行配置不见了时让端口池生效：重启 OpenClas
 }
 
 # 把 accounts.yaml 落到正在运行的 OpenClash / ShellCrash：结构没变只切节点；结构变了且获准才重载（运行配置不见了时是重启）。
-# 返回 0 成功；3 需要重载但没获准；1 失败
+# 有参考节点时先写进配置文件，新写了的要重启一次才用上（获准才重启）。返回 0 成功；3 需要重载（重启）但没获准；1 失败
 apply_now() {
 	if [ "$BK" = sc ] && ! sc_meta; then
 		echo "ShellCrash 现在用的不是 mihomo（Meta）内核：cca 的端口池只支持 Meta 内核（ShellCrash 的菜单里可以换内核）"
 		return 1
 	fi
+	fill_source   # 参考节点先写进配置文件：在跑的要重启才用上（下面 fill_waiting）
+	[ -n "$FILLWROTE" ] && running && : > "$FILLPEND"
 	cf=$(runtime_config)
 	if [ -z "$cf" ] || [ ! -f "$cf" ]; then
 		if ! running; then
@@ -4574,64 +4682,47 @@ apply_now() {
 				1) in_source "$FAILED" || return 1 ;;   # 切不过去的节点生成运行配置的那份配置里也没有：重启也没用
 			esac
 		fi
-		restart_now
+		restart_now "${NAME} 的运行配置文件不见了，要建立或调整账号端口池"
 		return $?
 	fi
 	if ! running; then
 		echo "${NAME} 未运行：端口池会在它下次启动时由钩子注入"
 		return 0
 	fi
+	if fill_waiting; then   # 重启时按写好的配置文件重新生成运行配置，钩子照常注入端口池：端口池要调整也一起了
+		restart_now "${NAME} 的配置文件里新写了维护者参考配置里的节点，要用上"
+		return $?
+	fi
 	t="$R/tmp/cca.apply.$$.yaml"
-	# ShellCrash：节点只用订阅配置里也有的（它的自定义节点启动时才拼进来，钩子用不上），和启动时注入的一致；参考节点
-	# 不占用它自定义节点的名字。OpenClash：参考节点按它自己的配置认哪些是用户的（运行配置里多出来的同名节点是以前补进去的，
-	# 参考配置改了就跟着改）
-	if [ "$BK" = sc ] && src=$(source_config); then set -- --base "$src" --custom "$SC/yamls/proxies.yaml"
-	elif [ "$BK" = oc ] && src=$(source_config); then set -- --source "$src"
-	else set --; fi
-	nofill=""   # 参考节点没通过内核的校验时：不补它们，只调整端口池
-	while :; do
+	cp -f "$cf" "$t"
+	# ShellCrash：节点只用订阅配置里也有的（它的自定义节点启动时才拼进来，钩子用不上），和启动时注入的一致
+	if [ "$BK" = sc ] && src=$(source_config); then set -- --base "$src"; else set --; fi
+	if ! ruby -E UTF-8 "$D/apply.rb" "$@" "$t" "$ACC"; then
+		rm -f "$t"
+		echo "生成配置失败，运行配置未改动"
+		return 1
+	fi
+	if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
+		put_runtime "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
+		select_all
+		case $? in
+			0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
+			1) return 1 ;;
+		esac
+		echo "运行中的内核里缺少账号策略组"   # 文件和内核不一致，落到下面的重载
 		cp -f "$cf" "$t"
-		if ! ruby -E UTF-8 "$D/apply.rb" "$@" ${nofill:+--fill-ok /dev/null} "$t" "$ACC"; then
-			rm -f "$t"
-			echo "生成配置失败，运行配置未改动"
-			return 1
-		fi
-		why=""
-		if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
-			put_runtime "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
-			select_all
-			case $? in
-				0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
-				1) return 1 ;;
-			esac
-			echo "运行中的内核里缺少账号策略组"   # 文件和内核不一致，落到下面的重载
-			cp -f "$cf" "$t"
-			why="建立或调整账号端口池"
-		fi
-		if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
-			if [ -z "$why" ]; then   # 端口池没变、只是要补参考节点时照实说
-				why="建立或调整账号端口池"
-				[ -z "$(missing_ports)" ] && [ "$(structure "$cf" | grep -v '^[FN]|')" = "$(structure "$t" | grep -v '^[FN]|')" ] &&
-					why="补上维护者参考配置里的节点"
-			fi
-			rm -f "$t"
-			echo "需要让 ${NAME} 重载一次配置，用来${why}：约 20 秒，期间局域网的新连接会中断"
-			return 3
-		fi
-		core_test "$t" && break
-		if [ -z "$nofill" ] && [ -n "$(fill_id)" ]; then
-			echo "维护者参考配置里的节点没通过 ${NAME} 内核的校验，这次不补它们："
-			echo "$out" | tail -n 3
-			rm -f "$FILLOK"
-			nofill=1
-			continue
-		fi
+	fi
+	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
+		rm -f "$t"
+		echo "需要让 ${NAME} 重载一次配置，用来建立或调整账号端口池：约 20 秒，期间局域网的新连接会中断"
+		return 3
+	fi
+	if ! core_test "$t"; then
 		rm -f "$t"
 		echo "mihomo 校验未通过，运行配置未改动："
 		echo "$out" | tail -n 3
 		return 1
-	done
-	[ -n "$nofill" ] || fill_mark
+	fi
 	newp=$(cca_ports "$t" | tr '\n' ' ')
 	gonep=""
 	for p in $(cca_ports "$cf"); do
@@ -4673,11 +4764,17 @@ ensure() {   # cron：补钩子、纠正被改掉的选中节点；端口池缺�
 	[ -n "$out" ] && log "纠正选中节点：$(echo $out)"
 	return 0
 }
-ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（快）；不在则交给 apply_now（需要重载时返回 3）
+ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（快）；不在则交给 apply_now（需要重载时返回 3）。
+	              # 参考节点也核对一遍（配置文件和参考节点都没变时只算一下校验和）：配置文件里新写了的要重启才用上，也交给 apply_now 问
 	install_hook
+	fill_source
+	[ -n "$FILLWROTE" ] && running && : > "$FILLPEND"
 	if [ -z "$(missing_ports)" ]; then
 		select_all
-		case $? in 0) return 0 ;; 1) return 1 ;; esac
+		case $? in
+			0) fill_waiting || return 0 ;;
+			1) fill_waiting || return 1 ;;
+		esac
 	fi
 	apply_now
 }
@@ -4685,20 +4782,24 @@ ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（
 hook_ok() {   # 在用的那套装着 cca 的钩子
 	if [ "$BK" = sc ]; then grep -qF "$SCHOOK" "$(sc_task)" 2>/dev/null; else grep -qxF "$MB" "$OW" 2>/dev/null; fi
 }
-fill_status() {   # 参考节点在运行配置里齐不齐（同一个节点在这里叫别的名字也算有）
-	ruby -E UTF-8 -ryaml -e "$YL"'
-		f = (yl(ARGV[0]) || {})["fill"]
-		exit 0 unless f.is_a?(Hash)
-		c = (File.file?(ARGV[1]) ? yl(ARGV[1]) : nil) || {}
-		key = lambda { |p| s = p["server"].to_s.strip.downcase.sub(/\.+\z/, ""); s.empty? ? nil : [p["type"].to_s.strip.downcase, s, p["port"].to_s.strip, (p["servername"] || p["sni"]).to_s.strip.downcase.sub(/\.+\z/, "")].join("|") }
-		px = (c["proxies"] || []).select { |p| p.is_a?(Hash) }
-		names = px.map { |p| p["name"].to_s }
-		keys = px.map { |p| key.call(p) }.compact
-		all = (f["proxies"] || []).select { |p| p.is_a?(Hash) }
-		miss = all.reject { |p| names.include?(p["name"].to_s) || keys.include?(key.call(p)) }.map { |p| p["name"] }
-		ok = (File.read(ARGV[2]).strip rescue "") == f["id"].to_s
-		puts "参考节点：维护者参考配置里策略组 #{f["group"]} 的 #{all.size} 个节点，" + (miss.empty? ? "运行配置里都有" : "运行配置里还缺 #{miss.join("、")}") +
-		  (ok ? "" : "（这一版还没在这台路由器的内核上校验过）")' "$ACC" "$1" "$FILLOK" 2>/dev/null
+fill_status() {   # 参考节点在配置文件里齐不齐，写进去的用上了没有
+	fill_has || return 0
+	fst_src=$(source_config)
+	if [ -z "$fst_src" ] || [ ! -f "$fst_src" ]; then echo "参考节点：找不到 ${NAME} 的配置文件，没地方写"; return 0; fi
+	set -- --fill-source -
+	[ "$BK" = sc ] && set -- "$@" --custom "$SC/yamls/proxies.yaml"
+	fst_r=$(ruby -E UTF-8 "$D/apply.rb" "$@" "$fst_src" "$ACC" 2>/dev/null); fst_rc=$?
+	fst_line="参考节点：维护者参考配置里$(printf '%s\n' "$fst_r" | sed -n 1p)，"
+	case $fst_rc in
+		2) fst_line="${fst_line}${NAME} 的配置文件里都有$(printf '%s\n' "$fst_r" | sed -n 3p)" ;;
+		0) fst_line="${fst_line}${NAME} 的配置文件里还要$(printf '%s\n' "$fst_r" | sed -n 2p)"
+		   [ "$(cat "$FILLOK" 2>/dev/null)" = "$(fill_id)" ] || fst_line="${fst_line}（这一版还没在这台路由器的内核上校验过）" ;;
+		*) echo "参考节点：读不了 ${NAME} 的配置文件 ${fst_src}"; return 0 ;;
+	esac
+	[ -f "$FILLPEND" ] && fst_line="${fst_line}（新写进去的要等 ${NAME} 重启后才用上）"
+	echo "$fst_line"
+	[ $fst_rc -eq 0 ] && [ -s "$FILLWHY" ] && echo "  上次没写成：$(cat "$FILLWHY")"
+	return 0
 }
 status() {
 	if running; then echo "${NAME}：运行中"; else echo "${NAME}：未运行"; fi
@@ -4709,7 +4810,7 @@ status() {
 	else echo "运行配置：${cf}（还没有，${NAME} 启动时生成）"; fi
 	if hook_ok; then echo "钩子：已安装"; else echo "钩子：未安装"; fi
 	if grep -qF "$D/cca-router.sh ensure" "$CRON" 2>/dev/null; then echo "自愈 cron：已安装"; else echo "自愈 cron：未安装"; fi
-	fill_status "$cf"
+	fill_status
 	if [ -s "$SEL" ] && running; then
 		i=0
 		while IFS="$TAB" read -r g node; do
@@ -4773,6 +4874,9 @@ uninstall() {   # stdin 可传入要删除的 SSH 公钥；CCA_ALLOW_RELOAD=1 �
 	fi
 	rm -rf "$D" "$R/tmp/cca.missing"
 	echo "路由器上的 cca 已移除"
+	src=$(source_config) && grep -qs ' # cca' "$src" &&
+		echo "${NAME} 的配置文件 ${src} 里 cca 写进去的维护者参考节点（行尾带 # cca）留着，不要的话自己删"
+	return 0
 }
 
 backend
@@ -4780,7 +4884,7 @@ case "$1" in
 	hook) hook "$2"; exit 0 ;;
 	sc-hook) sc_hook "$2"; exit 0 ;;
 	install) install_hook && install_cron && install_keep ;;
-	apply) apply_now ;;
+	apply) FILLFORCE=1; apply_now ;;   # 同步时参考节点照读一遍配置文件（内核升级了、上次没写成的也再试）
 	ensure) ensure ;;
 	ensure-now) ensure_now ;;
 	status) status ;;
@@ -4795,15 +4899,18 @@ router_rb() {
 	cat <<'RB'
 # cca：在 mihomo 配置里生成账号端口池。槽位 n = mixed 入站 cca-n（端口 base+n，不认证）→ select 策略组 CCA-n，
 # 组成员是可选节点 + REJECT；分到账号的槽位把它的节点排第一（内核启动后默认就选中它），空槽位默认 REJECT。
-# 账号表里有维护者参考配置里的节点（fill）时，配置里缺的也补上（见下面「参考节点」）。
-#   ruby apply.rb [--source 配置 | --base 订阅配置 [--custom 自定义节点]] [--fill-ok 文件] 配置 账号表
+#   ruby apply.rb [--base 订阅配置 | --mirror 配置文件] 配置 账号表
 #     改写配置：OpenClash 的运行配置；ShellCrash 热加载前的运行配置（节点只用订阅配置里也有的，和它启动时一样）。
-#     --source 是 OpenClash 自己的配置：参考节点按它认哪些节点是用户的
-#   ruby apply.rb --insert 输出 --ports "端口 …" [--custom 自定义节点] [--fill-ok 文件] 订阅配置 账号表
-#     ShellCrash 启动前用：订阅配置原样复制到输出，只插入端口池和参考节点的几行。ShellCrash 按文本把订阅配置拆成几段、
+#     --mirror：OpenClash 启动时参考节点刚写进它自己的配置，这次的运行配置里也照样写上（见下面）
+#   ruby apply.rb --insert 输出 --ports "端口 …" 订阅配置 账号表
+#     ShellCrash 启动前用：订阅配置原样复制到输出，只插入端口池的几行。ShellCrash 按文本把订阅配置拆成几段、
 #     再和它自己的设置拼起来，整份重排的话它自己追加的入站缩进会对不上；--ports 是它自己要占的端口
-#   --custom：ShellCrash 的自定义节点（yamls/proxies.yaml，它随后才接进来），参考节点不占用它们的名字；
-#   --fill-ok：文件里记的不是这一版参考节点的 id（还没在这台路由器的内核上校验过）就不补
+#   ruby apply.rb --fill-source 输出 [--custom 自定义节点] [--test 配置 --test-out 输出] 配置文件 账号表
+#     把账号表里维护者参考配置的节点（fill）直接写进用户的配置文件（见下面「参考节点」）：写好的新内容放到输出（输出是 -
+#     时只看不写：第一行是参考节点的概况，第二行是还要做什么，第三行是改不了的），做了什么打印到 stdout；退出码 0 有改动，
+#     2 不用改，1 改不了。
+#     --custom：ShellCrash 的自定义节点（yamls/proxies.yaml，它随后才接进来），参考节点不占用它们的名字；
+#     --test：另写一份「这份配置 + 要写的节点」到 --test-out，给内核 -t 校验（别处的节点这里的内核不一定认）
 require 'yaml'
 opt = {}
 while ARGV[0].to_s.start_with?('--')
@@ -4823,7 +4930,7 @@ begin
   cfg = yload.call(cfg_file) || {}
   acc = (File.exist?(acc_file) && YAML.load_file(acc_file)) || {}
   base = opt['--base'] && (yload.call(opt['--base']) || {})
-  raise '顶层不是映射' unless cfg.is_a?(Hash) && (base.nil? || base.is_a?(Hash))
+  raise '顶层不是映射' unless cfg.is_a?(Hash) && acc.is_a?(Hash) && (base.nil? || base.is_a?(Hash))
 rescue StandardError, Psych::SyntaxError => e
   $stderr.puts "cca: 读取配置失败：#{e.message.lines.first.to_s.strip}"
   exit 1
@@ -4845,111 +4952,18 @@ insert = lambda do |text, key, items|   # 段落的认法和 ShellCrash 一样�
     return text + "#{key}:\n" + items.map { |s| "  - #{s}\n" }.join
   end
   i = heads[0]
+  nl = lines[i].end_with?("\r\n") ? "\r\n" : "\n"
+  lines[i] = "#{key}:#{nl}" if lines[i] =~ /\A#{Regexp.escape(key)}:[ \t]*(\[\]|null|~)[ \t]*\r?\n?\z/   # 空列表写成一行的
   raise "#{key} 不是一行一项的列表" unless lines[i] =~ /\A#{Regexp.escape(key)}:[ \t]*(#.*)?\r?\n?\z/
   j = (i + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
   first = lines[i + 1...j].find { |l| l =~ /\A *- / }
   ind = first ? first[/\A */] : '  '   # 和这一段原有的项对齐
-  nl = lines[i].end_with?("\r\n") ? "\r\n" : "\n"
   lines[i] += nl unless lines[i].end_with?("\n")
   lines[i + 1, 0] = items.map { |s| "#{ind}- #{s}#{nl}" }
   lines.join
 end
-
-# --- 参考节点：账号表的 fill（Mac 上的 cca 从维护者的映射仓库拉下来、验过签的）= 维护者配置里的一个策略组和它引用的节点。
-# 配置里缺的节点补进 proxies，名字补进同名策略组（接在原有成员后面）。这些不补：同名的是用户自己的节点（只补进组）；名字被
-# 策略组、内置的出站、ShellCrash 的自定义节点占了；用户已经有同一个节点（类型、服务器、端口和 TLS 域名一样）、只是叫法
-# 不同（补进组的是他的名字）；要经别的节点连接（dialer-proxy）而那个节点没有。和 Mac 上 cca 的 fill_plan 是同一套规则
-fill = acc['fill'].is_a?(Hash) ? acc['fill'] : nil
-fill = nil if fill && opt.key?('--fill-ok') && (File.read(opt['--fill-ok']).strip rescue '') != fill['id'].to_s
-custom = []   # ShellCrash 的自定义节点：一行一个 "- {name: 节点, …} #策略组"
-if fill && opt['--custom'] && File.file?(opt['--custom'])
-  File.foreach(opt['--custom'], encoding: 'UTF-8') do |l|
-    m = l =~ /\A\s*#/ ? nil : l.match(/\bname:\s*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,}#]+)/)
-    next unless m
-    v = m[1].strip
-    v = (yparse.call(v) rescue v) if v.start_with?('"', "'")
-    custom << v.to_s.strip
-  end
-end
-own = base || cfg   # 按哪份认用户自己的节点：ShellCrash 是订阅配置，OpenClash 是它自己的配置（--source），都没有时是要改的这份
-if fill && !base && opt['--source']
-  begin
-    src = yload.call(opt['--source'])
-    own = src if src.is_a?(Hash)
-  rescue StandardError, Psych::SyntaxError
-    $stderr.puts 'cca: 读不了 OpenClash 自己的配置，参考节点按运行配置认'
-  end
-end
-key = lambda do |p|   # 和 Mac 上的 cca 认节点一样：类型、服务器、端口、TLS 域名
-  s = p['server'].to_s.strip.downcase.sub(/\.+\z/, '')
-  s.empty? ? nil : [p['type'].to_s.strip.downcase, s, p['port'].to_s.strip, (p['servername'] || p['sni']).to_s.strip.downcase.sub(/\.+\z/, '')].join('|')
-end
-plan_add = []   # 要补的节点定义
-plan_mem = []   # 要补进策略组的名字
-if fill
-  mine = list.call(own['proxies']).select { |p| p.is_a?(Hash) }
-  pn = {}
-  mine.each { |p| pn[p['name'].to_s] = true }
-  taken = {}
-  (names.call(own) + %w[DIRECT REJECT REJECT-DROP PASS COMPATIBLE GLOBAL] + custom).each { |n| taken[n] = true }
-  by = {}
-  mine.each { |p| k = key.call(p); by[k] ||= p['name'].to_s if k }
-  cand = list.call(fill['proxies']).select { |p| p.is_a?(Hash) && !p['name'].to_s.empty? }
-  okn = {}
-  cand.each { |p| okn[p['name'].to_s] = true unless taken[p['name'].to_s] || by[key.call(p)] }
-  cand.each do |p|
-    n = p['name'].to_s
-    k = key.call(p)
-    dp = p['dialer-proxy']
-    if pn[n]
-      plan_mem << n
-    elsif taken[n]
-      $stderr.puts "cca: 参考节点「#{n}」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有补"
-    elsif k && by[k]
-      plan_mem << by[k]
-    elsif dp && (!dp.is_a?(String) || (!taken[dp] && !okn[dp]))
-      $stderr.puts "cca: 参考节点「#{n}」要经「#{dp}」连接，这里没有它，没有补"
-    else
-      plan_add << p
-      plan_mem << n
-    end
-  end
-  plan_mem.uniq!
-end
-fgroup = lambda do |c|   # 要补进名字的那个策略组（relay、include-all 的不动）
-  g = fill && list.call(c['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == fill['group'].to_s && !ours.call(x, 'CCA-') }
-  g && g['type'].to_s != 'relay' && g['include-all'] != true && g['include-all-proxies'] != true ? g : nil
-end
-put_fill = lambda do |c, add, mem|   # 补进 YAML 读出来的配置 c；返回做了什么（没做是 nil）
-  done = []
-  unless add.empty?
-    px = list.call(c['proxies']).dup
-    fresh = []
-    upd = []
-    add.each do |p|
-      i = px.index { |x| x.is_a?(Hash) && x['name'].to_s == p['name'].to_s }
-      if i.nil?
-        px << p
-        fresh << p['name']
-      elsif px[i] != p   # 以前补进来的（用户自己的配置里没有它），参考配置改过了
-        px[i] = p
-        upd << p['name']
-      end
-    end
-    c['proxies'] = px
-    done << "补上节点 #{fresh.join('、')}" unless fresh.empty?
-    done << "按参考配置更新了节点 #{upd.join('、')}" unless upd.empty?
-  end
-  g = fgroup.call(c)
-  more = g ? mem - list.call(g['proxies']).map(&:to_s) : []
-  unless more.empty?
-    g['proxies'] = list.call(g['proxies']) + more
-    done << "策略组 #{g['name']} 里加上 #{more.join('、')}"
-  end
-  done.empty? ? nil : "cca: 维护者参考配置里的节点：#{done.join('；')}"
-end
 fkey = lambda { |k| s = k.to_s; s =~ /\A[A-Za-z_][A-Za-z0-9_-]*\z/ && s !~ /\A(y|yes|n|no|true|false|on|off|null)\z/i ? s : q.call(s) }
-flow = lambda do |v|   # 写成一行（YAML 的流式写法）：节点插进订阅配置时一个一行
+flow = lambda do |v|   # 写成一行（YAML 的流式写法）：写进配置文件的节点一个一行
   case v
   when Hash then '{' + v.map { |k, x| "#{fkey.call(k)}: #{flow.call(x)}" }.join(', ') + '}'
   when Array then '[' + v.map { |x| flow.call(x) }.join(', ') + ']'
@@ -4958,8 +4972,8 @@ flow = lambda do |v|   # 写成一行（YAML 的流式写法）：节点插进�
   else q.call(v)
   end
 end
-add_members = lambda do |text, gname, items|   # 策略组 gname 的 proxies 列表末尾接上 items：只认一行一项的块写法
-  lines = text.lines                             # （ShellCrash 往组里加自定义节点也只认这种）
+add_members = lambda do |text, gname, items, suffix|   # 策略组 gname 的 proxies 列表末尾接上 items：只认一行一项的块写法
+  lines = text.lines                                     # （ShellCrash 往组里加自定义节点也只认这种）
   heads = lines.each_index.select { |i| lines[i].start_with?('proxy-groups:') }
   raise 'proxy-groups 出现了不止一次' if heads.size > 1
   raise '没有 proxy-groups 这一段' if heads.empty?
@@ -4991,69 +5005,193 @@ add_members = lambda do |text, gname, items|   # 策略组 gname 的 proxies 列
   li ||= ki + '  '
   nl = lines[pk].end_with?("\r\n") ? "\r\n" : "\n"
   lines[m - 1] += nl unless lines[m - 1].end_with?("\n")
-  lines[m, 0] = items.map { |n| "#{li}- #{q.call(n)}#{nl}" }
+  lines[m, 0] = items.map { |n| "#{li}- #{q.call(n)}#{suffix}#{nl}" }
   lines.join
 end
-rest = lambda do |c, an, gname, mem|   # 去掉 cca 插进去的（端口池、参考节点）之后的样子：插好的读出来，这部分要和原来一模一样
-  c.merge('proxies' => list.call(c['proxies']).reject { |p| p.is_a?(Hash) && an.include?(p['name'].to_s) },
-          'proxy-groups' => list.call(c['proxy-groups']).reject { |g| ours.call(g, 'CCA-') }.map { |g|
-            g.is_a?(Hash) && g['name'].to_s == gname ? g.merge('proxies' => list.call(g['proxies']).reject { |n| mem.include?(n.to_s) }) : g },
-          'listeners' => list.call(c['listeners']).reject { |l| ours.call(l, 'cca-') })
-end
-fill_in = lambda do |chk, add, gname, mem|   # 插进去的参考节点一个不差：定义原样，名字都在组里
-  an = add.map { |p| p['name'].to_s }
-  g = list.call(chk['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gname } || {}
-  list.call(chk['proxies']).select { |p| p.is_a?(Hash) && an.include?(p['name'].to_s) } == add &&
-    (mem - list.call(g['proxies']).map(&:to_s)).empty?
-end
-fill_text = lambda do |text, c, add, mem|   # 在文本里插参考节点：节点一个一行插在 proxies 段开头，名字接在策略组的 proxies 后面。
-  g = fgroup.call(c)                        # 插好的读一遍核对，不对就退一步只插节点，还不行就不插（端口池照常）。
-  gname = g ? g['name'].to_s : ''           # 返回 [新文本, 插进去的节点, 补进策略组的名字]
-  more = g ? mem - list.call(g['proxies']).map(&:to_s) : []
-  tries = [[add, more], [add, []]].uniq.reject { |a, m| a.empty? && m.empty? }
-  tries.each_with_index do |(a, m), n|
-    begin
-      out = insert.call(text, 'proxies', a.map { |p| flow.call(p) })
-      out = add_members.call(out, gname, m) unless m.empty?
-      chk = yparse.call(out)
-      an = a.map { |p| p['name'].to_s }
-      raise '插好后读出来和预期的不一样' unless chk.is_a?(Hash) && rest.call(chk, an, gname, m) == rest.call(c, an, gname, m) && fill_in.call(chk, a, gname, m)
-      return [out, a, m]
-    rescue StandardError => e
-      $stderr.puts "cca: 参考节点没能插进订阅配置（#{e.message.lines.first.to_s.strip}）#{n + 1 < tries.size ? '，改成只补节点、不动策略组' : '，这次不补'}"
+
+# --- 参考节点：账号表的 fill（Mac 上的 cca 从维护者的映射仓库拉下来、验过签的）= 维护者配置里的一个策略组和它引用的节点。
+# 直接写进用户的配置文件（OpenClash 选用的那份、ShellCrash 的订阅配置、Clash Verge 当前的配置）：缺的节点一个一行插在
+# proxies 开头，名字接在同名策略组的 proxies 后面，行尾都带「# cca」；维护者改了节点，带这个记号的那一行跟着改。这些不写：
+# 同名的是用户自己的节点（只补进组）；名字被策略组、内置的出站、ShellCrash 的自定义节点占了；用户已经有同一个节点（类型、
+# 服务器、端口和 TLS 域名一样）、只是叫法不同（补进组的是他的名字）；要经别的节点连接（dialer-proxy）而那个节点没有。
+# 和 Mac 上 cca 的 fill_plan 是同一套规则。原文的其余部分一个字节不动，写好的读一遍核对
+if opt.key?('--fill-source')
+  fill = acc['fill'].is_a?(Hash) ? acc['fill'] : nil
+  exit 2 unless fill
+  text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8')
+  mark = ' # cca'
+  custom = []   # ShellCrash 的自定义节点：一行一个 "- {name: 节点, …} #策略组"
+  if opt['--custom'] && File.file?(opt['--custom'])
+    File.foreach(opt['--custom'], encoding: 'UTF-8') do |l|
+      m = l =~ /\A\s*#/ ? nil : l.match(/\bname:\s*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,}#]+)/)
+      next unless m
+      v = m[1].strip
+      v = (yparse.call(v) rescue v) if v.start_with?('"', "'")
+      custom << v.to_s.strip
     end
   end
-  [text, [], []]
+  lines = text.lines
+  marked = {}   # cca 以前写进来的节点（行尾带记号）：名字 → 行号
+  ph = lines.index { |l| l.start_with?('proxies:') }
+  if ph
+    pe = (ph + 1...lines.size).find { |n| lines[n] =~ /\A[a-z]/ } || lines.size
+    (ph + 1...pe).each do |n|
+      m = lines[n].match(/\A *- (\{.*\})[ \t]+# cca[ \t]*\r?\n?\z/) or next
+      y = (yparse.call(m[1]) rescue nil)
+      marked[y['name'].to_s] = n if y.is_a?(Hash) && !y['name'].to_s.empty?
+    end
+  end
+  key = lambda do |p|   # 和 Mac 上的 cca 认节点一样：类型、服务器、端口、TLS 域名
+    s = p['server'].to_s.strip.downcase.sub(/\.+\z/, '')
+    s.empty? ? nil : [p['type'].to_s.strip.downcase, s, p['port'].to_s.strip, (p['servername'] || p['sni']).to_s.strip.downcase.sub(/\.+\z/, '')].join('|')
+  end
+  mine = list.call(cfg['proxies']).select { |p| p.is_a?(Hash) }
+  have = {}
+  mine.each { |p| have[p['name'].to_s] ||= p }
+  taken = {}
+  (names.call(cfg) + %w[DIRECT REJECT REJECT-DROP PASS COMPATIBLE GLOBAL] + custom).each { |n| taken[n] = true }
+  by = {}   # 用户自己的节点按摘要认（cca 写进来的不算：维护者给节点改了名时按新名字写）
+  mine.each { |p| k = key.call(p); by[k] ||= p['name'].to_s if k && !marked[p['name'].to_s] }
+  cand = list.call(fill['proxies']).select { |p| p.is_a?(Hash) && !p['name'].to_s.empty? }
+  okn = {}
+  cand.each { |p| okn[p['name'].to_s] = true unless taken[p['name'].to_s] || by[key.call(p)] }
+  add = []   # 要插进去的节点
+  upd = []   # cca 以前写进来、参考配置又改过的节点
+  mem = []   # 要在策略组里的名字
+  cand.each do |p|
+    n = p['name'].to_s
+    k = key.call(p)
+    dp = p['dialer-proxy']
+    if have[n]
+      upd << p if marked[n] && have[n] != p
+      mem << n
+    elsif taken[n]
+      $stderr.puts "cca: 参考节点「#{n}」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写"
+    elsif k && by[k]
+      mem << by[k]
+    elsif dp && (!dp.is_a?(String) || (!taken[dp] && !okn[dp]))
+      $stderr.puts "cca: 参考节点「#{n}」要经「#{dp}」连接，这里没有它，没有写"
+    else
+      add << p
+      mem << n
+    end
+  end
+  g = list.call(cfg['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == fill['group'].to_s }
+  g = nil if g && (g['type'].to_s == 'relay' || g['include-all'] == true || g['include-all-proxies'] == true)   # 这样的组不动
+  gname = g ? g['name'].to_s : ''
+  more = g ? mem.uniq - list.call(g['proxies']).map(&:to_s) : []
+  gnote = nil
+  unless more.empty?   # 组写成一行（{name: …, proxies: [...]}）之类改不了的：只写节点
+    begin
+      add_members.call(text, gname, more, mark)
+    rescue StandardError
+      gnote = "（策略组 #{gname} 不是一行一项的写法，没往组里加 #{more.join('、')}）"
+      $stderr.puts "cca: 策略组 #{gname} 不是一行一项的写法，参考节点没往组里加"
+      more = []
+    end
+  end
+  said = lambda do |m|
+    d = []
+    d << "补上节点 #{add.map { |p| p['name'] }.join('、')}" unless add.empty?
+    d << "按参考配置更新了节点 #{upd.map { |p| p['name'] }.join('、')}" unless upd.empty?
+    d << "策略组 #{gname} 里加上 #{m.join('、')}" unless m.empty?
+    d.join('；')
+  end
+  if opt['--fill-source'] == '-'
+    puts "策略组 #{fill['group']} 的 #{cand.size} 个节点"
+    puts said.call(more)
+    puts gnote.to_s
+    exit(add.empty? && upd.empty? && more.empty? ? 2 : 0)
+  end
+  exit 2 if add.empty? && upd.empty? && more.empty?
+  rest = lambda do |c, an, m|   # 去掉写进去的之后的样子：写好的读出来，这部分要和原来一模一样
+    c.merge('proxies' => list.call(c['proxies']).reject { |p| p.is_a?(Hash) && an.include?(p['name'].to_s) },
+            'proxy-groups' => list.call(c['proxy-groups']).map { |x|
+              x.is_a?(Hash) && x['name'].to_s == gname ? x.merge('proxies' => list.call(x['proxies']).reject { |n| m.include?(n.to_s) }) : x })
+  end
+  got = lambda do |c, nodes, m|   # 写进去的节点一个不差（定义原样），名字都在组里
+    want = {}
+    nodes.each { |p| want[p['name'].to_s] = p }
+    px = list.call(c['proxies']).select { |p| p.is_a?(Hash) && want.key?(p['name'].to_s) }
+    gm = list.call((list.call(c['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gname } || {})['proxies']).map(&:to_s)
+    px.size == want.size && px.all? { |p| want[p['name'].to_s] == p } && (m - gm).empty?
+  end
+  an = (add + upd).map { |p| p['name'].to_s }
+  tries = [more]
+  tries << [] unless more.empty? || an.empty?   # 策略组改不了时退一步：只写节点
+  tries.each_with_index do |m, i|
+    begin
+      ls = text.lines
+      upd.each do |p|
+        n = marked[p['name'].to_s]
+        ls[n] = "#{ls[n][/\A */]}- #{flow.call(p)}#{mark}#{ls[n][/\r?\n\z/] || "\n"}"
+      end
+      out = insert.call(ls.join, 'proxies', add.map { |p| flow.call(p) + mark })
+      out = add_members.call(out, gname, m, mark) unless m.empty?
+      chk = yparse.call(out)
+      raise '写好后读出来和预期的不一样' unless chk.is_a?(Hash) && rest.call(chk, an, m) == rest.call(cfg, an, m) && got.call(chk, add + upd, m)
+      File.open(opt['--fill-source'], 'wb') { |f| f.write(out) }
+      if opt['--test'] && opt['--test-out']   # 给内核校验的：拿来校验的那份配置里换上（或加上）要写的节点
+        if File.expand_path(opt['--test']) == File.expand_path(cfg_file)
+          File.open(opt['--test-out'], 'wb') { |f| f.write(out) }
+        else
+          t = yload.call(opt['--test'])
+          t = {} unless t.is_a?(Hash)
+          px = list.call(t['proxies']).dup
+          (add + upd).each do |p|
+            j = px.index { |x| x.is_a?(Hash) && x['name'].to_s == p['name'].to_s }
+            if j then px[j] = p else px << p end
+          end
+          t['proxies'] = px
+          File.open(opt['--test-out'], 'w') { |f| f.write(YAML.dump(t)) }
+        end
+      end
+      puts said.call(m) + (m == more ? gnote.to_s : "（策略组 #{gname} 没能改，没往组里加 #{more.join('、')}）")
+      exit 0
+    rescue StandardError => e
+      $stderr.puts "cca: 参考节点没能写进配置文件（#{e.message.lines.first.to_s.strip}）#{i + 1 < tries.size ? '，改成只写节点、不动策略组' : ''}"
+    end
+  end
+  exit 1
 end
 
-text = nil   # --insert：订阅配置的原文（参考节点按文本插进去）
-fill_add = []   # 实际补上的节点
-fill_mem = []   # 实际补进策略组的名字
-fill_note = nil
-text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8') if opt['--insert']
-if fill && opt['--insert']
-  text, fill_add, fill_mem = fill_text.call(text, cfg, plan_add, plan_mem)
-  done = []
-  done << "补上节点 #{fill_add.map { |p| p['name'] }.join('、')}" unless fill_add.empty?
-  done << "策略组 #{fill['group']} 里加上 #{fill_mem.join('、')}" unless fill_mem.empty?
-  fill_note = "cca: 维护者参考配置里的节点：#{done.join('；')}" unless done.empty?
-elsif fill && base   # ShellCrash 热加载：照它下次启动时钩子按文本插得进去的来补，两边一样，重启后不会又要重载
-  _, fill_add, fill_mem = fill_text.call(File.read(opt['--base'], mode: 'rb').force_encoding('UTF-8'), base, plan_add, plan_mem)
-  fill_note = put_fill.call(cfg, fill_add, fill_mem)
-elsif fill
-  fill_add = plan_add
-  fill_mem = plan_mem
-  fill_note = put_fill.call(cfg, fill_add, fill_mem)
+# --mirror 配置文件：OpenClash 启动时钩子刚把参考节点写回它自己的配置（订阅更新整个换掉了），这次的运行配置是按写之前的
+# 那份生成的：参考节点照配置文件里的定义换上（或加上），策略组里配置文件有、这里还没有的名字接上，和下次按配置文件生成的一样。
+# 读不了配置文件时照常生成端口池，退出码 3（钩子记下要重启才用上）
+mirror_failed = false
+if opt['--mirror'] && acc['fill'].is_a?(Hash)
+  begin
+    src = yload.call(opt['--mirror'])
+    raise '顶层不是映射' unless src.is_a?(Hash)
+    fn = list.call(acc['fill']['proxies']).select { |p| p.is_a?(Hash) }.map { |p| p['name'].to_s }
+    px = list.call(cfg['proxies']).dup
+    list.call(src['proxies']).each do |p|
+      next unless p.is_a?(Hash) && fn.include?(p['name'].to_s)
+      i = px.index { |x| x.is_a?(Hash) && x['name'].to_s == p['name'].to_s }
+      if i then px[i] = p else px << p end
+    end
+    cfg['proxies'] = px
+    gn = acc['fill']['group'].to_s
+    sg = list.call(src['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gn }
+    rg = list.call(cfg['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gn }
+    if sg && rg
+      more = list.call(sg['proxies']).map(&:to_s) - list.call(rg['proxies']).map(&:to_s)
+      rg['proxies'] = list.call(rg['proxies']) + more unless more.empty?
+    end
+  rescue StandardError => e
+    $stderr.puts "cca: 读不了 #{opt['--mirror']}（#{e.message.lines.first.to_s.strip}），参考节点这次没写进运行配置"
+    mirror_failed = true
+  end
 end
-fill_names = fill_add.map { |p| p['name'].to_s }
 
+# --- 端口池 ---
 listeners = list.call(cfg['listeners']).reject { |l| ours.call(l, 'cca-') }
 groups = list.call(cfg['proxy-groups']).reject { |g| ours.call(g, 'CCA-') }
 known = { 'DIRECT' => true, 'REJECT' => true }
-(names.call(cfg) + fill_names).each { |n| known[n] = true }   # --insert 时参考节点还只在文本里
+names.call(cfg).each { |n| known[n] = true }
 if base
   in_base = {}
-  (names.call(base) + fill_names).each { |n| in_base[n] = true }   # 参考节点启动时也由钩子补上
+  names.call(base).each { |n| in_base[n] = true }
   known.keep_if { |n, _| n == 'DIRECT' || n == 'REJECT' || in_base[n] }
 end
 wanted = list.call(acc['nodes']).map(&:to_s)
@@ -5086,7 +5224,6 @@ slots = []
   used << port
 end
 new_groups = slots.map { |k, _, order| { 'name' => "CCA-#{k}", 'type' => 'select', 'proxies' => order } }
-$stderr.puts fill_note if fill_note
 unless opt['--insert']
   groups.concat(new_groups)
   slots.each do |k, port, _|
@@ -5098,7 +5235,7 @@ unless opt['--insert']
   tmp = "#{cfg_file}.cca.tmp"
   File.open(tmp, 'w') { |f| f.write(YAML.dump(cfg)) }
   File.rename(tmp, cfg_file)
-  exit 0
+  exit(mirror_failed ? 3 : 0)
 end
 
 # --- ShellCrash：订阅配置一个字节不改地复制，只在 proxy-groups、listeners 两段的开头插入端口池（一项一行）---
@@ -5106,6 +5243,7 @@ begin
   if groups.size != list.call(cfg['proxy-groups']).size || listeners.size != list.call(cfg['listeners']).size
     raise '里面已经有 cca 的端口池（CCA- 策略组或 cca- 入站）'
   end
+  text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8')
   new_listeners = slots.map do |k, port, _|
     { 'name' => "cca-#{k}", 'type' => 'mixed', 'port' => port, 'listen' => '0.0.0.0', 'users' => [], 'proxy' => "CCA-#{k}" }
   end
@@ -5115,12 +5253,11 @@ begin
   out = insert.call(insert.call(text, 'proxy-groups', g_lines), 'listeners', l_lines)
   tmp = "#{opt['--insert']}.tmp"
   File.open(tmp, 'wb') { |f| f.write(out) }
-  # 插好的再读一遍：端口池和参考节点一项不差、其余的和原来完全一样，才交给 ShellCrash
+  # 插好的再读一遍：端口池一项不差、其余的和原来完全一样，才交给 ShellCrash
   chk = yload.call(tmp)
-  gname = fill ? fill['group'].to_s : ''
+  strip = lambda { |c| c.merge('proxy-groups' => list.call(c['proxy-groups']).reject { |g| ours.call(g, 'CCA-') }, 'listeners' => list.call(c['listeners']).reject { |l| ours.call(l, 'cca-') }) }
   unless chk.is_a?(Hash) && list.call(chk['proxy-groups']).select { |g| ours.call(g, 'CCA-') } == new_groups &&
-         list.call(chk['listeners']).select { |l| ours.call(l, 'cca-') } == new_listeners &&
-         rest.call(chk, fill_names, gname, fill_mem) == rest.call(cfg, fill_names, gname, fill_mem) && fill_in.call(chk, fill_add, gname, fill_mem)
+         list.call(chk['listeners']).select { |l| ours.call(l, 'cca-') } == new_listeners && strip.call(chk) == strip.call(cfg)
     raise '插好后读出来和预期的不一样'
   end
   File.rename(tmp, opt['--insert'])
@@ -5158,14 +5295,16 @@ clash_name() {   # clash_name 路由器的输出：说的是 OpenClash 还是 Sh
 	case "${1:-}" in *ShellCrash*) echo ShellCrash ;; *) echo OpenClash ;; esac
 }
 # 路由器说"需要重载"（返回 3）时征求同意：重载期间局域网新连接会失败约 20 秒。allow_reload [路由器的说明]：
-# 运行配置不见了时路由器要的是重启 OpenClash / ShellCrash（连接都会断开），问的时候说清楚
+# 运行配置不见了、配置文件里新写了参考节点时路由器要的是重启 OpenClash / ShellCrash（连接都会断开），问的时候说清楚。
+# 这一次运行里说过不的，不再问（同步完启动前还会核对一次）
 allow_reload() {
 	[ -n "${CCA_YES:-}" ] && return 0
+	[ -z "${RELOAD_NO:-}" ] || return 1
 	interactive || return 1
 	case "${1:-}" in
 		*"只能重启一次 "*) confirm "现在重启 $(clash_name "$1") 吗？" y ;;
 		*) confirm "现在重载吗？" y ;;
-	esac
+	esac || { RELOAD_NO=1; return 1; }
 }
 router_reload() {   # 获准后在路由器上执行带重载的 apply（运行配置不见了时是重启 OpenClash / ShellCrash）
 	local out rc
@@ -5345,7 +5484,8 @@ router_push() {   # 把账号表和路由器端脚本部署到路由器（返回
 		if allow_reload "$out"; then
 			router_reload; rc=$?
 		else
-			warn "没有重载：这次的改动要等 $(clash_name "$out") 下次重启（或再运行 cca router sync）才生效"
+			case "$out" in *"只能重启一次 "*) warn "没有重启：这次的改动要等 $(clash_name "$out") 下次重启（或再运行 cca router sync）才生效" ;;
+				*) warn "没有重载：这次的改动要等 $(clash_name "$out") 下次重启（或再运行 cca router sync）才生效" ;; esac
 			return 3
 		fi
 	fi
@@ -6204,18 +6344,75 @@ verge_script() {   # 全局扩展脚本里 cca 的那一段保持最新（内容
 	esac
 	return 1
 }
-verge_apply() {   # verge_apply [remove]：在 Clash Verge 当前的运行配置里加上（或去掉）端口池，交给内核重新加载
-	local f="$CCA_HOME/local.put.$$" mode
-	( umask 077; py local-patch "$VERGE_DIR/clash-verge.yaml" "${1:-install}" > "$f" ) ||   # 里面有节点的密钥，只给自己读
-		{ rm -f "$f"; warn "读不懂 Clash Verge 的运行配置：退出再打开 Clash Verge，它会按全局扩展脚本重新生成"; return 1; }
-	lctl GET /configs
-	mode=$(json_get mode)
-	lctl PUT '/configs?force=true' "@$f"
-	rm -f "$f"
-	case "$LCODE" in
-		2??) [ -n "$mode" ] && lctl PATCH /configs "{\"mode\":\"$mode\"}"   # 运行配置文件里的模式可能比界面上切换过的旧
-		     return 0 ;;
+verge_fill_prepare() {   # 维护者参考配置里的节点要写进 Clash Verge 当前选用的配置（订阅或本地配置的文件）：先用 apply.rb（和
+	                      # 路由器上同一份）算出写好的新内容（VFILL_NEW），热加载时内核收下了才换上（verge_fill_commit），不认就不写。
+	                      # 热加载照着补参考节点的那份在 VFILL：要写时是新内容，否则是配置本身（照它里面 cca 写过的补，运行配置文件可能
+	                      # 比内核里的旧）；没有参考节点、没有当前配置时为空。配置文件和参考节点都没变时不再算
+	local sig rc tmp
+	VFILL=""; VFILL_NEW=""; VFILL_WHAT=""; VFILL_SIG=""
+	VFILL_PROF="$VERGE_PROFILE"; VFILL_NAME="$VERGE_PROFILE_NAME"
+	[ -n "$FILL_ID" ] && [ -f "$VFILL_PROF" ] || return 0
+	sig=$(cat "$POLICY_DIR/nodes.json" "$VFILL_PROF" 2>/dev/null | cksum); VFILL_SIG="$sig"
+	VFILL="$VFILL_PROF"
+	[ "$sig" = "$LOCAL_FILL_SEEN" ] && return 0
+	if ! command -v ruby >/dev/null 2>&1; then
+		warn "这台 Mac 上没有 ruby（macOS 自带 /usr/bin/ruby），没法把维护者参考配置里的节点写进 Clash Verge 的配置"
+		py local-set fill_seen "$sig" fill ""
+		return 0
+	fi
+	tmp=$(mktemp -d "$CCA_HOME/fill.XXXXXX") || return 0   # 只有自己能读：参考节点里有节点的密钥
+	router_rb > "$tmp/apply.rb"
+	if ! py fill-acc > "$tmp/acc.json"; then rm -rf "$tmp"; return 0; fi
+	VFILL_WHAT=$(ruby -E UTF-8 "$tmp/apply.rb" --fill-source "$tmp/new.yaml" "$VFILL_PROF" "$tmp/acc.json" 2>"$tmp/err"); rc=$?
+	case $rc in
+		0) VFILL_NEW="$CCA_HOME/local.fill.$$"; mv -f "$tmp/new.yaml" "$VFILL_NEW" && VFILL="$VFILL_NEW" ;;
+		2) py local-set fill_seen "$sig" fill "$FILL_ID" ;;
+		*) warn "维护者参考配置里的节点没能写进 Clash Verge 当前的配置「${VFILL_NAME}」：$(sed -n 's/^cca: //p' "$tmp/err" | tail -n 1)"
+		   py local-set fill_seen "$sig" fill "" ;;
 	esac
+	rm -rf "$tmp"
+}
+verge_fill_commit() {   # Clash Verge 的内核收下了带参考节点的配置：算好的新内容换进它当前的配置（原来的留一份）
+	local bk="$CCA_HOME/backup/clash-verge-${VFILL_PROF##*/}"
+	[ -n "$VFILL_NEW" ] || return 0
+	if mkdir -p "$CCA_HOME/backup" && cp -p "$VFILL_PROF" "$bk" && py file-replace "$VFILL_NEW" "$VFILL_PROF"; then
+		py local-set fill_seen "$(cat "$POLICY_DIR/nodes.json" "$VFILL_PROF" 2>/dev/null | cksum)" fill "$FILL_ID"
+		info "已把维护者参考配置里的节点写进 Clash Verge 当前的配置「${VFILL_NAME}」：${VFILL_WHAT}（行尾带 # cca；改之前的在 ${bk/#$HOME/~}）"
+		VFILL="$VFILL_PROF"
+	else
+		warn "写 Clash Verge 的配置失败：${VFILL_PROF}"
+		rm -f "$VFILL_NEW"
+		VFILL=""
+	fi
+	VFILL_NEW=""
+}
+verge_apply() {   # verge_apply [remove]：在 Clash Verge 当前的运行配置里加上（或去掉）端口池，交给内核重新加载。有 VFILL 时照它把
+	               # 参考节点也补进去；内核不收新写的就不写进配置，照配置里原有的再来一次，还不收就不带参考节点
+	local f="$CCA_HOME/local.put.$$" mode fill="${VFILL:-}"
+	[ "${1:-install}" = remove ] && fill=""
+	while :; do
+		( umask 077; py local-patch "$VERGE_DIR/clash-verge.yaml" "${1:-install}" "$fill" > "$f" ) ||   # 里面有节点的密钥，只给自己读
+			{ rm -f "$f"; warn "读不懂 Clash Verge 的运行配置：退出再打开 Clash Verge，它会按全局扩展脚本重新生成"; return 1; }
+		lctl GET /configs
+		mode=$(json_get mode)
+		lctl PUT '/configs?force=true' "@$f"
+		rm -f "$f"
+		case "$LCODE" in
+			2??) [ -n "$mode" ] && lctl PATCH /configs "{\"mode\":\"$mode\"}"   # 运行配置文件里的模式可能比界面上切换过的旧
+			     [ -n "$fill" ] && verge_fill_commit
+			     return 0 ;;
+		esac
+		[ -n "$fill" ] || break
+		if [ -n "$VFILL_NEW" ] && [ "$fill" = "$VFILL_NEW" ]; then   # 新写的不收：不写进配置，照配置里原有的再来一次
+			warn "Clash Verge 的内核不认维护者参考配置里的节点，没有写进它的配置：$(printf '%s' "$LBODY" | head -c 200)"
+			rm -f "$VFILL_NEW"; VFILL_NEW=""
+			py local-set fill_seen "$VFILL_SIG" fill ""   # 参考节点或配置文件变了再试
+			fill="$VFILL_PROF"
+		else
+			fill=""
+		fi
+		VFILL="$fill"
+	done
 	warn "Clash Verge 的内核没接受新配置（HTTP ${LCODE}）：$(printf '%s' "$LBODY" | head -c 200)"
 	return 1
 }
@@ -6229,6 +6426,7 @@ local_apply() {   # 把端口池放进正在运行的本机 Clash 内核
 	verge_apply || return 1
 	for i in $(seq 1 20); do local_ports_ok && break; sleep 0.25; done
 	local_ports_ok || { warn "Clash Verge 重新加载了配置，但端口 ${LOCAL_FIRST}–${LOCAL_LAST} 没有全部监听（可能被别的程序占用了）"; return 1; }
+	load_local   # 参考节点刚写进 Clash Verge 的配置时，摘要跟着变了
 	py local-set applied "$LOCAL_WANT"
 }
 local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽位切到 REJECT。返回 2：有策略组不在运行中的内核里
@@ -6243,11 +6441,13 @@ local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽�
 	done < <(py select-lines local)   # 节点名用 Clash Verge 里的叫法（同一个节点名字不同时按服务器地址换算）
 	return 0
 }
-local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本最新、端口池在运行中的内核里、每个槽位切到账号的节点
+local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本最新、参考节点写进了 Clash Verge 的配置、端口池在运行中的内核里、
+	               # 每个槽位切到账号的节点
 	load_local
 	local_up || return 1
-	if [ "$LOCAL_CLIENT" = clash-verge ]; then verge_script || return 1; fi
-	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || ! local_ports_ok; then local_apply || return 1; fi
+	VFILL=""; VFILL_NEW=""
+	if [ "$LOCAL_CLIENT" = clash-verge ]; then verge_script || return 1; verge_fill_prepare; fi
+	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || [ -n "$VFILL_NEW" ] || ! local_ports_ok; then local_apply || { [ -z "$VFILL_NEW" ] || rm -f "$VFILL_NEW"; return 1; }; fi
 	local_select_all && return 0
 	local_apply && local_select_all   # 组不在运行中的内核里（客户端重新生成过配置，却没带上端口池）
 }
@@ -6284,6 +6484,7 @@ cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户
 	say "  检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
 	say "  开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组 CCA-n，启动账号前 cca 把它切到账号的节点；然后让 Clash Verge 重新加载一次配置。"
 	say "  原来的配置、规则和系统代理都不变；不想用了运行 cca local off 删掉。"
+	[ -z "$FILL_ID" ] || say "  维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。"
 	confirm "现在配置 Clash Verge 吗？" y || return 1
 	py local-set client clash-verge || return 1
 	local_ensure || return 1
@@ -6348,6 +6549,10 @@ cmd_local_status() {
 		if [ "$LCODE" = 200 ]; then now=$(json_get now); else now="（不在内核里）"; fi
 		say "  ${g}  127.0.0.1:${p}  ${st}  → ${now}${name:+   ${C_D}${name}${C_0}}"
 	done < <(py slot-rows)
+	if [ -n "$FILL_ID" ] && [ "$LOCAL_CLIENT" = clash-verge ]; then
+		if [ "$LOCAL_FILL" = "$FILL_ID" ]; then say "  参考节点：已写进 Clash Verge 当前的配置「${VERGE_PROFILE_NAME}」"
+		else say "  参考节点：还没写进 Clash Verge 当前的配置${VERGE_PROFILE_NAME:+「${VERGE_PROFILE_NAME}」}（在外面启动账号时写）"; fi
+	fi
 	say ""
 }
 cmd_local() {
@@ -6939,7 +7144,7 @@ policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、�
 	if [ -f "$POLICY_DIR/policy.json" ]; then say "  映射：$(py policy-summary)（$(date -r "$POLICY_DIR/policy.json" '+%F %T') 拉到的）"
 	else say "  还没拉到映射"; fi
 	fill=$(py fill-summary)
-	[ -z "$fill" ] || say "  参考节点：维护者参考配置里${fill}（路由器和本机 Clash Verge 的配置里缺的自动补上）"
+	[ -z "$fill" ] || say "  参考节点：维护者参考配置里${fill}（路由器和本机 Clash Verge 的配置文件里缺的直接写进去）"
 	[ ! -f "$POLICY_DIR/log" ] || say "  最近一次拉取：$(tail -n 1 "$POLICY_DIR/log")"
 	policy_rows
 }
