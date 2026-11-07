@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.7"
+VERSION="2.9.0-beta.8"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -2896,9 +2896,11 @@ def cmd_core_summary():
     else:
         src = '还没从路由器拷过（在家启动账号时会拷）'
     names = {p['name'] for p in core_cache().get('proxies', []) if isinstance(p, dict)}
-    extra = [p['name'] for p in core_defs() if p['name'] not in names]
+    m = core_names(c)
+    used = core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])   # 可选节点真正用到的（参考节点只算补进来的）
+    extra = [p['name'] for p in used if p['name'] not in names]
     miss = core_missing(c)
-    print('节点定义：%s%s%s' % (src, '，维护者参考节点 %d 个' % len(extra) if extra else '',
+    print('节点定义：%s%s%s' % (src, '，补上维护者参考节点 %d 个' % len(extra) if extra else '',
                               '；没有定义的节点：%s（用它们的账号在外面会被拒绝连接）' % '、'.join(miss) if miss else ''))
 
 
