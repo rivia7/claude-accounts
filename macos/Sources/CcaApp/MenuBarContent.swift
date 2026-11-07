@@ -44,119 +44,101 @@ enum MenuBarIcon {
     }
 }
 
-/// 菜单栏面板（参考 magpie 的面板，约 360 pt 宽）：左上角品牌，右边刷新用量、打开主窗口；
-/// 每个工具一张白色的列表（一行一个账号：头像、名字、5h / 周的用量、【打开】），分流有问题时一行提示，底部打开 cca、退出。
+/// 菜单栏面板（约 340 pt 宽）：品牌标记和现在走哪边（待同步时右边是“同步”）、工具切换、
+/// 每个账号一行（头像、名字、第二行、两行小用量、【打开】），底部是刷新用量、打开主窗口、退出。
 struct MenuBarContent: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                BrandLabel()
-                Spacer()
+        @Bindable var model = model
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                BrandMark(size: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("cca").font(.headline)
+                    HStack(spacing: 5) {
+                        if let issue = model.routeIssue {
+                            Circle().fill(issue.1).frame(width: 6, height: 6)
+                            Text(model.routeSummary + "，" + issue.0)
+                        } else {
+                            Text(model.routeSummary)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                if model.state?.routing?.sync == .pending, model.routerConfigured {
+                    Button(model.syncActivity == nil ? "同步" : "同步中…") { model.syncRouter() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .disabled(model.syncActivity != nil)
+                        .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
+                }
+            }
+            if model.visibleTools.count > 1 {
+                Picker("工具", selection: $model.tool) {
+                    ForEach(model.visibleTools, id: \.self) { Text(Texts.product($0)).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            content
+            if let t = model.toast {
+                Text(t.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Divider()
+            HStack(spacing: 14) {
                 Button {
                     model.refreshUsage(manual: true)
                 } label: {
-                    if model.usageRefreshing.isEmpty {
-                        Image(systemName: "arrow.clockwise")
-                    } else {
-                        ProgressView().controlSize(.mini)
-                    }
+                    Label(model.usageRefreshing.isEmpty ? "刷新用量" : "刷新中…", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.icon)
                 .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
-                .help("经各账号的出口查一次用量")
-                .accessibilityLabel("刷新用量")
-                Button {
-                    showMain()
-                } label: {
-                    Image(systemName: "macwindow")
-                }
-                .buttonStyle(.icon)
-                .help("打开 cca 的主窗口")
-                .accessibilityLabel("打开主窗口")
-            }
-            content
-            routeLine
-            if let t = model.toast {
-                Text(t.text).font(.system(size: 11.5)).foregroundStyle(Theme.muted).lineLimit(2)
-            }
-            HStack(spacing: 2) {
                 Spacer()
-                Button("打开 cca") { showMain() }.buttonStyle(.quiet)
-                Button("退出") { NSApp.terminate(nil) }.buttonStyle(.quiet)
+                Button("打开主窗口") {
+                    openWindow(id: "main")
+                    NSApp.activate()
+                }
+                Button("退出") { NSApp.terminate(nil) }
             }
+            .buttonStyle(.borderless)
+            .font(.callout)
         }
-        .padding(12)
-        .frame(width: 360)
-        .background(Theme.bg)
+        .padding(14)
+        .frame(width: 340)
         .background(WindowObserver { visible in model.setPanelVisible(visible) })
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
         }
     }
 
-    private func showMain() {
-        openWindow(id: "main")
-        NSApp.activate()
-    }
-
     @ViewBuilder
     private var content: some View {
         switch model.phase {
         case .ready:
-            let tools = model.visibleTools.filter { !model.accounts($0).isEmpty }
-            if tools.isEmpty {
-                Text(model.state == nil ? "正在读取…" : "还没有账号").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+            let accounts = model.accounts(model.tool)
+            if accounts.isEmpty {
+                Text(model.state == nil ? "正在读取…" : "还没有账号").foregroundStyle(.secondary).font(.callout)
             } else {
-                ForEach(tools, id: \.self) { t in
-                    VStack(alignment: .leading, spacing: 4) {
-                        if tools.count > 1 {
-                            Text(Texts.product(t)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.muted)
-                                .padding(.horizontal, 4)
-                        }
-                        VStack(spacing: 0) {
-                            ForEach(Array(model.accounts(t).enumerated()), id: \.element.id) { i, a in
-                                if i > 0 { Hairline() }
-                                MenuRow(account: a)
-                            }
-                        }
-                        .card()
-                    }
+                VStack(spacing: 10) {
+                    ForEach(accounts) { a in MenuRow(account: a) }
                 }
             }
         case .starting:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("正在连接 cca…").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                Text("正在连接 cca…").foregroundStyle(.secondary)
             }
         default:
-            Text("cca 还没准备好：打开主窗口看看。").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
-        }
-    }
-
-    /// 分流有问题时一行：路由器待同步（右边“同步”）、有槽位连不上 / 选错节点。
-    @ViewBuilder
-    private var routeLine: some View {
-        if let issue = model.routeIssue {
-            HStack(spacing: 7) {
-                StatusDot(tone: issue.1, size: 7)
-                Text(model.routeSummary + "：" + issue.0).font(.system(size: 12)).foregroundStyle(Theme.fg2).lineLimit(1)
-                Spacer(minLength: 6)
-                if model.state?.routing?.sync == .pending, model.routerConfigured {
-                    Button(model.syncActivity == nil ? "同步" : "同步中…") { model.syncRouter() }
-                        .buttonStyle(.action)
-                        .disabled(model.syncActivity != nil)
-                        .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
-                }
-            }
-            .padding(.horizontal, 4)
+            Text("cca 还没准备好：打开主窗口看看。").foregroundStyle(.secondary).font(.callout)
         }
     }
 }
 
-/// 面板里的一行：头像、名字（有问题时后面一个点）、5h / 周的用量，右边【打开】（第三方 API 账号没有）。
+/// 面板里的一行：和侧栏同一套（头像、名字、第二行、两行小用量），右边是【打开】；有问题时名字后面一个橙色的点。
 struct MenuRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -167,49 +149,45 @@ struct MenuRow: View {
         let busy = model.activity(a.ref) != nil
         let issue = problem(a, u)
         HStack(spacing: 10) {
-            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 24)
+            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 28)
                 .overlay(alignment: .bottomTrailing) {
                     if a.appRunning {
-                        RunningDot(size: 8).offset(x: 2, y: 2)
+                        RunningDot(size: 9)
+                            .offset(x: 1, y: 1)
                             .accessibilityLabel("\(model.appLabel(a.tool)) 开着")
                     }
                 }
-            HStack(spacing: 5) {
-                Text(a.shortName).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.fg).lineLimit(1)
-                if let issue {
-                    StatusDot(tone: .warn, size: 6)
-                        .help(issue)
-                        .accessibilityLabel(issue)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)
+                    if let issue {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                            .help(issue)
+                            .accessibilityLabel(issue)
+                    }
                 }
+                Text(a.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 6)
             if let u, u.source != .none {
-                RowQuota(usage: u, width: 50)
-            } else if a.login != .loggedIn, !a.isAPI {
-                Text(Texts.login(a.login, loginEmail: nil)).font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+                UsageStack(usage: u, width: 26)
             }
-            Group {
-                if busy {
-                    ProgressView().controlSize(.small)
-                } else if a.login == .loggedOut || a.login == .emailMismatch {
-                    Button("登录") { model.runInTerminal(model.loginHandoff(a)) }
-                        .buttonStyle(.action)
-                        .help("在终端里运行 \(model.loginHandoff(a).display)")
-                } else if !a.isAPI {
-                    Button("打开") { model.openApp(a.ref) }
-                        .buttonStyle(.action)
-                        .disabled(!a.can.app)
-                        .accessibilityLabel("打开 \(a.displayName) 的 \(model.appLabel(a.tool))")
-                        .help(a.can.app ? "打开 \(model.appLabel(a.tool))" : (a.canWhy["app"].map {
-                            Texts.canWhy($0, appLabel: model.appLabel(a.tool), tool: a.tool)
-                        } ?? "不能打开"))
-                }
+            if busy {
+                ProgressView().controlSize(.small).frame(width: 44)
+            } else if !a.isAPI {
+                // 第三方 API 账号没有桌面 App：不放按钮
+                Button("打开") { model.openApp(a.ref) }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .disabled(!a.can.app)
+                    .accessibilityLabel("打开 \(a.displayName) 的 \(model.appLabel(a.tool))")
+                    .help(a.can.app ? "打开 \(model.appLabel(a.tool))" : (a.canWhy["app"].map {
+                        Texts.canWhy($0, appLabel: model.appLabel(a.tool), tool: a.tool)
+                    } ?? "不能打开"))
             }
-            .frame(width: 48, alignment: .trailing)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .help(a.displayName)
     }
 
     /// 出错点：没登录、登错号、查用量出错。

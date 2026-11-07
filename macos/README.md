@@ -67,25 +67,22 @@ bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
 CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
 ```
 
-只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、codex 是展开了那个账号的账号页，empty 是都收起来，
-routing 是分流页，再加上菜单栏面板 menubar），每个截浅色、深色两张 PNG 后退出。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty，
+再加上菜单栏面板 menubar），每个截浅色、深色两张 PNG 后退出。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽）。只截自己的窗口（`SCShareableContent.currentProcess`），
 不要“屏幕录制”权限；窗口放在别的窗口后面、不抢焦点，所以截出来是窗口不在前台时的样子（主按钮是灰的）。菜单栏面板是近似的
 （真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。
 
 ## 界面的规矩
 
-- 设计语言参考 [magpie](https://github.com/yetone/magpie)：一个安静的底色（浅色 `#F4F4F6`、深色 `#1A1A1E`），白色的列表卡片
-  （圆角 12、1 pt 的边、行与行之间一条细线），黑白为主；强调色是靛蓝（`#4F46E5` / `#A5B4FC`，额度条、主按钮），接近上限换琥珀色、到了上限红色。
-  色值和按钮、分段控件、提示条、状态点这些部件都在 `Theme.swift`（色值取自 magpie 的 app.css，浅色、深色两套）。
-- 颜色只表达两件事：哪个账号（账号色，就是启动器角标的颜色：头像、分流图里它的线、名字前的点）和什么状态（绿 / 琥珀 / 红；
-  失败的点画成叉，只看形状也分得出）。正常时尽量安静。
-- 结构：工具栏左边品牌、中间“账号 / 分流”两个页签（分流有问题时带个点）、右边刷新和添加。账号页每个工具一张列表，
-  一行一个账号（右边 5h / 周的用量、节点、【打开】），点一行在下面展开详情（用量、线路与出口、网页版 / 打开 App）；
-  分流页是一张卡片里的分流图（左边账号 → 中间路由器 / 本机 Clash → 右边节点，每个账号一条自己颜色的线）、统计和有问题的槽位，下面是端口的列表。
-  菜单栏面板同一套（白色列表、右上角图标按钮、底部文字按钮）。
-- Liquid Glass 只剩系统画的部分（工具栏、页签、弹出的提示）；内容层全是实的。
-- 一套系统字体（SF Pro / 苹方），数字一律等宽数字；13 pt 正文，名字 13.5 pt 中粗，第二行 11.5 pt 灰色。
+- 母题是 App 图标里的“分流线”：一个出口分出几条彩色曲线。每个账号有自己的颜色（启动器角标的颜色），这条线贯穿侧栏的头像、
+  账号页的线路（这台 Mac → 端口 → 节点 → 出口）和分流图（账号 → 路由器 / 本机 Clash 的端口 → 节点）。
+- 颜色只表达两件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，比如“已登录”不显示）。
+  图标的深靛蓝（`Brand`）只用在品牌标记和分流图的面板上，不设全局强调色（按钮、选中跟着用户的系统设置）。
+- Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
+  内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
+- 操作放在它作用的内容旁边：打开 App / 网页版在账号页头，刷新用量在“用量”标题上，检测出口在“线路与出口”标题上；不用浮在内容上的操作条。
+- 一套系统字体（SF Pro / 苹方），数字一律等宽数字；额度的百分比大号，“%”缩小。
 
 ## 结构
 
@@ -95,9 +92,9 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
   Process/             CcaProcess（posix_spawn）、CcaLocator、CcaEnvironment、Transport（进程 / 演示数据）、CcaClient（重跑流程、闸门）、
                        TerminalHandoff（.command 文件、shellQuote）
   Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、Texts（文字、颜色档、补救、标记）
-Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口（MainWindow：工具栏、页签、提示条、引导）、账号页（AccountsPage；
-                       UsageCard：用量；RouteSection：线路与出口检测）、分流页（RoutingPage：分流图、端口列表）、菜单栏（MenuBarContent）、
-                       对话框和弹层（Prompter）、可见性（Visibility）、色值和部件（Theme）、状态的颜色和头像（Format）、调试版的截图模式（Snapshot）
+Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、账号页（AccountDetail：页头；
+                       UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
+                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件（Glass）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
 tools/make-icon.swift  画图标
@@ -127,8 +124,7 @@ tools/make-icon.swift  画图标
 ## 这套工具链的坑（Command Line Tools，Swift 6.4，SDK 27）
 
 - **`@State` 编不过**：SDK 27 里它是宏，宏插件 SwiftUIMacros 只随 Xcode 提供。界面状态一律放在 `@Observable` 的 AppModel 里，视图里用
-  `@Environment(AppModel.self)`，要绑定时在 `body` 里 `@Bindable var model = model`。视图自己的局部状态（悬停）写成
-  `private let hover = State(initialValue: false)`（不加 @）：State 类型本身照样是 SwiftUI 的动态属性，读写 `hover.wrappedValue`。同样别用 `@Entry`、`@Previewable`、`#Preview`、`@Animatable`。
+  `@Environment(AppModel.self)`，要绑定时在 `body` 里 `@Bindable var model = model`。同样别用 `@Entry`、`@Previewable`、`#Preview`、`@Animatable`。
   `@Observable`、`@ObservationIgnored`、`@Namespace`、`@Environment`、`@NSApplicationDelegateAdaptor` 能用。
 - 没有 xcodebuild / actool / xcstrings：不用 asset catalog，图标用 `sips` + `iconutil` 生成 icns（`iconutil -o` 的文件名必须以 .icns 结尾）。
 - 部署目标 macOS 26.0；只有 macOS 27 才有的放在 `if #available(macOS 27, *)` 里（`.pickerStyle(.tabs)`）。

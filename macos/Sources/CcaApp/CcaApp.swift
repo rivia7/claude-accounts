@@ -34,7 +34,7 @@ struct CcaApp: App {
             MainWindow()
                 .environment(delegate.model)
         }
-        .defaultSize(width: 1040, height: 740)
+        .defaultSize(width: 1080, height: 720)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
