@@ -1,5 +1,15 @@
 import Foundation
 
+extension Account {
+    /// 示意用的账号（新手教程的小图、截图模式的画廊、测试）：字段照 `_gui state` 的写法，没给的照常宽松解码。key 必须有。
+    static func sample(_ fields: [String: Any], tool: ToolID = .claude) -> Account {
+        let data = (try? JSONSerialization.data(withJSONObject: fields)) ?? Data()
+        guard var a = try? JSONDecoder().decode(Account.self, from: data) else { fatalError("示意账号缺 key：\(fields)") }
+        a.tool = tool
+        return a
+    }
+}
+
 /// 编进 App 里的一小份样例（假数据）：`cca.app/Contents/MacOS/cca --self-check` 用它确认解码器能用。
 enum SampleDocs {
     static let hello = #"""
@@ -12,8 +22,9 @@ enum SampleDocs {
      "routing": {"first_port": 7901, "pool_size": 8, "sync": "ok", "local_sync": "n/a",
        "slots": [{"slot": 1, "group": "CCA-1", "port": 7901, "tool": "claude", "key": "alice@example.com", "node": "US-A"}], "nodes": []},
      "tools": [{"id": "claude", "cli_prefix": [], "enabled": true, "chrome": true, "settings_problems": [], "errors": [],
-       "accounts": [{"key": "alice@example.com", "kind": "oauth", "login": "logged_in", "plan": "Max", "node": "US-A", "port": 7901,
-         "badge": {"label": "A", "color": "#0A84FF"}, "can": {"app": true, "web": true, "usage": true, "check": true},
+       "accounts": [{"key": "alice@example.com", "kind": "oauth", "login": "logged_in", "plan": "Max", "plan_tier": "advanced", "node": "US-A", "port": 7901,
+         "badge": {"label": "A", "color": "#0A84FF"}, "cli": {"running": true, "sessions": 2, "since_epoch": 1794041000.5},
+         "can": {"app": true, "web": true, "usage": true, "check": true},
          "usage": {"key": "alice@example.com", "source": "cache", "fetched_epoch": 1794041000.0, "stale": false,
                    "five_hour": {"utilization": 13.0, "resets_epoch": 1794045210.12, "reset": false}},
          "health": {"version": 1, "checked_at": 1794041000.0, "route": "direct", "result": "api_ok"}}]}]}
@@ -56,6 +67,7 @@ enum SampleDocs {
         let c = try DocumentDecoder.decode(CheckDoc.self, from: Data(check.utf8))
         let e = EventLog.parse(Data(events.utf8))
         guard GUIAPI.isSupported(h.api), s.allAccounts.count == 1, s.allAccounts.first?.health?.route == .direct,
+              s.allAccounts.first?.planTier == .advanced, s.allAccounts.first?.cliSessions == 2,
               l.hasDrift, l.proxyHost == "192.0.2.10", u.accounts.first?.sevenDay?.resetsEpoch == 1794470400,
               c.accounts.count == 1, e.map(\.type) == [.step, .consent, .terminal, .fail, .result] else {
             throw Bad(description: "样例解码的结果不对")

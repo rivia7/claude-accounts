@@ -3,8 +3,9 @@ import SwiftUI
 
 // 颜色和小部件：品牌色、内容层的色块、状态色、头像、用量条、标签。文字本身在 CcaKit 的 Texts 里（可测试）。
 //
-// 颜色只表达两件事：“哪个账号”（账号色，就是启动器角标的颜色，线路、分流图里的线都用它）
-// 和“什么状态”（系统的绿 / 橙 / 红，正常时尽量不出现）。品牌色（App 图标的深靛蓝）只用在品牌标记和分流图的面板上。
+// 颜色只表达三件事：“哪个账号”（账号色，就是启动器角标的颜色，线路、分流图里的线都用它）、
+// “什么状态”（系统的绿 / 橙 / 红，正常时尽量不出现）和最高档的套餐（金色，PlanBadge.swift 的 TierStyle）。
+// 品牌色（App 图标的深靛蓝）只用在品牌标记和分流图的面板上。
 
 extension Color {
     /// `#RRGGBB`；格式不对时用灰色。
@@ -117,11 +118,24 @@ struct BrandMark: View {
     }
 }
 
-/// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。
+/// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。最高档的套餐（Ultra、Pro 500）外面有一圈金边
+/// （画在头像外面，不改变占的位置）。
 struct BadgeAvatar: View {
     let badge: Badge?
     var isAPI = false
     var size: CGFloat = 28
+    var tier: PlanTier = .unknown
+
+    init(badge: Badge?, isAPI: Bool = false, size: CGFloat = 28, tier: PlanTier = .unknown) {
+        self.badge = badge
+        self.isAPI = isAPI
+        self.size = size
+        self.tier = tier
+    }
+
+    init(account a: Account, size: CGFloat) {
+        self.init(badge: a.badge, isAPI: a.isAPI, size: size, tier: a.planTier)
+    }
 
     var body: some View {
         ZStack {
@@ -140,12 +154,41 @@ struct BadgeAvatar: View {
             }
         }
         .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
+        .overlay {
+            if tier == .premium {
+                let w = max(size * 0.07, 1.5)
+                Circle().strokeBorder(TierStyle.goldRing, lineWidth: w).padding(-(w + 1))
+            }
+        }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 }
 
-/// 头像右下角的绿点：这个账号的桌面 App 开着。
+/// 账号的头像，在用（桌面 App 开着、命令行里有会话）时右下角有绿点，悬停说在用什么。侧栏、菜单栏、账号页共用。
+struct AccountAvatar: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+    let size: CGFloat
+    /// 绿点的大小
+    let dot: CGFloat
+
+    var body: some View {
+        let a = account
+        BadgeAvatar(account: a, size: size)
+            .overlay(alignment: .bottomTrailing) {
+                if a.isWorking {
+                    let what = Texts.working(a, appLabel: model.appLabel(a.tool), now: Date().timeIntervalSince1970)
+                    RunningDot(size: dot)
+                        .offset(x: 1, y: 1)
+                        .help(what)
+                        .accessibilityLabel(what)
+                }
+            }
+    }
+}
+
+/// 头像右下角的绿点：这个账号在用（桌面 App 开着，或者有经 cca 启动的命令行会话）。
 struct RunningDot: View {
     var size: CGFloat = 9
 
@@ -204,19 +247,32 @@ struct Tag: View {
     }
 }
 
-extension Account {
-    /// 侧栏、菜单栏的第二行：套餐 · 节点；没登录时先说登录状态；API 账号：接口 · 直连 / 节点。
-    var subtitle: String {
-        if isAPI {
-            let host = api?.host ?? "第三方 API"
-            return host + " · " + (node ?? "直连")
+/// 侧栏、菜单栏账号第二行的一段：文字、套餐（画成徽章）、节点（放不下时先省掉）。
+enum SubtitlePart: Hashable {
+    case text(String)
+    case plan(String)
+    case node(String)
+
+    var text: String {
+        switch self {
+        case .text(let s), .plan(let s), .node(let s): return s
         }
-        var parts: [String] = []
-        if login != .loggedIn { parts.append(Texts.login(login, loginEmail: nil)) }
-        if let p = nonEmpty(plan) { parts.append(p) }
-        if let n = node { parts.append(n) }
-        return parts.joined(separator: " · ")
     }
+}
+
+extension Account {
+    /// 侧栏、菜单栏的第二行：套餐 · 节点；没登录时先说登录状态；API 账号：接口 · 直连 / 节点。画的（AccountSubtitle）和读屏念的
+    /// （subtitle）都按这一份。
+    var subtitleParts: [SubtitlePart] {
+        if isAPI { return [.text(api?.host ?? "第三方 API"), .node(node ?? "直连")] }
+        var parts: [SubtitlePart] = []
+        if login != .loggedIn { parts.append(.text(Texts.login(login, loginEmail: nil))) }
+        if let p = nonEmpty(plan) { parts.append(.plan(p)) }
+        if let n = node { parts.append(.node(n)) }
+        return parts
+    }
+
+    var subtitle: String { subtitleParts.map(\.text).joined(separator: " · ") }
 
     /// 这个账号的颜色（启动器角标的颜色）：头像、线路、分流图里的线都用它；没有角标的（第三方 API 账号）是灰色。
     var lineColor: Color { badge == nil ? Color(nsColor: .systemGray) : Color(badge: badge) }
@@ -227,6 +283,43 @@ extension Account {
         case .loggedOut: return .gray
         case .emailMismatch: return .orange
         default: return nil
+        }
+    }
+}
+
+/// 侧栏、菜单栏账号的第二行（按 Account.subtitleParts）：套餐画成徽章；放不下时先不写节点（只剩一个省略号没有意义），徽章不截断。
+/// 读屏照旧念 subtitle。
+struct AccountSubtitle: View {
+    let account: Account
+
+    var body: some View {
+        let a = account
+        let parts = a.subtitleParts
+        ViewThatFits(in: .horizontal) {
+            line(a, parts)
+            line(a, parts.filter { if case .node = $0 { return false }; return true })
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .frame(height: 17)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(a.subtitle)
+    }
+
+    private func line(_ a: Account, _ parts: [SubtitlePart]) -> some View {
+        HStack(spacing: 4) {
+            if let c = a.loginIssueColor {
+                Circle().fill(c).frame(width: 6, height: 6).padding(.trailing, 1)
+            }
+            ForEach(Array(parts.enumerated()), id: \.offset) { i, p in
+                if i > 0 { Text("·") }
+                if case .plan(let s) = p {
+                    PlanBadge(plan: s, tier: a.planTier, size: .compact).fixedSize().layoutPriority(1)
+                } else {
+                    Text(p.text)
+                }
+            }
         }
     }
 }

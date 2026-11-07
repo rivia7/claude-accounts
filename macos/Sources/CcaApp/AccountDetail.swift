@@ -12,7 +12,7 @@ struct AccountDetail: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 32) {
                     TipCard(id: "account-page", title: "这一页怎么看",
-                            message: "名字下面那句话告诉你这个账号现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
+                            message: "下面这张工牌就是这个账号：名字旁边是套餐，工牌里最下面那句话告诉你它现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
                     DetailHeader(account: a)
                     SectionColumns {
                         if !a.isAPI { UsageSection(account: a) }
@@ -31,7 +31,7 @@ struct AccountDetail: View {
     }
 }
 
-/// 头部：头像、名字、邮箱和几个标签；右边是打开 App（主按钮）和网页版，没登录时多一个登录。
+/// 头部是一张工牌（EmployeeBadgeCard）：头像、名字、邮箱和几个标签；右边是打开 App（主按钮）和网页版，没登录时多一个登录。
 /// 宽的时候左右排，窄的时候按钮放到下面。正在打开、检测时下面多一行进度（来自 step 事件）。
 struct DetailHeader: View {
     @Environment(AppModel.self) private var model
@@ -40,6 +40,12 @@ struct DetailHeader: View {
 
     var body: some View {
         let a = account
+        EmployeeBadgeCard(account: a) {
+            content(a)
+        }
+    }
+
+    private func content(_ a: Account) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 16) {
@@ -55,7 +61,7 @@ struct DetailHeader: View {
             if let busy = model.activity(a.ref) {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(progressText(busy)).font(.callout).foregroundStyle(.secondary)
+                    Text(Texts.activity(busy, appLabel: model.appLabel(a.tool))).font(.callout).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
             } else {
@@ -77,14 +83,7 @@ struct DetailHeader: View {
 
     private func identity(_ a: Account) -> some View {
         HStack(alignment: .center, spacing: 16) {
-            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 56)
-                .overlay(alignment: .bottomTrailing) {
-                    if a.appRunning {
-                        RunningDot(size: 15)
-                            .offset(x: 1, y: 1)
-                            .help("\(model.appLabel(a.tool)) 开着")
-                    }
-                }
+            AccountAvatar(account: a, size: 56, dot: 15)
             VStack(alignment: .leading, spacing: 5) {
                 AliasTitle(account: a)
                 if let sub = secondaryIdentity(a) {
@@ -106,19 +105,19 @@ struct DetailHeader: View {
         return email
     }
 
-    /// 标签：套餐；登录有问题时才说登录状态；App 开着；上次在命令行里用的。
+    /// 标签：套餐徽章（最高档的金徽章带流光）；登录有问题时才说登录状态；在用（App 开着、命令行里几个会话）；上次在命令行里用的。
     @ViewBuilder
     private func tags(_ a: Account) -> some View {
         if a.isAPI {
             Tag(text: "第三方 API", color: .blue, systemImage: "key.horizontal")
             if let m = nonEmpty(a.api?.model) { Tag(text: m) }
         } else {
-            if let p = nonEmpty(a.plan) { Tag(text: p) }
+            if let p = nonEmpty(a.plan) { PlanBadge(plan: p, tier: a.planTier, shimmer: true) }
             if let c = a.loginIssueColor {
                 Tag(text: Texts.login(a.login, loginEmail: a.loginEmail), color: c)
             }
         }
-        if a.appRunning { Tag(text: "\(model.appLabel(a.tool)) 开着", color: .green) }
+        if a.isWorking { Tag(text: Texts.working(a, appLabel: model.appLabel(a.tool)), color: .green) }
         if a.isLast, guide.showDetails { Tag(text: "上次在命令行里用的", systemImage: "terminal") }
     }
 
@@ -183,15 +182,52 @@ struct DetailHeader: View {
         return allowed ? nil : Texts.canWhy(w, appLabel: model.appLabel(a.tool), tool: a.tool)
     }
 
-    private func progressText(_ act: Activity) -> String {
-        let appLabel = model.appLabel(account.tool)
-        if let s = act.step { return Texts.step(s, appLabel: appLabel) }
-        switch act.kind {
-        case .app: return "打开 \(appLabel)…"
-        case .web: return "打开网页版…"
-        case .check: return "检测出口…"
-        case .sync: return "同步路由器…"
-        case .rename: return "改名…"
+}
+
+/// 账号页的工牌：顶上一条账号色的带子（写着哪个组；显示细节时还有工号，就是它的槽位组 CCA-n），下面是头像、名字、套餐、
+/// 按钮和那句话。最高档的套餐镶金边，第三方 API 账号（外包）是虚线边。内容层，是实的（不是玻璃）。
+struct EmployeeBadgeCard<Content: View>: View {
+    @Environment(Guide.self) private var guide
+    let account: Account
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        let a = account
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let c = a.lineColor
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack {
+                HStack(spacing: 8) {
+                    Text(Texts.department(Employee.department(of: a))).font(.caption.weight(.semibold))
+                    Spacer(minLength: 8)
+                    if guide.showDetails, let g = a.group {
+                        Text("工号 \(g)").font(.caption.weight(.medium)).monospacedDigit()
+                    }
+                }
+                // 挂绳的卡槽
+                Capsule().fill(.black.opacity(0.28)).frame(width: 42, height: 7)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .frame(height: 30)
+            .background(LinearGradient(colors: [c, c.mix(with: .black, by: 0.18)], startPoint: .leading, endPoint: .trailing))
+            .overlay(alignment: .bottom) {
+                if a.isPremium { Rectangle().fill(TierStyle.goldStroke).frame(height: 1.5) }
+            }
+            .accessibilityElement(children: .combine)
+            content
+                .padding(18)
+        }
+        .background(shape.fill(Surface.tile))
+        .clipShape(shape)
+        .overlay {
+            if a.isPremium {
+                shape.strokeBorder(TierStyle.goldStroke, lineWidth: 1.5)
+            } else if a.isAPI {
+                shape.strokeBorder(Surface.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            } else {
+                shape.strokeBorder(Surface.hairline, lineWidth: 0.5)
+            }
         }
     }
 }

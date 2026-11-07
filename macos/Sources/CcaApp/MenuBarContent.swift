@@ -152,14 +152,7 @@ struct MenuRow: View {
         let busy = model.activity(a.ref) != nil
         let issue = problem(a, u)
         HStack(spacing: 10) {
-            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 28)
-                .overlay(alignment: .bottomTrailing) {
-                    if a.appRunning {
-                        RunningDot(size: 9)
-                            .offset(x: 1, y: 1)
-                            .accessibilityLabel("\(model.appLabel(a.tool)) 开着")
-                    }
-                }
+            AccountAvatar(account: a, size: 28, dot: 9)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)
@@ -171,7 +164,7 @@ struct MenuRow: View {
                             .accessibilityLabel(issue)
                     }
                 }
-                Text(a.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                AccountSubtitle(account: a)
             }
             Spacer(minLength: 6)
             if let u, u.source != .none {

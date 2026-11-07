@@ -100,19 +100,19 @@
         "slot": 6,
         "group": "CCA-6",
         "port": 7906,
-        "tool": null,
-        "key": null,
-        "node": "REJECT",
-        "local_node": "REJECT"
+        "tool": "claude",
+        "key": "erin@example.com",
+        "node": "US-A",
+        "local_node": "US-A"
       },
       {
         "slot": 7,
         "group": "CCA-7",
         "port": 7907,
-        "tool": null,
-        "key": null,
-        "node": "REJECT",
-        "local_node": "REJECT"
+        "tool": "claude",
+        "key": "grace@example.com",
+        "node": "US-C",
+        "local_node": "US-C"
       },
       {
         "slot": 8,
@@ -129,6 +129,10 @@
         "name": "US-A",
         "local_name": "US-A",
         "users": [
+          {
+            "tool": "claude",
+            "key": "erin@example.com"
+          },
           {
             "tool": "codex",
             "key": "frank@example.com"
@@ -152,6 +156,10 @@
           {
             "tool": "claude",
             "key": "carol@example.com"
+          },
+          {
+            "tool": "claude",
+            "key": "grace@example.com"
           }
         ]
       },
@@ -204,7 +212,8 @@
           "kind": "oauth",
           "login": "logged_in",
           "login_email": "bob@example.com",
-          "plan": "Max",
+          "plan": "Ultra",
+          "plan_tier": "premium",
           "node": "US-B",
           "port": 7901,
           "slot": 1,
@@ -221,6 +230,11 @@
             "running": true,
             "pid": 4242
           },
+          "cli": {
+            "running": true,
+            "sessions": 2,
+            "since_epoch": 1794041280.0
+          },
           "can": {
             "app": true,
             "web": true,
@@ -232,7 +246,7 @@
             "account": "工作",
             "key": "工作(bob@example.com)",
             "email": "bob@example.com",
-            "plan": "Max",
+            "plan": "Ultra",
             "source": "cache",
             "fetched_at": "2026-11-07T08:56:00Z",
             "fetched_epoch": 1794041760.0,
@@ -315,6 +329,7 @@
           "login": "logged_out",
           "login_email": null,
           "plan": "",
+          "plan_tier": "",
           "node": "US-C",
           "port": 7902,
           "slot": 2,
@@ -330,6 +345,11 @@
           "app": {
             "running": false,
             "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
           },
           "can": {
             "app": true,
@@ -353,7 +373,8 @@
           "kind": "oauth",
           "login": "email_mismatch",
           "login_email": "eve@example.com",
-          "plan": "Pro",
+          "plan": "",
+          "plan_tier": "",
           "node": "US-D",
           "port": 7903,
           "slot": 3,
@@ -370,6 +391,11 @@
             "running": false,
             "pid": null
           },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
           "can": {
             "app": true,
             "web": true,
@@ -379,6 +405,210 @@
           "can_why": {},
           "usage": null,
           "health": null
+        },
+        {
+          "key": "erin@example.com",
+          "id": "erin-example-com-7a8b9c",
+          "alias": "",
+          "email": "erin@example.com",
+          "name": "erin@example.com",
+          "label": "erin@example.com",
+          "kind": "oauth",
+          "login": "logged_in",
+          "login_email": "erin@example.com",
+          "plan": "Max",
+          "plan_tier": "advanced",
+          "node": "US-A",
+          "port": 7906,
+          "slot": 6,
+          "group": "CCA-6",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": null,
+          "badge": {
+            "label": "E",
+            "color": "#12A594"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": true,
+            "check": true
+          },
+          "can_why": {},
+          "usage": {
+            "account": "erin@example.com",
+            "key": "erin@example.com",
+            "email": "erin@example.com",
+            "plan": "Max",
+            "source": "cache",
+            "fetched_at": "2026-11-07T08:55:00Z",
+            "fetched_epoch": 1794041700.0,
+            "age_seconds": 300,
+            "stale": false,
+            "error": null,
+            "error_code": null,
+            "error_detail": null,
+            "five_hour": {
+              "utilization": 100.0,
+              "resets_at": "2026-11-07T11:13:30+00:00",
+              "resets_epoch": 1794050010.0,
+              "reset": false
+            },
+            "seven_day": {
+              "utilization": 63.0,
+              "resets_at": "2026-11-10T08:00:00+00:00",
+              "resets_epoch": 1794297600.0,
+              "reset": false
+            },
+            "seven_day_opus": null,
+            "seven_day_sonnet": null,
+            "seven_day_oauth_apps": null,
+            "model_scoped": [],
+            "extra_usage": null
+          },
+          "health": {
+            "version": 1,
+            "checked_at": 1794038400.0,
+            "age_seconds": 3600,
+            "stale": false,
+            "applies": true,
+            "source": "launch",
+            "kind": "exit",
+            "route": "router",
+            "node": "US-A",
+            "port": 7906,
+            "result": "ok",
+            "ip": "203.0.113.30",
+            "country": "US",
+            "org": "Example Hosting",
+            "trust": 88,
+            "trust_label": "纯净",
+            "tags": [
+              "机房IP"
+            ],
+            "restricted_region": null,
+            "message": "203.0.113.30 · US · Example Hosting",
+            "note": "",
+            "leak": {
+              "dns": "ok",
+              "webrtc": "ok",
+              "line": "DNS 无泄露 · WebRTC 无泄露",
+              "dns_message": "",
+              "webrtc_message": ""
+            }
+          }
+        },
+        {
+          "key": "grace@example.com",
+          "id": "grace-example-com-0d1e2f",
+          "alias": "",
+          "email": "grace@example.com",
+          "name": "grace@example.com",
+          "label": "grace@example.com",
+          "kind": "oauth",
+          "login": "logged_in",
+          "login_email": "grace@example.com",
+          "plan": "Pro",
+          "plan_tier": "standard",
+          "node": "US-C",
+          "port": 7907,
+          "slot": 7,
+          "group": "CCA-7",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": null,
+          "badge": {
+            "label": "G",
+            "color": "#3E63DD"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": true,
+            "check": true
+          },
+          "can_why": {},
+          "usage": {
+            "account": "grace@example.com",
+            "key": "grace@example.com",
+            "email": "grace@example.com",
+            "plan": "Pro",
+            "source": "cache",
+            "fetched_at": "2026-11-07T08:55:00Z",
+            "fetched_epoch": 1794041700.0,
+            "age_seconds": 300,
+            "stale": false,
+            "error": null,
+            "error_code": null,
+            "error_detail": null,
+            "five_hour": {
+              "utilization": 12.0,
+              "resets_at": "2026-11-07T11:13:30+00:00",
+              "resets_epoch": 1794050010.0,
+              "reset": false
+            },
+            "seven_day": {
+              "utilization": 30.0,
+              "resets_at": "2026-11-10T08:00:00+00:00",
+              "resets_epoch": 1794297600.0,
+              "reset": false
+            },
+            "seven_day_opus": null,
+            "seven_day_sonnet": null,
+            "seven_day_oauth_apps": null,
+            "model_scoped": [],
+            "extra_usage": null
+          },
+          "health": {
+            "version": 1,
+            "checked_at": 1794038400.0,
+            "age_seconds": 3600,
+            "stale": false,
+            "applies": true,
+            "source": "launch",
+            "kind": "exit",
+            "route": "router",
+            "node": "US-C",
+            "port": 7907,
+            "result": "restricted",
+            "ip": "198.51.100.40",
+            "country": "CN",
+            "org": "Example Hosting",
+            "trust": 0,
+            "trust_label": "受限",
+            "tags": [],
+            "restricted_region": "中国大陆",
+            "message": "198.51.100.40 · CN · Example Hosting",
+            "note": "",
+            "leak": {
+              "dns": "ok",
+              "webrtc": "ok",
+              "line": "DNS 无泄露 · WebRTC 无泄露",
+              "dns_message": "",
+              "webrtc_message": ""
+            }
+          }
         },
         {
           "key": "直连接口",
@@ -391,6 +621,7 @@
           "login": "api",
           "login_email": "",
           "plan": "",
+          "plan_tier": "",
           "node": null,
           "port": null,
           "slot": null,
@@ -406,6 +637,11 @@
           "app": {
             "running": false,
             "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
           },
           "can": {
             "app": false,
@@ -454,6 +690,7 @@
           "login": "api",
           "login_email": "",
           "plan": "",
+          "plan_tier": "",
           "node": "HK-A",
           "port": 7904,
           "slot": 4,
@@ -469,6 +706,11 @@
           "app": {
             "running": false,
             "pid": null
+          },
+          "cli": {
+            "running": true,
+            "sessions": 1,
+            "since_epoch": 1794041820.0
           },
           "can": {
             "app": false,
@@ -514,7 +756,8 @@
           "kind": "oauth",
           "login": "logged_in",
           "login_email": "frank@example.com",
-          "plan": "Pro",
+          "plan": "Pro 500",
+          "plan_tier": "premium",
           "node": "US-A",
           "port": 7905,
           "slot": 5,
@@ -531,6 +774,11 @@
             "running": false,
             "pid": null
           },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
           "can": {
             "app": true,
             "web": true,
@@ -542,7 +790,7 @@
             "account": "frank@example.com",
             "key": "frank@example.com",
             "email": "frank@example.com",
-            "plan": "Pro",
+            "plan": "Pro 500",
             "source": "cache",
             "fetched_at": "2026-11-07T08:20:00Z",
             "fetched_epoch": 1794039600.0,

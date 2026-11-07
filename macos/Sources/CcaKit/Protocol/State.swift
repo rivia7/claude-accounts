@@ -362,6 +362,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var login: LoginState
     var loginEmail: String?
     var plan: String?
+    /// 套餐档位（cca 算的；旧版 cca 没有这个字段时是 .unknown）
+    var planTier: PlanTier
     var node: String?
     var port: Int?
     var slot: Int?
@@ -372,6 +374,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var api: APIInfo?
     var badge: Badge?
     var app: AppRun?
+    /// 经 cca 启动、还在运行的命令行会话（旧版 cca 没有这个字段时是 nil：当作没有会话）
+    var cli: CLIRun?
     var can: Can
     var canWhy: [String: CanWhy]
     var usage: UsageEntry?
@@ -385,10 +389,12 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case accountID = "id"
         case alias, email, name, label, kind, login
         case loginEmail = "login_email"
-        case plan, node, port, slot, group, pinned
+        case plan
+        case planTier = "plan_tier"
+        case node, port, slot, group, pinned
         case pinnedNode = "pinned_node"
         case isLast = "is_last"
-        case api, badge, app, can
+        case api, badge, app, cli, can
         case canWhy = "can_why"
         case usage, health
     }
@@ -408,6 +414,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         login = c.lossy(LoginState.self, .login) ?? LoginState(rawValue: "")
         loginEmail = c.string(.loginEmail)
         plan = c.string(.plan)
+        planTier = c.lossy(PlanTier.self, .planTier) ?? .unknown
         node = c.string(.node)
         port = c.int(.port)
         slot = c.int(.slot)
@@ -418,6 +425,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         api = c.lossy(APIInfo.self, .api)
         badge = c.lossy(Badge.self, .badge)
         app = c.lossy(AppRun.self, .app)
+        cli = c.lossy(CLIRun.self, .cli)
         can = c.lossy(Can.self, .can) ?? Can()
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
         usage = c.lossy(UsageEntry.self, .usage)
@@ -429,6 +437,14 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var displayName: String { nonEmpty(name) ?? nonEmpty(alias) ?? nonEmpty(email) ?? key }
     var displayLabel: String { nonEmpty(label) ?? displayName }
     var appRunning: Bool { app?.running ?? false }
+    /// 经 cca 启动的命令行会话有几个还在运行
+    var cliSessions: Int { cli?.running == true ? cli?.sessions ?? 0 : 0 }
+    /// 最早那个命令行会话开始的时间（没有会话时 nil）
+    var cliSince: Double? { cliSessions > 0 ? cli?.sinceEpoch : nil }
+    /// 在用：桌面 App 开着，或者有经 cca 启动的命令行会话（办公室里“在忙”，头像右下角的绿点）
+    var isWorking: Bool { appRunning || cliSessions > 0 }
+    /// 最高档的套餐（Ultra、Pro 500）：金徽章、头像金圈、金边的工位和工牌。第三方 API 账号的档位总是空的
+    var isPremium: Bool { planTier == .premium }
     /// 走节点（有端口）。直连的第三方 API 账号没有。
     var isRouted: Bool { port != nil }
 }
@@ -482,6 +498,27 @@ struct AppRun: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         running = c.bool(.running) ?? false
         pid = c.int(.pid)
+    }
+}
+
+/// `cli`：经 cca 启动、还在运行的命令行会话（cca 核对过进程，App 不判活）。
+struct CLIRun: Decodable, Sendable, Equatable {
+    var running: Bool
+    var sessions: Int
+    /// 最早那个会话开始的时间（Unix 秒）
+    var sinceEpoch: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case running, sessions
+        case sinceEpoch = "since_epoch"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let n = max(c.int(.sessions) ?? 0, 0)
+        running = c.bool(.running) ?? (n > 0)
+        sessions = running ? max(n, 1) : 0   // 在运行就至少一个
+        sinceEpoch = c.double(.sinceEpoch)
     }
 }
 

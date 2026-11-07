@@ -2,7 +2,8 @@ import CoreServices
 import Foundation
 
 /// 看着 `hello.home`（~/.cca）的变化，只当作“该重新跑一次 `_gui state` / `_gui hello`”的信号：从不读那些文件。
-/// 收：accounts.json、codex.json、config.json、*/usage.json、*/health.json、policy/policy.json（→ state），
+/// 收：accounts.json、codex.json、config.json、*/usage.json、*/health.json、accounts/*/cli-<数字>.json（命令行会话的登记）、
+/// policy/policy.json（→ state），
 /// core/config.yaml（→ core：内置代理的配置，看不见时也要马上读 state，见 AppModel），bin/cca（→ hello）。
 /// 不收：chrome/、desktop/ 下面的一切（浏览器和桌面 App 的资料目录一直在写）。
 /// 500 毫秒内的多次变化合并成一次（hello > core > state）。看不见时只记下“脏了”（由 AppModel 处理）。
@@ -42,7 +43,16 @@ final class CcaWatcher: @unchecked Sendable {
         if clean == "core/config.yaml" { return .core }
         if statePaths.contains(clean) { return .state }
         if comps.count >= 2, let last = comps.last, last == "usage.json" || last == "health.json" { return .state }
+        // 命令行会话的登记：accounts/<账号目录>/cli-<进程号>.json（Codex 的在 codex/accounts/ 下）；临时文件不算
+        if comps.count >= 3, comps[comps.count - 3] == "accounts", let last = comps.last, isSessionMark(last) { return .state }
         return nil
+    }
+
+    /// `cli-<数字>.json`
+    private static func isSessionMark(_ name: String) -> Bool {
+        guard name.hasPrefix("cli-"), name.hasSuffix(".json") else { return false }
+        let digits = name.dropFirst(4).dropLast(5)
+        return !digits.isEmpty && digits.allSatisfy(\.isASCII) && digits.allSatisfy(\.isNumber)
     }
 
     static func relative(_ path: String, to home: String) -> String? {

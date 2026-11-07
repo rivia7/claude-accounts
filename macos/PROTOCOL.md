@@ -29,7 +29,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `app`、`web`、`router sync` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下）。所以这几条命令的 stdout / stderr 接到文件，跑完再读；进度和结果看事件文件。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
-  `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`，`core/config.yaml`（内置代理的配置，见 7：
+  `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
+  `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
   App 看不见时也要马上重新读 `state`），以及 `bin/cca`（换了就重新 `hello`）；
   桌面 App 的 bundle id：Claude App `com.anthropic.claudefordesktop`、ChatGPT App `com.openai.codex`（它们启动、退出时刷新 `app.running`）。
 
@@ -107,12 +108,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "key": "工作(bob@example.com)", "id": "bob-example-com-1a2b3c",
   "alias": "工作", "email": "bob@example.com", "name": "工作", "label": "工作（bob@example.com）",
   "kind": "oauth",
-  "login": "logged_in", "login_email": "bob@example.com", "plan": "Max",
+  "login": "logged_in", "login_email": "bob@example.com", "plan": "Max", "plan_tier": "advanced",
   "node": "US-B", "port": 7902, "slot": 2, "group": "CCA-2",
   "pinned": true, "pinned_node": "US-B", "is_last": false,
   "api": null,
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
+  "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
   "can": {"app": true, "web": true, "usage": true, "check": true},
   "can_why": {},
   "usage": { "…用量条目，见 3.1…" },
@@ -120,15 +122,24 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 }
 ```
 
-第三方 API 账号：`kind: "api"`、`login: "api"`、`email: ""`、`plan: ""`、`badge: null`、`api: {"host": "api.example.com", "model": "model-x"}`
+第三方 API 账号：`kind: "api"`、`login: "api"`、`email: ""`、`plan: ""`、`plan_tier: ""`、`badge: null`、`api: {"host": "api.example.com", "model": "model-x"}`
 （**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage` 恒为 null。
 
 - `login`：`logged_in` | `logged_out` | `email_mismatch`（登录的不是这个账号，`login_email` 是实际登录的）| `api`。
 - `plan`：套餐的显示名（`Max`、`Pro 200`……），不知道为 `""`。
+- `plan_tier`：套餐的档位，cca 按结构化的账号信息算好（Claude：组织类型 + 额度倍数，倍数缺失才看官方的套餐名；ChatGPT：原始的套餐值），
+  **App 不从 `plan` 的文字猜**（官方随时改叫法）：`entry`（Free、Go）| `standard`（Pro、Plus、Team、Business、Enterprise、Edu 等）|
+  `advanced`（Max、Pro 100 / 200、Team Premium、Business Premium）| `premium`（Ultra、Pro 500）。不知道为 `""`：没登录、登录的不是这个账号、
+  第三方 API 账号、认不出的新套餐（这时 `plan` 可能仍有值）。没有这个字段（旧版 cca）当作 `""`。
 - `pinned`：维护者的映射锁定了这个账号的节点（`pinned_node` 是映射要的节点，已按改名换算）；App 里不提供改节点。
 - `is_last`：上次在命令行里用的账号。
 - `badge`：和 `~/Applications` 里启动器图标右下角一样的标识（文字 + 颜色），App 用它当头像；API 账号为 null。
 - `app.running` / `app.pid`：这个账号的桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）在不在运行。
+- `cli`：经 cca 启动（`cca @账号`、`cxa @账号`、菜单里选的）、还在运行的命令行会话：`sessions` 几个，`running` 等于 `sessions > 0`，
+  `since_epoch` 是最早那个会话开始的时间（Unix 秒），没有会话时为 null。官方账号、第三方 API 账号都有；`cca usage`、登录、`app-server`
+  起的 claude / codex 不算，没经 cca 启动的也不算。cca 启动工具前在账号目录登记 `cli-<cca 的进程号>.json`，工具一退出就删；cca 被 `kill -9`、
+  断电留下的登记，`state` 按进程号 + 进程的启动时间核对（对不上不算，也不删文件）。没有这个字段（旧版 cca）当作没有会话。
+  “在用”（办公室里在忙、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`。
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
   `app_missing`（没装对应的桌面 App）、`no_chrome`（没装 Google Chrome：网页版不能经账号的出口打开）、
   `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex）。
@@ -189,7 +200,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - 槽位：`expected` 是应该选中的节点（这台 Mac 的账号表算出来的；看本机时是本机的叫法），`selected` 是内核里现在选中的（拿不到为 null），
   `in_kernel`：内核里有没有这个组，`listening`：路由器 / 本机上这个端口在不在监听（拿不到为 null），`reachable`：这台 Mac 连不连得上这个端口。
 - `state`：`ok` | `drift`（选中的不是应选的，同步路由器能修好）| `closed`（这台 Mac 连不上这个端口）| `unknown`（拿不到选中的节点）| `empty`（空槽位）。
-- 慢：路由器那边要几秒。只在窗口可见时、分流页打开时每 60 秒查一次。
+- 慢：路由器那边要几秒。只在窗口可见时查：分流页打开时每 60 秒一次；办公室（首页）不定时查，切到它、窗口变得可见时上次的超过 2 分钟才查一次，操作（同步路由器等）之后也查。
 
 ## 3. 用量、出口检测
 

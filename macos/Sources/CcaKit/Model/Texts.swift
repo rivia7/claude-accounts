@@ -90,9 +90,19 @@ enum Texts {
     static func resetText(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
         if epoch <= now { return "已重置" }
         if epoch - now < 86400 { return span(epoch - now) + "后重置" }
-        let c = calendar.dateComponents([.weekday, .hour, .minute], from: Date(timeIntervalSince1970: epoch))
-        let wd = weekdays[((c.weekday ?? 1) - 1 + 7) % 7]
-        return String(format: "周%@ %02d:%02d 重置", wd, c.hour ?? 0, c.minute ?? 0)
+        return weekdayTime(epoch, calendar: calendar) + " 重置"
+    }
+
+    /// “周二 09:00”
+    private static func weekdayTime(_ epoch: Double, calendar: Calendar) -> String {
+        let c = calendar.dateComponents([.weekday], from: Date(timeIntervalSince1970: epoch))
+        return "周" + weekdays[((c.weekday ?? 1) - 1 + 7) % 7] + " " + clock(epoch, calendar: calendar)
+    }
+
+    /// “09:00”
+    private static func clock(_ epoch: Double, calendar: Calendar) -> String {
+        let c = calendar.dateComponents([.hour, .minute], from: Date(timeIntervalSince1970: epoch))
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
 
     static func percent(_ p: Double) -> String {
@@ -219,6 +229,18 @@ enum Texts {
         }
     }
 
+    /// 一个账号正在做的事（按钮旁边、工位上的进度）：有 step 事件时按它说，否则按是什么操作。
+    static func activity(_ act: Activity, appLabel: String) -> String {
+        if let s = act.step { return step(s, appLabel: appLabel) }
+        switch act.kind {
+        case .app: return "打开 \(appLabel)…"
+        case .web: return "打开网页版…"
+        case .check: return "检测出口…"
+        case .sync: return "同步路由器…"
+        case .rename: return "改名…"
+        }
+    }
+
     static func liveError(_ e: LiveIssue) -> String {
         if let m = nonEmpty(e.message) { return m }
         switch e.code {
@@ -250,6 +272,121 @@ enum Texts {
         case .tableInvalid: return "账号表校验不过"
         default: return "cca 报告了一个问题"
         }
+    }
+
+    // MARK: 办公室
+
+    static func department(_ d: Employee.Department) -> String {
+        switch d {
+        case .claude: return "Claude 组"
+        case .chatgpt: return "ChatGPT 组"
+        case .contractors: return "外包"
+        }
+    }
+
+    /// 套餐档位的叫法（读屏用；界面上靠徽章的样子区分）。不知道的档位为 nil。
+    static func planTier(_ t: PlanTier) -> String? {
+        switch t {
+        case .entry: return "入门"
+        case .standard: return "标准"
+        case .advanced: return "进阶"
+        case .premium: return "尊贵"
+        default: return nil
+        }
+    }
+
+    /// 读屏念的套餐：“Ultra，尊贵套餐”；不知道档位时只念名字。
+    static func planName(_ plan: String, tier: PlanTier) -> String {
+        planTier(tier).map { "\(plan)，\($0)套餐" } ?? plan
+    }
+
+    /// 额度用完的员工几点回来（显示器上写的）：今天的“16:00”，明天的“明天 09:00”，再远“周二 16:00”。
+    static func backTime(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
+        let d = Date(timeIntervalSince1970: epoch), n = Date(timeIntervalSince1970: now)
+        if calendar.isDate(d, inSameDayAs: n) { return clock(epoch, calendar: calendar) }
+        if let t = calendar.date(byAdding: .day, value: 1, to: n), calendar.isDate(d, inSameDayAs: t) {
+            return "明天 " + clock(epoch, calendar: calendar)
+        }
+        return weekdayTime(epoch, calendar: calendar)
+    }
+
+    /// “16:00 回来”；时间已经过了是“马上回来”（等下一次读到新的用量）。
+    static func backAt(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
+        epoch <= now ? "马上回来" : backTime(epoch: epoch, now: now, calendar: calendar) + " 回来"
+    }
+
+    /// 在忙什么：“Claude App 开着 · 命令行里 2 个会话，已 12 分钟”。
+    static func working(app: Bool, appLabel: String, sessions: Int, since: Double?, now: Double) -> String {
+        var parts: [String] = []
+        if app { parts.append("\(appLabel) 开着") }
+        if sessions > 0 {
+            var s = sessions == 1 ? "命令行里在用" : "命令行里 \(sessions) 个会话"
+            if let since { s += "，" + elapsed(since: since, now: now) }
+            parts.append(s)
+        }
+        return parts.isEmpty ? "在忙" : parts.joined(separator: " · ")
+    }
+
+    /// 这个账号在忙什么（头像绿点的悬停提示、工牌上的标签）；不给 now 就不写用了多久。
+    static func working(_ a: Account, appLabel: String, now: Double? = nil) -> String {
+        working(app: a.appRunning, appLabel: appLabel, sessions: a.cliSessions, since: now == nil ? nil : a.cliSince, now: now ?? 0)
+    }
+
+    /// “刚开始” / “已 12 分钟”
+    private static func elapsed(since: Double, now: Double) -> String {
+        now - since < 60 ? "刚开始" : "已 " + span(now - since)
+    }
+
+    static func ailment(_ a: Employee.Ailment) -> String {
+        switch a {
+        case .portClosed: return "端口连不上"
+        case .wrongNode: return "节点选错了"
+        case .exit(let r, let region): return healthResult(r, region: region)
+        }
+    }
+
+    /// 工位下面那一行：现在怎么样。brief：工位上的短写法（在忙什么看左上角的小图标，整句在悬停提示和读屏里）。
+    static func mood(_ e: Employee, appLabel: String, now: Double, brief: Bool = false) -> String {
+        switch e.mood {
+        case .absent: return "还没登录"
+        case .wrongPerson(let email): return email.map { "登录的是 \($0)" } ?? "登录的不是这个账号"
+        case .unwell(let a): return ailment(a)
+        case .resting(let until): return "额度用完了" + (until.map { "，" + backAt(epoch: $0, now: now) } ?? "")
+        case .working where brief: return "在忙" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "")
+        case .working: return working(app: e.app, appLabel: appLabel, sessions: e.sessions, since: e.since, now: now)
+        case .idle: return "空闲"
+        }
+    }
+
+    /// 头条之外的小事（工位右上角的标记），照 Diagnosis 的顺序。
+    static func flags(_ fs: [Employee.Flag], appLabel: String) -> [String] {
+        fs.map { f in
+            switch f {
+            case .nearLimit: return "额度快用完了"
+            case .noApp: return "没装 \(appLabel)"
+            case .lowPurity: return "出口 IP 的纯净度低于设定"
+            case .leak: return "检测到 DNS 或 WebRTC 泄露"
+            case .neverChecked: return "还没检测过出口"
+            }
+        }
+    }
+
+    /// 办公室顶上那一行：“8 位员工 · 2 人在忙 · 1 人休息 · 1 人没登录”（0 的不写）；brief 只写几位员工、几人在忙（侧栏）。
+    static func officeSummary(_ c: OfficeCensus, brief: Bool = false) -> String {
+        if c.total == 0 { return "还没有员工" }
+        let rest: [(Int, String)] = brief ? [(c.working, "在忙")]
+            : [(c.working, "在忙"), (c.idle, "空闲"), (c.resting, "休息"), (c.absent, "没登录"), (c.wrongPerson, "登错号"), (c.unwell, "有问题")]
+        return (["\(c.total) 位员工"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 人\($0.1)" }).joined(separator: " · ")
+    }
+
+    /// 读屏念的一整句：“工作，Claude 组，Ultra，尊贵套餐，Claude App 开着”。
+    static func deskLabel(_ e: Employee, appLabel: String, now: Double) -> String {
+        let a = e.account
+        var parts = [a.displayName, department(e.department)]
+        if let p = nonEmpty(a.plan) { parts.append(planName(p, tier: e.tier)) }
+        parts.append(mood(e, appLabel: appLabel, now: now))
+        parts += flags(e.flags, appLabel: appLabel)
+        return parts.joined(separator: "，")
     }
 }
 

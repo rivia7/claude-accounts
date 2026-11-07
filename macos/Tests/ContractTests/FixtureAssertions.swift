@@ -23,7 +23,7 @@ func fixtureAssertions() {
     }
     if let s = loadFixture(StateDoc.self, "state.json") {
         let c = s.tool(.claude), x = s.tool(.codex)
-        check("state：Claude 3 个官方账号 + 2 个 API 账号", c?.accounts.filter { !$0.isAPI }.count == 3 && c?.accounts.filter(\.isAPI).count == 2)
+        check("state：Claude 5 个官方账号 + 2 个 API 账号", c?.accounts.filter { !$0.isAPI }.count == 5 && c?.accounts.filter(\.isAPI).count == 2)
         let bob = s.account(bobRef)
         check("state：bob 被锁定、登录着、上次用的、App 开着", bob?.pinned == true && bob?.pinnedNode == "US-B" && bob?.login == .loggedIn
               && bob?.isLast == true && bob?.appRunning == true && bob?.app?.pid == 4242)
@@ -48,7 +48,15 @@ func fixtureAssertions() {
               && frank?.usage?.resetCredits?.availableCount == 2 && frank?.usage?.stale == true)
         check("state：frank 换了节点的旧检测结果", frank?.health?.applies == false && frank?.health?.stale == true
               && frank?.health?.result == .lowPurity && frank?.health?.leak == nil)
-        check("state：8 个槽位、3 个空的", s.routing?.slots.count == 8 && s.routing?.slots.filter(\.isEmpty).count == 3)
+        check("state：8 个槽位、1 个空的", s.routing?.slots.count == 8 && s.routing?.slots.filter(\.isEmpty).count == 1)
+        check("state：套餐档位（bob 是 Ultra / premium，frank 是 Pro 500 / premium，没登录、登错号、API 账号是空的）",
+              bob?.plan == "Ultra" && bob?.planTier == .premium && frank?.plan == "Pro 500" && frank?.planTier == .premium
+              && carol?.planTier == .unknown && dave?.plan == "" && dave?.planTier == .unknown && direct?.planTier == .unknown
+              && s.account(AccountRef(tool: .claude, key: "erin@example.com"))?.planTier == .advanced
+              && s.account(AccountRef(tool: .claude, key: "grace@example.com"))?.planTier == .standard)
+        check("state：命令行会话（bob 两个、香港接口一个，别的没有）", bob?.cliSessions == 2 && bob?.cli?.sinceEpoch == 1794041280
+              && bob?.isWorking == true && hk?.cliSessions == 1 && hk?.isWorking == true && carol?.cli?.running == false
+              && frank?.cliSessions == 0 && frank?.isWorking == false)
         check("state：路由器待同步", s.routing?.sync == .pending && s.routing?.localSync == .ok)
         check("state：notices", s.notices.count == 2 && s.notices[0].code == .policyPinned && s.notices[0].oldNode == "US-A"
               && s.notices[1].code == .nodesFilled && s.notices[1].tool == nil && s.notices[1].node == "HK-A")
@@ -109,7 +117,7 @@ func fixtureAssertions() {
     }
     if let l = loadFixture(LiveDoc.self, "live_unreachable.json") {
         check("live_unreachable：已分配的槽位都 closed", l.slots.filter { $0.tool != nil }.allSatisfy { $0.state == .closed }
-              && l.router?.reachable == false && l.router?.error?.code == .unreachable && l.summary?.closed == 5
+              && l.router?.reachable == false && l.router?.error?.code == .unreachable && l.summary?.closed == 7
               && l.proxyHost == "192.0.2.10")
     }
     if let c = loadFixture(CheckDoc.self, "check.json") {
@@ -158,6 +166,6 @@ func fixtureAssertions() {
         tools[0]["accounts"] = accounts
         obj["tools"] = tools
         let s = (try? JSONSerialization.data(withJSONObject: obj)).flatMap { try? DocumentDecoder.decode(StateDoc.self, from: $0) }
-        check("缺 key 的账号丢掉、别的照样", s?.tool(.claude)?.accounts.count == 4)
+        check("缺 key 的账号丢掉、别的照样", s?.tool(.claude)?.accounts.count == 6)
     }
 }

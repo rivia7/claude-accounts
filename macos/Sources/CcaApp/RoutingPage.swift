@@ -42,8 +42,7 @@ struct RoutingPage: View {
                                            description: Text("配置路由器或本机 Clash 之后，每个走节点的账号会分到一个端口。"))
                 } else {
                     RouteMap(rows: rows, nodes: mapNodes(rows), panel: panelTitle, showGroups: guide.showDetails) { ref in
-                        model.tool = ref.tool
-                        model.selection = .account(ref)
+                        model.show(ref)
                     }
                     SlotIssues(rows: rows)
                     DirectAccounts()
@@ -460,12 +459,17 @@ struct RouteMap: View {
                         .foregroundStyle(a == nil ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(chipSubtitle(a, ref: ref))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(a?.isAPI == true ? "第三方 API" : Texts.product(ref.tool))
+                        if a?.isAPI != true, let a, let p = nonEmpty(a.plan) {
+                            PlanBadge(plan: p, tier: a.planTier, size: .compact)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 }
-                BadgeAvatar(badge: a?.badge, isAPI: a?.isAPI ?? false, size: 24)
+                BadgeAvatar(badge: a?.badge, isAPI: a?.isAPI ?? false, size: 24, tier: a?.planTier ?? .unknown)
             }
             .contentShape(Rectangle())
         }
@@ -678,8 +682,7 @@ struct DirectAccounts: View {
                 Text("不经节点、直连的：").foregroundStyle(.secondary)
                 ForEach(direct) { a in
                     Button {
-                        model.tool = a.tool
-                        model.selection = .account(a.ref)
+                        model.show(a.ref)
                     } label: {
                         HStack(spacing: 5) {
                             BadgeAvatar(badge: a.badge, isAPI: true, size: 16)

@@ -14,14 +14,20 @@ import Foundation
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`gui update` 什么都不做。
+///
+/// 演示模式（App 用 CCA_GUI_FIXTURES 打开）传 rebaseTo = 现在：夹具里的时间（`generated_at`、`checked_at`、`*_epoch`）
+/// 一起平移，让 state.json 的 generated_at 落在“现在”——几点重置、几点回来、多久前检测的，永远像刚生成的一样。
+/// 测试不传，读到的是原样的文件。
 struct FixtureTransport: Transport {
     let directory: URL
     let stepDelay: TimeInterval
     let overrides: [String: String]
+    /// 时间平移多少秒（不平移是 0）
+    let shift: Double
 
     var isFixture: Bool { true }
 
-    init(directory: URL, environment: [String: String] = [:], stepDelay: TimeInterval = 0.35) {
+    init(directory: URL, environment: [String: String] = [:], stepDelay: TimeInterval = 0.35, rebaseTo now: Double? = nil) {
         self.directory = directory
         self.stepDelay = stepDelay
         var o: [String: String] = [:]
@@ -30,10 +36,38 @@ struct FixtureTransport: Transport {
             if let f = environment[v], !f.isEmpty { o[name] = f }
         }
         overrides = o
+        let anchor = (try? Data(contentsOf: directory.appendingPathComponent(o["state"] ?? "state.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            .flatMap { ($0["generated_at"] as? NSNumber)?.doubleValue }
+        shift = now.flatMap { n in anchor.map { n - $0 } } ?? 0
+    }
+
+    /// 把 JSON 里的时间平移 by 秒：`generated_at`、`checked_at` 和以 `_epoch` 结尾的数字（ISO 写法的 `*_at` 字符串、
+    /// `age_seconds` 不动）。读不懂就原样返回。
+    static func rebase(_ data: Data, by delta: Double) -> Data {
+        guard delta != 0, let obj = try? JSONSerialization.jsonObject(with: data) else { return data }
+        func walk(_ x: Any) -> Any {
+            if let d = x as? [String: Any] {
+                var out: [String: Any] = [:]
+                for (k, v) in d {
+                    if k == "generated_at" || k == "checked_at" || k.hasSuffix("_epoch"), let n = v as? NSNumber,
+                       CFGetTypeID(n) != CFBooleanGetTypeID() {
+                        out[k] = n.doubleValue + delta
+                    } else {
+                        out[k] = walk(v)
+                    }
+                }
+                return out
+            }
+            if let a = x as? [Any] { return a.map(walk) }
+            return x
+        }
+        return (try? JSONSerialization.data(withJSONObject: walk(obj))) ?? data
     }
 
     private func read(_ name: String) -> Data? {
-        try? Data(contentsOf: directory.appendingPathComponent(name))
+        guard let d = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return nil }
+        return name.hasSuffix(".json") ? Self.rebase(d, by: shift) : d
     }
 
     private func missing(_ name: String) -> CcaResponse {

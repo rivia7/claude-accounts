@@ -70,6 +70,8 @@ struct DetailColumn: View {
     var body: some View {
         Group {
             switch model.selection {
+            case .office?:
+                OfficePage()
             case .account(let ref)?:
                 AccountDetail(ref: ref)
             case .routing?:
@@ -193,9 +195,10 @@ struct MainToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button("添加 Claude 账号…") { model.runInTerminal(.addAccount(prefix: [], product: "Claude")) }
-                Button("添加 ChatGPT 账号…") { model.runInTerminal(.addAccount(prefix: model.prefix(.codex), product: "ChatGPT")) }
-                Button("添加第三方 API 账号…") { model.runInTerminal(.addAPI) }
+                ForEach(Employee.Department.allCases, id: \.self) { d in
+                    let add = model.addHandoff(d)
+                    Button(add.title + "…") { model.runInTerminal(add) }
+                }
                 Divider()
                 Button("编辑 \(Texts.product(model.tool)) 账号表…") { model.runInTerminal(.edit(prefix: model.prefix(model.tool))) }
                 Divider()

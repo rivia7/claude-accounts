@@ -100,6 +100,20 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
         check("\(n) 有端口就有 slot、group、node", a.slot != nil && a.group != nil && a.node != nil)
     }
     check("\(n) app.running 是布尔", isBool((ra["app"] as? [String: Any])?["running"]))
+    if let tier = ra["plan_tier"] {   // 旧版 cca 没有（当作不知道）
+        check("\(n) plan_tier 是字符串", tier is String)
+        if a.kind == .api || a.login != .loggedIn || (a.plan ?? "").isEmpty {
+            check("\(n) 没登录、登错号、API 账号、没套餐时 plan_tier 为空", a.planTier == .unknown, a.planTier.rawValue)
+        }
+    }
+    if let cli = ra["cli"] as? [String: Any] {   // 旧版 cca 没有（当作没有会话）
+        let running = cli["running"] as? Bool, sessions = (cli["sessions"] as? NSNumber)?.intValue ?? -1
+        check("\(n) cli.running 是布尔", isBool(cli["running"]))
+        check("\(n) cli.sessions 是不小于 0 的整数", isNumber(cli["sessions"]) && sessions >= 0)
+        check("\(n) cli.running 等于 sessions > 0", running == (sessions > 0))
+        check("\(n) cli.since_epoch 只在有会话时是数字", running == true ? isNumber(cli["since_epoch"]) : isNull(cli["since_epoch"]))
+        check("\(n) cli 解码", a.cli?.running == running && a.cliSessions == max(sessions, 0))
+    }
     if let h = ra["health"] as? [String: Any] {
         for k in ["version", "checked_at", "age_seconds", "stale", "applies"] {
             check("\(n) health.\(k) 有值", !isNull(h[k]))
@@ -352,7 +366,7 @@ func injectUnknown(_ x: Any, parentKey: String? = nil) -> Any {
 }
 
 private let enumKeys: Set<String> = ["login", "source", "error_code", "result", "state", "sync", "local_sync", "route", "route_pref",
-                                     "client", "backend", "dns", "webrtc", "severity", "default", "item"]
+                                     "client", "backend", "dns", "webrtc", "severity", "default", "item", "plan_tier"]
 
 /// 把枚举字段换成不认识的值（顶层的 kind 不动）。
 func futureEnums(_ x: Any, depth: Int = 0) -> Any {
@@ -372,9 +386,10 @@ func futureEnums(_ x: Any, depth: Int = 0) -> Any {
 
 /// 类型不对的字段：数字字段给字符串，布尔字段给字符串，字符串字段给数字。
 func wrongTypes(_ x: Any) -> Any {
-    let numeric: Set<String> = ["port", "pid", "trust", "age_seconds", "utilization", "min_trust", "ssh_port", "availableCount"]
+    let numeric: Set<String> = ["port", "pid", "trust", "age_seconds", "utilization", "min_trust", "ssh_port", "availableCount",
+                                "sessions", "since_epoch"]
     let boolean: Set<String> = ["stale", "pinned", "is_last", "running", "applies", "reset", "reachable", "hook", "cron", "listening"]
-    let text: Set<String> = ["plan", "label", "message", "org", "trust_label", "balance", "error", "local_node", "selected"]
+    let text: Set<String> = ["plan", "plan_tier", "label", "message", "org", "trust_label", "balance", "error", "local_node", "selected"]
     if var d = x as? [String: Any] {
         for (k, v) in d {
             if numeric.contains(k) {
@@ -590,6 +605,7 @@ func auditState(_ s: StateDoc) -> [String] {
             let p = "\(t.id.rawValue)/\(acc.key)"
             a.add(p + ".kind", acc.kind)
             a.add(p + ".login", acc.login)
+            a.add(p + ".plan_tier", acc.planTier)
             for (k, w) in acc.canWhy { a.add(p + ".can_why." + k, w) }
             a.usage(p + ".usage", acc.usage)
             a.health(p + ".health", acc.health)

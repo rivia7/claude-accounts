@@ -1,8 +1,9 @@
 import Foundation
 import Observation
 
-/// 侧栏选中的东西。
+/// 侧栏选中的东西：办公室（首页，所有账号一眼看全）、某个账号、节点分流。
 enum SidebarItem: Hashable, Sendable {
+    case office
     case account(AccountRef)
     case routing
 
@@ -129,24 +130,18 @@ final class AppModel {
         didSet {
             guard tool != oldValue else { return }
             defaults.set(tool.rawValue, forKey: Prefs.tool)
-            if selection != .routing { selection = defaultSelection(for: tool) }
+            // 办公室、分流页看的是所有工具：切工具只换侧栏的名册
+            if selection?.account != nil { selection = defaultSelection(for: tool) }
         }
     }
 
     var selection: SidebarItem? {
         didSet {
             guard selection != oldValue else { return }
-            switch selection {
-            case .account(let r)?:
-                defaults.set(r.key, forKey: Prefs.selected(r.tool))
-                defaults.set(false, forKey: Prefs.routing)
-            case .routing?:
-                defaults.set(true, forKey: Prefs.routing)
-            case nil:
-                break
-            }
+            if case .account(let r)? = selection { defaults.set(r.key, forKey: Prefs.selected(r.tool)) }
             if let e = aliasEditing, selection != .account(e) { cancelRename() }
             visibilityChanged(wasVisible: isVisible, wasRouting: oldValue == .routing && mainVisible)
+            if selection == .office { refreshLiveIfStale() }
         }
     }
 
@@ -165,6 +160,8 @@ final class AppModel {
     private(set) var panelVisible = false
     var isVisible: Bool { mainVisible || panelVisible }
     var routingVisible: Bool { mainVisible && selection == .routing }
+    /// 看得见、并且用得上路由器实况的页面开着：分流页，或者办公室（端口连不上、选错节点的员工看它）
+    var liveVisible: Bool { mainVisible && (selection == .routing || selection == .office) }
 
     // MARK: 内部
 
@@ -197,7 +194,7 @@ final class AppModel {
 
     enum Prefs {
         static let tool = "tool"
-        static let routing = "selection.routing"
+        /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
 
@@ -217,7 +214,8 @@ final class AppModel {
             injected = true
         } else if let dir = environment["CCA_GUI_FIXTURES"], !dir.isEmpty {
             let url = URL(fileURLWithPath: CcaLocator.expandTilde(dir, home: home))
-            self.transport = FixtureTransport(directory: url, environment: environment)
+            // 演示数据的时间平移到现在（几点重置、几点回来才有意义）
+            self.transport = FixtureTransport(directory: url, environment: environment, rebaseTo: Date().timeIntervalSince1970)
             isFixtureMode = true
             injected = false
         } else {
@@ -464,12 +462,12 @@ final class AppModel {
         return t
     }
 
-    /// 工具栏的“刷新”：重新读 state，查用量（要同意的事弹框问），分流页开着时也查 live。
+    /// 工具栏的“刷新”：重新读 state，查用量（要同意的事弹框问），分流页、办公室开着时也查 live（端口连不上的员工要看它）。
     func refreshAll() {
         Task {
             await loadState()
             refreshUsage(manual: true)
-            if routingVisible || selection == .routing { refreshLive() }
+            if selection == .routing || selection == .office { refreshLive() }
         }
     }
 
@@ -640,8 +638,7 @@ final class AppModel {
     /// 开始改别名：选中这个账号，它的名字变成输入框。
     func beginRename(_ ref: AccountRef) {
         renameError = nil
-        if tool != ref.tool { tool = ref.tool }
-        selection = .account(ref)
+        show(ref)
         aliasEditing = ref
         hooks.showMainWindow()
     }
@@ -662,28 +659,38 @@ final class AppModel {
         Task { [weak self] in
             let r = await client.execute(.rename(ref.tool, key: ref.key, alias: wanted.isEmpty ? "-" : wanted), prompter: prompter)
             guard let self else { return }
-            self.activities[ref] = nil
             switch r.status {
             case .success:
                 let out = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self)
                 let newKey = nonEmpty(out.split(whereSeparator: \.isNewline).last.map(String.init)) ?? ref.key
+                // 读新的 state 时改名还算在进行：fixSelection 不会因为旧键没了就回办公室，读完再换成新键
                 await self.loadState()
+                self.activities[ref] = nil
                 self.aliasEditing = nil
                 if self.selection == .account(ref) { self.selection = .account(AccountRef(tool: ref.tool, key: newKey)) }
                 self.showToast(newKey == ref.key ? "别名没有变" : "已改名：登录、资料和端口都不变", .success)
             case .failed(let f) where f.reason == .command:
+                self.activities[ref] = nil
                 self.renameError = nonEmpty(f.message) ?? "没能改名"
             default:
+                self.activities[ref] = nil
                 self.aliasEditing = nil
                 self.finish(r, failureTitle: "没能改名", success: "已改名")
             }
         }
     }
 
-    /// 每次操作之后重新读 state（分流页开着时也读 live）。
+    /// 每次操作之后重新读 state（分流页、办公室开着时也读 live：同步路由器之后工位要跟着好起来）。
     private func afterAction() async {
         await loadState()
-        if routingVisible { refreshLive() }
+        if liveVisible { refreshLive() }
+    }
+
+    /// 办公室打开、变得看得见时：上次的实况超过 2 分钟（或者还没有）就查一次。办公室不定时轮询（分流页才每 60 秒查）。
+    func refreshLiveIfStale(maxAge: Double = 120) {
+        guard phase == .ready, liveVisible else { return }
+        if let at = live?.generatedAt, Date().timeIntervalSince1970 - at < maxAge { return }
+        refreshLive()
     }
 
     func present(_ s: Sheet) {
@@ -795,6 +802,7 @@ final class AppModel {
         let was = isVisible, wasRouting = routingVisible
         mainVisible = v
         visibilityChanged(wasVisible: was, wasRouting: wasRouting)
+        if v, selection == .office { refreshLiveIfStale() }
     }
 
     func setPanelVisible(_ v: Bool) {
@@ -922,6 +930,21 @@ final class AppModel {
 
     // MARK: 选择
 
+    /// 在终端里添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）。
+    func addHandoff(_ d: Employee.Department) -> Handoff { d.addHandoff(codexPrefix: prefix(.codex)) }
+
+    /// 打开一个账号的页面（办公室的工位、分流图里的账号）：侧栏的工具跟着换过去。
+    func show(_ ref: AccountRef) {
+        if tool != ref.tool { tool = ref.tool }
+        selection = .account(ref)
+    }
+
+    /// 办公室：按组排好的工位，每个账号此刻的样子（和账号页那句话用同一份用量、实况）。
+    func office(now: Double) -> Office {
+        Office.make(tools: state?.tools ?? [], codexEnabled: codexEnabled, usage: { self.usage(for: $0) },
+                    live: { self.liveSlot(for: $0) }, now: now)
+    }
+
     private func defaultSelection(for t: ToolID) -> SidebarItem? {
         let list = accounts(t)
         if let k = defaults.string(forKey: Prefs.selected(t)), list.contains(where: { $0.key == k }) {
@@ -933,21 +956,19 @@ final class AppModel {
         return list.first.map { .account($0.ref) }
     }
 
-    /// state 变了之后：选中的账号不在了就换一个；第一次加载时恢复上次的选择。
+    /// state 变了之后：选中的账号不在了就回办公室；第一次加载时打开办公室（首页）。
     private func fixSelection() {
         if !visibleTools.contains(tool) { tool = .claude }
         switch selection {
-        case .routing?:
+        case .office?, .routing?:
             return
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }
-            selection = defaultSelection(for: tool)
+            // 正在改名：旧键没了是改名的结果，改名完成后会换成新键（rename）
+            if activities[r]?.kind == .rename { return }
+            selection = .office
         case nil:
-            if defaults.bool(forKey: Prefs.routing) {
-                selection = .routing
-            } else {
-                selection = defaultSelection(for: tool)
-            }
+            selection = .office
         }
     }
 }

@@ -74,18 +74,24 @@ struct TutorialCard {
     let points: [(String, String)]
     let art: Art
 
-    enum Art { case fan, sidebar, open, quota, route, map, rename, menubar }
+    enum Art { case fan, office, sidebar, open, quota, route, map, rename, menubar }
 
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
-            ("person.2", "同时管好几个 Claude、ChatGPT 账号，左边按工具分开列出。"),
+            ("person.2", "同时管好几个 Claude、ChatGPT 账号：办公室里一眼看全，左边按工具分开列出。"),
             ("point.3.connected.trianglepath.dotted", "每个账号走自己的网络出口（节点），互不串号。"),
             ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
         ], art: .fan),
+        TutorialCard(title: "办公室：谁在忙，谁在休息", points: [
+            ("building.2", "打开 App 先看到办公室：每个账号是一位员工，Claude、ChatGPT、第三方 API（外包）分组坐好。"),
+            ("desktopcomputer", "屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
+            ("moon.zzz", "趴着睡觉是额度用完了，屏幕上写着几点回来；椅子空着是没登录，坐着陌生人是登错了号。"),
+            ("crown", "套餐越高名牌越亮，Ultra、Pro 500 是金色的皇冠。点一个工位就进这个账号的页面。"),
+        ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
             ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
-            ("circle.fill", "头像右下角有绿点，说明这个账号的 App 正开着。"),
+            ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、检测出口、改别名。"),
         ], art: .sidebar),
         TutorialCard(title: "打开一个账号", points: [
@@ -235,6 +241,7 @@ struct TutorialArt: View {
         Group {
             switch art {
             case .fan: fanArt
+            case .office: officeArt
             case .sidebar: sidebarArt
             case .open: openArt
             case .quota: quotaArt
@@ -250,14 +257,48 @@ struct TutorialArt: View {
 
     private func color(_ k: Int) -> Color { Color(hex: Self.sample[k].1) }
 
-    private func avatar(_ k: Int, size: CGFloat) -> some View {
-        ZStack {
-            Circle().fill(color(k))
-            Text(Self.sample[k].0)
-                .font(.system(size: size * 0.44, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+    private static func badge(_ k: Int) -> Badge { Badge(label: sample[k].0, color: String(format: "#%06X", sample[k].1)) }
+
+    private func avatar(_ k: Int, size: CGFloat, tier: PlanTier = .unknown) -> some View {
+        BadgeAvatar(badge: Self.badge(k), size: size, tier: tier)
+    }
+
+    /// 示意用的员工（不是真的账号表里的）：第一个在忙（App 开着），其余照给的状态。
+    private static func demo(_ k: Int, plan: String, tier: PlanTier, mood: Employee.Mood) -> Employee {
+        let a = Account.sample(["key": sample[k].2, "kind": "oauth", "login": "logged_in", "plan": plan, "plan_tier": tier.rawValue,
+                                "badge": ["label": sample[k].0, "color": badge(k).color], "app": ["running": mood == .working]])
+        return Employee(account: a, mood: mood, flags: [])
+    }
+
+    /// 三个小工位：在忙（最高档，金边的角落办公室）、额度用完在休息、没登录（椅子空着）。静止的一帧。
+    private var officeArt: some View {
+        let now = Date().timeIntervalSince1970
+        let desks: [(caption: String, employee: Employee)] = [
+            ("在忙", Self.demo(0, plan: "Ultra", tier: .premium, mood: .working)),
+            ("休息中", Self.demo(2, plan: "Pro 100", tier: .advanced, mood: .resting(until: now + 7800))),
+            ("没登录", Self.demo(1, plan: "Pro", tier: .standard, mood: .absent)),
+        ]
+        return HStack(spacing: 12) {
+            ForEach(desks, id: \.caption) { d in
+                let a = d.employee.account, shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+                VStack(spacing: 6) {
+                    DeskScene(employee: d.employee, animate: false, now: now).frame(width: 158)
+                    HStack(spacing: 5) {
+                        Text(d.caption).font(.caption).foregroundStyle(.secondary)
+                        PlanBadge(plan: a.plan ?? "", tier: a.planTier, size: .compact)
+                    }
+                }
+                .padding(8)
+                .background(shape.fill(.background))
+                .overlay {
+                    if a.isPremium {
+                        shape.strokeBorder(TierStyle.goldStroke, lineWidth: 1.2)
+                    } else {
+                        shape.strokeBorder(Surface.hairline, lineWidth: 0.5)
+                    }
+                }
+            }
         }
-        .frame(width: size, height: size)
     }
 
     /// 一块白底的小卡片
@@ -302,24 +343,33 @@ struct TutorialArt: View {
     private var sidebarArt: some View {
         panel {
             VStack(spacing: 2) {
-                sidebarRow(0, sub: "Max · US-B", five: 92, week: 41, running: true, selected: true)
-                sidebarRow(1, sub: "未登录 · US-C", five: nil, week: nil, running: false, selected: false)
-                sidebarRow(2, sub: "ChatGPT Pro · US-A", five: 35, week: 76, running: false, selected: false)
+                sidebarRow(0, plan: ("Ultra", .premium), sub: "US-B", five: 92, week: 41, running: true, selected: true)
+                sidebarRow(1, plan: nil, sub: "未登录 · US-C", five: nil, week: nil, running: false, selected: false)
+                sidebarRow(2, plan: ("Pro 100", .advanced), sub: "US-A", five: 35, week: 76, running: false, selected: false)
             }
             .padding(8)
         }
         .frame(width: 330)
     }
 
-    private func sidebarRow(_ k: Int, sub: String, five: Double?, week: Double?, running: Bool, selected: Bool) -> some View {
+    private func sidebarRow(_ k: Int, plan: (String, PlanTier)?, sub: String, five: Double?, week: Double?, running: Bool,
+                            selected: Bool) -> some View {
         HStack(spacing: 9) {
-            avatar(k, size: 28)
+            avatar(k, size: 28, tier: plan?.1 ?? .unknown)
                 .overlay(alignment: .bottomTrailing) {
                     if running { RunningDot(size: 9).offset(x: 1, y: 1) }
                 }
             VStack(alignment: .leading, spacing: 1) {
                 Text(Self.sample[k].2).font(.callout.weight(.medium))
-                Text(sub).font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    if let plan {
+                        PlanBadge(plan: plan.0, tier: plan.1, size: .compact)
+                        Text("·")
+                    }
+                    Text(sub)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 6)
             if let five, let week {
@@ -348,10 +398,13 @@ struct TutorialArt: View {
     private var openArt: some View {
         panel {
             HStack(spacing: 10) {
-                avatar(0, size: 34)
-                VStack(alignment: .leading, spacing: 2) {
+                avatar(0, size: 34, tier: .premium)
+                VStack(alignment: .leading, spacing: 3) {
                     Text("工作").font(.headline)
-                    Text("Max · US-B").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        PlanBadge(plan: "Ultra", tier: .premium, size: .compact)
+                        Text("· US-B").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 16)
                 Label("打开 Claude App", systemImage: "macwindow")
@@ -591,57 +644,43 @@ struct Advice {
     let level: Level
     let text: String
 
+    /// 取 Diagnosis 里最要紧的一条（顺序只写在 Diagnosis 里，办公室里员工的状态也按它）。
     static func make(_ a: Account, usage u: UsageEntry?, live: LiveSlot?, appLabel: String, now: Double) -> Advice {
-        switch a.login {
+        guard let d = Diagnosis.all(a, usage: u, live: live, now: now).first else {
+            return Advice(level: .ok, text: a.isAPI ? "一切正常。" : "一切正常，可以打开使用。")
+        }
+        switch d {
         case .loggedOut:
             return Advice(level: .warn, text: "还没登录这个账号：点「登录…」，在终端里按提示登录。")
-        case .emailMismatch:
-            let who = nonEmpty(a.loginEmail).map { "（现在登录的是 \($0)）" } ?? ""
+        case .emailMismatch(let email):
+            let who = email.map { "（现在登录的是 \($0)）" } ?? ""
             return Advice(level: .warn, text: "登录的不是这个账号\(who)：点「重新登录…」换回来。")
-        default:
-            break
-        }
-        if !a.isAPI, !a.can.app, a.canWhy["app"] == .appMissing {
+        case .appMissing:
             return Advice(level: .info, text: "这台 Mac 上没装 \(appLabel)：可以先用「网页版」。")
-        }
-        switch live?.state {
-        case .closed?:
+        case .portClosed:
             return Advice(level: .bad, text: "这个账号在路由器上的端口连不上：先点「同步路由器」，还不行就看看路由器。")
-        case .drift?:
+        case .portDrift:
             return Advice(level: .warn, text: "路由器给这个账号选错了节点：点「同步路由器」就能修好。")
-        default:
-            break
-        }
-        let h = a.health.flatMap { $0.applies && !$0.stale ? $0 : nil }
-        if let h, let r = h.result {
-            switch r {
-            case .restricted, .noExit, .portClosed, .apiUnreachable:
-                return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: h.restrictedRegion))。点「检测出口」再测一次。")
-            default:
-                break
+        case .exitBad(let r, let region):
+            return Advice(level: .bad, text: "出口有问题：\(Texts.healthResult(r, region: region))。点「检测出口」再测一次。")
+        case .quota(let windows):
+            // 用完的窗口比快用完的要紧
+            let w = windows.first(where: \.exhausted) ?? windows[0]
+            let name = w.window == .fiveHour ? "5 小时" : "本周"
+            if w.exhausted {
+                let back = w.resetsEpoch.map { "，" + Texts.backAt(epoch: $0, now: now) } ?? ""
+                return Advice(level: .warn, text: "\(name)的额度用完了\(back)。可以先换个账号。")
             }
-        }
-        // 额度快用完了：比纯净度、泄露更要紧（马上就用不了）
-        if let u = u, !u.stale {
-            for (name, w) in [("5 小时", u.fiveHour), ("本周", u.sevenDay)] {
-                guard let w, let p = w.utilization, !w.isReset(now: now), UsageLevel(percent: p) == .critical else { continue }
-                let when = w.resetsEpoch.map { "，" + Texts.resetText(epoch: $0, now: now) } ?? ""
-                return Advice(level: .warn, text: "\(name)的额度快用完了（\(Texts.percent(p))\(when)）。可以先换个账号。")
-            }
-        }
-        if let h {
-            if h.result == .lowPurity {
-                return Advice(level: .warn, text: "出口 IP 的纯净度低于设定，用的时候注意风险。")
-            }
-            if h.leak?.hasLeak == true {
-                return Advice(level: .warn, text: "检测到 DNS 或 WebRTC 泄露：别人可能看出你的真实位置，详见下面的网络出口。")
-            }
-        }
-        if a.health == nil {
+            let when = w.resetsEpoch.map { "，" + Texts.resetText(epoch: $0, now: now) } ?? ""
+            return Advice(level: .warn, text: "\(name)的额度快用完了（\(Texts.percent(w.percent))\(when)）。可以先换个账号。")
+        case .lowPurity:
+            return Advice(level: .warn, text: "出口 IP 的纯净度低于设定，用的时候注意风险。")
+        case .leak:
+            return Advice(level: .warn, text: "检测到 DNS 或 WebRTC 泄露：别人可能看出你的真实位置，详见下面的网络出口。")
+        case .neverChecked:
             return Advice(level: .info, text: a.isAPI ? "第一次用这个接口？点「检测出口」看看连不连得上。"
                           : "第一次用这个账号？先点「检测出口」，看看出口在哪、干不干净。")
         }
-        return Advice(level: .ok, text: a.isAPI ? "一切正常。" : "一切正常，可以打开使用。")
     }
 }
 

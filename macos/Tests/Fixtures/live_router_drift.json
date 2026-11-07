@@ -93,27 +93,27 @@
       "slot": 6,
       "group": "CCA-6",
       "port": 7906,
-      "tool": null,
-      "key": null,
-      "expected": "REJECT",
-      "selected": "REJECT",
+      "tool": "claude",
+      "key": "erin@example.com",
+      "expected": "US-A",
+      "selected": "US-A",
       "in_kernel": true,
       "listening": true,
-      "reachable": null,
-      "state": "empty"
+      "reachable": true,
+      "state": "ok"
     },
     {
       "slot": 7,
       "group": "CCA-7",
       "port": 7907,
-      "tool": null,
-      "key": null,
-      "expected": "REJECT",
-      "selected": "REJECT",
+      "tool": "claude",
+      "key": "grace@example.com",
+      "expected": "US-C",
+      "selected": "US-C",
       "in_kernel": true,
       "listening": true,
-      "reachable": null,
-      "state": "empty"
+      "reachable": true,
+      "state": "ok"
     },
     {
       "slot": 8,
@@ -130,10 +130,10 @@
     }
   ],
   "summary": {
-    "ok": 3,
+    "ok": 5,
     "drift": 2,
     "closed": 0,
     "unknown": 0,
-    "empty": 3
+    "empty": 1
   }
 }

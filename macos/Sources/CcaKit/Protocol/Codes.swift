@@ -46,6 +46,23 @@ struct LoginState: KnownValues {
     static let allKnown: [LoginState] = [.loggedIn, .loggedOut, .emailMismatch, .api]
 }
 
+/// 套餐档位（`plan_tier`）：cca 按结构化的账号信息算好，App 不从套餐名猜（官方随时改叫法）。
+/// `""` = 不知道（没登录、登录的不是这个账号、第三方 API 账号、认不出的新套餐、旧版 cca）。
+struct PlanTier: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    /// Free、Go
+    static let entry = PlanTier(rawValue: "entry")
+    /// Pro、Plus、Team、Business、Enterprise…
+    static let standard = PlanTier(rawValue: "standard")
+    /// Max、Pro 100 / 200、Team Premium…
+    static let advanced = PlanTier(rawValue: "advanced")
+    /// Ultra、Pro 500
+    static let premium = PlanTier(rawValue: "premium")
+    static let unknown = PlanTier(rawValue: "")
+    static let allKnown: [PlanTier] = [.entry, .standard, .advanced, .premium, .unknown]
+}
+
 /// `can_why` 的原因码。
 struct CanWhy: KnownValues {
     let rawValue: String

@@ -700,6 +700,7 @@ PY
 	esac
 	exit 0
 fi
+while [ -e "$CCA_T/hold" ]; do sleep 0.1; done   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
 python3 - "$CLAUDE_CONFIG_DIR" "$CCA_ACCOUNT" <<'PY'
 import json, os, sys, time
 cd, acct = sys.argv[1], sys.argv[2]
@@ -780,6 +781,7 @@ print('AUTHCMD: rc=%d' % r.returncode)
 PY
 fi
 # 当作一次会话
+while [ -e "$CCA_T/hold" ]; do sleep 0.1; done   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
 python3 - "$CODEX_HOME" "${CODEX_SQLITE_HOME:-$CODEX_HOME}" "${CCA_ACCOUNT:-x}" <<'PY'
 import json, os, sqlite3, sys, time, uuid
 home, dbhome, acct = sys.argv[1:4]

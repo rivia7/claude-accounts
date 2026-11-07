@@ -1041,6 +1041,110 @@ out=$(run cca codex rename dave@example.com 二号 2>/dev/null </dev/null); rc=$
 ok "codex rename：Codex 的账号表同样改，端口不变" '[ $rc -eq 0 ] && [ "$out" = "二号(dave@example.com)" ] && tblok "\"二号(dave@example.com)\" in t" "$H/.cca/codex.json" && cfgok "c[\"codex\"][\"ports\"][\"二号(dave@example.com)\"] == 7903"'
 run cca codex rename 二号 - >/dev/null 2>&1 </dev/null
 run cca router sync >/dev/null 2>&1
+# 办公室（App 的首页）要的两样：套餐档位（plan_tier：cca 按结构化的账号信息算，App 不按套餐名猜）和命令行会话的登记（cli）
+ok "_gui state：每个账号都有 cli（没有会话：不在运行、0 个、since_epoch 为 null）；alice（Max）的档位是 advanced；第三方 API 账号的档位是空的" 'jok "all(a[\"cli\"] == {\"running\": False, \"sessions\": 0, \"since_epoch\": None} for t in d[\"tools\"] for a in t[\"accounts\"]) and acct(0, \"alice@example.com\")[\"plan_tier\"] == \"advanced\" and all(a[\"plan_tier\"] == \"\" for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")" < "$GF/state.json"'
+waitmark() { local i; for i in $(seq 1 100); do [ "$(ls "$1"/cli-*.json 2>/dev/null | wc -l)" -ge "${2:-1}" ] && return 0; sleep 0.1; done; return 1; }   # 等账号目录里出现几份会话登记（默认 1 份）
+marks() { ls "$1"/cli-*.json 2>/dev/null | sed 's/.*cli-\([0-9]*\)\.json$/\1/'; }   # 登记的进程号，一行一个
+pstart() { python3 -I -c 'import os,subprocess,sys,time; s=subprocess.run(["ps","-o","lstart=","-p",sys.argv[1]],capture_output=True,text=True,env=dict(os.environ,LC_ALL="C")).stdout; print(int(time.mktime(time.strptime(" ".join(s.split()),"%a %b %d %H:%M:%S %Y"))))' "$1"; }   # 进程的启动时间戳（和 cca 一样的算法）
+mark() { python3 -I -c 'import json,sys,time; d,t,i,p,s=sys.argv[1:6]; json.dump({"v":1,"tool":t,"id":i,"pid":int(p),"started":int(s),"since":time.time()}, open("%s/cli-%s.json" % (d,p),"w"))' "$@"; }   # mark 账号目录 工具 账号目录名 进程号 启动时间戳：手写一份登记
+touch "$T/hold"; t0=$(date +%s)   # 假 claude / codex 在 hold 存在时一直不退出：会话开着
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SP1=$!
+waitmark "$AD"; mp=$(marks "$AD"); s1=$(snap)
+out=$(gj state); printf '%s' "$out" > "$GF/state_cli.json"
+ok "命令行会话：cca 启动 claude 前在账号目录登记 cli-<cca 的进程号>.json（只给自己读；记着工具、账号目录名、进程号和它的启动时间）" '[ -n "$mp" ] && [ "$(stat -f %Lp "$AD/cli-$mp.json")" = 600 ] && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j[\"v\"] == 1 and j[\"tool\"] == \"claude\" and j[\"id\"] == sys.argv[2] and j[\"pid\"] == int(sys.argv[3]) and j[\"started\"] == int(sys.argv[4]) and j[\"since\"] >= int(sys.argv[5]) - 1 else 1)" "$AD/cli-$mp.json" "${AD##*/}" "$mp" "$(pstart "$mp")" "$t0"'
+ok "_gui state：会话开着时 alice 的 cli 是在运行、1 个、从登记的时刻算起，别的账号都没有；读 state 不写文件" 'printf "%s" "$out" | jok "(lambda a: a[\"cli\"][\"running\"] is True and a[\"cli\"][\"sessions\"] == 1 and $t0 - 1 <= a[\"cli\"][\"since_epoch\"] <= $t0 + 60 and a[\"app\"][\"running\"] is False)(acct(0, \"alice@example.com\")) and sum(a[\"cli\"][\"sessions\"] for t in d[\"tools\"] for a in t[\"accounts\"]) == 1" && [ "$(snap)" = "$s1" ]'
+kill -HUP "$mp" 2>/dev/null; kill -TERM "$mp" 2>/dev/null; sleep 0.5
+ok "命令行会话：cca 收到 HUP、TERM（关终端、Ctrl-C）时等工具退出才收尾，登记还在" 'kill -0 "$mp" 2>/dev/null && [ -f "$AD/cli-$mp.json" ] && gj state | jok "acct(0, \"alice@example.com\")[\"cli\"][\"running\"] is True"'
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SP2=$!
+waitmark "$AD" 2; mp2=$(marks "$AD" | grep -vx "$mp")
+out=$(gj state)
+ok "_gui state：同一个账号开着两个会话：2 个，since_epoch 是先开的那个的登记时刻" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"cli\"][\"sessions\"] == 2 and acct(0, \"alice@example.com\")[\"cli\"][\"since_epoch\"] == tab(\"accounts/${AD##*/}/cli-$mp.json\")[\"since\"]"'
+pkill -KILL -P "$mp2"; wait "$SP2" 2>/dev/null
+ok "命令行会话：工具被 kill -9 时 cca 照样删掉自己的登记，另一个会话的还在" '[ -n "$mp2" ] && [ ! -e "$AD/cli-$mp2.json" ] && [ -f "$AD/cli-$mp.json" ] && gj state | jok "acct(0, \"alice@example.com\")[\"cli\"][\"sessions\"] == 1"'
+rm -f "$T/hold"; wait "$SP1"; rc=$?
+ok "命令行会话：工具退出后登记马上删掉（退出码照旧透传），state 里不在运行" '[ $rc -eq 3 ] && [ -z "$(ls "$AD"/cli-*.json 2>/dev/null)" ] && gj state | jok "acct(0, \"alice@example.com\")[\"cli\"] == {\"running\": False, \"sessions\": 0, \"since_epoch\": None}"'
+touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SP3=$!
+waitmark "$AD"; mp3=$(marks "$AD"); tp=$(pgrep -P "$mp3")
+kill -KILL "$mp3"; sleep 0.3; s2=$(snap); out=$(gj state)
+ok "命令行会话：cca 自己被 kill -9（来不及删登记）：state 核对出进程没了，不算在运行，也不删文件（只读）" '[ -f "$AD/cli-$mp3.json" ] && printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"cli\"][\"running\"] is False" && [ "$(snap)" = "$s2" ]'
+rm -f "$T/hold"; wait "$SP3" 2>/dev/null; for i in $(seq 1 50); do kill -0 "$tp" 2>/dev/null || break; sleep 0.1; done
+DEAD=$(sh -c 'echo $$'); mark "$AD" claude "${AD##*/}" "$DEAD" "$(date +%s)"   # 进程没了
+echo '{bad json' > "$AD/cli-4242.json"; mark "$AD" codex "${AD##*/}" 4243 "$(date +%s)"   # 格式坏的；别的工具的登记放错了地方
+sleep 300 & SL=$!; mark "$AD" claude "${AD##*/}" "$SL" $(( $(pstart "$SL") - 3600 ))   # 进程号被别的进程用了（启动时间对不上）
+out=$(gj state)
+ok "_gui state：对不上的旧登记（进程没了、格式坏、别的工具的、进程号被别的进程重用了）都不算在运行" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"cli\"][\"running\"] is False" && [ "$(ls "$AD"/cli-*.json | wc -l)" -ge 5 ]'
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
+ok "命令行会话：下一次启动这个账号时清掉对不上的旧登记（自己的登记也随退出删了）" '[ -z "$(ls "$AD"/cli-*.json 2>/dev/null)" ]'
+mark "$AD" claude "${AD##*/}" "$SL" "$(pstart "$SL")"
+ok "_gui state：进程号和启动时间都对得上的登记算在运行（对照）" 'gj state | jok "acct(0, \"alice@example.com\")[\"cli\"][\"sessions\"] == 1"'
+kill "$SL" 2>/dev/null; wait "$SL" 2>/dev/null; rm -f "$AD/cli-$SL.json"
+touch "$T/hold"; run CCA_TTY="$(ans)" cca codex @dave --version >/dev/null 2>&1 & SP4=$!
+waitmark "$DD"; mp4=$(marks "$DD"); out=$(gj state); printf '%s' "$out" > "$GF/state_cli_codex.json"
+ok "命令行会话：Codex 的会话登记在 Codex 的账号目录里，state 里算在 Codex 的 dave 上" '[ -n "$mp4" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"tool\"] == \"codex\" else 1)" "$DD/cli-$mp4.json" && printf "%s" "$out" | jok "acct(1, \"dave@example.com\")[\"cli\"][\"running\"] is True and sum(a[\"cli\"][\"sessions\"] for a in d[\"tools\"][0][\"accounts\"]) == 0"'
+rm -f "$T/hold"; wait "$SP4"
+ok "命令行会话：Codex 的会话退出后登记删掉" '[ -z "$(ls "$DD"/cli-*.json 2>/dev/null)" ]'
+# 套餐档位的表：Claude 改 alice 的 oauthAccount（种类;额度档位;官方套餐名;应为 套餐|档位），用量缓存先挪开（它的 subscription_type 会顶替空的种类）
+tier_of() { gj state | python3 -c 'import json,sys; a=next(a for a in json.load(sys.stdin)["tools"][int(sys.argv[1])]["accounts"] if a["key"] == sys.argv[2]); print(a["plan"] + "|" + a["plan_tier"])' "$1" "$2"; }
+cp "$AJ" "$T/alice.oa.bak"; [ ! -f "$AD/usage.json" ] || mv "$AD/usage.json" "$T/alice.usage.bak"; bad=""
+while IFS=';' read -r ot tr nm want; do
+	setoa "$AJ" "organizationType=$ot" "organizationRateLimitTier=$tr" "planDisplayName=$nm"
+	got=$(tier_of 0 alice@example.com); [ "$got" = "$want" ] || bad="$bad [${ot};${tr};${nm} → ${got}，应为 ${want}]"
+done <<'EOF'
+claude_free;;;Free|entry
+claude_pro;default_claude_ai;;Pro|standard
+claude_max;default_claude_max_5x;;Max|advanced
+claude_max;default_claude_max_20x;;Ultra|premium
+claude_team;default_claude_ai;;Team|standard
+claude_team;default_claude_max_5x;;Team Premium|advanced
+claude_enterprise;default_claude_ai;;Enterprise|standard
+claude_max;default_claude_max_20x;Ultra Plus;Ultra Plus|premium
+claude_max;default_claude_max_5x;Ultra;Ultra|advanced
+claude_max;;Ultra;Ultra|premium
+claude_max;;;Max|advanced
+claude_team;;Team Premium;Team Premium|advanced
+;;Ultra;Ultra|premium
+;;Max 20x;Max 20x|premium
+;;Team Premium;Team Premium|advanced
+;;Ultra Plus;Ultra Plus|
+claude_zeta;;Zeta Plan;Zeta Plan|
+EOF
+ok "套餐档位（Claude）：先看种类和额度倍数（Max 20x 起 premium、Team 5x 起 advanced），倍数缺失才看官方的套餐名，名字认不出就不猜；冲突时种类和倍数赢${bad}" '[ -z "$bad" ]'
+setoa "$AJ" organizationType=claude_max organizationRateLimitTier=default_claude_max_20x planDisplayName=Ultra; gj state > "$GF/state_tiers.json"
+setoa "$AJ" emailAddress=other@example.com
+ok "套餐档位：登录的不是这个账号时套餐和档位都是空的" '[ "$(tier_of 0 alice@example.com)" = "|" ]'
+cp "$T/alice.oa.bak" "$AJ"; [ ! -f "$T/alice.usage.bak" ] || mv "$T/alice.usage.bak" "$AD/usage.json"
+# ChatGPT：dave 的用量缓存里写原始套餐值（原始值;应为 套餐|档位）；最后一行是缓存里没有套餐，用登录信息里的（plus）
+[ ! -f "$DD/usage.json" ] || mv "$DD/usage.json" "$T/dave.usage.bak"; bad=""
+while IFS=';' read -r raw want; do
+	python3 -c 'import json,sys,time; json.dump({"fetchedAtMs": int(time.time() * 1000), "utilization": {"plan": sys.argv[2]} if sys.argv[2] else {}}, open(sys.argv[1], "w"))' "$DD/usage.json" "$raw"
+	got=$(tier_of 1 dave@example.com); [ "$got" = "$want" ] || bad="$bad [${raw} → ${got}，应为 ${want}]"
+done <<'EOF'
+free;Free|entry
+go;Go|entry
+plus;Plus|standard
+team;Business|standard
+business;Enterprise|standard
+edu;Edu|standard
+prolite;Pro 100|advanced
+pro;Pro 200|advanced
+PRO;Pro 200|advanced
+self_serve_business_prolite;Business Premium|advanced
+promax;Pro 500|premium
+zz_future;Zz_future|
+;Plus|standard
+EOF
+rm -f "$DD/usage.json"; [ ! -f "$T/dave.usage.bak" ] || mv "$T/dave.usage.bak" "$DD/usage.json"
+ok "套餐档位（ChatGPT）：按原始套餐值查表（Pro 100 / 200 是 advanced，Pro 500 是 premium），表里没有的新套餐不猜；用量缓存里没有套餐时用登录信息里的${bad}" '[ -z "$bad" ]'
+lint_tiers() {   # CODEX_TIERS 和 CODEX_PLANS 的键一一对应（OpenAI 加了新套餐，叫法和档位要一起补）
+	python3 -I - "$CCA" <<'PY'
+import ast, re, sys
+s = open(sys.argv[1], encoding='utf-8').read()
+g = lambda n: set(ast.literal_eval(re.search(r'^%s = (\{.*?\})\n' % n, s, re.S | re.M).group(1)))
+print('ok' if g('CODEX_PLANS') == g('CODEX_TIERS') else '：对不上 %s' % sorted(g('CODEX_PLANS') ^ g('CODEX_TIERS')))
+PY
+}
+lt=$(lint_tiers)
+ok "套餐档位：CODEX_TIERS 和 CODEX_PLANS 的套餐一一对应${lt#ok}" '[ "$lt" = ok ]'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码这一节 cca 的真实输出（macos/test.sh）" 'bash "$D/../macos/test.sh" "$GF" > "$T/contract.log" 2>&1'
 else

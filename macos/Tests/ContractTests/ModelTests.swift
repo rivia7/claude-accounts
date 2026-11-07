@@ -14,7 +14,7 @@ import Foundation
     check("演示模式不找 cca", m.isFixtureMode && m.ccaPath == nil)
     check("两个工具都显示", m.visibleTools == [.claude, .codex])
     check("版本不同要提示更新", m.versionMismatch)
-    check("默认选中上次用的账号", m.selection == .account(bobRef), "\(String(describing: m.selection))")
+    check("默认打开办公室（首页）", m.selection == .office, "\(String(describing: m.selection))")
     check("菜单栏标记（待同步、92%）", m.needsAttention)
     check("API 账号没有用量", m.usage(for: m.account(AccountRef(tool: .claude, key: "香港接口"))!) == nil)
     check("用缓存的用量", m.usage(for: m.account(bobRef)!)?.source == .cache)
@@ -40,6 +40,10 @@ import Foundation
     m.checkExit(bobRef)
     _ = await waitUntil { m.activity(bobRef) == nil }
     check("检测出口：提示里说共用出口", (m.toast?.text ?? "").contains("共用出口 IP：203.0.113.7"), m.toast?.text ?? "nil")
+    m.tool = .codex
+    check("办公室不随工具变（切工具只换侧栏的名册）", m.selection == .office)
+    m.show(bobRef)
+    check("点工位：打开账号页，侧栏的工具跟着换", m.selection == .account(bobRef) && m.tool == .claude)
     m.tool = .codex
     check("换到 ChatGPT 选中它的账号", m.selection == .account(frankRef))
     m.selection = .routing
@@ -251,7 +255,10 @@ import Foundation
     m7.shutdown()
     let m8 = makeModel(fixtureTransport(), prefs: prefs)
     await m8.start()
-    check("下次打开恢复上次选的账号", m8.selection == .account(carolRef), "\(String(describing: m8.selection))")
+    check("下次打开先看办公室", m8.selection == .office, "\(String(describing: m8.selection))")
+    m8.show(frankRef)
+    m8.tool = .claude
+    check("在账号页换回 Claude：选中上次看的账号", m8.selection == .account(carolRef), "\(String(describing: m8.selection))")
     m8.shutdown()
 }
 

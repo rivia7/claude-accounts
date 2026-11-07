@@ -71,13 +71,16 @@ enum Snapshot {
                 m.tool = .claude
                 m.selection = nil
             },
+            Scene(name: "office") { m in
+                m.selection = .office
+            },
         ]
         let only = Set((ProcessInfo.processInfo.environment["CCA_GUI_SNAPSHOT_SCENES"] ?? "")
             .split(separator: ",").map(String.init))
         let appearances: [(String, NSAppearance.Name)] = [("light", .aqua), ("dark", .darkAqua)]
         for scene in scenes where only.isEmpty || only.contains(scene.name) {
             scene.apply(model)
-            if scene.name == "routing" { model.refreshLive() }
+            if scene.name == "routing" || scene.name == "office" { model.refreshLive() }
             for (label, name) in appearances {
                 NSApp.appearance = NSAppearance(named: name)
                 try? await Task.sleep(nanoseconds: 900_000_000)
@@ -122,6 +125,16 @@ enum Snapshot {
             guide.tutorialShown = false
             try? await Task.sleep(nanoseconds: 600_000_000)
         }
+        // 工位画廊：每种状态 × 几种档位（调插画用，不依赖演示数据）
+        if only.isEmpty || only.contains("gallery") {
+            for (label, name) in appearances {
+                NSApp.appearance = NSAppearance(named: name)
+                let panel = galleryPanel(model: model, guide: guide)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                await capture(panel, to: dir.appendingPathComponent("gallery-\(label).png"))
+                panel.close()
+            }
+        }
         if only.isEmpty || only.contains("menubar") {
             model.tool = .claude
             for (label, name) in appearances {
@@ -165,6 +178,17 @@ enum Snapshot {
         return panel
     }
 
+    private static func galleryPanel(model: AppModel, guide: Guide) -> NSPanel {
+        let host = NSHostingView(rootView: DeskGallery().environment(model).environment(guide))
+        let fit = host.fittingSize
+        let panel = NSPanel(contentRect: NSRect(x: 40, y: 40, width: fit.width, height: fit.height),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.contentView = host
+        panel.backgroundColor = .windowBackgroundColor
+        panel.orderBack(nil)
+        return panel
+    }
+
     private static func capture(_ window: NSWindow, to url: URL) async {
         do {
             let content = try await SCShareableContent.currentProcess
@@ -185,6 +209,55 @@ enum Snapshot {
         } catch {
             FileHandle.standardError.write(Data("snapshot: \(url.lastPathComponent) 截图失败：\(error)\n".utf8))
         }
+    }
+}
+/// 工位画廊：一行一种档位（尊贵、进阶、标准、外包），一列一种状态。
+private struct DeskGallery: View {
+    private struct Look { let caption: String; let mood: Employee.Mood; let app: Bool; let sessions: Int }
+    private struct Tier { let caption: String; let plan: String; let tier: PlanTier; let api: Bool; let color: String }
+
+    private static let looks = [
+        Look(caption: "App + 命令行", mood: .working, app: true, sessions: 2), Look(caption: "命令行", mood: .working, app: false, sessions: 1),
+        Look(caption: "App", mood: .working, app: true, sessions: 0), Look(caption: "空闲", mood: .idle, app: false, sessions: 0),
+        Look(caption: "休息", mood: .resting(until: Date().timeIntervalSince1970 + 7800), app: false, sessions: 0),
+        Look(caption: "没登录", mood: .absent, app: false, sessions: 0),
+        Look(caption: "登错号", mood: .wrongPerson(loginEmail: "eve@example.com"), app: false, sessions: 0),
+        Look(caption: "端口不通", mood: .unwell(.portClosed), app: true, sessions: 0),
+        Look(caption: "选错节点", mood: .unwell(.wrongNode), app: false, sessions: 0),
+    ]
+    private static let tiers = [
+        Tier(caption: "尊贵", plan: "Ultra", tier: .premium, api: false, color: "#30A46C"),
+        Tier(caption: "进阶", plan: "Max", tier: .advanced, api: false, color: "#8E4EC6"),
+        Tier(caption: "标准", plan: "Pro", tier: .standard, api: false, color: "#0A84FF"),
+        Tier(caption: "外包", plan: "", tier: .unknown, api: true, color: ""),
+    ]
+
+    var body: some View {
+        let now = Date().timeIntervalSince1970
+        Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+            ForEach(Self.tiers, id: \.caption) { t in
+                GridRow {
+                    Text(t.caption).font(.caption.weight(.semibold))
+                    ForEach(Self.looks, id: \.caption) { l in
+                        VStack(spacing: 4) {
+                            DeskScene(employee: Self.employee(t, l, now: now), animate: false, now: now).frame(width: 168)
+                            Text(l.caption).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Surface.tile))
+                    }
+                }
+            }
+        }
+        .padding(16)
+    }
+
+    private static func employee(_ t: Tier, _ l: Look, now: Double) -> Employee {
+        var d: [String: Any] = ["key": t.api ? "接口" : "demo@example.com", "kind": t.api ? "api" : "oauth",
+                                "login": t.api ? "api" : "logged_in", "plan": t.plan, "plan_tier": t.tier.rawValue,
+                                "app": ["running": l.app], "cli": ["running": l.sessions > 0, "sessions": l.sessions, "since_epoch": now - 600]]
+        if !t.api { d["badge"] = ["label": "工", "color": t.color] }
+        return Employee(account: Account.sample(d), mood: l.mood, flags: [])
     }
 }
 #endif

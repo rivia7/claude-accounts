@@ -9,6 +9,7 @@ if fullMode {
     await rerunProtocolTests()
     await gateTests()
     textTests()
+    await officeTests()
     environmentTests()
     locatorTests()
     eventTailTests()

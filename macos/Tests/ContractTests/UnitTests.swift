@@ -160,6 +160,11 @@ func watcherTests() async {
         ("/Users/me/.cca/cm-abc123", nil), ("/Users/me/.cca/backup/clash-verge-x.yaml", nil),
         ("/Users/me/.cca/core/config.yaml", .core), ("/Users/me/.cca/core/nodes.json", nil), ("/Users/me/.cca/core/cache.db", nil),
         ("/Users/me/.cca/core/config.yaml.123.tmp", nil), ("/Users/me/.cca/accounts/a/core/config.yaml", nil),
+        // 命令行会话的登记：出现、消失都要重新读 state（办公室里谁在干活）
+        ("/Users/me/.cca/accounts/bob-1/cli-123.json", .state), ("/Users/me/.cca/codex/accounts/frank-1/cli-9.json", .state),
+        ("/Users/me/.cca/accounts/bob-1/cli-123.json.cca-9.tmp", nil), ("/Users/me/.cca/accounts/bob-1/claude/cli-1.json", nil),
+        ("/Users/me/.cca/accounts/bob-1/cli-x.json", nil), ("/Users/me/.cca/accounts/bob-1/cli-.json", nil),
+        ("/Users/me/.cca/cli-1.json", nil),
     ]
     var bad: [String] = []
     for (p, want) in cases where CcaWatcher.classify(path: p, homes: homes) != want { bad.append(p) }

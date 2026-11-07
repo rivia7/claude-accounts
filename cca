@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.8"
+VERSION="2.9.0-beta.9"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -482,6 +482,9 @@ class Tool:
     def plan(self, key, sub=None):
         return plan_label(oauth_of(key), sub)
 
+    def plan_tier(self, key, sub=None):
+        return claude_plan_tier(oauth_of(key), sub)
+
     def sync(self, key):
         claude_sync(key)
 
@@ -549,6 +552,9 @@ class CodexTool(Tool):
 
     def plan(self, key, sub=None):
         return codex_plan_label(sub or codex_claims(key).get('plan'))
+
+    def plan_tier(self, key, sub=None):
+        return codex_plan_tier(sub or codex_claims(key).get('plan'))
 
     def sync(self, key):
         pass
@@ -3990,15 +3996,43 @@ def plan_label(oa, sub=None):
     n = oa.get('planDisplayName')
     if isinstance(n, str) and PLAN_NAME_RE.match(n):
         return n
+    kind, x = claude_plan_parts(oa, sub)
+    if kind == 'max' and x == 20:
+        return 'Ultra'
+    if kind == 'team' and x == 5:
+        return 'Team Premium'
+    return {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}.get(kind, kind.capitalize()) or '—'
+
+
+def claude_plan_parts(oa, sub=None):
+    """(种类, 额度倍数)：种类是 organizationType 去掉 claude_（没有时用查询结果里的 subscription_type），倍数是
+    organizationRateLimitTier / userRateLimitTier 里的 Nx（没有是 0）。plan_label 和 claude_plan_tier 共用，免得各认各的"""
     t = str(oa.get('organizationType') or '').lower()
     kind = t[len('claude_'):] if t.startswith('claude_') else str(sub or '').lower()
     m = re.search(r'(\d+)x\b', '%s %s' % (oa.get('organizationRateLimitTier') or '', oa.get('userRateLimitTier') or ''))
-    x = m.group(1) if m else ''
-    if kind == 'max' and x == '20':
-        return 'Ultra'
-    if kind == 'team' and x == '5':
-        return 'Team Premium'
-    return {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}.get(kind, kind.capitalize()) or '—'
+    return kind, int(m.group(1)) if m else 0
+
+
+# Claude 套餐档位的名字表（planDisplayName 小写、合并空格、去掉开头的 claude 之后查）：只在种类和倍数不够判断时兜底
+CLAUDE_TIER_NAMES = {'free': 'entry', 'pro': 'standard', 'team': 'standard', 'enterprise': 'standard', 'max': 'advanced',
+                     'max 5x': 'advanced', 'team premium': 'advanced', 'ultra': 'premium', 'max 20x': 'premium'}
+
+
+def claude_plan_tier(oa, sub=None):
+    """套餐档位（_gui state 的 plan_tier）：entry / standard / advanced / premium，认不出是 ''（不猜）。先看种类和额度倍数
+    （官方改叫法不受影响，Claude Code 自己认 Max 20x、Team Premium 也靠它们），倍数缺失时才看 planDisplayName；
+    两边冲突时种类和倍数赢。倍数用 >=：以后出了更高的倍数也不会掉档"""
+    kind, x = claude_plan_parts(oa, sub)
+    named = CLAUDE_TIER_NAMES.get(re.sub(r'^claude ', '', ' '.join(str(oa.get('planDisplayName') or '').lower().split())), '')
+    if kind == 'free':
+        return 'entry'
+    if kind in ('pro', 'enterprise') or kind.startswith('edu'):
+        return 'standard'
+    if kind == 'max':
+        return 'premium' if (x >= 20 if x else named == 'premium') else 'advanced'
+    if kind == 'team':
+        return 'advanced' if (x >= 5 if x else named == 'advanced') else 'standard'
+    return named
 
 
 def usage_file(key):
@@ -4259,6 +4293,21 @@ def codex_plan_label(plan):
     """ChatGPT 的套餐：Plus、Pro 100 / 200 / 500、Business、Enterprise…；表里没有的新套餐只把首字母大写"""
     p = str(plan or '').strip().lower()
     return CODEX_PLANS.get(p, p.capitalize()) or '—'
+
+
+# ChatGPT 套餐的档位（_gui state 的 plan_tier），按原始值查（和 CODEX_PLANS 同一个来源）。键和 CODEX_PLANS 一一对应
+# （回归里有 lint）：OpenAI 加了新套餐，叫法和档位一起补；表里没有的是 ''（不猜）
+CODEX_TIERS = {
+    'free': 'entry', 'go': 'entry',
+    'plus': 'standard', 'team': 'standard', 'self_serve_business_usage_based': 'standard', 'business': 'standard',
+    'enterprise': 'standard', 'hc': 'standard', 'ent26': 'standard', 'enterprise_cbp_usage_based': 'standard',
+    'enterprise_cbp_automation': 'standard', 'edu': 'standard', 'education': 'standard', 'edu_plus': 'standard',
+    'edu_pro': 'standard', 'sci': 'standard', 'sci_plus': 'standard',
+    'prolite': 'advanced', 'pro': 'advanced', 'self_serve_business_prolite': 'advanced', 'promax': 'premium'}
+
+
+def codex_plan_tier(plan):
+    return CODEX_TIERS.get(str(plan or '').strip().lower(), '')
 
 
 def codex_probe(bin_):
@@ -4629,33 +4678,116 @@ def cmd_check_render(route=''):
                      ensure_ascii=False, indent=2))
 
 
-def gui_procs():
-    """在运行的进程 [(pid, 命令行)]：看各账号的桌面 App 开着没有（一次 ps，不用每个账号 pgrep 一次）"""
+# 命令行会话的登记（_gui state 的 cli）：run_account 启动 claude / codex 之前在账号目录写 cli-<cca 的进程号>.json，
+# 工具一退出就删（bash 的 session_close）。记 cca 的进程号和它的启动时间：进程号会被重用，启动时间对得上才是同一个进程
+CLI_MARK = re.compile(r'^cli-([0-9]+)\.json$')
+
+
+def lstart_epoch(s):
+    """ps 的 lstart（C 语言环境的写法：Sat Nov  7 12:08:55 2026，本地时间）换成时间戳；读不懂返回 0"""
+    try:
+        return int(time.mktime(time.strptime(' '.join(s.split()), '%a %b %d %H:%M:%S %Y')))
+    except (ValueError, OverflowError):
+        return 0
+
+
+def ps_rows(args, timeout, env=None):
+    """跑一次 ps（args 里第一列是 pid），返回 [(pid, 其余)]；ps 跑不了就是 []"""
     import subprocess
     try:
-        out = subprocess.run(['ps', '-axww', '-o', 'pid=,command='], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, timeout=10).stdout.decode('utf-8', 'replace')
+        out = subprocess.run(['ps'] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             timeout=timeout, env=env).stdout.decode('utf-8', 'replace')
     except (OSError, subprocess.SubprocessError):
         return []
-    procs = []
+    rows = []
     for l in out.splitlines():
-        pid, _, cmd = l.strip().partition(' ')
+        pid, _, rest = l.strip().partition(' ')
         if pid.isdigit():
-            procs.append((int(pid), cmd))
-    return procs
+            rows.append((int(pid), rest))
+    return rows
 
 
-def gui_account(c, k, v, procs, badges, pm, env, now):
-    """_gui state 里的一个账号（T 是它的工具）"""
+def proc_starts(pids):
+    """{进程号: 启动时间戳}（一次 ps -p）；已经没有的进程不在里面。lstart 的写法随 locale 变，固定成 C"""
+    pids = sorted({p for p in pids if isinstance(p, int) and p > 0})
+    if not pids:
+        return {}
+    rows = ps_rows(['-o', 'pid=,lstart=', '-p', ','.join(map(str, pids))], 5, env=dict(os.environ, LC_ALL='C', LANG='C'))
+    return {pid: t for pid, t in ((pid, lstart_epoch(s)) for pid, s in rows) if t}
+
+
+def cli_marks(key):
+    """账号目录里登记的命令行会话（只读）；格式、工具、账号目录名、进程号和文件名对不上的不算"""
+    d, aid, out = adir(key), acct_id(key), []
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return out
+    for n in names:
+        m = CLI_MARK.match(n)
+        j = load_quiet(os.path.join(d, n)) if m else None
+        if (isinstance(j, dict) and j.get('v') == 1 and j.get('tool') == T.name and j.get('id') == aid
+                and j.get('pid') == int(m.group(1)) and type(j.get('started')) is int
+                and isinstance(j.get('since'), (int, float))):
+            out.append(j)
+    return out
+
+
+def cli_alive(pid, started, starts):
+    s = starts.get(pid)
+    return s is not None and abs(s - started) <= 1   # lstart 只到秒
+
+
+def cli_view(marks, starts):
+    """_gui state 里账号的 cli：还在运行的会话有几个、最早那个从什么时候开始"""
+    live = [m for m in marks if cli_alive(m['pid'], m['started'], starts)]
+    return {'running': bool(live), 'sessions': len(live), 'since_epoch': min((m['since'] for m in live), default=None)}
+
+
+def cmd_session_open(key, pid):
+    """run_account 启动工具之前登记这次命令行会话：图形界面看到账号目录里的 cli-<进程号>.json 就知道这个账号在工作。
+    顺手清掉这个账号对不上的旧登记（cca 被 kill -9、断电留下的；_gui state 只读，不删）。问不到 cca 自己的启动时间就
+    不登记：宁可不显示，也不留核对不了的登记"""
+    pid, d, old = int(pid), adir(key), {}
+    try:
+        for n in os.listdir(d):
+            m = CLI_MARK.match(n)
+            if m:
+                old[int(m.group(1))] = os.path.join(d, n)
+    except OSError:
+        return
+    starts = proc_starts(set(old) | {pid})
+    if pid not in starts:
+        return
+    for p, path in old.items():
+        j = load_quiet(path)
+        if p == pid or not (isinstance(j, dict) and type(j.get('started')) is int and cli_alive(p, j['started'], starts)):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    save_json(os.path.join(d, 'cli-%d.json' % pid),
+              {'v': 1, 'tool': T.name, 'id': acct_id(key), 'pid': pid, 'started': starts[pid], 'since': time.time()}, 0o600)
+
+
+def gui_procs():
+    """在运行的进程 [(pid, 命令行)]：看各账号的桌面 App 开着没有（一次 ps，不用每个账号 pgrep 一次）"""
+    return ps_rows(['-axww', '-o', 'pid=,command='], 10)
+
+
+def gui_account(c, k, v, procs, badges, pm, env, now, cli):
+    """_gui state 里的一个账号（T 是它的工具）；cli 是 cli_view 的结果"""
     a, e = parse_key(k)
     api = is_api(v)
     port = T.state(c)['ports'].get(k)
     slot = port - FIRST_PORT + 1 if port else None
     login = 'api' if api else login_code(k)
     usage = plan = None
+    tier = ''
     if not api and login == 'logged_in':
         x = usage_cached(k)
-        plan = T.plan(k, (x['rl'].get('plan') if x else None) or None)
+        sub = (x['rl'].get('plan') if x else None) or None
+        plan, tier = T.plan(k, sub), T.plan_tier(k, sub)
         if x:
             usage = usage_entry(usage_row(k, plan, source='cache', at=x['at'], rl=x['rl']), now)
     desk = os.path.join(adir(k), 'desktop')
@@ -4677,13 +4809,13 @@ def gui_account(c, k, v, procs, badges, pm, env, now):
     b = badges.get(k)
     return {'key': k, 'id': acct_id(k), 'alias': a, 'email': e, 'name': name_of(k), 'label': label_of(k),
             'kind': 'api' if api else 'oauth', 'login': login, 'login_email': '' if api else email_of(k),
-            'plan': '' if not plan or plan == '—' else plan,
+            'plan': '' if not plan or plan == '—' else plan, 'plan_tier': tier if plan and plan != '—' else '',
             'node': node_of(v) or None, 'port': port, 'slot': slot, 'group': 'CCA-%d' % slot if slot else None,
             'pinned': bool(not api and e and e.lower() in pm), 'pinned_node': pm.get(e.lower()) if not api and e else None,
             'is_last': k == T.state(c).get('last'),
             'api': {'host': api_host(v), 'model': v.get('model') or ''} if api else None,
             'badge': {'label': b[0], 'color': b[1]} if b else None,
-            'app': {'running': pid is not None, 'pid': pid},
+            'app': {'running': pid is not None, 'pid': pid}, 'cli': cli,
             'can': {x: x not in why for x in ('app', 'web', 'usage', 'check')}, 'can_why': why,
             'usage': usage, 'health': health_view(k, v, now)}
 
@@ -4758,7 +4890,10 @@ def cmd_gui_state():
                 pm = policy_map(tool, c)
                 entry['errors'] = [{'code': 'table_invalid', 'message': m} for m in ERRS.get(tool.name, [])]
                 entry['last'] = T.state(c).get('last') or None
-                entry['accounts'] = [gui_account(c, k, v, procs, badges, pm, env, now) for k, v in t.items()]
+                marks = {k: cli_marks(k) for k in t}
+                starts = proc_starts({m['pid'] for ms in marks.values() for m in ms})   # 没有登记时不跑 ps
+                entry['accounts'] = [gui_account(c, k, v, procs, badges, pm, env, now, cli_view(marks[k], starts))
+                                     for k, v in t.items()]
         out['tools'].append(entry)
     errors += [{'code': 'account_unreadable', 'tool': t, 'message': '%s 读不了或格式不对（当作没登录）' % p}
                for t, p in dict.fromkeys(RO_BAD)]
@@ -4872,7 +5007,7 @@ CMDS = {
     'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
     'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
     'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm, 'rename': cmd_rename,
-    'set-last': cmd_set_last, 'name': cmd_name, 'login-url': cmd_login_url,
+    'set-last': cmd_set_last, 'session-open': cmd_session_open, 'name': cmd_name, 'login-url': cmd_login_url,
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
@@ -7748,6 +7883,11 @@ cmd_check() {   # cca check [账号] [--json]：各账号的出口、纯净度�
 	return 0
 }
 
+# 命令行会话的登记（图形界面据此知道这个账号在工作，见 py session-open）：先 trap 再登记，工具一退出马上删（早于任何输出，
+# 关了终端写不了 stderr 也漏不掉）。登记不上也照常启动。cca 被 kill -9 留下的登记由下一次 session-open 清掉
+session_open() { py session-open "$ACC_KEY" "$$" >/dev/null 2>&1; return 0; }
+session_close() { rm -f "$ACC_DIR/cli-$$.json"; }
+
 run_account() {
 	local key="$1" rc e dropped
 	shift
@@ -7788,8 +7928,10 @@ run_account() {
 		else warn "已为本次启动屏蔽环境里继承的 ${DROPPED}（官方账号用它自己的登录；要换模型写进 ${TOOL_SETTINGS} 或用 /model）"; fi
 	fi
 	trap ':' INT TERM HUP
+	session_open
 	env "${UNSETS[@]}" "${SETS[@]}" "$TOOL_BIN" "${ACC_ARGS[@]}" "$@" 3<&-
 	rc=$?
+	session_close
 	trap - INT TERM HUP
 	py link "$key" >/dev/null || warn "退出后链接共享目录失败"
 	py sync "$key" >/dev/null || warn "退出后同步 .claude.json 失败"

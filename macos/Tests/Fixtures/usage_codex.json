@@ -2,7 +2,7 @@
   "version": 1, "kind": "usage", "generated_at": "2026-11-07T09:00:00Z", "generated_epoch": 1794042000.0,
   "accounts": [
     {
-      "account": "frank@example.com", "key": "frank@example.com", "email": "frank@example.com", "plan": "Pro",
+      "account": "frank@example.com", "key": "frank@example.com", "email": "frank@example.com", "plan": "Pro 500",
       "source": "live", "fetched_at": "2026-11-07T08:59:58Z", "fetched_epoch": 1794041998.0, "age_seconds": 2, "stale": false,
       "error": null, "error_code": null, "error_detail": null,
       "five_hour": {"utilization": 35.0, "resets_at": 1794049200, "resets_epoch": 1794049200.0, "reset": false},
