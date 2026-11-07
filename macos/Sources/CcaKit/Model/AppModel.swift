@@ -37,14 +37,11 @@ struct FailureInfo: Equatable, Identifiable {
 enum Sheet: Identifiable, Equatable {
     case handoff(Handoff)
     case failure(FailureInfo)
-    /// 改别名的弹层
-    case rename(AccountRef)
 
     var id: String {
         switch self {
         case .handoff(let h): return "handoff:" + h.id
         case .failure(let f): return "failure:" + f.id.uuidString
-        case .rename(let r): return "rename:" + r.tool.rawValue + ":" + r.key
         }
     }
 }
@@ -146,6 +143,7 @@ final class AppModel {
             case nil:
                 break
             }
+            if let e = aliasEditing, selection != .account(e) { cancelRename() }
             visibilityChanged(wasVisible: isVisible, wasRouting: oldValue == .routing && mainVisible)
         }
     }
@@ -602,16 +600,27 @@ final class AppModel {
 
     // MARK: 改别名
 
-    /// 改别名的弹层里显示的原因（cca 说的；弹层开着时才有）。
+    /// 正在直接改哪个账号的别名（账号页的名字变成输入框）；换到别的账号时自动放弃。
+    var aliasEditing: AccountRef?
+    /// 改别名时 cca 说的原因（写在输入框下面）。
     private(set) var renameError: String?
 
+    /// 开始改别名：选中这个账号，它的名字变成输入框。
     func beginRename(_ ref: AccountRef) {
         renameError = nil
-        present(.rename(ref))
+        if tool != ref.tool { tool = ref.tool }
+        selection = .account(ref)
+        aliasEditing = ref
+        hooks.showMainWindow()
     }
 
-    /// 改别名（`cca [codex] rename KEY 新别名`；新别名空着就去掉别名、只留邮箱）。成功后关掉弹层、选中改名后的账号
-    /// （新的键是 cca 打在 stdout 上的，App 不自己拼）；cca 说不行时把原因留在弹层里，弹层不关。
+    func cancelRename() {
+        aliasEditing = nil
+        renameError = nil
+    }
+
+    /// 改别名（`cca [codex] rename KEY 新别名`；新别名空着就去掉别名、只留邮箱）。成功后输入框收起、选中改名后的账号
+    /// （新的键是 cca 打在 stdout 上的，App 不自己拼）；cca 说不行时把原因写在输入框下面，接着改。
     func rename(_ ref: AccountRef, to alias: String) {
         guard phase == .ready, let client, activities[ref] == nil else { return }
         let wanted = alias.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -626,14 +635,14 @@ final class AppModel {
             case .success:
                 let out = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self)
                 let newKey = nonEmpty(out.split(whereSeparator: \.isNewline).last.map(String.init)) ?? ref.key
-                if self.sheet == .rename(ref) { self.sheet = nil }
                 await self.loadState()
+                self.aliasEditing = nil
                 if self.selection == .account(ref) { self.selection = .account(AccountRef(tool: ref.tool, key: newKey)) }
                 self.showToast(newKey == ref.key ? "别名没有变" : "已改名：登录、资料和端口都不变", .success)
             case .failed(let f) where f.reason == .command:
                 self.renameError = nonEmpty(f.message) ?? "没能改名"
             default:
-                if self.sheet == .rename(ref) { self.sheet = nil }
+                self.aliasEditing = nil
                 self.finish(r, failureTitle: "没能改名", success: "已改名")
             }
         }

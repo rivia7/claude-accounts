@@ -95,19 +95,15 @@ enum Snapshot {
             }
             guide.toggleDetails()
         }
-        // 改别名的弹层
+        // 直接改别名：名字变成输入框
         if only.isEmpty || only.contains("rename"), let ref = first(.claude, { $0.login == .loggedIn && !$0.isAPI }) {
-            model.tool = .claude
-            model.selection = .account(ref)
             model.beginRename(ref)
             for (label, name) in appearances {
                 NSApp.appearance = NSAppearance(named: name)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if let sheet = window.attachedSheet {
-                    await capture(sheet, to: dir.appendingPathComponent("rename-\(label).png"))
-                }
+                await capture(window, to: dir.appendingPathComponent("rename-\(label).png"))
             }
-            model.dismissSheet()
+            model.cancelRename()
             try? await Task.sleep(nanoseconds: 600_000_000)
         }
         // 卡片教程：每一步截一张弹层（浅色、深色）

@@ -68,31 +68,60 @@ final class Guide {
 
 // MARK: 卡片教程
 
-/// 教程的一张卡片：上面一幅小图，下面标题和两三句话。
+/// 教程的一张卡片：上面一幅小图（用 App 里真实的部件画），下面标题和几条带图标的要点。
 struct TutorialCard {
     let title: String
-    let body: String
+    let points: [(String, String)]
     let art: Art
 
-    enum Art { case fan, open, quota, route }
+    enum Art { case fan, sidebar, open, quota, route, map, rename, menubar }
 
     static let all: [TutorialCard] = [
-        TutorialCard(title: "一台 Mac，好几个账号",
-                     body: "cca 帮你同时用好几个 Claude、ChatGPT 账号。每个账号走自己的网络出口、用自己的登录资料，互不串号。",
-                     art: .fan),
-        TutorialCard(title: "打开一个账号",
-                     body: "在左边选一个账号，点「打开 Claude App」。cca 会先检查出口，再用这个账号自己的资料打开；也可以点「网页版」。菜单栏上的 cca 图标里也能一键打开。",
-                     art: .open),
-        TutorialCard(title: "看额度还剩多少",
-                     body: "每个账号有「5 小时」和「本周」两个额度。快用完时会变橙、变红，到了重置时间自动恢复。左边列表里的两根小条就是它们。",
-                     art: .quota),
-        TutorialCard(title: "出口和分流",
-                     body: "每个账号经路由器（或这台 Mac 上的 Clash）连到自己的节点，出口 IP 也就各不相同。「节点分流」页能看到是不是都连对了，连错时点「同步路由器」就能修好。第一次用某个账号，先点「检测出口」看看。",
-                     art: .route),
+        TutorialCard(title: "一台 Mac，好几个账号", points: [
+            ("person.2", "同时管好几个 Claude、ChatGPT 账号，左边按工具分开列出。"),
+            ("point.3.connected.trianglepath.dotted", "每个账号走自己的网络出口（节点），互不串号。"),
+            ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
+        ], art: .fan),
+        TutorialCard(title: "左边是你的账号", points: [
+            ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
+            ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
+            ("circle.fill", "头像右下角有绿点，说明这个账号的 App 正开着。"),
+            ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、检测出口、改别名。"),
+        ], art: .sidebar),
+        TutorialCard(title: "打开一个账号", points: [
+            ("macwindow", "点「打开 Claude App」：用这个账号自己的出口和资料打开。"),
+            ("safari", "点「网页版」：在它专属的 Chrome 资料里打开网页版。"),
+            ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
+        ], art: .open),
+        TutorialCard(title: "看额度还剩多少", points: [
+            ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两个额度，各一块。"),
+            ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
+            ("arrow.clockwise", "点「刷新用量」，经这个账号的出口查一次最新的。"),
+        ], art: .quota),
+        TutorialCard(title: "看网络出口", points: [
+            ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
+            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：出口在哪、干不干净、有没有泄露。"),
+            ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
+        ], art: .route),
+        TutorialCard(title: "节点分流", points: [
+            ("wifi.router", "「节点分流」页画出每个账号经路由器连到哪个节点。"),
+            ("line.diagonal", "实线是正常的；虚线说明选错了节点或者连不上。"),
+            ("arrow.triangle.2.circlepath", "有问题时点「同步路由器」就能修好（要重载路由器时会先问你）。"),
+        ], art: .map),
+        TutorialCard(title: "改别名、换外观", points: [
+            ("pencil", "直接点账号页上的名字就能改别名：回车保存，Esc 取消。"),
+            ("circle.lefthalf.filled", "左下角的按钮切换浅色、深色，或者跟随系统。"),
+            ("plus", "添加账号、配置路由器：点工具栏的「＋」，在终端里按提示完成。"),
+        ], art: .rename),
+        TutorialCard(title: "菜单栏和帮助", points: [
+            ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。"),
+            ("lightbulb", "页面上的提示卡片讲这一页怎么看，看懂了点「知道了」。"),
+            ("book", "想再看一遍这个教程：点左下角的「新手教程」，或者工具栏的问号。"),
+        ], art: .menubar),
     ]
 }
 
-/// 卡片教程（弹层）：一步一张，下面是第几步的点、上一步 / 下一步；第一张可以跳过，最后一张是“开始使用”。
+/// 卡片教程（弹层）：一步一张；下面的小圆点能直接点到任意一张；第一张可以跳过，最后一张能“从头再看”或“开始使用”。
 struct TutorialSheet: View {
     @Environment(Guide.self) private var guide
 
@@ -100,41 +129,60 @@ struct TutorialSheet: View {
         let cards = TutorialCard.all
         let i = min(max(guide.step, 0), cards.count - 1)
         let card = cards[i]
+        let last = i == cards.count - 1
         VStack(spacing: 0) {
             TutorialArt(art: card.art)
                 .frame(maxWidth: .infinity)
-                .frame(height: 200)
+                .frame(height: 196)
                 .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Surface.tile))
                 .padding([.horizontal, .top], 24)
                 .id(i)
                 .transition(.opacity)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("\(i + 1) / \(cards.count)")
-                    .font(.caption.weight(.medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Text(card.title)
-                    .font(.title2.weight(.semibold))
-                Text(card.body)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("第 \(i + 1) 步，共 \(cards.count) 步")
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(card.title).font(.title2.weight(.semibold))
+                }
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(card.points.indices, id: \.self) { k in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Image(systemName: card.points[k].0)
+                                .font(.callout.weight(.semibold))
+                                // “App 开着”的绿点照真实的样子画成绿色，其它要点用强调色
+                                .foregroundStyle(card.points[k].0 == "circle.fill" ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tint))
+                                .frame(width: 20)
+                            Text(card.points[k].1)
+                                .font(.body)
+                                .foregroundStyle(.primary.opacity(0.85))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 28)
             .padding(.top, 18)
-            Spacer(minLength: 12)
+            Spacer(minLength: 10)
             HStack(spacing: 10) {
-                PageDots(count: cards.count, current: i)
+                PageDots(count: cards.count, current: i) { guide.step = $0 }
                 Spacer()
-                if i == 0 {
+                if last {
+                    Button {
+                        guide.step = 0
+                    } label: {
+                        Label("从头再看", systemImage: "arrow.counterclockwise")
+                    }
+                } else if i == 0 {
                     Button("跳过") { guide.finishTutorial() }
                         .keyboardShortcut(.cancelAction)
-                } else {
+                }
+                if i > 0 {
                     Button("上一步") { guide.step = i - 1 }
                 }
-                Button(i == cards.count - 1 ? "开始使用" : "下一步") {
-                    if i == cards.count - 1 { guide.finishTutorial() } else { guide.step = i + 1 }
+                Button(last ? "开始使用" : "下一步") {
+                    if last { guide.finishTutorial() } else { guide.step = i + 1 }
                 }
                 .buttonStyle(.glassProminent)
                 .keyboardShortcut(.defaultAction)
@@ -143,27 +191,37 @@ struct TutorialSheet: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 22)
         }
-        .frame(width: 560, height: 460)
+        .frame(width: 600, height: 512)
         .animation(.snappy(duration: 0.25), value: guide.step)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("新手教程，第 \(i + 1) 步，共 \(cards.count) 步")
+        .accessibilityLabel("新手教程，第 \(i + 1) 步，共 \(cards.count) 步：\(card.title)")
     }
 }
 
-/// 第几步的点。
+/// 第几步的点：现在这一步是一根短条；点哪个点就跳到哪一步。
 struct PageDots: View {
     let count: Int
     let current: Int
+    let select: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(0..<count, id: \.self) { i in
-                Capsule()
-                    .fill(i == current ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
-                    .frame(width: i == current ? 18 : 7, height: 7)
+                Button {
+                    select(i)
+                } label: {
+                    Capsule()
+                        .fill(i == current ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
+                        .frame(width: i == current ? 18 : 7, height: 7)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("第 \(i + 1) 步")
+                .accessibilityLabel("第 \(i + 1) 步")
             }
         }
-        .accessibilityHidden(true)
     }
 }
 
@@ -171,19 +229,50 @@ struct PageDots: View {
 struct TutorialArt: View {
     let art: TutorialCard.Art
 
-    private static let sample: [(String, UInt32)] = [("工", 0x30A46C), ("C", 0x8E4EC6), ("F", 0x0A84FF)]
+    private static let sample: [(String, UInt32, String)] = [("工", 0x30A46C, "工作"), ("C", 0x8E4EC6, "carol"), ("F", 0x0A84FF, "frank")]
 
     var body: some View {
         Group {
             switch art {
             case .fan: fanArt
+            case .sidebar: sidebarArt
             case .open: openArt
             case .quota: quotaArt
             case .route: routeArt
+            case .map: mapArt
+            case .rename: renameArt
+            case .menubar: menubarArt
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private func color(_ k: Int) -> Color { Color(hex: Self.sample[k].1) }
+
+    private func avatar(_ k: Int, size: CGFloat) -> some View {
+        ZStack {
+            Circle().fill(color(k))
+            Text(Self.sample[k].0)
+                .font(.system(size: size * 0.44, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+        }
+        .frame(width: size, height: size)
+    }
+
+    /// 一块白底的小卡片
+    private func panel<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.background))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Surface.hairline, lineWidth: 0.5))
+    }
+
+    private func curve(_ a: CGPoint, _ b: CGPoint) -> Path {
+        var p = Path()
+        p.move(to: a)
+        let mid = a.x + (b.x - a.x) * 0.55
+        p.addCurve(to: b, control1: CGPoint(x: mid, y: a.y), control2: CGPoint(x: mid, y: b.y))
+        return p
     }
 
     /// 这台 Mac 分出三条线，各连一个账号（和 App 图标同一个样子）。
@@ -194,15 +283,10 @@ struct TutorialArt: View {
             let ends = [CGPoint(x: w * 0.68, y: h * 0.24), CGPoint(x: w * 0.72, y: h * 0.5), CGPoint(x: w * 0.68, y: h * 0.76)]
             ZStack {
                 ForEach(0..<3, id: \.self) { k in
-                    Path { p in
-                        p.move(to: hub)
-                        let mid = hub.x + (ends[k].x - hub.x) * 0.55
-                        p.addCurve(to: ends[k], control1: CGPoint(x: mid, y: hub.y), control2: CGPoint(x: mid, y: ends[k].y))
-                    }
-                    .stroke(Color(hex: Self.sample[k].1), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    curve(hub, ends[k]).stroke(color(k), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 }
                 Image(systemName: "laptopcomputer")
-                    .font(.system(size: 30, weight: .regular))
+                    .font(.system(size: 30))
                     .foregroundStyle(.secondary)
                     .padding(10)
                     .background(Circle().fill(.background))
@@ -214,9 +298,55 @@ struct TutorialArt: View {
         }
     }
 
-    /// 一行账号和“打开 Claude App”按钮。
+    /// 侧栏的样子：三个账号，名字右边两根小条，开着 App 的有绿点。
+    private var sidebarArt: some View {
+        panel {
+            VStack(spacing: 2) {
+                sidebarRow(0, sub: "Max · US-B", five: 92, week: 41, running: true, selected: true)
+                sidebarRow(1, sub: "未登录 · US-C", five: nil, week: nil, running: false, selected: false)
+                sidebarRow(2, sub: "ChatGPT Pro · US-A", five: 35, week: 76, running: false, selected: false)
+            }
+            .padding(8)
+        }
+        .frame(width: 330)
+    }
+
+    private func sidebarRow(_ k: Int, sub: String, five: Double?, week: Double?, running: Bool, selected: Bool) -> some View {
+        HStack(spacing: 9) {
+            avatar(k, size: 28)
+                .overlay(alignment: .bottomTrailing) {
+                    if running { RunningDot(size: 9).offset(x: 1, y: 1) }
+                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.sample[k].2).font(.callout.weight(.medium))
+                Text(sub).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 6)
+            if let five, let week {
+                VStack(alignment: .trailing, spacing: 4) {
+                    miniBar("5h", five)
+                    miniBar("周", week)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(selected ? Color.primary.opacity(0.07) : .clear))
+    }
+
+    private func miniBar(_ label: String, _ pct: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+            Meter(fraction: pct / 100, color: Palette.usage(percent: pct), height: 3).frame(width: 28)
+            Text("\(Int(pct))%").font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(UsageLevel(percent: pct) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(Palette.usage(percent: pct)))
+                .frame(width: 28, alignment: .trailing)
+        }
+    }
+
+    /// 一行账号和“打开 Claude App”“网页版”按钮。
     private var openArt: some View {
-        VStack(spacing: 14) {
+        panel {
             HStack(spacing: 10) {
                 avatar(0, size: 34)
                 VStack(alignment: .leading, spacing: 2) {
@@ -234,20 +364,18 @@ struct TutorialArt: View {
                     .font(.callout)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Capsule().fill(.background))
-                    .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 0.5))
+                    .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 1))
             }
             .padding(14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.background))
-            .frame(maxWidth: 440)
         }
+        .frame(maxWidth: 460)
         .padding(.horizontal, 24)
     }
 
     /// 两块额度：5 小时快用完了（红），本周还早（绿）。
     private var quotaArt: some View {
         HStack(spacing: 12) {
-            miniTile("5 小时", 92, "2 小时后恢复")
+            miniTile("5 小时", 92, "2 小时后重置")
             miniTile("本周", 41, "周二 16:00 重置")
         }
         .padding(.horizontal, 32)
@@ -255,40 +383,161 @@ struct TutorialArt: View {
 
     private func miniTile(_ title: String, _ pct: Double, _ reset: String) -> some View {
         let color = Palette.usage(percent: pct)
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline, spacing: 1) {
-                Text("\(Int(pct))").font(.system(size: 28, weight: .semibold).monospacedDigit())
-                Text("%").font(.system(size: 15, weight: .semibold))
+        return panel {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 1) {
+                    Text("\(Int(pct))").font(.system(size: 28, weight: .semibold).monospacedDigit())
+                    Text("%").font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundStyle(UsageLevel(percent: pct) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
+                Meter(fraction: pct / 100, color: color, height: 6)
+                Text(reset).font(.caption).foregroundStyle(.secondary)
             }
-            .foregroundStyle(UsageLevel(percent: pct) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
-            Meter(fraction: pct / 100, color: color, height: 6)
-            Text(reset).font(.caption).foregroundStyle(.secondary)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.background))
     }
 
-    /// 一条线路：这台 Mac → 路由器 → 节点 → 出口。
+    /// 一条线路（这台 Mac → 节点 → 出口）和检测结果的小标签。
     private var routeArt: some View {
-        var stops = [RouteStop(id: 0, mark: .origin, title: "这台 Mac"), RouteStop(id: 1, title: "路由器"),
-                     RouteStop(id: 2, title: "US-B"), RouteStop(id: 3, mark: .end, title: "出口 IP")]
-        stops[1].detail = "这个账号的端口"
-        stops[2].detail = "节点"
-        stops[3].detail = "美国 · 纯净度 97"
-        return RouteStrip(stops: stops, color: Color(hex: Self.sample[0].1))
-            .padding(.horizontal, 20)
+        var stops = [RouteStop(id: 0, mark: .origin, title: "这台 Mac"), RouteStop(id: 2, title: "US-B"),
+                     RouteStop(id: 3, mark: .end, title: "203.0.113.7")]
+        stops[1].detail = "经路由器"
+        stops[2].detail = "美国"
+        return VStack(spacing: 18) {
+            RouteStrip(stops: stops, color: color(0))
+            HStack(spacing: 6) {
+                Tag(text: "纯净度 97 · 极度纯净", color: .green)
+                Tag(text: "DNS 无泄露", color: .green)
+                Tag(text: "WebRTC 无泄露", color: .green)
+            }
+        }
+        .padding(.horizontal, 28)
     }
 
-    private func avatar(_ k: Int, size: CGFloat) -> some View {
-        ZStack {
-            Circle().fill(Color(hex: Self.sample[k].1))
-            Text(Self.sample[k].0)
-                .font(.system(size: size * 0.44, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+    /// 分流图的样子：三个账号 → 路由器 → 两个节点；有一条选错了节点（橙色虚线）。
+    private var mapArt: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height
+            let ys = [h * 0.24, h * 0.5, h * 0.76]
+            let acc = w * 0.16, routerL = w * 0.4, routerR = w * 0.58, node = w * 0.8
+            let nodeY = [h * 0.36, h * 0.68]
+            ZStack {
+                ForEach(0..<3, id: \.self) { k in
+                    Path { p in p.move(to: CGPoint(x: acc + 18, y: ys[k])); p.addLine(to: CGPoint(x: routerL, y: ys[k])) }
+                        .stroke(color(k), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                }
+                curve(CGPoint(x: routerR, y: ys[0]), CGPoint(x: node - 34, y: nodeY[0]))
+                    .stroke(color(0), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                curve(CGPoint(x: routerR, y: ys[1]), CGPoint(x: node - 34, y: nodeY[1]))
+                    .stroke(Color.orange, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [5, 5]))
+                curve(CGPoint(x: routerR, y: ys[2]), CGPoint(x: node - 34, y: nodeY[1]))
+                    .stroke(color(2), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Surface.tile)
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Surface.hairline, lineWidth: 0.5))
+                    .frame(width: routerR - routerL, height: h * 0.78)
+                    .overlay(alignment: .top) {
+                        Label("路由器", systemImage: "wifi.router").font(.caption2.weight(.semibold)).padding(.top, 6)
+                    }
+                    .position(x: (routerL + routerR) / 2, y: h * 0.5)
+                ForEach(0..<3, id: \.self) { k in
+                    Capsule().fill(.background)
+                        .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 0.5))
+                        .overlay(Circle().fill(k == 1 ? Color.orange : .green).frame(width: 6, height: 6))
+                        .frame(width: 30, height: 16)
+                        .position(x: (routerL + routerR) / 2, y: ys[k])
+                    avatar(k, size: 30).position(x: acc, y: ys[k])
+                }
+                ForEach(0..<2, id: \.self) { j in
+                    Text(j == 0 ? "US-B" : "US-A")
+                        .font(.callout.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.background))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Surface.hairline, lineWidth: 0.5))
+                        .position(x: node, y: nodeY[j])
+                }
+            }
         }
-        .frame(width: size, height: size)
+    }
+
+    /// 改别名（名字变成输入框）和外观按钮。
+    private var renameArt: some View {
+        VStack(spacing: 18) {
+            HStack(spacing: 12) {
+                avatar(0, size: 40)
+                HStack(spacing: 0) {
+                    Text("主号").font(.system(size: 20, weight: .semibold))
+                    Rectangle().fill(Color.accentColor).frame(width: 2, height: 22)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .frame(width: 180, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.background))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 1.5))
+                Image(systemName: "checkmark").foregroundStyle(.secondary)
+                Image(systemName: "xmark").foregroundStyle(.secondary)
+            }
+            HStack(spacing: 0) {
+                ForEach(AppearanceMode.allCases) { m in
+                    Label(m.title, systemImage: m.symbol)
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(m == .dark ? Color.primary.opacity(0.1) : .clear))
+                }
+            }
+            .padding(3)
+            .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 0.5))
+        }
+    }
+
+    /// 菜单栏上的 cca 图标和它弹出的面板。
+    private var menubarArt: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Spacer()
+                Image(systemName: "wifi").font(.caption)
+                BrandMark(size: 18)
+                    .padding(3)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.12)))
+                Image(systemName: "battery.75percent").font(.caption)
+                Text("10:24").font(.caption.monospacedDigit())
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .background(Rectangle().fill(.background.opacity(0.7)))
+            HStack {
+                Spacer()
+                panel {
+                    VStack(spacing: 8) {
+                        menuRow(0, five: 92)
+                        menuRow(2, five: 35)
+                    }
+                    .padding(10)
+                }
+                .frame(width: 260)
+                .padding(.trailing, 60)
+                .padding(.top, 8)
+            }
+            Spacer(minLength: 0)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func menuRow(_ k: Int, five: Double) -> some View {
+        HStack(spacing: 8) {
+            avatar(k, size: 24)
+            Text(Self.sample[k].2).font(.callout.weight(.medium))
+            Spacer()
+            miniBar("5h", five)
+            Text("打开").font(.caption.weight(.medium))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 1))
+        }
     }
 }
 

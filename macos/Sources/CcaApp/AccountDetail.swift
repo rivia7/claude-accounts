@@ -85,23 +85,7 @@ struct DetailHeader: View {
                     }
                 }
             VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(a.displayName)
-                        .font(.system(size: 24, weight: .semibold))
-                        .lineLimit(1)
-                        .textSelection(.enabled)
-                    Button {
-                        model.beginRename(a.ref)
-                    } label: {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(model.activity(a.ref) != nil)
-                    .help("改别名（登录、资料和端口都不变）")
-                    .accessibilityLabel("改别名")
-                }
+                AliasTitle(account: a)
                 if let sub = secondaryIdentity(a) {
                     Text(sub)
                         .font(.callout)
@@ -220,5 +204,121 @@ extension View {
         } else {
             self.buttonStyle(.glass)
         }
+    }
+}
+
+/// 账号页的名字：直接点一下就能改别名（就地变成输入框，回车保存、Esc 取消）。悬停时露出淡淡的底色和笔。
+struct AliasTitle: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+    private let hover = State(initialValue: false)
+
+    var body: some View {
+        let a = account
+        if model.aliasEditing == a.ref {
+            InlineAliasEditor(account: a)
+        } else {
+            let on = hover.wrappedValue && model.activity(a.ref) == nil
+            Button {
+                model.beginRename(a.ref)
+            } label: {
+                HStack(spacing: 8) {
+                    Text(a.displayName)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Image(systemName: "pencil")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .opacity(on ? 1 : 0.4)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(on ? 0.06 : 0)))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, -6)
+            .onHover { hover.wrappedValue = $0 }
+            .disabled(model.activity(a.ref) != nil)
+            .help("点一下改别名（登录、资料和端口都不变）")
+            .accessibilityLabel("\(a.displayName)，点一下改别名")
+        }
+    }
+}
+
+/// 改别名的输入框：回车或 ✓ 保存（交给 cca rename，规则由 cca 判断），Esc 或 ✕ 取消；cca 说不行时原因写在下面，接着改。
+struct InlineAliasEditor: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+    /// 输入框的内容（命令行工具编不了 @State 宏：State 类型直接用，照样是视图的状态）
+    private let draft: State<String>
+    @FocusState private var focused: Bool
+
+    init(account: Account) {
+        self.account = account
+        draft = State(initialValue: InlineAliasEditor.currentAlias(account))
+    }
+
+    static func currentAlias(_ a: Account) -> String {
+        nonEmpty(a.alias) ?? (a.isAPI ? a.key : "")
+    }
+
+    var body: some View {
+        let a = account
+        let busy = model.activity(a.ref) != nil
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                TextField(a.isAPI ? "别名" : "别名（空着就只用邮箱）", text: draft.projectedValue)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 22, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .frame(width: 280)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.background))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(model.renameError == nil ? Color.accentColor : Color.red, lineWidth: 1.5))
+                    .focused($focused)
+                    .disabled(busy)
+                    .onSubmit { save() }
+                    .onExitCommand { model.cancelRename() }
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button { save() } label: { Image(systemName: "checkmark") }
+                        .buttonStyle(.borderless)
+                        .help("保存（回车）")
+                        .accessibilityLabel("保存别名")
+                    Button { model.cancelRename() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless)
+                        .help("取消（Esc）")
+                        .accessibilityLabel("取消改名")
+                }
+            }
+            if let e = model.renameError {
+                Label(e, systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else {
+                Text(a.isAPI ? "回车保存，Esc 取消。最多 12 个汉字或 24 个字母，不能有空格、引号、括号、反斜杠或 @。"
+                     : "回车保存，Esc 取消。最多 12 个汉字或 24 个字母，不能有空格、引号、括号、反斜杠或 @；空着就只用邮箱。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear { DispatchQueue.main.async { focused = true } }
+    }
+
+    private func save() {
+        let text = draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard model.activity(account.ref) == nil else { return }
+        if text == InlineAliasEditor.currentAlias(account) {
+            model.cancelRename()
+            return
+        }
+        model.rename(account.ref, to: text)
     }
 }

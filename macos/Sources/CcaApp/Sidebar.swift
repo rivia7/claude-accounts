@@ -109,6 +109,7 @@ extension AppModel {
 
 struct SidebarFooter: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -127,6 +128,14 @@ struct SidebarFooter: View {
                 }
                 Text(statusText).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
                 Spacer(minLength: 4)
+                Button {
+                    guide.openTutorial()
+                } label: {
+                    Label("新手教程", systemImage: "book")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("重新看一遍新手教程（⇧⌘/）")
                 AppearanceMenu()
             }
         }
