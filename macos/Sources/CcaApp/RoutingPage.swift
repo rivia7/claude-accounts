@@ -49,11 +49,9 @@ struct RoutingPage: View {
                     DirectAccounts()
                 }
             }
-            .padding(.horizontal, 28)
             .padding(.top, 24)
             .padding(.bottom, 36)
-            .frame(maxWidth: 960, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .pageColumn()
         }
         .navigationTitle("节点分流")
     }

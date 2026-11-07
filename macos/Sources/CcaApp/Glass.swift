@@ -31,6 +31,55 @@ extension SectionHeader where Accessory == EmptyView {
     }
 }
 
+extension View {
+    /// 详情页的版心：内容最宽 1400pt，两边各留 28pt，再宽就居中。顶上的提示条、账号页、分流页都用它，左右边对齐。
+    func pageColumn() -> some View {
+        frame(maxWidth: 1400, alignment: .leading)
+            .padding(.horizontal, 28)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+/// 几节内容（账号页的用量、网络出口）：每栏都能有 minColumnWidth 宽时左右并排（一样宽、顶端对齐），不够宽就上下排。
+/// 用 Layout 而不用 ViewThatFits：换排法时还是同一份视图（不会建两份、不丢状态），也不用先量宽度再排一遍。
+struct SectionColumns: Layout {
+    var minColumnWidth: CGFloat = 500
+    var spacing: CGFloat = 32
+
+    /// 并排时每栏的宽度；不并排时为 nil。
+    private func columnWidth(_ width: CGFloat?, count: Int) -> CGFloat? {
+        guard let width, width.isFinite, count > 1 else { return nil }
+        let w = (width - spacing * CGFloat(count - 1)) / CGFloat(count)
+        return w >= minColumnWidth ? w : nil
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        if let col = columnWidth(proposal.width, count: subviews.count) {
+            let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: col, height: nil)).height }
+            return CGSize(width: proposal.width ?? 0, height: heights.max() ?? 0)
+        }
+        let sizes = subviews.map { $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) }
+        let height = sizes.map(\.height).reduce(0, +) + spacing * CGFloat(max(sizes.count - 1, 0))
+        return CGSize(width: proposal.width ?? sizes.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        if let col = columnWidth(bounds.width, count: subviews.count) {
+            let p = ProposedViewSize(width: col, height: nil)
+            for (i, s) in subviews.enumerated() {
+                s.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (col + spacing), y: bounds.minY), anchor: .topLeading, proposal: p)
+            }
+            return
+        }
+        let p = ProposedViewSize(width: bounds.width, height: nil)
+        var y = bounds.minY
+        for s in subviews {
+            s.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading, proposal: p)
+            y += s.sizeThatFits(p).height + spacing
+        }
+    }
+}
+
 /// 引导页的卡片（实的色块）。
 struct Card<Content: View>: View {
     let title: String

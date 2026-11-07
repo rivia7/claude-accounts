@@ -145,10 +145,9 @@ struct TopBanners: View {
                 }
             }
         }
-        .padding(.horizontal, 28)
         .padding(.top, hasBanners ? 14 : 0)
         .padding(.bottom, hasBanners ? 2 : 0)
-        .frame(maxWidth: 836)
+        .pageColumn()
     }
 
     private var hasBanners: Bool {

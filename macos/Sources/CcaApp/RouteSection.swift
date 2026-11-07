@@ -228,10 +228,12 @@ struct RouteStop: Identifiable {
 }
 
 /// 一条横着的线路：几站等宽排开，站名在圆点下面居中；线用账号的颜色，有问题的那段换成橙色或灰色的虚线。
+/// 每站最宽 300pt，再宽就整条居中（宽窗口里只有这一节的第三方 API 账号，两站不会被拉到页面两头）。
 struct RouteStrip: View {
     let stops: [RouteStop]
     let color: Color
     private let dot: CGFloat = 14
+    private let maxStopWidth: CGFloat = 300
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -245,10 +247,11 @@ struct RouteStrip: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if let d = s.detail, !d.isEmpty {
+                            // 最多三行：说明里可能自带换行（“维护者锁定”下面一行“Clash Verge 里叫 …”），站窄时第二段还能再折一行
                             Text(d)
                                 .font(.caption)
                                 .foregroundStyle(s.detailTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
-                                .lineLimit(2)
+                                .lineLimit(3)
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -275,6 +278,8 @@ struct RouteStrip: View {
             .frame(height: dot)
             .accessibilityHidden(true)
         }
+        .frame(maxWidth: maxStopWidth * CGFloat(max(stops.count, 1)))
+        .frame(maxWidth: .infinity)
     }
 
     private func title(_ s: RouteStop) -> Text {

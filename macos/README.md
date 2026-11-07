@@ -69,7 +69,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 
 只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty，
 再加上菜单栏面板 menubar、显示细节时的 details、直接改别名的 rename、卡片教程每一步的 tutorial），每个截浅色、深色两张 PNG 后退出。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
-`CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽）。只截自己的窗口（`SCShareableContent.currentProcess`），
+`CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
 不要“屏幕录制”权限；窗口放在别的窗口后面、不抢焦点，所以截出来是窗口不在前台时的样子（主按钮是灰的）。菜单栏面板是近似的
 （真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。
 
@@ -82,6 +82,8 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
   内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
 - 操作放在它作用的内容旁边：打开 App / 网页版在账号页头，刷新用量在“用量”标题上，检测出口在“线路与出口”标题上；不用浮在内容上的操作条。
+- 版心（`Glass.swift` 的 `pageColumn()`）：详情页的内容最宽 1400pt、两边各留 28pt，再宽就居中；顶上的提示条、账号页、分流页都用它，左右边对齐。
+  窗口宽的时候（全屏）账号页的用量和网络出口左右并排（`SectionColumns`：每栏能有 500pt 才并排，窄了照旧上下排）；线路每站最宽 300pt，再宽就整条居中。
 - 一套系统字体（SF Pro / 苹方），数字一律等宽数字；额度的百分比大号，“%”缩小。
 - 照顾新手（`Guide.swift`）：第一次连上 cca 时弹出卡片教程（八张，每张一幅示意图加几条带图标的要点：一台 Mac 好几个账号、左边的账号列表、
   打开账号、看额度、看网络出口、节点分流、改别名和外观、菜单栏和帮助；下面的小圆点能直接点到任意一张，最后一张能“从头再看”；
@@ -104,7 +106,7 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
   Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、Texts（文字、颜色档、补救、标记）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、账号页（AccountDetail：页头；
                        UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
-                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
+                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
 tools/make-icon.swift  画图标
