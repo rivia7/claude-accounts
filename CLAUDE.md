@@ -3,10 +3,10 @@
 `cca` 按 GitHub Releases 分发，是单个签名文件：bash 3.2 主体 + 内嵌 Python 辅助（`PY_SRC`，由 `py` 以 `-I -X utf8` 运行）+ 路由器端 busybox ash（`router_sh`）和 ruby（`router_rb`）。新功能也写进这个文件。管两种工具的账号：Claude Code（`cca …`）和 Codex（`cca codex …`）。
 
 ## 命令
-- `bash tests/regress.sh` — 全流程回归，约 2 分钟；全用假的路由器/claude/curl/ssh/GitHub，不联网、不碰真实 `~/.cca`；`KEEP=1` 保留沙箱，`DEBUG_OUT=1` 时失败的用例附上 `$out` 的最后几行；只能在 macOS 上跑（BSD sed、/bin/dash、ruby）
+- `bash tests/regress.sh` — 全流程回归，约 15 分钟（含 App 的契约测试；超过 Bash 工具前台 10 分钟的上限，放到后台跑）；全用假的路由器/claude/curl/ssh/GitHub，不联网、不碰真实 `~/.cca`；`KEEP=1` 保留沙箱，`DEBUG_OUT=1` 时失败的用例附上 `$out` 的最后几行；只能在 macOS 上跑（BSD sed、/bin/dash、ruby）
 - `bash -n cca && bash -n install.sh` — 快速语法检查
 - `bash macos/build.sh [--version V] [--arch universal|arm64|native] [--debug] [--out 路径.app]` — 编图形界面 cca App（默认 `macos/build/cca.app`，版本号取 `cca` 的 VERSION）；`bash macos/test.sh [夹具目录]` — App 的契约测试（解码 cca 的真实输出）。只要苹果的命令行工具，不用 Xcode
-- `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、编译界面 App（要命令行工具里的 swiftc 和 macOS 26 以上的 SDK）、打 tag、推送，发布 cca、cca.sig、install.sh、cca-app.zip、cca-app.zip.sig。`VERSION` 写成 `X.Y.Z-beta.N` 时发成测试版（GitHub pre-release、不设为 Latest）：`releases/latest` 不指向它，自动更新和一键安装都不装，只能 `cca update X.Y.Z-beta.N` 或 `install.sh` 后面跟版本号手动装；版本比较里同号的测试版比正式版旧（`ver_gt`）
+- `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、编译界面 App（要命令行工具里的 swiftc 和 macOS 26 以上的 SDK）、打 tag、推送，发布 cca、cca.sig、install.sh、cca-app.zip、cca-app.zip.sig（整个约 16 分钟，大半是回归，同样放到后台跑）。`VERSION` 写成 `X.Y.Z-beta.N` 时发成测试版（GitHub pre-release、不设为 Latest）：`releases/latest` 不指向它，自动更新和一键安装都不装，只能 `cca update X.Y.Z-beta.N` 或 `install.sh` 后面跟版本号手动装；版本比较里同号的测试版比正式版旧（`ver_gt`）
 - `./policy.sh 映射仓库的目录 ["提交说明"]` — 发布维护者的账号 → 节点映射：检查格式（`cca _policy-check`）、确认仓库是私有的，用发布密钥签名（命名空间 `cca-policy`），提交并推送。目录里有 `custom.yaml` 时顺带发布参考节点（抽成 `nodes.json`，`cca _fill-check`，命名空间 `cca-nodes`）；`./policy.sh nodes 参考配置 [策略组]` 只打印不发布
 - `./policy.sh key [ls | add [公钥文件 | -] [别名] | rm 别名 | mv 别名 [新别名]] [-R 仓库] [-y]` — 维护者管理各台机器的 deploy key（经 `gh api`）：别名就是 GitHub 上 key 的标题，不许重复；add 不写文件就读剪贴板（cca 的引导已经把公钥复制进去了），不写别名就提示（默认取公钥备注 `cca-policy@机器名` 里的机器名），总是加成只读；GitHub 的 deploy key 不能修改，mv 是删掉后用同一把公钥重新加（新的没加上时给出公钥好补回）。默认仓库从 `cca` 的 `POLICY_REPO_DEFAULT` 读（`CCA_POLICY_DEFAULT` 同样能换掉）
 
