@@ -2,3 +2,4 @@
 *.sig
 tests/.dbg*
 macos/build/
+.idea/
