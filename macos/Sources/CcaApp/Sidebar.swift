@@ -21,6 +21,18 @@ struct Sidebar: View {
                 ForEach(accounts) { a in
                     AccountRow(account: a)
                         .tag(SidebarItem.account(a.ref))
+                        .contextMenu {
+                            Button("改别名…") { model.beginRename(a.ref) }
+                            if !a.isAPI {
+                                Divider()
+                                Button("打开 \(model.appLabel(a.tool))") { model.openApp(a.ref) }
+                                    .disabled(!a.can.app || model.activity(a.ref) != nil)
+                                Button("打开网页版") { model.openWeb(a.ref) }
+                                    .disabled(!a.can.web || model.activity(a.ref) != nil)
+                            }
+                            Button("检测出口") { model.checkExit(a.ref) }
+                                .disabled(!a.can.check || model.activity(a.ref) != nil)
+                        }
                 }
             }
         }
@@ -114,6 +126,8 @@ struct SidebarFooter: View {
                     ProgressView().controlSize(.mini)
                 }
                 Text(statusText).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                Spacer(minLength: 4)
+                AppearanceMenu()
             }
         }
         .padding(.horizontal, 16)

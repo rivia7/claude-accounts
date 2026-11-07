@@ -44,6 +44,7 @@ struct MainWindow: View {
 
 struct SplitView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
 
     var body: some View {
         NavigationSplitView {
@@ -53,6 +54,11 @@ struct SplitView: View {
             DetailColumn()
         }
         .toolbar { MainToolbar() }
+        // 第一次连上 cca 时打开卡片教程；按 Esc 关掉也算看过（以后从“帮助”菜单、工具栏的问号再看）
+        .sheet(isPresented: Binding(get: { guide.tutorialShown }, set: { if !$0 { guide.finishTutorial() } })) {
+            TutorialSheet().environment(guide)
+        }
+        .onAppear { guide.startIfNeeded() }
     }
 }
 
@@ -152,9 +158,10 @@ struct TopBanners: View {
     }
 }
 
-/// 工具栏：刷新、同步路由器（配置了路由器才有）、“＋”菜单（都在终端里完成）。
+/// 工具栏：刷新、同步路由器（配置了路由器才有）、“＋”菜单（都在终端里完成）、新手教程。
 struct MainToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
@@ -189,6 +196,14 @@ struct MainToolbar: ToolbarContent {
                 Label("添加", systemImage: "plus")
             }
             .help("添加账号、编辑账号表、配置路由器（在终端里完成）")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                guide.openTutorial()
+            } label: {
+                Label("新手教程", systemImage: "questionmark.circle")
+            }
+            .help("新手教程：几张卡片讲清楚怎么用（⇧⌘/）")
         }
     }
 }

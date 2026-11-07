@@ -71,7 +71,8 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 查看各账号的用量 | `cca usage`（只看一个：`cca usage 工作`；给脚本用：`cca usage --json`） |
 | 换第三方 API 账号的 key | `cca key kimi` |
 | 查看所有账号 | `cca ls` |
-| 改别名、换节点 | `cca edit` |
+| 改别名 | `cca rename 账号 新别名`（写 `-` 去掉别名；登录、资料、端口都不变；cca App 里点名字旁边的笔） |
+| 换节点（也能改别名） | `cca edit` |
 | 删除账号 | `cca rm 工作` |
 | 检查每个账号的出口 IP | `cca check` |
 | 打开图形界面（用量、节点分流、一键打开 App） | `cca gui` |

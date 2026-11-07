@@ -27,18 +27,21 @@ struct SlotRow: Identifiable {
 /// 这一页可见时每 60 秒读一次 `_gui live`（Scheduler）。
 struct RoutingPage: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 RoutingHeader()
+                TipCard(id: "routing-map", title: "这张图怎么看",
+                        message: "左边是账号，中间是路由器上给每个账号留的端口，右边是节点（出口）。每条彩色的线就是一个账号的流量走向：实线正常；虚线说明有问题（选错节点、连不上），点「同步路由器」能修好。点左边的账号可以看它的详情。")
                 RoutingBanners()
                 let rows = slotRows()
                 if rows.isEmpty {
                     ContentUnavailableView("还没有端口池", systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("配置路由器或本机 Clash 之后，每个走节点的账号会分到一个端口。"))
                 } else {
-                    RouteMap(rows: rows, nodes: mapNodes(rows), panel: panelTitle) { ref in
+                    RouteMap(rows: rows, nodes: mapNodes(rows), panel: panelTitle, showGroups: guide.showDetails) { ref in
                         model.tool = ref.tool
                         model.selection = .account(ref)
                     }
@@ -108,6 +111,7 @@ struct RoutingPage: View {
 /// 页头：标题、一行概况（走哪边、怎么选、端口范围、多久以前查的），后端 / 钩子 / 定时任务的状态；右边是看哪边、刷新、同步路由器。
 struct RoutingHeader: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -122,11 +126,22 @@ struct RoutingHeader: View {
                     controls
                 }
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { chips }
-                VStack(alignment: .leading, spacing: 6) { chips }
+            // 后端、钩子、定时任务的状态：平时收在“显示细节”里，有问题时才露出来
+            if guide.showDetails || chipsNeedAttention {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { chips }
+                    VStack(alignment: .leading, spacing: 6) { chips }
+                }
             }
         }
+    }
+
+    private var chipsNeedAttention: Bool {
+        if let r = model.live?.router, r.configured {
+            if r.reachable == false || r.running == false || r.hook == false || r.cron == false { return true }
+        }
+        if let l = model.live?.local, l.configured, l.running == false, model.live?.route == .local { return true }
+        return false
     }
 
     private var titleBlock: some View {
@@ -168,6 +183,11 @@ struct RoutingHeader: View {
                     .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
                 }
             }
+            Button(guide.showDetails ? "收起细节" : "显示细节") {
+                withAnimation(.snappy) { guide.toggleDetails() }
+            }
+            .buttonStyle(.borderless)
+            .help("后端、钩子、定时任务的状态和槽位名")
         }
     }
 
@@ -333,6 +353,8 @@ struct RouteMap: View {
     let rows: [SlotRow]
     let nodes: [MapNode]
     let panel: (String, String?)
+    /// 端口旁边写槽位名（CCA-1 这些）：显示细节时才有
+    var showGroups = false
     let select: (AccountRef) -> Void
 
     private let rowHeight: CGFloat = 44
@@ -476,7 +498,7 @@ struct RouteMap: View {
             Text(r.port.map(String.init) ?? "—")
                 .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(r.isFree ? .tertiary : .primary)
-            Text(r.isFree ? "空闲" : (r.group ?? ""))
+            Text(r.isFree ? "空闲" : (showGroups ? (r.group ?? "") : ""))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)

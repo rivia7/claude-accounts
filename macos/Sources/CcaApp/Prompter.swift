@@ -29,12 +29,17 @@ final class AlertPrompter: Prompter, @unchecked Sendable {
 
 /// 主窗口上的弹层：终端交接、失败说明。
 struct SheetView: View {
+    @Environment(AppModel.self) private var model
     let sheet: Sheet
 
     var body: some View {
         switch sheet {
         case .handoff(let h): HandoffSheet(handoff: h)
         case .failure(let f): FailureSheet(info: f)
+        case .rename(let ref):
+            if let a = model.account(ref) {
+                RenameSheet(account: a)
+            }
         }
     }
 }

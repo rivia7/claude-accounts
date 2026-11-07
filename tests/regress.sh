@@ -1015,6 +1015,31 @@ echo 7901 >> "$R/listening"
 ok "usage --json：端口不通时 error_code 是 port，error_detail 是端口" 'printf "%s" "$out" | jok "(lambda a: a[\"error_code\"] == \"port\" and a[\"error_detail\"] == \"7901\" and a[\"source\"] == \"cache\")(uacct(\"alice@example.com\"))"'
 out=$(run cca codex usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_codex.json"
 ok "codex usage --json：同样的新字段（Codex 的重置时间本来就是 Unix 秒）" 'printf "%s" "$out" | jok "d[\"tool\"] == \"codex\" and all(\"error_code\" in a and \"stale\" in a for a in d[\"accounts\"])"'
+# 改别名（cca rename；App 的“改别名…”用它）：只换账号表里的键，账号目录、端口、“上次使用”、路由器的摘要都不变，启动器跟着改名
+edit_table 'j["kimi9"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "id": "kimi9"}'; run cca ls >/dev/null 2>&1 </dev/null
+sb=$(gj state | python3 -c 'import json,sys; print(json.load(sys.stdin)["routing"]["sync"])')
+out=$(runev cca rename alice@example.com 主号 2>/dev/null); rc=$?
+ok "rename：alice 改名为「主号」：stdout 是新键、在表里的位置不变，端口还是 7901，账号目录没换，启动器改名，路由器的同步状态不变" '[ $rc -eq 0 ] && [ "$out" = "主号(alice@example.com)" ] && tblok "list(t)[0] == \"主号(alice@example.com)\" and \"alice@example.com\" not in t" && cfgok "c[\"ports\"][\"主号(alice@example.com)\"] == 7901 and \"alice@example.com\" not in c[\"ports\"]" && [ "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" = "$AD" ] && [ -d "$L/Claude 主号.app" ] && [ ! -e "$L/Claude alice.app" ] && gj state | jok "d[\"routing\"][\"sync\"] == \"$sb\" and acct(0, \"主号(alice@example.com)\")[\"port\"] == 7901"'
+out=$(runev cca rename 主号 "有 空格" 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_rename_fail.jsonl"
+ok "rename：别名里有空格：不改，fail 事件的原因是 alias_invalid，说明里写清楚" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"alias_invalid\" and \"空格\" in e[\"message\"]" && tblok "\"主号(alice@example.com)\" in t"'
+out=$(runev cca rename kimi9 主号 2>&1); rc=$?
+ok "rename：别名和别的账号重了：不改（alias_invalid）" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"alias_invalid\" and \"已经用在\" in e[\"message\"]" && tblok "\"kimi9\" in t"'
+out=$(runev cca rename nobody 新名 2>&1); rc=$?
+ok "rename：没有这个账号：account_missing" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"account_missing\""'
+out=$(run cca rename kimi9 kimi8 2>/dev/null </dev/null); rc=$?
+ok "rename：第三方 API 账号改名：键换了，id 还是 kimi9（账号目录、钥匙串里的 key 都按 id 认）" '[ $rc -eq 0 ] && [ "$out" = kimi8 ] && tblok "t[\"kimi8\"][\"id\"] == \"kimi9\" and \"kimi9\" not in t"'
+out=$(runev cca rename kimi8 - 2>&1); rc=$?
+ok "rename：第三方 API 账号不能去掉别名" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"alias_invalid\"" && tblok "\"kimi8\" in t"'
+edit_table 'j.pop("kimi8")'; run cca ls >/dev/null 2>&1 </dev/null
+out=$(run cca rename 主号 - 2>/dev/null </dev/null); rc=$?
+ok "rename：写 - 去掉别名，只留邮箱：端口、启动器都回到原来的样子" '[ $rc -eq 0 ] && [ "$out" = alice@example.com ] && tblok "list(t)[0] == \"alice@example.com\"" && cfgok "c[\"ports\"][\"alice@example.com\"] == 7901" && [ -d "$L/Claude alice.app" ] && [ ! -e "$L/Claude 主号.app" ]'
+edit_table 'j["onlyalias"] = "US-A"'
+out=$(runev cca rename onlyalias 新名 2>&1); rc=$?
+ok "rename：只写了别名、没有邮箱的官方账号不能改（改了会换掉账号目录），让用 cca edit 补上邮箱" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"alias_invalid\" and \"edit\" in e[\"message\"]" && tblok "\"onlyalias\" in t"'
+edit_table 'j.pop("onlyalias")'
+out=$(run cca codex rename dave@example.com 二号 2>/dev/null </dev/null); rc=$?
+ok "codex rename：Codex 的账号表同样改，端口不变" '[ $rc -eq 0 ] && [ "$out" = "二号(dave@example.com)" ] && tblok "\"二号(dave@example.com)\" in t" "$H/.cca/codex.json" && cfgok "c[\"codex\"][\"ports\"][\"二号(dave@example.com)\"] == 7903"'
+run cca codex rename 二号 - >/dev/null 2>&1 </dev/null
 run cca router sync >/dev/null 2>&1
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码这一节 cca 的真实输出（macos/test.sh）" 'bash "$D/../macos/test.sh" "$GF" > "$T/contract.log" 2>&1'

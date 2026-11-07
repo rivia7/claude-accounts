@@ -268,10 +268,14 @@ struct FailCode: KnownValues {
     static let apiUnreachable = FailCode(rawValue: "api_unreachable")
     static let openFailed = FailCode(rawValue: "open_failed")
     static let appProfileUnsupported = FailCode(rawValue: "app_profile_unsupported")
+    /// 改别名（`cca rename`）：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改。
+    static let aliasInvalid = FailCode(rawValue: "alias_invalid")
+    /// 改别名时找不到这个账号。
+    static let accountMissing = FailCode(rawValue: "account_missing")
     static let allKnown: [FailCode] = [.error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
-                                       .appProfileUnsupported]
+                                       .appProfileUnsupported, .aliasInvalid, .accountMissing]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

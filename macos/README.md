@@ -68,7 +68,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 ```
 
 只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty，
-再加上菜单栏面板 menubar），每个截浅色、深色两张 PNG 后退出。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
+再加上菜单栏面板 menubar、显示细节时的 details、改别名的弹层 rename、卡片教程每一步的 tutorial），每个截浅色、深色两张 PNG 后退出。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽）。只截自己的窗口（`SCShareableContent.currentProcess`），
 不要“屏幕录制”权限；窗口放在别的窗口后面、不抢焦点，所以截出来是窗口不在前台时的样子（主按钮是灰的）。菜单栏面板是近似的
 （真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。
@@ -83,6 +83,14 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
 - 操作放在它作用的内容旁边：打开 App / 网页版在账号页头，刷新用量在“用量”标题上，检测出口在“线路与出口”标题上；不用浮在内容上的操作条。
 - 一套系统字体（SF Pro / 苹方），数字一律等宽数字；额度的百分比大号，“%”缩小。
+- 照顾新手（`Guide.swift`）：第一次连上 cca 时弹出卡片教程（四张：一台 Mac 好几个账号、打开账号、看额度、出口和分流；
+  “帮助”菜单的“新手教程”、工具栏的问号随时再看）；页面顶上的提示卡片讲一句这一页怎么看，点“知道了”就不再出现（“帮助”菜单可以重新显示）；
+  账号页名字下面一句话说现在能不能用、下一步点哪个按钮（只按 cca 给的状态说，最要紧的排前面）；端口、槽位、纯净度明细这些技术细节默认收起，
+  “显示细节”打开（记住选择）。看过教程、关掉的提示、显示细节都记在 App 的设置里（`guide.*`），演示模式只记在内存里。
+- 改别名：账号页名字旁边的笔、侧栏账号的右键菜单 → 改别名的弹层（`RenameSheet.swift`）→ `cca [codex] rename KEY 新别名`（PROTOCOL 4.4）。
+  别名的规则只由 cca 判断，它说不行时原因写在弹层里；成功后选中 cca 打在 stdout 上的新键。
+- 外观（`Appearance.swift`）：跟随系统 / 浅色 / 深色，侧栏右下角的按钮、“显示”菜单、设置窗口（⌘,）里都能换，用 `NSApp.appearance` 套到所有窗口，
+  记在 App 的设置里（`appearance`）。设置窗口里还有新手引导的几个开关。
 
 ## 结构
 
@@ -94,7 +102,7 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
   Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、Texts（文字、颜色档、补救、标记）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、账号页（AccountDetail：页头；
                        UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
-                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件（Glass）、调试版的截图模式（Snapshot）
+                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件（Glass）、新手引导（Guide）、改别名（RenameSheet）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
 tools/make-icon.swift  画图标

@@ -14,10 +14,12 @@ enum CcaCommand: Sendable, Hashable {
     case routerSync
     /// 「更新并重新打开」的第一步：下载校验好和 cca 同版本的 App，先放着（PROTOCOL 5）。
     case guiUpdate
+    /// 改别名（`cca [codex] rename KEY 新别名`，新别名是 - 时去掉别名）：stdout 是新的键。
+    case rename(ToolID, key: String, alias: String)
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .check(let t, _), .app(let t, _), .web(let t, _): return t
+        case .usage(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _): return t
         case .routerSync, .guiUpdate: return nil
         }
     }
@@ -25,7 +27,7 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k): return k
+        case .app(_, let k), .web(_, let k), .rename(_, let k, _): return k
         case .routerSync, .guiUpdate: return nil
         }
     }
@@ -40,6 +42,7 @@ enum CcaCommand: Sendable, Hashable {
         case .web(_, let k): return prefix + ["web", k]
         case .routerSync: return ["router", "sync"]
         case .guiUpdate: return ["gui", "update"]
+        case .rename(_, let k, let a): return prefix + ["rename", k, a]
         }
     }
 
@@ -51,6 +54,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app, .web: return 120
         case .routerSync: return 180
         case .guiUpdate: return 300
+        case .rename: return 60
         }
     }
 
@@ -58,14 +62,14 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .routerSync: return true
-        case .usage, .check, .guiUpdate: return false
+        case .usage, .check, .guiUpdate, .rename: return false
         }
     }
 
     /// 同一个闸门里的命令一次只跑一个：同一个账号的 app / web；同一个工具的 usage；router sync、gui update 全局一个。
     var gate: String? {
         switch self {
-        case .app(let t, let k), .web(let t, let k): return "launch:\(t.rawValue):\(k)"
+        case .app(let t, let k), .web(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
         case .usage(let t, _): return "usage:\(t.rawValue)"
         case .routerSync: return "router-sync"
         case .guiUpdate: return "gui-update"

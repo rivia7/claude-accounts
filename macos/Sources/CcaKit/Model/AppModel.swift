@@ -10,7 +10,7 @@ enum SidebarItem: Hashable, Sendable {
 }
 
 enum ActivityKind: Sendable, Equatable {
-    case app, web, check, sync
+    case app, web, check, sync, rename
 }
 
 /// 一个账号正在做的事（按钮旁边显示进度）。
@@ -37,11 +37,14 @@ struct FailureInfo: Equatable, Identifiable {
 enum Sheet: Identifiable, Equatable {
     case handoff(Handoff)
     case failure(FailureInfo)
+    /// 改别名的弹层
+    case rename(AccountRef)
 
     var id: String {
         switch self {
         case .handoff(let h): return "handoff:" + h.id
         case .failure(let f): return "failure:" + f.id.uuidString
+        case .rename(let r): return "rename:" + r.tool.rawValue + ":" + r.key
         }
     }
 }
@@ -594,6 +597,45 @@ final class AppModel {
         case .failed(let f):
             if f.reason == .cancelled { return }
             present(.failure(FailureInfo(title: failureTitle, failure: f)))
+        }
+    }
+
+    // MARK: 改别名
+
+    /// 改别名的弹层里显示的原因（cca 说的；弹层开着时才有）。
+    private(set) var renameError: String?
+
+    func beginRename(_ ref: AccountRef) {
+        renameError = nil
+        present(.rename(ref))
+    }
+
+    /// 改别名（`cca [codex] rename KEY 新别名`；新别名空着就去掉别名、只留邮箱）。成功后关掉弹层、选中改名后的账号
+    /// （新的键是 cca 打在 stdout 上的，App 不自己拼）；cca 说不行时把原因留在弹层里，弹层不关。
+    func rename(_ ref: AccountRef, to alias: String) {
+        guard phase == .ready, let client, activities[ref] == nil else { return }
+        let wanted = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        activities[ref] = Activity(kind: .rename)
+        renameError = nil
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(.rename(ref.tool, key: ref.key, alias: wanted.isEmpty ? "-" : wanted), prompter: prompter)
+            guard let self else { return }
+            self.activities[ref] = nil
+            switch r.status {
+            case .success:
+                let out = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self)
+                let newKey = nonEmpty(out.split(whereSeparator: \.isNewline).last.map(String.init)) ?? ref.key
+                if self.sheet == .rename(ref) { self.sheet = nil }
+                await self.loadState()
+                if self.selection == .account(ref) { self.selection = .account(AccountRef(tool: ref.tool, key: newKey)) }
+                self.showToast(newKey == ref.key ? "别名没有变" : "已改名：登录、资料和端口都不变", .success)
+            case .failed(let f) where f.reason == .command:
+                self.renameError = nonEmpty(f.message) ?? "没能改名"
+            default:
+                if self.sheet == .rename(ref) { self.sheet = nil }
+                self.finish(r, failureTitle: "没能改名", success: "已改名")
+            }
         }
     }
 

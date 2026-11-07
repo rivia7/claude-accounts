@@ -22,9 +22,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
-- 同一个账号（工具 + 键）的 `app` / `web` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；`router sync` 全局一次一个。
+- 同一个账号（工具 + 键）的 `app` / `web` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；`router sync` 全局一次一个。
   `_gui hello|state|live` 随时可以跑。
-- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒。
+- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
+  `rename` 60 秒。
 - `app`、`web`、`router sync` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下）。所以这几条命令的 stdout / stderr 接到文件，跑完再读；进度和结果看事件文件。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
@@ -258,7 +259,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 ### 4.1 事件文件
 
-运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`、`rename`）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 
 ```jsonl
@@ -273,8 +274,9 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 - `result.code`：`opened` | `activated`（已经开着，切到了前面）。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
-  `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported`。
-  可能有好几条，最后一条是最终原因。
+  `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
+  `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
+  `account_missing`（改别名：没有这个账号）。可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
   `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key`。
@@ -306,6 +308,15 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 5. 否则失败：显示最后一条 `fail` 的 `message`（按 `code` 给补救按钮，例如 `port_closed` → 同步路由器，`table_invalid` → 在终端里 `cca edit`），
    stderr 的最后几行放在“详情”里。
 6. 最多重跑 3 轮；同一个授权被再次要求就停下（防止死循环）。
+
+### 4.4 改别名：`cca [codex] rename KEY 新别名`
+
+- 只换账号表里的键（值和顺序都不变）：官方账号按邮箱、第三方 API 账号按 `id` 认，账号目录、登录、浏览器资料、端口、“上次使用”都不变，
+  路由器的同步摘要也不变（不用同步）；`~/Applications` 里的启动器跟着改名。不交互、不联网。
+- 新别名写 `-` 去掉别名，只留邮箱（第三方 API 账号必须有别名）。别名的规则由 cca 判断（最多 12 个汉字或 24 个字母，不能有空格、引号、
+  括号、反斜杠或 @，同一个工具里不能重名），App 不自己判断。
+- 成功：退出码 0，stdout 只有一行新的键（App 选中它）。不行：退出码非 0，`fail` 事件的 `code` 是 `alias_invalid` 或 `account_missing`，
+  `message` 是给人看的原因（App 显示在改名的弹层里，弹层不关）。
 
 ## 5. `cca gui`
 

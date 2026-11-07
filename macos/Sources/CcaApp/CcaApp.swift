@@ -33,6 +33,8 @@ struct CcaApp: App {
         Window("cca", id: "main") {
             MainWindow()
                 .environment(delegate.model)
+                .environment(delegate.guide)
+                .environment(delegate.appearance)
         }
         .defaultSize(width: 1080, height: 720)
         .commands {
@@ -40,7 +42,26 @@ struct CcaApp: App {
             CommandGroup(after: .toolbar) {
                 Button("刷新") { delegate.model.refreshAll() }
                     .keyboardShortcut("r", modifiers: .command)
+                Picker("外观", selection: delegate.appearance.binding) {
+                    ForEach(AppearanceMode.allCases) { m in
+                        Text(m.title).tag(m)
+                    }
+                }
             }
+            CommandGroup(replacing: .help) {
+                Button("新手教程") {
+                    WindowOpener.shared.showMain()
+                    delegate.guide.openTutorial()
+                }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+                Button("重新显示提示卡片") { delegate.guide.resetTips() }
+            }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(delegate.guide)
+                .environment(delegate.appearance)
         }
 
         MenuBarExtra {
@@ -58,6 +79,10 @@ struct CcaApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: AppModel
+    /// 新手教程、提示卡片、显示技术细节（记在 App 的设置里；演示模式只记在内存里）
+    let guide: Guide
+    /// 外观：跟随系统 / 浅色 / 深色
+    let appearance: AppearanceSetting
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     nonisolated private static let desktopApps: Set<String> = ["com.anthropic.claudefordesktop", "com.openai.codex"]
 
@@ -67,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let demo = !(ProcessInfo.processInfo.environment["CCA_GUI_FIXTURES"] ?? "").isEmpty
         model = AppModel(appVersion: version, defaults: demo ? MemoryPrefs() : UserDefaults.standard,
                          hooks: AppHooks(prompter: AlertPrompter()))
+        guide = Guide(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
+        appearance = AppearanceSetting(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
         super.init()
         model.hooks.openFile = { Platform.openInTerminal($0) }
         model.hooks.openURL = { NSWorkspace.shared.open($0) }
@@ -81,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        appearance.apply()
         let ws = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             let token = ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -98,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await model.start() }
         #if DEBUG
         if let dir = Snapshot.directory {
-            Task { await Snapshot.run(model: model, into: dir) }
+            Task { await Snapshot.run(model: model, guide: guide, into: dir) }
         }
         #endif
     }

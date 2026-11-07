@@ -23,7 +23,7 @@ enum Snapshot {
         let apply: @MainActor (AppModel) -> Void
     }
 
-    static func run(model: AppModel, into dir: URL) async {
+    static func run(model: AppModel, guide: Guide, into dir: URL) async {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         NSApp.setActivationPolicy(.accessory)
         // 等连上（演示数据）、读到 state
@@ -39,6 +39,8 @@ enum Snapshot {
         window.orderBack(nil)
         model.refreshUsage(manual: false)
         model.refreshLive()
+        // 第一次打开时的卡片教程先关掉（它自己有场景 tutorial）
+        guide.finishTutorial()
         try? await Task.sleep(nanoseconds: 2_500_000_000)
 
         func first(_ t: ToolID, _ match: (Account) -> Bool) -> AccountRef? {
@@ -81,6 +83,48 @@ enum Snapshot {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 await capture(window, to: dir.appendingPathComponent("\(scene.name)-\(label).png"))
             }
+        }
+        // 显示细节时的账号页、分流页
+        if only.isEmpty || only.contains("details") {
+            guide.toggleDetails()
+            for (scene, apply) in [("claude-details", scenes[0].apply), ("routing-details", scenes[3].apply)] {
+                apply(model)
+                NSApp.appearance = NSAppearance(named: .aqua)
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                await capture(window, to: dir.appendingPathComponent("\(scene)-light.png"))
+            }
+            guide.toggleDetails()
+        }
+        // 改别名的弹层
+        if only.isEmpty || only.contains("rename"), let ref = first(.claude, { $0.login == .loggedIn && !$0.isAPI }) {
+            model.tool = .claude
+            model.selection = .account(ref)
+            model.beginRename(ref)
+            for (label, name) in appearances {
+                NSApp.appearance = NSAppearance(named: name)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if let sheet = window.attachedSheet {
+                    await capture(sheet, to: dir.appendingPathComponent("rename-\(label).png"))
+                }
+            }
+            model.dismissSheet()
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+        // 卡片教程：每一步截一张弹层（浅色、深色）
+        if only.isEmpty || only.contains("tutorial") {
+            for step in 0..<TutorialCard.all.count {
+                guide.step = step
+                guide.tutorialShown = true
+                for (label, name) in appearances {
+                    NSApp.appearance = NSAppearance(named: name)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if let sheet = window.attachedSheet {
+                        await capture(sheet, to: dir.appendingPathComponent("tutorial-\(step + 1)-\(label).png"))
+                    }
+                }
+            }
+            guide.tutorialShown = false
+            try? await Task.sleep(nanoseconds: 600_000_000)
         }
         if only.isEmpty || only.contains("menubar") {
             model.tool = .claude

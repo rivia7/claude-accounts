@@ -1,21 +1,27 @@
 import SwiftUI
 
-/// 线路与出口：这个账号的流量怎么走——这台 Mac → 路由器（或本机 Clash）的端口 → 节点 → 出口，
-/// 画成一条账号颜色的线（和分流图、App 图标同一个样子），下面是出口检测的明细。
+/// 网络出口：这个账号的流量怎么走，画成一条账号颜色的线（和分流图、App 图标同一个样子），下面是出口检测。
+/// 默认简单：这台 Mac → 节点 → 出口三站，检测结果一行小标签；点“显示细节”多出路由器的端口那一站（槽位、经哪边）和三块明细。
 /// 端口的状态来自 `_gui live`（打开过分流页才有），出口来自 health（启动账号、检测出口时 cca 记下的）。
 struct RouteSection: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
     let account: Account
 
     var body: some View {
         let a = account
         VStack(alignment: .leading, spacing: 18) {
-            SectionHeader("线路与出口") {
+            SectionHeader("网络出口") {
                 if let h = a.health, let r = h.result {
                     // 旧结果（过时、换了节点）的颜色换成灰的：它说的不是现在的出口
                     Tag(text: Texts.healthResult(r, region: h.restrictedRegion),
                         color: h.stale || !h.applies ? Color.gray : Palette.health(r))
                 }
+                Button(guide.showDetails ? "收起细节" : "显示细节") {
+                    withAnimation(.snappy) { guide.toggleDetails() }
+                }
+                .buttonStyle(.borderless)
+                .help("端口、槽位、纯净度和泄露检测的明细")
                 Button {
                     model.checkExit(a.ref)
                 } label: {
@@ -25,7 +31,7 @@ struct RouteSection: View {
                 .disabled(!a.can.check || model.activity(a.ref) != nil)
                 .help(a.isAPI ? "检测接口连不连得上" : "检测出口 IP、地区、纯净度和 DNS / WebRTC 泄露（会访问检测网站）")
             }
-            RouteStrip(stops: stops(a), color: a.lineColor)
+            RouteStrip(stops: guide.showDetails ? stops(a) : simpleStops(a), color: a.lineColor)
                 .padding(.top, 2)
             if a.isRouted, model.state?.routing?.sync == .pending, model.routerConfigured {
                 Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器还没同步",
@@ -35,11 +41,33 @@ struct RouteSection: View {
                         .disabled(model.syncActivity != nil)
                 }
             }
-            HealthDetails(account: a)
+            if guide.showDetails {
+                HealthDetails(account: a)
+            } else {
+                HealthSummary(account: a)
+            }
         }
     }
 
     // MARK: 线路上的几站
+
+    /// 默认的简单线路：不画端口那一站；端口有问题（选错节点、连不上）时，问题挪到节点那一站说。
+    private func simpleStops(_ a: Account) -> [RouteStop] {
+        var s = stops(a)
+        guard let pi = s.firstIndex(where: { $0.id == 1 }) else { return s }
+        let port = s.remove(at: pi)
+        if let ni = s.firstIndex(where: { $0.id == 2 }) {
+            if port.status == .warn || port.status == .bad {
+                s[ni].status = port.status
+                s[ni].detail = port.detail
+                s[ni].detailTint = port.detailTint
+            } else {
+                s[ni].detail = routeName.map { "经" + $0 }
+                s[ni].detailTint = nil
+            }
+        }
+        return s
+    }
 
     private func stops(_ a: Account) -> [RouteStop] {
         var out = [RouteStop(id: 0, mark: .origin, title: "这台 Mac")]
@@ -424,5 +452,52 @@ struct CheckTile<Content: View>: View {
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 92, maxHeight: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
+    }
+}
+
+/// 出口检测的一行摘要（默认）：纯净度、DNS、WebRTC 各一个小标签，再是什么时候测的；点“显示细节”看三块明细。
+struct HealthSummary: View {
+    let account: Account
+
+    var body: some View {
+        if let h = account.health {
+            let dim = h.stale || !h.applies
+            VStack(alignment: .leading, spacing: 10) {
+                if !h.applies {
+                    Label("换了节点：这是旧节点 \(h.node ?? "—") 的结果，再检测一次看看新的出口。", systemImage: "arrow.triangle.swap")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if h.kind != .api {
+                    HStack(spacing: 6) {
+                        if let t = h.trust {
+                            Tag(text: "纯净度 \(Int(t.rounded()))" + (nonEmpty(h.trustLabel).map { " · \($0)" } ?? ""),
+                                color: dim ? Color.gray : Palette.health(h.result))
+                        }
+                        if let leak = h.leak {
+                            Tag(text: Texts.leak(leak.dns, what: "DNS"), color: dim ? Color.gray : Palette.leak(leak.dns))
+                            Tag(text: Texts.leak(leak.webrtc, what: "WebRTC"), color: dim ? Color.gray : Palette.leak(leak.webrtc))
+                        }
+                    }
+                }
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    HStack(spacing: 6) {
+                        if let at = h.checkedAt {
+                            Text(Texts.agoPhrase(context.date.timeIntervalSince1970 - at) + (h.source == .check ? "手动检测" : "启动时检测"))
+                        }
+                        if h.stale {
+                            Label("结果已经过时", systemImage: "clock.badge.exclamationmark").foregroundStyle(.orange)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            Text(account.isAPI ? "还没测过。点“检测出口”看看接口连不连得上。"
+                 : "还没测过。点“检测出口”，看看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 有没有泄露。")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

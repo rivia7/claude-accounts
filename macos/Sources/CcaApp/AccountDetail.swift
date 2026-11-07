@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 一个账号的详情：身份和主要操作（打开 App、网页版）、用量、线路与出口。
-/// 操作放在它作用的那一节旁边：刷新用量在“用量”的标题上，检测出口在“线路与出口”的标题上。
+/// 一个账号的详情：身份和主要操作（打开 App、网页版）、“现在能不能用、下一步点什么”的一句话、用量、网络出口。
+/// 操作放在它作用的那一节旁边：刷新用量在“用量”的标题上，检测出口在“网络出口”的标题上。第一次来时顶上有一张提示卡片。
 struct AccountDetail: View {
     @Environment(AppModel.self) private var model
     let ref: AccountRef
@@ -10,6 +10,8 @@ struct AccountDetail: View {
         if let a = model.account(ref) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 32) {
+                    TipCard(id: "account-page", title: "这一页怎么看",
+                            message: "名字下面那句话告诉你这个账号现在能不能用、下一步点什么。中间是额度，下面是它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
                     DetailHeader(account: a)
                     if !a.isAPI { UsageSection(account: a) }
                     RouteSection(account: a)
@@ -32,6 +34,7 @@ struct AccountDetail: View {
 /// 宽的时候左右排，窄的时候按钮放到下面。正在打开、检测时下面多一行进度（来自 step 事件）。
 struct DetailHeader: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
     let account: Account
 
     var body: some View {
@@ -54,6 +57,12 @@ struct DetailHeader: View {
                     Text(progressText(busy)).font(.callout).foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
+            } else {
+                // 给新手的一句话：现在能不能用、下一步点哪个按钮（和时间有关，每 30 秒重算）
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    AdviceLine(advice: Advice.make(a, usage: model.usage(for: a), live: model.liveSlot(for: a.ref),
+                                                   appLabel: model.appLabel(a.tool), now: context.date.timeIntervalSince1970))
+                }
             }
             let reasons = disabledReasons(a)
             if !reasons.isEmpty {
@@ -76,10 +85,23 @@ struct DetailHeader: View {
                     }
                 }
             VStack(alignment: .leading, spacing: 5) {
-                Text(a.displayName)
-                    .font(.system(size: 24, weight: .semibold))
-                    .lineLimit(1)
-                    .textSelection(.enabled)
+                HStack(alignment: .center, spacing: 6) {
+                    Text(a.displayName)
+                        .font(.system(size: 24, weight: .semibold))
+                        .lineLimit(1)
+                        .textSelection(.enabled)
+                    Button {
+                        model.beginRename(a.ref)
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(model.activity(a.ref) != nil)
+                    .help("改别名（登录、资料和端口都不变）")
+                    .accessibilityLabel("改别名")
+                }
                 if let sub = secondaryIdentity(a) {
                     Text(sub)
                         .font(.callout)
@@ -112,7 +134,7 @@ struct DetailHeader: View {
             }
         }
         if a.appRunning { Tag(text: "\(model.appLabel(a.tool)) 开着", color: .green) }
-        if a.isLast { Tag(text: "上次在命令行里用的", systemImage: "terminal") }
+        if a.isLast, guide.showDetails { Tag(text: "上次在命令行里用的", systemImage: "terminal") }
     }
 
     /// 打开 App（主按钮）、网页版；没登录或登错号时，“登录…”是主按钮。第三方 API 账号没有这两个按钮。
@@ -184,6 +206,7 @@ struct DetailHeader: View {
         case .web: return "打开网页版…"
         case .check: return "检测出口…"
         case .sync: return "同步路由器…"
+        case .rename: return "改名…"
         }
     }
 }

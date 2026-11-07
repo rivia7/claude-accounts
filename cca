@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.2"
+VERSION="2.9.0-beta.4"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -2098,6 +2098,42 @@ def cmd_add_api(alias, url, model='', node=''):
     save_json(T.table, t, 0o600)
     ctx()
     print(alias)
+
+
+def cmd_rename(key, alias):
+    """改别名（cca rename，图形界面的“改别名…”也用它）：只换账号表里的键，值和顺序都不变。官方账号按邮箱认、
+    第三方 API 账号按 id 认，账号目录、端口、“上次使用”、路由器的摘要都跟着走（acct_id 不变）。新别名写 - 去掉别名、只留邮箱。
+    成功时打印新的键；不行时把原因打到 stdout、退出码 3（bash 把它报成 alias_invalid）"""
+    c, t, _ = ctx()
+    need(t, key)
+    alias = alias.strip()
+    if alias == '-':
+        alias = ''
+    email = parse_key(key)[1]
+    api = is_api(t[key])
+
+    def bad(msg):
+        print(msg)
+        sys.exit(3)
+
+    if not api and not email:   # 只写了别名的官方账号：按别名认，换了别名就换了账号目录
+        bad('%s 的键里没有邮箱：改名会换掉它的账号目录（登录、浏览器资料都在里面）。先用 %s edit 补上邮箱，写成「别名(邮箱)」'
+            % (key, T.cmd))
+    if not alias:
+        if api:
+            bad('第三方 API 账号必须有别名')
+        new = email
+    else:
+        p = alias_problem({k: v for k, v in t.items() if k != key}, alias)
+        if p:
+            bad(p)
+        new = alias if api else '%s(%s)' % (alias, email)
+    if new != key:
+        t2 = {(new if k == key else k): v for k, v in t.items()}
+        save_json(T.table, t2, 0o600)
+        T.set_ids(t2)   # 第三方 API 账号：新键 → id，对账时端口、“上次使用”按 id 跟着走
+        ctx()
+    print(new)
 
 
 def cmd_rm(key):
@@ -4659,7 +4695,7 @@ def cmd_tool_env():
 CMDS = {
     'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
     'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
-    'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm,
+    'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm, 'rename': cmd_rename,
     'set-last': cmd_set_last, 'name': cmd_name, 'login-url': cmd_login_url,
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
@@ -6303,6 +6339,27 @@ cmd_edit() {
 	fi
 	launchers_sync
 	api_keys_ensure
+}
+
+cmd_rename() {   # cca [codex] rename <账号> <新别名>：改别名（新别名写 - 去掉别名，只留邮箱）。只换账号表里的键：
+	# 账号按邮箱（第三方 API 账号按 id）认，登录、浏览器资料、端口、“上次使用”都不变，路由器也不用同步；启动器跟着改名。
+	# 不交互（图形界面的“改别名…”用它），stdout 只打印新的键
+	local key new rc
+	[ $# -eq 2 ] || die "用法: ${CMD} rename <账号> <新别名>（新别名写 - 去掉别名，只留邮箱）"
+	key=$(py resolve "$1") || FAIL_CODE=account_missing die "没找到账号：$1"
+	new=$(py rename "$key" "$2") && rc=0 || rc=$?
+	case $rc in
+		0) ;;
+		3) FAIL_CODE=alias_invalid die "$new" ;;
+		*) return 1 ;;
+	esac
+	if [ "$new" = "$key" ]; then
+		info "别名没有变：${key}"
+	else
+		launchers_sync
+		okay "已改名：${key} → ${new}（登录、资料、端口都不变）"
+	fi
+	printf '%s\n' "$new"
 }
 
 # 继承来的、会盖掉账号自己的登录/接口/模型，或者把请求转去别的服务商的变量（和 PY_SRC 里的 CRED_ENV 对应）
@@ -8218,6 +8275,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
                              表里写法：{"别名": {"base_url": "…", "model": "…", "node": "", "env": {…}}}
   cca key <账号>             重新输入第三方 API 账号的 key
   cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
+  cca rename <账号> <新别名>  改别名（写 - 去掉别名，只留邮箱）：登录、资料、端口都不变，启动器跟着改名
   cca ls                     列出账号、登录状态和端口
   cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
@@ -8341,6 +8399,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		login) shift; cmd_login "$@" ;;
 		usage) shift; cmd_usage "$@" ;;
 		edit) cmd_edit ;;
+		rename) shift; cmd_rename "$@" ;;
 		ls|list) cmd_list ;;
 		rm|remove) shift; cmd_rm "$@" ;;
 		web) shift; cmd_web "$@" ;;
