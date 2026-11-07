@@ -1,24 +1,69 @@
 import SwiftUI
 
-/// 用量卡片：5 小时、本周、分模型的每周额度、Codex 的 credits / 重置次数，来源和出错原因。
-/// 和时间有关的文字放在 TimelineView 里，每 30 秒重算一次（“2 小时 13 分后重置”“3 分钟前更新”会往前走）。
-struct UsageCard: View {
+/// 用量：两块额度（5 小时、本周），下面是分模型的每周额度和 Codex 的 credits / 重置次数。
+/// 标题右边是数据从哪来（刚查询 / 缓存、多久以前）和“刷新用量”。和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
+struct UsageSection: View {
     @Environment(AppModel.self) private var model
     let account: Account
 
     var body: some View {
-        Card("用量", systemImage: "gauge.with.dots.needle.33percent") {
-            if model.isUsageRefreshing(account.ref) {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("刷新中…").font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader("用量") {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    freshness(now: context.date.timeIntervalSince1970)
                 }
+                refreshButton
             }
-        } content: {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 content(now: context.date.timeIntervalSince1970)
             }
         }
+    }
+
+    private var refreshButton: some View {
+        let a = account
+        let refreshing = model.isUsageRefreshing(a.ref)
+        return Button {
+            model.refreshUsage(tool: a.tool, key: a.key, manual: true)
+        } label: {
+            Label(refreshing ? "刷新中…" : "刷新用量", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.glass)
+        .disabled(!a.can.usage || refreshing)
+        .help(reason ?? "经这个账号的出口查一次用量")
+    }
+
+    private var reason: String? {
+        guard !account.can.usage, let w = account.canWhy["usage"] else { return nil }
+        return Texts.canWhy(w, appLabel: model.appLabel(account.tool), tool: account.tool)
+    }
+
+    /// 数据从哪来：10 分钟内查到的写“刚查询”，否则是“缓存”；再写多久以前更新的、是否过时。
+    @ViewBuilder
+    private func freshness(now: Double) -> some View {
+        if model.isUsageRefreshing(account.ref) {
+            ProgressView().controlSize(.small)
+        } else if let u = model.usage(for: account), u.source != .none {
+            let age = u.fetchedEpoch.map { now - $0 }
+            let fresh = u.source == .live && (age ?? .infinity) < 600
+            HStack(spacing: 5) {
+                if u.stale {
+                    Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
+                } else if fresh {
+                    Circle().fill(.green).frame(width: 6, height: 6)
+                }
+                Text(freshText(fresh: fresh, age: age, stale: u.stale))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func freshText(fresh: Bool, age: Double?, stale: Bool) -> String {
+        if fresh { return (age.map { Texts.agoPhrase($0) } ?? "刚刚") + "查询" }
+        let when = age.map { "，" + Texts.agoPhrase($0) + "更新" } ?? ""
+        return (stale ? "数据已经过时" : "缓存") + when
     }
 
     @ViewBuilder
@@ -26,20 +71,25 @@ struct UsageCard: View {
         if let u = model.usage(for: account), u.source != .none {
             // 数据旧了（过期，或者这次没查到、用的是缓存）就用灰色显示
             let dim = u.stale || (u.source == .cache && u.errorCode != nil)
-            VStack(alignment: .leading, spacing: 14) {
-                UsageBar(title: "5 小时", window: u.fiveHour, now: now, dim: dim)
-                UsageBar(title: "本周", window: u.sevenDay, now: now, dim: dim)
-                let models = modelWindows(u)
-                if !models.isEmpty {
-                    Divider()
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 16)], alignment: .leading, spacing: 12) {
-                        ForEach(models, id: \.0) { item in
-                            UsageBar(title: item.0 + " 本周", window: item.1, now: now, dim: dim, compact: true)
-                        }
-                    }
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    QuotaTile(title: "5 小时", window: u.fiveHour, now: now, dim: dim)
+                    QuotaTile(title: "本周", window: u.sevenDay, now: now, dim: dim)
                 }
-                extras(u)
-                footer(u, now: now)
+                let minor = minorItems(u, now: now, dim: dim)
+                if !minor.isEmpty {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 28), GridItem(.flexible())], alignment: .leading, spacing: 10) {
+                        ForEach(minor) { $0 }
+                    }
+                    .padding(.horizontal, 4)
+                }
+                if let code = u.errorCode {
+                    Label(nonEmpty(u.error) ?? Texts.usageError(code), systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .symbolRenderingMode(.multicolor)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -50,6 +100,9 @@ struct UsageCard: View {
                         .textSelection(.enabled)
                 }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         }
     }
 
@@ -64,131 +117,142 @@ struct UsageCard: View {
         }
     }
 
-    /// 分模型的每周额度：Opus、Sonnet、应用，加上 model_scoped（按名字去重）。
-    private func modelWindows(_ u: UsageEntry) -> [(String, UsageWindow)] {
-        var out: [(String, UsageWindow)] = []
+    /// 两块额度下面的小行：分模型的每周额度（Opus、Sonnet、应用，加上 model_scoped，按名字去重），
+    /// 再是 credits、还能重置几次、额外用量。
+    private func minorItems(_ u: UsageEntry, now: Double, dim: Bool) -> [MinorQuota] {
+        var out: [MinorQuota] = []
         var seen = Set<String>()
         let fixed: [(String, UsageWindow?)] = [("Opus", u.sevenDayOpus), ("Sonnet", u.sevenDaySonnet), ("应用", u.sevenDayOauthApps)]
         for (name, w) in fixed {
-            if let w, w.utilization != nil, seen.insert(name.lowercased()).inserted { out.append((name, w)) }
+            if let w, w.utilization != nil, seen.insert(name.lowercased()).inserted {
+                out.append(MinorQuota(title: name + " 本周", window: w, now: now, dim: dim))
+            }
         }
         for m in u.modelScoped {
             guard let name = nonEmpty(m.name), m.window.utilization != nil, seen.insert(name.lowercased()).inserted else { continue }
-            out.append((name, m.window))
+            out.append(MinorQuota(title: name, window: m.window, now: now, dim: dim))
         }
-        return out
-    }
-
-    @ViewBuilder
-    private func extras(_ u: UsageEntry) -> some View {
-        let rows = extraRows(u)
-        if !rows.isEmpty {
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(rows, id: \.0) { row in
-                    HStack {
-                        Label(row.0, systemImage: row.2).foregroundStyle(.secondary)
-                        Spacer()
-                        Text(row.1).monospacedDigit().fontWeight(.medium)
-                    }
-                    .font(.callout)
-                    .accessibilityElement(children: .combine)
-                }
-            }
-        }
-    }
-
-    private func extraRows(_ u: UsageEntry) -> [(String, String, String)] {
-        var rows: [(String, String, String)] = []
         if let c = u.credits {
             if c.unlimited == true {
-                rows.append(("Credits", "不限", "creditcard"))
+                out.append(MinorQuota(title: "Credits", value: "不限", systemImage: "creditcard"))
             } else if c.hasCredits == true, let b = nonEmpty(c.balance) {
-                rows.append(("Credits 余额", b, "creditcard"))
+                out.append(MinorQuota(title: "Credits 余额", value: b, systemImage: "creditcard"))
             } else if c.hasCredits == false {
-                rows.append(("Credits", "没有", "creditcard"))
+                out.append(MinorQuota(title: "Credits", value: "没有", systemImage: "creditcard"))
             }
         }
         if let n = u.resetCredits?.availableCount {
-            rows.append(("还能重置额度", "\(n) 次", "arrow.counterclockwise"))
+            out.append(MinorQuota(title: "还能重置额度", value: "\(n) 次", systemImage: "arrow.counterclockwise"))
         }
         if let e = u.extraUsage, e.isEnabled == true {
-            rows.append(("额外用量", e.utilization.map { Texts.percent($0) } ?? "已开启", "plus.circle"))
+            out.append(MinorQuota(title: "额外用量", value: e.utilization.map { Texts.percent($0) } ?? "已开启", systemImage: "plus.circle"))
         }
-        return rows
-    }
-
-    /// 来源：10 分钟内查到的写“刚查询”，否则是“缓存”；再写多久以前更新的、数据是否过时、这次的出错原因。
-    private func footer(_ u: UsageEntry, now: Double) -> some View {
-        let age = u.fetchedEpoch.map { now - $0 }
-        let fresh = u.source == .live && (age ?? .infinity) < 600
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                if fresh {
-                    Tag(text: "刚查询", color: .green)
-                } else {
-                    Tag(text: "缓存")
-                }
-                if let age {
-                    Text("\(Texts.agoPhrase(age))更新").font(.caption).foregroundStyle(.secondary)
-                }
-                if u.stale {
-                    Label("数据已经过时", systemImage: "clock.badge.exclamationmark")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if let code = u.errorCode {
-                Label(nonEmpty(u.error) ?? Texts.usageError(code), systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .symbolRenderingMode(.multicolor)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
+        return out
     }
 }
 
-/// 一个窗口的用量条：标题、百分比（颜色按档）、重置时间。已重置的不显示旧的百分比（也不再重复写“已重置”）。
-struct UsageBar: View {
+/// 一块额度：标题和重置时间，大号的百分比（只有接近、超过上限时才着色），一根条。
+/// 已重置的不显示旧的百分比。
+struct QuotaTile: View {
     let title: String
     let window: UsageWindow?
     let now: Double
     var dim = false
-    var compact = false
 
     var body: some View {
         let reset = window?.isReset(now: now) ?? false
-        let pct = window?.utilization ?? 0
-        let color = Palette.usage(percent: pct)
+        let pct = window?.utilization
+        let level = UsageLevel(percent: pct ?? 0)
+        let color = Palette.usage(level)
         let resetText = reset ? nil : window?.resetsEpoch.map { Texts.resetText(epoch: $0, now: now) }
-        VStack(alignment: .leading, spacing: compact ? 3 : 5) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(compact ? .caption.weight(.medium) : .callout.weight(.medium))
-                    .foregroundStyle(dim ? .secondary : .primary)
-                Spacer()
-                if window?.utilization == nil {
-                    Text("—").foregroundStyle(.secondary)
-                } else if reset {
-                    Text("已重置").font(compact ? .caption : .callout).foregroundStyle(.secondary)
-                } else {
-                    Text(Texts.percent(pct))
-                        .font(compact ? .caption.monospacedDigit().weight(.semibold) : .title3.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(dim ? AnyShapeStyle(.secondary)
-                                         : UsageLevel(percent: pct) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
+                Text(title).font(.callout.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                if let resetText {
+                    Text(resetText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            Meter(fraction: reset ? 0 : pct / 100, color: color, height: compact ? 5 : 8, dim: dim)
-            if let resetText, !compact {
-                Text(resetText).font(.caption).foregroundStyle(.secondary)
+            Group {
+                if let pct, !reset {
+                    HStack(alignment: .firstTextBaseline, spacing: 1) {
+                        Text("\(Int(pct.rounded()))")
+                            .font(.system(size: 32, weight: .semibold).monospacedDigit())
+                        Text("%")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                    .foregroundStyle(dim ? AnyShapeStyle(.secondary) : level == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
+                } else {
+                    Text(reset ? "已重置" : "—")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(height: 38, alignment: .bottom)
+                }
             }
+            Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: color, height: 6, dim: dim)
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title)用量")
-        .accessibilityValue(window?.utilization == nil ? "没有数据" : reset ? "已重置" : "\(Texts.percent(pct))\(resetText.map { "，" + $0 } ?? "")")
+        .accessibilityValue(pct == nil ? "没有数据" : reset ? "已重置" : "\(Texts.percent(pct!))\(resetText.map { "，" + $0 } ?? "")")
     }
 }
 
-/// 侧栏、菜单栏里的小用量条：“5h 13%”。每 30 秒重算一次（重置时间过了就显示“已重置”）。
+/// 额度砖下面的一小行：分模型的额度（名字、短条、百分比），或者一个数值（credits、重置次数）。
+struct MinorQuota: View, Identifiable {
+    let title: String
+    var window: UsageWindow?
+    var now: Double = 0
+    var dim = false
+    var value: String?
+    var systemImage: String?
+
+    var id: String { title }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let systemImage {
+                Label(title, systemImage: systemImage).foregroundStyle(.secondary)
+            } else {
+                Text(title).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if let window {
+                let reset = window.isReset(now: now)
+                let pct = window.utilization ?? 0
+                Meter(fraction: reset ? 0 : pct / 100, color: Palette.usage(percent: pct), height: 5, dim: dim)
+                    .frame(width: 72)
+                Text(reset ? "已重置" : Texts.percent(pct))
+                    .monospacedDigit()
+                    .fontWeight(.medium)
+                    .foregroundStyle(reset || dim ? .secondary : .primary)
+                    .frame(minWidth: 40, alignment: .trailing)
+            } else if let value {
+                Text(value).monospacedDigit().fontWeight(.medium)
+            }
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 侧栏、菜单栏右边的两行小用量（5 小时、本周）。
+struct UsageStack: View {
+    let usage: UsageEntry
+    var width: CGFloat = 30
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            MiniUsage(label: "5h", window: usage.fiveHour, stale: usage.stale, width: width)
+            MiniUsage(label: "周", window: usage.sevenDay, stale: usage.stale, width: width)
+        }
+    }
+}
+
+/// 一行小用量：“5h ▬▬ 13%”。每 30 秒重算一次（重置时间过了就显示“已重置”）。
 struct MiniUsage: View {
     let label: String
     let window: UsageWindow?
@@ -209,14 +273,14 @@ struct MiniUsage: View {
             guard let p = pct, !reset, !stale else { return AnyShapeStyle(.secondary) }
             return UsageLevel(percent: p) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(Palette.usage(percent: p))
         }()
-        return HStack(spacing: 4) {
-            Text(label).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).frame(width: 16, alignment: .trailing)
+        return HStack(spacing: 5) {
+            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(width: 14, alignment: .trailing)
             Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: Palette.usage(percent: pct ?? 0), height: 4, dim: stale)
                 .frame(width: width)
             Text(value)
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(style)
-                .frame(width: 40, alignment: .leading)
+                .frame(width: 34, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label == "5h" ? "5 小时用量" : "本周用量")

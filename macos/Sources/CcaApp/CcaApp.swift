@@ -96,6 +96,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         observers.append((nc, token))
         Task { await model.start() }
+        #if DEBUG
+        if let dir = Snapshot.directory {
+            Task { await Snapshot.run(model: model, into: dir) }
+        }
+        #endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

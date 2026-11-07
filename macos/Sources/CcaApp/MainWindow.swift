@@ -81,15 +81,15 @@ struct DetailColumn: View {
     }
 }
 
-/// 详情上方的横幅：版本不同、账号表校验不过、共享设置有问题、文件读不了、后台刷新用量要同意或失败了、读 state 出错。
-/// 横幅是玻璃，里面的按钮用 .bordered / .borderedProminent（玻璃上不叠玻璃）。
+/// 详情上方的提示条：版本不同、账号表校验不过、共享设置有问题、文件读不了、后台刷新用量要同意或失败了、读 state 出错。
+/// 提示条是内容层（实的，见 Glass.swift 的 Banner），里面的按钮用 .bordered / .borderedProminent。
 struct TopBanners: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        GlassBannerStack {
+        BannerStack {
             if model.versionMismatch, let v = model.hello?.ccaVersion {
-                GlassBanner(systemImage: "arrow.down.app", tint: .accentColor,
+                Banner(systemImage: "arrow.down.app", tint: .accentColor,
                             title: model.hello?.gui?.stagedVersion == v ? "新版本的 cca App 已经下载好" : "cca 已经更新到 \(v)",
                             message: model.updating ? "正在下载和 cca 同版本的 App…" : "这个 App 是 \(model.appVersion)。更新后会自动重新打开。") {
                     if model.updating { ProgressView().controlSize(.small) }
@@ -99,7 +99,7 @@ struct TopBanners: View {
                 }
             }
             ForEach(model.invalidTables, id: \.tool) { item in
-                GlassBanner(systemImage: "tablecells.badge.ellipsis", tint: .red,
+                Banner(systemImage: "tablecells.badge.ellipsis", tint: .red,
                             title: "\(Texts.product(item.tool)) 的账号表校验不过：启动账号会失败",
                             message: item.issues.map(\.message).filter { !$0.isEmpty }.joined(separator: "\n")) {
                     Button("在终端里编辑…") { model.runInTerminal(.edit(prefix: model.prefix(item.tool))) }
@@ -108,25 +108,25 @@ struct TopBanners: View {
             }
             ForEach(model.visibleTools, id: \.self) { t in
                 if let problems = model.toolState(t)?.settingsProblems, !problems.isEmpty {
-                    GlassBanner(systemImage: "gearshape.2", tint: .orange,
+                    Banner(systemImage: "gearshape.2", tint: .orange,
                                 title: "\(Texts.product(t)) 的共享设置里有会盖掉账号代理、接口或凭证的项",
                                 message: problems.joined(separator: "、") + "。启动账号前 cca 会检查，可能要先在终端里处理。")
                 }
             }
             ForEach(Array((model.state?.errors ?? []).enumerated()), id: \.offset) { _, e in
-                GlassBanner(systemImage: "exclamationmark.octagon", tint: .red,
+                Banner(systemImage: "exclamationmark.octagon", tint: .red,
                             title: (e.tool.map { Texts.product($0) + "：" } ?? "") + Texts.stateError(e),
                             message: nonEmpty(e.message) == nil || e.message == Texts.stateError(e) ? "" : e.message)
             }
             ForEach(model.visibleTools, id: \.self) { t in
                 if let cs = model.usageNeedsConsent[t], let first = cs.first {
-                    GlassBanner(systemImage: "hand.raised", tint: .orange, title: "刷新 \(Texts.product(t)) 的用量要你同意",
+                    Banner(systemImage: "hand.raised", tint: .orange, title: "刷新 \(Texts.product(t)) 的用量要你同意",
                                 message: first.title) {
                         Button("现在刷新") { model.refreshUsage(tool: t, manual: true) }
                             .buttonStyle(.bordered)
                     }
                 } else if let f = model.usageFailure[t] {
-                    GlassBanner(systemImage: "exclamationmark.triangle", tint: .orange, title: "后台刷新 \(Texts.product(t)) 的用量没有成功",
+                    Banner(systemImage: "exclamationmark.triangle", tint: .orange, title: "后台刷新 \(Texts.product(t)) 的用量没有成功",
                                 message: f.message) {
                         Button("重试") { model.refreshUsage(tool: t, manual: true) }
                             .buttonStyle(.bordered)
@@ -134,14 +134,15 @@ struct TopBanners: View {
                 }
             }
             if let e = model.stateError {
-                GlassBanner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能读取账号状态", message: e) {
+                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能读取账号状态", message: e) {
                     Button("重试") { Task { await model.connect() } }.buttonStyle(.bordered)
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, hasBanners ? 12 : 0)
-        .padding(.bottom, hasBanners ? 4 : 0)
+        .padding(.horizontal, 28)
+        .padding(.top, hasBanners ? 14 : 0)
+        .padding(.bottom, hasBanners ? 2 : 0)
+        .frame(maxWidth: 836)
     }
 
     private var hasBanners: Bool {
@@ -168,11 +169,13 @@ struct MainToolbar: ToolbarContent {
                 Button {
                     model.syncRouter()
                 } label: {
-                    Label("同步路由器", systemImage: "arrow.triangle.2.circlepath")
+                    Label("同步路由器", systemImage: "wifi.router")
                 }
                 .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
                 .disabled(model.syncActivity != nil)
             }
+        }
+        ToolbarItem(placement: .primaryAction) {
             Menu {
                 Button("添加 Claude 账号…") { model.runInTerminal(.addAccount(prefix: [], product: "Claude")) }
                 Button("添加 ChatGPT 账号…") { model.runInTerminal(.addAccount(prefix: model.prefix(.codex), product: "ChatGPT")) }

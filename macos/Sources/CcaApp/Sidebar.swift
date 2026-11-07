@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// 侧栏：工具切换（Claude / ChatGPT）、账号列表、节点分流。
+/// 侧栏：工具切换（Claude / ChatGPT），最上面是节点分流（两种工具共用的），下面是这个工具的账号。
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var model = model
         List(selection: $model.selection) {
+            Section {
+                RoutingRow()
+                    .tag(SidebarItem.routing)
+            }
             Section(Texts.product(model.tool) + " 账号") {
                 let accounts = model.accounts(model.tool)
                 if accounts.isEmpty, model.state != nil {
@@ -18,28 +22,6 @@ struct Sidebar: View {
                     AccountRow(account: a)
                         .tag(SidebarItem.account(a.ref))
                 }
-            }
-            Section("路由") {
-                Label {
-                    HStack {
-                        Text("节点分流")
-                        Spacer()
-                        if model.state?.routing?.sync == .pending {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.orange)
-                                .help("路由器待同步")
-                                .accessibilityLabel("路由器待同步")
-                        } else if model.live?.hasDrift == true {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.orange)
-                                .help("有槽位选错了节点")
-                                .accessibilityLabel("有槽位选错了节点")
-                        }
-                    }
-                } icon: {
-                    Image(systemName: "point.3.filled.connected.trianglepath.dotted")
-                }
-                .tag(SidebarItem.routing)
             }
         }
         .listStyle(.sidebar)
@@ -63,6 +45,56 @@ struct Sidebar: View {
     }
 }
 
+/// 节点分流那一行：品牌标记（App 图标的缩小版）、现在走哪边，有问题时右边说一句。
+struct RoutingRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 10) {
+            BrandMark(size: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("节点分流").font(.body.weight(.medium))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if let issue {
+                Tag(text: issue.0, color: issue.1)
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var subtitle: String { model.routeSummary }
+    private var issue: (String, Color)? { model.routeIssue }
+}
+
+extension AppModel {
+    /// 走哪边（侧栏的节点分流、菜单栏面板的第二行）：读到 live 时按它，否则按设置。
+    var routeSummary: String {
+        if let l = live {
+            switch l.route {
+            case .router: return "路由器" + (l.router?.backend.map { " · \($0.rawValue)" } ?? "")
+            case .local: return nonEmpty(l.local?.name) ?? "本机 Clash"
+            default: break
+            }
+        }
+        if routerConfigured { return "路由器" + (state?.config?.router?.host.map { " \($0)" } ?? "") }
+        if localConfigured { return nonEmpty(state?.config?.local?.name) ?? "本机 Clash" }
+        return "没配置路由器和本机 Clash"
+    }
+
+    /// 分流有问题时的一句话和颜色：待同步、有槽位连不上、选错节点。
+    var routeIssue: (String, Color)? {
+        if state?.routing?.sync == .pending { return ("待同步", .orange) }
+        if let s = live?.summary {
+            if s.closed > 0 { return ("\(s.closed) 个连不上", .red) }
+            if s.drift > 0 { return ("\(s.drift) 个选错", .orange) }
+        }
+        return nil
+    }
+}
+
 struct SidebarFooter: View {
     @Environment(AppModel.self) private var model
 
@@ -81,10 +113,10 @@ struct SidebarFooter: View {
                 if model.stateLoading {
                     ProgressView().controlSize(.mini)
                 }
-                Text(statusText).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(statusText).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -98,7 +130,7 @@ struct SidebarFooter: View {
     }
 }
 
-/// 侧栏的一行：头像、名字、套餐、登录状态、两个小用量条、锁定、节点、App 开着的绿点。
+/// 侧栏的一行：头像（App 开着时右下角有绿点）、名字、第二行（登录有问题时先说、套餐、节点），右边两行小用量。
 struct AccountRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -109,33 +141,31 @@ struct AccountRow: View {
             BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 30)
                 .overlay(alignment: .bottomTrailing) {
                     if a.appRunning {
-                        Circle().fill(.green)
-                            .frame(width: 9, height: 9)
-                            .overlay(Circle().stroke(.background, lineWidth: 1.5))
+                        RunningDot(size: 10)
+                            .offset(x: 1, y: 1)
                             .help("\(model.appLabel(a.tool)) 开着")
                     }
                 }
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.body.weight(.medium)).lineLimit(1)
                     if a.pinned {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                             .help("维护者锁定了节点")
                     }
                 }
                 HStack(spacing: 5) {
-                    LoginDot(state: a.login)
+                    if let c = a.loginIssueColor {
+                        Circle().fill(c).frame(width: 6, height: 6)
+                    }
                     Text(a.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 4)
             if let u = model.usage(for: a), u.source != .none {
-                VStack(alignment: .trailing, spacing: 3) {
-                    MiniUsage(label: "5h", window: u.fiveHour, stale: u.stale)
-                    MiniUsage(label: "周", window: u.sevenDay, stale: u.stale)
-                }
+                UsageStack(usage: u)
             } else if model.isUsageRefreshing(a.ref), a.can.usage {
                 ProgressView().controlSize(.mini)
             }

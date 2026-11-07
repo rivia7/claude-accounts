@@ -1,7 +1,10 @@
 import AppKit
 import SwiftUI
 
-// 颜色和小部件：用量的颜色档、状态颜色、头像。文字本身在 CcaKit 的 Texts 里（可测试）。
+// 颜色和小部件：品牌色、内容层的色块、状态色、头像、用量条、标签。文字本身在 CcaKit 的 Texts 里（可测试）。
+//
+// 颜色只表达两件事：“哪个账号”（账号色，就是启动器角标的颜色，线路、分流图里的线都用它）
+// 和“什么状态”（系统的绿 / 橙 / 红，正常时尽量不出现）。品牌色（App 图标的深靛蓝）只用在品牌标记和分流图的面板上。
 
 extension Color {
     /// `#RRGGBB`；格式不对时用灰色。
@@ -12,6 +15,30 @@ extension Color {
             self = Color(nsColor: .systemGray)
         }
     }
+
+    init(hex: UInt32) {
+        self = Color(.sRGB, red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255,
+                     blue: Double(hex & 0xFF) / 255, opacity: 1)
+    }
+}
+
+/// 和 App 图标同一套颜色（tools/make-icon.swift）。
+enum Brand {
+    static let indigo = Color(hex: 0x2D3A9E)
+    static let ink = Color(hex: 0x1A2266)
+    static let night = Color(hex: 0x0C1033)
+    static let teal = Color(hex: 0x19C2B0)
+    /// 图标里三条线的颜色（蓝、绿、粉）
+    static let lines: [Color] = [Color(hex: 0x0A84FF), Color(hex: 0x30A46C), Color(hex: 0xD6409F)]
+}
+
+/// 内容层的色块（不是玻璃）：深浅色下都比背景深一点 / 亮一点。
+enum Surface {
+    /// 额度砖、分流图的面板、引导卡片
+    static let tile = Color.primary.opacity(0.045)
+    /// 用量条的底槽
+    static let track = Color.primary.opacity(0.09)
+    static let hairline = Color.primary.opacity(0.12)
 }
 
 enum Palette {
@@ -36,16 +63,6 @@ enum Palette {
         }
     }
 
-    static func login(_ s: LoginState) -> Color {
-        switch s {
-        case .loggedIn: return .green
-        case .loggedOut: return .gray
-        case .emailMismatch: return .orange
-        case .api: return .blue
-        default: return .gray
-        }
-    }
-
     static func health(_ r: HealthResult?) -> Color {
         switch r {
         case .some(.ok), .some(.apiOk): return .green
@@ -65,6 +82,41 @@ enum Palette {
     }
 }
 
+/// 品牌标记：App 图标的缩小版——深靛蓝的圆角方块里，一个出口分出三条线。
+struct BrandMark: View {
+    var size: CGFloat = 28
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+        ZStack {
+            shape.fill(LinearGradient(colors: [Brand.indigo, Brand.ink, Brand.night], startPoint: .topLeading, endPoint: .bottomTrailing))
+            shape.fill(RadialGradient(colors: [Brand.teal.opacity(0.5), .clear], center: .bottomTrailing,
+                                      startRadius: 0, endRadius: size * 0.9))
+            Canvas { ctx, s in
+                let w = s.width, h = s.height
+                let hub = CGPoint(x: w * 0.3, y: h * 0.5)
+                let ends = [CGPoint(x: w * 0.72, y: h * 0.27), CGPoint(x: w * 0.76, y: h * 0.5), CGPoint(x: w * 0.72, y: h * 0.73)]
+                let line = max(w * 0.06, 1)
+                for (p, c) in zip(ends, Brand.lines) {
+                    var path = Path()
+                    path.move(to: hub)
+                    let mid = hub.x + (p.x - hub.x) * 0.55
+                    path.addCurve(to: p, control1: CGPoint(x: mid, y: hub.y), control2: CGPoint(x: mid, y: p.y))
+                    ctx.stroke(path, with: .color(.white.opacity(0.85)), style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    let r = w * 0.09
+                    ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)), with: .color(c))
+                }
+                let hr = w * 0.1
+                ctx.stroke(Path(ellipseIn: CGRect(x: hub.x - hr, y: hub.y - hr, width: hr * 2, height: hr * 2)),
+                           with: .color(.white), lineWidth: line)
+            }
+        }
+        .overlay(shape.strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 /// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。
 struct BadgeAvatar: View {
     let badge: Badge?
@@ -73,23 +125,34 @@ struct BadgeAvatar: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(badge == nil ? Color(nsColor: .systemGray).opacity(0.55) : Color(badge: badge))
-            Circle().fill(LinearGradient(colors: [.white.opacity(0.28), .clear], startPoint: .top, endPoint: .center))
+            Circle().fill(badge == nil ? Color(nsColor: .systemGray).opacity(0.6) : Color(badge: badge))
             if let b = badge, !b.label.isEmpty {
                 Text(b.label)
-                    .font(.system(size: size * 0.46, weight: .semibold, design: .rounded))
+                    .font(.system(size: size * 0.44, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
-                    .padding(size * 0.08)
+                    .padding(size * 0.1)
             } else {
                 Image(systemName: isAPI ? "key.horizontal.fill" : "person.fill")
-                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .font(.system(size: size * 0.4, weight: .semibold))
                     .foregroundStyle(.white)
             }
         }
+        .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+/// 头像右下角的绿点：这个账号的桌面 App 开着。
+struct RunningDot: View {
+    var size: CGFloat = 9
+
+    var body: some View {
+        Circle().fill(Color.green)
+            .frame(width: size, height: size)
+            .overlay(Circle().stroke(.background, lineWidth: max(size * 0.18, 1.5)))
     }
 }
 
@@ -103,15 +166,16 @@ struct Meter: View {
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
+                Capsule().fill(Surface.track)
                 if fraction > 0 {
                     Capsule()
-                        .fill(dim ? AnyShapeStyle(.secondary) : AnyShapeStyle(color.gradient))
+                        .fill(dim ? Color.secondary.opacity(0.6) : color)
                         .frame(width: max(g.size.width * min(fraction, 1), height))
                 }
             }
         }
         .frame(height: height)
+        .accessibilityHidden(true)
     }
 }
 
@@ -132,34 +196,37 @@ struct Tag: View {
             Text(text).foregroundStyle(color == nil ? Color.secondary : Color.primary)
         }
         .font(.caption.weight(.medium))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
         .background(Capsule().fill(.quaternary.opacity(0.7)))
         .accessibilityElement(children: .combine)
     }
 }
 
-/// 登录状态的小圆点。
-struct LoginDot: View {
-    let state: LoginState
-
-    var body: some View {
-        Circle().fill(Palette.login(state)).frame(width: 7, height: 7)
-            .accessibilityLabel(Texts.login(state, loginEmail: nil))
-    }
-}
-
 extension Account {
-    /// 侧栏第二行：套餐 · 节点；API 账号：接口 · 直连 / 节点。
+    /// 侧栏、菜单栏的第二行：套餐 · 节点；没登录时先说登录状态；API 账号：接口 · 直连 / 节点。
     var subtitle: String {
         if isAPI {
             let host = api?.host ?? "第三方 API"
             return host + " · " + (node ?? "直连")
         }
         var parts: [String] = []
-        if let p = nonEmpty(plan) { parts.append(p) }
         if login != .loggedIn { parts.append(Texts.login(login, loginEmail: nil)) }
+        if let p = nonEmpty(plan) { parts.append(p) }
         if let n = node { parts.append(n) }
         return parts.joined(separator: " · ")
+    }
+
+    /// 这个账号的颜色（启动器角标的颜色）：头像、线路、分流图里的线都用它；没有角标的（第三方 API 账号）是灰色。
+    var lineColor: Color { badge == nil ? Color(nsColor: .systemGray) : Color(badge: badge) }
+
+    /// 登录有问题时的颜色（侧栏、菜单栏第二行前面的点）；登录正常时为 nil（不显示）。
+    var loginIssueColor: Color? {
+        switch login {
+        case .loggedOut: return .gray
+        case .emailMismatch: return .orange
+        default: return nil
+        }
     }
 }

@@ -6,7 +6,7 @@
 #   --version V   App 的版本号（默认取 ../cca 里 VERSION="…" 那一行；必须和 cca 的版本一样，App 靠它判断要不要更新）
 #   --out PATH    输出的 .app（默认 macos/build/cca.app）
 #   --arch A      universal（默认，arm64 + x86_64）| arm64 | native（本机）
-#   --debug       不优化（-Onone -g），只编本机架构
+#   --debug       不优化（-Onone -g），只编本机架构；带上 DEBUG 才有的截图模式（Snapshot.swift）
 #
 # 步骤：编译 CcaKit + CcaApp → 画图标（有缓存）→ 写 Info.plist → 组装 → ad-hoc 签名 → 校验签名 → 运行 --self-check。
 # stdout 只输出 .app 的路径，进度写 stderr。
@@ -82,7 +82,7 @@ while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$HERE/Sources/CcaKit" "
 OBJ="$BUILD/obj"
 mkdir -p "$OBJ" "$BUILD/icon"
 if [ "$DEBUG" = 1 ]; then
-	OPT=(-Onone -g)
+	OPT=(-Onone -g -D DEBUG)
 else
 	OPT=(-O)
 fi

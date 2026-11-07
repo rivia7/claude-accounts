@@ -44,44 +44,53 @@ enum MenuBarIcon {
     }
 }
 
-/// 菜单栏面板（约 340 pt 宽）：工具切换、每个账号一行（头像、名字、5h 条和百分比、周百分比、出错点、【打开】）。
+/// 菜单栏面板（约 340 pt 宽）：品牌标记和现在走哪边（待同步时右边是“同步”）、工具切换、
+/// 每个账号一行（头像、名字、第二行、两行小用量、【打开】），底部是刷新用量、打开主窗口、退出。
 struct MenuBarContent: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "point.3.filled.connected.trianglepath.dotted").foregroundStyle(.tint)
-                Text("cca").font(.headline)
-                Spacer()
-                if model.visibleTools.count > 1 {
-                    Picker("工具", selection: $model.tool) {
-                        ForEach(model.visibleTools, id: \.self) { Text(Texts.product($0)).tag($0) }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                BrandMark(size: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("cca").font(.headline)
+                    HStack(spacing: 5) {
+                        if let issue = model.routeIssue {
+                            Circle().fill(issue.1).frame(width: 6, height: 6)
+                            Text(model.routeSummary + "，" + issue.0)
+                        } else {
+                            Text(model.routeSummary)
+                        }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 160)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 }
-            }
-            content
-            if model.state?.routing?.sync == .pending, model.routerConfigured {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
-                    Text("路由器待同步").font(.callout)
-                    Spacer()
+                Spacer(minLength: 6)
+                if model.state?.routing?.sync == .pending, model.routerConfigured {
                     Button(model.syncActivity == nil ? "同步" : "同步中…") { model.syncRouter() }
                         .buttonStyle(.glass)
                         .controlSize(.small)
                         .disabled(model.syncActivity != nil)
+                        .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
                 }
             }
+            if model.visibleTools.count > 1 {
+                Picker("工具", selection: $model.tool) {
+                    ForEach(model.visibleTools, id: \.self) { Text(Texts.product($0)).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            content
             if let t = model.toast {
                 Text(t.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Divider()
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
                 Button {
                     model.refreshUsage(manual: true)
                 } label: {
@@ -114,7 +123,7 @@ struct MenuBarContent: View {
             if accounts.isEmpty {
                 Text(model.state == nil ? "正在读取…" : "还没有账号").foregroundStyle(.secondary).font(.callout)
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: 10) {
                     ForEach(accounts) { a in MenuRow(account: a) }
                 }
             }
@@ -129,6 +138,7 @@ struct MenuBarContent: View {
     }
 }
 
+/// 面板里的一行：和侧栏同一套（头像、名字、第二行、两行小用量），右边是【打开】；有问题时名字后面一个橙色的点。
 struct MenuRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -138,8 +148,15 @@ struct MenuRow: View {
         let u = model.usage(for: a)
         let busy = model.activity(a.ref) != nil
         let issue = problem(a, u)
-        HStack(spacing: 8) {
-            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 22)
+        HStack(spacing: 10) {
+            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 28)
+                .overlay(alignment: .bottomTrailing) {
+                    if a.appRunning {
+                        RunningDot(size: 9)
+                            .offset(x: 1, y: 1)
+                            .accessibilityLabel("\(model.appLabel(a.tool)) 开着")
+                    }
+                }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)
@@ -150,59 +167,27 @@ struct MenuRow: View {
                             .help(issue)
                             .accessibilityLabel(issue)
                     }
-                    if a.appRunning {
-                        Image(systemName: "macwindow").font(.system(size: 10)).foregroundStyle(.green)
-                            .accessibilityLabel("\(model.appLabel(a.tool)) 开着")
-                    }
                 }
-                if let u, u.source != .none {
-                    HStack(spacing: 8) {
-                        MiniUsage(label: "5h", window: u.fiveHour, stale: u.stale, width: 46)
-                        TimelineView(.periodic(from: .now, by: 30)) { context in
-                            weekly(u, now: context.date.timeIntervalSince1970)
-                        }
-                    }
-                } else {
-                    Text(a.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
+                Text(a.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: 6)
+            if let u, u.source != .none {
+                UsageStack(usage: u, width: 26)
+            }
             if busy {
-                ProgressView().controlSize(.small)
-            }
-            // 第三方 API 账号没有桌面 App：不放按钮
-            if !a.isAPI {
+                ProgressView().controlSize(.small).frame(width: 44)
+            } else if !a.isAPI {
+                // 第三方 API 账号没有桌面 App：不放按钮
                 Button("打开") { model.openApp(a.ref) }
                     .buttonStyle(.glass)
                     .controlSize(.small)
-                    .disabled(!a.can.app || busy)
+                    .disabled(!a.can.app)
                     .accessibilityLabel("打开 \(a.displayName) 的 \(model.appLabel(a.tool))")
                     .help(a.can.app ? "打开 \(model.appLabel(a.tool))" : (a.canWhy["app"].map {
                         Texts.canWhy($0, appLabel: model.appLabel(a.tool), tool: a.tool)
                     } ?? "不能打开"))
             }
         }
-        .padding(.vertical, 2)
-    }
-
-    /// 本周的百分比；重置时间过了写“已重置”（灰色，不按旧的百分比着色），数据旧了也是灰色。
-    private func weekly(_ u: UsageEntry, now: Double) -> some View {
-        let w = u.sevenDay
-        let reset = w?.isReset(now: now) == true
-        let value: String = {
-            guard let p = w?.utilization else { return "—" }
-            return reset ? "已重置" : Texts.percent(p)
-        }()
-        let style: AnyShapeStyle = {
-            guard let p = w?.utilization, !reset, !u.stale, UsageLevel(percent: p) != .normal else { return AnyShapeStyle(.secondary) }
-            return AnyShapeStyle(Palette.usage(percent: p))
-        }()
-        return Text("周 " + value)
-            .font(.system(size: 11, weight: .medium).monospacedDigit())
-            .foregroundStyle(style)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("本周用量")
-            .accessibilityValue(value == "—" ? "没有数据" : value)
     }
 
     /// 出错点：没登录、登错号、查用量出错。

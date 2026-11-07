@@ -1,25 +1,36 @@
 import SwiftUI
 
-/// 一个槽位的一行：账号表算出来的（state）加上路由器 / 本机上现在的样子（live）。
+/// 分流图的一行：一个槽位（端口）。账号表算出来的（state）加上路由器 / 本机上现在的样子（live）。
 struct SlotRow: Identifiable {
     let id: Int
     let group: String?
     let port: Int?
     let ref: AccountRef?
     let account: Account?
-    let expected: String
+    /// 应选的节点（看本机时是本机 Clash 里的叫法）
+    let expected: String?
+    /// 现在选中的节点（live）
     let selected: String?
+    /// nil：还没查
     let state: SlotState?
+
+    var isFree: Bool { ref == nil }
+
+    /// 线连到哪个节点：选错了节点时连到实际选中的那个，否则连到应选的。
+    var target: String? {
+        if state == .drift, let s = nonEmpty(selected) { return s }
+        return nonEmpty(expected)
+    }
 }
 
-/// 节点分流页：走哪边、后端、钩子 / 定时任务、同步状态，槽位表，可选节点和用它的账号。
+/// 节点分流页：标题和概况、提示条、分流图（账号 → 路由器 / 本机 Clash 的端口 → 节点），图下面逐条列出有问题的槽位。
 /// 这一页可见时每 60 秒读一次 `_gui live`（Scheduler）。
 struct RoutingPage: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 22) {
                 RoutingHeader()
                 RoutingBanners()
                 let rows = slotRows()
@@ -27,112 +38,135 @@ struct RoutingPage: View {
                     ContentUnavailableView("还没有端口池", systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("配置路由器或本机 Clash 之后，每个走节点的账号会分到一个端口。"))
                 } else {
-                    SlotTable(rows: rows)
-                        .frame(height: CGFloat(rows.count) * 30 + 34)
+                    RouteMap(rows: rows, nodes: mapNodes(rows), panel: panelTitle) { ref in
+                        model.tool = ref.tool
+                        model.selection = .account(ref)
+                    }
+                    SlotIssues(rows: rows)
+                    DirectAccounts()
                 }
-                NodesSection()
             }
-            .padding(24)
-            .frame(maxWidth: 980, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 36)
+            .frame(maxWidth: 960, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .navigationTitle("节点分流")
     }
 
+    private var lookingLocal: Bool { model.live?.route == .local }
+
     private func slotRows() -> [SlotRow] {
         let slots = model.state?.routing?.slots ?? []
         let live = model.live
-        let local = live?.route == .local
+        let local = lookingLocal
         return slots.map { s in
             let l = live?.slot(s.slot)
             let ref = s.ref
             return SlotRow(id: s.slot, group: s.group ?? l?.group, port: s.port ?? l?.port, ref: ref,
                            account: ref.flatMap { model.account($0) },
-                           expected: l?.expected ?? (local ? s.localNode : s.node) ?? "—",
+                           expected: l?.expected ?? (local ? s.localNode ?? s.node : s.node),
                            selected: l?.selected, state: l?.state ?? (s.isEmpty ? .empty : nil))
         }
     }
+
+    /// 右边的节点：可选节点（看本机时用本机的叫法），再补上线连到、但不在可选节点里的（比如选错到别处）。
+    private func mapNodes(_ rows: [SlotRow]) -> [MapNode] {
+        let local = lookingLocal
+        var out: [MapNode] = (model.state?.routing?.nodes ?? []).map { n in
+            let name = local ? (nonEmpty(n.localName) ?? n.name) : n.name
+            var note: String?
+            if let ln = nonEmpty(n.localName), ln != n.name {
+                note = local ? "路由器上叫 \(n.name)" : "Clash Verge 里叫 \(ln)"
+            }
+            return MapNode(name: name, note: note, users: n.users.count)
+        }
+        for r in rows where !r.isFree {
+            if let t = r.target, !out.contains(where: { $0.name == t }) {
+                out.append(MapNode(name: t, note: "不在可选节点里", users: 0, listed: false))
+            }
+        }
+        return out
+    }
+
+    /// 中间面板的名字：OpenClash / ShellCrash / Clash Verge，下面一行是路由器的地址。
+    private var panelTitle: (String, String?) {
+        let live = model.live
+        if lookingLocal {
+            return (nonEmpty(live?.local?.name) ?? "本机 Clash", "这台 Mac")
+        }
+        if let r = live?.router, r.configured {
+            return (r.backend?.rawValue ?? "路由器", r.host ?? model.state?.config?.router?.host)
+        }
+        if model.routerConfigured { return ("路由器", model.state?.config?.router?.host) }
+        if model.localConfigured { return (nonEmpty(model.state?.config?.local?.name) ?? "本机 Clash", "这台 Mac") }
+        return ("端口池", nil)
+    }
 }
 
+/// 页头：标题、一行概况（走哪边、怎么选、端口范围、多久以前查的），后端 / 钩子 / 定时任务的状态；右边是看哪边、刷新、同步路由器。
 struct RoutingHeader: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        // 宽的时候信息和按钮左右排；窄的时候按钮（和看哪边的选择）放到下面
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: 16) {
-                info
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 8) {
-                    actions
-                    routePicker
+        VStack(alignment: .leading, spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    titleBlock
+                    Spacer(minLength: 12)
+                    controls
                 }
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                info
-                actions
-                routePicker
-            }
-        }
-    }
-
-    private var info: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("现在走").foregroundStyle(.secondary)
-                Text(routeTitle).font(.title3.weight(.semibold))
-                if model.liveLoading { ProgressView().controlSize(.small) }
+                VStack(alignment: .leading, spacing: 14) {
+                    titleBlock
+                    controls
+                }
             }
             ViewThatFits(in: .horizontal) {
-                GlassRow(spacing: 8) { pills }
-                VStack(alignment: .leading, spacing: 6) { pills }
+                HStack(spacing: 8) { chips }
+                VStack(alignment: .leading, spacing: 6) { chips }
             }
-            Text(detailLine).font(.caption).foregroundStyle(.secondary)
         }
     }
 
-    /// 后端、本机 Clash、钩子、定时任务：状态写在文字里（不只靠颜色）。
-    @ViewBuilder
-    private var pills: some View {
-        let cfg = model.state?.config
-        let live = model.live
-        if let r = live?.router, r.configured {
-            let name = r.backend?.rawValue ?? "路由器"
-            let state = r.reachable == false ? "连不上" : r.running == false ? "没在运行" : r.running == true ? "运行中" : "已配置"
-            GlassPill(text: "\(name) \(state)", color: r.reachable == false || r.running == false ? .red : .green,
-                      systemImage: "wifi.router")
-            statusPill("钩子", r.hook)
-            statusPill("定时任务", r.cron)
-        } else if cfg?.routerConfigured == true, let host = cfg?.router?.host {
-            GlassPill(text: "路由器 \(host)", color: .secondary, systemImage: "wifi.router")
-        }
-        if let l = live?.local, l.configured {
-            let name = nonEmpty(l.name) ?? "本机 Clash"
-            let state = l.running == true ? "运行中" : l.running == false ? "没开" : "没看这一边"
-            GlassPill(text: "\(name) \(state)", color: l.running == false ? .red : (l.running == true ? .green : .secondary),
-                      systemImage: "laptopcomputer")
-        } else if cfg?.localConfigured == true {
-            GlassPill(text: nonEmpty(cfg?.local?.name) ?? "本机 Clash", color: .secondary, systemImage: "laptopcomputer")
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("节点分流").font(.system(size: 24, weight: .semibold))
+                if model.liveLoading { ProgressView().controlSize(.small) }
+            }
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(summary(now: context.date.timeIntervalSince1970))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
-    private var actions: some View {
-        GlassRow(spacing: 8) {
-            Button {
-                model.refreshLive()
-            } label: {
-                Label("刷新", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.glass)
-            .disabled(model.liveLoading)
-            if model.routerConfigured {
+    private var controls: some View {
+        HStack(spacing: 10) {
+            routePicker
+            GlassRow(spacing: 8) {
                 Button {
-                    model.syncRouter()
+                    model.refreshLive()
                 } label: {
-                    Label(model.syncActivity == nil ? "同步路由器" : "同步中…", systemImage: "arrow.triangle.2.circlepath")
+                    Label("刷新", systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.glassProminent)
-                .disabled(model.syncActivity != nil)
+                .buttonStyle(.glass)
+                .disabled(model.liveLoading)
+                .help("重新读取路由器 / 本机 Clash 上各个端口现在的样子")
+                if model.routerConfigured {
+                    Button {
+                        model.syncRouter()
+                    } label: {
+                        Label(model.syncActivity == nil ? "同步路由器" : "同步中…", systemImage: "wifi.router")
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(model.syncActivity != nil)
+                    .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
+                }
             }
         }
     }
@@ -144,44 +178,66 @@ struct RoutingHeader: View {
             Picker("看哪边", selection: $model.liveRoute) {
                 Text("自动").tag(Route?.none)
                 Text("路由器").tag(Route?.some(.router))
-                Text("本机 Clash").tag(Route?.some(.local))
+                Text("本机").tag(Route?.some(.local))
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 230)
+            .fixedSize()
+            .help("自动：按 cca 的设置（连得上路由器看路由器，连不上看本机 Clash）")
         }
     }
 
-    private var routeTitle: String {
+    /// 一行概况：现在走哪边、怎么选、端口范围、多久以前查的。
+    private func summary(now: Double) -> String {
+        var parts: [String] = []
         if let l = model.live {
             switch l.route {
-            case .router: return "路由器" + (l.router?.host.map { " \($0)" } ?? "")
-            case .local: return nonEmpty(l.local?.name) ?? "本机 Clash"
-            default: return "无（没配置路由器和本机 Clash）"
+            case .router: parts.append("现在走路由器" + (l.router?.host.map { " \($0)" } ?? ""))
+            case .local: parts.append("现在走" + (nonEmpty(l.local?.name) ?? "本机 Clash"))
+            default: parts.append("没配置路由器和本机 Clash")
             }
+        } else if model.routerConfigured {
+            parts.append("走路由器")
+        } else if model.localConfigured {
+            parts.append("走本机 Clash")
         }
-        if model.routerConfigured { return "路由器" }
-        if model.localConfigured { return "本机 Clash" }
-        return "无"
-    }
-
-    private var detailLine: String {
-        var parts: [String] = []
-        if let pref = model.state?.config?.routePref { parts.append(Texts.routePref(pref)) }
         let ports = (model.state?.routing?.slots ?? []).compactMap(\.port)
         if let lo = ports.min(), let hi = ports.max() {
             parts.append(lo == hi ? "端口 \(lo)" : "端口 \(lo)–\(hi)")
         }
         if let at = model.live?.generatedAt {
-            parts.append(Texts.agoPhrase(Date().timeIntervalSince1970 - at) + "查的")
+            parts.append(Texts.agoPhrase(now - at) + "查的")
         }
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: "，")
     }
 
-    private func statusPill(_ name: String, _ v: Bool?) -> some View {
-        GlassPill(text: name + (v == true ? "正常" : v == false ? "没装" : "未知"),
-                  color: v == true ? .green : v == false ? .orange : .secondary,
-                  systemImage: v == true ? "checkmark" : v == false ? "xmark" : "questionmark")
+    /// 后端、本机 Clash、钩子、定时任务：状态写在文字里（不只靠颜色）。
+    @ViewBuilder
+    private var chips: some View {
+        let cfg = model.state?.config
+        let live = model.live
+        if let r = live?.router, r.configured {
+            let name = r.backend?.rawValue ?? "路由器"
+            let state = r.reachable == false ? "连不上" : r.running == false ? "没在运行" : r.running == true ? "运行中" : "已配置"
+            Tag(text: "\(name) \(state)", color: r.reachable == false || r.running == false ? .red : .green, systemImage: "wifi.router")
+            statusTag("钩子", r.hook)
+            statusTag("定时任务", r.cron)
+        } else if cfg?.routerConfigured == true, let host = cfg?.router?.host {
+            Tag(text: "路由器 \(host)", systemImage: "wifi.router")
+        }
+        if let l = live?.local, l.configured {
+            let name = nonEmpty(l.name) ?? "本机 Clash"
+            let state = l.running == true ? "运行中" : l.running == false ? "没开" : "这次没看"
+            Tag(text: "\(name) \(state)", color: l.running == false ? Color.red : l.running == true ? Color.green : nil, systemImage: "laptopcomputer")
+        } else if cfg?.localConfigured == true {
+            Tag(text: nonEmpty(cfg?.local?.name) ?? "本机 Clash", systemImage: "laptopcomputer")
+        }
+    }
+
+    private func statusTag(_ name: String, _ v: Bool?) -> some View {
+        Tag(text: name + (v == true ? "正常" : v == false ? "没装" : "未知"),
+            color: v == true ? Color.green : v == false ? Color.orange : nil,
+            systemImage: v == true ? "checkmark" : v == false ? "xmark" : "questionmark")
     }
 }
 
@@ -191,11 +247,11 @@ struct RoutingBanners: View {
     var body: some View {
         let routing = model.state?.routing
         let drift = model.live?.summary?.drift ?? 0
-        GlassBannerStack {
+        BannerStack {
             if routing?.sync == .pending {
-                GlassBanner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器待同步",
-                            message: "路由器上的端口池和这台 Mac 的账号表不一致" + (drift > 0 ? "（有 \(drift) 个槽位选错了节点）" : "")
-                                + "：下次启动账号时会自动同步，也可以现在同步。") {
+                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器待同步",
+                       message: "路由器上的端口池和这台 Mac 的账号表不一致" + (drift > 0 ? "（有 \(drift) 个槽位选错了节点）" : "")
+                           + "：下次启动账号时会自动同步，也可以现在同步。") {
                     if model.routerConfigured {
                         Button("同步路由器") { model.syncRouter() }
                             .buttonStyle(.borderedProminent)
@@ -204,31 +260,31 @@ struct RoutingBanners: View {
                 }
             }
             if let notices = model.state?.notices, !notices.isEmpty {
-                GlassBanner(systemImage: "info.circle", tint: .accentColor, title: "下次运行 cca 时会有这些改动",
-                            message: notices.map(Texts.notice).joined(separator: "\n"))
+                Banner(systemImage: "info.circle", tint: .accentColor, title: "下次运行 cca 时会有这些改动",
+                       message: notices.map(Texts.notice).joined(separator: "\n"))
             }
             if routing?.localSync == .pending {
-                GlassBanner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口池不是最新的",
-                            message: "下次在外面启动账号时会自动更新。")
+                Banner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口池不是最新的",
+                       message: "下次在外面启动账号时会自动更新。")
             }
             if let e = model.live?.router?.error {
                 routerErrorBanner(e)
             }
             if let e = model.live?.local?.error {
-                GlassBanner(systemImage: "exclamationmark.triangle", tint: .red, title: "本机 Clash：\(Texts.liveError(e))") {
+                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "本机 Clash：\(Texts.liveError(e))") {
                     if e.code == .notConfigured {
                         Button("配置本机 Clash…") { model.runInTerminal(.localSetup) }.buttonStyle(.bordered)
                     }
                 }
             }
             if let e = model.liveError {
-                GlassBanner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能读取路由器 / 本机 Clash 的状态", message: e) {
+                Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "没能读取路由器 / 本机 Clash 的状态", message: e) {
                     Button("重试") { model.refreshLive() }.buttonStyle(.bordered)
                 }
             }
             if drift > 0, routing?.sync != .pending {
-                GlassBanner(systemImage: "arrow.left.arrow.right", tint: .orange, title: "有 \(drift) 个槽位选错了节点",
-                            message: "同步路由器能修好。") {
+                Banner(systemImage: "arrow.left.arrow.right", tint: .orange, title: "有 \(drift) 个槽位选错了节点",
+                       message: "同步路由器能修好。") {
                     if model.routerConfigured {
                         Button("同步路由器") { model.syncRouter() }.buttonStyle(.bordered).disabled(model.syncActivity != nil)
                     }
@@ -250,7 +306,7 @@ struct RoutingBanners: View {
         } else {
             message = "连得上路由器之前启动账号会失败；在外面也想用，就配置本机 Clash。"
         }
-        return GlassBanner(systemImage: "wifi.exclamationmark", tint: .red, title: "路由器：\(Texts.liveError(e))", message: message) {
+        return Banner(systemImage: "wifi.exclamationmark", tint: .red, title: "路由器：\(Texts.liveError(e))", message: message) {
             if e.code == .unreachable, !model.localConfigured {
                 Button("配置本机 Clash…") { model.runInTerminal(.localSetup) }.buttonStyle(.bordered)
             }
@@ -258,116 +314,363 @@ struct RoutingBanners: View {
     }
 }
 
-struct SlotTable: View {
+/// 分流图右边的一个节点。
+struct MapNode: Identifiable {
+    let name: String
+    var note: String?
+    /// 账号表里用它的账号数（按配置，不按现在实际选中的）
+    var users = 0
+    /// 在可选节点里（不在的是线连到了别处）
+    var listed = true
+    var id: String { name }
+}
+
+/// 分流图：左边是账号（头像在靠线的一侧），中间是路由器 / 本机 Clash 的端口面板，右边是节点；
+/// 每个账号一条自己颜色的线，经它的端口连到节点（和 App 图标一样，从一处分出去的彩色曲线）。
+/// 选错节点：端口的灯是橙色，线是橙色虚线、连到实际选中的节点，应选的那条留一道淡淡的点线；连不上：红灯，后半段是灰色虚线。
+/// 点账号跳到它的详情。
+struct RouteMap: View {
+    let rows: [SlotRow]
+    let nodes: [MapNode]
+    let panel: (String, String?)
+    let select: (AccountRef) -> Void
+
+    private let rowHeight: CGFloat = 44
+    private let panelHeader: CGFloat = 52
+    private let nodeHeight: CGFloat = 46
+    private let nodeGap: CGFloat = 10
+
+    var body: some View {
+        GeometryReader { g in
+            let geo = MapGeometry(width: g.size.width, rows: rows, nodes: nodes, rowHeight: rowHeight,
+                                  top: panelHeader, nodeHeight: nodeHeight, nodeGap: nodeGap)
+            ZStack(alignment: .topLeading) {
+                panelBackground(geo)
+                wires(geo)
+                ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
+                    if let ref = r.ref {
+                        accountChip(r, ref: ref)
+                            .frame(width: geo.accountWidth, height: rowHeight, alignment: .trailing)
+                            .position(x: geo.accountWidth / 2, y: geo.rowY(i))
+                    }
+                    jack(r)
+                        .frame(width: geo.jackWidth, height: 28)
+                        .position(x: geo.panelX + geo.panelWidth / 2, y: geo.rowY(i))
+                }
+                ForEach(Array(nodes.enumerated()), id: \.element.id) { j, n in
+                    nodeCard(n, linked: geo.nodeLinks[j] > 0)
+                        .frame(width: geo.nodeWidth, height: nodeHeight)
+                        .position(x: geo.nodeX + geo.nodeWidth / 2, y: geo.nodeY[j])
+                }
+            }
+        }
+        .frame(height: MapGeometry.height(rows: rows.count, nodes: nodes.count, rowHeight: rowHeight, top: panelHeader,
+                                          nodeHeight: nodeHeight, nodeGap: nodeGap))
+        .frame(minWidth: 520)
+    }
+
+    // MARK: 部件
+
+    private func panelBackground(_ geo: MapGeometry) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return ZStack(alignment: .top) {
+            shape.fill(Surface.tile)
+            shape.strokeBorder(Surface.hairline, lineWidth: 0.5)
+            VStack(spacing: 2) {
+                Text(panel.0).font(.callout.weight(.semibold)).lineLimit(1)
+                if let sub = panel.1 {
+                    Text(sub).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                }
+            }
+            .padding(.top, 10)
+            .padding(.horizontal, 8)
+        }
+        .frame(width: geo.panelWidth, height: geo.height)
+        .offset(x: geo.panelX)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func wires(_ geo: MapGeometry) -> some View {
+        Canvas { ctx, _ in
+            let solid = StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
+            let dashed = StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [6, 5])
+            let dotted = StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [1, 4])
+            for (i, r) in rows.enumerated() where !r.isFree {
+                let y = geo.rowY(i)
+                let color = r.account?.lineColor ?? Color.gray
+                var lead = Path()
+                lead.move(to: CGPoint(x: geo.accountWidth + 3, y: y))
+                lead.addLine(to: CGPoint(x: geo.jackLeft, y: y))
+                ctx.stroke(lead, with: .color(color), style: solid)
+                let from = CGPoint(x: geo.jackRight, y: y)
+                // 选错节点：应选的那条留一道淡淡的点线
+                if r.state == .drift, let e = nonEmpty(r.expected), let j = nodes.firstIndex(where: { $0.name == e }) {
+                    ctx.stroke(curve(from, CGPoint(x: geo.nodeX, y: geo.nodeY[j])), with: .color(color.opacity(0.55)), style: dotted)
+                }
+                guard let t = r.target, let j = nodes.firstIndex(where: { $0.name == t }) else { continue }
+                let path = curve(from, CGPoint(x: geo.nodeX, y: geo.nodeY[j]))
+                switch r.state {
+                case .drift?: ctx.stroke(path, with: .color(.orange), style: dashed)
+                case .closed?: ctx.stroke(path, with: .color(Color.secondary.opacity(0.5)), style: dashed)
+                default: ctx.stroke(path, with: .color(color), style: solid)
+                }
+            }
+        }
+        .frame(width: geo.width, height: geo.height)
+        .accessibilityHidden(true)
+    }
+
+    private func curve(_ a: CGPoint, _ b: CGPoint) -> Path {
+        var p = Path()
+        p.move(to: a)
+        let dx = (b.x - a.x) * 0.5
+        p.addCurve(to: b, control1: CGPoint(x: a.x + dx, y: a.y), control2: CGPoint(x: b.x - dx, y: b.y))
+        return p
+    }
+
+    private func accountChip(_ r: SlotRow, ref: AccountRef) -> some View {
+        let a = r.account
+        return Button {
+            select(ref)
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(a?.displayName ?? ref.key)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(a == nil ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(chipSubtitle(a, ref: ref))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                BadgeAvatar(badge: a?.badge, isAPI: a?.isAPI ?? false, size: 24)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(a.map { "看 \($0.displayName) 的详情" } ?? ref.key)
+        .accessibilityLabel("\(a?.displayName ?? ref.key)，\(chipSubtitle(a, ref: ref))")
+        .accessibilityHint("看这个账号的详情")
+    }
+
+    private func chipSubtitle(_ a: Account?, ref: AccountRef) -> String {
+        if a?.isAPI == true { return "第三方 API" }
+        let tool = Texts.product(ref.tool)
+        if let p = nonEmpty(a?.plan) { return "\(tool) \(p)" }
+        return tool
+    }
+
+    private func jack(_ r: SlotRow) -> some View {
+        let color: Color = r.isFree ? .clear : (r.state.map { Palette.slot($0) } ?? .gray)
+        return HStack(spacing: 6) {
+            ZStack {
+                if r.isFree {
+                    Circle().strokeBorder(.tertiary, lineWidth: 1)
+                } else {
+                    Circle().fill(color)
+                }
+            }
+            .frame(width: 7, height: 7)
+            Text(r.port.map(String.init) ?? "—")
+                .font(.callout.weight(.semibold).monospacedDigit())
+                .foregroundStyle(r.isFree ? .tertiary : .primary)
+            Text(r.isFree ? "空闲" : (r.group ?? ""))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Capsule().fill(.background))
+        .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 0.5))
+        .opacity(r.isFree ? 0.75 : 1)
+        .help(jackHelp(r))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(jackHelp(r))
+    }
+
+    private func jackHelp(_ r: SlotRow) -> String {
+        let port = r.port.map { "端口 \($0)" } ?? "端口"
+        let group = r.group.map { "（\($0)）" } ?? ""
+        guard let ref = r.ref else { return "\(port)\(group)：空闲" }
+        let who = r.account?.displayName ?? ref.key
+        var text = "\(port)\(group)：\(who) → \(nonEmpty(r.expected) ?? "—")"
+        switch r.state {
+        case .drift?: text += "；选中的是 \(r.selected ?? "—")"
+        case .closed?: text += "；连不上"
+        case .ok?: text += "；正常"
+        case nil: text += "；还没查"
+        default: text += "；" + Texts.slotState(r.state!)
+        }
+        return text
+    }
+
+    private func nodeCard(_ n: MapNode, linked: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let count = n.users == 0 ? "没有账号在用" : "\(n.users) 个账号"
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(n.name)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(linked ? .primary : .secondary)
+                .lineLimit(1)
+            Text(n.note ?? count)
+                .font(.caption)
+                .foregroundStyle(n.listed ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(shape.fill(.background))
+        .overlay(shape.strokeBorder(Surface.hairline, lineWidth: 0.5))
+        .opacity(linked ? 1 : 0.7)
+        .help([n.name, n.note, count].compactMap { $0 }.joined(separator: "，"))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 分流图的几何：三列的位置，每行的高度，节点放在连到它的那几行的中间（互相挤开、不越界）。
+struct MapGeometry {
+    let width: CGFloat
+    let height: CGFloat
+    let accountWidth: CGFloat
+    let panelX: CGFloat
+    let panelWidth: CGFloat
+    let jackWidth: CGFloat
+    let nodeX: CGFloat
+    let nodeWidth: CGFloat
+    let rowHeight: CGFloat
+    let top: CGFloat
+    let nodeY: [CGFloat]
+    /// 连到每个节点的线（实际的线，加上选错节点时应选的那道点线）
+    let nodeLinks: [Int]
+
+    var jackLeft: CGFloat { panelX + (panelWidth - jackWidth) / 2 }
+    var jackRight: CGFloat { jackLeft + jackWidth }
+
+    func rowY(_ i: Int) -> CGFloat { top + CGFloat(i) * rowHeight + rowHeight / 2 }
+
+    static func height(rows: Int, nodes: Int, rowHeight: CGFloat, top: CGFloat, nodeHeight: CGFloat, nodeGap: CGFloat) -> CGFloat {
+        let byRows = top + CGFloat(rows) * rowHeight + 12
+        let byNodes = top + CGFloat(nodes) * (nodeHeight + nodeGap)
+        return max(byRows, byNodes)
+    }
+
+    init(width: CGFloat, rows: [SlotRow], nodes: [MapNode], rowHeight: CGFloat, top: CGFloat, nodeHeight: CGFloat, nodeGap: CGFloat) {
+        self.width = width
+        self.rowHeight = rowHeight
+        self.top = top
+        height = MapGeometry.height(rows: rows.count, nodes: nodes.count, rowHeight: rowHeight, top: top,
+                                    nodeHeight: nodeHeight, nodeGap: nodeGap)
+        accountWidth = min(max(width * 0.28, 150), 230)
+        panelWidth = 156
+        jackWidth = 132
+        nodeWidth = min(max(width * 0.23, 140), 210)
+        nodeX = width - nodeWidth
+        // 面板放在账号和节点之间偏左的地方：右边的曲线要更多地方
+        let free = max(nodeX - accountWidth - panelWidth, 0)
+        panelX = accountWidth + free * 0.32
+
+        // 每个节点理想的位置：连到它的那几行的平均高度（选错节点时应选的那个也算）；没有线的排在后面
+        var users = Array(repeating: 0, count: nodes.count)
+        var sum = Array(repeating: CGFloat(0), count: nodes.count)
+        for (i, r) in rows.enumerated() where !r.isFree {
+            var names = [r.target]
+            if r.state == .drift { names.append(nonEmpty(r.expected)) }
+            for t in Set(names.compactMap { $0 }) {
+                guard let j = nodes.firstIndex(where: { $0.name == t }) else { continue }
+                users[j] += 1
+                sum[j] += top + CGFloat(i) * rowHeight + rowHeight / 2
+            }
+        }
+        nodeLinks = users
+        let lastRow = top + CGFloat(max(rows.count - 1, 0)) * rowHeight + rowHeight / 2
+        let desired: [CGFloat] = nodes.indices.map { j in users[j] > 0 ? sum[j] / CGFloat(users[j]) : lastRow + CGFloat(j) }
+        let order = nodes.indices.sorted { a, b in
+            (users[a] > 0) != (users[b] > 0) ? users[a] > 0 : desired[a] < desired[b]
+        }
+        let step = nodeHeight + nodeGap
+        var placed = Array(repeating: CGFloat(0), count: nodes.count)
+        var prev = -CGFloat.infinity
+        let minY = top + nodeHeight / 2 - 6
+        for j in order {
+            let y = max(desired[j], prev + step, minY)
+            placed[j] = y
+            prev = y
+        }
+        // 越过底边就整体往上挪（不越过顶边）
+        let maxY = height - nodeHeight / 2 - 4
+        if let last = order.last, placed[last] > maxY {
+            let shift = placed[last] - maxY
+            for j in order { placed[j] = max(placed[j] - shift, minY) }
+            // 往上挪时挤在顶上的，再按顺序推开
+            var p = -CGFloat.infinity
+            for j in order {
+                placed[j] = max(placed[j], p + step)
+                p = placed[j]
+            }
+        }
+        nodeY = placed
+    }
+}
+
+/// 图下面逐条列出有问题的槽位（选错节点、连不上），说清楚应选什么、现在是什么。
+struct SlotIssues: View {
     @Environment(AppModel.self) private var model
     let rows: [SlotRow]
 
     var body: some View {
-        Table(rows) {
-            TableColumn("槽位") { r in
-                Text(r.group ?? "—").monospacedDigit().foregroundStyle(r.ref == nil ? .secondary : .primary)
+        let bad = rows.filter { !$0.isFree && ($0.state == .drift || $0.state == .closed) }
+        if !bad.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(bad) { r in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: r.state == .drift ? "arrow.left.arrow.right" : "xmark.octagon.fill")
+                            .foregroundStyle(Palette.slot(r.state))
+                        Text(line(r)).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
-            .width(min: 60, ideal: 70)
-            TableColumn("端口") { r in
-                Text(r.port.map(String.init) ?? "—").monospacedDigit().foregroundStyle(r.ref == nil ? .secondary : .primary)
-            }
-            .width(min: 50, ideal: 60)
-            TableColumn("账号") { r in
-                if let a = r.account {
-                    HStack(spacing: 6) {
-                        BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 18)
-                        Text(a.displayName).lineLimit(1)
-                        if a.tool != .claude { Tag(text: Texts.product(a.tool)) }
-                        if a.pinned {
-                            Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary)
-                                .accessibilityLabel("维护者锁定")
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    private func line(_ r: SlotRow) -> String {
+        let who = r.account?.displayName ?? r.ref?.key ?? "—"
+        let slot = [r.group, r.port.map { "端口 \($0)" }].compactMap { $0 }.joined(separator: "，")
+        if r.state == .drift {
+            return "\(who)（\(slot)）选中的是 \(r.selected ?? "—")，应为 \(r.expected ?? "—")"
+        }
+        return "\(who)（\(slot)）连不上"
+    }
+}
+
+/// 不经节点的账号（直连的第三方 API 账号）：图里没有它们，在这里提一句。
+struct DirectAccounts: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let direct = model.visibleTools.flatMap { model.accounts($0) }.filter { $0.isAPI && !$0.isRouted }
+        if !direct.isEmpty {
+            HStack(spacing: 8) {
+                Text("不经节点、直连的：").foregroundStyle(.secondary)
+                ForEach(direct) { a in
+                    Button {
+                        model.tool = a.tool
+                        model.selection = .account(a.ref)
+                    } label: {
+                        HStack(spacing: 5) {
+                            BadgeAvatar(badge: a.badge, isAPI: true, size: 16)
+                            Text(a.displayName)
                         }
                     }
-                } else if let ref = r.ref {
-                    Text(ref.key).foregroundStyle(.secondary)
-                } else {
-                    Text("空闲").foregroundStyle(.tertiary)
+                    .buttonStyle(.plain)
+                    .help("看 \(a.displayName) 的详情")
                 }
             }
-            .width(min: 160, ideal: 240)
-            TableColumn("应选") { r in
-                Text(r.ref == nil ? "—" : r.expected).foregroundStyle(r.ref == nil ? .tertiary : .primary)
-            }
-            .width(min: 70, ideal: 100)
-            TableColumn("实际") { r in
-                HStack(spacing: 4) {
-                    if r.state == .drift {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).imageScale(.small)
-                    }
-                    Text(r.ref == nil ? "—" : (r.selected ?? "—")).foregroundStyle(r.ref == nil ? .secondary : .primary)
-                }
-            }
-            .width(min: 70, ideal: 100)
-            TableColumn("状态") { r in
-                if let s = r.state {
-                    Tag(text: Texts.slotState(s), color: Palette.slot(s))
-                } else {
-                    Text("未查").foregroundStyle(.tertiary)
-                }
-            }
-            .width(min: 70, ideal: 90)
+            .font(.callout)
         }
-        .scrollDisabled(true)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
-    }
-}
-
-struct NodesSection: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        let nodes = model.state?.routing?.nodes ?? []
-        if !nodes.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("可选节点").font(.headline)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
-                    ForEach(nodes) { n in
-                        NodeCard(node: n)
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct NodeCard: View {
-    @Environment(AppModel.self) private var model
-    let node: NodeUse
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "globe").foregroundStyle(.secondary)
-                Text(node.name).font(.callout.weight(.semibold))
-                Spacer()
-                Text("\(node.users.count) 个账号").font(.caption).foregroundStyle(.secondary)
-            }
-            if let local = nonEmpty(node.localName), local != node.name {
-                Text("Clash Verge 里叫 \(local)").font(.caption).foregroundStyle(.secondary)
-            }
-            if node.users.isEmpty {
-                Text("没有账号在用").font(.caption).foregroundStyle(.tertiary)
-            } else {
-                ForEach(node.users, id: \.self) { ref in
-                    let a = model.account(ref)
-                    HStack(spacing: 6) {
-                        BadgeAvatar(badge: a?.badge, isAPI: a?.isAPI ?? false, size: 16)
-                        Text(a?.displayName ?? ref.key).font(.caption).lineLimit(1)
-                        if ref.tool != .claude { Text(Texts.product(ref.tool)).font(.caption2).foregroundStyle(.secondary) }
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
-        .accessibilityElement(children: .combine)
     }
 }

@@ -12,7 +12,7 @@ cca 的图形界面：列出 Claude / ChatGPT（Codex）账号、用量、节点
 ```bash
 bash macos/build.sh                      # universal（arm64 + x86_64），输出 macos/build/cca.app
 bash macos/build.sh --arch native        # 只编本机架构（快）
-bash macos/build.sh --debug              # -Onone -g，本机架构
+bash macos/build.sh --debug              # -Onone -g，本机架构，带截图模式（见“看界面”）
 bash macos/build.sh --version 2.9.0 --out /tmp/x/cca.app
 ```
 
@@ -60,6 +60,30 @@ App 从这个目录取固定的输出（`FixtureTransport`），绝不运行 cca
 
 开发模式下 `cca gui` 用 `open --env CCA_GUI_CCA=<仓库里的 cca>` 打开 `macos/build/cca.app`，App 优先用这个 cca。
 
+## 看界面（截图）
+
+```bash
+bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
+CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
+```
+
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty，
+再加上菜单栏面板 menubar），每个截浅色、深色两张 PNG 后退出。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
+`CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽）。只截自己的窗口（`SCShareableContent.currentProcess`），
+不要“屏幕录制”权限；窗口放在别的窗口后面、不抢焦点，所以截出来是窗口不在前台时的样子（主按钮是灰的）。菜单栏面板是近似的
+（真正的面板要点图标才弹出来）。换 `CCA_GUI_FIXTURE_*` 可以截别的情况（比如安装引导）。
+
+## 界面的规矩
+
+- 母题是 App 图标里的“分流线”：一个出口分出几条彩色曲线。每个账号有自己的颜色（启动器角标的颜色），这条线贯穿侧栏的头像、
+  账号页的线路（这台 Mac → 端口 → 节点 → 出口）和分流图（账号 → 路由器 / 本机 Clash 的端口 → 节点）。
+- 颜色只表达两件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，比如“已登录”不显示）。
+  图标的深靛蓝（`Brand`）只用在品牌标记和分流图的面板上，不设全局强调色（按钮、选中跟着用户的系统设置）。
+- Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
+  内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
+- 操作放在它作用的内容旁边：打开 App / 网页版在账号页头，刷新用量在“用量”标题上，检测出口在“线路与出口”标题上；不用浮在内容上的操作条。
+- 一套系统字体（SF Pro / 苹方），数字一律等宽数字；额度的百分比大号，“%”缩小。
+
 ## 结构
 
 ```
@@ -68,7 +92,9 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
   Process/             CcaProcess（posix_spawn）、CcaLocator、CcaEnvironment、Transport（进程 / 演示数据）、CcaClient（重跑流程、闸门）、
                        TerminalHandoff（.command 文件、shellQuote）
   Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、Texts（文字、颜色档、补救、标记）
-Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期、主窗口、侧栏、账号详情、用量 / 出口检测卡片、分流页、菜单栏、对话框和弹层、可见性、玻璃组件
+Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、账号页（AccountDetail：页头；
+                       UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
+                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件（Glass）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
 tools/make-icon.swift  画图标
@@ -108,4 +134,5 @@ tools/make-icon.swift  画图标
 - 图标的轮廓必须是系统的圆角方形（824 × 824，四周留 100，连续圆角 185.4），外面一个像素都不能画，否则 macOS 26 会把整个图标缩小、关进灰框。
   看效果要导出 `NSWorkspace.shared.icon(forFile:)`（系统实际显示的样子）。
 - bash 3.2：非 ASCII 字符前的变量写 `${VAR}`（不然变量名会吞掉多字节字符的首字节）。
-- 离屏看布局可以用 SwiftUI 的 `ImageRenderer`（玻璃、分段控件、表格这类 AppKit 控件画不出来）；窗口截图要“屏幕录制”权限。
+- 看界面用调试版的截图模式（上面“看界面”）：`ImageRenderer`、`cacheDisplay` 画不出玻璃和 AppKit 控件；`screencapture` 要“屏幕录制”权限，
+  App 截自己的窗口（ScreenCaptureKit 的 `SCShareableContent.currentProcess`）不用。
