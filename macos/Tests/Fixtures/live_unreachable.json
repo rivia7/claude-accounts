@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "kind": "live",
+  "generated_at": 1794042010.0,
+  "route": "router",
+  "route_pref": "router",
+  "at_home": false,
+  "proxy_host": "192.0.2.10",
+  "router": {
+    "configured": true,
+    "host": "192.0.2.10",
+    "reachable": false,
+    "backend": null,
+    "running": null,
+    "hook": null,
+    "cron": null,
+    "error": {
+      "code": "unreachable",
+      "message": "连不上路由器 192.0.2.10（ssh 端口 22）"
+    }
+  },
+  "local": {
+    "configured": false,
+    "client": "",
+    "name": "",
+    "running": null,
+    "error": null
+  },
+  "slots": [
+    {
+      "slot": 1,
+      "group": "CCA-1",
+      "port": 7901,
+      "tool": "claude",
+      "key": "工作(bob@example.com)",
+      "expected": "US-B",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": false,
+      "state": "closed"
+    },
+    {
+      "slot": 2,
+      "group": "CCA-2",
+      "port": 7902,
+      "tool": "claude",
+      "key": "carol@example.com",
+      "expected": "US-C",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": false,
+      "state": "closed"
+    },
+    {
+      "slot": 3,
+      "group": "CCA-3",
+      "port": 7903,
+      "tool": "claude",
+      "key": "测试(dave@example.com)",
+      "expected": "US-D",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": false,
+      "state": "closed"
+    },
+    {
+      "slot": 4,
+      "group": "CCA-4",
+      "port": 7904,
+      "tool": "claude",
+      "key": "香港接口",
+      "expected": "HK-A",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": false,
+      "state": "closed"
+    },
+    {
+      "slot": 5,
+      "group": "CCA-5",
+      "port": 7905,
+      "tool": "codex",
+      "key": "frank@example.com",
+      "expected": "US-A",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": false,
+      "state": "closed"
+    },
+    {
+      "slot": 6,
+      "group": "CCA-6",
+      "port": 7906,
+      "tool": null,
+      "key": null,
+      "expected": "REJECT",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": null,
+      "state": "empty"
+    },
+    {
+      "slot": 7,
+      "group": "CCA-7",
+      "port": 7907,
+      "tool": null,
+      "key": null,
+      "expected": "REJECT",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": null,
+      "state": "empty"
+    },
+    {
+      "slot": 8,
+      "group": "CCA-8",
+      "port": 7908,
+      "tool": null,
+      "key": null,
+      "expected": "REJECT",
+      "selected": null,
+      "in_kernel": null,
+      "listening": null,
+      "reachable": null,
+      "state": "empty"
+    }
+  ],
+  "summary": {
+    "ok": 0,
+    "drift": 0,
+    "closed": 5,
+    "unknown": 0,
+    "empty": 3
+  }
+}

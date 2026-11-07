@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "kind": "state",
+  "generated_at": 1794042000.0,
+  "cca_version": "2.9.0",
+  "errors": [
+    {
+      "code": "account_unreadable",
+      "tool": "claude",
+      "message": "读不了 alice@example.com 的登录状态（.claude.json 不是合法的 JSON），当作没登录"
+    }
+  ],
+  "notices": [],
+  "config": {
+    "route_pref": "router",
+    "router": {
+      "configured": true,
+      "host": "192.0.2.10",
+      "ssh_port": 22,
+      "proxy_host": "192.0.2.10"
+    },
+    "local": {
+      "configured": false,
+      "client": "",
+      "name": ""
+    },
+    "nodes": [
+      "US-A",
+      "US-B"
+    ],
+    "min_trust": 50,
+    "leak_check": false,
+    "update": "auto",
+    "policy": {
+      "configured": false,
+      "repo": null
+    }
+  },
+  "routing": {
+    "first_port": 7901,
+    "pool_size": 8,
+    "sync": "ok",
+    "local_sync": "n/a",
+    "slots": [
+      {
+        "slot": 1,
+        "group": "CCA-1",
+        "port": 7901,
+        "tool": "claude",
+        "key": "alice@example.com",
+        "node": "US-A",
+        "local_node": "US-A"
+      },
+      {
+        "slot": 2,
+        "group": "CCA-2",
+        "port": 7902,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 3,
+        "group": "CCA-3",
+        "port": 7903,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 4,
+        "group": "CCA-4",
+        "port": 7904,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 5,
+        "group": "CCA-5",
+        "port": 7905,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 6,
+        "group": "CCA-6",
+        "port": 7906,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 7,
+        "group": "CCA-7",
+        "port": 7907,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 8,
+        "group": "CCA-8",
+        "port": 7908,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      }
+    ],
+    "nodes": [
+      {
+        "name": "US-A",
+        "local_name": "US-A",
+        "users": [
+          {
+            "tool": "claude",
+            "key": "alice@example.com"
+          }
+        ]
+      },
+      {
+        "name": "US-B",
+        "local_name": "US-B",
+        "users": []
+      }
+    ]
+  },
+  "tools": [
+    {
+      "id": "claude",
+      "label": "Claude",
+      "app_label": "Claude App",
+      "cli_prefix": [],
+      "enabled": true,
+      "bin": "/Users/me/.local/bin/claude",
+      "app": {
+        "installed": true,
+        "path": "/Applications/Claude.app"
+      },
+      "chrome": true,
+      "settings_problems": [],
+      "errors": [],
+      "last": "alice@example.com",
+      "accounts": [
+        {
+          "key": "alice@example.com",
+          "id": "alice-example-com-5e6f7a",
+          "alias": "",
+          "email": "alice@example.com",
+          "name": "alice@example.com",
+          "label": "alice@example.com",
+          "kind": "oauth",
+          "login": "logged_out",
+          "login_email": null,
+          "plan": "",
+          "node": "US-A",
+          "port": 7901,
+          "slot": 1,
+          "group": "CCA-1",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": true,
+          "api": null,
+          "badge": {
+            "label": "A",
+            "color": "#0A84FF"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": false,
+            "check": true
+          },
+          "can_why": {
+            "usage": "not_logged_in"
+          },
+          "usage": null,
+          "health": null
+        },
+        {
+          "key": "直连接口",
+          "id": "api-1a2b3c",
+          "alias": "直连接口",
+          "email": "",
+          "name": "直连接口",
+          "label": "直连接口",
+          "kind": "api",
+          "login": "api",
+          "login_email": "",
+          "plan": "",
+          "node": null,
+          "port": null,
+          "slot": null,
+          "group": null,
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": {
+            "host": "api.example.com",
+            "model": "model-x"
+          },
+          "badge": null,
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": false,
+            "web": false,
+            "usage": false,
+            "check": true
+          },
+          "can_why": {
+            "app": "api_account",
+            "web": "api_account",
+            "usage": "api_account"
+          },
+          "usage": null,
+          "health": null
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "app_label": "ChatGPT App",
+      "cli_prefix": [
+        "codex"
+      ],
+      "enabled": false,
+      "bin": null,
+      "app": {
+        "installed": false,
+        "path": null
+      },
+      "chrome": false,
+      "settings_problems": [],
+      "errors": [],
+      "last": null,
+      "accounts": []
+    }
+  ]
+}

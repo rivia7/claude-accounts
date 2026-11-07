@@ -1,0 +1,218 @@
+import AppKit
+import SwiftUI
+
+/// 菜单栏图标：模板图（跟着菜单栏变色）；路由器待同步、有槽位选错节点、或者有账号用量 ≥ 90% 时右上角带个点。
+struct MenuBarLabel: View {
+    let model: AppModel
+
+    var body: some View {
+        let attention = model.needsAttention
+        Image(nsImage: MenuBarIcon.image(attention: attention))
+            .accessibilityLabel(attention ? "cca（有需要注意的事）" : "cca")
+    }
+}
+
+enum MenuBarIcon {
+    private static var cache: [Bool: NSImage] = [:]
+
+    @MainActor
+    static func image(attention: Bool) -> NSImage {
+        if let img = cache[attention] { return img }
+        let size = NSSize(width: 20, height: 16)
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        let symbol = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: "cca")?
+            .withSymbolConfiguration(config)
+        let img = NSImage(size: size, flipped: false) { rect in
+            if let symbol {
+                let s = symbol.size
+                let origin = NSPoint(x: (rect.width - s.width) / 2 - (attention ? 1 : 0), y: (rect.height - s.height) / 2)
+                symbol.draw(in: NSRect(origin: origin, size: s))
+            }
+            if attention {
+                let dot = NSRect(x: rect.width - 7, y: rect.height - 7, width: 6, height: 6)
+                NSGraphicsContext.current?.compositingOperation = .clear
+                NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+                NSColor.black.setFill()
+                NSBezierPath(ovalIn: dot).fill()
+            }
+            return true
+        }
+        img.isTemplate = true
+        cache[attention] = img
+        return img
+    }
+}
+
+/// 菜单栏面板（约 340 pt 宽）：工具切换、每个账号一行（头像、名字、5h 条和百分比、周百分比、出错点、【打开】）。
+struct MenuBarContent: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        @Bindable var model = model
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "point.3.filled.connected.trianglepath.dotted").foregroundStyle(.tint)
+                Text("cca").font(.headline)
+                Spacer()
+                if model.visibleTools.count > 1 {
+                    Picker("工具", selection: $model.tool) {
+                        ForEach(model.visibleTools, id: \.self) { Text(Texts.product($0)).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 160)
+                }
+            }
+            content
+            if model.state?.routing?.sync == .pending, model.routerConfigured {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
+                    Text("路由器待同步").font(.callout)
+                    Spacer()
+                    Button(model.syncActivity == nil ? "同步" : "同步中…") { model.syncRouter() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .disabled(model.syncActivity != nil)
+                }
+            }
+            if let t = model.toast {
+                Text(t.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Divider()
+            HStack(spacing: 12) {
+                Button {
+                    model.refreshUsage(manual: true)
+                } label: {
+                    Label(model.usageRefreshing.isEmpty ? "刷新用量" : "刷新中…", systemImage: "arrow.clockwise")
+                }
+                .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
+                Spacer()
+                Button("打开主窗口") {
+                    openWindow(id: "main")
+                    NSApp.activate()
+                }
+                Button("退出") { NSApp.terminate(nil) }
+            }
+            .buttonStyle(.borderless)
+            .font(.callout)
+        }
+        .padding(14)
+        .frame(width: 340)
+        .background(WindowObserver { visible in model.setPanelVisible(visible) })
+        .onAppear {
+            WindowOpener.shared.open = { openWindow(id: "main") }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.phase {
+        case .ready:
+            let accounts = model.accounts(model.tool)
+            if accounts.isEmpty {
+                Text(model.state == nil ? "正在读取…" : "还没有账号").foregroundStyle(.secondary).font(.callout)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(accounts) { a in MenuRow(account: a) }
+                }
+            }
+        case .starting:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("正在连接 cca…").foregroundStyle(.secondary)
+            }
+        default:
+            Text("cca 还没准备好：打开主窗口看看。").foregroundStyle(.secondary).font(.callout)
+        }
+    }
+}
+
+struct MenuRow: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+
+    var body: some View {
+        let a = account
+        let u = model.usage(for: a)
+        let busy = model.activity(a.ref) != nil
+        let issue = problem(a, u)
+        HStack(spacing: 8) {
+            BadgeAvatar(badge: a.badge, isAPI: a.isAPI, size: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)
+                    if let issue {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                            .help(issue)
+                            .accessibilityLabel(issue)
+                    }
+                    if a.appRunning {
+                        Image(systemName: "macwindow").font(.system(size: 10)).foregroundStyle(.green)
+                            .accessibilityLabel("\(model.appLabel(a.tool)) 开着")
+                    }
+                }
+                if let u, u.source != .none {
+                    HStack(spacing: 8) {
+                        MiniUsage(label: "5h", window: u.fiveHour, stale: u.stale, width: 46)
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            weekly(u, now: context.date.timeIntervalSince1970)
+                        }
+                    }
+                } else {
+                    Text(a.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            if busy {
+                ProgressView().controlSize(.small)
+            }
+            // 第三方 API 账号没有桌面 App：不放按钮
+            if !a.isAPI {
+                Button("打开") { model.openApp(a.ref) }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .disabled(!a.can.app || busy)
+                    .accessibilityLabel("打开 \(a.displayName) 的 \(model.appLabel(a.tool))")
+                    .help(a.can.app ? "打开 \(model.appLabel(a.tool))" : (a.canWhy["app"].map {
+                        Texts.canWhy($0, appLabel: model.appLabel(a.tool), tool: a.tool)
+                    } ?? "不能打开"))
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// 本周的百分比；重置时间过了写“已重置”（灰色，不按旧的百分比着色），数据旧了也是灰色。
+    private func weekly(_ u: UsageEntry, now: Double) -> some View {
+        let w = u.sevenDay
+        let reset = w?.isReset(now: now) == true
+        let value: String = {
+            guard let p = w?.utilization else { return "—" }
+            return reset ? "已重置" : Texts.percent(p)
+        }()
+        let style: AnyShapeStyle = {
+            guard let p = w?.utilization, !reset, !u.stale, UsageLevel(percent: p) != .normal else { return AnyShapeStyle(.secondary) }
+            return AnyShapeStyle(Palette.usage(percent: p))
+        }()
+        return Text("周 " + value)
+            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .foregroundStyle(style)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("本周用量")
+            .accessibilityValue(value == "—" ? "没有数据" : value)
+    }
+
+    /// 出错点：没登录、登错号、查用量出错。
+    private func problem(_ a: Account, _ u: UsageEntry?) -> String? {
+        switch a.login {
+        case .loggedOut: return "还没登录"
+        case .emailMismatch: return Texts.login(a.login, loginEmail: a.loginEmail)
+        default: break
+        }
+        if let code = u?.errorCode { return nonEmpty(u?.error) ?? Texts.usageError(code) }
+        return nil
+    }
+}

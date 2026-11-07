@@ -50,11 +50,21 @@ RC="$R/etc/openclash/custom.yaml"
 nl_() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); print((c["listeners"]||[]).count { |l| l["name"].start_with?("cca-") })' "$RC"; }
 first() { ruby -ryaml -e 'c=YAML.load_file(ARGV[0]); g=(c["proxy-groups"]||[]).find { |x| x["name"]==ARGV[1] }; print(g ? g["proxies"][0] : "-")' "$RC" "$1"; }
 sel() { cat "$R/sel/$1" 2>/dev/null || echo -; }
+unlisten() { grep -vx "$1" "$R/listening" > "$R/l.tmp"; mv "$R/l.tmp" "$R/listening"; }   # 路由器上这个端口不再监听
 reloads() { grep -c '^RELOAD' router.log 2>/dev/null || echo 0; }
 restarts() { grep -c '^RESTART' router.log 2>/dev/null || echo 0; }   # OpenClash 重启（假的 init 脚本记的）
 cfgv() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))" "$H/.cca/config.json" "$1"; }
 cfgok() { python3 -c "import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "$H/.cca/config.json" "$1"; }   # config.json（c）满足条件
 tblok() { python3 -c "import json,sys; t=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)" "${2:-$H/.cca/accounts.json}" "$1"; }   # 账号表（t）满足条件
+# 图形界面（cca App）的接口（macos/PROTOCOL.md）：gj = cca _gui …；jok 断言 stdin 的 JSON；事件文件（CCA_EVENTS）的断言
+gj() { run cca _gui "$@" </dev/null 2>/dev/null; }
+jok() {   # jok '条件' < JSON：stdin 的 JSON（d）满足条件。条件里 tab("accounts.json") 读 ~/.cca 里的文件（保持键的顺序），cfg 是 config.json，
+          # acct(工具序号, 键) 是 _gui state 里的账号，uacct(键) 是 usage --json 里的账号
+	python3 -c 'import json,sys; H=sys.argv[2]; tab=lambda n: json.load(open(H+"/"+n)); cfg=tab("config.json"); d=json.load(sys.stdin); acct=lambda t, k: next(a for a in d["tools"][t]["accounts"] if a["key"] == k); uacct=lambda k: next(a for a in d["accounts"] if a["key"] == k); sys.exit(0 if eval(sys.argv[1]) else 1)' "$1" "$H/.cca"
+}
+evq() { python3 -c 'import json,sys; ev=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]; sys.exit(0 if any(eval(sys.argv[2]) for e in ev) else 1)' "$T/ev.jsonl" "$1"; }   # 事件文件里有一条（e）满足条件
+evn() { grep -c "\"ev\":\"$1\"" "$T/ev.jsonl"; }   # 这种事件有几条
+runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   # 带事件文件运行（stdin 不是终端：App 就是这样调的）
 claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
@@ -224,8 +234,13 @@ ok "rm：账号的启动器一起删掉，别的账号的还在" '[ ! -e "$H/App
 edit_table 'j.update({"u%d@example.com" % i: "US-D" for i in range(2, 10)})'
 out=$(run cca router sync 2>&1); rc=$?
 ok "端口池要扩容 + 非交互：不重载，返回 3 并提示" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "没有重载" && [ "$(reloads)" = 1 ] && [ "$(nl_)" = 8 ]'
-run CCA_TTY="$(ans y)" cca router sync >/dev/null 2>&1
-ok "端口池扩容：同意后重载一次，变成 16 个槽位" '[ "$(nl_)" = 16 ] && [ "$(reloads)" = 2 ] && [ "$(sel CCA-9)" = US-D ]'
+out=$(runev cca router sync 2>&1); rc=$?
+ok "图形界面：要重载时记一条 consent（router_reload，范围是 OpenClash，说明里有约 20 秒），照旧不重载、返回 3" '[ $rc -eq 3 ] && [ "$(evn consent)" = 1 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"router_reload\" and e[\"scope\"] == \"OpenClash\" and e[\"grant\"] == \"router_reload:OpenClash\" and e[\"default\"] == \"yes\" and \"约 20 秒\" in e[\"detail\"]" && [ "$(reloads)" = 1 ]'
+run CCA_GRANT=router_reload:ShellCrash cca router sync >/dev/null 2>&1 </dev/null; rc=$?
+run CCA_GRANT=router_reload cca router sync >/dev/null 2>&1 </dev/null; rc2=$?
+ok "图形界面：范围不对的同意不算（同意的是重载 ShellCrash、没写范围）：不重载" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && [ "$(reloads)" = 1 ]'
+run CCA_GRANT=router_reload:OpenClash cca router sync >/dev/null 2>&1 </dev/null
+ok "端口池扩容：同意后（图形界面里点了同意，带着授权重跑）重载一次，变成 16 个槽位" '[ "$(nl_)" = 16 ] && [ "$(reloads)" = 2 ] && [ "$(sel CCA-9)" = US-D ]'
 
 # 8. 重载异常：明确拒绝 / 断开没生效 → 还原；断开但生效 → 成功
 edit_table '[j.pop("u%d@example.com" % i) for i in range(2, 10)]'
@@ -298,6 +313,9 @@ ok "运行配置文件被删了、只换节点：经控制接口切过去，不�
 edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(2, 10)})'
 out=$(run cca router sync 2>&1); rc=$?
 ok "运行配置文件被删了、端口池要扩容 + 非交互：不重启，返回 3，说明要重启一次 OpenClash" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "要建立或调整账号端口池只能重启一次 OpenClash" && [ "$(restarts)" = "$r0" ]'
+out=$(runev cca router sync 2>&1); rc=$?
+run CCA_GRANT=router_reload:OpenClash cca router sync >/dev/null 2>&1 </dev/null; rc2=$?
+ok "图形界面：要重启时记的是 router_restart（问的是现在重启 OpenClash 吗）；只同意了重载不算，不重启" '[ $rc -eq 3 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"router_restart\" and e[\"grant\"] == \"router_restart:OpenClash\" and e[\"question\"] == \"现在重启 OpenClash 吗？\"" && [ $rc2 -eq 3 ] && [ "$(restarts)" = "$r0" ]'
 out=$(run cca router sync -y 2>&1); rc=$?
 ok "同意后重启 OpenClash：重新生成运行配置，钩子注入 16 个槽位" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && [ -f "$RC" ] && [ "$(nl_)" = 16 ] && [ "$(sel CCA-9)" = US-B ] && printf "%s" "$out" | grep -q "已重启 OpenClash"'
 # 两个可选节点地址一样（US-D 换到 US-B 的服务器上），之后 US-D 没了：不能当成改名，把它的账号合到 US-B 上
@@ -866,11 +884,16 @@ run cca app --launchers >/dev/null 2>&1; run cca codex app --launchers >/dev/nul
 ok "启动器：两边各自重新生成时不删对方的" '[ -d "$L/ChatGPT alice.app" ] && [ -d "$L/Claude alice.app" ]'
 out=$(run cca codex app alice 2>&1 </dev/null); rc=$?
 ok "ChatGPT App：共享的 config.toml 里还没关 system_proxy_fallback、又不能问时：不打开，说明要在终端里运行一次" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "system_proxy_fallback"'
+out=$(runev cca codex app alice 2>&1); rc=$?
+ok "图形界面：第一次打开 ChatGPT App 要关掉 Codex 的系统代理回退：记一条 consent（codex_fallback_off），不改 config.toml、不打开" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"codex_fallback_off\" and e[\"grant\"] == \"codex_fallback_off\"" && ! grep -q "system_proxy_fallback = false" "$X/config.toml" 2>/dev/null && ! grep -q "FEATURES disable" codex.log'
 : > open.log
 out=$(run CCA_TTY="$(ans y)" cca codex app alice 2>&1); rc=$?
 ok "ChatGPT App：问过之后用 codex 自己的命令关掉 system_proxy_fallback（写进共享的 ~/.codex/config.toml）" '[ $rc -eq 0 ] && grep -q "FEATURES disable system_proxy_fallback @ $X" codex.log && grep -q "system_proxy_fallback = false" "$X/config.toml" && [ ! -L "$X/config.toml" ]'
 ok "ChatGPT App：账号自己的 CODEX_HOME、资料目录（CODEX_ELECTRON_USER_DATA_PATH + --user-data-dir）和端口" 'grep -qF -- "[-n] [-a] [$T/ChatGPT.app] [--env] [CODEX_HOME=$CH] [--env] [CODEX_SQLITE_HOME=$X] [--env] [CODEX_ELECTRON_USER_DATA_PATH=$CD/desktop]" open.log && grep -qF -- "[--args] [--user-data-dir=$CD/desktop] [--proxy-server=http://192.0.2.10:7902]" open.log && printf "%s" "$out" | grep -q "已打开 alice@example.com 的 ChatGPT App，出口 US-B（端口 7902）"'
 ok "ChatGPT App 第一次打开：说明 App 里要求登录时别在 App 里登，改用 cca codex login" 'printf "%s" "$out" | grep -q "运行 cca codex login alice@example.com，再打开 App"'
+sed -i '' '/system_proxy_fallback = false/d' "$X/config.toml"; nf=$(grep -c "FEATURES disable system_proxy_fallback" codex.log)
+out=$(runev CCA_GRANT=codex_fallback_off cca codex app alice 2>&1); rc=$?
+ok "图形界面：同意之后带着授权重跑：用 codex 自己的命令关掉它，照常打开 ChatGPT App" '[ $rc -eq 0 ] && [ "$(grep -c "FEATURES disable system_proxy_fallback" codex.log)" = $((nf + 1)) ] && grep -q "system_proxy_fallback = false" "$X/config.toml" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\""'
 cp "$T/fakerun/Contents/MacOS/Claude" "$T/fakerun/Contents/MacOS/ChatGPT"   # 和上面假的 Claude App 进程一样，换个名字
 "$T/fakerun/Contents/MacOS/ChatGPT" --user-data-dir="$CD/desktop" --x & FAKEPID=$!
 sleep 0.5; n_open=$(grep -c "user-data-dir=$CD/desktop" open.log)
@@ -896,6 +919,108 @@ run CCA_TTY="$(ans)" cca codex @dave --version >/dev/null 2>&1
 DD=$(ls -d "$H"/.cca/codex/accounts/dave-example-com-*)
 mkdir -p "$H/.cca/codex/accounts/orphan-000000/codex/worktrees/w"; printf '{"tokens": {"access_token": "at-SECRET"}}' > "$H/.cca/codex/accounts/orphan-000000/codex/auth.json"
 ok "（准备一键还原）dave 登录着、建过 git 工作树；另有一个从账号表里直接删掉、目录还留着登录凭证的账号" '[ -f "$DD/codex/auth.json" ] && [ -d "$DD/codex/worktrees/dave" ]'
+
+# 10g. 图形界面（cca App）的接口（macos/PROTOCOL.md）：只读的 cca _gui hello / state / live（JSON；不写文件、不经过自动更新），
+#      事件文件和带范围的同意（CCA_EVENTS / CCA_GRANT），出口检测结果（health.json、check --json），usage --json 的新字段。
+#      输出存进 $GF，这一节最后交给 App 的契约测试解码（macos/test.sh；没有 swiftc 时跳过并说明）
+GF="$T/guifx"; mkdir -p "$GF"
+VER=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$CCA")
+snap() { ( cd "$H/.cca" && find . -type f ! -path '*/chrome/*' ! -path '*/desktop/*' ! -name 'cm-*' ! -name '*.lock' | LC_ALL=C sort | while IFS= read -r f; do printf '%s ' "$f"; shasum < "$f"; done ) | shasum; }   # ~/.cca 里文件的摘要
+AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*)
+s0=$(snap)
+out=$(gj hello); printf '%s' "$out" > "$GF/hello.json"
+ok "_gui hello：接口版本 1、cca 的版本、开发模式、装好了、Codex 已启用、找到了 claude 和 codex、还没装 App" 'printf "%s" "$out" | jok "d[\"kind\"] == \"hello\" and d[\"api\"] == 1 and d[\"cca_version\"] == \"$VER\" and d[\"dev_mode\"] is True and d[\"installed\"] is True and d[\"tools\"][\"codex\"][\"enabled\"] is True and d[\"tools\"][\"claude\"][\"bin\"] and d[\"tools\"][\"codex\"][\"bin\"] and d[\"gui\"][\"app_version\"] is None"'
+out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state.json"
+ok "_gui state：Claude、Codex 的账号和账号表一样（顺序也一样），端口和 config.json 一样，账号目录名是 cca 算的" '[ $rc -eq 0 ] && jok "[a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]] == list(tab(\"accounts.json\")) and [a[\"key\"] for a in d[\"tools\"][1][\"accounts\"]] == list(tab(\"codex.json\")) and all(a[\"port\"] == cfg[\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][0][\"accounts\"]) and all(a[\"port\"] == cfg[\"codex\"][\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][1][\"accounts\"]) and acct(0, \"alice@example.com\")[\"id\"] == \"${AD##*/}\"" < "$GF/state.json"'
+ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存），槽位 1；Codex 的 dave 在槽位 3；路由器已同步" 'jok "(lambda a, x: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Max\" and a[\"slot\"] == 1 and a[\"group\"] == \"CCA-1\" and a[\"usage\"][\"source\"] == \"cache\" and a[\"usage\"][\"five_hour\"][\"utilization\"] >= 0 and isinstance(a[\"usage\"][\"five_hour\"][\"resets_epoch\"], float) and a[\"badge\"][\"label\"] == \"A\" and a[\"app\"] == {\"running\": False, \"pid\": None} and x[\"login\"] == \"logged_in\" and x[\"slot\"] == 3)(acct(0, \"alice@example.com\"), acct(1, \"dave@example.com\")) and d[\"routing\"][\"sync\"] == \"ok\" and d[\"routing\"][\"slots\"][2][\"tool\"] == \"codex\" and d[\"routing\"][\"pool_size\"] % 8 == 0" < "$GF/state.json"'
+ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
+edit_table 'j["ports"].pop("alice@example.com")' "$H/.cca/config.json"
+out=$(gj state)
+ok "_gui state 只在内存里对账：config.json 里少了的端口照样算出来（7901），文件不改；下一次真正运行 cca 时才写回去" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"port\"] == 7901" && cfgok "\"alice@example.com\" not in c[\"ports\"]" && run cca ls >/dev/null 2>&1 && cfgok "c[\"ports\"][\"alice@example.com\"] == 7901"'
+mv "$H/.cca/codex.json" "$T/codex.gui"
+out=$(gj state); printf '%s' "$out" > "$GF/state_nocodex.json"; out2=$(gj hello)
+ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把它建出来" 'printf "%s" "$out" | jok "d[\"tools\"][1][\"enabled\"] is False and d[\"tools\"][1][\"accounts\"] == []" && printf "%s" "$out2" | jok "d[\"tools\"][\"codex\"][\"enabled\"] is False" && [ ! -e "$H/.cca/codex.json" ]'
+mv "$T/codex.gui" "$H/.cca/codex.json"
+edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
+out=$(gj state)
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"usage\": False, \"check\": True} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
+edit_table 'j.pop("kimi2")'; run cca ls >/dev/null 2>&1
+cp "$AD/claude/.claude.json" "$T/alice.claude.json"; printf '{"oauthAccount": ' > "$AD/claude/.claude.json"
+out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state_account_unreadable.json"
+cp "$T/alice.claude.json" "$AD/claude/.claude.json"
+ok "_gui state：某个账号的 .claude.json 坏了也照样输出：这个账号当作没登录，errors 里说是哪个文件" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"login\"] == \"logged_out\" and any(e[\"code\"] == \"account_unreadable\" and e[\"tool\"] == \"claude\" and \".claude.json\" in e[\"message\"] for e in d[\"errors\"])"'
+# 实况：在家看路由器，在外面看本机 Clash Verge
+s1=$(snap); out=$(gj live); printf '%s' "$out" > "$GF/live_router.json"
+ok "_gui live（在家）：看路由器（OpenClash 在运行，钩子、cron 都在），分到账号的槽位都是 ok，空槽位是 empty；只读" '[ "$(snap)" = "$s1" ] && printf "%s" "$out" | jok "d[\"route\"] == \"router\" and d[\"at_home\"] is True and d[\"router\"][\"backend\"] == \"OpenClash\" and d[\"router\"][\"running\"] is True and d[\"router\"][\"hook\"] is True and d[\"router\"][\"cron\"] is True and d[\"router\"][\"error\"] is None and all(s[\"state\"] == (\"ok\" if s[\"key\"] else \"empty\") for s in d[\"slots\"]) and d[\"slots\"][0][\"selected\"] == d[\"slots\"][0][\"expected\"] and d[\"slots\"][0][\"listening\"] is True"'
+oth=US-D; [ "$(sel CCA-1)" = US-D ] && oth=US-B
+printf %s "$oth" > "$R/sel/CCA-1"; unlisten 7903
+out=$(gj live); printf '%s' "$out" > "$GF/live_router_drift.json"
+ok "_gui live：仪表盘里被手动切走的槽位是 drift（选中的不是应选的），连不上的端口是 closed" 'printf "%s" "$out" | jok "d[\"slots\"][0][\"state\"] == \"drift\" and d[\"slots\"][0][\"selected\"] == \"$oth\" and d[\"slots\"][2][\"state\"] == \"closed\" and d[\"summary\"][\"drift\"] == 1 and d[\"summary\"][\"closed\"] == 1"'
+echo 7903 >> "$R/listening"; run cca router sync >/dev/null 2>&1
+ok "（还原）同步一次就纠正回来" '[ "$(sel CCA-1)" != "$oth" ]'
+touch "$T/away"
+out=$(run CCA_ROUTE=router cca _gui live </dev/null 2>/dev/null); printf '%s' "$out" > "$GF/live_unreachable.json"
+out2=$(gj live); printf '%s' "$out2" > "$GF/live_local.json"
+rm -f "$T/away"
+ok "_gui live（在外面）：指定看路由器时说连不上（槽位 closed）；默认看本机 Clash Verge 的端口池" 'printf "%s" "$out" | jok "d[\"route\"] == \"router\" and d[\"at_home\"] is False and d[\"router\"][\"error\"][\"code\"] == \"unreachable\" and all(s[\"state\"] in (\"closed\", \"empty\") for s in d[\"slots\"])" && printf "%s" "$out2" | jok "d[\"route\"] == \"local\" and d[\"local\"][\"configured\"] is True and d[\"local\"][\"name\"] == \"Clash Verge\" and d[\"local\"][\"running\"] is True and d[\"slots\"][0][\"key\"] == \"alice@example.com\""'
+# 出口检测结果：启动、cca check 都记进账号目录的 health.json
+run cca @alice --version >/dev/null 2>&1
+ok "启动时记下出口检测结果（health.json，只给自己读）：来源 launch、结果 ok、出口 IP、泄露检测的状态" '[ "$(stat -f %Lp "$AD/health.json")" = 600 ] && jok "d[\"source\"] == \"launch\" and d[\"result\"] == \"ok\" and d[\"ip\"] == \"203.0.113.1\" and d[\"trust\"] == 97 and d[\"port\"] == 7901 and d[\"leak\"][\"dns\"] == \"ok\"" < "$AD/health.json"'
+out=$(gj state)
+ok "_gui state 里的 health：就是这次的结果，加上多久前、是不是旧了、换没换节点" 'printf "%s" "$out" | jok "(lambda h: h[\"result\"] == \"ok\" and h[\"age_seconds\"] < 120 and h[\"stale\"] is False and h[\"applies\"] is True)(acct(0, \"alice@example.com\")[\"health\"])"'
+out=$(run cca check alice --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$GF/check.json"
+ok "cca check --json：stdout 只有 JSON（每个账号的检测结果），结果也记进 health.json（来源 check）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"check\" and d[\"tool\"] == \"claude\" and d[\"route\"] == \"router\" and d[\"accounts\"][0][\"key\"] == \"alice@example.com\" and d[\"accounts\"][0][\"health\"][\"result\"] == \"ok\" and d[\"shared_exit_ips\"] == []" && grep -q "\"source\": \"check\"" "$AD/health.json"'
+# 同意：出口纯净度偏低时问要不要照样启动；授权要带出口 IP，换了 IP 不算
+printf '{"countryCode":"US","trust_score":30}' > "$T/risk/203.0.113.1.json"; : > open.log
+out=$(run cca app alice 2>&1 </dev/null); rc_plain=$?
+out_ev=$(runev cca app alice 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_consent.jsonl"
+ok "图形界面：纯净度偏低时记一条 consent（low_purity，范围是出口 IP，默认不同意），照旧不启动；有没有事件文件，stderr 和退出码都一样" '[ $rc -ne 0 ] && [ $rc -eq $rc_plain ] && [ "$out" = "$out_ev" ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"low_purity\" and e[\"grant\"] == \"low_purity:203.0.113.1\" and e[\"default\"] == \"no\" and \"纯净度 30\" in e[\"detail\"]" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"low_purity\"" && ! grep -q "user-data-dir=$AD/desktop" open.log'
+runev CCA_GRANT=low_purity:203.0.113.9 cca app alice >/dev/null 2>&1; rc=$?
+ok "图形界面：同意的是别的出口 IP：不算" '[ $rc -ne 0 ] && ! grep -q "user-data-dir=$AD/desktop" open.log'
+runev CCA_GRANT=low_purity:203.0.113.1 cca app alice >/dev/null 2>&1; rc=$?; cp "$T/ev.jsonl" "$GF/events_open.jsonl"
+ok "图形界面：同意了这个出口 IP：照样打开 App，事件里有每一步和结果" '[ $rc -eq 0 ] && grep -q "user-data-dir=$AD/desktop" open.log && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"node\"] and e[\"port\"] == 7901" && jok "d[\"result\"] == \"low_purity\"" < "$AD/health.json"'
+rm -f "$T/risk/203.0.113.1.json"
+# 失败的原因、要在终端里做的事
+unlisten 7901
+out=$(run cca @alice --version 2>&1 </dev/null); rc_plain=$?
+out_ev=$(runev cca @alice --version 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_fail.jsonl"
+echo 7901 >> "$R/listening"
+ok "图形界面：端口不通时 fail 事件的原因是 port_closed；stderr 和退出码和不设事件文件时一样" '[ $rc -ne 0 ] && [ $rc -eq $rc_plain ] && [ "$out" = "$out_ev" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"port_closed\" and \"7901\" in e[\"message\"]"'
+edit_table 'j["测试(zed@example.com)"] = "US-B"'
+out=$(runev cca @zed --version 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_terminal.jsonl"
+ok "图形界面：还没登录的账号：terminal 事件给出在终端里登录的命令（argv 里是原样的键，给人看的命令加了引号，能直接复制进终端），fail 原因 not_logged_in" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"login\" and e[\"argv\"] == [\"login\", \"测试(zed@example.com)\"] and e[\"display\"] == \"cca login '"'"'测试(zed@example.com)'"'"'\"" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"not_logged_in\""'
+edit_table 'j.pop("测试(zed@example.com)")'; run cca router sync >/dev/null 2>&1
+run cca @alice --version >/dev/null 2>&1 </dev/null   # 先跑一次：上一条删掉的账号，它的启动器在这次启动时才删（会多一行说明）
+out=$(run cca @alice --version 2>&1 </dev/null); rc=$?
+out2=$(run CCA_EVENTS=/nonexistent/dir/ev.jsonl cca @alice --version 2>&1 </dev/null); rc2=$?
+ok "事件文件指向写不了的地方：命令照常，输出和不设事件文件时一样（bash 打不开文件的报错也不漏出来）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && [ "$out" = "$out2" ]'
+# 在外面、Clash Verge 没开：问要不要打开它
+touch "$T/away" "$T/verge/down"; : > open.log
+out=$(runev cca @alice --version 2>&1); rc=$?
+ok "图形界面：在外面、Clash Verge 没在运行：记一条 consent（open_clash_verge），不打开它、不启动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"open_clash_verge\" and e[\"grant\"] == \"open_clash_verge\"" && [ -f "$T/verge/down" ] && ! grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log'
+out=$(runev CCA_GRANT=open_clash_verge cca @alice --version 2>&1); rc=$?
+ok "图形界面：同意之后打开 Clash Verge，照常启动" '[ $rc -eq 3 ] && grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log && [ ! -f "$T/verge/down" ]'
+rm -f "$T/away"
+# usage --json 的新字段
+canned alice@example.com 13 41
+out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude.json"
+ok "usage --json：新字段 kind / generated_epoch / error_code / fetched_epoch / stale，窗口有 resets_epoch（Unix 秒）" 'printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and isinstance(d[\"generated_epoch\"], float) and (lambda a: a[\"source\"] == \"live\" and a[\"error_code\"] is None and a[\"stale\"] is False and isinstance(a[\"fetched_epoch\"], float) and isinstance(a[\"five_hour\"][\"resets_epoch\"], float) and a[\"five_hour\"][\"resets_epoch\"] > a[\"fetched_epoch\"])(uacct(\"alice@example.com\"))"'
+cp "$AD/usage.json" "$T/usage.keep"
+printf '{"subscription_type": "max", "rate_limits_available": true, "rate_limits": {"five_hour": null, "seven_day": null}}' > "$T/usage/alice@example.com.json"
+out=$(run cca usage --json 2>/dev/null)
+ok "usage：查到的数据里一个窗口都认不出时不算查到（nolimits），不把好好的缓存换掉" 'printf "%s" "$out" | jok "(lambda a: a[\"source\"] == \"cache\" and a[\"error_code\"] == \"nolimits\" and a[\"five_hour\"][\"utilization\"] == 13)(uacct(\"alice@example.com\"))" && cmp -s "$AD/usage.json" "$T/usage.keep"'
+unlisten 7901
+out=$(run cca usage --json 2>/dev/null)
+echo 7901 >> "$R/listening"
+ok "usage --json：端口不通时 error_code 是 port，error_detail 是端口" 'printf "%s" "$out" | jok "(lambda a: a[\"error_code\"] == \"port\" and a[\"error_detail\"] == \"7901\" and a[\"source\"] == \"cache\")(uacct(\"alice@example.com\"))"'
+out=$(run cca codex usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_codex.json"
+ok "codex usage --json：同样的新字段（Codex 的重置时间本来就是 Unix 秒）" 'printf "%s" "$out" | jok "d[\"tool\"] == \"codex\" and all(\"error_code\" in a and \"stale\" in a for a in d[\"accounts\"])"'
+run cca router sync >/dev/null 2>&1
+if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
+	ok "App 的契约测试：Swift 模型解码这一节 cca 的真实输出（macos/test.sh）" 'bash "$D/../macos/test.sh" "$GF" > "$T/contract.log" 2>&1'
+else
+	echo "SKIP  App 的契约测试（没有 swiftc 或 macos/test.sh）"
+fi
 
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
@@ -979,6 +1104,91 @@ rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
 out=$(run CCA_TTY="$(ans)" cxa @dave --version 2>&1); rc=$?
 ok "装了测试版之后，出了更新的正式版照常自动更新；这次是用 cxa 启动的，换上新版本重新执行后启动的照样是 Codex" 'printf "%s" "$out" | grep -q "cca 已自动更新：9.9.14-beta.1 → 9.9.14" && [ "$(ver)" = 9.9.14 ] && [ $rc -eq 3 ] && clast ARGS | grep -q -- " --version$" && clast ENV | grep -q "CODEX_HOME=$DD/codex "'
 
+# 11b1. 图形界面 App（cca gui）：Release 附带的 cca-app.zip（命名空间 cca-app 签名），只装和 cca 同版本的；App 开着时先下载放着，
+#       退出后再换；cca 更新后，下一次运行 cca 时在后台跟着更新；开发模式从源码编译（这里用假的 build.sh）
+GA="$H/Applications/cca.app"
+publish_app() {   # publish_app 版本 [签名的命名空间] [Info.plist 里写的版本] [--self-check 的退出码]：假的 cca.app 打包签名，放进假 GitHub
+	local d="$T/appsrc/$1"
+	rm -rf "$d"; mkdir -p "$d/cca.app/Contents/MacOS"
+	cat > "$d/cca.app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleExecutable</key><string>cca</string>
+<key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${3:-$1}</string>
+</dict></plist>
+EOF
+	printf '#!/bin/sh\n[ "$1" = --self-check ] && { echo ok; exit %s; }\nsleep 30\n' "${4:-0}" > "$d/cca.app/Contents/MacOS/cca"
+	chmod 755 "$d/cca.app/Contents/MacOS/cca"
+	codesign --force --sign - "$d/cca.app" 2>/dev/null
+	mkdir -p "$G/v$1"; rm -f "$G/v$1/cca-app.zip" "$G/v$1/cca-app.zip.sig"
+	( cd "$d" && ditto -c -k --keepParent cca.app "$G/v$1/cca-app.zip" )
+	ssh-keygen -Y sign -q -n "${2:-cca-app}" -f "$T/relkey" "$G/v$1/cca-app.zip" 2>/dev/null
+}
+gver() { plutil -extract CFBundleShortVersionString raw "$GA/Contents/Info.plist" 2>/dev/null; }
+refused() { [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "$1" && [ ! -e "$GA" ]; }   # 这次 cca gui 没装：说了原因，App 也没有
+: > open.log
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：这个版本的 Release 没附带 App：说明，不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没能装上界面 App" && [ ! -e "$GA" ] && grep -q "GH get v9.9.14/cca-app.zip" gh.log'
+publish_app 9.9.14
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：下载和 cca 同版本（9.9.14）的 App，按 cca-app 验签、自检后装进 ~/Applications 并打开" '[ $rc -eq 0 ] && [ "$(gver)" = 9.9.14 ] && grep -qxF "OPEN [$GA]" open.log && [ -f "$H/.cca/gui/enabled" ] && [ ! -e "$H/.cca/gui/next" ] && ! ls -d "$H/.cca/gui"/dl.* >/dev/null 2>&1 && printf "%s" "$out" | grep -q "已装好界面 App"'
+n_gh=$(grep -c "cca-app.zip" gh.log)
+out=$(run cca gui 2>&1)
+ok "cca gui：已经是同一个版本：直接打开，不再下载" '[ "$(grep -c "cca-app.zip" gh.log)" = "$n_gh" ] && [ "$(grep -cxF "OPEN [$GA]" open.log)" = 2 ]'
+out=$(run cca _gui hello 2>/dev/null)
+ok "_gui hello：装着的 App 的版本" 'printf "%s" "$out" | jok "d[\"gui\"][\"app_version\"] == \"9.9.14\" and d[\"gui\"][\"staged_version\"] is None and d[\"dev_mode\"] is False"'
+rm -rf "$GA"; publish_app 9.9.14; echo "# 篡改" >> "$G/v9.9.14/cca-app.zip"
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：被篡改的 App：签名校验不过，不装" 'refused "签名校验没通过"'
+publish_app 9.9.14 cca-release
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：用 cca 本身的命名空间（cca-release）签的 zip 不算：两种签名不能互相顶替" 'refused "签名校验没通过"'
+publish_app 9.9.14 cca-app 9.9.13
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：签名对、里面却是别的版本（拿旧版本冒充）：不装" 'refused "不是 9.9.14 版的 cca App"'
+publish_app 9.9.14 cca-app "" 1
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：这台 Mac 跑不了这个 App（自检不过）：不装" 'refused "运行不了这个 App"'
+mkdir -p "$GA/Contents"; printf '<plist><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>' > "$GA/Contents/Info.plist"
+publish_app 9.9.14
+out=$(run cca gui 2>&1); rc=$?
+ok "cca gui：~/Applications 里已经有一个不是 cca 装的 cca.app：不覆盖" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不是 cca 装的" && grep -q com.example.other "$GA/Contents/Info.plist"'
+rm -rf "$GA"
+out=$(run CCA_GUI_OS=15 cca gui 2>&1); rc=$?
+ok "cca gui：macOS 26 以前的系统：说明要 macOS 26，不下载" 'refused "要 macOS 26 或更新"'
+run cca gui >/dev/null 2>&1
+"$GA/Contents/MacOS/cca" & GUIPID=$!   # App 开着
+sleep 0.3
+publish 9.9.15; publish_app 9.9.15
+run cca update >/dev/null 2>&1; run cca ls >/dev/null 2>&1   # 换上 9.9.15 后的第一次运行：后台下载对应版本的 App
+for i in $(seq 1 50); do [ -d "$H/.cca/gui/next/cca.app" ] && [ ! -d "$H/.cca/gui/lock" ] && break; sleep 0.2; done
+ok "cca 更新后第一次运行：后台下载同版本的 App；App 开着就先放着，不换" '[ "$(ver)" = 9.9.15 ] && [ "$(gver)" = 9.9.14 ] && [ "$(plutil -extract CFBundleShortVersionString raw "$H/.cca/gui/next/cca.app/Contents/Info.plist")" = 9.9.15 ] && run cca _gui hello 2>/dev/null | grep -q "\"staged_version\":\"9.9.15\""'
+( sleep 1; kill $GUIPID 2>/dev/null ) &
+out=$(run cca gui update --relaunch $GUIPID 2>&1); rc=$?
+wait $GUIPID 2>/dev/null
+ok "cca gui update --relaunch：等 App 退出后换上新版本（不再下载）并重新打开" '[ $rc -eq 0 ] && [ "$(gver)" = 9.9.15 ] && [ ! -e "$H/.cca/gui/next" ] && [ "$(grep -c "^GH get v9.9.15/cca-app.zip$" gh.log)" = 1 ] && [ "$(tail -n 1 open.log)" = "OPEN [$GA]" ] && printf "%s" "$out" | grep -q "界面 App 已更新到 9.9.15"'
+rm -rf "$GA"; publish 9.9.16; publish_app 9.9.16
+run cca update >/dev/null 2>&1; run cca ls >/dev/null 2>&1; sleep 1
+ok "自己删掉了 App：cca 更新后不再装回来" '[ ! -e "$GA" ] && ! grep -q "v9.9.16/cca-app.zip" gh.log'
+run cca gui >/dev/null 2>&1
+out=$(run cca gui remove 2>&1); rc=$?
+ok "cca gui remove：删掉 App 和下载目录" '[ $rc -eq 0 ] && [ ! -e "$GA" ] && [ ! -e "$H/.cca/gui" ]'
+mkdir -p "$T/devgui/Sources" "$T/devgui/tools"
+cat > "$T/devgui/build.sh" <<'EOF'
+#!/bin/bash
+# 假的 macos/build.sh：记下参数，按 --version 写出一个 App
+echo "BUILD $*" >> "$CCA_T/build.log"
+v="" o=""; while [ $# -gt 0 ]; do case "$1" in --version) v="$2"; shift ;; --out) o="$2"; shift ;; esac; shift; done
+mkdir -p "$o/Contents/MacOS"; printf '#!/bin/sh\n' > "$o/Contents/MacOS/cca"; chmod 755 "$o/Contents/MacOS/cca"
+printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$v" > "$o/Contents/Info.plist"
+echo "$o"
+EOF
+: > "$T/build.log"; CCAP=$(cd -P "$(dirname "$CCA")" && pwd)/cca
+out=$(run CCA_GUI_SRC="$T/devgui" bash "$CCA" gui 2>&1); rc=$?
+out2=$(run CCA_GUI_SRC="$T/devgui" bash "$CCA" gui 2>&1)
+ok "开发模式（git 仓库里的 cca）：cca gui 从源码编译（源码没变不再编），用仓库里的 cca 打开编好的 App，不装进 ~/Applications" '[ $rc -eq 0 ] && [ "$(grep -c "^BUILD .*--arch native" "$T/build.log")" = 1 ] && grep -qF "OPEN [--env] [CCA_GUI_CCA=$CCAP] [$T/devgui/build/cca.app]" open.log && [ ! -e "$GA" ]'
+
 # 11b2. 维护者的账号 → 节点映射：私有仓库（假 git）+ 这台机器的 deploy key + 发布密钥签名
 # （这时装着的是 mkver 换成测试密钥的版本，映射用 $T/relkey 签）
 PR="$T/policy_repo"; mkdir -p "$PR"; PK="$H/.cca/policy/id_ed25519"
@@ -1038,6 +1248,11 @@ pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": 
 out=$(run cca policy pull 2>&1); rc=$?
 ok "合并：映射里有、这台机器上还没有的账号自动加进账号表并分到端口（别名用映射里写的，和这台机器上的别名重名时只写邮箱）；这台机器自己的账号不动" '[ $rc -eq 0 ] && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\" and t.get(\"frank@example.com\") == \"US-B\" and t.get(\"自己(own@example.com)\") == \"US-A\" and \"kimi\" in t" && cfgok "\"Erin(erin@example.com)\" in c[\"ports\"] and \"frank@example.com\" in c[\"ports\"]" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 Erin（erin@example.com），出口 US-D" && printf "%s" "$out" | grep -q "Claude  Erin（erin@example.com） → US-D"'
 ok "映射要的节点不在这台机器的可选节点里：先不加（加进来整张表就校验不过），cca policy 里注明怎么办" '! grep -q gina "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "映射里还没加到这台机器上的账号：" && printf "%s" "$out" | grep -q "Claude  gina@example.com → HK-A：节点 HK-A 不在这台机器的可选节点里（运行 cca router setup 选上它）"'
+cp "$H/.cca/policy/policy.json" "$T/policy.gui"
+python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["claude"]["hank@example.com"]="US-B"; json.dump(j, open(p, "w"))' "$H/.cca/policy/policy.json"
+out=$(gj state)
+ok "_gui state（只读）：映射里新加的账号算进快照，notices 里说本来会加（policy_added），账号表和 config.json 都不改" 'printf "%s" "$out" | jok "any(n[\"code\"] == \"policy_added\" and n[\"key\"] == \"hank@example.com\" and n[\"node\"] == \"US-B\" for n in d[\"notices\"]) and \"hank@example.com\" in [a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]]" && ! grep -q hank "$H/.cca/accounts.json" "$H/.cca/config.json"'
+cp "$T/policy.gui" "$H/.cca/policy/policy.json"
 p=$(cfgv 'c["ports"]["Erin(erin@example.com)"]')
 out=$(run CCA_TTY="$(ans)" cca @erin --version 2>&1); rc=$?
 ok "加进来的账号照常启动：先用它的邮箱登录，路由器同步到映射的节点" '[ $rc -eq 3 ] && grep -q "ARGS: auth login --claudeai --email erin@example.com" claude.log && [ "$(sel "CCA-$((p - 7900))")" = US-D ]'
@@ -1340,10 +1555,14 @@ out=$(r3 "$H3/.cca/bin/cca" update --rollback 2>&1)
 ok "一键安装装上的测试版也能退回" '[ "$("$H3/.cca/bin/cca" version)" = 9.9.22 ] && printf "%s" "$out" | grep -q "已退回 9.9.22"'
 
 # 12. 一键还原：移除端口池需要重载（restore 已确认）
+cp -R "$T/appsrc/9.9.16/cca.app" "$GA"; "$GA/Contents/MacOS/cca" & GUIPID=$!; sleep 0.3
+out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
+kill $GUIPID 2>/dev/null; wait $GUIPID 2>/dev/null
+ok "restore：图形界面 App 开着时不还原（先退出它）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca 的界面 App" && [ -d "$GA" ] && [ -d "$H/.cca" ]'
 K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_keys"
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
-ok "restore：启动器全部删掉" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ]'
+ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
 ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字节还原），本机端口池移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening"'
 ok "restore：本机还原（cca、cxa 都删掉），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key 从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ -z "$(ls "$T/keychain" | grep "^cca-api-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'

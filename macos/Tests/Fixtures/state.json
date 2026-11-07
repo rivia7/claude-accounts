@@ -1,0 +1,606 @@
+{
+  "version": 1,
+  "kind": "state",
+  "generated_at": 1794042000.0,
+  "cca_version": "2.9.0",
+  "errors": [],
+  "notices": [
+    {
+      "code": "policy_pinned",
+      "tool": "claude",
+      "key": "工作(bob@example.com)",
+      "node": "US-B",
+      "old_node": "US-A"
+    },
+    {
+      "code": "nodes_filled",
+      "node": "HK-A"
+    }
+  ],
+  "config": {
+    "route_pref": "auto",
+    "router": {
+      "configured": true,
+      "host": "192.0.2.10",
+      "ssh_port": 22,
+      "proxy_host": "192.0.2.10"
+    },
+    "local": {
+      "configured": true,
+      "client": "clash-verge",
+      "name": "Clash Verge"
+    },
+    "nodes": [
+      "US-A",
+      "US-B",
+      "US-C",
+      "US-D",
+      "HK-A"
+    ],
+    "min_trust": 50,
+    "leak_check": true,
+    "update": "auto",
+    "policy": {
+      "configured": true,
+      "repo": "example/cca-policy"
+    }
+  },
+  "routing": {
+    "first_port": 7901,
+    "pool_size": 8,
+    "sync": "pending",
+    "local_sync": "ok",
+    "slots": [
+      {
+        "slot": 1,
+        "group": "CCA-1",
+        "port": 7901,
+        "tool": "claude",
+        "key": "工作(bob@example.com)",
+        "node": "US-B",
+        "local_node": "Verge-B"
+      },
+      {
+        "slot": 2,
+        "group": "CCA-2",
+        "port": 7902,
+        "tool": "claude",
+        "key": "carol@example.com",
+        "node": "US-C",
+        "local_node": "US-C"
+      },
+      {
+        "slot": 3,
+        "group": "CCA-3",
+        "port": 7903,
+        "tool": "claude",
+        "key": "测试(dave@example.com)",
+        "node": "US-D",
+        "local_node": "US-D"
+      },
+      {
+        "slot": 4,
+        "group": "CCA-4",
+        "port": 7904,
+        "tool": "claude",
+        "key": "香港接口",
+        "node": "HK-A",
+        "local_node": "HK-A"
+      },
+      {
+        "slot": 5,
+        "group": "CCA-5",
+        "port": 7905,
+        "tool": "codex",
+        "key": "frank@example.com",
+        "node": "US-A",
+        "local_node": "US-A"
+      },
+      {
+        "slot": 6,
+        "group": "CCA-6",
+        "port": 7906,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 7,
+        "group": "CCA-7",
+        "port": 7907,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 8,
+        "group": "CCA-8",
+        "port": 7908,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      }
+    ],
+    "nodes": [
+      {
+        "name": "US-A",
+        "local_name": "US-A",
+        "users": [
+          {
+            "tool": "codex",
+            "key": "frank@example.com"
+          }
+        ]
+      },
+      {
+        "name": "US-B",
+        "local_name": "Verge-B",
+        "users": [
+          {
+            "tool": "claude",
+            "key": "工作(bob@example.com)"
+          }
+        ]
+      },
+      {
+        "name": "US-C",
+        "local_name": "US-C",
+        "users": [
+          {
+            "tool": "claude",
+            "key": "carol@example.com"
+          }
+        ]
+      },
+      {
+        "name": "US-D",
+        "local_name": "US-D",
+        "users": [
+          {
+            "tool": "claude",
+            "key": "测试(dave@example.com)"
+          }
+        ]
+      },
+      {
+        "name": "HK-A",
+        "local_name": "HK-A",
+        "users": [
+          {
+            "tool": "claude",
+            "key": "香港接口"
+          }
+        ]
+      }
+    ]
+  },
+  "tools": [
+    {
+      "id": "claude",
+      "label": "Claude",
+      "app_label": "Claude App",
+      "cli_prefix": [],
+      "enabled": true,
+      "bin": "/Users/me/.local/bin/claude",
+      "app": {
+        "installed": true,
+        "path": "/Applications/Claude.app"
+      },
+      "chrome": true,
+      "settings_problems": [],
+      "errors": [],
+      "last": "工作(bob@example.com)",
+      "accounts": [
+        {
+          "key": "工作(bob@example.com)",
+          "id": "bob-example-com-1a2b3c",
+          "alias": "工作",
+          "email": "bob@example.com",
+          "name": "工作",
+          "label": "工作（bob@example.com）",
+          "kind": "oauth",
+          "login": "logged_in",
+          "login_email": "bob@example.com",
+          "plan": "Max",
+          "node": "US-B",
+          "port": 7901,
+          "slot": 1,
+          "group": "CCA-1",
+          "pinned": true,
+          "pinned_node": "US-B",
+          "is_last": true,
+          "api": null,
+          "badge": {
+            "label": "工",
+            "color": "#30A46C"
+          },
+          "app": {
+            "running": true,
+            "pid": 4242
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": true,
+            "check": true
+          },
+          "can_why": {},
+          "usage": {
+            "account": "工作",
+            "key": "工作(bob@example.com)",
+            "email": "bob@example.com",
+            "plan": "Max",
+            "source": "cache",
+            "fetched_at": "2026-11-07T08:56:00Z",
+            "fetched_epoch": 1794041760.0,
+            "age_seconds": 240,
+            "stale": false,
+            "error": null,
+            "error_code": null,
+            "error_detail": null,
+            "five_hour": {
+              "utilization": 92.0,
+              "resets_at": "2026-11-07T11:13:30.000000+00:00",
+              "resets_epoch": 1794050010.0,
+              "reset": false
+            },
+            "seven_day": {
+              "utilization": 41.0,
+              "resets_at": "2026-11-10T08:00:00+00:00",
+              "resets_epoch": 1794297600.0,
+              "reset": false
+            },
+            "seven_day_opus": null,
+            "seven_day_sonnet": {
+              "utilization": 60.0,
+              "resets_at": "2026-11-10T08:00:00+00:00",
+              "resets_epoch": 1794297600.0,
+              "reset": false
+            },
+            "seven_day_oauth_apps": null,
+            "model_scoped": [
+              {
+                "name": "Sonnet",
+                "utilization": 60.0,
+                "resets_at": "2026-11-10T08:00:00+00:00",
+                "resets_epoch": 1794297600.0,
+                "reset": false
+              }
+            ],
+            "extra_usage": null
+          },
+          "health": {
+            "version": 1,
+            "checked_at": 1794041000.0,
+            "age_seconds": 1000,
+            "stale": false,
+            "applies": true,
+            "source": "launch",
+            "kind": "exit",
+            "route": "router",
+            "node": "US-B",
+            "port": 7901,
+            "result": "ok",
+            "ip": "203.0.113.7",
+            "country": "US",
+            "org": "Example Networks",
+            "trust": 97,
+            "trust_label": "极度纯净",
+            "tags": [
+              "住宅IP"
+            ],
+            "restricted_region": null,
+            "message": "203.0.113.7 · US · Example Networks · 纯净度 97（极度纯净） · 住宅IP",
+            "note": "",
+            "leak": {
+              "dns": "leak",
+              "webrtc": "ok",
+              "line": "DNS 泄露 · WebRTC 无泄露",
+              "dns_message": "DNS 解析器在中国大陆（198.51.100.53），出口却在 US",
+              "webrtc_message": ""
+            }
+          }
+        },
+        {
+          "key": "carol@example.com",
+          "id": "carol-example-com-4d5e6f",
+          "alias": "",
+          "email": "carol@example.com",
+          "name": "carol@example.com",
+          "label": "carol@example.com",
+          "kind": "oauth",
+          "login": "logged_out",
+          "login_email": null,
+          "plan": "",
+          "node": "US-C",
+          "port": 7902,
+          "slot": 2,
+          "group": "CCA-2",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": null,
+          "badge": {
+            "label": "C",
+            "color": "#8E4EC6"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": false,
+            "check": true
+          },
+          "can_why": {
+            "usage": "not_logged_in"
+          },
+          "usage": null,
+          "health": null
+        },
+        {
+          "key": "测试(dave@example.com)",
+          "id": "dave-example-com-7a8b9c",
+          "alias": "测试",
+          "email": "dave@example.com",
+          "name": "测试",
+          "label": "测试（dave@example.com）",
+          "kind": "oauth",
+          "login": "email_mismatch",
+          "login_email": "eve@example.com",
+          "plan": "Pro",
+          "node": "US-D",
+          "port": 7903,
+          "slot": 3,
+          "group": "CCA-3",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": null,
+          "badge": {
+            "label": "测",
+            "color": "#D6409F"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": true,
+            "check": true
+          },
+          "can_why": {},
+          "usage": null,
+          "health": null
+        },
+        {
+          "key": "直连接口",
+          "id": "api-1a2b3c",
+          "alias": "直连接口",
+          "email": "",
+          "name": "直连接口",
+          "label": "直连接口",
+          "kind": "api",
+          "login": "api",
+          "login_email": "",
+          "plan": "",
+          "node": null,
+          "port": null,
+          "slot": null,
+          "group": null,
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": {
+            "host": "api.example.com",
+            "model": "model-x"
+          },
+          "badge": null,
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": false,
+            "web": false,
+            "usage": false,
+            "check": true
+          },
+          "can_why": {
+            "app": "api_account",
+            "web": "api_account",
+            "usage": "api_account"
+          },
+          "usage": null,
+          "health": {
+            "version": 1,
+            "checked_at": 1794040200.0,
+            "age_seconds": 1800,
+            "stale": false,
+            "applies": true,
+            "source": "check",
+            "kind": "api",
+            "route": "direct",
+            "node": null,
+            "port": null,
+            "result": "api_ok",
+            "ip": null,
+            "country": null,
+            "org": null,
+            "trust": null,
+            "trust_label": null,
+            "tags": [],
+            "restricted_region": null,
+            "message": "api.example.com 连得上",
+            "note": "",
+            "leak": null
+          }
+        },
+        {
+          "key": "香港接口",
+          "id": "api-4d5e6f",
+          "alias": "香港接口",
+          "email": "",
+          "name": "香港接口",
+          "label": "香港接口",
+          "kind": "api",
+          "login": "api",
+          "login_email": "",
+          "plan": "",
+          "node": "HK-A",
+          "port": 7904,
+          "slot": 4,
+          "group": "CCA-4",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": {
+            "host": "api2.example.com",
+            "model": "model-y"
+          },
+          "badge": null,
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": false,
+            "web": false,
+            "usage": false,
+            "check": true
+          },
+          "can_why": {
+            "app": "api_account",
+            "web": "api_account",
+            "usage": "api_account"
+          },
+          "usage": null,
+          "health": null
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "app_label": "ChatGPT App",
+      "cli_prefix": [
+        "codex"
+      ],
+      "enabled": true,
+      "bin": "/Users/me/.local/bin/codex",
+      "app": {
+        "installed": true,
+        "path": "/Applications/ChatGPT.app"
+      },
+      "chrome": true,
+      "settings_problems": [],
+      "errors": [],
+      "last": "frank@example.com",
+      "accounts": [
+        {
+          "key": "frank@example.com",
+          "id": "frank-example-com-2b3c4d",
+          "alias": "",
+          "email": "frank@example.com",
+          "name": "frank@example.com",
+          "label": "frank@example.com",
+          "kind": "oauth",
+          "login": "logged_in",
+          "login_email": "frank@example.com",
+          "plan": "Pro",
+          "node": "US-A",
+          "port": 7905,
+          "slot": 5,
+          "group": "CCA-5",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": true,
+          "api": null,
+          "badge": {
+            "label": "F",
+            "color": "#0A84FF"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "can": {
+            "app": true,
+            "web": true,
+            "usage": true,
+            "check": true
+          },
+          "can_why": {},
+          "usage": {
+            "account": "frank@example.com",
+            "key": "frank@example.com",
+            "email": "frank@example.com",
+            "plan": "Pro",
+            "source": "cache",
+            "fetched_at": "2026-11-07T08:20:00Z",
+            "fetched_epoch": 1794039600.0,
+            "age_seconds": 2400,
+            "stale": true,
+            "error": null,
+            "error_code": null,
+            "error_detail": null,
+            "five_hour": {
+              "utilization": 35.0,
+              "resets_at": 1794049200,
+              "resets_epoch": 1794049200.0,
+              "reset": false
+            },
+            "seven_day": {
+              "utilization": 76.0,
+              "resets_at": 1794470400,
+              "resets_epoch": 1794470400.0,
+              "reset": false
+            },
+            "model_scoped": null,
+            "extra_usage": null,
+            "credits": {
+              "hasCredits": true,
+              "unlimited": false,
+              "balance": "12.5"
+            },
+            "reset_credits": {
+              "availableCount": 2
+            }
+          },
+          "health": {
+            "version": 1,
+            "checked_at": 1794013200.0,
+            "age_seconds": 28800,
+            "stale": true,
+            "applies": false,
+            "source": "check",
+            "kind": "exit",
+            "route": "local",
+            "node": "US-C",
+            "port": 7905,
+            "result": "low_purity",
+            "ip": "203.0.113.20",
+            "country": "US",
+            "org": "Example Hosting",
+            "trust": 42,
+            "trust_label": "一般",
+            "tags": [
+              "机房IP"
+            ],
+            "restricted_region": null,
+            "message": "203.0.113.20 · US · Example Hosting · 纯净度 42（一般） · 机房IP",
+            "note": "纯净度低于设定的 50",
+            "leak": null
+          }
+        }
+      ]
+    }
+  ]
+}

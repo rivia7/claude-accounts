@@ -74,6 +74,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 改别名、换节点 | `cca edit` |
 | 删除账号 | `cca rm 工作` |
 | 检查每个账号的出口 IP | `cca check` |
+| 打开图形界面（用量、节点分流、一键打开 App） | `cca gui` |
 | 出门在外：配置本机的 Clash 客户端（第一次在外面启动时也会问） | `cca local setup` |
 | 看现在走路由器还是本机 Clash | `cca local` |
 | 退出某个账号的登录、重新登录 | `cca login 工作` |
@@ -166,7 +167,7 @@ cca usage
 - 查询由 Claude Code 自己完成（cca 让它以账号的配置无界面地查一下，不加载插件、hooks、MCP），**不发消息、不耗额度**，cca 也不碰登录凭证。
 - 查之前同样会确认出口：端口不通、出口跑到了受限地区的账号不去查。查不到时显示上次查到的数据，并注明是多久前的。
 - 菜单和 `cca ls` 里每个账号后面也会附上最近一次的用量（只读缓存，不联网，不拖慢菜单）。
-- `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）、`fetched_at`，以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`。所有账号都没有数据时退出码是 1。
+- `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）和 `error_code`（同一个原因的代码：`login`、`port`、`timeout`……）、`fetched_at` / `fetched_epoch`、`stale`（超过 10 分钟），以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "resets_epoch": 重置时间（Unix 秒）, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`。所有账号都没有数据时退出码是 1。完整格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 这个查询用的是 Claude Code 标为实验性的接口；以后的 Claude Code 版本如果改了，cca 会提示这个版本的 Claude Code 查不了用量，不会影响启动账号。
 
 ## 第三方 API 账号
@@ -241,6 +242,26 @@ cca app 工作
 - 在别的 App 里点开的 claude.ai 链接，macOS 只会交给其中一个 Claude App。
 - 这个功能依赖 Claude App 支持独立的资料目录（4.29 版已验证）。以后的版本如果不支持了，cca 会停下并提示，不会用错账号。
 
+## 图形界面（cca App）
+
+```sh
+cca gui
+```
+
+第一次运行会下载和 cca 同一个版本的 cca App，装进 `~/Applications/cca.app` 后打开（要 macOS 26 或更新，Intel 和 Apple 芯片都能用）。它是 cca 的一个窗口加一个菜单栏图标：
+
+- 左边是 Claude、ChatGPT（Codex）两组账号，每个账号显示套餐、登录状态、5 小时和本周用量；
+- 选中一个账号：用量的明细和重置时间、走哪个节点和端口、路由器上这个槽位现在选中的节点、上次检测到的出口（IP、地区、纯净度、DNS / WebRTC 泄露）；
+- 一键打开这个账号的 Claude App / ChatGPT App、网页版，检测出口，刷新用量；
+- 「节点分流」一页列出端口池每个槽位：应选的节点、路由器（在外面是本机 Clash Verge）上实际选中的、端口通不通，不一致时一键同步路由器；
+- 菜单栏图标里是精简的账号列表和用量，点一下就能打开账号的 App。
+
+App 里做的每件事都是交给 cca 做的，检查和命令行里完全一样：要重载或重启 OpenClash / ShellCrash、出口纯净度偏低还要不要用、第一次打开 ChatGPT App 要关掉 Codex 的系统代理回退、在外面要打开 Clash Verge……都会弹窗问你，同意了才做。添加账号、登录、改节点、配置路由器这些要回答问题的事，App 会在「终端」里打开对应的 cca 命令。
+
+- 装好以后不用管它：cca 自动更新到新版本后，下一次运行 cca 时会在后台下载对应版本的 App（App 开着就等它退出再换，也可以在 App 里点「更新并重新打开」）。`cca gui update` 立即更新，`cca gui remove` 删掉它。
+- App 用 curl 下载、用发布密钥验过签名才装（和 cca 本身一样）。它没有苹果的公证，所以**不要用浏览器从 Releases 页面下载 cca-app.zip**：那样会被 Gatekeeper 拦下。
+- 它通过 cca 的只读接口（`cca _gui`）读数据，格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
+
 ## 出门在外
 
 离开家、连不上路由器时，cca 自动改走 Mac 上的 Clash 客户端，每个账号照样走它自己的节点。
@@ -310,7 +331,7 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）和各账号的 App 启动器（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
@@ -401,7 +422,8 @@ bash /tmp/cca install
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
 - 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
 - 只测历史/记忆/配置共享、旧链接迁移、配置合并和冲突保留：`python3 tests/shared_state.py`（完整回归也会跑）。
-- 发布新版本：改 `cca` 里的 `VERSION` 并提交，然后运行 `./release.sh "更新说明"`。它会跑测试、签名、打 tag、推送，并创建 GitHub Release。
+- 图形界面 App 的源码在 `macos/`（SwiftUI，只用苹果的命令行工具就能编，不用 Xcode）：`bash macos/build.sh` 编出 `macos/build/cca.app`，`bash macos/test.sh` 跑它的契约测试。开发模式（`cca` 旁边有 `.git`）下 `cca gui` 直接从源码编译并打开它。App 和 cca 之间的接口见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
+- 发布新版本：改 `cca` 里的 `VERSION` 并提交，然后运行 `./release.sh "更新说明"`。它会跑测试、签名、编译界面 App、打 tag、推送，并创建 GitHub Release。
 
 ## 许可证
 

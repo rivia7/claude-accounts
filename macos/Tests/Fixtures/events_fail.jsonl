@@ -1,0 +1,4 @@
+{"v":1,"ev":"step","code":"sync"}
+{"v":1,"ev":"step","code":"preflight"}
+{"v":1,"ev":"fail","code":"error","message":"出口检测没有完成。"}
+{"v":1,"ev":"fail","code":"port_closed","message":"端口 192.0.2.10:7903 不通。为避免走错出口，已停止。"}

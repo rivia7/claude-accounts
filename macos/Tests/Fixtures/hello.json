@@ -1,0 +1,10 @@
+{
+  "version": 1, "kind": "hello", "api": 1,
+  "cca_version": "2.9.0", "dev_mode": false, "installed": true,
+  "self": "/Users/me/.cca/bin/cca", "home": "/Users/me/.cca",
+  "tools": {
+    "claude": {"enabled": true, "bin": "/Users/me/.local/bin/claude"},
+    "codex": {"enabled": true, "bin": "/Users/me/.local/bin/codex"}
+  },
+  "gui": {"app": "/Users/me/Applications/cca.app", "app_version": "2.9.0", "staged_version": null}
+}

@@ -1,0 +1,3 @@
+{"v":1,"ev":"step","code":"preflight"}
+{"v":1,"ev":"consent","item":"low_purity","scope":"203.0.113.20","grant":"low_purity:203.0.113.20","title":"出口纯净度偏低","question":"仍然用这个出口启动吗？","detail":"203.0.113.20 · US · Example Hosting · 纯净度 42（一般），低于设定的 50。","severity":"warn","default":"no"}
+{"v":1,"ev":"fail","code":"low_purity","message":"出口 203.0.113.20 的纯净度 42 低于设定的 50，没有启动。"}

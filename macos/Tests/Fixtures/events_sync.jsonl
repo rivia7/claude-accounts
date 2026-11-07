@@ -1,0 +1,3 @@
+{"v":1,"ev":"step","code":"sync"}
+{"v":1,"ev":"consent","item":"router_reload","scope":"OpenClash","grant":"router_reload:OpenClash","title":"需要重载 OpenClash","question":"现在重载吗？","detail":"端口池要调整：路由器要重载一次配置（约 20 秒，局域网的新连接会中断）。","severity":"warn","default":"yes"}
+{"v":1,"ev":"fail","code":"sync_failed","message":"路由器没有同步：没有重载 OpenClash。"}

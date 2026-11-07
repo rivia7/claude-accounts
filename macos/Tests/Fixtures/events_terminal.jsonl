@@ -1,0 +1,3 @@
+{"v":1,"ev":"step","code":"preflight"}
+{"v":1,"ev":"fail","code":"not_logged_in","message":"carol@example.com 还没登录。"}
+{"v":1,"ev":"terminal","code":"login","argv":["login","carol@example.com"],"display":"cca login carol@example.com","message":"carol@example.com 还没登录：在终端里登录后再打开。"}

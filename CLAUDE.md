@@ -5,7 +5,8 @@
 ## 命令
 - `bash tests/regress.sh` — 全流程回归，约 2 分钟；全用假的路由器/claude/curl/ssh/GitHub，不联网、不碰真实 `~/.cca`；`KEEP=1` 保留沙箱，`DEBUG_OUT=1` 时失败的用例附上 `$out` 的最后几行；只能在 macOS 上跑（BSD sed、/bin/dash、ruby）
 - `bash -n cca && bash -n install.sh` — 快速语法检查
-- `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、打 tag、推送，发布 cca、cca.sig、install.sh。`VERSION` 写成 `X.Y.Z-beta.N` 时发成测试版（GitHub pre-release、不设为 Latest）：`releases/latest` 不指向它，自动更新和一键安装都不装，只能 `cca update X.Y.Z-beta.N` 或 `install.sh` 后面跟版本号手动装；版本比较里同号的测试版比正式版旧（`ver_gt`）
+- `bash macos/build.sh [--version V] [--arch universal|arm64|native] [--debug] [--out 路径.app]` — 编图形界面 cca App（默认 `macos/build/cca.app`，版本号取 `cca` 的 VERSION）；`bash macos/test.sh [夹具目录]` — App 的契约测试（解码 cca 的真实输出）。只要苹果的命令行工具，不用 Xcode
+- `./release.sh "更新说明"` — 先把 `cca` 里的 `VERSION` 改大并提交（工作区要干净）；跑回归、签名、编译界面 App（要命令行工具里的 swiftc 和 macOS 26 以上的 SDK）、打 tag、推送，发布 cca、cca.sig、install.sh、cca-app.zip、cca-app.zip.sig。`VERSION` 写成 `X.Y.Z-beta.N` 时发成测试版（GitHub pre-release、不设为 Latest）：`releases/latest` 不指向它，自动更新和一键安装都不装，只能 `cca update X.Y.Z-beta.N` 或 `install.sh` 后面跟版本号手动装；版本比较里同号的测试版比正式版旧（`ver_gt`）
 - `./policy.sh 映射仓库的目录 ["提交说明"]` — 发布维护者的账号 → 节点映射：检查格式（`cca _policy-check`）、确认仓库是私有的，用发布密钥签名（命名空间 `cca-policy`），提交并推送。目录里有 `custom.yaml` 时顺带发布参考节点（抽成 `nodes.json`，`cca _fill-check`，命名空间 `cca-nodes`）；`./policy.sh nodes 参考配置 [策略组]` 只打印不发布
 - `./policy.sh key [ls | add [公钥文件 | -] [别名] | rm 别名 | mv 别名 [新别名]] [-R 仓库] [-y]` — 维护者管理各台机器的 deploy key（经 `gh api`）：别名就是 GitHub 上 key 的标题，不许重复；add 不写文件就读剪贴板（cca 的引导已经把公钥复制进去了），不写别名就提示（默认取公钥备注 `cca-policy@机器名` 里的机器名），总是加成只读；GitHub 的 deploy key 不能修改，mv 是删掉后用同一把公钥重新加（新的没加上时给出公钥好补回）。默认仓库从 `cca` 的 `POLICY_REPO_DEFAULT` 读（`CCA_POLICY_DEFAULT` 同样能换掉）
 
@@ -47,6 +48,17 @@
 - 路由器端只用 busybox 一定有的命令：OpenWrt 默认的 busybox 没有 `cksum`（真实路由器上遇到过，算摘要用 `sum_in`：md5sum → sha256sum → cksum → ruby），假路由器的 `rbin/cksum` 也照样报 not found
 - 路由器的 `nodes` 输出里 `C<TAB>名字` 是 ShellCrash 的自定义节点（不能当出口，只给 `nodes-fill` 判断重名）：只取名字的地方要滤掉 `C` 行
 
+## 图形界面（cca App，`macos/`）
+- App 只经 `macos/PROTOCOL.md` 写的接口和 cca 打交道：不读 `~/.cca` 里的文件、不解析中文、不在 Swift 里重算 cca 的规则。改了这些输出（`_gui hello|state|live`、`usage --json`、`check --json`、`health.json`、事件）要同时改 PROTOCOL.md、Swift 模型（`macos/Sources/CcaKit/Protocol`）和 regress 的 10g；只能加字段，删改要升 bash 的 `GUI_API`
+- `cca _gui …` 在 `main` 最前面分派（不经过自动更新、映射拉取），`state` / `live` 在 `CCA_RO=1` 下跑：`ctx`、`reconcile` 只在内存里对账，不写 config.json 和账号表，也不往 stderr 说（`notice()` 记进 `NOTICES`，输出在 `notices` 里）。PY_SRC 里新加会写文件、会说话的对账逻辑也要照这个规矩。`state` 一个 Python 进程里看两个工具：`with using(工具)` 换掉全局的 `T`（`ACCT_JSON` 跟着清）；`codex.json` 不存在时 Codex 算没启用，App 绝不能为了看 Codex 去跑 `cca codex …`（会建出 codex.json，映射里的 Codex 账号随即被加进来）
+- 路由器实况（`_gui live`）是经 SSH 跑这一版 `router_sh` 的 `status`（`sh -s status`，和 `router_node_list` 一样不依赖路由器上部署的版本），由 `cmd_gui_live` 解析槽位行（`GUI_SLOT_RE`）：`router_sh` 的 `status` 输出格式不能随意改（regress 守着）。应选的节点按这台 Mac 的账号表算，不看路由器上的“应为”
+- 事件：`CCA_EVENTS=文件` 时往里追加 JSON 行（`gui_event`；`consent` / `terminal` / `fail` / `result` / `step`），不设就什么都不做、退出码和 stderr 和不设时一样（启动器、命令行都不设）。用文件是因为很多地方在 `$(…)` 里。失败原因：`fail_warn 代码 文字`、`FAIL_CODE=代码 die …`（bash 3.2 里函数调用前的赋值只在这次调用里有效）；要在终端里做的：`gui_terminal 代码 说明 cca 后面的参数…`（Codex 自动加 `codex`）
+- 要用户同意的地方一律用 `consent 项 范围 标题 问题 说明 [默认]`：交互时照旧 `confirm`；非交互时记一条 consent 事件、返回 2（照旧拒绝），App 弹窗同意后带 `CCA_GRANT=项:范围` 重跑同一条命令。授权必须带范围、原样匹配（`router_reload:OpenClash`、`low_purity:<出口 IP>`），不保存；`CCA_YES` 仍然只管 `cca router sync -y`。后台任务（`_update-fetch` 等）在 `main` 里先 `unset CCA_EVENTS CCA_GRANT CCA_RO`，`child_env` 也不把它们带给 claude / codex
+- 出口检测结果：`coffee_check`（非 region 模式）之后 `py health-save` 记进账号目录的 `health.json`（600）；第三方 API 账号、端口不通用 `health_note`。泄露状态用 `leak-verdict` 输出的 `S<TAB>dns|webrtc<TAB>状态` 行（只在有横幅那一句时输出，`leak_finish` 只认 W / S 行），不要去解析 `LEAK_LINE`
+- `cca gui`（在 `main` 最前面分派）：只装和当前 cca 版本号相同的 App（`$UPDATE_REPO/releases/download/v版本/cca-app.zip` 和 `.sig`，命名空间 `cca-app`、principal `cca-app`，和 cca 的 `cca-release` 分开；再查 bundle id `local.cca.app`、版本号、`codesign --verify`、`--self-check`）。下载好的先放在 `~/.cca/gui/next`，App 开着时不换（`gui_running`），换的时候旧的先挪开、换不上挪回去。`gui_hook` 在每次启动时看：装过 App（`gui/enabled`）、版本和 cca 不同 → 后台 `_gui-fetch`（6 小时一次）；用户自己删掉的 App 不装回来。开发模式下 `cca gui` 用 `macos/build.sh` 现编，`open --env CCA_GUI_CCA=<仓库里的 cca>` 打开 `macos/build/cca.app`，不装进 `~/Applications`
+- 只有命令行工具（没有 Xcode）时：macOS 27 SDK 里的 `@State` 是宏，插件只随 Xcode 提供，编不过——App 的状态一律放在 `@Observable` 对象里（`@Environment`、`@Bindable`、`@Namespace` 可以用）；`@Entry`、`#Preview`、`@Previewable` 也不能用。部署目标 macOS 26，27 的 API（`.pickerStyle(.tabs)` 等）放在 `if #available(macOS 27, *)` 里；x86_64 也用 27 的 SDK 编，和 arm64 用 lipo 合成一个。没有 actool：图标由 `macos/tools/make-icon.swift` 画，sips + iconutil 打包；签名是临时签名（curl 下载不带隔离标记，所以 Gatekeeper 不拦；浏览器下载的会被拦）
+- release.sh 在跑完回归后编通用版 App、`ditto` 打成 `cca-app.zip`、用发布密钥按 `cca-app` 签名，并确认这个签名在 `cca-release` 命名空间里不通过，和 cca 一起上传
+
 ## 两种工具（Claude / Codex）
 - 工具差异集中在两处：PY_SRC 的 `Tool`（Claude，取值和只支持 Claude 时一样）/ `CodexTool`，按 `CCA_TOOL` 选出 `T`；bash 的 `TOOL`（`use_tool codex` 切换，账号表、命令前缀 `CMD`、文案变量由 `py tool-env` 给，`py` 自动带上 `CCA_TOOL`），不同的步骤写成成对的 `claude_xxx` / `codex_xxx`，用 `tool xxx` 调用。`cca codex <子命令>` 复用同一套 `dispatch`；提示里的命令前缀用 `${CMD}`。再加工具：照 `CodexTool` 加子类、补同名前缀的函数，再查一遍只是文案不同的 `case "$TOOL"` / `[ "$TOOL" = codex ]`（添加账号的问答、`cmd_key`、`cmd_rm`、`settings_warn` 等）和 `cmd_restore` 里的 `for t in claude codex`
 - `cxa` 是 `cca codex` 的简写：`~/.local/bin/cxa` 是指向同目录 `cca` 的相对链接（`codex_alias_ensure`：`cca install` 和添加 Codex 账号时建，不覆盖别人的同名命令；平时每次运行，用着 Codex（有 codex.json 或者这次是 `cca codex …`）时也查一下，缺了就补，用 quiet：那里有东西、PATH 里有别的 cxa 时不动也不说，免得每次都提示；`cmd_restore` 只删指向 `cca` 的那个）。`main` 开头按调用名（`$0`）把参数换成 `codex …`，必须在 `update_hook` 之前：自动更新后 `exec "$SELF" "$@"` 重新执行时参数里得带着 `codex`，否则 `cxa @工作` 会去启动 Claude
@@ -60,6 +72,7 @@
 
 ## 测试写法
 - 交互流程：`CCA_TTY="$(ans 答案1 答案2 …)"`，一行一个答案
+- 图形界面的接口（regress.sh 10g，`cca gui` 在 11b1）：`gj hello|state|live` 是 `cca _gui …`（stdin 接 /dev/null）；`jok '条件' < JSON` 断言 JSON（`d`，条件里 `tab("accounts.json")`、`cfg` 读 ~/.cca 里的文件）；`runev 命令…` 带着新的事件文件 `$T/ev.jsonl` 运行，`evq '条件'`（每条事件是 `e`）、`evn 类型` 断言事件；`snap` 是 ~/.cca 里文件的摘要（证明只读）。要指定环境变量就写进 `run` 的参数里（`run CCA_ROUTE=router cca _gui live`）：`run` 是 `env -i`，外面的变量带不进去。10g 的输出存进 `$GF`（`$T/guifx`），这一节最后交给 `macos/test.sh` 解码（契约测试；没有 swiftc 时 SKIP）。`publish_app 版本 [命名空间] [plist 版本] [自检退出码]` 往假 GitHub 放一个签好名的假 cca.app；假 App 的可执行文件不能 `exec`（`gui_running` 按命令行里的路径认它）。测试用的开关：`CCA_GUI_APP`（App 装在哪，默认 `~/Applications/cca.app`）、`CCA_GUI_OS`（假装 macOS 的主版本号）、`CCA_GUI_SRC`（开发模式下编译用的源码目录，测试里放一个假的 `build.sh`）
 - 启动时的映射引导：`run` 里 `CCA_POLICY_DEFAULT=` 是空的（平时的用例不引导），测引导时给 `CCA_POLICY_DEFAULT=example/cca-policy`；`$T/policy_denied_n` 让假 `git` 先拒绝这么多次（模拟维护者中途才加上公钥）；假 `pbcopy` 把内容写进 `$T/clipboard`
 - 维护者管理 deploy key（`policy.sh key`，regress.sh 11b3）：假 `gh`（`$T/fake_gh.py`）只模拟 `gh api` 里 deploy key 的列出、添加、删除，key 存在 `$T/deploy_keys.json`，调用记在 `ghcli.log`；`touch "$T/policy_keys"` 后假 `git` 按它认 deploy key（没加上就拒绝，认出来了记下 `last_used`）；`gh_down` 模拟连不上 GitHub，`gh_post_fail` 让添加一律 502；假 `pbpaste` 读 `$T/clipboard`
 - 映射和账号表合并（regress.sh 11b2）：`edit_table` 加一个映射里没有的账号当作用户自己的；Codex 账号"第一次用 cca codex 时才加"靠把 `codex.json` 挪开模拟，测完连 config.json 一起还原（挪开期间对账会回收 Codex 的端口）

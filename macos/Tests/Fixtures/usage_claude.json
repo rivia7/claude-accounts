@@ -1,0 +1,37 @@
+{
+  "version": 1, "kind": "usage", "generated_at": "2026-11-07T09:00:00Z", "generated_epoch": 1794042000.0,
+  "accounts": [
+    {
+      "account": "工作", "key": "工作(bob@example.com)", "email": "bob@example.com", "plan": "Max",
+      "source": "live", "fetched_at": "2026-11-07T08:59:55Z", "fetched_epoch": 1794041995.0, "age_seconds": 5, "stale": false,
+      "error": null, "error_code": null, "error_detail": null,
+      "five_hour": {"utilization": 92.0, "resets_at": "2026-11-07T11:13:30.123456+00:00", "resets_epoch": 1794050010.12, "reset": false},
+      "seven_day": {"utilization": 41.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
+      "seven_day_opus": {"utilization": 0.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
+      "seven_day_sonnet": {"utilization": 60.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
+      "seven_day_oauth_apps": null,
+      "model_scoped": [{"name": "Sonnet", "utilization": 60.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false}],
+      "extra_usage": {"is_enabled": true, "utilization": 12.5, "monthly_limit": 5000, "used_credits": 625}
+    },
+    {
+      "account": "carol@example.com", "key": "carol@example.com", "email": "carol@example.com", "plan": "",
+      "source": "cache", "fetched_at": "2026-11-04T09:00:00Z", "fetched_epoch": 1793782800.0, "age_seconds": 259200, "stale": true,
+      "error": "carol@example.com 还没登录：先在终端里运行 cca login carol@example.com", "error_code": "login", "error_detail": null,
+      "five_hour": {"utilization": 20.0, "resets_at": "2026-11-04T12:00:00+00:00", "resets_epoch": 1793793600.0, "reset": true},
+      "seven_day": {"utilization": 55.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
+      "seven_day_opus": null,
+      "seven_day_sonnet": null,
+      "seven_day_oauth_apps": null,
+      "model_scoped": null,
+      "extra_usage": null
+    },
+    {
+      "account": "测试", "key": "测试(dave@example.com)", "email": "dave@example.com", "plan": "Pro",
+      "source": "none", "fetched_at": null, "fetched_epoch": null, "age_seconds": null, "stale": false,
+      "error": "登录的是 eve@example.com，不是 dave@example.com", "error_code": "mismatch", "error_detail": "eve@example.com",
+      "five_hour": null, "seven_day": null, "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_oauth_apps": null,
+      "model_scoped": null, "extra_usage": null
+    }
+  ],
+  "skipped_api_accounts": ["直连接口", "香港接口"]
+}

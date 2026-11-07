@@ -1,3 +1,4 @@
 .DS_Store
 *.sig
 tests/.dbg*
+macos/build/

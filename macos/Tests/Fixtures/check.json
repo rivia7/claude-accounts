@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "kind": "check",
+  "tool": "claude",
+  "generated_at": 1794042100.0,
+  "route": "router",
+  "accounts": [
+    {
+      "key": "工作(bob@example.com)",
+      "name": "工作",
+      "node": "US-B",
+      "port": 7901,
+      "health": {
+        "version": 1,
+        "checked_at": 1794042090.0,
+        "source": "check",
+        "kind": "exit",
+        "route": "router",
+        "node": "US-B",
+        "port": 7901,
+        "result": "ok",
+        "ip": "203.0.113.7",
+        "country": "US",
+        "org": "Example Networks",
+        "trust": 97,
+        "trust_label": "极度纯净",
+        "tags": [
+          "住宅IP"
+        ],
+        "restricted_region": null,
+        "message": "203.0.113.7 · US · Example Networks · 纯净度 97（极度纯净） · 住宅IP",
+        "note": "",
+        "leak": {
+          "dns": "leak",
+          "webrtc": "ok",
+          "line": "DNS 泄露 · WebRTC 无泄露",
+          "dns_message": "DNS 解析器在中国大陆（198.51.100.53），出口却在 US",
+          "webrtc_message": ""
+        }
+      }
+    },
+    {
+      "key": "carol@example.com",
+      "name": "carol@example.com",
+      "node": "US-C",
+      "port": 7902,
+      "health": {
+        "version": 1,
+        "checked_at": 1794042095.0,
+        "source": "check",
+        "kind": "exit",
+        "route": "router",
+        "node": "US-C",
+        "port": 7902,
+        "result": "restricted",
+        "ip": "203.0.113.7",
+        "country": "CN",
+        "org": "Example Networks",
+        "trust": 0,
+        "trust_label": "可疑",
+        "tags": [],
+        "restricted_region": "中国大陆",
+        "message": "203.0.113.7 · CN · Example Networks · 纯净度 0（可疑）",
+        "note": "出口在中国大陆：Claude 不可用地区，会被严格风控",
+        "leak": null
+      }
+    },
+    {
+      "key": "直连接口",
+      "name": "直连接口",
+      "node": null,
+      "port": null,
+      "health": {
+        "version": 1,
+        "checked_at": 1794042099.0,
+        "source": "check",
+        "kind": "api",
+        "route": "direct",
+        "node": null,
+        "port": null,
+        "result": "api_unreachable",
+        "ip": null,
+        "country": null,
+        "org": null,
+        "trust": null,
+        "trust_label": null,
+        "tags": [],
+        "restricted_region": null,
+        "message": "api.example.com 连不上（401）",
+        "note": "",
+        "leak": null
+      }
+    }
+  ],
+  "shared_exit_ips": [
+    "203.0.113.7"
+  ]
+}

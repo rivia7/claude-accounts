@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.8.0-beta.8"
+VERSION="2.9.0-beta.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -85,7 +85,7 @@ fi
 say()  { printf '%s\n' "$*" >&2; }
 info() { printf '%s\n' "${C_G}•${C_0} $*" >&2; }
 warn() { printf '%s\n' "${C_Y}!${C_0} $*" >&2; }
-die()  { printf '%s\n' "${C_R}✗${C_0} $*" >&2; exit 1; }
+die()  { gui_fail "${FAIL_CODE:-error}" "$*"; printf '%s\n' "${C_R}✗${C_0} $*" >&2; exit 1; }   # FAIL_CODE=原因码 die …：告诉图形界面原因
 
 # 交互输入统一从 fd 3 读：默认是终端；CCA_TTY=文件 时按行读取预置答案（脚本化/测试用）
 TTY_OK=0
@@ -139,6 +139,49 @@ ask_secret() {
 	printf '%s' "$v"
 }
 okay() { printf '%s\n' "${C_G}✓${C_0} $*" >&2; }
+
+# 图形界面（cca App）的事件：CCA_EVENTS 指向的文件里追加 JSON 行（consent / terminal / fail / result / step，格式见
+# macos/PROTOCOL.md）。不设就什么都不做（命令行、启动器都不设），设了也不改变退出码和 stderr。用文件不用变量：很多地方在 $(…) 里
+jstr() {   # JSON 字符串（去掉控制字符，换行变空格）
+	printf '"%s"' "$(printf '%s' "$1" | LC_ALL=C tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | LC_ALL=C sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+jopt() { if [ -n "${1:-}" ]; then jstr "$1"; else printf null; fi; }   # 空的写成 null
+jarr() { local s="[" f=1 a; for a in "$@"; do [ $f = 1 ] || s="$s,"; f=0; s="$s$(jstr "$a")"; done; printf '%s]' "$s"; }
+shq() {   # shq 参数：能直接复制进终端的写法（只有字母数字和 @%+=:,./_- 的照写，别的加单引号）
+	if [ -n "$1" ] && printf '%s' "$1" | LC_ALL=C grep -q '^[A-Za-z0-9@%+=:,./_-]*$'; then printf '%s' "$1"
+	else printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; fi
+}
+gui_event() {   # gui_event 类型 '"键":值,…'
+	[ -n "${CCA_EVENTS:-}" ] || return 0
+	{ printf '{"v":1,"ev":"%s"%s}\n' "$1" "${2:+,$2}" >> "$CCA_EVENTS"; } 2>/dev/null   # 打不开文件时 bash 的报错也不能漏到 stderr
+	return 0
+}
+gui_fail() { [ -n "${CCA_EVENTS:-}" ] || return 0; gui_event fail "\"code\":\"$1\",\"message\":$(jstr "$2")"; }   # gui_fail 原因码 说明
+fail_warn() { gui_fail "$1" "$2"; warn "$2"; }   # fail_warn 原因码 说明：warn，并告诉图形界面失败的原因
+gui_step() { gui_event step "\"code\":\"$1\""; }
+gui_result() {   # gui_result opened|activated 说明（需要先 eval "$(py env 名称)"）
+	[ -n "${CCA_EVENTS:-}" ] || return 0
+	gui_event result "\"code\":\"$1\",\"route\":$(jopt "${ROUTE:-}"),\"node\":$(jopt "${ACC_NODE:-}"),\"port\":${ACC_PORT:-null},\"message\":$(jstr "$2")"
+}
+gui_terminal() {   # gui_terminal 代码 说明 参数…：这一步要在终端里运行 cca 参数…（Codex 账号自动加上 codex）
+	[ -n "${CCA_EVENTS:-}" ] || return 0
+	local code="$1" msg="$2" cmd=cca a
+	shift 2
+	[ "${TOOL:-claude}" = codex ] && set -- codex "$@"
+	for a in "$@"; do cmd="$cmd $(shq "$a")"; done
+	gui_event terminal "\"code\":\"$code\",\"argv\":$(jarr "$@"),\"display\":$(jstr "$cmd"),\"message\":$(jstr "$msg")"
+}
+# 要用户同意的地方一律用 consent：consent 项 范围 标题 问题 说明 [默认 y|n]。返回 0 同意（终端里答了 y，或者图形界面
+# 已经拿到用户的同意、带着 CCA_GRANT=项:范围 重新运行）；1 终端里答了 n；2 没法问（非交互）：记一条 consent 事件，
+# 由图形界面弹窗问，同意后带上 CCA_GRANT 重新运行。授权必须带范围、原样匹配（重载 OpenClash 的同意不能拿去重载 ShellCrash）
+consent_granted() { case ",${CCA_GRANT:-}," in *",$1,"*) return 0 ;; esac; return 1; }
+consent() {
+	local tok="$1${2:+:${2//,/_}}"
+	consent_granted "$tok" && return 0
+	if interactive; then confirm "$4" "${6:-y}" && return 0; return 1; fi
+	gui_event consent "\"item\":$(jstr "$1"),\"scope\":$(jstr "$2"),\"grant\":$(jstr "$tok"),\"title\":$(jstr "$3"),\"question\":$(jstr "$4"),\"detail\":$(jstr "$5"),\"severity\":\"warn\",\"default\":\"$([ "${6:-y}" = n ] && echo no || echo yes)\""
+	return 2
+}
 
 # 能画方向键菜单的条件：有真终端（不是 CCA_TTY 预置答案）且终端支持光标控制
 fancy_ok() { [ "$TTY_OK" = 1 ] && [ -z "${CCA_TTY:-}" ] && [ -t 2 ] && [ "${TERM:-dumb}" != dumb ]; }
@@ -297,6 +340,19 @@ def die(msg):
     sys.exit(1)
 
 
+# 只读（cca _gui state / live，CCA_RO=1）：按维护者的映射对账、分配端口都只在内存里做，不写 config.json 和账号表，
+# 也不往 stderr 说；本来会做的改动记在 NOTICES，给图形界面看（下一次真正运行 cca 时才写进去）
+RO = os.environ.get('CCA_RO') == '1'
+NOTICES = []
+RO_BAD = []   # 只读时读不了的账号文件 [(工具名, 路径)]
+
+
+def notice(code, text, **kv):
+    NOTICES.append(dict(kv, code=code))
+    if not RO:
+        sys.stderr.write(text + '\n')
+
+
 def codex_profile_file(name):
     return os.path.basename(name) == name and not name.startswith('.') and name.endswith('.config.toml')
 
@@ -374,6 +430,7 @@ class Tool:
     launcher_prefix = 'Claude '       # ~/Applications 里启动器的名字前缀
     launcher_id = 'local.cca.launcher.'
     app_label = 'Claude App'
+    app_proc = r'Contents/MacOS/Claude '   # 桌面 App 主进程命令行里的路径（_gui state 看它开着没有，和 claude_app_pid 一样）
     app_cmd = 'app'                   # 启动器调用的 cca 子命令
     api_fields = ('base_url', 'model', 'node', 'env', 'key', 'id')
     url_example = 'https://api.example.com/anthropic'
@@ -462,6 +519,7 @@ class CodexTool(Tool):
     launcher_prefix = 'ChatGPT '
     launcher_id = 'local.cca.launcher.codex.'
     app_label = 'ChatGPT App'
+    app_proc = r'Contents/MacOS/(?:ChatGPT|Codex) '   # 和 codex_app_pid 一样
     app_cmd = 'codex app'
     api_fields = ('base_url', 'model', 'node', 'key', 'id')
     url_example = 'https://api.example.com/v1'
@@ -521,7 +579,11 @@ ERRS = {}   # 各工具账号表的问题（工具名 → 错误列表）
 
 # --- 配置与账号表 -----------------------------------------------------------
 def cfg_load():
-    c = load_json(CFG, None) or {}
+    return cfg_fill(load_json(CFG, None) or {})
+
+
+def cfg_fill(c):
+    """config.json 里没写的项补上默认值"""
     c.setdefault('version', 2)
     c.setdefault('router', {})
     c.setdefault('proxy_host', '')
@@ -1015,17 +1077,20 @@ def reconcile(c, t, tool, reserved=()):
     st = tool.state(c, create=True)
     added = policy_merge(c, t, tool)
     for k in added:
-        sys.stderr.write('• 按维护者的映射添加了 %s 账号 %s，出口 %s\n' % (tool.label, label_of(k), t[k]))
+        notice('policy_added', '• 按维护者的映射添加了 %s 账号 %s，出口 %s' % (tool.label, label_of(k), t[k]),
+               tool=tool.name, key=k, node=t[k])
     renamed = policy_alias_fill(t, tool)
     for k, new in renamed:
-        sys.stderr.write('• 按维护者的映射给 %s 账号 %s 起了别名 %s\n' % (tool.label, k, parse_key(new)[0]))
+        notice('policy_alias', '• 按维护者的映射给 %s 账号 %s 起了别名 %s' % (tool.label, k, parse_key(new)[0]),
+               tool=tool.name, key=new, old_key=k)
     pm = policy_map(tool, c)
     fixed = [k for k, v in t.items() if not is_api(v) and pm.get(parse_key(k)[1].lower(), v) != v]
     for k in fixed:
         want = pm[parse_key(k)[1].lower()]
-        sys.stderr.write('! %s 的出口按维护者的映射固定为 %s（账号表里写的是 %s，已改回）\n' % (label_of(k), want, t[k]))
+        notice('policy_pinned', '! %s 的出口按维护者的映射固定为 %s（账号表里写的是 %s，已改回）' % (label_of(k), want, t[k]),
+               tool=tool.name, key=k, node=want, old_node=t[k])
         t[k] = want
-    if fixed or added or renamed:
+    if (fixed or added or renamed) and not RO:
         save_json(tool.table, t, 0o600)
     errs, emails, aliases, ids = [], {}, {}, {}
     if not c['nodes'] and any(node_of(v) or not is_api(v) for v in t.values()):
@@ -1105,8 +1170,8 @@ def policy_nodes_fill(c):
             ids = dict(node_ids(c))
             ids[n] = fp[n]
             c['node_ids'] = ids
-        sys.stderr.write('• 维护者的映射要 %s 走节点 %s：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点\n'
-                         % ('、'.join(who), n))
+        notice('nodes_filled', '• 维护者的映射要 %s 走节点 %s：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点'
+               % ('、'.join(who), n), node=n)
 
 
 def reconcile_all(c):
@@ -1125,7 +1190,7 @@ def ctx():
     tables_load()
     reconcile_all(c)
     cfg_clean(c)
-    if c != load_json(CFG, None):
+    if not RO and c != load_json(CFG, None):
         cfg_save(c)
     return c, TABS[T.name], ERRS.get(T.name, [])
 
@@ -1147,9 +1212,15 @@ ACCT_JSON = {}
 
 
 def acct_json(key):
-    """账号目录里的 .claude.json（一次进程里只读一次）"""
+    """账号目录里的 .claude.json（一次进程里只读一次）。只读（CCA_RO）时读不了不退出：当作没登录，记进 RO_BAD 给图形界面报"""
     if key not in ACCT_JSON:
-        j = load_json(os.path.join(cdir(key), '.claude.json'), {})
+        path = os.path.join(cdir(key), '.claude.json')
+        if RO:
+            j = load_quiet(path)
+            if j is None and os.path.exists(path):
+                RO_BAD.append((T.name, path))
+        else:
+            j = load_json(path, {})
         ACCT_JSON[key] = j if isinstance(j, dict) else {}
     return ACCT_JSON[key]
 
@@ -1199,12 +1270,17 @@ def fit(s, w, pad=True):
     return out + '…' + (' ' * (w - n - 1) if pad else '')
 
 
-def short_state(key):
+def login_code(key):
+    """登录状态（只读账号目录，不联网）：logged_in / logged_out / email_mismatch（登录的不是这个账号）"""
     e = email_of(key)
     if not e:
-        return '未登录'
+        return 'logged_out'
     want = parse_key(key)[1]
-    return '邮箱不符' if want and e.lower() != want.lower() else '已登录'
+    return 'email_mismatch' if want and e.lower() != want.lower() else 'logged_in'
+
+
+def short_state(key):
+    return {'logged_out': '未登录', 'email_mismatch': '邮箱不符'}.get(login_code(key), '已登录')
 
 
 def cmd_rows(cols='80'):
@@ -2226,12 +2302,17 @@ def cmd_select_lines(where=''):
         print('CCA-%d\t%s' % (s, m.get(n, n)))
 
 
+def sync_digest(c, code_text):
+    """账号表 + 路由器端代码的摘要（和 config.json 的 synced 比，不一样就要同步）"""
+    code = hashlib.sha1(code_text.encode('utf-8')).hexdigest()
+    s = json.dumps([c.get('proxy_host'), router_accounts(c), code], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(s.encode('utf-8')).hexdigest()
+
+
 def cmd_digest():
     """账号表 + 路由器端代码（从 stdin 读）的摘要：cca 更新改了路由器脚本，下次启动也会重新部署"""
     c, t, _ = ctx()
-    code = hashlib.sha1(sys.stdin.read().encode('utf-8')).hexdigest()
-    s = json.dumps([c.get('proxy_host'), router_accounts(c), code], ensure_ascii=False, sort_keys=True)
-    print(hashlib.sha1(s.encode('utf-8')).hexdigest())
+    print(sync_digest(c, sys.stdin.read()))
 
 
 def cmd_set_nodes(*nodes):
@@ -2574,13 +2655,23 @@ def verge_found():
         return False
 
 
+def local_label(client):
+    return 'Clash Verge' if client == 'clash-verge' else '本机 Clash'
+
+
+def local_info(c):
+    """本机 Clash 客户端（_gui state / live）：配置过没有、是哪个客户端、叫什么"""
+    client = (c.get('local') or {}).get('client') or ''
+    return {'configured': bool(client), 'client': client, 'name': local_label(client)}
+
+
 def cmd_local_env():
     c, t, _ = ctx()
     loc = c['local']
     client = loc.get('client', '')
     prof = (verge_profile() if client == 'clash-verge' else None) or ('', '')
     n = pool_size(c)
-    sh(LOCAL_CLIENT=client, LOCAL_NAME='Clash Verge' if client == 'clash-verge' else '本机 Clash',
+    sh(LOCAL_CLIENT=client, LOCAL_NAME=local_label(client),
        LOCAL_CTL='unix:' + verge_sock() if client == 'clash-verge' else loc.get('controller', ''),
        LOCAL_SECRET=loc.get('secret', ''), LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=local_want(c),
        LOCAL_FILL=loc.get('fill', ''), LOCAL_FILL_SEEN=loc.get('fill_seen', ''), FILL_ID=(policy_fill() or {}).get('id', ''),
@@ -3187,14 +3278,17 @@ def cmd_codex_fallback_off():
     sys.exit(0 if vals.get('features.system_proxy_fallback') == 'false' else 1)
 
 
-def cmd_coffee(min_trust, trace, risk):
-    """解析 claude.ai（Codex 账号是 chatgpt.com）的 trace 与 ip.net.coffee /api/iprisk 结果。
-    退出码：0 正常，1 纯净度偏低，2 受限地区，3 拿不到出口 IP，4 没有评分数据"""
-    kv = dict(l.split('=', 1) for l in trace.splitlines() if '=' in l)
+def coffee_parse(min_trust, trace, risk):
+    """解析 claude.ai（Codex 账号是 chatgpt.com）的 trace 与 ip.net.coffee /api/iprisk 结果 → dict：
+    rc（0 正常，1 纯净度偏低，2 受限地区，3 拿不到出口 IP，4 没有评分数据）、line（给人看的一行）、note（补充说明），
+    以及 ip、country、org、trust、trust_label、tags、restricted_region"""
+    kv = dict(l.split('=', 1) for l in (trace or '').splitlines() if '=' in l)
     ip, loc = kv.get('ip', ''), kv.get('loc', '').upper()
+    r = {'rc': 3, 'ip': ip or None, 'country': loc or None, 'org': None, 'trust': None, 'trust_label': None, 'tags': [],
+         'restricted_region': None, 'line': '', 'note': ''}
     if not ip:
-        print('拿不到 %s 看到的出口 IP（端口或节点不通）' % T.trace_host)
-        sys.exit(3)
+        r['line'] = '拿不到 %s 看到的出口 IP（端口或节点不通）' % T.trace_host
+        return r
     try:
         d = json.loads(risk) if risk else {}
     except ValueError:
@@ -3213,22 +3307,33 @@ def cmd_coffee(min_trust, trace, risk):
             tags.append(name)
     if cc in RESTRICTED:
         score = 0
+    label = None
     if score is None:
         level = '纯净度 无数据'
     else:
         label = ('极度纯净' if score >= 95 else '纯净' if score >= 80 else '良好' if score >= 50
                  else '中性' if score >= 25 else '可疑')
         level = '纯净度 %s（%s）' % (score, label)
-    print(' · '.join(x for x in [ip, cc or '?', d.get('asOrganization') or d.get('company_name') or '', level] + tags if x))
+    org = d.get('asOrganization') or d.get('company_name') or ''
+    r.update(country=cc or None, org=org if isinstance(org, str) and org else None, trust=score, trust_label=label, tags=tags, rc=0,
+             line=' · '.join(x for x in [ip, cc or '?', org, level] + tags if x))
     if cc in RESTRICTED:
-        print('出口在%s：%s 不可用地区，会被严格风控' % (RESTRICTED[cc], T.region_name))
-        sys.exit(2)
-    if score is None:
-        print('ip.net.coffee 没有返回评分（检测服务可能暂时不可用）')
-        sys.exit(4)
-    if score < int(min_trust):
-        print('纯净度低于设定的 %s' % min_trust)
-        sys.exit(1)
+        r.update(rc=2, restricted_region=RESTRICTED[cc], note='出口在%s：%s 不可用地区，会被严格风控' % (RESTRICTED[cc], T.region_name))
+    elif score is None:
+        r.update(rc=4, note='ip.net.coffee 没有返回评分（检测服务可能暂时不可用）')
+    elif score < int(min_trust):
+        r.update(rc=1, note='纯净度低于设定的 %s' % min_trust)
+    return r
+
+
+def cmd_coffee(min_trust, trace, risk):
+    """出口检测给 bash 用：第一行是 line，有补充说明再一行；退出码是 rc"""
+    r = coffee_parse(min_trust, trace, risk)
+    print(r['line'])
+    if r['note']:
+        print(r['note'])
+    if r['rc']:
+        sys.exit(r['rc'])
 
 
 # --- DNS / WebRTC 泄露检测（照 ip.net.coffee 的 DNS、WebRTC 检测页的做法）：和出口检测同时在后台跑，不拖慢启动 ------------------
@@ -3442,7 +3547,8 @@ def cmd_leak_probe(proxy, key, since=''):
 
 def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
     """汇总 leak-probe 的结果（exit_ip / exit_cc 是这次出口检测拿到的）：第一行是给横幅的一句话，每个泄露再一行
-    W<TAB>dns|webrtc<TAB>说明；把新结果写进缓存。detail（cca check）时一句话里多写点。WebRTC 暴露的 IP 直连查归属地：
+    W<TAB>dns|webrtc<TAB>说明，最后是机器看的状态 S<TAB>dns|webrtc<TAB>ok|leak|failed（出口检测结果里记下，见 health-save；
+    leak_finish 只认 W、S 行）；把新结果写进缓存。detail（cca check）时一句话里多写点。WebRTC 暴露的 IP 直连查归属地：
     别让账号的出口和它一起出现在别人那里"""
     p = load_quiet(path)
     if not isinstance(p, dict) or p.get('off'):
@@ -3457,10 +3563,11 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
     ips = [ip for ip in st.get('ips') or [] if isinstance(ip, str)]
     leaked = [ip for ip in ips if ip != exit_ip]
     geo.update(leak_geo(leaked, '', geo))
-    parts, warns, d = [], [], dns.get(key)
+    parts, warns, state, d = [], [], {}, dns.get(key)
     if isinstance(d, dict):
         sv = d.get('servers') or []
         cn = [s for s in sv if (geo.get(ip_prefix(s)) or {}).get('cc') == 'cn']
+        state['dns'] = 'failed' if not d.get('ok') else 'leak' if cn and exit_cc.upper() != 'CN' else 'ok'
         if not d.get('ok'):
             parts.append('DNS 没测成')
         elif cn and exit_cc.upper() != 'CN':
@@ -3474,6 +3581,8 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
         else:
             cs = list(dict.fromkeys((geo.get(ip_prefix(s)) or {}).get('country') or '?' for s in sv))
             parts.append('DNS 无泄露' + ('（%d 个解析器：%s%s）' % (len(sv), '、'.join(cs[:3]), '等' if len(cs) > 3 else '') if detail else ''))
+    if leaked or 'stun' in p:
+        state['webrtc'] = 'leak' if leaked else 'ok'
     if leaked:
         w = leak_where(geo.get(ip_prefix(leaked[0])))
         parts.append('WebRTC 会暴露 %s%s' % (leaked[0], '（%s）' % w if w else ''))
@@ -3488,10 +3597,12 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
         save_json(LEAK_FILE, cache, 0o600)
     except OSError:
         pass
-    if parts:
+    if parts:   # 有横幅那一句才输出（它总在第一行）
         print(' · '.join(parts))
         for kind, msg in warns:
             print('W\t%s\t%s' % (kind, msg))
+        for kind, v in state.items():
+            print('S\t%s\t%s' % (kind, v))
 
 
 # --- 订阅用量（cca usage、菜单）：让 Claude Code 自己查（get_usage 控制请求），cca 不碰登录凭证 ---------------
@@ -3707,6 +3818,9 @@ def usage_save(key, rl):
         pass
 
 
+USAGE_STALE = 600   # 用量超过 10 分钟算旧：菜单里注明多久前，图形界面里变暗
+
+
 def usage_cell(key, now):
     """菜单里的一格（只读缓存，不联网；只给登录着的账号）：5h 13% · 周 41%；数据旧了注明多久前，
     重置时间过了的窗口写已重置"""
@@ -3720,7 +3834,7 @@ def usage_cell(key, now):
             cells.append('%s %s' % (label, '已重置' if w['reset'] else '%d%%' % round(w['pct'])))
     if not cells:
         return ''
-    return ' · '.join(cells) + ('（%s前）' % ago(now - u['at']) if now - u['at'] >= 600 else '')
+    return ' · '.join(cells) + ('（%s前）' % ago(now - u['at']) if now - u['at'] >= USAGE_STALE else '')
 
 
 def usage_result(tmp, i):
@@ -3773,26 +3887,46 @@ def usage_notes(rl, now):
     return out
 
 
-def usage_json(rows, now, api):
+def usage_row(key, plan, **kw):
+    """cmd_usage_render / _gui state 里一个账号的用量行（usage_entry 读它）：source live|cache|none，at 取到数据的时间，
+    rl 用量窗口，why 失败原因（USAGE_WHY 的键），msg 补充说明"""
+    a, e = parse_key(key)
+    row = {'key': key, 'name': name_of(key), 'alias': a, 'email': e or email_of(key), 'plan': plan,
+           'source': 'none', 'at': None, 'rl': {}, 'why': None, 'msg': ''}
+    row.update(kw)
+    return row
+
+
+def usage_entry(r, now):
+    """cca usage --json 里一个账号的条目（_gui state 里的 usage 也是它；格式见 macos/PROTOCOL.md，字段只加不删）。
+    r 是 usage_row 构造的一行"""
     def w(x):
         v = win(x, now)
-        return {'utilization': v['pct'], 'resets_at': x.get('resets_at'), 'reset': v['reset']} if v else None
-    out = []
-    for r in rows:
-        rl = r['rl']
-        a = {'account': r['name'], 'key': r['key'], 'email': r['email'] or None, 'plan': r['plan'], 'source': r['source'],
-             'fetched_at': iso(r['at']) if r['at'] else None, 'age_seconds': int(now - r['at']) if r['at'] else None,
-             'error': usage_why(r) if r['why'] else None}
-        for k in T.usage_windows:
-            a[k] = w(rl.get(k))
-        ms = rl.get('model_scoped')
-        a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name')) for m in ms if isinstance(m, dict)] if isinstance(ms, list) else None
-        a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
-        if T is not CLAUDE:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
-            for k in ('credits', 'reset_credits'):
-                a[k] = rl.get(k) if isinstance(rl.get(k), dict) else None
-        out.append(a)
-    j = {'version': 1, 'generated_at': iso(now), 'accounts': out, 'skipped_api_accounts': api}
+        return {'utilization': v['pct'], 'resets_at': x.get('resets_at'), 'resets_epoch': v['at'], 'reset': v['reset']} if v else None
+    rl, at = r['rl'], r['at']
+    a = {'account': r['name'], 'key': r['key'], 'email': r['email'] or None, 'plan': r['plan'], 'source': r['source'],
+         'fetched_at': iso(at) if at else None, 'fetched_epoch': at or None, 'age_seconds': int(now - at) if at else None,
+         'stale': bool(at) and now - at >= USAGE_STALE,
+         'error': usage_why(r) if r['why'] else None, 'error_code': r['why'] or None, 'error_detail': (r['msg'] or None) if r['why'] else None}
+    for k in T.usage_windows:
+        a[k] = w(rl.get(k))
+    ms = rl.get('model_scoped')
+    a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name')) for m in ms if isinstance(m, dict)] if isinstance(ms, list) else None
+    a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
+    if T is not CLAUDE:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
+        for k in ('credits', 'reset_credits'):
+            a[k] = rl.get(k) if isinstance(rl.get(k), dict) else None
+    return a
+
+
+def usage_has_windows(rl):
+    """查到的用量里至少有一个认得出的窗口：都没有的（接口的格式变了）不算查到，免得把好好的缓存换成空的"""
+    return isinstance(rl, dict) and any(win(rl.get(k), 0) for k in T.usage_windows)
+
+
+def usage_json(rows, now, api):
+    out = [usage_entry(r, now) for r in rows]
+    j = {'version': 1, 'kind': 'usage', 'generated_at': iso(now), 'generated_epoch': now, 'accounts': out, 'skipped_api_accounts': api}
     if T is not CLAUDE:   # Claude 的输出和以前一样，不加这个字段
         j['tool'] = T.name
     return j
@@ -3851,11 +3985,10 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
     for i, k in enumerate(keys):
         r = usage_result(tmp, i)
         u = r.get('usage') if r.get('ok') else None
-        if isinstance(u, dict) and not (u.get('rate_limits_available') and isinstance(u.get('rate_limits'), dict)):
+        if isinstance(u, dict) and not (u.get('rate_limits_available') and usage_has_windows(u.get('rate_limits'))):
             r, u = {'ok': False, 'why': 'nolimits', 'msg': ''}, None
-        row = {'key': k, 'name': name_of(k), 'alias': parse_key(k)[0], 'email': parse_key(k)[1] or email_of(k),
-               'plan': T.plan(k, (u or {}).get('subscription_type')),
-               'source': 'none', 'at': None, 'rl': {}, 'why': None if u else (r.get('why') or 'error'), 'msg': r.get('msg') or ''}
+        row = usage_row(k, T.plan(k, (u or {}).get('subscription_type')), why=None if u else (r.get('why') or 'error'),
+                        msg=r.get('msg') or '')
         if u:
             row.update(source='live', at=now, rl=u['rate_limits'])
             usage_save(k, u['rate_limits'])
@@ -3936,7 +4069,7 @@ def codex_probe(bin_):
     j = load_quiet(path)
     if isinstance(j, dict) and j.get('sig') == sig and isinstance(j.get('flags'), list):
         return j
-    env = {k: v for k, v in os.environ.items() if not re.match(r'^(CODEX_|OPENAI_)', k)}
+    env = {k: v for k, v in os.environ.items() if not re.match(r'^(CODEX_|OPENAI_|CCA_(EVENTS|GRANT|RO)$)', k)}
     env['CODEX_HOME'] = CODEX.master
     os.makedirs(CODEX.master, exist_ok=True)
 
@@ -4193,6 +4326,331 @@ def codex_fix_rollouts():
             pass
 
 
+# --- 图形界面（cca App）的接口：cca _gui state / live、出口检测结果（health.json）、check --json。格式见 macos/PROTOCOL.md：
+#     只能加字段；删改要升 bash 的 GUI_API，同时改 Swift 模型（macos/Sources/CcaKit/Protocol）和回归测试（10g） ------------
+HEALTH_STALE = 6 * 3600   # 出口检测结果超过 6 小时算旧（和 DNS 泄露检测的缓存一样久）
+HEALTH_RESULTS = {0: 'ok', 1: 'low_purity', 2: 'restricted', 3: 'no_exit', 4: 'no_score'}   # coffee_parse 的 rc
+GUI_SLOT_RE = re.compile(r'^槽位 (CCA-\d+) :(\d+) (监听中|未监听) → (.*?)(?:（应为 .*）)?$')   # 路由器 status() 的槽位行
+
+
+class using:
+    """with using(工具)：暂时换成另一个工具（账号目录、登录状态、套餐都按 T 读）；按键缓存的 .claude.json 跟着清掉
+    （同一个邮箱可以既是 Claude 账号又是 Codex 账号）"""
+    def __init__(self, tool):
+        self.tool = tool
+
+    def __enter__(self):
+        global T
+        self.old, T = T, self.tool
+        ACCT_JSON.clear()
+
+    def __exit__(self, *exc):
+        global T
+        T = self.old
+        ACCT_JSON.clear()
+
+
+def health_file(key):
+    return os.path.join(adir(key), 'health.json')
+
+
+HEALTH_BLANK = {'ip': None, 'country': None, 'org': None, 'trust': None, 'trust_label': None, 'tags': [],
+                'restricted_region': None, 'message': '', 'note': '', 'leak': None}
+
+
+def health_write(key, source, kind, route, node, port, **fields):
+    """记下这个账号最近一次的出口检测（原子替换，600），并打印出来（cca check --json 收集）。字段见 macos/PROTOCOL.md 3.3"""
+    h = dict(HEALTH_BLANK, version=1, checked_at=time.time(), source=source, kind=kind, route=route or None,
+             node=node or None, port=num_or_none(port), **fields)
+    try:
+        save_json(health_file(key), h, 0o600)
+    except OSError:
+        pass
+    print(json.dumps(h, ensure_ascii=False))
+
+
+def num_or_none(s):
+    return int(s) if isinstance(s, str) and s.isdigit() else None
+
+
+def cmd_health_save(key, source, route, node, port, min_trust, trace, risk, line='', dns_msg='', webrtc_msg='', dns='', webrtc=''):
+    """coffee_check 之后（启动、cca check）：这次的出口检测记进 health.json。泄露的状态用 leak-verdict 的 S 行，不解析中文"""
+    r = coffee_parse(min_trust, trace, risk)
+    leak = {'dns': dns or None, 'webrtc': webrtc or None, 'line': line, 'dns_message': dns_msg,
+            'webrtc_message': webrtc_msg} if line else None   # 有横幅那一句才有 S 行（leak-verdict）
+    health_write(key, source, 'exit', route, node, port, result=HEALTH_RESULTS[r['rc']], message=r['line'], leak=leak,
+                 **{k: r[k] for k in ('ip', 'country', 'org', 'trust', 'trust_label', 'tags', 'restricted_region', 'note')})
+
+
+def cmd_health_note(key, source, kind, result, route, node, port, message=''):
+    """没有出口检测数据的结果也记进 health.json：第三方 API 账号的接口连不连得上（api_ok / api_unreachable）、端口不通"""
+    health_write(key, source, kind, route, node, port, result=result, message=message)
+
+
+def health_view(key, v, now):
+    """_gui state 里的 health：health.json 加上 age_seconds、stale、applies（测的时候用的节点就是账号现在的节点）"""
+    h = load_quiet(health_file(key))
+    at = h.get('checked_at') if isinstance(h, dict) else None
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        return None
+    h.update(age_seconds=int(max(now - at, 0)), stale=now - at >= HEALTH_STALE,
+             applies=(h.get('node') or None) == (node_of(v) or None))
+    return h
+
+
+def cmd_check_render(route=''):
+    """cca check --json：stdin 是 bash 收集的每个账号一行「键<TAB>health 的 JSON」"""
+    rows = []
+    for line in sys.stdin:
+        k, _, j = line.rstrip('\n').partition('\t')
+        if not k:
+            continue
+        try:
+            h = json.loads(j) if j else None
+        except ValueError:
+            h = None
+        h = h if isinstance(h, dict) else None
+        rows.append({'key': k, 'name': name_of(k), 'node': (h or {}).get('node'), 'port': (h or {}).get('port'), 'health': h})
+    ips = [r['health']['ip'] for r in rows if r['health'] and r['health'].get('ip')]
+    print(json.dumps({'version': 1, 'kind': 'check', 'tool': T.name, 'generated_at': time.time(), 'route': route or None,
+                      'accounts': rows, 'shared_exit_ips': sorted({ip for ip in ips if ips.count(ip) > 1})},
+                     ensure_ascii=False, indent=2))
+
+
+def gui_procs():
+    """在运行的进程 [(pid, 命令行)]：看各账号的桌面 App 开着没有（一次 ps，不用每个账号 pgrep 一次）"""
+    import subprocess
+    try:
+        out = subprocess.run(['ps', '-axww', '-o', 'pid=,command='], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=10).stdout.decode('utf-8', 'replace')
+    except (OSError, subprocess.SubprocessError):
+        return []
+    procs = []
+    for l in out.splitlines():
+        pid, _, cmd = l.strip().partition(' ')
+        if pid.isdigit():
+            procs.append((int(pid), cmd))
+    return procs
+
+
+def gui_account(c, k, v, procs, badges, pm, env, now):
+    """_gui state 里的一个账号（T 是它的工具）"""
+    a, e = parse_key(k)
+    api = is_api(v)
+    port = T.state(c)['ports'].get(k)
+    slot = port - FIRST_PORT + 1 if port else None
+    login = 'api' if api else login_code(k)
+    usage = plan = None
+    if not api and login == 'logged_in':
+        x = usage_cached(k)
+        plan = T.plan(k, (x['rl'].get('plan') if x else None) or None)
+        if x:
+            usage = usage_entry(usage_row(k, plan, source='cache', at=x['at'], rl=x['rl']), now)
+    desk = os.path.join(adir(k), 'desktop')
+    pid = None if api else next((p for p, cmd in procs if re.search(T.app_proc + '.*--user-data-dir=' + re.escape(desk) + '( |$)', cmd)), None)
+    why = {}
+    if api:
+        why.update(app='api_account', web='api_account', usage='api_account')
+    else:
+        if not env['app']:
+            why['app'] = 'app_missing'
+        elif T is CODEX and not env['bin']:
+            why['app'] = 'tool_missing'   # ChatGPT App 打开前要用 codex 命令检查设置
+        if not env['chrome']:
+            why['web'] = 'no_chrome'      # 没有 Chrome 时 cca web 只能用默认浏览器打开，不经账号的出口
+        if not env['bin']:
+            why['usage'] = 'tool_missing'
+        elif login != 'logged_in':
+            why['usage'] = 'not_logged_in'
+    b = badges.get(k)
+    return {'key': k, 'id': acct_id(k), 'alias': a, 'email': e, 'name': name_of(k), 'label': label_of(k),
+            'kind': 'api' if api else 'oauth', 'login': login, 'login_email': '' if api else email_of(k),
+            'plan': '' if not plan or plan == '—' else plan,
+            'node': node_of(v) or None, 'port': port, 'slot': slot, 'group': 'CCA-%d' % slot if slot else None,
+            'pinned': bool(not api and e and e.lower() in pm), 'pinned_node': pm.get(e.lower()) if not api and e else None,
+            'is_last': k == T.state(c).get('last'),
+            'api': {'host': api_host(v), 'model': v.get('model') or ''} if api else None,
+            'badge': {'label': b[0], 'color': b[1]} if b else None,
+            'app': {'running': pid is not None, 'pid': pid},
+            'can': {x: x not in why for x in ('app', 'web', 'usage', 'check')}, 'can_why': why,
+            'usage': usage, 'health': health_view(k, v, now)}
+
+
+def cmd_gui_state():
+    """cca _gui state：图形界面的只读快照，两个工具一起。CCA_RO=1 下运行：对账只在内存里做，不写文件、不往 stderr 说
+    （本来会做的改动在 notices 里）。读不了的文件报在 errors 里，不退出。stdin 是路由器端代码（算同步摘要）；
+    bash 才知道的（找到的命令、App、Chrome）经 CCA_GUI_* 环境变量传进来"""
+    now, errors = time.time(), []
+    raw = load_quiet(CFG)
+    if not isinstance(raw, dict):
+        errors.append({'code': 'config_unreadable', 'tool': None, 'message': '%s 读不了或格式不对' % CFG})
+        raw = {}
+    c = cfg_fill(raw)
+    for tool in TOOLS:
+        if not os.path.exists(tool.table):
+            if tool is CLAUDE:
+                TABS[tool.name] = {}
+            continue
+        t = load_quiet(tool.table)
+        if not isinstance(t, dict):
+            errors.append({'code': 'table_unreadable', 'tool': tool.name, 'message': '%s 读不了或格式不对' % tool.table})
+            continue
+        tool.set_ids(t)
+        TABS[tool.name] = t
+    reconcile_all(c)
+    code = sys.stdin.read()
+    r, loc = c.get('router') or {}, c.get('local') or {}
+    lnames = local_names(c)
+    who = {p: (tool.name, k) for tool, k, _, p in pool(c)}
+    slots = []
+    for s, (g, p, order) in enumerate(slot_orders(c), 1):
+        tk = who.get(p) or (None, None)
+        slots.append({'slot': s, 'group': g, 'port': p, 'tool': tk[0], 'key': tk[1], 'node': order[0],
+                      'local_node': lnames.get(order[0], order[0])})
+    users = {}
+    for tool, k, v, p in pool(c):
+        users.setdefault(node_of(v), []).append({'tool': tool.name, 'key': k})
+    pol = c.get('policy')
+    out = {'version': 1, 'kind': 'state', 'generated_at': now, 'cca_version': os.environ.get('CCA_VERSION') or '',
+           'errors': errors, 'notices': NOTICES,
+           'config': {'route_pref': c.get('route') or 'auto',
+                      'router': {'configured': bool(r.get('host')), 'host': r.get('host') or None, 'ssh_port': r.get('port') or 22,
+                                 'proxy_host': c.get('proxy_host') or r.get('host') or None},
+                      'local': local_info(c),
+                      'nodes': c['nodes'], 'min_trust': c['min_trust'], 'leak_check': c.get('leak_check') is not False,
+                      'update': c['update'], 'policy': {'configured': bool(pol), 'repo': pol if isinstance(pol, str) else None}},
+           'routing': {'first_port': FIRST_PORT, 'pool_size': pool_size(c),
+                       'sync': 'n/a' if not r.get('host') else 'ok' if sync_digest(c, code) == c.get('synced') else 'pending',
+                       'local_sync': 'n/a' if not loc.get('client') else 'ok' if local_want(c) == loc.get('applied') else 'pending',
+                       'slots': slots,
+                       'nodes': [{'name': n, 'local_name': lnames.get(n, n), 'users': users.get(n, [])} for n in c['nodes']]},
+           'tools': []}
+    procs = gui_procs()
+    for tool in TOOLS:
+        name = tool.name.upper()
+        env = {'bin': os.environ.get('CCA_GUI_%s_BIN' % name) or None, 'app': os.environ.get('CCA_GUI_%s_APP' % name) or None,
+               'chrome': os.environ.get('CCA_GUI_CHROME') == '1'}
+        enabled = tool is CLAUDE or os.path.exists(tool.table)
+        entry = {'id': tool.name, 'label': tool.label, 'app_label': tool.app_label, 'cli_prefix': tool.cmd.split()[1:],
+                 'enabled': enabled, 'bin': env['bin'], 'app': {'installed': bool(env['app']), 'path': env['app']},
+                 'chrome': env['chrome'], 'settings_problems': [], 'errors': [], 'last': None, 'accounts': []}
+        if enabled and tool.name in TABS:
+            with using(tool):
+                try:
+                    entry['settings_problems'] = T.settings_problems()
+                except SystemExit:   # 共享的设置文件格式不对（load_json 报错退出）
+                    entry['settings_problems'] = ['%s:unreadable' % T.settings_disp]
+                t = TABS[tool.name]
+                official = {k: v for k, v in t.items() if not is_api(v)}
+                badges = launcher_badges(official, launcher_names(official))
+                pm = policy_map(tool, c)
+                entry['errors'] = [{'code': 'table_invalid', 'message': m} for m in ERRS.get(tool.name, [])]
+                entry['last'] = T.state(c).get('last') or None
+                entry['accounts'] = [gui_account(c, k, v, procs, badges, pm, env, now) for k, v in t.items()]
+        out['tools'].append(entry)
+    errors += [{'code': 'account_unreadable', 'tool': t, 'message': '%s 读不了或格式不对（当作没登录）' % p}
+               for t, p in dict.fromkeys(RO_BAD)]
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+
+
+def gui_reach(host, ports):
+    """这台 Mac 连不连得上这些端口：{端口: bool}（并行，每个最多 1 秒；用 PATH 里的 nc，和 probe 一样）"""
+    import subprocess, threading
+    out = {}
+
+    def one(p):
+        a = ['nc', '-z', '-G', '1', host, str(p)] if sys.platform == 'darwin' else ['nc', '-z', '-w', '1', host, str(p)]
+        try:
+            out[p] = subprocess.run(a, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=5).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            out[p] = False
+    th = [threading.Thread(target=one, args=(p,)) for p in ports]
+    for x in th:
+        x.start()
+    for x in th:
+        x.join()
+    return out
+
+
+def cmd_gui_live(route, host='', rc='0', at_home=''):
+    """cca _gui live：端口池的实况（只读）。stdin 是 bash 收集的原始数据：在路由器上是这一版 router_sh 的 status 输出
+    （rc 是 ssh 的退出码），在本机是控制接口的 V<TAB>状态码、逐组 G<TAB>组<TAB>状态码<TAB>选中的节点。
+    应选的节点按这台 Mac 的账号表算（不看路由器上的应为），选中的不一样就是 drift，同步一次就好"""
+    c, _, _ = ctx()
+    text = sys.stdin.read()
+    r = c.get('router') or {}
+    router = {'configured': bool(r.get('host')), 'host': r.get('host') or None, 'reachable': at_home == 'yes', 'backend': None,
+              'running': None, 'hook': None, 'cron': None, 'error': None}
+    local = dict(local_info(c), running=None, error=None)
+    lines = [l for l in text.splitlines() if l.strip()]
+    sel, inkernel, listening = {}, {}, {}
+    if route == 'router':
+        if not router['configured']:
+            router['error'] = {'code': 'not_configured', 'message': '还没配置路由器（cca router setup）'}
+        elif at_home != 'yes':
+            router['error'] = {'code': 'unreachable', 'message': '连不上路由器 %s' % r.get('host')}
+        elif rc != '0':
+            router['error'] = {'code': 'unreachable' if rc == '255' else 'status_failed', 'message': lines[-1] if lines else ''}
+        else:
+            for l in lines:
+                m = re.match(r'^(OpenClash|ShellCrash)：(运行中|未运行)', l)
+                if m:
+                    router['backend'], router['running'] = m.group(1), m.group(2) == '运行中'
+                elif l.startswith('钩子：'):
+                    router['hook'] = l == '钩子：已安装'
+                elif l.startswith('自愈 cron：'):
+                    router['cron'] = l == '自愈 cron：已安装'
+                else:
+                    m = GUI_SLOT_RE.match(l)
+                    if m:
+                        g, now = m.group(1), m.group(4)
+                        listening[g] = m.group(3) == '监听中'
+                        inkernel[g] = now != '（内核里没有）'
+                        sel[g] = now if inkernel[g] and now not in ('', '?') else None
+            if router['running'] is False:
+                router['error'] = {'code': 'not_running', 'message': '%s 没在运行' % router['backend']}
+    elif route == 'local':
+        if not local['configured']:
+            local['error'] = {'code': 'not_configured', 'message': '还没配置本机 Clash（cca local setup）'}
+        for l in lines:
+            f = l.split('\t')
+            if f[0] == 'V' and len(f) > 1:
+                local['running'] = f[1] == '200'
+            elif f[0] == 'G' and len(f) > 2:
+                inkernel[f[1]] = f[2] == '200'
+                now = f[3] if len(f) > 3 else ''
+                sel[f[1]] = now if f[2] == '200' and now else None
+        if local['configured'] and local['running'] is False:
+            local['error'] = {'code': 'not_running', 'message': '%s 没在运行' % local['name']}
+    who = {p: (tool.name, k) for tool, k, _, p in pool(c)}
+    plan = slot_orders(c, local=route == 'local')
+    reach = gui_reach(host, [p for _, p, _ in plan if p in who]) if host and route != 'none' else {}
+    slots, summary = [], {'ok': 0, 'drift': 0, 'closed': 0, 'unknown': 0, 'empty': 0}
+    for i, (g, p, order) in enumerate(plan, 1):
+        tk = who.get(p)
+        s = sel.get(g)
+        if not tk:
+            st = 'empty'
+        elif route == 'none' or not host:
+            st = 'unknown'
+        elif not reach.get(p):
+            st = 'closed'
+        elif s is None:
+            st = 'unknown'
+        else:
+            st = 'drift' if s != order[0] else 'ok'
+        summary[st] += 1
+        slots.append({'slot': i, 'group': g, 'port': p, 'tool': tk[0] if tk else None, 'key': tk[1] if tk else None,
+                      'expected': order[0], 'selected': s, 'in_kernel': inkernel.get(g),
+                      'listening': listening.get(g) if route == 'router' else (reach.get(p) if tk else None),
+                      'reachable': reach.get(p) if tk else None, 'state': st})
+    print(json.dumps({'version': 1, 'kind': 'live', 'generated_at': time.time(), 'route': route, 'route_pref': c.get('route') or 'auto',
+                      'at_home': at_home == 'yes', 'proxy_host': host or None, 'router': router, 'local': local, 'slots': slots,
+                      'summary': summary},
+                     ensure_ascii=False, indent=2))
+
+
 def cmd_tool_env():
     """bash 切换到当前工具时要的变量"""
     sh(TABLE=T.table, CMD=T.cmd, TOOL_LABEL=T.label, TOOL_SETTINGS=T.settings_disp, TRACE_HOST=T.trace_host, APP_LABEL=T.app_label)
@@ -4223,6 +4681,8 @@ CMDS = {
     'policy-have': cmd_policy_have, 'policy-forget': cmd_policy_forget,
     'fill-check': cmd_fill_check, 'fill-summary': cmd_fill_summary, 'nodes-fill': cmd_nodes_fill,
     'leak-probe': cmd_leak_probe, 'leak-verdict': cmd_leak_verdict,
+    'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
+    'check-render': cmd_check_render,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -4244,8 +4704,8 @@ use_tool() {   # use_tool codex：这次命令管 Codex 账号（账号表 codex
 need_bin() {   # 要运行工具本身的命令：没装就说明怎么装
 	[ -n "$TOOL_BIN" ] && return 0
 	case "$TOOL" in
-		codex) die "找不到 codex 命令：先装 Codex（例如 npm install -g @openai/codex，或 brew install codex），再用 cca codex" ;;
-		*) die "找不到 claude 命令" ;;
+		codex) FAIL_CODE=tool_missing die "找不到 codex 命令：先装 Codex（例如 npm install -g @openai/codex，或 brew install codex），再用 cca codex" ;;
+		*) FAIL_CODE=tool_missing die "找不到 claude 命令" ;;
 	esac
 }
 
@@ -5405,12 +5865,13 @@ clash_name() {   # clash_name 路由器的输出：说的是 OpenClash 还是 Sh
 # 运行配置不见了、配置文件里新写了参考节点时路由器要的是重启 OpenClash / ShellCrash（连接都会断开），问的时候说清楚。
 # 这一次运行里说过不的，不再问（同步完启动前还会核对一次）
 allow_reload() {
+	local name
 	[ -n "${CCA_YES:-}" ] && return 0
 	[ -z "${RELOAD_NO:-}" ] || return 1
-	interactive || return 1
-	case "${1:-}" in
-		*"只能重启一次 "*) confirm "现在重启 $(clash_name "$1") 吗？" y ;;
-		*) confirm "现在重载吗？" y ;;
+	name=$(clash_name "${1:-}")
+	case "${1:-}" in   # 图形界面：记一条 consent 事件（说明是路由器的最后几行），同意后带着 CCA_GRANT 重新运行
+		*"只能重启一次 "*) consent router_restart "$name" "需要重启 ${name}" "现在重启 ${name} 吗？" "$(printf '%s\n' "$1" | tail -n 5)" y ;;
+		*) consent router_reload "$name" "需要重载 ${name}" "现在重载吗？" "$(printf '%s\n' "${1:-}" | tail -n 5)" y ;;
 	esac || { RELOAD_NO=1; return 1; }
 }
 router_reload() {   # 获准后在路由器上执行带重载的 apply（运行配置不见了时是重启 OpenClash / ShellCrash）
@@ -5551,6 +6012,7 @@ node_replace() {   # node_replace 节点列表 旧节点 用它的账号：旧�
 	local -a all
 	if ! interactive; then
 		warn "路由器上找不到节点「${old}」了（也认不出它改成了哪个）：${who} 暂时用不了。在终端里运行 cca router sync 选一个节点代替它"
+		TOOL=claude gui_terminal router_sync "路由器上找不到节点「${old}」了：在终端里运行 cca router sync 选一个节点代替它" router sync
 		return 1
 	fi
 	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(printf '%s\n' "$list" | awk -F '\t' '$1 == "P" { print $2 }')
@@ -5783,7 +6245,11 @@ api_key_prompt() {   # 输入 key 存进钥匙串（需要先 eval "$(py env 名
 
 api_key_ready() {   # 启动前：key 在账号表里或钥匙串里（按现在的接口域名）；都没有时在终端里问
 	[ -n "$(py secret-status "$ACC_KEY")" ] && return 0
-	interactive || { warn "钥匙串里没有 ${ACC_NAME} 的 API key（接口地址换了服务商时也要重新输入）：在终端里运行 ${CMD} key ${ACC_NAME}"; return 1; }
+	if ! interactive; then
+		warn "钥匙串里没有 ${ACC_NAME} 的 API key（接口地址换了服务商时也要重新输入）：在终端里运行 ${CMD} key ${ACC_NAME}"
+		gui_terminal api_key "钥匙串里没有 ${ACC_NAME} 的 API key：在终端里输入一次" key "$ACC_KEY"
+		return 1
+	fi
 	warn "钥匙串里还没有 ${ACC_NAME} 的 API key（第一次用，或者接口地址换了服务商）"
 	api_key_prompt
 }
@@ -5850,7 +6316,7 @@ child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS �
 	local v
 	# 继承来的接口地址、凭证、模型一律不带进去：例如 shell 里 export 过 ANTHROPIC_BASE_URL，官方账号的登录 token
 	# 就会被发到那个地址。第三方 API 账号自己的地址和模型经 --settings（Codex 经 -c）传，key 经回调 cca 现取
-	UNSETS=(-u ALL_PROXY -u all_proxy)
+	UNSETS=(-u ALL_PROXY -u all_proxy -u CCA_EVENTS -u CCA_GRANT -u CCA_RO)   # 图形界面给 cca 的变量不带给工具
 	DROPPED=""
 	for v in $(compgen -e | grep -E "$INHERITED_RE" | grep -vE "$INHERITED_KEEP"); do UNSETS+=(-u "$v"); DROPPED="${DROPPED:+${DROPPED} }${v}"; done
 	tool env
@@ -5917,7 +6383,11 @@ ensure_login() {
 		py device "$ACC_KEY" || return 1   # logout 可能清掉客户端配置，登录前恢复该账号的固定设备标识
 		e=$(auth_email)
 		if [ -z "$e" ]; then
-			interactive || { warn "${ACC_NAME} 还没登录，需要在终端里运行 ${CMD} @${ACC_NAME} 完成登录"; return 1; }
+			if ! interactive; then
+				fail_warn not_logged_in "${ACC_NAME} 还没登录，需要在终端里运行 ${CMD} @${ACC_NAME} 完成登录"
+				gui_terminal login "${ACC_NAME} 还没登录：在终端里完成一次登录" login "$ACC_KEY"
+				return 1
+			fi
 			[ $tries -lt 2 ] || return 1
 			tries=$((tries + 1))
 			[ $tries -gt 1 ] || [ -z "${LEAK_WEBRTC:-}" ] || warn "$LEAK_WEBRTC"   # 登录页在账号的浏览器里打开
@@ -5927,7 +6397,12 @@ ensure_login() {
 		[ -z "$ACC_EMAIL" ] && return 0
 		[ "$(lower "$e")" = "$(lower "$ACC_EMAIL")" ] && return 0
 		warn "这个账号目录登录的是 ${e}，不是 ${ACC_EMAIL}（继续会让 ${e} 走 ${ACC_NAME} 的出口）"
-		interactive && confirm "退出 ${e}，改用 ${ACC_EMAIL} 登录？" y || return 1
+		if ! interactive; then
+			gui_fail login_mismatch "这个账号目录登录的是 ${e}，不是 ${ACC_EMAIL}"
+			gui_terminal login "${ACC_NAME} 登录的不是这个账号：在终端里退出后改用 ${ACC_EMAIL} 登录" login "$ACC_KEY"
+			return 1
+		fi
+		confirm "退出 ${e}，改用 ${ACC_EMAIL} 登录？" y || return 1
 		tool wipe
 	done
 }
@@ -6111,11 +6586,11 @@ router_ensure() {   # 让路由器确认端口池在，并把各槽位切到账�
 	return 0
 }
 route_router() {   # 在家：经路由器的端口池
-	[ -n "$ACC_PROXY" ] || { warn "还没配置路由器（cca router setup）"; return 1; }
+	[ -n "$ACC_PROXY" ] || { fail_warn no_router "还没配置路由器（cca router setup）"; TOOL=claude gui_terminal router_setup "还没配置路由器：在终端里配置一次" router setup; return 1; }
 	load_router
 	router_ensure
 	port_open "$PROXY_HOST" "$ACC_PORT" || {
-		warn "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
+		fail_warn port_closed "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
 		return 1
 	}
 	ROUTE=router
@@ -6135,12 +6610,20 @@ api_check() {
 	[ -n "$ACC_PROXY" ] && via=(-x "$ACC_PROXY")
 	for i in 1 2; do
 		code=$(curl -s -o /dev/null -m 8 -w '%{http_code}' "${via[@]}" "$ACC_BASE_URL" 2>/dev/null)
-		case "$code" in ''|000) ;; *) COFFEE_LINE="接口连得上"; return 0 ;; esac
+		case "$code" in ''|000) ;; *) COFFEE_LINE="接口连得上"; health_note api_ok; return 0 ;; esac
 	done
 	COFFEE_LINE="连不上 ${ACC_BASE_URL}（$(route_note)）"
+	health_note api_unreachable
 	return 1
 }
+health_note() {   # health_note 结果：没有出口检测数据的结果（第三方 API 账号、端口不通）也记进 health.json，见 cmd_health_note
+	local kind=exit
+	[ "$ACC_KIND" = api ] && kind=api
+	HEALTH_JSON=$(py health-note "$ACC_KEY" "${HEALTH_SOURCE:-launch}" "$kind" "$1" "${ROUTE:-}" "${ACC_PORT:+$ACC_NODE}" "$ACC_PORT" \
+		"${COFFEE_LINE:-}" 2>/dev/null)
+}
 settings_warn() {
+	gui_fail settings_conflict "共享的设置里有会盖掉账号自己的代理、接口地址或凭证的配置（${1}）"
 	case "$TOOL" in
 		codex) warn "共享的 ~/.codex 里有会把账号的登录发到别处、换掉账号或出口的配置（${1}）。删掉或改掉后再用 cca codex 启动（第三方 API 用 cca codex add api 加成账号）" ;;
 		*) warn "共享的设置里有会盖掉每个账号自己的代理、接口地址或凭证的配置（${1}）。删掉后再用 cca 启动（第三方 API 用 cca add api 加成账号）" ;;
@@ -6151,7 +6634,7 @@ settings_warn() {
 coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出口地区（不查 ip.net.coffee 的纯净度、不测泄露，查用量前用）；
 	               # 别的时候同时在后台测 DNS / WebRTC 泄露（给了开始时间时 DNS 不用那之前的缓存：cca check），结果在 LEAK_*
 	local trace ip loc risk="" out rc min="$CCA_MIN_TRUST"
-	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC=""
+	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC="" LEAK_DNS_STATE="" LEAK_WEBRTC_STATE="" HEALTH_JSON=""
 	[ "${1:-}" = region ] || leak_start "${1:-}"
 	trace=$(curl -s -m 8 -x "$ACC_PROXY" "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
 	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
@@ -6164,6 +6647,9 @@ coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出�
 	COFFEE_LINE=$(printf '%s\n' "$out" | head -n 1)
 	COFFEE_NOTE=$(printf '%s\n' "$out" | sed -n '2,$p')
 	case $rc in 0|1|4) leak_finish "$ip" "$loc" "${1:-}" ;; *) leak_finish ;; esac   # 出口本身就不对（受限地区、拿不到 IP）时不用等它
+	# 记进账号目录的 health.json（图形界面不联网也能显示上次的出口）；cca check --json 用 HEALTH_JSON
+	[ "${1:-}" = region ] || HEALTH_JSON=$(py health-save "$ACC_KEY" "${HEALTH_SOURCE:-launch}" "${ROUTE:-}" "$ACC_NODE" "$ACC_PORT" "$min" \
+		"$trace" "$risk" "$LEAK_LINE" "$LEAK_DNS" "$LEAK_WEBRTC" "$LEAK_DNS_STATE" "$LEAK_WEBRTC_STATE" 2>/dev/null)
 	return $rc
 }
 leak_start() {   # leak_start [cca check 开始的时间]：后台开始 DNS / WebRTC 泄露检测（py leak-probe，最多 5 秒左右）
@@ -6181,8 +6667,10 @@ leak_finish() {   # leak_finish [出口IP 出口地区 [cca check 开始的时�
 		out=$(py leak-verdict "$LEAK_OUT" "${ROUTE}|${ACC_NODE}" "$1" "${2:-}" "${3:-}")
 		LEAK_LINE=$(printf '%s\n' "$out" | head -n 1)
 		while IFS=$'\t' read -r kind tag msg; do
-			[ "$kind" = W ] || continue
-			case "$tag" in dns) LEAK_DNS="$msg" ;; webrtc) LEAK_WEBRTC="$msg" ;; esac
+			case "$kind" in
+				W) case "$tag" in dns) LEAK_DNS="$msg" ;; webrtc) LEAK_WEBRTC="$msg" ;; esac ;;
+				S) case "$tag" in dns) LEAK_DNS_STATE="$msg" ;; webrtc) LEAK_WEBRTC_STATE="$msg" ;; esac ;;
+			esac
 		done <<< "$out"
 	fi
 	rm -f "$LEAK_OUT"
@@ -6208,7 +6696,7 @@ preflight() {   # preflight [app]：账号的出口必须可用且干净，否�
 	[ -n "${CCA_SKIP_CHECK:-}" ] && return 0
 	if [ "$ACC_KIND" = api ]; then   # claude.ai / chatgpt.com 的出口检测和第三方服务无关：只看接口连不连得上
 		api_check && return 0
-		warn "${COFFEE_LINE}"
+		fail_warn api_unreachable "${COFFEE_LINE}"
 		warn "已停止启动：确认地址没写错、服务商没出问题（确定没问题可以加 CCA_SKIP_CHECK=1 跳过检测）"
 		return 1
 	fi
@@ -6221,8 +6709,10 @@ preflight() {   # preflight [app]：账号的出口必须可用且干净，否�
 		4) warn "出口检测没拿到评分（${COFFEE_LINE}），先继续" ;;
 		1)
 			warn "出口纯净度偏低：${COFFEE_LINE}"
-			interactive && confirm "仍然用这个出口启动吗？" n || return 1 ;;
+			consent low_purity "$COFFEE_IP" "出口纯净度偏低" "仍然用这个出口启动吗？" "${COFFEE_LINE}${COFFEE_NOTE:+（${COFFEE_NOTE}）}" n ||
+				{ gui_fail low_purity "出口纯净度偏低：${COFFEE_LINE}"; return 1; } ;;
 		*)
+			if [ $rc -eq 2 ]; then gui_fail region_restricted "${COFFEE_LINE}${COFFEE_NOTE:+：${COFFEE_NOTE}}"; else gui_fail no_exit_ip "${COFFEE_LINE}"; fi
 			warn "${COFFEE_LINE}"
 			[ -n "$COFFEE_NOTE" ] && warn "$COFFEE_NOTE"
 			warn "已停止启动。可以用 ${CMD} edit 给这个账号换个节点"
@@ -6249,8 +6739,10 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 	local key site="$TRACE_HOST"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
-	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
+	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
+	gui_step sync
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
+	gui_step preflight
 	CCA_SKIP_CHECK=1 preflight || exit 1
 	py device "$ACC_KEY" || die "初始化账号设备标识失败"
 	# 还没登录就先登录（同一个浏览器实例，登录一次两边都能用；Claude 的登录页预填邮箱）
@@ -6258,8 +6750,10 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 		prepare_account "$ACC_KEY" || die "初始化账号目录失败"
 		ensure_login || exit 1
 	fi
+	gui_step open
 	open_chrome "${2:-https://${site}/}"
 	info "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-$site}（经 ${ACC_PROXY} → ${ACC_NODE}）"
+	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-$site}（经 ${ACC_PROXY} → ${ACC_NODE}）"
 }
 
 cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的浏览器实例里打开，登录地址没带邮箱时补上
@@ -6324,17 +6818,19 @@ codex_app_prepare() {
 		if [[ " ${ACC_FLAGS[*]} " != *" system_proxy_fallback "* ]]; then   # 这个版本的 codex 不认识这个开关，没法替你关
 			warn "这个版本的 codex 不认识 system_proxy_fallback，cca 没法在共享的 config.toml 里关掉它。ChatGPT App 自带的 codex 如果有这个开关，账号的出口断了时可能改走系统代理（升级 codex 后再打开一次，cca 会征求同意关掉）"
 		else
-			interactive || die "先在终端里运行一次 cca codex app ${ACC_NAME}：要先关掉 Codex 的 system_proxy_fallback（会说明原因）"
-			warn "ChatGPT App 自己启动 codex，cca 加不了参数。Codex 的 system_proxy_fallback 开着时，账号的出口一断，部分请求会带着这个账号的登录改走 macOS 的系统代理，出口就换了"
-			if confirm "用 codex features disable system_proxy_fallback 在共享的 ~/.codex/config.toml 里关掉它吗？（直接用 codex 时也不再回退到系统代理）" y; then
-				child_env
-				env "${UNSETS[@]}" CODEX_HOME="$ACC_MASTER" "$CODEX_BIN" features disable system_proxy_fallback </dev/null >/dev/null 2>&1 3<&-
-				py codex-fallback-off || die "没能关掉 system_proxy_fallback：手动在 ~/.codex/config.toml 的 [features] 里写上 system_proxy_fallback = false"
-				okay "已在 ~/.codex/config.toml 里关掉 system_proxy_fallback"
-				py link "$ACC_KEY" || die "链接共享目录失败"   # config.toml 可能是刚建的：账号目录里还没有指向它的链接
-			else
-				warn "没有关掉：ChatGPT App 照常打开，但这个账号的出口断了时可能改走系统代理"
-			fi
+			local why="ChatGPT App 自己启动 codex，cca 加不了参数。Codex 的 system_proxy_fallback 开着时，账号的出口一断，部分请求会带着这个账号的登录改走 macOS 的系统代理，出口就换了"
+			interactive && warn "$why"
+			consent codex_fallback_off "" "关掉 Codex 的系统代理回退" "用 codex features disable system_proxy_fallback 在共享的 ~/.codex/config.toml 里关掉它吗？（直接用 codex 时也不再回退到系统代理）" "$why" y
+			case $? in
+				0)
+					child_env
+					env "${UNSETS[@]}" CODEX_HOME="$ACC_MASTER" "$CODEX_BIN" features disable system_proxy_fallback </dev/null >/dev/null 2>&1 3<&-
+					py codex-fallback-off || die "没能关掉 system_proxy_fallback：手动在 ~/.codex/config.toml 的 [features] 里写上 system_proxy_fallback = false"
+					okay "已在 ~/.codex/config.toml 里关掉 system_proxy_fallback"
+					py link "$ACC_KEY" || die "链接共享目录失败" ;;   # config.toml 可能是刚建的：账号目录里还没有指向它的链接
+				2) die "先在终端里运行一次 cca codex app ${ACC_NAME}：要先关掉 Codex 的 system_proxy_fallback（会说明原因）" ;;
+				*) warn "没有关掉：ChatGPT App 照常打开，但这个账号的出口断了时可能改走系统代理" ;;
+			esac
 		fi
 	fi
 	ensure_login || exit 1
@@ -6360,31 +6856,37 @@ codex_app_first() {
 cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）；已经开着就切到它
 	local key app dir pid first="" i p
 	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
-	app=$(tool app_path) || die "$(tool app_missing)"
+	app=$(tool app_path) || FAIL_CODE=app_missing die "$(tool app_missing)"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
-	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号：${APP_LABEL} 只能用官方账号"
+	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：${APP_LABEL} 只能用官方账号"
 	key="$ACC_KEY" dir="$ACC_DESKTOP_DIR"
 	pid=$(tool app_pid "$dir")
 	if [ -n "$pid" ]; then
 		activate_pid "$pid"
 		info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
+		gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 		return 0
 	fi
+	gui_step sync
 	sync_if_changed
 	launchers_sync
+	gui_step preflight
 	preflight app || exit 1   # App 里的网页也会用 WebRTC：泄露时另外说明
+	gui_step prepare
 	prepare_account "$key" || die "初始化账号目录失败"
 	tool app_prepare
 	[ -e "$dir/Local State" ] || first=1
 	mkdir -p "$dir" && chmod 700 "$dir"
-	tool app_open "$app" "$dir" || die "打开 ${APP_LABEL} 失败"
+	gui_step open
+	tool app_open "$app" "$dir" || FAIL_CODE=open_failed die "打开 ${APP_LABEL} 失败"
 	for i in $(seq 1 40); do [ -e "$dir/Local State" ] && break; sleep 0.25; done
 	if [ ! -e "$dir/Local State" ]; then   # 不认独立的资料目录的话，它会用默认资料（你主账号的登录）走这个账号的出口
 		for p in $(pgrep -f -- "--user-data-dir=$dir( |\$)"); do kill "$p" 2>/dev/null; done
-		die "${APP_LABEL} 没有用 ${ACC_NAME} 自己的资料目录启动（可能是新版本不再支持多开），已经关掉，免得用错账号或出口"
+		FAIL_CODE=app_profile_unsupported die "${APP_LABEL} 没有用 ${ACC_NAME} 自己的资料目录启动（可能是新版本不再支持多开），已经关掉，免得用错账号或出口"
 	fi
 	okay "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
+	gui_result opened "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	[ -n "$first" ] && tool app_first
 	return 0
 }
@@ -6403,7 +6905,6 @@ load_local() {
 	return 0
 }
 local_ready() { [ -n "$LOCAL_CLIENT" ]; }
-json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 json_get() { printf '%s' "$LBODY" | sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p'; }   # 响应里的字符串字段
 lctl() {   # lctl 方法 路径 [JSON 或 @文件]：本机 Clash 内核的控制接口；响应体在 ${LBODY}，HTTP 状态码在 ${LCODE}
 	local out url nl=$'\n'
@@ -6427,7 +6928,8 @@ local_up() {   # 本机 Clash 内核的控制接口能用；Clash Verge 没在�
 		return 1
 	fi
 	warn "Clash Verge 没在运行"
-	interactive && confirm "现在打开 Clash Verge 吗？" y || return 1
+	consent open_clash_verge "" "Clash Verge 没在运行" "现在打开 Clash Verge 吗？" "现在连不上路由器，账号要走本机 Clash Verge 的端口" y ||
+		{ gui_fail local_unavailable "Clash Verge 没在运行"; return 1; }
 	open -g -b "$VERGE_ID" || return 1
 	for i in $(seq 1 40); do
 		sleep 0.5
@@ -6547,7 +7049,7 @@ local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽�
 		lctl GET "/proxies/$g"
 		[ "$LCODE" = 200 ] || return 2
 		[ "$(json_get now)" = "$node" ] && continue
-		lctl PUT "/proxies/$g" "{\"name\":\"$(json_esc "$node")\"}"
+		lctl PUT "/proxies/$g" "{\"name\":$(jstr "$node")}"
 		case "$LCODE" in 2??) ;; *) lctl PUT "/proxies/$g" '{"name":"REJECT"}' ;; esac   # 客户端里没有这个节点：宁可断开也不换出口
 	done < <(py select-lines local)   # 节点名用 Clash Verge 里的叫法（同一个节点名字不同时按服务器地址换算）
 	return 0
@@ -6565,7 +7067,8 @@ local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本�
 local_offer() {   # 在外面、还没配置本机 Clash：说明情况；交互时接着配置
 	warn "连不上路由器${ROUTER_HOST:+ ${ROUTER_HOST}}（可能不在家里的网络）"
 	if ! interactive; then
-		warn "在外面要改走本机的 Clash 客户端（例如 Clash Verge）：在终端里运行 cca local setup 配置一次"
+		fail_warn local_unavailable "在外面要改走本机的 Clash 客户端（例如 Clash Verge）：在终端里运行 cca local setup 配置一次"
+		TOOL=claude gui_terminal local_setup "在外面要改走本机的 Clash 客户端：在终端里配置一次" local setup
 		return 1
 	fi
 	say "  在外面可以改走本机的 Clash 客户端：每个账号在本机开一个端口，走它自己的节点。"
@@ -6574,13 +7077,13 @@ local_offer() {   # 在外面、还没配置本机 Clash：说明情况；交互
 route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval "$(py env 名称)"）
 	load_local
 	local_ready || local_offer || return 1
-	local_ensure || return 1
+	local_ensure || { gui_fail local_unavailable "本机 ${LOCAL_NAME:-Clash} 的端口池没有就绪"; return 1; }
 	lctl GET "/proxies/CCA-${ACC_SLOT}"
 	if [ "$(json_get now)" != "$(py local-node "$ACC_NODE")" ]; then
-		warn "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」（名字和服务器地址都对不上）：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 ${CMD} edit 换一个两边都有的节点）"
+		fail_warn node_missing "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」（名字和服务器地址都对不上）：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 ${CMD} edit 换一个两边都有的节点）"
 		return 1
 	fi
-	port_open 127.0.0.1 "$ACC_PORT" || { warn "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
+	port_open 127.0.0.1 "$ACC_PORT" || { fail_warn port_closed "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
 	ACC_PROXY="http://127.0.0.1:${ACC_PORT}"
 	ROUTE=local
 }
@@ -6679,11 +7182,21 @@ cmd_local() {
 	esac
 }
 
-cmd_check() {   # cca check [账号]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
-	local keys key ips="" rc host="" route="" since webrtc=""
+cmd_check() {   # cca check [账号] [--json]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
+	local keys key ips="" rc host="" route="" since webrtc="" q="" json="" rows=""   # rows：--json 时每个账号一行「键<TAB>health 的 JSON」
+	local HEALTH_SOURCE=check   # 结果照样记进各账号的 health.json（来源写 check）
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--json) json=1 ;;   # stdout 输出 JSON（格式见 macos/PROTOCOL.md），给人看的照旧写 stderr
+			-h|--help) say "用法: ${CMD} check [账号] [--json]"; return 0 ;;
+			-*) die "用法: ${CMD} check [账号] [--json]" ;;
+			*) [ -z "$q" ] || die "用法: ${CMD} check [账号] [--json]（写一个账号，或者不写查全部）"; q="$1" ;;
+		esac
+		shift
+	done
 	since=$(date +%s)
-	if [ -n "${1:-}" ]; then keys=$(py resolve "$1") || return 1; else keys=$(py keys); fi
-	[ -n "$keys" ] || { info "还没有账号"; return 0; }
+	if [ -n "$q" ]; then keys=$(py resolve "$q") || return 1; else keys=$(py keys); fi
+	[ -n "$keys" ] || { info "还没有账号"; [ -z "$json" ] || py check-render "" </dev/null; return 0; }
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，测到的才是账号现在的出口
 	# 账号列表从 fd 4 读：循环里要连路由器（ssh 会把 stdin 读走）、要问用户（interactive 看 fd 0 是不是终端）
 	while IFS= read -r key <&4; do
@@ -6693,28 +7206,33 @@ cmd_check() {   # cca check [账号]：各账号的出口、纯净度，和 DNS 
 			host="$PROXY_HOST" route=router
 			if want_local; then   # 在外面：先让本机端口池就绪、切好节点
 				load_local
-				local_ready || die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
+				local_ready || FAIL_CODE=local_unavailable die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
 				local_ensure || return 1
 				host=127.0.0.1 route=local
 			else
 				router_ensure   # 和启动前一样：各槽位切到账号的节点（节点在路由器上改了名会跟着改）
 			fi
 		fi
-		ROUTE=direct
+		ROUTE=direct HEALTH_JSON=""
 		if [ -n "$ACC_PORT" ]; then
 			ACC_PROXY="http://${host}:${ACC_PORT}" ROUTE="$route"
 			if ! port_open "$host" "$ACC_PORT"; then
 				say "  ${ACC_NAME}  ${ACC_NODE}  ${C_R}端口 ${ACC_PORT} 不通${C_0}"
+				COFFEE_LINE="端口 ${host}:${ACC_PORT} 不通"
+				health_note port_closed
+				rows="$rows$ACC_KEY"$'\t'"$HEALTH_JSON"$'\n'
 				continue
 			fi
 		fi
 		if [ "$ACC_KIND" = api ]; then   # 第三方 API：只看接口连不连得上
 			api_check
 			say "  ${ACC_NAME}  ${ACC_NODE}${ACC_PORT:+  :${ACC_PORT}}  ${COFFEE_LINE}"
+			rows="$rows$ACC_KEY"$'\t'"$HEALTH_JSON"$'\n'
 			continue
 		fi
 		coffee_check "$since"
 		rc=$?
+		rows="$rows$ACC_KEY"$'\t'"$HEALTH_JSON"$'\n'
 		case $rc in 0) ;; *) COFFEE_LINE="$COFFEE_LINE ${C_Y}(${COFFEE_NOTE//$'\n'/; })${C_0}" ;; esac
 		say "  ${ACC_NAME}  ${ACC_NODE}  :${ACC_PORT}  ${COFFEE_LINE}"
 		leak_show "      "
@@ -6726,6 +7244,7 @@ cmd_check() {   # cca check [账号]：各账号的出口、纯净度，和 DNS 
 	dup=$(printf '%s' "$ips" | sort | uniq -d)
 	[ -n "$dup" ] && warn "有账号共用同一个出口 IP：$(echo $dup)"
 	[ -z "$webrtc" ] || warn "$webrtc"
+	[ -z "$json" ] || printf '%s' "$rows" | py check-render "$route"
 	return 0
 }
 
@@ -6784,7 +7303,7 @@ run_account() {
 sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）；在外面就等回家
 	if ! py validate 2>/dev/null; then   # 可能是路由器上的节点改了名（比如维护者的映射已经换成新名字）：先跟上再校验
 		if router_ready && at_home; then nodes_follow; fi
-		py validate || die "账号表有错误：运行 ${CMD} edit 修正"
+		py validate || FAIL_CODE=table_invalid die "账号表有错误：运行 ${CMD} edit 修正"
 	fi
 	py secrets-forget   # 直接改账号表删掉的第三方 API 账号：钥匙串里的 key 一起删
 	if [ "$(digest)" != "$(py get synced)" ]; then
@@ -6795,7 +7314,7 @@ sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路�
 		fi
 		info "账号表或路由器端脚本有变化，先同步到路由器"
 		router_sync
-		case $? in 0|3) ;; *) die "同步失败，已停止（避免走错出口）" ;; esac
+		case $? in 0|3) ;; *) FAIL_CODE=sync_failed die "同步失败，已停止（避免走错出口）" ;; esac
 	fi
 }
 
@@ -7065,6 +7584,242 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 		*-beta.*) info "这是测试版：不会自动更新到别的测试版，出了更新的正式版时照常自动更新；退回原来的版本：cca update --rollback" ;;
 	esac
 	info "路由器端脚本如果有变化，下次启动时会自动同步"
+}
+
+# ---------------------------------------------------------------------------
+# 图形界面（cca App，源码在 macos/）：cca _gui hello|state|live 是给它用的只读接口（JSON，格式见 macos/PROTOCOL.md），
+# 会改东西的照旧用 cca app / web / check / usage / router sync，加上 CCA_EVENTS（事件）和 CCA_GRANT（用户在 App 里点过的同意）。
+# cca gui 安装、更新、打开它：App 和 cca 同一个版本号，每个版本的 Release 附带 cca-app.zip 和签名（命名空间 cca-app，
+# 和 cca 本身的 cca-release 分开）。curl 下载的文件没有隔离标记，临时签名的 App 不会被 Gatekeeper 拦（用浏览器下载就会）
+# ---------------------------------------------------------------------------
+GUI_API=1   # 删字段、改含义时才加一（App 声明自己支持的范围）
+GUI_ID=local.cca.app
+GUI_APP="${CCA_GUI_APP:-$HOME/Applications/cca.app}"
+GUI_DIR="$CCA_HOME/gui"   # next/cca.app：下载校验好、等 App 退出后再换上的版本；enabled：装过 App（自动更新时跟着更新）；lock
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+gui_plist() { plutil -extract "$2" raw "$1/Contents/Info.plist" 2>/dev/null; }   # gui_plist App 键
+gui_ours() { [ "$(gui_plist "$1" CFBundleIdentifier)" = "$GUI_ID" ]; }
+gui_ver() { gui_plist "$1" CFBundleShortVersionString; }
+gui_staged() { [ "$(gui_ver "$GUI_DIR/next/cca.app")" = "$VERSION" ]; }   # 和 cca 同版本的已经下载好、放着了
+gui_running() { pgrep -f "$GUI_APP/Contents/MacOS/cca( |\$)" >/dev/null 2>&1; }
+gui_lock() {   # gui_lock [最多等几秒，默认 120]：前台的 cca gui 和后台的 _gui-fetch 不同时下载、换 App
+	local i n=$(( ${1:-120} * 4 ))
+	mkdir -p "$GUI_DIR" || return 1
+	[ -n "$(find "$GUI_DIR/lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$GUI_DIR/lock"   # 上次异常退出留下的锁
+	for ((i = 0; ; i++)); do
+		mkdir "$GUI_DIR/lock" 2>/dev/null && return 0
+		[ $i -lt $n ] || return 1
+		sleep 0.25
+	done
+}
+gui_unlock() { rmdir "$GUI_DIR/lock" 2>/dev/null; return 0; }
+wait_pid() { local i; for i in $(seq 1 240); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.25; done; return 1; }   # 最多等 60 秒
+
+cmd_gui_api() {   # cca _gui hello|state|live（不经过自动更新和映射拉取，不写文件）
+	case "${1:-}" in
+		hello) gui_hello ;;
+		state) gui_state ;;
+		live) gui_live ;;
+		*) die "用法: cca _gui hello|state|live" ;;
+	esac
+}
+gui_hello() {
+	local inst=false dev=false cx=false av="" sv=""
+	[ -f "$CFG" ] && inst=true
+	dev_mode && dev=true
+	[ -f "$CCA_HOME/codex.json" ] && cx=true
+	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
+	sv=$(gui_ver "$GUI_DIR/next/cca.app")
+	printf '{"version":1,"kind":"hello","api":%s,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+		"$GUI_API" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
+	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s}},' "$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")"
+	printf '"gui":{"app":%s,"app_version":%s,"staged_version":%s}}\n' "$(jstr "$GUI_APP")" "$(jopt "$av")" "$(jopt "$sv")"
+}
+gui_state() {   # bash 才知道的（找到的命令、App、Chrome）经环境变量交给 py gui-state；stdin 是路由器端代码（算同步摘要）
+	[ -f "$CFG" ] || die "还没安装：请在终端里运行 $SELF install"
+	{ router_sh; router_rb; } | CCA_RO=1 CCA_VERSION="$VERSION" CCA_GUI_CLAUDE_BIN="$CLAUDE_BIN" CCA_GUI_CODEX_BIN="$CODEX_BIN" \
+		CCA_GUI_CLAUDE_APP="$(claude_app_path)" CCA_GUI_CODEX_APP="$(codex_app_path)" CCA_GUI_CHROME="$(has_chrome && echo 1)" \
+		py gui-state
+}
+gui_live() {   # 端口池的实况：在家看路由器（经 SSH 跑这一版 router_sh 的 status，不依赖路由器上部署的版本），在外面看本机 Clash Verge
+	local route=none out="" rc=0 host="" g p node who
+	[ -f "$CFG" ] || die "还没安装：请在终端里运行 $SELF install"
+	export CCA_RO=1
+	load_router
+	load_local
+	[ -z "$ROUTER_HOST" ] || at_home   # 先探测一次（1 秒），结果在 AT_HOME
+	if want_local; then
+		if local_ready; then route=local; elif [ -n "$ROUTER_HOST" ]; then route=router; fi
+	elif [ -n "$ROUTER_HOST" ]; then
+		route=router
+	fi
+	case "$route" in
+		router)
+			host="$PROXY_HOST"
+			if [ "$AT_HOME" = yes ]; then
+				if router_ready; then
+					out=$(router_sh | rsh 'sh -s status' 2>&1); rc=$?   # 脚本从管道进 ssh 的 stdin（别再接 /dev/null）
+				else
+					out="找不到连路由器用的 SSH 密钥 ${ROUTER_KEY}" rc=254
+				fi
+			fi ;;
+		local)
+			host=127.0.0.1
+			lctl GET /version
+			out="V"$'\t'"$LCODE"
+			if [ "$LCODE" = 200 ]; then
+				while IFS=$'\t' read -r g p node who; do
+					lctl GET "/proxies/$g"
+					out="$out"$'\n'"G"$'\t'"${g}"$'\t'"${LCODE}"$'\t'"$([ "$LCODE" = 200 ] && json_get now)"
+				done < <(py slot-rows)
+			fi ;;
+	esac
+	printf '%s\n' "$out" | py gui-live "$route" "$host" "$rc" "${AT_HOME:-no}"
+}
+
+gui_supported() {   # 界面 App 要 macOS 26 或更新（Liquid Glass）
+	local v
+	v=$(sw_vers -productVersion 2>/dev/null)
+	v="${CCA_GUI_OS:-${v%%.*}}"
+	[ "${v:-0}" -ge 26 ] 2>/dev/null && return 0
+	warn "界面 App 要 macOS 26 或更新（这台 Mac 是 macOS ${v:-?}）"
+	return 1
+}
+gui_fetch() {   # gui_fetch 版本 目录：下载和这个版本号相同的 App，校验签名和内容，解开在 目录/x/cca.app；失败原因在 FETCH_ERR
+	local v="$1" d="$2" f url="$UPDATE_REPO/releases/download/v$1"
+	FETCH_ERR="下载失败（网络不通、GitHub 暂时不可用，或者 ${v} 没有附带界面 App）"
+	for f in cca-app.zip cca-app.zip.sig; do
+		retry3 curl -fsSL -m 300 -o "$d/$f" "$url/$f" 2>/dev/null || return 1
+	done
+	printf 'cca-app %s\n' "$RELEASE_KEY" > "$d/allowed"
+	FETCH_ERR="签名校验没通过（文件可能被篡改或不完整），没有安装"
+	ssh-keygen -Y verify -f "$d/allowed" -I cca-app -n cca-app -s "$d/cca-app.zip.sig" < "$d/cca-app.zip" >/dev/null 2>&1 || return 1
+	FETCH_ERR="解不开下载到的 App"
+	ditto -x -k "$d/cca-app.zip" "$d/x" 2>/dev/null && [ -d "$d/x/cca.app" ] || return 1
+	FETCH_ERR="下载到的不是 ${v} 版的 cca App，没有安装"
+	gui_ours "$d/x/cca.app" && [ "$(gui_ver "$d/x/cca.app")" = "$v" ] || return 1
+	FETCH_ERR="App 的代码签名不完整，没有安装"
+	codesign --verify --strict "$d/x/cca.app" >/dev/null 2>&1 || return 1
+	FETCH_ERR="这台 Mac 运行不了这个 App（要 macOS 26 或更新）"
+	with_timeout 20 "$d/x/cca.app/Contents/MacOS/cca" --self-check </dev/null >/dev/null 2>&1
+}
+gui_stage() {   # 下载校验好和 cca 同版本的 App，放在 $GUI_DIR/next（已经放着了就不再下载）；调用方先 gui_lock
+	local d rc
+	gui_staged && return 0
+	mkdir -p "$GUI_DIR" && chmod 700 "$GUI_DIR" && d=$(mktemp -d "$GUI_DIR/dl.XXXXXX") || { FETCH_ERR="建不了临时目录"; return 1; }
+	gui_fetch "$VERSION" "$d" && rm -rf "$GUI_DIR/next" && mkdir -p "$GUI_DIR/next" && mv "$d/x/cca.app" "$GUI_DIR/next/cca.app"
+	rc=$?
+	rm -rf "$d"
+	return $rc
+}
+gui_swap() {   # 换上放在 next 里的 App（调用方先确认 App 没开着、拿到 gui_lock）：旧的先挪开，换不上就挪回去
+	local old="$GUI_APP.old.$$"
+	[ -d "$GUI_DIR/next/cca.app" ] || return 1
+	[ ! -e "$GUI_APP" ] || gui_ours "$GUI_APP" || { warn "${GUI_APP} 已经存在，但不是 cca 装的，没有覆盖"; return 1; }
+	mkdir -p "$(dirname "$GUI_APP")" || return 1
+	if [ -e "$GUI_APP" ]; then mv "$GUI_APP" "$old" || return 1; fi
+	if ! mv "$GUI_DIR/next/cca.app" "$GUI_APP"; then
+		[ ! -e "$old" ] || mv "$old" "$GUI_APP"
+		return 1
+	fi
+	rm -rf "$old" "$GUI_DIR/next"
+	touch "$GUI_DIR/enabled"
+	"$LSREGISTER" -f "$GUI_APP" >/dev/null 2>&1
+	return 0
+}
+gui_dev_build() {   # 开发模式：从 macos/ 的源码编译（源码比上次编出来的新、或者版本号变了才编），打印 .app 的路径
+	local src="${CCA_GUI_SRC:-${SELF%/*}/macos}" app
+	app="$src/build/cca.app"
+	[ -f "$src/build.sh" ] || die "找不到 ${src}/build.sh"
+	if [ ! -x "$app/Contents/MacOS/cca" ] || [ "$(gui_ver "$app")" != "$VERSION" ] ||
+		[ -n "$(find "$src/Sources" "$src/tools" "$src/build.sh" -newer "$app/Contents/MacOS/cca" -print 2>/dev/null | head -n 1)" ]; then
+		command -v swiftc >/dev/null 2>&1 || die "编译界面 App 要 swiftc：先运行 xcode-select --install 装上苹果的命令行工具"
+		info "正在从源码编译界面 App（${src}）…"
+		bash "$src/build.sh" --version "$VERSION" --arch native --out "$app" >&2 || die "编译界面 App 失败"
+	fi
+	printf '%s' "$app"
+}
+cmd_gui() {   # cca gui [update [--relaunch PID] | remove]
+	local pid="" app
+	case "${1:-}" in
+		''|open)
+			gui_supported || return 1
+			if dev_mode; then
+				app=$(gui_dev_build) || return 1
+				open --env CCA_GUI_CCA="$SELF" "$app" || die "打开 ${app} 失败"
+				return 0
+			fi
+			if ! gui_ours "$GUI_APP" || [ "$(gui_ver "$GUI_APP")" != "$VERSION" ]; then
+				[ ! -e "$GUI_APP" ] || gui_ours "$GUI_APP" || die "${GUI_APP} 已经存在，但不是 cca 装的，没有覆盖"
+				if gui_running; then
+					warn "界面 App 开着，版本和 cca（${VERSION}）不一样：在 App 里点「更新并重新打开」，或者退出它后再运行 cca gui"
+					open "$GUI_APP"
+					return 0
+				fi
+				gui_lock || die "界面 App 正在下载或更换：稍后再试"
+				trap gui_unlock EXIT
+				info "正在下载 cca ${VERSION} 的界面 App…"
+				gui_stage || die "没能装上界面 App：${FETCH_ERR}"
+				gui_swap || die "换上界面 App 失败"
+				okay "已装好界面 App：${GUI_APP}"
+			fi
+			open "$GUI_APP" || die "打开 ${GUI_APP} 失败" ;;
+		update)
+			[ "${2:-}" != --relaunch ] || pid="${3:-}"
+			[ -z "$pid" ] || [[ "$pid" =~ ^[0-9]+$ ]] || die "用法: cca gui update [--relaunch PID]"
+			gui_supported || return 1
+			if dev_mode; then   # 开发模式：重新编译，等旧的退出后打开编好的
+				app=$(gui_dev_build) || return 1
+				[ -z "$pid" ] || { wait_pid "$pid"; open --env CCA_GUI_CCA="$SELF" "$app"; }
+				return 0
+			fi
+			[ ! -e "$GUI_APP" ] || gui_ours "$GUI_APP" || die "${GUI_APP} 已经存在，但不是 cca 装的，没有覆盖"
+			gui_lock || die "界面 App 正在下载或更换：稍后再试"
+			trap gui_unlock EXIT
+			gui_stage || die "没能下载界面 App：${FETCH_ERR}"
+			[ -z "$pid" ] || wait_pid "$pid"
+			if gui_running; then
+				info "新版本的界面 App 已经下载好：退出 App 后会换上（或者在 App 里点「更新并重新打开」）"
+				return 0
+			fi
+			gui_swap || die "换上界面 App 失败"
+			okay "界面 App 已更新到 ${VERSION}"
+			[ -z "$pid" ] || open "$GUI_APP" ;;
+		remove)
+			gui_lock || die "界面 App 正在下载或更换：稍后再试"
+			trap gui_unlock EXIT
+			if [ -e "$GUI_APP" ]; then
+				gui_ours "$GUI_APP" || die "${GUI_APP} 不是 cca 装的，没有删除"
+				gui_running && die "界面 App 开着：先退出它"
+				rm -rf "$GUI_APP" || die "删除 ${GUI_APP} 失败"
+				okay "已删除 ${GUI_APP}"
+			fi
+			rm -rf "$GUI_DIR"
+			defaults delete "$GUI_ID" >/dev/null 2>&1
+			return 0 ;;
+		-h|--help) say "用法: cca gui [update | remove]" ;;
+		*) die "用法: cca gui [update | remove]" ;;
+	esac
+}
+gui_hook() {   # 每次启动：装过 App、cca 换了版本（自动更新、cca update）→ 后台下载对应版本的 App（App 开着就先放着，退出后再换）
+	[ -f "$GUI_DIR/enabled" ] || return 0
+	dev_mode && return 0
+	gui_ours "$GUI_APP" || return 0   # 自己删掉了 App：不再装回来
+	[ "$(gui_ver "$GUI_APP")" = "$VERSION" ] && return 0
+	if gui_staged; then   # 已经下载好了：App 没开着、也没有别人正在换，就换上
+		if ! gui_running && gui_lock 0; then gui_swap >/dev/null 2>&1; gui_unlock; fi
+		return 0
+	fi
+	[ -n "$(find "$GUI_DIR/checked" -mmin -360 2>/dev/null)" ] && return 0   # 6 小时内试过
+	touch "$GUI_DIR/checked"
+	( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _gui-fetch </dev/null >"$GUI_DIR/log" 2>&1 3<&- & )
+	return 0
+}
+cmd_gui_fetch() {   # 后台任务：下载校验好和 cca 同版本的 App；App 没开着就换上
+	gui_lock 0 || return 0
+	trap gui_unlock EXIT
+	if gui_stage; then gui_running || gui_swap; else echo "$FETCH_ERR"; fi
+	return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -7391,12 +8146,13 @@ cmd_restore() {
 		done < <(py keys)
 	done
 	use_tool claude
+	gui_ours "$GUI_APP" && gui_running && running="${running:+${running}、}cca 的界面 App"
 	[ -z "$running" ] || die "这些账号的桌面 App 还开着：${running}。先退出它们再还原"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证（第三方 API 账号删掉钥匙串里的 key）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池"
-	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器"
+	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
 	say "  · ~/.claude、~/.claude.json 和 ~/.codex 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
 	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
@@ -7434,6 +8190,7 @@ cmd_restore() {
 		info "配置备份：$bk"
 	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
+	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; defaults delete "$GUI_ID" >/dev/null 2>&1; info "已删除界面 App ${GUI_APP}"; fi
 	rm -rf "${CCA_HOME:?}"
 	info "已还原。原来的 claude、codex 命令和 ~/.claude、~/.codex 不受影响"
 }
@@ -7468,8 +8225,10 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
                              部分；cca app --launchers 重新生成）。只用于官方账号
-  cca check [账号]           检测各账号出口 IP、地区、纯净度和 DNS / WebRTC 泄露，提示共用出口；第三方 API 账号只检测接口连不连得上
+  cca check [账号] [--json]  检测各账号出口 IP、地区、纯净度和 DNS / WebRTC 泄露，提示共用出口；第三方 API 账号只检测接口连不连得上
   cca login <账号>           退出这个账号现在的登录，在它专属的浏览器窗口里重新登录
+  cca gui                    打开图形界面（cca App：各账号的用量、节点分流，一键打开桌面 App、网页版）；没装就先下载
+                             和 cca 同版本的 App 装进 ~/Applications（要 macOS 26 或更新）。cca gui update | remove
 
 Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人的两种账号可以用同一个别名、同一个邮箱）
   cca codex [codex 参数]     弹出 Codex 账号菜单，选中后启动 codex；cca codex @<账号> [codex 参数] 跳过选择。
@@ -7530,6 +8289,8 @@ main() {
 	[ -n "$PYTHON" ] || die "需要 python3"
 	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
+	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch) unset CCA_EVENTS CCA_GRANT CCA_RO ;; esac
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;
@@ -7546,6 +8307,9 @@ main() {
 		_policy-fetch) cmd_policy_fetch ;;
 		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
 		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
+		_gui) shift; cmd_gui_api "$@" ;;   # 图形界面的只读接口（macos/PROTOCOL.md）
+		_gui-fetch) cmd_gui_fetch ;;
+		gui) shift; cmd_gui "$@" ;;
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
 		*)
@@ -7557,6 +8321,7 @@ main() {
 			fi
 			update_hook "$@"
 			policy_hook
+			gui_hook
 			# 用着 Codex（有 Codex 的账号表，或者这次就是 cca codex …）而 cxa 不见了（以前装的 cca 升级上来、被删掉了）：补上
 			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then codex_alias_ensure "" quiet; fi
 			if [ "${1:-}" = codex ]; then   # cca codex …：后面的子命令都作用于 Codex 账号

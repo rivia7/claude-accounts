@@ -1,0 +1,5 @@
+{"v":1,"ev":"step","code":"sync"}
+{"v":1,"ev":"step","code":"preflight"}
+{"v":1,"ev":"step","code":"prepare"}
+{"v":1,"ev":"step","code":"open"}
+{"v":1,"ev":"result","code":"opened","route":"router","node":"US-B","port":7901,"message":"已打开 工作 的 Claude App，出口 US-B（端口 7901）"}
