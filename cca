@@ -56,10 +56,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.6"
+VERSION="2.9.0-beta.7"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
+# 内置代理的内核：mihomo 官方 Release 里固定的版本，下载的 .gz 按这里的 SHA256 校验（换版本时两个一起改，取 GitHub 资产的 digest）
+CORE_VERSION="1.19.33"
+CORE_SHA256_ARM64="060b64b0f2c9a310831db0fe4adb2878de67bfa606c311813c1f13966aa504b6"
+CORE_SHA256_AMD64="eefe967b74312f70b64efa0dfa54929d00c7af8e94416e1b12df09863a40f35b"
 CCA_HOME="${CCA_HOME:-$HOME/.cca}"
 CFG="$CCA_HOME/config.json"
 TABLE="$CCA_HOME/accounts.json"
@@ -1766,10 +1770,10 @@ def api_settings(key, v):
     return json.dumps({'apiKeyHelper': helper, 'env': api_env(v)}, ensure_ascii=False)
 
 
-# ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、维护者参考节点里的节点密钥、Codex 的登录 token、
+# ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、维护者参考节点和内置代理里的节点密钥、Codex 的登录 token、
 # 各账号的 Chrome 和桌面 App 资料目录里的 cookie）
 CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'backup/clash-verge-*.yaml', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
-                   'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**')
+                   'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**', 'core/nodes.json', 'core/config.yaml')
 
 
 def cca_dir_args():
@@ -2555,16 +2559,21 @@ def local_want(c):
     m = local_names(c)
     want = [sorted(m.get(n, n) for n in c['nodes']), pool_size(c)]
     f = policy_fill()
-    if f and (c.get('local') or {}).get('fill') == f['id']:   # 参考节点写进了 Clash Verge 的配置：变了也要重新加载
-        want.append(f['id'])                                   # （没有参考节点时摘要和以前一样）
+    if (c.get('local') or {}).get('client') == 'builtin':   # 内置代理：节点定义变了（路由器上改了节点、参考节点更新）也要重新加载
+        defs = core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])
+        want.append(hashlib.sha1(json.dumps(defs, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest())
+    elif f and (c.get('local') or {}).get('fill') == f['id']:   # 参考节点写进了 Clash Verge 的配置：变了也要重新加载
+        want.append(f['id'])                                     # （没有参考节点时摘要和以前一样）
     return hashlib.sha1(json.dumps(want).encode('utf-8')).hexdigest()
 
 
 def local_names(c):
-    """账号表里的节点名（路由器上的叫法）→ 本机 Clash Verge 运行配置里的叫法：按服务器地址认（node_match），
-    对不上的不在结果里（照原名，客户端里没有就拒绝连接）。不是 Clash Verge（手动配置的客户端看不到它的配置）、
-    读不了运行配置时不换算"""
-    if (c.get('local') or {}).get('client') != 'clash-verge':
+    """账号表里的节点名（路由器上的叫法）→ 本机 Clash Verge 运行配置里（内置代理：它的节点定义里）的叫法：按服务器地址认
+    （node_match），对不上的不在结果里（照原名，客户端里没有就拒绝连接）。手动配置的客户端看不到它的配置、读不了运行配置时不换算"""
+    client = (c.get('local') or {}).get('client')
+    if client == 'builtin':
+        return core_names(c)
+    if client != 'clash-verge':
         return {}
     try:
         with open(os.path.join(VERGE_DIR, 'clash-verge.yaml'), encoding='utf-8') as f:
@@ -2574,6 +2583,11 @@ def local_names(c):
     secs = yaml_sections(lines)
     have = yaml_proxies(lines, secs)
     have += [(p['name'], fill_fp(p)) for p in fill_plan(have, yaml_names(lines, secs))[0]]   # cca 会补进去的参考节点也算有
+    return names_in(c, have)
+
+
+def names_in(c, have):
+    """可选节点在节点列表 have=[(名字, 摘要)] 里的叫法（按服务器地址认，见 node_match）；认不出的不在结果里"""
     out = {}
     for n in c['nodes']:
         m = node_match(n, node_ids(c).get(n, ''), have)
@@ -2692,7 +2706,7 @@ def verge_found():
 
 
 def local_label(client):
-    return 'Clash Verge' if client == 'clash-verge' else '本机 Clash'
+    return {'clash-verge': 'Clash Verge', 'builtin': '内置代理'}.get(client, '本机 Clash')
 
 
 def local_info(c):
@@ -2707,8 +2721,8 @@ def cmd_local_env():
     client = loc.get('client', '')
     prof = (verge_profile() if client == 'clash-verge' else None) or ('', '')
     n = pool_size(c)
-    sh(LOCAL_CLIENT=client, LOCAL_NAME=local_label(client),
-       LOCAL_CTL='unix:' + verge_sock() if client == 'clash-verge' else loc.get('controller', ''),
+    ctl = {'clash-verge': 'unix:' + verge_sock(), 'builtin': 'unix:@core'}.get(client, loc.get('controller', ''))   # @core：bash 的 core_sock
+    sh(LOCAL_CLIENT=client, LOCAL_NAME=local_label(client), LOCAL_CTL=ctl,
        LOCAL_SECRET=loc.get('secret', ''), LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=local_want(c),
        LOCAL_FILL=loc.get('fill', ''), LOCAL_FILL_SEEN=loc.get('fill_seen', ''), FILL_ID=(policy_fill() or {}).get('id', ''),
        VERGE_PROFILE=prof[0], VERGE_PROFILE_NAME=prof[1],
@@ -2717,7 +2731,7 @@ def cmd_local_env():
 
 
 def cmd_local_set(*kv):
-    """local-set 键 值 …；换客户端（或 client 设成空）时清掉旧的设置"""
+    """local-set 键 值 …；换客户端（或 client 设成空）时清掉旧的设置（关掉过内置代理的记号 core_off 也一起清掉）"""
     c = cfg_load()
     loc = c['local']
     for k, v in zip(kv[::2], kv[1::2]):
@@ -2726,6 +2740,166 @@ def cmd_local_set(*kv):
         if v or k != 'client':
             loc[k] = v
     cfg_save(c)
+
+
+# --- 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，界面 App 托管的 mihomo 内核（bash 的"内置代理"一节） ----------------
+CORE_DIR = os.path.join(CCA_HOME, 'core')
+CORE_NODES = os.path.join(CORE_DIR, 'nodes.json')     # 在家时从路由器拷的节点定义（带密钥，600）
+CORE_CONFIG = os.path.join(CORE_DIR, 'config.yaml')   # 内核的配置（用 JSON 写，YAML 也认；带密钥，600）
+CORE_STALE_AFTER = 12 * 3600
+
+
+def core_eligible(c):
+    """在外面会走内置代理的机器：本机客户端就是它；或者没配置本机客户端、也没装 Clash Verge、没关掉过内置代理（cca local off）"""
+    loc = c.get('local') or {}
+    client = loc.get('client') or ''
+    return client == 'builtin' or (not client and not loc.get('core_off') and not verge_found())
+
+
+def core_cache():
+    """core/nodes.json：{'proxies': [节点定义…], 'saved_at': 时间, 'nodes': 拷的时候的可选节点}；没有、读不了时是空的"""
+    j = load_quiet(CORE_NODES)
+    return j if isinstance(j, dict) and isinstance(j.get('proxies'), list) else {}
+
+
+def core_stale(c):
+    """在家时该不该从路由器重新拷节点定义：会走内置代理、配置了路由器，而缓存不在、超过 12 小时、可选节点变了"""
+    if not core_eligible(c) or not (c.get('router') or {}).get('host'):
+        return False
+    j = core_cache()
+    return not j or time.time() - (j.get('saved_at') or 0) > CORE_STALE_AFTER or j.get('nodes') != c['nodes']
+
+
+def core_defs():
+    """内置代理能用的节点定义（还没按可选节点挑）：路由器上拷来的，加上维护者参考节点里要补的（和往路由器、Clash Verge 里补的
+    同一套规则 fill_plan：同名的、服务器一样的以路由器的为准）"""
+    px = [p for p in core_cache().get('proxies', []) if isinstance(p, dict) and isinstance(p.get('name'), str)]
+    have = [(p['name'], fill_fp(p)) for p in px]
+    return px + fill_plan(have, [n for n, _ in have])[0]
+
+
+def core_names(c):
+    """可选节点在内置代理的节点定义里叫什么（按服务器地址认：路由器上改了名、还没同步时也认得出）"""
+    return names_in(c, [(p['name'], fill_fp(p)) for p in core_defs()])
+
+
+def core_pick(px, names):
+    """节点定义 px 里，names 要的节点和它们（一层层）经 dialer-proxy 用到的节点。dialer-proxy 指向的不是节点（策略组、找不到、
+    绕成圈）的不要：内置代理里没有那些组，带上它整份配置都加载不了。顺序照 px，同名的留第一个"""
+    by = {}
+    for p in px:
+        if isinstance(p, dict) and isinstance(p.get('name'), str):
+            by.setdefault(p['name'], p)
+    keep = {}
+
+    def need(n, path):
+        if n in keep:
+            return keep[n]
+        p = by.get(n)
+        if p is None or n in path:
+            return False
+        dp = p.get('dialer-proxy')
+        keep[n] = dp is None or (isinstance(dp, str) and need(dp, path | {n}))
+        return keep[n]
+
+    for n in names:
+        need(n, frozenset())
+    return [p for n, p in by.items() if keep.get(n)]
+
+
+def core_missing(c):
+    """可选节点里内置代理没有定义的（名字和服务器地址都对不上）"""
+    m = core_names(c)
+    have = {p['name'] for p in core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])}
+    return [n for n in c['nodes'] if m.get(n, n) not in have]
+
+
+def core_config(c, sock):
+    """内置代理的配置（mihomo）：只有本机 127.0.0.1 上的入站 cca-n，各自直通策略组 CCA-n（成员和 Clash Verge 里的一样：分到的节点
+    排第一，没有定义的拿掉，分到的没有就 REJECT 排第一）；不开通用的代理端口、系统代理、TUN、DNS，规则只有一条 MATCH,REJECT
+    （入站都指定了组，用不到规则）；控制接口只开 Unix socket；不记选中的节点（重新加载后选组里第一个，就是账号的节点）"""
+    m = local_names(c)
+    defs = core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])
+    have = {p['name'] for p in defs}
+    groups, listeners = [], []
+    for g, port, order in slot_orders(c, local=True):
+        groups.append({'name': g, 'type': 'select', 'proxies': local_members(order, have)})
+        listeners.append({'name': g.lower(), 'type': 'mixed', 'listen': '127.0.0.1', 'port': port, 'users': [], 'proxy': g})
+    return {'allow-lan': False, 'bind-address': '127.0.0.1', 'mode': 'rule', 'log-level': 'warning', 'find-process-mode': 'off',
+            'geo-auto-update': False, 'profile': {'store-selected': False, 'store-fake-ip': False},
+            'external-controller-unix': sock, 'proxies': defs, 'proxy-groups': groups, 'listeners': listeners,
+            'rules': ['MATCH,REJECT']}
+
+
+def core_dir():
+    os.makedirs(CORE_DIR, mode=0o700, exist_ok=True)
+    os.chmod(CORE_DIR, 0o700)
+
+
+def cmd_core_config(sock):
+    """写内置代理的配置 core/config.yaml（JSON 写的，mihomo 照 YAML 读）：内容变了才写，界面 App 看着这个文件，一变就重新读 state"""
+    c, t, _ = ctx()
+    text = json.dumps(core_config(c, sock), ensure_ascii=False, indent=1) + '\n'
+    try:
+        with open(CORE_CONFIG, encoding='utf-8') as f:
+            if f.read() == text:
+                return
+    except OSError:
+        pass
+    core_dir()
+    tmp = '%s.%d.tmp' % (CORE_CONFIG, os.getpid())
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(tmp, CORE_CONFIG)
+
+
+def cmd_core_nodes_save(path):
+    """路由器上的节点定义（{"proxies": [...]}，bash 从路由器端 defs 的 YAML 转的 JSON）→ core/nodes.json：只留可选节点（按名字和
+    服务器地址认）和它们经 dialer-proxy 用到的，再记下拷的时间和当时的可选节点（变了就重新拷）"""
+    c = cfg_load()
+    try:
+        j = json.load(sys.stdin) if path == '-' else load_quiet(path)
+    except ValueError:
+        j = None
+    px = j.get('proxies') if isinstance(j, dict) else None
+    if not isinstance(px, list):
+        die('读不懂路由器给的节点定义')
+    px = [p for p in px if isinstance(p, dict) and isinstance(p.get('name'), str)]
+    m = names_in(c, [(p['name'], fill_fp(p)) for p in px])
+    core_dir()
+    save_json(CORE_NODES, {'version': 1, 'saved_at': time.time(), 'nodes': c['nodes'],
+                           'proxies': core_pick(px, [m.get(n, n) for n in c['nodes']])}, mode=0o600, follow_symlinks=False)
+
+
+def cmd_core_stale(have_bin=''):
+    """在家启动后要在后台做的（cca _core-nodes 的参数）：nodes 从路由器拷节点定义，bin 下载内核文件（已经用内置代理、文件还不在）。
+    只读 config.json、节点缓存和 Clash Verge 在不在：每次在家启动都会跑，不能慢"""
+    c = cfg_load()
+    out = ['nodes'] if core_stale(c) else []
+    if (c.get('local') or {}).get('client') == 'builtin' and not have_bin and (c.get('router') or {}).get('host'):
+        out.append('bin')
+    print(' '.join(out))
+
+
+def cmd_core_missing():
+    print('、'.join(core_missing(cfg_load())))
+
+
+def cmd_core_summary():
+    """cca local status 里内置代理的一行：节点定义从哪来、多久以前拷的、缺哪些"""
+    c = cfg_load()
+    j = core_cache()
+    if j:
+        age = max(0, time.time() - (j.get('saved_at') or 0))
+        when = '%d 分钟前' % (age // 60) if age < 3600 else '%d 小时前' % (age // 3600) if age < 86400 * 2 else '%d 天前' % (age // 86400)
+        src = '从路由器拷的 %d 个（%s）' % (len(j['proxies']), when)
+    else:
+        src = '还没从路由器拷过（在家启动账号时会拷）'
+    names = {p['name'] for p in core_cache().get('proxies', []) if isinstance(p, dict)}
+    extra = [p['name'] for p in core_defs() if p['name'] not in names]
+    miss = core_missing(c)
+    print('节点定义：%s%s%s' % (src, '，维护者参考节点 %d 个' % len(extra) if extra else '',
+                              '；没有定义的节点：%s（用它们的账号在外面会被拒绝连接）' % '、'.join(miss) if miss else ''))
 
 
 def write_text(path, text):
@@ -4705,6 +4879,8 @@ CMDS = {
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
     'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet, 'local-node': cmd_local_node,
+    'core-config': cmd_core_config, 'core-nodes-save': cmd_core_nodes_save, 'core-missing': cmd_core_missing, 'core-summary': cmd_core_summary,
+    'core-stale': cmd_core_stale,
     'fill-acc': cmd_fill_acc, 'file-replace': cmd_file_replace,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
@@ -5367,8 +5543,7 @@ status() {
 	if [ -f "$LOG" ]; then echo "最近日志："; tail -n 5 "$LOG"; fi
 	return 0
 }
-nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型；
-	         # ShellCrash 的自定义节点 C<TAB>名字（不能当出口，Mac 端补参考节点时不占用它们的名字）
+nodes_cf() {   # nodes / defs 读哪份配置（设好 cf），ShellCrash 的自定义节点在哪（设好 cust）
 	cust=""
 	if [ "$BK" = sc ]; then
 		# ShellCrash 只列订阅配置里的：它的自定义节点、策略组启动时才拼进来（自定义配置出错时又会去掉），钩子用不上
@@ -5380,6 +5555,17 @@ nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（
 		[ -n "$cf" ] && [ -f "$cf" ] || cf=$(source_config)   # 运行配置不见了：OpenClash 自己的配置里节点一样
 	fi
 	[ -n "$cf" ] && [ -f "$cf" ] || { echo "找不到 ${NAME} 的配置" >&2; return 1; }
+}
+defs() {   # 节点的完整定义（YAML 的 proxies 列表，带密钥）：Mac 在家时拷一份给内置代理（只留可选节点，在 Mac 上挑）。读的配置和 nodes 一样
+	nodes_cf || return 1
+	ruby -E UTF-8 -ryaml -e "$YL"'
+		c = yl(ARGV[0]) || {}
+		print YAML.dump({"proxies" => (c["proxies"] || []).select { |p| p.is_a?(Hash) }})
+		print "\n# cca-defs-end\n"' "$cf"
+}
+nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型；
+	         # ShellCrash 的自定义节点 C<TAB>名字（不能当出口，Mac 端补参考节点时不占用它们的名字）
+	nodes_cf || return 1
 	ruby -E UTF-8 -ryaml -e "$YL"'
 		c = yl(ARGV[0]) || {}
 		f = lambda { |v| v.to_s.tr("\t\n", "  ") }
@@ -5428,8 +5614,9 @@ case "$1" in
 	ensure-now) ensure_now ;;
 	status) status ;;
 	nodes) nodes ;;
+	defs) defs ;;
 	uninstall) uninstall ;;
-	*) echo "用法: $0 hook <配置>|sc-hook <配置>|install|apply|ensure|ensure-now|status|nodes|uninstall" >&2; exit 2 ;;
+	*) echo "用法: $0 hook <配置>|sc-hook <配置>|install|apply|ensure|ensure-now|status|nodes|defs|uninstall" >&2; exit 2 ;;
 esac
 SH
 }
@@ -6650,6 +6837,7 @@ route_router() {   # 在家：经路由器的端口池
 		fail_warn port_closed "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
 		return 1
 	}
+	core_nodes_hook   # 在外面会走内置代理的机器：节点定义旧了就在后台从路由器拷一份新的
 	ROUTE=router
 }
 route_note() {   # 给提示用：走的是哪个端口
@@ -6959,6 +7147,7 @@ VERGE_ID="io.github.clash-verge-rev.clash-verge-rev"
 load_local() {
 	eval "$(py local-env)"
 	[ "$LOCAL_CTL" = unix: ] && LOCAL_CTL="unix:$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)verge-mihomo.sock"
+	[ "$LOCAL_CTL" = unix:@core ] && LOCAL_CTL="unix:$(core_sock)"   # 内置代理（见下面"内置代理"一节）
 	return 0
 }
 local_ready() { [ -n "$LOCAL_CLIENT" ]; }
@@ -7114,6 +7303,7 @@ local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽�
 local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本最新、参考节点写进了 Clash Verge 的配置、端口池在运行中的内核里、
 	               # 每个槽位切到账号的节点
 	load_local
+	[ "$LOCAL_CLIENT" = builtin ] && { core_ensure; return; }
 	local_up || return 1
 	VFILL=""; VFILL_NEW=""
 	if [ "$LOCAL_CLIENT" = clash-verge ]; then verge_script || return 1; verge_fill_prepare; fi
@@ -7121,10 +7311,16 @@ local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本�
 	local_select_all && return 0
 	local_apply && local_select_all   # 组不在运行中的内核里（客户端重新生成过配置，却没带上端口池）
 }
-local_offer() {   # 在外面、还没配置本机 Clash：说明情况；交互时接着配置
+local_offer() {   # 在外面、还没配置本机 Clash：交互时接着配置（cca local setup：没装 Clash Verge 时默认用内置代理）；界面 App 里没装
+	               # Clash Verge 时问一句改用内置代理（同意框，同意后带着授权重跑）；其它非交互的（启动器、脚本）说清楚，交给终端
+	local why
 	warn "连不上路由器${ROUTER_HOST:+ ${ROUTER_HOST}}（可能不在家里的网络）"
 	if ! interactive; then
-		fail_warn local_unavailable "在外面要改走本机的 Clash 客户端（例如 Clash Verge）：在终端里运行 cca local setup 配置一次"
+		if [ "$VERGE_FOUND" != 1 ] && core_possible && { [ -n "${CCA_EVENTS:-}" ] || consent_granted builtin_core; }; then core_offer; return; fi
+		why="在外面要改走本机的 Clash 客户端（例如 Clash Verge）"
+		[ "$VERGE_FOUND" = 1 ] || why="在外面要改走本机的 Clash 客户端（没装的话可以用 cca 内置的代理）"
+		[ "$VERGE_FOUND" = 1 ] || core_possible || why="在外面要改走本机的 Clash 客户端：这台 Mac 上没找到（内置代理要 macOS 26 或更新），装一个（例如 Clash Verge）后"
+		fail_warn local_unavailable "${why}：在终端里运行 cca local setup 配置一次"
 		TOOL=claude gui_terminal local_setup "在外面要改走本机的 Clash 客户端：在终端里配置一次" local setup
 		return 1
 	fi
@@ -7137,7 +7333,11 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 	local_ensure || { gui_fail local_unavailable "本机 ${LOCAL_NAME:-Clash} 的端口池没有就绪"; return 1; }
 	lctl GET "/proxies/CCA-${ACC_SLOT}"
 	if [ "$(json_get now)" != "$(py local-node "$ACC_NODE")" ]; then
-		fail_warn node_missing "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」（名字和服务器地址都对不上）：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 ${CMD} edit 换一个两边都有的节点）"
+		if [ "$LOCAL_CLIENT" = builtin ]; then
+			fail_warn node_missing "内置代理里没有节点「${ACC_NODE}」的定义：${ACC_NAME} 在外面用不了，为避免走错出口已停止（在家连上路由器时 cca 会拷一份节点定义；也可以用 ${CMD} edit 换一个节点）"
+		else
+			fail_warn node_missing "本机 ${LOCAL_NAME} 里没有节点「${ACC_NODE}」（名字和服务器地址都对不上）：${ACC_NAME} 在外面用不了，为避免走错出口已停止（可以用 ${CMD} edit 换一个两边都有的节点）"
+		fi
 		return 1
 	fi
 	port_open 127.0.0.1 "$ACC_PORT" || { fail_warn port_closed "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
@@ -7145,28 +7345,42 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 	ROUTE=local
 }
 cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户端按提示手动加配置
-	local miss
+	local miss was
 	need_tty
 	py validate all || die "账号表有错误：先修正（Claude 账号用 cca edit，Codex 账号用 cca codex edit）"   # 本机端口池里有各工具的账号
 	load_local
 	[ "$LOCAL_SLOTS" -gt 0 ] || { warn "还没有账号（${CMD} add）"; return 1; }
-	[ "$VERGE_FOUND" = 1 ] || { manual_setup; return; }
+	[ "$VERGE_FOUND" = 1 ] || { local_setup_other; return; }
 	say ""
 	say "  检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
 	say "  开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组 CCA-n，启动账号前 cca 把它切到账号的节点；然后让 Clash Verge 重新加载一次配置。"
 	say "  原来的配置、规则和系统代理都不变；不想用了运行 cca local off 删掉。"
 	[ -z "$FILL_ID" ] || say "  维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。"
 	confirm "现在配置 Clash Verge 吗？" y || return 1
+	was="$LOCAL_CLIENT"
 	py local-set client clash-verge || return 1
+	[ "$was" != builtin ] || core_retire
 	local_ensure || return 1
 	miss=$(py local-missing "$VERGE_DIR/clash-verge.yaml")
 	[ -n "$miss" ] && warn "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名（或服务器地址相同）的节点"
 	okay "本机端口池已就绪：Clash Verge 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
 }
-manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：用户把配置加进去，cca 经它的外部控制接口切换节点
-	local ctl secret
+local_setup_other() {   # 没装 Clash Verge：用内置代理（默认），或者手动配置别的基于 mihomo 的客户端
 	say ""
-	say "  没找到 Clash Verge。其它基于 mihomo（Clash Meta 内核）的客户端也可以，要手动做两件事："
+	say "  没找到 Clash Verge。可以用 cca 内置的代理：在界面 App 里跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
+	say "  每个端口走一个账号的节点（第一次要下载约 21MB），节点用在家时从路由器拷的那份；也可以手动配置别的基于 mihomo 的客户端。"
+	if ! core_possible; then
+		say "  内置代理要 macOS 26 或更新（界面 App 的要求），这台 Mac 只能手动配置别的客户端。"
+		manual_setup
+		return
+	fi
+	confirm "用内置代理吗？（选 n 手动配置别的客户端）" y || { manual_setup; return; }
+	core_setup
+}
+manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：用户把配置加进去，cca 经它的外部控制接口切换节点
+	local ctl secret was="$LOCAL_CLIENT"
+	say ""
+	say "  其它基于 mihomo（Clash Meta 内核）的客户端也可以，要手动做两件事："
 	say "  1. 把下面 listeners 和 proxy-groups 的条目，分别追加到客户端配置（或覆写）里的同名列表，保存并重新加载："
 	say ""
 	py local-snippet | sed 's/^/       /' >&2
@@ -7178,6 +7392,7 @@ manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：�
 	case "$ctl" in unix:*|http://*|https://*) ;; *) ctl="http://$ctl" ;; esac
 	secret=$(ask "  密钥 secret（没有就直接回车）：" "")
 	py local-set client manual controller "$ctl" secret "$secret" || return 1
+	[ "$was" != builtin ] || core_retire
 	load_local
 	lctl GET /version
 	if [ "$LCODE" != 200 ]; then
@@ -7195,6 +7410,10 @@ local_remove() {   # 删掉 Clash Verge 全局扩展脚本里 cca 的那一段�
 		py local-script "$VERGE_DIR/profiles/Script.js" remove || warn "改 Clash Verge 的全局扩展脚本失败"
 		lctl GET /version
 		if [ "$LCODE" = 200 ]; then verge_apply remove || warn "端口池要等 Clash Verge 下次重新加载配置后才消失"; fi
+	elif [ "$LOCAL_CLIENT" = builtin ]; then
+		py local-set client '' core_off 1   # 记下关掉过：在家不再拷节点定义
+		core_retire
+		return 0
 	elif local_ready; then
 		info "请自己从本机 Clash 客户端的配置里删掉 cca-1… 入站和 CCA-1… 策略组"
 	fi
@@ -7211,7 +7430,15 @@ cmd_local_status() {
 		return 0
 	fi
 	lctl GET /version
-	[ "$LCODE" = 200 ] || { warn "${LOCAL_NAME} 没在运行（控制接口 ${LOCAL_CTL}）"; return 0; }
+	if [ "$LCODE" != 200 ]; then
+		if [ "$LOCAL_CLIENT" = builtin ]; then
+			info "内置代理的内核没在运行：它在界面 App 里运行，在外面启动账号时会自动在后台打开 App"
+			say "  $(py core-summary)"
+			return 0
+		fi
+		warn "${LOCAL_NAME} 没在运行（控制接口 ${LOCAL_CTL}）"
+		return 0
+	fi
 	say ""
 	say "  ${LOCAL_NAME}（控制接口 ${LOCAL_CTL}）"
 	while IFS=$'\t' read -r g p node name; do
@@ -7224,6 +7451,7 @@ cmd_local_status() {
 		if [ "$LOCAL_FILL" = "$FILL_ID" ]; then say "  参考节点：已写进 Clash Verge 当前的配置「${VERGE_PROFILE_NAME}」"
 		else say "  参考节点：还没写进 Clash Verge 当前的配置${VERGE_PROFILE_NAME:+「${VERGE_PROFILE_NAME}」}（在外面启动账号时写）"; fi
 	fi
+	[ "$LOCAL_CLIENT" != builtin ] || say "  $(py core-summary)"
 	say ""
 }
 cmd_local() {
@@ -7232,11 +7460,224 @@ cmd_local() {
 		setup) cmd_local_setup ;;
 		off)
 			load_local
-			local_ready || { info "还没配置本机 Clash"; return 0; }
+			if ! local_ready; then   # 没配置本机客户端：记下不用内置代理（在家不再拷节点定义），拷过的删掉
+				py local-set client '' core_off 1
+				rm -f "$CORE_DIR/config.yaml" "$CORE_DIR/nodes.json"
+				info "还没配置本机 Clash；已关掉内置代理的准备（在家不再从路由器拷节点定义）"
+				return 0
+			fi
 			local_remove
-			okay "已移除本机 Clash 的端口池（之后在外面连不上路由器时会再问）" ;;
+			if [ "$LOCAL_CLIENT" = builtin ]; then okay "已关掉内置代理，拷来的节点定义删掉了（之后在外面连不上路由器时会再问）"
+			else okay "已移除本机 Clash 的端口池（之后在外面连不上路由器时会再问）"; fi ;;
 		*) die "用法: cca local [status|setup|off]" ;;
 	esac
+}
+
+# ---------------------------------------------------------------------------
+# 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用 cca 自己带的 mihomo 内核（config.json 的 local.client 是 builtin）。
+# 端口池和本机 Clash 的一样（127.0.0.1:7901…，入站 cca-n 直通策略组 CCA-n），切换节点、端口检查、泄露检测都走上面那一套。
+# - 内核由界面 App 托管：App 读到本机客户端是内置代理就运行 cca _core run（生成配置后 exec 内核），退出了就重启，App 退出时停掉。
+#   App 没开着时 cca 在后台打开它（--core：不弹主窗口，只留菜单栏图标）
+# - 内核文件第一次用时从 mihomo 官方 Release 下载，按开头写死的 SHA256 校验（cca 本身有签名，校验值可信）
+# - 节点：在家时从路由器拷一份可选节点的完整定义（core/nodes.json，路由器端的 defs），再补上维护者参考节点里路由器上没有的；
+#   两边都没有定义的节点在组里 REJECT 排第一（宁可断开也不换出口）
+# - 配置 core/config.yaml 只有这些入站、组和节点：不开通用的代理端口、系统代理、TUN、DNS；控制接口只开 Unix socket
+# ---------------------------------------------------------------------------
+CORE_DIR="$CCA_HOME/core"
+core_bin() { printf '%s' "$CORE_DIR/mihomo-v$CORE_VERSION"; }
+core_sock() {   # 控制接口的 Unix socket：放在系统给这个用户的临时目录（和 Clash Verge 一样；~/.cca 下的路径可能超过 macOS 的
+	             # 104 字节上限）。名字带上 ~/.cca 的摘要：两份 ~/.cca（比如测试的沙箱）不会用到同一个
+	local d h
+	d=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)
+	h=$(md5 -qs "$CCA_HOME" 2>/dev/null | cut -c1-8)
+	printf '%s' "${d:-$CORE_DIR/}cca-core-${h:-0}.sock"
+}
+core_possible() { gui_os_ok; }   # 内置代理在界面 App 里运行：要 macOS 26 或更新
+core_asset() {   # 这台 Mac 用哪个内核文件和它的校验值：Apple 芯片（Rosetta 下运行的 cca 也算）用 arm64，Intel 用 amd64-compatible
+	if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then printf 'arm64 %s' "$CORE_SHA256_ARM64"
+	else printf 'amd64-compatible %s' "$CORE_SHA256_AMD64"; fi
+}
+core_fetch() {   # 内核文件不在就下载：mihomo 官方 Release 里固定的版本，.gz 的 SHA256 对上、能运行才换上（旧版本的删掉）；失败原因在 FETCH_ERR
+	local arch sha url tmp got f
+	[ -x "$(core_bin)" ] && return 0
+	read -r arch sha <<< "$(core_asset)"
+	url="https://github.com/MetaCubeX/mihomo/releases/download/v${CORE_VERSION}/mihomo-darwin-${arch}-v${CORE_VERSION}.gz"
+	FETCH_ERR=""
+	if ! ( umask 077; mkdir -p "$CORE_DIR" ) || ! chmod 700 "$CORE_DIR" || ! tmp=$(mktemp -d "$CORE_DIR/dl.XXXXXX"); then
+		FETCH_ERR="建不了 ${CORE_DIR}"
+		return 1
+	fi
+	info "正在下载内置代理的内核 mihomo v${CORE_VERSION}（约 21MB，只有第一次）…"
+	if ! retry3 curl -fsSL --connect-timeout 15 -m 300 -o "$tmp/m.gz" "$url" 2>/dev/null; then
+		FETCH_ERR="下载失败（${url}）"
+	elif got=$(shasum -a 256 "$tmp/m.gz" | cut -d' ' -f1) && [ "$got" != "$sha" ]; then
+		FETCH_ERR="下载的文件校验不对（应为 ${sha}，实际是 ${got}），没有用它"
+	elif ! gunzip -c "$tmp/m.gz" > "$tmp/m" 2>/dev/null || ! chmod 755 "$tmp/m" || ! "$tmp/m" -v 2>/dev/null | grep -qF "v${CORE_VERSION}"; then
+		FETCH_ERR="内核文件运行不了"
+	elif mv -f "$tmp/m" "$(core_bin)"; then
+		rm -rf "$tmp"
+		for f in "$CORE_DIR"/mihomo-v*; do [ "$f" = "$(core_bin)" ] || rm -f "$f"; done
+		return 0
+	else
+		FETCH_ERR="换上内核文件失败"
+	fi
+	rm -rf "$tmp"
+	return 1
+}
+core_offer() {   # 界面 App 里、在外面、没找到 Clash Verge：改用内置代理吗（同意框，同意后带着授权重跑；终端里走 cca local setup）
+	consent builtin_core "" "改用内置代理" "没找到 Clash 客户端，改用 cca 内置的代理吗？" \
+		"cca 在界面 App 里跑一个 mihomo 内核，每个账号照样走自己的节点（第一次要下载约 21MB；节点用在家时从路由器拷的那份）。用别的 Clash 客户端的话，在终端里运行 cca local setup" y ||
+		{ gui_fail local_unavailable "没有启用内置代理"; return 1; }
+	py local-set client builtin || return 1
+	load_local
+	okay "已改用内置代理（不想用了运行 cca local off）"
+}
+core_setup() {   # cca local setup 选了内置代理：在家时先从路由器拷节点定义，然后让它就绪
+	local miss
+	py local-set client builtin || return 1
+	load_local
+	if at_home; then
+		info "正在从路由器拷节点定义…"
+		core_nodes_fetch || warn "没能从路由器拷到节点定义：在家启动账号时会再试"
+	fi
+	miss=$(py core-missing)
+	[ -z "$miss" ] || warn "内置代理里没有这些节点的定义：${miss}。用它们的账号在外面会被拒绝连接，直到在家连上路由器、拷到它们"
+	local_ensure || return 1
+	okay "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}（在界面 App 里运行），连不上路由器时账号自动走这里"
+}
+core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面 App 在托管内核、端口都在监听、每个槽位切到账号的节点
+	core_possible || { warn "内置代理在界面 App 里运行，要 macOS 26 或更新"; return 1; }
+	core_fetch || { warn "内置代理的内核没装上：${FETCH_ERR}"; return 1; }
+	py core-config "$(core_sock)" || { warn "生成内置代理的配置失败"; return 1; }
+	core_up || return 1
+	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || ! local_ports_ok; then core_reload || return 1; fi
+	local_select_all && return 0
+	core_reload && local_select_all
+}
+core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App 起它，最多等 20 秒
+	local i
+	lctl GET /version
+	[ "$LCODE" = 200 ] && return 0
+	core_launch || return 1
+	for i in $(seq 1 80); do
+		sleep 0.25
+		lctl GET /version
+		[ "$LCODE" = 200 ] && return 0
+	done
+	if ! dev_mode && gui_ours "$GUI_APP" && [ "$(gui_ver "$GUI_APP")" != "$VERSION" ]; then
+		warn "等了 20 秒，内置代理的内核还没就绪：开着的界面 App（$(gui_ver "$GUI_APP")）和 cca（${VERSION}）版本不同，旧版不会运行内置代理。在 App 里点「更新并重新打开」，或者退出它再运行 cca gui"
+	else
+		warn "等了 20 秒，内置代理的内核还没就绪（界面 App 的日志：~/Library/Caches/local.cca.app/core.log）"
+	fi
+	return 1
+}
+core_launch() {   # 内核由界面 App 托管：App 没开就在后台打开它（--core：不弹主窗口，只留菜单栏图标），它读到本机客户端是内置代理就
+	               # 运行 cca _core run；已经开着的 App 看到 core/config.yaml 变了会重新读 state、接着起内核（不再 open：会弹出主窗口）
+	local app
+	if dev_mode; then   # 开发模式：用 macos/ 编出来的 App（和 cca gui 一样）
+		app=$(gui_dev_build) || return 1
+		if pgrep -f "$app/Contents/MacOS/cca( |\$)" >/dev/null 2>&1; then touch "$CORE_DIR/config.yaml"; return 0; fi
+		open -g --env CCA_GUI_CCA="$SELF" "$app" --args --core || { warn "打开 ${app} 失败"; return 1; }
+		return 0
+	fi
+	if ! gui_ours "$GUI_APP"; then
+		if ! interactive; then
+			fail_warn local_unavailable "内置代理在 cca 的界面 App 里运行，这台 Mac 还没装：在终端里运行 cca local setup"
+			TOOL=claude gui_terminal local_setup "内置代理要先装界面 App：在终端里配置一次" local setup
+			return 1
+		fi
+		confirm "内置代理在 cca 的界面 App 里运行，现在安装界面 App 吗？" y || return 1
+		( cmd_gui ) || return 1   # 装好后照常打开它（这次有窗口）
+		return 0
+	fi
+	if gui_running; then   # 开着：碰一下配置文件提醒它（重新读 state；内核正在退避重启的话马上重启）
+		touch "$CORE_DIR/config.yaml"
+		return 0
+	fi
+	open -g "$GUI_APP" --args --core || { warn "打开 ${GUI_APP} 失败"; return 1; }
+}
+core_reload() {   # 照账号表重新生成配置，交给在跑的内核重新加载（PUT /configs），等端口都监听上
+	local i
+	py core-config "$(core_sock)" || { warn "生成内置代理的配置失败"; return 1; }
+	lctl PUT '/configs?force=true' "{\"path\":$(jstr "$CORE_DIR/config.yaml")}"
+	case "$LCODE" in
+		2??) ;;
+		*) warn "内置代理的内核没接受新配置（HTTP ${LCODE}）：$(printf '%s' "$LBODY" | head -c 200)"; return 1 ;;
+	esac
+	for i in $(seq 1 20); do local_ports_ok && break; sleep 0.25; done
+	local_ports_ok || { warn "内置代理重新加载了配置，但端口 ${LOCAL_FIRST}–${LOCAL_LAST} 没有全部监听（可能被别的程序占用了）"; return 1; }
+	py local-set applied "$LOCAL_WANT"
+}
+core_retire() {   # 不再用内置代理（关掉、换成别的客户端；先改好 config.json 里的客户端）：删掉配置和拷来的节点（有密钥），等内核停下，
+	              # 免得它还占着端口。界面 App 看到配置没了会重新读 state、停掉它；App 没开着（或者 10 秒还没停）就按 pid 文件停掉
+	local i ctl="$LOCAL_CTL"
+	rm -f "$CORE_DIR/config.yaml" "$CORE_DIR/nodes.json"
+	if gui_running; then
+		LOCAL_CTL="unix:$(core_sock)"
+		for i in $(seq 1 40); do lctl GET /version; [ "$LCODE" = 200 ] || break; sleep 0.25; done
+		LOCAL_CTL="$ctl"
+	fi
+	core_stop_stale
+}
+core_stop_stale() {   # 别的内核还占着端口（界面 App 崩溃后留下的：它在自己的会话里，没跟着退出）：按 pid 文件认出来停掉
+	local pid i
+	pid=$(cat "$CORE_DIR/mihomo.pid" 2>/dev/null)
+	[[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" != "$$" ] || return 0
+	ps -p "$pid" -o command= 2>/dev/null | grep -qF "$CORE_DIR/mihomo-v" || return 0
+	kill "$pid" 2>/dev/null
+	for i in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || return 0; sleep 0.25; done
+	kill -9 "$pid" 2>/dev/null
+	return 0
+}
+cmd_core() {   # cca _core run：界面 App 托管的内置代理（前台运行）。照账号表生成配置后 exec 内核：App 的子进程就是内核本身
+	[ "${1:-}" = run ] || die "用法: cca _core run"
+	[ -f "$CFG" ] || die "还没安装：请在终端里运行 $SELF install"
+	load_local
+	[ "$LOCAL_CLIENT" = builtin ] || die "本机客户端不是内置代理（cca local setup 可以改用它）"
+	core_fetch || die "内置代理的内核没装上：${FETCH_ERR}"
+	core_stop_stale
+	py core-config "$(core_sock)" || die "生成内置代理的配置失败"
+	rm -f "$(core_sock)"   # 上次没删掉的 socket 文件会让内核绑定失败
+	printf '%s\n' "$$" > "$CORE_DIR/mihomo.pid"
+	exec "$(core_bin)" -d "$CORE_DIR" -f "$CORE_DIR/config.yaml"
+}
+# 路由器端 defs 输出的 YAML（最后一行是结束标记：没拷完整的不要）→ JSON（这台 Mac 自带的 ruby；safe_load：订阅里的节点定义不能变成
+# 别的对象；日期、符号照字符串收，免得一个怪值让整次拷贝失败）
+CORE_YAML2JSON='s = STDIN.read
+abort "cca: 节点定义没拷完整" unless s.end_with?("\n# cca-defs-end\n")
+k = [Date, Time, Symbol]
+d = begin YAML.safe_load(s, permitted_classes: k, aliases: true) rescue ArgumentError; YAML.safe_load(s, k, [], true) end
+abort "cca: 没读到节点" unless d.is_a?(Hash) && d["proxies"].is_a?(Array)
+print JSON.generate({"proxies" => d["proxies"].select { |p| p.is_a?(Hash) }})'
+core_nodes_fetch() {   # 在家：路由器上节点的完整定义拷一份进 core/nodes.json（只留可选节点和它们经 dialer-proxy 用到的），在外面给内置代理用。
+	                    # 全程走管道（有密钥，不落盘）：路由器端 defs → ruby 转 JSON → py 只在读到完整的 JSON 时才写
+	router_ready || return 1
+	command -v ruby >/dev/null 2>&1 || { warn "这台 Mac 上没有 ruby（macOS 自带 /usr/bin/ruby），没法从路由器拷节点定义给内置代理"; return 1; }
+	router_sh | rsh 'sh -s defs' 2>/dev/null | ruby -E UTF-8 -rdate -ryaml -rjson -e "$CORE_YAML2JSON" 2>/dev/null | py core-nodes-save -
+}
+core_nodes_hook() {   # 在家启动账号之后：会走内置代理的机器（本机客户端是它，或者没配置、也没装 Clash Verge），节点定义的缓存不在、
+	                   # 超过 12 小时、可选节点变了，就在后台从路由器拷一份新的；已经用内置代理的，内核文件不在（第一次、换了版本）也在家先下好
+	                   # （在外面直连 GitHub 可能很慢）。都在后台，不拖慢启动
+	local st
+	core_possible || return 0
+	st=$(py core-stale "$([ -x "$(core_bin)" ] && echo 1)")
+	[ -n "$st" ] || return 0
+	( unset CCA_EVENTS CCA_GRANT CCA_RO; "$SELF" _core-nodes $st </dev/null >/dev/null 2>&1 & )
+}
+cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器拷节点定义、下载内核文件；同一时间只跑一个
+	local lk="$CCA_HOME/core-nodes.lock" a
+	[ -f "$CFG" ] || return 0
+	[ -n "$(find "$lk" -maxdepth 0 -mmin +10 2>/dev/null)" ] && rmdir "$lk"   # 上次异常退出留下的锁
+	mkdir "$lk" 2>/dev/null || return 0
+	[ $# -gt 0 ] || set -- nodes
+	for a in "$@"; do
+		case "$a" in
+			nodes) core_nodes_fetch ;;
+			bin) core_fetch >/dev/null 2>&1 ;;
+		esac
+	done
+	rmdir "$lk" 2>/dev/null
+	return 0
 }
 
 cmd_check() {   # cca check [账号] [--json]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
@@ -7734,11 +8175,12 @@ gui_live() {   # 端口池的实况：在家看路由器（经 SSH 跑这一版 
 	printf '%s\n' "$out" | py gui-live "$route" "$host" "$rc" "${AT_HOME:-no}"
 }
 
-gui_supported() {   # 界面 App 要 macOS 26 或更新（Liquid Glass）
+gui_os_major() { local v; v=$(sw_vers -productVersion 2>/dev/null); printf '%s' "${CCA_GUI_OS:-${v%%.*}}"; }
+gui_os_ok() { [ "$(gui_os_major)" -ge 26 ] 2>/dev/null; }   # 界面 App 要 macOS 26 或更新（Liquid Glass）
+gui_supported() {
 	local v
-	v=$(sw_vers -productVersion 2>/dev/null)
-	v="${CCA_GUI_OS:-${v%%.*}}"
-	[ "${v:-0}" -ge 26 ] 2>/dev/null && return 0
+	gui_os_ok && return 0
+	v=$(gui_os_major)
 	warn "界面 App 要 macOS 26 或更新（这台 Mac 是 macOS ${v:-?}）"
 	return 1
 }
@@ -8208,7 +8650,7 @@ cmd_restore() {
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证（第三方 API 账号删掉钥匙串里的 key）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
-	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池"
+	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理（用过的话）：停掉它的内核"
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
 	say "  · ~/.claude、~/.claude.json 和 ~/.codex 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
@@ -8240,9 +8682,12 @@ cmd_restore() {
 	fi
 	load_local
 	if local_ready; then local_remove; info "本机 ${LOCAL_NAME} 里 cca 的端口池已移除"; fi
+	core_stop_stale   # 内置代理的内核（界面 App 退出时会停掉它，这里是 App 崩溃后留下的）
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥
-	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
+	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。内置代理的节点密钥、配置和内核文件不打包
+	# （bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core 的目录）
+	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
+		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null ) &&
 		info "配置备份：$bk"
 	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
@@ -8314,11 +8759,12 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              运行配置文件不见了时，重载换成重启 OpenClash / ShellCrash（同样先问）
   cca router status|nodes|log|ssh|uninstall
 
-出门在外（连不上路由器时改走本机的 Clash 客户端，例如 Clash Verge）
+出门在外（连不上路由器时改走本机的 Clash 客户端，例如 Clash Verge；没有的话用 cca 内置的代理）
   cca local [status]         现在走哪条路；本机端口池各端口的监听状态和选中的节点
   cca local setup            配置本机 Clash：Clash Verge 自动配置（全局扩展脚本里加一段，不用重启它）；
-                             其它基于 mihomo 的客户端按提示手动加配置。在外面第一次启动时也会问
-  cca local off              删掉 Clash Verge 全局扩展脚本里 cca 的那一段，移除本机端口池
+                             没装 Clash Verge 时默认用内置代理（mihomo 内核，在界面 App 里运行；节点在家时从路由器拷一份），
+                             也可以按提示手动配置别的基于 mihomo 的客户端。在外面第一次启动时也会问
+  cca local off              删掉 Clash Verge 全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理则停掉内核、删掉拷来的节点
                              平时自动判断：连得上路由器走路由器，连不上走本机 Clash；
                              想固定一种，把 ${CFG} 的 route 改成 router 或 local
 
@@ -8348,7 +8794,7 @@ main() {
 	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch) unset CCA_EVENTS CCA_GRANT CCA_RO ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes) unset CCA_EVENTS CCA_GRANT CCA_RO ;; esac
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;
@@ -8367,6 +8813,8 @@ main() {
 		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
 		_gui) shift; cmd_gui_api "$@" ;;   # 图形界面的只读接口（macos/PROTOCOL.md）
 		_gui-fetch) cmd_gui_fetch ;;
+		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）
+		_core-nodes) shift; cmd_core_nodes "$@" ;;   # 后台：从路由器拷节点定义、下载内核给内置代理
 		gui) shift; cmd_gui "$@" ;;
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;

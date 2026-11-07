@@ -4,11 +4,15 @@ import SwiftUI
 /// 菜单栏图标：模板图（跟着菜单栏变色）；路由器待同步、有槽位选错节点、或者有账号用量 ≥ 90% 时右上角带个点。
 struct MenuBarLabel: View {
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let attention = model.needsAttention
         Image(nsImage: MenuBarIcon.image(attention: attention))
             .accessibilityLabel(attention ? "cca（有需要注意的事）" : "cca")
+            // 菜单栏图标启动时就有：在这里登记“打开主窗口”。--core 启动时主窗口和面板都还没建，Finder、cca gui 再打开 App
+            // （applicationShouldHandleReopen → showMain）也能把主窗口开出来
+            .onAppear { WindowOpener.shared.open = { openWindow(id: "main") } }
     }
 }
 
@@ -99,8 +103,7 @@ struct MenuBarContent: View {
                 .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
                 Spacer()
                 Button("打开主窗口") {
-                    openWindow(id: "main")
-                    NSApp.activate()
+                    WindowOpener.shared.showMain()   // 只在菜单栏里托管内置代理时（--core 启动）顺便换回 Dock 图标
                 }
                 Button("退出") { NSApp.terminate(nil) }
             }

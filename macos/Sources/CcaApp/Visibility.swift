@@ -83,6 +83,8 @@ final class WindowOpener {
     var open: (() -> Void)?
 
     func showMain() {
+        // 只在菜单栏里托管内置代理时（--core 启动）没有 Dock 图标：要显示主窗口了，换回普通 App
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         NSApp.activate()
         if let open {
             open()

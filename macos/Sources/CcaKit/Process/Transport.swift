@@ -42,6 +42,24 @@ protocol Transport: Sendable {
     func send(_ request: CcaRequest, onEvent: (@Sendable (CcaEvent) -> Void)?) async throws -> CcaResponse
     /// 后台启动、不等它（`gui update --relaunch`）。
     func spawnDetached(_ request: CcaRequest) throws
+    /// 内置代理的内核（PROTOCOL 7）：后台运行 `cca _core run`，不限时，输出追加进 logPath；退出时（后台线程上）调 onExit。
+    func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle
+}
+
+/// 一个在跑的内置代理内核：停掉它（wait：等它退出再返回，App 退出前用）。
+protocol CoreHandle: AnyObject, Sendable {
+    func terminate(wait: Bool)
+}
+
+struct CoreUnsupported: Error, CustomStringConvertible {
+    var description: String { "演示数据不运行内置代理" }
+}
+
+extension Transport {
+    /// 演示数据、测试替身：不运行内核。
+    func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle {
+        throw CoreUnsupported()
+    }
 }
 
 struct ProcessTransport: Transport {
@@ -130,5 +148,23 @@ struct ProcessTransport: Transport {
         let spec = ProcessSpec(executable: ccaPath, arguments: request.arguments, environment: env, timeout: nil)
         let log = newFile(in: runsDirectory, "detached-\(UUID().uuidString).log")
         try CcaProcess.spawnDetached(spec, logPath: log?.path)
+    }
+
+    /// `cca _core run`（PROTOCOL 7）：cca 生成配置后 exec 内核，这个进程就是内核本身。不设 CCA_EVENTS，不限时。
+    func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle {
+        let env = CcaEnvironment.make(base: baseEnvironment, home: home)
+        let spec = ProcessSpec(executable: ccaPath, arguments: ["_core", "run"], environment: env, timeout: nil)
+        let handle = CoreProcessHandle()
+        let pid = try CcaProcess.spawnMonitored(spec, logPath: logPath) { code in
+            handle.markExited()
+            onExit(code)
+        }
+        handle.attach(pid)
+        return handle
+    }
+
+    /// 内置代理内核的日志：`~/Library/Caches/local.cca.app/core.log`（不放 runs 目录：那里一天前的文件会被清掉）
+    static func coreLogPath() -> String {
+        defaultRunsDirectory().deletingLastPathComponent().appendingPathComponent("core.log").path
     }
 }

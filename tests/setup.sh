@@ -247,10 +247,11 @@ exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=4 HOME="$CCA_T/router/root" PATH="$CC
 S
 cat > "$T/bin/nc" <<'S'
 #!/bin/bash
-# 127.0.0.1：假 Clash Verge 内核的监听端口；路由器：出门在外（$CCA_T/away）时一律连不上，平时 SSH 端口 22 连得上
+# 127.0.0.1：假 Clash Verge 内核、假内置代理内核（core/up 时）的监听端口；路由器：出门在外（$CCA_T/away）时一律连不上，平时 SSH 端口 22 连得上
 port="${@: -1}"; host="${@: -2:1}"
 case "$host" in
-	127.0.0.1) [ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening" ;;
+	127.0.0.1) { [ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening"; } ||
+		{ [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; } ;;
 	*) [ -f "$CCA_T/away" ] && exit 1; [ "$port" = 22 ] && exit 0; grep -qx "$port" "$CCA_T/router/listening" ;;
 esac
 S
@@ -262,6 +263,34 @@ for a in "$@"; do
 	case "$prev" in -x) proxy="$a" ;; -o) out="$a" ;; --unix-socket) sock="$a" ;; -X) method="$a" ;; --data|--data-binary) data="$a" ;; esac
 	case "$a" in http*) url="$a";; esac; prev="$a"
 done
+# 假的内置代理内核的控制接口（socket 名是 cca-core-*.sock）：状态在 $CCA_T/core（假 mihomo 起来时建 up；core_load 读配置，
+# 写 listening、groups/、sel/，控制接口的 socket 记在 sock）；PUT /configs 只认主目录（home）里的配置文件
+if [ -n "$sock" ]; then
+	case "$sock" in */cca-core-*.sock)
+		CD="$CCA_T/core"; reply() { printf '%s\n%s' "$2" "$1"; }
+		[ -f "$CD/up" ] && [ "$sock" = "$(cat "$CD/sock" 2>/dev/null)" ] || { printf '\n000'; exit 7; }
+		path="${url#http://localhost}"
+		case "$method $path" in
+			"GET /version") reply 200 '{"meta":true,"version":"v1.19.33"}' ;;
+			"PUT /configs?force=true")
+				p=$(printf '%s' "$data" | sed -n 's/^{"path":"\(.*\)"}$/\1/p')
+				case "$p" in "$(cat "$CD/home")"/*) ;; *) reply 400 '{"message":"path is not subpath of home directory"}'; exit 0 ;; esac
+				if err=$("$CCA_T/core_load" "$p" 2>&1); then echo RELOAD >> "$CD/core.log"; reply 204 ""
+				else echo "RELOAD failed: $err" >> "$CD/core.log"; reply 400 "{\"message\":\"$err\"}"; fi ;;
+			"GET /proxies/"*)
+				g="${path#/proxies/}"
+				[ -f "$CD/groups/$g" ] || { reply 404 '{"message":"resource not found"}'; exit 0; }
+				reply 200 "{\"name\":\"$g\",\"type\":\"Selector\",\"now\":\"$(cat "$CD/sel/$g")\"}" ;;
+			"PUT /proxies/"*)
+				g="${path#/proxies/}"; name=$(printf '%s' "$data" | sed -n 's/^{"name":"\(.*\)"}$/\1/p')
+				if [ -f "$CD/groups/$g" ] && grep -qx "$name" "$CD/groups/$g"; then
+					printf '%s' "$name" > "$CD/sel/$g"; echo "SELECT $g $name" >> "$CD/core.log"; reply 204 ""
+				else reply 400 '{"message":"Selector update error: proxy not exist"}'; fi ;;
+			*) reply 404 '{"message":"not found"}' ;;
+		esac
+		exit 0 ;;
+	esac
+fi
 # 假的 Clash Verge 内核控制接口（--unix-socket）：状态在 $CCA_T/verge（down=没在运行，listening=监听端口，
 # groups/CCA-n=组成员，sel/CCA-n=选中的节点）；输出"响应体\n状态码"（cca 用 -w '\n%{http_code}'）
 if [ -n "$sock" ]; then
@@ -336,13 +365,20 @@ case "$url" in
 		[ -f "$CCA_T/gh/$rel" ] || exit 22
 		cp "$CCA_T/gh/$rel" "$out"
 		exit 0 ;;
+	https://github.com/MetaCubeX/mihomo/releases/download/*)   # 内置代理的内核：假的 mihomo（$CCA_T/mihomo/ 下，setup.sh 打包）
+		f="${url##*/}"; echo "GH mihomo $f" >> "$CCA_T/gh.log"
+		[ -f "$CCA_T/mihomo/$f" ] || exit 22
+		cp "$CCA_T/mihomo/$f" "$out"
+		exit 0 ;;
 	https://github.com/*|https://*.githubusercontent.com/*) echo "GH unexpected $url" >> "$CCA_T/gh.log"; exit 22 ;;
 esac
 if [ -n "$proxy" ]; then
 	port="${proxy##*:}"; phost="${proxy#*://}"; phost="${phost%:*}"
-	if [ "$phost" = 127.0.0.1 ]; then   # 本机 Clash Verge 的端口：出口 IP 换成 198.51.100.x，选中 REJECT 时连接被拒
-		[ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening" || exit 7
-		s=$(cat "$CCA_T/verge/sel/CCA-$((port - 7900))" 2>/dev/null); [ -n "$s" ] && [ "$s" != REJECT ] || exit 56
+	if [ "$phost" = 127.0.0.1 ]; then   # 本机的端口（Clash Verge 或内置代理）：出口 IP 换成 198.51.100.x，选中 REJECT 时连接被拒
+		if [ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening"; then LD="$CCA_T/verge"
+		elif [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; then LD="$CCA_T/core"
+		else exit 7; fi
+		s=$(cat "$LD/sel/CCA-$((port - 7900))" 2>/dev/null); [ -n "$s" ] && [ "$s" != REJECT ] || exit 56
 		echo "CURL via local:$port $url" >> "$CCA_T/curl.log"; net=198.51.100
 	else
 		[ -f "$CCA_T/away" ] && exit 7
@@ -530,6 +566,8 @@ cat > "$T/bin/open" <<'S'
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"
 # 打开 Clash Verge：内核起来，并像它启动时那样按全局扩展脚本重新生成配置
 case " $* " in *" io.github.clash-verge-rev.clash-verge-rev "*) rm -f "$CCA_T/verge/down"; "$CCA_T/verge_regen"; exit 0 ;; esac
+# 在后台打开界面 App（--args --core：内置代理要内核）：像 App 那样在后台运行 cca _core run（App 托管内核）；core/app_dead 时 App 起不来内核
+case " $* " in *" --core "*) [ -f "$CCA_T/core/app_dead" ] || ( cca _core run >> "$CCA_T/core/app.log" 2>&1 </dev/null & ); exit 0 ;; esac
 # 像 Chromium/Electron 一样在 --user-data-dir 里建资料（open_noprofile：模拟 Claude App 不认这个参数）
 for a in "$@"; do
 	case "$a" in --user-data-dir=*) [ -f "$CCA_T/open_noprofile" ] || { mkdir -p "${a#--user-data-dir=}"; : > "${a#--user-data-dir=}/Local State"; } ;; esac
@@ -967,5 +1005,59 @@ p = sys.argv[1]; j = json.load(open(p))
 exec(os.environ['CCA_TEST_EDIT'])
 json.dump(j, open(p, 'w'), indent=2, ensure_ascii=False)
 S
-chmod +x "$T"/bin/* "$T"/rbin/* "$T/verge_regen" "$T/edit.py"
+# --- 内置代理：假的 mihomo 内核，打包成官方 Release 的文件名（假 curl 从 $T/mihomo/ 给），SHA256 写进 $T/mihomo/sha256
+# （regress.sh 的 mkver 把测试版 cca 里写死的校验值换成它）。状态在 $T/core：起来后建 up、记下主目录 home 和 pid，
+# core_load 照配置写 listening、groups/、sel/；收到 SIGTERM 时清掉 up 和 listening 再退出。core/start_fail 时起不来
+mkdir -p "$T/core/groups" "$T/core/sel" "$T/mihomo"
+cat > "$T/mihomo/mihomo" <<'S'
+#!/bin/bash
+case "${1:-}" in -v) echo "Mihomo Meta v1.19.33 darwin arm64 with go1.26 (fake)"; exit 0 ;; esac
+d="" f=""
+while [ $# -gt 0 ]; do case "$1" in -d) d="$2"; shift ;; -f) f="$2"; shift ;; esac; shift; done
+CD="$CCA_T/core"
+[ -f "$CD/start_fail" ] && { echo 'level=fatal msg="Parse config error: fake"' >&2; exit 1; }
+"$CCA_T/core_load" "$f" || exit 1
+printf '%s' "$d" > "$CD/home"; echo $$ > "$CD/pid"; echo START >> "$CD/core.log"
+trap 'rm -f "$CD/up"; : > "$CD/listening"; echo STOP >> "$CD/core.log"; exit 0' TERM INT
+touch "$CD/up"
+while :; do sleep 1 & wait $!; done
+S
+chmod 755 "$T/mihomo/mihomo"
+gzip -c "$T/mihomo/mihomo" > "$T/mihomo/mihomo-darwin-arm64-v1.19.33.gz"
+cp "$T/mihomo/mihomo-darwin-arm64-v1.19.33.gz" "$T/mihomo/mihomo-darwin-amd64-compatible-v1.19.33.gz"
+shasum -a 256 "$T/mihomo/mihomo-darwin-arm64-v1.19.33.gz" | cut -d' ' -f1 > "$T/mihomo/sha256"
+cat > "$T/core_load" <<'S'
+#!/usr/bin/env python3
+# 假内核读配置（cca 生成的内置代理配置是 JSON 写的）：组成员、dialer-proxy、入站指向的都要有，入站只能在 127.0.0.1 上；
+# core/reject_text 里的文字出现在配置里就不收（模拟内核不认某个节点）。收下的：listening、groups/、sel/（选组里第一个，
+# 像 store-selected: false），控制接口的 socket 记在 sock，配置留一份 last_config.json
+import glob, json, os, sys
+cd = os.path.join(os.environ['CCA_T'], 'core')
+text = open(sys.argv[1], encoding='utf-8').read()
+rj = os.path.join(cd, 'reject_text')
+if os.path.exists(rj) and open(rj).read().strip() and open(rj).read().strip() in text:
+    sys.exit('proxy 1: unsupport proxy type')
+c = json.loads(text)
+gs = c.get('proxy-groups') or []
+known = {p['name'] for p in c.get('proxies') or []} | {g['name'] for g in gs} | {'REJECT', 'DIRECT'}
+for p in c.get('proxies') or []:
+    if p.get('dialer-proxy') and p['dialer-proxy'] not in known:
+        sys.exit('proxy %s: dialer-proxy %s not found' % (p['name'], p['dialer-proxy']))
+for g in gs:
+    for m in g['proxies']:
+        if m not in known:
+            sys.exit('proxy group %s: %s not found' % (g['name'], m))
+for l in c.get('listeners') or []:
+    if l.get('proxy') not in known or l.get('listen') != '127.0.0.1':
+        sys.exit('listener %s: bad' % l.get('name'))
+open(os.path.join(cd, 'listening'), 'w').write(''.join('%d\n' % l['port'] for l in c.get('listeners') or []))
+for f in glob.glob(os.path.join(cd, 'groups', '*')) + glob.glob(os.path.join(cd, 'sel', '*')):
+    os.remove(f)
+for g in gs:
+    open(os.path.join(cd, 'groups', g['name']), 'w').write(''.join(m + '\n' for m in g['proxies']))
+    open(os.path.join(cd, 'sel', g['name']), 'w').write(g['proxies'][0])
+open(os.path.join(cd, 'sock'), 'w').write(c.get('external-controller-unix', ''))
+open(os.path.join(cd, 'last_config.json'), 'w').write(text)
+S
+chmod +x "$T"/bin/* "$T"/rbin/* "$T/verge_regen" "$T/edit.py" "$T/core_load"
 echo "sandbox ready: $T"

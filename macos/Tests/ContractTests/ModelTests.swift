@@ -254,3 +254,50 @@ import Foundation
     check("下次打开恢复上次选的账号", m8.selection == .account(carolRef), "\(String(describing: m8.selection))")
     m8.shutdown()
 }
+
+/// 内置代理（PROTOCOL 7）：state 里本机客户端是 builtin 时起内核，换掉了就停；.core 信号看不见时也读 state；
+/// 退出前停掉并等它退出；演示数据不跑。
+@MainActor func coreModelTests() async {
+    section("AppModel · 内置代理")
+    guard let stateData = fixture("state.json"), var st = jsonObject(stateData) as? [String: Any],
+          var cfg = st["config"] as? [String: Any] else {
+        check("读 state.json", false)
+        return
+    }
+    cfg["local"] = ["configured": true, "client": "builtin", "name": "内置代理"]
+    st["config"] = cfg
+    let builtinData = (try? JSONSerialization.data(withJSONObject: st)) ?? Data()
+    let builtin = String(decoding: builtinData, as: UTF8.self)
+    let current = TextBox(builtin)
+    let t = ScriptedTransport { req, _ in
+        switch req.arguments {
+        case ["_gui", "hello"]: return response(0, stdout: tinyHello)
+        case ["_gui", "state"]: return response(0, stdout: current.value)
+        default: return response(2, stderr: "unexpected")
+        }
+    }
+    let m = makeModel(t, appVersion: "9.9.9")
+    func running() -> Bool { if case .running = m.coreStatus { return true }; return false }
+    await m.start()
+    check("本机客户端是内置代理：起内核（App 看不见时也起）", t.coreStarts == 1 && running() && !m.isVisible)
+    await m.loadState()
+    check("state 再读一遍、还是内置代理：不重复起", t.coreStarts == 1)
+    current.set(String(decoding: stateData, as: UTF8.self))
+    await m.loadState()
+    check("换成别的客户端：停掉内核（不等）", t.coreHandles.first?.terminated == [false] && m.coreStatus == .off)
+    current.set(builtin)
+    m.watcherFired(.core)
+    check("core/config.yaml 变了（看不见时也算）：重新读 state，又起内核", await waitUntil(3) { t.coreStarts == 2 } && running())
+    m.shutdown()
+    check("退出前停掉内核并等它退出", t.coreHandles.last?.terminated == [true] && m.coreStatus == .off)
+
+    // 演示数据：本机客户端是内置代理也不跑内核
+    let fx = tmpRoot.appendingPathComponent("fixtures-builtin")
+    try? FileManager.default.createDirectory(at: fx, withIntermediateDirectories: true)
+    try? fixture("hello.json")?.write(to: fx.appendingPathComponent("hello.json"))
+    try? builtinData.write(to: fx.appendingPathComponent("state.json"))
+    let demo = makeModel(FixtureTransport(directory: fx, stepDelay: 0))
+    await demo.start()
+    check("演示数据不跑内置代理的内核", demo.phase == .ready && demo.state?.config?.local?.client == .builtin && demo.coreStatus == .off)
+    demo.shutdown()
+}

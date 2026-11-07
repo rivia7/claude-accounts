@@ -38,6 +38,8 @@ struct MainWindow: View {
         .background(WindowObserver { visible in model.setMainVisible(visible) })
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
+            // 主窗口出来了就是普通 App：--core 启动时是 .accessory（没有 Dock 图标和菜单栏），不管是从哪里打开的都换回来
+            if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         }
     }
 }
@@ -144,6 +146,14 @@ struct TopBanners: View {
                     Button("重试") { Task { await model.connect() } }.buttonStyle(.bordered)
                 }
             }
+            if let t = model.coreTrouble {
+                Banner(systemImage: "exclamationmark.arrow.triangle.2.circlepath", tint: .orange,
+                       title: "内置代理的内核停了，稍后自动重启",
+                       message: [t.code >= 0 ? "退出码 \(t.code)" : nil, nonEmpty(t.detail)].compactMap { $0 }.joined(separator: "：")) {
+                    Button("现在重启") { model.retryCore() }
+                        .buttonStyle(.bordered)
+                }
+            }
         }
         .padding(.top, hasBanners ? 14 : 0)
         .padding(.bottom, hasBanners ? 2 : 0)
@@ -152,7 +162,7 @@ struct TopBanners: View {
 
     private var hasBanners: Bool {
         model.versionMismatch || !model.invalidTables.isEmpty || !(model.state?.errors ?? []).isEmpty
-            || !model.usageNeedsConsent.isEmpty || !model.usageFailure.isEmpty || model.stateError != nil
+            || !model.usageNeedsConsent.isEmpty || !model.usageFailure.isEmpty || model.stateError != nil || model.coreTrouble != nil
             || model.visibleTools.contains { !(model.toolState($0)?.settingsProblems ?? []).isEmpty }
     }
 }

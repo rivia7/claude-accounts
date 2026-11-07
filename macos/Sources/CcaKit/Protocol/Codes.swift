@@ -116,8 +116,10 @@ struct LocalClient: KnownValues {
     init(rawValue: String) { self.rawValue = rawValue }
     static let clashVerge = LocalClient(rawValue: "clash-verge")
     static let manual = LocalClient(rawValue: "manual")
+    /// 内置代理：App 托管的 mihomo 内核（PROTOCOL 7）
+    static let builtin = LocalClient(rawValue: "builtin")
     static let unset = LocalClient(rawValue: "")
-    static let allKnown: [LocalClient] = [.clashVerge, .manual, .unset]
+    static let allKnown: [LocalClient] = [.clashVerge, .manual, .builtin, .unset]
 }
 
 struct Backend: KnownValues {

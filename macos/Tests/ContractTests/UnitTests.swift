@@ -158,10 +158,14 @@ func watcherTests() async {
         ("/Users/me/.cca/usage.json", nil), ("/Users/me/.ccaX/accounts.json", nil), ("/Users/me/.cca", nil),
         ("/Users/other/.cca/accounts.json", nil), ("/Users/me/.cca/bin/cca.new", nil), ("/Users/me/.cca/policy/nodes.json", nil),
         ("/Users/me/.cca/cm-abc123", nil), ("/Users/me/.cca/backup/clash-verge-x.yaml", nil),
+        ("/Users/me/.cca/core/config.yaml", .core), ("/Users/me/.cca/core/nodes.json", nil), ("/Users/me/.cca/core/cache.db", nil),
+        ("/Users/me/.cca/core/config.yaml.123.tmp", nil), ("/Users/me/.cca/accounts/a/core/config.yaml", nil),
     ]
     var bad: [String] = []
     for (p, want) in cases where CcaWatcher.classify(path: p, homes: homes) != want { bad.append(p) }
     check("路径过滤", bad.isEmpty, bad.joined(separator: ", "))
+    check("合并时 hello > core > state", CcaWatcher.Trigger.hello.rank > CcaWatcher.Trigger.core.rank
+          && CcaWatcher.Trigger.core.rank > CcaWatcher.Trigger.state.rank)
     check("解析过链接的写法也认", CcaWatcher.classify(path: "/private/x/.cca/config.json", homes: ["/Users/me/.cca", "/private/x/.cca"]) == .state)
 
     // 真的 FSEvents：写 accounts.json 触发，写 chrome/ 下面的不触发
@@ -395,4 +399,156 @@ func eventTailTests() {
     h.write(Data(#"{"v":1,"ev":"result","code":"opened"}"#.utf8))
     try? h.close()
     check("整份读最后一行没有换行也算", tail.all().count == 3 && tail.all().last?.result?.code == .opened)
+}
+
+/// 假的内核进程句柄：记下每次 terminate 的 wait。
+final class FakeCoreHandle: CoreHandle, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _terminated: [Bool] = []
+    var terminated: [Bool] { lock.withLock { _terminated } }
+    func terminate(wait: Bool) { lock.withLock { _terminated.append(wait) } }
+}
+
+@MainActor final class CoreStarts {
+    var handles: [FakeCoreHandle] = []
+    var exits: [@Sendable (Int32) -> Void] = []
+    var failNext: Error?
+}
+
+@MainActor func coreHostTests() async {
+    section("内置代理的内核（CoreHost）")
+    let dir = tmpRoot.appendingPathComponent("core-host")
+    let log = dir.appendingPathComponent("core.log").path
+    let s = CoreStarts()
+    let host = CoreHost(logPath: log, firstBackoff: 0.05, maxBackoff: 0.2, resetAfter: 0.3) { _, onExit in
+        if let e = s.failNext {
+            s.failNext = nil
+            throw e
+        }
+        let h = FakeCoreHandle()
+        s.handles.append(h)
+        s.exits.append(onExit)
+        return h
+    }
+    var changes: [CoreHost.Status] = []
+    host.onChange = { changes.append($0) }
+    func running() -> Bool { if case .running = host.status { return true }; return false }
+    func waiting() -> (Date, Int32, String)? { if case .waiting(let at, let c, let d) = host.status { return (at, c, d) }; return nil }
+
+    host.setWanted(true)
+    check("要内核：启动一次，状态是运行中；日志目录建好（700）", s.handles.count == 1 && running()
+          && (try? FileManager.default.attributesOfItem(atPath: dir.path))?[.posixPermissions] as? NSNumber == 0o700)
+    host.setWanted(true)
+    check("再说一遍要：不重复启动", s.handles.count == 1)
+
+    try? "启动\n第二行\n内核退出的原因\n\n".write(toFile: log, atomically: true, encoding: .utf8)
+    s.exits[0](3)
+    _ = await waitUntil(2) { waiting() != nil || s.handles.count > 1 }
+    if let w = waiting() {
+        check("退出了：等着重启，带着退出码和日志的最后几行", w.1 == 3 && w.2.hasSuffix("内核退出的原因") && w.2.contains("第二行"), w.2)
+    } else {
+        check("退出了：等着重启，带着退出码和日志的最后几行", false, "\(host.status)")
+    }
+    check("退避之后自己重启", await waitUntil(2) { s.handles.count == 2 } && running())
+    let t0 = Date()
+    s.exits[1](1)
+    _ = await waitUntil(2) { s.handles.count == 3 }
+    check("马上又退出：退避翻倍（0.05 → 0.1 秒）", s.handles.count == 3 && Date().timeIntervalSince(t0) >= 0.09)
+    s.exits[2](1)
+    _ = await waitUntil(2) { waiting() != nil }
+    check("退避最多到 maxBackoff", (waiting()?.0.timeIntervalSinceNow ?? 0) > 0.15 && (waiting()?.0.timeIntervalSinceNow ?? 1) <= 0.21)
+    host.retryNow()
+    check("现在重启：不等退避", s.handles.count == 4 && running())
+    try? await Task.sleep(nanoseconds: 350_000_000)
+    s.exits[3](0)
+    _ = await waitUntil(2) { waiting() != nil }
+    check("跑够 resetAfter 才退出的：退避从头算", (waiting()?.0.timeIntervalSinceNow ?? 1) <= 0.06)
+    _ = await waitUntil(2) { s.handles.count == 5 }
+
+    host.setWanted(false)
+    check("不要了：停掉内核（不等），状态 off", s.handles[4].terminated == [false] && host.status == .off)
+    s.exits[4](143)
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    check("停掉的内核迟到的退出通知：不重启、状态不变", s.handles.count == 5 && host.status == .off)
+
+    s.failNext = CcaError.launch("找不到 cca")
+    host.setWanted(true)
+    if let w = waiting() {
+        check("起不来：等着重启（退出码 -1，说明原因）", w.1 == -1 && w.2.contains("找不到 cca"), w.2)
+    } else {
+        check("起不来：等着重启（退出码 -1，说明原因）", false, "\(host.status)")
+    }
+    check("起不来之后照样按退避重试", await waitUntil(2) { s.handles.count == 6 } && running())
+    host.shutdown()
+    check("App 退出：停掉并等它退出", s.handles[5].terminated == [true] && host.status == .off && !host.isWanted)
+    check("状态变化都通知了", changes.first.map { if case .running = $0 { return true }; return false } == true && changes.last == .off)
+
+    // 日志超过 1 MB：启动前清空
+    try? Data(count: 1_100_000).write(to: URL(fileURLWithPath: log))
+    let host2 = CoreHost(logPath: log) { _, _ in FakeCoreHandle() }
+    host2.setWanted(true)
+    check("日志超过 1 MB：启动前清空", !FileManager.default.fileExists(atPath: log))
+    host2.shutdown()
+}
+
+func coreProcessTests() async {
+    section("内置代理的内核（真的进程）")
+    let dir = tmpRoot.appendingPathComponent("core-proc")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let fake = dir.appendingPathComponent("cca")
+    let script = """
+    #!/bin/bash
+    [ "$*" = "_core run" ] || { echo "unknown: $*" >&2; exit 2; }
+    echo "core started gui=$CCA_GUI"
+    [ -f "\(dir.path)/exit7" ] && { echo "配置读不了" >&2; exit 7; }
+    sh -c 'echo $$ > "\(dir.path)/child.pid"; exec sleep 30' &
+    exec sleep 30
+    """
+    FileManager.default.createFile(atPath: fake.path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
+    let t = ProcessTransport(ccaPath: fake.path, baseEnvironment: ["PATH": "/usr/bin:/bin"], home: dir.path)
+    let log = dir.appendingPathComponent("core.log").path
+    let exited = TriggerBox()
+    do {
+        let h = try t.startCore(logPath: log) { exited.set($0) }
+        var ok = false
+        for _ in 0..<50 {
+            if ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").contains("core started gui=1") { ok = true; break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        check("startCore 运行 cca _core run，输出追加进日志（带着 CCA_GUI=1）", ok)
+        for _ in 0..<30 where !FileManager.default.fileExists(atPath: dir.appendingPathComponent("child.pid").path) {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let t0 = Date()
+        h.terminate(wait: true)
+        check("terminate(wait:) 停掉、等它退出，onExit 拿到被信号杀掉的退出码", exited.value == 128 + SIGTERM && Date().timeIntervalSince(t0) < 2.5,
+              "\(String(describing: exited.value))")
+        let child = Int32((try? String(contentsOfFile: dir.appendingPathComponent("child.pid").path, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+        var gone = false
+        for _ in 0..<30 where !gone {
+            gone = child > 0 && kill(child, 0) != 0
+            if !gone { try? await Task.sleep(nanoseconds: 100_000_000) }
+        }
+        check("整个进程组都停了（cca 留下的子进程也是）", gone, "child=\(child)")
+        let t1 = Date()
+        h.terminate(wait: true)
+        check("已经退出了：再停不发信号、不等", Date().timeIntervalSince(t1) < 0.2)
+    } catch {
+        check("startCore 运行 cca _core run", false, "\(error)")
+    }
+    FileManager.default.createFile(atPath: dir.appendingPathComponent("exit7").path, contents: Data())
+    let exited2 = TriggerBox()
+    _ = try? t.startCore(logPath: log) { exited2.set($0) }
+    for _ in 0..<50 where exited2.value == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+    let text = (try? String(contentsOfFile: log, encoding: .utf8)) ?? ""
+    check("自己退出：退出码交给 onExit，stderr 也进日志（追加，不覆盖）", exited2.value == 7 && text.contains("配置读不了")
+          && text.components(separatedBy: "core started").count == 3, text)
+}
+
+final class TriggerBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Int32?
+    var value: Int32? { lock.withLock { _value } }
+    func set(_ v: Int32) { lock.withLock { _value = v } }
 }

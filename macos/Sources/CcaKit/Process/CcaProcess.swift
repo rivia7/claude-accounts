@@ -340,13 +340,63 @@ enum CcaProcess {
     /// 进程在自己的会话里，App 退出不影响它；App 还开着时由后台线程回收，不留僵尸进程。
     @discardableResult
     static func spawnDetached(_ spec: ProcessSpec, logPath: String?) throws -> pid_t {
+        try spawnMonitored(spec, logPath: logPath) { _ in }
+    }
+
+    /// 后台启动，退出时（在后台线程上）把退出码交给 onExit（内置代理的内核）。stdout、stderr 都追加进 logPath（没有就丢掉）。
+    /// 自己一个会话：要停的时候给整个进程组发信号（CoreProcessHandle）。
+    @discardableResult
+    static func spawnMonitored(_ spec: ProcessSpec, logPath: String?, onExit: @escaping @Sendable (Int32) -> Void) throws -> pid_t {
         let pid = try spawn(spec, stdout: logPath.map { .file($0) } ?? .null, stderr: logPath == nil ? .null : .stdout)
         let t = Thread {
             var status: Int32 = 0
             while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+            onExit(exitInfo(status).0)
         }
+        t.name = "cca-bg-\(pid)"
         t.start()
         return pid
+    }
+}
+
+/// 一个在后台跑着的进程（内置代理的内核）：停掉它时 SIGTERM 整个进程组，killGrace 秒后还在就 SIGKILL。
+/// 已经退出了就不再发信号（pid 可能已经给了别的进程）。线程安全。
+final class CoreProcessHandle: CoreHandle, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pid: pid_t = 0
+    private var exited = false
+    let killGrace: TimeInterval
+
+    init(killGrace: TimeInterval = 3) {
+        self.killGrace = killGrace
+    }
+
+    func attach(_ pid: pid_t) {
+        lock.withLock { self.pid = pid }
+    }
+
+    func markExited() {
+        lock.withLock { exited = true }
+    }
+
+    private var running: pid_t? {
+        lock.withLock { pid != 0 && !exited ? pid : nil }
+    }
+
+    /// wait：在这里等它退出（最多 killGrace 秒，到时 SIGKILL）；App 退出前用，免得来不及发 SIGKILL。
+    func terminate(wait: Bool) {
+        guard let p = running else { return }
+        if kill(-p, SIGTERM) != 0 { kill(p, SIGTERM) }
+        let kill9: @Sendable () -> Void = { [self] in
+            if let p = running, kill(-p, SIGKILL) != 0 { kill(p, SIGKILL) }
+        }
+        if wait {
+            let deadline = Date().addingTimeInterval(killGrace)
+            while running != nil && kill(p, 0) == 0 && Date() < deadline { usleep(50_000) }
+            kill9()
+        } else {
+            DispatchQueue.global().asyncAfter(deadline: .now() + killGrace, execute: kill9)
+        }
     }
 }
 

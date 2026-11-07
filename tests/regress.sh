@@ -6,7 +6,7 @@ D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
 T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
-trap '[ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
+trap '[ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
 run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
@@ -509,7 +509,7 @@ ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不�
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
 ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址），也不加 --settings" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && ! lastline ARGS | grep -q -- --settings && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
 # Claude 默认对 ~/.cca 放开权限（加成工作目录），登录凭证和浏览器资料除外
-P1="--add-dir=$H/.cca --disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/backup/clash-verge-*.yaml),Edit(/$H/.cca/backup/clash-verge-*.yaml),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**)"
+P1="--add-dir=$H/.cca --disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/backup/clash-verge-*.yaml),Edit(/$H/.cca/backup/clash-verge-*.yaml),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml)"
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
 ok "Claude 默认对 ~/.cca 放开权限：--add-dir 加成工作目录，登录凭证和浏览器资料用 --disallowedTools 挡住；都写成 --x=值，后面的提示词不会被当成目录" '[ $rc -eq 3 ] && [ "$(lastline ARGS)" = "ARGS: $P1 看看 ~/.cca 里的配置" ]'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
@@ -1059,7 +1059,9 @@ G="$T/gh"; mkdir -p "$G"
 ssh-keygen -q -t ed25519 -N '' -C test-release -f "$T/relkey"; ssh-keygen -q -t ed25519 -N '' -f "$T/evilkey"
 TESTPUB=$(cut -d' ' -f1,2 "$T/relkey.pub")
 mkver() {   # mkver 版本 输出文件 [路由器脚本标记]：换成测试密钥、改版本号，可在路由器脚本里加个标记
-	sed -e "s|^VERSION=\".*\"$|VERSION=\"$1\"|" -e "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$CCA" > "$2"
+	# 内置代理的内核换成假的 mihomo（setup.sh 打包、算好的校验值）
+	sed -e "s|^VERSION=\".*\"$|VERSION=\"$1\"|" -e "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" \
+		-e "s|^CORE_SHA256_ARM64=\".*\"$|CORE_SHA256_ARM64=\"$(cat "$T/mihomo/sha256")\"|" -e "s|^CORE_SHA256_AMD64=\".*\"$|CORE_SHA256_AMD64=\"$(cat "$T/mihomo/sha256")\"|" "$CCA" > "$2"
 	[ -n "${3:-}" ] && sed -i '' "s|^# cca-router：|# cca-router（$3）：|" "$2"
 	chmod 755 "$2"
 }
@@ -1554,6 +1556,126 @@ out2=$(run CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
 : > ghcli.log; env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_TTY="$(ans)" PATH="$T/bin:/usr/bin:/bin" bash "$PS" key >/dev/null 2>&1
 ok "仓库：CCA_POLICY_DEFAULT 设成空、又没写 -R 时不猜；-R 指定别的仓库；都没设时用 cca 里写的默认仓库" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不知道是哪个映射仓库：加上 -R 维护者/仓库" && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "example/other 上还没有 deploy key" && [ -n "$defrepo" ] && grep -q "^GH api GET repos/$defrepo/keys" ghcli.log'
 rm -f "$T/policy_keys"
+
+# 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开
+#       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时
+#       从路由器拷（core/nodes.json），再补维护者的参考节点。这一节不用映射（config.json 里的 policy、~/.cca/policy 先挪开），
+#       结束时都还原。这时路由器上的节点是 US-A～D 和 HK-A2（10a 里改过名），可选节点也是这几个
+CD="$T/core"; CN="$H/.cca/core"
+creloads() { grep -c '^RELOAD$' "$CD/core.log" 2>/dev/null || echo 0; }
+csel() { cat "$CD/sel/$1" 2>/dev/null || echo -; }
+cnames() { python3 -c 'import json,sys; print(",".join(p["name"] for p in json.load(open(sys.argv[1]))["proxies"]))' "$1"; }
+ccfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$CN/config.yaml" "$1"; }   # 内置代理的配置（c）满足条件
+core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; for i in $(seq 1 30); do [ -f "$CD/up" ] || return 0; sleep 0.1; done; }
+nodes_wait() { local i; for i in $(seq 1 80); do [ -f "$CN/nodes.json" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && return 0; sleep 0.1; done; return 1; }
+cp "$H/.cca/config.json" "$T/config.core"; cp "$H/.cca/accounts.json" "$T/accounts.core"
+run cca local off >/dev/null 2>&1
+mv "$V" "$V.off"; touch "$T/verge/down"   # 这台 Mac 上没有 Clash 客户端了
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+rm -rf "$T/policy.core"; mv "$H/.cca/policy" "$T/policy.core"; mkdir -p "$H/.cca/policy"
+edit_table 'j["alice@example.com"] = "US-A"'
+mkdir -p "$GA/Contents/MacOS"
+printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$GA/Contents/Info.plist"
+: > ssh.log; : > open.log
+run cca @alice --version >/dev/null 2>&1; nodes_wait
+ok "在家启动账号：没有 Clash 客户端的机器在后台从路由器拷一份节点定义（只留可选节点；600，目录 700，临时文件不留）" '[ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ "$(stat -f %Lp "$CN/nodes.json")" = 600 ] && [ "$(stat -f %Lp "$CN")" = 700 ] && grep -q "sh -s defs" ssh.log && grep -q "\"password\"" "$CN/nodes.json" && [ -z "$(ls "$H/.cca" | grep "^defs\.")" ]'
+: > ssh.log; run cca @alice --version >/dev/null 2>&1; sleep 1
+ok "节点定义还新（12 小时内、可选节点没变）：不再拷" '! grep -q "sh -s defs" ssh.log'
+out=$(run cca local off 2>&1)
+ok "还没配置本机客户端时 cca local off：关掉内置代理的准备（记下 core_off），拷来的节点删掉" 'printf "%s" "$out" | grep -q "已关掉内置代理的准备" && cfgok "c[\"local\"] == {\"core_off\": \"1\"}" && [ ! -e "$CN/nodes.json" ]'
+: > ssh.log; run cca @alice --version >/dev/null 2>&1; sleep 1
+ok "关掉了：在家不再拷节点定义" '! grep -q "sh -s defs" ssh.log && [ ! -e "$CN/nodes.json" ]'
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"; run cca _core-nodes >/dev/null 2>&1
+# 经 dialer-proxy 连的节点：它用到的节点（不是可选节点的 HOP-A）也拷；指向策略组的不要（内置代理里没有那个组，带上它整份配置都加载不了）
+cp "$RC" "$T/rc.core"; cp "$H/.cca/config.json" "$T/config.core2"
+ruby -e 'f = ARGV[0]; s = File.read(f); s.sub!(/^proxies:\n( *)- /) { i = $1; "proxies:\n" + ["{name: US-E, type: ss, server: 192.0.2.6, port: 8388, cipher: aes-128-gcm, password: x, dialer-proxy: HOP-A}", "{name: US-F, type: ss, server: 192.0.2.7, port: 8388, cipher: aes-128-gcm, password: x, dialer-proxy: \"🚀 节点选择\"}", "{name: HOP-A, type: ss, server: 192.0.2.8, port: 8388, cipher: aes-128-gcm, password: x}"].map { |x| "#{i}- #{x}\n" }.join + "#{i}- " } or abort; File.write(f, s)' "$RC"   # 照它第一项的缩进插在最前面
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['nodes'] += ['US-E', 'US-F']; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+run cca _core-nodes >/dev/null 2>&1
+ok "拷节点定义：可选节点经 dialer-proxy 用到的 HOP-A 也拷；dialer-proxy 指向策略组的 US-F 不要" '[ "$(cnames "$CN/nodes.json")" = US-E,HOP-A,US-A,US-B,US-C,US-D,HK-A2 ]'
+cp "$T/rc.core" "$RC"; cp "$T/config.core2" "$H/.cca/config.json"; run cca _core-nodes >/dev/null 2>&1
+touch "$T/away"; : > ssh.log; : > open.log; : > gh.log; : > curl.log
+out=$(runev cca @alice --version 2>&1); rc=$?
+ok "在外面、没有 Clash 客户端、非交互（界面 App）：记一条 consent（builtin_core），不下载、不启动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"builtin_core\" and e[\"grant\"] == \"builtin_core\"" && ! grep -q "GH mihomo" gh.log && ! cfgok "c[\"local\"].get(\"client\")"'
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在外面、没有 Clash 客户端、非交互（Dock 上的启动器、脚本）：说明可以用内置代理，交给终端（cca local setup），不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没装的话可以用 cca 内置的代理）：在终端里运行 cca local setup 配置一次" && ! cfgok "c[\"local\"].get(\"client\")" && ! grep -q "GH mihomo" gh.log'
+out=$(runev CCA_GRANT=builtin_core cca @alice --version 2>&1); rc=$?
+ok "界面 App 里同意之后（带着授权重跑）：改用内置代理：下载内核（按 SHA256 校验），在后台打开界面 App（--core），App 起内核，账号照常启动" '[ $rc -eq 3 ] && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo mihomo-darwin-.*-v1.19.33.gz$" gh.log && grep -qF "OPEN [-g] [$GA] [--args] [--core]" open.log && grep -qx START "$CD/core.log" && [ "$(cat "$CD/home")" = "$CN" ] && [ "$(cat "$CN/mihomo.pid")" = "$(cat "$CD/pid")" ] && [ -z "$(ls "$CN" | grep "^dl\.")" ]'
+ok "在外面：经内置代理的 7901 出去（CCA-1 选中 US-A），Claude Code 拿到的代理也是它；不连路由器" '[ "$(csel CCA-1)" = US-A ] && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log && lastenv | grep -q "https_proxy=http://127.0.0.1:7901" && [ ! -s ssh.log ]'
+ok "内置代理的配置（600）：只有 127.0.0.1 上的入站（各自直通 CCA-n）、可选节点、一条 MATCH,REJECT；不开通用的代理端口、TUN、DNS；控制接口只开 Unix socket，不记选中的节点" '[ "$(stat -f %Lp "$CN/config.yaml")" = 600 ] && ccfg "all(l[\"listen\"] == \"127.0.0.1\" and l[\"proxy\"] == \"CCA-%d\" % (l[\"port\"] - 7900) for l in c[\"listeners\"]) and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\")) and c[\"external-controller-unix\"].endswith(\".sock\") and c[\"profile\"][\"store-selected\"] is False and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A2\"] and c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-A\""'
+n0=$(creloads); : > open.log; : > gh.log
+run cca @alice --version >/dev/null 2>&1
+ok "再启动：内核在跑，不再下载、不打开界面 App、不重新加载" '[ "$(creloads)" = "$n0" ] && [ ! -s open.log ] && ! grep -q "GH mihomo" gh.log'
+printf US-B > "$CD/sel/CCA-1"
+run cca @alice --version >/dev/null 2>&1
+ok "选中被改：启动前经控制接口纠正回 US-A，不重新加载" '[ "$(csel CCA-1)" = US-A ] && [ "$(creloads)" = "$n0" ]'
+edit_table 'j["alice@example.com"] = "US-C"'
+run cca @alice --version >/dev/null 2>&1
+ok "换节点：经控制接口切到 US-C，不重新加载；配置里 CCA-1 的第一个成员也换成 US-C（内核重启后照样选它）" '[ "$(csel CCA-1)" = US-C ] && [ "$(creloads)" = "$n0" ] && ccfg "c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-C\""'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies']=[x for x in j['proxies'] if x['name']!='US-D']; json.dump(j, open(p,'w'))" "$CN/nodes.json"
+edit_table 'j["alice@example.com"] = "US-D"'
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "账号的节点内置代理里没有定义：重新加载（组里 REJECT 排第一），不启动，说明怎么补" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「US-D」的定义" && [ "$(csel CCA-1)" = REJECT ] && [ "$(creloads)" = $((n0 + 1)) ]'
+out=$(run cca local 2>&1)
+ok "cca local：内置代理的端口和选中的节点；节点定义从哪来、缺哪个" 'printf "%s" "$out" | grep -q "内置代理（控制接口 unix:" && printf "%s" "$out" | grep -q "CCA-1  127.0.0.1:7901  监听中  → REJECT" && printf "%s" "$out" | grep -q "节点定义：从路由器拷的 4 个" && printf "%s" "$out" | grep -q "没有定义的节点：US-D"'
+# 维护者的参考节点补上路由器那份里没有的（和往路由器、Clash Verge 里补的同一套规则：同名的以路由器的为准）
+printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-D", "type": "ss", "server": "192.0.2.4", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}, {"name": "US-A", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "y"}, {"name": "AI-Z", "type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$H/.cca/policy/nodes.json"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "维护者的参考节点补上缺的 US-D：重新加载一次，照常启动；同名的 US-A 以路由器的为准，不是可选节点的 AI-Z 不放" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = US-D ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"HK-A2\", \"US-D\"] and c[\"proxies\"][0][\"server\"] == \"192.0.2.1\""'
+rm -f "$H/.cca/policy/nodes.json"; edit_table 'j["alice@example.com"] = "US-A"'
+run cca @alice --version >/dev/null 2>&1
+edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(3, 11)})'
+n0=$(creloads)
+run cca @alice --version >/dev/null 2>&1
+ok "端口池要扩容（第 9 个账号起）：内置代理重新加载一次配置，变成 16 个端口" '[ "$(creloads)" = $((n0 + 1)) ] && grep -qx 7916 "$CD/listening" && [ "$(csel CCA-1)" = US-A ]'
+edit_table '[j.pop("u%d@example.com" % i) for i in range(3, 11)]'
+echo 192.0.2.2 > "$CD/reject_text"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "内置代理的内核不收新配置：说明原因，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理的内核没接受新配置（HTTP 400）"'
+rm -f "$CD/reject_text"
+run cca @alice --version >/dev/null 2>&1
+ok "内核收下了：端口池缩回 8 个" '! grep -qx 7909 "$CD/listening" && grep -qx 7908 "$CD/listening"'
+out=$(gj state)
+ok "_gui state：本机客户端是内置代理（名字由 cca 给），已经同步" 'printf "%s" "$out" | jok "d[\"config\"][\"local\"] == {\"configured\": True, \"client\": \"builtin\", \"name\": \"内置代理\"} and d[\"routing\"][\"local_sync\"] == \"ok\""'
+out=$(gj live)
+ok "_gui live：在外面看内置代理：在运行，alice 的槽位正常" 'printf "%s" "$out" | jok "d[\"route\"] == \"local\" and d[\"local\"][\"name\"] == \"内置代理\" and d[\"local\"][\"running\"] is True and d[\"slots\"][0][\"state\"] == \"ok\""'
+# 内核文件校验不对、界面 App 没装
+core_stop; rm -f "$CN"/mihomo-v*
+for f in "$T"/mihomo/*.gz; do cp "$f" "$f.orig"; printf x >> "$f"; done
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "下载的内核校验不对：不用它（临时文件删掉），不启动，说明原因" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "下载的文件校验不对" && [ ! -e "$CN/mihomo-v1.19.33" ] && [ -z "$(ls "$CN" | grep "^dl\.")" ] && [ ! -f "$CD/up" ]'
+for f in "$T"/mihomo/*.gz; do mv "$f.orig" "$f"; done
+mv "$GA" "$GA.off"
+out=$(runev cca @alice --version 2>&1); rc=$?
+ok "没装界面 App、非交互（启动器、脚本）：说明，交给终端（cca local setup）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"local_setup\"" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"local_unavailable\"" && [ ! -f "$CD/up" ]'
+mv "$GA.off" "$GA"
+run cca @alice --version >/dev/null 2>&1
+ok "装回界面 App：再下载内核、起内核，照常启动" '[ -x "$CN/mihomo-v1.19.33" ] && [ -f "$CD/up" ] && [ "$(csel CCA-1)" = US-A ]'
+# 终端里（交互）在外面、还没配置本机客户端：照 cca local setup 的流程问（没装 Clash Verge 时默认内置代理，选 n 手动配置别的客户端）
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
+ok "终端里在外面、还没配置本机客户端：照 cca local setup 问（没装 Clash Verge 时默认用内置代理），答 y 照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "用内置代理吗" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(csel CCA-1)" = US-A ]'
+# 关掉、在家重新配置
+run cca local off >/dev/null 2>&1
+ok "cca local off：关掉内置代理（记下关掉过），节点定义和配置删掉，停掉内核（界面 App 没开着时）；内核文件留着" 'cfgok "c[\"local\"] == {\"core_off\": \"1\"}" && [ ! -e "$CN/nodes.json" ] && [ ! -e "$CN/config.yaml" ] && [ ! -f "$CD/up" ] && [ -x "$CN/mihomo-v1.19.33" ]'
+out=$(run CCA_GUI_OS=15 cca @alice --version 2>&1); rc=$?
+ok "macOS 太旧（内置代理在界面 App 里运行，要 macOS 26）：说明要装 Clash 客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理要 macOS 26 或更新"'
+rm -f "$T/away"; : > ssh.log
+run cca @alice --version >/dev/null 2>&1; sleep 1
+ok "关掉过内置代理：在家不再拷节点定义" '! grep -q "sh -s defs" ssh.log && [ ! -e "$CN/nodes.json" ]'
+out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
+ok "cca local setup：没装 Clash Verge 时默认用内置代理；在家先从路由器拷节点定义，然后让内核就绪" 'printf "%s" "$out" | grep -q "用内置代理吗" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ -f "$CD/up" ]'
+rm -f "$CN"/mihomo-v*; : > gh.log
+run cca @alice --version >/dev/null 2>&1
+for i in $(seq 1 50); do [ -x "$CN/mihomo-v1.19.33" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done
+ok "已经用内置代理、内核文件不在（比如 cca 升级换了内核版本）：在家启动后在后台先下好（在外面直连 GitHub 可能很慢）" '[ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo" gh.log'
+# 换回 Clash Verge（cca local setup）：先停掉内置代理的内核（它还占着 127.0.0.1 的端口），删掉它的配置和拷来的节点
+mv "$V.off" "$V"; rm -f "$T/verge/down"
+out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
+ok "从内置代理换回 Clash Verge：先停掉内置代理的内核、删掉它的配置和拷来的节点，再配置 Clash Verge" '[ ! -f "$CD/up" ] && [ ! -e "$CN/config.yaml" ] && [ ! -e "$CN/nodes.json" ] && cfgok "c[\"local\"][\"client\"] == \"clash-verge\"" && printf "%s" "$out" | grep -q "现在配置 Clash Verge 吗"'
+# 还原：配置、账号表、映射还原，重新配置 Clash Verge
+core_stop; rm -rf "$GA" "$CN" "$H/.cca/policy"; mv "$T/policy.core" "$H/.cca/policy"
+cp "$T/config.core" "$H/.cca/config.json"; cp "$T/accounts.core" "$H/.cca/accounts.json"
+run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3"

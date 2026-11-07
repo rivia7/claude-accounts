@@ -29,6 +29,10 @@ enum SelfCheck {
 struct CcaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
+    /// cca 在后台打开的（`open -g … --args --core`，内置代理要内核，PROTOCOL 7）：不弹主窗口、不占 Dock，只留菜单栏图标；
+    /// 之后从菜单栏、“帮助”菜单打开主窗口时照常显示（WindowOpener 把 Dock 图标换回来）
+    static let launchedForCore = CommandLine.arguments.contains("--core")
+
     var body: some Scene {
         Window("cca", id: "main") {
             MainWindow()
@@ -37,6 +41,9 @@ struct CcaApp: App {
                 .environment(delegate.appearance)
         }
         .defaultSize(width: 1080, height: 720)
+        .defaultLaunchBehavior(Self.launchedForCore ? .suppressed : .automatic)
+        // 后台打开时也不恢复上次退出时开着的主窗口（恢复出来的窗口不经过 showMain，没有 Dock 图标和菜单栏）
+        .restorationBehavior(Self.launchedForCore ? .disabled : .automatic)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
@@ -105,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                                  userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
         }
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        if CcaApp.launchedForCore { NSApp.setActivationPolicy(.accessory) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

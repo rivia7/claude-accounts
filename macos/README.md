@@ -103,7 +103,8 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
   Protocol/            PROTOCOL 的模型：hello / state / live / usage / check / health / 事件；容错解码（Decoding.swift）；样例（Sample.swift）
   Process/             CcaProcess（posix_spawn）、CcaLocator、CcaEnvironment、Transport（进程 / 演示数据）、CcaClient（重跑流程、闸门）、
                        TerminalHandoff（.command 文件、shellQuote）
-  Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、Texts（文字、颜色档、补救、标记）
+  Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、CoreHost（内置代理的内核）、
+                       Texts（文字、颜色档、补救、标记）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、账号页（AccountDetail：页头；
                        UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
                        可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
@@ -130,6 +131,12 @@ tools/make-icon.swift  画图标
   App 中途退出留下的输出文件、事件文件，一天后清掉。
 - **更新并重新打开**（PROTOCOL 5）分两步：先运行 `cca gui update` 等它下载好（失败就显示原因，App 照常开着）；成功后脱离 App 运行
   `cca gui update --relaunch <pid>`（输出接到 runs 目录里的文件），然后退出。
+- **内置代理**（PROTOCOL 7）：state 里本机客户端是 `builtin` 时，`CoreHost` 运行 `cca _core run`（cca 生成配置后 exec mihomo，这个进程就是内核），
+  输出追加进 `~/Library/Caches/local.cca.app/core.log`；退出了按 1、2、4…最多 60 秒退避重启（顶上一条提示，可以“现在重启”），不再需要、App 退出时停掉
+  （退出前等它退出）。cca 要内核又没开 App 时用 `open -g … --args --core` 在后台打开它：不弹主窗口、不占 Dock（`CcaApp.launchedForCore`，
+  `.defaultLaunchBehavior(.suppressed)`、不恢复上次的窗口、`.accessory`）；“打开主窗口”的回调在菜单栏图标里就登记（这时主窗口、面板都还没建），
+  主窗口一出现就换回普通 App（`MainWindow.onAppear`）。`core/config.yaml` 变了是
+  CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；
   文件一开始就删掉自己，中途关窗口也不留下），用“终端”打开。放了一小时还没运行的会清掉。
 

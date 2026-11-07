@@ -41,6 +41,26 @@ final class ScriptedTransport: Transport, @unchecked Sendable {
         _detached.append(request)
         lock.unlock()
     }
+
+    /// 内置代理的内核：记下每次启动，给一个假的进程句柄
+    private var _coreHandles: [FakeCoreHandle] = []
+    var coreHandles: [FakeCoreHandle] { lock.withLock { _coreHandles } }
+    var coreStarts: Int { coreHandles.count }
+
+    func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle {
+        let h = FakeCoreHandle()
+        lock.withLock { _coreHandles.append(h) }
+        return h
+    }
+}
+
+/// 测试里会换的一段文字（线程安全）。
+final class TextBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: String
+    init(_ v: String) { _value = v }
+    var value: String { lock.withLock { _value } }
+    func set(_ v: String) { lock.withLock { _value = v } }
 }
 
 final class ScriptedPrompter: Prompter, @unchecked Sendable {

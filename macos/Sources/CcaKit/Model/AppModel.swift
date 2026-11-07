@@ -118,6 +118,8 @@ final class AppModel {
     private(set) var syncActivity: Activity?
     /// 「更新并重新打开」的第一步（`cca gui update`）正在跑。
     private(set) var updating = false
+    /// 内置代理的内核（CoreHost，PROTOCOL 7）：退出了的时候界面上显示一条提示
+    private(set) var coreStatus: CoreHost.Status = .off
     var sheet: Sheet?
     private(set) var toast: Toast?
 
@@ -191,6 +193,7 @@ final class AppModel {
     /// 它们的输出接文件，App 退出后照样跑完（PROTOCOL 1）。
     @ObservationIgnored private var cancelOnQuit: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var startedOnce = false
+    @ObservationIgnored private var coreHost: CoreHost?
 
     enum Prefs {
         static let tool = "tool"
@@ -331,6 +334,34 @@ final class AppModel {
         await client?.setCodexEnabled(h.codexEnabled)
         if !h.codexEnabled && tool != .claude { tool = .claude }
         if homeChanged { restartWatcher() }
+        reconcileCore()
+    }
+
+    // MARK: 内置代理
+
+    /// 内置代理（PROTOCOL 7）：state 里本机客户端是内置代理时让内核一直跑着（`cca _core run`），不是了就停掉。演示数据不跑。
+    private func reconcileCore() {
+        let want = !isFixtureMode && phase == .ready && state?.config?.local?.client == .builtin
+        if want && coreHost == nil {
+            let host = CoreHost(logPath: ProcessTransport.coreLogPath()) { [weak self] log, onExit in
+                guard let t = self?.transport else { throw CcaError.launch("找不到 cca") }
+                return try t.startCore(logPath: log, onExit: onExit)
+            }
+            host.onChange = { [weak self] s in self?.coreStatus = s }
+            coreHost = host
+        }
+        coreHost?.setWanted(want)
+    }
+
+    /// 提示条上的“现在重启”：不等退避。
+    func retryCore() {
+        coreHost?.retryNow()
+    }
+
+    /// 内置代理的内核停了、等着重启：(退出码，没启动起来时是 -1；日志的最后几行)
+    var coreTrouble: (code: Int32, detail: String)? {
+        if case .waiting(_, let code, let detail) = coreStatus { return (code, detail) }
+        return nil
     }
 
     private func restartWatcher() {
@@ -378,6 +409,7 @@ final class AppModel {
             state = s
             stateError = nil
             fixSelection()
+            reconcileCore()
         } catch {
             stateError = String(describing: error)
         }
@@ -807,6 +839,15 @@ final class AppModel {
 
     /// ~/.cca 变了（CcaWatcher）：看得见就重新读；看不见只记下，等看得见了再读。
     func watcherFired(_ t: CcaWatcher.Trigger) {
+        // 内置代理的配置变了（或者 cca 碰了它一下）：cca 刚切到内置代理、在等内核（App 可能只在菜单栏里），看不见时也马上读 state；
+        // 内核正在退避重启的话不再等
+        if t == .core {
+            Task {
+                await loadState()
+                coreHost?.retryNow()
+            }
+            return
+        }
         guard isVisible else {
             dirty = true
             if t == .hello { helloDirty = true }
@@ -814,13 +855,14 @@ final class AppModel {
         }
         switch t {
         case .hello: Task { await connect() }
-        case .state: refreshState()
+        case .state, .core: refreshState()
         }
     }
 
     /// 退出前：取消 usage / check / live / gui update 的子进程（SIGTERM 进程组）。app、web、router sync 不杀：
-    /// 它们的输出接文件，App 退出后照样跑完。
+    /// 它们的输出接文件，App 退出后照样跑完。内置代理的内核停掉并等它退出（App 托管它，App 退出它就停）。
     func shutdown() {
+        coreHost?.shutdown()
         scheduler.stop()
         watcher?.stop()
         for (_, t) in cancelOnQuit { t.cancel() }

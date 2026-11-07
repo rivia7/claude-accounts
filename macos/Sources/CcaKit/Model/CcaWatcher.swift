@@ -3,12 +3,24 @@ import Foundation
 
 /// 看着 `hello.home`（~/.cca）的变化，只当作“该重新跑一次 `_gui state` / `_gui hello`”的信号：从不读那些文件。
 /// 收：accounts.json、codex.json、config.json、*/usage.json、*/health.json、policy/policy.json（→ state），
-/// bin/cca（→ hello）。不收：chrome/、desktop/ 下面的一切（浏览器和桌面 App 的资料目录一直在写）。
-/// 500 毫秒内的多次变化合并成一次。看不见时只记下“脏了”（由 AppModel 处理）。
+/// core/config.yaml（→ core：内置代理的配置，看不见时也要马上读 state，见 AppModel），bin/cca（→ hello）。
+/// 不收：chrome/、desktop/ 下面的一切（浏览器和桌面 App 的资料目录一直在写）。
+/// 500 毫秒内的多次变化合并成一次（hello > core > state）。看不见时只记下“脏了”（由 AppModel 处理）。
 final class CcaWatcher: @unchecked Sendable {
     enum Trigger: Sendable, Equatable {
         case state
         case hello
+        /// 内置代理的配置变了（cca 刚切到内置代理、要内核、关掉了）：和 state 一样重新读，但看不见时也读
+        case core
+
+        /// 合并时留哪个：hello 最大（它之后会接着读 state），core 次之
+        var rank: Int {
+            switch self {
+            case .state: return 0
+            case .core: return 1
+            case .hello: return 2
+            }
+        }
     }
 
     private static let statePaths: Set<String> = ["accounts.json", "codex.json", "config.json", "policy/policy.json"]
@@ -27,6 +39,7 @@ final class CcaWatcher: @unchecked Sendable {
         if comps.contains("chrome") || comps.contains("desktop") { return nil }
         let clean = comps.joined(separator: "/")
         if clean == "bin/cca" { return .hello }
+        if clean == "core/config.yaml" { return .core }
         if statePaths.contains(clean) { return .state }
         if comps.count >= 2, let last = comps.last, last == "usage.json" || last == "health.json" { return .state }
         return nil
@@ -107,16 +120,12 @@ final class CcaWatcher: @unchecked Sendable {
     private func received(_ paths: [String]) {
         var t: Trigger? = nil
         for p in paths {
-            switch CcaWatcher.classify(path: p, homes: homes) {
-            case .hello?: t = .hello
-            case .state?: if t == nil { t = .state }
-            case nil: break
-            }
+            if let x = CcaWatcher.classify(path: p, homes: homes), x.rank > (t?.rank ?? -1) { t = x }
         }
         guard let t else { return }
         let handler = self.handler
         lock.lock()
-        if pending != .hello { pending = t }
+        if t.rank > (pending?.rank ?? -1) { pending = t }
         fire?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }

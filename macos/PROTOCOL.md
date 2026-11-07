@@ -29,7 +29,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `app`、`web`、`router sync` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下）。所以这几条命令的 stdout / stderr 接到文件，跑完再读；进度和结果看事件文件。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
-  `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`，以及 `bin/cca`（换了就重新 `hello`）；
+  `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`，`core/config.yaml`（内置代理的配置，见 7：
+  App 看不见时也要马上重新读 `state`），以及 `bin/cca`（换了就重新 `hello`）；
   桌面 App 的 bundle id：Claude App `com.anthropic.claudefordesktop`、ChatGPT App `com.openai.codex`（它们启动、退出时刷新 `app.running`）。
 
 ## 2. 只读的查询：`cca _gui hello | state | live`
@@ -138,7 +139,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 - `route_pref`：`auto`（连得上路由器走路由器，连不上走本机 Clash）| `router` | `local`。
 - `router.configured`：配置过路由器；`proxy_host` 是账号端口所在的主机（可能和 `host` 不同）。
-- `local.configured` / `client`：本机 Clash 客户端（`clash-verge` | `manual` | `""`）。
+- `local.configured` / `client`：本机 Clash 客户端（`clash-verge` | `manual` | `builtin` | `""`）。`builtin` 是内置代理：App 要托管
+  它的内核（见 7）。`name` 是给人看的名字（`Clash Verge`、`内置代理`……），App 照着显示。
 
 `routing`：
 
@@ -182,7 +184,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `route`：`router` | `local` | `none`（哪边都没配置）。`at_home`：连得上路由器（1 秒探测）。`proxy_host`：账号端口现在在哪台机器上
   （看路由器时是路由器的地址，看本机时是 `127.0.0.1`，`none` 时为 null），App 显示「地址:端口」用它。
 - `router.error` / `local.error`：`null` 或 `{"code": "unreachable" | "status_failed" | "not_configured" | "not_running", "message": "…"}`。
-  `router.backend`：`OpenClash` | `ShellCrash` | null。`local.running`：Clash Verge 的控制接口能不能连上（没看这一边时为 null）。
+  `router.backend`：`OpenClash` | `ShellCrash` | null。`local.running`：本机客户端（Clash Verge、内置代理的内核……）的控制接口能不能连上
+  （没看这一边时为 null）。
 - 槽位：`expected` 是应该选中的节点（这台 Mac 的账号表算出来的；看本机时是本机的叫法），`selected` 是内核里现在选中的（拿不到为 null），
   `in_kernel`：内核里有没有这个组，`listening`：路由器 / 本机上这个端口在不在监听（拿不到为 null），`reachable`：这台 Mac 连不连得上这个端口。
 - `state`：`ok` | `drift`（选中的不是应选的，同步路由器能修好）| `closed`（这台 Mac 连不上这个端口）| `unknown`（拿不到选中的节点）| `empty`（空槽位）。
@@ -293,6 +296,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `low_purity` | 出口 IP | 出口纯净度低于设定，问是否仍然用这个出口启动 | no |
 | `codex_fallback_off` | 空 | 第一次打开 ChatGPT App：用 `codex features disable system_proxy_fallback` 在共享的 config.toml 里关掉系统代理回退 | yes |
 | `open_clash_verge` | 空 | 在外面，Clash Verge 没开：打开它 | yes |
+| `builtin_core` | 空 | 在外面，这台 Mac 上没有 Clash 客户端：改用内置代理（第一次要下载约 21MB 的内核，见 7） | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
   同意了用某个 IP 启动，换了 IP 要重新问）。
@@ -338,3 +342,21 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 `~/Library/Caches/local.cca.app/handoff/` 写一个临时的 `.command` 文件（`#!/bin/bash`，补好 `PATH`，去掉 `CCA_GUI` 等 App 给 cca 的变量，先删掉自己，再运行逐个加了引号的
 命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的），`chmod 755` 后用“终端”打开。不需要“自动化”权限。
 一小时前留下的 `.command` 文件 App 会清掉。用户回到 App（App 被激活）时重新读一次 `state`。
+
+## 7. 内置代理（`cca _core run`）
+
+在外面、这台 Mac 上又没有 Clash 客户端时，cca 用自己带的 mihomo 内核（`state.config.local.client == "builtin"`）。端口池和本机
+Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca 管；**App 只负责让内核进程一直跑着**：
+
+- `state` 里本机客户端是 `builtin` 时，App 运行 `cca _core run`：自己一个会话，stdin 接 `/dev/null`，不设 `CCA_EVENTS`，不限时，
+  stdout / stderr 追加进 `~/Library/Caches/local.cca.app/core.log`（启动前超过 1 MB 就清空）。cca 照账号表生成配置后 `exec` 内核，
+  所以这个进程就是内核本身。
+- 进程退出了就隔一会儿重启：1、2、4…秒，最多 60 秒；跑够 60 秒才退出的从 1 秒重新算。重启前显示一条提示（退出码、日志最后几行），
+  可以“现在重启”。
+- 不再是 `builtin`（`cca local off`、换了客户端）时停掉：cca 改好 `config.json` 后删掉 `core/config.yaml`，App 看到后重新读 `state`、停掉内核
+  （cca 会等它停下，免得旧内核还占着端口）。App 退出前停掉并等它退出（SIGTERM 进程组，3 秒后 SIGKILL）。App 崩溃时留下的内核，
+  下一次 `cca _core run` 会按它的 pid 文件认出来停掉。
+- cca 需要内核、App 又没开着时，在后台打开 App：`open -g <App> --args --core`。带 `--core` 启动的 App 不弹主窗口、不占 Dock，
+  只留菜单栏图标；用户从菜单栏、Dock 打开主窗口时照常显示。App 开着时 cca 不再 `open`（会弹出主窗口），而是写 `core/config.yaml`：
+  App 看到它变了就重新读 `state`、接着起内核（看不见时也读）。
+- 演示数据（`CCA_GUI_FIXTURES`）不运行内核。
