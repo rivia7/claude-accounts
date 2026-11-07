@@ -278,9 +278,9 @@ enum Texts {
 
     static func department(_ d: Employee.Department) -> String {
         switch d {
-        case .claude: return "Claude 组"
-        case .chatgpt: return "ChatGPT 组"
-        case .contractors: return "外包"
+        case .claude: return "Claude 账号"
+        case .chatgpt: return "ChatGPT 账号"
+        case .contractors: return "第三方 API 账号"
         }
     }
 
@@ -310,9 +310,9 @@ enum Texts {
         return weekdayTime(epoch, calendar: calendar)
     }
 
-    /// “16:00 回来”；时间已经过了是“马上回来”（等下一次读到新的用量）。
+    /// “16:00 恢复”；时间已经过了是“马上恢复”（等下一次读到新的用量）。
     static func backAt(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
-        epoch <= now ? "马上回来" : backTime(epoch: epoch, now: now, calendar: calendar) + " 回来"
+        epoch <= now ? "马上恢复" : backTime(epoch: epoch, now: now, calendar: calendar) + " 恢复"
     }
 
     /// 在忙什么：“Claude App 开着 · 命令行里 2 个会话，已 12 分钟”。
@@ -324,7 +324,7 @@ enum Texts {
             if let since { s += "，" + elapsed(since: since, now: now) }
             parts.append(s)
         }
-        return parts.isEmpty ? "在忙" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "在用" : parts.joined(separator: " · ")
     }
 
     /// 这个账号在忙什么（头像绿点的悬停提示、工牌上的标签）；不给 now 就不写用了多久。
@@ -352,7 +352,7 @@ enum Texts {
         case .wrongPerson(let email): return email.map { "登录的是 \($0)" } ?? "登录的不是这个账号"
         case .unwell(let a): return ailment(a)
         case .resting(let until): return "额度用完了" + (until.map { "，" + backAt(epoch: $0, now: now) } ?? "")
-        case .working where brief: return "在忙" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "")
+        case .working where brief: return "在用" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "")
         case .working: return working(app: e.app, appLabel: appLabel, sessions: e.sessions, since: e.since, now: now)
         case .idle: return "空闲"
         }
@@ -371,15 +371,15 @@ enum Texts {
         }
     }
 
-    /// 办公室顶上那一行：“8 位员工 · 2 人在忙 · 1 人休息 · 1 人没登录”（0 的不写）；brief 只写几位员工、几人在忙（侧栏）。
+    /// 总览顶上那一行：“8 个账号 · 2 个在用 · 1 个额度用完 · 1 个没登录”（0 的不写）；brief 只写几个账号、几个在用（侧栏）。
     static func officeSummary(_ c: OfficeCensus, brief: Bool = false) -> String {
-        if c.total == 0 { return "还没有员工" }
-        let rest: [(Int, String)] = brief ? [(c.working, "在忙")]
-            : [(c.working, "在忙"), (c.idle, "空闲"), (c.resting, "休息"), (c.absent, "没登录"), (c.wrongPerson, "登错号"), (c.unwell, "有问题")]
-        return (["\(c.total) 位员工"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 人\($0.1)" }).joined(separator: " · ")
+        if c.total == 0 { return "还没有账号" }
+        let rest: [(Int, String)] = brief ? [(c.working, "在用")]
+            : [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "没登录"), (c.wrongPerson, "登错号"), (c.unwell, "有问题")]
+        return (["\(c.total) 个账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
     }
 
-    /// 读屏念的一整句：“工作，Claude 组，Ultra，尊贵套餐，Claude App 开着”。
+    /// 读屏念的一整句：“工作，Claude 账号，Ultra，尊贵套餐，Claude App 开着”。
     static func deskLabel(_ e: Employee, appLabel: String, now: Double) -> String {
         let a = e.account
         var parts = [a.displayName, department(e.department)]

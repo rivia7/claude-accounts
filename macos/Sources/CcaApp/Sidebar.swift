@@ -79,16 +79,9 @@ struct OfficeRow: View {
         TimelineView(.periodic(from: .now, by: 30)) { ctx in
             let census = model.office(now: ctx.date.timeIntervalSince1970).census
             HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Surface.track)
-                    Image(systemName: "building.2.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(width: 30, height: 30)
-                .accessibilityHidden(true)
+                OverviewMark(size: 22).frame(width: 30, height: 30)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("办公室").font(.body.weight(.medium))
+                    Text("总览").font(.body.weight(.medium))
                     Text(model.state == nil ? "所有账号一眼看全" : Texts.officeSummary(census, brief: true))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -110,7 +103,7 @@ struct RoutingRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            BrandMark(size: 30)
+            BrandMark(size: 26).frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("节点分流").font(.body.weight(.medium))
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -200,7 +193,7 @@ struct SidebarFooter: View {
     }
 }
 
-/// 侧栏的一行：头像（在用时右下角有绿点；最高档的套餐有金圈）、名字、第二行（登录有问题时先说、套餐徽章、节点），
+/// 侧栏的一行：头像（在用时右下角有绿点；最高档的套餐有光晕，在用时慢慢流动）、名字、第二行（登录有问题时先说、套餐徽章、节点），
 /// 右边两行小用量。
 struct AccountRow: View {
     @Environment(AppModel.self) private var model
@@ -209,7 +202,7 @@ struct AccountRow: View {
     var body: some View {
         let a = account
         HStack(spacing: 10) {
-            AccountAvatar(account: a, size: 30, dot: 10)
+            AccountAvatar(account: a, size: 30, dot: 10, visible: model.mainVisible)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.body.weight(.medium)).lineLimit(1)

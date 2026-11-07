@@ -119,11 +119,11 @@ func officeTests() async {
     utc.timeZone = TimeZone(identifier: "UTC")!
     var sh = Calendar(identifier: .gregorian)
     sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
-    check("几点回来：今天", Texts.backAt(epoch: 1794050010, now: now0, calendar: utc) == "11:13 回来"
-          && Texts.backAt(epoch: 1794050010, now: now0, calendar: sh) == "19:13 回来", Texts.backAt(epoch: 1794050010, now: now0, calendar: sh))
-    check("几点回来：明天、再远写星期几", Texts.backTime(epoch: now0 + 86400, now: now0, calendar: utc) == "明天 09:00"
+    check("几点恢复：今天", Texts.backAt(epoch: 1794050010, now: now0, calendar: utc) == "11:13 恢复"
+          && Texts.backAt(epoch: 1794050010, now: now0, calendar: sh) == "19:13 恢复", Texts.backAt(epoch: 1794050010, now: now0, calendar: sh))
+    check("几点恢复：明天、再远写星期几", Texts.backTime(epoch: now0 + 86400, now: now0, calendar: utc) == "明天 09:00"
           && Texts.backTime(epoch: 1794297600, now: now0, calendar: sh) == "周二 16:00", Texts.backTime(epoch: 1794297600, now: now0, calendar: sh))
-    check("几点回来：时间过了", Texts.backAt(epoch: now0 - 1, now: now0) == "马上回来")
+    check("几点恢复：时间过了", Texts.backAt(epoch: now0 - 1, now: now0) == "马上恢复")
     check("在忙什么", Texts.working(app: true, appLabel: "Claude App", sessions: 2, since: now0 - 720, now: now0)
           == "Claude App 开着 · 命令行里 2 个会话，已 12 分钟"
           && Texts.working(app: false, appLabel: "", sessions: 1, since: now0 - 10, now: now0) == "命令行里在用，刚开始"
@@ -135,9 +135,9 @@ func officeTests() async {
     check("档位的叫法", Texts.planTier(.premium) == "尊贵" && Texts.planTier(.entry) == "入门" && Texts.planTier(.unknown) == nil)
     check("读屏念的一整句", Texts.deskLabel(Employee.make(acct(["key": "工作(bob@example.com)", "name": "工作", "plan": "Ultra",
           "plan_tier": "premium", "app": ["running": true]]), usage: nil, live: nil, now: now0), appLabel: "Claude App", now: now0)
-          == "工作，Claude 组，Ultra，尊贵套餐，Claude App 开着")
+          == "工作，Claude 账号，Ultra，尊贵套餐，Claude App 开着")
     check("工位上的短写法", Texts.mood(Employee.make(two, usage: nil, live: nil, now: now0), appLabel: "", now: now0, brief: true)
-          == "在忙，已 1 分钟")
+          == "在用，已 1 分钟")
 
     // 手写的演示数据：每种状态都有
     if let d = fixture("state.json"), let s = try? DocumentDecoder.decode(StateDoc.self, from: d) {
@@ -151,7 +151,8 @@ func officeTests() async {
               && moods["grace@example.com"] == .unwell(.exit(.restricted, region: "中国大陆"))
               && moods["直连接口"] == .idle && moods["香港接口"] == .working && moods["frank@example.com"] == .idle,
               "\(moods)")
-        check("点名", Texts.officeSummary(o.census) == "8 位员工 · 2 人在忙 · 2 人空闲 · 1 人休息 · 1 人没登录 · 1 人登错号 · 1 人有问题"
+        check("点名", Texts.officeSummary(o.census) == "8 个账号 · 2 个在用 · 2 个空闲 · 1 个额度用完 · 1 个没登录 · 1 个登错号 · 1 个有问题"
+              && Texts.officeSummary(o.census, brief: true) == "8 个账号 · 2 个在用"
               && o.census.needsAttention == 3, Texts.officeSummary(o.census))
         check("没启用 Codex：没有 ChatGPT 组", Office.make(tools: s.tools, codexEnabled: false, usage: { $0.usage }, live: { _ in nil },
                                                     now: now0).rooms.map(\.department) == [.claude, .contractors])
@@ -166,7 +167,7 @@ func officeTests() async {
     } else {
         check("读 state.json", false)
     }
-    check("空的办公室", Texts.officeSummary(OfficeCensus([])) == "还没有员工"
+    check("空的总览", Texts.officeSummary(OfficeCensus([])) == "还没有账号"
           && Office.make(tools: [], codexEnabled: false, usage: { _ in nil }, live: { _ in nil }, now: now0).rooms.map(\.department) == [.claude])
 
     // 演示数据的时间平移到“现在”（测试不平移）

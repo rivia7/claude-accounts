@@ -1,126 +1,113 @@
 import SwiftUI
 
-// 套餐的四档（cca 给的 plan_tier，App 不按套餐名猜）：
-// 入门（Free、Go）灰色细字；标准（Pro、Plus、Team…）中性标签；进阶（Max、Pro 100 / 200…）银色金属标签 + ✦；
-// 尊贵（Ultra、Pro 500）金色渐变 + 皇冠，头像带金圈，工位是金边的角落办公室，账号页的工牌上还有一道流光。
-// 金色只给最高档（界面的规矩：颜色表达账号、状态、最高档的套餐）；银色是金属的灰，不算一种颜色。
+// 套餐的四档（cca 给的 plan_tier，App 不按套餐名猜），参考 Google 2025 年后的图标语言：一个主色、颜色互相渐变、圆润扁平。
+// 同一种胶囊，前面一个小徽记，徽记的形状和颜色一档比一档足：
+// 入门（Free、Go）灰色圆圈；标准（Pro、Plus、Team…）蓝色圆点、淡蓝底；进阶（Max、Pro 100 / 200…）紫色菱形、淡紫底；
+// 尊贵（Ultra、Pro 500）整块 Logo 的渐变（蓝 → 紫 → 玫红 → 琥珀）、白色四角星，头像有同色的光晕（BadgeAvatar），
+// 总览的卡片、账号页的卡片、插画里的桌子镶同一条渐变的边。
 
 enum TierStyle {
-    static let gold = [Color(hex: 0xF8DB7A), Color(hex: 0xE9B949), Color(hex: 0xC98A20)]
-    static let goldEdge = Color(hex: 0xB07A1A)
-    static let goldInk = Color(hex: 0x3D2600)
-    /// 头像外面的金圈、工位的金边
-    static let goldRing = AngularGradient(colors: [Color(hex: 0xF8DB7A), Color(hex: 0xC98A20), Color(hex: 0xF3CF6B),
-                                                   Color(hex: 0xB8791A), Color(hex: 0xF8DB7A)], center: .center)
-    static let goldStroke = LinearGradient(colors: [Color(hex: 0xF3CF6B), Color(hex: 0xC98A20), Color(hex: 0xF3CF6B)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let silver = [Color(hex: 0xF6F7F9), Color(hex: 0xC9CED7)]
-    static let silverEdge = Color(hex: 0x9AA1AD)
-    static let silverInk = Color(hex: 0x2B2F36)
+    /// 尊贵档的边（卡片、插画）：Logo 的渐变绕一圈
+    static let edge = AngularGradient(colors: Brand.spectrumLoop, center: .center, angle: .degrees(-45))
+    /// 尊贵档的横线（账号页卡片顶上那条带子的下沿）
+    static let line = LinearGradient(colors: Brand.spectrum, startPoint: .leading, endPoint: .trailing)
 }
 
-/// 套餐徽章。compact 用在一行字里（侧栏、菜单栏、工位、分流图），regular 用在账号页的工牌上。
+/// 档位的小徽记：圈 → 圆 → 菱形 → 四角星。onColor：画在尊贵档整块渐变的底上（白色）。
+struct TierMark: View {
+    let tier: PlanTier
+    var size: CGFloat = 11
+    var onColor = false
+
+    var body: some View {
+        Canvas { c, s in
+            let w = s.width, r = CGRect(origin: .zero, size: s)
+            let diagonal = (CGPoint.zero, CGPoint(x: w, y: w))
+            switch tier {
+            case .entry:
+                c.stroke(Path(ellipseIn: r.insetBy(dx: w * 0.14, dy: w * 0.14)), with: .color(Color(hex: 0x8E95A1)), lineWidth: w * 0.16)
+            case .standard:
+                c.fill(Path(ellipseIn: r.insetBy(dx: w * 0.08, dy: w * 0.08)),
+                       with: .linearGradient(Gradient(colors: [Color(hex: 0x6FA0FF), Brand.blue]), startPoint: diagonal.0, endPoint: diagonal.1))
+            case .advanced:
+                var d = Path()
+                d.addRoundedRect(in: r.insetBy(dx: w * 0.17, dy: w * 0.17), cornerSize: CGSize(width: w * 0.16, height: w * 0.16), style: .continuous,
+                                 transform: CGAffineTransform(translationX: w / 2, y: w / 2).rotated(by: .pi / 4).translatedBy(x: -w / 2, y: -w / 2))
+                c.fill(d, with: .linearGradient(Gradient(colors: [Color(hex: 0xA58BFF), Brand.violet]), startPoint: diagonal.0, endPoint: diagonal.1))
+            case .premium:
+                // 圆润的四角星：四条边向里弯
+                let m = w / 2
+                let tips = [CGPoint(x: m, y: 0), CGPoint(x: w, y: m), CGPoint(x: m, y: w), CGPoint(x: 0, y: m)]
+                var star = Path()
+                star.move(to: tips[0])
+                for i in 0..<4 {
+                    let a = tips[i], b = tips[(i + 1) % 4]
+                    star.addQuadCurve(to: b, control: CGPoint(x: m + (a.x + b.x - w) * 0.12, y: m + (a.y + b.y - w) * 0.12))
+                }
+                star.closeSubpath()
+                c.fill(star, with: onColor ? .color(.white)
+                       : .linearGradient(Gradient(colors: Brand.spectrum), startPoint: CGPoint(x: 0, y: w), endPoint: CGPoint(x: w, y: 0)))
+            default:
+                break
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 套餐徽章。compact 用在一行字里（侧栏、菜单栏、总览的卡片、分流图），regular 用在账号页的卡片上。
 struct PlanBadge: View {
     enum Size { case compact, regular }
 
     let plan: String
     let tier: PlanTier
     var size: Size = .regular
-    /// 尊贵档每隔几秒扫过一道光：只给账号页的工牌，窗口看不见、开了“减少动态效果”时不动
-    var shimmer = false
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        content
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .help(Texts.planName(plan, tier: tier))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Texts.planName(plan, tier: tier))
-    }
-
-    private var font: Font { size == .compact ? .caption2.weight(.semibold) : .caption.weight(.semibold) }
-    private var hPad: CGFloat { size == .compact ? 6 : 8 }
-    private var vPad: CGFloat { size == .compact ? 1 : 3 }
-
-    @ViewBuilder
-    private var content: some View {
-        switch tier {
-        case .entry:
-            Text(plan).font(size == .compact ? .caption : .caption.weight(.medium)).foregroundStyle(.secondary)
-        case .advanced:
-            label(icon: "sparkle", ink: TierStyle.silverInk)
-                .background(Capsule().fill(LinearGradient(colors: TierStyle.silver, startPoint: .top, endPoint: .bottom)))
-                .overlay(Capsule().strokeBorder(TierStyle.silverEdge.opacity(0.8), lineWidth: 0.5))
-        case .premium:
-            label(icon: "crown.fill", ink: TierStyle.goldInk)
-                .background(Capsule().fill(LinearGradient(colors: TierStyle.gold, startPoint: .topLeading, endPoint: .bottomTrailing)))
-                .overlay { if shimmer { Shimmer(running: !reduceMotion).clipShape(Capsule()) } }
-                .overlay(Capsule().strokeBorder(TierStyle.goldEdge.opacity(0.7), lineWidth: 0.5))
-                .shadow(color: TierStyle.gold[2].opacity(size == .compact ? 0 : 0.35), radius: 3, y: 1)
-        default:
-            // 标准档，或者 cca 认不出的新套餐：和以前一样的中性标签
-            Text(plan).font(font.weight(.medium)).foregroundStyle(.secondary)
-                .padding(.horizontal, hPad).padding(.vertical, vPad)
-                .background(Capsule().fill(.quaternary.opacity(0.7)))
-        }
-    }
-
-    private func label(icon: String, ink: Color) -> some View {
-        HStack(spacing: size == .compact ? 2 : 3) {
-            Image(systemName: icon).imageScale(.small)
+        let compact = size == .compact
+        HStack(spacing: compact ? 3 : 4) {
+            if tier.isKnown && tier != .unknown {
+                TierMark(tier: tier, size: compact ? 9 : 11, onColor: tier == .premium)
+            }
             Text(plan)
+                .font(.system(size: compact ? 10.5 : 12, weight: .semibold))
+                .foregroundStyle(ink)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        .font(font)
-        .foregroundStyle(ink)
-        .padding(.horizontal, hPad)
-        .padding(.vertical, vPad)
+        .padding(.horizontal, compact ? 6.5 : 8.5)
+        .frame(height: compact ? 17 : 21)
+        .background(Capsule().fill(fill))
+        .help(Texts.planName(plan, tier: tier))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Texts.planName(plan, tier: tier))
     }
-}
 
-/// 金徽章上扫过的那道光：4.5 秒一次，扫 0.9 秒；只在扫的时候出帧（SweepSchedule），其余时间不重画。
-/// running 为假（减少动态效果）、窗口看不见时不动。
-private struct Shimmer: View {
-    let running: Bool
-    @Environment(AppModel.self) private var model
+    private var dark: Bool { scheme == .dark }
 
-    var body: some View {
-        TimelineView(SweepSchedule(paused: !running || !model.mainVisible)) { ctx in
-            GeometryReader { g in
-                let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: SweepSchedule.period) / SweepSchedule.sweep
-                if running, t < 1 {
-                    let w = g.size.width
-                    LinearGradient(colors: [.clear, .white.opacity(0.7), .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: w * 0.45)
-                        .rotationEffect(.degrees(18))
-                        .offset(x: -w * 0.45 + (w * 1.45) * t)
-                }
-            }
+    private var ink: Color {
+        switch tier {
+        case .premium: return .white
+        case .standard: return dark ? Color(hex: 0xA9C6FF) : Color(hex: 0x1D4FC4)
+        case .advanced: return dark ? Color(hex: 0xC8BBFF) : Color(hex: 0x5133D6)
+        default: return dark ? Color(hex: 0xA3A9B3) : Color(hex: 0x5D636D)   // 入门，或者 cca 认不出的新套餐
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
-}
 
-/// 流光的时间表：每 period 秒扫一次，扫的 sweep 秒里每秒 30 帧，扫完补一帧（光移出去），其余时间不出帧。
-private struct SweepSchedule: TimelineSchedule {
-    static let period = 4.5
-    static let sweep = 0.9
-    let paused: Bool
-
-    func entries(from start: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
-        if paused { return AnyIterator([start].makeIterator()) }
-        let fps = mode == .lowFrequency ? 4.0 : 30.0
-        var cycle = (start.timeIntervalSinceReferenceDate / Self.period).rounded(.down)
-        var frame = 0
-        let frames = Int(Self.sweep * fps) + 1
-        return AnyIterator {
-            defer {
-                frame += 1
-                if frame > frames { frame = 0; cycle += 1 }
-            }
-            return Date(timeIntervalSinceReferenceDate: cycle * Self.period + Double(frame) / fps)
+    private var fill: AnyShapeStyle {
+        switch tier {
+        case .premium:
+            return AnyShapeStyle(LinearGradient(colors: Brand.spectrum, startPoint: .leading, endPoint: .trailing))
+        case .standard:
+            return AnyShapeStyle(Brand.blue.opacity(dark ? 0.22 : 0.11))
+        case .advanced:
+            return AnyShapeStyle(LinearGradient(colors: [Brand.violet.opacity(dark ? 0.28 : 0.14), Brand.blue.opacity(dark ? 0.22 : 0.10)],
+                                                startPoint: .leading, endPoint: .trailing))
+        default:
+            return AnyShapeStyle(Color.primary.opacity(dark ? 0.08 : 0.05))
         }
     }
 }

@@ -12,7 +12,7 @@ struct AccountDetail: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 32) {
                     TipCard(id: "account-page", title: "这一页怎么看",
-                            message: "下面这张工牌就是这个账号：名字旁边是套餐，工牌里最下面那句话告诉你它现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
+                            message: "下面这张卡片就是这个账号：名字旁边是套餐，卡片最下面那句话告诉你它现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
                     DetailHeader(account: a)
                     SectionColumns {
                         if !a.isAPI { UsageSection(account: a) }
@@ -83,7 +83,7 @@ struct DetailHeader: View {
 
     private func identity(_ a: Account) -> some View {
         HStack(alignment: .center, spacing: 16) {
-            AccountAvatar(account: a, size: 56, dot: 15)
+            AccountAvatar(account: a, size: 56, dot: 15, visible: model.mainVisible)
             VStack(alignment: .leading, spacing: 5) {
                 AliasTitle(account: a)
                 if let sub = secondaryIdentity(a) {
@@ -105,14 +105,14 @@ struct DetailHeader: View {
         return email
     }
 
-    /// 标签：套餐徽章（最高档的金徽章带流光）；登录有问题时才说登录状态；在用（App 开着、命令行里几个会话）；上次在命令行里用的。
+    /// 标签：套餐徽章（最高档是整块渐变）；登录有问题时才说登录状态；在用（App 开着、命令行里几个会话）；上次在命令行里用的。
     @ViewBuilder
     private func tags(_ a: Account) -> some View {
         if a.isAPI {
             Tag(text: "第三方 API", color: .blue, systemImage: "key.horizontal")
             if let m = nonEmpty(a.api?.model) { Tag(text: m) }
         } else {
-            if let p = nonEmpty(a.plan) { PlanBadge(plan: p, tier: a.planTier, shimmer: true) }
+            if let p = nonEmpty(a.plan) { PlanBadge(plan: p, tier: a.planTier) }
             if let c = a.loginIssueColor {
                 Tag(text: Texts.login(a.login, loginEmail: a.loginEmail), color: c)
             }
@@ -185,7 +185,7 @@ struct DetailHeader: View {
 }
 
 /// 账号页的工牌：顶上一条账号色的带子（写着哪个组；显示细节时还有工号，就是它的槽位组 CCA-n），下面是头像、名字、套餐、
-/// 按钮和那句话。最高档的套餐镶金边，第三方 API 账号（外包）是虚线边。内容层，是实的（不是玻璃）。
+/// 按钮和那句话。最高档的套餐镶一圈 Logo 的渐变，第三方 API 账号是虚线边。内容层，是实的（不是玻璃）。
 struct EmployeeBadgeCard<Content: View>: View {
     @Environment(Guide.self) private var guide
     let account: Account
@@ -201,7 +201,7 @@ struct EmployeeBadgeCard<Content: View>: View {
                     Text(Texts.department(Employee.department(of: a))).font(.caption.weight(.semibold))
                     Spacer(minLength: 8)
                     if guide.showDetails, let g = a.group {
-                        Text("工号 \(g)").font(.caption.weight(.medium)).monospacedDigit()
+                        Text(g).font(.caption.weight(.medium)).monospacedDigit()
                     }
                 }
                 // 挂绳的卡槽
@@ -212,7 +212,7 @@ struct EmployeeBadgeCard<Content: View>: View {
             .frame(height: 30)
             .background(LinearGradient(colors: [c, c.mix(with: .black, by: 0.18)], startPoint: .leading, endPoint: .trailing))
             .overlay(alignment: .bottom) {
-                if a.isPremium { Rectangle().fill(TierStyle.goldStroke).frame(height: 1.5) }
+                if a.isPremium { Rectangle().fill(TierStyle.line).frame(height: 2) }
             }
             .accessibilityElement(children: .combine)
             content
@@ -222,7 +222,7 @@ struct EmployeeBadgeCard<Content: View>: View {
         .clipShape(shape)
         .overlay {
             if a.isPremium {
-                shape.strokeBorder(TierStyle.goldStroke, lineWidth: 1.5)
+                shape.strokeBorder(TierStyle.edge, lineWidth: 1.5)
             } else if a.isAPI {
                 shape.strokeBorder(Surface.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
             } else {

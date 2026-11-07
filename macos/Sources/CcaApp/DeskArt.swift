@@ -3,7 +3,7 @@ import SwiftUI
 // 办公室里一个工位的插画（Canvas 画的，没有图片资源）：桌子、显示器、椅子、坐着的人（身子是账号色，脸是账号的头像）。
 // 设计空间 240×168，按宽度缩放。显示器上演这个账号此刻在干什么；会动的部分（打字、滚动的代码、热气、zZ、汗）只在
 // animate 时走（窗口看得见、没开“减少动态效果”），帧率看状态，没人、坐着陌生人的工位不走。
-// 家具一律中性灰（不带含义），账号色只用在人、地毯和屏幕上，金色只给最高档的角落办公室。
+// 家具一律中性灰（不带含义），账号色只用在人、地毯和屏幕上，Logo 的渐变只给最高档的角落办公室（窗框、桌沿、扶手、台灯）。
 
 /// 人的姿势
 enum DeskPose {
@@ -108,7 +108,7 @@ struct DeskScene: View {
         .accessibilityHidden(true)
     }
 
-    /// 脸（账号的头像，最高档有金圈）；陌生人是灰色的问号，真主人的头像别在显示器角上；没人时别在外套上。
+    /// 脸（账号的头像，最高档有光晕）；陌生人是灰色的问号，真主人的头像别在显示器角上；没人时别在外套上。
     @ViewBuilder
     private func faces(_ p: DeskPainter, _ s: CGFloat) -> some View {
         let a = employee.account
@@ -253,7 +253,12 @@ struct DeskPainter {
     }
 
     private var armColor: Color { accent.mix(with: .black, by: 0.2) }
-    private var gold: Color { TierStyle.gold[1] }
+    /// 尊贵档的装饰（窗框、桌沿、扶手、抽屉、台灯）：Logo 的渐变，单色的地方用其中的紫
+    private var luxe: Color { Brand.violet }
+
+    private func spectrum(_ from: CGPoint, _ to: CGPoint) -> GraphicsContext.Shading {
+        .linearGradient(Gradient(colors: Brand.spectrum), startPoint: from, endPoint: to)
+    }
 
     // MARK: 画
 
@@ -302,9 +307,8 @@ struct DeskPainter {
         var mullion = Path()
         mullion.move(to: CGPoint(x: w.midX, y: w.minY))
         mullion.addLine(to: CGPoint(x: w.midX, y: w.maxY))
-        c.stroke(mullion, with: .color(gold.opacity(0.9)), lineWidth: 1.2)
-        c.stroke(rr(w.minX, w.minY, w.width, w.height, 4), with: .linearGradient(Gradient(colors: TierStyle.gold),
-                                                                                  startPoint: w.origin, endPoint: CGPoint(x: w.maxX, y: w.maxY)),
+        c.stroke(mullion, with: .color(luxe.opacity(0.7)), lineWidth: 1.2)
+        c.stroke(rr(w.minX, w.minY, w.width, w.height, 4), with: spectrum(CGPoint(x: w.minX, y: w.maxY), CGPoint(x: w.maxX, y: w.minY)),
                  lineWidth: 2)
     }
 
@@ -312,7 +316,7 @@ struct DeskPainter {
         let dx = chairShift
         c.fill(rr(182 + dx, 46, 32, 58, 12), with: .color(palette.chairBack))
         if premium {
-            c.stroke(rr(182 + dx, 46, 32, 58, 12), with: .color(gold.opacity(0.9)), lineWidth: 1.2)
+            c.stroke(rr(182 + dx, 46, 32, 58, 12), with: spectrum(CGPoint(x: 182 + dx, y: 104), CGPoint(x: 214 + dx, y: 46)), lineWidth: 1.4)
         }
     }
 
@@ -331,7 +335,7 @@ struct DeskPainter {
             var arm = Path()
             arm.move(to: CGPoint(x: 172 + dx, y: 99))
             arm.addLine(to: CGPoint(x: 206 + dx, y: 99))
-            c.stroke(arm, with: .color(gold), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            c.stroke(arm, with: spectrum(CGPoint(x: 172 + dx, y: 99), CGPoint(x: 206 + dx, y: 99)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
         }
     }
 
@@ -367,32 +371,32 @@ struct DeskPainter {
         c.fill(rr(20, 116, 142, 34, 3), with: .color(front))
         c.fill(rr(12, 108, 158, 8, 3), with: .color(top))
         // 抽屉
-        c.stroke(rr(116, 121, 40, 12, 2), with: .color(premium ? gold.opacity(0.55) : palette.drawer), lineWidth: 1)
-        c.stroke(rr(116, 136, 40, 11, 2), with: .color(premium ? gold.opacity(0.55) : palette.drawer), lineWidth: 1)
+        c.stroke(rr(116, 121, 40, 12, 2), with: .color(premium ? luxe.opacity(0.45) : palette.drawer), lineWidth: 1)
+        c.stroke(rr(116, 136, 40, 11, 2), with: .color(premium ? luxe.opacity(0.45) : palette.drawer), lineWidth: 1)
         for y in [127.0, 141.5] {
-            c.fill(rr(131, y - 1, 10, 2, 1), with: .color(premium ? gold : palette.drawer))
+            c.fill(rr(131, y - 1, 10, 2, 1), with: premium ? spectrum(CGPoint(x: 131, y: y), CGPoint(x: 141, y: y)) : .color(palette.drawer))
         }
         if premium {
             var edge = Path()
             edge.move(to: CGPoint(x: 13, y: 116))
             edge.addLine(to: CGPoint(x: 169, y: 116))
-            c.stroke(edge, with: .color(gold), lineWidth: 1.4)
+            c.stroke(edge, with: spectrum(CGPoint(x: 13, y: 116), CGPoint(x: 169, y: 116)), lineWidth: 1.6)
         }
     }
 
     private func drawLamp(_ c: inout GraphicsContext) {
-        c.fill(rr(14, 104, 14, 4, 2), with: .color(gold))
+        c.fill(rr(14, 104, 14, 4, 2), with: .color(luxe))
         var pole = Path()
         pole.move(to: CGPoint(x: 21, y: 105))
         pole.addLine(to: CGPoint(x: 21, y: 82))
-        c.stroke(pole, with: .color(gold), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        c.stroke(pole, with: .color(luxe), style: StrokeStyle(lineWidth: 2, lineCap: .round))
         var shade = Path()
         shade.move(to: CGPoint(x: 13, y: 84))
         shade.addLine(to: CGPoint(x: 29, y: 84))
         shade.addLine(to: CGPoint(x: 25, y: 74))
         shade.addLine(to: CGPoint(x: 17, y: 74))
         shade.closeSubpath()
-        c.fill(shade, with: .linearGradient(Gradient(colors: TierStyle.gold), startPoint: CGPoint(x: 13, y: 74), endPoint: CGPoint(x: 29, y: 84)))
+        c.fill(shade, with: spectrum(CGPoint(x: 13, y: 84), CGPoint(x: 29, y: 74)))
         c.fill(Path(ellipseIn: CGRect(x: 10, y: 82, width: 22, height: 12)),
                with: .radialGradient(Gradient(colors: [Color(hex: 0xFFE7A3).opacity(0.45), .clear]), center: CGPoint(x: 21, y: 86),
                                      startRadius: 0, endRadius: 12))

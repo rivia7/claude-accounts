@@ -219,7 +219,7 @@ private struct DeskGallery: View {
     private static let looks = [
         Look(caption: "App + 命令行", mood: .working, app: true, sessions: 2), Look(caption: "命令行", mood: .working, app: false, sessions: 1),
         Look(caption: "App", mood: .working, app: true, sessions: 0), Look(caption: "空闲", mood: .idle, app: false, sessions: 0),
-        Look(caption: "休息", mood: .resting(until: Date().timeIntervalSince1970 + 7800), app: false, sessions: 0),
+        Look(caption: "额度用完", mood: .resting(until: Date().timeIntervalSince1970 + 7800), app: false, sessions: 0),
         Look(caption: "没登录", mood: .absent, app: false, sessions: 0),
         Look(caption: "登错号", mood: .wrongPerson(loginEmail: "eve@example.com"), app: false, sessions: 0),
         Look(caption: "端口不通", mood: .unwell(.portClosed), app: true, sessions: 0),
@@ -229,7 +229,7 @@ private struct DeskGallery: View {
         Tier(caption: "尊贵", plan: "Ultra", tier: .premium, api: false, color: "#30A46C"),
         Tier(caption: "进阶", plan: "Max", tier: .advanced, api: false, color: "#8E4EC6"),
         Tier(caption: "标准", plan: "Pro", tier: .standard, api: false, color: "#0A84FF"),
-        Tier(caption: "外包", plan: "", tier: .unknown, api: true, color: ""),
+        Tier(caption: "第三方 API", plan: "", tier: .unknown, api: true, color: ""),
     ]
 
     var body: some View {

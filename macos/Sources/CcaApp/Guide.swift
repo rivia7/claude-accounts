@@ -78,15 +78,15 @@ struct TutorialCard {
 
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
-            ("person.2", "同时管好几个 Claude、ChatGPT 账号：办公室里一眼看全，左边按工具分开列出。"),
+            ("person.2", "同时管好几个 Claude、ChatGPT 账号：总览里一眼看全，左边按工具分开列出。"),
             ("point.3.connected.trianglepath.dotted", "每个账号走自己的网络出口（节点），互不串号。"),
             ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
         ], art: .fan),
-        TutorialCard(title: "办公室：谁在忙，谁在休息", points: [
-            ("building.2", "打开 App 先看到办公室：每个账号是一位员工，Claude、ChatGPT、第三方 API（外包）分组坐好。"),
-            ("desktopcomputer", "屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
-            ("moon.zzz", "趴着睡觉是额度用完了，屏幕上写着几点回来；椅子空着是没登录，坐着陌生人是登错了号。"),
-            ("crown", "套餐越高名牌越亮，Ultra、Pro 500 是金色的皇冠。点一个工位就进这个账号的页面。"),
+        TutorialCard(title: "总览：哪个在用，哪个额度用完了", points: [
+            ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
+            ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
+            ("moon.zzz", "趴在桌上是额度用完了，屏幕上写着几点恢复；椅子空着是没登录，坐着灰色的人是登录的不是这个账号。"),
+            ("sparkle", "套餐越高徽章越亮，Ultra、Pro 500 是一整块渐变，头像还有光晕。点一张卡片就进这个账号的页面。"),
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
@@ -270,12 +270,12 @@ struct TutorialArt: View {
         return Employee(account: a, mood: mood, flags: [])
     }
 
-    /// 三个小工位：在忙（最高档，金边的角落办公室）、额度用完在休息、没登录（椅子空着）。静止的一帧。
+    /// 三个小工位：在忙（最高档，镶渐变边的角落办公室）、额度用完在休息、没登录（椅子空着）。静止的一帧。
     private var officeArt: some View {
         let now = Date().timeIntervalSince1970
         let desks: [(caption: String, employee: Employee)] = [
-            ("在忙", Self.demo(0, plan: "Ultra", tier: .premium, mood: .working)),
-            ("休息中", Self.demo(2, plan: "Pro 100", tier: .advanced, mood: .resting(until: now + 7800))),
+            ("在用", Self.demo(0, plan: "Ultra", tier: .premium, mood: .working)),
+            ("额度用完", Self.demo(2, plan: "Pro 100", tier: .advanced, mood: .resting(until: now + 7800))),
             ("没登录", Self.demo(1, plan: "Pro", tier: .standard, mood: .absent)),
         ]
         return HStack(spacing: 12) {
@@ -292,7 +292,7 @@ struct TutorialArt: View {
                 .background(shape.fill(.background))
                 .overlay {
                     if a.isPremium {
-                        shape.strokeBorder(TierStyle.goldStroke, lineWidth: 1.2)
+                        shape.strokeBorder(TierStyle.edge, lineWidth: 1.2)
                     } else {
                         shape.strokeBorder(Surface.hairline, lineWidth: 0.5)
                     }

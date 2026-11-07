@@ -152,7 +152,7 @@ struct MenuRow: View {
         let busy = model.activity(a.ref) != nil
         let issue = problem(a, u)
         HStack(spacing: 10) {
-            AccountAvatar(account: a, size: 28, dot: 9)
+            AccountAvatar(account: a, size: 28, dot: 9, visible: model.panelVisible)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)

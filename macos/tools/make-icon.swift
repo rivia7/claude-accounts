@@ -3,7 +3,7 @@
 // 只用 CoreGraphics（形状取 SwiftUI 的连续圆角矩形，和系统图标的轮廓一样）。按 Apple 的图标网格：
 // 圆角方形边长 824、四周各留 100（0.0977 × 1024），圆角 185.4；所有内容都裁在圆角方形里，外面一个像素都不画
 // （macOS 26 起，轮廓不对的图标会被缩小、关进灰色的底板里）。
-// 图案是原创的：深色渐变底上，一个出口节点分出几条线连到不同颜色的节点（账号经各自的节点出去）。
+// 图案是原创的：白底上一根粗圆的线分成三支，主干蓝色，三支各自渐变到玫红、青绿、琥珀（一个出口分给几个账号）。
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -43,114 +43,51 @@ ctx.saveGState()
 ctx.addPath(squircle)
 ctx.clip()
 
-// 底：深靛蓝到夜蓝的竖向渐变，右下角一团青色的光
-ctx.setFillColor(rgb(0x141B52))
-ctx.fill(body)
-ctx.drawLinearGradient(gradient([(0, rgb(0x2D3A9E)), (0.55, rgb(0x1A2266)), (1, rgb(0x0C1033))]),
-                       start: CGPoint(x: body.minX, y: body.minY), end: CGPoint(x: body.maxX * 0.7, y: body.maxY),
-                       options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-ctx.drawRadialGradient(gradient([(0, rgb(0x19C2B0, 0.55)), (1, rgb(0x19C2B0, 0))]),
-                       startCenter: CGPoint(x: 800, y: 820), startRadius: 0, endCenter: CGPoint(x: 800, y: 820), endRadius: 520, options: [])
-ctx.drawRadialGradient(gradient([(0, rgb(0x7B8CFF, 0.35)), (1, rgb(0x7B8CFF, 0))]),
-                       startCenter: CGPoint(x: 240, y: 230), startRadius: 0, endCenter: CGPoint(x: 240, y: 230), endRadius: 460, options: [])
-
-// 淡淡的点阵（网络的感觉）
-ctx.setFillColor(rgb(0xFFFFFF, 0.055))
-var y = body.minY + 40
-while y < body.maxY {
-    var x = body.minX + 40
-    while x < body.maxX {
-        ctx.fillEllipse(in: CGRect(x: x - 3.5, y: y - 3.5, width: 7, height: 7))
-        x += 62
-    }
-    y += 62
-}
-
-// 出口节点和四个目标节点
-let hub = CGPoint(x: 318, y: 512)
-let targets: [(CGPoint, UInt32)] = [
-    (CGPoint(x: 716, y: 292), 0x0A84FF),
-    (CGPoint(x: 760, y: 450), 0x30A46C),
-    (CGPoint(x: 760, y: 608), 0xD6409F),
-    (CGPoint(x: 716, y: 760), 0xF5A524),
-]
-
-// 线：从出口节点出发的平滑曲线，先画一层柔和的光，再画实线（颜色从白渐变到节点色）
-for (p, color) in targets {
-    let path = CGMutablePath()
-    path.move(to: hub)
-    path.addCurve(to: p, control1: CGPoint(x: hub.x + 210, y: hub.y), control2: CGPoint(x: p.x - 230, y: p.y))
-    ctx.saveGState()
-    ctx.addPath(path)
-    ctx.setLineWidth(52)
-    ctx.setLineCap(.round)
-    ctx.setStrokeColor(rgb(color, 0.16))
-    ctx.strokePath()
-    ctx.restoreGState()
-
-    ctx.saveGState()
-    ctx.addPath(path)
-    ctx.setLineWidth(24)
-    ctx.setLineCap(.round)
-    ctx.replacePathWithStrokedPath()
-    ctx.clip()
-    ctx.drawLinearGradient(gradient([(0, rgb(0xFFFFFF, 0.95)), (0.45, rgb(0xFFFFFF, 0.85)), (1, rgb(color))]),
-                           start: hub, end: p, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-    ctx.restoreGState()
-}
-
-// 目标节点：彩色圆，白色细圈，顶部一点高光
-for (p, color) in targets {
-    let r: CGFloat = 50
-    let rect = CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)
-    ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: 10), blur: 26, color: rgb(0x000000, 0.35))
-    ctx.setFillColor(rgb(color))
-    ctx.fillEllipse(in: rect)
-    ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addEllipse(in: rect)
-    ctx.clip()
-    ctx.drawLinearGradient(gradient([(0, rgb(0xFFFFFF, 0.45)), (0.5, rgb(0xFFFFFF, 0))]),
-                           start: CGPoint(x: p.x, y: rect.minY), end: CGPoint(x: p.x, y: rect.maxY), options: [])
-    ctx.restoreGState()
-    ctx.setStrokeColor(rgb(0xFFFFFF, 0.92))
-    ctx.setLineWidth(9)
-    ctx.strokeEllipse(in: rect.insetBy(dx: 4.5, dy: 4.5))
-}
-
-// 出口节点：白色大圆，深色的环和中心
-do {
-    let r: CGFloat = 92
-    let rect = CGRect(x: hub.x - r, y: hub.y - r, width: 2 * r, height: 2 * r)
-    ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: 14), blur: 36, color: rgb(0x000000, 0.4))
-    ctx.setFillColor(rgb(0xFFFFFF))
-    ctx.fillEllipse(in: rect)
-    ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addEllipse(in: rect)
-    ctx.clip()
-    ctx.drawLinearGradient(gradient([(0, rgb(0xFFFFFF)), (1, rgb(0xDCE3FF))]),
-                           start: CGPoint(x: hub.x, y: rect.minY), end: CGPoint(x: hub.x, y: rect.maxY), options: [])
-    ctx.restoreGState()
-    let ring = rect.insetBy(dx: 30, dy: 30)
-    ctx.setStrokeColor(rgb(0x1A2266))
-    ctx.setLineWidth(16)
-    ctx.strokeEllipse(in: ring)
-    let core = rect.insetBy(dx: 62, dy: 62)
-    ctx.setFillColor(rgb(0x1A2266))
-    ctx.fillEllipse(in: core)
-}
-
-// 玻璃质感：上半部一层很淡的白色高光
-ctx.drawLinearGradient(gradient([(0, rgb(0xFFFFFF, 0.16)), (0.42, rgb(0xFFFFFF, 0.03)), (0.5, rgb(0xFFFFFF, 0))]),
+// 底：干净的白，往下一点点灰（参考 Google 2025 年后的图标：一块干净的底上一个渐变的形，扁平、不加高光和阴影）
+ctx.drawLinearGradient(gradient([(0, rgb(0xFFFFFF)), (1, rgb(0xEDF0F6))]),
                        start: CGPoint(x: 512, y: body.minY), end: CGPoint(x: 512, y: body.maxY), options: [])
 
-// 内描边：让边缘在浅色背景上也清楚（画在圆角方形里面）
+// 字形：粗圆的一根线分成三支（一个出口分给几个账号）。主干蓝色，每一支从蓝渐变到自己的颜色（玫红、青绿、琥珀），
+// 颜色互相流过去，不是一块一块。和 App 里的 BrandMark 同一个形
+let box = CGRect(x: 512 - 296, y: 512 - 296, width: 592, height: 592)
+func at(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: box.minX + x * box.width, y: box.minY + y * box.height) }
+let root = at(0.12, 0.5), fork = at(0.38, 0.5)
+let blue: UInt32 = 0x3B7BFF
+// 每一支的渐变：分开之前都是蓝（三支在接头处叠着，颜色一样才看不出叠），分开以后才流向自己的颜色；
+// 中间放饱和的颜色（蓝直接到琥珀会经过发灰的中间色），最下面那支走完整条 Logo 渐变（蓝 → 紫 → 玫红 → 琥珀）
+let branches: [(CGPoint, [(CGFloat, UInt32)])] = [
+    (at(0.82, 0.17), [(0, blue), (0.3, blue), (0.65, 0x7C5CFF), (1, 0xEC4C8C)]),
+    (at(0.86, 0.5), [(0, blue), (0.3, blue), (0.65, 0x22A3E6), (1, 0x14B8A6)]),
+    (at(0.82, 0.83), [(0, blue), (0.28, blue), (0.52, 0x7C5CFF), (0.76, 0xEC4C8C), (1, 0xF5A524)]),
+]
+let weight = box.width * 0.15
+for i in [1, 0, 2] {
+    let (tip, stops) = branches[i]
+    let path = CGMutablePath()
+    path.move(to: fork)
+    let k = fork.x + (tip.x - fork.x) * 0.5
+    path.addCurve(to: tip, control1: CGPoint(x: k, y: fork.y), control2: CGPoint(x: k, y: tip.y))
+    ctx.saveGState()
+    ctx.addPath(path.copy(strokingWithWidth: weight, lineCap: .round, lineJoin: .round, miterLimit: 10))
+    ctx.clip()
+    ctx.drawLinearGradient(gradient(stops.map { ($0.0, rgb($0.1)) }), start: fork, end: tip,
+                           options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+    ctx.restoreGState()
+}
+// 主干（接头处和三支一样是蓝色，盖上去看不出接缝）
+do {
+    let stem = CGMutablePath()
+    stem.move(to: root)
+    stem.addLine(to: fork)
+    ctx.addPath(stem.copy(strokingWithWidth: weight, lineCap: .round, lineJoin: .round, miterLimit: 10))
+    ctx.setFillColor(rgb(blue))
+    ctx.fillPath()
+}
+
+// 内描边：浅色背景（Finder、白色的桌面）上也看得出边
 ctx.addPath(squircle)
-ctx.setStrokeColor(rgb(0xFFFFFF, 0.14))
-ctx.setLineWidth(6)
+ctx.setStrokeColor(rgb(0x000000, 0.07))
+ctx.setLineWidth(5)
 ctx.strokePath()
 ctx.restoreGState()
 

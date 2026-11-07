@@ -15,7 +15,7 @@ struct OfficePage: View {
                 VStack(alignment: .leading, spacing: 26) {
                     header(office)
                     TipCard(id: "office-page", title: "这一页怎么看",
-                            message: "每个账号是一位员工，坐在自己的工位上。屏幕在滚代码、聊天，说明它正在被使用；趴着睡觉、屏幕黑了，是额度用完了，屏幕上写着几点回来；椅子空着是还没登录，坐着陌生人是登错了号。名牌越亮套餐越高，金色皇冠是最高档。点一个工位看详情，右键可以直接打开。")
+                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。徽章越亮套餐越高，最高档是一整块渐变、头像有光晕。点卡片看详情，右键可以直接打开。")
                     if model.state == nil {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -32,13 +32,13 @@ struct OfficePage: View {
                 .pageColumn()
             }
         }
-        .navigationTitle("办公室")
+        .navigationTitle("总览")
     }
 
     private func header(_ o: Office) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Text("办公室").font(.system(size: 24, weight: .semibold))
+                Text("总览").font(.system(size: 24, weight: .semibold))
                 if model.stateLoading { ProgressView().controlSize(.small) }
             }
             Text(Texts.officeSummary(o.census))
@@ -60,7 +60,7 @@ private struct RoomSection: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(Texts.department(room.department)) {
                 if !room.people.isEmpty {
-                    Text("\(room.people.count) 人").font(.callout).foregroundStyle(.secondary)
+                    Text("\(room.people.count) 个").font(.callout).foregroundStyle(.secondary)
                 }
                 Button {
                     model.runInTerminal(add)
@@ -113,7 +113,7 @@ private struct DeskCard: View {
             .background(shape.fill(on ? Color.primary.opacity(0.08) : Surface.tile))
             .overlay {
                 if a.isPremium {
-                    shape.strokeBorder(TierStyle.goldStroke, lineWidth: 1.5)
+                    shape.strokeBorder(TierStyle.edge, lineWidth: 1.5)
                 } else {
                     shape.strokeBorder(Color.primary.opacity(on ? 0.16 : 0), lineWidth: 1)
                 }
