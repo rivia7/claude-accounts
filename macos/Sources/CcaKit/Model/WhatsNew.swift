@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.14", title: "界面更简洁", points: [
+            .init(symbol: "sparkle",
+                  text: "套餐徽章不再整块上色：都是灰色的小胶囊，档位看前面的小记号（灰圈、蓝点、紫色菱形，最高档是彩色的四角星）。"),
+            .init(symbol: "circle.dashed",
+                  text: "最高档账号的光晕只留在左边列表的头像上，换成一圈细细的环，也不会再被切掉一块。"),
+            .init(symbol: "person.text.rectangle",
+                  text: "账号页的头部回到简洁的样子，不套卡片、不加彩色边框；总览的卡片和插画也不再按套餐上色。"),
+            .init(symbol: "bolt",
+                  text: "从命令行启动账号时少起几次 Python，快一点。"),
+        ], art: "badges"),
         ReleaseNote(version: "2.9.0-beta.13", title: "加强账号隔离，集中管理 ChatGPT 更新", points: [
             .init(symbol: "key.horizontal",
                   text: "加强各账号的钥匙串和登录凭证隔离，阻止终端环境或共享设置意外覆盖账号凭证。"),
