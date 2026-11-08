@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.18", title: "终端工具也能检查更新，账号顺序同步到终端", points: [
+            .init(symbol: "terminal",
+                  text: "「客户端更新」现在也检查终端里的 Claude Code 和 Codex：有新版本时确认一下就能更新，开着的会话不受影响，下次启动时用新版本。"),
+            .init(symbol: "arrow.up.arrow.down",
+                  text: "在 App 里调整账号顺序或置顶，终端里的菜单和编号也跟着变；在终端里改了账号表的顺序，App 也跟着变。调整顺序不用同步路由器，账号的颜色也不变。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.17", title: "账号可以排序和置顶，添加账号在 App 里完成", points: [
             .init(symbol: "pin",
                   text: "账号可以拖动排序（侧栏上下拖，总览里拖到别的卡片上），常用的右键置顶。顺序只影响 App 里的显示。"),
