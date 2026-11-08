@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.19", title: "平时在后台运行，节点可以请求维护者锁定", points: [
+            .init(symbol: "menubar.rectangle",
+                  text: "cca 平时在后台运行，只有菜单栏图标，点「打开主窗口」时才出现在 Dock。关掉窗口、在 Dock 里点“退出”、按 ⌘Q 都只是回到后台，用量继续更新，内置代理不停；要彻底退出，点菜单栏面板里的「退出」。"),
+            .init(symbol: "terminal",
+                  text: "账号页的「终端」用你选的终端，登录、配置路由器这些命令固定用系统自带的终端；系统终端里按任意键后窗口会自动关掉。"),
+            .init(symbol: "lock",
+                  text: "账号的右键菜单或「…」里可以「请求维护者锁定节点」：生成一行请求并复制，发给维护者，写进映射后这个账号的节点就固定了。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.18", title: "终端工具也能检查更新，账号顺序同步到终端", points: [
             .init(symbol: "terminal",
                   text: "「客户端更新」现在也检查终端里的 Claude Code 和 Codex：有新版本时确认一下就能更新，开着的会话不受影响，下次启动时用新版本。"),
