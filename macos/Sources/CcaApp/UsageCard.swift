@@ -378,11 +378,11 @@ struct MiniUsage: View {
         let pct = window?.utilization
         let value: String = pct == nil ? "—" : reset ? "已重置" : Texts.percent(pct!)
         let style: AnyShapeStyle = {
-            guard let p = pct, !reset, !stale else { return AnyShapeStyle(.secondary) }
+            guard let p = pct, !reset, !stale else { return AnyShapeStyle(.plainSecondary) }
             return UsageLevel(percent: p) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(Palette.usage(percent: p))
         }()
         return HStack(spacing: 5) {
-            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(width: 14, alignment: .trailing)
+            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(.plainSecondary).frame(width: 14, alignment: .trailing)
             Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: Palette.usage(percent: pct ?? 0), height: 4, dim: stale)
                 .frame(width: width)
             Text(value)

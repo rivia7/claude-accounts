@@ -98,6 +98,9 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   按窗口看不看得见、开没开“减少动态效果”设一次（`Visibility.swift`），下面的视图只读它；没设的地方（截图、教程的示意图）不动。
 - Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
   内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
+- 玻璃上的文字：深色外观下系统给文字用的混色（vibrancy）让灰字的对比度只有约 3:1，小字发虚。菜单栏面板的根上用 `plainTextOnDarkGlass()` 清掉 `backgroundMaterial`
+  （约 6:1，和内容区一样；浅色外观下这层混色反而让字更深，不动）。侧栏的列表不认它，侧栏和账号行里的灰字用 `.plainSecondary`（深色外观、窗口在前台时是不混色的 55% 白，约 5.6:1，别的情况照系统的），
+  新加灰字时也用它；里面不要再套一层 `.secondary`（基色是具体颜色时会叠加变暗）。
 - 操作放在它作用的内容旁边：打开 App / 网页版 / 终端在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
   检测出口在“网络出口”标题上，添加账号在总览各组的标题上；不用浮在内容上的操作条。
 - 账号页的用量（`UsageCard.swift`）：每个额度一大块（5 小时、本周，还有按模型的每周额度，例如 Claude 的 Fable：下面一行写它最多能用本周额度的多少、

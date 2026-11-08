@@ -17,17 +17,17 @@ struct Sidebar: View {
                     Image(systemName: "arrow.down.app").font(.title3).frame(width: 30, height: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("客户端更新").font(.body.weight(.medium))
-                        Text("Claude、ChatGPT 桌面客户端").font(.caption).foregroundStyle(.secondary)
+                        Text("Claude、ChatGPT 桌面客户端").font(.caption).foregroundStyle(.plainSecondary)
                     }
                 }
                 .sidebarRowPadding()
                 .tag(SidebarItem.clientUpdates)
             }
-            Section(Texts.product(model.tool) + " 账号") {
+            Section {
                 let accounts = model.accounts(model.tool)
                 if accounts.isEmpty, model.state != nil {
                     Text(model.tool == .codex ? "还没有 ChatGPT 账号" : "还没有账号")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.plainSecondary)
                         .font(.callout)
                 }
                 ForEach(accounts) { a in
@@ -35,6 +35,8 @@ struct Sidebar: View {
                         .tag(SidebarItem.account(a.ref))
                         .contextMenu { AccountMenu(account: a) }
                 }
+            } header: {
+                Text(Texts.product(model.tool) + " 账号").foregroundStyle(PlainSecondary(system: .tertiary))
             }
         }
         .listStyle(.sidebar)
@@ -94,7 +96,7 @@ struct OfficeRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("总览").font(.body.weight(.medium))
                     Text(model.state == nil ? "所有账号一眼看全" : Texts.officeSummary(census, brief: true))
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 if census.needsAttention > 0 {
@@ -117,7 +119,7 @@ struct RoutingRow: View {
             BrandMark(size: 26).frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("节点分流").font(.body.weight(.medium))
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(subtitle).font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)
             if let issue {
@@ -182,7 +184,7 @@ struct SidebarFooter: View {
                     model.checkForUpdates(manual: true)
                 } label: {
                     HStack(spacing: 4) {
-                        Text(statusText).foregroundStyle(.tertiary)
+                        Text(statusText).foregroundStyle(PlainSecondary(system: .tertiary))
                         if let v = model.availableVersion {
                             Text("· 有新版本 \(v)").foregroundStyle(.tint)
                         }

@@ -112,6 +112,7 @@ struct MenuBarContent: View {
         }
         .padding(14)
         .frame(width: 340)
+        .plainTextOnDarkGlass()
         .background(WindowObserver { visible in model.setPanelVisible(visible) })
         .motionScope(\.panelVisible)
         .onAppear {

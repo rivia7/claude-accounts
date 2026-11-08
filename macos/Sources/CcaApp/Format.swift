@@ -351,7 +351,7 @@ struct AccountSubtitle: View {
             line(a, parts.filter { if case .node = $0 { return false }; return true })
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.plainSecondary)
         .lineLimit(1)
         .frame(height: PlanBadge.Size.compact.height)
         .accessibilityElement(children: .ignore)

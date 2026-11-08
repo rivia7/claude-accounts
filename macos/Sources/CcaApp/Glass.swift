@@ -31,6 +31,39 @@ extension SectionHeader where Accessory == EmptyView {
     }
 }
 
+/// 侧栏和账号行里的灰字。侧栏的列表给 .secondary 用系统的混色（vibrancy），深色外观下对比度只有约 3:1，小字发虚，
+/// 清掉 backgroundMaterial 也没用（列表不认它）；这里直接用不混色的 55% 白，和内容区的 .secondary 一样，约 5.6:1。
+/// 只在深色外观、窗口在前台时这样：窗口在后台时系统把整个侧栏调暗（名字也暗，灰字不能比名字亮），浅色外观、选中后底色变强的行也都照系统的。
+struct PlainSecondary: ShapeStyle {
+    /// 不换颜色时用系统的哪一级（侧栏的分组标题、版本号本来就淡一级）
+    var system = HierarchicalShapeStyle.secondary
+
+    func resolve(in environment: EnvironmentValues) -> AnyShapeStyle {
+        environment.colorScheme == .dark && environment.controlActiveState != .inactive && environment.backgroundProminence != .increased
+            ? AnyShapeStyle(Color.white.opacity(0.55)) : AnyShapeStyle(system)
+    }
+}
+
+extension ShapeStyle where Self == PlainSecondary {
+    static var plainSecondary: PlainSecondary { PlainSecondary() }
+}
+
+extension View {
+    /// 菜单栏面板的文字用普通的颜色：深色外观下玻璃的混色（vibrancy）让灰字的对比度只有约 3:1，小字发虚，状态色也比内容区的艳；
+    /// 不用它，灰字约 6:1，和内容区一样。浅色外观下这层混色反而让字更深，不动。
+    func plainTextOnDarkGlass() -> some View {
+        modifier(PlainTextOnDarkGlass())
+    }
+}
+
+private struct PlainTextOnDarkGlass: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content.transformEnvironment(\.backgroundMaterial) { if colorScheme == .dark { $0 = nil } }
+    }
+}
+
 extension View {
     /// 详情页的版心：内容最宽 1400pt，两边各留 28pt，再宽就居中。顶上的提示条、账号页、分流页都用它，左右边对齐。
     func pageColumn() -> some View {

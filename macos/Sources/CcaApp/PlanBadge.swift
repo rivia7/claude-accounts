@@ -81,7 +81,7 @@ struct PlanBadge: View {
             }
             Text(plan)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.plainSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
