@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.15", title: "在终端里打开账号，Claude App 也能统一更新", points: [
+            .init(symbol: "terminal",
+                  text: "账号页多了「终端」按钮：在你选的文件夹里用这个账号开命令行，最近用过的文件夹会记住，所有账号共用。"),
+            .init(symbol: "macwindow",
+                  text: "自动认出 iTerm2、Warp、WezTerm、Ghostty、kitty、Alacritty，在设置或「终端」按钮的下拉菜单里选默认用哪个。"),
+            .init(symbol: "arrow.down.app",
+                  text: "「客户端更新」现在也管 Claude App：自动检查、下载并校验；关掉 Claude 的全部窗口、你确认后才安装。"),
+            .init(symbol: "moon",
+                  text: "深色外观下，菜单栏面板和左边列表里的灰字更清楚了。"),
+        ], art: "open"),
         ReleaseNote(version: "2.9.0-beta.14", title: "界面更简洁", points: [
             .init(symbol: "sparkle",
                   text: "套餐徽章不再整块上色：都是灰色的小胶囊，档位看前面的小记号（灰圈、蓝点、紫色菱形，最高档是彩色的四角星）。"),
