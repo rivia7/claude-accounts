@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.17", title: "账号可以排序和置顶，添加账号在 App 里完成", points: [
+            .init(symbol: "pin",
+                  text: "账号可以拖动排序（侧栏上下拖，总览里拖到别的卡片上），常用的右键置顶。顺序只影响 App 里的显示。"),
+            .init(symbol: "plus",
+                  text: "添加账号、第三方 API 账号、更换 API key、删除账号，现在在 App 里一页页填完；侧栏的账号列表上多了「＋」。"),
+            .init(symbol: "checkmark.shield",
+                  text: "网络出口在后台定时检测：在用的账号半小时左右一次，没在用的几小时一次，你走开或系统过热时暂停。"),
+            .init(symbol: "person.badge.key",
+                  text: "改过密码导致登录失效时，ChatGPT 账号会直接提示；任何账号都可以在右键菜单或「…」里「重新登录…」。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.16", title: "支持更多终端，用量自动刷新", points: [
             .init(symbol: "terminal",
                   text: "「终端」支持 iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux；Termius、Wave 会打开它并复制命令，粘贴运行。没装的显示为灰色。"),
