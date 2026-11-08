@@ -23,7 +23,7 @@ else
 	DIR="$HERE/Tests/Fixtures"
 fi
 
-# CcaKit 只能用 Foundation / Observation / CoreServices（界面相关的都在 CcaApp）
+# CcaKit 用 Foundation / Observation / CoreServices / CryptoKit（界面相关的都在 CcaApp）
 bad=$(grep -rlE '^[[:space:]]*(@testable[[:space:]]+)?import[[:space:]]+(SwiftUI|AppKit|Cocoa|UIKit)([^[:alnum:]_]|$)' \
 	"$HERE/Sources/CcaKit" || true)
 [ -z "$bad" ] || die "CcaKit 里不能 import SwiftUI / AppKit：$bad"

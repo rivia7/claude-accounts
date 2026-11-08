@@ -81,6 +81,8 @@ struct DetailColumn: View {
                 AccountDetail(ref: ref)
             case .routing?:
                 RoutingPage()
+            case .clientUpdates?:
+                ClientUpdatesPage()
             case nil:
                 if model.accounts(model.tool).isEmpty {
                     ContentUnavailableView("还没有\(Texts.product(model.tool))账号", systemImage: "person.crop.circle.badge.plus",

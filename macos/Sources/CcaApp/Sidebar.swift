@@ -13,6 +13,15 @@ struct Sidebar: View {
                     .tag(SidebarItem.office)
                 RoutingRow()
                     .tag(SidebarItem.routing)
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.app").font(.title3).frame(width: 30, height: 30)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("客户端更新").font(.body.weight(.medium))
+                        Text("ChatGPT 桌面客户端").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 3)
+                .tag(SidebarItem.clientUpdates)
             }
             Section(Texts.product(model.tool) + " 账号") {
                 let accounts = model.accounts(model.tool)
@@ -181,8 +190,8 @@ struct SidebarFooter: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.phase != .ready || model.updateChecking)
-                .help("检查更新")
-                .accessibilityLabel(statusText + "，检查更新")
+                .help("检查 cca 更新")
+                .accessibilityLabel(statusText + "，检查 cca 更新")
                 Spacer(minLength: 4)
                 Button {
                     guide.openTutorial()

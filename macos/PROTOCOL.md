@@ -24,12 +24,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
 - 同一个账号（工具 + 键）的 `app` / `web` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
-  随时可以跑。
+  随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `rename` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
 - `app`、`web`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
+- `clients install TOKEN` 同样运行至完成，退出 App 不终止安装事务；`clients check` 和 `clients mode` 可取消。检查建议超时 900 秒，
+  安装的下载/事务超时由后端控制，`clients status` 15 秒，`clients mode` 30 秒。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
   `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
   `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
@@ -425,3 +427,50 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
   只留菜单栏图标；用户从菜单栏、Dock 打开主窗口时照常显示。App 开着时 cca 不再 `open`（会弹出主窗口），而是写 `core/config.yaml`：
   App 看到它变了就重新读 `state`、接着起内核（看不见时也读）。
 - 演示数据（`CCA_GUI_FIXTURES`）不运行内核。
+
+## 8. ChatGPT 桌面客户端更新
+
+当前只管理 `com.openai.codex` 的 ChatGPT 桌面客户端；和 cca 自身的 `update` 命令分开。
+
+- `cca clients status --json`：只读本机状态，启动和进入客户端更新页时调用。
+- `cca clients check [--force] --json`：检查并准备更新，不安装。后台不带 `--force`，24 小时节流由 cca 负责；用户点“立即检查”时加 `--force`。
+- `cca clients mode auto|off --json`：设置自动检查。默认 `auto`，含义仅是自动检查和准备软件包。
+- `cca clients install TOKEN --json`：用户明确点击安装后调用；cca 返回 `client_update` consent，grant 为 `client_update:TOKEN`，默认不同意。
+  TOKEN 绑定检查时的目标和软件包哈希，App 原样传递，不解析或生成。目标变化后原授权失效，必须重新检查。
+
+以上命令均返回以下文档；不支持或内部错误时可能只有 fail 事件。字段缺失、null 和未知状态宽松处理。
+
+```json
+{
+  "version": 1, "kind": "client_updates", "generated_epoch": 1794042000,
+  "mode": "auto",
+  "clients": [{
+    "id": "codex", "label": "ChatGPT", "path": "/Applications/ChatGPT.app",
+    "installed_version": "1.0", "available_version": "1.1", "staged_version": "1.1",
+    "status": "staged", "message": "软件包已准备好，等待确认安装。", "checked_epoch": 1794041940,
+    "install_token": "opaque-checked-target-and-package-hash", "can_install": true,
+    "package_version": "1.1", "package_build": "1100"
+  }]
+}
+```
+
+- `clients` 当前只有 `id=codex`；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
+- `status`：`missing/current/checking/busy/unsupported/staged/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
+  `busy` 显示“更新正在进行”，`unsupported` 显示“当前系统暂无适配包”。
+- `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示“目标版本或软件包校验值已变化，请重新检查后再安装”。
+- GUI 运行期间每 60 秒尝试后台检查，窗口隐藏时也继续；模式为 off、开发模式或演示数据时不自动检查。定时器不发安装命令，重入时跳过。
+- 安装仅在用户点击并同意后进行，所有对应客户端进程退出后才允许替换；不强杀进程，不注册 LaunchAgent，不修改原生 updater 设置。
+
+### 8.1 在解压前验证官方归档签名
+
+已安装、签名校验通过的 `local.cca.app` 在 Info.plist 声明整数 `CCAClientUpdateVerifier=1`。cca 先验证该能力字段，
+不能通过启动旧版 App 探测未知参数。安装版调用 `~/Applications/cca.app/Contents/MacOS/cca`；开发测试调用新编译的
+`macos/build/cca.app/Contents/MacOS/cca`：
+
+```
+cca.app/Contents/MacOS/cca --verify-client-update /absolute/package.zip BASE64_SIGNATURE
+```
+
+该入口在 NSApplication 初始化前退出，不打开窗口，不执行归档内代码。使用 CryptoKit Ed25519、映射只读文件，固定公钥
+`mNfr1v9t63BfgDtlw4C8lRvSY6uMggIXABDOCi3tS6k=`，不接受参数或环境替换。退出 0 表示签名有效，1 表示签名或读取失败，2 表示参数错误。
+官方签名只证明归档来源和完整性，不代表所有隔离行为已经兼容审计；解压和后续安装检查由后端完成。

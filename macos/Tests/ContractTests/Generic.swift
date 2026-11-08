@@ -586,6 +586,14 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "update":
             genericUpdate(f, d)
             tolerance(UpdateDoc.self, f, d) { [$0.latest == nil ? 0 : 1] }
+        case "client_updates":
+            if let doc = decodeOrFail(ClientUpdatesDoc.self, f, d) {
+                check("\(f) version 1", doc.version == 1)
+                check("\(f) 客户端 ID 不为空且不重复", doc.clients.allSatisfy { !$0.id.isEmpty }
+                      && Set(doc.clients.map(\.id)).count == doc.clients.count)
+                check("\(f) 可安装时有绑定检查结果的 token", doc.clients.allSatisfy { !$0.canInstall || nonEmpty($0.installToken) != nil })
+            }
+            tolerance(ClientUpdatesDoc.self, f, d) { [$0.clients.count] }
         default:
             check("\(f) 是认识的文档", false, "kind=\(kind)")
         }

@@ -169,8 +169,8 @@ struct TutorialCard {
         ], art: .rename),
         TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。"),
-            ("arrow.down.circle", "有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查更新。"),
-            ("lightbulb", "页面上的提示卡片讲这一页怎么看，看懂了点「知道了」。"),
+            ("arrow.down.circle", "cca 有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查 cca 更新。"),
+            ("arrow.down.app", "ChatGPT 更新在左侧「客户端更新」页：自动检查并准备，退出客户端后由你确认安装。"),
             ("book", "想再看一遍这个教程：点左下角的「新手教程」或工具栏的问号；「帮助」菜单里还有每个版本的更新说明。"),
         ], art: .menubar),
     ]

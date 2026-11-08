@@ -70,6 +70,13 @@ enum SampleDocs {
     {"v":1,"ev":"result","code":"opened","route":"router","node":"US-A","port":7901,"message":"已打开"}
     """#
 
+    static let clientUpdates = #"""
+    {"version":1,"kind":"client_updates","generated_epoch":1794042000,"mode":"auto",
+     "clients":[{"id":"codex","label":"ChatGPT","installed_version":"1.0","available_version":"1.1",
+                 "staged_version":"1.1","status":"staged","message":"等待确认安装","checked_epoch":1794041940,
+                 "install_token":"sample-token","can_install":true,"package_version":"1.1","package_build":"1100"}]}
+    """#
+
     /// 全部解码一遍；出错时抛出说明。
     static func verify() throws {
         struct Bad: Error, CustomStringConvertible { let description: String }
@@ -80,12 +87,13 @@ enum SampleDocs {
         let c = try DocumentDecoder.decode(CheckDoc.self, from: Data(check.utf8))
         let r = try DocumentDecoder.decode(ResetDoc.self, from: Data(reset.utf8))
         let up = try DocumentDecoder.decode(UpdateDoc.self, from: Data(update.utf8))
+        let clients = try DocumentDecoder.decode(ClientUpdatesDoc.self, from: Data(clientUpdates.utf8))
         let e = EventLog.parse(Data(events.utf8))
         guard GUIAPI.isSupported(h.api), s.allAccounts.count == 1, s.allAccounts.first?.health?.route == .direct,
               s.allAccounts.first?.planTier == .advanced, s.allAccounts.first?.cliSessions == 2,
               l.hasDrift, l.proxyHost == "192.0.2.10", u.accounts.first?.sevenDay?.resetsEpoch == 1794470400,
               c.accounts.count == 1, r.didReset, r.usage?.resetCredits?.nextExpiresEpoch == 1795251600,
-              up.available, up.channel == .beta, up.source == .releases,
+              up.available, up.channel == .beta, up.source == .releases, clients.clients.first?.readyToInstall == true,
               e.map(\.type) == [.step, .consent, .terminal, .fail, .result] else {
             throw Bad(description: "样例解码的结果不对")
         }

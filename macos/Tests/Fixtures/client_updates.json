@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "kind": "client_updates",
+  "generated_epoch": 1794042000.0,
+  "mode": "auto",
+  "clients": [{
+    "id": "codex",
+    "label": "ChatGPT",
+    "path": "/Applications/ChatGPT.app",
+    "installed_version": "1.0.0",
+    "available_version": "1.1.0",
+    "staged_version": "1.1.0",
+    "status": "staged",
+    "message": "软件包已准备好。安装前请退出所有 ChatGPT 窗口。",
+    "checked_epoch": 1794041940.0,
+    "install_token": "fixture-version-and-package-hash",
+    "can_install": true,
+    "package_version": "1.1.0",
+    "package_build": "1100"
+  }]
+}

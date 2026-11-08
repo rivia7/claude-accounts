@@ -211,6 +211,23 @@ name = "one"
         self.write('project/custom.json', '{"permissions":{"allow":["Read"]}}')
         self.assertEqual(self.launch('--settings=custom.json', tool='claude'), [])
 
+    def test_claude_configuration_cannot_replace_credential_sources(self):
+        for name in ('CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR',
+                     'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
+                     'CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR'):
+            with self.subTest(name=name):
+                content = json.dumps({'env': {name: 'private-fixture-value'}})
+                shared = self.write('.claude/settings.json', content)
+                self.assertEqual(self.shared('claude'), ['settings.json:' + name])
+                shared.unlink()
+                project = self.write('project/.claude/settings.local.json', content)
+                self.assertEqual(self.launch(tool='claude'), [str(project.resolve()) + ':' + name])
+                project.unlink()
+                self.assertEqual(self.launch('--settings', content, tool='claude'), ['--settings:' + name])
+                self.assertTrue(self.ns['ENV_RESERVED'].match(name))
+                self.assertNotIn(name, self.ns['api_env']({'base_url': 'https://example.invalid',
+                                                        'env': {name: 'private-fixture-value'}}))
+
     def test_required_option_values_do_not_end_guard_scanning(self):
         self.assertEqual(self.launch('--system-prompt', '--settings', tool='claude'), [])
         self.assertTrue(self.launch('--system-prompt', '--', '--settings',

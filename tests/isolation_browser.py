@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -29,11 +30,25 @@ info() { printf 'INFO:%s\\n' "$*"; }
 gui_result() { printf 'RESULT:%s\\n' "$*"; }
 gui_step() { :; }
 die() { echo "$*" >&2; exit 1; }
+chrome_app_path() { echo '/dummy/Google Chrome.app'; }
+chrome_launch_lock() { return 0; }
+chrome_pid() { [ ! -f opened ] || echo 101; }
+app_profile_in_use() { return 0; }
+lsof() { :; }
+py() {
+ case "$1" in
+  private-profile) mkdir -p "$ACC_CHROME_DIR"; chmod 700 "$ACC_CHROME_DIR"; echo "$ACC_CHROME_DIR" ;;
+  runtime-record) printf '%s\\n' "$2" >> records ;;
+ esac
+}
 '''
+        if 'open_chrome' in functions:
+            prologue += function('chrome_open_url') + '\n'
         return subprocess.run(
             ['/bin/bash', '-c', prologue + '\n'.join(function(n) for n in functions) + '\n' + code],
             cwd=self.root, env={'HOME': str(self.root), 'PATH': '/usr/bin:/bin',
                                'ACC_CHROME_DIR': str(self.root / 'browser'),
+                               'ACC_DIR': str(self.root), 'ACC_KEY': 'alice@example.com', 'PYTHON': sys.executable,
                                'ACC_PROXY': 'http://192.0.2.10:7901'},
             text=True, capture_output=True, timeout=10)
 
@@ -51,15 +66,57 @@ open_chrome https://example.com
     def test_browser_receives_private_directory_and_account_proxy(self):
         r = self.run_shell(['open_chrome'], '''
 has_chrome() { return 0; }
-open() { printf '%s\\n' "$@" > open-args; }
+open() { printf '%s\\n' "$@" > open-args; touch opened; }
 open_chrome 'https://example.com/?a=b&c=d'
 ''')
         self.assertEqual(r.returncode, 0, r.stderr)
         args = (self.root / 'open-args').read_text().splitlines()
         self.assertIn('--user-data-dir=' + str(self.root / 'browser'), args)
         self.assertIn('--proxy-server=http://192.0.2.10:7901', args)
+        self.assertIn('--webrtc-ip-handling-policy=disable_non_proxied_udp', args)
         self.assertEqual(args[-1], 'https://example.com/?a=b&c=d')
         self.assertEqual((self.root / 'browser').stat().st_mode & 0o777, 0o700)
+
+    def test_existing_browser_requires_matching_record_before_opening_url(self):
+        r = self.run_shell(['open_chrome'], '''
+has_chrome() { return 0; }
+chrome_pid() { echo 101; }
+py() { [ "$1" != private-profile ] || { echo "$ACC_CHROME_DIR"; return; }; return 1; }
+open() { touch unexpected-open; }
+open_chrome https://example.com
+''')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse((self.root / 'unexpected-open').exists())
+        self.assertIn('退出', r.stderr)
+
+    def test_existing_verified_browser_reuses_same_profile(self):
+        r = self.run_shell(['open_chrome'], '''
+has_chrome() { return 0; }
+chrome_pid() { echo 101; }
+open() { printf '%s\\n' "$@" > open-args; }
+open_chrome https://example.com
+''')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.root / 'records').read_text().strip(), 'check')
+        self.assertNotIn('about:blank', (self.root / 'open-args').read_text())
+
+    def test_new_browser_receipt_failure_never_opens_target_url(self):
+        r = self.run_shell(['open_chrome'], '''
+has_chrome() { return 0; }
+py() {
+ case "$1" in
+  private-profile) echo "$ACC_CHROME_DIR" ;;
+  browser-profile) return 0 ;;
+  *) return 1 ;;
+ esac
+}
+open() { printf '%s\\n' "$@" >> open-args; touch opened; }
+open_chrome https://example.com
+''')
+        self.assertNotEqual(r.returncode, 0)
+        args = (self.root / 'open-args').read_text()
+        self.assertIn('about:blank', args)
+        self.assertNotIn('https://example.com', args)
 
     def test_browser_open_failure_is_propagated(self):
         r = self.run_shell(['open_chrome'], '''

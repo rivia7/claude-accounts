@@ -168,6 +168,8 @@ cat >"$STAGE/Contents/Info.plist" <<PLIST
 	<string>cca</string>
 	<key>CFBundleIdentifier</key>
 	<string>local.cca.app</string>
+	<key>CCAClientUpdateVerifier</key>
+	<integer>1</integer>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

@@ -22,11 +22,15 @@ enum CcaCommand: Sendable, Hashable {
     case update(String)
     /// 检查更新（`cca update --check --json`，PROTOCOL 5.1）：只读、要联网，stdout 是 kind=update 的文档；查不了时看 fail 事件。
     case updateCheck
+    /// ChatGPT 客户端更新：检查只准备软件包，安装需经过绑定 token 的 consent。
+    case clientCheck(force: Bool)
+    case clientMode(automatic: Bool)
+    case clientInstall(token: String)
 
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
-        case .routerSync, .guiUpdate, .update, .updateCheck: return nil
+        case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
 
@@ -34,7 +38,7 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
         case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k): return k
-        case .routerSync, .guiUpdate, .update, .updateCheck: return nil
+        case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
 
@@ -52,6 +56,9 @@ enum CcaCommand: Sendable, Hashable {
         case .reset(_, let k): return prefix + ["reset", k, "--json"]
         case .update(let v): return ["update", v]
         case .updateCheck: return ["update", "--check", "--json"]
+        case .clientCheck(let force): return ["clients", "check"] + (force ? ["--force"] : []) + ["--json"]
+        case .clientMode(let automatic): return ["clients", "mode", automatic ? "auto" : "off", "--json"]
+        case .clientInstall(let token): return ["clients", "install", token, "--json"]
         }
     }
 
@@ -65,6 +72,8 @@ enum CcaCommand: Sendable, Hashable {
         case .guiUpdate, .update: return 300
         case .rename: return 60
         case .reset, .updateCheck: return 150
+        case .clientCheck, .clientInstall: return 900
+        case .clientMode: return 30
         }
     }
 
@@ -72,8 +81,8 @@ enum CcaCommand: Sendable, Hashable {
     /// 半路杀掉可能用掉了却没记下重置后的用量。
     var runsToCompletion: Bool {
         switch self {
-        case .app, .web, .routerSync, .reset: return true
-        case .usage, .check, .guiUpdate, .rename, .update, .updateCheck: return false
+        case .app, .web, .routerSync, .reset, .clientInstall: return true
+        case .usage, .check, .guiUpdate, .rename, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
 
@@ -86,6 +95,7 @@ enum CcaCommand: Sendable, Hashable {
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
         case .routerSync: return "router-sync"
         case .guiUpdate, .update: return "gui-update"
+        case .clientCheck, .clientMode, .clientInstall: return "client-update"
         case .check, .updateCheck: return nil
         }
     }
@@ -215,6 +225,10 @@ actor CcaClient {
 
     func state() async throws -> StateDoc {
         try await query(StateDoc.self, ["_gui", "state"], timeout: 15)
+    }
+
+    func clientUpdates() async throws -> ClientUpdatesDoc {
+        try await query(ClientUpdatesDoc.self, ["clients", "status", "--json"], timeout: 15)
     }
 
     /// route 为 nil 时按 route_pref；给了就用 CCA_ROUTE 看指定的一边。

@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.13", title: "加强账号隔离，集中管理 ChatGPT 更新", points: [
+            .init(symbol: "key.horizontal",
+                  text: "加强各账号的钥匙串和登录凭证隔离，阻止终端环境或共享设置意外覆盖账号凭证。"),
+            .init(symbol: "checkmark.shield",
+                  text: "启动前回查实际选中的出口节点；节点切换失败或无法核实时停止启动，避免走错出口。"),
+            .init(symbol: "network",
+                  text: "收紧浏览器 WebRTC 直连限制；再次打开浏览器或桌面 App 前核对账号资料和出口，不符时要求退出重开。"),
+            .init(symbol: "arrow.down.app",
+                  text: "新增「客户端更新」页：自动检查、下载并验签 ChatGPT 更新；退出全部实例并确认后才安装，目标变化会停止，意外中断可恢复。"),
+        ], art: "open"),
         ReleaseNote(version: "2.9.0-beta.12", title: "加强账号隔离与启动检查", points: [
             .init(symbol: "checkmark.shield",
                   text: "检查共享设置、项目设置和启动参数，发现可能换掉登录或出口的配置时停止启动。"),

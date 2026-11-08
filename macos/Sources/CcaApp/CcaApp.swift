@@ -5,6 +5,10 @@ import SwiftUI
 @main
 enum Main {
     static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.contains(ClientUpdateSignature.option) {
+            exit(ClientUpdateSignature.run(arguments: arguments))
+        }
         if CommandLine.arguments.contains("--self-check") {
             SelfCheck.run()
         }
@@ -46,9 +50,14 @@ struct CcaApp: App {
         .restorationBehavior(Self.launchedForCore ? .disabled : .automatic)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("检查更新…") {
+                Button("检查 cca 更新…") {
                     WindowOpener.shared.showMain()
                     delegate.model.checkForUpdates(manual: true)
+                }
+                .disabled(delegate.model.phase != .ready)
+                Button("客户端更新…") {
+                    WindowOpener.shared.showMain()
+                    delegate.model.selection = .clientUpdates
                 }
                 .disabled(delegate.model.phase != .ready)
             }

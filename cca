@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.12"
+VERSION="2.9.0-beta.13"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -314,11 +314,12 @@ SECRET_MSG = 'key 应该是一串可见的 ASCII 字符（至少 8 个，不能�
 MODEL_MSG = '模型名里不能有空格或引号'
 # 会盖掉账号自己的代理、接口地址、凭证，或者把请求转去别的服务商（云厂商、网关）的变量。
 # 共享的 settings.json 的 env 里不能有，第三方 API 账号的 env 里也不能设；bash 的 INHERITED_RE 跟着改
-CRED_ENV = (r'(HTTPS?|ALL|NO)_PROXY|ANTHROPIC_(BASE_URL|AUTH_TOKEN|API_KEY)|CLAUDE_CODE_OAUTH_TOKEN'
+CRED_ENV = (r'(HTTPS?|ALL|NO)_PROXY|ANTHROPIC_(BASE_URL|AUTH_TOKEN|API_KEY)'
+            r'|CLAUDE_(CONFIG_DIR|SECURESTORAGE_CONFIG_DIR)|CLAUDE_CODE_(OAUTH_TOKEN|[A-Z_]*_FILE_DESCRIPTOR)'
             r'|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)'
             r'|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST')
 SETTINGS_BAD = lazy_re(r'^(%s)$' % CRED_ENV, re.I)
-ENV_RESERVED = lazy_re(r'^(%s|CLAUDE_CONFIG_DIR|CCA_\w*|BROWSER)$' % CRED_ENV, re.I)
+ENV_RESERVED = lazy_re(r'^(%s|CCA_\w*|BROWSER)$' % CRED_ENV, re.I)
 # env 的内容会出现在 claude 的命令行里（--settings），像密钥的变量名不收
 ENV_SECRETISH = lazy_re(r'(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$', re.I)
 SELF_PATH = os.environ.get('CCA_SELF') or os.path.join(CCA_HOME, 'bin', 'cca')   # 本脚本（apiKeyHelper 回调它）
@@ -3933,7 +3934,8 @@ def leak_curl(url, proxy='', timeout=4.0):
     import subprocess
     timeout = max(float(timeout), 0.5)
     try:
-        r = subprocess.run(['curl', '-s', '-m', '%.1f' % timeout] + (['-x', proxy] if proxy else []) + [url],
+        r = subprocess.run(['curl', '-q', '-s', '-m', '%.1f' % timeout] +
+                           (['--noproxy', '', '-x', proxy] if proxy else ['--noproxy', '*']) + [url],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout + 2)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -4201,7 +4203,7 @@ WEEKDAYS = '一二三四五六日'
 USAGE_WHY = {
     'login': '还没登录（{cmd} @{name} 登录）',
     'mismatch': '登录的是 {msg}，不是这个账号（{cmd} @{name} 改回）',
-    'route': '连不上路由器，本机 Clash 也不可用',
+    'route': '账号出口未能核实，未发起查询',
     'port': '出口端口 {msg} 不通',
     'trace': '出口连不上 {host}',
     'region': '{msg}，没有查询',
@@ -5271,6 +5273,111 @@ def proc_starts(pids):
     return {pid: t for pid, t in ((pid, lstart_epoch(s)) for pid, s in rows) if t}
 
 
+def profile_path(key, kind):
+    if kind not in ('app', 'browser'):
+        die('未知客户端资料类型')
+    account = adir(key)
+    path = os.path.join(account, 'desktop' if kind == 'app' else 'chrome')
+    if os.path.islink(account) or os.path.islink(path):
+        die('客户端资料目录不能是符号链接：%s' % path)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+    return os.path.realpath(path)
+
+
+def cmd_private_profile(key, kind):
+    with Lock():
+        print(profile_path(key, kind))
+
+
+def browser_profile(key, prepare):
+    """Chrome 关闭时写账号专属偏好；运行时只检查，避免和 Chrome 的原子保存竞争。"""
+    root = profile_path(key, 'browser')
+    names = {'Default'}
+    for name in os.listdir(root):
+        if os.path.isfile(os.path.join(root, name, 'Preferences')):
+            names.add(name)
+    for name in sorted(names):
+        folder = os.path.join(root, name)
+        path = os.path.join(folder, 'Preferences')
+        if os.path.islink(folder) or not private_file(path):
+            die('浏览器偏好不能通过链接共享：%s' % path)
+        data = load_json(path, {})
+        if not isinstance(data, dict) or not isinstance(data.get('webrtc', {}), dict):
+            die('无法读取浏览器 WebRTC 偏好：%s' % path)
+        webrtc = data.setdefault('webrtc', {})
+        wanted = {'ip_handling_policy': 'disable_non_proxied_udp', 'ip_handling_url': [], 'local_ips_allowed_urls': []}
+        if prepare:
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            webrtc.update(wanted)
+            save_json(path, data, 0o600, follow_symlinks=False)
+        elif any(webrtc.get(k) != v for k, v in wanted.items()):
+            die('浏览器 WebRTC 偏好已变化或有 URL 例外，请退出该账号的 Chrome 后重开')
+
+
+def cmd_browser_profile(action, key):
+    if action not in ('prepare', 'check'):
+        die('未知浏览器偏好操作')
+    with Lock():
+        browser_profile(key, action == 'prepare')
+
+
+def runtime_snapshot(key, kind, pid, profile, app, proxy, route, bypass, no_proxy):
+    """记录可核对的启动条件；不读取进程环境、Cookie 或凭证，不声称验证客户端所有请求。"""
+    c, table, _ = ctx()
+    need(table, key)
+    pid = int(pid)
+    started = proc_starts([pid]).get(pid)
+    if not started or not proxy:
+        die('无法核验客户端进程或账号代理')
+    expected = profile_path(key, kind)
+    if os.path.realpath(profile) != expected:
+        die('客户端资料目录与账号不符')
+    commands = ps_rows(['-ww', '-o', 'pid=,command=', '-p', str(pid)], 5)
+    command = next((s for p, s in commands if p == pid), '')
+    flags = {'user-data-dir': profile, 'proxy-server': proxy}
+    if kind == 'app':
+        flags['proxy-bypass-list'] = bypass
+    else:
+        flags['webrtc-ip-handling-policy'] = 'disable_non_proxied_udp'
+        browser_profile(key, False)
+    for flag, value in flags.items():
+        if (len(re.findall(r'(?:^|\s)--' + flag + r'(?:=|\s)', command)) != 1 or
+                not re.search(r'(?:^|\s)--' + flag + '=' + re.escape(value) + r'(?:\s|$)', command)):
+            die('客户端启动参数无法核验：--%s；请退出该实例后重新打开' % flag)
+    app = os.path.realpath(app)
+    try:
+        import plistlib
+        plist = os.path.join(app, 'Contents', 'Info.plist')
+        with open(plist, 'rb') as f:
+            executable = plistlib.load(f).get('CFBundleExecutable')
+        if not isinstance(executable, str) or os.path.basename(executable) != executable or executable in ('', '.', '..'):
+            raise ValueError('invalid executable')
+        binary = os.path.join(app, 'Contents', 'MacOS', executable)
+        if not command.startswith(binary + ' '):
+            die('客户端进程不属于当前选择的程序，请退出旧实例后重开')
+        st, binary_st = os.stat(plist), os.stat(binary)
+    except (OSError, ValueError, TypeError, AttributeError):
+        die('无法核验客户端程序版本')
+    return {'v': 1, 'tool': T.name, 'id': acct_id(key), 'kind': kind, 'pid': pid, 'started': started,
+            'profile': expected, 'config': os.path.realpath(cdir(key)), 'app': app,
+            'app_version': [st.st_size, st.st_mtime_ns, binary_st.st_size, binary_st.st_mtime_ns], 'proxy': proxy, 'route': route,
+            'node': node_of(table[key]), 'bypass': bypass, 'no_proxy': no_proxy,
+            'launch_policy': 1}
+
+
+def cmd_runtime_record(action, key, kind, pid, profile, app, proxy, route='', bypass='', no_proxy=''):
+    if action not in ('write', 'check') or kind not in ('app', 'browser'):
+        die('未知客户端运行记录操作')
+    with Lock():
+        current = runtime_snapshot(key, kind, pid, profile, app, proxy, route, bypass, no_proxy)
+        path = os.path.join(adir(key), kind + '-runtime.json')
+        if action == 'write':
+            save_json(path, current, 0o600, follow_symlinks=False)
+        elif not private_file(path) or load_quiet(path) != current:
+            die('客户端的运行记录、账号节点或启动条件已变化；请先退出该实例，再用 cca 重新打开')
+
+
 def cli_marks(key):
     """账号目录里登记的命令行会话（只读）；格式、工具、账号目录名、进程号和文件名对不上的不算"""
     d, aid, out = adir(key), acct_id(key), []
@@ -5605,11 +5712,845 @@ def cmd_update_check(current, mode='', fallback='', repo=''):
        UP_NOTES='\n'.join(lines[:3]))
 
 
+# 中央桌面包检查只处理 com.openai.codex；auto 仅自动检查和暂存，安装总要用户确认。
+# 不读取账号目录，也不修改原版客户端的更新器设置。
+CU_FEED = 'https://persistent.oaistatic.com/codex-app-prod/appcast.xml'
+CU_BUNDLE = 'com.openai.codex'
+CU_TEAM = '2DC432GLL2'
+CU_MAX_PACKAGE = 2 * 1024 * 1024 * 1024
+CU_NS = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
+
+
+class ClientUpdateError(Exception):
+    def __init__(self, status, message):
+        self.status, self.message = status, message
+        super().__init__(message)
+
+
+def cu_error(status, message):
+    raise ClientUpdateError(status, message)
+
+
+def cu_private(path, directory=False, create=False):
+    """更新器自己的路径只容许当前用户的普通文件/目录，不跟随链接。"""
+    import stat
+    if create and not os.path.lexists(path):
+        if directory:
+            os.mkdir(path, 0o700)
+        else:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(fd)
+    try:
+        s = os.lstat(path)
+    except OSError:
+        cu_error('blocked', '无法读取更新器的私有文件')
+    valid = stat.S_ISDIR(s.st_mode) if directory else stat.S_ISREG(s.st_mode) and s.st_nlink == 1
+    if not valid or s.st_uid != os.getuid() or s.st_mode & 0o077:
+        cu_error('blocked', '更新器目录或文件权限不安全')
+    return path
+
+
+def cu_root(create=False):
+    root = os.path.join(CCA_HOME, 'client-updates')
+    if create:
+        if not os.path.exists(CCA_HOME):
+            os.makedirs(CCA_HOME, mode=0o700)
+        import stat
+        s = os.lstat(CCA_HOME)
+        if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o022:
+            cu_error('blocked', 'cca 配置目录不能用于安全暂存更新')
+    for path in (root, os.path.join(root, 'codex')):
+        if create or os.path.lexists(path):
+            cu_private(path, True, create)
+    return os.path.join(root, 'codex')
+
+
+class ClientUpdateLock:
+    def __init__(self, path):
+        self.path, self.fd = path, None
+
+    def __enter__(self):
+        import stat
+        cu_private(self.path, create=True)
+        self.fd = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
+        s = os.fstat(self.fd)
+        if not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_uid != os.getuid() or s.st_mode & 0o077:
+            os.close(self.fd)
+            self.fd = None
+            cu_error('blocked', '客户端更新锁不安全')
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(self.fd)
+            self.fd = None
+            cu_error('busy', '另一项客户端更新正在进行')
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)
+
+
+def cu_read_state():
+    path = os.path.join(cu_root(), 'state.json')
+    if not os.path.lexists(path):
+        return {}
+    cu_private(path)
+    data = load_quiet(path)
+    if not isinstance(data, dict) or data.get('v') != 1:
+        cu_error('blocked', '更新缓存格式无法识别，请重新检查')
+    return data
+
+
+def cu_save_state(state):
+    path = os.path.join(cu_root(True), 'state.json')
+    if os.path.lexists(path):
+        cu_private(path)
+    save_json(path, dict(state, v=1), 0o600, follow_symlinks=False)
+
+
+def cu_mode():
+    c = load_quiet(CFG)
+    value = c.get('client_updates', 'auto') if isinstance(c, dict) else 'auto'
+    return 'off' if value == 'off' else 'auto'
+
+
+def cu_target():
+    """空的显式路径代表 shell 没找到客户端，不绕过它另找一个程序。"""
+    if 'CCA_CLIENT_CODEX_APP' in os.environ:
+        return os.environ['CCA_CLIENT_CODEX_APP']
+    if os.environ.get('CCA_CODEX_APP'):
+        return os.environ['CCA_CODEX_APP']
+    import plistlib
+    for base in ('/Applications', os.path.join(HOME, 'Applications')):
+        for name in ('ChatGPT.app', 'Codex.app'):
+            path = os.path.join(base, name)
+            try:
+                with open(os.path.join(path, 'Contents', 'Info.plist'), 'rb') as f:
+                    if plistlib.load(f).get('CFBundleIdentifier') == CU_BUNDLE:
+                        return path
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+    return ''
+
+
+def cu_hash(path):
+    import stat
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        cu_error('blocked', '程序或安装包不是独立的普通文件')
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        opened = os.fstat(f.fileno())
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            cu_error('needs_recheck', '程序或安装包正在变化，请重新检查')
+        for block in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(block)
+        after = os.fstat(f.fileno())
+    fields = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if fields(before) != fields(after) or fields(after) != fields(os.lstat(path)):
+        cu_error('needs_recheck', '程序或安装包正在变化，请重新检查')
+    return h.hexdigest()
+
+
+def cu_file_id(path):
+    s = os.lstat(path)
+    return [s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+
+
+def cu_snapshot(path, full=True):
+    import plistlib, stat
+    if not path or not os.path.isdir(path):
+        cu_error('missing', '未找到当前 ChatGPT 桌面客户端')
+    if not os.path.isabs(path) or os.path.islink(path):
+        cu_error('blocked', '客户端路径必须是实际的绝对目录')
+    path = os.path.realpath(path)
+    before = os.stat(path)
+    plist_path = os.path.join(path, 'Contents', 'Info.plist')
+    plist_identity = cu_file_id(plist_path)
+    with open(plist_path, 'rb') as f:
+        info = plistlib.load(f)
+    executable = info.get('CFBundleExecutable')
+    version, build = info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')
+    if (info.get('CFBundleIdentifier') != CU_BUNDLE or not isinstance(executable, str)
+            or not executable or os.path.basename(executable) != executable or executable in ('.', '..')
+            or not isinstance(version, str) or not re.fullmatch(r'\d+(?:\.\d+){1,5}', version)
+            or not isinstance(build, str) or not re.fullmatch(r'\d{1,12}', build)):
+        cu_error('blocked', '客户端标识、版本或程序布局无法识别')
+    names = ['Contents/Info.plist', 'Contents/MacOS/' + executable,
+             'Contents/Resources/app.asar', 'Contents/_CodeSignature/CodeResources']
+    hashes, identities = {}, {}
+    for name in names:
+        full_path = os.path.join(path, name)
+        if os.path.realpath(full_path) != full_path:
+            cu_error('blocked', '客户端关键程序文件不能通过链接替换')
+        identities[name] = cu_file_id(full_path)
+        if full:
+            hashes[name] = cu_hash(full_path)
+    if (identities['Contents/Info.plist'] != plist_identity
+            or any(cu_file_id(os.path.join(path, name)) != identity for name, identity in identities.items())):
+        cu_error('needs_recheck', '客户端在检查期间发生变化，请重新检查')
+    after = os.stat(path)
+    if (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns):
+        cu_error('needs_recheck', '客户端正在被其他更新器修改，请稍后重新检查')
+    return {'path': path, 'version': version, 'build': build, 'hashes': hashes, 'files': identities,
+            'device': after.st_dev, 'inode': after.st_ino,
+            'modified_ns': after.st_mtime_ns, 'changed_ns': after.st_ctime_ns}
+
+
+def cu_environment(folder):
+    """从空环境构建：不携带账号 ID、代理、Cookie、证书覆盖或 shell 注入配置。"""
+    return {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': folder, 'CURL_HOME': folder,
+            'TMPDIR': folder, 'LANG': 'C', 'LC_ALL': 'C'}
+
+
+def cu_run(args, folder, timeout=30):
+    import subprocess
+    try:
+        return subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=cu_environment(folder), close_fds=True,
+                              timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        cu_error('error', '更新校验命令失败或超时')
+
+
+def cu_url(url, package=False):
+    from urllib.parse import urlsplit
+    if not isinstance(url, str) or re.search(r'[\x00-\x20\x7f\\]', url):
+        cu_error('blocked', '更新地址不符合官方来源规则')
+    try:
+        p = urlsplit(url)
+        valid = (p.scheme == 'https' and p.hostname == 'persistent.oaistatic.com'
+                 and p.port in (None, 443) and not p.username and not p.password and not p.fragment
+                 and not p.query)
+    except ValueError:
+        valid = False
+    pattern = r'/codex-app-prod/ChatGPT-darwin-(arm64|x64)-\d+(?:\.\d+){1,5}\.zip'
+    if not valid or not (re.fullmatch(pattern, p.path) if package else p.path == '/codex-app-prod/appcast.xml'):
+        cu_error('blocked', '更新地址不符合官方来源规则')
+    return url
+
+
+def cu_download(url, destination, folder, package=False, expected_size=None):
+    """curl 不自动跳转；每一跳先验证，三次重试不复用半包或持久 Cookie。"""
+    from urllib.parse import urljoin
+    header = os.path.join(folder, 'response.headers')
+    initial = cu_url(url, package)
+    limit = CU_MAX_PACKAGE if package else 2 * 1024 * 1024
+    for attempt in range(3):
+        current = initial
+        for hop in range(6):
+            args = ['/usr/bin/curl', '-q', '--silent', '--show-error', '--proto', '=https',
+                    '--proto-redir', '=https', '--proxy', '', '--noproxy', '*',
+                    '--no-netrc', '--no-netrc-optional', '--netrc-file', '/dev/null',
+                    '--connect-timeout', '15', '--max-time', '240' if package else '30',
+                    '--max-filesize', str(limit), '--max-redirs', '0',
+                    '--dump-header', header, '--output', destination, '--write-out', '%{http_code}', current]
+            try:
+                result = cu_run(args, folder, 250 if package else 40)
+            except ClientUpdateError as e:
+                if e.status != 'error':
+                    raise
+                break
+            if result.returncode:
+                break
+            code = result.stdout.decode('ascii', 'replace').strip()
+            if code in ('301', '302', '303', '307', '308'):
+                with open(header, encoding='iso-8859-1') as f:
+                    locations = [line.split(':', 1)[1].strip() for line in f if line.lower().startswith('location:')]
+                if len(locations) != 1:
+                    cu_error('blocked', '官方更新地址返回了无法识别的跳转')
+                current = cu_url(urljoin(current, locations[0]), package)
+                continue
+            if code != '200':
+                break
+            size = os.path.getsize(destination)
+            if not 0 < size <= limit or expected_size is not None and size != expected_size:
+                cu_error('error', '下载大小与官方元数据不符')
+            os.chmod(destination, 0o600)
+            return
+        if attempt < 2:
+            time.sleep(attempt + 1)
+    cu_error('error', '无法从官方来源下载更新，请稍后重试')
+
+
+def cu_host():
+    import platform
+    arch = platform.machine()
+    try:
+        result = cu_run(['/usr/sbin/sysctl', '-n', 'hw.optional.arm64'], '/private/tmp', 10)
+        if result.returncode == 0 and result.stdout.strip() == b'1':
+            arch = 'arm64'
+    except ClientUpdateError:
+        pass
+    if arch not in ('arm64', 'x86_64') or not platform.mac_ver()[0]:
+        cu_error('blocked', '仅支持 macOS 上经过识别的处理器架构')
+    return ('x64' if arch == 'x86_64' else arch), platform.mac_ver()[0]
+
+
+def cu_version(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d+(?:\.\d+){0,5}', value):
+        cu_error('blocked', '官方版本元数据无法识别')
+    return tuple(int(x) for x in value.split('.')) + (0,) * (6 - len(value.split('.')))
+
+
+def cu_parse_feed(data, arch, system):
+    import base64, xml.etree.ElementTree as ET
+    if len(data) > 2 * 1024 * 1024 or b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():
+        cu_error('blocked', '官方版本列表格式不安全')
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        cu_error('error', '无法读取官方版本列表')
+    if root.tag != 'rss':
+        cu_error('blocked', '官方版本列表格式无法识别')
+    candidates = []
+    for item in root.findall('./channel/item'):
+        version = item.findtext(CU_NS + 'shortVersionString') or ''
+        build = item.findtext(CU_NS + 'version') or ''
+        minimum = item.findtext(CU_NS + 'minimumSystemVersion') or ''
+        hardware = item.findtext(CU_NS + 'hardwareRequirements') or ''
+        if hardware != arch or item.find(CU_NS + 'channel') is not None:
+            continue
+        if not re.fullmatch(r'\d{1,12}', build) or not re.fullmatch(r'\d+(?:\.\d+){1,5}', version):
+            continue
+        if not minimum or cu_version(minimum) > cu_version(system):
+            continue
+        enclosures = item.findall('enclosure')
+        if len(enclosures) != 1:
+            continue
+        enclosure = enclosures[0]
+        if enclosure.get(CU_NS + 'deltaFrom') is not None:
+            continue
+        url = cu_url(enclosure.get('url', ''), True)
+        expected = '/ChatGPT-darwin-%s-%s.zip' % (arch, version)
+        if not url.endswith(expected):
+            cu_error('blocked', '官方包地址和版本元数据不一致')
+        try:
+            length = int(enclosure.get('length', ''))
+            signature = enclosure.get(CU_NS + 'edSignature', '')
+            if not 0 < length <= CU_MAX_PACKAGE or len(base64.b64decode(signature, validate=True)) != 64:
+                raise ValueError()
+        except (ValueError, TypeError):
+            cu_error('blocked', '官方包缺少有效长度或签名')
+        candidates.append({'version': version, 'build': build, 'minimum_system': minimum,
+                           'arch': arch, 'url': url, 'length': length, 'signature': signature})
+    if not candidates:
+        cu_error('unsupported', '官方列表没有适合此 Mac 的完整安装包')
+    return max(candidates, key=lambda x: int(x['build']))
+
+
+def cu_verifier():
+    verifier = os.environ.get('CCA_CLIENT_VERIFIER', '')
+    if not verifier or not os.path.isabs(verifier) or not os.path.isfile(verifier):
+        cu_error('blocked', '需要已验证的 cca 图形界面来校验官方安装包签名')
+    return verifier
+
+
+def cu_verify_archive(path, metadata, folder):
+    verifier = cu_verifier()
+    if os.path.getsize(path) != metadata['length']:
+        cu_error('blocked', '暂存安装包大小已变化，请重新检查')
+    identity, digest = cu_file_id(path), cu_hash(path)
+    result = cu_run([verifier, '--verify-client-update', path, metadata['signature']], folder, 120)
+    if result.returncode:
+        cu_error('blocked', '官方安装包签名校验失败，未解压或安装')
+    if cu_file_id(path) != identity or cu_hash(path) != digest:
+        cu_error('needs_recheck', '安装包在验签期间发生变化，请重新检查')
+    return digest
+
+
+def cu_token(stage):
+    import secrets
+    payload = {'nonce': secrets.token_hex(32), 'package_sha256': stage['package_sha256'],
+               'target': stage['target'], 'metadata': stage['metadata']}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def cu_bundle(path, folder, metadata=None):
+    """签名、产品、版本和架构核验，不声称验证了未来版本的全部隔离行为。"""
+    import plistlib
+    snapshot = cu_snapshot(path)
+    for command in (['/usr/bin/codesign', '--verify', '--deep', '--strict', path],
+                    ['/usr/sbin/spctl', '--assess', '--type', 'execute', path]):
+        if cu_run(command, folder, 120).returncode:
+            cu_error('blocked', '客户端代码签名或系统安全评估未通过')
+    identity = cu_run(['/usr/bin/codesign', '--display', '--verbose=4', path], folder)
+    text = (identity.stdout + identity.stderr).decode('utf-8', 'replace')
+    if (identity.returncode or not re.search(r'^TeamIdentifier=' + CU_TEAM + r'$', text, re.M)
+            or not re.search(r'^Identifier=' + re.escape(CU_BUNDLE) + r'$', text, re.M)):
+        cu_error('blocked', '客户端签名团队或产品标识与官方程序不符')
+    with open(os.path.join(path, 'Contents', 'Info.plist'), 'rb') as f:
+        info = plistlib.load(f)
+    arch, system = cu_host()
+    binary = os.path.join(path, 'Contents', 'MacOS', info['CFBundleExecutable'])
+    result = cu_run(['/usr/bin/lipo', '-archs', binary], folder)
+    arches = result.stdout.decode('ascii', 'replace').split()
+    native = 'x86_64' if arch == 'x64' else arch
+    if result.returncode or native not in arches or cu_version(info.get('LSMinimumSystemVersion', '')) > cu_version(system):
+        cu_error('unsupported', '客户端不支持当前 macOS 版本或处理器')
+    if metadata and (snapshot['version'] != metadata['version'] or snapshot['build'] != metadata['build']
+                     or arch != metadata['arch']
+                     or cu_version(info.get('LSMinimumSystemVersion', '')) != cu_version(metadata['minimum_system'])):
+        cu_error('blocked', '安装包内的产品版本或系统要求与官方列表不符')
+    if cu_snapshot(path) != snapshot:
+        cu_error('needs_recheck', '客户端在签名检查期间发生变化，请重新检查')
+    return snapshot
+
+
+def cu_content(snapshot):
+    return {key: snapshot[key] for key in ('version', 'build', 'hashes')}
+
+
+def cu_extract(archive, folder):
+    """只接受实证的 ChatGPT.app 单根 ZIP；先验证整张目录表，再写普通文件，最后建内部链接。"""
+    import posixpath, shutil, stat, unicodedata, zipfile
+    try:
+        with zipfile.ZipFile(archive) as z:
+            entries = z.infolist()
+            if not entries or len(entries) > 100000 or sum(x.file_size for x in entries) > 8 * 1024 ** 3:
+                cu_error('blocked', '官方安装包条目数量或解压大小超出限制')
+            seen, paths, links = set(), [], {}
+            for item in entries:
+                name = item.filename.rstrip('/')
+                parts = name.split('/')
+                mode = item.external_attr >> 16
+                kind = stat.S_IFMT(mode)
+                normalized = unicodedata.normalize('NFD', name).casefold()
+                if (not name or parts[0] != 'ChatGPT.app' or any(x in ('', '.', '..') for x in parts)
+                        or re.search(r'[\x00-\x1f\x7f\\:]', name) or normalized in seen
+                        or item.flag_bits & 1 or kind not in (0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK)
+                        or item.file_size > CU_MAX_PACKAGE):
+                    cu_error('blocked', '官方安装包包含不支持的路径或重复条目')
+                seen.add(normalized)
+                paths.append((item, name, mode))
+                if kind == stat.S_IFLNK:
+                    if item.file_size > 4096:
+                        cu_error('blocked', '安装包链接长度不安全')
+                    target = z.read(item).decode('utf-8')
+                    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+                    if (not target or target.startswith('/') or re.search(r'[\x00-\x1f\x7f\\:]', target)
+                            or not resolved.startswith('ChatGPT.app/')):
+                        cu_error('blocked', '安装包包含指向程序外的链接')
+                    links[normalized] = target
+            for item, name, mode in paths:
+                parts = name.split('/')
+                if any(unicodedata.normalize('NFD', '/'.join(parts[:n])).casefold() in links
+                       for n in range(1, len(parts))):
+                    cu_error('blocked', '安装包不能通过链接写入其他目录')
+            for item, name, mode in paths:
+                target = os.path.join(folder, *name.split('/'))
+                if stat.S_ISLNK(mode):
+                    continue
+                if item.is_dir() or stat.S_ISDIR(mode):
+                    os.makedirs(target, mode=0o755, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
+                    with z.open(item) as source, open(target, 'xb') as destination:
+                        shutil.copyfileobj(source, destination, 1024 * 1024)
+                    os.chmod(target, 0o755 if mode & 0o111 else 0o644)
+            for item, name, mode in paths:
+                if stat.S_ISLNK(mode):
+                    target = os.path.join(folder, *name.split('/'))
+                    os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
+                    os.symlink(links[unicodedata.normalize('NFD', name).casefold()], target)
+            app = os.path.join(folder, 'ChatGPT.app')
+            from pathlib import Path
+            for _, name, mode in paths:
+                if stat.S_ISLNK(mode):
+                    resolved = str(Path(os.path.join(folder, name)).resolve(strict=True))
+                    if not resolved.startswith(app + os.sep):
+                        cu_error('blocked', '安装包链接未留在程序目录内')
+            return app
+    except (zipfile.BadZipFile, UnicodeError, OSError, RuntimeError, ValueError):
+        cu_error('blocked', '无法安全解压官方安装包')
+
+
+def cu_prepare_package(archive, folder, metadata):
+    app = cu_extract(archive, folder)
+    return cu_content(cu_bundle(app, folder, metadata))
+
+
+def cu_validate_plan(state, token):
+    import hmac
+    stage = state.get('stage')
+    if (not re.fullmatch(r'[0-9a-f]{64}', token or '') or not isinstance(stage, dict)
+            or not hmac.compare_digest(token, stage.get('token', ''))):
+        cu_error('needs_recheck', '安装确认已失效，请重新检查更新')
+    target = cu_snapshot(cu_target())
+    if target != stage.get('target'):
+        cu_error('needs_recheck', '客户端已被其他更新器修改，请重新检查')
+    if int(stage['metadata']['build']) <= int(target['build']):
+        cu_error('needs_recheck', '不会覆盖相同或更新的客户端版本')
+    archive = os.path.join(cu_root(), 'package.zip')
+    cu_private(archive)
+    if cu_hash(archive) != stage.get('package_sha256'):
+        cu_error('needs_recheck', '暂存安装包已变化，请重新检查')
+    return stage
+
+
+def cu_light(snapshot):
+    return {k: v for k, v in snapshot.items() if k != 'hashes'}
+
+
+def cu_view(state=None, problem=None):
+    state = state if isinstance(state, dict) else {}
+    row = {'id': 'codex', 'label': 'ChatGPT', 'path': cu_target() or None,
+           'installed_version': None, 'available_version': None, 'staged_version': None,
+           'package_version': None, 'package_build': None, 'install_token': None, 'can_install': False,
+           'status': state.get('status', 'unchecked'), 'message': state.get('message', '尚未检查官方更新'),
+           'checked_epoch': state.get('checked_epoch')}
+    try:
+        snapshot = cu_snapshot(cu_target(), False)
+        row['installed_version'] = snapshot['version']
+        metadata = state.get('metadata')
+        if isinstance(metadata, dict):
+            row['available_version'] = metadata.get('version')
+        stage = state.get('stage')
+        if isinstance(stage, dict):
+            row.update(staged_version=stage['metadata']['version'], package_version=stage['metadata']['version'],
+                       package_build=stage['metadata']['build'])
+            archive = os.path.join(cu_root(), 'package.zip')
+            cu_private(archive)
+            if (cu_light(snapshot) != cu_light(stage.get('target', {}))
+                    or cu_file_id(archive) != stage.get('archive_identity')):
+                row.update(status='needs_recheck', message='客户端版本或程序内容已变化，请重新检查更新')
+            elif (state.get('status') in ('staged', 'running')
+                  and int(stage['metadata']['build']) > int(snapshot['build'])):
+                row.update(install_token=stage['token'], can_install=True)
+    except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
+        row.update(status=getattr(e, 'status', 'blocked'), message=getattr(e, 'message', '无法安全读取客户端状态'))
+    if os.path.lexists(os.path.join(CCA_HOME, 'client-updates', 'codex', 'transaction.json')):
+        row.update(status='needs_recheck', message='上次安装尚未完成，请运行检查以安全恢复',
+                   install_token=None, can_install=False)
+    if problem:
+        row.update(status=problem.status, message=problem.message, install_token=None, can_install=False)
+    return {'version': 1, 'kind': 'client_updates', 'generated_epoch': time.time(),
+            'mode': cu_mode(), 'clients': [row]}
+
+
+def cu_check(state, force=False):
+    import tempfile
+    root = cu_root(True)
+    if not force and (cu_mode() == 'off' or time.time() - state.get('checked_epoch', 0) < 86400):
+        return state
+    target = cu_snapshot(cu_target())
+    state['checked_epoch'] = time.time()
+    try:
+        with tempfile.TemporaryDirectory(prefix='check-', dir=root) as folder:
+            if cu_bundle(target['path'], folder) != target:
+                cu_error('needs_recheck', '客户端正在被其他更新器修改，请重新检查')
+            feed = os.path.join(folder, 'appcast.xml')
+            cu_download(CU_FEED, feed, folder)
+            arch, system = cu_host()
+            with open(feed, 'rb') as f:
+                metadata = cu_parse_feed(f.read(), arch, system)
+            state['metadata'] = metadata
+            if int(metadata['build']) <= int(target['build']):
+                state.pop('stage', None)
+                state.update(status='current', message='当前客户端已是相同或更新版本')
+                return state
+            stage = state.get('stage')
+            cu_verifier()
+            if isinstance(stage, dict) and stage.get('metadata') == metadata:
+                archive = os.path.join(root, 'package.zip')
+                cu_private(archive)
+                if cu_hash(archive) == stage.get('package_sha256'):
+                    cu_verify_archive(archive, metadata, folder)
+                    if target != stage.get('target'):
+                        stage['target'] = target
+                        stage['token'] = cu_token(stage)
+                    stage['archive_identity'] = cu_file_id(archive)
+                    state.update(status='staged', message='官方更新已暂存，等待确认安装')
+                    return state
+            archive = os.path.join(folder, 'package.zip')
+            cu_download(metadata['url'], archive, folder, True, metadata['length'])
+            digest = cu_verify_archive(archive, metadata, folder)
+            package = cu_prepare_package(archive, folder, metadata)
+            if cu_snapshot(cu_target()) != target:
+                cu_error('needs_recheck', '下载期间客户端发生变化，请重新检查')
+            stage = {'metadata': metadata, 'target': target, 'package_sha256': digest, 'package': package}
+            stage['token'] = cu_token(stage)
+            destination = os.path.join(root, 'package.zip')
+            if os.path.lexists(destination):
+                cu_private(destination)
+            os.replace(archive, destination)
+            stage['archive_identity'] = cu_file_id(destination)
+            state.update(stage=stage, status='staged', message='官方更新已暂存，等待确认安装')
+    except ClientUpdateError as e:
+        state.update(status=e.status, message=e.message)
+        state.pop('stage', None)
+        raise
+    finally:
+        cu_save_state(state)
+    return state
+
+
+def cu_no_processes(*paths):
+    executables = cu_run(['/bin/ps', '-axww', '-o', 'pid=,comm='], '/private/tmp', 20)
+    result = cu_run(['/bin/ps', '-axww', '-o', 'pid=,command='], '/private/tmp', 20)
+    if executables.returncode or not executables.stdout.strip() or result.returncode or not result.stdout.strip():
+        cu_error('blocked', '无法核验客户端进程，未替换程序')
+    commands = {}
+    for line in executables.stdout.decode('utf-8', 'replace').splitlines():
+        match = re.match(r'^\s*(\d+)\s+(.+)$', line)
+        if not match:
+            cu_error('blocked', '客户端进程列表无法完整解析，未替换程序')
+        commands[match.group(1)] = match.group(2)
+    for line in result.stdout.decode('utf-8', 'replace').splitlines():
+        match = re.match(r'^\s*(\d+)\s+(.+)$', line)
+        if not match:
+            cu_error('blocked', '客户端进程列表无法完整解析，未替换程序')
+        command = match.group(2)
+        target_match = any(re.search(r'(?:^|[\s=\x22\x27])' + re.escape(path) + r'(?:[/\s\x22\x27]|$)', command)
+                           for path in paths)
+        executable = commands.get(match.group(1), '')
+        sparkle = CU_BUNDLE in executable and re.search(r'Sparkle|Autoupdate|Updater\.app', executable)
+        if target_match or sparkle:
+            cu_error('running', '请先退出所有 ChatGPT 窗口及后台进程，再确认安装')
+
+
+def cu_rename_exclusive(source, destination):
+    """Darwin 的无覆盖原子 rename；检查后突然出现的目标也不能被覆盖。"""
+    import ctypes, errno
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, 'renameatx_np', None)
+    if function is None:
+        cu_error('blocked', '系统缺少安全的无覆盖安装接口')
+    function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    function.restype = ctypes.c_int
+    if function(-2, os.fsencode(source), -2, os.fsencode(destination), 4) != 0:
+        code = ctypes.get_errno()
+        if code in (errno.EEXIST, errno.ENOTEMPTY):
+            cu_error('needs_recheck', '安装目标已由其他更新器创建，未覆盖它')
+        if code in (errno.EACCES, errno.EPERM, errno.EROFS):
+            cu_error('blocked', '没有替换此客户端的权限；未请求管理员权限')
+        cu_error('blocked', '无法安全移动客户端程序')
+
+
+def cu_sync_directory(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def cu_journal(data):
+    path = os.path.join(cu_root(True), 'transaction.json')
+    if os.path.lexists(path):
+        cu_private(path)
+    save_json(path, data, 0o600, follow_symlinks=False)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    cu_sync_directory(os.path.dirname(path))
+
+
+def cu_moved_matches(current, before):
+    # rename 改变根目录的路径/ctime；程序内容、文件身份和目录 inode 必须保持原样。
+    return all(current.get(k) == before.get(k) for k in (
+        'version', 'build', 'hashes', 'files', 'device', 'inode', 'modified_ns'))
+
+
+def cu_cleanup_work(work, state):
+    import shutil
+    try:
+        shutil.rmtree(work)
+    except OSError:
+        state['retained_recovery_path'] = work
+        cu_save_state(state)
+
+
+def cu_recover(state):
+    """只在 manager/install 锁内调用；status 仅显示待恢复，不触碰事务现场。"""
+    root = cu_root(True)
+    journal = os.path.join(root, 'transaction.json')
+    if not os.path.lexists(journal):
+        return state
+    cu_private(journal)
+    data = load_quiet(journal)
+    if not isinstance(data, dict) or data.get('v') != 1:
+        cu_error('blocked', '安装恢复记录无法识别，已保留现场')
+    target = data.get('target', {}).get('path', '')
+    work = data.get('work', '')
+    if (not os.path.isabs(target) or target != os.path.realpath(target)
+            or not work or os.path.dirname(work) != os.path.dirname(target)
+            or not re.fullmatch(r'\.cca-client-install-[a-z0-9_]+', os.path.basename(work))
+            or data.get('backup') != os.path.join(work, 'previous.app')
+            or data.get('incoming') != os.path.join(work, 'ChatGPT.app')):
+        cu_error('blocked', '安装恢复路径无法核验，已保留现场')
+    cu_private(work, True)
+    backup, incoming = data['backup'], data['incoming']
+    cleanup_work = False
+    cu_no_processes(target, backup, incoming)
+    if os.path.lexists(target):
+        current = cu_snapshot(target)
+        if cu_content(current) == data.get('candidate') and os.path.lexists(backup):
+            cu_bundle(target, root, data['metadata'])
+            # 崩溃可能发生在新程序到位后、状态保存前；不再移动已完成的目标。
+            state.pop('stage', None)
+            state.update(status='updated', message='官方客户端更新已安装')
+            cleanup_work = True
+        elif current == data['target'] and not os.path.lexists(backup):
+            # 移走旧程序前中断：当前原程序未变化，可以清除仅属于本事务的候选目录。
+            state.update(status='needs_recheck', message='上次安装未开始替换，请重新检查更新')
+            cleanup_work = True
+        else:
+            current = cu_bundle(target, root)
+            if int(current['build']) < int(data['target']['build']):
+                cu_error('needs_recheck', '目标版本异常，已保留安装现场且未覆盖程序')
+            state.pop('stage', None)
+            state.update(status='needs_recheck', message='已保留原生更新器安装的客户端，请重新检查')
+            if os.path.lexists(backup):
+                state['retained_recovery_path'] = work  # 竞态现场不自动删除。
+            else:
+                cleanup_work = True
+    elif os.path.lexists(backup):
+        original = cu_bundle(backup, root)
+        if not cu_moved_matches(original, data['target']) and int(original['build']) < int(data['target']['build']):
+            cu_error('needs_recheck', '备份版本异常，已保留现场且未自动恢复')
+        cu_no_processes(target, backup, incoming)
+        cu_rename_exclusive(backup, target)
+        cu_sync_directory(os.path.dirname(target))
+        cu_sync_directory(work)
+        state.pop('stage', None)
+        state.update(status='needs_recheck', message='已恢复可核验的官方客户端，请重新检查更新')
+        cleanup_work = True
+    else:
+        cu_error('blocked', '未找到可核验的客户端或备份，已保留安装恢复记录')
+    cu_save_state(state)
+    os.unlink(journal)
+    cu_sync_directory(root)
+    if cleanup_work:
+        cu_cleanup_work(work, state)
+    return state
+
+
+def cu_install(state, token):
+    import tempfile
+    root = cu_root(True)
+    with ClientUpdateLock(os.path.join(root, 'install.lock')):
+        cu_recover(state)
+        stage = cu_validate_plan(state, token)
+        target = stage['target']['path']
+        cu_no_processes(target)
+        if not os.access(os.path.dirname(target), os.W_OK):
+            cu_error('blocked', '客户端所在目录不可写；请使用原版安装器更新')
+        # 同一文件系统内准备候选程序，整个准备阶段尚未移动目标。
+        work = tempfile.mkdtemp(prefix='.cca-client-install-', dir=os.path.dirname(target))
+        journal_written = False
+        try:
+            archive = os.path.join(root, 'package.zip')
+            if cu_verify_archive(archive, stage['metadata'], work) != stage['package_sha256']:
+                cu_error('needs_recheck', '暂存安装包已变化，请重新检查')
+            incoming = cu_extract(archive, work)
+            candidate = cu_bundle(incoming, work, stage['metadata'])
+            if cu_content(candidate) != stage['package']:
+                cu_error('needs_recheck', '解压程序与此前确认的安装包不一致')
+            if cu_bundle(target, work) != stage['target']:
+                cu_error('needs_recheck', '原生更新器已改变客户端，未覆盖它')
+            cu_validate_plan(state, token)
+            cu_no_processes(target, incoming)
+            backup = os.path.join(work, 'previous.app')
+            transaction = {'v': 1, 'target': stage['target'], 'candidate': cu_content(candidate),
+                           'metadata': stage['metadata'], 'incoming': incoming, 'backup': backup, 'work': work}
+            cu_journal(transaction)
+            journal_written = True
+            # 日志已持久化；再核验目标，移动之后也检查被移走的正是刚才核验的版本。
+            if cu_snapshot(target) != stage['target']:
+                cu_error('needs_recheck', '客户端在提交前发生变化，未覆盖它')
+            cu_no_processes(target, incoming)
+            cu_rename_exclusive(target, backup)
+            cu_sync_directory(os.path.dirname(target))
+            cu_sync_directory(work)
+            if not cu_moved_matches(cu_snapshot(backup), stage['target']):
+                cu_error('needs_recheck', '原生更新器在替换时改变了客户端，已保留现场')
+            cu_no_processes(target, backup, incoming)
+            cu_rename_exclusive(incoming, target)
+            cu_sync_directory(os.path.dirname(target))
+            cu_sync_directory(work)
+            if cu_content(cu_snapshot(target)) != transaction['candidate']:
+                cu_error('needs_recheck', '客户端在安装后被其他更新器改变，已保留现场')
+            state.pop('stage', None)
+            state.update(status='updated', message='官方客户端更新已安装')
+            cu_save_state(state)
+            os.unlink(os.path.join(root, 'transaction.json'))
+            cu_sync_directory(root)
+            cu_cleanup_work(work, state)  # 提交完成才清理，不累积每版约 2 GB 的程序副本。
+            return state
+        except Exception:
+            if journal_written:
+                try:
+                    cu_recover(state)
+                except (ClientUpdateError, OSError, ValueError, TypeError, KeyError):
+                    pass   # 无法证明安全就保留 journal；下次 check 再恢复，不覆盖新目标。
+            raise
+        finally:
+            if not journal_written:
+                import shutil
+                shutil.rmtree(work)
+
+
+def cmd_client_updates(action='status', arg=''):
+    if action not in ('status', 'check', 'mode', 'plan', 'install'):
+        die('未知客户端更新操作')
+    state = {}
+    try:
+        if action == 'mode':
+            if arg not in ('auto', 'off'):
+                cu_error('blocked', '客户端更新模式只能是 auto 或 off')
+            with Lock():
+                c = load_json(CFG, {})
+                c['client_updates'] = arg
+                save_json(CFG, c)
+            try:
+                state = cu_read_state()
+                print(json.dumps(cu_view(state), ensure_ascii=False))
+            except ClientUpdateError as e:
+                print(json.dumps(cu_view({}, e), ensure_ascii=False))
+            return
+        state = cu_read_state()
+        if action == 'plan':
+            stage = cu_validate_plan(state, arg)
+            sh(CU_VERSION=stage['metadata']['version'], CU_INSTALLED=stage['target']['version'],
+               CU_TARGET=stage['target']['path'])
+            return
+        if action == 'status':
+            print(json.dumps(cu_view(state), ensure_ascii=False))
+            return
+        if action in ('check', 'install'):
+            root = cu_root(True)
+            with ClientUpdateLock(os.path.join(os.path.dirname(root), 'manager.lock')):
+                state = cu_read_state()
+                if action == 'check':
+                    if arg not in ('', 'force'):
+                        cu_error('blocked', '检查更新的参数无法识别')
+                    with ClientUpdateLock(os.path.join(root, 'install.lock')):
+                        state = cu_recover(state)
+                    state = cu_check(state, arg == 'force')
+                else:
+                    state = cu_install(state, arg)
+        print(json.dumps(cu_view(state), ensure_ascii=False))
+    except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
+        problem = e if isinstance(e, ClientUpdateError) else ClientUpdateError('blocked', '无法安全处理客户端更新状态')
+        if action == 'plan':
+            die(problem.message)
+        print(json.dumps(cu_view(state, problem), ensure_ascii=False))
+        if action != 'status':
+            sys.stderr.write(problem.message + '\n')
+            sys.exit(1)
+
+
 CMDS = {
     'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
     'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
     'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm, 'rename': cmd_rename,
     'set-last': cmd_set_last, 'session-open': cmd_session_open, 'name': cmd_name, 'login-url': cmd_login_url,
+    'private-profile': cmd_private_profile, 'runtime-record': cmd_runtime_record, 'browser-profile': cmd_browser_profile,
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
@@ -5627,7 +6568,7 @@ CMDS = {
     'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render,
     'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
-    'update-check': cmd_update_check,
+    'update-check': cmd_update_check, 'client-updates': cmd_client_updates,
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
     'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
     'policy-ask': cmd_policy_ask, 'policy-decline': cmd_policy_decline, 'policy-set': cmd_policy_set,
@@ -5911,10 +6852,10 @@ ctl_init() {   # 控制接口的端口和密钥：从运行配置读；运行配
 ctl() {   # ctl 方法 路径 [JSON]：响应体在 ${CTLOUT}，状态码在 $CODE
 	ctl_init
 	if [ -n "$3" ]; then
-		CODE=$(curl -s -m "${CTL_TIMEOUT:-10}" -o "$CTLOUT" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $CSEC" \
+		CODE=$(curl -q --noproxy '*' -s -m "${CTL_TIMEOUT:-10}" -o "$CTLOUT" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $CSEC" \
 			-H 'Content-Type: application/json' --data "$3" "http://127.0.0.1:$CPORT$2")
 	else
-		CODE=$(curl -s -m "${CTL_TIMEOUT:-10}" -o "$CTLOUT" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $CSEC" \
+		CODE=$(curl -q --noproxy '*' -s -m "${CTL_TIMEOUT:-10}" -o "$CTLOUT" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $CSEC" \
 			"http://127.0.0.1:$CPORT$2")
 	fi
 }
@@ -5930,17 +6871,22 @@ select_all() {
 	while IFS="$TAB" read -r g node; do
 		[ -n "$g" ] || continue
 		ctl GET "/proxies/$g"
-		if [ "$CODE" != 200 ]; then rc=2; continue; fi
+		if [ "$CODE" != 200 ]; then
+			if [ "$CODE" = 404 ]; then rc=2; elif [ $rc -eq 0 ]; then rc=1; fi
+			echo "无法核实 ${g} 当前节点（HTTP ${CODE}）"
+			continue
+		fi
 		[ "$(now_of)" = "$node" ] && continue
 		ctl PUT "/proxies/$g" "{\"name\":\"$(json_str "$node")\"}"
-		case "$CODE" in
-			2??) echo "${g} → ${node}" ;;
-			*)
-				echo "${g} 切换到 ${node} 失败（HTTP ${CODE}），改为 REJECT"
-				FAILED="${FAILED}${node}${TAB}"
-				ctl PUT "/proxies/$g" '{"name":"REJECT"}'
-				[ $rc -eq 0 ] && rc=1 ;;
-		esac
+		case "$CODE" in 2??) ctl GET "/proxies/$g" ;; esac
+		if [ "$CODE" = 200 ] && [ "$(now_of)" = "$node" ]; then
+			echo "${g} → ${node}"
+		else
+			echo "${g} 切换到 ${node} 失败（HTTP ${CODE}，未能核实目标节点），改为 REJECT"
+			FAILED="${FAILED}${node}${TAB}"
+			ctl PUT "/proxies/$g" '{"name":"REJECT"}'
+			[ $rc -eq 0 ] && rc=1
+		fi
 	done < "$SEL"
 	rm -f "$CTLOUT"
 	return $rc
@@ -6106,7 +7052,7 @@ reload() {
 		[ -L "$SCB/config.yaml" ] || [ ! -e "$SCB/config.yaml" ] && ! [ "$SCB/config.yaml" -ef "$1" ] && ln -sf "$1" "$SCB/config.yaml"
 		[ "$SCB/config.yaml" -ef "$1" ] && p="$SCB/config.yaml"
 	fi
-	RELOAD_CODE=$(curl -s -m 90 -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $CSEC" \
+	RELOAD_CODE=$(curl -q --noproxy '*' -s -m 90 -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $CSEC" \
 		-H 'Content-Type: application/json' --data "{\"path\":\"$p\"}" "http://127.0.0.1:$CPORT/configs")
 	case "$RELOAD_CODE" in 2??|000|"") return 0 ;; esac
 	echo "mihomo 拒绝了新配置（HTTP ${RELOAD_CODE}）"
@@ -6230,7 +7176,7 @@ apply_now() {
 			reload "$cf" && reload_wait "$newp" "$gonep" && ok=1
 		fi
 		if [ $ok = 1 ]; then
-			select_all >/dev/null
+			select_all || { echo "重载后账号节点未能核实，停止使用端口池"; return 1; }
 			echo "已重载并建立账号端口池（未重启 ${NAME}）"
 			return 0
 		fi
@@ -7324,7 +8270,7 @@ cmd_rename() {   # cca [codex] rename <账号> <新别名>：改别名（新别�
 }
 
 # 继承来的、会盖掉账号自己的登录/接口/模型，或者把请求转去别的服务商的变量（和 PY_SRC 里的 CRED_ENV 对应）
-INHERITED_RE='^(ANTHROPIC_.*|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)$'
+INHERITED_RE='^(ANTHROPIC_.*|CLAUDE_(CONFIG_DIR|SECURESTORAGE_CONFIG_DIR)|CLAUDE_CODE_(OAUTH_TOKEN|[A-Z_]*_FILE_DESCRIPTOR)|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)$'
 CLAUDE_INHERITED_RE="$INHERITED_RE"
 # Codex：CODEX_ACCESS_TOKEN / CODEX_API_KEY 会直接顶替账号的登录，*_URL_OVERRIDE 会把 token 发到别处，OPENAI_* 会带上
 # 别的组织、key；CODEX_HOME 等由 cca 设。只留 CODEX_CA_CERTIFICATE（公司网络的根证书，和账号无关）
@@ -7346,7 +8292,8 @@ child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS �
 	fi
 }
 claude_env() {
-	SETS=(CLAUDE_CONFIG_DIR="$ACC_HOME" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
+	# 新版凭证库可单独指定目录；固定为原 CLAUDE_CONFIG_DIR，保留已有钥匙串服务名。
+	SETS=(CLAUDE_CONFIG_DIR="$ACC_HOME" CLAUDE_SECURESTORAGE_CONFIG_DIR="$ACC_HOME" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
 	[ "$ACC_KIND" = api ] || SETS+=(BROWSER="$CCA_HOME/bin/open-url")
 }
 codex_env() {   # 会话、记忆等数据库不靠链接共享：CODEX_SQLITE_HOME 指向 ~/.codex
@@ -7467,11 +8414,13 @@ cmd_login() {   # cca [codex] login <账号>：退出这个账号现在的登录
 }
 
 cmd_rm() {
-	local key
+	local key pid rc
 	key=$(py resolve "${1:-}") || die "用法: ${CMD} rm <账号>"
 	need_tty
 	eval "$(py env "$key")"
-	[ -z "$(tool app_pid "$ACC_DESKTOP_DIR")" ] || die "${ACC_LABEL} 的 ${APP_LABEL} 还开着：先退出它再删除"
+	pid=$(tool app_pid "$ACC_DESKTOP_DIR"); rc=$?
+	[ "$rc" -le 1 ] || die "无法查询 ${APP_LABEL} 进程，已停止删除；请稍后重试"
+	[ -z "$pid" ] || die "${ACC_LABEL} 的 ${APP_LABEL} 还开着：先退出它再删除"
 	if [ "$ACC_KIND" = api ]; then
 		confirm "删除第三方 API 账号 ${ACC_LABEL}？（删除钥匙串里它的 key 和账号目录；共享的记忆/会话不受影响）" n || return 0
 	elif [ "$TOOL" = codex ]; then
@@ -7592,23 +8541,33 @@ pick_route() {   # 需要先 eval "$(py env 名称)"；结果在 ROUTE（router|
 	if want_local; then route_local; else route_router; fi
 }
 router_ensure() {   # 让路由器确认端口池在，并把各槽位切到账号的节点（API，无需重载；要重载时先问）
-	local out rc
-	router_ready || return 0
-	out=$(rsh "$RDIR/cca-router.sh ensure-now" </dev/null 2>&1); rc=$?   # </dev/null：不让 ssh 读走调用方的 stdin
-	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
-	# 有槽位切不过去（或要重载）：可能是节点在路由器上改了名。账号表跟上之后重新同步（结构变了要重载，会先问）
-	if [ $rc -ne 0 ] && [ $rc -ne 255 ] && nodes_follow; then
-		router_push
-		[ -z "${ACC_KEY:-}" ] || eval "$(py env "$ACC_KEY")"   # 当前账号的节点名可能跟着改了
-		return 0
-	fi
-	[ $rc -eq 3 ] && allow_reload "$out" && router_reload
-	return 0
+	local out rc attempt
+	router_ready || { fail_warn no_router "无法核实路由器账号节点：还没配置路由器（cca router setup）"; return 1; }
+	for attempt in 1 2; do
+		out=$(rsh "$RDIR/cca-router.sh ensure-now" </dev/null 2>&1); rc=$?   # </dev/null：不让 ssh 读走调用方的 stdin
+		[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
+		[ $rc -eq 0 ] && return 0
+		[ $attempt -eq 1 ] || break
+		# 节点改名后重新部署，或获准重载后，再核实一次实际选中节点。端口开放不能替代这一步。
+		if [ $rc -ne 255 ] && nodes_follow; then
+			router_push || break
+			if [ -n "${ACC_KEY:-}" ]; then
+				out=$(py env "$ACC_KEY") || break
+				eval "$out"
+			fi
+		elif [ $rc -eq 3 ] && allow_reload "$out"; then
+			router_reload || break
+		else
+			break
+		fi
+	done
+	fail_warn sync_failed "路由器账号节点未能核实，已停止使用端口池（避免走错出口）。排查：cca router status / cca router sync"
+	return 1
 }
 route_router() {   # 在家：经路由器的端口池
 	[ -n "$ACC_PROXY" ] || { fail_warn no_router "还没配置路由器（cca router setup）"; TOOL=claude gui_terminal router_setup "还没配置路由器：在终端里配置一次" router setup; return 1; }
 	load_router
-	router_ensure
+	router_ensure || return 1
 	port_open "$PROXY_HOST" "$ACC_PORT" || {
 		fail_warn port_closed "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
 		return 1
@@ -7628,9 +8587,9 @@ route_note() {   # 给提示用：走的是哪个端口
 api_check() {
 	local code i
 	local -a via=(--noproxy '*')
-	[ -n "$ACC_PROXY" ] && via=(-x "$ACC_PROXY")
+	[ -n "$ACC_PROXY" ] && via=(--noproxy '' -x "$ACC_PROXY")
 	for i in 1 2; do
-		code=$(curl -s -o /dev/null -m 8 -w '%{http_code}' "${via[@]}" "$ACC_BASE_URL" 2>/dev/null)
+		code=$(curl -q -s -o /dev/null -m 8 -w '%{http_code}' "${via[@]}" "$ACC_BASE_URL" 2>/dev/null)
 		case "$code" in ''|000) ;; *) COFFEE_LINE="接口连得上"; health_note api_ok; return 0 ;; esac
 	done
 	COFFEE_LINE="连不上 ${ACC_BASE_URL}（$(route_note)）"
@@ -7657,11 +8616,11 @@ coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出�
 	local trace ip loc risk="" out rc min="$CCA_MIN_TRUST"
 	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC="" LEAK_DNS_STATE="" LEAK_WEBRTC_STATE="" HEALTH_JSON=""
 	[ "${1:-}" = region ] || leak_start "${1:-}"
-	trace=$(curl -s -m 8 -x "$ACC_PROXY" "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
+	trace=$(curl -q --noproxy '' -s -m 8 -x "$ACC_PROXY" "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
 	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
 	loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p')
 	if [ "${1:-}" = region ]; then min=0
-	elif [ -n "$ip" ]; then risk=$(curl -s -m 12 -x "$ACC_PROXY" "https://ip.net.coffee/api/iprisk/$ip" 2>/dev/null); fi
+	elif [ -n "$ip" ]; then risk=$(curl -q --noproxy '' -s -m 12 -x "$ACC_PROXY" "https://ip.net.coffee/api/iprisk/$ip" 2>/dev/null); fi
 	out=$(py coffee "$min" "$trace" "$risk")
 	rc=$?
 	COFFEE_IP="$ip"
@@ -7742,10 +8701,34 @@ preflight() {   # preflight [app]：账号的出口必须可用且干净，否�
 	return 0
 }
 
-has_chrome() { [ -d "/Applications/Google Chrome.app" ] || [ -d "$HOME/Applications/Google Chrome.app" ]; }
+chrome_app_path() {
+	local app
+	for app in /Applications/Google\ Chrome.app "$HOME/Applications/Google Chrome.app"; do
+		[ -d "$app" ] && { printf '%s' "$app"; return 0; }
+	done
+	return 1
+}
+has_chrome() { chrome_app_path >/dev/null; }
 
-open_chrome() {   # 需要先 eval "$(py env 名称)"
-	local url="$1"
+chrome_pid() { app_pid 'Google Chrome' "$ACC_CHROME_DIR"; }
+
+chrome_launch_lock() {
+	exec 9>"$ACC_DIR/browser-launch.lock" || return 1
+	"$PYTHON" -I -c 'import fcntl, sys
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)'
+}
+
+chrome_open_url() {
+	open -n -a "$1" --args --user-data-dir="$ACC_CHROME_DIR" --no-first-run --no-default-browser-check \
+		--proxy-server="$ACC_PROXY" --webrtc-ip-handling-policy=disable_non_proxied_udp "$2" 9>&-
+}
+
+open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放；不终止已有浏览器窗口。
+(
+	local url="$1" app pid i rc ready=""
 	case "$url" in
 		http://*|https://*) ;;
 		*) fail_warn invalid_url "浏览器地址必须以 http:// 或 https:// 开头"; return 1 ;;
@@ -7754,9 +8737,33 @@ open_chrome() {   # 需要先 eval "$(py env 名称)"
 		fail_warn no_chrome "没装 Google Chrome，已停止打开：系统默认浏览器不能保证使用这个账号的资料目录和出口"
 		return 1
 	fi
-	mkdir -p "$ACC_CHROME_DIR" && chmod 700 "$ACC_CHROME_DIR" || return 1
-	open -na "Google Chrome" --args --user-data-dir="$ACC_CHROME_DIR" --no-first-run --no-default-browser-check \
-		--proxy-server="$ACC_PROXY" "$url"
+	app=$(chrome_app_path) || return 1
+	ACC_CHROME_DIR=$(py private-profile "$ACC_KEY" browser) || return 1
+	command -v lsof >/dev/null 2>&1 || { fail_warn open_failed "找不到 lsof，无法核验账号浏览器的资料目录"; return 1; }
+	chrome_launch_lock || { fail_warn open_failed "账号浏览器正在启动，请稍后再试"; return 1; }
+	pid=$(chrome_pid); rc=$?
+	[ "$rc" -le 1 ] || { fail_warn open_failed "无法查询 Chrome 进程，已停止打开，未修改浏览器偏好"; return 1; }
+	if [ -n "$pid" ]; then
+		py runtime-record check "$ACC_KEY" browser "$pid" "$ACC_CHROME_DIR" "$app" "$ACC_PROXY" || {
+			fail_warn open_failed "浏览器的启动条件无法核验或出口已变化：请退出这个账号的 Chrome，再用 cca 打开"
+			return 1
+		}
+		app_profile_in_use "$pid" "$ACC_CHROME_DIR" || { fail_warn open_failed "无法核验已有 Chrome 的账号资料目录，请退出后重开"; return 1; }
+	else
+		py browser-profile prepare "$ACC_KEY" || return 1
+		# 先启动空白页，核验后才主动交付目标网址；Chrome 自身仍可能恢复旧标签或发起后台请求。
+		chrome_open_url "$app" about:blank || return $?
+		for i in $(seq 1 40); do
+			pid=$(chrome_pid); rc=$?
+			[ "$rc" -le 1 ] || { fail_warn open_failed "无法查询本次 Chrome 进程，未打开目标网址；请退出空白窗口后重试"; return 1; }
+			if [ -n "$pid" ] && app_profile_in_use "$pid" "$ACC_CHROME_DIR"; then ready=1; break; fi
+			sleep 0.25
+		done
+		[ -n "$ready" ] || { fail_warn open_failed "无法核验 Chrome 使用账号自己的资料目录，未打开目标网址；请退出空白窗口后重试"; return 1; }
+		py runtime-record write "$ACC_KEY" browser "$pid" "$ACC_CHROME_DIR" "$app" "$ACC_PROXY" || return 1
+	fi
+	chrome_open_url "$app" "$url"
+)
 }
 
 cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）
@@ -7814,9 +8821,13 @@ codex_app_path() {   # ChatGPT App 装在哪（CCA_CODEX_APP 可指定）：认 
 claude_app_missing() { printf '%s' "没找到 Claude App：先从 https://claude.ai/download 下载安装"; }
 codex_app_missing() { printf '%s' "没找到 ChatGPT App（Codex 的桌面版）：运行 codex app 会打开它的安装页"; }
 app_pid() {   # 资料目录按字面量匹配，路径里的点号等不能变成正则通配符
-	local pattern
-	pattern=$("$PYTHON" -I -c 'import re, sys; print(re.escape(sys.argv[1]))' "$2") || return 1
-	pgrep -f "Contents/MacOS/$1 .*--user-data-dir=${pattern}( |\$)" | head -n 1
+	local pattern matches rc
+	pattern=$("$PYTHON" -I -c 'import re, sys; print(re.escape(sys.argv[1]))' "$2") || return 2
+	matches=$(pgrep -f "Contents/MacOS/$1 .*--user-data-dir(=| +)${pattern}/*( |\$)"); rc=$?
+	[ "$rc" -le 1 ] || return "$rc"
+	[ "$rc" -eq 0 ] || return 1
+	[ -n "$matches" ] || return 2
+	printf '%s\n' "$matches" | head -n 1
 }
 claude_app_pid() { app_pid Claude "$1"; }
 codex_app_pid() { app_pid '(ChatGPT|Codex)' "$1"; }
@@ -7874,13 +8885,16 @@ app_open() {   # app_open App 资料目录 [--env 工具自己的变量…]：�
 		--env NO_PROXY="$CCA_NO_PROXY" --env no_proxy="$CCA_NO_PROXY" \
 		--args --user-data-dir="$dir" --proxy-server="$ACC_PROXY" --proxy-bypass-list="$CCA_PROXY_BYPASS"
 }
-claude_app_open() { app_open "$1" "$2" --env CLAUDE_CONFIG_DIR="$ACC_HOME"; }
+claude_app_open() { app_open "$1" "$2" --env CLAUDE_CONFIG_DIR="$ACC_HOME" --env CLAUDE_SECURESTORAGE_CONFIG_DIR="$ACC_HOME"; }
 # 资料目录同时用 CODEX_ELECTRON_USER_DATA_PATH 和 --user-data-dir 指定（它自己再开一个实例时也这样）
-codex_app_open() { app_open "$1" "$2" --env CODEX_HOME="$ACC_HOME" --env CODEX_SQLITE_HOME="$ACC_MASTER" --env CODEX_ELECTRON_USER_DATA_PATH="$2"; }
+codex_app_open() {   # Sparkle 的更新 installationId 存在共享 appData；该实例关闭更新，避免发送共享标识。
+	app_open "$1" "$2" --env CODEX_HOME="$ACC_HOME" --env CODEX_SQLITE_HOME="$ACC_MASTER" --env CODEX_ELECTRON_USER_DATA_PATH="$2" --env CODEX_SPARKLE_ENABLED=false
+}
 claude_app_first() { info "第一次打开要登录 ${ACC_EMAIL:-这个账号}：用邮箱登录全程走这个账号的出口；用 Google 登录时，那一次会走系统网络"; }
 codex_app_first() {
 	info "它和 cca codex @${ACC_NAME} 用同一份登录。如果 App 里还要你登录，别在 App 里登（它的登录页会在系统默认浏览器里打开，不经账号的出口）："
 	info "关掉 App，运行 cca codex login ${ACC_NAME}，再打开 App"
+	info "这个账号实例已关闭 App 自动更新；请定期退出账号实例后手动更新 App"
 }
 
 # flock 锁留在当前 shell 的 fd 9；Python 退出后仍持有，进程退出自动释放，不留过期目录锁。
@@ -7921,8 +8935,16 @@ prefix = "n" + sys.argv[1] + "/"
 sys.exit(0 if any(line.startswith(prefix) for line in sys.stdin) else 1)' "$dir"
 }
 
+app_runtime_record() {
+	py runtime-record "$1" "$ACC_KEY" app "$2" "$3" "$4" "$ACC_PROXY" "${ROUTE:-}" "$CCA_PROXY_BYPASS" "$CCA_NO_PROXY"
+}
+
 app_activate_existing() {   # 不接管或终止已有实例；不能验证时要求用户自行退出再打开
 	app_profile_in_use "$1" "$2" || FAIL_CODE=app_profile_unsupported die "无法确认已有的 ${APP_LABEL} 使用 ${ACC_NAME} 自己的资料目录；请先自行退出这个实例，再用 cca 打开"
+	app_runtime_record check "$1" "$2" "$3" || FAIL_CODE=app_profile_unsupported die "已有的 ${APP_LABEL} 没有匹配的启动记录，或账号的出口、资料目录、启动配置已变化；请保存工作并自行退出这个实例，再用 cca 打开"
+	if [ "$TOOL" = codex ]; then
+		py codex-fallback-off || FAIL_CODE=settings_conflict die "已有的 ChatGPT App 无法确认已关闭系统代理回退；请保存工作并退出 App，再用 cca 打开"
+	fi
 	activate_pid "$1"
 	info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 	gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
@@ -7958,18 +8980,14 @@ app_launch_abort() {
 }
 
 cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）；已经开着就切到它
-	local key app dir pid first="" i p ready=""
+	local key app dir pid first="" i p rc ready=""
 	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
 	app=$(tool app_path) || FAIL_CODE=app_missing die "$(tool app_missing)"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
 	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：${APP_LABEL} 只能用官方账号"
 	key="$ACC_KEY" dir="$ACC_DESKTOP_DIR"
-	pid=$(tool app_pid "$dir")
-	if [ -n "$pid" ]; then
-		app_activate_existing "$pid" "$dir"
-		return 0
-	fi
+	dir=$(py private-profile "$key" app) || FAIL_CODE=app_profile_unsupported die "${APP_LABEL} 的资料目录不是账号独立目录，已停止打开"
 	gui_step sync
 	sync_if_changed
 	launchers_sync
@@ -7977,16 +8995,23 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	preflight app || exit 1   # App 里的网页也会用 WebRTC：泄露时另外说明
 	gui_step prepare
 	prepare_account "$key" || die "初始化账号目录失败"
+	pid=$(tool app_pid "$dir"); rc=$?
+	[ "$rc" -le 1 ] || FAIL_CODE=open_failed die "无法查询 ${APP_LABEL} 进程，已停止打开；请稍后重试"
+	if [ -n "$pid" ]; then
+		app_activate_existing "$pid" "$dir" "$app"
+		return 0
+	fi
 	tool app_prepare
 	[ -e "$dir/Local State" ] || first=1
 	mkdir -p "$dir" && chmod 700 "$dir"
 	command -v lsof >/dev/null 2>&1 || FAIL_CODE=app_profile_unsupported die "找不到 lsof，无法核验 App 是否使用账号自己的资料目录，已停止打开"
 	app_launch_lock || FAIL_CODE=open_failed die "${ACC_NAME} 的 ${APP_LABEL} 正在启动，请稍后再试"
 	# 预检时另一条启动命令可能先开好了；拿到锁后再检查，防止同一资料目录开两份。
-	pid=$(tool app_pid "$dir")
+	pid=$(tool app_pid "$dir"); rc=$?
+	[ "$rc" -le 1 ] || { app_launch_unlock; FAIL_CODE=open_failed die "无法查询 ${APP_LABEL} 进程，已停止打开；请稍后重试"; }
 	if [ -n "$pid" ]; then
 		app_launch_unlock
-		app_activate_existing "$pid" "$dir"
+		app_activate_existing "$pid" "$dir" "$app"
 		return 0
 	fi
 	APP_LAUNCH_DIR="$dir" APP_LAUNCH_NEW_PID=""
@@ -8001,7 +9026,8 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	gui_step open
 	tool app_open "$app" "$dir" 9>&- || FAIL_CODE=open_failed die "打开 ${APP_LABEL} 失败"
 	for i in $(seq 1 40); do
-		pid=$(tool app_pid "$dir")
+		pid=$(tool app_pid "$dir"); rc=$?
+		[ "$rc" -le 1 ] || FAIL_CODE=open_failed die "无法查询本次 ${APP_LABEL} 进程，已停止启动；请确认已退出本次实例后再试"
 		[ -z "$pid" ] || APP_LAUNCH_NEW_PID="$pid"
 		if app_profile_in_use "$pid" "$dir"; then ready=1; break; fi
 		sleep 0.25
@@ -8009,6 +9035,10 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	if [ -z "$ready" ]; then
 		FAIL_CODE=app_profile_unsupported die "无法确认 ${APP_LABEL} 本次正在使用 ${ACC_NAME} 自己的资料目录（可能是新版本不再支持多开）；已停止启动并关闭能识别的本次实例，免得用错账号或出口"
 	fi
+	case " $APP_LAUNCH_BEFORE " in
+		*" $pid "*) FAIL_CODE=app_profile_unsupported die "无法确认 ${APP_LABEL} 是本次启动的新实例；请保存工作并自行退出已有实例，再用 cca 打开" ;;
+	esac
+	app_runtime_record write "$pid" "$dir" "$app" || FAIL_CODE=app_profile_unsupported die "无法保存 ${APP_LABEL} 的启动记录，已关闭能识别的本次实例；请检查账号目录后再试"
 	APP_LAUNCH_ACTIVE=""
 	app_launch_restore_traps
 	app_launch_unlock
@@ -8036,7 +9066,7 @@ local_ready() { [ -n "$LOCAL_CLIENT" ]; }
 json_get() { printf '%s' "$LBODY" | sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p'; }   # 响应里的字符串字段
 lctl() {   # lctl 方法 路径 [JSON 或 @文件]：本机 Clash 内核的控制接口；响应体在 ${LBODY}，HTTP 状态码在 ${LCODE}
 	local out url nl=$'\n'
-	local -a a=(-s -m "${LCTL_TIMEOUT:-8}" -X "$1" -w '\n%{http_code}')
+	local -a a=(-q --noproxy '*' -s -m "${LCTL_TIMEOUT:-8}" -X "$1" -w '\n%{http_code}')
 	case "$LOCAL_CTL" in
 		unix:*) a+=(--unix-socket "${LOCAL_CTL#unix:}"); url="http://localhost$2" ;;
 		*) url="${LOCAL_CTL%/}$2"; [ -n "$LOCAL_SECRET" ] && a+=(-H "Authorization: Bearer $LOCAL_SECRET") ;;
@@ -8171,26 +9201,39 @@ local_apply() {   # 把端口池放进正在运行的本机 Clash 内核
 	py local-set applied "$LOCAL_WANT"
 }
 local_select_all() {   # 每个槽位切到分给它的账号的节点，空槽位切到 REJECT。返回 2：有策略组不在运行中的内核里
-	local g node
+	local g node lines
+	lines=$(py select-lines local) || return 1
 	while IFS=$'\t' read -r g node; do
 		[ -n "$g" ] || continue
 		lctl GET "/proxies/$g"
-		[ "$LCODE" = 200 ] || return 2
+		if [ "$LCODE" != 200 ]; then
+			[ "$LCODE" = 404 ] && return 2
+			warn "无法核实本机 ${g} 当前节点（HTTP ${LCODE}）"
+			return 1
+		fi
 		[ "$(json_get now)" = "$node" ] && continue
 		lctl PUT "/proxies/$g" "{\"name\":$(jstr "$node")}"
-		case "$LCODE" in 2??) ;; *) lctl PUT "/proxies/$g" '{"name":"REJECT"}' ;; esac   # 客户端里没有这个节点：宁可断开也不换出口
-	done < <(py select-lines local)   # 节点名用 Clash Verge 里的叫法（同一个节点名字不同时按服务器地址换算）
+		case "$LCODE" in 2??) lctl GET "/proxies/$g" ;; esac
+		if [ "$LCODE" != 200 ] || [ "$(json_get now)" != "$node" ]; then
+			warn "本机 ${g} 切换到 ${node} 后未能核实（HTTP ${LCODE}），停止使用端口池"
+			lctl PUT "/proxies/$g" '{"name":"REJECT"}'   # 宁可断开，也不能把切换失败当成就绪
+			return 1
+		fi
+	done <<< "$lines"   # 节点名用 Clash Verge 里的叫法（同一个节点名字不同时按服务器地址换算）
 	return 0
 }
 local_ensure() {   # 本机端口池可用：内核在跑、全局扩展脚本最新、参考节点写进了 Clash Verge 的配置、端口池在运行中的内核里、
 	               # 每个槽位切到账号的节点
+	local rc
 	load_local
 	[ "$LOCAL_CLIENT" = builtin ] && { core_ensure; return; }
 	local_up || return 1
 	VFILL=""; VFILL_NEW=""
 	if [ "$LOCAL_CLIENT" = clash-verge ]; then verge_script || return 1; verge_fill_prepare; fi
 	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || [ -n "$VFILL_NEW" ] || ! local_ports_ok; then local_apply || { [ -z "$VFILL_NEW" ] || rm -f "$VFILL_NEW"; return 1; }; fi
-	local_select_all && return 0
+	local_select_all; rc=$?
+	[ $rc -eq 0 ] && return 0
+	[ $rc -eq 2 ] || return 1
 	local_apply && local_select_all   # 组不在运行中的内核里（客户端重新生成过配置，却没带上端口池）
 }
 local_offer() {   # 在外面、还没配置本机 Clash：交互时接着配置（cca local setup：没装 Clash Verge 时默认用内置代理）；界面 App 里没装
@@ -8210,10 +9253,12 @@ local_offer() {   # 在外面、还没配置本机 Clash：交互时接着配置
 	cmd_local_setup
 }
 route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval "$(py env 名称)"）
+	local ready=0
 	load_local
 	local_ready || local_offer || return 1
-	local_ensure || { gui_fail local_unavailable "本机 ${LOCAL_NAME:-Clash} 的端口池没有就绪"; return 1; }
+	local_ensure && ready=1
 	lctl GET "/proxies/CCA-${ACC_SLOT}"
+	[ "$LCODE" = 200 ] || { fail_warn local_unavailable "本机 ${LOCAL_NAME:-Clash} 的账号节点未能核实，已停止"; return 1; }
 	if [ "$(json_get now)" != "$(py local-node "$ACC_NODE")" ]; then
 		if [ "$LOCAL_CLIENT" = builtin ]; then
 			fail_warn node_missing "内置代理里没有节点「${ACC_NODE}」的定义：${ACC_NAME} 在外面用不了，为避免走错出口已停止（在家连上路由器时 cca 会拷一份节点定义；也可以用 ${CMD} edit 换一个节点）"
@@ -8222,6 +9267,7 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 		fi
 		return 1
 	fi
+	[ $ready -eq 1 ] || { gui_fail local_unavailable "本机 ${LOCAL_NAME:-Clash} 的端口池没有就绪"; return 1; }
 	port_open 127.0.0.1 "$ACC_PORT" || { fail_warn port_closed "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
 	ACC_PROXY="http://127.0.0.1:${ACC_PORT}"
 	ROUTE=local
@@ -8428,12 +9474,15 @@ core_setup() {   # cca local setup 选了内置代理：在家时先从路由器
 	okay "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}（在界面 App 里运行），连不上路由器时账号自动走这里"
 }
 core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面 App 在托管内核、端口都在监听、每个槽位切到账号的节点
+	local rc
 	core_possible || { warn "内置代理在界面 App 里运行，要 macOS 26 或更新"; return 1; }
 	core_fetch || { warn "内置代理的内核没装上：${FETCH_ERR}"; return 1; }
 	py core-config "$(core_sock)" || { warn "生成内置代理的配置失败"; return 1; }
 	core_up || return 1
 	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || ! local_ports_ok; then core_reload || return 1; fi
-	local_select_all && return 0
+	local_select_all; rc=$?
+	[ $rc -eq 0 ] && return 0
+	[ $rc -eq 2 ] || return 1
 	core_reload && local_select_all
 }
 core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App 起它，最多等 20 秒
@@ -8590,7 +9639,7 @@ cmd_check() {   # cca check [账号] [--json]：各账号的出口、纯净度�
 				local_ensure || return 1
 				host=127.0.0.1 route=local
 			else
-				router_ensure   # 和启动前一样：各槽位切到账号的节点（节点在路由器上改了名会跟着改）
+				router_ensure || return 1   # 和启动前一样：必须核实各槽位当前节点，不能只看端口开放
 			fi
 		fi
 		ROUTE=direct HEALTH_JSON=""
@@ -8744,7 +9793,15 @@ usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过
 	if [ -n "$ACC_EMAIL" ] && [ "$(lower "$e")" != "$(lower "$ACC_EMAIL")" ]; then   # 登错号：不拿别的账号走这个出口
 		printf 'mismatch\t%s\n' "$e" > "$o.skip"; return 0
 	fi
-	if [ -z "$ACC_PROXY" ]; then printf 'route\t\n' > "$o.skip"; return 0; fi
+	if [ -z "$ACC_PROXY" ]; then
+		# 路由核验失败时不能带账号查询；只探测预期端口，保留端口确实关闭这一具体诊断。
+		if [ -n "${USAGE_EXPECTED_HOST:-}" ] && ! port_open "$USAGE_EXPECTED_HOST" "$ACC_PORT"; then
+			printf 'port\t%s\n' "$ACC_PORT" > "$o.skip"
+		else
+			printf 'route\t\n' > "$o.skip"
+		fi
+		return 0
+	fi
 	if ! port_open "$USAGE_HOST" "$ACC_PORT"; then printf 'port\t%s\n' "$ACC_PORT" > "$o.skip"; return 0; fi
 	if [ -z "${CCA_SKIP_CHECK:-}" ]; then   # 出口在受限地区时不拿账号去查（和启动前的检测一样，只是不看纯净度）
 		coffee_check region
@@ -8761,13 +9818,14 @@ usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过
 
 usage_route() {   # 查用量、重置额度经哪台机器上的账号端口（USAGE_HOST）：本机 Clash 是 127.0.0.1，路由器是它的代理地址；
 	# 走本机 Clash 而它用不了时返回 1（USAGE_HOST 是空的，经出口的查询会说连不上）
-	USAGE_HOST=""
+	USAGE_HOST="" USAGE_EXPECTED_HOST=""
 	if want_local; then
 		load_local
-		local_ready && local_ensure && USAGE_HOST=127.0.0.1 && return 0
+		local_ready && USAGE_EXPECTED_HOST=127.0.0.1 && local_ensure && USAGE_HOST=127.0.0.1 && return 0
 		return 1
 	fi
-	router_ensure
+	USAGE_EXPECTED_HOST="$PROXY_HOST"
+	router_ensure || return 1
 	USAGE_HOST="$PROXY_HOST"
 }
 
@@ -8795,7 +9853,7 @@ cmd_usage() {   # cca [codex] usage [账号] [--json]
 	fi
 	sync_if_changed
 	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
-	usage_route || warn "现在连不上路由器，本机 Clash 也用不了：只能显示上次的用量（cca local setup 配置本机 Clash）"
+	usage_route || warn "账号出口未能核实：不发起查询，只显示上次的用量（检查路由器或本机 Clash 的账号端口池）"
 	tmp=$(mktemp -d "$CCA_HOME/usage.XXXXXX") || die "建临时目录失败"
 	# Ctrl-C、关掉终端：后台的查询忽略 SIGINT，要自己停掉它们（连同它们起的 python、curl；claude、codex 的 stdin 一断也就退出了）
 	trap 'for i in "${pids[@]}"; do pkill -P "$i"; kill "$i"; done 2>/dev/null; rm -rf "$tmp"; exit 130' INT TERM HUP
@@ -9014,6 +10072,55 @@ update_check() {   # cca update --check [--json]：只检查不安装。按现�
 	if [ -n "$UP_BETA" ]; then info "有新的测试版 ${UP_LATEST}（当前 ${VERSION}），运行 cca update ${UP_LATEST} 安装"
 	else info "有新版本 ${UP_LATEST}（当前 ${VERSION}），运行 cca update 安装"; fi
 	[ -z "$UP_NOTES" ] || printf '%s\n' "$UP_NOTES" | LC_ALL=C sed 's/^/  │ /' >&2
+}
+
+client_update_py() {   # 客户端更新独立于账号准备和 cca 自身更新；验签器只使用本机 cca GUI
+	local verifier="" app="$GUI_APP"
+	if [ "$1" = check ] || [ "$1" = install ]; then
+		if dev_mode; then app="${SELF%/*}/macos/build/cca.app"; fi
+		if gui_ours "$app" && [ "$(gui_plist "$app" CCAClientUpdateVerifier)" = 1 ] && [ -x "$app/Contents/MacOS/cca" ] &&
+			codesign --verify --strict "$app" >/dev/null 2>&1; then
+			verifier="$app/Contents/MacOS/cca"
+		fi
+	fi
+	CCA_CLIENT_CODEX_APP="$(codex_app_path)" CCA_CLIENT_VERIFIER="$verifier" py client-updates "$@"
+}
+
+cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOKEN [--json]
+	local action="${1:-status}" arg="" json="" out rc plan CU_VERSION CU_INSTALLED CU_TARGET
+	[ $# -eq 0 ] || shift
+	case "$action" in
+		status) ;;
+		check) ;;
+		mode|install) arg="${1:-}"; [ $# -eq 0 ] || shift ;;
+		*) die "用法: cca clients status|check [--force]|mode auto|off|install TOKEN [--json]" ;;
+	esac
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--json) json=1 ;;
+			--force) [ "$action" = check ] || die "--force 只用于检查客户端更新"; arg=force ;;
+			*) die "不认识的客户端更新参数: $1" ;;
+		esac
+		shift
+	done
+	case "$action" in
+		mode) case "$arg" in auto|off) ;; *) die "用法: cca clients mode auto|off [--json]" ;; esac ;;
+		install)
+			[[ "$arg" =~ ^[0-9a-f]{64}$ ]] || die "安装凭据无效，请重新检查客户端更新"
+			plan=$(client_update_py plan "$arg") || return 1
+			eval "$plan"
+			consent client_update "$arg" "安装 ChatGPT 更新" "将 ChatGPT 从 ${CU_INSTALLED} 更新到 ${CU_VERSION} 吗？" \
+				"目标：${CU_TARGET}。请先退出所有 ChatGPT 实例；安装前会重新验证签名和当前版本，目标改变时停止。" n ||
+				{ rc=$?; [ "$rc" = 2 ] && fail_warn confirmation_required "安装客户端更新需要确认"; return "$rc"; } ;;
+	esac
+	out=$(client_update_py "$action" "$arg"); rc=$?
+	if [ -n "$out" ]; then
+		if [ -n "$json" ]; then printf '%s\n' "$out"
+		else
+			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("ChatGPT 自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭")); [print(c.get("label", "ChatGPT") + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", [])]'
+		fi
+	fi
+	return "$rc"
 }
 
 cmd_update() {   # cca update [版本号 | --check [--json] | --rollback | auto | notify | off]
@@ -9605,7 +10712,7 @@ cmd_install() {
 }
 
 cmd_restore() {
-	local key bk out rc running="" wt="" t
+	local key bk out rc pid running="" wt="" t
 	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
 	need_tty
 	for t in claude codex; do   # 账号的桌面 App 开着时删它的资料目录会出问题
@@ -9613,7 +10720,9 @@ cmd_restore() {
 		while IFS= read -r key; do
 			[ -n "$key" ] || continue
 			eval "$(py env "$key")"
-			[ -n "$(tool app_pid "$ACC_DESKTOP_DIR")" ] && running="${running:+${running}、}${ACC_NAME}（${APP_LABEL}）"
+			pid=$(tool app_pid "$ACC_DESKTOP_DIR"); rc=$?
+			[ "$rc" -le 1 ] || die "无法查询 ${APP_LABEL} 进程，已停止还原；请稍后重试"
+			[ -n "$pid" ] && running="${running:+${running}、}${ACC_NAME}（${APP_LABEL}）"
 			[ "$t" = codex ] && has_worktrees && wt="${wt:+${wt}、}${ACC_NAME}"
 		done < <(py keys)
 	done
@@ -9760,6 +10869,10 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca update --check [--json] | --rollback | auto | notify | off
                              只检查（装着测试版时也看更新的测试版；--json 给界面 App）/ 退回上一版 / 自动安装（默认）/
                              只提示 / 关闭
+  cca clients status [--json] 查看 ChatGPT 桌面客户端更新状态（与 cca 自身更新分开）
+  cca clients check --force  从官方更新源检查、下载并验证，安装前必须确认
+  cca clients mode auto|off  开启/关闭 GUI 的每日自动检查和准备
+  cca clients install TOKEN 安装已验证的更新；凭据由 check 给出，须先退出 ChatGPT
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
@@ -9794,6 +10907,7 @@ main() {
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）
 		_core-nodes) shift; cmd_core_nodes "$@" ;;   # 后台：从路由器拷节点定义、下载内核给内置代理
 		gui) shift; cmd_gui "$@" ;;
+		clients) shift; cmd_clients "$@" ;;
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
 		*)

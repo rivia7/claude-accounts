@@ -215,6 +215,7 @@ cxa @工作              # 简写：cxa 就是 cca codex（cxa、cxa usage、cxa
 - **查用量**：`cca codex usage [账号] [--json]` 经每个账号自己的出口，让 codex 自己去查（和它的 `/status` 一样，不发消息、不耗额度），显示套餐（叫法和 codex 里一样：Plus、Pro 100、Pro 200、Pro 500…）、5 小时、本周额度、单独计的额度、剩余的重置次数（在 codex 里用 `/usage` → Redeem reset 兑换）和 credits 余额；`--json` 里另有 codex 原样给的 `credits` 和 `reset_credits`（`availableCount` 是剩余次数）。菜单里也附上最近一次的用量。`cca usage` 只查 Claude 账号。
 - **第三方 API**：`cca codex add api` 添加兼容 OpenAI **Responses 接口**（`/v1/responses`）的服务，填地址（例如 `https://api.example.com/v1`）、key、模型。key 存在钥匙串里（条目名 `cca-codex-api-…`），启动时由 codex 的 `auth.command` 回调 cca 现取，不出现在命令行参数和环境变量里；地址和模型经 `-c` 交给 codex。只提供 Chat Completions 接口的服务用不了。
 - **ChatGPT App（Codex 桌面版）**：`cca codex app 工作`，或者在启动台、聚焦搜索里点「ChatGPT 工作」。每个账号一份资料目录，用这个账号的 `CODEX_HOME`（和 `cca codex @工作` 同一份登录），App 的浏览器请求和遵守代理环境的子进程使用这个账号的出口。App 自己启动 codex 时 cca 加不了参数，所以第一次打开时会征求你同意，用 Codex 自带的 `codex features disable system_proxy_fallback` 在共享的 `~/.codex/config.toml` 里关掉回退到系统代理（之后直接敲 `codex` 也不再回退）。未同意关闭、关闭失败或当前 CLI 无法关闭时，不会启动 App。没登录时先在账号专属的 Chrome 里登录，App 打开时就是登录状态。如果 App 里还要你登录（比如登录过期了），别在 App 里登：它的登录页会在系统默认浏览器里打开，那一次不经账号的出口；关掉 App，运行 `cca codex login 工作`，再打开 App。
+- **ChatGPT App 更新**：经 cca 打开的实例设置 `CODEX_SPARKLE_ENABLED=false`，关闭 App 更新请求，避免当前客户端从共享 `appData` 读取安装 ID 后通过更新检查发送。cca GUI 的「客户端更新」页可统一下载并验证官方更新；退出所有 ChatGPT 实例后，点安装并确认即可。它不会改写 App 的原生更新配置。这条共享 ID 调用链已核验 App 26.1021.31345；客户端升级后需重新验证，不代表所有 `appData` 或系统特征均已隔离。
 - **其它命令**：`cca codex ls`、`edit`、`check`、`web`（用账号专属的浏览器打开 chatgpt.com）、`key`（换第三方 API 账号的 key），和 Claude 账号的同名命令一样。
 - **简写 `cxa`**：`cxa` 就是 `cca codex`，后面接什么都一样（`cxa`、`cxa @工作`、`cxa usage`、`cxa add`……）。`cca install` 时和 `cca` 一起放进 `~/.local/bin`；用着 Codex 的机器上 `cxa` 不见了（比如以前装的 cca 升级上来），下一次运行 cca 时自动补上。已经有别的 `cxa` 命令时不会覆盖它。
 - **删除**：`cca codex rm 工作` 退出登录、删掉账号目录（包括它的 git 工作树，删之前会提醒）；它开过的会话留在 `~/.codex` 里，cca 平时就把会话库里的路径写成 `~/.codex` 下的，删了账号也找得到。
@@ -233,7 +234,7 @@ cca app 工作
 
 - 每个账号的 App 有自己独立的资料（登录状态、设置）；浏览器请求和遵守代理环境的子进程使用账号出口，打开前检查出口。启动时同样清理继承的凭证、接口和代理变量。外部浏览器登录与不遵守代理的网络流量不在此保证内。
 - App 里的 Code 标签页和 `cca @工作` 用同一个账号配置，记忆、技能、设置照样共享。
-- 这个账号的 App 已经开着时，再打开只会把它切到前面。
+- 这个账号的 App 已经开着时，先重新检查出口、共享配置和启动记录，一致才切到前面。路线、节点、程序版本或启动参数变化，以及升级前没有启动记录的旧实例，需要先保存工作、退出该实例再打开；cca 不会强行关闭已有实例。
 - 你原来的 Claude App 不受影响，照常使用。
 
 需要知道的几点：
@@ -241,7 +242,7 @@ cca app 工作
 - 正在运行的 Claude 在 Dock 里的图标改不了，开了几个账号就有几个一模一样的 Claude 图标；分不清时用 `cca app 账号` 或启动器切换。
 - 第一次打开要登录。用邮箱登录全程走这个账号的出口；用 Google 登录时，那一次登录会走系统网络。不要同时在两个 App 里登录。
 - 在别的 App 里点开的 claude.ai 链接，macOS 只会交给其中一个 Claude App。
-- 这个功能依赖 Claude App 支持独立的资料目录。启动或激活已有实例时，cca 用 `lsof` 核验该实例或其子进程正在打开账号资料目录内的文件；旧的 `Local State` 文件不算运行证据。新启动无法核验或启动中被取消时，会关闭能识别的本次实例；已有实例无法核验时，提示你自行退出后重开。这个核验不等于对 App 全部网络和硬件指纹的验证。
+- 这个功能依赖 Claude App 支持独立的资料目录。启动或激活已有实例时，cca 用 `lsof` 核验该实例或其子进程正在打开账号资料目录内的文件，并核对进程启动时间、实际程序路径、版本和代理参数；旧的 `Local State` 文件不算运行证据。新启动无法核验或启动中被取消时，会关闭能识别的本次实例；已有实例无法核验时，提示你自行退出后重开。这个核验不等于对 App 全部网络和硬件指纹的验证。
 
 ## 图形界面（cca App）
 
@@ -293,18 +294,39 @@ cca local setup
 
 cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
+- **指定节点是否就绪**：路由器或本机内核切换节点后再读取实际结果；控制接口失败、结果不一致或需要重载但未完成时停止，端口开放不算验证通过。目前采用整个端口池核验：其他账号缺少节点也会阻止启动，需要先修复该节点或调整账号映射。出口探针忽略用户 `.curlrc`，显式固定代理及绕过规则，避免 shell 的 `NO_PROXY` 改变检测路线。
 - **出口所在地区**：如果出口在 Claude 不提供服务的地区（例如中国大陆、香港、俄罗斯），直接停止。
 - **IP 纯净度**（数据来自 ip.net.coffee）：分数太低会先问你还要不要继续。
 - **DNS / WebRTC 泄露**（照 ip.net.coffee 的 [DNS](https://ip.net.coffee/dns/)、[WebRTC](https://ip.net.coffee/webrtc/) 检测页的做法）：和出口检测同时在后台测，结果写在启动时的「泄露」那一行；只提示，不拦着启动。
   - **DNS**：经这个账号的端口访问一次性的子域名，看是哪些 DNS 服务器来解析的。出口不在中国大陆、解析器却在中国大陆，就是泄露（网站的 DNS 能看出查询来自中国大陆），一般是节点在本地把域名解析好再发出去（比如直连、WireGuard 节点）。要几秒，所以结果按节点记 6 小时，平时启动不用等它。
-  - **WebRTC**：不经代理向 STUN 服务器（UDP）探测这台 Mac 的出口。与账号出口不同时提示“直连风险”；一致时只说明 STUN 出口一致，均不代表已在浏览器内验证。超时、失败或没有取得 IP 时显示“没测成”，不会显示“无泄露”。打开 App、要在浏览器里登录时会另外说明；如需限制 WebRTC，应使用浏览器支持的代理策略或网络出站控制，并实测实际浏览器的行为。
+  - **WebRTC**：不经代理向 STUN 服务器（UDP）探测这台 Mac 的出口。与账号出口不同时提示“直连风险”；一致时只说明 STUN 出口一致，均不代表已在浏览器内验证。超时、失败或没有取得 IP 时显示“没测成”，不会显示“无泄露”。账号 Chrome 另设 `--webrtc-ip-handling-policy=disable_non_proxied_udp`，关闭时合并独立 profile 的偏好并清除 WebRTC URL 例外，运行时发现偏好改变会要求重开。此限制可能影响语音或视频连接；企业策略、扩展优先级及原生 App 仍需单独验证，不能把宿主探针结果当成浏览器验收。
   - `cca check` 每次都重新测，并写出解析器在哪；不想测的话在 `~/.cca/config.json` 里加上 `"leak_check": false`。`cca web` 也执行启动前出口与泄露检查。DNS 没有返回解析器或无法确认归属地时按未验证处理；正常结果仅说明未发现地区异常，不代表已验证浏览器 DNS。
 - **登录的是不是这个账号**：如果这个账号的窗口里登录成了别的邮箱，会拒绝启动并提示你重新登录，免得一个账号用了另一个账号的出口。
 - **共享设置有没有"串号"的配置**：`~/.claude/settings.json`（或 `settings.local.json`）的 env 里如果写了代理（包括 `NO_PROXY`）、`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商开关（`CLAUDE_CODE_USE_BEDROCK` / `VERTEX` / `FOUNDRY` / `MANTLE` 等），或者写了 `apiKeyHelper`，会盖掉每个账号自己的设置（官方账号的登录 token 甚至会被发到别的地址），cca 会拒绝启动并指出来。
-- **shell 环境**：shell 里 export 的 `ANTHROPIC_*`（包括 `ANTHROPIC_MODEL`）、`CLAUDE_CODE_OAUTH_TOKEN` 和云厂商开关，cca 启动时一律不带进去，并提示屏蔽了哪些。官方账号要换模型，写进 `~/.claude/settings.json` 或在会话里用 `/model`。
+- **shell 环境**：shell 里 export 的 `ANTHROPIC_*`（包括 `ANTHROPIC_MODEL`）、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CODE_*_FILE_DESCRIPTOR` 和云厂商开关，cca 启动时一律不带进去，并提示屏蔽了哪些。Claude 的 `CLAUDE_CONFIG_DIR` 和 `CLAUDE_SECURESTORAGE_CONFIG_DIR` 均固定为账号目录，保持原有钥匙串命名；共享及项目 settings 也不能覆盖这些凭证来源。官方账号要换模型，写进 `~/.claude/settings.json` 或在会话里用 `/model`。
 - **第三方 API 账号**：只确认接口地址经它的出口连得上。
 
 ## 自动更新
+
+### ChatGPT 桌面客户端
+
+cca GUI 的「客户端更新」页管理已安装的 ChatGPT 桌面客户端（`com.openai.codex`）。GUI 运行期间默认每天检查一次，即使主窗口隐藏也会检查；发现新版本后下载到独立缓存，验证官方包签名、App 签名、开发者身份和版本，再显示可安装状态。开发模式和演示模式不会自动检查。
+
+安装始终需要确认。请先退出所有 ChatGPT 实例，再点「安装更新」；下载不会打断正在使用的 App。确认只适用于当时检查过的安装包和目标版本。如果原生更新器或其他工具改动了 App，cca 会停止本次安装，要求重新检查。不会自动降级，也不会自动提权。
+
+命令行使用同一流程（需要安装或编译好 cca GUI，供安装包验签使用）：
+
+```bash
+cca clients status                 # 查看状态
+cca clients check --force          # 立即检查、下载并验证
+cca clients install TOKEN          # 将 TOKEN 换成检查给出的凭据；确认后安装
+cca clients mode off               # 关闭自动检查；手动检查仍可用
+cca clients mode auto              # 恢复每日自动检查和准备
+```
+
+此入口只更新 ChatGPT 桌面客户端，不更新 Claude、Chrome 或终端工具；也不改变它们的更新设置。更新包请求不带账号登录凭证或共享安装 ID，但更新服务器仍可看到下载连接的 IP。新版本通过发行方签名验证，不等于已经重新完成设备指纹隔离审计。
+
+### cca 本身
 
 不用管它。cca 每天会在后台检查一次新版本，下载好之后，在下一次启动时自动换上。
 
@@ -348,7 +370,9 @@ cca restore
 **不同账号的设备指纹独立吗？**
 客户端设备标识独立：Claude Code 使用各账号自己的 `userID`、`machineID`，Codex 使用自己的 `installation_id`。cca 在登录前准备好这些随机标识，保存在账号目录的 `device.json`，再写入客户端配置；重新登录、改别名、换节点都沿用，客户端清掉标识时也会从这份记录恢复。旧账号已有合法且独立的标识会保留；与主配置或其它本机账号重复、通过链接共享的标识会自动分开。删除账号时一起删除，重新添加会生成新标识。
 
-这里隔离的是客户端设备标识。Chrome 和桌面 App 的 Cookie、站点存储仍由各账号的独立资料目录隔离；Canvas、WebGL、字体、屏幕和操作系统等浏览器或硬件特征不会因此改变。
+这里隔离的是客户端设备标识。Chrome 和桌面 App 的 Cookie、站点存储仍由各账号的独立资料目录隔离；Canvas、WebGL、字体、GPU、屏幕、时区和操作系统等浏览器或硬件特征不会因此改变。签名原生 App 没有统一的指纹替换接口；需要独立操作系统环境或设备才能扩大隔离边界。独立虚拟机也不会自动产生不同的 Canvas/GPU 结果，须逐项实测，仍不能承诺服务端无法关联。未运行网页或 WebView 的 CLI 不适用 Canvas/WebGL 指标。cca 不通过注入不完整的 JavaScript 补丁声称已隔离硬件。
+
+Chrome 的启动记录同样绑定进程、程序路径、版本、账号节点和代理。没有匹配记录的旧窗口需要退出重开；新进程先打开空白页并核验，再主动交付目标网址（Chrome 自身可能恢复旧标签或发起后台请求）。资料目录和运行记录不能通过链接与其它账号共用。这些检查不验证网页 Cookie 所属的实际登录账号，也不改变直接打开原版 App 或原始 `claude` / `codex` 命令的行为。
 
 **历史、记忆和配置还会跨账号共享吗？**
 会。Claude 的 `projects`（会话和项目记忆）、`history.jsonl`、设置、指令、技能、规则、插件、hooks 脚本等保持共享；Codex 的会话、历史、记忆、配置和相关数据库也保持共享，切换账号后仍可续接会话。登录凭证、设备字段和已识别的账号运行状态独立保存。共享清单以 `cca` 中的 `CLAUDE_SHARED` / `CODEX_SHARED` 为准，未知新增条目默认不共享；插件目录内部的数据仍随插件目录共享。
@@ -423,6 +447,7 @@ bash /tmp/cca install
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
 - 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
 - 隔离防护专项：`python3 -m unittest discover -s tests -p 'isolation_*.py'`，覆盖配置解析、危险覆盖、App 环境与资料目录验证、浏览器失败路径及泄露检测状态；使用临时目录和测试替身，不登录真实账号。
+- 原生客户端兼容性测试（可选）：`CCA_TEST_CLAUDE_BIN=/绝对路径/claude python3 tests/isolation_credentials.py`，使用临时 HOME、假钥匙串和假凭证，验证实际客户端的凭证来源；`CCA_TEST_CHROME_BIN='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' python3 tests/isolation_chrome_native.py` 使用空 profile 和本机测试页/STUN 验证 WebRTC。需要 macOS 允许启动测试进程和本机监听；默认不执行这些原生测试。
 - 只测历史/记忆/配置共享、旧链接迁移、配置合并和冲突保留：`python3 tests/shared_state.py`（完整回归也会跑）。
 - 图形界面 App 的源码在 `macos/`（SwiftUI，只用苹果的命令行工具就能编，不用 Xcode）：`bash macos/build.sh` 编出 `macos/build/cca.app`，`bash macos/test.sh` 跑它的契约测试。开发模式（`cca` 旁边有 `.git`）下 `cca gui` 直接从源码编译并打开它。App 和 cca 之间的接口见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 发布新版本：改 `cca` 里的 `VERSION` 并提交，然后运行 `./release.sh "更新说明"`。它会跑测试、签名、编译界面 App、打 tag、推送，并创建 GitHub Release。

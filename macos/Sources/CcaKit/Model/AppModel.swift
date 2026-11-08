@@ -6,6 +6,7 @@ enum SidebarItem: Hashable, Sendable {
     case office
     case account(AccountRef)
     case routing
+    case clientUpdates
 
     var account: AccountRef? { if case .account(let r) = self { return r }; return nil }
 }
@@ -127,6 +128,12 @@ final class AppModel {
     /// 最近一次检查更新的结果（`cca update --check --json`，PROTOCOL 5.1）
     private(set) var updateInfo: UpdateDoc?
     private(set) var updateChecking = false
+    private(set) var clientUpdates: ClientUpdatesDoc?
+    private(set) var clientUpdatesError: String?
+    private(set) var clientUpdatesLoading = false
+    enum ClientUpdateActivity: Equatable { case check, mode, install }
+    private(set) var clientUpdateActivity: ClientUpdateActivity?
+    var clientUpdatesBusy: Bool { clientUpdateActivity != nil || clientUpdatesLoading }
     /// 点过“以后再说”的版本（记在 App 的设置里）：这个版本不再提示，出了更新的照常提示
     private(set) var updateDismissed: String?
     /// 手动检查时正好有一次自动检查在跑：它跑完照样说一声
@@ -156,6 +163,7 @@ final class AppModel {
             if let e = aliasEditing, selection != .account(e) { cancelRename() }
             visibilityChanged(wasVisible: isVisible, wasRouting: oldValue == .routing && mainVisible)
             if selection == .office { refreshLiveIfStale() }
+            if selection == .clientUpdates { refreshClientUpdates() }
         }
     }
 
@@ -245,6 +253,7 @@ final class AppModel {
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
         self.scheduler.onUsageTick = { [weak self] in self?.refreshUsage(manual: false) }
         self.scheduler.onLiveTick = { [weak self] in self?.refreshLive() }
+        self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
     }
 
     // MARK: 启动和连接
@@ -280,6 +289,7 @@ final class AppModel {
     private var canLocate: Bool { !isFixtureMode && !injected }
 
     private func connectOnce() async {
+        defer { reconcileClientChecks() }
         if canLocate && (transport == nil || ccaPath.map { !CcaLocator.isExecutableFile($0) } ?? true) {
             locate()
         }
@@ -319,7 +329,10 @@ final class AppModel {
             }
             return
         }
-        if phase == .ready { await loadState() }
+        if phase == .ready {
+            await loadState()
+            await loadClientUpdates()
+        }
     }
 
     /// 找 cca（演示模式、测试注入时不找）。
@@ -814,7 +827,98 @@ final class AppModel {
         }
     }
 
-    // MARK: 检查更新、更新
+    // MARK: ChatGPT 客户端更新
+
+    /// App 隐藏时也检查；是否到 24 小时由后端决定。检查绝不安装，开发和演示模式不自动运行。
+    private func reconcileClientChecks() {
+        scheduler.updateClientChecks(enabled: phase == .ready && !isFixtureMode && hello?.devMode != true)
+    }
+
+    func refreshClientUpdates() {
+        track { [weak self] in await self?.loadClientUpdates() }
+    }
+
+    private func loadClientUpdates() async {
+        guard phase == .ready, let client, !clientUpdatesBusy else { return }
+        clientUpdatesLoading = true
+        defer { clientUpdatesLoading = false }
+        do {
+            clientUpdates = try await client.clientUpdates()
+            clientUpdatesError = nil
+        } catch CcaError.cancelled {
+        } catch {
+            clientUpdatesError = "没能读取客户端更新状态：\(error)"
+        }
+    }
+
+    func checkClientUpdates(manual: Bool) {
+        if !manual {
+            guard !isFixtureMode, hello?.devMode != true, clientUpdates?.mode == "auto" else { return }
+        }
+        runClientUpdate(.clientCheck(force: manual), activity: .check, manual: manual)
+    }
+
+    func setClientUpdateAutomatic(_ enabled: Bool) {
+        guard !isFixtureMode else { showToast("演示模式：不会更改自动检查设置", .info); return }
+        runClientUpdate(.clientMode(automatic: enabled), activity: .mode, manual: true)
+    }
+
+    func installClientUpdate(_ entry: ClientUpdateEntry) {
+        guard !isFixtureMode else { showToast("演示模式：不会安装客户端更新", .info); return }
+        // 从当前快照重取，不能使用页面尚未刷新的旧 token。
+        guard let current = clientUpdates?.clients.first(where: { $0.id == entry.id }),
+              current.readyToInstall, current.installToken == entry.installToken, let token = current.installToken else {
+            showToast("目标版本或软件包校验值已变化，请重新检查后再安装", .warning)
+            return
+        }
+        runClientUpdate(.clientInstall(token: token), activity: .install, manual: true)
+    }
+
+    private func runClientUpdate(_ command: CcaCommand, activity: ClientUpdateActivity, manual: Bool) {
+        guard phase == .ready, let client, !clientUpdatesBusy else { return }
+        clientUpdateActivity = activity
+        clientUpdatesError = nil
+        let prompter = manual ? hooks.prompter : nil
+        let operation: @MainActor () async -> Void = { [weak self] in
+            let (doc, result) = await client.document(command, as: ClientUpdatesDoc.self, prompter: prompter)
+            guard let self else { return }
+            self.clientUpdateActivity = nil
+            if let doc {
+                self.clientUpdates = doc
+            } else if result.isSuccess {
+                self.clientUpdatesError = "cca 没有返回有效的客户端更新状态，请重新检查。"
+            } else if let failure = result.failure, failure.reason != .cancelled {
+                self.clientUpdatesError = failure.message
+            }
+            if manual {
+                let message: String
+                if let entry = doc?.clients.first(where: { $0.status == "needs_recheck" }) {
+                    message = entry.detail
+                } else if activity == .mode {
+                    message = doc?.mode == "auto" ? "已开启自动检查；安装前仍会询问" : "已关闭自动检查"
+                } else if activity == .install {
+                    message = doc?.clients.first?.detail ?? "客户端更新操作已完成"
+                } else {
+                    message = "客户端更新状态已刷新"
+                }
+                if result.isSuccess, doc?.clients.contains(where: { $0.status == "needs_recheck" }) == true {
+                    self.showToast(message, .warning)
+                } else if result.isSuccess, let error = self.clientUpdatesError {
+                    self.showToast(error, .warning)
+                } else {
+                    self.finish(result, failureTitle: "客户端更新未完成", success: message)
+                }
+            }
+            if activity == .install { await self.loadState() }
+        }
+        if command.runsToCompletion {
+            Task { await operation() }   // 安装事务必须完成或回滚，退出 App 也不杀进程。
+        } else {
+            track(operation)
+        }
+    }
+
+    // MARK: cca 自身的检查更新、更新
 
     /// 检查更新找到的新版本：比现在的 cca 新（按版本号的先后）、没点过“以后再说”、不是开发模式（看 hello）；cca 已经换成它了
     /// （顶上已经有“更新并重新打开”）就不再说。
@@ -1112,7 +1216,7 @@ final class AppModel {
     private func fixSelection() {
         if !visibleTools.contains(tool) { tool = .claude }
         switch selection {
-        case .office?, .routing?:
+        case .office?, .routing?, .clientUpdates?:
             return
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }

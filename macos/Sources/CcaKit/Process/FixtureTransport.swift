@@ -13,6 +13,7 @@ import Foundation
 /// | `router sync` | events_sync.jsonl（同意后成功） | CCA_GUI_FIXTURE_SYNC |
 /// | `codex reset KEY --json` | events_reset_consent.jsonl（要同意），同意后 reset.json | — |
 /// | `update --check --json` | update.json | — |
+/// | `clients status/check --json` | client_updates.json | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。
@@ -149,6 +150,8 @@ struct FixtureTransport: Transport {
             return json("reset.json")
         case ("update", "--check"):
             return json("update.json")
+        case ("clients", "status"), ("clients", "check"):
+            return json("client_updates.json")
         case ("update", _):
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
         default:

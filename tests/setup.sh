@@ -586,25 +586,31 @@ case " $* " in *" io.github.clash-verge-rev.clash-verge-rev "*) rm -f "$CCA_T/ve
 # 在后台打开界面 App（--args --core：内置代理要内核）：像 App 那样在后台运行 cca _core run（App 托管内核）；core/app_dead 时 App 起不来内核
 case " $* " in *" --core "*) [ -f "$CCA_T/core/app_dead" ] || ( cca _core run >> "$CCA_T/core/app.log" 2>&1 </dev/null & ); exit 0 ;; esac
 # 像 Chromium/Electron 一样在 --user-data-dir 里建资料（open_noprofile：模拟 Claude App 不认这个参数）
-app="" profile="" previous=""
+app="" profile="" previous="" arguments="" args_started=""
 for a in "$@"; do
+	[ -z "$args_started" ] || arguments="${arguments:+$arguments }$a"
+	[ "$a" != --args ] || args_started=1
 	[ "$previous" != -a ] || app="$a"
 	case "$a" in --user-data-dir=*) profile="${a#--user-data-dir=}"; [ -f "$CCA_T/open_noprofile" ] || { mkdir -p "$profile"; : > "$profile/Local State"; } ;; esac
 	previous="$a"
 done
-# 桌面 App 的本次运行证据：仅供启动后的 pgrep/lsof 使用一次，不留下跨用例的假活进程。
-# Chrome 继续只记录打开参数；真实 fakerun 进程仍交给系统 pgrep/lsof。
+# 浏览器和桌面 App 的运行证据在启动它的 shell 存活期间保留；lsof 不消费记录。
+# app-owner 可在单个用例中延长寿命，验证后显式删除；真实 fakerun 交给系统 pgrep/lsof/ps。
 case "$app" in
 	"$CCA_T/Claude.app") name=Claude ;;
 	"$CCA_T/ChatGPT.app") name=ChatGPT ;;
 	"$CCA_T/Codex.app") name=Codex ;;
+	*/Google\ Chrome.app|Google\ Chrome) name='Google Chrome' ;;
 	*) exit 0 ;;
 esac
 if [ -n "$profile" ] && [ ! -f "$CCA_T/open_noprofile" ]; then
 	profile=$(cd "$profile" && pwd -P)
 	mkdir -p "$CCA_T/app-open"
-	pid=$((900000000 + PPID))
-	printf '%s\n' "$PPID" "$app/Contents/MacOS/$name --user-data-dir=$profile" "$profile" > "$CCA_T/app-open/$pid"
+	owner="$PPID"
+	[ ! -f "$CCA_T/app-owner" ] || owner=$(cat "$CCA_T/app-owner")
+	pid=$((900000000 + owner))
+	started=$(LC_ALL=C /bin/ps -o lstart= -p "$owner")
+	printf '%s\n' "$owner" "$app/Contents/MacOS/$name $arguments" "$profile" "$started" > "$CCA_T/app-open/$pid"
 fi
 S
 cat > "$T/bin/pgrep" <<'S'
@@ -635,13 +641,39 @@ for record in "$CCA_T"/app-open/*; do
 	case ",$pids," in
 		*",$pid,"*)
 			{ IFS= read -r owner; IFS= read -r command; IFS= read -r profile; } < "$record"
-			rm -f "$record"
-			kill -0 "$owner" 2>/dev/null || exit 1
+				kill -0 "$owner" 2>/dev/null || { rm -f "$record"; exit 1; }
 			printf 'p%s\nn%s/Local State\n' "$pid" "$profile"
 			exit 0 ;;
 	esac
 done
 exec /usr/sbin/lsof "$@"
+S
+cat > "$T/bin/ps" <<'S'
+#!/bin/bash
+pids="" previous="" matched=""
+for a in "$@"; do
+	[ "$previous" != -p ] || pids="$a"
+	previous="$a"
+done
+/bin/ps "$@" 2>/dev/null
+rc=$?
+for record in "$CCA_T"/app-open/*; do
+	[ -f "$record" ] || continue
+	{ IFS= read -r owner; IFS= read -r command; IFS= read -r profile; IFS= read -r started; } < "$record"
+	if ! kill -0 "$owner" 2>/dev/null; then rm -f "$record"; continue; fi
+	pid="${record##*/}"
+	if [ -n "$pids" ]; then case ",$pids," in *",$pid,"*) ;; *) continue ;; esac; fi
+	case "$*" in
+		'-axo pid=') printf '%s\n' "$pid" ;;
+		'-axo pid=,ppid=') printf '%s %s\n' "$pid" "$owner" ;;
+		'-o pid=,lstart= -p '*) printf '%s %s\n' "$pid" "$started" ;;
+		'-ww -o pid=,command= -p '*|'-axww -o pid=,command=') printf '%s %s\n' "$pid" "$command" ;;
+		*) continue ;;
+	esac
+	matched=1
+done
+[ -z "$matched" ] || exit 0
+exit "$rc"
 S
 cat > "$T/bin/osascript" <<'S'
 #!/bin/bash
@@ -649,9 +681,12 @@ cat > "$T/bin/osascript" <<'S'
 [ "${1:-}" = -l ] && exec /usr/bin/osascript "$@"   # JavaScript（画启动器图标、切换窗口）交给真的 osascript
 exit 0
 S
-# 假的 Claude App（只用到 Info.plist 里的图标名和图标文件）
+# 假的 Claude App：图标、程序身份与可执行文件供启动核验；open 本身由上面的夹具模拟。
 mkdir -p "$T/Claude.app/Contents/Resources" "$T/Claude.app/Contents/MacOS"
-plutil -create xml1 "$T/Claude.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string electron "$T/Claude.app/Contents/Info.plist"
+plutil -create xml1 "$T/Claude.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string electron "$T/Claude.app/Contents/Info.plist" &&
+	plutil -insert CFBundleExecutable -string Claude "$T/Claude.app/Contents/Info.plist"
+printf '#!/bin/sh\nexit 0\n' > "$T/Claude.app/Contents/MacOS/Claude"
+chmod 755 "$T/Claude.app/Contents/MacOS/Claude"
 cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns "$T/Claude.app/Contents/Resources/electron.icns" 2>/dev/null ||
 	printf 'fake-icns' > "$T/Claude.app/Contents/Resources/electron.icns"
 # 假的钥匙串：条目存在 $CCA_T/keychain/<服务名>/<账户名>（文件内容就是密码；cca 的账户名是接口的域名）。
@@ -1002,10 +1037,13 @@ for line in sys.stdin:
     elif rid is not None:
         send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found'}})
 S
-# 假的 ChatGPT App（Codex 桌面版，只用到 Info.plist 里的图标名和图标文件）
+# 假的 ChatGPT App（Codex 桌面版），同样提供可核验的程序身份和文件。
 mkdir -p "$T/ChatGPT.app/Contents/Resources" "$T/ChatGPT.app/Contents/MacOS"
 plutil -create xml1 "$T/ChatGPT.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string app "$T/ChatGPT.app/Contents/Info.plist" &&
-	plutil -insert CFBundleIdentifier -string com.openai.codex "$T/ChatGPT.app/Contents/Info.plist"
+	plutil -insert CFBundleIdentifier -string com.openai.codex "$T/ChatGPT.app/Contents/Info.plist" &&
+	plutil -insert CFBundleExecutable -string ChatGPT "$T/ChatGPT.app/Contents/Info.plist"
+printf '#!/bin/sh\nexit 0\n' > "$T/ChatGPT.app/Contents/MacOS/ChatGPT"
+chmod 755 "$T/ChatGPT.app/Contents/MacOS/ChatGPT"
 cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns "$T/ChatGPT.app/Contents/Resources/app.icns" 2>/dev/null ||
 	printf 'fake-icns' > "$T/ChatGPT.app/Contents/Resources/app.icns"
 # 假 ~/.codex：共享的配置、会话、技能；还有不该被链接进账号目录的（登录、installation_id、桌面 App 的运行状态）

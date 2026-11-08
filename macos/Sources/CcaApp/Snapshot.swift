@@ -74,6 +74,9 @@ enum Snapshot {
             Scene(name: "office") { m in
                 m.selection = .office
             },
+            Scene(name: "client-updates") { m in
+                m.selection = .clientUpdates
+            },
         ]
         let only = Set((ProcessInfo.processInfo.environment["CCA_GUI_SNAPSHOT_SCENES"] ?? "")
             .split(separator: ",").map(String.init))

@@ -89,7 +89,11 @@ ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配�
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
 ok "泄露检测：失败结果不误报通过，区分宿主探针与浏览器" 'python3 "$D/isolation_leaks.py"'
 ok "配置隔离：完整 TOML、项目配置与启动参数检查" 'python3 "$D/isolation_settings.py"'
+ok "凭证隔离：固定钥匙串目录，屏蔽继承凭证描述符" 'python3 "$D/isolation_credentials.py"'
+ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'python3 "$D/isolation_network.py"'
+ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$D/isolation_runtime.py"'
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
+ok "客户端更新：签名、安装确认、目标漂移与中断恢复" 'python3 "$D/client_updates.py"'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -180,11 +184,17 @@ SH
 chmod 755 "$T/fakerun/Contents/MacOS/Claude"
 "$T/fakerun/Contents/MacOS/Claude" --user-data-dir="$BD/desktop" --proxy-server=x & FAKEPID=$!
 sleep 0.5; n_open=$(grep -c "user-data-dir=$BD/desktop" open.log)
-out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1)
-ok "cca app：这个账号的已经开着，只切到它，不开第二份" 'printf "%s" "$out" | grep -q "副号 的 Claude App 已经开着，已切到前面" && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = "$n_open" ]'
+out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
+ok "cca app：已有实例代理不符、没有可信启动记录时拒绝激活，不开第二份也不杀用户进程" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "启动记录" && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = "$n_open" ] && kill -0 "$FAKEPID"'
 out=$(run CCA_TTY="$(ans y)" cca rm 副号 2>&1); rc=$?
 ok "cca rm：这个账号的 Claude App 开着时不删" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "Claude App 还开着" && grep -q "副号(bob@example.com)" "$H/.cca/accounts.json"'
 kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
+printf '%s\n' "$$" > "$T/app-owner"
+out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
+n_open=$(grep -c "user-data-dir=$BD/desktop" open.log)
+out2=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc2=$?
+ok "cca app：本次启动有运行记录，PID、启动时间、账号目录与代理一致时复用实例" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "副号 的 Claude App 已经开着，已切到前面" && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = "$n_open" ] && [ "$(stat -f %Lp "$BD/app-runtime.json")" = 600 ]'
+rm -f "$T/app-owner" "$T/app-open/$((900000000 + $$))"
 touch "$T/open_noprofile"
 out=$(run CCA_TTY="$(ans)" cca app alice 2>&1); rc=$?
 ok "cca app：Claude App 不认独立资料目录时关掉并说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "本次正在使用 alice@example.com 自己的资料目录"'
@@ -957,10 +967,11 @@ ok "图形界面：同意之后带着授权重跑：用 codex 自己的命令关
 cp "$T/fakerun/Contents/MacOS/Claude" "$T/fakerun/Contents/MacOS/ChatGPT"   # 和上面假的 Claude App 进程一样，换个名字
 "$T/fakerun/Contents/MacOS/ChatGPT" --user-data-dir="$CD/desktop" --x & FAKEPID=$!
 sleep 0.5; n_open=$(grep -c "user-data-dir=$CD/desktop" open.log)
-out=$(run CCA_TTY="$(ans)" cca codex app alice 2>&1)
+out=$(run CCA_TTY="$(ans)" cca codex app alice 2>&1); rc=$?
 out2=$(run CCA_TTY="$(ans y)" cca codex rm alice 2>&1); rc2=$?
+alive=0; kill -0 "$FAKEPID" 2>/dev/null && alive=1
 kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
-ok "ChatGPT App：这个账号的已经开着就切过去；开着时不能删账号" 'printf "%s" "$out" | grep -q "alice@example.com 的 ChatGPT App 已经开着" && [ "$(grep -c "user-data-dir=$CD/desktop" open.log)" = "$n_open" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "ChatGPT App 还开着"'
+ok "ChatGPT App：已有实例缺少正确代理或启动记录时拒绝激活，不杀进程；开着时不能删账号" '[ $rc -ne 0 ] && [ "$alive" = 1 ] && printf "%s" "$out" | grep -q "启动记录" && [ "$(grep -c "user-data-dir=$CD/desktop" open.log)" = "$n_open" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "ChatGPT App 还开着"'
 # 删除：退出登录、删账号目录（同一个邮箱的 Claude 账号不受影响），端口回收；会话还在
 rm -f "$H/.local/bin/cxa"; printf '#!/bin/sh\necho mine\n' > "$H/.local/bin/cxa"; chmod 755 "$H/.local/bin/cxa"   # 别人的 cxa
 out=$(run CCA_TTY="$(ans dave@example.com '' 3)" cca codex add 2>&1)
@@ -1041,11 +1052,11 @@ runev CCA_GRANT=low_purity:203.0.113.1 cca app alice >/dev/null 2>&1; rc=$?; cp 
 ok "图形界面：同意了这个出口 IP：照样打开 App，事件里有每一步和结果" '[ $rc -eq 0 ] && grep -q "user-data-dir=$AD/desktop" open.log && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"node\"] and e[\"port\"] == 7901" && jok "d[\"result\"] == \"low_purity\"" < "$AD/health.json"'
 rm -f "$T/risk/203.0.113.1.json"
 # 失败的原因、要在终端里做的事
-unlisten 7901
+unlisten 7901; n_cli=$(grep -c '^ARGS:' claude.log)
 out=$(run cca @alice --version 2>&1 </dev/null); rc_plain=$?
 out_ev=$(runev cca @alice --version 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_fail.jsonl"
 echo 7901 >> "$R/listening"
-ok "图形界面：端口不通时 fail 事件的原因是 port_closed；stderr 和退出码和不设事件文件时一样" '[ $rc -ne 0 ] && [ $rc -eq $rc_plain ] && [ "$out" = "$out_ev" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"port_closed\" and \"7901\" in e[\"message\"]"'
+ok "图形界面：端口池缺失、未授权重载时 sync_failed 并且不启动；stderr 和退出码和不设事件文件时一样" '[ $rc -ne 0 ] && [ $rc -eq $rc_plain ] && [ "$out" = "$out_ev" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"sync_failed\"" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ]'
 edit_table 'j["测试(zed@example.com)"] = "US-B"'
 out=$(runev cca @zed --version 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/events_terminal.jsonl"
 ok "图形界面：还没登录的账号：terminal 事件给出在终端里登录的命令（argv 里是原样的键，给人看的命令加了引号，能直接复制进终端），fail 原因 not_logged_in" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"login\" and e[\"argv\"] == [\"login\", \"测试(zed@example.com)\"] and e[\"display\"] == \"cca login '"'"'测试(zed@example.com)'"'"'\"" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"not_logged_in\""'
@@ -1617,8 +1628,8 @@ python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(pass
 r0=$(restarts); out=$(run cca policy pull 2>&1); rc=$?
 out2=$(run cca router status 2>&1)
 ok "非交互时要重启也不重启：配置文件照样写好，说清楚这次的改动要等 OpenClash 下次重启；cca router status 也这么说" '[ "$(restarts)" = "$r0" ] && printf "%s" "$out" | grep -q "没有重启：这次的改动要等 OpenClash 下次重启" && [ -e "$R/etc/cca/fill.pending" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"x\"" && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有（新写进去的要等 OpenClash 重启后才用上）"'
-r0=$(restarts); out=$(run CCA_TTY="$(ans n)" cca @ai --version 2>&1); rc=$?
-ok "在家启动账号：同步和启动前核对时都要重启，只问一次；说不重启就照常启动" '[ $rc -eq 3 ] && [ "$(printf "%s" "$out" | grep -c "现在重启 OpenClash 吗")" = 1 ] && [ "$(restarts)" = "$r0" ] && [ "$(sel "CCA-$s")" = AI-A ]'
+r0=$(restarts); n_cli=$(grep -c '^ARGS:' claude.log); out=$(run CCA_TTY="$(ans n)" cca @ai --version 2>&1); rc=$?
+ok "在家启动账号：必要重启只问一次；拒绝后即使节点同名也阻断，不调用客户端" '[ $rc -eq 1 ] && [ "$(printf "%s" "$out" | grep -c "现在重启 OpenClash 吗")" = 1 ] && [ "$(restarts)" = "$r0" ] && [ "$(sel "CCA-$s")" = AI-A ] && printf "%s" "$out" | grep -q "路由器账号节点未能核实" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ]'
 out=$(run CCA_TTY="$(ans y)" cca router sync 2>&1); rc=$?
 ok "再同步时同意重启：用上配置文件里新写的" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && [ ! -e "$R/etc/cca/fill.pending" ] && [ "$(sel "CCA-$s")" = AI-A ]'
 cp "$H/.cca/policy/nodes.json" "$T/nodes.good"; nodes_pub "$T/evilkey"
@@ -1644,8 +1655,9 @@ cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; sc_restart; n0=$(reloads); r0=$(r
 out=$(run cca router sync 2>&1); rc=$?
 ok "订阅配置里 OpenAi 组写成一行的：只写节点、组不动（说明为什么）；同步时不用再重载、重启" 'grep -q "策略组 OpenAi 不是一行一项的写法" "$R/tmp/cca-router.log" && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 2 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A]" && ! grep -q SCBAD router.log && [ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = "$r0" ]'
 rm -rf "$R"; cp -R "$T/router.snap" "$R"
-# 本机 Clash Verge：当前选用的是本地配置（Verge 里也有 OpenAi 组）；在外面启动账号时写进这份配置，热加载一次
-awk '/^rules:$/ { print "- name: OpenAi"; print "  type: select"; print "  proxies:"; print "  - US-A" } { print }' "$T/verge/base.snap" > "$V/profiles/Lprofile1.yaml"
+# 本机 Clash Verge：当前选用的是本地配置（Verge 里也有 OpenAi 组）；在外面启动账号时写进这份配置，热加载一次。
+# Codex 的 dave 同时需要 US-D：功能用例先备齐全池节点，不能靠忽略另一个账号的切换失败来通过。
+awk '/^proxy-groups:$/ { print "- {name: US-D, type: ss, server: 192.0.2.4, port: 8388, cipher: aes-128-gcm, password: x}" } /^rules:$/ { print "- name: OpenAi"; print "  type: select"; print "  proxies:"; print "  - US-A" } { print }' "$T/verge/base.snap" > "$V/profiles/Lprofile1.yaml"
 cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.orig"
 printf '%s\n' '- uid: Lprofile1' '  type: local' '  name: 测试配置' '  file: Lprofile1.yaml' >> "$V/profiles.yaml"
 "$T/verge_regen"; touch "$T/away"; n0=$(vreloads)
@@ -1656,6 +1668,15 @@ ok "热加载的运行配置照写好的配置补上：节点一个不多、名�
 ok "Clash Verge 重新生成配置（真的 JavaScript 引擎跑全局扩展脚本）：参考节点来自它的配置文件，和热加载的一样" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); px = c[\"proxies\"].map { |p| p[\"name\"] }; g = c[\"proxy-groups\"].find { |x| x[\"name\"] == \"OpenAi\" }[\"proxies\"]; exit(px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X] && c[\"proxy-groups\"].find { |x| x[\"name\"] == \"CCA-$s\" }[\"proxies\"][0] == \"AI-A\" ? 0 : 1)" "$T/verge/regen.json" && [ "$(vsel "CCA-$s")" = AI-A ]'
 n0=$(vreloads); out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
 ok "再在外面启动：配置里都有了，不再写、也不再热加载" '[ $rc -eq 3 ] && [ "$(vreloads)" = "$n0" ] && ! printf "%s" "$out" | grep -q "写进 Clash Verge" && [ "$(vsel "CCA-$s")" = AI-A ]'
+# 模拟运行中的内核丢了另一账号组的目标成员；当前 ai 仍正确也不能吞掉全池失败。
+dave_group="CCA-$(( $(cfgv 'c["codex"]["ports"]["dave@example.com"]') - 7900 ))"
+cp "$T/verge/groups/$dave_group" "$T/verge/dave.group"
+grep -vx US-D "$T/verge/dave.group" > "$T/verge/groups/$dave_group"; printf US-C > "$T/verge/sel/$dave_group"
+n_cli=$(grep -c '^ARGS:' claude.log); out=$(runev cca @ai --version 2>&1); rc=$?
+ok "本机全池门禁：其他账号的节点不可选时置 REJECT；当前账号即使节点正确也拒绝启动" '[ $rc -eq 1 ] && [ "$(vsel "CCA-$s")" = AI-A ] && [ "$(vsel "$dave_group")" = REJECT ] && printf "%s" "$out" | grep -q "${dave_group} 切换到 US-D 后未能核实" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"local_unavailable\"" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ] && [ "$(vreloads)" = "$n0" ]'
+cp "$T/verge/dave.group" "$T/verge/groups/$dave_group"
+out=$(run cca @ai --version 2>&1); rc=$?
+ok "其他账号的节点恢复后：全池重新核验通过，当前账号才恢复启动，无需热加载" '[ $rc -eq 3 ] && [ "$(vsel "$dave_group")" = US-D ] && [ "$(vsel "CCA-$s")" = AI-A ] && [ "$(vreloads)" = "$n0" ]'
 cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.filled"
 python3 - "$H/.cca/policy/nodes.json" > "$T/ai_a.flow" <<'PY'
 import json, sys
@@ -1795,6 +1816,7 @@ ok "选中被改：启动前经控制接口纠正回 US-A，不重新加载" '[ 
 edit_table 'j["alice@example.com"] = "US-C"'
 run cca @alice --version >/dev/null 2>&1
 ok "换节点：经控制接口切到 US-C，不重新加载；配置里 CCA-1 的第一个成员也换成 US-C（内核重启后照样选它）" '[ "$(csel CCA-1)" = US-C ] && [ "$(creloads)" = "$n0" ] && ccfg "c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-C\""'
+cp "$CN/nodes.json" "$T/nodes.core.complete"
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies']=[x for x in j['proxies'] if x['name']!='US-D']; json.dump(j, open(p,'w'))" "$CN/nodes.json"
 edit_table 'j["alice@example.com"] = "US-D"'
 out=$(run cca @alice --version 2>&1); rc=$?
@@ -1806,6 +1828,7 @@ printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-D", "t
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "维护者的参考节点补上缺的 US-D：重新加载一次，照常启动；同名的 US-A 以路由器的为准，不是可选节点的 AI-Z 不放" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = US-D ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"HK-A2\", \"US-D\"] and c[\"proxies\"][0][\"server\"] == \"192.0.2.1\""'
 rm -f "$H/.cca/policy/nodes.json"; edit_table 'j["alice@example.com"] = "US-A"'
+cp "$T/nodes.core.complete" "$CN/nodes.json"   # 缺节点负例结束：恢复 dave 所需的 US-D，后续功能测试仍要求全池核验通过
 run cca @alice --version >/dev/null 2>&1
 edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(3, 11)})'
 n0=$(creloads)
