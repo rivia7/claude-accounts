@@ -188,8 +188,8 @@ enum Texts {
 
     static func leak(_ s: LeakState?, what: String) -> String {
         switch s {
-        case .some(.ok): return "\(what) 无泄露"
-        case .some(.leak): return "\(what) 泄露"
+        case .some(.ok): return what == "WebRTC" ? "WebRTC 探针出口一致" : "\(what) 探针未发现异常"
+        case .some(.leak): return "\(what) 有泄露风险"
         case .some(.failed): return "\(what) 没测成"
         case .none: return "\(what) 没测"
         default: return "\(what) 未知"
@@ -383,7 +383,7 @@ enum Texts {
             case .nearLimit: return "额度快用完了"
             case .noApp: return "没装 \(appLabel)"
             case .lowPurity: return "出口 IP 的纯净度低于设定"
-            case .leak: return "检测到 DNS 或 WebRTC 泄露"
+            case .leak: return "DNS 或 WebRTC 探针发现泄露风险"
             case .neverChecked: return "还没检测过出口"
             }
         }

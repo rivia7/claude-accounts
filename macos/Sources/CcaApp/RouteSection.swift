@@ -378,7 +378,7 @@ struct HealthDetails: View {
             }
         } else {
             Text(account.isAPI ? "还没测过。点“检测出口”看看接口连不连得上。"
-                 : "还没测过。点“检测出口”，看看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 有没有泄露。")
+                 : "还没测过。点“检测出口”，查看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 泄露风险。")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -500,7 +500,7 @@ struct HealthSummary: View {
             }
         } else {
             Text(account.isAPI ? "还没测过。点“检测出口”看看接口连不连得上。"
-                 : "还没测过。点“检测出口”，看看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 有没有泄露。")
+                 : "还没测过。点“检测出口”，查看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 泄露风险。")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

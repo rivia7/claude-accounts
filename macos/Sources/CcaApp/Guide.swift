@@ -126,7 +126,7 @@ struct TutorialCard {
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
             ("person.2", "同时管好几个 Claude、ChatGPT 账号：总览里一眼看全，左边按工具分开列出。"),
-            ("point.3.connected.trianglepath.dotted", "每个账号走自己的网络出口（节点），互不串号。"),
+            ("point.3.connected.trianglepath.dotted", "每个账号分别配置登录资料和网络出口，启动前检查是否冲突。"),
             ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
         ], art: .fan),
         TutorialCard(title: "总览：哪个在用，哪个额度用完了", points: [
@@ -143,7 +143,7 @@ struct TutorialCard {
         ], art: .sidebar),
         TutorialCard(title: "打开一个账号", points: [
             ("macwindow", "点「打开 Claude App」：用这个账号自己的出口和资料打开。"),
-            ("safari", "点「网页版」：在它专属的 Chrome 资料里打开网页版。"),
+            ("safari", "点「网页版」：在账号专属 Chrome 资料里打开；未安装 Chrome 时会停止打开。"),
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
@@ -154,7 +154,7 @@ struct TutorialCard {
         ], art: .quota),
         TutorialCard(title: "看网络出口", points: [
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
-            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：出口在哪、干不干净、有没有泄露。"),
+            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：查看出口位置、纯净度和 DNS / WebRTC 泄露风险。"),
             ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
         ], art: .route),
         TutorialCard(title: "节点分流", points: [
@@ -585,8 +585,8 @@ struct TutorialArt: View {
             RouteStrip(stops: stops, color: color(0))
             HStack(spacing: 6) {
                 Tag(text: "纯净度 97 · 极度纯净", color: .green)
-                Tag(text: "DNS 无泄露", color: .green)
-                Tag(text: "WebRTC 无泄露", color: .green)
+                Tag(text: Texts.leak(.ok, what: "DNS"), color: .green)
+                Tag(text: Texts.leak(.ok, what: "WebRTC"), color: .green)
             }
         }
         .padding(.horizontal, 28)
@@ -799,7 +799,7 @@ struct Advice {
         case .lowPurity:
             return Advice(level: .warn, text: "出口 IP 的纯净度低于设定，用的时候注意风险。")
         case .leak:
-            return Advice(level: .warn, text: "检测到 DNS 或 WebRTC 泄露：别人可能看出你的真实位置，详见下面的网络出口。")
+            return Advice(level: .warn, text: "DNS 或 WebRTC 探针发现泄露风险，详见下面的网络出口。")
         case .neverChecked:
             return Advice(level: .info, text: a.isAPI ? "第一次用这个接口？点「检测出口」看看连不连得上。"
                           : "第一次用这个账号？先点「检测出口」，看看出口在哪、干不干净。")

@@ -214,7 +214,7 @@ cxa @工作              # 简写：cxa 就是 cca codex（cxa、cxa usage、cxa
 - **出口不会悄悄换**：cca 启动 codex 时关掉它的两个开关：`system_proxy_fallback`（连不上代理时改走 macOS 的系统代理）和 `respect_system_proxy`（系统代理优先）；也不让它挂到常驻的后台进程上（`--no-daemon`，那个进程的代理在它启动时就定死了）。代价是在 cca 启动的 Codex 里用不了靠后台进程的功能（例如 `codex agents`）。
 - **查用量**：`cca codex usage [账号] [--json]` 经每个账号自己的出口，让 codex 自己去查（和它的 `/status` 一样，不发消息、不耗额度），显示套餐（叫法和 codex 里一样：Plus、Pro 100、Pro 200、Pro 500…）、5 小时、本周额度、单独计的额度、剩余的重置次数（在 codex 里用 `/usage` → Redeem reset 兑换）和 credits 余额；`--json` 里另有 codex 原样给的 `credits` 和 `reset_credits`（`availableCount` 是剩余次数）。菜单里也附上最近一次的用量。`cca usage` 只查 Claude 账号。
 - **第三方 API**：`cca codex add api` 添加兼容 OpenAI **Responses 接口**（`/v1/responses`）的服务，填地址（例如 `https://api.example.com/v1`）、key、模型。key 存在钥匙串里（条目名 `cca-codex-api-…`），启动时由 codex 的 `auth.command` 回调 cca 现取，不出现在命令行参数和环境变量里；地址和模型经 `-c` 交给 codex。只提供 Chat Completions 接口的服务用不了。
-- **ChatGPT App（Codex 桌面版）**：`cca codex app 工作`，或者在启动台、聚焦搜索里点「ChatGPT 工作」。每个账号一份资料目录，用这个账号的 `CODEX_HOME`（和 `cca codex @工作` 同一份登录），整个 App 走这个账号的出口。App 自己启动 codex 时 cca 加不了参数，所以第一次打开时会征求你同意，用 Codex 自带的 `codex features disable system_proxy_fallback` 在共享的 `~/.codex/config.toml` 里关掉回退到系统代理（之后直接敲 `codex` 也不再回退）。没登录时先在账号专属的 Chrome 里登录，App 打开时就是登录状态。如果 App 里还要你登录（比如登录过期了），别在 App 里登：它的登录页会在系统默认浏览器里打开，那一次不经账号的出口；关掉 App，运行 `cca codex login 工作`，再打开 App。
+- **ChatGPT App（Codex 桌面版）**：`cca codex app 工作`，或者在启动台、聚焦搜索里点「ChatGPT 工作」。每个账号一份资料目录，用这个账号的 `CODEX_HOME`（和 `cca codex @工作` 同一份登录），App 的浏览器请求和遵守代理环境的子进程使用这个账号的出口。App 自己启动 codex 时 cca 加不了参数，所以第一次打开时会征求你同意，用 Codex 自带的 `codex features disable system_proxy_fallback` 在共享的 `~/.codex/config.toml` 里关掉回退到系统代理（之后直接敲 `codex` 也不再回退）。未同意关闭、关闭失败或当前 CLI 无法关闭时，不会启动 App。没登录时先在账号专属的 Chrome 里登录，App 打开时就是登录状态。如果 App 里还要你登录（比如登录过期了），别在 App 里登：它的登录页会在系统默认浏览器里打开，那一次不经账号的出口；关掉 App，运行 `cca codex login 工作`，再打开 App。
 - **其它命令**：`cca codex ls`、`edit`、`check`、`web`（用账号专属的浏览器打开 chatgpt.com）、`key`（换第三方 API 账号的 key），和 Claude 账号的同名命令一样。
 - **简写 `cxa`**：`cxa` 就是 `cca codex`，后面接什么都一样（`cxa`、`cxa @工作`、`cxa usage`、`cxa add`……）。`cca install` 时和 `cca` 一起放进 `~/.local/bin`；用着 Codex 的机器上 `cxa` 不见了（比如以前装的 cca 升级上来），下一次运行 cca 时自动补上。已经有别的 `cxa` 命令时不会覆盖它。
 - **删除**：`cca codex rm 工作` 退出登录、删掉账号目录（包括它的 git 工作树，删之前会提醒）；它开过的会话留在 `~/.codex` 里，cca 平时就把会话库里的路径写成 `~/.codex` 下的，删了账号也找得到。
@@ -231,7 +231,7 @@ cca app 工作
 
 也可以在启动台、聚焦搜索里点「Claude 工作」。cca 会给每个账号生成一个这样的启动器（放在 `~/Applications`），名字是"Claude"加别名，没起别名的用邮箱 @ 前面的部分（比如「Claude me」）；图标右下角有账号标识（别名的头两个字或首字母，每个账号一种颜色），在启动台里一眼就能分清。账号改名、删除时，启动器自动跟着改。
 
-- 每个账号的 App 有自己独立的资料（登录状态、设置），整个 App 都走这个账号的出口，打开前同样会检查出口。
+- 每个账号的 App 有自己独立的资料（登录状态、设置）；浏览器请求和遵守代理环境的子进程使用账号出口，打开前检查出口。启动时同样清理继承的凭证、接口和代理变量。外部浏览器登录与不遵守代理的网络流量不在此保证内。
 - App 里的 Code 标签页和 `cca @工作` 用同一个账号配置，记忆、技能、设置照样共享。
 - 这个账号的 App 已经开着时，再打开只会把它切到前面。
 - 你原来的 Claude App 不受影响，照常使用。
@@ -241,7 +241,7 @@ cca app 工作
 - 正在运行的 Claude 在 Dock 里的图标改不了，开了几个账号就有几个一模一样的 Claude 图标；分不清时用 `cca app 账号` 或启动器切换。
 - 第一次打开要登录。用邮箱登录全程走这个账号的出口；用 Google 登录时，那一次登录会走系统网络。不要同时在两个 App 里登录。
 - 在别的 App 里点开的 claude.ai 链接，macOS 只会交给其中一个 Claude App。
-- 这个功能依赖 Claude App 支持独立的资料目录（4.29 版已验证）。以后的版本如果不支持了，cca 会停下并提示，不会用错账号。
+- 这个功能依赖 Claude App 支持独立的资料目录。启动或激活已有实例时，cca 用 `lsof` 核验该实例或其子进程正在打开账号资料目录内的文件；旧的 `Local State` 文件不算运行证据。新启动无法核验或启动中被取消时，会关闭能识别的本次实例；已有实例无法核验时，提示你自行退出后重开。这个核验不等于对 App 全部网络和硬件指纹的验证。
 
 ## 图形界面（cca App）
 
@@ -297,8 +297,8 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 - **IP 纯净度**（数据来自 ip.net.coffee）：分数太低会先问你还要不要继续。
 - **DNS / WebRTC 泄露**（照 ip.net.coffee 的 [DNS](https://ip.net.coffee/dns/)、[WebRTC](https://ip.net.coffee/webrtc/) 检测页的做法）：和出口检测同时在后台测，结果写在启动时的「泄露」那一行；只提示，不拦着启动。
   - **DNS**：经这个账号的端口访问一次性的子域名，看是哪些 DNS 服务器来解析的。出口不在中国大陆、解析器却在中国大陆，就是泄露（网站的 DNS 能看出查询来自中国大陆），一般是节点在本地把域名解析好再发出去（比如直连、WireGuard 节点）。要几秒，所以结果按节点记 6 小时，平时启动不用等它。
-  - **WebRTC**：不经代理直接问 STUN 服务器（UDP）这台 Mac 的公网 IP，就是浏览器的 WebRTC 直连时网页拿得到的 IP；和账号的出口不一样就是泄露：账号的网页版、Claude App 里的网页（还有实时语音这类功能）都拿得到它，几个账号会露出同一个 IP。它和出口检测同时完成，不额外花时间。打开 App、要在浏览器里登录时会另外说明；可以在路由器上拦掉 STUN（UDP 3478、19302 端口）。
-  - `cca check` 每次都重新测，并写出解析器在哪；不想测的话在 `~/.cca/config.json` 里加上 `"leak_check": false`。`cca web` 照旧不做启动前检测（打开得快）。
+  - **WebRTC**：不经代理向 STUN 服务器（UDP）探测这台 Mac 的出口。与账号出口不同时提示“直连风险”；一致时只说明 STUN 出口一致，均不代表已在浏览器内验证。超时、失败或没有取得 IP 时显示“没测成”，不会显示“无泄露”。打开 App、要在浏览器里登录时会另外说明；如需限制 WebRTC，应使用浏览器支持的代理策略或网络出站控制，并实测实际浏览器的行为。
+  - `cca check` 每次都重新测，并写出解析器在哪；不想测的话在 `~/.cca/config.json` 里加上 `"leak_check": false`。`cca web` 也执行启动前出口与泄露检查。DNS 没有返回解析器或无法确认归属地时按未验证处理；正常结果仅说明未发现地区异常，不代表已验证浏览器 DNS。
 - **登录的是不是这个账号**：如果这个账号的窗口里登录成了别的邮箱，会拒绝启动并提示你重新登录，免得一个账号用了另一个账号的出口。
 - **共享设置有没有"串号"的配置**：`~/.claude/settings.json`（或 `settings.local.json`）的 env 里如果写了代理（包括 `NO_PROXY`）、`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商开关（`CLAUDE_CODE_USE_BEDROCK` / `VERTEX` / `FOUNDRY` / `MANTLE` 等），或者写了 `apiKeyHelper`，会盖掉每个账号自己的设置（官方账号的登录 token 甚至会被发到别的地址），cca 会拒绝启动并指出来。
 - **shell 环境**：shell 里 export 的 `ANTHROPIC_*`（包括 `ANTHROPIC_MODEL`）、`CLAUDE_CODE_OAUTH_TOKEN` 和云厂商开关，cca 启动时一律不带进去，并提示屏蔽了哪些。官方账号要换模型，写进 `~/.claude/settings.json` 或在会话里用 `/model`。
@@ -395,7 +395,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 - **分开登录、共享工作资料**：每个账号有自己的 Claude Code 配置目录（`CLAUDE_CONFIG_DIR`，按邮箱命名）。登录信息、设备标识和账号/进程状态各自保存；历史、记忆、配置等明确列入共享清单，链接到你原来的 `~/.claude`。`~/.claude.json` 里和账号无关的设置，每次启动和退出时按字段合并；新增未知字段留在账号目录。
 - **分开设备标识**：各账号的 `device.json` 固定保存客户端标识，初始化和旧配置迁移使用文件锁；Claude 的标识不参加共享设置合并，Codex 的 `installation_id` 不在共享白名单里。旧的设备文件若是软链接或硬链接，会原子替换为该账号自己的文件，避免写到共享源。
 - **分开出口**：cca 在路由器上开一组端口（从 7901 开始，8 个一组），每个端口绑定一个出口节点，每个账号用自己的端口上网。换节点通过 OpenClash / ShellCrash 内核的接口直接切换，不用重启。
-- **网页版**：每个账号有一个专属的 Chrome 窗口（独立的浏览器资料，走同一个端口），所以网页版和 Claude Code 的出口一致。
+- **网页版**：每个账号使用独立的 Chrome 资料目录和账号代理。未安装 Chrome、打开失败或 Codex 不支持独立登录流程时会停止，不会退回默认浏览器。浏览器中手工切换的登录账号不由 cca 自动核验；显示的账号名称表示资料目录归属，不是网页当前登录身份的证明。
 - **泄露检测**：DNS 那项经账号的端口访问 `<随机串>-1.d.ip.net.coffee`，ip.net.coffee 的权威 DNS 记下来查的解析器，再经同一个端口问它要结果、查归属地（按网段记 7 天）；WebRTC 那项是 Python 直接发 STUN Binding 请求（IPv4、IPv6 都试），对方看到的 IP 不经账号的出口查归属地。结果在 `~/.cca/leak.json`。
 - **用量**：cca 以账号的配置目录、经账号的端口无界面地启动 Claude Code（`--safe-mode`，不加载插件、hooks、MCP），发一个 `get_usage` 控制请求，拿到和 `/usage` 一样的数据；登录 token 的读取和刷新都由 Claude Code 自己完成。
 - **第三方 API 账号**：接口地址、模型经 `claude --settings` 传入（优先级高于共享的 settings.json），key 由 `apiKeyHelper` 回调 cca 从钥匙串取，不进环境变量。
@@ -422,6 +422,7 @@ bash /tmp/cca install
 
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
 - 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
+- 隔离防护专项：`python3 -m unittest discover -s tests -p 'isolation_*.py'`，覆盖配置解析、危险覆盖、App 环境与资料目录验证、浏览器失败路径及泄露检测状态；使用临时目录和测试替身，不登录真实账号。
 - 只测历史/记忆/配置共享、旧链接迁移、配置合并和冲突保留：`python3 tests/shared_state.py`（完整回归也会跑）。
 - 图形界面 App 的源码在 `macos/`（SwiftUI，只用苹果的命令行工具就能编，不用 Xcode）：`bash macos/build.sh` 编出 `macos/build/cca.app`，`bash macos/test.sh` 跑它的契约测试。开发模式（`cca` 旁边有 `.git`）下 `cca gui` 直接从源码编译并打开它。App 和 cca 之间的接口见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 发布新版本：改 `cca` 里的 `VERSION` 并提交，然后运行 `./release.sh "更新说明"`。它会跑测试、签名、编译界面 App、打 tag、推送，并创建 GitHub Release。

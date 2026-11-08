@@ -586,9 +586,62 @@ case " $* " in *" io.github.clash-verge-rev.clash-verge-rev "*) rm -f "$CCA_T/ve
 # 在后台打开界面 App（--args --core：内置代理要内核）：像 App 那样在后台运行 cca _core run（App 托管内核）；core/app_dead 时 App 起不来内核
 case " $* " in *" --core "*) [ -f "$CCA_T/core/app_dead" ] || ( cca _core run >> "$CCA_T/core/app.log" 2>&1 </dev/null & ); exit 0 ;; esac
 # 像 Chromium/Electron 一样在 --user-data-dir 里建资料（open_noprofile：模拟 Claude App 不认这个参数）
+app="" profile="" previous=""
 for a in "$@"; do
-	case "$a" in --user-data-dir=*) [ -f "$CCA_T/open_noprofile" ] || { mkdir -p "${a#--user-data-dir=}"; : > "${a#--user-data-dir=}/Local State"; } ;; esac
+	[ "$previous" != -a ] || app="$a"
+	case "$a" in --user-data-dir=*) profile="${a#--user-data-dir=}"; [ -f "$CCA_T/open_noprofile" ] || { mkdir -p "$profile"; : > "$profile/Local State"; } ;; esac
+	previous="$a"
 done
+# 桌面 App 的本次运行证据：仅供启动后的 pgrep/lsof 使用一次，不留下跨用例的假活进程。
+# Chrome 继续只记录打开参数；真实 fakerun 进程仍交给系统 pgrep/lsof。
+case "$app" in
+	"$CCA_T/Claude.app") name=Claude ;;
+	"$CCA_T/ChatGPT.app") name=ChatGPT ;;
+	"$CCA_T/Codex.app") name=Codex ;;
+	*) exit 0 ;;
+esac
+if [ -n "$profile" ] && [ ! -f "$CCA_T/open_noprofile" ]; then
+	profile=$(cd "$profile" && pwd -P)
+	mkdir -p "$CCA_T/app-open"
+	pid=$((900000000 + PPID))
+	printf '%s\n' "$PPID" "$app/Contents/MacOS/$name --user-data-dir=$profile" "$profile" > "$CCA_T/app-open/$pid"
+fi
+S
+cat > "$T/bin/pgrep" <<'S'
+#!/bin/bash
+if [ "$#" -eq 2 ] && [ "$1" = -f ]; then
+	for record in "$CCA_T"/app-open/*; do
+		[ -f "$record" ] || continue
+		{ IFS= read -r owner; IFS= read -r command; } < "$record"
+		if ! kill -0 "$owner" 2>/dev/null; then rm -f "$record"; continue; fi
+		if printf '%s\n' "$command" | grep -Eq -- "$2"; then
+			printf '%s\n' "${record##*/}"
+			exit 0
+		fi
+	done
+fi
+exec /usr/bin/pgrep "$@"
+S
+cat > "$T/bin/lsof" <<'S'
+#!/bin/bash
+pids="" previous=""
+for a in "$@"; do
+	[ "$previous" != -p ] || pids="$a"
+	previous="$a"
+done
+for record in "$CCA_T"/app-open/*; do
+	[ -f "$record" ] || continue
+	pid="${record##*/}"
+	case ",$pids," in
+		*",$pid,"*)
+			{ IFS= read -r owner; IFS= read -r command; IFS= read -r profile; } < "$record"
+			rm -f "$record"
+			kill -0 "$owner" 2>/dev/null || exit 1
+			printf 'p%s\nn%s/Local State\n' "$pid" "$profile"
+			exit 0 ;;
+	esac
+done
+exec /usr/sbin/lsof "$@"
 S
 cat > "$T/bin/osascript" <<'S'
 #!/bin/bash
@@ -770,9 +823,22 @@ case "$sub" in
 				[ -f "$CCA_T/codex_noflags" ] || printf '%s\n' "respect_system_proxy                     under development  false" "system_proxy_fallback                    stable             true" ;;
 			disable)   # 像真的 codex：顺着链接写回原文件（临时文件 + 改名，放在原文件旁边）
 				python3 - "$CODEX_HOME/config.toml" "${args[$((i + 2))]}" <<'PY'
-import os, sys
+import os, re, sys
 p = os.path.realpath(sys.argv[1]); s = open(p).read() if os.path.exists(p) else ''
-s += ('' if s.endswith('\n') or not s else '\n') + '\n[features]\n%s = false\n' % sys.argv[2]
+key = sys.argv[2]
+lines, result, inside, found = s.splitlines(), [], False, False
+for line in lines:
+    if line.strip().startswith('['):
+        inside = line.strip() == '[features]'
+        result.append(line)
+        if inside:
+            found = True
+            result.append('%s = false' % key)
+    elif not (inside and re.match(r'^\s*' + re.escape(key) + r'\s*=', line)):
+        result.append(line)
+if not found:
+    result.extend(['', '[features]', '%s = false' % key])
+s = '\n'.join(result) + '\n'
 open(p + '.tmp', 'w').write(s); os.replace(p + '.tmp', p)
 PY
 				;;

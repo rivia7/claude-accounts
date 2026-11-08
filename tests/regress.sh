@@ -9,7 +9,19 @@ STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）�
 trap '[ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+# TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>说明”；
+# python 的次数靠 CCA_PYTHON 指向的一个记数的小脚本（只在 TIMING 时用，平时 cca 照常找 python3）
+PYWRAP=""
+if [ -n "${TIMING:-}" ]; then
+	: > "$TIMING"; : > "$T/py.count"; TIMING_PY=0
+	PYWRAP="$T/pycount"
+	# 每次记一行：参数里短的那些（长的是内嵌的 Python 源码），第一个不是开关、不是目录的就是 py 的子命令
+	printf '#!/bin/sh\nfor a in "$@"; do [ ${#a} -lt 120 ] && printf "%%s " "$a"; done >> "%s/py.count"; echo >> "%s/py.count"\nexec %s "$@"\n' \
+		"$T" "$T" "$(PATH=/opt/homebrew/bin:/usr/bin:/bin command -v python3)" > "$PYWRAP"
+	chmod 755 "$PYWRAP"
+	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
+fi
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -17,6 +29,12 @@ ok() {   # ok 说明 '断言'：断言写丢了（比如说明和断言之间少
 	if [ $# -eq 2 ] && [ -n "$2" ] && eval "$2"; then echo "PASS  $1"; pass=$((pass + 1)); else
 		echo "FAIL  $1   [${2:-没有断言}]"; fail=$((fail + 1))
 		[ -z "${DEBUG_OUT:-}" ] || ok_why "$2"
+	fi
+	if [ -n "${TIMING:-}" ]; then
+		local now n
+		now=$(perl -MTime::HiRes=time -e 'printf "%.3f", time'); n=$(wc -l < "$T/py.count")
+		printf '%s\t%s\t%s\t%s\n' "$(perl -e "printf '%.2f', $now - $TIMING_T")" "${BASH_LINENO[0]}" $((n - TIMING_PY)) "$1" >> "$TIMING"
+		TIMING_T=$now TIMING_PY=$((n))
 	fi
 }
 ok_why() {   # DEBUG_OUT 时：$out 的最后几行，和断言里（按顶层的 && 拆开）第一个不成立的那一段
@@ -68,6 +86,10 @@ runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   #
 claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
+ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
+ok "泄露检测：失败结果不误报通过，区分宿主探针与浏览器" 'python3 "$D/isolation_leaks.py"'
+ok "配置隔离：完整 TOML、项目配置与启动参数检查" 'python3 "$D/isolation_settings.py"'
+ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -147,7 +169,15 @@ m0=$(stat -f %m "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"); sleep 1
 ok "启动器图标：账号标识没变时不重画" '[ "$(stat -f %m "$L/Claude 副号.app/Contents/Resources/AppIcon.icns")" = "$m0" ]'
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
 ok "cca app：账号自己的资料目录、端口和 CLAUDE_CONFIG_DIR，启动前做出口检测" '[ $rc -eq 0 ] && grep -qF -- "[-n] [-a] [$T/Claude.app] [--env] [CLAUDE_CONFIG_DIR=$BD/claude]" open.log && grep -qF -- "[--args] [--user-data-dir=$BD/desktop] [--proxy-server=http://192.0.2.10:7902] [--proxy-bypass-list=localhost;127.0.0.1;[::1];*.local;10.0.0.0/8;172.16.0.0/12;192.168.0.0/16]" open.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log && printf "%s" "$out" | grep -q "已打开 副号（bob@example.com） 的 Claude App，出口 US-B（端口 7902）" && printf "%s" "$out" | grep -q "第一次打开要登录 bob@example.com"'
-mkdir -p "$T/fakerun/Contents/MacOS"; printf '#!/bin/bash\nsleep 30\n' > "$T/fakerun/Contents/MacOS/Claude"; chmod 755 "$T/fakerun/Contents/MacOS/Claude"
+mkdir -p "$T/fakerun/Contents/MacOS"
+cat > "$T/fakerun/Contents/MacOS/Claude" <<'SH'
+#!/bin/bash
+for arg in "$@"; do
+	case "$arg" in --user-data-dir=*) exec 8<"${arg#*=}/Local State" ;; esac
+done
+sleep 30
+SH
+chmod 755 "$T/fakerun/Contents/MacOS/Claude"
 "$T/fakerun/Contents/MacOS/Claude" --user-data-dir="$BD/desktop" --proxy-server=x & FAKEPID=$!
 sleep 0.5; n_open=$(grep -c "user-data-dir=$BD/desktop" open.log)
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1)
@@ -157,7 +187,7 @@ ok "cca rm：这个账号的 Claude App 开着时不删" '[ $rc -ne 0 ] && print
 kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
 touch "$T/open_noprofile"
 out=$(run CCA_TTY="$(ans)" cca app alice 2>&1); rc=$?
-ok "cca app：Claude App 不认独立资料目录时关掉并说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有用 alice@example.com 自己的资料目录启动"'
+ok "cca app：Claude App 不认独立资料目录时关掉并说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "本次正在使用 alice@example.com 自己的资料目录"'
 rm -f "$T/open_noprofile"; : > osascript.log
 run "$L/Claude 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
 ok "启动器：调用 cca app 打开对应账号" '[ $rc -eq 0 ] && [ ! -s osascript.log ] && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = $((n_open + 1)) ]'
@@ -177,31 +207,31 @@ ok "启动器：不再重名后改回短名字" '[ -d "$L/Claude alice.app" ] &&
 #     结果按 线路|节点 缓存（启动不用每次等它），cca check 重新测；WebRTC 直连问 STUN（平时 CCA_STUN 指向不通的端口）
 rm -f "$H/.cca/leak.json"; : > curl.log; mkdir -p "$T/dns" "$T/geo"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "启动时顺带测泄露：DNS 经账号的端口解析一次性的子域名、再问是哪些解析器来查的（归属地也经它查）；WebRTC 直连问 STUN（UDP 出不去算无泄露）；横幅里一句话" '[ $rc -eq 3 ] && grep -qE "^CURL via :7901 https://[0-9a-f]{20}-1\.d\.ip\.net\.coffee/pixel\.gif$" curl.log && grep -qE "^CURL via :7901 https://ip\.net\.coffee/api/dns/result/[0-9a-f]{20}$" curl.log && grep -q "^CURL via :7901 https://ip.net.coffee/api/geoip/203.0.113.53$" curl.log && printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 无泄露" && [ "$(stat -f %Lp "$H/.cca/leak.json")" = 600 ]'
+ok "启动时顺带测泄露：DNS 经账号的端口解析一次性的子域名、再问是哪些解析器来查的（归属地也经它查）；WebRTC 直连问 STUN（未取得 IP 记为未验证）；横幅里一句话" '[ $rc -eq 3 ] && grep -qE "^CURL via :7901 https://[0-9a-f]{20}-1\.d\.ip\.net\.coffee/pixel\.gif$" curl.log && grep -qE "^CURL via :7901 https://ip\.net\.coffee/api/dns/result/[0-9a-f]{20}$" curl.log && grep -q "^CURL via :7901 https://ip.net.coffee/api/geoip/203.0.113.53$" curl.log && printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC 没测成" && [ "$(stat -f %Lp "$H/.cca/leak.json")" = 600 ]'
 n0=$(grep -c "pixel.gif" curl.log)
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
-ok "DNS 的结果按 线路|节点 缓存：再启动不再测（不拖慢启动），横幅照样有" '[ "$(grep -c "pixel.gif" curl.log)" = "$n0" ] && printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 无泄露"'
+ok "DNS 的结果按 线路|节点 缓存：再启动不再测（不拖慢启动），横幅照样有" '[ "$(grep -c "pixel.gif" curl.log)" = "$n0" ] && printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC 没测成"'
 printf '%s\n' 223.5.5.5 203.0.113.53 > "$T/dns/7902"
 printf '{"country": "China", "region": "Zhejiang", "city": "Hangzhou", "isp": "Alibaba", "country_code": "cn"}' > "$T/geo/223.5.5.5.json"
 out=$(run CCA_TTY="$(ans)" cca @副号 --version 2>&1); rc=$?
-ok "DNS 泄露（账号出口那边用了中国大陆的解析器）：说明是哪个解析器、该查哪个节点，横幅里标出来，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口访问网站时，域名是中国大陆的 DNS 服务器解析的（223.5.5.5 China · Alibaba）" && printf "%s" "$out" | grep -q "上的节点 US-B：" && printf "%s" "$out" | grep -q "泄露  DNS 泄露（1 个解析器在中国大陆） · WebRTC 无泄露"'
+ok "DNS 泄露（账号出口那边用了中国大陆的解析器）：说明是哪个解析器、该查哪个节点，横幅里标出来，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口访问网站时，域名是中国大陆的 DNS 服务器解析的（223.5.5.5 China · Alibaba）" && printf "%s" "$out" | grep -q "上的节点 US-B：" && printf "%s" "$out" | grep -q "泄露  DNS 泄露（1 个解析器在中国大陆） · WebRTC 没测成"'
 n0=$(grep -c "pixel.gif" curl.log)
 out=$(run cca check 2>&1)
-ok "cca check：DNS 重新测（不用启动时缓存的），注明解析器在哪；有泄露的那个账号另外说明" '[ "$(grep -c "pixel.gif" curl.log)" = $((n0 + 4)) ] && printf "%s" "$out" | grep -q "DNS 无泄露（1 个解析器：United States） · WebRTC 无泄露（UDP 直连拿不到公网 IP）" && printf "%s" "$out" | grep -q "DNS 泄露（1 个解析器在中国大陆）" && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口"'
+ok "cca check：DNS 重新测（不用启动时缓存的），注明解析器在哪；有泄露的那个账号另外说明" '[ "$(grep -c "pixel.gif" curl.log)" = $((n0 + 4)) ] && printf "%s" "$out" | grep -q "DNS 未发现地区异常（1 个解析器：United States；非浏览器实测） · WebRTC 没测成" && printf "%s" "$out" | grep -q "DNS 泄露（1 个解析器在中国大陆）" && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口"'
 python3 -I "$T/fake_stun.py" "$T" & STUN_PID=$!
 for i in $(seq 1 50); do [ -s "$T/stun.port" ] && break; sleep 0.1; done; STUN="127.0.0.1:$(cat "$T/stun.port")"
 echo 192.0.2.77 > "$T/stun_ip"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "WebRTC 泄露（直连 STUN 看到的不是账号的出口）：横幅里注明会暴露哪个 IP、在哪（归属地直连查，不经账号的出口）；命令行启动不另外警告" '[ $rc -eq 3 ] && grep -qx "STUN 192.0.2.77" "$T/stun.log" && printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 会暴露 192.0.2.77（United States · Example ISP）" && grep -qx "CURL direct https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! grep -q "via :7901 https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! printf "%s" "$out" | grep -q "WebRTC 泄露："'
+ok "WebRTC 直连风险（宿主 STUN 看到的不是账号的出口）：横幅注明探针 IP、在哪（归属地直连查，不经账号的出口）；命令行启动不另外警告" '[ $rc -eq 3 ] && grep -qx "STUN 192.0.2.77" "$T/stun.log" && printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC 直连风险：192.0.2.77（United States · Example ISP）" && grep -qx "CURL direct https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! grep -q "via :7901 https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP"'
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
-ok "cca app：WebRTC 泄露另外说明（App 里的网页拿得到这个 IP、怎么拦），照常打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "WebRTC 泄露：浏览器用 UDP 直连 STUN 服务器时，对方看到的是 192.0.2.77（United States · Example ISP），不是账号的出口：账号的网页版、Claude App 里的网页" && printf "%s" "$out" | grep -q "UDP 3478、19302 端口"'
+ok "cca app：WebRTC 直连风险另外说明（不声称已经验证浏览器），照常打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP 的 STUN 探测看到" && printf "%s" "$out" | grep -q "未验证浏览器"'
 edit_table 'j["carol@example.com"] = "US-C"'
 out=$(run CCA_TTY="$(ans)" cca @carol --version 2>&1); rc=$?
-ok "要在账号的浏览器里登录时，WebRTC 泄露先说一声（登录页在那个浏览器里打开）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 泄露：" && grep -q "ARGS: auth login --claudeai --email carol@example.com" claude.log'
+ok "要在账号的浏览器里登录时，WebRTC 泄露先说一声（登录页在那个浏览器里打开）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：" && grep -q "ARGS: auth login --claudeai --email carol@example.com" claude.log'
 run CCA_TTY="$(ans y)" cca rm carol >/dev/null 2>&1
 echo 203.0.113.1 > "$T/stun_ip"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
-ok "直连 STUN 看到的就是账号的出口：WebRTC 无泄露" 'printf "%s" "$out" | grep -q "泄露  DNS 无泄露 · WebRTC 无泄露"'
+ok "直连 STUN 看到的就是账号的出口：仅确认 STUN 出口一致" 'printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC：STUN 出口一致（浏览器状态未验证）"'
 kill "$STUN_PID" 2>/dev/null; wait "$STUN_PID" 2>/dev/null; STUN="" STUN_PID=""
 edit_table 'j["leak_check"] = False' "$H/.cca/config.json"; rm -f "$H/.cca/leak.json"; n0=$(grep -c "pixel.gif" curl.log)
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
@@ -210,7 +240,7 @@ ok "config.json 的 leak_check 设成 false：不测泄露（一个请求都不�
 touch "$T/dns_down"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 rm -f "$T/dns_down"
-ok "ip.net.coffee 的 DNS 检测接口连不上：注明没测成，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "泄露  DNS 没测成 · WebRTC 无泄露"'
+ok "ip.net.coffee 的 DNS 检测接口连不上：注明没测成，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "泄露  DNS 没测成.* · WebRTC 没测成"'
 rm -rf "$T/dns" "$T/geo" "$T/stun_ip" "$H/.cca/leak.json"
 
 # 4. 选中节点被改动（仪表盘手动切 / 缓存恢复错）→ 启动前自动纠正，不重载
@@ -824,7 +854,7 @@ ok "Codex 登错号后重新登录：设备标识保持不变" '[ "$(cat "$CH/in
 rm -f "$CH/auth.json"; touch "$T/codex_rpc_off"
 out=$(run CCA_TTY="$(ans)" cca codex @alice --version 2>&1); rc=$?
 rm -f "$T/codex_rpc_off"
-ok "这个版本的 codex 不支持经 app-server 登录：退回 codex login（说明登录页走系统默认浏览器）" '[ $rc -eq 3 ] && grep -q "LOGIN-CLI $CH" codex.log && printf "%s" "$out" | grep -q "改用 codex login"'
+ok "这个版本的 codex 不支持经 app-server 登录：停止，不退回系统浏览器" '[ $rc -ne 0 ] && ! grep -q "LOGIN-CLI $CH" codex.log && printf "%s" "$out" | grep -q "已停止登录"'
 rm -f "$H/.cca/codex/probe.json"; touch "$T/codex_noflags"
 run CCA_TTY="$(ans)" cca codex @alice --version >/dev/null 2>&1; rc=$?
 rm -f "$T/codex_noflags" "$H/.cca/codex/probe.json"

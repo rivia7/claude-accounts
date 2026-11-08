@@ -38,7 +38,15 @@ while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$HERE/Sources/CcaKit" "
 ARCH=$(uname -m)
 BIN="$BUILD/contract-tests"
 mkdir -p "$BUILD/tmp"
-printf '• 编译契约测试（%s）…\n' "$ARCH" >&2
-swiftc -Onone -swift-version 5 -module-name cca -target "$ARCH-apple-macos26.0" "${SOURCES[@]}" -o "$BIN"
+# 源码（文件名和内容）、架构、编译器都没变就不重新编译（一次要一分多钟；回归、发布时常常是刚编过的）
+SUM=$( { printf '%s\n' "$ARCH" "${SOURCES[@]#"$HERE"/}"; swiftc --version 2>&1; cat "${SOURCES[@]}"; } | shasum | cut -d' ' -f1)
+if [ -x "$BIN" ] && [ "$(cat "$BIN.sum" 2>/dev/null)" = "$SUM" ]; then
+	printf '• 契约测试的源码没变，用上次编好的（%s）\n' "$ARCH" >&2
+else
+	printf '• 编译契约测试（%s）…\n' "$ARCH" >&2
+	rm -f "$BIN.sum"
+	swiftc -Onone -swift-version 5 -module-name cca -target "$ARCH-apple-macos26.0" "${SOURCES[@]}" -o "$BIN"
+	printf '%s\n' "$SUM" > "$BIN.sum"
+fi
 
 CCA_TEST_TMP="$BUILD/tmp" TMPDIR="$BUILD/tmp/" "$BIN" "$MODE" "$DIR"

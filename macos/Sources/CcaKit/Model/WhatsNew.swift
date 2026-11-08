@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.12", title: "加强账号隔离与启动检查", points: [
+            .init(symbol: "checkmark.shield",
+                  text: "检查共享设置、项目设置和启动参数，发现可能换掉登录或出口的配置时停止启动。"),
+            .init(symbol: "macwindow",
+                  text: "打开或切回桌面 App 时核验账号资料目录；启动中断时清理能识别的本次新实例。"),
+            .init(symbol: "network",
+                  text: "网页版和命令行登录页使用账号专属 Chrome；无法按此方式打开时，不再退回默认浏览器。"),
+            .init(symbol: "exclamationmark.shield",
+                  text: "检测失败会明确显示“没测成”；DNS、WebRTC 的探针结果不再表述为浏览器“无泄露”。"),
+        ], art: "open"),
         ReleaseNote(version: "2.9.0-beta.11", title: "Fable 用量、重置额度、检查更新", points: [
             .init(symbol: "gauge.with.dots.needle.33percent",
                   text: "账号页上 Fable 的用量单独一大块：用了多少、什么时候重置，还写着它最多能用本周额度的多少。"),

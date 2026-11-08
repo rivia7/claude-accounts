@@ -33,7 +33,7 @@
         "leak": {
           "dns": "leak",
           "webrtc": "ok",
-          "line": "DNS 泄露 · WebRTC 无泄露",
+          "line": "DNS 泄露 · WebRTC 探针出口一致",
           "dns_message": "DNS 解析器在中国大陆（198.51.100.53），出口却在 US",
           "webrtc_message": ""
         }

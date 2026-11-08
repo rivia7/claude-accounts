@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """设备标识迁移与持久隔离：只运行 cca 内嵌 Python，所有数据都在临时 HOME。"""
 import concurrent.futures
+import base64
+import gzip
 import hashlib
 import json
 import os
@@ -14,7 +16,10 @@ import uuid
 
 
 CCA = Path(__file__).resolve().parents[1] / 'cca'
-SOURCE = CCA.read_text().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+SCRIPT = CCA.read_text()
+SOURCE = SCRIPT.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+PY_BOOT = SCRIPT.split("PY_BOOT='", 1)[1].split("'\n", 1)[0]
+SOURCE_PACKED = base64.b64encode(gzip.compress(SOURCE.encode(), mtime=0)).decode()
 ACCOUNTS = ('alice@example.com', 'bob@example.com')
 
 
@@ -37,7 +42,7 @@ class DeviceIdentity(unittest.TestCase):
 
     def run_cca(self, tool, command, key=ACCOUNTS[0]):
         result = subprocess.run(
-            [sys.executable, '-I', '-X', 'utf8', '-c', SOURCE, command, key],
+            [sys.executable, '-I', '-X', 'utf8', '-c', PY_BOOT, '', SOURCE_PACKED, command, key],
             env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'CCA_TOOL': tool, 'CCA_POLICY_DEFAULT': ''},
             capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)

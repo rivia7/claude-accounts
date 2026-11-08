@@ -34,7 +34,7 @@
 - 仓库是公开的：代码和测试里不放真实节点名、路由器 IP、邮箱；测试用 `US-A`…`US-D`、`HK-A`、`192.0.2.10`、`example.com`
 - `cca` 和 `install.sh` 里各有一份 `RELEASE_KEY`，必须和 `~/.ssh/cca_release_ed25519.pub` 一致（release.sh 会检查）
 - 改动要发版才会到达已安装的机器（包括维护者自己的 Mac）；`cca` 旁边有 `.git` 时是开发模式，不自动更新
-- Claude App 多开只认 `--user-data-dir`（签名版忽略 `CLAUDE_USER_DATA_DIR`）；App 不加单实例锁，同一个资料目录绝不能开两份，`cmd_app` 先用 `app_pid` 查
+- Claude App 多开只认 `--user-data-dir`（签名版忽略 `CLAUDE_USER_DATA_DIR`）；App 不加单实例锁，同一个资料目录绝不能开两份。`cmd_app` 先用 `app_pid` 查，真正启动时再持有账号 `app-launch.lock`（fd 9，不传给 App）复查；新实例须由进程树 + lsof 证明打开了账号资料文件，旧 Local State 不足以证明。`app_open` 也必须使用 `child_env` 的环境清理。
 - 启动器图标的轮廓必须和原图标一样：标识伸出圆角方形，macOS 26 起会把整个图标缩小、关进灰框。看效果要导出 `NSWorkspace.iconForFile`（系统实际显示的样子），只看 icns 本身发现不了
 - `PY_SRC=$(cat <<'PY' … PY)` 里不能有落单的 `'` 或 `"`：bash 3.2 扫描 `$(…)` 时会数引号，认错结尾后报错的行号在后面毫不相干的地方。正则和字符串里写 `\x22` / `\x27`
 - 出门在外（连不上路由器）走本机 Clash：Clash Verge 的 Merge 会整个替换列表，所以端口池写进全局扩展脚本（包住用户的 main）；生效靠 `PUT /configs` 热加载它当前的运行配置（文本插入，不重写），不重启 Clash Verge。它的内核控制接口默认只有 Unix socket（运行配置里的 `external-controller-unix`）
@@ -75,9 +75,9 @@
 - Codex 账号表是 `~/.cca/codex.json`（格式同 accounts.json），账号目录在 `~/.cca/codex/accounts/<acct_id>/`（`acct_id` 算法不变，同一个邮箱的 Claude 账号不会撞），config.json 里它的 ports / last / api_ids / api_keys 放在 `"codex"` 子对象（空了 `cfg_clean` 会删掉）。读写这些一律经 `T.state(c)`，不要直接碰 `c['ports']`
 - 两张表共用一个端口池：`reconcile_all` 一起对账（各自已有的端口不动，新端口避开对方的），`pool(c)` 先 Claude 后 Codex。路由器和本机 Clash 的端口池、摘要都按 `pool`；只有 Claude 账号时输出必须和以前逐字节一样（回归里有 accounts.yaml 的固定对照）。钥匙串前缀 `cca-codex-api-`、路由器账号名前缀 `codex-`、启动器「ChatGPT 别名」（bundle id `local.cca.launcher.codex.…`，标记里带 `"tool": "codex"`；各工具的启动器同步只动自己的）
 - `CODEX_HOME` 共享是白名单（`CODEX_SHARED`，以及新版 `*.config.toml` profile）：~/.codex 里有登录、按账号的缓存、installation_id、桌面 App 和后台进程的状态，新文件默认不共享。profile 同样记录配置基线，启动检查遍历全部共享 profile，避免 `--profile` 选中未检查的账号/接口设置。`worktrees/`、`visualizations/` 是 macOS 沙箱的可写目录，路径里不能有链接。数据库不靠链接：`CODEX_SQLITE_HOME` 指向 ~/.codex；会话库 threads 表里经账号目录的 `rollout_path` 每次 `py link` 都改写成 ~/.codex 下的（`codex_fix_rollouts`），否则删账号后会话从 `codex resume` 的全部列表里消失
-- 启动 codex 一律加 `--no-daemon` 和关掉 `system_proxy_fallback`、`respect_system_proxy` 的 `--disable`（都会让请求换出口）；codex 不认识的开关会直接报错，所以按 codex 程序文件缓存探测结果（`codex_probe`，`~/.cca/codex/probe.json`），只加它认识的。ChatGPT App 自己启动 codex，只能征得同意后用 `codex features disable system_proxy_fallback` 写进共享的 config.toml
+- 启动 codex 一律加 `--no-daemon` 和关掉 `system_proxy_fallback`、`respect_system_proxy` 的 `--disable`（都会让请求换出口）；codex 不认识的开关会直接报错，所以按 codex 程序文件缓存探测结果（`codex_probe`，`~/.cca/codex/probe.json`），只加它认识的。ChatGPT App 自己启动 codex，只能征得同意后用 `codex features disable system_proxy_fallback` 写进共享的 config.toml；拒绝、失败或无法关闭时停止打开 App
 - Codex 登录和查用量都经 codex 自己的 app-server（`Rpc`：`account/login/start` 拿到网址后回调 `cca _browser` 在账号的 Chrome 里开，`cmd_login_url` 按 `T.login_hosts` 补 `login_hint`；`account/rateLimits/read`），客户端名用 `codex_cli_rs`（和 `codex login` 一样，登录页认这个 originator）。登录身份只从 auth.json 的 id_token 读邮箱/套餐/工作空间（`codex_claims`），不碰 access/refresh token
-- Codex 子进程不带继承来的 `CODEX_*`、`OPENAI_*`（`CODEX_INHERITED_RE`，只留 `CODEX_CA_CERTIFICATE`）；共享 config.toml / .env 里会串号的设置见 `codex_settings_problems`（没有 tomllib，`toml_entries` 是粗扫描）。Codex 新增会改地址、换凭证的设置或环境变量时两边一起补
+- Codex 子进程不带继承来的 `CODEX_*`、`OPENAI_*`（`CODEX_INHERITED_RE`，只留 `CODEX_CA_CERTIFICATE`）；共享 config.toml / .env 里会串号的设置见 `codex_settings_problems`（Python 3.11+ 用 tomllib，旧版用内嵌的 MIT 许可 tomli；禁止退回粗扫描，解析失败必须阻止启动）。Codex 新增会改地址、换凭证的设置或环境变量时两边一起补
 - Codex 的第三方 API 账号只能用 Responses 接口：`-c model_provider="cca"` + `-c model_providers.cca={…auth={command=cca, args=["_api-key","codex",账号目录名]}}`，key 不进命令行；没有 `env` 字段
 
 ## 测试写法
@@ -106,3 +106,5 @@
 - 用量：假 `claude` 的 stream-json 分支是 `$T/fake_usage.py`，按登录的邮箱回 `$T/usage/<邮箱>.json`（`canned` 生成），`$T/usage/unsupported`、`$T/usage/hang` 模拟不支持和卡住；`$T/loc/<端口>` 改 claude.ai trace 里的出口地区
 - 菜单行很宽：要看行尾的内容时用 `run COLUMNS=160 …`（`tput cols` 认 `COLUMNS`）
 - Codex：假 `codex` 把参数和环境记在 `$T/codex.log`（`ARGS:` / `ENV:`），前面带 cca 的参数时是启动会话（模拟写 CODEX_HOME 和会话库，退出码 3）；`app-server` 由 `$T/fake_codex_server.py` 扮演，登录时等登录网址出现在 open.log 里再写 auth.json（邮箱取 `CCA_ACCOUNT`，一次性的 `$T/codex_login_as` 模拟登错号），用量回 `$T/codex_usage/<邮箱>.json`（`unsupported`、`hang` 同 Claude）；`$T/codex_rpc_off` 模拟不支持 app-server，`$T/codex_noflags` 模拟不认识那两个开关（记得删 `~/.cca/codex/probe.json`）；假 ChatGPT App 用 `CCA_CODEX_APP`
+
+- 隔离防护：`py launch-check` 在 CLI 启动准备前后检查参数及当前项目祖先配置；配置诊断只输出路径/键名，禁止打印值。Chrome 缺失和旧 Codex 不支持独立登录时停止，不能降级默认浏览器。`cca web` 也须预检。泄露检测是宿主探针，失败/空结果不可当作“无泄露”；不宣称实测过浏览器。专项测试在 `tests/isolation_*.py`，完整回归也执行。

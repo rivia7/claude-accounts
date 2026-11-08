@@ -286,6 +286,9 @@ struct FailCode: KnownValues {
     static let loginMismatch = FailCode(rawValue: "login_mismatch")
     static let apiUnreachable = FailCode(rawValue: "api_unreachable")
     static let openFailed = FailCode(rawValue: "open_failed")
+    static let noChrome = FailCode(rawValue: "no_chrome")
+    static let invalidURL = FailCode(rawValue: "invalid_url")
+    static let loginUnsupported = FailCode(rawValue: "login_unsupported")
     static let appProfileUnsupported = FailCode(rawValue: "app_profile_unsupported")
     /// 改别名（`cca rename`）：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改。
     static let aliasInvalid = FailCode(rawValue: "alias_invalid")
@@ -298,7 +301,8 @@ struct FailCode: KnownValues {
     static let allKnown: [FailCode] = [.error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
-                                       .appProfileUnsupported, .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported]
+                                       .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
+                                       .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

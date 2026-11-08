@@ -266,7 +266,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "ip": "203.0.113.1", "country": "US", "org": "Example Networks", "trust": 97, "trust_label": "极度纯净",
   "tags": ["住宅IP"], "restricted_region": null,
   "message": "203.0.113.1 · US · Example Networks · 纯净度 97（极度纯净） · 住宅IP", "note": "",
-  "leak": {"dns": "ok", "webrtc": "ok", "line": "DNS 无泄露 · WebRTC 无泄露", "dns_message": "", "webrtc_message": ""}
+  "leak": {"dns": "ok", "webrtc": "ok", "line": "DNS 未发现地区异常 · WebRTC：STUN 出口一致（浏览器状态未验证）", "dns_message": "", "webrtc_message": ""}
 }
 ```
 
@@ -275,8 +275,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `result`：`ok` | `low_purity`（纯净度低于设定）| `restricted`（出口在不可用地区，`restricted_region` 是地区名）| `no_exit`（拿不到出口 IP）|
   `no_score`（检测服务没给评分）| `port_closed` | `api_ok` | `api_unreachable`。
 - `trust`：0–100，没有评分为 null。`stale`：超过 6 小时。`applies`：测的时候用的节点和账号现在的节点相同（换了节点就是旧结果）。
-- `leak`：没测（关掉了泄露检测、出口本身就不对）为 null。`dns`：`ok` | `leak` | `failed` | null；`webrtc`：`ok` | `leak` | null；
-  `*_message` 是泄露时给人看的说明。
+- `leak`：没测（关掉了泄露检测、出口本身就不对）为 null。`dns`：`ok` | `leak` | `failed` | null；`webrtc`：`ok` | `leak` | `failed` | null；
+  `*_message` 是发现风险时给人看的说明。`ok` 仅表示宿主探针未发现该项异常，不是浏览器实测结论；空结果、超时及信息不足使用 `failed`。
 
 ## 4. 事件和同意（`CCA_EVENTS`、`CCA_GRANT`）
 
@@ -299,6 +299,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
+  `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
   `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）。可能有好几条，最后一条是最终原因。

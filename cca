@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.11"
+VERSION="2.9.0-beta.12"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -249,6 +249,22 @@ self_path() {
 }
 SELF=$(self_path)
 PYTHON="${CCA_PYTHON:-$(command -v python3 2>/dev/null)}"
+# 内嵌 Python 的缓存目录（PY_BOOT）：这个用户自己的临时目录（/var/folders/…/T/，别人进不去；TMPDIR 不是它时问 getconf）
+case "${TMPDIR:-}" in /var/folders/*) PYC_DIR="${TMPDIR%/}/cca-py" ;; *) PYC_DIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && PYC_DIR="${PYC_DIR%/}/cca-py" || PYC_DIR="" ;; esac
+# /usr/bin/python3 是命令行工具的转发程序：每次先找开发者目录，每次调用多花约 50 毫秒。换成它转发到的真正的 python3
+# （问一次，记在上面的缓存目录里；目录不是自己的、是链接就不用）
+if [ "$PYTHON" = /usr/bin/python3 ] && [ -n "$PYC_DIR" ]; then
+	{ [ -d "$PYC_DIR" ] || mkdir -m 700 "$PYC_DIR"; } 2>/dev/null
+	if [ -d "$PYC_DIR" ] && [ ! -L "$PYC_DIR" ] && [ -O "$PYC_DIR" ]; then
+		_p=$(cat "$PYC_DIR/python3" 2>/dev/null)
+		if [ -z "$_p" ] || [ ! -x "$_p" ]; then
+			_p=$(/usr/bin/python3 -I -c 'import sys; print(sys.executable)' 2>/dev/null)
+			[ -x "$_p" ] && printf '%s\n' "$_p" > "$PYC_DIR/python3"
+		fi
+		[ -x "$_p" ] && PYTHON="$_p"
+		unset _p
+	fi
+fi
 CLAUDE_BIN=$(command -v claude 2>/dev/null)
 [ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ] && CLAUDE_BIN="$HOME/.local/bin/claude"   # PATH 里还没加 ~/.local/bin 时
 CODEX_BIN=$(command -v codex 2>/dev/null)
@@ -267,19 +283,33 @@ CODEX_ALIAS=cxa   # cxa …：等于 cca codex …（~/.local/bin/cxa 是指向�
 # Python 辅助：配置/账号表、共享链接、.claude.json 三方合并、出口检测解析
 # ---------------------------------------------------------------------------
 PY_SRC=$(cat <<'PY'
-import base64, fcntl, filecmp, hashlib, json, os, re, shlex, shutil, sys, time, unicodedata, uuid
+import fcntl, hashlib, json, os, re, shlex, sys, time
+
+
+class lazy_re:
+    """模块里的正则用到时才编译：每次 py 都是新进程，开头一口气编译二十几个、这次多半用不到的正则要白花几毫秒"""
+    __slots__ = ('args', 'rx')
+
+    def __init__(self, *args):
+        self.args, self.rx = args, None
+
+    def __getattr__(self, name):
+        if self.rx is None:
+            self.rx = re.compile(*self.args)
+        return getattr(self.rx, name)
+
 
 HOME = os.path.expanduser('~')
 CCA_HOME = os.path.abspath(os.environ.get('CCA_HOME') or os.path.join(HOME, '.cca'))
 CFG = os.path.join(CCA_HOME, 'config.json')
 MASTER_JSON = os.path.join(HOME, '.claude.json')
-KEY_RE = re.compile(r'^[^\s"\\]{1,100}$')
-EMAIL_RE = re.compile(r'^[^@\s"\\()（）]+@[^@\s"\\()（）]+\.[^@\s"\\()（）]+$')
-PAIR_RE = re.compile(r'^(.*?)[(（]([^()（）]*)[)）]$')
-ALIAS_BAD = re.compile(r'[\s"\\()（）@]')
-SECRET_RE = re.compile(r'^[\x21-\x7e]{8,4096}$')   # 只收可见的 ASCII：别的字符 security -w 会改成输出十六进制
-MODEL_RE = re.compile(r'^[^\s\x22\x27\\]{1,100}$')
-ENV_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
+KEY_RE = lazy_re(r'^[^\s"\\]{1,100}$')
+EMAIL_RE = lazy_re(r'^[^@\s"\\()（）]+@[^@\s"\\()（）]+\.[^@\s"\\()（）]+$')
+PAIR_RE = lazy_re(r'^(.*?)[(（]([^()（）]*)[)）]$')
+ALIAS_BAD = lazy_re(r'[\s"\\()（）@]')
+SECRET_RE = lazy_re(r'^[\x21-\x7e]{8,4096}$')   # 只收可见的 ASCII：别的字符 security -w 会改成输出十六进制
+MODEL_RE = lazy_re(r'^[^\s\x22\x27\\]{1,100}$')
+ENV_NAME_RE = lazy_re(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
 SECRET_MSG = 'key 应该是一串可见的 ASCII 字符（至少 8 个，不能有空格或中文）'
 MODEL_MSG = '模型名里不能有空格或引号'
 # 会盖掉账号自己的代理、接口地址、凭证，或者把请求转去别的服务商（云厂商、网关）的变量。
@@ -287,10 +317,10 @@ MODEL_MSG = '模型名里不能有空格或引号'
 CRED_ENV = (r'(HTTPS?|ALL|NO)_PROXY|ANTHROPIC_(BASE_URL|AUTH_TOKEN|API_KEY)|CLAUDE_CODE_OAUTH_TOKEN'
             r'|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)'
             r'|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST')
-SETTINGS_BAD = re.compile(r'^(%s)$' % CRED_ENV, re.I)
-ENV_RESERVED = re.compile(r'^(%s|CLAUDE_CONFIG_DIR|CCA_\w*|BROWSER)$' % CRED_ENV, re.I)
+SETTINGS_BAD = lazy_re(r'^(%s)$' % CRED_ENV, re.I)
+ENV_RESERVED = lazy_re(r'^(%s|CLAUDE_CONFIG_DIR|CCA_\w*|BROWSER)$' % CRED_ENV, re.I)
 # env 的内容会出现在 claude 的命令行里（--settings），像密钥的变量名不收
-ENV_SECRETISH = re.compile(r'(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$', re.I)
+ENV_SECRETISH = lazy_re(r'(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$', re.I)
 SELF_PATH = os.environ.get('CCA_SELF') or os.path.join(CCA_HOME, 'bin', 'cca')   # 本脚本（apiKeyHelper 回调它）
 FIRST_PORT = 7901
 # 与 ip.net.coffee/claude 页面一致：这些地区直接判 0 分
@@ -359,6 +389,12 @@ def notice(code, text, **kv):
 
 def codex_profile_file(name):
     return os.path.basename(name) == name and not name.startswith('.') and name.endswith('.config.toml')
+
+
+def codex_profile_name(name):
+    """选择的 profile 必须是会被发现并校验的同目录配置；允许 Unicode 和空格。"""
+    return (isinstance(name, str) and bool(name) and not re.search(r'[\x00-\x1f\x7f]', name)
+            and codex_profile_file(name + '.config.toml'))
 
 
 def load_json(path, default):
@@ -1259,6 +1295,7 @@ def slot_nodes(c):
 
 
 def char_w(ch):
+    import unicodedata
     return 2 if unicodedata.east_asian_width(ch) in 'WF' else 1
 
 
@@ -1366,6 +1403,7 @@ def device_fields():
 
 
 def device_value(name, value):
+    import uuid
     if not isinstance(value, str):
         return None
     if name == 'installation_id':
@@ -1394,6 +1432,7 @@ def private_file(path):
 
 def device_identity(key, native):
     """调用方持有 Lock。device.json 是账号的固定标识；首次接管保留合法、独立的客户端旧值。"""
+    import uuid
     account = adir(key)
     path = os.path.join(account, 'device.json')
     saved = load_json(path, {})
@@ -1518,6 +1557,7 @@ def claude_sync(key):
 
 # --- 共享目录链接 -----------------------------------------------------------
 def aside(src, key):
+    import shutil
     d = os.path.join(T.sroot, 'conflicts', acct_id(key))
     os.makedirs(d, exist_ok=True)
     dst = os.path.join(d, '%s.%d' % (os.path.basename(src), int(time.time())))
@@ -1526,6 +1566,7 @@ def aside(src, key):
 
 
 def copy_over(src, dst):
+    import shutil
     real = os.path.realpath(dst)
     tmp = '%s.cca-%d.tmp' % (real, os.getpid())
     shutil.copy2(src, tmp)
@@ -1544,6 +1585,7 @@ def merge_lines(src, dst):
 
 
 def merge_file(src, dst):
+    import filecmp
     if src.endswith('.jsonl'):
         merge_lines(src, dst)
     elif not filecmp.cmp(src, dst, shallow=False) and os.path.getmtime(src) > os.path.getmtime(dst):
@@ -1551,6 +1593,7 @@ def merge_file(src, dst):
 
 
 def merge_tree(src, dst):
+    import shutil
     for root, dirs, files in os.walk(src):
         rel = os.path.relpath(root, src)
         troot = dst if rel == '.' else os.path.join(dst, rel)
@@ -1569,6 +1612,7 @@ def merge_tree(src, dst):
 
 def adopt(src, dst, key):
     """会话里新建的、或被原子写替换掉链接的真实条目：并回共享主目录（~/.claude、~/.codex）后改回链接。"""
+    import shutil
     if not os.path.lexists(dst):
         shutil.move(src, dst)
     elif os.path.isdir(src):
@@ -1585,6 +1629,7 @@ def adopt(src, dst, key):
 
 def detach_legacy_shared(path, shared):
     """只拆旧版 cca 指向共享主目录同名项的链接，用户自己建的外部链接不动。"""
+    import shutil
     if not os.path.islink(path):
         return
     target = os.readlink(path)
@@ -1624,6 +1669,7 @@ def shared_text(path):
 
 def config_conflict(src, key):
     """冲突副本完整保存；文件可能包含用户私有配置，不输出内容。"""
+    import shutil, uuid
     directory = os.path.join(T.sroot, 'conflicts', acct_id(key))
     os.makedirs(directory, mode=0o700, exist_ok=True)
     dst = os.path.join(directory, '%s.%s' % (os.path.basename(src), uuid.uuid4().hex))
@@ -2518,7 +2564,7 @@ def cmd_nodes_rename(old, new):
 # --- 出门在外：本机 Clash 客户端的端口池 -----------------------------------------
 VERGE_DIR = os.path.join(HOME, 'Library', 'Application Support', 'io.github.clash-verge-rev.clash-verge-rev')
 VERGE_SCRIPT = '// Define main function (script entry)\n\nfunction main(config, profileName) {\n  return config;\n}\n'
-LOCAL_BLOCK = re.compile(r'\n// >>> cca >>>.*?// <<< cca <<<\n', re.S)
+LOCAL_BLOCK = lazy_re(r'\n// >>> cca >>>.*?// <<< cca <<<\n', re.S)
 # 加在 Clash Verge 全局扩展脚本末尾：包住原来的 main，在它的结果上加端口池（重复执行结果不变）
 LOCAL_JS = r"""// >>> cca >>> 本机分流端口池（cca 自动维护，不要手改这一段；cca local off 会删掉它）
 // 127.0.0.1 上的入站 cca-n → 策略组 CCA-n，启动账号前 cca 会把组切到它的节点；原来的配置和规则不变
@@ -2926,6 +2972,7 @@ def write_text(path, text):
 def cmd_local_script(path, action='install'):
     """Clash Verge 全局扩展脚本里 cca 的那一段：install 写入或更新，remove 删掉（删后和原文件逐字节一致）。
     内容没变就不写。main 是 const/let 定义的（包不住）时返回 3"""
+    import shutil
     try:
         with open(path, encoding='utf-8') as f:
             old = f.read()
@@ -2949,7 +2996,7 @@ def cmd_local_script(path, action='install'):
         write_text(path, new)
 
 
-YAML_KEY = re.compile(r'^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:[ \t]+(.*?))?[ \t]*$')
+YAML_KEY = lazy_re(r'^([A-Za-z0-9_][A-Za-z0-9_.-]*):(?:[ \t]+(.*?))?[ \t]*$')
 
 
 def yaml_sections(lines):
@@ -3348,6 +3395,7 @@ def cmd_launchers(ldir, cca, app='', mode=''):
     """~/Applications 里每个账号一个"Claude 别名"（Codex 账号是"ChatGPT 别名"）启动器：按账号表新建、改名、删除。
     只动带 cca 标记、并且是当前工具的 .app；没装对应的 App（app 为空）或 mode=remove-all 时只删不建。
     输出：+ 新建、- 删除、! 同名但不是 cca 生成的（跳过）。第三方 API 账号用不了 App，没有启动器"""
+    import shutil
     t = {k: v for k, v in table_load().items() if not is_api(v)}
     names = launcher_names(t)
     badges = launcher_badges(t, names)
@@ -3370,130 +3418,442 @@ def cmd_launchers(ldir, cca, app='', mode=''):
 
 
 def cmd_keychain(key):
+    import unicodedata
     p = unicodedata.normalize('NFC', cdir(key))
     print('Claude Code-credentials-' + hashlib.sha256(p.encode('utf-8')).hexdigest()[:8])
 
 
 def cmd_settings_check():
-    """共享的设置里会盖掉每个账号自己的代理、接口地址或凭证的配置：有就打印出来、返回 1"""
-    bad = T.settings_problems()
+    """校验共享配置；输出仅含来源和配置键，不输出值、解析器原文或凭证。"""
+    settings_check_result(T.settings_problems())
+
+
+def settings_check_result(bad):
     if bad:
-        print(' '.join(bad))
+        print(' '.join(dict.fromkeys(bad)))
         sys.exit(1)
 
 
-def claude_settings_problems():
-    bad = []
-    for fn in ('settings.json', 'settings.local.json'):
-        j = load_json(os.path.join(CLAUDE.master, fn), {}) or {}
-        if not isinstance(j, dict):
-            continue
-        env = j.get('env') if isinstance(j.get('env'), dict) else {}
-        bad += ['%s:%s' % (fn, k) for k in env if SETTINGS_BAD.match(k)]
-        if j.get('apiKeyHelper'):
-            bad.append('%s:apiKeyHelper' % fn)
+class ConfigReadError(ValueError):
+    pass
+
+
+def config_text(path):
+    """不存在的可选配置略过；坏链接、无权限、目录和非 UTF-8 都不能当成空配置。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        if not os.path.lexists(path):
+            return None
+        raise ConfigReadError('unreadable_config') from None
+    except (OSError, UnicodeError):
+        raise ConfigReadError('unreadable_config') from None
+
+
+def claude_config_problems(data, source):
+    if not isinstance(data, dict):
+        return [source + ':invalid_config']
+    env = data.get('env', {})
+    if not isinstance(env, dict):
+        return [source + ':env:invalid_config']
+    bad = [source + ':' + k for k in env if SETTINGS_BAD.match(k)]
+    if data.get('apiKeyHelper'):
+        bad.append(source + ':apiKeyHelper')
     return bad
 
 
-# 共享的 ~/.codex/config.toml 里会把账号的登录发到别的地址、换成别的工作空间或别的出口的设置（Codex 自己也不许
-# 项目里的配置写前几个）。model_provider 只许是 openai，cli_auth_credentials_store 只许是 file（cca 要从 auth.json
-# 核对登录的是谁；桌面 App 也读不到别的存法），forced_login_method 不许是 api，不许系统代理排在账号的代理前面
+def claude_config_file_problems(path, source=None):
+    source = source or path
+    try:
+        content = config_text(path)
+        return [] if content is None else claude_config_problems(json.loads(content), source)
+    except (ConfigReadError, ValueError, RecursionError):
+        return [source + ':invalid_or_unreadable_config']
+
+
+def claude_settings_problems():
+    return [problem for name in ('settings.json', 'settings.local.json')
+            for problem in claude_config_file_problems(os.path.join(CLAUDE.master, name), name)]
+
+
+# 官方账号不能被配置改到其它地址、凭证库、工作空间或系统代理。
 CODEX_BAD_KEYS = ('openai_base_url', 'chatgpt_base_url', 'experimental_realtime_ws_base_url',
                   'experimental_realtime_webrtc_call_base_url', 'forced_chatgpt_workspace_id')
 CODEX_MUST_BE = {'model_provider': 'openai', 'cli_auth_credentials_store': 'file'}
-CODEX_MUST_NOT = {'forced_login_method': 'api', 'features.respect_system_proxy': 'true'}
-CODEX_ENV_BAD = re.compile(r'^((HTTPS?|ALL|NO)_PROXY|OPENAI_\w+)$', re.I)   # ~/.codex/.env 会盖掉进程环境
-TOML_KEY = r'(?:[A-Za-z0-9_-]+|\x22(?:[^\x22\\]|\\.)*\x22|\x27[^\x27]*\x27)'   # 一段键：裸键或带引号的（里面可以有点号）
-TOML_DOTTED = r'%s(?:\s*\.\s*%s)*' % (TOML_KEY, TOML_KEY)
-TOML_VAL = re.compile(r'^(\x22(?:[^\x22\\]|\\.)*\x22|\x27[^\x27]*\x27|[^#]*?)\s*(?:#.*)?$')   # 值，去掉行尾注释
+CODEX_MUST_NOT = {'forced_login_method': 'api'}
+CODEX_ENV_BAD = lazy_re(r'^((HTTPS?|ALL|NO)_PROXY|OPENAI_\w+|CODEX_\w+)$', re.I)
 
 
-def toml_unquote(v):
-    v = v.strip()
-    if v.startswith('\x22'):
-        try:
-            return json.loads(v)
-        except ValueError:
-            return v.strip('\x22')
-    if v.startswith('\x27'):
-        return v.strip('\x27')
-    return v
+# TOML 1.0 parser fallback for Python 3.9/3.10. No runtime downloads/imports from user sites.
+# Vendored unmodified tomli 2.3.0: https://github.com/hukkin/tomli/tree/2.3.0/src/tomli
+# Packaging: JSON object of __init__.py, _parser.py, _re.py, _types.py (sort_keys=True,
+# separators=(comma, colon), ensure_ascii=True), UTF-8, zlib level 9, then base64.
+# Source JSON SHA256: dfcb5b54604d284cb796bdca4548c1150e9785d840bb3cf04318f0fbedd93e8a
+# Base64 keeps the original source untouched by the Bash 3.2 heredoc quote scanner.
+# MIT License
+#
+# Copyright (c) 2021 Taneli Hukkinen
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+TOMLI_EMBEDDED = (
+    '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'
+)
 
 
-def toml_path(dotted):
-    return '.'.join(toml_unquote(x) for x in re.findall(TOML_KEY, dotted))
-
-
-def toml_values(path):
-    """很粗的 TOML 扫描（macOS 自带的 python3 是 3.9，没有 tomllib）：{完整的点号路径: 值}，字符串去掉引号，其余（数字、
-    true / false、数组…）原样。认得 [表] / [[表]] 表头、点号写法的键和行尾注释；多行字符串和跨行数组的续行跳过。
-    看不懂的行宁可漏掉也不报错"""
-    out, table, ml, depth = {}, '', None, 0
+def tomli_fallback():
+    """加载包内固定版本；模块与用户安装的 tomli 隔离，所有导入均来自标准库。"""
+    import base64, types, zlib
+    name = '_cca_tomli'
+    if name in sys.modules:
+        return sys.modules[name]
+    sources = json.loads(zlib.decompress(base64.b64decode(TOMLI_EMBEDDED)))
+    package = types.ModuleType(name)
+    package.__path__ = []
+    package.__package__ = name
+    sys.modules[name] = package
     try:
-        with open(path, encoding='utf-8') as f:
-            lines = f.read().split('\n')
-    except (OSError, ValueError):
-        return out
-    for line in lines:
-        if ml:   # 多行字符串里
-            if ml in line:
-                ml = None
-            continue
-        if depth > 0:   # 跨行数组里
-            depth += line.count('[') - line.count(']')
-            continue
-        s = line.strip()
-        if not s or s.startswith('#'):
-            continue
-        m = re.match(r'^\[\[?\s*(%s)\s*\]\]?\s*(?:#.*)?$' % TOML_DOTTED, s)
-        if m:
-            table = toml_path(m.group(1))
-            continue
-        m = re.match(r'^(%s)\s*=\s*(.*)$' % TOML_DOTTED, s)
-        if not m:
-            continue
-        val = m.group(2).strip()
-        for q in ('\x22\x22\x22', '\x27\x27\x27'):
-            if val.startswith(q) and val.count(q) == 1:
-                ml = q
-        if ml:
-            continue
-        if val.startswith('['):
-            depth = val.count('[') - val.count(']')
-        key = toml_path(m.group(1))
-        out[(table + '.' + key) if table else key] = toml_unquote(TOML_VAL.match(val).group(1))
-    return out
+        for filename in ('_types.py', '_re.py', '_parser.py', '__init__.py'):
+            module_name = name if filename == '__init__.py' else name + '.' + filename[:-3]
+            module = package if module_name == name else types.ModuleType(module_name)
+            module.__package__ = name
+            sys.modules[module_name] = module
+            exec(compile(sources[filename], '<cca:tomli:2.3.0:' + filename + '>', 'exec'), module.__dict__)
+    except Exception:
+        for module_name in tuple(sys.modules):
+            if module_name == name or module_name.startswith(name + '.'):
+                del sys.modules[module_name]
+        raise
+    return package
 
 
-def codex_settings_problems():
-    bad = []
-    files = ['config.toml']
-    if os.path.isdir(CODEX.master):
-        files += sorted(n for n in os.listdir(CODEX.master) if codex_profile_file(n))
-    for name in files:
-        vals = toml_values(os.path.join(CODEX.master, name))
-        prof = vals.get('profile') or ''
-        # 同时兼容旧版内嵌 profiles 和新版独立配置；检查全部共享 profile，CLI 可临时选择任一个。
-        for pre in [''] + (['profiles.%s.' % prof] if prof else []):
-            at = name + ':' + pre
-            bad += [at + k for k in CODEX_BAD_KEYS if pre + k in vals]
-            bad += [at + k for k, want in CODEX_MUST_BE.items() if pre + k in vals and vals[pre + k] != want]
-            bad += [at + k for k, no in CODEX_MUST_NOT.items() if vals.get(pre + k) == no]
+def toml_loads(content):
     try:
-        with open(os.path.join(CODEX.master, '.env'), encoding='utf-8') as f:
-            for line in f:
-                m = re.match(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=', line)
-                if m and CODEX_ENV_BAD.match(m.group(1)):
-                    bad.append('.env:' + m.group(1))
-    except (OSError, ValueError):
-        pass
+        import tomllib
+    except ImportError:
+        tomllib = tomli_fallback()
+    return tomllib.loads(content)
+
+
+def read_toml_config(path):
+    content = config_text(path)
+    if content is None:
+        return {}
+    try:
+        return toml_loads(content)
+    except (ValueError, RecursionError):
+        raise ConfigReadError('invalid_toml') from None
+
+
+def codex_config_problems(data, source, overrides=False, allow_base_fallback=False):
+    """只按解析后的键层级检查，不把带点号的字面键误认成嵌套表。"""
+    if not isinstance(data, dict):
+        return [source + ':invalid_config']
+    bad = [source + ':' + key for key in CODEX_BAD_KEYS if key in data]
+    if 'profile' in data and not codex_profile_name(data['profile']):
+        bad.append(source + ':profile:invalid_profile')
+    for key, want in CODEX_MUST_BE.items():
+        if key in data and (overrides or data[key] != want):
+            bad.append(source + ':' + key)
+    for key, value in CODEX_MUST_NOT.items():
+        if key in data and (overrides or data[key] == value):
+            bad.append(source + ':' + key)
+    features = data.get('features', {})
+    if not isinstance(features, dict):
+        bad.append(source + ':features:invalid_config')
+    else:
+        for key in ('respect_system_proxy', 'system_proxy_fallback'):
+            if key in features and (not isinstance(features[key], bool) or
+                                    (features[key] and (overrides or key == 'respect_system_proxy' or not allow_base_fallback))):
+                bad.append(source + ':features.' + key)
+    providers = data.get('model_providers', {})
+    if not isinstance(providers, dict):
+        bad.append(source + ':model_providers:invalid_config')
+    elif 'openai' in providers:
+        # 不允许替换内置官方 provider 的地址或认证配置。
+        bad.append(source + ':model_providers.openai')
+    profiles = data.get('profiles', {})
+    if not isinstance(profiles, dict):
+        bad.append(source + ':profiles:invalid_config')
+    else:
+        for name, profile in profiles.items():
+            bad.extend(codex_config_problems(profile, source + ':profiles.' + name, overrides))
     return bad
 
 
+def codex_config_file_problems(path, source=None, allow_base_fallback=False):
+    source = source or path
+    try:
+        return codex_config_problems(read_toml_config(path), source, allow_base_fallback=allow_base_fallback)
+    except (ConfigReadError, RecursionError):
+        return [source + ':invalid_or_unreadable_config']
+
+
+def codex_settings_problems():
+    files, bad = ['config.toml'], []
+    try:
+        files += sorted(name for name in os.listdir(CODEX.master) if codex_profile_file(name))
+    except FileNotFoundError:
+        if os.path.lexists(CODEX.master):
+            bad.append('~/.codex:unreadable_config')
+    except OSError:
+        bad.append('~/.codex:unreadable_config')
+    for name in files:
+        bad.extend(codex_config_file_problems(os.path.join(CODEX.master, name), name, allow_base_fallback=name == 'config.toml'))
+    try:
+        content = config_text(os.path.join(CODEX.master, '.env'))
+        for line in (content or '').splitlines():
+            match = re.match(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=', line)
+            if match and CODEX_ENV_BAD.match(match.group(1)) and match.group(1) != 'CODEX_CA_CERTIFICATE':
+                bad.append('.env:' + match.group(1))
+    except ConfigReadError:
+        bad.append('.env:invalid_or_unreadable_config')
+    return bad
+
+
+def project_settings_problems(cwd):
+    """只检查当前目录及祖先；不扫描项目的无关子目录或相邻项目。"""
+    bad, current = [], os.path.realpath(cwd)
+    while True:
+        if T is CLAUDE:
+            for name in ('settings.json', 'settings.local.json'):
+                path = os.path.join(current, '.claude', name)
+                if path != os.path.realpath(os.path.join(CLAUDE.master, name)):
+                    bad.extend(claude_config_file_problems(path))
+        else:
+            path = os.path.join(current, '.codex', 'config.toml')
+            if path != os.path.realpath(os.path.join(CODEX.master, 'config.toml')):
+                bad.extend(codex_config_file_problems(path))
+        parent = os.path.dirname(current)
+        if parent == current:
+            return bad
+        current = parent
+
+
+def launch_settings_problems(args):
+    bad, cwd, settings = [], os.getcwd(), []
+    original_cwd = cwd
+    args = list(args)
+    # 必填参数值可能恰好是 -- 或 --settings，必须先消费，才能认出真正的选项边界。
+    claude_values = ('--agent', '--agents', '--append-system-prompt', '--autocompact', '--debug-file',
+                     '--effort', '--environment', '--fallback-model', '--input-format', '--json-schema',
+                     '--max-budget-usd', '--model', '-n', '--name', '--output-format', '--permission-mode',
+                     '--permission-prompts', '--plugin-dir', '--plugin-url', '--remote-control-session-name-prefix',
+                     '--session-id', '--setting-sources', '--settings', '--system-prompt', '--system-prompt-snapshot',
+                     '--system-prompt-file', '--append-system-prompt-file', '--add-dir', '--allowedTools',
+                     '--allowed-tools', '--betas', '--disallowedTools', '--disallowed-tools', '--file',
+                     '--mcp-config', '--tools')
+    codex_values = ('-c', '--config', '-p', '--profile', '-C', '--cd', '--enable', '--disable',
+                    '-m', '--model', '-s', '--sandbox', '-a', '--ask-for-approval', '-i', '--image',
+                    '--local-provider', '--remote-auth-token-env', '--remote', '--output-schema',
+                    '-o', '--output-last-message')
+    i, positional_seen = 0, False
+    while i < len(args):
+        arg, value = args[i], None
+        i += 1
+        if arg == '--':
+            break
+        option = arg.split('=', 1)[0]
+        if T is CODEX and len(arg) > 2 and arg[:2] in ('-c', '-p', '-C'):
+            option, value = arg[:2], arg[2:]
+            if value.startswith('='):
+                value = value[1:]
+        elif '=' in arg:
+            value = arg.split('=', 1)[1]
+        takes_value = codex_values if T is CODEX else claude_values
+        if option in takes_value and value is None:
+            if i == len(args):
+                bad.append(option + ':missing_value')
+                continue
+            value, i = args[i], i + 1
+        if T is CLAUDE:
+            if option == '--settings':
+                settings.append(value)
+            elif option == '--desktop':
+                bad.append('--desktop:use_cca_app')
+            continue
+        if not arg.startswith('-'):
+            if not positional_seen and arg == 'app':
+                bad.append('app:use_cca_codex_app')
+            positional_seen = True
+        if option in ('--remote', '--remote-auth-token-env', '--oss', '--local-provider'):
+            bad.append(option + ':account_override')
+        elif option in ('-C', '--cd') and value is not None:
+            # root/exec 各自的 --cd 可同时出现；后者覆盖前者，均相对初始目录解析。
+            cwd = os.path.abspath(os.path.join(original_cwd, os.path.expanduser(value)))
+        elif option in ('-p', '--profile') and value is not None:
+            if not codex_profile_name(value):
+                bad.append(option + ':invalid_profile')
+        elif option == '--enable' and value in ('system_proxy_fallback', 'respect_system_proxy'):
+            bad.append(option + ':' + value)
+        elif option in ('-c', '--config') and value is not None:
+            if '=' not in value:
+                bad.append(option + ':invalid_config')
+                continue
+            key, raw = value.split('=', 1)
+            try:
+                # Codex 接受未引号的字符串值；只对值应用同样的回退，键仍交完整 TOML 解析器。
+                try:
+                    parsed = toml_loads(value)
+                except ValueError:
+                    parsed = toml_loads(key + ' = ' + json.dumps(raw))
+                bad.extend(codex_config_problems(parsed, option, overrides=True))
+            except (ValueError, RecursionError):
+                bad.append(option + ':invalid_config')
+    for value in settings:
+        source = '--settings'
+        if value.lstrip().startswith('{'):
+            try:
+                bad.extend(claude_config_problems(json.loads(value), source))
+            except (ValueError, RecursionError):
+                bad.append(source + ':invalid_config')
+        else:
+            path = os.path.abspath(os.path.join(cwd, os.path.expanduser(value)))
+            if not os.path.exists(path):
+                bad.append(source + ':unreadable_config')
+            else:
+                bad.extend(claude_config_file_problems(path))
+    bad.extend(T.settings_problems())
+    bad.extend(project_settings_problems(cwd))
+    return bad
+
+
+def cmd_launch_check(*args):
+    settings_check_result(launch_settings_problems(args))
+
+
 def cmd_codex_fallback_off():
-    """共享的 config.toml 里是不是已经关掉了 system_proxy_fallback（桌面 App 自己启动 codex，cca 加不了参数）"""
-    vals = toml_values(os.path.join(CODEX.master, 'config.toml'))
-    sys.exit(0 if vals.get('features.system_proxy_fallback') == 'false' else 1)
+    """桌面 App 只能依赖共享配置；无效或不可读不能等同于已关闭回退。"""
+    try:
+        data = read_toml_config(os.path.join(CODEX.master, 'config.toml'))
+        features = data.get('features', {})
+        disabled = (isinstance(features, dict) and features.get('system_proxy_fallback') is False
+                    and not codex_settings_problems())
+    except ConfigReadError:
+        disabled = False
+    sys.exit(0 if disabled else 1)
 
 
 def coffee_parse(min_trust, trace, risk):
@@ -3557,7 +3917,7 @@ def cmd_coffee(min_trust, trace, risk):
 # --- DNS / WebRTC 泄露检测（照 ip.net.coffee 的 DNS、WebRTC 检测页的做法）：和出口检测同时在后台跑，不拖慢启动 ------------------
 # DNS：经账号的端口访问两个一次性的子域名（<token>-n.d.ip.net.coffee），由账号出口那边去解析，ip.net.coffee 的权威 DNS 记下是哪些
 # 解析器来查的（/api/dns/result/<token>）；有中国大陆的解析器、出口又不在中国大陆就是泄露。要几秒，结果按 线路|节点 缓存。
-# WebRTC：直连（不经代理）问 STUN 服务器自己的公网 IP，就是浏览器的 WebRTC 用 UDP 直连时网页拿得到的 IP，和账号的出口不同就是泄露
+# WebRTC：用本机 UDP 探测 STUN，检查绕过账号代理的风险；不在浏览器里执行，不能据此断言浏览器是否泄露
 LEAK_FILE = os.path.join(CCA_HOME, 'leak.json')   # 缓存：DNS 的结果（按 线路|节点）、IP 归属地
 LEAK_DNS_TTL = 6 * 3600   # DNS 怎么解析取决于节点和路由器的设置，不常变
 LEAK_FAIL_TTL = 600       # 没测成的过 10 分钟再测
@@ -3565,7 +3925,7 @@ LEAK_GEO_TTL = 7 * 86400
 LEAK_DEADLINE = 5         # 后台检测最多这么多秒（和出口检测同时跑）
 STUN_SERVERS = (('stun.cloudflare.com', 3478), ('stun.l.google.com', 19302))   # 和检测页用的一样
 COFFEE = 'https://ip.net.coffee'
-IP_TEXT = re.compile(r'^[0-9A-Fa-f:.]{2,45}$')
+IP_TEXT = lazy_re(r'^[0-9A-Fa-f:.]{2,45}$')
 
 
 def leak_curl(url, proxy='', timeout=4.0):
@@ -3658,7 +4018,7 @@ def stun_parse(data, tid):
 
 
 def stun_probe(host, port, family, timeout):
-    """直连发一个 STUN Binding 请求，返回对方看到的公网 IP；没有回应、没有这种地址（没有真的 IPv6）是空的"""
+    """本机直连发 STUN Binding 请求；错误、超时、没有这种地址都返回空，不能当成确认没有泄露"""
     import socket, struct
     try:
         af, _, _, _, addr = socket.getaddrinfo(host, port, family, socket.SOCK_DGRAM)[0]
@@ -3686,7 +4046,7 @@ def stun_probe(host, port, family, timeout):
 
 
 def stun_ips(timeout=1.0):
-    """浏览器的 WebRTC 用 UDP 直连时网页拿得到的公网 IP：同时问几个 STUN 服务器（IPv4、IPv6 都试）。CCA_STUN=主机:端口,… 换服务器（测试用）"""
+    """本机 UDP 的出口（非浏览器实测）：同时问几个 STUN 服务器，IPv4、IPv6 都试；空结果表示没测成。CCA_STUN 换服务器（测试用）"""
     import socket, threading
     env = os.environ.get('CCA_STUN', '')
     servers = [(h, int(p)) for h, p in (x.rsplit(':', 1) for x in env.split(',') if re.match(r'^[^:,]+:\d+$', x))] if env else STUN_SERVERS
@@ -3704,6 +4064,7 @@ def stun_ips(timeout=1.0):
 def leak_dns(proxy, deadline):
     """经账号的端口解析两个一次性的子域名，再问 ip.net.coffee 是哪些解析器来查的：{ok, servers}。
     要的只是那边的解析器来查过：不等图片请求做完（HTTPS 往返要一两秒），最多一秒就开始问"""
+    import uuid
     import threading
     tok = uuid.uuid4().hex[:20]
     ts = [threading.Thread(target=leak_curl, daemon=True, args=('https://%s-%d.d.ip.net.coffee/pixel.gif' % (tok, i), proxy,
@@ -3719,8 +4080,8 @@ def leak_dns(proxy, deadline):
             break
         j = leak_json(leak_curl('%s/api/dns/result/%s' % (COFFEE, tok), proxy, min(3, deadline - time.time())))
         if isinstance(j, dict) and isinstance(j.get('dns_servers'), list):
-            ok = True
             servers = [s for s in j['dns_servers'] if isinstance(s, str) and IP_TEXT.match(s)]
+            ok = bool(servers)
             if servers:
                 break
         if n < 3:
@@ -3736,7 +4097,7 @@ def leak_dns_fresh(d, since=0.0):
 
 
 def cmd_leak_probe(proxy, key, since=''):
-    """后台跑（和出口检测同时）：STUN 直连看 WebRTC 会暴露的 IP；DNS 的缓存不能用时经账号的端口测一次（解析器的归属地也经它查）。
+    """后台跑（和出口检测同时）：本机 STUN 直连检查潜在的 WebRTC 绕行风险；DNS 缓存不能用时经账号端口测一次。
     结果（JSON）打到 stdout，由 leak-verdict 汇总、写缓存。config.json 的 leak_check 设成 false 时什么都不测"""
     import threading
     c = load_quiet(CFG)
@@ -3744,7 +4105,7 @@ def cmd_leak_probe(proxy, key, since=''):
         print(json.dumps({'off': True}))
         return
     cache = leak_cache()
-    deadline, res = time.time() + LEAK_DEADLINE, {}
+    deadline, res = time.time() + LEAK_DEADLINE, {'stun': {'ips': []}}
     known = {k: g for k, g in (cache.get('geo') or {}).items() if geo_fresh(g, time.time())}
 
     def dns():
@@ -3758,7 +4119,7 @@ def cmd_leak_probe(proxy, key, since=''):
     ts = [threading.Thread(target=j, daemon=True) for j in jobs]
     for t in ts:
         t.start()
-    for t in ts:   # 到时间还没做完的不要了（没有它的结果，汇总时就不提）
+    for t in ts:   # 到时间还没做完的不要了；汇总时没有结果按未验证处理
         t.join(max(deadline + 1 - time.time(), 0))
     print(json.dumps(dict(res)))
 
@@ -3766,7 +4127,7 @@ def cmd_leak_probe(proxy, key, since=''):
 def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
     """汇总 leak-probe 的结果（exit_ip / exit_cc 是这次出口检测拿到的）：第一行是给横幅的一句话，每个泄露再一行
     W<TAB>dns|webrtc<TAB>说明，最后是机器看的状态 S<TAB>dns|webrtc<TAB>ok|leak|failed（出口检测结果里记下，见 health-save；
-    leak_finish 只认 W、S 行）；把新结果写进缓存。detail（cca check）时一句话里多写点。WebRTC 暴露的 IP 直连查归属地：
+    leak_finish 只认 W、S 行）；把新结果写进缓存。detail（cca check）时一句话里多写点。本机 STUN IP 直连查归属地：
     别让账号的出口和它一起出现在别人那里"""
     p = load_quiet(path)
     if not isinstance(p, dict) or p.get('off'):
@@ -3785,30 +4146,40 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
     if isinstance(d, dict):
         sv = d.get('servers') or []
         cn = [s for s in sv if (geo.get(ip_prefix(s)) or {}).get('cc') == 'cn']
-        state['dns'] = 'failed' if not d.get('ok') else 'leak' if cn and exit_cc.upper() != 'CN' else 'ok'
-        if not d.get('ok'):
-            parts.append('DNS 没测成')
-        elif cn and exit_cc.upper() != 'CN':
+        unknown = [s for s in sv if not re.fullmatch('[a-z]{2}', (geo.get(ip_prefix(s)) or {}).get('cc') or '')]
+        if d.get('ok') and cn and exit_cc and exit_cc.upper() != 'CN':
+            state['dns'] = 'leak'
             parts.append('DNS 泄露（%d 个解析器在中国大陆）' % len(cn))
             warns.append(('dns', 'DNS 泄露：经这个账号的端口访问网站时，域名是中国大陆的 DNS 服务器解析的（%s），网站的 DNS 服务'
                           '能看出查询来自中国大陆。检查路由器（在外面是本机 Clash）上的节点 %s：mihomo 把域名在本地解析好再交给节点时'
                           '（比如直连、WireGuard 这类节点），用的是它自己的 DNS' % ('、'.join(('%s %s' % (s, leak_where(geo.get(ip_prefix(s))))).strip()
                                                                        for s in cn[:3]), key.split('|', 1)[-1])))
-        elif not sv:
-            parts.append('DNS 无泄露' + ('（没看到解析器，可能用的是加密 DNS）' if detail else ''))
+        elif not d.get('ok') or not sv or unknown or not exit_cc:
+            state['dns'] = 'failed'
+            d['ok'] = False   # 未验证的旧缓存也只保留失败结果的短 TTL
+            reason = '解析器归属地不完整' if sv and unknown else '未取得解析器' if not sv else '探测未完成'
+            parts.append('DNS 没测成（%s）' % reason)
         else:
+            state['dns'] = 'ok'
             cs = list(dict.fromkeys((geo.get(ip_prefix(s)) or {}).get('country') or '?' for s in sv))
-            parts.append('DNS 无泄露' + ('（%d 个解析器：%s%s）' % (len(sv), '、'.join(cs[:3]), '等' if len(cs) > 3 else '') if detail else ''))
-    if leaked or 'stun' in p:
-        state['webrtc'] = 'leak' if leaked else 'ok'
+            parts.append('DNS 未发现地区异常' + ('（%d 个解析器：%s%s；非浏览器实测）' %
+                         (len(sv), '、'.join(cs[:3]), '等' if len(cs) > 3 else '') if detail else ''))
+    else:
+        state['dns'] = 'failed'
+        parts.append('DNS 没测成（探测未完成）')
     if leaked:
+        state['webrtc'] = 'leak'
         w = leak_where(geo.get(ip_prefix(leaked[0])))
-        parts.append('WebRTC 会暴露 %s%s' % (leaked[0], '（%s）' % w if w else ''))
-        warns.append(('webrtc', 'WebRTC 泄露：浏览器用 UDP 直连 STUN 服务器时，对方看到的是 %s，不是账号的出口：账号的网页版、'
-                      '%s 里的网页（还有实时语音这类用 WebRTC 的功能）都拿得到它，几个账号会露出同一个 IP。可以在路由器上拦掉 STUN'
-                      '（UDP 3478、19302 端口），或者让这类 UDP 也走账号的节点' % ('、'.join(leaked[:2]) + ('（%s）' % w if w else ''), T.app_label)))
-    elif 'stun' in p:
-        parts.append('WebRTC 无泄露' + ('（UDP 直连拿不到公网 IP）' if detail and not ips else ''))
+        parts.append('WebRTC 直连风险：%s%s' % (leaked[0], '（%s）' % w if w else ''))
+        warns.append(('webrtc', 'WebRTC 直连风险：本机 UDP 的 STUN 探测看到 %s，与账号的出口不同。这是本机网络探测，'
+                      '尚未验证浏览器或 %s 是否会暴露该 IP；应在实际客户端验证 WebRTC 路由，并限制绕过账号代理的 UDP 流量' %
+                      ('、'.join(leaked[:2]) + ('（%s）' % w if w else ''), T.app_label)))
+    elif ips:
+        state['webrtc'] = 'ok'
+        parts.append('WebRTC：STUN 出口一致（浏览器状态未验证）')
+    else:
+        state['webrtc'] = 'failed'
+        parts.append('WebRTC 没测成（STUN 探测未取得 IP，浏览器状态未验证）')
     keep = sorted(geo.items(), key=lambda x: -x[1].get('t', 0))[:300]
     cache.update({'dns': dns, 'geo': dict(keep)})
     try:
@@ -3985,7 +4356,7 @@ def ago(secs):
 
 
 # Claude Code 收 profile 接口给的套餐名（planDisplayName）的规矩：字母数字开头，中间可以有空格和 .+-，最长 40 个字
-PLAN_NAME_RE = re.compile(r'^[^\W_](?:(?:[^\W_]|[ .+-]){0,38}(?:[^\W_]|\+))?$')
+PLAN_NAME_RE = lazy_re(r'^[^\W_](?:(?:[^\W_]|[ .+-]){0,38}(?:[^\W_]|\+))?$')
 
 
 def plan_label(oa, sub=None):
@@ -4396,6 +4767,7 @@ def cmd_reset_done(tmp, key, mode='', credit=''):
 def codex_claims(key):
     """Codex 账号登录的身份：auth.json 里 id_token 的声明，只取邮箱、套餐和工作空间（不验签名；不碰 access / refresh
     token，也不保存、不转发）。没登录、用 API key 登录、读不了都返回 {}"""
+    import base64
     j = load_quiet(os.path.join(cdir(key), 'auth.json'))
     tok = j.get('tokens') if isinstance(j, dict) else None
     tok = tok.get('id_token') if isinstance(tok, dict) else None
@@ -4739,7 +5111,14 @@ def codex_fix_rollouts():
     这里把它们改写成 ~/.codex 下的同一个文件：只改 rollout_path 这一列，只改确实有对应文件的。库被别的 codex 占着时
     跳过，下次再改"""
     import glob, sqlite3
-    home = os.path.expanduser(toml_values(os.path.join(CODEX.master, 'config.toml')).get('sqlite_home') or '') or CODEX.master
+    try:
+        home = read_toml_config(os.path.join(CODEX.master, 'config.toml')).get('sqlite_home', '')
+        if not isinstance(home, str):
+            raise ConfigReadError('invalid_sqlite_home')
+    except ConfigReadError:
+        sys.stderr.write('cca: ~/.codex/config.toml 无效或不可读，已跳过会话路径修复；启动前配置校验将拒绝此配置\n')
+        return
+    home = os.path.expanduser(home) or CODEX.master
     pre = os.path.join(CODEX.sroot, 'accounts') + os.sep
     pat = re.compile(r'^%s[^/]+/%s/(sessions|archived_sessions)/' % (re.escape(pre), re.escape(CODEX.sub)))
     for db in sorted(glob.glob(os.path.join(home, 'state_*.sqlite'))):
@@ -4767,7 +5146,7 @@ def codex_fix_rollouts():
 #     只能加字段；删改要升 bash 的 GUI_API，同时改 Swift 模型（macos/Sources/CcaKit/Protocol）和回归测试（10g） ------------
 HEALTH_STALE = 6 * 3600   # 出口检测结果超过 6 小时算旧（和 DNS 泄露检测的缓存一样久）
 HEALTH_RESULTS = {0: 'ok', 1: 'low_purity', 2: 'restricted', 3: 'no_exit', 4: 'no_score'}   # coffee_parse 的 rc
-GUI_SLOT_RE = re.compile(r'^槽位 (CCA-\d+) :(\d+) (监听中|未监听) → (.*?)(?:（应为 .*）)?$')   # 路由器 status() 的槽位行
+GUI_SLOT_RE = lazy_re(r'^槽位 (CCA-\d+) :(\d+) (监听中|未监听) → (.*?)(?:（应为 .*）)?$')   # 路由器 status() 的槽位行
 
 
 class using:
@@ -4856,7 +5235,7 @@ def cmd_check_render(route=''):
 
 # 命令行会话的登记（_gui state 的 cli）：run_account 启动 claude / codex 之前在账号目录写 cli-<cca 的进程号>.json，
 # 工具一退出就删（bash 的 session_close）。记 cca 的进程号和它的启动时间：进程号会被重用，启动时间对得上才是同一个进程
-CLI_MARK = re.compile(r'^cli-([0-9]+)\.json$')
+CLI_MARK = lazy_re(r'^cli-([0-9]+)\.json$')
 
 
 def lstart_epoch(s):
@@ -5234,7 +5613,7 @@ CMDS = {
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
-    'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'coffee': cmd_coffee,
+    'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'launch-check': cmd_launch_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
@@ -5264,7 +5643,40 @@ load_ids()
 CMDS[sys.argv[1]](*sys.argv[2:])
 PY
 )
-PYRUN=("$PYTHON" -I -X utf8 -c "$PY_SRC")   # -X utf8：不管 locale 是什么都按 UTF-8 输出
+# 先压缩源码快照，避免源码和用户环境一起超过 macOS 的 exec 参数上限；管道不读取调用者的 stdin。
+PY_PACKED=$(set -o pipefail; printf '%s' "$PY_SRC" | /usr/bin/gzip -n -c | /usr/bin/base64) ||
+	{ printf '%s\n' 'cca: 无法打包内嵌 Python' >&2; exit 1; }
+unset PY_SRC
+export -n PY_PACKED PY_BOOT
+# 每次 py 都是新的 Python 进程：PY_BOOT 把编译好的源码按摘要存在 PYC_DIR 里（只有自己能读写，换了版本摘要就变），
+# 下次直接载入，省掉每次 30 多毫秒的编译。目录不是自己的、别人能进、是链接，或者缓存读不了，就照常编译、不用缓存
+PY_BOOT='import sys, os, marshal, zlib, base64
+d, packed = sys.argv.pop(1), sys.argv.pop(1)
+src = zlib.decompress(base64.b64decode(packed), 31).decode("utf-8")
+code = p = None
+try:
+    if d and not os.path.isdir(d):
+        os.mkdir(d, 0o700)
+    st = os.lstat(d)
+    if os.path.isdir(d) and not os.path.islink(d) and st.st_uid == os.getuid() and not st.st_mode & 0o077:
+        b = src.encode("utf-8")
+        p = os.path.join(d, "%08x%08x%x-%x" % (zlib.crc32(b), zlib.adler32(b), len(b), sys.hexversion))
+        with open(p, "rb") as f:
+            code = marshal.load(f)
+except Exception:
+    code = None
+if code is None:
+    code = compile(src, "cca-py", "exec")
+    if p:
+        try:
+            t = "%s.%d" % (p, os.getpid())
+            with os.fdopen(os.open(t, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                marshal.dump(code, f)
+            os.replace(t, p)
+        except OSError:
+            pass
+exec(code, {"__name__": "__main__"})'
+PYRUN=("$PYTHON" -I -X utf8 -c "$PY_BOOT" "$PYC_DIR" "$PY_PACKED")   # -X utf8：不管 locale 是什么都按 UTF-8 输出
 py() { CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "${PYRUN[@]}" "$@"; }
 
 use_tool() {   # use_tool codex：这次命令管 Codex 账号（账号表 codex.json、CODEX_HOME、codex 命令）；账号表、命令前缀、文案由 py 给
@@ -7013,6 +7425,7 @@ ensure_login() {
 	done
 }
 claude_login() {
+	has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
 	info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开登录页${ACC_EMAIL:+（已预填 ${ACC_EMAIL}）}，登录完成后会自动继续"
 	local -a em=()
 	[ -n "$ACC_EMAIL" ] && em=(--email "$ACC_EMAIL")
@@ -7025,15 +7438,16 @@ claude_wipe() {   # 退出登错的账号（Claude Code 自己记着的 oauthAcc
 }
 codex_wipe() { codex_logout; }
 # Codex 登录：经 codex 的 app-server 拿到登录网址，在这个账号专属的 Chrome 里打开（整个登录都走账号的出口），登录完成后
-# codex 自己把凭证写进这个账号的 auth.json。这个版本的 codex 不支持时退回 codex login（系统默认浏览器）
+# codex 自己把凭证写进这个账号的 auth.json。
 codex_login() {   # 前台运行（Ctrl-C 能取消登录，不会留下占着 1455 端口的登录服务）；登录页由它回调 cca _browser 打开
 	local rc
+	has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
 	info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开 ChatGPT 的登录页${ACC_EMAIL:+（请用 ${ACC_EMAIL} 登录）}，登录完成后会自动继续"
 	child_env
 	pyenv login-flow "$CODEX_BIN" 3<&- </dev/null; rc=$?
 	[ $rc -eq 3 ] || return $rc
-	warn "这个版本的 codex 不支持由 cca 打开登录页，改用 codex login：登录页会在系统默认浏览器里打开（这一步不经账号的出口）"
-	env "${UNSETS[@]}" "${SETS[@]}" "$CODEX_BIN" "${ACC_FLAGS[@]}" login 3<&-
+	fail_warn login_unsupported "这个版本的 codex 不支持由 cca 打开独立登录页，已停止登录。请升级 codex 后重试，避免登录页走系统默认浏览器"
+	return 1
 }
 has_worktrees() { [ -n "$(ls -A "$ACC_HOME/worktrees" 2>/dev/null)" ]; }   # Codex 账号建过 git 工作树（删账号会一起删）
 
@@ -7332,12 +7746,15 @@ has_chrome() { [ -d "/Applications/Google Chrome.app" ] || [ -d "$HOME/Applicati
 
 open_chrome() {   # 需要先 eval "$(py env 名称)"
 	local url="$1"
+	case "$url" in
+		http://*|https://*) ;;
+		*) fail_warn invalid_url "浏览器地址必须以 http:// 或 https:// 开头"; return 1 ;;
+	esac
 	if ! has_chrome; then
-		warn "没装 Google Chrome，改用默认浏览器打开（不会走账号端口）"
-		open "$url"
-		return
+		fail_warn no_chrome "没装 Google Chrome，已停止打开：系统默认浏览器不能保证使用这个账号的资料目录和出口"
+		return 1
 	fi
-	mkdir -p "$ACC_CHROME_DIR"
+	mkdir -p "$ACC_CHROME_DIR" && chmod 700 "$ACC_CHROME_DIR" || return 1
 	open -na "Google Chrome" --args --user-data-dir="$ACC_CHROME_DIR" --no-first-run --no-default-browser-check \
 		--proxy-server="$ACC_PROXY" "$url"
 }
@@ -7347,18 +7764,18 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
 	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
+	has_chrome || { fail_warn no_chrome "没装 Google Chrome，已停止打开：请先安装 Chrome，再使用账号的独立浏览器"; return 1; }
 	gui_step sync
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
 	gui_step preflight
-	CCA_SKIP_CHECK=1 preflight || exit 1
-	py device "$ACC_KEY" || die "初始化账号设备标识失败"
+	preflight app || exit 1
+	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
 	# 还没登录就先登录（同一个浏览器实例，登录一次两边都能用；Claude 的登录页预填邮箱）
-	if [ -n "$ACC_EMAIL" ] && [ -n "$TOOL_BIN" ] && interactive && [ -z "$(auth_email)" ]; then
-		prepare_account "$ACC_KEY" || die "初始化账号目录失败"
+	if [ -n "$ACC_EMAIL" ] && [ -n "$TOOL_BIN" ] && interactive; then
 		ensure_login || exit 1
 	fi
 	gui_step open
-	open_chrome "${2:-https://${site}/}"
+	open_chrome "${2:-https://${site}/}" || { fail_warn open_failed "打开账号的独立浏览器失败"; return 1; }
 	info "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-$site}（经 ${ACC_PROXY} → ${ACC_NODE}）"
 	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-$site}（经 ${ACC_PROXY} → ${ACC_NODE}）"
 }
@@ -7396,8 +7813,13 @@ codex_app_path() {   # ChatGPT App 装在哪（CCA_CODEX_APP 可指定）：认 
 }
 claude_app_missing() { printf '%s' "没找到 Claude App：先从 https://claude.ai/download 下载安装"; }
 codex_app_missing() { printf '%s' "没找到 ChatGPT App（Codex 的桌面版）：运行 codex app 会打开它的安装页"; }
-claude_app_pid() { pgrep -f "Contents/MacOS/Claude .*--user-data-dir=$1( |\$)" | head -n 1; }   # 用这个资料目录的主进程
-codex_app_pid() { pgrep -f "Contents/MacOS/(ChatGPT|Codex) .*--user-data-dir=$1( |\$)" | head -n 1; }
+app_pid() {   # 资料目录按字面量匹配，路径里的点号等不能变成正则通配符
+	local pattern
+	pattern=$("$PYTHON" -I -c 'import re, sys; print(re.escape(sys.argv[1]))' "$2") || return 1
+	pgrep -f "Contents/MacOS/$1 .*--user-data-dir=${pattern}( |\$)" | head -n 1
+}
+claude_app_pid() { app_pid Claude "$1"; }
+codex_app_pid() { app_pid '(ChatGPT|Codex)' "$1"; }
 activate_pid() {   # 多开时 open -a 分不清是哪一个，按进程号切到前面
 	osascript -l JavaScript -e "ObjC.import('AppKit'); var a = \$.NSRunningApplication.runningApplicationWithProcessIdentifier($1); a.unhide; a.activateWithOptions(\$.NSApplicationActivateAllWindows)" </dev/null >/dev/null 2>&1
 }
@@ -7423,7 +7845,7 @@ codex_app_prepare() {
 	need_bin
 	if ! py codex-fallback-off; then
 		if [[ " ${ACC_FLAGS[*]} " != *" system_proxy_fallback "* ]]; then   # 这个版本的 codex 不认识这个开关，没法替你关
-			warn "这个版本的 codex 不认识 system_proxy_fallback，cca 没法在共享的 config.toml 里关掉它。ChatGPT App 自带的 codex 如果有这个开关，账号的出口断了时可能改走系统代理（升级 codex 后再打开一次，cca 会征求同意关掉）"
+			FAIL_CODE=settings_conflict die "这个版本的 codex 不认识 system_proxy_fallback，无法确认 ChatGPT App 的出口隔离；请升级 codex 后再打开 App"
 		else
 			local why="ChatGPT App 自己启动 codex，cca 加不了参数。Codex 的 system_proxy_fallback 开着时，账号的出口一断，部分请求会带着这个账号的登录改走 macOS 的系统代理，出口就换了"
 			interactive && warn "$why"
@@ -7436,7 +7858,7 @@ codex_app_prepare() {
 					okay "已在 ~/.codex/config.toml 里关掉 system_proxy_fallback"
 					py link "$ACC_KEY" || die "链接共享目录失败" ;;   # config.toml 可能是刚建的：账号目录里还没有指向它的链接
 				2) die "先在终端里运行一次 cca codex app ${ACC_NAME}：要先关掉 Codex 的 system_proxy_fallback（会说明原因）" ;;
-				*) warn "没有关掉：ChatGPT App 照常打开，但这个账号的出口断了时可能改走系统代理" ;;
+				*) FAIL_CODE=settings_conflict die "没有关掉 system_proxy_fallback，已停止打开 ChatGPT App，避免账号的出口断开时改走系统代理" ;;
 			esac
 		fi
 	fi
@@ -7446,7 +7868,8 @@ codex_app_prepare() {
 app_open() {   # app_open App 资料目录 [--env 工具自己的变量…]：整个实例走账号的端口（Chromium 的 --proxy-server，子进程的 *_PROXY）
 	local app="$1" dir="$2"
 	shift 2
-	open -n -a "$app" "$@" \
+	child_env
+	env "${UNSETS[@]}" "${SETS[@]}" open -n -a "$app" "$@" \
 		--env HTTPS_PROXY="$ACC_PROXY" --env https_proxy="$ACC_PROXY" --env HTTP_PROXY="$ACC_PROXY" --env http_proxy="$ACC_PROXY" \
 		--env NO_PROXY="$CCA_NO_PROXY" --env no_proxy="$CCA_NO_PROXY" \
 		--args --user-data-dir="$dir" --proxy-server="$ACC_PROXY" --proxy-bypass-list="$CCA_PROXY_BYPASS"
@@ -7460,8 +7883,82 @@ codex_app_first() {
 	info "关掉 App，运行 cca codex login ${ACC_NAME}，再打开 App"
 }
 
+# flock 锁留在当前 shell 的 fd 9；Python 退出后仍持有，进程退出自动释放，不留过期目录锁。
+# 只在预检完成后持锁，打开 App 时关闭 fd 9，避免常驻 App 继承后一直占锁。
+app_launch_lock() {
+	exec 9>"$ACC_DIR/app-launch.lock" || return 1
+	"$PYTHON" -I -c 'import fcntl, sys
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)' && return 0
+	exec 9>&-
+	return 1
+}
+app_launch_unlock() { exec 9>&-; }
+
+app_process_tree() {   # 输出主进程及其当前子孙的 PID；不读取进程环境或登录资料
+	ps -axo pid=,ppid= | "$PYTHON" -I -c 'import sys
+root = int(sys.argv[1])
+rows = [tuple(map(int, line.split())) for line in sys.stdin if len(line.split()) == 2]
+pids = {root}
+while True:
+    found = {pid for pid, parent in rows if parent in pids}
+    if found <= pids:
+        break
+    pids.update(found)
+print(",".join(map(str, sorted(pids))))' "$1"
+}
+
+app_profile_in_use() {   # 本次活进程必须实际打开资料目录内的文件；旧 Local State 不能充当证据
+	local pid="$1" dir pids
+	[ -n "$pid" ] || return 1
+	dir=$(cd "$2" && pwd -P) || return 1
+	pids=$(app_process_tree "$pid") || return 1
+	[ -n "$pids" ] || return 1
+	lsof -n -P -a -p "$pids" -Fn 2>/dev/null | "$PYTHON" -I -c 'import sys
+prefix = "n" + sys.argv[1] + "/"
+sys.exit(0 if any(line.startswith(prefix) for line in sys.stdin) else 1)' "$dir"
+}
+
+app_activate_existing() {   # 不接管或终止已有实例；不能验证时要求用户自行退出再打开
+	app_profile_in_use "$1" "$2" || FAIL_CODE=app_profile_unsupported die "无法确认已有的 ${APP_LABEL} 使用 ${ACC_NAME} 自己的资料目录；请先自行退出这个实例，再用 cca 打开"
+	activate_pid "$1"
+	info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
+	gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
+}
+
+app_launch_cleanup() {   # 只清理本次启动后出现、且仍匹配该资料目录的进程；从不终止启动前已有进程
+	local pid p current
+	[ "${APP_LAUNCH_ACTIVE:-}" = 1 ] || return 0
+	APP_LAUNCH_ACTIVE=""
+	pid="${APP_LAUNCH_NEW_PID:-}"
+	current=$(tool app_pid "$APP_LAUNCH_DIR")
+	[ -n "$pid" ] || pid="$current"   # 信号可能在 open 返回、记录 PID 之前到达
+	if [ -n "$pid" ] && [ "$pid" = "$current" ]; then
+		case " $APP_LAUNCH_BEFORE " in
+			*" $pid "*) ;;   # PID 在启动前已经存在，无法认定是本次创建
+			*) for p in $(app_process_tree "$pid" | tr ',' ' '); do
+				case " $APP_LAUNCH_BEFORE " in *" $p "*) ;; *) kill "$p" 2>/dev/null ;; esac
+			done ;;
+		esac
+	fi
+	app_launch_unlock
+	return 0
+}
+
+app_launch_restore_traps() {
+	trap - EXIT INT TERM HUP
+	[ -z "${APP_LAUNCH_TRAPS:-}" ] || eval "$APP_LAUNCH_TRAPS"
+}
+app_launch_abort() {
+	app_launch_cleanup
+	app_launch_restore_traps
+	exit "$1"
+}
+
 cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）；已经开着就切到它
-	local key app dir pid first="" i p
+	local key app dir pid first="" i p ready=""
 	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
 	app=$(tool app_path) || FAIL_CODE=app_missing die "$(tool app_missing)"
 	key=$(pick_account "${1:-}") || return 0
@@ -7470,9 +7967,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	key="$ACC_KEY" dir="$ACC_DESKTOP_DIR"
 	pid=$(tool app_pid "$dir")
 	if [ -n "$pid" ]; then
-		activate_pid "$pid"
-		info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
-		gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
+		app_activate_existing "$pid" "$dir"
 		return 0
 	fi
 	gui_step sync
@@ -7485,13 +7980,38 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	tool app_prepare
 	[ -e "$dir/Local State" ] || first=1
 	mkdir -p "$dir" && chmod 700 "$dir"
-	gui_step open
-	tool app_open "$app" "$dir" || FAIL_CODE=open_failed die "打开 ${APP_LABEL} 失败"
-	for i in $(seq 1 40); do [ -e "$dir/Local State" ] && break; sleep 0.25; done
-	if [ ! -e "$dir/Local State" ]; then   # 不认独立的资料目录的话，它会用默认资料（你主账号的登录）走这个账号的出口
-		for p in $(pgrep -f -- "--user-data-dir=$dir( |\$)"); do kill "$p" 2>/dev/null; done
-		FAIL_CODE=app_profile_unsupported die "${APP_LABEL} 没有用 ${ACC_NAME} 自己的资料目录启动（可能是新版本不再支持多开），已经关掉，免得用错账号或出口"
+	command -v lsof >/dev/null 2>&1 || FAIL_CODE=app_profile_unsupported die "找不到 lsof，无法核验 App 是否使用账号自己的资料目录，已停止打开"
+	app_launch_lock || FAIL_CODE=open_failed die "${ACC_NAME} 的 ${APP_LABEL} 正在启动，请稍后再试"
+	# 预检时另一条启动命令可能先开好了；拿到锁后再检查，防止同一资料目录开两份。
+	pid=$(tool app_pid "$dir")
+	if [ -n "$pid" ]; then
+		app_launch_unlock
+		app_activate_existing "$pid" "$dir"
+		return 0
 	fi
+	APP_LAUNCH_DIR="$dir" APP_LAUNCH_NEW_PID=""
+	APP_LAUNCH_BEFORE=$(ps -axo pid= | awk '{print $1}' | tr '\n' ' ')
+	[ -n "${APP_LAUNCH_BEFORE// /}" ] || FAIL_CODE=open_failed die "无法记录启动前的进程，已停止打开 App"
+	APP_LAUNCH_TRAPS=$(trap -p EXIT INT TERM HUP)
+	APP_LAUNCH_ACTIVE=1
+	trap app_launch_cleanup EXIT
+	trap 'app_launch_abort 130' INT
+	trap 'app_launch_abort 143' TERM
+	trap 'app_launch_abort 129' HUP
+	gui_step open
+	tool app_open "$app" "$dir" 9>&- || FAIL_CODE=open_failed die "打开 ${APP_LABEL} 失败"
+	for i in $(seq 1 40); do
+		pid=$(tool app_pid "$dir")
+		[ -z "$pid" ] || APP_LAUNCH_NEW_PID="$pid"
+		if app_profile_in_use "$pid" "$dir"; then ready=1; break; fi
+		sleep 0.25
+	done
+	if [ -z "$ready" ]; then
+		FAIL_CODE=app_profile_unsupported die "无法确认 ${APP_LABEL} 本次正在使用 ${ACC_NAME} 自己的资料目录（可能是新版本不再支持多开）；已停止启动并关闭能识别的本次实例，免得用错账号或出口"
+	fi
+	APP_LAUNCH_ACTIVE=""
+	app_launch_restore_traps
+	app_launch_unlock
 	okay "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	gui_result opened "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	[ -n "$first" ] && tool app_first
@@ -8114,7 +8634,7 @@ session_open() { py session-open "$ACC_KEY" "$$" >/dev/null 2>&1; return 0; }
 session_close() { rm -f "$ACC_DIR/cli-$$.json"; }
 
 run_account() {
-	local key="$1" rc e dropped
+	local key="$1" rc e dropped bad
 	shift
 	need_bin
 	eval "$(py env "$key")" || die "读取账号失败: $key"
@@ -8126,8 +8646,10 @@ run_account() {
 		fi
 		api_key_ready || exit 1
 	fi
+	if ! bad=$(py launch-check "$@"); then settings_warn "$bad"; return 1; fi
 	preflight || exit 1
 	prepare_account "$key" || die "初始化账号目录失败"
+	if ! bad=$(py launch-check "$@"); then settings_warn "$bad"; return 1; fi
 	[ "$ACC_KIND" = api ] || ensure_login || exit 1
 	py set-last "$key"
 	say ""
