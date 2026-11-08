@@ -3,3 +3,4 @@
 tests/.dbg*
 macos/build/
 .idea/
+__pycache__/
