@@ -2,7 +2,7 @@
 
 cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cca` 里的文件、不解析中文输出、不在 Swift 里重算 cca 的规则**
 （账号目录名、端口、维护者映射、用量是否过期……都由 cca 算好给出）。改这里的格式要同时改 cca、Swift 模型
-（`macos/Sources/CcaKit/Protocol/`）和回归测试（`tests/regress.sh` 的 10g 节）。
+（`macos/Sources/CcaKit/Protocol/`）和回归测试（`tests/regress.sh` 的 10g 节，提问会话是 10h 节）。
 
 兼容规则：
 
@@ -10,22 +10,22 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - 删字段、改含义才升 `GUI_API`（`cca _gui hello` 的 `api`）。App 声明自己支持的范围，不在范围内就提示更新。
 - 每份 JSON 文档都带 `"version": 1` 和 `"kind"`。时间一律是 Unix 秒（浮点数），字段名以 `_epoch` 或 `_at` 结尾
   （`usage --json` 里沿用的 `fetched_at`、`generated_at`、`resets_at` 是旧字段，保留原样，App 用对应的 `*_epoch`）。
-- JSON 只写到 stdout；给人看的文字照旧写 stderr，App 只在“详情”里原样显示，不解析。
+- JSON 只写到 stdout；给人看的文字照旧写 stderr，App 只在“详情”里原样显示（提问会话的等待页还显示最新的一行，见 4.6），不解析。
 
 ## 1. 怎么运行 cca
 
 - 可执行文件：`~/.local/bin/cca`，没有就 `~/.cca/bin/cca`；开发模式下 `cca gui` 会用 `open --env CCA_GUI_CCA=<路径>` 告诉 App。
 - 每次调用都是一个新进程：stdin 接 `/dev/null`，自己一个会话（`POSIX_SPAWN_SETSID`），取消时给整个进程组发 SIGTERM，3 秒后 SIGKILL。
-  这样 cca 永远打不开 `/dev/tty`，所有需要回答的地方都按“非交互”处理。
-- 环境：继承 App 的环境，去掉 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`、`CCA_GRANT`、`CCA_EVENTS`、`CCA_RO`；`PATH` 后面补上
-  `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin`；设 `CCA_GUI=1`、`NO_COLOR=1`；按需设 `CCA_EVENTS`、`CCA_GRANT`（见 4）。
+  这样 cca 永远打不开 `/dev/tty`，所有需要回答的地方都按“非交互”处理（例外是提问会话，见 4.6）。
+- 环境：继承 App 的环境，去掉 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`、`CCA_GRANT`、`CCA_EVENTS`、`CCA_RO`、`CCA_PROMPT`；`PATH` 后面补上
+  `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin`；设 `CCA_GUI=1`、`NO_COLOR=1`；按需设 `CCA_EVENTS`、`CCA_GRANT`（见 4）、`CCA_PROMPT`（见 4.6）。
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
 - 同一个账号（工具 + 键）的 `app` / `web` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
-- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
+- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `rename` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
 - `app`、`web`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
@@ -49,7 +49,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 ```json
 {
-  "version": 1, "kind": "hello", "api": 1,
+  "version": 1, "kind": "hello", "api": 1, "prompt": 1,
   "cca_version": "2.9.0", "dev_mode": false, "installed": true,
   "self": "/Users/me/.cca/bin/cca", "home": "/Users/me/.cca",
   "tools": {
@@ -60,6 +60,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 }
 ```
 
+- `prompt`：提问会话（4.6）的版本。没有这个字段（旧版 cca）或者版本不认识时，App 不开提问会话，流程走终端交接（6）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在。`bin` 是找到的 `claude` / `codex`，没装为 null。
 - `gui.app_version`：装着的 cca.app 的版本（没装为 null）；`gui.staged_version`：已经下载校验好、等 App 退出后再换上的版本（没有为 null）。
@@ -231,7 +232,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 ```
 
 - `source`：`live`（这次查到的）| `cache`（没查到，用上次的）| `none`（没有数据）。
-- `error_code`（`error` 是给人看的文字）：`login` | `mismatch` | `route` | `port` | `region` | `trace` | `unsupported` | `timeout` | `nolimits` | `error`，没出错为 null。
+- `error_code`（`error` 是给人看的文字）：`login` | `mismatch` | `route` | `port` | `region` | `trace` | `unsupported` | `timeout` | `nolimits` | `auth` | `error`，没出错为 null。
+  `auth`：登录凭证失效了（Codex 说 token 刷新不了、服务器回 401；改过密码、在别处退出过都会这样），本地的登录信息还在，所以 `_gui state` 的 `login` 还是 `logged_in`，要重新登录（`cca [codex] login 账号`）。
+  Claude 登录失效时 Claude Code 只回“没有用量”，分不清原因，是 `nolimits`。
 - `stale`：数据超过 10 分钟。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
 - 窗口：Claude 有 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_oauth_apps`；Codex 只有 `five_hour`、`seven_day`，
   另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, "next_expires_epoch": …, …}`）。
@@ -245,9 +248,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - 退出码 1 表示没有一个账号有数据（JSON 照样输出）。查询会经各账号的出口，最慢 2 分钟左右。
 - `_gui state` 里的 `usage` 是同样的条目（`source` 是 `cache` 或 `none`）。
 
-### 3.2 `cca [codex] check [账号] --json`
+### 3.2 `cca [codex] check [账号…] --json`
 
-人看的文字照旧写 stderr，stdout 输出：
+不写账号测全部；写了就只测这几个（App 定时检测只测到期的账号）。人看的文字照旧写 stderr，stdout 输出：
 
 ```json
 {
@@ -290,6 +293,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
 查不了的原因看 `fail` 事件）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
+提问会话另有 `ask` 事件（见 4.6）。
 
 ```jsonl
 {"v":1,"ev":"step","code":"preflight"}
@@ -300,14 +304,15 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened` | `activated`（已经开着，切到了前面）。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened` | `activated`（已经开着，切到了前面）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed`，带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
   `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
   `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
-  `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）。可能有好几条，最后一条是最终原因。
+  `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消）| `app_running`（删除账号：它的桌面 App 还开着）。
+  可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
   `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key`。
@@ -372,6 +377,75 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
   （超时、codex 出错）：`fail` 的 `error`，`message` 说可能已经用掉了一次、刷新用量看看。
 - `usage` 是重置后的用量（读不到为 null：App 自己再刷新一次用量）；`message` 是给人看的一句话，App 照着提示。
 
+### 4.6 提问会话：在 App 里问完的流程
+
+添加账号这类要问好几个问题的命令，App 和命令行用**同一份流程、同一套校验**：一个 cca 进程跑完整条流程，每问一页就发一条 `ask` 事件，App 把这一页
+显示成控件，答案写回管道。分支、默认值、校验都在 cca 里，App 里没有问题的文案和规则；cca 新增提问时 App 自动显示。
+
+- 版本：`hello.prompt`（现在是 1）。没有这个字段、或者版本不认识：不开提问会话，走终端交接（6）。
+- 怎么运行：和平时一样（stdin 接 `/dev/null`、自己一个会话、`CCA_EVENTS`），多两样：设 `CCA_PROMPT=1`；**fd 3 接答案管道的读端**。stdout / stderr 接文件
+  （App 退出时 cca 不会被 SIGPIPE 杀掉），不限时。只给下面表里的流程用，不要给 `app`、`web`、`usage`、`check`。
+- `CCA_PROMPT=1`、`CCA_EVENTS`、fd 3 三样都有，cca 才进提问会话；缺一样就和平时的非交互一样（比如要终端的命令直接报错）。
+- 同意（4.2）在提问会话里当场问，不用带 `CCA_GRANT` 重跑。
+
+```jsonl
+{"v":1,"ev":"ask","seq":1,"q":"add.basic","title":"添加 Claude 账号","message":"","fields":[{"id":"email","kind":"text","label":"登录邮箱","default":"","value":"","error":"","hint":"…","optional":false},{"id":"alias","kind":"text","label":"别名（可选）","default":"","value":"","error":"","hint":"…","optional":true}]}
+```
+
+- `seq`：这个事件文件里的第几页，答案要带上（重复点击发出来的旧答案序号对不上，cca 丢掉）。
+- `q`：题号，全局唯一（下面的映射表）。App 不靠它决定显示什么：不认识的题号照样按字段显示。
+- `title`、`message`：页标题和说明，可以为空。
+- `fields[]`：这一页的字段。`id`（答案要带上）、`kind`、`label`、`default`、`value`（重问时上次填的，**密文永远是空的**）、`error`（上次的答案为什么不行，显示在输入框下面）、
+  `hint`、`optional`，以及下表里各类型自己的。
+
+| `kind` | 控件 | 答案 | 另外的字段 |
+|---|---|---|---|
+| `text` | 输入框 | 文字（一行） | |
+| `secret` | 密文框 | 文字（一行），不回显、不重填 | |
+| `choice` | 单选 | 选中项的 `value`；`optional` 时可以空着（“不选”的说法在 `skip`） | `options: [{value, label, note}]`，`default` 是预选项的 `value` |
+| `multi` | 多选 | 选中项的 `value`，空格隔开 | `options`、`min`（至少选几个） |
+| `confirm` | 是 / 否两个按钮（一页只有它） | `y` / `n` | `detail`、`severity`；`default` 是回车时的答案 |
+
+答案：每个字段一行 `<seq> <字段 id> <值>\n`（只有一个字段的页，字段 id 就是 `v`），按 `fields` 的顺序写进 fd 3；值里不能有换行。一页的字段对不上（id 不对）时 cca 按取消处理，免得把值放错地方。
+App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同一个 `q` 带着 `error` 和已填的值再发一条 `ask`。
+
+- 取消：App 关掉答案管道。cca 读到 EOF 就发 `fail cancelled` 然后退出（SIGTERM），**绝不当成回车取默认值**（默认“是”的确认不能因为 App 退出就被同意了）。App 崩溃、退出时同样。
+- 显示不了的一页（字段类型不认识、选择题没有选项）：App 关掉管道，失败页上有“改在终端里完成”，不能漏掉问题。
+- 等待（cca 在干活，没在问）：App 显示 stderr 最新的一行，原样显示，不解析。超过 30 秒没结束时给“停止”按钮（给进程组发 SIGTERM）。
+- 结束：退出码 0：做完了（有 `result` 事件时显示它的 `message`，带 `key` 时选中这个账号；没有 `result` 表示用户选了不做）；退出码 0 但有 `fail` 事件：做完了，要提醒（比如路由器没同步成）。
+  退出码非 0：有 `terminal` 事件就走终端交接，否则显示最后一条 `fail`。
+- 密钥（`secret` 字段）只经答案管道：不进命令行、环境变量、事件文件、输出文件。cca 读进没有 export 的变量，校验和存储都经管道给 python；错误文案是固定的，不回显输入。
+  App 里密文不放进被观察的状态，交出去马上清掉。**第三方 API 的 key 会短暂经过 App 的内存**（这是用户选的：比终端里输入方便，换来这一点暴露面）。
+
+题号（提问）和控件的对应（`cca` 里新加一个提问时要写进这张表，回归的 lint 守着）：
+
+| 题号 | 命令 | 控件 | 问什么 |
+|---|---|---|---|
+| `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
+| `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
+| `api.basic` | `[codex] add api` | `text`、`text`、`secret`、`text` | 别名、接口地址（校验 url）、API key、模型（可选，校验 model） |
+| `api.node` | `[codex] add api` | `choice` | 出口节点（第一项是直连）。没有可选节点时不问 |
+| `key.secret` | `[codex] key 账号` | `secret` | API key |
+| `rm.confirm` | `[codex] rm 账号` | `confirm`（默认否） | 确认删除 |
+| `node.replace` | 同步路由器的流程里 | `choice`（可以不选） | 节点在路由器上不见了，换成哪个 |
+| `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
+
+命令行功能和 App 的对应：
+
+| 命令 | App 里 | 方式 |
+|---|---|---|
+| `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
+| `[codex] key` | 账号页「…」、右键菜单 | 提问会话 |
+| `[codex] rm` | 账号页「…」、右键菜单 | 提问会话 |
+| `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
+| `[codex] usage`、`check`、`app`、`web`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
+| `[codex] login` | 账号页「登录…」 | 终端 |
+| `[codex] edit` | 工具栏「＋」、账号表损坏时的提示 | 终端 |
+| `router setup`、`local setup`、`install` | 工具栏「＋」、分流页、引导页 | 终端 |
+| `router uninstall`、`local off`、`policy` | 没有入口 | 终端里自己运行 |
+| `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
+| `restore` | 没有入口 | 终端（要求 cca App 先退出） |
+
 ## 5. `cca gui`
 
 - `cca gui`：打开 App；没装、或者版本和 cca 不同，先下载装好（只装和当前 cca 版本号相同的 App）。
@@ -408,7 +482,7 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 
 ## 6. 终端交接
 
-`terminal` 事件、`hello.installed == false`、账号的「终端」按钮（`cca [codex] @账号`）、以及 App 里“添加账号”之类的入口，都在终端里运行对应的 cca 命令：App 在
+`terminal` 事件、`hello.installed == false`、账号的「终端」按钮（`cca [codex] @账号`）、以及还没搬进提问会话（4.6）的入口（cca 不支持提问会话时也是），都在终端里运行对应的 cca 命令：App 在
 `~/Library/Caches/local.cca.app/handoff/` 写一个临时的 `.command` 文件（`#!/bin/bash`，先把自己挪走再删掉，补好 `PATH`，去掉 `CCA_GUI` 等 App 给 cca 的变量，要换文件夹时先 `cd`，再运行逐个加了引号的
 命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的；账号的会话结束后留在用户的登录 shell 里），`chmod 755` 后用用户选的终端打开。都不需要“自动化”权限。
 一小时前留下的 `.command` 文件 App 会清掉。用户回到 App（App 被激活）时重新读一次 `state`。

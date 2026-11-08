@@ -168,6 +168,7 @@ enum Texts {
         case .unsupported: return "这个版本不支持查用量"
         case .timeout: return "查询超时"
         case .nolimits: return "没有拿到用量数据"
+        case .auth: return "登录已失效"
         default: return "查询失败"
         }
     }
@@ -369,6 +370,7 @@ enum Texts {
         switch e.mood {
         case .absent: return "还没登录"
         case .wrongPerson(let email): return email.map { "登录的是 \($0)" } ?? "登录的不是这个账号"
+        case .expired: return brief ? "登录已失效" : "登录已失效，要重新登录"
         case .unwell(let a): return ailment(a)
         case .resting(let until): return "额度用完了" + (until.map { "，" + backAt(epoch: $0, now: now) } ?? "")
         case .working where brief: return "在用" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "")
@@ -394,7 +396,7 @@ enum Texts {
     static func officeSummary(_ c: OfficeCensus, brief: Bool = false) -> String {
         if c.total == 0 { return "还没有账号" }
         let rest: [(Int, String)] = brief ? [(c.working, "在用")]
-            : [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "没登录"), (c.wrongPerson, "登错号"), (c.unwell, "有问题")]
+            : [(c.working, "在用"), (c.idle, "空闲"), (c.resting, "额度用完"), (c.absent, "没登录"), (c.wrongPerson, "登错号"), (c.expired, "登录失效"), (c.unwell, "有问题")]
         return (["\(c.total) 个账号"] + rest.filter { $0.0 > 0 }.map { "\($0.0) 个\($0.1)" }).joined(separator: " · ")
     }
 

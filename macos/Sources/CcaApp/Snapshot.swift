@@ -77,6 +77,12 @@ enum Snapshot {
             Scene(name: "client-updates") { m in
                 m.selection = .clientUpdates
             },
+            // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
+            Scene(name: "pinned") { m in
+                m.tool = .claude
+                if let a = m.accounts(.claude).last(where: { !$0.isAPI && $0.login == .loggedIn }), !m.isOnTop(a) { m.setOnTop(a, true) }
+                m.selection = .office
+            },
         ]
         let only = Set((ProcessInfo.processInfo.environment["CCA_GUI_SNAPSHOT_SCENES"] ?? "")
             .split(separator: ",").map(String.init))
@@ -127,6 +133,41 @@ enum Snapshot {
             }
             guide.sheet = nil
             try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+        // 在 App 里问完的流程（提问会话）：每一页截一张弹层（CCA_GUI_FIXTURES 里的 flow_*.flow）
+        if only.isEmpty || only.contains("flow") {
+            func demo(_ name: String, _ title: String) -> Handoff { Handoff(arguments: [name], title: title, inApp: true) }
+            let add = Handoff.addAccount(prefix: [], product: "Claude")
+            let flows: [(String, Handoff, Int)] = [
+                ("flow-add", add, 0), ("flow-add-error", add, 1), ("flow-add-node", add, 2),
+                ("flow-api", .addAPI(), 0), ("flow-api-node", .addAPI(), 1),
+                ("flow-key", .apiKey(prefix: [], key: "kimi", name: "kimi"), 0),
+                ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
+                ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),
+                ("flow-warned", demo("demo-warned", "添加 Claude 账号"), 0),
+                ("flow-failed", demo("demo-failed", "添加第三方 API 账号"), 0),
+            ]
+            for (name, handoff, pages) in flows {
+                model.run(handoff)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                for _ in 0..<pages {
+                    guard let f = model.flow, case .asking(let e) = f.phase else { break }
+                    for x in e.fields {
+                        if x.kind == .secret { f.setSecret(x.id, "demo-demo") } else if (f.draft[x.id] ?? "").isEmpty { f.draft[x.id] = "demo" }
+                    }
+                    f.submit()
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                }
+                for (label, appearance) in appearances {
+                    NSApp.appearance = NSAppearance(named: appearance)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if let sheet = window.attachedSheet {
+                        await capture(sheet, to: dir.appendingPathComponent("\(name)-\(label).png"))
+                    }
+                }
+                model.flow?.cancel()
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
         }
         // 更新了什么：每个版本一张（WhatsNew.all：开发版里还没发布的那一版也截）
         if only.isEmpty || only.contains("whatsnew") {

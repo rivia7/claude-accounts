@@ -39,11 +39,14 @@ struct FailureInfo: Equatable, Identifiable {
 enum Sheet: Identifiable, Equatable {
     case handoff(Handoff)
     case failure(FailureInfo)
+    /// 在 App 里问完的流程（提问会话，PROTOCOL 4.6）。
+    case flow(FlowModel)
 
     var id: String {
         switch self {
         case .handoff(let h): return "handoff:" + h.id
         case .failure(let f): return "failure:" + f.id.uuidString
+        case .flow(let f): return "flow:" + f.id.uuidString
         }
     }
 }
@@ -125,11 +128,18 @@ final class AppModel {
     private(set) var usageRefreshingKeys: Set<AccountRef> = []
     /// 自动刷新上次试过的时间：查失败时 fetchedEpoch 不变，靠它按间隔重试，不每分钟试一次。
     @ObservationIgnored private var usageAttempted: [AccountRef: Double] = [:]
+    /// 自动检测出口：上次试的时间、正在测的工具
+    @ObservationIgnored private var exitAttempted: [AccountRef: Double] = [:]
+    @ObservationIgnored private var exitPolling: Set<ToolID> = []
+    /// 什么时候点的“重新登录”（UsagePolling.reloginWatch 之内盯着它）
+    @ObservationIgnored private var reloginStarted: [AccountRef: Double] = [:]
     /// 后台自动刷新用量时遇到的、需要用户同意的事（不弹框，显示一条提示，点了再手动刷新）。
     private(set) var usageNeedsConsent: [ToolID: [ConsentEvent]] = [:]
     /// 后台自动刷新用量失败（不弹框，显示一条可以重试的提示）。
     private(set) var usageFailure: [ToolID: Failure] = [:]
     private(set) var activities: [AccountRef: Activity] = [:]
+    /// 账号在各组里的排序和置顶（用户拖的；存在 App 的设置里）
+    private(set) var arrangement = AccountArrangement()
     private(set) var syncActivity: Activity?
     /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
     /// （`cca gui update`）；cca 已经比 App 新时只有后一步。
@@ -248,6 +258,8 @@ final class AppModel {
         static let terminalApp = "terminal.app"
         /// 账号的终端会话最近打开过的文件夹（一行一个）
         static let terminalDirectories = "terminal.directories"
+        /// 账号在各组里的排序和置顶（AccountArrangement 的 JSON）
+        static let arrangement = "accounts.arrangement"
         /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
@@ -264,6 +276,10 @@ final class AppModel {
         self.scheduler = scheduler ?? Scheduler()
         terminalID = defaults.string(forKey: Prefs.terminalApp)
         terminalDirectories = (defaults.string(forKey: Prefs.terminalDirectories) ?? "").split(separator: "\n").map(String.init)
+        if let s = defaults.string(forKey: Prefs.arrangement),
+           let saved = try? JSONDecoder().decode(AccountArrangement.self, from: Data(s.utf8)) {
+            arrangement = saved
+        }
         if let transport {
             self.transport = transport
             isFixtureMode = transport.isFixture
@@ -549,20 +565,34 @@ final class AppModel {
         return run
     }
 
-    /// 自动刷新用量（定时器每分钟一次，App 变得看得见时也来一次）：只查到期的账号（UsagePolling）。
+    /// 登录已失效（查用量时才知道：本地的登录信息还在，所以 cca 算的 login 还是已登录）。
+    func loginExpired(_ a: Account) -> Bool { usage(for: a)?.errorCode == .auth }
+
+    /// 自动刷新用量、检测出口（定时器每分钟一次，App 变得看得见时也来一次）：只查到期的账号（UsagePolling、ExitPolling）。
     func refreshUsageIfNeeded() {
         guard phase == .ready else { return }
         let conditions = hooks.systemConditions()
         guard conditions.idleSeconds < UsagePolling.awayAfter, !conditions.thermalPressure else { return }
         guard dirty, !isVisible else {
-            startDueUsageRuns(lowPower: conditions.lowPower)
+            startDueRuns(lowPower: conditions.lowPower)
             return
         }
         dirty = false   // 看不见时 state 只记下“变了”，要判断哪些账号在用时才读
         track { [weak self] in
             await self?.loadState()
-            self?.startDueUsageRuns(lowPower: conditions.lowPower)
+            self?.startDueRuns(lowPower: conditions.lowPower)
         }
+    }
+
+    private func startDueRuns(lowPower: Bool) {
+        startDueUsageRuns(lowPower: lowPower)
+        startDueExitChecks(lowPower: lowPower)
+    }
+
+    /// 刚点了“重新登录”、还没看到成功：这段时间每分钟查一次（登录过程中查到“没登录”不花什么）。
+    private func isRelogging(_ a: Account, now: Double) -> Bool {
+        guard let started = reloginStarted[a.ref], now - started < UsagePolling.reloginWatch else { return false }
+        return a.login != .loggedIn || usage(for: a)?.errorCode != nil
     }
 
     private func startDueUsageRuns(lowPower: Bool) {
@@ -571,9 +601,10 @@ final class AppModel {
             // 同一个工具一次只查一批；看不见时，等着用户同意的不白跑
             guard !usageRefreshing.contains(t), !usageRefreshingKeys.contains(where: { $0.tool == t }),
                   isVisible || usageNeedsConsent[t] == nil else { continue }
-            let items = accounts(t).filter { $0.can.usage && $0.login == .loggedIn }.map { a in
+            let items = accounts(t).filter { ($0.can.usage && $0.login == .loggedIn) || isRelogging($0, now: now) }.map { a in
                 UsagePolling.Item(key: a.key, inUse: a.appRunning || a.cliSessions > 0,
-                                  updated: max(usage(for: a)?.fetchedEpoch ?? 0, usageAttempted[a.ref] ?? 0))
+                                  updated: max(usage(for: a)?.fetchedEpoch ?? 0, usageAttempted[a.ref] ?? 0),
+                                  login: isRelogging(a, now: now) ? .relogging : loginExpired(a) ? .expired : .normal)
             }
             let keys = UsagePolling.dueKeys(items, visible: isVisible, lowPower: lowPower, now: now)
             if !keys.isEmpty { pollUsage(t, keys: keys, now: now) }
@@ -590,6 +621,33 @@ final class AppModel {
             guard let self else { return }
             self.usageRefreshingKeys.subtract(refs)
             await self.finishUsage(t, doc: doc, result: r, manual: false)
+        }
+    }
+
+    /// 自动检测出口：只测到期的账号（ExitPolling），结果 cca 记进各账号的 health.json，读一次 state 就有了。不弹框、不占用账号的按钮；
+    /// 没测成就等下一轮（`exitAttempted`），账号页上照样有“多久以前测的”。没登录的账号用不了，不测。
+    private func startDueExitChecks(lowPower: Bool) {
+        guard let client else { return }
+        let now = Date().timeIntervalSince1970
+        for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
+            // 一个工具一次只测一批；正在查用量时等下一分钟（两边都要核实路由器上的节点，错开）
+            guard !exitPolling.contains(t), !usageRefreshing.contains(t),
+                  !usageRefreshingKeys.contains(where: { $0.tool == t }) else { continue }
+            let items = accounts(t).filter { $0.can.check && ($0.isAPI || $0.login == .loggedIn) && activities[$0.ref] == nil }.map { a in
+                // 换了节点的旧结果说的不是现在的出口：算没测过
+                UsagePolling.Item(key: a.key, inUse: a.appRunning || a.cliSessions > 0,
+                                  updated: max(a.health?.applies == true ? a.health?.checkedAt ?? 0 : 0, exitAttempted[a.ref] ?? 0))
+            }
+            let keys = ExitPolling.dueKeys(items, visible: isVisible, lowPower: lowPower, now: now)
+            guard !keys.isEmpty else { continue }
+            for k in keys { exitAttempted[AccountRef(tool: t, key: k)] = now }
+            exitPolling.insert(t)
+            track { [weak self] in
+                _ = await client.execute(.checkPoll(t, keys: keys), prompter: nil)
+                guard let self else { return }
+                self.exitPolling.remove(t)
+                await self.loadState()
+            }
         }
     }
 
@@ -798,8 +856,78 @@ final class AppModel {
     }
 
     func present(_ s: Sheet) {
+        // 流程问到一半时不能被别的弹层顶掉：排着，流程结束再出
+        if flow != nil {
+            queuedSheet = s
+            return
+        }
         sheet = s
         hooks.showMainWindow()
+    }
+
+    // MARK: 提问会话（PROTOCOL 4.6）
+
+    /// 正在 App 里问的流程（同一时间一个）。
+    private(set) var flow: FlowModel?
+    @ObservationIgnored private var queuedSheet: Sheet?
+
+    var promptSupported: Bool { hello?.prompt == PromptAPI.version }
+
+    /// 运行一条要和用户交互的命令：能在 App 里问完的在 App 里问，否则（cca 太旧、这条还没搬过来）开终端。
+    func run(_ h: Handoff) {
+        guard h.inApp, promptSupported, flow == nil, let client else {
+            if flow == nil { runInTerminal(h) }
+            return
+        }
+        do {
+            let session = try client.startSession(h.arguments)
+            let f = FlowModel(handoff: h, session: session) { [weak self] flow, end in
+                self?.flowEnded(flow, end)
+            }
+            flow = f
+            sheet = .flow(f)
+            hooks.showMainWindow()
+        } catch {
+            runInTerminal(h)
+        }
+    }
+
+    private func flowEnded(_ f: FlowModel, _ end: FlowModel.End) {
+        guard flow === f else { return }
+        var result: ResultEvent?
+        switch end {
+        case .success(let r):
+            result = r
+            if let m = nonEmpty(r?.message) { showToast(m, .success) }
+        case .cancelled:
+            break
+        case .terminal(let t):
+            queuedSheet = .handoff(Handoff(event: t))
+        }
+        finishFlow(result)
+    }
+
+    /// 关掉结束了的流程（失败页、提醒页的“好”）。
+    func closeFlow(_ f: FlowModel) {
+        guard flow === f else { return }
+        finishFlow(f.result)
+    }
+
+    private func finishFlow(_ result: ResultEvent?) {
+        flow = nil
+        sheet = queuedSheet
+        queuedSheet = nil
+        if sheet != nil { hooks.showMainWindow() }
+        Task { [weak self] in
+            guard let self else { return }
+            // 重新跑 hello：第一次添加 ChatGPT 账号时 Codex 才启用
+            await self.connect()
+            if let r = result, r.code == .added, let key = r.key {
+                let ref = AccountRef(tool: r.tool ?? .claude, key: key)
+                if self.account(ref) != nil { self.show(ref) }
+            }
+            if self.liveVisible { self.refreshLive() }
+        }
     }
 
     func dismissSheet() {
@@ -966,7 +1094,19 @@ final class AppModel {
     }
 
     func loginHandoff(_ a: Account) -> Handoff {
-        .login(prefix: prefix(a.tool), key: a.key, name: a.displayName)
+        a.login == .loggedOut ? .login(prefix: prefix(a.tool), key: a.key, name: a.displayName)
+            : .relogin(prefix: prefix(a.tool), key: a.key, name: a.displayName)
+    }
+
+    /// 登录、重新登录（在终端里）。`cca login` 会先退出现在的登录：登录还好好的账号先弹窗说清楚，点错了可以取消。
+    func relogin(_ a: Account) {
+        reloginStarted[a.ref] = Date().timeIntervalSince1970
+        let h = loginHandoff(a)
+        if a.login == .loggedIn, !loginExpired(a) {
+            present(.handoff(h))
+        } else {
+            runInTerminal(h)
+        }
     }
 
     // MARK: 重置额度
@@ -1368,7 +1508,7 @@ final class AppModel {
 
     // MARK: 选择
 
-    /// 在终端里添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）。
+    /// 添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）。
     func addHandoff(_ d: Employee.Department) -> Handoff { d.addHandoff(codexPrefix: prefix(.codex)) }
 
     /// 打开一个账号的页面（办公室的工位、分流图里的账号）：侧栏的工具跟着换过去。
@@ -1380,11 +1520,73 @@ final class AppModel {
     /// 办公室：按组排好的工位，每个账号此刻的样子（和账号页那句话用同一份用量、实况）。
     func office(now: Double) -> Office {
         Office.make(tools: state?.tools ?? [], codexEnabled: codexEnabled, usage: { self.usage(for: $0) },
-                    live: { self.liveSlot(for: $0) }, now: now)
+                    live: { self.liveSlot(for: $0) }, now: now,
+                    arrange: { d, people in self.arrangement.arranged(people, group: d.key, id: \.account.stableID) })
+    }
+
+    // MARK: 账号怎么排（拖动、置顶）
+
+    func isOnTop(_ a: Account) -> Bool { arrangement.top.contains(a.stableID) }
+
+    func setOnTop(_ a: Account, _ on: Bool) {
+        arrangement.setTop(a.stableID, on)
+        saveArrangement()
+    }
+
+    /// 这个组的全部账号，按用户排的顺序。第三方 API 账号的组是两个工具共用的。
+    private func arranged(_ d: Employee.Department) -> [Account] {
+        let members: [Account]
+        switch d {
+        case .claude: members = accounts(.claude).filter { !$0.isAPI }
+        case .chatgpt: members = accounts(.codex).filter { !$0.isAPI }
+        case .contractors: members = visibleTools.flatMap { accounts($0) }.filter(\.isAPI)
+        }
+        return arrangement.arranged(members, group: d.key, id: \.stableID)
+    }
+
+    /// 侧栏的分组：这个工具的官方账号（没有账号时这一组也在：标题上有添加按钮），有第三方 API 账号时再加一组。
+    func accountGroups(_ t: ToolID) -> [AccountGroup] {
+        let official: Employee.Department = t == .codex ? .chatgpt : .claude
+        var out = [AccountGroup(department: official, accounts: arranged(official))]
+        let api = arranged(.contractors).filter { $0.tool == t }
+        if !api.isEmpty { out.append(AccountGroup(department: .contractors, accounts: api)) }
+        return out
+    }
+
+    /// 这个工具的账号（官方的在前，各组里按用户排的顺序）：菜单栏面板、第一次选中哪个账号用。
+    func arrangedAccounts(_ t: ToolID) -> [Account] { accountGroups(t).flatMap(\.accounts) }
+
+    /// 拖动排序：shown 是这一组现在显示的账号（置顶的在前面）。置顶的只在置顶的里面挪，没置顶的只在没置顶的里面挪，
+    /// 拖过界的停在边上；要换区用「置顶」「取消置顶」。
+    func moveAccounts(_ d: Employee.Department, shown: [Account], from offsets: IndexSet, to destination: Int) {
+        guard let first = offsets.first, shown.indices.contains(first) else { return }
+        let onTop = isOnTop(shown[first])
+        let zone = shown.filter { isOnTop($0) == onTop }
+        let start = onTop ? 0 : shown.count - zone.count
+        let from = IndexSet(offsets.map { $0 - start }.filter { zone.indices.contains($0) })
+        arrangement.move(group: d.key, full: arranged(d).map(\.stableID), shown: zone.map(\.stableID), from: from,
+                         to: min(max(destination - start, 0), zone.count))
+        saveArrangement()
+    }
+
+    /// 总览：把账号拖到另一张卡片上，排到那张卡片的位置。只认同一组、同一区（置顶的 / 没置顶的）里的。
+    @discardableResult
+    func dropAccount(_ id: String, onto target: Account) -> Bool {
+        let d = Employee.department(of: target)
+        let list = arranged(d)
+        guard let from = list.firstIndex(where: { $0.stableID == id }), let to = list.firstIndex(of: target), from != to,
+              isOnTop(list[from]) == isOnTop(target) else { return false }
+        moveAccounts(d, shown: list, from: IndexSet(integer: from), to: from < to ? to + 1 : to)
+        return true
+    }
+
+    private func saveArrangement() {
+        guard !isFixtureMode, let d = try? JSONEncoder().encode(arrangement) else { return }
+        defaults.set(String(decoding: d, as: UTF8.self), forKey: Prefs.arrangement)
     }
 
     private func defaultSelection(for t: ToolID) -> SidebarItem? {
-        let list = accounts(t)
+        let list = arrangedAccounts(t)
         if let k = defaults.string(forKey: Prefs.selected(t)), list.contains(where: { $0.key == k }) {
             return .account(AccountRef(tool: t, key: k))
         }

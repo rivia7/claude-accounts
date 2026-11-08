@@ -11,6 +11,8 @@ enum CcaCommand: Sendable, Hashable {
     /// 自动刷新用量：只查到期的这几个账号，低优先级，最多同时查两个。
     case usagePoll(ToolID, keys: [String])
     case check(ToolID, key: String?)
+    /// 自动检测出口：只测到期的这几个账号，低优先级。
+    case checkPoll(ToolID, keys: [String])
     case app(ToolID, key: String)
     case web(ToolID, key: String)
     case routerSync
@@ -31,7 +33,7 @@ enum CcaCommand: Sendable, Hashable {
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
         case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -40,14 +42,14 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
         case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k): return k
-        case .usagePoll, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
+        case .usagePoll, .checkPoll, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
 
     /// 后台的活：低优先级运行。
     var isBackground: Bool {
         switch self {
-        case .usagePoll, .clientCheck(force: false): return true
+        case .usagePoll, .checkPoll, .clientCheck(force: false): return true
         default: return false
         }
     }
@@ -64,6 +66,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage(_, let k): return prefix + ["usage"] + (k.map { [$0] } ?? []) + ["--json"]
         case .usagePoll(_, let keys): return prefix + ["usage"] + keys + ["--json"]
         case .check(_, let k): return prefix + ["check"] + (k.map { [$0] } ?? []) + ["--json"]
+        case .checkPoll(_, let keys): return prefix + ["check"] + keys + ["--json"]
         case .app(_, let k): return prefix + ["app", k]
         case .web(_, let k): return prefix + ["web", k]
         case .routerSync: return ["router", "sync"]
@@ -83,6 +86,7 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage, .usagePoll: return 150
         case .check: return 180
+        case .checkPoll: return 300
         case .app, .web: return 120
         case .routerSync: return 180
         case .guiUpdate, .update: return 300
@@ -98,7 +102,7 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .routerSync, .reset, .clientInstall: return true
-        case .usage, .usagePoll, .check, .guiUpdate, .rename, .update, .updateCheck, .clientCheck, .clientMode: return false
+        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
 
@@ -112,7 +116,7 @@ enum CcaCommand: Sendable, Hashable {
         case .routerSync: return "router-sync"
         case .guiUpdate, .update: return "gui-update"
         case .clientCheck, .clientMode, .clientInstall: return "client-update"
-        case .check, .updateCheck: return nil
+        case .check, .checkPoll, .updateCheck: return nil
         }
     }
 }
@@ -271,6 +275,13 @@ actor CcaClient {
         } catch {
             throw CcaError.badOutput(String(describing: error), stderrTail: tail)
         }
+    }
+
+    // MARK: 提问会话（PROTOCOL 4.6）
+
+    /// App 同一时间只开一个流程，不用闸门；不限时（用户答题要多久就多久）。
+    nonisolated func startSession(_ arguments: [String]) throws -> CcaSession {
+        try transport.startSession(arguments)
     }
 
     // MARK: 会改东西的命令（PROTOCOL 4）

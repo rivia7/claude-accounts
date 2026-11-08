@@ -944,7 +944,7 @@ S
 # 假的 codex app-server（JSON-RPC，一行一个 JSON）：initialize；account/login/start 回登录网址，等 cca 在账号的浏览器里
 # 打开它（出现在 open.log 里）就当用户登录完了，写 auth.json（假的 id_token，邮箱默认取 CCA_ACCOUNT 里的，
 # 一次性的 codex_login_as 模拟登错号）；account/rateLimits/read 按登录的邮箱回 codex_usage/<邮箱>.json。
-# codex_rpc_off：不支持 app-server；codex_usage/unsupported、hang：不支持查用量、卡住
+# codex_rpc_off：不支持 app-server；codex_usage/unsupported、hang：不支持查用量、卡住；rpc_error：里面的话当出错说明回
 cat > "$T/fake_codex_server.py" <<'S'
 import base64, json, os, re, sys, time
 t, home = os.environ['CCA_T'], os.environ.get('CODEX_HOME', '')
@@ -1008,6 +1008,8 @@ for line in sys.stdin:
             time.sleep(60)
         if os.path.exists(os.path.join(u, 'unsupported')):
             send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found: account/rateLimits/read'}}); continue
+        if os.path.exists(os.path.join(u, 'rpc_error')):   # 这句话原样当 app-server 的出错说明（登录凭证失效之类）
+            send({'id': rid, 'error': {'code': -32603, 'message': open(os.path.join(u, 'rpc_error')).read()}}); continue
         p = os.path.join(u, email_now() + '.json')
         if not email_now():
             send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required'}})

@@ -433,6 +433,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     }
 
     var isAPI: Bool { kind == .api }
+    /// App 记排序、置顶时认账号用：工具 + 账号目录名（改别名不变）。
+    var stableID: String { tool.rawValue + ":" + (accountID ?? key) }
     /// 显示用的名字：别名，没有别名就是邮箱（cca 算好的 `name`）。
     var displayName: String { nonEmpty(name) ?? nonEmpty(alias) ?? nonEmpty(email) ?? key }
     var displayLabel: String { nonEmpty(label) ?? displayName }

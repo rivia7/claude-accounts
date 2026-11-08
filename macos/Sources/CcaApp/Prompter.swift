@@ -35,6 +35,7 @@ struct SheetView: View {
         switch sheet {
         case .handoff(let h): HandoffSheet(handoff: h)
         case .failure(let f): FailureSheet(info: f)
+        case .flow(let f): FlowSheet(flow: f)
         }
     }
 }
@@ -88,14 +89,29 @@ struct FailureSheet: View {
     let info: FailureInfo
 
     var body: some View {
-        let f = info.failure
+        FailureContent(title: info.title, failure: info.failure) { model.dismissSheet() }
+            .padding(22)
+            .frame(width: 500)
+    }
+}
+
+/// 失败页的内容（失败弹层、流程的失败页共用）。terminal：还可以改在终端里做这件事。
+struct FailureContent: View {
+    @Environment(AppModel.self) private var model
+    let title: String
+    let failure: Failure
+    var terminal: Handoff?
+    let done: () -> Void
+
+    var body: some View {
+        let f = failure
         let remedy = model.remedy(for: f)
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 26))
                     .foregroundStyle(.orange)
-                Text(info.title).font(.title3.weight(.semibold))
+                Text(title).font(.title3.weight(.semibold))
             }
             Text(f.message)
                 .fixedSize(horizontal: false, vertical: true)
@@ -114,21 +130,25 @@ struct FailureSheet: View {
                 }
             }
             HStack {
+                if let terminal {
+                    Button("改在终端里完成") {
+                        done()
+                        model.runInTerminal(terminal)
+                    }
+                }
                 Spacer()
                 if let title = remedy.title {
                     Button(title) {
-                        model.dismissSheet()
+                        done()
                         model.apply(remedy)
                     }
                     .buttonStyle(.glass)
                 }
-                Button("好") { model.dismissSheet() }
+                Button("好", action: done)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.glassProminent)
             }
         }
-        .padding(22)
-        .frame(width: 500)
     }
 }
 

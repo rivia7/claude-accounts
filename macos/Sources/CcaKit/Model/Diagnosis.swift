@@ -5,6 +5,8 @@ import Foundation
 enum Diagnosis: Equatable, Sendable {
     case loggedOut
     case emailMismatch(loginEmail: String?)
+    /// 看着还登录着，但凭证已经失效了（改过密码、在别处退出过；查用量时才知道）
+    case loginExpired
     /// 路由器 / 本机 Clash 上这个账号的端口连不上
     case portClosed
     /// 路由器给这个账号选错了节点
@@ -38,6 +40,7 @@ enum Diagnosis: Equatable, Sendable {
         case .emailMismatch: return [.emailMismatch(loginEmail: nonEmpty(a.loginEmail))]
         default: break
         }
+        if u?.errorCode == .auth { return [.loginExpired] }
         var out: [Diagnosis] = []
         switch live?.state {
         case .closed?: out.append(.portClosed)

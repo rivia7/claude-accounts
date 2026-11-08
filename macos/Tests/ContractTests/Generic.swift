@@ -392,6 +392,11 @@ func genericEvents(_ name: String, _ d: Data) -> [CcaEvent] {
             check("\(ln) result 有 code", !r.code.rawValue.isEmpty)
         case .step(let s):
             check("\(ln) step 有 code", !s.code.rawValue.isEmpty)
+        case .ask(let q):
+            check("\(ln) ask 有序号和题号", q.seq > 0 && !q.q.isEmpty, q.q)
+            check("\(ln) ask 的字段 App 都能显示", q.isDisplayable)
+            check("\(ln) 同一页的字段 id 不重复", Set(q.fields.map(\.id)).count == q.fields.count)
+            check("\(ln) 密文字段不带默认值和旧值", q.fields.allSatisfy { $0.kind != .secret || ($0.defaultValue.isEmpty && $0.value.isEmpty) })
         case .other:
             break
         }
@@ -725,6 +730,11 @@ func auditEvents(_ evs: [CcaEvent]) -> [String] {
         case .result(let x):
             a.add(p + ".code", x.code)
             a.add(p + ".route", x.route)
+        case .ask(let x):
+            for f in x.fields {
+                a.add(p + ".\(f.id).kind", f.kind)
+                a.add(p + ".\(f.id).severity", f.severity)
+            }
         case .other: break
         }
     }

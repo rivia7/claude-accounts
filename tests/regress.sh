@@ -939,6 +939,19 @@ touch "$T/codex_usage/hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca codex usage alice 2>&1); t1=$(date +%s)
 rm -f "$T/codex_usage/hang"
 ok "codex 查用量卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
+# 登录凭证失效（改过密码、在别处退出过）：本地的 auth.json 还在，cca 算的还是已登录，查用量时 codex 才说
+printf 'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.' > "$T/codex_usage/rpc_error"
+out=$(run COLUMNS=200 cca codex usage alice 2>&1); js=$(run cca codex usage alice --json 2>/dev/null); printf '%s' "$js" > "$T/usage_auth.json"
+ok "codex 说 token 刷新不了：原因是 auth（登录已失效，说清楚怎么重新登录），用缓存顶上" 'printf "%s" "$out" | grep -q "登录已失效" && printf "%s" "$out" | grep -q "cca codex login " && printf "%s" "$js" | python3 -c "import json,sys; a=json.load(sys.stdin)[\"accounts\"][0]; sys.exit(0 if a[\"error_code\"]==\"auth\" and a[\"source\"]==\"cache\" and \"revoked\" in a[\"error_detail\"] else 1)"'
+out=$(runev CCA_GRANT="reset_credit:${CD##*/}" cca codex reset alice --json 2>&1); rc=$?
+ok "重置额度遇到登录失效：说要登录（App 给重新登录的按钮），不说可能用掉了一次" '[ $rc -ne 0 ] && evq "e.get(\"ev\") == \"fail\" and e.get(\"code\") == \"not_logged_in\" and \"可能已经用掉\" not in e.get(\"message\", \"\")"'
+printf 'failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; content-type=application/json; body={}' > "$T/codex_usage/rpc_error"
+js=$(run cca codex usage alice --json 2>/dev/null)
+ok "服务器回 401 也算登录失效" 'printf "%s" "$js" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)[\"accounts\"][0][\"error_code\"]==\"auth\" else 1)"'
+printf 'failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 502 Bad Gateway; content-type=text/html; body=x' > "$T/codex_usage/rpc_error"
+js=$(run cca codex usage alice --json 2>/dev/null)
+rm -f "$T/codex_usage/rpc_error"
+ok "别的错不算登录失效（不能吓用户去重新登录）" 'printf "%s" "$js" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)[\"accounts\"][0][\"error_code\"]==\"error\" else 1)"'
 ccanned alice@example.com 13 41 promax 0; out=$(run cca codex usage alice 2>&1)
 ccanned alice@example.com 13 41 prolite; out2=$(run cca codex usage alice 2>&1)
 ok "套餐叫法和 codex 的一样：promax 是 Pro 500、prolite 是 Pro 100；剩余 0 次也写上，codex 没给重置次数（旧版本）就不写" 'printf "%s" "$out" | grep -qE "alice@example.com +Pro 500 +13%" && printf "%s" "$out" | grep -q "剩余重置 0 次；GPT-5-Pro" && printf "%s" "$out2" | grep -qE "alice@example.com +Pro 100 +13%" && printf "%s" "$out2" | grep -q "GPT-5-Pro 本周 30%" && ! printf "%s" "$out2" | grep -q "剩余重置"'
@@ -1064,6 +1077,11 @@ out=$(gj state)
 ok "_gui state 里的 health：就是这次的结果，加上多久前、是不是旧了、换没换节点" 'printf "%s" "$out" | jok "(lambda h: h[\"result\"] == \"ok\" and h[\"age_seconds\"] < 120 and h[\"stale\"] is False and h[\"applies\"] is True)(acct(0, \"alice@example.com\")[\"health\"])"'
 out=$(run cca check alice --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$GF/check.json"
 ok "cca check --json：stdout 只有 JSON（每个账号的检测结果），结果也记进 health.json（来源 check）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"check\" and d[\"tool\"] == \"claude\" and d[\"route\"] == \"router\" and d[\"accounts\"][0][\"key\"] == \"alice@example.com\" and d[\"accounts\"][0][\"health\"][\"result\"] == \"ok\" and d[\"shared_exit_ips\"] == []" && grep -q "\"source\": \"check\"" "$AD/health.json"'
+cp "$T/usage_auth.json" "$GF/usage_auth.json"
+out=$(run cca check kimi alice --json 2>/dev/null); rc=$?; out1=$(run cca check kimi --json 2>/dev/null)
+ok "cca check 可以写几个账号：只测写了的这几个（App 定时检测只测到期的）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "[a[\"key\"] for a in d[\"accounts\"]] == [\"kimi\", \"alice@example.com\"]" && printf "%s" "$out1" | jok "[a[\"key\"] for a in d[\"accounts\"]] == [\"kimi\"]"'
+out=$(run cca check 没有这个账号 --json 2>/dev/null); rc=$?
+ok "cca check 写错账号：报错退出" '[ $rc -ne 0 ]'
 # 同意：出口纯净度偏低时问要不要照样启动；授权要带出口 IP，换了 IP 不算
 printf '{"countryCode":"US","trust_score":30}' > "$T/risk/203.0.113.1.json"; : > open.log
 out=$(run cca app alice 2>&1 </dev/null); rc_plain=$?
@@ -1242,6 +1260,87 @@ zz_future;Zz_future|
 EOF
 rm -f "$DD/usage.json"; [ ! -f "$T/dave.usage.bak" ] || mv "$T/dave.usage.bak" "$DD/usage.json"
 ok "套餐档位（ChatGPT）：按原始套餐值查表（Pro 100 / 200 是 advanced，Pro 500 是 premium），表里没有的新套餐不猜；用量缓存里没有套餐时用登录信息里的${bad}" '[ -z "$bad" ]'
+# 10h. 提问会话（macos/PROTOCOL.md 4.6）：App 开的封闭流程，提问发成 ask 事件，答案从 fd 3 的管道读（tests/gui_session.py 扮演 App）
+sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道运行，stdin 接 /dev/null（App 就是这样开流程的）
+	local a="$1"; shift
+	: > "$T/ev.jsonl"
+	printf '%s' "$a" > "$T/sess.answers"
+	run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 python3 -I "$D/gui_session.py" "$T/ev.jsonl" "$T/sess.answers" "$@" </dev/null
+}
+asks() { python3 -I -c 'import json,sys; print(" ".join(e["q"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "ask"))' "$T/ev.jsonl"; }   # 问过的题号，按顺序
+tsum() { shasum < "$H/.cca/accounts.json"; }
+ok "提问会话：hello 说明支持（App 据此决定用不用它）" 'gj hello | jok "d[\"prompt\"] == 1"'
+out=$(run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 cca add 2>&1 </dev/null); rc=$?
+ok "提问会话：设了 CCA_PROMPT 却没有答案管道：和非交互一样，不提问" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "需要在终端里交互运行"'
+N2=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"][1])' "$H/.cca/config.json")
+before=$(tsum)
+out=$(sess '{}' --eof-at add.basic -- cca add 2>&1); rc=$?
+ok "提问会话：中途取消（App 关掉答案管道）：账号表不变，退出码不是 0，原因是 cancelled" '[ $rc -ne 0 ] && [ "$(tsum)" = "$before" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
+out=$(sess '{"add.basic":[{"email":"x@example.com","alias":""}]}' --wrong-field add.basic -- cca add 2>&1); rc=$?
+ok "提问会话：一页的答案字段对不上：停下，不把值放错地方" '[ $rc -ne 0 ] && [ "$(tsum)" = "$before" ]'
+out=$(sess '{"add.basic":[{"email":"x@example.com","alias":""}],"add.node":[{"v":"1"}]}' --wrong-field add.node -- cca add 2>&1); rc=$?
+ok "提问会话：只有一个字段的题，字段对不上也停下，不干等" '[ $rc -ne 0 ] && [ "$(tsum)" = "$before" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
+a='{"add.basic":[{"email":"不是邮箱","alias":"图一"},{"email":"Gui1@Example.com","alias":"图一"}],"add.node":[{"v":"2"}]}'
+out=$(sess "$a" --stale -- cca add 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_add.jsonl"
+ok "提问会话：添加官方账号：邮箱和别名一页，节点一页；邮箱不合格带着原因重问，已填的带回去；过期的重复答案被丢弃" '[ $rc -eq 0 ] && [ "$(asks)" = "add.basic add.basic add.node" ] && evq "e.get(\"seq\") == 2 and e[\"fields\"][0][\"error\"] and e[\"fields\"][0][\"value\"] == \"不是邮箱\" and e[\"fields\"][1][\"value\"] == \"图一\"" && tblok "t.get(\"图一(gui1@example.com)\") == \"$N2\""'
+ok "提问会话：节点的选项有编号、节点名和“已被谁使用”，结果带账号的键" 'evq "e.get(\"q\") == \"add.node\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"2\" and e[\"fields\"][0][\"options\"][1][\"label\"] == \"$N2\" and any(\"已被\" in o[\"note\"] for o in e[\"fields\"][0][\"options\"])" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"added\" and e[\"key\"] == \"图一(gui1@example.com)\" and e[\"tool\"] == \"claude\""'
+S1=sk-GUI-PROMPT-SENTINEL-0123456789 S2=sk-GUI-PROMPT-SENTINEL2-9876543210
+: > env.log; : > security.log; : > ssh.log; : > curl.log; : > open.log; : > claude.log
+a='{"api.basic":[{"alias":"gui2","url":"https://api.example.com/anthropic","key":"S3NT","model":""},{"alias":"gui2","url":"https://api.example.com/anthropic","key":"'$S1'","model":"m-1"}],"api.node":[{"v":"1"}]}'
+out=$(sess "$a" -- cca add api 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_add_api.jsonl"
+KC2=$(echo "$T"/keychain/cca-api-gui2-*)
+ok "提问会话：添加第三方 API 账号：一页填完，key 不合格时带着原因重问（填过的 key 不带回去），选直连，key 进了钥匙串" '[ $rc -eq 0 ] && [ "$(asks)" = "api.basic api.basic api.node" ] && evq "e.get(\"seq\") == 2 and e[\"fields\"][2][\"kind\"] == \"secret\" and e[\"fields\"][2][\"error\"] and not e[\"fields\"][2][\"value\"] and e[\"fields\"][1][\"value\"] == \"https://api.example.com/anthropic\"" && [ "$(cat "$KC2/api.example.com")" = "$S1" ] && tblok "t[\"gui2\"][\"model\"] == \"m-1\" and \"node\" in t[\"gui2\"] and not t[\"gui2\"][\"node\"]"'
+ok "提问会话：key 不进事件文件、输出和任何命令行（假 security / ssh / curl / open / claude / env 都记着命令行）" '! printf "%s" "$out" | grep -qF "$S1" && ! grep -qF "$S1" "$T/ev.jsonl" env.log security.log ssh.log curl.log open.log claude.log && ! grep -qF S3NT "$T/ev.jsonl"'
+out=$(sess '{"key.secret":[{"s":"'$S2'"}]}' -- cca key gui2 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_key.jsonl"
+ok "提问会话：换 key：一个密文框，存进钥匙串，key 不进事件文件" '[ $rc -eq 0 ] && [ "$(asks)" = key.secret ] && [ "$(cat "$KC2/api.example.com")" = "$S2" ] && ! grep -qF "$S2" "$T/ev.jsonl" env.log security.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"key_saved\" and e[\"key\"] == \"gui2\""'
+out=$(sess '{"rm.confirm":[{"v":"n"}]}' -- cca rm gui2 2>&1); rc=$?
+ok "提问会话：删除账号答否：什么都不动，没有结果事件" '[ $rc -eq 0 ] && tblok "\"gui2\" in t" && [ "$(evn result)" = 0 ] && evq "e.get(\"q\") == \"rm.confirm\" and e[\"fields\"][0][\"default\"] == \"n\" and e[\"fields\"][0][\"severity\"] == \"warn\""'
+out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm gui2 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_rm.jsonl"
+ok "提问会话：删除账号答是：账号和钥匙串里的 key 都删了" '[ $rc -eq 0 ] && tblok "\"gui2\" not in t" && [ ! -e "$KC2/api.example.com" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"removed\""'
+out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm 图一 2>&1); rc=$?
+ok "提问会话：删除官方账号" '[ $rc -eq 0 ] && tblok "not any(\"gui1@\" in k for k in t)"'
+unlisten 7901; n=$(reloads)
+out=$(sess '{}' --eof-at consent.router_reload -- cca router sync 2>&1); rc=$?
+ok "提问会话：默认“是”的同意，问的时候 App 关掉管道：按取消，不重载" '[ $rc -ne 0 ] && [ "$(reloads)" = "$n" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
+out=$(sess '{"consent.router_reload":[{"v":"n"}]}' -- cca router sync 2>&1); rc=$?
+ok "提问会话：同意答否：不重载" '[ "$(reloads)" = "$n" ] && [ "$(evn consent)" = 0 ]'
+out=$(sess '{"consent.router_reload":[{"v":"y"}]}' -- cca router sync 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_consent.jsonl"
+ok "提问会话：同意当场问（不用重跑），带标题和完整的说明（路由器的说明有好几行，最后一行也在），答是就重载" '[ $rc -eq 0 ] && [ "$(reloads)" = "$((n + 1))" ] && evq "e.get(\"q\") == \"consent.router_reload\" and e[\"title\"] and e[\"fields\"][0][\"kind\"] == \"confirm\" and \"约 20 秒\" in e[\"fields\"][0][\"detail\"] and e[\"fields\"][0][\"default\"] == \"y\""'
+mv "$H/.cca/router_ed25519" "$T/rk.bak"
+out=$(sess '{}' -- cca add 2>&1); rc=$?
+mv "$T/rk.bak" "$H/.cca/router_ed25519"
+ok "提问会话：还没配置路由器：一个问题都不问，交给终端（terminal 事件：router setup）" '[ $rc -ne 0 ] && [ "$(evn ask)" = 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"router_setup\" and e[\"argv\"] == [\"router\", \"setup\"]"'
+# 节点在路由器上不见了（也认不出改成了哪个）：选一个代替，没有默认项，可以先不换
+cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"
+edit_table 'j["图四(gui4@example.com)"] = "US-D"'; run cca router sync >/dev/null 2>&1 </dev/null
+node_rn US-D 192.0.2.4 US-Z9 192.0.2.44; oc_restart
+out=$(sess '{"node.replace":[{"v":""}]}' -- cca router sync 2>&1); rc=$?
+pick=$(python3 -I -c 'import json,sys; print(next(o["value"] for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "node.replace" for o in e["fields"][0]["options"] if o["label"] == "US-B"))' "$T/ev.jsonl")
+ok "提问会话：节点不见了：选择题，没有默认项，可以先不换（账号表不变）" 'evq "e.get(\"q\") == \"node.replace\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"optional\"] and e[\"fields\"][0][\"skip\"] and not e[\"fields\"][0][\"default\"] and \"US-D\" in e[\"message\"]" && tblok "t.get(\"图四(gui4@example.com)\") == \"US-D\""'
+out=$(sess '{"node.replace":[{"v":"'$pick'"}]}' -- cca router sync 2>&1); rc=$?
+ok "提问会话：节点不见了：选了哪个就换成哪个" 'tblok "t.get(\"图四(gui4@example.com)\") == \"US-B\""'
+cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"
+node_rn US-Z9 192.0.2.44 US-D 192.0.2.4; oc_restart; run CCA_YES=1 cca router sync -y >/dev/null 2>&1 </dev/null
+lint_prompts() {   # 提问只能经基元：别的地方直接读 fd 3，图形界面就收不到这个问题；每个题号都要写进 PROTOCOL 的映射表
+	python3 -I - "$CCA" "$D/../macos/PROTOCOL.md" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+doc = open(sys.argv[2], encoding='utf-8').read()
+allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_fields', 'policy_guide', 'cmd_edit'}
+bad, fn = [], ''
+for line in src.split('\n'):
+    m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\(\) \{', line)
+    if m:
+        fn = m.group(1)
+    if '<&3' in line and ': <&3' not in line and not line.lstrip().startswith('#') and fn not in allowed:
+        bad.append(fn)
+qs = set(re.findall(r'\bq=([a-z_]+\.[a-z_.]+)', src)) | set(re.findall(r'ask_fields ([a-z]+\.[a-z_.]+) ', src))
+missing = sorted(q for q in qs if '`%s`' % q not in doc)
+print('ok' if not bad and not missing and qs else '：读 fd 3 的 %s；PROTOCOL 里没写的题号 %s' % (bad, missing))
+PY
+}
+lp=$(lint_prompts)
+ok "lint：提问只经基元（别处不读 fd 3），每个题号都在 PROTOCOL 的映射表里${lp#ok}" '[ "$lp" = ok ]'
 lint_tiers() {   # CODEX_TIERS 和 CODEX_PLANS 的键一一对应（OpenAI 加了新套餐，叫法和档位要一起补）
 	python3 -I - "$CCA" <<'PY'
 import ast, re, sys
@@ -1296,6 +1395,14 @@ li=$(lint_imports)
 ok "lint：PY_SRC 的函数里用到的标准库模块都 import 过（顶上只 import 每次都用的几个）${li#ok}" '[ "$li" = ok ]'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码这一节 cca 的真实输出（macos/test.sh）" 'bash "$D/../macos/test.sh" "$GF" > "$T/contract.log" 2>&1'
+	S3=sk-GUI-PROMPT-SENTINEL3-1357924680
+	printf '%s' '{"api.basic":[{"alias":"gui3","url":"https://api.example.com/anthropic","key":"'$S3'","model":""}],"api.node":[{"v":"1"}],"rm.confirm":[{"v":"y"}]}' > "$T/sess.answers"
+	: > env.log; : > security.log
+	out=$(run "$D/../macos/build/contract-tests" --session-smoke "$H/.local/bin/cca" "$T/sess.answers" add api 2>&1 </dev/null); rc=$?
+	KC3=$(echo "$T"/keychain/cca-api-gui3-*)
+	ok "提问会话：App 真正的答案管道（ProcessTransport）对真的 cca：添加第三方 API 账号，key 进了钥匙串，不进命令行" '[ $rc -eq 0 ] && [ "$(cat "$KC3/api.example.com")" = "$S3" ] && ! grep -qF "$S3" env.log security.log && ! printf "%s" "$out" | grep -qF "$S3"'
+	run "$D/../macos/build/contract-tests" --session-smoke "$H/.local/bin/cca" "$T/sess.answers" rm gui3 >/dev/null 2>&1 </dev/null
+	ok "提问会话：真的答案管道：删除账号" 'tblok "\"gui3\" not in t"'
 else
 	echo "SKIP  App 的契约测试（没有 swiftc 或 macos/test.sh）"
 fi

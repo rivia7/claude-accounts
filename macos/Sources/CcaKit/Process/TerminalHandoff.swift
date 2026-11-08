@@ -74,6 +74,8 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     var staysOpen = false
     /// 一定用系统自带的“终端”（选的终端没运行起来，用户点了改用它）。
     var systemTerminal = false
+    /// 这条流程能在 App 里问完（提问会话，PROTOCOL 4.6）；cca 不支持时照旧走终端。
+    var inApp = false
 
     var id: String { arguments.joined(separator: "\u{1F}") }
 
@@ -83,11 +85,12 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         return directory.map { "cd \(shellQuoteIfNeeded($0)) && \(run)" } ?? run
     }
 
-    init(arguments: [String], display: String? = nil, title: String, message: String = "") {
+    init(arguments: [String], display: String? = nil, title: String, message: String = "", inApp: Bool = false) {
         self.arguments = arguments
         self.display = display ?? displayCommand(arguments)
         self.title = title
         self.message = message
+        self.inApp = inApp
     }
 
     init(event: TerminalEvent) {
@@ -96,6 +99,12 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
 
     static func login(prefix: [String], key: String, name: String) -> Handoff {
         Handoff(arguments: prefix + ["login", key], title: "登录 \(name)", message: "在终端里登录这个账号，完成后回到 cca。")
+    }
+
+    /// `cca login` 会先退出现在的登录，再登录一次：改过密码、登录失效、登错号时用。
+    static func relogin(prefix: [String], key: String, name: String) -> Handoff {
+        Handoff(arguments: prefix + ["login", key], title: "重新登录 \(name)",
+                message: "会先退出这个账号现在的登录，再在它专属的浏览器窗口里重新登录，完成后回到 cca。")
     }
 
     /// 在终端里用这个账号（`cca @账号`），从 directory 启动。
@@ -111,11 +120,22 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     }
 
     static func addAccount(prefix: [String], product: String) -> Handoff {
-        Handoff(arguments: prefix + ["add"], title: "添加 \(product) 账号", message: "在终端里按提示添加账号并登录。")
+        Handoff(arguments: prefix + ["add"], title: "添加 \(product) 账号", message: "在终端里按提示添加账号并登录。", inApp: true)
     }
 
-    static let addAPI = Handoff(arguments: ["add", "api"], title: "添加第三方 API 账号",
-                                message: "在终端里填写接口地址、模型和 key（key 存进钥匙串，不经过 cca App）。")
+    static func addAPI(prefix: [String] = []) -> Handoff {
+        Handoff(arguments: prefix + ["add", "api"], title: "添加第三方 API 账号", message: "在终端里填写接口地址、模型和 key（key 存进钥匙串）。", inApp: true)
+    }
+
+    /// 更换第三方 API 账号的 key。
+    static func apiKey(prefix: [String], key: String, name: String) -> Handoff {
+        Handoff(arguments: prefix + ["key", key], title: "更换 \(name) 的 API key", message: "在终端里输入新的 key，存进钥匙串。", inApp: true)
+    }
+
+    static func remove(prefix: [String], key: String, name: String) -> Handoff {
+        Handoff(arguments: prefix + ["rm", key], title: "删除 \(name)", message: "在终端里确认后删除这个账号。", inApp: true)
+    }
+
     static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。")
     static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。")
     static let install = Handoff(arguments: ["install"], title: "安装 cca", message: "在终端里完成 cca 的安装。")
@@ -155,7 +175,7 @@ enum TerminalHandoff {
         mv -- "$0" "$0.run" 2>/dev/null || exit 0
         rm -f -- "$0.run"
         export PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
-        unset CCA_TTY CCA_YES CCA_GRANT CCA_EVENTS CCA_RO CCA_SKIP_CHECK CCA_GUI
+        unset CCA_TTY CCA_YES CCA_GRANT CCA_EVENTS CCA_RO CCA_SKIP_CHECK CCA_GUI CCA_PROMPT
         \(enter)printf '%s\\n\\n' \(shellQuote("$ " + h.display))
         \(command)
         status=$?

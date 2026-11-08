@@ -219,7 +219,7 @@ struct UpdateBanner: View {
     }
 }
 
-/// 工具栏：刷新、同步路由器（配置了路由器才有）、“＋”菜单（都在终端里完成）、新手教程。
+/// 工具栏：刷新、同步路由器（配置了路由器才有）、“＋”菜单、新手教程。
 struct MainToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
     @Environment(Guide.self) private var guide
@@ -247,7 +247,7 @@ struct MainToolbar: ToolbarContent {
             Menu {
                 ForEach(Employee.Department.allCases, id: \.self) { d in
                     let add = model.addHandoff(d)
-                    Button(add.title + "…") { model.runInTerminal(add) }
+                    Button(add.title + "…") { model.run(add) }
                 }
                 Divider()
                 Button("编辑 \(Texts.product(model.tool)) 账号表…") { model.runInTerminal(.edit(prefix: model.prefix(model.tool))) }
@@ -257,7 +257,7 @@ struct MainToolbar: ToolbarContent {
             } label: {
                 Label("添加", systemImage: "plus")
             }
-            .help("添加账号、编辑账号表、配置路由器（在终端里完成）")
+            .help("添加账号、编辑账号表、配置路由器")
         }
         ToolbarItem(placement: .primaryAction) {
             Button {

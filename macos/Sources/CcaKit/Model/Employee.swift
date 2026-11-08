@@ -15,6 +15,8 @@ struct Employee: Equatable, Sendable, Identifiable {
         case absent
         /// 登录的不是这个账号：工位上坐着别人
         case wrongPerson(loginEmail: String?)
+        /// 登录失效了（改过密码之类）：要重新登录
+        case expired
         /// 端口连不上、节点选错、出口有问题
         case unwell(Ailment)
         /// 5 小时或本周的额度用完了：趴着睡觉，until 是用完的窗口里最晚重置的时间
@@ -76,6 +78,7 @@ struct Employee: Equatable, Sendable, Identifiable {
             switch d {
             case .loggedOut: mood = mood ?? .absent
             case .emailMismatch(let e): mood = mood ?? .wrongPerson(loginEmail: e)
+            case .loginExpired: mood = mood ?? .expired
             case .portClosed: mood = mood ?? .unwell(.portClosed)
             case .portDrift: mood = mood ?? .unwell(.wrongNode)
             case .exitBad(let r, let region): mood = mood ?? .unwell(.exit(r, region: region))
@@ -96,17 +99,26 @@ struct Employee: Equatable, Sendable, Identifiable {
 }
 
 extension Employee.Department {
-    /// 在终端里添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）
+    /// App 设置里记这个组的排序用的名字
+    var key: String {
+        switch self {
+        case .claude: return "claude"
+        case .chatgpt: return "chatgpt"
+        case .contractors: return "api"
+        }
+    }
+
+    /// 添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）
     func addHandoff(codexPrefix: [String]) -> Handoff {
         switch self {
         case .claude: return .addAccount(prefix: [], product: "Claude")
         case .chatgpt: return .addAccount(prefix: codexPrefix, product: "ChatGPT")
-        case .contractors: return .addAPI
+        case .contractors: return .addAPI()
         }
     }
 }
 
-/// 整间办公室：按组排好的员工（组里照账号表的顺序，座位不会因为状态变了就挪），和一行点名。
+/// 整间办公室：按组排好的员工（组里按用户排的顺序，没排过的照账号表的顺序，座位不会因为状态变了就挪），和一行点名。
 struct Office: Equatable, Sendable {
     struct Room: Equatable, Sendable, Identifiable {
         var department: Employee.Department
@@ -121,21 +133,22 @@ struct Office: Equatable, Sendable {
 
     /// Claude 组一直有（空的也画出来，好让人知道从哪里添加）；ChatGPT 组在启用了 Codex 时有；外包有人才有。
     static func make(tools: [ToolState], codexEnabled: Bool, usage: (Account) -> UsageEntry?,
-                     live: (AccountRef) -> LiveSlot?, now: Double) -> Office {
+                     live: (AccountRef) -> LiveSlot?, now: Double,
+                     arrange: (Employee.Department, [Employee]) -> [Employee] = { $1 }) -> Office {
         let people = tools.filter { $0.id == .claude || ($0.id == .codex && codexEnabled) }
             .flatMap(\.accounts)
             .map { Employee.make($0, usage: usage($0), live: live($0.ref), now: now) }
         let byDept = Dictionary(grouping: people, by: \.department)
-        var rooms = [Room(department: .claude, people: byDept[.claude] ?? [])]
-        if codexEnabled { rooms.append(Room(department: .chatgpt, people: byDept[.chatgpt] ?? [])) }
-        if let c = byDept[.contractors], !c.isEmpty { rooms.append(Room(department: .contractors, people: c)) }
+        var rooms = [Room(department: .claude, people: arrange(.claude, byDept[.claude] ?? []))]
+        if codexEnabled { rooms.append(Room(department: .chatgpt, people: arrange(.chatgpt, byDept[.chatgpt] ?? []))) }
+        if let c = byDept[.contractors], !c.isEmpty { rooms.append(Room(department: .contractors, people: arrange(.contractors, c))) }
         return Office(rooms: rooms)
     }
 }
 
 /// 点名：几位员工，几个在忙、几个空闲……（办公室页顶上那一行、侧栏“办公室”那一行）
 struct OfficeCensus: Equatable, Sendable {
-    var total = 0, working = 0, idle = 0, resting = 0, absent = 0, wrongPerson = 0, unwell = 0
+    var total = 0, working = 0, idle = 0, resting = 0, absent = 0, wrongPerson = 0, expired = 0, unwell = 0
 
     init(_ people: [Employee]) {
         total = people.count
@@ -146,11 +159,12 @@ struct OfficeCensus: Equatable, Sendable {
             case .resting: resting += 1
             case .absent: absent += 1
             case .wrongPerson: wrongPerson += 1
+            case .expired: expired += 1
             case .unwell: unwell += 1
             }
         }
     }
 
-    /// 要用户动手的：没登录、登错号、线路或出口有问题
-    var needsAttention: Int { absent + wrongPerson + unwell }
+    /// 要用户动手的：没登录、登错号、登录失效、线路或出口有问题
+    var needsAttention: Int { absent + wrongPerson + expired + unwell }
 }

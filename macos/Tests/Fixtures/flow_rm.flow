@@ -1,0 +1,2 @@
+{"v":1,"ev":"ask","seq":1,"q":"rm.confirm","title":"删除账号","message":"","fields":[{"id":"v","kind":"confirm","label":"删除账号 工作（bob@example.com）？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）","default":"n","severity":"warn"}]}
+{"v":1,"ev":"result","code":"removed","tool":"claude","message":"已删除账号 工作（bob@example.com）"}

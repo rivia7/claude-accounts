@@ -1,0 +1,2 @@
+{"v":1,"ev":"result","code":"added","tool":"claude","key":"alice@example.com","message":"已添加 工作（bob@example.com），出口 US-C"}
+{"v":1,"ev":"fail","code":"sync_failed","message":"路由器同步没完成：修好后运行 cca router sync"}

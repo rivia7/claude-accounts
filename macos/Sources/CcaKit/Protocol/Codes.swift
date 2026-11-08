@@ -189,8 +189,10 @@ struct UsageErrorCode: KnownValues {
     static let unsupported = UsageErrorCode(rawValue: "unsupported")
     static let timeout = UsageErrorCode(rawValue: "timeout")
     static let nolimits = UsageErrorCode(rawValue: "nolimits")
+    /// 登录凭证失效了（改过密码、在别处退出过）：本地看着还登录着，要重新登录
+    static let auth = UsageErrorCode(rawValue: "auth")
     static let error = UsageErrorCode(rawValue: "error")
-    static let allKnown: [UsageErrorCode] = [.login, .mismatch, .route, .port, .region, .trace, .unsupported, .timeout, .nolimits, .error]
+    static let allKnown: [UsageErrorCode] = [.login, .mismatch, .route, .port, .region, .trace, .unsupported, .timeout, .nolimits, .auth, .error]
 }
 
 struct HealthSource: KnownValues {
@@ -244,7 +246,8 @@ struct EventType: KnownValues {
     static let terminal = EventType(rawValue: "terminal")
     static let fail = EventType(rawValue: "fail")
     static let result = EventType(rawValue: "result")
-    static let allKnown: [EventType] = [.step, .consent, .terminal, .fail, .result]
+    static let ask = EventType(rawValue: "ask")
+    static let allKnown: [EventType] = [.step, .consent, .terminal, .fail, .result, .ask]
 }
 
 struct StepCode: KnownValues {
@@ -262,7 +265,11 @@ struct ResultCode: KnownValues {
     init(rawValue: String) { self.rawValue = rawValue }
     static let opened = ResultCode(rawValue: "opened")
     static let activated = ResultCode(rawValue: "activated")
-    static let allKnown: [ResultCode] = [.opened, .activated]
+    /// 提问会话做完了（PROTOCOL 4.6）。
+    static let added = ResultCode(rawValue: "added")
+    static let keySaved = ResultCode(rawValue: "key_saved")
+    static let removed = ResultCode(rawValue: "removed")
+    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed]
 }
 
 struct FailCode: KnownValues {
@@ -299,7 +306,11 @@ struct FailCode: KnownValues {
     static let noResetCredit = FailCode(rawValue: "no_reset_credit")
     /// 重置额度：这个版本的 codex 不支持（升级后再试）。
     static let resetUnsupported = FailCode(rawValue: "reset_unsupported")
-    static let allKnown: [FailCode] = [.error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
+    /// 提问会话被取消了（App 关掉了答案管道）。
+    static let cancelled = FailCode(rawValue: "cancelled")
+    /// 删除账号：它的桌面 App 还开着。
+    static let appRunning = FailCode(rawValue: "app_running")
+    static let allKnown: [FailCode] = [.cancelled, .appRunning, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,

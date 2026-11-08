@@ -93,20 +93,26 @@ struct UsageSection: View {
                         .padding(.horizontal, 4)
                 }
                 if let code = u.errorCode {
-                    Label(nonEmpty(u.error) ?? Texts.usageError(code), systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .symbolRenderingMode(.multicolor)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Label(nonEmpty(u.error) ?? Texts.usageError(code), systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .symbolRenderingMode(.multicolor)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        reloginLink(u)
+                    }
                 }
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Text(emptyReason).foregroundStyle(.secondary)
                 if let u = model.usage(for: account), let e = nonEmpty(u.error) {
-                    Label(e, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
-                        .symbolRenderingMode(.multicolor)
-                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Label(e, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
+                            .symbolRenderingMode(.multicolor)
+                            .textSelection(.enabled)
+                        reloginLink(u)
+                    }
                 }
             }
             .padding(16)
@@ -115,10 +121,22 @@ struct UsageSection: View {
         }
     }
 
+    /// 查到的结果里没有用量：Claude 登录失效时只会这样（分不清是不是别的原因），放个重新登录的入口；
+    /// 确定失效了的（`auth`）名字旁边的主按钮已经是重新登录了。
+    @ViewBuilder
+    private func reloginLink(_ u: UsageEntry) -> some View {
+        if u.errorCode == .nolimits, !account.isAPI {
+            Button("重新登录…") { model.relogin(account) }
+                .buttonStyle(.borderless)
+                .font(.caption)
+        }
+    }
+
     private var emptyReason: String {
         if let why = account.canWhy["usage"], !account.can.usage {
             return Texts.canWhy(why, appLabel: model.appLabel(account.tool), tool: account.tool)
         }
+        if model.loginExpired(account) { return "登录已失效，查不了用量。" }
         switch account.login {
         case .loggedOut: return "还没登录，查不了用量。"
         case .emailMismatch: return "登录的不是这个账号，查不了用量。"

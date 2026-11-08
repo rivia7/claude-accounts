@@ -229,7 +229,7 @@ func handoffTests() async {
     check("放了很久的交接文件清掉", !FileManager.default.fileExists(atPath: old.path))
     let noDisplay = EventLog.parseLine(Data(#"{"v":1,"ev":"terminal","code":"login","argv":["login","工作(bob@example.com)"],"message":""}"#.utf8))
     check("terminal 事件没给 display 时按参数拼（加引号）", noDisplay?.terminal.map { Handoff(event: $0).display } == "cca login '工作(bob@example.com)'")
-    check("Handoff 的常用入口", Handoff.addAPI.arguments == ["add", "api"]
+    check("Handoff 的常用入口", Handoff.addAPI().arguments == ["add", "api"]
           && Handoff.routerSetup.arguments == ["router", "setup"] && Handoff.localSetup.arguments == ["local", "setup"]
           && Handoff.addAccount(prefix: ["codex"], product: "ChatGPT").arguments == ["codex", "add"]
           && Handoff.edit(prefix: ["codex"]).display == "cca codex edit")

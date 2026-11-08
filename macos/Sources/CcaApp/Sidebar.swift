@@ -23,20 +23,9 @@ struct Sidebar: View {
                 .sidebarRowPadding()
                 .tag(SidebarItem.clientUpdates)
             }
-            Section {
-                let accounts = model.accounts(model.tool)
-                if accounts.isEmpty, model.state != nil {
-                    Text(model.tool == .codex ? "还没有 ChatGPT 账号" : "还没有账号")
-                        .foregroundStyle(.plainSecondary)
-                        .font(.callout)
-                }
-                ForEach(accounts) { a in
-                    AccountRow(account: a)
-                        .tag(SidebarItem.account(a.ref))
-                        .contextMenu { AccountMenu(account: a) }
-                }
-            } header: {
-                Text(Texts.product(model.tool) + " 账号").foregroundStyle(PlainSecondary(system: .tertiary))
+            let groups = model.accountGroups(model.tool)
+            ForEach(groups) { g in
+                AccountSection(group: g, showsAdd: g.id == groups.first?.id)
             }
         }
         .listStyle(.sidebar)
@@ -60,6 +49,63 @@ struct Sidebar: View {
     }
 }
 
+/// 侧栏的一组账号：上下拖动调整顺序（只影响 App 里的显示），标题上有添加账号的按钮。
+private struct AccountSection: View {
+    @Environment(AppModel.self) private var model
+    let group: AccountGroup
+    let showsAdd: Bool
+
+    var body: some View {
+        Section {
+            if group.accounts.isEmpty, model.state != nil {
+                Text("还没有 \(Texts.product(model.tool)) 账号")
+                    .foregroundStyle(.plainSecondary)
+                    .font(.callout)
+            }
+            ForEach(group.accounts) { a in
+                AccountRow(account: a)
+                    .tag(SidebarItem.account(a.ref))
+                    .contextMenu { AccountMenu(account: a) }
+            }
+            .onMove { model.moveAccounts(group.department, shown: group.accounts, from: $0, to: $1) }
+        } header: {
+            HStack(spacing: 4) {
+                Text(Texts.department(group.department)).foregroundStyle(PlainSecondary(system: .tertiary))
+                Spacer(minLength: 4)
+                if showsAdd { AddAccountMenu() }
+            }
+        }
+    }
+}
+
+/// 添加账号：这个工具的官方账号，或者第三方 API 账号。
+private struct AddAccountMenu: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let t = model.tool
+        let official = model.addHandoff(t == .codex ? .chatgpt : .claude)
+        let api = Handoff.addAPI(prefix: model.prefix(t))
+        Menu {
+            Button(official.title + "…") { model.run(official) }
+            Button(api.title + "…") { model.run(api) }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 20, height: 18)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(.plainSecondary)
+        .disabled(model.phase != .ready)
+        .help("添加账号")
+        .accessibilityLabel("添加账号")
+    }
+}
+
 /// 账号的右键菜单（侧栏的账号、办公室的工位共用）。
 struct AccountMenu: View {
     @Environment(AppModel.self) private var model
@@ -80,6 +126,30 @@ struct AccountMenu: View {
             .disabled(!a.can.cli || busy)
         Button("检测出口") { model.checkExit(a.ref) }
             .disabled(!a.can.check || busy)
+        Divider()
+        AccountManageItems(account: a, busy: busy)
+    }
+}
+
+/// 管理账号的菜单项（右键菜单、账号页头部的“更多”共用）。
+struct AccountManageItems: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+    let busy: Bool
+
+    var body: some View {
+        let a = account
+        let top = model.isOnTop(a)
+        Button(top ? "取消置顶" : "置顶") { model.setOnTop(a, !top) }
+        if a.isAPI {
+            Button("更换 API key…") { model.run(.apiKey(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
+                .disabled(busy)
+        } else {
+            Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
+                .disabled(busy)
+        }
+        Button("删除账号…", role: .destructive) { model.run(.remove(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
+            .disabled(busy)
     }
 }
 
@@ -168,12 +238,11 @@ struct SidebarFooter: View {
         VStack(alignment: .leading, spacing: 6) {
             if model.phase == .ready, !model.codexEnabled {
                 Button {
-                    model.runInTerminal(.addAccount(prefix: ToolID.codex.defaultPrefix, product: "ChatGPT"))
+                    model.run(.addAccount(prefix: ToolID.codex.defaultPrefix, product: "ChatGPT"))
                 } label: {
                     Label("启用 ChatGPT 账号", systemImage: "plus.circle")
                 }
                 .buttonStyle(.borderless)
-                .help("在终端里运行 cca codex add")
             }
             HStack(spacing: 6) {
                 if model.stateLoading || model.updateChecking {
@@ -230,6 +299,17 @@ extension View {
     }
 }
 
+/// 置顶的账号名字后面的小图钉（侧栏、总览的卡片）。
+struct OnTopMark: View {
+    var body: some View {
+        Image(systemName: "pin.fill")
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .help("已置顶")
+            .accessibilityLabel("已置顶")
+    }
+}
+
 /// 侧栏的一行：头像（在用时右下角有绿点；最高档的套餐有光晕，只有这里有，在用时慢慢流动）、名字、
 /// 第二行（登录有问题时先说、套餐徽章、节点），右边两行小用量。
 struct AccountRow: View {
@@ -249,8 +329,9 @@ struct AccountRow: View {
                             .foregroundStyle(.tertiary)
                             .help("维护者锁定了节点")
                     }
+                    if model.isOnTop(a) { OnTopMark() }
                 }
-                AccountSubtitle(account: a)
+                AccountSubtitle(account: a, expired: model.loginExpired(a))
             }
             Spacer(minLength: 4)
             if let u = model.usage(for: a), u.source != .none {

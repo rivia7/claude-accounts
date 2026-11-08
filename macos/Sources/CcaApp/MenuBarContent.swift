@@ -124,7 +124,7 @@ struct MenuBarContent: View {
     private var content: some View {
         switch model.phase {
         case .ready:
-            let accounts = model.accounts(model.tool)
+            let accounts = model.arrangedAccounts(model.tool)
             if accounts.isEmpty {
                 Text(model.state == nil ? "正在读取…" : "还没有账号").foregroundStyle(.secondary).font(.callout)
             } else {
@@ -166,7 +166,7 @@ struct MenuRow: View {
                             .accessibilityLabel(issue)
                     }
                 }
-                AccountSubtitle(account: a)
+                AccountSubtitle(account: a, expired: model.loginExpired(a))
             }
             Spacer(minLength: 6)
             if let u, u.source != .none {

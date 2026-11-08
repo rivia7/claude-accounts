@@ -47,6 +47,8 @@ protocol Transport: Sendable {
     func spawnDetached(_ request: CcaRequest) throws
     /// 内置代理的内核（PROTOCOL 7）：后台运行 `cca _core run`，不限时，输出追加进 logPath；退出时（后台线程上）调 onExit。
     func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle
+    /// 提问会话（PROTOCOL 4.6）：一个边问边答的 cca 进程，不限时。
+    func startSession(_ arguments: [String]) throws -> CcaSession
 }
 
 /// 一个在跑的内置代理内核：停掉它（wait：等它退出再返回，App 退出前用）。
@@ -62,6 +64,11 @@ extension Transport {
     /// 演示数据、测试替身：不运行内核。
     func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle {
         throw CoreUnsupported()
+    }
+
+    /// 测试替身：没有提问会话时流程走终端。
+    func startSession(_ arguments: [String]) throws -> CcaSession {
+        throw SessionUnsupported()
     }
 }
 
@@ -144,6 +151,18 @@ struct ProcessTransport: Transport {
         }
         return CcaResponse(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, events: tail?.all() ?? [],
                            timedOut: result.timedOut, cancelled: result.cancelled, duration: result.duration)
+    }
+
+    /// 提问会话（PROTOCOL 4.6）：输出接 runs 目录的文件，事件文件和平时一样。文件在会话结束时删掉，App 中途退出留下的下次清理。
+    func startSession(_ arguments: [String]) throws -> CcaSession {
+        let id = UUID().uuidString
+        guard let events = newFile(in: eventsDirectory, "events-\(id).jsonl"),
+              let out = newFile(in: runsDirectory, "run-\(id).out"), let err = newFile(in: runsDirectory, "run-\(id).err") else {
+            throw ProcessError.spawnFailed(path: runsDirectory.path, errno: EACCES)
+        }
+        let env = CcaEnvironment.make(base: baseEnvironment, home: home, eventsPath: events.path, prompt: true)
+        let spec = ProcessSpec(executable: ccaPath, arguments: arguments, environment: env, timeout: nil)
+        return try ProcessSession(spec: spec, events: events, stdout: out, stderr: err)
     }
 
     /// 不设 CCA_EVENTS、不限时，输出接到 runs 目录里的一个文件（PROTOCOL 5）。

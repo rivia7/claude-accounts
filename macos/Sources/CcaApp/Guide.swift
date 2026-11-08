@@ -139,7 +139,7 @@ struct TutorialCard {
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
             ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
             ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者命令行里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
-            ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名。"),
+            ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名、置顶、重新登录。上下拖动可以调整顺序。"),
         ], art: .sidebar),
         TutorialCard(title: "打开一个账号", points: [
             ("macwindow", "点「打开 Claude App」：用这个账号自己的出口和资料打开。"),
@@ -155,7 +155,7 @@ struct TutorialCard {
         ], art: .quota),
         TutorialCard(title: "看网络出口", points: [
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
-            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：查看出口位置、纯净度和 DNS / WebRTC 泄露风险。"),
+            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：查看出口位置、纯净度和 DNS / WebRTC 泄露风险。之后后台会定时再测，在用的账号测得勤一些。"),
             ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
         ], art: .route),
         TutorialCard(title: "节点分流", points: [
@@ -166,7 +166,7 @@ struct TutorialCard {
         TutorialCard(title: "改别名、换外观", points: [
             ("pencil", "直接点账号页上的名字就能改别名：回车保存，Esc 取消。"),
             ("circle.lefthalf.filled", "左下角的按钮切换浅色、深色，或者跟随系统。"),
-            ("plus", "添加账号、配置路由器：点工具栏的「＋」，在终端里按提示完成。"),
+            ("plus", "添加账号：点左边账号列表上的「＋」；配置路由器：点工具栏的「＋」，按提示完成。"),
         ], art: .rename),
         TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。"),
@@ -779,6 +779,8 @@ struct Advice {
         case .emailMismatch(let email):
             let who = email.map { "（现在登录的是 \($0)）" } ?? ""
             return Advice(level: .warn, text: "登录的不是这个账号\(who)：点「重新登录…」换回来。")
+        case .loginExpired:
+            return Advice(level: .warn, text: "这个账号的登录已失效（比如改过密码）：点「重新登录…」，在终端里按提示登录。")
         case .appMissing:
             return Advice(level: .info, text: "这台 Mac 上没装 \(appLabel)：可以先用「网页版」。")
         case .portClosed:

@@ -92,13 +92,19 @@ warn() { printf '%s\n' "${C_Y}!${C_0} $*" >&2; }
 die()  { gui_fail "${FAIL_CODE:-error}" "$*"; printf '%s\n' "${C_R}✗${C_0} $*" >&2; exit 1; }   # FAIL_CODE=原因码 die …：告诉图形界面原因
 
 # 交互输入统一从 fd 3 读：默认是终端；CCA_TTY=文件 时按行读取预置答案（脚本化/测试用）
+# 提问会话（macos/PROTOCOL.md 4.6）：图形界面设了 CCA_PROMPT=1、事件文件，并把答案管道接在 fd 3 上时，
+# 提问发成 ask 事件，答案从 fd 3 读。只有 App 开的封闭流程（添加账号之类）才这样运行
 TTY_OK=0
-if [ -n "${CCA_TTY:-}" ]; then
+PROMPT_GUI=""
+if [ "${CCA_PROMPT:-}" = 1 ] && [ -n "${CCA_EVENTS:-}" ] && { : <&3; } 2>/dev/null; then
+	TTY_OK=1
+	PROMPT_GUI=1
+elif [ -n "${CCA_TTY:-}" ]; then
 	exec 3<"$CCA_TTY" && TTY_OK=1
 elif { exec 3</dev/tty; } 2>/dev/null; then
 	TTY_OK=1
 fi
-interactive() { [ "$TTY_OK" = 1 ] && { [ -t 0 ] || [ -n "${CCA_TTY:-}" ]; }; }
+interactive() { [ "$TTY_OK" = 1 ] && { [ -t 0 ] || [ -n "${CCA_TTY:-}" ] || [ -n "$PROMPT_GUI" ]; }; }
 need_tty() {   # 需要交互的命令：没有终端时（例如 Claude Code 里的 ! 前缀）直接说明，不要带着默认值乱跑
 	interactive && return 0
 	if [ -n "${CLAUDECODE:-}" ]; then
@@ -109,7 +115,9 @@ need_tty() {   # 需要交互的命令：没有终端时（例如 Claude Code �
 
 # x=$(ask "提示: " 默认值)；提示走 stderr，没有终端时返回默认值。
 # 真终端用 readline（read -e）：终端默认 -iutf8，普通 read 退格只删掉中文字符的一个字节，留下乱码
+# 默认值后面可以跟给图形界面的 k=v（q= label= hint= …，见 gui_ask），终端里用不上
 ask() {
+	[ -z "$PROMPT_GUI" ] || { gui_ask text "$@"; return; }
 	local v=""
 	if [ "$TTY_OK" = 1 ]; then
 		if [ -z "${CCA_TTY:-}" ] && [ -t 3 ]; then
@@ -122,14 +130,19 @@ ask() {
 	[ -n "$v" ] || v="$2"
 	printf '%s' "$v"
 }
-confirm() {  # confirm "问题" [y|n]
+confirm() {  # confirm "问题" [y|n] [给图形界面的 k=v…]
 	local d="${2:-y}" hint="[Y/n]" a
-	[ "$d" = n ] && hint="[y/N]"
-	a=$(ask "$1 $hint " "$d")
+	if [ -n "$PROMPT_GUI" ]; then
+		a=$(gui_ask confirm "$1" "$d" "${@:3}") || return 1
+	else
+		[ "$d" = n ] && hint="[y/N]"
+		a=$(ask "$1 $hint " "$d")
+	fi
 	case "$a" in [Yy]*) return 0 ;; *) return 1 ;; esac
 }
 # x=$(ask_secret "提示: ")：输入不回显（不用 readline，免得它回显）；CCA_TTY 答案文件时照常按行读
 ask_secret() {
+	[ -z "$PROMPT_GUI" ] || { gui_ask secret "$1" "" "${@:2}"; return; }
 	local v=""
 	if [ "$TTY_OK" = 1 ]; then
 		printf '%s' "$1" >&2
@@ -144,7 +157,7 @@ ask_secret() {
 }
 okay() { printf '%s\n' "${C_G}✓${C_0} $*" >&2; }
 
-# 图形界面（cca App）的事件：CCA_EVENTS 指向的文件里追加 JSON 行（consent / terminal / fail / result / step，格式见
+# 图形界面（cca App）的事件：CCA_EVENTS 指向的文件里追加 JSON 行（consent / terminal / fail / result / step / ask，格式见
 # macos/PROTOCOL.md）。不设就什么都不做（命令行、启动器都不设），设了也不改变退出码和 stderr。用文件不用变量：很多地方在 $(…) 里
 jstr() {   # JSON 字符串（去掉控制字符，换行变空格）
 	printf '"%s"' "$(printf '%s' "$1" | LC_ALL=C tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | LC_ALL=C sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -182,9 +195,101 @@ consent_granted() { case ",${CCA_GRANT:-}," in *",$1,"*) return 0 ;; esac; retur
 consent() {
 	local tok="$1${2:+:${2//,/_}}"
 	consent_granted "$tok" && return 0
-	if interactive; then confirm "$4" "${6:-y}" && return 0; return 1; fi
+	if interactive; then confirm "$4" "${6:-y}" "q=consent.$1" "title=$3" "detail=$5" severity=warn && return 0; return 1; fi
 	gui_event consent "\"item\":$(jstr "$1"),\"scope\":$(jstr "$2"),\"grant\":$(jstr "$tok"),\"title\":$(jstr "$3"),\"question\":$(jstr "$4"),\"detail\":$(jstr "$5"),\"severity\":\"warn\",\"default\":\"$([ "${6:-y}" = n ] && echo no || echo yes)\""
 	return 2
+}
+
+# ---- 提问会话（macos/PROTOCOL.md 4.6）----
+# 取消：App 关掉答案管道（读到 EOF）。绝不当成“回车取默认值”：默认 y 的确认会变成同意。提问常在 $(…) 里，exit 只退子 shell，所以杀主进程
+gui_abort() { gui_fail cancelled "已取消"; kill -TERM "$$"; sleep 1; exit 130; }
+# 一个问题（整页只有一个字段）：gui_ask 类型 提示 默认值 [k=v…]，打印答案。k=v：q=题号 label=名字 hint=说明 title=页标题 message=页说明
+# detail= severity= optional=1 skip=“不选”的说法 opt=值<TAB>名字<TAB>注记（选项）。没写 label 时用提示语
+gui_ask() {
+	local kind="$1" prompt="$2" def="${3:-}" seq line v
+	shift; shift; [ $# -eq 0 ] || shift
+	seq=$(gui_kv field=v "kind=$kind" "prompt=$prompt" "default=$def" "$@" | py prompt-emit) || gui_abort
+	while IFS= read -r line <&3; do
+		case "$line" in
+			"$seq v "*) v=${line#"$seq v "}; printf '%s' "${v:-$def}"; return 0 ;;
+			"$seq "*) gui_abort ;;   # 字段对不上就停下，别把值放错地方
+		esac
+	done
+	gui_abort
+}
+gui_kv() { local a nl=$'\n'; for a in "$@"; do printf '%s\n' "${a//$nl/ }"; done; }   # 给 py prompt-emit 的描述：一条一行，值里的换行变空格（路由器的说明常常有好几行）
+# 一页多个字段：ask_fields 题号 页标题 页说明 字段…，结果放进 F_变量（所以不能在 $(…) 里调用）。
+# 字段是“变量|类型|校验|终端提示|GUI 名字|GUI 说明”：类型 text、secret，后面加 ? 是可选；校验 email、alias、url、model（cca 判断，密文固定校验 key 的格式）。
+# 终端里逐个问，和以前一样；图形界面里一页填完，不合格的带着原因重问（已填的带回去，密文不带）
+ask_fields() {
+	if [ -n "$PROMPT_GUI" ]; then gui_fields "$@"; return; fi
+	local spec name kind check tip rest val
+	shift 3
+	for spec in "$@"; do
+		IFS='|' read -r name kind check tip rest <<< "$spec"
+		case "$kind" in
+			secret*) val=$(api_key_ask "$tip") || { say "  已取消"; return 1; } ;;
+			*\?) val=$(ask_valid "$check" "$tip" optional) ;;
+			*) val=$(ask_valid "$check" "$tip") || return 1 ;;
+		esac
+		printf -v "F_$name" '%s' "$val"
+	done
+}
+gui_fields_spec() {   # 这一页的描述（给 py prompt-emit；变量都是 gui_fields 的）。单独一个函数：bash 3.2 在 $(…) 里解析不了 case 的右括号
+	local i
+	gui_kv "q=$q" "title=$title" "message=$msg"
+	for ((i = 0; i < n; i++)); do
+		gui_kv "field=${names[i]}" "kind=${kinds[i]%\?}" "label=${labels[i]}" "hint=${hints[i]}" "error=${errs[i]}"
+		case "${kinds[i]}" in secret*) ;; *) gui_kv "value=${vals[i]}" ;; esac
+		case "${kinds[i]}" in *\?) echo optional=1 ;; esac
+	done
+}
+gui_fields() {
+	local q="$1" title="$2" msg="$3" seq line i n=0 name kind check tip label hint v out bad
+	local -a names kinds checks labels hints vals errs
+	shift 3
+	for line in "$@"; do
+		IFS='|' read -r name kind check tip label hint <<< "$line"
+		names[n]=$name kinds[n]=$kind checks[n]=$check labels[n]=$label hints[n]=$hint vals[n]="" errs[n]=""
+		n=$((n + 1))
+	done
+	while :; do
+		seq=$(gui_fields_spec | py prompt-emit) || gui_abort
+		for ((i = 0; i < n; i++)); do
+			while :; do
+				IFS= read -r line <&3 || gui_abort
+				case "$line" in
+					"$seq ${names[i]} "*) vals[i]=${line#"$seq ${names[i]} "}; break ;;
+					"$seq "*) gui_abort ;;   # 同一页的字段对不上就停下：别把值放错地方（可能是密钥）
+				esac
+			done
+		done
+		bad=""
+		for ((i = 0; i < n; i++)); do
+			errs[i]=""
+			v=${vals[i]}
+			if [ -z "$v" ]; then
+				case "${kinds[i]}" in *\?) ;; *) errs[i]="这一项要填"; bad=1 ;; esac
+				continue
+			fi
+			case "${kinds[i]}" in
+				secret*) if ! out=$(printf '%s' "$v" | py secret-check); then errs[i]=$out; bad=1; fi ;;
+				*) [ -z "${checks[i]}" ] && continue
+				   if out=$(py check "${checks[i]}" "$v"); then vals[i]=$out; else errs[i]=$out; bad=1; fi ;;
+			esac
+		done
+		[ -n "$bad" ] || break
+	done
+	for ((i = 0; i < n; i++)); do printf -v "F_${names[i]}" '%s' "${vals[i]}"; done
+}
+gui_done() {   # gui_done 结果码 说明 [账号的键]：这条流程做完了（App 选中这个账号、显示这句话）
+	[ -n "${CCA_EVENTS:-}" ] || return 0
+	gui_event result "\"code\":\"$1\",\"tool\":$(jstr "${TOOL:-claude}"),\"key\":$(jopt "${3:-}"),\"message\":$(jstr "$2")"
+}
+gui_router_later() {   # 提问会话里还不能配置路由器（SSH 密码要在终端里输）：交给终端，返回 0
+	[ -n "$PROMPT_GUI" ] || return 1
+	TOOL=claude gui_terminal router_setup "还没配置路由器：在终端里配置一次" router setup
+	return 0
 }
 
 # 能画方向键菜单的条件：有真终端（不是 CCA_TTY 预置答案）且终端支持光标控制
@@ -2092,6 +2197,48 @@ def alias_problem(t, alias):
         if parse_key(k)[0] == alias:
             return '别名「%s」已经用在 %s 上了' % (alias, label_of(k))
     return ''
+
+
+def cmd_prompt_emit():
+    """提问会话（PROTOCOL 4.6）：把一页提问写进事件文件，打印序号。描述从 stdin 读（k=v，一行一条；field= 开始一个字段）。
+    序号 = 文件里已有的 ask 事件数 + 1：提问常在子 shell 里，变量带不出来"""
+    path = os.environ.get('CCA_EVENTS') or die('cca(py): 没有事件文件')
+    page = {'v': 1, 'ev': 'ask', 'seq': 0, 'q': '', 'title': '', 'message': '', 'fields': []}
+    cur = None
+    for line in sys.stdin:
+        k, sep, v = line.rstrip('\n').partition('=')
+        if not sep:
+            continue
+        if k in ('q', 'title', 'message'):
+            page[k] = v
+        elif k == 'field':
+            cur = {'id': v, 'kind': 'text', 'label': '', 'default': '', 'value': '', 'error': '', 'hint': '', 'optional': False}
+            page['fields'].append(cur)
+        elif cur is None:
+            continue
+        elif k == 'prompt':
+            cur['label'] = cur['label'] or prompt_label(v)
+        elif k == 'optional':
+            cur[k] = v == '1'
+        elif k == 'opt':
+            value, label, note = (v.split('\t') + ['', ''])[:3]
+            cur.setdefault('options', []).append({'value': value, 'label': label, 'note': note})
+        elif k == 'min':
+            cur[k] = int(v)
+        elif k in ('kind', 'label', 'default', 'value', 'error', 'hint', 'detail', 'severity', 'skip'):
+            if v or k != 'label':
+                cur[k] = v
+    with open(path, 'rb') as f:
+        page['seq'] = sum(1 for row in f if b'"ev":"ask"' in row) + 1
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(page, ensure_ascii=False, separators=(',', ':')) + '\n')
+    print(page['seq'])
+
+
+def prompt_label(p):
+    """没有专门写名字时，用终端的提示语当名字（去掉前后的空白、冒号和方括号里的默认值）"""
+    s = re.sub(r'\s*\[[^\]]*\]\s*[：:]?\s*$', '', p.strip())
+    return s.rstrip('：: ')
 
 
 def cmd_check(field, value):
@@ -4256,7 +4403,8 @@ USAGE_WHY = {
     'region': '{msg}，没有查询',
     'unsupported': '这个版本的 {product} 查不了用量（{update} 升级后再试）',
     'timeout': '查询超时',
-    'nolimits': '没有订阅用量（按量计费的账号，或者登录过期了：{cmd} @{name} 重新登录）',
+    'nolimits': '没有订阅用量（按量计费的账号，或者登录已失效：{cmd} login {name} 重新登录）',
+    'auth': '登录已失效（比如改过密码）：{cmd} login {name} 重新登录',
     'error': '查询失败：{msg}',
 }
 
@@ -4749,7 +4897,7 @@ RESET_WHY = dict(USAGE_WHY, unsupported='这个版本的 {product} 不能重置�
 RESET_UNSURE = dict(RESET_WHY, timeout='没等到重置的结果，可能已经用掉了一次：刷新用量看看还剩几次',
                     error='重置出错了（{msg}），可能已经用掉了一次：刷新用量看看还剩几次')
 RESET_FAIL = {'login': 'not_logged_in', 'mismatch': 'login_mismatch', 'route': 'local_unavailable', 'port': 'port_closed',
-              'region': 'region_restricted', 'trace': 'no_exit_ip', 'unsupported': 'reset_unsupported'}
+              'region': 'region_restricted', 'trace': 'no_exit_ip', 'unsupported': 'reset_unsupported', 'auth': 'not_logged_in'}
 RESET_SAID = {'reset': '已重置 %s 的额度', 'already_redeemed': '%s 的这次重置已经完成过了',
               'nothing_to_reset': '%s 现在的用量还不需要重置，没有用掉重置机会'}
 
@@ -4990,11 +5138,14 @@ class Rpc:
                 return None
 
     def failure(self, err):
-        """call 的错误 → (原因, 说明)：unsupported（这个版本的 codex 没有这个接口）、timeout 或 error"""
+        """call 的错误 → (原因, 说明)：unsupported（这个版本的 codex 没有这个接口）、auth（登录凭证失效了：token 刷新不了或者
+        被服务器拒绝，比如改过密码、在别处退出过，要重新登录）、timeout 或 error"""
         msg = self.tail() if err in ('timeout', 'exit') else str(err or '')
-        if re.search(r'(?i)method not found|unknown (method|variant|request)|unrecognized subcommand|unexpected argument',
-                     '%s %s' % (err, msg)):
+        text = '%s %s' % (err, msg)
+        if re.search(r'(?i)method not found|unknown (method|variant|request)|unrecognized subcommand|unexpected argument', text):
             return 'unsupported', msg[:300]
+        if re.search(r'(?i)access token could not be refreshed|\b401 unauthorized\b', text):
+            return 'auth', msg[:300]
         return ('timeout' if err == 'timeout' else 'error'), msg[:300]
 
     def start(self, end):
@@ -6803,6 +6954,7 @@ CMDS = {
     'fill-check': cmd_fill_check, 'fill-summary': cmd_fill_summary, 'nodes-fill': cmd_nodes_fill,
     'leak-probe': cmd_leak_probe, 'leak-verdict': cmd_leak_verdict,
     'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
+    'prompt-emit': cmd_prompt_emit,
     'check-render': cmd_check_render,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
@@ -8185,7 +8337,7 @@ nodes_follow() {   # 路由器上的节点改了名：按服务器地址认出�
 }
 node_replace() {   # node_replace 节点列表 旧节点 用它的账号：旧节点在路由器上找不到了（也认不出改成了哪个），交互时选一个代替
 	local list="$1" old="$2" who="$3" n=0 i w nd tries
-	local -a all
+	local -a all opts
 	if ! interactive; then
 		warn "路由器上找不到节点「${old}」了（也认不出它改成了哪个）：${who} 暂时用不了。在终端里运行 cca router sync 选一个节点代替它"
 		TOOL=claude gui_terminal router_sync "路由器上找不到节点「${old}」了：在终端里运行 cca router sync 选一个节点代替它" router sync
@@ -8193,23 +8345,31 @@ node_replace() {   # node_replace 节点列表 旧节点 用它的账号：旧�
 	fi
 	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(printf '%s\n' "$list" | awk -F '\t' '$1 == "P" { print $2 }')
 	[ $n -gt 0 ] || return 1
-	say ""
-	say "  路由器上找不到节点「${old}」了（也认不出它改成了哪个），${who} 在用它。换成哪个节点？"
-	for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${all[i]}"; done
-	say ""
-	for tries in 1 2 3 4 5; do
-		w=$(ask "  输入编号（直接回车先不换，这些账号暂时用不了）：" "")
+	if [ -n "$PROMPT_GUI" ]; then
+		for ((i = 0; i < n; i++)); do opts[i]="opt=$((i + 1))"$'\t'"${all[i]}"$'\t'; done
+		w=$(gui_ask choice "换成哪个节点" "" q=node.replace "title=节点不见了" "label=换成" optional=1 "skip=先不换，这些账号暂时用不了" \
+			"message=路由器上找不到节点「${old}」了（也认不出它改成了哪个），${who} 在用它。" "${opts[@]}") || return 1
+		case "$w" in ''|*[!0-9]*) return 1 ;; esac
+		[ "$w" -ge 1 ] && [ "$w" -le $n ] || return 1
+	else
+		say ""
+		say "  路由器上找不到节点「${old}」了（也认不出它改成了哪个），${who} 在用它。换成哪个节点？"
+		for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${all[i]}"; done
+		say ""
+		for tries in 1 2 3 4 5; do
+			w=$(ask "  输入编号（直接回车先不换，这些账号暂时用不了）：" "")
+			[ -n "$w" ] || return 1
+			case "$w" in *[!0-9]*) warn "「${w}」不是编号"; w=""; continue ;; esac
+			[ "$w" -ge 1 ] && [ "$w" -le $n ] && break
+			warn "没有编号 ${w}"
+			w=""
+		done
 		[ -n "$w" ] || return 1
-		case "$w" in *[!0-9]*) warn "「${w}」不是编号"; continue ;; esac
-		if [ "$w" -ge 1 ] && [ "$w" -le $n ]; then
-			nd="${all[w - 1]}"
-			printf '%s\n' "$list" | py nodes-rename "$old" "$nd" || return 1
-			okay "「${old}」换成了「${nd}」：${who} 改走它"
-			return 0
-		fi
-		warn "没有编号 ${w}"
-	done
-	return 1
+	fi
+	nd="${all[w - 1]}"
+	printf '%s\n' "$list" | py nodes-rename "$old" "$nd" || return 1
+	okay "「${old}」换成了「${nd}」：${who} 改走它"
+	return 0
 }
 
 router_sync() {   # 先跟上路由器上节点的改名，再同步。0 成功；3 需要重载但没获同意（账号表已上传，端口池等下次）；1 失败
@@ -8281,17 +8441,31 @@ cmd_router() {
 # ---------------------------------------------------------------------------
 # 账号
 # ---------------------------------------------------------------------------
-pick_node() {   # pick_node [direct]：从可选节点里选一个，打印节点名；标出已被当前工具的哪些账号使用、路由器上是否存在。
+pick_node() {   # pick_node [direct] [给图形界面的 k=v…]：从可选节点里选一个，打印节点名；标出已被当前工具的哪些账号使用、路由器上是否存在。
 	                # direct 时第一项（默认）是"直连"，选它打印空字符串
-	local onrouter="" def n=0 i node sel off=0
-	local -a nodes rows
-	if [ "${1:-}" = direct ]; then nodes[0]=""; rows[0]="直连（不经代理）"; n=1; off=1; fi
+	local onrouter="" def n=0 i node sel off=0 cols note
+	local -a nodes rows opts
+	if [ "${1:-}" = direct ]; then nodes[0]=""; rows[0]="直连（不经代理）"; n=1; off=1; shift; fi
 	at_home && onrouter=$(rsh "$RDIR/cca-router.sh nodes" 2>/dev/null | py nodes-fill | awk -F '\t' '$1 != "C" { print $2 }')   # 参考节点同步时补上，不算"路由器上没有"
 	while IFS= read -r node; do [ -n "$node" ] && { nodes[n]="$node"; n=$((n + 1)); }; done < <(py nodes-allowed | cut -f1)
 	[ $n -gt 0 ] || { warn "config.json 里没有可选节点（nodes）"; return 1; }
 	i=$off
-	while IFS= read -r node; do rows[i]="$node"; i=$((i + 1)); done < <(py node-rows "$onrouter" "$(term_cols)")
+	cols=$(term_cols); [ -z "$PROMPT_GUI" ] || cols=400   # 图形界面要完整的注记，不按终端宽度截断
+	while IFS= read -r node; do rows[i]="$node"; i=$((i + 1)); done < <(py node-rows "$onrouter" "$cols")
 	if [ $off = 1 ]; then def=0; else def=$(py node-default); fi
+	if [ -n "$PROMPT_GUI" ]; then
+		for ((i = 0; i < n; i++)); do
+			note=${rows[i]#"${nodes[i]}"}
+			[ -n "${nodes[i]}" ] || note=""
+			note=${note#"${note%%[![:space:]]*}"}
+			opts[i]="opt=$((i + 1))"$'\t'"${nodes[i]:-${rows[i]}}"$'\t'"$note"
+		done
+		sel=$(gui_ask choice "选择出口节点" "$((def + 1))" label=出口节点 "${opts[@]}" "$@") || return 1
+		case "$sel" in ''|*[!0-9]*) return 1 ;; esac
+		[ "$sel" -ge 1 ] && [ "$sel" -le $n ] || return 1
+		printf '%s' "${nodes[sel - 1]}"
+		return 0
+	fi
 	if fancy_ok; then
 		arrow_menu "$def" "${rows[@]}"
 		[ "$MENU_PICK" -ge 0 ] || return 1
@@ -8310,18 +8484,25 @@ pick_node() {   # pick_node [direct]：从可选节点里选一个，打印节�
 }
 
 cmd_add() {   # cca [codex] add [api]
-	local email alias key node out
+	local email alias key node out hint
 	[ "${1:-}" = api ] && { cmd_add_api; return; }
 	need_tty
 	if ! router_ready; then
+		gui_router_later && return 1
 		info "官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
 		cmd_router_setup || return 1
 	fi
 	say ""
 	say "${C_B}添加 ${TOOL_LABEL} 账号${C_0}    ${C_D}第三方 API 用 ${CMD} add api${C_0}"
 	say ""
-	email=$(ask_valid email "  登录邮箱：") || return 1   # Claude 登录时自动填进登录页；Codex 登录后核对
-	alias=$(ask_valid alias "  别名（可选，回车跳过）：" optional)   # 只用来在菜单里认出账号
+	case "$TOOL" in
+		codex) hint="第一次使用时在它专属的浏览器窗口里登录，登录后 cca 会核对是不是这个邮箱" ;;
+		*) hint="第一次使用时在它专属的浏览器窗口里登录，登录页会预填这个邮箱" ;;
+	esac
+	ask_fields add.basic "添加 ${TOOL_LABEL} 账号" "" \
+		"email|text|email|  登录邮箱：|登录邮箱|${hint}" \
+		"alias|text?|alias|  别名（可选，回车跳过）：|别名（可选）|只用来认出这个账号" || return 1
+	email=$F_email alias=$F_alias
 	say ""
 	node=$(py policy-node "$email")
 	if [ -n "$node" ]; then
@@ -8329,12 +8510,12 @@ cmd_add() {   # cca [codex] add [api]
 	else
 		say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
 		say ""
-		node=$(pick_node) || return 1
+		node=$(pick_node q=add.node "title=添加 ${TOOL_LABEL} 账号" "message=给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）") || return 1
 	fi
 	say ""
 	key=$(py add "$email" "$alias" "$node") || return 1
 	eval "$(py env "$key")"
-	router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
+	router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
 	okay "已添加 ${ACC_LABEL}，出口 ${node}"
 	launchers_sync
@@ -8344,33 +8525,42 @@ cmd_add() {   # cca [codex] add [api]
 		*) info "第一次使用时会在它专属的浏览器窗口里登录，登录页会预填 ${ACC_EMAIL}" ;;
 	esac
 	ADDED_KEY="$key"
+	gui_done added "已添加 ${ACC_LABEL}，出口 ${node}" "$key"
 }
 
 # 第三方 API 账号：Claude 是兼容 Anthropic 接口的地址 + key，Codex 是兼容 OpenAI Responses 接口的；在菜单里和
 # 官方账号一样选用。直连时不需要路由器
 cmd_add_api() {
-	local alias url model secret node="" key title api url_q model_q env_hint
+	local alias url model secret node="" key title api url_hint url_q model_q env_hint
 	need_tty
 	case "$TOOL" in
 		codex) title="添加第三方 API 账号（Codex）" api="兼容 OpenAI Responses 接口的服务" env_hint=""
-		       url_q="接口地址（base_url，例如 https://api.example.com/v1）" model_q="服务商不认 codex 默认的模型名时请填上" ;;
+		       url_hint="base_url，例如 https://api.example.com/v1" model_q="服务商不认 codex 默认的模型名时请填上" ;;
 		*) title="添加第三方 API 账号" api="兼容 Anthropic 接口的服务" env_hint="或加环境变量"
-		   url_q="接口地址（ANTHROPIC_BASE_URL，例如 https://api.example.com/anthropic）" model_q="填了会同时用作 opus / sonnet / haiku" ;;
+		   url_hint="ANTHROPIC_BASE_URL，例如 https://api.example.com/anthropic" model_q="填了会同时用作 opus / sonnet / haiku" ;;
 	esac
+	url_q="接口地址（${url_hint}）"
 	say ""
 	say "${C_B}${title}${C_0}    ${C_D}${api}：填地址和 key，模型可选${C_0}"
 	say ""
-	alias=$(ask_valid alias "  别名（在菜单里显示，例如 kimi）：") || return 1
-	url=$(ask_valid url "  ${url_q}：") || return 1
-	secret=$(api_key_ask "  API key（输入时不显示）：") || { say "  已取消"; return 1; }
-	model=$(ask_valid model "  模型（可选，回车跳过；${model_q}）：" optional)
+	ask_fields api.basic "$title" "${api}：填地址和 key，模型可选" \
+		"alias|text|alias|  别名（在菜单里显示，例如 kimi）：|别名|在菜单里显示，例如 kimi" \
+		"url|text|url|  ${url_q}：|接口地址|${url_hint}" \
+		"key|secret|secret|  API key（输入时不显示）：|API key|只存进这台 Mac 的钥匙串" \
+		"model|text?|model|  模型（可选，回车跳过；${model_q}）：|模型（可选）|${model_q}" || return 1
+	alias=$F_alias url=$F_url secret=$F_key model=$F_model
+	F_key=""
 	if [ -n "$(py nodes-allowed)" ]; then
 		say ""
 		say "  ${alias} 走哪个出口？国内的服务一般直连；要经代理的选一个节点："
 		say ""
-		node=$(pick_node direct) || return 1
+		node=$(pick_node direct q=api.node "title=${title}" "message=${alias} 走哪个出口？国内的服务一般直连；要经代理的选一个节点") || return 1
 		say ""
-		if [ -n "$node" ] && ! router_ready; then info "走节点要先配置路由器"; cmd_router_setup || return 1; fi
+		if [ -n "$node" ] && ! router_ready; then
+			gui_router_later && return 1
+			info "走节点要先配置路由器"
+			cmd_router_setup || return 1
+		fi
 	fi
 	key=$(py add-api "$alias" "$url" "$model" "$node") || return 1
 	if ! printf '%s' "$secret" | py secret-set "$key"; then
@@ -8379,11 +8569,12 @@ cmd_add_api() {
 	fi
 	secret=""
 	eval "$(py env "$key")"
-	[ -z "$ACC_PORT" ] || router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
+	[ -z "$ACC_PORT" ] || router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
 	okay "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}），key 存在钥匙串里"
 	info "用 ${CMD} @${ACC_NAME} 启动；改地址、模型${env_hint}用 ${CMD} edit，换 key 用 ${CMD} key ${ACC_NAME}"
 	if [ "$TOOL" = codex ]; then codex_alias_ensure "$ACC_NAME"; fi
+	gui_done added "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}）" "$key"
 }
 
 # x=$(ask_valid 字段 提示 [optional])：问到 py check 通过为止，打印规范化后的值；
@@ -8402,8 +8593,13 @@ ask_valid() {
 	done
 }
 
-api_key_ask() {   # api_key_ask 提示：读一个合格的 API key 打到 stdout（不回显）；空输入返回 1
+api_key_ask() {   # api_key_ask 提示 [图形界面的页标题] [说明]：读一个合格的 API key 打到 stdout（不回显）；空输入返回 1
 	local s out
+	if [ -n "$PROMPT_GUI" ]; then
+		ask_fields key.secret "${2:-API key}" "${3:-}" "s|secret|secret|$1|API key|输入时不显示，只存进这台 Mac 的钥匙串" || return 1
+		printf '%s' "$F_s"
+		return 0
+	fi
 	while :; do
 		s=$(ask_secret "$1")
 		[ -n "$s" ] || return 1
@@ -8412,11 +8608,12 @@ api_key_ask() {   # api_key_ask 提示：读一个合格的 API key 打到 stdou
 	done
 }
 
-api_key_prompt() {   # 输入 key 存进钥匙串（需要先 eval "$(py env 名称)"）
+api_key_prompt() {   # api_key_prompt [图形界面的说明]：输入 key 存进钥匙串（需要先 eval "$(py env 名称)"）
 	local s
-	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：") || { say "  已取消"; return 1; }
+	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：" "${ACC_NAME} 的 API key" "${1:-}") || { say "  已取消"; return 1; }
 	printf '%s' "$s" | py secret-set "$ACC_KEY" || return 1
 	okay "已把 ${ACC_NAME} 的 API key 存进钥匙串"
+	gui_done key_saved "已把 ${ACC_NAME} 的 API key 存进钥匙串" "$ACC_KEY"
 }
 
 api_key_ready() {   # 启动前：key 在账号表里或钥匙串里（按现在的接口域名）；都没有时在终端里问
@@ -8451,8 +8648,12 @@ cmd_key() {   # cca [codex] key <账号>：重新输入第三方 API 账号的 k
 			*) die "${ACC_NAME} 是官方账号：登录凭证由 Claude Code 自己管（在 cca @${ACC_NAME} 里用 /login 重新登录）" ;;
 		esac
 	fi
-	[ "$(py secret-status "$ACC_KEY")" = table ] && warn "账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 ${CMD} edit"
-	api_key_prompt
+	local note=""
+	if [ "$(py secret-status "$ACC_KEY")" = table ]; then
+		note="账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 ${CMD} edit"
+		warn "$note"
+	fi
+	api_key_prompt "$note"
 }
 
 # 账号表、端口池有变化时要不要同步路由器：配置过路由器，或者有走端口的账号（只有直连的第三方 API 账号时不用）
@@ -8513,7 +8714,7 @@ child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS �
 	local v
 	# 继承来的接口地址、凭证、模型一律不带进去：例如 shell 里 export 过 ANTHROPIC_BASE_URL，官方账号的登录 token
 	# 就会被发到那个地址。第三方 API 账号自己的地址和模型经 --settings（Codex 经 -c）传，key 经回调 cca 现取
-	UNSETS=(-u ALL_PROXY -u all_proxy -u CCA_EVENTS -u CCA_GRANT -u CCA_RO)   # 图形界面给 cca 的变量不带给工具
+	UNSETS=(-u ALL_PROXY -u all_proxy -u CCA_EVENTS -u CCA_GRANT -u CCA_RO -u CCA_PROMPT)   # 图形界面给 cca 的变量不带给工具
 	DROPPED=""
 	for v in $(compgen -e | grep -E "$INHERITED_RE" | grep -vE "$INHERITED_KEEP"); do UNSETS+=(-u "$v"); DROPPED="${DROPPED:+${DROPPED} }${v}"; done
 	tool env
@@ -8648,29 +8849,34 @@ cmd_login() {   # cca [codex] login <账号>：退出这个账号现在的登录
 }
 
 cmd_rm() {
-	local key pid rc
+	local key pid rc msg wt=""
 	key=$(py resolve "${1:-}") || die "用法: ${CMD} rm <账号>"
 	need_tty
 	eval "$(py env "$key")"
 	pid=$(tool app_pid "$ACC_DESKTOP_DIR"); rc=$?
 	[ "$rc" -le 1 ] || die "无法查询 ${APP_LABEL} 进程，已停止删除；请稍后重试"
-	[ -z "$pid" ] || die "${ACC_LABEL} 的 ${APP_LABEL} 还开着：先退出它再删除"
+	[ -z "$pid" ] || FAIL_CODE=app_running die "${ACC_LABEL} 的 ${APP_LABEL} 还开着：先退出它再删除"
 	if [ "$ACC_KIND" = api ]; then
-		confirm "删除第三方 API 账号 ${ACC_LABEL}？（删除钥匙串里它的 key 和账号目录；共享的记忆/会话不受影响）" n || return 0
+		msg="删除第三方 API 账号 ${ACC_LABEL}？（删除钥匙串里它的 key 和账号目录；共享的记忆/会话不受影响）"
 	elif [ "$TOOL" = codex ]; then
-		has_worktrees && warn "${ACC_HOME}/worktrees 里有这个账号建的 git 工作树，会一起删掉（还没提交的改动先处理好）"
-		confirm "删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证、浏览器资料和 ChatGPT App 资料；共享的记忆/会话不受影响）" n || return 0
+		if has_worktrees; then
+			wt="${ACC_HOME}/worktrees 里有这个账号建的 git 工作树，会一起删掉（还没提交的改动先处理好）"
+			warn "$wt"
+		fi
+		msg="删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证、浏览器资料和 ChatGPT App 资料；共享的记忆/会话不受影响）"
 	else
-		confirm "删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）" n || return 0
+		msg="删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）"
 	fi
+	confirm "$msg" n q=rm.confirm "title=删除账号" "detail=$wt" severity=warn || return 0
 	py link "$key" >/dev/null 2>&1   # 先把会话里新产生的共享内容并回共享主目录（Codex 顺便把会话库里的路径改到 ~/.codex）
 	py sync "$key" >/dev/null 2>&1
 	logout_account
 	rm -rf "${ACC_DIR:?}"
 	py rm "$key"
-	[ -z "$ACC_PORT" ] || router_sync_soon   # 直连的第三方 API 账号不占端口，路由器那边没有要改的
+	[ -z "$ACC_PORT" ] || router_sync_soon || gui_fail sync_failed "路由器同步没完成：修好后运行 cca router sync"   # 直连的第三方 API 账号不占端口，路由器那边没有要改的
 	launchers_sync
 	info "已删除账号 ${ACC_LABEL}"
+	gui_done removed "已删除账号 ${ACC_LABEL}"
 }
 
 cmd_list() {
@@ -9847,20 +10053,20 @@ cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器�
 	return 0
 }
 
-cmd_check() {   # cca check [账号] [--json]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
-	local keys key ips="" rc host="" route="" since webrtc="" q="" json="" rows=""   # rows：--json 时每个账号一行「键<TAB>health 的 JSON」
+cmd_check() {   # cca check [账号…] [--json]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
+	local keys="" key ips="" rc host="" route="" since webrtc="" json="" rows="" nl=$'\n'   # rows：--json 时每个账号一行「键<TAB>health 的 JSON」
 	local HEALTH_SOURCE=check   # 结果照样记进各账号的 health.json（来源写 check）
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--json) json=1 ;;   # stdout 输出 JSON（格式见 macos/PROTOCOL.md），给人看的照旧写 stderr
-			-h|--help) say "用法: ${CMD} check [账号] [--json]"; return 0 ;;
-			-*) die "用法: ${CMD} check [账号] [--json]" ;;
-			*) [ -z "$q" ] || die "用法: ${CMD} check [账号] [--json]（写一个账号，或者不写查全部）"; q="$1" ;;
+			-h|--help) say "用法: ${CMD} check [账号…] [--json]（不写账号查全部）"; return 0 ;;
+			-*) die "用法: ${CMD} check [账号…] [--json]" ;;
+			*) key=$(py resolve "$1") || return 1; keys="${keys:+$keys$nl}$key" ;;
 		esac
 		shift
 	done
 	since=$(date +%s)
-	if [ -n "$q" ]; then keys=$(py resolve "$q") || return 1; else keys=$(py keys); fi
+	[ -n "$keys" ] || keys=$(py keys)
 	[ -n "$keys" ] || { info "还没有账号"; [ -z "$json" ] || py check-render "" </dev/null; return 0; }
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，测到的才是账号现在的出口
 	# 账号列表从 fd 4 读：循环里要连路由器（ssh 会把 stdin 读走）、要问用户（interactive 看 fd 0 是不是终端）
@@ -10405,11 +10611,12 @@ cmd_update() {   # cca update [版本号 | --check [--json] | --rollback | auto 
 # ---------------------------------------------------------------------------
 # 图形界面（cca App，源码在 macos/）：cca _gui hello|state|live 是给它用的只读接口（JSON，格式见 macos/PROTOCOL.md），
 # 会改东西的照旧用 cca app / web / check / usage / router sync / rename / codex reset / update，加上 CCA_EVENTS（事件）和 CCA_GRANT
-# （用户在 App 里点过的同意）；检查更新是 cca update --check --json。
+# （用户在 App 里点过的同意）；检查更新是 cca update --check --json。添加账号、换 key、删除账号走提问会话（CCA_PROMPT=1，fd 3 是答案管道）。
 # cca gui 安装、更新、打开它：App 和 cca 同一个版本号，每个版本的 Release 附带 cca-app.zip 和签名（命名空间 cca-app，
 # 和 cca 本身的 cca-release 分开）。curl 下载的文件没有隔离标记，临时签名的 App 不会被 Gatekeeper 拦（用浏览器下载就会）
 # ---------------------------------------------------------------------------
 GUI_API=1   # 删字段、改含义时才加一（App 声明自己支持的范围）
+GUI_PROMPT=1   # 提问会话的版本（macos/PROTOCOL.md 4.6）：ask 事件、答案格式改了才加一
 GUI_ID=local.cca.app
 GUI_APP="${CCA_GUI_APP:-$HOME/Applications/cca.app}"
 GUI_DIR="$CCA_HOME/gui"   # next/cca.app：下载校验好、等 App 退出后再换上的版本；enabled：装过 App（自动更新时跟着更新）；lock
@@ -10447,8 +10654,8 @@ gui_hello() {
 	[ -f "$CCA_HOME/codex.json" ] && cx=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
-		"$GUI_API" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s}},' "$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")"
 	printf '"gui":{"app":%s,"app_version":%s,"staged_version":%s}}\n' "$(jstr "$GUI_APP")" "$(jopt "$av")" "$(jopt "$sv")"
 }
@@ -11049,7 +11256,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
                              部分；cca app --launchers 重新生成）。只用于官方账号
-  cca check [账号] [--json]  检测各账号出口 IP、地区、纯净度和 DNS / WebRTC 泄露，提示共用出口；第三方 API 账号只检测接口连不连得上
+  cca check [账号…] [--json]  检测各账号出口 IP、地区、纯净度和 DNS / WebRTC 泄露，提示共用出口；第三方 API 账号只检测接口连不连得上
   cca login <账号>           退出这个账号现在的登录，在它专属的浏览器窗口里重新登录
   cca gui                    打开图形界面（cca App：各账号的用量、节点分流，一键打开桌面 App、网页版）；没装就先下载
                              和 cca 同版本的 App 装进 ~/Applications（要 macOS 26 或更新）。cca gui update | remove
@@ -11124,7 +11331,7 @@ main() {
 	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes) unset CCA_EVENTS CCA_GRANT CCA_RO ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;

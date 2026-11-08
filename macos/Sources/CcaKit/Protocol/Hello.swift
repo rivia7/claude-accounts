@@ -7,6 +7,8 @@ struct HelloDoc: CcaDocument, Equatable {
     var version: Int?
     var kind: String?
     var api: Int?
+    /// 提问会话的版本（PROTOCOL 4.6）；旧版 cca 没有这个字段，流程都走终端。
+    var prompt: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -17,7 +19,7 @@ struct HelloDoc: CcaDocument, Equatable {
     var gui: HelloGUI?
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, api
+        case version, kind, api, prompt
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
         case installed
@@ -30,6 +32,7 @@ struct HelloDoc: CcaDocument, Equatable {
         version = c.int(.version)
         kind = c.string(.kind)
         api = c.int(.api)
+        prompt = c.int(.prompt)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true

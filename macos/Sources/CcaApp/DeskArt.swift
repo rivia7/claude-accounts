@@ -38,7 +38,7 @@ enum DeskScreen: Equatable {
 extension Employee {
     var pose: DeskPose {
         switch mood {
-        case .absent: return .away
+        case .absent, .expired: return .away
         case .wrongPerson: return .stranger
         case .unwell: return .sweating
         case .resting: return .sleeping
@@ -50,7 +50,7 @@ extension Employee {
     var screen: DeskScreen {
         switch mood {
         case .absent: return .login(warn: false)
-        case .wrongPerson: return .login(warn: true)
+        case .wrongPerson, .expired: return .login(warn: true)
         case .unwell(let a): return .noSignal(severe: a.severe)
         case .resting: return .asleep
         case .working: return app && sessions > 0 ? .split : sessions > 0 ? .terminal : .chat

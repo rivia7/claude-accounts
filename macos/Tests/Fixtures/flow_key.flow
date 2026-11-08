@@ -1,0 +1,2 @@
+{"v":1,"ev":"ask","seq":1,"q":"key.secret","title":"kimi 的 API key","message":"","fields":[{"id":"s","kind":"secret","label":"API key","hint":"输入时不显示，只存进这台 Mac 的钥匙串"}]}
+{"v":1,"ev":"result","code":"key_saved","tool":"claude","key":"kimi","message":"已把 kimi 的 API key 存进钥匙串"}

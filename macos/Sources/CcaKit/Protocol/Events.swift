@@ -7,6 +7,8 @@ enum CcaEvent: Sendable, Equatable {
     case terminal(TerminalEvent)
     case fail(FailEvent)
     case result(ResultEvent)
+    /// 提问会话（PROTOCOL 4.6）：cca 在等这一页的答案。
+    case ask(AskEvent)
     case other(String)
 
     var type: EventType {
@@ -16,6 +18,7 @@ enum CcaEvent: Sendable, Equatable {
         case .terminal: return .terminal
         case .fail: return .fail
         case .result: return .result
+        case .ask: return .ask
         case .other(let t): return EventType(rawValue: t)
         }
     }
@@ -25,6 +28,7 @@ enum CcaEvent: Sendable, Equatable {
     var fail: FailEvent? { if case .fail(let e) = self { return e }; return nil }
     var result: ResultEvent? { if case .result(let e) = self { return e }; return nil }
     var step: StepEvent? { if case .step(let e) = self { return e }; return nil }
+    var ask: AskEvent? { if case .ask(let e) = self { return e }; return nil }
 }
 
 struct StepEvent: Sendable, Equatable {
@@ -64,6 +68,9 @@ struct ResultEvent: Sendable, Equatable {
     var node: String?
     var port: Int?
     var message: String?
+    /// 提问会话：做完之后选中哪个账号。
+    var tool: ToolID? = nil
+    var key: String? = nil
 }
 
 private struct RawEvent: Decodable {
@@ -84,11 +91,16 @@ private struct RawEvent: Decodable {
     var route: Route?
     var node: String?
     var port: Int?
+    var seq: Int?
+    var q: String?
+    var fields: [PromptField]?
+    var tool: ToolID?
+    var key: String?
 
     enum CodingKeys: String, CodingKey {
         case v, ev, code, item, scope, grant, title, question, detail, severity
         case defaultValue = "default"
-        case argv, display, message, route, node, port
+        case argv, display, message, route, node, port, seq, q, fields, tool, key
     }
 
     init(from decoder: Decoder) throws {
@@ -110,6 +122,11 @@ private struct RawEvent: Decodable {
         route = c.lossy(Route.self, .route)
         node = c.string(.node)
         port = c.int(.port)
+        seq = c.int(.seq)
+        q = c.string(.q)
+        fields = c.lossyArray(PromptField.self, .fields)
+        tool = c.lossy(ToolID.self, .tool)
+        key = c.string(.key)
     }
 }
 
@@ -141,7 +158,10 @@ enum EventLog {
             return .fail(FailEvent(code: FailCode(rawValue: raw.code ?? "error"), message: raw.message ?? ""))
         case .result:
             return .result(ResultEvent(code: ResultCode(rawValue: raw.code ?? ""), route: raw.route, node: raw.node,
-                                       port: raw.port, message: raw.message))
+                                       port: raw.port, message: raw.message, tool: raw.tool, key: raw.key))
+        case .ask:
+            guard let seq = raw.seq else { return .other(ev) }
+            return .ask(AskEvent(seq: seq, q: raw.q ?? "", title: raw.title ?? "", message: raw.message ?? "", fields: raw.fields ?? []))
         default:
             return .other(ev)
         }

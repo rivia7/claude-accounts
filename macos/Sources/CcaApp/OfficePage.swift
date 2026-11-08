@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 办公室（App 的首页）：每个账号是一位员工，坐在自己的工位上，按组排好（Claude 组、ChatGPT 组、外包）。
-/// 一眼看出谁在忙、谁在休息、谁没来、谁出了毛病；点工位进这个账号的页面，右键和侧栏的账号一样。
+/// 一眼看出谁在忙、谁在休息、谁没来、谁出了毛病；点工位进这个账号的页面，右键和侧栏的账号一样，拖到别的工位上调整顺序。
 /// 状态全按 cca 给的（Office / Employee，和账号页那句话同一份优先级），“休息到几点”到点就醒：每 30 秒按时间重算。
 struct OfficePage: View {
     @Environment(AppModel.self) private var model
@@ -15,7 +15,7 @@ struct OfficePage: View {
                 VStack(alignment: .leading, spacing: 26) {
                     header(office)
                     TipCard(id: "office-page", title: "这一页怎么看",
-                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。套餐看徽章前面的小记号，彩色的四角星是最高档。点卡片看详情，右键可以直接打开。")
+                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。套餐看徽章前面的小记号，彩色的四角星是最高档。点卡片看详情，右键可以直接打开，拖到别的卡片上可以调整顺序。")
                     if model.state == nil {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -63,12 +63,11 @@ private struct RoomSection: View {
                     Text("\(room.people.count) 个").font(.callout).foregroundStyle(.secondary)
                 }
                 Button {
-                    model.runInTerminal(add)
+                    model.run(add)
                 } label: {
                     Label(add.title + "…", systemImage: "plus")
                 }
                 .buttonStyle(.borderless)
-                .help("在终端里运行 \(add.display)")
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 228, maximum: 340), spacing: 16)], alignment: .leading, spacing: 16) {
                 ForEach(room.people) { e in
@@ -76,7 +75,7 @@ private struct RoomSection: View {
                 }
                 if room.people.isEmpty {
                     EmptyDesk(title: room.department == .chatgpt ? "还没有 ChatGPT 账号" : "还没有账号", action: add.title + "…") {
-                        model.runInTerminal(add)
+                        model.run(add)
                     }
                 }
             }
@@ -94,6 +93,8 @@ private struct DeskCard: View {
     let animate: Bool
     /// 悬停（命令行工具编不了 @State 宏：State 类型直接用）
     private let hover = State(initialValue: false)
+    /// 别的卡片正拖到这张上面
+    private let targeted = State(initialValue: false)
 
     var body: some View {
         let e = employee, a = employee.account
@@ -111,7 +112,8 @@ private struct DeskCard: View {
             }
             .padding(12)
             .background(shape.fill(on ? Color.primary.opacity(0.08) : Surface.tile))
-            .overlay(shape.strokeBorder(Color.primary.opacity(on ? 0.16 : 0), lineWidth: 1))
+            .overlay(shape.strokeBorder(targeted.wrappedValue ? Color.accentColor : Color.primary.opacity(on ? 0.16 : 0),
+                                        lineWidth: targeted.wrappedValue ? 2 : 1))
             .contentShape(shape)
             .scaleEffect(on && !reduceMotion ? 1.01 : 1)
             .animation(reduceMotion ? nil : .snappy(duration: 0.18), value: on)
@@ -119,6 +121,10 @@ private struct DeskCard: View {
         .buttonStyle(.plain)
         .onHover { hover.wrappedValue = $0 }
         .contextMenu { AccountMenu(account: a) }
+        .draggable(a.stableID) { DeskDragPreview(account: a) }
+        .dropDestination(for: String.self) { ids, _ in
+            ids.first.map { model.dropAccount($0, onto: a) } ?? false
+        } isTargeted: { targeted.wrappedValue = $0 }
         .help(label)
         .accessibilityLabel(label)
         .accessibilityHint("打开这个账号的页面")
@@ -129,6 +135,7 @@ private struct DeskCard: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(a.displayName).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                if model.isOnTop(a) { OnTopMark() }
                 Spacer(minLength: 4)
                 if a.isAPI {
                     Text(nonEmpty(a.api?.model) ?? "第三方 API").font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -170,7 +177,7 @@ private struct DeskCard: View {
         switch e.mood {
         case .working: Circle().fill(Color.green).frame(width: 6, height: 6)
         case .absent: Circle().fill(Color.gray).frame(width: 6, height: 6)
-        case .wrongPerson: Circle().fill(Color.orange).frame(width: 6, height: 6)
+        case .wrongPerson, .expired: Circle().fill(Color.orange).frame(width: 6, height: 6)
         case .unwell(let a): Circle().fill(a.severe ? Color.red : Color.orange).frame(width: 6, height: 6)
         case .resting: Image(systemName: "moon.zzz.fill").font(.caption2).foregroundStyle(.secondary)
         case .idle: EmptyView()
@@ -214,7 +221,21 @@ private struct DeskCard: View {
 
 }
 
-/// 空着的工位（这个组还没有账号）：整张是按钮，点了在终端里添加。
+/// 拖动时跟着鼠标的小卡片（整张工位带动画，拖着太重）。
+private struct DeskDragPreview: View {
+    let account: Account
+
+    var body: some View {
+        Text(account.displayName)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(.regularMaterial))
+    }
+}
+
+/// 空着的工位（这个组还没有账号）：整张是按钮，点了添加账号。
 private struct EmptyDesk: View {
     let title: String
     let action: String

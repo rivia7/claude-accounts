@@ -110,23 +110,24 @@ struct DetailHeader: View {
             if let c = a.loginIssueColor {
                 Tag(text: Texts.login(a.login, loginEmail: a.loginEmail), color: c)
             }
+            if model.loginExpired(a) { Tag(text: Texts.usageError(.auth), color: .orange) }
         }
         if a.isWorking { Tag(text: Texts.working(a, appLabel: model.appLabel(a.tool)), color: .green) }
         if a.isLast, guide.showDetails { Tag(text: "上次在命令行里用的", systemImage: "terminal") }
     }
 
-    /// 打开 App（主按钮）、网页版、终端；没登录或登错号时，“登录…”是主按钮。第三方 API 账号没有 App 和网页版，终端是它的主按钮。
+    /// 打开 App（主按钮）、网页版、终端；没登录、登错号或登录失效时，“登录…”是主按钮。第三方 API 账号没有 App 和网页版，终端是它的主按钮。
     @ViewBuilder
     private func actions(_ a: Account) -> some View {
         let busy = model.activity(a.ref) != nil
         let label = model.appLabel(a.tool)
-        let needsLogin = a.login == .loggedOut || a.login == .emailMismatch
+        let needsLogin = a.login == .loggedOut || a.login == .emailMismatch || model.loginExpired(a)
         GlassRow(spacing: 8) {
             if needsLogin {
                 Button {
-                    model.runInTerminal(model.loginHandoff(a))
+                    model.relogin(a)
                 } label: {
-                    Label(a.login == .emailMismatch ? "重新登录…" : "登录…", systemImage: "person.badge.key")
+                    Label(a.login == .loggedOut ? "登录…" : "重新登录…", systemImage: "person.badge.key")
                 }
                 .buttonStyle(.glassProminent)
                 .help("在终端里运行 \(model.loginHandoff(a).display)")
@@ -150,6 +151,15 @@ struct DetailHeader: View {
                 .help(reason("web", a) ?? "在这个账号自己的 Chrome 资料里打开网页版，走账号的出口")
             }
             SessionButton(account: a, prominent: a.isAPI && !needsLogin, unavailable: reason("cli", a))
+            Menu {
+                AccountManageItems(account: a, busy: busy)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuIndicator(.hidden)
+            .buttonStyle(.glass)
+            .help("管理这个账号")
+            .accessibilityLabel("管理这个账号")
         }
         .controlSize(.large)
     }

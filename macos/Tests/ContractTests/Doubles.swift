@@ -52,6 +52,19 @@ final class ScriptedTransport: Transport, @unchecked Sendable {
         lock.withLock { _coreHandles.append(h) }
         return h
     }
+
+    /// 提问会话：按顺序给出准备好的会话，没有了就和不支持一样
+    var sessions: [ScriptedSession] = []
+    private var _started: [[String]] = []
+    var started: [[String]] { lock.withLock { _started } }
+
+    func startSession(_ arguments: [String]) throws -> CcaSession {
+        try lock.withLock {
+            _started.append(arguments)
+            guard !sessions.isEmpty else { throw SessionUnsupported() }
+            return sessions.removeFirst()
+        }
+    }
 }
 
 /// 测试里会换的一段文字（线程安全）。
@@ -160,3 +173,36 @@ func fixtureTransport(_ env: [String: String] = [:]) -> FixtureTransport {
     }
     return cond()
 }
+
+// MARK: 提问会话（PROTOCOL 4.6）
+
+final class ScriptedSession: CcaSession, @unchecked Sendable {
+    let updates: AsyncStream<SessionUpdate>
+    private let continuation: AsyncStream<SessionUpdate>.Continuation
+    private let lock = NSLock()
+    private var _answers: [[String]] = []
+    private var _closed = 0
+    private var _stopped = 0
+
+    init() {
+        var c: AsyncStream<SessionUpdate>.Continuation!
+        updates = AsyncStream(bufferingPolicy: .unbounded) { c = $0 }
+        continuation = c
+    }
+
+    var answers: [[String]] { lock.withLock { _answers } }
+    var closed: Int { lock.withLock { _closed } }
+    var stopped: Int { lock.withLock { _stopped } }
+
+    func feed(_ e: CcaEvent) { continuation.yield(.event(e)) }
+
+    func finish(_ code: Int32, stderr: String = "") {
+        continuation.yield(.finished(CcaResponse(exitCode: code, stdout: Data(), stderr: Data(stderr.utf8), events: [])))
+        continuation.finish()
+    }
+
+    func answer(_ lines: [String]) { lock.withLock { _answers.append(lines) } }
+    func closeAnswers() { lock.withLock { _closed += 1 } }
+    func stop() { lock.withLock { _stopped += 1 } }
+}
+

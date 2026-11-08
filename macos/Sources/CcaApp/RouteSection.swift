@@ -427,7 +427,7 @@ struct HealthDetails: View {
 
     private func footer(_ h: Health, now: Double) -> some View {
         var parts: [String] = []
-        if let at = h.checkedAt { parts.append(Texts.agoPhrase(now - at) + (h.source == .check ? "手动检测" : "启动时检测")) }
+        if let at = h.checkedAt { parts.append(Texts.agoPhrase(now - at) + (h.source == .launch ? "启动时检测" : "检测")) }
         if let via = Texts.via(h.route) { parts.append(via) }
         if let n = h.node { parts.append(n + (h.port.map { "（端口 \($0)）" } ?? "")) }
         return HStack(spacing: 8) {
@@ -488,7 +488,7 @@ struct HealthSummary: View {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     HStack(spacing: 6) {
                         if let at = h.checkedAt {
-                            Text(Texts.agoPhrase(context.date.timeIntervalSince1970 - at) + (h.source == .check ? "手动检测" : "启动时检测"))
+                            Text(Texts.agoPhrase(context.date.timeIntervalSince1970 - at) + (h.source == .launch ? "启动时检测" : "检测"))
                         }
                         if h.stale {
                             Label("结果已经过时", systemImage: "clock.badge.exclamationmark").foregroundStyle(.orange)

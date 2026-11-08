@@ -16,27 +16,64 @@ struct SystemConditions: Sendable, Equatable {
 enum UsagePolling {
     /// 这么久没碰电脑就不查了：没人看
     static let awayAfter: TimeInterval = 15 * 60
+    /// 点了“重新登录”之后这么久里盯着这个账号（每分钟查一次），登录一完成就看得到
+    static let reloginWatch: TimeInterval = 15 * 60
+
+    enum LoginWatch: Equatable, Sendable {
+        case normal
+        /// 登录已失效：多查也没用，查得很慢（在别处重新登录了靠这个恢复）
+        case expired
+        /// 刚点了“重新登录”，还没查到成功
+        case relogging
+    }
 
     struct Item: Equatable {
         var key: String
         var inUse: Bool
         /// 上次查到或者试过的时间（Unix 秒），0 是没查过
         var updated: Double
+        var login: LoginWatch = .normal
     }
 
     /// 看得见时没在用的账号 8 分钟一次：比 cca 算“过期”的 10 分钟短一点，数字不会变灰。
-    static func interval(inUse: Bool, visible: Bool, lowPower: Bool) -> TimeInterval {
-        let minutes: Double = visible ? (inUse ? 5 : 8) : (inUse ? 10 : 60)
+    static func interval(inUse: Bool, visible: Bool, lowPower: Bool, login: LoginWatch = .normal) -> TimeInterval {
+        let minutes: Double
+        switch login {
+        case .relogging: return 55   // 定时器每分钟一次，留点余量
+        case .expired: minutes = visible ? 15 : 60
+        case .normal: minutes = visible ? (inUse ? 5 : 8) : (inUse ? 10 : 60)
+        }
         return minutes * 60 * (lowPower ? 2 : 1)
     }
 
     static func dueKeys(_ items: [Item], visible: Bool, lowPower: Bool, now: Double) -> [String] {
-        items.filter { now - $0.updated >= interval(inUse: $0.inUse, visible: visible, lowPower: lowPower) }.map(\.key)
+        items.filter { now - $0.updated >= interval(inUse: $0.inUse, visible: visible, lowPower: lowPower, login: $0.login) }.map(\.key)
+    }
+}
+
+/// 自动检测网络出口的节奏，比查用量慢得多：出口不常变，测一次要访问好几个外部服务（出口 IP、纯净度、DNS、WebRTC）。
+/// 在用的账号看得见时半小时一次、看不见时一小时；没在用的两小时、四小时（cca 算“结果过时”是 6 小时，App 开着就不会过时）；低电量模式慢一倍。
+/// 用户走开了、系统过热时不测（和查用量同一个闸门）；没测成也按间隔重试。
+enum ExitPolling {
+    /// 一次最多测几个账号（cca 是一个接一个测的），剩下的下一分钟接着测
+    static let batch = 6
+
+    static func interval(inUse: Bool, visible: Bool, lowPower: Bool) -> TimeInterval {
+        let minutes: Double = visible ? (inUse ? 30 : 120) : (inUse ? 60 : 240)
+        return minutes * 60 * (lowPower ? 2 : 1)
+    }
+
+    /// 到期的账号，最久没测的排前面。
+    static func dueKeys(_ items: [UsagePolling.Item], visible: Bool, lowPower: Bool, now: Double) -> [String] {
+        Array(items.filter { now - $0.updated >= interval(inUse: $0.inUse, visible: visible, lowPower: lowPower) }
+            .sorted { $0.updated < $1.updated }
+            .prefix(batch)
+            .map(\.key))
     }
 }
 
 /// App 的定时器。都带容差，让系统把唤醒合在一起：
-/// - 用量：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling）；
+/// - 用量和网络出口：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
 /// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；它从不负责安装。
 @MainActor

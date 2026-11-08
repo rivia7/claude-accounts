@@ -342,10 +342,14 @@ extension Account {
 /// 读屏照旧念 subtitle。
 struct AccountSubtitle: View {
     let account: Account
+    /// 登录已失效（查用量时才知道）：先说这个
+    var expired = false
 
     var body: some View {
         let a = account
-        let parts = a.subtitleParts
+        // 登录失效时不写套餐：徽章不截断，放在一行里会把这句话挤没
+        let parts = expired ? [SubtitlePart.text(Texts.usageError(.auth))] + a.subtitleParts.filter { if case .plan = $0 { return false }; return true }
+            : a.subtitleParts
         ViewThatFits(in: .horizontal) {
             line(a, parts)
             line(a, parts.filter { if case .node = $0 { return false }; return true })
@@ -355,12 +359,12 @@ struct AccountSubtitle: View {
         .lineLimit(1)
         .frame(height: PlanBadge.Size.compact.height)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(a.subtitle)
+        .accessibilityLabel(parts.map(\.text).joined(separator: " · "))
     }
 
     private func line(_ a: Account, _ parts: [SubtitlePart]) -> some View {
         HStack(spacing: 4) {
-            if let c = a.loginIssueColor {
+            if let c = a.loginIssueColor ?? (expired ? .orange : nil) {
                 Circle().fill(c).frame(width: 6, height: 6).padding(.trailing, 1)
             }
             ForEach(Array(parts.enumerated()), id: \.offset) { i, p in

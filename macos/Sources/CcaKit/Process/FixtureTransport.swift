@@ -161,4 +161,67 @@ struct FixtureTransport: Transport {
     }
 
     func spawnDetached(_ request: CcaRequest) throws {}
+
+    /// 提问会话的演示：按 `flow_<参数用 _ 连起来>.flow` 回放（没有这个文件就和不支持一样）。
+    func startSession(_ arguments: [String]) throws -> CcaSession {
+        var args = arguments
+        if args.first == "codex" { args.removeFirst() }
+        if args.first == "key" || args.first == "rm" { args = [args[0]] }
+        let name = "flow_" + args.joined(separator: "_") + ".flow"
+        guard let d = read(name) else { throw SessionUnsupported() }
+        return DemoSession(data: d)
+    }
+}
+
+/// 演示用的提问会话：一行一个事件，`ask` 之后等答案；`{"pause":true}` 停在那里，`{"exit":N}` 记下退出码。
+final class DemoSession: CcaSession, @unchecked Sendable {
+    let updates: AsyncStream<SessionUpdate>
+    private let continuation: AsyncStream<SessionUpdate>.Continuation
+    private let lock = NSLock()
+    private var rows: [Data]
+    private var exitCode: Int32 = 0
+    private var ended = false
+
+    init(data: Data) {
+        var c: AsyncStream<SessionUpdate>.Continuation!
+        updates = AsyncStream(bufferingPolicy: .unbounded) { c = $0 }
+        continuation = c
+        rows = data.split(separator: 0x0A, omittingEmptySubsequences: true).map { Data($0) }
+        play()
+    }
+
+    private func play() {
+        lock.lock()
+        defer { lock.unlock() }
+        while !ended, !rows.isEmpty {
+            let row = rows.removeFirst()
+            let obj = try? JSONSerialization.jsonObject(with: row) as? [String: Any]
+            if obj?["pause"] != nil { return }
+            if let code = obj?["exit"] as? Int {
+                exitCode = Int32(code)
+                continue
+            }
+            guard let e = EventLog.parseLine(row) else { continue }
+            continuation.yield(.event(e))
+            if case .ask = e { return }
+        }
+        if !ended { finish(exitCode) }
+    }
+
+    private func finish(_ code: Int32) {
+        ended = true
+        continuation.yield(.finished(CcaResponse(exitCode: code, stdout: Data(), stderr: Data(), events: [])))
+        continuation.finish()
+    }
+
+    func answer(_ lines: [String]) { play() }
+
+    func closeAnswers() {
+        lock.withLock {
+            guard !ended else { return }
+            finish(143)
+        }
+    }
+
+    func stop() { closeAnswers() }
 }

@@ -170,7 +170,7 @@ enum CcaProcess {
     }
 
     /// posix_spawn：自己一个会话、信号恢复默认、只继承 0/1/2；stdin 一律 /dev/null。
-    private static func spawn(_ spec: ProcessSpec, stdout: Output, stderr: Output) throws -> pid_t {
+    private static func spawn(_ spec: ProcessSpec, stdout: Output, stderr: Output, answers: Int32? = nil) throws -> pid_t {
         var attr: posix_spawnattr_t? = nil
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
@@ -196,6 +196,7 @@ enum CcaProcess {
             case .null: posix_spawn_file_actions_addopen(&fa, fd, "/dev/null", O_WRONLY, 0)
             }
         }
+        if let answers { posix_spawn_file_actions_adddup2(&fa, answers, 3) }
 
         let argv = cStrings([spec.executable] + spec.arguments)
         let envp = cStrings(spec.environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" })
@@ -327,6 +328,53 @@ enum CcaProcess {
             t.name = "cca-run-\(pid)"
             t.start()
         }
+    }
+
+    /// 提问会话（PROTOCOL 4.6）：输出接文件（App 退出时 cca 不会被 SIGPIPE 杀掉），fd 3 是答案管道的读端。返回进程号和写端。
+    static func spawnSession(_ spec: ProcessSpec, stdoutPath: String, stderrPath: String) throws -> (pid: pid_t, answers: Int32) {
+        let p = try makePipe()
+        // 读端挪到高位：它碰巧是 3 时 dup2(3, 3) 什么都不做，close-on-exec 清不掉，子进程就没有 fd 3 了
+        let high = fcntl(p.read, F_DUPFD_CLOEXEC, 10)
+        let failure = errno
+        close(p.read)
+        guard high >= 0 else {
+            close(p.write)
+            throw ProcessError.pipeFailed(errno: failure)
+        }
+        defer { close(high) }
+        _ = fcntl(p.write, F_SETNOSIGPIPE, 1)   // cca 已经退出时写答案不能把 App 杀掉
+        do {
+            let pid = try spawn(spec, stdout: .file(stdoutPath), stderr: .file(stderrPath), answers: high)
+            return (pid, p.write)
+        } catch {
+            close(p.write)
+            throw error
+        }
+    }
+
+    /// 把数据全部写进文件描述符（对方关了就算了）。
+    static func writeAll(_ fd: Int32, _ data: Data) {
+        data.withUnsafeBytes { (b: UnsafeRawBufferPointer) in
+            var off = 0
+            while off < b.count {
+                let n = write(fd, b.baseAddress! + off, b.count - off)
+                if n > 0 {
+                    off += n
+                } else if n < 0 && errno == EINTR {
+                    continue
+                } else {
+                    return
+                }
+            }
+        }
+    }
+
+    /// 文件最后一行不是空白的文字（给人看的进度）。
+    static func lastLine(_ path: String) -> String? {
+        let (data, _) = readTail(path, limit: 4096)
+        let text = String(decoding: data, as: UTF8.self)
+        return text.split(whereSeparator: \.isNewline).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// 文件的最后 limit 个字节（详情要的是最后几行）。
