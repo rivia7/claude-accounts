@@ -16,19 +16,25 @@ enum CcaCommand: Sendable, Hashable {
     case guiUpdate
     /// 改别名（`cca [codex] rename KEY 新别名`，新别名是 - 时去掉别名）：stdout 是新的键。
     case rename(ToolID, key: String, alias: String)
+    /// 重置额度（`cca codex reset KEY --json`，PROTOCOL 4.5）：要同意（reset_credit），stdout 是 kind=reset 的文档。
+    case reset(ToolID, key: String)
+    /// 「更新并重新打开」之前先把 cca 更新到这个版本（`cca update 版本号`，PROTOCOL 5.1）。
+    case update(String)
+    /// 检查更新（`cca update --check --json`，PROTOCOL 5.1）：只读、要联网，stdout 是 kind=update 的文档；查不了时看 fail 事件。
+    case updateCheck
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _): return t
-        case .routerSync, .guiUpdate: return nil
+        case .usage(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
+        case .routerSync, .guiUpdate, .update, .updateCheck: return nil
         }
     }
 
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .rename(_, let k, _): return k
-        case .routerSync, .guiUpdate: return nil
+        case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k): return k
+        case .routerSync, .guiUpdate, .update, .updateCheck: return nil
         }
     }
 
@@ -43,6 +49,9 @@ enum CcaCommand: Sendable, Hashable {
         case .routerSync: return ["router", "sync"]
         case .guiUpdate: return ["gui", "update"]
         case .rename(_, let k, let a): return prefix + ["rename", k, a]
+        case .reset(_, let k): return prefix + ["reset", k, "--json"]
+        case .update(let v): return ["update", v]
+        case .updateCheck: return ["update", "--check", "--json"]
         }
     }
 
@@ -53,27 +62,31 @@ enum CcaCommand: Sendable, Hashable {
         case .check: return 180
         case .app, .web: return 120
         case .routerSync: return 180
-        case .guiUpdate: return 300
+        case .guiUpdate, .update: return 300
         case .rename: return 60
+        case .reset, .updateCheck: return 150
         }
     }
 
-    /// 一旦开始就要跑完（PROTOCOL 1）：输出接文件，不限时，App 退出时也不杀。
+    /// 一旦开始就要跑完（PROTOCOL 1）：输出接文件，不限时，App 退出时也不杀。重置额度也是：同意之后就会用掉一次，
+    /// 半路杀掉可能用掉了却没记下重置后的用量。
     var runsToCompletion: Bool {
         switch self {
-        case .app, .web, .routerSync: return true
-        case .usage, .check, .guiUpdate, .rename: return false
+        case .app, .web, .routerSync, .reset: return true
+        case .usage, .check, .guiUpdate, .rename, .update, .updateCheck: return false
         }
     }
 
-    /// 同一个闸门里的命令一次只跑一个：同一个账号的 app / web；同一个工具的 usage；router sync、gui update 全局一个。
+    /// 同一个闸门里的命令一次只跑一个：同一个账号的 app / web；同一个工具的 usage；同一个账号的 reset；
+    /// router sync 全局一个；更新 cca、gui update 全局一个（一个接着一个）。
     var gate: String? {
         switch self {
         case .app(let t, let k), .web(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
         case .usage(let t, _): return "usage:\(t.rawValue)"
+        case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
         case .routerSync: return "router-sync"
-        case .guiUpdate: return "gui-update"
-        case .check: return nil
+        case .guiUpdate, .update: return "gui-update"
+        case .check, .updateCheck: return nil
         }
     }
 }

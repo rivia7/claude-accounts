@@ -112,8 +112,8 @@ enum Snapshot {
         // 卡片教程：每一步截一张弹层（浅色、深色）
         if only.isEmpty || only.contains("tutorial") {
             for step in 0..<TutorialCard.all.count {
+                guide.openTutorial()
                 guide.step = step
-                guide.tutorialShown = true
                 for (label, name) in appearances {
                     NSApp.appearance = NSAppearance(named: name)
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -122,8 +122,34 @@ enum Snapshot {
                     }
                 }
             }
-            guide.tutorialShown = false
+            guide.sheet = nil
             try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+        // 更新了什么：每个版本一张（WhatsNew.all：开发版里还没发布的那一版也截）
+        if only.isEmpty || only.contains("whatsnew") {
+            guide.showWhatsNew(WhatsNew.all)
+            for i in WhatsNew.all.indices {
+                guide.step = i
+                for (label, name) in appearances {
+                    NSApp.appearance = NSAppearance(named: name)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if let sheet = window.attachedSheet {
+                        await capture(sheet, to: dir.appendingPathComponent("whatsnew-\(i + 1)-\(label).png"))
+                    }
+                }
+            }
+            guide.sheet = nil
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+        // 检查更新找到新版本：窗口顶上的提示条（演示数据的 update.json；放在后面，前面的场景不带它）
+        if only.isEmpty || only.contains("update") {
+            model.selection = .office
+            model.checkForUpdates(manual: false)
+            for (label, name) in appearances {
+                NSApp.appearance = NSAppearance(named: name)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await capture(window, to: dir.appendingPathComponent("update-\(label).png"))
+            }
         }
         // 工位画廊：每种状态 × 几种档位（调插画用，不依赖演示数据）
         if only.isEmpty || only.contains("gallery") {

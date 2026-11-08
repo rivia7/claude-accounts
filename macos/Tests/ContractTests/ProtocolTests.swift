@@ -132,6 +132,15 @@ func rerunProtocolTests() async {
     check("check 全部账号的参数", CcaCommand.check(.claude, key: nil).arguments == ["check", "--json"])
     check("gui update（第一步）", CcaCommand.guiUpdate.arguments == ["gui", "update"] && CcaCommand.guiUpdate.timeout == 300
           && !CcaCommand.guiUpdate.runsToCompletion && CcaCommand.guiUpdate.gate == "gui-update")
+    let reset = CcaCommand.reset(.codex, key: "frank@example.com")
+    check("重置额度：参数、带 codex、跑完为止（同意之后就会用掉一次）、同一个账号一次一个",
+          reset.arguments == ["codex", "reset", "frank@example.com", "--json"] && reset.runsToCompletion
+          && reset.gate == "reset:codex:frank@example.com" && reset.tool == .codex && reset.key == "frank@example.com")
+    check("更新 cca 到某个版本：参数、超时，和 gui update 一个闸门（一个接着一个）",
+          CcaCommand.update("2.9.1").arguments == ["update", "2.9.1"] && CcaCommand.update("2.9.1").timeout == 300
+          && !CcaCommand.update("2.9.1").runsToCompletion && CcaCommand.update("2.9.1").gate == "gui-update")
+    check("检查更新：参数、超时，不排队", CcaCommand.updateCheck.arguments == ["update", "--check", "--json"]
+          && CcaCommand.updateCheck.timeout == 150 && !CcaCommand.updateCheck.runsToCompletion && CcaCommand.updateCheck.gate == nil)
     check("前缀只有一处", ToolID.claude.defaultPrefix.isEmpty && ToolID.codex.defaultPrefix == ["codex"])
     // 只读查询
     do {
@@ -190,4 +199,7 @@ func gateTests() async {
     check("Claude 和 Codex 的 usage 同时跑", await pair(.usage(.claude, key: nil), .usage(.codex, key: nil)))
     check("router sync 全局一个", !(await pair(.routerSync, .routerSync)))
     check("check 不排队", await pair(.check(.claude, key: "k1"), .check(.claude, key: "k1")))
+    check("同一个账号的重置额度排队", !(await pair(.reset(.codex, key: "k1"), .reset(.codex, key: "k1"))))
+    check("不同账号的重置额度同时跑", await pair(.reset(.codex, key: "k1"), .reset(.codex, key: "k2")))
+    check("更新 cca 和 gui update 排队（一个接着一个）", !(await pair(.update("9.9.10"), .guiUpdate)))
 }

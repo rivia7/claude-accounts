@@ -370,7 +370,24 @@ case "$url" in
 		[ -f "$CCA_T/mihomo/$f" ] || exit 22
 		cp "$CCA_T/mihomo/$f" "$out"
 		exit 0 ;;
-	https://github.com/*|https://*.githubusercontent.com/*) echo "GH unexpected $url" >> "$CCA_T/gh.log"; exit 22 ;;
+	https://api.github.com/repos/rivia7/claude-accounts/releases*)   # 最近的发布（cca update --check）：按 $CCA_T/gh/v<版本>/ 生成，
+		# 测试版是 pre-release；更新说明取 v<版本>/notes（没有就是“cca 版本”）；gh_api_down 模拟连不上、被限流
+		echo "GH releases" >> "$CCA_T/gh.log"
+		[ ! -f "$CCA_T/gh_api_down" ] || exit 22
+		python3 - "$CCA_T/gh" > "${out:-/dev/stdout}" <<'PY'
+import json, os, sys
+g = sys.argv[1]
+rel = []
+for d in sorted(os.listdir(g)) if os.path.isdir(g) else []:
+    if d.startswith('v') and os.path.isfile(os.path.join(g, d, 'cca')):
+        n = os.path.join(g, d, 'notes')
+        rel.append({'tag_name': d, 'name': d, 'draft': False, 'prerelease': '-beta.' in d,
+                    'body': open(n, encoding='utf-8').read() if os.path.exists(n) else 'cca %s' % d[1:],
+                    'html_url': 'https://github.com/rivia7/claude-accounts/releases/tag/' + d, 'published_at': '2026-11-01T08:00:00Z'})
+json.dump(rel, sys.stdout, ensure_ascii=False)
+PY
+		exit 0 ;;
+	https://github.com/*|https://*.githubusercontent.com/*|https://api.github.com/*) echo "GH unexpected $url" >> "$CCA_T/gh.log"; exit 22 ;;
 esac
 if [ -n "$proxy" ]; then
 	port="${proxy##*:}"; phost="${proxy#*://}"; phost="${phost%:*}"
@@ -882,6 +899,40 @@ for line in sys.stdin:
             send({'id': rid, 'result': json.load(open(p))})
         else:
             send({'id': rid, 'result': {'rateLimits': {'limitId': 'codex', 'primary': None, 'secondary': None, 'planType': 'free'}}})
+    elif meth == 'account/rateLimitResetCredit/consume':
+        # 用掉一次重置机会：按 codex_usage/<邮箱>.json 里的用量和重置机会办——没有（或指定的那一次不在了）是 noCredit，
+        # 用量都是 0 是 nothingToReset，否则把 5 小时、每周清零、去掉用掉的那一次（写回文件，之后查用量就是新的）；
+        # codex_usage/reset_outcome 里写着结果时照它回，reset_unsupported 模拟旧版本的 codex
+        u, prm = os.path.join(t, 'codex_usage'), m.get('params') or {}
+        key = prm.get('idempotencyKey') or ''
+        log('RPC resetConsume email=%s https_proxy=%s credit=%s key=%s' % (email_now() or '-', os.environ.get('https_proxy', 'unset'),
+            prm.get('creditId') or '-', 'uuid' if re.match(r'^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$', key) else 'bad:' + key))
+        if os.path.exists(os.path.join(u, 'reset_unsupported')):
+            send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found: account/rateLimitResetCredit/consume'}}); continue
+        if not email_now():
+            send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required for rate limit reset credits'}}); continue
+        p = os.path.join(u, email_now() + '.json')
+        j = json.load(open(p)) if os.path.exists(p) else {'rateLimits': {}}
+        rc = j.get('rateLimitResetCredits') or {'availableCount': 0, 'credits': []}
+        avail = [c for c in rc.get('credits') or [] if c.get('status') == 'available']
+        cid = prm.get('creditId') or (avail[0]['id'] if avail else None)
+        wins = [w for w in (j['rateLimits'].get('primary'), j['rateLimits'].get('secondary')) if isinstance(w, dict)]
+        if os.path.exists(os.path.join(u, 'reset_outcome')):
+            outcome = open(os.path.join(u, 'reset_outcome')).read().strip()
+        elif rc.get('availableCount', 0) <= 0 or (prm.get('creditId') and not any(c['id'] == cid for c in avail)):
+            outcome = 'noCredit'
+        elif not any(w.get('usedPercent') for w in wins):
+            outcome = 'nothingToReset'
+        else:
+            outcome = 'reset'
+            for w in wins:
+                w['usedPercent'] = 0
+            rc['availableCount'] -= 1
+            rc['credits'] = [c for c in rc.get('credits') or [] if c.get('id') != cid]
+            j['rateLimitResetCredits'] = rc
+            j.setdefault('rateLimitsByLimitId', {})['codex'] = j['rateLimits']
+            json.dump(j, open(p, 'w'))
+        send({'id': rid, 'result': {'outcome': outcome}})
     elif rid is not None:
         send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found'}})
 S

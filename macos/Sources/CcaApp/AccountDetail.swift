@@ -83,7 +83,7 @@ struct DetailHeader: View {
 
     private func identity(_ a: Account) -> some View {
         HStack(alignment: .center, spacing: 16) {
-            AccountAvatar(account: a, size: 56, dot: 15, visible: model.mainVisible)
+            AccountAvatar(account: a, size: 56, dot: 15)
             VStack(alignment: .leading, spacing: 5) {
                 AliasTitle(account: a)
                 if let sub = secondaryIdentity(a) {

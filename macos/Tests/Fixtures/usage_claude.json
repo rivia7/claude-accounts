@@ -10,7 +10,9 @@
       "seven_day_opus": {"utilization": 0.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
       "seven_day_sonnet": {"utilization": 60.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
       "seven_day_oauth_apps": null,
-      "model_scoped": [{"name": "Sonnet", "utilization": 60.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false}],
+      "model_scoped": [{"name": "Sonnet", "utilization": 60.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
+                       {"name": "Fable", "utilization": 34.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false,
+                        "used_percent_of_weekly": 17, "allowance_percent_of_weekly": 50}],
       "extra_usage": {"is_enabled": true, "utilization": 12.5, "monthly_limit": 5000, "used_credits": 625}
     },
     {

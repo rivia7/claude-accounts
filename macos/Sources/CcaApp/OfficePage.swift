@@ -5,7 +5,7 @@ import SwiftUI
 /// 状态全按 cca 给的（Office / Employee，和账号页那句话同一份优先级），“休息到几点”到点就醒：每 30 秒按时间重算。
 struct OfficePage: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motionAllowed) private var motionAllowed
 
     var body: some View {
         ScrollView {
@@ -23,7 +23,7 @@ struct OfficePage: View {
                         }
                     } else {
                         ForEach(office.rooms) { room in
-                            RoomSection(room: room, now: now, animate: model.mainVisible && !reduceMotion)
+                            RoomSection(room: room, now: now, animate: motionAllowed)
                         }
                     }
                 }

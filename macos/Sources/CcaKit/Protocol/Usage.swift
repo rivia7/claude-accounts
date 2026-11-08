@@ -33,17 +33,27 @@ struct UsageWindow: Decodable, Sendable, Equatable {
     }
 }
 
-/// `model_scoped[]`：按模型的每周额度。
+/// `model_scoped[]`：按模型的每周额度（Claude 的 Fable；Codex 另外计的额度）。Claude 的还带着它占本周总额度多少（cca 认出来的）。
 struct ModelWindow: Decodable, Sendable, Equatable {
     var name: String?
     var window: UsageWindow
+    /// 最多能用本周总额度的百分之几（Fable 是 50）；cca 认不出时为 nil
+    var allowancePercentOfWeekly: Double?
+    /// 已经用掉本周总额度的百分之几
+    var usedPercentOfWeekly: Double?
 
-    enum CodingKeys: String, CodingKey { case name }
+    enum CodingKeys: String, CodingKey {
+        case name
+        case allowancePercentOfWeekly = "allowance_percent_of_weekly"
+        case usedPercentOfWeekly = "used_percent_of_weekly"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = c.string(.name)
         window = try UsageWindow(from: decoder)
+        allowancePercentOfWeekly = c.double(.allowancePercentOfWeekly)
+        usedPercentOfWeekly = c.double(.usedPercentOfWeekly)
     }
 }
 
@@ -86,15 +96,22 @@ struct Credits: Decodable, Sendable, Equatable {
     }
 }
 
-/// Codex 还能重置几次额度（codex 原样给的，键是驼峰）。
+/// Codex 还能重置几次额度（codex 原样给的 `availableCount`），和 cca 算好的还能用的里面最早什么时候过期（PROTOCOL 3.1）。
+/// 每一次的明细（`credits[]`）App 不用。
 struct ResetCredits: Decodable, Sendable, Equatable {
     var availableCount: Int?
+    /// 最早过期的那一次什么时候过期（Unix 秒）；都不过期、没有明细时为 nil
+    var nextExpiresEpoch: Double?
 
-    enum CodingKeys: String, CodingKey { case availableCount }
+    enum CodingKeys: String, CodingKey {
+        case availableCount
+        case nextExpiresEpoch = "next_expires_epoch"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         availableCount = c.int(.availableCount)
+        nextExpiresEpoch = c.double(.nextExpiresEpoch)
     }
 }
 

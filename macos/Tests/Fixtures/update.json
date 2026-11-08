@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "kind": "update",
+  "generated_epoch": 1794042000.0,
+  "cca_version": "2.9.0",
+  "channel": "stable",
+  "source": "releases",
+  "latest": "2.9.1",
+  "available": true,
+  "notes": "cca 2.9.1：账号页上 Fable 的用量单独一大块；ChatGPT 账号能重置额度；App 里能检查更新\n\n更多说明见发布页",
+  "url": "https://github.com/rivia7/claude-accounts/releases/tag/v2.9.1",
+  "published_epoch": 1794038400.0
+}

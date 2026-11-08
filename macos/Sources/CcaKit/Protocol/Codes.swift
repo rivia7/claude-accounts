@@ -291,10 +291,14 @@ struct FailCode: KnownValues {
     static let aliasInvalid = FailCode(rawValue: "alias_invalid")
     /// 改别名时找不到这个账号。
     static let accountMissing = FailCode(rawValue: "account_missing")
+    /// 重置额度：没有能用的重置机会了。
+    static let noResetCredit = FailCode(rawValue: "no_reset_credit")
+    /// 重置额度：这个版本的 codex 不支持（升级后再试）。
+    static let resetUnsupported = FailCode(rawValue: "reset_unsupported")
     static let allKnown: [FailCode] = [.error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
-                                       .appProfileUnsupported, .aliasInvalid, .accountMissing]
+                                       .appProfileUnsupported, .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -317,7 +321,41 @@ struct ConsentItem: KnownValues {
     static let lowPurity = ConsentItem(rawValue: "low_purity")
     static let codexFallbackOff = ConsentItem(rawValue: "codex_fallback_off")
     static let openClashVerge = ConsentItem(rawValue: "open_clash_verge")
-    static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .openClashVerge]
+    static let builtinCore = ConsentItem(rawValue: "builtin_core")
+    /// 重置额度会用掉一次重置机会（范围是账号目录名，默认不同意）。
+    static let resetCredit = ConsentItem(rawValue: "reset_credit")
+    static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .openClashVerge, .builtinCore,
+                                          .resetCredit]
+}
+
+/// 重置额度的结果（PROTOCOL 4.5）：重置了 / 这一次早就重置过了 / 用量还不需要重置（没扣次数）/ 没有能用的重置机会。
+struct ResetOutcome: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    static let reset = ResetOutcome(rawValue: "reset")
+    static let alreadyRedeemed = ResetOutcome(rawValue: "already_redeemed")
+    static let nothingToReset = ResetOutcome(rawValue: "nothing_to_reset")
+    static let noCredit = ResetOutcome(rawValue: "no_credit")
+    static let allKnown: [ResetOutcome] = [.reset, .alreadyRedeemed, .nothingToReset, .noCredit]
+}
+
+/// 检查更新跟着哪种版本（PROTOCOL 5.1）：`stable`（正式版只看正式版）| `beta`（测试版也看更新的测试版）。
+struct UpdateChannel: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    static let stable = UpdateChannel(rawValue: "stable")
+    static let beta = UpdateChannel(rawValue: "beta")
+    static let allKnown: [UpdateChannel] = [.stable, .beta]
+}
+
+/// 检查更新的版本从哪来（PROTOCOL 5.1）：`releases`（GitHub 的发布列表，有更新说明）| `latest`（列表拿不到时退回 releases/latest：
+/// 只看得到正式版、没有更新说明）。
+struct UpdateSource: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    static let releases = UpdateSource(rawValue: "releases")
+    static let latest = UpdateSource(rawValue: "latest")
+    static let allKnown: [UpdateSource] = [.releases, .latest]
 }
 
 struct Severity: KnownValues {

@@ -1,10 +1,12 @@
 import SwiftUI
 
-// 给新手的引导：第一次打开时的卡片教程（一步一张，可以随时从“帮助”菜单、工具栏的问号再看），
+// 给新手的引导：第一次打开时的卡片教程（一步一张，可以随时从“帮助”菜单、工具栏的问号再看），升级后第一次打开时的
+// “更新了什么”（一个版本一张，内容在 CcaKit 的 WhatsNew.swift，“帮助”菜单的「更新说明」能再看），
 // 页面上的提示卡片（讲一句这一页怎么看，点“知道了”就不再出现），账号页顶上“现在能不能用、下一步点什么”的一句话，
 // 以及默认收起的技术细节（端口、槽位、纯净度明细这些，点“显示细节”才出来）。
 
-/// 引导的状态：教程看过没有、关掉了哪些提示卡片、要不要显示技术细节。记在 App 的设置里（演示模式只记在内存里）。
+/// 引导的状态：教程看过没有、看过哪个版本的更新说明、关掉了哪些提示卡片、要不要显示技术细节。
+/// 记在 App 的设置里（演示模式只记在内存里）。
 @MainActor
 @Observable
 final class Guide {
@@ -12,39 +14,83 @@ final class Guide {
         static let done = "guide.tutorialDone"
         static let tips = "guide.dismissedTips"
         static let details = "guide.showDetails"
+        /// 看过哪个版本的“更新了什么”（App 的版本号）
+        static let whatsNewSeen = "guide.whatsNewSeen"
     }
 
     @ObservationIgnored private let prefs: PrefsStore
-    /// 教程正在显示
-    var tutorialShown = false
-    /// 教程现在在第几张（从 0 起）
+    /// 这个 App 的版本号（更新说明按它挑）
+    @ObservationIgnored let appVersion: String
+    /// 主窗口上正在看的引导卡片：新手教程，或者这几个版本的更新说明（最新的在前）
+    var sheet: Sheet?
+    /// 现在在第几张（从 0 起）
     var step = 0
     private(set) var dismissedTips: Set<String>
     /// 显示技术细节（端口、槽位、出口检测的明细）
     private(set) var showDetails: Bool
 
-    init(prefs: PrefsStore) {
+    enum Sheet: Identifiable, Equatable {
+        case tutorial
+        case whatsNew([ReleaseNote])
+
+        var id: String {
+            if case .tutorial = self { return "tutorial" }
+            return "whatsNew"
+        }
+    }
+
+    init(prefs: PrefsStore, appVersion: String) {
         self.prefs = prefs
+        self.appVersion = appVersion
         dismissedTips = Set((prefs.string(forKey: Keys.tips) ?? "").split(separator: ",").map(String.init))
         showDetails = prefs.bool(forKey: Keys.details)
     }
 
-    /// 第一次连上 cca 时打开教程（看过、跳过过的不再自动打开）。
+    /// 第一次连上 cca 时：第一次装就打开教程（看过、跳过过的不再自动打开）；升级了就给这几个版本更新了什么
+    /// （WhatsNew.onLaunch：给了就记作看过，以后不再自动给）。
     func startIfNeeded() {
-        guard !prefs.bool(forKey: Keys.done), !tutorialShown else { return }
-        step = 0
-        tutorialShown = true
+        guard sheet == nil else { return }
+        let done = prefs.bool(forKey: Keys.done)
+        let r = WhatsNew.onLaunch(tutorialDone: done, lastSeen: prefs.string(forKey: Keys.whatsNewSeen), current: appVersion)
+        if let seen = r.seen { prefs.set(seen, forKey: Keys.whatsNewSeen) }
+        if !done {
+            openTutorial()
+        } else if !r.show.isEmpty {
+            showWhatsNew(r.show)
+        }
     }
 
     func openTutorial() {
         step = 0
-        tutorialShown = true
+        sheet = .tutorial
     }
 
     /// 看完或跳过：记下来，以后不再自动打开。
     func finishTutorial() {
         prefs.set(true, forKey: Keys.done)
-        tutorialShown = false
+        if sheet == .tutorial { sheet = nil }
+    }
+
+    /// 「帮助」菜单的「更新说明」：不比这个版本新的都能翻（最新的在前）。
+    func openWhatsNew() {
+        showWhatsNew(WhatsNew.history(current: appVersion))
+    }
+
+    func showWhatsNew(_ notes: [ReleaseNote]) {
+        guard !notes.isEmpty else { return }
+        step = 0
+        sheet = .whatsNew(notes)
+    }
+
+    /// 正在看的更新说明（没在看是空的）
+    var whatsNewNotes: [ReleaseNote] {
+        if case .whatsNew(let notes)? = sheet { return notes }
+        return []
+    }
+
+    /// 弹层关掉了（按钮、Esc）：教程记作看过；更新说明收起
+    func dismissSheet() {
+        if sheet == .tutorial { finishTutorial() } else { sheet = nil }
     }
 
     func isDismissed(_ tip: String) -> Bool { dismissedTips.contains(tip) }
@@ -74,7 +120,8 @@ struct TutorialCard {
     let points: [(String, String)]
     let art: Art
 
-    enum Art { case fan, office, sidebar, open, quota, route, map, rename, menubar }
+    /// 小图；更新说明（ReleaseNote.art）按名字找，认不出就画 Logo
+    enum Art: String { case fan, office, sidebar, open, quota, route, map, rename, menubar, badges, logo }
 
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
@@ -100,8 +147,9 @@ struct TutorialCard {
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
-            ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两个额度，各一块。"),
+            ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两块额度；Claude 的 Fable 另有每周额度，也是单独一块。"),
             ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
+            ("arrow.counterclockwise", "ChatGPT 账号还有重置机会时，点「重置额度…」能把用量清零（会先问你）。"),
             ("arrow.clockwise", "点「刷新用量」，经这个账号的出口查一次最新的。"),
         ], art: .quota),
         TutorialCard(title: "看网络出口", points: [
@@ -119,47 +167,53 @@ struct TutorialCard {
             ("circle.lefthalf.filled", "左下角的按钮切换浅色、深色，或者跟随系统。"),
             ("plus", "添加账号、配置路由器：点工具栏的「＋」，在终端里按提示完成。"),
         ], art: .rename),
-        TutorialCard(title: "菜单栏和帮助", points: [
+        TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。"),
+            ("arrow.down.circle", "有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查更新。"),
             ("lightbulb", "页面上的提示卡片讲这一页怎么看，看懂了点「知道了」。"),
-            ("book", "想再看一遍这个教程：点左下角的「新手教程」，或者工具栏的问号。"),
+            ("book", "想再看一遍这个教程：点左下角的「新手教程」或工具栏的问号；「帮助」菜单里还有每个版本的更新说明。"),
         ], art: .menubar),
     ]
 }
 
-/// 卡片教程（弹层）：一步一张；下面的小圆点能直接点到任意一张；第一张可以跳过，最后一张能“从头再看”或“开始使用”。
-struct TutorialSheet: View {
-    @Environment(Guide.self) private var guide
+/// 卡片弹层（新手教程、更新说明共用）：上面一幅小图，下面一行小字、标题和几条带图标的要点，最下面是翻页的小圆点和按钮。
+struct CardSheet<Footer: View>: View {
+    /// 读屏软件念的名字（新手教程、更新说明）
+    let name: String
+    let art: TutorialCard.Art
+    let caption: String
+    let title: String
+    let points: [(String, String)]
+    let page: Int
+    let pages: Int
+    let select: (Int) -> Void
+    @ViewBuilder let footer: Footer
 
     var body: some View {
-        let cards = TutorialCard.all
-        let i = min(max(guide.step, 0), cards.count - 1)
-        let card = cards[i]
-        let last = i == cards.count - 1
         VStack(spacing: 0) {
-            TutorialArt(art: card.art)
+            TutorialArt(art: art)
                 .frame(maxWidth: .infinity)
                 .frame(height: 196)
                 .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Surface.tile))
                 .padding([.horizontal, .top], 24)
-                .id(i)
+                .id(page)
                 .transition(.opacity)
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("第 \(i + 1) 步，共 \(cards.count) 步")
+                    Text(caption)
                         .font(.caption.weight(.medium).monospacedDigit())
                         .foregroundStyle(.secondary)
-                    Text(card.title).font(.title2.weight(.semibold))
+                    Text(title).font(.title2.weight(.semibold))
                 }
                 VStack(alignment: .leading, spacing: 9) {
-                    ForEach(card.points.indices, id: \.self) { k in
+                    ForEach(points.indices, id: \.self) { k in
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Image(systemName: card.points[k].0)
+                            Image(systemName: points[k].0)
                                 .font(.callout.weight(.semibold))
                                 // “App 开着”的绿点照真实的样子画成绿色，其它要点用强调色
-                                .foregroundStyle(card.points[k].0 == "circle.fill" ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tint))
+                                .foregroundStyle(points[k].0 == "circle.fill" ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tint))
                                 .frame(width: 20)
-                            Text(card.points[k].1)
+                            Text(points[k].1)
                                 .font(.body)
                                 .foregroundStyle(.primary.opacity(0.85))
                                 .fixedSize(horizontal: false, vertical: true)
@@ -172,35 +226,83 @@ struct TutorialSheet: View {
             .padding(.top, 18)
             Spacer(minLength: 10)
             HStack(spacing: 10) {
-                PageDots(count: cards.count, current: i) { guide.step = $0 }
+                if pages > 1 {
+                    PageDots(count: pages, current: page, select: select)
+                }
                 Spacer()
-                if last {
-                    Button {
-                        guide.step = 0
-                    } label: {
-                        Label("从头再看", systemImage: "arrow.counterclockwise")
-                    }
-                } else if i == 0 {
-                    Button("跳过") { guide.finishTutorial() }
-                        .keyboardShortcut(.cancelAction)
-                }
-                if i > 0 {
-                    Button("上一步") { guide.step = i - 1 }
-                }
-                Button(last ? "开始使用" : "下一步") {
-                    if last { guide.finishTutorial() } else { guide.step = i + 1 }
-                }
-                .buttonStyle(.glassProminent)
-                .keyboardShortcut(.defaultAction)
+                footer
             }
             .controlSize(.large)
             .padding(.horizontal, 24)
             .padding(.bottom, 22)
         }
         .frame(width: 600, height: 512)
-        .animation(.snappy(duration: 0.25), value: guide.step)
+        .animation(.snappy(duration: 0.25), value: page)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("新手教程，第 \(i + 1) 步，共 \(cards.count) 步：\(card.title)")
+        .accessibilityLabel("\(name)，\(caption)：\(title)")
+    }
+}
+
+/// 卡片教程（弹层）：一步一张；第一张可以跳过，最后一张能“从头再看”或“开始使用”。
+struct TutorialSheet: View {
+    @Environment(Guide.self) private var guide
+
+    var body: some View {
+        let cards = TutorialCard.all
+        let i = min(max(guide.step, 0), cards.count - 1)
+        let card = cards[i]
+        let last = i == cards.count - 1
+        CardSheet(name: "新手教程", art: card.art, caption: "第 \(i + 1) 步，共 \(cards.count) 步", title: card.title,
+                  points: card.points, page: i, pages: cards.count, select: { guide.step = $0 }) {
+            if last {
+                Button {
+                    guide.step = 0
+                } label: {
+                    Label("从头再看", systemImage: "arrow.counterclockwise")
+                }
+            } else if i == 0 {
+                Button("跳过") { guide.finishTutorial() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            if i > 0 {
+                Button("上一步") { guide.step = i - 1 }
+            }
+            Button(last ? "开始使用" : "下一步") {
+                if last { guide.finishTutorial() } else { guide.step = i + 1 }
+            }
+            .buttonStyle(.glassProminent)
+            .keyboardShortcut(.defaultAction)
+        }
+    }
+}
+
+/// 更新了什么（弹层）：一个版本一张（最新的在前），样子和新手教程一样。
+struct WhatsNewSheet: View {
+    @Environment(Guide.self) private var guide
+
+    var body: some View {
+        let notes = guide.whatsNewNotes
+        if !notes.isEmpty {
+            let i = min(max(guide.step, 0), notes.count - 1)
+            let note = notes[i]
+            let last = i == notes.count - 1
+            CardSheet(name: "更新说明", art: TutorialCard.Art(rawValue: note.art) ?? .logo, caption: "\(note.version) 更新了什么",
+                      title: note.title, points: note.points.map { ($0.symbol, $0.text) }, page: i, pages: notes.count,
+                      select: { guide.step = $0 }) {
+                if !last {
+                    Button("关闭") { guide.dismissSheet() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                if i > 0 {
+                    Button("上一张") { guide.step = i - 1 }
+                }
+                Button(last ? "知道了" : "更早的版本") {
+                    if last { guide.dismissSheet() } else { guide.step = i + 1 }
+                }
+                .buttonStyle(.glassProminent)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
     }
 }
 
@@ -249,6 +351,8 @@ struct TutorialArt: View {
             case .map: mapArt
             case .rename: renameArt
             case .menubar: menubarArt
+            case .badges: badgesArt
+            case .logo: BrandMark(size: 96)
             }
         }
         .allowsHitTesting(false)
@@ -316,7 +420,7 @@ struct TutorialArt: View {
         return p
     }
 
-    /// 这台 Mac 分出三条线，各连一个账号（和 App 图标同一个样子）。
+    /// 这台 Mac 分出三条线，各连一个账号（App 图标的母题：一个出口分给几个账号）。
     private var fanArt: some View {
         GeometryReader { g in
             let w = g.size.width, h = g.size.height
@@ -425,16 +529,18 @@ struct TutorialArt: View {
         .padding(.horizontal, 24)
     }
 
-    /// 两块额度：5 小时快用完了（红），本周还早（绿）。
+    /// 三块额度：5 小时快用完了（红），本周还早（绿），Fable 单独一块（下面写着它最多用本周额度的多少）。
     private var quotaArt: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 10) {
             miniTile("5 小时", 92, "2 小时后重置")
             miniTile("本周", 41, "周二 16:00 重置")
+            miniTile("Fable", 6, "周二 16:00 重置", note: Texts.weeklyShare(allowance: 50, used: 3))
         }
-        .padding(.horizontal, 32)
+        .fixedSize(horizontal: false, vertical: true)   // 三块一样高（按最高的那块），不撑满整幅图
+        .padding(.horizontal, 24)
     }
 
-    private func miniTile(_ title: String, _ pct: Double, _ reset: String) -> some View {
+    private func miniTile(_ title: String, _ pct: Double, _ reset: String, note: String? = nil) -> some View {
         let color = Palette.usage(percent: pct)
         return panel {
             VStack(alignment: .leading, spacing: 8) {
@@ -445,10 +551,27 @@ struct TutorialArt: View {
                 }
                 .foregroundStyle(UsageLevel(percent: pct) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
                 Meter(fraction: pct / 100, color: color, height: 6)
-                Text(reset).font(.caption).foregroundStyle(.secondary)
+                Text(note ?? reset).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
             .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    /// 2.9.0-beta.10 的更新：四档套餐徽章，和最高档头像的光晕。
+    private var badgesArt: some View {
+        VStack(spacing: 20) {
+            HStack(spacing: 22) {
+                avatar(2, size: 46, tier: .standard)
+                avatar(1, size: 46, tier: .advanced)
+                avatar(0, size: 46, tier: .premium)
+            }
+            HStack(spacing: 8) {
+                PlanBadge(plan: "Free", tier: .entry)
+                PlanBadge(plan: "Pro", tier: .standard)
+                PlanBadge(plan: "Max", tier: .advanced)
+                PlanBadge(plan: "Ultra", tier: .premium)
+            }
         }
     }
 

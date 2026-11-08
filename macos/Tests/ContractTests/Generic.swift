@@ -305,6 +305,58 @@ func genericCheck(_ name: String, _ d: Data) -> CheckDoc? {
 }
 
 @discardableResult
+func genericReset(_ name: String, _ d: Data) -> ResetDoc? {
+    guard let doc = decodeOrFail(ResetDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) kind reset", doc.kind == "reset")
+    check("\(name) 有 generated_epoch", isNumber(raw["generated_epoch"]))
+    check("\(name) key、message 不为空", !(doc.key ?? "").isEmpty && !(doc.message ?? "").isEmpty)
+    check("\(name) outcome 是重置成了的几种（没有重置机会时 cca 不输出文档）",
+          doc.outcome.map { [.reset, .alreadyRedeemed, .nothingToReset].contains($0) } ?? false, doc.outcome?.rawValue ?? "nil")
+    if let ru = raw["usage"] as? [String: Any] {
+        usageEntryInvariants("\(name) usage", ru, doc.usage)
+        let rc = ru["reset_credits"] as? [String: Any] ?? [:]
+        let credits = rc["credits"] as? [[String: Any]] ?? []
+        check("\(name) 每一次重置机会都有 expires_epoch（数字或 null）", credits.allSatisfy { isNumber($0["expires_epoch"]) || isNull($0["expires_epoch"]) })
+        check("\(name) cca 给了最早过期的 next_expires_epoch（数字或 null）", rc.keys.contains("next_expires_epoch")
+              && (isNumber(rc["next_expires_epoch"]) || isNull(rc["next_expires_epoch"])))
+    }
+    let a = EnumAudit()
+    a.add("tool", doc.tool)
+    a.add("outcome", doc.outcome)
+    a.usage("usage", doc.usage)
+    knownEnums(name, a.unknown)
+    return doc
+}
+
+@discardableResult
+func genericUpdate(_ name: String, _ d: Data) -> UpdateDoc? {
+    guard let doc = decodeOrFail(UpdateDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) kind update", doc.kind == "update")
+    check("\(name) 有 generated_epoch", isNumber(raw["generated_epoch"]))
+    check("\(name) cca_version、latest 是版本号", AppVersion(doc.ccaVersion ?? "") != nil && AppVersion(doc.latest ?? "") != nil,
+          "\(doc.ccaVersion ?? "nil") \(doc.latest ?? "nil")")
+    check("\(name) available 是布尔", isBool(raw["available"]))
+    check("\(name) source 是 releases 或 latest（latest 时没有更新说明）", doc.source == .releases || (doc.source == .latest && doc.notes == nil))
+    if let c = doc.ccaVersion.flatMap(AppVersion.init), let l = doc.latest.flatMap(AppVersion.init) {
+        check("\(name) available 和版本号的先后一致（同号的测试版比正式版旧）", doc.available == (l > c))
+    }
+    check("\(name) 测试版的 channel 是 beta，正式版是 stable",
+          doc.channel == ((AppVersion(doc.ccaVersion ?? "")?.isBeta ?? false) ? .beta : .stable))
+    check("\(name) notes、url、published_epoch 是字符串 / 数字或 null",
+          (isNull(raw["notes"]) || raw["notes"] is String) && (isNull(raw["url"]) || raw["url"] is String)
+          && (isNull(raw["published_epoch"]) || isNumber(raw["published_epoch"])))
+    let a = EnumAudit()
+    a.add("channel", doc.channel)
+    a.add("source", doc.source)
+    knownEnums(name, a.unknown)
+    return doc
+}
+
+@discardableResult
 func genericEvents(_ name: String, _ d: Data) -> [CcaEvent] {
     let lines = String(decoding: d, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
         .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -528,6 +580,12 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "check":
             genericCheck(f, d)
             tolerance(CheckDoc.self, f, d) { [$0.accounts.count, $0.sharedExitIPs.count] }
+        case "reset":
+            genericReset(f, d)
+            tolerance(ResetDoc.self, f, d) { [$0.usage == nil ? 0 : 1, $0.usage?.modelScoped.count ?? 0] }
+        case "update":
+            genericUpdate(f, d)
+            tolerance(UpdateDoc.self, f, d) { [$0.latest == nil ? 0 : 1] }
         default:
             check("\(f) 是认识的文档", false, "kind=\(kind)")
         }

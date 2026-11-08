@@ -56,7 +56,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="2.9.0-beta.10"
+VERSION="2.9.0-beta.11"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -4101,25 +4101,47 @@ def usage_result(tmp, i):
     return {'ok': False, 'why': 'error', 'msg': '没有拿到结果'}
 
 
-def usage_why(r):
-    return USAGE_WHY.get(r['why'], USAGE_WHY['error']).format(name=r['name'], msg=r['msg'] or '原因不明', cmd=T.cmd,
-                                                              host=T.trace_host, product=T.product, update=T.update_cmd)
+def usage_why(r, table=None):
+    """查不了的原因（r['why']，USAGE_WHY 的键）→ 给人看的说明；重置额度另有自己的说法（RESET_WHY）"""
+    t = table or USAGE_WHY
+    return t.get(r['why'], t['error']).format(name=r['name'], msg=r['msg'] or '原因不明', cmd=T.cmd,
+                                              host=T.trace_host, product=T.product, update=T.update_cmd)
+
+
+def is_num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def dicts(rl, k):
+    """rl[k] 这个列表里的字典（不是列表、不是字典的项都不算）"""
+    v = rl.get(k)
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
+def name_key(s):
+    """按名字认分模型的额度：去掉两头的空白，不分大小写"""
+    return str(s or '').strip().lower()
+
+
+def reset_count(rl):
+    """Codex 还能重置几次额度（codex 给的 availableCount）；旧版本的 codex 不给，是 None"""
+    rc = rl.get('reset_credits')
+    n = rc.get('availableCount') if isinstance(rc, dict) else None
+    return max(int(n), 0) if is_num(n) else None
 
 
 def usage_notes(rl, now):
     """表格的备注：Codex 还能重置几次额度，分模型的每周额度、额外用量，Codex 的 credits"""
     out, seen = [], set()
-    rc = rl.get('reset_credits')   # Codex：0 次也写；codex 没给（旧版本）就不写
-    n = rc.get('availableCount') if isinstance(rc, dict) else None
-    if isinstance(n, int) and not isinstance(n, bool):
+    n = reset_count(rl)   # Codex：0 次也写；codex 没给（旧版本）就不写
+    if n is not None:
         out.append('剩余重置 %d 次' % n)
-    ms = rl.get('model_scoped')
     pairs = [('Opus', rl.get('seven_day_opus')), ('Sonnet', rl.get('seven_day_sonnet'))]
-    pairs += [(m.get('display_name'), m) for m in (ms if isinstance(ms, list) else []) if isinstance(m, dict)]
+    pairs += [(m.get('display_name'), m) for m in dicts(rl, 'model_scoped')]
     for label, w in pairs:   # 没用过的（0%）不写，免得一排 0%；JSON 里照样都有
         x = win(w, now)
-        if x and label and not x['reset'] and x['pct'] > 0 and str(label).lower() not in seen:
-            seen.add(str(label).lower())
+        if x and label and not x['reset'] and x['pct'] > 0 and name_key(label) not in seen:
+            seen.add(name_key(label))
             out.append('%s 本周 %d%%' % (label, round(x['pct'])))
     e = rl.get('extra_usage')
     if isinstance(e, dict) and e.get('is_enabled'):
@@ -4143,6 +4165,46 @@ def usage_row(key, plan, **kw):
     return row
 
 
+def weekly_shares(rl):
+    """Claude 分模型的每周额度（model_scoped，例如 Fable）各占本周总额度多少：{name_key(模型名): {used_percent_of_weekly（已用掉
+    本周额度的百分之几）, allowance_percent_of_weekly（最多能用本周额度的百分之几）}}。weekly_scoped_shares 的 limit_index
+    指 limits 里的那一项（kind 是 weekly_scoped，scope.model 是哪个模型）；没有 limits（Claude Code 存的缓存里没有）而
+    分模型的额度、份额都只有一项时就是它俩，别的情况认不出就不写"""
+    shares, ms = dicts(rl, 'weekly_scoped_shares'), dicts(rl, 'model_scoped')
+    limits = rl.get('limits') if isinstance(rl.get('limits'), list) else []
+    out = {}
+    for s in shares:
+        i, name = s.get('limit_index'), None
+        if limits:
+            lim = limits[int(i)] if is_num(i) and int(i) == i and 0 <= i < len(limits) else None
+            scope = lim.get('scope') if isinstance(lim, dict) else None
+            model = scope.get('model') if isinstance(scope, dict) else None
+            name = model.get('display_name') if isinstance(model, dict) else None
+        elif len(shares) == 1 and len(ms) == 1:
+            name = ms[0].get('display_name')
+        if isinstance(name, str) and name_key(name):
+            out[name_key(name)] = {k: s.get(k) for k in ('used_percent_of_weekly', 'allowance_percent_of_weekly') if is_num(s.get(k))}
+    return out
+
+
+def reset_credits_view(rc):
+    """Codex 还能重置几次额度（codex 原样给的 rateLimitResetCredits）。cca 另加（macos/PROTOCOL.md 3.1）：每一次的明细上
+    Unix 秒的 expires_epoch（codex 给的 expiresAt 原样留着，不过期为 null），还能用的里面最早过期的那次的 next_expires_epoch"""
+    if not isinstance(rc, dict):
+        return None
+    if isinstance(rc.get('credits'), list):
+        rc = dict(rc, credits=[dict(c, expires_epoch=parse_ts(c.get('expiresAt'))) if isinstance(c, dict) else c
+                               for c in rc['credits']])
+    opens = reset_credits_open(rc)
+    return dict(rc, next_expires_epoch=opens[0]['expires_epoch'] if opens else None)
+
+
+def reset_credits_open(rc):
+    """还能用的重置机会（reset_credits_view 看过的），最早过期的排前面（不过期的排最后；和 codex 里 /usage 的 Redeem reset 一样）"""
+    cs = [c for c in dicts(rc, 'credits') if c.get('status') == 'available' and isinstance(c.get('id'), str) and c['id']]
+    return sorted(cs, key=lambda c: c['expires_epoch'] if is_num(c.get('expires_epoch')) else float('inf'))
+
+
 def usage_entry(r, now):
     """cca usage --json 里一个账号的条目（_gui state 里的 usage 也是它；格式见 macos/PROTOCOL.md，字段只加不删）。
     r 是 usage_row 构造的一行"""
@@ -4156,18 +4218,25 @@ def usage_entry(r, now):
          'error': usage_why(r) if r['why'] else None, 'error_code': r['why'] or None, 'error_detail': (r['msg'] or None) if r['why'] else None}
     for k in T.usage_windows:
         a[k] = w(rl.get(k))
-    ms = rl.get('model_scoped')
-    a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name')) for m in ms if isinstance(m, dict)] if isinstance(ms, list) else None
+    shares = weekly_shares(rl)
+    a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name'), **shares.get(name_key(m.get('display_name')), {}))
+                         for m in dicts(rl, 'model_scoped')] if isinstance(rl.get('model_scoped'), list) else None
     a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
     if T is not CLAUDE:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
-        for k in ('credits', 'reset_credits'):
-            a[k] = rl.get(k) if isinstance(rl.get(k), dict) else None
+        a['credits'] = rl.get('credits') if isinstance(rl.get('credits'), dict) else None
+        a['reset_credits'] = reset_credits_view(rl.get('reset_credits'))
     return a
 
 
 def usage_has_windows(rl):
     """查到的用量里至少有一个认得出的窗口：都没有的（接口的格式变了）不算查到，免得把好好的缓存换成空的"""
     return isinstance(rl, dict) and any(win(rl.get(k), 0) for k in T.usage_windows)
+
+
+def usage_take(r):
+    """后台带回来的用量（usage_result 里查用量的格式）：至少认得出一个窗口的才算查到，返回它；没有、认不出返回 None"""
+    u = r.get('usage') if r.get('ok') else None
+    return u if isinstance(u, dict) and u.get('rate_limits_available') and usage_has_windows(u.get('rate_limits')) else None
 
 
 def usage_json(rows, now, api):
@@ -4230,9 +4299,9 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
     now, rows = time.time(), []
     for i, k in enumerate(keys):
         r = usage_result(tmp, i)
-        u = r.get('usage') if r.get('ok') else None
-        if isinstance(u, dict) and not (u.get('rate_limits_available') and usage_has_windows(u.get('rate_limits'))):
-            r, u = {'ok': False, 'why': 'nolimits', 'msg': ''}, None
+        u = usage_take(r)
+        if r.get('ok') and not u:
+            r = {'ok': False, 'why': 'nolimits', 'msg': ''}
         row = usage_row(k, T.plan(k, (u or {}).get('subscription_type')), why=None if u else (r.get('why') or 'error'),
                         msg=r.get('msg') or '')
         if u:
@@ -4252,6 +4321,75 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
     else:
         usage_table(rows, now, cols, color == '1', api)
     sys.exit(0 if any(r['source'] != 'none' for r in rows) else 1)
+
+
+# 重置额度（cca codex reset）：查不了、重置不了的原因 → 说明，和图形界面的失败原因（fail 事件的 code，macos/PROTOCOL.md 4.5）
+RESET_WHY = dict(USAGE_WHY, unsupported='这个版本的 {product} 不能重置额度（{update} 升级后再试）')
+# 已经请求重置之后出的错：不知道用掉了没有
+RESET_UNSURE = dict(RESET_WHY, timeout='没等到重置的结果，可能已经用掉了一次：刷新用量看看还剩几次',
+                    error='重置出错了（{msg}），可能已经用掉了一次：刷新用量看看还剩几次')
+RESET_FAIL = {'login': 'not_logged_in', 'mismatch': 'login_mismatch', 'route': 'local_unavailable', 'port': 'port_closed',
+              'region': 'region_restricted', 'trace': 'no_exit_ip', 'unsupported': 'reset_unsupported'}
+RESET_SAID = {'reset': '已重置 %s 的额度', 'already_redeemed': '%s 的这次重置已经完成过了',
+              'nothing_to_reset': '%s 现在的用量还不需要重置，没有用掉重置机会'}
+
+
+def reset_fail(key, r, table=RESET_WHY):
+    """后台没成（usage_result 的 {ok: false, why, msg}）→ (fail 事件的 code, 说明)"""
+    row = usage_row(key, '', why=r.get('why') or 'error', msg=r.get('msg') or '')
+    return RESET_FAIL.get(row['why'], 'error'), usage_why(row, table)
+
+
+def credit_label(c):
+    """一次重置机会：名字（OpenAI 没给就叫完整重置）和什么时候过期（本地时间）"""
+    lt = time.localtime(c['expires_epoch']) if is_num(c.get('expires_epoch')) else None
+    when = '%d 月 %d 日 %02d:%02d 过期' % (lt.tm_mon, lt.tm_mday, lt.tm_hour, lt.tm_min) if lt else '不过期'
+    return '%s，%s' % (str(c.get('title') or '').strip() or '完整重置', when)
+
+
+def cmd_reset_plan(tmp, key):
+    """cca codex reset 的第一步：后台经账号的出口查到的用量（tmp/0）存进 usage.json，给 bash：RC_CODE / RC_MSG（查不了时
+    fail 事件的 code 和说明，查到了是空的）；RC_COUNT 还能重置几次；RC_ID 要用掉的那一次（最早过期的；没有明细时是空的，
+    由 OpenAI 挑）、RC_NEXT 它的说明；RC_LIST 每一次的说明（一行一个，明细可能比次数少）"""
+    def stop(code, msg):
+        sh(RC_CODE=code, RC_MSG=msg, RC_COUNT='', RC_ID='', RC_NEXT='', RC_LIST='')
+    r = usage_result(tmp, 0)
+    u = usage_take(r)
+    if not u:
+        return stop(*reset_fail(key, r if not r.get('ok') else {'why': 'nolimits'}))
+    usage_save(key, u['rate_limits'])
+    n = reset_count(u['rate_limits'])
+    if n is None:   # 旧版本的 codex：回应里没有重置次数
+        return stop(*reset_fail(key, {'why': 'unsupported'}))
+    opens = reset_credits_open(reset_credits_view(u['rate_limits'].get('reset_credits')))
+    sh(RC_CODE='', RC_MSG='', RC_COUNT=n, RC_ID=opens[0]['id'] if opens else '',
+       RC_NEXT=credit_label(opens[0]) if opens else '', RC_LIST='\n'.join(credit_label(c) for c in opens))
+
+
+def cmd_reset_done(tmp, key, mode='', credit=''):
+    """cca codex reset 的最后一步：用掉一次重置机会的结果（tmp/1）→ 重置后的用量存进 usage.json，给 bash RC_OUTCOME、
+    RC_CODE（重置不了时 fail 事件的 code，否则是空的）、RC_MSG（说明）、RC_DOC（mode=json 时 kind=reset 的文档）"""
+    now, name = time.time(), name_of(key)
+    r = usage_result(tmp, 1)
+    outcome = r.get('outcome') if r.get('ok') else None
+    if outcome == 'no_credit':
+        return sh(RC_OUTCOME=outcome, RC_CODE='no_reset_credit', RC_DOC='',
+                  RC_MSG=('%s 的这次重置机会已经不能用了（可能刚在别处用掉了），刷新用量看看还剩几次' if credit
+                          else '%s 没有能用的重置机会了') % name)
+    if outcome not in RESET_SAID:   # 已经请求重置了，结果不知道（超时、出错）
+        code, msg = reset_fail(key, r if not r.get('ok') else {'why': 'error', 'msg': '看不懂 codex 回的结果'}, RESET_UNSURE)
+        return sh(RC_OUTCOME='', RC_CODE=code, RC_MSG=msg, RC_DOC='')
+    u = usage_take(r)
+    if u:
+        usage_save(key, u['rate_limits'])
+    msg = RESET_SAID[outcome] % name
+    cell = usage_cell(key, now) if u and outcome != 'nothing_to_reset' else ''
+    if cell:
+        msg += '（现在 %s）' % cell
+    row = usage_row(key, T.plan(key, u.get('subscription_type')), source='live', at=now, rl=u['rate_limits']) if u else None
+    doc = {'version': 1, 'kind': 'reset', 'tool': T.name, 'generated_epoch': now, 'key': key, 'outcome': outcome,
+           'message': msg, 'usage': usage_entry(row, now) if row else None}
+    sh(RC_OUTCOME=outcome, RC_CODE='', RC_MSG=msg, RC_DOC=json.dumps(doc, ensure_ascii=False, indent=2) if mode == 'json' else '')
 
 
 # --- Codex：登录身份、app-server（登录、查用量）、会话库里的路径 ----------------------------------------------
@@ -4476,45 +4614,83 @@ def codex_windows(snap):
     return out
 
 
-def codex_usage_query(bin_, timeout='25'):
-    """在账号的环境里启动 codex app-server，account/rateLimits/read 取用量（和 codex 里 /status 显示的一样）。只查用量，
-    不发模型请求、不耗额度；token 由 codex 自己读取和刷新。stdout 打印一行 JSON，格式和 Claude 的查询一样：
-    {ok: true, usage: {rate_limits_available, rate_limits, subscription_type}} 或 {ok: false, why, msg}"""
+def codex_usage(res):
+    """account/rateLimits/read 的回应 → 和 Claude 的查询一样的 {rate_limits_available, rate_limits, subscription_type}"""
+    res = res if isinstance(res, dict) else {}
+    main = res.get('rateLimits') if isinstance(res.get('rateLimits'), dict) else {}
+    rl = codex_windows(main)
+    extra = res.get('rateLimitsByLimitId') if isinstance(res.get('rateLimitsByLimitId'), dict) else {}
+    ms = []
+    for lid, snap in extra.items():   # 别的额度（某些模型单独计的）：只列每周的
+        if isinstance(snap, dict) and lid != main.get('limitId'):
+            w = codex_windows(snap).get('seven_day')
+            if w:
+                ms.append(dict(w, display_name=snap.get('limitName') or lid))
+    if ms:
+        rl['model_scoped'] = ms
+    if isinstance(main.get('credits'), dict):
+        rl['credits'] = main['credits']
+    if isinstance(res.get('rateLimitResetCredits'), dict):   # 还能重置几次额度（codex 里 /usage 的 Redeem reset）和明细
+        rl['reset_credits'] = res['rateLimitResetCredits']
+    if main.get('planType'):
+        rl['plan'] = main['planType']   # 存进缓存：查不到时显示上次查到的套餐（登录凭证里记的可能是旧的）
+    return {'rate_limits_available': 'five_hour' in rl or 'seven_day' in rl, 'rate_limits': rl, 'subscription_type': main.get('planType')}
+
+
+def codex_rpc_once(bin_, timeout, run):
+    """在账号的环境里启动 codex app-server、initialize，run(r, 截止时间) 做这次要做的事，返回 (结果, 错误)；
+    stdout 打印一行 JSON：结果，或者出错时的 {ok: false, why: unsupported|timeout|error, msg}"""
     end = time.time() + float(timeout)
     try:
         r = Rpc(bin_)
     except OSError as e:
         return print(json.dumps({'ok': False, 'why': 'error', 'msg': str(e)}, ensure_ascii=False))
-    err = r.start(end)
-    res = None
+    out, err = None, r.start(end)
     if not err:
-        res, err = r.call('account/rateLimits/read', None, end)
+        out, err = run(r, end)
     if err:
         why, msg = r.failure(err)
         out = {'ok': False, 'why': why, 'msg': msg}
-    else:
-        res = res if isinstance(res, dict) else {}
-        main = res.get('rateLimits') if isinstance(res.get('rateLimits'), dict) else {}
-        rl = codex_windows(main)
-        extra = res.get('rateLimitsByLimitId') if isinstance(res.get('rateLimitsByLimitId'), dict) else {}
-        ms = []
-        for lid, snap in extra.items():   # 别的额度（某些模型单独计的）：只列每周的
-            if isinstance(snap, dict) and lid != main.get('limitId'):
-                w = codex_windows(snap).get('seven_day')
-                if w:
-                    ms.append(dict(w, display_name=snap.get('limitName') or lid))
-        if ms:
-            rl['model_scoped'] = ms
-        if isinstance(main.get('credits'), dict):
-            rl['credits'] = main['credits']
-        if isinstance(res.get('rateLimitResetCredits'), dict):   # 还能重置几次额度（codex 里 /usage 的 Redeem reset）和明细
-            rl['reset_credits'] = res['rateLimitResetCredits']
-        if main.get('planType'):
-            rl['plan'] = main['planType']   # 存进缓存：查不到时显示上次查到的套餐（登录凭证里记的可能是旧的）
-        has = 'five_hour' in rl or 'seven_day' in rl
-        out = {'ok': True, 'usage': {'rate_limits_available': has, 'rate_limits': rl, 'subscription_type': main.get('planType')}}
     r.close(kill=bool(err))
     print(json.dumps(out, ensure_ascii=False))
+
+
+def codex_usage_query(bin_, timeout='25'):
+    """account/rateLimits/read 取用量（和 codex 里 /status 显示的一样）。只查用量，不发模型请求、不耗额度；token 由 codex 自己
+    读取和刷新。打印的格式和 Claude 的查询一样：{ok: true, usage: {rate_limits_available, rate_limits, subscription_type}}"""
+    def run(r, end):
+        res, err = r.call('account/rateLimits/read', None, end)
+        return {'ok': True, 'usage': codex_usage(res)}, err
+    codex_rpc_once(bin_, timeout, run)
+
+
+# codex 回的重置结果 → cca 的写法（macos/PROTOCOL.md 4.5：reset 重置了、already_redeemed 这一次早就重置过了、nothing_to_reset
+# 用量还不需要重置（不扣次数）、no_credit 没有能用的重置机会了）
+RESET_OUTCOMES = {'reset': 'reset', 'alreadyRedeemed': 'already_redeemed', 'nothingToReset': 'nothing_to_reset', 'noCredit': 'no_credit'}
+
+
+def cmd_reset_consume(bin_, credit='', timeout='25'):
+    """用掉一次重置机会（Codex 账号；和查用量一样经账号的出口）：account/rateLimitResetCredit/consume，creditId 是要用的那一次
+    （空着由 OpenAI 挑），idempotencyKey 每次新生成；重置了就再读一次用量。打印 {ok: true, outcome, usage: 查用量的格式或 null}"""
+    import uuid
+
+    def run(r, end):
+        params = {'idempotencyKey': str(uuid.uuid4())}
+        if credit:
+            params['creditId'] = credit
+        res, err = r.call('account/rateLimitResetCredit/consume', params, end)
+        if err:
+            return None, err
+        outcome = RESET_OUTCOMES.get(res.get('outcome') if isinstance(res, dict) else None)
+        if not outcome:
+            return {'ok': False, 'why': 'error', 'msg': 'codex 回的结果看不懂：%s' % json.dumps(res, ensure_ascii=False)[:200]}, None
+        out = {'ok': True, 'outcome': outcome, 'usage': None}
+        if outcome in ('reset', 'already_redeemed'):   # 重置了：再读一次用量（读不到不算失败，下次查用量时就有了）
+            u, e2 = r.call('account/rateLimits/read', None, max(end, time.time() + 15))
+            if not e2:
+                out['usage'] = codex_usage(u)
+        return out, None
+    codex_rpc_once(bin_, timeout, run)
 
 
 def cmd_login_flow(bin_, timeout='900'):
@@ -5003,6 +5179,53 @@ def cmd_tool_env():
     sh(TABLE=T.table, CMD=T.cmd, TOOL_LABEL=T.label, TOOL_SETTINGS=T.settings_disp, TRACE_HOST=T.trace_host, APP_LABEL=T.app_label)
 
 
+def ver_key(v):
+    """版本号的先后，和 bash 的 ver_gt 一样：同号的测试版比正式版旧，测试版之间比 beta 后面的数；认不出是 None"""
+    m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$', v if isinstance(v, str) else '')
+    if not m:
+        return None
+    x, y, z, b = m.groups()
+    return (int(x), int(y), int(z), int(b) if b is not None else float('inf'))
+
+
+def cmd_update_check(current, mode='', fallback='', repo=''):
+    """cca update --check [--json]：stdin 是 GitHub 上最近的发布（api.github.com 的 releases 列表，拿不到时是空的），
+    fallback 是 releases/latest 指向的正式版（列表拿不到时 bash 才去取，只有版本号）。按现在的版本挑：测试版上看更新的
+    测试版和正式版，正式版上只看正式版（自动更新、不带版本号的 cca update 不变，只看正式版）。
+    mode=json：stdout 输出 kind=update 的文档（macos/PROTOCOL.md 5.1）；否则给 bash UP_LATEST / UP_AVAILABLE / UP_BETA /
+    UP_NOTES（更新说明的前几行）。一个版本都没拿到时退出码 1"""
+    beta = '-beta.' in current
+    try:
+        rels = json.loads(sys.stdin.read() or 'null')
+    except ValueError:
+        rels = None
+    found = []
+    for x in rels if isinstance(rels, list) else []:
+        tag = str(x.get('tag_name') or '') if isinstance(x, dict) and not x.get('draft') else ''
+        v = tag[1:] if tag[:1] in ('v', 'V') else tag
+        if ver_key(v) is None or ('-beta.' in v and not beta):
+            continue
+        found.append({'version': v, 'notes': x.get('body') if isinstance(x.get('body'), str) else None,
+                      'url': x.get('html_url') if isinstance(x.get('html_url'), str) else '%s/releases/tag/%s' % (repo, tag),
+                      'published_epoch': parse_ts(x.get('published_at'))})
+    source = 'releases'
+    if not found and ver_key(fallback):
+        found, source = [{'version': fallback, 'notes': None, 'url': '%s/releases/tag/v%s' % (repo, fallback), 'published_epoch': None}], 'latest'
+    if not found:
+        sys.exit(1)
+    best = max(found, key=lambda f: ver_key(f['version']))
+    available = ver_key(current) is None or ver_key(best['version']) > ver_key(current)
+    if mode == 'json':
+        print(json.dumps({'version': 1, 'kind': 'update', 'generated_epoch': time.time(), 'cca_version': current,
+                          'channel': 'beta' if beta else 'stable', 'source': source,
+                          'latest': best['version'], 'available': available, 'notes': best['notes'] or None, 'url': best['url'],
+                          'published_epoch': best['published_epoch']}, ensure_ascii=False, indent=2))
+        return
+    lines = [s.strip() for s in (best['notes'] or '').splitlines() if s.strip()]
+    sh(UP_LATEST=best['version'], UP_AVAILABLE='1' if available else '', UP_BETA='1' if '-beta.' in best['version'] else '',
+       UP_NOTES='\n'.join(lines[:3]))
+
+
 CMDS = {
     'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
     'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
@@ -5023,7 +5246,9 @@ CMDS = {
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
     'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render,
+    'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
+    'update-check': cmd_update_check,
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
     'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
     'policy-ask': cmd_policy_ask, 'policy-decline': cmd_policy_decline, 'policy-set': cmd_policy_set,
@@ -7987,8 +8212,11 @@ launch() {
 # 订阅用量：每个官方账号经它自己的出口，让 Claude Code 自己查（get_usage 控制请求，token 由它读取和刷新，
 # cca 不碰登录凭证）。几个账号并行查；查不到的显示上次的缓存（注明多久前）
 # ---------------------------------------------------------------------------
-usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过的原因写到 $1.skip；需要先 eval "$(py env 名称)" 并设好 ACC_PROXY
+usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过的原因写到 $1.skip；需要先 eval "$(py env 名称)" 并设好 ACC_PROXY。
+	# 后面的参数是在账号的环境里经它的出口跑的 py 子命令（默认查用量：usage-query 工具 超时；重置额度用 reset-consume）
 	local o="$1" e trace out rc
+	shift
+	[ $# -gt 0 ] || set -- usage-query "$TOOL_BIN" "${CCA_USAGE_TIMEOUT:-25}"
 	e=$(py email "$ACC_KEY")
 	if [ -z "$e" ]; then printf 'login\t\n' > "$o.skip"; return 0; fi
 	if [ -n "$ACC_EMAIL" ] && [ "$(lower "$e")" != "$(lower "$ACC_EMAIL")" ]; then   # 登错号：不拿别的账号走这个出口
@@ -8006,7 +8234,19 @@ usage_one() {   # 后台：查一个官方账号，结果写到 $1.json，跳过
 	py device "$ACC_KEY" || return 1
 	child_env
 	env "${UNSETS[@]}" -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SSE_PORT "${SETS[@]}" CCA_TOOL="$TOOL" \
-		"${PYRUN[@]}" usage-query "$TOOL_BIN" "${CCA_USAGE_TIMEOUT:-25}" > "$o.json" 2>/dev/null
+		"${PYRUN[@]}" "$@" > "$o.json" 2>/dev/null
+}
+
+usage_route() {   # 查用量、重置额度经哪台机器上的账号端口（USAGE_HOST）：本机 Clash 是 127.0.0.1，路由器是它的代理地址；
+	# 走本机 Clash 而它用不了时返回 1（USAGE_HOST 是空的，经出口的查询会说连不上）
+	USAGE_HOST=""
+	if want_local; then
+		load_local
+		local_ready && local_ensure && USAGE_HOST=127.0.0.1 && return 0
+		return 1
+	fi
+	router_ensure
+	USAGE_HOST="$PROXY_HOST"
 }
 
 cmd_usage() {   # cca [codex] usage [账号] [--json]
@@ -8033,15 +8273,7 @@ cmd_usage() {   # cca [codex] usage [账号] [--json]
 	fi
 	sync_if_changed
 	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
-	USAGE_HOST=""
-	if want_local; then
-		load_local
-		if local_ready && local_ensure; then USAGE_HOST=127.0.0.1
-		else warn "现在连不上路由器，本机 Clash 也用不了：只能显示上次的用量（cca local setup 配置本机 Clash）"; fi
-	else
-		router_ensure
-		USAGE_HOST="$PROXY_HOST"
-	fi
+	usage_route || warn "现在连不上路由器，本机 Clash 也用不了：只能显示上次的用量（cca local setup 配置本机 Clash）"
 	tmp=$(mktemp -d "$CCA_HOME/usage.XXXXXX") || die "建临时目录失败"
 	# Ctrl-C、关掉终端：后台的查询忽略 SIGINT，要自己停掉它们（连同它们起的 python、curl；claude、codex 的 stdin 一断也就退出了）
 	trap 'for i in "${pids[@]}"; do pkill -P "$i"; kill "$i"; done 2>/dev/null; rm -rf "$tmp"; exit 130' INT TERM HUP
@@ -8059,6 +8291,58 @@ cmd_usage() {   # cca [codex] usage [账号] [--json]
 	py usage-render "$tmp" "${json:-table}" "$(term_cols)" "$color" "${keys[@]}"; rc=$?
 	rm -rf "$tmp"
 	return $rc
+}
+
+# ---------------------------------------------------------------------------
+# 重置额度（ChatGPT 账号；codex 里 /usage 的 Redeem reset）：OpenAI 有时会给几次重置机会，用掉一次就把 5 小时和每周的
+# 用量清零。先经账号自己的出口查还能重置几次（顺便存下用量），问过之后用掉最早过期的那一次，重置后再读一次用量；
+# 用量还不需要重置时 OpenAI 不扣次数。图形界面：同意是 reset_credit:<账号目录名>，--json 输出 kind=reset 的文档
+# ---------------------------------------------------------------------------
+cmd_reset() {   # cca codex reset 账号 [--json]
+	local json="" q="" key tmp bad l use="用法: ${CMD} reset 账号 [--json]"
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--json) json=json ;;
+			-h|--help) say "$use"; return 0 ;;
+			-*) die "$use" ;;
+			*) [ -z "$q" ] || die "$use"; q="$1" ;;
+		esac
+		shift
+	done
+	[ "$TOOL" = codex ] || die "只有 ChatGPT 账号能重置额度：cca codex reset 账号"
+	[ -n "$q" ] || die "${use}（还能重置几次，${CMD} usage 的备注里也有）"
+	need_bin
+	key=$(py resolve "$q") || exit 1
+	eval "$(py env "$key")"
+	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号，没有额度可以重置"
+	sync_if_changed
+	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
+	usage_route || true   # 用不了时下面经出口的查询会说连不上
+	ACC_PROXY="${USAGE_HOST:+http://${USAGE_HOST}:${ACC_PORT}}"
+	tmp=$(mktemp -d "$CCA_HOME/usage.XXXXXX") || die "建临时目录失败"
+	trap "rm -rf $(printf %q "$tmp")" EXIT   # 路径现在就展开：EXIT 时函数的局部变量已经不在了（die 退出时也是）
+	[ -n "$json" ] || info "正在经 ${ACC_NAME} 自己的出口查还能重置几次…"
+	usage_one "$tmp/0" </dev/null 3<&-
+	eval "$(py reset-plan "$tmp" "$key")"
+	[ -z "$RC_CODE" ] || FAIL_CODE="$RC_CODE" die "$RC_MSG"
+	[ "$RC_COUNT" -gt 0 ] || FAIL_CODE=no_reset_credit die "${ACC_NAME} 没有能用的重置机会"
+	if [ -z "$json" ]; then
+		info "${ACC_NAME} 还能重置 ${RC_COUNT} 次额度：用掉一次就把 5 小时和每周的用量清零（用量还不需要重置时不扣次数）"
+		[ -z "$RC_LIST" ] || printf '%s\n' "$RC_LIST" | while IFS= read -r l; do say "    · $l"; done
+	fi
+	consent reset_credit "$ACC_ID" "重置 ${ACC_NAME} 的额度" "现在用掉一次重置机会吗？" \
+		"会用掉${RC_NEXT:+「${RC_NEXT}」这}一次（现在还剩 ${RC_COUNT} 次），把 5 小时和每周的用量清零。用量还不需要重置时不扣次数。" n
+	case $? in
+		0) ;;
+		1) info "没有重置（还能重置 ${RC_COUNT} 次）"; return 0 ;;
+		*) die "要先同意：在终端里运行 ${CMD} reset ${ACC_NAME}（会先问你）" ;;
+	esac
+	[ -n "$json" ] || info "正在重置…"
+	usage_one "$tmp/1" reset-consume "$TOOL_BIN" "$RC_ID" "${CCA_USAGE_TIMEOUT:-25}" </dev/null 3<&-
+	eval "$(py reset-done "$tmp" "$key" "$json" "$RC_ID")"
+	[ -z "$RC_CODE" ] || FAIL_CODE="$RC_CODE" die "$RC_MSG"
+	if [ "$RC_OUTCOME" = nothing_to_reset ]; then info "$RC_MSG"; else okay "$RC_MSG"; fi
+	[ -z "$json" ] || printf '%s\n' "$RC_DOC"
 }
 
 # ---------------------------------------------------------------------------
@@ -8187,7 +8471,30 @@ update_rollback() {
 	okay "已退回 ${pv:-上一个版本}；${VERSION} 不会再自动安装，有更新的版本时照常更新"
 }
 
-cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify | off]
+update_releases() {   # GitHub 上最近的发布（api.github.com 的列表，JSON，包括测试版）；拿不到（连不上、被限流）时什么都不输出
+	local out
+	out=$(retry3 curl -fsSL -m 15 -H 'Accept: application/vnd.github+json' \
+		"https://api.github.com/repos/${UPDATE_REPO#https://github.com/}/releases?per_page=30" 2>/dev/null) || return 0
+	case "$out" in '['*) printf '%s' "$out" ;; esac
+}
+
+update_check() {   # cca update --check [--json]：只检查不安装。按现在的版本挑：测试版上也看更新的测试版（只是告诉你，
+	# 自动更新照旧只装正式版）。--json 给图形界面（macos/PROTOCOL.md 5.1），stdout 只有 JSON
+	local json="${1:-}" fb out
+	[ -n "$json" ] || info "正在检查最新版本（${UPDATE_REPO}）…"
+	# 列表拿不到、里面没有能装的版本：退回 releases/latest（只看得到正式版、没有更新说明）
+	out=$(update_releases | py update-check "$VERSION" "$json" "" "$UPDATE_REPO") ||
+		{ fb=$(latest_version) && out=$(py update-check "$VERSION" "$json" "$fb" "$UPDATE_REPO" </dev/null); } ||
+		die "拿不到最新版本号（网络不通，或 GitHub 暂时不可用）"
+	if [ -n "$json" ]; then printf '%s\n' "$out"; return 0; fi
+	eval "$out"
+	if [ -z "$UP_AVAILABLE" ]; then okay "已是最新版本 ${VERSION}"; return 0; fi
+	if [ -n "$UP_BETA" ]; then info "有新的测试版 ${UP_LATEST}（当前 ${VERSION}），运行 cca update ${UP_LATEST} 安装"
+	else info "有新版本 ${UP_LATEST}（当前 ${VERSION}），运行 cca update 安装"; fi
+	[ -z "$UP_NOTES" ] || printf '%s\n' "$UP_NOTES" | LC_ALL=C sed 's/^/  │ /' >&2
+}
+
+cmd_update() {   # cca update [版本号 | --check [--json] | --rollback | auto | notify | off]
 	local v want=""
 	case "${1:-}" in
 		auto|notify|off)
@@ -8199,12 +8506,12 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 			esac
 			return 0 ;;
 		--rollback) update_rollback; return ;;
+		--check) update_check "$([ "${2:-}" = --json ] && echo json)"; return ;;   # 开发模式下也能查
 		'') [ ! -f "$POLICY_DIR/id_ed25519" ] || policy_pull || true ;;   # 配置了维护者的映射：顺便拉一次
-		--check) ;;
 		*) want="${1#[vV]}"   # 手动装指定的版本，例如测试版 2.6.0-beta.1（照 GitHub 上 tag 的样子写成 v2.6.0-beta.1 也认）
 		   is_ver "$want" || die "用法: cca update [版本号 | --check | --rollback | auto | notify | off]" ;;
 	esac
-	if dev_mode && [ "${1:-}" != --check ]; then
+	if dev_mode; then
 		info "开发模式：${SELF} 在 git 仓库里，用 git pull 更新"
 		return 0
 	fi
@@ -8216,7 +8523,6 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 		info "正在检查最新版本（${UPDATE_REPO}）…"
 		v=$(latest_version) || die "拿不到最新版本号（网络不通，或 GitHub 暂时不可用）"
 		if ! ver_gt "$v" "$VERSION"; then okay "已是最新版本 ${VERSION}"; return 0; fi
-		if [ "${1:-}" = --check ]; then info "有新版本 ${v}（当前 ${VERSION}），运行 cca update 安装"; return 0; fi
 	fi
 	fetch_release "$v" || die "${v}：${FETCH_ERR}"
 	install_next || die "安装 ${v} 失败"
@@ -8230,7 +8536,8 @@ cmd_update() {   # cca update [版本号 | --check | --rollback | auto | notify 
 
 # ---------------------------------------------------------------------------
 # 图形界面（cca App，源码在 macos/）：cca _gui hello|state|live 是给它用的只读接口（JSON，格式见 macos/PROTOCOL.md），
-# 会改东西的照旧用 cca app / web / check / usage / router sync，加上 CCA_EVENTS（事件）和 CCA_GRANT（用户在 App 里点过的同意）。
+# 会改东西的照旧用 cca app / web / check / usage / router sync / rename / codex reset / update，加上 CCA_EVENTS（事件）和 CCA_GRANT
+# （用户在 App 里点过的同意）；检查更新是 cca update --check --json。
 # cca gui 安装、更新、打开它：App 和 cca 同一个版本号，每个版本的 Release 附带 cca-app.zip 和签名（命名空间 cca-app，
 # 和 cca 本身的 cca-release 分开）。curl 下载的文件没有隔离标记，临时签名的 App 不会被 Gatekeeper 拦（用浏览器下载就会）
 # ---------------------------------------------------------------------------
@@ -8888,6 +9195,10 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca codex usage [账号] [--json]
                              查 Codex 账号的 5 小时、每周额度和剩余的重置次数：
                              经各自的出口让 codex 自己去查，不耗额度
+  cca codex reset <账号> [--json]
+                             用掉一次重置机会，把这个账号 5 小时和每周的用量清零（codex 里 /usage 的 Redeem reset）：
+                             先经它自己的出口查还能重置几次、各在什么时候过期，问过你再用掉最早过期的那一次；
+                             用量还不需要重置时不扣次数
   cca codex ls | edit | rm | key | login | web | check
                              和上面同名的命令一样，作用于 Codex 账号（web 打开 chatgpt.com）
   cca codex app [账号]       用该账号自己的资料目录、登录和出口打开 ChatGPT App（Codex 桌面版）；
@@ -8924,8 +9235,9 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
   cca update                 立即更新到最新版本；平时每天自动检查一次，新版本在下次启动时自动安装
   cca update <版本号>        手动装指定的版本，例如测试版 2.6.0-beta.1（测试版不会自动装，只能这样装）
-  cca update --check | --rollback | auto | notify | off
-                             只检查 / 退回上一版 / 自动安装（默认）/ 只提示 / 关闭
+  cca update --check [--json] | --rollback | auto | notify | off
+                             只检查（装着测试版时也看更新的测试版；--json 给界面 App）/ 退回上一版 / 自动安装（默认）/
+                             只提示 / 关闭
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
@@ -8990,6 +9302,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		key) shift; cmd_key "$@" ;;
 		login) shift; cmd_login "$@" ;;
 		usage) shift; cmd_usage "$@" ;;
+		reset) shift; cmd_reset "$@" ;;
 		edit) cmd_edit ;;
 		rename) shift; cmd_rename "$@" ;;
 		ls|list) cmd_list ;;

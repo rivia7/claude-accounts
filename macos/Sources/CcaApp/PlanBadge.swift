@@ -4,36 +4,42 @@ import SwiftUI
 // 同一种胶囊，前面一个小徽记，徽记的形状和颜色一档比一档足：
 // 入门（Free、Go）灰色圆圈；标准（Pro、Plus、Team…）蓝色圆点、淡蓝底；进阶（Max、Pro 100 / 200…）紫色菱形、淡紫底；
 // 尊贵（Ultra、Pro 500）整块 Logo 的渐变（蓝 → 紫 → 玫红 → 琥珀）、白色四角星，头像有同色的光晕（BadgeAvatar），
-// 总览的卡片、账号页的卡片、插画里的桌子镶同一条渐变的边。
+// 总览的卡片、账号页的卡片、插画里的桌子镶同一条渐变的边。这条渐变的几种画法都在 TierStyle。
 
 enum TierStyle {
-    /// 尊贵档的边（卡片、插画）：Logo 的渐变绕一圈
-    static let edge = AngularGradient(colors: Brand.spectrumLoop, center: .center, angle: .degrees(-45))
-    /// 尊贵档的横线（账号页卡片顶上那条带子的下沿）
+    /// Logo 的渐变绕一圈（首尾都是蓝，接得上）：头像的光晕用 0°
+    static func ring(_ degrees: Double) -> AngularGradient {
+        AngularGradient(colors: Brand.spectrumLoop, center: .center, angle: .degrees(degrees))
+    }
+    /// 尊贵档的边（卡片）
+    static let edge = ring(-45)
+    /// 尊贵档的徽章底、账号页卡片顶上那条带子的下沿
     static let line = LinearGradient(colors: Brand.spectrum, startPoint: .leading, endPoint: .trailing)
+    /// Canvas 里尊贵档的装饰（插画的窗框、桌沿、扶手、台灯）：在 r 里从左下到右上
+    static func shading(_ r: CGRect) -> GraphicsContext.Shading {
+        .linearGradient(spectrum, startPoint: CGPoint(x: r.minX, y: r.maxY), endPoint: CGPoint(x: r.maxX, y: r.minY))
+    }
+    private static let spectrum = Gradient(colors: Brand.spectrum)
 }
 
-/// 档位的小徽记：圈 → 圆 → 菱形 → 四角星。onColor：画在尊贵档整块渐变的底上（白色）。
-struct TierMark: View {
+/// 档位的小徽记：圈 → 圆 → 菱形 → 四角星（尊贵档的画在整块渐变的底上，是白色的）。
+private struct TierMark: View {
     let tier: PlanTier
-    var size: CGFloat = 11
-    var onColor = false
+    let size: CGFloat
 
     var body: some View {
         Canvas { c, s in
             let w = s.width, r = CGRect(origin: .zero, size: s)
-            let diagonal = (CGPoint.zero, CGPoint(x: w, y: w))
             switch tier {
             case .entry:
                 c.stroke(Path(ellipseIn: r.insetBy(dx: w * 0.14, dy: w * 0.14)), with: .color(Color(hex: 0x8E95A1)), lineWidth: w * 0.16)
             case .standard:
-                c.fill(Path(ellipseIn: r.insetBy(dx: w * 0.08, dy: w * 0.08)),
-                       with: .linearGradient(Gradient(colors: [Color(hex: 0x6FA0FF), Brand.blue]), startPoint: diagonal.0, endPoint: diagonal.1))
+                c.fill(Path(ellipseIn: r.insetBy(dx: w * 0.08, dy: w * 0.08)), with: Self.tint(Brand.blue, w))
             case .advanced:
                 var d = Path()
                 d.addRoundedRect(in: r.insetBy(dx: w * 0.17, dy: w * 0.17), cornerSize: CGSize(width: w * 0.16, height: w * 0.16), style: .continuous,
                                  transform: CGAffineTransform(translationX: w / 2, y: w / 2).rotated(by: .pi / 4).translatedBy(x: -w / 2, y: -w / 2))
-                c.fill(d, with: .linearGradient(Gradient(colors: [Color(hex: 0xA58BFF), Brand.violet]), startPoint: diagonal.0, endPoint: diagonal.1))
+                c.fill(d, with: Self.tint(Brand.violet, w))
             case .premium:
                 // 圆润的四角星：四条边向里弯
                 let m = w / 2
@@ -45,8 +51,7 @@ struct TierMark: View {
                     star.addQuadCurve(to: b, control: CGPoint(x: m + (a.x + b.x - w) * 0.12, y: m + (a.y + b.y - w) * 0.12))
                 }
                 star.closeSubpath()
-                c.fill(star, with: onColor ? .color(.white)
-                       : .linearGradient(Gradient(colors: Brand.spectrum), startPoint: CGPoint(x: 0, y: w), endPoint: CGPoint(x: w, y: 0)))
+                c.fill(star, with: .color(.white))
             default:
                 break
             }
@@ -54,11 +59,20 @@ struct TierMark: View {
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
+
+    /// 从左上的浅色到右下的本色（和总览的图标一样的做法）
+    private static func tint(_ c: Color, _ w: CGFloat) -> GraphicsContext.Shading {
+        .linearGradient(Gradient(colors: [c.mix(with: .white, by: 0.25), c]), startPoint: .zero, endPoint: CGPoint(x: w, y: w))
+    }
 }
 
 /// 套餐徽章。compact 用在一行字里（侧栏、菜单栏、总览的卡片、分流图），regular 用在账号页的卡片上。
 struct PlanBadge: View {
-    enum Size { case compact, regular }
+    enum Size {
+        case compact, regular
+        /// 胶囊的高（侧栏、菜单栏账号的第二行按 compact 的高排：AccountSubtitle）
+        var height: CGFloat { self == .compact ? 17 : 21 }
+    }
 
     let plan: String
     let tier: PlanTier
@@ -70,7 +84,7 @@ struct PlanBadge: View {
         let compact = size == .compact
         HStack(spacing: compact ? 3 : 4) {
             if tier.isKnown && tier != .unknown {
-                TierMark(tier: tier, size: compact ? 9 : 11, onColor: tier == .premium)
+                TierMark(tier: tier, size: compact ? 9 : 11)
             }
             Text(plan)
                 .font(.system(size: compact ? 10.5 : 12, weight: .semibold))
@@ -79,7 +93,7 @@ struct PlanBadge: View {
                 .truncationMode(.tail)
         }
         .padding(.horizontal, compact ? 6.5 : 8.5)
-        .frame(height: compact ? 17 : 21)
+        .frame(height: size.height)
         .background(Capsule().fill(fill))
         .help(Texts.planName(plan, tier: tier))
         .accessibilityElement(children: .ignore)
@@ -100,7 +114,7 @@ struct PlanBadge: View {
     private var fill: AnyShapeStyle {
         switch tier {
         case .premium:
-            return AnyShapeStyle(LinearGradient(colors: Brand.spectrum, startPoint: .leading, endPoint: .trailing))
+            return AnyShapeStyle(TierStyle.line)
         case .standard:
             return AnyShapeStyle(Brand.blue.opacity(dark ? 0.22 : 0.11))
         case .advanced:

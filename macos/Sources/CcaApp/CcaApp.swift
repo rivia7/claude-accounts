@@ -45,6 +45,13 @@ struct CcaApp: App {
         // 后台打开时也不恢复上次退出时开着的主窗口（恢复出来的窗口不经过 showMain，没有 Dock 图标和菜单栏）
         .restorationBehavior(Self.launchedForCore ? .disabled : .automatic)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") {
+                    WindowOpener.shared.showMain()
+                    delegate.model.checkForUpdates(manual: true)
+                }
+                .disabled(delegate.model.phase != .ready)
+            }
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
                 Button("刷新") { delegate.model.refreshAll() }
@@ -61,6 +68,10 @@ struct CcaApp: App {
                     delegate.guide.openTutorial()
                 }
                 .keyboardShortcut("/", modifiers: [.command, .shift])
+                Button("更新说明") {
+                    WindowOpener.shared.showMain()
+                    delegate.guide.openWhatsNew()
+                }
                 Button("重新显示提示卡片") { delegate.guide.resetTips() }
             }
         }
@@ -82,7 +93,7 @@ struct CcaApp: App {
 }
 
 /// App 的生命周期：关掉主窗口不退出；Claude App / ChatGPT App 启动、退出时重新读 state；App 被激活时重新跑 hello 和 state；
-/// 退出时取消 usage / check / live 的子进程。
+/// 退出时取消 usage / check / live / 检查更新 / 更新的子进程（app、web、router sync、重置额度跑完为止）。
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: AppModel
@@ -99,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let demo = !(ProcessInfo.processInfo.environment["CCA_GUI_FIXTURES"] ?? "").isEmpty
         model = AppModel(appVersion: version, defaults: demo ? MemoryPrefs() : UserDefaults.standard,
                          hooks: AppHooks(prompter: AlertPrompter()))
-        guide = Guide(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
+        guide = Guide(prefs: demo ? MemoryPrefs() : UserDefaults.standard, appVersion: version)
         appearance = AppearanceSetting(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
         super.init()
         model.hooks.openFile = { Platform.openInTerminal($0) }

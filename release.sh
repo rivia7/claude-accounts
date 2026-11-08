@@ -13,6 +13,10 @@ v=$(sed -n 's/^VERSION="\([0-9][0-9a-z.-]*\)"$/\1/p' cca | head -n 1)
 [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || fail "cca 里的 VERSION 不对：${v}"
 pre=()
 case "$v" in *-beta.*) pre=(--prerelease --latest=false) ;; esac
+# 每个版本都要写“更新了什么”：界面 App 升级后第一次打开时一张张给你看（「帮助」菜单的「更新说明」能再看）
+notes_src=macos/Sources/CcaKit/Model/WhatsNew.swift
+grep -qF "ReleaseNote(version: \"$v\"" "$notes_src" ||
+	fail "还没写 ${v} 的“更新了什么”：在 ${notes_src} 的 WhatsNew.all 最前面加一条 ReleaseNote(version: \"${v}\", …)；顺便看看新手教程（macos/Sources/CcaApp/Guide.swift 的 TutorialCard）要不要跟着改"
 [ -z "$(git status --porcelain)" ] || fail "有未提交的改动，先提交"
 ! git rev-parse -q --verify "refs/tags/v$v" >/dev/null || fail "v$v 已经发布过，先改 VERSION"
 # 嵌在 cca 里的公钥必须和签名私钥是一对，否则发出去的版本谁也装不上

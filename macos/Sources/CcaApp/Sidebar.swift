@@ -70,7 +70,7 @@ struct AccountMenu: View {
     }
 }
 
-/// 办公室那一行：大楼图标、几位员工几个在忙，有人要处理时右边说一句。
+/// 总览那一行：总览的图标（OverviewMark）、几个账号几个在用，有要处理的时右边说一句。
 struct OfficeRow: View {
     @Environment(AppModel.self) private var model
 
@@ -163,10 +163,26 @@ struct SidebarFooter: View {
                 .help("在终端里运行 cca codex add")
             }
             HStack(spacing: 6) {
-                if model.stateLoading {
+                if model.stateLoading || model.updateChecking {
                     ProgressView().controlSize(.mini)
                 }
-                Text(statusText).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                // 版本号：点一下检查更新；有新版本时后面带一句（顶上的提示条里能更新）
+                Button {
+                    model.checkForUpdates(manual: true)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(statusText).foregroundStyle(.tertiary)
+                        if let v = model.availableVersion {
+                            Text("· 有新版本 \(v)").foregroundStyle(.tint)
+                        }
+                    }
+                    .font(.caption2)
+                    .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.phase != .ready || model.updateChecking)
+                .help("检查更新")
+                .accessibilityLabel(statusText + "，检查更新")
                 Spacer(minLength: 4)
                 Button {
                     guide.openTutorial()
@@ -202,7 +218,7 @@ struct AccountRow: View {
     var body: some View {
         let a = account
         HStack(spacing: 10) {
-            AccountAvatar(account: a, size: 30, dot: 10, visible: model.mainVisible)
+            AccountAvatar(account: a, size: 30, dot: 10)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.body.weight(.medium)).lineLimit(1)

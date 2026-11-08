@@ -253,12 +253,8 @@ struct DeskPainter {
     }
 
     private var armColor: Color { accent.mix(with: .black, by: 0.2) }
-    /// 尊贵档的装饰（窗框、桌沿、扶手、抽屉、台灯）：Logo 的渐变，单色的地方用其中的紫
+    /// 尊贵档的装饰（窗框、桌沿、扶手、抽屉、台灯）：Logo 的渐变（TierStyle.shading），单色的地方用其中的紫
     private var luxe: Color { Brand.violet }
-
-    private func spectrum(_ from: CGPoint, _ to: CGPoint) -> GraphicsContext.Shading {
-        .linearGradient(Gradient(colors: Brand.spectrum), startPoint: from, endPoint: to)
-    }
 
     // MARK: 画
 
@@ -293,9 +289,9 @@ struct DeskPainter {
     private func drawWindow(_ c: inout GraphicsContext) {
         // 显示器上方的墙上（人的头前面不挡）
         let w = CGRect(x: 38, y: 4, width: 80, height: 25)
+        let pane = rr(w.minX, w.minY, w.width, w.height, 4)
         let sky = palette.dark ? [Color(hex: 0x0E1A33), Color(hex: 0x1F3158)] : [Color(hex: 0xBFDDF7), Color(hex: 0xEAF4FD)]
-        c.fill(rr(w.minX, w.minY, w.width, w.height, 4), with: .linearGradient(Gradient(colors: sky), startPoint: w.origin,
-                                                                               endPoint: CGPoint(x: w.minX, y: w.maxY)))
+        c.fill(pane, with: .linearGradient(Gradient(colors: sky), startPoint: w.origin, endPoint: CGPoint(x: w.minX, y: w.maxY)))
         if palette.dark {
             for (x, y) in [(0.12, 0.3), (0.38, 0.18), (0.6, 0.55), (0.84, 0.25), (0.7, 0.8)] {
                 c.fill(Path(ellipseIn: CGRect(x: w.minX + w.width * x, y: w.minY + w.height * y, width: 1.6, height: 1.6)),
@@ -308,15 +304,14 @@ struct DeskPainter {
         mullion.move(to: CGPoint(x: w.midX, y: w.minY))
         mullion.addLine(to: CGPoint(x: w.midX, y: w.maxY))
         c.stroke(mullion, with: .color(luxe.opacity(0.7)), lineWidth: 1.2)
-        c.stroke(rr(w.minX, w.minY, w.width, w.height, 4), with: spectrum(CGPoint(x: w.minX, y: w.maxY), CGPoint(x: w.maxX, y: w.minY)),
-                 lineWidth: 2)
+        c.stroke(pane, with: TierStyle.shading(w), lineWidth: 2)
     }
 
     private func drawChairBack(_ c: inout GraphicsContext) {
-        let dx = chairShift
-        c.fill(rr(182 + dx, 46, 32, 58, 12), with: .color(palette.chairBack))
+        let back = rr(182 + chairShift, 46, 32, 58, 12)
+        c.fill(back, with: .color(palette.chairBack))
         if premium {
-            c.stroke(rr(182 + dx, 46, 32, 58, 12), with: spectrum(CGPoint(x: 182 + dx, y: 104), CGPoint(x: 214 + dx, y: 46)), lineWidth: 1.4)
+            c.stroke(back, with: TierStyle.shading(back.boundingRect), lineWidth: 1.4)
         }
     }
 
@@ -335,7 +330,7 @@ struct DeskPainter {
             var arm = Path()
             arm.move(to: CGPoint(x: 172 + dx, y: 99))
             arm.addLine(to: CGPoint(x: 206 + dx, y: 99))
-            c.stroke(arm, with: spectrum(CGPoint(x: 172 + dx, y: 99), CGPoint(x: 206 + dx, y: 99)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            c.stroke(arm, with: TierStyle.shading(arm.boundingRect), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
         }
     }
 
@@ -371,16 +366,18 @@ struct DeskPainter {
         c.fill(rr(20, 116, 142, 34, 3), with: .color(front))
         c.fill(rr(12, 108, 158, 8, 3), with: .color(top))
         // 抽屉
-        c.stroke(rr(116, 121, 40, 12, 2), with: .color(premium ? luxe.opacity(0.45) : palette.drawer), lineWidth: 1)
-        c.stroke(rr(116, 136, 40, 11, 2), with: .color(premium ? luxe.opacity(0.45) : palette.drawer), lineWidth: 1)
+        let drawerLine = premium ? luxe.opacity(0.45) : palette.drawer
+        c.stroke(rr(116, 121, 40, 12, 2), with: .color(drawerLine), lineWidth: 1)
+        c.stroke(rr(116, 136, 40, 11, 2), with: .color(drawerLine), lineWidth: 1)
         for y in [127.0, 141.5] {
-            c.fill(rr(131, y - 1, 10, 2, 1), with: premium ? spectrum(CGPoint(x: 131, y: y), CGPoint(x: 141, y: y)) : .color(palette.drawer))
+            let handle = rr(131, y - 1, 10, 2, 1)
+            c.fill(handle, with: premium ? TierStyle.shading(handle.boundingRect) : .color(palette.drawer))
         }
         if premium {
             var edge = Path()
             edge.move(to: CGPoint(x: 13, y: 116))
             edge.addLine(to: CGPoint(x: 169, y: 116))
-            c.stroke(edge, with: spectrum(CGPoint(x: 13, y: 116), CGPoint(x: 169, y: 116)), lineWidth: 1.6)
+            c.stroke(edge, with: TierStyle.shading(edge.boundingRect), lineWidth: 1.6)
         }
     }
 
@@ -396,7 +393,7 @@ struct DeskPainter {
         shade.addLine(to: CGPoint(x: 25, y: 74))
         shade.addLine(to: CGPoint(x: 17, y: 74))
         shade.closeSubpath()
-        c.fill(shade, with: spectrum(CGPoint(x: 13, y: 84), CGPoint(x: 29, y: 74)))
+        c.fill(shade, with: TierStyle.shading(shade.boundingRect))
         c.fill(Path(ellipseIn: CGRect(x: 10, y: 82, width: 22, height: 12)),
                with: .radialGradient(Gradient(colors: [Color(hex: 0xFFE7A3).opacity(0.45), .clear]), center: CGPoint(x: 21, y: 86),
                                      startRadius: 0, endRadius: 12))

@@ -441,9 +441,9 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var cliSessions: Int { cli?.running == true ? cli?.sessions ?? 0 : 0 }
     /// 最早那个命令行会话开始的时间（没有会话时 nil）
     var cliSince: Double? { cliSessions > 0 ? cli?.sinceEpoch : nil }
-    /// 在用：桌面 App 开着，或者有经 cca 启动的命令行会话（办公室里“在忙”，头像右下角的绿点）
+    /// 在用：桌面 App 开着，或者有经 cca 启动的命令行会话（总览里的“在用”、头像右下角的绿点）
     var isWorking: Bool { appRunning || cliSessions > 0 }
-    /// 最高档的套餐（Ultra、Pro 500）：金徽章、头像金圈、金边的工位和工牌。第三方 API 账号的档位总是空的
+    /// 最高档的套餐（Ultra、Pro 500）。第三方 API 账号的档位总是空的
     var isPremium: Bool { planTier == .premium }
     /// 走节点（有端口）。直连的第三方 API 账号没有。
     var isRouted: Bool { port != nil }

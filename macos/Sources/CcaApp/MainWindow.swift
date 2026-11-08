@@ -36,6 +36,7 @@ struct MainWindow: View {
             SheetView(sheet: s).environment(model)
         }
         .background(WindowObserver { visible in model.setMainVisible(visible) })
+        .motionScope(\.mainVisible)
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
             // 主窗口出来了就是普通 App：--core 启动时是 .accessory（没有 Dock 图标和菜单栏），不管是从哪里打开的都换回来
@@ -56,9 +57,13 @@ struct SplitView: View {
             DetailColumn()
         }
         .toolbar { MainToolbar() }
-        // 第一次连上 cca 时打开卡片教程；按 Esc 关掉也算看过（以后从“帮助”菜单、工具栏的问号再看）
-        .sheet(isPresented: Binding(get: { guide.tutorialShown }, set: { if !$0 { guide.finishTutorial() } })) {
-            TutorialSheet().environment(guide)
+        // 第一次连上 cca 时打开卡片教程（按 Esc 关掉也算看过，以后从“帮助”菜单、工具栏的问号再看）；
+        // 升级后第一次打开时给这几个版本更新了什么（“帮助”菜单的「更新说明」能再看）
+        .sheet(item: Binding(get: { guide.sheet }, set: { if $0 == nil { guide.dismissSheet() } })) { s in
+            switch s {
+            case .tutorial: TutorialSheet().environment(guide)
+            case .whatsNew: WhatsNewSheet().environment(guide)
+            }
         }
         .onAppear { guide.startIfNeeded() }
     }
@@ -91,14 +96,17 @@ struct DetailColumn: View {
     }
 }
 
-/// 详情上方的提示条：版本不同、账号表校验不过、共享设置有问题、文件读不了、后台刷新用量要同意或失败了、读 state 出错。
+/// 详情上方的提示条：有新版本（检查更新找到的）、版本不同、账号表校验不过、共享设置有问题、文件读不了、
+/// 后台刷新用量要同意或失败了、读 state 出错。
 /// 提示条是内容层（实的，见 Glass.swift 的 Banner），里面的按钮用 .bordered / .borderedProminent。
 struct TopBanners: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         BannerStack {
-            if model.versionMismatch, let v = model.hello?.ccaVersion {
+            if let u = model.availableUpdate {
+                UpdateBanner(update: u)
+            } else if model.versionMismatch, let v = model.hello?.ccaVersion {
                 Banner(systemImage: "arrow.down.app", tint: .accentColor,
                             title: model.hello?.gui?.stagedVersion == v ? "新版本的 cca App 已经下载好" : "cca 已经更新到 \(v)",
                             message: model.updating ? "正在下载和 cca 同版本的 App…" : "这个 App 是 \(model.appVersion)。更新后会自动重新打开。") {
@@ -163,9 +171,49 @@ struct TopBanners: View {
     }
 
     private var hasBanners: Bool {
-        model.versionMismatch || !model.invalidTables.isEmpty || !(model.state?.errors ?? []).isEmpty
+        model.availableUpdate != nil || model.versionMismatch || !model.invalidTables.isEmpty || !(model.state?.errors ?? []).isEmpty
             || !model.usageNeedsConsent.isEmpty || !model.usageFailure.isEmpty || model.stateError != nil || model.coreTrouble != nil
             || model.visibleTools.contains { !(model.toolState($0)?.settingsProblems ?? []).isEmpty }
+    }
+}
+
+/// 检查更新找到的新版本：版本号、更新说明的前几行（「更新说明」打开 GitHub 上的发布页），「更新并重新打开」先把 cca 换成它、
+/// 再换上同版本的 App；「以后再说」这个版本不再提示。测试版上也会提示更新的测试版（跟着现在装的版本）。
+struct UpdateBanner: View {
+    @Environment(AppModel.self) private var model
+    let update: UpdateDoc
+
+    private var version: String { update.latest ?? "" }
+
+    var body: some View {
+        let beta = AppVersion(version)?.isBeta ?? false
+        Banner(systemImage: "arrow.down.circle", tint: .accentColor,
+               title: beta ? "cca 有新的测试版 \(version)" : "cca 有新版本 \(version)",
+               message: message, messageLines: 2) {
+            if model.updating { ProgressView().controlSize(.small) }
+            if let s = update.url, let url = URL(string: s) {
+                Button("更新说明") { model.hooks.openURL(url) }
+                    .buttonStyle(.bordered)
+            }
+            Button("以后再说") { model.dismissUpdate() }
+                .buttonStyle(.bordered)
+                .disabled(model.updating)
+            Button("更新并重新打开") { model.installUpdate() }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.updating)
+        }
+    }
+
+    private var message: String {
+        switch model.updateStep {
+        case .cca?: return "正在把 cca 更新到 \(version)…"
+        case .app?: return "正在下载和 cca 同版本的 App…"
+        case nil:
+            let lines = (update.notes ?? "").split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            let head = lines.prefix(2).joined(separator: "\n")
+            return head.isEmpty ? "现在是 \(model.hello?.ccaVersion ?? model.appVersion)。更新后会自动重新打开。" : head
+        }
     }
 }
 

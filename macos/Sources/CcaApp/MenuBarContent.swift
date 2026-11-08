@@ -113,6 +113,7 @@ struct MenuBarContent: View {
         .padding(14)
         .frame(width: 340)
         .background(WindowObserver { visible in model.setPanelVisible(visible) })
+        .motionScope(\.panelVisible)
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
         }
@@ -152,7 +153,7 @@ struct MenuRow: View {
         let busy = model.activity(a.ref) != nil
         let issue = problem(a, u)
         HStack(spacing: 10) {
-            AccountAvatar(account: a, size: 28, dot: 9, visible: model.panelVisible)
+            AccountAvatar(account: a, size: 28, dot: 9)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)

@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 用量：两块额度（5 小时、本周），下面是分模型的每周额度和 Codex 的 credits / 重置次数。
-/// 标题右边是数据从哪来（刚查询 / 缓存、多久以前）和“刷新用量”。和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
+/// 用量：大块的额度（5 小时、本周，还有分模型的每周额度，例如 Claude 的 Fable），下面是旧的分模型额度、Codex 的 credits，
+/// ChatGPT 账号还能重置几次（旁边是「重置额度…」）。标题右边是数据从哪来（刚查询 / 缓存、多久以前）和“刷新用量”。
+/// 和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
 struct UsageSection: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -71,17 +72,25 @@ struct UsageSection: View {
         if let u = model.usage(for: account), u.source != .none {
             // 数据旧了（过期，或者这次没查到、用的是缓存）就用灰色显示
             let dim = u.stale || (u.source == .cache && u.errorCode != nil)
+            let models = modelTiles(u)
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
+                QuotaGrid {
                     QuotaTile(title: "5 小时", window: u.fiveHour, now: now, dim: dim)
                     QuotaTile(title: "本周", window: u.sevenDay, now: now, dim: dim)
+                    ForEach(models, id: \.name) { m in
+                        QuotaTile(title: m.name, window: m.window, now: now, dim: dim, note: m.note)
+                    }
                 }
-                let minor = minorItems(u, now: now, dim: dim)
+                let minor = minorItems(u, shown: Set(models.map { $0.name.lowercased() }), now: now, dim: dim)
                 if !minor.isEmpty {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 28), GridItem(.flexible())], alignment: .leading, spacing: 10) {
                         ForEach(minor) { $0 }
                     }
                     .padding(.horizontal, 4)
+                }
+                if let rc = u.resetCredits, rc.availableCount != nil {
+                    ResetCreditsRow(account: account, credits: rc, now: now)
+                        .padding(.horizontal, 4)
                 }
                 if let code = u.errorCode {
                     Label(nonEmpty(u.error) ?? Texts.usageError(code), systemImage: "exclamationmark.triangle.fill")
@@ -117,20 +126,24 @@ struct UsageSection: View {
         }
     }
 
-    /// 两块额度下面的小行：分模型的每周额度（Opus、Sonnet、应用，加上 model_scoped，按名字去重），
-    /// 再是 credits、还能重置几次、额外用量。
-    private func minorItems(_ u: UsageEntry, now: Double, dim: Bool) -> [MinorQuota] {
-        var out: [MinorQuota] = []
+    /// 分模型的每周额度（model_scoped，按名字去重）：各是一大块，下面一行说它和本周总额度的关系（cca 认得出时）。
+    private func modelTiles(_ u: UsageEntry) -> [(name: String, window: UsageWindow, note: String)] {
         var seen = Set<String>()
+        return u.modelScoped.compactMap { m in
+            guard let name = nonEmpty(m.name), m.window.utilization != nil, seen.insert(name.lowercased()).inserted else { return nil }
+            return (name, m.window, Texts.weeklyShare(allowance: m.allowancePercentOfWeekly, used: m.usedPercentOfWeekly))
+        }
+    }
+
+    /// 大块下面的小行：旧的分模型每周额度（Opus、Sonnet、应用；大块里已经有的不再写），再是 credits、额外用量。
+    private func minorItems(_ u: UsageEntry, shown: Set<String>, now: Double, dim: Bool) -> [MinorQuota] {
+        var out: [MinorQuota] = []
+        var seen = shown
         let fixed: [(String, UsageWindow?)] = [("Opus", u.sevenDayOpus), ("Sonnet", u.sevenDaySonnet), ("应用", u.sevenDayOauthApps)]
         for (name, w) in fixed {
             if let w, w.utilization != nil, seen.insert(name.lowercased()).inserted {
                 out.append(MinorQuota(title: name + " 本周", window: w, now: now, dim: dim))
             }
-        }
-        for m in u.modelScoped {
-            guard let name = nonEmpty(m.name), m.window.utilization != nil, seen.insert(name.lowercased()).inserted else { continue }
-            out.append(MinorQuota(title: name, window: m.window, now: now, dim: dim))
         }
         if let c = u.credits {
             if c.unlimited == true {
@@ -141,9 +154,6 @@ struct UsageSection: View {
                 out.append(MinorQuota(title: "Credits", value: "没有", systemImage: "creditcard"))
             }
         }
-        if let n = u.resetCredits?.availableCount {
-            out.append(MinorQuota(title: "还能重置额度", value: "\(n) 次", systemImage: "arrow.counterclockwise"))
-        }
         if let e = u.extraUsage, e.isEnabled == true {
             out.append(MinorQuota(title: "额外用量", value: e.utilization.map { Texts.percent($0) } ?? "已开启", systemImage: "plus.circle"))
         }
@@ -151,13 +161,59 @@ struct UsageSection: View {
     }
 }
 
-/// 一块额度：标题和重置时间，大号的百分比（只有接近、超过上限时才着色），一根条。
+/// 额度的大块：放得下就排成一行（每块至少 minWidth 宽），放不下两块一行，单出来的最后一块占满一行。同一行的一样高。
+/// 用 Layout：换排法时还是同一份视图，不用先量宽度再排一遍。
+struct QuotaGrid: Layout {
+    var minWidth: CGFloat = 196
+    var spacing: CGFloat = 12
+
+    /// 每行放哪几块
+    private func rows(_ count: Int, width: CGFloat) -> [Range<Int>] {
+        guard count > 0 else { return [] }
+        let fits = { (n: Int) in CGFloat(n) * minWidth + CGFloat(n - 1) * spacing <= width }
+        let perRow = fits(count) ? count : (fits(2) ? 2 : 1)
+        return stride(from: 0, to: count, by: perRow).map { $0..<min($0 + perRow, count) }
+    }
+
+    private func tileWidth(_ row: Range<Int>, _ width: CGFloat) -> CGFloat {
+        (width - spacing * CGFloat(row.count - 1)) / CGFloat(row.count)
+    }
+
+    private func layout(_ subviews: Subviews, width: CGFloat) -> [(row: Range<Int>, width: CGFloat, height: CGFloat)] {
+        rows(subviews.count, width: width).map { r in
+            let w = tileWidth(r, width)
+            let h = r.map { subviews[$0].sizeThatFits(ProposedViewSize(width: w, height: nil)).height }.max() ?? 0
+            return (r, w, h)
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? CGFloat(subviews.count) * (minWidth + spacing) - spacing
+        let rows = layout(subviews, width: width)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for (row, w, h) in layout(subviews, width: bounds.width) {
+            for (k, i) in row.enumerated() {
+                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(k) * (w + spacing), y: y), anchor: .topLeading,
+                                  proposal: ProposedViewSize(width: w, height: h))
+            }
+            y += h + spacing
+        }
+    }
+}
+
+/// 一块额度：标题和重置时间，大号的百分比（只有接近、超过上限时才着色），一根条；分模型的额度下面再写一句它和本周总额度的关系。
 /// 已重置的不显示旧的百分比。
 struct QuotaTile: View {
     let title: String
     let window: UsageWindow?
     let now: Double
     var dim = false
+    var note: String?
 
     var body: some View {
         let reset = window?.isReset(now: now) ?? false
@@ -190,13 +246,65 @@ struct QuotaTile: View {
                 }
             }
             Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: color, height: 6, dim: dim)
+            if let note = nonEmpty(note) {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title)用量")
-        .accessibilityValue(pct == nil ? "没有数据" : reset ? "已重置" : "\(Texts.percent(pct!))\(resetText.map { "，" + $0 } ?? "")")
+        .accessibilityValue((pct == nil ? "没有数据" : reset ? "已重置" : "\(Texts.percent(pct!))\(resetText.map { "，" + $0 } ?? "")")
+                            + (nonEmpty(note).map { "。" + $0 } ?? ""))
+    }
+}
+
+/// ChatGPT 账号还能重置几次额度（codex 里 /usage 的 Redeem reset），最早的那次什么时候过期（cca 算好的）；有机会时旁边是
+/// 「重置额度…」（cca 会先问：会用掉一次，默认不重置；用量还不需要重置时不扣次数）。
+struct ResetCreditsRow: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+    let credits: ResetCredits
+    let now: Double
+
+    var body: some View {
+        let a = account
+        let count = credits.availableCount ?? 0
+        let busy = model.activity(a.ref) != nil
+        let resetting = model.activity(a.ref)?.kind == .reset
+        HStack(spacing: 10) {
+            Label {
+                HStack(spacing: 6) {
+                    Text("还能重置额度")
+                    Text("\(count) 次").monospacedDigit().fontWeight(.medium).foregroundStyle(.primary)
+                    if count > 0, let e = credits.nextExpiresEpoch {
+                        Text("·")
+                        Text((count > 1 ? "最早一次 " : "") + Texts.expiryText(epoch: e, now: now)).lineLimit(1)
+                    }
+                }
+            } icon: {
+                Image(systemName: "arrow.counterclockwise")
+            }
+            .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            if count > 0 {
+                Button {
+                    model.resetQuota(a.ref)
+                } label: {
+                    Label(resetting ? "重置中…" : "重置额度…", systemImage: "arrow.counterclockwise.circle")
+                }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(busy || !a.can.usage)
+                .help("用掉一次重置机会，把 5 小时和每周的用量清零（会先问你；用量还不需要重置时不扣次数）")
+            }
+        }
+        .font(.callout)
+        .accessibilityElement(children: .contain)
     }
 }
 

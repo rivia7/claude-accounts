@@ -109,6 +109,23 @@ enum Texts {
         "\(Int(p.rounded()))%"
     }
 
+    /// 分模型的每周额度（Fable）和本周总额度的关系：“最多用本周额度的 50%，已用 3%”；cca 没认出份额时只说是单独的每周额度。
+    static func weeklyShare(allowance: Double?, used: Double?) -> String {
+        guard let allowance else { return "单独计的每周额度" }
+        return "最多用本周额度的 \(percent(allowance))" + (used.map { "，已用 \(percent($0))" } ?? "")
+    }
+
+    /// 什么时候过期（重置机会）：“11 月 20 日过期”（今年以内不写年份），一天以内写还有多久（“5 小时 3 分后过期”）。
+    static func expiryText(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
+        if epoch <= now { return "已过期" }
+        if epoch - now < 86400 { return span(epoch - now) + "后过期" }
+        let d = Date(timeIntervalSince1970: epoch)
+        let c = calendar.dateComponents([.year, .month, .day], from: d)
+        let thisYear = calendar.component(.year, from: Date(timeIntervalSince1970: now))
+        let day = "\(c.month ?? 0) 月 \(c.day ?? 0) 日"
+        return (c.year == thisYear ? day : "\(c.year ?? 0) 年 " + day) + "过期"
+    }
+
     static func product(_ tool: ToolID) -> String {
         switch tool {
         case .claude: return "Claude"
@@ -238,6 +255,7 @@ enum Texts {
         case .check: return "检测出口…"
         case .sync: return "同步路由器…"
         case .rename: return "改名…"
+        case .reset: return "重置额度…"
         }
     }
 

@@ -120,11 +120,13 @@ else
 fi
 ok "编译好了：$(lipo -archs "$BIN")"
 
-# ---------------------------------------------------------------- 图标（make-icon.swift 没改过就用缓存）
+# ---------------------------------------------------------------- 图标（make-icon 和 Logo 的字形没改过就用缓存）
 ICNS="$BUILD/icon/AppIcon.icns"
-if [ ! -s "$ICNS" ] || [ "$HERE/tools/make-icon.swift" -nt "$ICNS" ]; then
+# 字形 LogoGlyph.swift 和 App 里的 BrandMark 共用，一起编进 make-icon
+ICON_SRC=("$HERE/tools/make-icon/main.swift" "$HERE/Sources/CcaApp/LogoGlyph.swift")
+if [ ! -s "$ICNS" ] || [ "${ICON_SRC[0]}" -nt "$ICNS" ] || [ "${ICON_SRC[1]}" -nt "$ICNS" ]; then
 	info "画图标…"
-	swiftc -O -swift-version 5 "$HERE/tools/make-icon.swift" -o "$BUILD/icon/make-icon" >"$BUILD/icon/build.log" 2>&1 ||
+	swiftc -O -swift-version 5 "${ICON_SRC[@]}" -o "$BUILD/icon/make-icon" >"$BUILD/icon/build.log" 2>&1 ||
 		{ cat "$BUILD/icon/build.log" >&2; die "编译 make-icon 失败"; }
 	"$BUILD/icon/make-icon" "$BUILD/icon/icon_1024.png"
 	SET="$BUILD/icon/AppIcon.iconset"

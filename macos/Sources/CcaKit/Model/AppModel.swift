@@ -11,7 +11,7 @@ enum SidebarItem: Hashable, Sendable {
 }
 
 enum ActivityKind: Sendable, Equatable {
-    case app, web, check, sync, rename
+    case app, web, check, sync, rename, reset
 }
 
 /// 一个账号正在做的事（按钮旁边显示进度）。
@@ -51,6 +51,7 @@ enum Sheet: Identifiable, Equatable {
 protocol PrefsStore: AnyObject {
     func string(forKey key: String) -> String?
     func bool(forKey key: String) -> Bool
+    func double(forKey key: String) -> Double
     func set(_ value: Any?, forKey key: String)
 }
 
@@ -61,6 +62,7 @@ final class MemoryPrefs: PrefsStore {
     init() {}
     func string(forKey key: String) -> String? { values[key] as? String }
     func bool(forKey key: String) -> Bool { values[key] as? Bool ?? false }
+    func double(forKey key: String) -> Double { values[key] as? Double ?? 0 }
     func set(_ value: Any?, forKey key: String) { values[key] = value }
 }
 
@@ -117,8 +119,20 @@ final class AppModel {
     private(set) var usageFailure: [ToolID: Failure] = [:]
     private(set) var activities: [AccountRef: Activity] = [:]
     private(set) var syncActivity: Activity?
-    /// 「更新并重新打开」的第一步（`cca gui update`）正在跑。
-    private(set) var updating = false
+    /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
+    /// （`cca gui update`）；cca 已经比 App 新时只有后一步。
+    enum UpdateStep: Equatable { case cca, app }
+    private(set) var updateStep: UpdateStep?
+    var updating: Bool { updateStep != nil }
+    /// 最近一次检查更新的结果（`cca update --check --json`，PROTOCOL 5.1）
+    private(set) var updateInfo: UpdateDoc?
+    private(set) var updateChecking = false
+    /// 点过“以后再说”的版本（记在 App 的设置里）：这个版本不再提示，出了更新的照常提示
+    private(set) var updateDismissed: String?
+    /// 手动检查时正好有一次自动检查在跑：它跑完照样说一声
+    @ObservationIgnored private var manualCheckPending = false
+    /// 自动检查更新的间隔（查不了时 3 小时后再查）
+    static let updateCheckInterval: Double = 86400
     /// 内置代理的内核（CoreHost，PROTOCOL 7）：退出了的时候界面上显示一条提示
     private(set) var coreStatus: CoreHost.Status = .off
     var sheet: Sheet?
@@ -186,14 +200,18 @@ final class AppModel {
     @ObservationIgnored private var liveGeneration = 0
     @ObservationIgnored private var appsDebounce: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
-    /// 退出时要取消的任务（usage / check / live / gui update 的子进程）。app、web、router sync 不在这里：
-    /// 它们的输出接文件，App 退出后照样跑完（PROTOCOL 1）。
+    /// 退出时要取消的任务（usage / check / live / 检查更新 / 更新 cca / gui update 的子进程）。app、web、router sync、重置额度
+    /// 不在这里：它们的输出接文件，App 退出后照样跑完（PROTOCOL 1）。
     @ObservationIgnored private var cancelOnQuit: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var startedOnce = false
     @ObservationIgnored private var coreHost: CoreHost?
 
     enum Prefs {
         static let tool = "tool"
+        /// 上次检查更新的时间（Unix 秒）：自动检查一天最多一次；查不了时记成 3 小时后再查
+        static let updateCheckedAt = "update.checkedAt"
+        /// 点过“以后再说”的版本
+        static let updateDismissed = "update.dismissed"
         /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
@@ -224,6 +242,7 @@ final class AppModel {
         }
         if let transport = self.transport { client = CcaClient(transport: transport) }
         if let t = defaults.string(forKey: Prefs.tool) { tool = ToolID(rawValue: t) }
+        updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
         self.scheduler.onUsageTick = { [weak self] in self?.refreshUsage(manual: false) }
         self.scheduler.onLiveTick = { [weak self] in self?.refreshLive() }
     }
@@ -238,6 +257,7 @@ final class AppModel {
         if phase == .ready, isVisible {
             refreshLive()
             refreshUsageIfNeeded()
+            checkForUpdatesIfDue()
         }
     }
 
@@ -450,7 +470,7 @@ final class AppModel {
         }
     }
 
-    /// 登记一个退出时要取消的任务（usage / check / live / gui update），跑完自己注销。
+    /// 登记一个退出时要取消的任务（usage / check / live / 检查更新 / 更新），跑完自己注销。
     @discardableResult
     private func track(_ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
         let id = UUID()
@@ -764,35 +784,166 @@ final class AppModel {
         .login(prefix: prefix(a.tool), key: a.key, name: a.displayName)
     }
 
-    /// 「更新并重新打开」（PROTOCOL 5）：先照常运行 `cca gui update`，等它下载校验好新版本（失败就显示原因，App 照常开着）；
-    /// 成功后脱离 App 运行 `cca gui update --relaunch <pid>`（它等 App 退出后换上新版本再打开），然后退出。
-    func updateAndRelaunch() {
+    // MARK: 重置额度
+
+    /// 重置额度（ChatGPT 账号，`cca codex reset KEY --json`，PROTOCOL 4.5）：cca 先要同意（reset_credit，默认不同意：
+    /// 会用掉一次重置机会），同意后重置，带回重置后的用量。用量还不需要重置时 OpenAI 不扣次数，只提示一句。
+    /// 同意之后就会用掉一次：跑完为止，App 退出也不杀（PROTOCOL 1），所以不登记到 cancelOnQuit。
+    func resetQuota(_ ref: AccountRef) {
+        guard phase == .ready, let client, activities[ref] == nil else { return }
+        activities[ref] = Activity(kind: .reset)
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let (doc, r) = await client.document(.reset(ref.tool, key: ref.key), as: ResetDoc.self, prompter: prompter)
+            guard let self else { return }
+            self.activities[ref] = nil
+            if let u = doc?.usage, let k = u.key ?? u.account {
+                self.usageRuns[ref.tool, default: [:]][k] = u
+            }
+            let text = nonEmpty(doc?.message) ?? "已重置额度"
+            if r.isSuccess, doc?.outcome == .nothingToReset {
+                self.showToast(text, .info)
+            } else {
+                self.finish(r, failureTitle: "没能重置额度", success: text)
+            }
+            await self.afterAction()
+            // 重置成了却没读到重置后的用量：再查一次，不然页面上还是重置前的数
+            if r.isSuccess, doc?.didReset == true, doc?.usage == nil {
+                self.refreshUsage(tool: ref.tool, key: ref.key, manual: false)
+            }
+        }
+    }
+
+    // MARK: 检查更新、更新
+
+    /// 检查更新找到的新版本：比现在的 cca 新（按版本号的先后）、没点过“以后再说”、不是开发模式（看 hello）；cca 已经换成它了
+    /// （顶上已经有“更新并重新打开”）就不再说。
+    var availableUpdate: UpdateDoc? {
+        guard hello?.devMode != true, let u = updateInfo, u.available, let v = nonEmpty(u.latest), v != updateDismissed,
+              let latest = AppVersion(v) else { return nil }
+        if let cur = hello?.ccaVersion.flatMap(AppVersion.init), !(latest > cur) { return nil }
+        return u
+    }
+
+    /// 有新版本时它的版本号
+    var availableVersion: String? { availableUpdate?.latest }
+
+    /// 检查更新（`cca update --check --json`）：按现在的版本挑（测试版也看更新的测试版），cca 只检查不安装。
+    /// manual 是用户点的「检查更新…」：结果都说一声（已是最新、有新版本、查不了，查不了的原因是 cca 的 fail 事件），
+    /// 正好有一次自动检查在跑就等它的结果；自动检查只在有新版本时出现在窗口顶上，查不了不说、3 小时后再查。
+    func checkForUpdates(manual: Bool) {
+        guard phase == .ready, let client else { return }
+        if manual { manualCheckPending = true }
+        guard !updateChecking else { return }
+        updateChecking = true
+        track { [weak self] in
+            let (doc, r) = await client.document(.updateCheck, as: UpdateDoc.self, prompter: nil)
+            guard let self else { return }
+            self.updateChecking = false
+            let announce = self.manualCheckPending
+            self.manualCheckPending = false
+            let now = Date().timeIntervalSince1970
+            if let u = doc, r.isSuccess {
+                self.updateInfo = u
+                self.defaults.set(now, forKey: Prefs.updateCheckedAt)
+                if announce { self.announceUpdate(u) }
+            } else {
+                self.defaults.set(now - Self.updateCheckInterval + 3 * 3600, forKey: Prefs.updateCheckedAt)
+                if announce, let f = r.failure, f.reason != .cancelled {
+                    self.showToast("没能检查更新：\(f.message)", .warning)
+                }
+            }
+        }
+    }
+
+    /// 手动检查的结果说一声；点过“以后再说”的版本这时也重新提示。
+    private func announceUpdate(_ u: UpdateDoc) {
+        if let d = updateDismissed, d == u.latest {
+            updateDismissed = nil
+            defaults.set(nil, forKey: Prefs.updateDismissed)
+        }
+        if hello?.devMode == true {
+            showToast(u.available ? "有新版本 \(u.latest ?? "")：开发模式下在仓库里 git pull 更新" : "已是最新版本（开发模式）", .info)
+        } else if let v = availableVersion {
+            showToast("有新版本 \(v)：点窗口顶上的「更新并重新打开」", .info)
+        } else {
+            showToast("已是最新版本 \(hello?.ccaVersion ?? u.latest ?? "")", .success)
+        }
+    }
+
+    /// 自动检查更新：窗口或菜单栏面板看得见、离上次检查超过一天（查不了时 3 小时）；关掉了自动更新（`cca update off`）、
+    /// 开发模式、演示数据都不查。
+    func checkForUpdatesIfDue(now: Date = Date()) {
+        guard phase == .ready, isVisible, !isFixtureMode, hello?.devMode != true, let state, state.config?.update != "off" else { return }
+        guard now.timeIntervalSince1970 - defaults.double(forKey: Prefs.updateCheckedAt) >= Self.updateCheckInterval else { return }
+        checkForUpdates(manual: false)
+    }
+
+    /// 这个版本先不更新：不再提示它，出了更新的照常提示（手动「检查更新…」也会重新提示它）。
+    func dismissUpdate() {
+        guard let v = availableVersion else { return }
+        updateDismissed = v
+        defaults.set(v, forKey: Prefs.updateDismissed)
+    }
+
+    /// 开始「更新并重新打开」：演示模式只说一声；已经在更新时不再开始。
+    private func beginUpdate(_ step: UpdateStep) -> CcaClient? {
         if isFixtureMode {
             showToast("演示模式：不会更新", .info)
-            return
+            return nil
         }
-        guard let client, !updating else { return }
-        updating = true
+        guard let client, updateStep == nil else { return nil }
+        updateStep = step
+        return client
+    }
+
+    /// 检查更新找到新版本时的「更新并重新打开」（PROTOCOL 5.1）：先 `cca update 版本号` 把 cca 换成新版本（失败就显示原因，
+    /// 什么都没换），再照常下载同版本的 App、重新打开。
+    func installUpdate() {
+        guard let v = availableVersion, let client = beginUpdate(.cca) else { return }
         let prompter = hooks.prompter
         track { [weak self] in
-            let r = await client.execute(.guiUpdate, prompter: prompter)
+            let r = await client.execute(.update(v), prompter: prompter)
             guard let self else { return }
-            self.updating = false
             guard r.isSuccess else {
-                self.finish(r, failureTitle: "没能下载新版本的 cca App", success: "")
+                self.updateStep = nil
+                self.finish(r, failureTitle: "没能把 cca 更新到 \(v)", success: "")
                 return
             }
-            do {
-                try await client.relaunchAfterUpdate(pid: ProcessInfo.processInfo.processIdentifier)
-            } catch {
-                let f = Failure(reason: .launch, code: nil, message: "没能运行 cca gui update --relaunch：\(error)", stderrTail: "",
-                                exitCode: nil, tool: nil, key: nil)
-                self.present(.failure(FailureInfo(title: "没能重新打开 cca App", failure: f)))
-                return
-            }
-            self.shutdown()
-            self.hooks.terminate()
+            await self.connect()   // hello 换成新版本的 cca（App 的版本对不上了，顶上换成“更新并重新打开”的进度）
+            await self.relaunchIntoNewApp()
         }
+    }
+
+    /// 「更新并重新打开」（cca 已经比 App 新，PROTOCOL 5）：先照常运行 `cca gui update`，等它下载校验好新版本（失败就显示原因，
+    /// App 照常开着）；成功后脱离 App 运行 `cca gui update --relaunch <pid>`（它等 App 退出后换上新版本再打开），然后退出。
+    func updateAndRelaunch() {
+        guard beginUpdate(.app) != nil else { return }
+        track { [weak self] in await self?.relaunchIntoNewApp() }
+    }
+
+    private func relaunchIntoNewApp() async {
+        guard let client else {
+            updateStep = nil
+            return
+        }
+        updateStep = .app
+        let r = await client.execute(.guiUpdate, prompter: hooks.prompter)
+        updateStep = nil
+        guard r.isSuccess else {
+            finish(r, failureTitle: "没能下载新版本的 cca App", success: "")
+            return
+        }
+        do {
+            try await client.relaunchAfterUpdate(pid: ProcessInfo.processInfo.processIdentifier)
+        } catch {
+            let f = Failure(reason: .launch, code: nil, message: "没能运行 cca gui update --relaunch：\(error)", stderrTail: "",
+                            exitCode: nil, tool: nil, key: nil)
+            present(.failure(FailureInfo(title: "没能重新打开 cca App", failure: f)))
+            return
+        }
+        shutdown()
+        hooks.terminate()
     }
 
     // MARK: 可见性、外部事件
@@ -825,6 +976,7 @@ final class AppModel {
                 refreshState()
             }
             refreshUsageIfNeeded()
+            checkForUpdatesIfDue()
         }
     }
 
@@ -867,7 +1019,7 @@ final class AppModel {
         }
     }
 
-    /// 退出前：取消 usage / check / live / gui update 的子进程（SIGTERM 进程组）。app、web、router sync 不杀：
+    /// 退出前：取消 usage / check / live / 检查更新 / 更新的子进程（SIGTERM 进程组）。app、web、router sync、重置额度不杀：
     /// 它们的输出接文件，App 退出后照样跑完。内置代理的内核停掉并等它退出（App 托管它，App 退出它就停）。
     func shutdown() {
         coreHost?.shutdown()

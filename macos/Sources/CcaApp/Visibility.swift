@@ -76,6 +76,37 @@ final class ObserverView: NSView {
     }
 }
 
+/// 持续的动画（最高档头像的光晕流动、总览的插画）能不能走：所在的窗口 / 面板看得见，而且没开“减少动态效果”。
+/// 主窗口和菜单栏面板的根上各设一次（motionScope），下面的视图只读它；没设的地方（截图、教程的示意图）是 false，不动。
+private struct MotionAllowedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var motionAllowed: Bool {
+        get { self[MotionAllowedKey.self] }
+        set { self[MotionAllowedKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 按这个窗口看不看得见（AppModel 的 mainVisible / panelVisible）设 motionAllowed
+    func motionScope(_ visible: KeyPath<AppModel, Bool>) -> some View {
+        modifier(MotionScope(visible: visible))
+    }
+}
+
+/// 单独一层：窗口变得看得见 / 看不见时只有它和读 motionAllowed 的视图重算，不连累整个窗口。
+private struct MotionScope: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let visible: KeyPath<AppModel, Bool>
+
+    func body(content: Content) -> some View {
+        content.environment(\.motionAllowed, model[keyPath: visible] && !reduceMotion)
+    }
+}
+
 /// 打开主窗口的办法（SwiftUI 的 openWindow 只能从视图里拿到：主窗口和菜单栏面板出现时登记）。
 @MainActor
 final class WindowOpener {

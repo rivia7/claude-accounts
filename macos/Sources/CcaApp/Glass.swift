@@ -122,18 +122,23 @@ struct GlassRow<Content: View>: View {
 }
 
 /// 提示条（内容层，实的）：按严重程度染一层很淡的颜色，左边图标和文字，右边按钮（.bordered / .borderedProminent）。
+/// 文字那一栏有个最小宽度、排版时优先：按钮多的时候也不会被挤成一个字一行（那样提示条会高得把整个窗口撑出去）。
+/// messageLines 给了就最多显示这么多行（多的省略），不给就全显示。
 struct Banner<Actions: View>: View {
     let systemImage: String
     let tint: Color
     let title: String
     var message: String = ""
+    var messageLines: Int?
     let actions: Actions
 
-    init(systemImage: String, tint: Color, title: String, message: String = "", @ViewBuilder actions: () -> Actions) {
+    init(systemImage: String, tint: Color, title: String, message: String = "", messageLines: Int? = nil,
+         @ViewBuilder actions: () -> Actions) {
         self.systemImage = systemImage
         self.tint = tint
         self.title = title
         self.message = message
+        self.messageLines = messageLines
         self.actions = actions()
     }
 
@@ -152,12 +157,17 @@ struct Banner<Actions: View>: View {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(messageLines)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
             }
+            .frame(minWidth: 180, alignment: .leading)
+            .layoutPriority(1)
             Spacer(minLength: 8)
-            actions.controlSize(.small)
+            HStack(spacing: 8) { actions }
+                .controlSize(.small)
+                .fixedSize()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

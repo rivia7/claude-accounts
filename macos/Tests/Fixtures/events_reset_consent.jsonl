@@ -1,0 +1,2 @@
+{"v":1,"ev":"consent","item":"reset_credit","scope":"frank-example-com-2b3c4d","grant":"reset_credit:frank-example-com-2b3c4d","title":"重置 frank@example.com 的额度","question":"现在用掉一次重置机会吗？","detail":"会用掉「完整重置，11 月 21 日 09:00 过期」这一次（现在还剩 2 次），把 5 小时和每周的用量清零。用量还不需要重置时不扣次数。","severity":"warn","default":"no"}
+{"v":1,"ev":"fail","code":"error","message":"要先同意：在终端里运行 cca codex reset frank@example.com（会先问你）"}

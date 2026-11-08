@@ -282,6 +282,15 @@
                 "resets_at": "2026-11-10T08:00:00+00:00",
                 "resets_epoch": 1794297600.0,
                 "reset": false
+              },
+              {
+                "name": "Fable",
+                "utilization": 34.0,
+                "resets_at": "2026-11-10T08:00:00+00:00",
+                "resets_epoch": 1794297600.0,
+                "reset": false,
+                "used_percent_of_weekly": 17,
+                "allowance_percent_of_weekly": 50
               }
             ],
             "extra_usage": null
@@ -474,7 +483,17 @@
             "seven_day_opus": null,
             "seven_day_sonnet": null,
             "seven_day_oauth_apps": null,
-            "model_scoped": [],
+            "model_scoped": [
+              {
+                "name": "Fable",
+                "utilization": 0.0,
+                "resets_at": "2026-11-10T08:00:00+00:00",
+                "resets_epoch": 1794297600.0,
+                "reset": false,
+                "used_percent_of_weekly": 0,
+                "allowance_percent_of_weekly": 50
+              }
+            ],
             "extra_usage": null
           },
           "health": {
@@ -819,7 +838,30 @@
               "balance": "12.5"
             },
             "reset_credits": {
-              "availableCount": 2
+              "availableCount": 2,
+              "credits": [
+                {
+                  "id": "rc-1",
+                  "resetType": "codexRateLimits",
+                  "status": "available",
+                  "grantedAt": 1793437200,
+                  "expiresAt": 1795251600,
+                  "title": null,
+                  "description": null,
+                  "expires_epoch": 1795251600.0
+                },
+                {
+                  "id": "rc-2",
+                  "resetType": "codexRateLimits",
+                  "status": "available",
+                  "grantedAt": 1793696400,
+                  "expiresAt": null,
+                  "title": "Bonus reset",
+                  "description": null,
+                  "expires_epoch": null
+                }
+              ],
+              "next_expires_epoch": 1795251600.0
             }
           },
           "health": {

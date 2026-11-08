@@ -22,12 +22,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
-- 同一个账号（工具 + 键）的 `app` / `web` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；`router sync` 全局一次一个。
-  `_gui hello|state|live` 随时可以跑。
+- 同一个账号（工具 + 键）的 `app` / `web` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；同一个账号的 `reset`
+  一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
+  随时可以跑。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
-  `rename` 60 秒。
-- `app`、`web`、`router sync` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
-  可能 App 没打开、路由器同步了却没记下）。所以这几条命令的 stdout / stderr 接到文件，跑完再读；进度和结果看事件文件。
+  `rename` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
+- `app`、`web`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
+  可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
+  进度和结果看事件文件。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
   `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
   `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
@@ -227,7 +229,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `error_code`（`error` 是给人看的文字）：`login` | `mismatch` | `route` | `port` | `region` | `trace` | `unsupported` | `timeout` | `nolimits` | `error`，没出错为 null。
 - `stale`：数据超过 10 分钟。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
 - 窗口：Claude 有 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_oauth_apps`；Codex 只有 `five_hour`、`seven_day`，
-  另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, …}`）。
+  另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, "next_expires_epoch": …, …}`）。
+- `model_scoped[]`：按模型的每周额度（Claude 的 Fable；Codex 另外计的额度）。Claude 的条目在 cca 认得出时**另有**它和本周总额度的关系：
+  `allowance_percent_of_weekly`（最多能用本周总额度的百分之几，例如 50）、`used_percent_of_weekly`（已经用掉本周总额度的百分之几）；认不出时
+  没有这两个字段。`utilization` 是这个模型自己那份额度用了多少。
+- `reset_credits`（Codex，还能重置几次额度，codex 原样给的）：`availableCount` 次数；`credits[]` 每一次的明细（可能比次数少，codex 只给了次数时
+  没有），`id`、`title`（没有为 null，界面上叫“完整重置”）、`status`（`available` 才能用）、`expiresAt` / `grantedAt`（codex 原样给的）。cca 另加：
+  每一次的 `expires_epoch`（Unix 秒，不过期为 null），和还能用的里面最早过期的那次的 `next_expires_epoch`（都不过期、没有明细时为 null；
+  App 显示“最早一次几号过期”用它，不自己挑）。重置见 4.5。
 - 退出码 1 表示没有一个账号有数据（JSON 照样输出）。查询会经各账号的出口，最慢 2 分钟左右。
 - `_gui state` 里的 `usage` 是同样的条目（`source` 是 `cache` 或 `none`）。
 
@@ -273,7 +282,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 ### 4.1 事件文件
 
-运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`、`rename`）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
+查不了的原因看 `fail` 事件）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 
 ```jsonl
@@ -290,7 +300,8 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
-  `account_missing`（改别名：没有这个账号）。可能有好几条，最后一条是最终原因。
+  `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
+  `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）。可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
   `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key`。
@@ -308,6 +319,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `codex_fallback_off` | 空 | 第一次打开 ChatGPT App：用 `codex features disable system_proxy_fallback` 在共享的 config.toml 里关掉系统代理回退 | yes |
 | `open_clash_verge` | 空 | 在外面，Clash Verge 没开：打开它 | yes |
 | `builtin_core` | 空 | 在外面，这台 Mac 上没有 Clash 客户端：改用内置代理（第一次要下载约 21MB 的内核，见 7） | yes |
+| `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
   同意了用某个 IP 启动，换了 IP 要重新问）。
@@ -333,6 +345,27 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 - 成功：退出码 0，stdout 只有一行新的键（App 选中它）。不行：退出码非 0，`fail` 事件的 `code` 是 `alias_invalid` 或 `account_missing`，
   `message` 是给人看的原因（App 显示在改名的弹层里，弹层不关）。
 
+### 4.5 重置额度：`cca codex reset KEY --json`
+
+ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset_credits.availableCount > 0`），用掉一次就把 5 小时和每周的用量清零
+（codex 里 `/usage` 的 Redeem reset）。和 `usage` 一样经账号自己的出口：
+
+1. 先查一次还能重置几次（顺便存下用量）。没有机会了：`fail` 的 `no_reset_credit`；codex 太旧（不给次数、没有这个接口）：`reset_unsupported`；
+   查不了时按原因：`not_logged_in` | `login_mismatch` | `local_unavailable` | `port_closed` | `region_restricted` | `no_exit_ip` | `error`。
+2. 有机会：要同意（`consent`，`reset_credit:<账号目录名>`，默认不同意；`detail` 写着用掉哪一次、还剩几次），App 弹框同意后带上授权重跑。
+   这条命令一旦开始就要跑完（见 1）：同意之后就会用掉一次。
+3. 用掉最早过期的那一次（没有明细时由 OpenAI 挑），重置了就再读一次用量。stdout 输出：
+
+```json
+{"version": 1, "kind": "reset", "tool": "codex", "generated_epoch": 1794042060.0, "key": "frank@example.com",
+ "outcome": "reset", "message": "已重置 frank@example.com 的额度（现在 5h 0% · 周 0%）", "usage": { "…3.1 的用量条目，重置后的…" }}
+```
+
+- `outcome`：`reset`（重置了）| `already_redeemed`（这一次早就重置过了，也算成了）| `nothing_to_reset`（用量还不需要重置，**没有扣次数**）；
+  这三种退出码 0。`no_credit`（这一次已经不能用了）不输出文档：`fail` 的 `no_reset_credit`，退出码 1。已经请求重置、结果却不知道
+  （超时、codex 出错）：`fail` 的 `error`，`message` 说可能已经用掉了一次、刷新用量看看。
+- `usage` 是重置后的用量（读不到为 null：App 自己再刷新一次用量）；`message` 是给人看的一句话，App 照着提示。
+
 ## 5. `cca gui`
 
 - `cca gui`：打开 App；没装、或者版本和 cca 不同，先下载装好（只装和当前 cca 版本号相同的 App）。
@@ -346,6 +379,26 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
   Gatekeeper 不拦；自己用浏览器下载 zip 会被拦。
 - 自动更新：cca 自动更新后，下一次运行 cca 时在后台下载对应版本的 App（App 开着就先放着）。
 - 开发模式（cca 旁边有 `.git`）：`cca gui` 用 `macos/build.sh` 从源码编译，打开 `macos/build/cca.app`，不装进 `~/Applications`。
+
+### 5.1 检查更新：`cca update --check --json`
+
+只读，要联网（GitHub）。按现在装的版本挑：**测试版上看更新的测试版和正式版，正式版上只看正式版**（自动更新、不带版本号的 `cca update`
+不变，只装正式版）。stdout 只有 JSON；一个版本都拿不到（网络不通）时退出码 1，原因是 `fail` 事件的 `message`（App 带着事件文件运行它）。
+
+```json
+{"version": 1, "kind": "update", "generated_epoch": 1794042000.0, "cca_version": "2.9.0-beta.10", "channel": "beta",
+ "source": "releases", "latest": "2.9.0-beta.11", "available": true, "notes": "cca 2.9.0-beta.11：…",
+ "url": "https://github.com/rivia7/claude-accounts/releases/tag/v2.9.0-beta.11", "published_epoch": 1794038400.0}
+```
+
+- `channel`：`stable` | `beta`。`latest`：这个版本跟着的最新版本（不一定比现在新）；`available`：比现在新。版本号的先后和 cca 一样：
+  同号的测试版比正式版旧（`2.9.0-beta.12` 比 `2.9.0` 旧），测试版之间比 beta 后面的数。
+- `source`：`releases`（GitHub 的发布列表，有更新说明）| `latest`（列表拿不到、被限流时退回 `releases/latest`：只看得到正式版，`notes` 为 null）。
+- `notes`：GitHub Release 的更新说明（原样）；`url`：发布页。开发模式看 `hello.dev_mode`：App 不自动查、不提供安装（用 git pull 更新）。
+- App：窗口或菜单栏面板看得见时一天最多自动查一次（`state.config.update` 是 `off`、开发模式时不自动查；查不了的 3 小时后再查），
+  也可以手动「检查更新…」。只有 `latest` 比 `hello.cca_version` 新（按上面的先后）才提示。
+  有新版本时提示「更新并重新打开」：先运行 `cca update <latest>`（照常带事件文件；失败就显示原因，什么都没换），成功后照 5 的两步换上
+  同版本的 App、重新打开。「以后再说」只记在 App 自己的设置里（这个版本不再提示，手动检查时照样提示）。
 
 ## 6. 终端交接
 

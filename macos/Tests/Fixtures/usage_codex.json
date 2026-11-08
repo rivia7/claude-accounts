@@ -10,7 +10,12 @@
       "model_scoped": null,
       "extra_usage": null,
       "credits": {"hasCredits": true, "unlimited": false, "balance": "12.5"},
-      "reset_credits": {"availableCount": 2, "nextGrantAt": 1794470400}
+      "reset_credits": {"availableCount": 2, "nextGrantAt": 1794470400, "credits": [
+        {"id": "rc-1", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1793437200, "expiresAt": 1795251600,
+         "title": null, "description": null, "expires_epoch": 1795251600.0},
+        {"id": "rc-2", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1793696400, "expiresAt": null,
+         "title": "Bonus reset", "description": null, "expires_epoch": null}],
+        "next_expires_epoch": 1795251600.0}
     }
   ],
   "skipped_api_accounts": [],

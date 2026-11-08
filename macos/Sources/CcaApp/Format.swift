@@ -2,10 +2,7 @@ import AppKit
 import SwiftUI
 
 // 颜色和小部件：品牌色、内容层的色块、状态色、头像、用量条、标签。文字本身在 CcaKit 的 Texts 里（可测试）。
-//
-// 颜色只表达三件事：“哪个账号”（账号色，就是启动器角标的颜色，线路、分流图里的线都用它）、
-// “什么状态”（系统的绿 / 橙 / 红，正常时尽量不出现）和套餐的档位（PlanBadge.swift：灰、蓝、紫，最高档是 Logo 的渐变）。
-// 品牌色（App 图标的深靛蓝）只用在品牌标记和分流图的面板上。
+// 颜色表达什么、给谁用，见 macos/README.md「界面的规矩」；套餐档位的样子在 PlanBadge.swift（TierStyle）。
 
 extension Color {
     /// `#RRGGBB`；格式不对时用灰色。
@@ -23,18 +20,17 @@ extension Color {
     }
 }
 
-/// 和 App 图标同一套颜色（tools/make-icon.swift）：Logo 的主干是蓝色，三支分别流向玫红、青绿、琥珀（颜色互相渐变过去，参考 Google
-/// 2025 年后的图标语言）。最高档的套餐（标签、头像的光晕、卡片的边）用 spectrum：Logo 的颜色连成的一条渐变。
+/// Logo 的颜色（取 LogoGlyph 的，App 图标也是这一份）。最高档的套餐用 spectrum：Logo 的颜色连成的一条渐变。
 enum Brand {
-    static let blue = Color(hex: 0x3B7BFF)
-    static let violet = Color(hex: 0x7C5CFF)
-    static let rose = Color(hex: 0xEC4C8C)
-    static let teal = Color(hex: 0x14B8A6)
-    static let amber = Color(hex: 0xF5A524)
+    static let blue = Color(hex: LogoGlyph.blue)
+    static let violet = Color(hex: LogoGlyph.violet)
+    static let rose = Color(hex: LogoGlyph.rose)
+    static let teal = Color(hex: LogoGlyph.teal)
+    static let amber = Color(hex: LogoGlyph.amber)
     /// 蓝 → 紫 → 玫红 → 琥珀
     static let spectrum: [Color] = [blue, violet, rose, amber]
     /// 绕一圈回到蓝（环、光晕用：首尾接得上）
-    static let spectrumLoop: [Color] = [blue, violet, rose, amber, blue]
+    static let spectrumLoop: [Color] = spectrum + [blue]
 }
 
 /// 内容层的色块（不是玻璃）：深浅色下都比背景深一点 / 亮一点。
@@ -87,37 +83,13 @@ enum Palette {
     }
 }
 
-/// 品牌标记：App 图标里那个字形，不带底（Google 新图标的做法：形状自己站着）——粗圆的一根线分成三支，
-/// 主干蓝色，每一支从蓝渐变到自己的颜色。和 tools/make-icon.swift 画的是同一个形。
+/// 品牌标记：App 图标里那个字形（LogoGlyph），不带底（Google 新图标的做法：形状自己站着）。
 struct BrandMark: View {
     var size: CGFloat = 28
 
     var body: some View {
         Canvas { ctx, s in
-            let w = s.width, weight = w * 0.15
-            let root = CGPoint(x: w * 0.12, y: w * 0.5), fork = CGPoint(x: w * 0.38, y: w * 0.5)
-            // 分开之前都是蓝（接头处叠着看不出），分开以后才流向自己的颜色；中间放饱和的颜色（蓝直接到琥珀会发灰），
-            // 最下面那支走完整条 Logo 渐变。中间那支先画
-            let branches: [(CGPoint, [Gradient.Stop])] = [
-                (CGPoint(x: w * 0.86, y: w * 0.5), [.init(color: Brand.blue, location: 0.3), .init(color: Color(hex: 0x22A3E6), location: 0.65),
-                                                    .init(color: Brand.teal, location: 1)]),
-                (CGPoint(x: w * 0.82, y: w * 0.17), [.init(color: Brand.blue, location: 0.3), .init(color: Brand.violet, location: 0.65),
-                                                     .init(color: Brand.rose, location: 1)]),
-                (CGPoint(x: w * 0.82, y: w * 0.83), [.init(color: Brand.blue, location: 0.28), .init(color: Brand.violet, location: 0.52),
-                                                     .init(color: Brand.rose, location: 0.76), .init(color: Brand.amber, location: 1)]),
-            ]
-            for (tip, stops) in branches {
-                var p = Path()
-                p.move(to: fork)
-                let k = fork.x + (tip.x - fork.x) * 0.5
-                p.addCurve(to: tip, control1: CGPoint(x: k, y: fork.y), control2: CGPoint(x: k, y: tip.y))
-                ctx.stroke(p, with: .linearGradient(Gradient(stops: stops), startPoint: fork, endPoint: tip),
-                           style: StrokeStyle(lineWidth: weight, lineCap: .round, lineJoin: .round))
-            }
-            var stem = Path()
-            stem.move(to: root)
-            stem.addLine(to: fork)
-            ctx.stroke(stem, with: .color(Brand.blue), style: StrokeStyle(lineWidth: weight, lineCap: .round))
+            ctx.withCGContext { LogoGlyph.draw(in: $0, rect: CGRect(origin: .zero, size: s)) }
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -145,26 +117,14 @@ struct OverviewMark: View {
 }
 
 /// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。最高档的套餐（Ultra、Pro 500）有光晕（参考 Gemini：
-/// 背后一团几种颜色互相流动的柔光，外面一圈清楚的渐变环）；光晕画在头像外面，不改变占的位置。
+/// 一圈清楚的渐变环，环外一团同色的柔光）；光晕画在头像外面，不改变占的位置。
 struct BadgeAvatar: View {
     let badge: Badge?
     var isAPI = false
     var size: CGFloat = 28
     var tier: PlanTier = .unknown
-    /// 光晕转到的角度（在用时 AccountAvatar 让它慢慢转）
-    var haloPhase: Double = 0
-
-    init(badge: Badge?, isAPI: Bool = false, size: CGFloat = 28, tier: PlanTier = .unknown, haloPhase: Double = 0) {
-        self.badge = badge
-        self.isAPI = isAPI
-        self.size = size
-        self.tier = tier
-        self.haloPhase = haloPhase
-    }
-
-    init(account a: Account, size: CGFloat, haloPhase: Double = 0) {
-        self.init(badge: a.badge, isAPI: a.isAPI, size: size, tier: a.planTier, haloPhase: haloPhase)
-    }
+    /// 光晕慢慢流动（AccountAvatar：账号在用、能动的时候）
+    var haloFlowing = false
 
     var body: some View {
         ZStack {
@@ -185,69 +145,69 @@ struct BadgeAvatar: View {
         .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
         .frame(width: size, height: size)
         .background {
-            if tier == .premium { Halo(size: size, phase: haloPhase) }
+            if tier == .premium { Halo(size: size, flowing: haloFlowing) }
         }
         .accessibilityHidden(true)
     }
 }
 
-/// 最高档头像的光晕：一圈清楚的渐变环，环和头像之间一道真正透明的缝（选中的行、彩色的底上都对），
-/// 环外面一团模糊开的同色柔光。
+extension BadgeAvatar {
+    init(account a: Account, size: CGFloat, haloFlowing: Bool = false) {
+        self.init(badge: a.badge, isAPI: a.isAPI, size: size, tier: a.planTier, haloFlowing: haloFlowing)
+    }
+}
+
+/// 最高档头像的光晕。流动（6 秒一圈）是转整个光晕：除了渐变它都是圆的，转它就是转渐变；
+/// 转的是画好的一层（HaloLayer），每帧只改一个旋转角，不重画模糊。
 private struct Halo: View {
     let size: CGFloat
-    let phase: Double
+    let flowing: Bool
 
     var body: some View {
-        let ring = max(size * 0.055, 1.5), gap = max(size * 0.045, 1.3)
-        let outer = size + 2 * (gap + ring), glow = size * 0.16
-        let colors = AngularGradient(colors: Brand.spectrumLoop, center: .center, angle: .degrees(phase))
-        ZStack {
-            Circle().fill(colors)
-                .frame(width: outer + glow, height: outer + glow)
-                .blur(radius: glow * 0.9)
-                .opacity(0.7)
-                .frame(width: outer + 4 * glow, height: outer + 4 * glow)
-                // 柔光只在环外面：环和头像之间的缝是空的
-                .mask(Annulus(hole: outer - ring).fill(style: FillStyle(eoFill: true)))
-            Circle().strokeBorder(colors, lineWidth: ring)
-                .frame(width: outer, height: outer)
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !flowing)) { ctx in
+            HaloLayer(size: size)
+                .rotationEffect(.degrees(flowing ? (ctx.date.timeIntervalSinceReferenceDate / 6).truncatingRemainder(dividingBy: 1) * 360 : 0))
         }
         .allowsHitTesting(false)
     }
 }
 
-/// 整块减去中间一个圆（直径 hole），用 eoFill 填
-private struct Annulus: Shape {
-    let hole: CGFloat
+/// 不转的光晕：一圈清楚的渐变环，环和头像之间一道真正透明的缝（选中的行、彩色的底上都对），环外面一团模糊开的同色柔光。
+private struct HaloLayer: View {
+    let size: CGFloat
 
-    func path(in r: CGRect) -> Path {
-        var p = Path(r)
-        p.addEllipse(in: CGRect(x: r.midX - hole / 2, y: r.midY - hole / 2, width: hole, height: hole))
-        return p
+    var body: some View {
+        let ring = max(size * 0.055, 1.5), gap = max(size * 0.045, 1.3)
+        let outer = size + 2 * (gap + ring), glow = size * 0.16
+        ZStack {
+            Circle().fill(TierStyle.ring(0))
+                .frame(width: outer + glow, height: outer + glow)
+                .blur(radius: glow * 0.9)
+                .opacity(0.7)
+                .frame(width: outer + 4 * glow, height: outer + 4 * glow)
+                // 柔光只在环外面：环和头像之间的缝是空的。外边也裁成圆，转起来裁的地方不变
+                .clipShape(Circle().subtracting(Circle().inset(by: 2 * glow + ring / 2)))
+            Circle().strokeBorder(TierStyle.ring(0), lineWidth: ring)
+                .frame(width: outer, height: outer)
+        }
+        .drawingGroup()
     }
 }
 
 /// 账号的头像，在用（桌面 App 开着、命令行里有会话）时右下角有绿点，悬停说在用什么；最高档的光晕在用时慢慢流动
-/// （6 秒一圈；所在的窗口、面板看不见或者开了“减少动态效果”时不动）。侧栏、菜单栏、账号页共用。
+/// （只在 motionAllowed 时：所在的窗口、面板看得见，没开“减少动态效果”）。侧栏、菜单栏、账号页共用。
 struct AccountAvatar: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.motionAllowed) private var motionAllowed
     let account: Account
     let size: CGFloat
     /// 绿点的大小
     let dot: CGFloat
-    /// 所在的窗口 / 面板看得见
-    var visible = true
 
     var body: some View {
         let a = account
-        let flowing = a.isPremium && a.isWorking && visible && !reduceMotion
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !flowing)) { ctx in
-            BadgeAvatar(account: a, size: size,
-                        haloPhase: flowing ? (ctx.date.timeIntervalSinceReferenceDate / 6).truncatingRemainder(dividingBy: 1) * 360 : 0)
-        }
-        .frame(width: size, height: size)
-        .overlay(alignment: .bottomTrailing) {
+        BadgeAvatar(account: a, size: size, haloFlowing: a.isWorking && motionAllowed)
+            .overlay(alignment: .bottomTrailing) {
                 if a.isWorking {
                     let what = Texts.working(a, appLabel: model.appLabel(a.tool), now: Date().timeIntervalSince1970)
                     RunningDot(size: dot)
@@ -373,7 +333,7 @@ struct AccountSubtitle: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .lineLimit(1)
-        .frame(height: 17)
+        .frame(height: PlanBadge.Size.compact.height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(a.subtitle)
     }

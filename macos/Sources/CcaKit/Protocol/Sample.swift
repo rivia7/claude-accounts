@@ -49,6 +49,19 @@ enum SampleDocs {
      "shared_exit_ips": []}
     """#
 
+    static let reset = #"""
+    {"version": 1, "kind": "reset", "tool": "codex", "generated_epoch": 1794042060.0, "key": "frank@example.com", "outcome": "reset",
+     "message": "已重置 frank@example.com 的额度", "usage": {"key": "frank@example.com", "source": "live", "fetched_epoch": 1794042060.0,
+       "five_hour": {"utilization": 0.0, "resets_epoch": 1794049200.0, "reset": false},
+       "reset_credits": {"availableCount": 1, "next_expires_epoch": 1795251600.0}}}
+    """#
+
+    static let update = #"""
+    {"version": 1, "kind": "update", "generated_epoch": 1794042000.0, "cca_version": "2.9.0-beta.10", "channel": "beta",
+     "source": "releases", "latest": "2.9.0-beta.11", "available": true, "notes": "cca 2.9.0-beta.11",
+     "url": "https://github.com/rivia7/claude-accounts/releases/tag/v2.9.0-beta.11", "published_epoch": 1794038400.0}
+    """#
+
     static let events = #"""
     {"v":1,"ev":"step","code":"sync"}
     {"v":1,"ev":"consent","item":"router_reload","scope":"OpenClash","grant":"router_reload:OpenClash","title":"需要重载 OpenClash","question":"现在重载吗？","severity":"warn","default":"yes"}
@@ -65,11 +78,15 @@ enum SampleDocs {
         let l = try DocumentDecoder.decode(LiveDoc.self, from: Data(live.utf8))
         let u = try DocumentDecoder.decode(UsageDoc.self, from: Data(usage.utf8))
         let c = try DocumentDecoder.decode(CheckDoc.self, from: Data(check.utf8))
+        let r = try DocumentDecoder.decode(ResetDoc.self, from: Data(reset.utf8))
+        let up = try DocumentDecoder.decode(UpdateDoc.self, from: Data(update.utf8))
         let e = EventLog.parse(Data(events.utf8))
         guard GUIAPI.isSupported(h.api), s.allAccounts.count == 1, s.allAccounts.first?.health?.route == .direct,
               s.allAccounts.first?.planTier == .advanced, s.allAccounts.first?.cliSessions == 2,
               l.hasDrift, l.proxyHost == "192.0.2.10", u.accounts.first?.sevenDay?.resetsEpoch == 1794470400,
-              c.accounts.count == 1, e.map(\.type) == [.step, .consent, .terminal, .fail, .result] else {
+              c.accounts.count == 1, r.didReset, r.usage?.resetCredits?.nextExpiresEpoch == 1795251600,
+              up.available, up.channel == .beta, up.source == .releases,
+              e.map(\.type) == [.step, .consent, .terminal, .fail, .result] else {
             throw Bad(description: "样例解码的结果不对")
         }
     }

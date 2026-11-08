@@ -657,6 +657,16 @@ ok "cca usage：每个账号经自己的端口、用自己的配置目录无界�
 out=$(run cca usage --json 2>/dev/null)
 ok "cca usage --json：stdout 只有 JSON（套餐、各窗口、数据来源、跳过的第三方 API 账号）" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a={x[\"account\"]: x for x in d[\"accounts\"]}; sys.exit(0 if a[\"alice@example.com\"][\"five_hour\"][\"utilization\"]==13 and a[\"alice@example.com\"][\"plan\"]==\"Max\" and a[\"bob@example.com\"][\"source\"]==\"live\" and a[\"bob@example.com\"][\"seven_day_sonnet\"][\"utilization\"]==60 and d[\"skipped_api_accounts\"]==[\"kimi\"] and \"reset_credits\" not in a[\"alice@example.com\"] else 1)"'
 ok "cca usage：查到的存进账号目录的 usage.json（菜单和查不到时用）" '[ -f "$AD/usage.json" ]'
+cp "$AD/usage.json" "$T/alice.usage.keep"
+fable='"model_scoped": [{"display_name": "Fable", "utilization": 6, "resets_at": "2099-01-01T00:00:00Z"}], "weekly_scoped_shares": [{"limit_index": 1, "used_percent_of_weekly": 3, "allowance_percent_of_weekly": 50}]'
+canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]}"
+out=$(run cca usage alice --json 2>/dev/null)
+canned alice@example.com 13 41 max "{$fable, \"limits\": null}"
+out2=$(run cca usage alice --json 2>/dev/null)
+canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}]}"
+out3=$(run cca usage alice --json 2>/dev/null)
+canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
+ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
 edit_table 'j["副号(bob@example.com)"] = j.pop("bob@example.com")'
 out=$(run cca usage 2>&1)
 edit_table 'j["bob@example.com"] = j.pop("副号(bob@example.com)")'
@@ -873,6 +883,26 @@ ok "codex 查用量卡住：到时间就结束（不会一直等），显示缓�
 ccanned alice@example.com 13 41 promax 0; out=$(run cca codex usage alice 2>&1)
 ccanned alice@example.com 13 41 prolite; out2=$(run cca codex usage alice 2>&1)
 ok "套餐叫法和 codex 的一样：promax 是 Pro 500、prolite 是 Pro 100；剩余 0 次也写上，codex 没给重置次数（旧版本）就不写" 'printf "%s" "$out" | grep -qE "alice@example.com +Pro 500 +13%" && printf "%s" "$out" | grep -q "剩余重置 0 次；GPT-5-Pro" && printf "%s" "$out2" | grep -qE "alice@example.com +Pro 100 +13%" && printf "%s" "$out2" | grep -q "GPT-5-Pro 本周 30%" && ! printf "%s" "$out2" | grep -q "剩余重置"'
+# 重置额度（cca codex reset）：先经账号的出口查还能重置几次，问过之后用掉最早过期的那一次，重置后再读一次用量
+ccanned alice@example.com 100 41 pro 2; : > codex.log
+out=$(run CCA_TTY="$(ans '')" cca codex reset alice 2>&1); rc=$?
+ok "cca codex reset：经账号的端口查到还能重置 2 次、各在什么时候过期；默认不重置（直接回车就不动）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "alice@example.com 还能重置 2 次额度" && [ "$(printf "%s" "$out" | grep -cE "· 完整重置，[0-9]+ 月 [0-9]+ 日 [0-9:]+ 过期")" = 2 ] && printf "%s" "$out" | grep -q "没有重置（还能重置 2 次）" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && ! grep -q "RPC resetConsume" codex.log'
+out=$(run CCA_TTY="$(ans y)" cca codex reset alice 2>&1); rc=$?
+m=$(run CCA_TTY="$(ans q)" cca codex 2>&1)
+ok "cca codex reset：答 y 用掉最早过期的那一次（经账号的端口，idempotencyKey 是新生成的），重置后再读一次用量存下来" '[ $rc -eq 0 ] && grep -q "RPC resetConsume email=alice@example.com https_proxy=http://192.0.2.10:7902 credit=rc-0 key=uuid" codex.log && printf "%s" "$out" | grep -q "已重置 alice@example.com 的额度（现在 5h 0% · 周 0%）" && printf "%s" "$m" | grep -q "5h 0% · 周 0%"'
+ok "_gui state：重置后的用量（缓存）里还剩 1 次，每一次的明细另有 Unix 秒的 expires_epoch，最早过期的那次 next_expires_epoch" 'gj state | jok "(lambda r: r[\"availableCount\"] == 1 and r[\"credits\"][0][\"id\"] == \"rc-1\" and isinstance(r[\"credits\"][0][\"expires_epoch\"], float) and r[\"next_expires_epoch\"] == r[\"credits\"][0][\"expires_epoch\"])(acct(1, \"alice@example.com\")[\"usage\"][\"reset_credits\"])"'
+out=$(run CCA_TTY="$(ans y)" cca codex reset alice 2>&1); rc=$?
+ok "cca codex reset：用量已经是 0、不需要重置时 OpenAI 不扣次数，照实说" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "现在的用量还不需要重置，没有用掉重置机会"'
+ccanned alice@example.com 100 41 pro 1; printf 'weird' > "$T/codex_usage/reset_outcome"
+out=$(runev CCA_GRANT="reset_credit:${CD##*/}" cca codex reset alice --json 2>&1); rc=$?; rm -f "$T/codex_usage/reset_outcome"
+ok "cca codex reset：已经请求重置、结果却不知道（codex 回的看不懂、超时）：不说没重置，说可能已经用掉了一次、刷新用量看看" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and \"可能已经用掉了一次\" in e[\"message\"]"'
+ccanned alice@example.com 100 41 pro 0; out=$(run CCA_TTY="$(ans y)" cca codex reset alice 2>&1); rc=$?
+ccanned alice@example.com 100 41 pro; out2=$(runev cca codex reset alice --json 2>&1); rc2=$?
+ok "cca codex reset：没有重置机会了就不问；codex 没给重置次数（旧版本）时说明要升级（fail 原因 reset_unsupported）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "alice@example.com 没有能用的重置机会" && [ $rc2 -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"reset_unsupported\" and \"这个版本的 Codex 不能重置额度\" in e[\"message\"]"'
+out=$(run cca reset alice 2>&1); rc=$?; out2=$(run cca codex reset kimi 2>&1); rc2=$?
+ok "cca reset：只有 ChatGPT 账号能重置额度；第三方 API 账号没有额度可以重置" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "只有 ChatGPT 账号能重置额度" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "第三方 API 账号，没有额度可以重置"'
+ok "cca codex reset：成功、不重置、出错退出，临时目录都清掉了（~/.cca 下没有 usage.*）" '[ -z "$(ls -d "$H"/.cca/usage.* 2>/dev/null)" ]'
+ccanned alice@example.com 13 41 pro 2
 ok "Codex 的 access / refresh token 从没出现在 cca 写的文件、日志和命令行里（cca 只从 id_token 读邮箱和套餐）" '! grep -rqF -e at-SECRET -e rt-SECRET --exclude auth.json "$H/.cca" && ! grep -qF -e at-SECRET -e rt-SECRET "$T/env.log" codex.log curl.log security.log open.log'
 # 网页版、桌面 App 和启动器
 : > open.log
@@ -1001,8 +1031,8 @@ ok "图形界面：在外面、Clash Verge 没在运行：记一条 consent（op
 out=$(runev CCA_GRANT=open_clash_verge cca @alice --version 2>&1); rc=$?
 ok "图形界面：同意之后打开 Clash Verge，照常启动" '[ $rc -eq 3 ] && grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log && [ ! -f "$T/verge/down" ]'
 rm -f "$T/away"
-# usage --json 的新字段
-canned alice@example.com 13 41
+# usage --json 的新字段（alice 带着 Fable 的每周额度：契约测试要解码它占本周总额度的份额）
+canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]}"
 out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude.json"
 ok "usage --json：新字段 kind / generated_epoch / error_code / fetched_epoch / stale，窗口有 resets_epoch（Unix 秒）" 'printf "%s" "$out" | jok "d[\"kind\"] == \"usage\" and isinstance(d[\"generated_epoch\"], float) and (lambda a: a[\"source\"] == \"live\" and a[\"error_code\"] is None and a[\"stale\"] is False and isinstance(a[\"fetched_epoch\"], float) and isinstance(a[\"five_hour\"][\"resets_epoch\"], float) and a[\"five_hour\"][\"resets_epoch\"] > a[\"fetched_epoch\"])(uacct(\"alice@example.com\"))"'
 cp "$AD/usage.json" "$T/usage.keep"
@@ -1015,6 +1045,19 @@ echo 7901 >> "$R/listening"
 ok "usage --json：端口不通时 error_code 是 port，error_detail 是端口" 'printf "%s" "$out" | jok "(lambda a: a[\"error_code\"] == \"port\" and a[\"error_detail\"] == \"7901\" and a[\"source\"] == \"cache\")(uacct(\"alice@example.com\"))"'
 out=$(run cca codex usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_codex.json"
 ok "codex usage --json：同样的新字段（Codex 的重置时间本来就是 Unix 秒）" 'printf "%s" "$out" | jok "d[\"tool\"] == \"codex\" and all(\"error_code\" in a and \"stale\" in a for a in d[\"accounts\"])"'
+# 重置额度（App 的「重置额度…」）：要同意（reset_credit:账号目录名，默认不同意），同意后带着授权重跑，stdout 是 kind=reset 的文档
+ccanned dave@example.com 100 41 pro 1; nc=$(grep -c "RPC resetConsume" codex.log)
+out=$(runev cca codex reset dave --json 2>/dev/null); rc=$?; cp "$T/ev.jsonl" "$GF/events_reset_consent.jsonl"
+ok "图形界面：重置额度先记一条 consent（reset_credit，范围是账号目录名，默认不同意，说明里有还剩几次），stdout 什么都没有，不重置" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"reset_credit\" and e[\"grant\"] == \"reset_credit:${DD##*/}\" and e[\"default\"] == \"no\" and \"还剩 1 次\" in e[\"detail\"]" && [ "$(grep -c "RPC resetConsume" codex.log)" = "$nc" ]'
+out=$(runev CCA_GRANT="reset_credit:${DD##*/}" cca codex reset dave --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$GF/reset.json"
+ok "图形界面：同意之后重置，stdout 是 kind=reset 的文档（结果、说明、重置后的用量）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"reset\" and d[\"tool\"] == \"codex\" and d[\"key\"] == \"dave@example.com\" and d[\"outcome\"] == \"reset\" and \"已重置\" in d[\"message\"] and d[\"usage\"][\"five_hour\"][\"utilization\"] == 0 and d[\"usage\"][\"reset_credits\"][\"availableCount\"] == 0" && [ "$(grep -c "RPC resetConsume" codex.log)" = $((nc + 1)) ]'
+out=$(runev CCA_GRANT="reset_credit:${DD##*/}" cca codex reset dave --json 2>/dev/null); rc=$?
+ok "图形界面：没有重置机会了：fail 事件的原因是 no_reset_credit，不再去重置" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"no_reset_credit\"" && [ "$(grep -c "RPC resetConsume" codex.log)" = $((nc + 1)) ]'
+# 检查更新（App 的「检查更新…」）：cca update --check --json，按现在的版本挑（这里是开发模式下的测试版：正式版、测试版都看）
+mkdir -p "$T/gh/v99.0.0"; printf x > "$T/gh/v99.0.0/cca"; printf 'cca 99.0.0：更新说明的第一行\n第二行\n' > "$T/gh/v99.0.0/notes"
+out=$(run cca update --check --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$GF/update.json"
+rm -rf "$T/gh" "$T/gh.log"   # 11b 的自动更新从空的假 GitHub 开始
+ok "update --check --json：stdout 只有 JSON（kind=update：最新版本、有没有新的、更新说明、发布页），开发模式下也能查" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"update\" and d[\"cca_version\"] == \"$VER\" and d[\"latest\"] == \"99.0.0\" and d[\"available\"] is True and \"dev_mode\" not in d and d[\"source\"] == \"releases\" and d[\"notes\"].startswith(\"cca 99.0.0\") and d[\"url\"].endswith(\"/releases/tag/v99.0.0\")"'
 # 改别名（cca rename；App 的“改别名…”用它）：只换账号表里的键，账号目录、端口、“上次使用”、路由器的摘要都不变，启动器跟着改名
 edit_table 'j["kimi9"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "id": "kimi9"}'; run cca ls >/dev/null 2>&1 </dev/null
 sb=$(gj state | python3 -c 'import json,sys; print(json.load(sys.stdin)["routing"]["sync"])')
@@ -1230,10 +1273,17 @@ out=$(run cca update --rollback 2>&1)
 ok "测试版 → 退回原来的正式版" '[ "$(ver)" = 9.9.13 ] && printf "%s" "$out" | grep -q "已退回 9.9.13"'
 out=$(run cca update v9.9.14-beta.1 2>&1); rc=$?
 ok "cca update 的版本号照 GitHub 上 tag 的样子写成 v9.9.14-beta.1 也认" '[ $rc -eq 0 ] && [ "$(ver)" = 9.9.14-beta.1 ]'
+publish 9.9.14-beta.3; printf 'cca 9.9.14-beta.3：修好了一个问题\n\n第二行\n' > "$G/v9.9.14-beta.3/notes"
+out=$(run cca update --check 2>&1); out2=$(run cca update --check --json 2>/dev/null)
+ok "update --check：装着测试版时也看更新的测试版（告诉你用版本号装，不装），带着更新说明的前几行；--json 是给图形界面的" 'printf "%s" "$out" | grep -q "有新的测试版 9.9.14-beta.3（当前 9.9.14-beta.1），运行 cca update 9.9.14-beta.3 安装" && printf "%s" "$out" | grep -q "│ cca 9.9.14-beta.3：修好了一个问题" && printf "%s" "$out" | grep -q "│ 第二行" && printf "%s" "$out2" | jok "d[\"channel\"] == \"beta\" and d[\"latest\"] == \"9.9.14-beta.3\" and d[\"available\"] is True and d[\"published_epoch\"] > 0" && [ "$(ver)" = 9.9.14-beta.1 ]'
+touch "$T/gh_api_down"; out=$(run cca update --check --json 2>/dev/null); rc=$?; rm -f "$T/gh_api_down"
+ok "update --check：发布列表拿不到（被限流、连不上 api.github.com）时退回 releases/latest：只看得到正式版，没有更新说明" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"source\"] == \"latest\" and d[\"latest\"] == \"9.9.13\" and d[\"available\"] is False and d[\"notes\"] is None"'
 publish 9.9.14
 rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
 out=$(run CCA_TTY="$(ans)" cxa @dave --version 2>&1); rc=$?
 ok "装了测试版之后，出了更新的正式版照常自动更新；这次是用 cxa 启动的，换上新版本重新执行后启动的照样是 Codex" 'printf "%s" "$out" | grep -q "cca 已自动更新：9.9.14-beta.1 → 9.9.14" && [ "$(ver)" = 9.9.14 ] && [ $rc -eq 3 ] && clast ARGS | grep -q -- " --version$" && clast ENV | grep -q "CODEX_HOME=$DD/codex "'
+publish 9.9.15-beta.1; out=$(run cca update --check --json 2>/dev/null); out2=$(run cca update --check 2>&1); rm -rf "$G/v9.9.15-beta.1"
+ok "update --check：正式版上只看正式版（更新的 9.9.15-beta.1 不算），已是最新" 'printf "%s" "$out" | jok "d[\"channel\"] == \"stable\" and d[\"latest\"] == \"9.9.14\" and d[\"available\"] is False" && printf "%s" "$out2" | grep -q "已是最新版本 9.9.14"'
 
 # 11b1. 图形界面 App（cca gui）：Release 附带的 cca-app.zip（命名空间 cca-app 签名），只装和 cca 同版本的；App 开着时先下载放着，
 #       退出后再换；cca 更新后，下一次运行 cca 时在后台跟着更新；开发模式从源码编译（这里用假的 build.sh）
