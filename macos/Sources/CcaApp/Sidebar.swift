@@ -17,7 +17,7 @@ struct Sidebar: View {
                     Image(systemName: "arrow.down.app").font(.title3).frame(width: 30, height: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("客户端更新").font(.body.weight(.medium))
-                        Text("Claude、ChatGPT 桌面客户端").font(.caption).foregroundStyle(.plainSecondary)
+                        Text("桌面客户端和终端工具").font(.caption).foregroundStyle(.plainSecondary)
                     }
                 }
                 .sidebarRowPadding()

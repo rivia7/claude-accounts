@@ -1082,6 +1082,22 @@ out=$(run cca check kimi alice --json 2>/dev/null); rc=$?; out1=$(run cca check 
 ok "cca check 可以写几个账号：只测写了的这几个（App 定时检测只测到期的）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "[a[\"key\"] for a in d[\"accounts\"]] == [\"kimi\", \"alice@example.com\"]" && printf "%s" "$out1" | jok "[a[\"key\"] for a in d[\"accounts\"]] == [\"kimi\"]"'
 out=$(run cca check 没有这个账号 --json 2>/dev/null); rc=$?
 ok "cca check 写错账号：报错退出" '[ $rc -ne 0 ]'
+# 调整账号表的顺序（cca reorder，图形界面拖动账号时用）：只改先后，端口池、摘要、启动器的颜色都按调整之前的顺序（base_order）
+out=$(gj hello); ok "_gui hello：说明能写回账号表的顺序（旧版 cca 没有，App 就不写）" 'printf "%s" "$out" | jok "d[\"reorder\"] == 1"'
+edit_table 'j["zed@example.com"] = "US-B"'; run cca router sync >/dev/null 2>&1
+gj state > "$T/order0.json"
+order_same() { jok "(lambda v: v(d) == v(json.load(open(\"$T/order0.json\"))) and d[\"routing\"][\"sync\"] == \"ok\")(lambda s: {(t[\"id\"], a[\"key\"]): (a[\"port\"], a[\"slot\"], a[\"badge\"]) for t in s[\"tools\"] for a in t[\"accounts\"]})"; }
+keys_now='[a["key"] for a in d["tools"][0]["accounts"]]'
+out=$(run cca reorder zed kimi 2>&1); rc=$?; st=$(gj state)
+ok "cca reorder：按写的顺序排，没写到的账号接在后面，账号的内容不变，什么都不输出；_gui state 也是这个顺序" '[ $rc -eq 0 ] && [ -z "$out" ] && printf "%s" "$st" | jok "list(tab(\"accounts.json\")) == [\"zed@example.com\", \"kimi\", \"alice@example.com\"] and tab(\"accounts.json\")[\"zed@example.com\"] == \"US-B\" and $keys_now == list(tab(\"accounts.json\"))"'
+ok "调整顺序不牵连别的：不用同步路由器（摘要不变），端口、槽位、头像的颜色都不变" 'printf "%s" "$st" | order_same'
+n0=$(wc -l < ssh.log); out=$(run cca reorder 2>&1); rc=$?
+ok "cca reorder 不写账号：说明用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法"'
+out=$(run cca reorder 没有这个账号 2>&1); rc=$?; st=$(gj state)
+ok "cca reorder 写错账号：报错，账号表不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有匹配的账号" && printf "%s" "$st" | jok "list(tab(\"accounts.json\"))[0] == \"zed@example.com\""'
+run cca reorder alice zed kimi >/dev/null 2>&1; st=$(gj state)
+ok "再调整一次：基准顺序还是第一次调整之前的，不用同步路由器" 'printf "%s" "$st" | order_same && [ "$(wc -l < ssh.log)" = "$n0" ]'
+edit_table 'j.pop("zed@example.com")'; edit_table 'j.pop("order_base", None)' "$H/.cca/config.json"; run cca router sync >/dev/null 2>&1
 # 同意：出口纯净度偏低时问要不要照样启动；授权要带出口 IP，换了 IP 不算
 printf '{"countryCode":"US","trust_score":30}' > "$T/risk/203.0.113.1.json"; : > open.log
 out=$(run cca app alice 2>&1 </dev/null); rc_plain=$?

@@ -18,6 +18,8 @@ enum CcaCommand: Sendable, Hashable {
     case routerSync
     /// 「更新并重新打开」的第一步：下载校验好和 cca 同版本的 App，先放着（PROTOCOL 5）。
     case guiUpdate
+    /// 账号表按这个顺序排（`cca [codex] reorder 账号…`）：只改先后，端口、路由器都不动。
+    case reorder(ToolID, keys: [String])
     /// 改别名（`cca [codex] rename KEY 新别名`，新别名是 - 时去掉别名）：stdout 是新的键。
     case rename(ToolID, key: String, alias: String)
     /// 重置额度（`cca codex reset KEY --json`，PROTOCOL 4.5）：要同意（reset_credit），stdout 是 kind=reset 的文档。
@@ -26,14 +28,14 @@ enum CcaCommand: Sendable, Hashable {
     case update(String)
     /// 检查更新（`cca update --check --json`，PROTOCOL 5.1）：只读、要联网，stdout 是 kind=update 的文档；查不了时看 fail 事件。
     case updateCheck
-    /// 桌面客户端（Claude、ChatGPT）更新：检查只准备软件包，安装需经过绑定 token 的 consent。
+    /// 客户端（Claude、ChatGPT 桌面版，终端里的 Claude Code、Codex）更新：检查不安装，安装需经过绑定 token 的 consent。
     case clientCheck(force: Bool)
     case clientMode(automatic: Bool)
     case clientInstall(token: String)
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _): return t
         case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -42,7 +44,7 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
         case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k): return k
-        case .usagePoll, .checkPoll, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
+        case .usagePoll, .checkPoll, .reorder, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
 
@@ -72,6 +74,7 @@ enum CcaCommand: Sendable, Hashable {
         case .routerSync: return ["router", "sync"]
         case .guiUpdate: return ["gui", "update"]
         case .rename(_, let k, let a): return prefix + ["rename", k, a]
+        case .reorder(_, let keys): return prefix + ["reorder"] + keys
         case .reset(_, let k): return prefix + ["reset", k, "--json"]
         case .update(let v): return ["update", v]
         case .updateCheck: return ["update", "--check", "--json"]
@@ -90,7 +93,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app, .web: return 120
         case .routerSync: return 180
         case .guiUpdate, .update: return 300
-        case .rename: return 60
+        case .rename, .reorder: return 60
         case .reset, .updateCheck: return 150
         case .clientCheck, .clientInstall: return 900
         case .clientMode: return 30
@@ -102,7 +105,7 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .routerSync, .reset, .clientInstall: return true
-        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .update, .updateCheck, .clientCheck, .clientMode: return false
+        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
 
@@ -112,6 +115,7 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .app(let t, let k), .web(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
         case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
+        case .reorder(let t, _): return "reorder:\(t.rawValue)"   // 连着拖几次：一个接一个，最后拖的那次写在最后
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
         case .routerSync: return "router-sync"
         case .guiUpdate, .update: return "gui-update"
@@ -248,7 +252,7 @@ actor CcaClient {
     }
 
     func clientUpdates() async throws -> ClientUpdatesDoc {
-        try await query(ClientUpdatesDoc.self, ["clients", "status", "--json"], timeout: 15)
+        try await query(ClientUpdatesDoc.self, ["clients", "status", "--json"], timeout: 30)
     }
 
     /// route 为 nil 时按 route_pref；给了就用 CCA_ROUTE 看指定的一边。

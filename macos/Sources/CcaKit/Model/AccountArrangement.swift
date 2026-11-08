@@ -1,9 +1,9 @@
 import Foundation
 
-/// 账号在各组里怎么排：用户拖出来的顺序和置顶。只影响 App 里的显示，存在 App 的设置里，不进 `~/.cca`
-/// （账号表的顺序、端口、路由器都不受影响）。账号按 `Account.stableID` 认：改别名不会丢。
+/// 账号在各组里怎么排。顺序以账号表为准（拖动、置顶之后 App 写回账号表，`cca reorder`，终端里的菜单和编号也是这个顺序）；
+/// 这里只记置顶（存在 App 的设置里），和还没写进账号表的顺序。账号按 `Account.stableID` 认：改别名不会丢。
 struct AccountArrangement: Codable, Equatable, Sendable {
-    /// 组 → 拖过之后的顺序。没拖过的组没有这一项，照账号表的顺序
+    /// 组 → 刚拖出来、还没写进账号表的顺序（写好了就清掉；旧版 cca 不支持写回时一直用它）
     var order: [String: [String]] = [:]
     /// 置顶的账号
     var top: Set<String> = []

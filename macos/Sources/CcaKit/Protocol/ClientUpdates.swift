@@ -31,6 +31,8 @@ struct ClientUpdatesDoc: CcaDocument, Equatable {
 struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
     var id: String
     var label: String?
+    /// `desktop` | `cli`（终端里的 Claude Code、Codex）；旧版 cca 没有这个字段，都是桌面客户端
+    var kind: String?
     var path: String?
     var installedVersion: String?
     var availableVersion: String?
@@ -44,7 +46,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
     var packageBuild: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, label, path, status, message
+        case id, label, kind, path, status, message
         case installedVersion = "installed_version", availableVersion = "available_version", stagedVersion = "staged_version"
         case checkedEpoch = "checked_epoch", installToken = "install_token", canInstall = "can_install"
         case packageVersion = "package_version", packageBuild = "package_build"
@@ -54,6 +56,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = c.string(.id) ?? ""
         label = c.string(.label)
+        kind = c.string(.kind)
         path = c.string(.path)
         installedVersion = c.string(.installedVersion)
         availableVersion = c.string(.availableVersion)
@@ -66,6 +69,8 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
         packageVersion = c.string(.packageVersion)
         packageBuild = c.stringish(.packageBuild)
     }
+
+    var isCLI: Bool { kind == "cli" }
 
     /// 是否可安装只采用后端给的结论；已失效的检查即使带旧 token 也不能复用。
     var readyToInstall: Bool {
@@ -80,6 +85,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
         case "busy": return "更新正在进行"
         case "unsupported": return "当前系统暂无适配包"
         case "staged": return "更新已准备好"
+        case "available": return "有新版本"
         case "running": return "客户端正在运行"
         case "blocked": return "暂不能安装"
         case "error": return "更新检查失败"

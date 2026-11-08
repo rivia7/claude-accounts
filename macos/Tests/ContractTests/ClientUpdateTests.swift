@@ -109,10 +109,13 @@ func clientUpdateProtocolTests() async {
 
     let fixtureModel = makeModel(fixtureTransport())
     await fixtureModel.start()
-    check("演示模式只读夹具、不启用自动检查", fixtureModel.clientUpdates?.clients.map(\.id) == ["claude", "codex"]
+    check("演示模式只读夹具、不启用自动检查", fixtureModel.clientUpdates?.clients.map(\.id) == ["claude", "codex", "claude-cli", "codex-cli"]
           && !fixtureModel.scheduler.clientChecksRunning)
     fixtureModel.installClientUpdate(fixtureModel.clientUpdates!.clients[0])
     check("演示模式不会安装", fixtureModel.clientUpdateActivity == nil && fixtureModel.toast?.text.contains("不会安装") == true)
+    let tools = fixtureModel.clientUpdates!.clients.filter(\.isCLI)
+    check("终端工具：有新版本时能直接更新，已是最新的不能", tools.map(\.statusText) == ["有新版本", "已是最新版本"]
+          && tools.map(\.readyToInstall) == [true, false] && !fixtureModel.clientUpdates!.clients[0].isCLI)
     fixtureModel.shutdown()
 
     let dev = tinyHello.replacingOccurrences(of: "\"installed\":true", with: "\"installed\":true,\"dev_mode\":true")

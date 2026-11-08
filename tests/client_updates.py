@@ -727,8 +727,9 @@ class ClaudeClientUpdates(unittest.TestCase):
         code, output, errors = self.command('check', 'force')
         self.assertEqual(code, 0, errors + output)
         doc = json.loads(output)
-        self.assertEqual([c['id'] for c in doc['clients']], ['claude', 'codex'])
-        claude, codex = doc['clients']
+        self.assertEqual([c['id'] for c in doc['clients']], ['claude', 'codex', 'claude-cli', 'codex-cli'])
+        self.assertEqual([c['status'] for c in doc['clients'][2:]], ['missing', 'missing'])
+        claude, codex = doc['clients'][:2]
         self.assertTrue(claude['can_install'] and codex['can_install'])
         self.assertNotEqual(claude['install_token'], codex['install_token'])
         code, out, errors = self.command('install', codex['install_token'])
@@ -777,6 +778,246 @@ class ClaudeClientUpdates(unittest.TestCase):
             self.command('check', 'force')
         state = json.loads((self.root / '.cca/client-updates/claude/state.json').read_text())
         self.assertGreater(state['checked_epoch'], 0)
+
+
+class CliToolUpdates(unittest.TestCase):
+    """终端里的 Claude Code、Codex：只查版本，更新用它们自己的 update 命令，用户确认后才运行"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='cca-cli-update-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.claude = self.tool('.local/share/claude/versions/2.0.0')
+        self.codex = self.tool('.codex/packages/standalone/current/bin/codex')
+        env = {'HOME': str(self.root), 'CCA_HOME': str(self.root / '.cca'), 'CCA_TOOL': 'claude', 'PATH': '/usr/bin:/bin',
+               'CCA_CLIENT_CLAUDE_APP': '', 'CCA_CLIENT_CODEX_APP': '', 'CCA_CLI_CLAUDE': str(self.claude), 'CCA_CLI_CODEX': '',
+               'ANTHROPIC_API_KEY': 'not-a-real-key', 'OPENAI_API_KEY': 'not-a-real-key', 'HTTPS_PROXY': 'http://example.invalid',
+               'CLAUDE_CONFIG_DIR': '/do-not-read', 'CODEX_HOME': '/do-not-read'}
+        patch = mock.patch.dict(os.environ, env, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.ns = {}
+        exec(compile(DEFINITIONS, str(CCA), 'exec'), self.ns)
+        self.installed, self.latest, self.update_works = '2.0.0', '2.1.0', True
+        self.runs, self.urls = [], []
+        self.body = None
+        self.ns['cu_run'] = self.fake_run
+        self.ns['cu_download'] = self.fake_download
+
+    def tool(self, relative):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('fake')
+        return path
+
+    def fake_run(self, args, folder, timeout=30, env=None):
+        self.runs.append((args, env, timeout))
+        if args[-1] == '--version':
+            return types.SimpleNamespace(returncode=0, stdout=(self.installed + ' (Claude Code)').encode(), stderr=b'')
+        if self.update_works:
+            self.installed = self.latest
+            return types.SimpleNamespace(returncode=0, stdout=b'done', stderr=b'')
+        return types.SimpleNamespace(returncode=1, stdout=b'', stderr=b'first line\nnetwork is down')
+
+    def fake_download(self, url, destination, folder, package=False, expected_size=None):
+        self.ns['cu_url'](url, package)
+        self.urls.append(url)
+        Path(destination).write_bytes(self.body if self.body is not None else self.latest.encode() + b'\n')
+
+    def command(self, action='status', arg=''):
+        output, errors = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            try:
+                self.ns['cmd_client_updates'](action, arg)
+            except SystemExit as e:
+                code = e.code
+        return code, output.getvalue(), errors.getvalue()
+
+    def row(self, output, client='claude-cli'):
+        return next(c for c in json.loads(output)['clients'] if c['id'] == client)
+
+    def updates(self):
+        return [r for r in self.runs if r[0][-1] == 'update']
+
+    def check(self):
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        return self.row(output)
+
+    def test_status_is_read_only_and_lists_the_terminal_tools(self):
+        code, output, _ = self.command()
+        self.assertEqual(code, 0)
+        row = self.row(output)
+        self.assertEqual((row['kind'], row['status'], row['installed_version'], row['path']), ('cli', 'unchecked', '2.0.0', str(self.claude)))
+        self.assertEqual(self.row(output, 'codex-cli')['status'], 'missing')
+        self.assertEqual(self.urls, [])
+        self.assertFalse((self.root / '.cca').exists())
+
+    def test_check_finds_a_new_version_but_never_installs(self):
+        row = self.check()
+        self.assertEqual((row['status'], row['available_version'], row['can_install']), ('available', '2.1.0', True))
+        self.assertTrue(row['install_token'])
+        self.assertEqual(self.updates(), [])
+        self.assertEqual(self.urls, ['https://downloads.claude.ai/claude-code-releases/latest'])
+
+    def test_same_or_newer_is_current(self):
+        for latest in ('2.0.0', '1.9.9'):
+            self.latest = latest
+            row = self.check()
+            self.assertEqual((row['status'], row['can_install'], row['install_token']), ('current', False, None))
+
+    def test_background_check_is_throttled_and_mode_off_stops_it(self):
+        self.check()
+        self.urls.clear()
+        self.assertEqual(self.command('check')[0], 0)
+        self.assertEqual(self.urls, [])
+        state = self.root / '.cca/client-updates/claude-cli/state.json'
+        data = json.loads(state.read_text())
+        data['checked_epoch'] = 1
+        state.write_text(json.dumps(data))
+        self.assertEqual(self.command('mode', 'off')[0], 0)
+        self.assertEqual(self.command('check')[0], 0)
+        self.assertEqual(self.urls, [])
+
+    def test_tool_that_updated_itself_is_current_without_a_stale_button(self):
+        self.check()
+        self.installed = '2.1.0'
+        row = self.row(self.command()[1])
+        self.assertEqual((row['status'], row['can_install'], row['install_token']), ('current', False, None))
+
+    def test_install_runs_the_official_updater_in_a_clean_environment(self):
+        token = self.check()['install_token']
+        code, output, errors = self.command('install', token)
+        self.assertEqual(code, 0, errors + output)
+        row = self.row(output)
+        self.assertEqual((row['status'], row['installed_version'], row['can_install']), ('updated', '2.1.0', False))
+        args, env, timeout = self.updates()[0]
+        self.assertEqual(args, [str(self.claude), 'update'])
+        self.assertEqual(env['HOME'], str(self.root))
+        self.assertTrue(env['PATH'].startswith(str(self.root / '.local/bin') + ':'))
+        self.assertNotIn(env['CLAUDE_CONFIG_DIR'], ('/do-not-read', str(self.root / '.claude')))
+        self.assertEqual((env['DISABLE_TELEMETRY'], env['DISABLE_ERROR_REPORTING']), ('1', '1'))
+        for name in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'HTTPS_PROXY', 'CODEX_HOME'):
+            self.assertNotIn(name, env)
+
+    def test_codex_uses_github_and_its_own_updater(self):
+        os.environ['CCA_CLI_CLAUDE'] = ''
+        os.environ['CCA_CLI_CODEX'] = str(self.codex)
+        self.installed, self.latest = '0.166.0', '0.167.0'
+        self.body = json.dumps({'tag_name': 'rust-v0.167.0'}).encode()
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        row = self.row(output, 'codex-cli')
+        self.assertEqual((row['status'], row['available_version'], row['can_install']), ('available', '0.167.0', True))
+        self.assertEqual(self.urls, ['https://api.github.com/repos/openai/codex/releases/latest'])
+        code, output, errors = self.command('install', row['install_token'])
+        self.assertEqual(code, 0, errors + output)
+        _, env, _ = self.updates()[0]
+        self.assertEqual(env['CODEX_NON_INTERACTIVE'], '1')
+        self.assertNotIn('CODEX_HOME', env)
+
+    def test_failed_update_keeps_the_button_and_says_why(self):
+        self.update_works = False
+        token = self.check()['install_token']
+        code, output, errors = self.command('install', token)
+        self.assertEqual(code, 1)
+        self.assertIn('network is down', errors)
+        row = self.row(output)
+        self.assertEqual(row['status'], 'error')
+        self.assertFalse(row['can_install'])
+        again = self.row(self.command()[1])
+        self.assertEqual((again['status'], again['can_install']), ('available', True))
+
+    def test_stale_or_foreign_token_runs_nothing(self):
+        token = self.check()['install_token']
+        for bad in ('b' * 64, 'not-a-token'):
+            self.assertEqual(self.command('install', bad)[0], 1)
+        self.installed = '2.1.0'
+        self.assertEqual(self.command('install', token)[0], 1)
+        self.assertEqual(self.updates(), [])
+
+    def test_homebrew_install_is_checked_against_the_cask_and_left_to_the_user(self):
+        cask = self.tool('opt/Caskroom/claude-code@latest/2.0.0/claude')
+        os.environ['CCA_CLI_CLAUDE'] = str(cask)
+        self.body = json.dumps({'version': '2.1.0'}).encode()
+        row = self.check()
+        self.assertEqual(self.urls, ['https://formulae.brew.sh/api/cask/claude-code@latest.json'])
+        self.assertEqual((row['status'], row['can_install'], row['install_token']), ('available', False, None))
+        self.assertIn('brew upgrade --cask claude-code@latest', row['message'])
+
+    def test_npm_install_is_checked_against_npm_and_left_to_the_user(self):
+        npm = self.tool('lib/node_modules/@anthropic-ai/claude-code/cli.js')
+        os.environ['CCA_CLI_CLAUDE'] = str(npm)
+        self.body = json.dumps({'version': '2.1.0'}).encode()
+        row = self.check()
+        self.assertEqual(self.urls, ['https://registry.npmjs.org/@anthropic-ai%2Fclaude-code/latest'])
+        self.assertEqual((row['status'], row['can_install']), ('available', False))
+        self.assertIn('npm install -g @anthropic-ai/claude-code@latest', row['message'])
+
+    def test_claude_channel_is_respected(self):
+        settings = self.root / '.claude/settings.json'
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({'autoUpdatesChannel': 'stable'}))
+        token = self.check()['install_token']
+        self.assertEqual(self.urls, ['https://downloads.claude.ai/claude-code-releases/stable'])
+        seen = {}
+
+        def run(args, folder, timeout=30, env=None):
+            if args[-1] == 'update':
+                seen.update(json.loads(Path(env['CLAUDE_CONFIG_DIR'], 'settings.json').read_text()))
+            return self.fake_run(args, folder, timeout, env)
+        self.ns['cu_run'] = run
+        self.assertEqual(self.command('install', token)[0], 0)
+        self.assertEqual(seen, {'autoUpdatesChannel': 'stable'})
+
+    def test_only_the_official_addresses_are_allowed(self):
+        self.ns['CU'] = self.ns['CU_CLAUDE_CLI']
+        allowed = ['https://downloads.claude.ai/claude-code-releases/latest', 'https://api.github.com/repos/openai/codex/releases/latest',
+                   'https://registry.npmjs.org/@openai%2Fcodex/latest', 'https://formulae.brew.sh/api/cask/codex.json']
+        for url in allowed:
+            self.assertEqual(self.ns['cu_url'](url), url)
+        for url in ('https://downloads.claude.ai/claude-code-releases/2.0.0/claude', 'https://example.invalid/claude-code-releases/latest',
+                    'http://downloads.claude.ai/claude-code-releases/latest', 'https://api.github.com/repos/evil/codex/releases/latest',
+                    'https://downloads.claude.ai/claude-code-releases/latest?x=1', 'https://formulae.brew.sh/api/cask/evil.json'):
+            with self.assertRaises(self.ns['ClientUpdateError'], msg=url):
+                self.ns['cu_url'](url)
+        with self.assertRaises(self.ns['ClientUpdateError']):
+            self.ns['cu_url'](allowed[0], True)
+
+    def test_garbage_from_the_network_is_an_error_not_an_update(self):
+        for body in (b'<html>blocked</html>', b'{}', b'{"version": "latest"}', b''):
+            self.body = body
+            code, output, _ = self.command('check', 'force')
+            self.assertEqual(code, 1, body)
+            row = self.row(output)
+            self.assertEqual((row['status'], row['can_install']), ('error', False), body)
+
+    def test_unreadable_version_blocks_the_row_only(self):
+        self.ns['cu_run'] = lambda args, folder, timeout=30, env=None: types.SimpleNamespace(returncode=1, stdout=b'', stderr=b'')
+        row = self.row(self.command()[1])
+        self.assertEqual((row['status'], row['can_install']), ('blocked', False))
+
+    def test_consent_says_how_a_terminal_tool_is_updated(self):
+        start = SHELL.index('\ncmd_clients() {') + 1
+        function = SHELL[start:SHELL.index('\n}', start) + 2]
+        token = 'a' * 64
+        prologue = '''
+die() { echo "$*" >&2; exit 1; }
+fail_warn() { :; }
+client_update_py() {
+  if [ "$1" = plan ]; then printf '%s\\n' "CU_VERSION=2.1; CU_INSTALLED=2.0; CU_TARGET=/x/claude; CU_LABEL=Claude; CU_NOTE=${NOTE@Q}"
+  else echo '{}'; fi
+}
+consent() { printf '%s\\n' "$5" >> "$TEST_LOG"; return 0; }
+'''
+        prologue = prologue.replace('${NOTE@Q}', "\"'$NOTE'\"")
+        for note, expected in [('用 claude update 更新', '用 claude update 更新'), ('', '目标：/x/claude')]:
+            log = self.root / 'shell.log'
+            log.write_text('')
+            result = subprocess.run(['/bin/bash', '-c', prologue + function + '\ncmd_clients install "$1" --json', 'test', token],
+                                    env={'PATH': '/usr/bin:/bin', 'TEST_LOG': str(log), 'NOTE': note}, capture_output=True, text=True)
+            self.assertIn(expected, log.read_text(), result.stderr)
 
 
 if __name__ == '__main__':

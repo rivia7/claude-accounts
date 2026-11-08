@@ -796,14 +796,25 @@ def node_of(v):
     return n if isinstance(n, str) else ''
 
 
+def base_order(c, t, tool=None):
+    """账号的先来后到（键的列表）：端口池、路由器的摘要、启动器的颜色都按它，调整账号表的顺序（cca reorder）不牵连它们，
+    不用同步路由器、不用重新加载本机 Clash、头像和启动器的颜色也不变。没调整过时就是账号表的顺序（和以前逐字节一样）；
+    调整过的话，调整之前的顺序记在 order_base（账号目录名），之后新加的账号排在后面"""
+    base = (tool or T).state(c).get('order_base')
+    if not base:
+        return list(t)
+    rank = {a: i for i, a in enumerate(base)}
+    return sorted(t, key=lambda k: rank.get(acct_id(k, tool), len(base)))
+
+
 def routed(c, t, tool=None):
     """走节点、有端口的账号 [(键, 值, 端口)]；直连的第三方 API 账号没有端口"""
     ports = (tool or T).state(c).get('ports') or {}
-    return [(k, v, ports[k]) for k, v in t.items() if k in ports]
+    return [(k, t[k], ports[k]) for k in base_order(c, t, tool) if k in ports]
 
 
 def pool(c):
-    """端口池里的全部账号 [(工具, 键, 值, 端口)]：先 Claude 后 Codex，各按账号表的顺序。路由器和本机 Clash
+    """端口池里的全部账号 [(工具, 键, 值, 端口)]：先 Claude 后 Codex，各按 base_order。路由器和本机 Clash
     上的端口池都按它来；只有 Claude 账号时和以前一样"""
     return [(tool, k, v, p) for tool in TOOLS for k, v, p in routed(c, TABS.get(tool.name) or {}, tool)]
 
@@ -1997,25 +2008,30 @@ def cmd_keys(kind=''):
             print(k)
 
 
-def cmd_resolve(q=''):
-    """按完整的键、编号、别名或邮箱找账号，其次按它们的唯一前缀"""
+def account_named(t, q):
+    """按完整的键、编号、别名或邮箱找账号，其次按它们的唯一前缀；找不到就退出"""
     if not q:
         die('需要指定账号（别名、邮箱、编号或唯一前缀）')
-    t = ctx()[1]
     keys = list(t)
     if q in t:
-        return print(q)
+        return q
     if q.isdigit() and 1 <= int(q) <= len(keys):
-        return print(keys[int(q) - 1])
+        return keys[int(q) - 1]
     ql = q.lower()
     names = {k: [x.lower() for x in (k,) + parse_key(k) if x] for k in keys}
     for hit in (lambda x: x == ql, lambda x: x.startswith(ql)):
         hits = [k for k in keys if any(hit(x) for x in names[k])]
         if len(hits) == 1:
-            return print(hits[0])
+            return hits[0]
         if hits:
             die('「%s」匹配到多个账号: %s' % (q, '、'.join(label_of(k) for k in hits)))
     die('没有匹配的账号: %s' % q)
+
+
+def cmd_resolve(q=''):
+    if not q:
+        die('需要指定账号（别名、邮箱、编号或唯一前缀）')
+    print(account_named(ctx()[1], q))
 
 
 def all_errors():
@@ -2340,6 +2356,23 @@ def cmd_rename(key, alias):
         T.set_ids(t2)   # 第三方 API 账号：新键 → id，对账时端口、“上次使用”按 id 跟着走
         ctx()
     print(new)
+
+
+def cmd_reorder(*names):
+    """cca reorder：按这个顺序排账号表（没写到的账号接在后面，先后不变）。图形界面调整账号顺序时用它。
+    只改账号表里的先后；第一次调整之前先记下原来的顺序（base_order），端口池、摘要、颜色都不跟着变"""
+    with Lock():
+        c, t, _ = ctx()
+        order = []
+        for n in names:
+            k = account_named(t, n)
+            if k not in order:
+                order.append(k)
+        order += [k for k in t if k not in order]
+        if order != list(t):
+            T.state(c)['order_base'] = [acct_id(k) for k in base_order(c, t)]
+            cfg_save(c)
+            save_json(T.table, {k: t[k] for k in order}, 0o600)
 
 
 def cmd_rm(key):
@@ -3485,10 +3518,11 @@ function run(argv) {
 }"""
 
 
-def launcher_badges(t, names):
-    """图标右下角的账号标识：中文名取头两个字，其它取首字母大写；颜色按账号固定，尽量不和别的账号重复"""
+def launcher_badges(c, t, names):
+    """图标右下角的账号标识：中文名取头两个字，其它取首字母大写；颜色按账号固定（按 base_order 分，调整账号表的顺序不会变色），
+    尽量不和别的账号重复"""
     out, used = {}, set()
-    for k in t:
+    for k in base_order(c, t):
         n = names[k][len(T.launcher_prefix):] or '?'
         wide = ''.join(ch for ch in n[:2] if char_w(ch) == 2)
         label = wide if char_w(n[0]) == 2 else n[0].upper()
@@ -3577,7 +3611,7 @@ def cmd_launchers(ldir, cca, app='', mode=''):
     import shutil
     t = {k: v for k, v in table_load().items() if not is_api(v)}
     names = launcher_names(t)
-    badges = launcher_badges(t, names)
+    badges = launcher_badges(load_quiet(CFG) or {}, t, names)
     want = {} if mode == 'remove-all' or not app else {os.path.join(ldir, names[k] + '.app'): k for k in t}
     if os.path.isdir(ldir):
         for n in sorted(os.listdir(ldir)):
@@ -5748,7 +5782,7 @@ def cmd_gui_state():
                     entry['settings_problems'] = ['%s:unreadable' % T.settings_disp]
                 t = TABS[tool.name]
                 official = {k: v for k, v in t.items() if not is_api(v)}
-                badges = launcher_badges(official, launcher_names(official))
+                badges = launcher_badges(c, official, launcher_names(official))
                 pm = policy_map(tool, c)
                 entry['errors'] = [{'code': 'table_invalid', 'message': m} for m in ERRS.get(tool.name, [])]
                 entry['last'] = T.state(c).get('last') or None
@@ -5940,8 +5974,21 @@ def cu_url_claude(p, package):
             and re.fullmatch(r'device_id=[0-9a-f-]{36}&version=[0-9.]+&os_version=[0-9.]+', p.query))
 
 
+# 终端工具的最新版本从哪查（host → path）：和它们自己检查更新用的地址一样，都是不带身份的公开地址
+CU_CLI_SOURCES = {'downloads.claude.ai': r'/claude-code-releases/(latest|stable)',
+                  'api.github.com': r'/repos/openai/codex/releases/latest',
+                  'registry.npmjs.org': r'/(@anthropic-ai%2Fclaude-code/(latest|stable)|@openai%2Fcodex/latest)',
+                  'formulae.brew.sh': r'/api/cask/(claude-code(@latest)?|codex)\.json'}
+
+
+def cu_url_cli(p, package):
+    return not package and not p.query and re.fullmatch(CU_CLI_SOURCES.get(p.hostname, r'(?!)'), p.path)
+
+
 class CuClient:
     """一种桌面客户端：产品标识、签名团队、更新源的规则。全局的 CU 是正在处理的那一种（和账号的 T 一样）"""
+    cli = False
+
     def __init__(self, id, label, bundle, team, app, names, env, app_env, build_re, url_ok, updater):
         self.id, self.label, self.bundle, self.team, self.app = id, label, bundle, team, app
         self.names, self.env, self.app_env = names, env, app_env
@@ -5952,7 +5999,47 @@ CU_CODEX = CuClient('codex', 'ChatGPT', 'com.openai.codex', '2DC432GLL2', 'ChatG
                     'CCA_CLIENT_CODEX_APP', 'CCA_CODEX_APP', r'\d{1,12}', cu_url_codex, r'Sparkle|Autoupdate|Updater\.app')
 CU_CLAUDE = CuClient('claude', 'Claude', 'com.anthropic.claudefordesktop', 'Q6L2SF6YDW', 'Claude.app', ('Claude.app',),
                      'CCA_CLIENT_CLAUDE_APP', 'CCA_CLAUDE_APP', r'\d+(?:\.\d+){1,5}', cu_url_claude, r'ShipIt|Squirrel')
-CU_CLIENTS = (CU_CLAUDE, CU_CODEX)
+
+
+def cu_claude_channel():
+    """Claude Code 跟哪个发布通道（用户在共享的 settings.json 里设的，默认 latest）"""
+    s = load_quiet(os.path.join(HOME, '.claude', 'settings.json'))
+    c = s.get('autoUpdatesChannel') if isinstance(s, dict) else None
+    return c if c in ('latest', 'stable') else 'latest'
+
+
+def cu_claude_env(folder):
+    """claude 用一次性的配置目录运行：不碰账号和 ~/.claude，不带设备标识（官方的更新命令不要登录）；更新通道和用户设的一样"""
+    conf = os.path.join(folder, 'claude')
+    os.makedirs(conf, exist_ok=True)
+    if cu_claude_channel() != 'latest':
+        save_json(os.path.join(conf, 'settings.json'), {'autoUpdatesChannel': cu_claude_channel()}, 0o600)
+    return {'CLAUDE_CONFIG_DIR': conf, 'DISABLE_TELEMETRY': '1', 'DISABLE_ERROR_REPORTING': '1'}
+
+
+class CuCli:
+    """一种终端工具（命令行的 Claude Code、Codex）：只查版本，不下载软件包；更新用它们自己的 update 命令（自己校验、自己替换），
+    用户确认后才运行。命令在哪是 bash 找到的（env，空的就是没装）"""
+    cli, names, app_env, url_ok = True, (), '', staticmethod(cu_url_cli)
+
+    def __init__(self, id, label, command, env, own_dir, npm, npm_url, latest, run_env):
+        self.id, self.label, self.command, self.env, self.own_dir = id, label, command, env, own_dir
+        self.npm, self.npm_url, self.latest, self.run_env = npm, npm_url, latest, run_env
+
+    def advice(self, method, cask):
+        """官方安装器以外的装法 App 不代劳（npm、Homebrew 要用用户自己的环境和权限）：告诉用户在终端里运行什么"""
+        if method == 'brew':
+            return 'brew upgrade --cask ' + cask
+        return 'npm install -g %s@latest' % self.npm if method == 'npm' else self.command + ' update'
+
+
+CU_CLAUDE_CLI = CuCli('claude-cli', 'Claude Code（终端）', 'claude', 'CCA_CLI_CLAUDE', '.local/share/claude/versions',
+                      '@anthropic-ai/claude-code', lambda: 'https://registry.npmjs.org/@anthropic-ai%2Fclaude-code/' + cu_claude_channel(),
+                      lambda: 'https://downloads.claude.ai/claude-code-releases/' + cu_claude_channel(), cu_claude_env)
+CU_CODEX_CLI = CuCli('codex-cli', 'Codex（终端）', 'codex', 'CCA_CLI_CODEX', '.codex/packages/standalone',
+                     '@openai/codex', lambda: 'https://registry.npmjs.org/@openai%2Fcodex/latest',
+                     lambda: 'https://api.github.com/repos/openai/codex/releases/latest', lambda folder: {'CODEX_NON_INTERACTIVE': '1'})
+CU_CLIENTS = (CU_CLAUDE, CU_CODEX, CU_CLAUDE_CLI, CU_CODEX_CLI)
 CU = CU_CODEX
 
 
@@ -6147,11 +6234,11 @@ def cu_environment(folder):
             'TMPDIR': folder, 'LANG': 'C', 'LC_ALL': 'C'}
 
 
-def cu_run(args, folder, timeout=30):
+def cu_run(args, folder, timeout=30, env=None):
     import subprocess
     try:
         return subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, env=cu_environment(folder), close_fds=True,
+                              stderr=subprocess.PIPE, env=env or cu_environment(folder), close_fds=True,
                               timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         cu_error('error', '更新校验命令失败或超时')
@@ -6493,6 +6580,8 @@ def cu_validate_plan(state, token):
     if (not re.fullmatch(r'[0-9a-f]{64}', token or '') or not isinstance(stage, dict)
             or not hmac.compare_digest(token, stage.get('token', ''))):
         cu_error('needs_recheck', '安装确认已失效，请重新检查更新')
+    if CU.cli:
+        return cu_cli_validate(stage)
     target = cu_snapshot(cu_target())
     if target != stage.get('target'):
         cu_error('needs_recheck', '客户端已被其他更新器修改，请重新检查')
@@ -6511,7 +6600,9 @@ def cu_light(snapshot):
 
 def cu_view(state=None, problem=None):
     state = state if isinstance(state, dict) else {}
-    row = {'id': CU.id, 'label': CU.label, 'path': cu_target() or None,
+    if CU.cli:
+        return cu_cli_view(state, problem)
+    row = {'id': CU.id, 'label': CU.label, 'kind': 'desktop', 'path': cu_target() or None,
            'installed_version': None, 'available_version': None, 'staged_version': None,
            'package_version': None, 'package_build': None, 'install_token': None, 'can_install': False,
            'status': state.get('status', 'unchecked'), 'message': state.get('message', '尚未检查官方更新'),
@@ -6553,7 +6644,7 @@ def cu_next_check(rows):
 def cu_doc(problems=None):
     """所有客户端的状态文档；problems 是 {客户端 id: 这次操作遇到的问题}"""
     global CU
-    rows = []
+    rows, current = [], CU
     for client in CU_CLIENTS:
         CU = client
         problem = (problems or {}).get(client.id)
@@ -6562,6 +6653,7 @@ def cu_doc(problems=None):
         except ClientUpdateError as e:
             state, problem = {}, problem or e
         rows.append(cu_view(state, problem))
+    CU = current
     return {'version': 1, 'kind': 'client_updates', 'generated_epoch': time.time(),
             'mode': cu_mode(), 'next_check_epoch': cu_next_check(rows), 'clients': rows}
 
@@ -6571,6 +6663,8 @@ def cu_check(state, force=False):
     root = cu_root(True)
     if not force and (cu_mode() == 'off' or time.time() - state.get('checked_epoch', 0) < CU_CHECK_INTERVAL):
         return state
+    if CU.cli:
+        return cu_cli_check(state, root)
     target = cu_snapshot(cu_target())
     state['checked_epoch'] = time.time()
     try:
@@ -6772,6 +6866,8 @@ def cu_recover(state):
 def cu_install(state, token):
     import tempfile
     root = cu_root(True)
+    if CU.cli:
+        return cu_cli_install(state, token, root)
     with ClientUpdateLock(os.path.join(root, 'install.lock')):
         cu_recover(state)
         stage = cu_validate_plan(state, token)
@@ -6834,6 +6930,147 @@ def cu_install(state, token):
                 shutil.rmtree(work)
 
 
+def cu_cli_run(args, folder, timeout=20):
+    """运行 claude / codex：也从空环境开始（不带账号、代理、API key）。HOME 是真的：官方更新命令要往 ~/.local、~/.codex 里装；
+    PATH 里要有 ~/.local/bin：codex 的安装脚本发现它不在 PATH 里，会去改用户的 shell 配置文件"""
+    env = {'PATH': os.path.join(HOME, '.local', 'bin') + ':' + os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin'),
+           'HOME': HOME, 'TMPDIR': folder, 'LANG': 'en_US.UTF-8', 'NO_COLOR': '1', 'TERM': 'dumb'}
+    env.update(CU.run_env(folder))
+    return cu_run(args, folder, timeout, env)
+
+
+def cu_cli_installed(path, folder):
+    """现在装的版本"""
+    r = cu_cli_run([path, '--version'], folder)
+    m = re.search(r'(?<![\d.])\d+\.\d+\.\d+(?![\d.])', r.stdout.decode('utf-8', 'replace')) if r.returncode == 0 else None
+    if not m:
+        cu_error('blocked', '读不出 %s 的版本' % CU.command)
+    return m.group(0)
+
+
+def cu_cli_method(path):
+    """怎么装的：self（官方安装器，它的 update 命令自己换）、brew、npm，认不出的是 other；brew 时带上 cask 的名字"""
+    real = os.path.realpath(path)
+    cask = re.search(r'/Caskroom/([^/]+)/', real)
+    if cask:
+        return 'brew', cask.group(1)
+    if '/node_modules/' in real:
+        return 'npm', ''
+    return ('self' if real.startswith(os.path.join(HOME, CU.own_dir) + os.sep) else 'other'), ''
+
+
+def cu_cli_latest(data):
+    """官方的最新版本：纯文本（Claude Code 的发布通道）或 JSON（npm、Homebrew 的 version，GitHub 的 tag_name）"""
+    text = data.decode('utf-8', 'replace').strip()
+    if text.startswith('{'):
+        try:
+            j = json.loads(text)
+        except ValueError:
+            cu_error('error', '官方版本信息无法识别')
+        text = str(j.get('version') or j.get('tag_name') or '') if isinstance(j, dict) else ''
+    m = re.fullmatch(r'(?:rust-v|v)?(\d+\.\d+\.\d+)', text)
+    if not m:
+        cu_error('error', '官方版本信息无法识别')
+    return m.group(1)
+
+
+def cu_cli_check(state, root):
+    import secrets, tempfile
+    path = cu_target()
+    state['checked_epoch'] = time.time()
+    try:
+        cu_save_state(state)
+        with tempfile.TemporaryDirectory(prefix='check-', dir=root) as folder:
+            installed = cu_cli_installed(path, folder)
+            method, cask = cu_cli_method(path)
+            url = 'https://formulae.brew.sh/api/cask/%s.json' % cask if method == 'brew' else CU.npm_url() if method == 'npm' else CU.latest()
+            latest_file = os.path.join(folder, 'latest')
+            cu_download(url, latest_file, folder)
+            with open(latest_file, 'rb') as f:
+                latest = cu_cli_latest(f.read())
+        state['metadata'] = {'version': latest}
+        if cu_version(latest) <= cu_version(installed):
+            state.pop('stage', None)
+            state.update(status='current', message='已是最新版本')
+            return state
+        state['stage'] = {'token': secrets.token_hex(32), 'method': method, 'metadata': {'version': latest},
+                          'target': {'path': path, 'version': installed}}
+        state.update(status='available', message='可以直接更新到 %s' % latest if method == 'self'
+                     else '有新版本 %s：在终端里运行 %s' % (latest, CU.advice(method, cask)))
+    except ClientUpdateError as e:
+        state.update(status=e.status, message=e.message)
+        state.pop('stage', None)
+        raise
+    finally:
+        cu_save_state(state)
+    return state
+
+
+def cu_cli_view(state, problem):
+    """status 用：现在的版本是现跑的（claude 平时会自己更新，缓存的结论可能已经过时了），别的来自上次检查"""
+    import tempfile
+    path = cu_target()
+    row = {'id': CU.id, 'label': CU.label, 'kind': 'cli', 'path': path or None,
+           'installed_version': None, 'available_version': None, 'staged_version': None,
+           'package_version': None, 'package_build': None, 'install_token': None, 'can_install': False,
+           'status': state.get('status', 'unchecked'), 'message': state.get('message', '尚未检查官方更新'),
+           'checked_epoch': state.get('checked_epoch')}
+    if not path:
+        row.update(status='missing', message='没有找到 %s 命令' % CU.command)
+        return row
+    try:
+        with tempfile.TemporaryDirectory(prefix='cca-cli-') as folder:
+            row['installed_version'] = installed = cu_cli_installed(path, folder)
+        metadata, stage = state.get('metadata'), state.get('stage')
+        latest = metadata.get('version') if isinstance(metadata, dict) else None
+        row['available_version'] = latest
+        if latest and cu_version(latest) <= cu_version(installed):
+            if state.get('status') != 'updated':   # 刚更新过的留着“已更新到 X”那句话
+                row.update(status='current', message='已是最新版本')
+        elif isinstance(stage, dict) and stage.get('method') == 'self' and stage['target']['path'] == path:
+            row.update(install_token=stage['token'], can_install=True)
+    except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
+        row.update(status=getattr(e, 'status', 'blocked'), message=getattr(e, 'message', '读不出这个命令的状态'))
+    if problem:
+        row.update(status=problem.status, message=problem.message, install_token=None, can_install=False)
+    return row
+
+
+def cu_cli_validate(stage):
+    """确认和安装之前：还是这个命令、用官方安装器装的、确实比现在的新。返回的 target 带着现在的版本（确认框里写）"""
+    import tempfile
+    path = cu_target()
+    if not path or path != stage['target']['path'] or stage.get('method') != 'self':
+        cu_error('needs_recheck', '%s 的安装位置变了，请重新检查' % CU.command)
+    with tempfile.TemporaryDirectory(prefix='cca-cli-') as folder:
+        installed = cu_cli_installed(path, folder)
+    if cu_version(stage['metadata']['version']) <= cu_version(installed):
+        cu_error('needs_recheck', '%s 已经是这个版本或者更新的了' % CU.command)
+    return dict(stage, target=dict(stage['target'], version=installed))
+
+
+def cu_cli_install(state, token, root):
+    """用户同意之后运行官方的 update 命令。官方安装器把版本装在各自的目录里再换链接：开着的会话继续用旧版本"""
+    import tempfile
+    with ClientUpdateLock(os.path.join(root, 'install.lock')):
+        stage = cu_validate_plan(state, token)
+        path, want = stage['target']['path'], stage['metadata']['version']
+        with tempfile.TemporaryDirectory(prefix='update-', dir=root) as folder:
+            try:
+                r = cu_cli_run([path, 'update'], folder, 600)
+            except ClientUpdateError:
+                cu_error('error', '%s update 运行失败或超时，稍后再试' % CU.command)
+            installed = cu_cli_installed(path, folder)
+        if cu_version(installed) < cu_version(want):
+            lines = (r.stderr or r.stdout).decode('utf-8', 'replace').strip().splitlines()
+            cu_error('error', '%s update 没有更新成功%s' % (CU.command, '：' + lines[-1][:200] if lines else ''))
+        state.pop('stage', None)
+        state['metadata'] = {'version': installed}
+        state.update(status='updated', message='已更新到 %s，下次启动时用新版本' % installed)
+        cu_save_state(state)
+    return state
+
+
 def cu_token_client(token):
     """安装凭据是哪个客户端的；都对不上时停在第一个，由 cu_validate_plan 说凭据失效"""
     global CU
@@ -6869,7 +7106,7 @@ def cu_check_all(force, problems):
     """一个一个检查（只在 manager 锁内调用）：一个客户端出问题不影响另一个；没装的不算问题"""
     global CU, CU_BUDGET
     CU_BUDGET = time.time() + CU_CHECK_SECONDS
-    for client in CU_CLIENTS:
+    for client in sorted(CU_CLIENTS, key=lambda c: not c.cli):   # 终端工具先查：只是一个小请求，不被桌面客户端的大下载占完时间
         CU = client
         if not cu_target() and not os.path.lexists(os.path.join(cu_base(), client.id, 'transaction.json')):
             continue
@@ -6900,7 +7137,8 @@ def cmd_client_updates(action='status', arg=''):
             cu_token_client(arg)
             stage = cu_validate_plan(cu_read_state(), arg)
             sh(CU_VERSION=stage['metadata']['version'], CU_INSTALLED=stage['target']['version'],
-               CU_TARGET=stage['target']['path'], CU_LABEL=CU.label)
+               CU_TARGET=stage['target']['path'], CU_LABEL=CU.label,
+               CU_NOTE='用 %s update 更新（它自己校验和替换）。开着的会话不受影响，下次启动时用新版本。' % CU.command if CU.cli else '')
             return
         elif action in ('check', 'install'):
             if action == 'check' and arg not in ('', 'force'):
@@ -6926,7 +7164,7 @@ def cmd_client_updates(action='status', arg=''):
 CMDS = {
     'init': cmd_init, 'env': cmd_env, 'router-env': cmd_router_env, 'router-set': cmd_router_set,
     'keys': cmd_keys, 'resolve': cmd_resolve, 'validate': cmd_validate,
-    'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm, 'rename': cmd_rename,
+    'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm, 'rename': cmd_rename, 'reorder': cmd_reorder,
     'set-last': cmd_set_last, 'session-open': cmd_session_open, 'name': cmd_name, 'login-url': cmd_login_url,
     'private-profile': cmd_private_profile, 'runtime-record': cmd_runtime_record, 'browser-profile': cmd_browser_profile,
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
@@ -8701,6 +8939,12 @@ cmd_rename() {   # cca [codex] rename <账号> <新别名>：改别名（新别�
 		okay "已改名：${key} → ${new}（登录、资料、端口都不变）"
 	fi
 	printf '%s\n' "$new"
+}
+
+cmd_reorder() {   # cca [codex] reorder <账号>…：按这个顺序排账号表（没写到的账号接在后面）。菜单、编号都跟着变；端口、路由器、启动器都不动。
+	# 不交互（图形界面调整账号顺序时用它），什么都不输出
+	[ $# -gt 0 ] || die "用法: ${CMD} reorder <账号>…（按这个顺序排账号表，没写到的账号接在后面）"
+	py reorder "$@"
 }
 
 # 继承来的、会盖掉账号自己的登录/接口/模型，或者把请求转去别的服务商的变量（和 PY_SRC 里的 CRED_ENV 对应）
@@ -10528,11 +10772,12 @@ client_update_py() {   # 客户端更新独立于账号准备和 cca 自身更�
 			verifier="$app/Contents/MacOS/cca"
 		fi
 	fi
-	CCA_CLIENT_CLAUDE_APP="$(claude_app_path)" CCA_CLIENT_CODEX_APP="$(codex_app_path)" CCA_CLIENT_VERIFIER="$verifier" py client-updates "$@"
+	CCA_CLIENT_CLAUDE_APP="$(claude_app_path)" CCA_CLIENT_CODEX_APP="$(codex_app_path)" CCA_CLIENT_VERIFIER="$verifier" \
+		CCA_CLI_CLAUDE="$CLAUDE_BIN" CCA_CLI_CODEX="$CODEX_BIN" py client-updates "$@"
 }
 
 cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOKEN [--json]
-	local action="${1:-status}" arg="" json="" out rc plan CU_VERSION CU_INSTALLED CU_TARGET CU_LABEL
+	local action="${1:-status}" arg="" json="" out rc plan CU_VERSION CU_INSTALLED CU_TARGET CU_LABEL CU_NOTE
 	[ $# -eq 0 ] || shift
 	case "$action" in
 		status) ;;
@@ -10555,14 +10800,14 @@ cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOK
 			plan=$(client_update_py plan "$arg") || return 1
 			eval "$plan"
 			consent client_update "$arg" "安装 ${CU_LABEL} 更新" "将 ${CU_LABEL} 从 ${CU_INSTALLED} 更新到 ${CU_VERSION} 吗？" \
-				"目标：${CU_TARGET}。请先退出所有 ${CU_LABEL} 实例；安装前会重新验证签名和当前版本，目标改变时停止。" n ||
+				"${CU_NOTE:-目标：${CU_TARGET}。请先退出所有 ${CU_LABEL} 实例；安装前会重新验证签名和当前版本，目标改变时停止。}" n ||
 				{ rc=$?; [ "$rc" = 2 ] && fail_warn confirmation_required "安装客户端更新需要确认"; return "$rc"; } ;;
 	esac
 	out=$(client_update_py "$action" "$arg"); rc=$?
 	if [ -n "$out" ]; then
 		if [ -n "$json" ]; then printf '%s\n' "$out"
 		else
-			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("桌面客户端自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭")); [print(c.get("label", c.get("id", "")) + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", []) if c.get("status") != "missing"]'
+			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("客户端自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭")); [print(c.get("label", c.get("id", "")) + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", []) if c.get("status") != "missing"]'
 		fi
 	fi
 	return "$rc"
@@ -10654,7 +10899,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/codex.json" ] && cx=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s}},' "$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")"
 	printf '"gui":{"app":%s,"app_version":%s,"staged_version":%s}}\n' "$(jstr "$GUI_APP")" "$(jopt "$av")" "$(jopt "$sv")"
@@ -11249,6 +11494,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca key <账号>             重新输入第三方 API 账号的 key
   cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
   cca rename <账号> <新别名>  改别名（写 - 去掉别名，只留邮箱）：登录、资料、端口都不变，启动器跟着改名
+  cca reorder <账号>…        按这个顺序排账号表（没写到的接在后面）：菜单、编号跟着变，端口、路由器都不动
   cca ls                     列出账号、登录状态和端口
   cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
@@ -11315,7 +11561,7 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca update --check [--json] | --rollback | auto | notify | off
                              只检查（装着测试版时也看更新的测试版；--json 给界面 App）/ 退回上一版 / 自动安装（默认）/
                              只提示 / 关闭
-  cca clients status [--json] 查看 Claude、ChatGPT 桌面客户端的更新状态（与 cca 自身更新分开）
+  cca clients status [--json] 查看桌面客户端和终端工具（Claude Code、Codex）的更新状态（与 cca 自身更新分开）
   cca clients check --force  从官方更新源检查、下载并验证，安装前必须确认
   cca clients mode auto|off  开启/关闭 GUI 的每日自动检查和准备
   cca clients install TOKEN 安装已验证的更新；凭据由 check 给出，须先退出对应的客户端
@@ -11387,6 +11633,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		reset) shift; cmd_reset "$@" ;;
 		edit) cmd_edit ;;
 		rename) shift; cmd_rename "$@" ;;
+		reorder) shift; cmd_reorder "$@" ;;
 		ls|list) cmd_list ;;
 		rm|remove) shift; cmd_rm "$@" ;;
 		web) shift; cmd_web "$@" ;;

@@ -105,8 +105,8 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   新加灰字时也用它；里面不要再套一层 `.secondary`（基色是具体颜色时会叠加变暗）。
 - 操作放在它作用的内容旁边：打开 App / 网页版 / 终端在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
   检测出口在“网络出口”标题上，添加账号在侧栏账号列表和总览各组的标题上；不用浮在内容上的操作条。
-- 账号的排序和置顶（`AccountArrangement`）：侧栏上下拖、总览里拖到别的卡片上，右键或账号页的「…」置顶；只影响 App 里的显示，存在 App 的设置里（不进 `~/.cca`，账号表、端口、路由器都不受影响），
-  账号按 `Account.stableID`（工具 + 账号目录名）认，改别名不丢。分组和总览一样：Claude、ChatGPT、第三方 API（两个工具共用一组，侧栏只显示当前工具的，拖动时只换这几个之间的先后）。置顶的只在置顶的里面挪，拖过界的停在边上。
+- 账号的排序和置顶（`AccountArrangement`）：侧栏上下拖、总览里拖到别的卡片上，右键或账号页的「…」置顶。顺序以账号表为准：调整之后 App 写回账号表（`cca reorder`，PROTOCOL 4.7），终端里的菜单和编号也是这个顺序，在终端里改了顺序 App 也跟着变；
+  写回之前界面先按拖出来的顺序显示，不等 cca。置顶记在 App 的设置里，账号按 `Account.stableID`（工具 + 账号目录名）认，改别名不丢。分组和总览一样：Claude、ChatGPT、第三方 API（两个工具共用一组，侧栏只显示当前工具的，拖动时只换这几个之间的先后）。置顶的只在置顶的里面挪，拖过界的停在边上。
 - 重新登录（`AppModel.relogin`，`cca [codex] login 账号`，在终端里）：右键或账号页的「…」随时可以；登录还好好的账号先弹窗（它会先退出现在的登录），登录失效的直接去终端。登录失效是查用量时才知道的（`error_code` 是 `auth`，`Diagnosis.loginExpired`）：Claude Code 不说原因（`nolimits`），用量那一行旁边放个「重新登录…」。
 - 账号页的用量（`UsageCard.swift`）：每个额度一大块（5 小时、本周，还有按模型的每周额度，例如 Claude 的 Fable：下面一行写它最多能用本周额度的多少、
   已用多少，份额由 cca 认出来给），`QuotaGrid` 排：放得下就一行，放不下两块一行，单出来的最后一块占满一行，同一行的一样高。旧的分模型额度、
@@ -187,6 +187,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   主窗口一出现就换回普通 App（`MainWindow.onAppear`）。`core/config.yaml` 变了是
   CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **提问会话**（PROTOCOL 4.6）：添加账号、换 key、删除账号这些流程在 App 里问完：`ProcessSession` 开一个 cca 进程，fd 3 是答案管道（`CCA_PROMPT=1`），`FlowModel` 把 `ask` 事件变成页面，`FlowSheet` 显示。cca 不支持（`hello.prompt`）时走下面的终端交接。
+- **客户端更新**（`ClientUpdatesPage`，PROTOCOL 8）：桌面客户端和终端里的 Claude Code、Codex 一页管，每行一张卡片，`kind=cli` 的图标是终端。版本、能不能更新、为什么都是 cca 给的。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；
   文件一开始就挪走再删掉，中途关窗口也不留下），用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux，
   在设置和账号页「终端」的下拉里选，没装的灰着不能选）。Termius、Wave 没有从外面运行命令的办法，是半自动：打开它、把命令放进剪贴板，用户粘贴运行。第三方终端 30 秒还没运行就收回脚本、问要不要改用系统自带的。放了一小时还没运行的会清掉。

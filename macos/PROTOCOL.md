@@ -26,12 +26,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
-  `rename` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
+  `rename`、`reorder` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
 - `app`、`web`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
 - `clients install TOKEN` 同样运行至完成，退出 App 不终止安装事务；`clients check` 和 `clients mode` 可取消。检查建议超时 900 秒，
-  安装的下载/事务超时由后端控制，`clients status` 15 秒，`clients mode` 30 秒。
+  安装的下载/事务超时由后端控制，`clients status` 30 秒（要现跑 `claude --version`、`codex --version`，刚更新完第一次启动较慢），`clients mode` 30 秒。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
   `codex.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
   `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
@@ -60,6 +60,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 }
 ```
 
+- `reorder`：有 `cca [codex] reorder`（4.7），App 调整账号顺序后写回账号表；没有这个字段（旧版 cca）时顺序只记在 App 里。
 - `prompt`：提问会话（4.6）的版本。没有这个字段（旧版 cca）或者版本不认识时，App 不开提问会话，流程走终端交接（6）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在。`bin` 是找到的 `claude` / `codex`，没装为 null。
@@ -290,7 +291,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 ### 4.1 事件文件
 
-运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
+运行会改东西的命令（`app`、`web`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
 查不了的原因看 `fail` 事件）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
@@ -355,6 +356,11 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
   括号、反斜杠或 @，同一个工具里不能重名），App 不自己判断。
 - 成功：退出码 0，stdout 只有一行新的键（App 选中它）。不行：退出码非 0，`fail` 事件的 `code` 是 `alias_invalid` 或 `account_missing`，
   `message` 是给人看的原因（App 显示在改名的弹层里，弹层不关）。
+
+### 4.7 账号表的顺序：`cca [codex] reorder 账号…`
+
+按这个顺序排账号表（没写到的账号接在后面，先后不变）。不交互、不输出，退出码 0 是成功。菜单、编号跟着变；端口池、路由器的摘要、启动器和头像的颜色
+按调整之前的顺序（config.json 的 `order_base`，记账号目录名），不用同步路由器、不用重新加载本机 Clash。App 拖动账号、置顶之后写回：官方账号在前，第三方 API 账号在后，各组里和界面上一样（置顶的在前）。
 
 ### 4.5 重置额度：`cca codex reset KEY --json`
 
@@ -438,6 +444,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `[codex] key` | 账号页「…」、右键菜单 | 提问会话 |
 | `[codex] rm` | 账号页「…」、右键菜单 | 提问会话 |
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
+| `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
 | `[codex] usage`、`check`、`app`、`web`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `[codex] edit` | 工具栏「＋」、账号表损坏时的提示 | 终端 |
@@ -512,9 +519,9 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
   App 看到它变了就重新读 `state`、接着起内核（看不见时也读）。
 - 演示数据（`CCA_GUI_FIXTURES`）不运行内核。
 
-## 8. 桌面客户端更新（Claude、ChatGPT）
+## 8. 客户端更新（桌面客户端和终端工具）
 
-管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端；和 cca 自身的 `update` 命令分开。
+管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端，以及终端里的 Claude Code、Codex 命令；和 cca 自身的 `update` 命令分开。
 
 - `cca clients status --json`：只读本机状态，启动和进入客户端更新页时调用。
 - `cca clients check [--force] --json`：检查并准备更新，不安装。后台不带 `--force`，每个客户端 6 小时最多查一次，节流由 cca 负责；用户点“立即检查”时加 `--force`。
@@ -538,9 +545,10 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 }
 ```
 
-- `clients` 里 `id=claude`、`id=codex` 各一行（`status=missing` 是没装，UI 不显示）；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
+- `clients` 里 `id=claude`、`id=codex`（`kind=desktop`）、`id=claude-cli`、`id=codex-cli`（`kind=cli`）各一行（`status=missing` 是没装，UI 不显示）；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
+- 终端工具（`kind=cli`）只查版本、不下载软件包：`status` 里的现在版本是现跑 `命令 --version`（空环境），最新版本从官方的公开地址查（官方安装器：Claude Code 是 `downloads.claude.ai` 的发布通道，跟用户设的 `autoUpdatesChannel`；Codex 是 GitHub 的 latest release；npm、Homebrew 装的查 npm、Homebrew）。有新版本时 `status=available`，`available_version` 是新版本。官方安装器装的 `can_install=true`，`install` 运行它们自己的 `update` 命令（空环境、真 HOME；claude 用一次性的配置目录，不碰账号）；npm、Homebrew 装的 `can_install=false`，`message` 写着在终端里运行什么。
   一个客户端出问题写在它自己那一行，不影响另一个；`check`、`install` 有问题时退出码 1。`install` 的 TOKEN 只对它那一个客户端有效。
-- `status`：`missing/current/checking/busy/unsupported/staged/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
+- `status`：`missing/current/checking/busy/unsupported/staged/available/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
   `busy` 显示“更新正在进行”，`unsupported` 显示“当前系统暂无适配包”。
 - `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示“目标版本或软件包校验值已变化，请重新检查后再安装”。
 - `next_check_epoch`：下次该后台检查的时间（模式为 off、一个客户端都没装时为 null）。GUI 运行期间睡到这个时间再运行 `clients check`，窗口隐藏时也继续，不隔一会儿起一个进程；已经到了、这次没查成时 15 分钟后再来；

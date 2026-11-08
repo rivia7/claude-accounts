@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 管理这台 Mac 上的 Claude、ChatGPT 桌面客户端（没装的不显示）。版本、安装资格和原因均来自 cca，不在界面重算校验规则。
+/// 管理这台 Mac 上的 Claude、ChatGPT 桌面客户端和终端里的 Claude Code、Codex（没装的不显示）。版本、安装资格和原因均来自 cca，不在界面重算校验规则。
 struct ClientUpdatesPage: View {
     @Environment(AppModel.self) private var model
 
@@ -38,10 +38,10 @@ struct ClientUpdatesPage: View {
                     ClientUpdateCard(entry: entry)
                 }
                 if model.clientUpdates != nil && installed.isEmpty {
-                    ContentUnavailableView("这台 Mac 上还没有桌面客户端", systemImage: "shippingbox",
-                                           description: Text("装好 Claude 或 ChatGPT 桌面客户端后，这里会显示它们的版本和更新。"))
+                    ContentUnavailableView("这台 Mac 上还没有客户端", systemImage: "shippingbox",
+                                           description: Text("装好 Claude、ChatGPT 桌面客户端或 Claude Code、Codex 命令后，这里会显示它们的版本和更新。"))
                 }
-                Text("安装前请保存工作并退出这个客户端的全部窗口。更新仅替换应用程序，账号资料保留。")
+                Text("安装桌面客户端前请保存工作并退出它的全部窗口。更新仅替换程序，账号资料保留。终端工具更新后，开着的会话继续用旧版本，下次启动时用新版本。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
@@ -60,7 +60,7 @@ struct ClientUpdatesPage: View {
                 Text("客户端更新").font(.system(size: 24, weight: .semibold))
                 if model.clientUpdatesBusy { ProgressView().controlSize(.small) }
             }
-            Text("检查这台 Mac 上的 Claude、ChatGPT 桌面客户端，并选择何时安装。")
+            Text("检查这台 Mac 上的桌面客户端和终端里的 Claude Code、Codex，并选择何时安装。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -78,7 +78,7 @@ private struct ClientUpdateCard: View {
     let entry: ClientUpdateEntry
 
     var body: some View {
-        Card(nonEmpty(entry.label) ?? entry.id, systemImage: "app.badge") {
+        Card(nonEmpty(entry.label) ?? entry.id, systemImage: entry.isCLI ? "terminal" : "app.badge") {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 24) {
                     version("当前版本", entry.installedVersion)
@@ -103,7 +103,7 @@ private struct ClientUpdateCard: View {
                 }
                 HStack(spacing: 12) {
                     Button { model.installClientUpdate(entry) } label: {
-                        Label(model.clientUpdateActivity == .install ? "正在安装…" : "安装更新…", systemImage: "arrow.down.to.line")
+                        Label(model.clientUpdateActivity == .install ? "正在安装…" : (entry.isCLI ? "更新…" : "安装更新…"), systemImage: "arrow.down.to.line")
                     }
                     .buttonStyle(.glassProminent)
                     .disabled(!entry.readyToInstall || model.clientUpdatesBusy)

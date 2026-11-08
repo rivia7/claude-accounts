@@ -133,6 +133,9 @@ final class AppModel {
     @ObservationIgnored private var exitPolling: Set<ToolID> = []
     /// 什么时候点的“重新登录”（UsagePolling.reloginWatch 之内盯着它）
     @ObservationIgnored private var reloginStarted: [AccountRef: Double] = [:]
+    /// 写回账号表的第几次（连着拖几次时只有最后一次收尾）；这次运行看过 App 里有没有没写回的顺序了没有
+    @ObservationIgnored private var orderGeneration = 0
+    @ObservationIgnored private var orderChecked = false
     /// 后台自动刷新用量时遇到的、需要用户同意的事（不弹框，显示一条提示，点了再手动刷新）。
     private(set) var usageNeedsConsent: [ToolID: [ConsentEvent]] = [:]
     /// 后台自动刷新用量失败（不弹框，显示一条可以重试的提示）。
@@ -489,6 +492,11 @@ final class AppModel {
             stateError = nil
             fixSelection()
             reconcileCore()
+            // 2.9.0-beta.17 的顺序只记在 App 里：第一次读到账号表时写回去
+            if !orderChecked {
+                orderChecked = true
+                if !arrangement.order.isEmpty { writeOrder() }
+            }
         } catch {
             stateError = String(describing: error)
         }
@@ -1531,6 +1539,7 @@ final class AppModel {
     func setOnTop(_ a: Account, _ on: Bool) {
         arrangement.setTop(a.stableID, on)
         saveArrangement()
+        writeOrder()
     }
 
     /// 这个组的全部账号，按用户排的顺序。第三方 API 账号的组是两个工具共用的。
@@ -1567,6 +1576,7 @@ final class AppModel {
         arrangement.move(group: d.key, full: arranged(d).map(\.stableID), shown: zone.map(\.stableID), from: from,
                          to: min(max(destination - start, 0), zone.count))
         saveArrangement()
+        writeOrder()
     }
 
     /// 总览：把账号拖到另一张卡片上，排到那张卡片的位置。只认同一组、同一区（置顶的 / 没置顶的）里的。
@@ -1583,6 +1593,31 @@ final class AppModel {
     private func saveArrangement() {
         guard !isFixtureMode, let d = try? JSONEncoder().encode(arrangement) else { return }
         defaults.set(String(decoding: d, as: UTF8.self), forKey: Prefs.arrangement)
+    }
+
+    /// 把现在的顺序写回账号表（终端里的菜单、编号也是这个顺序）。写之前界面先按拖出来的顺序显示，不等 cca；
+    /// 写好、读回 state 后账号表就是唯一的依据（在终端里改了顺序，App 也跟着变）。连着拖几次时只有最后一次收尾。
+    private func writeOrder() {
+        guard let client, phase == .ready, !isFixtureMode, hello?.reorder == 1 else { return }
+        orderGeneration += 1
+        let generation = orderGeneration
+        let plans = visibleTools.compactMap { t -> (ToolID, [String])? in
+            let keys = arrangedAccounts(t).map(\.key)
+            return keys == accounts(t).map(\.key) ? nil : (t, keys)
+        }
+        Task { [weak self] in
+            var problem: String?
+            for (t, keys) in plans {
+                let r = await client.execute(.reorder(t, keys: keys), prompter: nil)
+                if case .failed(let f) = r.status, f.reason != .cancelled { problem = f.message }
+            }
+            guard let self, generation == self.orderGeneration else { return }
+            if !plans.isEmpty { await self.loadState() }
+            guard generation == self.orderGeneration else { return }
+            self.arrangement.order = [:]
+            self.saveArrangement()
+            if let problem { self.showToast("没能把顺序写进账号表：\(problem)", .warning) }
+        }
     }
 
     private func defaultSelection(for t: ToolID) -> SidebarItem? {
