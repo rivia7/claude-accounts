@@ -5499,6 +5499,8 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             why['usage'] = 'tool_missing'
         elif login != 'logged_in':
             why['usage'] = 'not_logged_in'
+    if not env['bin']:
+        why['cli'] = 'tool_missing'   # 第三方 API 账号也是经 claude / codex 命令用的
     b = badges.get(k)
     return {'key': k, 'id': acct_id(k), 'alias': a, 'email': e, 'name': name_of(k), 'label': label_of(k),
             'kind': 'api' if api else 'oauth', 'login': login, 'login_email': '' if api else email_of(k),
@@ -5509,7 +5511,7 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             'api': {'host': api_host(v), 'model': v.get('model') or ''} if api else None,
             'badge': {'label': b[0], 'color': b[1]} if b else None,
             'app': {'running': pid is not None, 'pid': pid}, 'cli': cli,
-            'can': {x: x not in why for x in ('app', 'web', 'usage', 'check')}, 'can_why': why,
+            'can': {x: x not in why for x in ('app', 'web', 'usage', 'check', 'cli')}, 'can_why': why,
             'usage': usage, 'health': health_view(k, v, now)}
 
 
@@ -5743,13 +5745,47 @@ def cmd_update_check(current, mode='', fallback='', repo=''):
        UP_NOTES='\n'.join(lines[:3]))
 
 
-# 中央桌面包检查只处理 com.openai.codex；auto 仅自动检查和暂存，安装总要用户确认。
-# 不读取账号目录，也不修改原版客户端的更新器设置。
+# 中央桌面包检查：Claude（com.anthropic.claudefordesktop，Squirrel）和 ChatGPT（com.openai.codex，Sparkle）。
+# auto 仅自动检查和暂存，安装总要用户确认。不读取账号目录，也不修改原版客户端的更新器设置。
 CU_FEED = 'https://persistent.oaistatic.com/codex-app-prod/appcast.xml'
-CU_BUNDLE = 'com.openai.codex'
-CU_TEAM = '2DC432GLL2'
 CU_MAX_PACKAGE = 2 * 1024 * 1024 * 1024
 CU_NS = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
+# 一次 check 最多用多久：App 等 900 秒，超时会杀掉 cca
+CU_CHECK_SECONDS = 840
+CU_BUDGET = None
+
+
+def cu_url_codex(p, package):
+    if p.hostname != 'persistent.oaistatic.com' or p.query:
+        return False
+    if package:
+        return re.fullmatch(r'/codex-app-prod/ChatGPT-darwin-(arm64|x64)-\d+(?:\.\d+){1,5}\.zip', p.path)
+    return p.path == '/codex-app-prod/appcast.xml'
+
+
+def cu_url_claude(p, package):
+    if package:
+        return p.hostname == 'downloads.claude.ai' and not p.query and re.fullmatch(
+            r'/releases/darwin/(arm64|x64|universal)/\d+(?:\.\d+){1,5}/Claude-[0-9a-f]{7,64}\.zip', p.path)
+    return (p.hostname == 'api.anthropic.com'
+            and re.fullmatch(r'/api/desktop/darwin/(arm64|x64|universal)/squirrel/update', p.path)
+            and re.fullmatch(r'device_id=[0-9a-f-]{36}&version=[0-9.]+&os_version=[0-9.]+', p.query))
+
+
+class CuClient:
+    """一种桌面客户端：产品标识、签名团队、更新源的规则。全局的 CU 是正在处理的那一种（和账号的 T 一样）"""
+    def __init__(self, id, label, bundle, team, app, names, env, app_env, build_re, url_ok, updater):
+        self.id, self.label, self.bundle, self.team, self.app = id, label, bundle, team, app
+        self.names, self.env, self.app_env = names, env, app_env
+        self.build_re, self.url_ok, self.updater = build_re, url_ok, updater
+
+
+CU_CODEX = CuClient('codex', 'ChatGPT', 'com.openai.codex', '2DC432GLL2', 'ChatGPT.app', ('ChatGPT.app', 'Codex.app'),
+                    'CCA_CLIENT_CODEX_APP', 'CCA_CODEX_APP', r'\d{1,12}', cu_url_codex, r'Sparkle|Autoupdate|Updater\.app')
+CU_CLAUDE = CuClient('claude', 'Claude', 'com.anthropic.claudefordesktop', 'Q6L2SF6YDW', 'Claude.app', ('Claude.app',),
+                     'CCA_CLIENT_CLAUDE_APP', 'CCA_CLAUDE_APP', r'\d+(?:\.\d+){1,5}', cu_url_claude, r'ShipIt|Squirrel')
+CU_CLIENTS = (CU_CLAUDE, CU_CODEX)
+CU = CU_CODEX
 
 
 class ClientUpdateError(Exception):
@@ -5781,7 +5817,8 @@ def cu_private(path, directory=False, create=False):
     return path
 
 
-def cu_root(create=False):
+def cu_base(create=False):
+    """client-updates 目录（manager.lock 在这里）；各客户端的状态、软件包在它下面各一个目录"""
     root = os.path.join(CCA_HOME, 'client-updates')
     if create:
         if not os.path.exists(CCA_HOME):
@@ -5790,10 +5827,16 @@ def cu_root(create=False):
         s = os.lstat(CCA_HOME)
         if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o022:
             cu_error('blocked', 'cca 配置目录不能用于安全暂存更新')
-    for path in (root, os.path.join(root, 'codex')):
-        if create or os.path.lexists(path):
-            cu_private(path, True, create)
-    return os.path.join(root, 'codex')
+    if create or os.path.lexists(root):
+        cu_private(root, True, create)
+    return root
+
+
+def cu_root(create=False):
+    root = os.path.join(cu_base(create), CU.id)
+    if create or os.path.lexists(root):
+        cu_private(root, True, create)
+    return root
 
 
 class ClientUpdateLock:
@@ -5848,17 +5891,17 @@ def cu_mode():
 
 def cu_target():
     """空的显式路径代表 shell 没找到客户端，不绕过它另找一个程序。"""
-    if 'CCA_CLIENT_CODEX_APP' in os.environ:
-        return os.environ['CCA_CLIENT_CODEX_APP']
-    if os.environ.get('CCA_CODEX_APP'):
-        return os.environ['CCA_CODEX_APP']
+    if CU.env in os.environ:
+        return os.environ[CU.env]
+    if os.environ.get(CU.app_env):
+        return os.environ[CU.app_env]
     import plistlib
     for base in ('/Applications', os.path.join(HOME, 'Applications')):
-        for name in ('ChatGPT.app', 'Codex.app'):
+        for name in CU.names:
             path = os.path.join(base, name)
             try:
                 with open(os.path.join(path, 'Contents', 'Info.plist'), 'rb') as f:
-                    if plistlib.load(f).get('CFBundleIdentifier') == CU_BUNDLE:
+                    if plistlib.load(f).get('CFBundleIdentifier') == CU.bundle:
                         return path
             except (OSError, ValueError, TypeError, AttributeError):
                 pass
@@ -5892,7 +5935,7 @@ def cu_file_id(path):
 def cu_snapshot(path, full=True):
     import plistlib, stat
     if not path or not os.path.isdir(path):
-        cu_error('missing', '未找到当前 ChatGPT 桌面客户端')
+        cu_error('missing', '未找到当前 %s 桌面客户端' % CU.label)
     if not os.path.isabs(path) or os.path.islink(path):
         cu_error('blocked', '客户端路径必须是实际的绝对目录')
     path = os.path.realpath(path)
@@ -5903,10 +5946,10 @@ def cu_snapshot(path, full=True):
         info = plistlib.load(f)
     executable = info.get('CFBundleExecutable')
     version, build = info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')
-    if (info.get('CFBundleIdentifier') != CU_BUNDLE or not isinstance(executable, str)
+    if (info.get('CFBundleIdentifier') != CU.bundle or not isinstance(executable, str)
             or not executable or os.path.basename(executable) != executable or executable in ('.', '..')
             or not isinstance(version, str) or not re.fullmatch(r'\d+(?:\.\d+){1,5}', version)
-            or not isinstance(build, str) or not re.fullmatch(r'\d{1,12}', build)):
+            or not isinstance(build, str) or not re.fullmatch(CU.build_re, build)):
         cu_error('blocked', '客户端标识、版本或程序布局无法识别')
     names = ['Contents/Info.plist', 'Contents/MacOS/' + executable,
              'Contents/Resources/app.asar', 'Contents/_CodeSignature/CodeResources']
@@ -5952,19 +5995,27 @@ def cu_url(url, package=False):
         cu_error('blocked', '更新地址不符合官方来源规则')
     try:
         p = urlsplit(url)
-        valid = (p.scheme == 'https' and p.hostname == 'persistent.oaistatic.com'
-                 and p.port in (None, 443) and not p.username and not p.password and not p.fragment
-                 and not p.query)
+        valid = (p.scheme == 'https' and p.port in (None, 443) and not p.username and not p.password
+                 and not p.fragment and CU.url_ok(p, package))
     except ValueError:
         valid = False
-    pattern = r'/codex-app-prod/ChatGPT-darwin-(arm64|x64)-\d+(?:\.\d+){1,5}\.zip'
-    if not valid or not (re.fullmatch(pattern, p.path) if package else p.path == '/codex-app-prod/appcast.xml'):
+    if not valid:
         cu_error('blocked', '更新地址不符合官方来源规则')
     return url
 
 
-def cu_download(url, destination, folder, package=False, expected_size=None):
-    """curl 不自动跳转；每一跳先验证，三次重试不复用半包或持久 Cookie。"""
+def cu_time(seconds):
+    """一次下载最多用多久：不超过这次 check 剩下的时间"""
+    if CU_BUDGET is None:
+        return seconds
+    left = int(CU_BUDGET - time.time())
+    if left < 20:
+        cu_error('error', '这次检查的时间用完了，稍后会重新检查')
+    return min(seconds, left)
+
+
+def cu_download(url, destination, folder, package=False, expected_size=None, empty=()):
+    """curl 不自动跳转；每一跳先验证，三次重试不复用半包或持久 Cookie。empty 里的状态码（没有更新）原样返回"""
     from urllib.parse import urljoin
     header = os.path.join(folder, 'response.headers')
     initial = cu_url(url, package)
@@ -5972,14 +6023,15 @@ def cu_download(url, destination, folder, package=False, expected_size=None):
     for attempt in range(3):
         current = initial
         for hop in range(6):
+            seconds = cu_time(300 if package else 30)
             args = ['/usr/bin/curl', '-q', '--silent', '--show-error', '--proto', '=https',
                     '--proto-redir', '=https', '--proxy', '', '--noproxy', '*',
                     '--no-netrc', '--no-netrc-optional', '--netrc-file', '/dev/null',
-                    '--connect-timeout', '15', '--max-time', '240' if package else '30',
+                    '--connect-timeout', '15', '--max-time', str(seconds),
                     '--max-filesize', str(limit), '--max-redirs', '0',
                     '--dump-header', header, '--output', destination, '--write-out', '%{http_code}', current]
             try:
-                result = cu_run(args, folder, 250 if package else 40)
+                result = cu_run(args, folder, seconds + 10)
             except ClientUpdateError as e:
                 if e.status != 'error':
                     raise
@@ -5987,6 +6039,8 @@ def cu_download(url, destination, folder, package=False, expected_size=None):
             if result.returncode:
                 break
             code = result.stdout.decode('ascii', 'replace').strip()
+            if code in empty:
+                return code
             if code in ('301', '302', '303', '307', '308'):
                 with open(header, encoding='iso-8859-1') as f:
                     locations = [line.split(':', 1)[1].strip() for line in f if line.lower().startswith('location:')]
@@ -6024,6 +6078,11 @@ def cu_version(value):
     if not isinstance(value, str) or not re.fullmatch(r'\d+(?:\.\d+){0,5}', value):
         cu_error('blocked', '官方版本元数据无法识别')
     return tuple(int(x) for x in value.split('.')) + (0,) * (6 - len(value.split('.')))
+
+
+def cu_build(value):
+    """构建号比大小：ChatGPT 是整数，Claude 和版本号一样是点分的"""
+    return cu_version(value) if '.' in value else (int(value),)
 
 
 def cu_parse_feed(data, arch, system):
@@ -6072,6 +6131,54 @@ def cu_parse_feed(data, arch, system):
     return max(candidates, key=lambda x: int(x['build']))
 
 
+def cu_parse_squirrel(data, arch):
+    """Claude 的更新源（Squirrel 的 json 格式）：currentRelease 那一版的完整 zip，增量包不用"""
+    if len(data) > 2 * 1024 * 1024:
+        cu_error('blocked', '官方版本列表格式不安全')
+    try:
+        doc = json.loads(data)
+    except (ValueError, UnicodeError):
+        cu_error('error', '无法读取官方版本列表')
+    version = doc.get('currentRelease') if isinstance(doc, dict) else None
+    releases = doc.get('releases') if isinstance(doc, dict) else None
+    if not isinstance(version, str) or not re.fullmatch(r'\d+(?:\.\d+){1,5}', version) or not isinstance(releases, list):
+        cu_error('blocked', '官方版本列表格式无法识别')
+    rows = [r.get('updateTo') for r in releases if isinstance(r, dict) and r.get('version') == version]
+    if len(rows) != 1 or not isinstance(rows[0], dict) or rows[0].get('version') != version:
+        cu_error('blocked', '官方版本列表格式无法识别')
+    url, digest, size = rows[0].get('url', ''), rows[0].get('sha256'), rows[0].get('size')
+    cu_url(url, True)
+    if '/releases/darwin/%s/%s/' % (arch, version) not in url:
+        cu_error('blocked', '官方包地址和版本元数据不一致')
+    if (not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)
+            or type(size) is not int or not 0 < size <= CU_MAX_PACKAGE):
+        cu_error('blocked', '官方包缺少有效长度或校验值')
+    return {'version': version, 'build': version, 'minimum_system': '', 'arch': arch, 'url': url,
+            'length': size, 'sha256': digest}
+
+
+def cu_metadata(target, folder):
+    """官方最新版本的元数据；None 表示更新源说没有新版本"""
+    arch, system = cu_host()
+    feed = os.path.join(folder, 'feed')
+    if CU is CU_CODEX:
+        cu_download(CU_FEED, feed, folder)
+        with open(feed, 'rb') as f:
+            return cu_parse_feed(f.read(), arch, system)
+    # device_id 是必填的：每次现生成一个，不用也不存任何账号实例的标识（Claude 的 ant-did 在各账号的资料目录里）
+    import uuid
+    for a in (arch, 'universal'):
+        query = 'device_id=%s&version=%s&os_version=%s' % (uuid.uuid4(), target['version'], system)
+        code = cu_download('https://api.anthropic.com/api/desktop/darwin/%s/squirrel/update?%s' % (a, query),
+                           feed, folder, empty=('204', '404'))
+        if code == '204':
+            return None
+        if code is None:
+            with open(feed, 'rb') as f:
+                return cu_parse_squirrel(f.read(), a)
+    cu_error('unsupported', '官方列表没有适合此 Mac 的完整安装包')
+
+
 def cu_verifier():
     verifier = os.environ.get('CCA_CLIENT_VERIFIER', '')
     if not verifier or not os.path.isabs(verifier) or not os.path.isfile(verifier):
@@ -6080,6 +6187,14 @@ def cu_verifier():
 
 
 def cu_verify_archive(path, metadata, folder):
+    """ChatGPT 的包验 Ed25519（固定公钥在 cca.app 里）；Claude 的更新源带 SHA-256，解压后还要过代码签名和 Gatekeeper"""
+    if metadata.get('sha256'):
+        if os.path.getsize(path) != metadata['length']:
+            cu_error('blocked', '暂存安装包大小已变化，请重新检查')
+        digest = cu_hash(path)
+        if digest != metadata['sha256']:
+            cu_error('blocked', '官方安装包校验值不一致，未解压或安装')
+        return digest
     verifier = cu_verifier()
     if os.path.getsize(path) != metadata['length']:
         cu_error('blocked', '暂存安装包大小已变化，请重新检查')
@@ -6109,8 +6224,8 @@ def cu_bundle(path, folder, metadata=None):
             cu_error('blocked', '客户端代码签名或系统安全评估未通过')
     identity = cu_run(['/usr/bin/codesign', '--display', '--verbose=4', path], folder)
     text = (identity.stdout + identity.stderr).decode('utf-8', 'replace')
-    if (identity.returncode or not re.search(r'^TeamIdentifier=' + CU_TEAM + r'$', text, re.M)
-            or not re.search(r'^Identifier=' + re.escape(CU_BUNDLE) + r'$', text, re.M)):
+    if (identity.returncode or not re.search(r'^TeamIdentifier=' + CU.team + r'$', text, re.M)
+            or not re.search(r'^Identifier=' + re.escape(CU.bundle) + r'$', text, re.M)):
         cu_error('blocked', '客户端签名团队或产品标识与官方程序不符')
     with open(os.path.join(path, 'Contents', 'Info.plist'), 'rb') as f:
         info = plistlib.load(f)
@@ -6122,8 +6237,9 @@ def cu_bundle(path, folder, metadata=None):
     if result.returncode or native not in arches or cu_version(info.get('LSMinimumSystemVersion', '')) > cu_version(system):
         cu_error('unsupported', '客户端不支持当前 macOS 版本或处理器')
     if metadata and (snapshot['version'] != metadata['version'] or snapshot['build'] != metadata['build']
-                     or arch != metadata['arch']
-                     or cu_version(info.get('LSMinimumSystemVersion', '')) != cu_version(metadata['minimum_system'])):
+                     or metadata['arch'] not in (arch, 'universal')
+                     or metadata['minimum_system'] and cu_version(info.get('LSMinimumSystemVersion', ''))
+                     != cu_version(metadata['minimum_system'])):
         cu_error('blocked', '安装包内的产品版本或系统要求与官方列表不符')
     if cu_snapshot(path) != snapshot:
         cu_error('needs_recheck', '客户端在签名检查期间发生变化，请重新检查')
@@ -6135,7 +6251,7 @@ def cu_content(snapshot):
 
 
 def cu_extract(archive, folder):
-    """只接受实证的 ChatGPT.app 单根 ZIP；先验证整张目录表，再写普通文件，最后建内部链接。"""
+    """只接受实证的单根 ZIP（根目录是这个客户端的 .app）；先验证整张目录表，再写普通文件，最后建内部链接。"""
     import posixpath, shutil, stat, unicodedata, zipfile
     try:
         with zipfile.ZipFile(archive) as z:
@@ -6149,7 +6265,7 @@ def cu_extract(archive, folder):
                 mode = item.external_attr >> 16
                 kind = stat.S_IFMT(mode)
                 normalized = unicodedata.normalize('NFD', name).casefold()
-                if (not name or parts[0] != 'ChatGPT.app' or any(x in ('', '.', '..') for x in parts)
+                if (not name or parts[0] != CU.app or any(x in ('', '.', '..') for x in parts)
                         or re.search(r'[\x00-\x1f\x7f\\:]', name) or normalized in seen
                         or item.flag_bits & 1 or kind not in (0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK)
                         or item.file_size > CU_MAX_PACKAGE):
@@ -6162,7 +6278,7 @@ def cu_extract(archive, folder):
                     target = z.read(item).decode('utf-8')
                     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
                     if (not target or target.startswith('/') or re.search(r'[\x00-\x1f\x7f\\:]', target)
-                            or not resolved.startswith('ChatGPT.app/')):
+                            or not resolved.startswith(CU.app + '/')):
                         cu_error('blocked', '安装包包含指向程序外的链接')
                     links[normalized] = target
             for item, name, mode in paths:
@@ -6186,7 +6302,7 @@ def cu_extract(archive, folder):
                     target = os.path.join(folder, *name.split('/'))
                     os.makedirs(os.path.dirname(target), mode=0o755, exist_ok=True)
                     os.symlink(links[unicodedata.normalize('NFD', name).casefold()], target)
-            app = os.path.join(folder, 'ChatGPT.app')
+            app = os.path.join(folder, CU.app)
             from pathlib import Path
             for _, name, mode in paths:
                 if stat.S_ISLNK(mode):
@@ -6212,7 +6328,7 @@ def cu_validate_plan(state, token):
     target = cu_snapshot(cu_target())
     if target != stage.get('target'):
         cu_error('needs_recheck', '客户端已被其他更新器修改，请重新检查')
-    if int(stage['metadata']['build']) <= int(target['build']):
+    if cu_build(stage['metadata']['build']) <= cu_build(target['build']):
         cu_error('needs_recheck', '不会覆盖相同或更新的客户端版本')
     archive = os.path.join(cu_root(), 'package.zip')
     cu_private(archive)
@@ -6227,7 +6343,7 @@ def cu_light(snapshot):
 
 def cu_view(state=None, problem=None):
     state = state if isinstance(state, dict) else {}
-    row = {'id': 'codex', 'label': 'ChatGPT', 'path': cu_target() or None,
+    row = {'id': CU.id, 'label': CU.label, 'path': cu_target() or None,
            'installed_version': None, 'available_version': None, 'staged_version': None,
            'package_version': None, 'package_build': None, 'install_token': None, 'can_install': False,
            'status': state.get('status', 'unchecked'), 'message': state.get('message', '尚未检查官方更新'),
@@ -6248,17 +6364,32 @@ def cu_view(state=None, problem=None):
                     or cu_file_id(archive) != stage.get('archive_identity')):
                 row.update(status='needs_recheck', message='客户端版本或程序内容已变化，请重新检查更新')
             elif (state.get('status') in ('staged', 'running')
-                  and int(stage['metadata']['build']) > int(snapshot['build'])):
+                  and cu_build(stage['metadata']['build']) > cu_build(snapshot['build'])):
                 row.update(install_token=stage['token'], can_install=True)
     except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
         row.update(status=getattr(e, 'status', 'blocked'), message=getattr(e, 'message', '无法安全读取客户端状态'))
-    if os.path.lexists(os.path.join(CCA_HOME, 'client-updates', 'codex', 'transaction.json')):
+    if os.path.lexists(os.path.join(CCA_HOME, 'client-updates', CU.id, 'transaction.json')):
         row.update(status='needs_recheck', message='上次安装尚未完成，请运行检查以安全恢复',
                    install_token=None, can_install=False)
     if problem:
         row.update(status=problem.status, message=problem.message, install_token=None, can_install=False)
+    return row
+
+
+def cu_doc(problems=None):
+    """所有客户端的状态文档；problems 是 {客户端 id: 这次操作遇到的问题}"""
+    global CU
+    rows = []
+    for client in CU_CLIENTS:
+        CU = client
+        problem = (problems or {}).get(client.id)
+        try:
+            state = cu_read_state()
+        except ClientUpdateError as e:
+            state, problem = {}, problem or e
+        rows.append(cu_view(state, problem))
     return {'version': 1, 'kind': 'client_updates', 'generated_epoch': time.time(),
-            'mode': cu_mode(), 'clients': [row]}
+            'mode': cu_mode(), 'clients': rows}
 
 
 def cu_check(state, force=False):
@@ -6269,21 +6400,24 @@ def cu_check(state, force=False):
     target = cu_snapshot(cu_target())
     state['checked_epoch'] = time.time()
     try:
+        cu_save_state(state)   # 先记下检查时间：中途被杀掉时，下一轮（60 秒后）不会从头再下载一遍
         with tempfile.TemporaryDirectory(prefix='check-', dir=root) as folder:
             if cu_bundle(target['path'], folder) != target:
                 cu_error('needs_recheck', '客户端正在被其他更新器修改，请重新检查')
-            feed = os.path.join(folder, 'appcast.xml')
-            cu_download(CU_FEED, feed, folder)
-            arch, system = cu_host()
-            with open(feed, 'rb') as f:
-                metadata = cu_parse_feed(f.read(), arch, system)
+            metadata = cu_metadata(target, folder)
+            if metadata is None:
+                state.pop('stage', None)
+                state.pop('metadata', None)
+                state.update(status='current', message='当前客户端已是最新版本')
+                return state
             state['metadata'] = metadata
-            if int(metadata['build']) <= int(target['build']):
+            if cu_build(metadata['build']) <= cu_build(target['build']):
                 state.pop('stage', None)
                 state.update(status='current', message='当前客户端已是相同或更新版本')
                 return state
             stage = state.get('stage')
-            cu_verifier()
+            if CU is CU_CODEX:
+                cu_verifier()
             if isinstance(stage, dict) and stage.get('metadata') == metadata:
                 archive = os.path.join(root, 'package.zip')
                 cu_private(archive)
@@ -6337,9 +6471,9 @@ def cu_no_processes(*paths):
         target_match = any(re.search(r'(?:^|[\s=\x22\x27])' + re.escape(path) + r'(?:[/\s\x22\x27]|$)', command)
                            for path in paths)
         executable = commands.get(match.group(1), '')
-        sparkle = CU_BUNDLE in executable and re.search(r'Sparkle|Autoupdate|Updater\.app', executable)
-        if target_match or sparkle:
-            cu_error('running', '请先退出所有 ChatGPT 窗口及后台进程，再确认安装')
+        updater = CU.bundle in executable and re.search(CU.updater, executable)
+        if target_match or updater:
+            cu_error('running', '请先退出所有 %s 窗口及后台进程，再确认安装' % CU.label)
 
 
 def cu_rename_exclusive(source, destination):
@@ -6412,7 +6546,7 @@ def cu_recover(state):
             or not work or os.path.dirname(work) != os.path.dirname(target)
             or not re.fullmatch(r'\.cca-client-install-[a-z0-9_]+', os.path.basename(work))
             or data.get('backup') != os.path.join(work, 'previous.app')
-            or data.get('incoming') != os.path.join(work, 'ChatGPT.app')):
+            or data.get('incoming') != os.path.join(work, CU.app)):
         cu_error('blocked', '安装恢复路径无法核验，已保留现场')
     cu_private(work, True)
     backup, incoming = data['backup'], data['incoming']
@@ -6432,7 +6566,7 @@ def cu_recover(state):
             cleanup_work = True
         else:
             current = cu_bundle(target, root)
-            if int(current['build']) < int(data['target']['build']):
+            if cu_build(current['build']) < cu_build(data['target']['build']):
                 cu_error('needs_recheck', '目标版本异常，已保留安装现场且未覆盖程序')
             state.pop('stage', None)
             state.update(status='needs_recheck', message='已保留原生更新器安装的客户端，请重新检查')
@@ -6442,7 +6576,7 @@ def cu_recover(state):
                 cleanup_work = True
     elif os.path.lexists(backup):
         original = cu_bundle(backup, root)
-        if not cu_moved_matches(original, data['target']) and int(original['build']) < int(data['target']['build']):
+        if not cu_moved_matches(original, data['target']) and cu_build(original['build']) < cu_build(data['target']['build']):
             cu_error('needs_recheck', '备份版本异常，已保留现场且未自动恢复')
         cu_no_processes(target, backup, incoming)
         cu_rename_exclusive(backup, target)
@@ -6526,10 +6660,60 @@ def cu_install(state, token):
                 shutil.rmtree(work)
 
 
+def cu_token_client(token):
+    """安装凭据是哪个客户端的；都对不上时停在第一个，由 cu_validate_plan 说凭据失效"""
+    global CU
+    import hmac
+    if re.fullmatch(r'[0-9a-f]{64}', token or ''):
+        for client in CU_CLIENTS:
+            CU = client
+            try:
+                stage = cu_read_state().get('stage')
+            except ClientUpdateError:
+                continue
+            if isinstance(stage, dict) and hmac.compare_digest(token, str(stage.get('token', ''))):
+                return
+    CU = CU_CLIENTS[0]
+
+
+def cu_problem(e):
+    return e if isinstance(e, ClientUpdateError) else ClientUpdateError('blocked', '无法安全处理客户端更新状态')
+
+
+def cu_drop_package():
+    """没有待安装的更新时不留着安装包（一个几百 MB）；删不掉也不影响这次操作"""
+    try:
+        path = os.path.join(cu_root(), 'package.zip')
+        if os.path.lexists(path):
+            cu_private(path)
+            os.unlink(path)
+    except (ClientUpdateError, OSError):
+        pass
+
+
+def cu_check_all(force, problems):
+    """一个一个检查（只在 manager 锁内调用）：一个客户端出问题不影响另一个；没装的不算问题"""
+    global CU, CU_BUDGET
+    CU_BUDGET = time.time() + CU_CHECK_SECONDS
+    for client in CU_CLIENTS:
+        CU = client
+        if not cu_target() and not os.path.lexists(os.path.join(cu_base(), client.id, 'transaction.json')):
+            continue
+        try:
+            root = cu_root(True)
+            state = cu_read_state()
+            with ClientUpdateLock(os.path.join(root, 'install.lock')):
+                state = cu_recover(state)
+            if not cu_check(state, force).get('stage'):
+                cu_drop_package()
+        except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
+            problems[client.id] = cu_problem(e)
+
+
 def cmd_client_updates(action='status', arg=''):
     if action not in ('status', 'check', 'mode', 'plan', 'install'):
         die('未知客户端更新操作')
-    state = {}
+    problems = {}
     try:
         if action == 'mode':
             if arg not in ('auto', 'off'):
@@ -6538,42 +6722,31 @@ def cmd_client_updates(action='status', arg=''):
                 c = load_json(CFG, {})
                 c['client_updates'] = arg
                 save_json(CFG, c)
-            try:
-                state = cu_read_state()
-                print(json.dumps(cu_view(state), ensure_ascii=False))
-            except ClientUpdateError as e:
-                print(json.dumps(cu_view({}, e), ensure_ascii=False))
-            return
-        state = cu_read_state()
-        if action == 'plan':
-            stage = cu_validate_plan(state, arg)
+        elif action == 'plan':
+            cu_token_client(arg)
+            stage = cu_validate_plan(cu_read_state(), arg)
             sh(CU_VERSION=stage['metadata']['version'], CU_INSTALLED=stage['target']['version'],
-               CU_TARGET=stage['target']['path'])
+               CU_TARGET=stage['target']['path'], CU_LABEL=CU.label)
             return
-        if action == 'status':
-            print(json.dumps(cu_view(state), ensure_ascii=False))
-            return
-        if action in ('check', 'install'):
-            root = cu_root(True)
-            with ClientUpdateLock(os.path.join(os.path.dirname(root), 'manager.lock')):
-                state = cu_read_state()
+        elif action in ('check', 'install'):
+            if action == 'check' and arg not in ('', 'force'):
+                cu_error('blocked', '检查更新的参数无法识别')
+            with ClientUpdateLock(os.path.join(cu_base(True), 'manager.lock')):
                 if action == 'check':
-                    if arg not in ('', 'force'):
-                        cu_error('blocked', '检查更新的参数无法识别')
-                    with ClientUpdateLock(os.path.join(root, 'install.lock')):
-                        state = cu_recover(state)
-                    state = cu_check(state, arg == 'force')
+                    cu_check_all(arg == 'force', problems)
                 else:
-                    state = cu_install(state, arg)
-        print(json.dumps(cu_view(state), ensure_ascii=False))
+                    cu_token_client(arg)
+                    cu_root(True)
+                    cu_install(cu_read_state(), arg)
+                    cu_drop_package()
     except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
-        problem = e if isinstance(e, ClientUpdateError) else ClientUpdateError('blocked', '无法安全处理客户端更新状态')
         if action == 'plan':
-            die(problem.message)
-        print(json.dumps(cu_view(state, problem), ensure_ascii=False))
-        if action != 'status':
-            sys.stderr.write(problem.message + '\n')
-            sys.exit(1)
+            die(cu_problem(e).message)
+        problems[CU.id] = cu_problem(e)
+    print(json.dumps(cu_doc(problems), ensure_ascii=False))
+    if problems and action != 'status':
+        sys.stderr.write('\n'.join(p.message for p in problems.values()) + '\n')
+        sys.exit(1)
 
 
 CMDS = {
@@ -10123,11 +10296,11 @@ client_update_py() {   # 客户端更新独立于账号准备和 cca 自身更�
 			verifier="$app/Contents/MacOS/cca"
 		fi
 	fi
-	CCA_CLIENT_CODEX_APP="$(codex_app_path)" CCA_CLIENT_VERIFIER="$verifier" py client-updates "$@"
+	CCA_CLIENT_CLAUDE_APP="$(claude_app_path)" CCA_CLIENT_CODEX_APP="$(codex_app_path)" CCA_CLIENT_VERIFIER="$verifier" py client-updates "$@"
 }
 
 cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOKEN [--json]
-	local action="${1:-status}" arg="" json="" out rc plan CU_VERSION CU_INSTALLED CU_TARGET
+	local action="${1:-status}" arg="" json="" out rc plan CU_VERSION CU_INSTALLED CU_TARGET CU_LABEL
 	[ $# -eq 0 ] || shift
 	case "$action" in
 		status) ;;
@@ -10149,15 +10322,15 @@ cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOK
 			[[ "$arg" =~ ^[0-9a-f]{64}$ ]] || die "安装凭据无效，请重新检查客户端更新"
 			plan=$(client_update_py plan "$arg") || return 1
 			eval "$plan"
-			consent client_update "$arg" "安装 ChatGPT 更新" "将 ChatGPT 从 ${CU_INSTALLED} 更新到 ${CU_VERSION} 吗？" \
-				"目标：${CU_TARGET}。请先退出所有 ChatGPT 实例；安装前会重新验证签名和当前版本，目标改变时停止。" n ||
+			consent client_update "$arg" "安装 ${CU_LABEL} 更新" "将 ${CU_LABEL} 从 ${CU_INSTALLED} 更新到 ${CU_VERSION} 吗？" \
+				"目标：${CU_TARGET}。请先退出所有 ${CU_LABEL} 实例；安装前会重新验证签名和当前版本，目标改变时停止。" n ||
 				{ rc=$?; [ "$rc" = 2 ] && fail_warn confirmation_required "安装客户端更新需要确认"; return "$rc"; } ;;
 	esac
 	out=$(client_update_py "$action" "$arg"); rc=$?
 	if [ -n "$out" ]; then
 		if [ -n "$json" ]; then printf '%s\n' "$out"
 		else
-			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("ChatGPT 自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭")); [print(c.get("label", "ChatGPT") + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", [])]'
+			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("桌面客户端自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭")); [print(c.get("label", c.get("id", "")) + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", []) if c.get("status") != "missing"]'
 		fi
 	fi
 	return "$rc"
@@ -10909,10 +11082,10 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca update --check [--json] | --rollback | auto | notify | off
                              只检查（装着测试版时也看更新的测试版；--json 给界面 App）/ 退回上一版 / 自动安装（默认）/
                              只提示 / 关闭
-  cca clients status [--json] 查看 ChatGPT 桌面客户端更新状态（与 cca 自身更新分开）
+  cca clients status [--json] 查看 Claude、ChatGPT 桌面客户端的更新状态（与 cca 自身更新分开）
   cca clients check --force  从官方更新源检查、下载并验证，安装前必须确认
   cca clients mode auto|off  开启/关闭 GUI 的每日自动检查和准备
-  cca clients install TOKEN 安装已验证的更新；凭据由 check 给出，须先退出 ChatGPT
+  cca clients install TOKEN 安装已验证的更新；凭据由 check 给出，须先退出对应的客户端
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、

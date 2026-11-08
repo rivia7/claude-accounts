@@ -528,8 +528,10 @@ struct Can: Decodable, Sendable, Equatable {
     var web: Bool = false
     var usage: Bool = false
     var check: Bool = true
+    /// 能不能在终端里打开（要有 claude / codex 命令）
+    var cli: Bool = false
 
-    enum CodingKeys: String, CodingKey { case app, web, usage, check }
+    enum CodingKeys: String, CodingKey { case app, web, usage, check, cli }
 
     init() {}
 
@@ -539,6 +541,7 @@ struct Can: Decodable, Sendable, Equatable {
         web = c.bool(.web) ?? false
         usage = c.bool(.usage) ?? false
         check = c.bool(.check) ?? true
+        cli = c.bool(.cli) ?? false
     }
 }
 

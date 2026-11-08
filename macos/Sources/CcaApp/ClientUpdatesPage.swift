@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 当前管理 ChatGPT 桌面客户端。版本、安装资格和原因均来自 cca，不在界面重算校验规则。
+/// 管理这台 Mac 上的 Claude、ChatGPT 桌面客户端（没装的不显示）。版本、安装资格和原因均来自 cca，不在界面重算校验规则。
 struct ClientUpdatesPage: View {
     @Environment(AppModel.self) private var model
 
@@ -34,19 +34,24 @@ struct ClientUpdatesPage: View {
                             .buttonStyle(.bordered).disabled(model.clientUpdatesBusy)
                     }
                 }
-                ForEach(Array((model.clientUpdates?.clients ?? []).enumerated()), id: \.offset) { _, entry in
+                ForEach(Array(installed.enumerated()), id: \.offset) { _, entry in
                     ClientUpdateCard(entry: entry)
                 }
-                if model.clientUpdates?.clients.isEmpty == true {
-                    ContentUnavailableView("暂无客户端更新状态", systemImage: "shippingbox",
-                                           description: Text("点“立即检查”获取当前客户端和可用版本。"))
+                if model.clientUpdates != nil && installed.isEmpty {
+                    ContentUnavailableView("这台 Mac 上还没有桌面客户端", systemImage: "shippingbox",
+                                           description: Text("装好 Claude 或 ChatGPT 桌面客户端后，这里会显示它们的版本和更新。"))
                 }
-                Text("安装前请保存工作并退出全部 ChatGPT 实例。更新仅替换应用程序，账号资料保留。")
+                Text("安装前请保存工作并退出这个客户端的全部窗口。更新仅替换应用程序，账号资料保留。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
         }
         .navigationTitle("客户端更新")
+    }
+
+    /// 这台 Mac 上装了的客户端。
+    private var installed: [ClientUpdateEntry] {
+        (model.clientUpdates?.clients ?? []).filter { $0.status != "missing" }
     }
 
     private var heading: some View {
@@ -55,7 +60,7 @@ struct ClientUpdatesPage: View {
                 Text("客户端更新").font(.system(size: 24, weight: .semibold))
                 if model.clientUpdatesBusy { ProgressView().controlSize(.small) }
             }
-            Text("检查这台 Mac 上的 ChatGPT 桌面客户端，并选择何时安装。")
+            Text("检查这台 Mac 上的 Claude、ChatGPT 桌面客户端，并选择何时安装。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

@@ -17,7 +17,7 @@ struct Sidebar: View {
                     Image(systemName: "arrow.down.app").font(.title3).frame(width: 30, height: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("客户端更新").font(.body.weight(.medium))
-                        Text("ChatGPT 桌面客户端").font(.caption).foregroundStyle(.secondary)
+                        Text("Claude、ChatGPT 桌面客户端").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .sidebarRowPadding()
@@ -67,13 +67,15 @@ struct AccountMenu: View {
         let a = account
         let busy = model.activity(a.ref) != nil
         Button("改别名…") { model.beginRename(a.ref) }
+        Divider()
         if !a.isAPI {
-            Divider()
             Button("打开 \(model.appLabel(a.tool))") { model.openApp(a.ref) }
                 .disabled(!a.can.app || busy)
             Button("打开网页版") { model.openWeb(a.ref) }
                 .disabled(!a.can.web || busy)
         }
+        Button("在终端里打开") { model.openSession(a.ref) }
+            .disabled(!a.can.cli || busy)
         Button("检测出口") { model.checkExit(a.ref) }
             .disabled(!a.can.check || busy)
     }

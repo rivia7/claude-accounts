@@ -22,7 +22,7 @@ enum CcaCommand: Sendable, Hashable {
     case update(String)
     /// 检查更新（`cca update --check --json`，PROTOCOL 5.1）：只读、要联网，stdout 是 kind=update 的文档；查不了时看 fail 事件。
     case updateCheck
-    /// ChatGPT 客户端更新：检查只准备软件包，安装需经过绑定 token 的 consent。
+    /// 桌面客户端（Claude、ChatGPT）更新：检查只准备软件包，安装需经过绑定 token 的 consent。
     case clientCheck(force: Bool)
     case clientMode(automatic: Bool)
     case clientInstall(token: String)

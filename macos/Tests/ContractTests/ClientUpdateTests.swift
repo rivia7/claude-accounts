@@ -109,7 +109,7 @@ func clientUpdateProtocolTests() async {
 
     let fixtureModel = makeModel(fixtureTransport())
     await fixtureModel.start()
-    check("演示模式只读夹具、不启用自动检查", fixtureModel.clientUpdates?.clients.first?.id == "codex"
+    check("演示模式只读夹具、不启用自动检查", fixtureModel.clientUpdates?.clients.map(\.id) == ["claude", "codex"]
           && !fixtureModel.scheduler.clientChecksRunning)
     fixtureModel.installClientUpdate(fixtureModel.clientUpdates!.clients[0])
     check("演示模式不会安装", fixtureModel.clientUpdateActivity == nil && fixtureModel.toast?.text.contains("不会安装") == true)

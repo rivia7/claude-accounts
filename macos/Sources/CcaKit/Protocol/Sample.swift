@@ -24,7 +24,7 @@ enum SampleDocs {
      "tools": [{"id": "claude", "cli_prefix": [], "enabled": true, "chrome": true, "settings_problems": [], "errors": [],
        "accounts": [{"key": "alice@example.com", "kind": "oauth", "login": "logged_in", "plan": "Max", "plan_tier": "advanced", "node": "US-A", "port": 7901,
          "badge": {"label": "A", "color": "#0A84FF"}, "cli": {"running": true, "sessions": 2, "since_epoch": 1794041000.5},
-         "can": {"app": true, "web": true, "usage": true, "check": true},
+         "can": {"app": true, "web": true, "usage": true, "check": true, "cli": true},
          "usage": {"key": "alice@example.com", "source": "cache", "fetched_epoch": 1794041000.0, "stale": false,
                    "five_hour": {"utilization": 13.0, "resets_epoch": 1794045210.12, "reset": false}},
          "health": {"version": 1, "checked_at": 1794041000.0, "route": "direct", "result": "api_ok"}}]}]}

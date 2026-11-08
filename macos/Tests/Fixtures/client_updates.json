@@ -4,6 +4,20 @@
   "generated_epoch": 1794042000.0,
   "mode": "auto",
   "clients": [{
+    "id": "claude",
+    "label": "Claude",
+    "path": "/Applications/Claude.app",
+    "installed_version": "4.23118.0",
+    "available_version": "4.23118.0",
+    "staged_version": null,
+    "status": "current",
+    "message": "当前客户端已是相同或更新版本",
+    "checked_epoch": 1794041940.0,
+    "install_token": null,
+    "can_install": false,
+    "package_version": null,
+    "package_build": null
+  }, {
     "id": "codex",
     "label": "ChatGPT",
     "path": "/Applications/ChatGPT.app",

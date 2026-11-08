@@ -119,7 +119,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
   "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
-  "can": {"app": true, "web": true, "usage": true, "check": true},
+  "can": {"app": true, "web": true, "usage": true, "check": true, "cli": true},
   "can_why": {},
   "usage": { "…用量条目，见 3.1…" },
   "health": { "…出口检测结果，见 3.3…" }
@@ -146,7 +146,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   “在用”（总览里画成在用、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`。
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
   `app_missing`（没装对应的桌面 App）、`no_chrome`（没装 Google Chrome：网页版不能经账号的出口打开）、
-  `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex）。
+  `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
+  第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
@@ -175,7 +176,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `{"code": "policy_pinned", "tool", "key", "node", "old_node"}`、`{"code": "nodes_filled", "node"}`。
 
 `can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）；
-`web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in`；`check` 总是可用。
+`web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in`；`cli`：`tool_missing`；`check` 总是可用。
 
 ### 2.3 `cca _gui live`（只读，要联网：连路由器或本机 Clash Verge）
 
@@ -405,10 +406,15 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 
 ## 6. 终端交接
 
-`terminal` 事件、`hello.installed == false`、以及 App 里“添加账号”之类的入口，都在“终端”里运行对应的 cca 命令：App 在
-`~/Library/Caches/local.cca.app/handoff/` 写一个临时的 `.command` 文件（`#!/bin/bash`，补好 `PATH`，去掉 `CCA_GUI` 等 App 给 cca 的变量，先删掉自己，再运行逐个加了引号的
-命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的），`chmod 755` 后用“终端”打开。不需要“自动化”权限。
+`terminal` 事件、`hello.installed == false`、账号的「终端」按钮（`cca [codex] @账号`）、以及 App 里“添加账号”之类的入口，都在终端里运行对应的 cca 命令：App 在
+`~/Library/Caches/local.cca.app/handoff/` 写一个临时的 `.command` 文件（`#!/bin/bash`，先把自己挪走再删掉，补好 `PATH`，去掉 `CCA_GUI` 等 App 给 cca 的变量，要换文件夹时先 `cd`，再运行逐个加了引号的
+命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的；账号的会话结束后留在用户的登录 shell 里），`chmod 755` 后用用户选的终端打开。都不需要“自动化”权限。
 一小时前留下的 `.command` 文件 App 会清掉。用户回到 App（App 被激活）时重新读一次 `state`。
+
+用哪个终端、账号的会话从哪个文件夹启动（最近用过的，所有账号共用），都记在 App 自己的设置里，不进 `~/.cca`，cca 不知道也不用知道。
+App 按 bundle id 看这台 Mac 上装了哪些：系统自带的“终端”、iTerm2、Warp、WezTerm（把 `.command` 文件交给它们）、Ghostty、kitty、Alacritty
+（开新进程、参数里带上脚本：Ghostty、kitty 打开文件每次都要确认，Alacritty 不能打开文件）。第三方终端 30 秒还没运行脚本（`.command` 还在）时，App 把它收回
+（rename，和脚本开头的 `mv` 只有一边成功，不会跑两遍），弹窗问要不要改用系统自带的“终端”。
 
 ## 7. 内置代理（`cca _core run`）
 
@@ -428,9 +434,9 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
   App 看到它变了就重新读 `state`、接着起内核（看不见时也读）。
 - 演示数据（`CCA_GUI_FIXTURES`）不运行内核。
 
-## 8. ChatGPT 桌面客户端更新
+## 8. 桌面客户端更新（Claude、ChatGPT）
 
-当前只管理 `com.openai.codex` 的 ChatGPT 桌面客户端；和 cca 自身的 `update` 命令分开。
+管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端；和 cca 自身的 `update` 命令分开。
 
 - `cca clients status --json`：只读本机状态，启动和进入客户端更新页时调用。
 - `cca clients check [--force] --json`：检查并准备更新，不安装。后台不带 `--force`，24 小时节流由 cca 负责；用户点“立即检查”时加 `--force`。
@@ -454,7 +460,8 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 }
 ```
 
-- `clients` 当前只有 `id=codex`；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
+- `clients` 里 `id=claude`、`id=codex` 各一行（`status=missing` 是没装，UI 不显示）；UI 按数组显示，不因查询客户端状态而启用 Codex 账号。
+  一个客户端出问题写在它自己那一行，不影响另一个；`check`、`install` 有问题时退出码 1。`install` 的 TOKEN 只对它那一个客户端有效。
 - `status`：`missing/current/checking/busy/unsupported/staged/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
   `busy` 显示“更新正在进行”，`unsupported` 显示“当前系统暂无适配包”。
 - `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示“目标版本或软件包校验值已变化，请重新检查后再安装”。
@@ -474,3 +481,7 @@ cca.app/Contents/MacOS/cca --verify-client-update /absolute/package.zip BASE64_S
 该入口在 NSApplication 初始化前退出，不打开窗口，不执行归档内代码。使用 CryptoKit Ed25519、映射只读文件，固定公钥
 `mNfr1v9t63BfgDtlw4C8lRvSY6uMggIXABDOCi3tS6k=`，不接受参数或环境替换。退出 0 表示签名有效，1 表示签名或读取失败，2 表示参数错误。
 官方签名只证明归档来源和完整性，不代表所有隔离行为已经兼容审计；解压和后续安装检查由后端完成。
+
+Claude 的更新源（`https://api.anthropic.com/api/desktop/darwin/<架构>/squirrel/update`，Squirrel 的 json 格式，204 是没有更新）没有 Ed25519 签名，给的是
+SHA-256 和大小：cca 下载后比对，解压后同样检查代码签名、Team ID、产品标识、版本和 Gatekeeper，不需要 cca.app 验签。这个接口要求带 `device_id`：每次现生成一个，
+不用也不存账号实例里的标识。下载地址只认 `downloads.claude.ai`，增量包不用。

@@ -139,11 +139,12 @@ struct TutorialCard {
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
             ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
             ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者命令行里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
-            ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、检测出口、改别名。"),
+            ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名。"),
         ], art: .sidebar),
         TutorialCard(title: "打开一个账号", points: [
             ("macwindow", "点「打开 Claude App」：用这个账号自己的出口和资料打开。"),
             ("safari", "点「网页版」：在账号专属 Chrome 资料里打开；未安装 Chrome 时会停止打开。"),
+            ("terminal", "点「终端」：在你选的文件夹里启动这个账号的命令行，下次记得是哪个文件夹；按钮的下拉里换文件夹、换用哪个终端。"),
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
@@ -170,7 +171,7 @@ struct TutorialCard {
         TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。"),
             ("arrow.down.circle", "cca 有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查 cca 更新。"),
-            ("arrow.down.app", "ChatGPT 更新在左侧「客户端更新」页：自动检查并准备，退出客户端后由你确认安装。"),
+            ("arrow.down.app", "Claude、ChatGPT 桌面客户端的更新在左侧「客户端更新」页：自动检查并准备，退出客户端后由你确认安装。"),
             ("book", "想再看一遍这个教程：点左下角的「新手教程」或工具栏的问号；「帮助」菜单里还有每个版本的更新说明。"),
         ], art: .menubar),
     ]
@@ -493,34 +494,39 @@ struct TutorialArt: View {
         }
     }
 
-    /// 一行账号和“打开 Claude App”“网页版”按钮。
+    /// 一行账号和“打开 Claude App”“网页版”“终端”按钮。
     private var openArt: some View {
         panel {
             HStack(spacing: 10) {
                 avatar(0, size: 34)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("工作").font(.headline)
-                    HStack(spacing: 4) {
-                        PlanBadge(plan: "Ultra", tier: .premium, size: .compact)
-                        Text("· US-B").font(.caption).foregroundStyle(.secondary)
-                    }
+                    PlanBadge(plan: "Ultra", tier: .premium, size: .compact)
                 }
                 Spacer(minLength: 16)
                 Label("打开 Claude App", systemImage: "macwindow")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white)
+                    .fixedSize()
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(Capsule().fill(Color.accentColor))
                 Label("网页版", systemImage: "safari")
                     .font(.callout)
+                    .fixedSize()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 1))
+                Label("终端", systemImage: "terminal")
+                    .font(.callout)
+                    .fixedSize()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 1))
             }
             .padding(14)
         }
-        .frame(maxWidth: 460)
+        .frame(maxWidth: 540)
         .padding(.horizontal, 24)
     }
 

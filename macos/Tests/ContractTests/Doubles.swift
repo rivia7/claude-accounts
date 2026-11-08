@@ -112,6 +112,13 @@ final class TriggerSink: @unchecked Sendable {
 
 @MainActor final class HookLog {
     var opened: [URL] = []
+    /// 打开时用的终端（bundle id），和 opened 一一对应。
+    var terminals: [String] = []
+    /// openInTerminal 回调的结果（模拟终端打不开）。
+    var openSucceeds = true
+    /// “选文件夹”面板要返回的结果。
+    var pickedDirectory: String?
+    var installed: [TerminalApp] = [.system]
     var urls: [URL] = []
     var copied: [String] = []
     var shown = 0
@@ -120,7 +127,10 @@ final class TriggerSink: @unchecked Sendable {
 }
 
 @MainActor func makeHooks(_ log: HookLog, _ prompter: Prompter) -> AppHooks {
-    AppHooks(prompter: prompter, openFile: { log.opened.append($0) }, openURL: { log.urls.append($0) },
+    AppHooks(prompter: prompter,
+             openInTerminal: { url, app, done in log.opened.append(url); log.terminals.append(app.id); done(log.openSucceeds) },
+             installedTerminals: { log.installed }, chooseDirectory: { _ in log.pickedDirectory },
+             openURL: { log.urls.append($0) },
              copy: { log.copied.append($0) }, showMainWindow: { log.shown += 1 }, terminate: { log.terminated += 1 },
              announce: { log.announced.append($0) })
 }

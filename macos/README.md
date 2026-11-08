@@ -1,7 +1,7 @@
 # cca.app（macOS 原生界面）
 
 cca 的图形界面：总览（所有账号一眼看全：哪个在用、哪个额度用完了、哪个没登录）、Claude / ChatGPT（Codex）账号、用量、节点分流，
-打开每个账号自己的桌面 App、网页版，检测出口，同步路由器。
+打开每个账号自己的桌面 App、网页版或终端，检测出口，同步路由器。
 它只是 cca 的前端：**只经 [PROTOCOL.md](PROTOCOL.md) 和 cca 打交道**（运行 `cca _gui hello|state|live`、`cca [codex] usage|check … --json`、
 `cca [codex] app|web KEY`、`cca codex reset KEY --json`、`cca router sync`、`cca update --check --json`、`cca update 版本号`、
 `cca gui update --relaunch PID`），不读 `~/.cca` 里的文件、不解析中文输出、不在 Swift 里重算 cca 的规则。
@@ -98,7 +98,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   按窗口看不看得见、开没开“减少动态效果”设一次（`Visibility.swift`），下面的视图只读它；没设的地方（截图、教程的示意图）不动。
 - Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
   内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
-- 操作放在它作用的内容旁边：打开 App / 网页版在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
+- 操作放在它作用的内容旁边：打开 App / 网页版 / 终端在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
   检测出口在“网络出口”标题上，添加账号在总览各组的标题上；不用浮在内容上的操作条。
 - 账号页的用量（`UsageCard.swift`）：每个额度一大块（5 小时、本周，还有按模型的每周额度，例如 Claude 的 Fable：下面一行写它最多能用本周额度的多少、
   已用多少，份额由 cca 认出来给），`QuotaGrid` 排：放得下就一行，放不下两块一行，单出来的最后一块占满一行，同一行的一样高。旧的分模型额度、
@@ -179,7 +179,10 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   主窗口一出现就换回普通 App（`MainWindow.onAppear`）。`core/config.yaml` 变了是
   CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；
-  文件一开始就删掉自己，中途关窗口也不留下），用“终端”打开。放了一小时还没运行的会清掉。
+  文件一开始就挪走再删掉，中途关窗口也不留下），用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Warp、WezTerm、Ghostty、kitty、Alacritty，
+  在设置和账号页「终端」的下拉里选）。第三方终端 30 秒还没运行就收回脚本、问要不要改用系统自带的。放了一小时还没运行的会清掉。
+- **账号的终端会话**：账号页的「终端」（右键菜单也有）在选的文件夹里运行 `cca [codex] @账号`，结束后留在用户的登录 shell 里。
+  最近的文件夹记在 App 的设置里（最多 8 个，所有账号共用，第一次先选一个）。
 
 ## 这套工具链的坑（Command Line Tools，Swift 6.4，SDK 27）
 

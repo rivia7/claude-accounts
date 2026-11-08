@@ -239,7 +239,8 @@
             "app": true,
             "web": true,
             "usage": true,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {},
           "usage": {
@@ -364,7 +365,8 @@
             "app": true,
             "web": true,
             "usage": false,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "usage": "not_logged_in"
@@ -409,7 +411,8 @@
             "app": true,
             "web": true,
             "usage": true,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {},
           "usage": null,
@@ -452,7 +455,8 @@
             "app": true,
             "web": true,
             "usage": true,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {},
           "usage": {
@@ -565,7 +569,8 @@
             "app": true,
             "web": true,
             "usage": true,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {},
           "usage": {
@@ -666,7 +671,8 @@
             "app": false,
             "web": false,
             "usage": false,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "app": "api_account",
@@ -735,7 +741,8 @@
             "app": false,
             "web": false,
             "usage": false,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "app": "api_account",
@@ -802,7 +809,8 @@
             "app": true,
             "web": true,
             "usage": true,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {},
           "usage": {

@@ -133,18 +133,48 @@ struct FailureSheet: View {
 }
 
 enum Platform {
-    static let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
-
-    /// 用“终端”打开交接文件（不需要“自动化”权限）。
+    /// 这台 Mac 上装了哪些认识的终端（系统自带的一定有）。
     @MainActor
-    static func openInTerminal(_ url: URL) {
+    static func installedTerminals() -> [TerminalApp] {
+        TerminalApp.known.filter { $0 == .system || NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.id) != nil }
+    }
+
+    /// 用选好的终端打开交接文件（都不需要“自动化”权限）；打不开时回调 false。
+    @MainActor
+    static func open(_ script: URL, in terminal: TerminalApp, done: @escaping @MainActor (Bool) -> Void) {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.id) else {
+            done(false)
+            return
+        }
+        let finish: (Error?) -> Void = { error in
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(error == nil) } }
+        }
         let cfg = NSWorkspace.OpenConfiguration()
         cfg.activates = true
-        NSWorkspace.shared.open([url], withApplicationAt: terminal, configuration: cfg) { _, error in
-            if error != nil {
-                DispatchQueue.main.async { _ = NSWorkspace.shared.open(url) }
-            }
+        switch terminal.launch {
+        case .openFile:
+            NSWorkspace.shared.open([script], withApplicationAt: app, configuration: cfg) { _, error in finish(error) }
+        case .arguments(let arguments):
+            // 相当于 open -na 终端 --args …：它已经开着时，普通的打开不会把参数带过去
+            cfg.createsNewApplicationInstance = true
+            cfg.arguments = arguments.map { $0 == TerminalApp.scriptToken ? script.path : $0 }
+            NSWorkspace.shared.openApplication(at: app, configuration: cfg) { _, error in finish(error) }
         }
+    }
+
+    /// 选一个文件夹；取消时是 nil。
+    @MainActor
+    static func chooseDirectory(startingAt path: String?) async -> String? {
+        NSApp.activate()
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "在这里打开"
+        panel.message = "选择在哪个文件夹里打开（下次默认还是这里）"
+        if let path { panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true) }
+        return await panel.begin() == .OK ? panel.url?.path : nil
     }
 
     @MainActor

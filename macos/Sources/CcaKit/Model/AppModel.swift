@@ -70,7 +70,12 @@ final class MemoryPrefs: PrefsStore {
 /// AppKit 那边提供的动作（测试里换成记录用的假实现）。
 struct AppHooks {
     var prompter: Prompter
-    var openFile: @MainActor (URL) -> Void = { _ in }
+    /// 用这个终端打开交接脚本；打不开时回调 false。
+    var openInTerminal: @MainActor (URL, TerminalApp, @escaping @MainActor (Bool) -> Void) -> Void = { _, _, done in done(true) }
+    /// 这台 Mac 上装了哪些终端（系统自带的在最前面）。
+    var installedTerminals: @MainActor () -> [TerminalApp] = { [.system] }
+    /// 选一个文件夹（从这里开始看）；取消时是 nil。
+    var chooseDirectory: @MainActor (String?) async -> String? = { _ in nil }
     var openURL: @MainActor (URL) -> Void = { _ in }
     var copy: @MainActor (String) -> Void = { _ in }
     var showMainWindow: @MainActor () -> Void = {}
@@ -145,6 +150,15 @@ final class AppModel {
     var sheet: Sheet?
     private(set) var toast: Toast?
 
+    // MARK: 终端（记在 UserDefaults 里）
+
+    /// 这台 Mac 上装了的终端，系统自带的在最前面。
+    private(set) var terminals: [TerminalApp] = [.system]
+    /// 用户挑的默认终端（bundle id）；没挑过是 nil。
+    private(set) var terminalID: String?
+    /// 账号的终端会话最近在哪些文件夹里打开过，最新的在前。所有账号共用：额度用完换个账号，接着在同一个项目里干活。
+    private(set) var terminalDirectories: [String] = []
+
     // MARK: 选择（记在 UserDefaults 里）
 
     var tool: ToolID = .claude {
@@ -213,6 +227,10 @@ final class AppModel {
     @ObservationIgnored private var cancelOnQuit: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var startedOnce = false
     @ObservationIgnored private var coreHost: CoreHost?
+    /// 交接脚本放在哪（测试里换成临时目录）。
+    @ObservationIgnored var handoffDirectory = TerminalHandoff.defaultDirectory()
+    /// 等多久（秒）：选的终端过了这么久还没运行交接脚本，就请用户改用系统自带的。留够时间给 iTerm2 问“要运行吗”。
+    @ObservationIgnored var terminalGrace: Double = 30
 
     enum Prefs {
         static let tool = "tool"
@@ -220,6 +238,10 @@ final class AppModel {
         static let updateCheckedAt = "update.checkedAt"
         /// 点过“以后再说”的版本
         static let updateDismissed = "update.dismissed"
+        /// 默认终端（bundle id）
+        static let terminalApp = "terminal.app"
+        /// 账号的终端会话最近打开过的文件夹（一行一个）
+        static let terminalDirectories = "terminal.directories"
         /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
@@ -234,6 +256,8 @@ final class AppModel {
         self.defaults = defaults
         self.hooks = hooks
         self.scheduler = scheduler ?? Scheduler()
+        terminalID = defaults.string(forKey: Prefs.terminalApp)
+        terminalDirectories = (defaults.string(forKey: Prefs.terminalDirectories) ?? "").split(separator: "\n").map(String.init)
         if let transport {
             self.transport = transport
             isFixtureMode = transport.isFixture
@@ -262,6 +286,7 @@ final class AppModel {
     func start() async {
         guard !startedOnce else { return }
         startedOnce = true
+        refreshTerminals()
         await connect()
         if phase == .ready, isVisible {
             refreshLive()
@@ -748,7 +773,60 @@ final class AppModel {
 
     // MARK: 终端交接、补救
 
-    /// 在“终端”里运行一条 cca 命令（PROTOCOL 6）。
+    /// 用来运行命令的终端：用户挑的，没挑过或者卸载了就用系统自带的。
+    var terminalChoice: TerminalApp {
+        terminals.first { $0.id == terminalID } ?? .system
+    }
+
+    func chooseTerminal(_ id: String) {
+        terminalID = id
+        defaults.set(id, forKey: Prefs.terminalApp)
+    }
+
+    func refreshTerminals() {
+        terminals = hooks.installedTerminals()
+    }
+
+    /// 终端会话可选的文件夹：最近用过、现在还在的，最新的在前。
+    var sessionDirectories: [String] {
+        terminalDirectories.filter { path in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+    }
+
+    /// 给人看的路径（主目录写成 ~）。
+    func displayPath(_ path: String) -> String {
+        if path == homeDir { return "~" }
+        return path.hasPrefix(homeDir + "/") ? "~" + path.dropFirst(homeDir.count) : path
+    }
+
+    private func rememberDirectory(_ path: String) {
+        guard !path.contains("\n") else { return }
+        terminalDirectories = Array(([path] + terminalDirectories.filter { $0 != path }).prefix(8))
+        defaults.set(terminalDirectories.joined(separator: "\n"), forKey: Prefs.terminalDirectories)
+    }
+
+    /// 在终端里用这个账号：不给文件夹就用最近用的那个，一个都没有时先选一个。
+    func openSession(_ ref: AccountRef, directory: String? = nil) {
+        guard let a = account(ref), a.can.cli else { return }
+        guard let dir = directory ?? sessionDirectories.first ?? (isFixtureMode ? homeDir : nil) else {
+            chooseSessionDirectory(ref)
+            return
+        }
+        rememberDirectory(dir)
+        runInTerminal(.session(prefix: prefix(a.tool), key: a.key, name: a.displayName, directory: dir))
+    }
+
+    /// 选一个文件夹，在里面打开这个账号的终端会话（选了就记住）。
+    func chooseSessionDirectory(_ ref: AccountRef) {
+        Task { [weak self] in
+            guard let self, let dir = await self.hooks.chooseDirectory(self.sessionDirectories.first ?? self.homeDir) else { return }
+            self.openSession(ref, directory: dir)
+        }
+    }
+
+    /// 在选好的终端里运行一条 cca 命令（PROTOCOL 6）。
     func runInTerminal(_ h: Handoff) {
         if isFixtureMode {
             showToast("演示模式：不会打开终端（\(h.display)）", .info)
@@ -758,12 +836,37 @@ final class AppModel {
             showToast("找不到 cca", .warning)
             return
         }
+        launchInTerminal(h, ccaPath: path)
+    }
+
+    func launchInTerminal(_ h: Handoff, ccaPath path: String) {
+        let app = h.systemTerminal ? TerminalApp.system : terminalChoice
+        let url: URL
         do {
-            let url = try TerminalHandoff.write(h, ccaPath: path)
-            hooks.openFile(url)
+            url = try TerminalHandoff.write(h, ccaPath: path, directory: handoffDirectory)
         } catch {
             showToast("没能写交接文件：\(error.localizedDescription)", .warning)
+            return
         }
+        hooks.openInTerminal(url, app) { [weak self] opened in
+            if !opened { self?.terminalDidNotRun(url, h, app) }
+        }
+        guard app != .system else { return }
+        let grace = terminalGrace
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(grace * 1_000_000_000))
+            self?.terminalDidNotRun(url, h, app)
+        }
+    }
+
+    /// 选的终端没有运行交接脚本：收回脚本（它不会再被运行），问用户要不要改用系统自带的。脚本已经开始运行时什么也不做。
+    private func terminalDidNotRun(_ url: URL, _ h: Handoff, _ app: TerminalApp) {
+        guard TerminalHandoff.reclaim(url) else { return }
+        var fallback = h
+        fallback.systemTerminal = true
+        fallback.title = "\(app.name) 没有运行这条命令"
+        fallback.message = "可能它在等你确认，或者这个版本不支持从别的 App 启动。可以改用系统自带的“终端”，也可以复制命令自己运行；默认终端在“设置”里换。"
+        present(.handoff(fallback))
     }
 
     func copy(_ text: String) {
@@ -827,7 +930,7 @@ final class AppModel {
         }
     }
 
-    // MARK: ChatGPT 客户端更新
+    // MARK: 桌面客户端更新
 
     /// App 隐藏时也检查；是否到 24 小时由后端决定。检查绝不安装，开发和演示模式不自动运行。
     private func reconcileClientChecks() {
@@ -871,10 +974,10 @@ final class AppModel {
             showToast("目标版本或软件包校验值已变化，请重新检查后再安装", .warning)
             return
         }
-        runClientUpdate(.clientInstall(token: token), activity: .install, manual: true)
+        runClientUpdate(.clientInstall(token: token), activity: .install, manual: true, entryID: entry.id)
     }
 
-    private func runClientUpdate(_ command: CcaCommand, activity: ClientUpdateActivity, manual: Bool) {
+    private func runClientUpdate(_ command: CcaCommand, activity: ClientUpdateActivity, manual: Bool, entryID: String? = nil) {
         guard phase == .ready, let client, !clientUpdatesBusy else { return }
         clientUpdateActivity = activity
         clientUpdatesError = nil
@@ -897,7 +1000,7 @@ final class AppModel {
                 } else if activity == .mode {
                     message = doc?.mode == "auto" ? "已开启自动检查；安装前仍会询问" : "已关闭自动检查"
                 } else if activity == .install {
-                    message = doc?.clients.first?.detail ?? "客户端更新操作已完成"
+                    message = doc?.clients.first(where: { $0.id == entryID })?.detail ?? "客户端更新操作已完成"
                 } else {
                     message = "客户端更新状态已刷新"
                 }
@@ -1087,6 +1190,7 @@ final class AppModel {
     /// App 被激活（包括从“终端”回来）：重新跑 hello 和 state。
     func becameActive() {
         guard startedOnce else { return }
+        refreshTerminals()
         Task { await connect() }
     }
 

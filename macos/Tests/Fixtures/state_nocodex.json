@@ -195,7 +195,8 @@
             "app": false,
             "web": false,
             "usage": true,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "app": "app_missing",
@@ -235,7 +236,8 @@
             "app": false,
             "web": false,
             "usage": false,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "app": "api_account",

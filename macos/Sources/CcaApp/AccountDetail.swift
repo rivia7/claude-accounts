@@ -115,53 +115,54 @@ struct DetailHeader: View {
         if a.isLast, guide.showDetails { Tag(text: "上次在命令行里用的", systemImage: "terminal") }
     }
 
-    /// 打开 App（主按钮）、网页版；没登录或登错号时，“登录…”是主按钮。第三方 API 账号没有这两个按钮。
+    /// 打开 App（主按钮）、网页版、终端；没登录或登错号时，“登录…”是主按钮。第三方 API 账号没有 App 和网页版，终端是它的主按钮。
     @ViewBuilder
     private func actions(_ a: Account) -> some View {
         let busy = model.activity(a.ref) != nil
         let label = model.appLabel(a.tool)
         let needsLogin = a.login == .loggedOut || a.login == .emailMismatch
-        if needsLogin || !a.isAPI {
-            GlassRow(spacing: 8) {
-                if needsLogin {
-                    Button {
-                        model.runInTerminal(model.loginHandoff(a))
-                    } label: {
-                        Label(a.login == .emailMismatch ? "重新登录…" : "登录…", systemImage: "person.badge.key")
-                    }
-                    .buttonStyle(.glassProminent)
-                    .help("在终端里运行 \(model.loginHandoff(a).display)")
+        GlassRow(spacing: 8) {
+            if needsLogin {
+                Button {
+                    model.runInTerminal(model.loginHandoff(a))
+                } label: {
+                    Label(a.login == .emailMismatch ? "重新登录…" : "登录…", systemImage: "person.badge.key")
                 }
-                if !a.isAPI {
-                    Button {
-                        model.openApp(a.ref)
-                    } label: {
-                        Label("打开 \(label)", systemImage: "macwindow")
-                    }
-                    .glassButton(prominent: !needsLogin)
-                    .disabled(!a.can.app || busy)
-                    .help(reason("app", a) ?? "用这个账号的出口和独立的资料目录打开 \(label)")
-                    Button {
-                        model.openWeb(a.ref)
-                    } label: {
-                        Label("网页版", systemImage: "safari")
-                    }
-                    .buttonStyle(.glass)
-                    .disabled(!a.can.web || busy)
-                    .help(reason("web", a) ?? "在这个账号自己的 Chrome 资料里打开网页版，走账号的出口")
-                }
+                .buttonStyle(.glassProminent)
+                .help("在终端里运行 \(model.loginHandoff(a).display)")
             }
-            .controlSize(.large)
+            if !a.isAPI {
+                Button {
+                    model.openApp(a.ref)
+                } label: {
+                    Label("打开 \(label)", systemImage: "macwindow")
+                }
+                .glassButton(prominent: !needsLogin)
+                .disabled(!a.can.app || busy)
+                .help(reason("app", a) ?? "用这个账号的出口和独立的资料目录打开 \(label)")
+                Button {
+                    model.openWeb(a.ref)
+                } label: {
+                    Label("网页版", systemImage: "safari")
+                }
+                .buttonStyle(.glass)
+                .disabled(!a.can.web || busy)
+                .help(reason("web", a) ?? "在这个账号自己的 Chrome 资料里打开网页版，走账号的出口")
+            }
+            SessionButton(account: a, prominent: a.isAPI && !needsLogin, unavailable: reason("cli", a))
         }
+        .controlSize(.large)
     }
 
-    /// 按钮为什么不能用（cca 给的原因码）。API 账号没有这两个按钮，不说。
+    /// 按钮为什么不能用（cca 给的原因码）。第三方 API 账号本来就没有 App 和网页版的按钮，不说。
     private func disabledReasons(_ a: Account) -> [String] {
-        if a.isAPI { return [] }
         var out: [String] = []
         let label = model.appLabel(a.tool)
-        if !a.can.app, let w = a.canWhy["app"] { out.append("打开 App：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
-        if !a.can.web, let w = a.canWhy["web"] { out.append("网页版：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
+        if !a.isAPI {
+            if !a.can.app, let w = a.canWhy["app"] { out.append("打开 App：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
+            if !a.can.web, let w = a.canWhy["web"] { out.append("网页版：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
+        }
+        if !a.can.cli, let w = a.canWhy["cli"] { out.append("终端：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
         return out
     }
 
@@ -171,6 +172,7 @@ struct DetailHeader: View {
         switch action {
         case "app": allowed = a.can.app
         case "web": allowed = a.can.web
+        case "cli": allowed = a.can.cli
         default: allowed = a.can.usage
         }
         return allowed ? nil : Texts.canWhy(w, appLabel: model.appLabel(a.tool), tool: a.tool)
@@ -186,6 +188,59 @@ extension View {
         } else {
             self.buttonStyle(.glass)
         }
+    }
+}
+
+/// “终端”按钮：点一下用这个账号在最近用的文件夹里开一个命令行会话；下拉里换文件夹、换终端。
+struct SessionButton: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+    var prominent = false
+    /// 为什么现在不能用（cca 给的原因）。
+    var unavailable: String?
+
+    var body: some View {
+        let a = account
+        let recent = model.sessionDirectories
+        Menu {
+            if !recent.isEmpty {
+                Section("在这个文件夹里打开") {
+                    ForEach(recent, id: \.self) { dir in
+                        Button(model.displayPath(dir)) { model.openSession(a.ref, directory: dir) }
+                    }
+                }
+            }
+            Button("选择其他文件夹…") { model.chooseSessionDirectory(a.ref) }
+            if model.terminals.count > 1 {
+                Divider()
+                Picker("用哪个终端打开", selection: Binding(get: { model.terminalChoice.id }, set: { model.chooseTerminal($0) })) {
+                    ForEach(model.terminals) { t in
+                        Text(t.name).tag(t.id)
+                    }
+                }
+            }
+        } label: {
+            Label(title(recent.first), systemImage: "terminal")
+                .lineLimit(1)
+        } primaryAction: {
+            model.openSession(a.ref)
+        }
+        .glassButton(prominent: prominent)
+        .disabled(!a.can.cli || model.activity(a.ref) != nil)
+        .help(unavailable ?? helpText(a, directory: recent.first))
+    }
+
+    /// 按钮上的字：带上最近用的文件夹的名字，太长时截短（完整路径在提示里）。
+    private func title(_ directory: String?) -> String {
+        guard let directory else { return "终端" }
+        let name = (directory as NSString).lastPathComponent
+        return "终端 · " + (name.count > 20 ? name.prefix(19) + "…" : name)
+    }
+
+    private func helpText(_ a: Account, directory: String?) -> String {
+        let cli = a.tool == .codex ? "Codex" : "Claude Code"
+        guard let directory else { return "先选一个文件夹，再用 \(model.terminalChoice.name) 在里面启动这个账号的 \(cli)" }
+        return "用 \(model.terminalChoice.name) 在 \(model.displayPath(directory)) 里启动这个账号的 \(cli)"
     }
 }
 

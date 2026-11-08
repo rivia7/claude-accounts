@@ -87,6 +87,7 @@ struct CcaApp: App {
 
         Settings {
             SettingsView()
+                .environment(delegate.model)
                 .environment(delegate.guide)
                 .environment(delegate.appearance)
         }
@@ -122,7 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guide = Guide(prefs: demo ? MemoryPrefs() : UserDefaults.standard, appVersion: version)
         appearance = AppearanceSetting(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
         super.init()
-        model.hooks.openFile = { Platform.openInTerminal($0) }
+        model.hooks.openInTerminal = { Platform.open($0, in: $1, done: $2) }
+        model.hooks.installedTerminals = { Platform.installedTerminals() }
+        model.hooks.chooseDirectory = { await Platform.chooseDirectory(startingAt: $0) }
         model.hooks.openURL = { NSWorkspace.shared.open($0) }
         model.hooks.copy = { Platform.copy($0) }
         model.hooks.showMainWindow = { WindowOpener.shared.showMain() }

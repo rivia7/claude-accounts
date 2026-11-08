@@ -2,11 +2,13 @@
 """Central client updates: fake signed bundles/network/processes in temporary directories."""
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -30,7 +32,7 @@ class ClientUpdates(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.app = self.root / 'Applications/ChatGPT.app'
         self.env = {'HOME': str(self.root), 'CCA_HOME': str(self.root / '.cca'),
-                    'CCA_TOOL': 'codex', 'CCA_CLIENT_CODEX_APP': str(self.app),
+                    'CCA_TOOL': 'codex', 'CCA_CLIENT_CODEX_APP': str(self.app), 'CCA_CLIENT_CLAUDE_APP': '',
                     'CCA_CLIENT_VERIFIER': str(self.root / 'verifier'),
                     'OPENAI_API_KEY': 'not-a-real-key', 'CODEX_HOME': '/do-not-read',
                     'HTTPS_PROXY': 'http://example.invalid', 'NO_PROXY': '*'}
@@ -83,6 +85,9 @@ class ClientUpdates(unittest.TestCase):
                 '<sparkle:deltas><enclosure url="https://example.invalid/evil.delta"/></sparkle:deltas>'
                 '</item></channel></rss>').encode()
 
+    def row(self, output, client='codex'):
+        return next(c for c in json.loads(output)['clients'] if c['id'] == client)
+
     def fake_run(self, args, folder, timeout=30):
         self.calls.append(args)
         out = b''
@@ -114,7 +119,7 @@ class ClientUpdates(unittest.TestCase):
     def stage(self):
         code, output, errors = self.command('check', 'force')
         self.assertEqual(code, 0, errors + output)
-        view = json.loads(output)['clients'][0]
+        view = self.row(output)
         self.assertEqual(view['status'], 'staged', output)
         self.assertTrue(view['can_install'])
         return view['install_token']
@@ -123,7 +128,7 @@ class ClientUpdates(unittest.TestCase):
         self.ns['cu_hash'] = mock.Mock(side_effect=AssertionError('status hashed a file'))
         code, out, _ = self.command()
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out)['clients'][0]['installed_version'], '1.0')
+        self.assertEqual(self.row(out)['installed_version'], '1.0')
         self.assertFalse((self.root / '.cca').exists())
         self.assertEqual(self.calls, [])
 
@@ -143,7 +148,7 @@ class ClientUpdates(unittest.TestCase):
         os.environ['CCA_CLIENT_VERIFIER'] = ''
         code, out, _ = self.command('check', 'force')
         self.assertEqual(code, 1)
-        self.assertEqual(json.loads(out)['clients'][0]['status'], 'blocked')
+        self.assertEqual(self.row(out)['status'], 'blocked')
         self.assertEqual(len(self.downloads), 1)
 
     def test_bad_current_signature_is_not_replaced(self):
@@ -156,7 +161,7 @@ class ClientUpdates(unittest.TestCase):
         self.ns['cu_extract'] = mock.Mock(side_effect=AssertionError('unverified extraction'))
         code, out, _ = self.command('check', 'force')
         self.assertEqual(code, 1)
-        self.assertFalse(json.loads(out)['clients'][0]['can_install'])
+        self.assertFalse(self.row(out)['can_install'])
 
     def test_archive_change_during_signature_is_rejected(self):
         original = self.fake_run
@@ -181,7 +186,7 @@ class ClientUpdates(unittest.TestCase):
             self.feed = self.make_feed(build=build)
             code, out, _ = self.command('check', 'force')
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(out)['clients'][0]['status'], 'current')
+            self.assertEqual(self.row(out)['status'], 'current')
         self.assertEqual(len(self.downloads), 2)
 
     def test_target_change_invalidates_plan_and_install(self):
@@ -195,7 +200,7 @@ class ClientUpdates(unittest.TestCase):
         self.stage()
         path = Path(self.ns['cu_root']()) / 'package.zip'
         path.write_bytes(b'changed')
-        view = json.loads(self.command()[1])['clients'][0]
+        view = self.row(self.command()[1])
         self.assertFalse(view['can_install'])
         self.assertEqual(view['status'], 'needs_recheck')
 
@@ -276,7 +281,7 @@ class ClientUpdates(unittest.TestCase):
         code, out, errors = self.command('install', token)
         self.assertEqual(code, 0, errors + out)
         self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '200')
-        self.assertEqual(json.loads(out)['clients'][0]['status'], 'updated')
+        self.assertEqual(self.row(out)['status'], 'updated')
         self.assertEqual(list(self.app.parent.glob('.cca-client-install-*')), [])
         self.assertEqual(self.command('install', token)[0], 1)
 
@@ -321,7 +326,7 @@ class ClientUpdates(unittest.TestCase):
         with self.assertRaises(PowerLoss):
             self.command('install', token)
         self.assertFalse(self.app.exists())
-        self.assertEqual(json.loads(self.command()[1])['clients'][0]['status'], 'needs_recheck')
+        self.assertEqual(self.row(self.command()[1])['status'], 'needs_recheck')
         self.ns['cu_rename_exclusive'] = rename
         self.assertEqual(self.command('check')[0], 0)
         self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '100')
@@ -405,7 +410,7 @@ client_update_py() {
   echo "$1 $2" >> "$TEST_LOG"
   if [ "$1" = plan ]; then
     [ "$PLAN_OK" = 1 ] || return 1
-    echo "CU_VERSION=2.0; CU_INSTALLED=1.0; CU_TARGET=/tmp/ChatGPT.app"
+    echo "CU_VERSION=2.0; CU_INSTALLED=1.0; CU_TARGET=/tmp/ChatGPT.app; CU_LABEL=ChatGPT"
   else echo '{}'; fi
 }
 consent() { echo "consent $1 $2" >> "$TEST_LOG"; return "$CONSENT_RC"; }
@@ -425,6 +430,342 @@ consent() { echo "consent $1 $2" >> "$TEST_LOG"; return "$CONSENT_RC"; }
                 self.assertFalse(any(x.startswith('consent ') for x in lines))
             if installs:
                 self.assertIn('consent client_update ' + token, lines)
+
+
+
+class ClaudeClientUpdates(unittest.TestCase):
+    """Claude App：Squirrel 的 JSON 更新源、SHA-256、和 ChatGPT 并排处理"""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='cca-claude-update-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.claude = self.root / 'Applications/Claude.app'
+        self.chatgpt = self.root / 'Applications/ChatGPT.app'
+        patch = mock.patch.dict(os.environ, {
+            'HOME': str(self.root), 'CCA_HOME': str(self.root / '.cca'),
+            'CCA_CLIENT_CLAUDE_APP': str(self.claude), 'CCA_CLIENT_CODEX_APP': '',
+            'CCA_CLIENT_VERIFIER': ''}, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.ns = {}
+        exec(compile(DEFINITIONS, str(CCA), 'exec'), self.ns)
+        self.make_app(self.claude, 'Claude', 'com.anthropic.claudefordesktop', '4.1.0', '4.1.0')
+        self.calls, self.urls = [], []
+        self.processes = b'1 /sbin/launchd\n'
+        self.ns['cu_run'] = self.fake_run
+        self.ns['cu_host'] = lambda: ('arm64', '26.0')
+        self.ns['cu_download'] = self.fake_download
+        self.package = self.make_zip('Claude', 'com.anthropic.claudefordesktop', '4.2.0', '4.2.0')
+        self.feed_code = None
+        self.feed = self.make_feed()
+        self.chatgpt_feed = None
+
+    def make_app(self, path, exe, bundle, version, build):
+        (path / 'Contents/MacOS').mkdir(parents=True, exist_ok=True)
+        (path / 'Contents/Resources').mkdir(exist_ok=True)
+        (path / 'Contents/_CodeSignature').mkdir(exist_ok=True)
+        (path / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+            'CFBundleIdentifier': bundle, 'CFBundleExecutable': exe,
+            'CFBundleShortVersionString': version, 'CFBundleVersion': build,
+            'LSMinimumSystemVersion': '13.0'}))
+        (path / 'Contents/MacOS' / exe).write_bytes(b'fake binary ' + build.encode())
+        (path / 'Contents/Resources/app.asar').write_bytes(b'fake app ' + build.encode())
+        (path / 'Contents/_CodeSignature/CodeResources').write_bytes(b'fake seal ' + build.encode())
+
+    def make_zip(self, exe, bundle, version, build):
+        source = self.root / ('source-%s' % exe) / (exe + '.app')
+        self.make_app(source, exe, bundle, version, build)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as z:
+            for path in sorted(source.rglob('*')):
+                z.write(path, str(Path(exe + '.app') / path.relative_to(source)))
+        return out.getvalue()
+
+    def make_feed(self, version='4.2.0', url=None, digest=None, size=None, listed=None):
+        url = url or 'https://downloads.claude.ai/releases/darwin/arm64/%s/Claude-%s.zip' % (version, 'a' * 40)
+        item = {'name': 'Claude ' + version, 'version': version, 'url': url,
+                'sha256': hashlib.sha256(self.package).hexdigest() if digest is None else digest,
+                'size': len(self.package) if size is None else size,
+                'delta': {'from_version': '4.1.0', 'url': 'https://example.invalid/evil.delta'}}
+        return json.dumps({'currentRelease': listed or version, 'releases': [{'version': version, 'updateTo': item}]}).encode()
+
+    def fake_run(self, args, folder, timeout=30):
+        self.calls.append(args)
+        out = b''
+        target = ' '.join(args)
+        if '--display' in args:
+            out = (b'TeamIdentifier=2DC432GLL2\nIdentifier=com.openai.codex\n' if 'ChatGPT.app' in target
+                   else b'TeamIdentifier=Q6L2SF6YDW\nIdentifier=com.anthropic.claudefordesktop\n')
+        if '-archs' in args:
+            out = b'arm64\n'
+        if args[0] == '/bin/ps':
+            out = self.processes
+        return types.SimpleNamespace(returncode=0, stdout=out, stderr=b'')
+
+    def fake_download(self, url, destination, folder, package=False, expected_size=None, empty=()):
+        self.ns['cu_url'](url, package)   # 真规则：地址不合规就抛错
+        self.urls.append(url)
+        if package:
+            data = self.chatgpt_package if 'oaistatic' in url else self.package
+        elif 'oaistatic' in url:
+            data = self.chatgpt_feed
+        else:
+            if self.feed_code:
+                return self.feed_code
+            data = self.feed
+        Path(destination).write_bytes(data)
+        os.chmod(destination, 0o600)
+
+    def command(self, action='status', arg=''):
+        output, errors = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            try:
+                self.ns['cmd_client_updates'](action, arg)
+            except SystemExit as e:
+                code = e.code
+        return code, output.getvalue(), errors.getvalue()
+
+    def row(self, output, client='claude'):
+        return next(c for c in json.loads(output)['clients'] if c['id'] == client)
+
+    def use_claude(self):
+        self.ns['CU'] = self.ns['CU_CLAUDE']
+
+    def stage(self):
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        view = self.row(output)
+        self.assertEqual(view['status'], 'staged', output)
+        self.assertTrue(view['can_install'])
+        return view['install_token']
+
+    def installed_build(self):
+        self.use_claude()
+        return self.ns['cu_snapshot'](str(self.claude))['build']
+
+    def test_checks_with_throwaway_device_id_and_needs_no_gui_verifier(self):
+        self.assertEqual(self.command('check', 'force')[0], 0)
+        self.assertEqual(self.command('check', 'force')[0], 0)
+        feeds = [u for u in self.urls if 'squirrel/update' in u]
+        ids = [re.search(r'device_id=([0-9a-f-]{36})&', u).group(1) for u in feeds]
+        self.assertEqual(len(feeds), 2)
+        self.assertNotEqual(ids[0], ids[1], 'device_id must not be reused between checks')
+        self.assertTrue(all(u.startswith('https://api.anthropic.com/api/desktop/darwin/arm64/squirrel/update?') for u in feeds))
+        state = (self.root / '.cca/client-updates/claude/state.json').read_text()
+        self.assertNotIn(ids[0], state)
+        self.assertNotIn(ids[1], state)
+        self.assertEqual(sum('downloads.claude.ai' in u for u in self.urls), 1, 'same package must not be downloaded twice')
+
+    def test_204_means_nothing_to_install(self):
+        self.feed_code = '204'
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(self.row(output)['status'], 'current')
+        self.assertFalse(any('downloads.claude.ai' in u for u in self.urls))
+
+    def test_arch_feed_missing_falls_back_to_universal(self):
+        original = self.fake_download
+        seen = []
+        def download(url, destination, folder, package=False, expected_size=None, empty=()):
+            if 'squirrel/update' in url:
+                seen.append(url.split('/squirrel')[0].rsplit('/', 1)[1])
+                if len(seen) == 1:
+                    return '404'
+                self.ns['cu_url'](url, package)
+                Path(destination).write_bytes(self.make_feed(url='https://downloads.claude.ai/releases/darwin/universal/4.2.0/Claude-%s.zip' % ('b' * 40)))
+                os.chmod(destination, 0o600)
+                return None
+            return original(url, destination, folder, package, expected_size, empty)
+        self.ns['cu_download'] = download
+        self.assertEqual(self.command('check', 'force')[0], 0)
+        self.assertEqual(seen, ['arm64', 'universal'])
+
+    def test_same_or_older_release_is_not_downloaded(self):
+        for version in ('4.1.0', '4.0.9'):
+            self.feed = self.make_feed(version=version)
+            code, output, _ = self.command('check', 'force')
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.row(output)['status'], 'current')
+        self.assertFalse(any('downloads.claude.ai' in u for u in self.urls))
+
+    def test_build_is_compared_as_version_not_text(self):
+        self.make_app(self.claude, 'Claude', 'com.anthropic.claudefordesktop', '4.9.0', '4.9.0')
+        self.package = self.make_zip('Claude', 'com.anthropic.claudefordesktop', '4.23118.0', '4.23118.0')
+        self.feed = self.make_feed(version='4.23118.0')
+        self.stage()
+
+    def test_wrong_sha256_is_blocked_before_extracting(self):
+        self.feed = self.make_feed(digest='0' * 64)
+        self.ns['cu_extract'] = mock.Mock(side_effect=AssertionError('unverified extraction'))
+        code, output, _ = self.command('check', 'force')
+        self.assertEqual(code, 1)
+        view = self.row(output)
+        self.assertEqual(view['status'], 'blocked')
+        self.assertFalse(view['can_install'])
+
+    def test_feed_rejects_bad_metadata(self):
+        self.use_claude()
+        good = self.make_feed()
+        self.assertEqual(self.ns['cu_parse_squirrel'](good, 'arm64')['build'], '4.2.0')
+        self.assertEqual(self.ns['cu_parse_squirrel'](good, 'arm64')['sha256'], hashlib.sha256(self.package).hexdigest())
+        bad = [self.make_feed(url='https://example.invalid/Claude.zip'),
+               self.make_feed(url='http://downloads.claude.ai/releases/darwin/arm64/4.2.0/Claude-%s.zip' % ('a' * 40)),
+               self.make_feed(url='https://downloads.claude.ai/releases/darwin/arm64/4.2.0/Claude-%s.delta' % ('a' * 40)),
+               self.make_feed(url='https://downloads.claude.ai/releases/darwin/x64/4.2.0/Claude-%s.zip' % ('a' * 40)),
+               self.make_feed(url='https://downloads.claude.ai/releases/darwin/arm64/4.1.0/Claude-%s.zip' % ('a' * 40)),
+               self.make_feed(digest='nope'), self.make_feed(size=0), self.make_feed(size=True),
+               self.make_feed(listed='9.9.9'), b'not json', b'[]', b'{"currentRelease": 1, "releases": []}']
+        for data in bad:
+            with self.subTest(data=data[:120]), self.assertRaises(self.ns['ClientUpdateError']):
+                self.ns['cu_parse_squirrel'](data, 'arm64')
+
+    def test_redirect_to_other_host_is_refused(self):
+        self.use_claude()
+        for url, package in (('https://storage.example.invalid/Claude.zip', True),
+                             ('https://api.anthropic.com/api/desktop/darwin/arm64/squirrel/update', False),
+                             ('https://api.anthropic.com/api/desktop/darwin/arm64/squirrel/update?device_id=x&version=1&os_version=2', False)):
+            with self.subTest(url=url), self.assertRaises(self.ns['ClientUpdateError']):
+                self.ns['cu_url'](url, package)
+
+    def test_extract_needs_the_claude_root(self):
+        self.use_claude()
+        archive = self.root / 'other.zip'
+        with zipfile.ZipFile(archive, 'w') as z:
+            z.writestr('ChatGPT.app/Contents/x', b'x')
+        output = self.root / 'other'
+        output.mkdir()
+        with self.assertRaises(self.ns['ClientUpdateError']):
+            self.ns['cu_extract'](str(archive), str(output))
+
+    def test_wrong_team_or_bundle_is_blocked(self):
+        original = self.fake_run
+        def run(args, folder, timeout=30):
+            result = original(args, folder, timeout)
+            if '--display' in args:
+                result.stdout = b'TeamIdentifier=AAAAAAAAAA\nIdentifier=com.anthropic.claudefordesktop\n'
+            return result
+        self.ns['cu_run'] = run
+        code, output, _ = self.command('check', 'force')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.row(output)['status'], 'blocked')
+        self.assertEqual(self.urls, [], 'must not contact the feed for an unverifiable client')
+
+    def test_install_replaces_claude_and_labels_the_consent(self):
+        token = self.stage()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.ns['cmd_client_updates']('plan', token)
+        self.assertIn('CU_LABEL=Claude', output.getvalue())
+        self.assertIn('CU_VERSION=4.2.0', output.getvalue())
+        code, out, errors = self.command('install', token)
+        self.assertEqual(code, 0, errors + out)
+        self.assertEqual(self.installed_build(), '4.2.0')
+        self.assertEqual(self.row(out)['status'], 'updated')
+        self.assertEqual(list(self.claude.parent.glob('.cca-client-install-*')), [])
+
+    def test_package_is_not_kept_without_a_pending_update(self):
+        package = self.root / '.cca/client-updates/claude/package.zip'
+        self.stage()
+        self.assertTrue(package.exists())
+        token = self.row(self.command()[1])['install_token']
+        self.assertEqual(self.command('install', token)[0], 0)
+        self.assertFalse(package.exists(), 'installed: the staged zip must not linger')
+        self.make_app(self.claude, 'Claude', 'com.anthropic.claudefordesktop', '4.1.0', '4.1.0')
+        self.stage()
+        self.assertTrue(package.exists())
+        self.feed_code = '204'
+        self.assertEqual(self.command('check', 'force')[0], 0)
+        self.assertFalse(package.exists(), 'nothing to install: the staged zip must not linger')
+
+    def test_any_process_from_the_bundle_blocks_install(self):
+        token = self.stage()
+        for command in (str(self.claude) + '/Contents/MacOS/Claude --user-data-dir=/x',
+                        str(self.claude) + '/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu',
+                        str(self.claude) + '/Contents/Frameworks/Squirrel.framework/Resources/ShipIt com.anthropic.claudefordesktop.ShipIt /x'):
+            self.processes = ('88 ' + command + '\n').encode()
+            code, output, errors = self.command('install', token)
+            self.assertEqual(code, 1, output)
+            self.assertIn('Claude', errors)
+            self.assertEqual(self.installed_build(), '4.1.0')
+        self.processes = b'1 /sbin/launchd\n'
+        self.assertEqual(self.command('install', token)[0], 0)
+
+    def test_native_update_before_install_stops_it(self):
+        token = self.stage()
+        self.make_app(self.claude, 'Claude', 'com.anthropic.claudefordesktop', '4.3.0', '4.3.0')
+        self.assertEqual(self.command('install', token)[0], 1)
+        self.assertEqual(self.installed_build(), '4.3.0')
+
+    def test_not_installed_is_not_a_failure(self):
+        os.environ['CCA_CLIENT_CLAUDE_APP'] = ''
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        self.assertEqual(self.row(output)['status'], 'missing')
+        self.assertEqual(self.urls, [])
+        self.assertFalse((self.root / '.cca/client-updates/claude').exists())
+        self.assertFalse((self.root / '.cca/client-updates/codex').exists())
+
+    def add_chatgpt(self):
+        os.environ['CCA_CLIENT_CODEX_APP'] = str(self.chatgpt)
+        os.environ['CCA_CLIENT_VERIFIER'] = str(self.root / 'verifier')
+        (self.root / 'verifier').write_text('fake verifier')
+        self.make_app(self.chatgpt, 'ChatGPT', 'com.openai.codex', '1.0', '100')
+        self.chatgpt_package = self.make_zip('ChatGPT', 'com.openai.codex', '2.0', '200')
+        signature = base64.b64encode(b'X' * 64).decode()
+        self.chatgpt_feed = (f'<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>'
+                             f'<sparkle:version>200</sparkle:version><sparkle:shortVersionString>2.0</sparkle:shortVersionString>'
+                             f'<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>'
+                             f'<sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>'
+                             f'<enclosure url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-2.0.zip" '
+                             f'length="{len(self.chatgpt_package)}" sparkle:edSignature="{signature}"/>'
+                             '</item></channel></rss>').encode()
+
+    def test_both_clients_are_listed_claude_first_with_separate_tokens(self):
+        self.add_chatgpt()
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        doc = json.loads(output)
+        self.assertEqual([c['id'] for c in doc['clients']], ['claude', 'codex'])
+        claude, codex = doc['clients']
+        self.assertTrue(claude['can_install'] and codex['can_install'])
+        self.assertNotEqual(claude['install_token'], codex['install_token'])
+        code, out, errors = self.command('install', codex['install_token'])
+        self.assertEqual(code, 0, errors + out)
+        self.ns['CU'] = self.ns['CU_CODEX']
+        self.assertEqual(self.ns['cu_snapshot'](str(self.chatgpt))['build'], '200')
+        self.assertEqual(self.installed_build(), '4.1.0', 'installing ChatGPT must not touch Claude')
+        self.assertEqual(self.row(out)['status'], 'staged')
+        self.assertTrue(self.row(out)['can_install'])
+
+    def test_one_client_failing_does_not_stop_the_other(self):
+        self.add_chatgpt()
+        self.feed = self.make_feed(digest='0' * 64)
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.row(output)['status'], 'blocked')
+        codex = self.row(output, 'codex')
+        self.assertEqual(codex['status'], 'staged', output)
+        self.assertTrue(codex['can_install'])
+        self.assertIn('校验值', errors)
+
+    def test_time_budget_stops_new_downloads(self):
+        self.use_claude()
+        self.ns['CU_BUDGET'] = self.ns['time'].time() + 5
+        with self.assertRaises(self.ns['ClientUpdateError']):
+            self.ns['cu_time'](300)
+        self.ns['CU_BUDGET'] = self.ns['time'].time() + 100
+        self.assertLessEqual(self.ns['cu_time'](300), 100)
+        self.ns['CU_BUDGET'] = None
+        self.assertEqual(self.ns['cu_time'](300), 300)
+
+    def test_check_time_is_saved_before_the_download(self):
+        self.ns['cu_download'] = mock.Mock(side_effect=KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            self.command('check', 'force')
+        state = json.loads((self.root / '.cca/client-updates/claude/state.json').read_text())
+        self.assertGreater(state['checked_epoch'], 0)
 
 
 if __name__ == '__main__':

@@ -82,6 +82,7 @@ struct AppearanceMenu: View {
 
 /// 设置窗口（⌘,）：外观、新手引导。
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
     @Environment(AppearanceSetting.self) private var appearance
     @Environment(Guide.self) private var guide
 
@@ -94,6 +95,16 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+            }
+            Section("终端") {
+                Picker("默认终端", selection: Binding(get: { model.terminalChoice.id }, set: { model.chooseTerminal($0) })) {
+                    ForEach(model.terminals) { t in
+                        Text(t.name).tag(t.id)
+                    }
+                }
+                Text("账号页的「终端」、登录、添加账号都用它打开。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("新手引导") {
                 Toggle("显示技术细节（端口、槽位、纯净度明细）",
@@ -109,6 +120,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460)
+        .onAppear { model.refreshTerminals() }
         .fixedSize(horizontal: false, vertical: true)
     }
 }

@@ -181,7 +181,8 @@
             "app": true,
             "web": true,
             "usage": false,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "usage": "not_logged_in"
@@ -220,7 +221,8 @@
             "app": false,
             "web": false,
             "usage": false,
-            "check": true
+            "check": true,
+            "cli": true
           },
           "can_why": {
             "app": "api_account",
