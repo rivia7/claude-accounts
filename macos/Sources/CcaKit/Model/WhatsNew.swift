@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.16", title: "支持更多终端，用量自动刷新", points: [
+            .init(symbol: "terminal",
+                  text: "「终端」支持 iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux；Termius、Wave 会打开它并复制命令，粘贴运行。没装的显示为灰色。"),
+            .init(symbol: "arrow.clockwise",
+                  text: "用量在后台自动刷新：只查到期的账号，在用的查得勤、没在用的很少查；你走开或系统过热时暂停，不和你抢 CPU。"),
+            .init(symbol: "arrow.down.app",
+                  text: "Claude、ChatGPT 客户端每 6 小时检查一次更新，不再每分钟起一个进程。"),
+            .init(symbol: "network",
+                  text: "WebRTC 检测放宽：只有看到中国大陆的地址才警告，其他地区只作备注。"),
+        ], art: "quota"),
         ReleaseNote(version: "2.9.0-beta.15", title: "在终端里打开账号，Claude App 也能统一更新", points: [
             .init(symbol: "terminal",
                   text: "账号页多了「终端」按钮：在你选的文件夹里用这个账号开命令行，最近用过的文件夹会记住，所有账号共用。"),
