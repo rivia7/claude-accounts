@@ -162,7 +162,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   title / question / detail / severity / default），同意了带上 `CCA_GRANT` 重跑。后台自动刷新用量不弹框：记下来显示一条横幅，点了再手动刷新。
 - **闸门**：同一个账号（工具 + 键）的 app / web / 改别名排队；每个工具的 usage 一次一个；同一个账号的重置额度一次一个；router sync 全局一个；
   更新 cca（`update 版本号`）和 gui update 全局一个（一个接着一个）。`cca codex …` 只在 `hello.tools.codex.enabled` 为真时运行。
-- **刷新**：看得见时（主窗口没被挡住、或菜单栏面板开着）才跑定时器：用量每 15 分钟，分流页开着时 live 每 60 秒。总览不定时查 live
+- **刷新**：用量自动刷新不管看不看得见（`Scheduler` 每分钟看一眼，`UsagePolling` 只挑到期的账号，到期了才起进程）：在用的账号看得见时 5 分钟一次、看不见时 10 分钟，没在用的看得见时 8 分钟、看不见时 1 小时，低电量模式慢一倍；用户 15 分钟没碰电脑、系统过热时不查，查失败也按间隔重试。自动刷新和后台检查客户端更新都以 utility 优先级运行（子进程继承），定时器带容差。分流页开着时 live 每 60 秒。总览不定时查 live
   （端口连不上、选错节点的账号看它）：切到总览、主窗口变得看得见时，上次的超过 2 分钟才查一次；分流页、总览开着时操作完（同步路由器等）也查。变得看得见时，有账号的用量过期或超过
   5 分钟就刷新。FSEvents 只当信号（accounts.json、codex.json、config.json、*/usage.json、*/health.json、命令行会话的登记 accounts/*/cli-<数字>.json、
   policy/policy.json → state；bin/cca → hello；
@@ -182,8 +182,8 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   主窗口一出现就换回普通 App（`MainWindow.onAppear`）。`core/config.yaml` 变了是
   CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；
-  文件一开始就挪走再删掉，中途关窗口也不留下），用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Warp、WezTerm、Ghostty、kitty、Alacritty，
-  在设置和账号页「终端」的下拉里选）。第三方终端 30 秒还没运行就收回脚本、问要不要改用系统自带的。放了一小时还没运行的会清掉。
+  文件一开始就挪走再删掉，中途关窗口也不留下），用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux，
+  在设置和账号页「终端」的下拉里选，没装的灰着不能选）。Termius、Wave 没有从外面运行命令的办法，是半自动：打开它、把命令放进剪贴板，用户粘贴运行。第三方终端 30 秒还没运行就收回脚本、问要不要改用系统自带的。放了一小时还没运行的会清掉。
 - **账号的终端会话**：账号页的「终端」（右键菜单也有）在选的文件夹里运行 `cca [codex] @账号`，结束后留在用户的登录 shell 里。
   最近的文件夹记在 App 的设置里（最多 8 个，所有账号共用，第一次先选一个）。
 

@@ -97,14 +97,14 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
             }
             Section("终端") {
-                Picker("默认终端", selection: Binding(get: { model.terminalChoice.id }, set: { model.chooseTerminal($0) })) {
-                    ForEach(model.terminals) { t in
-                        Text(t.name).tag(t.id)
-                    }
+                LabeledContent("默认终端") {
+                    Menu(TerminalMenuItems.label(model.terminalChoice, installed: true)) { TerminalMenuItems() }
+                        .fixedSize()
                 }
-                Text("账号页的「终端」、登录、添加账号都用它打开。")
+                Text(terminalCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("新手引导") {
                 Toggle("显示技术细节（端口、槽位、纯净度明细）",
@@ -122,5 +122,32 @@ struct SettingsView: View {
         .frame(width: 460)
         .onAppear { model.refreshTerminals() }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var terminalCaption: String {
+        let t = model.terminalChoice
+        guard t.isAutomatic else {
+            return "\(t.name) 不能由别的 App 运行命令：点「终端」、登录、添加账号时会打开它并复制命令，到它的本地终端里粘贴运行。"
+        }
+        return (["账号页的「终端」、登录、添加账号都用它打开。"] + [t.note].compactMap { $0 }).joined(separator: "")
+    }
+}
+
+/// 选默认终端的菜单项：认识的都列出来，没装的灰着不能选，半自动的写明。
+/// 用 Toggle 不用 Picker：Picker 的选项不认 .disabled（实测菜单里全是可选的）。
+struct TerminalMenuItems: View {
+    @Environment(AppModel.self) private var model
+
+    static func label(_ t: TerminalApp, installed: Bool) -> String {
+        guard installed else { return "\(t.name)（未安装）" }
+        return t.isAutomatic ? t.name : "\(t.name)（半自动）"
+    }
+
+    var body: some View {
+        ForEach(TerminalApp.known) { t in
+            let installed = model.isInstalled(t)
+            Toggle(Self.label(t, installed: installed), isOn: Binding(get: { model.terminalChoice == t }, set: { if $0 { model.chooseTerminal(t.id) } }))
+                .disabled(!installed)
+        }
     }
 }

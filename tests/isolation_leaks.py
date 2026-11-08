@@ -90,13 +90,41 @@ class IsolationLeaks(unittest.TestCase):
         self.assertEqual(states['dns'], 'leak')
         self.assertIn('DNS 泄露（1 个解析器在中国大陆）', text)
 
-    def test_different_host_stun_ip_is_risk_not_browser_measurement(self):
-        text, states = self.verdict({'dns': self.dns(), 'stun': {'ips': ['192.0.2.77']}})
+    def stun(self, *where):
+        dns = self.dns()
+        for ip, cc in where:
+            dns['geo'][self.ns['ip_prefix'](ip)] = self.geo(cc)
+        return self.verdict({'dns': dns, 'stun': {'ips': [ip for ip, _ in where]}})
+
+    def test_mainland_stun_ip_is_risk_not_browser_measurement(self):
+        text, states = self.stun(('192.0.2.77', 'cn'))
         self.assertEqual(states['webrtc'], 'leak')
+        self.assertIn('W\twebrtc\t', text)
         self.assertIn('WebRTC 直连风险：192.0.2.77', text)
         self.assertIn('尚未验证浏览器或 Claude App 是否会暴露该 IP', text)
         self.assertNotIn('都拿得到', text)
         self.assertNotIn('会暴露 192.0.2.77', text)
+
+    def test_other_regions_are_only_a_note(self):
+        for cc in ('us', 'hk', 'mo', 'tw'):
+            with self.subTest(cc=cc):
+                text, states = self.stun(('192.0.2.77', cc))
+                self.assertEqual(states['webrtc'], 'note')
+                self.assertNotIn('W\twebrtc', text)
+                self.assertIn('N\twebrtc\t', text)
+                self.assertIn('WebRTC 备注：STUN 看到 192.0.2.77', text)
+                self.assertNotIn('直连风险', text)
+
+    def test_any_mainland_address_is_a_risk(self):
+        text, states = self.stun(('192.0.2.77', 'us'), ('198.51.100.77', 'cn'))
+        self.assertEqual(states['webrtc'], 'leak')
+        self.assertIn('WebRTC 直连风险：198.51.100.77', text)
+
+    def test_unknown_location_is_neither_a_warning_nor_clear(self):
+        text, states = self.verdict({'dns': self.dns(), 'stun': {'ips': ['192.0.2.77']}})
+        self.assertEqual(states['webrtc'], 'failed')
+        self.assertNotIn('W\twebrtc', text)
+        self.assertIn('归属地没查到', text)
 
     def test_stun_dns_failure_or_timeout_cannot_produce_ok(self):
         with mock.patch.object(socket, 'getaddrinfo', side_effect=socket.gaierror('unavailable')):

@@ -4159,8 +4159,8 @@ def cmd_leak_probe(proxy, key, since=''):
 
 def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
     """汇总 leak-probe 的结果（exit_ip / exit_cc 是这次出口检测拿到的）：第一行是给横幅的一句话，每个泄露再一行
-    W<TAB>dns|webrtc<TAB>说明，最后是机器看的状态 S<TAB>dns|webrtc<TAB>ok|leak|failed（出口检测结果里记下，见 health-save；
-    leak_finish 只认 W、S 行）；把新结果写进缓存。detail（cca check）时一句话里多写点。本机 STUN IP 直连查归属地：
+    W<TAB>dns|webrtc<TAB>说明，只作提醒的一行 N<TAB>webrtc<TAB>说明，最后是机器看的状态 S<TAB>dns|webrtc<TAB>ok|leak|note|failed（出口检测结果里记下，见 health-save；
+    leak_finish 只认 W、N、S 行）；把新结果写进缓存。detail（cca check）时一句话里多写点。本机 STUN IP 直连查归属地：
     别让账号的出口和它一起出现在别人那里"""
     p = load_quiet(path)
     if not isinstance(p, dict) or p.get('off'):
@@ -4175,7 +4175,7 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
     ips = [ip for ip in st.get('ips') or [] if isinstance(ip, str)]
     leaked = [ip for ip in ips if ip != exit_ip]
     geo.update(leak_geo(leaked, '', geo))
-    parts, warns, state, d = [], [], {}, dns.get(key)
+    parts, warns, notes, state, d = [], [], [], {}, dns.get(key)
     if isinstance(d, dict):
         sv = d.get('servers') or []
         cn = [s for s in sv if (geo.get(ip_prefix(s)) or {}).get('cc') == 'cn']
@@ -4201,12 +4201,26 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
         state['dns'] = 'failed'
         parts.append('DNS 没测成（探测未完成）')
     if leaked:
-        state['webrtc'] = 'leak'
-        w = leak_where(geo.get(ip_prefix(leaked[0])))
-        parts.append('WebRTC 直连风险：%s%s' % (leaked[0], '（%s）' % w if w else ''))
-        warns.append(('webrtc', 'WebRTC 直连风险：本机 UDP 的 STUN 探测看到 %s，与账号的出口不同。这是本机网络探测，'
-                      '尚未验证浏览器或 %s 是否会暴露该 IP；应在实际客户端验证 WebRTC 路由，并限制绕过账号代理的 UDP 流量' %
-                      ('、'.join(leaked[:2]) + ('（%s）' % w if w else ''), T.app_label)))
+        def cc_of(ip):
+            return (geo.get(ip_prefix(ip)) or {}).get('cc') or ''
+        cn = [ip for ip in leaked if cc_of(ip) == 'cn']
+        shown = (cn or leaked)[0]
+        w = leak_where(geo.get(ip_prefix(shown)))
+        at = '%s（%s）' % (shown, w) if w else shown
+        if cn:   # 只有中国大陆的地址才算风险
+            state['webrtc'] = 'leak'
+            parts.append('WebRTC 直连风险：%s' % at)
+            warns.append(('webrtc', 'WebRTC 直连风险：本机 UDP 的 STUN 探测看到中国大陆的地址 %s，与账号的出口不同。这是本机网络探测，'
+                          '尚未验证浏览器或 %s 是否会暴露该 IP；应在实际客户端验证 WebRTC 路由，并限制绕过账号代理的 UDP 流量' % (at, T.app_label)))
+        elif all(re.fullmatch('[a-z]{2}', cc_of(ip)) for ip in leaked):   # 别的地区只作提醒
+            state['webrtc'] = 'note'
+            parts.append('WebRTC 备注：STUN 看到 %s，与账号的出口不同' % at)
+            notes.append(('webrtc', '本机 STUN 探测看到 %s，与账号的出口不同，但不是中国大陆的地址，只作提醒。'
+                          '尚未验证浏览器或 %s 是否会暴露该 IP' % (at, T.app_label)))
+        else:   # 归属地查不到：说不清是不是中国大陆，也不能当作没问题
+            state['webrtc'] = 'failed'
+            parts.append('WebRTC 没测成（STUN 看到 %s，归属地没查到，浏览器状态未验证）' % shown)
+            notes.append(('webrtc', '本机 UDP 的 STUN 探测看到 %s，与账号的出口不同，但归属地没查到，判断不了是不是中国大陆的地址' % shown))
     elif ips:
         state['webrtc'] = 'ok'
         parts.append('WebRTC：STUN 出口一致（浏览器状态未验证）')
@@ -4223,6 +4237,8 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
         print(' · '.join(parts))
         for kind, msg in warns:
             print('W\t%s\t%s' % (kind, msg))
+        for kind, msg in notes:
+            print('N\t%s\t%s' % (kind, msg))
         for kind, v in state.items():
             print('S\t%s\t%s' % (kind, v))
 
@@ -5752,6 +5768,7 @@ CU_MAX_PACKAGE = 2 * 1024 * 1024 * 1024
 CU_NS = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 # 一次 check 最多用多久：App 等 900 秒，超时会杀掉 cca
 CU_CHECK_SECONDS = 840
+CU_CHECK_INTERVAL = 6 * 3600   # 后台多久检查一次：每次只是两个小请求，发现新版才下载
 CU_BUDGET = None
 
 
@@ -6376,6 +6393,12 @@ def cu_view(state=None, problem=None):
     return row
 
 
+def cu_next_check(rows):
+    """下次该后台检查的时间：App 睡到这时候再来问，不用隔一会儿起一个进程。关了自动检查、一个客户端都没装时是 None"""
+    times = [r.get('checked_epoch') or 0 for r in rows if r.get('status') != 'missing']
+    return min(times) + CU_CHECK_INTERVAL if times and cu_mode() != 'off' else None
+
+
 def cu_doc(problems=None):
     """所有客户端的状态文档；problems 是 {客户端 id: 这次操作遇到的问题}"""
     global CU
@@ -6389,18 +6412,18 @@ def cu_doc(problems=None):
             state, problem = {}, problem or e
         rows.append(cu_view(state, problem))
     return {'version': 1, 'kind': 'client_updates', 'generated_epoch': time.time(),
-            'mode': cu_mode(), 'clients': rows}
+            'mode': cu_mode(), 'next_check_epoch': cu_next_check(rows), 'clients': rows}
 
 
 def cu_check(state, force=False):
     import tempfile
     root = cu_root(True)
-    if not force and (cu_mode() == 'off' or time.time() - state.get('checked_epoch', 0) < 86400):
+    if not force and (cu_mode() == 'off' or time.time() - state.get('checked_epoch', 0) < CU_CHECK_INTERVAL):
         return state
     target = cu_snapshot(cu_target())
     state['checked_epoch'] = time.time()
     try:
-        cu_save_state(state)   # 先记下检查时间：中途被杀掉时，下一轮（60 秒后）不会从头再下载一遍
+        cu_save_state(state)   # 先记下检查时间：中途被杀掉时，下一轮不会马上从头再下载一遍
         with tempfile.TemporaryDirectory(prefix='check-', dir=root) as folder:
             if cu_bundle(target['path'], folder) != target:
                 cu_error('needs_recheck', '客户端正在被其他更新器修改，请重新检查')
@@ -8825,7 +8848,7 @@ settings_warn() {
 coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出口地区（不查 ip.net.coffee 的纯净度、不测泄露，查用量前用）；
 	               # 别的时候同时在后台测 DNS / WebRTC 泄露（给了开始时间时 DNS 不用那之前的缓存：cca check），结果在 LEAK_*
 	local trace ip loc risk="" out rc min="$CCA_MIN_TRUST"
-	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC="" LEAK_DNS_STATE="" LEAK_WEBRTC_STATE="" HEALTH_JSON=""
+	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC="" LEAK_WEBRTC_NOTE="" LEAK_DNS_STATE="" LEAK_WEBRTC_STATE="" HEALTH_JSON=""
 	[ "${1:-}" = region ] || leak_start "${1:-}"
 	trace=$(curl -q --noproxy '' -s -m 8 -x "$ACC_PROXY" "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
 	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
@@ -8840,7 +8863,7 @@ coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出�
 	case $rc in 0|1|4) leak_finish "$ip" "$loc" "${1:-}" ;; *) leak_finish ;; esac   # 出口本身就不对（受限地区、拿不到 IP）时不用等它
 	# 记进账号目录的 health.json（图形界面不联网也能显示上次的出口）；cca check --json 用 HEALTH_JSON
 	[ "${1:-}" = region ] || HEALTH_JSON=$(py health-save "$ACC_KEY" "${HEALTH_SOURCE:-launch}" "${ROUTE:-}" "$ACC_NODE" "$ACC_PORT" "$min" \
-		"$trace" "$risk" "$LEAK_LINE" "$LEAK_DNS" "$LEAK_WEBRTC" "$LEAK_DNS_STATE" "$LEAK_WEBRTC_STATE" 2>/dev/null)
+		"$trace" "$risk" "$LEAK_LINE" "$LEAK_DNS" "${LEAK_WEBRTC:-$LEAK_WEBRTC_NOTE}" "$LEAK_DNS_STATE" "$LEAK_WEBRTC_STATE" 2>/dev/null)
 	return $rc
 }
 leak_start() {   # leak_start [cca check 开始的时间]：后台开始 DNS / WebRTC 泄露检测（py leak-probe，最多 5 秒左右）
@@ -8850,7 +8873,7 @@ leak_start() {   # leak_start [cca check 开始的时间]：后台开始 DNS / W
 	LEAK_PID=$!
 }
 leak_finish() {   # leak_finish [出口IP 出口地区 [cca check 开始的时间]]：等后台的检测，汇总成 LEAK_LINE（横幅里的一句）、
-	                # LEAK_DNS / LEAK_WEBRTC（泄露时的说明）。不给出口 IP 时不等它、不汇总（它自己几秒内就结束）
+	                # LEAK_DNS / LEAK_WEBRTC（泄露时的说明，要警告的）、LEAK_WEBRTC_NOTE（只作提醒的说明）。不给出口 IP 时不等它、不汇总（它自己几秒内就结束）
 	local out kind tag msg
 	[ -n "${LEAK_PID:-}" ] || return 0
 	if [ -n "${1:-}" ]; then
@@ -8860,6 +8883,7 @@ leak_finish() {   # leak_finish [出口IP 出口地区 [cca check 开始的时�
 		while IFS=$'\t' read -r kind tag msg; do
 			case "$kind" in
 				W) case "$tag" in dns) LEAK_DNS="$msg" ;; webrtc) LEAK_WEBRTC="$msg" ;; esac ;;
+				N) case "$tag" in webrtc) LEAK_WEBRTC_NOTE="$msg" ;; esac ;;
 				S) case "$tag" in dns) LEAK_DNS_STATE="$msg" ;; webrtc) LEAK_WEBRTC_STATE="$msg" ;; esac ;;
 			esac
 		done <<< "$out"
@@ -10042,24 +10066,26 @@ usage_route() {   # 查用量、重置额度经哪台机器上的账号端口（
 	USAGE_HOST="$PROXY_HOST"
 }
 
-cmd_usage() {   # cca [codex] usage [账号] [--json]
-	local json="" q="" key i tmp rc bad color=""
-	local -a keys=() pids=()
+cmd_usage() {   # cca [codex] usage [账号…] [--json]（CCA_USAGE_JOBS：最多同时查几个，默认 4；App 自动刷新时是 2）
+	local json="" q key i tmp rc bad color=""
+	local -a keys=() pids=() wanted=()
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--json) json=json ;;
-			-h|--help) say "用法: ${CMD} usage [账号] [--json]"; return 0 ;;
-			-*) die "用法: ${CMD} usage [账号] [--json]" ;;
-			*) [ -z "$q" ] || die "用法: ${CMD} usage [账号] [--json]（写一个账号，或者不写查全部）"; q="$1" ;;
+			-h|--help) say "用法: ${CMD} usage [账号…] [--json]"; return 0 ;;
+			-*) die "用法: ${CMD} usage [账号…] [--json]" ;;
+			*) wanted+=("$1") ;;
 		esac
 		shift
 	done
 	need_bin
-	if [ -n "$q" ]; then
-		key=$(py resolve "$q") || exit 1
-		eval "$(py env "$key")"
-		[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号，没有订阅用量可查（用量看服务商的控制台）"
-		keys=("$key")
+	if [ ${#wanted[@]} -gt 0 ]; then
+		for q in "${wanted[@]}"; do
+			key=$(py resolve "$q") || exit 1
+			eval "$(py env "$key")"
+			[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号，没有订阅用量可查（用量看服务商的控制台）"
+			keys+=("$key")
+		done
 	else
 		while IFS= read -r key; do [ -n "$key" ] && keys+=("$key"); done < <(py keys official)
 		[ ${#keys[@]} -gt 0 ] || { info "还没有官方账号（${CMD} add）"; return 0; }
@@ -10071,12 +10097,12 @@ cmd_usage() {   # cca [codex] usage [账号] [--json]
 	# Ctrl-C、关掉终端：后台的查询忽略 SIGINT，要自己停掉它们（连同它们起的 python、curl；claude、codex 的 stdin 一断也就退出了）
 	trap 'for i in "${pids[@]}"; do pkill -P "$i"; kill "$i"; done 2>/dev/null; rm -rf "$tmp"; exit 130' INT TERM HUP
 	[ -n "$json" ] || info "正在经各账号自己的出口查询用量（${#keys[@]} 个账号）…"
-	for ((i = 0; i < ${#keys[@]}; i++)); do   # 最多同时查 4 个
+	for ((i = 0; i < ${#keys[@]}; i++)); do   # 同时查的不超过 CCA_USAGE_JOBS 个
 		eval "$(py env "${keys[i]}")"
 		ACC_PROXY="${USAGE_HOST:+http://${USAGE_HOST}:${ACC_PORT}}"
 		usage_one "$tmp/$i" </dev/null 3<&- &
 		pids+=($!)
-		if [ ${#pids[@]} -ge 4 ]; then wait "${pids[0]}"; pids=("${pids[@]:1}"); fi
+		if [ ${#pids[@]} -ge "${CCA_USAGE_JOBS:-4}" ]; then wait "${pids[0]}"; pids=("${pids[@]:1}"); fi
 	done
 	wait
 	trap - INT TERM HUP
@@ -11003,7 +11029,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
                              启动前经该账号端口检测出口（claude.ai 看到的 IP + ip.net.coffee 纯净度）
 
 用量
-  cca usage [账号] [--json]   查官方账号的订阅用量：5 小时、本周（含分模型）额度用了多少、什么时候重置；
+  cca usage [账号…] [--json]  查官方账号的订阅用量：5 小时、本周（含分模型）额度用了多少、什么时候重置；
                              经每个账号自己的出口、让 Claude Code 自己去查（不发消息、不耗额度），
                              查不到时显示上次的缓存。菜单和 cca ls 里也会附上最近一次的用量
 
@@ -11036,7 +11062,7 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              一起建在 ~/.local/bin；添加 Codex 账号时没有的话也会补上）
   cca codex add [api]        新增 Codex 账号（用 ChatGPT 登录，第一次启动时在它专属的浏览器窗口里登录）；
                              api：兼容 OpenAI Responses 接口的第三方服务（地址 + key，模型可选）
-  cca codex usage [账号] [--json]
+  cca codex usage [账号…] [--json]
                              查 Codex 账号的 5 小时、每周额度和剩余的重置次数：
                              经各自的出口让 codex 自己去查，不耗额度
   cca codex reset <账号> [--json]

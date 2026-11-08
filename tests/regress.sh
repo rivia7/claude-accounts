@@ -237,13 +237,25 @@ python3 -I "$T/fake_stun.py" "$T" & STUN_PID=$!
 for i in $(seq 1 50); do [ -s "$T/stun.port" ] && break; sleep 0.1; done; STUN="127.0.0.1:$(cat "$T/stun.port")"
 echo 192.0.2.77 > "$T/stun_ip"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "WebRTC 直连风险（宿主 STUN 看到的不是账号的出口）：横幅注明探针 IP、在哪（归属地直连查，不经账号的出口）；命令行启动不另外警告" '[ $rc -eq 3 ] && grep -qx "STUN 192.0.2.77" "$T/stun.log" && printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC 直连风险：192.0.2.77（United States · Example ISP）" && grep -qx "CURL direct https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! grep -q "via :7901 https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP"'
+ok "WebRTC：宿主 STUN 看到的不是账号的出口，但也不是中国大陆的地址：横幅里只是备注（探针 IP、在哪；归属地直连查，不经账号的出口），不警告" '[ $rc -eq 3 ] && grep -qx "STUN 192.0.2.77" "$T/stun.log" && printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC 备注：STUN 看到 192.0.2.77（United States · Example ISP），与账号的出口不同" && grep -qx "CURL direct https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! grep -q "via :7901 https://ip.net.coffee/api/geoip/192.0.2.77" curl.log && ! printf "%s" "$out" | grep -q "WebRTC 直连风险"'
+ok "WebRTC 备注记进 health.json（状态 note，说明给 App 看）" 'grep -qE "\"webrtc\": *\"note\"" "$H"/.cca/accounts/*/health.json && grep -q "不是中国大陆的地址，只作提醒" "$H"/.cca/accounts/*/health.json'
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
-ok "cca app：WebRTC 直连风险另外说明（不声称已经验证浏览器），照常打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP 的 STUN 探测看到" && printf "%s" "$out" | grep -q "未验证浏览器"'
+ok "cca app：不是中国大陆的地址不另外说明，照常打开" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "WebRTC 直连风险"'
+echo 198.51.100.77 > "$T/stun_ip"
+mkdir -p "$T/geo"
+printf '{"country": "China", "region": "", "city": "", "isp": "Example CN", "country_code": "cn"}' > "$T/geo/198.51.100.77.json"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "WebRTC：看到的是中国大陆的地址才算风险：横幅里标出来；命令行启动不另外警告" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：198.51.100.77（China · Example CN）" && ! printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP"'
+out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
+ok "cca app：中国大陆的地址另外说明（不声称已经验证浏览器），照常打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP 的 STUN 探测看到中国大陆的地址" && printf "%s" "$out" | grep -q "未验证浏览器"'
 edit_table 'j["carol@example.com"] = "US-C"'
 out=$(run CCA_TTY="$(ans)" cca @carol --version 2>&1); rc=$?
 ok "要在账号的浏览器里登录时，WebRTC 泄露先说一声（登录页在那个浏览器里打开）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：" && grep -q "ARGS: auth login --claudeai --email carol@example.com" claude.log'
 run CCA_TTY="$(ans y)" cca rm carol >/dev/null 2>&1
+echo 198.18.0.77 > "$T/stun_ip"
+printf 'not json' > "$T/geo/198.18.0.77.json"
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "WebRTC：看到了别的地址、归属地查不到：说不清是不是中国大陆，记为没测成，不警告也不当作没问题" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 没测成（STUN 看到 198.18.0.77，归属地没查到" && ! printf "%s" "$out" | grep -q "WebRTC 直连风险"'
 echo 203.0.113.1 > "$T/stun_ip"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
 ok "直连 STUN 看到的就是账号的出口：仅确认 STUN 出口一致" 'printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常 · WebRTC：STUN 出口一致（浏览器状态未验证）"'
@@ -710,6 +722,8 @@ canned alice@example.com 13 41 max "{$fable, \"limits\": null}"
 out2=$(run cca usage alice --json 2>/dev/null)
 canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}]}"
 out3=$(run cca usage alice --json 2>/dev/null)
+mixed=$(run CCA_USAGE_JOBS=1 cca usage alice bob --json 2>/dev/null)
+ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if len(d[\"accounts\"]) == 2 else 1)"'
 canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
 edit_table 'j["副号(bob@example.com)"] = j.pop("bob@example.com")'

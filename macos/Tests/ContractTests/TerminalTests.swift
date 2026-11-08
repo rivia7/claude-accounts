@@ -77,9 +77,22 @@ func sessionScriptTests() async {
     await m.start()
 
     check("认识的终端：系统自带的在最前面，每个 bundle id 只一个", TerminalApp.known.first == .system && Set(TerminalApp.known.map(\.id)).count == TerminalApp.known.count)
-    check("识别出装了的终端，没选过时用系统自带的", m.terminals == [.system, iTerm] && m.terminalChoice == .system)
+    let mainstream = ["com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable", "com.github.wez.wezterm", "net.kovidgoyal.kitty", "org.alacritty",
+                      "org.tabby", "com.raphaelamorim.rio", "co.zeit.hyper", "com.cmuxterm.app", "com.termius-dmg.mac", "dev.commandline.waveterm"]
+    check("主流的第三方终端都认识", mainstream.allSatisfy { id in TerminalApp.known.contains { $0.id == id } })
+    check("只有 Termius、Wave 是半自动", TerminalApp.known.filter { !$0.isAutomatic }.map(\.id) == ["com.termius-dmg.mac", "dev.commandline.waveterm"])
+    check("带参数启动的都把脚本传过去", TerminalApp.known.allSatisfy { t in
+        if case .arguments(let a) = t.launch { return a.contains(TerminalApp.scriptToken) }
+        return true
+    })
+    let ghostty = TerminalApp.known.first { $0.id == "com.mitchellh.ghostty" }!
+    check("识别出装了的终端，没选过时优先用第三方的", m.terminals == [.system, iTerm] && m.terminalChoice == iTerm)
+    m.chooseTerminal(TerminalApp.system.id)
+    check("也可以选回系统自带的", m.terminalChoice == .system)
     m.chooseTerminal(iTerm.id)
     check("选的终端记下来", m.terminalChoice == iTerm && prefs.string(forKey: AppModel.Prefs.terminalApp) == iTerm.id)
+    m.chooseTerminal(ghostty.id)
+    check("没装的选不了", !m.isInstalled(ghostty) && m.terminalChoice == iTerm && prefs.string(forKey: AppModel.Prefs.terminalApp) == iTerm.id)
     log.installed = [.system]
     m.refreshTerminals()
     check("选的终端卸载了就退回系统自带的", m.terminalChoice == .system)
@@ -131,8 +144,9 @@ func sessionScriptTests() async {
     await w.start()
     w.handoffDirectory = handoffs
     w.terminalGrace = 0.05
+    w.chooseTerminal(TerminalApp.system.id)
     w.launchInTerminal(.edit(prefix: []), ccaPath: "/usr/bin/true")
-    check("没选过：用系统自带的", openLog.terminals == [TerminalApp.system.id])
+    check("选了系统自带的：用它", openLog.terminals == [TerminalApp.system.id])
     try? await Task.sleep(nanoseconds: 150_000_000)
     check("系统自带的不用等它", w.sheet == nil && openLog.opened.last.map { fm.fileExists(atPath: $0.path) } == true)
 
@@ -158,5 +172,27 @@ func sessionScriptTests() async {
     check("打不开时马上说", w.sheet != nil)
     w.dismissSheet()
     w.shutdown()
+
+    // 半自动：打开它、命令进剪贴板，不写交接文件
+    let termius = TerminalApp.known.first { $0.id == "com.termius-dmg.mac" }!
+    let pasteLog = HookLog()
+    pasteLog.installed = [.system, termius]
+    let p = makeModel(fixtureTransport(), log: pasteLog, prefs: MemoryPrefs())
+    await p.start()
+    p.handoffDirectory = tmpRoot.appendingPathComponent("handoff-paste")
+    p.terminalGrace = 0.05
+    check("只装了半自动的终端：没选过时还是系统自带的", p.terminalChoice == .system)
+    p.chooseTerminal(termius.id)
+    check("半自动的终端可以选", p.terminalChoice == termius)
+    p.launchInTerminal(.session(prefix: ["codex"], key: "工作(bob@example.com)", name: "工作", directory: "/tmp/工作 目录"), ccaPath: "/x/cca")
+    check("半自动：打开它、命令进剪贴板（先进文件夹，cca 用绝对路径）",
+          pasteLog.activated == [termius.id] && pasteLog.copied == ["cd '/tmp/工作 目录' && /x/cca codex '@工作(bob@example.com)'"], pasteLog.copied.joined(separator: "|"))
+    check("半自动：提醒去粘贴", (p.toast?.text ?? "").contains("粘贴") && (p.toast?.text ?? "").contains("Termius"))
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    check("半自动：不写交接文件、不等它运行", pasteLog.opened.isEmpty && !fm.fileExists(atPath: tmpRoot.appendingPathComponent("handoff-paste").path) && p.sheet == nil)
+    pasteLog.openSucceeds = false
+    p.launchInTerminal(.edit(prefix: []), ccaPath: "/x/cca")
+    check("打不开也说清楚，命令还在剪贴板里", pasteLog.copied.last == "/x/cca edit" && (p.toast?.text ?? "").contains("打不开 Termius"))
+    p.shutdown()
     m.shutdown()
 }

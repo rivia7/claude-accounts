@@ -17,33 +17,46 @@ func displayCommand(_ arguments: [String]) -> String {
     (["cca"] + arguments.map(shellQuoteIfNeeded)).joined(separator: " ")
 }
 
-/// 能运行交接脚本的终端：App 看这台 Mac 上装了哪些，用户挑一个当默认的。
+/// 认识的终端：App 看这台 Mac 上装了哪些（没装的在选择列表里灰着），用户挑一个当默认的。
 struct TerminalApp: Identifiable, Hashable, Sendable {
     enum Launch: Hashable, Sendable {
-        /// 把 .command 文件交给它，它自己开窗口运行（这几个终端都声明了能打开这种文件）
+        /// 全自动：把 .command 文件交给它，它自己开窗口运行（声明了能打开这种文件，或者收到可执行文件时直接运行）
         case openFile
-        /// 开一个新进程，参数里带上脚本（`scriptToken` 换成脚本的路径）：打开文件这条路不好用的终端
-        /// （Ghostty 打开文件每次都要确认，kitty 默认也是，Alacritty 不能打开文件）
+        /// 全自动：开一个新进程，参数里带上脚本（`scriptToken` 换成脚本的路径）。打开文件这条路不好用的终端：
+        /// Ghostty 打开文件每次都要确认，kitty 默认也是，Alacritty、Rio、Tabby 的命令行才能指定运行什么
         case arguments([String])
+        /// 半自动：它没有从外面运行命令的办法。打开它，把命令放进剪贴板，用户在它的终端里粘贴
+        case paste
     }
 
     /// bundle id
     let id: String
     let name: String
     let launch: Launch
+    /// 选它时在设置里提醒一句（比如运行前它自己要确认）
+    var note: String?
+
+    /// 全自动：不用用户再粘贴。
+    var isAutomatic: Bool { launch != .paste }
 
     static let scriptToken = "{script}"
     static let system = TerminalApp(id: "com.apple.Terminal", name: "系统终端", launch: .openFile)
-    /// 认识的终端：系统自带的排最前面。
+    /// 认识的终端：系统自带的排最前面，然后是全自动的第三方终端（没选过时用这里面第一个装了的），半自动的在最后。
     static let known: [TerminalApp] = [
         system,
-        TerminalApp(id: "com.googlecode.iterm2", name: "iTerm2", launch: .openFile),
-        TerminalApp(id: "dev.warp.Warp-Stable", name: "Warp", launch: .openFile),
-        TerminalApp(id: "com.github.wez.wezterm", name: "WezTerm", launch: .openFile),
+        TerminalApp(id: "com.googlecode.iterm2", name: "iTerm2", launch: .openFile, note: "第一次运行时 iTerm2 会问要不要运行这个脚本，选不再询问就行。"),
         TerminalApp(id: "com.mitchellh.ghostty", name: "Ghostty",
                     launch: .arguments(["--quit-after-last-window-closed=true", "-e", "/bin/bash", scriptToken])),
+        TerminalApp(id: "dev.warp.Warp-Stable", name: "Warp", launch: .openFile),
+        TerminalApp(id: "com.github.wez.wezterm", name: "WezTerm", launch: .openFile),
         TerminalApp(id: "net.kovidgoyal.kitty", name: "kitty", launch: .arguments(["--single-instance", "/bin/bash", scriptToken])),
         TerminalApp(id: "org.alacritty", name: "Alacritty", launch: .arguments(["-e", "/bin/bash", scriptToken])),
+        TerminalApp(id: "org.tabby", name: "Tabby", launch: .arguments(["run", "/bin/bash", scriptToken]), note: "每次运行前 Tabby 都会弹窗确认，30 秒内点 Run。"),
+        TerminalApp(id: "com.raphaelamorim.rio", name: "Rio", launch: .arguments(["-e", "/bin/bash", scriptToken])),
+        TerminalApp(id: "co.zeit.hyper", name: "Hyper", launch: .openFile),
+        TerminalApp(id: "com.cmuxterm.app", name: "cmux", launch: .openFile),
+        TerminalApp(id: "com.termius-dmg.mac", name: "Termius", launch: .paste),
+        TerminalApp(id: "dev.commandline.waveterm", name: "Wave", launch: .paste),
     ]
 }
 
@@ -63,6 +76,12 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     var systemTerminal = false
 
     var id: String { arguments.joined(separator: "\u{1F}") }
+
+    /// 半自动的终端：粘贴进去运行的那一行（cca 用绝对路径，不依赖那个终端的 PATH）。
+    func pasteCommand(ccaPath: String) -> String {
+        let run = ([ccaPath] + arguments).map(shellQuoteIfNeeded).joined(separator: " ")
+        return directory.map { "cd \(shellQuoteIfNeeded($0)) && \(run)" } ?? run
+    }
 
     init(arguments: [String], display: String? = nil, title: String, message: String = "") {
         self.arguments = arguments

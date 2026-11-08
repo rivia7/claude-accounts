@@ -223,14 +223,15 @@ struct HealthResult: KnownValues {
     static let allKnown: [HealthResult] = [.ok, .lowPurity, .restricted, .noExit, .noScore, .portClosed, .apiOk, .apiUnreachable]
 }
 
-/// 泄露检测：`dns` 有 ok / leak / failed，`webrtc` 有 ok / leak。
+/// 泄露检测：`dns` 有 ok / leak / failed，`webrtc` 还有 note（STUN 看到的地址和出口不同，但不是中国大陆的：只作提醒）。
 struct LeakState: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
     static let ok = LeakState(rawValue: "ok")
     static let leak = LeakState(rawValue: "leak")
+    static let note = LeakState(rawValue: "note")
     static let failed = LeakState(rawValue: "failed")
-    static let allKnown: [LeakState] = [.ok, .leak, .failed]
+    static let allKnown: [LeakState] = [.ok, .leak, .note, .failed]
 }
 
 // MARK: 事件（PROTOCOL 4）

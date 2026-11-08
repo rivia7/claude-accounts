@@ -410,13 +410,13 @@ struct HealthDetails: View {
         let word = Texts.leak(s, what: "").trimmingCharacters(in: .whitespaces)
         return CheckTile(title: what) {
             HStack(spacing: 6) {
-                Image(systemName: s == .leak ? "exclamationmark.triangle.fill" : s == .ok ? "checkmark.circle.fill" : "questionmark.circle")
+                Image(systemName: s == .leak ? "exclamationmark.triangle.fill" : s == .ok ? "checkmark.circle.fill" : s == .note ? "info.circle" : "questionmark.circle")
                     .foregroundStyle(dim ? Color.secondary : Palette.leak(s))
                 Text(word)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(dim ? .secondary : .primary)
             }
-            if s == .leak || s == .failed, let m = nonEmpty(message) {
+            if s == .leak || s == .failed || s == .note, let m = nonEmpty(message) {
                 Text(m).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)

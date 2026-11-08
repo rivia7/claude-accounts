@@ -68,15 +68,6 @@ func textTests() {
     if let l = fixture("live_router.json").flatMap({ try? DocumentDecoder.decode(LiveDoc.self, from: $0) }) {
         check("drift 要标记", Attention.needed(sync: .ok, live: l, usages: [], now: now))
     }
-    if let s = fixture("state.json").flatMap({ try? DocumentDecoder.decode(StateDoc.self, from: $0) }) {
-        let bob = s.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))!
-        let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))!
-        check("新的不刷新", !Attention.usageNeedsRefresh([(bob, entry(10, fetched: now - 60))], now: now))
-        check("过期的刷新", Attention.usageNeedsRefresh([(bob, entry(10, fetched: now - 60, stale: true))], now: now))
-        check("超过 5 分钟的刷新", Attention.usageNeedsRefresh([(bob, entry(10, fetched: now - 400))], now: now))
-        check("没有缓存的刷新", Attention.usageNeedsRefresh([(bob, nil)], now: now))
-        check("查不了用量的账号不算", !Attention.usageNeedsRefresh([(carol, nil)], now: now))
-    }
 }
 
 func shellTests() async {

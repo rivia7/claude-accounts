@@ -61,7 +61,7 @@ import Foundation
     _ = await waitUntil { m.live?.route == .local }
     check("看本机 Clash 那边", m.live?.route == .local)
     m.setMainVisible(false)
-    check("看不见时不跑", !m.scheduler.usageRunning && !m.scheduler.liveRunning)
+    check("看不见时 live 停下，用量还在轮询（放慢）", m.scheduler.usageRunning && !m.scheduler.liveRunning)
     m.copy("cca edit")
     check("复制", log.copied == ["cca edit"])
     m.apply(Remedy.openURL("https://claude.ai/download"))
@@ -151,7 +151,7 @@ import Foundation
     check("cca 换过了：看得见时重新跑 hello", hellos() == hellosBefore + 1)
     _ = await waitUntil { m5.usageRefreshing.isEmpty && !m5.stateLoading }
     try? await Task.sleep(nanoseconds: 300_000_000)
-    check("看得见时没有缓存的账号自动刷新用量", counter.requests.contains { $0.arguments == ["usage", "--json"] })
+    check("看得见时没有缓存的账号自动刷新用量（只查到期的）", counter.requests.contains { $0.arguments.first == "usage" && $0.arguments.last == "--json" && $0.arguments.count > 2 && $0.background })
     check("后台刷新用量失败：记下来（不弹框）", m5.usageFailure[.claude] != nil && m5.sheet == nil)
     let settled = states()
     m5.desktopAppsChanged()

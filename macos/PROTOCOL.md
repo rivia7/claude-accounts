@@ -209,7 +209,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 ## 3. 用量、出口检测
 
-### 3.1 `cca [codex] usage [账号] --json`
+### 3.1 `cca [codex] usage [账号…] --json`
+
+不写账号查全部；写了就只查这几个（App 自动刷新时只查到期的账号，带 `CCA_USAGE_JOBS=2`：最多同时查两个，默认 4）。
 
 格式和以前一样，文档另加 `"kind": "usage"` 和 `generated_epoch`，每个账号的条目**新增**：
 
@@ -278,8 +280,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `result`：`ok` | `low_purity`（纯净度低于设定）| `restricted`（出口在不可用地区，`restricted_region` 是地区名）| `no_exit`（拿不到出口 IP）|
   `no_score`（检测服务没给评分）| `port_closed` | `api_ok` | `api_unreachable`。
 - `trust`：0–100，没有评分为 null。`stale`：超过 6 小时。`applies`：测的时候用的节点和账号现在的节点相同（换了节点就是旧结果）。
-- `leak`：没测（关掉了泄露检测、出口本身就不对）为 null。`dns`：`ok` | `leak` | `failed` | null；`webrtc`：`ok` | `leak` | `failed` | null；
-  `*_message` 是发现风险时给人看的说明。`ok` 仅表示宿主探针未发现该项异常，不是浏览器实测结论；空结果、超时及信息不足使用 `failed`。
+- `leak`：没测（关掉了泄露检测、出口本身就不对）为 null。`dns`：`ok` | `leak` | `failed` | null；`webrtc`：`ok` | `leak`（STUN 看到中国大陆的地址）| `note`（看到的地址和出口不同，但不是中国大陆的：只作提醒，不算问题）| `failed`（包括看到了别的地址、归属地查不到）| null；
+  `*_message` 是发现风险或备注时给人看的说明。`ok` 仅表示宿主探针未发现该项异常，不是浏览器实测结论；空结果、超时及信息不足使用 `failed`。
 
 ## 4. 事件和同意（`CCA_EVENTS`、`CCA_GRANT`）
 
@@ -412,8 +414,10 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 一小时前留下的 `.command` 文件 App 会清掉。用户回到 App（App 被激活）时重新读一次 `state`。
 
 用哪个终端、账号的会话从哪个文件夹启动（最近用过的，所有账号共用），都记在 App 自己的设置里，不进 `~/.cca`，cca 不知道也不用知道。
-App 按 bundle id 看这台 Mac 上装了哪些：系统自带的“终端”、iTerm2、Warp、WezTerm（把 `.command` 文件交给它们）、Ghostty、kitty、Alacritty
-（开新进程、参数里带上脚本：Ghostty、kitty 打开文件每次都要确认，Alacritty 不能打开文件）。第三方终端 30 秒还没运行脚本（`.command` 还在）时，App 把它收回
+App 按 bundle id 看这台 Mac 上装了哪些，没装的在选择列表里灰着、不能选。全自动：系统自带的“终端”、iTerm2、Warp、WezTerm、Hyper、cmux（把 `.command` 文件交给它们）、Ghostty、kitty、
+Alacritty、Tabby、Rio（开新进程、参数里带上脚本：Ghostty、kitty 打开文件每次都要确认，Alacritty 不能打开文件，Tabby 每次运行前自己弹窗确认）。半自动：Termius、Wave 没有从外面运行命令的办法，
+App 打开它，把 `cd 文件夹 && cca …`（cca 用绝对路径）放进剪贴板，用户在它的终端里粘贴运行，不写交接文件。没选过时用第一个装了的全自动第三方终端，都没有就是系统自带的；半自动的要用户自己选。
+第三方终端 30 秒还没运行脚本（`.command` 还在）时，App 把它收回
 （rename，和脚本开头的 `mv` 只有一边成功，不会跑两遍），弹窗问要不要改用系统自带的“终端”。
 
 ## 7. 内置代理（`cca _core run`）
@@ -439,7 +443,7 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端；和 cca 自身的 `update` 命令分开。
 
 - `cca clients status --json`：只读本机状态，启动和进入客户端更新页时调用。
-- `cca clients check [--force] --json`：检查并准备更新，不安装。后台不带 `--force`，24 小时节流由 cca 负责；用户点“立即检查”时加 `--force`。
+- `cca clients check [--force] --json`：检查并准备更新，不安装。后台不带 `--force`，每个客户端 6 小时最多查一次，节流由 cca 负责；用户点“立即检查”时加 `--force`。
 - `cca clients mode auto|off --json`：设置自动检查。默认 `auto`，含义仅是自动检查和准备软件包。
 - `cca clients install TOKEN --json`：用户明确点击安装后调用；cca 返回 `client_update` consent，grant 为 `client_update:TOKEN`，默认不同意。
   TOKEN 绑定检查时的目标和软件包哈希，App 原样传递，不解析或生成。目标变化后原授权失效，必须重新检查。
@@ -449,7 +453,7 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 ```json
 {
   "version": 1, "kind": "client_updates", "generated_epoch": 1794042000,
-  "mode": "auto",
+  "mode": "auto", "next_check_epoch": 1794063600,
   "clients": [{
     "id": "codex", "label": "ChatGPT", "path": "/Applications/ChatGPT.app",
     "installed_version": "1.0", "available_version": "1.1", "staged_version": "1.1",
@@ -465,7 +469,8 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 - `status`：`missing/current/checking/busy/unsupported/staged/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
   `busy` 显示“更新正在进行”，`unsupported` 显示“当前系统暂无适配包”。
 - `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示“目标版本或软件包校验值已变化，请重新检查后再安装”。
-- GUI 运行期间每 60 秒尝试后台检查，窗口隐藏时也继续；模式为 off、开发模式或演示数据时不自动检查。定时器不发安装命令，重入时跳过。
+- `next_check_epoch`：下次该后台检查的时间（模式为 off、一个客户端都没装时为 null）。GUI 运行期间睡到这个时间再运行 `clients check`，窗口隐藏时也继续，不隔一会儿起一个进程；已经到了、这次没查成时 15 分钟后再来；
+  没有这个字段时每小时看一次。模式为 off、开发模式或演示数据时不自动检查，低电量模式、系统过热时往后推。定时器不发安装命令，重入时跳过；后台检查以低优先级（utility）运行。
 - 安装仅在用户点击并同意后进行，所有对应客户端进程退出后才允许替换；不强杀进程，不注册 LaunchAgent，不修改原生 updater 设置。
 
 ### 8.1 在解压前验证官方归档签名

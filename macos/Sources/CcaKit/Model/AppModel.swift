@@ -72,6 +72,10 @@ struct AppHooks {
     var prompter: Prompter
     /// 用这个终端打开交接脚本；打不开时回调 false。
     var openInTerminal: @MainActor (URL, TerminalApp, @escaping @MainActor (Bool) -> Void) -> Void = { _, _, done in done(true) }
+    /// 打开这个终端（半自动：命令在剪贴板里，用户自己粘贴）；打不开时回调 false。
+    var openTerminalApp: @MainActor (TerminalApp, @escaping @MainActor (Bool) -> Void) -> Void = { _, done in done(true) }
+    /// 后台干活之前看的系统状态（用户走开了没有、低电量模式、过热）。
+    var systemConditions: @MainActor () -> SystemConditions = { SystemConditions() }
     /// 这台 Mac 上装了哪些终端（系统自带的在最前面）。
     var installedTerminals: @MainActor () -> [TerminalApp] = { [.system] }
     /// 选一个文件夹（从这里开始看）；取消时是 nil。
@@ -119,6 +123,8 @@ final class AppModel {
     private(set) var usageRuns: [ToolID: [String: UsageEntry]] = [:]
     private(set) var usageRefreshing: Set<ToolID> = []
     private(set) var usageRefreshingKeys: Set<AccountRef> = []
+    /// 自动刷新上次试过的时间：查失败时 fetchedEpoch 不变，靠它按间隔重试，不每分钟试一次。
+    @ObservationIgnored private var usageAttempted: [AccountRef: Double] = [:]
     /// 后台自动刷新用量时遇到的、需要用户同意的事（不弹框，显示一条提示，点了再手动刷新）。
     private(set) var usageNeedsConsent: [ToolID: [ConsentEvent]] = [:]
     /// 后台自动刷新用量失败（不弹框，显示一条可以重试的提示）。
@@ -275,7 +281,8 @@ final class AppModel {
         if let transport = self.transport { client = CcaClient(transport: transport) }
         if let t = defaults.string(forKey: Prefs.tool) { tool = ToolID(rawValue: t) }
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
-        self.scheduler.onUsageTick = { [weak self] in self?.refreshUsage(manual: false) }
+        self.scheduler.onUsageTick = { [weak self] in self?.refreshUsageIfNeeded() }
+        self.scheduler.clientCheckDelay = { [weak self] in self?.clientCheckDelay() ?? 3600 }
         self.scheduler.onLiveTick = { [weak self] in self?.refreshLive() }
         self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
     }
@@ -314,7 +321,7 @@ final class AppModel {
     private var canLocate: Bool { !isFixtureMode && !injected }
 
     private func connectOnce() async {
-        defer { reconcileClientChecks() }
+        defer { reconcileBackgroundPolling() }
         if canLocate && (transport == nil || ccaPath.map { !CcaLocator.isExecutableFile($0) } ?? true) {
             locate()
         }
@@ -542,12 +549,47 @@ final class AppModel {
         return run
     }
 
-    /// 看得见时：有账号没有缓存、数据过期或者 5 分钟没更新，就刷新。
+    /// 自动刷新用量（定时器每分钟一次，App 变得看得见时也来一次）：只查到期的账号（UsagePolling）。
     func refreshUsageIfNeeded() {
+        guard phase == .ready else { return }
+        let conditions = hooks.systemConditions()
+        guard conditions.idleSeconds < UsagePolling.awayAfter, !conditions.thermalPressure else { return }
+        guard dirty, !isVisible else {
+            startDueUsageRuns(lowPower: conditions.lowPower)
+            return
+        }
+        dirty = false   // 看不见时 state 只记下“变了”，要判断哪些账号在用时才读
+        track { [weak self] in
+            await self?.loadState()
+            self?.startDueUsageRuns(lowPower: conditions.lowPower)
+        }
+    }
+
+    private func startDueUsageRuns(lowPower: Bool) {
         let now = Date().timeIntervalSince1970
-        for t in visibleTools {
-            let items = accounts(t).map { (account: $0, usage: usage(for: $0)) }
-            if Attention.usageNeedsRefresh(items, now: now) { refreshUsage(tool: t, manual: false) }
+        for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
+            // 同一个工具一次只查一批；看不见时，等着用户同意的不白跑
+            guard !usageRefreshing.contains(t), !usageRefreshingKeys.contains(where: { $0.tool == t }),
+                  isVisible || usageNeedsConsent[t] == nil else { continue }
+            let items = accounts(t).filter { $0.can.usage && $0.login == .loggedIn }.map { a in
+                UsagePolling.Item(key: a.key, inUse: a.appRunning || a.cliSessions > 0,
+                                  updated: max(usage(for: a)?.fetchedEpoch ?? 0, usageAttempted[a.ref] ?? 0))
+            }
+            let keys = UsagePolling.dueKeys(items, visible: isVisible, lowPower: lowPower, now: now)
+            if !keys.isEmpty { pollUsage(t, keys: keys, now: now) }
+        }
+    }
+
+    private func pollUsage(_ t: ToolID, keys: [String], now: Double) {
+        guard let client else { return }
+        let refs = keys.map { AccountRef(tool: t, key: $0) }
+        for r in refs { usageAttempted[r] = now }
+        usageRefreshingKeys.formUnion(refs)
+        track { [weak self] in
+            let (doc, r) = await client.document(.usagePoll(t, keys: keys), as: UsageDoc.self, prompter: nil)
+            guard let self else { return }
+            self.usageRefreshingKeys.subtract(refs)
+            await self.finishUsage(t, doc: doc, result: r, manual: false)
         }
     }
 
@@ -573,33 +615,37 @@ final class AppModel {
                 } else {
                     self.usageRefreshing.remove(t)
                 }
-                if let doc {
-                    var entries = self.usageRuns[t] ?? [:]
-                    for e in doc.accounts { if let k = e.key ?? e.account { entries[k] = e } }
-                    self.usageRuns[t] = entries
-                }
-                switch r.status {
-                case .success:
-                    self.usageNeedsConsent[t] = nil
-                    self.usageFailure[t] = nil
-                case .needsConsent(let cs):
-                    self.usageNeedsConsent[t] = cs
-                case .refused:
-                    self.showToast("没有同意，没有做任何改动", .info)
-                case .terminal(let e):
-                    if manual { self.present(.handoff(Handoff(event: e))) }
-                case .failed(let f):
-                    if f.reason == .cancelled { break }
-                    if manual {
-                        self.usageFailure[t] = nil   // 已经弹框说过了，不再留着后台那一条
-                        self.present(.failure(FailureInfo(title: "没能刷新用量", failure: f)))
-                    } else {
-                        self.usageFailure[t] = f
-                    }
-                }
-                await self.loadState()
+                await self.finishUsage(t, doc: doc, result: r, manual: manual)
             }
         }
+    }
+
+    private func finishUsage(_ t: ToolID, doc: UsageDoc?, result r: ExecResult, manual: Bool) async {
+        if let doc {
+            var entries = usageRuns[t] ?? [:]
+            for e in doc.accounts { if let k = e.key ?? e.account { entries[k] = e } }
+            usageRuns[t] = entries
+        }
+        switch r.status {
+        case .success:
+            usageNeedsConsent[t] = nil
+            usageFailure[t] = nil
+        case .needsConsent(let cs):
+            usageNeedsConsent[t] = cs
+        case .refused:
+            showToast("没有同意，没有做任何改动", .info)
+        case .terminal(let e):
+            if manual { present(.handoff(Handoff(event: e))) }
+        case .failed(let f):
+            if f.reason == .cancelled { break }
+            if manual {
+                usageFailure[t] = nil   // 已经弹框说过了，不再留着后台那一条
+                present(.failure(FailureInfo(title: "没能刷新用量", failure: f)))
+            } else {
+                usageFailure[t] = f
+            }
+        }
+        await loadState()
     }
 
     // MARK: 动作
@@ -774,11 +820,18 @@ final class AppModel {
     // MARK: 终端交接、补救
 
     /// 用来运行命令的终端：用户挑的，没挑过或者卸载了就用系统自带的。
+    /// 用哪个终端：用户选的；没选过（或者选的卸载了）时用第一个装了的全自动第三方终端，都没有就是系统自带的。半自动的要用户自己选。
     var terminalChoice: TerminalApp {
-        terminals.first { $0.id == terminalID } ?? .system
+        terminals.first { $0.id == terminalID } ?? terminals.first { $0 != .system && $0.isAutomatic } ?? .system
     }
 
+    func isInstalled(_ terminal: TerminalApp) -> Bool {
+        terminals.contains(terminal)
+    }
+
+    /// 选默认的终端。没装的选不了（选择列表里是灰的）。
     func chooseTerminal(_ id: String) {
+        guard terminals.contains(where: { $0.id == id }) else { return }
         terminalID = id
         defaults.set(id, forKey: Prefs.terminalApp)
     }
@@ -841,6 +894,10 @@ final class AppModel {
 
     func launchInTerminal(_ h: Handoff, ccaPath path: String) {
         let app = h.systemTerminal ? TerminalApp.system : terminalChoice
+        guard app.isAutomatic else {
+            pasteInTerminal(h, app, ccaPath: path)
+            return
+        }
         let url: URL
         do {
             url = try TerminalHandoff.write(h, ccaPath: path, directory: handoffDirectory)
@@ -856,6 +913,18 @@ final class AppModel {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(grace * 1_000_000_000))
             self?.terminalDidNotRun(url, h, app)
+        }
+    }
+
+    /// 半自动：打开终端，把命令放进剪贴板，用户在它的终端里粘贴运行（不写交接文件）。
+    private func pasteInTerminal(_ h: Handoff, _ app: TerminalApp, ccaPath path: String) {
+        hooks.copy(h.pasteCommand(ccaPath: path))
+        hooks.openTerminalApp(app) { [weak self] opened in
+            if opened {
+                self?.showToast("命令已复制：到 \(app.name) 的本地终端里粘贴运行", .info)
+            } else {
+                self?.showToast("打不开 \(app.name)，命令已复制，可以粘贴到别的终端里运行", .warning)
+            }
         }
     }
 
@@ -932,9 +1001,16 @@ final class AppModel {
 
     // MARK: 桌面客户端更新
 
-    /// App 隐藏时也检查；是否到 24 小时由后端决定。检查绝不安装，开发和演示模式不自动运行。
-    private func reconcileClientChecks() {
+    /// 连上 cca 之后才开始定时。App 隐藏时也检查客户端更新；检查绝不安装，开发和演示模式不自动运行。
+    private func reconcileBackgroundPolling() {
+        scheduler.updateUsagePolling(enabled: phase == .ready)
         scheduler.updateClientChecks(enabled: phase == .ready && !isFixtureMode && hello?.devMode != true)
+    }
+
+    /// 离下次该检查客户端更新还有多久：cca 给的时间（间隔由 cca 决定）。已经到了或者没查成时过一会儿再来，不空转。
+    private func clientCheckDelay() -> TimeInterval {
+        guard let next = clientUpdates?.nextCheckEpoch else { return scheduler.clientCheckInterval }
+        return max(next - Date().timeIntervalSince1970, min(scheduler.clientCheckInterval, 15 * 60))
     }
 
     func refreshClientUpdates() {
@@ -957,6 +1033,8 @@ final class AppModel {
     func checkClientUpdates(manual: Bool) {
         if !manual {
             guard !isFixtureMode, hello?.devMode != true, clientUpdates?.mode == "auto" else { return }
+            let conditions = hooks.systemConditions()   // 发现新版要下载、解包几百 MB：低电量、过热时晚点再说
+            guard !conditions.lowPower, !conditions.thermalPressure else { return }
         }
         runClientUpdate(.clientCheck(force: manual), activity: .check, manual: manual)
     }

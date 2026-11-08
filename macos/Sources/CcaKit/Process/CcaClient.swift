@@ -8,6 +8,8 @@ protocol Prompter: Sendable {
 /// 会改东西的 cca 命令（带事件文件、走重跑流程）。
 enum CcaCommand: Sendable, Hashable {
     case usage(ToolID, key: String?)
+    /// 自动刷新用量：只查到期的这几个账号，低优先级，最多同时查两个。
+    case usagePoll(ToolID, keys: [String])
     case check(ToolID, key: String?)
     case app(ToolID, key: String)
     case web(ToolID, key: String)
@@ -29,7 +31,7 @@ enum CcaCommand: Sendable, Hashable {
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reset(let t, _): return t
         case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -38,8 +40,21 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
         case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k): return k
-        case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
+        case .usagePoll, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
+    }
+
+    /// 后台的活：低优先级运行。
+    var isBackground: Bool {
+        switch self {
+        case .usagePoll, .clientCheck(force: false): return true
+        default: return false
+        }
+    }
+
+    var extraEnvironment: [String: String] {
+        if case .usagePoll = self { return ["CCA_USAGE_JOBS": "2"] }
+        return [:]
     }
 
     /// `cca` 后面的参数（工具的前缀见 ToolID.defaultPrefix）。
@@ -47,6 +62,7 @@ enum CcaCommand: Sendable, Hashable {
         let prefix = tool?.defaultPrefix ?? []
         switch self {
         case .usage(_, let k): return prefix + ["usage"] + (k.map { [$0] } ?? []) + ["--json"]
+        case .usagePoll(_, let keys): return prefix + ["usage"] + keys + ["--json"]
         case .check(_, let k): return prefix + ["check"] + (k.map { [$0] } ?? []) + ["--json"]
         case .app(_, let k): return prefix + ["app", k]
         case .web(_, let k): return prefix + ["web", k]
@@ -65,7 +81,7 @@ enum CcaCommand: Sendable, Hashable {
     /// PROTOCOL 1 建议的超时（runsToCompletion 的命令不限时）。
     var timeout: TimeInterval {
         switch self {
-        case .usage: return 150
+        case .usage, .usagePoll: return 150
         case .check: return 180
         case .app, .web: return 120
         case .routerSync: return 180
@@ -82,7 +98,7 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .routerSync, .reset, .clientInstall: return true
-        case .usage, .check, .guiUpdate, .rename, .update, .updateCheck, .clientCheck, .clientMode: return false
+        case .usage, .usagePoll, .check, .guiUpdate, .rename, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
 
@@ -91,7 +107,7 @@ enum CcaCommand: Sendable, Hashable {
     var gate: String? {
         switch self {
         case .app(let t, let k), .web(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
-        case .usage(let t, _): return "usage:\(t.rawValue)"
+        case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
         case .routerSync: return "router-sync"
         case .guiUpdate, .update: return "gui-update"
@@ -307,7 +323,7 @@ actor CcaClient {
         while true {
             runs += 1
             let req = CcaRequest(arguments: command.arguments, timeout: command.timeout, wantsEvents: true, grants: grants,
-                                 runsToCompletion: command.runsToCompletion)
+                                 extraEnvironment: command.extraEnvironment, runsToCompletion: command.runsToCompletion, background: command.isBackground)
             let resp: CcaResponse
             do {
                 resp = try await transport.send(req, onEvent: onEvent)

@@ -9,15 +9,18 @@ struct CcaRequest: Sendable, Hashable {
     var extraEnvironment: [String: String]
     /// 一旦开始就要跑完（app、web、router sync，PROTOCOL 1）：输出接文件不接管道，不限时、不取消，App 退出时也不杀。
     var runsToCompletion: Bool
+    /// 后台的活：低优先级运行（ProcessSpec.background）。
+    var background: Bool
 
     init(arguments: [String], timeout: TimeInterval, wantsEvents: Bool = false, grants: [String] = [],
-         extraEnvironment: [String: String] = [:], runsToCompletion: Bool = false) {
+         extraEnvironment: [String: String] = [:], runsToCompletion: Bool = false, background: Bool = false) {
         self.arguments = arguments
         self.timeout = timeout
         self.wantsEvents = wantsEvents
         self.grants = grants
         self.extraEnvironment = extraEnvironment
         self.runsToCompletion = runsToCompletion
+        self.background = background
     }
 }
 
@@ -105,7 +108,8 @@ struct ProcessTransport: Transport {
         defer { if let eventsURL { try? FileManager.default.removeItem(at: eventsURL) } }
         let env = CcaEnvironment.make(base: baseEnvironment, home: home, eventsPath: eventsURL?.path,
                                       grants: request.grants, extra: request.extraEnvironment)
-        let spec = ProcessSpec(executable: ccaPath, arguments: request.arguments, environment: env, timeout: request.timeout)
+        var spec = ProcessSpec(executable: ccaPath, arguments: request.arguments, environment: env, timeout: request.timeout)
+        spec.background = request.background
         let tail = eventsURL.map { EventTail(url: $0) }
         var poller: Task<Void, Never>? = nil
         if let tail, let onEvent {

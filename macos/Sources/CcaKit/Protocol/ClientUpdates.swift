@@ -7,15 +7,19 @@ struct ClientUpdatesDoc: CcaDocument, Equatable {
     var kind: String?
     var generatedEpoch: Double?
     var mode: String?
+    /// 下次该后台检查的时间：App 睡到这时候再来问（关了自动检查、没有客户端时是 nil）
+    var nextCheckEpoch: Double?
     var clients: [ClientUpdateEntry]
 
     enum CodingKeys: String, CodingKey {
         case version, kind, mode, clients
         case generatedEpoch = "generated_epoch"
+        case nextCheckEpoch = "next_check_epoch"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        nextCheckEpoch = c.double(.nextCheckEpoch)
         version = c.int(.version)
         kind = c.string(.kind)
         generatedEpoch = c.double(.generatedEpoch)

@@ -211,14 +211,8 @@ struct SessionButton: View {
                 }
             }
             Button("选择其他文件夹…") { model.chooseSessionDirectory(a.ref) }
-            if model.terminals.count > 1 {
-                Divider()
-                Picker("用哪个终端打开", selection: Binding(get: { model.terminalChoice.id }, set: { model.chooseTerminal($0) })) {
-                    ForEach(model.terminals) { t in
-                        Text(t.name).tag(t.id)
-                    }
-                }
-            }
+            Divider()
+            Menu("用哪个终端打开") { TerminalMenuItems() }
         } label: {
             Label(title(recent.first), systemImage: "terminal")
                 .lineLimit(1)
@@ -239,8 +233,12 @@ struct SessionButton: View {
 
     private func helpText(_ a: Account, directory: String?) -> String {
         let cli = a.tool == .codex ? "Codex" : "Claude Code"
-        guard let directory else { return "先选一个文件夹，再用 \(model.terminalChoice.name) 在里面启动这个账号的 \(cli)" }
-        return "用 \(model.terminalChoice.name) 在 \(model.displayPath(directory)) 里启动这个账号的 \(cli)"
+        let t = model.terminalChoice
+        guard let directory else { return "先选一个文件夹，再用 \(t.name) 在里面启动这个账号的 \(cli)" }
+        guard t.isAutomatic else {
+            return "打开 \(t.name) 并复制命令：到它的本地终端里粘贴运行，在 \(model.displayPath(directory)) 里启动这个账号的 \(cli)"
+        }
+        return "用 \(t.name) 在 \(model.displayPath(directory)) 里启动这个账号的 \(cli)"
     }
 }
 

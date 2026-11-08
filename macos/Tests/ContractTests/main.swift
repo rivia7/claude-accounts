@@ -28,6 +28,7 @@ if fullMode {
     await featureModelTests()
     await clientUpdateProtocolTests()
     await clientUpdateModelTests()
+    await pollingTests()
 }
 try? FileManager.default.removeItem(at: tmpRoot)
 print("\n通过 \(H.passed)，失败 \(H.failed)")

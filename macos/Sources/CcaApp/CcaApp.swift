@@ -124,7 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appearance = AppearanceSetting(prefs: demo ? MemoryPrefs() : UserDefaults.standard)
         super.init()
         model.hooks.openInTerminal = { Platform.open($0, in: $1, done: $2) }
+        model.hooks.openTerminalApp = { Platform.open($0, done: $1) }
         model.hooks.installedTerminals = { Platform.installedTerminals() }
+        model.hooks.systemConditions = { Platform.systemConditions() }
         model.hooks.chooseDirectory = { await Platform.chooseDirectory(startingAt: $0) }
         model.hooks.openURL = { NSWorkspace.shared.open($0) }
         model.hooks.copy = { Platform.copy($0) }

@@ -14,6 +14,8 @@ struct ProcessSpec: Sendable {
     var outputLimit: Int = 2 * 1024 * 1024
     var exitGrace: TimeInterval = 1.0
     var killGrace: TimeInterval = 3.0
+    /// 后台的活（自动刷新用量、自动检查客户端更新）：utility 优先级，子进程也继承，不和用户正在做的事抢 CPU。
+    var background = false
 
     init(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval?) {
         self.executable = executable
@@ -180,6 +182,7 @@ enum CcaProcess {
         var all = sigset_t()
         sigfillset(&all)
         posix_spawnattr_setsigdefault(&attr, &all)
+        if spec.background { posix_spawnattr_set_qos_class_np(&attr, QOS_CLASS_UTILITY) }
 
         var fa: posix_spawn_file_actions_t? = nil
         posix_spawn_file_actions_init(&fa)

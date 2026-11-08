@@ -190,6 +190,7 @@ enum Texts {
         switch s {
         case .some(.ok): return what == "WebRTC" ? "WebRTC 探针出口一致" : "\(what) 探针未发现异常"
         case .some(.leak): return "\(what) 有泄露风险"
+        case .some(.note): return "\(what) 有备注"
         case .some(.failed): return "\(what) 没测成"
         case .none: return "\(what) 没测"
         default: return "\(what) 未知"
@@ -418,15 +419,6 @@ enum Attention {
                 guard let w, let p = w.utilization, !w.isReset(now: now), u.source != .none else { return false }
                 return p >= 90
             }
-        }
-    }
-
-    /// 要不要刷新用量：能查用量的账号里，有没有缓存、数据过期（stale）、或者超过 maxAge 秒没更新的。
-    static func usageNeedsRefresh(_ items: [(account: Account, usage: UsageEntry?)], now: Double, maxAge: Double = 300) -> Bool {
-        items.contains { item in
-            guard item.account.can.usage, item.account.login == .loggedIn else { return false }
-            guard let u = item.usage, let at = u.fetchedEpoch else { return true }
-            return u.stale || now - at > maxAge
         }
     }
 }

@@ -31,6 +31,8 @@ func fixtureAssertions() {
               && bob?.usage?.sevenDaySonnet?.utilization == 60 && bob?.usage?.modelScoped.first?.name == "Sonnet")
         check("state：bob 的 DNS 泄露", bob?.health?.leak?.dns == .leak && bob?.health?.leak?.webrtc == .ok && bob?.health?.leak?.hasLeak == true
               && bob?.health?.trust == 97 && bob?.health?.tags == ["住宅IP"])
+        let noteLeak = try? JSONDecoder().decode(Leak.self, from: Data(#"{"dns":"ok","webrtc":"note","line":"x","dns_message":"","webrtc_message":"只作提醒"}"#.utf8))
+        check("WebRTC 备注（不是中国大陆的地址）：不算泄露，说明给界面看", noteLeak?.webrtc == .note && noteLeak?.hasLeak == false && noteLeak?.webrtcMessage == "只作提醒" && Texts.leak(.note, what: "WebRTC") == "WebRTC 有备注")
         let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))
         check("state：carol 没登录、查不了用量", carol?.login == .loggedOut && carol?.can.usage == false
               && carol?.canWhy["usage"] == .notLoggedIn && carol?.usage == nil)

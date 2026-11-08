@@ -69,7 +69,7 @@ struct HandoffSheet: View {
                 Button("取消") { model.dismissSheet() }
                     .keyboardShortcut(.cancelAction)
                 Button("复制命令") { model.copy(handoff.display) }
-                Button("在终端里运行") {
+                Button(handoff.systemTerminal || model.terminalChoice.isAutomatic ? "在终端里运行" : "打开 \(model.terminalChoice.name) 并复制命令") {
                     model.runInTerminal(handoff)
                     model.dismissSheet()
                 }
@@ -135,6 +135,14 @@ struct FailureSheet: View {
 enum Platform {
     /// 这台 Mac 上装了哪些认识的终端（系统自带的一定有）。
     @MainActor
+    /// 后台干活之前看的系统状态。读键盘鼠标的空闲时间不需要任何权限。
+    static func systemConditions() -> SystemConditions {
+        let info = ProcessInfo.processInfo
+        return SystemConditions(idleSeconds: CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!),
+                                lowPower: info.isLowPowerModeEnabled,
+                                thermalPressure: info.thermalState == .serious || info.thermalState == .critical)
+    }
+
     static func installedTerminals() -> [TerminalApp] {
         TerminalApp.known.filter { $0 == .system || NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.id) != nil }
     }
@@ -159,6 +167,22 @@ enum Platform {
             cfg.createsNewApplicationInstance = true
             cfg.arguments = arguments.map { $0 == TerminalApp.scriptToken ? script.path : $0 }
             NSWorkspace.shared.openApplication(at: app, configuration: cfg) { _, error in finish(error) }
+        case .paste:   // 半自动的不写交接文件，走下面的 open(_:done:)
+            done(false)
+        }
+    }
+
+    /// 打开这个终端，不运行什么（半自动：命令在剪贴板里）；打不开时回调 false。
+    @MainActor
+    static func open(_ terminal: TerminalApp, done: @escaping @MainActor (Bool) -> Void) {
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.id) else {
+            done(false)
+            return
+        }
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        NSWorkspace.shared.openApplication(at: app, configuration: cfg) { _, error in
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(error == nil) } }
         }
     }
 

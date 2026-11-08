@@ -760,6 +760,17 @@ class ClaudeClientUpdates(unittest.TestCase):
         self.ns['CU_BUDGET'] = None
         self.assertEqual(self.ns['cu_time'](300), 300)
 
+    def test_next_check_time_tells_the_app_how_long_to_sleep(self):
+        rows = [{'status': 'current', 'checked_epoch': 1000.0}, {'status': 'current', 'checked_epoch': 500.0},
+                {'status': 'missing', 'checked_epoch': None}]
+        self.assertEqual(self.ns['cu_next_check'](rows), 500.0 + self.ns['CU_CHECK_INTERVAL'])
+        self.assertEqual(self.ns['CU_CHECK_INTERVAL'], 6 * 3600)
+        rows[0]['checked_epoch'] = None   # 没查过的：已经到时间了
+        self.assertEqual(self.ns['cu_next_check'](rows), self.ns['CU_CHECK_INTERVAL'])
+        self.assertIsNone(self.ns['cu_next_check']([{'status': 'missing'}]))
+        self.assertEqual(self.command('mode', 'off')[0], 0)
+        self.assertIsNone(self.ns['cu_next_check']([{'status': 'current', 'checked_epoch': 1.0}]))
+
     def test_check_time_is_saved_before_the_download(self):
         self.ns['cu_download'] = mock.Mock(side_effect=KeyboardInterrupt())
         with self.assertRaises(KeyboardInterrupt):
