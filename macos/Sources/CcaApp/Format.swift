@@ -116,15 +116,20 @@ struct OverviewMark: View {
     }
 }
 
-/// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。最高档的套餐（Ultra、Pro 500）有光晕（参考 Gemini：
-/// 一圈清楚的渐变环，环外一团同色的柔光）；光晕画在头像外面，不改变占的位置。
+/// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。最高档的套餐（Ultra、Pro 500）只在侧栏里有光晕：
+/// 一道细的渐变环，环外一层很淡的柔光。光晕画在头像外面、不改变占的位置，最远伸出 haloRoom：放它的地方得留出这么宽，
+/// 不然会被裁掉（侧栏的一格只到头像的边）。
 struct BadgeAvatar: View {
     let badge: Badge?
     var isAPI = false
     var size: CGFloat = 28
-    var tier: PlanTier = .unknown
+    /// 画光晕（init(account:) 按套餐算好：要了、又是最高档才画）
+    var halo = false
     /// 光晕慢慢流动（AccountAvatar：账号在用、能动的时候）
     var haloFlowing = false
+
+    /// 光晕伸出头像边缘多远（含柔光）
+    static func haloRoom(_ size: CGFloat) -> CGFloat { HaloMetrics(size).room }
 
     var body: some View {
         ZStack {
@@ -145,15 +150,28 @@ struct BadgeAvatar: View {
         .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5))
         .frame(width: size, height: size)
         .background {
-            if tier == .premium { Halo(size: size, flowing: haloFlowing) }
+            if halo { Halo(size: size, flowing: haloFlowing) }
         }
         .accessibilityHidden(true)
     }
 }
 
 extension BadgeAvatar {
-    init(account a: Account, size: CGFloat, haloFlowing: Bool = false) {
-        self.init(badge: a.badge, isAPI: a.isAPI, size: size, tier: a.planTier, haloFlowing: haloFlowing)
+    /// halo：这里要不要光晕（只有侧栏要）；画不画还看套餐是不是最高档
+    init(account a: Account, size: CGFloat, halo: Bool = false, haloFlowing: Bool = false) {
+        self.init(badge: a.badge, isAPI: a.isAPI, size: size, halo: halo && a.isPremium, haloFlowing: haloFlowing)
+    }
+}
+
+/// 光晕的尺寸（按头像的大小）：头像和环之间一道透明的缝，细的环，环外柔光的模糊半径；room 是连柔光一共伸出头像边缘多远。
+private struct HaloMetrics {
+    let gap, ring, glow, room: CGFloat
+
+    init(_ size: CGFloat) {
+        gap = max(size * 0.04, 1)
+        ring = max(size * 0.045, 1.2)
+        glow = size * 0.05
+        room = (gap + ring + glow * 1.6).rounded(.up)
     }
 }
 
@@ -172,30 +190,31 @@ private struct Halo: View {
     }
 }
 
-/// 不转的光晕：一圈清楚的渐变环，环和头像之间一道真正透明的缝（选中的行、彩色的底上都对），环外面一团模糊开的同色柔光。
+/// 不转的光晕：一道细的渐变环，环和头像之间一道真正透明的缝（选中的行、彩色的底上都对），环外面淡淡晕开一点同色的光。
 private struct HaloLayer: View {
     let size: CGFloat
 
     var body: some View {
-        let ring = max(size * 0.055, 1.5), gap = max(size * 0.045, 1.3)
-        let outer = size + 2 * (gap + ring), glow = size * 0.16
+        let m = HaloMetrics(size)
+        let outer = size + 2 * (m.gap + m.ring), box = size + 2 * m.room
         ZStack {
-            Circle().fill(TierStyle.ring(0))
-                .frame(width: outer + glow, height: outer + glow)
-                .blur(radius: glow * 0.9)
-                .opacity(0.7)
-                .frame(width: outer + 4 * glow, height: outer + 4 * glow)
-                // 柔光只在环外面：环和头像之间的缝是空的。外边也裁成圆，转起来裁的地方不变
-                .clipShape(Circle().subtracting(Circle().inset(by: 2 * glow + ring / 2)))
-            Circle().strokeBorder(TierStyle.ring(0), lineWidth: ring)
+            Circle().strokeBorder(TierStyle.ring(0), lineWidth: m.ring * 2)
                 .frame(width: outer, height: outer)
+                .blur(radius: m.glow)
+                .opacity(0.4)
+                .frame(width: box, height: box)
+                // 柔光只在环外面（缝是空的），外边在 room 处裁成圆：转起来裁的地方不变，也碰不到侧栏格子的直边
+                .clipShape(Circle().subtracting(Circle().inset(by: m.room - m.gap - m.ring / 2)))
+            Circle().strokeBorder(TierStyle.ring(0), lineWidth: m.ring)
+                .frame(width: outer, height: outer)
+                .opacity(0.85)
         }
         .drawingGroup()
     }
 }
 
-/// 账号的头像，在用（桌面 App 开着、命令行里有会话）时右下角有绿点，悬停说在用什么；最高档的光晕在用时慢慢流动
-/// （只在 motionAllowed 时：所在的窗口、面板看得见，没开“减少动态效果”）。侧栏、菜单栏、账号页共用。
+/// 账号的头像，在用（桌面 App 开着、命令行里有会话）时右下角有绿点，悬停说在用什么。侧栏、菜单栏、账号页共用；
+/// 只有侧栏要最高档的光晕（halo），在用时慢慢流动（只在 motionAllowed 时：所在的窗口、面板看得见，没开“减少动态效果”）。
 struct AccountAvatar: View {
     @Environment(AppModel.self) private var model
     @Environment(\.motionAllowed) private var motionAllowed
@@ -203,10 +222,11 @@ struct AccountAvatar: View {
     let size: CGFloat
     /// 绿点的大小
     let dot: CGFloat
+    var halo = false
 
     var body: some View {
         let a = account
-        BadgeAvatar(account: a, size: size, haloFlowing: a.isWorking && motionAllowed)
+        BadgeAvatar(account: a, size: size, halo: halo, haloFlowing: halo && a.isWorking && motionAllowed)
             .overlay(alignment: .bottomTrailing) {
                 if a.isWorking {
                     let what = Texts.working(a, appLabel: model.appLabel(a.tool), now: Date().timeIntervalSince1970)

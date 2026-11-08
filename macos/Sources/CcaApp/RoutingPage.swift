@@ -469,7 +469,7 @@ struct RouteMap: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 }
-                BadgeAvatar(badge: a?.badge, isAPI: a?.isAPI ?? false, size: 24, tier: a?.planTier ?? .unknown)
+                BadgeAvatar(badge: a?.badge, isAPI: a?.isAPI ?? false, size: 24)
             }
             .contentShape(Rectangle())
         }

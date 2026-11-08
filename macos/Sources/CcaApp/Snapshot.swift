@@ -240,7 +240,7 @@ enum Snapshot {
         }
     }
 }
-/// 工位画廊：一行一种档位（尊贵、进阶、标准、外包），一列一种状态。
+/// 工位画廊：一行一种账号（几种账号色、第三方 API 的笔记本；套餐档位不进插画），一列一种状态。
 private struct DeskGallery: View {
     private struct Look { let caption: String; let mood: Employee.Mood; let app: Bool; let sessions: Int }
     private struct Tier { let caption: String; let plan: String; let tier: PlanTier; let api: Bool; let color: String }
@@ -255,9 +255,9 @@ private struct DeskGallery: View {
         Look(caption: "选错节点", mood: .unwell(.wrongNode), app: false, sessions: 0),
     ]
     private static let tiers = [
-        Tier(caption: "尊贵", plan: "Ultra", tier: .premium, api: false, color: "#30A46C"),
-        Tier(caption: "进阶", plan: "Max", tier: .advanced, api: false, color: "#8E4EC6"),
-        Tier(caption: "标准", plan: "Pro", tier: .standard, api: false, color: "#0A84FF"),
+        Tier(caption: "绿色", plan: "Max", tier: .advanced, api: false, color: "#30A46C"),
+        Tier(caption: "紫色", plan: "Max", tier: .advanced, api: false, color: "#8E4EC6"),
+        Tier(caption: "蓝色", plan: "Pro", tier: .standard, api: false, color: "#0A84FF"),
         Tier(caption: "第三方 API", plan: "", tier: .unknown, api: true, color: ""),
     ]
 

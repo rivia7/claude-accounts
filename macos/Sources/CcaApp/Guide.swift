@@ -133,12 +133,12 @@ struct TutorialCard {
             ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
             ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
             ("moon.zzz", "趴在桌上是额度用完了，屏幕上写着几点恢复；椅子空着是没登录，坐着灰色的人是登录的不是这个账号。"),
-            ("sparkle", "套餐越高徽章越亮，Ultra、Pro 500 是一整块渐变，头像还有光晕。点一张卡片就进这个账号的页面。"),
+            ("sparkle", "套餐看徽章前面的小记号：灰圈、蓝点、紫色菱形，最高档（Ultra、Pro 500）是彩色的四角星。点一张卡片就进这个账号的页面。"),
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
             ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
-            ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
+            ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者命令行里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、检测出口、改别名。"),
         ], art: .sidebar),
         TutorialCard(title: "打开一个账号", points: [
@@ -363,8 +363,9 @@ struct TutorialArt: View {
 
     private static func badge(_ k: Int) -> Badge { Badge(label: sample[k].0, color: String(format: "#%06X", sample[k].1)) }
 
-    private func avatar(_ k: Int, size: CGFloat, tier: PlanTier = .unknown) -> some View {
-        BadgeAvatar(badge: Self.badge(k), size: size, tier: tier)
+    /// halo：最高档的光晕（只有侧栏的示意图、讲光晕的那张更新说明画）
+    private func avatar(_ k: Int, size: CGFloat, halo: Bool = false) -> some View {
+        BadgeAvatar(badge: Self.badge(k), size: size, halo: halo)
     }
 
     /// 示意用的员工（不是真的账号表里的）：第一个在忙（App 开着），其余照给的状态。
@@ -374,7 +375,7 @@ struct TutorialArt: View {
         return Employee(account: a, mood: mood, flags: [])
     }
 
-    /// 三个小工位：在忙（最高档，镶渐变边的角落办公室）、额度用完在休息、没登录（椅子空着）。静止的一帧。
+    /// 三个小工位：在用、额度用完在休息、没登录（椅子空着）。静止的一帧。
     private var officeArt: some View {
         let now = Date().timeIntervalSince1970
         let desks: [(caption: String, employee: Employee)] = [
@@ -394,13 +395,7 @@ struct TutorialArt: View {
                 }
                 .padding(8)
                 .background(shape.fill(.background))
-                .overlay {
-                    if a.isPremium {
-                        shape.strokeBorder(TierStyle.edge, lineWidth: 1.2)
-                    } else {
-                        shape.strokeBorder(Surface.hairline, lineWidth: 0.5)
-                    }
-                }
+                .overlay(shape.strokeBorder(Surface.hairline, lineWidth: 0.5))
             }
         }
     }
@@ -459,7 +454,7 @@ struct TutorialArt: View {
     private func sidebarRow(_ k: Int, plan: (String, PlanTier)?, sub: String, five: Double?, week: Double?, running: Bool,
                             selected: Bool) -> some View {
         HStack(spacing: 9) {
-            avatar(k, size: 28, tier: plan?.1 ?? .unknown)
+            avatar(k, size: 28, halo: plan?.1 == .premium)
                 .overlay(alignment: .bottomTrailing) {
                     if running { RunningDot(size: 9).offset(x: 1, y: 1) }
                 }
@@ -502,7 +497,7 @@ struct TutorialArt: View {
     private var openArt: some View {
         panel {
             HStack(spacing: 10) {
-                avatar(0, size: 34, tier: .premium)
+                avatar(0, size: 34)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("工作").font(.headline)
                     HStack(spacing: 4) {
@@ -562,9 +557,9 @@ struct TutorialArt: View {
     private var badgesArt: some View {
         VStack(spacing: 20) {
             HStack(spacing: 22) {
-                avatar(2, size: 46, tier: .standard)
-                avatar(1, size: 46, tier: .advanced)
-                avatar(0, size: 46, tier: .premium)
+                avatar(2, size: 46)
+                avatar(1, size: 46)
+                avatar(0, size: 46, halo: true)
             }
             HStack(spacing: 8) {
                 PlanBadge(plan: "Free", tier: .entry)

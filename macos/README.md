@@ -86,13 +86,15 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   一根粗圆的线分成三支，主干蓝色，三支分开以后才分别流向玫红、青绿、琥珀。字形和颜色只写在 `Sources/CcaApp/LogoGlyph.swift` 一处：
   App 图标（白底上的这个字形，`tools/make-icon/main.swift`，build.sh 把 LogoGlyph.swift 一起编进去）、App 里不带底的 `BrandMark`、
   `Brand` 的颜色都取它；“总览”的图标是同一套颜色的 2×2 圆角方块 `OverviewMark`。
-- 颜色只表达三件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，比如“已登录”不显示），套餐的档位
-  （`PlanBadge.swift`：同一种胶囊、前面一个小徽记，一档比一档足——入门灰色圆圈、标准蓝色圆点淡蓝底、进阶紫色菱形淡紫底、
-  尊贵（Ultra、Pro 500）是整块 Logo 的渐变（`Brand.spectrum`：蓝 → 紫 → 玫红 → 琥珀）加白色四角星）。这条渐变只给最高档：
-  头像的光晕（参考 Gemini：一圈清楚的渐变环，环外一团同色的柔光，环和头像之间留一道透明的缝；这个账号在用时慢慢流动，6 秒一圈，
-  转的是画好的一层、不每帧重画模糊）、总览卡片和账号页卡片的边、插画里角落办公室的装饰；几种画法都在 `TierStyle`。套餐分档由 cca 给（`plan_tier`），
-  App 不按套餐名猜。总览插画里的家具一律中性灰，不带含义。不设全局强调色（按钮、选中跟着用户的系统设置）。
-- 持续的动画（光晕流动、总览的插画）只在 `motionAllowed` 时走：主窗口、菜单栏面板的根上 `.motionScope(\.mainVisible / \.panelVisible)`
+- 以信息简洁易懂为主，不为装饰上色、画框。颜色只表达三件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，
+  比如“已登录”不显示），套餐的档位。档位要低调（`PlanBadge.swift`）：徽章和 `Tag` 一样是中性的胶囊、secondary 的字，颜色只在前面的小徽记上，
+  一档比一档足——入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵（Ultra、Pro 500）Logo 渐变（`Brand.spectrum`：蓝 → 紫 → 玫红 → 琥珀）的四角星。
+  这条渐变只给最高档的两样东西：这颗星，和**侧栏**里它头像的光晕（一道细的渐变环，环外很淡的一层柔光，环和头像之间留一道透明的缝；
+  这个账号在用时慢慢流动，6 秒一圈，转的是画好的一层、不每帧重画模糊）。光晕只在侧栏：账号页、总览、菜单栏、分流图的头像都不带；
+  侧栏的一格只到头像的边，画到格子外面的会被裁掉，所以每一行左边都留出光晕的宽度（`sidebarRowPadding`，`BadgeAvatar.haloRoom`）。
+  卡片不按档位描边上色，插画也不画档位。画法都在 `TierStyle`。套餐分档由 cca 给（`plan_tier`），App 不按套餐名猜。
+  总览插画里的家具一律中性灰，不带含义。不设全局强调色（按钮、选中跟着用户的系统设置）。
+- 持续的动画（侧栏的光晕流动、总览的插画）只在 `motionAllowed` 时走：主窗口、菜单栏面板的根上 `.motionScope(\.mainVisible / \.panelVisible)`
   按窗口看不看得见、开没开“减少动态效果”设一次（`Visibility.swift`），下面的视图只读它；没设的地方（截图、教程的示意图）不动。
 - Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
   内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
@@ -107,7 +109,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   不出现在界面上。状态（`Employee` 的 mood：没登录 = 椅子空着、登错号 = 坐着灰色的人、有问题 = 端口连不上 / 节点选错 / 出口有问题、额度用完 = 趴在桌上、在用、空闲）
   从 `Diagnosis` 派生，和账号页那句话共用一份优先级（顺序只写在 `Diagnosis.all`）；“在忙”= 桌面 App 开着或者有经 cca 启动的命令行会话（`cli`）。
   插画是 Canvas 画的（`DeskArt.swift`，没有图片资源）：显示器上演在干什么，会动的部分只在窗口看得见、没开“减少动态效果”时走，帧率看状态
-  （打字 10 帧、其余 4–6 帧，没人的不走）。点卡片进账号页，右键和侧栏一样；账号页的页头是一张卡片（`EmployeeBadgeCard`：账号色的带子写着是哪种账号）。
+  （打字 10 帧、其余 4–6 帧，没人的不走）。点卡片进账号页，右键和侧栏一样。账号页的页头（头像、名字、标签、按钮、那句话）直接放在页面上，不套卡片、不上底色。
 - 版心（`Glass.swift` 的 `pageColumn()`）：详情页的内容最宽 1400pt、两边各留 28pt，再宽就居中；顶上的提示条、总览、账号页、分流页都用它，左右边对齐。
   窗口宽的时候（全屏）账号页的用量和网络出口左右并排（`SectionColumns`：每栏能有 500pt 才并排，窄了照旧上下排）；线路每站最宽 300pt，再宽就整条居中。
 - 一套系统字体（SF Pro / 苹方），数字一律等宽数字；额度的百分比大号，“%”缩小。
@@ -139,7 +141,7 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
                        Texts（文字、颜色档、补救、标记）、Diagnosis（一个账号的问题，按要紧程度排好）、Employee（总览里一个账号的状态、点名）、
                        WhatsNew（每个版本更新了什么、版本号的先后）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、总览（OfficePage；插画 DeskArt）、
-                       套餐徽章（PlanBadge）、账号页（AccountDetail：卡片页头；
+                       套餐徽章（PlanBadge）、账号页（AccountDetail：页头；
                        UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
                        可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试

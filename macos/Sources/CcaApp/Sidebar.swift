@@ -20,7 +20,7 @@ struct Sidebar: View {
                         Text("ChatGPT 桌面客户端").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.vertical, 3)
+                .sidebarRowPadding()
                 .tag(SidebarItem.clientUpdates)
             }
             Section(Texts.product(model.tool) + " 账号") {
@@ -99,7 +99,7 @@ struct OfficeRow: View {
                     Tag(text: "\(census.needsAttention) 个要处理", color: .orange)
                 }
             }
-            .padding(.vertical, 3)
+            .sidebarRowPadding()
             .accessibilityElement(children: .combine)
         }
     }
@@ -122,7 +122,7 @@ struct RoutingRow: View {
                 Tag(text: issue.0, color: issue.1)
             }
         }
-        .padding(.vertical, 3)
+        .sidebarRowPadding()
         .accessibilityElement(children: .combine)
     }
 
@@ -218,8 +218,16 @@ struct SidebarFooter: View {
     }
 }
 
-/// 侧栏的一行：头像（在用时右下角有绿点；最高档的套餐有光晕，在用时慢慢流动）、名字、第二行（登录有问题时先说、套餐徽章、节点），
-/// 右边两行小用量。
+extension View {
+    /// 侧栏一行的边距。左边多留出最高档头像光晕的宽度：列表的一格只到头像的边，画到格子外面的会被裁掉；
+    /// 每一行都留，各行的图标（宽 30）照样对齐。
+    func sidebarRowPadding() -> some View {
+        padding(.vertical, 3).padding(.leading, BadgeAvatar.haloRoom(30))
+    }
+}
+
+/// 侧栏的一行：头像（在用时右下角有绿点；最高档的套餐有光晕，只有这里有，在用时慢慢流动）、名字、
+/// 第二行（登录有问题时先说、套餐徽章、节点），右边两行小用量。
 struct AccountRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -227,7 +235,7 @@ struct AccountRow: View {
     var body: some View {
         let a = account
         HStack(spacing: 10) {
-            AccountAvatar(account: a, size: 30, dot: 10)
+            AccountAvatar(account: a, size: 30, dot: 10, halo: true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.body.weight(.medium)).lineLimit(1)
@@ -247,7 +255,7 @@ struct AccountRow: View {
                 ProgressView().controlSize(.mini)
             }
         }
-        .padding(.vertical, 3)
+        .sidebarRowPadding()
         .accessibilityElement(children: .combine)
     }
 }

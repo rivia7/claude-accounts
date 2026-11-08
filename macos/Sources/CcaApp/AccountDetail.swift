@@ -12,7 +12,7 @@ struct AccountDetail: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 32) {
                     TipCard(id: "account-page", title: "这一页怎么看",
-                            message: "下面这张卡片就是这个账号：名字旁边是套餐，卡片最下面那句话告诉你它现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
+                            message: "名字下面那句话告诉你这个账号现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
                     DetailHeader(account: a)
                     SectionColumns {
                         if !a.isAPI { UsageSection(account: a) }
@@ -31,7 +31,7 @@ struct AccountDetail: View {
     }
 }
 
-/// 头部是一张工牌（EmployeeBadgeCard）：头像、名字、邮箱和几个标签；右边是打开 App（主按钮）和网页版，没登录时多一个登录。
+/// 头部：头像、名字、邮箱和几个标签；右边是打开 App（主按钮）和网页版，没登录时多一个登录。直接放在页面上，不套卡片、不上底色。
 /// 宽的时候左右排，窄的时候按钮放到下面。正在打开、检测时下面多一行进度（来自 step 事件）。
 struct DetailHeader: View {
     @Environment(AppModel.self) private var model
@@ -40,12 +40,6 @@ struct DetailHeader: View {
 
     var body: some View {
         let a = account
-        EmployeeBadgeCard(account: a) {
-            content(a)
-        }
-    }
-
-    private func content(_ a: Account) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 16) {
@@ -105,7 +99,7 @@ struct DetailHeader: View {
         return email
     }
 
-    /// 标签：套餐徽章（最高档是整块渐变）；登录有问题时才说登录状态；在用（App 开着、命令行里几个会话）；上次在命令行里用的。
+    /// 标签：套餐徽章；登录有问题时才说登录状态；在用（App 开着、命令行里几个会话）；上次在命令行里用的。
     @ViewBuilder
     private func tags(_ a: Account) -> some View {
         if a.isAPI {
@@ -180,55 +174,6 @@ struct DetailHeader: View {
         default: allowed = a.can.usage
         }
         return allowed ? nil : Texts.canWhy(w, appLabel: model.appLabel(a.tool), tool: a.tool)
-    }
-
-}
-
-/// 账号页的工牌：顶上一条账号色的带子（写着哪个组；显示细节时还有工号，就是它的槽位组 CCA-n），下面是头像、名字、套餐、
-/// 按钮和那句话。最高档的套餐镶一圈 Logo 的渐变，第三方 API 账号是虚线边。内容层，是实的（不是玻璃）。
-struct EmployeeBadgeCard<Content: View>: View {
-    @Environment(Guide.self) private var guide
-    let account: Account
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        let a = account
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
-        let c = a.lineColor
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                HStack(spacing: 8) {
-                    Text(Texts.department(Employee.department(of: a))).font(.caption.weight(.semibold))
-                    Spacer(minLength: 8)
-                    if guide.showDetails, let g = a.group {
-                        Text(g).font(.caption.weight(.medium)).monospacedDigit()
-                    }
-                }
-                // 挂绳的卡槽
-                Capsule().fill(.black.opacity(0.28)).frame(width: 42, height: 7)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .frame(height: 30)
-            .background(LinearGradient(colors: [c, c.mix(with: .black, by: 0.18)], startPoint: .leading, endPoint: .trailing))
-            .overlay(alignment: .bottom) {
-                if a.isPremium { Rectangle().fill(TierStyle.line).frame(height: 2) }
-            }
-            .accessibilityElement(children: .combine)
-            content
-                .padding(18)
-        }
-        .background(shape.fill(Surface.tile))
-        .clipShape(shape)
-        .overlay {
-            if a.isPremium {
-                shape.strokeBorder(TierStyle.edge, lineWidth: 1.5)
-            } else if a.isAPI {
-                shape.strokeBorder(Surface.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-            } else {
-                shape.strokeBorder(Surface.hairline, lineWidth: 0.5)
-            }
-        }
     }
 }
 

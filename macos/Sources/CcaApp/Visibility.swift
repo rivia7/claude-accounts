@@ -76,7 +76,7 @@ final class ObserverView: NSView {
     }
 }
 
-/// 持续的动画（最高档头像的光晕流动、总览的插画）能不能走：所在的窗口 / 面板看得见，而且没开“减少动态效果”。
+/// 持续的动画（侧栏里最高档头像的光晕流动、总览的插画）能不能走：所在的窗口 / 面板看得见，而且没开“减少动态效果”。
 /// 主窗口和菜单栏面板的根上各设一次（motionScope），下面的视图只读它；没设的地方（截图、教程的示意图）是 false，不动。
 private struct MotionAllowedKey: EnvironmentKey {
     static let defaultValue = false

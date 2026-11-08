@@ -3,7 +3,7 @@ import SwiftUI
 // 办公室里一个工位的插画（Canvas 画的，没有图片资源）：桌子、显示器、椅子、坐着的人（身子是账号色，脸是账号的头像）。
 // 设计空间 240×168，按宽度缩放。显示器上演这个账号此刻在干什么；会动的部分（打字、滚动的代码、热气、zZ、汗）只在
 // animate 时走（窗口看得见、没开“减少动态效果”），帧率看状态，没人、坐着陌生人的工位不走。
-// 家具一律中性灰（不带含义），账号色只用在人、地毯和屏幕上，Logo 的渐变只给最高档的角落办公室（窗框、桌沿、扶手、台灯）。
+// 家具一律中性灰（不带含义），账号色只用在人、地毯和屏幕上。套餐的档位不画进来：看卡片上的徽章。
 
 /// 人的姿势
 enum DeskPose {
@@ -86,7 +86,7 @@ struct DeskScene: View {
     var body: some View {
         let e = employee
         let painter = DeskPainter(pose: e.pose, screen: e.screen, accent: e.account.lineColor,
-                                  palette: OfficePalette(scheme), premium: e.account.isPremium,
+                                  palette: OfficePalette(scheme),
                                   laptop: e.department == .contractors)
         GeometryReader { g in
             let s = g.size.width / Self.design.width
@@ -108,7 +108,7 @@ struct DeskScene: View {
         .accessibilityHidden(true)
     }
 
-    /// 脸（账号的头像，最高档有光晕）；陌生人是灰色的问号，真主人的头像别在显示器角上；没人时别在外套上。
+    /// 脸（账号的头像）；陌生人是灰色的问号，真主人的头像别在显示器角上；没人时别在外套上。
     @ViewBuilder
     private func faces(_ p: DeskPainter, _ s: CGFloat) -> some View {
         let a = employee.account
@@ -162,9 +162,6 @@ struct OfficePalette {
     static let screenNoSignal = Color(hex: 0x1C1517)
     static let codeGrey = Color(hex: 0x9AA7B8)
     static let sweat = Color(hex: 0x9FB4C7)
-    /// 角落办公室的深石墨桌面
-    static let graphiteTop = Color(hex: 0x4A4846)
-    static let graphiteFront = Color(hex: 0x3A3836)
 
     init(_ scheme: ColorScheme) {
         dark = scheme == .dark
@@ -190,7 +187,6 @@ struct DeskPainter {
     let screen: DeskScreen
     let accent: Color
     let palette: OfficePalette
-    let premium: Bool
     /// 外包（第三方 API 账号）：桌上是笔记本，不是显示器
     let laptop: Bool
 
@@ -253,22 +249,18 @@ struct DeskPainter {
     }
 
     private var armColor: Color { accent.mix(with: .black, by: 0.2) }
-    /// 尊贵档的装饰（窗框、桌沿、扶手、抽屉、台灯）：Logo 的渐变（TierStyle.shading），单色的地方用其中的紫
-    private var luxe: Color { Brand.violet }
 
     // MARK: 画
 
     func draw(_ c: inout GraphicsContext, t: Double) {
         // 地毯
         c.fill(Path(ellipseIn: CGRect(x: 54, y: 143, width: 180, height: 15)), with: .color(accent.opacity(palette.dark ? 0.26 : 0.15)))
-        if premium { drawWindow(&c) }
         drawChairBack(&c)
         if pose != .away { drawBody(&c) }
         drawChairSeat(&c)
         if pose != .away { drawLegs(&c) }
         if pose == .away { drawCoat(&c) }
         drawDesk(&c)
-        if premium { drawLamp(&c) }
         drawMonitor(&c, t: t)
         drawKeyboardAndMug(&c)
         if let a = arm(t) {
@@ -286,33 +278,8 @@ struct DeskPainter {
         }
     }
 
-    private func drawWindow(_ c: inout GraphicsContext) {
-        // 显示器上方的墙上（人的头前面不挡）
-        let w = CGRect(x: 38, y: 4, width: 80, height: 25)
-        let pane = rr(w.minX, w.minY, w.width, w.height, 4)
-        let sky = palette.dark ? [Color(hex: 0x0E1A33), Color(hex: 0x1F3158)] : [Color(hex: 0xBFDDF7), Color(hex: 0xEAF4FD)]
-        c.fill(pane, with: .linearGradient(Gradient(colors: sky), startPoint: w.origin, endPoint: CGPoint(x: w.minX, y: w.maxY)))
-        if palette.dark {
-            for (x, y) in [(0.12, 0.3), (0.38, 0.18), (0.6, 0.55), (0.84, 0.25), (0.7, 0.8)] {
-                c.fill(Path(ellipseIn: CGRect(x: w.minX + w.width * x, y: w.minY + w.height * y, width: 1.6, height: 1.6)),
-                       with: .color(.white.opacity(0.85)))
-            }
-        } else {
-            c.fill(Path(ellipseIn: CGRect(x: w.maxX - 20, y: w.minY + 6, width: 10, height: 10)), with: .color(Color(hex: 0xFFE7A3)))
-        }
-        var mullion = Path()
-        mullion.move(to: CGPoint(x: w.midX, y: w.minY))
-        mullion.addLine(to: CGPoint(x: w.midX, y: w.maxY))
-        c.stroke(mullion, with: .color(luxe.opacity(0.7)), lineWidth: 1.2)
-        c.stroke(pane, with: TierStyle.shading(w), lineWidth: 2)
-    }
-
     private func drawChairBack(_ c: inout GraphicsContext) {
-        let back = rr(182 + chairShift, 46, 32, 58, 12)
-        c.fill(back, with: .color(palette.chairBack))
-        if premium {
-            c.stroke(back, with: TierStyle.shading(back.boundingRect), lineWidth: 1.4)
-        }
+        c.fill(rr(182 + chairShift, 46, 32, 58, 12), with: .color(palette.chairBack))
     }
 
     private func drawChairSeat(_ c: inout GraphicsContext) {
@@ -325,12 +292,6 @@ struct DeskPainter {
         c.stroke(base, with: .color(palette.chairPole), style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
         for x in [174.0, 191.0, 208.0] {
             c.fill(Path(ellipseIn: CGRect(x: x + dx - 3, y: 140, width: 6, height: 6)), with: .color(palette.chairSeat))
-        }
-        if premium {
-            var arm = Path()
-            arm.move(to: CGPoint(x: 172 + dx, y: 99))
-            arm.addLine(to: CGPoint(x: 206 + dx, y: 99))
-            c.stroke(arm, with: TierStyle.shading(arm.boundingRect), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
         }
     }
 
@@ -361,42 +322,14 @@ struct DeskPainter {
     }
 
     private func drawDesk(_ c: inout GraphicsContext) {
-        let top = premium ? OfficePalette.graphiteTop : palette.deskTop
-        let front = premium ? OfficePalette.graphiteFront : palette.deskFront
-        c.fill(rr(20, 116, 142, 34, 3), with: .color(front))
-        c.fill(rr(12, 108, 158, 8, 3), with: .color(top))
+        c.fill(rr(20, 116, 142, 34, 3), with: .color(palette.deskFront))
+        c.fill(rr(12, 108, 158, 8, 3), with: .color(palette.deskTop))
         // 抽屉
-        let drawerLine = premium ? luxe.opacity(0.45) : palette.drawer
-        c.stroke(rr(116, 121, 40, 12, 2), with: .color(drawerLine), lineWidth: 1)
-        c.stroke(rr(116, 136, 40, 11, 2), with: .color(drawerLine), lineWidth: 1)
+        c.stroke(rr(116, 121, 40, 12, 2), with: .color(palette.drawer), lineWidth: 1)
+        c.stroke(rr(116, 136, 40, 11, 2), with: .color(palette.drawer), lineWidth: 1)
         for y in [127.0, 141.5] {
-            let handle = rr(131, y - 1, 10, 2, 1)
-            c.fill(handle, with: premium ? TierStyle.shading(handle.boundingRect) : .color(palette.drawer))
+            c.fill(rr(131, y - 1, 10, 2, 1), with: .color(palette.drawer))
         }
-        if premium {
-            var edge = Path()
-            edge.move(to: CGPoint(x: 13, y: 116))
-            edge.addLine(to: CGPoint(x: 169, y: 116))
-            c.stroke(edge, with: TierStyle.shading(edge.boundingRect), lineWidth: 1.6)
-        }
-    }
-
-    private func drawLamp(_ c: inout GraphicsContext) {
-        c.fill(rr(14, 104, 14, 4, 2), with: .color(luxe))
-        var pole = Path()
-        pole.move(to: CGPoint(x: 21, y: 105))
-        pole.addLine(to: CGPoint(x: 21, y: 82))
-        c.stroke(pole, with: .color(luxe), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-        var shade = Path()
-        shade.move(to: CGPoint(x: 13, y: 84))
-        shade.addLine(to: CGPoint(x: 29, y: 84))
-        shade.addLine(to: CGPoint(x: 25, y: 74))
-        shade.addLine(to: CGPoint(x: 17, y: 74))
-        shade.closeSubpath()
-        c.fill(shade, with: TierStyle.shading(shade.boundingRect))
-        c.fill(Path(ellipseIn: CGRect(x: 10, y: 82, width: 22, height: 12)),
-               with: .radialGradient(Gradient(colors: [Color(hex: 0xFFE7A3).opacity(0.45), .clear]), center: CGPoint(x: 21, y: 86),
-                                     startRadius: 0, endRadius: 12))
     }
 
     private func drawMonitor(_ c: inout GraphicsContext, t: Double) {

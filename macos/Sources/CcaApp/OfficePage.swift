@@ -15,7 +15,7 @@ struct OfficePage: View {
                 VStack(alignment: .leading, spacing: 26) {
                     header(office)
                     TipCard(id: "office-page", title: "这一页怎么看",
-                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。徽章越亮套餐越高，最高档是一整块渐变、头像有光晕。点卡片看详情，右键可以直接打开。")
+                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。套餐看徽章前面的小记号，彩色的四角星是最高档。点卡片看详情，右键可以直接打开。")
                     if model.state == nil {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -111,13 +111,7 @@ private struct DeskCard: View {
             }
             .padding(12)
             .background(shape.fill(on ? Color.primary.opacity(0.08) : Surface.tile))
-            .overlay {
-                if a.isPremium {
-                    shape.strokeBorder(TierStyle.edge, lineWidth: 1.5)
-                } else {
-                    shape.strokeBorder(Color.primary.opacity(on ? 0.16 : 0), lineWidth: 1)
-                }
-            }
+            .overlay(shape.strokeBorder(Color.primary.opacity(on ? 0.16 : 0), lineWidth: 1))
             .contentShape(shape)
             .scaleEffect(on && !reduceMotion ? 1.01 : 1)
             .animation(reduceMotion ? nil : .snappy(duration: 0.18), value: on)

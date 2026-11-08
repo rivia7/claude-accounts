@@ -52,13 +52,13 @@ enum WhatsNew {
         ], art: "quota"),
         ReleaseNote(version: "2.9.0-beta.10", title: "新的 Logo 和套餐徽章", points: [
             .init(symbol: "point.3.connected.trianglepath.dotted", text: "新的 Logo：一个出口分给几个账号，颜色互相渐变。"),
-            .init(symbol: "seal", text: "套餐徽章分四档：灰色圆圈、蓝色圆点、紫色菱形，最高档（Ultra、Pro 500）是整块渐变。"),
-            .init(symbol: "circle.dashed", text: "最高档的头像有一圈光晕，账号在用时会慢慢流动。"),
+            .init(symbol: "seal", text: "套餐徽章分四档：灰色圆圈、蓝色圆点、紫色菱形，最高档（Ultra、Pro 500）是彩色的四角星。"),
+            .init(symbol: "circle.dashed", text: "左边列表里，最高档账号的头像外面有一圈光晕，账号在用时会慢慢流动。"),
         ], art: "badges"),
         ReleaseNote(version: "2.9.0-beta.9", title: "总览：所有账号一眼看全", points: [
             .init(symbol: "square.grid.2x2", text: "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
             .init(symbol: "desktopcomputer", text: "图里的屏幕在滚代码、聊天，说明这个账号正在用；额度用完、没登录、登录的不是这个账号，一眼就看得出。"),
-            .init(symbol: "sparkle", text: "套餐越高徽章越亮。点一张卡片就进这个账号的页面。"),
+            .init(symbol: "sparkle", text: "徽章前面的小记号表示套餐的档位。点一张卡片就进这个账号的页面。"),
         ], art: "office"),
     ]
 
