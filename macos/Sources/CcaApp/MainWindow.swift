@@ -39,7 +39,7 @@ struct MainWindow: View {
         .motionScope(\.mainVisible)
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
-            // 主窗口出来了就是普通 App：--core 启动时是 .accessory（没有 Dock 图标和菜单栏），不管是从哪里打开的都换回来
+            // 主窗口出来了就是普通 App：在后台时是 .accessory（没有 Dock 图标和菜单栏），不管是从哪里打开的都换回来
             if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         }
     }

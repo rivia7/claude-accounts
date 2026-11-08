@@ -26,7 +26,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
-  `rename`、`reorder` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
+  `rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
 - `app`、`web`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -149,7 +149,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
   `app_missing`（没装对应的桌面 App）、`no_chrome`（没装 Google Chrome：网页版不能经账号的出口打开）、
   `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
-  第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。
+  第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。`policy_lock` 是能不能请求维护者把节点锁进映射（4.8），没有对应的 `can_why`：不能就不显示这个入口。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
@@ -362,6 +362,13 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 按这个顺序排账号表（没写到的账号接在后面，先后不变）。不交互、不输出，退出码 0 是成功。菜单、编号跟着变；端口池、路由器的摘要、启动器和头像的颜色
 按调整之前的顺序（config.json 的 `order_base`，记账号目录名），不用同步路由器、不用重新加载本机 Clash。App 拖动账号、置顶之后写回：官方账号在前，第三方 API 账号在后，各组里和界面上一样（置顶的在前）。
 
+### 4.8 请求维护者锁定节点：`cca [codex] policy request 账号`
+
+别的机器只有只读 deploy key，改不了映射，只能请求：cca 写一行给维护者的文字（账号和它现在的节点），用户发给维护者，维护者运行 `./policy.sh lock` 看过、确认后写进映射并发布。
+不交互、只读（不改账号表和映射），stdout 是那一行，退出码 0；App 把它复制到剪贴板（有事件文件时 cca 不碰剪贴板，命令行里 cca 自己复制）。
+不能请求时（第三方 API 账号、这台机器没配置映射、已经被映射固定）退出码非 0，原因在 `fail` 事件里；`state` 账号的 `can.policy_lock` 是 false 时 App 不显示这个入口。
+那一行的最后是 `cca-lock-v1:` 加上 base64url（不带 `=`）的 JSON：`{"tool": "claude|codex", "email": "小写的邮箱", "node": "节点", "alias": "别名（可选）"}`，App 只复制、不解析。
+
 ### 4.5 重置额度：`cca codex reset KEY --json`
 
 ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset_credits.availableCount > 0`），用掉一次就把 5 小时和每周的用量清零
@@ -445,11 +452,12 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `[codex] rm` | 账号页「…」、右键菜单 | 提问会话 |
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
+| `[codex] policy request` | 账号页「…」、右键菜单 | 无交互命令（4.8） |
 | `[codex] usage`、`check`、`app`、`web`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `[codex] edit` | 工具栏「＋」、账号表损坏时的提示 | 终端 |
 | `router setup`、`local setup`、`install` | 工具栏「＋」、分流页、引导页 | 终端 |
-| `router uninstall`、`local off`、`policy` | 没有入口 | 终端里自己运行 |
+| `router uninstall`、`local off`、`policy`（查看、配置、拉取） | 没有入口 | 终端里自己运行 |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
 | `restore` | 没有入口 | 终端（要求 cca App 先退出） |
 
@@ -458,6 +466,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 - `cca gui`：打开 App；没装、或者版本和 cca 不同，先下载装好（只装和当前 cca 版本号相同的 App）。
 - `cca gui update [--relaunch PID]`：下载校验好和 cca 同版本的 App；App 开着时先放着（`hello.gui.staged_version`），等它退出再换；
   给了 `--relaunch PID` 就等这个进程退出（最多 60 秒）后换上并重新打开。
+- `cca gui` 和重新打开时带 `--args --window`：App 平时在后台启动，只有这样启动才开主窗口。App 已经开着时 `open` 不传参数，App 收到“重新打开”，同样显示主窗口。
 - App 的「更新并重新打开」分两步：先照常运行 `cca gui update`（不带 `--relaunch`，等它结束，失败就显示原因、App 照常开着）；成功后
   （新版本已经下载好放着）再脱离 App 运行 `cca gui update --relaunch <自己的 pid>`（不设 CCA_EVENTS、不限时，输出接到文件），然后退出。
 - `cca gui remove`：删掉 App。
@@ -491,10 +500,10 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 
 `terminal` 事件、`hello.installed == false`、账号的「终端」按钮（`cca [codex] @账号`）、以及还没搬进提问会话（4.6）的入口（cca 不支持提问会话时也是），都在终端里运行对应的 cca 命令：App 在
 `~/Library/Caches/local.cca.app/handoff/` 写一个临时的 `.command` 文件（`#!/bin/bash`，先把自己挪走再删掉，补好 `PATH`，去掉 `CCA_GUI` 等 App 给 cca 的变量，要换文件夹时先 `cd`，再运行逐个加了引号的
-命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的；账号的会话结束后留在用户的登录 shell 里），`chmod 755` 后用用户选的终端打开。都不需要“自动化”权限。
+命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的；账号的会话结束后留在用户的登录 shell 里），`chmod 755` 后打开：账号的「终端」按钮用用户选的终端，别的命令都用系统自带的“终端”。都不需要“自动化”权限。
 一小时前留下的 `.command` 文件 App 会清掉。用户回到 App（App 被激活）时重新读一次 `state`。
 
-用哪个终端、账号的会话从哪个文件夹启动（最近用过的，所有账号共用），都记在 App 自己的设置里，不进 `~/.cca`，cca 不知道也不用知道。
+账号的会话用哪个终端、从哪个文件夹启动（最近用过的，所有账号共用），都记在 App 自己的设置里，不进 `~/.cca`，cca 不知道也不用知道。
 App 按 bundle id 看这台 Mac 上装了哪些，没装的在选择列表里灰着、不能选。全自动：系统自带的“终端”、iTerm2、Warp、WezTerm、Hyper、cmux（把 `.command` 文件交给它们）、Ghostty、kitty、
 Alacritty、Tabby、Rio（开新进程、参数里带上脚本：Ghostty、kitty 打开文件每次都要确认，Alacritty 不能打开文件，Tabby 每次运行前自己弹窗确认）。半自动：Termius、Wave 没有从外面运行命令的办法，
 App 打开它，把 `cd 文件夹 && cca …`（cca 用绝对路径）放进剪贴板，用户在它的终端里粘贴运行，不写交接文件。没选过时用第一个装了的全自动第三方终端，都没有就是系统自带的；半自动的要用户自己选。
@@ -514,8 +523,8 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 - 不再是 `builtin`（`cca local off`、换了客户端）时停掉：cca 改好 `config.json` 后删掉 `core/config.yaml`，App 看到后重新读 `state`、停掉内核
   （cca 会等它停下，免得旧内核还占着端口）。App 退出前停掉并等它退出（SIGTERM 进程组，3 秒后 SIGKILL）。App 崩溃时留下的内核，
   下一次 `cca _core run` 会按它的 pid 文件认出来停掉。
-- cca 需要内核、App 又没开着时，在后台打开 App：`open -g <App> --args --core`。带 `--core` 启动的 App 不弹主窗口、不占 Dock，
-  只留菜单栏图标；用户从菜单栏、Dock 打开主窗口时照常显示。App 开着时 cca 不再 `open`（会弹出主窗口），而是写 `core/config.yaml`：
+- cca 需要内核、App 又没开着时，在后台打开 App：`open -g <App> --args --core`。App 平时就在后台（只有菜单栏图标），带 `--core` 时什么情况下都不自己弹主窗口；
+  用户从菜单栏打开主窗口时照常显示。App 开着时 cca 不再 `open`（会弹出主窗口），而是写 `core/config.yaml`：
   App 看到它变了就重新读 `state`、接着起内核（看不见时也读）。
 - 演示数据（`CCA_GUI_FIXTURES`）不运行内核。
 

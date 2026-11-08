@@ -103,9 +103,10 @@ struct MenuBarContent: View {
                 .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
                 Spacer()
                 Button("打开主窗口") {
-                    WindowOpener.shared.showMain()   // 只在菜单栏里托管内置代理时（--core 启动）顺便换回 Dock 图标
+                    WindowOpener.shared.showMain()   // 平时在后台：这时才有 Dock 图标
                 }
-                Button("退出") { NSApp.terminate(nil) }
+                Button("退出") { AppExit.quit() }
+                    .help("退出 cca：用量和出口不再自动更新，内置代理也会停")
             }
             .buttonStyle(.borderless)
             .font(.callout)

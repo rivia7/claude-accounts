@@ -532,8 +532,13 @@ struct Can: Decodable, Sendable, Equatable {
     var check: Bool = true
     /// 能不能在终端里打开（要有 claude / codex 命令）
     var cli: Bool = false
+    /// 能不能请求维护者把节点锁进映射（官方账号、这台机器配置了映射、还没被映射固定；PROTOCOL 4.8）
+    var policyLock: Bool = false
 
-    enum CodingKeys: String, CodingKey { case app, web, usage, check, cli }
+    enum CodingKeys: String, CodingKey {
+        case app, web, usage, check, cli
+        case policyLock = "policy_lock"
+    }
 
     init() {}
 
@@ -544,6 +549,7 @@ struct Can: Decodable, Sendable, Equatable {
         usage = c.bool(.usage) ?? false
         check = c.bool(.check) ?? true
         cli = c.bool(.cli) ?? false
+        policyLock = c.bool(.policyLock) ?? false
     }
 }
 

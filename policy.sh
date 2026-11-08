@@ -13,6 +13,11 @@
 #   ./policy.sh nodes 参考配置 [策略组]
 #     只看不发布：打印会写进 nodes.json 的内容（策略组默认 OpenAi）
 #
+#   ./policy.sh lock 映射仓库的目录 [请求文件 | -] [-y]
+#     把别的机器发来的锁定请求（cca policy request、App 账号菜单里的「请求维护者锁定节点」生成的一行字，可以夹在聊天消息里，
+#     一次可以贴好几条）写进 policy.json：不写文件就读剪贴板（- 是标准输入），列出会改什么，确认后照常检查、签名、提交并推送。
+#     别的机器都只有只读 key，只能这样请求：写不写进映射由维护者决定。节点不在参考节点（nodes.json）里时提醒一句
+#
 #   ./policy.sh key [ls]                       列出各台机器的 deploy key：添加时间、最近一次拉取、别名
 #   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥（- 是从标准输入读），
 #                                              不写别名就提示起一个（默认是公钥备注里的机器名）；别名不能重复
@@ -30,6 +35,8 @@ usage() {
 用法：
   ./policy.sh 映射仓库的目录 ["提交说明"]     发布映射（目录里要有 policy.json；有 custom.yaml 时顺带发布参考节点）
   ./policy.sh nodes 参考配置 [策略组]          只看不发布：打印会写进 nodes.json 的参考节点（策略组默认 OpenAi）
+  ./policy.sh lock 映射仓库的目录 [请求文件 | -] [-y]
+                                               把别的机器发来的锁定请求写进映射（不写文件就读剪贴板），确认后发布
   ./policy.sh key [ls]                         列出各台机器的 deploy key：添加时间、最近一次拉取、别名
   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥，不写别名就提示起一个
   ./policy.sh key rm 别名 [-y]                 删掉一把
@@ -347,8 +354,53 @@ nodes_extract() {   # nodes_extract 参考配置 策略组：打印 nodes.json �
 		puts JSON.pretty_generate("version" => 1, "group" => ARGV[1], "proxies" => out)' "$1" "$2"
 }
 
+# ---------------------------------------------------------------------------
+# 锁定请求：别的机器发来的“账号 → 现在的节点”（cca policy request），维护者看过、确认之后写进映射，后面照常发布
+# ---------------------------------------------------------------------------
+LOCK_DIR="" LOCK_MSG=""
+lock_request() {   # lock_request 映射目录 [请求文件 | -] [-y]：写好 policy.json，发布要用的 LOCK_DIR、LOCK_MSG 留给后面
+	local a dir="" src="" yes="" text from plan rc=0
+	for a in "$@"; do
+		case "$a" in
+			-y) yes=1 ;;
+			*) if [ -z "$dir" ]; then dir="$a"; elif [ -z "$src" ]; then src="$a"; else fail "用法：./policy.sh lock 映射仓库的目录 [请求文件 | -] [-y]"; fi ;;
+		esac
+	done
+	[ -f "$dir/policy.json" ] || fail "${dir:-（没写目录）} 里没有 policy.json（用法：./policy.sh lock 映射仓库的目录 [请求文件 | -] [-y]）"
+	dir=$(cd "$dir" && pwd)
+	open_tty
+	case "$src" in
+		'') text=$(pbpaste 2>/dev/null || true); from="剪贴板" ;;
+		-) text=$(cat); from="标准输入" ;;
+		*) text=$(cat "$src") || fail "读不了 ${src}"; from="$src" ;;
+	esac
+	if [ -z "$src" ] && [ "$TTY_OK" = 1 ] && ! printf '%s' "$text" | grep -q 'cca-lock-v1:'; then   # 剪贴板里没有：让维护者直接粘贴
+		text=$(ask "  剪贴板里没有锁定请求。粘贴对方发来的内容（一行），回车：" "")
+		from="粘贴的内容"
+	fi
+	plan=$(printf '%s' "$text" | bash "$HERE/cca" _policy-lock plan "$dir/policy.json") || rc=$?
+	case "$rc" in
+		0) ;;
+		3) printf '%s\n' "$plan"; echo "• 都已经是这样了，不用发布"; exit 0 ;;
+		*) fail "${from}里的请求有问题：
+${plan}" ;;
+	esac
+	echo "• ${from}里的请求，要写进映射："
+	printf '%s\n' "$plan"
+	if [ -z "$yes" ]; then
+		[ "$TTY_OK" = 1 ] || fail "要先确认：在终端里运行，或者加 -y"
+		case "$(ask "  写进 policy.json、签名并推送吗？所有配置了这个映射仓库的机器都会照做 [y/N]：" n)" in
+			y|Y|yes) ;;
+			*) echo "• 没有改"; exit 0 ;;
+		esac
+	fi
+	LOCK_MSG=$(printf '%s' "$text" | bash "$HERE/cca" _policy-lock apply "$dir/policy.json") || fail "没能写进 policy.json：${LOCK_MSG}"
+	LOCK_DIR="$dir"
+}
+
 case "${1:-}" in
 	key|keys) shift; key_cmd "$@"; exit 0 ;;
+	lock) shift; lock_request "$@"; set -- "$LOCK_DIR" "$LOCK_MSG" ;;
 	nodes)
 		[ -f "${2:-}" ] || fail "用法：./policy.sh nodes 参考配置 [策略组]"
 		command -v ruby >/dev/null 2>&1 || fail "要用 ruby 读 Clash 的配置（macOS 自带；没有的话 brew install ruby）"

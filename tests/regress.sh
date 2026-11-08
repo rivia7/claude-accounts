@@ -1046,7 +1046,7 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"usage\": False, \"check\": True, \"cli\": True} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
 mv "$T/bin/claude" "$T/claude.off"
 out=$(run PATH="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" cca _gui state </dev/null 2>/dev/null)
 mv "$T/claude.off" "$T/bin/claude"
@@ -1543,10 +1543,10 @@ out=$(run cca gui 2>&1); rc=$?
 ok "cca gui：这个版本的 Release 没附带 App：说明，不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没能装上界面 App" && [ ! -e "$GA" ] && grep -q "GH get v9.9.14/cca-app.zip" gh.log'
 publish_app 9.9.14
 out=$(run cca gui 2>&1); rc=$?
-ok "cca gui：下载和 cca 同版本（9.9.14）的 App，按 cca-app 验签、自检后装进 ~/Applications 并打开" '[ $rc -eq 0 ] && [ "$(gver)" = 9.9.14 ] && grep -qxF "OPEN [$GA]" open.log && [ -f "$H/.cca/gui/enabled" ] && [ ! -e "$H/.cca/gui/next" ] && ! ls -d "$H/.cca/gui"/dl.* >/dev/null 2>&1 && printf "%s" "$out" | grep -q "已装好界面 App"'
+ok "cca gui：下载和 cca 同版本（9.9.14）的 App，按 cca-app 验签、自检后装进 ~/Applications 并打开" '[ $rc -eq 0 ] && [ "$(gver)" = 9.9.14 ] && grep -qxF "OPEN [$GA] [--args] [--window]" open.log && [ -f "$H/.cca/gui/enabled" ] && [ ! -e "$H/.cca/gui/next" ] && ! ls -d "$H/.cca/gui"/dl.* >/dev/null 2>&1 && printf "%s" "$out" | grep -q "已装好界面 App"'
 n_gh=$(grep -c "cca-app.zip" gh.log)
 out=$(run cca gui 2>&1)
-ok "cca gui：已经是同一个版本：直接打开，不再下载" '[ "$(grep -c "cca-app.zip" gh.log)" = "$n_gh" ] && [ "$(grep -cxF "OPEN [$GA]" open.log)" = 2 ]'
+ok "cca gui：已经是同一个版本：直接打开，不再下载" '[ "$(grep -c "cca-app.zip" gh.log)" = "$n_gh" ] && [ "$(grep -cxF "OPEN [$GA] [--args] [--window]" open.log)" = 2 ]'
 out=$(run cca _gui hello 2>/dev/null)
 ok "_gui hello：装着的 App 的版本" 'printf "%s" "$out" | jok "d[\"gui\"][\"app_version\"] == \"9.9.14\" and d[\"gui\"][\"staged_version\"] is None and d[\"dev_mode\"] is False"'
 rm -rf "$GA"; publish_app 9.9.14; echo "# 篡改" >> "$G/v9.9.14/cca-app.zip"
@@ -1578,7 +1578,7 @@ ok "cca 更新后第一次运行：后台下载同版本的 App；App 开着就�
 ( sleep 1; kill $GUIPID 2>/dev/null ) &
 out=$(run cca gui update --relaunch $GUIPID 2>&1); rc=$?
 wait $GUIPID 2>/dev/null
-ok "cca gui update --relaunch：等 App 退出后换上新版本（不再下载）并重新打开" '[ $rc -eq 0 ] && [ "$(gver)" = 9.9.15 ] && [ ! -e "$H/.cca/gui/next" ] && [ "$(grep -c "^GH get v9.9.15/cca-app.zip$" gh.log)" = 1 ] && [ "$(tail -n 1 open.log)" = "OPEN [$GA]" ] && printf "%s" "$out" | grep -q "界面 App 已更新到 9.9.15"'
+ok "cca gui update --relaunch：等 App 退出后换上新版本（不再下载）并重新打开" '[ $rc -eq 0 ] && [ "$(gver)" = 9.9.15 ] && [ ! -e "$H/.cca/gui/next" ] && [ "$(grep -c "^GH get v9.9.15/cca-app.zip$" gh.log)" = 1 ] && [ "$(tail -n 1 open.log)" = "OPEN [$GA] [--args] [--window]" ] && printf "%s" "$out" | grep -q "界面 App 已更新到 9.9.15"'
 rm -rf "$GA"; publish 9.9.16; publish_app 9.9.16
 run cca update >/dev/null 2>&1; run cca ls >/dev/null 2>&1; sleep 1
 ok "自己删掉了 App：cca 更新后不再装回来" '[ ! -e "$GA" ] && ! grep -q "v9.9.16/cca-app.zip" gh.log'
@@ -1950,6 +1950,101 @@ out2=$(run CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
 : > ghcli.log; env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_TTY="$(ans)" PATH="$T/bin:/usr/bin:/bin" bash "$PS" key >/dev/null 2>&1
 ok "仓库：CCA_POLICY_DEFAULT 设成空、又没写 -R 时不猜；-R 指定别的仓库；都没设时用 cca 里写的默认仓库" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不知道是哪个映射仓库：加上 -R 维护者/仓库" && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "example/other 上还没有 deploy key" && [ -n "$defrepo" ] && grep -q "^GH api GET repos/$defrepo/keys" ghcli.log'
 rm -f "$T/policy_keys"
+
+# 11b3b. 锁定请求：这台机器请求把账号现在的节点锁进映射（cca policy request），维护者用 policy.sh lock 看过、确认后写进映射，
+#        签名推送，再拉回来这个账号就被固定了。policy.sh 读旁边那份 cca 的发布公钥：放在假的维护者目录里，用测试发布密钥的 cca。
+#        这一节用自己的映射，结束时账号表、配置、映射、假的映射仓库都还原
+PD="$H/.cca/policy/policy.json"
+for f in "$H/.cca/accounts.json" "$H/.cca/codex.json" "$H/.cca/config.json" "$PD" "$PR/policy.json" "$PR/policy.json.sig"; do cp -p "$f" "$T/lock.$(basename "$f")"; done
+MT="$T/maint"; MR="$MT/repo"; mkdir -p "$MR"; cp "$PS" "$MT/policy.sh"; cp "$H/.cca/bin/cca" "$MT/cca"
+printf '%s\n' '{"version": 1, "claude": {"alice@example.com": "US-C"}}' | tee "$PD" > "$MR/policy.json"
+git -C "$MR" init -q; git -C "$MR" config user.name t; git -C "$MR" config user.email t@example.com
+git -C "$MR" remote add origin git@github.com:example/cca-policy.git; git -C "$MR" add -A; git -C "$MR" commit -qm init
+edit_table 'j["工作(bob@example.com)"] = "US-B"'   # 这时账号表里只有 alice（映射固定）和第三方 API：加一个映射里没有的
+lockpick() { python3 - "$1" "$PD" <<'PY'   # lockpick 账号表：第一个映射里没有的官方账号的键
+import json, sys
+t, m = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+mapped = {e.lower() for s in ("claude", "codex") for e in m.get(s, {})}
+print(next(k for k, v in t.items() if isinstance(v, str) and k.split("(")[-1].rstrip(")").lower() not in mapped))
+PY
+}
+lockapi() { python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$1"; }
+token() { python3 -c 'import base64,json,re,sys; t=re.findall(r"cca-lock-v1:([A-Za-z0-9_-]+)", sys.stdin.read())[-1]; print(json.dumps(json.loads(base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))), ensure_ascii=False, sort_keys=True))'; }   # 请求里机器读的那一段
+LK=$(lockpick "$H/.cca/accounts.json"); LE=$(printf '%s' "$LK" | sed 's/.*(//; s/)$//'); LN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$H/.cca/accounts.json" "$LK")
+: > "$T/clipboard"
+out=$(run cca policy request "$LK" 2>"$T/lock.err"); rc=$?
+ok "cca policy request：一行请求（账号和它现在的节点）写到 stdout，复制到剪贴板，提示发给维护者" '[ $rc -eq 0 ] && [ "$(printf "%s\n" "$out" | wc -l | tr -d " ")" = 1 ] && [ "$(printf "%s" "$out" | token | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[\"tool\"], d[\"email\"], d[\"node\"])")" = "claude $LE $LN" ] && grep -qF cca-lock-v1: "$T/clipboard" && [ "$(cat "$T/clipboard")" = "$out" ] && grep -q "直接粘贴发给维护者" "$T/lock.err"'
+out=$(run cca policy request alice@example.com 2>&1); rc=$?
+ok "已经被映射固定的账号不用请求：说清楚固定在哪个节点上" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已经按维护者的映射固定在 US-C 上了" && ! printf "%s" "$out" | grep -q cca-lock-v1'
+AK=$(lockapi "$H/.cca/accounts.json")
+out=$(run cca policy request "$AK" 2>&1); rc=$?
+ok "第三方 API 账号不能请求（映射只管官方账号）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "映射只管官方账号"'
+out=$(run cca policy request 没这个账号 2>&1); rc=$?
+ok "没有这个账号：说清楚" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没找到账号"'
+: > "$T/clipboard"
+out=$(runev cca policy request "$LK" 2>/dev/null); rc=$?
+ok "图形界面（有事件文件）：stdout 还是那一行，由 App 自己复制，cca 不碰剪贴板" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF cca-lock-v1: && [ ! -s "$T/clipboard" ]'
+out=$(runev cca policy request alice@example.com 2>/dev/null); rc=$?
+ok "图形界面：不能请求时 fail 事件里写着原因，stdout 没有内容" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and \"已经按维护者的映射固定\" in e[\"message\"]"'
+out=$(run cca _gui state 2>/dev/null </dev/null)
+ok "_gui state：can.policy_lock：没被映射固定的官方账号能请求，被固定的、第三方 API 账号不能" 'printf "%s" "$out" | LK="$LK" AK="$AK" jok "(lambda a: a[__import__(\"os\").environ[\"LK\"]][\"can\"][\"policy_lock\"] and not a[__import__(\"os\").environ[\"AK\"]][\"can\"][\"policy_lock\"] and not next(v for k, v in a.items() if \"alice@example.com\" in k)[\"can\"][\"policy_lock\"])({x[\"key\"]: x for x in d[\"tools\"][0][\"accounts\"]})"'
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("policy", None); json.dump(d, open(sys.argv[1], "w"))' "$H/.cca/config.json"
+out=$(run cca policy request "$LK" 2>&1); rc=$?
+out2=$(run cca _gui state 2>/dev/null </dev/null)
+ok "这台机器没配置映射：不能请求（先 cca policy setup），App 里也没有这个入口" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "还没配置维护者的映射" && printf "%s" "$out2" | jok "not any(x[\"can\"][\"policy_lock\"] for t in d[\"tools\"] for x in t[\"accounts\"])"'
+cp -p "$T/lock.config.json" "$H/.cca/config.json"
+if CX=$(lockpick "$H/.cca/codex.json" 2>/dev/null) && [ -n "$CX" ]; then
+	out=$(run cca codex policy request "$CX" 2>/dev/null); rc=$?
+	ok "cca codex policy request：请求里写着是 Codex 的账号" '[ $rc -eq 0 ] && printf "%s" "$out" | token | jok "d[\"tool\"] == \"codex\""'
+fi
+# 维护者这边：默认读剪贴板，看过、确认才写
+PL() { run CCA_RELEASE_KEY="$T/relkey" "$@"; }
+head0=$(git -C "$MR" rev-parse HEAD); sum0=$(cat "$MR/policy.json")
+run cca policy request "$LK" >/dev/null 2>&1; REQ=$(cat "$T/clipboard")
+out=$(PL CCA_TTY="$(ans n)" bash "$MT/policy.sh" lock "$MR" 2>&1); rc=$?
+ok "policy.sh lock：读剪贴板，列出会改什么、问过才写；回答 n 什么都不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "${LE} → ${LN}（新加）" && printf "%s" "$out" | grep -q "写进 policy.json、签名并推送吗" && printf "%s" "$out" | grep -q "没有改" && [ "$(cat "$MR/policy.json")" = "$sum0" ] && [ "$(git -C "$MR" rev-parse HEAD)" = "$head0" ]'
+: > git.log
+out=$(PL CCA_TTY="$(ans y)" bash "$MT/policy.sh" lock "$MR" 2>&1); rc=$?
+printf 'cca-release %s\n' "$(cut -d' ' -f1,2 "$T/relkey.pub")" > "$T/lock.allowed"
+ok "policy.sh lock：确认后写进 policy.json、用发布密钥签名（cca-policy）、提交并推送" '[ $rc -eq 0 ] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"claude\"].get(sys.argv[2]) == sys.argv[3] and d[\"claude\"][\"alice@example.com\"] == \"US-C\" else 1)" "$MR/policy.json" "$LE" "$LN" && ssh-keygen -Y verify -f "$T/lock.allowed" -I cca-release -n cca-policy -s "$MR/policy.json.sig" < "$MR/policy.json" >/dev/null 2>&1 && git -C "$MR" log -1 --format=%s | grep -q "按请求锁定账号的节点：$LE → $LN" && grep -q "GIT push $MR" git.log && printf "%s" "$out" | grep -q "已发布到 example/cca-policy"'
+cp "$MR/policy.json" "$MR/policy.json.sig" "$PR/"
+out=$(run cca policy pull 2>&1); rc=$?
+out2=$(run cca policy request "$LK" 2>&1); rc2=$?
+out3=$(run cca _gui state 2>/dev/null </dev/null)
+ok "拉到新映射后这个账号被固定了：不用再请求，App 里也没有这个入口" '[ $rc -eq 0 ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "已经按维护者的映射固定在 $LN 上了" && printf "%s" "$out3" | LE="$LE" jok "(lambda a: a[\"pinned\"] and not a[\"can\"][\"policy_lock\"])(next(x for x in d[\"tools\"][0][\"accounts\"] if __import__(\"os\").environ[\"LE\"] in x[\"key\"]))"'
+head1=$(git -C "$MR" rev-parse HEAD)
+out=$(PL CCA_TTY="$(ans)" bash "$MT/policy.sh" lock "$MR" 2>&1); rc=$?
+ok "同一条请求再来一次：说已经是这样了，不用发布，不提交" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经是这样" && printf "%s" "$out" | grep -q "不用发布" && [ "$(git -C "$MR" rev-parse HEAD)" = "$head1" ]'
+mktoken() { python3 -c 'import base64,json,sys; print("cca-lock-v1:" + base64.urlsafe_b64encode(json.dumps(json.loads(sys.argv[1]), ensure_ascii=False).encode()).decode().rstrip("="))' "$1"; }
+printf '麻烦锁一下 %s，谢谢\n还有 %s\n' "$(mktoken '{"tool":"codex","email":"Mixed@Example.com","node":"US-D","alias":"副号"}')" "$(mktoken '{"tool":"claude","email":"alice@example.com","node":"US-A"}')" > "$T/lock.req"
+: > git.log
+out=$(PL bash "$MT/policy.sh" lock "$MR" "$T/lock.req" -y 2>&1); rc=$?
+ok "请求可以夹在聊天消息里，一次好几条；-y 不问；已有的账号换节点；新账号带上别名（邮箱不分大小写）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "alice@example.com：US-C → US-A（换节点）" && printf "%s" "$out" | grep -q "mixed@example.com → US-D（新加）" && printf "%s" "$out" | grep -q "别名：mixed@example.com 叫「副号」" && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"codex\"] == {\"mixed@example.com\": \"US-D\"} and d[\"claude\"][\"alice@example.com\"] == \"US-A\" and d[\"aliases\"][\"mixed@example.com\"] == \"副号\" else 1)" "$MR/policy.json" && grep -q "GIT push" git.log'
+printf '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-A", "type": "vless", "server": "192.0.2.1", "port": 443}]}\n' > "$MR/nodes.json"
+mktoken '{"tool":"claude","email":"new@example.com","node":"US-B"}' > "$T/lock.req"
+out=$(PL CCA_TTY="$(ans n)" bash "$MT/policy.sh" lock "$MR" "$T/lock.req" 2>&1); rc=$?
+rm -f "$MR/nodes.json" "$MR/nodes.json.sig"
+ok "节点不在参考节点里：提醒路由器上没有这个节点的机器会用不了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "节点 US-B 不在参考节点（nodes.json）里"'
+headx=$(git -C "$MR" rev-parse HEAD); sumx=$(cat "$MR/policy.json")
+bad() { out=$(printf '%s' "$1" | PL bash "$MT/policy.sh" lock "$MR" - -y 2>&1); rc=$?; }   # bad 请求的文字：从标准输入读
+unchanged() { [ "$(git -C "$MR" rev-parse HEAD)" = "$headx" ] && [ "$(cat "$MR/policy.json")" = "$sumx" ]; }
+bad "没有请求的一段话"
+ok "文字里没有请求：说清楚，什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有找到锁定请求" && unchanged'
+bad "cca-lock-v1:AAAA"
+ok "复制时漏了字符、读不出来：说清楚，什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "读不出来" && unchanged'
+bad "$(mktoken '{"tool":"claude","email":"e@example.com","node":"US-B\u001b[2J"}')"
+ok "节点名里有控制字符（可能搅乱终端）：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内容不对" && ! printf "%s" "$out" | grep -q "$(printf "\033")" && unchanged'
+bad "$(mktoken '{"tool":"claude","email":"e\u001b[2J@example.com","node":"US-B"}')"
+ok "邮箱里有控制字符：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内容不对" && unchanged'
+bad "$(mktoken '{"tool":"router","email":"e@example.com","node":"US-B"}')"
+ok "不认识的工具：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内容不对" && unchanged'
+bad "$(mktoken '{"tool":"claude","email":"e@example.com","node":"US-A"}') $(mktoken '{"tool":"claude","email":"E@example.com","node":"US-B"}')"
+ok "同一个账号有两条节点不同的请求：说清楚，什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "两条节点不同的请求" && unchanged'
+touch "$T/gh_public"; : > git.log
+mktoken '{"tool":"claude","email":"pub@example.com","node":"US-A"}' > "$T/lock.req"
+out=$(PL bash "$MT/policy.sh" lock "$MR" "$T/lock.req" -y 2>&1); rc=$?; rm -f "$T/gh_public"
+ok "映射仓库不是私有的：不签名、不推送" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不是私有仓库" && ! grep -q "GIT push" git.log'
+for f in accounts.json codex.json config.json; do cp -p "$T/lock.$f" "$H/.cca/$f"; done; cp -p "$T/lock.policy.json" "$PD"; cp -p "$T/lock.policy.json" "$PR/policy.json"; cp -p "$T/lock.policy.json.sig" "$PR/policy.json.sig"
 
 # 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开
 #       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时

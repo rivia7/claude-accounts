@@ -240,7 +240,8 @@
             "web": true,
             "usage": true,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": false
           },
           "can_why": {},
           "usage": {
@@ -366,7 +367,8 @@
             "web": true,
             "usage": false,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": true
           },
           "can_why": {
             "usage": "not_logged_in"
@@ -412,7 +414,8 @@
             "web": true,
             "usage": true,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": true
           },
           "can_why": {},
           "usage": null,
@@ -456,7 +459,8 @@
             "web": true,
             "usage": true,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": true
           },
           "can_why": {},
           "usage": {
@@ -570,7 +574,8 @@
             "web": true,
             "usage": true,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": true
           },
           "can_why": {},
           "usage": {
@@ -672,7 +677,8 @@
             "web": false,
             "usage": false,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": false
           },
           "can_why": {
             "app": "api_account",
@@ -742,7 +748,8 @@
             "web": false,
             "usage": false,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": false
           },
           "can_why": {
             "app": "api_account",
@@ -810,7 +817,8 @@
             "web": true,
             "usage": true,
             "check": true,
-            "cli": true
+            "cli": true,
+            "policy_lock": true
           },
           "can_why": {},
           "usage": {

@@ -116,6 +116,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
   - Codex 账号要到第一次用 `cca codex` 时才加进来，不用 Codex 的机器不会白占路由器上的端口。
   - 维护者从映射里删掉了某个账号：你这台机器上的账号留着（登录还在），只是不再固定出口。
   - `cca policy` 里列出映射里还没加到这台机器上的账号和原因。
+  - 想把某个账号现在的节点固定下来：`cca policy request 账号`（Codex 账号是 `cca codex policy request 账号`；App 里在账号的「…」或右键菜单选「请求维护者锁定节点」）会生成一行请求并复制到剪贴板，发给维护者；维护者写进映射后，每天自动拉取时这个账号就固定在这个节点上了。
 - **固定出口**：映射里的账号，添加时直接用映射的节点，不让选；账号表里改成别的节点，下次运行 cca 时会改回来，并提示一句。映射的节点不在这台机器的可选节点里时，运行 `cca router setup` 重新选可选节点。
 - **节点改名**：路由器上的节点改了名（服务器地址没变）时，映射里还写着旧名字也照样能用：cca 跟着改名时记下了新旧名字的对应。维护者之后把映射更新成新名字就好。
 - **验签**：映射要有发布 cca 用的那把密钥的签名才会被采用，签名不对、格式不对都不用，接着用上次拉到的。只管官方账号（按邮箱），第三方 API 账号不受影响。
@@ -134,6 +135,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
    - 经 gh 加的 key 跟着 gh 的授权走：在 GitHub 的 Settings → Applications 里撤销 GitHub CLI 的授权，这些 key 会一起被删掉；`gh auth logout` 只删本机的登录，不影响它们。
    - 默认管第 4 步说的默认仓库，别的仓库加 `-R 你/仓库`。
 4. 默认仓库写在 `cca` 里（`POLICY_REPO_DEFAULT`）：用户运行 `cca policy setup` 不写仓库、启动时的引导，都用它。
+5. 有人发来锁定请求（`cca policy request` 生成的一行字）时，复制它，在 cca 的仓库里运行 `./policy.sh lock 映射仓库的目录`：读剪贴板里的请求（可以夹在聊天消息里，一次可以好几条），列出会改什么，确认后写进 `policy.json`，照常检查、签名、提交并推送。请求在文件里时写成 `./policy.sh lock 目录 文件`，`-y` 不问。节点不在参考节点里时会提醒一句：路由器上没有这个节点的机器，这个账号会用不了。
 
 ### 参考节点：自动补全 OpenAi 分流组
 
@@ -260,6 +262,8 @@ cca gui
 
 App 里做的每件事都是交给 cca 做的，检查和命令行里完全一样：要重载或重启 OpenClash / ShellCrash、出口纯净度偏低还要不要用、第一次打开 ChatGPT App 要关掉 Codex 的系统代理回退、在外面要打开 Clash Verge……都会弹窗问你，同意了才做。添加账号、登录、改节点、配置路由器这些要回答问题的事，App 会在「终端」里打开对应的 cca 命令。
 
+- 平时在后台运行，只有屏幕顶上的菜单栏图标：点图标里的「打开主窗口」时才有窗口和 Dock 图标，关掉窗口又回到后台。在 Dock 里点“退出”、按 ⌘Q 也只是回到后台（用量继续更新，内置代理不停）；要彻底退出，点菜单栏面板里的「退出」，或者应用菜单的「退出 cca」。
+- 账号页的「终端」按钮用你选的终端，其它要在终端里做的事（登录、配置路由器……）都用系统自带的“终端”。
 - 装好以后不用管它：cca 自动更新到新版本后，下一次运行 cca 时会在后台下载对应版本的 App（App 开着就等它退出再换，也可以在 App 里点「更新并重新打开」）。`cca gui update` 立即更新，`cca gui remove` 删掉它。
 - App 用 curl 下载、用发布密钥验过签名才装（和 cca 本身一样）。它没有苹果的公证，所以**不要用浏览器从 Releases 页面下载 cca-app.zip**：那样会被 Gatekeeper 拦下。
 - 它通过 cca 的只读接口（`cca _gui`）读数据，格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。

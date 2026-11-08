@@ -33,9 +33,12 @@ enum SelfCheck {
 struct CcaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
-    /// cca 在后台打开的（`open -g … --args --core`，内置代理要内核，PROTOCOL 7）：不弹主窗口、不占 Dock，只留菜单栏图标；
-    /// 之后从菜单栏、“帮助”菜单打开主窗口时照常显示（WindowOpener 把 Dock 图标换回来）
+    /// cca 在后台打开的（`open -g … --args --core`，内置代理要内核，PROTOCOL 7）：什么情况下都不自己弹主窗口。
     static let launchedForCore = CommandLine.arguments.contains("--core")
+    /// 启动时就开主窗口：`cca gui`、“更新并重新打开”（`--window`）和演示模式。平时启动只留菜单栏图标，
+    /// 点“打开主窗口”才有窗口和 Dock 图标（WindowOpener）。
+    static let opensWindowAtLaunch = CommandLine.arguments.contains("--window")
+        || !(ProcessInfo.processInfo.environment["CCA_GUI_FIXTURES"] ?? "").isEmpty
 
     var body: some Scene {
         Window("cca", id: "main") {
@@ -45,10 +48,17 @@ struct CcaApp: App {
                 .environment(delegate.appearance)
         }
         .defaultSize(width: 1080, height: 720)
-        .defaultLaunchBehavior(Self.launchedForCore ? .suppressed : .automatic)
-        // 后台打开时也不恢复上次退出时开着的主窗口（恢复出来的窗口不经过 showMain，没有 Dock 图标和菜单栏）
-        .restorationBehavior(Self.launchedForCore ? .disabled : .automatic)
+        .defaultLaunchBehavior(Self.opensWindowAtLaunch ? .automatic : .suppressed)
+        // 启动时不恢复上次开着的主窗口（恢复出来的窗口不经过 showMain，没有 Dock 图标和菜单栏）
+        .restorationBehavior(.disabled)
         .commands {
+            // ⌘Q 和 Dock 里的“退出”一样只是回到后台（内置代理、用量更新不停）；真要退出在这里和菜单栏面板
+            CommandGroup(replacing: .appTermination) {
+                Button("关闭窗口，留在后台") { WindowOpener.shared.toBackground() }
+                    .keyboardShortcut("q", modifiers: .command)
+                Button("退出 cca") { AppExit.quit() }
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+            }
             CommandGroup(after: .appInfo) {
                 Button("检查 cca 更新…") {
                     WindowOpener.shared.showMain()
@@ -102,8 +112,9 @@ struct CcaApp: App {
     }
 }
 
-/// App 的生命周期：关掉主窗口不退出；Claude App / ChatGPT App 启动、退出时重新读 state；App 被激活时重新跑 hello 和 state；
-/// 退出时取消 usage / check / live / 检查更新 / 更新的子进程（app、web、router sync、重置额度跑完为止）。
+/// App 的生命周期：平时在后台运行（只有菜单栏图标），开着主窗口时才有 Dock 图标，关掉主窗口、Dock 里的“退出”、⌘Q 都只是回到后台
+/// （AppExit、WindowOpener）；Claude App / ChatGPT App 启动、退出时重新读 state；App 被激活时重新跑 hello 和 state；
+/// 真的退出时取消 usage / check / live / 检查更新 / 更新的子进程（app、web、router sync、重置额度跑完为止）。
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: AppModel
@@ -131,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.hooks.openURL = { NSWorkspace.shared.open($0) }
         model.hooks.copy = { Platform.copy($0) }
         model.hooks.showMainWindow = { WindowOpener.shared.showMain() }
-        model.hooks.terminate = { NSApp.terminate(nil) }
+        model.hooks.terminate = { AppExit.quit() }
         // 提示条出现时让读屏软件播报
         model.hooks.announce = { text in
             NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
@@ -140,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        if CcaApp.launchedForCore { NSApp.setActivationPolicy(.accessory) }
+        NSApp.setActivationPolicy(CcaApp.opensWindowAtLaunch ? .regular : .accessory)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -154,12 +165,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             observers.append((ws, token))
         }
+        observers.append((ws, ws.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppExit.systemEnding = true }
+        }))
         let nc = NotificationCenter.default
         let token = nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.model.becameActive() }
         }
         observers.append((nc, token))
-        Task { await model.start() }
+        observers.append((nc, nc.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            guard let window = note.object as? NSWindow else { return }
+            MainActor.assumeIsolated { WindowOpener.shared.windowWillClose(window) }
+        }))
+        Task { [self] in
+            await model.start()
+            // 第一次打开、cca 没准备好：只有菜单栏图标的话用户不知道该做什么（教程和引导都在主窗口里）
+            if !CcaApp.launchedForCore, model.phase != .ready || !guide.tutorialDone { WindowOpener.shared.showMain() }
+        }
         #if DEBUG
         if let dir = Snapshot.directory {
             Task { await Snapshot.run(model: model, guide: guide, into: dir) }
@@ -169,6 +191,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// 不是真的要退出（Dock 里的“退出”）：回到后台继续运行。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if AppExit.shouldExit(policy: sender.activationPolicy(), event: NSAppleEventManager.shared().currentAppleEvent) { return .terminateNow }
+        WindowOpener.shared.toBackground()
+        return .terminateCancel
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

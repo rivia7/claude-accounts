@@ -955,8 +955,7 @@ final class AppModel {
 
     // MARK: 终端交接、补救
 
-    /// 用来运行命令的终端：用户挑的，没挑过或者卸载了就用系统自带的。
-    /// 用哪个终端：用户选的；没选过（或者选的卸载了）时用第一个装了的全自动第三方终端，都没有就是系统自带的。半自动的要用户自己选。
+    /// 账号的会话用哪个终端（别的命令固定用系统自带的，见 `Handoff.systemTerminal`）：用户选的；没选过（或者选的卸载了）时用第一个装了的全自动第三方终端，都没有就是系统自带的。半自动的要用户自己选。
     var terminalChoice: TerminalApp {
         terminals.first { $0.id == terminalID } ?? terminals.first { $0 != .system && $0.isAutomatic } ?? .system
     }
@@ -1077,6 +1076,26 @@ final class AppModel {
     func copy(_ text: String) {
         hooks.copy(text)
         showToast("已复制：\(text)", .info)
+    }
+
+    /// 请求维护者把这个账号现在的节点锁进映射（PROTOCOL 4.8）：cca 写好一行请求，复制给用户发给维护者。
+    func requestPolicyLock(_ a: Account) {
+        if isFixtureMode {
+            showToast("演示模式：不会生成请求", .info)
+            return
+        }
+        guard let client else { return }
+        Task { [weak self] in
+            let r = await client.execute(.policyRequest(a.tool, key: a.key), prompter: nil)
+            guard let self else { return }
+            let line = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard r.isSuccess, !line.isEmpty else {
+                self.finish(r, failureTitle: "没能生成锁定请求", success: "cca 没有给出请求的内容")
+                return
+            }
+            self.hooks.copy(line)
+            self.showToast("已复制请求：发给维护者，加进映射后这个账号的节点就固定了", .success)
+        }
     }
 
     func apply(_ remedy: Remedy) {

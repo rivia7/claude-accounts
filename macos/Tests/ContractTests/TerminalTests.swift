@@ -45,6 +45,11 @@ func sessionScriptTests() async {
     // 普通的交接（登录、添加账号）照旧：不换文件夹，结束时等按键
     let plain = TerminalHandoff.script(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: "/x/cca")
     check("普通交接不 cd、不进 shell", !plain.contains("cd --") && !plain.contains("exec \"${SHELL") && plain.contains("按任意键关闭"))
+    check("系统终端：按键之后关掉窗口（别的终端不发 Apple Event）", plain.contains("TERM_PROGRAM:-}\" = Apple_Terminal") && plain.contains("close window id i") && plain.contains("if [ -t 0 ]; then cca_wait_close; fi"))
+    let syntax = tmpRoot.appendingPathComponent("handoff-syntax.command")
+    try? plain.write(to: syntax, atomically: true, encoding: .utf8)
+    let parsed = try? await CcaProcess.run(ProcessSpec(executable: "/bin/bash", arguments: ["-n", syntax.path], environment: ["PATH": "/usr/bin:/bin"], timeout: 10))
+    check("交接脚本语法没问题", parsed?.exitCode == 0, parsed?.stderrText ?? "")
 
     // App 收回和脚本开始运行抢同一个 rename，只有一边成功
     if let u = try? TerminalHandoff.write(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: cca.path, directory: dir) {
@@ -144,15 +149,24 @@ func sessionScriptTests() async {
     await w.start()
     w.handoffDirectory = handoffs
     w.terminalGrace = 0.05
+    let sessionHandoff = Handoff.session(prefix: [], key: "工作(bob@example.com)", name: "工作", directory: "/tmp")
     w.chooseTerminal(TerminalApp.system.id)
-    w.launchInTerminal(.edit(prefix: []), ccaPath: "/usr/bin/true")
+    w.launchInTerminal(sessionHandoff, ccaPath: "/usr/bin/true")
     check("选了系统自带的：用它", openLog.terminals == [TerminalApp.system.id])
     try? await Task.sleep(nanoseconds: 150_000_000)
     check("系统自带的不用等它", w.sheet == nil && openLog.opened.last.map { fm.fileExists(atPath: $0.path) } == true)
 
     w.chooseTerminal(iTerm.id)
-    w.launchInTerminal(.edit(prefix: []), ccaPath: "/usr/bin/true")
-    check("用选好的终端", openLog.terminals.last == iTerm.id)
+    let appCommands: [Handoff] = [.edit(prefix: []), .login(prefix: [], key: "k", name: "n"), .relogin(prefix: [], key: "k", name: "n"),
+                                  .addAccount(prefix: [], product: "Claude"), .routerSetup, .localSetup, .install, .update,
+                                  Handoff(event: TerminalEvent(code: TerminalCode(rawValue: "local_setup"), argv: ["local", "setup"], display: nil, message: ""))]
+    for h in appCommands { w.launchInTerminal(h, ccaPath: "/usr/bin/true") }
+    check("选了别的终端：App 发起的命令还是用系统自带的", openLog.terminals.suffix(appCommands.count).allSatisfy { $0 == TerminalApp.system.id })
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    check("App 发起的命令不等第三方终端、不问要不要改用系统自带的", w.sheet == nil)
+
+    w.launchInTerminal(sessionHandoff, ccaPath: "/usr/bin/true")
+    check("账号的会话用选好的终端", openLog.terminals.last == iTerm.id)
     guard let notRun = openLog.opened.last else { return }
     _ = await waitUntil { w.sheet != nil }
     var fallback: Handoff?
@@ -162,13 +176,13 @@ func sessionScriptTests() async {
     if let fallback { w.launchInTerminal(fallback, ccaPath: "/usr/bin/true") }
     check("改用系统自带的", openLog.terminals.last == TerminalApp.system.id)
 
-    w.launchInTerminal(.edit(prefix: []), ccaPath: "/usr/bin/true")
+    w.launchInTerminal(sessionHandoff, ccaPath: "/usr/bin/true")
     if let running = openLog.opened.last { try? fm.moveItem(atPath: running.path, toPath: running.path + ".run") }   // 脚本开始运行时做的事
     try? await Task.sleep(nanoseconds: 150_000_000)
     check("已经开始运行就不打扰", w.sheet == nil)
 
     openLog.openSucceeds = false
-    w.launchInTerminal(.edit(prefix: []), ccaPath: "/usr/bin/true")
+    w.launchInTerminal(sessionHandoff, ccaPath: "/usr/bin/true")
     check("打不开时马上说", w.sheet != nil)
     w.dismissSheet()
     w.shutdown()
@@ -191,8 +205,8 @@ func sessionScriptTests() async {
     try? await Task.sleep(nanoseconds: 150_000_000)
     check("半自动：不写交接文件、不等它运行", pasteLog.opened.isEmpty && !fm.fileExists(atPath: tmpRoot.appendingPathComponent("handoff-paste").path) && p.sheet == nil)
     pasteLog.openSucceeds = false
-    p.launchInTerminal(.edit(prefix: []), ccaPath: "/x/cca")
-    check("打不开也说清楚，命令还在剪贴板里", pasteLog.copied.last == "/x/cca edit" && (p.toast?.text ?? "").contains("打不开 Termius"))
+    p.launchInTerminal(.session(prefix: [], key: "k", name: "n", directory: "/tmp"), ccaPath: "/x/cca")
+    check("打不开也说清楚，命令还在剪贴板里", pasteLog.copied.last == "cd /tmp && /x/cca @k" && (p.toast?.text ?? "").contains("打不开 Termius"))
     p.shutdown()
     m.shutdown()
 }

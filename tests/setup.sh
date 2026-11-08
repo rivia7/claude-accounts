@@ -478,6 +478,8 @@ if [ "$1" = clone ]; then
 	mkdir -p "$dst" && cp "$CCA_T"/policy_repo/* "$dst"/ && exit 0
 	exit 128
 fi
+# 发布映射（policy.sh）的推送：记下来，不碰网络
+if [ "$1" = -C ] && [ "$3" = push ]; then echo "GIT push $2" >> "$CCA_T/git.log"; exit 0; fi
 exec /usr/bin/git "$@"
 S
 # 假的剪贴板（不碰真的）：复制的内容写进 $CCA_T/clipboard，粘贴时从那里读
@@ -523,6 +525,9 @@ if a[:1] == ["_use"]:
             save(d)
             sys.exit(0)
     sys.exit(1)
+if a[:2] == ["repo", "view"]:   # policy.sh 发布前确认仓库是私有的；gh_public 模拟公开仓库
+    print("PUBLIC" if flag("gh_public") else "PRIVATE")
+    sys.exit(0)
 if a[:1] != ["api"]:
     sys.stderr.write("fake gh: only gh api is simulated: %s\n" % " ".join(a))
     sys.exit(1)

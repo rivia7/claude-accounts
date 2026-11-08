@@ -161,6 +161,36 @@ func arrangementTests() {
     check("上一版只记在 App 里的顺序：第一次读到账号表时写回去", migrated && mt.requests.filter { $0.arguments.contains("reorder") }.count == 1)
     mm.shutdown()
 
+    // 请求维护者把节点锁进映射
+    let requestLine = "请把这个账号的节点锁进映射：Claude erin@example.com → US-B  cca-lock-v1:abc"
+    let lockLog = HookLog()
+    let lockT = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+        if request.arguments == ["policy", "request", erin] { return response(0, stdout: requestLine + "\n") }
+        if request.arguments == ["policy", "request", carol] {
+            return response(1, [.fail(FailEvent(code: FailCode(rawValue: "error"), message: "这台机器还没配置维护者的映射"))], stderr: "这台机器还没配置维护者的映射")
+        }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let lm = makeModel(lockT, log: lockLog, prefs: MemoryPrefs())
+    await lm.start()
+    func lockAccount(_ k: String) -> Account { lm.account(AccountRef(tool: .claude, key: k))! }
+    check("能不能请求锁定由 cca 说了算：已经被映射固定的、第三方 API 账号都不行", lockAccount(erin).can.policyLock && !lockAccount(bob).can.policyLock && !lockAccount("直连接口").can.policyLock)
+    lm.requestPolicyLock(lockAccount(erin))
+    _ = await waitUntil { lm.toast != nil }
+    check("请求锁定：cca 写的那一行原样进剪贴板，提醒发给维护者", lockLog.copied == [requestLine] && lm.toast?.text.contains("发给维护者") == true, lockLog.copied.joined())
+    check("请求锁定：用户在等，不是后台任务，超时 60 秒", lockT.requests.last { $0.arguments.contains("request") }?.background == false && lockT.requests.last { $0.arguments.contains("request") }?.timeout == 60)
+    lm.requestPolicyLock(lockAccount(carol))
+    _ = await waitUntil { lm.sheet != nil }
+    if case .failure(let info)? = lm.sheet {
+        check("请求不了：弹窗说明 cca 给的原因，什么都不复制", info.failure.message.contains("还没配置") && lockLog.copied.count == 1, info.failure.message)
+    } else {
+        check("请求不了：弹窗说明 cca 给的原因，什么都不复制", false)
+    }
+    lm.shutdown()
+    check("请求锁定的命令：Codex 账号带上前缀", CcaCommand.policyRequest(.codex, key: "k").arguments == ["codex", "policy", "request", "k"] && CcaCommand.policyRequest(.claude, key: "k").arguments == ["policy", "request", "k"])
+
     check("添加第三方 API 账号：带上这个工具的前缀", Handoff.addAPI(prefix: ["codex"]).arguments == ["codex", "add", "api"] && Handoff.addAPI().arguments == ["add", "api"]
           && Handoff.addAPI().inApp)
 }

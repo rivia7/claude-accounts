@@ -20,6 +20,8 @@ enum CcaCommand: Sendable, Hashable {
     case guiUpdate
     /// 账号表按这个顺序排（`cca [codex] reorder 账号…`）：只改先后，端口、路由器都不动。
     case reorder(ToolID, keys: [String])
+    /// 请求维护者把这个账号现在的节点锁进映射（`cca [codex] policy request KEY`，PROTOCOL 4.8）：stdout 是发给维护者的那一行。
+    case policyRequest(ToolID, key: String)
     /// 改别名（`cca [codex] rename KEY 新别名`，新别名是 - 时去掉别名）：stdout 是新的键。
     case rename(ToolID, key: String, alias: String)
     /// 重置额度（`cca codex reset KEY --json`，PROTOCOL 4.5）：要同意（reset_credit），stdout 是 kind=reset 的文档。
@@ -35,7 +37,7 @@ enum CcaCommand: Sendable, Hashable {
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _): return t
         case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -43,7 +45,7 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k): return k
+        case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -75,6 +77,7 @@ enum CcaCommand: Sendable, Hashable {
         case .guiUpdate: return ["gui", "update"]
         case .rename(_, let k, let a): return prefix + ["rename", k, a]
         case .reorder(_, let keys): return prefix + ["reorder"] + keys
+        case .policyRequest(_, let k): return prefix + ["policy", "request", k]
         case .reset(_, let k): return prefix + ["reset", k, "--json"]
         case .update(let v): return ["update", v]
         case .updateCheck: return ["update", "--check", "--json"]
@@ -93,7 +96,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app, .web: return 120
         case .routerSync: return 180
         case .guiUpdate, .update: return 300
-        case .rename, .reorder: return 60
+        case .rename, .reorder, .policyRequest: return 60
         case .reset, .updateCheck: return 150
         case .clientCheck, .clientInstall: return 900
         case .clientMode: return 30
@@ -105,7 +108,7 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .routerSync, .reset, .clientInstall: return true
-        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .update, .updateCheck, .clientCheck, .clientMode: return false
+        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
 
@@ -120,7 +123,7 @@ enum CcaCommand: Sendable, Hashable {
         case .routerSync: return "router-sync"
         case .guiUpdate, .update: return "gui-update"
         case .clientCheck, .clientMode, .clientInstall: return "client-update"
-        case .check, .checkPoll, .updateCheck: return nil
+        case .check, .checkPoll, .updateCheck, .policyRequest: return nil
         }
     }
 }

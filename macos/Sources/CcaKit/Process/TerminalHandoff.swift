@@ -17,7 +17,7 @@ func displayCommand(_ arguments: [String]) -> String {
     (["cca"] + arguments.map(shellQuoteIfNeeded)).joined(separator: " ")
 }
 
-/// 认识的终端：App 看这台 Mac 上装了哪些（没装的在选择列表里灰着），用户挑一个当默认的。
+/// 认识的终端：App 看这台 Mac 上装了哪些（没装的在选择列表里灰着），用户挑一个用来开账号的会话。
 struct TerminalApp: Identifiable, Hashable, Sendable {
     enum Launch: Hashable, Sendable {
         /// 全自动：把 .command 文件交给它，它自己开窗口运行（声明了能打开这种文件，或者收到可执行文件时直接运行）
@@ -72,8 +72,9 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     var directory: String?
     /// 命令结束后留在 shell 里（账号的会话），而不是等按键关窗。
     var staysOpen = false
-    /// 一定用系统自带的“终端”（选的终端没运行起来，用户点了改用它）。
-    var systemTerminal = false
+    /// 用系统自带的“终端”：App 发起的命令（登录、添加账号、配置路由器……）都是。只有账号的会话用用户选的终端；
+    /// 选的终端没运行起来、用户点了改用系统自带的时，也变回这样。
+    var systemTerminal = true
     /// 这条流程能在 App 里问完（提问会话，PROTOCOL 4.6）；cca 不支持时照旧走终端。
     var inApp = false
 
@@ -112,6 +113,7 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         var h = Handoff(arguments: prefix + ["@" + key], title: "在终端里打开 \(name)")
         h.directory = directory
         h.staysOpen = true
+        h.systemTerminal = false
         return h
     }
 
@@ -151,13 +153,13 @@ enum TerminalHandoff {
     }
 
     /// `.command` 文件的内容：bash；补好 PATH；去掉会让 cca 自作主张的变量；进要求的文件夹；逐个加了单引号运行命令；
-    /// 结束时等按任意键（账号的会话留在 shell 里，这个窗口接着能用）。文件一开始就挪走再删掉（bash 已经打开了它，
+    /// 结束时等按任意键再关窗口（账号的会话留在 shell 里，这个窗口接着能用）。文件一开始就挪走再删掉（bash 已经打开了它，
     /// 照样往下读；这样中途关窗口也不会留下文件）。挪走这一步和 App 的 `reclaim` 抢同一个 rename：App 收回了就不运行，
     /// 不会换了终端又跑一遍。
     static func script(_ h: Handoff, ccaPath: String) -> String {
         let command = ([ccaPath] + h.arguments).map(shellQuote).joined(separator: " ")
         let enter = h.directory.map { dir in
-            "cd -- \(shellQuote(dir)) || { echo \(shellQuote("打不开这个文件夹：" + dir)); read -r -s -n 1 -p \"按任意键关闭…\" _; exit 1; }\n"
+            "cd -- \(shellQuote(dir)) || { echo \(shellQuote("打不开这个文件夹：" + dir)); cca_wait_close; exit 1; }\n"
         } ?? ""
         let finish = h.staysOpen ? """
         if [ "$status" -ne 0 ]; then echo "命令结束（退出码 $status）。"; fi
@@ -165,7 +167,7 @@ enum TerminalHandoff {
 
         """ : """
         if [ "$status" -eq 0 ]; then echo "完成。回到 cca App 会自动刷新。"; else echo "命令结束（退出码 $status）。"; fi
-        if [ -t 0 ]; then read -r -s -n 1 -p "按任意键关闭…" _; echo; fi
+        if [ -t 0 ]; then cca_wait_close; fi
         exit "$status"
 
         """
@@ -176,6 +178,7 @@ enum TerminalHandoff {
         rm -f -- "$0.run"
         export PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         unset CCA_TTY CCA_YES CCA_GRANT CCA_EVENTS CCA_RO CCA_SKIP_CHECK CCA_GUI CCA_PROMPT
+        \(waitClose)
         \(enter)printf '%s\\n\\n' \(shellQuote("$ " + h.display))
         \(command)
         status=$?
@@ -183,6 +186,26 @@ enum TerminalHandoff {
         \(finish)
         """
     }
+
+    /// 等按键，按了就关窗口。系统自带的“终端”进程结束后默认留着窗口（[进程已完成]，配置文件里的“当 shell 退出时”），要自己关：
+    /// 趁脚本还在跑（busy）认出窗口的 id（已经结束的窗口还报着原来的 tty，新窗口会重用这个号，只按 tty 认可能认错），按键之后等 shell 退出再关这一个。
+    /// 窗口里还有别的标签页时不关（AppleScript 关不了单个标签页）。Terminal 发给自己的 Apple Event 不用授权（实测）；认不出、发不了就照旧留着窗口。
+    private static let waitClose = #"""
+    cca_wait_close() {
+    	local window=""
+    	if [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
+    		window=$(perl -e 'alarm 3; exec @ARGV' osascript -e 'on run argv' -e 'tell application "Terminal"' \
+    			-e 'repeat with w in windows' \
+    			-e 'if (count of tabs of w) is 1 and tty of tab 1 of w is item 1 of argv and busy of tab 1 of w then return id of w' \
+    			-e 'end repeat' -e 'end tell' -e 'end run' "$(tty)" 2>/dev/null)
+    	fi
+    	read -r -s -n 1 -p "按任意键关闭…" _; echo
+    	[ -n "$window" ] || return 0
+    	perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' osascript -e 'on run argv' -e 'set i to (item 1 of argv) as integer' -e 'tell application "Terminal"' \
+    		-e 'repeat 50 times' -e 'if not (exists window id i) then return' -e 'if not busy of tab 1 of window id i then' \
+    		-e 'close window id i' -e 'return' -e 'end if' -e 'delay 0.1' -e 'end repeat' -e 'end tell' -e 'end run' "$window" </dev/null >/dev/null 2>&1 &
+    }
+    """#
 
     /// 收回还没运行的交接脚本（选的终端没运行它）：true 表示收回了，它不会再被运行；false 表示已经开始运行了（或者已经没了）。
     static func reclaim(_ url: URL) -> Bool {

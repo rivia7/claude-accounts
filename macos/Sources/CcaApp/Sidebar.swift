@@ -147,6 +147,9 @@ struct AccountManageItems: View {
         } else {
             Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
                 .disabled(busy)
+            if a.can.policyLock {
+                Button("请求维护者锁定节点") { model.requestPolicyLock(a) }
+            }
         }
         Button("删除账号…", role: .destructive) { model.run(.remove(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
             .disabled(busy)

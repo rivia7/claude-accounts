@@ -127,9 +127,9 @@ struct SettingsView: View {
     private var terminalCaption: String {
         let t = model.terminalChoice
         guard t.isAutomatic else {
-            return "\(t.name) 不能由别的 App 运行命令：点「终端」、登录、添加账号时会打开它并复制命令，到它的本地终端里粘贴运行。"
+            return "\(t.name) 不能由别的 App 运行命令：点账号页的「终端」时会打开它并复制命令，到它的本地终端里粘贴运行。登录、添加账号这些命令总是用系统自带的终端。"
         }
-        return (["账号页的「终端」、登录、添加账号都用它打开。"] + [t.note].compactMap { $0 }).joined(separator: "")
+        return (["账号页的「终端」用它打开；登录、添加账号这些命令总是用系统自带的终端。"] + [t.note].compactMap { $0 }).joined(separator: "")
     }
 }
 
