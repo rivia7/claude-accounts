@@ -252,13 +252,15 @@ PYTHON="${CCA_PYTHON:-$(command -v python3 2>/dev/null)}"
 # 内嵌 Python 的缓存目录（PY_BOOT）：这个用户自己的临时目录（/var/folders/…/T/，别人进不去；TMPDIR 不是它时问 getconf）
 case "${TMPDIR:-}" in /var/folders/*) PYC_DIR="${TMPDIR%/}/cca-py" ;; *) PYC_DIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && PYC_DIR="${PYC_DIR%/}/cca-py" || PYC_DIR="" ;; esac
 # /usr/bin/python3 是命令行工具的转发程序：每次先找开发者目录，每次调用多花约 50 毫秒。换成它转发到的真正的 python3
-# （问一次，记在上面的缓存目录里；目录不是自己的、是链接就不用）
+# （问一次，记在上面的缓存目录里；目录不是自己的、是链接就不用）。没装命令行工具时它一运行就弹安装窗口：先问 xcode-select，
+# 没装就不问（照常用 /usr/bin/python3，need_deps 会说清楚要装什么）
 if [ "$PYTHON" = /usr/bin/python3 ] && [ -n "$PYC_DIR" ]; then
 	{ [ -d "$PYC_DIR" ] || mkdir -m 700 "$PYC_DIR"; } 2>/dev/null
 	if [ -d "$PYC_DIR" ] && [ ! -L "$PYC_DIR" ] && [ -O "$PYC_DIR" ]; then
-		_p=$(cat "$PYC_DIR/python3" 2>/dev/null)
+		_p=""; { read -r _p < "$PYC_DIR/python3"; } 2>/dev/null
 		if [ -z "$_p" ] || [ ! -x "$_p" ]; then
-			_p=$(/usr/bin/python3 -I -c 'import sys; print(sys.executable)' 2>/dev/null)
+			_p=""
+			xcode-select -p >/dev/null 2>&1 && _p=$(/usr/bin/python3 -I -c 'import sys; print(sys.executable)' 2>/dev/null)
 			[ -x "$_p" ] && printf '%s\n' "$_p" > "$PYC_DIR/python3"
 		fi
 		[ -x "$_p" ] && PYTHON="$_p"
@@ -2406,6 +2408,35 @@ def cmd_digest():
     """账号表 + 路由器端代码（从 stdin 读）的摘要：cca 更新改了路由器脚本，下次启动也会重新部署"""
     c, t, _ = ctx()
     print(sync_digest(c, sys.stdin.read()))
+
+
+def cmd_sync_state(quiet=''):
+    """sync_if_changed 开头要的一次给（几乎每条命令都走这里，原来要起四次 python：validate、secrets-forget、digest、
+    get synced）。账号表有错就返回 1，错误写 stderr；quiet 时校验这一步的 stderr 全不要（和 py validate 2>/dev/null 一样）。
+    没错就清掉已经不在账号表里的 key（secrets-forget），再打印「账号表 + 路由器端代码（stdin）的摘要<TAB>上次同步的摘要」"""
+    if quiet:
+        sys.stderr.flush()
+        saved, null = os.dup(2), os.open(os.devnull, os.O_WRONLY)
+        os.dup2(null, 2)
+    try:
+        errs = ctx()[2]
+        for e in errs:
+            sys.stderr.write('! %s\n' % e)
+    except Exception:
+        if not quiet:
+            raise
+        errs = [None]   # quiet：出了意外也只返回 1（同样不说），交给不带 quiet 的那次说清楚
+    finally:
+        if quiet:
+            sys.stderr.flush()
+            os.dup2(saved, 2)
+            os.close(saved)
+            os.close(null)
+    if errs:
+        sys.exit(1)
+    cmd_secrets_forget()
+    c = ctx()[0]
+    print('%s\t%s' % (sync_digest(c, sys.stdin.read()), c.get('synced') or ''))
 
 
 def cmd_set_nodes(*nodes):
@@ -6553,7 +6584,7 @@ CMDS = {
     'private-profile': cmd_private_profile, 'runtime-record': cmd_runtime_record, 'browser-profile': cmd_browser_profile,
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
-    'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest,
+    'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest, 'sync-state': cmd_sync_state,
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'launch-check': cmd_launch_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
@@ -7827,7 +7858,13 @@ router_reload() {   # 获准后在路由器上执行带重载的 apply（运行�
 # ---------------------------------------------------------------------------
 # 路由器 SSH
 # ---------------------------------------------------------------------------
-load_router() { eval "$(py router-env)"; }
+load_router() {   # config.json 里路由器的设置。一条命令里要读好几次：config.json 没换过（同一个文件、大小和修改时间都没变）就不再起 python
+	local k out
+	k=$(stat -L -f '%i:%z:%Fm' "$CFG" 2>/dev/null)
+	[ -n "$k" ] && [ "$k" = "${ROUTER_SEEN:-}" ] && return 0
+	out=$(py router-env) && ROUTER_SEEN=$k || ROUTER_SEEN=""   # 没读成功的不记
+	eval "$out"
+}
 router_ready() { load_router; [ -n "$ROUTER_HOST" ] && [ -f "$ROUTER_KEY" ]; }
 SSH_COMMON=(-o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ConnectTimeout=6)
 rsh() {
@@ -8347,6 +8384,7 @@ ensure_login() {
 	while :; do
 		py device "$ACC_KEY" || return 1   # logout 可能清掉客户端配置，登录前恢复该账号的固定设备标识
 		e=$(auth_email)
+		LOGIN_EMAIL=$e   # 启动时的横幅接着用，不再问一次
 		if [ -z "$e" ]; then
 			if ! interactive; then
 				fail_warn not_logged_in "${ACC_NAME} 还没登录，需要在终端里运行 ${CMD} @${ACC_NAME} 完成登录"
@@ -8980,7 +9018,7 @@ app_launch_abort() {
 }
 
 cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）；已经开着就切到它
-	local key app dir pid first="" i p rc ready=""
+	local key app dir pid first="" i p rc ready="" app_wait
 	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
 	app=$(tool app_path) || FAIL_CODE=app_missing die "$(tool app_missing)"
 	key=$(pick_account "${1:-}") || return 0
@@ -9025,7 +9063,8 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	trap 'app_launch_abort 129' HUP
 	gui_step open
 	tool app_open "$app" "$dir" 9>&- || FAIL_CODE=open_failed die "打开 ${APP_LABEL} 失败"
-	for i in $(seq 1 40); do
+	app_wait=${CCA_APP_WAIT:-10}; case "$app_wait" in ''|*[!0-9]*) app_wait=10 ;; esac   # 最多等几秒（默认 10；测试里等不到的用例设成 1）
+	for i in $(seq 1 $((app_wait * 4))); do
 		pid=$(tool app_pid "$dir"); rc=$?
 		[ "$rc" -le 1 ] || FAIL_CODE=open_failed die "无法查询本次 ${APP_LABEL} 进程，已停止启动；请确认已退出本次实例后再试"
 		[ -z "$pid" ] || APP_LAUNCH_NEW_PID="$pid"
@@ -9706,7 +9745,7 @@ run_account() {
 		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}第三方 API · ${ACC_BASE_URL}${ACC_MODEL:+ · ${ACC_MODEL}}${C_0}"
 		say "  ${C_D}出口${C_0}  ${ACC_NODE}$([ -n "$ACC_PORT" ] && printf '（%s）' "$(route_note)") · ${COFFEE_LINE:-未检测}"
 	else
-		e=$(py email "$key")
+		e=$LOGIN_EMAIL   # ensure_login 刚问过
 		if [ -n "$ACC_EMAIL" ]; then e="已登录"; else e="已登录 ${e}"; fi
 		if [ -n "$ACC_ALIAS" ] && [ -n "$ACC_EMAIL" ]; then
 			say "  ${C_B}${ACC_ALIAS}${C_0}  ${ACC_EMAIL}   ${C_D}${e} · $(route_note)${C_0}"
@@ -9739,12 +9778,13 @@ run_account() {
 }
 
 sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）；在外面就等回家
-	if ! py validate 2>/dev/null; then   # 可能是路由器上的节点改了名（比如维护者的映射已经换成新名字）：先跟上再校验
+	# 校验账号表、清掉钥匙串里直接改账号表删掉的第三方 API 账号的 key、算摘要，一个 py sync-state 做完（"这次的摘要<TAB>上次同步的"）
+	local st
+	if ! st=$({ router_sh; router_rb; } | py sync-state quiet); then   # 可能是路由器上的节点改了名（比如维护者的映射已经换成新名字）：先跟上再校验
 		if router_ready && at_home; then nodes_follow; fi
-		py validate || FAIL_CODE=table_invalid die "账号表有错误：运行 ${CMD} edit 修正"
+		st=$({ router_sh; router_rb; } | py sync-state) || FAIL_CODE=table_invalid die "账号表有错误：运行 ${CMD} edit 修正"
 	fi
-	py secrets-forget   # 直接改账号表删掉的第三方 API 账号：钥匙串里的 key 一起删
-	if [ "$(digest)" != "$(py get synced)" ]; then
+	if [ "${st%%	*}" != "${st#*	}" ]; then
 		router_needed || return 0   # 只有直连的第三方 API 账号、也没配置路由器：没有要同步的
 		if router_ready && ! at_home; then
 			info "账号表或路由器端脚本有变化：现在连不上路由器，回到家里的网络后再同步"
@@ -9961,7 +10001,7 @@ verify_release() {   # verify_release 脚本 签名：签名有效、语法正�
 	is_ver "$v" && printf '%s' "$v"
 }
 
-retry3() { "$@" && return 0; sleep 2; "$@" && return 0; sleep 2; "$@"; }   # 有的网络偶尔会丢新连接
+retry3() { "$@" && return 0; sleep "${CCA_RETRY_WAIT:-2}"; "$@" && return 0; sleep "${CCA_RETRY_WAIT:-2}"; "$@"; }   # 有的网络偶尔会丢新连接（两次之间等 CCA_RETRY_WAIT 秒，默认 2；测试里是 0）
 
 latest_version() {   # releases/latest 会 302 到 …/releases/tag/vX.Y.Z（只指向正式版，不指向测试版）
 	local u
@@ -10456,7 +10496,7 @@ policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-pol
 	for i in 1 2 3; do   # 有的网络偶尔会丢新连接；GitHub 拒绝了的不用再试
 		policy_clone "$repo" "$tmp/repo"; rc=$?
 		[ $rc -eq 1 ] && [ $i -lt 3 ] || break
-		sleep 2
+		sleep "${CCA_RETRY_WAIT:-2}"
 	done
 	if [ $rc -eq 0 ]; then
 		rc=1

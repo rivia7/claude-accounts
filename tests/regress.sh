@@ -9,20 +9,23 @@ STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）�
 trap '[ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
-# TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>说明”；
-# python 的次数靠 CCA_PYTHON 指向的一个记数的小脚本（只在 TIMING 时用，平时 cca 照常找 python3）
+# TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>sleep 了几秒<TAB>说明”；
+# python 的次数靠 CCA_PYTHON 指向的一个记数的小脚本（只在 TIMING 时用，平时 cca 照常找 python3），sleep 靠 $T/bin 里的 sleep
+#（cca、假命令、经假 ssh 跑的路由器端都从 PATH 找它；后台进程的也算在内）
 PYWRAP=""
 if [ -n "${TIMING:-}" ]; then
 	: > "$TIMING"; : > "$T/py.count"; TIMING_PY=0
 	PYWRAP="$T/pycount"
-	# 每次记一行：参数里短的那些（长的是内嵌的 Python 源码），第一个不是开关、不是目录的就是 py 的子命令
-	printf '#!/bin/sh\nfor a in "$@"; do [ ${#a} -lt 120 ] && printf "%%s " "$a"; done >> "%s/py.count"; echo >> "%s/py.count"\nexec %s "$@"\n' \
-		"$T" "$T" "$(PATH=/opt/homebrew/bin:/usr/bin:/bin command -v python3)" > "$PYWRAP"
+	# 每次记一行：参数里短的、不带换行的那些（长的是内嵌的 Python 源码），第一个不是开关、不是目录的就是 py 的子命令。
+	# 用 dash 写：/bin/sh（bash）带着几百 KB 的参数起一次要多花二三十毫秒，比要量的还多；python 用它转发到的真正的那个（和 cca 一样）
+	printf '#!/bin/dash\nfor a in "$@"; do case $a in *"\n"*) ;; *) [ ${#a} -lt 120 ] && printf "%%s " "$a" ;; esac; done >> "%s/py.count"; echo >> "%s/py.count"\nexec %s "$@"\n' \
+		"$T" "$T" "$(PATH=/opt/homebrew/bin:/usr/bin:/bin python3 -I -c 'import sys; print(sys.executable)')" > "$PYWRAP"
 	chmod 755 "$PYWRAP"
+	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
-rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=4 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
 ok() {   # ok 说明 '断言'：断言写丢了（比如说明和断言之间少了空格，连成了一个参数）也算失败，不会空过。DEBUG_OUT=1 时失败的附上 $out 的最后几行
@@ -31,9 +34,10 @@ ok() {   # ok 说明 '断言'：断言写丢了（比如说明和断言之间少
 		[ -z "${DEBUG_OUT:-}" ] || ok_why "$2"
 	fi
 	if [ -n "${TIMING:-}" ]; then
-		local now n
+		local now n s
 		now=$(perl -MTime::HiRes=time -e 'printf "%.3f", time'); n=$(wc -l < "$T/py.count")
-		printf '%s\t%s\t%s\t%s\n' "$(perl -e "printf '%.2f', $now - $TIMING_T")" "${BASH_LINENO[0]}" $((n - TIMING_PY)) "$1" >> "$TIMING"
+		s=$(awk '{ s += $1 } END { printf "%.1f", s }' "$T/sleep.log"); : > "$T/sleep.log"
+		printf '%s\t%s\t%s\t%s\t%s\n' "$(perl -e "printf '%.2f', $now - $TIMING_T")" "${BASH_LINENO[0]}" $((n - TIMING_PY)) "$s" "$1" >> "$TIMING"
 		TIMING_T=$now TIMING_PY=$((n))
 	fi
 }
@@ -169,8 +173,9 @@ EOF
 sips -s format png "$T/Claude.app/Contents/Resources/electron.icns" --out "$T/icon-src.png" >/dev/null 2>&1
 sips -s format png "$L/Claude 副号.app/Contents/Resources/AppIcon.icns" --out "$T/icon-out.png" >/dev/null 2>&1
 ok "启动器图标：账号标识整个在原图标的轮廓里（伸出去的话 macOS 26 起会把图标缩小、关进灰框）" '[ "$(osascript -l JavaScript "$T/alpha.js" "$T/icon-src.png" "$T/icon-out.png")" = ok ]'
-m0=$(stat -f %m "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"); sleep 1; run cca app --launchers >/dev/null 2>&1
-ok "启动器图标：账号标识没变时不重画" '[ "$(stat -f %m "$L/Claude 副号.app/Contents/Resources/AppIcon.icns")" = "$m0" ]'
+m0=$(stat -f %Fm "$L/Claude 副号.app/Contents/Resources/AppIcon.icns"); run cca app --launchers >/dev/null 2>&1   # 纳秒的修改时间：不用先等一秒
+ok "启动器图标：账号标识没变时不重画" '[ "$(stat -f %Fm "$L/Claude 副号.app/Contents/Resources/AppIcon.icns")" = "$m0" ]'
+touch "$T/fake_icons"   # 图标检查完了：以后新建、重画的启动器图标用假的 sips / iconutil（setup.sh），真画一个要将近 1 秒
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
 ok "cca app：账号自己的资料目录、端口和 CLAUDE_CONFIG_DIR，启动前做出口检测" '[ $rc -eq 0 ] && grep -qF -- "[-n] [-a] [$T/Claude.app] [--env] [CLAUDE_CONFIG_DIR=$BD/claude]" open.log && grep -qF -- "[--args] [--user-data-dir=$BD/desktop] [--proxy-server=http://192.0.2.10:7902] [--proxy-bypass-list=localhost;127.0.0.1;[::1];*.local;10.0.0.0/8;172.16.0.0/12;192.168.0.0/16]" open.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log && printf "%s" "$out" | grep -q "已打开 副号（bob@example.com） 的 Claude App，出口 US-B（端口 7902）" && printf "%s" "$out" | grep -q "第一次打开要登录 bob@example.com"'
 mkdir -p "$T/fakerun/Contents/MacOS"
@@ -196,7 +201,7 @@ out2=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc2=$?
 ok "cca app：本次启动有运行记录，PID、启动时间、账号目录与代理一致时复用实例" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "副号 的 Claude App 已经开着，已切到前面" && [ "$(grep -c "user-data-dir=$BD/desktop" open.log)" = "$n_open" ] && [ "$(stat -f %Lp "$BD/app-runtime.json")" = 600 ]'
 rm -f "$T/app-owner" "$T/app-open/$((900000000 + $$))"
 touch "$T/open_noprofile"
-out=$(run CCA_TTY="$(ans)" cca app alice 2>&1); rc=$?
+out=$(run CCA_APP_WAIT=1 CCA_TTY="$(ans)" cca app alice 2>&1); rc=$?   # 等不到的：只等 1 秒
 ok "cca app：Claude App 不认独立资料目录时关掉并说明" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "本次正在使用 alice@example.com 自己的资料目录"'
 rm -f "$T/open_noprofile"; : > osascript.log
 run "$L/Claude 副号.app/Contents/MacOS/cca-launcher" >/dev/null 2>&1; rc=$?
@@ -1229,6 +1234,48 @@ PY
 }
 lt=$(lint_tiers)
 ok "套餐档位：CODEX_TIERS 和 CODEX_PLANS 的套餐一一对应${lt#ok}" '[ "$lt" = ok ]'
+lint_imports() {   # PY_SRC 顶上只 import 每次都要用的模块（每次 py 都是新进程，少 import 一个就省一点启动时间），别的在用到的函数里 import：
+	# 函数里用到的标准库模块，顶上、这个函数和外层函数里都没 import（也没有同名的变量），运行到那里就是 NameError
+	python3 -I - "$CCA" <<'PY'
+import ast, sys
+s = open(sys.argv[1], encoding='utf-8').read()
+head = "PY_SRC=$(cat <<'PY'\n"
+a = s.index(head) + len(head)
+tree = ast.parse(s[a:s.index('\nPY\n)', a)])
+mods = getattr(sys, 'stdlib_module_names', None) or {'base64', 'filecmp', 'glob', 'plistlib', 'shutil', 'socket', 'sqlite3', 'struct', 'subprocess', 'tempfile', 'threading', 'types', 'unicodedata', 'uuid', 'zlib'}
+def bound(node):
+    out = set()
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            out |= {(x.asname or x.name).split('.')[0] for x in n.names}
+        elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+            out.add(n.id)
+        elif isinstance(n, ast.arg):
+            out.add(n.arg)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            out.add(n.name)
+    return out
+top = set()
+for n in tree.body:
+    top |= {n.name} if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else bound(n)
+bad = set()
+def walk(node, outer):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            names = outer | bound(child) | top
+            bad.update('%s 用了 %s' % (getattr(child, 'name', 'lambda'), n.id) for n in ast.walk(child)
+                       if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in mods and n.id not in names)
+            walk(child, names)
+        else:
+            walk(child, outer)
+walk(tree, set())
+print('ok' if not bad else '：' + '、'.join(sorted(bad)))
+PY
+}
+li=$(lint_imports)
+ok "lint：PY_SRC 的函数里用到的标准库模块都 import 过（顶上只 import 每次都用的几个）${li#ok}" '[ "$li" = ok ]'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码这一节 cca 的真实输出（macos/test.sh）" 'bash "$D/../macos/test.sh" "$GF" > "$T/contract.log" 2>&1'
 else
@@ -1259,6 +1306,7 @@ publish() {   # publish 版本 [路由器脚本标记] [签名密钥]；测试�
 	case "$1" in *-beta.*) ;; *) echo "$1" > "$G/latest" ;; esac
 }
 wait_next() { local i; for i in $(seq 1 50); do [ -f "$H/.cca/update/cca.next" ] && [ ! -d "$H/.cca/update/lock" ] && return 0; sleep 0.2; done; return 1; }
+wait_log() { local i; for i in $(seq 1 50); do grep -q "$1" "$H/.cca/update/log" 2>/dev/null && [ ! -d "$H/.cca/update/lock" ] && return 0; sleep 0.2; done; return 1; }   # 后台检查不下载时：等它在日志里写下原因（不用等满 wait_next 的 10 秒）
 ver() { run cca version; }
 if [ -e "$(dirname "$CCA")/.git" ]; then
 	out=$(run bash "$CCA" update 2>&1)
@@ -1274,7 +1322,7 @@ out=$(run cca update 2>&1)
 ok "update：下载、验签、原子替换，旧版本留作回退" '[ "$(ver)" = 9.9.9 ] && printf "%s" "$out" | grep -q "已更新到 9.9.9（原来是 2.0.0）" && [ -f "$H/.cca/update/cca.prev" ]'
 out=$(run cca update --rollback 2>&1)
 ok "update --rollback：退回 2.0.0，之后不再自动装 9.9.9" '[ "$(ver)" = 2.0.0 ] && [ "$(cat "$H/.cca/update/skip")" = 9.9.9 ] && printf "%s" "$out" | grep -q "已退回 2.0.0"'
-rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next
+rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_log "9.9.9 被回退过"
 ok "后台检查：被回退的 9.9.9 不会再下载" '[ ! -f "$H/.cca/update/cca.next" ] && grep -q "9.9.9 被回退过" "$H/.cca/update/log"'
 publish 9.9.10 r2
 rm -f "$H/.cca/update/checked"; run cca ls >/dev/null 2>&1; wait_next

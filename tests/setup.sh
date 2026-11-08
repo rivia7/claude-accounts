@@ -243,7 +243,7 @@ if [ -f "$CCA_T/ssh_fail_uninstall" ]; then case "$cmd" in *uninstall*) echo "ss
 # 像真的 ssh 一样把 stdin 读走（cca 在 while … <<< 循环里调用 ssh 又没加 </dev/null 时，会吞掉循环后面的输入）。
 # 只读普通文件（bash 3.2 的 here-string 就是）：终端、管道不碰，免得测试卡住
 case "$cmd" in "sh -s"*|*uninstall*) ;; *) [ -f /dev/stdin ] && cat > /dev/null ;; esac
-exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=4 HOME="$CCA_T/router/root" PATH="$CCA_T/rbin:$PATH" /bin/dash -c "$cmd"
+exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=2 HOME="$CCA_T/router/root" PATH="$CCA_T/rbin:$PATH" /bin/dash -c "$cmd"
 S
 cat > "$T/bin/nc" <<'S'
 #!/bin/bash
@@ -678,9 +678,24 @@ S
 cat > "$T/bin/osascript" <<'S'
 #!/bin/bash
 { printf 'OSA'; printf ' [%s]' "$@"; echo; [ "${1:-}" = - ] && cat; } >> "$CCA_T/osascript.log"
+# 画启动器图标（osascript -l JavaScript badge.js 原图标 输出 标识 颜色）：有 fake_icons 时只写一行（见下面的 sips）
+[ "${1:-}" = -l ] && [ -f "$CCA_T/fake_icons" ] && [ "${3##*/}" = badge.js ] && { printf 'fake-png %s %s\n' "$6" "$7" > "$5"; exit 0; }
 [ "${1:-}" = -l ] && exec /usr/bin/osascript "$@"   # JavaScript（画启动器图标、切换窗口）交给真的 osascript
 exit 0
 S
+# 启动器图标的另外两步（sips 缩成各个尺寸、iconutil 打包）。真画一个启动器的图标要将近 1 秒，回归里加一批账号时很慢：
+# 检查图标的用例（regress.sh 3c）之后 touch $CCA_T/fake_icons，换成只把参数和输入拼起来的假的（标识、颜色变了图标照样变）
+cat > "$T/bin/sips" <<'S'
+#!/bin/dash
+[ -f "$CCA_T/fake_icons" ] && [ "$1" = -z ] && [ "$5" = --out ] && { { printf '%s %s ' "$2" "$3"; cat "$4"; } > "$6"; exit 0; }
+exec /usr/bin/sips "$@"
+S
+cat > "$T/bin/iconutil" <<'S'
+#!/bin/dash
+[ -f "$CCA_T/fake_icons" ] && [ "$1" = -c ] && [ "$4" = -o ] && { cat "$3"/* > "$5"; exit 0; }
+exec /usr/bin/iconutil "$@"
+S
+chmod 755 "$T/bin/sips" "$T/bin/iconutil"
 # 假的 Claude App：图标、程序身份与可执行文件供启动核验；open 本身由上面的夹具模拟。
 mkdir -p "$T/Claude.app/Contents/Resources" "$T/Claude.app/Contents/MacOS"
 plutil -create xml1 "$T/Claude.app/Contents/Info.plist" && plutil -insert CFBundleIconFile -string electron "$T/Claude.app/Contents/Info.plist" &&
