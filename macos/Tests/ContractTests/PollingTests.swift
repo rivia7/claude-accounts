@@ -93,4 +93,63 @@ import Foundation
     _ = await waitUntil { past.requests.contains { $0.arguments == ["clients", "check", "--json"] } }
     check("到时间了就检查（低优先级）", past.requests.first { $0.arguments == ["clients", "check", "--json"] }?.background == true)
     pastModel.shutdown()
+
+    section("定时拉维护者的映射")
+    check("下次的时间是 cca 给的", PolicyPolling.delay(next: now + 3000, now: now) == 3000)
+    check("到期了、没拉过：过一会儿再来，不抢着在启动时干活", PolicyPolling.delay(next: now - 5, now: now) == PolicyPolling.minDelay && PolicyPolling.delay(next: nil, now: now) == PolicyPolling.minDelay)
+    check("没到时间不拉，到了才拉", !PolicyPolling.isDue(next: now + 1, now: now) && PolicyPolling.isDue(next: now - 1, now: now) && PolicyPolling.isDue(next: nil, now: now))
+    check("命令：cca policy pull --json，低优先级，和同步路由器排队", CcaCommand.policyPull.arguments == ["policy", "pull", "--json"] && CcaCommand.policyPull.isBackground && CcaCommand.policyPull.gate == CcaCommand.routerSync.gate)
+    let pullDoc = #"{"version":1,"kind":"policy_pull","generated_epoch":1794042000,"changed":true,"summary":"Claude 1 个账号"}"#
+    func policyModel(configured: Bool, next: Double?, doc: String = pullDoc, temp: Bool = false) -> (ScriptedTransport, AppModel, HookLog) {
+        var root = (try? JSONSerialization.jsonObject(with: fixture("state_nocodex.json") ?? Data())) as? [String: Any] ?? [:]
+        var config = root["config"] as? [String: Any] ?? [:]
+        config["policy"] = ["configured": configured, "repo": "example/cca-policy", "next_check_epoch": next as Any? ?? NSNull()] as [String: Any]
+        root["config"] = config
+        let st = String(decoding: (try? JSONSerialization.data(withJSONObject: root)) ?? Data(), as: UTF8.self)
+        let t = ScriptedTransport { r, _ in
+            if r.arguments == ["_gui", "hello"] { return response(0, stdout: tinyHello) }
+            if r.arguments == ["_gui", "state"] { return response(0, stdout: st) }
+            if r.arguments == ["policy", "pull", "--json"] { return response(0, stdout: doc) }
+            return response(0)
+        }
+        let log = HookLog()
+        if temp { log.conditions = SystemConditions(thermalPressure: true) }
+        return (t, makeModel(t, log: log), log)
+    }
+    func pulls(_ t: ScriptedTransport) -> [CcaRequest] { t.requests.filter { $0.arguments == ["policy", "pull", "--json"] } }
+    do {
+        let (t, m, _) = policyModel(configured: false, next: nil)
+        await m.connect()
+        check("没配置映射：不定时", !m.scheduler.policyPollingRunning)
+        m.scheduler.onPolicyTick?()
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        check("没配置映射：不拉", pulls(t).isEmpty)
+        m.shutdown()
+    }
+    do {
+        let (t, m, _) = policyModel(configured: true, next: now + 3000)
+        await m.connect()
+        check("配置了映射：定时拉", m.scheduler.policyPollingRunning)
+        m.scheduler.onPolicyTick?()
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        check("没到 cca 给的时间：不拉（到期后紧接着的那一次 tick 也不重复拉）", pulls(t).isEmpty)
+        m.shutdown()
+        check("退出时停下", !m.scheduler.policyPollingRunning)
+    }
+    do {
+        let (t, m, _) = policyModel(configured: true, next: now - 5)
+        await m.connect()
+        m.scheduler.onPolicyTick?()
+        _ = await waitUntil { !pulls(t).isEmpty && m.toast != nil }
+        check("到时间了：低优先级拉一次，带事件文件（不弹框）；有变化时提示一句", pulls(t).count == 1 && pulls(t)[0].background && pulls(t)[0].wantsEvents && m.toast?.text.contains("维护者更新了节点映射") == true)
+        m.shutdown()
+    }
+    do {
+        let (t, m, _) = policyModel(configured: true, next: now - 5, temp: true)
+        await m.connect()
+        m.scheduler.onPolicyTick?()
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        check("系统过热：不拉", pulls(t).isEmpty)
+        m.shutdown()
+    }
 }

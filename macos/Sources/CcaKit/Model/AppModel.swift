@@ -131,6 +131,7 @@ final class AppModel {
     /// 自动检测出口：上次试的时间、正在测的工具
     @ObservationIgnored private var exitAttempted: [AccountRef: Double] = [:]
     @ObservationIgnored private var exitPolling: Set<ToolID> = []
+    @ObservationIgnored private var policyPolling = false
     /// 什么时候点的“重新登录”（UsagePolling.reloginWatch 之内盯着它）
     @ObservationIgnored private var reloginStarted: [AccountRef: Double] = [:]
     /// 写回账号表的第几次（连着拖几次时只有最后一次收尾）；这次运行看过 App 里有没有没写回的顺序了没有
@@ -304,6 +305,8 @@ final class AppModel {
         self.scheduler.clientCheckDelay = { [weak self] in self?.clientCheckDelay() ?? 3600 }
         self.scheduler.onLiveTick = { [weak self] in self?.refreshLive() }
         self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
+        self.scheduler.policyDelay = { [weak self] in self?.policyDelay() ?? PolicyPolling.fallback }
+        self.scheduler.onPolicyTick = { [weak self] in self?.pollPolicy() }
     }
 
     // MARK: 启动和连接
@@ -492,6 +495,7 @@ final class AppModel {
             stateError = nil
             fixSelection()
             reconcileCore()
+            reconcilePolicyPolling()   // 映射可能是刚配置的
             // 2.9.0-beta.17 的顺序只记在 App 里：第一次读到账号表时写回去
             if !orderChecked {
                 orderChecked = true
@@ -701,7 +705,7 @@ final class AppModel {
         case .refused:
             showToast("没有同意，没有做任何改动", .info)
         case .terminal(let e):
-            if manual { present(.handoff(Handoff(event: e))) }
+            if manual { presentHandoff(e) }
         case .failed(let f):
             if f.reason == .cancelled { break }
             if manual {
@@ -791,7 +795,7 @@ final class AppModel {
         case .needsConsent:
             showToast("需要你同意才能继续", .warning)
         case .terminal(let e):
-            present(.handoff(Handoff(event: e)))
+            presentHandoff(e)
         case .failed(let f):
             if f.reason == .cancelled { return }
             present(.failure(FailureInfo(title: failureTitle, failure: f)))
@@ -880,10 +884,15 @@ final class AppModel {
     @ObservationIgnored private var queuedSheet: Sheet?
 
     var promptSupported: Bool { hello?.prompt == PromptAPI.version }
+    var formsSupported: Bool { promptSupported && hello?.forms == PromptAPI.forms }
+
+    private func canAskInApp(_ h: Handoff) -> Bool {
+        h.inApp && promptSupported && (!h.needsForms || formsSupported)
+    }
 
     /// 运行一条要和用户交互的命令：能在 App 里问完的在 App 里问，否则（cca 太旧、这条还没搬过来）开终端。
     func run(_ h: Handoff) {
-        guard h.inApp, promptSupported, flow == nil, let client else {
+        guard canAskInApp(h), flow == nil, let client else {
             if flow == nil { runInTerminal(h) }
             return
         }
@@ -940,6 +949,16 @@ final class AppModel {
 
     func dismissSheet() {
         sheet = nil
+    }
+
+    /// cca 说这一步要用户来做（`terminal` 事件）：配置路由器、配置本机 Clash 能在 App 里问，别的交给终端。
+    private func presentHandoff(_ e: TerminalEvent) {
+        let form: Handoff? = e.code == .routerSetup ? .routerSetup : e.code == .localSetup ? .localSetup : nil
+        if let form, canAskInApp(form), flow == nil {
+            run(form)
+        } else {
+            present(.handoff(Handoff(event: e)))
+        }
     }
 
     func showToast(_ text: String, _ style: Toast.Style) {
@@ -1102,7 +1121,7 @@ final class AppModel {
         switch remedy {
         case .none: break
         case .routerSync: syncRouter()
-        case .handoff(let h): runInTerminal(h)
+        case .handoff(let h): run(h)
         case .openURL(let s): if let u = URL(string: s) { hooks.openURL(u) }
         }
     }
@@ -1172,6 +1191,33 @@ final class AppModel {
     private func reconcileBackgroundPolling() {
         scheduler.updateUsagePolling(enabled: phase == .ready)
         scheduler.updateClientChecks(enabled: phase == .ready && !isFixtureMode && hello?.devMode != true)
+        reconcilePolicyPolling()
+    }
+
+    private func reconcilePolicyPolling() {
+        scheduler.updatePolicyPolling(enabled: phase == .ready && !isFixtureMode && state?.config?.policy?.configured == true)
+    }
+
+    /// 离下次该拉维护者的映射还有多久：cca 给的时间（一小时一次）。到期了、没拉成时过一会儿再来。
+    private func policyDelay() -> TimeInterval {
+        PolicyPolling.delay(next: state?.config?.policy?.nextCheckEpoch, now: Date().timeIntervalSince1970)
+    }
+
+    /// 定时拉维护者的映射（`cca policy pull --json`）：有变化时 cca 照映射改账号表、同步路由器（要重载的不问，留着“待同步”，用户点同步时再问）。
+    /// 在后台也拉（App 平时就在后台）；拉不成不打扰，到点再试，原因记在 cca 的日志里（`cca policy` 看得到）。
+    private func pollPolicy() {
+        guard phase == .ready, let client, !isFixtureMode, !policyPolling, flow == nil,
+              state?.config?.policy?.configured == true,
+              PolicyPolling.isDue(next: state?.config?.policy?.nextCheckEpoch, now: Date().timeIntervalSince1970),
+              !hooks.systemConditions().thermalPressure else { return }
+        policyPolling = true
+        Task { [weak self] in
+            let (doc, _) = await client.document(.policyPull, as: PolicyPullDoc.self, prompter: nil)
+            guard let self else { return }
+            self.policyPolling = false
+            if doc?.changed == true { self.showToast("维护者更新了节点映射，账号表已经跟着改好", .info) }
+            await self.loadState()
+        }
     }
 
     /// 离下次该检查客户端更新还有多久：cca 给的时间（间隔由 cca 决定）。已经到了或者没查成时过一会儿再来，不空转。

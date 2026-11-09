@@ -90,7 +90,7 @@ final class FlowModel: Identifiable {
 
     private func begin(_ e: AskEvent) {
         var d: [String: String] = [:]
-        for f in e.fields where f.kind != .secret && f.kind != .confirm {
+        for f in e.fields where f.kind != .secret && f.kind != .confirm && f.kind != .code {
             d[f.id] = f.value.isEmpty ? f.defaultValue : f.value
         }
         draft = d
@@ -150,7 +150,7 @@ final class FlowModel: Identifiable {
             switch f.kind {
             case .secret: return f.optional || filledSecrets.contains(f.id)
             case .multi: return selected(f.id).count >= max(f.min ?? 1, f.optional ? 0 : 1)
-            case .confirm: return true
+            case .confirm, .code: return true
             default: return f.optional || !(draft[f.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
         }
@@ -158,7 +158,7 @@ final class FlowModel: Identifiable {
 
     func submit() {
         guard canSubmit, case .asking(let e) = phase else { return }
-        send(e, e.fields.map { f in f.kind == .secret ? secrets[f.id] : draft[f.id] ?? "" })
+        send(e, e.fields.filter { $0.kind != .code }.map { f in f.kind == .secret ? secrets[f.id] : draft[f.id] ?? "" })
     }
 
     /// 回答“是 / 否”的一页。
@@ -168,7 +168,7 @@ final class FlowModel: Identifiable {
     }
 
     private func send(_ e: AskEvent, _ values: [String]) {
-        let lines = zip(e.fields, values).map { f, v in "\(e.seq) \(f.id) \(FlowModel.oneLine(v, f.kind))" }
+        let lines = zip(e.fields.filter { $0.kind != .code }, values).map { f, v in "\(e.seq) \(f.id) \(FlowModel.oneLine(v, f.kind))" }
         session.answer(lines)
         secrets.removeAll()
         filledSecrets = []

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """回归用：扮演 cca App 的提问会话（macos/PROTOCOL.md 4.6）。
 
-用法：gui_session.py 事件文件 答案表.json [--eof-at 题号] [--stale] [--wrong-field 题号] -- 命令…
+用法：gui_session.py 事件文件 答案表.json [--eof-at 题号] [--stale] [--wrong-field 题号] [--keep] -- 命令…
 
-答案表：{"题号": [第一次问时的答案, 第二次问时的答案…]}，每次的答案是 {"字段 id": "值"}。
+答案表：{"题号": [第一次问时的答案, 第二次问时的答案…]}，每次的答案是 {"字段 id": "值"}。--keep：没写的字段按页面上现有的值回答（字段多的表单）。
 命令在新会话里运行，fd 3 是答案管道（和 App 一样）；问到答案表里没有的题号时关掉管道（cca 按取消处理）。
 退出码就是命令的退出码，收到信号时是 128 + 信号。
 """
@@ -16,7 +16,7 @@ import time
 
 events, table_path = sys.argv[1:3]
 args = sys.argv[3:]
-eof_at = stale = wrong = None
+eof_at = stale = wrong = keep = None
 while args and args[0] != '--':
     if args[0] == '--eof-at':
         eof_at = args[1]
@@ -26,6 +26,9 @@ while args and args[0] != '--':
         args = args[2:]
     elif args[0] == '--stale':
         stale = True
+        args = args[1:]
+    elif args[0] == '--keep':
+        keep = True
         args = args[1:]
     else:
         sys.exit('不认识的参数：%s' % args[0])
@@ -74,8 +77,10 @@ while True:
             say(last)   # 上一页的答案又发了一遍（比如点了两下）：序号对不上，要丢掉
         text = ''
         for field in e['fields']:
+            if field['kind'] == 'code':   # 只显示，不用回答
+                continue
             fid = field['id']
-            text += '%d %s %s\n' % (e['seq'], 'wrong' if q == wrong else fid, ans.get(fid, ''))
+            text += '%d %s %s\n' % (e['seq'], 'wrong' if q == wrong else fid, ans.get(fid, (field.get('value') or field.get('default') or '') if keep else ''))
         say(text)
         last = text
     if p.poll() is not None:

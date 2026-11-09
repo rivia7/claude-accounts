@@ -42,7 +42,8 @@
     "update": "auto",
     "policy": {
       "configured": true,
-      "repo": "example/cca-policy"
+      "repo": "example/cca-policy",
+      "next_check_epoch": 1794045600.0
     }
   },
   "routing": {

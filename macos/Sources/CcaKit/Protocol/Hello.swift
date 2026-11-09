@@ -11,6 +11,8 @@ struct HelloDoc: CcaDocument, Equatable {
     var prompt: Int?
     /// 有 `cca reorder`（App 调整账号顺序时写回账号表）；旧版 cca 没有这个字段
     var reorder: Int?
+    /// 配置路由器、配置本机 Clash、账号表能在 App 里填表（`PromptAPI.forms`）；旧版 cca 没有这个字段，这几条走终端
+    var forms: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -21,7 +23,7 @@ struct HelloDoc: CcaDocument, Equatable {
     var gui: HelloGUI?
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, api, prompt, reorder
+        case version, kind, api, prompt, reorder, forms
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
         case installed
@@ -36,6 +38,7 @@ struct HelloDoc: CcaDocument, Equatable {
         api = c.int(.api)
         prompt = c.int(.prompt)
         reorder = c.int(.reorder)
+        forms = c.int(.forms)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true

@@ -51,25 +51,53 @@ private struct FlowPage: View {
     let ask: AskEvent
     @FocusState private var focus: String?
 
+    /// 相邻的同一组放在一起（组名空着的不显示小标题）。
+    private var sections: [(name: String, fields: [PromptField])] {
+        var out: [(name: String, fields: [PromptField])] = []
+        for f in ask.fields {
+            if out.last?.name == f.section { out[out.count - 1].fields.append(f) } else { out.append((f.section, [f])) }
+        }
+        return out
+    }
+
+    private var fields: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            ForEach(Array(sections.enumerated()), id: \.offset) { _, s in
+                VStack(alignment: .leading, spacing: 12) {
+                    if !s.name.isEmpty {
+                        Text(s.name).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    ForEach(s.fields) { f in
+                        FlowField(flow: flow, field: f, focus: $focus)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             FlowHeader(title: nonEmpty(ask.title) ?? flow.handoff.title, message: ask.message)
-            ForEach(ask.fields) { f in
-                FlowField(flow: flow, field: f, focus: $focus)
+            if ask.fields.count > 6 {   // 字段多的表单（账号表）自己滚动，弹层不会撑得比屏幕还高
+                ScrollView { fields.padding(.trailing, 14) }
+                    .frame(height: 440)
+            } else {
+                fields
             }
             HStack {
                 Spacer()
                 Button("取消") { flow.cancel() }
                     .keyboardShortcut(.cancelAction)
-                Button("继续") { flow.submit() }
+                Button(nonEmpty(ask.submit) ?? "继续") { flow.submit() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.glassProminent)
                     .disabled(!flow.canSubmit)
             }
         }
         .onAppear {
-            let first = ask.fields.first { !$0.error.isEmpty && ($0.kind == .text || $0.kind == .secret) }
-                ?? ask.fields.first { $0.kind == .text || $0.kind == .secret }
+            let typed: (PromptField) -> Bool = { $0.kind == .text || $0.kind == .secret }
+            let first = ask.fields.first { !$0.error.isEmpty && typed($0) } ?? ask.fields.first.flatMap { typed($0) ? $0 : nil }
             DispatchQueue.main.async { focus = first?.id }
         }
     }
@@ -83,10 +111,19 @@ private struct FlowField: View {
     var body: some View {
         let f = field
         VStack(alignment: .leading, spacing: 5) {
-            if !f.label.isEmpty {
-                Text(f.label).font(.callout.weight(.medium))
+            if f.kind == .choice, f.style == "menu" {   // 一行：名字在左，弹出菜单在右
+                HStack(spacing: 10) {
+                    Text(f.label).lineLimit(1).truncationMode(.middle).help(f.label)
+                    Spacer(minLength: 8)
+                    FlowMenu(options: f.options, skip: f.optional ? nonEmpty(f.skip) ?? "不选" : nil,
+                             selected: flow.draft[f.id] ?? "") { flow.draft[f.id] = $0 }
+                }
+            } else {
+                if !f.label.isEmpty {
+                    Text(f.label).font(.callout.weight(.medium))
+                }
+                control(f)
             }
-            control(f)
             if !f.error.isEmpty {
                 Label(f.error, systemImage: "exclamationmark.circle.fill")
                     .font(.caption)
@@ -112,6 +149,8 @@ private struct FlowField: View {
                        selected: flow.draft[f.id] ?? "") { flow.draft[f.id] = $0 }
         case .multi:
             FlowMulti(options: f.options, selected: flow.selected(f.id)) { flow.toggle(f.id, $0) }
+        case .code:
+            FlowCode(text: f.value)
         default:
             TextField("", text: Binding(get: { flow.draft[f.id] ?? "" }, set: { flow.draft[f.id] = $0 }))
                 .textFieldStyle(.roundedBorder)
@@ -165,6 +204,62 @@ private struct FlowChoice: View {
                 FlowOptionRow(symbol: selected.isEmpty ? "largecircle.fill.circle" : "circle", label: skip, note: "",
                               isOn: selected.isEmpty) { pick("") }
             }
+        }
+    }
+}
+
+/// 一行里的弹出菜单（字段多的表单）。只有一个选项、没得选的（维护者固定了）只显示它。
+private struct FlowMenu: View {
+    let options: [PromptOption]
+    /// 可以不选时，“不选”那一项的说法（答案是空的）。
+    let skip: String?
+    let selected: String
+    let pick: (String) -> Void
+
+    var body: some View {
+        if options.count == 1, skip == nil, selected == options[0].value {
+            Text(options[0].label).foregroundStyle(.secondary)
+        } else {
+            Menu(current) {
+                if let skip { item(skip, value: "") }
+                ForEach(options) { o in item(o.note.isEmpty ? o.label : "\(o.label)   \(o.note)", value: o.value) }
+            }
+            .fixedSize()
+        }
+    }
+
+    /// 收起时只显示选中的名字（注记留在展开的菜单里），账号名不会被挤掉。
+    private var current: String {
+        options.first { $0.value == selected }?.label ?? (selected.isEmpty ? skip ?? "选择…" : selected)
+    }
+
+    private func item(_ text: String, value: String) -> some View {
+        Button {
+            pick(value)
+        } label: {
+            if selected == value { Label(text, systemImage: "checkmark") } else { Text(text) }
+        }
+    }
+}
+
+/// 只显示、不用回答的一段配置（等宽字体，可以复制）。
+private struct FlowCode: View {
+    @Environment(AppModel.self) private var model
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            ScrollView {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(height: 130)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.6)))
+            Button("复制") { model.copy(text) }
+                .controlSize(.small)
         }
     }
 }

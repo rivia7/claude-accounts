@@ -4,16 +4,20 @@ import SwiftUI
 /// 报告所在窗口看不看得见（遮挡状态、最小化、关闭、成为 / 不再是主窗口时重新算）。
 /// 主窗口和菜单栏面板各放一个：AppModel 只在看得见时跑定时器、读 live。
 struct WindowObserver: NSViewRepresentable {
+    /// 所在的窗口换了（菜单栏面板要记下自己的窗口，好在主窗口出来时收起）。
+    var onWindow: ((NSWindow?) -> Void)?
     let onChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> ObserverView {
         let v = ObserverView()
         v.onChange = onChange
+        v.onWindow = onWindow
         return v
     }
 
     func updateNSView(_ v: ObserverView, context: Context) {
         v.onChange = onChange
+        v.onWindow = onWindow
     }
 
     static func dismantleNSView(_ v: ObserverView, coordinator: ()) {
@@ -23,12 +27,14 @@ struct WindowObserver: NSViewRepresentable {
 
 final class ObserverView: NSView {
     var onChange: ((Bool) -> Void)?
+    var onWindow: ((NSWindow?) -> Void)?
     private var tokens: [NSObjectProtocol] = []
     private var last: Bool?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         stopObserving()
+        onWindow?(window)
         guard let w = window else {
             report(false)
             return
@@ -113,6 +119,9 @@ private struct MotionScope: ViewModifier {
 final class WindowOpener {
     static let shared = WindowOpener()
     var open: (() -> Void)?
+    /// 菜单栏面板的窗口和 SwiftUI 收起它的办法（面板出现时登记）。
+    weak var panel: NSWindow?
+    var dismissPanel: (() -> Void)?
 
     /// 占着 Dock 图标的窗口：主窗口、设置（菜单栏面板、弹层、对话框不算）。
     private var windows: [NSWindow] {
@@ -120,6 +129,7 @@ final class WindowOpener {
     }
 
     func showMain() {
+        hidePanel()
         let fromBackground = NSApp.activationPolicy() != .regular
         if fromBackground { NSApp.setActivationPolicy(.regular) }
         NSApp.activate()
@@ -136,6 +146,30 @@ final class WindowOpener {
             windows.first?.makeKeyAndOrderFront(nil)
             windows.first?.orderFrontRegardless()
         }
+    }
+
+    /// 主窗口要出来了，菜单栏面板收起来。先走 SwiftUI 自己的收起；还开着时像再点一下菜单栏图标那样收起；
+    /// 最后才直接关窗口（只关窗口的话 SwiftUI 还以为面板开着，下次点图标要点两下）。
+    private func hidePanel() {
+        guard let panel, panel.isVisible else { return }
+        dismissPanel?()
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard panel.isVisible else { return }
+            self?.statusButtons.first { $0.state == .on }?.performClick(nil)
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if panel.isVisible { panel.close() }
+        }
+    }
+
+    /// 菜单栏图标的按钮（每块屏幕一个）。
+    private var statusButtons: [NSStatusBarButton] {
+        func find(_ v: NSView?) -> NSStatusBarButton? {
+            guard let v else { return nil }
+            if let b = v as? NSStatusBarButton { return b }
+            return v.subviews.lazy.compactMap(find).first
+        }
+        return NSApp.windows.filter { String(describing: type(of: $0)).contains("NSStatusBar") }.compactMap { find($0.contentView) }
     }
 
     /// 回到后台。窗口上还挂着弹层（问题没答完之类）时不关，和点窗口的关闭按钮一样要先处理它：切回来让用户看到。

@@ -1285,7 +1285,7 @@ sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道
 }
 asks() { python3 -I -c 'import json,sys; print(" ".join(e["q"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "ask"))' "$T/ev.jsonl"; }   # 问过的题号，按顺序
 tsum() { shasum < "$H/.cca/accounts.json"; }
-ok "提问会话：hello 说明支持（App 据此决定用不用它）" 'gj hello | jok "d[\"prompt\"] == 1"'
+ok "提问会话：hello 说明支持（App 据此决定用不用它）；forms：配置路由器、本机 Clash、账号表能在 App 里填表" 'gj hello | jok "d[\"prompt\"] == 1 and d[\"forms\"] == 1"'
 out=$(run CCA_EVENTS="$T/ev.jsonl" CCA_PROMPT=1 cca add 2>&1 </dev/null); rc=$?
 ok "提问会话：设了 CCA_PROMPT 却没有答案管道：和非交互一样，不提问" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "需要在终端里交互运行"'
 N2=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"][1])' "$H/.cca/config.json")
@@ -1325,7 +1325,67 @@ ok "提问会话：同意当场问（不用重跑），带标题和完整的说�
 mv "$H/.cca/router_ed25519" "$T/rk.bak"
 out=$(sess '{}' -- cca add 2>&1); rc=$?
 mv "$T/rk.bak" "$H/.cca/router_ed25519"
-ok "提问会话：还没配置路由器：一个问题都不问，交给终端（terminal 事件：router setup）" '[ $rc -ne 0 ] && [ "$(evn ask)" = 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"router_setup\" and e[\"argv\"] == [\"router\", \"setup\"]"'
+ok "提问会话：添加账号时还没配置路由器：接着在表单里配置（说明为什么要配置），取消时什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = router.basic ] && evq "e.get(\"q\") == \"router.basic\" and \"官方账号要经路由器\" in e[\"message\"]" && [ "$(evn terminal)" = 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
+# 配置路由器（router.basic / router.password / router.nodes）：地址不通的重问；密码经 askpass 交给 ssh，不进命令行、环境变量、事件文件；
+# 取消时不盖掉原来的配置
+cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"; RPW='rtr-PW-SENTINEL-1 with space'
+cfg_router() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["router"]["port"])' "$H/.cca/config.json"; }
+printf '%s' "$RPW" > "$T/router_needs_password"
+: > ssh.log; : > env.log
+out=$(sess '{"router.basic":[{"host":"-oProxyCommand=x","user":"root","port":"22"},{"host":"192.0.2.10","user":"bad user","port":"0"},{"host":"192.0.2.10","user":"root","port":"2222"}]}' -- cca router setup 2>&1); rc=$?
+ok "提问会话：配置路由器：地址、用户、端口一页（预填现在的），不合格的带着原因重问，连不上的说明白；取消时 config.json 不变" '[ $rc -ne 0 ] && [ "$(asks)" = "router.basic router.basic router.basic router.basic" ] && evq "e.get(\"seq\") == 1 and e[\"fields\"][0][\"value\"] == \"192.0.2.10\" and e[\"fields\"][1][\"value\"] == \"root\" and e[\"fields\"][2][\"value\"] == \"22\"" && evq "e.get(\"seq\") == 2 and \"不带\" in e[\"fields\"][0][\"error\"]" && evq "e.get(\"seq\") == 3 and e[\"fields\"][1][\"error\"] and e[\"fields\"][2][\"error\"]" && evq "e.get(\"seq\") == 4 and \"连不上 192.0.2.10:2222\" in e[\"fields\"][0][\"error\"]" && [ "$(cfg_router)" = 22 ] && cmp -s "$H/.cca/config.json" "$T/cfg.bak"'
+out=$(sess '{"router.basic":[{"host":"192.0.2.10","user":"root","port":"22"}],"router.password":[{"v":"wrong-one"}]}' -- cca router setup 2>&1); rc=$?
+ok "提问会话：配置路由器：密码不对带着原因重问，取消时公钥没装、config.json 不变" '[ $rc -ne 0 ] && [ "$(asks)" = "router.basic router.password router.password" ] && evq "e.get(\"seq\") == 3 and e[\"fields\"][0][\"kind\"] == \"secret\" and \"密码不对\" in e[\"fields\"][0][\"error\"] and not e[\"fields\"][0][\"value\"]" && [ -f "$T/router_needs_password" ] && cmp -s "$H/.cca/config.json" "$T/cfg.bak"'
+touch "$T/askpass_twice"; : > ssh.log
+out=$(sess '{"router.basic":[{"host":"192.0.2.10","user":"root","port":"22"}],"router.password":[{"v":"'"$RPW"'"}],"router.nodes":[{"v":"1"},{"v":"1 2 3 4"}]}' -- cca router setup 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_router.jsonl"
+rm -f "$T/askpass_twice"
+ok "提问会话：配置路由器：密码经 askpass 交给 ssh，读完就没了（ssh 再问一遍也不会卡住）；公钥装上了" '[ $rc -eq 0 ] && [ ! -f "$T/router_needs_password" ] && grep -q "^ASKPASS rc=0" ssh.log && grep -q "^ASKPASS2 rc=1" ssh.log && grep -q "cca@" "$R/root/.ssh/authorized_keys"'
+ok "提问会话：密码不进事件文件、输出、任何命令行（假 ssh / env 都记着命令行），临时目录不留" '! grep -qF "$RPW" "$T/ev.jsonl" ssh.log env.log && ! printf "%s" "$out" | grep -qF "$RPW" && ! ls "$T"/tmp/cca-askpass.* >/dev/null 2>&1 && ! ls /tmp/cca-askpass.* >/dev/null 2>&1'
+ok "提问会话：配置路由器：节点多选一页（现在的预先选好），还有账号在用的不能去掉，说明是谁在用；配好了有结果事件" '[ "$(asks)" = "router.basic router.password router.nodes router.nodes" ] && evq "e.get(\"q\") == \"router.nodes\" and e[\"fields\"][0][\"kind\"] == \"multi\" and e[\"fields\"][0][\"min\"] == 1 and e[\"fields\"][0][\"default\"] and e[\"fields\"][0][\"options\"][0][\"label\"] == \"US-A\"" && evq "e.get(\"seq\") == 4 and \"还有账号在用\" in e[\"fields\"][0][\"error\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"router_ready\" and \"root@192.0.2.10\" in e[\"message\"]"'
+out=$(sess '{"router.basic":[{"host":"192.0.2.10","user":"root","port":"22"}],"router.nodes":[{"v":"1 2 3 4"}]}' -- cca router setup 2>&1); rc=$?
+ok "提问会话：配置路由器：密钥已经能登录时不问密码，可选节点没变也不多同步一次" '[ $rc -eq 0 ] && [ "$(asks)" = "router.basic router.nodes" ] && [ "$(evn result)" = 1 ]'
+cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"
+# 配置本机 Clash（local.verge；没装 Clash Verge 时的 local.client / local.manual 在 11b4）
+out=$(sess '{"local.verge":[{"v":"n"}]}' -- cca local setup 2>&1); rc=$?
+ok "提问会话：配置本机 Clash：说明要做什么，答否按取消收场，什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = local.verge ] && evq "e.get(\"q\") == \"local.verge\" and \"全局扩展脚本\" in e[\"fields\"][0][\"detail\"] and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\"" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && cmp -s "$H/.cca/config.json" "$T/cfg.bak"'
+out=$(sess '{"local.verge":[{"v":"y"}]}' -- cca local setup 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_local_verge.jsonl"
+ok "提问会话：配置本机 Clash：答是就配好（有结果事件），和终端里一样" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && grep -q ">>> cca >>>" "$VS" && grep -qx 7901 "$T/verge/listening"'
+run cca local off >/dev/null 2>&1
+cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"
+# 账号表表单（edit.form）：节点、接口地址、模型、环境变量；cca 校验，不显示 key；表坏了才去终端
+cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"
+edit_table 'j["form1"] = {"base_url": "https://api.example.com/anthropic", "model": "m-1", "node": "", "env": {"FOO_LEVEL": 3, "BAR_NAME": "a b"}, "key": "sk-FORM-TABLE-KEY-0123456789", "id": "form1"}'
+: > ssh.log
+out=$(sess '{}' --eof-at edit.form -- cca edit 2>&1); rc=$?; tb=$(tsum)
+fid() { python3 -I -c 'import json,sys; f=[x for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == sys.argv[2] and (not sys.argv[3] or sys.argv[3] in x.get("section", ""))]; print(f[0]["id"])' "$T/ev.jsonl" "$1" "${2:-}"; }
+U=$(fid 接口地址 form1); M=$(fid "模型（可选）" form1); NO=$(fid 出口 form1); EV=$(fid "环境变量（可选）" form1); AL=$(fid "alice@example.com")
+ok "提问会话：账号表表单：一页里每个账号一行节点菜单，第三方 API 账号有地址、模型、出口、环境变量，保存按钮；不显示 key；取消什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = edit.form ] && evq "e.get(\"q\") == \"edit.form\" and e[\"submit\"] == \"保存\"" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$AL\" and f[\"kind\"] == \"choice\" and f[\"style\"] == \"menu\" and f[\"value\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$EV\" and f[\"value\"] == \"FOO_LEVEL=3 BAR_NAME=\x27a b\x27\" and \"form1\" in f[\"section\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$NO\" and f[\"optional\"] and f[\"skip\"] for f in e[\"fields\"])" && ! grep -qF "sk-FORM-TABLE-KEY" "$T/ev.jsonl" && [ "$tb" = "$(tsum)" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
+out=$(sess '{"edit.form":[{}]}' --keep -- cca edit 2>&1); rc=$?
+ok "提问会话：账号表表单：什么都没改：账号表一个字节不动，没有结果事件" '[ $rc -eq 0 ] && [ "$tb" = "$(tsum)" ] && [ "$(evn result)" = 0 ]'
+a='{"edit.form":[{"'$U'":"http://api.example.com/x","'$M'":"bad model","'$EV'":"MY_API_KEY=1"},{"'$U'":"https://api.example.com/anthropic","'$M'":"m-2","'$NO'":"US-B","'$EV'":"FOO_LEVEL=3 BAR_NAME=\u0027a b\u0027 NEW_ONE=x"}]}'
+out=$(sess "$a" --keep -- cca edit 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_edit.jsonl"
+ok "提问会话：账号表表单：不合格的写在对应的字段下面（已填的带回去），都合格才写" '[ $rc -eq 0 ] && [ "$(asks)" = "edit.form edit.form" ] && evq "e.get(\"seq\") == 2 and any(f[\"id\"] == \"$U\" and \"https\" in f[\"error\"] and f[\"value\"] == \"http://api.example.com/x\" for f in e[\"fields\"])" && evq "e.get(\"seq\") == 2 and any(f[\"id\"] == \"$M\" and f[\"error\"] for f in e[\"fields\"])" && evq "e.get(\"seq\") == 2 and any(f[\"id\"] == \"$EV\" and \"密钥\" in f[\"error\"] for f in e[\"fields\"])"'
+ok "提问会话：账号表表单：保存后改好了（模型、出口、环境变量），key 不动，分到了端口，同步了路由器；有结果事件" 'tblok "t[\"form1\"][\"model\"] == \"m-2\" and t[\"form1\"][\"node\"] == \"US-B\" and t[\"form1\"][\"env\"] == {\"FOO_LEVEL\": \"3\", \"BAR_NAME\": \"a b\", \"NEW_ONE\": \"x\"} and t[\"form1\"][\"key\"].startswith(\"sk-FORM\")" && cfgok "\"form1\" in c[\"ports\"]" && grep -q "sh -s" ssh.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"saved\"" && ! grep -qF "sk-FORM-TABLE-KEY" "$T/ev.jsonl"'
+KC3=$(echo "$T"/keychain/cca-api-form1-*); S3=sk-FORM-NEW-KEY-9876543210
+a='{"edit.form":[{"'$U'":"https://api2.example.com/anthropic"}],"key.secret":[{"s":"'$S3'"}]}'
+out=$(sess "$a" --keep -- cca edit 2>&1); rc=$?
+KC3=$(echo "$T"/keychain/cca-api-form1-*)
+ok "提问会话：账号表表单：换了服务商（域名变了）：账号表里旧的 key 删掉，当场问新的 key，存进钥匙串（不进事件文件）" '[ $rc -eq 0 ] && [ "$(asks)" = "edit.form key.secret" ] && tblok "\"key\" not in t[\"form1\"] and t[\"form1\"][\"base_url\"] == \"https://api2.example.com/anthropic\"" && [ "$(cat "$KC3/api2.example.com")" = "$S3" ] && ! grep -qF "$S3" "$T/ev.jsonl" env.log security.log'
+EN=$(fid "alice@example.com")
+out=$(sess '{"edit.form":[{"'$EN'":"US-D"}]}' --keep -- cca edit 2>&1); rc=$?
+ok "提问会话：账号表表单：改官方账号的节点" '[ $rc -eq 0 ] && tblok "t[\"alice@example.com\"] == \"US-D\""'
+out=$(sess '{}' --eof-at edit.form -- cca codex edit 2>&1); rc=$?
+ok "提问会话：账号表表单：ChatGPT（Codex）的账号表一样能改，没有环境变量这一项" '[ "$(asks)" = edit.form ] && evq "e.get(\"q\") == \"edit.form\" and any(\"dave@example.com\" in f[\"label\"] and f[\"kind\"] == \"choice\" for f in e[\"fields\"]) and not any(f[\"label\"].startswith(\"环境变量\") for f in e[\"fields\"])"'
+edit_table 'j["alice@example.com"] = "NOT-ALLOWED"'
+out=$(sess '{}' --eof-at edit.form -- cca edit 2>&1); rc=$?
+ok "提问会话：账号表表单：节点不在可选列表：表单里要重选（没有预选值，说明原因），不用去终端" '[ "$(asks)" = edit.form ] && [ "$(evn terminal)" = 0 ] && evq "e.get(\"q\") == \"edit.form\" and any(f[\"id\"] == \"$EN\" and not f[\"value\"] and \"NOT-ALLOWED\" in f[\"error\"] for f in e[\"fields\"])"'
+edit_table 'j["bad key with space"] = "US-A"'
+out=$(sess '{}' -- cca edit 2>&1); rc=$?
+ok "提问会话：账号表表单：表单改不了的问题（键写错了）：一个问题都不问，交给终端" '[ $rc -ne 0 ] && [ "$(evn ask)" = 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"edit\" and e[\"argv\"] == [\"edit\"]"'
+cp "$H/.cca/accounts.json" "$T/tbl.broken"; printf '{不是 JSON' > "$H/.cca/accounts.json"
+out=$(sess '{}' -- cca edit 2>&1); rc=$?
+ok "提问会话：账号表表单：账号表不是 JSON：交给终端" '[ $rc -ne 0 ] && [ "$(evn ask)" = 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"edit\""'
+cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"; rm -rf "$T"/keychain/cca-api-form1-*; run CCA_YES=1 cca router sync -y >/dev/null 2>&1 </dev/null
 # 节点在路由器上不见了（也认不出改成了哪个）：选一个代替，没有默认项，可以先不换
 cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"
 edit_table 'j["图四(gui4@example.com)"] = "US-D"'; run cca router sync >/dev/null 2>&1 </dev/null
@@ -1342,7 +1402,7 @@ lint_prompts() {   # 提问只能经基元：别的地方直接读 fd 3，图形
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 doc = open(sys.argv[2], encoding='utf-8').read()
-allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_fields', 'policy_guide', 'cmd_edit'}
+allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'policy_guide', 'cmd_edit'}
 bad, fn = [], ''
 for line in src.split('\n'):
     m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\(\) \{', line)
@@ -1648,6 +1708,33 @@ out2=$(run cca policy pull 2>&1); rc2=$?
 pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'; printf '{"version": 1, "claude": {"alice@example.com": "US-D"}}\n' > "$PR/policy.json"
 out3=$(run cca policy pull 2>&1); rc3=$?
 ok "不是发布密钥签的、签过之后又被改过的、格式不对的映射都不用，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "映射的格式不对：claude：「not-an-email」不像邮箱" && printf "%s" "$out2" | grep -q "claude：ALICE@example.com 写了不止一次（邮箱不分大小写）" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "签名不对" && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/policy/policy.json"'
+# App 的定时拉取（PROTOCOL 4.9）：stdout 一行 JSON；有变化时马上照映射改账号表并同步路由器，要重载的不问；拉不到时 fail 事件；state 给下次的时间
+rm -f "$H/.cca/policy/checked"
+ok "App 定时拉映射：还没拉过时 state 的 next_check_epoch 是 null" 'gj state | jok "d[\"config\"][\"policy\"][\"configured\"] and d[\"config\"][\"policy\"][\"next_check_epoch\"] is None"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-D"}}'
+runev cca policy pull --json >/dev/null 2>&1
+out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>/dev/null </dev/null); rc=$?
+ok "App 定时拉映射：cca policy pull --json：stdout 只有一份 JSON，这次没变化时 changed 是 false" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"policy_pull\" and d[\"changed\"] is False and d[\"summary\"] and d[\"generated_epoch\"] > 0"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-A"}}'
+: > ssh.log
+out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>/dev/null </dev/null); rc=$?
+ok "App 定时拉映射：有变化：changed，账号表马上改好，同步到路由器（不用等下一条命令）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"changed\"] is True" && tblok "t[\"alice@example.com\"] == \"US-A\"" && grep -q "sh -s" ssh.log && [ "$(cfgv "c.get(\"synced\") != None")" = True ]'
+ok "App 定时拉映射：拉过之后 state 给下次的时间（一小时后），启动时的后台拉取不用再拉" 'gj state | jok "abs(d[\"config\"][\"policy\"][\"next_check_epoch\"] - __import__(\"time\").time() - 3600) < 120" && [ -n "$(find "$H/.cca/policy/checked" -mmin -1)" ]'
+touch "$T/policy_offline"
+: > "$T/ev.jsonl"; out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>/dev/null </dev/null); rc=$?
+rm -f "$T/policy_offline"
+ok "App 定时拉映射：拉不到：退出码 1，没有 JSON，fail 事件说原因" '[ $rc -eq 1 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"policy_unavailable\" and \"连不上 GitHub\" in e[\"message\"]"'
+out=$(run cca policy pull --what 2>&1); rc=$?
+ok "cca policy pull：不认识的参数说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法: cca policy pull"'
+pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'; run cca policy pull >/dev/null 2>&1
+# 账号表表单里，维护者固定的账号不能改（只有一个选项），答案不算数
+edit_table 'j["自己(self1@example.com)"] = "US-D"'; rm -f "$T/ev.jsonl"
+out=$(sess '{}' --eof-at edit.form -- cca edit 2>&1)
+ok "账号表表单：维护者固定的账号：只有一个选项，说明是维护者固定的" 'evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"alice@example.com\" and len(f[\"options\"]) == 1 and f[\"options\"][0][\"value\"] == \"US-C\" and \"维护者固定\" in f[\"hint\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"自己（self1@example.com）\" and len(f[\"options\"]) > 1 for f in e[\"fields\"])"'
+FP=$(python3 -I -c 'import json,sys; print([x["id"] for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == "alice@example.com"][0])' "$T/ev.jsonl")
+sess '{"edit.form":[{"'$FP'":"US-B"}]}' --keep -- cca edit >/dev/null 2>&1
+ok "账号表表单：维护者固定的账号：答案不算数，账号表不变" 'tblok "t[\"alice@example.com\"] == \"US-C\""'
+edit_table 'j.pop("自己(self1@example.com)")'
 touch "$T/policy_offline"; : > git.log
 out=$(run cca policy pull 2>&1); rc=$?
 rm -f "$T/policy_offline"
@@ -2158,6 +2245,14 @@ rm -f "$CN"/mihomo-v*; : > gh.log
 run cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 50); do [ -x "$CN/mihomo-v1.19.33" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done
 ok "已经用内置代理、内核文件不在（比如 cca 升级换了内核版本）：在家启动后在后台先下好（在外面直连 GitHub 可能很慢）" '[ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo" gh.log'
+# 配置本机 Clash 的表单（没装 Clash Verge）：内置代理 / 手动配置别的客户端
+run cca local off >/dev/null 2>&1; core_stop
+: > env.log
+out=$(sess '{"local.client":[{"v":"2"}],"local.manual":[{"ctl":"不是地址","secret":""},{"ctl":"unix:/tmp/cca-none.sock","secret":"CLASH-SECRET-SENTINEL"}]}' -- cca local setup 2>&1); rc=$?
+ok "提问会话：配置本机 Clash：没装 Clash Verge 时选内置代理或手动配置；手动配置的一页有要加的配置（只显示，不用答）、外部控制地址、密钥" '[ "$(asks)" = "local.client local.manual local.manual local.manual" ] && evq "e.get(\"q\") == \"local.client\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"default\"] == \"1\" and len(e[\"fields\"][0][\"options\"]) == 2" && evq "e.get(\"seq\") == 2 and e[\"fields\"][0][\"kind\"] == \"code\" and \"listeners:\" in e[\"fields\"][0][\"value\"] and \"proxy-groups:\" in e[\"fields\"][0][\"value\"] and e[\"fields\"][2][\"kind\"] == \"secret\" and e[\"fields\"][2][\"optional\"]"'
+ok "提问会话：配置本机 Clash：地址写错、连不上都带着原因重问，连不上时不留配置；密钥不进事件文件和命令行" 'evq "e.get(\"seq\") == 3 and e[\"fields\"][1][\"error\"]" && evq "e.get(\"seq\") == 4 and \"连不上 unix:/tmp/cca-none.sock\" in e[\"fields\"][1][\"error\"] and e[\"fields\"][1][\"value\"] == \"unix:/tmp/cca-none.sock\"" && ! cfgok "c[\"local\"].get(\"client\")" && ! grep -qF CLASH-SECRET-SENTINEL "$T/ev.jsonl" env.log py.count'
+out=$(sess '{"local.client":[{"v":"1"}]}' -- cca local setup 2>&1); rc=$?
+ok "提问会话：配置本机 Clash：选内置代理：配好（有结果事件）" '[ $rc -eq 0 ] && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && [ -f "$CD/up" ]'
 # 换回 Clash Verge（cca local setup）：先停掉内置代理的内核（它还占着 127.0.0.1 的端口），删掉它的配置和拷来的节点
 mv "$V.off" "$V"; rm -f "$T/verge/down"
 out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)

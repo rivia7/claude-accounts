@@ -77,6 +77,8 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     var systemTerminal = true
     /// 这条流程能在 App 里问完（提问会话，PROTOCOL 4.6）；cca 不支持时照旧走终端。
     var inApp = false
+    /// 只有 cca 够新（`hello.forms`）才能在 App 里问完：旧版的这几条问的是终端里的那一套。
+    var needsForms = false
 
     var id: String { arguments.joined(separator: "\u{1F}") }
 
@@ -86,12 +88,13 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         return directory.map { "cd \(shellQuoteIfNeeded($0)) && \(run)" } ?? run
     }
 
-    init(arguments: [String], display: String? = nil, title: String, message: String = "", inApp: Bool = false) {
+    init(arguments: [String], display: String? = nil, title: String, message: String = "", inApp: Bool = false, needsForms: Bool = false) {
         self.arguments = arguments
         self.display = display ?? displayCommand(arguments)
         self.title = title
         self.message = message
         self.inApp = inApp
+        self.needsForms = needsForms
     }
 
     init(event: TerminalEvent) {
@@ -118,7 +121,8 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     }
 
     static func edit(prefix: [String]) -> Handoff {
-        Handoff(arguments: prefix + ["edit"], title: "编辑账号表", message: "在终端里用编辑器修改账号表，保存后 cca 会检查格式。")
+        Handoff(arguments: prefix + ["edit"], title: "编辑 \(prefix.isEmpty ? "Claude" : "ChatGPT") 账号表",
+                message: "在终端里用编辑器修改账号表，保存后 cca 会检查格式。", inApp: true, needsForms: true)
     }
 
     static func addAccount(prefix: [String], product: String) -> Handoff {
@@ -138,8 +142,8 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         Handoff(arguments: prefix + ["rm", key], title: "删除 \(name)", message: "在终端里确认后删除这个账号。", inApp: true)
     }
 
-    static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。")
-    static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。")
+    static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。", inApp: true, needsForms: true)
+    static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。", inApp: true, needsForms: true)
     static let install = Handoff(arguments: ["install"], title: "安装 cca", message: "在终端里完成 cca 的安装。")
     static let update = Handoff(arguments: ["update"], title: "更新 cca", message: "在终端里把 cca 更新到最新版本。")
 }

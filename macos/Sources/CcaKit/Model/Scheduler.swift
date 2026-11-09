@@ -72,6 +72,23 @@ enum ExitPolling {
     }
 }
 
+/// 定时拉维护者的映射（`cca policy pull --json`）：低频，下次的时间是 cca 给的（`next_check_epoch`，一小时一次），App 不重算。
+enum PolicyPolling {
+    /// 刚启动、到期了或者没拉成时至少等这么久：不空转，也不抢着在启动时干活
+    static let minDelay: TimeInterval = 5 * 60
+    /// 不知道下次什么时候（还没读到 state）隔多久看一次
+    static let fallback: TimeInterval = 3600
+
+    static func delay(next: Double?, now: Double) -> TimeInterval {
+        guard let next else { return minDelay }
+        return max(next - now, minDelay)
+    }
+
+    static func isDue(next: Double?, now: Double) -> Bool {
+        (next ?? 0) <= now
+    }
+}
+
 /// App 的定时器。都带容差，让系统把唤醒合在一起：
 /// - 用量和网络出口：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
@@ -87,7 +104,11 @@ final class Scheduler {
     /// 离下次该检查客户端更新还有多久（AppModel 按 cca 给的时间算）
     var clientCheckDelay: (() -> TimeInterval)?
     var onClientCheckTick: (() -> Void)?
+    /// 离下次该拉映射还有多久（AppModel 按 cca 给的时间算）
+    var policyDelay: (() -> TimeInterval)?
+    var onPolicyTick: (() -> Void)?
 
+    private var policyLoop: Task<Void, Never>?
     private var usageLoop: Task<Void, Never>?
     private var liveLoop: Task<Void, Never>?
     private var clientCheckLoop: Task<Void, Never>?
@@ -101,6 +122,7 @@ final class Scheduler {
     var usageRunning: Bool { usageLoop != nil }
     var liveRunning: Bool { liveLoop != nil }
     var clientChecksRunning: Bool { clientCheckLoop != nil }
+    var policyPollingRunning: Bool { policyLoop != nil }
 
     func updateUsagePolling(enabled: Bool) {
         if enabled {
@@ -125,6 +147,17 @@ final class Scheduler {
         }
     }
 
+    func updatePolicyPolling(enabled: Bool) {
+        if enabled {
+            if policyLoop == nil {
+                policyLoop = loop(every: { [weak self] in self?.policyDelay?() ?? PolicyPolling.fallback }, immediately: false) { [weak self] in self?.onPolicyTick?() }
+            }
+        } else {
+            policyLoop?.cancel()
+            policyLoop = nil
+        }
+    }
+
     /// visible：窗口或面板可见；routingVisible：分流页可见（live 立刻查一次，之后每 liveInterval 秒一次）。
     func update(visible: Bool, routingVisible: Bool) {
         if visible && routingVisible {
@@ -141,6 +174,7 @@ final class Scheduler {
         update(visible: false, routingVisible: false)
         updateUsagePolling(enabled: false)
         updateClientChecks(enabled: false)
+        updatePolicyPolling(enabled: false)
     }
 
     private func loop(every interval: @escaping @MainActor () -> TimeInterval, immediately: Bool,

@@ -181,13 +181,19 @@ struct LocalConfig: Decodable, Sendable, Equatable {
 struct PolicyConfig: Decodable, Sendable, Equatable {
     var configured: Bool
     var repo: String?
+    /// App 下次该拉映射的时间（cca 算的，App 不重算）；没拉过是 nil。
+    var nextCheckEpoch: Double?
 
-    enum CodingKeys: String, CodingKey { case configured, repo }
+    enum CodingKeys: String, CodingKey {
+        case configured, repo
+        case nextCheckEpoch = "next_check_epoch"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         configured = c.bool(.configured) ?? false
         repo = c.string(.repo)
+        nextCheckEpoch = c.double(.nextCheckEpoch)
     }
 }
 

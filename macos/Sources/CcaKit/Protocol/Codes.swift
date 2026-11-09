@@ -269,7 +269,11 @@ struct ResultCode: KnownValues {
     static let added = ResultCode(rawValue: "added")
     static let keySaved = ResultCode(rawValue: "key_saved")
     static let removed = ResultCode(rawValue: "removed")
-    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed]
+    /// 账号表保存了（`cca [codex] edit` 的表单）。
+    static let saved = ResultCode(rawValue: "saved")
+    static let routerReady = ResultCode(rawValue: "router_ready")
+    static let localReady = ResultCode(rawValue: "local_ready")
+    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady]
 }
 
 struct FailCode: KnownValues {
@@ -310,7 +314,9 @@ struct FailCode: KnownValues {
     static let cancelled = FailCode(rawValue: "cancelled")
     /// 删除账号：它的桌面 App 还开着。
     static let appRunning = FailCode(rawValue: "app_running")
-    static let allKnown: [FailCode] = [.cancelled, .appRunning, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
+    /// 拉不到维护者的映射（`cca policy pull --json`，上次拉到的照用）。
+    static let policyUnavailable = FailCode(rawValue: "policy_unavailable")
+    static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
@@ -326,7 +332,9 @@ struct TerminalCode: KnownValues {
     static let routerSetup = TerminalCode(rawValue: "router_setup")
     static let localSetup = TerminalCode(rawValue: "local_setup")
     static let apiKey = TerminalCode(rawValue: "api_key")
-    static let allKnown: [TerminalCode] = [.login, .routerSync, .routerSetup, .localSetup, .apiKey]
+    /// 账号表有表单改不了的问题（不是 JSON、键写错了）：在终端里编辑。
+    static let edit = TerminalCode(rawValue: "edit")
+    static let allKnown: [TerminalCode] = [.login, .routerSync, .routerSetup, .localSetup, .apiKey, .edit]
 }
 
 struct ConsentItem: KnownValues {

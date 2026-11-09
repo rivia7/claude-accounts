@@ -28,8 +28,16 @@ func flowProtocolTests() async {
     check("答案一行一个：文字去掉前后空白和换行", FlowModel.oneLine("  a\nb\r ", .text) == "a b")
     check("密文只去掉换行，空格原样", FlowModel.oneLine(" k e\ny\r\n", .secret) == " k ey")
     let handoff = Handoff.addAccount(prefix: ["codex"], product: "ChatGPT")
-    check("添加账号能在 App 里问完，会话和编辑账号表不行",
-          handoff.inApp && Handoff.addAPI().inApp && !Handoff.edit(prefix: []).inApp && !Handoff.session(prefix: [], key: "k", name: "n", directory: "/").inApp)
+    check("添加账号能在 App 里问完，账号的会话不行",
+          handoff.inApp && Handoff.addAPI().inApp && !Handoff.session(prefix: [], key: "k", name: "n", directory: "/").inApp)
+    check("账号表、配置路由器、配置本机 Clash 能在 App 里问完，但要 cca 够新（hello.forms）",
+          [Handoff.edit(prefix: []), .routerSetup, .localSetup].allSatisfy { $0.inApp && $0.needsForms } && !handoff.needsForms)
+    check("编辑账号表的标题带产品名（Codex 账号是 ChatGPT）", Handoff.edit(prefix: []).title == "编辑 Claude 账号表" && Handoff.edit(prefix: ["codex"]).title == "编辑 ChatGPT 账号表")
+    let form = #"{"v":1,"ev":"ask","seq":1,"q":"edit.form","title":"","message":"M","submit":"保存","fields":[{"id":"n0","kind":"choice","label":"a","section":"官方账号","style":"menu","options":[{"value":"US-A","label":"US-A","note":""}]},{"id":"c","kind":"code","label":"要加的配置","value":"listeners:\n  - x"}]}"#
+    let fe = EventLog.parseLine(Data(form.utf8))?.ask
+    check("表单：分组、弹出菜单、提交按钮的说法解码；只显示的代码块能显示",
+          fe?.submit == "保存" && fe?.fields.first?.section == "官方账号" && fe?.fields.first?.style == "menu" && fe?.fields.last?.kind == .code
+          && fe?.fields.last?.value == "listeners:\n  - x" && fe?.isDisplayable == true)
     check("删除账号、换 key 的命令", Handoff.remove(prefix: ["codex"], key: "k", name: "n").arguments == ["codex", "rm", "k"]
           && Handoff.apiKey(prefix: [], key: "k", name: "n").arguments == ["key", "k"])
 }
@@ -165,6 +173,15 @@ func flowProtocolTests() async {
         f.stop()
         check("等太久可以停掉", s.stopped == 1)
     }
+    do {
+        let (s, f, _) = make()
+        s.feed(ask(1, [PromptField(id: "c", kind: .code, value: "a\nb"), PromptField(id: "u", kind: .text, value: "x")]))
+        _ = await waitUntil { f.phase != .working }
+        check("代码块不用回答：能提交，不算进必填", f.canSubmit && f.draft["c"] == nil)
+        f.submit()
+        _ = await waitUntil { !s.answers.isEmpty }
+        check("代码块不用回答：答案里只有别的字段", s.answers.first == ["1 u x"])
+    }
 
     section("提问会话：AppModel")
     let helloPrompt = #"{"version":1,"kind":"hello","api":1,"prompt":1,"cca_version":"9.9.9","installed":true,"home":"/nonexistent/.cca","tools":{"claude":{"enabled":true,"bin":null},"codex":{"enabled":false,"bin":null}},"gui":{"app":"/x","app_version":null,"staged_version":null}}"#
@@ -183,6 +200,42 @@ func flowProtocolTests() async {
         await m.connect()
         m.run(.addAPI())
         check("旧版 cca（hello 没有 prompt）：走终端", t.started.isEmpty && m.flow == nil && m.toast?.text == "找不到 cca")
+    }
+    do {
+        let (t, m) = scripted(helloPrompt, [ScriptedSession()])
+        await m.connect()
+        m.run(.routerSetup)
+        check("cca 支持提问会话但没有 hello.forms：配置路由器走终端（旧版问的是终端里的那一套）", t.started.isEmpty && m.flow == nil && !m.formsSupported)
+    }
+    let helloForms = helloPrompt.replacingOccurrences(of: #""prompt":1"#, with: #""prompt":1,"forms":1"#)
+    do {
+        let s = ScriptedSession()
+        let (t, m) = scripted(helloForms, [s])
+        await m.connect()
+        m.run(.edit(prefix: []))
+        check("hello.forms：编辑账号表在 App 里问", t.started == [["edit"]] && m.flow != nil && m.formsSupported)
+        s.finish(0)
+        _ = await waitUntil { m.flow == nil }
+    }
+    do {
+        let s = ScriptedSession()
+        let t = ScriptedTransport { r, _ in
+            if r.arguments == ["_gui", "hello"] { return response(0, stdout: helloForms) }
+            if r.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+            if r.arguments == ["router", "sync"] {
+                let line = #"{"v":1,"ev":"terminal","code":"router_setup","argv":["router","setup"],"display":"cca router setup","message":"还没配置路由器"}"#
+                return CcaResponse(exitCode: 1, stdout: Data(), stderr: Data(), events: [EventLog.parseLine(Data(line.utf8))!])
+            }
+            return response(0)
+        }
+        t.sessions = [s]
+        let m = makeModel(t)
+        await m.connect()
+        m.syncRouter()
+        _ = await waitUntil { m.flow != nil }
+        check("cca 说这一步要配置路由器（terminal 事件）：直接开 App 里的表单，不跳终端", t.started == [["router", "setup"]] && m.flow != nil)
+        s.finish(0)
+        _ = await waitUntil { m.flow == nil }
     }
     do {
         let s = ScriptedSession()

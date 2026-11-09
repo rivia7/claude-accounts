@@ -53,7 +53,7 @@ enum Remedy: Sendable, Equatable {
         switch self {
         case .none: return nil
         case .routerSync: return "同步路由器"
-        case .handoff(let h): return "在终端里运行 \(h.display)"
+        case .handoff(let h): return h.inApp ? h.title + "…" : "在终端里运行 \(h.display)"
         case .openURL: return "去下载"
         }
     }

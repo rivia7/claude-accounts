@@ -9,7 +9,9 @@ struct PromptKind: KnownValues {
     static let choice = PromptKind(rawValue: "choice")
     static let multi = PromptKind(rawValue: "multi")
     static let confirm = PromptKind(rawValue: "confirm")
-    static let allKnown: [PromptKind] = [.text, .secret, .choice, .multi, .confirm]
+    /// 只显示、不用回答的一段多行文字（`value`），带“复制”。
+    static let code = PromptKind(rawValue: "code")
+    static let allKnown: [PromptKind] = [.text, .secret, .choice, .multi, .confirm, .code]
 }
 
 /// 选择题的一项。`value` 原样回传，App 不解释它。
@@ -54,16 +56,20 @@ struct PromptField: Decodable, Sendable, Equatable, Identifiable {
     var severity: Severity?
     /// 选择题“不选”那一项的说法。
     var skip: String
+    /// 分组的小标题：相邻的同一组放在一起。
+    var section: String
+    /// 选择题的样子：`menu` 是一行里的弹出菜单（字段多的表单），别的是单选列表。
+    var style: String
 
     enum CodingKeys: String, CodingKey {
         case id, kind, label
         case defaultValue = "default"
-        case value, error, hint, optional, options, min, detail, severity, skip
+        case value, error, hint, optional, options, min, detail, severity, skip, section, style
     }
 
     init(id: String, kind: PromptKind, label: String = "", defaultValue: String = "", value: String = "", error: String = "",
          hint: String = "", optional: Bool = false, options: [PromptOption] = [], min: Int? = nil, detail: String = "",
-         severity: Severity? = nil, skip: String = "") {
+         severity: Severity? = nil, skip: String = "", section: String = "", style: String = "") {
         self.id = id
         self.kind = kind
         self.label = label
@@ -77,6 +83,8 @@ struct PromptField: Decodable, Sendable, Equatable, Identifiable {
         self.detail = detail
         self.severity = severity
         self.skip = skip
+        self.section = section
+        self.style = style
     }
 
     init(from decoder: Decoder) throws {
@@ -94,6 +102,8 @@ struct PromptField: Decodable, Sendable, Equatable, Identifiable {
         detail = c.string(.detail) ?? ""
         severity = c.lossy(Severity.self, .severity)
         skip = c.string(.skip) ?? ""
+        section = c.string(.section) ?? ""
+        style = c.string(.style) ?? ""
     }
 }
 
@@ -104,6 +114,8 @@ struct AskEvent: Sendable, Equatable {
     var title: String
     var message: String
     var fields: [PromptField]
+    /// 提交按钮的说法（空的是“继续”）。
+    var submit: String = ""
 
     /// 这一页只有一个“是 / 否”的问题。
     var confirmField: PromptField? {
@@ -122,4 +134,6 @@ struct AskEvent: Sendable, Equatable {
 enum PromptAPI {
     /// App 支持的提问会话版本（`hello.prompt`，PROTOCOL 4.6）。
     static let version = 1
+    /// 配置路由器、配置本机 Clash、账号表能在 App 里填表（`hello.forms`）：旧版 cca 问的是终端里的那一套，这几条走终端。
+    static let forms = 1
 }

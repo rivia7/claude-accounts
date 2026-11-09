@@ -53,6 +53,7 @@ enum MenuBarIcon {
 struct MenuBarContent: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         @Bindable var model = model
@@ -114,10 +115,11 @@ struct MenuBarContent: View {
         .padding(14)
         .frame(width: 340)
         .plainTextOnDarkGlass()
-        .background(WindowObserver { visible in model.setPanelVisible(visible) })
+        .background(WindowObserver(onWindow: { WindowOpener.shared.panel = $0 }) { visible in model.setPanelVisible(visible) })
         .motionScope(\.panelVisible)
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
+            WindowOpener.shared.dismissPanel = { dismiss() }
         }
     }
 

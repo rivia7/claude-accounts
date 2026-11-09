@@ -238,11 +238,25 @@ dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
 # 出门在外（$CCA_T/away）：连不上路由器
 [ -f "$CCA_T/away" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }
+# 路由器上还没装公钥（$CCA_T/router_needs_password 里是密码）：密钥登录被拒；提问会话的密码登录像真的 ssh 一样经 SSH_ASKPASS 取密码，
+# 对了才算装上公钥（删掉这个文件）。askpass 第二次读不到东西，不会卡住（$CCA_T/askpass_twice 时读两次，模拟 ssh 问了两遍）
+if [ -f "$CCA_T/router_needs_password" ]; then
+	case " ${args[*]} " in
+		*PubkeyAuthentication=no*)
+			if [ "${SSH_ASKPASS_REQUIRE:-}" != force ] || [ -z "${SSH_ASKPASS:-}" ]; then echo "$dest: Permission denied (no askpass)." >&2; exit 255; fi
+			pw=$("$SSH_ASKPASS"); rc=$?
+			echo "ASKPASS rc=$rc" >> "$CCA_T/ssh.log"
+			[ ! -f "$CCA_T/askpass_twice" ] || { "$SSH_ASKPASS" >/dev/null; echo "ASKPASS2 rc=$?" >> "$CCA_T/ssh.log"; }
+			[ "$pw" = "$(cat "$CCA_T/router_needs_password")" ] || { echo "$dest: Permission denied (publickey,password)." >&2; exit 255; }
+			rm -f "$CCA_T/router_needs_password" ;;
+		*BatchMode=yes*) echo "$dest: Permission denied (publickey)." >&2; exit 255 ;;
+	esac
+fi
 [ -n "$cmd" ] || exit 0
 if [ -f "$CCA_T/ssh_fail_uninstall" ]; then case "$cmd" in *uninstall*) echo "ssh: Connection refused" >&2; exit 255 ;; esac; fi
 # 像真的 ssh 一样把 stdin 读走（cca 在 while … <<< 循环里调用 ssh 又没加 </dev/null 时，会吞掉循环后面的输入）。
 # 只读普通文件（bash 3.2 的 here-string 就是）：终端、管道不碰，免得测试卡住
-case "$cmd" in "sh -s"*|*uninstall*) ;; *) [ -f /dev/stdin ] && cat > /dev/null ;; esac
+case "$cmd" in "sh -s"*|*uninstall*|*authorized_keys*) ;; *) [ -f /dev/stdin ] && cat > /dev/null ;; esac
 exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=2 HOME="$CCA_T/router/root" PATH="$CCA_T/rbin:$PATH" /bin/dash -c "$cmd"
 S
 cat > "$T/bin/nc" <<'S'

@@ -122,7 +122,7 @@ struct TopBanners: View {
                 Banner(systemImage: "tablecells.badge.ellipsis", tint: .red,
                             title: "\(Texts.product(item.tool)) 的账号表校验不过：启动账号会失败",
                             message: item.issues.map(\.message).filter { !$0.isEmpty }.joined(separator: "\n")) {
-                    Button("在终端里编辑…") { model.runInTerminal(.edit(prefix: model.prefix(item.tool))) }
+                    Button(model.formsSupported ? "编辑账号表…" : "在终端里编辑…") { model.run(.edit(prefix: model.prefix(item.tool))) }
                         .buttonStyle(.bordered)
                 }
             }
@@ -250,10 +250,10 @@ struct MainToolbar: ToolbarContent {
                     Button(add.title + "…") { model.run(add) }
                 }
                 Divider()
-                Button("编辑 \(Texts.product(model.tool)) 账号表…") { model.runInTerminal(.edit(prefix: model.prefix(model.tool))) }
+                Button("编辑 \(Texts.product(model.tool)) 账号表…") { model.run(.edit(prefix: model.prefix(model.tool))) }
                 Divider()
-                Button("配置路由器…") { model.runInTerminal(.routerSetup) }
-                Button("配置本机 Clash…") { model.runInTerminal(.localSetup) }
+                Button("配置路由器…") { model.run(.routerSetup) }
+                Button("配置本机 Clash…") { model.run(.localSetup) }
             } label: {
                 Label("添加", systemImage: "plus")
             }

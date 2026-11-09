@@ -290,7 +290,7 @@ struct RoutingBanners: View {
             if let e = model.live?.local?.error {
                 Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "本机 Clash：\(Texts.liveError(e))") {
                     if e.code == .notConfigured {
-                        Button("配置本机 Clash…") { model.runInTerminal(.localSetup) }.buttonStyle(.bordered)
+                        Button("配置本机 Clash…") { model.run(.localSetup) }.buttonStyle(.bordered)
                     }
                 }
             }
@@ -325,7 +325,7 @@ struct RoutingBanners: View {
         }
         return Banner(systemImage: "wifi.exclamationmark", tint: .red, title: "路由器：\(Texts.liveError(e))", message: message) {
             if e.code == .unreachable, !model.localConfigured {
-                Button("配置本机 Clash…") { model.runInTerminal(.localSetup) }.buttonStyle(.bordered)
+                Button("配置本机 Clash…") { model.run(.localSetup) }.buttonStyle(.bordered)
             }
         }
     }

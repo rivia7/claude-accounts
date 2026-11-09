@@ -219,7 +219,8 @@ gui_ask() {
 }
 gui_kv() { local a nl=$'\n'; for a in "$@"; do printf '%s\n' "${a//$nl/ }"; done; }   # 给 py prompt-emit 的描述：一条一行，值里的换行变空格（路由器的说明常常有好几行）
 # 一页多个字段：ask_fields 题号 页标题 页说明 字段…，结果放进 F_变量（所以不能在 $(…) 里调用）。
-# 字段是“变量|类型|校验|终端提示|GUI 名字|GUI 说明”：类型 text、secret，后面加 ? 是可选；校验 email、alias、url、model（cca 判断，密文固定校验 key 的格式）。
+# 字段是“变量|类型|校验|终端提示|GUI 名字|GUI 说明|预填|错误”（后两项可以不写）：类型 text、secret，后面加 ? 是可选；校验 email、alias、url、model、host、sshuser、port、
+# controller（cca 判断，密文默认校验 key 的格式，写 any 不校验）。类型 code 只显示、不用回答（GUI 专用：预填那一项写放着多行文字的变量名）。
 # 终端里逐个问，和以前一样；图形界面里一页填完，不合格的带着原因重问（已填的带回去，密文不带）
 ask_fields() {
 	if [ -n "$PROMPT_GUI" ]; then gui_fields "$@"; return; fi
@@ -236,44 +237,57 @@ ask_fields() {
 	done
 }
 gui_fields_spec() {   # 这一页的描述（给 py prompt-emit；变量都是 gui_fields 的）。单独一个函数：bash 3.2 在 $(…) 里解析不了 case 的右括号
-	local i
+	local i l
 	gui_kv "q=$q" "title=$title" "message=$msg"
 	for ((i = 0; i < n; i++)); do
 		gui_kv "field=${names[i]}" "kind=${kinds[i]%\?}" "label=${labels[i]}" "hint=${hints[i]}" "error=${errs[i]}"
-		case "${kinds[i]}" in secret*) ;; *) gui_kv "value=${vals[i]}" ;; esac
+		case "${kinds[i]}" in
+			code) while IFS= read -r l; do printf 'code=%s\n' "$l"; done <<< "${vals[i]}" ;;   # 多行文字：一行一条
+			secret*) ;;
+			*) gui_kv "value=${vals[i]}" ;;
+		esac
 		case "${kinds[i]}" in *\?) echo optional=1 ;; esac
 	done
 }
+gui_answer() {   # gui_answer 序号 字段：读这一页这个字段的答案，放进 ANSWER（不能在 $(…) 里调用）
+	local line
+	while :; do
+		IFS= read -r line <&3 || gui_abort
+		case "$line" in
+			"$1 $2 "*) ANSWER=${line#"$1 $2 "}; return 0 ;;
+			"$1 "*) gui_abort ;;   # 同一页的字段对不上就停下：别把值放错地方（可能是密钥）
+		esac
+	done
+}
 gui_fields() {
-	local q="$1" title="$2" msg="$3" seq line i n=0 name kind check tip label hint v out bad
+	local q="$1" title="$2" msg="$3" seq line i n=0 name kind check tip label hint def err v out bad
 	local -a names kinds checks labels hints vals errs
 	shift 3
 	for line in "$@"; do
-		IFS='|' read -r name kind check tip label hint <<< "$line"
-		names[n]=$name kinds[n]=$kind checks[n]=$check labels[n]=$label hints[n]=$hint vals[n]="" errs[n]=""
+		IFS='|' read -r name kind check tip label hint def err <<< "$line"
+		[ "$kind" != code ] || def=${!def}
+		names[n]=$name kinds[n]=$kind checks[n]=$check labels[n]=$label hints[n]=$hint vals[n]=$def errs[n]=$err
 		n=$((n + 1))
 	done
 	while :; do
 		seq=$(gui_fields_spec | py prompt-emit) || gui_abort
 		for ((i = 0; i < n; i++)); do
-			while :; do
-				IFS= read -r line <&3 || gui_abort
-				case "$line" in
-					"$seq ${names[i]} "*) vals[i]=${line#"$seq ${names[i]} "}; break ;;
-					"$seq "*) gui_abort ;;   # 同一页的字段对不上就停下：别把值放错地方（可能是密钥）
-				esac
-			done
+			[ "${kinds[i]}" != code ] || continue
+			gui_answer "$seq" "${names[i]}"
+			vals[i]=$ANSWER
 		done
+		ANSWER=""
 		bad=""
 		for ((i = 0; i < n; i++)); do
 			errs[i]=""
+			[ "${kinds[i]}" != code ] || continue
 			v=${vals[i]}
 			if [ -z "$v" ]; then
 				case "${kinds[i]}" in *\?) ;; *) errs[i]="这一项要填"; bad=1 ;; esac
 				continue
 			fi
 			case "${kinds[i]}" in
-				secret*) if ! out=$(printf '%s' "$v" | py secret-check); then errs[i]=$out; bad=1; fi ;;
+				secret*) if [ "${checks[i]}" != any ] && ! out=$(printf '%s' "$v" | py secret-check); then errs[i]=$out; bad=1; fi ;;
 				*) [ -z "${checks[i]}" ] && continue
 				   if out=$(py check "${checks[i]}" "$v"); then vals[i]=$out; else errs[i]=$out; bad=1; fi ;;
 			esac
@@ -286,11 +300,7 @@ gui_done() {   # gui_done 结果码 说明 [账号的键]：这条流程做完�
 	[ -n "${CCA_EVENTS:-}" ] || return 0
 	gui_event result "\"code\":\"$1\",\"tool\":$(jstr "${TOOL:-claude}"),\"key\":$(jopt "${3:-}"),\"message\":$(jstr "$2")"
 }
-gui_router_later() {   # 提问会话里还不能配置路由器（SSH 密码要在终端里输）：交给终端，返回 0
-	[ -n "$PROMPT_GUI" ] || return 1
-	TOOL=claude gui_terminal router_setup "还没配置路由器：在终端里配置一次" router setup
-	return 0
-}
+gui_cancelled() { gui_fail cancelled "已取消"; return 1; }   # 提问会话里用户答了“不做”：按取消收场（不算失败）
 
 # 能画方向键菜单的条件：有真终端（不是 CCA_TTY 预置答案）且终端支持光标控制
 fancy_ok() { [ "$TTY_OK" = 1 ] && [ -z "${CCA_TTY:-}" ] && [ -t 2 ] && [ "${TERM:-dumb}" != dumb ]; }
@@ -416,6 +426,9 @@ PAIR_RE = lazy_re(r'^(.*?)[(（]([^()（）]*)[)）]$')
 ALIAS_BAD = lazy_re(r'[\s"\\()（）@]')
 SECRET_RE = lazy_re(r'^[\x21-\x7e]{8,4096}$')   # 只收可见的 ASCII：别的字符 security -w 会改成输出十六进制
 MODEL_RE = lazy_re(r'^[^\s\x22\x27\\]{1,100}$')
+HOST_RE = lazy_re(r'^([A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|[0-9A-Fa-f:]{2,39})$')   # 主机名、IPv4、IPv6（开头不能是 -：ssh 会当成选项）
+SSH_USER_RE = lazy_re(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$')
+CONTROLLER_RE = lazy_re(r'^(unix:/\S+|(https?://)?[^\s/]+:[0-9]{1,5}/?)$')
 ENV_NAME_RE = lazy_re(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
 SECRET_MSG = 'key 应该是一串可见的 ASCII 字符（至少 8 个，不能有空格或中文）'
 MODEL_MSG = '模型名里不能有空格或引号'
@@ -954,6 +967,7 @@ def api_problems(c, k, v, tool=None):
 
 
 POLICY_FILE = os.path.join(CCA_HOME, 'policy', 'policy.json')   # 维护者的账号 → 节点映射（bash 的 policy_fetch 验签后才放进来）
+POLICY_POLL_INTERVAL = 3600   # App 多久拉一次映射（App 不重算，看 state 的 next_check_epoch）；命令行还是启动时一天一次
 
 
 def policy_raw(tool):
@@ -1319,6 +1333,37 @@ def reconcile(c, t, tool, reserved=()):
         t[k] = want
     if (fixed or added or renamed) and not RO:
         save_json(tool.table, t, 0o600)
+    errs = table_problems(c, t, tool, pm)
+    # 第三方 API 账号的键 → 账号目录名，记在 config.json：改过不止一次别名也认得出旧的端口和"上次使用"
+    known = st.get('api_ids') if isinstance(st.get('api_ids'), dict) else {}
+    old = st['ports']
+    by_id = {known.get(k) or acct_id(k, tool): p for k, p in old.items()}
+    wanted = [k for k, v in t.items() if node_of(v)]
+    ports, used = {}, set(reserved)
+    for k in wanted:
+        p = old.get(k) or by_id.get(acct_id(k, tool))
+        if isinstance(p, int) and p not in used:
+            ports[k] = p
+            used.add(p)
+    for k in wanted:
+        if k not in ports:
+            p = FIRST_PORT
+            while p in used:
+                p += 1
+            ports[k] = p
+            used.add(p)
+    st['ports'] = ports
+    if st.get('last') not in t:
+        lid = (known.get(st['last']) or acct_id(st['last'], tool)) if st.get('last') else ''
+        st['last'] = next((k for k in t if acct_id(k, tool) == lid), '')
+    now = {k: acct_id(k, tool) for k, v in t.items() if is_api(v)}
+    if now or known:
+        st['api_ids'] = now
+    return errs
+
+
+def table_problems(c, t, tool, pm):
+    """账号表的问题（只看，不改）：reconcile、表单都用它"""
     errs, emails, aliases, ids = [], {}, {}, {}
     if not c['nodes'] and any(node_of(v) or not is_api(v) for v in t.values()):
         errs.append('config.json 里还没有可选节点（nodes）：运行 cca router setup 从路由器的节点里选')
@@ -1348,31 +1393,6 @@ def reconcile(c, t, tool, reserved=()):
         if i in ids and (is_api(v) or is_api(t[ids[i]])):   # 官方账号的邮箱重复上面已经报过
             errs.append('「%s」和「%s」会用同一个账号目录（id 或邮箱重复了）' % (ids[i], k))
         ids.setdefault(i, k)
-    # 第三方 API 账号的键 → 账号目录名，记在 config.json：改过不止一次别名也认得出旧的端口和"上次使用"
-    known = st.get('api_ids') if isinstance(st.get('api_ids'), dict) else {}
-    old = st['ports']
-    by_id = {known.get(k) or acct_id(k, tool): p for k, p in old.items()}
-    wanted = [k for k, v in t.items() if node_of(v)]
-    ports, used = {}, set(reserved)
-    for k in wanted:
-        p = old.get(k) or by_id.get(acct_id(k, tool))
-        if isinstance(p, int) and p not in used:
-            ports[k] = p
-            used.add(p)
-    for k in wanted:
-        if k not in ports:
-            p = FIRST_PORT
-            while p in used:
-                p += 1
-            ports[k] = p
-            used.add(p)
-    st['ports'] = ports
-    if st.get('last') not in t:
-        lid = (known.get(st['last']) or acct_id(st['last'], tool)) if st.get('last') else ''
-        st['last'] = next((k for k in t if acct_id(k, tool) == lid), '')
-    now = {k: acct_id(k, tool) for k, v in t.items() if is_api(v)}
-    if now or known:
-        st['api_ids'] = now
     return errs
 
 
@@ -2106,6 +2126,195 @@ def all_errors():
     return errs
 
 
+# --- 提问会话里的账号表表单（cca [codex] edit，PROTOCOL 4.6）：节点、接口地址、模型、环境变量。App 不碰账号表，也看不到 key ---
+def edit_sum(t):
+    """账号表的键和先后的摘要：表单按编号对应账号，表在中途变了（映射更新、别处改了别名）就重新出表单"""
+    return hashlib.sha1(json.dumps(list(t), ensure_ascii=False).encode('utf-8')).hexdigest()[:12]
+
+
+def env_text(env):
+    """环境变量在表单里的写法：A=1 B=\x27带空格的值\x27"""
+    return ' '.join('%s=%s' % (k, shlex.quote(str(v))) for k, v in env.items()) if isinstance(env, dict) else ''
+
+
+def env_parse(s):
+    """表单里的环境变量 → (字典, 问题)"""
+    try:
+        words = shlex.split(s)
+    except ValueError:
+        return {}, '引号没有配对'
+    out = {}
+    for w in words:
+        k, sep, v = w.partition('=')
+        if not sep:
+            return {}, '写成 名字=值，多个用空格隔开（「%s」里没有 =）' % k[:40]
+        out[k] = v
+    return out, ''
+
+
+def edit_unfixable(c, t, pm):
+    """表单改不了的问题（键写错了、有不认识的字段、key 或 id 不对）：把表单能改的项换成合格的值，再校验一遍"""
+    probe = {}
+    for k, v in t.items():
+        if is_api(v):
+            probe[k] = {f: x for f, x in v.items() if f not in ('model', 'node', 'env')}
+            probe[k]['base_url'] = 'https://api.example.com'
+        else:
+            probe[k] = 'x'
+    return table_problems(dict(c, nodes=['x']), probe, T, pm)
+
+
+def cmd_edit_form():
+    """表单的一页：打印 edit_sum，后面是这一页的描述（k=v，一行一条，给 prompt-emit）。stdin：上次填的（字段<TAB>值）和问题（!字段<TAB>原因，
+    字段空着是整页的）。退出码 3：表单改不了（stdout 是原因，去终端）；4：还没有账号；5：还没有可选节点（stdout 是原因）"""
+    if not os.path.exists(T.table) or not isinstance(load_quiet(T.table), dict):
+        if os.path.exists(T.table):
+            print('%s 不是正确的 JSON' % T.table)
+            sys.exit(3)
+        print('还没有账号')
+        sys.exit(4)
+    c, t, _ = ctx()
+    prev, ferr = {}, {}
+    for line in sys.stdin.read().split('\n'):
+        k, sep, v = line.partition('\t')
+        if sep:
+            (ferr if k.startswith('!') else prev)[k.lstrip('!')] = v
+    if not t:
+        print('还没有账号')
+        sys.exit(4)
+    pm = policy_map(T, c)
+    bad = edit_unfixable(c, t, pm)
+    if bad:
+        print('；'.join(bad)[:500])
+        sys.exit(3)
+    nodes = c['nodes']
+    if not nodes and any(not is_api(v) for v in t.values()):
+        print('还没有可选节点：先配置路由器')
+        sys.exit(5)
+    used = {}
+    for k, v in t.items():
+        if node_of(v):
+            used.setdefault(node_of(v), []).append(k)
+    apis = any(is_api(v) for v in t.values())
+    out = [edit_sum(t), 'q=edit.form', 'submit=保存',
+           'message=' + (ferr.get('') or '改完点“保存”，cca 会检查，需要的话同步到路由器。')]
+
+    def put(fid, kind, label, value, section, hint='', optional=False, style='', error=''):
+        out.extend('%s=%s' % x for x in [('field', fid), ('kind', kind), ('label', label), ('value', value), ('section', section), ('hint', hint),
+                                         ('style', style), ('error', error or ferr.get(fid, ''))] if x[1] or x[0] in ('field', 'value'))
+        if optional:
+            out.append('optional=1')
+
+    def node_opts(k):
+        for n in nodes:
+            who = [name_of(x) for x in used.get(n, []) if x != k]
+            out.append('opt=%s\t%s\t%s' % (n, n, '已被 %s 使用' % '、'.join(who) if who else ''))
+
+    for i, (k, v) in enumerate(t.items()):
+        nid = 'n%d' % i
+        if not is_api(v):
+            sec = '官方账号' if apis else ''
+            want = pm.get(parse_key(k)[1].lower()) if parse_key(k)[1] else None
+            if want:
+                put(nid, 'choice', label_of(k), want, sec, '维护者固定了这个账号的节点', style='menu',
+                    error='' if want in nodes else '维护者的映射要求它走「%s」，这个节点不在可选列表：先在“配置路由器”里选上它' % want)
+                out.append('opt=%s\t%s\t' % (want, want))
+                continue
+            cur = prev.get(nid, v if isinstance(v, str) else '')
+            put(nid, 'choice', label_of(k), cur if cur in nodes else '', sec, style='menu',
+                error='' if cur in nodes else '节点「%s」不在可选列表，换一个' % cur)
+            node_opts(k)
+            continue
+        sec = '第三方 API：%s' % name_of(k)
+        fid = 'u%d' % i
+        put(fid, 'text', '接口地址', prev.get(fid, api_url(v)), sec, '换了服务商（域名变了）要重新输入 key')
+        fid = 'm%d' % i
+        put(fid, 'text', '模型（可选）', prev.get(fid, v.get('model') or ''), sec,
+            '填了会同时用作 opus / sonnet / haiku' if 'env' in T.api_fields else '服务商不认 codex 默认的模型名时请填上', optional=True)
+        if nodes:
+            cur = prev.get(nid, node_of(v))
+            put(nid, 'choice', '出口', cur if cur in nodes else '', sec, optional=True, style='menu',
+                error='' if not cur or cur in nodes else '节点「%s」不在可选列表，换一个' % cur)
+            node_opts(k)
+            out.append('skip=直连（不经代理）')
+        if 'env' in T.api_fields:
+            fid = 'e%d' % i
+            put(fid, 'text', '环境变量（可选）', prev.get(fid, env_text(v.get('env'))), sec, '写成 名字=值，多个用空格隔开；密钥不要写在这里', optional=True)
+    print('\n'.join(x.replace('\n', ' ') for x in out))
+
+
+def cmd_edit_apply(digest):
+    """表单的答案（stdin：字段<TAB>值）：合格就写进账号表，打印 changed / same；不合格退出 3，stdout 一行一个问题（!字段<TAB>原因）"""
+    c, t, _ = ctx()
+    if edit_sum(t) != digest:
+        print('!\t账号表刚刚变了（维护者的映射更新了，或者在别处改过）：下面是最新的内容，再确认一次')
+        sys.exit(3)
+    ans = {}
+    for line in sys.stdin.read().split('\n'):
+        k, sep, v = line.partition('\t')
+        if sep:
+            ans[k] = v
+    pm = policy_map(T, c)
+    new, bad = {}, {}
+    for i, (k, v) in enumerate(t.items()):
+        nid = 'n%d' % i
+        n = ans.get(nid)
+        if not is_api(v):
+            e = parse_key(k)[1]
+            if n is None or (e and e.lower() in pm):   # 维护者固定的不看答案
+                new[k] = v
+            elif n not in c['nodes']:
+                bad[nid] = '这个节点不在可选列表'
+                new[k] = v
+            else:
+                new[k] = n
+            continue
+        w = dict(v)
+        url = ans.get('u%d' % i, '').strip().rstrip('/')
+        p = url_problem(url, T)
+        if p:
+            bad['u%d' % i] = p
+        else:
+            if api_host(dict(w, base_url=url)) != api_host(v):
+                w.pop('key', None)   # 换了服务商：账号表里写的是旧服务商的 key，不能发给新的（和钥匙串按域名存一样），保存后问新的
+            w['base_url'] = url
+        m = ans.get('m%d' % i, '').strip()
+        if m and not model_ok(m):
+            bad['m%d' % i] = MODEL_MSG
+        elif m:
+            w['model'] = m
+        else:
+            w.pop('model', None)
+        if n is not None:
+            n = n.strip()
+            if n and n not in c['nodes']:
+                bad[nid] = '这个节点不在可选列表'
+            elif n or w.get('node'):
+                w['node'] = n
+        eid = 'e%d' % i
+        if 'env' in T.api_fields and eid in ans:
+            env, p = env_parse(ans[eid])
+            p = p or '；'.join(api_problems(c, k, {'base_url': 'https://api.example.com', 'env': env}))
+            if p:
+                bad[eid] = p
+            elif env_text(env) != env_text(v.get('env')):
+                if env:
+                    w['env'] = env
+                else:
+                    w.pop('env', None)
+        new[k] = w
+    if bad:
+        for f, why in bad.items():
+            print('!%s\t%s' % (f, why))
+        sys.exit(3)
+    if new == t:
+        print('same')
+        return
+    save_json(T.table, new, 0o600)
+    ctx()   # 重新对账（直连改走节点时分配端口）
+    print('changed')
+
+
 def cmd_validate(scope=''):
     """当前工具的账号表有没有问题；scope=all 时各工具的都看"""
     errs = ctx()[2]
@@ -2287,7 +2496,7 @@ def cmd_prompt_emit():
         k, sep, v = line.rstrip('\n').partition('=')
         if not sep:
             continue
-        if k in ('q', 'title', 'message'):
+        if k in ('q', 'title', 'message', 'submit'):
             page[k] = v
         elif k == 'field':
             cur = {'id': v, 'kind': 'text', 'label': '', 'default': '', 'value': '', 'error': '', 'hint': '', 'optional': False}
@@ -2303,7 +2512,9 @@ def cmd_prompt_emit():
             cur.setdefault('options', []).append({'value': value, 'label': label, 'note': note})
         elif k == 'min':
             cur[k] = int(v)
-        elif k in ('kind', 'label', 'default', 'value', 'error', 'hint', 'detail', 'severity', 'skip'):
+        elif k == 'code':   # 多行文字（kind 是 code 的字段）：一行一条
+            cur['value'] = cur['value'] + '\n' + v if cur['value'] else v
+        elif k in ('kind', 'label', 'default', 'value', 'error', 'hint', 'detail', 'severity', 'skip', 'section', 'style'):
             if v or k != 'label':
                 cur[k] = v
     with open(path, 'rb') as f:
@@ -2332,6 +2543,14 @@ def cmd_check(field, value):
         p = url_problem(value)
     elif field == 'model':
         p = '' if model_ok(value) else MODEL_MSG
+    elif field == 'host':
+        p = '' if HOST_RE.match(value) else '地址写成 192.168.1.2 或者主机名（不带 http://、端口和空格）'
+    elif field == 'sshuser':
+        p = '' if SSH_USER_RE.match(value) else '用户名只能有字母、数字、点、下划线和连字符'
+    elif field == 'port':
+        p = '' if re.match(r'^[0-9]{1,5}$', value) and 1 <= int(value) <= 65535 else '端口是 1–65535 之间的数字'
+    elif field == 'controller':
+        p = '' if CONTROLLER_RE.match(value) else '写成 127.0.0.1:9090、http://地址:端口，Unix socket 写 unix:/路径'
     else:
         p = (email_problem if field == 'email' else alias_problem)(table_load(), value)
     print(p or value)
@@ -2679,6 +2898,21 @@ def cmd_sync_state(quiet=''):
     cmd_secrets_forget()
     c = ctx()[0]
     print('%s\t%s' % (sync_digest(c, sys.stdin.read()), c.get('synced') or ''))
+
+
+def cmd_nodes_preselect(*names):
+    """路由器上的这些节点里，现在已经是可选节点的编号（从 1 起，空格隔开）"""
+    allowed = set(ctx()[0]['nodes'])
+    print(' '.join(str(i) for i, n in enumerate(names, 1) if n in allowed))
+
+
+def cmd_nodes_lost(*picked):
+    """这次选的节点里少了哪些还有账号在用的（两个工具的都看）：「节点（账号、账号）」"""
+    c = ctx()[0]
+    who = {}
+    for tool, k, v, _ in pool(c):
+        who.setdefault(node_of(v), []).append(shown(tool, k))
+    print('；'.join('%s（%s）' % (n, '、'.join(who[n])) for n in c['nodes'] if n in who and n not in picked))
 
 
 def cmd_set_nodes(*nodes):
@@ -3054,6 +3288,15 @@ def cmd_local_env():
        VERGE_PROFILE=prof[0], VERGE_PROFILE_NAME=prof[1],
        LOCAL_SLOTS=n, LOCAL_FIRST=FIRST_PORT, LOCAL_LAST=FIRST_PORT + n - 1,
        VERGE_DIR=VERGE_DIR, VERGE_FOUND=1 if verge_found() else 0)
+
+
+def cmd_local_secret():
+    """本机 Clash 外部控制的 secret：从 stdin 读（不进命令行），空的不写"""
+    s = sys.stdin.read().strip()
+    if s:
+        c = cfg_load()
+        c['local']['secret'] = s
+        cfg_save(c)
 
 
 def cmd_local_set(*kv):
@@ -5780,6 +6023,14 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             'usage': usage, 'health': health_view(k, v, now)}
 
 
+def policy_next_check():
+    """App 下次该拉映射的时间：上次拉（$POLICY_DIR/checked）之后过 POLICY_POLL_INTERVAL 秒；没拉过是 None"""
+    try:
+        return os.stat(os.path.join(CCA_HOME, 'policy', 'checked')).st_mtime + POLICY_POLL_INTERVAL
+    except OSError:
+        return None
+
+
 def cmd_gui_state():
     """cca _gui state：图形界面的只读快照，两个工具一起。CCA_RO=1 下运行：对账只在内存里做，不写文件、不往 stderr 说
     （本来会做的改动在 notices 里）。读不了的文件报在 errors 里，不退出。stdin 是路由器端代码（算同步摘要）；
@@ -5822,7 +6073,8 @@ def cmd_gui_state():
                                  'proxy_host': c.get('proxy_host') or r.get('host') or None},
                       'local': local_info(c),
                       'nodes': c['nodes'], 'min_trust': c['min_trust'], 'leak_check': c.get('leak_check') is not False,
-                      'update': c['update'], 'policy': {'configured': bool(pol), 'repo': pol if isinstance(pol, str) else None}},
+                      'update': c['update'], 'policy': {'configured': bool(pol), 'repo': pol if isinstance(pol, str) else None,
+                                                         'next_check_epoch': policy_next_check() if pol else None}},
            'routing': {'first_port': FIRST_PORT, 'pool_size': pool_size(c),
                        'sync': 'n/a' if not r.get('host') else 'ok' if sync_digest(c, code) == c.get('synced') else 'pending',
                        'local_sync': 'n/a' if not loc.get('client') else 'ok' if local_want(c) == loc.get('applied') else 'pending',
@@ -7250,6 +7502,8 @@ CMDS = {
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
     'update-check': cmd_update_check, 'client-updates': cmd_client_updates,
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
+    'nodes-preselect': cmd_nodes_preselect, 'nodes-lost': cmd_nodes_lost, 'edit-form': cmd_edit_form, 'edit-apply': cmd_edit_apply,
+    'local-secret': cmd_local_secret,
     'policy-request': cmd_policy_request, 'policy-lock': cmd_policy_lock,
     'policy-rows': cmd_policy_rows, 'policy-repo': cmd_policy_repo,
     'policy-ask': cmd_policy_ask, 'policy-decline': cmd_policy_decline, 'policy-set': cmd_policy_set,
@@ -8537,8 +8791,11 @@ REMOTE_ADD_KEY='k=$(cat); add() { mkdir -p "${1%/*}"; touch "$1"; chmod 600 "$1"
 cmd_router_setup() {
 	need_tty
 	load_router
-	local host="" user port key i list="" nd bad=""
-	if [ -n "$ROUTER_HOST" ]; then
+	local host="" user port key i list="" nd bad="" msg
+	if [ -n "$PROMPT_GUI" ]; then
+		router_form || return 1
+		host=$F_host user=$F_user port=$F_port
+	elif [ -n "$ROUTER_HOST" ]; then
 		host=$(ask "路由器地址 [${ROUTER_HOST}]: " "$ROUTER_HOST")
 	else
 		for i in 1 2 3; do
@@ -8547,32 +8804,53 @@ cmd_router_setup() {
 		done
 		[ -n "$host" ] || die "需要路由器地址"
 	fi
-	user=$(ask "SSH 用户 [${ROUTER_USER:-root}]: " "${ROUTER_USER:-root}")
-	port=$(ask "SSH 端口 [${ROUTER_PORT:-22}]: " "${ROUTER_PORT:-22}")
+	if [ -z "$PROMPT_GUI" ]; then
+		user=$(ask "SSH 用户 [${ROUTER_USER:-root}]: " "${ROUTER_USER:-root}")
+		port=$(ask "SSH 端口 [${ROUTER_PORT:-22}]: " "${ROUTER_PORT:-22}")
+	fi
 	key="$CCA_HOME/router_ed25519"
 	[ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C "cca@$(hostname -s)" -f "$key" || die "生成 SSH 密钥失败"
-	py router-set "$host" "$port" "$user" "$key" || die "保存路由器配置失败"
-	load_router
+	ROUTER_HOST=$host ROUTER_USER=$user ROUTER_PORT=$port ROUTER_KEY=$key   # 先在内存里换上试连，登录成功才写进 config.json：配错了不盖掉原来能用的
 	if rsh true 2>/dev/null; then
 		info "已能用密钥登录 $user@$host"
 	else
 		info "需要输入一次 $user@$host 的密码来安装 SSH 公钥（密码不会被保存）"
-		ssh -p "$port" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
-			-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password \
-			"$user@$host" "$REMOTE_ADD_KEY" < "$key.pub" >/dev/null || die "安装公钥失败"
+		router_key_install "$user" "$host" "$port" "$key" || return 1
 		rsh true || die "公钥已写入，但密钥登录仍然失败"
 		info "密钥登录成功，之后免密"
 	fi
+	py router-set "$host" "$port" "$user" "$key" || die "保存路由器配置失败"
+	ROUTER_SEEN=""
+	load_router
 	# 账号表现在有错误时先别同步（同步前会校验，过不去就走不到下面）：例如维护者的映射要的节点不在可选节点里，
 	# cca edit 改不了，只能在这里重新选可选节点。只是路由器上的节点改了名的话，先跟上就好了
 	py validate all >/dev/null 2>&1 || nodes_follow || true
 	if py validate all >/dev/null 2>&1; then
 		router_sync
-		case $? in 0|3) ;; *) return 1 ;; esac
+		case $? in
+			0|3) ;;
+			*) gui_fail sync_failed "同步路由器没有成功（详情里有路由器说的原因）"; return 1 ;;
+		esac
 	else
 		bad=1
 	fi
 	while IFS= read -r nd; do list="${list:+${list}、}${nd}"; done < <(py nodes-allowed | cut -f1)
+	if [ -n "$PROMPT_GUI" ]; then   # App 里直接显示可选节点（现在的预先选好），不用先问一句要不要重新选
+		msg=""
+		[ -z "$bad" ] || msg="账号表现在有错误，先重新选可选节点：$(py validate all 2>&1 | head -n 3 | tr '\n' ' ')"
+		pick_allowed_nodes "$msg" || return 1
+		nd=""
+		while IFS= read -r i; do nd="${nd:+${nd}、}${i}"; done < <(py nodes-allowed | cut -f1)
+		if { [ "$nd" != "$list" ] || [ -n "$bad" ]; } && [ -n "$list" ] && [ -n "$(py keys)" ]; then
+			router_sync
+			case $? in
+				0|3) ;;
+				*) fail_warn sync_failed "可选节点已经保存，同步路由器没有成功：修好后运行 cca router sync" ;;
+			esac
+		fi
+		gui_done router_ready "路由器配置好了：${user}@${host}，可选节点 ${nd}"
+		return 0
+	fi
 	if [ -z "$list" ]; then
 		pick_allowed_nodes || return 1
 	elif [ -n "$bad" ] || confirm "账号可选的出口节点：${list}。要重新选吗？" n; then
@@ -8583,12 +8861,79 @@ cmd_router_setup() {
 	return 0
 }
 
-pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出口，存进 config.json 的 nodes（同时记下各节点的服务器地址摘要）
+router_form() {   # 提问会话：地址、用户、端口一页，连不上的带着原因重问。结果在 F_host F_user F_port
+	local err=""
+	F_host=$ROUTER_HOST F_user=${ROUTER_USER:-root} F_port=${ROUTER_PORT:-22}
+	while :; do
+		ask_fields router.basic "配置路由器" "${ROUTER_FORM_WHY:-装了 OpenClash 或 ShellCrash 的路由器。cca 经 SSH 把账号的端口池同步上去。}" \
+			"host|text|host||路由器地址|例如 192.168.1.2|${F_host}|${err}" \
+			"user|text|sshuser||SSH 用户||${F_user}" \
+			"port|text|port||SSH 端口||${F_port}" || return 1
+		port_open "$F_host" "$F_port" && return 0
+		err="连不上 ${F_host}:${F_port}：路由器开着吗？地址和端口对吗？（不在家里的网络时也连不上）"
+	done
+}
+
+router_key_install() {   # router_key_install 用户 地址 端口 密钥路径：用密码登录一次，把公钥装到路由器上。终端里 ssh 自己问密码；App 里在表单里输入
+	local user="$1" host="$2" port="$3" key="$4" pw err="" out
+	if [ -z "$PROMPT_GUI" ]; then
+		ssh -p "$port" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
+			-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password \
+			"$user@$host" "$REMOTE_ADD_KEY" < "$key.pub" >/dev/null || die "安装公钥失败"
+		return 0
+	fi
+	while :; do
+		pw=$(ask_secret "${user}@${host} 的密码" q=router.password "title=登录路由器" \
+			"message=用密码登录一次，把 cca 的 SSH 公钥装到 ${host} 上，之后就不用密码了。密码只用这一次，不保存。" label=密码 "error=$err") || return 1
+		if out=$(router_ssh_password "$user" "$host" "$port" "$key" "$pw"); then pw=""; return 0; fi
+		pw=""
+		case "$out" in
+			*"Permission denied"*) err="密码不对，再试一次" ;;
+			*) FAIL_CODE=sync_failed die "安装公钥失败：$(printf '%s' "$out" | tail -n 1)" ;;
+		esac
+	done
+}
+
+# 用 App 里输入的密码跑一次 ssh。密码不进命令行和环境变量：ssh 经 SSH_ASKPASS 取，取的是私有目录（700）里的一个 FIFO，
+# 写的一方是 bash 内建的 printf（子 shell，没有新的进程映像）。askpass 读完就删掉 FIFO，ssh 再问时读不到东西，不会卡住。stdout：ssh 的报错
+router_ssh_password() {
+	local user="$1" host="$2" port="$3" key="$4" pw="$5" d w out rc
+	d=$(mktemp -d "${TMPDIR:-/tmp}/cca-askpass.XXXXXX") || return 1
+	if ! mkfifo -m 600 "$d/pw"; then rm -rf "$d"; return 1; fi
+	cat > "$d/ask" <<'ASK'
+#!/bin/sh
+f="${0%/*}/pw"
+[ -p "$f" ] || exit 1
+cat "$f"
+rm -f "$f"
+ASK
+	chmod 700 "$d/ask"
+	( printf '%s\n' "$pw" > "$d/pw" ) 2>/dev/null &
+	w=$!
+	pw=""
+	out=$(SSH_ASKPASS="$d/ask" SSH_ASKPASS_REQUIRE=force ssh -p "$port" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
+		-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
+		"$user@$host" "$REMOTE_ADD_KEY" < "$key.pub" 2>&1 >/dev/null); rc=$?
+	kill "$w" 2>/dev/null
+	wait "$w" 2>/dev/null
+	rm -rf "$d"
+	printf '%s' "$out"
+	return $rc
+}
+
+pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出口，存进 config.json 的 nodes（同时记下各节点的服务器地址摘要）。
+	                      # pick_allowed_nodes [给图形界面的说明]
 	local -a all picked
 	local n=0 i nd sel w tries=0 list="" raw
 	raw=$(router_node_list 2>/dev/null)
 	while IFS= read -r nd; do [ -n "$nd" ] && { all[n]="$nd"; n=$((n + 1)); }; done < <(printf '%s\n' "$raw" | awk -F '\t' '$1 == "P" { print $2 }')
-	[ $n -gt 0 ] || { warn "没从路由器读到节点（路由器上的 OpenClash / ShellCrash 导入过配置了吗？）"; return 1; }
+	[ $n -gt 0 ] || { fail_warn node_missing "没从路由器读到节点（路由器上的 OpenClash / ShellCrash 导入过配置了吗？）"; return 1; }
+	if [ -n "$PROMPT_GUI" ]; then
+		pick_nodes_form "${1:-}" || return 1
+		for nd in "${picked[@]}"; do list="${list:+${list}、}${nd}"; done
+		okay "账号可选的出口节点：${list}"
+		return 0
+	fi
 	say ""
 	say "  选出允许账号使用的出口节点（之后每个账号从这些里面挑一个）："
 	say ""
@@ -8611,6 +8956,28 @@ pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出�
 		return 0
 	done
 	return 1
+}
+
+pick_nodes_form() {   # pick_allowed_nodes 在提问会话里的那一页（用它的 all、n、raw、picked）：现在的预先选好，还有账号在用的不能去掉
+	local msg="${1:-之后每个账号从这些节点里挑一个出口，最好一个账号一个节点。}" cur err="" sel w i lost
+	local -a opts
+	for ((i = 0; i < n; i++)); do opts[i]="opt=$((i + 1))"$'\t'"${all[i]}"$'\t'; done
+	cur=$(py nodes-preselect "${all[@]}")
+	while :; do
+		sel=$(gui_ask multi "可选的出口节点" "$cur" q=router.nodes "title=选择账号可用的出口节点" "message=$msg" label=出口节点 min=1 "error=$err" "${opts[@]}") || return 1
+		picked=()
+		for w in $sel; do
+			case "$w" in *[!0-9]*) continue ;; esac
+			[ "$w" -ge 1 ] && [ "$w" -le $n ] && picked[${#picked[@]}]="${all[w - 1]}"
+		done
+		if [ ${#picked[@]} -eq 0 ]; then err="至少选一个"; continue; fi
+		lost=$(py nodes-lost "${picked[@]}")
+		[ -z "$lost" ] && break
+		err="这些节点还有账号在用，不能去掉：${lost}。先在账号表里给它们换个节点"
+		cur=$sel
+	done
+	py set-nodes "${picked[@]}" || return 1
+	printf '%s\n' "$raw" | py nodes-follow >/dev/null   # 记下各可选节点的摘要：以后在路由器上改了名也认得出
 }
 
 router_node_list() {   # 路由器上的节点（P<TAB>名字<TAB>类型<TAB>服务器<TAB>端口）：拿这一版的路由器脚本现跑，不依赖路由器上部署的版本。
@@ -8791,8 +9158,8 @@ cmd_add() {   # cca [codex] add [api]
 	[ "${1:-}" = api ] && { cmd_add_api; return; }
 	need_tty
 	if ! router_ready; then
-		gui_router_later && return 1
 		info "官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
+		ROUTER_FORM_WHY="官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器）。"
 		cmd_router_setup || return 1
 	fi
 	say ""
@@ -8860,8 +9227,8 @@ cmd_add_api() {
 		node=$(pick_node direct q=api.node "title=${title}" "message=${alias} 走哪个出口？国内的服务一般直连；要经代理的选一个节点") || return 1
 		say ""
 		if [ -n "$node" ] && ! router_ready; then
-			gui_router_later && return 1
 			info "走节点要先配置路由器"
+			ROUTER_FORM_WHY="走节点要先配置路由器。"
 			cmd_router_setup || return 1
 		fi
 	fi
@@ -8965,6 +9332,7 @@ router_needed() { router_ready || [ -n "$(py ports)" ]; }
 cmd_edit() {
 	local before had
 	need_tty
+	if [ -n "$PROMPT_GUI" ]; then edit_form; return; fi
 	before=$(digest)
 	had=$(py policy-have)   # 映射里的账号：编辑时删掉的要记下来，不然 validate（经过 ctx）又会按映射把它加回来
 	${EDITOR:-vi} "$TABLE" <&3 3<&-
@@ -8983,6 +9351,47 @@ cmd_edit() {
 	fi
 	launchers_sync
 	api_keys_ensure
+}
+
+edit_form() {   # 提问会话里的 cca [codex] edit：表单改常用项（节点、接口地址、模型、环境变量），cca 校验、写表；表单改不了的（账号表不是 JSON、键写错了）才去终端
+	local spec sum seq id out rc answers="" left
+	local -a ids
+	while :; do
+		rc=0
+		spec=$(printf '%s' "$answers" | py edit-form) || rc=$?
+		case $rc in
+			0) ;;
+			3) gui_terminal edit "账号表有表单改不了的问题：在终端里修一下（${spec}）" edit
+			   FAIL_CODE=table_invalid die "账号表有表单改不了的问题：${spec}" ;;
+			4) die "$spec" ;;
+			5) FAIL_CODE=no_router die "$spec" ;;   # App 的补救按钮：配置路由器
+			*) return 1 ;;
+		esac
+		sum=${spec%%$'\n'*}
+		spec=${spec#*$'\n'}
+		seq=$(printf '%s\n' "$spec" | py prompt-emit) || gui_abort
+		ids=()
+		while IFS= read -r id; do
+			case "$id" in field=*) ids[${#ids[@]}]=${id#field=} ;; esac
+		done <<< "$spec"
+		answers=""
+		for id in "${ids[@]}"; do
+			gui_answer "$seq" "$id"
+			answers="${answers}${id}"$'\t'"${ANSWER}"$'\n'
+		done
+		rc=0
+		out=$(printf '%s' "$answers" | py edit-apply "$sum") || rc=$?
+		[ $rc -eq 0 ] && break
+		[ $rc -eq 3 ] || return 1
+		answers="${answers}${out}"$'\n'   # 问题（!字段<TAB>原因）带回去，已填的也带回去
+	done
+	[ "$out" != same ] || [ "$(digest)" != "$(py get synced)" ] || return 0   # 什么都没改
+	py secrets-forget   # 换了服务商、去掉了账号表里的 key：钥匙串里跟着清
+	if router_needed; then router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"; fi
+	launchers_sync
+	api_keys_ensure
+	if ! left=$(py validate 2>&1); then gui_fail table_invalid "账号表还有问题：${left//$'\n'/；}"; fi
+	[ "$out" = same ] || gui_done saved "${TOOL_LABEL} 的账号表已保存"
 }
 
 cmd_rename() {   # cca [codex] rename <账号> <新别名>：改别名（新别名写 - 去掉别名，只留邮箱）。只换账号表里的键：
@@ -10026,23 +10435,25 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户端按提示手动加配置
 	local miss was
 	need_tty
-	py validate all || die "账号表有错误：先修正（Claude 账号用 cca edit，Codex 账号用 cca codex edit）"   # 本机端口池里有各工具的账号
+	py validate all || FAIL_CODE=table_invalid die "账号表有错误：先修正（Claude 账号用 cca edit，Codex 账号用 cca codex edit）"   # 本机端口池里有各工具的账号
 	load_local
-	[ "$LOCAL_SLOTS" -gt 0 ] || { warn "还没有账号（${CMD} add）"; return 1; }
+	[ "$LOCAL_SLOTS" -gt 0 ] || { fail_warn error "还没有账号（${CMD} add）"; return 1; }
 	[ "$VERGE_FOUND" = 1 ] || { local_setup_other; return; }
 	say ""
 	say "  检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
 	say "  开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组 CCA-n，启动账号前 cca 把它切到账号的节点；然后让 Clash Verge 重新加载一次配置。"
 	say "  原来的配置、规则和系统代理都不变；不想用了运行 cca local off 删掉。"
 	[ -z "$FILL_ID" ] || say "  维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。"
-	confirm "现在配置 Clash Verge 吗？" y || return 1
+	confirm "现在配置 Clash Verge 吗？" y q=local.verge "title=配置本机 Clash" \
+		"detail=检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST} 开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组，启动账号前切到账号的节点，然后让 Clash Verge 重新加载一次配置。原来的配置、规则和系统代理都不变。${FILL_ID:+维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。}" || { gui_cancelled; return 1; }
 	was="$LOCAL_CLIENT"
 	py local-set client clash-verge || return 1
 	[ "$was" != builtin ] || core_retire
-	local_ensure || return 1
+	local_ensure || { gui_fail local_unavailable "Clash Verge 的端口池没有就绪（详情里有原因）"; return 1; }
 	miss=$(py local-missing "$VERGE_DIR/clash-verge.yaml")
-	[ -n "$miss" ] && warn "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名（或服务器地址相同）的节点"
+	[ -z "$miss" ] || fail_warn node_missing "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名（或服务器地址相同）的节点"
 	okay "本机端口池已就绪：Clash Verge 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
+	gui_done local_ready "本机端口池已就绪：Clash Verge 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
 }
 local_setup_other() {   # 没装 Clash Verge：用内置代理（默认），或者手动配置别的基于 mihomo 的客户端
 	say ""
@@ -10053,11 +10464,51 @@ local_setup_other() {   # 没装 Clash Verge：用内置代理（默认），或
 		manual_setup
 		return
 	fi
+	if [ -n "$PROMPT_GUI" ]; then
+		local w o1="opt=1"$'\t'"cca 内置的代理"$'\t'"第一次要下载约 21MB" o2="opt=2"$'\t'"手动配置别的 Clash 客户端"$'\t'"基于 mihomo（Clash Meta 内核）的都可以"
+		w=$(gui_ask choice "用哪个" 1 q=local.client "title=配置本机 Clash" label=在外面走哪个 \
+			"message=没找到 Clash Verge。可以用 cca 内置的代理：在这个 App 里跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST} 每个端口走一个账号的节点，节点用在家时从路由器拷的那份。" \
+			"$o1" "$o2") || return 1
+		if [ "$w" = 2 ]; then manual_setup; return; fi
+		core_setup
+		return
+	fi
 	confirm "用内置代理吗？（选 n 手动配置别的客户端）" y || { manual_setup; return; }
 	core_setup
 }
+manual_form() {   # 提问会话里的手动配置：要加的配置和外部控制接口一页，连不上的带着原因重问
+	local snippet err="" ctl secret was="$1"
+	snippet=$(py local-snippet)
+	F_ctl=""
+	while :; do
+		ask_fields local.manual "手动配置本机 Clash" "基于 mihomo（Clash Meta 内核）的客户端都可以：把下面 listeners 和 proxy-groups 的条目分别追加到客户端配置（或覆写）里的同名列表，保存并重新加载，再打开它的外部控制（external-controller）。" \
+			"snippet|code|||要加的配置||snippet" \
+			"ctl|text|controller||外部控制地址|例如 127.0.0.1:9090；Unix socket 写 unix:/路径|${F_ctl}|${err}" \
+			"secret|secret?|any||密钥（可选）|外部控制的 secret，没有就空着" || return 1
+		ctl=$F_ctl secret=$F_secret
+		F_secret=""
+		case "$ctl" in unix:*|http://*|https://*) ;; *) ctl="http://$ctl" ;; esac
+		py local-set client manual controller "$ctl" || return 1
+		printf '%s' "$secret" | py local-secret || return 1
+		secret=""
+		if [ "$was" = builtin ]; then core_retire; was=""; fi
+		load_local
+		lctl GET /version
+		[ "$LCODE" = 200 ] && return 0
+		py local-set client ''
+		err="连不上 ${ctl}（HTTP ${LCODE}）：检查地址和密钥"
+	done
+}
 manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：用户把配置加进去，cca 经它的外部控制接口切换节点
 	local ctl secret was="$LOCAL_CLIENT"
+	if [ -n "$PROMPT_GUI" ]; then
+		manual_form "$was" || return 1
+		py local-set applied "$LOCAL_WANT"
+		local_ensure || { gui_fail local_unavailable "本机 Clash 的端口池没有就绪（详情里有原因）"; return 1; }
+		okay "本机端口池已就绪：127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
+		gui_done local_ready "本机端口池已就绪：127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
+		return 0
+	fi
 	say ""
 	say "  其它基于 mihomo（Clash Meta 内核）的客户端也可以，要手动做两件事："
 	say "  1. 把下面 listeners 和 proxy-groups 的条目，分别追加到客户端配置（或覆写）里的同名列表，保存并重新加载："
@@ -10070,7 +10521,8 @@ manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：�
 	[ -n "$ctl" ] || return 1
 	case "$ctl" in unix:*|http://*|https://*) ;; *) ctl="http://$ctl" ;; esac
 	secret=$(ask "  密钥 secret（没有就直接回车）：" "")
-	py local-set client manual controller "$ctl" secret "$secret" || return 1
+	py local-set client manual controller "$ctl" || return 1
+	printf '%s' "$secret" | py local-secret || return 1
 	[ "$was" != builtin ] || core_retire
 	load_local
 	lctl GET /version
@@ -10220,9 +10672,10 @@ core_setup() {   # cca local setup 选了内置代理：在家时先从路由器
 		core_nodes_fetch || warn "没能从路由器拷到节点定义：在家启动账号时会再试"
 	fi
 	miss=$(py core-missing)
-	[ -z "$miss" ] || warn "内置代理里没有这些节点的定义：${miss}。用它们的账号在外面会被拒绝连接，直到在家连上路由器、拷到它们"
-	local_ensure || return 1
+	[ -z "$miss" ] || fail_warn node_missing "内置代理里没有这些节点的定义：${miss}。用它们的账号在外面会被拒绝连接，直到在家连上路由器、拷到它们"
+	local_ensure || { gui_fail local_unavailable "内置代理没有就绪（详情里有原因）"; return 1; }
 	okay "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}（在界面 App 里运行），连不上路由器时账号自动走这里"
+	gui_done local_ready "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
 }
 core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面 App 在托管内核、端口都在监听、每个槽位切到账号的节点
 	local rc
@@ -10965,7 +11418,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/codex.json" ] && cx=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s}},' "$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")"
 	printf '"gui":{"app":%s,"app_version":%s,"staged_version":%s}}\n' "$(jstr "$GUI_APP")" "$(jopt "$av")" "$(jopt "$sv")"
@@ -11174,7 +11627,12 @@ GITHUB_HOST_KEYS=(   # GitHub 公布的 SSH 主机公钥（api.github.com/meta�
 	'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg='
 )
 
-policy_log() { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$POLICY_DIR/log" 2>/dev/null; }
+policy_log() {   # 最近的拉取结果（App 一小时拉一次：只留最后 200 行）
+	printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$POLICY_DIR/log" 2>/dev/null
+	if [ "$(wc -l 2>/dev/null < "$POLICY_DIR/log" || echo 0)" -gt 300 ]; then
+		tail -n 200 "$POLICY_DIR/log" > "$POLICY_DIR/log.$$" 2>/dev/null && mv -f "$POLICY_DIR/log.$$" "$POLICY_DIR/log"
+	fi
+}
 
 policy_clone() {   # policy_clone 仓库 目录：0 拉到了；1 连不上（可以重试）；2 GitHub 拒绝了（重试也没用）。原因在 POLICY_ERR
 	# 只用这台机器的 deploy key、只认 GitHub 的主机公钥，不读用户自己的 git / ssh 配置和 ssh-agent：ssh 要是先拿用户
@@ -11249,23 +11707,28 @@ policy_rows() {   # 这台机器上按映射固定出口的账号、映射里还
 	[ -z "$rows" ] || say "$rows"
 }
 
-policy_pull() {   # 现在就拉一次，说明结果；拉不到时说明原因（上次拉到的照用）
-	local before fill
+policy_pull() {   # policy_pull [--json]：现在就拉一次，说明结果；拉不到时说明原因（上次拉到的照用）。--json 是 App 的定时拉取（PROTOCOL 4.9）：stdout 一行 JSON
+	local before fill summary changed=false json="${1:-}"
+	case "$json" in ''|--json) ;; *) die "用法: cca policy pull [--json]" ;; esac
 	before=$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)
+	touch "$POLICY_DIR/checked" 2>/dev/null   # 记下拉过了：启动时的 policy_hook 不用再拉，App 据此算下一次
 	if policy_fetch; then
 		policy_log "拉取成功"
 		fill=$(py fill-summary)
-		if [ "$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)" = "$before" ]; then okay "映射没有变化（$(py policy-summary)${fill:+；参考节点：${fill}}）"
-		else okay "已更新映射（$(py policy-summary)${fill:+；参考节点：${fill}}）"; fi
+		summary="$(py policy-summary)${fill:+；参考节点：${fill}}"
+		[ "$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)" = "$before" ] || changed=true
+		if [ "$changed" = true ]; then okay "已更新映射（${summary}）"; else okay "映射没有变化（${summary}）"; fi
 		policy_rows
-		# 账号表刚照映射改过：马上同步到路由器（后台拉取不做这一步，它不能问、不能重载，留给下一条命令）
+		# 账号表刚照映射改过：马上同步到路由器（后台拉取不做这一步，它不能问、不能重载，留给下一条命令）。要重载的这里不问（没有终端、App 的定时拉取也不弹框），
+		# 账号表已经上传，端口池等用户点“同步”或下次重启
 		if [ "$(digest)" != "$(py get synced)" ] && router_needed; then
 			router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
 		fi
+		[ -z "$json" ] || printf '{"version":1,"kind":"policy_pull","generated_epoch":%s,"changed":%s,"summary":%s}\n' "$(date +%s)" "$changed" "$(jstr "$summary")"
 		return 0
 	fi
 	policy_log "$POLICY_ERR"
-	warn "没有拉到映射：${POLICY_ERR}${before:+（接着用上次拉到的）}"
+	fail_warn policy_unavailable "没有拉到映射：${POLICY_ERR}${before:+（接着用上次拉到的）}"
 	return 1
 }
 
@@ -11377,13 +11840,13 @@ policy_request() {   # cca [codex] policy request 账号：一行给维护者直
 	else info "把上面这条命令发给维护者，在 cca 的仓库里运行"; fi
 }
 
-cmd_policy() {   # cca [codex] policy [setup [仓库] | pull | request 账号]
+cmd_policy() {   # cca [codex] policy [setup [仓库] | pull [--json] | request 账号]
 	case "${1:-}" in
 		setup) shift; policy_setup "$@" ;;
-		pull) policy_pull ;;
+		pull) shift; policy_pull "$@" ;;
 		request) shift; policy_request "$@" ;;
 		''|status) policy_status ;;
-		*) die "用法: cca policy [setup [仓库] | pull | request 账号]" ;;
+		*) die "用法: cca policy [setup [仓库] | pull [--json] | request 账号]" ;;
 	esac
 }
 

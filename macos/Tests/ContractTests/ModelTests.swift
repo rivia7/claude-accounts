@@ -99,7 +99,7 @@ import Foundation
     } else {
         check("登错号的补救：在终端里登录", false)
     }
-    check("node_missing 的补救：在终端里编辑 Codex 账号表",
+    check("node_missing 的补救：编辑 Codex 账号表",
           m2.remedy(for: failure(.nodeMissing, .codex)) == .handoff(.edit(prefix: ["codex"])))
     check("table_invalid 的补救：cca edit", m2.remedy(for: failure(.tableInvalid)) == .handoff(.edit(prefix: [])))
     check("app_missing 的补救：Claude App 给下载页，ChatGPT App 没有", m2.remedy(for: failure(.appMissing)) == .openURL(Remedy.claudeDownload)

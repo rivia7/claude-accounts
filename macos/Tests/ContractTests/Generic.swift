@@ -588,6 +588,11 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "reset":
             genericReset(f, d)
             tolerance(ResetDoc.self, f, d) { [$0.usage == nil ? 0 : 1, $0.usage?.modelScoped.count ?? 0] }
+        case "policy_pull":
+            if let doc = decodeOrFail(PolicyPullDoc.self, f, d) {
+                check("\(f) 有说明", !doc.summary.isEmpty)
+            }
+            tolerance(PolicyPullDoc.self, f, d) { [$0.changed ? 1 : 0] }
         case "update":
             genericUpdate(f, d)
             tolerance(UpdateDoc.self, f, d) { [$0.latest == nil ? 0 : 1] }

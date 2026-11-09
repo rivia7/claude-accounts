@@ -94,13 +94,14 @@ private struct RawEvent: Decodable {
     var seq: Int?
     var q: String?
     var fields: [PromptField]?
+    var submit: String?
     var tool: ToolID?
     var key: String?
 
     enum CodingKeys: String, CodingKey {
         case v, ev, code, item, scope, grant, title, question, detail, severity
         case defaultValue = "default"
-        case argv, display, message, route, node, port, seq, q, fields, tool, key
+        case argv, display, message, route, node, port, seq, q, fields, submit, tool, key
     }
 
     init(from decoder: Decoder) throws {
@@ -125,6 +126,7 @@ private struct RawEvent: Decodable {
         seq = c.int(.seq)
         q = c.string(.q)
         fields = c.lossyArray(PromptField.self, .fields)
+        submit = c.string(.submit)
         tool = c.lossy(ToolID.self, .tool)
         key = c.string(.key)
     }
@@ -161,7 +163,7 @@ enum EventLog {
                                        port: raw.port, message: raw.message, tool: raw.tool, key: raw.key))
         case .ask:
             guard let seq = raw.seq else { return .other(ev) }
-            return .ask(AskEvent(seq: seq, q: raw.q ?? "", title: raw.title ?? "", message: raw.message ?? "", fields: raw.fields ?? []))
+            return .ask(AskEvent(seq: seq, q: raw.q ?? "", title: raw.title ?? "", message: raw.message ?? "", fields: raw.fields ?? [], submit: raw.submit ?? ""))
         default:
             return .other(ev)
         }

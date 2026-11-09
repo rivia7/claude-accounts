@@ -16,6 +16,8 @@ enum CcaCommand: Sendable, Hashable {
     case app(ToolID, key: String)
     case web(ToolID, key: String)
     case routerSync
+    /// App 定时拉维护者的映射（`cca policy pull --json`，PROTOCOL 4.9）：照映射改账号表、同步路由器，要重载的不弹框（待同步，用户点“同步”）。
+    case policyPull
     /// 「更新并重新打开」的第一步：下载校验好和 cca 同版本的 App，先放着（PROTOCOL 5）。
     case guiUpdate
     /// 账号表按这个顺序排（`cca [codex] reorder 账号…`）：只改先后，端口、路由器都不动。
@@ -38,7 +40,7 @@ enum CcaCommand: Sendable, Hashable {
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _): return t
-        case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
+        case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
 
@@ -46,14 +48,14 @@ enum CcaCommand: Sendable, Hashable {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
         case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k): return k
-        case .usagePoll, .checkPoll, .reorder, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
+        case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
 
     /// 后台的活：低优先级运行。
     var isBackground: Bool {
         switch self {
-        case .usagePoll, .checkPoll, .clientCheck(force: false): return true
+        case .usagePoll, .checkPoll, .policyPull, .clientCheck(force: false): return true
         default: return false
         }
     }
@@ -74,6 +76,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app(_, let k): return prefix + ["app", k]
         case .web(_, let k): return prefix + ["web", k]
         case .routerSync: return ["router", "sync"]
+        case .policyPull: return ["policy", "pull", "--json"]
         case .guiUpdate: return ["gui", "update"]
         case .rename(_, let k, let a): return prefix + ["rename", k, a]
         case .reorder(_, let keys): return prefix + ["reorder"] + keys
@@ -94,7 +97,7 @@ enum CcaCommand: Sendable, Hashable {
         case .check: return 180
         case .checkPoll: return 300
         case .app, .web: return 120
-        case .routerSync: return 180
+        case .routerSync, .policyPull: return 180
         case .guiUpdate, .update: return 300
         case .rename, .reorder, .policyRequest: return 60
         case .reset, .updateCheck: return 150
@@ -108,7 +111,7 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .routerSync, .reset, .clientInstall: return true
-        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode: return false
+        case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
 
@@ -120,7 +123,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
         case .reorder(let t, _): return "reorder:\(t.rawValue)"   // 连着拖几次：一个接一个，最后拖的那次写在最后
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
-        case .routerSync: return "router-sync"
+        case .routerSync, .policyPull: return "router-sync"   // 拉映射时可能同步路由器：一个接一个
         case .guiUpdate, .update: return "gui-update"
         case .clientCheck, .clientMode, .clientInstall: return "client-update"
         case .check, .checkPoll, .updateCheck, .policyRequest: return nil
