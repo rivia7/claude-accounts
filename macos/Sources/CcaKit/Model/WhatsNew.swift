@@ -20,6 +20,10 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.20", title: "锁定请求改成一条命令", points: [
+            .init(symbol: "lock",
+                  text: "「请求维护者锁定节点」现在复制的是一条命令：发给维护者，在 cca 的仓库里运行，确认后就写进映射并发布。请求里不再带别名。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.19", title: "平时在后台运行，节点可以请求维护者锁定", points: [
             .init(symbol: "menubar.rectangle",
                   text: "cca 平时在后台运行，只有菜单栏图标，点「打开主窗口」时才出现在 Dock。关掉窗口、在 Dock 里点“退出”、按 ⌘Q 都只是回到后台，用量继续更新，内置代理不停；要彻底退出，点菜单栏面板里的「退出」。"),
