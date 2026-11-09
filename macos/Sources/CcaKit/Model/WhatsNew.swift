@@ -20,6 +20,10 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.1", title: "在账号菜单里查看 API 额度", points: [
+            .init(symbol: "creditcard",
+                  text: "账号的右键菜单和「…」里多了「查看 API 额度」：用这个账号自己的浏览器和网络出口打开控制台的账单页，订阅附带的每月 API 额度和余额都在那里。第一次打开时要登录控制台。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "3.0.0", title: "cca 3.0 正式版", points: [
             .init(symbol: "checkmark.seal",
                   text: "这是 cca 3.0 正式版，包含之前各个测试版的全部内容。以后的正式版会自动更新，不用再手动指定版本号。"),
