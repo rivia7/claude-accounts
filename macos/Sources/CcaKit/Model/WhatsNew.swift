@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0", title: "2.9.0 正式版", points: [
+            .init(symbol: "checkmark.seal",
+                  text: "这是 2.9.0 的正式版，包含之前各个测试版的全部内容。以后的正式版默认会自动更新，不用再手动指定版本号。"),
+            .init(symbol: "book",
+                  text: "想看每个版本更新了什么：「帮助」菜单里的「更新说明」可以一张张翻。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.22", title: "可以马上拉取维护者的映射", points: [
             .init(symbol: "arrow.down.to.line",
                   text: "不用等每小时的自动检查：在「节点分流」页点「拉取映射」，或者在账号的右键菜单和「…」里选「现在拉取映射」，维护者刚发布的改动马上就能拉下来。"),
