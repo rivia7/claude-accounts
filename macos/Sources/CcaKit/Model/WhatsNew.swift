@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.21", title: "账号表、路由器和本机 Clash 都在 App 里填", points: [
+            .init(symbol: "tablecells",
+                  text: "编辑 Claude 和 ChatGPT 的账号表不用再开终端：节点、接口地址、模型、环境变量都在 App 里改，不合格的地方直接写在输入框下面。"),
+            .init(symbol: "wifi.router",
+                  text: "配置路由器和本机 Clash 也都在 App 里填。路由器的 SSH 密码在 App 里输入，只用这一次，不保存。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "cca 开着时每小时看一次维护者的节点映射，有变化就自动改好账号表并同步路由器。需要重载路由器时不打扰你，会显示待同步，点「同步」时再问。"),
+            .init(symbol: "menubar.rectangle",
+                  text: "点「打开主窗口」后，菜单栏的小窗口会自动收起。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.20", title: "锁定请求改成一条命令", points: [
             .init(symbol: "lock",
                   text: "「请求维护者锁定节点」现在复制的是一条命令：发给维护者，在 cca 的仓库里运行，确认后就写进映射并发布。请求里不再带别名。"),
