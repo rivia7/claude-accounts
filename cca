@@ -5044,7 +5044,9 @@ def usage_notes(rl, now):
     out, seen = [], set()
     n = reset_count(rl)   # Codex：0 次也写；codex 没给（旧版本）就不写
     if n is not None:
-        out.append('剩余重置 %d 次' % n)
+        e = reset_credits_view(rl.get('reset_credits')).get('next_expires_epoch') if n else None
+        lt = time.localtime(e) if is_num(e) and e > now else None
+        out.append('剩余重置 %d 次' % n + ('（%s%d 月 %d 日过期）' % ('最早 ' if n > 1 else '', lt.tm_mon, lt.tm_mday) if lt else ''))
     pairs = [('Opus', rl.get('seven_day_opus')), ('Sonnet', rl.get('seven_day_sonnet'))]
     pairs += [(m.get('display_name'), m) for m in dicts(rl, 'model_scoped')]
     for label, w in pairs:   # 没用过的（0%）不写，免得一排 0%；JSON 里照样都有

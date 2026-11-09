@@ -299,9 +299,9 @@ struct ResetCreditsRow: View {
                 HStack(spacing: 6) {
                     Text("还能重置额度")
                     Text("\(count) 次").monospacedDigit().fontWeight(.medium).foregroundStyle(.primary)
-                    if count > 0, let e = credits.nextExpiresEpoch {
+                    if count > 0, let expiry = Texts.resetExpiry(credits, now: now) {
                         Text("·")
-                        Text((count > 1 ? "最早一次 " : "") + Texts.expiryText(epoch: e, now: now)).lineLimit(1)
+                        Text(expiry).lineLimit(1)
                     }
                 }
             } icon: {

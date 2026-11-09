@@ -126,6 +126,19 @@ enum Texts {
         return (c.year == thisYear ? day : "\(c.year ?? 0) 年 " + day) + "过期"
     }
 
+    /// 重置机会什么时候过期：「最早一次 11 月 21 日过期」（只有一次时不说最早）；不过期、cca 没说时是 nil。
+    static func resetExpiry(_ rc: ResetCredits, now: Double, calendar: Calendar = .current) -> String? {
+        guard let e = rc.nextExpiresEpoch else { return nil }
+        return ((rc.availableCount ?? 0) > 1 ? "最早一次 " : "") + expiryText(epoch: e, now: now, calendar: calendar)
+    }
+
+    /// 总览卡片的提示和读屏：「还能重置额度 2 次，最早一次 11 月 21 日过期」；没有重置机会时是 nil。
+    static func resetSummary(_ rc: ResetCredits?, now: Double, calendar: Calendar = .current) -> String? {
+        guard let rc, let n = rc.availableCount, n > 0 else { return nil }
+        let count = "还能重置额度 \(n) 次"
+        return resetExpiry(rc, now: now, calendar: calendar).map { count + "，" + $0 } ?? count
+    }
+
     static func product(_ tool: ToolID) -> String {
         switch tool {
         case .claude: return "Claude"
@@ -402,12 +415,13 @@ enum Texts {
     }
 
     /// 读屏念的一整句：“工作，Claude 账号，Ultra，尊贵套餐，Claude App 开着”。
-    static func deskLabel(_ e: Employee, appLabel: String, now: Double) -> String {
+    static func deskLabel(_ e: Employee, appLabel: String, now: Double, resets: ResetCredits? = nil) -> String {
         let a = e.account
         var parts = [a.displayName, department(e.department)]
         if let p = nonEmpty(a.plan) { parts.append(planName(p, tier: e.tier)) }
         parts.append(mood(e, appLabel: appLabel, now: now))
         parts += flags(e.flags, appLabel: appLabel)
+        if let r = resetSummary(resets, now: now) { parts.append(r) }
         return parts.joined(separator: "，")
     }
 }

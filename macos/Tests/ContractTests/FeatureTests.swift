@@ -51,6 +51,20 @@ func whatsNewTests() {
           && Texts.expiryText(epoch: 1798761600, now: now, calendar: cal) == "2027 年 1 月 1 日过期"
           && Texts.expiryText(epoch: now - 1, now: now, calendar: cal) == "已过期",
           Texts.expiryText(epoch: 1798761600, now: now, calendar: cal))
+    func credits(_ count: Int?, expires: Double?) -> ResetCredits? {
+        let obj: [String: Any] = ["availableCount": count ?? NSNull(), "next_expires_epoch": expires ?? NSNull()]
+        return (try? JSONSerialization.data(withJSONObject: obj)).flatMap { try? JSONDecoder().decode(ResetCredits.self, from: $0) }
+    }
+    check("重置机会的到期日：几次时说最早一次，只有一次不说，不过期时没有",
+          credits(2, expires: 1795251600).flatMap { Texts.resetExpiry($0, now: now, calendar: cal) } == "最早一次 11 月 21 日过期"
+          && credits(1, expires: 1795251600).flatMap { Texts.resetExpiry($0, now: now, calendar: cal) } == "11 月 21 日过期"
+          && credits(2, expires: nil).flatMap { Texts.resetExpiry($0, now: now, calendar: cal) } == nil)
+    check("总览的一句：次数带到期日；0 次、不知道次数时没有",
+          Texts.resetSummary(credits(2, expires: 1795251600), now: now, calendar: cal) == "还能重置额度 2 次，最早一次 11 月 21 日过期"
+          && Texts.resetSummary(credits(1, expires: nil), now: now, calendar: cal) == "还能重置额度 1 次"
+          && Texts.resetSummary(credits(0, expires: nil), now: now, calendar: cal) == nil
+          && Texts.resetSummary(credits(nil, expires: 1795251600), now: now, calendar: cal) == nil
+          && Texts.resetSummary(nil, now: now, calendar: cal) == nil)
 }
 
 @MainActor func featureModelTests() async {

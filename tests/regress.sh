@@ -925,8 +925,11 @@ json.dump(j, open(p, 'w'))
 PY
 }
 ccanned alice@example.com 13 41 pro 2; n_usage=$(grep -c "^USAGE: " claude.log)
-out=$(run cca codex usage 2>&1); rc=$?
-ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐（叫法和 codex 的 /status 一样，pro 是 Pro 200）、5 小时、本周，备注里先写剩余的重置次数，再是别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -q "剩余重置 2 次；GPT-5-Pro 本周 30%；credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
+out=$(run COLUMNS=160 cca codex usage 2>&1); rc=$?
+ok "cca codex usage：经账号的端口让 codex 的 app-server 查（不发模型请求），表里有套餐（叫法和 codex 的 /status 一样，pro 是 Pro 200）、5 小时、本周，备注里先写剩余的重置次数，再是别的额度和 credits；第三方 API 账号不查" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%  2 小时 1[0-9] 分后重置 +41%  周. [0-9:]+ 重置" && printf "%s" "$out" | grep -qE "剩余重置 2 次（最早 [0-9]+ 月 [0-9]+ 日过期）；GPT-5-Pro 本周 30%；credits 余额 12.5" && printf "%s" "$out" | grep -q "第三方 API 账号没有订阅用量，不查：kimi" && grep -q "RPC rateLimits email=alice@example.com https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
+ccanned alice@example.com 13 41 pro 1; out=$(run cca codex usage 2>&1)
+ok "cca codex usage：只有一次重置机会时不说“最早”，到期日照样写" 'printf "%s" "$out" | grep -qE "剩余重置 1 次（[0-9]+ 月 [0-9]+ 日过期）"'
+ccanned alice@example.com 13 41 pro 2
 out=$(run cca codex usage --json 2>/dev/null)
 ok "cca codex usage --json：注明 tool=codex，窗口和 Claude 的一样写法；credits、reset_credits（剩余重置次数和明细）是 codex 原样给的" 'printf "%s" "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); a=d[\"accounts\"][0]; sys.exit(0 if d[\"tool\"]==\"codex\" and a[\"plan\"]==\"Pro 200\" and a[\"five_hour\"][\"utilization\"]==13 and a[\"seven_day\"][\"utilization\"]==41 and a[\"credits\"][\"balance\"]==\"12.5\" and a[\"reset_credits\"][\"availableCount\"]==2 and len(a[\"reset_credits\"][\"credits\"])==2 and a[\"source\"]==\"live\" else 1)"'
 out=$(run cca usage 2>&1)
@@ -936,7 +939,7 @@ ok "cca codex 菜单：附上最近一次的用量" 'printf "%s" "$m" | grep -q 
 touch "$T/codex_usage/unsupported"
 out=$(run COLUMNS=200 cca codex usage alice 2>&1)
 rm -f "$T/codex_usage/unsupported"
-ok "codex 不支持查用量：提示升级，用缓存顶上（套餐、剩余重置次数也取缓存里的）" 'printf "%s" "$out" | grep -q "这个版本的 Codex 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%" && printf "%s" "$out" | grep -q "升级后再试）；剩余重置 2 次；GPT-5-Pro"'
+ok "codex 不支持查用量：提示升级，用缓存顶上（套餐、剩余重置次数也取缓存里的）" 'printf "%s" "$out" | grep -q "这个版本的 Codex 查不了用量" && printf "%s" "$out" | grep -qE "alice@example.com +Pro 200 +13%" && printf "%s" "$out" | grep -qE "升级后再试）；剩余重置 2 次（最早 [0-9]+ 月 [0-9]+ 日过期）；GPT-5-Pro"'
 touch "$T/codex_usage/hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca codex usage alice 2>&1); t1=$(date +%s)
 rm -f "$T/codex_usage/hang"

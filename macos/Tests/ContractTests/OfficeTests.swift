@@ -137,6 +137,9 @@ func officeTests() async {
     check("读屏念的一整句", Texts.deskLabel(Employee.make(acct(["key": "工作(bob@example.com)", "name": "工作", "plan": "Ultra",
           "plan_tier": "premium", "app": ["running": true]]), usage: nil, live: nil, now: now0), appLabel: "Claude App", now: now0)
           == "工作，Claude 账号，Ultra，尊贵套餐，Claude App 开着")
+    let oneReset = try? JSONDecoder().decode(ResetCredits.self, from: Data(#"{"availableCount":1}"#.utf8))
+    check("读屏也念还能重置几次", Texts.deskLabel(Employee.make(acct(), usage: nil, live: nil, now: now0), appLabel: "", now: now0, resets: oneReset)
+          .hasSuffix("，还能重置额度 1 次"))
     check("工位上的短写法", Texts.mood(Employee.make(two, usage: nil, live: nil, now: now0), appLabel: "", now: now0, brief: true)
           == "在用，已 1 分钟")
 

@@ -15,7 +15,7 @@ struct OfficePage: View {
                 VStack(alignment: .leading, spacing: 26) {
                     header(office)
                     TipCard(id: "office-page", title: "这一页怎么看",
-                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。套餐看徽章前面的小记号，彩色的四角星是最高档。点卡片看详情，右键可以直接打开，拖到别的卡片上可以调整顺序。")
+                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。套餐看徽章前面的小记号，彩色的四角星是最高档。图左下角的小票是还能重置额度几次，一张一次，旁边写着最早什么时候过期。点卡片看详情，右键可以直接打开，拖到别的卡片上可以调整顺序。")
                     if model.state == nil {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -98,7 +98,8 @@ private struct DeskCard: View {
 
     var body: some View {
         let e = employee, a = employee.account
-        let label = Texts.deskLabel(e, appLabel: model.appLabel(a.tool), now: now)
+        let resets = model.usage(for: a)?.resetCredits
+        let label = Texts.deskLabel(e, appLabel: model.appLabel(a.tool), now: now, resets: resets)
         let on = hover.wrappedValue
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         Button {
@@ -108,6 +109,7 @@ private struct DeskCard: View {
                 DeskScene(employee: e, animate: animate, now: now)
                     .overlay(alignment: .topLeading) { workBadge(e, a) }
                     .overlay(alignment: .topTrailing) { flagBadge(e, a) }
+                    .overlay(alignment: .bottomLeading) { resetBadge(resets) }
                 info(a, e)
             }
             .padding(12)
@@ -195,13 +197,25 @@ private struct DeskCard: View {
                     if e.sessions > 1 { Text("\(e.sessions)").monospacedDigit() }
                 }
             }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(.background.opacity(0.85)))
-            .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 0.5))
+            .sceneBadge()
             .help(Texts.working(app: e.app, appLabel: model.appLabel(a.tool), sessions: e.sessions, since: e.since, now: now))
+        }
+    }
+
+    /// 左下角：还能重置几次额度，一张小票一次（太多了写 +N），旁边是最早什么时候过期。没有机会时不画。
+    @ViewBuilder
+    private func resetBadge(_ rc: ResetCredits?) -> some View {
+        if let rc, let n = rc.availableCount, let summary = Texts.resetSummary(rc, now: now) {
+            let drawn = min(n, 5)
+            HStack(spacing: 3) {
+                ForEach(0..<drawn, id: \.self) { _ in Image(systemName: "ticket.fill") }
+                if n > drawn { Text("+\(n - drawn)").monospacedDigit() }
+                if let epoch = rc.nextExpiresEpoch {
+                    Text(Texts.expiryText(epoch: epoch, now: now)).lineLimit(1).padding(.leading, 2)
+                }
+            }
+            .sceneBadge()
+            .help(summary)
         }
     }
 
@@ -219,6 +233,18 @@ private struct DeskCard: View {
         }
     }
 
+}
+
+private extension View {
+    /// 插画角上的小胶囊：文字灰色，不抢插画（颜色只表达状态）。
+    func sceneBadge() -> some View {
+        font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(.background.opacity(0.85)))
+            .overlay(Capsule().strokeBorder(Surface.hairline, lineWidth: 0.5))
+    }
 }
 
 /// 拖动时跟着鼠标的小卡片（整张工位带动画，拖着太重）。
