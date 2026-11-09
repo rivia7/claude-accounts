@@ -127,6 +127,8 @@ func rerunProtocolTests() async {
     }
     // 其它命令的参数
     check("web 的参数", CcaCommand.web(.claude, key: "k").arguments == ["web", "k"] && CcaCommand.web(.claude, key: "k").runsToCompletion)
+    check("账单页的参数", CcaCommand.billing(.claude, key: "k").arguments == ["billing", "k"] && CcaCommand.billing(.codex, key: "k").arguments == ["codex", "billing", "k"]
+          && CcaCommand.billing(.claude, key: "k").runsToCompletion && CcaCommand.billing(.claude, key: "k").timeout == CcaCommand.web(.claude, key: "k").timeout)
     check("router sync 的参数", CcaCommand.routerSync.arguments == ["router", "sync"] && CcaCommand.routerSync.timeout == 180
           && CcaCommand.routerSync.runsToCompletion)
     check("check 全部账号的参数", CcaCommand.check(.claude, key: nil).arguments == ["check", "--json"])
@@ -193,6 +195,7 @@ func gateTests() async {
     }
     check("同一个账号的 app 排队", !(await pair(.app(.claude, key: "k1"), .app(.claude, key: "k1"))))
     check("同一个账号的 app 和 web 排队", !(await pair(.app(.claude, key: "k1"), .web(.claude, key: "k1"))))
+    check("同一个账号的网页版和账单页排队（是同一份浏览器资料）", !(await pair(.web(.claude, key: "k1"), .billing(.claude, key: "k1"))))
     check("不同账号的 app 同时跑", await pair(.app(.claude, key: "k1"), .app(.claude, key: "k2")))
     check("Claude 和 Codex 的同一个键是不同账号", await pair(.app(.claude, key: "k1"), .app(.codex, key: "k1")))
     check("同一个工具的 usage 排队", !(await pair(.usage(.claude, key: nil), .usage(.claude, key: "k1"))))

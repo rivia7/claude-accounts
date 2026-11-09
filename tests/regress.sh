@@ -662,6 +662,8 @@ rm -f "$T/api_down"
 out=$(run CCA_TTY="$(ans)" cca web kimi 2>&1); rc=$?
 out2=$(run CCA_TTY="$(ans)" cca app kimi 2>&1); rc2=$?
 ok "第三方 API 账号：cca web / cca app 说明只能用官方账号；也没有 Claude App 启动器" '[ $rc -ne 0 ] && [ $rc2 -ne 0 ] && printf "%s" "$out" | grep -q "网页版只能用官方账号" && printf "%s" "$out2" | grep -q "Claude App 只能用官方账号" && [ ! -s open.log ] && [ ! -e "$H/Applications/Claude kimi.app" ] && [ ! -e "$H/Applications/Claude relay.app" ] && [ -d "$H/Applications/Claude alice.app" ]'
+out=$(run CCA_TTY="$(ans)" cca billing kimi 2>&1); rc=$?
+ok "第三方 API 账号：cca billing 说明只能用官方账号，不打开浏览器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "控制台的账单页只能用官方账号" && [ ! -s open.log ]'
 out=$(run CCA_TTY="$(ans)" cca @kimi --settings '{}' --version 2>&1); rc=$?
 ok "第三方 API 账号不能再加 --settings（会把 cca 传的地址和 key 整个顶掉）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不能再加 --settings"'
 m=$(run CCA_TTY="$(ans q)" cca 2>&1)
@@ -980,6 +982,9 @@ ok "Codex 的 access / refresh token 从没出现在 cca 写的文件、日志�
 : > open.log
 run CCA_TTY="$(ans)" cca codex web alice >/dev/null 2>&1
 ok "cca codex web：用账号专属的浏览器打开 chatgpt.com" 'grep -F "https://chatgpt.com/" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
+: > open.log
+run CCA_TTY="$(ans)" cca codex billing alice >/dev/null 2>&1
+ok "cca codex billing：用账号专属的浏览器打开 OpenAI 控制台的账单页" 'grep -F "https://platform.openai.com/settings/organization/billing/overview" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
 L="$H/Applications"
 ok "启动器：Codex 账号是「ChatGPT 别名」，和 Claude 账号的「Claude 别名」各管各的" '[ -x "$L/ChatGPT alice.app/Contents/MacOS/cca-launcher" ] && grep -q "codex app" "$L/ChatGPT alice.app/Contents/MacOS/cca-launcher" && [ -d "$L/Claude alice.app" ] && plutil -extract CFBundleIdentifier raw "$L/ChatGPT alice.app/Contents/Info.plist" | grep -q "^local.cca.launcher.codex.alice-example-com-"'
 run cca app --launchers >/dev/null 2>&1; run cca codex app --launchers >/dev/null 2>&1
@@ -1046,7 +1051,8 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
+ok "_gui state：能不能打开账单页，条件和网页版一样（入口的显示由 cca 说了算）" 'printf "%s" "$out" | jok "all(a[\"can\"][\"billing\"] == a[\"can\"][\"web\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 mv "$T/bin/claude" "$T/claude.off"
 out=$(run PATH="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" cca _gui state </dev/null 2>/dev/null)
 mv "$T/claude.off" "$T/bin/claude"
@@ -1108,6 +1114,9 @@ ok "图形界面：同意的是别的出口 IP：不算" '[ $rc -ne 0 ] && ! gre
 runev CCA_GRANT=low_purity:203.0.113.1 cca app alice >/dev/null 2>&1; rc=$?; cp "$T/ev.jsonl" "$GF/events_open.jsonl"
 ok "图形界面：同意了这个出口 IP：照样打开 App，事件里有每一步和结果" '[ $rc -eq 0 ] && grep -q "user-data-dir=$AD/desktop" open.log && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"node\"] and e[\"port\"] == 7901" && jok "d[\"result\"] == \"low_purity\"" < "$AD/health.json"'
 rm -f "$T/risk/203.0.113.1.json"
+: > open.log
+runev cca billing alice >/dev/null 2>&1; rc=$?
+ok "cca billing：用账号专属的浏览器和出口打开控制台的账单页，步骤和结果事件和网页版一样" '[ $rc -eq 0 ] && grep -F "https://platform.claude.com/settings/billing" open.log | grep -F -- "--user-data-dir=$AD/chrome" | grep -qF -- "--proxy-server=http://" && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"port\"] == 7901 and \"控制台的账单页\" in e[\"message\"]"'
 # 失败的原因、要在终端里做的事
 unlisten 7901; n_cli=$(grep -c '^ARGS:' claude.log)
 out=$(run cca @alice --version 2>&1 </dev/null); rc_plain=$?

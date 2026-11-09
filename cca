@@ -392,7 +392,7 @@ unset _c
 
 # 当前管的是哪个工具：默认 Claude Code；cca codex … 换成 Codex（use_tool）。各工具不同的步骤写成同名前缀的函数
 # （claude_login / codex_login …），用 tool 步骤名 调用；Python 那边按 CCA_TOOL 选同一个工具
-TOOL=claude CMD=cca TOOL_LABEL=Claude TOOL_BIN="$CLAUDE_BIN" TOOL_SETTINGS='~/.claude/settings.json' TRACE_HOST=claude.ai APP_LABEL='Claude App'
+TOOL=claude CMD=cca TOOL_LABEL=Claude TOOL_BIN="$CLAUDE_BIN" TOOL_SETTINGS='~/.claude/settings.json' TRACE_HOST=claude.ai APP_LABEL='Claude App' BILLING_URL=https://platform.claude.com/settings/billing
 tool() { local s="$1"; shift; "${TOOL}_${s}" "$@"; }
 CODEX_ALIAS=cxa   # cxa …：等于 cca codex …（~/.local/bin/cxa 是指向同目录 cca 的相对链接，main 按调用名换成 codex 参数）
 
@@ -597,6 +597,7 @@ class Tool:
     url_example = 'https://api.example.com/anthropic'
     region_name = 'Claude'            # 出口在受限地区时的提示
     trace_host = 'claude.ai'          # 出口检测：经账号的端口取这个网站看到的 IP 和地区
+    billing_url = 'https://platform.claude.com/settings/billing'   # 控制台的账单页：每月 API 额度和余额只在这里显示，官方没有查询接口
     login_hosts = ('claude.com', 'claude.ai', 'platform.claude.com', 'console.anthropic.com')   # 登录页（补 login_hint）
     product = 'Claude Code'           # 查不了用量时的提示
     usage_windows = ('five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'seven_day_oauth_apps')   # cca usage --json 的窗口
@@ -689,6 +690,7 @@ class CodexTool(Tool):
     url_example = 'https://api.example.com/v1'
     region_name = 'OpenAI'
     trace_host = 'chatgpt.com'
+    billing_url = 'https://platform.openai.com/settings/organization/billing/overview'
     login_hosts = ('auth.openai.com',)
     product = 'Codex'
     usage_windows = ('five_hour', 'seven_day')
@@ -6018,6 +6020,7 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             'badge': {'label': b[0], 'color': b[1]} if b else None,
             'app': {'running': pid is not None, 'pid': pid}, 'cli': cli,
             'can': dict({x: x not in why for x in ('app', 'web', 'usage', 'check', 'cli')},
+                        billing='web' not in why,   # 控制台的账单页和网页版走同一条路（cmd_web）
                         policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm)),
             'can_why': why,
             'usage': usage, 'health': health_view(k, v, now)}
@@ -6212,7 +6215,8 @@ def cmd_gui_live(route, host='', rc='0', at_home=''):
 
 def cmd_tool_env():
     """bash 切换到当前工具时要的变量"""
-    sh(TABLE=T.table, CMD=T.cmd, TOOL_LABEL=T.label, TOOL_SETTINGS=T.settings_disp, TRACE_HOST=T.trace_host, APP_LABEL=T.app_label)
+    sh(TABLE=T.table, CMD=T.cmd, TOOL_LABEL=T.label, TOOL_SETTINGS=T.settings_disp, TRACE_HOST=T.trace_host, APP_LABEL=T.app_label,
+       BILLING_URL=T.billing_url)
 
 
 def ver_key(v):
@@ -9925,11 +9929,11 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 )
 }
 
-cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）
-	local key site="$TRACE_HOST"
+cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）
+	local key site="$TRACE_HOST" what="${3:-}"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
-	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：网页版只能用官方账号"
+	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：${what:-网页版}只能用官方账号"
 	has_chrome || { fail_warn no_chrome "没装 Google Chrome，已停止打开：请先安装 Chrome，再使用账号的独立浏览器"; return 1; }
 	gui_step sync
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
@@ -9942,8 +9946,14 @@ cmd_web() {   # 网页版：claude.ai，Codex 账号是 chatgpt.com（和出口�
 	fi
 	gui_step open
 	open_chrome "${2:-https://${site}/}" || { fail_warn open_failed "打开账号的独立浏览器失败"; return 1; }
-	info "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-$site}（经 ${ACC_PROXY} → ${ACC_NODE}）"
-	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${2:-$site}（经 ${ACC_PROXY} → ${ACC_NODE}）"
+	what="${what:-${2:-$site}}"
+	info "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）"
+	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）"
+}
+
+cmd_billing() {   # cca [codex] billing [账号]：控制台的账单页。订阅附带的每月 API 额度和余额只在这里显示（两家都没有用 API Key 查余额的接口），
+	# 走网页版的全部检查，用账号自己的浏览器实例和出口打开
+	cmd_web "${1:-}" "$BILLING_URL" 控制台的账单页
 }
 
 cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的浏览器实例里打开，登录地址没带邮箱时补上
@@ -12041,6 +12051,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
                              只用于官方账号
+  cca billing [账号]         用该账号的浏览器实例打开控制台的账单页，看订阅附带的每月 API 额度和余额；只用于官方账号
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
                              部分；cca app --launchers 重新生成）。只用于官方账号
@@ -12181,6 +12192,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		ls|list) cmd_list ;;
 		rm|remove) shift; cmd_rm "$@" ;;
 		web) shift; cmd_web "$@" ;;
+		billing) shift; cmd_billing "$@" ;;
 		app) shift; cmd_app "$@" ;;
 		check) shift; cmd_check "$@" ;;
 		router) shift; cmd_router "$@" ;;

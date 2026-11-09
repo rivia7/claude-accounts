@@ -25,7 +25,8 @@ func fixtureAssertions() {
         let c = s.tool(.claude), x = s.tool(.codex)
         check("state：Claude 5 个官方账号 + 2 个 API 账号", c?.accounts.filter { !$0.isAPI }.count == 5 && c?.accounts.filter(\.isAPI).count == 2)
         let bob = s.account(bobRef)
-        check("state：bob 被锁定、登录着、上次用的、App 开着", bob?.pinned == true && bob?.pinnedNode == "US-B" && bob?.login == .loggedIn
+        check("state：官方账号有账单页入口，第三方 API 账号没有", c?.accounts.allSatisfy { $0.can.billing == !$0.isAPI } == true)
+        check("state：bob 被锁定、登录着、上次用的、App 开着",bob?.pinned == true && bob?.pinnedNode == "US-B" && bob?.login == .loggedIn
               && bob?.isLast == true && bob?.appRunning == true && bob?.app?.pid == 4242)
         check("state：bob 的缓存用量", bob?.usage?.fiveHour?.utilization == 92 && bob?.usage?.source == .cache
               && bob?.usage?.sevenDaySonnet?.utilization == 60 && bob?.usage?.modelScoped.first?.name == "Sonnet")
@@ -74,6 +75,7 @@ func fixtureAssertions() {
         let alice = c?.accounts.first
         check("state_nocodex：alice 没缓存、没装 App 和 Chrome", alice?.usage == nil && alice?.canWhy["app"] == .appMissing
               && alice?.canWhy["web"] == .noChrome && alice?.plan == "Pro 200")
+        check("state_nocodex：没装 Chrome 时没有账单页入口", alice?.can.billing == false)
         check("state_nocodex：policy_alias", s.notices.contains { $0.code == .policyAlias && $0.oldKey == "alice@example.com" })
     }
     if let u = loadFixture(UsageDoc.self, "usage_claude.json") {

@@ -145,6 +145,10 @@ struct AccountManageItems: View {
             Button("更换 API key…") { model.run(.apiKey(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
                 .disabled(busy)
         } else {
+            if a.can.billing {
+                Button("查看 API 额度") { model.openBilling(a.ref) }
+                    .disabled(busy)
+            }
             Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
                 .disabled(busy)
             if a.can.policyLock {

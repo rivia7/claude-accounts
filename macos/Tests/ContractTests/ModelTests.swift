@@ -28,6 +28,10 @@ import Foundation
     _ = await waitUntil { m.activity(bobRef) == nil }
     check("打开成功的提示用 cca 给的话", m.toast?.text == "已打开 工作 的 Claude App，出口 US-B（端口 7901）", m.toast?.text ?? "nil")
     check("提示条会播报给读屏软件", log.announced.last == m.toast?.text)
+    m.openBilling(bobRef)
+    check("打开账单页中，按钮旁边说的是账单页", m.activity(bobRef)?.kind == .billing && Texts.activity(Activity(kind: .billing), appLabel: "Claude App") == "打开账单页…")
+    _ = await waitUntil { m.activity(bobRef) == nil }
+    check("账单页打开后不留在进行中，提示用 cca 给的话", m.activity(bobRef) == nil && m.toast?.text.isEmpty == false)
     let yes = ScriptedPrompter([true])
     m.hooks.prompter = yes
     m.syncRouter()

@@ -534,6 +534,8 @@ struct CLIRun: Decodable, Sendable, Equatable {
 struct Can: Decodable, Sendable, Equatable {
     var app: Bool = false
     var web: Bool = false
+    /// 能不能打开控制台的账单页（每月 API 额度和余额在那里看；旧版 cca 没有这一项，当作不能）
+    var billing: Bool = false
     var usage: Bool = false
     var check: Bool = true
     /// 能不能在终端里打开（要有 claude / codex 命令）
@@ -542,7 +544,7 @@ struct Can: Decodable, Sendable, Equatable {
     var policyLock: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case app, web, usage, check, cli
+        case app, web, billing, usage, check, cli
         case policyLock = "policy_lock"
     }
 
@@ -552,6 +554,7 @@ struct Can: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         app = c.bool(.app) ?? false
         web = c.bool(.web) ?? false
+        billing = c.bool(.billing) ?? false
         usage = c.bool(.usage) ?? false
         check = c.bool(.check) ?? true
         cli = c.bool(.cli) ?? false

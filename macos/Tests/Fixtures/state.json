@@ -239,6 +239,7 @@
           "can": {
             "app": true,
             "web": true,
+            "billing": true,
             "usage": true,
             "check": true,
             "cli": true,
@@ -366,6 +367,7 @@
           "can": {
             "app": true,
             "web": true,
+            "billing": true,
             "usage": false,
             "check": true,
             "cli": true,
@@ -413,6 +415,7 @@
           "can": {
             "app": true,
             "web": true,
+            "billing": true,
             "usage": true,
             "check": true,
             "cli": true,
@@ -458,6 +461,7 @@
           "can": {
             "app": true,
             "web": true,
+            "billing": true,
             "usage": true,
             "check": true,
             "cli": true,
@@ -573,6 +577,7 @@
           "can": {
             "app": true,
             "web": true,
+            "billing": true,
             "usage": true,
             "check": true,
             "cli": true,
@@ -676,6 +681,7 @@
           "can": {
             "app": false,
             "web": false,
+            "billing": false,
             "usage": false,
             "check": true,
             "cli": true,
@@ -747,6 +753,7 @@
           "can": {
             "app": false,
             "web": false,
+            "billing": false,
             "usage": false,
             "check": true,
             "cli": true,
@@ -816,6 +823,7 @@
           "can": {
             "app": true,
             "web": true,
+            "billing": true,
             "usage": true,
             "check": true,
             "cli": true,

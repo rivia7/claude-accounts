@@ -59,6 +59,7 @@ func officeTests() async {
           && acct(["cli": ["running": false, "sessions": 2, "since_epoch": now0]]).cliSince == nil)
     check("cli：类型不对当作没有", acct(["cli": ["running": "yes", "sessions": "abc"]]).cliSessions == 0)
     check("App 开着也算在用", acct(["app": ["running": true, "pid": 1]]).isWorking)
+    check("旧版 cca 没有 can.billing：当作不能，不显示账单页入口", !acct().can.billing && acct().can.web)
 
     // Diagnosis：顺序就是账号页那句话的顺序
     check("没登录：只说这一件", Diagnosis.all(acct(["login": "logged_out", "health": NSNull()]), usage: nil, live: slot("closed"), now: now0)

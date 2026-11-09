@@ -65,6 +65,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 选账号，启动 Claude Code | `cca` |
 | 直接用某个账号启动 | `cca @工作`（写别名、邮箱或开头几个字都行） |
 | 打开某个账号的网页版 | `cca web 工作` |
+| 看某个账号的每月 API 额度和余额 | `cca billing 工作`（ChatGPT 账号：`cca codex billing 工作`。在这个账号的浏览器里打开控制台的账单页，第一次要登录控制台；cca App：账号菜单里的「查看 API 额度」） |
 | 打开某个账号的 Claude App（桌面版） | `cca app 工作`，或者在启动台、聚焦搜索里点「Claude 工作」 |
 | 添加账号 | `cca add`，或者在菜单里选"＋ 添加新账号" |
 | 添加第三方 API 账号 | `cca add api`，或者在菜单里选"＋ 添加第三方 API 账号" |

@@ -12,7 +12,7 @@ enum SidebarItem: Hashable, Sendable {
 }
 
 enum ActivityKind: Sendable, Equatable {
-    case app, web, check, sync, rename, reset
+    case app, web, billing, check, sync, rename, reset
 }
 
 /// 一个账号正在做的事（按钮旁边显示进度）。
@@ -729,6 +729,11 @@ final class AppModel {
         launch(ref, kind: .web, command: .web(ref.tool, key: ref.key), title: "没能打开网页版")
     }
 
+    /// 查看 API 额度：在账号自己的浏览器里打开控制台的账单页（网址是 cca 的事）。
+    func openBilling(_ ref: AccountRef) {
+        launch(ref, kind: .billing, command: .billing(ref.tool, key: ref.key), title: "没能打开账单页")
+    }
+
     private func launch(_ ref: AccountRef, kind: ActivityKind, command: CcaCommand, title: String) {
         guard phase == .ready, let client, activities[ref] == nil else { return }
         activities[ref] = Activity(kind: kind)
@@ -739,8 +744,8 @@ final class AppModel {
             })
             guard let self else { return }
             self.activities[ref] = nil
-            self.finish(r, failureTitle: title,
-                        success: r.resultEvent?.message ?? (kind == .web ? "已打开网页版" : "已打开 \(self.appLabel(ref.tool))"))
+            let opened = kind == .web ? "已打开网页版" : kind == .billing ? "已打开账单页" : "已打开 \(self.appLabel(ref.tool))"
+            self.finish(r, failureTitle: title, success: r.resultEvent?.message ?? opened)
             await self.afterAction()
         }
     }

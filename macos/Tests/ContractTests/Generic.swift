@@ -64,6 +64,9 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
         let off = (k == "app" && !a.can.app) || (k == "web" && !a.can.web) || (k == "usage" && !a.can.usage)
         check("\(n) can_why.\(k) 对应一个不可用的按钮", off)
     }
+    if let can = ra["can"] as? [String: Any], can["billing"] != nil {
+        check("\(n) 账单页的条件和网页版一样", a.can.billing == a.can.web)
+    }
     if a.kind == .api {
         check("\(n) API 账号 login 为 api", a.login == .api, a.login.rawValue)
         check("\(n) API 账号 badge 为 null", a.badge == nil && isNull(ra["badge"]))

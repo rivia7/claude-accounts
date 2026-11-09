@@ -15,6 +15,8 @@ enum CcaCommand: Sendable, Hashable {
     case checkPoll(ToolID, keys: [String])
     case app(ToolID, key: String)
     case web(ToolID, key: String)
+    /// 控制台的账单页（`cca [codex] billing KEY`）：每月 API 额度和余额在那里看，检查和网页版一样。
+    case billing(ToolID, key: String)
     case routerSync
     /// 拉维护者的映射（`cca policy pull --json`，PROTOCOL 4.9）：照映射改账号表、同步路由器，要重载的不做（待同步）。manual 是用户点的，不降优先级。
     case policyPull(manual: Bool)
@@ -39,7 +41,7 @@ enum CcaCommand: Sendable, Hashable {
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -47,7 +49,7 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k): return k
+        case .app(_, let k), .web(_, let k), .billing(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -75,6 +77,7 @@ enum CcaCommand: Sendable, Hashable {
         case .checkPoll(_, let keys): return prefix + ["check"] + keys + ["--json"]
         case .app(_, let k): return prefix + ["app", k]
         case .web(_, let k): return prefix + ["web", k]
+        case .billing(_, let k): return prefix + ["billing", k]
         case .routerSync: return ["router", "sync"]
         case .policyPull: return ["policy", "pull", "--json"]
         case .guiUpdate: return ["gui", "update"]
@@ -96,7 +99,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage, .usagePoll: return 150
         case .check: return 180
         case .checkPoll: return 300
-        case .app, .web: return 120
+        case .app, .web, .billing: return 120
         case .routerSync, .policyPull: return 180
         case .guiUpdate, .update: return 300
         case .rename, .reorder, .policyRequest: return 60
@@ -110,7 +113,7 @@ enum CcaCommand: Sendable, Hashable {
     /// 半路杀掉可能用掉了却没记下重置后的用量。
     var runsToCompletion: Bool {
         switch self {
-        case .app, .web, .routerSync, .reset, .clientInstall: return true
+        case .app, .web, .billing, .routerSync, .reset, .clientInstall: return true
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode: return false
         }
     }
@@ -119,7 +122,7 @@ enum CcaCommand: Sendable, Hashable {
     /// router sync 全局一个；更新 cca、gui update 全局一个（一个接着一个）。
     var gate: String? {
         switch self {
-        case .app(let t, let k), .web(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
+        case .app(let t, let k), .web(let t, let k), .billing(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
         case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
         case .reorder(let t, _): return "reorder:\(t.rawValue)"   // 连着拖几次：一个接一个，最后拖的那次写在最后
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
