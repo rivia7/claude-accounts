@@ -20,6 +20,10 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "2.9.0-beta.22", title: "可以马上拉取维护者的映射", points: [
+            .init(symbol: "arrow.down.to.line",
+                  text: "不用等每小时的自动检查：在「节点分流」页点「拉取映射」，或者在账号的右键菜单和「…」里选「现在拉取映射」，维护者刚发布的改动马上就能拉下来。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "2.9.0-beta.21", title: "账号表、路由器和本机 Clash 都在 App 里填", points: [
             .init(symbol: "tablecells",
                   text: "编辑 Claude 和 ChatGPT 的账号表不用再开终端：节点、接口地址、模型、环境变量都在 App 里改，不合格的地方直接写在输入框下面。"),
