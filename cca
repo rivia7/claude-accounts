@@ -1138,15 +1138,12 @@ def alias_problems(j, names):
     return errs
 
 
-LOCK_PREFIX = 'cca-lock-v1:'   # 锁定请求里机器读的那一段（cca policy request 写，维护者的 policy.sh lock 读）
-
-
 def cmd_policy_request(key):
-    """cca [codex] policy request 账号（key 是 bash 经 resolve 找好的）：写一行请求维护者把这个账号现在的节点锁进映射，
-    人看的一句话后面跟着机器读的一段，发到聊天里也不怕被改。不能请求时 stdout 是原因、退出码 2"""
-    import base64
+    """cca [codex] policy request 账号（key 是 bash 经 resolve 找好的）：写一行维护者直接运行的命令（在 cca 的仓库里），把这个账号
+    现在的节点锁进映射。不能请求时 stdout 是原因、退出码 2"""
+    import shlex
     c, t, _ = ctx()
-    a, e = parse_key(key)
+    e = parse_key(key)[1]
     pinned = policy_map(T, c).get(e.lower()) if e else None
     why = None
     if is_api(t[key]) or not e:
@@ -1158,93 +1155,49 @@ def cmd_policy_request(key):
     if why:
         print(why)
         sys.exit(2)
-    n = node_of(t[key])
-    body = {'tool': T.name, 'email': e.lower(), 'node': n}
-    if a:
-        body['alias'] = a
-    token = base64.urlsafe_b64encode(json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).decode('ascii').rstrip('=')
-    print('请把这个账号的节点锁进映射：%s %s → %s%s  %s%s' % (T.label, e, n, '（别名 %s）' % a if a else '', LOCK_PREFIX, token))
+    print('./policy.sh lock %s %s %s' % (T.name, shlex.quote(e.lower()), shlex.quote(node_of(t[key]))))
 
 
-def policy_lock_requests(text):
-    """一段文字（可以夹在聊天消息里，同一条贴了几次算一条）里的锁定请求：返回 ([{tool, email, node, alias}], [问题])。
-    内容是别人发来的：控制字符、不合规的值都不收，免得显示时搅乱维护者的终端"""
-    import base64
-    ok = lambda s: isinstance(s, str) and not re.search(r'[\x00-\x1f\x7f]', s)
-    tools, reqs, errs, seen = {tool.name for tool in TOOLS}, {}, [], set()
-    for tok in re.findall(re.escape(LOCK_PREFIX) + r'([A-Za-z0-9_-]+)', text):
-        if tok in seen:
-            continue
-        seen.add(tok)
-        short = '%s%s…' % (LOCK_PREFIX, tok[:12])
-        try:
-            j = json.loads(base64.urlsafe_b64decode(tok + '=' * (-len(tok) % 4)))
-            tool, email, node = j['tool'], j['email'], j['node']
-        except Exception:
-            errs.append('有一条请求读不出来，可能复制时漏了字符：%s' % short)
-            continue
-        if not ok(tool) or tool not in tools or not ok(email) or not EMAIL_RE.match(email) or not fill_name_ok(node):
-            errs.append('有一条请求的内容不对（工具、邮箱或节点）：%s' % short)
-            continue
-        alias = j.get('alias')
-        r = {'tool': tool, 'email': email.lower(), 'node': node, 'alias': alias if ok(alias) and alias_ok(alias) else ''}
-        old = reqs.setdefault((tool, r['email']), r)
-        if old['node'] != node:
-            errs.append('%s 有两条节点不同的请求（%s、%s）：只留下要的那条再运行' % (r['email'], old['node'], node))
-    return list(reqs.values()), errs
-
-
-def cmd_policy_lock(action='', path=''):
-    """维护者把别的机器发来的锁定请求写进映射（policy.sh lock，stdin 是请求的文字）。plan 说明会改什么，apply 写进 policy.json。
-    退出码：0 有要改的（apply 时已改好，stdout 是提交说明）；3 都已经是这样了；1 请求有问题（原因在 stdout）"""
+def cmd_policy_lock(action='', path='', tool='', email='', node=''):
+    """维护者把账号锁到节点（policy.sh lock）：plan 说明会改什么，apply 写进 policy.json。退出码：0 有要改的（apply 时已改好，
+    stdout 是提交说明）；3 已经是这样了；1 参数或映射有问题（原因在 stdout）。命令多半是别人发来的：控制字符、不合规的值不收，
+    也不原样显示，免得搅乱维护者的终端"""
     if action not in ('plan', 'apply') or not path:
-        die('用法: cca _policy-lock plan|apply policy.json')
-    reqs, errs = policy_lock_requests(sys.stdin.read())
-    if not reqs and not errs:
-        errs = ['没有找到锁定请求（应该有一段 %s 开头的内容）' % LOCK_PREFIX]
+        die('用法: cca _policy-lock plan|apply policy.json 工具 邮箱 节点')
+    names, errs = {tool_.name: tool_.label for tool_ in TOOLS}, []
+    if tool not in names:
+        errs.append('工具应该是 %s' % ' 或 '.join(names))
+    if re.search(r'[\x00-\x1f\x7f]', email) or not EMAIL_RE.match(email):
+        errs.append('邮箱不对')
+    if not fill_name_ok(node):
+        errs.append('节点名不对（不能是空的，首尾不能有空格，不能有控制字符，不能以 CCA- 开头）')
     j = load_quiet(path)
     if not errs and (not isinstance(j, dict) or policy_problems(j)):
-        errs = ['%s 读不出来，或者格式不对' % path]
+        errs.append('%s 读不出来，或者格式不对' % path)
     if errs:
         print('\n'.join(errs))
         sys.exit(1)
+    s, email = j.setdefault(tool, {}), email.lower()
+    key = next((k for k in s if k.lower() == email), email)
+    old, head = s.get(key), '  %s  %s' % (names[tool], key)
+    if old == node:
+        print('%s → %s（已经是这样）' % (head, node))
+        sys.exit(3)
+    s[key] = node
+    lines = ['%s → %s（新加）' % (head, node) if old is None else '%s：%s → %s（换节点）' % (head, old, node)]
     fill = load_quiet(os.path.join(os.path.dirname(path), 'nodes.json'))
     known = {p.get('name') for p in fill.get('proxies') or [] if isinstance(p, dict)} if isinstance(fill, dict) else set()
-    names, lines, changes = {tool.name: tool.label for tool in TOOLS}, [], []
-    for r in reqs:
-        s, email, node = j.setdefault(r['tool'], {}), r['email'], r['node']
-        key = next((k for k in s if k.lower() == email), email)
-        old = s.get(key)
-        head = '  %s  %s' % (names[r['tool']], key)
-        if old == node:
-            lines.append('%s → %s（已经是这样）' % (head, node))
-        else:
-            lines.append('%s → %s（新加）' % (head, node) if old is None else '%s：%s → %s（换节点）' % (head, old, node))
-            s[key] = node
-            changes.append('%s → %s' % (key, node))
-        aliases = j.get('aliases') if isinstance(j.get('aliases'), dict) else {}
-        if r['alias'] and not any(k.lower() == email for k in aliases):
-            peers = {k.lower() for k in s}
-            if any(v == r['alias'] and k.lower() in peers for k, v in aliases.items()):
-                lines.append('  ! 别名「%s」和 %s 里别的账号重名，没有用它' % (r['alias'], names[r['tool']]))
-            else:
-                aliases[email] = r['alias']
-                j['aliases'] = aliases
-                lines.append('  别名：%s 叫「%s」' % (email, r['alias']))
-                changes.append('%s 的别名 %s' % (email, r['alias']))
-        if known and node not in known:
-            lines.append('  ! 节点 %s 不在参考节点（nodes.json）里：路由器上没有这个节点的机器，这个账号会用不了' % node)
+    if known and node not in known:
+        lines.append('  ! 节点 %s 不在参考节点（nodes.json）里：路由器上没有这个节点的机器，这个账号会用不了' % node)
     errs = policy_problems(j, strict=True)
     if errs:
         print('\n'.join(['写进去之后映射的检查不通过：'] + errs))
         sys.exit(1)
-    if action == 'plan' or not changes:
+    if action == 'plan':
         print('\n'.join(lines))
-    if not changes:
-        sys.exit(3)
-    if action == 'apply':
+    else:
         save_json(path, j)
-        print('按请求锁定账号的节点：' + '、'.join(changes))
+        print('按请求锁定账号的节点：%s → %s' % (key, node))
 
 
 # --- 维护者参考配置里的节点（映射仓库里的 nodes.json，./policy.sh 从维护者的 custom.yaml 抽出一个策略组和它引用的节点）：
@@ -11412,7 +11365,7 @@ cmd_policy_fetch() {   # 后台任务：拉一次映射，结果记在 $POLICY_D
 	if policy_fetch; then policy_log "拉取成功"; else policy_log "$POLICY_ERR"; fi
 }
 
-policy_request() {   # cca [codex] policy request 账号：一行请求（stdout，App 自己复制），请维护者把这个账号现在的节点锁进映射
+policy_request() {   # cca [codex] policy request 账号：一行给维护者直接运行的命令（stdout，App 自己复制），把这个账号现在的节点锁进映射
 	local key line rc=0
 	[ $# -eq 1 ] || die "用法: ${CMD} policy request 账号"
 	key=$(py resolve "$1") || FAIL_CODE=account_missing die "没找到账号：$1"
@@ -11420,8 +11373,8 @@ policy_request() {   # cca [codex] policy request 账号：一行请求（stdout
 	[ "$rc" -eq 0 ] || die "$line"
 	printf '%s\n' "$line"
 	[ -z "${CCA_EVENTS:-}" ] || return 0
-	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then info "已复制到剪贴板，直接粘贴发给维护者（维护者运行 ./policy.sh lock 映射目录，读剪贴板）"
-	else info "把上面这一行发给维护者（维护者运行 ./policy.sh lock 映射目录）"; fi
+	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then info "已复制到剪贴板：发给维护者，在 cca 的仓库里运行这条命令"
+	else info "把上面这条命令发给维护者，在 cca 的仓库里运行"; fi
 }
 
 cmd_policy() {   # cca [codex] policy [setup [仓库] | pull | request 账号]
@@ -11679,7 +11632,7 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca policy [pull]          看映射的状态 / 马上拉一次（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
                              指定的节点，账号表里改成别的会被改回；映射里有、这台机器上还没有的账号自动加进来
                              （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
-  cca policy request <账号>  生成一行请求（这个账号和它现在的节点）并复制到剪贴板，发给维护者锁进映射（Codex 账号：cca codex policy request）
+  cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex 账号：cca codex policy request）
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
@@ -11721,7 +11674,7 @@ main() {
 		_policy-fetch) cmd_policy_fetch ;;
 		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
 		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
-		_policy-lock) shift; py policy-lock "${1:-}" "${2:-}" ;;   # 维护者把锁定请求写进映射（policy.sh lock 调用）
+		_policy-lock) shift; py policy-lock "$@" ;;   # 维护者把账号锁到节点（policy.sh lock 调用）
 		_gui) shift; cmd_gui_api "$@" ;;   # 图形界面的只读接口（macos/PROTOCOL.md）
 		_gui-fetch) cmd_gui_fetch ;;
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）

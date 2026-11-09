@@ -1078,7 +1078,7 @@ final class AppModel {
         showToast("已复制：\(text)", .info)
     }
 
-    /// 请求维护者把这个账号现在的节点锁进映射（PROTOCOL 4.8）：cca 写好一行请求，复制给用户发给维护者。
+    /// 请求维护者把这个账号现在的节点锁进映射（PROTOCOL 4.8）：cca 写好一条维护者直接运行的命令，复制给用户发给维护者。
     func requestPolicyLock(_ a: Account) {
         if isFixtureMode {
             showToast("演示模式：不会生成请求", .info)
@@ -1094,7 +1094,7 @@ final class AppModel {
                 return
             }
             self.hooks.copy(line)
-            self.showToast("已复制请求：发给维护者，加进映射后这个账号的节点就固定了", .success)
+            self.showToast("已复制命令：发给维护者，在 cca 的仓库里运行后这个账号的节点就固定了", .success)
         }
     }
 

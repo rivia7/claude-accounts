@@ -116,7 +116,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
   - Codex 账号要到第一次用 `cca codex` 时才加进来，不用 Codex 的机器不会白占路由器上的端口。
   - 维护者从映射里删掉了某个账号：你这台机器上的账号留着（登录还在），只是不再固定出口。
   - `cca policy` 里列出映射里还没加到这台机器上的账号和原因。
-  - 想把某个账号现在的节点固定下来：`cca policy request 账号`（Codex 账号是 `cca codex policy request 账号`；App 里在账号的「…」或右键菜单选「请求维护者锁定节点」）会生成一行请求并复制到剪贴板，发给维护者；维护者写进映射后，每天自动拉取时这个账号就固定在这个节点上了。
+  - 想把某个账号现在的节点固定下来：`cca policy request 账号`（Codex 账号是 `cca codex policy request 账号`；App 里在账号的「…」或右键菜单选「请求维护者锁定节点」）会生成一条命令并复制到剪贴板，发给维护者；维护者运行它写进映射后，每天自动拉取时这个账号就固定在这个节点上了。
 - **固定出口**：映射里的账号，添加时直接用映射的节点，不让选；账号表里改成别的节点，下次运行 cca 时会改回来，并提示一句。映射的节点不在这台机器的可选节点里时，运行 `cca router setup` 重新选可选节点。
 - **节点改名**：路由器上的节点改了名（服务器地址没变）时，映射里还写着旧名字也照样能用：cca 跟着改名时记下了新旧名字的对应。维护者之后把映射更新成新名字就好。
 - **验签**：映射要有发布 cca 用的那把密钥的签名才会被采用，签名不对、格式不对都不用，接着用上次拉到的。只管官方账号（按邮箱），第三方 API 账号不受影响。
@@ -135,7 +135,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
    - 经 gh 加的 key 跟着 gh 的授权走：在 GitHub 的 Settings → Applications 里撤销 GitHub CLI 的授权，这些 key 会一起被删掉；`gh auth logout` 只删本机的登录，不影响它们。
    - 默认管第 4 步说的默认仓库，别的仓库加 `-R 你/仓库`。
 4. 默认仓库写在 `cca` 里（`POLICY_REPO_DEFAULT`）：用户运行 `cca policy setup` 不写仓库、启动时的引导，都用它。
-5. 有人发来锁定请求（`cca policy request` 生成的一行字）时，复制它，在 cca 的仓库里运行 `./policy.sh lock 映射仓库的目录`：读剪贴板里的请求（可以夹在聊天消息里，一次可以好几条），列出会改什么，确认后写进 `policy.json`，照常检查、签名、提交并推送。请求在文件里时写成 `./policy.sh lock 目录 文件`，`-y` 不问。节点不在参考节点里时会提醒一句：路由器上没有这个节点的机器，这个账号会用不了。
+5. 有人发来锁定命令（`cca policy request` 生成的 `./policy.sh lock claude 邮箱 节点`）时，看一眼内容，在 cca 的仓库里运行它：列出会改什么，确认后写进 `policy.json`，照常检查、签名、提交并推送（`-y` 不问）。映射仓库默认是 cca 仓库旁边的 `cca-policy`，别的位置加 `-C 目录` 或者设环境变量 `CCA_POLICY_DIR`。节点不在参考节点里时会提醒一句：路由器上没有这个节点的机器，这个账号会用不了。
 
 ### 参考节点：自动补全 OpenAi 分流组
 

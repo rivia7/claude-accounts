@@ -364,10 +364,10 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 
 ### 4.8 请求维护者锁定节点：`cca [codex] policy request 账号`
 
-别的机器只有只读 deploy key，改不了映射，只能请求：cca 写一行给维护者的文字（账号和它现在的节点），用户发给维护者，维护者运行 `./policy.sh lock` 看过、确认后写进映射并发布。
-不交互、只读（不改账号表和映射），stdout 是那一行，退出码 0；App 把它复制到剪贴板（有事件文件时 cca 不碰剪贴板，命令行里 cca 自己复制）。
+别的机器只有只读 deploy key，改不了映射，只能请求：cca 写一条维护者直接运行的命令 `./policy.sh lock claude|codex 邮箱 节点`（账号和它现在的节点，不带别名，值按 shell 规则加好引号），用户发给维护者，维护者在 cca 的仓库里运行，确认后写进映射并发布。
+不交互、只读（不改账号表和映射），stdout 是那条命令，退出码 0；App 把它复制到剪贴板（有事件文件时 cca 不碰剪贴板，命令行里 cca 自己复制）。
 不能请求时（第三方 API 账号、这台机器没配置映射、已经被映射固定）退出码非 0，原因在 `fail` 事件里；`state` 账号的 `can.policy_lock` 是 false 时 App 不显示这个入口。
-那一行的最后是 `cca-lock-v1:` 加上 base64url（不带 `=`）的 JSON：`{"tool": "claude|codex", "email": "小写的邮箱", "node": "节点", "alias": "别名（可选）"}`，App 只复制、不解析。
+App 只复制、不解析。
 
 ### 4.5 重置额度：`cca codex reset KEY --json`
 

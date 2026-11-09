@@ -20,7 +20,7 @@ enum CcaCommand: Sendable, Hashable {
     case guiUpdate
     /// 账号表按这个顺序排（`cca [codex] reorder 账号…`）：只改先后，端口、路由器都不动。
     case reorder(ToolID, keys: [String])
-    /// 请求维护者把这个账号现在的节点锁进映射（`cca [codex] policy request KEY`，PROTOCOL 4.8）：stdout 是发给维护者的那一行。
+    /// 请求维护者把这个账号现在的节点锁进映射（`cca [codex] policy request KEY`，PROTOCOL 4.8）：stdout 是维护者直接运行的那条命令。
     case policyRequest(ToolID, key: String)
     /// 改别名（`cca [codex] rename KEY 新别名`，新别名是 - 时去掉别名）：stdout 是新的键。
     case rename(ToolID, key: String, alias: String)

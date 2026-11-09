@@ -185,7 +185,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   （退出前等它退出）。cca 要内核又没开 App 时用 `open -g … --args --core` 在后台打开它（`CcaApp.launchedForCore`：什么情况下都不自己弹主窗口）。`core/config.yaml` 变了是
   CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **后台运行**：平时只有菜单栏图标（`LSUIElement`、`.accessory`，`.defaultLaunchBehavior(.suppressed)`，不恢复上次的窗口）。`cca gui`、更新后重新打开带 `--window`（`CcaApp.opensWindowAtLaunch`，演示模式也是）启动时开主窗口；第一次打开、cca 没准备好时连上之后也开。`WindowOpener.showMain` 换成 `.regular`（有 Dock 图标），刚换时激活不一定马上生效，稍等再激活一次、把窗口放到最前面；最后一个窗口（主窗口、设置）关掉时换回 `.accessory`，焦点还给之前的 App。Dock 里的“退出”、⌘Q 只回到后台（`applicationShouldTerminate` 返回 `.terminateCancel`、`WindowOpener.toBackground`），真的退出走 `AppExit.quit`（菜单栏面板和应用菜单的「退出」、更新后重新打开）；注销、重启、关机（`NSWorkspace.willPowerOffNotification`、退出事件里的 `kAEQuitReason`）和没有 Dock 图标时收到的退出请求也真的退出。
-- **请求锁定到映射**（PROTOCOL 4.8）：账号的「…」和右键菜单里的「请求维护者锁定节点」（`can.policy_lock`）运行 `cca [codex] policy request`，把 stdout 的那一行复制给用户发给维护者。
+- **请求锁定到映射**（PROTOCOL 4.8）：账号的「…」和右键菜单里的「请求维护者锁定节点」（`can.policy_lock`）运行 `cca [codex] policy request`，把 stdout 的那条命令复制给用户发给维护者。
 - **提问会话**（PROTOCOL 4.6）：添加账号、换 key、删除账号这些流程在 App 里问完：`ProcessSession` 开一个 cca 进程，fd 3 是答案管道（`CCA_PROMPT=1`），`FlowModel` 把 `ask` 事件变成页面，`FlowSheet` 显示。cca 不支持（`hello.prompt`）时走下面的终端交接。
 - **客户端更新**（`ClientUpdatesPage`，PROTOCOL 8）：桌面客户端和终端里的 Claude Code、Codex 一页管，每行一张卡片，`kind=cli` 的图标是终端。版本、能不能更新、为什么都是 cca 给的。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；系统自带的“终端”进程结束后默认留着窗口，按键后脚本用 AppleScript 关掉这个窗口；

@@ -162,7 +162,7 @@ func arrangementTests() {
     mm.shutdown()
 
     // 请求维护者把节点锁进映射
-    let requestLine = "请把这个账号的节点锁进映射：Claude erin@example.com → US-B  cca-lock-v1:abc"
+    let requestLine = "./policy.sh lock claude erin@example.com US-B"
     let lockLog = HookLog()
     let lockT = ScriptedTransport { request, _ in
         if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
