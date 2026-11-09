@@ -6023,6 +6023,7 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             'app': {'running': pid is not None, 'pid': pid}, 'cli': cli,
             'can': dict({x: x not in why for x in ('app', 'web', 'usage', 'check', 'cli')},
                         billing='web' not in why,   # 控制台的账单页和网页版走同一条路（cmd_web）
+                        limit_resets=T is CLAUDE and 'web' not in why,   # claude.ai 的用量页，只有 Claude 账号有
                         policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm)),
             'can_why': why,
             'usage': usage, 'health': health_view(k, v, now)}
@@ -9958,6 +9959,11 @@ cmd_billing() {   # cca [codex] billing [账号]：控制台的账单页。订�
 	cmd_web "${1:-}" "$BILLING_URL" 控制台的账单页
 }
 
+cmd_limit_resets() {   # cca limit-resets [账号]：claude.ai 的用量页。Claude 账号的重置次数和到期日只在这里显示（get_usage 不给，也不能拿登录凭证自己查）
+	[ "$TOOL" = claude ] || die "ChatGPT 账号的重置次数和到期日在 ${CMD} usage 里"
+	cmd_web "${1:-}" https://claude.ai/settings/usage 用量页
+}
+
 cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的浏览器实例里打开，登录地址没带邮箱时补上
 	local key="${CCA_ACCOUNT:-$(py get last)}" url
 	eval "$(py env "$key")" || exit 1
@@ -12054,6 +12060,7 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
                              只用于官方账号
   cca billing [账号]         用该账号的浏览器实例打开控制台的账单页，看订阅附带的每月 API 额度和余额；只用于官方账号
+  cca limit-resets [账号]    用该账号的浏览器实例打开 claude.ai 的用量页，看重置次数和到期日；只用于 Claude 的官方账号
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
                              部分；cca app --launchers 重新生成）。只用于官方账号
@@ -12195,6 +12202,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		rm|remove) shift; cmd_rm "$@" ;;
 		web) shift; cmd_web "$@" ;;
 		billing) shift; cmd_billing "$@" ;;
+		limit-resets) shift; cmd_limit_resets "$@" ;;
 		app) shift; cmd_app "$@" ;;
 		check) shift; cmd_check "$@" ;;
 		router) shift; cmd_router "$@" ;;

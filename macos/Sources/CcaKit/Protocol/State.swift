@@ -536,6 +536,8 @@ struct Can: Decodable, Sendable, Equatable {
     var web: Bool = false
     /// 能不能打开控制台的账单页（每月 API 额度和余额在那里看；旧版 cca 没有这一项，当作不能）
     var billing: Bool = false
+    /// 能不能打开 claude.ai 的用量页（Claude 账号的重置次数和到期日在那里看；旧版 cca 没有这一项，当作不能）
+    var limitResets: Bool = false
     var usage: Bool = false
     var check: Bool = true
     /// 能不能在终端里打开（要有 claude / codex 命令）
@@ -545,6 +547,7 @@ struct Can: Decodable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case app, web, billing, usage, check, cli
+        case limitResets = "limit_resets"
         case policyLock = "policy_lock"
     }
 
@@ -555,6 +558,7 @@ struct Can: Decodable, Sendable, Equatable {
         app = c.bool(.app) ?? false
         web = c.bool(.web) ?? false
         billing = c.bool(.billing) ?? false
+        limitResets = c.bool(.limitResets) ?? false
         usage = c.bool(.usage) ?? false
         check = c.bool(.check) ?? true
         cli = c.bool(.cli) ?? false

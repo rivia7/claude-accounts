@@ -32,6 +32,10 @@ import Foundation
     check("打开账单页中，按钮旁边说的是账单页", m.activity(bobRef)?.kind == .billing && Texts.activity(Activity(kind: .billing), appLabel: "Claude App") == "打开账单页…")
     _ = await waitUntil { m.activity(bobRef) == nil }
     check("账单页打开后不留在进行中，提示用 cca 给的话", m.activity(bobRef) == nil && m.toast?.text.isEmpty == false)
+    m.openLimitResets(bobRef)
+    check("打开用量页中，按钮旁边说的是用量页", m.activity(bobRef)?.kind == .limitResets && Texts.activity(Activity(kind: .limitResets), appLabel: "Claude App") == "打开用量页…")
+    _ = await waitUntil { m.activity(bobRef) == nil }
+    check("用量页打开后不留在进行中", m.activity(bobRef) == nil)
     let yes = ScriptedPrompter([true])
     m.hooks.prompter = yes
     m.syncRouter()

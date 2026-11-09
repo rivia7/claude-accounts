@@ -22,12 +22,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
-- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；同一个账号的 `reset`
+- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
-- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
+- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
-- `app`、`web`、`billing`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
+- `app`、`web`、`billing`、`limit-resets`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
 - `clients install TOKEN` 同样运行至完成，退出 App 不终止安装事务；`clients check` 和 `clients mode` 可取消。检查建议超时 900 秒，
@@ -122,7 +122,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
   "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
-  "can": {"app": true, "web": true, "billing": true, "usage": true, "check": true, "cli": true},
+  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true},
   "can_why": {},
   "usage": { "…用量条目，见 3.1…" },
   "health": { "…出口检测结果，见 3.3…" }
@@ -153,6 +153,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。`policy_lock` 是能不能请求维护者把节点锁进映射（4.8），没有对应的 `can_why`：不能就不显示这个入口。
   `billing` 是能不能打开控制台的账单页（`cca [codex] billing 账号`，用账号自己的浏览器实例和出口；订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，
   所以 App 只给入口、不显示数字）：条件和 `web` 一样，也走同样的步骤、事件和同意。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
+  `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
@@ -294,7 +295,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 ### 4.1 事件文件
 
-运行会改东西的命令（`app`、`web`、`billing`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
+运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
 查不了的原因看 `fail` 事件）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
@@ -412,7 +413,7 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 
 - 版本：`hello.prompt`（现在是 1）。没有这个字段、或者版本不认识：不开提问会话，走终端交接（6）。配置路由器、配置本机 Clash、账号表的表单另外要 `hello.forms`（现在是 1）：旧版 cca 这几条问的是终端里的那一套（比如 SSH 密码要在终端里输），没有这个字段时走终端。
 - 怎么运行：和平时一样（stdin 接 `/dev/null`、自己一个会话、`CCA_EVENTS`），多两样：设 `CCA_PROMPT=1`；**fd 3 接答案管道的读端**。stdout / stderr 接文件
-  （App 退出时 cca 不会被 SIGPIPE 杀掉），不限时。只给下面表里的流程用，不要给 `app`、`web`、`billing`、`usage`、`check`。
+  （App 退出时 cca 不会被 SIGPIPE 杀掉），不限时。只给下面表里的流程用，不要给 `app`、`web`、`billing`、`limit-resets`、`usage`、`check`。
 - `CCA_PROMPT=1`、`CCA_EVENTS`、fd 3 三样都有，cca 才进提问会话；缺一样就和平时的非交互一样（比如要终端的命令直接报错）。
 - 同意（4.2）在提问会话里当场问，不用带 `CCA_GRANT` 重跑。
 
@@ -485,7 +486,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy pull --json` | 定时（App 开着时一小时一次）、节点分流页「拉取映射」、账号的「现在拉取映射」 | 无交互命令（4.9） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
-| `[codex] usage`、`check`、`app`、`web`、`billing`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
+| `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
 | `router uninstall`、`local off`、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |

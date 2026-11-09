@@ -268,6 +268,7 @@ enum Texts {
         case .app: return "打开 \(appLabel)…"
         case .web: return "打开网页版…"
         case .billing: return "打开账单页…"
+        case .limitResets: return "打开用量页…"
         case .check: return "检测出口…"
         case .sync: return "同步路由器…"
         case .rename: return "改名…"

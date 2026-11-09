@@ -9,7 +9,7 @@ import Foundation
 /// | `_gui live` | live_router.json（CCA_ROUTE=local 时 live_local.json） | CCA_GUI_FIXTURE_LIVE |
 /// | `usage --json` | usage_claude.json / usage_codex.json | — |
 /// | `check KEY --json` | check.json | — |
-/// | `app KEY` / `web KEY` / `billing KEY` | events_open.jsonl | CCA_GUI_FIXTURE_APP / CCA_GUI_FIXTURE_WEB |
+/// | `app KEY` / `web KEY` / `billing KEY` / `limit-resets KEY` | events_open.jsonl | CCA_GUI_FIXTURE_APP / CCA_GUI_FIXTURE_WEB |
 /// | `router sync` | events_sync.jsonl（同意后成功） | CCA_GUI_FIXTURE_SYNC |
 /// | `codex reset KEY --json` | events_reset_consent.jsonl（要同意），同意后 reset.json | — |
 /// | `update --check --json` | update.json | — |
@@ -139,7 +139,7 @@ struct FixtureTransport: Transport {
             return json("check.json")
         case ("app", _):
             return await events(overrides["app"] ?? "events_open.jsonl", grants: request.grants, onEvent: onEvent)
-        case ("web", _), ("billing", _):
+        case ("web", _), ("billing", _), ("limit-resets", _):
             return await events(overrides["web"] ?? "events_open.jsonl", grants: request.grants, onEvent: onEvent)
         case ("router", "sync"):
             return await events(overrides["sync"] ?? "events_sync.jsonl", grants: request.grants, onEvent: onEvent)

@@ -12,7 +12,7 @@ enum SidebarItem: Hashable, Sendable {
 }
 
 enum ActivityKind: Sendable, Equatable {
-    case app, web, billing, check, sync, rename, reset
+    case app, web, billing, limitResets, check, sync, rename, reset
 }
 
 /// 一个账号正在做的事（按钮旁边显示进度）。
@@ -734,6 +734,11 @@ final class AppModel {
         launch(ref, kind: .billing, command: .billing(ref.tool, key: ref.key), title: "没能打开账单页")
     }
 
+    /// 查看重置次数：在账号自己的浏览器里打开 claude.ai 的用量页（Claude 账号的次数和到期日只在那里显示）。
+    func openLimitResets(_ ref: AccountRef) {
+        launch(ref, kind: .limitResets, command: .limitResets(ref.tool, key: ref.key), title: "没能打开用量页")
+    }
+
     private func launch(_ ref: AccountRef, kind: ActivityKind, command: CcaCommand, title: String) {
         guard phase == .ready, let client, activities[ref] == nil else { return }
         activities[ref] = Activity(kind: kind)
@@ -744,7 +749,7 @@ final class AppModel {
             })
             guard let self else { return }
             self.activities[ref] = nil
-            let opened = kind == .web ? "已打开网页版" : kind == .billing ? "已打开账单页" : "已打开 \(self.appLabel(ref.tool))"
+            let opened = kind == .web ? "已打开网页版" : kind == .billing ? "已打开账单页" : kind == .limitResets ? "已打开用量页" : "已打开 \(self.appLabel(ref.tool))"
             self.finish(r, failureTitle: title, success: r.resultEvent?.message ?? opened)
             await self.afterAction()
         }

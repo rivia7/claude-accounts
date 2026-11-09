@@ -26,6 +26,8 @@ func fixtureAssertions() {
         check("state：Claude 5 个官方账号 + 2 个 API 账号", c?.accounts.filter { !$0.isAPI }.count == 5 && c?.accounts.filter(\.isAPI).count == 2)
         let bob = s.account(bobRef)
         check("state：官方账号有账单页入口，第三方 API 账号没有", c?.accounts.allSatisfy { $0.can.billing == !$0.isAPI } == true)
+        check("state：用量页入口只给 Claude 的官方账号", c?.accounts.allSatisfy { $0.can.limitResets == !$0.isAPI } == true
+              && x?.accounts.allSatisfy { !$0.can.limitResets } == true)
         check("state：bob 被锁定、登录着、上次用的、App 开着",bob?.pinned == true && bob?.pinnedNode == "US-B" && bob?.login == .loggedIn
               && bob?.isLast == true && bob?.appRunning == true && bob?.app?.pid == 4242)
         check("state：bob 的缓存用量", bob?.usage?.fiveHour?.utilization == 92 && bob?.usage?.source == .cache

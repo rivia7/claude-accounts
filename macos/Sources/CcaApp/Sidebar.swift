@@ -149,6 +149,10 @@ struct AccountManageItems: View {
                 Button("查看 API 额度") { model.openBilling(a.ref) }
                     .disabled(busy)
             }
+            if a.can.limitResets {
+                Button("查看重置次数") { model.openLimitResets(a.ref) }
+                    .disabled(busy)
+            }
             Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
                 .disabled(busy)
             if a.can.policyLock {
