@@ -372,13 +372,14 @@ App 只复制、不解析。
 
 ### 4.9 定时拉维护者的映射：`cca policy pull --json`
 
-配置了映射（`state.config.policy.configured`）时 App 定时运行（低优先级，带事件文件，不弹框）：下次的时间是 `state.config.policy.next_check_epoch`（上次拉的时间 + 一小时，cca 算的，App 不重算；没拉过是 null），
+配置了映射（`state.config.policy.configured`）、cca 够新（`hello.forms`）时 App 定时运行（低优先级，带事件文件，不弹框）：下次的时间是 `state.config.policy.next_check_epoch`（上次拉的时间 + 一小时，cca 算的，App 不重算；没拉过是 null），
 App 开着就拉，不管窗口看不看得见（过热时跳过，下一次再试）。刚启动、到期了时至少隔 5 分钟，不空转。
 
 - 成功：退出码 0，stdout 一行 `{"version":1,"kind":"policy_pull","generated_epoch":…,"changed":true,"summary":"Claude 1 个账号、Codex 0 个账号"}`。
   `changed`：这次拉到的映射（或参考节点）和上次不一样。拉到了就马上照映射改账号表，账号表和路由器的摘要对不上时同步路由器：要重载 / 重启的不做（`consent` 事件 App 忽略），账号表已经上传，
   `state.routing.sync` 留着 `pending`，用户点“同步”时再问；在外面连不上路由器时等回家。
 - 拉不到：退出码 1，没有 stdout，`fail` 事件的 `code` 是 `policy_unavailable`，`message` 是原因（App 不打扰用户，到点再试；原因记在 cca 的日志里，`cca policy` 看得到）。
+- 手动拉取（节点分流页的「拉取映射」、账号右键菜单和「…」里的「现在拉取映射」）是同一条命令，不降优先级，不看下次的时间，结果照实提示（`summary`；拉不到时弹框说原因）。要重载时（`consent` 事件）接着走 `router sync` 的重跑流程（4.3）：这次是用户点的，弹框问。
 - 命令行的 `cca policy pull` 不带 `--json` 时和以前一样（只是多了 `checked` 的时间：启动时一天一次的后台拉取不用再拉）。
 
 ### 4.5 重置额度：`cca codex reset KEY --json`
@@ -479,13 +480,13 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
 | `[codex] policy request` | 账号页「…」、右键菜单 | 无交互命令（4.8） |
-| `policy pull --json` | 定时（App 开着时一小时一次） | 无交互命令（4.9） |
+| `policy pull --json` | 定时（App 开着时一小时一次）、节点分流页「拉取映射」、账号的「现在拉取映射」 | 无交互命令（4.9） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
-| `router uninstall`、`local off`、`policy`（查看、配置、手动拉取） | 没有入口 | 终端里自己运行 |
+| `router uninstall`、`local off`、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
 | `restore` | 没有入口 | 终端（要求 cca App 先退出） |
 

@@ -150,6 +150,10 @@ struct AccountManageItems: View {
             if a.can.policyLock {
                 Button("请求维护者锁定节点") { model.requestPolicyLock(a) }
             }
+            if model.policyPullAvailable {
+                Button(model.policyPulling ? "正在拉取映射…" : "现在拉取映射") { model.pullPolicyNow() }
+                    .disabled(model.policyPulling)
+            }
         }
         Button("删除账号…", role: .destructive) { model.run(.remove(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
             .disabled(busy)

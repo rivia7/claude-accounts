@@ -169,6 +169,16 @@ struct RoutingHeader: View {
                 .buttonStyle(.glass)
                 .disabled(model.liveLoading)
                 .help("重新读取路由器 / 本机 Clash 上各个端口现在的样子")
+                if model.policyPullAvailable {
+                    Button {
+                        model.pullPolicyNow()
+                    } label: {
+                        Label(model.policyPulling ? "拉取中…" : "拉取映射", systemImage: "arrow.down.to.line")
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(model.policyPulling)
+                    .help("马上从维护者的仓库拉一次账号和节点的映射（平时 App 开着时一小时自动拉一次）")
+                }
                 if model.routerConfigured {
                     Button {
                         model.syncRouter()

@@ -131,7 +131,6 @@ final class AppModel {
     /// 自动检测出口：上次试的时间、正在测的工具
     @ObservationIgnored private var exitAttempted: [AccountRef: Double] = [:]
     @ObservationIgnored private var exitPolling: Set<ToolID> = []
-    @ObservationIgnored private var policyPolling = false
     /// 什么时候点的“重新登录”（UsagePolling.reloginWatch 之内盯着它）
     @ObservationIgnored private var reloginStarted: [AccountRef: Double] = [:]
     /// 写回账号表的第几次（连着拖几次时只有最后一次收尾）；这次运行看过 App 里有没有没写回的顺序了没有
@@ -145,6 +144,8 @@ final class AppModel {
     /// 账号在各组里的排序和置顶（用户拖的；存在 App 的设置里）
     private(set) var arrangement = AccountArrangement()
     private(set) var syncActivity: Activity?
+    /// 正在拉维护者的映射（定时的和手动的同一时间一个）。
+    private(set) var policyPulling = false
     /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
     /// （`cca gui update`）；cca 已经比 App 新时只有后一步。
     enum UpdateStep: Equatable { case cca, app }
@@ -1195,7 +1196,12 @@ final class AppModel {
     }
 
     private func reconcilePolicyPolling() {
-        scheduler.updatePolicyPolling(enabled: phase == .ready && !isFixtureMode && state?.config?.policy?.configured == true)
+        scheduler.updatePolicyPolling(enabled: phase == .ready && !isFixtureMode && policyPullAvailable)
+    }
+
+    /// 能拉维护者的映射：配置了映射，cca 也够新（和 `hello.forms` 同一版起才有 `policy pull --json` 和 `next_check_epoch`；没有下次的时间，定时拉取就成了每 5 分钟一次）。
+    var policyPullAvailable: Bool {
+        formsSupported && state?.config?.policy?.configured == true
     }
 
     /// 离下次该拉维护者的映射还有多久：cca 给的时间（一小时一次）。到期了、没拉成时过一会儿再来。
@@ -1206,17 +1212,35 @@ final class AppModel {
     /// 定时拉维护者的映射（`cca policy pull --json`）：有变化时 cca 照映射改账号表、同步路由器（要重载的不问，留着“待同步”，用户点同步时再问）。
     /// 在后台也拉（App 平时就在后台）；拉不成不打扰，到点再试，原因记在 cca 的日志里（`cca policy` 看得到）。
     private func pollPolicy() {
-        guard phase == .ready, let client, !isFixtureMode, !policyPolling, flow == nil,
-              state?.config?.policy?.configured == true,
+        guard phase == .ready, let client, !isFixtureMode, !policyPulling, flow == nil, policyPullAvailable,
               PolicyPolling.isDue(next: state?.config?.policy?.nextCheckEpoch, now: Date().timeIntervalSince1970),
               !hooks.systemConditions().thermalPressure else { return }
-        policyPolling = true
+        policyPulling = true
         Task { [weak self] in
-            let (doc, _) = await client.document(.policyPull, as: PolicyPullDoc.self, prompter: nil)
+            let (doc, _) = await client.document(.policyPull(manual: false), as: PolicyPullDoc.self, prompter: nil)
             guard let self else { return }
-            self.policyPolling = false
+            self.policyPulling = false
             if doc?.changed == true { self.showToast("维护者更新了节点映射，账号表已经跟着改好", .info) }
             await self.loadState()
+        }
+    }
+
+    /// 现在就拉一次维护者的映射（节点分流页、账号的菜单）。结果照实提示；路由器要重载时接着走“同步路由器”：这次是用户点的，可以弹框问。
+    func pullPolicyNow() {
+        if isFixtureMode {
+            showToast("演示模式：不会拉取映射", .info)
+            return
+        }
+        guard phase == .ready, let client, !policyPulling, flow == nil, policyPullAvailable else { return }
+        policyPulling = true
+        Task { [weak self] in
+            let (doc, r) = await client.document(.policyPull(manual: true), as: PolicyPullDoc.self, prompter: nil)
+            guard let self else { return }
+            self.policyPulling = false
+            await self.loadState()
+            let detail = nonEmpty(doc?.summary).map { "（\($0)）" } ?? ""
+            self.finish(r, failureTitle: "没能拉取映射", success: (doc?.changed == true ? "已更新映射" : "映射没有变化") + detail)
+            if r.isSuccess, r.last?.events.contains(where: { $0.consent != nil }) == true { self.syncRouter() }
         }
     }
 

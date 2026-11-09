@@ -2,6 +2,8 @@ import Foundation
 
 // 自动刷新用量、检查客户端更新的节奏：只查到期的账号，系统吃紧、用户走开时不查，后台的活低优先级，不空转。
 
+private typealias ResponseOverride = @Sendable () -> CcaResponse
+
 @MainActor func pollingTests() async {
     section("自动刷新的节奏")
     let now = Date().timeIntervalSince1970
@@ -98,18 +100,23 @@ import Foundation
     check("下次的时间是 cca 给的", PolicyPolling.delay(next: now + 3000, now: now) == 3000)
     check("到期了、没拉过：过一会儿再来，不抢着在启动时干活", PolicyPolling.delay(next: now - 5, now: now) == PolicyPolling.minDelay && PolicyPolling.delay(next: nil, now: now) == PolicyPolling.minDelay)
     check("没到时间不拉，到了才拉", !PolicyPolling.isDue(next: now + 1, now: now) && PolicyPolling.isDue(next: now - 1, now: now) && PolicyPolling.isDue(next: nil, now: now))
-    check("命令：cca policy pull --json，低优先级，和同步路由器排队", CcaCommand.policyPull.arguments == ["policy", "pull", "--json"] && CcaCommand.policyPull.isBackground && CcaCommand.policyPull.gate == CcaCommand.routerSync.gate)
+    let autoPull = CcaCommand.policyPull(manual: false), manualPull = CcaCommand.policyPull(manual: true)
+    check("命令：cca policy pull --json，定时的低优先级，手动的不降，都和同步路由器排队",
+          autoPull.arguments == ["policy", "pull", "--json"] && manualPull.arguments == autoPull.arguments && autoPull.isBackground && !manualPull.isBackground
+          && autoPull.gate == CcaCommand.routerSync.gate && manualPull.gate == CcaCommand.routerSync.gate)
     let pullDoc = #"{"version":1,"kind":"policy_pull","generated_epoch":1794042000,"changed":true,"summary":"Claude 1 个账号"}"#
-    func policyModel(configured: Bool, next: Double?, doc: String = pullDoc, temp: Bool = false) -> (ScriptedTransport, AppModel, HookLog) {
+    let helloForms = tinyHello.replacingOccurrences(of: #""api":1"#, with: #""api":1,"prompt":1,"forms":1"#)
+    func policyModel(configured: Bool, next: Double?, doc: String = pullDoc, temp: Bool = false, hello: String? = nil,
+                     pull: ResponseOverride? = nil) -> (ScriptedTransport, AppModel, HookLog) {
         var root = (try? JSONSerialization.jsonObject(with: fixture("state_nocodex.json") ?? Data())) as? [String: Any] ?? [:]
         var config = root["config"] as? [String: Any] ?? [:]
         config["policy"] = ["configured": configured, "repo": "example/cca-policy", "next_check_epoch": next as Any? ?? NSNull()] as [String: Any]
         root["config"] = config
         let st = String(decoding: (try? JSONSerialization.data(withJSONObject: root)) ?? Data(), as: UTF8.self)
         let t = ScriptedTransport { r, _ in
-            if r.arguments == ["_gui", "hello"] { return response(0, stdout: tinyHello) }
+            if r.arguments == ["_gui", "hello"] { return response(0, stdout: hello ?? helloForms) }
             if r.arguments == ["_gui", "state"] { return response(0, stdout: st) }
-            if r.arguments == ["policy", "pull", "--json"] { return response(0, stdout: doc) }
+            if r.arguments == ["policy", "pull", "--json"] { return pull?() ?? response(0, stdout: doc) }
             return response(0)
         }
         let log = HookLog()
@@ -117,6 +124,15 @@ import Foundation
         return (t, makeModel(t, log: log), log)
     }
     func pulls(_ t: ScriptedTransport) -> [CcaRequest] { t.requests.filter { $0.arguments == ["policy", "pull", "--json"] } }
+    do {
+        let (t, m, _) = policyModel(configured: true, next: now - 5, hello: tinyHello)
+        await m.connect()
+        check("cca 太旧（没有 policy pull --json）：不定时，也没有手动拉取的按钮", !m.scheduler.policyPollingRunning && !m.policyPullAvailable)
+        m.pullPolicyNow()
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        check("cca 太旧：不拉", pulls(t).isEmpty)
+        m.shutdown()
+    }
     do {
         let (t, m, _) = policyModel(configured: false, next: nil)
         await m.connect()
@@ -150,6 +166,66 @@ import Foundation
         m.scheduler.onPolicyTick?()
         try? await Task.sleep(nanoseconds: 60_000_000)
         check("系统过热：不拉", pulls(t).isEmpty)
+        m.pullPolicyNow()
+        _ = await waitUntil { !pulls(t).isEmpty }
+        check("手动拉取：过热也照拉（是用户点的）", pulls(t).count == 1)
+        m.shutdown()
+    }
+    do {
+        let (t, m, _) = policyModel(configured: true, next: now + 3000)
+        await m.connect()
+        check("手动拉取：配置了映射、cca 够新时有按钮", m.policyPullAvailable)
+        m.pullPolicyNow()
+        m.pullPolicyNow()
+        check("手动拉取：拉的时候按钮显示进行中，点两下只拉一次", m.policyPulling)
+        _ = await waitUntil { !m.policyPulling && m.toast != nil }
+        check("手动拉取：没到定时的时间也拉，不降优先级；有变化时提示摘要", pulls(t).count == 1 && !pulls(t)[0].background && pulls(t)[0].wantsEvents
+              && m.toast?.text == "已更新映射（Claude 1 个账号）")
+        m.shutdown()
+    }
+    do {
+        let same = #"{"version":1,"kind":"policy_pull","generated_epoch":1794042000,"changed":false,"summary":"Claude 1 个账号"}"#
+        let (_, m, _) = policyModel(configured: true, next: now + 3000, doc: same)
+        await m.connect()
+        m.pullPolicyNow()
+        _ = await waitUntil { !m.policyPulling && m.toast != nil }
+        check("手动拉取：没有变化时也照实说", m.toast?.text == "映射没有变化（Claude 1 个账号）")
+        m.shutdown()
+    }
+    do {
+        let line = #"{"v":1,"ev":"fail","code":"policy_unavailable","message":"没有拉到映射：连不上 GitHub（接着用上次拉到的）"}"#
+        let failed: ResponseOverride = { CcaResponse(exitCode: 1, stdout: Data(), stderr: Data(), events: [EventLog.parseLine(Data(line.utf8))!]) }
+        let (_, m, _) = policyModel(configured: true, next: now + 3000, pull: failed)
+        await m.connect()
+        m.pullPolicyNow()
+        _ = await waitUntil { !m.policyPulling && m.sheet != nil }
+        if case .failure(let info)? = m.sheet {
+            check("手动拉取：拉不到时弹框说原因", info.title == "没能拉取映射" && info.failure.message.contains("连不上 GitHub"))
+        } else {
+            check("手动拉取：拉不到时弹框说原因", false, "\(String(describing: m.sheet))")
+        }
+        m.shutdown()
+    }
+    do {
+        let ok = #"{"version":1,"kind":"policy_pull","generated_epoch":1794042000,"changed":true,"summary":"Claude 1 个账号"}"#
+        let line = #"{"v":1,"ev":"consent","item":"router_reload","scope":"OpenClash","grant":"router_reload:OpenClash","title":"需要重载 OpenClash","question":"现在重载吗？","detail":"","severity":"warn","default":"yes"}"#
+        let consent: ResponseOverride = { CcaResponse(exitCode: 0, stdout: Data(ok.utf8), stderr: Data(), events: [EventLog.parseLine(Data(line.utf8))!]) }
+        let (t, m, _) = policyModel(configured: true, next: now + 3000, pull: consent)
+        await m.connect()
+        m.pullPolicyNow()
+        _ = await waitUntil { t.requests.contains { $0.arguments == ["router", "sync"] } }
+        check("手动拉取：路由器要重载时接着走“同步路由器”（这次可以问用户）", t.requests.contains { $0.arguments == ["router", "sync"] })
+        m.shutdown()
+    }
+    do {
+        let line = #"{"v":1,"ev":"consent","item":"router_reload","scope":"OpenClash","grant":"router_reload:OpenClash","title":"需要重载 OpenClash","question":"现在重载吗？","detail":"","severity":"warn","default":"yes"}"#
+        let consent: ResponseOverride = { CcaResponse(exitCode: 0, stdout: Data(pullDoc.utf8), stderr: Data(), events: [EventLog.parseLine(Data(line.utf8))!]) }
+        let (t, m, _) = policyModel(configured: true, next: now - 5, pull: consent)
+        await m.connect()
+        m.scheduler.onPolicyTick?()
+        _ = await waitUntil { !pulls(t).isEmpty && !m.policyPulling }
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        check("定时拉取：路由器要重载时不弹框、不接着同步（留着待同步）", !t.requests.contains { $0.arguments == ["router", "sync"] })
         m.shutdown()
     }
 }

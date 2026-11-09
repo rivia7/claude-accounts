@@ -16,8 +16,8 @@ enum CcaCommand: Sendable, Hashable {
     case app(ToolID, key: String)
     case web(ToolID, key: String)
     case routerSync
-    /// App 定时拉维护者的映射（`cca policy pull --json`，PROTOCOL 4.9）：照映射改账号表、同步路由器，要重载的不弹框（待同步，用户点“同步”）。
-    case policyPull
+    /// 拉维护者的映射（`cca policy pull --json`，PROTOCOL 4.9）：照映射改账号表、同步路由器，要重载的不做（待同步）。manual 是用户点的，不降优先级。
+    case policyPull(manual: Bool)
     /// 「更新并重新打开」的第一步：下载校验好和 cca 同版本的 App，先放着（PROTOCOL 5）。
     case guiUpdate
     /// 账号表按这个顺序排（`cca [codex] reorder 账号…`）：只改先后，端口、路由器都不动。
@@ -55,7 +55,7 @@ enum CcaCommand: Sendable, Hashable {
     /// 后台的活：低优先级运行。
     var isBackground: Bool {
         switch self {
-        case .usagePoll, .checkPoll, .policyPull, .clientCheck(force: false): return true
+        case .usagePoll, .checkPoll, .policyPull(manual: false), .clientCheck(force: false): return true
         default: return false
         }
     }
