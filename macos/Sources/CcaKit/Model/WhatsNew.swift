@@ -20,9 +20,11 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
-        ReleaseNote(version: "2.9.0", title: "2.9.0 正式版", points: [
+        ReleaseNote(version: "3.0.0", title: "cca 3.0 正式版", points: [
             .init(symbol: "checkmark.seal",
-                  text: "这是 2.9.0 的正式版，包含之前各个测试版的全部内容。以后的正式版默认会自动更新，不用再手动指定版本号。"),
+                  text: "这是 cca 3.0 正式版，包含之前各个测试版的全部内容。以后的正式版会自动更新，不用再手动指定版本号。"),
+            .init(symbol: "macwindow",
+                  text: "图形界面 App 平时在菜单栏后台运行：添加账号、编辑账号表、配置路由器和本机 Clash 都在窗口里完成，维护者的节点映射也会自动跟上。"),
             .init(symbol: "book",
                   text: "想看每个版本更新了什么：「帮助」菜单里的「更新说明」可以一张张翻。"),
         ], art: "sidebar"),
