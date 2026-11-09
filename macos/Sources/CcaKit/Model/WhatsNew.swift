@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.2", title: "看清还能重置几次", points: [
+            .init(symbol: "ticket",
+                  text: "ChatGPT 账号有重置机会时，总览卡片上一张小票代表一次，旁边写着最早什么时候过期。"),
+            .init(symbol: "arrow.counterclockwise",
+                  text: "Claude 账号的右键菜单和「…」里多了「查看重置次数」：用这个账号自己的浏览器和网络出口打开 claude.ai 的用量页，重置次数和到期日都在那里。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "3.1.0-beta.1", title: "在账号菜单里查看 API 额度", points: [
             .init(symbol: "creditcard",
                   text: "账号的右键菜单和「…」里多了「查看 API 额度」：用这个账号自己的浏览器和网络出口打开控制台的账单页，订阅附带的每月 API 额度和余额都在那里。第一次打开时要登录控制台。"),
