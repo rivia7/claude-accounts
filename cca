@@ -9932,8 +9932,9 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 )
 }
 
-cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）
-	local key site="$TRACE_HOST" what="${3:-}"
+cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）。
+	# mail 时打开后把账号的邮箱放进剪贴板：控制台这些登录页不认网址里的邮箱参数（实测），要登录时粘贴，免得在这个账号的浏览器里登错号
+	local key site="$TRACE_HOST" what="${3:-}" note=""
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
 	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：${what:-网页版}只能用官方账号"
@@ -9949,19 +9950,22 @@ cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法]：网页版：cla
 	fi
 	gui_step open
 	open_chrome "${2:-https://${site}/}" || { fail_warn open_failed "打开账号的独立浏览器失败"; return 1; }
+	if [ "${4:-}" = mail ] && [ -n "$ACC_EMAIL" ] && printf '%s' "$ACC_EMAIL" | pbcopy 2>/dev/null; then
+		note="；要登录的话，邮箱 ${ACC_EMAIL} 已经复制好，粘贴即可"
+	fi
 	what="${what:-${2:-$site}}"
-	info "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）"
-	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）"
+	info "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）${note}"
+	gui_result opened "已用 ${ACC_NAME} 的浏览器实例打开 ${what}（经 ${ACC_PROXY} → ${ACC_NODE}）${note}"
 }
 
 cmd_billing() {   # cca [codex] billing [账号]：控制台的账单页。订阅附带的每月 API 额度和余额只在这里显示（两家都没有用 API Key 查余额的接口），
 	# 走网页版的全部检查，用账号自己的浏览器实例和出口打开
-	cmd_web "${1:-}" "$BILLING_URL" 控制台的账单页
+	cmd_web "${1:-}" "$BILLING_URL" 控制台的账单页 mail
 }
 
 cmd_limit_resets() {   # cca limit-resets [账号]：claude.ai 的用量页。Claude 账号的重置次数和到期日只在这里显示（get_usage 不给，也不能拿登录凭证自己查）
 	[ "$TOOL" = claude ] || die "ChatGPT 账号的重置次数和到期日在 ${CMD} usage 里"
-	cmd_web "${1:-}" https://claude.ai/settings/usage 用量页
+	cmd_web "${1:-}" https://claude.ai/settings/usage 用量页 mail
 }
 
 cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的浏览器实例里打开，登录地址没带邮箱时补上

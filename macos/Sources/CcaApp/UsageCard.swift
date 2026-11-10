@@ -18,6 +18,7 @@ struct UsageSection: View {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 content(now: context.date.timeIntervalSince1970)
             }
+            WebOnlyRows(account: account)
         }
     }
 
@@ -320,6 +321,51 @@ struct ResetCreditsRow: View {
                 .disabled(busy || !a.can.usage)
                 .help("用掉一次重置机会，把 5 小时和每周的用量清零（会先问你；用量还不需要重置时不扣次数）")
             }
+        }
+        .font(.callout)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// 只能在网页上看的两样：Claude 账号的重置次数（claude.ai 的用量页）、订阅附带的每月 API 额度（控制台的账单页）。
+/// 一样一行，旁边是打开它的按钮（用账号自己的浏览器和出口；cca 顺手把邮箱放进剪贴板，要登录时粘贴）。
+/// 没登录也显示；cca 说不能（第三方 API 账号、没装 Chrome、旧版 cca）就不显示。
+struct WebOnlyRows: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+
+    var body: some View {
+        let a = account
+        let busy = model.activity(a.ref) != nil
+        if a.can.limitResets || a.can.billing {
+            VStack(alignment: .leading, spacing: 8) {
+                if a.can.limitResets {
+                    row("重置次数和到期日在 claude.ai 上看", icon: "arrow.counterclockwise", button: "查看重置次数",
+                        help: "用这个账号自己的浏览器和出口打开 claude.ai 的用量页；要登录时邮箱已经复制好", busy: busy) {
+                        model.openLimitResets(a.ref)
+                    }
+                }
+                if a.can.billing {
+                    row("订阅附带的每月 API 额度在控制台上看", icon: "creditcard", button: "查看 API 额度",
+                        help: "用这个账号自己的浏览器和出口打开控制台的账单页；要登录时邮箱已经复制好", busy: busy) {
+                        model.openBilling(a.ref)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private func row(_ text: String, icon: String, button: String, help: String, busy: Bool,
+                     action: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Label(text, systemImage: icon).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button(button, action: action)
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(busy)
+                .help(help)
         }
         .font(.callout)
         .accessibilityElement(children: .contain)

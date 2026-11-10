@@ -121,6 +121,14 @@ struct AccountMenu: View {
                 .disabled(!a.can.app || busy)
             Button("打开网页版") { model.openWeb(a.ref) }
                 .disabled(!a.can.web || busy)
+            if a.can.limitResets {
+                Button("查看重置次数") { model.openLimitResets(a.ref) }
+                    .disabled(busy)
+            }
+            if a.can.billing {
+                Button("查看 API 额度") { model.openBilling(a.ref) }
+                    .disabled(busy)
+            }
         }
         Button("在终端里打开") { model.openSession(a.ref) }
             .disabled(!a.can.cli || busy)
@@ -145,14 +153,6 @@ struct AccountManageItems: View {
             Button("更换 API key…") { model.run(.apiKey(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
                 .disabled(busy)
         } else {
-            if a.can.billing {
-                Button("查看 API 额度") { model.openBilling(a.ref) }
-                    .disabled(busy)
-            }
-            if a.can.limitResets {
-                Button("查看重置次数") { model.openLimitResets(a.ref) }
-                    .disabled(busy)
-            }
             Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
                 .disabled(busy)
             if a.can.policyLock {

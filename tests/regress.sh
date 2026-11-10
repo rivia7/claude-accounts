@@ -984,12 +984,12 @@ ok "cca codex reset：成功、不重置、出错退出，临时目录都清掉�
 ccanned alice@example.com 13 41 pro 2
 ok "Codex 的 access / refresh token 从没出现在 cca 写的文件、日志和命令行里（cca 只从 id_token 读邮箱和套餐）" '! grep -rqF -e at-SECRET -e rt-SECRET --exclude auth.json "$H/.cca" && ! grep -qF -e at-SECRET -e rt-SECRET "$T/env.log" codex.log curl.log security.log open.log'
 # 网页版、桌面 App 和启动器
-: > open.log
+: > open.log; rm -f "$T/clipboard"
 run CCA_TTY="$(ans)" cca codex web alice >/dev/null 2>&1
-ok "cca codex web：用账号专属的浏览器打开 chatgpt.com" 'grep -F "https://chatgpt.com/" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
+ok "cca codex web：用账号专属的浏览器打开 chatgpt.com；网页版不动剪贴板" '[ ! -e "$T/clipboard" ] && grep -F "https://chatgpt.com/" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
 : > open.log
 run CCA_TTY="$(ans)" cca codex billing alice >/dev/null 2>&1
-ok "cca codex billing：用账号专属的浏览器打开 OpenAI 控制台的账单页" 'grep -F "https://platform.openai.com/settings/organization/billing/overview" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
+ok "cca codex billing：用账号专属的浏览器打开 OpenAI 控制台的账单页，邮箱放进剪贴板" '[ "$(cat "$T/clipboard")" = alice@example.com ] && grep -F "https://platform.openai.com/settings/organization/billing/overview" open.log | grep -qF -- "--user-data-dir=$CD/chrome"'
 : > open.log
 out=$(run CCA_TTY="$(ans)" cca codex limit-resets alice 2>&1); rc=$?
 ok "cca codex limit-resets：ChatGPT 账号的次数在 usage 里，不打开浏览器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "重置次数和到期日在 cca codex usage 里" && [ ! -s open.log ]'
@@ -1123,12 +1123,12 @@ ok "图形界面：同意的是别的出口 IP：不算" '[ $rc -ne 0 ] && ! gre
 runev CCA_GRANT=low_purity:203.0.113.1 cca app alice >/dev/null 2>&1; rc=$?; cp "$T/ev.jsonl" "$GF/events_open.jsonl"
 ok "图形界面：同意了这个出口 IP：照样打开 App，事件里有每一步和结果" '[ $rc -eq 0 ] && grep -q "user-data-dir=$AD/desktop" open.log && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"node\"] and e[\"port\"] == 7901" && jok "d[\"result\"] == \"low_purity\"" < "$AD/health.json"'
 rm -f "$T/risk/203.0.113.1.json"
-: > open.log
+: > open.log; rm -f "$T/clipboard"
 runev cca billing alice >/dev/null 2>&1; rc=$?
-ok "cca billing：用账号专属的浏览器和出口打开控制台的账单页，步骤和结果事件和网页版一样" '[ $rc -eq 0 ] && grep -F "https://platform.claude.com/settings/billing" open.log | grep -F -- "--user-data-dir=$AD/chrome" | grep -qF -- "--proxy-server=http://" && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"port\"] == 7901 and \"控制台的账单页\" in e[\"message\"]"'
-: > open.log
+ok "cca billing：用账号专属的浏览器和出口打开控制台的账单页，步骤和结果事件和网页版一样" '[ $rc -eq 0 ] && grep -F "https://platform.claude.com/settings/billing" open.log | grep -F -- "--user-data-dir=$AD/chrome" | grep -qF -- "--proxy-server=http://" && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"port\"] == 7901 and \"控制台的账单页\" in e[\"message\"] and \"邮箱 alice@example.com 已经复制好\" in e[\"message\"]" && [ "$(cat "$T/clipboard")" = alice@example.com ]'
+: > open.log; rm -f "$T/clipboard"
 runev cca limit-resets alice >/dev/null 2>&1; rc=$?
-ok "cca limit-resets：用账号专属的浏览器和出口打开 claude.ai 的用量页，步骤和结果事件和网页版一样" '[ $rc -eq 0 ] && grep -F "https://claude.ai/settings/usage" open.log | grep -F -- "--user-data-dir=$AD/chrome" | grep -qF -- "--proxy-server=http://" && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"port\"] == 7901 and \"用量页\" in e[\"message\"]"'
+ok "cca limit-resets：用账号专属的浏览器和出口打开 claude.ai 的用量页，步骤和结果事件和网页版一样" '[ $rc -eq 0 ] && grep -F "https://claude.ai/settings/usage" open.log | grep -F -- "--user-data-dir=$AD/chrome" | grep -qF -- "--proxy-server=http://" && evq "e[\"ev\"] == \"step\" and e[\"code\"] == \"preflight\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"opened\" and e[\"port\"] == 7901 and \"用量页\" in e[\"message\"] and \"已经复制好\" in e[\"message\"]" && [ "$(cat "$T/clipboard")" = alice@example.com ]'
 # 失败的原因、要在终端里做的事
 unlisten 7901; n_cli=$(grep -c '^ARGS:' claude.log)
 out=$(run cca @alice --version 2>&1 </dev/null); rc_plain=$?
