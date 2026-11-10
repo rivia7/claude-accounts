@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.6", title: "Claude Code 显示的套餐不对时，提示重新登录", points: [
+            .init(symbol: "person.badge.key",
+                  text: "升级、降级套餐以后，Claude Code 里显示的套餐（启动时的横幅、/status）可能还是旧的：它只在登录时记下套餐，之后不会自己更新。cca 查用量时发现和账号现在的套餐对不上，账号页会说一句，用量下面有「重新登录…」，重新登录一次就会更新。"),
+            .init(symbol: "terminal",
+                  text: "命令行里也会提示：cca usage 的表格下面、启动这个账号时的横幅里各说一句。额度一直照账号实际的套餐算，不受影响。"),
+        ], art: "badges"),
         ReleaseNote(version: "3.1.0-beta.5", title: "看看账号在哪些设备上用", points: [
             .init(symbol: "desktopcomputer",
                   text: "维护者映射里的账号，账号页最下面多了「设备」：哪几台 Mac 正在用它、开着但闲置了多久、离线的最后一次回报在什么时候、上次什么时候用。维护者配置了设备统计的服务器之后才有。"),
