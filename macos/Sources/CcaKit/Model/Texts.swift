@@ -412,6 +412,59 @@ enum Texts {
         return "本周额度还剩 \(f.leftPercent)%，\(when) 重置，建议先用这个账号"
     }
 
+    // MARK: 每周用量（cca 给的 usage_weeks）
+
+    /// 过完的几周的统计（账号页「每周用量」图下面那一行）：「记下的 8 周平均用到 63% · 2 周用完 · 3 周没用到一半」；
+    /// 一周都还没过完时是 nil。
+    static func weeksSummary(_ s: UsageWeeksSummary) -> String? {
+        guard let avg = weeksAverage(s) else { return nil }
+        return ([s.weeks == 1 ? "记下的 1 周用到 \(avg)" : "记下的 \(s.weeks) 周平均用到 \(avg)"] + weeksNotes(s)).joined(separator: " · ")
+    }
+
+    /// 平均每周用到多少：「63%」；一周都还没过完时是 nil
+    static func weeksAverage(_ s: UsageWeeksSummary) -> String? {
+        guard s.weeks > 0, let avg = s.averagePercent else { return nil }
+        return "\(avg)%"
+    }
+
+    /// 几周用完、几周没用到一半（用量统计页平均数下面那一行）；都没有时是空的
+    static func weeksNotes(_ s: UsageWeeksSummary) -> [String] {
+        (s.maxed > 0 ? ["\(s.maxed) 周用完"] : []) + (s.underHalf > 0 ? ["\(s.underHalf) 周没用到一半"] : [])
+    }
+
+    /// 一周的细节（鼠标指着柱子时、读屏）：「11 月 6 日–13 日：用到 87%，中间重置过 1 次」；
+    /// 还没过完的这一周：「本周到现在用了 20%，周四 10:00 重置」
+    static func weekDetail(_ w: UsageWeek, now: Double, calendar: Calendar = .current) -> String {
+        let resets = w.resets > 0 ? "中间重置过 \(w.resets) 次" : nil
+        if w.current {
+            return "本周到现在用了 \(percent(w.usedPercent))" + (resets.map { "（\($0)）" } ?? "") + "，"
+                + resetText(epoch: w.endEpoch, now: now, calendar: calendar)
+        }
+        return weekRange(w, now: now, calendar: calendar) + "：用到 \(percent(w.usedPercent))" + (resets.map { "，" + $0 } ?? "")
+            + (w.partial ? "；结束前一天没查到，实际可能更多" : "")
+    }
+
+    /// 「11 月 6 日–13 日」、「10 月 30 日–11 月 6 日」（不是今年的带年份）
+    static func weekRange(_ w: UsageWeek, now: Double, calendar: Calendar = .current) -> String {
+        let a = calendar.dateComponents([.year, .month], from: Date(timeIntervalSince1970: w.startEpoch))
+        let b = calendar.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: w.endEpoch))
+        let start = dayText(w.startEpoch, now: now, calendar: calendar)
+        if a.year == b.year && a.month == b.month { return start + "–\(b.day ?? 0) 日" }
+        return start + "–" + dayText(w.endEpoch, now: now, calendar: calendar)
+    }
+
+    /// 柱子下面的日期：这一周从哪天开始（「11/6」）；还没过完的写「本周」
+    static func weekLabel(_ w: UsageWeek, calendar: Calendar = .current) -> String {
+        if w.current { return "本周" }
+        let c = calendar.dateComponents([.month, .day], from: Date(timeIntervalSince1970: w.startEpoch))
+        return "\(c.month ?? 0)/\(c.day ?? 0)"
+    }
+
+    /// 从什么时候开始记的：「从 11 月 11 日开始记」
+    static func weeksSince(_ epoch: Double, now: Double, calendar: Calendar = .current) -> String {
+        "从 " + dayText(epoch, now: now, calendar: calendar) + "开始记"
+    }
+
     /// 侧栏「客户端更新」右边的标签：有几个客户端有新版本。
     static func clientUpdatesTag(_ n: Int) -> String { "\(n) 个可更新" }
 

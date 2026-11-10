@@ -257,3 +257,120 @@ struct UsageDoc: CcaDocument, Equatable {
         skippedAPIAccounts = c.lossyArray(String.self, .skippedAPIAccounts) ?? []
     }
 }
+
+/// `usage_weeks`（PROTOCOL 2.2）：最近几周每周用到这一周额度的百分之几。Claude、OpenAI 都不给过去几周的额度，是 cca 每次查用量时
+/// 记下的；哪一周算用完、算没记全、统计怎么算都由 cca 定，App 照着画。旧版 cca 没有，是 nil。
+struct UsageWeeks: Decodable, Sendable, Equatable {
+    /// 从什么时候开始记的（最早一次记下的时间）
+    var sinceEpoch: Double?
+    /// 按时间排好，最后一项可能是还没过完的这一周
+    var weeks: [UsageWeek]
+    var summary: UsageWeeksSummary
+
+    enum CodingKeys: String, CodingKey {
+        case sinceEpoch = "since_epoch"
+        case weeks, summary
+    }
+
+    init(sinceEpoch: Double?, weeks: [UsageWeek], summary: UsageWeeksSummary) {
+        self.sinceEpoch = sinceEpoch
+        self.weeks = weeks
+        self.summary = summary
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sinceEpoch = c.double(.sinceEpoch)
+        weeks = (c.lossyArray(UsageWeek.self, .weeks) ?? []).sorted { $0.endEpoch < $1.endEpoch }
+        summary = c.lossy(UsageWeeksSummary.self, .summary) ?? UsageWeeksSummary()
+    }
+
+    /// 还没过完的这一周（cca 标的 `current`）
+    var current: UsageWeek? { weeks.last(where: \.current) }
+}
+
+/// 一周（`usage_weeks.weeks[]`）：从 `start_epoch` 到 `end_epoch`（中间重置后重新计时的，到下一周开始时为止）。
+struct UsageWeek: Decodable, Sendable, Equatable, Identifiable {
+    var startEpoch: Double
+    var endEpoch: Double
+    /// 用到这一周额度的百分之几：中间重置过的把重置前的加上，可能超过 100
+    var usedPercent: Double
+    /// 中间重置过几次（重置额度、官方重置）
+    var resets: Int
+    /// 最后一次查到的时间
+    var lastEpoch: Double?
+    /// 这一周还没过完
+    var current: Bool
+    /// 结束前一天里没查到过：后来的用量没记下，实际可能更多
+    var partial: Bool
+
+    var id: Double { endEpoch }
+
+    enum CodingKeys: String, CodingKey {
+        case startEpoch = "start_epoch"
+        case endEpoch = "end_epoch"
+        case usedPercent = "used_percent"
+        case resets
+        case lastEpoch = "last_epoch"
+        case current, partial
+    }
+
+    init(startEpoch: Double, endEpoch: Double, usedPercent: Double, resets: Int = 0, lastEpoch: Double? = nil,
+         current: Bool = false, partial: Bool = false) {
+        self.startEpoch = startEpoch
+        self.endEpoch = endEpoch
+        self.usedPercent = usedPercent
+        self.resets = resets
+        self.lastEpoch = lastEpoch
+        self.current = current
+        self.partial = partial
+    }
+
+    /// 缺时间、百分比，或者区间是空的：这一项不要（lossyArray 跳过）
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let start = c.double(.startEpoch), let end = c.double(.endEpoch), let used = c.double(.usedPercent), start < end else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "usage week"))
+        }
+        startEpoch = start
+        endEpoch = end
+        usedPercent = max(used, 0)
+        resets = max(c.int(.resets) ?? 0, 0)
+        lastEpoch = c.double(.lastEpoch)
+        current = c.bool(.current) ?? false
+        partial = c.bool(.partial) ?? false
+    }
+}
+
+/// `usage_weeks.summary`：过完的几周（不算还没过完的这一周）的统计，cca 算好的（百分比都是四舍五入后的整数）。
+struct UsageWeeksSummary: Decodable, Sendable, Equatable {
+    /// 算进来的有几周
+    var weeks: Int = 0
+    /// 平均每周用到百分之几；一周都没有时 nil
+    var averagePercent: Int?
+    /// 用完（100% 及以上）的有几周
+    var maxed: Int = 0
+    /// 没用到一半的有几周
+    var underHalf: Int = 0
+
+    enum CodingKeys: String, CodingKey {
+        case weeks, maxed
+        case averagePercent = "average_percent"
+        case underHalf = "under_half"
+    }
+
+    init(weeks: Int = 0, averagePercent: Int? = nil, maxed: Int = 0, underHalf: Int = 0) {
+        self.weeks = weeks
+        self.averagePercent = averagePercent
+        self.maxed = maxed
+        self.underHalf = underHalf
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        weeks = max(c.int(.weeks) ?? 0, 0)
+        averagePercent = c.int(.averagePercent)
+        maxed = max(c.int(.maxed) ?? 0, 0)
+        underHalf = max(c.int(.underHalf) ?? 0, 0)
+    }
+}

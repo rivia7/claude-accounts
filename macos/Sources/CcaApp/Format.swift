@@ -141,6 +141,29 @@ struct UpdatesMark: View {
     }
 }
 
+/// “用量统计”的图标：三根高低不同的柱子。和客户端更新的图标一套画法（粗圆的线，线宽是边长的 0.15，不带底）；
+/// 颜色是 Logo 的蓝渐变到紫（左上角先掺一点白）。
+struct StatsMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        Canvas { ctx, s in
+            let w = s.width
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * w, y: y * w) }
+            var g = Path()
+            g.move(to: p(0.20, 0.84)); g.addLine(to: p(0.20, 0.56))
+            g.move(to: p(0.50, 0.84)); g.addLine(to: p(0.50, 0.16))
+            g.move(to: p(0.80, 0.84)); g.addLine(to: p(0.80, 0.40))
+            let shade = Gradient(stops: [.init(color: Brand.blue.mix(with: .white, by: 0.25), location: 0),
+                                         .init(color: Brand.blue, location: 0.35), .init(color: Brand.violet, location: 1)])
+            ctx.stroke(g, with: .linearGradient(shade, startPoint: p(0.15, 0), endPoint: p(0.85, 1)),
+                       style: StrokeStyle(lineWidth: w * 0.15, lineCap: .round))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 /// 周结算提醒的沙漏（侧栏、菜单栏的账号行，名字后面）：本周额度快重置了、还剩不少，建议先用这个账号。
 /// 用强调色：是提示不是警告（绿是在用，橙、红是问题）。悬停和读屏是同一句话；到了重置时间自己消失（每分钟按时间重算）。
 struct UseFirstMark: View {
@@ -296,12 +319,15 @@ struct RunningDot: View {
     }
 }
 
-/// 一根用量条。dim 时（数据旧了）用灰色，不靠透明度。
+/// 一根用量条。dim 时（数据旧了）用灰色，不靠透明度。每周用量的图（WeeklyChart）是竖着的同一种条。
 struct Meter: View {
     var fraction: Double
     var color: Color
     var height: CGFloat = 8
     var dim = false
+
+    /// 数据旧了、不全时填的灰色（每周用量里没记全的那一周也是它）
+    static let dimColor = Color.secondary.opacity(0.6)
 
     var body: some View {
         GeometryReader { g in
@@ -309,7 +335,7 @@ struct Meter: View {
                 Capsule().fill(Surface.track)
                 if fraction > 0 {
                     Capsule()
-                        .fill(dim ? Color.secondary.opacity(0.6) : color)
+                        .fill(dim ? Self.dimColor : color)
                         .frame(width: max(g.size.width * min(fraction, 1), height))
                 }
             }

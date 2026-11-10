@@ -118,6 +118,96 @@ class UsageView(unittest.TestCase):
         for k in ('sk-ant-api03-0123456789abcdefghijWXYZ', 'abcdefghijklmnopqrstuvwxyz'):
             self.assertRegex(key_hint(k), r'^[!-~]{0,8}…[!-~]{4}$')
 
+    def test_weeks_add(self):
+        """每周用量的记录：按重置时间认是哪一周，记最高的百分比；掉下去一大截是中间重置过，之前的累计下来"""
+        add, W = self.ns['weeks_add'], self.ns['WEEK']
+        t = 1_800_000_000.0
+        end = t + 3 * 86400
+        rl = lambda pct, e=end: {'seven_day': {'utilization': pct, 'resets_at': e}}
+        weeks = []
+        self.assertTrue(add(weeks, rl(10), t))
+        self.assertTrue(add(weeks, rl(30), t + 60))
+        self.assertTrue(add(weeks, rl(27, end + 0.4), t + 120))   # 低了不到 5 个百分点；重置时间差零点几秒：还是同一周
+        self.assertEqual(len(weeks), 1)
+        self.assertEqual((weeks[0]['peak'], weeks[0]['carried'], weeks[0]['resets'], weeks[0]['end']), (30, 0, 0, end + 0.4))
+        self.assertFalse(add(weeks, rl(50), t + 30))    # 比已经记下的旧（Claude Code 的缓存）：不改
+        self.assertFalse(add(weeks, rl(50), t + 120))   # 同一次查询
+        self.assertTrue(add(weeks, rl(1), t + 180))     # 掉到 1%：中间重置过
+        self.assertTrue(add(weeks, rl(40), t + 240))
+        self.assertEqual((weeks[0]['peak'], weeks[0]['carried'], weeks[0]['resets']), (40, 30, 1))
+        self.assertEqual((weeks[0]['first'], weeks[0]['last']), (t, t + 240))
+        self.assertFalse(add(weeks, rl(60, t), t + 300))   # 窗口已经重置了：缓存里的数不算数
+        self.assertFalse(add(weeks, {'seven_day': {'utilization': 5}}, t))   # 不知道什么时候重置（这一周还没开始用）
+        self.assertFalse(add(weeks, {}, t))
+        self.assertFalse(add(weeks, rl(float('nan')), t + 400))   # NaN、无穷大不记（App 解码不了，算平均会出错）
+        self.assertFalse(add(weeks, rl(float('inf')), t + 400))
+        self.assertFalse(add(weeks, rl(10, float('inf')), t + 400))
+        self.assertEqual((weeks[0]['peak'], weeks[0]['last']), (40, t + 240))
+        for i in range(1, 70):   # 新的一周接在后面，最多留 WEEKS_KEEP 周
+            add(weeks, rl(i, end + i * W), t + i * W)
+        self.assertEqual(len(weeks), self.ns['WEEKS_KEEP'])
+        self.assertEqual(weeks[-1]['end'], end + 69 * W)
+        self.assertEqual([w['end'] for w in weeks], sorted(w['end'] for w in weeks))
+
+    def test_weeks_record_file(self):
+        """查到用量时记进账号目录的 usage-weeks.json（600）；同一次查询不重写，坏的项读的时候不要"""
+        rec, load, path = self.ns['weeks_record'], self.ns['weeks_load'], self.ns['weeks_file']
+        rl = {'seven_day': {'utilization': 12.5, 'resets_at': self.now + 86400}}
+        rec('bob@example.com', rl, self.now)
+        p = path('bob@example.com')
+        self.assertEqual(os.stat(p).st_mode & 0o777, 0o600)
+        self.assertEqual([(w['peak'], w['first']) for w in load('bob@example.com')], [(12.5, self.now)])
+        mtime = os.stat(p).st_mtime_ns
+        rec('bob@example.com', rl, self.now)
+        self.assertEqual(os.stat(p).st_mtime_ns, mtime)
+        self.ns['save_json'](p, {'version': 1, 'weeks': [{'end': 'x'}, 'bad', {'end': 1, 'peak': 2, 'first': 3, 'last': 4}]}, 0o600)
+        self.assertEqual(load('bob@example.com'), [{'end': 1, 'peak': 2, 'first': 3, 'last': 4, 'carried': 0, 'resets': 0}])
+        nan, inf = float('nan'), float('inf')
+        self.ns['save_json'](p, {'version': 1, 'weeks': [{'end': 1, 'peak': nan, 'first': 3, 'last': 4},
+                                                          {'end': 5, 'peak': 6, 'first': 7, 'last': 8, 'carried': inf, 'resets': nan}]}, 0o600)
+        self.assertEqual(load('bob@example.com'), [{'end': 5, 'peak': 6, 'first': 7, 'last': 8, 'carried': 0, 'resets': 0}])
+        self.assertEqual(load('nobody@example.com'), [])
+
+    def test_usage_weeks_view(self):
+        """App 看的每周用量：最近 12 周，标出还没过完的、结束前一天没查到的；统计只算过完的几周（四舍五入后的百分比）"""
+        view, W, D = self.ns['usage_weeks_view'], self.ns['WEEK'], 86400
+        save = lambda weeks: self.ns['save_json'](self.ns['weeks_file']('alice@example.com'), {'version': 1, 'weeks': weeks}, 0o600)
+        now = 1_800_000_000.0
+
+        def week(end, peak, carried=0, resets=0, first=None, last=None):
+            return {'end': end, 'peak': peak, 'carried': carried, 'resets': resets,
+                    'first': end - W + 3600 if first is None else first, 'last': end - 600 if last is None else last}
+
+        self.assertIsNone(view('alice@example.com', now))   # 还没有记录
+        weeks = [week(now - 13 * W, 90),                         # 13 周前结束：不显示，只算进从什么时候开始记
+                 week(now - 3 * W, 99.5),                        # 显示成 100%：算用完
+                 week(now - 2 * W, 30, last=now - 2 * W - 2 * D),   # 结束前两天就没再查到：实际可能更多
+                 week(now - W, 60, carried=70, resets=1),        # 中间重置过一次：一共 130%
+                 week(now + 2 * D, 20, last=now - 60)]           # 这一周还没过完
+        save(weeks)
+        v = view('alice@example.com', now)
+        self.assertEqual(v['since_epoch'], weeks[0]['first'])
+        self.assertEqual([(w['start_epoch'], w['end_epoch']) for w in v['weeks']], [(w['end'] - W, w['end']) for w in weeks[1:]])
+        self.assertEqual([w['used_percent'] for w in v['weeks']], [99.5, 30, 130, 20])
+        self.assertEqual([w['current'] for w in v['weeks']], [False, False, False, True])
+        self.assertEqual([w['partial'] for w in v['weeks']], [False, True, False, False])
+        self.assertEqual([w['resets'] for w in v['weeks']], [0, 0, 1, 0])
+        self.assertEqual(v['weeks'][-1]['last_epoch'], now - 60)
+        self.assertEqual(v['summary'], {'weeks': 3, 'average_percent': 87, 'maxed': 2, 'under_half': 1})
+        # Claude Code 的缓存比 cca 记的新：只在内存里并进来，文件不动
+        x = {'at': now, 'rl': {'seven_day': {'utilization': 35, 'resets_at': now + 2 * D}}}
+        self.assertEqual(view('alice@example.com', now, x)['weeks'][-1]['used_percent'], 35)
+        self.assertEqual(self.ns['weeks_load']('alice@example.com')[-1]['peak'], 20)
+        # 中间重置后重新计时（下一周提前开始）：上一周到那时为止，不算还没过完
+        save([week(now + 3 * D, 80, first=now - 4 * D, last=now - 2 * D), week(now + 6 * D, 5, first=now - D, last=now - 60)])
+        v = view('alice@example.com', now)
+        self.assertEqual([(w['end_epoch'], w['current'], w['partial']) for w in v['weeks']], [(now - D, False, False), (now + 6 * D, True, False)])
+        self.assertEqual(v['summary'], {'weeks': 1, 'average_percent': 80, 'maxed': 0, 'under_half': 0})
+        # 最近 12 周都没有记录
+        save([week(now - 20 * W, 50)])
+        self.assertEqual(view('alice@example.com', now)['weeks'], [])
+        self.assertEqual(view('alice@example.com', now)['summary'], {'weeks': 0, 'average_percent': None, 'maxed': 0, 'under_half': 0})
+
 
 if __name__ == '__main__':
     unittest.main()

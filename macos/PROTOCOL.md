@@ -128,12 +128,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "can_why": {},
   "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain"},
   "usage": { "…用量条目，见 3.1…" },
+  "usage_weeks": { "…每周用量，见下面…" },
   "health": { "…出口检测结果，见 3.3…" }
 }
 ```
 
 第三方 API 账号：`kind: "api"`、`login: "api"`、`email: ""`、`plan: ""`、`plan_tier: ""`、`badge: null`、`api: {"host": "api.example.com", "model": "model-x"}`
-（**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage` 恒为 null。
+（**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage`、`usage_weeks` 恒为 null。
 
 - `login`：`logged_in` | `logged_out` | `email_mismatch`（登录的不是这个账号，`login_email` 是实际登录的）| `api`。
 - `plan`：套餐的显示名（`Max`、`Pro 200`……），不知道为 `""`。
@@ -167,6 +168,33 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   没有掩码，是 `""`，App 画圆点）；`source`：`keychain`（钥匙串里）| `table`（账号表的 `key` 字段里，明文；只有第三方 API 账号有）| `""`（没存）。
   `state` 不读钥匙串，掩码照 config.json 里记的说；**明文只在用户点「显示」「复制」时经 `key --show` 要**。旧版 cca 没有这个字段，当作 null。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
+- `usage_weeks`：每周用量（账号页的「每周用量」、侧栏的「用量统计」）：最近 12 周每周用到这一周额度的百分之几，和这几周的统计。
+  Claude、OpenAI 都不给以前的用量，这是 cca 每次查到用量时（`cca usage`、重置额度）记在账号目录里的，从开始记的那一周起一周一周长出来；
+  没有记录为 null（还没查到过、第三方 API 账号；旧版 cca 没有这个字段，同样当作 null）。没登录的官方账号也照样给以前记下的。
+  `state` 只读：比记下的新的用量（Claude Code 自己的缓存）只在内存里并进来。
+
+  ```json
+  "usage_weeks": {
+    "since_epoch": 1787047200.0,
+    "weeks": [
+      {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "used_percent": 72, "resets": 0, "last_epoch": 1793691300.0, "current": false, "partial": false},
+      {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 41, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
+    ],
+    "summary": {"weeks": 11, "average_percent": 84, "maxed": 3, "under_half": 0}
+  }
+  ```
+
+  - `since_epoch`：从什么时候开始记的（最早记下的一次，可能早于列出的这几周）。
+  - `weeks[]`：按时间排好，只列结束在最近 12 周里的。一项是本周额度（`seven_day`）的一个窗口：`end_epoch` 是它的重置时间，`start_epoch`
+    往前 7 天；中间重新计时的（下一周在这一周结束前就开始了，例如官方重置了额度），`end_epoch` 是下一周开始的时候。
+  - `used_percent`：这一周用到额度的百分之几：这一周查到的最高的；比最高的低了超过 5 个百分点算中间重置过（`resets` 加一），重置前的加上，
+    所以可能超过 100。`last_epoch`：最后一次查到的时间。
+  - `current`：还没过完的这一周（最多一项，是最后一项）。`partial`：过完的一周里，结束前一天一次也没查到（之后用的没记下，实际可能更多）；
+    用完了的（100% 及以上）不算。
+  - `summary`：`weeks` 里过完的那几周（`current` 为 false 的）的统计，百分比按四舍五入后的整数算：`weeks` 几周，`average_percent` 平均每周
+    （一周都没过完时为 null），`maxed` 用完（100% 及以上）的几周，`under_half` 没用到一半的几周。
+
+  App 只排版、不重算：条的高低、哪一周填灰色、统计的数字都照这里的。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
 `config`：
@@ -476,6 +504,7 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
   这三种退出码 0。`no_credit`（这一次已经不能用了）不输出文档：`fail` 的 `no_reset_credit`，退出码 1。已经请求重置、结果却不知道
   （超时、codex 出错）：`fail` 的 `error`，`message` 说可能已经用掉了一次、刷新用量看看。
 - `usage` 是重置后的用量（读不到为 null：App 自己再刷新一次用量）；`message` 是给人看的一句话，App 照着提示。
+  重置前后读到的用量都记进每周用量（2.2 的 `usage_weeks`）：这一周算中间重置过一次，重置前用掉的照样算进这一周。
 
 ### 4.6 提问会话：在 App 里问完的流程
 

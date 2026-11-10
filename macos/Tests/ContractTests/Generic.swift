@@ -23,6 +23,31 @@ func genericHello(_ name: String, _ d: Data) -> HelloDoc? {
     return doc
 }
 
+/// usage_weeks（PROTOCOL 2.2）：数字都是 cca 算的，App 只排版；这里核对 cca 给的东西自洽
+func usageWeeksInvariants(_ n: String, _ raw: [String: Any], _ uw: UsageWeeks?) {
+    guard let uw else {
+        check("\(n) 解码", false)
+        return
+    }
+    let rawWeeks = raw["weeks"] as? [[String: Any]]
+    check("\(n) weeks 是对象数组，每一周都解码了", rawWeeks?.count == uw.weeks.count,
+          "\(rawWeeks?.count ?? -1) vs \(uw.weeks.count)")
+    check("\(n) since_epoch 是数字", isNumber(raw["since_epoch"]) && uw.sinceEpoch != nil)
+    let ends = (rawWeeks ?? []).compactMap { ($0["end_epoch"] as? NSNumber)?.doubleValue }
+    check("\(n) 按时间排好", ends.count == uw.weeks.count && ends == ends.sorted())
+    check("\(n) 字段的类型", (rawWeeks ?? []).allSatisfy {
+        isNumber($0["used_percent"]) && isNumber($0["resets"]) && isBool($0["current"]) && isBool($0["partial"]) && isNumber($0["last_epoch"])
+    })
+    check("\(n) 一周不超过 7 天", uw.weeks.allSatisfy { $0.endEpoch - $0.startEpoch <= 7 * 86400 })
+    let current = uw.weeks.filter(\.current)
+    check("\(n) 还没过完的最多一周，是最后一项", current.count <= 1 && (current.isEmpty || uw.weeks.last?.current == true))
+    check("\(n) 还没过完的不算没记全", uw.weeks.allSatisfy { !($0.current && $0.partial) })
+    let s = uw.summary
+    check("\(n) summary 统计的是 weeks 里过完的那几周", s.weeks == uw.weeks.count - current.count, "\(s.weeks)")
+    check("\(n) 用完的、没用到一半的加起来不超过总数", s.maxed + s.underHalf <= s.weeks)
+    check("\(n) 有过完的周才有平均", (s.weeks == 0) == (s.averagePercent == nil) && isNumber((raw["summary"] as? [String: Any])?["weeks"]))
+}
+
 func usageEntryInvariants(_ n: String, _ ru: [String: Any], _ u: UsageEntry?) {
     guard let u else {
         check("\(n) 解码", false)
@@ -118,6 +143,12 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
         check("\(n) state 里 usage 的 source 是 cache 或 none", a.usage?.source == .cache || a.usage?.source == UsageSource.none,
               a.usage?.source.rawValue ?? "nil")
         usageEntryInvariants(n + " usage", ra["usage"] as? [String: Any] ?? [:], a.usage)
+    }
+    if a.kind == .api {
+        check("\(n) API 账号没有 usage_weeks", a.usageWeeks == nil && isNull(ra["usage_weeks"]))
+    }
+    if let raw = ra["usage_weeks"], !isNull(raw) {
+        usageWeeksInvariants(n + " usage_weeks", raw as? [String: Any] ?? [:], a.usageWeeks)
     }
     if a.login == .emailMismatch {
         check("\(n) email_mismatch 带 login_email", !(a.loginEmail ?? "").isEmpty)

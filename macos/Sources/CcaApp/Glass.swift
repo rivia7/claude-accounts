@@ -27,13 +27,16 @@ struct SectionHeader<Accessory: View>: View {
 
 // 按钮的样子只有几种（写进 macos/README.md「界面的规矩」）：
 // - 一节标题上的操作（刷新用量、检测出口、显示细节）用 SectionAction；一行信息右边的操作（重新登录…、在控制台查看、复制）用
-//   RowAction。两种一个样子：玻璃、图标加文字、常规大小，右边和标题上的按钮对齐；行里的按钮一样宽、左边也对齐。
+//   RowAction。两种一个样子：玻璃、图标加文字、常规大小，右边和标题上的按钮对齐；行里的按钮一样宽、左边也对齐，
+//   按钮里的图标和文字靠左（上下几个按钮的图标排成一列，文字从同一个位置开始）。
 // - 打开网页的（在账号自己的浏览器里）图标是 ↗（RowAction.web）。
 // - 提示条里的按钮小一号（Banner 设的）：解决问题的那个 .borderedProminent，其余 .bordered。
 
 /// 行里按钮的标签至少这么宽：同一节里上下几个按钮一样宽（最长的「在 claude.ai 查看」也放得下；更长的只会让它自己变宽）。
 enum RowMetrics {
     static let actionLabelWidth: CGFloat = 124
+    /// 按钮里图标那一栏的宽（最宽的 person.badge.key 也放得下）
+    static let actionIconWidth: CGFloat = 18
 }
 
 /// 一节标题上的操作：玻璃按钮、图标加文字、常规大小。
@@ -69,7 +72,8 @@ extension View {
     }
 }
 
-/// 一行信息右边的操作：和 SectionAction 一个样子，标签有最小宽度（同一节里的几个一样宽）。
+/// 一行信息右边的操作：和 SectionAction 一个样子，标签有最小宽度（同一节里的几个一样宽），图标和文字靠左：
+/// 图标占固定的宽度（SF Symbols 各个宽度不一样），上下几个按钮的文字从同一个位置开始。
 struct RowAction: View {
     let title: String
     let systemImage: String
@@ -89,7 +93,8 @@ struct RowAction: View {
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
-                .frame(minWidth: RowMetrics.actionLabelWidth)
+                .labelStyle(FixedIconLabelStyle(iconWidth: RowMetrics.actionIconWidth, spacing: 6))
+                .frame(minWidth: RowMetrics.actionLabelWidth, alignment: .leading)
         }
         .buttonStyle(.glass)
         .controlSize(.regular)

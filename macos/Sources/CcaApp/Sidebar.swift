@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 侧栏：工具切换（Claude / ChatGPT），最上面是办公室（首页，所有账号一眼看全）和节点分流（两种工具共用的），
+/// 侧栏：工具切换（Claude / ChatGPT），最上面是办公室（首页，所有账号一眼看全）、用量统计、节点分流和客户端更新（两种工具共用的），
 /// 下面是这个工具的账号（花名册）。
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
@@ -11,6 +11,8 @@ struct Sidebar: View {
             Section {
                 OfficeRow()
                     .tag(SidebarItem.office)
+                UsageStatsRow()
+                    .tag(SidebarItem.usageStats)
                 RoutingRow()
                     .tag(SidebarItem.routing)
                 ClientUpdatesRow()
@@ -202,6 +204,22 @@ struct OfficeRow: View {
         }
     }
 
+}
+
+/// 用量统计那一行：自己的图标（StatsMark，和总览、客户端更新一套画法）。
+struct UsageStatsRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            StatsMark(size: 22).frame(width: 30, height: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("用量统计").font(.body.weight(.medium))
+                Text("每个账号每周用了多少").font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+        }
+        .sidebarRowPadding()
+        .accessibilityElement(children: .combine)
+    }
 }
 
 /// 节点分流那一行：品牌标记（App 图标的缩小版）、现在走哪边，有问题时右边说一句。

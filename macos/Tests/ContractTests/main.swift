@@ -13,6 +13,7 @@ if fullMode {
     textTests()
     await officeTests()
     useFirstTests()
+    await weeklyUsageTests()
     await apiKeyTests()
     environmentTests()
     locatorTests()

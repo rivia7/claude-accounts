@@ -5,6 +5,8 @@ import Observation
 enum SidebarItem: Hashable, Sendable {
     case office
     case account(AccountRef)
+    /// 用量统计：所有官方账号每周用了多少，放在一起比
+    case usageStats
     case routing
     case clientUpdates
 
@@ -1760,6 +1762,12 @@ final class AppModel {
         return out
     }
 
+    /// 用量统计页的分组：两个工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有），和总览一样按用户排的顺序。
+    /// 第三方 API 账号没有订阅的额度，不在里面。
+    func officialGroups() -> [AccountGroup] {
+        ([.claude] + (codexEnabled ? [.chatgpt] : [])).map { AccountGroup(department: $0, accounts: arranged($0)) }
+    }
+
     /// 这个工具的账号（官方的在前，各组里按用户排的顺序）：菜单栏面板、第一次选中哪个账号用。
     func arrangedAccounts(_ t: ToolID) -> [Account] { accountGroups(t).flatMap(\.accounts) }
 
@@ -1833,7 +1841,7 @@ final class AppModel {
     private func fixSelection() {
         if !visibleTools.contains(tool) { tool = .claude }
         switch selection {
-        case .office?, .routing?, .clientUpdates?:
+        case .office?, .usageStats?, .routing?, .clientUpdates?:
             return
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }

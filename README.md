@@ -217,6 +217,7 @@ cca usage
 - 查询由 Claude Code 自己完成（cca 让它以账号的配置无界面地查一下，不加载插件、hooks、MCP），**不发消息、不耗额度**，cca 也不碰登录凭证。
 - 查之前同样会确认出口：端口不通、出口跑到了受限地区的账号不去查。查不到时显示上次查到的数据，备注里先写原因，再注明是多久前的。
 - 菜单和 `cca ls` 里每个账号后面也会附上最近一次的用量（只读缓存，不联网，不拖慢菜单）。
+- 每次查到用量，cca 顺带记下这一周用到多少（账号目录里的 `usage-weeks.json`，最多一年多）：cca App 的「每周用量」「用量统计」看的就是它，终端里不显示。中间重置过额度的那一周，重置前用掉的也算进去，所以可能超过 100%。
 - `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）和 `error_code`（同一个原因的代码：`login`、`port`、`timeout`……）、`fetched_at` / `fetched_epoch`、`stale`（超过 10 分钟），以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "resets_epoch": 重置时间（Unix 秒）, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`，`outdated_login_plan`（Claude Code 记的套餐过时了时是它记的那个，比如 `"Pro"`，否则为 null），和 `use_first`（本周额度快重置了、还剩至少 20% 时，建议先用这个账号的时间段：`left_percent`、`from_epoch`、`until_epoch`；cca App 在这段时间里提示，终端里不提示）。所有账号都没有数据时退出码是 1。完整格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 这个查询用的是 Claude Code 标为实验性的接口；以后的 Claude Code 版本如果改了，cca 会提示这个版本的 Claude Code 查不了用量，不会影响启动账号。
 
@@ -305,6 +306,7 @@ cca gui
 - 选中一个账号：用量的明细和重置时间、走哪个节点和端口、路由器上这个槽位现在选中的节点、上次检测到的出口（IP、地区、纯净度、DNS / WebRTC 泄露）；
 - 一键打开这个账号的 Claude App / ChatGPT App、网页版，检测出口，刷新用量；
 - 本周额度快重置了、还剩不少的账号，名字旁边有个沙漏，提醒你先用它，别浪费；
+- 每周用量：账号页的「每周用量」是最近 12 周每周用到额度的百分之几（一周一根竖条，填满就是用完，鼠标指着一周看细节），左边的「用量统计」把所有账号排在一起比，哪个总不够用、哪个常常剩一大半，一眼看出来。Claude、OpenAI 不给以前的用量，所以是 cca 每次查用量时记一笔，从装上这个版本的那一周开始一周一周攒起来；
 - 账号的 API key（第三方 API 账号的，或者给官方账号记下备查的）：默认只显示掩码，点眼睛看全文，一键复制（剪贴板标成机密，60 秒后自动清掉）；
 - 「节点分流」一页列出端口池每个槽位：应选的节点、路由器（在外面是本机 Clash Verge）上实际选中的、端口通不通，不一致时一键同步路由器；
 - 菜单栏图标里是精简的账号列表和用量，点一下就能打开账号的 App。

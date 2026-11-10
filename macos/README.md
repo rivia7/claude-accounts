@@ -32,10 +32,10 @@ bash macos/test.sh 目录           # 真实的 cca 输出（tests/regress.sh 10
 ```
 
 - `Tests/ContractTests/` 是不用测试框架的小程序（`main.swift` 是入口，其它文件按节分：Harness、Generic、FixtureAssertions、Doubles、
-  ProtocolTests、UnitTests、ModelTests、OfficeTests、FeatureTests、TerminalTests、PollingTests、ClientUpdateTests、FlowTests、AccountListTests、DevicesTests、APIKeyTests）：`check(名字, 条件)` 打印 PASS / FAIL，有失败就非 0 退出。只和 CcaKit 一起编（本机架构）。
+  ProtocolTests、UnitTests、ModelTests、OfficeTests、FeatureTests、TerminalTests、PollingTests、ClientUpdateTests、FlowTests、AccountListTests、DevicesTests、APIKeyTests、WeeklyUsageTests）：`check(名字, 条件)` 打印 PASS / FAIL，有失败就非 0 退出。只和 CcaKit 一起编（本机架构）。
 - `test.sh` 还检查 CcaKit 没有 `import SwiftUI / AppKit`。临时文件都在 `macos/build/tmp`。
 - 通用不变量（两种模式都跑）：每个文件都能解码、`version`/`kind` 对、槽位的端口 = 7900 + 槽位、空槽位是 REJECT、每个工具的账号键不重复、
-  第三方 API 账号的 `api` 对象不带 key、`usage` 只给登录着的官方账号、`summary` 和槽位一致、事件逐行解析、consent 的 grant 是 `item:scope`……；
+  第三方 API 账号的 `api` 对象不带 key、`usage` 只给登录着的官方账号、`usage_weeks` 自洽（按时间排好、还没过完的最多一周且是最后一项、统计的是过完的那几周）、`summary` 和槽位一致、事件逐行解析、consent 的 grant 是 `item:scope`……；
   再把每个文件改一改（加不认识的字段、整数和浮点数互换、不认识的枚举值、类型不对的字段）确认照样解码、不丢元素。
   另有防漂移检查：真实输出里每个枚举字段的值都必须在 App 已知的列表里（`Codes.swift` 的 `allKnown`）；cca 加了新值就先在这里报出来。
 - 完整模式另外测：重跑流程（同意 → 带授权重跑 → 成功、不同意、同一个授权再次被要求、最多重跑 3 轮、终端交接、失败取最后一条 fail、
@@ -73,7 +73,7 @@ bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
 CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
 ```
 
-只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty、office、client-updates、pinned（有置顶账号的总览和侧栏），
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty、office、client-updates、stats（用量统计页）、pinned（有置顶账号的总览和侧栏），
 再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details、直接改别名的 rename、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
@@ -99,6 +99,9 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   总览插画里的家具一律中性灰，不带含义。不设全局强调色（按钮、选中跟着用户的系统设置）。
 - 持续的动画（侧栏的光晕流动、总览的插画）只在 `motionAllowed` 时走：主窗口、菜单栏面板的根上 `.motionScope(\.mainVisible / \.panelVisible)`
   按窗口看不看得见、开没开“减少动态效果”设一次（`Visibility.swift`），下面的视图只读它；没设的地方（截图、教程的示意图）不动。
+- 用量一律画成用量条（`Meter`）：灰色的底槽是额度，两头圆，数据旧了、不全时填灰色（不靠透明度）；现在的额度按用量的档上色（绿 / 橙 / 红），
+  过去的（每周用量）不算状态，填账号的颜色。图表也照这一套，不另起一套图表的样子：每周用量是一排竖着的用量条，不画坐标轴、网格线和每根上的数字
+  （数字在旁边的一行字和读屏里），悬停和卡片、列表行一样垫一层浅底（`primary` 6%）。
 - Liquid Glass 只给控件层：侧栏、工具栏（系统画）、按钮（`.glass` / `.glassProminent`，相邻的放进 `GlassRow`）、浮着的提示。
   内容层（额度砖、线路、分流图、提示条 `Banner`）是实的，色块用 `Surface`，玻璃上不叠玻璃。
 - 玻璃上的文字：深色外观下系统给文字用的混色（vibrancy）让灰字的对比度只有约 3:1，小字发虚。菜单栏面板的根上用 `plainTextOnDarkGlass()` 清掉 `backgroundMaterial`
@@ -107,7 +110,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 操作放在它作用的内容旁边：打开 App / 网页版 / 终端在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
   检测出口在“网络出口”标题上，「刷新」设备在“设备”标题上，添加账号在侧栏账号列表和总览各组的标题上；不用浮在内容上的操作条。
 - 按钮只有几种样子（`Glass.swift`）：一节标题上的操作是 `SectionAction`，一行信息（`InfoRow`）右边的操作是 `RowAction`——两种一个样子：玻璃、
-  图标加文字、常规大小，右边和标题上的按钮对齐（信息行不缩进）；行里的按钮标签有最小宽度，同一节里上下一样宽、左边也对齐。打开网页的
+  图标加文字、常规大小，右边和标题上的按钮对齐（信息行不缩进）；行里的按钮标签有最小宽度，同一节里上下一样宽、左边也对齐，按钮里的图标和文字靠左（图标占固定的宽度：上下几个按钮的图标排成一列，文字从同一处开始）。打开网页的
   （在账号自己的浏览器里）用 `RowAction.web`，图标是 ↗；「显示细节」是 `DetailsToggle`，和标题上别的按钮一样。提示条里的按钮小一号：
   解决问题的那个 `.borderedProminent`，其余 `.bordered`。账号页头的主操作大一号（`.controlSize(.large)`）。菜单栏面板账号行里的「打开」是重复出现的
   列表按钮，保持小的文字按钮。
@@ -125,6 +128,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 周结算提醒（cca 给的 `use_first`，PROTOCOL 3.1）：本周额度快重置了、还剩不少，没有挡路的问题时（`Diagnosis.useFirst` 排在最前），账号页那句话说
   「本周额度还剩 59%，明天 19:55 重置，建议先用这个账号。」，总览卡片右下角、侧栏和菜单栏面板的名字后面一个沙漏（`UseFirstMark`）。沙漏用强调色：
   是提示不是警告（绿是在用，橙、红是问题）；不算进“要处理”。
+- 每周用量（cca 给的 `usage_weeks`，PROTOCOL 2.2）：账号页「用量」下面的「每周用量」（`WeeklyUsage.swift`）是最近 12 周的一排竖条：和额度砖里的用量条（`Meter`）同一种条，只是竖着——灰色的底槽是这一周的额度，从下往上填到用了多少，填满就是用完，填账号的颜色；结束前一天没查到的填灰色（实际可能更多；和数据旧了的用量条一样，不靠透明度），中间重置过、超过 100% 的整根高出底槽（哪一段是重置前的 cca 不给，所以不在 100% 处断开）。用得很少时不像横着的条那样至少画一个圆点（竖着的条短，会显得比实际多），填的那段按底槽的形状裁。每根条在它那一周的正中间，日期写在正下方；不画坐标轴、网格线和每根上的数字：鼠标指着一周时那一列垫一层浅底（和卡片、列表行的悬停一样）、下面那一行换成这一周的细节，平时是统计（记下的几周平均用到多少、几周用完、几周没用到一半），读屏每根条都念。侧栏「总览」下面的「用量统计」（`UsageStatsPage.swift`）把官方账号排在一起比：Claude、ChatGPT 各一组，和总览一样的顺序，每个账号一行（头像和名字、小图（同样的竖条，和额度砖里的条一样细）、平均每周、本周），所有行同一个时间范围、同一个纵轴高度（有超过 100% 的就一起抬高），上下对得齐、高低能比；点一行进账号页。第三方 API 账号没有订阅的额度，不在里面。数字和哪一周填灰色都是 cca 给的；以前的用量官方不给，从 cca 开始记的那一周起一周一周长出来。
 - API key（PROTOCOL 4.10）：平时只显示 cca 给的掩码；点眼睛才向 cca 要一次明文（`KeyReveal`，不被观察、不进读屏，30 秒后、再点一下、换账号、
   离开页面时收起来）；「复制」写进剪贴板时标成机密，60 秒后还是它就清掉（`SecretClipboard`），提示里不写 key。官方账号的 key 只是备查。
 - 总览（`OfficePage.swift`，首页，侧栏最上面）：每个账号一张卡片，按 Claude 账号、ChatGPT 账号、第三方 API 账号分开排，按用户排的顺序（没排过的照账号表）、
@@ -166,7 +170,7 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
                        WhatsNew（每个版本更新了什么、版本号的先后）、APIKey（API key 的明文只在这里：KeyReveal、机密剪贴板）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、总览（OfficePage；插画 DeskArt）、
                        套餐徽章（PlanBadge）、账号页（AccountDetail：页头；
-                       UsageCard：用量；APIKeySection：API key 那一行和第三方 API 账号的一节；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
+                       UsageCard：用量；WeeklyUsage：每周用量的图（一排竖着的用量条）；APIKeySection：API key 那一行和第三方 API 账号的一节；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、用量统计（UsageStatsPage）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
                        可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）

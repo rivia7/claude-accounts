@@ -249,6 +249,24 @@
             "api_key": true
           },
           "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain"},
+          "usage_weeks": {
+            "since_epoch": 1787047200.0,
+            "weeks": [
+              {"start_epoch": 1787040000.0, "end_epoch": 1787644800.0, "used_percent": 92, "resets": 0, "last_epoch": 1787643300.0, "current": false, "partial": false},
+              {"start_epoch": 1787644800.0, "end_epoch": 1788249600.0, "used_percent": 77, "resets": 0, "last_epoch": 1788248100.0, "current": false, "partial": false},
+              {"start_epoch": 1788249600.0, "end_epoch": 1788854400.0, "used_percent": 100, "resets": 0, "last_epoch": 1788852900.0, "current": false, "partial": false},
+              {"start_epoch": 1788854400.0, "end_epoch": 1789459200.0, "used_percent": 81, "resets": 0, "last_epoch": 1789457700.0, "current": false, "partial": false},
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "used_percent": 58, "resets": 0, "last_epoch": 1790062500.0, "current": false, "partial": false},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "used_percent": 100, "resets": 0, "last_epoch": 1790667300.0, "current": false, "partial": false},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "used_percent": 64, "resets": 0, "last_epoch": 1791100800.0, "current": false, "partial": true},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "used_percent": 95, "resets": 0, "last_epoch": 1791876900.0, "current": false, "partial": false},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "used_percent": 100, "resets": 0, "last_epoch": 1792481700.0, "current": false, "partial": false},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "used_percent": 88, "resets": 0, "last_epoch": 1793086500.0, "current": false, "partial": false},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "used_percent": 72, "resets": 0, "last_epoch": 1793691300.0, "current": false, "partial": false},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 41, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
+            ],
+            "summary": {"weeks": 11, "average_percent": 84, "maxed": 3, "under_half": 0}
+          },
           "can_why": {},
           "usage": {
             "account": "工作",
@@ -381,6 +399,15 @@
             "api_key": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
+          "usage_weeks": {
+            "since_epoch": 1789466400.0,
+            "weeks": [
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "used_percent": 55, "resets": 0, "last_epoch": 1790062500.0, "current": false, "partial": false},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "used_percent": 40, "resets": 0, "last_epoch": 1790667300.0, "current": false, "partial": false},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "used_percent": 60, "resets": 0, "last_epoch": 1791272100.0, "current": false, "partial": false}
+            ],
+            "summary": {"weeks": 3, "average_percent": 52, "maxed": 0, "under_half": 1}
+          },
           "can_why": {
             "usage": "not_logged_in"
           },
@@ -481,6 +508,19 @@
             "api_key": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
+          "usage_weeks": {
+            "since_epoch": 1790071200.0,
+            "weeks": [
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "used_percent": 55, "resets": 0, "last_epoch": 1790667300.0, "current": false, "partial": false},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "used_percent": 70, "resets": 0, "last_epoch": 1791272100.0, "current": false, "partial": false},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "used_percent": 61, "resets": 0, "last_epoch": 1791876900.0, "current": false, "partial": false},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "used_percent": 38, "resets": 0, "last_epoch": 1792481700.0, "current": false, "partial": false},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "used_percent": 52, "resets": 0, "last_epoch": 1793086500.0, "current": false, "partial": false},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "used_percent": 45, "resets": 0, "last_epoch": 1793691300.0, "current": false, "partial": false},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 63, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
+            ],
+            "summary": {"weeks": 6, "average_percent": 54, "maxed": 0, "under_half": 2}
+          },
           "can_why": {},
           "usage": {
             "account": "erin@example.com",
@@ -601,6 +641,23 @@
             "api_key": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
+          "usage_weeks": {
+            "since_epoch": 1787652000.0,
+            "weeks": [
+              {"start_epoch": 1787644800.0, "end_epoch": 1788249600.0, "used_percent": 11, "resets": 0, "last_epoch": 1788248100.0, "current": false, "partial": false},
+              {"start_epoch": 1788249600.0, "end_epoch": 1788854400.0, "used_percent": 20, "resets": 0, "last_epoch": 1788852900.0, "current": false, "partial": false},
+              {"start_epoch": 1788854400.0, "end_epoch": 1789459200.0, "used_percent": 9, "resets": 0, "last_epoch": 1789457700.0, "current": false, "partial": false},
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "used_percent": 15, "resets": 0, "last_epoch": 1790062500.0, "current": false, "partial": false},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "used_percent": 22, "resets": 0, "last_epoch": 1790667300.0, "current": false, "partial": false},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "used_percent": 18, "resets": 0, "last_epoch": 1791272100.0, "current": false, "partial": false},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "used_percent": 30, "resets": 0, "last_epoch": 1791876900.0, "current": false, "partial": false},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "used_percent": 8, "resets": 0, "last_epoch": 1792481700.0, "current": false, "partial": false},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "used_percent": 25, "resets": 0, "last_epoch": 1793086500.0, "current": false, "partial": false},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "used_percent": 12, "resets": 0, "last_epoch": 1793691300.0, "current": false, "partial": false},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 30, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
+            ],
+            "summary": {"weeks": 10, "average_percent": 17, "maxed": 0, "under_half": 10}
+          },
           "can_why": {},
           "usage": {
             "account": "grace@example.com",
@@ -857,6 +914,18 @@
             "api_key": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
+          "usage_weeks": {
+            "since_epoch": 1790492400.0,
+            "weeks": [
+              {"start_epoch": 1790485200.0, "end_epoch": 1791090000.0, "used_percent": 60, "resets": 0, "last_epoch": 1791088500.0, "current": false, "partial": false},
+              {"start_epoch": 1791090000.0, "end_epoch": 1791694800.0, "used_percent": 85, "resets": 0, "last_epoch": 1791693300.0, "current": false, "partial": false},
+              {"start_epoch": 1791694800.0, "end_epoch": 1792299600.0, "used_percent": 100, "resets": 0, "last_epoch": 1792298100.0, "current": false, "partial": false},
+              {"start_epoch": 1792299600.0, "end_epoch": 1792904400.0, "used_percent": 130, "resets": 1, "last_epoch": 1792902900.0, "current": false, "partial": false},
+              {"start_epoch": 1792904400.0, "end_epoch": 1793509200.0, "used_percent": 90, "resets": 0, "last_epoch": 1793507700.0, "current": false, "partial": false},
+              {"start_epoch": 1793509200.0, "end_epoch": 1794114000.0, "used_percent": 76, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
+            ],
+            "summary": {"weeks": 5, "average_percent": 93, "maxed": 2, "under_half": 0}
+          },
           "can_why": {},
           "usage": {
             "account": "frank@example.com",

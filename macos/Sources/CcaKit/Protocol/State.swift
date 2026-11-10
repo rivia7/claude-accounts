@@ -387,6 +387,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     /// 存没存 API key、掩码（PROTOCOL 2.2；旧版 cca 没有，是 nil）
     var apiKey: APIKeyInfo?
     var usage: UsageEntry?
+    /// 最近几周每周用了多少（PROTOCOL 2.2；cca 记下的，官方账号才有；旧版 cca 没有，是 nil）
+    var usageWeeks: UsageWeeks?
     var health: Health?
 
     var id: AccountRef { ref }
@@ -405,7 +407,9 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case api, badge, app, cli, can
         case canWhy = "can_why"
         case apiKey = "api_key"
-        case usage, health
+        case usage
+        case usageWeeks = "usage_weeks"
+        case health
     }
 
     init(from decoder: Decoder) throws {
@@ -439,6 +443,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
         apiKey = c.lossy(APIKeyInfo.self, .apiKey)
         usage = c.lossy(UsageEntry.self, .usage)
+        usageWeeks = c.lossy(UsageWeeks.self, .usageWeeks)
         health = c.lossy(Health.self, .health)
     }
 

@@ -137,6 +137,7 @@ struct TutorialCard {
             ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者终端里有会话）。"),
             ("moon.zzz", "趴在桌上是额度用完了，屏幕上写着几点恢复；椅子空着是没登录，坐着灰色的人是登录的不是这个账号。"),
             ("sparkle", "套餐看徽章前面的小记号：灰圈、蓝点、紫色菱形，最高档（Ultra、Pro 500）是彩色的四角星。点一张卡片就进这个账号的页面。"),
+            ("chart.bar.xaxis", "左边的「用量统计」把每个账号每周用了多少排在一起：哪个总不够用、哪个常常剩一大半，一眼看出来。"),
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),

@@ -77,6 +77,8 @@ struct DetailColumn: View {
             switch model.selection {
             case .office?:
                 OfficePage()
+            case .usageStats?:
+                UsageStatsPage()
             case .account(let ref)?:
                 AccountDetail(ref: ref)
             case .routing?:

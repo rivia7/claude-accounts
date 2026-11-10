@@ -78,6 +78,9 @@ enum Snapshot {
             Scene(name: "client-updates") { m in
                 m.selection = .clientUpdates
             },
+            Scene(name: "stats") { m in
+                m.selection = .usageStats
+            },
             // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
             Scene(name: "pinned") { m in
                 m.tool = .claude

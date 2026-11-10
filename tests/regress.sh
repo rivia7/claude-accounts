@@ -100,7 +100,7 @@ ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
 ok "客户端更新：签名、安装确认、目标漂移与中断恢复" 'python3 "$D/client_updates.py"'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端的扫描、闲置判定、经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
-ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码" 'python3 "$D/usage_view.py" 2>/dev/null'
+ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -801,6 +801,25 @@ ok "按四舍五入后显示的百分比判断：用了 80.4%（显示 80%）还
 canned alice@example.com 13 41; run cca usage alice >/dev/null 2>&1; cp "$R/listening" "$T/listening.uf"; unlisten 7901
 o1=$(run cca usage alice --json 2>/dev/null); cp "$T/listening.uf" "$R/listening"
 ok "这次查询端口不通（账号现在用不了）：use_first 是 null，缓存里的用量照样给" 'printf "%s" "$o1" | jok "uacct(\"alice@example.com\")[\"error_code\"] == \"port\" and uacct(\"alice@example.com\")[\"use_first\"] is None and uacct(\"alice@example.com\")[\"seven_day\"][\"utilization\"] == 41"'
+# 每周用量（usage_weeks，只给 App）：查到用量时顺带记进账号目录的 usage-weeks.json（600），一周一项，取这一周查到的最高的；
+# 比最高的低了超过 5 个百分点算中间重置过（重置前的加上）。_gui state 只读：比记下的新的用量只在内存里并进来
+rm -f "$AD/usage-weeks.json"
+canned alice@example.com 13 30; run cca usage alice >/dev/null 2>&1; w1=$(gj state)
+canned alice@example.com 13 45; run cca usage alice >/dev/null 2>&1
+canned alice@example.com 13 44; run cca usage alice >/dev/null 2>&1; w2=$(gj state)
+ok "每周用量：查到用量时记进 usage-weeks.json（600）；_gui state 里是还没过完的这一周（7 天），用到这一周查到的最高的（略低一点不算重置），还没有过完的周、没有统计；第三方 API 账号是 null" '[ "$(stat -f %Lp "$AD/usage-weeks.json")" = 600 ] && printf "%s" "$w1" | jok "(lambda u: len(u[\"weeks\"]) == 1 and u[\"weeks\"][0][\"used_percent\"] == 30 and u[\"weeks\"][0][\"current\"] is True and u[\"weeks\"][0][\"partial\"] is False and u[\"weeks\"][0][\"resets\"] == 0 and u[\"summary\"] == {\"weeks\": 0, \"average_percent\": None, \"maxed\": 0, \"under_half\": 0} and isinstance(u[\"since_epoch\"], float))(acct(0, \"alice@example.com\")[\"usage_weeks\"]) and all(a[\"usage_weeks\"] is None for a in d[\"tools\"][0][\"accounts\"] if a[\"kind\"] == \"api\")" && printf "%s" "$w2" | jok "(lambda w: w[\"used_percent\"] == 45 and w[\"resets\"] == 0 and abs(w[\"end_epoch\"] - w[\"start_epoch\"] - 7 * 86400) < 1)(acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
+cp "$AD/usage-weeks.json" "$T/weeks.keep"
+python3 - "$AD/usage.json" <<'PY'
+import json, sys
+j = json.load(open(sys.argv[1]))
+j['fetchedAtMs'] += 60000
+j['utilization']['seven_day']['utilization'] = 50
+json.dump(j, open(sys.argv[1], 'w'))
+PY
+w3=$(gj state)
+ok "_gui state 只读：比记下的新的用量（usage.json、Claude Code 的缓存）只在内存里并进来，不写 usage-weeks.json" 'printf "%s" "$w3" | jok "acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1][\"used_percent\"] == 50" && cmp -s "$AD/usage-weeks.json" "$T/weeks.keep"'
+canned alice@example.com 13 10; run cca usage alice >/dev/null 2>&1; w4=$(gj state)
+ok "每周用量：比这一周最高的低了超过 5 个百分点算中间重置过，重置前的加上（45 + 10），记一次" 'printf "%s" "$w4" | jok "(lambda w: w[\"used_percent\"] == 55 and w[\"resets\"] == 1 and w[\"current\"] is True)(acct(0, \"alice@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
 canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 # Claude Code 记的套餐过时了（登录以后升级了）：查用量时它回报的 subscription_type 是登录时记下的，和账号资料（organizationType）对不上
 canned alice@example.com 13 41 pro
@@ -1277,8 +1296,10 @@ ok "codex usage --json：同样的新字段（Codex 的重置时间本来就是 
 ccanned dave@example.com 100 41 pro 1; nc=$(grep -c "RPC resetConsume" codex.log)
 out=$(runev cca codex reset dave --json 2>/dev/null); rc=$?; cp "$T/ev.jsonl" "$GF/events_reset_consent.jsonl"
 ok "图形界面：重置额度先记一条 consent（reset_credit，范围是账号目录名，默认不同意，说明里有还剩几次），stdout 什么都没有，不重置" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"reset_credit\" and e[\"grant\"] == \"reset_credit:${DD##*/}\" and e[\"default\"] == \"no\" and \"还剩 1 次\" in e[\"detail\"]" && [ "$(grep -c "RPC resetConsume" codex.log)" = "$nc" ]'
+wb=$(gj state | python3 -c 'import json,sys; d=json.load(sys.stdin); w=next(a for a in d["tools"][1]["accounts"] if a["key"] == "dave@example.com")["usage_weeks"]["weeks"][-1]; print(w["resets"], w["used_percent"])')
 out=$(runev CCA_GRANT="reset_credit:${DD##*/}" cca codex reset dave --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$GF/reset.json"
 ok "图形界面：同意之后重置，stdout 是 kind=reset 的文档（结果、说明、重置后的用量）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"reset\" and d[\"tool\"] == \"codex\" and d[\"key\"] == \"dave@example.com\" and d[\"outcome\"] == \"reset\" and \"已重置\" in d[\"message\"] and d[\"usage\"][\"five_hour\"][\"utilization\"] == 0 and d[\"usage\"][\"reset_credits\"][\"availableCount\"] == 0" && [ "$(grep -c "RPC resetConsume" codex.log)" = $((nc + 1)) ]'
+ok "重置之后：每周用量里这一周记一次重置，用到的还是重置前的那么多（清零的不减掉）" 'gj state | jok "(lambda w: w[\"resets\"] == ${wb%% *} + 1 and w[\"used_percent\"] == ${wb#* } and w[\"current\"] is True)(acct(1, \"dave@example.com\")[\"usage_weeks\"][\"weeks\"][-1])"'
 out=$(runev CCA_GRANT="reset_credit:${DD##*/}" cca codex reset dave --json 2>/dev/null); rc=$?
 ok "图形界面：没有重置机会了：fail 事件的原因是 no_reset_credit，不再去重置" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"no_reset_credit\"" && [ "$(grep -c "RPC resetConsume" codex.log)" = $((nc + 1)) ]'
 # 检查更新（App 的「检查更新…」）：cca update --check --json，按现在的版本挑（这里是开发模式下的测试版：正式版、测试版都看）

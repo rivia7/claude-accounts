@@ -5158,15 +5158,113 @@ def usage_cached(key):
 
 
 def usage_save(key, rl, sub=None):
-    """查到的用量存进 usage.json。Claude 账号顺带记下查询回的 subscription_type（Claude Code 登录时记的套餐，login_plan）：
+    """查到的用量存进 usage.json，本周的用量顺带记进每周用量（weeks_record；先记它：App 看到 usage.json 变了就重读 state）。
+    Claude 账号顺带记下查询回的 subscription_type（Claude Code 登录时记的套餐，login_plan）：
     放在顶层、不进用量窗口，用量可能取 Claude Code 自己那份更新的缓存，这一项只有 cca 查的时候才拿得到"""
-    j = {'fetchedAtMs': int(time.time() * 1000), 'accountUuid': T.who(key), 'utilization': rl}
+    ms = int(time.time() * 1000)
+    weeks_record(key, rl, ms / 1000.0)
+    j = {'fetchedAtMs': ms, 'accountUuid': T.who(key), 'utilization': rl}
     if T is CLAUDE and isinstance(sub, str) and sub:
         j['login_plan'] = sub
     try:
         save_json(usage_file(key), j, 0o600)
     except OSError:
         pass
+
+
+# 每周用量（App 账号页的「每周用量」、「用量统计」页；macos/PROTOCOL.md 2.2 的 usage_weeks）：Claude、OpenAI 都不给过去几周的额度，
+# 所以 cca 每次查到用量（usage_save）时把本周的窗口记进账号目录的 usage-weeks.json（600）。按窗口的重置时间认是哪一周，记这一周
+# 查到的最高百分比；同一周里比最高的低了一大截是中间重置过（重置额度、官方重置），之前的最高值累计下来。只给图形界面，终端不显示
+WEEK = 7 * 86400
+WEEKS_KEEP = 60        # 最多记这么多周（一年多）
+WEEKS_SHOW = 12        # App 看最近这么多周，统计也按它
+WEEK_SAME = 3600       # 重置时间差不到 1 小时的算同一周（接口给的时间有零点几秒的出入）
+WEEK_DROP = 5          # 同一周里比最高的低了超过这么多个百分点：中间重置过
+WEEK_PARTIAL = 86400   # 结束前一天里一次也没查到：那一周后来的用量没记下，实际可能更多
+
+
+def weeks_file(key):
+    return os.path.join(adir(key), 'usage-weeks.json')
+
+
+def week_num(x):
+    """有限的数字：NaN、无穷大不算（App 解码不了，算平均时 int() 会出错）"""
+    return is_num(x) and abs(x) < 1e18
+
+
+def weeks_load(key):
+    """记下的每周用量，按结束时间排好；格式不对的项不要。每项：end 重置时间，peak 上次重置以来查到的最高百分比，
+    carried 这一周里之前重置掉的（累计），resets 中间重置过几次，first / last 第一次、最后一次查到的时间"""
+    j = load_quiet(weeks_file(key))
+    out = []
+    for e in dicts(j, 'weeks') if isinstance(j, dict) else []:
+        if all(week_num(e.get(k)) for k in ('end', 'peak', 'first', 'last')):
+            out.append({'end': e['end'], 'peak': e['peak'], 'first': e['first'], 'last': e['last'],
+                        'carried': e['carried'] if week_num(e.get('carried')) else 0,
+                        'resets': int(e['resets']) if week_num(e.get('resets')) else 0})
+    return sorted(out, key=lambda e: e['end'])
+
+
+def weeks_add(weeks, rl, at):
+    """at 时查到的用量（rl）并进 weeks（原地改，按结束时间排好、最多 WEEKS_KEEP 周）：本周的窗口还没重置时记下，
+    返回记了没有。不比已经记下的新（Claude Code 的缓存、同一次查询）就不改"""
+    w = win(rl.get('seven_day'), at)
+    if not w or not week_num(w['at']) or w['reset'] or not week_num(w['pct']):
+        return False
+    end, pct = w['at'], float(w['pct'])
+    e = next((x for x in weeks if abs(x['end'] - end) <= WEEK_SAME), None)
+    if e is None:
+        weeks.append({'end': end, 'peak': pct, 'first': at, 'last': at, 'carried': 0, 'resets': 0})
+        weeks.sort(key=lambda x: x['end'])
+        del weeks[:-WEEKS_KEEP]
+        return True
+    if at <= e['last']:
+        return False
+    if pct < e['peak'] - WEEK_DROP:
+        e['carried'] += e['peak']
+        e['resets'] += 1
+        e['peak'] = pct
+    else:
+        e['peak'] = max(e['peak'], pct)
+    e['end'], e['last'] = end, at
+    return True
+
+
+def weeks_record(key, rl, at):
+    """usage_save 里：查到的本周用量记进 usage-weeks.json"""
+    weeks = weeks_load(key)
+    if weeks_add(weeks, rl, at):
+        try:
+            save_json(weeks_file(key), {'version': 1, 'weeks': weeks}, 0o600)
+        except OSError:
+            pass
+
+
+def usage_weeks_view(key, now, cached=None):
+    """_gui state 的 usage_weeks（macos/PROTOCOL.md 2.2）：最近 WEEKS_SHOW 周每周用到这一周额度的百分之几，和这几周的统计；
+    没有记录是 None。cached 是 usage_cached 的结果（Claude Code 的缓存可能比 cca 记的新）：只在内存里并进来，不写文件（CCA_RO）。
+    下一周在这一周结束前就开始了（中间重置后重新计时）：这一周到那时为止，不算还没过完"""
+    weeks = weeks_load(key)
+    if cached:
+        weeks_add(weeks, cached['rl'], cached['at'])
+    if not weeks:
+        return None
+    out = []
+    for i, e in enumerate(weeks):
+        nxt = weeks[i + 1] if i + 1 < len(weeks) else None
+        end = e['end']
+        if nxt and nxt['first'] < end - WEEK_SAME:
+            end = max(min(nxt['end'] - WEEK, end), e['last'])
+        if end <= now - WEEKS_SHOW * WEEK:
+            continue
+        current = end > now
+        out.append({'start_epoch': e['end'] - WEEK, 'end_epoch': end, 'used_percent': round(e['carried'] + e['peak'], 1),
+                    'resets': e['resets'], 'last_epoch': e['last'], 'current': current,
+                    'partial': not current and end - e['last'] > WEEK_PARTIAL and e['peak'] < 100})
+    done = [int(w['used_percent'] + 0.5) for w in out if not w['current']]   # 和显示的一样四舍五入（round 是银行家舍入）
+    return {'since_epoch': min(e['first'] for e in weeks), 'weeks': out,
+            'summary': {'weeks': len(done), 'average_percent': int(sum(done) / len(done) + 0.5) if done else None,
+                        'maxed': sum(1 for p in done if p >= 100), 'under_half': sum(1 for p in done if p < 50)}}
 
 
 USAGE_STALE = 600   # 用量超过 10 分钟算旧：菜单里注明多久前，图形界面里变暗
@@ -6780,7 +6878,7 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
     port = T.state(c)['ports'].get(k)
     slot = port - FIRST_PORT + 1 if port else None
     login = 'api' if api else login_code(k)
-    usage = plan = None
+    usage = plan = x = None
     tier = ''
     if not api and login == 'logged_in':
         x = usage_cached(k)
@@ -6824,7 +6922,8 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
                         devices=bool(env.get('presence') and not api and e and e.lower() in pm),   # 账号页的「设备」（PROTOCOL 3.4）
                         api_key=True),   # 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
             'can_why': why, 'api_key': gui_api_key(c, k, v),
-            'usage': usage, 'health': health_view(k, v, now)}
+            'usage': usage, 'usage_weeks': None if api else usage_weeks_view(k, now, x),
+            'health': health_view(k, v, now)}
 
 
 def policy_next_check():
