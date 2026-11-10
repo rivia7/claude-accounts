@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "kind": "devices",
+  "generated_epoch": 1794042000,
+  "tool": "claude",
+  "me": "studio-mac",
+  "idle_after": 600,
+  "offline_after": 150,
+  "reporting_error": null,
+  "accounts": [
+    {
+      "key": "工作(bob@example.com)",
+      "id": "bob-example-com-1a2b3c",
+      "devices": [
+        {
+          "id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "name": "studio-mac",
+          "me": true,
+          "state": "in_use",
+          "cli": 2,
+          "app": false,
+          "since_epoch": 1794034800,
+          "last_active_epoch": 1794041940,
+          "last_used_epoch": 1794041940,
+          "seen_epoch": 1794041985
+        },
+        {
+          "id": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "name": "alice-mini",
+          "me": false,
+          "state": "idle",
+          "cli": 1,
+          "app": true,
+          "since_epoch": 1794020400,
+          "last_active_epoch": 1794039300,
+          "last_used_epoch": 1794039300,
+          "seen_epoch": 1794041970
+        },
+        {
+          "id": "SHA256:ccccccccccccccccccccccccccccccccccccccccccc",
+          "name": "office-imac",
+          "me": false,
+          "state": "offline",
+          "cli": 1,
+          "app": false,
+          "since_epoch": 1794030000,
+          "last_active_epoch": 1794036000,
+          "last_used_epoch": 1794036000,
+          "seen_epoch": 1794036300
+        },
+        {
+          "id": "SHA256:ddddddddddddddddddddddddddddddddddddddddddd",
+          "name": "carol-air",
+          "me": false,
+          "state": "none",
+          "cli": 0,
+          "app": false,
+          "since_epoch": null,
+          "last_active_epoch": null,
+          "last_used_epoch": 1793966400,
+          "seen_epoch": 1793966500
+        }
+      ]
+    }
+  ]
+}

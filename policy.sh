@@ -26,6 +26,18 @@
 #   别名就是 GitHub 上 deploy key 的标题。GitHub 的 deploy key 不能改，改别名是删掉后用同一把公钥重新加上。
 #   默认管 cca 里写的默认映射仓库（POLICY_REPO_DEFAULT，环境变量 CCA_POLICY_DEFAULT 可以换掉），别的仓库加 -R 维护者/仓库。
 #   经 gh 调 GitHub 的接口（先 gh auth login）；交互输入从终端读，CCA_TTY=答案文件 时按行读（测试用）。
+#   映射里配置了设备统计的服务器时，add / rm / mv 之后顺带把设备清单同步过去（见下面的 presence sync）。
+#
+#   ./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--dir 服务器上的目录] [-C 映射仓库的目录]
+#     经 SSH 把设备统计的服务器（server/ 下的 compose.yaml 和 cca-presence.py：官方 python 镜像，只用标准库，不用构建）
+#     装到一台有 docker compose 的 Linux 上的一个目录里（默认 /root/projects/cca-presence，要 root），第一次生成自签的
+#     P-256 证书（私钥不出服务器），docker compose up -d，默认端口 18443（不用 80、443）。再从这台 Mac 钉住证书公钥连一次，
+#     把 presence 一节（地址、证书公钥的指纹、账号摘要用的盐）写进映射目录的 policy.json，推送设备清单。重复运行就是
+#     更新服务端（证书和盐不变）；迁移是把整个目录拷到新服务器后对它运行一次。之后照常 ./policy.sh 目录 发布映射
+#   ./policy.sh presence sync [-C 目录] [-R 仓库]
+#     把仓库上各台机器的 deploy key（只读、启用的 ed25519）作为设备清单，用发布密钥签名（命名空间 cca-devices）推给服务器：
+#     服务器只认这份清单里的机器，名字就是 key 的别名
+#   ./policy.sh presence status [-C 目录]     服务器在不在、认得几台设备、签名自检过没过
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 KEY="${CCA_RELEASE_KEY:-$HOME/.ssh/cca_release_ed25519}"
@@ -42,6 +54,9 @@ usage() {
   ./policy.sh key rm 别名 [-y]                 删掉一把
   ./policy.sh key mv 别名 [新别名]             改别名
 key 默认管 cca 里写的默认映射仓库，别的仓库加 -R 维护者/仓库
+  ./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--dir 服务器上的目录] [-C 映射仓库的目录]
+                                               经 SSH 用 docker compose 部署设备统计的服务器，把它写进映射（之后照常发布映射）
+  ./policy.sh presence sync | status           把各台机器的 deploy key 同步成服务器的设备清单 / 看服务器的状态
 U
 	exit 1
 }
@@ -50,7 +65,7 @@ U
 # deploy key：每台机器一把只读 key（cca policy setup 生成，公钥备注是 cca-policy@机器名），别名记在 key 的标题里
 # ---------------------------------------------------------------------------
 MINE="${CCA_HOME:-$HOME/.cca}/policy/id_ed25519.pub"   # 这台机器自己的
-REPO="" YES="" KEYS="" LINE="" FP="" GH_ERR="" TMPD="" TTY_OK=0
+REPO="" YES="" KEYS="" LINE="" FP="" GH_ERR="" TMPD="" TTY_OK=0 PDIR="" P_URL="" P_PINS="" P_ERR="" P_N=0 P_HEALTH=""
 
 open_tty() {   # 交互输入从 fd 3 读：CCA_TTY=答案文件（测试用），否则是终端
 	if [ -n "${CCA_TTY:-}" ]; then
@@ -309,6 +324,20 @@ key_cmd() {
 			*) args+=("$1"); shift ;;
 		esac
 	done
+	repo_pick
+	TMPD=$(mktemp -d)
+	trap 'rm -rf "$TMPD"' EXIT
+	open_tty
+	set -- ${args[@]+"${args[@]}"}
+	case "${1:-ls}" in
+		ls|list) key_ls ;;
+		add) shift; key_add "$@"; presence_after ;;
+		rm|remove) shift; key_rm "$@"; presence_after ;;
+		mv|rename) shift; key_mv "$@"; presence_after ;;
+		*) usage ;;
+	esac
+}
+repo_pick() {   # REPO：-R 写的，其次环境变量 CCA_POLICY_DEFAULT（有定义就用，空的也算），最后是 cca 里写的默认仓库
 	if [ -z "$REPO" ]; then
 		if [ -n "${CCA_POLICY_DEFAULT+x}" ]; then REPO="$CCA_POLICY_DEFAULT"
 		else REPO=$(sed -n 's/^POLICY_REPO_DEFAULT="\${CCA_POLICY_DEFAULT-\([^}]*\)}"$/\1/p' "$HERE/cca"); fi
@@ -316,17 +345,6 @@ key_cmd() {
 	[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "不知道是哪个映射仓库：加上 -R 维护者/仓库"
 	command -v gh >/dev/null 2>&1 || fail "要用 GitHub 的命令行工具 gh：brew install gh，再运行 gh auth login"
 	command -v python3 >/dev/null 2>&1 || fail "要用 python3：先运行 xcode-select --install"
-	TMPD=$(mktemp -d)
-	trap 'rm -rf "$TMPD"' EXIT
-	open_tty
-	set -- ${args[@]+"${args[@]}"}
-	case "${1:-ls}" in
-		ls|list) key_ls ;;
-		add) shift; key_add "$@" ;;
-		rm|remove) shift; key_rm "$@" ;;
-		mv|rename) shift; key_mv "$@" ;;
-		*) usage ;;
-	esac
 }
 
 # ---------------------------------------------------------------------------
@@ -355,21 +373,268 @@ nodes_extract() {   # nodes_extract 参考配置 策略组：打印 nodes.json �
 }
 
 # ---------------------------------------------------------------------------
+# 设备统计的服务器（presence）：各台机器经 cca 用映射里的账号时报告给它，App 的账号页显示这个账号连着哪些设备。
+# 服务端是 server/cca-presence.py；各台机器用自己的 deploy key 签名，服务器只认发布密钥签的设备清单（命名空间 cca-devices）
+# ---------------------------------------------------------------------------
+PRESENCE_USAGE="用法：./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--dir 服务器上的目录] [-C 映射仓库的目录]
+      ./policy.sh presence sync | status [-C 映射仓库的目录] [-R 仓库]"
+policy_dir() { printf '%s' "${PDIR:-${CCA_POLICY_DIR:-$HERE/../cca-policy}}"; }
+mapping_repo() {   # mapping_repo 目录：映射目录推送到的 GitHub 仓库（维护者/仓库）；不是 git 仓库、没有 origin 时是空的
+	git -C "$1" remote get-url --push origin 2>/dev/null |
+		sed -E 's#^(git@github\.com:|ssh://git@(ssh\.)?github\.com(:443)?/|https://github\.com/)##; s#\.git$##' || true
+}
+release_pub() {   # 旁边那份 cca 里的发布公钥（类型 内容），和 $KEY.pub 不是一对就退出：用这把签的东西谁也不认
+	local pub
+	pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' "$HERE/cca" | cut -d' ' -f1,2)
+	[ -n "$pub" ] && [ "$(cut -d' ' -f1,2 "$KEY.pub" 2>/dev/null || true)" = "$pub" ] ||
+		fail "cca 里的 RELEASE_KEY 和 $KEY.pub 不是一对：用这把签的映射、设备清单谁也不认"
+	printf '%s' "$pub"
+}   # 映射仓库的目录（和 lock 一样：-C、CCA_POLICY_DIR、cca 仓库旁边的 cca-policy）
+presence_conf() {   # presence_conf 映射目录：P_URL、P_PINS（curl 的写法，; 隔开）从 policy.json 的 presence 一节读；没有返回 1
+	local out
+	out=$(python3 -I - "$1/policy.json" 2>/dev/null <<'PY'
+import json, sys
+try:
+    p = json.load(open(sys.argv[1], encoding="utf-8")).get("presence")
+except Exception:
+    p = None
+if isinstance(p, dict) and isinstance(p.get("url"), str) and isinstance(p.get("pins"), list):
+    print(p["url"].rstrip("/"))
+    print(";".join(x for x in p["pins"] if isinstance(x, str)))
+PY
+) || true
+	P_URL=$(printf '%s\n' "$out" | sed -n 1p); P_PINS=$(printf '%s\n' "$out" | sed -n 2p)
+	[ -n "$P_URL" ] && [ -n "$P_PINS" ]
+}
+presence_curl() {   # presence_curl 路径 [文件 签名文件]：直连、钉住证书公钥（自签的证书，不验 CA）；输出 body，最后一行是 HTTP 状态码
+	local args=(curl -q -sS -k --proxy '' --noproxy '*' --proto =https --max-redirs 0 --connect-timeout 8 -m 20 --pinnedpubkey "$P_PINS" -w '\n%{http_code}')
+	if [ -n "${2:-}" ]; then
+		args+=(-H 'Content-Type: application/json' -H "X-Cca-Sig: $(base64 < "$3" | tr -d '\n')" --data-binary "@$2")
+	fi
+	"${args[@]}" "$P_URL$1" 2>"$TMPD/curl.err"
+}
+presence_down() {   # presence_down curl 的退出码：连不上的原因
+	local e
+	e=$(sed -n '$p' "$TMPD/curl.err" 2>/dev/null || true)
+	case "$1" in
+		90) echo "服务器的证书和映射里钉住的指纹对不上（${P_URL}）：可能连到了别的机器，或者服务器换了证书" ;;
+		6|7|28) echo "连不上 ${P_URL}：服务没起来，或者云服务商的安全组 / 防火墙还没放行这个 TCP 端口${e:+（${e}）}" ;;
+		*) echo "连 ${P_URL} 出错（curl ${1}${e:+：${e}}）" ;;
+	esac
+}
+presence_health() {   # 问服务器的 /v1/health：那一行 JSON 放在 P_HEALTH；连不上时 P_ERR 是原因。别放在 $(…) 里调（P_ERR 会留在子 shell 里）
+	local out rc=0
+	P_HEALTH=""
+	out=$(presence_curl /v1/health) || rc=$?
+	if [ "$rc" != 0 ]; then P_ERR=$(presence_down "$rc"); return 1; fi
+	if [ "$(printf '%s' "$out" | tail -n 1)" != 200 ]; then P_ERR="服务器回了 HTTP $(printf '%s' "$out" | tail -n 1)"; return 1; fi
+	P_HEALTH=$(printf '%s' "$out" | sed '$d')
+}
+presence_sync() {   # 把仓库上各台机器的 deploy key（只读、启用的 ed25519）作为设备清单，用发布密钥签名后推给服务器；没成时 P_ERR 是原因
+	local dir mrepo out rc=0 code
+	dir=$(policy_dir)
+	presence_conf "$dir" || { P_ERR="${dir}/policy.json 里还没有设备统计的服务器（先 ./policy.sh presence deploy 主机）"; return 1; }
+	mrepo=$(mapping_repo "$dir")
+	if [ -n "$mrepo" ] && [ "$mrepo" != "$REPO" ]; then   # 别的仓库的 key 推上去，服务器就不认这个映射的机器了
+		P_ERR="映射目录 ${dir} 推送到的是 ${mrepo}，不是 ${REPO}：设备清单要用 ${mrepo} 上的 key（./policy.sh presence sync -R ${mrepo}）"
+		return 1
+	fi
+	[ -f "$KEY" ] || { P_ERR="没有发布私钥 ${KEY}：设备清单要用它签名"; return 1; }
+	keys_load || { P_ERR="读不到 ${REPO} 上的 deploy key：${GH_ERR}"; return 1; }
+	presence_health || return 1
+	printf '%s\n' "$KEYS" > "$TMPD/keys.tsv"
+	# 设备清单：序号比服务器上的大；标题重复的（不是经 policy.sh 加的 key）加上编号，服务器要求不重复。stdout 是有几台
+	P_N=$(python3 -I - "$TMPD/keys.tsv" "$TMPD/machines.json" "$P_HEALTH" <<'PY'
+import json, sys, time
+try:
+    seq = max(int(time.time()), int(json.loads(sys.argv[3]).get("seq") or 0) + 1)
+except (ValueError, AttributeError):
+    seq = int(time.time())
+ms, names = [], set()
+for line in open(sys.argv[1], encoding="utf-8"):
+    f = line.rstrip("\n").split("\t")
+    if len(f) < 7 or f[5] != "ro" or f[6] != "on" or not f[2].startswith("ssh-ed25519 "):
+        continue
+    base = " ".join(f[1].split())[:60] or "mac"
+    name, n = base, 2
+    while name in names:
+        name, n = "%s (%d)" % (base, n), n + 1
+    names.add(name)
+    ms.append({"key": f[2], "name": name})
+with open(sys.argv[2], "w", encoding="utf-8") as out:
+    out.write(json.dumps({"version": 1, "seq": seq, "machines": ms}, ensure_ascii=False, separators=(",", ":")))
+print(len(ms))
+PY
+) || { P_ERR="设备清单生成失败"; return 1; }
+	rm -f "$TMPD/machines.json.sig"
+	ssh-keygen -Y sign -q -n cca-devices -f "$KEY" "$TMPD/machines.json" 2>/dev/null || { P_ERR="用 ${KEY} 签名失败"; return 1; }
+	out=$(presence_curl /v1/machines "$TMPD/machines.json" "$TMPD/machines.json.sig") || rc=$?
+	code=$(printf '%s' "$out" | tail -n 1)
+	[ "$rc" = 0 ] || { P_ERR=$(presence_down "$rc"); return 1; }
+	case "$code" in
+		200) return 0 ;;
+		403) P_ERR="服务器不认这份签名：它装的发布公钥和 ${KEY} 不是一对（重新运行 ./policy.sh presence deploy）" ;;
+		409) P_ERR="服务器上的设备清单比这份还新：稍后再运行 ./policy.sh presence sync" ;;
+		*) P_ERR="服务器回了 HTTP ${code}" ;;
+	esac
+	return 1
+}
+presence_after() {   # key add / rm / mv 之后：映射里配置了设备统计的服务器，就把新的设备清单推过去
+	presence_conf "$(policy_dir)" || return 0
+	if presence_sync; then echo "✓ 设备统计的服务器认得的设备跟着更新了（${P_N} 台）"
+	else echo "! 设备清单没同步到服务器：${P_ERR}（修好后运行 ./policy.sh presence sync）"; fi
+}
+presence_remote() {   # presence_remote 服务器上的目录 端口 发布公钥：在服务器上运行的安装脚本（root；文件以 base64 带过去）
+	local f
+	cat <<SH
+set -eu
+D='${1}'
+fail() { echo "✗ \$*"; exit 1; }
+[ "\$(id -u)" = 0 ] || fail "要用 root 登录（目录在 \${D}，还要用 docker）"
+command -v docker >/dev/null 2>&1 || fail "服务器上没有 docker"
+docker compose version >/dev/null 2>&1 || fail "服务器上没有 docker compose（Docker 的 compose 插件）"
+command -v openssl >/dev/null 2>&1 || fail "服务器上没有 openssl（第一次生成证书要用）"
+mkdir -p "\$D/app" "\$D/config" "\$D/certs" "\$D/data"
+put() { printf '%s' "\$2" | base64 -d > "\$D/\$1.new.\$\$" && chmod 644 "\$D/\$1.new.\$\$" && mv -f "\$D/\$1.new.\$\$" "\$D/\$1"; }
+SH
+	for f in compose.yaml README.md; do printf "put %s '%s'\n" "$f" "$(base64 < "$HERE/server/$f" | tr -d '\n')"; done
+	printf "put app/cca-presence.py '%s'\n" "$(base64 < "$HERE/server/cca-presence.py" | tr -d '\n')"
+	printf "put config/release.pub '%s'\n" "$(printf '%s\n' "$3" | base64 | tr -d '\n')"
+	printf "PORT='%s'\n" "$2"
+	cat <<'SH'
+if [ ! -f "$D/certs/cert.pem" ]; then   # 第一次：自签的 P-256 证书（macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住），私钥不出服务器
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj /CN=cca-presence \
+		-keyout "$D/certs/key.pem" -out "$D/certs/cert.pem" >/dev/null 2>&1 || fail "生成证书失败"
+	echo "生成了新的证书（自签 P-256，10 年）"
+fi
+chown -R 10001:10001 "$D/certs" "$D/data"   # 容器里用 10001 运行（compose.yaml 的 user）
+chmod 700 "$D/certs" "$D/data"; chmod 600 "$D/certs/key.pem"; chmod 644 "$D/certs/cert.pem"; chmod 755 "$D" "$D/app" "$D/config"
+cd "$D"
+# 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub）。不改 Docker 的全局配置
+img=""
+for i in $(sed -n 's/^CCA_PRESENCE_IMAGE=//p' .env 2>/dev/null) public.ecr.aws/docker/library/python:3.13-slim \
+	mirror.ccs.tencentyun.com/library/python:3.13-slim docker.m.daocloud.io/library/python:3.13-slim python:3.13-slim; do
+	if timeout 300 docker pull -q "$i" >/dev/null 2>&1 || docker image inspect "$i" >/dev/null 2>&1; then img="$i"; break; fi
+done
+[ -n "$img" ] || fail "拉不到 python:3.13-slim 镜像（Docker Hub 和几个同步源都连不上）：给 Docker 配上镜像加速，或者在别处 docker save 一份再 docker load 进来"
+printf 'CCA_PRESENCE_PORT=%s\nCCA_PRESENCE_IMAGE=%s\n' "$PORT" "$img" > .env.new && mv -f .env.new .env
+docker compose up -d --remove-orphans --force-recreate >/dev/null 2>&1 || { docker compose up -d --force-recreate; fail "docker compose up 失败"; }
+sleep 3
+[ "$(docker inspect -f '{{.State.Running}}' cca-presence 2>/dev/null)" = true ] || { echo "✗ 容器没起来："; docker compose logs --tail 20; exit 1; }
+echo "容器 cca-presence 在跑（${D}，镜像 $(docker inspect -f '{{.Config.Image}}' cca-presence 2>/dev/null)）"
+docker compose logs --tail 1 2>/dev/null | sed 's/^[^|]*| *//'
+echo "PIN sha256//$(openssl x509 -in "$D/certs/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64 -A)"
+SH
+}
+presence_write() {   # presence_write 目录 网址 指纹：把 presence 一节写进 policy.json。盐只在第一次生成；证书换了时旧的指纹也留着，各台机器拉到新映射前照样连得上
+	python3 -I - "$1/policy.json" "$2" "$3" <<'PY'
+import json, os, secrets, sys
+path, url, pin = sys.argv[1:4]
+j = json.load(open(path, encoding="utf-8"))
+old = j.get("presence") if isinstance(j.get("presence"), dict) else {}
+salt = old.get("salt") if isinstance(old.get("salt"), str) and len(old["salt"]) >= 32 else secrets.token_hex(16)
+pins = [pin] + ([p for p in old.get("pins") or [] if isinstance(p, str) and p != pin][:1] if old.get("url") == url else [])
+j["presence"] = {"url": url, "pins": pins, "salt": salt}
+with open(path + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(j, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.replace(path + ".tmp", path)
+PY
+}
+presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口]
+	local target="" sshport="" ident="" port=18443 rdir=/root/projects/cca-presence dir host hp pub out rc=0 pin ssh_args
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-p) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; sshport="$2"; shift ;;
+			-i) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; ident="$2"; shift ;;
+			--port) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; port="$2"; shift ;;
+			--dir) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; rdir="$2"; shift ;;
+			-*) fail "$PRESENCE_USAGE" ;;
+			*) [ -z "$target" ] || fail "$PRESENCE_USAGE"; target="$1" ;;
+		esac
+		shift
+	done
+	[ -n "$target" ] || fail "$PRESENCE_USAGE"
+	[[ "$port" =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && [ "$port" != 80 ] && [ "$port" != 443 ] ||
+		fail "--port 要是 1～65535 的端口，不用 80、443（国内没备案的服务器这两个端口会被拦）"
+	host=${target#*@}
+	[[ "$host" =~ ^[A-Za-z0-9.:-]+$ ]] || fail "主机写错了：${host}"
+	[[ "$rdir" =~ ^/[A-Za-z0-9._/-]+$ ]] && [[ "$rdir" != *..* ]] || fail "--dir 要是服务器上的绝对路径（只用字母、数字和 . _ - /）"
+	case "$host" in *:*) hp="[${host}]" ;; *) hp="$host" ;; esac
+	dir=$(policy_dir)
+	[ -f "$dir/policy.json" ] || fail "${dir} 里没有 policy.json：用 -C 指定映射仓库的目录（默认是 cca 仓库旁边的 cca-policy）"
+	dir=$(cd "$dir" && pwd)
+	pub=$(release_pub) || exit 1
+	ssh_args=(-o BatchMode=yes -o ConnectTimeout=15)
+	[ -z "$ident" ] || ssh_args+=(-i "$ident" -o IdentitiesOnly=yes)
+	[ -z "$sshport" ] || ssh_args+=(-p "$sshport")
+	echo "• 部署设备统计的服务器到 ${target}:${rdir}（docker compose，端口 ${port}）…"
+	out=$(presence_remote "$rdir" "$port" "$pub" | ssh "${ssh_args[@]}" "$target" 'sh -s' 2>&1) || rc=$?
+	printf '%s\n' "$out" | grep -v '^PIN ' | sed 's/^/  /' || true
+	pin=$(printf '%s\n' "$out" | sed -n 's/^PIN //p' | tail -n 1)
+	[ "$rc" = 0 ] && [[ "$pin" =~ ^sha256//[A-Za-z0-9+/]{43}=$ ]] || fail "部署没完成（上面是服务器那边的输出）"
+	presence_write "$dir" "https://${hp}:${port}" "$pin" || fail "没能写进 ${dir}/policy.json"
+	presence_conf "$dir" || fail "写进 ${dir}/policy.json 的 presence 一节读不出来"
+	echo "✓ 已写进 ${dir}/policy.json：presence = ${P_URL}，证书公钥指纹 ${pin}"
+	if presence_health; then
+		printf '%s' "$P_HEALTH" | grep -q '"sig_ok":true' || echo "! 服务器上的验签自检没通过：各台机器的上报会被拒绝（在服务器上 docker compose logs 看看）"
+		echo "✓ 从这台 Mac 连得上（证书和指纹对得上）"
+		if presence_sync; then echo "✓ 设备清单已推给服务器（${P_N} 台）"
+		else echo "! 设备清单没推上去：${P_ERR}（修好后运行 ./policy.sh presence sync）"; fi
+	else
+		echo "! 从这台 Mac 连不上：${P_ERR}"
+		echo "  腾讯云、阿里云等要在控制台的安全组（或轻量应用服务器的防火墙）里放行 TCP ${port}，放行后运行 ./policy.sh presence sync"
+	fi
+	echo "• 下一步：发布映射，各台机器拉到后就开始报告：./policy.sh '${dir}' '设备统计的服务器'"
+}
+presence_status() {
+	presence_conf "$(policy_dir)" || fail "$(policy_dir)/policy.json 里还没有设备统计的服务器：先运行 ./policy.sh presence deploy root@主机"
+	presence_health || fail "$P_ERR"
+	printf '%s' "$P_HEALTH" | python3 -I -c 'import json, sys
+j = json.load(sys.stdin)
+print("✓ 设备统计的服务器在（%s）：认得 %d 台设备（设备清单 #%s），签名自检%s" % (sys.argv[1], j.get("machines") or 0, j.get("seq"),
+      "通过" if j.get("sig_ok") else "没通过：各台机器的上报都会被拒绝"))' "$P_URL"
+}
+presence_cmd() {
+	local sub="${1:-}" args=()
+	[ $# -eq 0 ] || shift
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-C) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; PDIR="$2"; shift 2 ;;
+			-R|--repo) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; REPO="$2"; shift 2 ;;
+			*) args+=("$1"); shift ;;
+		esac
+	done
+	command -v python3 >/dev/null 2>&1 || fail "要用 python3：先运行 xcode-select --install"
+	TMPD=$(mktemp -d)
+	trap 'rm -rf "$TMPD"' EXIT
+	set -- ${args[@]+"${args[@]}"}
+	case "$sub" in
+		deploy) repo_pick; presence_deploy "$@" ;;
+		sync) [ $# -eq 0 ] || fail "$PRESENCE_USAGE"; repo_pick
+			if presence_sync; then echo "✓ 设备清单已推给服务器（${P_N} 台）"; else fail "$P_ERR"; fi ;;
+		status) [ $# -eq 0 ] || fail "$PRESENCE_USAGE"; presence_status ;;
+		*) fail "$PRESENCE_USAGE" ;;
+	esac
+}
+
+# ---------------------------------------------------------------------------
 # 把账号锁到节点：cca policy request 生成的就是这条命令（发给维护者在这里运行），确认之后写进映射，后面照常发布
 # ---------------------------------------------------------------------------
 LOCK_DIR="" LOCK_MSG=""
 LOCK_USAGE="用法：./policy.sh lock claude|codex 邮箱 节点 [-C 映射仓库的目录] [-y]"
 lock_account() {   # lock_account 工具 邮箱 节点 [-C 目录] [-y]：写好 policy.json，发布要用的 LOCK_DIR、LOCK_MSG 留给后面
-	local dir="${CCA_POLICY_DIR:-$HERE/../cca-policy}" yes="" tool="" email="" node="" plan rc=0
+	local dir yes="" tool="" email="" node="" plan rc=0
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			-y) yes=1 ;;
-			-C) [ $# -ge 2 ] || fail "$LOCK_USAGE"; dir="$2"; shift ;;
+			-C) [ $# -ge 2 ] || fail "$LOCK_USAGE"; PDIR="$2"; shift ;;
 			*) if [ -z "$tool" ]; then tool="$1"; elif [ -z "$email" ]; then email="$1"; elif [ -z "$node" ]; then node="$1"; else fail "$LOCK_USAGE"; fi ;;
 		esac
 		shift
 	done
 	[ -n "$node" ] || fail "$LOCK_USAGE"
+	dir=$(policy_dir)
 	[ -f "$dir/policy.json" ] || fail "${dir} 里没有 policy.json：用 -C 指定映射仓库的目录，或者设环境变量 CCA_POLICY_DIR（默认是 cca 仓库旁边的 cca-policy）"
 	dir=$(cd "$dir" && pwd)
 	open_tty
@@ -397,6 +662,7 @@ lock_account() {   # lock_account 工具 邮箱 节点 [-C 目录] [-y]：写好
 
 case "${1:-}" in
 	key|keys) shift; key_cmd "$@"; exit 0 ;;
+	presence) shift; presence_cmd "$@"; exit 0 ;;
 	lock) shift; lock_account "$@"; set -- "$LOCK_DIR" "$LOCK_MSG" ;;
 	nodes)
 		[ -f "${2:-}" ] || fail "用法：./policy.sh nodes 参考配置 [策略组]"
@@ -411,9 +677,7 @@ esac
 [ -f "$1/policy.json" ] || fail "${1} 里没有 policy.json（用法：./policy.sh 映射仓库的目录 [\"提交说明\"]）"
 dir=$(cd "$1" && pwd)   # 先换成绝对路径，再进 cca 的仓库
 cd "$HERE"
-pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' cca)
-[ "$(cut -d' ' -f1,2 "$KEY.pub")" = "$(printf '%s' "$pub" | cut -d' ' -f1,2)" ] ||
-	fail "cca 里的 RELEASE_KEY 和 $KEY.pub 不是一对：用这把签的映射谁也不认"
+pub=$(release_pub) || exit 1
 out=$(bash ./cca _policy-check "$dir/policy.json") || fail "policy.json 有问题：
 ${out}"
 
@@ -434,8 +698,7 @@ ${out}"
 fi
 
 # 映射里有邮箱和节点名：只往私有仓库推（看的是 origin 实际推送的地址）
-url=$(git -C "$dir" remote get-url --push origin) || fail "${dir} 不是 git 仓库，或者没有 origin"
-repo=$(printf '%s' "$url" | sed -E 's#^(git@github\.com:|ssh://git@(ssh\.)?github\.com(:443)?/|https://github\.com/)##; s#\.git$##')
+repo=$(mapping_repo "$dir"); [ -n "$repo" ] || fail "${dir} 不是 git 仓库，或者没有 origin"
 vis=$(gh repo view "$repo" --json visibility -q .visibility 2>/dev/null) || fail "确认不了 ${repo} 是不是私有仓库（gh 登录了吗？）"
 [ "$vis" = PRIVATE ] || fail "${repo} 不是私有仓库（${vis}），映射不能推上去"
 

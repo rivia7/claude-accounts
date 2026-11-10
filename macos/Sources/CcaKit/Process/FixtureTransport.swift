@@ -14,6 +14,7 @@ import Foundation
 /// | `codex reset KEY --json` | events_reset_consent.jsonl（要同意），同意后 reset.json | — |
 /// | `update --check --json` | update.json | — |
 /// | `clients status/check --json` | client_updates.json | — |
+/// | `devices KEY --json` | devices.json（键换成这次问的账号） | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。
@@ -152,6 +153,9 @@ struct FixtureTransport: Transport {
             return json("update.json")
         case ("clients", "status"), ("clients", "check"):
             return json("client_updates.json")
+        case ("devices", let key):
+            guard let d = read("devices.json") else { return missing("devices.json") }
+            return CcaResponse(exitCode: 0, stdout: Self.devicesFor(key, d), stderr: Data(), events: [])
         case ("update", _):
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
         default:
@@ -161,6 +165,15 @@ struct FixtureTransport: Transport {
     }
 
     func spawnDetached(_ request: CcaRequest) throws {}
+
+    /// 演示数据里只有一个账号的设备：换成这次问的账号（每个账号页都有东西看）
+    static func devicesFor(_ key: String, _ data: Data) -> Data {
+        guard var j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var accounts = j["accounts"] as? [[String: Any]], !accounts.isEmpty else { return data }
+        accounts = [accounts[0].merging(["key": key]) { $1 }]
+        j["accounts"] = accounts
+        return (try? JSONSerialization.data(withJSONObject: j)) ?? data
+    }
 
     /// 提问会话的演示：按 `flow_<参数用 _ 连起来>.flow` 回放（没有这个文件就和不支持一样）。
     func startSession(_ arguments: [String]) throws -> CcaSession {

@@ -316,11 +316,15 @@ struct FailCode: KnownValues {
     static let appRunning = FailCode(rawValue: "app_running")
     /// 拉不到维护者的映射（`cca policy pull --json`，上次拉到的照用）。
     static let policyUnavailable = FailCode(rawValue: "policy_unavailable")
+    /// 设备统计（PROTOCOL 3.4）：服务器那边没成（连不上、不认这台 Mac、证书指纹对不上……，message 是原因）/ 这台 Mac 用不了
+    static let devicesUnavailable = FailCode(rawValue: "devices_unavailable")
+    static let devicesOff = FailCode(rawValue: "devices_off")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
-                                       .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported]
+                                       .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
+                                       .devicesUnavailable, .devicesOff]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

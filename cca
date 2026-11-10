@@ -1123,8 +1123,10 @@ def policy_problems(j, strict=False):
                 errs.append('%s：%s 的节点应该是非空字符串' % (n, e))
     if strict:
         errs += alias_problems(j, names)
-        errs += ['不认识的字段 %s（只能有 version、%s、aliases）' % (k, '、'.join(names))
-                 for k in j if k not in ('version', 'aliases') and k not in names]
+        if 'presence' in j:   # 设备统计的服务器（客户端只在完全合格时启用，不合格就当没有）
+            errs += presence_problems(j['presence'])
+        errs += ['不认识的字段 %s（只能有 version、%s、aliases、presence）' % (k, '、'.join(names))
+                 for k in j if k not in ('version', 'aliases', 'presence') and k not in names]
     return errs
 
 
@@ -4876,12 +4878,17 @@ def span(secs):
     return '%d 天 %d 小时' % (d, h) if h else '%d 天' % d
 
 
+def weekday_clock(lt):
+    """“周二 09:00”（lt 是 time.localtime 的结果）"""
+    return '周%s %02d:%02d' % (WEEKDAYS[lt.tm_wday], lt.tm_hour, lt.tm_min)
+
+
 def resets(at, now):
     """重置时间：一天以内写还有多久，再远写星期几、几点（本地时间）"""
     if at - now < 86400:
         return '%s后重置' % span(at - now)
-    lt = time.localtime(at)
-    return '周%s %02d:%02d 重置' % (WEEKDAYS[lt.tm_wday], lt.tm_hour, lt.tm_min)
+    return weekday_clock(time.localtime(at)) + ' 重置'
+
 
 
 def ago(secs):
@@ -5971,11 +5978,516 @@ def cmd_session_open(key, pid):
                 pass
     save_json(os.path.join(d, 'cli-%d.json' % pid),
               {'v': 1, 'tool': T.name, 'id': acct_id(key), 'pid': pid, 'started': starts[pid], 'since': time.time()}, 0o600)
+    presence_wake(key)   # 映射里的账号：报告给维护者的服务器（上报进程在后台，不拖慢启动）
 
 
 def gui_procs():
     """在运行的进程 [(pid, 命令行)]：看各账号的桌面 App 开着没有（一次 ps，不用每个账号 pgrep 一次）"""
     return ps_rows(['-axww', '-o', 'pid=,command='], 10)
+
+
+# --- 连接设备（presence）：映射里的账号经 cca 在用时报告给维护者的服务器，账号页显示这个账号连着哪些设备 -------------
+# 只有配置了映射（有 deploy key）的 Mac 报，只报映射里的官方账号；命令行会话和 cca app 打开的桌面 App 算在用。
+# 每台 Mac 一个上报进程（cca _presence-agent，后台优先级）：有这样的会话时才在，先报一次全部开着的会话（快照），
+# 之后 60 秒一次心跳，其余时间睡在 kqueue 里：会话进程退出、账号目录里的登记变了马上醒来再报；最后一个关掉时报一次
+#「什么都没开了」就退出。报不出去时按退避再试（5 秒起翻倍，最多 2 分钟；服务器不认这台 Mac 时 10 分钟）。
+# 动静：命令行会话看它终端的最后输入、输出时间（和 w 算闲置一样），桌面 App 看进程树的 CPU；10 分钟没动静算闲置（服务器算）。
+# 请求用 deploy key 签名（命名空间 cca-presence），直连、钉住服务器证书的公钥；账号只报 HMAC(盐, 工具\0邮箱)，
+# 服务器看不到邮箱。服务端是 server/cca-presence.py，部署和设备清单在 policy.sh presence
+PRESENCE_DIR = os.path.join(CCA_HOME, 'presence')
+PRESENCE_BEAT = 60                  # 心跳间隔（秒）：服务器 150 秒收不到、又开着会话就算离线
+PRESENCE_IDLE = 600                 # 这么久没动静算闲置（服务器按它自己的设置算；这里只用于第一次见到的桌面 App）
+PRESENCE_APP_CPU = 0.03             # 桌面 App 的进程树在一拍里平均用掉一个核的这么多算有动静（2026-11 实测 Claude App：闲着约 1%，
+                                    # 60 秒平均最高 1.3%；打开、写回复时 18%～100%）
+PRESENCE_URL_RE = lazy_re(r'^https://(?P<host>[0-9]{1,3}(\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:]{2,39}\]|[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)'
+                          r':(?P<port>[0-9]{1,5})/?$')
+PRESENCE_PIN_RE = lazy_re(r'^sha256//[A-Za-z0-9+/]{43}=$')
+PRESENCE_SALT_RE = lazy_re(r'^([0-9a-f]{2}){16,64}$')
+TTY_RE = lazy_re(r'^ttys[0-9]+$')
+
+
+def presence_problems(p):
+    """映射里 presence 一节的问题：{"url": "https://地址:端口", "pins": ["sha256//…"], "salt": "十六进制"}。维护者发布前
+    严格检查；客户端只在完全合格时启用（不合格就当没有，映射的其余部分照用）"""
+    if not isinstance(p, dict):
+        return ['presence 应该是 {"url": "https://地址:端口", "pins": ["sha256//…"], "salt": "…"} 形式的对象']
+    errs = []
+    u = p.get('url')
+    m = PRESENCE_URL_RE.match(u) if isinstance(u, str) else None
+    if not m or not 1 <= int(m.group('port')) <= 65535:
+        errs.append('presence.url 应该是 https://地址:端口（例如 https://203.0.113.10:18443）')
+    pins = p.get('pins')
+    if not (isinstance(pins, list) and 1 <= len(pins) <= 4 and all(isinstance(x, str) and PRESENCE_PIN_RE.match(x) for x in pins)):
+        errs.append('presence.pins 应该是 1～4 个服务器证书公钥的指纹（sha256//…，./policy.sh presence deploy 打印的）')
+    s = p.get('salt')
+    if not (isinstance(s, str) and PRESENCE_SALT_RE.match(s)):
+        errs.append('presence.salt 应该是 32～128 位（偶数位）小写十六进制')
+    return errs
+
+
+def ssh_fp(b64):
+    """公钥（base64 那一段）的指纹，和 ssh-keygen -l 的写法一样（SHA256:…）；不是 base64 是 None"""
+    import base64
+    try:
+        return 'SHA256:' + base64.b64encode(hashlib.sha256(base64.b64decode(b64, validate=True)).digest()).decode('ascii').rstrip('=')
+    except ValueError:
+        return None
+
+
+def presence_key():
+    """这台 Mac 拉映射用的 deploy key：(私钥路径, 指纹)；没有、不是 ed25519 是 None"""
+    key = os.path.join(CCA_HOME, 'policy', 'id_ed25519')
+    try:
+        with open(key + '.pub', encoding='utf-8') as f:
+            pub = f.read().split()
+    except OSError:
+        return None
+    fp = ssh_fp(pub[1]) if len(pub) >= 2 and pub[0] == 'ssh-ed25519' and os.path.isfile(key) else None
+    return (key, fp) if fp else None
+
+
+def presence_load():
+    """(用不了的原因, 配置)：能用时原因是空的，配置是 {url, pins, salt, key, fp}"""
+    c = load_quiet(CFG)
+    if isinstance(c, dict) and c.get('presence') is False:
+        return '这台 Mac 关掉了设备统计（config.json 里写着 "presence": false）', None
+    j = load_quiet(POLICY_FILE)
+    if not isinstance(j, dict):
+        return '这台 Mac 没有配置维护者的映射（cca policy setup）', None
+    p = j.get('presence')
+    if p is None:
+        return '维护者的映射里还没有设备统计的服务器', None
+    errs = presence_problems(p)
+    if errs:
+        return '维护者的映射里设备统计那一节不对：' + '；'.join(errs), None
+    k = presence_key()
+    if not k:
+        return '这台 Mac 没有映射的 deploy key（cca policy setup）', None
+    return '', {'url': p['url'].rstrip('/'), 'pins': p['pins'], 'salt': p['salt'], 'key': k[0], 'fp': k[1]}
+
+
+def presence_aid(salt, tool, email):
+    """上报用的账号摘要：服务器只看到它，看不到邮箱（盐在签名的映射里，各台 Mac 算出来的一样）"""
+    import hmac
+    return hmac.new(bytes.fromhex(salt), ('%s\0%s' % (tool.name, email.lower())).encode('utf-8'), hashlib.sha256).hexdigest()[:32]
+
+
+def presence_mapped(pm, key, v):
+    """这个账号是映射里的官方账号吗（pm 是这个工具的 policy_raw）：只有它们上报、看得到设备"""
+    e = parse_key(key)[1].lower()
+    return bool(e) and not is_api(v) and e in pm
+
+
+def presence_targets():
+    """这台 Mac 上映射里的官方账号：[(工具, 键, 账号目录)]。账号表读不了是 None（这一轮不报：不能当成什么都没开）"""
+    out = []
+    for tool in TOOLS:
+        if not os.path.exists(tool.table):
+            continue
+        t = load_quiet(tool.table)
+        if not isinstance(t, dict):
+            return None
+        pm = policy_raw(tool)
+        with using(tool):
+            out += [(tool, k, adir(k)) for k, v in t.items() if presence_mapped(pm, k, v)]
+    return out
+
+
+def cpu_secs(s):
+    """ps 的 time（[天-][时:]分:秒.百分秒）→ 秒"""
+    try:
+        d, _, hms = s.rpartition('-')
+        secs = 0.0
+        for x in hms.split(':'):
+            secs = secs * 60 + float(x)
+        return secs + (int(d) * 86400 if d else 0)
+    except ValueError:
+        return 0.0
+
+
+def presence_procs():
+    """全部进程 {pid: (ppid, 终端, CPU 秒数, 启动时间戳, 命令行)}（一次 ps）；ps 跑不了是 None"""
+    rows = ps_rows(['-axww', '-o', 'pid=,ppid=,tty=,time=,lstart=,command='], 10, env=dict(os.environ, LC_ALL='C', LANG='C'))
+    if not rows:
+        return None
+    out = {}
+    for pid, rest in rows:
+        f = rest.split(None, 8)
+        if len(f) >= 8 and f[0].isdigit():
+            out[pid] = (int(f[0]), f[1], cpu_secs(f[2]), lstart_epoch(' '.join(f[3:8])), f[8] if len(f) > 8 else '')
+    return out
+
+
+def tree_cpu(pid, procs, kids):
+    """这个进程和它的子孙一共用了多少 CPU 秒"""
+    total, stack, seen = 0.0, [pid], set()
+    while stack:
+        p = stack.pop()
+        if p not in seen:
+            seen.add(p)
+            total += procs[p][2] if p in procs else 0
+            stack.extend(kids.get(p, ()))
+    return total
+
+
+def app_proc_re(tool, desk):
+    """这个资料目录的桌面 App 主进程的命令行（_gui state 看 App 开着没有、上报都用它）：--user-data-dir= 后面可能是
+    账号目录里的写法，也可能是真实路径（cca app 传的是 realpath，~/.cca 经过链接时两者不同）"""
+    return re.compile(tool.app_proc + '.*--user-data-dir=(%s|%s)/?( |$)' % (re.escape(desk), re.escape(os.path.realpath(desk))))
+
+
+def presence_scan(salt, targets, procs, apps, now, mono):
+    """这一轮开着的会话：({账号摘要: {"cli": [[开了多久, 闲置多久]…], "app": [开了多久, 闲置多久] | None}}, 要盯着退出的进程号)。
+    apps 是桌面 App 的 CPU 采样（这里更新）：{(pid, 启动时间): [CPU 秒数, 采样时刻, 最后动静]}"""
+    units, pids, live, kids = {}, set(), set(), {}
+    starts = {pid: p[3] for pid, p in procs.items()}
+    for pid, p in procs.items():
+        kids.setdefault(p[0], []).append(pid)
+    for tool, key, d in targets:
+        with using(tool):
+            marks = cli_marks(key)
+        cli = []
+        for m in marks:
+            if not cli_alive(m['pid'], m['started'], starts):   # 进程没了，或者进程号被别的进程重用了
+                continue
+            pids.add(m['pid'])
+            last, tty = now, procs[m['pid']][1]   # 没有终端（脚本里的 claude -p 之类）：在跑就是在干活
+            if TTY_RE.match(tty):
+                try:
+                    st = os.stat('/dev/' + tty)
+                    last = max(m['since'], st.st_atime, st.st_mtime)   # 最后一次输入、输出
+                except OSError:
+                    pass
+            cli.append([round(max(now - m['since'], 0)), round(max(now - last, 0))])
+        app = None
+        pat = app_proc_re(tool, os.path.join(d, 'desktop'))
+        apid = next((pid for pid in sorted(procs) if pat.search(procs[pid][4])), None)
+        if apid:
+            pids.add(apid)
+            start, cpu, k = procs[apid][3], tree_cpu(apid, procs, kids), (apid, procs[apid][3])
+            live.add(k)
+            rec = apps.get(k)
+            if rec is None:   # 第一次见到：刚打开的算在用，开了很久的先当作刚好闲置满 10 分钟，下一拍看 CPU
+                rec = apps[k] = [cpu, mono, start if now - start < PRESENCE_IDLE else now - PRESENCE_IDLE]
+            elif mono - rec[1] >= 30:   # 隔得太近的两次采样不准：至少隔 30 秒
+                if (cpu - rec[0]) / (mono - rec[1]) >= PRESENCE_APP_CPU:
+                    rec[2] = now
+                rec[0], rec[1] = cpu, mono
+            app = [round(max(now - start, 0)), round(max(now - rec[2], 0))]
+        if cli or app:
+            units[presence_aid(salt, tool, parse_key(key)[1])] = {'cli': cli, 'app': app}
+    for k in [k for k in apps if k not in live]:
+        del apps[k]
+    return units, pids
+
+
+def presence_post(cfg, op, payload, timeout=8):
+    """经 HTTPS 发一个签过名的请求：直连（不经账号的出口），钉住服务器证书的公钥。返回 (HTTP 状态码, JSON)；
+    没发出去是 (0, {"error": "sign" | "unreachable" | "pin"})"""
+    import base64, secrets, subprocess
+    body = json.dumps(dict(payload, v=1, op=op, key=cfg['fp'], ts=int(time.time()), nonce=secrets.token_hex(16)),
+                      ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    try:
+        sig = subprocess.run(['ssh-keygen', '-Y', 'sign', '-q', '-n', 'cca-presence', '-f', cfg['key']], input=body,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        sig = b''
+    if not sig:
+        return 0, {'error': 'sign'}
+    args = ['curl', '-q', '-sS', '-k', '--proxy', '', '--noproxy', '*', '--proto', '=https', '--max-redirs', '0',
+            '--connect-timeout', '5', '-m', str(timeout), '--pinnedpubkey', ';'.join(cfg['pins']),
+            '-H', 'Content-Type: application/json', '-H', 'X-Cca-Sig: ' + base64.b64encode(sig).decode('ascii'),
+            '--data-binary', '@-', '-w', '\n%{http_code}', cfg['url'] + '/v1/' + op]
+    try:
+        r = subprocess.run(args, input=body, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout + 5)
+    except (OSError, subprocess.SubprocessError):
+        return 0, {'error': 'unreachable'}
+    if r.returncode == 90:   # CURLE_SSL_PINNEDPUBKEYNOTMATCH：证书不是映射里钉住的那张
+        return 0, {'error': 'pin'}
+    out, _, code = r.stdout.decode('utf-8', 'replace').rpartition('\n')
+    if r.returncode != 0 or not code.isdigit() or code == '000':
+        return 0, {'error': 'unreachable'}
+    try:
+        j = json.loads(out)
+    except ValueError:
+        j = None
+    return int(code), j if isinstance(j, dict) else {}
+
+
+def presence_why(cfg, code, j):
+    """请求没成的原因（给人看的）"""
+    err = j.get('error')
+    if err == 'pin':
+        return '服务器的证书和映射里钉住的指纹对不上（可能有人冒充服务器，也可能维护者换了证书、映射还没更新）'
+    if err == 'sign':
+        return '没法用这台 Mac 的 deploy key 签名（~/.cca/policy/id_ed25519）'
+    if code == 0:
+        return '连不上设备统计的服务器（%s）' % cfg['url']
+    if code == 403:
+        return '服务器还不认这台 Mac：维护者要把它的 deploy key 同步到服务器的设备清单（./policy.sh presence sync）'
+    if err == 'clock' and is_num(j.get('now')):
+        return '这台 Mac 的时间和服务器差了 %d 秒：打开“系统设置 › 通用 › 日期与时间”里的自动设置' % abs(time.time() - j['now'])
+    if code == 429:
+        return '请求太频繁，稍后再试'
+    return '设备统计的服务器出错了（HTTP %d）' % code
+
+
+def presence_status(text):
+    """上报进程最近一次没报成的原因（cca devices 显示）；报成了是空的。只在变了的时候写"""
+    p = os.path.join(PRESENCE_DIR, 'status.json')
+    if (load_quiet(p) or {}).get('error', '') != text and os.path.isdir(PRESENCE_DIR):
+        try:
+            save_json(p, {'error': text, 'at': time.time()}, 0o600)
+        except OSError:
+            pass
+
+
+def presence_wait(pids, dirs, timeout):
+    """睡 timeout 秒（至少 1 秒）；这些进程有一个退出、这些目录里有文件建 / 删 / 换名（登记出现、消失）就提前醒"""
+    import select
+    timeout = max(timeout, 1.0)
+    try:
+        kq = select.kqueue()
+    except (OSError, AttributeError):
+        time.sleep(min(timeout, 5))   # 没有 kqueue：退回 5 秒看一次
+        return
+    fds, gone = [], False
+    try:
+        for pid in pids:
+            try:
+                kq.control([select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                          fflags=select.KQ_NOTE_EXIT)], 0, 0)
+            except OSError:   # 已经退出了（或者是还没回收的僵尸进程）：睡一秒就回去再看，不空转
+                gone = True
+        if gone:
+            time.sleep(1)
+            return
+        for d in dirs:
+            try:
+                fds.append(os.open(d, 0x8000))   # O_EVTONLY：只为收事件打开
+                kq.control([select.kevent(fds[-1], filter=select.KQ_FILTER_VNODE, flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                                          fflags=select.KQ_NOTE_WRITE)], 0, 0)
+            except OSError:
+                continue
+        if kq.control(None, 1, timeout):
+            time.sleep(0.3)   # 一次启动会连着写好几个文件：等写完再看
+    finally:
+        for fd in fds:
+            os.close(fd)
+        kq.close()
+
+
+def presence_stamp():
+    try:
+        st = os.stat(SELF_PATH)
+        return st.st_ino, st.st_mtime, st.st_size
+    except OSError:
+        return None
+
+
+def cmd_presence_agent():
+    """cca _presence-agent：这台 Mac 的上报进程（见上面这一节的说明）。同时只有一个（agent.lock）；用不了、没在用时马上退出"""
+    import random, signal
+    if not presence_load()[1]:
+        return
+    os.makedirs(PRESENCE_DIR, mode=0o700, exist_ok=True)
+    lock = open(os.path.join(PRESENCE_DIR, 'agent.lock'), 'a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return   # 已经有一个在跑：它会经 kqueue 看到新的登记
+    me = os.getpid()
+    save_json(os.path.join(PRESENCE_DIR, 'agent.json'), {'pid': me, 'started': proc_starts({me}).get(me, 0)}, 0o600)
+
+    class Stop(Exception):
+        pass
+
+    def on_term(*_):
+        raise Stop()
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    stamp, apps, shape, units, cfg = presence_stamp(), {}, None, {}, None
+    due, fails = 0.0, 0   # 下一次该报的时刻：报成了是下一次心跳，没报成是退避结束（心跳到期、会话变了都等它）
+    try:
+        while True:
+            cfg = presence_load()[1]
+            if not cfg:
+                return   # 映射里去掉了、这台 Mac 关掉了、cca restore 了：不再报
+            targets = presence_targets()
+            procs = presence_procs() if targets else {}
+            if targets is None or procs is None:
+                presence_wait((), (), 5)
+                continue
+            mono = time.monotonic()
+            units, pids = presence_scan(cfg['salt'], targets, procs, apps, time.time(), mono)
+            cur = sorted((a, len(u['cli']), bool(u['app'])) for a, u in units.items())
+            if mono >= due or (cur != shape and not fails):
+                code, j = presence_post(cfg, 'report', {'units': units, 'end': None if units else 'none'})
+                if code == 200:
+                    shape, fails, due = cur, 0, mono + PRESENCE_BEAT * random.uniform(0.9, 1.1)
+                    presence_status('')
+                else:
+                    fails += 1
+                    due = mono + (600 if code == 403 else min(5 * 2 ** fails, 120))   # 不认这台 Mac：等维护者同步
+                    presence_status(presence_why(cfg, code, j))
+            if not units and (shape == [] or fails >= 3):
+                # 什么都没开了（报过了，或者一直报不出去）：先放锁再看一眼，刚好有新会话时接着报
+                fcntl.flock(lock, fcntl.LOCK_UN)
+                again = presence_targets()
+                if not again or not presence_scan(cfg['salt'], again, presence_procs() or {}, {}, time.time(), time.monotonic())[0]:
+                    return
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return   # 新起的那个接手了
+                continue
+            if presence_stamp() != stamp and presence_stamp():   # cca 更新了：换成新版本接着报
+                lock.close()
+                try:
+                    os.execv(SELF_PATH, [SELF_PATH, '_presence-agent'])
+                except OSError:
+                    return
+            presence_wait(pids, [d for _, _, d in targets], due - time.monotonic())
+    except Stop:
+        if cfg and shape:   # 被停掉（关机、注销、cca restore）：告诉服务器，马上算离线，不用等心跳超时
+            presence_post(cfg, 'report', {'units': units, 'end': 'down'}, timeout=3)
+
+
+def presence_wake(key):
+    """key（T 的）是映射里的官方账号、正在用：确保这台 Mac 的上报进程在跑（在跑的会经 kqueue 自己看到新的登记），
+    不在就在后台起一个。静默：出什么错都不影响启动"""
+    import subprocess
+    try:
+        if not presence_mapped(policy_raw(T), key, None) or not presence_load()[1]:
+            return
+        os.makedirs(PRESENCE_DIR, mode=0o700, exist_ok=True)
+        with open(os.path.join(PRESENCE_DIR, 'agent.lock'), 'a') as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return   # 在跑
+            fcntl.flock(f, fcntl.LOCK_UN)
+        argv = [SELF_PATH, '_presence-agent']
+        if os.access('/usr/sbin/taskpolicy', os.X_OK):
+            argv = ['/usr/sbin/taskpolicy', '-c', 'background'] + argv   # 后台优先级：只用能效核，定时器和别的唤醒合在一起
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('CCA_EVENTS', 'CCA_GRANT', 'CCA_RO', 'CCA_PROMPT', 'CCA_TTY', 'CCA_YES', 'CCA_TOOL')}
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True, start_new_session=True, env=env)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
+def cmd_presence_wake(key):
+    presence_wake(key)
+
+
+def cmd_presence_stop():
+    """cca restore 之前：停掉这台 Mac 的上报进程（它先告诉服务器“停了”）"""
+    import signal
+    j = load_quiet(os.path.join(PRESENCE_DIR, 'agent.json'))
+    if not (isinstance(j, dict) and isinstance(j.get('pid'), int) and type(j.get('started')) is int and j['started']):
+        return
+    alive = lambda: cli_alive(j['pid'], j['started'], proc_starts({j['pid']}))
+    if not alive():
+        return
+    try:
+        os.kill(j['pid'], signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(50):
+        if not alive():
+            return
+        time.sleep(0.1)
+
+
+def past_time(t, now):
+    """过去的某个时刻（和 App 的 Texts.pastTime 一样）：今天的写几点，昨天的写“昨天 几点”，一周内写星期几，再早写日期"""
+    lt, ln = time.localtime(t), time.localtime(now)
+    days = round((time.mktime(ln[:3] + (0, 0, 0, 0, 0, -1)) - time.mktime(lt[:3] + (0, 0, 0, 0, 0, -1))) / 86400)
+    if days <= 0:
+        return '%02d:%02d' % (lt.tm_hour, lt.tm_min)
+    if days == 1:
+        return '昨天 %02d:%02d' % (lt.tm_hour, lt.tm_min)
+    if days < 7:
+        return weekday_clock(lt)
+    return ('' if lt.tm_year == ln.tm_year else '%d 年 ' % lt.tm_year) + '%d 月 %d 日' % (lt.tm_mon, lt.tm_mday)
+
+
+def presence_line(d, now):
+    """cca devices 里一台设备的状态（和 App 的 Texts.deviceState 说法一样；离线的说明 App 里在悬停时显示）"""
+    what = '、'.join((['命令行里 %d 个会话' % d['cli']] if d['cli'] else []) + (['%s 开着' % T.app_label] if d['app'] else []))
+    used = ' · 上次使用 %s' % past_time(d['last_used_epoch'], now) if d['last_used_epoch'] else ''
+    if d['state'] == 'in_use':
+        return '在用%s%s' % (' · ' + what if what else '', ' · %s 起' % past_time(d['since_epoch'], now) if d['since_epoch'] else '')
+    if d['state'] == 'idle':
+        return '开着，闲置%s%s' % (' ' + span(now - d['last_active_epoch']) if d['last_active_epoch'] else '', ' · ' + what if what else '')
+    if d['state'] == 'offline':
+        seen = '很久以前' if not d['seen_epoch'] else '刚刚' if now - d['seen_epoch'] < 60 else '%s前' % ago(now - d['seen_epoch'])
+        return '离线%s（%s最后一次回报，当时还开着会话：可能休眠、断网，或者被强行结束了，不知道现在还用不用）' % (used, seen)
+    return '没在用%s' % used
+
+
+def cmd_presence_view(*args):
+    """cca [codex] devices [账号…] [--json]：映射里的账号现在连着哪些设备（问维护者的服务器）。--json 是给 App 的（PROTOCOL 3.4）。
+    退出码：0 成功；1 服务器那边没成；2 用不了（这台 Mac 没配置、关掉了，账号不在映射里）。没成时 stdout 是原因"""
+    as_json = '--json' in args
+    names = [a for a in args if a != '--json']
+    reason, cfg = presence_load()
+    if not cfg:
+        print(reason)
+        sys.exit(2)
+    t, pm = ctx()[1], policy_raw(T)
+    keys = [account_named(t, n) for n in names] if names else [k for k, v in t.items() if presence_mapped(pm, k, v)]
+    for k in keys:
+        if not presence_mapped(pm, k, t[k]):
+            print('%s 不在维护者的映射里：只统计映射里的官方账号' % name_of(k))
+            sys.exit(2)
+    aids = {presence_aid(cfg['salt'], T, parse_key(k)[1]): k for k in keys}
+    code, j = presence_post(cfg, 'view', {'accounts': list(aids)}) if aids else (200, {'accounts': {}})
+    recv = time.time()
+    if code != 200 or not isinstance(j.get('accounts'), dict):
+        print(presence_why(cfg, code, j) if code != 200 else '设备统计的服务器回的内容看不懂')
+        sys.exit(1)
+    ep = lambda age: round(recv - age, 3) if is_num(age) else None
+    order = {'in_use': 0, 'idle': 1, 'offline': 2, 'none': 3}
+    accounts = []
+    for aid, k in aids.items():
+        rows = [{'id': r.get('fp'), 'name': r['name'], 'me': r.get('fp') == cfg['fp'], 'state': r['state'],
+                 'cli': r['cli'] if isinstance(r.get('cli'), int) else 0, 'app': r.get('app') is True,
+                 'since_epoch': ep(r.get('since_age')), 'last_active_epoch': ep(r.get('idle_age')),
+                 'last_used_epoch': ep(r.get('used_age')), 'seen_epoch': ep(r.get('seen_age'))}
+                for r in j['accounts'].get(aid) or [] if isinstance(r, dict) and isinstance(r.get('name'), str) and r.get('state') in order]
+        rows.sort(key=lambda r: (not r['me'], order[r['state']], -(r['last_used_epoch'] or 0), r['name']))
+        accounts.append({'key': k, 'id': acct_id(k), 'devices': rows})
+    failing = (load_quiet(os.path.join(PRESENCE_DIR, 'status.json')) or {}).get('error') or None
+    if as_json:
+        print(json.dumps({'version': 1, 'kind': 'devices', 'generated_epoch': recv, 'tool': T.name, 'me': j.get('me_name'),
+                          'idle_after': j.get('idle'), 'offline_after': j.get('ttl'), 'reporting_error': failing,
+                          'accounts': accounts}, ensure_ascii=False))
+        return
+    lines = ['%s 账号连着的设备（维护者的服务器上的记录%s）：' % (T.label, '，这台 Mac 叫 %s' % j['me_name'] if j.get('me_name') else '')]
+    for a in accounts:
+        lines.append('  %s' % label_of(a['key']))
+        lines += ['    · %s%s  %s' % (d['name'], '（这台 Mac）' if d['me'] else '', presence_line(d, recv)) for d in a['devices']]
+        if not a['devices']:
+            lines.append('    30 天内没有设备经 cca 用过')
+    if failing:
+        lines.append('  这台 Mac 最近一次没报成：%s' % failing)
+    print('\n'.join(lines))
+
+
+def cmd_presence_note():
+    """cca policy 里的一句：这台 Mac 会不会把映射里账号的使用情况报告给维护者的服务器"""
+    j = load_quiet(POLICY_FILE)
+    if not isinstance(j, dict) or 'presence' not in j:
+        return
+    reason, cfg = presence_load()
+    if cfg:
+        print('设备统计：映射里的账号在这台 Mac 上用的时候（命令行会话、cca app 打开的 App），会报告给维护者的服务器 %s，'
+              '配置了同一份映射的设备在账号页能看到这台 Mac 在不在用（不想报告：config.json 里加上 "presence": false）' % cfg['url'])
+    else:
+        print('设备统计：' + reason)
 
 
 def gui_account(c, k, v, procs, badges, pm, env, now, cli):
@@ -5993,8 +6505,8 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
         plan, tier = T.plan(k, sub), T.plan_tier(k, sub)
         if x:
             usage = usage_entry(usage_row(k, plan, source='cache', at=x['at'], rl=x['rl']), now)
-    desk = os.path.join(adir(k), 'desktop')
-    pid = None if api else next((p for p, cmd in procs if re.search(T.app_proc + '.*--user-data-dir=' + re.escape(desk) + '( |$)', cmd)), None)
+    pat = None if api else app_proc_re(T, os.path.join(adir(k), 'desktop'))
+    pid = None if api else next((p for p, cmd in procs if pat.search(cmd)), None)
     why = {}
     if api:
         why.update(app='api_account', web='api_account', usage='api_account')
@@ -6024,7 +6536,8 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             'can': dict({x: x not in why for x in ('app', 'web', 'usage', 'check', 'cli')},
                         billing='web' not in why,   # 控制台的账单页和网页版走同一条路（cmd_web）
                         limit_resets=T is CLAUDE and 'web' not in why,   # claude.ai 的用量页，只有 Claude 账号有
-                        policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm)),
+                        policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm),
+                        devices=bool(env.get('presence') and not api and e and e.lower() in pm)),   # 账号页的「设备」（PROTOCOL 3.4）
             'can_why': why,
             'usage': usage, 'health': health_view(k, v, now)}
 
@@ -6088,10 +6601,11 @@ def cmd_gui_state():
                        'nodes': [{'name': n, 'local_name': lnames.get(n, n), 'users': users.get(n, [])} for n in c['nodes']]},
            'tools': []}
     procs = gui_procs()
+    presence = presence_load()[1] is not None
     for tool in TOOLS:
         name = tool.name.upper()
         env = {'bin': os.environ.get('CCA_GUI_%s_BIN' % name) or None, 'app': os.environ.get('CCA_GUI_%s_APP' % name) or None,
-               'chrome': os.environ.get('CCA_GUI_CHROME') == '1'}
+               'chrome': os.environ.get('CCA_GUI_CHROME') == '1', 'presence': presence}
         enabled = tool is CLAUDE or os.path.exists(tool.table)
         entry = {'id': tool.name, 'label': tool.label, 'app_label': tool.app_label, 'cli_prefix': tool.cmd.split()[1:],
                  'enabled': enabled, 'bin': env['bin'], 'app': {'installed': bool(env['app']), 'path': env['app']},
@@ -7518,6 +8032,8 @@ CMDS = {
     'fill-check': cmd_fill_check, 'fill-summary': cmd_fill_summary, 'nodes-fill': cmd_nodes_fill,
     'leak-probe': cmd_leak_probe, 'leak-verdict': cmd_leak_verdict,
     'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
+    'presence-agent': cmd_presence_agent, 'presence-wake': cmd_presence_wake, 'presence-stop': cmd_presence_stop,
+    'presence-note': cmd_presence_note, 'presence-view': cmd_presence_view,
     'prompt-emit': cmd_prompt_emit,
     'check-render': cmd_check_render,
 }
@@ -10142,6 +10658,7 @@ app_activate_existing() {   # 不接管或终止已有实例；不能验证时�
 		py codex-fallback-off || FAIL_CODE=settings_conflict die "已有的 ChatGPT App 无法确认已关闭系统代理回退；请保存工作并退出 App，再用 cca 打开"
 	fi
 	activate_pid "$1"
+	py presence-wake "$ACC_KEY" >/dev/null 2>&1   # 映射里的账号：确保在报告给维护者的服务器（设备统计）
 	info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 	gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 }
@@ -10239,6 +10756,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	APP_LAUNCH_ACTIVE=""
 	app_launch_restore_traps
 	app_launch_unlock
+	py presence-wake "$key" >/dev/null 2>&1   # 映射里的账号：报告给维护者的服务器（设备统计）
 	okay "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	gui_result opened "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	[ -n "$first" ] && tool app_first
@@ -11848,6 +12366,8 @@ policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、�
 	fill=$(py fill-summary)
 	[ -z "$fill" ] || say "  参考节点：维护者参考配置里${fill}（路由器和本机 Clash Verge 的配置文件里缺的直接写进去）"
 	[ ! -f "$POLICY_DIR/log" ] || say "  最近一次拉取：$(tail -n 1 "$POLICY_DIR/log")"
+	fill=$(py presence-note)
+	[ -z "$fill" ] || say "  ${fill}"
 	policy_rows
 }
 
@@ -11875,6 +12395,17 @@ policy_request() {   # cca [codex] policy request 账号：一行给维护者直
 	[ -z "${CCA_EVENTS:-}" ] || return 0
 	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then info "已复制到剪贴板：发给维护者，在 cca 的仓库里运行这条命令"
 	else info "把上面这条命令发给维护者，在 cca 的仓库里运行"; fi
+}
+
+cmd_devices() {   # cca [codex] devices [账号…] [--json]：映射里的账号连着哪些设备（维护者的服务器上看；--json 给 App，PROTOCOL 3.4）
+	local a json="" out rc
+	for a in "$@"; do [ "$a" = --json ] && json=1; done
+	out=$(py presence-view "$@"); rc=$?
+	case $rc in
+		0) if [ -n "$json" ]; then printf '%s\n' "$out"; else say "$out"; fi ;;
+		2) FAIL_CODE=devices_off die "$out" ;;
+		*) [ -z "$out" ] || fail_warn devices_unavailable "$out"; return 1 ;;   # 账号写错了时 py 自己说过了
+	esac
 }
 
 cmd_policy() {   # cca [codex] policy [setup [仓库] | pull [--json] | request 账号]
@@ -12045,6 +12576,7 @@ cmd_restore() {
 	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
 	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; defaults delete "$GUI_ID" >/dev/null 2>&1; info "已删除界面 App ${GUI_APP}"; fi
+	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台 Mac 停了）
 	rm -rf "${CCA_HOME:?}"
 	info "已还原。原来的 claude、codex 命令和 ~/.claude、~/.codex 不受影响"
 }
@@ -12135,6 +12667,10 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              指定的节点，账号表里改成别的会被改回；映射里有、这台机器上还没有的账号自动加进来
                              （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
   cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex 账号：cca codex policy request）
+  cca devices [账号…] [--json]
+                             映射里的账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
+                             （维护者在映射里配置了设备统计的服务器时才有；Codex 账号：cca codex devices）。
+                             映射里的账号经 cca 用的时候（命令行会话、cca app 打开的 App），这台 Mac 也会报告给那台服务器
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
@@ -12150,7 +12686,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
-                             leak_check（设成 false：启动前不测 DNS / WebRTC 泄露）
+                             leak_check（设成 false：启动前不测 DNS / WebRTC 泄露）、
+                             presence（设成 false：这台 Mac 不向维护者的服务器报告、也不查设备统计）
 EOF
 }
 
@@ -12159,7 +12696,7 @@ main() {
 	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes|_presence-agent) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;
@@ -12181,6 +12718,7 @@ main() {
 		_gui-fetch) cmd_gui_fetch ;;
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）
 		_core-nodes) shift; cmd_core_nodes "$@" ;;   # 后台：从路由器拷节点定义、下载内核给内置代理
+		_presence-agent) CCA_SELF="$SELF" exec "${PYRUN[@]}" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
 		gui) shift; cmd_gui "$@" ;;
 		clients) shift; cmd_clients "$@" ;;
 		update) shift; cmd_update "$@" ;;
@@ -12227,6 +12765,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		router) shift; cmd_router "$@" ;;
 		local) shift; cmd_local "$@" ;;
 		policy) shift; cmd_policy "$@" ;;
+		devices) shift; cmd_devices "$@" ;;
 		@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;
 		--) shift; launch "$@" ;;
 		*) launch "$@" ;;

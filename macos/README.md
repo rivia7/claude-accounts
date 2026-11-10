@@ -104,7 +104,10 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   （约 6:1，和内容区一样；浅色外观下这层混色反而让字更深，不动）。侧栏的列表不认它，侧栏和账号行里的灰字用 `.plainSecondary`（深色外观、窗口在前台时是不混色的 55% 白，约 5.6:1，别的情况照系统的），
   新加灰字时也用它；里面不要再套一层 `.secondary`（基色是具体颜色时会叠加变暗）。
 - 操作放在它作用的内容旁边：打开 App / 网页版 / 终端在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
-  检测出口在“网络出口”标题上，添加账号在侧栏账号列表和总览各组的标题上；不用浮在内容上的操作条。
+  检测出口在“网络出口”标题上，「刷新」设备在“设备”标题上，添加账号在侧栏账号列表和总览各组的标题上；不用浮在内容上的操作条。
+- 账号页的设备（`DevicesSection.swift`，只有 cca 说 `can.devices` 的账号有，PROTOCOL 3.4）：在两栏下面占一整行，这台 Mac 排第一；状态点只表达状态
+  （在用实心绿点、闲置绿圈、离线灰圈、没在用浅灰点），文字照实说（在用、开着，闲置 N 分钟、离线、没在用 · 上次使用）；离线的原因（可能休眠、断网）
+  放在悬停说明里，怎么判断在用、闲置放在「显示细节」里。账号页看得见时一分钟查一次，看不见、换到别的页就停。
 - 账号的排序和置顶（`AccountArrangement`）：侧栏上下拖、总览里拖到别的卡片上，右键或账号页的「…」置顶。顺序以账号表为准：调整之后 App 写回账号表（`cca reorder`，PROTOCOL 4.7），终端里的菜单和编号也是这个顺序，在终端里改了顺序 App 也跟着变；
   写回之前界面先按拖出来的顺序显示，不等 cca。置顶记在 App 的设置里，账号按 `Account.stableID`（工具 + 账号目录名）认，改别名不丢。分组和总览一样：Claude、ChatGPT、第三方 API（两个工具共用一组，侧栏只显示当前工具的，拖动时只换这几个之间的先后）。置顶的只在置顶的里面挪，拖过界的停在边上。
 - 重新登录（`AppModel.relogin`，`cca [codex] login 账号`，在终端里）：右键或账号页的「…」随时可以；登录还好好的账号先弹窗（它会先退出现在的登录），登录失效的直接去终端。登录失效是查用量时才知道的（`error_code` 是 `auth`，`Diagnosis.loginExpired`）：Claude Code 不说原因（`nolimits`），用量那一行旁边放个「重新登录…」。
@@ -141,7 +144,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 
 ```
 Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测试）
-  Protocol/            PROTOCOL 的模型：hello / state / live / usage / check / health / 重置额度（Reset）/ 检查更新（Update）/ 事件；
+  Protocol/            PROTOCOL 的模型：hello / state / live / usage / check / health / 重置额度（Reset）/ 检查更新（Update）/ 设备（Devices）/ 事件；
                        容错解码（Decoding.swift）；样例（Sample.swift）
   Process/             CcaProcess（posix_spawn）、CcaLocator、CcaEnvironment、Transport（进程 / 演示数据）、CcaClient（重跑流程、闸门）、
                        TerminalHandoff（.command 文件、shellQuote）
@@ -150,7 +153,7 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
                        WhatsNew（每个版本更新了什么、版本号的先后）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、总览（OfficePage；插画 DeskArt）、
                        套餐徽章（PlanBadge）、账号页（AccountDetail：页头；
-                       UsageCard：用量；RouteSection：线路与出口检测）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
+                       UsageCard：用量；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
                        可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
@@ -165,7 +168,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   设 `CCA_GUI=1`、`NO_COLOR=1`。
 - **重跑流程**（PROTOCOL 4.3）在 `CcaClient.execute`：事件文件边运行边读（显示“同步路由器…”之类的进度），要同意时用 NSAlert 问（只用事件里的
   title / question / detail / severity / default），同意了带上 `CCA_GRANT` 重跑。后台自动刷新用量不弹框：记下来显示一条横幅，点了再手动刷新。
-- **闸门**：同一个账号（工具 + 键）的 app / web / 改别名排队；每个工具的 usage 一次一个；同一个账号的重置额度一次一个；router sync 全局一个；
+- **闸门**：同一个账号（工具 + 键）的 app / web / 改别名排队（查设备由 AppModel 保证同一个账号一次一个）；每个工具的 usage 一次一个；同一个账号的重置额度一次一个；router sync 全局一个；
   更新 cca（`update 版本号`）和 gui update 全局一个（一个接着一个）。`cca codex …` 只在 `hello.tools.codex.enabled` 为真时运行。
 - **刷新**：用量自动刷新不管看不看得见（`Scheduler` 每分钟看一眼，`UsagePolling` 只挑到期的账号，到期了才起进程）：在用的账号看得见时 5 分钟一次、看不见时 10 分钟，没在用的看得见时 8 分钟、看不见时 1 小时，低电量模式慢一倍；用户 15 分钟没碰电脑、系统过热时不查，查失败也按间隔重试。登录失效的账号慢下来（看得见时 15 分钟、看不见时 1 小时），点了“重新登录”之后的 15 分钟里每分钟查一次，登录一完成就看得到。网络出口也定时检测（同一个定时器，`ExitPolling`，`cca [codex] check 这几个账号`，比查用量慢得多：在用的账号看得见时半小时、看不见时 1 小时，没在用的 2 小时、4 小时，低电量模式慢一倍；一次最多 6 个，最久没测的先测；没登录的账号不测；正在查用量时等下一分钟；不弹框、不占用账号的按钮）。自动刷新和后台检查客户端更新都以 utility 优先级运行（子进程继承），定时器带容差。分流页开着时 live 每 60 秒。总览不定时查 live
   （端口连不上、选错节点的账号看它）：切到总览、主窗口变得看得见时，上次的超过 2 分钟才查一次；分流页、总览开着时操作完（同步路由器等）也查。变得看得见时，有账号的用量过期或超过

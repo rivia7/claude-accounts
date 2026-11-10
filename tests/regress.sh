@@ -6,7 +6,8 @@ D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
 T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
-trap '[ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
+SVP=""   # 设备统计的测试服务器（11b3c 那一节才开）
+trap '[ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
 # TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>sleep 了几秒<TAB>说明”；
@@ -98,6 +99,7 @@ ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'p
 ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$D/isolation_runtime.py"'
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
 ok "客户端更新：签名、安装确认、目标漂移与中断恢复" 'python3 "$D/client_updates.py"'
+ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端的扫描、闲置判定、经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -1082,7 +1084,7 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False} and a[\"can_why\"][\"app\"] == \"api_account\")(acct(0, \"kimi2\"))"'
 ok "_gui state：能不能打开账单页，条件和网页版一样（入口的显示由 cca 说了算）" 'printf "%s" "$out" | jok "all(a[\"can\"][\"billing\"] == a[\"can\"][\"web\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版一样" 'printf "%s" "$out" | jok "all(a[\"can\"][\"limit_resets\"] == (i == 0 and a[\"can\"][\"web\"]) for i, t in enumerate(d[\"tools\"]) for a in t[\"accounts\"])"'
 mv "$T/bin/claude" "$T/claude.off"
@@ -2052,7 +2054,8 @@ run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 # 11b3. 维护者管理各台机器的 deploy key（policy.sh key）：假 gh 模拟 GitHub 的 deploy key 接口（存在 $T/deploy_keys.json），
 # 有 $T/policy_keys 时假 git 按它认 deploy key（没加上就拒绝，认出来了记下最近使用）
 PS="$D/../policy.sh"; touch "$T/policy_keys"; : > ghcli.log
-pks() { local a="$1"; shift; run $P CCA_TTY="$a" bash "$PS" key "$@"; }   # pks 答案文件 子命令…
+NOPD="CCA_POLICY_DIR=$T/no-policy-dir"   # 仓库里的 policy.sh 默认看仓库旁边的 cca-policy（维护者真的映射）：测试里指到沙箱
+pks() { local a="$1"; shift; run $P $NOPD CCA_TTY="$a" bash "$PS" key "$@"; }   # pks 答案文件 子命令…
 dkt() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(\"|\".join(\"%s:%s\" % (k[\"title\"], \"ro\" if k[\"read_only\"] else \"rw\") for k in d[\"repos\"].get(\"example/cca-policy\", [])))" "$T/deploy_keys.json" 2>/dev/null; }   # 假 GitHub 上的 key：别名:ro|rw
 dkk() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(\"\".join(k[\"key\"] for k in d[\"repos\"][\"example/cca-policy\"] if k[\"title\"] == sys.argv[2]))" "$T/deploy_keys.json" "$1"; }   # dkk 别名：那把 key 的公钥
 posts() { grep -c '^GH api POST' ghcli.log; }
@@ -2073,7 +2076,7 @@ ok "从文件加：别名重复了（不计首尾空格）要换一个；直接�
 cp "$T/bob" "$T/clipboard"
 out=$(pks "$(ans x)" add 2>&1); rc=$?
 ok "剪贴板里是私钥：不加，提醒别再外传" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "剪贴板里是私钥，不是公钥" && [ "$(posts)" = 2 ]'
-out=$(printf '这是我的公钥：%s 谢谢\n' "$(cat "$T/carol.pub")" | run $P bash "$PS" key add - "Carol 的 Air" 2>&1); rc=$?
+out=$(printf '这是我的公钥：%s 谢谢\n' "$(cat "$T/carol.pub")" | run $P $NOPD bash "$PS" key add - "Carol 的 Air" 2>&1); rc=$?
 ok "从标准输入加、别名写在命令后面（不提问）；夹在聊天消息里的公钥也认得出" '[ $rc -eq 0 ] && [ "$(dkt)" = "alice-mbp:ro|bob-mini:ro|Carol 的 Air:ro" ] && [ "$(dkk "Carol 的 Air")" = "$(cut -d" " -f1,2 "$T/carol.pub")" ]'
 out=$(pks "$(ans)" ls 2>&1); rc=$?; today=$(date +%F)
 ok "policy.sh key：列出各台机器的 key（添加时间、最近一次拉取、别名），标出这台机器的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上有 3 把 deploy key" && printf "%s\n" "$out" | grep -qx "  $today  $today  alice-mbp（这台机器）" && printf "%s\n" "$out" | grep -qx "  $today  还没用过    bob-mini" && printf "%s\n" "$out" | grep -qx "  $today  还没用过    Carol 的 Air"'
@@ -2097,9 +2100,9 @@ ok "改别名时旧的删掉了、新的没加上（GitHub 出错，试了三次
 touch "$T/gh_down"; out=$(pks "$(ans)" 2>&1); rc=$?; rm -f "$T/gh_down"
 ok "连不上 GitHub：说明原因" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "读不到 example/cca-policy 上的 deploy key：连不上 GitHub（error connecting to api.github.com）"'
 defrepo=$(sed -n 's/^POLICY_REPO_DEFAULT="\${CCA_POLICY_DEFAULT-\([^}]*\)}"$/\1/p' "$CCA")
-out=$(run CCA_TTY="$(ans)" bash "$PS" key 2>&1); rc=$?
-out2=$(run CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
-: > ghcli.log; env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_TTY="$(ans)" PATH="$T/bin:/usr/bin:/bin" bash "$PS" key >/dev/null 2>&1
+out=$(run $NOPD CCA_TTY="$(ans)" bash "$PS" key 2>&1); rc=$?
+out2=$(run $NOPD CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
+: > ghcli.log; env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" "$NOPD" CCA_TTY="$(ans)" PATH="$T/bin:/usr/bin:/bin" bash "$PS" key >/dev/null 2>&1
 ok "仓库：CCA_POLICY_DEFAULT 设成空、又没写 -R 时不猜；-R 指定别的仓库；都没设时用 cca 里写的默认仓库" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不知道是哪个映射仓库：加上 -R 维护者/仓库" && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "example/other 上还没有 deploy key" && [ -n "$defrepo" ] && grep -q "^GH api GET repos/$defrepo/keys" ghcli.log'
 rm -f "$T/policy_keys"
 
@@ -2196,6 +2199,126 @@ ok "映射仓库不是私有的：不签名、不推送" '[ $rc -ne 0 ] && print
 runcmd "$(ans)" "./policy.sh lock claude pub@example.com US-A -y"
 ok "上次写进去了、没发布成：再运行一次时提醒还没发布，告诉维护者怎么发布" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还有没发布的改动" && printf "%s" "$out" | grep -qF "./policy.sh $MR"'
 for f in accounts.json codex.json config.json; do cp -p "$T/lock.$f" "$H/.cca/$f"; done; cp -p "$T/lock.policy.json" "$PD"; cp -p "$T/lock.policy.json" "$PR/policy.json"; cp -p "$T/lock.policy.json.sig" "$PR/policy.json.sig"
+
+# 11b3c. 设备统计（presence）：维护者在映射里配置了设备统计的服务器（真的 server/cca-presence.py：127.0.0.1 上随机端口、测试证书、
+#        测试发布密钥，ttl 3 秒）之后，映射里的账号经 cca 用的时候这台 Mac 在后台起一个上报进程，把开着的会话报给服务器；
+#        cca devices 问服务器这个账号连着哪些设备。设备清单由维护者 ./policy.sh presence sync（假 gh 的 deploy key）推给服务器。
+#        测试里的会话没有终端：在跑就算在用。这一节结束时停掉服务器，映射、配置、假的映射仓库、假 GitHub 上的 key 都还原
+SV="$T/presence-srv"; mkdir -p "$SV"
+openssl ecparam -name prime256v1 -genkey -noout -out "$SV/key.pem" 2>/dev/null
+openssl req -new -x509 -key "$SV/key.pem" -subj /CN=cca-presence -days 2 -out "$SV/cert.pem" 2>/dev/null
+cp "$T/relkey.pub" "$SV/release.pub"
+srv_start() {   # srv_start [端口]：起服务器（状态文件留着，重启后接着用）
+	rm -f "$SV/port"
+	python3 -I "$D/../server/cca-presence.py" --listen "127.0.0.1:${1:-0}" --port-file "$SV/port" --cert "$SV/cert.pem" --key "$SV/key.pem" \
+		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl 3 >>"$SV/log" 2>&1 &
+	SVP=$!
+	local i; for i in $(seq 1 50); do [ -s "$SV/port" ] && return 0; sleep 0.1; done; return 1
+}
+srv_start; SVPORT=$(cat "$SV/port")
+PIN="sha256//$(openssl x509 -in "$SV/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"   # 和部署时一样用 openssl 算
+PRD="$H/.cca/presence"
+cp -p "$H/.cca/config.json" "$T/pres.config.json"; cp -p "$H/.cca/accounts.json" "$T/pres.accounts.json"; cp -p "$T/deploy_keys.json" "$T/pres.keys.json"
+cp -p "$PR/policy.json" "$T/pres.pr.json"; cp -p "$PR/policy.json.sig" "$T/pres.pr.sig"; cp -p "$H/.cca/policy/policy.json" "$T/pres.local.json"; cp -p "$MR/policy.json" "$T/pres.mr.json"
+withp() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]={"url":"https://127.0.0.1:%s" % sys.argv[2],"pins":[sys.argv[3]],"salt":"ab"*16}; print(json.dumps(j))' "$T/pres.pr.json" "$SVPORT" "${1:-$PIN}"; }   # withp [指纹]：现在发布的映射加上 presence 一节
+dv() { run cca devices alice@example.com --json 2>/dev/null; }   # 问服务器：alice 连着哪些设备
+dstate() { dv | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' 2>/dev/null; }
+dwait() { local i; for i in $(seq 1 60); do [ "$(dstate)" = "$1" ] && return 0; sleep 0.2; done; return 1; }   # 等服务器上 alice 的设备变成这样
+apid() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$PRD/agent.json" 2>/dev/null; }   # 上报进程的进程号
+alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+pol "$(withp)"
+out=$(run cca policy pull 2>&1); rc=$?
+out2=$(run cca policy 2>&1)
+ok "映射里加了设备统计的服务器（presence 一节）：照常验签拉到；cca policy 说明映射里的账号经 cca 用时会报告给它、怎么关掉" '[ $rc -eq 0 ] && grep -q "\"presence\"" "$H/.cca/policy/policy.json" && printf "%s" "$out2" | grep -q "设备统计：映射里的账号在这台 Mac 上用的时候.*https://127.0.0.1:$SVPORT" && printf "%s" "$out2" | grep -qF "\"presence\": false"'
+printf '%s\n' "$(withp)" > "$T/pres.ok.json"; python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]["url"]="http://x"; j["presence"]["pins"]=[]; json.dump(j, open(sys.argv[2], "w"))' "$T/pres.ok.json" "$T/pres.bad.json"
+out=$(run cca _policy-check "$T/pres.bad.json" 2>&1); rc=$?
+ok "维护者发布前的严格检查认识 presence 这一节，也查它的格式" 'run cca _policy-check "$T/pres.ok.json" >/dev/null 2>&1 && [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "presence.url 应该是 https://地址:端口" && printf "%s" "$out" | grep -q "presence.pins"'
+out=$(gj state)
+ok "_gui state：映射里的官方账号 can.devices 为真（账号页有「设备」），第三方 API 账号没有" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"can\"][\"devices\"] is True and not any(a[\"can\"].get(\"devices\") for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
+out=$(runev cca devices alice@example.com --json); rc=$?
+ok "服务器还不认这台 Mac（维护者还没同步设备清单）：退出码 1，fail 事件说清楚要维护者做什么" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_unavailable\" and \"presence sync\" in e[\"message\"]"'
+# 维护者：仓库上各台机器的 deploy key（这台机器的要在上面）推成服务器的设备清单
+printf '%s\n' "$(withp)" > "$MR/policy.json"
+python3 - "$T/deploy_keys.json" "$PK.pub" <<'PY'
+import json, sys
+p, pub = sys.argv[1], " ".join(open(sys.argv[2]).read().split()[:2])
+d = json.load(open(p))
+ks = d["repos"].setdefault("example/cca-policy", [])
+if not any(k["key"] == pub for k in ks):
+    ks.append({"id": d["next"], "key": pub, "url": "", "title": "alice-mbp", "verified": True, "created_at": "2026-11-01T00:00:00Z",
+               "read_only": True, "added_by": "maintainer", "last_used": None, "enabled": True})
+    d["next"] += 1
+json.dump(d, open(p, "w"), indent=1, ensure_ascii=False)
+PY
+ME=$(python3 -c 'import json,sys; pub=" ".join(open(sys.argv[2]).read().split()[:2]); print(next(k["title"] for k in json.load(open(sys.argv[1]))["repos"]["example/cca-policy"] if k["key"] == pub))' "$T/deploy_keys.json" "$PK.pub")
+NK=$(python3 -c 'import json,sys; print(sum(1 for k in json.load(open(sys.argv[1]))["repos"]["example/cca-policy"] if k["read_only"] and k["enabled"] and k["key"].startswith("ssh-ed25519 ")))' "$T/deploy_keys.json")
+runcmd "$(ans)" "$P ./policy.sh presence sync"
+out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1)
+ok "./policy.sh presence sync：仓库上的只读 deploy key 用发布密钥签名（cca-devices）推给服务器；presence status 说服务器认得几台、验签自检过了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "设备清单已推给服务器（$NK 台）" && printf "%s" "$out2" | grep -q "认得 $NK 台设备.*签名自检通过"'
+out=$(run cca devices alice@example.com --json 2>&1); rc=$?
+ok "cca devices：还没有设备经 cca 用过 alice（这台 Mac 已经被认出来）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"devices\" and d[\"me\"] == \"$ME\" and d[\"accounts\"][0][\"key\"] == \"alice@example.com\" and d[\"accounts\"][0][\"devices\"] == []"'
+# 会话开着：上报进程在后台报（假 claude 在 hold 存在时不退出）
+touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS1=$!
+waitmark "$AD"; m1=$(marks "$AD")
+dwait "$ME:in_use:1"; rc=$?; a1=$(apid)
+ok "映射里的账号开着会话：后台的上报进程马上报给服务器（在用、1 个会话、这台 Mac 排第一）；上报进程只有一个，后台优先级" '[ $rc -eq 0 ] && alive "$a1" && ps -o command= -p "$a1" | grep -q presence-agent && [ "$(ps -o pri= -p "$a1" | tr -d " ")" -le 20 ] && dv | jok "(lambda x: x[\"me\"] is True and x[\"since_epoch\"] and x[\"last_used_epoch\"] and x[\"last_active_epoch\"])(d[\"accounts\"][0][\"devices\"][0])"'
+mkdir -p "$T/guifx3"; dv > "$T/guifx3/devices.json"
+out=$(run cca devices 2>&1)
+ok "cca devices（给人看的）：每个映射里的账号连着哪些设备，这台 Mac 标出来" 'printf "%s" "$out" | grep -q "Claude 账号连着的设备" && printf "%s" "$out" | grep -qF "${ME}（这台 Mac）  在用 · 命令行里 1 个会话"'
+touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS2=$!
+waitmark "$AD" 2
+dwait "$ME:in_use:2"; rc=$?
+ok "又开一个会话：同一个上报进程马上报 2 个（账号目录里的登记一变就醒，不用等心跳）" '[ $rc -eq 0 ] && [ "$(apid)" = "$a1" ]'
+m2=$(marks "$AD" | grep -vx "$m1"); t2=$(pgrep -P "$m2")
+kill -KILL "$m2"
+dwait "$ME:in_use:1"; rc=$?
+ok "cca 被 kill -9（来不及删登记）：上报进程看到它退出，马上改报 1 个" '[ $rc -eq 0 ]'
+kill -KILL "$a1"; sleep 4
+dwait "$ME:offline:1"; rc=$?
+ok "上报进程被 kill -9（就像这台 Mac 睡着了、断网了）：服务器 ttl 秒收不到心跳，算离线（最后看到时开着 1 个会话）" '[ $rc -eq 0 ] && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"seen_epoch\"] < d[\"generated_epoch\"] - 3"'
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS3=$!
+dwait "$ME:in_use:2"; rc=$?; a2=$(apid)
+ok "再启动一次：上报进程重新起来，报全部开着的（2 个）" '[ $rc -eq 0 ] && alive "$a2" && [ "$a2" != "$a1" ]'
+rm -f "$T/hold"; wait "$SS1" "$SS3" 2>/dev/null; for i in $(seq 1 30); do alive "$t2" || break; sleep 0.1; done
+dwait "$ME:none:0"; rc=$?
+for i in $(seq 1 30); do alive "$a2" || break; sleep 0.1; done
+ok "会话都关了：马上报“没在用”（留着上次使用），上报进程自己退出，这台 Mac 上不再有它" '[ $rc -eq 0 ] && ! alive "$a2" && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"last_used_epoch\"] is not None"'
+ok "上报不经账号的出口：直连（钉住证书公钥），不经路由器和本机 Clash" '! grep -q "127.0.0.1:$SVPORT" curl.log 2>/dev/null'
+if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
+	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
+fi
+AK=$(python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$H/.cca/accounts.json")
+out=$(runev cca devices "$AK" --json); rc=$?
+ok "不在映射里的账号（第三方 API 账号）：不统计，fail 事件 devices_off" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"不在维护者的映射里\" in e[\"message\"]"'
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["presence"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+out=$(runev cca devices alice@example.com --json); rc=$?
+touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS4=$!
+waitmark "$AD"; sleep 1; a3=$(apid)
+out2=$(gj state)
+ok "config.json 里写着 \"presence\": false：这台 Mac 不报告（没起上报进程）、也不查，账号页没有「设备」" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_off\" and \"关掉了设备统计\" in e[\"message\"]" && ! alive "$a3" && printf "%s" "$out2" | jok "acct(0, \"alice@example.com\")[\"can\"][\"devices\"] is False"'
+rm -f "$T/hold"; wait "$SS4" 2>/dev/null; cp -p "$T/pres.config.json" "$H/.cca/config.json"
+kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null
+out=$(runev cca devices alice@example.com --json); rc=$?
+ok "服务器连不上：退出码 1，fail 事件 devices_unavailable 说连不上" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_unavailable\" and \"连不上设备统计的服务器\" in e[\"message\"]"'
+out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1); rc2=$?
+ok "./policy.sh presence status：服务器连不上时说清楚原因" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "连不上 https://127.0.0.1:$SVPORT"'
+srv_start "$SVPORT"
+ok "服务器重启后照样认得设备清单、记得上次使用" '[ "$(dstate)" = "$ME:none:0" ]'
+pol "$(withp "sha256//$(printf 'A%.0s' $(seq 1 43))=")"; run cca policy pull >/dev/null 2>&1
+out=$(runev cca devices alice@example.com --json); rc=$?
+ok "服务器的证书不是映射里钉住的那张（被冒充）：不发请求，说清楚" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_unavailable\" and \"钉住的指纹对不上\" in e[\"message\"]"'
+pol "$(withp)"; run cca policy pull >/dev/null 2>&1
+ssh-keygen -q -t ed25519 -N "" -C "cca-policy@dan-air" -f "$T/dan"
+runcmd "$(ans dan-air)" "$P ./policy.sh key add '$T/dan.pub'"
+ok "./policy.sh key add：映射里配置了设备统计的服务器时，顺带把新的设备清单推过去" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "设备统计的服务器认得的设备跟着更新了（$((NK + 1)) 台）"'
+ssh-keygen -q -t ed25519 -N "" -C "cca-policy@eve-air" -f "$T/eve"
+runcmd "$(ans eve-air)" "$P ./policy.sh key add -R example/other '$T/eve.pub'"
+out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1)
+ok "./policy.sh key add -R 别的仓库：不拿那个仓库的 key 当设备清单推给服务器（服务器照样认得原来那些机器）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "推送到的是 example/cca-policy，不是 example/other" && printf "%s" "$out2" | grep -q "认得 $((NK + 1)) 台设备"'
+kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; SVP=""
+cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"; cp -p "$T/pres.keys.json" "$T/deploy_keys.json"
+cp -p "$T/pres.pr.json" "$PR/policy.json"; cp -p "$T/pres.pr.sig" "$PR/policy.json.sig"; cp -p "$T/pres.local.json" "$H/.cca/policy/policy.json"
+cp -p "$T/pres.mr.json" "$MR/policy.json"; rm -rf "$PRD"
 
 # 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开
 #       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时

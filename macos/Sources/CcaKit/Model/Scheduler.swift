@@ -92,6 +92,7 @@ enum PolicyPolling {
 /// App 的定时器。都带容差，让系统把唤醒合在一起：
 /// - 用量和网络出口：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
+/// - 账号页的「设备」看得见时马上查一次，之后每 60 秒一次（问维护者的服务器，很轻）；
 /// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；它从不负责安装。
 @MainActor
 final class Scheduler {
@@ -107,22 +108,40 @@ final class Scheduler {
     /// 离下次该拉映射还有多久（AppModel 按 cca 给的时间算）
     var policyDelay: (() -> TimeInterval)?
     var onPolicyTick: (() -> Void)?
+    /// 账号页的「设备」看得见时隔多久查一次
+    var devicesInterval: TimeInterval
+    var onDevicesTick: (() -> Void)?
 
     private var policyLoop: Task<Void, Never>?
     private var usageLoop: Task<Void, Never>?
     private var liveLoop: Task<Void, Never>?
     private var clientCheckLoop: Task<Void, Never>?
+    private var devicesLoop: Task<Void, Never>?
 
-    init(usageInterval: TimeInterval = 60, liveInterval: TimeInterval = 60, clientCheckInterval: TimeInterval = 3600) {
+    init(usageInterval: TimeInterval = 60, liveInterval: TimeInterval = 60, clientCheckInterval: TimeInterval = 3600,
+         devicesInterval: TimeInterval = 60) {
         self.usageInterval = usageInterval
         self.liveInterval = liveInterval
         self.clientCheckInterval = clientCheckInterval
+        self.devicesInterval = devicesInterval
     }
 
     var usageRunning: Bool { usageLoop != nil }
     var liveRunning: Bool { liveLoop != nil }
     var clientChecksRunning: Bool { clientCheckLoop != nil }
     var policyPollingRunning: Bool { policyLoop != nil }
+    var devicesPollingRunning: Bool { devicesLoop != nil }
+
+    /// 账号页的「设备」看得见：马上查一次，之后每 devicesInterval 秒一次。restart：换了账号，马上再查一次
+    func updateDevicesPolling(enabled: Bool, restart: Bool = false) {
+        if !enabled || restart {
+            devicesLoop?.cancel()
+            devicesLoop = nil
+        }
+        if enabled, devicesLoop == nil {
+            devicesLoop = loop(every: { [weak self] in self?.devicesInterval ?? 60 }, immediately: true) { [weak self] in self?.onDevicesTick?() }
+        }
+    }
 
     func updateUsagePolling(enabled: Bool) {
         if enabled {
@@ -175,6 +194,7 @@ final class Scheduler {
         updateUsagePolling(enabled: false)
         updateClientChecks(enabled: false)
         updatePolicyPolling(enabled: false)
+        updateDevicesPolling(enabled: false)
     }
 
     private func loop(every interval: @escaping @MainActor () -> TimeInterval, immediately: Bool,

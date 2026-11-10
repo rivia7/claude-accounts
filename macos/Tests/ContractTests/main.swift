@@ -31,6 +31,7 @@ if fullMode {
     await clientUpdateProtocolTests()
     await clientUpdateModelTests()
     await pollingTests()
+    await devicesTests()
     arrangementTests()
     await accountListModelTests()
     await exitPollingTests()

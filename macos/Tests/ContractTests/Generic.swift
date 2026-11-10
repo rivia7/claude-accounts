@@ -336,6 +336,31 @@ func genericReset(_ name: String, _ d: Data) -> ResetDoc? {
     return doc
 }
 
+/// `devices KEY --json`（PROTOCOL 3.4）：账号连着的设备，时间是 *_epoch，这台 Mac 排第一。
+@discardableResult
+func genericDevices(_ name: String, _ d: Data) -> DevicesDoc? {
+    guard let doc = decodeOrFail(DevicesDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) kind devices", doc.kind == "devices")
+    check("\(name) generated_epoch 是数字", isNumber(raw["generated_epoch"]))
+    let rawAccounts = raw["accounts"] as? [[String: Any]] ?? []
+    check("\(name) 账号都解码了", rawAccounts.count == doc.accounts.count)
+    for (i, a) in doc.accounts.enumerated() {
+        let rd = (i < rawAccounts.count ? rawAccounts[i]["devices"] as? [[String: Any]] : nil) ?? []
+        check("\(name) \(a.key) 的设备都解码了", rd.count == a.devices.count)
+        check("\(name) \(a.key) 这台 Mac 排第一", a.devices.dropFirst().allSatisfy { !$0.isMe })
+        for (j, dev) in a.devices.enumerated() {
+            let r = j < rd.count ? rd[j] : [:]
+            check("\(name) \(dev.name) 的时间是数字或 null", ["since_epoch", "last_active_epoch", "last_used_epoch", "seen_epoch"]
+                .allSatisfy { isNull(r[$0]) || isNumber(r[$0]) })
+            check("\(name) \(dev.name) 开着会话的才有开始时间", dev.state == .none || dev.state == .offline || dev.sinceEpoch != nil)
+        }
+    }
+    knownEnums(name, auditDevices(doc))
+    return doc
+}
+
 @discardableResult
 func genericUpdate(_ name: String, _ d: Data) -> UpdateDoc? {
     guard let doc = decodeOrFail(UpdateDoc.self, name, d) else { return nil }
@@ -450,7 +475,7 @@ func futureEnums(_ x: Any, depth: Int = 0) -> Any {
 /// 类型不对的字段：数字字段给字符串，布尔字段给字符串，字符串字段给数字。
 func wrongTypes(_ x: Any) -> Any {
     let numeric: Set<String> = ["port", "pid", "trust", "age_seconds", "utilization", "min_trust", "ssh_port", "availableCount",
-                                "sessions", "since_epoch"]
+                                "sessions", "since_epoch", "last_used_epoch", "seen_epoch"]
     let boolean: Set<String> = ["stale", "pinned", "is_last", "running", "applies", "reset", "reachable", "hook", "cron", "listening"]
     let text: Set<String> = ["plan", "plan_tier", "label", "message", "org", "trust_label", "balance", "error", "local_node", "selected"]
     if var d = x as? [String: Any] {
@@ -599,6 +624,9 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
                 check("\(f) 有说明", !doc.summary.isEmpty)
             }
             tolerance(PolicyPullDoc.self, f, d) { [$0.changed ? 1 : 0] }
+        case "devices":
+            genericDevices(f, d)
+            tolerance(DevicesDoc.self, f, d) { [$0.accounts.count, $0.accounts.reduce(0) { $0 + $1.devices.count }] }
         case "update":
             genericUpdate(f, d)
             tolerance(UpdateDoc.self, f, d) { [$0.latest == nil ? 0 : 1] }
@@ -715,6 +743,13 @@ func auditUsage(_ u: UsageDoc) -> [String] {
     let a = EnumAudit()
     a.add("tool", u.tool)
     for e in u.accounts { a.usage("[\(e.key ?? "?")]", e) }
+    return a.unknown
+}
+
+func auditDevices(_ doc: DevicesDoc) -> [String] {
+    let a = EnumAudit()
+    a.add("tool", doc.tool)
+    for acc in doc.accounts { for dev in acc.devices { a.add("[\(acc.key)].\(dev.name).state", dev.state) } }
     return a.unknown
 }
 

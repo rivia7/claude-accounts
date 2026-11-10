@@ -244,7 +244,8 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": false
+            "policy_lock": false,
+            "devices": true
           },
           "can_why": {},
           "usage": {

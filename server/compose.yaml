@@ -1,0 +1,40 @@
+# cca 的设备统计服务器（presence）。./policy.sh presence deploy 把这一套放到服务器上的一个目录里（默认
+# /root/projects/cca-presence），在那里 docker compose up -d。迁移：整个目录拷到新服务器（certs/ 里的证书跟着走，
+# 映射里钉住的指纹就不用改），docker compose up -d，再把映射里的地址改成新的（重新运行 deploy 会写好）。
+#   app/cca-presence.py   服务端（只用 Python 标准库，自己验签，不需要别的软件）
+#   config/release.pub    维护者的发布公钥：只认它签的设备清单
+#   certs/                自签的 P-256 证书和私钥（私钥不出服务器）
+#   data/state.json       各台设备最近一次的报告、上次使用的时间（保留 30 天）
+#   .env                  CCA_PRESENCE_PORT：对外的端口（默认 18443）；CCA_PRESENCE_IMAGE：用的 python 镜像
+services:
+  cca-presence:
+    image: ${CCA_PRESENCE_IMAGE:-python:3.13-slim}   # .env 里是部署时拉得到的那个（官方镜像或它的同步源）
+    container_name: cca-presence
+    restart: unless-stopped
+    user: "10001:10001"
+    command: ["python3", "-I", "/app/cca-presence.py", "--listen", "0.0.0.0:18443",
+              "--cert", "/certs/cert.pem", "--key", "/certs/key.pem",
+              "--release-key", "/config/release.pub", "--state", "/data/state.json"]
+    ports:
+      - "${CCA_PRESENCE_PORT:-18443}:18443"
+    volumes:
+      - ./app:/app:ro
+      - ./config:/config:ro
+      - ./certs:/certs:ro
+      - ./data:/data
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      TZ: Asia/Shanghai
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"

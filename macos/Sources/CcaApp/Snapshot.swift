@@ -50,6 +50,7 @@ enum Snapshot {
             Scene(name: "claude") { m in
                 m.tool = .claude
                 m.selection = first(.claude) { $0.login == .loggedIn && !$0.isAPI }.map { .account($0) }
+                if let r = m.selection?.account { m.refreshDevices(r, manual: true) }   // 窗口在后面，不算看得见：「设备」自己查一次
             },
             Scene(name: "claude-loggedout") { m in
                 m.tool = .claude

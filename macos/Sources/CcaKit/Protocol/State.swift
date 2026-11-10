@@ -544,9 +544,12 @@ struct Can: Decodable, Sendable, Equatable {
     var cli: Bool = false
     /// 能不能请求维护者把节点锁进映射（官方账号、这台机器配置了映射、还没被映射固定；PROTOCOL 4.8）
     var policyLock: Bool = false
+    /// 账号页有没有「设备」一节（映射里的官方账号、映射里配置了设备统计的服务器、这台 Mac 没关掉；PROTOCOL 3.4）。
+    /// 旧版 cca 没有这一项，当作没有
+    var devices: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case app, web, billing, usage, check, cli
+        case app, web, billing, usage, check, cli, devices
         case limitResets = "limit_resets"
         case policyLock = "policy_lock"
     }
@@ -563,6 +566,7 @@ struct Can: Decodable, Sendable, Equatable {
         check = c.bool(.check) ?? true
         cli = c.bool(.cli) ?? false
         policyLock = c.bool(.policyLock) ?? false
+        devices = c.bool(.devices) ?? false
     }
 }
 

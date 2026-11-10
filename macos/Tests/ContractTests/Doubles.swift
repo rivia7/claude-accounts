@@ -160,9 +160,9 @@ func fixtureTransport(_ env: [String: String] = [:]) -> FixtureTransport {
 
 /// 测试用的 AppModel：内存里的设置、记录用的 hooks，不找 cca、不碰 UserDefaults。
 @MainActor func makeModel(_ transport: Transport, log: HookLog? = nil, prompter: Prompter = ScriptedPrompter([]),
-                          appVersion: String = "0.0.0-test", prefs: MemoryPrefs = MemoryPrefs()) -> AppModel {
+                          appVersion: String = "0.0.0-test", prefs: MemoryPrefs = MemoryPrefs(), scheduler: Scheduler? = nil) -> AppModel {
     AppModel(environment: [:], home: tmpRoot.path, appVersion: appVersion, defaults: prefs,
-             hooks: makeHooks(log ?? HookLog(), prompter), transport: transport)
+             hooks: makeHooks(log ?? HookLog(), prompter), transport: transport, scheduler: scheduler)
 }
 
 @MainActor func waitUntil(_ timeout: Double = 5, _ cond: () -> Bool) async -> Bool {

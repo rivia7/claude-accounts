@@ -146,6 +146,9 @@ final class AppModel {
     private(set) var syncActivity: Activity?
     /// 正在拉维护者的映射（定时的和手动的同一时间一个）。
     private(set) var policyPulling = false
+    /// 账号页「设备」一节（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号页看得见时一分钟查一次，只记在内存里
+    private(set) var devices: [AccountRef: DevicesSnapshot] = [:]
+    private(set) var devicesLoading: Set<AccountRef> = []
     /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
     /// （`cca gui update`）；cca 已经比 App 新时只有后一步。
     enum UpdateStep: Equatable { case cca, app }
@@ -197,6 +200,7 @@ final class AppModel {
             if case .account(let r)? = selection { defaults.set(r.key, forKey: Prefs.selected(r.tool)) }
             if let e = aliasEditing, selection != .account(e) { cancelRename() }
             visibilityChanged(wasVisible: isVisible, wasRouting: oldValue == .routing && mainVisible)
+            reconcileDevicesPolling(restart: true)
             if selection == .office { refreshLiveIfStale() }
             if selection == .clientUpdates { refreshClientUpdates() }
         }
@@ -219,6 +223,11 @@ final class AppModel {
     var routingVisible: Bool { mainVisible && selection == .routing }
     /// 看得见、并且用得上路由器实况的页面开着：分流页，或者办公室（端口连不上、选错节点的员工看它）
     var liveVisible: Bool { mainVisible && (selection == .routing || selection == .office) }
+    /// 看得见的账号页有「设备」一节（cca 说这个账号有：映射里的官方账号、配置了设备统计的服务器）：这个账号
+    var devicesRef: AccountRef? {
+        guard mainVisible, case .account(let r)? = selection, account(r)?.can.devices == true else { return nil }
+        return r
+    }
 
     // MARK: 内部
 
@@ -308,6 +317,7 @@ final class AppModel {
         self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
         self.scheduler.policyDelay = { [weak self] in self?.policyDelay() ?? PolicyPolling.fallback }
         self.scheduler.onPolicyTick = { [weak self] in self?.pollPolicy() }
+        self.scheduler.onDevicesTick = { [weak self] in self?.pollDevices() }
     }
 
     // MARK: 启动和连接
@@ -497,6 +507,7 @@ final class AppModel {
             fixSelection()
             reconcileCore()
             reconcilePolicyPolling()   // 映射可能是刚配置的
+            reconcileDevicesPolling()  // 映射里刚加了设备统计的服务器、这个账号刚进了映射
             // 2.9.0-beta.17 的顺序只记在 App 里：第一次读到账号表时写回去
             if !orderChecked {
                 orderChecked = true
@@ -1209,6 +1220,37 @@ final class AppModel {
         scheduler.updatePolicyPolling(enabled: phase == .ready && !isFixtureMode && policyPullAvailable)
     }
 
+    // MARK: 账号连着的设备（PROTOCOL 3.4）
+
+    /// 账号页的「设备」看得见时才定时查（换了账号马上查一次）；看不见、cca 说没有就停
+    private func reconcileDevicesPolling(restart: Bool = false) {
+        scheduler.updateDevicesPolling(enabled: phase == .ready && devicesRef != nil, restart: restart)
+    }
+
+    private func pollDevices() {
+        guard let r = devicesRef, hooks.systemConditions().idleSeconds < UsagePolling.awayAfter else { return }   // 走开了：没人看
+        refreshDevices(r, manual: false)
+    }
+
+    /// 问一次这个账号连着哪些设备。查不成时上次查到的照样显示，旁边说原因
+    func refreshDevices(_ ref: AccountRef, manual: Bool) {
+        guard phase == .ready, let client, !devicesLoading.contains(ref), account(ref)?.can.devices == true else { return }
+        devicesLoading.insert(ref)
+        track { [weak self] in
+            let (doc, r) = await client.document(.devices(ref.tool, key: ref.key, auto: !manual), as: DevicesDoc.self, prompter: nil)
+            guard let self else { return }
+            self.devicesLoading.remove(ref)
+            if let doc, let a = doc.account(ref.key) {
+                self.devices[ref] = DevicesSnapshot(doc: doc, account: a, error: nil,
+                                                    fetchedEpoch: doc.generatedEpoch ?? Date().timeIntervalSince1970)
+            } else if r.failure?.reason != .cancelled {
+                var s = self.devices[ref] ?? DevicesSnapshot()
+                s.error = nonEmpty(r.failure?.message) ?? "没能查到这个账号连着的设备"
+                self.devices[ref] = s
+            }
+        }
+    }
+
     /// 能拉维护者的映射：配置了映射，cca 也够新（和 `hello.forms` 同一版起才有 `policy pull --json` 和 `next_check_epoch`；没有下次的时间，定时拉取就成了每 5 分钟一次）。
     var policyPullAvailable: Bool {
         formsSupported && state?.config?.policy?.configured == true
@@ -1497,6 +1539,7 @@ final class AppModel {
 
     private func visibilityChanged(wasVisible: Bool, wasRouting: Bool) {
         scheduler.update(visible: isVisible, routingVisible: routingVisible)
+        reconcileDevicesPolling()
         guard phase == .ready else { return }
         if isVisible && !wasVisible {
             if helloDirty {

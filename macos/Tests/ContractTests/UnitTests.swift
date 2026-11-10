@@ -19,6 +19,25 @@ func textTests() {
           Texts.resetText(epoch: 1794470400 + 86400 * 3, now: now, calendar: utc))
     check("已经过了", Texts.resetText(epoch: now - 1, now: now) == "已重置")
     check("百分比", Texts.percent(12.5) == "13%" && Texts.percent(0) == "0%" && Texts.percent(99.4) == "99%")
+    // 设备（PROTOCOL 3.4）：过去的时刻、一台设备的状态（和 cca devices 的说法一样）
+    check("过去的时刻：今天、昨天、一周内、更早、去年", Texts.pastTime(now - 3600, now: now, calendar: sh) == "16:00"
+          && Texts.pastTime(now - 86400, now: now, calendar: sh) == "昨天 17:00"
+          && Texts.pastTime(now - 86400 * 3, now: now, calendar: sh) == "周三 17:00"
+          && Texts.pastTime(now - 86400 * 10, now: now, calendar: sh) == "10 月 28 日"
+          && Texts.pastTime(now - 86400 * 400, now: now, calendar: sh) == "2025 年 10 月 3 日",
+          Texts.pastTime(now - 86400 * 3, now: now, calendar: sh))
+    func device(_ j: String) -> DeviceRow { try! JSONDecoder().decode(DeviceRow.self, from: Data(j.utf8)) }
+    let using = device(#"{"name":"m","state":"in_use","cli":2,"app":true,"since_epoch":\#(now - 3600)}"#)
+    check("在用：开着什么、几点起", Texts.deviceState(using, appLabel: "Claude App", now: now, calendar: sh) == "在用 · 命令行里 2 个会话、Claude App 开着 · 16:00 起",
+          Texts.deviceState(using, appLabel: "Claude App", now: now, calendar: sh))
+    let idle = device(#"{"name":"m","state":"idle","cli":1,"last_active_epoch":\#(now - 1500)}"#)
+    check("闲置：多久没动静", Texts.deviceState(idle, appLabel: "Claude App", now: now, calendar: sh) == "开着，闲置 25 分钟 · 命令行里 1 个会话")
+    let off = device(#"{"name":"m","state":"offline","cli":1,"last_used_epoch":\#(now - 86400),"seen_epoch":\#(now - 600)}"#)
+    check("离线：上次使用，悬停时说可能休眠或断网", Texts.deviceState(off, appLabel: "", now: now, calendar: sh) == "离线 · 上次使用 昨天 17:00"
+          && Texts.deviceOfflineHelp(off, now: now).hasPrefix("10 分钟前最后一次回报"))
+    let gone = device(#"{"name":"m","state":"zz_future","cli":0}"#)
+    check("不认识的状态当没在用", !gone.state.isKnown && Texts.deviceState(gone, appLabel: "", now: now) == "没在用")
+    check("设备的汇总", Texts.devicesSummary([using, idle, off]) == "1 台在用 · 1 台闲置" && Texts.devicesSummary([off]) == "现在没有设备在用")
     check("颜色档", UsageLevel(percent: 69.9) == .normal && UsageLevel(percent: 70) == .warning && UsageLevel(percent: 89.9) == .warning
           && UsageLevel(percent: 90) == .critical && UsageLevel(percent: 120) == .critical)
     check("登录状态", Texts.login(.emailMismatch, loginEmail: "eve@example.com") == "登录的是 eve@example.com"

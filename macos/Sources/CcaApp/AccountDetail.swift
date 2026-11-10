@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 一个账号的详情：身份和主要操作（打开 App、网页版）、“现在能不能用、下一步点什么”的一句话、用量、网络出口。
+/// 一个账号的详情：身份和主要操作（打开 App、网页版）、“现在能不能用、下一步点什么”的一句话、用量、网络出口；
+/// 映射里的账号还有「设备」（在哪些设备上用，DevicesSection）。
 /// 操作放在它作用的那一节旁边：刷新用量在“用量”的标题上，检测出口在“网络出口”的标题上。第一次来时顶上有一张提示卡片。
-/// 窗口宽的时候（全屏）用量和网络出口左右并排，窄了上下排（SectionColumns）。
+/// 窗口宽的时候（全屏）用量和网络出口左右并排，窄了上下排（SectionColumns）；「设备」总是在下面占一整行。
 struct AccountDetail: View {
     @Environment(AppModel.self) private var model
     let ref: AccountRef
@@ -12,12 +13,14 @@ struct AccountDetail: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 32) {
                     TipCard(id: "account-page", title: "这一页怎么看",
-                            message: "名字下面那句话告诉你这个账号现在能不能用、下一步点什么。再往下是额度和它的网络出口。想看端口、纯净度这些技术细节，点「显示细节」。")
+                            message: "名字下面那句话告诉你这个账号现在能不能用、下一步点什么。再往下是额度和它的网络出口；维护者映射里的账号，最下面还有它在哪些设备上用。想看端口、纯净度这些技术细节，点「显示细节」。")
                     DetailHeader(account: a)
                     SectionColumns {
                         if !a.isAPI { UsageSection(account: a) }
                         RouteSection(account: a)
                     }
+                    // 映射里的账号：在哪些设备上用（整行，不进并排的两栏）
+                    if a.can.devices { DevicesSection(account: a) }
                 }
                 .padding(.top, 24)
                 .padding(.bottom, 36)

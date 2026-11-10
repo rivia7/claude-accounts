@@ -109,6 +109,63 @@ enum Texts {
         "\(Int(p.rounded()))%"
     }
 
+    /// 过去的某个时刻：今天的写几点（14:02），昨天的写“昨天 18:40”，一周内写星期几（周二 09:05），再早写日期（11 月 3 日，不是今年的带年份）。
+    static func pastTime(_ epoch: Double, now: Double, calendar: Calendar = .current) -> String {
+        let d = Date(timeIntervalSince1970: epoch), n = Date(timeIntervalSince1970: now)
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: d), to: calendar.startOfDay(for: n)).day ?? 0
+        if days <= 0 { return clock(epoch, calendar: calendar) }
+        if days == 1 { return "昨天 " + clock(epoch, calendar: calendar) }
+        if days < 7 { return weekdayTime(epoch, calendar: calendar) }
+        return dayText(epoch, now: now, calendar: calendar)
+    }
+
+    /// “11 月 3 日”（不是今年的带年份：“2025 年 10 月 3 日”）
+    private static func dayText(_ epoch: Double, now: Double, calendar: Calendar) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: epoch))
+        let day = "\(c.month ?? 0) 月 \(c.day ?? 0) 日"
+        return c.year == calendar.component(.year, from: Date(timeIntervalSince1970: now)) ? day : "\(c.year ?? 0) 年 " + day
+    }
+
+    /// 一台设备开着什么：“命令行里 2 个会话、Claude App 开着”
+    static func deviceOpen(_ d: DeviceRow, appLabel: String) -> String {
+        var parts: [String] = []
+        if d.cli > 0 { parts.append("命令行里 \(d.cli) 个会话") }
+        if d.app { parts.append("\(appLabel) 开着") }
+        return parts.joined(separator: "、")
+    }
+
+    /// 账号页「设备」里一台设备的状态（和 cca devices 的说法一样）：
+    /// 在用 · 命令行里 2 个会话 · 14:02 起 / 开着，闲置 23 分钟 · 命令行里 1 个会话 / 离线 · 上次使用 10:20 / 没在用 · 上次使用 昨天 18:40
+    static func deviceState(_ d: DeviceRow, appLabel: String, now: Double, calendar: Calendar = .current) -> String {
+        let open = deviceOpen(d, appLabel: appLabel)
+        let used = d.lastUsedEpoch.map { " · 上次使用 " + pastTime($0, now: now, calendar: calendar) } ?? ""
+        switch d.state {
+        case .inUse:
+            return "在用" + (open.isEmpty ? "" : " · " + open) + (d.sinceEpoch.map { " · " + pastTime($0, now: now, calendar: calendar) + " 起" } ?? "")
+        case .idle:
+            return "开着，" + (d.lastActiveEpoch.map { "闲置 " + span(now - $0) } ?? "闲置") + (open.isEmpty ? "" : " · " + open)
+        case .offline:
+            return "离线" + used
+        default:
+            return "没在用" + used
+        }
+    }
+
+    /// 离线那一行的说明（悬停、读屏）：最后一次回报时还开着会话，现在不知道
+    static func deviceOfflineHelp(_ d: DeviceRow, now: Double) -> String {
+        let seen = d.seenEpoch.map { agoPhrase(now - $0) } ?? "很久以前"
+        return "\(seen)最后一次回报，当时还开着会话：可能休眠、断网，或者被强行结束了，不知道现在还用不用"
+    }
+
+    /// 「设备」标题右边的一句：“1 台在用 · 1 台闲置”；都没在用时“现在没有设备在用”
+    static func devicesSummary(_ rows: [DeviceRow]) -> String {
+        let inUse = rows.filter { $0.state == .inUse }.count, idle = rows.filter { $0.state == .idle }.count
+        var parts: [String] = []
+        if inUse > 0 { parts.append("\(inUse) 台在用") }
+        if idle > 0 { parts.append("\(idle) 台闲置") }
+        return parts.isEmpty ? "现在没有设备在用" : parts.joined(separator: " · ")
+    }
+
     /// 分模型的每周额度（Fable）和本周总额度的关系：“最多用本周额度的 50%，已用 3%”；cca 没认出份额时只说是单独的每周额度。
     static func weeklyShare(allowance: Double?, used: Double?) -> String {
         guard let allowance else { return "单独计的每周额度" }
@@ -119,11 +176,7 @@ enum Texts {
     static func expiryText(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
         if epoch <= now { return "已过期" }
         if epoch - now < 86400 { return span(epoch - now) + "后过期" }
-        let d = Date(timeIntervalSince1970: epoch)
-        let c = calendar.dateComponents([.year, .month, .day], from: d)
-        let thisYear = calendar.component(.year, from: Date(timeIntervalSince1970: now))
-        let day = "\(c.month ?? 0) 月 \(c.day ?? 0) 日"
-        return (c.year == thisYear ? day : "\(c.year ?? 0) 年 " + day) + "过期"
+        return dayText(epoch, now: now, calendar: calendar) + "过期"
     }
 
     /// 重置机会什么时候过期：「最早一次 11 月 21 日过期」（只有一次时不说最早）；不过期、cca 没说时是 nil。

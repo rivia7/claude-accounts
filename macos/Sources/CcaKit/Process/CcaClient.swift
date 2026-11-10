@@ -40,10 +40,12 @@ enum CcaCommand: Sendable, Hashable {
     case clientCheck(force: Bool)
     case clientMode(automatic: Bool)
     case clientInstall(token: String)
+    /// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：只读、要联网。auto 是账号页开着时的定时刷新（低优先级）。
+    case devices(ToolID, key: String, auto: Bool)
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -51,7 +53,7 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k): return k
+        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -59,7 +61,7 @@ enum CcaCommand: Sendable, Hashable {
     /// 后台的活：低优先级运行。
     var isBackground: Bool {
         switch self {
-        case .usagePoll, .checkPoll, .policyPull(manual: false), .clientCheck(force: false): return true
+        case .usagePoll, .checkPoll, .policyPull(manual: false), .clientCheck(force: false), .devices(_, _, auto: true): return true
         default: return false
         }
     }
@@ -93,6 +95,7 @@ enum CcaCommand: Sendable, Hashable {
         case .clientCheck(let force): return ["clients", "check"] + (force ? ["--force"] : []) + ["--json"]
         case .clientMode(let automatic): return ["clients", "mode", automatic ? "auto" : "off", "--json"]
         case .clientInstall(let token): return ["clients", "install", token, "--json"]
+        case .devices(_, let k, _): return prefix + ["devices", k, "--json"]
         }
     }
 
@@ -108,7 +111,7 @@ enum CcaCommand: Sendable, Hashable {
         case .rename, .reorder, .policyRequest: return 60
         case .reset, .updateCheck: return 150
         case .clientCheck, .clientInstall: return 900
-        case .clientMode: return 30
+        case .clientMode, .devices: return 30
         }
     }
 
@@ -117,7 +120,7 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .billing, .limitResets, .routerSync, .reset, .clientInstall: return true
-        case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode: return false
+        case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode, .devices: return false
         }
     }
 
@@ -132,7 +135,7 @@ enum CcaCommand: Sendable, Hashable {
         case .routerSync, .policyPull: return "router-sync"   // 拉映射时可能同步路由器：一个接一个
         case .guiUpdate, .update: return "gui-update"
         case .clientCheck, .clientMode, .clientInstall: return "client-update"
-        case .check, .checkPoll, .updateCheck, .policyRequest: return nil
+        case .check, .checkPoll, .updateCheck, .policyRequest, .devices: return nil   // devices：AppModel 已保证同一个账号一次一个
         }
     }
 }

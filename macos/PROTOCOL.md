@@ -22,11 +22,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
-- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份）；`usage` 每个工具一次一个；同一个账号的 `reset`
+- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
-  `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒。
+  `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒。
 - `app`、`web`、`billing`、`limit-resets`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -155,6 +155,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   所以 App 只给入口、不显示数字）：条件和 `web` 一样，也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
   `result` 的说明里会讲；`limit-resets` 也一样，网页版（`web`）不动剪贴板。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
   `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
+  `devices` 是账号页有没有「设备」一节（3.4）：映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
+  config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
@@ -292,12 +294,44 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `leak`：没测（关掉了泄露检测、出口本身就不对）为 null。`dns`：`ok` | `leak` | `failed` | null；`webrtc`：`ok` | `leak`（STUN 看到中国大陆的地址）| `note`（看到的地址和出口不同，但不是中国大陆的：只作提醒，不算问题）| `failed`（包括看到了别的地址、归属地查不到）| null；
   `*_message` 是发现风险或备注时给人看的说明。`ok` 仅表示宿主探针未发现该项异常，不是浏览器实测结论；空结果、超时及信息不足使用 `failed`。
 
+### 3.4 `cca [codex] devices KEY --json`：账号连着的设备
+
+`can.devices` 为真的账号，账号页看得见时 App 马上运行一次，之后每分钟一次（低优先级；用户 15 分钟没碰电脑时不查），点「刷新」时不降优先级。
+cca 问维护者的设备统计服务器（直连，钉住映射里的证书公钥，用这台 Mac 的 deploy key 签名），把服务器给的相对秒数换成这台 Mac 的时钟：
+
+```json
+{
+  "version": 1, "kind": "devices", "generated_epoch": 1794042000.0, "tool": "claude", "me": "studio-mac",
+  "idle_after": 600, "offline_after": 150, "reporting_error": null,
+  "accounts": [{"key": "工作(bob@example.com)", "id": "bob-example-com-1a2b3c", "devices": [
+    {"id": "SHA256:…", "name": "studio-mac", "me": true, "state": "in_use", "cli": 2, "app": false,
+     "since_epoch": 1794034800.0, "last_active_epoch": 1794041940.0, "last_used_epoch": 1794041940.0, "seen_epoch": 1794041985.0}
+  ]}]
+}
+```
+
+- `me`：这台 Mac 在服务器上的名字（维护者给它的 deploy key 起的别名），服务器还不认它时为 null。`idle_after`、`offline_after`：服务器的设置（秒），
+  旧的服务器没给时为 null。
+  `reporting_error`：这台 Mac 最近一次没报成的原因（给人看的话），报成了是 null。
+- `accounts`：问的账号（不写账号时是这个工具里映射里的全部官方账号），`devices` 是 30 天内经 cca 用过它的设备，这台 Mac 排第一，
+  其余按 `in_use`、`idle`、`offline`、`none`，同一种里最近用过的在前（cca 排好的，App 不重排）。
+- `state`：`in_use`（开着会话或桌面 App，`idle_after` 秒内有动静）| `idle`（开着，很久没动静）| `none`（都关了）|
+  `offline`（开着会话却超过 `offline_after` 秒没回报：可能休眠、断网、被强行结束，不知道现在还用不用）。不认识的值当 `none` 显示。
+  动静：命令行会话看它终端的最后输入、输出时间，桌面 App 看它进程树用的 CPU（cca 和服务器算，App 不重算）。
+- `cli`：开着几个命令行会话，`app`：桌面 App（`cca app` 打开的）开没开；离线时是最后一次回报时的。
+- 时间（都是这台 Mac 的时钟，可能是 null）：`since_epoch` 开着的会话里最早那个从什么时候开始；`last_active_epoch` 开着的会话最后一次有动静
+  （闲置从这时算起）；`last_used_epoch` 上次使用（会话都关了也留着）；`seen_epoch` 最后一次收到它的回报。
+- 失败：退出码 1，没有 stdout，`fail` 事件的 `code` 是 `devices_unavailable`，`message` 是原因（连不上服务器、服务器还不认这台 Mac、
+  证书指纹对不上、时钟差太多……）：App 留着上次查到的，旁边显示原因。用不了（这台 Mac 没配置映射、关掉了、账号不在映射里）时是 `devices_off`，
+  `can.devices` 为假时 App 本来就不会调用。
+- 这台 Mac 自己的上报不经 App：经 cca 启动映射里的账号（命令行会话、`cca app`）时 cca 在后台起一个上报进程，会话都关了它自己退出。
+
 ## 4. 事件和同意（`CCA_EVENTS`、`CCA_GRANT`）
 
 ### 4.1 事件文件
 
-运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`）和检查更新（`update --check --json`，
-查不了的原因看 `fail` 事件）时，App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`）、检查更新（`update --check --json`）
+和查设备（`devices --json`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -317,7 +351,8 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
   `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
-  `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）。
+  `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
+  `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
@@ -485,6 +520,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
 | `[codex] policy request` | 账号页「…」、右键菜单 | 无交互命令（4.8） |
 | `policy pull --json` | 定时（App 开着时一小时一次）、节点分流页「拉取映射」、账号的「现在拉取映射」 | 无交互命令（4.9） |
+| `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
