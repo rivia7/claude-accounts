@@ -273,7 +273,9 @@ struct ResultCode: KnownValues {
     static let saved = ResultCode(rawValue: "saved")
     static let routerReady = ResultCode(rawValue: "router_ready")
     static let localReady = ResultCode(rawValue: "local_ready")
-    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady]
+    /// 删掉了官方账号记下的 API key（`cca [codex] key 账号 --forget`；本来就没有时也是它）。
+    static let keyForgotten = ResultCode(rawValue: "key_forgotten")
+    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten]
 }
 
 struct FailCode: KnownValues {
@@ -319,12 +321,15 @@ struct FailCode: KnownValues {
     /// 设备统计（PROTOCOL 3.4）：服务器那边没成（连不上、不认这台 Mac、证书指纹对不上……，message 是原因）/ 这台 Mac 用不了
     static let devicesUnavailable = FailCode(rawValue: "devices_unavailable")
     static let devicesOff = FailCode(rawValue: "devices_off")
+    /// `cca [codex] key 账号 --show`：这个账号还没有存 API key / 钥匙串读不了（锁着、超时）。
+    static let keyMissing = FailCode(rawValue: "key_missing")
+    static let keychainUnavailable = FailCode(rawValue: "keychain_unavailable")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
-                                       .devicesUnavailable, .devicesOff]
+                                       .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -352,8 +357,20 @@ struct ConsentItem: KnownValues {
     static let builtinCore = ConsentItem(rawValue: "builtin_core")
     /// 重置额度会用掉一次重置机会（范围是账号目录名，默认不同意）。
     static let resetCredit = ConsentItem(rawValue: "reset_credit")
+    /// 删掉官方账号记下的 API key（范围是账号目录名，默认不同意）。
+    static let keyForget = ConsentItem(rawValue: "key_forget")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .openClashVerge, .builtinCore,
-                                          .resetCredit]
+                                          .resetCredit, .keyForget]
+}
+
+/// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。
+struct APIKeySource: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    static let keychain = APIKeySource(rawValue: "keychain")
+    static let table = APIKeySource(rawValue: "table")
+    static let none = APIKeySource(rawValue: "")
+    static let allKnown: [APIKeySource] = [.keychain, .table, .none]
 }
 
 /// 重置额度的结果（PROTOCOL 4.5）：重置了 / 这一次早就重置过了 / 用量还不需要重置（没扣次数）/ 没有能用的重置机会。

@@ -42,10 +42,15 @@ enum CcaCommand: Sendable, Hashable {
     case clientInstall(token: String)
     /// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：只读、要联网。auto 是账号页开着时的定时刷新（低优先级）。
     case devices(ToolID, key: String, auto: Bool)
+    /// 读这个账号存的 API key（`cca [codex] key KEY --show`，PROTOCOL 4.10）：stdout 原样是 key。**输出只经内存里的管道**，
+    /// 不能是 runsToCompletion（那种的 stdout 写进文件）；用完马上丢，不进被观察的状态、不进提示、不进读屏。
+    case keyShow(ToolID, key: String)
+    /// 删掉官方账号记下的 API key（`cca [codex] key KEY --forget`）：要同意（key_forget，默认不同意）。
+    case keyForget(ToolID, key: String)
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -53,7 +58,7 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _): return k
+        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientInstall: return nil
         }
     }
@@ -96,6 +101,8 @@ enum CcaCommand: Sendable, Hashable {
         case .clientMode(let automatic): return ["clients", "mode", automatic ? "auto" : "off", "--json"]
         case .clientInstall(let token): return ["clients", "install", token, "--json"]
         case .devices(_, let k, _): return prefix + ["devices", k, "--json"]
+        case .keyShow(_, let k): return prefix + ["key", k, "--show"]
+        case .keyForget(_, let k): return prefix + ["key", k, "--forget"]
         }
     }
 
@@ -112,6 +119,7 @@ enum CcaCommand: Sendable, Hashable {
         case .reset, .updateCheck: return 150
         case .clientCheck, .clientInstall: return 900
         case .clientMode, .devices: return 30
+        case .keyShow, .keyForget: return 40   // cca 读钥匙串最多等 30 秒
         }
     }
 
@@ -120,7 +128,8 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .billing, .limitResets, .routerSync, .reset, .clientInstall: return true
-        case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode, .devices: return false
+        case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientCheck, .clientMode, .devices,
+             .keyShow, .keyForget: return false
         }
     }
 
@@ -136,6 +145,7 @@ enum CcaCommand: Sendable, Hashable {
         case .guiUpdate, .update: return "gui-update"
         case .clientCheck, .clientMode, .clientInstall: return "client-update"
         case .check, .checkPoll, .updateCheck, .policyRequest, .devices: return nil   // devices：AppModel 已保证同一个账号一次一个
+        case .keyShow(let t, let k), .keyForget(let t, let k): return "key:\(t.rawValue):\(k)"
         }
     }
 }

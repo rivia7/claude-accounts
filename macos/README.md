@@ -32,7 +32,7 @@ bash macos/test.sh 目录           # 真实的 cca 输出（tests/regress.sh 10
 ```
 
 - `Tests/ContractTests/` 是不用测试框架的小程序（`main.swift` 是入口，其它文件按节分：Harness、Generic、FixtureAssertions、Doubles、
-  ProtocolTests、UnitTests、ModelTests、OfficeTests、FeatureTests、TerminalTests、PollingTests、ClientUpdateTests、FlowTests、AccountListTests）：`check(名字, 条件)` 打印 PASS / FAIL，有失败就非 0 退出。只和 CcaKit 一起编（本机架构）。
+  ProtocolTests、UnitTests、ModelTests、OfficeTests、FeatureTests、TerminalTests、PollingTests、ClientUpdateTests、FlowTests、AccountListTests、DevicesTests、APIKeyTests）：`check(名字, 条件)` 打印 PASS / FAIL，有失败就非 0 退出。只和 CcaKit 一起编（本机架构）。
 - `test.sh` 还检查 CcaKit 没有 `import SwiftUI / AppKit`。临时文件都在 `macos/build/tmp`。
 - 通用不变量（两种模式都跑）：每个文件都能解码、`version`/`kind` 对、槽位的端口 = 7900 + 槽位、空槽位是 REJECT、每个工具的账号键不重复、
   第三方 API 账号的 `api` 对象不带 key、`usage` 只给登录着的官方账号、`summary` 和槽位一致、事件逐行解析、consent 的 grant 是 `item:scope`……；
@@ -87,9 +87,10 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - Logo 和品牌色参考 Google 2025 年后的图标语言（一个主色、颜色互相渐变过去、粗圆扁平，不加金属高光和阴影），用 cca 自己的形和颜色：
   一根粗圆的线分成三支，主干蓝色，三支分开以后才分别流向玫红、青绿、琥珀。字形和颜色只写在 `Sources/CcaApp/LogoGlyph.swift` 一处：
   App 图标（白底上的这个字形，`tools/make-icon/main.swift`，build.sh 把 LogoGlyph.swift 一起编进去）、App 里不带底的 `BrandMark`、
-  `Brand` 的颜色都取它；“总览”的图标是同一套颜色的 2×2 圆角方块 `OverviewMark`。
+  `Brand` 的颜色都取它；“总览”的图标是同一套颜色的 2×2 圆角方块 `OverviewMark`；“客户端更新”的图标 `UpdatesMark` 是一支箭头落进敞口的盒子，
+  同样粗圆的线（边长的 0.15），蓝渐变到青绿（整条 Logo 渐变只给最高档的套餐）。
 - 以信息简洁易懂为主，不为装饰上色、画框。颜色只表达三件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，
-  比如“已登录”不显示），套餐的档位。档位要低调（`PlanBadge.swift`）：徽章和 `Tag` 一样是中性的胶囊、secondary 的字，颜色只在前面的小徽记上，
+  比如“已登录”不显示；提示、建议用系统的强调色），套餐的档位。档位要低调（`PlanBadge.swift`）：徽章和 `Tag` 一样是中性的胶囊、secondary 的字，颜色只在前面的小徽记上，
   一档比一档足——入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵（Ultra、Pro 500）Logo 渐变（`Brand.spectrum`：蓝 → 紫 → 玫红 → 琥珀）的四角星。
   这条渐变只给最高档的两样东西：这颗星，和**侧栏**里它头像的光晕（一道细的渐变环，环外很淡的一层柔光，环和头像之间留一道透明的缝；
   这个账号在用时慢慢流动，6 秒一圈，转的是画好的一层、不每帧重画模糊）。光晕只在侧栏：账号页、总览、菜单栏、分流图的头像都不带；
@@ -105,6 +106,11 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   新加灰字时也用它；里面不要再套一层 `.secondary`（基色是具体颜色时会叠加变暗）。
 - 操作放在它作用的内容旁边：打开 App / 网页版 / 终端在账号页头，刷新用量在“用量”标题上，「重置额度…」在“还能重置额度 N 次”那一行（ChatGPT 账号），
   检测出口在“网络出口”标题上，「刷新」设备在“设备”标题上，添加账号在侧栏账号列表和总览各组的标题上；不用浮在内容上的操作条。
+- 按钮只有几种样子（`Glass.swift`）：一节标题上的操作是 `SectionAction`，一行信息（`InfoRow`）右边的操作是 `RowAction`——两种一个样子：玻璃、
+  图标加文字、常规大小，右边和标题上的按钮对齐（信息行不缩进）；行里的按钮标签有最小宽度，同一节里上下一样宽、左边也对齐。打开网页的
+  （在账号自己的浏览器里）用 `RowAction.web`，图标是 ↗；「显示细节」是 `DetailsToggle`，和标题上别的按钮一样。提示条里的按钮小一号：
+  解决问题的那个 `.borderedProminent`，其余 `.bordered`。账号页头的主操作大一号（`.controlSize(.large)`）。菜单栏面板账号行里的「打开」是重复出现的
+  列表按钮，保持小的文字按钮。
 - 账号页的设备（`DevicesSection.swift`，只有 cca 说 `can.devices` 的账号有，PROTOCOL 3.4）：在两栏下面占一整行，这台 Mac 排第一；状态点只表达状态
   （在用实心绿点、闲置绿圈、离线灰圈、没在用浅灰点），文字照实说（在用、开着，闲置 N 分钟、离线、没在用 · 上次使用）；离线的原因（可能休眠、断网）
   放在悬停说明里，怎么判断在用、闲置放在「显示细节」里。账号页看得见时一分钟查一次，看不见、换到别的页就停。
@@ -113,7 +119,14 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 重新登录（`AppModel.relogin`，`cca [codex] login 账号`，在终端里）：右键或账号页的「…」随时可以；登录还好好的账号先弹窗（它会先退出现在的登录），登录失效的直接去终端。登录失效是查用量时才知道的（`error_code` 是 `auth`，`Diagnosis.loginExpired`）：Claude Code 不说原因（`nolimits`），用量那一行旁边放个「重新登录…」。
 - 账号页的用量（`UsageCard.swift`）：每个额度一大块（5 小时、本周，还有按模型的每周额度，例如 Claude 的 Fable：下面一行写它最多能用本周额度的多少、
   已用多少，份额由 cca 认出来给），`QuotaGrid` 排：放得下就一行，放不下两块一行，单出来的最后一块占满一行，同一行的一样高。旧的分模型额度、
-  credits、额外用量是下面的小行；ChatGPT 账号还能重置几次、最早的一次什么时候过期单独一行，旁边是「重置额度…」（cca 先问，PROTOCOL 4.5）。
+  credits、额外用量是下面的小行；再下面是一行一行的信息（`InfoRow`）：ChatGPT 账号还能重置几次、最早的一次什么时候过期（「重置额度…」，cca 先问，
+  PROTOCOL 4.5），查用量出的错，Claude Code 记的套餐过时了（「重新登录…」），只能在网页上看的重置次数（「在 claude.ai 查看」）和订阅附带的
+  每月 API 额度（「在控制台查看」），API key（掩码、一只眼睛、「复制」，`APIKeySection.swift`）。
+- 周结算提醒（cca 给的 `use_first`，PROTOCOL 3.1）：本周额度快重置了、还剩不少，没有挡路的问题时（`Diagnosis.useFirst` 排在最前），账号页那句话说
+  「本周额度还剩 59%，明天 19:55 重置，建议先用这个账号。」，总览卡片右下角、侧栏和菜单栏面板的名字后面一个沙漏（`UseFirstMark`）。沙漏用强调色：
+  是提示不是警告（绿是在用，橙、红是问题）；不算进“要处理”。
+- API key（PROTOCOL 4.10）：平时只显示 cca 给的掩码；点眼睛才向 cca 要一次明文（`KeyReveal`，不被观察、不进读屏，30 秒后、再点一下、换账号、
+  离开页面时收起来）；「复制」写进剪贴板时标成机密，60 秒后还是它就清掉（`SecretClipboard`），提示里不写 key。官方账号的 key 只是备查。
 - 总览（`OfficePage.swift`，首页，侧栏最上面）：每个账号一张卡片，按 Claude 账号、ChatGPT 账号、第三方 API 账号分开排，按用户排的顺序（没排过的照账号表）、
   不随状态挪。画面设计上参考办公室（每张卡片画一个工位：桌子、显示器、椅子、坐着的人），**界面上的文字照实说**（账号、在用、空闲、额度用完、
   几点恢复、没登录、登错号、有问题），不写“办公室、员工、工位、在忙、休息、回来”这类比喻的词；代码里的类型名（`Office`、`Employee`）照设计参考起的，
@@ -129,7 +142,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   侧栏左下角的“新手教程”、工具栏的问号、“帮助”菜单随时再看）；升级后第一次打开时一张张给你看这几个版本“更新了什么”（和教程一样的卡片，
   一个版本一张，跳过了几个版本就都给；第一次装只看教程；“帮助”菜单的「更新说明」能再看）。内容写在 CcaKit 的 `Model/WhatsNew.swift`
   （`ReleaseNote`，最新的在前），**每个版本都要写**：release.sh 发布前查这里有没有这个版本的一条，没有就不发布（顺便看看教程要不要跟着改）；页面顶上的提示卡片讲一句这一页怎么看，点“知道了”就不再出现（“帮助”菜单可以重新显示）；
-  账号页名字下面一句话说现在能不能用、下一步点哪个按钮（只按 cca 给的状态说，最要紧的排前面，顺序在 `Diagnosis`）；端口、槽位、纯净度明细这些技术细节默认收起，
+  账号页名字下面一句话说现在能不能用、下一步点哪个按钮（只按 cca 给的状态说，最要紧的排前面，顺序在 `Diagnosis`）；端口、纯净度明细这些技术细节默认收起，
   “显示细节”打开（记住选择）。看过教程、关掉的提示、显示细节都记在 App 的设置里（`guide.*`），演示模式只记在内存里。
 - 改别名：直接点账号页上的名字（或者侧栏账号的右键菜单），名字就地变成输入框（`AccountDetail.swift` 的 `AliasTitle` / `InlineAliasEditor`），
   回车保存、Esc 取消 → `cca [codex] rename KEY 新别名`（PROTOCOL 4.4）。别名的规则只由 cca 判断，它说不行时原因写在输入框下面；
@@ -150,10 +163,10 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
                        TerminalHandoff（.command 文件、shellQuote）
   Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、CoreHost（内置代理的内核）、
                        Texts（文字、颜色档、补救、标记）、Diagnosis（一个账号的问题，按要紧程度排好）、Employee（总览里一个账号的状态、点名）、
-                       WhatsNew（每个版本更新了什么、版本号的先后）
+                       WhatsNew（每个版本更新了什么、版本号的先后）、APIKey（API key 的明文只在这里：KeyReveal、机密剪贴板）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、总览（OfficePage；插画 DeskArt）、
                        套餐徽章（PlanBadge）、账号页（AccountDetail：页头；
-                       UsageCard：用量；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
+                       UsageCard：用量；APIKeySection：API key 那一行和第三方 API 账号的一节；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
                        可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
@@ -168,7 +181,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   设 `CCA_GUI=1`、`NO_COLOR=1`。
 - **重跑流程**（PROTOCOL 4.3）在 `CcaClient.execute`：事件文件边运行边读（显示“同步路由器…”之类的进度），要同意时用 NSAlert 问（只用事件里的
   title / question / detail / severity / default），同意了带上 `CCA_GRANT` 重跑。后台自动刷新用量不弹框：记下来显示一条横幅，点了再手动刷新。
-- **闸门**：同一个账号（工具 + 键）的 app / web / 改别名排队（查设备由 AppModel 保证同一个账号一次一个）；每个工具的 usage 一次一个；同一个账号的重置额度一次一个；router sync 全局一个；
+- **闸门**：同一个账号（工具 + 键）的 app / web / 改别名排队，key --show / --forget 也是（查设备由 AppModel 保证同一个账号一次一个）；每个工具的 usage 一次一个；同一个账号的重置额度一次一个；router sync 全局一个；
   更新 cca（`update 版本号`）和 gui update 全局一个（一个接着一个）。`cca codex …` 只在 `hello.tools.codex.enabled` 为真时运行。
 - **刷新**：用量自动刷新不管看不看得见（`Scheduler` 每分钟看一眼，`UsagePolling` 只挑到期的账号，到期了才起进程）：在用的账号看得见时 5 分钟一次、看不见时 10 分钟，没在用的看得见时 8 分钟、看不见时 1 小时，低电量模式慢一倍；用户 15 分钟没碰电脑、系统过热时不查，查失败也按间隔重试。登录失效的账号慢下来（看得见时 15 分钟、看不见时 1 小时），点了“重新登录”之后的 15 分钟里每分钟查一次，登录一完成就看得到。网络出口也定时检测（同一个定时器，`ExitPolling`，`cca [codex] check 这几个账号`，比查用量慢得多：在用的账号看得见时半小时、看不见时 1 小时，没在用的 2 小时、4 小时，低电量模式慢一倍；一次最多 6 个，最久没测的先测；没登录的账号不测；正在查用量时等下一分钟；不弹框、不占用账号的按钮）。自动刷新和后台检查客户端更新都以 utility 优先级运行（子进程继承），定时器带容差。分流页开着时 live 每 60 秒。总览不定时查 live
   （端口连不上、选错节点的账号看它）：切到总览、主窗口变得看得见时，上次的超过 2 分钟才查一次；分流页、总览开着时操作完（同步路由器等）也查。变得看得见时，有账号的用量过期或超过
@@ -189,10 +202,12 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **后台运行**：平时只有菜单栏图标（`LSUIElement`、`.accessory`，`.defaultLaunchBehavior(.suppressed)`，不恢复上次的窗口）。`cca gui`、更新后重新打开带 `--window`（`CcaApp.opensWindowAtLaunch`，演示模式也是）启动时开主窗口；第一次打开、cca 没准备好时连上之后也开。`WindowOpener.showMain` 换成 `.regular`（有 Dock 图标），刚换时激活不一定马上生效，稍等再激活一次、把窗口放到最前面；最后一个窗口（主窗口、设置）关掉时换回 `.accessory`，焦点还给之前的 App。Dock 里的“退出”、⌘Q 只回到后台（`applicationShouldTerminate` 返回 `.terminateCancel`、`WindowOpener.toBackground`），真的退出走 `AppExit.quit`（菜单栏面板和应用菜单的「退出」、更新后重新打开）；注销、重启、关机（`NSWorkspace.willPowerOffNotification`、退出事件里的 `kAEQuitReason`）和没有 Dock 图标时收到的退出请求也真的退出。
 - **请求锁定到映射**（PROTOCOL 4.8）：账号的「…」和右键菜单里的「请求维护者锁定节点」（`can.policy_lock`）运行 `cca [codex] policy request`，把 stdout 的那条命令复制给用户发给维护者。
-- **查看 API 额度**：账号页“用量”一节底部的「查看 API 额度」（右键菜单里也有；`can.billing`，第三方 API 账号、没装 Chrome 时没有）运行 `cca [codex] billing`，用账号自己的浏览器实例和出口打开控制台的账单页。订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，所以 App 不显示数字。
-- **查看重置次数**：Claude 账号页“用量”一节底部的「查看重置次数」（右键菜单里也有；`can.limit_resets`）运行 `cca limit-resets`，用账号自己的浏览器实例和出口打开 claude.ai 的用量页。这两个按钮打开前 cca 把账号邮箱放进剪贴板，要登录时粘贴（这些登录页不认网址里的邮箱参数）。Claude 的重置次数和到期日 cca 查不到（CLAUDE.md 里记着原因），所以总览上没有小票；ChatGPT 账号的次数和到期日直接显示。
+- **查看 API 额度**：账号页“用量”一节底部“订阅附带的每月 API 额度”那一行的「在控制台查看」（右键菜单里的「在控制台查看 API 额度」；`can.billing`，第三方 API 账号、没装 Chrome 时没有）运行 `cca [codex] billing`，用账号自己的浏览器实例和出口打开控制台的账单页。订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，所以 App 不显示数字。
+- **查看重置次数**：Claude 账号页“用量”一节底部“重置次数和到期日”那一行的「在 claude.ai 查看」（右键菜单里的「在 claude.ai 查看重置次数」；`can.limit_resets`）运行 `cca limit-resets`，用账号自己的浏览器实例和出口打开 claude.ai 的用量页。这两个按钮打开前 cca 把账号邮箱放进剪贴板，要登录时粘贴（这些登录页不认网址里的邮箱参数）。Claude 的重置次数和到期日 cca 查不到（CLAUDE.md 里记着原因），所以总览上没有小票；ChatGPT 账号的次数和到期日直接显示。
 - **提问会话**（PROTOCOL 4.6）：添加账号、换 key、删除账号、编辑账号表、配置路由器、配置本机 Clash 这些流程在 App 里问完：`ProcessSession` 开一个 cca 进程，fd 3 是答案管道（`CCA_PROMPT=1`），`FlowModel` 把 `ask` 事件变成页面，`FlowSheet` 显示。cca 不支持（`hello.prompt`）时走下面的终端交接。
-- **客户端更新**（`ClientUpdatesPage`，PROTOCOL 8）：桌面客户端和终端里的 Claude Code、Codex 一页管，每行一张卡片，`kind=cli` 的图标是终端。版本、能不能更新、为什么都是 cca 给的。
+- **客户端更新**（`ClientUpdatesPage`，PROTOCOL 8）：桌面 App 和终端里的 Claude Code、Codex 一页管，每行一张卡片，图标中性灰、固定宽度（桌面 App 是窗口，
+  `kind=cli` 是终端），能装的才有「安装更新…」、要重新检查的才有「重新检查」。版本、能不能更新、为什么都是 cca 给的。侧栏这一行有新版本时右边写「N 个可更新」。
+- **API key**（PROTOCOL 4.10）：官方账号在“用量”一节、第三方 API 账号在自己的「API key」一节；「…」和右键菜单里有记录 / 更换、复制、删除记下的 API key。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；系统自带的“终端”进程结束后默认留着窗口，按键后脚本用 AppleScript 关掉这个窗口；
   文件一开始就挪走再删掉，中途关窗口也不留下），App 发起的命令（登录、添加账号、配置路由器……）用系统自带的“终端”打开，账号的会话用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux，
   在设置和账号页「终端」的下拉里选，没装的灰着不能选）。Termius、Wave 没有从外面运行命令的办法，是半自动：打开它、把命令放进剪贴板，用户粘贴运行。第三方终端 30 秒还没运行就收回脚本、问要不要改用系统自带的。放了一小时还没运行的会清掉。
@@ -202,7 +217,8 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
 ## 这套工具链的坑（Command Line Tools，Swift 6.4，SDK 27）
 
 - **`@State` 编不过**：SDK 27 里它是宏，宏插件 SwiftUIMacros 只随 Xcode 提供。界面状态一律放在 `@Observable` 的 AppModel 里，视图里用
-  `@Environment(AppModel.self)`，要绑定时在 `body` 里 `@Bindable var model = model`。同样别用 `@Entry`、`@Previewable`、`#Preview`、`@Animatable`。
+  `@Environment(AppModel.self)`，要绑定时在 `body` 里 `@Bindable var model = model`。只属于一个视图、随它一起没的状态（卡片的悬停、API key 那一行的
+  `KeyReveal`）可以直接用 `State` 类型：`private let x = State(initialValue: …)`，读写 `x.wrappedValue`。同样别用 `@Entry`、`@Previewable`、`#Preview`、`@Animatable`。
   `@Observable`、`@ObservationIgnored`、`@Namespace`、`@Environment`、`@NSApplicationDelegateAdaptor` 能用。
 - 没有 xcodebuild / actool / xcstrings：不用 asset catalog，图标用 `sips` + `iconutil` 生成 icns（`iconutil -o` 的文件名必须以 .icns 结尾）。
 - 部署目标 macOS 26.0；只有 macOS 27 才有的放在 `if #available(macOS 27, *)` 里（`.pickerStyle(.tabs)`）。

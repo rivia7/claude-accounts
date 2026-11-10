@@ -15,7 +15,7 @@ struct OfficePage: View {
                 VStack(alignment: .leading, spacing: 26) {
                     header(office)
                     TipCard(id: "office-page", title: "这一页怎么看",
-                            message: "每个账号一张卡片，图里画的是它现在的状态：屏幕在滚代码、聊天，说明正在用；趴在桌上、屏幕黑了，是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，坐着灰色的人是登录的不是这个账号。套餐看徽章前面的小记号，彩色的四角星是最高档。图左下角的小票是还能重置额度几次，一张一次，旁边写着最早什么时候过期。点卡片看详情，右键可以直接打开，拖到别的卡片上可以调整顺序。")
+                            message: "每个账号一张卡片，图里是它现在的状态：屏幕在动是在用；趴在桌上是额度用完了，屏幕上写着几点恢复；椅子空着是还没登录，灰色的人是登录的不是这个账号。左下角的小票是还能重置几次额度，右下角的沙漏是建议先用（本周额度快重置了、还剩不少）。点卡片看详情，右键直接打开，拖动调整顺序。")
                     if model.state == nil {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -62,12 +62,7 @@ private struct RoomSection: View {
                 if !room.people.isEmpty {
                     Text("\(room.people.count) 个").font(.callout).foregroundStyle(.secondary)
                 }
-                Button {
-                    model.run(add)
-                } label: {
-                    Label(add.title + "…", systemImage: "plus")
-                }
-                .buttonStyle(.borderless)
+                SectionAction(add.title + "…", systemImage: "plus") { model.run(add) }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 228, maximum: 340), spacing: 16)], alignment: .leading, spacing: 16) {
                 ForEach(room.people) { e in
@@ -110,6 +105,7 @@ private struct DeskCard: View {
                     .overlay(alignment: .topLeading) { workBadge(e, a) }
                     .overlay(alignment: .topTrailing) { flagBadge(e, a) }
                     .overlay(alignment: .bottomLeading) { resetBadge(resets) }
+                    .overlay(alignment: .bottomTrailing) { useFirstBadge(e) }
                 info(a, e)
             }
             .padding(12)
@@ -216,6 +212,19 @@ private struct DeskCard: View {
             }
             .sceneBadge()
             .help(summary)
+        }
+    }
+
+    /// 右下角：本周额度快重置了、还剩不少，建议先用这个账号（沙漏是强调色：提示，不是警告）
+    @ViewBuilder
+    private func useFirstBadge(_ e: Employee) -> some View {
+        if let f = e.useFirst {
+            HStack(spacing: 3) {
+                Image(systemName: "hourglass").foregroundStyle(Color.accentColor)
+                Text("建议先用")
+            }
+            .sceneBadge()
+            .help(Texts.useFirst(f, now: now))
         }
     }
 

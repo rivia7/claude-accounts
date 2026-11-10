@@ -116,6 +116,52 @@ struct OverviewMark: View {
     }
 }
 
+/// “客户端更新”的图标：一支箭头落进敞口的盒子。和总览、节点分流的图标一套画法：粗圆的线（线宽是边长的 0.15，和 Logo 一样）、
+/// 不带底；颜色是 Logo 的蓝渐变到青绿（左上角先掺一点白，和 OverviewMark 的方块一样从浅到深）。整条渐变只给最高档的套餐，这里不用。
+struct UpdatesMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        Canvas { ctx, s in
+            let w = s.width
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * w, y: y * w) }
+            var g = Path()
+            g.move(to: p(0.50, 0.12)); g.addLine(to: p(0.50, 0.56))                                  // 箭杆
+            g.move(to: p(0.29, 0.35)); g.addLine(to: p(0.50, 0.56)); g.addLine(to: p(0.71, 0.35))    // 箭头
+            g.move(to: p(0.16, 0.57)); g.addLine(to: p(0.16, 0.72))                                  // 盒子：左壁、底、右壁
+            g.addQuadCurve(to: p(0.30, 0.86), control: p(0.16, 0.86)); g.addLine(to: p(0.70, 0.86))
+            g.addQuadCurve(to: p(0.84, 0.72), control: p(0.84, 0.86)); g.addLine(to: p(0.84, 0.57))
+            let shade = Gradient(stops: [.init(color: Brand.blue.mix(with: .white, by: 0.25), location: 0),
+                                         .init(color: Brand.blue, location: 0.35), .init(color: Brand.teal, location: 1)])
+            ctx.stroke(g, with: .linearGradient(shade, startPoint: p(0.15, 0), endPoint: p(0.85, 1)),
+                       style: StrokeStyle(lineWidth: w * 0.15, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// 周结算提醒的沙漏（侧栏、菜单栏的账号行，名字后面）：本周额度快重置了、还剩不少，建议先用这个账号。
+/// 用强调色：是提示不是警告（绿是在用，橙、红是问题）。悬停和读屏是同一句话；到了重置时间自己消失（每分钟按时间重算）。
+struct UseFirstMark: View {
+    @Environment(AppModel.self) private var model
+    let account: Account
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { ctx in
+            let now = ctx.date.timeIntervalSince1970
+            if let f = model.useFirst(for: account, now: now) {
+                let text = Texts.useFirst(f, now: now)
+                Image(systemName: "hourglass")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .help(text)
+                    .accessibilityLabel(text)
+            }
+        }
+    }
+}
+
 /// 账号头像：和启动器图标右下角一样的标识（文字 + 颜色）；API 账号是钥匙。最高档的套餐（Ultra、Pro 500）只在侧栏里有光晕：
 /// 一道细的渐变环，环外一层很淡的柔光。光晕画在头像外面、不改变占的位置，最远伸出 haloRoom：放它的地方得留出这么宽，
 /// 不然会被裁掉（侧栏的一格只到头像的边）。

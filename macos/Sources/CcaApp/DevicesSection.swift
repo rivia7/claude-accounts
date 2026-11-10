@@ -17,14 +17,9 @@ struct DevicesSection: View {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     freshness(snap, loading: loading, now: context.date.timeIntervalSince1970)
                 }
-                Button {
-                    model.refreshDevices(account.ref, manual: true)
-                } label: {
-                    Label(loading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.glass)
-                .disabled(loading)
-                .help("问一次维护者的服务器：这个账号现在在哪些设备上用")
+                SectionAction(loading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshDevices(account.ref, manual: true) }
+                    .disabled(loading)
+                    .help("问一次维护者的服务器：这个账号现在在哪些设备上用")
             }
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 content(snap, loading: loading, now: context.date.timeIntervalSince1970)
@@ -74,7 +69,7 @@ struct DevicesSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if guide.showDetails, let doc = s?.doc, let idle = doc.idleAfter, let offline = doc.offlineAfter {
-                Text("经 cca 打开的命令行会话和 \(label) 算在用；\(Texts.span(idle))没动静算闲置（命令行看终端的最后输入、输出，App 看它用的 CPU）；开着会话却\(Texts.span(offline))没回报算离线。设备名是维护者给各台机器的 deploy key 起的别名" + (nonEmpty(doc.me).map { "，这台 Mac 叫 \($0)" } ?? ""))
+                Text("经 cca 打开的终端会话和 \(label) 算在用；\(Texts.span(idle))没动静算闲置（终端看最后一次输入、输出，App 看它用的 CPU）；开着却\(Texts.span(offline))没回报算离线。设备名是维护者给每台 Mac 起的名字" + (nonEmpty(doc.me).map { "，这台 Mac 叫 \($0)" } ?? ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

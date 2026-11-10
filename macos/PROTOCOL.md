@@ -19,14 +19,16 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   这样 cca 永远打不开 `/dev/tty`，所有需要回答的地方都按“非交互”处理（例外是提问会话，见 4.6）。
 - 环境：继承 App 的环境，去掉 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`、`CCA_GRANT`、`CCA_EVENTS`、`CCA_RO`、`CCA_PROMPT`；`PATH` 后面补上
   `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin`；设 `CCA_GUI=1`、`NO_COLOR=1`；按需设 `CCA_EVENTS`、`CCA_GRANT`（见 4）、`CCA_PROMPT`（见 4.6）。
-- **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。
+- **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。读 API key 只用 `cca [codex] key 账号 --show`（4.10），
+  它的 stdout 只能经内存里的管道读，不能按 `runsToCompletion` 接到文件。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
   维护者映射里的 Codex 账号随即被自动加进来、分走端口。
-- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
+- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
-  `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒。
+  `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒、
+  `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）。
 - `app`、`web`、`billing`、`limit-resets`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -122,8 +124,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
   "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
-  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true},
+  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true, "api_key": true},
   "can_why": {},
+  "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain"},
   "usage": { "…用量条目，见 3.1…" },
   "health": { "…出口检测结果，见 3.3…" }
 }
@@ -157,6 +160,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
   `devices` 是账号页有没有「设备」一节（3.4）：映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
   config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
+  `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
+- `api_key`：存没存 API key（4.10）。官方账号的是**记下备查**的（比如控制台里建的 key：只存进这台 Mac 的钥匙串，cca 绝不拿它登录或启动账号，
+  那样会变成按量计费）；第三方 API 账号的是启动要用的那把。`saved`：存了没有（第三方 API 账号换了服务商、和存的时候域名不一样的算没存）；
+  `hint`：掩码，存的时候 cca 算好的（开头 8 个字符里最后一个 `-` 以前的前缀 + `…` + 最后 4 个字符，例如 `sk-ant-…x7Qa`；短于 24 个字符的 key
+  没有掩码，是 `""`，App 画圆点）；`source`：`keychain`（钥匙串里）| `table`（账号表的 `key` 字段里，明文；只有第三方 API 账号有）| `""`（没存）。
+  `state` 不读钥匙串，掩码照 config.json 里记的说；**明文只在用户点「显示」「复制」时经 `key --show` 要**。旧版 cca 没有这个字段，当作 null。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
@@ -236,6 +245,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "seven_day_oauth_apps": null,
   "model_scoped": [{"name": "Sonnet", "utilization": 60.0, "resets_at": "…", "resets_epoch": 1794297600.0, "reset": false}],
   "extra_usage": null,
+  "use_first": {"left_percent": 59, "from_epoch": 1794211200.0, "until_epoch": 1794297600.0},
   "outdated_login_plan": "Pro"
 }
 ```
@@ -259,6 +269,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   Claude Code 只在登录时记套餐，之后升级、降级都不改（2.1.322 核实），所以它还按旧套餐显示（启动横幅、`/status` 里写 Claude Pro）、按旧套餐处理；
   额度由服务器按实际的套餐算，不受影响。重新登录（`cca login 账号`）才会更新：cca 经它登录之前把记下的作废，下一次查用量对上了就是 null。
   App 照它说一句、给「重新登录…」，不自己比（`plan` 是账号现在的套餐）。没有这个字段（旧版 cca）当作 null。
+- `use_first`（周结算提醒，不提示时为 null）：本周额度（`seven_day`）快重置了、还剩不少，建议先用这个账号，别浪费。`left_percent` 是本周还剩
+  百分之几（整数：`100 - 四舍五入后的 utilization`，和显示的百分比一致）；`from_epoch` 是本周重置前 24 小时，`until_epoch` 是本周的重置时间。
+  **App 拿当前时间和 `[from_epoch, until_epoch)` 比**（快照可能放了好几分钟），区间外当作没有；规则（24 小时、至少 20%）由 cca 定，App 不重算。
+  cca 给 null 的情况：没有重置时间、本周窗口已经 `reset`、剩得不到 20%、这次查询说明账号现在用不了（`error_code` 是 `login` / `mismatch` /
+  `route` / `port` / `trace` / `region` / `nolimits` / `auth`；`timeout`、`error`、`unsupported` 不算，照缓存里的数）。登录、线路、出口、纯净度、
+  泄露、5 小时的额度用完或快用完时不提示，由 App 按各自的状态挡（`Diagnosis`）。只给图形界面：终端里 cca 不提示。旧版 cca 没有这个字段，当作 null。
 - 退出码 1 表示没有一个账号有数据（JSON 照样输出）。查询会经各账号的出口，最慢 2 分钟左右。
 - `_gui state` 里的 `usage` 是同样的条目（`source` 是 `cache` 或 `none`）。
 
@@ -336,8 +352,8 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
 
 ### 4.1 事件文件
 
-运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`）、检查更新（`update --check --json`）
-和查设备（`devices --json`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
+`key --forget`）、检查更新（`update --check --json`）、查设备（`devices --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -350,7 +366,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened` | `activated`（已经开着，切到了前面）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready`，带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened` | `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready`，带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -358,7 +374,8 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
   `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
-  `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）。
+  `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
+  `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
@@ -378,6 +395,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `open_clash_verge` | 空 | 在外面，Clash Verge 没开：打开它 | yes |
 | `builtin_core` | 空 | 在外面，这台 Mac 上没有 Clash 客户端：改用内置代理（第一次要下载约 21MB 的内核，见 7） | yes |
 | `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
+| `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；见 4.10） | no |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
   同意了用某个 IP 启动，换了 IP 要重新问）。
@@ -426,6 +444,17 @@ App 开着就拉，不管窗口看不看得见（过热时跳过，下一次再�
 - 拉不到：退出码 1，没有 stdout，`fail` 事件的 `code` 是 `policy_unavailable`，`message` 是原因（App 不打扰用户，到点再试；原因记在 cca 的日志里，`cca policy` 看得到）。
 - 手动拉取（节点分流页的「拉取映射」、账号右键菜单和「…」里的「现在拉取映射」）是同一条命令，不降优先级，不看下次的时间，结果照实提示（`summary`；拉不到时弹框说原因）。要重载时（`consent` 事件）接着走 `router sync` 的重跑流程（4.3）：这次是用户点的，弹框问。
 - 命令行的 `cca policy pull` 不带 `--json` 时和以前一样（只是多了 `checked` 的时间：启动时一天一次的后台拉取不用再拉）。
+
+### 4.10 API key：`cca [codex] key KEY [--show | --forget]`
+
+- 记下 / 更换（`cca [codex] key KEY`，不带参数）：提问会话（4.6，`key.secret`）。第三方 API 账号是换它启动要用的 key；官方账号是**记一把备查**的
+  （比如控制台里建的 key：存进这台 Mac 的钥匙串，cca 绝不拿它登录或启动这个账号）。存好后 `result` 是 `key_saved`。
+- 显示 / 复制（`--show`）：stdout **原样**是 key（不换行、没有别的字）；第三方 API 账号和启动时取的一样（账号表的 `key` 字段优先，再是钥匙串里
+  这个服务商的）。**只经内存里的管道读**（不能接到文件，见 1），读完马上丢：不放进被观察的状态、不进提示、不进读屏、不进日志。
+  没有：退出码 1，`fail` 的 `code` 是 `key_missing`；钥匙串读不了：`keychain_unavailable`。App 复制时自己写剪贴板：标成机密
+  （`org.nspasteboard.ConcealedType`，剪贴板管理器不记），60 秒后剪贴板还是它就清掉，退出 App 前也清。
+- 删除（`--forget`，只给官方账号）：要同意（4.2 的 `key_forget`，默认不删），删好是 `result` 的 `key_forgotten`；第三方 API 账号的 key 启动要用，
+  不在这里删（`fail` 的 `api_account`）。删除账号（`rm`）、`restore` 时 cca 一起删。
 
 ### 4.5 重置额度：`cca codex reset KEY --json`
 
@@ -499,7 +528,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
 | `api.basic` | `[codex] add api` | `text`、`text`、`secret`、`text` | 别名、接口地址（校验 url）、API key、模型（可选，校验 model） |
 | `api.node` | `[codex] add api` | `choice` | 出口节点（第一项是直连）。没有可选节点时不问 |
-| `key.secret` | `[codex] key 账号` | `secret` | API key |
+| `key.secret` | `[codex] key 账号` | `secret` | API key（第三方 API 账号：换 key；官方账号：记一把备查的，页上的 `message` 说明 cca 不拿它启动） |
 | `rm.confirm` | `[codex] rm 账号` | `confirm`（默认否） | 确认删除 |
 | `node.replace` | 同步路由器的流程里 | `choice`（可以不选） | 节点在路由器上不见了，换成哪个 |
 | `router.basic` | `router setup` | `text` ×3 | 路由器地址（校验 host）、SSH 用户（校验 sshuser）、SSH 端口（校验 port），预填现在的；连不上时带着原因重问 |
@@ -520,7 +549,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | 命令 | App 里 | 方式 |
 |---|---|---|
 | `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
-| `[codex] key` | 账号页「…」、右键菜单 | 提问会话 |
+| `[codex] key` | 账号页「…」、右键菜单、API key 那一行的「记录…」「输入…」 | 提问会话 |
+| `[codex] key KEY --show`、`--forget` | API key 那一行的眼睛、「复制」；「…」、右键菜单里的「删除记下的 API key…」 | 无交互命令（4.10；`--show` 只经内存里的管道读，`--forget` 要同意） |
 | `[codex] rm` | 账号页「…」、右键菜单 | 提问会话 |
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
@@ -633,8 +663,8 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 - 终端工具（`kind=cli`）只查版本、不下载软件包：`status` 里的现在版本是现跑 `命令 --version`（空环境），最新版本从官方的公开地址查（官方安装器：Claude Code 是 `downloads.claude.ai` 的发布通道，跟用户设的 `autoUpdatesChannel`；Codex 是 GitHub 的 latest release；npm、Homebrew 装的查 npm、Homebrew）。有新版本时 `status=available`，`available_version` 是新版本。官方安装器装的 `can_install=true`，`install` 运行它们自己的 `update` 命令（空环境、真 HOME；claude 用一次性的配置目录，不碰账号）；npm、Homebrew 装的 `can_install=false`，`message` 写着在终端里运行什么。
   一个客户端出问题写在它自己那一行，不影响另一个；`check`、`install` 有问题时退出码 1。`install` 的 TOKEN 只对它那一个客户端有效。
 - `status`：`missing/current/checking/busy/unsupported/staged/available/running/blocked/error/updated/unverified/needs_recheck`，以后可增加；原因直接显示 `message`。
-  `busy` 显示“更新正在进行”，`unsupported` 显示“当前系统暂无适配包”。
-- `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示“目标版本或软件包校验值已变化，请重新检查后再安装”。
+  `busy` 显示「正在更新」，`unsupported` 显示「这个系统暂时没有可用的安装包」。
+- `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示「要安装的版本变了，请重新检查后再安装」。
 - `next_check_epoch`：下次该后台检查的时间（模式为 off、一个客户端都没装时为 null）。GUI 运行期间睡到这个时间再运行 `clients check`，窗口隐藏时也继续，不隔一会儿起一个进程；已经到了、这次没查成时 15 分钟后再来；
   没有这个字段时每小时看一次。模式为 off、开发模式或演示数据时不自动检查，低电量模式、系统过热时往后推。定时器不发安装命令，重入时跳过；后台检查以低优先级（utility）运行。
 - 安装仅在用户点击并同意后进行，所有对应客户端进程退出后才允许替换；不强杀进程，不注册 LaunchAgent，不修改原生 updater 设置。

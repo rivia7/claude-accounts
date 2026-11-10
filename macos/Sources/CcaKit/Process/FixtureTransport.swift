@@ -158,6 +158,11 @@ struct FixtureTransport: Transport {
             return CcaResponse(exitCode: 0, stdout: Self.devicesFor(key, d), stderr: Data(), events: [])
         case ("update", _):
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
+        case ("key", _) where args.contains("--show"):
+            // 演示用的假 key：运行时拼出来（仓库里不放长得像真 key 的字符串）
+            return CcaResponse(exitCode: 0, stdout: Data(("sk-demo-" + String(repeating: "0", count: 24) + "Demo").utf8), stderr: Data(), events: [])
+        case ("key", _) where args.contains("--forget"):
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
         default:
             let cmd = (["cca"] + request.arguments).joined(separator: " ")
             return CcaResponse(exitCode: 2, stdout: Data(), stderr: Data("演示模式不支持：\(cmd)\n".utf8), events: [])

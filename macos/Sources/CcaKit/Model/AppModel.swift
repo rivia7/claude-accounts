@@ -85,6 +85,8 @@ struct AppHooks {
     var chooseDirectory: @MainActor (String?) async -> String? = { _ in nil }
     var openURL: @MainActor (URL) -> Void = { _ in }
     var copy: @MainActor (String) -> Void = { _ in }
+    /// 复制密文（API key）：剪贴板标成机密，过一会儿还是它就清掉（App 里是 SecretClipboard）。不进提示、不进读屏。
+    var copySecret: @MainActor (String) -> Void = { _ in }
     var showMainWindow: @MainActor () -> Void = {}
     var terminate: @MainActor () -> Void = {}
     /// 读屏软件播报（提示条出现时）。
@@ -158,6 +160,8 @@ final class AppModel {
     private(set) var updateInfo: UpdateDoc?
     private(set) var updateChecking = false
     private(set) var clientUpdates: ClientUpdatesDoc?
+    /// 有新版本的客户端有几个（侧栏「客户端更新」右边的标签）
+    var clientUpdatesReady: Int { clientUpdates?.updatableCount ?? 0 }
     private(set) var clientUpdatesError: String?
     private(set) var clientUpdatesLoading = false
     enum ClientUpdateActivity: Equatable { case check, mode, install }
@@ -592,6 +596,14 @@ final class AppModel {
     /// 登录已失效（查用量时才知道：本地的登录信息还在，所以 cca 算的 login 还是已登录）。
     func loginExpired(_ a: Account) -> Bool { usage(for: a)?.errorCode == .auth }
 
+    /// 周结算提醒：本周额度快重置了、还剩不少，建议先用（侧栏、菜单栏的沙漏）。和账号页那句话、总览一样从 Diagnosis 取。
+    func useFirst(for a: Account, now: Double) -> UseFirst? {
+        for d in Diagnosis.all(a, usage: usage(for: a), live: liveSlot(for: a.ref), now: now) {
+            if case .useFirst(let f) = d { return f }
+        }
+        return nil
+    }
+
     /// 自动刷新用量、检测出口（定时器每分钟一次，App 变得看得见时也来一次）：只查到期的账号（UsagePolling、ExitPolling）。
     func refreshUsageIfNeeded() {
         guard phase == .ready else { return }
@@ -865,14 +877,14 @@ final class AppModel {
                 self.activities[ref] = nil
                 self.aliasEditing = nil
                 if self.selection == .account(ref) { self.selection = .account(AccountRef(tool: ref.tool, key: newKey)) }
-                self.showToast(newKey == ref.key ? "别名没有变" : "已改名：登录、资料和端口都不变", .success)
+                self.showToast(newKey == ref.key ? "别名没有变" : "别名改好了：登录、资料和端口都不变", .success)
             case .failed(let f) where f.reason == .command:
                 self.activities[ref] = nil
-                self.renameError = nonEmpty(f.message) ?? "没能改名"
+                self.renameError = nonEmpty(f.message) ?? "没能改别名"
             default:
                 self.activities[ref] = nil
                 self.aliasEditing = nil
-                self.finish(r, failureTitle: "没能改名", success: "已改名")
+                self.finish(r, failureTitle: "没能改别名", success: "别名改好了")
             }
         }
     }
@@ -1111,7 +1123,7 @@ final class AppModel {
         var fallback = h
         fallback.systemTerminal = true
         fallback.title = "\(app.name) 没有运行这条命令"
-        fallback.message = "可能它在等你确认，或者这个版本不支持从别的 App 启动。可以改用系统自带的“终端”，也可以复制命令自己运行；默认终端在“设置”里换。"
+        fallback.message = "可能它在等你确认，或者这个版本不支持被别的 App 打开。可以改用系统自带的「终端」，也可以复制命令自己运行（默认终端在「设置」里换）。"
         present(.handoff(fallback))
     }
 
@@ -1137,6 +1149,49 @@ final class AppModel {
             }
             self.hooks.copy(line)
             self.showToast("已复制命令：发给维护者，在 cca 的仓库里运行后这个账号的节点就固定了", .success)
+        }
+    }
+
+    // MARK: API key（PROTOCOL 4.10）
+
+    /// 读这个账号存的 API key（`cca [codex] key KEY --show`，经内存里的管道）；读不了时弹框说原因、返回 nil。
+    /// 明文不进被观察的状态、不进提示和读屏：调用的一方（复制、点开看）用完就丢。
+    func readAPIKey(_ a: Account) async -> APIKeyValue? {
+        guard phase == .ready, let client else { return nil }
+        let r = await client.execute(.keyShow(a.tool, key: a.key), prompter: nil)
+        if r.isSuccess, let v = APIKeyValue(cca: r.last?.stdout ?? Data()) { return v }
+        if r.isSuccess {
+            present(.failure(FailureInfo(title: "没能读取 API key", failure: Failure(reason: .command, code: nil, message: "cca 给的不是一个 key",
+                                                                                 stderrTail: "", exitCode: 0, tool: a.tool, key: a.key))))
+        } else {
+            finish(r, failureTitle: "没能读取 API key", success: "")
+        }
+        return nil
+    }
+
+    /// 复制 API key：剪贴板标成机密（剪贴板管理器不记），60 秒后还是它就清掉。提示里不写 key。
+    func copyAPIKey(_ a: Account) {
+        Task { [weak self] in
+            guard let self, let v = await self.readAPIKey(a) else { return }
+            self.hooks.copySecret(v.text)
+            self.showToast("已复制 \(a.displayName) 的 API key（60 秒后从剪贴板清掉）", .success)
+        }
+    }
+
+    /// 记下 / 更换 API key：App 里的提问会话（密文框），cca 存进钥匙串。官方账号的只是备查，cca 不拿它启动。
+    func recordAPIKey(_ a: Account) {
+        run(.apiKey(prefix: prefix(a.tool), key: a.key, name: a.displayName, record: !a.isAPI))
+    }
+
+    /// 删掉官方账号记下的 API key（cca 先问：key_forget，默认不删）。
+    func forgetAPIKey(_ a: Account) {
+        guard phase == .ready, let client else { return }
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(.keyForget(a.tool, key: a.key), prompter: prompter)
+            guard let self else { return }
+            self.finish(r, failureTitle: "没能删除 API key", success: r.resultEvent?.message ?? "已删除记下的 API key")
+            await self.afterAction()
         }
     }
 
@@ -1339,7 +1394,7 @@ final class AppModel {
         // 从当前快照重取，不能使用页面尚未刷新的旧 token。
         guard let current = clientUpdates?.clients.first(where: { $0.id == entry.id }),
               current.readyToInstall, current.installToken == entry.installToken, let token = current.installToken else {
-            showToast("目标版本或软件包校验值已变化，请重新检查后再安装", .warning)
+            showToast("要安装的版本变了，请重新检查后再安装", .warning)
             return
         }
         runClientUpdate(.clientInstall(token: token), activity: .install, manual: true, entryID: entry.id)

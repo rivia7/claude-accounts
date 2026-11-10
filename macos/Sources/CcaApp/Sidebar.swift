@@ -13,15 +13,8 @@ struct Sidebar: View {
                     .tag(SidebarItem.office)
                 RoutingRow()
                     .tag(SidebarItem.routing)
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.app").font(.title3).frame(width: 30, height: 30)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("客户端更新").font(.body.weight(.medium))
-                        Text("桌面客户端和终端工具").font(.caption).foregroundStyle(.plainSecondary)
-                    }
-                }
-                .sidebarRowPadding()
-                .tag(SidebarItem.clientUpdates)
+                ClientUpdatesRow()
+                    .tag(SidebarItem.clientUpdates)
             }
             let groups = model.accountGroups(model.tool)
             ForEach(groups) { g in
@@ -122,11 +115,11 @@ struct AccountMenu: View {
             Button("打开网页版") { model.openWeb(a.ref) }
                 .disabled(!a.can.web || busy)
             if a.can.limitResets {
-                Button("查看重置次数") { model.openLimitResets(a.ref) }
+                Button("在 claude.ai 查看重置次数") { model.openLimitResets(a.ref) }
                     .disabled(busy)
             }
             if a.can.billing {
-                Button("查看 API 额度") { model.openBilling(a.ref) }
+                Button("在控制台查看 API 额度") { model.openBilling(a.ref) }
                     .disabled(busy)
             }
         }
@@ -150,7 +143,7 @@ struct AccountManageItems: View {
         let top = model.isOnTop(a)
         Button(top ? "取消置顶" : "置顶") { model.setOnTop(a, !top) }
         if a.isAPI {
-            Button("更换 API key…") { model.run(.apiKey(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
+            Button("更换 API key…") { model.recordAPIKey(a) }
                 .disabled(busy)
         } else {
             Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
@@ -163,6 +156,22 @@ struct AccountManageItems: View {
                     .disabled(model.policyPulling)
             }
         }
+        if a.can.apiKey {
+            let saved = a.apiKey?.saved == true
+            Divider()
+            if !a.isAPI {
+                Button(saved ? "更换记下的 API key…" : "记录 API key…") { model.recordAPIKey(a) }
+                    .disabled(busy)
+            }
+            if saved {
+                Button("复制 API key") { model.copyAPIKey(a) }
+                if !a.isAPI {
+                    Button("删除记下的 API key…") { model.forgetAPIKey(a) }
+                        .disabled(busy)
+                }
+            }
+        }
+        Divider()
         Button("删除账号…", role: .destructive) { model.run(.remove(prefix: model.prefix(a.tool), key: a.key, name: a.displayName)) }
             .disabled(busy)
     }
@@ -219,6 +228,27 @@ struct RoutingRow: View {
     private var issue: (String, Color)? { model.routeIssue }
 }
 
+/// 客户端更新那一行：自己的图标（UpdatesMark，和总览、节点分流一套画法），有新版本时右边说有几个。
+struct ClientUpdatesRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 10) {
+            UpdatesMark(size: 23).frame(width: 30, height: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("客户端更新").font(.body.weight(.medium))
+                Text("桌面 App 和终端工具").font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if model.clientUpdatesReady > 0 {
+                Tag(text: Texts.clientUpdatesTag(model.clientUpdatesReady), color: .accentColor)
+            }
+        }
+        .sidebarRowPadding()
+        .accessibilityElement(children: .combine)
+    }
+}
+
 extension AppModel {
     /// 走哪边（侧栏的节点分流、菜单栏面板的第二行）：读到 live 时按它，否则按设置。
     var routeSummary: String {
@@ -238,8 +268,8 @@ extension AppModel {
     var routeIssue: (String, Color)? {
         if state?.routing?.sync == .pending { return ("待同步", .orange) }
         if let s = live?.summary {
-            if s.closed > 0 { return ("\(s.closed) 个连不上", .red) }
-            if s.drift > 0 { return ("\(s.drift) 个选错", .orange) }
+            if s.closed > 0 { return ("\(s.closed) 个端口连不上", .red) }
+            if s.drift > 0 { return ("\(s.drift) 个节点选错", .orange) }
         }
         return nil
     }
@@ -256,8 +286,10 @@ struct SidebarFooter: View {
                     model.run(.addAccount(prefix: ToolID.codex.defaultPrefix, product: "ChatGPT"))
                 } label: {
                     Label("启用 ChatGPT 账号", systemImage: "plus.circle")
+                        .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .help("添加第一个 ChatGPT 账号（Codex）")
             }
             HStack(spacing: 6) {
                 if model.stateLoading || model.updateChecking {
@@ -345,6 +377,7 @@ struct AccountRow: View {
                             .help("维护者锁定了节点")
                     }
                     if model.isOnTop(a) { OnTopMark() }
+                    UseFirstMark(account: a)
                 }
                 AccountSubtitle(account: a, expired: model.loginExpired(a))
             }

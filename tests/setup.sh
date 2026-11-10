@@ -748,6 +748,7 @@ one() {
 			mkdir -p "$KC/$svc"; f="$KC/$svc/${acct:-_}"
 			if [ -n "$hex" ]; then printf '%s' "$hex" | xxd -r -p > "$f"; else printf '%s' "$pw" > "$f"; fi ;;
 		find-generic-password)
+			[ -f "$CCA_T/keychain_unreadable" ] && return 51   # 钥匙串锁着、读不了
 			[ -n "$f" ] && [ -f "$f" ] || return 44
 			[ $w = 1 ] && { cat "$f"; echo; } ;;
 		delete-generic-password)

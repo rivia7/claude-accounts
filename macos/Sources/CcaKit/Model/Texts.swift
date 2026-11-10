@@ -129,7 +129,7 @@ enum Texts {
     /// 一台设备开着什么：“命令行里 2 个会话、Claude App 开着”
     static func deviceOpen(_ d: DeviceRow, appLabel: String) -> String {
         var parts: [String] = []
-        if d.cli > 0 { parts.append("命令行里 \(d.cli) 个会话") }
+        if d.cli > 0 { parts.append("终端里 \(d.cli) 个会话") }
         if d.app { parts.append("\(appLabel) 开着") }
         return parts.joined(separator: "、")
     }
@@ -209,7 +209,7 @@ enum Texts {
     static func login(_ s: LoginState, loginEmail: String?) -> String {
         switch s {
         case .loggedIn: return "已登录"
-        case .loggedOut: return "未登录"
+        case .loggedOut: return "还没登录"
         case .emailMismatch:
             if let e = nonEmpty(loginEmail) { return "登录的是 \(e)" }
             return "登录的不是这个账号"
@@ -234,7 +234,7 @@ enum Texts {
         case .login: return "没登录"
         case .mismatch: return "登录的不是这个账号"
         case .route: return "没有可用的出口"
-        case .port: return "出口端口不通"
+        case .port: return "端口连不上"
         case .region: return "出口在不可用地区"
         case .trace: return "查不到出口"
         case .unsupported: return "这个版本不支持查用量"
@@ -248,11 +248,11 @@ enum Texts {
     static func healthResult(_ r: HealthResult, region: String?) -> String {
         switch r {
         case .ok: return "出口正常"
-        case .lowPurity: return "纯净度低于设定"
+        case .lowPurity: return "纯净度偏低"
         case .restricted: return nonEmpty(region).map { "出口在不可用地区（\($0)）" } ?? "出口在不可用地区"
         case .noExit: return "拿不到出口 IP"
-        case .noScore: return "检测服务没给评分"
-        case .portClosed: return "端口不通"
+        case .noScore: return "检测网站没给评分"
+        case .portClosed: return "端口连不上"
         case .apiOk: return "接口连得上"
         case .apiUnreachable: return "接口连不上"
         default: return "检测结果未知"
@@ -261,9 +261,9 @@ enum Texts {
 
     static func leak(_ s: LeakState?, what: String) -> String {
         switch s {
-        case .some(.ok): return what == "WebRTC" ? "WebRTC 探针出口一致" : "\(what) 探针未发现异常"
+        case .some(.ok): return "\(what) 正常"
         case .some(.leak): return "\(what) 有泄露风险"
-        case .some(.note): return "\(what) 有备注"
+        case .some(.note): return "\(what) 有提示"
         case .some(.failed): return "\(what) 没测成"
         case .none: return "\(what) 没测"
         default: return "\(what) 未知"
@@ -330,7 +330,7 @@ enum Texts {
         case .limitResets: return "打开用量页…"
         case .check: return "检测出口…"
         case .sync: return "同步路由器…"
-        case .rename: return "改名…"
+        case .rename: return "改别名…"
         case .reset: return "重置额度…"
         }
     }
@@ -363,7 +363,7 @@ enum Texts {
         case .configUnreadable: return "读不了 cca 的设置"
         case .tableUnreadable: return "读不了账号表"
         case .accountUnreadable: return "读不了账号的登录状态（这个账号当作没登录）"
-        case .tableInvalid: return "账号表校验不过"
+        case .tableInvalid: return "账号表有错误"
         default: return "cca 报告了一个问题"
         }
     }
@@ -395,14 +395,25 @@ enum Texts {
     }
 
     /// 额度用完的员工几点回来（显示器上写的）：今天的“16:00”，明天的“明天 09:00”，再远“周二 16:00”。
-    static func backTime(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
+    /// today 写在今天的时间前面（周结算提醒写“今天 19:55”）。
+    static func backTime(epoch: Double, now: Double, calendar: Calendar = .current, today: String = "") -> String {
         let d = Date(timeIntervalSince1970: epoch), n = Date(timeIntervalSince1970: now)
-        if calendar.isDate(d, inSameDayAs: n) { return clock(epoch, calendar: calendar) }
+        if calendar.isDate(d, inSameDayAs: n) { return today + clock(epoch, calendar: calendar) }
         if let t = calendar.date(byAdding: .day, value: 1, to: n), calendar.isDate(d, inSameDayAs: t) {
             return "明天 " + clock(epoch, calendar: calendar)
         }
         return weekdayTime(epoch, calendar: calendar)
     }
+
+    /// 周结算提醒（cca 给的 use_first）：“本周额度还剩 59%，明天 19:55 重置，建议先用这个账号”。
+    /// 账号页那句话、总览卡片和侧栏 / 菜单栏沙漏的悬停说明、读屏都用这一句。
+    static func useFirst(_ f: UseFirst, now: Double, calendar: Calendar = .current) -> String {
+        let when = backTime(epoch: f.untilEpoch, now: now, calendar: calendar, today: "今天 ")
+        return "本周额度还剩 \(f.leftPercent)%，\(when) 重置，建议先用这个账号"
+    }
+
+    /// 侧栏「客户端更新」右边的标签：有几个客户端有新版本。
+    static func clientUpdatesTag(_ n: Int) -> String { "\(n) 个可更新" }
 
     /// “16:00 恢复”；时间已经过了是“马上恢复”（等下一次读到新的用量）。
     static func backAt(epoch: Double, now: Double, calendar: Calendar = .current) -> String {
@@ -414,7 +425,7 @@ enum Texts {
         var parts: [String] = []
         if app { parts.append("\(appLabel) 开着") }
         if sessions > 0 {
-            var s = sessions == 1 ? "命令行里在用" : "命令行里 \(sessions) 个会话"
+            var s = sessions == 1 ? "终端里在用" : "终端里 \(sessions) 个会话"
             if let since { s += "，" + elapsed(since: since, now: now) }
             parts.append(s)
         }
@@ -459,8 +470,8 @@ enum Texts {
             switch f {
             case .nearLimit: return "额度快用完了"
             case .noApp: return "没装 \(appLabel)"
-            case .lowPurity: return "出口 IP 的纯净度低于设定"
-            case .leak: return "DNS 或 WebRTC 探针发现泄露风险"
+            case .lowPurity: return "出口 IP 的纯净度偏低"
+            case .leak: return "DNS 或 WebRTC 可能泄露"
             case .neverChecked: return "还没检测过出口"
             }
         }
@@ -481,6 +492,7 @@ enum Texts {
         if let p = nonEmpty(a.plan) { parts.append(planName(p, tier: e.tier)) }
         parts.append(mood(e, appLabel: appLabel, now: now))
         parts += flags(e.flags, appLabel: appLabel)
+        if let f = e.useFirst { parts.append(useFirst(f, now: now)) }
         if let r = resetSummary(resets, now: now) { parts.append(r) }
         return parts.joined(separator: "，")
     }

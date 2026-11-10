@@ -53,7 +53,7 @@ struct HandoffSheet: View {
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(handoff.title).font(.title3.weight(.semibold))
-                    Text("这一步要在“终端”里完成，完成后回到 cca 会自动刷新。").font(.callout).foregroundStyle(.secondary)
+                    Text("这一步要在「终端」里完成，完成后回到 cca 会自动刷新。").font(.callout).foregroundStyle(.secondary)
                 }
             }
             if !handoff.message.isEmpty {
@@ -225,5 +225,28 @@ enum Platform {
     static func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// 复制密文（API key）：标成机密，60 秒后剪贴板还是它就清掉；退出 App 前也清（applicationWillTerminate 调 flush）。
+    @MainActor static let secrets = SecretClipboard(board: GeneralPasteboard())
+}
+
+/// 系统的剪贴板。密文除了普通的文字，再带上 org.nspasteboard.ConcealedType（nspasteboard.org 的约定：剪贴板管理器看到它就不记）。
+@MainActor
+final class GeneralPasteboard: SecretPasteboard {
+    private let board = NSPasteboard.general
+    private static let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+
+    var changeCount: Int { board.changeCount }
+
+    func writeSecret(_ s: String) -> Int {
+        board.clearContents()
+        board.setString(s, forType: .string)
+        board.setString("", forType: Self.concealed)
+        return board.changeCount
+    }
+
+    func clear() {
+        board.clearContents()
     }
 }

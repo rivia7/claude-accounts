@@ -137,6 +137,8 @@ final class TriggerSink: @unchecked Sendable {
     var conditions = SystemConditions()
     var urls: [URL] = []
     var copied: [String] = []
+    /// 经 copySecret 复制的密文（API key）：不能出现在 copied、提示、读屏里
+    var copiedSecrets: [String] = []
     var shown = 0
     var terminated = 0
     var announced: [String] = []
@@ -149,7 +151,8 @@ final class TriggerSink: @unchecked Sendable {
              systemConditions: { log.conditions },
              installedTerminals: { log.installed }, chooseDirectory: { _ in log.pickedDirectory },
              openURL: { log.urls.append($0) },
-             copy: { log.copied.append($0) }, showMainWindow: { log.shown += 1 }, terminate: { log.terminated += 1 },
+             copy: { log.copied.append($0) }, copySecret: { log.copiedSecrets.append($0) },
+             showMainWindow: { log.shown += 1 }, terminate: { log.terminated += 1 },
              announce: { log.announced.append($0) })
 }
 

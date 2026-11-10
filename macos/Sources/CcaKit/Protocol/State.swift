@@ -384,6 +384,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var cli: CLIRun?
     var can: Can
     var canWhy: [String: CanWhy]
+    /// 存没存 API key、掩码（PROTOCOL 2.2；旧版 cca 没有，是 nil）
+    var apiKey: APIKeyInfo?
     var usage: UsageEntry?
     var health: Health?
 
@@ -402,6 +404,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case isLast = "is_last"
         case api, badge, app, cli, can
         case canWhy = "can_why"
+        case apiKey = "api_key"
         case usage, health
     }
 
@@ -434,6 +437,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         cli = c.lossy(CLIRun.self, .cli)
         can = c.lossy(Can.self, .can) ?? Can()
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
+        apiKey = c.lossy(APIKeyInfo.self, .apiKey)
         usage = c.lossy(UsageEntry.self, .usage)
         health = c.lossy(Health.self, .health)
     }
@@ -467,6 +471,30 @@ struct APIInfo: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         host = c.string(.host)
         model = c.string(.model)
+    }
+}
+
+/// `api_key`（PROTOCOL 2.2）：这个账号存没存 API key。官方账号的是记下备查的（cca 不拿它启动），第三方 API 账号的是启动要用的。
+/// `hint` 是掩码（`sk-ant-…x7Qa`；短的 key 没有，是空的），存的时候 cca 算好的，**不是** key；明文只在点「显示」「复制」时
+/// 经管道向 cca 要（`cca [codex] key 账号 --show`）。
+struct APIKeyInfo: Decodable, Sendable, Equatable {
+    var saved: Bool
+    var hint: String
+    var source: APIKeySource
+
+    enum CodingKeys: String, CodingKey { case saved, hint, source }
+
+    init(saved: Bool, hint: String, source: APIKeySource) {
+        self.saved = saved
+        self.hint = hint
+        self.source = source
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        saved = c.bool(.saved) ?? false
+        hint = c.string(.hint) ?? ""
+        source = c.lossy(APIKeySource.self, .source) ?? APIKeySource(rawValue: "")
     }
 }
 
@@ -547,11 +575,14 @@ struct Can: Decodable, Sendable, Equatable {
     /// 账号页有没有「设备」一节（映射里的官方账号、映射里配置了设备统计的服务器、这台 Mac 没关掉；PROTOCOL 3.4）。
     /// 旧版 cca 没有这一项，当作没有
     var devices: Bool = false
+    /// 能不能记下 / 显示 / 复制 API key（`cca [codex] key`，PROTOCOL 4.10；旧版 cca 没有这一项，当作不能）
+    var apiKey: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case app, web, billing, usage, check, cli, devices
         case limitResets = "limit_resets"
         case policyLock = "policy_lock"
+        case apiKey = "api_key"
     }
 
     init() {}
@@ -567,6 +598,7 @@ struct Can: Decodable, Sendable, Equatable {
         cli = c.bool(.cli) ?? false
         policyLock = c.bool(.policyLock) ?? false
         devices = c.bool(.devices) ?? false
+        apiKey = c.bool(.apiKey) ?? false
     }
 }
 

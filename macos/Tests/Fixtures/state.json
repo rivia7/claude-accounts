@@ -245,8 +245,10 @@
             "check": true,
             "cli": true,
             "policy_lock": false,
-            "devices": true
+            "devices": true,
+            "api_key": true
           },
+          "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain"},
           "can_why": {},
           "usage": {
             "account": "工作",
@@ -375,8 +377,10 @@
             "usage": false,
             "check": true,
             "cli": true,
-            "policy_lock": true
+            "policy_lock": true,
+            "api_key": true
           },
+          "api_key": {"saved": false, "hint": "", "source": ""},
           "can_why": {
             "usage": "not_logged_in"
           },
@@ -424,8 +428,10 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true
+            "policy_lock": true,
+            "api_key": true
           },
+          "api_key": {"saved": false, "hint": "", "source": ""},
           "can_why": {},
           "usage": null,
           "health": null
@@ -471,8 +477,10 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true
+            "policy_lock": true,
+            "api_key": true
           },
+          "api_key": {"saved": false, "hint": "", "source": ""},
           "can_why": {},
           "usage": {
             "account": "erin@example.com",
@@ -589,8 +597,10 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true
+            "policy_lock": true,
+            "api_key": true
           },
+          "api_key": {"saved": false, "hint": "", "source": ""},
           "can_why": {},
           "usage": {
             "account": "grace@example.com",
@@ -695,8 +705,10 @@
             "usage": false,
             "check": true,
             "cli": true,
-            "policy_lock": false
+            "policy_lock": false,
+            "api_key": true
           },
+          "api_key": {"saved": true, "hint": "sk-…9fK2", "source": "keychain"},
           "can_why": {
             "app": "api_account",
             "web": "api_account",
@@ -768,8 +780,10 @@
             "usage": false,
             "check": true,
             "cli": true,
-            "policy_lock": false
+            "policy_lock": false,
+            "api_key": true
           },
+          "api_key": {"saved": true, "hint": "", "source": "table"},
           "can_why": {
             "app": "api_account",
             "web": "api_account",
@@ -839,8 +853,10 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true
+            "policy_lock": true,
+            "api_key": true
           },
+          "api_key": {"saved": false, "hint": "", "source": ""},
           "can_why": {},
           "usage": {
             "account": "frank@example.com",
@@ -863,12 +879,17 @@
             },
             "seven_day": {
               "utilization": 76.0,
-              "resets_at": 1794470400,
-              "resets_epoch": 1794470400.0,
+              "resets_at": 1794114000,
+              "resets_epoch": 1794114000.0,
               "reset": false
             },
             "model_scoped": null,
             "extra_usage": null,
+            "use_first": {
+              "left_percent": 24,
+              "from_epoch": 1794027600.0,
+              "until_epoch": 1794114000.0
+            },
             "credits": {
               "hasCredits": true,
               "unlimited": false,

@@ -425,6 +425,7 @@ EMAIL_RE = lazy_re(r'^[^@\s"\\()（）]+@[^@\s"\\()（）]+\.[^@\s"\\()（）]+$
 PAIR_RE = lazy_re(r'^(.*?)[(（]([^()（）]*)[)）]$')
 ALIAS_BAD = lazy_re(r'[\s"\\()（）@]')
 SECRET_RE = lazy_re(r'^[\x21-\x7e]{8,4096}$')   # 只收可见的 ASCII：别的字符 security -w 会改成输出十六进制
+HINT_RE = lazy_re(r'^[\x21-\x7e]{0,8}…[\x21-\x7e]{4}$')   # key 的掩码（key_hint）：前缀 + … + 最后 4 个字符
 MODEL_RE = lazy_re(r'^[^\s\x22\x27\\]{1,100}$')
 HOST_RE = lazy_re(r'^([A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|[0-9A-Fa-f:]{2,39})$')   # 主机名、IPv4、IPv6（开头不能是 -：ssh 会当成选项）
 SSH_USER_RE = lazy_re(r'^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$')
@@ -585,8 +586,9 @@ class Tool:
     precreate = PRECREATE
     sub = 'claude'                    # 账号目录里交给工具的配置目录（CLAUDE_CONFIG_DIR）
     settings_disp = '~/.claude/settings.json'   # 提示里"模型写在哪"
-    state_key = None                  # config.json 里这个工具的 ports、last、api_ids、api_keys 放在哪：None 是顶层
+    state_key = None                  # config.json 里这个工具的 ports、last、api_ids、api_keys、ref_keys、key_hints 放在哪：None 是顶层
     kc_prefix = 'cca-api-'            # 钥匙串里第三方 API key 的服务名前缀
+    kc_ref_prefix = 'cca-ref-'        # 官方账号记下备查的 API key（cca 不拿它启动）的服务名前缀
     pool_prefix = ''                  # 路由器端口池里的账号名前缀
     launcher_prefix = 'Claude '       # ~/Applications 里启动器的名字前缀
     launcher_id = 'local.cca.launcher.'
@@ -610,7 +612,7 @@ class Tool:
         self.ids = {k: v['id'] for k, v in t.items() if is_api(v) and isinstance(v.get('id'), str) and v['id']}
 
     def state(self, c, create=False):
-        """config.json 里属于这个工具的那部分（ports、last、api_ids、api_keys）；create：没有就建上（空的 cfg_clean 会删）"""
+        """config.json 里属于这个工具的那部分（ports、last、api_ids、api_keys、ref_keys、key_hints、policy_skip）；create：没有就建上（空的 cfg_clean 会删）"""
         if not self.state_key:
             return c
         s = c.get(self.state_key)
@@ -685,6 +687,7 @@ class CodexTool(Tool):
     settings_disp = '~/.codex/config.toml'
     state_key = 'codex'
     kc_prefix = 'cca-codex-api-'
+    kc_ref_prefix = 'cca-codex-ref-'
     pool_prefix = 'codex-'
     launcher_prefix = 'ChatGPT '
     launcher_id = 'local.cca.launcher.codex.'
@@ -864,6 +867,17 @@ def api_host(v):
 
 def secret_ok(s):
     return isinstance(s, str) and bool(SECRET_RE.match(s))
+
+
+REF_ACCT = 'reference'   # 官方账号记下备查的 API key 在钥匙串里的账户名（服务名是 T.kc_ref_prefix + 账号目录名）
+
+
+def key_hint(s):
+    """给人看的 key 掩码（App 里默认显示它，config.json 的 key_hints 里存的也是它）：开头 8 个字符里最后一个 - 以前的前缀
+    （sk-ant-、sk-proj-）+ … + 最后 4 个字符；短于 24 个字符的不给（露出的比例太大），是空字符串"""
+    if not secret_ok(s) or len(s) < 24:
+        return ''
+    return s[:s[:8].rfind('-') + 1] + '…' + s[-4:]
 
 
 def model_ok(m):
@@ -1459,7 +1473,7 @@ def cfg_clean(c):
     """没有 Codex 账号时不在 config.json 里留下空的 codex 一节：只有 Claude 账号时 config.json 和以前一样"""
     for tool in TOOLS:
         s = c.get(tool.state_key) if tool.state_key else None
-        if isinstance(s, dict) and not any(s.get(k) for k in ('ports', 'last', 'api_ids', 'api_keys', 'policy_skip')):
+        if isinstance(s, dict) and not any(s.get(k) for k in ('ports', 'last', 'api_ids', 'api_keys', 'ref_keys', 'key_hints', 'policy_skip')):
             del c[tool.state_key]
 
 
@@ -2681,10 +2695,13 @@ def cmd_rm(key):
     ctx()
 
 
-# --- 第三方 API 账号的 key（下面叫 secret，免得和账号表的键混了）：存在钥匙串里，服务名 cca-api-账号目录名
-# （Codex 账号是 cca-codex-api-账号目录名）、
-# 账户名是接口地址的域名——地址换成别的服务商，旧 key 就取不到，不会被发过去。账号表里写了 key 字段时用表里的。
-# cca 存过 key 的账号记在 config.json 的 api_keys：删账号（包括在 cca edit 里删、直接改账号表删）后据此清掉钥匙串里的 key
+# --- API key（下面叫 secret，免得和账号表的键混了），都存在钥匙串里：
+# - 第三方 API 账号的：服务名 cca-api-账号目录名（Codex 账号是 cca-codex-api-账号目录名），账户名是接口地址的域名——地址换成
+#   别的服务商，旧 key 就取不到，不会被发过去。账号表里写了 key 字段时用表里的。
+# - 官方账号记下备查的（控制台里建的 API key；cca 绝不拿它登录或启动账号，那样会变成按量计费）：服务名 cca-ref-账号目录名
+#   （Codex 是 cca-codex-ref-），账户名是 REF_ACCT。
+# cca 存过 key 的账号记在 config.json 的 api_keys / ref_keys：删账号（包括在 cca edit 里删、直接改账号表删）后据此清掉钥匙串里的 key；
+# key_hints 记着每个 key 的掩码（key_hint）和存的时候的域名：_gui state 照它显示，不读钥匙串
 def security(*args, data=None):
     """运行 security，返回 (退出码, stdout)；data 从 stdin 交给它（security -i）"""
     import subprocess
@@ -2696,43 +2713,93 @@ def security(*args, data=None):
     return r.returncode, r.stdout
 
 
-def kc_svc(aid):
-    return T.kc_prefix + aid
+def kc_svc(aid, ref=False):
+    return (T.kc_ref_prefix if ref else T.kc_prefix) + aid
 
 
-def kc_get(aid, host):
-    """钥匙串里这个账号、这个服务商的 key；没有、读不了或不是可见的 ASCII 时返回空字符串"""
-    rc, out = security('find-generic-password', '-a', host, '-s', kc_svc(aid), '-w')
+def kc_slot(v):
+    """账号表的值 → (钥匙串里的账户名, ref)：第三方 API 账号的 key 按接口的域名存；官方账号记下备查的存在 reference 下"""
+    return (api_host(v), False) if is_api(v) else (REF_ACCT, True)
+
+
+def kc_list(ref):
+    """config.json 里记着存过 key 的账号目录名的那一项"""
+    return 'ref_keys' if ref else 'api_keys'
+
+
+def kc_hints(st):
+    h = st.get('key_hints')
+    return h if isinstance(h, dict) else {}
+
+
+def kc_read(aid, host, ref=False):
+    """(security 的退出码, key)：钥匙串里这个账号、这个服务商的 key；没有（退出码 44）、读不了（锁着、超时）或不是可见的
+    ASCII 时 key 是空字符串"""
+    rc, out = security('find-generic-password', '-a', host, '-s', kc_svc(aid, ref), '-w')
     s = out.decode('utf-8', 'replace').strip()
-    return s if rc == 0 and SECRET_RE.match(s) else ''
+    return rc, s if rc == 0 and SECRET_RE.match(s) else ''
 
 
-def kc_put(aid, host, s):
+def kc_get(aid, host, ref=False):
+    return kc_read(aid, host, ref)[1]
+
+
+def kc_book(aid, host, s, ref=False):
+    """config.json 里记下（s 是 key）或者删掉（s 是 None）这个账号存过的 key：api_keys / ref_keys 和 key_hints（掩码、域名）"""
+    c = cfg_load()
+    st = T.state(c, create=True)
+    lst = kc_list(ref)
+    have = set(st.get(lst) or [])
+    hints = kc_hints(st)
+    if s is None:
+        have.discard(aid)
+        hints.pop(aid, None)
+    else:   # 域名总是记下（换了服务商算没存）；短的 key 没有掩码，hint 是空字符串
+        have.add(aid)
+        hints[aid] = {'host': host, 'hint': key_hint(s)}
+    if have or not ref:
+        st[lst] = sorted(have)
+    else:
+        st.pop(lst, None)
+    if hints:
+        st['key_hints'] = hints
+    else:
+        st.pop('key_hints', None)
+    cfg_save(c)
+
+
+def kc_unbook(aid, ref=False):
+    """钥匙串里已经没有这个账号的 key 了：config.json 里的记录也删掉"""
+    if aid in (T.state(cfg_load()).get(kc_list(ref)) or []):
+        kc_book(aid, '', None, ref)
+
+
+def kc_backfill(aid, host, s, ref=False):
+    """读到了 key、config.json 里却没有它的掩码和域名（旧版本存的）：补上，App 以后就能显示它"""
+    st = T.state(cfg_load())
+    if aid in (st.get(kc_list(ref)) or []) and kc_hints(st).get(aid) != {'host': host, 'hint': key_hint(s)}:
+        kc_book(aid, host, s, ref)
+
+
+def kc_put(aid, host, s, ref=False):
     """先删掉这个账号的旧 key（不管哪个服务商的），再存新的。命令和十六进制的 key 都从 stdin 交给 security -i，
     key 不出现在任何进程的命令行里；security -i 里的命令失败了它也返回 0，所以存完读回来比对"""
     if not host or re.search(r'\s', host):
         return False
-    kc_del(aid)
-    security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid), s.encode('ascii').hex())).encode('ascii'))
-    if kc_get(aid, host) != s:
+    kc_del(aid, ref)
+    security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid, ref), s.encode('ascii').hex())).encode('ascii'))
+    if kc_get(aid, host, ref) != s:
         return False
-    c = cfg_load()
-    st = T.state(c, create=True)
-    st['api_keys'] = sorted(set(st.get('api_keys') or []) | {aid})
-    cfg_save(c)
+    kc_book(aid, host, s, ref)
     return True
 
 
-def kc_del(aid):
+def kc_del(aid, ref=False):
     """删掉这个账号在钥匙串里的 key（每次删一条，不管哪个服务商的，删到没有为止）"""
     for _ in range(20):
-        if security('delete-generic-password', '-s', kc_svc(aid))[0] != 0:
+        if security('delete-generic-password', '-s', kc_svc(aid, ref))[0] != 0:
             break
-    c = cfg_load()
-    st = T.state(c, create=True)
-    if aid in (st.get('api_keys') or []):
-        st['api_keys'] = [x for x in st['api_keys'] if x != aid]
-        cfg_save(c)
+    kc_unbook(aid, ref)
 
 
 def api_secret(k, v):
@@ -2742,7 +2809,7 @@ def api_secret(k, v):
 
 def cmd_api_key_out(aid=''):
     """apiKeyHelper 回调（Claude Code 启动时和之后每 5 分钟左右来取一次）：把 key 打到 stdout。
-    只给账号表里现有的账号：删掉的账号钥匙串里就算还留着 key 也不给"""
+    只给账号表里现有的第三方 API 账号：删掉的账号钥匙串里就算还留着 key 也不给；官方账号记下备查的 key 绝不给"""
     t = table_load()
     k = next((k for k, v in t.items() if is_api(v) and acct_id(k) == aid), None)
     s = api_secret(k, t[k]) if k else ''
@@ -2759,28 +2826,40 @@ def cmd_secret_check():
 
 
 def cmd_secret_set(key):
-    """从 stdin 读 key，按账号现在的接口地址存进钥匙串"""
+    """从 stdin 读 key 存进钥匙串：第三方 API 账号按现在的接口地址存；官方账号的是记下备查的（ref，cca 不拿它启动）"""
     t = table_load()
     need(t, key)
     s = sys.stdin.read().strip()
     if not secret_ok(s):
         die(SECRET_MSG)
-    if not is_api(t[key]) or not kc_put(acct_id(key), api_host(t[key]), s):
+    host, ref = kc_slot(t[key])
+    if not kc_put(acct_id(key), host, s, ref):
         die('API key 存进钥匙串失败（钥匙串被锁住了？）')
 
 
 def cmd_secret_del(key):
+    """删掉这个账号存过的 key（第三方 API 账号的、官方账号记下备查的都删）"""
     kc_del(acct_id(key))
+    kc_del(acct_id(key), ref=True)
 
 
 def cmd_secret_status(key):
-    """key 在哪：table（账号表的 key 字段）、keychain，或者什么也不打印（还没有）"""
+    """key 在哪：table（账号表的 key 字段）、keychain（第三方 API 账号的，在钥匙串里）、ref（官方账号记下备查的），
+    或者什么也不打印（还没有）。读到第三方 API 账号的 key 时顺便补上掩码（旧版本存的没有）"""
     v = table_load().get(key)
+    if v is None:
+        return
+    aid = acct_id(key)
     if not is_api(v):
+        if aid in (T.state(cfg_load()).get('ref_keys') or []):
+            print('ref')
         return
     if secret_ok(v.get('key')):
         print('table')
-    elif api_secret(key, v):
+        return
+    s = kc_get(aid, api_host(v))
+    if s:
+        kc_backfill(aid, api_host(v), s)
         print('keychain')
 
 
@@ -2792,11 +2871,41 @@ def cmd_secrets_missing():
 
 
 def cmd_secrets_forget(scope=''):
-    """清掉钥匙串里已经不在账号表里的账号的 key；scope=all 时全部清掉（cca restore）"""
+    """清掉钥匙串里已经不在账号表里的账号的 key（第三方 API 账号的、官方账号记下备查的）；scope=all 时全部清掉（cca restore）。
+    官方账号记下备查的删了找不回来（控制台只在建的时候给一次全文），平时清掉时说一声（多半是 cca edit 里删掉了这个账号）"""
     c, t, _ = ctx()
-    keep = set() if scope == 'all' else {acct_id(k) for k, v in t.items() if is_api(v)}
-    for aid in sorted(set(T.state(c).get('api_keys') or []) - keep):
-        kc_del(aid)
+    st = T.state(c)
+    for ref in (False, True):
+        keep = set() if scope == 'all' else {acct_id(k) for k, v in t.items() if is_api(v) != ref}
+        for aid in sorted(set(st.get(kc_list(ref)) or []) - keep):
+            h = kc_hints(st).get(aid)
+            hint = h.get('hint') if isinstance(h, dict) and isinstance(h.get('hint'), str) else ''
+            kc_del(aid, ref)
+            if ref and scope != 'all':
+                sys.stderr.write('已从钥匙串删掉 %s 记下的 API key%s：账号表里已经没有这个账号了\n' % (aid, '（%s）' % hint if hint else ''))
+
+
+def cmd_key_show(key):
+    """把这个账号的 key 原样打到 stdout（不换行；cca [codex] key 账号 --show，App 的「显示」「复制」经管道读它）：
+    第三方 API 账号和启动时取的一样（账号表的 key 字段优先，再是钥匙串里这个服务商的）；官方账号是记下备查的。
+    没有：退出码 3（钥匙串里的被删了时顺便把记录也删掉）；钥匙串读不了（锁着、超时）：退出码 4"""
+    t = table_load()
+    need(t, key)
+    v, aid = t[key], acct_id(key)
+    if is_api(v) and secret_ok(v.get('key')):
+        sys.stdout.write(v['key'])
+        return
+    host, ref = kc_slot(v)
+    rc, s = kc_read(aid, host, ref)
+    if s:
+        kc_backfill(aid, host, s, ref)
+        sys.stdout.write(s)
+        return
+    if rc in (0, 44):
+        if ref:   # 第三方 API 账号的不删：可能还存着旧服务商的那一把，secrets-forget 要靠记录找到它
+            kc_unbook(aid, ref)
+        sys.exit(3)
+    sys.exit(4)
 
 
 def cmd_set_last(key):
@@ -2807,7 +2916,7 @@ def cmd_set_last(key):
     cfg_save(c)
     old = T.outdated_login_plan(key)
     if old:
-        print(login_plan_note(key, old))
+        print(login_plan_note(key, old, T.plan(key)))
 
 
 def cmd_name(key):
@@ -4897,11 +5006,25 @@ def weekday_clock(lt):
     return '周%s %02d:%02d' % (WEEKDAYS[lt.tm_wday], lt.tm_hour, lt.tm_min)
 
 
-def resets(at, now):
-    """重置时间：一天以内写还有多久，再远写星期几、几点（本地时间）"""
-    if at - now < 86400:
-        return '%s后重置' % span(at - now)
-    return weekday_clock(time.localtime(at)) + ' 重置'
+def span_short(secs):
+    """紧凑的时长（cca usage 的表格里，不加空格）：不到1分钟 / 25分钟 / 2小时13分 / 3天4小时"""
+    return span(secs).replace(' ', '')
+
+
+def day_gap(a, b):
+    """b 那天比 a 那天晚几天（本地时间的日历日；跨夏令时也对）"""
+    from datetime import date
+    return (date.fromtimestamp(b) - date.fromtimestamp(a)).days
+
+
+def reset_short(at, now, week=False):
+    """表格里的重置时间（本地时间）：5 小时的窗口写还有多久（2小时13分后）；本周的一小时以内也写还有多久，
+    再远写今天 / 明天 / 星期几和几点（周四 09:00）"""
+    if not week or at - now < 3600:
+        return span_short(at - now) + '后'
+    lt, days = time.localtime(at), day_gap(now, at)
+    day = '今天' if days == 0 else '明天' if days == 1 else '周' + WEEKDAYS[lt.tm_wday]
+    return '%s %02d:%02d' % (day, lt.tm_hour, lt.tm_min)
 
 
 
@@ -4983,10 +5106,11 @@ def claude_login_plan_outdated(oa, recorded):
     return CLAUDE_KIND_NAMES[r] if kind in CLAUDE_LOGIN_KINDS and r in CLAUDE_LOGIN_KINDS and r != kind else ''
 
 
-def login_plan_note(key, old):
-    """Claude Code 记的套餐过时了：给人看的一句（cca usage 的表格下面、启动横幅里；App 自己按 outdated_login_plan 说）"""
+def login_plan_note(key, old, plan):
+    """Claude Code 记的套餐过时了：给人看的一句（cca usage 的表格下面、启动横幅里；App 自己按 outdated_login_plan 说）。
+    plan 是账号现在的套餐（表格里和套餐那一列一样）"""
     return '%s 里记的套餐还是 %s（登录时记下的，不会自己更新），账号现在是 %s：重新登录一次就会更新（%s login %s）' % (
-        T.product, old, T.plan(key), T.cmd, name_of(key))
+        T.product, old, plan, T.cmd, name_of(key))
 
 
 def usage_file(key):
@@ -5188,6 +5312,23 @@ def reset_credits_open(rc):
     return sorted(cs, key=lambda c: c['expires_epoch'] if is_num(c.get('expires_epoch')) else float('inf'))
 
 
+USE_FIRST_HOURS, USE_FIRST_LEFT = 24, 20   # 本周额度 24 小时内重置、还剩至少 20%：App 里建议先用这个账号
+USE_FIRST_BAD = ('login', 'mismatch', 'route', 'port', 'trace', 'region', 'nolimits', 'auth')   # 这次查询说明账号现在用不了
+
+
+def use_first(rl, now, why=None):
+    """本周额度快重置了、还剩不少（macos/PROTOCOL.md 3.1）：{left_percent, from_epoch, until_epoch}，App 拿当前时间和
+    [from_epoch, until_epoch) 比（快照可能放了好几分钟）；不该提示时是 None。剩余按四舍五入后的百分比算（和显示的一致；
+    Python 的 round 是银行家舍入，所以不用它）。登录、线路、出口、5 小时的额度由 App 按各自的状态挡"""
+    w = win(rl.get('seven_day'), now)
+    if why in USE_FIRST_BAD or not w or w['at'] is None or w['reset']:
+        return None
+    left = 100 - min(max(int(w['pct'] + 0.5), 0), 100)
+    if left < USE_FIRST_LEFT:
+        return None
+    return {'left_percent': left, 'from_epoch': w['at'] - USE_FIRST_HOURS * 3600, 'until_epoch': w['at']}
+
+
 def usage_entry(r, now):
     """cca usage --json 里一个账号的条目（_gui state 里的 usage 也是它；格式见 macos/PROTOCOL.md，字段只加不删）。
     r 是 usage_row 构造的一行"""
@@ -5205,6 +5346,7 @@ def usage_entry(r, now):
     a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name'), **shares.get(name_key(m.get('display_name')), {}))
                          for m in dicts(rl, 'model_scoped')] if isinstance(rl.get('model_scoped'), list) else None
     a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
+    a['use_first'] = use_first(rl, now, r['why'])
     if T is CLAUDE:   # Claude Code 登录时记的套餐和账号现在的对不上（重新登录才会更新）：记的那个的叫法；对得上、不知道是 null
         a['outdated_login_plan'] = r.get('outdated_login_plan') or None
     else:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
@@ -5232,53 +5374,108 @@ def usage_json(rows, now, api):
     return j
 
 
+USAGE_NOTE_FLOOR = 20   # cca usage 的表格里备注至少留这么宽（放得下一项原因或额度）；不够时先收起别的列
+
+
+def fit_note(parts, room):
+    """表格的备注（按 ； 分项）放进 room 格：放得下几项放几项，后面的写成 ；…；第一项就放不下时先去掉括号里的补充，
+    再不行按字截"""
+    for n in range(len(parts), 0, -1):
+        s = '；'.join(parts[:n]) + ('；…' if n < len(parts) else '')
+        if dw(s) <= room:
+            return s
+    head = parts[0].split('（')[0]
+    return head + '…' if head != parts[0] and dw(head) + 1 <= room else fit(parts[0], room, pad=False)
+
+
 def usage_table(rows, now, cols, color, api):
-    width = max(int(cols) if str(cols).isdigit() else 80, 40) - 2
+    """cca usage 的表格：一个账号一行，整行不超过终端的宽度。放不下时依次收起有别名的账号的邮箱、套餐那一列、
+    两个重置时间；备注至少留 USAGE_NOTE_FLOOR 格，按项取舍（fit_note）；查不到的行从 5 小时那一列起写原因"""
+    W = max(int(cols) if str(cols).isdigit() else 80, 40) - 2   # 一行最多这么宽（留 2 格：… 和 — 在有的终端里占 2 格）
     paint = (lambda s, code: '\033[%sm%s\033[0m' % (code, s) if code and s.strip() else s) if color else (lambda s, code: s)
 
-    def cell(w):
+    def cell(w, week):
+        """一个用量窗口：(百分比, 重置时间, 颜色)"""
         if not w:
-            return '—', ''
+            return '—', '', ''
         if w['reset']:
-            return '已重置', ''
+            return '已重置', '', ''
         p = round(w['pct'])
-        return ('%3d%%  %s' % (p, resets(w['at'], now)) if w['at'] else '%3d%%' % p), ('31' if p >= 90 else '33' if p >= 70 else '')
-    table = []
+        return '%3d%%' % p, reset_short(w['at'], now, week) if w['at'] else '', '31' if p >= 90 else '33' if p >= 70 else ''
+    data = []
     for r in rows:
-        five, week, notes = cell(win(r['rl'].get('five_hour'), now)), cell(win(r['rl'].get('seven_day'), now)), usage_notes(r['rl'], now)
         if r['source'] == 'none':
-            five = week = ('—', '')
-            notes = [usage_why(r)]
-        elif r['source'] == 'cache':
-            notes.insert(0, '缓存（%s前）%s' % (ago(now - r['at']), '：' + usage_why(r) if r['why'] else ''))
-        table.append((r, five, week, '；'.join(notes)))
+            data.append((r, None, None, [usage_why(r)]))
+            continue
+        notes = usage_notes(r['rl'], now)
+        if r['source'] == 'cache':   # 原因在前（窄的终端里先保住它），再说是多久以前的数
+            notes = ([usage_why(r)] if r['why'] else []) + ['缓存（%s前）' % ago(now - r['at'])] + notes
+        data.append((r, cell(win(r['rl'].get('five_hour'), now), False), cell(win(r['rl'].get('seven_day'), now), True), notes))
+    show = {'email': True, 'plan': True, 'r5': True, 'r7': True}
     aw = min(max(dw(r['alias']) for r in rows), 16)   # 账号一格：别名、邮箱各占一小列，和菜单一样（都没有别名就只写邮箱）
     ew = min(max(dw(r['email']) for r in rows), 32)
 
     def acct(r):
-        return '  '.join(([fit(r['alias'], aw)] if aw else []) + ([fit(r['email'], ew)] if ew else []))
-    hd = ('账号', '套餐', '5 小时', '本周')
-    cw = [max([dw(hd[0])] + [dw(acct(r)) for r in rows]), max([dw(hd[1])] + [dw(r['plan']) for r in rows]),
-         max([dw(hd[2])] + [dw(x[1][0]) for x in table]), max([dw(hd[3])] + [dw(x[2][0]) for x in table])]
-    room = width - 2 - sum(cw) - 2 * len(cw)   # 同一行里留给备注的宽度；放不下就挪到下一行
-    print(paint(('  ' + '  '.join(fit(h, cw[i]) for i, h in enumerate(hd)) + ('  备注' if room >= 12 else '')).rstrip(), '2'))
-    for r, five, week, note in table:
+        if show['email']:
+            return '  '.join(([fit(r['alias'], aw)] if aw else []) + ([fit(r['email'], ew)] if ew else []))
+        return fit(r['alias'] or r['email'], 32, pad=False)
+
+    def win_col(i, title, on):
+        """一个窗口那一列：(表头, 宽)。重置时间收起来以后（on 是 False）只写百分比"""
+        cells = [x[i] for x in data if x[i]]
+        rw = max([dw(c[1]) for c in cells] + [0]) if on else 0
+        head = title + '/重置' if rw else title
+        return head, max([dw(head)] + [dw(c[0]) + (1 + rw if rw and c[1] else 0) for c in cells])
+
+    def layout():
+        """各列的宽：账号、套餐（收起来是 0）、5 小时、本周"""
+        A = max([dw('账号')] + [dw(acct(r)) for r in rows])
+        P = max([dw('套餐')] + [dw(r['plan']) for r in rows]) if show['plan'] else 0
+        return A, P, win_col(1, '5 小时', show['r5'])[1], win_col(2, '本周', show['r7'])[1]
+
+    def slack(A, P, F, K):
+        """这样排时一行剩下给备注的宽（可能是负数）"""
+        return W - (2 + A + (2 + P if P else 0) + 2 + F + 2 + K)
+    firsts = [dw(notes[0]) for _, five, _, notes in data if five and notes]   # 查到了的行的第一项备注
+    want = min(USAGE_NOTE_FLOOR, max(firsts)) + 2 if firsts else 0   # 备注那一列（连同前面的两格）想要的宽
+    for k, need in (('email', want), ('plan', want), ('r5', 0), ('r7', 0)):   # 重置时间只在数据都放不下时才收
+        if slack(*layout()) < need and (k != 'email' or any(r['alias'] and r['email'] for r in rows)):
+            show[k] = False
+    A, P, F, K = layout()
+    if slack(A, P, F, K) < 0:   # 还是放不下：账号那一列截短（最少 10 格），再不行整行截断
+        A = max(A + slack(A, P, F, K), 10)
+    left = slack(A, P, F, K) - 2
+    room = left if left >= 8 else 0   # 备注的宽；太窄就不写备注
+    head = [fit('账号', A)] + ([fit('套餐', P)] if P else []) + [fit(win_col(1, '5 小时', show['r5'])[0], F),
+                                                              fit(win_col(2, '本周', show['r7'])[0], K)]
+    noted = room and firsts
+    print(paint(fit(('  ' + '  '.join(head) + ('  备注' if noted else '')).rstrip(), W, pad=False), '2'))
+    lost = False
+    for r, five, week, notes in data:
         dim = '' if r['source'] == 'live' else '2'
-        cells = [(acct(r), dim), (r['plan'], dim), (five[0], five[1] or dim), (week[0], week[1] or dim)]
-        s = '  ' + '  '.join(paint(fit(text, cw[i]), code) for i, (text, code) in enumerate(cells))
-        ncode = '2' if dim else ''
-        if not note:
-            print(s.rstrip())
-        elif dw(note) <= room:
-            print(s + '  ' + paint(note, ncode))
-        else:
-            print(s.rstrip())
-            print(' ' * (4 + cw[0]) + paint(fit(note, max(width - 4 - cw[0], 20), pad=False), ncode))
-    for r in rows:   # Claude Code 记的套餐过时了：表格下面单独说一句（备注那一格放不下）
-        if r['outdated_login_plan']:
-            print(paint('  ! %s：%s' % (r['name'], login_plan_note(r['key'], r['outdated_login_plan'])), '33'))
+        cells = [(fit(acct(r), A), dim)] + ([(fit(r['plan'], P), dim)] if P else [])
+        if not five:   # 查不到：从 5 小时那一列起写原因
+            start = 2 + A + 2 + (P + 2 if P else 0)
+            print('  ' + '  '.join(paint(t, c) for t, c in cells) + '  ' + paint(fit(notes[0], max(W - start, 10), pad=False), '2'))
+            continue
+        for (pct, rt, code), width, on in ((five, F, show['r5']), (week, K, show['r7'])):
+            cells.append((fit('%s %s' % (pct, rt) if on and rt else pct, width), code or dim))
+        line = '  ' + '  '.join(paint(t, c) for t, c in cells)
+        note = fit_note(notes, room) if notes and room else ''
+        lost = lost or bool(notes and not room)
+        print(line + '  ' + paint(note, '2' if dim else '') if note else line.rstrip())
+    if lost:
+        print(paint(fit('  （终端太窄，备注没显示：拉宽一点，或者用 %s usage --json 看全部）' % T.cmd, W, pad=False), '2'))
+    for r in rows:   # Claude Code 记的套餐过时了：表格下面单独一行（太长就换短一点的说法，整行不超过终端的宽度）
+        old = r['outdated_login_plan']
+        if old:
+            fix = '%s login %s' % (T.cmd, r['name'])
+            says = ('  ! %s：%s' % (r['name'], login_plan_note(r['key'], old, r['plan'])),
+                    '  ! %s：%s 里记的套餐还是 %s，现在是 %s，重新登录：%s' % (r['name'], T.product, old, r['plan'], fix),
+                    '  ! 套餐过时（记的是 %s，现在是 %s）：%s' % (old, r['plan'], fix))
+            print(paint(fit(next((s for s in says if dw(s) <= W), says[-1]), W, pad=False), '33'))
     if api:
-        print(paint('  第三方 API 账号没有订阅用量，不查：%s' % '、'.join(name_of(k) for k in api), '2'))
+        print(paint(fit('  第三方 API 账号没有订阅用量，不查：%s' % '、'.join(name_of(k) for k in api), W, pad=False), '2'))
 
 
 def cmd_usage_render(tmp, mode, cols, color, *keys):
@@ -6476,7 +6673,7 @@ def cmd_presence_stop():
 def past_time(t, now):
     """过去的某个时刻（和 App 的 Texts.pastTime 一样）：今天的写几点，昨天的写“昨天 几点”，一周内写星期几，再早写日期"""
     lt, ln = time.localtime(t), time.localtime(now)
-    days = round((time.mktime(ln[:3] + (0, 0, 0, 0, 0, -1)) - time.mktime(lt[:3] + (0, 0, 0, 0, 0, -1))) / 86400)
+    days = day_gap(t, now)
     if days <= 0:
         return '%02d:%02d' % (lt.tm_hour, lt.tm_min)
     if days == 1:
@@ -6562,6 +6759,20 @@ def cmd_presence_note():
         print('设备统计：' + reason)
 
 
+def gui_api_key(c, k, v):
+    """_gui state 的 api_key（PROTOCOL 2.2）：存没存 key、掩码、在哪。照 config.json 里记的说（存的时候算好的掩码），不读钥匙串；
+    第三方 API 账号换了服务商（域名和存的时候不一样）算没存——启动时也取不到它"""
+    if is_api(v) and secret_ok(v.get('key')):
+        return {'saved': True, 'hint': key_hint(v['key']), 'source': 'table'}
+    aid, st = acct_id(k), T.state(c)
+    h = kc_hints(st).get(aid)
+    h = h if isinstance(h, dict) else {}
+    host, ref = kc_slot(v)
+    saved = aid in (st.get(kc_list(ref)) or []) and h.get('host', host) == host
+    hint = h.get('hint') if saved and h.get('host') == host and isinstance(h.get('hint'), str) else ''
+    return {'saved': saved, 'hint': hint if HINT_RE.match(hint) else '', 'source': 'keychain' if saved else ''}
+
+
 def gui_account(c, k, v, procs, badges, pm, env, now, cli):
     """_gui state 里的一个账号（T 是它的工具）；cli 是 cli_view 的结果"""
     a, e = parse_key(k)
@@ -6610,8 +6821,9 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
                         billing='web' not in why,   # 控制台的账单页和网页版走同一条路（cmd_web）
                         limit_resets=T is CLAUDE and 'web' not in why,   # claude.ai 的用量页，只有 Claude 账号有
                         policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm),
-                        devices=bool(env.get('presence') and not api and e and e.lower() in pm)),   # 账号页的「设备」（PROTOCOL 3.4）
-            'can_why': why,
+                        devices=bool(env.get('presence') and not api and e and e.lower() in pm),   # 账号页的「设备」（PROTOCOL 3.4）
+                        api_key=True),   # 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
+            'can_why': why, 'api_key': gui_api_key(c, k, v),
             'usage': usage, 'health': health_view(k, v, now)}
 
 
@@ -8091,6 +8303,7 @@ CMDS = {
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
+    'key-show': cmd_key_show,
     'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render, 'login-plan-forget': cmd_login_plan_forget,
     'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
@@ -9889,10 +10102,14 @@ api_key_ask() {   # api_key_ask 提示 [图形界面的页标题] [说明]：读
 	done
 }
 
-api_key_prompt() {   # api_key_prompt [图形界面的说明]：输入 key 存进钥匙串（需要先 eval "$(py env 名称)"）
-	local s
-	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：" "${ACC_NAME} 的 API key" "${1:-}") || { say "  已取消"; return 1; }
-	printf '%s' "$s" | py secret-set "$ACC_KEY" || return 1
+api_key_prompt() {   # api_key_prompt [图形界面的说明]：输入 key 存进钥匙串（需要先 eval "$(py env 名称)"）；官方账号的是记下备查的
+	local s title="${ACC_NAME} 的 API key"
+	[ "$ACC_KIND" = api ] || title="记录 ${ACC_NAME} 的 API key"
+	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：" "$title" "${1:-}") || { say "  已取消"; return 1; }
+	if ! printf '%s' "$s" | py secret-set "$ACC_KEY" 2>/dev/null; then   # key 已经检查过（api_key_ask），失败只会是钥匙串
+		fail_warn keychain_unavailable "API key 存进钥匙串失败（钥匙串被锁住了？）：解锁后再试一次"
+		return 1
+	fi
 	okay "已把 ${ACC_NAME} 的 API key 存进钥匙串"
 	gui_done key_saved "已把 ${ACC_NAME} 的 API key 存进钥匙串" "$ACC_KEY"
 }
@@ -9918,23 +10135,67 @@ api_keys_ensure() {   # cca edit 之后：手写进账号表、换了服务商�
 	done < <(py secrets-missing)
 }
 
-cmd_key() {   # cca [codex] key <账号>：重新输入第三方 API 账号的 key（存进钥匙串）
-	local key
-	key=$(py resolve "${1:-}") || die "用法: ${CMD} key <第三方 API 账号>"
-	need_tty
-	eval "$(py env "$key")"
-	if [ "$ACC_KIND" != api ]; then
-		case "$TOOL" in
-			codex) die "${ACC_NAME} 是官方账号：登录凭证由 Codex 自己管（要重新登录：${CMD} login ${ACC_NAME}）" ;;
-			*) die "${ACC_NAME} 是官方账号：登录凭证由 Claude Code 自己管（在 cca @${ACC_NAME} 里用 /login 重新登录）" ;;
+cmd_key() {   # cca [codex] key <账号> [--show | --forget]：第三方 API 账号重新输入 key；官方账号记一把 API key 备查（比如控制台里建的，
+              # cca 不拿它登录、启动）。--show 把 key 原样打到 stdout（App 的「显示」「复制」经管道读）；--forget 删掉官方账号记的 key
+	local a op="" name="" key
+	for a in "$@"; do
+		case "$a" in
+			--show|--forget) op=${a#--} ;;
+			*) [ -n "$name" ] || name=$a ;;
 		esac
-	fi
+	done
+	key=$(py resolve "$name") || FAIL_CODE=account_missing die "用法: ${CMD} key <账号> [--show | --forget]"
+	eval "$(py env "$key")"
+	case "$op" in
+		show) key_show ;;
+		forget) key_forget ;;
+		*) key_set ;;
+	esac
+}
+
+key_set() {   # cca key 账号（需要先 eval "$(py env 名称)"）
+	need_tty
 	local note=""
-	if [ "$(py secret-status "$ACC_KEY")" = table ]; then
+	if [ "$ACC_KIND" != api ]; then
+		note="只记在这台 Mac 的钥匙串里备查（比如在控制台里建的 key）：cca 不会拿它登录或启动这个账号"
+		[ -n "$PROMPT_GUI" ] || info "$note"
+	elif [ "$(py secret-status "$ACC_KEY")" = table ]; then
 		note="账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 ${CMD} edit"
 		warn "$note"
 	fi
 	api_key_prompt "$note"
+}
+
+key_show() {   # cca key 账号 --show：key 原样打到 stdout（不换行；终端里另起一行写到 stderr）。在 Claude Code 的会话里不给：会进对话记录
+	if [ -n "${CLAUDECODE:-}" ] && [ -z "${CCA_EVENTS:-}" ]; then
+		die "在 Claude Code 里不显示 API key（会进对话记录）：请在终端或 cca App 里看"
+	fi
+	py key-show "$ACC_KEY"
+	case $? in
+		0) [ ! -t 1 ] || echo >&2 ;;
+		3) FAIL_CODE=key_missing die "${ACC_NAME} 还没有存 API key（${CMD} key ${ACC_NAME} 存一个）" ;;
+		4) FAIL_CODE=keychain_unavailable die "读不了钥匙串（被锁住了？）：解锁后再试" ;;
+		*) die "没能读取 ${ACC_NAME} 的 API key" ;;
+	esac
+}
+
+key_forget() {   # cca key 账号 --forget：删掉官方账号记下备查的 API key（先问）；第三方 API 账号的 key 启动要用，不在这里删
+	[ "$ACC_KIND" != api ] || FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：它的 key 启动时要用，要换就用 ${CMD} key ${ACC_NAME}"
+	if [ "$(py secret-status "$ACC_KEY")" != ref ]; then
+		info "${ACC_NAME} 没有记下 API key"
+		gui_done key_forgotten "${ACC_NAME} 没有记下 API key" "$ACC_KEY"
+		return 0
+	fi
+	consent key_forget "$ACC_ID" "删除 ${ACC_NAME} 的 API key" "删除记下的这把 API key 吗？" \
+		"只删掉 cca 在这台 Mac 的钥匙串里记的这一份，控制台里的 key 本身不受影响。" n
+	case $? in
+		0) ;;
+		1) info "没有删除"; return 0 ;;
+		*) die "要先同意：在终端里运行 ${CMD} key ${ACC_NAME} --forget（会先问你）" ;;
+	esac
+	py secret-del "$ACC_KEY"
+	okay "已删除 ${ACC_NAME} 记下的 API key"
+	gui_done key_forgotten "已删除 ${ACC_NAME} 记下的 API key" "$ACC_KEY"
 }
 
 # 账号表、端口池有变化时要不要同步路由器：配置过路由器，或者有走端口的账号（只有直连的第三方 API 账号时不用）
@@ -10066,9 +10327,9 @@ codex_env() {   # 会话、记忆等数据库不靠链接共享：CODEX_SQLITE_H
 }
 pyenv() { env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "${PYRUN[@]}" "$@"; }   # 在账号的环境里跑 py（先 child_env）
 
-logout_account() {   # 需要先 eval "$(py env 名称)"；第三方 API 账号只删钥匙串里它的 key
-	if [ "$ACC_KIND" = api ]; then py secret-del "$ACC_KEY"; return 0; fi
-	tool logout
+logout_account() {   # 需要先 eval "$(py env 名称)"；官方账号退出登录；钥匙串里 cca 存的 key（第三方 API 账号的、官方账号记下备查的）都删掉
+	[ "$ACC_KIND" = api ] || tool logout
+	py secret-del "$ACC_KEY"
 	return 0
 }
 claude_logout() {
@@ -10179,13 +10440,14 @@ cmd_login() {   # cca [codex] login <账号>：退出这个账号现在的登录
 }
 
 cmd_rm() {
-	local key pid rc msg wt=""
+	local key pid rc msg wt="" refk=""
 	key=$(py resolve "${1:-}") || die "用法: ${CMD} rm <账号>"
 	need_tty
 	eval "$(py env "$key")"
 	pid=$(tool app_pid "$ACC_DESKTOP_DIR"); rc=$?
 	[ "$rc" -le 1 ] || die "无法查询 ${APP_LABEL} 进程，已停止删除；请稍后重试"
 	[ -z "$pid" ] || FAIL_CODE=app_running die "${ACC_LABEL} 的 ${APP_LABEL} 还开着：先退出它再删除"
+	[ "$ACC_KIND" = api ] || [ "$(py secret-status "$ACC_KEY")" != ref ] || refk="、记下的 API key"
 	if [ "$ACC_KIND" = api ]; then
 		msg="删除第三方 API 账号 ${ACC_LABEL}？（删除钥匙串里它的 key 和账号目录；共享的记忆/会话不受影响）"
 	elif [ "$TOOL" = codex ]; then
@@ -10193,9 +10455,9 @@ cmd_rm() {
 			wt="${ACC_HOME}/worktrees 里有这个账号建的 git 工作树，会一起删掉（还没提交的改动先处理好）"
 			warn "$wt"
 		fi
-		msg="删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证、浏览器资料和 ChatGPT App 资料；共享的记忆/会话不受影响）"
+		msg="删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证${refk}、浏览器资料和 ChatGPT App 资料；共享的记忆/会话不受影响）"
 	else
-		msg="删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）"
+		msg="删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证${refk}、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）"
 	fi
 	confirm "$msg" n q=rm.confirm "title=删除账号" "detail=$wt" severity=warn || return 0
 	py link "$key" >/dev/null 2>&1   # 先把会话里新产生的共享内容并回共享主目录（Codex 顺便把会话库里的路径改到 ~/.codex）
@@ -12606,7 +12868,8 @@ cmd_restore() {
 	gui_ours "$GUI_APP" && gui_running && running="${running:+${running}、}cca 的界面 App"
 	[ -z "$running" ] || die "这些账号的桌面 App 还开着：${running}。先退出它们再还原"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
-	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证（第三方 API 账号删掉钥匙串里的 key）"
+	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证"
+	say "  · 钥匙串里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理（用过的话）：停掉它的内核"
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
@@ -12623,7 +12886,7 @@ cmd_restore() {
 			logout_account
 			info "已退出账号 ${ACC_LABEL}"
 		done < <(py keys)
-		py secrets-forget all   # 账号表里已经没有、钥匙串里还留着的第三方 API key 也删掉
+		py secrets-forget all   # 账号表里已经没有、钥匙串里还留着的 key（第三方 API 账号的、官方账号记下备查的）也删掉
 		launchers_sync remove-all
 	done
 	use_tool claude
@@ -12677,7 +12940,8 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca add api                新增第三方 API 账号（兼容 Anthropic 接口的地址 + key，模型可选）：
                              直连或走节点；key 存进钥匙串，经 apiKeyHelper 交给 Claude Code
                              表里写法：{"别名": {"base_url": "…", "model": "…", "node": "", "env": {…}}}
-  cca key <账号>             重新输入第三方 API 账号的 key
+  cca key <账号>             第三方 API 账号：重新输入 key；官方账号：记一把 API key 备查（存进钥匙串，cca 不拿它启动）
+  cca key <账号> --show      把 key 打出来（App 里的「显示」「复制」）；--forget 删掉官方账号记的 key
   cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
   cca rename <账号> <新别名>  改别名（写 - 去掉别名，只留邮箱）：登录、资料、端口都不变，启动器跟着改名
   cca reorder <账号>…        按这个顺序排账号表（没写到的接在后面）：菜单、编号跟着变，端口、路由器都不动

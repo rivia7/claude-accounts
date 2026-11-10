@@ -76,7 +76,11 @@ struct MenuBarContent: View {
                 }
                 Spacer(minLength: 6)
                 if model.state?.routing?.sync == .pending, model.routerConfigured {
-                    Button(model.syncActivity == nil ? "同步" : "同步中…") { model.syncRouter() }
+                    Button {
+                        model.syncRouter()
+                    } label: {
+                        Label(model.syncActivity == nil ? "同步路由器" : "同步中…", systemImage: "wifi.router")
+                    }
                         .buttonStyle(.glass)
                         .controlSize(.small)
                         .disabled(model.syncActivity != nil)
@@ -103,11 +107,17 @@ struct MenuBarContent: View {
                 }
                 .disabled(!model.usageRefreshing.isEmpty || model.phase != .ready)
                 Spacer()
-                Button("打开主窗口") {
+                Button {
                     WindowOpener.shared.showMain()   // 平时在后台：这时才有 Dock 图标
+                } label: {
+                    Label("打开主窗口", systemImage: "macwindow")
                 }
-                Button("退出") { AppExit.quit() }
-                    .help("退出 cca：用量和出口不再自动更新，内置代理也会停")
+                Button {
+                    AppExit.quit()
+                } label: {
+                    Label("退出", systemImage: "power")
+                }
+                .help("退出 cca：用量和出口不再自动更新，内置代理也会停")
             }
             .buttonStyle(.borderless)
             .font(.callout)
@@ -146,7 +156,9 @@ struct MenuBarContent: View {
     }
 }
 
-/// 面板里的一行：和侧栏同一套（头像、名字、第二行、两行小用量），右边是【打开】；有问题时名字后面一个橙色的点。
+/// 面板里的一行：和侧栏同一套（头像、名字、第二行、两行小用量），右边是【打开】；有问题时名字后面一个橙色的点，
+/// 本周额度快重置了还剩不少时是沙漏（建议先用）。两样都有时照 Diagnosis 的先后：挡得住提醒的问题（没登录、登错号……）
+/// 本来就不会有沙漏，挡不住的（比如上次查用量超时，用的是缓存的数）让沙漏在前，和侧栏、总览一样。
 struct MenuRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -161,12 +173,14 @@ struct MenuRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(a.displayName).font(.callout.weight(.medium)).lineLimit(1)
-                    if let issue {
+                    if let issue, model.useFirst(for: a, now: Date().timeIntervalSince1970) == nil {
                         Image(systemName: "exclamationmark.circle.fill")
                             .font(.system(size: 10))
                             .foregroundStyle(.orange)
                             .help(issue)
                             .accessibilityLabel(issue)
+                    } else {
+                        UseFirstMark(account: a)
                     }
                 }
                 AccountSubtitle(account: a, expired: model.loginExpired(a))

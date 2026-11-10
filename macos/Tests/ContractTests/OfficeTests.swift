@@ -1,6 +1,7 @@
 import Foundation
 
-// 办公室（App 的首页）：套餐档位、命令行会话的解码，员工状态（Diagnosis → Employee）的优先级，点名，文字，演示数据的时间平移。
+// 办公室（App 的首页）：套餐档位、命令行会话的解码，员工状态（Diagnosis → Employee）的优先级，点名，文字，演示数据的时间平移；
+// 周结算提醒（use_first：cca 给区间，App 只拿当前时间比；Diagnosis 里只在没有挡路的问题时出现，排在最前）。
 
 private let now0 = 1794042000.0
 
@@ -16,16 +17,23 @@ private func acct(_ extra: [String: Any] = [:], tool: ToolID = .claude) -> Accou
     return Account.sample(d, tool: tool)
 }
 
-/// 用量：5 小时、本周的百分比和重置时间（nil 表示没有这个窗口）；outdated 是 Claude Code 记的过时的套餐（cca 的 outdated_login_plan）。
+/// 用量：5 小时、本周的百分比和重置时间（nil 表示没有这个窗口）；outdated 是 Claude Code 记的过时的套餐（cca 的 outdated_login_plan），
+/// error 是查询出错的代码，useFirst 是 cca 给的周结算提醒的区间（use_first）。
 private func usage(five: Double?, week: Double? = 10, stale: Bool = false, fiveResets: Double = now0 + 3600,
-                   weekResets: Double = now0 + 86400 * 3, opus: Double? = nil, outdated: Any? = nil) -> UsageEntry {
+                   weekResets: Double = now0 + 86400 * 3, opus: Double? = nil, outdated: Any? = nil,
+                   error: String? = nil, useFirst: Any? = nil) -> UsageEntry {
     var d: [String: Any] = ["key": "a@example.com", "source": "cache", "stale": stale]
     if let five { d["five_hour"] = ["utilization": five, "resets_epoch": fiveResets, "reset": false] }
     if let week { d["seven_day"] = ["utilization": week, "resets_epoch": weekResets, "reset": false] }
     if let opus { d["seven_day_opus"] = ["utilization": opus, "resets_epoch": weekResets, "reset": false] }
     if let outdated { d["outdated_login_plan"] = outdated }
+    if let error { d["error_code"] = error }
+    if let useFirst { d["use_first"] = useFirst }
     return try! JSONDecoder().decode(UsageEntry.self, from: JSONSerialization.data(withJSONObject: d))
 }
+
+/// 周结算提醒的区间：本周还剩 59%，一小时前进了区间，20 小时后重置
+private let useFirstWindow: [String: Any] = ["left_percent": 59, "from_epoch": now0 - 3600, "until_epoch": now0 + 20 * 3600]
 
 private func slot(_ state: String) -> LiveSlot {
     let d: [String: Any] = ["slot": 1, "group": "CCA-1", "port": 7901, "tool": "claude", "key": "a@example.com", "state": state]
@@ -142,8 +150,8 @@ func officeTests() async {
           && Texts.backTime(epoch: 1794297600, now: now0, calendar: sh) == "周二 16:00", Texts.backTime(epoch: 1794297600, now: now0, calendar: sh))
     check("几点恢复：时间过了", Texts.backAt(epoch: now0 - 1, now: now0) == "马上恢复")
     check("在忙什么", Texts.working(app: true, appLabel: "Claude App", sessions: 2, since: now0 - 720, now: now0)
-          == "Claude App 开着 · 命令行里 2 个会话，已 12 分钟"
-          && Texts.working(app: false, appLabel: "", sessions: 1, since: now0 - 10, now: now0) == "命令行里在用，刚开始"
+          == "Claude App 开着 · 终端里 2 个会话，已 12 分钟"
+          && Texts.working(app: false, appLabel: "", sessions: 1, since: now0 - 10, now: now0) == "终端里在用，刚开始"
           && Texts.working(app: true, appLabel: "ChatGPT App", sessions: 0, since: nil, now: now0) == "ChatGPT App 开着")
     let resting = Employee.make(acct(), usage: usage(five: 100, week: 20, fiveResets: 1794050010), live: nil, now: now0)
     check("工位下面那一行", Texts.mood(resting, appLabel: "Claude App", now: now0).hasPrefix("额度用完了，")
@@ -207,4 +215,70 @@ func officeTests() async {
                                                                                   onEvent: nil) {
         check("不平移：原样", r.stdout == fixture("state.json"))
     }
+}
+
+func useFirstTests() {
+    section("周结算提醒")
+    // 本周 41%、20 小时后重置；cca 给的区间默认是 useFirstWindow
+    func entry(five: Double = 10, stale: Bool = false, error: String? = nil, outdated: String? = nil,
+               useFirst: Any? = useFirstWindow) -> UsageEntry {
+        usage(five: five, week: 41, stale: stale, weekResets: now0 + 20 * 3600, outdated: outdated, error: error, useFirst: useFirst)
+    }
+    let f = UseFirst(leftPercent: 59, fromEpoch: now0 - 3600, untilEpoch: now0 + 20 * 3600)
+    check("use_first：解码", entry().useFirst == f)
+    check("use_first：null、缺字段、区间是空的都算没有", entry(useFirst: NSNull()).useFirst == nil
+          && entry(useFirst: ["left_percent": 59]).useFirst == nil
+          && entry(useFirst: ["left_percent": 59, "from_epoch": now0, "until_epoch": now0]).useFirst == nil)
+    check("use_first：整数、浮点数、写成字符串的数字都收",
+          entry(useFirst: ["left_percent": 59.0, "from_epoch": Int(now0), "until_epoch": "\(now0 + 10)"]).useFirst?.leftPercent == 59)
+    check("isActive：[from, until)", !f.isActive(now: f.fromEpoch - 1) && f.isActive(now: f.fromEpoch)
+          && f.isActive(now: f.untilEpoch - 1) && !f.isActive(now: f.untilEpoch))
+
+    check("健康的账号、在区间里：只有这一条建议", Diagnosis.all(acct(), usage: entry(), live: nil, now: now0) == [.useFirst(f)])
+    check("区间外（还没到重置前 24 小时、已经重置了）：没有",
+          Diagnosis.all(acct(), usage: entry(), live: nil, now: f.fromEpoch - 1).isEmpty
+          && Diagnosis.all(acct(), usage: entry(), live: nil, now: f.untilEpoch).isEmpty)
+    check("旧版 cca（没有 use_first）：和以前一样", Diagnosis.all(acct(), usage: entry(useFirst: nil), live: nil, now: now0).isEmpty)
+
+    // 挡路的：用不了、额度紧张、出口有风险的都不建议先用；其余的问题和没有 use_first 时一模一样
+    let blockers: [(String, Account, (Any?) -> UsageEntry, LiveSlot?)] = [
+        ("没登录", acct(["login": "logged_out"]), { entry(useFirst: $0) }, nil),
+        ("登错号", acct(["login": "email_mismatch"]), { entry(useFirst: $0) }, nil),
+        ("登录失效", acct(), { entry(error: "auth", useFirst: $0) }, nil),
+        ("端口连不上", acct(), { entry(useFirst: $0) }, slot("closed")),
+        ("节点选错", acct(), { entry(useFirst: $0) }, slot("drift")),
+        ("出口在不可用地区", acct(["health": health("restricted")]), { entry(useFirst: $0) }, nil),
+        ("纯净度偏低", acct(["health": health("low_purity")]), { entry(useFirst: $0) }, nil),
+        ("泄露风险", acct(["health": health("ok", dns: "leak")]), { entry(useFirst: $0) }, nil),
+        ("5 小时用完了", acct(), { entry(five: 100, useFirst: $0) }, nil),
+        ("5 小时快用完了", acct(), { entry(five: 92, useFirst: $0) }, nil),
+        ("5 小时快用完了（旧数据也算）", acct(), { entry(five: 92, stale: true, useFirst: $0) }, nil),
+    ]
+    for (name, a, u, l) in blockers {
+        let with = Diagnosis.all(a, usage: u(useFirstWindow), live: l, now: now0)
+        let without = Diagnosis.all(a, usage: u(nil), live: l, now: now0)
+        check("挡住建议：\(name)", !with.contains(.useFirst(f)) && with == without, "\(with)")
+    }
+    // 只是提示的（没检测过出口、没装 App、套餐过时）不挡：建议排在最前，提示跟在后面
+    check("没检测过出口：建议在前", Diagnosis.all(acct(["health": NSNull()]), usage: entry(), live: nil, now: now0) == [.useFirst(f), .neverChecked])
+    check("Claude Code 记的套餐过时了：建议在前", Diagnosis.all(acct(), usage: entry(outdated: "Pro"), live: nil, now: now0)
+          == [.useFirst(f), .outdatedLoginPlan("Pro")])
+    check("blocksUseFirst：建议本身不挡", !Diagnosis.useFirst(f).blocksUseFirst && Diagnosis.leak.blocksUseFirst && !Diagnosis.appMissing.blocksUseFirst)
+
+    // 总览：头条、小标记、点名都不变，多一个沙漏
+    let e = Employee.make(acct(), usage: entry(), live: nil, now: now0)
+    let e0 = Employee.make(acct(), usage: entry(useFirst: nil), live: nil, now: now0)
+    check("总览：头条、小标记都不变，卡片上多一个沙漏", e.mood == .idle && e.flags.isEmpty && e.useFirst == f && e0.useFirst == nil)
+    check("总览：点名不变（建议先用不算要处理）", OfficeCensus([e]) == OfficeCensus([e0]) && OfficeCensus([e]).needsAttention == 0)
+    let busy = Employee.make(acct(["app": ["running": true, "pid": 1]]), usage: entry(), live: nil, now: now0)
+    check("在用的账号也照样提示", busy.mood == .working && busy.useFirst == f)
+
+    var sh = Calendar(identifier: .gregorian)
+    sh.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    check("说法：明天几点重置", Texts.useFirst(f, now: now0, calendar: sh) == "本周额度还剩 59%，明天 13:00 重置，建议先用这个账号",
+          Texts.useFirst(f, now: now0, calendar: sh))
+    let today = UseFirst(leftPercent: 30, fromEpoch: now0 - 3600, untilEpoch: now0 + 4 * 3600)
+    check("说法：今天几点重置", Texts.useFirst(today, now: now0, calendar: sh) == "本周额度还剩 30%，今天 21:00 重置，建议先用这个账号",
+          Texts.useFirst(today, now: now0, calendar: sh))
+    check("读屏：卡片那一整句带上建议", Texts.deskLabel(e, appLabel: "Claude App", now: now0).contains("建议先用这个账号"))
 }

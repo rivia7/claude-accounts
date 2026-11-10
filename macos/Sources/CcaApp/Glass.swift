@@ -25,9 +25,141 @@ struct SectionHeader<Accessory: View>: View {
     }
 }
 
-extension SectionHeader where Accessory == EmptyView {
-    init(_ title: String) {
-        self.init(title) { EmptyView() }
+// 按钮的样子只有几种（写进 macos/README.md「界面的规矩」）：
+// - 一节标题上的操作（刷新用量、检测出口、显示细节）用 SectionAction；一行信息右边的操作（重新登录…、在控制台查看、复制）用
+//   RowAction。两种一个样子：玻璃、图标加文字、常规大小，右边和标题上的按钮对齐；行里的按钮一样宽、左边也对齐。
+// - 打开网页的（在账号自己的浏览器里）图标是 ↗（RowAction.web）。
+// - 提示条里的按钮小一号（Banner 设的）：解决问题的那个 .borderedProminent，其余 .bordered。
+
+/// 行里按钮的标签至少这么宽：同一节里上下几个按钮一样宽（最长的「在 claude.ai 查看」也放得下；更长的只会让它自己变宽）。
+enum RowMetrics {
+    static let actionLabelWidth: CGFloat = 124
+}
+
+/// 一节标题上的操作：玻璃按钮、图标加文字、常规大小。
+struct SectionAction: View {
+    let title: String
+    let systemImage: String
+    var prominent = false
+    let action: () -> Void
+
+    init(_ title: String, systemImage: String, prominent: Bool = false, action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
+        self.prominent = prominent
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) { Label(title, systemImage: systemImage) }
+            .glassButton(prominent: prominent)
+            .controlSize(.regular)
+    }
+}
+
+extension View {
+    /// 主按钮用 .glassProminent，其它 .glass。
+    @ViewBuilder
+    func glassButton(prominent: Bool) -> some View {
+        if prominent {
+            self.buttonStyle(.glassProminent)
+        } else {
+            self.buttonStyle(.glass)
+        }
+    }
+}
+
+/// 一行信息右边的操作：和 SectionAction 一个样子，标签有最小宽度（同一节里的几个一样宽）。
+struct RowAction: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    init(_ title: String, systemImage: String, action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
+        self.action = action
+    }
+
+    /// 在账号自己的浏览器里打开一个网页（图标是 ↗）
+    static func web(_ title: String, action: @escaping () -> Void) -> RowAction {
+        RowAction(title, systemImage: "arrow.up.right.square", action: action)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(minWidth: RowMetrics.actionLabelWidth)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.regular)
+    }
+}
+
+/// 一行信息：左边图标和说明（太长会折行），中间可以放一个值，右边是这一行的操作（RowAction）。
+/// 不缩进：左边和额度砖、右边和标题上的按钮对齐。
+struct InfoRow<Value: View, Actions: View>: View {
+    let title: Text
+    let systemImage: String
+    var tint: Color?
+    let value: Value
+    let actions: Actions
+
+    init(_ title: Text, systemImage: String, tint: Color? = nil, @ViewBuilder value: () -> Value, @ViewBuilder actions: () -> Actions) {
+        self.title = title
+        self.systemImage = systemImage
+        self.tint = tint
+        self.value = value()
+        self.actions = actions()
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Label {
+                title.foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: systemImage).foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
+            }
+            .labelStyle(FixedIconLabelStyle(iconWidth: 20, spacing: 8))
+            Spacer(minLength: 8)
+            value
+            GlassRow { actions }
+        }
+        .font(.callout)
+        .frame(minHeight: 28)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension InfoRow where Value == EmptyView {
+    init(_ title: Text, systemImage: String, tint: Color? = nil, @ViewBuilder actions: () -> Actions) {
+        self.init(title, systemImage: systemImage, tint: tint, value: { EmptyView() }, actions: actions)
+    }
+}
+
+/// 图标占固定的宽度、文字左边对齐（SF Symbols 各个宽度不一样，上下几行的文字会对不齐）。
+struct FixedIconLabelStyle: LabelStyle {
+    var iconWidth: CGFloat
+    var spacing: CGFloat = 8
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: spacing) {
+            configuration.icon.frame(width: iconWidth)
+            configuration.title
+        }
+    }
+}
+
+/// 「显示细节」开关（账号页的网络出口、分流页共用一个设置）：样子和标题上的别的按钮一样。
+struct DetailsToggle: View {
+    @Environment(Guide.self) private var guide
+    let help: String
+
+    var body: some View {
+        SectionAction(guide.showDetails ? "收起细节" : "显示细节", systemImage: "list.bullet.below.rectangle") {
+            withAnimation(.snappy) { guide.toggleDetails() }
+        }
+        .help(help)
     }
 }
 
@@ -113,27 +245,34 @@ struct SectionColumns: Layout {
     }
 }
 
-/// 引导页的卡片（实的色块）。
-struct Card<Content: View>: View {
+/// 卡片（实的色块）：引导页、客户端更新页。图标占固定的宽度，几张卡片的标题左边对齐。
+struct Card<Icon: View, Content: View>: View {
     let title: String
-    let systemImage: String
+    let icon: Icon
     let content: Content
 
-    init(_ title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+    init(_ title: String, @ViewBuilder icon: () -> Icon, @ViewBuilder content: () -> Content) {
         self.title = title
-        self.systemImage = systemImage
+        self.icon = icon()
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label(title, systemImage: systemImage)
+            Label { Text(title) } icon: { icon }
+                .labelStyle(FixedIconLabelStyle(iconWidth: 26, spacing: 10))
                 .font(.title3.weight(.semibold))
             content
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Surface.tile))
+    }
+}
+
+extension Card where Icon == Image {
+    init(_ title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+        self.init(title, icon: { Image(systemName: systemImage) }, content: content)
     }
 }
 

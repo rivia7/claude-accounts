@@ -129,52 +129,53 @@ struct TutorialCard {
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
             ("person.2", "同时管好几个 Claude、ChatGPT 账号：总览里一眼看全，左边按工具分开列出。"),
-            ("point.3.connected.trianglepath.dotted", "每个账号分别配置登录资料和网络出口，启动前检查是否冲突。"),
+            ("point.3.connected.trianglepath.dotted", "每个账号有自己的登录资料和网络出口，启动前 cca 会先检查。"),
             ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
         ], art: .fan),
         TutorialCard(title: "总览：哪个在用，哪个额度用完了", points: [
             ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
-            ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者命令行里有会话）。"),
+            ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者终端里有会话）。"),
             ("moon.zzz", "趴在桌上是额度用完了，屏幕上写着几点恢复；椅子空着是没登录，坐着灰色的人是登录的不是这个账号。"),
             ("sparkle", "套餐看徽章前面的小记号：灰圈、蓝点、紫色菱形，最高档（Ultra、Pro 500）是彩色的四角星。点一张卡片就进这个账号的页面。"),
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
             ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
-            ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者命令行里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
+            ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者终端里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名、置顶、重新登录。上下拖动可以调整顺序。"),
         ], art: .sidebar),
         TutorialCard(title: "打开一个账号", points: [
             ("macwindow", "点「打开 Claude App」：用这个账号自己的出口和资料打开。"),
             ("safari", "点「网页版」：在账号专属 Chrome 资料里打开；未安装 Chrome 时会停止打开。"),
-            ("terminal", "点「终端」：在你选的文件夹里启动这个账号的命令行，下次记得是哪个文件夹；按钮的下拉里换文件夹、换用哪个终端。"),
+            ("terminal", "点「终端」：在选好的文件夹里用这个账号开一个会话，下次还用这个文件夹；右边的箭头可以换文件夹、换终端。"),
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
             ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两块额度；Claude 的 Fable 另有每周额度，也是单独一块。"),
             ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
-            ("arrow.counterclockwise", "ChatGPT 账号还有重置机会时，点「重置额度…」能把用量清零（会先问你）。"),
+            ("hourglass", "本周额度快重置了、还剩不少的账号，名字旁边有个沙漏：建议先用它，别浪费。"),
+            ("arrow.counterclockwise", "ChatGPT 账号还有重置次数时，点「重置额度…」能把用量清零（会先问你）。"),
             ("arrow.clockwise", "点「刷新用量」，经这个账号的出口查一次最新的。"),
         ], art: .quota),
         TutorialCard(title: "看网络出口", points: [
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
-            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：查看出口位置、纯净度和 DNS / WebRTC 泄露风险。之后后台会定时再测，在用的账号测得勤一些。"),
+            ("checkmark.shield", "第一次用某个账号，先点「检测出口」：看看出口在哪、纯净度怎么样、DNS / WebRTC 有没有泄露风险。之后会在后台定时重测。"),
             ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
         ], art: .route),
         TutorialCard(title: "节点分流", points: [
             ("wifi.router", "「节点分流」页画出每个账号经路由器连到哪个节点。"),
-            ("line.diagonal", "实线是正常的；虚线说明选错了节点或者连不上。"),
+            ("line.diagonal", "实线是正常的；虚线说明节点选错了，或者端口连不上。"),
             ("arrow.triangle.2.circlepath", "有问题时点「同步路由器」就能修好（要重载路由器时会先问你）。"),
         ], art: .map),
         TutorialCard(title: "改别名、换外观", points: [
             ("pencil", "直接点账号页上的名字就能改别名：回车保存，Esc 取消。"),
             ("circle.lefthalf.filled", "左下角的按钮切换浅色、深色，或者跟随系统。"),
-            ("plus", "添加账号：点左边账号列表上的「＋」；配置路由器：点工具栏的「＋」，按提示完成。"),
+            ("plus", "添加账号：点左边账号列表上的「＋」；配置路由器、本机 Clash：点工具栏的「＋」，按提示完成。"),
         ], art: .rename),
         TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。关掉主窗口后 cca 还在后台运行，要彻底退出点这里面的「退出」。"),
             ("arrow.down.circle", "cca 有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查 cca 更新。"),
-            ("arrow.down.app", "桌面客户端和终端里的 Claude Code、Codex 的更新在左侧「客户端更新」页：自动检查，由你确认后安装。"),
+            ("arrow.down.app", "桌面 App 和终端里的 Claude Code、Codex 的更新在左侧「客户端更新」页：自动检查，你确认后才安装。"),
             ("book", "想再看一遍这个教程：点左下角的「新手教程」或工具栏的问号；「帮助」菜单里还有每个版本的更新说明。"),
         ], art: .menubar),
     ]
@@ -766,7 +767,8 @@ struct TipCard: View {
 
 /// 给新手的一句话：这个账号现在能不能用、下一步点哪个按钮。只按 cca 给的状态说话，不重算 cca 的规则；最要紧的一条排最前。
 struct Advice {
-    enum Level { case ok, info, warn, bad }
+    /// suggest：建议（周结算提醒），不是问题
+    enum Level { case ok, suggest, info, warn, bad }
 
     let level: Level
     let text: String
@@ -777,17 +779,19 @@ struct Advice {
             return Advice(level: .ok, text: a.isAPI ? "一切正常。" : "一切正常，可以打开使用。")
         }
         switch d {
+        case .useFirst(let f):
+            return Advice(level: .suggest, text: Texts.useFirst(f, now: now) + "。")
         case .loggedOut:
             return Advice(level: .warn, text: "还没登录这个账号：点「登录…」，在终端里按提示登录。")
         case .emailMismatch(let email):
             let who = email.map { "（现在登录的是 \($0)）" } ?? ""
             return Advice(level: .warn, text: "登录的不是这个账号\(who)：点「重新登录…」换回来。")
         case .loginExpired:
-            return Advice(level: .warn, text: "这个账号的登录已失效（比如改过密码）：点「重新登录…」，在终端里按提示登录。")
+            return Advice(level: .warn, text: "登录已失效（比如改过密码）：点「重新登录…」，在终端里按提示登录。")
         case .appMissing:
             return Advice(level: .info, text: "这台 Mac 上没装 \(appLabel)：可以先用「网页版」。")
         case .portClosed:
-            return Advice(level: .bad, text: "这个账号在路由器上的端口连不上：先点「同步路由器」，还不行就看看路由器。")
+            return Advice(level: .bad, text: "这个账号的端口连不上：先点「同步路由器」，还不行就检查一下路由器。")
         case .portDrift:
             return Advice(level: .warn, text: "路由器给这个账号选错了节点：点「同步路由器」就能修好。")
         case .exitBad(let r, let region):
@@ -805,12 +809,12 @@ struct Advice {
         case .outdatedLoginPlan(let old):
             return Advice(level: .info, text: Texts.outdatedLoginPlan(old, current: a.plan) + "：点用量下面的「重新登录…」更新一次。")
         case .lowPurity:
-            return Advice(level: .warn, text: "出口 IP 的纯净度低于设定，用的时候注意风险。")
+            return Advice(level: .warn, text: "出口 IP 的纯净度偏低，用的时候注意风险。")
         case .leak:
-            return Advice(level: .warn, text: "DNS 或 WebRTC 探针发现泄露风险，详见下面的网络出口。")
+            return Advice(level: .warn, text: "DNS 或 WebRTC 可能泄露，详情看下面的网络出口。")
         case .neverChecked:
-            return Advice(level: .info, text: a.isAPI ? "第一次用这个接口？点「检测出口」看看连不连得上。"
-                          : "第一次用这个账号？先点「检测出口」，看看出口在哪、干不干净。")
+            return Advice(level: .info, text: a.isAPI ? "第一次用这个接口？点「检测连接」看看连不连得上。"
+                          : "第一次用这个账号？先点「检测出口」，看看出口在哪、纯净度怎么样。")
         }
     }
 }
@@ -823,6 +827,7 @@ struct AdviceLine: View {
         let (icon, color): (String, Color) = {
             switch advice.level {
             case .ok: return ("checkmark.circle.fill", .green)
+            case .suggest: return ("hourglass.circle.fill", .accentColor)
             case .info: return ("info.circle.fill", .accentColor)
             case .warn: return ("exclamationmark.circle.fill", .orange)
             case .bad: return ("xmark.octagon.fill", .red)

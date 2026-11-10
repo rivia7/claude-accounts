@@ -12,6 +12,8 @@ if fullMode {
     await gateTests()
     textTests()
     await officeTests()
+    useFirstTests()
+    await apiKeyTests()
     environmentTests()
     locatorTests()
     eventTailTests()

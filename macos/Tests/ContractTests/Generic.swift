@@ -35,6 +35,15 @@ func usageEntryInvariants(_ n: String, _ ru: [String: Any], _ u: UsageEntry?) {
     if let p = ru["outdated_login_plan"], !isNull(p) {
         check("\(n) outdated_login_plan 不是 null 时是不为空的文字", (p as? String).map { !$0.isEmpty } == true, "\(p)")
     }
+    if let f = ru["use_first"], !isNull(f) {
+        // 周结算提醒：区间到本周的重置时间为止，还剩至少 20%（规则在 cca：24 小时、20%）
+        check("\(n) use_first 解码", u.useFirst != nil, "\(f)")
+        if let uf = u.useFirst {
+            check("\(n) use_first 区间到本周的重置时间为止", uf.fromEpoch < uf.untilEpoch && uf.untilEpoch == u.sevenDay?.resetsEpoch,
+                  "\(uf) \(String(describing: u.sevenDay?.resetsEpoch))")
+            check("\(n) use_first 还剩至少 20%", (20...100).contains(uf.leftPercent), "\(uf.leftPercent)")
+        }
+    }
     if u.source == .none {
         check("\(n) source none 没有窗口", u.fiveHour == nil && u.sevenDay == nil)
     }
@@ -72,6 +81,17 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
     }
     if let can = ra["can"] as? [String: Any], can["limit_resets"] != nil {
         check("\(n) 用量页只有 Claude 账号有，其余条件和网页版一样", a.can.limitResets == (t.id == .claude && a.can.web))
+    }
+    if let raw = ra["api_key"], !isNull(raw) {
+        // API key 只给掩码：前缀（最多 8 个字符）+ … + 最后 4 个字符，短的 key 没有掩码；没存的掩码、来源都是空的
+        let k = a.apiKey
+        check("\(n) api_key 解码", k != nil, "\(raw)")
+        if let k {
+            check("\(n) api_key 的掩码不是 key", k.hint.isEmpty || k.hint.range(of: "^[!-~]{0,8}…[!-~]{4}$", options: .regularExpression) != nil, k.hint)
+            check("\(n) 没存的 api_key 没有掩码和来源", k.saved || (k.hint.isEmpty && k.source == .none))
+            check("\(n) api_key 的来源认得", k.source.isKnown, k.source.rawValue)
+            check("\(n) 账号表里写的 key 只有第三方 API 账号有", k.source != .table || a.kind == .api)
+        }
     }
     if a.kind == .api {
         check("\(n) API 账号 login 为 api", a.login == .api, a.login.rawValue)
@@ -478,8 +498,8 @@ func futureEnums(_ x: Any, depth: Int = 0) -> Any {
 /// 类型不对的字段：数字字段给字符串，布尔字段给字符串，字符串字段给数字。
 func wrongTypes(_ x: Any) -> Any {
     let numeric: Set<String> = ["port", "pid", "trust", "age_seconds", "utilization", "min_trust", "ssh_port", "availableCount",
-                                "sessions", "since_epoch", "last_used_epoch", "seen_epoch"]
-    let boolean: Set<String> = ["stale", "pinned", "is_last", "running", "applies", "reset", "reachable", "hook", "cron", "listening"]
+                                "sessions", "since_epoch", "last_used_epoch", "seen_epoch", "left_percent", "from_epoch", "until_epoch"]
+    let boolean: Set<String> = ["stale", "pinned", "is_last", "running", "applies", "reset", "reachable", "hook", "cron", "listening", "saved"]
     let text: Set<String> = ["plan", "plan_tier", "label", "message", "org", "trust_label", "balance", "error", "local_node", "selected"]
     if var d = x as? [String: Any] {
         for (k, v) in d {

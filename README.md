@@ -65,13 +65,14 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 | 选账号，启动 Claude Code | `cca` |
 | 直接用某个账号启动 | `cca @工作`（写别名、邮箱或开头几个字都行） |
 | 打开某个账号的网页版 | `cca web 工作` |
-| 看某个账号的每月 API 额度和余额 | `cca billing 工作`（ChatGPT 账号：`cca codex billing 工作`。在这个账号的浏览器里打开控制台的账单页，第一次要登录控制台，邮箱已经复制好、粘贴即可；cca App：账号页“用量”下面的「查看 API 额度」） |
-| 看 Claude 账号的重置次数和到期日 | `cca limit-resets 工作`（在这个账号的浏览器里打开 claude.ai 的用量页，邮箱同样复制好；cca App：账号页“用量”下面的「查看重置次数」） |
+| 看某个账号的每月 API 额度和余额 | `cca billing 工作`（ChatGPT 账号：`cca codex billing 工作`。在这个账号的浏览器里打开控制台的账单页，第一次要登录控制台，邮箱已经复制好、粘贴即可；cca App：账号页“用量”里「订阅附带的每月 API 额度」那一行的「在控制台查看」） |
+| 看 Claude 账号的重置次数和到期日 | `cca limit-resets 工作`（在这个账号的浏览器里打开 claude.ai 的用量页，邮箱同样复制好；cca App：账号页“用量”里「重置次数和到期日」那一行的「在 claude.ai 查看」） |
 | 打开某个账号的 Claude App（桌面版） | `cca app 工作`，或者在启动台、聚焦搜索里点「Claude 工作」 |
 | 添加账号 | `cca add`，或者在菜单里选"＋ 添加新账号" |
 | 添加第三方 API 账号 | `cca add api`，或者在菜单里选"＋ 添加第三方 API 账号" |
 | 查看各账号的用量 | `cca usage`（只看一个：`cca usage 工作`；给脚本用：`cca usage --json`） |
 | 换第三方 API 账号的 key | `cca key kimi` |
+| 给官方账号记一把 API key 备查 | `cca key 工作`（只存进钥匙串，cca 不拿它启动；`--show` 打出来，`--forget` 删掉） |
 | 查看所有账号 | `cca ls` |
 | 改别名 | `cca rename 账号 新别名`（写 `-` 去掉别名；登录、资料、端口都不变；cca App 里点名字旁边的笔） |
 | 换节点（也能改别名） | `cca edit` |
@@ -203,19 +204,20 @@ cca usage
 ```
 
 ```text
-  账号                     套餐  5 小时                    本周                   备注
-  工作  bob@example.com    Max    13%  2 小时 13 分后重置   41%  周四 09:00 重置
-  个人  alice@example.com  Pro    98%  25 分钟后重置        72%  周六 02:30 重置  Sonnet 本周 60%
+  账号                     套餐  5 小时/重置       本周/重置        备注
+  工作  bob@example.com    Max    13% 2小时13分后   41% 周四 09:00
+  个人  alice@example.com  Pro    98% 25分钟后      72% 明天 02:30  Sonnet 本周 60%
 ```
 
 - 每个官方账号经它**自己的出口**查询，和在 Claude Code 里打开 `/usage` 看到的一样：5 小时额度、本周额度，以及按模型单独计的每周额度。几个账号一起查，一般几秒钟。
+- 一个账号一行，整行不超过终端的宽度：终端窄了先收起有别名的账号的邮箱，再收起套餐，最后收起重置时间；备注放不下的项写成 `…`（`--json` 里什么都有）。
 - 「账号」一列和菜单一样写别名和邮箱，没起别名的只写邮箱。
 - 套餐的叫法和官网一样：Pro、Max（原来的 Max 5x）、Ultra（原来的 Max 20x）、Team、Team Premium（Team 的 Premium 席位）、Enterprise。新版 Claude Code 在账号里记了官方给的套餐名时，直接照它写。
 - 升级、降级套餐以后，Claude Code 里显示的套餐（启动时的横幅、`/status`）可能还是旧的：它只在登录时记下套餐，之后不会自己更新（额度照实际的套餐算，不受影响）。`cca usage` 查到这种情况会在表格下面说一句，启动这个账号时的横幅、App 的账号页也会提示；重新登录一次（`cca login 工作`）就好。
 - 查询由 Claude Code 自己完成（cca 让它以账号的配置无界面地查一下，不加载插件、hooks、MCP），**不发消息、不耗额度**，cca 也不碰登录凭证。
-- 查之前同样会确认出口：端口不通、出口跑到了受限地区的账号不去查。查不到时显示上次查到的数据，并注明是多久前的。
+- 查之前同样会确认出口：端口不通、出口跑到了受限地区的账号不去查。查不到时显示上次查到的数据，备注里先写原因，再注明是多久前的。
 - 菜单和 `cca ls` 里每个账号后面也会附上最近一次的用量（只读缓存，不联网，不拖慢菜单）。
-- `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）和 `error_code`（同一个原因的代码：`login`、`port`、`timeout`……）、`fetched_at` / `fetched_epoch`、`stale`（超过 10 分钟），以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "resets_epoch": 重置时间（Unix 秒）, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`，和 `outdated_login_plan`（Claude Code 记的套餐过时了时是它记的那个，比如 `"Pro"`，否则为 null）。所有账号都没有数据时退出码是 1。完整格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
+- `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）和 `error_code`（同一个原因的代码：`login`、`port`、`timeout`……）、`fetched_at` / `fetched_epoch`、`stale`（超过 10 分钟），以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "resets_epoch": 重置时间（Unix 秒）, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`，`outdated_login_plan`（Claude Code 记的套餐过时了时是它记的那个，比如 `"Pro"`，否则为 null），和 `use_first`（本周额度快重置了、还剩至少 20% 时，建议先用这个账号的时间段：`left_percent`、`from_epoch`、`until_epoch`；cca App 在这段时间里提示，终端里不提示）。所有账号都没有数据时退出码是 1。完整格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 这个查询用的是 Claude Code 标为实验性的接口；以后的 Claude Code 版本如果改了，cca 会提示这个版本的 Claude Code 查不了用量，不会影响启动账号。
 
 ## 第三方 API 账号
@@ -302,6 +304,8 @@ cca gui
 - 左边是 Claude、ChatGPT（Codex）两组账号，每个账号显示套餐、登录状态、5 小时和本周用量；
 - 选中一个账号：用量的明细和重置时间、走哪个节点和端口、路由器上这个槽位现在选中的节点、上次检测到的出口（IP、地区、纯净度、DNS / WebRTC 泄露）；
 - 一键打开这个账号的 Claude App / ChatGPT App、网页版，检测出口，刷新用量；
+- 本周额度快重置了、还剩不少的账号，名字旁边有个沙漏，提醒你先用它，别浪费；
+- 账号的 API key（第三方 API 账号的，或者给官方账号记下备查的）：默认只显示掩码，点眼睛看全文，一键复制（剪贴板标成机密，60 秒后自动清掉）；
 - 「节点分流」一页列出端口池每个槽位：应选的节点、路由器（在外面是本机 Clash Verge）上实际选中的、端口通不通，不一致时一键同步路由器；
 - 菜单栏图标里是精简的账号列表和用量，点一下就能打开账号的 App。
 
@@ -403,7 +407,7 @@ cca clients mode auto              # 恢复每日自动检查和准备
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（第三方 API 账号删除钥匙串里的 key）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key 也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
@@ -431,7 +435,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 升级时，旧版指向共享主目录的未知条目链接会拆成账号自己的副本，源文件保留；用户自建的外部链接不动。旧共享目录若含内部符号链接，自动拆分会停止并指出路径，避免追随外部目录或循环链接。已有设备 ID 不因这项迁移重置。共享与续接会保留共同上下文，因此客户端标识独立并不意味着服务端无法关联账号。
 
 **第三方 API 的 key 存在哪？**
-默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
+默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。给官方账号记下备查的 key（`cca key 工作`）也存在钥匙串里（条目名 `cca-ref-…`，Codex 的是 `cca-codex-ref-…`），cca 绝不拿它登录或启动账号，同样随 `cca rm`、`cca restore` 删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
 
 **cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
 能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、写参考节点前留的 Clash Verge 配置备份（`backup/clash-verge-*.yaml`）、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。

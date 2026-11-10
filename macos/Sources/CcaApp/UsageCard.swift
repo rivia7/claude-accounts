@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 用量：大块的额度（5 小时、本周，还有分模型的每周额度，例如 Claude 的 Fable），下面是旧的分模型额度、Codex 的 credits，
-/// ChatGPT 账号还能重置几次（旁边是「重置额度…」）。标题右边是数据从哪来（刚查询 / 缓存、多久以前）和“刷新用量”。
-/// 和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
+/// 用量：大块的额度（5 小时、本周，还有分模型的每周额度，例如 Claude 的 Fable），下面是旧的分模型额度、Codex 的 credits；
+/// 再下面是一行一行的信息（InfoRow，右边是这一行的操作）：ChatGPT 账号还能重置几次（「重置额度…」）、查用量出的错、
+/// Claude Code 记的套餐过时了（「重新登录…」）、只能在网页上看的重置次数和每月 API 额度、API key。
+/// 标题右边是数据从哪来（刚查询 / 缓存、多久以前）和「刷新用量」。和时间有关的文字放在 TimelineView 里，每 30 秒重算一次。
 struct UsageSection: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -16,21 +17,21 @@ struct UsageSection: View {
                 refreshButton
             }
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                content(now: context.date.timeIntervalSince1970)
+                let now = context.date.timeIntervalSince1970
+                VStack(alignment: .leading, spacing: 12) {
+                    content(now: now)
+                    infoRows(now: now)
+                }
             }
-            WebOnlyRows(account: account)
         }
     }
 
     private var refreshButton: some View {
         let a = account
         let refreshing = model.isUsageRefreshing(a.ref)
-        return Button {
+        return SectionAction(refreshing ? "刷新中…" : "刷新用量", systemImage: "arrow.clockwise") {
             model.refreshUsage(tool: a.tool, key: a.key, manual: true)
-        } label: {
-            Label(refreshing ? "刷新中…" : "刷新用量", systemImage: "arrow.clockwise")
         }
-        .buttonStyle(.glass)
         .disabled(!a.can.usage || refreshing)
         .help(reason ?? "经这个账号的出口查一次用量")
     }
@@ -87,71 +88,66 @@ struct UsageSection: View {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 28), GridItem(.flexible())], alignment: .leading, spacing: 10) {
                         ForEach(minor) { $0 }
                     }
-                    .padding(.horizontal, 4)
-                }
-                if let rc = u.resetCredits, rc.availableCount != nil {
-                    ResetCreditsRow(account: account, credits: rc, now: now)
-                        .padding(.horizontal, 4)
-                }
-                if let code = u.errorCode {
-                    HStack(spacing: 8) {
-                        Label(nonEmpty(u.error) ?? Texts.usageError(code), systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .symbolRenderingMode(.multicolor)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        reloginLink(u)
-                    }
-                }
-                if let old = u.outdatedLoginPlan {
-                    outdatedPlanRow(old)
                 }
             }
         } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(emptyReason).foregroundStyle(.secondary)
-                if let u = model.usage(for: account), let e = nonEmpty(u.error) {
-                    HStack(spacing: 8) {
-                        Label(e, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
-                            .symbolRenderingMode(.multicolor)
-                            .textSelection(.enabled)
-                        reloginLink(u)
+            Text(emptyReason)
+                .foregroundStyle(.secondary)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
+        }
+    }
+
+    /// 额度下面一行一行的信息（InfoRow）：右边的操作一样大、一样宽，右边和「刷新用量」对齐。没登录也显示只能在网页上看的、API key。
+    @ViewBuilder
+    private func infoRows(now: Double) -> some View {
+        let a = account
+        let u = model.usage(for: a)
+        let busy = model.activity(a.ref) != nil
+        VStack(alignment: .leading, spacing: 8) {
+            if let u, u.source != .none, let rc = u.resetCredits, rc.availableCount != nil {
+                ResetCreditsRow(account: a, credits: rc, now: now)
+            }
+            if let u, let error = nonEmpty(u.error) ?? u.errorCode.map(Texts.usageError) {
+                // 查到的结果里没有用量：Claude 登录失效时只会这样（分不清是不是别的原因），放个重新登录的入口；
+                // 确定失效了的（auth）名字旁边的主按钮已经是重新登录了
+                InfoRow(Text(error), systemImage: "exclamationmark.triangle.fill", tint: .orange) {
+                    if u.errorCode == .nolimits, !a.isAPI {
+                        reloginButton(busy: busy)
                     }
                 }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
+            if let u, u.source != .none, let old = u.outdatedLoginPlan {
+                InfoRow(Text(Texts.outdatedLoginPlan(old, current: a.plan)), systemImage: "info.circle") {
+                    reloginButton(busy: busy)
+                        .help("Claude Code 只在登录时记下套餐，升降级后不会自己更新（额度照实际套餐算）。"
+                              + "点了会在终端里运行 \(model.loginHandoff(a).display)：先退出现在的登录，再重新登录")
+                }
+            }
+            if a.can.limitResets {
+                InfoRow(Text("重置次数和到期日"), systemImage: "ticket") {
+                    RowAction.web("在 claude.ai 查看") { model.openLimitResets(a.ref) }
+                        .disabled(busy)
+                        .help("用这个账号自己的浏览器和出口打开 claude.ai 的用量页；要登录时邮箱已复制好，直接粘贴")
+                }
+            }
+            if a.can.billing {
+                InfoRow(Text("订阅附带的每月 API 额度"), systemImage: "creditcard") {
+                    RowAction.web("在控制台查看") { model.openBilling(a.ref) }
+                        .disabled(busy)
+                        .help("用这个账号自己的浏览器和出口打开控制台的账单页；要登录时邮箱已复制好，直接粘贴")
+                }
+            }
+            if a.can.apiKey {
+                APIKeyRow(account: a).id(a.ref)
+            }
         }
     }
 
-    /// 查到的结果里没有用量：Claude 登录失效时只会这样（分不清是不是别的原因），放个重新登录的入口；
-    /// 确定失效了的（`auth`）名字旁边的主按钮已经是重新登录了。
-    @ViewBuilder
-    private func reloginLink(_ u: UsageEntry) -> some View {
-        if u.errorCode == .nolimits, !account.isAPI {
-            Button("重新登录…") { model.relogin(account) }
-                .buttonStyle(.borderless)
-                .font(.caption)
-        }
-    }
-
-    /// Claude Code 登录时记下的套餐过时了（cca 比好的）：说一句，右边是「重新登录…」（cca login 先退出再登录，点了先确认）。
-    /// 样子和下面「查看重置次数」那几行一样。
-    private func outdatedPlanRow(_ old: String) -> some View {
-        HStack(spacing: 10) {
-            Label(Texts.outdatedLoginPlan(old, current: account.plan), systemImage: "person.badge.key").foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Button("重新登录…") { model.relogin(account) }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(model.activity(account.ref) != nil)
-                .help("Claude Code 只在登录时记下套餐，升级、降级以后不会自己更新（额度照实际的套餐算）。"
-                      + "点了在终端里运行 \(model.loginHandoff(account).display)：先退出现在的登录再登录")
-        }
-        .font(.callout)
-        .padding(.horizontal, 4)
-        .accessibilityElement(children: .contain)
+    private func reloginButton(busy: Bool) -> some View {
+        RowAction("重新登录…", systemImage: "person.badge.key") { model.relogin(account) }
+            .disabled(busy)
     }
 
     private var emptyReason: String {
@@ -162,7 +158,7 @@ struct UsageSection: View {
         switch account.login {
         case .loggedOut: return "还没登录，查不了用量。"
         case .emailMismatch: return "登录的不是这个账号，查不了用量。"
-        default: return "还没有用量数据：点“刷新用量”查一次。"
+        default: return "还没有用量数据：点「刷新用量」查一次。"
         }
     }
 
@@ -303,7 +299,7 @@ struct QuotaTile: View {
     }
 }
 
-/// ChatGPT 账号还能重置几次额度（codex 里 /usage 的 Redeem reset），最早的那次什么时候过期（cca 算好的）；有机会时旁边是
+/// ChatGPT 账号还能重置几次额度（codex 里 /usage 的 Redeem reset），最早的那次什么时候过期（cca 算好的）；还有次数时右边是
 /// 「重置额度…」（cca 会先问：会用掉一次，默认不重置；用量还不需要重置时不扣次数）。
 struct ResetCreditsRow: View {
     @Environment(AppModel.self) private var model
@@ -316,80 +312,22 @@ struct ResetCreditsRow: View {
         let count = credits.availableCount ?? 0
         let busy = model.activity(a.ref) != nil
         let resetting = model.activity(a.ref)?.kind == .reset
-        HStack(spacing: 10) {
-            Label {
-                HStack(spacing: 6) {
-                    Text("还能重置额度")
-                    Text("\(count) 次").monospacedDigit().fontWeight(.medium).foregroundStyle(.primary)
-                    if count > 0, let expiry = Texts.resetExpiry(credits, now: now) {
-                        Text("·")
-                        Text(expiry).lineLimit(1)
-                    }
-                }
-            } icon: {
-                Image(systemName: "arrow.counterclockwise")
-            }
-            .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+        InfoRow(title(count), systemImage: "ticket") {
             if count > 0 {
-                Button {
-                    model.resetQuota(a.ref)
-                } label: {
-                    Label(resetting ? "重置中…" : "重置额度…", systemImage: "arrow.counterclockwise.circle")
-                }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(busy || !a.can.usage)
-                .help("用掉一次重置机会，把 5 小时和每周的用量清零（会先问你；用量还不需要重置时不扣次数）")
+                RowAction(resetting ? "重置中…" : "重置额度…", systemImage: "arrow.counterclockwise") { model.resetQuota(a.ref) }
+                    .disabled(busy || !a.can.usage)
+                    .help("用掉 1 次重置，把 5 小时和本周的用量清零。会先问你；用量本来就是 0 时不扣次数。")
             }
-        }
-        .font(.callout)
-        .accessibilityElement(children: .contain)
-    }
-}
-
-/// 只能在网页上看的两样：Claude 账号的重置次数（claude.ai 的用量页）、订阅附带的每月 API 额度（控制台的账单页）。
-/// 一样一行，旁边是打开它的按钮（用账号自己的浏览器和出口；cca 顺手把邮箱放进剪贴板，要登录时粘贴）。
-/// 没登录也显示；cca 说不能（第三方 API 账号、没装 Chrome、旧版 cca）就不显示。
-struct WebOnlyRows: View {
-    @Environment(AppModel.self) private var model
-    let account: Account
-
-    var body: some View {
-        let a = account
-        let busy = model.activity(a.ref) != nil
-        if a.can.limitResets || a.can.billing {
-            VStack(alignment: .leading, spacing: 8) {
-                if a.can.limitResets {
-                    row("重置次数和到期日在 claude.ai 上看", icon: "arrow.counterclockwise", button: "查看重置次数",
-                        help: "用这个账号自己的浏览器和出口打开 claude.ai 的用量页；要登录时邮箱已经复制好", busy: busy) {
-                        model.openLimitResets(a.ref)
-                    }
-                }
-                if a.can.billing {
-                    row("订阅附带的每月 API 额度在控制台上看", icon: "creditcard", button: "查看 API 额度",
-                        help: "用这个账号自己的浏览器和出口打开控制台的账单页；要登录时邮箱已经复制好", busy: busy) {
-                        model.openBilling(a.ref)
-                    }
-                }
-            }
-            .padding(.horizontal, 4)
         }
     }
 
-    private func row(_ text: String, icon: String, button: String, help: String, busy: Bool,
-                     action: @escaping () -> Void) -> some View {
-        HStack(spacing: 10) {
-            Label(text, systemImage: icon).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Button(button, action: action)
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(busy)
-                .help(help)
+    /// “还能重置额度 2 次 · 最早一次 11 月 24 日过期”（次数加重）
+    private func title(_ count: Int) -> Text {
+        var t = Text("还能重置额度 ") + Text("\(count) 次").monospacedDigit().fontWeight(.medium).foregroundStyle(.primary)
+        if count > 0, let expiry = Texts.resetExpiry(credits, now: now) {
+            t = t + Text(" · " + expiry)
         }
-        .font(.callout)
-        .accessibilityElement(children: .contain)
+        return t
     }
 }
 

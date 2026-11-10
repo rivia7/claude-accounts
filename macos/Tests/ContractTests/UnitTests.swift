@@ -28,10 +28,10 @@ func textTests() {
           Texts.pastTime(now - 86400 * 3, now: now, calendar: sh))
     func device(_ j: String) -> DeviceRow { try! JSONDecoder().decode(DeviceRow.self, from: Data(j.utf8)) }
     let using = device(#"{"name":"m","state":"in_use","cli":2,"app":true,"since_epoch":\#(now - 3600)}"#)
-    check("在用：开着什么、几点起", Texts.deviceState(using, appLabel: "Claude App", now: now, calendar: sh) == "在用 · 命令行里 2 个会话、Claude App 开着 · 16:00 起",
+    check("在用：开着什么、几点起", Texts.deviceState(using, appLabel: "Claude App", now: now, calendar: sh) == "在用 · 终端里 2 个会话、Claude App 开着 · 16:00 起",
           Texts.deviceState(using, appLabel: "Claude App", now: now, calendar: sh))
     let idle = device(#"{"name":"m","state":"idle","cli":1,"last_active_epoch":\#(now - 1500)}"#)
-    check("闲置：多久没动静", Texts.deviceState(idle, appLabel: "Claude App", now: now, calendar: sh) == "开着，闲置 25 分钟 · 命令行里 1 个会话")
+    check("闲置：多久没动静", Texts.deviceState(idle, appLabel: "Claude App", now: now, calendar: sh) == "开着，闲置 25 分钟 · 终端里 1 个会话")
     let off = device(#"{"name":"m","state":"offline","cli":1,"last_used_epoch":\#(now - 86400),"seen_epoch":\#(now - 600)}"#)
     check("离线：上次使用，悬停时说可能休眠或断网", Texts.deviceState(off, appLabel: "", now: now, calendar: sh) == "离线 · 上次使用 昨天 17:00"
           && Texts.deviceOfflineHelp(off, now: now).hasPrefix("10 分钟前最后一次回报"))

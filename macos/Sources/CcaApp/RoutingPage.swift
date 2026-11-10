@@ -34,11 +34,11 @@ struct RoutingPage: View {
             VStack(alignment: .leading, spacing: 22) {
                 RoutingHeader()
                 TipCard(id: "routing-map", title: "这张图怎么看",
-                        message: "左边是账号，中间是路由器上给每个账号留的端口，右边是节点（出口）。每条彩色的线就是一个账号的流量走向：实线正常；虚线说明有问题（选错节点、连不上），点「同步路由器」能修好。点左边的账号可以看它的详情。")
+                        message: "左边是账号，中间是给每个账号留的端口，右边是它走的节点。每条彩色的线是一个账号的流量走向：实线正常，虚线有问题（节点选错了，或者端口连不上），点「同步路由器」通常就能修好。点账号看详情。")
                 RoutingBanners()
                 let rows = slotRows()
                 if rows.isEmpty {
-                    ContentUnavailableView("还没有端口池", systemImage: "point.3.connected.trianglepath.dotted",
+                    ContentUnavailableView("还没有分配端口", systemImage: "point.3.connected.trianglepath.dotted",
                                            description: Text("配置路由器或本机 Clash 之后，每个走节点的账号会分到一个端口。"))
                 } else {
                     RouteMap(rows: rows, nodes: mapNodes(rows), panel: panelTitle, showGroups: guide.showDetails) { ref in
@@ -101,7 +101,7 @@ struct RoutingPage: View {
         }
         if model.routerConfigured { return ("路由器", model.state?.config?.router?.host) }
         if model.localConfigured { return (nonEmpty(model.state?.config?.local?.name) ?? "本机 Clash", "这台 Mac") }
-        return ("端口池", nil)
+        return ("端口", nil)
     }
 }
 
@@ -161,40 +161,21 @@ struct RoutingHeader: View {
         HStack(spacing: 10) {
             routePicker
             GlassRow(spacing: 8) {
-                Button {
-                    model.refreshLive()
-                } label: {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.glass)
-                .disabled(model.liveLoading)
-                .help("重新读取路由器 / 本机 Clash 上各个端口现在的样子")
+                SectionAction("刷新", systemImage: "arrow.clockwise") { model.refreshLive() }
+                    .disabled(model.liveLoading)
+                    .help("重新读取路由器 / 本机 Clash 上各个端口现在的样子")
                 if model.policyPullAvailable {
-                    Button {
-                        model.pullPolicyNow()
-                    } label: {
-                        Label(model.policyPulling ? "拉取中…" : "拉取映射", systemImage: "arrow.down.to.line")
-                    }
-                    .buttonStyle(.glass)
-                    .disabled(model.policyPulling)
-                    .help("马上从维护者的仓库拉一次账号和节点的映射（平时 App 开着时一小时自动拉一次）")
+                    SectionAction(model.policyPulling ? "拉取中…" : "拉取映射", systemImage: "arrow.down.to.line") { model.pullPolicyNow() }
+                        .disabled(model.policyPulling)
+                        .help("马上从维护者那里拉一次账号和节点的映射（App 开着时每小时自动拉一次）")
                 }
+                DetailsToggle(help: "后端、钩子、定时任务的状态，和端口的分组名")
                 if model.routerConfigured {
-                    Button {
-                        model.syncRouter()
-                    } label: {
-                        Label(model.syncActivity == nil ? "同步路由器" : "同步中…", systemImage: "wifi.router")
-                    }
-                    .buttonStyle(.glassProminent)
-                    .disabled(model.syncActivity != nil)
-                    .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
+                    SectionAction(model.syncActivity == nil ? "同步路由器" : "同步中…", systemImage: "wifi.router", prominent: true) { model.syncRouter() }
+                        .disabled(model.syncActivity != nil)
+                        .help("把这台 Mac 的账号表同步到路由器（可能要重载 OpenClash / ShellCrash，会先问你）")
                 }
             }
-            Button(guide.showDetails ? "收起细节" : "显示细节") {
-                withAnimation(.snappy) { guide.toggleDetails() }
-            }
-            .buttonStyle(.borderless)
-            .help("后端、钩子、定时任务的状态和槽位名")
         }
     }
 
@@ -276,9 +257,9 @@ struct RoutingBanners: View {
         let drift = model.live?.summary?.drift ?? 0
         BannerStack {
             if routing?.sync == .pending {
-                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器待同步",
-                       message: "路由器上的端口池和这台 Mac 的账号表不一致" + (drift > 0 ? "（有 \(drift) 个槽位选错了节点）" : "")
-                           + "：下次启动账号时会自动同步，也可以现在同步。") {
+                Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器还没同步",
+                       message: "路由器上的端口和这台 Mac 的账号表对不上" + (drift > 0 ? "（有 \(drift) 个账号的节点选错了）" : "")
+                           + "。下次启动账号时会自动同步，也可以现在同步。") {
                     if model.routerConfigured {
                         Button("同步路由器") { model.syncRouter() }
                             .buttonStyle(.borderedProminent)
@@ -291,7 +272,7 @@ struct RoutingBanners: View {
                        message: notices.map(Texts.notice).joined(separator: "\n"))
             }
             if routing?.localSync == .pending {
-                Banner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口池不是最新的",
+                Banner(systemImage: "laptopcomputer", tint: .orange, title: "本机 Clash 的端口还没更新",
                        message: "下次在外面启动账号时会自动更新。")
             }
             if let e = model.live?.router?.error {
@@ -300,7 +281,7 @@ struct RoutingBanners: View {
             if let e = model.live?.local?.error {
                 Banner(systemImage: "exclamationmark.triangle", tint: .red, title: "本机 Clash：\(Texts.liveError(e))") {
                     if e.code == .notConfigured {
-                        Button("配置本机 Clash…") { model.run(.localSetup) }.buttonStyle(.bordered)
+                        Button("配置本机 Clash…") { model.run(.localSetup) }.buttonStyle(.borderedProminent)
                     }
                 }
             }
@@ -310,10 +291,10 @@ struct RoutingBanners: View {
                 }
             }
             if drift > 0, routing?.sync != .pending {
-                Banner(systemImage: "arrow.left.arrow.right", tint: .orange, title: "有 \(drift) 个槽位选错了节点",
-                       message: "同步路由器能修好。") {
+                Banner(systemImage: "arrow.left.arrow.right", tint: .orange, title: "有 \(drift) 个账号的节点选错了",
+                       message: "点「同步路由器」就能修好。") {
                     if model.routerConfigured {
-                        Button("同步路由器") { model.syncRouter() }.buttonStyle(.bordered).disabled(model.syncActivity != nil)
+                        Button("同步路由器") { model.syncRouter() }.buttonStyle(.borderedProminent).disabled(model.syncActivity != nil)
                     }
                 }
             }
@@ -335,7 +316,7 @@ struct RoutingBanners: View {
         }
         return Banner(systemImage: "wifi.exclamationmark", tint: .red, title: "路由器：\(Texts.liveError(e))", message: message) {
             if e.code == .unreachable, !model.localConfigured {
-                Button("配置本机 Clash…") { model.run(.localSetup) }.buttonStyle(.bordered)
+                Button("配置本机 Clash…") { model.run(.localSetup) }.buttonStyle(.borderedProminent)
             }
         }
     }

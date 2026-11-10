@@ -38,7 +38,7 @@ func clientUpdateProtocolTests() async {
           && empty?.clients.first?.status == "future_status" && empty?.clients.first?.readyToInstall == false)
     let changed = try? DocumentDecoder.decode(ClientUpdatesDoc.self, from: Data(current.replacingOccurrences(of: "\"staged\"", with: "\"needs_recheck\"").utf8))
     check("重新检查状态不允许复用旧token，文字说明目标已变化", changed?.clients.first?.readyToInstall == false
-          && changed?.clients.first?.detail.contains("校验值已变化") == true)
+          && changed?.clients.first?.detail.contains("要安装的版本变了") == true)
 
     let archive = tmpRoot.appendingPathComponent("unsigned-client.zip")
     try? Data("not an official package".utf8).write(to: archive)

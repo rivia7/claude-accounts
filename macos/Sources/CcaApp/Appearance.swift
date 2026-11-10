@@ -107,7 +107,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Section("新手引导") {
-                Toggle("显示技术细节（端口、槽位、纯净度明细）",
+                Toggle("显示细节（端口、纯净度这些明细）",
                        isOn: Binding(get: { guide.showDetails }, set: { if $0 != guide.showDetails { guide.toggleDetails() } }))
                 HStack {
                     Button("看新手教程") {
@@ -127,7 +127,7 @@ struct SettingsView: View {
     private var terminalCaption: String {
         let t = model.terminalChoice
         guard t.isAutomatic else {
-            return "\(t.name) 不能由别的 App 运行命令：点账号页的「终端」时会打开它并复制命令，到它的本地终端里粘贴运行。登录、添加账号这些命令总是用系统自带的终端。"
+            return "别的 App 没法让 \(t.name) 运行命令：点账号页的「终端」会打开它、把命令复制好，到它里面粘贴运行。登录、添加账号总是用系统自带的终端。"
         }
         return (["账号页的「终端」用它打开；登录、添加账号这些命令总是用系统自带的终端。"] + [t.note].compactMap { $0 }).joined(separator: "")
     }

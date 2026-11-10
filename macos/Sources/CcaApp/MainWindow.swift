@@ -85,8 +85,8 @@ struct DetailColumn: View {
                 ClientUpdatesPage()
             case nil:
                 if model.accounts(model.tool).isEmpty {
-                    ContentUnavailableView("还没有\(Texts.product(model.tool))账号", systemImage: "person.crop.circle.badge.plus",
-                                           description: Text("还没有账号 — 点工具栏的「＋」添加。"))
+                    ContentUnavailableView("还没有 \(Texts.product(model.tool)) 账号", systemImage: "person.crop.circle.badge.plus",
+                                           description: Text("点左边账号列表上的「＋」添加。"))
                 } else {
                     ContentUnavailableView("选一个账号", systemImage: "person.2", description: Text("左边列出了这台 Mac 上的账号。"))
                 }
@@ -160,7 +160,7 @@ struct TopBanners: View {
             }
             if let t = model.coreTrouble {
                 Banner(systemImage: "exclamationmark.arrow.triangle.2.circlepath", tint: .orange,
-                       title: "内置代理的内核停了，稍后自动重启",
+                       title: "内置代理停了，稍后自动重启",
                        message: [t.code >= 0 ? "退出码 \(t.code)" : nil, nonEmpty(t.detail)].compactMap { $0 }.joined(separator: "：")) {
                     Button("现在重启") { model.retryCore() }
                         .buttonStyle(.bordered)
@@ -294,7 +294,7 @@ struct OnboardingView: View {
         case .missingCca:
             Card("先安装 cca", systemImage: "shippingbox") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("这个 App 是 cca 的图形界面，需要先装好 cca。在“终端”里运行：")
+                    Text("这个 App 是 cca 的图形界面，需要先装好 cca。在「终端」里运行：")
                     Text(Self.installCommand)
                         .font(.system(.callout, design: .monospaced))
                         .textSelection(.enabled)

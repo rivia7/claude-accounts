@@ -133,9 +133,10 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         Handoff(arguments: prefix + ["add", "api"], title: "添加第三方 API 账号", message: "在终端里填写接口地址、模型和 key（key 存进钥匙串）。", inApp: true)
     }
 
-    /// 更换第三方 API 账号的 key。
-    static func apiKey(prefix: [String], key: String, name: String) -> Handoff {
-        Handoff(arguments: prefix + ["key", key], title: "更换 \(name) 的 API key", message: "在终端里输入新的 key，存进钥匙串。", inApp: true)
+    /// 更换第三方 API 账号的 key；官方账号是记一把 API key 备查（record：cca 不拿它启动）。
+    static func apiKey(prefix: [String], key: String, name: String, record: Bool = false) -> Handoff {
+        Handoff(arguments: prefix + ["key", key], title: record ? "记录 \(name) 的 API key" : "更换 \(name) 的 API key",
+                message: "在终端里输入 key，存进钥匙串。", inApp: true)
     }
 
     static func remove(prefix: [String], key: String, name: String) -> Handoff {

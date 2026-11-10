@@ -35,7 +35,7 @@ func fixtureAssertions() {
         check("state：bob 的 DNS 泄露", bob?.health?.leak?.dns == .leak && bob?.health?.leak?.webrtc == .ok && bob?.health?.leak?.hasLeak == true
               && bob?.health?.trust == 97 && bob?.health?.tags == ["住宅IP"])
         let noteLeak = try? JSONDecoder().decode(Leak.self, from: Data(#"{"dns":"ok","webrtc":"note","line":"x","dns_message":"","webrtc_message":"只作提醒"}"#.utf8))
-        check("WebRTC 备注（不是中国大陆的地址）：不算泄露，说明给界面看", noteLeak?.webrtc == .note && noteLeak?.hasLeak == false && noteLeak?.webrtcMessage == "只作提醒" && Texts.leak(.note, what: "WebRTC") == "WebRTC 有备注")
+        check("WebRTC 备注（不是中国大陆的地址）：不算泄露，说明给界面看", noteLeak?.webrtc == .note && noteLeak?.hasLeak == false && noteLeak?.webrtcMessage == "只作提醒" && Texts.leak(.note, what: "WebRTC") == "WebRTC 有提示")
         let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))
         check("state：carol 没登录、查不了用量", carol?.login == .loggedOut && carol?.can.usage == false
               && carol?.canWhy["usage"] == .notLoggedIn && carol?.usage == nil)
@@ -103,7 +103,9 @@ func fixtureAssertions() {
         let f = u.accounts.first
         check("usage_codex：tool、credits", u.tool == .codex && f?.credits?.balance == "12.5" && f?.credits?.unlimited == false)
         check("usage_codex：reset_credits", f?.resetCredits?.availableCount == 2)
-        check("usage_codex：整数的 resets_at", f?.fiveHour?.resetsEpoch == 1794049200 && f?.sevenDay?.resetsEpoch == 1794470400)
+        check("usage_codex：整数的 resets_at", f?.fiveHour?.resetsEpoch == 1794049200 && f?.sevenDay?.resetsEpoch == 1794114000)
+        check("usage_codex：本周额度 20 小时后重置、还剩 24%：建议先用（区间是重置前 24 小时到重置）",
+              f?.useFirst == UseFirst(leftPercent: 24, fromEpoch: 1794027600, untilEpoch: 1794114000))
     }
     if let l = loadFixture(LiveDoc.self, "live_router.json") {
         let states = Set(l.slots.map(\.state))

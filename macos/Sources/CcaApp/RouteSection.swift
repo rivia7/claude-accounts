@@ -17,19 +17,12 @@ struct RouteSection: View {
                     Tag(text: Texts.healthResult(r, region: h.restrictedRegion),
                         color: h.stale || !h.applies ? Color.gray : Palette.health(r))
                 }
-                Button(guide.showDetails ? "收起细节" : "显示细节") {
-                    withAnimation(.snappy) { guide.toggleDetails() }
+                GlassRow {
+                    DetailsToggle(help: "端口、纯净度和泄露检测的明细")
+                    SectionAction(a.isAPI ? "检测连接" : "检测出口", systemImage: "checkmark.shield") { model.checkExit(a.ref) }
+                        .disabled(!a.can.check || model.activity(a.ref) != nil)
+                        .help(a.isAPI ? "检测接口连不连得上" : "检测出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险（会访问检测网站）")
                 }
-                .buttonStyle(.borderless)
-                .help("端口、槽位、纯净度和泄露检测的明细")
-                Button {
-                    model.checkExit(a.ref)
-                } label: {
-                    Label("检测出口", systemImage: "checkmark.shield")
-                }
-                .buttonStyle(.glass)
-                .disabled(!a.can.check || model.activity(a.ref) != nil)
-                .help(a.isAPI ? "检测接口连不连得上" : "检测出口 IP、地区、纯净度和 DNS / WebRTC 泄露（会访问检测网站）")
             }
             RouteStrip(stops: guide.showDetails ? stops(a) : simpleStops(a), color: a.lineColor)
                 .padding(.top, 2)
@@ -37,7 +30,7 @@ struct RouteSection: View {
                 Banner(systemImage: "arrow.triangle.2.circlepath", tint: .orange, title: "路由器还没同步",
                        message: "下次启动账号时会同步，也可以现在同步。") {
                     Button("同步路由器") { model.syncRouter() }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
                         .disabled(model.syncActivity != nil)
                 }
             }
@@ -198,7 +191,7 @@ struct RouteSection: View {
         }
         if s.listening == false { parts.append("端口没在监听") }
         if s.reachable == false { parts.append("这台 Mac 连不上这个端口") }
-        if s.inKernel == false { parts.append("内核里没有这个组") }
+        if s.inKernel == false { parts.append("Clash 里还没有这个端口") }
         return Texts.route(model.live?.route) + "：" + parts.joined(separator: "，")
     }
 }
@@ -377,8 +370,8 @@ struct HealthDetails: View {
                 }
             }
         } else {
-            Text(account.isAPI ? "还没测过。点“检测出口”看看接口连不连得上。"
-                 : "还没测过。点“检测出口”，查看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 泄露风险。")
+            Text(account.isAPI ? "还没测过。点「检测连接」看看接口连不连得上。"
+                 : "还没测过。点「检测出口」，看看这个账号的出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险。")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -499,8 +492,8 @@ struct HealthSummary: View {
                 }
             }
         } else {
-            Text(account.isAPI ? "还没测过。点“检测出口”看看接口连不连得上。"
-                 : "还没测过。点“检测出口”，查看这个账号的出口 IP、地区、纯净度和 DNS / WebRTC 泄露风险。")
+            Text(account.isAPI ? "还没测过。点「检测连接」看看接口连不连得上。"
+                 : "还没测过。点「检测出口」，看看这个账号的出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险。")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -57,6 +57,42 @@ struct ModelWindow: Decodable, Sendable, Equatable {
     }
 }
 
+/// `use_first`：本周额度快重置了、还剩不少，建议先用这个账号（PROTOCOL 3.1）。规则（重置前 24 小时、还剩至少 20%）由 cca 定；
+/// App 只拿当前时间和 `[from_epoch, until_epoch)` 比——快照可能放了好几分钟，到了重置时间提示就该消失。
+struct UseFirst: Decodable, Sendable, Equatable {
+    /// 本周还剩百分之几（整数，和显示的百分比一致）
+    var leftPercent: Int
+    var fromEpoch: Double
+    /// 本周的重置时间
+    var untilEpoch: Double
+
+    enum CodingKeys: String, CodingKey {
+        case leftPercent = "left_percent"
+        case fromEpoch = "from_epoch"
+        case untilEpoch = "until_epoch"
+    }
+
+    init(leftPercent: Int, fromEpoch: Double, untilEpoch: Double) {
+        self.leftPercent = leftPercent
+        self.fromEpoch = fromEpoch
+        self.untilEpoch = untilEpoch
+    }
+
+    /// 缺字段、类型不对、区间是空的都算没有（lossy 得到 nil）。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let left = c.int(.leftPercent), let from = c.double(.fromEpoch), let until = c.double(.untilEpoch), from < until else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "use_first"))
+        }
+        leftPercent = left
+        fromEpoch = from
+        untilEpoch = until
+    }
+
+    /// 现在该不该提示。
+    func isActive(now: Double) -> Bool { fromEpoch <= now && now < untilEpoch }
+}
+
 /// Claude 的额外用量（字段原样来自 Claude Code，宽松解析）。
 struct ExtraUsage: Decodable, Sendable, Equatable {
     var isEnabled: Bool?
@@ -140,6 +176,8 @@ struct UsageEntry: Decodable, Sendable, Equatable {
     /// Claude Code 登录时记下的套餐和账号现在的对不上（升降级以后要重新登录才会更新）：记下的那个的叫法（“Pro”）。
     /// cca 比好的，App 不自己比；对得上、不知道、Codex 账号、旧版 cca 都是 nil。
     var outdatedLoginPlan: String?
+    /// 本周额度快重置了、还剩不少：建议先用（旧版 cca 没有，是 nil）
+    var useFirst: UseFirst?
 
     enum CodingKeys: String, CodingKey {
         case account, key, email, plan, source
@@ -158,6 +196,7 @@ struct UsageEntry: Decodable, Sendable, Equatable {
         case credits
         case resetCredits = "reset_credits"
         case outdatedLoginPlan = "outdated_login_plan"
+        case useFirst = "use_first"
     }
 
     init(from decoder: Decoder) throws {
@@ -183,6 +222,7 @@ struct UsageEntry: Decodable, Sendable, Equatable {
         credits = c.lossy(Credits.self, .credits)
         resetCredits = c.lossy(ResetCredits.self, .resetCredits)
         outdatedLoginPlan = nonEmpty(c.string(.outdatedLoginPlan))
+        useFirst = c.lossy(UseFirst.self, .useFirst)
     }
 
     /// 有没有可以显示的数据（`source` 为 none 时没有）。

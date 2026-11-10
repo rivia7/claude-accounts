@@ -141,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.hooks.chooseDirectory = { await Platform.chooseDirectory(startingAt: $0) }
         model.hooks.openURL = { NSWorkspace.shared.open($0) }
         model.hooks.copy = { Platform.copy($0) }
+        model.hooks.copySecret = { Platform.secrets.copy($0) }
         model.hooks.showMainWindow = { WindowOpener.shared.showMain() }
         model.hooks.terminate = { AppExit.quit() }
         // 提示条出现时让读屏软件播报
@@ -206,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Platform.secrets.flush()   // 复制的 API key 还在剪贴板上就清掉
         model.shutdown()
         for (center, token) in observers { center.removeObserver(token) }
     }

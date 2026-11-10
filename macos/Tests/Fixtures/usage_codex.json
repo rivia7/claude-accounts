@@ -6,9 +6,10 @@
       "source": "live", "fetched_at": "2026-11-07T08:59:58Z", "fetched_epoch": 1794041998.0, "age_seconds": 2, "stale": false,
       "error": null, "error_code": null, "error_detail": null,
       "five_hour": {"utilization": 35.0, "resets_at": 1794049200, "resets_epoch": 1794049200.0, "reset": false},
-      "seven_day": {"utilization": 76.0, "resets_at": 1794470400, "resets_epoch": 1794470400.0, "reset": false},
+      "seven_day": {"utilization": 76.0, "resets_at": 1794114000, "resets_epoch": 1794114000.0, "reset": false},
       "model_scoped": null,
       "extra_usage": null,
+      "use_first": {"left_percent": 24, "from_epoch": 1794027600.0, "until_epoch": 1794114000.0},
       "credits": {"hasCredits": true, "unlimited": false, "balance": "12.5"},
       "reset_credits": {"availableCount": 2, "nextGrantAt": 1794470400, "credits": [
         {"id": "rc-1", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1793437200, "expiresAt": 1795251600,

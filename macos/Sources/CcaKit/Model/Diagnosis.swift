@@ -2,6 +2,7 @@ import Foundation
 
 /// 一个账号现在的问题，按要紧程度排好。账号页那句“下一步”（Advice）和办公室里员工的状态（Employee）都从这里取，
 /// 顺序只写在这一处。只按 cca 给的状态说话（登录、can_why、路由器实况、出口检测、用量），不重算 cca 的规则。
+/// 第一条可能是建议而不是问题：`useFirst`（本周额度快重置了、还剩不少），只在没有挡路的问题时出现，排在最前。
 enum Diagnosis: Equatable, Sendable {
     case loggedOut
     case emailMismatch(loginEmail: String?)
@@ -24,6 +25,8 @@ enum Diagnosis: Equatable, Sendable {
     case leak
     /// 从没检测过出口
     case neverChecked
+    /// 建议，不是问题：本周额度快重置了、还剩不少，先用这个账号（cca 给的 use_first，App 只比时间）
+    case useFirst(UseFirst)
 
     /// 一个快用完（或者已经用完）的额度窗口。
     struct QuotaPressure: Equatable, Sendable {
@@ -63,7 +66,25 @@ enum Diagnosis: Equatable, Sendable {
             if h.leak?.hasLeak == true { out.append(.leak) }
         }
         if a.health == nil { out.append(.neverChecked) }
+        if let f = u?.useFirst, f.isActive(now: now), !out.contains(where: \.blocksUseFirst), !fiveHourPressed(u, now: now) {
+            out.insert(.useFirst(f), at: 0)
+        }
         return out
+    }
+
+    /// 有它就不建议先用这个账号：用不了、额度紧张、出口有风险的都算；只是提示的（套餐过时、没装 App、没检测过出口）不算。
+    /// 穷举、不写 default：加了新的问题，编译器会逼着决定它挡不挡。
+    var blocksUseFirst: Bool {
+        switch self {
+        case .loggedOut, .emailMismatch, .loginExpired, .portClosed, .portDrift, .exitBad, .quota, .lowPurity, .leak: return true
+        case .outdatedLoginPlan, .appMissing, .neverChecked, .useFirst: return false
+        }
+    }
+
+    /// 5 小时的额度快用完了（≥90%，不看数据新旧：没到重置时间不会降下来）：这时候不建议先用它。
+    static func fiveHourPressed(_ u: UsageEntry?, now: Double) -> Bool {
+        guard let w = u?.fiveHour, let p = w.utilization, !w.isReset(now: now) else { return false }
+        return UsageLevel(percent: p) == .critical
     }
 
     /// 5 小时、本周两个窗口里用完的、快用完的（模型级的窗口不算：一个模型用完了，别的模型照样能用）。

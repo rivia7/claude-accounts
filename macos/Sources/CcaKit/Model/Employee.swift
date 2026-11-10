@@ -54,6 +54,8 @@ struct Employee: Equatable, Sendable, Identifiable {
     var mood: Mood
     /// 按 Diagnosis 的顺序（要紧的在前）
     var flags: [Flag]
+    /// 本周额度快重置了、还剩不少，建议先用（不改头条、不算小标记；卡片上画一个沙漏）
+    var useFirst: UseFirst? = nil
 
     var id: AccountRef { account.ref }
     var department: Department { Self.department(of: account) }
@@ -74,6 +76,7 @@ struct Employee: Equatable, Sendable, Identifiable {
     static func make(_ a: Account, usage: UsageEntry?, live: LiveSlot?, now: Double) -> Employee {
         var mood: Mood?
         var flags: [Flag] = []
+        var useFirst: UseFirst?
         for d in Diagnosis.all(a, usage: usage, live: live, now: now) {
             switch d {
             case .loggedOut: mood = mood ?? .absent
@@ -93,9 +96,10 @@ struct Employee: Equatable, Sendable, Identifiable {
             case .lowPurity: flags.append(.lowPurity)
             case .leak: flags.append(.leak)
             case .neverChecked: flags.append(.neverChecked)
+            case .useFirst(let f): useFirst = f
             }
         }
-        return Employee(account: a, mood: mood ?? (a.isWorking ? .working : .idle), flags: flags)
+        return Employee(account: a, mood: mood ?? (a.isWorking ? .working : .idle), flags: flags, useFirst: useFirst)
     }
 }
 
