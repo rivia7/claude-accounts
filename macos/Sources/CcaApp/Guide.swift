@@ -141,7 +141,7 @@ struct TutorialCard {
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
-            ("chart.bar", "名字右边两根小条是额度：上面 5 小时，下面本周。"),
+            ("chart.bar", "名字右边的小条是额度：5 小时、本周，Claude 账号还有一根 Fable。"),
             ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者终端里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名、置顶、重新登录。上下拖动可以调整顺序。"),
         ], art: .sidebar),
@@ -444,11 +444,11 @@ struct TutorialArt: View {
         }
     }
 
-    /// 侧栏的样子：三个账号，名字右边两根小条，开着 App 的有绿点。
+    /// 侧栏的样子：三个账号，名字右边几根小条（Claude 账号多一根 Fable），开着 App 的有绿点。
     private var sidebarArt: some View {
         panel {
             VStack(spacing: 2) {
-                sidebarRow(0, plan: ("Ultra", .premium), sub: "US-B", five: 92, week: 41, running: true, selected: true)
+                sidebarRow(0, plan: ("Ultra", .premium), sub: "US-B", five: 92, week: 41, fable: 12, running: true, selected: true)
                 sidebarRow(1, plan: nil, sub: "未登录 · US-C", five: nil, week: nil, running: false, selected: false)
                 sidebarRow(2, plan: ("Pro 100", .advanced), sub: "US-A", five: 35, week: 76, running: false, selected: false)
             }
@@ -457,8 +457,8 @@ struct TutorialArt: View {
         .frame(width: 330)
     }
 
-    private func sidebarRow(_ k: Int, plan: (String, PlanTier)?, sub: String, five: Double?, week: Double?, running: Bool,
-                            selected: Bool) -> some View {
+    private func sidebarRow(_ k: Int, plan: (String, PlanTier)?, sub: String, five: Double?, week: Double?, fable: Double? = nil,
+                            running: Bool, selected: Bool) -> some View {
         HStack(spacing: 9) {
             avatar(k, size: 28, halo: plan?.1 == .premium)
                 .overlay(alignment: .bottomTrailing) {
@@ -481,6 +481,7 @@ struct TutorialArt: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     miniBar("5h", five)
                     miniBar("周", week)
+                    if let fable { miniBar("Fable", fable) }
                 }
             }
         }

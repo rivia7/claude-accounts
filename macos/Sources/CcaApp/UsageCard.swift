@@ -74,7 +74,7 @@ struct UsageSection: View {
         if let u = model.usage(for: account), u.source != .none {
             // 数据旧了（过期，或者这次没查到、用的是缓存）就用灰色显示
             let dim = u.stale || (u.source == .cache && u.errorCode != nil)
-            let models = modelTiles(u)
+            let models = u.modelQuotas
             VStack(alignment: .leading, spacing: 16) {
                 QuotaGrid {
                     QuotaTile(title: "5 小时", window: u.fiveHour, now: now, dim: dim)
@@ -159,15 +159,6 @@ struct UsageSection: View {
         case .loggedOut: return "还没登录，查不了用量。"
         case .emailMismatch: return "登录的不是这个账号，查不了用量。"
         default: return "还没有用量数据：点「刷新用量」查一次。"
-        }
-    }
-
-    /// 分模型的每周额度（model_scoped，按名字去重）：各是一大块，下面一行说它和本周总额度的关系（cca 认得出时）。
-    private func modelTiles(_ u: UsageEntry) -> [(name: String, window: UsageWindow, note: String)] {
-        var seen = Set<String>()
-        return u.modelScoped.compactMap { m in
-            guard let name = nonEmpty(m.name), m.window.utilization != nil, seen.insert(name.lowercased()).inserted else { return nil }
-            return (name, m.window, Texts.weeklyShare(allowance: m.allowancePercentOfWeekly, used: m.usedPercentOfWeekly))
         }
     }
 
@@ -370,29 +361,57 @@ struct MinorQuota: View, Identifiable {
     }
 }
 
-/// 侧栏、菜单栏右边的两行小用量（5 小时、本周）。
+extension UsageEntry {
+    /// 分模型的每周额度（model_scoped，例如 Claude 的 Fable；按名字去重，没有百分比的不要）：账号页各是一大块，侧栏各一行小条。
+    /// note 说它和本周总额度的关系（cca 认得出时）。
+    var modelQuotas: [(name: String, window: UsageWindow, note: String)] {
+        var seen = Set<String>()
+        return modelScoped.compactMap { m in
+            guard let name = nonEmpty(m.name), m.window.utilization != nil, seen.insert(name.lowercased()).inserted else { return nil }
+            return (name, m.window, Texts.weeklyShare(allowance: m.allowancePercentOfWeekly, used: m.usedPercentOfWeekly))
+        }
+    }
+}
+
+/// 侧栏、菜单栏面板、总览卡片右边的几行小用量：5 小时、本周，分模型的每周额度（Claude 的 Fable）也各一行，和账号页的大块一一对应。
 struct UsageStack: View {
     let usage: UsageEntry
     var width: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
-            MiniUsage(label: "5h", window: usage.fiveHour, stale: usage.stale, width: width)
-            MiniUsage(label: "周", window: usage.sevenDay, stale: usage.stale, width: width)
+            MiniUsage(label: "5h", spoken: "5 小时用量", window: usage.fiveHour, stale: usage.stale, width: width)
+            MiniUsage(label: "周", spoken: "本周用量", window: usage.sevenDay, stale: usage.stale, width: width)
+            // 标签栏 26：“Fable” 要 26.5，缩到 98% 看不出来；再宽一点，总览卡片最窄时「在用，已 12 分钟」就要折行
+            ForEach(usage.modelQuotas, id: \.name) { m in
+                MiniUsage(label: m.name, spoken: "\(m.name) 用量", window: m.window, stale: usage.stale, width: width,
+                          labelWidth: 26, note: m.note)
+            }
         }
     }
 }
 
-/// 一行小用量：“5h ▬▬ 13%”。每 30 秒重算一次（重置时间过了就显示“已重置”）。
+/// 一行小用量：“5h ▬▬ 13%”。每 30 秒重算一次（重置时间过了就显示“已重置”）。几行的标签靠右、条和百分比上下对齐。
 struct MiniUsage: View {
     let label: String
+    /// 读屏念的名字（“5 小时用量”）
+    let spoken: String
     let window: UsageWindow?
     let stale: Bool
     var width: CGFloat = 30
+    /// 标签那一栏多宽：“5h”“周”是 14；模型名（Fable）宽一些，放不下时先缩小（最多到 70%）、再截断（鼠标指着有全名）
+    var labelWidth: CGFloat = 14
+    /// 分模型的额度和本周总额度的关系：鼠标指着时显示，读屏接在百分比后面念
+    var note: String?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
+        let row = TimelineView(.periodic(from: .now, by: 30)) { context in
             cell(now: context.date.timeIntervalSince1970)
+        }
+        if let note {
+            row.help(label + "：" + note)
+        } else {
+            row
         }
     }
 
@@ -405,7 +424,9 @@ struct MiniUsage: View {
             return UsageLevel(percent: p) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(Palette.usage(percent: p))
         }()
         return HStack(spacing: 5) {
-            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(.plainSecondary).frame(width: 14, alignment: .trailing)
+            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(.plainSecondary)
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .frame(width: labelWidth, alignment: .trailing)
             Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: Palette.usage(percent: pct ?? 0), height: 4, dim: stale)
                 .frame(width: width)
             Text(value)
@@ -414,7 +435,7 @@ struct MiniUsage: View {
                 .frame(width: 34, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label == "5h" ? "5 小时用量" : "本周用量")
-        .accessibilityValue(value == "—" ? "没有数据" : value)
+        .accessibilityLabel(spoken)
+        .accessibilityValue((value == "—" ? "没有数据" : value) + (note.map { "，" + $0 } ?? ""))
     }
 }

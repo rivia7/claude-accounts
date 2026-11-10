@@ -78,7 +78,7 @@ private struct RoomSection: View {
     }
 }
 
-/// 一个工位：插画、名字和套餐徽章、现在怎么样、两行小用量。整张卡片是按钮（打开账号页），右键和侧栏一样。
+/// 一个工位：插画、名字和套餐徽章、现在怎么样、几行小用量（5 小时、本周、Claude 的 Fable）。整张卡片是按钮（打开账号页），右键和侧栏一样。
 private struct DeskCard: View {
     @Environment(AppModel.self) private var model
     @Environment(Guide.self) private var guide
@@ -109,6 +109,8 @@ private struct DeskCard: View {
                 info(a, e)
             }
             .padding(12)
+            // 同一排的卡片一样高：有 Fable 的多一行小条，比没登录的高一截；矮的撑到这一排最高的，多出来的空在下面
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(shape.fill(on ? Color.primary.opacity(0.08) : Surface.tile))
             .overlay(shape.strokeBorder(targeted.wrappedValue ? Color.accentColor : Color.primary.opacity(on ? 0.16 : 0),
                                         lineWidth: targeted.wrappedValue ? 2 : 1))

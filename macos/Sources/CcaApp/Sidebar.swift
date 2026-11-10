@@ -376,7 +376,7 @@ struct OnTopMark: View {
 }
 
 /// 侧栏的一行：头像（在用时右下角有绿点；最高档的套餐有光晕，只有这里有，在用时慢慢流动）、名字、
-/// 第二行（登录有问题时先说、套餐徽章、节点），右边两行小用量。
+/// 第二行（登录有问题时先说、套餐徽章、节点），右边几行小用量（5 小时、本周，Claude 的 Fable 这类分模型的每周额度也各一行）。
 struct AccountRow: View {
     @Environment(AppModel.self) private var model
     let account: Account

@@ -125,6 +125,9 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   credits、额外用量是下面的小行；再下面是一行一行的信息（`InfoRow`）：ChatGPT 账号还能重置几次、最早的一次什么时候过期（「重置额度…」，cca 先问，
   PROTOCOL 4.5），查用量出的错，Claude Code 记的套餐过时了（「重新登录…」），只能在网页上看的重置次数（「在 claude.ai 查看」）和订阅附带的
   每月 API 额度（「在控制台查看」），API key（掩码、一只眼睛、「复制」，`APIKeySection.swift`）。
+  侧栏、菜单栏面板、总览卡片里账号名字右边是同样几块的小条（`UsageStack`）：5 小时、本周，分模型的每周额度（Fable）各一行，
+  标签靠右、条和百分比上下对齐，鼠标指着 Fable 那行说它最多能用本周额度的多少；模型名的标签宽 26（刚好放下 Fable，再宽总览卡片最窄时状态那句要折行），
+  放不下先缩小再截断。有 Fable 的卡片多一行，比没登录的高一截：同一排的卡片撑成一样高（`frame(maxHeight: .infinity)`），多出来的空在下面。
 - 周结算提醒（cca 给的 `use_first`，PROTOCOL 3.1）：本周额度快重置了、还剩不少，没有挡路的问题时（`Diagnosis.useFirst` 排在最前），账号页那句话说
   「本周额度还剩 59%，明天 19:55 重置，建议先用这个账号。」，总览卡片右下角、侧栏和菜单栏面板的名字后面一个沙漏（`UseFirstMark`）。沙漏用强调色：
   是提示不是警告（绿是在用，橙、红是问题）；不算进“要处理”。
