@@ -16,13 +16,14 @@ private func acct(_ extra: [String: Any] = [:], tool: ToolID = .claude) -> Accou
     return Account.sample(d, tool: tool)
 }
 
-/// 用量：5 小时、本周的百分比和重置时间（nil 表示没有这个窗口）。
+/// 用量：5 小时、本周的百分比和重置时间（nil 表示没有这个窗口）；outdated 是 Claude Code 记的过时的套餐（cca 的 outdated_login_plan）。
 private func usage(five: Double?, week: Double? = 10, stale: Bool = false, fiveResets: Double = now0 + 3600,
-                   weekResets: Double = now0 + 86400 * 3, opus: Double? = nil) -> UsageEntry {
+                   weekResets: Double = now0 + 86400 * 3, opus: Double? = nil, outdated: Any? = nil) -> UsageEntry {
     var d: [String: Any] = ["key": "a@example.com", "source": "cache", "stale": stale]
     if let five { d["five_hour"] = ["utilization": five, "resets_epoch": fiveResets, "reset": false] }
     if let week { d["seven_day"] = ["utilization": week, "resets_epoch": weekResets, "reset": false] }
     if let opus { d["seven_day_opus"] = ["utilization": opus, "resets_epoch": weekResets, "reset": false] }
+    if let outdated { d["outdated_login_plan"] = outdated }
     return try! JSONDecoder().decode(UsageEntry.self, from: JSONSerialization.data(withJSONObject: d))
 }
 
@@ -90,6 +91,16 @@ func officeTests() async {
           && pressed(usage(five: 95)).blocking == nil)
     let both = Diagnosis.all(acct(["health": health("low_purity")]), usage: usage(five: 92), live: nil, now: now0)
     if case .quota? = both.first { check("额度排在纯净度前面", both.last == .lowPurity && both.count == 2) } else { check("额度排在纯净度前面", false, "\(both)") }
+    check("Claude Code 记的套餐过时了：只有这一件时就说它", Diagnosis.all(acct(), usage: usage(five: 10, outdated: "Pro"), live: nil, now: now0)
+          == [.outdatedLoginPlan("Pro")])
+    let plan = Diagnosis.all(missing, usage: usage(five: 100, outdated: "Pro"), live: nil, now: now0)
+    if case .quota? = plan.first {
+        check("套餐过时排在额度后面、没装 App 前面（照常能用，不算真问题）", plan.count == 3 && plan[1] == .outdatedLoginPlan("Pro") && plan[2] == .appMissing, "\(plan)")
+    } else {
+        check("套餐过时排在额度后面、没装 App 前面（照常能用，不算真问题）", false, "\(plan)")
+    }
+    check("对得上（null）、空的、类型不对都不算", Diagnosis.all(acct(), usage: usage(five: 10, outdated: NSNull()), live: nil, now: now0).isEmpty
+          && usage(five: 10, outdated: "").outdatedLoginPlan == nil && usage(five: 10, outdated: 3).outdatedLoginPlan == nil)
 
     // 员工的状态
     check("没登录：椅子空着", mood(acct(["login": "logged_out", "app": ["running": true]])) == .absent)
@@ -109,6 +120,10 @@ func officeTests() async {
     check("快用完、泄露是小标记，不改头条", near.mood == .idle && near.flags == [.nearLimit, .leak])
     check("没装 App、没检测过的小标记", Employee.make(missing, usage: nil, live: nil, now: now0).flags == [.noApp]
           && Employee.make(acct(["health": NSNull()]), usage: nil, live: nil, now: now0).flags == [.neverChecked])
+    let outdated = Employee.make(acct(["app": ["running": true]]), usage: usage(five: 10, outdated: "Pro"), live: nil, now: now0)
+    check("Claude Code 记的套餐过时了：照常在忙，不改头条、没有小标记", outdated.mood == .working && outdated.flags.isEmpty)
+    check("套餐过时的一句（不知道账号现在的套餐时只说前半句）", Texts.outdatedLoginPlan("Pro", current: "Max") == "Claude Code 里记的套餐还是 Pro，账号现在是 Max"
+          && Texts.outdatedLoginPlan("Pro", current: "") == "Claude Code 里记的套餐还是 Pro" && Texts.outdatedLoginPlan("Max", current: nil) == "Claude Code 里记的套餐还是 Max")
     let api = acct(["key": "kimi", "kind": "api", "login": "api", "plan": "", "plan_tier": "", "health": NSNull(),
                     "cli": ["running": true, "sessions": 1, "since_epoch": now0 - 120]])
     let contractor = Employee.make(api, usage: nil, live: nil, now: now0)

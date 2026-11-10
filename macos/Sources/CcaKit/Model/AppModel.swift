@@ -614,9 +614,10 @@ final class AppModel {
     }
 
     /// 刚点了“重新登录”、还没看到成功：这段时间每分钟查一次（登录过程中查到“没登录”不花什么）。
+    /// Claude Code 记的套餐过时了的也算：重新登录之后要再查一次用量，cca 才知道它记下了现在的套餐，提示才会消失。
     private func isRelogging(_ a: Account, now: Double) -> Bool {
         guard let started = reloginStarted[a.ref], now - started < UsagePolling.reloginWatch else { return false }
-        return a.login != .loggedIn || usage(for: a)?.errorCode != nil
+        return a.login != .loggedIn || usage(for: a)?.errorCode != nil || usage(for: a)?.outdatedLoginPlan != nil
     }
 
     private func startDueUsageRuns(lowPower: Bool) {

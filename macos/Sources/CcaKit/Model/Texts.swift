@@ -192,6 +192,12 @@ enum Texts {
         return resetExpiry(rc, now: now, calendar: calendar).map { count + "，" + $0 } ?? count
     }
 
+    /// Claude Code 登录时记下的套餐过时了（cca 给的 `outdated_login_plan`）：「Claude Code 里记的套餐还是 Pro，账号现在是 Max」，
+    /// 不知道账号现在的套餐时只说前半句。账号页那句话、用量下面那一行都用它。
+    static func outdatedLoginPlan(_ old: String, current: String?) -> String {
+        "Claude Code 里记的套餐还是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
+    }
+
     static func product(_ tool: ToolID) -> String {
         switch tool {
         case .claude: return "Claude"

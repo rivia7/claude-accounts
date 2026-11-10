@@ -802,6 +802,8 @@ struct Advice {
             }
             let when = w.resetsEpoch.map { "，" + Texts.resetText(epoch: $0, now: now) } ?? ""
             return Advice(level: .warn, text: "\(name)的额度快用完了（\(Texts.percent(w.percent))\(when)）。可以先换个账号。")
+        case .outdatedLoginPlan(let old):
+            return Advice(level: .info, text: Texts.outdatedLoginPlan(old, current: a.plan) + "：点用量下面的「重新登录…」更新一次。")
         case .lowPurity:
             return Advice(level: .warn, text: "出口 IP 的纯净度低于设定，用的时候注意风险。")
         case .leak:

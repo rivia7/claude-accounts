@@ -137,6 +137,9 @@ struct UsageEntry: Decodable, Sendable, Equatable {
     var extraUsage: ExtraUsage?
     var credits: Credits?
     var resetCredits: ResetCredits?
+    /// Claude Code 登录时记下的套餐和账号现在的对不上（升降级以后要重新登录才会更新）：记下的那个的叫法（“Pro”）。
+    /// cca 比好的，App 不自己比；对得上、不知道、Codex 账号、旧版 cca 都是 nil。
+    var outdatedLoginPlan: String?
 
     enum CodingKeys: String, CodingKey {
         case account, key, email, plan, source
@@ -154,6 +157,7 @@ struct UsageEntry: Decodable, Sendable, Equatable {
         case extraUsage = "extra_usage"
         case credits
         case resetCredits = "reset_credits"
+        case outdatedLoginPlan = "outdated_login_plan"
     }
 
     init(from decoder: Decoder) throws {
@@ -178,6 +182,7 @@ struct UsageEntry: Decodable, Sendable, Equatable {
         extraUsage = c.lossy(ExtraUsage.self, .extraUsage)
         credits = c.lossy(Credits.self, .credits)
         resetCredits = c.lossy(ResetCredits.self, .resetCredits)
+        outdatedLoginPlan = nonEmpty(c.string(.outdatedLoginPlan))
     }
 
     /// 有没有可以显示的数据（`source` 为 none 时没有）。

@@ -211,10 +211,11 @@ cca usage
 - 每个官方账号经它**自己的出口**查询，和在 Claude Code 里打开 `/usage` 看到的一样：5 小时额度、本周额度，以及按模型单独计的每周额度。几个账号一起查，一般几秒钟。
 - 「账号」一列和菜单一样写别名和邮箱，没起别名的只写邮箱。
 - 套餐的叫法和官网一样：Pro、Max（原来的 Max 5x）、Ultra（原来的 Max 20x）、Team、Team Premium（Team 的 Premium 席位）、Enterprise。新版 Claude Code 在账号里记了官方给的套餐名时，直接照它写。
+- 升级、降级套餐以后，Claude Code 里显示的套餐（启动时的横幅、`/status`）可能还是旧的：它只在登录时记下套餐，之后不会自己更新（额度照实际的套餐算，不受影响）。`cca usage` 查到这种情况会在表格下面说一句，启动这个账号时的横幅、App 的账号页也会提示；重新登录一次（`cca login 工作`）就好。
 - 查询由 Claude Code 自己完成（cca 让它以账号的配置无界面地查一下，不加载插件、hooks、MCP），**不发消息、不耗额度**，cca 也不碰登录凭证。
 - 查之前同样会确认出口：端口不通、出口跑到了受限地区的账号不去查。查不到时显示上次查到的数据，并注明是多久前的。
 - 菜单和 `cca ls` 里每个账号后面也会附上最近一次的用量（只读缓存，不联网，不拖慢菜单）。
-- `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）和 `error_code`（同一个原因的代码：`login`、`port`、`timeout`……）、`fetched_at` / `fetched_epoch`、`stale`（超过 10 分钟），以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "resets_epoch": 重置时间（Unix 秒）, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`。所有账号都没有数据时退出码是 1。完整格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
+- `cca usage --json` 输出 JSON，方便接到脚本或状态栏里：`accounts` 里每个账号有 `plan`（套餐）、`source`（`live` 刚查到 / `cache` 查不到时用的缓存 / `none` 没有数据）、`error`（查不到的原因）和 `error_code`（同一个原因的代码：`login`、`port`、`timeout`……）、`fetched_at` / `fetched_epoch`、`stale`（超过 10 分钟），以及 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet` 等窗口（`{"utilization": 百分比, "resets_at": 重置时间, "resets_epoch": 重置时间（Unix 秒）, "reset": 重置时间是否已过}`）、`model_scoped`、`extra_usage`，和 `outdated_login_plan`（Claude Code 记的套餐过时了时是它记的那个，比如 `"Pro"`，否则为 null）。所有账号都没有数据时退出码是 1。完整格式见 [macos/PROTOCOL.md](macos/PROTOCOL.md)。
 - 这个查询用的是 Claude Code 标为实验性的接口；以后的 Claude Code 版本如果改了，cca 会提示这个版本的 Claude Code 查不了用量，不会影响启动账号。
 
 ## 第三方 API 账号

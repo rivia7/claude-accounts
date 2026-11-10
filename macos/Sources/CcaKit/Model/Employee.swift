@@ -88,6 +88,7 @@ struct Employee: Equatable, Sendable, Identifiable {
                 } else {
                     flags.append(.nearLimit)
                 }
+            case .outdatedLoginPlan: break   // 照常能用：不改头条、不加小标记（账号页那句话里说）
             case .appMissing: flags.append(.noApp)
             case .lowPurity: flags.append(.lowPurity)
             case .leak: flags.append(.leak)

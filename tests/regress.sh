@@ -755,6 +755,23 @@ mixed=$(run CCA_USAGE_JOBS=1 cca usage alice bob --json 2>/dev/null)
 ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if len(d[\"accounts\"]) == 2 else 1)"'
 canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
+# Claude Code 记的套餐过时了（登录以后升级了）：查用量时它回报的 subscription_type 是登录时记下的，和账号资料（organizationType）对不上
+canned alice@example.com 13 41 pro
+out=$(run cca usage 2>&1); outj=$(run cca usage --json 2>/dev/null); st=$(gj state)
+ok "Claude Code 记的套餐和账号资料对不上：表格下面说一句、让重新登录；--json 和 _gui state 的用量里是 outdated_login_plan（对得上的是 null），记进 usage.json" 'printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）" && [ "$(printf "%s" "$out" | grep -c "里记的套餐还是")" = 1 ] && printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\" and uacct(\"bob@example.com\")[\"outdated_login_plan\"] is None" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\"" && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"login_plan\"] == \"pro\" else 1)" "$AD/usage.json"'
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
+ok "启动横幅里也说一句（读上次查用量时记下的，不另外查）" 'printf "%s" "$out" | grep -qF "套餐  Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login alice@example.com）"'
+cp "$R/listening" "$T/listening.plan"; unlisten 7901
+out=$(run cca usage alice 2>&1)
+cp "$T/listening.plan" "$R/listening"
+ok "这次查不到（出口端口不通）：照上次记下的说" 'printf "%s" "$out" | grep -q "出口端口 7901 不通" && printf "%s" "$out" | grep -qF "! alice@example.com：Claude Code 里记的套餐还是 Pro"'
+setoa "$AJ" organizationType=claude_pro; out=$(run cca usage alice --json 2>/dev/null); setoa "$AJ" organizationType=claude_max
+ok "账号资料也是 Pro（又降回去了）：对上了就不说" 'printf "%s" "$out" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] is None"'
+run CCA_TTY="$(ans)" cca login alice >/dev/null 2>&1; rc=$?
+setoa "$AJ" organizationType=claude_max organizationRateLimitTier=default_claude_max_5x accountUuid=u-alice   # 假 claude 登录时只写邮箱
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1)
+ok "经 cca 重新登录：登录之前把记下的套餐作废（下次查用量按 Claude Code 新记的重新记），横幅里不再说" '[ $rc -eq 0 ] && ! grep -q login_plan "$AD/usage.json" && ! printf "%s" "$out" | grep -q "里记的套餐还是"'
+canned alice@example.com 13 41; run cca usage alice >/dev/null 2>&1
 edit_table 'j["副号(bob@example.com)"] = j.pop("bob@example.com")'
 out=$(run cca usage 2>&1)
 edit_table 'j["bob@example.com"] = j.pop("副号(bob@example.com)")'
@@ -1175,6 +1192,11 @@ ok "图形界面：在外面、Clash Verge 没在运行：记一条 consent（op
 out=$(runev CCA_GRANT=open_clash_verge cca @alice --version 2>&1); rc=$?
 ok "图形界面：同意之后打开 Clash Verge，照常启动" '[ $rc -eq 3 ] && grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log && [ ! -f "$T/verge/down" ]'
 rm -f "$T/away"
+# Claude Code 记的套餐过时了（outdated_login_plan）：契约测试要解码不是 null 的（下面查用量时 alice 又回到 max）
+canned alice@example.com 13 41 pro
+out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude_outdated.json"
+out2=$(gj state); printf '%s' "$out2" > "$GF/state_outdated_plan.json"
+ok "usage --json / _gui state：Claude Code 记的套餐和账号资料对不上时 outdated_login_plan 是记下的那个（Pro）；Codex 的条目没有这个字段" 'printf "%s" "$out" | jok "uacct(\"alice@example.com\")[\"outdated_login_plan\"] == \"Pro\"" && printf "%s" "$out2" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"outdated_login_plan\"] == \"Pro\" and all(\"outdated_login_plan\" not in (a[\"usage\"] or {}) for a in d[\"tools\"][1][\"accounts\"])"'
 # usage --json 的新字段（alice 带着 Fable 的每周额度：契约测试要解码它占本周总额度的份额）
 canned alice@example.com 13 41 max "{$fable, \"limits\": [{\"kind\": \"weekly_all\", \"scope\": null}, {\"kind\": \"weekly_scoped\", \"scope\": {\"model\": {\"id\": null, \"display_name\": \"Fable\"}}}]}"
 out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude.json"

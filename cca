@@ -643,6 +643,11 @@ class Tool:
     def plan_tier(self, key, sub=None):
         return claude_plan_tier(oauth_of(key), sub)
 
+    def outdated_login_plan(self, key):
+        """Claude Code 登录时记下的套餐和账号现在的对不上：记下的那个的叫法（Pro 等），要重新登录才会更新；对得上、
+        不知道时是 ''（claude_login_plan_outdated）"""
+        return claude_login_plan_outdated(oauth_of(key), usage_login_plan(key))
+
     def sync(self, key):
         claude_sync(key)
 
@@ -714,6 +719,10 @@ class CodexTool(Tool):
 
     def plan_tier(self, key, sub=None):
         return codex_plan_tier(sub or codex_claims(key).get('plan'))
+
+    def outdated_login_plan(self, key):
+        """不比：app-server 查用量时回的就是服务器现在的套餐，没有一份登录时记下的可比"""
+        return ''
 
     def sync(self, key):
         pass
@@ -2791,9 +2800,14 @@ def cmd_secrets_forget(scope=''):
 
 
 def cmd_set_last(key):
+    """记下这次启动的账号（菜单里默认选它）。顺便打印启动横幅里套餐那一句：Claude Code 记的套餐过时了才有（login_plan_note），
+    启动时本来就要起这个 Python，不为它再起一个"""
     c = cfg_load()
     T.state(c, create=True)['last'] = key
     cfg_save(c)
+    old = T.outdated_login_plan(key)
+    if old:
+        print(login_plan_note(key, old))
 
 
 def cmd_name(key):
@@ -4902,6 +4916,8 @@ def ago(secs):
 
 # Claude Code 收 profile 接口给的套餐名（planDisplayName）的规矩：字母数字开头，中间可以有空格和 .+-，最长 40 个字
 PLAN_NAME_RE = lazy_re(r'^[^\W_](?:(?:[^\W_]|[ .+-]){0,38}(?:[^\W_]|\+))?$')
+# Claude 套餐种类（organizationType 去掉 claude_）的叫法，和 Claude Code 自己显示的一样（它写成 Claude Pro）
+CLAUDE_KIND_NAMES = {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}
 
 
 def plan_label(oa, sub=None):
@@ -4917,7 +4933,7 @@ def plan_label(oa, sub=None):
         return 'Ultra'
     if kind == 'team' and x == 5:
         return 'Team Premium'
-    return {'pro': 'Pro', 'max': 'Max', 'team': 'Team', 'enterprise': 'Enterprise', 'free': 'Free'}.get(kind, kind.capitalize()) or '—'
+    return CLAUDE_KIND_NAMES.get(kind, kind.capitalize()) or '—'
 
 
 def claude_plan_parts(oa, sub=None):
@@ -4951,8 +4967,53 @@ def claude_plan_tier(oa, sub=None):
     return named
 
 
+# Claude Code 登录时把当时的套餐种类记进登录凭证（get_usage、claude auth status 回的 subscription_type 就是它），之后从官方读到的
+# 新资料只更新 .claude.json 的 oauthAccount，凭证里这一项不改（2.1.322 核实：登录时记下的不拿资料覆盖，刷新 token 时资料齐全也不再读），
+# 所以升降级以后它还按旧套餐显示（启动横幅、/status 写 Claude Pro）、按旧套餐处理，重新登录才更新。额度由服务器按实际的套餐算，不受影响。
+# cca 查用量时把它记进 usage.json（login_plan），和账号资料对不上就提示重新登录
+CLAUDE_LOGIN_KINDS = ('pro', 'max', 'team', 'enterprise')   # Claude Code 只记这几种，别的记成 null
+
+
+def claude_login_plan_outdated(oa, recorded):
+    """Claude Code 登录时记下的套餐种类（recorded）和账号资料里的（organizationType）不一样：记下的那个的叫法（Pro 等）；
+    一样、哪边没有、认不出都是 ''。额度倍数（Max 5x / 20x）不比：查用量时不回"""
+    t = str(oa.get('organizationType') or '').lower()
+    kind = t[len('claude_'):] if t.startswith('claude_') else ''
+    r = str(recorded or '').lower()
+    return CLAUDE_KIND_NAMES[r] if kind in CLAUDE_LOGIN_KINDS and r in CLAUDE_LOGIN_KINDS and r != kind else ''
+
+
+def login_plan_note(key, old):
+    """Claude Code 记的套餐过时了：给人看的一句（cca usage 的表格下面、启动横幅里；App 自己按 outdated_login_plan 说）"""
+    return '%s 里记的套餐还是 %s（登录时记下的，不会自己更新），账号现在是 %s：重新登录一次就会更新（%s login %s）' % (
+        T.product, old, T.plan(key), T.cmd, name_of(key))
+
+
 def usage_file(key):
     return os.path.join(adir(key), 'usage.json')
+
+
+def usage_login_plan(key):
+    """上次 cca 查用量时 Claude Code 登录时记的套餐种类（usage_save 存的 login_plan）；登录的已经不是那个账号时不算，
+    经 cca 重新登录前清掉（login-plan-forget）"""
+    j = load_quiet(usage_file(key))
+    p = j.get('login_plan') if isinstance(j, dict) else None
+    if not isinstance(p, str):
+        return ''
+    uuid = T.who(key)
+    return '' if uuid and j.get('accountUuid') and j['accountUuid'] != uuid else p
+
+
+def cmd_login_plan_forget(key):
+    """登录之前（claude_login）：usage.json 里记的 Claude Code 登录时的套餐作废，免得重新登录以后还提示；下一次查用量再记"""
+    p = usage_file(key)
+    j = load_quiet(p)
+    if isinstance(j, dict) and 'login_plan' in j:
+        del j['login_plan']
+        try:
+            save_json(p, j, 0o600)
+        except OSError:
+            pass
 
 
 def usage_cached(key):
@@ -4972,10 +5033,14 @@ def usage_cached(key):
     return best
 
 
-def usage_save(key, rl):
+def usage_save(key, rl, sub=None):
+    """查到的用量存进 usage.json。Claude 账号顺带记下查询回的 subscription_type（Claude Code 登录时记的套餐，login_plan）：
+    放在顶层、不进用量窗口，用量可能取 Claude Code 自己那份更新的缓存，这一项只有 cca 查的时候才拿得到"""
+    j = {'fetchedAtMs': int(time.time() * 1000), 'accountUuid': T.who(key), 'utilization': rl}
+    if T is CLAUDE and isinstance(sub, str) and sub:
+        j['login_plan'] = sub
     try:
-        save_json(usage_file(key), {'fetchedAtMs': int(time.time() * 1000), 'accountUuid': T.who(key),
-                                    'utilization': rl}, 0o600)
+        save_json(usage_file(key), j, 0o600)
     except OSError:
         pass
 
@@ -5075,10 +5140,10 @@ def usage_notes(rl, now):
 
 def usage_row(key, plan, **kw):
     """cmd_usage_render / _gui state 里一个账号的用量行（usage_entry 读它）：source live|cache|none，at 取到数据的时间，
-    rl 用量窗口，why 失败原因（USAGE_WHY 的键），msg 补充说明"""
+    rl 用量窗口，why 失败原因（USAGE_WHY 的键），msg 补充说明，outdated_login_plan Claude Code 记的过时的套餐（T.outdated_login_plan）"""
     a, e = parse_key(key)
     row = {'key': key, 'name': name_of(key), 'alias': a, 'email': e or email_of(key), 'plan': plan,
-           'source': 'none', 'at': None, 'rl': {}, 'why': None, 'msg': ''}
+           'source': 'none', 'at': None, 'rl': {}, 'why': None, 'msg': '', 'outdated_login_plan': ''}
     row.update(kw)
     return row
 
@@ -5140,7 +5205,9 @@ def usage_entry(r, now):
     a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name'), **shares.get(name_key(m.get('display_name')), {}))
                          for m in dicts(rl, 'model_scoped')] if isinstance(rl.get('model_scoped'), list) else None
     a['extra_usage'] = rl.get('extra_usage') if isinstance(rl.get('extra_usage'), dict) else None
-    if T is not CLAUDE:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
+    if T is CLAUDE:   # Claude Code 登录时记的套餐和账号现在的对不上（重新登录才会更新）：记的那个的叫法；对得上、不知道是 null
+        a['outdated_login_plan'] = r.get('outdated_login_plan') or None
+    else:   # codex 原样给的：credits 余额；还能重置几次额度（availableCount）和每一次的明细
         a['credits'] = rl.get('credits') if isinstance(rl.get('credits'), dict) else None
         a['reset_credits'] = reset_credits_view(rl.get('reset_credits'))
     return a
@@ -5207,6 +5274,9 @@ def usage_table(rows, now, cols, color, api):
         else:
             print(s.rstrip())
             print(' ' * (4 + cw[0]) + paint(fit(note, max(width - 4 - cw[0], 20), pad=False), ncode))
+    for r in rows:   # Claude Code 记的套餐过时了：表格下面单独说一句（备注那一格放不下）
+        if r['outdated_login_plan']:
+            print(paint('  ! %s：%s' % (r['name'], login_plan_note(r['key'], r['outdated_login_plan'])), '33'))
     if api:
         print(paint('  第三方 API 账号没有订阅用量，不查：%s' % '、'.join(name_of(k) for k in api), '2'))
 
@@ -5224,13 +5294,15 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
                         msg=r.get('msg') or '')
         if u:
             row.update(source='live', at=now, rl=u['rate_limits'])
-            usage_save(k, u['rate_limits'])
+            usage_save(k, u['rate_limits'], u.get('subscription_type'))
         elif row['why'] not in ('login', 'mismatch'):
             x = usage_cached(k)
             if x:
                 row.update(source='cache', at=x['at'], rl=x['rl'])
                 if x['rl'].get('plan'):
                     row['plan'] = T.plan(k, x['rl']['plan'])
+        if row['why'] not in ('login', 'mismatch'):   # 没登录、登录的不是这个账号时不说
+            row['outdated_login_plan'] = T.outdated_login_plan(k)
         rows.append(row)
     official = {k for k, v in t.items() if not is_api(v)}
     api = [k for k, v in t.items() if is_api(v)] if set(keys) == official else []
@@ -6504,7 +6576,8 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
         sub = (x['rl'].get('plan') if x else None) or None
         plan, tier = T.plan(k, sub), T.plan_tier(k, sub)
         if x:
-            usage = usage_entry(usage_row(k, plan, source='cache', at=x['at'], rl=x['rl']), now)
+            usage = usage_entry(usage_row(k, plan, source='cache', at=x['at'], rl=x['rl'],
+                                          outdated_login_plan=T.outdated_login_plan(k)), now)
     pat = None if api else app_proc_re(T, os.path.join(adir(k), 'desktop'))
     pid = None if api else next((p for p, cmd in procs if pat.search(cmd)), None)
     why = {}
@@ -8018,7 +8091,7 @@ CMDS = {
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
-    'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render,
+    'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render, 'login-plan-forget': cmd_login_plan_forget,
     'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
     'update-check': cmd_update_check, 'client-updates': cmd_client_updates,
@@ -10067,6 +10140,7 @@ claude_login() {
 	info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开登录页${ACC_EMAIL:+（已预填 ${ACC_EMAIL}）}，登录完成后会自动继续"
 	local -a em=()
 	[ -n "$ACC_EMAIL" ] && em=(--email "$ACC_EMAIL")
+	py login-plan-forget "$ACC_KEY" || :   # 上次查用量时记下的“Claude Code 登录时的套餐”作废：登录后它按现在的套餐重新记
 	child_env
 	env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth login --claudeai "${em[@]}" 3<&-
 }
@@ -11442,7 +11516,7 @@ session_open() { py session-open "$ACC_KEY" "$$" >/dev/null 2>&1; return 0; }
 session_close() { rm -f "$ACC_DIR/cli-$$.json"; }
 
 run_account() {
-	local key="$1" rc e dropped bad
+	local key="$1" rc e dropped bad pn
 	shift
 	need_bin
 	eval "$(py env "$key")" || die "读取账号失败: $key"
@@ -11459,7 +11533,7 @@ run_account() {
 	prepare_account "$key" || die "初始化账号目录失败"
 	if ! bad=$(py launch-check "$@"); then settings_warn "$bad"; return 1; fi
 	[ "$ACC_KIND" = api ] || ensure_login || exit 1
-	py set-last "$key"
+	pn=$(py set-last "$key")   # 顺带拿到横幅里套餐那一句（Claude Code 记的套餐过时了才有）
 	say ""
 	if [ "$ACC_KIND" = api ]; then
 		say "  ${C_B}${ACC_NAME}${C_0}   ${C_D}第三方 API · ${ACC_BASE_URL}${ACC_MODEL:+ · ${ACC_MODEL}}${C_0}"
@@ -11475,6 +11549,7 @@ run_account() {
 		if [ -n "$COFFEE_LINE" ]; then say "  ${C_D}出口${C_0}  ${ACC_NODE} · ${COFFEE_LINE}"
 		else say "  ${C_D}出口${C_0}  ${ACC_NODE}（未检测）"; fi
 		leak_show "  ${C_D}泄露${C_0}  "
+		[ -z "$pn" ] || say "  ${C_D}套餐${C_0}  ${C_Y}${pn}${C_0}"
 	fi
 	say ""
 	child_env

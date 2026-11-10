@@ -235,7 +235,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "seven_day_sonnet": {"utilization": 60.0, "resets_at": "…", "resets_epoch": 1794297600.0, "reset": false},
   "seven_day_oauth_apps": null,
   "model_scoped": [{"name": "Sonnet", "utilization": 60.0, "resets_at": "…", "resets_epoch": 1794297600.0, "reset": false}],
-  "extra_usage": null
+  "extra_usage": null,
+  "outdated_login_plan": "Pro"
 }
 ```
 
@@ -253,6 +254,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   没有），`id`、`title`（没有为 null，界面上叫“完整重置”）、`status`（`available` 才能用）、`expiresAt` / `grantedAt`（codex 原样给的）。cca 另加：
   每一次的 `expires_epoch`（Unix 秒，不过期为 null），和还能用的里面最早过期的那次的 `next_expires_epoch`（都不过期、没有明细时为 null；
   App 显示“最早一次几号过期”用它，不自己挑）。重置见 4.5。
+- `outdated_login_plan`（只有 Claude 的条目有，Codex 的没有这个字段）：Claude Code 登录时记下的套餐（查用量时它回报的 `subscription_type`）
+  和账号现在的套餐（官方资料里的种类：Pro / Max / Team / Enterprise）对不上时，是记下的那个的叫法（`"Pro"`）；对得上、不知道时为 null。
+  Claude Code 只在登录时记套餐，之后升级、降级都不改（2.1.322 核实），所以它还按旧套餐显示（启动横幅、`/status` 里写 Claude Pro）、按旧套餐处理；
+  额度由服务器按实际的套餐算，不受影响。重新登录（`cca login 账号`）才会更新：cca 经它登录之前把记下的作废，下一次查用量对上了就是 null。
+  App 照它说一句、给「重新登录…」，不自己比（`plan` 是账号现在的套餐）。没有这个字段（旧版 cca）当作 null。
 - 退出码 1 表示没有一个账号有数据（JSON 照样输出）。查询会经各账号的出口，最慢 2 分钟左右。
 - `_gui state` 里的 `usage` 是同样的条目（`source` 是 `cache` 或 `none`）。
 

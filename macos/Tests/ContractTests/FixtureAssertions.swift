@@ -68,6 +68,9 @@ func fixtureAssertions() {
         check("state：config", s.config?.routerConfigured == true && s.config?.localConfigured == true && s.config?.minTrust == 50
               && s.config?.local?.client == .clashVerge && s.config?.policy?.repo == "example/cca-policy")
         check("state：本机 Clash 的叫法", s.routing?.slot(1)?.localNode == "Verge-B")
+        check("state：bob 的 Claude Code 还记着 Pro（账号现在是 Ultra），别的账号没有（null、Codex 没这个字段）",
+              bob?.usage?.outdatedLoginPlan == "Pro" && s.account(AccountRef(tool: .claude, key: "erin@example.com"))?.usage?.outdatedLoginPlan == nil
+              && frank?.usage?.outdatedLoginPlan == nil)
     }
     if let s = loadFixture(StateDoc.self, "state_nocodex.json") {
         let c = s.tool(.claude)
@@ -85,6 +88,8 @@ func fixtureAssertions() {
         check("usage_claude：bob 实时", bob?.source == .live && bob?.fiveHour?.utilization == 92 && bob?.errorCode == nil)
         check("usage_claude：带小数的 resets_epoch", abs((bob?.fiveHour?.resetsEpoch ?? 0) - 1794050010.12) < 0.001)
         check("usage_claude：额外用量", bob?.extraUsage?.isEnabled == true && bob?.extraUsage?.utilization == 12.5)
+        check("usage_claude：Claude Code 记的套餐过时了（bob 是 Pro，别的是 null）", bob?.outdatedLoginPlan == "Pro"
+              && u.accounts.filter { $0.outdatedLoginPlan != nil }.count == 1)
         let carol = u.accounts.first { $0.key == "carol@example.com" }
         check("usage_claude：carol 用缓存、带出错原因", carol?.source == .cache && carol?.errorCode == .login && carol?.stale == true
               && carol?.fiveHour?.reset == true)

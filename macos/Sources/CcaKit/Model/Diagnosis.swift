@@ -15,6 +15,9 @@ enum Diagnosis: Equatable, Sendable {
     case exitBad(HealthResult, region: String?)
     /// 5 小时 / 本周的额度用完了，或者快用完了（≥90%）；5 小时在前
     case quota([QuotaPressure])
+    /// Claude Code 登录时记下的套餐过时了（升降级以后要重新登录才会更新）：值是记下的那个（“Pro”）。
+    /// 额度照账号实际的套餐算，只是 Claude Code 里还按旧套餐显示、处理，所以排在真正的问题后面
+    case outdatedLoginPlan(String)
     /// 这台 Mac 上没装桌面 App（只是提示：还能用网页版；排在真正的问题后面）
     case appMissing
     case lowPurity
@@ -53,6 +56,7 @@ enum Diagnosis: Equatable, Sendable {
         }
         let pressed = quotaPressure(u, now: now)
         if !pressed.isEmpty { out.append(.quota(pressed)) }
+        if let p = nonEmpty(u?.outdatedLoginPlan) { out.append(.outdatedLoginPlan(p)) }
         if !a.isAPI, !a.can.app, a.canWhy["app"] == .appMissing { out.append(.appMissing) }
         if let h {
             if h.result == .lowPurity { out.append(.lowPurity) }

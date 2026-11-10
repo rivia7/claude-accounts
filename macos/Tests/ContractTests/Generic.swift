@@ -32,6 +32,9 @@ func usageEntryInvariants(_ n: String, _ ru: [String: Any], _ u: UsageEntry?) {
     check("\(n) error 和 error_code 同时有或同时没有", (u.error == nil) == (u.errorCode == nil),
           "error=\(String(describing: u.error)) code=\(String(describing: u.errorCode))")
     check("\(n) stale 是布尔", isBool(ru["stale"]))
+    if let p = ru["outdated_login_plan"], !isNull(p) {
+        check("\(n) outdated_login_plan 不是 null 时是不为空的文字", (p as? String).map { !$0.isEmpty } == true, "\(p)")
+    }
     if u.source == .none {
         check("\(n) source none 没有窗口", u.fiveHour == nil && u.sevenDay == nil)
     }

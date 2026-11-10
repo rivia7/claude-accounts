@@ -103,6 +103,9 @@ struct UsageSection: View {
                         reloginLink(u)
                     }
                 }
+                if let old = u.outdatedLoginPlan {
+                    outdatedPlanRow(old)
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -131,6 +134,24 @@ struct UsageSection: View {
                 .buttonStyle(.borderless)
                 .font(.caption)
         }
+    }
+
+    /// Claude Code 登录时记下的套餐过时了（cca 比好的）：说一句，右边是「重新登录…」（cca login 先退出再登录，点了先确认）。
+    /// 样子和下面「查看重置次数」那几行一样。
+    private func outdatedPlanRow(_ old: String) -> some View {
+        HStack(spacing: 10) {
+            Label(Texts.outdatedLoginPlan(old, current: account.plan), systemImage: "person.badge.key").foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("重新登录…") { model.relogin(account) }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .disabled(model.activity(account.ref) != nil)
+                .help("Claude Code 只在登录时记下套餐，升级、降级以后不会自己更新（额度照实际的套餐算）。"
+                      + "点了在终端里运行 \(model.loginHandoff(account).display)：先退出现在的登录再登录")
+        }
+        .font(.callout)
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
     }
 
     private var emptyReason: String {

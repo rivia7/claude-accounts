@@ -299,7 +299,8 @@
                 "allowance_percent_of_weekly": 50
               }
             ],
-            "extra_usage": null
+            "extra_usage": null,
+            "outdated_login_plan": "Pro"
           },
           "health": {
             "version": 1,
@@ -512,7 +513,8 @@
                 "allowance_percent_of_weekly": 50
               }
             ],
-            "extra_usage": null
+            "extra_usage": null,
+            "outdated_login_plan": null
           },
           "health": {
             "version": 1,
@@ -619,7 +621,8 @@
             "seven_day_sonnet": null,
             "seven_day_oauth_apps": null,
             "model_scoped": [],
-            "extra_usage": null
+            "extra_usage": null,
+            "outdated_login_plan": null
           },
           "health": {
             "version": 1,

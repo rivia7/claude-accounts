@@ -13,7 +13,8 @@
       "model_scoped": [{"name": "Sonnet", "utilization": 60.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
                        {"name": "Fable", "utilization": 34.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false,
                         "used_percent_of_weekly": 17, "allowance_percent_of_weekly": 50}],
-      "extra_usage": {"is_enabled": true, "utilization": 12.5, "monthly_limit": 5000, "used_credits": 625}
+      "extra_usage": {"is_enabled": true, "utilization": 12.5, "monthly_limit": 5000, "used_credits": 625},
+      "outdated_login_plan": "Pro"
     },
     {
       "account": "carol@example.com", "key": "carol@example.com", "email": "carol@example.com", "plan": "",
@@ -25,14 +26,15 @@
       "seven_day_sonnet": null,
       "seven_day_oauth_apps": null,
       "model_scoped": null,
-      "extra_usage": null
+      "extra_usage": null,
+      "outdated_login_plan": null
     },
     {
       "account": "测试", "key": "测试(dave@example.com)", "email": "dave@example.com", "plan": "Pro",
       "source": "none", "fetched_at": null, "fetched_epoch": null, "age_seconds": null, "stale": false,
       "error": "登录的是 eve@example.com，不是 dave@example.com", "error_code": "mismatch", "error_detail": "eve@example.com",
       "five_hour": null, "seven_day": null, "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_oauth_apps": null,
-      "model_scoped": null, "extra_usage": null
+      "model_scoped": null, "extra_usage": null, "outdated_login_plan": null
     },
     {
       "account": "erin@example.com", "key": "erin@example.com", "email": "erin@example.com", "plan": "Max",
@@ -40,7 +42,8 @@
       "error": null, "error_code": null, "error_detail": null,
       "five_hour": {"utilization": 100.0, "resets_at": "2026-11-07T11:13:30+00:00", "resets_epoch": 1794050010.0, "reset": false},
       "seven_day": {"utilization": 63.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
-      "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_oauth_apps": null, "model_scoped": [], "extra_usage": null
+      "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_oauth_apps": null, "model_scoped": [], "extra_usage": null,
+      "outdated_login_plan": null
     },
     {
       "account": "grace@example.com", "key": "grace@example.com", "email": "grace@example.com", "plan": "Pro",
@@ -48,7 +51,8 @@
       "error": null, "error_code": null, "error_detail": null,
       "five_hour": {"utilization": 12.0, "resets_at": "2026-11-07T11:13:30+00:00", "resets_epoch": 1794050010.0, "reset": false},
       "seven_day": {"utilization": 30.0, "resets_at": "2026-11-10T08:00:00+00:00", "resets_epoch": 1794297600.0, "reset": false},
-      "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_oauth_apps": null, "model_scoped": [], "extra_usage": null
+      "seven_day_opus": null, "seven_day_sonnet": null, "seven_day_oauth_apps": null, "model_scoped": [], "extra_usage": null,
+      "outdated_login_plan": null
     }
   ],
   "skipped_api_accounts": ["直连接口", "香港接口"]
