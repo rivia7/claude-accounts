@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.4", title: "路由器还在用旧配置时，重载一次就好", points: [
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "路由器上的 OpenClash / ShellCrash 还在按旧配置运行、切不到账号的节点时，cca 会说明原因，问过你再重载一次；以前这种情况每次同步都会失败，这台 Mac 上的账号都启动不了。"),
+            .init(symbol: "terminal",
+                  text: "在终端里做的操作（登录、添加账号等）没成功时，最后一行会正确显示退出码，不再是一串问号。"),
+        ], art: "route"),
         ReleaseNote(version: "3.1.0-beta.3", title: "在账号页直接查看额度和重置次数", points: [
             .init(symbol: "hand.tap",
                   text: "账号页“用量”下面多了「查看重置次数」（Claude 账号）和「查看 API 额度」两个按钮，不用再去右键菜单里找。"),
