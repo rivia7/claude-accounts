@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.8", title: "看看每个账号每周用了多少", points: [
+            .init(symbol: "chart.bar.xaxis",
+                  text: "账号页多了「每周用量」：最近 12 周，每周用了那一周额度的多少。一周一根竖条，填满就是用完；鼠标指着一周看细节，下面一行是平均每周用到多少、几周用完、几周没用到一半。"),
+            .init(symbol: "chart.bar.doc.horizontal",
+                  text: "左边新增「用量统计」：所有 Claude、ChatGPT 账号的每周用量排在一起，哪个总不够用、哪个常常剩一大半，一眼看出来。点一行打开这个账号。"),
+            .init(symbol: "calendar.badge.clock",
+                  text: "Claude、OpenAI 都不给以前的用量，所以 cca 每次查用量时记一笔，从这个版本开始一周一周攒起来（刚升级时只有本周）。一周结束前一天没查到的，那根条填成灰色：实际可能更多。"),
+            .init(symbol: "text.alignleft",
+                  text: "账号页信息行右边的按钮（重新登录、在 claude.ai 查看、复制……）图标和文字靠左，上下排成一列。"),
+        ], art: "quota"),
         ReleaseNote(version: "3.1.0-beta.7", title: "本周额度快重置时提醒先用，API key 记在账号页", points: [
             .init(symbol: "hourglass",
                   text: "本周额度 24 小时内就要重置、还剩至少 20% 的账号，名字旁边有个蓝色的沙漏，账号页写着还剩多少、几点重置：建议先用它，别让额度白白作废。账号用不了（没登录、登错号、出口有问题）或者 5 小时额度快用完时不提示。"),
