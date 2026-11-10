@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.7", title: "本周额度快重置时提醒先用，API key 记在账号页", points: [
+            .init(symbol: "hourglass",
+                  text: "本周额度 24 小时内就要重置、还剩至少 20% 的账号，名字旁边有个蓝色的沙漏，账号页写着还剩多少、几点重置：建议先用它，别让额度白白作废。账号用不了（没登录、登错号、出口有问题）或者 5 小时额度快用完时不提示。"),
+            .init(symbol: "key",
+                  text: "账号页多了 API key 一行：第三方 API 账号的 key 在这里，官方账号也可以记一把备查的（比如在控制台里建的，cca 不会拿它登录或启动）。平时只显示开头和结尾几个字，点眼睛看完整的，30 秒后自动收起；「复制」后剪贴板 60 秒自动清掉。"),
+            .init(symbol: "tablecells",
+                  text: "cca usage 的表格一个账号一行，不再折行：终端窄时先收起邮箱、套餐和重置时间，备注放不下的写成「…」。"),
+            .init(symbol: "rectangle.on.rectangle",
+                  text: "账号页、节点分流页、客户端更新页的按钮换成统一的样子，同一节里的按钮对齐；「客户端更新」换了和 cca 一样风格的图标，界面上的说明也改得更短、更好懂。"),
+        ], art: "quota"),
         ReleaseNote(version: "3.1.0-beta.6", title: "Claude Code 显示的套餐不对时，提示重新登录", points: [
             .init(symbol: "person.badge.key",
                   text: "升级、降级套餐以后，Claude Code 里显示的套餐（启动时的横幅、/status）可能还是旧的：它只在登录时记下套餐，之后不会自己更新。cca 查用量时发现和账号现在的套餐对不上，账号页会说一句，用量下面有「重新登录…」，重新登录一次就会更新。"),
