@@ -320,6 +320,29 @@ ok "旧入站占端口：第一次没绑上 7901，自动再重载一次后成�
 edit_table '[j.pop("u%d@example.com" % i) for i in range(2, 10)]'
 run cca router sync -y >/dev/null 2>&1
 
+# 8c. 内核落后于运行配置文件（文件重新生成过、内核还没重新加载；真实路由器上遇到过）：内核的 CCA-1 里没有 US-A，文件里有。
+#     不能只看文件的结构就当作不用重载：先改为 REJECT，问过再重载一次（同步、启动前核对都一样）
+cp "$R/core.yaml" "$T/core.snap"
+stale_kernel() {   # 内核加载的那份里 CCA-1 去掉 US-A、选中 HK-A；运行配置文件不动
+	touch "$R/kernel_stale"
+	ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); c["proxy-groups"].find { |g| g["name"] == "CCA-1" }["proxies"].delete("US-A"); File.write(ARGV[0], YAML.dump(c))' "$R/core.yaml"
+	printf HK-A > "$R/sel/CCA-1"
+}
+stale_kernel; n0=$(reloads)
+out=$(run cca router sync 2>&1); rc=$?
+ok "内核落后于运行配置文件 + 非交互：说清楚是内核没重新加载（不是节点不在路由器上），CCA-1 先改为 REJECT，不重载，返回 3" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "CCA-1 切换到 US-A 失败：运行配置文件里的 CCA-1 有这个节点，在跑的内核里还没有" && printf "%s" "$out" | grep -q "需要让 OpenClash 重载一次配置" && [ "$(sel CCA-1)" = REJECT ] && [ "$(reloads)" = "$n0" ]'
+out=$(run CCA_TTY="$(ans y)" cca router sync 2>&1); rc=$?
+ok "内核落后于运行配置文件：问过后重载一次，CCA-1 切回 US-A，同步成功" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "现在重载吗" && [ "$(reloads)" = $((n0 + 1)) ] && [ "$(sel CCA-1)" = US-A ]'
+stale_kernel; n0=$(reloads)
+out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
+ok "启动前核对时发现内核落后：问过后重载一次，照常启动（每次连路由器只说一次）" '[ $rc -eq 3 ] && [ "$(reloads)" = $((n0 + 1)) ] && [ "$(sel CCA-1)" = US-A ] && [ "$(printf "%s" "$out" | grep -c "CCA-1 切换到 US-A 失败")" = 2 ]'
+stale_kernel; n0=$(reloads)
+out=$(run CCA_TTY="$(ans n)" cca @alice --version 2>&1); rc=$?
+ok "启动前核对时发现内核落后、不同意重载：不启动（不会走错出口），CCA-1 留在 REJECT" '[ $rc -ne 0 ] && [ $rc -ne 3 ] && printf "%s" "$out" | grep -q "路由器账号节点未能核实" && [ "$(sel CCA-1)" = REJECT ] && [ "$(reloads)" = "$n0" ]'
+rm -f "$R/kernel_stale"; cp "$T/core.snap" "$R/core.yaml"
+out=$(run cca router sync 2>&1); rc=$?
+ok "（还原）内核和运行配置文件一致了：经 API 切回 US-A，不重载" '[ $rc -eq 0 ] && [ "$(sel CCA-1)" = US-A ] && [ "$(reloads)" = "$n0" ]'
+
 # 9. OpenClash 升级/重装：钩子丢了、重启后没有端口池
 cp pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh"
 cp "$R/etc/openclash/config/custom.yaml" "$RC"; printf '7890\n7891\n7892\n7893\n7895\n9090\n' > "$R/listening"; rm -f "$R"/sel/CCA-*
@@ -1507,7 +1530,28 @@ fi
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
-ok "lint：cca、install.sh、release.sh 和 policy.sh 里没有 \$变量 紧跟非 ASCII 字符" '[ "$(python3 -I -c "import re,sys; print(sum(len(re.findall(r\"\\\$[A-Za-z_][A-Za-z0-9_]*(?=[^\\x00-\\x7f])\", open(f, encoding=\"utf-8\").read())) for f in sys.argv[1:]))" "$CCA" "$D/../install.sh" "$D/../release.sh" "$D/../policy.sh")" = 0 ]'
+lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
+	# 查发出去的 bash：cca、install.sh、release.sh、policy.sh、macos 下的脚本，还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
+	python3 -I - "$D/.." "$CCA" install.sh release.sh policy.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
+import glob, os, re, sys
+root, files = sys.argv[1], []
+for a in sys.argv[2:]:
+    ps = sorted(glob.glob(os.path.join(root, a)))
+    if not ps and '*' not in a:
+        print('：没有 %s' % a)
+        sys.exit()
+    for p in ps:
+        if os.path.isdir(p):
+            files += sorted(os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs if f.endswith(('.sh', '.swift')))
+        else:
+            files.append(p)
+bad = ['%s:%d' % (os.path.relpath(f, root), i) for f in files
+       for i, line in enumerate(open(f, encoding='utf-8'), 1) if re.search(r'\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])', line)]
+print('ok' if not bad else '：' + '、'.join(bad))
+PY
+}
+ld=$(lint_dollar)
+ok "lint：cca、install.sh、release.sh、policy.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
 out=$(run cca router status 2>&1)
 ok "router status：列出槽位、端口和选中节点" 'printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A" && printf "%s" "$out" | grep -q "槽位 CCA-2 :7902 监听中 → REJECT"'
 

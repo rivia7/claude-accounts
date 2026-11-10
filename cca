@@ -7672,6 +7672,12 @@ in_source() {   # in_source "节点<TAB>节点…"：这些节点生成运行配
 		have = ((yl(ARGV[0]) || {})["proxies"] || []).map { |p| p["name"].to_s if p.is_a?(Hash) }
 		exit($stdin.read.split("\t").reject(&:empty?).all? { |n| have.include?(n) } ? 0 : 1)' "$src" 2>/dev/null
 }
+in_group() {   # in_group 配置 策略组 节点：这份配置里这个策略组的成员有这个节点
+	[ -n "$1" ] && [ -f "$1" ] || return 1
+	ruby -E UTF-8 -ryaml -e "$YL"'
+		g = ((yl(ARGV[0]) || {})["proxy-groups"] || []).find { |x| x.is_a?(Hash) && x["name"].to_s == ARGV[1].dup.force_encoding("UTF-8") }
+		exit(g && g["proxies"].is_a?(Array) && g["proxies"].map(&:to_s).include?(ARGV[2].dup.force_encoding("UTF-8")) ? 0 : 1)' "$1" "$2" "$3" </dev/null 2>/dev/null
+}
 core_bin() {   # 优先用实际在跑的那份内核
 	if [ "$BK" = sc ]; then   # ShellCrash 保守模式启动后会删掉 /tmp 里的内核文件，在跑的进程经 /proc 还找得到
 		for c in "$SCT/CrashCore" "/proc/$(pidof CrashCore | awk '{print $1}')/exe"; do [ -x "$c" ] && { echo "$c"; return 0; }; done
@@ -7806,7 +7812,9 @@ json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 now_of() { sed -n 's/.*"now":"\([^"]*\)".*/\1/p' "$CTLOUT" 2>/dev/null; }
 
 # 按 ${SEL}（"CCA-n<TAB>节点"）把每个槽位切到账号的节点；节点不可用时切到 REJECT（宁可断开也不换出口）。
-# 返回 0 全部就绪；2 有策略组不在运行中的内核里（需要重载）；1 其它失败（切不过去的节点记在 FAILED，TAB 分隔）
+# select_all [运行配置]：给了运行配置时，内核不让切（400：它的这个组里没有这个节点）、而这份配置里的组有这个节点的，
+# 是内核落后于配置文件（文件重新生成过，内核还没重新加载；真实路由器上遇到过），和组不在内核里一样，重载一次就好。
+# 返回 0 全部就绪；2 有策略组不在运行中的内核里、或内核的组里缺了配置文件里有的节点（需要重载）；1 其它失败（切不过去的节点记在 FAILED，TAB 分隔）
 select_all() {
 	FAILED=""
 	[ -s "$SEL" ] || return 0
@@ -7821,9 +7829,15 @@ select_all() {
 		fi
 		[ "$(now_of)" = "$node" ] && continue
 		ctl PUT "/proxies/$g" "{\"name\":\"$(json_str "$node")\"}"
+		sa_put=$CODE
 		case "$CODE" in 2??) ctl GET "/proxies/$g" ;; esac
 		if [ "$CODE" = 200 ] && [ "$(now_of)" = "$node" ]; then
 			echo "${g} → ${node}"
+		elif [ "$sa_put" = 400 ] && in_group "${1:-}" "$g" "$node"; then
+			echo "${g} 切换到 ${node} 失败：运行配置文件里的 ${g} 有这个节点，在跑的内核里还没有（内核还没重新加载这份配置），先改为 REJECT"
+			FAILED="${FAILED}${node}${TAB}"
+			ctl PUT "/proxies/$g" '{"name":"REJECT"}'
+			rc=2
 		else
 			echo "${g} 切换到 ${node} 失败（HTTP ${CODE}，未能核实目标节点），改为 REJECT"
 			FAILED="${FAILED}${node}${TAB}"
@@ -8082,12 +8096,12 @@ apply_now() {
 	fi
 	if [ "$(structure "$cf")" = "$(structure "$t")" ] && [ -z "$(missing_ports)" ]; then
 		put_runtime "$cf" "$t"   # 只有默认选中顺序可能不同，写回文件让下次启动一致
-		select_all
+		select_all "$cf"
 		case $? in
 			0) echo "账号端口已就绪（切换节点走 API，无需重载）"; return 0 ;;
 			1) return 1 ;;
 		esac
-		echo "运行中的内核里缺少账号策略组"   # 文件和内核不一致，落到下面的重载
+		echo "运行中的内核里缺少账号策略组或组里的节点（和运行配置文件不一致）"   # 落到下面的重载
 		cp -f "$cf" "$t"
 	fi
 	if [ "${CCA_ALLOW_RELOAD:-}" != 1 ]; then
@@ -8148,11 +8162,12 @@ ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（
 	fill_source
 	[ -n "$FILLWROTE" ] && running && : > "$FILLPEND"
 	if [ -z "$(missing_ports)" ]; then
-		select_all
-		case $? in
-			0) fill_waiting || return 0 ;;
-			1) fill_waiting || return 1 ;;
+		ctl_init   # 控制接口的端口和密钥先读好（select_all 在子 shell 里跑，读了也带不回来）
+		en_out=$(select_all "$(runtime_config)"); en_rc=$?
+		case $en_rc in
+			0|1) [ -z "$en_out" ] || printf '%s\n' "$en_out"; fill_waiting || return $en_rc ;;
 		esac
+		# 2（组不在运行中的内核里，或内核落后于运行配置文件）：交给 apply_now，它会再核实一遍、说清楚，问过再重载，这里不重复说
 	fi
 	apply_now
 }

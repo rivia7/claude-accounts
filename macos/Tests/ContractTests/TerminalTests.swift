@@ -15,9 +15,11 @@ func sessionScriptTests() async {
     }
     let cca = tool("session-cca", "#!/bin/sh\npwd\nfor a in \"$@\"; do printf '<%s>\\n' \"$a\"; done\nexit 3\n")
     let shell = tool("session-shell", "#!/bin/sh\necho \"SHELL-STARTED $*\"\n")
+    // 终端里是 UTF-8：/bin/bash 3.2 这时会把紧跟在 $变量 后面的中文的首字节吞进变量名（C locale 下看不出来）
     func run(_ url: URL) async -> ProcessResult? {
         try? await CcaProcess.run(ProcessSpec(executable: "/bin/bash", arguments: [url.path],
-                                              environment: ["PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "SHELL": shell.path], timeout: 20))
+                                              environment: ["PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "SHELL": shell.path,
+                                                            "LANG": "en_US.UTF-8"], timeout: 20))
     }
 
     let session = Handoff.session(prefix: ["codex"], key: "工作(bob@example.com)", name: "工作", directory: place.path)
@@ -31,7 +33,7 @@ func sessionScriptTests() async {
     check("在选的文件夹里运行", out.split(separator: "\n").contains { $0.hasSuffix("工作 目录'x") }, out)
     check("参数原样传给 cca", out.contains("<codex>\n<@工作(bob@example.com)>\n"), out)
     check("结束后留在用户的 shell 里（登录 shell）", out.contains("SHELL-STARTED -l"), out)
-    check("说清楚退出码", out.contains("退出码 3"), out)
+    check("说清楚退出码", out.contains("命令结束（退出码 3）。"), out)
     check("运行一次就删掉自己", !fm.fileExists(atPath: url.path) && !fm.fileExists(atPath: url.path + ".run"))
 
     var gone = session
@@ -43,6 +45,10 @@ func sessionScriptTests() async {
     }
 
     // 普通的交接（登录、添加账号）照旧：不换文件夹，结束时等按键
+    if let u = try? TerminalHandoff.write(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: cca.path, directory: dir) {
+        let rr = await run(u)
+        check("普通交接：命令失败时说清楚退出码", (rr?.stdoutText ?? "").contains("命令结束（退出码 3）。"), rr?.stdoutText ?? "")
+    }
     let plain = TerminalHandoff.script(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: "/x/cca")
     check("普通交接不 cd、不进 shell", !plain.contains("cd --") && !plain.contains("exec \"${SHELL") && plain.contains("按任意键关闭"))
     check("系统终端：按键之后关掉窗口（别的终端不发 Apple Event）", plain.contains("TERM_PROGRAM:-}\" = Apple_Terminal") && plain.contains("close window id i") && plain.contains("if [ -t 0 ]; then cca_wait_close; fi"))

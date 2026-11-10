@@ -166,11 +166,11 @@ enum TerminalHandoff {
             "cd -- \(shellQuote(dir)) || { echo \(shellQuote("打不开这个文件夹：" + dir)); cca_wait_close; exit 1; }\n"
         } ?? ""
         let finish = h.staysOpen ? """
-        if [ "$status" -ne 0 ]; then echo "命令结束（退出码 $status）。"; fi
+        if [ "$status" -ne 0 ]; then echo "命令结束（退出码 ${status}）。"; fi
         exec "${SHELL:-/bin/zsh}" -l
 
         """ : """
-        if [ "$status" -eq 0 ]; then echo "完成。回到 cca App 会自动刷新。"; else echo "命令结束（退出码 $status）。"; fi
+        if [ "$status" -eq 0 ]; then echo "完成。回到 cca App 会自动刷新。"; else echo "命令结束（退出码 ${status}）。"; fi
         if [ -t 0 ]; then cca_wait_close; fi
         exit "$status"
 

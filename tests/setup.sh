@@ -212,7 +212,10 @@ case "$url" in
     [ -f "$f" ] || { emit 404 '{"message":"resource not found"}'; exit 0; }
     if [ "$method" = PUT ]; then
       name=$(printf '%s' "$data" | sed -n 's/^{"name":"\(.*\)"}$/\1/p')
-      if ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); g = (c["proxy-groups"] || []).find { |x| x["name"] == ARGV[1] }; exit((g && g["proxies"].include?(ARGV[2])) ? 0 : 1)' "$([ -f "$RCF" ] && echo "$RCF" || echo "$CORE")" "$g" "$name"; then
+      # 组成员按运行配置文件判断（文件被删了时按内核加载的那份）。kernel_stale：内核还是按旧配置在跑（文件重新生成过、
+      # 内核没重新加载，真实路由器上遇到过），按内核加载的那份判断
+      mf="$RCF"; { [ -f "$RCF" ] && [ ! -f "$CCA_T/router/kernel_stale" ]; } || mf="$CORE"
+      if ruby -ryaml -e 'c = YAML.load_file(ARGV[0]); g = (c["proxy-groups"] || []).find { |x| x["name"] == ARGV[1] }; exit((g && g["proxies"].include?(ARGV[2])) ? 0 : 1)' "$mf" "$g" "$name"; then
         printf '%s' "$name" > "$f"; echo "SELECT $g $name" >> "$CCA_T/router.log"; emit 204 ""
       else emit 400 '{"message":"Selector update error: proxy not exist"}'; fi
     else
