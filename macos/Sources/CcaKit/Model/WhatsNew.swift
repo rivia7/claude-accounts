@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.9", title: "随时看到 Fable 用了多少", points: [
+            .init(symbol: "chart.bar",
+                  text: "左边的账号列表里，Claude 账号名字右边的小条多了一根 Fable：它自己那份每周额度用了多少，快用完时变橙、变红。菜单栏图标里、总览的卡片上也一样有。"),
+            .init(symbol: "cursorarrow.rays",
+                  text: "鼠标指着 Fable 那一行，会说它最多能用本周额度的多少、已经用掉多少。"),
+            .init(symbol: "square.grid.2x2",
+                  text: "总览里同一排的卡片一样高，下边对齐。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "3.1.0-beta.8", title: "看看每个账号每周用了多少", points: [
             .init(symbol: "chart.bar.xaxis",
                   text: "账号页多了「每周用量」：最近 12 周，每周用了那一周额度的多少。一周一根竖条，填满就是用完；鼠标指着一周看细节，下面一行是平均每周用到多少、几周用完、几周没用到一半。"),
