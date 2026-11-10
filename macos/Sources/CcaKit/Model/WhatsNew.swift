@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.5", title: "看看账号在哪些设备上用", points: [
+            .init(symbol: "desktopcomputer",
+                  text: "维护者映射里的账号，账号页最下面多了「设备」：哪几台 Mac 正在用它、开着但闲置了多久、离线的最后一次回报在什么时候、上次什么时候用。维护者配置了设备统计的服务器之后才有。"),
+            .init(symbol: "lock.shield",
+                  text: "经 cca 用映射里的账号时（命令行会话、cca 打开的 App），这台 Mac 会在后台把开着的会话报告给维护者的服务器：只报账号的摘要，看不到邮箱，也不经账号的网络出口。不想报告：在 ~/.cca/config.json 里加上 \"presence\": false。"),
+        ], art: "office"),
         ReleaseNote(version: "3.1.0-beta.4", title: "路由器还在用旧配置时，重载一次就好", points: [
             .init(symbol: "arrow.triangle.2.circlepath",
                   text: "路由器上的 OpenClash / ShellCrash 还在按旧配置运行、切不到账号的节点时，cca 会说明原因，问过你再重载一次；以前这种情况每次同步都会失败，这台 Mac 上的账号都启动不了。"),
