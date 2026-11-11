@@ -20,11 +20,17 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.13", title: "额度用完时，总览卡片上趴在桌上的样子更自然", points: [
+            .init(symbol: "moon.zzz",
+                  text: "额度用完的账号，卡片上的人弓着背趴在桌上、头枕在胳膊上，zZ 从头顶飘起来。以前头落在身子前下方，中间还露出一截胳膊，看着像头掉了。新手教程里的图也一样。"),
+            .init(symbol: "cup.and.saucer",
+                  text: "浅色外观下，桌上的杯子看得清了；热气只在空闲（端着杯子）时冒，在用时小臂压着杯口就不冒了。以前杯子和卡片底色几乎一样，热气像几个飘着的灰点。端口不通、选错节点时冒的汗也更清楚。"),
+        ], art: "office"),
         ReleaseNote(version: "3.1.0-beta.12", title: "没有 5 小时限制的账号，不再显示 5 小时用量", points: [
             .init(symbol: "chart.bar",
                   text: "Claude Ultra 这类没有 5 小时限制的套餐，左边的账号列表、总览卡片、菜单栏里不再画 5 小时那一根，账号页的用量里也没有「5 小时」那一块。ChatGPT 的 Pro 500 也一样。"),
             .init(symbol: "checkmark.seal",
-                  text: "看的是查回来的用量里 5 小时限制有没有生效，不按套餐名猜：5 小时限制还在的账号照常显示。以前这类账号的 5 小时一直写着 0%，终端的 cca usage 里现在这一格写「—」。"),
+                  text: "看的是查到的用量里 5 小时限制有没有生效，不按套餐名猜：5 小时限制还在的账号照常显示。以前这类账号的 5 小时一直写着 0%，终端的 cca usage 里现在这一格写「—」。"),
         ], art: "sidebar"),
         ReleaseNote(version: "3.1.0-beta.11", title: "用完的终端、App 不再留在程序坞里", points: [
             .init(symbol: "terminal",
