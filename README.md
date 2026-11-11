@@ -43,7 +43,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 ## Linux 服务器
 
-Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要先装好 Claude Code，还要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。
+Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要先装好 Claude Code，还要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、find：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。
 
 Linux 支持目前在测试版里（3.1.0-beta.14 起）。正式版发布以前，上面那行命令装的正式版还不支持 Linux，先用这一行装测试版（正式版发布以后就和 macOS 用同一行命令）：
 
@@ -53,8 +53,9 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v3.1.0-be
 
 Linux 上能用的是命令行：
 
-- **账号的网络**：连得上路由器时照常走它的端口池；连不上的（云服务器）用 cca 内置的代理，mihomo 内核由 cca 在后台运行（不用 root，不靠 systemd）。节点在家时从路由器拷一份，连不到路由器的服务器上只能用维护者参考节点里有的节点。
-- **登录**：服务器上没有账号专属的浏览器。`cca login 工作` 给出一行在 Mac 上运行的命令，登录页在 Mac 上用这个账号专属的 Chrome 打开，再把拿到的验证码贴回服务器（见「常见问题」）。
+- **账号的网络**：连得上路由器时照常走它的端口池；连不上的（云服务器）用 cca 内置的代理，mihomo 内核由 cca 在后台运行（不用 root，不靠 systemd）。节点在家时从路由器拷一份，连不到路由器的服务器上只能用维护者参考节点里有的节点。配置时问过的话，在你自己的 crontab 里加一行 `@reboot`，机器重启后内核自己起来（`cca local off` 时删掉）。Linux 桌面上装了 Clash Verge 的，和 Mac 上一样改走它。
+- **登录**：服务器上没有账号专属的浏览器。`cca login 工作` 给出一行在 Mac 上运行的命令，登录页在 Mac 上用这个账号专属的 Chrome 打开，再把拿到的验证码贴回服务器（见「常见问题」）。Mac 上还没有这个账号的话，会问要不要用同一个节点加上它。
+- **泄露检测**：只测 DNS。WebRTC 只和浏览器、桌面 App 有关，服务器上没有它们。
 - **API key**：存成 `~/.cca/secrets` 下只有你能读的文件。
 - 网页版、桌面 App、图形界面（`cca web`、`billing`、`limit-resets`、`app`、`gui`）只在 macOS 上。
 
@@ -436,7 +437,7 @@ cca restore
 **cca 会碰我的 Claude 登录凭证吗？**
 不会。登录完全走官方的 `claude auth login`，凭证由 Claude Code 自己存进 macOS 钥匙串；cca 不读取、不保存，也不转发任何登录凭证。`cca usage` 查用量也是让 Claude Code 自己去查。
 
-在 Linux 服务器上没有账号专属的 Chrome：`cca login 工作` 照常在服务器上跑官方的登录，给出一行 `cca login-page …`，在 Mac 上运行它，Mac 上的 cca 用这个账号专属的 Chrome、经同一个节点打开登录页，登录完把验证码复制到剪贴板，贴回服务器即可（Mac 上也要有这个账号，节点和服务器上一样）。经手的只是这个一次性的验证码：cca 核对过是这一次登录的，才交给服务器上正在等着的 Claude Code（或 codex），由它自己经账号的出口换成凭证、自己保存（Claude Code 在 Linux 上存成账号目录里只有你能读的 `.credentials.json`）。
+在 Linux 服务器上没有账号专属的 Chrome：`cca login 工作` 照常在服务器上跑官方的登录，给出一行 `cca login-page …`，在 Mac 上运行它，Mac 上的 cca 用这个账号专属的 Chrome、经同一个节点打开登录页，登录完把验证码复制到剪贴板，贴回服务器即可（节点按地址认，两边叫法不同也行；Mac 上还没有这个账号时，会问要不要用同一个节点加上它）。经手的只是这个一次性的验证码：cca 核对过是这一次登录的，才交给服务器上正在等着的 Claude Code（或 codex），由它自己经账号的出口换成凭证、自己保存（Claude Code 在 Linux 上存成账号目录里只有你能读的 `.credentials.json`）。
 
 **Codex 的登录凭证呢？**
 登录、刷新都由 codex 自己完成，凭证由它写进账号目录里的 `auth.json`。cca 只从里面的 id_token 读出邮箱、套餐和工作空间 ID（核对登录的是不是这个账号），不碰真正用来访问的 access / refresh token，也不保存、不转发。
@@ -519,7 +520,7 @@ bash /tmp/cca install
 ## 开发
 
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
-- 在 Linux 上测一键安装、内置代理、服务器上的登录和密钥文件：`bash tests/linux.sh`（临时 HOME，要联网下载内核）；装了 Docker 的话 `bash tests/linux.sh --docker` 在 Ubuntu、Debian、Rocky、AlmaLinux、Fedora、Amazon Linux、Alpine、Arch、openSUSE 的容器里各跑一遍。
+- 在 Linux 上测：`bash tests/linux.sh`（临时 HOME、假的 claude / codex，不碰你的 crontab；要联网下载内核、测真实的出口）。覆盖一键安装和自动更新、内置代理（含重启后自己起来）、服务器上的登录、密钥文件、维护者的映射、设备统计、Codex、出口和泄露检测、Linux 桌面上的 Clash Verge。装了 Docker 的话 `bash tests/linux.sh --docker` 在 Ubuntu、Debian、Rocky、AlmaLinux、Fedora、Amazon Linux、Alpine、Arch、openSUSE 的容器里各跑一遍，容器里还测在家走路由器（假路由器上跑真的路由器端脚本和 mihomo 内核）。
 - 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
 - 隔离防护专项：`python3 -m unittest discover -s tests -p 'isolation_*.py'`，覆盖配置解析、危险覆盖、App 环境与资料目录验证、浏览器失败路径及泄露检测状态；使用临时目录和测试替身，不登录真实账号。
 - 原生客户端兼容性测试（可选）：`CCA_TEST_CLAUDE_BIN=/绝对路径/claude python3 tests/isolation_credentials.py`，使用临时 HOME、假钥匙串和假凭证，验证实际客户端的凭证来源；`CCA_TEST_CHROME_BIN='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' python3 tests/isolation_chrome_native.py` 使用空 profile 和本机测试页/STUN 验证 WebRTC。需要 macOS 允许启动测试进程和本机监听；默认不执行这些原生测试。

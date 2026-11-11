@@ -371,11 +371,11 @@ class ClientTest(unittest.TestCase):
         targets = self.ns['presence_targets']()
         self.assertEqual([(t.name, k) for t, k, _ in targets], [('claude', self.key)], '只有映射里的官方账号')
         scan = lambda procs: self.ns['presence_scan'](self.salt, targets, procs, {}, now, 1000.0)
-        units, pids = scan({4242: (1, os.path.basename(tty), 1.0, 1000, 'bash cca')})
+        units, pids = scan({4242: (1, tty[len('/dev/'):], 1.0, 1000, 'bash cca')})   # ps 的写法：macOS 是 ttys005，Linux 是 pts/5
         aid = self.ns['presence_aid'](self.salt, self.ns['CLAUDE'], 'alice@example.com')
         self.assertEqual(units, {aid: {'cli': [[300, 120]], 'app': None}}, '闲置 = 现在 - 最后一次输入 / 输出')
         self.assertEqual(pids, {4242}, '盯着这个会话的 cca 进程退出')
-        self.assertEqual(scan({4242: (1, os.path.basename(tty), 1.0, 1003, 'bash cca')})[0], {}, '进程号被重用（启动时间对不上）：不算')
+        self.assertEqual(scan({4242: (1, tty[len('/dev/'):], 1.0, 1003, 'bash cca')})[0], {}, '进程号被重用（启动时间对不上）：不算')
         self.assertEqual(scan({})[0], {}, 'cca 被 kill -9 留下的登记：进程没了，不算')
         self.assertEqual(scan({4242: (1, '??', 1.0, 1000, 'bash cca')})[0][aid]['cli'], [[300, 0]], '没有终端：在跑就算在干活')
 

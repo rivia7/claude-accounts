@@ -59,6 +59,13 @@ class IsolationLeaks(unittest.TestCase):
                 self.assertIn('STUN 探测未取得 IP', text)
                 self.assertNotIn('无泄露', text)
 
+    def test_webrtc_off_on_servers_is_not_mentioned(self):
+        # 服务器上（没有账号专属的浏览器和桌面 App）leak-probe 写明 webrtc: off：不测也不说，不是“没测成”
+        text, states = self.verdict({'dns': self.dns(), 'webrtc': 'off'})
+        self.assertNotIn('webrtc', states)
+        self.assertEqual(states['dns'], 'ok')
+        self.assertNotIn('WebRTC', text)
+
     def test_empty_dns_response_is_failed_and_cached_briefly(self):
         text, states = self.verdict({'dns': self.dns(servers=[]), 'stun': {'ips': []}})
         self.assertEqual(states['dns'], 'failed')

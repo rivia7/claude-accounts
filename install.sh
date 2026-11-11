@@ -38,6 +38,7 @@ main() {
 				*:nc) p=netcat-openbsd ;;
 				pacman:python3) p=python ;;
 				*:gunzip) p=gzip ;;
+				*:find) p=findutils ;;
 				*) p=$c ;;
 			esac
 			case " $out " in *" $p "*) ;; *) out="${out:+$out }$p" ;; esac
@@ -54,7 +55,7 @@ main() {
 	os=$(uname)
 	case "$os" in Darwin|Linux) ;; *) fail "cca 只支持 macOS 和 Linux（这台是 ${os}）" ;; esac
 	# 和 cca install 查的一样（need_deps）；Linux 上 python3 也可能没装（macOS 的 /usr/bin/python3 总在，下面另查）
-	for c in curl ssh ssh-keygen nc perl gunzip; do
+	for c in curl ssh ssh-keygen nc perl gunzip find; do
 		command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"
 	done
 	py=$(command -v python3 2>/dev/null)

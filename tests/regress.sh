@@ -161,13 +161,15 @@ ok "会话里 /login 打开的登录地址没带邮箱时补上 login_hint，其
 # 它要打开的登录网址经 BROWSER 交给 cca，cca 写成一行 cca login-page 命令（Mac 上运行它打开登录页）；贴回来的验证码核对过 state
 # 才转给本机的回调（不经代理），换 token 照常经账号的端口。假 claude 在 $T/oauth_flow 存在时照真的走（内容是这次的 state）
 gone() { local i; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -f "$1" >/dev/null || return 0; sleep 0.2; done; return 1; }   # 进程都退出了
+fpof() { printf '%s' "$1" | shasum -a 256 | cut -c1-16; }   # 节点的摘要（node_fp）：类型|服务器|端口|TLS 域名
+FPA=$(fpof 'ss|192.0.2.1|8388|'); FPB=$(fpof 'ss|192.0.2.2|8388|'); FPD=$(fpof 'ss|192.0.2.4|8388|')
 echo st-remote1 > "$T/oauth_flow"; : > open.log
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans good-1 'good-1#st-wrong' 'good-1#st-remote1')" cca login alice 2>&1); rc=$?
-ok "服务器上登录：给出在 Mac 上运行的一行（账号写邮箱、带上节点，网址是 claude 本机回调的那个），不在这台机器上开浏览器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca login-page alice@example.com --node US-A '\''https://claude.com/cai/oauth/authorize?" && printf "%s" "$out" | grep -q "redirect_uri=http%3A%2F%2Flocalhost%3A[0-9]*%2Fcallback.*state=st-remote1" && ! grep -q oauth open.log'
+ok "服务器上登录：给出在 Mac 上运行的一行（账号写邮箱、带上节点和它的地址摘要，网址是 claude 本机回调的那个），不在这台机器上开浏览器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca login-page alice@example.com --node US-A --node-id $FPA '\''https://claude.com/cai/oauth/authorize?" && printf "%s" "$out" | grep -q "redirect_uri=http%3A%2F%2Flocalhost%3A[0-9]*%2Fcallback.*state=st-remote1" && ! grep -q oauth open.log'
 ok "服务器上登录：贴的不是 code#state、state 对不上都不转（重新问），对的转给本机的回调；换 token 经账号的端口，登录好了" 'printf "%s" "$out" | grep -q "认不出验证码" && printf "%s" "$out" | grep -q "state 对不上" && [ "$(grep -c "^OAUTH-EXCHANGE" claude.log)" = 1 ] && grep -q "OAUTH-EXCHANGE code=good-1 https_proxy=http://192.0.2.10:7901" claude.log && grep -q "LOGIN alice@example.com @ $AD/claude" claude.log && printf "%s" "$out" | grep -q "已重新登录"'
 echo st-remote2 > "$T/oauth_flow"
-out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans '')" cca login alice 2>&1); rc=$?
-ok "服务器上登录：直接回车取消，本机等着回调的 claude 跟着停掉" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_oauth.py"'
+out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans '')" cca login 副号 2>&1); rc=$?
+ok "服务器上登录：有别名的账号带上别名（Mac 上还没有它时照这个别名加上）；直接回车取消，本机等着回调的 claude 跟着停掉" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "  cca login-page bob@example.com --alias '\''副号'\'' --node US-B --node-id $FPB '\''https://claude.com/" && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_oauth.py"'
 echo st-remote3 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'bad-3#st-remote3')" cca login alice 2>&1); rc=$?
 ok "服务器上登录：验证码换不到 token（过期、用过了）：照 claude 的原话说，没登录上" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录没有成功：Login failed: Request failed with status code 400" && gone "$T/fake_oauth.py"'
@@ -193,8 +195,23 @@ ok "login-page：不是这个工具的登录页不打开（Codex 的提示用 cc
 python3 -c 'import socket, sys, time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(20)' "$lp" & busy=$!
 sleep 0.3
 out=$(run cca login-page alice@example.com --node US-A "$LPU" 2>&1); rc=$?
-kill $busy 2>/dev/null; wait $busy 2>/dev/null
 ok "login-page：回调的端口被别的程序占着：照样打开登录页，说清楚登录后从地址栏复制整个网址贴回服务器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "被别的程序占着" && grep -q "state=st-page1" open.log'
+# 节点按地址摘要认（两边叫法可以不同）；Mac 上还没有这个账号时问要不要用同一个节点加上它。回调的端口还占着：打开登录页就返回
+: > open.log
+out2=$(run cca login-page alice@example.com --node US-A --node-id 0123456789abcdef "$LPU" 2>&1); rc2=$?
+n2=$(grep -c st-page1 open.log)
+out=$(run cca login-page alice@example.com --node US-A1 --node-id "$FPA" "$LPU" 2>&1); rc=$?
+ok "login-page：节点按地址摘要认：服务器上叫 US-A1、地址和这边的 US-A 一样，照样打开；同名而地址不同的不打开" '[ $rc -eq 0 ] && grep -q "state=st-page1" open.log && [ $rc2 -ne 0 ] && [ "$n2" = 0 ] && printf "%s" "$out2" | grep -q "在服务器上走 US-A，在这台 Mac 上走 US-A：不是同一个节点"'
+t0=$(cat "$H/.cca/accounts.json"); : > open.log
+out=$(run CCA_TTY="$(ans n)" cca login-page dora@example.com --alias 新号 --node US-D2 --node-id "$FPD" "$LPU" 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans y)" cca login-page dora@example.com --node XX-Z --node-id 1111111111111111 "$LPU" 2>&1); rc2=$?
+out3=$(run CCA_TTY="$(ans n)" cca login-page dora@example.com --node US-C "$LPU" 2>&1); rc3=$?
+ok "login-page：Mac 上还没有这个账号：按地址认出这边的 US-D，问要不要照服务器的别名加上，不加就不打开；这边没有这个节点的说清楚；旧版服务器没给摘要时按名字认" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这台 Mac 上还没有 新号（dora@example.com）：现在加上它吗（出口 US-D）？" && printf "%s" "$out" | grep -q "没有加上，也没打开登录页" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "这台 Mac 的可选节点里没有服务器上的 XX-Z（按地址也认不出）" && ! printf "%s" "$out2" | grep -q "现在加上它吗" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "这台 Mac 上还没有 dora@example.com：现在加上它吗（出口 US-C）？" && [ "$(cat "$H/.cca/accounts.json")" = "$t0" ] && ! grep -q st-page1 open.log'
+out=$(run CCA_TTY="$(ans y)" cca login-page dora@example.com --alias 新号 --node US-D2 --node-id "$FPD" "$LPU" 2>&1); rc=$?
+ok "login-page：答应加上：用这边的 US-D 加上 新号（dora@example.com），同步路由器，接着在它专属的 Chrome 里经它的端口打开登录页" '[ $rc -eq 0 ] && tblok "t.get(\"新号(dora@example.com)\") == \"US-D\"" && printf "%s" "$out" | grep -q "已添加 新号（dora@example.com），出口 US-D" && grep -F "state=st-page1" open.log | grep -qF -- "--user-data-dir=$(ls -d "$H"/.cca/accounts/dora-example-com-*)/chrome" && [ -d "$H/Applications/Claude 新号.app" ]'
+kill $busy 2>/dev/null; wait $busy 2>/dev/null
+run CCA_TTY="$(ans y)" cca rm dora@example.com >/dev/null 2>&1
+ok "删掉刚加的 新号：账号表、启动器都照旧" '[ "$(cat "$H/.cca/accounts.json")" = "$t0" ] && [ ! -e "$H/Applications/Claude 新号.app" ] && ! ls -d "$H"/.cca/accounts/dora-example-com-* >/dev/null 2>&1'
 
 # 3c. Claude App 多开：每个账号一份资料目录、走自己的端口；启动器跟着账号表走
 L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
@@ -288,6 +305,10 @@ mkdir -p "$T/geo"
 printf '{"country": "China", "region": "", "city": "", "isp": "Example CN", "country_code": "cn"}' > "$T/geo/198.51.100.77.json"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "WebRTC：看到的是中国大陆的地址才算风险：横幅里标出来；命令行启动不另外警告" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：198.51.100.77（China · Example CN）" && ! printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP"'
+n0=$(grep -c "^STUN " "$T/stun.log")
+out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+out2=$(run CCA_REMOTE_LOGIN=1 cca check alice 2>&1)
+ok "服务器上（没有账号专属的浏览器和桌面 App，CCA_REMOTE_LOGIN=1 模拟）不测 WebRTC：启动横幅、cca check 里只说 DNS，不问 STUN" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "泄露  DNS 未发现地区异常" && printf "%s" "$out2" | grep -q "DNS 未发现地区异常（1 个解析器" && ! printf "%s" "$out$out2" | grep -q WebRTC && [ "$(grep -c "^STUN " "$T/stun.log")" = "$n0" ]'
 out=$(run CCA_TTY="$(ans)" cca app 副号 2>&1); rc=$?
 ok "cca app：中国大陆的地址另外说明（不声称已经验证浏览器），照常打开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "WebRTC 直连风险：本机 UDP 的 STUN 探测看到中国大陆的地址" && printf "%s" "$out" | grep -q "未验证浏览器"'
 edit_table 'j["carol@example.com"] = "US-C"'
@@ -982,6 +1003,14 @@ out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
 out3=$(r4 cca ls 2>&1)
 ok "不配置路由器、只有直连的第三方 API 账号：照样能添加、启动和列出，不提路由器" '[ $rc -eq 0 ] && [ $rc2 -eq 3 ] && ! printf "%s%s%s" "$out" "$out2" "$out3" | grep -q "路由器" && printf "%s" "$out3" | grep -qE "solo +api.example.com +API +直连"'
 r4 CCA_TTY="$(ans y)" cca rm solo >/dev/null 2>&1
+# 没配置路由器、只配置了本机的代理（服务器上 cca 内置的代理，可选节点来自参考节点或拷来的）：添加官方账号不先要求配置路由器，
+# 也不说同步路由器（没有路由器要同步，本机的端口池启动时配好）
+cp -p "$H4/.cca/config.json" "$T/h4.config.json"
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=["US-A"]; c.setdefault("local", {})["client"]="builtin"; json.dump(c, open(p, "w"), indent=1)' "$H4/.cca/config.json"
+out=$(r4 CCA_TTY="$(ans erin@example.com '' 1)" cca add 2>&1); rc=$?
+ok "没配置路由器、只配置了本机的代理（服务器上）：添加官方账号不先要求配置路由器，也不说同步路由器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已添加 erin@example.com，出口 US-A" && ! printf "%s" "$out" | grep -q "路由器" && grep -q "\"erin@example.com\": \"US-A\"" "$H4/.cca/accounts.json"'
+r4 CCA_TTY="$(ans y)" cca rm erin@example.com >/dev/null 2>&1
+cp -p "$T/h4.config.json" "$H4/.cca/config.json"
 
 # 10f. Codex 账号：单独的账号表 codex.json，和 Claude 账号共用端口池；每个账号一个 CODEX_HOME，~/.codex 里白名单上的
 # 条目共享；登录经 codex 的 app-server、在账号专属的浏览器里；用量经 app-server 查
@@ -1072,7 +1101,7 @@ ok "这个版本的 codex 不支持经 app-server 登录：停止，不退回系
 # 换好 token 才回答浏览器）
 echo st-cx1 > "$T/oauth_flow"; : > open.log
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans 'good-cx#st-wrong' 'good-cx#st-cx1')" cca codex login alice 2>&1); rc=$?
-ok "Codex 服务器上登录：经 app-server 拿登录网址，给出 cca codex login-page 那一行；验证码转给 codex 本机的回调，换 token 经账号的端口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca codex login-page alice@example.com --node US-B '\''https://auth.openai.com/oauth/authorize?" && printf "%s" "$out" | grep -q "state 对不上" && grep -q "OAUTH-EXCHANGE code=good-cx https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^OAUTH-EXCHANGE" codex.log)" = 1 ] && grep -q "LOGIN alice@example.com @ $CH" codex.log && ! grep -q auth.openai.com open.log'
+ok "Codex 服务器上登录：经 app-server 拿登录网址，给出 cca codex login-page 那一行；验证码转给 codex 本机的回调，换 token 经账号的端口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca codex login-page alice@example.com --node US-B --node-id $FPB '\''https://auth.openai.com/oauth/authorize?" && printf "%s" "$out" | grep -q "state 对不上" && grep -q "OAUTH-EXCHANGE code=good-cx https_proxy=http://192.0.2.10:7902" codex.log && [ "$(grep -c "^OAUTH-EXCHANGE" codex.log)" = 1 ] && grep -q "LOGIN alice@example.com @ $CH" codex.log && ! grep -q auth.openai.com open.log'
 echo st-cx2 > "$T/oauth_flow"
 out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans '')" cca codex login alice 2>&1); rc=$?
 ok "Codex 服务器上登录：取消时 login-flow 和 app-server 都停掉（不留下占着回调端口的登录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_codex_server.py" && gone "login-flow $T/"'
