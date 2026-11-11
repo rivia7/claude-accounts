@@ -77,7 +77,9 @@ struct UsageSection: View {
             let models = u.modelQuotas
             VStack(alignment: .leading, spacing: 16) {
                 QuotaGrid {
-                    QuotaTile(title: "5 小时", window: u.fiveHour, now: now, dim: dim)
+                    if !u.noFiveHourLimit {   // 没有 5 小时限制的套餐（Ultra、Pro 500）不画这一块
+                        QuotaTile(title: "5 小时", window: u.fiveHour, now: now, dim: dim)
+                    }
                     QuotaTile(title: "本周", window: u.sevenDay, now: now, dim: dim)
                     ForEach(models, id: \.name) { m in
                         QuotaTile(title: m.name, window: m.window, now: now, dim: dim, note: m.note)
@@ -375,13 +377,16 @@ extension UsageEntry {
 }
 
 /// 侧栏、菜单栏面板、总览卡片右边的几行小用量：5 小时、本周，分模型的每周额度（Claude 的 Fable）也各一行，和账号页的大块一一对应。
+/// 没有 5 小时限制的套餐（`noFiveHourLimit`：Claude 的 Ultra、ChatGPT 的 Pro 500）不画 5 小时那一行。
 struct UsageStack: View {
     let usage: UsageEntry
     var width: CGFloat = 30
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
-            MiniUsage(label: "5h", spoken: "5 小时用量", window: usage.fiveHour, stale: usage.stale, width: width)
+            if !usage.noFiveHourLimit {
+                MiniUsage(label: "5h", spoken: "5 小时用量", window: usage.fiveHour, stale: usage.stale, width: width)
+            }
             MiniUsage(label: "周", spoken: "本周用量", window: usage.sevenDay, stale: usage.stale, width: width)
             // 标签栏 26：“Fable” 要 26.5，缩到 98% 看不出来；再宽一点，总览卡片最窄时「在用，已 12 分钟」就要折行
             ForEach(usage.modelQuotas, id: \.name) { m in

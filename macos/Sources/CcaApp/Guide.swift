@@ -141,7 +141,7 @@ struct TutorialCard {
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
             ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
-            ("chart.bar", "名字右边的小条是额度：5 小时、本周，Claude 账号还有一根 Fable。"),
+            ("chart.bar", "名字右边的小条是额度：5 小时、本周，Claude 账号还有一根 Fable；没有 5 小时限制的套餐（比如 Ultra）没有 5h 那一根。"),
             ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者终端里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名、置顶、重新登录。上下拖动可以调整顺序。"),
         ], art: .sidebar),
@@ -152,7 +152,7 @@ struct TutorialCard {
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
-            ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两块额度。Claude 的 Fable 单独一块：它只能用掉本周额度的一部分，用完了别的模型还能接着用。"),
+            ("gauge.with.dots.needle.33percent", "额度分「5 小时」和「本周」两块，没有 5 小时限制的套餐（比如 Ultra）只有本周。Claude 的 Fable 单独一块：它只能用掉本周额度的一部分，用完了别的模型还能接着用。"),
             ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
             ("hourglass", "本周额度快重置了、还剩不少的账号，名字旁边有个沙漏：建议先用它，别浪费。"),
             ("arrow.counterclockwise", "ChatGPT 账号还有重置次数时，点「重置额度…」能把用量清零（会先问你）。"),
@@ -448,7 +448,8 @@ struct TutorialArt: View {
     private var sidebarArt: some View {
         panel {
             VStack(spacing: 2) {
-                sidebarRow(0, plan: ("Ultra", .premium), sub: "US-B", five: 92, week: 41, fable: 12, running: true, selected: true)
+                // Ultra 一般没有 5 小时的限制，和真的侧栏一样不画 5h 那一根（UsageStack）
+                sidebarRow(0, plan: ("Ultra", .premium), sub: "US-B", five: nil, week: 41, fable: 12, running: true, selected: true)
                 sidebarRow(1, plan: nil, sub: "未登录 · US-C", five: nil, week: nil, running: false, selected: false)
                 sidebarRow(2, plan: ("Pro 100", .advanced), sub: "US-A", five: 35, week: 76, running: false, selected: false)
             }
@@ -477,9 +478,9 @@ struct TutorialArt: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 6)
-            if let five, let week {
+            if let week {
                 VStack(alignment: .trailing, spacing: 4) {
-                    miniBar("5h", five)
+                    if let five { miniBar("5h", five) }
                     miniBar("周", week)
                     if let fable { miniBar("Fable", fable) }
                 }

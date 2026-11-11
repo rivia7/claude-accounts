@@ -789,6 +789,14 @@ mixed=$(run CCA_USAGE_JOBS=1 cca usage alice bob --json 2>/dev/null)
 ok "cca usage：可以写好几个账号，只查这几个（App 自动刷新只查到期的；CCA_USAGE_JOBS 限制同时查几个）" 'printf "%s" "$mixed" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if len(d[\"accounts\"]) == 2 else 1)"'
 canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
 ok "cca usage --json：分模型的每周额度（Fable）带上它占本周总额度多少：最多用一半、已用 3%（按 limits 里 limit_index 那一项认出是哪个模型；没有 limits 时只有一项就是它，指错了不写）" 'printf "%s" "$out" | jok "(lambda m: m[\"name\"] == \"Fable\" and m[\"utilization\"] == 6 and m[\"allowance_percent_of_weekly\"] == 50 and m[\"used_percent_of_weekly\"] == 3)(uacct(\"alice@example.com\")[\"model_scoped\"][0])" && printf "%s" "$out2" | jok "uacct(\"alice@example.com\")[\"model_scoped\"][0][\"allowance_percent_of_weekly\"] == 50" && printf "%s" "$out3" | jok "\"allowance_percent_of_weekly\" not in uacct(\"alice@example.com\")[\"model_scoped\"][0]"'
+# 没有生效的 5 小时限制（Ultra 这类套餐）：Claude 给的 limits 里 session 那一项 is_active 是 false，five_hour 是 0%、没有重置时间。
+# 普通账号的 5 小时窗口还没开始计时也是 0%、没有重置时间，但 is_active 是 true
+noses='{"five_hour": {"utilization": 0, "resets_at": null}, "limits": [{"kind": "session", "group": "session", "percent": 0, "resets_at": null, "scope": null, "is_active": %s}, {"kind": "weekly_all", "group": "weekly", "percent": 41, "scope": null, "is_active": true}]}'
+canned alice@example.com 0 41 max "$(printf "$noses" false)"
+outj=$(run cca usage alice --json 2>/dev/null); st=$(gj state); out=$(run COLUMNS=160 cca usage alice 2>&1)
+canned alice@example.com 0 41 max "$(printf "$noses" true)"; outa=$(run cca usage alice --json 2>/dev/null)
+canned alice@example.com 13 41; cp "$T/alice.usage.keep" "$AD/usage.json"
+ok "没有生效的 5 小时限制（limits 里 session 那一项 is_active 是 false，Ultra 这类套餐）：five_hour 当作没有（usage --json、_gui state 里是 null，表格里是 —，App 不画这一行），本周照常；还没开始计时的（is_active 是 true）照常是 0%" 'printf "%s" "$outj" | jok "uacct(\"alice@example.com\")[\"five_hour\"] is None and uacct(\"alice@example.com\")[\"seven_day\"][\"utilization\"] == 41" && printf "%s" "$st" | jok "acct(0, \"alice@example.com\")[\"usage\"][\"five_hour\"] is None" && printf "%s" "$out" | grep "alice@example.com" | grep -qE "— .*41%" && ! printf "%s" "$out" | grep "alice@example.com" | grep -qE " 0%" && printf "%s" "$outa" | jok "uacct(\"alice@example.com\")[\"five_hour\"][\"utilization\"] == 0"'
 # 周结算提醒（use_first，只给 App）：本周额度还剩至少 20% 时给出 [重置前 24 小时, 重置) 的区间，App 拿当前时间比；剩得少、
 # 这次查询说明账号现在用不了（端口不通、没登录……）时是 null；终端的表格里不提示
 soon=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10 * 3600)))')

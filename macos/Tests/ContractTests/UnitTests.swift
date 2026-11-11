@@ -87,6 +87,17 @@ func textTests() {
     if let l = fixture("live_router.json").flatMap({ try? DocumentDecoder.decode(LiveDoc.self, from: $0) }) {
         check("drift 要标记", Attention.needed(sync: .ok, live: l, usages: [], now: now))
     }
+
+    section("没有 5 小时限制的套餐")
+    func usage(_ j: String) -> UsageEntry { try! JSONDecoder().decode(UsageEntry.self, from: Data(j.utf8)) }
+    let week = #""seven_day":{"utilization":51,"resets_epoch":1794050010,"reset":false}"#
+    check("查到了用量、five_hour 是 null、本周有：没有 5 小时限制，不画那一行",
+          usage(#"{"key":"k","source":"live","five_hour":null,\#(week)}"#).noFiveHourLimit)
+    check("缓存里的也一样", usage(#"{"key":"k","source":"cache","stale":true,\#(week)}"#).noFiveHourLimit)
+    check("有 5 小时的窗口（0%、还没开始计）：照常画",
+          !usage(#"{"key":"k","source":"live","five_hour":{"utilization":0,"reset":false},\#(week)}"#).noFiveHourLimit)
+    check("还没查到用量：两行照常画成「—」", !usage(#"{"key":"k","source":"none","five_hour":null,"seven_day":null}"#).noFiveHourLimit)
+    check("两个窗口都没有：不算", !usage(#"{"key":"k","source":"cache","five_hour":null,"seven_day":null}"#).noFiveHourLimit)
 }
 
 func shellTests() async {
