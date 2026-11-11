@@ -40,8 +40,28 @@ func whatsNewTests() {
     check("「更新说明」：不比现在新的都给（最新的在前）", WhatsNew.history(current: "2.9.1", notes: notes).map(\.version) == ["2.9.1", "2.9.0", "2.9.0-beta.3"])
 
     section("文字（这一版）")
-    check("Fable 和本周总额度的关系", Texts.weeklyShare(allowance: 50, used: 3) == "最多用本周额度的 50%，已用 3%"
-          && Texts.weeklyShare(allowance: 50, used: nil) == "最多用本周额度的 50%" && Texts.weeklyShare(allowance: nil, used: 3) == "单独计的每周额度")
+    check("Fable 和本周总额度的关系（名字写在句子里，不会被看成整个账号最多用一半）",
+          Texts.modelShare("Fable", allowance: 50, used: 3) == "Fable 最多占本周额度的 50%，已占 3%"
+          && Texts.modelShare("Fable", allowance: 50, used: nil) == "Fable 最多占本周额度的 50%"
+          && Texts.modelShare("Spark", allowance: nil, used: 3) == "Spark 的额度单独计")
+    check("Fable 那份用完了：说别的模型还能用本周剩下多少；本周也用完了只说前半句",
+          Texts.modelShare("Fable", allowance: 50, used: 50, full: true, weeklyLeft: 49) == "Fable 的份额用完了，别的模型还能用本周剩下的 49%"
+          && Texts.modelShare("Fable", allowance: 50, used: 50, full: true, weeklyLeft: 0) == "Fable 的份额用完了"
+          && Texts.modelShare("Fable", allowance: 50, used: 50, full: true) == "Fable 的份额用完了")
+    let fullFable = try? JSONDecoder().decode(ModelWindow.self, from: Data(#"""
+        {"name": "Fable", "utilization": 100, "resets_epoch": 1794779999, "reset": false,
+         "allowance_percent_of_weekly": 50, "used_percent_of_weekly": 50}
+        """#.utf8))
+    check("照 cca 给的数：Fable 100%、本周 51% → 剩下 49%（按显示的百分比减）；本周已重置、Fable 已重置时不这么说",
+          fullFable.map { Texts.modelShare($0, weekly: UsageWindow(utilization: 51, resetsEpoch: nil, reset: false)) }
+              == "Fable 的份额用完了，别的模型还能用本周剩下的 49%"
+          && fullFable.map { Texts.modelShare($0, weekly: UsageWindow(utilization: 51.4, resetsEpoch: nil, reset: true)) }
+              == "Fable 的份额用完了"
+          && fullFable.map { f -> String in
+              var g = f
+              g.window.reset = true
+              return Texts.modelShare(g, weekly: nil)
+          } == "Fable 最多占本周额度的 50%，已占 50%")
     var cal = Calendar(identifier: .gregorian)
     cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
     let now = 1794042000.0   // 2026-11-07 17:00（上海）
@@ -80,6 +100,7 @@ func whatsNewTests() {
     let fable = bob?.modelScoped.first { $0.name == "Fable" }
     check("bob 的 Fable：份额（最多用一半、已用 17%）", fable?.window.utilization == 34 && fable?.allowancePercentOfWeekly == 50
           && fable?.usedPercentOfWeekly == 17)
+    check("bob 的 Fable 下面那句话", fable.map { Texts.modelShare($0, weekly: bob?.sevenDay) } == "Fable 最多占本周额度的 50%，已占 17%")
     m.resetQuota(frankRef)
     check("重置中", m.activity(frankRef)?.kind == .reset)
     _ = await waitUntil { m.activity(frankRef) == nil }

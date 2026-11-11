@@ -166,10 +166,23 @@ enum Texts {
         return parts.isEmpty ? "现在没有设备在用" : parts.joined(separator: " · ")
     }
 
-    /// 分模型的每周额度（Fable）和本周总额度的关系：“最多用本周额度的 50%，已用 3%”；cca 没认出份额时只说是单独的每周额度。
-    static func weeklyShare(allowance: Double?, used: Double?) -> String {
-        guard let allowance else { return "单独计的每周额度" }
-        return "最多用本周额度的 \(percent(allowance))" + (used.map { "，已用 \(percent($0))" } ?? "")
+    /// 分模型的每周额度（Fable）下面那句话：它和本周总额度的关系（份额是 cca 认出来给的，PROTOCOL 3.1）。Fable 用的是本周总额度的一部分，
+    /// 不是另外一份：平时“Fable 最多占本周额度的 50%，已占 6%”；它那份用完了时说清楚账号没用完：“Fable 的份额用完了，别的模型还能用本周
+    /// 剩下的 49%”（本周的也用完了就只说前半句）。名字写在句子里：只写“最多用本周额度的 50%”会被看成整个账号最多只能用一半。
+    /// cca 没认出份额时只说它的额度单独计。
+    static func modelShare(_ m: ModelWindow, weekly: UsageWindow?) -> String {
+        // 剩下多少按显示出来的百分比减（本周 51% 就说剩 49%，两个数加起来是 100）
+        let left = weekly.flatMap { w in w.reset ? nil : w.utilization.map { 100 - $0.rounded() } }
+        return modelShare(nonEmpty(m.name) ?? "这个模型", allowance: m.allowancePercentOfWeekly, used: m.usedPercentOfWeekly,
+                          full: !m.window.reset && (m.window.utilization ?? 0) >= 100, weeklyLeft: left)
+    }
+
+    static func modelShare(_ name: String, allowance: Double?, used: Double?, full: Bool = false, weeklyLeft: Double? = nil) -> String {
+        guard let allowance else { return "\(name) 的额度单独计" }
+        if full {
+            return "\(name) 的份额用完了" + (weeklyLeft.flatMap { $0 > 0 ? "，别的模型还能用本周剩下的 \(percent($0))" : nil } ?? "")
+        }
+        return "\(name) 最多占本周额度的 \(percent(allowance))" + (used.map { "，已占 \(percent($0))" } ?? "")
     }
 
     /// 什么时候过期（重置机会）：“11 月 20 日过期”（今年以内不写年份），一天以内写还有多久（“5 小时 3 分后过期”）。

@@ -192,7 +192,7 @@ private struct StatsRow: View {
     @ViewBuilder
     private func chart(_ uw: UsageWeeks?) -> some View {
         if let uw, !uw.weeks.isEmpty {
-            WeeklyChart(weeks: uw.weeks, domain: scale.domain, tint: Color(badge: account.badge), now: now, compact: true, top: scale.top)
+            WeeklyChart(weeks: uw.weeks, domain: scale.domain, now: now, compact: true, top: scale.top)
         } else {
             Text(uw == nil ? "还没有记录" : "最近 12 周没有记录")
                 .font(.caption)

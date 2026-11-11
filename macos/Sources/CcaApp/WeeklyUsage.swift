@@ -2,14 +2,14 @@ import SwiftUI
 
 /// 每周用量的图：账号页的「每周用量」（WeeklyUsageSection）和「用量统计」页的每一行（UsageStatsPage）共用。
 /// 和额度砖里的用量条（Meter）是同一种条，只是竖着排：一周一根，灰色的底槽是这一周的额度（100%），从下往上填到用了多少，填满就是用完；
-/// 填账号的颜色，结束前一天没查到的（实际可能更多）填灰色（和数据旧了的用量条一样，不靠透明度）；中间重置过、超过 100% 的，
+/// 按这一周用了多少上色，和额度砖里的条同一套（70% 以下绿、70–89% 橙、90% 以上红：同一个百分比在哪儿都是同一个颜色；
+/// 不填账号色，账号色里也有红、绿、橙，会被看成状态），结束前一天没查到的（实际可能更多）填灰色（和数据旧了的用量条一样，不靠透明度）；中间重置过、超过 100% 的，
 /// 整根高出底槽。横轴是时间，每根条在它那一周的正中间（中间重置后重新计时的，那一周截到下一周开始）。
 /// 不画坐标轴、网格线和每根条上的数字：数字在下面那一行（鼠标指着哪一周就说哪一周）和读屏里。数字、哪一周没记全都是 cca 给的。
 /// compact 是用量统计页的小图：条细一点，不画日期，不跟着鼠标。横轴的范围由用的地方给（统计页所有行同一个范围，上下对得齐）。
 struct WeeklyChart: View {
     let weeks: [UsageWeek]
     let domain: ClosedRange<Double>
-    let tint: Color
     let now: Double
     var compact = false
     /// 纵轴最高到多少（百分比，至少 100）；不给就按这几周自己的。用量统计页所有行用同一个，各行的高低才能比
@@ -53,7 +53,8 @@ struct WeeklyChart: View {
                             .frame(width: max(s.width - 4, 0), height: size.height)
                             .position(x: s.mid, y: size.height / 2)
                     }
-                    WeekBar(percent: s.week.usedPercent, top: top, color: s.week.partial ? Meter.dimColor : tint)
+                    WeekBar(percent: s.week.usedPercent, top: top,
+                            color: s.week.partial ? Meter.dimColor : Palette.usage(percent: s.week.usedPercent))
                         .frame(width: min(barWidth, max(s.width * 0.6, 2)), height: plot)
                         .position(x: s.mid, y: topInset + plot / 2)
                         .accessibilityElement()
@@ -168,8 +169,7 @@ struct WeeklyUsageSection: View {
         if let uw = account.usageWeeks, !uw.weeks.isEmpty {
             let hovered = uw.weeks.first { $0.endEpoch == hover.wrappedValue }
             VStack(alignment: .leading, spacing: 10) {
-                WeeklyChart(weeks: uw.weeks, domain: WeeklyChart.domain([uw.weeks], now: now), tint: Color(badge: account.badge),
-                            now: now, hover: hover.projectedValue)
+                WeeklyChart(weeks: uw.weeks, domain: WeeklyChart.domain([uw.weeks], now: now), now: now, hover: hover.projectedValue)
                     .frame(height: 128)
                 Text(hovered.map { Texts.weekDetail($0, now: now) } ?? Texts.weeksSummary(uw.summary) ?? "这一周过完就有第一周的统计。")
                     .font(.caption)

@@ -273,7 +273,8 @@ struct QuotaTile: View {
                 }
             }
             Meter(fraction: reset ? 0 : (pct ?? 0) / 100, color: color, height: 6, dim: dim)
-            if let note = nonEmpty(note) {
+            // 过了重置时间，那句话（已占多少、用完了）是旧的：等下次查到再说
+            if !reset, let note = nonEmpty(note) {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -286,7 +287,7 @@ struct QuotaTile: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title)用量")
         .accessibilityValue((pct == nil ? "没有数据" : reset ? "已重置" : "\(Texts.percent(pct!))\(resetText.map { "，" + $0 } ?? "")")
-                            + (nonEmpty(note).map { "。" + $0 } ?? ""))
+                            + (reset ? "" : nonEmpty(note).map { "。" + $0 } ?? ""))
     }
 }
 
@@ -363,12 +364,12 @@ struct MinorQuota: View, Identifiable {
 
 extension UsageEntry {
     /// 分模型的每周额度（model_scoped，例如 Claude 的 Fable；按名字去重，没有百分比的不要）：账号页各是一大块，侧栏各一行小条。
-    /// note 说它和本周总额度的关系（cca 认得出时）。
+    /// note 说它和本周总额度的关系（`Texts.modelShare`，句子里带着名字）。
     var modelQuotas: [(name: String, window: UsageWindow, note: String)] {
         var seen = Set<String>()
         return modelScoped.compactMap { m in
             guard let name = nonEmpty(m.name), m.window.utilization != nil, seen.insert(name.lowercased()).inserted else { return nil }
-            return (name, m.window, Texts.weeklyShare(allowance: m.allowancePercentOfWeekly, used: m.usedPercentOfWeekly))
+            return (name, m.window, Texts.modelShare(m, weekly: sevenDay))
         }
     }
 }
@@ -401,21 +402,21 @@ struct MiniUsage: View {
     var width: CGFloat = 30
     /// 标签那一栏多宽：“5h”“周”是 14；模型名（Fable）宽一些，放不下时先缩小（最多到 70%）、再截断（鼠标指着有全名）
     var labelWidth: CGFloat = 14
-    /// 分模型的额度和本周总额度的关系：鼠标指着时显示，读屏接在百分比后面念
+    /// 分模型的额度和本周总额度的关系（句子里带着名字）：鼠标指着时显示，读屏接在百分比后面念；过了重置时间就不说（那是旧的）
     var note: String?
 
     var body: some View {
-        let row = TimelineView(.periodic(from: .now, by: 30)) { context in
-            cell(now: context.date.timeIntervalSince1970)
-        }
-        if let note {
-            row.help(label + "：" + note)
-        } else {
-            row
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let now = context.date.timeIntervalSince1970
+            if let note, !(window?.isReset(now: now) ?? false) {
+                cell(now: now, note: note).help(note)
+            } else {
+                cell(now: now, note: nil)
+            }
         }
     }
 
-    private func cell(now: Double) -> some View {
+    private func cell(now: Double, note: String?) -> some View {
         let reset = window?.isReset(now: now) ?? false
         let pct = window?.utilization
         let value: String = pct == nil ? "—" : reset ? "已重置" : Texts.percent(pct!)

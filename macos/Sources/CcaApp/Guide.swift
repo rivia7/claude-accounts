@@ -152,7 +152,7 @@ struct TutorialCard {
             ("checkmark.shield", "打开前 cca 会先检查出口；有问题时直接告诉你该点哪个按钮。"),
         ], art: .open),
         TutorialCard(title: "看额度还剩多少", points: [
-            ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两块额度；Claude 的 Fable 另有每周额度，也是单独一块。"),
+            ("gauge.with.dots.needle.33percent", "每个账号有「5 小时」和「本周」两块额度。Claude 的 Fable 单独一块：它只能用掉本周额度的一部分，用完了别的模型还能接着用。"),
             ("exclamationmark.triangle", "快用完时变橙、变红；到了重置时间自动恢复。"),
             ("hourglass", "本周额度快重置了、还剩不少的账号，名字旁边有个沙漏：建议先用它，别浪费。"),
             ("arrow.counterclockwise", "ChatGPT 账号还有重置次数时，点「重置额度…」能把用量清零（会先问你）。"),
@@ -536,12 +536,12 @@ struct TutorialArt: View {
         .padding(.horizontal, 24)
     }
 
-    /// 三块额度：5 小时快用完了（红），本周还早（绿），Fable 单独一块（下面写着它最多用本周额度的多少）。
+    /// 三块额度：5 小时快用完了（红），本周还早（绿），Fable 单独一块（下面写着它最多占本周额度的多少）。
     private var quotaArt: some View {
         HStack(alignment: .top, spacing: 10) {
             miniTile("5 小时", 92, "2 小时后重置")
             miniTile("本周", 41, "周二 16:00 重置")
-            miniTile("Fable", 6, "周二 16:00 重置", note: Texts.weeklyShare(allowance: 50, used: 3))
+            miniTile("Fable", 6, "周二 16:00 重置", note: Texts.modelShare("Fable", allowance: 50, used: 3))
         }
         .fixedSize(horizontal: false, vertical: true)   // 三块一样高（按最高的那块），不撑满整幅图
         .padding(.horizontal, 24)
@@ -558,7 +558,9 @@ struct TutorialArt: View {
                 }
                 .foregroundStyle(UsageLevel(percent: pct) == .normal ? AnyShapeStyle(.primary) : AnyShapeStyle(color))
                 Meter(fraction: pct / 100, color: color, height: 6)
-                Text(note ?? reset).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                // Fable 那句（名字写在句子里）一行放不下：最多两行，三块照样一样高
+                Text(note ?? reset).font(.caption).foregroundStyle(.secondary).lineLimit(2).minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
