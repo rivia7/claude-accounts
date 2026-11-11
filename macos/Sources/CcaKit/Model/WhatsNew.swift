@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.11", title: "用完的终端、App 不再留在程序坞里", points: [
+            .init(symbol: "terminal",
+                  text: "在 App 里经“终端”跑完的命令，按任意键后关掉窗口；“终端”没有别的窗口了就退出它，程序坞的「最近使用的 App」里也不再留着它。你自己还开着别的“终端”窗口时不动它。"),
+            .init(symbol: "dock.rectangle",
+                  text: "cca 打开的账号 Chrome、Claude App、ChatGPT App 完全退出以后，程序坞里留下的图标也会去掉：几秒后程序坞刷新一次（图标栏闪一下）。还开着的、固定在程序坞上的 App 不受影响。"),
+            .init(symbol: "switch.2",
+                  text: "不想要的话，在 ~/.cca/config.json 里把 dock_tidy 设成 false；系统设置里关掉「在程序坞中显示最近使用的 App」也就不用整理了。"),
+        ], art: "open"),
         ReleaseNote(version: "3.1.0-beta.10", title: "每周用量的颜色和额度一样，Fable 的提示更好懂", points: [
             .init(symbol: "chart.bar.xaxis",
                   text: "每周用量的竖条按那一周用了多少上色，和上面的额度一样：70% 以下绿，70–89% 橙，90% 以上红。以前用的是账号的颜色，红色、绿色的账号容易看错（用了 51% 也是红的）。「用量统计」页也一样。"),
