@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.14", title: "5 小时用量又显示出来了，cca 也能装在 Linux 服务器上", points: [
+            .init(symbol: "chart.bar",
+                  text: "修正上两个版本的问题：Max 账号和部分 Ultra 账号明明有 5 小时限制，5 小时用量却不显示了。那两个版本看错了查到的用量里的一个标记，5 小时用得比本周或 Fable 少时就当成没有 5 小时限制。现在只有查到的用量里根本没有 5 小时这一项（真正没有 5 小时限制的套餐）才不显示。"),
+            .init(symbol: "server.rack",
+                  text: "cca 能装在 Linux 服务器上了（命令行）：Ubuntu、Debian、Rocky、Fedora、Alpine 等都测过，缺什么安装时会说，并给出装它的那一行命令。连不上路由器的服务器用 cca 内置的代理；API key 存成只有你能读的文件。"),
+            .init(symbol: "key",
+                  text: "在服务器上登录账号：服务器给出一行 cca login-page 命令，在这台 Mac 上运行它，登录页就用这个账号的 Chrome、经同一个节点打开；登录完验证码已经复制好，贴到服务器上就行。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "3.1.0-beta.13", title: "额度用完时，总览卡片上趴在桌上的样子更自然", points: [
             .init(symbol: "moon.zzz",
                   text: "额度用完的账号，卡片上的人弓着背趴在桌上、头枕在胳膊上，zZ 从头顶飘起来。以前头落在身子前下方，中间还露出一截胳膊，看着像头掉了。新手教程里的图也一样。"),
