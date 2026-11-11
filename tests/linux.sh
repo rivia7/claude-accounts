@@ -58,7 +58,7 @@ if [ "${1:-}" = --in-container ]; then   # 容器里（sh 跑的，可能还没�
 	deps() {
 		if command -v apt-get >/dev/null 2>&1; then
 			export DEBIAN_FRONTEND=noninteractive
-			# 不装 procps（镜像里本来就没有）：cca 在 Linux 上不靠 ps、pgrep
+			# 不装 procps（Debian 的镜像里本来就没有，Ubuntu 的自带）：cca 在 Linux 上不靠 ps、pgrep、pkill
 			apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends bash python3 curl ca-certificates gzip perl netcat-openbsd openssh-client openssl >/dev/null 2>&1
 		elif command -v dnf >/dev/null 2>&1; then
 			dnf install -y -q python3 gzip perl nmap-ncat openssh-clients procps-ng findutils openssl >/dev/null 2>&1
@@ -271,6 +271,8 @@ for line in sys.stdin:
         send({'id': rid, 'result': {}})
     elif meth == 'account/rateLimits/read':
         log('USAGE email=%s https_proxy=%s' % (email_now() or '-', os.environ.get('https_proxy', 'unset')))
+        if os.path.exists(os.path.join(D, 'usage_hang')):   # 卡住不回（照样读 stdin：和真的一样，stdin 一断就退出）
+            continue
         if not email_now():
             send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required'}}); continue
         now = int(time.time())
@@ -423,7 +425,7 @@ for i in $(seq 1 40); do [ "$(get)" = cca-linux-ok ] && break; sleep 0.25; done
 if [ "$(get)" = cca-linux-ok ]; then ok "经账号的端口出去（CCA-1 → US-A）"; else no "经账号的端口出不去"; fi
 if [ -z "$(get 7902)" ]; then ok "空槽位（CCA-2 → REJECT）拒绝连接"; else no "空槽位的端口居然出得去"; fi
 
-running() {   # running 文字：有命令行里带着它的进程（读 /proc：Debian、Ubuntu 的容器里没装 procps，没有 pgrep）
+running() {   # running 文字：有命令行里带着它的进程（读 /proc：Debian 的容器里没有 procps，没有 pgrep）
 	local p c
 	for p in /proc/[0-9]*; do
 		c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
@@ -584,6 +586,29 @@ out=$(CCA_SKIP_CHECK=1 COLUMNS=160 "$C" codex usage 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qE 'carol.* 13% .* 41% ' && grep -q "USAGE email=carol@example.com https_proxy=http://127.0.0.1:$CP" "$D/codex.log"; then
 	ok "cca codex usage：经账号的端口让 app-server 查，表里有 5 小时、本周"
 else no "cca codex usage（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)"; fi
+# 查用量途中按 Ctrl-C、关掉终端（TERM）：后台的查询忽略 SIGINT，cca 自己停掉它们和它们起的进程，不等查询超时。
+# Debian 的容器没有 procps（没有 pkill）：走读 /proc 的那条路
+queries() {   # 这次测试里还在跑的用量查询：python 的 usage-query 和它起的 app-server（按 HOME 认）
+	local p
+	for p in /proc/[0-9]*; do
+		{ tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null | grep -qE 'usage-query|app-server' &&
+			{ tr '\0' '\n' < "$p/environ"; } 2>/dev/null | grep -qxF "HOME=$H" && echo "${p#/proc/}"
+	done
+}
+alive() {   # alive 进程号…：还没退出的（退出了、只剩僵尸的 cmdline 是空的）。只看这几个：机器上进程多时（上千个）扫一遍 /proc 要好几秒
+	local k
+	for k in "$@"; do [ -n "$({ tr -d '\0' < "/proc/$k/cmdline"; } 2>/dev/null)" ] && printf '%s ' "$k"; done
+}
+touch "$D/usage_hang"; n=$(grep -c '^USAGE ' "$D/codex.log")
+CCA_SKIP_CHECK=1 CCA_USAGE_TIMEOUT=60 "$C" codex usage >/dev/null 2>&1 & up=$!
+for i in $(seq 1 100); do [ "$(grep -c '^USAGE ' "$D/codex.log")" -gt "$n" ] && break; sleep 0.1; done
+q=$(queries | tr '\n' ' '); t0=$(date +%s)
+kill -TERM "$up"; wait "$up"; rc=$?; t1=$(date +%s)
+for i in $(seq 1 30); do [ -z "$(alive $q)" ] && break; sleep 0.1; done; left=$(alive $q)
+rm -f "$D/usage_hang"
+if [ "$rc" = 130 ] && [ -n "$q" ] && [ -z "$left" ] && [ $((t1 - t0)) -lt 5 ]; then
+	ok "查用量途中按 Ctrl-C、关掉终端：后台的查询连同它起的 app-server 马上停掉（不等 60 秒的超时；$(command -v pkill >/dev/null 2>&1 && echo 'pkill' || echo '没有 pkill，读 /proc')）"
+else no "查用量途中 Ctrl-C（退出码 $rc，$((t1 - t0)) 秒）：查询的进程 ${q:-没找到}，还在的 ${left:-没有}"; kill $left 2>/dev/null; fi
 out=$("$H/.local/bin/cxa" ls 2>&1)
 if printf '%s' "$out" | grep -q 'carol' && ! printf '%s' "$out" | grep -q 'alice' && [ "$(get "$CP")" = cca-linux-ok ]; then ok "cxa ls：列的是 Codex 账号；carol 的端口也通"
 else no "cxa ls：$(printf '%s' "$out" | head -n 4)"; fi
@@ -619,6 +644,31 @@ if ! printf '%s' "$out" | grep -qE '^  cca (web|billing|limit-resets|app|gui|log
 	! printf '%s' "$out" | grep -q 'WebRTC'; then
 	ok "cca help：不列只在 macOS 上的命令，内置代理说的是由 cca 在后台运行，泄露检测不提 WebRTC"
 else no "cca help：$(printf '%s' "$out" | grep -E '^  cca (web|billing|limit-resets|app|gui|login-page) |^  cca codex app |WebRTC' | head -n 2)"; fi
+
+# 内嵌 Python 的编译缓存：每个版本一份，写新的一份时顺手删掉 7 天前写的旧缓存和没写完的临时文件（没有 XDG_RUNTIME_DIR 时缓存在
+# ~/.cache 里，系统不会清，不删就越积越多）；7 天内的、python3 指针、名字不像缓存的都留着，读缓存时不动。用 XDG_RUNTIME_DIR 指到沙箱
+PC="$D/xdg/cca-py"; mkdir -p -m 700 "$D/xdg" "$PC"
+for n in 0123456789abcdef1-30906f0 0123456789abcdef2-30906f0.4242 0123456789abcdef3-30e00f0 python3 notes-0123456789abcdef5 0123456789abcdefk-1; do echo x > "$PC/$n"; done
+python3 - "$PC" <<'P'
+import os, sys, time
+for n, days in (('0123456789abcdef1-30906f0', 8), ('0123456789abcdef2-30906f0.4242', 30), ('0123456789abcdef3-30e00f0', 6),
+                ('python3', 30), ('notes-0123456789abcdef5', 30), ('0123456789abcdefk-1', 30)):
+    t = time.time() - days * 86400
+    os.utime(os.path.join(sys.argv[1], n), (t, t))
+P
+XDG_RUNTIME_DIR="$D/xdg" "$C" ls >/dev/null 2>&1; l1=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
+XDG_RUNTIME_DIR="$D/xdg" "$C" ls >/dev/null 2>&1; l2=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
+v=$(python3 - "$l1" <<'P'
+import re, sys
+s = set(sys.argv[1].split())
+new = [n for n in s if re.fullmatch(r'[0-9a-f]{17,}-[0-9a-f]+', n) and not n.startswith('0123456789abcdef')]
+keep = {'0123456789abcdef3-30e00f0', '0123456789abcdefk-1', 'notes-0123456789abcdef5', 'python3'}
+gone = {'0123456789abcdef1-30906f0', '0123456789abcdef2-30906f0.4242'}
+print('ok' if keep <= s and not s & gone and len(new) == 1 else 'bad')
+P
+)
+if [ "$v" = ok ] && [ "$l1" = "$l2" ]; then ok "内嵌 Python 的编译缓存：写新的一份时删掉 7 天前写的旧缓存和没写完的临时文件，别的都留着；读缓存时不动"
+else no "内嵌 Python 的编译缓存：第一次后 ${l1:-空的}；第二次后 ${l2:-空的}"; fi
 
 out=$("$C" local off 2>&1)
 for i in $(seq 1 20); do [ -z "$(keeper)" ] && ! listen 7901 && break; sleep 0.25; done
@@ -679,12 +729,17 @@ if ! grep -qF '>>> cca >>>' "$VD/profiles/Script.js" && ! listen 7901 && [ -S "$
 else no "Clash Verge 的 cca local off：$(printf '%s' "$out" | tail -n 2)"; fi
 kill "$(cat "$D/verge.pid" 2>/dev/null)" 2>/dev/null
 
-# cca restore：先打包备份配置（GNU / busybox 的 tar；登录凭证、密钥文件不进包里），再删掉 ~/.cca、~/.local/bin 里的 cca 和 cxa、
+# cca restore：先打包备份配置（GNU / busybox 的 tar；登录凭证、密钥文件、参考节点不进包里），再删掉 ~/.cca、~/.local/bin 里的 cca 和 cxa、
 # crontab 里开机起内核的那一行（别的行留着）。没有 tar 的（Amazon Linux 的最小安装）：先停下，什么都不动
 mkdir -p "$H/.cca/secrets" "$H/.cca/accounts/orphan-example-com/claude"
 echo '{"v": 1, "host": "api.example.com", "key": "sk-LEFTOVER-SECRET"}' > "$H/.cca/secrets/cca-api-orphan"
 echo '{"claudeAiOauth": {"accessToken": "cred-LEFTOVER-SECRET"}}' > "$H/.cca/accounts/orphan-example-com/claude/.credentials.json"
 printf '%s\n' "@reboot '$C' _core-keep >/dev/null 2>&1 # cca-core" >> "$D/crontab"
+# 维护者的参考节点里有节点密钥（连同拉取映射时留下的临时文件）：也不进备份；映射本身照样打包
+mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; [ -f "$H/.cca/policy/policy.json" ] || echo '{}' > "$H/.cca/policy/policy.json"
+for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do
+	printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}' > "$H/.cca/policy/$f"
+done
 out=$(CCA_TTY=$(ans restore) "$C" restore 2>&1); rc=$?
 bk=$(ls "$H"/cca-backup-*.tar.gz 2>/dev/null | head -n 1)
 if ! command -v tar >/dev/null 2>&1; then
@@ -693,11 +748,12 @@ if ! command -v tar >/dev/null 2>&1; then
 	else no "cca restore 没有 tar（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)"; fi
 elif [ $rc -eq 0 ] && [ -n "$bk" ] && [ "$(stat -c %a "$bk")" = 600 ] && printf '%s' "$out" | grep -qF "配置备份：$bk" &&
 	tar -tzf "$bk" | grep -q 'accounts.json' && tar -tzf "$bk" | grep -q 'orphan-example-com/claude' &&
-	! tar -tzf "$bk" | grep -qE '\.credentials\.json|secrets|id_ed25519$' && ! tar -xzOf "$bk" 2>/dev/null | grep -q 'LEFTOVER-SECRET' &&
+	! tar -tzf "$bk" | grep -qE '\.credentials\.json|secrets|id_ed25519$|policy/(nodes\.json|tmp\.)' && tar -tzf "$bk" | grep -q 'policy/policy\.json' &&
+	! tar -xzOf "$bk" 2>/dev/null | grep -q 'LEFTOVER-SECRET' &&
 	[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] &&
 	! grep -qF '# cca-core' "$D/crontab" && grep -qx '0 3 \* \* \* echo user-job' "$D/crontab"; then
-	ok "cca restore：先打包备份（600，登录凭证、密钥文件不在里面），再删掉 ~/.cca、cca、cxa 和 crontab 里开机起内核的那一行（别的行留着）"
-else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519' | head -n 2 | tr '\n' ' ')"; fi
+	ok "cca restore：先打包备份（600，登录凭证、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa 和 crontab 里开机起内核的那一行（别的行留着）"
+else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
 
 # 在家走路由器：假路由器（127.0.0.2）上跑真的 cca-router.sh / apply.rb（sh 是这个发行版的 /bin/sh），内核是真的 mihomo（当作 OpenClash
 # 的 clash，-d /etc/openclash），uci、pidof、netstat 是假的（netstat 读 /proc/net/tcp），假 ssh 把命令交给它；SSH 端口（12222）只是

@@ -944,6 +944,17 @@ ok "Claude Code 不支持 get_usage：提示升级，用缓存顶上" 'printf "%
 rm -f "$T/usage/unsupported"; touch "$T/usage/hang"; t0=$(date +%s)
 out=$(run CCA_USAGE_TIMEOUT=2 cca usage alice 2>&1); t1=$(date +%s)
 ok "查询卡住：到时间就结束（不会一直等），显示缓存" 'printf "%s" "$out" | grep -q "查询超时" && [ $((t1 - t0)) -lt 15 ]'
+# 查询途中按 Ctrl-C、关掉终端（TERM）：后台的查询忽略 SIGINT，cca 自己停掉它们和它们起的进程，不等查询超时（没装 procps 的
+# Linux 上读 /proc 的那条路在 tests/linux.sh）。$! 是 run 的子 shell，cca 一般是它的子进程（bash 把 env 直接 exec 了的话就是它自己）
+n_usage=$(grep -c "^USAGE: " claude.log)
+run CCA_USAGE_TIMEOUT=60 cca usage alice >/dev/null 2>&1 & UP=$!
+for i in $(seq 1 100); do [ "$(grep -c "^USAGE: " claude.log)" -gt "$n_usage" ] && break; sleep 0.1; done
+CP=$UP; ps -o command= -p "$UP" | grep -q 'cca usage' || CP=$(pgrep -P "$UP" | head -n 1)
+kids=$(for j in $(pgrep -P "$CP"); do pgrep -P "$j"; done); t0=$(date +%s)
+kill -TERM "${CP:-$UP}"; wait "$UP"; rc=$?
+for i in $(seq 1 30); do left=""; for k in $kids; do kill -0 "$k" 2>/dev/null && left="$left $k"; done; [ -z "$left" ] && break; sleep 0.1; done; t1=$(date +%s)
+pkill -f "$T/fake_usage.py"
+ok "查询途中按 Ctrl-C、关掉终端：后台的查询连同它起的进程马上停掉（不等 60 秒的超时），退出码 130" '[ "$rc" = 130 ] && [ -n "$kids" ] && [ -z "$left" ] && [ $((t1 - t0)) -lt 5 ]'
 rm -f "$T/usage/hang"; mkdir -p "$T/loc"; printf CN > "$T/loc/7901"; n_usage=$(grep -c "^USAGE: " claude.log)
 out=$(run cca usage alice 2>&1)
 ok "出口在受限地区：不拿账号去查，说明原因" 'printf "%s" "$out" | grep -q "出口在中国大陆" && [ "$(grep -c "^USAGE: " claude.log)" = "$n_usage" ]'
@@ -1280,6 +1291,34 @@ ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存）�
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
 out=$(run OSTYPE=linux-gnu cca _gui hello </dev/null 2>/dev/null); tr=$(run OSTYPE=linux-gnu bash -x "$CCA" _gui hello </dev/null 2>&1 >/dev/null)
 ok "Linux 上内嵌 Python 的源码拆成几段传（exec 的单个参数最多 128KB；bash 认环境里的 OSTYPE，这里借它模拟）：bash 3.2 照样按字节切、PY_BOOT 拼回来，结果和不拆一样" '[ -n "$out" ] && [ "$out" = "$(gj hello)" ] && printf "%s" "$tr" | grep -q "unset _a _lc _lcs"'
+# 内嵌 Python 的编译缓存（PY_BOOT）：每个版本一份，写新的一份时顺手删掉 7 天前写的旧缓存和没写完的临时文件；7 天内的、python3 指针、
+# 名字不像缓存的都留着，读缓存时什么都不改。TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面（沙箱不在那里就没法不碰真的缓存目录）
+case "$T" in
+/var/folders/*)
+PC="$T/pyc/cca-py"; mkdir -p -m 700 "$T/pyc" "$PC"
+for n in 0123456789abcdef1-30906f0 0123456789abcdef2-30906f0.4242 0123456789abcdef3-30e00f0 python3 notes-0123456789abcdef5 0123456789abcdefk-1; do echo x > "$PC/$n"; done
+python3 - "$PC" <<'P'
+import os, sys, time
+for n, days in (('0123456789abcdef1-30906f0', 8), ('0123456789abcdef2-30906f0.4242', 30), ('0123456789abcdef3-30e00f0', 6),
+                ('python3', 30), ('notes-0123456789abcdef5', 30), ('0123456789abcdefk-1', 30)):
+    t = time.time() - days * 86400
+    os.utime(os.path.join(sys.argv[1], n), (t, t))
+P
+run TMPDIR="$T/pyc/" cca ls >/dev/null 2>&1; l1=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
+run TMPDIR="$T/pyc/" cca ls >/dev/null 2>&1; l2=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
+v=$(python3 - "$l1" <<'P'
+import re, sys
+s = set(sys.argv[1].split())
+new = [n for n in s if re.fullmatch(r'[0-9a-f]{17,}-[0-9a-f]+', n) and not n.startswith('0123456789abcdef')]
+keep = {'0123456789abcdef3-30e00f0', '0123456789abcdefk-1', 'notes-0123456789abcdef5', 'python3'}
+gone = {'0123456789abcdef1-30906f0', '0123456789abcdef2-30906f0.4242'}
+print('ok' if keep <= s and not s & gone and len(new) == 1 else 'bad')
+P
+)
+ok "内嵌 Python 的编译缓存：写新的一份时删掉 7 天前写的旧缓存和没写完的临时文件，7 天内的、python3 指针、名字不像缓存的都留着；读缓存时不动" '[ "$v" = ok ] && [ "$l1" = "$l2" ]'
+;;
+*) echo "SKIP  内嵌 Python 的编译缓存（沙箱不在 /var/folders 下，cca 不会把缓存放进沙箱）" ;;
+esac
 edit_table 'j["ports"].pop("alice@example.com")' "$H/.cca/config.json"
 out=$(gj state)
 ok "_gui state 只在内存里对账：config.json 里少了的端口照样算出来（7901），文件不改；下一次真正运行 cca 时才写回去" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"port\"] == 7901" && cfgok "\"alice@example.com\" not in c[\"ports\"]" && run cca ls >/dev/null 2>&1 && cfgok "c[\"ports\"][\"alice@example.com\"] == 7901"'
@@ -2832,6 +2871,10 @@ K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_key
 mkdir -p "$H/.cca/secrets" "$H/.cca/accounts/orphan-example-com/claude"
 echo '{"v": 1, "host": "api.example.com", "key": "sk-LEFTOVER-SECRET"}' > "$H/.cca/secrets/cca-api-orphan"
 echo '{"claudeAiOauth": {"accessToken": "cred-LEFTOVER-SECRET"}}' > "$H/.cca/accounts/orphan-example-com/claude/.credentials.json"
+# 维护者的参考节点里有节点密钥（连同拉取映射时留下的临时文件）：也不进备份；映射本身照样打包
+mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; [ -f "$H/.cca/policy/policy.json" ] || echo '{}' > "$H/.cca/policy/policy.json"
+NODEJ='{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}'
+for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do printf '%s\n' "$NODEJ" > "$H/.cca/policy/$f"; done
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
@@ -2840,6 +2883,7 @@ ok "restore：本机还原（cca、cxa 都删掉），共享主目录内容保�
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
+ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

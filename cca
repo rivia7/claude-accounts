@@ -363,6 +363,22 @@ on_linux() {   # 在 Linux 上（服务器）：没有界面 App、钥匙串、�
 proc_args() {   # 进程的命令行（看它是不是自己起的那个）：Linux 读 /proc（busybox 的 ps 不认 -p），macOS 问 ps
 	if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline"; else ps -p "$1" -o command= 2>/dev/null; fi
 }
+kill_kids() {   # kill_kids 进程号…：停掉这些进程的子进程（pkill -P）。没装 procps 的 Linux（Debian、Fedora、Rocky、Amazon Linux 的容器镜像这类最小安装）没有 pkill：读 /proc
+	local p f s
+	if command -v pkill >/dev/null 2>&1; then
+		for p in "$@"; do pkill -P "$p"; done
+		return 0
+	fi
+	for f in /proc/[0-9]*/stat; do
+		{ read -r s < "$f"; } 2>/dev/null || continue   # 读的时候进程刚好退出了
+		s=${s##*") "}; s=${s#* }; s=${s%% *}   # 「进程号 (程序名) 状态 父进程号 …」：程序名里可能有空格和括号，从最后一个 ") " 往后数
+		for p in "$@"; do
+			[ "$s" = "$p" ] || continue
+			f=${f%/stat}; kill "${f#/proc/}"; break
+		done
+	done
+	return 0
+}
 # cca 存的 API key 放在哪（PY_SRC 的 keyfile_store 是同一个判断）：macOS 是钥匙串；没有钥匙串的系统（Linux 服务器）是
 # ~/.cca/secrets 下权限 600 的文件。CCA_KEYSTORE=file 时 macOS 上也用文件（测试用）。按 OSTYPE 判断，不起 uname
 keyfile_store() { [ "${CCA_KEYSTORE:-}" = file ] || [ "${OSTYPE#darwin}" = "$OSTYPE" ]; }
@@ -9297,7 +9313,10 @@ PY_PACKED=$(set -o pipefail; printf '%s' "$PY_SRC" | "$_gz" -n -c | "$_b64") ||
 unset PY_SRC _gz _b64
 export -n PY_PACKED PY_BOOT
 # 每次 py 都是新的 Python 进程：PY_BOOT 把编译好的源码按摘要存在 PYC_DIR 里（只有自己能读写，换了版本摘要就变），
-# 下次直接载入，省掉每次 30 多毫秒的编译。目录不是自己的、别人能进、是链接，或者缓存读不了，就照常编译、不用缓存
+# 下次直接载入，省掉每次 30 多毫秒的编译。目录不是自己的、别人能进、是链接，或者缓存读不了，就照常编译、不用缓存。
+# 每个版本（和每个 Python 版本）一份，约 0.5 MB：写新的一份时顺手删掉 7 天前写的（旧版本的，还有没写完的临时文件），
+# 不然越积越多（Linux 上没有 XDG_RUNTIME_DIR 时在 ~/.cache 里，系统不会清；比如 crontab 里开机起内核的那一行）。
+# 只认缓存的文件名（十六进制的摘要-版本号），python3 那个文件等别的不动；平时只读缓存，不多一次系统调用
 PY_BOOT='import sys, os, marshal, zlib, base64
 d, packed = sys.argv.pop(1), sys.argv.pop(1)
 if packed[:1] == "+":
@@ -9325,6 +9344,15 @@ if code is None:
             with os.fdopen(os.open(t, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
                 marshal.dump(code, f)
             os.replace(t, p)
+            old = os.stat(p).st_mtime - 7 * 86400
+            for n in os.listdir(d):
+                h, _, v = n.partition("-")
+                if len(h) > 16 and v and not (h + v).strip("0123456789abcdef."):
+                    try:
+                        if os.lstat(os.path.join(d, n)).st_mtime < old:
+                            os.unlink(os.path.join(d, n))
+                    except OSError:
+                        pass
         except OSError:
             pass
 exec(code, {"__name__": "__main__"})'
@@ -13287,8 +13315,9 @@ cmd_usage() {   # cca [codex] usage [账号…] [--json]（CCA_USAGE_JOBS：最�
 	if ! bad=$(py settings-check); then settings_warn "$bad"; return 1; fi
 	usage_route || warn "账号出口未能核实：不发起查询，只显示上次的用量（检查路由器或本机 Clash 的账号端口池）"
 	tmp=$(mktemp -d "$CCA_HOME/usage.XXXXXX") || die "建临时目录失败"
-	# Ctrl-C、关掉终端：后台的查询忽略 SIGINT，要自己停掉它们（连同它们起的 python、curl；claude、codex 的 stdin 一断也就退出了）
-	trap 'for i in "${pids[@]}"; do pkill -P "$i"; kill "$i"; done 2>/dev/null; rm -rf "$tmp"; exit 130' INT TERM HUP
+	# Ctrl-C、关掉终端：后台的查询忽略 SIGINT，要自己停掉它们（连同它们起的 python、curl；claude、codex 的 stdin 一断也就退出了）。
+	# 先停子进程：查询先停的话，它们的子进程就归到 1 号进程名下，按父进程找不到了
+	trap 'kill_kids "${pids[@]}" 2>/dev/null; kill "${pids[@]}" 2>/dev/null; rm -rf "$tmp"; exit 130' INT TERM HUP
 	[ -n "$json" ] || info "正在经各账号自己的出口查询用量（${#keys[@]} 个账号）…"
 	for ((i = 0; i < ${#keys[@]}; i++)); do   # 同时查的不超过 CCA_USAGE_JOBS 个
 		eval "$(py env "${keys[i]}")"
@@ -14294,10 +14323,12 @@ cmd_restore() {
 	on_linux && core_boot off   # 开机起内核的那一行（上面换掉内置代理时已经删了；以前留下的也删）
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。内置代理的节点密钥、配置和内核文件不打包
-	# （bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core 的目录）。登录凭证（Codex 的 auth.json、Linux 上
+	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点、维护者的参考节点，
+	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
+	# policy 的目录）；Clash Verge 配置的备份（backup/）是用户自己的配置文件，照样打包。登录凭证（Codex 的 auth.json、Linux 上
 	# Claude Code 的 .credentials.json）、密钥文件（secrets：上面按记账删过，没记上账的也不带）不打包
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
+		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'secrets' \
 		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null )
