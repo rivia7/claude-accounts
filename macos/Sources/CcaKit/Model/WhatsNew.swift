@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.10", title: "每周用量的颜色和额度一样，Fable 的提示更好懂", points: [
+            .init(symbol: "chart.bar.xaxis",
+                  text: "每周用量的竖条按那一周用了多少上色，和上面的额度一样：70% 以下绿，70–89% 橙，90% 以上红。以前用的是账号的颜色，红色、绿色的账号容易看错（用了 51% 也是红的）。「用量统计」页也一样。"),
+            .init(symbol: "text.bubble",
+                  text: "Fable 下面那句话改得更直白：「Fable 最多占本周额度的 50%，已占 17%」。Fable 用的是本周额度的一部分，它那份用完了时写「Fable 的份额用完了，别的模型还能用本周剩下的 49%」：账号没用完，换别的模型还能接着用。"),
+        ], art: "quota"),
         ReleaseNote(version: "3.1.0-beta.9", title: "随时看到 Fable 用了多少", points: [
             .init(symbol: "chart.bar",
                   text: "左边的账号列表里，Claude 账号名字右边的小条多了一根 Fable：它自己那份每周额度用了多少，快用完时变橙、变红。菜单栏图标里、总览的卡片上也一样有。"),
