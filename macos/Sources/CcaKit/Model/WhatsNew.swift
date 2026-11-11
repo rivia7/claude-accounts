@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.16", title: "配置备份不再带节点密钥，缓存不再越积越多", points: [
+            .init(symbol: "archivebox",
+                  text: "一键还原（cca restore）打的配置备份里，不再有维护者的参考节点（里面有节点的密钥），拉取映射时没清掉的临时文件也不打包。你自己的 Clash Verge 配置备份照样在里面。"),
+            .init(symbol: "internaldrive",
+                  text: "cca 给内置的 Python 代码存的编译缓存每个版本一份（约 0.5 MB），以前从不清理。现在写新的一份时，顺手删掉 7 天前的旧版本。Mac 上系统本来会清，Linux 服务器上以前会一直留着。"),
+            .init(symbol: "stop.circle",
+                  text: "Linux 服务器上没装 procps 时（比如 Debian 的精简安装），查用量途中按 Ctrl-C 也能马上停下后台的查询，不用等它们自己超时。"),
+        ]),
         ReleaseNote(version: "3.1.0-beta.15", title: "在服务器上登录更省事，服务器重启后代理自己起来", points: [
             .init(symbol: "key",
                   text: "在服务器上登录账号时，这台 Mac 上不用先加好同一个账号：运行服务器给的那行 cca login-page，还没有这个账号会问要不要用同一个节点加上它。两边节点的名字不一样也认得出（按节点的地址认）。"),
