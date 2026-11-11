@@ -228,6 +228,7 @@ S
 # --- Mac 侧假命令（bin）
 cat > "$T/bin/ssh" <<'S'
 #!/bin/bash
+[ "${1:-}" = -V ] && { echo "OpenSSH_9.9p2, LibreSSL 3.3.6" >&2; exit 0; }   # 安装时查版本（ssh-keygen -Y 要 8.1）
 args=("$@"); i=0; n=${#args[@]}
 while [ $i -lt $n ]; do
 	case "${args[$i]}" in
@@ -901,6 +902,8 @@ PY
 			email=""; prev=""; for a in "$@"; do [ "$prev" = --email ] && email="$a"; prev="$a"; done
 			if [ -f "$CCA_T/login_as" ]; then email=$(cat "$CCA_T/login_as"); rm -f "$CCA_T/login_as"; fi   # 一次性：模拟登错号
 			[ -n "$email" ] || email="someone@example.com"
+			# $CCA_T/oauth_flow（内容是这次的 state）：像真的 Claude Code 一样在本机开回调、经 BROWSER 打开登录页，等浏览器跳回来再换 token
+			[ -f "$CCA_T/oauth_flow" ] && exec python3 "$CCA_T/fake_oauth.py" "$P" "$email"
 			python3 -c 'import json,os,sys; p=sys.argv[1]; j=json.load(open(p)) if os.path.exists(p) else {}; j["oauthAccount"]={"emailAddress":sys.argv[2]}; json.dump(j,open(p,"w"),indent=2)' "$P" "$email"
 			echo "LOGIN $email @ $CLAUDE_CONFIG_DIR" >> "$LOG" ;;
 		logout)
@@ -1032,6 +1035,88 @@ con.execute('INSERT INTO threads VALUES (?, ?, ?)', (tid, rollout, tag)); con.co
 PY
 exit 3
 S
+# 假 claude 的 auth login 在 $CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 Claude Code 2.1.322 走：本机 127.0.0.1 随机端口开回调
+# （redirect_uri 写 localhost），打印手动登录的网址和“Paste code here”，经 $BROWSER 打开自动的那个登录网址；回调的 state 不对回 400、
+# 整个登录失败，对的回 302 到成功页，再“换 token”：code 以 good 开头算成功（写 oauthAccount），否则失败。换 token 时的代理记进 claude.log
+cat > "$T/fake_oauth.py" <<'S'
+import http.server, json, os, socketserver, subprocess, sys, threading, urllib.parse as up
+P, email = sys.argv[1], sys.argv[2]
+t = os.environ['CCA_T']
+state = open(os.path.join(t, 'oauth_flow')).read().strip() or 'st-claude'
+def log(s):
+    open(os.path.join(t, 'claude.log'), 'a').write(s + '\n')
+got, done = {}, threading.Event()
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_GET(self):
+        u = up.urlsplit(self.path)
+        q = dict(up.parse_qsl(u.query))
+        if u.path != '/callback':
+            self.send_response(404); self.end_headers(); return
+        if q.get('state') != state:
+            self.send_response(400); self.end_headers(); self.wfile.write(b'Invalid state parameter')
+            got['err'] = 'Invalid state parameter'; done.set(); return
+        self.send_response(302); self.send_header('Location', 'https://platform.claude.com/oauth/code/success?app=claude-code'); self.end_headers()
+        got['code'] = q.get('code', ''); done.set()
+srv = socketserver.TCPServer(('127.0.0.1', 0), H)
+port = srv.server_address[1]
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+def url(redirect):
+    return 'https://claude.com/cai/oauth/authorize?' + up.urlencode({'code': 'true', 'client_id': 'c', 'response_type': 'code', 'redirect_uri': redirect,
+        'scope': 'user:inference', 'code_challenge': 'CC', 'code_challenge_method': 'S256', 'state': state, 'login_hint': email})
+print('Opening browser to sign in…')
+print("If the browser didn't open, visit: " + url('https://platform.claude.com/oauth/code/callback'))
+sys.stdout.write('Paste code here if prompted > '); sys.stdout.flush()
+log('OAUTH-START port=%d' % port)
+if os.environ.get('BROWSER'):
+    subprocess.run([os.environ['BROWSER'], url('http://localhost:%d/callback' % port)], stdin=subprocess.DEVNULL)
+if not done.wait(60):
+    print('Login failed: timed out'); sys.exit(1)
+if 'err' in got:
+    print('Login failed: ' + got['err']); sys.exit(1)
+log('OAUTH-EXCHANGE code=%s https_proxy=%s' % (got['code'], os.environ.get('https_proxy', 'unset')))
+if not got['code'].startswith('good'):
+    print('Login failed: Request failed with status code 400'); sys.exit(1)
+j = json.load(open(P)) if os.path.exists(P) else {}
+j['oauthAccount'] = {'emailAddress': email}
+json.dump(j, open(P, 'w'), indent=2)
+log('LOGIN %s @ %s' % (email, os.path.dirname(P)))
+print('Login successful.')
+S
+
+# 扮演 Mac 上账号的 Chrome（cca login-page 的用例）：fake_browser.py state code。等 open.log 里出现这个 state 的登录网址
+#（cca 在账号的浏览器里打开了它），再像登录完的浏览器一样跳回网址里 redirect_uri 的回调：先来个 favicon、一个 state 不对的
+#（都不该算数），再带着 code 跳回来。打印每次的 HTTP 状态和最后那一页
+cat > "$T/fake_browser.py" <<'S'
+import os, re, sys, time, urllib.error as ue, urllib.parse as up, urllib.request as ur
+t, state, code = os.environ['CCA_T'], sys.argv[1], sys.argv[2]
+for _ in range(400):
+    p = os.path.join(t, 'open.log')
+    m = re.search(r'\[(https://[^\]]*state=%s[^\]]*)\]' % re.escape(state), open(p).read()) if os.path.exists(p) else None
+    if m:
+        break
+    time.sleep(0.05)
+else:
+    print('never opened'); sys.exit(1)
+r = up.urlsplit(dict(up.parse_qsl(up.urlsplit(m.group(1)).query))['redirect_uri'])
+op = ur.build_opener(ur.ProxyHandler({}))
+def get(u):
+    try:
+        r = op.open(u, timeout=10)
+        return r.status, r.read().decode('utf-8', 'replace')
+    except ue.HTTPError as e:
+        return e.code, ''
+    except OSError as e:
+        return 0, str(e)
+base = 'http://localhost:%d' % r.port
+print('favicon %d' % get(base + '/favicon.ico')[0])
+print('wrong %d' % get(base + r.path + '?code=x&state=wrong')[0])
+st, page = get(base + r.path + '?code=%s&state=%s' % (code, state))
+print('callback %d' % st)
+print(page)
+S
+
 # 假的 codex app-server（JSON-RPC，一行一个 JSON）：initialize；account/login/start 回登录网址，等 cca 在账号的浏览器里
 # 打开它（出现在 open.log 里）就当用户登录完了，写 auth.json（假的 id_token，邮箱默认取 CCA_ACCOUNT 里的，
 # 一次性的 codex_login_as 模拟登错号）；account/rateLimits/read 按登录的邮箱回 codex_usage/<邮箱>.json。
@@ -1069,8 +1154,42 @@ if '--write-auth' in sys.argv:
 log('APPSERVER: CODEX_HOME=%s https_proxy=%s NO_PROXY=%s' % (home, os.environ.get('https_proxy', 'unset'), os.environ.get('NO_PROXY', 'unset')))
 if os.path.exists(os.path.join(t, 'codex_rpc_off')):
     sys.stderr.write("error: unrecognized subcommand 'app-server'\n"); sys.exit(2)
+import threading
+SEND = threading.Lock()
 def send(m):
-    print(json.dumps(m), flush=True)
+    with SEND:
+        print(json.dumps(m), flush=True)
+def start_oauth(rid):
+    """$CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 codex 0.167 走：本机 127.0.0.1 随机端口开回调（redirect_uri 写 localhost），
+    回登录网址；回调的 state 不对回 400（State mismatch）、接着等，对的就“换 token”（code 以 good 开头算成功，写 auth.json），
+    换完才回答浏览器，再发 account/login/completed。换 token 时的代理记进 codex.log"""
+    import http.server, socketserver, urllib.parse as up
+    state = open(os.path.join(t, 'oauth_flow')).read().strip() or 'st-codex'
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+        def do_GET(self):
+            u = up.urlsplit(self.path)
+            q = dict(up.parse_qsl(u.query))
+            if u.path != '/auth/callback':
+                self.send_response(404); self.end_headers(); return
+            if q.get('state') != state:
+                self.send_response(400); self.end_headers(); self.wfile.write(b'State mismatch'); return
+            code = q.get('code', '')
+            log('OAUTH-EXCHANGE code=%s https_proxy=%s' % (code, os.environ.get('https_proxy', 'unset')))
+            ok = code.startswith('good')
+            if ok:
+                write_auth()
+            self.send_response(200); self.send_header('Content-Type', 'text/html'); self.end_headers()
+            self.wfile.write(b'<p>Signed in</p>' if ok else b'<p>Sign-in failed</p>')
+            send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': ok, 'error': None if ok else 'Token exchange failed: invalid_grant'}})
+    srv = socketserver.TCPServer(('127.0.0.1', 0), H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    log('OAUTH-START port=%d' % port)
+    q = up.urlencode({'response_type': 'code', 'client_id': 'app_x', 'redirect_uri': 'http://localhost:%d/auth/callback' % port, 'scope': 'openid profile email offline_access',
+                      'code_challenge': 'CC', 'code_challenge_method': 'S256', 'state': state, 'originator': 'codex_cli_rs'})
+    send({'id': rid, 'result': {'type': 'chatgpt', 'loginId': 'L1', 'authUrl': 'https://auth.openai.com/oauth/authorize?' + q}})
 for line in sys.stdin:
     try:
         m = json.loads(line)
@@ -1081,6 +1200,10 @@ for line in sys.stdin:
         log('RPC initialize client=%s' % m['params']['clientInfo']['name']); send({'id': rid, 'result': {'userAgent': 'x'}})
     elif meth == 'initialized':
         pass
+    elif meth == 'account/login/start' and os.path.exists(os.path.join(t, 'oauth_flow')):
+        start_oauth(rid)
+    elif meth == 'account/login/cancel':
+        log('RPC loginCancel'); send({'id': rid, 'result': {}})
     elif meth == 'account/login/start':
         url = 'https://auth.openai.com/oauth/authorize?client_id=app_x&state=s%d' % os.getpid()
         send({'id': rid, 'result': {'type': 'chatgpt', 'loginId': 'L1', 'authUrl': url}})

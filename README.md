@@ -14,7 +14,7 @@
 
 ## 需要准备什么
 
-- 一台 Mac
+- 一台 Mac（Linux 服务器上也能用命令行，见「Linux 服务器」）
 - 装好 Claude Code（没装的话先运行 `curl -fsSL https://claude.ai/install.sh | bash`）
 - 用 Codex 的话：装好 `codex` 命令（npm、Homebrew 或 OpenAI 的安装脚本都行，cca 会在 PATH、`~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找）；要用桌面版的话装好 ChatGPT App
 - Google Chrome（登录和网页版都用它）
@@ -40,6 +40,23 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 装好后打开一个新的终端标签，输入 `cca` 就能用了。
 
 已经装过的，再运行一次这条命令就是修复或重装，账号和配置都会保留。
+
+## Linux 服务器
+
+Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要先装好 Claude Code，还要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。
+
+Linux 支持目前在测试版里（3.1.0-beta.14 起）。正式版发布以前，上面那行命令装的正式版还不支持 Linux，先用这一行装测试版（正式版发布以后就和 macOS 用同一行命令）：
+
+```bash
+curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v3.1.0-beta.14/install.sh | bash -s 3.1.0-beta.14
+```
+
+Linux 上能用的是命令行：
+
+- **账号的网络**：连得上路由器时照常走它的端口池；连不上的（云服务器）用 cca 内置的代理，mihomo 内核由 cca 在后台运行（不用 root，不靠 systemd）。节点在家时从路由器拷一份，连不到路由器的服务器上只能用维护者参考节点里有的节点。
+- **登录**：服务器上没有账号专属的浏览器。`cca login 工作` 给出一行在 Mac 上运行的命令，登录页在 Mac 上用这个账号专属的 Chrome 打开，再把拿到的验证码贴回服务器（见「常见问题」）。
+- **API key**：存成 `~/.cca/secrets` 下只有你能读的文件。
+- 网页版、桌面 App、图形界面（`cca web`、`billing`、`limit-resets`、`app`、`gui`）只在 macOS 上。
 
 ## 日常使用
 
@@ -419,6 +436,8 @@ cca restore
 **cca 会碰我的 Claude 登录凭证吗？**
 不会。登录完全走官方的 `claude auth login`，凭证由 Claude Code 自己存进 macOS 钥匙串；cca 不读取、不保存，也不转发任何登录凭证。`cca usage` 查用量也是让 Claude Code 自己去查。
 
+在 Linux 服务器上没有账号专属的 Chrome：`cca login 工作` 照常在服务器上跑官方的登录，给出一行 `cca login-page …`，在 Mac 上运行它，Mac 上的 cca 用这个账号专属的 Chrome、经同一个节点打开登录页，登录完把验证码复制到剪贴板，贴回服务器即可（Mac 上也要有这个账号，节点和服务器上一样）。经手的只是这个一次性的验证码：cca 核对过是这一次登录的，才交给服务器上正在等着的 Claude Code（或 codex），由它自己经账号的出口换成凭证、自己保存（Claude Code 在 Linux 上存成账号目录里只有你能读的 `.credentials.json`）。
+
 **Codex 的登录凭证呢？**
 登录、刷新都由 codex 自己完成，凭证由它写进账号目录里的 `auth.json`。cca 只从里面的 id_token 读出邮箱、套餐和工作空间 ID（核对登录的是不是这个账号），不碰真正用来访问的 access / refresh token，也不保存、不转发。
 
@@ -437,7 +456,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 升级时，旧版指向共享主目录的未知条目链接会拆成账号自己的副本，源文件保留；用户自建的外部链接不动。旧共享目录若含内部符号链接，自动拆分会停止并指出路径，避免追随外部目录或循环链接。已有设备 ID 不因这项迁移重置。共享与续接会保留共同上下文，因此客户端标识独立并不意味着服务端无法关联账号。
 
 **第三方 API 的 key 存在哪？**
-默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。给官方账号记下备查的 key（`cca key 工作`）也存在钥匙串里（条目名 `cca-ref-…`，Codex 的是 `cca-codex-ref-…`），cca 绝不拿它登录或启动账号，同样随 `cca rm`、`cca restore` 删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。
+默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。给官方账号记下备查的 key（`cca key 工作`）也存在钥匙串里（条目名 `cca-ref-…`，Codex 的是 `cca-codex-ref-…`），cca 绝不拿它登录或启动账号，同样随 `cca rm`、`cca restore` 删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。Linux 服务器上没有钥匙串，这些 key 存成 `~/.cca/secrets` 下只有你能读的文件（目录 700、文件 600），同样随 `cca rm`、`cca restore` 删掉，不进备份包。
 
 **cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
 能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、写参考节点前留的 Clash Verge 配置备份（`backup/clash-verge-*.yaml`）、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
@@ -500,6 +519,7 @@ bash /tmp/cca install
 ## 开发
 
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
+- 在 Linux 上测一键安装、内置代理、服务器上的登录和密钥文件：`bash tests/linux.sh`（临时 HOME，要联网下载内核）；装了 Docker 的话 `bash tests/linux.sh --docker` 在 Ubuntu、Debian、Rocky、AlmaLinux、Fedora、Amazon Linux、Alpine、Arch、openSUSE 的容器里各跑一遍。
 - 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
 - 隔离防护专项：`python3 -m unittest discover -s tests -p 'isolation_*.py'`，覆盖配置解析、危险覆盖、App 环境与资料目录验证、浏览器失败路径及泄露检测状态；使用临时目录和测试替身，不登录真实账号。
 - 原生客户端兼容性测试（可选）：`CCA_TEST_CLAUDE_BIN=/绝对路径/claude python3 tests/isolation_credentials.py`，使用临时 HOME、假钥匙串和假凭证，验证实际客户端的凭证来源；`CCA_TEST_CHROME_BIN='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' python3 tests/isolation_chrome_native.py` 使用空 profile 和本机测试页/STUN 验证 WebRTC。需要 macOS 允许启动测试进程和本机监听；默认不执行这些原生测试。

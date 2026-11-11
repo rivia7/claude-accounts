@@ -60,10 +60,13 @@ VERSION="3.1.0-beta.13"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
-# 内置代理的内核：mihomo 官方 Release 里固定的版本，下载的 .gz 按这里的 SHA256 校验（换版本时两个一起改，取 GitHub 资产的 digest）
+# 内置代理的内核：mihomo 官方 Release 里固定的版本，下载的 .gz 按这里的 SHA256 校验（换版本时四个一起改，取 GitHub 资产的 digest）：
+# macOS 的 darwin-arm64、darwin-amd64-compatible，Linux 的 linux-arm64、linux-amd64-compatible（都是静态链接，不挑发行版）
 CORE_VERSION="1.19.33"
 CORE_SHA256_ARM64="060b64b0f2c9a310831db0fe4adb2878de67bfa606c311813c1f13966aa504b6"
 CORE_SHA256_AMD64="eefe967b74312f70b64efa0dfa54929d00c7af8e94416e1b12df09863a40f35b"
+CORE_SHA256_LINUX_ARM64="ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187"
+CORE_SHA256_LINUX_AMD64="386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6"
 CCA_HOME="${CCA_HOME:-$HOME/.cca}"
 CFG="$CCA_HOME/config.json"
 TABLE="$CCA_HOME/accounts.json"
@@ -352,6 +355,19 @@ arrow_menu() {
 
 with_timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+OS_NAME=""
+on_linux() {   # 在 Linux 上（服务器）：没有界面 App、钥匙串、桌面 App，内置代理由 cca 自己的后台进程托管。uname 只问一次（别在 $(…) 里第一次调）
+	[ -n "$OS_NAME" ] || OS_NAME=$(uname -s 2>/dev/null)
+	[ "$OS_NAME" = Linux ]
+}
+proc_args() {   # 进程的命令行（看它是不是自己起的那个）：Linux 读 /proc（busybox 的 ps 不认 -p），macOS 问 ps
+	if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline"; else ps -p "$1" -o command= 2>/dev/null; fi
+}
+# cca 存的 API key 放在哪（PY_SRC 的 keyfile_store 是同一个判断）：macOS 是钥匙串；没有钥匙串的系统（Linux 服务器）是
+# ~/.cca/secrets 下权限 600 的文件。CCA_KEYSTORE=file 时 macOS 上也用文件（测试用）。按 OSTYPE 判断，不起 uname
+keyfile_store() { [ "${CCA_KEYSTORE:-}" = file ] || [ "${OSTYPE#darwin}" = "$OSTYPE" ]; }
+if keyfile_store; then KEYSTORE="密钥文件" KEYSTORE_AT="这台机器的密钥文件（~/.cca/secrets，权限 600）" KEYSTORE_CRED="登录凭证"
+else KEYSTORE="钥匙串" KEYSTORE_AT="这台 Mac 的钥匙串" KEYSTORE_CRED="钥匙串凭证"; fi
 
 self_path() {
 	local p="${BASH_SOURCE[0]}" d
@@ -364,8 +380,13 @@ self_path() {
 }
 SELF=$(self_path)
 PYTHON="${CCA_PYTHON:-$(command -v python3 2>/dev/null)}"
-# 内嵌 Python 的缓存目录（PY_BOOT）：这个用户自己的临时目录（/var/folders/…/T/，别人进不去；TMPDIR 不是它时问 getconf）
-case "${TMPDIR:-}" in /var/folders/*) PYC_DIR="${TMPDIR%/}/cca-py" ;; *) PYC_DIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && PYC_DIR="${PYC_DIR%/}/cca-py" || PYC_DIR="" ;; esac
+# 内嵌 Python 的缓存目录（PY_BOOT）：这个用户自己的临时目录（/var/folders/…/T/，别人进不去；TMPDIR 不是它时问 getconf）。
+# Linux 没有它：用登录会话的 XDG_RUNTIME_DIR（tmpfs，只有自己能进），没有就 ~/.cache（PY_BOOT 照样查目录是不是自己的、别人进不进得去）
+case "${TMPDIR:-}" in
+	/var/folders/*) PYC_DIR="${TMPDIR%/}/cca-py" ;;
+	*) PYC_DIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && PYC_DIR="${PYC_DIR%/}/cca-py" ||
+		PYC_DIR="${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/cca-py" ;;
+esac
 # /usr/bin/python3 是命令行工具的转发程序：每次先找开发者目录，每次调用多花约 50 毫秒。换成它转发到的真正的 python3
 # （问一次，记在上面的缓存目录里；目录不是自己的、是链接就不用）。没装命令行工具时它一运行就弹安装窗口：先问 xcode-select，
 # 没装就不问（照常用 /usr/bin/python3，need_deps 会说清楚要装什么）
@@ -2051,9 +2072,10 @@ def api_settings(key, v):
 
 
 # ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、维护者参考节点和内置代理里的节点密钥、Codex 的登录 token、
-# 各账号的 Chrome 和桌面 App 资料目录里的 cookie）
+# 各账号的 Chrome 和桌面 App 资料目录里的 cookie；没有钥匙串的系统上 Claude Code 的登录凭证、cca 存的 API key）
 CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'backup/clash-verge-*.yaml', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
-                   'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**', 'core/nodes.json', 'core/config.yaml')
+                   'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**', 'core/nodes.json', 'core/config.yaml',
+                   'accounts/*/claude/.credentials.json', 'secrets/**')
 
 
 def cca_dir_args():
@@ -2098,9 +2120,11 @@ def bypass_list(no_proxy):
 def cmd_router_env():
     c = cfg_load()
     r = c.get('router') or {}
+    loc = c.get('local')
     sh(ROUTER_HOST=r.get('host', ''), ROUTER_PORT=r.get('port') or 22, ROUTER_USER=r.get('user') or 'root',
        ROUTER_KEY=r.get('key', ''), PROXY_HOST=c.get('proxy_host') or r.get('host', ''),
-       ROUTE_PREF=c.get('route') or 'auto', POOL_FIRST=FIRST_PORT)
+       ROUTE_PREF=c.get('route') or 'auto', POOL_FIRST=FIRST_PORT,
+       LOCAL_SET=(loc.get('client') or '') if isinstance(loc, dict) else '')   # 配置过本机的客户端（不读 Clash Verge 的配置，见 load_local）
 
 
 def cmd_router_set(host, port, user, key):
@@ -2702,6 +2726,66 @@ def cmd_rm(key):
 #   （Codex 是 cca-codex-ref-），账户名是 REF_ACCT。
 # cca 存过 key 的账号记在 config.json 的 api_keys / ref_keys：删账号（包括在 cca edit 里删、直接改账号表删）后据此清掉钥匙串里的 key；
 # key_hints 记着每个 key 的掩码（key_hint）和存的时候的域名：_gui state 照它显示，不读钥匙串
+# 没有钥匙串的系统（Linux 服务器）把 key 存成文件：~/.cca/secrets/<服务名>（服务名和钥匙串里的一样），内容是
+# {"host": 账户名, "key": key}；目录 700、文件 600，先写临时文件（建的时候就是 600）再原子替换。CCA_KEYSTORE=file 时 macOS
+# 上也这样（测试用）。bash 的 keyfile_store 是同一个判断
+SECRETS_DIR = os.path.join(CCA_HOME, 'secrets')
+
+
+def keyfile_store():
+    return sys.platform != 'darwin' or os.environ.get('CCA_KEYSTORE') == 'file'
+
+
+def keystore_name():
+    return '密钥文件' if keyfile_store() else '钥匙串'
+
+
+def keyfile_read(host, svc):
+    """(退出码, key)：退出码和 security find-generic-password 一样，没有是 44，读不了是 1"""
+    try:
+        with open(os.path.join(SECRETS_DIR, svc), encoding='utf-8') as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return 44, ''
+    except (OSError, ValueError):
+        return 1, ''
+    if not isinstance(d, dict) or d.get('host') != host or not isinstance(d.get('key'), str):
+        return 44, ''
+    return 0, d['key']
+
+
+def keyfile_write(host, svc, s):
+    os.makedirs(SECRETS_DIR, mode=0o700, exist_ok=True)
+    os.chmod(SECRETS_DIR, 0o700)
+    p = os.path.join(SECRETS_DIR, svc)
+    tmp = '%s.cca-%d.tmp' % (p, os.getpid())
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump({'v': 1, 'host': host, 'key': s}, f)
+            f.write('\n')
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def keyfile_del(svc):
+    try:
+        os.unlink(os.path.join(SECRETS_DIR, svc))
+    except FileNotFoundError:
+        pass
+
+
 def security(*args, data=None):
     """运行 security，返回 (退出码, stdout)；data 从 stdin 交给它（security -i）"""
     import subprocess
@@ -2734,9 +2818,12 @@ def kc_hints(st):
 
 def kc_read(aid, host, ref=False):
     """(security 的退出码, key)：钥匙串里这个账号、这个服务商的 key；没有（退出码 44）、读不了（锁着、超时）或不是可见的
-    ASCII 时 key 是空字符串"""
-    rc, out = security('find-generic-password', '-a', host, '-s', kc_svc(aid, ref), '-w')
-    s = out.decode('utf-8', 'replace').strip()
+    ASCII 时 key 是空字符串（没有钥匙串的系统读密钥文件）"""
+    if keyfile_store():
+        rc, s = keyfile_read(host, kc_svc(aid, ref))
+    else:
+        rc, out = security('find-generic-password', '-a', host, '-s', kc_svc(aid, ref), '-w')
+        s = out.decode('utf-8', 'replace').strip()
     return rc, s if rc == 0 and SECRET_RE.match(s) else ''
 
 
@@ -2787,7 +2874,13 @@ def kc_put(aid, host, s, ref=False):
     if not host or re.search(r'\s', host):
         return False
     kc_del(aid, ref)
-    security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid, ref), s.encode('ascii').hex())).encode('ascii'))
+    if keyfile_store():
+        try:
+            keyfile_write(host, kc_svc(aid, ref), s)
+        except OSError:
+            return False
+    else:
+        security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid, ref), s.encode('ascii').hex())).encode('ascii'))
     if kc_get(aid, host, ref) != s:
         return False
     kc_book(aid, host, s, ref)
@@ -2795,10 +2888,13 @@ def kc_put(aid, host, s, ref=False):
 
 
 def kc_del(aid, ref=False):
-    """删掉这个账号在钥匙串里的 key（每次删一条，不管哪个服务商的，删到没有为止）"""
-    for _ in range(20):
-        if security('delete-generic-password', '-s', kc_svc(aid, ref))[0] != 0:
-            break
+    """删掉这个账号在钥匙串里的 key（每次删一条，不管哪个服务商的，删到没有为止；密钥文件一个服务名只有一份）"""
+    if keyfile_store():
+        keyfile_del(kc_svc(aid, ref))
+    else:
+        for _ in range(20):
+            if security('delete-generic-password', '-s', kc_svc(aid, ref))[0] != 0:
+                break
     kc_unbook(aid, ref)
 
 
@@ -2834,7 +2930,7 @@ def cmd_secret_set(key):
         die(SECRET_MSG)
     host, ref = kc_slot(t[key])
     if not kc_put(acct_id(key), host, s, ref):
-        die('API key 存进钥匙串失败（钥匙串被锁住了？）')
+        die('API key 存进密钥文件失败（看看 ~/.cca/secrets 的权限和磁盘空间）' if keyfile_store() else 'API key 存进钥匙串失败（钥匙串被锁住了？）')
 
 
 def cmd_secret_del(key):
@@ -2882,7 +2978,7 @@ def cmd_secrets_forget(scope=''):
             hint = h.get('hint') if isinstance(h, dict) and isinstance(h.get('hint'), str) else ''
             kc_del(aid, ref)
             if ref and scope != 'all':
-                sys.stderr.write('已从钥匙串删掉 %s 记下的 API key%s：账号表里已经没有这个账号了\n' % (aid, '（%s）' % hint if hint else ''))
+                sys.stderr.write('已从%s删掉 %s 记下的 API key%s：账号表里已经没有这个账号了\n' % (keystore_name(), aid, '（%s）' % hint if hint else ''))
 
 
 def cmd_key_show(key):
@@ -2934,6 +3030,212 @@ def cmd_login_url(key, url):
             and 'login_hint' not in dict(parse_qsl(u.query, keep_blank_values=True))):
         url = urlunsplit(u._replace(query=(u.query + '&' if u.query else '') + urlencode({'login_hint': e})))
     print(url)
+
+
+# --- 服务器上登录（bash 的 remote_login / cmd_login_page）：claude / codex 在服务器上跑登录、等本机的回调；登录页由 Mac 上的
+# cca login-page 用账号专属的 Chrome、经同一个节点打开，Mac 接住跳回 localhost 的那一下，验证码（code#state）贴回服务器，
+# 服务器核对 state 后转给本机的回调。换 token 的始终是服务器上的 claude / codex（PKCE：验证码离了它手里的 verifier 没用）
+LOGIN_CODE_RE = lazy_re(r'^[\x21-\x22\x24-\x7e]{1,4096}$')   # 可见的 ASCII，不含 #（code#state 的分隔）
+
+
+def login_target(url):
+    """登录网址 → (回调的主机, 端口, 路径, state)；不是这个工具的登录页（T.login_hosts 里的 https 地址、/oauth/authorize、
+    带 PKCE），或者回调不在本机的 http 端口上时返回 None"""
+    from urllib.parse import urlsplit, parse_qsl
+    if not isinstance(url, str) or not re.match(r'^https://[\x21-\x7e]{1,8192}$', url):
+        return None
+    try:
+        u = urlsplit(url)
+        q = dict(parse_qsl(u.query, keep_blank_values=True))
+        r = urlsplit(q.get('redirect_uri', ''))
+        port = r.port
+    except ValueError:
+        return None
+    if (u.hostname not in T.login_hosts or not u.path.endswith('/oauth/authorize') or q.get('response_type') != 'code'
+            or not q.get('code_challenge') or r.scheme != 'http' or r.hostname not in ('localhost', '127.0.0.1')
+            or not port or not LOGIN_CODE_RE.match(q.get('state', ''))):
+        return None
+    return r.hostname, port, r.path or '/', q['state']
+
+
+def cmd_login_check(url):
+    """cca login-page 拿到的网址是不是这个工具的登录页（别的网址不在账号的浏览器里打开）"""
+    if login_target(url):
+        return
+    other = next((t for t in TOOLS if t is not T and urlsplit_host(url) in t.login_hosts), None)
+    die('这不是 %s 的登录网址：要用服务器上的 cca 给出的那一整行%s' % (T.label, '（%s 账号用 %s login-page）' % (other.label, other.cmd) if other else ''))
+
+
+def urlsplit_host(url):
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(url).hostname or ''
+    except ValueError:
+        return ''
+
+
+def cmd_login_forward(urlfile):
+    """服务器上：把贴回来的验证码转给本机正在等的登录回调。stdin 是用户贴的：Mac 上 cca login-page 给的 code#state，或者浏览器
+    跳回 localhost 时地址栏里的整个网址。state 和这次的登录网址对不上就不转（Claude Code 收到对不上的 state 整个登录就失败了）。
+    直接连本机的回调：不经代理，也不跟随跳转（Claude Code 回的是跳到成功页的 302，跟过去就直连了外网）。Codex 换好 token
+    才回答，所以多等一会儿。退出码：0 转过去了；2 贴的不对（没转，可以重新贴）；1 转不过去，原因打到 stderr"""
+    import http.client
+    from urllib.parse import urlsplit, parse_qsl, quote
+    try:
+        with open(urlfile, encoding='utf-8') as f:
+            tgt = login_target(f.read().strip())
+    except OSError:
+        tgt = None
+    if not tgt:
+        die('这次的登录网址不对，没法转交验证码')
+    host, port, path, state = tgt
+    text = sys.stdin.read().strip()
+    code = got = err = None
+    if re.match(r'^https?://', text):
+        try:
+            q = dict(parse_qsl(urlsplit(text).query, keep_blank_values=True))
+        except ValueError:
+            q = {}
+        code, got, err = q.get('code'), q.get('state'), q.get('error')
+    elif '#' in text:
+        code, _, got = text.partition('#')
+    if err and got == state:
+        die('登录页说没有登录成功：%s' % re.sub(r'[^\x20-\x7e]', '?', (q.get('error_description') or err))[:200])
+    if not code or not got or not LOGIN_CODE_RE.match(code) or not LOGIN_CODE_RE.match(got):
+        sys.stderr.write('认不出验证码：粘贴 Mac 上 cca login-page 给的那一行（形如 xxxx#yyyy），或者浏览器跳回 localhost 时地址栏里的整个网址\n')
+        sys.exit(2)
+    if got != state:
+        sys.stderr.write('这个验证码不是这一次登录的（state 对不上）：在 Mac 上运行上面这一次给出的命令，重新登录一遍\n')
+        sys.exit(2)
+    c = http.client.HTTPConnection(host, port, timeout=120)
+    try:
+        c.request('GET', '%s?code=%s&state=%s' % (path, quote(code, safe=''), quote(got, safe='')))
+        r = c.getresponse()
+        st = r.status
+        r.read(65536)
+    except (OSError, http.client.HTTPException) as e:
+        die('连不上这台机器上等着的登录（%s:%d），它可能已经退出了：%s' % (host, port, e))
+    finally:
+        c.close()
+    if st >= 400:
+        die('登录没收下这个验证码（HTTP %d）' % st)
+
+
+LOGIN_PAGE = '''<!doctype html><html lang=zh-CN><meta charset=utf-8><title>cca：%(title)s</title>
+<style>body{font:15px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;max-width:40em;margin:4em auto;padding:0 1.2em;color:#222}
+pre{white-space:pre-wrap;word-break:break-all;background:#f2f2f2;padding:.7em .9em;border-radius:6px;font-size:13px}
+@media (prefers-color-scheme:dark){body{background:#1e1e1e;color:#ddd}pre{background:#2c2c2c}}</style>
+<h2>%(title)s</h2>%(body)s'''
+
+
+def login_catch_reply(conn, status, title, body):
+    import html
+    page = (LOGIN_PAGE % {'title': html.escape(title), 'body': body}).encode('utf-8')
+    head = 'HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' % (status, len(page))
+    try:
+        conn.sendall(head.encode('ascii') + page)
+    except OSError:
+        pass
+
+
+def login_catch_one(conn, path, state):
+    """读一个请求：是这次登录的回调（路径、state 都对）时返回 (code, error)，别的请求（favicon、对不上的）回 404 / 400、返回 None"""
+    from urllib.parse import urlsplit, parse_qsl
+    conn.settimeout(10)
+    data = b''
+    try:
+        while b'\r\n\r\n' not in data and len(data) < 16384:
+            b = conn.recv(4096)
+            if not b:
+                break
+            data += b
+    except OSError:
+        return None
+    line = data.split(b'\r\n', 1)[0].decode('latin-1').split(' ')
+    if len(line) < 2 or line[0] != 'GET':
+        return None
+    try:
+        u = urlsplit(line[1])
+        q = dict(parse_qsl(u.query, keep_blank_values=True))
+    except ValueError:
+        q, u = {}, None
+    if u is None or u.path != path:
+        login_catch_reply(conn, '404 Not Found', '找不到', '')
+        return None
+    if q.get('state') != state:
+        login_catch_reply(conn, '400 Bad Request', '不是这一次的登录', '<p>这一页不是这一次登录跳回来的。回到终端看看 cca login-page 有没有在运行。</p>')
+        return None
+    if q.get('error') or not q.get('code'):
+        return None, re.sub(r'[^\x20-\x7e]', '?', q.get('error_description') or q.get('error') or 'no code')[:200]
+    return q['code'], None
+
+
+def cmd_login_catch(url, timeout='900'):
+    """cca login-page（Mac 上）：先占住登录网址里回调的端口（127.0.0.1，能占的话还有 ::1），再回调 cca _browser 在账号专属的
+    Chrome 里打开登录页（走账号的出口；回调地址是本机，Chrome 不经代理），等浏览器带着 code、state 跳回来：放进剪贴板，给浏览器
+    一页说明，把 code#state 打到 stdout。退出码：0 拿到了、复制好了；3 拿到了、没复制成；4 端口被别的程序占着（照样打开了登录页，
+    stdout 是端口，bash 说登录后从地址栏复制整个网址贴回服务器）；1 没拿到，原因打到 stderr"""
+    import html, select, socket, subprocess
+    tgt = login_target(url)
+    if not tgt:
+        die('这不是 %s 的登录网址' % T.label)
+    _, port, path, state = tgt
+    socks = []
+    for fam, addr in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
+        try:
+            s = socket.socket(fam, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if fam == socket.AF_INET6:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            s.bind((addr, port))
+            s.listen(8)
+            socks.append(s)
+        except OSError:
+            if fam == socket.AF_INET:
+                break
+    if subprocess.run([SELF_PATH, '_browser', url], stdin=subprocess.DEVNULL).returncode != 0:
+        die('没能在账号的浏览器里打开登录页')
+    if not socks:   # bash 照这个端口说怎么办
+        print(port)
+        sys.exit(4)
+    end = time.time() + float(timeout)
+    got = None
+    try:
+        while got is None:
+            left = end - time.time()
+            if left <= 0:
+                die('等了 %d 分钟还没登录完：要登录的话在服务器上重新开始' % (int(float(timeout)) // 60))
+            ready = select.select(socks, [], [], min(left, 5))[0]
+            for s in ready:
+                try:
+                    conn = s.accept()[0]
+                except OSError:
+                    continue
+                try:
+                    got = login_catch_one(conn, path, state)
+                    if got is None:
+                        continue
+                    code, err = got
+                    if err:
+                        login_catch_reply(conn, '200 OK', '没有登录成功', '<p>登录页说：<code>%s</code></p><p>回到服务器的终端直接回车取消，再重新登录一遍。</p>' % html.escape(err))
+                        die('登录页说没有登录成功：%s' % err)
+                    text = '%s#%s' % (code, state)
+                    try:
+                        copied = subprocess.run(['pbcopy'], input=text.encode('ascii'), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+                    except (OSError, subprocess.SubprocessError):
+                        copied = False
+                    login_catch_reply(conn, '200 OK', '这边登录好了，还差一步',
+                                      '<p>%s回到服务器的终端，粘贴、回车，服务器上就登录好了。之后可以关掉这一页。</p><pre>%s</pre>'
+                                      % ('验证码已经复制到剪贴板（就是下面这一行）：' if copied else '复制下面这一行验证码，', html.escape(text)))
+                    print(text)
+                    sys.exit(0 if copied else 3)
+                finally:
+                    conn.close()
+    except KeyboardInterrupt:
+        die('已取消')
+    finally:
+        for s in socks:
+            s.close()
 
 
 def cmd_get(field):
@@ -3549,12 +3851,18 @@ def cmd_core_config(sock):
     os.replace(tmp, CORE_CONFIG)
 
 
-def cmd_core_nodes_save(path):
-    """路由器上的节点定义（{"proxies": [...]}，bash 从路由器端 defs 的 YAML 转的 JSON）→ core/nodes.json：只留可选节点（按名字和
-    服务器地址认）和它们经 dialer-proxy 用到的，再记下拷的时间和当时的可选节点（变了就重新拷）"""
+DEFS_END = '\n# cca-defs-end\n'   # 路由器端 defs 输出的最后一行：没读到它就是没拷完整
+
+
+def cmd_core_nodes_save():
+    """stdin 是路由器端 defs 给的节点定义（JSON 的 {"proxies": [...]}，后面跟着结束标记）→ core/nodes.json：只留可选节点（按名字和
+    服务器地址认）和它们经 dialer-proxy 用到的，再记下拷的时间和当时的可选节点（变了就重新拷）。没拷完整、读不懂的不写"""
     c = cfg_load()
+    s = sys.stdin.read()
+    if not s.endswith(DEFS_END):
+        die('节点定义没拷完整')
     try:
-        j = json.load(sys.stdin) if path == '-' else load_quiet(path)
+        j = json.loads(s[:-len(DEFS_END)])
     except ValueError:
         j = None
     px = j.get('proxies') if isinstance(j, dict) else None
@@ -3598,6 +3906,103 @@ def cmd_core_summary():
     miss = core_missing(c)
     print('节点定义：%s%s%s' % (src, '，补上维护者参考节点 %d 个' % len(extra) if extra else '',
                               '；没有定义的节点：%s（用它们的账号在外面会被拒绝连接）' % '、'.join(miss) if miss else ''))
+
+
+CORE_LOG = os.path.join(CORE_DIR, 'core.log')   # Linux 上内核的输出（macOS 上在界面 App 的缓存目录里）
+
+
+def core_wanted():
+    """cca _core-keep 要不要内核在跑：本机客户端是内置代理、配置文件在（cca local off、换了客户端时 core_retire 先删掉它）"""
+    c = load_quiet(CFG)
+    return isinstance(c, dict) and (c.get('local') or {}).get('client') == 'builtin' and os.path.isfile(CORE_CONFIG)
+
+
+def core_config_mtime():
+    try:
+        return os.stat(CORE_CONFIG).st_mtime_ns
+    except OSError:
+        return None
+
+
+def core_halt(child):
+    """停掉 cca _core run 起的内核（它是自己进程组的头）：SIGTERM，3 秒还没退出就 SIGKILL"""
+    import signal, subprocess
+    for sig, wait in ((signal.SIGTERM, 3), (signal.SIGKILL, 3)):
+        try:
+            os.killpg(child.pid, sig)
+        except OSError:
+            pass
+        try:
+            child.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def cmd_core_keep():
+    """cca _core-keep（Linux）：没有界面 App 时，照 App 的 CoreHost 托管内置代理的内核。运行 cca _core run（生成配置后 exec 内核）；
+    退出了就隔一会儿重启：1、2、4…秒，最多 60 秒，跑够 60 秒才退出的从 1 秒重新算，等的时候配置文件变了（cca 碰了一下）马上重启。
+    不再要了（core_wanted）就停掉内核、自己退出，被 SIGTERM 时也先停内核。同时只有一个（core/keep.lock）。内核的输出追加进
+    core/core.log，每次启动前超过 1 MB 就清空。自己一个会话：终端的 Ctrl-C、退出登录都碰不到它"""
+    import signal, subprocess
+    try:
+        os.setsid()
+    except OSError:
+        pass   # 已经是会话的头（bash 经 POSIX::setsid 起的）
+    if not core_wanted():
+        return
+    core_dir()
+    lock = open(os.path.join(CORE_DIR, 'keep.lock'), 'a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return   # 已经有一个在托管：它会看到配置文件变了
+
+    class Stop(Exception):
+        pass
+
+    def on_term(*_):
+        raise Stop()
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGINT, on_term)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('CCA_EVENTS', 'CCA_GRANT', 'CCA_RO', 'CCA_PROMPT', 'CCA_TTY', 'CCA_YES', 'CCA_TOOL')}
+    child, backoff = None, 1
+    try:
+        while core_wanted():
+            try:
+                if os.path.getsize(CORE_LOG) > 1048576:
+                    os.remove(CORE_LOG)
+            except OSError:
+                pass
+            fd = os.open(CORE_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            started = time.monotonic()
+            try:
+                child = subprocess.Popen([SELF_PATH, '_core', 'run'], stdin=subprocess.DEVNULL, stdout=fd, stderr=fd,
+                                         close_fds=True, start_new_session=True, env=env)
+            finally:
+                os.close(fd)
+            while True:
+                try:
+                    child.wait(timeout=2)
+                    break
+                except subprocess.TimeoutExpired:
+                    if not core_wanted():
+                        core_halt(child)
+                        return
+            child = None
+            if time.monotonic() - started >= 60:
+                backoff = 1
+            mark, until = core_config_mtime(), time.monotonic() + backoff
+            while time.monotonic() < until and core_wanted() and core_config_mtime() == mark:
+                time.sleep(0.5)
+            backoff = min(backoff * 2, 60)
+    except Stop:
+        pass
+    finally:
+        if child is not None and child.poll() is None:
+            core_halt(child)
 
 
 def write_text(path, text):
@@ -6002,9 +6407,13 @@ def cmd_login_flow(bin_, timeout='900'):
     登录网址，回调 cca _browser 在这个账号专属的 Chrome 里打开（走账号的出口；回调地址是本机 127.0.0.1:1455，Chrome
     不经代理），登录完成后 codex 自己把凭证写进这个账号的 auth.json。退出码：0 登录了；3 这个版本的 codex 不支持
     （bash 改用 codex login）；1 没登录成，原因打到 stderr"""
-    import subprocess
+    import signal, subprocess
     end = time.time() + float(timeout)
     r, login, ok = None, None, False
+
+    def stop(*_):   # 服务器上登录时它在后台跑，cca 取消登录用 SIGTERM：和 Ctrl-C 一样告诉 app-server 取消
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
     try:
         r = Rpc(bin_)
         err = r.start(time.time() + 30)
@@ -8741,7 +9150,7 @@ CMDS = {
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
     'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet, 'local-node': cmd_local_node,
     'core-config': cmd_core_config, 'core-nodes-save': cmd_core_nodes_save, 'core-missing': cmd_core_missing, 'core-summary': cmd_core_summary,
-    'core-stale': cmd_core_stale,
+    'core-stale': cmd_core_stale, 'core-keep': cmd_core_keep,
     'fill-acc': cmd_fill_acc, 'file-replace': cmd_file_replace,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
@@ -8749,7 +9158,8 @@ CMDS = {
     'key-show': cmd_key_show,
     'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render, 'login-plan-forget': cmd_login_plan_forget,
     'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
-    'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'codex-fallback-off': cmd_codex_fallback_off,
+    'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'login-check': cmd_login_check, 'login-forward': cmd_login_forward,
+    'login-catch': cmd_login_catch, 'codex-fallback-off': cmd_codex_fallback_off,
     'update-check': cmd_update_check, 'client-updates': cmd_client_updates,
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
     'nodes-preselect': cmd_nodes_preselect, 'nodes-lost': cmd_nodes_lost, 'edit-form': cmd_edit_form, 'edit-apply': cmd_edit_apply,
@@ -8772,15 +9182,22 @@ load_ids()
 CMDS[sys.argv[1]](*sys.argv[2:])
 PY
 )
-# 先压缩源码快照，避免源码和用户环境一起超过 macOS 的 exec 参数上限；管道不读取调用者的 stdin。
-PY_PACKED=$(set -o pipefail; printf '%s' "$PY_SRC" | /usr/bin/gzip -n -c | /usr/bin/base64) ||
+# 先压缩源码快照，避免源码和用户环境一起超过 macOS 的 exec 参数上限；管道不读取调用者的 stdin。gzip、base64 用系统自带的那份
+# （/usr/bin；没合并 /usr 的 Linux 发行版在 /bin）
+_gz=/usr/bin/gzip; [ -x "$_gz" ] || _gz=/bin/gzip
+_b64=/usr/bin/base64; [ -x "$_b64" ] || _b64=/bin/base64
+PY_PACKED=$(set -o pipefail; printf '%s' "$PY_SRC" | "$_gz" -n -c | "$_b64") ||
 	{ printf '%s\n' 'cca: 无法打包内嵌 Python' >&2; exit 1; }
-unset PY_SRC
+unset PY_SRC _gz _b64
 export -n PY_PACKED PY_BOOT
 # 每次 py 都是新的 Python 进程：PY_BOOT 把编译好的源码按摘要存在 PYC_DIR 里（只有自己能读写，换了版本摘要就变），
 # 下次直接载入，省掉每次 30 多毫秒的编译。目录不是自己的、别人能进、是链接，或者缓存读不了，就照常编译、不用缓存
 PY_BOOT='import sys, os, marshal, zlib, base64
 d, packed = sys.argv.pop(1), sys.argv.pop(1)
+if packed[:1] == "+":
+    n = int(packed[1:])
+    packed = "".join(sys.argv[1:1 + n])
+    del sys.argv[1:1 + n]
 src = zlib.decompress(base64.b64decode(packed), 31).decode("utf-8")
 code = p = None
 try:
@@ -8805,7 +9222,17 @@ if code is None:
         except OSError:
             pass
 exec(code, {"__name__": "__main__"})'
-PYRUN=("$PYTHON" -I -X utf8 -c "$PY_BOOT" "$PYC_DIR" "$PY_PACKED")   # -X utf8：不管 locale 是什么都按 UTF-8 输出
+case "$OSTYPE" in
+	darwin*) PYRUN=("$PYTHON" -I -X utf8 -c "$PY_BOOT" "$PYC_DIR" "$PY_PACKED") ;;   # -X utf8：不管 locale 是什么都按 UTF-8 输出
+	*)	# Linux 上 exec 的单个参数最多 128KB（MAX_ARG_STRLEN），打包好的源码一个参数放不下：拆成几段，前面加一个「+段数」，PY_BOOT 再拼起来
+		# （base64 的 gzip 总是 H4sI 开头，不会和它混）。按字节切：bash 在 UTF-8 locale 下逐字数，这么长的字符串慢好几倍
+		_lc=${LC_ALL-}; _lcs=${LC_ALL+1}; LC_ALL=C; _a=()
+		while [ -n "$PY_PACKED" ]; do _a+=("${PY_PACKED:0:120000}"); PY_PACKED=${PY_PACKED:120000}; done
+		if [ -n "$_lcs" ]; then LC_ALL=$_lc; else unset LC_ALL; fi
+		PYRUN=("$PYTHON" -I -X utf8 -c "$PY_BOOT" "$PYC_DIR" "+${#_a[@]}" "${_a[@]}")
+		unset _a _lc _lcs ;;
+esac
+unset PY_PACKED
 py() { CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "${PYRUN[@]}" "$@"; }
 
 use_tool() {   # use_tool codex：这次命令管 Codex 账号（账号表 codex.json、CODEX_HOME、codex 命令）；账号表、命令前缀、文案由 py 给
@@ -9479,11 +9906,24 @@ nodes_cf() {   # nodes / defs 读哪份配置（设好 cf），ShellCrash 的自
 	fi
 	[ -n "$cf" ] && [ -f "$cf" ] || { echo "找不到 ${NAME} 的配置" >&2; return 1; }
 }
-defs() {   # 节点的完整定义（YAML 的 proxies 列表，带密钥）：Mac 在家时拷一份给内置代理（只留可选节点，在 Mac 上挑）。读的配置和 nodes 一样
+defs() {   # 节点的完整定义（JSON 的 {"proxies": […]}，带密钥）：在家时拷一份给内置代理（只留可选节点，在拷的那台机器上挑）。
+	       # 读的配置和 nodes 一样。JSON 在这里写好：拷的那台机器（Linux 服务器）不一定有 ruby，OpenWrt 的 ruby 也不一定带 json 库
+	       # （OpenClash 只依赖 ruby、ruby-yaml），所以自己写；字符串里的引号、反斜杠、控制字符写成 \u 转义，不合法的 UTF-8 换掉。
+	       # 日期这类读出来不是字符串的值照字符串写（to_s），NaN、无穷大写 null。最后一行是结束标记：没读到它的不要
 	nodes_cf || return 1
 	ruby -E UTF-8 -ryaml -e "$YL"'
+		j = lambda do |v|
+		  case v
+		  when Hash then "{" + v.map { |k, x| j.(k.to_s) + ":" + j.(x) }.join(",") + "}"
+		  when Array then "[" + v.map { |x| j.(x) }.join(",") + "]"
+		  when true, false, Integer then v.to_s
+		  when nil then "null"
+		  when Float then v.finite? ? v.to_s : "null"
+		  else "\"" + v.to_s.dup.force_encoding("UTF-8").scrub("?").gsub(/[\\"\x00-\x1f]/) { |ch| "\\u%04x" % ch.ord } + "\""
+		  end
+		end
 		c = yl(ARGV[0]) || {}
-		print YAML.dump({"proxies" => (c["proxies"] || []).select { |p| p.is_a?(Hash) }})
+		print j.({"proxies" => (c["proxies"] || []).select { |p| p.is_a?(Hash) }})
 		print "\n# cca-defs-end\n"' "$cf"
 }
 nodes() {   # P<TAB>节点<TAB>类型<TAB>服务器<TAB>端口<TAB>TLS 域名（Mac 端按后四项认出改了名的节点，只存摘要）；G<TAB>策略组<TAB>类型；
@@ -10032,7 +10472,8 @@ router_reload() {   # 获准后在路由器上执行带重载的 apply（运行�
 # ---------------------------------------------------------------------------
 load_router() {   # config.json 里路由器的设置。一条命令里要读好几次：config.json 没换过（同一个文件、大小和修改时间都没变）就不再起 python
 	local k out
-	k=$(stat -L -f '%i:%z:%Fm' "$CFG" 2>/dev/null)
+	if [ "${OSTYPE#darwin}" != "$OSTYPE" ]; then k=$(stat -L -f '%i:%z:%Fm' "$CFG" 2>/dev/null)
+	else k=$(stat -L -c '%i:%s:%Y' "$CFG" 2>/dev/null); fi   # GNU / busybox 的 stat（每次保存都是原子替换，inode 必变）
 	[ -n "$k" ] && [ "$k" = "${ROUTER_SEEN:-}" ] && return 0
 	out=$(py router-env) && ROUTER_SEEN=$k || ROUTER_SEEN=""   # 没读成功的不记
 	eval "$out"
@@ -10483,7 +10924,7 @@ cmd_add_api() {
 	ask_fields api.basic "$title" "${api}：填地址和 key，模型可选" \
 		"alias|text|alias|  别名（在菜单里显示，例如 kimi）：|别名|在菜单里显示，例如 kimi" \
 		"url|text|url|  ${url_q}：|接口地址|${url_hint}" \
-		"key|secret|secret|  API key（输入时不显示）：|API key|只存进这台 Mac 的钥匙串" \
+		"key|secret|secret|  API key（输入时不显示）：|API key|只存进${KEYSTORE_AT}" \
 		"model|text?|model|  模型（可选，回车跳过；${model_q}）：|模型（可选）|${model_q}" || return 1
 	alias=$F_alias url=$F_url secret=$F_key model=$F_model
 	F_key=""
@@ -10502,13 +10943,13 @@ cmd_add_api() {
 	key=$(py add-api "$alias" "$url" "$model" "$node") || return 1
 	if ! printf '%s' "$secret" | py secret-set "$key"; then
 		py rm "$key"
-		die "API key 没存进钥匙串，没有添加 ${alias}"
+		die "API key 没存进${KEYSTORE}，没有添加 ${alias}"
 	fi
 	secret=""
 	eval "$(py env "$key")"
 	[ -z "$ACC_PORT" ] || router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
-	okay "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}），key 存在钥匙串里"
+	okay "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}），key 存在${KEYSTORE}里"
 	info "用 ${CMD} @${ACC_NAME} 启动；改地址、模型${env_hint}用 ${CMD} edit，换 key 用 ${CMD} key ${ACC_NAME}"
 	if [ "$TOOL" = codex ]; then codex_alias_ensure "$ACC_NAME"; fi
 	gui_done added "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}）" "$key"
@@ -10533,7 +10974,7 @@ ask_valid() {
 api_key_ask() {   # api_key_ask 提示 [图形界面的页标题] [说明]：读一个合格的 API key 打到 stdout（不回显）；空输入返回 1
 	local s out
 	if [ -n "$PROMPT_GUI" ]; then
-		ask_fields key.secret "${2:-API key}" "${3:-}" "s|secret|secret|$1|API key|输入时不显示，只存进这台 Mac 的钥匙串" || return 1
+		ask_fields key.secret "${2:-API key}" "${3:-}" "s|secret|secret|$1|API key|输入时不显示，只存进${KEYSTORE_AT}" || return 1
 		printf '%s' "$F_s"
 		return 0
 	fi
@@ -10550,21 +10991,22 @@ api_key_prompt() {   # api_key_prompt [图形界面的说明]：输入 key 存�
 	[ "$ACC_KIND" = api ] || title="记录 ${ACC_NAME} 的 API key"
 	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：" "$title" "${1:-}") || { say "  已取消"; return 1; }
 	if ! printf '%s' "$s" | py secret-set "$ACC_KEY" 2>/dev/null; then   # key 已经检查过（api_key_ask），失败只会是钥匙串
-		fail_warn keychain_unavailable "API key 存进钥匙串失败（钥匙串被锁住了？）：解锁后再试一次"
+		if keyfile_store; then fail_warn keychain_unavailable "API key 存进密钥文件失败：看看 ~/.cca/secrets 的权限和磁盘空间"
+		else fail_warn keychain_unavailable "API key 存进钥匙串失败（钥匙串被锁住了？）：解锁后再试一次"; fi
 		return 1
 	fi
-	okay "已把 ${ACC_NAME} 的 API key 存进钥匙串"
-	gui_done key_saved "已把 ${ACC_NAME} 的 API key 存进钥匙串" "$ACC_KEY"
+	okay "已把 ${ACC_NAME} 的 API key 存进${KEYSTORE}"
+	gui_done key_saved "已把 ${ACC_NAME} 的 API key 存进${KEYSTORE}" "$ACC_KEY"
 }
 
 api_key_ready() {   # 启动前：key 在账号表里或钥匙串里（按现在的接口域名）；都没有时在终端里问
 	[ -n "$(py secret-status "$ACC_KEY")" ] && return 0
 	if ! interactive; then
-		warn "钥匙串里没有 ${ACC_NAME} 的 API key（接口地址换了服务商时也要重新输入）：在终端里运行 ${CMD} key ${ACC_NAME}"
-		gui_terminal api_key "钥匙串里没有 ${ACC_NAME} 的 API key：在终端里输入一次" key "$ACC_KEY"
+		warn "${KEYSTORE}里没有 ${ACC_NAME} 的 API key（接口地址换了服务商时也要重新输入）：在终端里运行 ${CMD} key ${ACC_NAME}"
+		gui_terminal api_key "${KEYSTORE}里没有 ${ACC_NAME} 的 API key：在终端里输入一次" key "$ACC_KEY"
 		return 1
 	fi
-	warn "钥匙串里还没有 ${ACC_NAME} 的 API key（第一次用，或者接口地址换了服务商）"
+	warn "${KEYSTORE}里还没有 ${ACC_NAME} 的 API key（第一次用，或者接口地址换了服务商）"
 	api_key_prompt
 }
 
@@ -10600,7 +11042,7 @@ key_set() {   # cca key 账号（需要先 eval "$(py env 名称)"）
 	need_tty
 	local note=""
 	if [ "$ACC_KIND" != api ]; then
-		note="只记在这台 Mac 的钥匙串里备查（比如在控制台里建的 key）：cca 不会拿它登录或启动这个账号"
+		note="只记在${KEYSTORE_AT}里备查（比如在控制台里建的 key）：cca 不会拿它登录或启动这个账号"
 		[ -n "$PROMPT_GUI" ] || info "$note"
 	elif [ "$(py secret-status "$ACC_KEY")" = table ]; then
 		note="账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 ${CMD} edit"
@@ -10617,7 +11059,8 @@ key_show() {   # cca key 账号 --show：key 原样打到 stdout（不换行；�
 	case $? in
 		0) [ ! -t 1 ] || echo >&2 ;;
 		3) FAIL_CODE=key_missing die "${ACC_NAME} 还没有存 API key（${CMD} key ${ACC_NAME} 存一个）" ;;
-		4) FAIL_CODE=keychain_unavailable die "读不了钥匙串（被锁住了？）：解锁后再试" ;;
+		4) keyfile_store && FAIL_CODE=keychain_unavailable die "读不了 ~/.cca/secrets 里的密钥文件：看看它的权限"
+		   FAIL_CODE=keychain_unavailable die "读不了钥匙串（被锁住了？）：解锁后再试" ;;
 		*) die "没能读取 ${ACC_NAME} 的 API key" ;;
 	esac
 }
@@ -10630,7 +11073,7 @@ key_forget() {   # cca key 账号 --forget：删掉官方账号记下备查的 A
 		return 0
 	fi
 	consent key_forget "$ACC_ID" "删除 ${ACC_NAME} 的 API key" "删除记下的这把 API key 吗？" \
-		"只删掉 cca 在这台 Mac 的钥匙串里记的这一份，控制台里的 key 本身不受影响。" n
+		"只删掉 cca 在${KEYSTORE_AT}里记的这一份，控制台里的 key 本身不受影响。" n
 	case $? in
 		0) ;;
 		1) info "没有删除"; return 0 ;;
@@ -10780,7 +11223,8 @@ claude_logout() {
 		child_env
 		with_timeout 30 env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth logout </dev/null >/dev/null 2>&1
 	fi
-	security delete-generic-password -s "$(py keychain "$ACC_KEY")" >/dev/null 2>&1
+	if on_linux; then rm -f "$ACC_HOME/.credentials.json"   # Linux 上 Claude Code 的登录凭证是这个文件（没有钥匙串）
+	else security delete-generic-password -s "$(py keychain "$ACC_KEY")" >/dev/null 2>&1; fi
 }
 codex_logout() {   # codex logout 会去服务器上注销（经账号的出口）；连不上也把本地的 auth.json 删掉
 	if [ -f "$ACC_HOME/auth.json" ] && [ -n "$CODEX_BIN" ]; then
@@ -10823,7 +11267,7 @@ ensure_login() {
 			fi
 			[ $tries -lt 2 ] || return 1
 			tries=$((tries + 1))
-			[ $tries -gt 1 ] || [ -z "${LEAK_WEBRTC:-}" ] || warn "$LEAK_WEBRTC"   # 登录页在账号的浏览器里打开
+			[ $tries -gt 1 ] || [ -z "${LEAK_WEBRTC:-}" ] || login_remote || warn "$LEAK_WEBRTC"   # 登录页在账号的浏览器里打开（服务器上登录时在 Mac 上打开：那边的 login-page 自己测）
 			tool login || { warn "登录没有完成"; return 1; }
 			continue
 		fi
@@ -10840,12 +11284,18 @@ ensure_login() {
 	done
 }
 claude_login() {
-	has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
-	info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开登录页${ACC_EMAIL:+（已预填 ${ACC_EMAIL}）}，登录完成后会自动继续"
 	local -a em=()
 	[ -n "$ACC_EMAIL" ] && em=(--email "$ACC_EMAIL")
+	if ! login_remote; then
+		has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
+		info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开登录页${ACC_EMAIL:+（已预填 ${ACC_EMAIL}）}，登录完成后会自动继续"
+	fi
 	py login-plan-forget "$ACC_KEY" || :   # 上次查用量时记下的“Claude Code 登录时的套餐”作废：登录后它按现在的套餐重新记
 	child_env
+	if login_remote; then
+		remote_login env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth login --claudeai "${em[@]}"
+		return
+	fi
 	env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth login --claudeai "${em[@]}" 3<&-
 }
 claude_wipe() {   # 退出登错的账号（Claude Code 自己记着的 oauthAccount 也去掉，免得还当它登录着）
@@ -10857,15 +11307,116 @@ codex_wipe() { codex_logout; }
 # codex 自己把凭证写进这个账号的 auth.json。
 codex_login() {   # 前台运行（Ctrl-C 能取消登录，不会留下占着 1455 端口的登录服务）；登录页由它回调 cca _browser 打开
 	local rc
-	has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
-	info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开 ChatGPT 的登录页${ACC_EMAIL:+（请用 ${ACC_EMAIL} 登录）}，登录完成后会自动继续"
+	if ! login_remote; then
+		has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
+		info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开 ChatGPT 的登录页${ACC_EMAIL:+（请用 ${ACC_EMAIL} 登录）}，登录完成后会自动继续"
+	fi
 	child_env
-	pyenv login-flow "$CODEX_BIN" 3<&- </dev/null; rc=$?
+	if login_remote; then   # 和 pyenv 一样，只是要直接是一条命令：取消时 remote_login 停的是它本身
+		remote_login env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "${PYRUN[@]}" login-flow "$CODEX_BIN"; rc=$?
+	else
+		pyenv login-flow "$CODEX_BIN" 3<&- </dev/null; rc=$?
+	fi
 	[ $rc -eq 3 ] || return $rc
 	fail_warn login_unsupported "这个版本的 codex 不支持由 cca 打开独立登录页，已停止登录。请升级 codex 后重试，避免登录页走系统默认浏览器"
 	return 1
 }
 has_worktrees() { [ -n "$(ls -A "$ACC_HOME/worktrees" 2>/dev/null)" ]; }   # Codex 账号建过 git 工作树（删账号会一起删）
+
+# 服务器上登录（Linux 上没有账号专属的 Chrome）：claude / codex 照常在服务器上跑登录、等本机的回调；它们要打开的登录网址经
+# BROWSER（Codex 是 login-flow）回调 cca _browser，这时只写进 CCA_LOGIN_URL_FILE。cca 把它写成一行 cca login-page 命令，用户在
+# Mac 上运行：Mac 上的 cca 用这个账号专属的 Chrome、经同一个节点打开登录页，接住登录后跳回 localhost 的那一下，把验证码
+# （code#state）放进剪贴板；贴回服务器，cca 核对 state 后转给服务器上正在等的回调（py login-forward），换 token 照常经账号的出口
+login_remote() { [ -n "${CCA_REMOTE_LOGIN:-}" ] || on_linux; }   # CCA_REMOTE_LOGIN=1：macOS 上也这样（测试用）
+login_log_tail() {   # 登录命令输出的最后一句（去掉颜色、claude 的“粘贴验证码”提示和手动登录的网址）
+	local esc
+	esc=$(printf '\033')
+	sed "s/${esc}\[[0-9;]*m//g; s/^Paste code here if prompted > //" "$1" 2>/dev/null |
+		grep -v -e '^[[:space:]]*$' -e "^If the browser didn't open" -e '^Opening browser' | tail -n 1 | cut -c1-300
+}
+remote_login() {   # remote_login 登录命令…（先 child_env；要直接是一条命令，取消时停的是它本身）：退出码是登录命令的
+(
+	local dir pid="" rc line i code
+	dir=$(mktemp -d "${TMPDIR:-/tmp}/cca-login.XXXXXX") || { warn "建不了临时目录，没法登录"; exit 1; }
+	trap '[ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null; rm -rf "$dir"' EXIT
+	trap 'exit 130' INT TERM HUP
+	CCA_LOGIN_URL_FILE="$dir/url" "$@" </dev/null >"$dir/log" 2>&1 3<&- &
+	pid=$!
+	for i in $(seq 1 120); do   # 最多等 30 秒
+		[ -s "$dir/url" ] && break
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.25
+	done
+	if [ ! -s "$dir/url" ]; then
+		if ! kill -0 "$pid" 2>/dev/null; then
+			wait "$pid"; rc=$?; pid=""
+			[ $rc -eq 3 ] && exit 3   # Codex：这个版本不支持由 cca 打开登录页
+		fi
+		warn "没拿到登录网址${pid:+（等了 30 秒）}：$(login_log_tail "$dir/log")"
+		exit 1
+	fi
+	line="${CMD} login-page $(shq "${ACC_EMAIL:-$ACC_NAME}") --node $(shq "$ACC_NODE") $(shq "$(cat "$dir/url")")"   # 官方账号一定有节点
+	say ""
+	say "${C_B}${ACC_NAME} 要登录${C_0}：这台机器上没有它专属的浏览器，登录页在 Mac 上打开"
+	say "1. 在 Mac 的终端里运行这一行（用 ${ACC_NAME} 专属的 Chrome、经同一个节点 ${ACC_NODE} 打开登录页；Mac 上要有这个账号）："
+	say ""
+	say "  $line"
+	say ""
+	say "2. 在打开的页面上登录${ACC_EMAIL:+（用 ${ACC_EMAIL}）}。登录完，Mac 上的 cca 会把验证码复制到剪贴板"
+	say "3. 回到这里粘贴验证码、回车"
+	say ""
+	while :; do
+		code=$(ask "验证码（直接回车取消）： " "")
+		if [ -z "$code" ]; then warn "已取消登录"; exit 1; fi
+		kill -0 "$pid" 2>/dev/null || { warn "登录已经退出了：$(login_log_tail "$dir/log")"; exit 1; }
+		printf '%s' "$code" | py login-forward "$dir/url"; rc=$?
+		[ $rc -eq 2 ] && continue
+		[ $rc -eq 0 ] || exit 1
+		break
+	done
+	code=""
+	wait "$pid"; rc=$?; pid=""
+	[ $rc -eq 0 ] || warn "登录没有成功：$(login_log_tail "$dir/log")"
+	exit $rc
+)
+}
+
+cmd_login_page() {   # cca [codex] login-page <账号> [--node 节点] <登录网址>（在 Mac 上）：服务器上登录时它给出这一行。用这个账号专属的
+	# Chrome、经同一个节点打开登录页，接住登录后跳回 localhost 的验证码（code#state），放进剪贴板、打到 stdout
+	local who="" node="" url="" key code rc
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--node) [ $# -ge 2 ] || die "--node 后面要写节点"; node=$2; shift 2 ;;
+			--node=*) node=${1#--node=}; shift ;;
+			http://*|https://*) url=$1; shift ;;
+			*) [ -z "$who" ] || die "用法: ${CMD} login-page <账号> [--node 节点] <登录网址>"; who=$1; shift ;;
+		esac
+	done
+	[ -n "$who" ] && [ -n "$url" ] || die "用法: ${CMD} login-page <账号> [--node 节点] <登录网址>（服务器上的 cca 登录时会给出这一整行）"
+	login_remote && die "这台机器上没有账号专属的浏览器：在 Mac 上运行这一行"
+	py login-check "$url" || exit 1
+	key=$(py resolve "$who" 2>/dev/null) || die "这台 Mac 上没有 ${who} 这个账号：先用 ${CMD} add 加上它${node:+（节点选 ${node}）}，再运行这一行"
+	eval "$(py env "$key")"
+	[ "$ACC_KIND" = api ] && die "${ACC_NAME} 是第三方 API 账号，不用登录"
+	if [ -n "$node" ] && [ "$node" != "$ACC_NODE" ]; then
+		die "${ACC_NAME} 在服务器上走 ${node}，在这台 Mac 上走 ${ACC_NODE}：出口不同，已停止（登录页和服务器换 token 要经同一个节点）。先把两边改成同一个节点"
+	fi
+	has_chrome || { fail_warn no_chrome "没装 Google Chrome：登录页要在账号专属的 Chrome 里打开"; exit 1; }
+	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
+	preflight app || exit 1
+	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
+	child_env
+	info "正在 ${ACC_NAME} 专属的浏览器里打开登录页（经 ${ACC_PROXY:-直连} → ${ACC_NODE}）${ACC_EMAIL:+，请用 ${ACC_EMAIL} 登录}；登录完这里会拿到验证码"
+	code=$(pyenv login-catch "$url" "${CCA_LOGIN_WAIT:-900}"); rc=$?   # 最多等 15 分钟（CCA_LOGIN_WAIT 秒：测试用）
+	case $rc in
+		0) okay "拿到验证码了，已经复制到剪贴板：回到服务器的终端粘贴、回车" ;;
+		3) okay "拿到验证码了（没能放进剪贴板）：复制下面这一行，回到服务器的终端粘贴、回车" ;;
+		4) warn "这台 Mac 上的端口 ${code} 被别的程序占着，接不住登录后跳回来的那一页：登录完浏览器会显示打不开或别的页面，把地址栏里的整个网址（http://localhost:${code}/… 开头）复制下来，贴回服务器"
+		   return 0 ;;
+		*) exit 1 ;;
+	esac
+	printf '%s\n' "$code"
+}
 
 cmd_login() {   # cca [codex] login <账号>：退出这个账号现在的登录，重新登录
 	local key
@@ -10892,7 +11443,7 @@ cmd_rm() {
 	[ -z "$pid" ] || FAIL_CODE=app_running die "${ACC_LABEL} 的 ${APP_LABEL} 还开着：先退出它再删除"
 	[ "$ACC_KIND" = api ] || [ "$(py secret-status "$ACC_KEY")" != ref ] || refk="、记下的 API key"
 	if [ "$ACC_KIND" = api ]; then
-		msg="删除第三方 API 账号 ${ACC_LABEL}？（删除钥匙串里它的 key 和账号目录；共享的记忆/会话不受影响）"
+		msg="删除第三方 API 账号 ${ACC_LABEL}？（删除${KEYSTORE}里它的 key 和账号目录；共享的记忆/会话不受影响）"
 	elif [ "$TOOL" = codex ]; then
 		if has_worktrees; then
 			wt="${ACC_HOME}/worktrees 里有这个账号建的 git 工作树，会一起删掉（还没提交的改动先处理好）"
@@ -10900,7 +11451,7 @@ cmd_rm() {
 		fi
 		msg="删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证${refk}、浏览器资料和 ChatGPT App 资料；共享的记忆/会话不受影响）"
 	else
-		msg="删除账号 ${ACC_LABEL}？（退出登录、删除它的钥匙串凭证${refk}、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）"
+		msg="删除账号 ${ACC_LABEL}？（退出登录、删除它的${KEYSTORE_CRED}${refk}、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）"
 	fi
 	confirm "$msg" n q=rm.confirm "title=删除账号" "detail=$wt" severity=warn || return 0
 	py link "$key" >/dev/null 2>&1   # 先把会话里新产生的共享内容并回共享主目录（Codex 顺便把会话库里的路径改到 ~/.codex）
@@ -11275,6 +11826,10 @@ chrome_app_path() {
 	return 1
 }
 has_chrome() { chrome_app_path >/dev/null; }
+mac_only() {   # mac_only 说明：要账号专属的 Chrome、桌面 App 或界面 App 的功能，Linux（服务器）上没有：说清楚、退出（不说"没装 Chrome"）
+	on_linux || return 0
+	die "${1}只在 macOS 上；这台 Linux 上用命令行：${CMD} @账号 启动，${CMD} help 看能用的命令"
+}
 
 chrome_pid() { app_pid 'Google Chrome' "$ACC_CHROME_DIR"; }
 
@@ -11337,6 +11892,7 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）。
 	# mail 时打开后把账号的邮箱放进剪贴板：控制台这些登录页不认网址里的邮箱参数（实测），要登录时粘贴，免得在这个账号的浏览器里登错号
 	local key site="$TRACE_HOST" what="${3:-}" note=""
+	mac_only "${what:-网页版}要在账号专属的 Chrome 里打开，"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
 	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：${what:-网页版}只能用官方账号"
@@ -11375,6 +11931,14 @@ cmd_browser() {   # Claude Code 登录时经 BROWSER 调用：在当前账号的
 	eval "$(py env "$key")" || exit 1
 	[ -n "${CCA_PROXY:-}" ] && ACC_PROXY="$CCA_PROXY"   # 启动它的 cca 选好的出口（在外面时是本机 Clash 的端口）
 	url=$(py login-url "$ACC_KEY" "$1") || url="$1"
+	if [ -n "${CCA_LOGIN_URL_FILE:-}" ]; then   # 服务器上登录（remote_login）：只记下网址，交给 Mac 打开
+		printf '%s\n' "$url" > "$CCA_LOGIN_URL_FILE.tmp" && mv -f "$CCA_LOGIN_URL_FILE.tmp" "$CCA_LOGIN_URL_FILE"
+		return
+	fi
+	if login_remote; then
+		warn "这台机器上没有 ${ACC_NAME} 专属的浏览器，没有打开：要登录的话退出后运行 ${CMD} login ${ACC_NAME}（登录页在 Mac 上打开）"
+		exit 1
+	fi
 	open_chrome "$url"
 }
 
@@ -11566,6 +12130,7 @@ app_launch_abort() {
 
 cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）；已经开着就切到它
 	local key app dir pid first="" i p rc ready="" app_wait
+	mac_only "${APP_LABEL}（桌面版）"
 	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
 	app=$(tool app_path) || FAIL_CODE=app_missing die "$(tool app_missing)"
 	key=$(pick_account "${1:-}") || return 0
@@ -11885,10 +12450,16 @@ cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户
 }
 local_setup_other() {   # 没装 Clash Verge：用内置代理（默认），或者手动配置别的基于 mihomo 的客户端
 	say ""
-	say "  没找到 Clash Verge。可以用 cca 内置的代理：在界面 App 里跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
-	say "  每个端口走一个账号的节点（第一次要下载约 21MB），节点用在家时从路由器拷的那份；也可以手动配置别的基于 mihomo 的客户端。"
+	if on_linux; then
+		say "  可以用 cca 内置的代理：cca 在后台跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST} 每个端口走一个账号的节点"
+		say "  （第一次要下载约 21MB）。节点用维护者的参考节点，在家时也从路由器拷一份；也可以手动配置别的基于 mihomo 的客户端。"
+	else
+		say "  没找到 Clash Verge。可以用 cca 内置的代理：在界面 App 里跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
+		say "  每个端口走一个账号的节点（第一次要下载约 21MB），节点用在家时从路由器拷的那份；也可以手动配置别的基于 mihomo 的客户端。"
+	fi
 	if ! core_possible; then
-		say "  内置代理要 macOS 26 或更新（界面 App 的要求），这台 Mac 只能手动配置别的客户端。"
+		if on_linux; then say "  内置代理的内核只有 x86-64 和 arm64 的 Linux 版（这台是 $(uname -m)），只能手动配置别的客户端。"
+		else say "  内置代理要 macOS 26 或更新（界面 App 的要求），这台 Mac 只能手动配置别的客户端。"; fi
 		manual_setup
 		return
 	fi
@@ -11991,7 +12562,8 @@ cmd_local_status() {
 	lctl GET /version
 	if [ "$LCODE" != 200 ]; then
 		if [ "$LOCAL_CLIENT" = builtin ]; then
-			info "内置代理的内核没在运行：它在界面 App 里运行，在外面启动账号时会自动在后台打开 App"
+			if on_linux; then info "内置代理的内核没在运行：在外面启动账号时 cca 会在后台起它"
+			else info "内置代理的内核没在运行：它在界面 App 里运行，在外面启动账号时会自动在后台打开 App"; fi
 			say "  $(py core-summary)"
 			return 0
 		fi
@@ -12037,6 +12609,8 @@ cmd_local() {
 # 端口池和本机 Clash 的一样（127.0.0.1:7901…，入站 cca-n 直通策略组 CCA-n），切换节点、端口检查、泄露检测都走上面那一套。
 # - 内核由界面 App 托管：App 读到本机客户端是内置代理就运行 cca _core run（生成配置后 exec 内核），退出了就重启，App 退出时停掉。
 #   App 没开着时 cca 在后台打开它（--core：不弹主窗口，只留菜单栏图标）
+# - Linux（服务器）上没有界面 App：由 cca 自己的后台进程 cca _core-keep 照 App 的做法托管（py 的 cmd_core_keep），不用 root、不靠
+#   systemd；机器重启后，下次在外面启动账号时再起
 # - 内核文件第一次用时从 mihomo 官方 Release 下载，按开头写死的 SHA256 校验（cca 本身有签名，校验值可信）
 # - 节点：在家时从路由器拷一份可选节点的完整定义（core/nodes.json，路由器端的 defs），再补上维护者参考节点里路由器上没有的；
 #   两边都没有定义的节点在组里 REJECT 排第一（宁可断开也不换出口）
@@ -12044,23 +12618,46 @@ cmd_local() {
 # ---------------------------------------------------------------------------
 CORE_DIR="$CCA_HOME/core"
 core_bin() { printf '%s' "$CORE_DIR/mihomo-v$CORE_VERSION"; }
-core_sock() {   # 控制接口的 Unix socket：放在系统给这个用户的临时目录（和 Clash Verge 一样；~/.cca 下的路径可能超过 macOS 的
-	             # 104 字节上限）。名字带上 ~/.cca 的摘要：两份 ~/.cca（比如测试的沙箱）不会用到同一个
+core_sock() {   # 控制接口的 Unix socket：macOS 上放在系统给这个用户的临时目录（和 Clash Verge 一样；~/.cca 下的路径可能超过 macOS 的
+	             # 104 字节上限），名字带上 ~/.cca 的摘要：两份 ~/.cca（比如测试的沙箱）不会用到同一个。Linux 上放在 core 目录里（只有自己能进，
+	             # 不像 XDG_RUNTIME_DIR 退出登录后会被删掉）；路径长到放不下（108 字节）时才放进 XDG_RUNTIME_DIR
 	local d h
+	if on_linux; then
+		d="$CORE_DIR/cca-core.sock"
+		if [ "$(printf '%s' "$d" | wc -c)" -ge 100 ] && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+			d="${XDG_RUNTIME_DIR%/}/cca-core-$(printf '%s' "$CCA_HOME" | md5sum | cut -c1-8).sock"
+		fi
+		printf '%s' "$d"
+		return
+	fi
 	d=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)
 	h=$(md5 -qs "$CCA_HOME" 2>/dev/null | cut -c1-8)
 	printf '%s' "${d:-$CORE_DIR/}cca-core-${h:-0}.sock"
 }
-core_possible() { gui_os_ok; }   # 内置代理在界面 App 里运行：要 macOS 26 或更新
-core_asset() {   # 这台 Mac 用哪个内核文件和它的校验值：Apple 芯片（Rosetta 下运行的 cca 也算）用 arm64，Intel 用 amd64-compatible
-	if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then printf 'arm64 %s' "$CORE_SHA256_ARM64"
-	else printf 'amd64-compatible %s' "$CORE_SHA256_AMD64"; fi
+core_possible() {   # 这台机器能用内置代理吗：macOS 上它在界面 App 里运行，要 macOS 26 或更新；Linux 上有这个架构的内核就行
+	if on_linux; then core_asset >/dev/null; else gui_os_ok; fi
 }
+core_asset() {   # 用哪个内核文件（官方 Release 里的名字）和它的校验值。macOS：Apple 芯片（Rosetta 下运行的 cca 也算）用 arm64，Intel 用
+	              # amd64-compatible；Linux：x86-64 也用 compatible（不挑 CPU），arm64 服务器用 arm64，别的架构没有
+	if on_linux; then
+		case "$(uname -m)" in
+			x86_64|amd64) printf 'linux-amd64-compatible %s' "$CORE_SHA256_LINUX_AMD64" ;;
+			aarch64|arm64) printf 'linux-arm64 %s' "$CORE_SHA256_LINUX_ARM64" ;;
+			*) return 1 ;;
+		esac
+	elif [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then printf 'darwin-arm64 %s' "$CORE_SHA256_ARM64"
+	else printf 'darwin-amd64-compatible %s' "$CORE_SHA256_AMD64"; fi
+}
+core_runs_where() {   # 提示里说内核在哪儿跑
+	if on_linux; then printf '由 cca 在后台运行'; else printf '在界面 App 里运行'; fi
+}
+sha256_of() { if on_linux; then sha256sum "$1"; else shasum -a 256 "$1"; fi 2>/dev/null | cut -d' ' -f1; }   # Linux 不一定有 shasum（perl 的）
 core_fetch() {   # 内核文件不在就下载：mihomo 官方 Release 里固定的版本，.gz 的 SHA256 对上、能运行才换上（旧版本的删掉）；失败原因在 FETCH_ERR
 	local arch sha url tmp got f
 	[ -x "$(core_bin)" ] && return 0
-	read -r arch sha <<< "$(core_asset)"
-	url="https://github.com/MetaCubeX/mihomo/releases/download/v${CORE_VERSION}/mihomo-darwin-${arch}-v${CORE_VERSION}.gz"
+	FETCH_ERR="内置代理的内核没有这个架构（$(uname -m)）的版本"
+	read -r arch sha <<< "$(core_asset)" && [ -n "$sha" ] || return 1
+	url="https://github.com/MetaCubeX/mihomo/releases/download/v${CORE_VERSION}/mihomo-${arch}-v${CORE_VERSION}.gz"
 	FETCH_ERR=""
 	if ! ( umask 077; mkdir -p "$CORE_DIR" ) || ! chmod 700 "$CORE_DIR" || ! tmp=$(mktemp -d "$CORE_DIR/dl.XXXXXX"); then
 		FETCH_ERR="建不了 ${CORE_DIR}"
@@ -12069,7 +12666,7 @@ core_fetch() {   # 内核文件不在就下载：mihomo 官方 Release 里固定
 	info "正在下载内置代理的内核 mihomo v${CORE_VERSION}（约 21MB，只有第一次）…"
 	if ! retry3 curl -fsSL --connect-timeout 15 -m 300 -o "$tmp/m.gz" "$url" 2>/dev/null; then
 		FETCH_ERR="下载失败（${url}）"
-	elif got=$(shasum -a 256 "$tmp/m.gz" | cut -d' ' -f1) && [ "$got" != "$sha" ]; then
+	elif got=$(sha256_of "$tmp/m.gz") && [ "$got" != "$sha" ]; then
 		FETCH_ERR="下载的文件校验不对（应为 ${sha}，实际是 ${got}），没有用它"
 	elif ! gunzip -c "$tmp/m.gz" > "$tmp/m" 2>/dev/null || ! chmod 755 "$tmp/m" || ! "$tmp/m" -v 2>/dev/null | grep -qF "v${CORE_VERSION}"; then
 		FETCH_ERR="内核文件运行不了"
@@ -12102,12 +12699,16 @@ core_setup() {   # cca local setup 选了内置代理：在家时先从路由器
 	miss=$(py core-missing)
 	[ -z "$miss" ] || fail_warn node_missing "内置代理里没有这些节点的定义：${miss}。用它们的账号在外面会被拒绝连接，直到在家连上路由器、拷到它们"
 	local_ensure || { gui_fail local_unavailable "内置代理没有就绪（详情里有原因）"; return 1; }
-	okay "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}（在界面 App 里运行），连不上路由器时账号自动走这里"
+	okay "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}（$(core_runs_where)），连不上路由器时账号自动走这里"
 	gui_done local_ready "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
 }
-core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面 App 在托管内核、端口都在监听、每个槽位切到账号的节点
+core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面 App（Linux 上是 cca _core-keep）在托管内核、端口都在监听、每个槽位切到账号的节点
 	local rc
-	core_possible || { warn "内置代理在界面 App 里运行，要 macOS 26 或更新"; return 1; }
+	if ! core_possible; then
+		if on_linux; then warn "内置代理的内核只有 x86-64 和 arm64 的 Linux 版，这台是 $(uname -m)"
+		else warn "内置代理在界面 App 里运行，要 macOS 26 或更新"; fi
+		return 1
+	fi
 	core_fetch || { warn "内置代理的内核没装上：${FETCH_ERR}"; return 1; }
 	py core-config "$(core_sock)" || { warn "生成内置代理的配置失败"; return 1; }
 	core_up || return 1
@@ -12117,7 +12718,7 @@ core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面
 	[ $rc -eq 2 ] || return 1
 	core_reload && local_select_all
 }
-core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App 起它，最多等 20 秒
+core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App（Linux 上是 cca _core-keep）起它，最多等 20 秒
 	local i
 	lctl GET /version
 	[ "$LCODE" = 200 ] && return 0
@@ -12127,7 +12728,9 @@ core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App
 		lctl GET /version
 		[ "$LCODE" = 200 ] && return 0
 	done
-	if ! dev_mode && gui_ours "$GUI_APP" && [ "$(gui_ver "$GUI_APP")" != "$VERSION" ]; then
+	if on_linux; then
+		warn "等了 20 秒，内置代理的内核还没就绪（日志：${CORE_DIR/#$HOME/~}/core.log）"
+	elif ! dev_mode && gui_ours "$GUI_APP" && [ "$(gui_ver "$GUI_APP")" != "$VERSION" ]; then
 		warn "等了 20 秒，内置代理的内核还没就绪：开着的界面 App（$(gui_ver "$GUI_APP")）和 cca（${VERSION}）版本不同，旧版不会运行内置代理。在 App 里点「更新并重新打开」，或者退出它再运行 cca gui"
 	else
 		warn "等了 20 秒，内置代理的内核还没就绪（界面 App 的日志：~/Library/Caches/local.cca.app/core.log）"
@@ -12137,6 +12740,11 @@ core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App
 core_launch() {   # 内核由界面 App 托管：App 没开就在后台打开它（--core：不弹主窗口，只留菜单栏图标），它读到本机客户端是内置代理就
 	               # 运行 cca _core run；已经开着的 App 看到 core/config.yaml 变了会重新读 state、接着起内核（不再 open：会弹出主窗口）
 	local app
+	if on_linux; then   # Linux：起 cca 自己的后台进程托管内核（已经有一个在跑的话新起的马上退出；碰一下配置文件，退避中的马上重启）
+		touch "$CORE_DIR/config.yaml"
+		( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _core-keep </dev/null >/dev/null 2>&1 3<&- & )
+		return 0
+	fi
 	if dev_mode; then   # 开发模式：用 macos/ 编出来的 App（和 cca gui 一样）
 		app=$(gui_dev_build) || return 1
 		if pgrep -f "$app/Contents/MacOS/cca( |\$)" >/dev/null 2>&1; then touch "$CORE_DIR/config.yaml"; return 0; fi
@@ -12172,27 +12780,27 @@ core_reload() {   # 照账号表重新生成配置，交给在跑的内核重新
 	py local-set applied "$LOCAL_WANT"
 }
 core_retire() {   # 不再用内置代理（关掉、换成别的客户端；先改好 config.json 里的客户端）：删掉配置和拷来的节点（有密钥），等内核停下，
-	              # 免得它还占着端口。界面 App 看到配置没了会重新读 state、停掉它；App 没开着（或者 10 秒还没停）就按 pid 文件停掉
+	              # 免得它还占着端口。界面 App（Linux 上是 cca _core-keep）看到配置没了会停掉它；没在托管（或者 10 秒还没停）就按 pid 文件停掉
 	local i ctl="$LOCAL_CTL"
 	rm -f "$CORE_DIR/config.yaml" "$CORE_DIR/nodes.json"
-	if gui_running; then
+	if on_linux || gui_running; then
 		LOCAL_CTL="unix:$(core_sock)"
 		for i in $(seq 1 40); do lctl GET /version; [ "$LCODE" = 200 ] || break; sleep 0.25; done
 		LOCAL_CTL="$ctl"
 	fi
 	core_stop_stale
 }
-core_stop_stale() {   # 别的内核还占着端口（界面 App 崩溃后留下的：它在自己的会话里，没跟着退出）：按 pid 文件认出来停掉
+core_stop_stale() {   # 别的内核还占着端口（界面 App、cca _core-keep 崩溃后留下的：它在自己的会话里，没跟着退出）：按 pid 文件认出来停掉
 	local pid i
 	pid=$(cat "$CORE_DIR/mihomo.pid" 2>/dev/null)
 	[[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" != "$$" ] || return 0
-	ps -p "$pid" -o command= 2>/dev/null | grep -qF "$CORE_DIR/mihomo-v" || return 0
+	proc_args "$pid" | grep -qF "$CORE_DIR/mihomo-v" || return 0
 	kill "$pid" 2>/dev/null
 	for i in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || return 0; sleep 0.25; done
 	kill -9 "$pid" 2>/dev/null
 	return 0
 }
-cmd_core() {   # cca _core run：界面 App 托管的内置代理（前台运行）。照账号表生成配置后 exec 内核：App 的子进程就是内核本身
+cmd_core() {   # cca _core run：界面 App（Linux 上是 cca _core-keep）托管的内置代理（前台运行）。照账号表生成配置后 exec 内核：托管它的进程的子进程就是内核本身
 	[ "${1:-}" = run ] || die "用法: cca _core run"
 	[ -f "$CFG" ] || die "还没安装：请在终端里运行 $SELF install"
 	load_local
@@ -12204,19 +12812,11 @@ cmd_core() {   # cca _core run：界面 App 托管的内置代理（前台运行
 	printf '%s\n' "$$" > "$CORE_DIR/mihomo.pid"
 	exec "$(core_bin)" -d "$CORE_DIR" -f "$CORE_DIR/config.yaml"
 }
-# 路由器端 defs 输出的 YAML（最后一行是结束标记：没拷完整的不要）→ JSON（这台 Mac 自带的 ruby；safe_load：订阅里的节点定义不能变成
-# 别的对象；日期、符号照字符串收，免得一个怪值让整次拷贝失败）
-CORE_YAML2JSON='s = STDIN.read
-abort "cca: 节点定义没拷完整" unless s.end_with?("\n# cca-defs-end\n")
-k = [Date, Time, Symbol]
-d = begin YAML.safe_load(s, permitted_classes: k, aliases: true) rescue ArgumentError; YAML.safe_load(s, k, [], true) end
-abort "cca: 没读到节点" unless d.is_a?(Hash) && d["proxies"].is_a?(Array)
-print JSON.generate({"proxies" => d["proxies"].select { |p| p.is_a?(Hash) }})'
 core_nodes_fetch() {   # 在家：路由器上节点的完整定义拷一份进 core/nodes.json（只留可选节点和它们经 dialer-proxy 用到的），在外面给内置代理用。
-	                    # 全程走管道（有密钥，不落盘）：路由器端 defs → ruby 转 JSON → py 只在读到完整的 JSON 时才写
+	                    # 全程走管道（有密钥，不落盘）：路由器端 defs 写好 JSON（路由器上本来就有 ruby，这台机器上不用）→ py 只在读到完整的
+	                    # JSON（带着结束标记）时才写
 	router_ready || return 1
-	command -v ruby >/dev/null 2>&1 || { warn "这台 Mac 上没有 ruby（macOS 自带 /usr/bin/ruby），没法从路由器拷节点定义给内置代理"; return 1; }
-	router_sh | rsh 'sh -s defs' 2>/dev/null | ruby -E UTF-8 -rdate -ryaml -rjson -e "$CORE_YAML2JSON" 2>/dev/null | py core-nodes-save -
+	router_sh | rsh 'sh -s defs' 2>/dev/null | py core-nodes-save
 }
 core_nodes_hook() {   # 在家启动账号之后：会走内置代理的机器（本机客户端是它，或者没配置、也没装 Clash Verge），节点定义的缓存不在、
 	                   # 超过 12 小时、可选节点变了，就在后台从路由器拷一份新的；已经用内置代理的，内核文件不在（第一次、换了版本）也在家先下好
@@ -12224,7 +12824,7 @@ core_nodes_hook() {   # 在家启动账号之后：会走内置代理的机器�
 	local st
 	core_possible || return 0
 	st=$(py core-stale "$([ -x "$(core_bin)" ] && echo 1)")
-	[ -n "$st" ] || return 0
+	[ -n "${st// /}" ] || return 0
 	( unset CCA_EVENTS CCA_GRANT CCA_RO; "$SELF" _core-nodes $st </dev/null >/dev/null 2>&1 & )
 }
 cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器拷节点定义、下载内核文件；同一时间只跑一个
@@ -12380,6 +12980,8 @@ sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路�
 	fi
 	if [ "${st%%	*}" != "${st#*	}" ]; then
 		router_needed || return 0   # 只有直连的第三方 API 账号、也没配置路由器：没有要同步的
+		# 没配置路由器、只用本机的客户端（服务器上 cca 内置的代理）：没有路由器要同步，本机的端口池启动时配好
+		if ! router_ready && [ -n "$LOCAL_SET" ]; then return 0; fi
 		if router_ready && ! at_home; then
 			info "账号表或路由器端脚本有变化：现在连不上路由器，回到家里的网络后再同步"
 			return 0
@@ -12959,6 +13561,7 @@ gui_dev_build() {   # 开发模式：从 macos/ 的源码编译（源码比上�
 }
 cmd_gui() {   # cca gui [update [--relaunch PID] | remove]
 	local pid="" app
+	mac_only "图形界面（cca App）"
 	case "${1:-}" in
 		''|open)
 			gui_supported || return 1
@@ -13295,27 +13898,71 @@ cmd_policy() {   # cca [codex] policy [setup [仓库] | pull [--json] | request 
 # ---------------------------------------------------------------------------
 # 安装 / 还原
 # ---------------------------------------------------------------------------
-need_deps() {
-	local c miss=""
-	for c in ssh ssh-keygen nc curl perl; do command -v "$c" >/dev/null 2>&1 || miss="$miss $c"; done
-	[ -z "$miss" ] || die "缺少命令:$miss"
+pkg_hint() {   # pkg_hint 命令…：Linux 上装这些命令的那一行（认出包管理器时，前面带「：」）。和 install.sh 里的一样
+	local pm p c out="" s=""
+	on_linux || return 0
+	# 包管理器可能在 sbin 里（Alpine 的 apk 在 /sbin），不在 PATH 里也认
+	for pm in apt-get dnf yum zypper pacman apk ""; do
+		[ -z "$pm" ] || command -v "$pm" >/dev/null 2>&1 || [ -x "/sbin/$pm" ] || [ -x "/usr/sbin/$pm" ] && break
+	done
+	for c in "$@"; do
+		case "$pm:$c" in
+			apt-get:ssh*) p=openssh-client ;;
+			dnf:ssh*|yum:ssh*|zypper:ssh*) p=openssh-clients ;;
+			pacman:ssh*) p=openssh ;;
+			apk:ssh) p=openssh-client-default ;;
+			apk:ssh-keygen) p=openssh-keygen ;;
+			dnf:nc|yum:nc) p=nmap-ncat ;;
+			pacman:nc) p=openbsd-netcat ;;
+			*:nc) p=netcat-openbsd ;;
+			pacman:python3) p=python ;;
+			*:gunzip) p=gzip ;;
+			*) p=$c ;;
+		esac
+		case " $out " in *" $p "*) ;; *) out="${out:+$out }$p" ;; esac
+	done
+	[ "$(id -u)" = 0 ] || s="sudo "
+	case "$pm" in
+		apt-get) printf '：%sapt install %s' "$s" "$out" ;;
+		dnf|yum|zypper) printf '：%s%s install %s' "$s" "$pm" "$out" ;;
+		pacman) printf '：%spacman -S %s' "$s" "$out" ;;
+		apk) printf '：%sapk add %s' "$s" "$out" ;;
+	esac
+}
+need_deps() {   # 安装时查依赖：install.sh 下载之前查的是同一份（命令、Python 和 OpenSSH 的版本），两边一起改
+	local c miss="" v
+	for c in ssh ssh-keygen nc curl perl gunzip; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"; done
+	[ -z "$miss" ] || die "缺少命令 ${miss// /、}，先装上再运行 cca install$(pkg_hint $miss)"
 	# macOS 的 /usr/bin/python3 只是个占位，没装命令行工具时一运行就弹安装窗口
 	if [ -z "$PYTHON" ] || { [ "$PYTHON" = /usr/bin/python3 ] && [ "$(uname)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; }; then
 		die "需要 python3：先运行 xcode-select --install 装上苹果的命令行工具，装好后重新安装"
 	fi
+	v=$("$PYTHON" -I -c 'import sys; print("%d.%d" % sys.version_info[:2]); sys.exit(sys.version_info < (3, 8))' 2>/dev/null) ||
+		die "cca 要 Python 3.8 或更新（${PYTHON} 是 ${v:-更早的版本}）"
+	# 校验更新、映射的签名用 ssh-keygen -Y，OpenSSH 8.1 才有（RHEL / Rocky 8 是 8.0）；认不出版本（不是 OpenSSH）时不拦
+	v=$(ssh -V 2>&1 | sed -n 's/^OpenSSH_\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)
+	case "$v" in [1-7].*|8.0) die "OpenSSH 太旧（${v}）：cca 校验更新和映射的签名要 8.1 或更新（ssh-keygen -Y）" ;; esac
 	[ -n "$CLAUDE_BIN" ] || die "没找到 Claude Code：先运行 curl -fsSL https://claude.ai/install.sh | bash 安装它，再重新安装 cca"
-	[ "$(uname)" = Darwin ] || warn "本脚本按 macOS 编写（钥匙串、open、Chrome 路径），其它系统需自行调整"
+	if on_linux; then warn "Linux 上能用的是命令行：账号的网络（路由器的端口池、cca 内置的代理）、登录（登录页在 Mac 上用账号专属的 Chrome 打开）、API key（存成权限 600 的文件）；桌面 App、网页版、图形界面这些只在 macOS 上"
+	elif [ "$(uname)" != Darwin ]; then warn "本脚本按 macOS 编写（钥匙串、open、Chrome 路径），其它系统需自行调整"; fi
 }
 
-path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的启动文件
-	local bin="$1" rc="$HOME/.zshrc"
-	case "${SHELL:-}" in */bash) rc="$HOME/.bash_profile" ;; esac
+path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的启动文件。macOS 的终端开的是登录 shell，bash 读 ~/.bash_profile；
+	# Linux 上 bash 写 ~/.bashrc（Ubuntu、Debian 的 ~/.profile，Fedora、RHEL、Arch 的 ~/.bash_profile 都会读它；新建一个
+	# ~/.bash_profile 反而会让 Ubuntu、Debian 的登录 shell 不再读 ~/.profile），sh、ash（Alpine）这些写 ~/.profile
+	local bin="$1" rc="$HOME/.zshrc" again="打开一个新的终端标签"
+	case "${SHELL:-}" in
+		*/zsh) ;;
+		*/bash) if on_linux; then rc="$HOME/.bashrc"; else rc="$HOME/.bash_profile"; fi ;;
+		*) on_linux && rc="$HOME/.profile" ;;
+	esac
+	on_linux && again="重新登录（或者运行 . ~/${rc##*/}）后"
 	if grep -qs '\.local/bin' "$rc"; then
-		warn "${bin} 已经写在 ${rc} 里，只是当前终端还没生效：打开一个新的终端标签再用 cca"
+		warn "${bin} 已经写在 ${rc} 里，只是当前终端还没生效：${again}再用 cca"
 	elif confirm "把 ${bin} 加进 PATH（写入 ${rc}），以后直接输入 cca 就能用？" y; then
 		printf '\n# cca（Claude Code 多账号）\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc" || return 1
 		info "已写入 ${rc}"
-		CCA_PATH_ADDED=1
+		CCA_PATH_ADDED="$again"
 	else
 		warn "${bin} 不在 PATH 里：可以用 ${bin}/cca 运行，或者自己把它加进 PATH"
 	fi
@@ -13382,7 +14029,7 @@ cmd_install() {
 	if [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
 		cmd_add || true
 	fi
-	if [ -n "${CCA_PATH_ADDED:-}" ]; then info "完成。打开一个新的终端标签，输入 cca 就能用（cca help 查看全部命令）"
+	if [ -n "${CCA_PATH_ADDED:-}" ]; then info "完成。${CCA_PATH_ADDED}，输入 cca 就能用（cca help 查看全部命令）"
 	else info "完成。以后输入 cca 启动 Claude Code（cca help 查看全部命令）"; fi
 }
 
@@ -13406,7 +14053,7 @@ cmd_restore() {
 	[ -z "$running" ] || die "这些账号的桌面 App 还开着：${running}。先退出它们再还原"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证"
-	say "  · 钥匙串里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
+	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理（用过的话）：停掉它的内核"
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
@@ -13443,10 +14090,12 @@ cmd_restore() {
 	core_stop_stale   # 内置代理的内核（界面 App 退出时会停掉它，这里是 App 崩溃后留下的）
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。内置代理的节点密钥、配置和内核文件不打包
-	# （bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core 的目录）
+	# （bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core 的目录）。登录凭证（Codex 的 auth.json、Linux 上
+	# Claude Code 的 .credentials.json）、密钥文件（secrets：上面按记账删过，没记上账的也不带）不打包
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
-		--exclude 'auth.json' --exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null ) &&
+		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'secrets' \
+		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null ) &&
 		info "配置备份：$bk"
 	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
@@ -13456,9 +14105,11 @@ cmd_restore() {
 	info "已还原。原来的 claude、codex 命令和 ~/.claude、~/.codex 不受影响"
 }
 
-usage() {
+usage() {   # Linux（服务器）上不列只在 macOS 上的命令（网页版、桌面 App、图形界面），几处说法按平台换
+	local mac=1 host="这台 Mac " away="在外面走本机 Clash" cxlogin="第一次启动时在它专属的浏览器窗口里登录"
+	on_linux && mac="" host="这台机器" away="连不上路由器时走 cca 内置的代理" cxlogin="第一次启动时给出在 Mac 上运行的 login-page 那一行"
 	cat >&2 <<EOF
-cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记忆/配置共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，在外面走本机 Clash）
+cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记忆/配置共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，${away}）
 
 启动
   cca [claude 参数]          弹出账号菜单：↑↓ 选择、回车确认、数字键直接选、q 退出；
@@ -13475,15 +14126,17 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca add                    新增账号：分两行填登录邮箱和别名（可选），再选出口节点；
                              登录时邮箱会预填在登录页里
   cca add api                新增第三方 API 账号（兼容 Anthropic 接口的地址 + key，模型可选）：
-                             直连或走节点；key 存进钥匙串，经 apiKeyHelper 交给 Claude Code
+                             直连或走节点；key 存进${KEYSTORE}，经 apiKeyHelper 交给 Claude Code
                              表里写法：{"别名": {"base_url": "…", "model": "…", "node": "", "env": {…}}}
-  cca key <账号>             第三方 API 账号：重新输入 key；官方账号：记一把 API key 备查（存进钥匙串，cca 不拿它启动）
+  cca key <账号>             第三方 API 账号：重新输入 key；官方账号：记一把 API key 备查（存进${KEYSTORE}，cca 不拿它启动）
   cca key <账号> --show      把 key 打出来（App 里的「显示」「复制」）；--forget 删掉官方账号记的 key
   cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
   cca rename <账号> <新别名>  改别名（写 - 去掉别名，只留邮箱）：登录、资料、端口都不变，启动器跟着改名
   cca reorder <账号>…        按这个顺序排账号表（没写到的接在后面）：菜单、编号跟着变，端口、路由器都不动
   cca ls                     列出账号、登录状态和端口
-  cca rm <账号>              删除账号（退出登录，删钥匙串凭证和浏览器资料）
+  cca rm <账号>              删除账号（退出登录，删${KEYSTORE_CRED}${mac:+和浏览器资料}）
+EOF
+	[ -z "$mac" ] || cat >&2 <<EOF
   cca web [账号] [网址]      用该账号的浏览器实例打开 claude.ai（或指定网址，如 https://ip.net.coffee/claude/）；
                              只用于官方账号
   cca billing [账号]         用该账号的浏览器实例打开控制台的账单页，看订阅附带的每月 API 额度和余额；只用于官方账号
@@ -13491,10 +14144,26 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca app [账号]             用该账号专属的资料目录和出口打开 Claude App（桌面版），已经开着就切到它；
                              每个账号在 ~/Applications 里有一个「Claude 别名」启动器（没有别名时用邮箱 @ 前面的
                              部分；cca app --launchers 重新生成）。只用于官方账号
+EOF
+	cat >&2 <<EOF
   cca check [账号…] [--json]  检测各账号出口 IP、地区、纯净度和 DNS / WebRTC 泄露，提示共用出口；第三方 API 账号只检测接口连不连得上
-  cca login <账号>           退出这个账号现在的登录，在它专属的浏览器窗口里重新登录
+EOF
+	if [ -n "$mac" ]; then cat >&2 <<EOF
+  cca login <账号>           退出这个账号现在的登录，在它专属的浏览器窗口里重新登录。在 Linux 服务器上：给出一行
+                             cca login-page 命令，在 Mac 上运行它打开登录页，再把 Mac 上拿到的验证码贴回服务器
+  cca login-page <账号> [--node 节点] <登录网址>
+                             （在 Mac 上）服务器上登录时用：用这个账号专属的 Chrome、经同一个节点打开登录页，
+                             接住登录后跳回来的验证码，复制到剪贴板
   cca gui                    打开图形界面（cca App：各账号的用量、节点分流，一键打开桌面 App、网页版）；没装就先下载
                              和 cca 同版本的 App 装进 ~/Applications（要 macOS 26 或更新）。cca gui update | remove
+EOF
+	else cat >&2 <<EOF
+  cca login <账号>           退出这个账号现在的登录，重新登录：这台机器上没有账号专属的浏览器，给出一行在 Mac 上运行的
+                             cca login-page 命令（用账号专属的 Chrome、经同一个节点打开登录页），再把拿到的验证码贴回这里
+  网页版、桌面 App、图形界面（web、billing、limit-resets、app、gui）要用账号专属的 Chrome 或 App，只在 macOS 上
+EOF
+	fi
+	cat >&2 <<EOF
 
 Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人的两种账号可以用同一个别名、同一个邮箱）
   cca codex [codex 参数]     弹出 Codex 账号菜单，选中后启动 codex；cca codex @<账号> [codex 参数] 跳过选择。
@@ -13502,7 +14171,7 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              技能、记忆等所有账号共用。启动前经该账号端口检测出口（chatgpt.com 看到的 IP）
   cxa [codex 参数]           等于 cca codex：cxa @<账号>、cxa usage、cxa add 等都一样（cca install 时和 cca
                              一起建在 ~/.local/bin；添加 Codex 账号时没有的话也会补上）
-  cca codex add [api]        新增 Codex 账号（用 ChatGPT 登录，第一次启动时在它专属的浏览器窗口里登录）；
+  cca codex add [api]        新增 Codex 账号（用 ChatGPT 登录，${cxlogin}）；
                              api：兼容 OpenAI Responses 接口的第三方服务（地址 + key，模型可选）
   cca codex usage [账号…] [--json]
                              查 Codex 账号的 5 小时、每周额度和剩余的重置次数：
@@ -13511,11 +14180,15 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              用掉一次重置机会，把这个账号 5 小时和每周的用量清零（codex 里 /usage 的 Redeem reset）：
                              先经它自己的出口查还能重置几次、各在什么时候过期，问过你再用掉最早过期的那一次；
                              用量还不需要重置时不扣次数
-  cca codex ls | edit | rm | key | login | web | check
-                             和上面同名的命令一样，作用于 Codex 账号（web 打开 chatgpt.com）
+  cca codex ls | edit | rm | key | login${mac:+ | web} | check
+                             和上面同名的命令一样，作用于 Codex 账号${mac:+（web 打开 chatgpt.com）}
+EOF
+	[ -z "$mac" ] || cat >&2 <<EOF
   cca codex app [账号]       用该账号自己的资料目录、登录和出口打开 ChatGPT App（Codex 桌面版）；
                              启动器叫「ChatGPT 别名」（cca codex app --launchers 重新生成）。App 里要求登录时
                              别在 App 里登：关掉它，cca codex login 账号 登录后再打开
+EOF
+	cat >&2 <<EOF
 
 路由器
   cca router setup           SSH 免密（只输一次密码）+ 部署分流；路由器上用 OpenClash 还是 ShellCrash 自动检测
@@ -13526,6 +14199,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
                              运行配置文件不见了时，重载换成重启 OpenClash / ShellCrash（同样先问）
   cca router status|nodes|log|ssh|uninstall
 
+EOF
+	if [ -n "$mac" ]; then cat >&2 <<EOF
 出门在外（连不上路由器时改走本机的 Clash 客户端，例如 Clash Verge；没有的话用 cca 内置的代理）
   cca local [status]         现在走哪条路；本机端口池各端口的监听状态和选中的节点
   cca local setup            配置本机 Clash：Clash Verge 自动配置（全局扩展脚本里加一段，不用重启它）；
@@ -13534,6 +14209,19 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca local off              删掉 Clash Verge 全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理则停掉内核、删掉拷来的节点
                              平时自动判断：连得上路由器走路由器，连不上走本机 Clash；
                              想固定一种，把 ${CFG} 的 route 改成 router 或 local
+EOF
+	else cat >&2 <<EOF
+连不上路由器时（云服务器、不在家）改走本机的代理，默认是 cca 内置的代理
+  cca local [status]         现在走哪条路；本机端口池各端口的监听状态和选中的节点
+  cca local setup            配置本机的代理：默认用内置代理（mihomo 内核，由 cca 在后台运行，不用 root；节点在家时从
+                             路由器拷一份，连不到路由器的服务器上用维护者的参考节点），也可以按提示手动配置别的基于
+                             mihomo 的客户端。在外面第一次启动时也会问
+  cca local off              停掉内置代理的内核、删掉拷来的节点（手动配置的客户端：移除本机端口池）
+                             平时自动判断：连得上路由器走路由器，连不上走本机的代理；
+                             想固定一种，把 ${CFG} 的 route 改成 router 或 local
+EOF
+	fi
+	cat >&2 <<EOF
 
 维护者的账号 → 节点映射（可选）
   cca policy setup [仓库]    映射放在维护者的私有 GitHub 仓库里（不写就是 ${POLICY_REPO_DEFAULT:-维护者的仓库}）：给这台机器
@@ -13546,7 +14234,7 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   cca devices [账号…] [--json]
                              映射里的账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
                              （维护者在映射里配置了设备统计的服务器时才有；Codex 账号：cca codex devices）。
-                             映射里的账号经 cca 用的时候（命令行会话、cca app 打开的 App），这台 Mac 也会报告给那台服务器
+                             映射里的账号经 cca 用的时候（命令行会话${mac:+、cca app 打开的 App}），${host}也会报告给那台服务器
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
@@ -13563,17 +14251,20 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
                              leak_check（设成 false：启动前不测 DNS / WebRTC 泄露）、
-                             presence（设成 false：这台 Mac 不向维护者的服务器报告、也不查设备统计）、
+                             presence（设成 false：${host}不向维护者的服务器报告、也不查设备统计）${mac:+、}
+EOF
+	[ -z "$mac" ] || cat >&2 <<EOF
                              dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）
 EOF
 }
 
 main() {
-	[ -n "$PYTHON" ] || die "需要 python3"
+	[ -n "$PYTHON" ] || die "需要 python3（3.8 或更新）$(pkg_hint python3)"
 	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes|_presence-agent|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;
@@ -13595,6 +14286,7 @@ main() {
 		_gui-fetch) cmd_gui_fetch ;;
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）
 		_core-nodes) shift; cmd_core_nodes "$@" ;;   # 后台：从路由器拷节点定义、下载内核给内置代理
+		_core-keep) CCA_SELF="$SELF" exec "${PYRUN[@]}" core-keep ;;   # 后台（Linux）：没有界面 App 时托管内置代理的内核（见 py 的 cmd_core_keep）
 		_presence-agent) CCA_SELF="$SELF" exec "${PYRUN[@]}" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
 		_dock-tidy) shift; cmd_dock_tidy "$@" ;;   # 后台：cca 打开的 App 实例退出后整理程序坞（见 py 的程序坞一节；终端交接的脚本也调，PROTOCOL 6）
 		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
@@ -13629,6 +14321,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		add) shift; cmd_add "$@" ;;
 		key) shift; cmd_key "$@" ;;
 		login) shift; cmd_login "$@" ;;
+		login-page) shift; cmd_login_page "$@" ;;
 		usage) shift; cmd_usage "$@" ;;
 		reset) shift; cmd_reset "$@" ;;
 		edit) cmd_edit ;;
