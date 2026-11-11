@@ -286,9 +286,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `stale`：数据超过 10 分钟。`reset`：这个窗口的重置时间已经过了（显示“已重置”，不要显示旧的百分比）。
 - 窗口：Claude 有 `five_hour`、`seven_day`、`seven_day_opus`、`seven_day_sonnet`、`seven_day_oauth_apps`；Codex 只有 `five_hour`、`seven_day`，
   另有 `credits`（`{"hasCredits": true, "unlimited": false, "balance": "12.5"}`）和 `reset_credits`（`{"availableCount": 2, "next_expires_epoch": …, …}`）。
-- 没有 5 小时限制的账号（Claude 的 Ultra 这类套餐，ChatGPT 的 Pro 500）：查到了用量（`source` 不是 `none`）、`seven_day` 有而 `five_hour` 是 null。
-  Claude 说 5 小时的限制没生效（它给的 `limits` 里 `session` 那一项 `is_active: false`；这时它给的 `five_hour` 是 0%、没有重置时间）时，cca 也给 null。
-  App 这时不画 5 小时那一行（侧栏、菜单栏面板、总览卡片、账号页）；没查到用量时照常画成“—”。
+- 没有 5 小时限制的账号（Claude 的 Ultra 这类套餐，ChatGPT 的 Pro 500）：查到了用量（`source` 不是 `none`）、`seven_day` 有而 `five_hour` 是 null（接口没给 5 小时的窗口）。
+  App 这时不画 5 小时那一行（侧栏、菜单栏面板、总览卡片、账号页）；没查到用量时照常画成“—”。5 小时的窗口还没开始计时（0%、没有重置时间）不算，照常画。
 - `model_scoped[]`：按模型的每周额度（Claude 的 Fable；Codex 另外计的额度）。Claude 的条目在 cca 认得出时**另有**它和本周总额度的关系：
   `allowance_percent_of_weekly`（最多能用本周总额度的百分之几，例如 50）、`used_percent_of_weekly`（已经用掉本周总额度的百分之几）；认不出时
   没有这两个字段。`utilization` 是这个模型自己那份额度用了多少。

@@ -228,8 +228,8 @@ struct UsageEntry: Decodable, Sendable, Equatable {
     /// 有没有可以显示的数据（`source` 为 none 时没有）。
     var hasData: Bool { source != .none && (fiveHour != nil || sevenDay != nil) }
 
-    /// 这个账号没有 5 小时的限制（PROTOCOL 3.1：查到了用量、`seven_day` 有而 `five_hour` 是 null。Claude 的 Ultra 这类套餐、
-    /// ChatGPT 的 Pro 500；Claude 说限制没生效的 cca 也给 null）：侧栏、菜单栏面板、总览卡片、账号页都不画 5 小时那一行。
+    /// 这个账号没有 5 小时的限制（PROTOCOL 3.1：查到了用量、`seven_day` 有而 `five_hour` 是 null，接口没给这个窗口。
+    /// Claude 的 Ultra 这类套餐、ChatGPT 的 Pro 500）：侧栏、菜单栏面板、总览卡片、账号页都不画 5 小时那一行。
     var noFiveHourLimit: Bool { source != .none && fiveHour == nil && sevenDay != nil }
 }
 

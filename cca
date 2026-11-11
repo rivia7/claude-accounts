@@ -5381,21 +5381,6 @@ def iso(ts):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
 
 
-def five_hour_off(rl):
-    """Claude 说这个账号的 5 小时限制没生效：limits 里 kind 是 session 的那一项 is_active 是 false（Ultra 这类套餐；
-    这种套餐有的连 five_hour 都不给，有的给一个 0%、没有重置时间的）。普通账号的 5 小时窗口还没开始时也是 0%、
-    没有重置时间，但 is_active 是 true，所以只认这个标记；没有 limits（旧版 Claude Code 存的缓存）时不知道，照原样"""
-    lims = rl.get('limits') if isinstance(rl, dict) else None
-    return isinstance(lims, list) and any(isinstance(x, dict) and x.get('kind') == 'session' and x.get('is_active') is False
-                                          for x in lims)
-
-
-def usage_window(rl, k):
-    """用量里的一个窗口（原样的）：5 小时的限制没生效时 five_hour 当作没有，和接口没给这个窗口的一样
-    （cca usage 里是 —，usage --json、_gui state 里是 null，App 不画 5 小时那一行：macos/PROTOCOL.md 3.1）"""
-    return None if k == 'five_hour' and five_hour_off(rl) else rl.get(k)
-
-
 def win(w, now):
     """一个用量窗口 → {pct, at, reset}；at 是重置时间（秒），reset 表示重置时间已经过了（缓存里的数不算数了）"""
     if not isinstance(w, dict):
@@ -5698,7 +5683,7 @@ def usage_cell(key, now):
         return ''
     cells = []
     for label, k in (('5h', 'five_hour'), ('周', 'seven_day')):
-        w = win(usage_window(u['rl'], k), now)
+        w = win(u['rl'].get(k), now)
         if w:
             cells.append('%s %s' % (label, '已重置' if w['reset'] else '%d%%' % round(w['pct'])))
     if not cells:
@@ -5858,8 +5843,8 @@ def usage_entry(r, now):
          'fetched_at': iso(at) if at else None, 'fetched_epoch': at or None, 'age_seconds': int(now - at) if at else None,
          'stale': bool(at) and now - at >= USAGE_STALE,
          'error': usage_why(r) if r['why'] else None, 'error_code': r['why'] or None, 'error_detail': (r['msg'] or None) if r['why'] else None}
-    for k in T.usage_windows:
-        a[k] = w(usage_window(rl, k))
+    for k in T.usage_windows:   # 窗口原样给：没有 5 小时限制的套餐接口不给 five_hour，就是 null。别拿 limits 里的 is_active 判断（CLAUDE.md）
+        a[k] = w(rl.get(k))
     shares = weekly_shares(rl)
     a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name'), **shares.get(name_key(m.get('display_name')), {}))
                          for m in dicts(rl, 'model_scoped')] if isinstance(rl.get('model_scoped'), list) else None
@@ -5928,7 +5913,7 @@ def usage_table(rows, now, cols, color, api):
         notes = usage_notes(r['rl'], now)
         if r['source'] == 'cache':   # 原因在前（窄的终端里先保住它），再说是多久以前的数
             notes = ([usage_why(r)] if r['why'] else []) + ['缓存（%s前）' % ago(now - r['at'])] + notes
-        data.append((r, cell(win(usage_window(r['rl'], 'five_hour'), now), False), cell(win(r['rl'].get('seven_day'), now), True), notes))
+        data.append((r, cell(win(r['rl'].get('five_hour'), now), False), cell(win(r['rl'].get('seven_day'), now), True), notes))
     show = {'email': True, 'plan': True, 'r5': True, 'r7': True}
     aw = min(max(dw(r['alias']) for r in rows), 16)   # 账号一格：别名、邮箱各占一小列，和菜单一样（都没有别名就只写邮箱）
     ew = min(max(dw(r['email']) for r in rows), 32)
