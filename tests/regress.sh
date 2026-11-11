@@ -1292,8 +1292,10 @@ ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变）�
 out=$(run OSTYPE=linux-gnu cca _gui hello </dev/null 2>/dev/null); tr=$(run OSTYPE=linux-gnu bash -x "$CCA" _gui hello </dev/null 2>&1 >/dev/null)
 ok "Linux 上内嵌 Python 的源码拆成几段传（exec 的单个参数最多 128KB；bash 认环境里的 OSTYPE，这里借它模拟）：bash 3.2 照样按字节切、PY_BOOT 拼回来，结果和不拆一样" '[ -n "$out" ] && [ "$out" = "$(gj hello)" ] && printf "%s" "$tr" | grep -q "unset _a _lc _lcs"'
 # 内嵌 Python 的编译缓存（PY_BOOT）：每个版本一份，写新的一份时顺手删掉 7 天前写的旧缓存和没写完的临时文件；7 天内的、python3 指针、
-# 名字不像缓存的都留着，读缓存时什么都不改。TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面（沙箱不在那里就没法不碰真的缓存目录）
-case "$T" in
+# 名字不像缓存的都留着，读缓存时什么都不改。TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面（沙箱不在那里就没法不碰真的缓存目录）。
+# 开头把沙箱规整成了 /private/var/folders/…，cca 只认 /var/folders/…：换回这个写法交给它（/var 是指向 /private/var 的链接，同一个目录）
+TL=${T#/private}
+case "$TL" in
 /var/folders/*)
 PC="$T/pyc/cca-py"; mkdir -p -m 700 "$T/pyc" "$PC"
 for n in 0123456789abcdef1-30906f0 0123456789abcdef2-30906f0.4242 0123456789abcdef3-30e00f0 python3 notes-0123456789abcdef5 0123456789abcdefk-1; do echo x > "$PC/$n"; done
@@ -1304,8 +1306,8 @@ for n, days in (('0123456789abcdef1-30906f0', 8), ('0123456789abcdef2-30906f0.42
     t = time.time() - days * 86400
     os.utime(os.path.join(sys.argv[1], n), (t, t))
 P
-run TMPDIR="$T/pyc/" cca ls >/dev/null 2>&1; l1=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
-run TMPDIR="$T/pyc/" cca ls >/dev/null 2>&1; l2=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
+run TMPDIR="$TL/pyc/" cca ls >/dev/null 2>&1; l1=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
+run TMPDIR="$TL/pyc/" cca ls >/dev/null 2>&1; l2=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
 v=$(python3 - "$l1" <<'P'
 import re, sys
 s = set(sys.argv[1].split())
