@@ -25,7 +25,7 @@ if [ -n "${TIMING:-}" ]; then
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -2584,6 +2584,88 @@ out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" v9.9.23-beta.1 2>&1); rc=$?
 ok "一键安装默认装最新的正式版；指定版本号时（写成 tag 的样子 v9.9.23-beta.1 也认）装那个测试版，换下来的正式版留着" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.23-beta.1 ] && printf "%s" "$out" | grep -q "正在下载 cca 9.9.23-beta.1" && [ "$(cat "$H3/.cca/update/cca.prev.version")" = 9.9.22 ]'
 out=$(r3 "$H3/.cca/bin/cca" update --rollback 2>&1)
 ok "一键安装装上的测试版也能退回" '[ "$("$H3/.cca/bin/cca" version)" = 9.9.22 ] && printf "%s" "$out" | grep -q "已退回 9.9.22"'
+
+# 11d. 程序坞：cca 打开的 App 实例（账号的 Chrome、桌面 App）、终端交接用完退出的系统终端，退出以后去掉程序坞「最近使用的 App」里
+# 留下的图标（cca _dock-tidy）。测试里程序坞的设置是 $T/dock/dock.plist（run 带着 CCA_DOCK_PREFS；CCA_DOCK_SETTLE=0：不等），
+# 假 killall 只记一笔，假 lsappinfo 回 $T/lsappinfo.txt，假 open 像 LaunchServices 那样在后台跑小 App（跑完在 open.log 记 DOCK-APP-DONE）
+DK="$T/dock"
+dkapp() {   # dkapp 名字 bundle-id [真程序]：沙箱里的假 App
+	mkdir -p "$DK/$1.app/Contents/MacOS"
+	printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>%s</string></dict></plist>\n' "$2" "$1" > "$DK/$1.app/Contents/Info.plist"
+	[ -z "${3:-}" ] || { cp "$3" "$DK/$1.app/Contents/MacOS/$1"; codesign -s - -f "$DK/$1.app" >/dev/null 2>&1; }
+}
+dk() { python3 -I "$T/dockpl.py" "$DK/dock.plist" "$@"; }   # set 最近使用的 [固定的] [show-recents] | get | add App
+kills() { local n; n=$(grep -c '^KILLALL Dock$' "$T/killall.log" 2>/dev/null); echo "${n:-0}"; }   # 重启了几次程序坞
+dkwait() { local i; for i in $(seq 1 100); do [ "$(grep -cxF -- "$3" "$1" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0; sleep 0.1; done; return 1; }   # dkwait 文件 行数 那一行：等到有这么多行是这样的（最多 10 秒）
+hires() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+mkdir -p "$DK"; dkapp A local.cca.test.a; dkapp B local.cca.test.b; dkapp S local.cca.test.s /bin/sleep
+ok "_gui hello：说明能整理程序坞（App 据此让终端交接的脚本退出系统终端以后调 cca _dock-tidy）" 'gj hello | jok "d[\"dock\"] == 1"'
+: > "$T/killall.log"; dk set '["A","Preview:nobid","A:nobid"]'
+out=$(run cca _dock-tidy "$DK/A.app" 2>&1); rc=$?
+ok "程序坞：App 退出后它留在「最近使用的 App」里的图标都去掉（按 bundle id 认，图标里没有 bundle id 的按位置认），别的不动；改完重启程序坞一次，什么都不说" '[ $rc -eq 0 ] && [ -z "$out" ] && [ "$(dk get)" = "Preview:nobid" ] && [ "$(kills)" = 1 ]'
+: > "$T/killall.log"; dk set '["B","Preview:nobid"]'
+run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1
+ok "程序坞：没有它留下的图标时不改设置、不重启程序坞" '[ "$(dk get)" = "B Preview:nobid" ] && [ "$(kills)" = 0 ]'
+: > "$T/killall.log"; dk set '["A","B","Preview:nobid"]'
+run CCA_DOCK_SETTLE=2 cca _dock-tidy "$DK/A.app" >/dev/null 2>&1 & TA=$!
+sleep 0.5; run CCA_DOCK_SETTLE=2 cca _dock-tidy "$DK/B.app" >/dev/null 2>&1 & TB=$!
+wait $TA $TB
+ok "程序坞：几个先后退出的（最近一次退出以后等一会儿）一起整理，只重启一次；排队的记录不留" '[ "$(dk get)" = "Preview:nobid" ] && [ "$(kills)" = 1 ] && [ -z "$(ls "$DK/cca-dock" | grep exited)" ]'
+: > "$T/killall.log"; dk set '["A","Preview:nobid"]'; echo A > "$T/dock_readd"
+run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1
+ok "程序坞：重启以后又被加回来了（LaunchServices 还留着记录时会这样）：再等一轮、再重启一次" '[ "$(dk get)" = "Preview:nobid" ] && [ "$(kills)" = 2 ] && [ ! -e "$T/dock_readd" ]'
+: > "$T/killall.log"; dk set '["A","Preview:nobid"]'; printf 'A\nkeep\n' > "$T/dock_readd"
+run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1; rm -f "$T/dock_readd"
+ok "程序坞：每次都被加回来：最多重启两次就算了" '[ "$(kills)" = 2 ] && [ "$(dk get)" = "Preview:nobid A-back" ]'
+"$DK/S.app/Contents/MacOS/S" 30 & SP=$!
+: > "$T/killall.log"; dk set '["S","S","Preview:nobid"]'; run cca _dock-tidy "$DK/S.app" >/dev/null 2>&1; n1=$(kills); r1=$(dk get)
+: > "$T/killall.log"; dk set '["S","Preview:nobid"]'; run cca _dock-tidy "$DK/S.app" >/dev/null 2>&1; n2=$(kills); r2=$(dk get)
+: > "$T/killall.log"; dk set '["S"]' '["S"]'; run cca _dock-tidy "$DK/S.app" >/dev/null 2>&1; n3=$(kills)
+: > "$T/killall.log"; dk set '["A","S","Preview:nobid","B"]'; run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1; n4=$(kills); r4=$(dk get)
+kill $SP 2>/dev/null; wait $SP 2>/dev/null
+ok "程序坞：同一个 App 还开着一个实例：两个图标里多出一个，要整理；只有它自己的那一个时不动" '[ "$n1" = 1 ] && [ "$r1" = "Preview:nobid" ] && [ "$n2" = 0 ] && [ "$r2" = "S Preview:nobid" ]'
+ok "程序坞：固定在程序坞上的 App 开着时用固定的那个图标，「最近使用的 App」里它的图标就是多出来的" '[ "$n3" = 1 ]'
+ok "程序坞：要重启时开着的 App 的图标也先拿掉（新的程序坞给在跑的实例重新加一个，不认原来的，不拿掉会多出一个），没开着的照留" '[ "$n4" = 1 ] && [ "$r4" = "Preview:nobid B" ]'
+: > "$T/killall.log"; dk set '["A"]' '[]' false; run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1; n1=$(kills)
+dk set '["A"]' '[]' true; cp "$H/.cca/config.json" "$T/config.dock"; edit_table 'j["dock_tidy"] = False' "$H/.cca/config.json"
+run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1; n2=$(kills)
+sleep 30 & P=$!; n_open=$(grep -c 'cca-dock.app' open.log)
+run cca _dock-tidy "$DK/A.app" $P >/dev/null 2>&1; n_open2=$(grep -c 'cca-dock.app' open.log)
+kill $P; wait $P 2>/dev/null; cp "$T/config.dock" "$H/.cca/config.json"
+ok "程序坞：没开「显示最近使用的 App」、config.json 的 dock_tidy 设成 false 时都不整理；关掉了连等待的小 App 都不起" '[ "$n1" = 0 ] && [ "$n2" = 0 ] && [ "$(dk get)" = A ] && [ "$n_open2" = "$n_open" ]'
+dkapp G "local.cca.test.guard.$$"; : > "$T/killall.log"; : > "$T/lsappinfo.log"
+t0=$(hires); out=$(run CCA_DOCK_PREFS= cca _dock-tidy "$DK/G.app" 2>&1); rc=$?; t1=$(hires)
+ok "程序坞：HOME 换过（像这个测试的沙箱）又没指定设置文件时，这个用户真正的程序坞碰都不碰（不查、不改、不重启）" '[ $rc -eq 0 ] && [ -z "$out" ] && [ "$(kills)" = 0 ] && [ ! -s "$T/lsappinfo.log" ] && perl -e "exit($t1 - $t0 < 2 ? 0 : 1)"'
+: > "$T/killall.log"; dk set '["A","Preview:nobid"]'
+sleep 30 & P=$!; n_open=$(grep -c 'cca-dock.app\] \[--args\]' open.log)
+t0=$(hires); out=$(run cca _dock-tidy "$DK/A.app" $P 2>&1); rc=$?; out2=$(run cca _dock-tidy "$DK/A.app" $P 2>&1); rc2=$?; t1=$(hires)
+dkwait open.log 1 "DOCK-APP-DONE $P"   # 第二个小 App：已经有一个在等这个进程号，马上退出
+waiters=$(ps -axww -o args= | grep -c "[ ]$P $DK/cca-dock ")
+ok "程序坞：cca _dock-tidy App 进程号：交给后台小 App（open -g -j -n，LSBackgroundOnly）等它退出，马上返回；同一个进程号只留一个在等" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ -z "$out$out2" ] && perl -e "exit($t1 - $t0 < 3 ? 0 : 1)" && [ "$(grep -c "cca-dock.app\] \[--args\]" open.log)" = $((n_open + 2)) ] && grep -qF "[-g] [-j] [-n] [-a] [$H/.cca/dock/cca-dock.app] [--args]" open.log && [ "$(plutil -extract LSBackgroundOnly raw "$H/.cca/dock/cca-dock.app/Contents/Info.plist")" = true ] && [ -x "$H/.cca/dock/cca-dock.app/Contents/MacOS/cca-dock" ] && [ "$waiters" = 1 ] && [ -f "$DK/cca-dock/$P.wait" ] && [ "$(kills)" = 0 ]'
+kill $P; wait $P 2>/dev/null; dkwait open.log 2 "DOCK-APP-DONE $P"
+ok "程序坞：等的那个实例退出了才整理，等待的锁文件删掉" '[ "$(kills)" = 1 ] && [ "$(dk get)" = "Preview:nobid" ] && [ ! -e "$DK/cca-dock/$P.wait" ]'
+: > "$T/killall.log"; dk set '["A"]'; sleep 0 & P=$!; wait $P
+run cca _dock-tidy "$DK/A.app" $P >/dev/null 2>&1; dkwait open.log 1 "DOCK-APP-DONE $P"
+out=$(run cca _dock-tidy "$DK/A.app" 12x 2>&1); rc=$?
+ok "程序坞：交过去时那个实例已经退出了：马上整理；进程号不是数字的不收" '[ "$(kills)" = 1 ] && [ -z "$(dk get)" ] && [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法: cca _dock-tidy"'
+: > "$T/killall.log"; : > "$T/lsappinfo.log"; dk set '["A","Preview:nobid"]'
+printf '%s\n' '12) "A" ASN:0x0-0x1234:' '    bundleID="local.cca.test.a"' "    bundle path=\"$DK/A.app\"" '    pid = 123 type="Foreground" flavor=3 (exited-with-subordinates) ' > "$T/lsappinfo.txt"
+run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1 & TP=$!
+dkwait "$T/lsappinfo.log" 2 "LSAPPINFO list"; held=$(kills)
+rm -f "$T/lsappinfo.txt"; wait $TP
+ok "程序坞：App 退出了、LaunchServices 还留着它的记录（exited-with-subordinates：它起的进程还在）时先不重启（重启的程序坞会照着记录把它加回去），记录没了再整理" '[ "$held" = 0 ] && [ "$(kills)" = 1 ] && [ "$(dk get)" = "Preview:nobid" ]'
+printf '%s\n' '12) "B" ASN:0x0-0x1235:' '    bundleID="local.cca.test.b"' '    pid = 124 type="Foreground" (exited-with-subordinates)' '13) "A" ASN:0x0-0x1236:' '    bundleID="local.cca.test.a"' "    bundle path=\"$DK/A.app\"" '    pid = 125 type="Foreground"' > "$T/lsappinfo.txt"
+: > "$T/killall.log"; dk set '["A"]'; run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1; rm -f "$T/lsappinfo.txt"
+ok "程序坞：别的 App 留着的记录、这个 App 正常开着的实例的记录不算" '[ "$(kills)" = 1 ]'
+: > "$T/killall.log"; : > "$T/lsappinfo.log"; dk set '["A","B","Preview:nobid"]'; echo A > "$T/dock_readd"
+printf '%s\n' '12) "A" ASN:0x0-0x1234:' '    bundleID="local.cca.test.a"' '    pid = 123 type="Foreground" (exited-with-subordinates)' > "$T/lsappinfo.txt"
+run cca _dock-tidy "$DK/A.app" >/dev/null 2>&1 & TH=$!
+dkwait "$T/lsappinfo.log" 1 "LSAPPINFO list"   # 拿着锁，在等 A 的记录
+t0=$(hires); run cca _dock-tidy "$DK/B.app" >/dev/null 2>&1; t1=$(hires)
+dkwait "$T/killall.log" 1 "KILLALL Dock"; n1=$(kills); r1=$(dk get)
+rm -f "$T/lsappinfo.txt"; wait $TH
+ok "程序坞：已经有一个在整理（拿着锁）时，新来的记一笔就走，由那一个一起整理" 'perl -e "exit($t1 - $t0 < 2 ? 0 : 1)" && [ "$n1" = 1 ]'
+ok "程序坞：有的 App 的记录一直不清（它起的进程还在）时不拖累别的：别的先整理（重启前它的图标也拿掉，新的程序坞照着记录加回一个，不会多），记录没了再整理它" '[ "$r1" = "Preview:nobid A-back" ] && [ "$(kills)" = 2 ] && [ "$(dk get)" = "Preview:nobid" ] && [ -z "$(ls "$DK/cca-dock" | grep exited)" ]'
 
 # 12. 一键还原：移除端口池需要重载（restore 已确认）
 cp -R "$T/appsrc/9.9.16/cca.app" "$GA"; "$GA/Contents/MacOS/cca" & GUIPID=$!; sleep 0.3

@@ -52,10 +52,18 @@ func sessionScriptTests() async {
     let plain = TerminalHandoff.script(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: "/x/cca")
     check("普通交接不 cd、不进 shell", !plain.contains("cd --") && !plain.contains("exec \"${SHELL") && plain.contains("按任意键关闭"))
     check("系统终端：按键之后关掉窗口（别的终端不发 Apple Event）", plain.contains("TERM_PROGRAM:-}\" = Apple_Terminal") && plain.contains("close window id i") && plain.contains("if [ -t 0 ]; then cca_wait_close; fi"))
-    let syntax = tmpRoot.appendingPathComponent("handoff-syntax.command")
-    try? plain.write(to: syntax, atomically: true, encoding: .utf8)
-    let parsed = try? await CcaProcess.run(ProcessSpec(executable: "/bin/bash", arguments: ["-n", syntax.path], environment: ["PATH": "/usr/bin:/bin"], timeout: 10))
-    check("交接脚本语法没问题", parsed?.exitCode == 0, parsed?.stderrText ?? "")
+    // 退出系统终端以后整理程序坞：cca 有 _dock-tidy（hello.dock）才交给它，旧版 cca 不认识这个子命令（会当成启动账号）
+    let tidy = TerminalHandoff.script(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: "/x/cca", dockTidy: true)
+    check("旧版 cca：退出终端后不调 _dock-tidy", plain.contains("cca_tidy=''") && plain.contains("[ -n \"$5\" ]"))
+    check("新版 cca：退出终端后交给 cca _dock-tidy 终端 进程号", tidy.contains("cca_tidy='/x/cca'") && tidy.contains("exec \"$5\" _dock-tidy \"$4\" \"$3\"")
+          && tidy.contains("*/Contents/MacOS/Terminal) tpid=$p tapp=${c%/Contents/MacOS/Terminal}"))
+    check("只在关掉了最后一个窗口、退出了“终端”时整理", tidy.contains("if (count of windows) > 0 then return \"\"") && tidy.contains("= quit ]"))
+    for (name, text) in [("handoff-syntax.command", plain), ("handoff-syntax-tidy.command", tidy)] {
+        let syntax = tmpRoot.appendingPathComponent(name)
+        try? text.write(to: syntax, atomically: true, encoding: .utf8)
+        let parsed = try? await CcaProcess.run(ProcessSpec(executable: "/bin/bash", arguments: ["-n", syntax.path], environment: ["PATH": "/usr/bin:/bin"], timeout: 10))
+        check("交接脚本语法没问题（\(name)）", parsed?.exitCode == 0, parsed?.stderrText ?? "")
+    }
 
     // App 收回和脚本开始运行抢同一个 rename，只有一边成功
     if let u = try? TerminalHandoff.write(Handoff(arguments: ["edit"], title: "编辑"), ccaPath: cca.path, directory: dir) {

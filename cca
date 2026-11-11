@@ -6768,6 +6768,335 @@ def cmd_presence_stop():
         time.sleep(0.1)
 
 
+# ---------------------------------------------------------------------------
+# 程序坞：cca 打开的 App 实例（账号的 Chrome、Claude / ChatGPT App，终端交接用的系统终端）退出以后，程序坞开着「最近使用的 App」
+# （系统默认开着）时会把它留在那一栏里；同一个 App 多开的，每退出一个就多留一个，固定在程序坞上的 App 也照样留（实测）。
+# cca _dock-tidy 把这些去掉：程序坞只在启动时读设置，改完要重启它（图标栏消失再出来，不到一秒；在跑的实例它自己加回来）。
+# 设置要经 cfprefsd 读写（直接改 plist 文件程序坞看不到）。只在真有留下的图标时才改、才重启；config.json 的 dock_tidy 设成 false 时不整理。
+# 重启前要等 App 在 LaunchServices 里的记录没了：主程序退出了，它起的进程（同一个 coalition，setsid、disclaim 了也算）或交给 launchd 的
+# 任务还在时，记录留着（lsappinfo 里是 exited-with-subordinates），这时起来的程序坞照着它又把 App 加回「最近使用的 App」
+# （日志里是 Adding already-exited process；实测和退出了多久无关）。所以等待、整理的进程自己由 LaunchServices 当作后台小 App 启动
+# （bash 的 dock_watch），不算任何调用者 App 的下属；几个先后退出的一起整理、只重启一次；重启后再看一眼，又加回来了就再等、再重启一次。
+# 有的 App 的记录一直不清（下属一直在）时不拖累别的：别的最多陪它等 DOCK_GRACE，它自己越等查得越慢、最多等 DOCK_WAIT_MAX
+# ---------------------------------------------------------------------------
+DOCK_DOMAIN = 'com.apple.dock'
+DOCK_QUIET = 3         # 最近一次退出以后至少等这么久：程序坞在 App 退出一两秒后才把它记进「最近使用的 App」（实测 1.5～2.6 秒）
+DOCK_LOOK = 10         # 重启以后过这么久再看一眼：程序坞起来、把在跑的实例加回去，再把设置写下来，要几秒
+DOCK_GRACE = 60        # 一起整理的 App 里有的记录一直不清时，别的最多陪它等这么久，然后先整理别的
+DOCK_WAIT_MAX = 3600   # 记录一直不清的 App 最多等这么久（越等查得越慢：dock_poll），过了就不管它了
+
+
+def dock_prefs(domain):
+    """(读, 写)：程序坞设置里的一项，值是 plistlib 的类型（列表、字典、bytes……）。平时经 CoreFoundation（ctypes）读写 cfprefsd 里的
+    com.apple.dock。domain 是文件的路径时（测试的沙箱）直接读写这个文件：这种设置经 cfprefsd 的话，同一个进程读不到自己、
+    别的进程后来写的（实测；普通的设置没有这个问题）"""
+    import plistlib
+    if domain.startswith('/'):
+        def load():
+            try:
+                with open(domain, 'rb') as f:
+                    d = plistlib.load(f)
+            except (OSError, ValueError):
+                return {}
+            return d if isinstance(d, dict) else {}
+
+        def fget(key):
+            return load().get(key)
+
+        def fput(key, value):
+            d = load()
+            d[key] = value
+            tmp = '%s.cca-%d.tmp' % (domain, os.getpid())
+            try:
+                with open(tmp, 'wb') as f:
+                    plistlib.dump(d, f, fmt=plistlib.FMT_BINARY)
+                os.replace(tmp, domain)
+            except OSError:
+                return False
+            return True
+        return fget, fput
+    import ctypes
+    cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+    P = ctypes.c_void_p
+
+    def fn(name, res, *args):
+        f = getattr(cf, name)
+        f.restype, f.argtypes = res, list(args)
+        return f
+    mkstr = fn('CFStringCreateWithCString', P, P, ctypes.c_char_p, ctypes.c_uint32)
+    copy = fn('CFPreferencesCopyAppValue', P, P, P)
+    setv = fn('CFPreferencesSetAppValue', None, P, P, P)
+    sync = fn('CFPreferencesAppSynchronize', ctypes.c_bool, P)
+    to_data = fn('CFPropertyListCreateData', P, P, P, ctypes.c_long, ctypes.c_ulong, P)
+    from_data = fn('CFPropertyListCreateWithData', P, P, P, ctypes.c_ulong, P, P)
+    data_new = fn('CFDataCreate', P, P, ctypes.c_char_p, ctypes.c_long)
+    data_len = fn('CFDataGetLength', ctypes.c_long, P)
+    data_ptr = fn('CFDataGetBytePtr', P, P)
+    release = fn('CFRelease', None, P)
+
+    def names(key):
+        return mkstr(None, domain.encode(), 0x08000100), mkstr(None, key.encode(), 0x08000100)   # kCFStringEncodingUTF8
+
+    def get(key):
+        d, k = names(key)
+        try:
+            sync(d)   # 程序坞刚写的也要读到（不用这个进程里缓存的）
+            v = copy(k, d)
+            if not v:
+                return None
+            data = to_data(None, v, 100, 0, None)   # kCFPropertyListXMLFormat_v1_0
+            release(v)
+            if not data:
+                return None
+            try:
+                return plistlib.loads(ctypes.string_at(data_ptr(data), data_len(data)))
+            except ValueError:
+                return None
+            finally:
+                release(data)
+        finally:
+            release(d)
+            release(k)
+
+    def put(key, value):
+        raw = plistlib.dumps(value, fmt=plistlib.FMT_XML)
+        data = data_new(None, raw, len(raw))
+        if not data:
+            return False
+        v = from_data(None, data, 0, None, None)
+        release(data)
+        if not v:
+            return False
+        d, k = names(key)
+        try:
+            setv(k, v, d)
+            return bool(sync(d))
+        finally:
+            release(v)
+            release(d)
+            release(k)
+    return get, put
+
+
+def dock_tile_path(tile):
+    """程序坞的一个图标指着的 App 的位置（真实路径）；不是文件的图标是 None"""
+    from urllib.parse import unquote, urlparse
+    d = tile.get('tile-data') if isinstance(tile, dict) else None
+    f = d.get('file-data') if isinstance(d, dict) else None
+    u = f.get('_CFURLString') if isinstance(f, dict) else None
+    if not isinstance(u, str) or not u.startswith('file://'):
+        return None
+    return os.path.realpath(unquote(urlparse(u).path).rstrip('/') or '/')
+
+
+def dock_tile_is(tile, bid, path):
+    """程序坞的一个图标是不是这个 App：按 bundle id 认，图标里没有 bundle id 时按位置认"""
+    d = tile.get('tile-data') if isinstance(tile, dict) else None
+    if not isinstance(d, dict):
+        return False
+    if bid and d.get('bundle-identifier') == bid:
+        return True
+    return bool(path) and dock_tile_path(tile) == path
+
+
+def dock_app(path):
+    """App 的 (bundle id, 主程序的路径)：从 Info.plist 读，读不到的是 None"""
+    import plistlib
+    try:
+        with open(os.path.join(path, 'Contents', 'Info.plist'), 'rb') as f:
+            info = plistlib.load(f)
+    except (OSError, ValueError):
+        info = None
+    info = info if isinstance(info, dict) else {}
+    bid, exe = info.get('CFBundleIdentifier'), info.get('CFBundleExecutable')
+    return (bid if isinstance(bid, str) and bid else None,
+            os.path.join(path, 'Contents', 'MacOS', exe) if isinstance(exe, str) and exe else None)
+
+
+def dock_tidied(get, apps, exited=()):
+    """重启程序坞前的「最近使用的 App」：apps（App 的路径）退出后留下的图标去掉；apps 都没有多出来的图标、看不清（ps 失败）时是 None。
+    在跑的实例各占一个图标（主程序是 Info.plist 写的那个的进程；Chrome、Electron 的辅助进程是别的程序，不算），固定在程序坞上的
+    App 有一个实例用固定的那个图标；比这多出来的就是退出后留下的。要重启时开着的 App、LaunchServices 还留着记录的 App（exited，
+    dock_exited 给的）的图标也都拿掉：新的程序坞给每个在跑的实例、每条这样的记录重新加一个，不认原来的（同一个 App 多开的实测会多出一个）"""
+    import subprocess
+    try:
+        out = subprocess.run(['ps', '-axo', 'comm='], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    procs = [line.strip() for line in out.splitlines()]
+    recent, pinned = get('recent-apps'), get('persistent-apps')
+    recent = recent if isinstance(recent, list) else []
+    pinned = pinned if isinstance(pinned, list) else []
+    known = {}
+
+    def running(path):
+        if path not in known:
+            exe = dock_app(path)[1]
+            known[path] = procs.count(exe) if exe else 0
+        return known[path]
+    mine = [(dock_app(p)[0], p) for p in apps]
+    if not any(sum(1 for t in recent if dock_tile_is(t, b, p)) > max(0, running(p) - (1 if any(dock_tile_is(t, b, p) for t in pinned) else 0))
+               for b, p in mine):
+        return None
+    gone = mine + list(exited)
+    return [t for t in recent if not any(dock_tile_is(t, b, p) for b, p in gone)
+            and not (dock_tile_path(t) and running(dock_tile_path(t)))]
+
+
+def dock_exited():
+    """LaunchServices 里退出了、还留着记录的 App：[(bundle id, 真实路径)]（exited-with-subordinates：它起的进程、交给 launchd 的任务还在；
+    同一个 App 开着的实例是正常的记录，不算）。lsappinfo 用不了时是 []"""
+    import subprocess
+    try:
+        out = subprocess.run(['lsappinfo', 'list'], stdin=subprocess.DEVNULL, capture_output=True, timeout=10).stdout.decode('utf-8', 'replace')
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for entry in re.split(r'\n(?=\s*\d+\) )', out):
+        if '(exited' not in entry:
+            continue
+        bid = re.search(r'bundleID=\x22([^\x22\n]+)\x22', entry)
+        path = re.search(r'bundle path=\x22([^\x22\n]+)\x22', entry)
+        if bid or path:
+            found.append((bid and bid.group(1), path and os.path.realpath(path.group(1))))
+    return found
+
+
+def dock_poll(waited):
+    """记录不清时多久再查一次（lsappinfo 一次三四十毫秒）：刚开始 2 秒，等了一分钟以后 10 秒，十分钟以后 30 秒"""
+    return 2.0 if waited < 60 else 10.0 if waited < 600 else 30.0
+
+
+def cmd_dock_tidy(app='', lockdir=''):
+    """cca _dock-tidy App：去掉程序坞「最近使用的 App」里这个 App 退出后留下的图标（bash 的 dock_watch 等它退出以后调）。
+    先在 lockdir/exited 里记一笔（这个文件的修改时间就是最近一次退出）；锁（tidy.lock）有人拿着就走，拿着锁的那个会把记着的一起整理。
+    拿到锁的等最近一次退出满 DOCK_QUIET 秒、记着的 App 在 LaunchServices 里的记录没了，把它们一起整理、只重启一次程序坞；
+    有的记录一直不清时，别的最多陪它等 DOCK_GRACE 秒就先整理，它自己最多等 DOCK_WAIT_MAX 秒。放锁以后再看一眼有没有新记的，
+    有就再拿锁接着整理（刚才没拿到锁就走了的那个记的不会没人管）。后台跑的：什么都不说，出错就算了"""
+    import subprocess
+    if not app:
+        return
+    c = load_quiet(CFG)
+    if isinstance(c, dict) and c.get('dock_tidy') is False:
+        return
+    domain = os.environ.get('CCA_DOCK_PREFS') or DOCK_DOMAIN   # 测试里是沙箱里的文件
+    if domain == DOCK_DOMAIN:
+        import pwd
+        try:
+            if os.path.realpath(os.path.expanduser('~')) != os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir):
+                return   # HOME 换过（测试的沙箱）：程序坞的设置还是这个用户真正的那一份，不碰
+        except KeyError:
+            return
+    try:
+        get, put = dock_prefs(domain)
+    except (OSError, AttributeError):
+        return
+    if get('show-recents') is False:
+        return   # 不显示最近使用的 App：退出了图标就没了
+    try:
+        quiet = look = grace = max(0.0, float(os.environ['CCA_DOCK_SETTLE']))   # 测试：等待都换成这么久
+    except (KeyError, ValueError):
+        quiet, look, grace = DOCK_QUIET, DOCK_LOOK, DOCK_GRACE
+    first = os.path.realpath(app)
+    pending, added, tries = [first], {first: time.monotonic()}, {}
+    note = lock = None
+    if lockdir:
+        try:
+            os.makedirs(lockdir, mode=0o700, exist_ok=True)
+            fd = os.open(os.path.join(lockdir, 'exited'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, (first + '\n').encode())
+            finally:
+                os.close(fd)
+            note = os.path.join(lockdir, 'exited')
+            lock = open(os.path.join(lockdir, 'tidy.lock'), 'a')
+        except OSError:
+            lock = None
+
+    def take():
+        """记在 exited 里的 App 一起整理：先改名再读，改名以后才退出的记进新的文件"""
+        if not note:
+            return
+        mine = '%s.%d' % (note, os.getpid())
+        try:
+            os.rename(note, mine)
+        except OSError:
+            return
+        try:
+            with open(mine, encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    p = line.rstrip('\n')
+                    if p and p not in pending:   # 新退出的（以前整理过、放弃过的也重新算）
+                        pending.append(p)
+                        added[p] = time.monotonic()
+                        tries.pop(p, None)
+        except OSError:
+            pass
+        try:
+            os.unlink(mine)
+        except OSError:
+            pass
+
+    def tidy():
+        """拿着锁整理 pending 里的，直到都整理完、放弃了"""
+        since, held = time.time(), None   # since：最近一次重启（开始时是退出）；held：没记录的 App 从什么时候起在陪着等
+        while True:
+            try:
+                last = os.stat(note).st_mtime if note else 0
+            except OSError:
+                last = 0
+            left = max(since, last) + quiet - time.time()
+            if left > 0:
+                time.sleep(min(left, 5.0))
+                continue
+            take()
+            now = time.monotonic()
+            pending[:] = [p for p in pending if now - added[p] < DOCK_WAIT_MAX]   # 等太久的不管了
+            if not pending:
+                return
+            exited = dock_exited()
+            stuck = [p for p in pending if any((b and b == dock_app(p)[0]) or r == p for b, r in exited)]
+            ready = [p for p in pending if p not in stuck]
+            if stuck:
+                held = now if held is None else held
+                if not ready or now - held < grace:
+                    time.sleep(dock_poll(now - min(added[p] for p in stuck)))
+                    continue
+            new = dock_tidied(get, ready, exited)
+            if new is None:   # 都没有多出来的图标了（或者看不清）
+                pending[:] = stuck
+                continue
+            if not put('recent-apps', new):
+                return
+            try:
+                subprocess.run(['killall', 'Dock'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            time.sleep(look)   # 新的程序坞起来、把在跑的实例加回去以后再看
+            for p in ready:
+                tries[p] = tries.get(p, 0) + 1
+            # 又被加回来的（重启时记录还在）再等一轮、再重启一次，最多两次
+            pending[:] = stuck + [p for p in ready if tries[p] < 2 and dock_tidied(get, [p]) is not None]
+            since, held = time.time(), None
+    try:
+        while True:
+            if lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return   # 有人拿着锁：他会把记着的一起整理
+            tidy()
+            if not lock:
+                return
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            if not os.path.exists(note):
+                return
+            # 放锁前后有人记了一笔（他没拿到锁就走了）：再拿锁接着整理
+    finally:
+        if lock:
+            lock.close()
+
+
 def past_time(t, now):
     """过去的某个时刻（和 App 的 Texts.pastTime 一样）：今天的写几点，昨天的写“昨天 几点”，一周内写星期几，再早写日期"""
     lt, ln = time.localtime(t), time.localtime(now)
@@ -8418,7 +8747,7 @@ CMDS = {
     'leak-probe': cmd_leak_probe, 'leak-verdict': cmd_leak_verdict,
     'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
     'presence-agent': cmd_presence_agent, 'presence-wake': cmd_presence_wake, 'presence-stop': cmd_presence_stop,
-    'presence-note': cmd_presence_note, 'presence-view': cmd_presence_view,
+    'presence-note': cmd_presence_note, 'presence-view': cmd_presence_view, 'dock-tidy': cmd_dock_tidy,
     'prompt-emit': cmd_prompt_emit,
     'check-render': cmd_check_render,
 }
@@ -10833,6 +11162,96 @@ preflight() {   # preflight [app]：账号的出口必须可用且干净，否�
 	return 0
 }
 
+# 程序坞：cca 打开的 App 实例（账号的 Chrome、桌面 App）、终端交接用完退出的系统终端，退出以后去掉程序坞「最近使用的 App」里留下的图标
+# （见 py 的程序坞一节）。等它退出、整理的进程经 open 当作一个后台小 App（DOCK_APP，LSBackgroundOnly：不在程序坞里出现）来跑：
+# 直接从 cca 起的话，它算调用 cca 的那个 App（终端交接时是系统终端）的下属（setsid、disclaim、launchctl submit 都一样，实测），
+# 那个 App 退出以后 LaunchServices 还留着它的记录，整理时重启的程序坞照着记录又把它加回去。
+# 小 App 里是一个很小的 Python 等那个实例退出（kqueue，不轮询，十来 MB），退出了再换成 cca _dock-tidy App 去整理。
+# 同一个实例只留一个在等（锁文件：账号的 Chrome 每次被 cca 用到都会来一次）
+DOCK_DIR="${PYC_DIR:+${PYC_DIR%/cca-py}/cca-dock}"
+[ -z "${CCA_DOCK_PREFS:-}" ] || DOCK_DIR="${CCA_DOCK_PREFS%/*}/cca-dock"   # 测试：程序坞的设置是沙箱里的文件，排队、等待的记录也放在它旁边
+DOCK_APP="$CCA_HOME/dock/cca-dock.app"
+DOCK_APP_SH='#!/bin/bash
+# cca 生成的后台小 App：等 cca 打开的 App 实例退出，整理程序坞（cca _dock-wait）。经 open 启动，不算调用 cca 的那个 App 的下属
+export PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+while [ "$#" -gt 0 ]; do case "$1" in -psn_*) shift ;; *) break ;; esac; done
+[ "$#" -eq 4 ] || exit 0
+export CCA_PYTHON="$2"   # 和起它的 cca 用同一个 python3（这里的 PATH 是 launchd 的，找到的不一定是那一个）
+exec "$1" _dock-wait "$3" "$4" </dev/null >/dev/null 2>&1'
+DOCK_APP_PLIST='<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key><string>cca-dock</string>
+	<key>CFBundleIdentifier</key><string>local.cca.dock</string>
+	<key>CFBundleName</key><string>cca-dock</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>1.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>LSBackgroundOnly</key><true/>
+</dict>
+</plist>'
+DOCK_WAIT='import fcntl, os, select, sys
+pid, d, argv = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
+lock = None
+if d:
+    try:
+        os.makedirs(d, 0o700, exist_ok=True)
+        lock = open(os.path.join(d, "%d.wait" % pid), "a")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(0)
+    except OSError:
+        lock = None
+kq = select.kqueue()
+try:
+    kq.control([select.kevent(pid, select.KQ_FILTER_PROC, select.KQ_EV_ADD | select.KQ_EV_ONESHOT, select.KQ_NOTE_EXIT)], 0, 0)
+    kq.control(None, 1)
+except OSError:
+    pass
+if lock:
+    try:
+        os.unlink(lock.name)
+    except OSError:
+        pass
+try:
+    os.execv(argv[0], argv)
+except OSError:
+    pass'
+dock_app() {   # 后台小 App 的路径（没有、内容不对就重写）
+	local c="$DOCK_APP/Contents"
+	if [ "$(cat "$c/MacOS/cca-dock" 2>/dev/null)" != "$DOCK_APP_SH" ] || [ "$(cat "$c/Info.plist" 2>/dev/null)" != "$DOCK_APP_PLIST" ]; then
+		mkdir -p "$c/MacOS" || return 1
+		printf '%s\n' "$DOCK_APP_PLIST" > "$c/Info.plist.tmp" && mv -f "$c/Info.plist.tmp" "$c/Info.plist" || return 1
+		printf '%s\n' "$DOCK_APP_SH" > "$c/MacOS/cca-dock.tmp" && chmod 755 "$c/MacOS/cca-dock.tmp" && mv -f "$c/MacOS/cca-dock.tmp" "$c/MacOS/cca-dock" || return 1
+	fi
+	printf '%s\n' "$DOCK_APP"
+}
+dock_hand() {   # dock_hand 进程号 App：交给后台小 App 等这个实例退出、整理程序坞（已经退出了也交：小 App 马上整理）；不占这条命令的时间。
+	# 锁（fd 9）、答案管道（fd 3）不带过去；config.json 里关掉了就不起（py 那边整理前还会再看）
+	local a
+	grep -Eq '"dock_tidy"[[:space:]]*:[[:space:]]*false' "$CFG" 2>/dev/null && return 0
+	a=$(dock_app) || return 0
+	( open -g -j -n -a "$a" --args "$SELF" "$PYTHON" "$1" "$2" </dev/null >/dev/null 2>&1 3<&- 4<&- 9>&- & )
+	return 0
+}
+dock_watch() {   # dock_watch 进程号 App：cca 打开、用到的实例（还开着的）退出以后整理程序坞
+	[ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+	kill -0 "$1" 2>/dev/null || return 0
+	dock_hand "$1" "$2"
+}
+cmd_dock_tidy() {   # cca _dock-tidy App [进程号]：带进程号时交给后台小 App 等它退出（终端交接的脚本退出系统终端以后也这样调，PROTOCOL 6）
+	case "${2:-}" in
+		'') CCA_SELF="$SELF" exec "${PYRUN[@]}" dock-tidy "${1:-}" "$DOCK_DIR" ;;
+		*[!0-9]*) die "用法: cca _dock-tidy App [进程号]" ;;
+		*) [ -z "${1:-}" ] || dock_hand "$2" "$1" ;;
+	esac
+}
+cmd_dock_wait() {   # cca _dock-wait 进程号 App：后台小 App 里跑的，等那个实例退出（已经没了就不等），再换成 cca _dock-tidy App
+	case "${1:-}" in ''|*[!0-9]*) return 0 ;; esac
+	exec "$PYTHON" -I -c "$DOCK_WAIT" "$1" "$DOCK_DIR" "$SELF" _dock-tidy "${2:-}"
+}
+
 chrome_app_path() {
 	local app
 	for app in /Applications/Google\ Chrome.app "$HOME/Applications/Google Chrome.app"; do
@@ -10881,6 +11300,7 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 			return 1
 		}
 		app_profile_in_use "$pid" "$ACC_CHROME_DIR" || { fail_warn open_failed "无法核验已有 Chrome 的账号资料目录，请退出后重开"; return 1; }
+		dock_watch "$pid" "$app"   # 以前的版本打开的也等（已经有一个在等就不再起）
 	else
 		py browser-profile prepare "$ACC_KEY" || return 1
 		# 先启动空白页，核验后才主动交付目标网址；Chrome 自身仍可能恢复旧标签或发起后台请求。
@@ -10893,6 +11313,7 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 		done
 		[ -n "$ready" ] || { fail_warn open_failed "无法核验 Chrome 使用账号自己的资料目录，未打开目标网址；请退出空白窗口后重试"; return 1; }
 		py runtime-record write "$ACC_KEY" browser "$pid" "$ACC_CHROME_DIR" "$app" "$ACC_PROXY" || return 1
+		dock_watch "$pid" "$app"   # 退出以后程序坞不留它的图标
 	fi
 	chrome_open_url "$app" "$url"
 )
@@ -11093,6 +11514,7 @@ app_activate_existing() {   # 不接管或终止已有实例；不能验证时�
 		py codex-fallback-off || FAIL_CODE=settings_conflict die "已有的 ChatGPT App 无法确认已关闭系统代理回退；请保存工作并退出 App，再用 cca 打开"
 	fi
 	activate_pid "$1"
+	dock_watch "$1" "$3"   # 以前的版本打开的也等（已经有一个在等就不再起）
 	py presence-wake "$ACC_KEY" >/dev/null 2>&1   # 映射里的账号：确保在报告给维护者的服务器（设备统计）
 	info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 	gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
@@ -11191,6 +11613,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	APP_LAUNCH_ACTIVE=""
 	app_launch_restore_traps
 	app_launch_unlock
+	dock_watch "$pid" "$app"   # 退出以后程序坞不留它的图标
 	py presence-wake "$key" >/dev/null 2>&1   # 映射里的账号：报告给维护者的服务器（设备统计）
 	okay "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	gui_result opened "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
@@ -12409,7 +12832,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/codex.json" ] && cx=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s}},' "$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")"
 	printf '"gui":{"app":%s,"app_version":%s,"staged_version":%s}}\n' "$(jstr "$GUI_APP")" "$(jopt "$av")" "$(jopt "$sv")"
@@ -13125,7 +13548,8 @@ Codex（账号表 ~/.cca/codex.json，和 Claude 账号分开记：同一个人�
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
                              leak_check（设成 false：启动前不测 DNS / WebRTC 泄露）、
-                             presence（设成 false：这台 Mac 不向维护者的服务器报告、也不查设备统计）
+                             presence（设成 false：这台 Mac 不向维护者的服务器报告、也不查设备统计）、
+                             dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）
 EOF
 }
 
@@ -13134,7 +13558,7 @@ main() {
 	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes|_presence-agent) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-nodes|_presence-agent|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	case "${1:-}" in
 		install) cmd_install ;;
 		help|-h|--help) usage ;;
@@ -13157,6 +13581,8 @@ main() {
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）
 		_core-nodes) shift; cmd_core_nodes "$@" ;;   # 后台：从路由器拷节点定义、下载内核给内置代理
 		_presence-agent) CCA_SELF="$SELF" exec "${PYRUN[@]}" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
+		_dock-tidy) shift; cmd_dock_tidy "$@" ;;   # 后台：cca 打开的 App 实例退出后整理程序坞（见 py 的程序坞一节；终端交接的脚本也调，PROTOCOL 6）
+		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
 		gui) shift; cmd_gui "$@" ;;
 		clients) shift; cmd_clients "$@" ;;
 		update) shift; cmd_update "$@" ;;

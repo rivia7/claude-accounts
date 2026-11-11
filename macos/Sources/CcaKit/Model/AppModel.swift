@@ -1091,7 +1091,7 @@ final class AppModel {
         }
         let url: URL
         do {
-            url = try TerminalHandoff.write(h, ccaPath: path, directory: handoffDirectory)
+            url = try TerminalHandoff.write(h, ccaPath: path, directory: handoffDirectory, dockTidy: hello?.dock == 1)
         } catch {
             showToast("没能写交接文件：\(error.localizedDescription)", .warning)
             return

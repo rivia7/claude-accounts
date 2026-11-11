@@ -160,8 +160,8 @@ enum TerminalHandoff {
     /// `.command` 文件的内容：bash；补好 PATH；去掉会让 cca 自作主张的变量；进要求的文件夹；逐个加了单引号运行命令；
     /// 结束时等按任意键再关窗口（账号的会话留在 shell 里，这个窗口接着能用）。文件一开始就挪走再删掉（bash 已经打开了它，
     /// 照样往下读；这样中途关窗口也不会留下文件）。挪走这一步和 App 的 `reclaim` 抢同一个 rename：App 收回了就不运行，
-    /// 不会换了终端又跑一遍。
-    static func script(_ h: Handoff, ccaPath: String) -> String {
+    /// 不会换了终端又跑一遍。dockTidy：cca 有 `_dock-tidy`（`hello.dock`）时，系统终端退出后去掉程序坞里它留下的图标。
+    static func script(_ h: Handoff, ccaPath: String, dockTidy: Bool = false) -> String {
         let command = ([ccaPath] + h.arguments).map(shellQuote).joined(separator: " ")
         let enter = h.directory.map { dir in
             "cd -- \(shellQuote(dir)) || { echo \(shellQuote("打不开这个文件夹：" + dir)); cca_wait_close; exit 1; }\n"
@@ -183,6 +183,7 @@ enum TerminalHandoff {
         rm -f -- "$0.run"
         export PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
         unset CCA_TTY CCA_YES CCA_GRANT CCA_EVENTS CCA_RO CCA_SKIP_CHECK CCA_GUI CCA_PROMPT
+        cca_tidy=\(dockTidy ? shellQuote(ccaPath) : "''")
         \(waitClose)
         \(enter)printf '%s\\n\\n' \(shellQuote("$ " + h.display))
         \(command)
@@ -193,22 +194,51 @@ enum TerminalHandoff {
     }
 
     /// 等按键，按了就关窗口。系统自带的“终端”进程结束后默认留着窗口（[进程已完成]，配置文件里的“当 shell 退出时”），要自己关：
-    /// 趁脚本还在跑（busy）认出窗口的 id（已经结束的窗口还报着原来的 tty，新窗口会重用这个号，只按 tty 认可能认错），按键之后等 shell 退出再关这一个。
+    /// 趁脚本还在跑（busy）认出窗口的 id（已经结束的窗口还报着原来的 tty，新窗口会重用这个号，只按 tty 认可能认错）。
+    /// 认出来就在后台（setsid：关窗口、退出“终端”都不影响它）等脚本结束：按了键、点了关闭、^C 都算，经一根管道（脚本退出时写端关上，
+    /// 不轮询）。然后等 shell 退出、关这个窗口；“终端”没有别的窗口了（别的标签页、用户自己的窗口、最小化的都算）就退出它，免得它一直开在程序坞里；
+    /// cca 够新时（`cca_tidy` 是 cca 的路径）再交给 `cca _dock-tidy`，去掉程序坞「最近使用的 App」里它留下的图标：它只是把活交给 cca 的
+    /// 后台小 App 就退出（从这个窗口里起的进程都算“终端”的下属，还活着时重启的程序坞会把“终端”又加回去，所以这里什么都不能留下）。
     /// 窗口里还有别的标签页时不关（AppleScript 关不了单个标签页）。Terminal 发给自己的 Apple Event 不用授权（实测）；认不出、发不了就照旧留着窗口。
+    /// “终端”已经退出了（用户按了 ⌘Q）就不再找它：`tell` 会把它重新打开。
     private static let waitClose = #"""
     cca_wait_close() {
-    	local window=""
+    	local window="" p c tpid="" tapp="" as close
     	if [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
     		window=$(perl -e 'alarm 3; exec @ARGV' osascript -e 'on run argv' -e 'tell application "Terminal"' \
     			-e 'repeat with w in windows' \
     			-e 'if (count of tabs of w) is 1 and tty of tab 1 of w is item 1 of argv and busy of tab 1 of w then return id of w' \
     			-e 'end repeat' -e 'end tell' -e 'end run' "$(tty)" 2>/dev/null)
+    		p=$PPID
+    		while [ "${p:-0}" -gt 1 ] 2>/dev/null; do
+    			c=$(ps -o comm= -p "$p" 2>/dev/null)
+    			case "$c" in */Contents/MacOS/Terminal) tpid=$p tapp=${c%/Contents/MacOS/Terminal}; break ;; esac
+    			p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    		done
+    	fi
+    	if [ -n "$window" ]; then
+    		as='on run argv
+    	set i to (item 1 of argv) as integer
+    	if application "Terminal" is not running then return ""
+    	tell application "Terminal"
+    		repeat 50 times
+    			if not (exists window id i) then exit repeat
+    			if not busy of tab 1 of window id i then
+    				close window id i
+    				exit repeat
+    			end if
+    			delay 0.1
+    		end repeat
+    		if (count of windows) > 0 then return ""
+    		quit
+    	end tell
+    	return "quit"
+    end run'
+    		close='cat >/dev/null
+    [ "$(osascript -e "$1" "$2" 2>/dev/null)" = quit ] && [ -n "$3" ] && [ -n "$5" ] && exec "$5" _dock-tidy "$4" "$3"'
+    		exec 7> >(exec perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' /bin/bash -c "$close" cca-close "$as" "$window" "$tpid" "$tapp" "$cca_tidy" >/dev/null 2>&1)
     	fi
     	read -r -s -n 1 -p "按任意键关闭…" _; echo
-    	[ -n "$window" ] || return 0
-    	perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' osascript -e 'on run argv' -e 'set i to (item 1 of argv) as integer' -e 'tell application "Terminal"' \
-    		-e 'repeat 50 times' -e 'if not (exists window id i) then return' -e 'if not busy of tab 1 of window id i then' \
-    		-e 'close window id i' -e 'return' -e 'end if' -e 'delay 0.1' -e 'end repeat' -e 'end tell' -e 'end run' "$window" </dev/null >/dev/null 2>&1 &
     }
     """#
 
@@ -221,12 +251,12 @@ enum TerminalHandoff {
     }
 
     /// 写好 `.command` 文件（755），返回它的位置；打开它（用选好的终端）由 App 做。
-    static func write(_ handoff: Handoff, ccaPath: String, directory: URL = defaultDirectory()) throws -> URL {
+    static func write(_ handoff: Handoff, ccaPath: String, directory: URL = defaultDirectory(), dockTidy: Bool = false) throws -> URL {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         cleanup(directory: directory)
         let url = directory.appendingPathComponent("cca-\(UUID().uuidString.prefix(8)).command")
-        let text = script(handoff, ccaPath: ccaPath)
+        let text = script(handoff, ccaPath: ccaPath, dockTidy: dockTidy)
         try Data(text.utf8).write(to: url, options: .atomic)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url

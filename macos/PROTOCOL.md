@@ -65,6 +65,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `reorder`：有 `cca [codex] reorder`（4.7），App 调整账号顺序后写回账号表；没有这个字段（旧版 cca）时顺序只记在 App 里。
 - `prompt`：提问会话（4.6）的版本。没有这个字段（旧版 cca）或者版本不认识时，App 不开提问会话，流程走终端交接（6）。
 - `forms`：配置路由器、配置本机 Clash、账号表能在 App 里填表（4.6）。没有这个字段时这三条走终端交接。
+- `dock`：有 `cca _dock-tidy`（6）：终端交接退出系统终端以后，交给 cca 去掉程序坞「最近使用的 App」里它留下的图标。没有这个字段时交接脚本不调它（旧版 cca 会把不认识的 `_dock-tidy` 当成启动账号）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在。`bin` 是找到的 `claude` / `codex`，没装为 null。
 - `gui.app_version`：装着的 cca.app 的版本（没装为 null）；`gui.staged_version`：已经下载校验好、等 App 退出后再换上的版本（没有为 null）。
@@ -636,6 +637,12 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 `~/Library/Caches/local.cca.app/handoff/` 写一个临时的 `.command` 文件（`#!/bin/bash`，先把自己挪走再删掉，补好 `PATH`，去掉 `CCA_GUI` 等 App 给 cca 的变量，要换文件夹时先 `cd`，再运行逐个加了引号的
 命令（cca 用找到的绝对路径），结束后在终端里等按任意键，退出码就是命令的；账号的会话结束后留在用户的登录 shell 里），`chmod 755` 后打开：账号的「终端」按钮用用户选的终端，别的命令都用系统自带的“终端”。都不需要“自动化”权限。
 一小时前留下的 `.command` 文件 App 会清掉。用户回到 App（App 被激活）时重新读一次 `state`。
+
+用的是系统自带的“终端”时，按了任意键（或者点了关闭、^C）以后脚本关掉这个窗口（窗口里只有这一个标签页时）；“终端”没有别的窗口了就退出它，免得它一直开在程序坞里。
+`hello.dock` 有时再运行 `cca _dock-tidy <终端.app 的位置> <终端的进程号>`：cca 把活交给它自己的后台小 App（`~/.cca/dock/cca-dock.app`，经 LaunchServices 启动、`LSBackgroundOnly`，
+不在程序坞里出现）就返回；小 App 等“终端”退出、LaunchServices 里没了它的记录，再去掉「最近使用的 App」里它留下的图标、重启一次程序坞（图标栏消失再出来，不到一秒）。
+从这个窗口里起的进程都算“终端”的下属，还活着时 LaunchServices 留着“终端”的记录（`lsappinfo` 里是 `exited-with-subordinates`），重启的程序坞照着它又把“终端”加回去，
+所以关窗口的这一段除了交出去什么都不留下。cca 打开的账号 Chrome、Claude / ChatGPT App 退出以后 cca 自己同样整理，不经 App。
 
 账号的会话用哪个终端、从哪个文件夹启动（最近用过的，所有账号共用），都记在 App 自己的设置里，不进 `~/.cca`，cca 不知道也不用知道。
 App 按 bundle id 看这台 Mac 上装了哪些，没装的在选择列表里灰着、不能选。全自动：系统自带的“终端”、iTerm2、Warp、WezTerm、Hyper、cmux（把 `.command` 文件交给它们）、Ghostty、kitty、

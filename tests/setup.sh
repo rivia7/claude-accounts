@@ -603,6 +603,19 @@ S
 cat > "$T/bin/open" <<'S'
 #!/bin/bash
 { printf 'OPEN'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/open.log"
+# 程序坞整理用的后台小 App（~/.cca/dock/cca-dock.app）：像 LaunchServices 那样在后台运行它，带上 --args 后面的参数
+case " $* " in *"/cca-dock.app "*)
+	app="" previous="" after=""; args=()
+	for a in "$@"; do
+		if [ -n "$after" ]; then args+=("$a"); continue; fi
+		if [ "$a" = --args ]; then after=1; continue; fi
+		[ "$previous" != -a ] || app="$a"
+		previous="$a"
+	done
+	# 跑完（等到了、整理完，或者已经有一个在等这个进程号）记一笔 DOCK-APP-DONE 进程号：用例等它，不用干等
+	( "$app/Contents/MacOS/cca-dock" "${args[@]}" </dev/null >/dev/null 2>&1; echo "DOCK-APP-DONE ${args[2]:-}" >> "$CCA_T/open.log" ) </dev/null >/dev/null 2>&1 &
+	exit 0 ;;
+esac
 # 打开 Clash Verge：内核起来，并像它启动时那样按全局扩展脚本重新生成配置
 case " $* " in *" io.github.clash-verge-rev.clash-verge-rev "*) rm -f "$CCA_T/verge/down"; "$CCA_T/verge_regen"; exit 0 ;; esac
 # 在后台打开界面 App（--args --core：内置代理要内核）：像 App 那样在后台运行 cca _core run（App 托管内核）；core/app_dead 时 App 起不来内核
@@ -634,6 +647,61 @@ if [ -n "$profile" ] && [ ! -f "$CCA_T/open_noprofile" ]; then
 	started=$(LC_ALL=C /bin/ps -o lstart= -p "$owner")
 	printf '%s\n' "$owner" "$app/Contents/MacOS/$name $arguments" "$profile" "$started" > "$CCA_T/app-open/$pid"
 fi
+S
+# 程序坞：killall 只记一笔（不碰真的程序坞）；$CCA_T/dock_readd 里写着 App 时，像重启后的程序坞照 LaunchServices 的记录那样把它加回去一次。
+# lsappinfo 回 $CCA_T/lsappinfo.txt（模拟 LaunchServices 还留着退出了的 App 的记录），每次调用记在 lsappinfo.log
+cat > "$T/bin/killall" <<'S'
+#!/bin/bash
+echo "KILLALL $*" >> "$CCA_T/killall.log"
+if [ -f "$CCA_T/dock_readd" ]; then   # 第二行写着 keep 时每次都加回去
+	{ IFS= read -r a; IFS= read -r keep; } < "$CCA_T/dock_readd"
+	[ "$keep" = keep ] || rm -f "$CCA_T/dock_readd"
+	python3 -I "$CCA_T/dockpl.py" "$CCA_T/dock/dock.plist" add "$a"
+fi
+exit 0
+S
+cat > "$T/bin/lsappinfo" <<'S'
+#!/bin/bash
+echo "LSAPPINFO $*" >> "$CCA_T/lsappinfo.log"
+[ ! -f "$CCA_T/lsappinfo.txt" ] || cat "$CCA_T/lsappinfo.txt"
+exit 0
+S
+# 程序坞的设置（测试里是 plist 文件，cca 直接读写它）：set 最近使用的 [固定的] [show-recents]（JSON 里写 App 名，A:nobid 是不带 bundle id 的图标），
+# get 列出最近使用的，add App 加一个
+cat > "$T/dockpl.py" <<'S'
+import json, os, plistlib, sys
+dom, cmd = sys.argv[1], sys.argv[2]
+R = os.path.dirname(dom)
+def load():
+    try:
+        with open(dom, 'rb') as f:
+            return plistlib.load(f)
+    except OSError:
+        return {}
+def save(d):
+    with open(dom + '.tmp', 'wb') as f:
+        plistlib.dump(d, f)
+    os.replace(dom + '.tmp', dom)
+def tile(name, label, bid=True):
+    app = os.path.join(R, name + '.app')
+    d = {'file-data': {'_CFURLString': 'file://' + app + '/', '_CFURLStringType': 15}, 'file-label': label}
+    if bid:
+        with open(os.path.join(app, 'Contents', 'Info.plist'), 'rb') as f:
+            d['bundle-identifier'] = plistlib.load(f)['CFBundleIdentifier']
+    return {'tile-data': d, 'tile-type': 'file-tile'}
+def tiles(spec):
+    return [tile(s.split(':')[0], s, ':nobid' not in s) for s in json.loads(spec)]
+if cmd == 'set':
+    d = {'recent-apps': tiles(sys.argv[3]), 'persistent-apps': tiles(sys.argv[4]) if len(sys.argv) > 4 else []}
+    if len(sys.argv) > 5:
+        d['show-recents'] = sys.argv[5] == 'true'
+    save(d)
+elif cmd == 'get':
+    print(' '.join(t['tile-data']['file-label'] for t in load().get('recent-apps', [])))
+elif cmd == 'add':
+    d = load()
+    d.setdefault('recent-apps', []).append(tile(sys.argv[3], sys.argv[3] + '-back'))
+    save(d)
 S
 cat > "$T/bin/pgrep" <<'S'
 #!/bin/bash
