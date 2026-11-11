@@ -11,7 +11,7 @@ enum DeskPose {
     case away
     /// 坐着一个陌生人（登录的不是这个账号）
     case stranger
-    /// 趴在桌上睡觉（额度用完了）
+    /// 趴在桌上睡觉（额度用完了）：弓着背，头枕在胳膊上
     case sleeping
     /// 扶着额头冒汗（线路、出口有问题）
     case sweating
@@ -150,7 +150,7 @@ struct DeskScene: View {
 
 /// 工位的配色。家具在浅色、深色下各一套中性灰；屏幕本来就是深色的，两种外观一样。
 struct OfficePalette {
-    let deskTop, deskFront, drawer, chairBack, chairSeat, chairPole, frame, keyboard, mug, steam, zzz, pants, stranger: Color
+    let deskTop, deskFront, drawer, chairBack, chairSeat, chairPole, frame, keyboard, mug, steam, zzz, sweat, pants, stranger: Color
     let dark: Bool
 
     static let moon = Color(hex: 0xB3C2DD)
@@ -161,7 +161,6 @@ struct OfficePalette {
     static let screenChat = Color(hex: 0x161E29)
     static let screenNoSignal = Color(hex: 0x1C1517)
     static let codeGrey = Color(hex: 0x9AA7B8)
-    static let sweat = Color(hex: 0x9FB4C7)
 
     init(_ scheme: ColorScheme) {
         dark = scheme == .dark
@@ -169,13 +168,14 @@ struct OfficePalette {
             deskTop = Color(hex: 0x77756F); deskFront = Color(hex: 0x615F5A); drawer = Color(hex: 0x4E4C48)
             chairBack = Color(hex: 0x8D96A3); chairSeat = Color(hex: 0x707A88); chairPole = Color(hex: 0xA3ADBB)
             frame = Color(hex: 0x2A2F37); keyboard = Color(hex: 0x9AA1AD); mug = Color(hex: 0xD9DBE0)
-            steam = Color(hex: 0xE5E9F0).opacity(0.5); zzz = Color(hex: 0xB3C2DD); pants = Color(hex: 0x4B5260)
+            steam = Color(hex: 0xE5E9F0).opacity(0.5); zzz = Color(hex: 0xB3C2DD); sweat = Color(hex: 0x9FB4C7); pants = Color(hex: 0x4B5260)
             stranger = Color(hex: 0x6E7580)
         } else {
+            // 杯子、汗要比卡片的底色（Surface.tile）深出一截：浅色的杯子和底色几乎一样，热气就成了飘着的灰点
             deskTop = Color(hex: 0xD9D6D0); deskFront = Color(hex: 0xC4C0B8); drawer = Color(hex: 0xADA8A0)
             chairBack = Color(hex: 0x4B525C); chairSeat = Color(hex: 0x3A4048); chairPole = Color(hex: 0x6B7280)
-            frame = Color(hex: 0x252A32); keyboard = Color(hex: 0x6B7280); mug = Color(hex: 0xEDEEF0)
-            steam = Color(hex: 0x6B7280).opacity(0.55); zzz = Color(hex: 0x5C6B86); pants = Color(hex: 0x3A4048)
+            frame = Color(hex: 0x252A32); keyboard = Color(hex: 0x6B7280); mug = Color(hex: 0xBFC4CC)
+            steam = Color(hex: 0x6B7280).opacity(0.55); zzz = Color(hex: 0x5C6B86); sweat = Color(hex: 0x6F8FB0); pants = Color(hex: 0x3A4048)
             stranger = Color(hex: 0x8B929C)
         }
     }
@@ -207,7 +207,7 @@ struct DeskPainter {
         switch pose {
         case .typing, .stranger: return CGPoint(x: 179, y: 68)
         case .relaxed: return CGPoint(x: 197, y: 67)
-        case .sleeping: return CGPoint(x: 165, y: 88)
+        case .sleeping: return CGPoint(x: 160, y: 86)
         case .sweating: return CGPoint(x: 186, y: 67)
         case .away: return .zero
         }
@@ -217,13 +217,17 @@ struct DeskPainter {
         switch pose {
         case .typing, .stranger: return CGPoint(x: 171, y: 46)
         case .relaxed: return CGPoint(x: 194, y: 44)
-        case .sleeping: return CGPoint(x: 146, y: 94)
+        case .sleeping: return CGPoint(x: 142, y: 94)
         case .sweating: return CGPoint(x: 184, y: 45)
         case .away: return .zero
         }
     }
 
     var headSize: CGFloat { pose == .sleeping ? 26 : 30 }
+
+    /// 趴着时身子从胯弯过弓起来的背、低下去接到头上（二次曲线的控制点）；别的姿势身子是直的。
+    /// 身子要是直着往上伸，头落在它前下方，看着像头掉在了桌上
+    var back: CGPoint? { pose == .sleeping ? CGPoint(x: 178, y: 78) : nil }
 
     /// 手臂：从肩到手（elbow 是二次曲线的控制点）
     private func arm(_ t: Double) -> (from: CGPoint, elbow: CGPoint, hand: CGPoint)? {
@@ -236,7 +240,7 @@ struct DeskPainter {
         case .relaxed:
             return (CGPoint(x: 195, y: 74), CGPoint(x: 182, y: 104), CGPoint(x: 160, y: 100))
         case .sleeping:
-            return (CGPoint(x: 166, y: 92), CGPoint(x: 150, y: 110), CGPoint(x: 126, y: 105))
+            return (CGPoint(x: 162, y: 100), CGPoint(x: 152, y: 108), CGPoint(x: 122, y: 104))
         case .sweating:
             return (CGPoint(x: 182, y: 74), CGPoint(x: 160, y: 74), CGPoint(x: 170, y: 51))
         case .away:
@@ -271,7 +275,8 @@ struct DeskPainter {
                      style: StrokeStyle(lineWidth: 7, lineCap: .round))
         }
         switch pose {
-        case .typing, .relaxed: drawSteam(&c, t: t)
+        // 只有端着杯子（空闲）时冒热气：打字时小臂压着杯口，热气像是从胳膊上冒出来的
+        case .relaxed: drawSteam(&c, t: t)
         case .sleeping: drawZzz(&c, t: t)
         case .sweating: drawSweat(&c, t: t)
         default: break
@@ -298,7 +303,7 @@ struct DeskPainter {
     private func drawBody(_ c: inout GraphicsContext) {
         var torso = Path()
         torso.move(to: hip)
-        torso.addLine(to: shoulder)
+        if let b = back { torso.addQuadCurve(to: shoulder, control: b) } else { torso.addLine(to: shoulder) }
         let color = pose == .stranger ? palette.stranger : accent
         c.stroke(torso, with: .color(color), style: StrokeStyle(lineWidth: 26, lineCap: .round))
     }
@@ -389,6 +394,8 @@ struct DeskPainter {
 
     private func drawKeyboardAndMug(_ c: inout GraphicsContext) {
         if !laptop { c.fill(rr(98, 103, 44, 5, 2), with: .color(palette.keyboard)) }
+        // 趴着时杯子在头底下，露出的一截夹在头和身子中间：不画
+        if pose == .sleeping { return }
         c.fill(rr(148, 96, 12, 12, 2.5), with: .color(palette.mug))
         var handle = Path()
         handle.addArc(center: CGPoint(x: 160, y: 102), radius: 3.5, startAngle: .degrees(-80), endAngle: .degrees(80), clockwise: false)
@@ -477,7 +484,7 @@ struct DeskPainter {
         for k in 0..<3 {
             let p = (t / 3.2 + Double(k) / 3).truncatingRemainder(dividingBy: 1)
             let size = 5 * (0.6 + 0.5 * p)
-            let o = CGPoint(x: 156 + 14 * p, y: 78 - 22 * p)
+            let o = CGPoint(x: 138 + 8 * p, y: 76 - 24 * p)   // 从头顶飘上去
             var z = Path()
             z.move(to: o)
             z.addLine(to: CGPoint(x: o.x + size, y: o.y))
@@ -494,6 +501,6 @@ struct DeskPainter {
         drop.move(to: CGPoint(x: o.x, y: o.y - 4))
         drop.addQuadCurve(to: CGPoint(x: o.x, y: o.y + 3), control: CGPoint(x: o.x + 5, y: o.y + 3))
         drop.addQuadCurve(to: CGPoint(x: o.x, y: o.y - 4), control: CGPoint(x: o.x - 5, y: o.y + 3))
-        c.fill(drop, with: .color(OfficePalette.sweat.opacity(1 - p)))
+        c.fill(drop, with: .color(palette.sweat.opacity(1 - p)))
     }
 }
