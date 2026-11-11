@@ -1,5 +1,5 @@
 #!/bin/bash
-# 发布当前提交（版本号取自 cca 里的 VERSION）：跑回归 → 签名 → 编译界面 App → 打 tag → 推送 → 创建 GitHub Release
+# 发布当前提交（版本号取自 cca 里的 VERSION）：跑 App 的单元测试 → 跑回归 → 签名 → 编译界面 App → 打 tag → 推送 → 创建 GitHub Release
 # （附件：cca、cca.sig、一键安装脚本 install.sh、界面 App cca-app.zip 和它的签名 cca-app.zip.sig）
 # 用法：./release.sh ["更新说明"]；签名私钥默认 ~/.ssh/cca_release_ed25519（可用 CCA_RELEASE_KEY 指定）
 # VERSION 是 X.Y.Z-beta.N 时发成测试版（GitHub 的 pre-release，不设为 Latest）：自动更新和一键安装都不会装它，
@@ -24,6 +24,16 @@ pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' cca)
 [ "$(cut -d' ' -f1,2 "$KEY.pub")" = "$(printf '%s' "$pub" | cut -d' ' -f1,2)" ] ||
 	fail "cca 里的 RELEASE_KEY 和 $KEY.pub 不是一对"
 [ "$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' install.sh)" = "$pub" ] || fail "install.sh 里的 RELEASE_KEY 和 cca 里的不一致"
+
+# App 的单元测试（macos/test.sh 不带参数：手写的夹具、各部件的单元测试，更新说明的用词和版本先后也在这里查）。
+# 回归里只拿 cca 的真实输出跑契约测试的解码部分（macos/test.sh 目录），这些都不跑。放在回归前面：没通过就不用等回归
+echo "• 跑 App 的单元测试…"
+ut=$(bash macos/test.sh 2>&1) || {
+	printf '%s\n' "$ut" | grep -E '^(FAIL|✗)|: error:' | head -n 20 >&2 || true
+	sum=$(printf '%s\n' "$ut" | grep -E '^通过 [0-9]+，失败 [0-9]+' | tail -n 1 || true)
+	fail "App 的单元测试没通过：${sum:-没跑完（编译不过或中途出错，见上面）}"
+}
+echo "  $(printf '%s\n' "$ut" | tail -n 1)"
 
 echo "• 跑回归测试…"
 res=$(bash tests/regress.sh 2>&1 | tail -n 1)
