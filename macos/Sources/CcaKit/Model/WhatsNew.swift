@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.15", title: "在服务器上登录更省事，服务器重启后代理自己起来", points: [
+            .init(symbol: "key",
+                  text: "在服务器上登录账号时，这台 Mac 上不用先加好同一个账号：运行服务器给的那行 cca login-page，还没有这个账号会问要不要用同一个节点加上它。两边节点的名字不一样也认得出（按节点的地址认）。"),
+            .init(symbol: "server.rack",
+                  text: "Linux 服务器重启以后，cca 内置的代理自己起来，不用等下次启动账号：配置时问一次，同意就在你自己的 crontab 里加一行（cca local off 时删掉）。Linux 桌面上装了 Clash Verge 的，和 Mac 上一样走它。服务器上的启动横幅不再写 WebRTC 那一行（服务器上没有浏览器，只测 DNS）。"),
+            .init(symbol: "checkmark.shield",
+                  text: "「检测出口」时 DNS 泄露多等一会儿（最多 20 秒），慢的线路上不再常常写“没测成”。cca restore 先确认备份包能完整读出来才删 ~/.cca，备份不成就什么都不删。"),
+        ], art: "route"),
         ReleaseNote(version: "3.1.0-beta.14", title: "5 小时用量又显示出来了，cca 也能装在 Linux 服务器上", points: [
             .init(symbol: "chart.bar",
                   text: "修正上两个版本的问题：Max 账号和部分 Ultra 账号明明有 5 小时限制，5 小时用量却不显示了。那两个版本看错了查到的用量里的一个标记，5 小时用得比本周或 Fable 少时就当成没有 5 小时限制。现在只有查到的用量里根本没有 5 小时这一项（真正没有 5 小时限制的套餐）才不显示。"),
