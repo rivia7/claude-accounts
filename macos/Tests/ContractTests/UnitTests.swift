@@ -194,6 +194,10 @@ func watcherTests() async {
         ("/Users/me/.cca/accounts/bob-1/cli-123.json.cca-9.tmp", nil), ("/Users/me/.cca/accounts/bob-1/claude/cli-1.json", nil),
         ("/Users/me/.cca/accounts/bob-1/cli-x.json", nil), ("/Users/me/.cca/accounts/bob-1/cli-.json", nil),
         ("/Users/me/.cca/cli-1.json", nil),
+        // Antigravity：账号表、各账号的登记和检测结果；agy 自己的数据目录（登录 token 在里面）不看
+        ("/Users/me/.cca/agy.json", .state), ("/Users/me/.cca/agy/accounts/gina-1/cli-7.json", .state),
+        ("/Users/me/.cca/agy/accounts/gina-1/health.json", .state), ("/Users/me/.cca/agy.json.tmp1", nil),
+        ("/Users/me/.cca/agy/accounts/gina-1/gemini/antigravity-cli/antigravity-oauth-token", nil),
     ]
     var bad: [String] = []
     for (p, want) in cases where CcaWatcher.classify(path: p, homes: homes) != want { bad.append(p) }

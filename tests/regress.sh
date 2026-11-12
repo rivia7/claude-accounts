@@ -109,6 +109,7 @@ ok "install：建端口池前先问，提示重载约 20 秒" 'printf "%s" "$out
 ok "install：8 个槽位 7901-7908，CCA-1 默认 US-A，空槽位默认 REJECT" '[ "$(nl_)" = 8 ] && [ "$(first CCA-1)" = US-A ] && [ "$(first CCA-8)" = REJECT ] && [ "$(sel CCA-1)" = US-A ]'
 ok "install：只重载了一次" '[ "$(reloads)" = 1 ]'
 ok "install：同时建好 cxa（等于 cca codex），是指向同目录 cca 的相对链接" '[ "$(readlink "$H/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 cxa 代替 cca codex：cxa @别名 直接启动"'
+ok "install：同时建好 aga（等于 cca agy），也是相对链接；agy 没有查用量，说明里不提 aga usage" '[ "$(readlink "$H/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 aga 代替 cca agy：aga @别名 直接启动" && ! printf "%s" "$out" | grep -q "aga usage"'
 python3 - > "$T/accounts.golden" <<'PY'
 import hashlib, json
 n = 'alice-example-com-' + hashlib.sha1(b'alice@example.com').hexdigest()[:6]
@@ -1287,6 +1288,8 @@ mkdir -p "$G/antigravity-cli/conversations" "$G/config/skills/mine"
 printf '{"theme": "dark"}' > "$G/antigravity-cli/settings.json"; echo '# 共享的规则' > "$G/GEMINI.md"
 printf '00000000-0000-4000-8000-000000000000' > "$G/antigravity-cli/installation_id"
 printf '{"id_token_email": "master@example.com"}' > "$G/antigravity-cli/antigravity-oauth-token"
+rm -f "$H/.local/bin/aga"; out0=$(run cca ls 2>&1)   # 模拟以前装的 cca：那时还没有 aga
+[ -e "$H/.local/bin/aga" ] || [ -L "$H/.local/bin/aga" ] && ag0=yes || ag0=no
 : > agy.log; : > open.log; : > curl.log; n0=$(reloads)
 out=$(run CCA_TTY="$(ans alice@example.com '' 1)" cca agy add 2>&1); rc=$?
 AGD=$(ls -d "$H"/.cca/agy/accounts/alice-example-com-* 2>/dev/null); AG="$AGD/gemini"
@@ -1294,8 +1297,13 @@ agy_iid=$(cat "$AG/antigravity-cli/installation_id" 2>/dev/null); agy_uuid=$(sed
 ok "agy add：和 Claude 账号同一个邮箱也能加，记在 agy.json；账号目录在 ~/.cca/agy/accounts 下；说明用 Google 账号登录" '[ $rc -eq 0 ] && grep -q "\"alice@example.com\": \"US-A\"" "$AGJ" && [ -d "$AG" ] && printf "%s" "$out" | grep -q "添加 Antigravity 账号" && printf "%s" "$out" | grep -q "登录 Google（用 alice@example.com 登录"'
 ok "agy add：和 Claude、Codex 共用端口池（分到空着的 7902），路由器上的名字带 agy-，不重载" '[ "$(cfgv "c[\"agy\"][\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7902}" ] && grep -q "\"slot\": 2, \"name\": \"agy-alice-example-com-" "$R/etc/cca/accounts.yaml" && [ "$(sel CCA-2)" = US-A ] && [ "$(reloads)" = "$n0" ]'
 ok "agy add：登录前就固定好两个装机标识（installation_id 正好 36 个字符、不带换行；jetski_state.pbtxt 的 installation_uuid 是另一个），和 ~/.gemini 的不一样" '[ ${#agy_iid} = 36 ] && printf "%s\n" "$agy_iid" "$agy_uuid" | grep -Eqx "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}" && [ "$agy_iid" != "$agy_uuid" ] && [ "$agy_iid" != "$(cat "$G/antigravity-cli/installation_id")" ] && [ -f "$AGD/device.json" ]'
+ok "以前装的 cca 升级后还没有 aga：没用过 agy 时不补；第一次用 cca agy 时补上，并说明怎么用" '[ $ag0 = no ] && ! printf "%s" "$out0" | grep -q "aga" && [ "$(readlink "$H/.local/bin/aga")" = cca ] && [ "$(printf "%s" "$out" | grep -c "以后可以直接用 aga 代替 cca agy：aga @别名 直接启动")" = 1 ]'
 out=$(run cca agy ls 2>&1)
 ok "cca agy ls：列出 Antigravity 账号（还没登录）" 'printf "%s" "$out" | grep -qE "1\. alice@example.com +未登录 +US-A"'
+out3=$(run aga ls 2>&1)
+ok "aga ls 就是 cca agy ls" '[ -n "$out3" ] && [ "$out3" = "$out" ]'
+rm -f "$H/.local/bin/aga"; out=$(run cca ls 2>&1); out2=$(run cca ls 2>&1)
+ok "用着 agy 的机器上 aga 不见了：下一次运行 cca（哪个子命令都行）就补上，只说一次" '[ "$(readlink "$H/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 aga 代替 cca agy" && ! printf "%s" "$out2" | grep -q "以后可以直接用 aga"'
 : > agy.log; : > open.log; : > curl.log; rm -f "$H/.cca/agy/probe.json"
 out=$(run CCA_TTY="$(ans good-ag1)" GEMINI_API_KEY=evil-1 GOOGLE_CLOUD_PROJECT=evil-proj ANTIGRAVITY_GEMINI_DIR=/evil AGY_ACCOUNT=evil@example.com AGY_CLI_THEME=light AGY_CA_CERT="$T/ca.pem" ALL_PROXY=socks5://evil.invalid cca agy @alice --version 2>&1); rc=$?
 penv=$(grep -A1 "cca-agy-probe" agy.log | grep "^ENV: " | head -n 1)
@@ -1311,6 +1319,9 @@ ok "不共享：登录 token、装机标识、日志各账号一份" '[ ! -L "$A
 ok "会话里写的共享内容回到 ~/.gemini：会话、历史、技能、--continue 的记录；agy 用临时文件改名保存的 settings.json 并回去再链接上" '[ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && [ -d "$G/config/skills/from-alice" ] && grep -q "conv-alice" "$G/antigravity-cli/cache/last_conversations.json" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j.get(\"lastWriter\") == \"alice\" and j.get(\"theme\") == \"dark\" else 1)" "$G/antigravity-cli/settings.json"'
 m=$(run CCA_TTY="$(ans q)" cca agy 2>&1)
 ok "cca agy 菜单：标题是 Antigravity，账号已登录；没有添加第三方 API 账号这一项" 'printf "%s" "$m" | grep -q "选择 Antigravity 账号" && printf "%s" "$m" | grep -qE "1\. alice@example.com +已登录 +US-A" && printf "%s" "$m" | grep -q "a      添加新账号" && ! printf "%s" "$m" | grep -q "第三方 API"'
+n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
+run CCA_TTY="$(ans)" aga @alice --version >/dev/null 2>&1; rc=$?
+ok "aga @alice：启动的是 alice 的 agy（等于 cca agy @alice）" '[ $rc -eq 3 ] && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = $((n_args + 1)) ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version"'
 out=$(run cca agy usage 2>&1); rc=$?; out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?; out4=$(run cca agy billing alice 2>&1 </dev/null); rc4=$?
 ok "agy 没有查用量的接口、第三方 API 账号、桌面 App 和控制台账单页：说清楚，什么都不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 agy 里用 /usage 看" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "没有控制台的账单页"'
 edit_table 'j["kimi"] = {"base_url": "https://api.example.com/v1"}' "$AGJ"
@@ -3001,7 +3012,7 @@ r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_POLICY
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射；仓库不是默认的那个时，给维护者的命令带上 -R" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射" && printf "%s" "$out" | grep -q "    ./policy.sh key add -R example/cca-policy '\''ssh-ed25519 AAAA[^ ]* cca-policy@[^ ]*'\'' [^ ]*$"'
-ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.20 ] && [ "$(readlink "$H3/.local/bin/cca")" = "$H3/.cca/bin/cca" ] && [ "$(readlink "$H3/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "已下载 cca 9.9.20，签名校验通过"'
+ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.20 ] && [ "$(readlink "$H3/.local/bin/cca")" = "$H3/.cca/bin/cca" ] && [ "$(readlink "$H3/.local/bin/cxa")" = cca ] && [ "$(readlink "$H3/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "已下载 cca 9.9.20，签名校验通过"'
 ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
 out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?
 ok "再运行一次：修复/重装，不重复写 PATH" '[ $rc -eq 0 ] && [ "$(grep -c "\.local/bin" "$H3/.zshrc")" = 1 ] && printf "%s" "$out" | grep -q "已经写在"'
@@ -3141,11 +3152,12 @@ for a in "gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)" o
 	mkdir -p "$H/.cca/agy/accounts/$a/gemini/antigravity-cli"
 	echo '{"access_token": "ya29.agy-LEFTOVER-SECRET", "id_token_email": "gina@example.com"}' > "$H/.cca/agy/accounts/$a/gemini/antigravity-cli/antigravity-oauth-token"
 done
+ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
 ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字节还原），本机端口池移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening"'
-ok "restore：本机还原（cca、cxa 都删掉），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
+ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'

@@ -116,6 +116,7 @@ Linux 上能用的是命令行：
 | 看现在走路由器还是本机 Clash | `cca local` |
 | 退出某个账号的登录、重新登录 | `cca login 工作` |
 | Codex：选账号启动 / 直接启动 / 添加账号 / 查用量 | `cca codex` / `cca codex @工作` / `cca codex add` / `cca codex usage`（`cca codex` 可以简写成 `cxa`） |
+| Antigravity：选账号启动 / 直接启动 / 添加账号 | `cca agy` / `cca agy @工作` / `cca agy add`（`cca agy` 可以简写成 `aga`） |
 | 查看全部命令 | `cca help` |
 
 ## 账号表
@@ -313,6 +314,7 @@ Google 的 Antigravity 命令行（`agy`）也能多账号，用法和 Codex 一
 cca agy add            # 添加 Antigravity 账号：填 Google 账号的邮箱、别名（可选），选出口节点
 cca agy                # 选账号启动 agy（cca agy @工作 直接启动，后面的参数原样交给 agy）
 cca agy login 工作     # 重新登录
+aga @工作              # 简写：aga 就是 cca agy（aga、aga add、aga ls 也都行）
 ```
 
 - **账号表分开记**：记在 `~/.cca/agy.json`，格式和 `accounts.json` 一样（只有 Google 账号，值是节点名）。和 Claude、Codex 账号共用路由器（或本机 Clash）上的同一组端口，每个账号一个端口、一个出口。
@@ -322,6 +324,7 @@ cca agy login 工作     # 重新登录
 - **不共用的**：登录、两个装机标识（`installation_id` 和 `jetski_state.pbtxt` 里的 `installation_uuid`：添加账号时 cca 给每个账号各生成一份，之后固定不变）、日志、会话摘要的索引（`conversation_summaries.db` 等，agy 会按共享的会话重建）。
 - **没有的**：查用量的接口（在 agy 里用 `/usage` 看）、第三方 API 账号、桌面 App 和控制台的账单页；`cca agy usage`、`add api`、`app`、`billing` 会说清楚，什么都不做。
 - **其它命令**：`cca agy ls`、`edit`、`check`（出口检测：Google 的网站没有 `/cdn-cgi/trace`，经同一个端口看 Cloudflare 看到的 IP）、`web`（用账号专属的浏览器打开 antigravity.google）、`rm`，和 Claude 账号的同名命令一样。服务器上登录和 Claude、Codex 一样：给出在 Mac 上运行的 `cca agy login-page …` 那一行，Mac 上打开登录页，授权码抄回服务器的终端。
+- **简写 `aga`**：`aga` 就是 `cca agy`，后面接什么都一样（`aga`、`aga @工作`、`aga add`……），和 Codex 的 `cxa` 一样：`cca install` 时和 `cca` 一起放进 `~/.local/bin`；用着 Antigravity 的机器上 `aga` 不见了（比如以前装的 cca 升级上来），下一次运行 cca 时自动补上。已经有别的 `aga` 命令时不会覆盖它。
 - **图形界面**：用过 `cca agy` 之后，总览和侧栏里多一组 Antigravity 账号（装了 `agy` 命令时，侧栏底部也能「启用 Antigravity 账号」），能打开终端、网页版、检测出口；没有用量和桌面 App。
 
 启动前同样会检查：出口地区和纯净度；shell 里继承的 `GEMINI_*`、`ANTIGRAVITY_*`、`AGY_*`（例如会换掉账号的 `AGY_ACCOUNT`）、`GOOGLE_API_KEY`、`GOOGLE_APPLICATION_CREDENTIALS`、`GOOGLE_CLOUD_PROJECT` 这类会顶替登录或换项目的变量一律不带进去，只留界面开关 `AGY_CLI_*` 和公司网络根证书 `AGY_CA_CERT`；共享的 `~/.gemini/antigravity-cli/settings.json`（或这次的 `--settings`）里写了 Google Cloud 项目（`gcp`：各账号会记到同一个项目上），或者启动参数里另给了 `--gemini_dir`，cca 会拒绝启动并指出来。
@@ -463,7 +466,7 @@ cca clients mode auto              # 恢复每日自动检查和准备
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude、Codex 和 Antigravity）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key 也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`、`~/.gemini`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude、Codex 和 Antigravity）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key 也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`、`aga`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`、`~/.gemini`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 

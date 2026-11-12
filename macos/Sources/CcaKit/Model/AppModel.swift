@@ -634,13 +634,34 @@ final class AppModel {
         return a.login != .loggedIn || usage(for: a)?.errorCode != nil || usage(for: a)?.outdatedLoginPlan != nil
     }
 
+    /// 登录好了能不能查用量：除了“没登录”没有别的原因挡着。Antigravity 没有查用量的接口（`unsupported`），
+    /// 没装命令的（`tool_missing`）登录了也查不了。
+    private func usageAfterLogin(_ a: Account) -> Bool {
+        guard features(a.tool).usage else { return false }
+        let why = a.canWhy["usage"]
+        return why == nil || why == .notLoggedIn
+    }
+
     private func startDueUsageRuns(lowPower: Bool) {
         let now = Date().timeIntervalSince1970
+        // 在等登录、登录好了也查不了用量的账号（Antigravity）：不跑 cca … usage（只会失败，留下一条“后台刷新没有成功”），
+        // 按同样的间隔只重读 state，看登录好了没有
+        var watchOnly: [AccountRef] = []
+        for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
+            let items = accounts(t).filter { isRelogging($0, now: now) && !usageAfterLogin($0) }.map { a in
+                UsagePolling.Item(key: a.key, inUse: false, updated: usageAttempted[a.ref] ?? 0, login: .relogging)
+            }
+            watchOnly += UsagePolling.dueKeys(items, visible: isVisible, lowPower: lowPower, now: now).map { AccountRef(tool: t, key: $0) }
+        }
+        if !watchOnly.isEmpty {
+            for r in watchOnly { usageAttempted[r] = now }
+            track { [weak self] in await self?.loadState() }
+        }
         for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
             // 同一个工具一次只查一批；看不见时，等着用户同意的不白跑
             guard !usageRefreshing.contains(t), !usageRefreshingKeys.contains(where: { $0.tool == t }),
                   isVisible || usageNeedsConsent[t] == nil else { continue }
-            let items = accounts(t).filter { ($0.can.usage && $0.login == .loggedIn) || isRelogging($0, now: now) }.map { a in
+            let items = accounts(t).filter { ($0.can.usage && $0.login == .loggedIn) || (isRelogging($0, now: now) && usageAfterLogin($0)) }.map { a in
                 UsagePolling.Item(key: a.key, inUse: a.appRunning || a.cliSessions > 0,
                                   updated: max(usage(for: a)?.fetchedEpoch ?? 0, usageAttempted[a.ref] ?? 0),
                                   login: isRelogging(a, now: now) ? .relogging : loginExpired(a) ? .expired : .normal)

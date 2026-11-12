@@ -69,6 +69,16 @@ private typealias ResponseOverride = @Sendable () -> CcaResponse
     m.refreshUsageIfNeeded()
     try? await Task.sleep(nanoseconds: 80_000_000)
     check("查失败了不马上重试（按间隔）", polls().count == first.count)
+    // 没登录的账号点了“登录”：等它登录好的那段时间照旧查用量（登录好了就查得了；查不了用量的工具只重读 state，见 AgyTests）
+    if let carol = m.account(AccountRef(tool: .claude, key: "carol@example.com")) {
+        m.relogin(carol)
+        m.dismissSheet()
+        m.refreshUsageIfNeeded()
+        _ = await waitUntil(1) { polls().contains { $0.arguments.contains("carol@example.com") } }
+        check("点了登录的没登录账号：照旧查用量，看登录好了没有", polls().contains { $0.arguments.contains("carol@example.com") })
+    } else {
+        check("夹具里有 carol", false)
+    }
     m.shutdown()
     check("退出时停下", !m.scheduler.usageRunning)
 

@@ -117,6 +117,39 @@ func agyGateTests() async {
     check("Claude 的照常查", t.requests.contains { $0.arguments == ["usage", "--json"] })
     m.shutdown()
 
+    // 点了“登录”、等着登录好的那段时间（UsagePolling.reloginWatch）：agy 没有查用量的接口，后台不跑 cca agy usage
+    // （只会失败，留下一条“后台刷新 Antigravity 的用量没有成功”），按同样的间隔只重读 state，登录好了界面照样会变
+    let unsupported = EventLog.parseLine(Data(#"{"v":1,"ev":"fail","code":"unsupported","message":"Antigravity 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看"}"#.utf8))!
+    let t3 = ScriptedTransport { request, _ in
+        if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
+        if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+        if request.arguments.first == "agy", request.arguments.contains("usage") { return response(1, [unsupported]) }
+        if request.arguments.contains("usage") { return response(0, stdout: tinyUsage) }
+        return response(0, stdout: SampleDocs.clientUpdates)
+    }
+    let m3 = makeModel(t3, prefs: MemoryPrefs())
+    await m3.start()
+    func states() -> Int { t3.requests.filter { $0.arguments == ["_gui", "state"] }.count }
+    // 先把到期的用量、出口检测都跑完（查用量时同一个工具的出口检测等下一轮），之后多出来的 state 只能是盯着登录的那一次
+    for _ in 0..<3 {
+        m3.refreshUsageIfNeeded()
+        _ = await waitUntil(1) { m3.usageRefreshingKeys.isEmpty }
+        try? await Task.sleep(nanoseconds: 150_000_000)
+    }
+    let henry = m3.account(AccountRef(tool: .agy, key: "henry@example.com"))
+    check("夹具里 henry 没登录", henry?.login == .loggedOut)
+    if let henry { m3.relogin(henry) }
+    let before = states()
+    m3.refreshUsageIfNeeded()
+    _ = await waitUntil(1) { states() > before }
+    m3.refreshUsageIfNeeded()
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    let agyPolls = t3.requests.filter { $0.arguments.first == "agy" && $0.arguments.contains("usage") }
+    check("点了登录以后：后台不跑 cca agy usage", agyPolls.isEmpty, "\(agyPolls.map(\.arguments))")
+    check("所以没有“后台刷新 Antigravity 的用量没有成功”", m3.usageFailure[.agy] == nil, m3.usageFailure[.agy]?.message ?? "")
+    check("改成重读 state 看登录好了没有，按间隔（马上再来一次不重读）", states() == before + 1, "多读了 \(states() - before) 次")
+    m3.shutdown()
+
     // 没启用 agy 的 hello：工具换回 Claude，看不见 agy
     let off = hello.replacingOccurrences(of: #""enabled": true,\#n      "bin": "/Users/me/.local/bin/agy""#,
                                          with: #""enabled": false,\#n      "bin": "/Users/me/.local/bin/agy""#)

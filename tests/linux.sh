@@ -403,6 +403,8 @@ else no "cca update --rollback：$(printf '%s' "$out" | tail -n 2)；后台：$(
 
 out=$(CCA_TTY=$(ans n n) "$C" install 2>&1)
 if [ -f "$H/.cca/config.json" ]; then ok "cca install"; else no "cca install：$(printf '%s' "$out" | tail -n 3)"; echo "  结果：$pass 通过，$fail 失败"; exit 1; fi
+if [ "$(readlink "$H/.local/bin/cxa")" = cca ] && [ "$(readlink "$H/.local/bin/aga")" = cca ]; then ok "cca install：建好简写 cxa、aga（等于 cca codex、cca agy），指向同目录的 cca"
+else no "cca install 的简写：cxa → $(readlink "$H/.local/bin/cxa" 2>/dev/null)，aga → $(readlink "$H/.local/bin/aga" 2>/dev/null)"; fi
 python3 - "$H/.cca" <<'PY'
 import json, os, sys, time
 d = sys.argv[1]
@@ -748,7 +750,7 @@ if ! grep -qF '>>> cca >>>' "$VD/profiles/Script.js" && ! listen 7901 && [ -S "$
 else no "Clash Verge 的 cca local off：$(printf '%s' "$out" | tail -n 2)"; fi
 kill "$(cat "$D/verge.pid" 2>/dev/null)" 2>/dev/null
 
-# cca restore：先打包备份配置（GNU / busybox 的 tar；登录凭证、密钥文件、参考节点不进包里），再删掉 ~/.cca、~/.local/bin 里的 cca 和 cxa、
+# cca restore：先打包备份配置（GNU / busybox 的 tar；登录凭证、密钥文件、参考节点不进包里），再删掉 ~/.cca、~/.local/bin 里的 cca、cxa 和 aga、
 # crontab 里开机起内核的那一行（别的行留着）。没有 tar 的（Amazon Linux 的最小安装）：先停下，什么都不动
 mkdir -p "$H/.cca/secrets" "$H/.cca/accounts/orphan-example-com/claude"
 echo '{"v": 1, "host": "api.example.com", "key": "sk-LEFTOVER-SECRET"}' > "$H/.cca/secrets/cca-api-orphan"
@@ -769,9 +771,9 @@ elif [ $rc -eq 0 ] && [ -n "$bk" ] && [ "$(stat -c %a "$bk")" = 600 ] && printf 
 	tar -tzf "$bk" | grep -q 'accounts.json' && tar -tzf "$bk" | grep -q 'orphan-example-com/claude' &&
 	! tar -tzf "$bk" | grep -qE '\.credentials\.json|secrets|id_ed25519$|policy/(nodes\.json|tmp\.)' && tar -tzf "$bk" | grep -q 'policy/policy\.json' &&
 	! tar -xzOf "$bk" 2>/dev/null | grep -q 'LEFTOVER-SECRET' &&
-	[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] &&
+	[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ ! -L "$H/.local/bin/aga" ] &&
 	! grep -qF '# cca-core' "$D/crontab" && grep -qx '0 3 \* \* \* echo user-job' "$D/crontab"; then
-	ok "cca restore：先打包备份（600，登录凭证、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa 和 crontab 里开机起内核的那一行（别的行留着）"
+	ok "cca restore：先打包备份（600，登录凭证、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa、aga 和 crontab 里开机起内核的那一行（别的行留着）"
 else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
 
 # 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理，

@@ -439,6 +439,7 @@ TOOL=claude CMD=cca TOOL_LABEL=Claude TOOL_BIN="$CLAUDE_BIN" TOOL_SETTINGS='~/.c
 WEB_URL=https://claude.ai/ REGION_NAME=Claude INSTALL_URL=https://claude.ai/install.sh
 tool() { local s="$1"; shift; "${TOOL}_${s}" "$@"; }
 CODEX_ALIAS=cxa   # cxa …：等于 cca codex …（~/.local/bin/cxa 是指向同目录 cca 的相对链接，main 按调用名换成 codex 参数）
+AGY_ALIAS=aga     # aga …：等于 cca agy …（同上，~/.local/bin/aga）
 
 # ---------------------------------------------------------------------------
 # Python 辅助：配置/账号表、共享链接、.claude.json 三方合并、出口检测解析
@@ -11674,8 +11675,9 @@ cmd_add() {   # cca [codex] add [api]
 	account_added "$key"
 	case "$TOOL" in
 		codex) info "第一次使用时会在它专属的浏览器窗口里登录 ChatGPT（用 ${ACC_EMAIL} 登录，登录后 cca 会核对）"
-		       codex_alias_ensure "$ACC_NAME" ;;
-		agy) info "第一次使用时会在它专属的浏览器窗口里登录 Google（用 ${ACC_EMAIL} 登录，登录后把页面上的授权码粘贴回终端）" ;;
+		       tool_alias_ensure codex "$ACC_NAME" ;;
+		agy) info "第一次使用时会在它专属的浏览器窗口里登录 Google（用 ${ACC_EMAIL} 登录，登录后把页面上的授权码粘贴回终端）"
+		     tool_alias_ensure agy "$ACC_NAME" ;;
 		*) info "第一次使用时会在它专属的浏览器窗口里登录，登录页会预填 ${ACC_EMAIL}" ;;
 	esac
 	ADDED_KEY="$key"
@@ -11736,7 +11738,7 @@ cmd_add_api() {
 	py link "$key" && py sync "$key" || die "初始化账号目录失败"
 	okay "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}），key 存在${KEYSTORE}里"
 	info "用 ${CMD} @${ACC_NAME} 启动；改地址、模型${env_hint}用 ${CMD} edit，换 key 用 ${CMD} key ${ACC_NAME}"
-	if [ "$TOOL" = codex ]; then codex_alias_ensure "$ACC_NAME"; fi
+	if [ "$TOOL" = codex ]; then tool_alias_ensure codex "$ACC_NAME"; fi
 	gui_done added "已添加第三方 API 账号 ${ACC_NAME}（${ACC_BASE_URL}，出口 ${ACC_NODE}）" "$key"
 }
 
@@ -12229,7 +12231,7 @@ cmd_login_page() {   # cca [codex|agy] login-page <账号> [--alias 别名] [--n
 		confirm "这台 Mac 上还没有 ${LP_ALIAS:+${LP_ALIAS}（}${who}${LP_ALIAS:+）}：现在加上它吗（出口 ${LP_NODE}）？" y || { info "没有加上，也没打开登录页"; return 1; }
 		key=$(py add "$who" "$LP_ALIAS" "$LP_NODE") || exit 1
 		account_added "$key"
-		[ "$TOOL" != codex ] || codex_alias_ensure "$ACC_NAME"
+		case "$TOOL" in codex|agy) tool_alias_ensure "$TOOL" "$ACC_NAME" ;; esac
 	fi
 	eval "$(py env "$key")"
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
@@ -15068,24 +15070,29 @@ path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的
 	fi
 }
 
-codex_alias_ensure() {   # codex_alias_ensure [账号名] [quiet]：没有就建 ~/.local/bin/cxa（指向同目录 cca 的相对链接，cca 指向哪它就跟到哪）；
-	                       # 那里已经有别的文件、或者 PATH 里已经有别的 cxa 时不建，提示一句。quiet 是平时每次运行时的检查：
-	                       # 那里有东西（不管是不是 cca 建的）就不动，建不了也不说，免得每次都提示。总是返回 0
-	local bin="$HOME/.local/bin" other quiet="${2:-}"
-	if [ -n "$quiet" ]; then { [ -e "$bin/$CODEX_ALIAS" ] || [ -L "$bin/$CODEX_ALIAS" ]; } && return 0; fi
-	[ "$(readlink "$bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && return 0
+tool_alias_ensure() {   # tool_alias_ensure codex|agy [账号名] [quiet]：没有就建这个工具的简写 ~/.local/bin/cxa、aga（指向同目录 cca 的
+	                      # 相对链接，cca 指向哪它就跟到哪）；那里已经有别的文件、或者 PATH 里已经有别的同名命令时不建，提示一句。
+	                      # quiet 是平时每次运行时的检查：那里有东西（不管是不是 cca 建的）就不动，建不了也不说，免得每次都提示。总是返回 0
+	local bin="$HOME/.local/bin" other quiet="${3:-}" name more=""
+	case "$1" in
+		codex) name=$CODEX_ALIAS more="，${CODEX_ALIAS} usage 查用量" ;;
+		agy) name=$AGY_ALIAS ;;   # agy 没有查用量
+		*) return 0 ;;
+	esac
+	if [ -n "$quiet" ]; then { [ -e "$bin/$name" ] || [ -L "$bin/$name" ]; } && return 0; fi
+	[ "$(readlink "$bin/$name" 2>/dev/null)" = cca ] && return 0
 	[ -e "$bin/cca" ] || return 0   # cca 没装在 ~/.local/bin 里（直接运行的这份脚本）：不建
-	if [ -e "$bin/$CODEX_ALIAS" ] || [ -L "$bin/$CODEX_ALIAS" ]; then
-		warn "${bin}/${CODEX_ALIAS} 已经存在，不是 cca 建的：没有建 ${CODEX_ALIAS} 这个简写（照样可以用 cca codex）"
+	if [ -e "$bin/$name" ] || [ -L "$bin/$name" ]; then
+		warn "${bin}/${name} 已经存在，不是 cca 建的：没有建 ${name} 这个简写（照样可以用 cca ${1}）"
 		return 0
 	fi
-	other=$(type -P "$CODEX_ALIAS" 2>/dev/null)
+	other=$(type -P "$name" 2>/dev/null)
 	if [ -n "$other" ]; then
-		[ -n "$quiet" ] || warn "已经有别的 ${CODEX_ALIAS} 命令（${other}）：没有建 ${CODEX_ALIAS} 这个简写（照样可以用 cca codex）"
+		[ -n "$quiet" ] || warn "已经有别的 ${name} 命令（${other}）：没有建 ${name} 这个简写（照样可以用 cca ${1}）"
 		return 0
 	fi
-	ln -s cca "$bin/$CODEX_ALIAS" 2>/dev/null || { [ -n "$quiet" ] || warn "没能建 ${bin}/${CODEX_ALIAS}（照样可以用 cca codex）"; return 0; }
-	info "以后可以直接用 ${CODEX_ALIAS} 代替 cca codex：${CODEX_ALIAS} @${1:-别名} 直接启动，${CODEX_ALIAS} usage 查用量"
+	ln -s cca "$bin/$name" 2>/dev/null || { [ -n "$quiet" ] || warn "没能建 ${bin}/${name}（照样可以用 cca ${1}）"; return 0; }
+	info "以后可以直接用 ${name} 代替 cca ${1}：${name} @${2:-别名} 直接启动${more}"
 }
 
 # ---------------------------------------------------------------------------
@@ -15185,7 +15192,8 @@ cmd_install() {
 	fi
 	case ":$PATH:" in *":$bin:"*) ;; *) path_hint "$bin" ;; esac
 	info "已安装：$bin/cca → $target"
-	codex_alias_ensure
+	tool_alias_ensure codex
+	tool_alias_ensure agy
 	if [ -n "${CCA_POLICY_REPO:-}" ]; then   # 一键安装时带上维护者的映射仓库：curl … | CCA_POLICY_REPO=仓库 bash
 		( policy_setup "$CCA_POLICY_REPO" ) || warn "映射仓库没配置好：稍后运行 cca policy setup ${CCA_POLICY_REPO}"
 	fi
@@ -15221,7 +15229,7 @@ cmd_install() {
 }
 
 cmd_restore() {
-	local key bk out rc pid running="" wt="" t
+	local key bk out rc pid running="" wt="" t a
 	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
 	need_tty
 	for t in claude codex agy; do   # 账号的桌面 App 开着时删它的资料目录会出问题（agy 没有桌面 App）
@@ -15245,7 +15253,7 @@ cmd_restore() {
 	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理（用过的话）：停掉它的内核"
-	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
+	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
 	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
 	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
@@ -15297,7 +15305,9 @@ cmd_restore() {
 		warn "配置没能打包备份（磁盘满了？）：${CCA_HOME} 留着没删，别的都已经还原。腾出空间后自己备份它，不要的话直接删掉（rm -rf ${CCA_HOME}）"
 		return 1
 	fi
-	[ "$(readlink "$HOME/.local/bin/$CODEX_ALIAS" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$CODEX_ALIAS"   # 只删 cca 建的
+	for a in "$CODEX_ALIAS" "$AGY_ALIAS"; do   # 只删 cca 建的
+		[ "$(readlink "$HOME/.local/bin/$a" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$a"
+	done
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
 	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; defaults delete "$GUI_ID" >/dev/null 2>&1; info "已删除界面 App ${GUI_APP}"; fi
 	rm -rf "${CCA_HOME:?}"
@@ -15396,6 +15406,8 @@ Antigravity（Google 的 agy 命令行；账号表 ~/.cca/agy.json，和 Claude�
   cca agy [agy 参数]         弹出 Antigravity 账号菜单，选中后启动 agy；cca agy @<账号> [agy 参数] 跳过选择。
                              每个账号一个数据目录（--gemini_dir），登录各自独立；~/.gemini 里的会话、记忆、设置、
                              技能、MCP 等所有账号共用。启动前经该账号端口检测出口
+  aga [agy 参数]             等于 cca agy：aga @<账号>、aga add、aga ls 等都一样（cca install 时和 cca
+                             一起建在 ~/.local/bin；添加 Antigravity 账号时没有的话也会补上）
   cca agy add                新增 Antigravity 账号（用 Google 账号登录，${aglogin}）
   cca agy ls | edit | rm | key | login${mac:+ | web} | check
                              和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 antigravity.google）}；
@@ -15445,14 +15457,14 @@ EOF
   cca policy [pull]          看映射的状态 / 马上拉一次（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
                              指定的节点，账号表里改成别的会被改回；映射里有、这台机器上还没有的账号自动加进来
                              （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
-  cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex 账号：cca codex policy request）
+  cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex、Antigravity 账号：cca codex|agy policy request）
   cca devices [账号…] [--json]
                              映射里的账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
                              （维护者在映射里配置了设备统计的服务器时才有；Codex 账号：cca codex devices）。
                              映射里的账号经 cca 用的时候（命令行会话${mac:+、cca app 打开的 App}），${host}也会报告给那台服务器
 
 其它
-  cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
+  cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa、等于 cca agy 的 aga）
   cca install-cli            用官方安装脚本装 Claude Code（cca codex install-cli、cca agy install-cli 装 codex、agy 命令）：
                              先直连，拿不到时问过再经内置代理的一个节点装（维护者的映射指定，没指定时现选一个）；
                              用到没装的命令时，终端里也会先问要不要装
@@ -15478,8 +15490,8 @@ EOF
 
 main() {
 	[ -n "$PYTHON" ] || die "需要 python3（3.8 或更新）$(pkg_hint python3)"
-	# 用 cxa 调用：换成 cca codex …。参数里带着 codex，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
-	[ "${0##*/}" = "$CODEX_ALIAS" ] && set -- codex "$@"
+	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
+	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
 	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
@@ -15522,8 +15534,9 @@ main() {
 			update_hook "$@"
 			policy_hook
 			gui_hook
-			# 用着 Codex（有 Codex 的账号表，或者这次就是 cca codex …）而 cxa 不见了（以前装的 cca 升级上来、被删掉了）：补上
-			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then codex_alias_ensure "" quiet; fi
+			# 用着 Codex / agy（有它的账号表，或者这次就是 cca codex|agy …）而 cxa / aga 不见了（以前装的 cca 升级上来、被删掉了）：补上
+			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then tool_alias_ensure codex "" quiet; fi
+			if [ "${1:-}" = agy ] || [ -f "$CCA_HOME/agy.json" ]; then tool_alias_ensure agy "" quiet; fi
 			if [ "${1:-}" = codex ] || [ "${1:-}" = agy ]; then   # cca codex|agy …：后面的子命令都作用于 Codex / agy 的账号
 				use_tool "$1"
 				shift
