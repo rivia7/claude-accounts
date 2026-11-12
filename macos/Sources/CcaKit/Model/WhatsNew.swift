@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.17", title: "没装的命令可以帮你装上，也支持 Antigravity 命令行了", points: [
+            .init(symbol: "arrow.down.circle",
+                  text: "没装 claude、codex 命令时，cca 会问要不要用官方安装脚本装上（也可以运行 cca install-cli、cca codex install-cli）；账号页“没装 X 命令”旁边有「安装 X 命令…」。先直连，直连装不上时问过你，再经内置代理的一个节点装（用哪个节点由维护者在映射里指定），装完就停。"),
+            .init(symbol: "terminal",
+                  text: "支持 Google 的 Antigravity 命令行（agy）：在终端里运行 cca agy add 添加账号，每个账号有自己的登录、装机标识和网络出口，会话、记忆照样共用。用过以后左边多一组 Antigravity 账号，能打开终端、网页版、检测出口（没有用量和桌面 App）。"),
+            .init(symbol: "lock.shield",
+                  text: "cca 启动的 Claude Code 只把这个账号自己的目录加进工作目录，不再是整个 ~/.cca：读账号表、配置、别的账号的目录之前，照你的权限模式先问。登录凭证、节点密钥这些照旧一律不让读。"),
+        ], art: "open"),
         ReleaseNote(version: "3.1.0-beta.16", title: "配置备份不再带节点密钥，缓存不再越积越多", points: [
             .init(symbol: "archivebox",
                   text: "一键还原（cca restore）打的配置备份里，不再有维护者的参考节点（里面有节点的密钥），拉取映射时没清掉的临时文件也不打包。你自己的 Clash Verge 配置备份照样在里面。"),

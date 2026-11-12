@@ -140,7 +140,7 @@ struct TutorialCard {
             ("chart.bar.xaxis", "左边的「用量统计」把每个账号每周用了多少排在一起：哪个总不够用、哪个常常剩一大半，一眼看出来。"),
         ], art: .office),
         TutorialCard(title: "左边是你的账号", points: [
-            ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具。"),
+            ("cursorarrow.click", "点一个账号，右边就是它的详情；顶上的「Claude / ChatGPT」切换工具（用了 Antigravity 命令行时还有它）。"),
             ("chart.bar", "名字右边的小条是额度：5 小时、本周，Claude 账号还有一根 Fable；没有 5 小时限制的套餐（比如 Ultra）没有 5h 那一根。"),
             ("circle.fill", "头像右下角有绿点，说明这个账号正在用（App 开着，或者终端里有会话）；最高档套餐的头像外面有一圈细细的光晕。"),
             ("contextualmenu.and.cursorarrow", "在账号上点右键：打开 App、网页版、终端、检测出口、改别名、置顶、重新登录。上下拖动可以调整顺序。"),
