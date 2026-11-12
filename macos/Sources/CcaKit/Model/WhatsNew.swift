@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.19", title: "Antigravity 账号也有简写了", points: [
+            .init(symbol: "terminal",
+                  text: "aga 就是 cca agy，和 cxa 就是 cca codex 一样：aga @别名 直接启动这个 Antigravity 账号，aga add 添加账号。安装 cca 时和 cxa 一起建好；已经在用 Antigravity 的机器，升级后下一次运行 cca 时自动补上（已经有别的 aga 命令时不覆盖它）。"),
+            .init(symbol: "checkmark.circle",
+                  text: "登录 Antigravity 账号以后，主窗口上不再出现“后台刷新 Antigravity 的用量没有成功”：agy 本来就没有能在它外面查的用量接口，App 不再去查；等你登录的那段时间改成按时重读账号状态，登录好了界面照样会更新。"),
+        ], art: "open"),
         ReleaseNote(version: "3.1.0-beta.18", title: "直连不通的服务器上，装好就能用", points: [
             .init(symbol: "server.rack",
                   text: "在连不上 claude.ai 的 Linux 服务器上（比如国内的云服务器）安装 cca，不用再配置路由器：cca 直接用内置代理，给出一行命令请维护者运行。维护者运行以后，cca 自己导入节点、配置好代理、装上 Claude Code，映射里的账号自动加进来。"),
