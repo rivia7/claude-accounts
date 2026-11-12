@@ -57,7 +57,7 @@ Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起�
 Linux 支持目前在测试版里（3.1.0-beta.14 起）。正式版发布以前，上面那行命令装的正式版还不支持 Linux，先用这一行装测试版（正式版发布以后就和 macOS 用同一行命令）：
 
 ```bash
-curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v3.1.0-beta.17/install.sh | bash -s 3.1.0-beta.17
+curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v3.1.0-beta.18/install.sh | bash -s 3.1.0-beta.18
 ```
 
 Linux 上能用的是命令行：

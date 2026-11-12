@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0-beta.18", title: "直连不通的服务器上，装好就能用", points: [
+            .init(symbol: "server.rack",
+                  text: "在连不上 claude.ai 的 Linux 服务器上（比如国内的云服务器）安装 cca，不用再配置路由器：cca 直接用内置代理，给出一行命令请维护者运行。维护者运行以后，cca 自己导入节点、配置好代理、装上 Claude Code，映射里的账号自动加进来。"),
+            .init(symbol: "key",
+                  text: "配置维护者的映射时，cca 给出的是一整行可以直接运行的命令（这台机器的公钥和名字都写在里面），Mac 上顺便复制到剪贴板。维护者加好以后，cca 每 5 秒自己拉一次映射，不用再按回车。"),
+        ], art: "route"),
         ReleaseNote(version: "3.1.0-beta.17", title: "没装的命令可以帮你装上，也支持 Antigravity 命令行了", points: [
             .init(symbol: "arrow.down.circle",
                   text: "没装 claude、codex 命令时，cca 会问要不要用官方安装脚本装上（也可以运行 cca install-cli、cca codex install-cli）；账号页“没装 X 命令”旁边有「安装 X 命令…」。先直连，直连装不上时问过你，再经内置代理的一个节点装（用哪个节点由维护者在映射里指定），装完就停。"),
