@@ -477,6 +477,12 @@ case "$url" in   # 直连的第三方 API 接口（不能落到下面真的 curl
 		else printf '{"country": "United States", "region": "", "city": "", "isp": "Example ISP", "country_code": "us"}'; fi
 		exit 0 ;;
 	https://*ip.net.coffee/*) echo "CURL direct $url" >> "$CCA_T/curl.log"; exit 7 ;;   # 别的 ip.net.coffee 接口不该直连
+	https://claude.ai/cdn-cgi/trace|https://chatgpt.com/cdn-cgi/trace|https://www.cloudflare.com/cdn-cgi/trace)
+		# 直连的出口（服务器上安装时测能不能直连）：默认美国；direct_down 时连不上，direct_loc 里写地区代码时出口在那里
+		echo "CURL direct $url" >> "$CCA_T/curl.log"
+		[ -f "$CCA_T/direct_down" ] && exit 7
+		printf 'fl=1\nip=192.0.2.200\nloc=%s\n' "$(cat "$CCA_T/direct_loc" 2>/dev/null || echo US)"
+		exit 0 ;;
 esac
 exec /usr/bin/curl "$@"
 S

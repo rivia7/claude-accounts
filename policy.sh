@@ -19,8 +19,10 @@
 #     映射仓库的目录默认是环境变量 CCA_POLICY_DIR，没有就是 cca 仓库旁边的 cca-policy。节点不在参考节点（nodes.json）里时提醒一句
 #
 #   ./policy.sh key [ls]                       列出各台机器的 deploy key：添加时间、最近一次拉取、别名
-#   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥（- 是从标准输入读），
-#                                              不写别名就提示起一个（默认是公钥备注里的机器名）；别名不能重复
+#   ./policy.sh key add [公钥文件 | - | '公钥'] [别名]
+#                                              加一把只读 deploy key：不写文件就用剪贴板里的公钥（- 是从标准输入读；cca 给出的
+#                                              那一行命令把公钥和别名都写在后面），不写别名就提示起一个（默认是公钥备注里的
+#                                              机器名）；别名不能重复（命令里写的重复了，有终端时另问一个）
 #   ./policy.sh key rm 别名 [-y]                删掉一把：那台机器以后拉不到新映射（已经拉到的照用）
 #   ./policy.sh key mv 别名 [新别名]             改别名
 #   别名就是 GitHub 上 deploy key 的标题。GitHub 的 deploy key 不能改，改别名是删掉后用同一把公钥重新加上。
@@ -50,7 +52,8 @@ usage() {
   ./policy.sh lock claude|codex|agy 邮箱 节点 [-C 映射仓库的目录] [-y]
                                                把账号锁到节点，确认后发布（目录默认是 CCA_POLICY_DIR，没有就是 cca 仓库旁边的 cca-policy）
   ./policy.sh key [ls]                         列出各台机器的 deploy key：添加时间、最近一次拉取、别名
-  ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥，不写别名就提示起一个
+  ./policy.sh key add [公钥文件 | - | '公钥'] [别名]
+                                               加一把只读 deploy key：不写文件也不写公钥就用剪贴板里的，不写别名就提示起一个
   ./policy.sh key rm 别名 [-y]                 删掉一把
   ./policy.sh key mv 别名 [新别名]             改别名
 key 默认管 cca 里写的默认映射仓库，别的仓库加 -R 维护者/仓库
@@ -189,17 +192,19 @@ alias_check() {   # alias_check 别名 [这把 key 的编号]：能用返回 0�
 		return 1
 	fi
 }
-alias_pick() {   # alias_pick 提示 命令里写的别名 默认值 [这把 key 的编号]：写了就只检查；没写就提示（最多问 5 次）
-	local a why i
+alias_pick() {   # alias_pick 提示 命令里写的别名 默认值 [这把 key 的编号]：写了就只检查（不能用时，比如两台机器同名，有终端就另问一个）；
+	              # 没写就提示（最多问 5 次）
+	local a why i def="$3"
 	a=$(norm "$2")
 	if [ -n "$a" ]; then
-		why=$(alias_check "$a" "${4:-}") || { echo "✗ ${why}" >&2; return 1; }
-		printf '%s' "$a"
-		return 0
+		why=$(alias_check "$a" "${4:-}") && { printf '%s' "$a"; return 0; }
+		echo "✗ ${why}" >&2
+		[ "$TTY_OK" = 1 ] || return 1
+		def=""
 	fi
 	[ "$TTY_OK" = 1 ] || { echo "✗ 没有终端可以提问：把别名写在命令后面" >&2; return 1; }
 	for i in 1 2 3 4 5; do
-		a=$(norm "$(ask "${1}${3:+ [${3}]}：" "$3")")
+		a=$(norm "$(ask "${1}${def:+ [${def}]}：" "$def")")
 		why=$(alias_check "$a" "${4:-}") && { printf '%s' "$a"; return 0; }
 		echo "  ${why}" >&2
 	done
@@ -214,15 +219,18 @@ key_scan() {   # key_scan 文字 来源：LINE 是里面的公钥（可以夹在
 		grep -oE '(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) AAAA[A-Za-z0-9+/]+=*( [A-Za-z0-9._+-]*@[A-Za-z0-9._+-]+)?' |
 		awk '!seen[$1 " " $2]++' || true)
 }
-key_read() {   # key_read 来源（文件、- 或者空＝剪贴板）→ LINE：一行公钥（类型 内容 [备注]），FP：它的指纹
+key_read() {   # key_read 来源（文件、- 或者空＝剪贴板）[命令里直接写的公钥] → LINE：一行公钥（类型 内容 [备注]），FP：它的指纹
 	local src="$1" text from n
-	case "$src" in
-		'') text=$(pbpaste 2>/dev/null || true); from="剪贴板" ;;
-		-) text=$(cat); from="标准输入" ;;
-		*) text=$(cat "$src") || fail "读不了 ${src}"; from="$src" ;;
-	esac
+	if [ -n "${2:-}" ]; then text="$2"; from="命令里写的公钥"
+	else
+		case "$src" in
+			'') text=$(pbpaste 2>/dev/null || true); from="剪贴板" ;;
+			-) text=$(cat); from="标准输入" ;;
+			*) text=$(cat "$src") || fail "读不了 ${src}"; from="$src" ;;
+		esac
+	fi
 	key_scan "$text" "$from"
-	if [ -z "$LINE" ] && [ -z "$src" ] && [ "$TTY_OK" = 1 ]; then   # 剪贴板里没有：让维护者直接粘贴
+	if [ -z "$LINE" ] && [ -z "$src" ] && [ -z "${2:-}" ] && [ "$TTY_OK" = 1 ]; then   # 剪贴板里没有：让维护者直接粘贴
 		from="粘贴的内容"
 		key_scan "$(ask "  剪贴板里没有公钥。粘贴对方发来的公钥（一行），回车：" "")" "$from"
 	fi
@@ -255,18 +263,21 @@ key_ls() {
 	done <<< "$KEYS"
 }
 key_add() {
-	local a src="" name="" pub comment def hit mine=""
+	local a src="" text="" name="" pub comment def hit mine=""
 	for a in "$@"; do
 		if [ "$a" = - ] || [ -f "$a" ]; then
-			[ -z "$src" ] || fail "一次加一把"
+			[ -z "$src$text" ] || fail "一次加一把"
 			src="$a"
+		elif [[ "$a" == *[[:space:]]AAAA* ]]; then   # 公钥本身（cca 给出的那一行命令里写着：ssh-ed25519 AAAA… cca-policy@机器名）
+			[ -z "$src$text" ] || fail "一次加一把"
+			text="$a"
 		elif [ -z "$name" ]; then
 			name="$a"
 		else
-			fail "用法：./policy.sh key add [公钥文件 | -] [别名]"
+			fail "用法：./policy.sh key add [公钥文件 | - | '公钥'] [别名]"
 		fi
 	done
-	key_read "$src"
+	key_read "$src" "$text"
 	pub=$(printf '%s' "$LINE" | cut -d' ' -f1,2)
 	comment=$(printf '%s' "$LINE" | cut -s -d' ' -f3-)
 	keys_load || fail "读不到 ${REPO} 上的 deploy key：${GH_ERR}"
@@ -280,7 +291,7 @@ key_add() {
 	echo "  要加的公钥：${FP}${comment:+（${comment}）}${mine:+，是这台机器的}"
 	name=$(alias_pick "  给它起个别名（谁的哪台机器，以后按别名查、删、改）" "$name" "$def") || exit 1
 	key_create "$name" "$pub" ro || fail "没加上：${GH_ERR}"
-	echo "✓ 已把「${name}」加成 ${REPO} 的只读 deploy key：那台机器在引导里按回车，或者运行 cca policy pull，就能拉到映射"
+	echo "✓ 已把「${name}」加成 ${REPO} 的只读 deploy key：那台机器上正在等的 cca 几秒内就会自己拉到映射（没在等的，在那台机器上运行 cca policy pull）"
 }
 key_rm() {
 	[ $# -eq 1 ] || fail "用法：./policy.sh key rm 别名 [-y]"
@@ -310,8 +321,8 @@ key_mv() {
 	if [ "$new" = "$title" ]; then echo "• 别名没变"; return 0; fi
 	gh_api -X DELETE "repos/${REPO}/keys/${id}" || fail "没改成：${GH_ERR}"
 	key_create "$new" "$pub" "$ro" || fail "旧的「${title}」已经删了，可新的没加上：${GH_ERR}
-  那台机器现在拉不到新映射，尽快加回来：复制下面这一行，运行 ./policy.sh key add '${new}'
-  ${pub}"
+  那台机器现在拉不到新映射，尽快加回来（公钥写在命令里了）：
+  ./policy.sh key add -R ${REPO} '${pub}' '${new}'"
 	echo "✓ 「${title}」改叫「${new}」（GitHub 上的 deploy key 不能改，是删掉后用同一把公钥重新加的：那台机器什么都不用做，添加时间和最近使用从现在算起）"
 }
 key_cmd() {

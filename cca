@@ -1226,7 +1226,8 @@ def policy_missing(c, t, tool):
         elif e in skip:
             why = '这台机器上删掉过（要加回来：%s add）' % tool.cmd
         elif not c.get('nodes'):
-            why = '这台机器还没有可选节点（运行 cca router setup）'
+            why = ('这台机器还没有可选节点（运行 cca router setup）' if (c.get('router') or {}).get('host') else
+                   '这台机器还没有可选节点（运行 cca router setup；连不上路由器的服务器上运行 cca install，导入维护者提供的节点）')
         elif n not in c['nodes']:
             why = '节点 %s 不在这台机器的可选节点里（运行 cca router setup 选上它）' % n
         elif not KEY_RE.match(e):
@@ -1593,29 +1594,60 @@ def table_problems(c, t, tool, pm):
     return errs
 
 
-def policy_nodes_fill(c):
+def policy_nodes_fill(c, server=False):
     """维护者的映射要用、还不在可选节点里的节点，是维护者参考配置里的（同步时 cca 把它写进路由器的配置）：自动加进
-    可选节点、记下摘要，说一声，映射里的账号随后就能加进来。还没有可选节点（没配置路由器）、这台机器删掉过的账号不算"""
+    可选节点、记下摘要，说一声，映射里的账号随后就能加进来。还没有可选节点（没配置路由器）、这台机器删掉过的账号不算。
+    server：服务器上导入维护者提供的节点（cca install 里维护者确认了这台机器之后，见 cmd_nodes_import）：还没有可选节点也加，
+    映射指定的安装节点也加，不说（bash 汇总成一句）。返回加进来的节点"""
     f = policy_fill()
-    if not f or not c.get('nodes'):
-        return
+    if not f or not (c.get('nodes') or server):
+        return []
     fp = {p['name']: fill_fp(p) for p in f['proxies']}
+    have = list(c.get('nodes') or [])
     want = {}
+    inst = policy_install_node() if server else ''
+    if inst in fp and inst not in have:
+        want[inst] = []
     for tool in TOOLS:
         if not policy_in_use(tool):
             continue
         skip = set(tool.state(c).get('policy_skip') or [])
         for e, n in policy_map(tool, c).items():
-            if n in fp and n not in c['nodes'] and e not in skip:
+            if n in fp and n not in have and e not in skip:
                 want.setdefault(n, []).append(e)
     for n, who in want.items():
-        c['nodes'] = c['nodes'] + [n]
+        c['nodes'] = list(c.get('nodes') or []) + [n]
         if fp[n]:
             ids = dict(node_ids(c))
             ids[n] = fp[n]
             c['node_ids'] = ids
-        notice('nodes_filled', '• 维护者的映射要 %s 走节点 %s：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点'
-               % ('、'.join(who), n), node=n)
+        if not server:
+            notice('nodes_filled', '• 维护者的映射要 %s 走节点 %s：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点'
+                   % ('、'.join(who), n), node=n)
+    return list(want)
+
+
+def cmd_nodes_import():
+    """服务器上（没配置过路由器、直连不通，cca install 里维护者确认了这台机器之后）导入维护者提供的节点：映射指定的安装节点、映射里
+    这台机器的账号要用的节点（都要在维护者参考节点里，定义有签名），加进可选节点、记下摘要。打印加进来的节点（一行一个）；
+    可选节点里一个能用的都没有时退出码 3（stdout 是原因）"""
+    c = cfg_load()
+    added = policy_nodes_fill(c, server=True)
+    if added:
+        cfg_save(c)
+    for n in added:
+        print(n)
+    if not c.get('nodes'):
+        print('维护者的映射里没有这台机器能用的节点（映射指定的安装节点、映射里账号的节点都不在维护者参考节点里）')
+        sys.exit(3)
+
+
+def cmd_restricted(loc=''):
+    """出口的地区代码在不能用的地区（RESTRICTED）里时打印地区名、退出码 0；不在时退出码 1"""
+    name = RESTRICTED.get(loc.strip().upper())
+    if not name:
+        sys.exit(1)
+    print(name)
 
 
 def reconcile_all(c):
@@ -9850,7 +9882,8 @@ CMDS = {
     'email': cmd_email, 'check': cmd_check, 'add': cmd_add, 'rm': cmd_rm, 'rename': cmd_rename, 'reorder': cmd_reorder,
     'set-last': cmd_set_last, 'session-open': cmd_session_open, 'name': cmd_name, 'login-url': cmd_login_url,
     'private-profile': cmd_private_profile, 'runtime-record': cmd_runtime_record, 'browser-profile': cmd_browser_profile,
-    'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes,
+    'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes, 'nodes-import': cmd_nodes_import,
+    'restricted': cmd_restricted,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
     'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest, 'sync-state': cmd_sync_state,
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'launch-check': cmd_launch_check, 'coffee': cmd_coffee,
@@ -11603,12 +11636,16 @@ cmd_add() {   # cca [codex] add [api]
 	local email alias key node out hint
 	[ "${1:-}" = api ] && { cmd_add_api; return; }
 	need_tty
-	# 没配置路由器：先配置。服务器上（从来没配置过路由器（没有地址），只配置了本机的代理，可选节点来自维护者的参考节点）有可选节点就不用；
-	# 配置过、只是现在用不了（比如密钥没了）的，照样先重新配置
+	# 没配置路由器：先配置。服务器上（从来没配置过路由器（没有地址），只配置了本机的代理，可选节点来自维护者的参考节点）有可选节点就不用，
+	# 还没有、直连又不通的，等维护者确认这台机器、导入节点（builtin_onboard）；配置过、只是现在用不了（比如密钥没了）的，照样先重新配置
 	if ! router_ready && { [ -n "$ROUTER_HOST" ] || [ -z "$LOCAL_SET" ] || [ -z "$(py nodes-allowed)" ]; }; then
-		info "官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
-		ROUTER_FORM_WHY="官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器）。"
-		cmd_router_setup || return 1
+		if server_builtin; then
+			builtin_onboard "${CMD} add" || return 1
+		else
+			info "官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
+			ROUTER_FORM_WHY="官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器）。"
+			cmd_router_setup || return 1
+		fi
 	fi
 	say ""
 	if [ "$TOOL" = agy ]; then say "${C_B}添加 ${TOOL_LABEL} 账号${C_0}    ${C_D}Google 账号${C_0}"
@@ -13545,6 +13582,12 @@ core_setup() {   # cca local setup 选了内置代理：在家时先从路由器
 	fi
 	miss=$(py core-missing)
 	[ -z "$miss" ] || fail_warn node_missing "内置代理里没有这些节点的定义：${miss}。用它们的账号在外面会被拒绝连接，直到在家连上路由器、拷到它们"
+	if [ "${LOCAL_SLOTS:-0}" = 0 ]; then   # 还没有走节点的账号：端口池是空的，内核先不用起（BSD 的 seq 7901 7900 还会倒着数）
+		okay "已改用内置代理：加了走节点的账号之后，启动时 cca 自动起它"
+		core_boot_offer
+		gui_done local_ready "已改用内置代理"
+		return 0
+	fi
 	local_ensure || { gui_fail local_unavailable "内置代理没有就绪（详情里有原因）"; return 1; }
 	okay "本机端口池已就绪：内置代理 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}（$(core_runs_where)），连不上路由器时账号自动走这里"
 	core_boot_offer
@@ -13822,20 +13865,23 @@ install_found() {   # 安装脚本跑完之后：重新找命令，找到了说�
 	case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) info "~/.local/bin 不在 PATH 里：cca 照样找得到它；要在终端里直接运行 ${TOOL}，把它加进 PATH" ;; esac
 	return 0
 }
-tool_install() {   # tool_install：用官方安装脚本装当前工具的命令（先直连，不行时问过再经内置代理装）。装好了返回 0（TOOL_BIN 等换成新装的）
-	local rc why node
+tool_install() {   # tool_install [proxy]：用官方安装脚本装当前工具的命令（先直连，不行时问过再经内置代理装）。装好了返回 0（TOOL_BIN 等换成新装的）。
+	               # proxy：已经知道直连不通（服务器上安装时测过、用户也同意了经内置代理装）：不再直连试，映射指定的节点也不另外问
+	local rc why node via="${1:-}"
 	say "  用官方安装脚本安装 ${TOOL}：${INSTALL_URL}（脚本自己下载、校验，装进 ~/.local/bin）"
-	install_once; rc=$?
-	case $rc in   # 安装脚本跑完了却没找到命令：换个出口再跑一次也一样，不再经内置代理试
-		0) install_found && return 0; warn "安装脚本跑完了，却没找到 ${TOOL} 命令：看上面安装脚本的输出"; return 1 ;;
-		3) why="直连拿不到安装脚本" ;;
-		130) return 1 ;;
-		*) why="直连没装成" ;;
-	esac
-	warn "$why"
+	if [ -z "$via" ]; then
+		install_once; rc=$?
+		case $rc in   # 安装脚本跑完了却没找到命令：换个出口再跑一次也一样，不再经内置代理试
+			0) install_found && return 0; warn "安装脚本跑完了，却没找到 ${TOOL} 命令：看上面安装脚本的输出"; return 1 ;;
+			3) why="直连拿不到安装脚本" ;;
+			130) return 1 ;;
+			*) why="直连没装成" ;;
+		esac
+		warn "$why"
+	fi
 	node=$(install_node_pick); rc=$?
 	case $rc in
-		0) consent install_proxy "$node" "经内置代理安装" "${why}。经内置代理的节点 ${node} 安装 ${TOOL} 吗？" \
+		0) [ -n "$via" ] || consent install_proxy "$node" "经内置代理安装" "${why}。经内置代理的节点 ${node} 安装 ${TOOL} 吗？" \
 			"会在本机临时起一个只走 ${node} 的代理端口，装完就停；安装脚本照样从官方地址下载、自己校验，不带账号和登录信息。" y ||
 			{ info "没有安装 ${TOOL}（以后可以运行 ${CMD} install-cli）"; return 1; } ;;
 		2) ;;   # 现选的：选了就是同意
@@ -14697,7 +14743,8 @@ policy_clone() {   # policy_clone 仓库 目录：0 拉到了；1 连不上（�
 		err=$(GIT_SSH_COMMAND="$ssh_cmd" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
 			git clone --quiet --depth 1 "$url" "$2" 2>&1 >/dev/null) && return 0
 		case "$err" in
-			*"Permission denied"*) POLICY_ERR="GitHub 不认这台机器的 deploy key：维护者还没把公钥加到 ${1} 上，或者已经撤销了"; return 2 ;;
+			*"Permission denied"*) POLICY_ERR="GitHub 不认这台机器的 deploy key：维护者还没把公钥加到 ${1} 上，或者已经撤销了"
+				POLICY_DENIED=1; return 2 ;;
 			*"not found"*|*"not appear to be a git repository"*) POLICY_ERR="仓库 ${1} 不存在，或者这台机器的 deploy key 不是加在它上面的"; return 2 ;;
 			*"Host key verification failed"*|*"IDENTIFICATION HAS CHANGED"*) POLICY_ERR="GitHub 的主机密钥对不上（网络可能被劫持了），没有拉取"; return 2 ;;
 		esac
@@ -14710,8 +14757,9 @@ policy_clone() {   # policy_clone 仓库 目录：0 拉到了；1 连不上（�
 
 policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-policy）、检查格式后换上 $POLICY_DIR/policy.json；仓库里有
 	                 # 维护者参考配置里的节点（nodes.json，命名空间 cca-nodes）时同样验过换上，没有了就删掉。
-	                 # 两份都没问题才换（任何一份不对都不换），失败时原来的照用，原因在 POLICY_ERR
+	                 # 两份都没问题才换（任何一份不对都不换），失败时原来的照用，原因在 POLICY_ERR（GitHub 不认 deploy key 时 POLICY_DENIED=1）
 	local repo tmp rc i err nodes
+	POLICY_DENIED=""
 	repo=$(py policy-repo)
 	[ -n "$repo" ] || { POLICY_ERR="还没配置映射仓库（cca policy setup）"; return 1; }
 	[ -f "$POLICY_DIR/id_ed25519" ] || { POLICY_ERR="这台机器还没有 deploy key：运行 cca policy setup ${repo}"; return 1; }
@@ -14785,8 +14833,9 @@ policy_pull() {   # policy_pull [--json]：现在就拉一次，说明结果；�
 	return 1
 }
 
-policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，显示公钥（复制到剪贴板）和维护者要运行的命令
-	local repo="$1" old host opt=""
+policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，显示维护者要运行的那一行命令（公钥和别名都写在
+	                  # 里面，维护者复制过去直接运行；Mac 上顺便复制到剪贴板）
+	local repo="$1" old host opt="" line
 	mkdir -p "$POLICY_DIR" && chmod 700 "$POLICY_DIR" || die "建不了 ${POLICY_DIR}"
 	old=$(py policy-repo)
 	if [ -n "$old" ] && [ "$old" != "$repo" ]; then   # GitHub 的 deploy key 只能加在一个仓库上：换了仓库就换一把，旧仓库的映射也不再用
@@ -14797,16 +14846,49 @@ policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、�
 		ssh-keygen -q -t ed25519 -N '' -C "cca-policy@${host}" -f "$POLICY_DIR/id_ed25519" || die "生成 deploy key 失败"
 	fi
 	py policy-set "$repo" || die "保存配置失败"
-	say ""
-	say "  映射仓库：${repo}。把这台机器的公钥发给维护者（顺便说一声是谁的哪台机器），由维护者加成这个仓库的只读 deploy key："
-	say ""
-	say "    $(cat "$POLICY_DIR/id_ed25519.pub")"
-	say ""
-	if pbcopy < "$POLICY_DIR/id_ed25519.pub" 2>/dev/null; then say "  （公钥已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
-	# 维护者那边：policy.sh key add 读剪贴板里的公钥，提示起个别名（之后按别名查、删、改），默认就管 POLICY_REPO_DEFAULT
+	# 维护者那边：policy.sh key add 认命令里写的公钥，别名默认是这台机器的名字（和别的机器重名时它会另问一个；之后按别名查、删、改），
+	# 默认就管 POLICY_REPO_DEFAULT
 	[ "$repo" = "$POLICY_REPO_DEFAULT" ] || opt=" -R ${repo}"
-	say "  ${C_D}维护者：复制这一行，在 cca 的仓库里运行 ./policy.sh key add${opt}（读剪贴板里的公钥，提示起个别名）${C_0}"
+	line="./policy.sh key add${opt} $(shq "$(cat "$POLICY_DIR/id_ed25519.pub")") $(shq "$host")"
 	say ""
+	say "  映射仓库：${repo}。把下面这一行发给维护者（顺便说一声是谁的哪台机器），由维护者在 cca 的仓库里运行，"
+	say "  把这台机器的公钥加成这个仓库的只读 deploy key："
+	say ""
+	say "    ${line}"
+	say ""
+	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then say "  （这一行已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
+}
+policy_got() {   # 拉到了映射（policy_fetch 成功之后）：记下来，说一声
+	policy_log "拉取成功"
+	touch "$POLICY_DIR/checked" 2>/dev/null
+	okay "拉到了维护者的映射（$(py policy-summary)）"
+}
+policy_wait() {   # 等维护者加上这台机器的公钥：马上拉一次，之后每 5 秒自动再拉（回车马上再拉，输入 s 先跳过；读到头也算跳过），最多等
+	               # 30 分钟。拉到了说一声、返回 0。还没加上（GitHub 不认 deploy key）不用每次都说，别的原因（连不上 GitHub 等）变了才说。
+	               # CCA_POLICY_POLL：每隔几秒（整数，测试用）
+	local w rc i t0 last="" said="" poll="${CCA_POLICY_POLL:-5}"
+	case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
+	for ((i = 0; i < 1800 / poll; i++)); do
+		policy_fetch && { policy_got; return 0; }
+		if [ "$POLICY_ERR" != "$last" ]; then
+			policy_log "$POLICY_ERR"
+			[ -n "$POLICY_DENIED" ] || warn "这次没拉到映射：${POLICY_ERR}"
+			last="$POLICY_ERR"
+		fi
+		if [ -z "$said" ]; then
+			say "  ${C_D}等维护者运行上面那一行：每 5 秒自动重试（回车马上重试，输入 s 先跳过）…${C_0}"
+			said=1
+		fi
+		t0=$SECONDS
+		IFS= read -r -t "$poll" w <&3; rc=$?
+		if [ $rc -ne 0 ]; then
+			# 到时间了：bash 4 起退出码大于 128；macOS 的 bash 3.2 和读到头一样是 1，按等了多久分（读到头是马上返回的）
+			[ $rc -gt 128 ] || [ $((SECONDS - t0)) -ge 1 ] && continue
+			return 1   # 读到头（终端关了、答案用完了）：当跳过
+		fi
+		case "$w" in s|S|q|Q) return 1 ;; esac
+	done
+	return 1
 }
 policy_setup() {   # policy_setup [仓库]：配置映射仓库（不写就是维护者的默认仓库），再试着拉一次
 	local repo="${1:-$POLICY_REPO_DEFAULT}"
@@ -14835,16 +14917,10 @@ policy_offer() {   # 终端里启动账号时：还没配置映射、也没说�
 	esac
 	return 0
 }
-policy_guide() {   # 手把手配置：生成 deploy key、显示公钥，等维护者加好之后按回车重新拉取（可以先跳过：之后每天自动拉）
-	local w i
+policy_guide() {   # 手把手配置：生成 deploy key、显示维护者要运行的那一行，等维护者加好（每 5 秒自动拉一次；可以先跳过：之后每天自动拉）。
+	                # 这台机器的公钥以前就加过（比如重装了 cca）时马上就拉到了
 	policy_prepare "$POLICY_REPO_DEFAULT"
-	policy_pull && return 0   # 这台机器的公钥以前就加过（比如重装了 cca）：直接拉到了
-	for i in 1 2 3 4 5 6 7 8 9 10; do
-		printf '%s' "  维护者加好之后按回车重新拉取；输入 s 先跳过：" >&2
-		IFS= read -r w <&3 || break   # 读到头（终端关了、答案用完了）就当跳过
-		case "$w" in s|S|q|Q) break ;; esac
-		policy_pull && return 0
-	done
+	if policy_wait; then policy_rows; return 0; fi
 	info "先跳过：维护者加上公钥之后，cca 每天会自动拉一次映射（也可以运行 cca policy pull 马上拉）"
 }
 
@@ -15012,6 +15088,74 @@ codex_alias_ensure() {   # codex_alias_ensure [账号名] [quiet]：没有就建
 	info "以后可以直接用 ${CODEX_ALIAS} 代替 cca codex：${CODEX_ALIAS} @${1:-别名} 直接启动，${CODEX_ALIAS} usage 查用量"
 }
 
+# ---------------------------------------------------------------------------
+# 服务器上不用路由器（Linux；CCA_REMOTE_LOGIN=1 时 macOS 上也这样，测试用）：从没配置过路由器、直连不通（连不上，或者出口在受限地区）时，
+# cca install、cca add 不问路由器，直接用内置代理。节点由维护者提供：这台机器生成只读 deploy key，给出维护者在 cca 的仓库里运行的一行
+# 命令（公钥写在里面），之后每 5 秒拉一次映射；维护者加上以后，把验过签名的映射指定的安装节点（install_node）和映射里这台机器的账号
+# 要用的节点（都在维护者参考节点里）导入可选节点，配置好内置代理，再经它装 Claude Code；映射里的账号随后自动加进来
+# ---------------------------------------------------------------------------
+direct_probe() {   # 不经代理能用当前工具的服务吗：直连 TRACE_HOST 的 /cdn-cgi/trace 拿得到出口、出口不在受限地区。不能时返回 1，原因在 DIRECT_WHY
+	local trace loc i name
+	DIRECT_WHY=""
+	for i in 1 2; do   # 有的网络会丢新连接：再试一次
+		trace=$(curl -q --proxy '' --noproxy '*' -s --connect-timeout 5 -m 8 "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
+		loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p')
+		[ -z "$loc" ] || break
+	done
+	if [ -z "$loc" ]; then DIRECT_WHY="直连 ${TRACE_HOST} 不通"; return 1; fi
+	name=$(py restricted "$loc") || return 0
+	DIRECT_WHY="直连 ${TRACE_HOST} 的出口在${name}，不能用"
+	return 1
+}
+server_builtin() {   # 服务器上要不要直接用内置代理（不问路由器）：Linux（login_remote）、从没配置过路由器（没有地址）、本机客户端没配置或者
+	                  # 就是内置代理、直连不通。要测一次直连（几秒）
+	login_remote || return 1
+	load_router
+	[ -z "$ROUTER_HOST" ] || return 1
+	case "$LOCAL_SET" in ''|builtin) ;; *) return 1 ;; esac
+	info "正在检测这台机器能不能直连 ${TRACE_HOST}…"
+	direct_probe || return 0
+	okay "这台机器能直连 ${TRACE_HOST}"
+	return 1
+}
+builtin_onboard() {   # builtin_onboard 接着配置的命令：服务器上直连不通、没配置过路由器时不配置路由器，等维护者确认这台机器，导入维护者提供的
+	                    # 节点，配置好内置代理。导入了节点就返回 0（内置代理没就绪只说一声：启动账号时还会再试）；没导入（先跳过了、用不了）
+	                    # 时说明之后再运行哪条命令接着配置
+	local again="$1" repo added n list=""
+	say ""
+	say "  ${C_B}${DIRECT_WHY:-直连不通}：这台机器不用配置路由器，改用 cca 内置的代理${C_0}"
+	say "  节点由维护者提供：维护者确认这台机器之后，cca 自动导入节点、配置好内置代理（要用路由器的话，之后运行 cca router setup）"
+	if ! core_possible; then
+		warn "内置代理的内核只有 x86-64 和 arm64 的 Linux 版，这台是 $(uname -m)：用不了内置代理"
+		return 1
+	fi
+	if ! command -v git >/dev/null 2>&1; then
+		warn "拉维护者的映射要 git，这台机器上没有$(pkg_hint git)。装好后再运行 ${again}"
+		return 1
+	fi
+	repo=$(py policy-repo)
+	[ -n "$repo" ] || repo="$POLICY_REPO_DEFAULT"
+	if [ -z "$repo" ]; then
+		warn "不知道维护者的映射仓库：运行 cca policy setup 维护者/仓库，之后再运行 ${again}"
+		return 1
+	fi
+	if [ "$(py policy-repo)" = "$repo" ] && [ -f "$POLICY_DIR/id_ed25519" ] && policy_fetch; then   # 以前就确认过（重新运行 cca install）
+		policy_got
+	else
+		policy_prepare "$repo"
+		if ! policy_wait; then
+			info "先跳过：维护者运行上面那一行之后，再运行 ${again} 接着配置（导入节点、配置内置代理）"
+			return 1
+		fi
+	fi
+	added=$(py nodes-import) || { warn "${added}：请维护者在映射里指定安装用的节点（install_node），或者把这台机器的账号写进映射"; return 1; }
+	while IFS= read -r n; do [ -z "$n" ] || list="${list:+${list}、}${n}"; done <<< "$added"
+	[ -z "$list" ] || okay "已导入维护者提供的节点：${list}（这台机器的可选节点）"
+	policy_rows
+	core_setup || warn "内置代理还没就绪（原因见上面）：之后运行 cca local setup 再试，启动账号时 cca 也会再试"
+	return 0
+}
+
 cmd_install() {
 	need_deps
 	need_tty
@@ -15048,17 +15192,28 @@ cmd_install() {
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
 	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
-	if ! router_ready && confirm "现在配置路由器（OpenClash 或 ShellCrash；SSH 免密 + 按端口分流）？" y; then
+	local onboard=""   # 服务器上直连不通（见 builtin_onboard）：ok 配置好了内置代理；skip 没配置好（等维护者确认之后再运行 cca install）
+	if server_builtin; then
+		if builtin_onboard "cca install"; then onboard=ok; else onboard=skip; fi
+	elif ! router_ready && confirm "现在配置路由器（OpenClash 或 ShellCrash；SSH 免密 + 按端口分流）？" y; then
 		cmd_router_setup || warn "路由器配置没完成，稍后可运行 cca router setup"
 	fi
 	if [ -z "$CLAUDE_BIN" ]; then   # 辅助安装：直连不通时可以经内置代理装（要有节点定义：映射的参考节点，或者在家时从路由器拷的）
-		if confirm "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" y; then
+		if [ "$onboard" = skip ]; then
+			:   # 还没有节点：等维护者确认之后再运行 cca install
+		elif [ "$onboard" = ok ]; then
+			if confirm "没找到 Claude Code（claude 命令）。现在经内置代理用官方安装脚本装上吗？" y; then
+				tool_install proxy || warn "Claude Code 没装上：稍后运行 cca install-cli 再装"
+			else
+				info "以后用 cca install-cli 装 Claude Code（只用 Codex、Antigravity 账号的话不需要它）"
+			fi
+		elif confirm "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" y; then
 			tool_install || warn "Claude Code 没装上：稍后运行 cca install-cli 再装"
 		else
 			info "以后用 cca install-cli 装 Claude Code（只用 Codex、Antigravity 账号的话不需要它）"
 		fi
 	fi
-	if [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
+	if [ "$onboard" != skip ] && [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
 		cmd_add || true
 	fi
 	if [ -n "${CCA_PATH_ADDED:-}" ]; then info "完成。${CCA_PATH_ADDED}，输入 cca 就能用（cca help 查看全部命令）"

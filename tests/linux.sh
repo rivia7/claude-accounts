@@ -13,6 +13,8 @@
 #     启动、查用量、cxa）→ 真实的出口和泄露检测（测试节点直连出去；服务器上不测 WebRTC）→ 只在 macOS 上的命令说清楚 → cca local off
 #   Linux 桌面上的 Clash Verge（数据目录 ~/.local/share/…，内核是真的 mihomo、经数据目录里的 verge-mihomo.sock 控制）：没有图形界面时
 #     说清楚，有时打开它，配置端口池、经它出去，cca local off 去掉
+#   服务器上不用路由器（全新的 HOME，直连通不通由假 curl 定）：直连不通时 cca install 不问路由器，给出维护者运行的那一行，先跳过；
+#     维护者加上公钥后再运行：拉到映射、导入映射指定的节点、照映射加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
@@ -101,7 +103,7 @@ H="$D/home"; mkdir -p "$H/.local/bin" "$H/.cache" "$D/bin" "$D/up" "$D/www" "$D/
 cleanup() {   # 停掉这次起的进程（测试服务、内核、托管进程、上报进程、后台下载…：命令行或环境里带着 $D 的），删掉沙箱
 	local p n h
 	kill $(cat "$D/pids" 2>/dev/null) 2>/dev/null
-	for h in "$H" "$D/rhome"; do [ -f "$h/.cca/config.json" ] && HOME="$h" "$D/cca/cca" local off >/dev/null 2>&1; done
+	for h in "$H" "$D/shome" "$D/rhome"; do [ -f "$h/.cca/config.json" ] && HOME="$h" "$D/cca/cca" local off >/dev/null 2>&1; done
 	for p in /proc/[0-9]*; do
 		n=${p#/proc/}
 		[ "$n" = $$ ] && continue
@@ -291,28 +293,44 @@ case "\$1" in
 	*) echo "crontab: 测试里只支持 -l 和 -" >&2; exit 2 ;;
 esac
 S
-# 假的 git：只管 cca 拉映射的 git clone（把 $D/policy_repo 里的文件拷过去），记下用的 ssh 命令
+# 假的 git：只管 cca 拉映射的 git clone（把 $D/policy_repo 里的文件拷过去），记下用的 ssh 命令；$D/policy_denied 时像 GitHub 不认这台
+# 机器的 deploy key（维护者还没加上）那样拒绝
 cat > "$D/bin/git" <<S
 #!/bin/sh
 echo "GIT \$* SSH=\${GIT_SSH_COMMAND:-}" >> "$D/git.log"
 [ "\$1" = clone ] || exit 1
+if [ -f "$D/policy_denied" ]; then echo 'git@github.com: Permission denied (publickey).' >&2; echo 'fatal: Could not read from remote repository.' >&2; exit 128; fi
 for a; do dst=\$a; done
 rm -rf "\$dst" && mkdir -p "\$dst" && cp -R "$D/policy_repo/." "\$dst/"
 S
 chmod 755 "$D/bin/claude" "$D/bin/codex" "$D/bin/crontab" "$D/bin/git"
-# CCA_LINUX_CORE_CACHE（--docker 时宿主机下好的内核）：cca 下载内核时从这里拿（照样校验 SHA256），别的照常交给真的 curl
+# 假的 curl（包着真的）：cca 直连 claude.ai 这些的 /cdn-cgi/trace（direct_probe：服务器上能不能直连）由测试定，不看这台机器的网络：
+# $D/direct_down 时连不上，$D/direct_loc 是出口地区（默认 US）。CCA_LINUX_CORE_CACHE（--docker 时宿主机下好的内核）：cca 下载内核时
+# 从这里拿（照样校验 SHA256）。别的照常交给真的 curl
 CORE_CACHE=""
-if [ -n "${CCA_LINUX_CORE_CACHE:-}" ] && ls "$CCA_LINUX_CORE_CACHE"/mihomo-linux-*.gz >/dev/null 2>&1; then
-	CORE_CACHE=$CCA_LINUX_CORE_CACHE
-	cat > "$D/bin/curl" <<S
-#!/bin/sh
-out=""; url=""; prev=""
-for a; do [ "\$prev" = -o ] && out=\$a; case "\$a" in https://github.com/MetaCubeX/mihomo/releases/download/*) url=\$a ;; esac; prev=\$a; done
-if [ -n "\$url" ] && [ -n "\$out" ] && [ -f "$CORE_CACHE/\${url##*/}" ]; then exec cp "$CORE_CACHE/\${url##*/}" "\$out"; fi
-exec "$(command -v curl)" "\$@"
+if [ -n "${CCA_LINUX_CORE_CACHE:-}" ] && ls "$CCA_LINUX_CORE_CACHE"/mihomo-linux-*.gz >/dev/null 2>&1; then CORE_CACHE=$CCA_LINUX_CORE_CACHE; fi
+{ echo '#!/bin/sh'; echo "D='$D' CORE_CACHE='$CORE_CACHE' REAL='$(command -v curl)'"; cat <<'S'; } > "$D/bin/curl"
+out=""; url=""; prev=""; direct=""
+for a; do
+	[ "$prev" = -o ] && out=$a
+	[ "$prev" = --proxy ] && [ -z "$a" ] && direct=1
+	case "$a" in https://*) url=$a ;; esac
+	prev=$a
+done
+case "$direct $url" in
+	"1 https://claude.ai/cdn-cgi/trace"|"1 https://chatgpt.com/cdn-cgi/trace"|"1 https://www.cloudflare.com/cdn-cgi/trace")
+		echo "CURL direct $url" >> "$D/curl.log"
+		[ -f "$D/direct_down" ] && exit 7
+		printf 'fl=1\nip=192.0.2.200\nloc=%s\n' "$(cat "$D/direct_loc" 2>/dev/null || echo US)"
+		exit 0 ;;
+esac
+case "$url" in
+	https://github.com/MetaCubeX/mihomo/releases/download/*)
+		[ -n "$CORE_CACHE" ] && [ -n "$out" ] && [ -f "$CORE_CACHE/${url##*/}" ] && exec cp "$CORE_CACHE/${url##*/}" "$out" ;;
+esac
+exec "$REAL" "$@"
 S
-	chmod 755 "$D/bin/curl"
-fi
+chmod 755 "$D/bin/curl"
 export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" CCA_POLICY_DEFAULT= LANG=C.UTF-8
 unset CCA_HOME XDG_RUNTIME_DIR XDG_DATA_HOME DISPLAY WAYLAND_DISPLAY
 echo "  bash ${BASH_VERSION%%(*}，$(python3 --version 2>&1)，$(curl --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2)，nc：$(readlink -f "$(command -v nc)" 2>/dev/null || echo 无)，ps：$(readlink -f "$(command -v ps)" 2>/dev/null || echo 无)，ruby：$(ruby -e 'print RUBY_VERSION' 2>/dev/null || echo 无)"
@@ -339,6 +357,7 @@ case "$url" in
 	"$G/latest/download/cca"|"$G/latest/download/cca.sig") cp "$I/gh/${url##*/}" "$out" ;;
 	"$G/latest") [ -s "$I/gh/latest" ] || exit 22; [ "$fmt" = '%{redirect_url}' ] && printf '%s' "$G/tag/v$(cat "$I/gh/latest")"; exit 0 ;;
 	"$G/download/v"*/cca|"$G/download/v"*/cca.sig) v=${url#"$G/download/"}; f="$I/gh/${v%%/*}/${url##*/}"; [ -f "$f" ] || exit 22; cp "$f" "$out" ;;
+	https://claude.ai/cdn-cgi/trace) printf 'fl=1\nip=192.0.2.200\nloc=US\n' ;;   # cca install 看能不能直连：能，照旧问要不要配置路由器
 	*) exit 22 ;;
 esac
 S
@@ -433,10 +452,10 @@ running() {   # running 文字：有命令行里带着它的进程（读 /proc�
 	done
 	return 1
 }
-keeper() {   # 这次测试的托管进程（按 HOME 认：机器上可能还有别人的 cca）
-	local p
+keeper() {   # keeper [HOME]：这次测试的托管进程（按 HOME 认：机器上可能还有别人的 cca）
+	local p h="${1:-$H}"
 	for p in /proc/[0-9]*; do
-		{ tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null | grep -q ' core-keep $' && { tr '\0' '\n' < "$p/environ"; } 2>/dev/null | grep -qxF "HOME=$H" && echo "${p#/proc/}"
+		{ tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null | grep -q ' core-keep $' && { tr '\0' '\n' < "$p/environ"; } 2>/dev/null | grep -qxF "HOME=$h" && echo "${p#/proc/}"
 	done
 }
 k=$(keeper); m=$(cat "$H/.cca/core/mihomo.pid" 2>/dev/null); n=$m
@@ -754,6 +773,58 @@ elif [ $rc -eq 0 ] && [ -n "$bk" ] && [ "$(stat -c %a "$bk")" = 600 ] && printf 
 	! grep -qF '# cca-core' "$D/crontab" && grep -qx '0 3 \* \* \* echo user-job' "$D/crontab"; then
 	ok "cca restore：先打包备份（600，登录凭证、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa 和 crontab 里开机起内核的那一行（别的行留着）"
 else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
+
+# 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理，
+# 节点由维护者提供。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
+# 拉到映射，导入映射指定的节点（install_node、映射里账号的节点，只要维护者参考节点里有），照映射加上账号，内置代理由 cca _core-keep
+# 托管（问过后在 crontab 里加开机那一行），经账号的端口出去。内核文件用前面下好的那份（不再下载一次）
+SH="$D/shome"; mkdir -p "$SH/.local/bin"
+sr() { HOME="$SH" PATH="$SH/.local/bin:$PATH" CCA_POLICY_DEFAULT=example/cca-policy "$@"; }   # ~/.local/bin 在 PATH 里：不问要不要写进 ~/.bashrc
+if [ -x "$D/mihomo" ]; then mkdir -p -m 700 "$SH/.cca" "$SH/.cca/core" && cp "$D/mihomo" "$SH/.cca/core/mihomo-v$(sed -n 's/^CORE_VERSION="\(.*\)"$/\1/p' "$C")"; fi
+pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-S"}'
+printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-S", "type": "socks5", "server": "127.0.0.1", "port": 18080}, {"name": "US-X", "type": "ss", "server": "192.0.2.83", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$PR/nodes.json"
+rm -f "$PR/nodes.json.sig"; ssh-keygen -q -Y sign -n cca-nodes -f "$I/relkey" "$PR/nodes.json" </dev/null
+touch "$D/direct_down" "$D/policy_denied"; : > "$D/curl.log"
+out=$(sr env CCA_TTY="$(ans s)" "$C" install 2>&1); rc=$?
+pk="$SH/.cca/policy/id_ed25519.pub"
+line=$(printf '%s\n' "$out" | sed -n 's/^    \(\.\/policy\.sh key add .*\)$/\1/p' | head -n 1)
+if [ $rc -eq 0 ] && grep -q '^CURL direct https://claude.ai/cdn-cgi/trace' "$D/curl.log" && [ -s "$pk" ] && [ "$(stat -c %a "${pk%.pub}")" = 600 ] &&
+	printf '%s' "$out" | grep -q '直连 claude.ai 不通：这台机器不用配置路由器，改用 cca 内置的代理' &&
+	[ "$line" = "./policy.sh key add '$(cat "$pk")' $(cut -d@ -f2 "$pk")" ] && printf '%s' "$out" | grep -q '等维护者运行上面那一行' &&
+	printf '%s' "$out" | grep -q '先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置' &&
+	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|GitHub 不认这台机器的 deploy key' && [ -z "$(keeper "$SH")" ]; then
+	ok "服务器上直连不通：不问路由器，给出维护者运行的那一行（这台机器的公钥、机器名）；维护者还没加上时先跳过，说清楚之后再运行什么"
+else no "服务器上直连不通（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
+# 再运行 cca install，这次一直等着（不按回车：每隔几秒自动拉，CCA_POLICY_POLL=1 秒；答案是一直开着的管道）：维护者中途运行了那一行
+# （假 git 不再拒绝），cca 自己拉到、接着配置。开机起内核那一问的答案等拉到映射以后才写进管道（那之前读到的会当作“马上重试”）
+touch "$SH/.cca/policy/checked"   # 今天拉过了：启动时不再在后台拉（git.log 里只有这次 cca install 拉的）
+mkfifo "$D/tty.fifo"; exec 8<>"$D/tty.fifo"; : > "$D/git.log"
+sr env CCA_TTY="$D/tty.fifo" CCA_POLICY_POLL=1 "$C" install > "$D/onboard.out" 2>&1 & job=$!
+for i in $(seq 1 80); do [ "$(grep -c '^GIT clone' "$D/git.log")" -ge 3 ] && break; sleep 0.25; done   # 第三次是等了一轮之后自动拉的
+n_wait=$(grep -c '^GIT clone' "$D/git.log")
+rm -f "$D/policy_denied"   # 维护者运行了那一行
+for i in $(seq 1 80); do [ -f "$SH/.cca/policy/policy.json" ] && break; sleep 0.25; done
+printf 'y\n' >&8
+for i in $(seq 1 240); do kill -0 "$job" 2>/dev/null || break; sleep 0.25; done
+if kill -0 "$job" 2>/dev/null; then   # 卡住了：停掉这个 HOME 的进程（失败时才扫 /proc）
+	for p in /proc/[0-9]*; do { tr '\0' '\n' < "$p/environ"; } 2>/dev/null | grep -qxF "HOME=$SH" && kill "${p#/proc/}" 2>/dev/null; done
+fi
+wait "$job"; rc=$?
+exec 8<&-; rm -f "$D/tty.fifo"
+out=$(cat "$D/onboard.out")
+for i in $(seq 1 40); do [ "$(get)" = cca-linux-ok ] && break; sleep 0.25; done
+boot=$(grep -F '# cca-core' "$D/crontab" 2>/dev/null)
+if [ $rc -eq 0 ] && [ "$n_wait" -ge 3 ] && [ "$(printf '%s' "$out" | grep -c '等维护者运行上面那一行')" = 1 ] &&
+	printf '%s' "$out" | grep -q '拉到了维护者的映射（Claude 1 个账号' && printf '%s' "$out" | grep -qF '已导入维护者提供的节点：US-S（这台机器的可选节点）' &&
+	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c["nodes"] == ["US-S"] and c["node_ids"].get("US-S") == sys.argv[2] and c["local"]["client"] == "builtin" else 1)' "$SH/.cca/config.json" "$FPA" 2>/dev/null &&
+	grep -q '"sam(sam@example.com)": "US-S"' "$SH/.cca/accounts.json" && printf '%s' "$out" | grep -q '本机端口池已就绪：内置代理 127.0.0.1:7901' &&
+	[ "$boot" = "@reboot $C _core-keep >/dev/null 2>&1 # cca-core" ] && [ -n "$(keeper "$SH")" ] && [ "$(get)" = cca-linux-ok ] &&
+	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|没找到 Claude Code'; then
+	ok "再运行 cca install 等着：每隔几秒自动拉（拉了 ${n_wait} 次还没加上），维护者加上后拉到映射，导入映射指定的节点（参考节点里别的不导入），照映射加上 sam，内置代理由 cca _core-keep 托管（问过后加开机那一行），经账号的端口出去"
+else no "等维护者确认的 cca install（退出码 $rc，加上之前拉了 ${n_wait} 次）：$(printf '%s' "$out" | tail -n 4)；crontab 是「$(tr '\n' '|' < "$D/crontab" 2>/dev/null)」"; fi
+sr "$C" local off >/dev/null 2>&1
+for i in $(seq 1 40); do [ -z "$(keeper "$SH")" ] && ! listen 7901 && break; sleep 0.25; done
+rm -f "$D/direct_down" "$PR/nodes.json" "$PR/nodes.json.sig"
 
 # 在家走路由器：假路由器（127.0.0.2）上跑真的 cca-router.sh / apply.rb（sh 是这个发行版的 /bin/sh），内核是真的 mihomo（当作 OpenClash
 # 的 clash，-d /etc/openclash），uci、pidof、netstat 是假的（netstat 读 /proc/net/tcp），假 ssh 把命令交给它；SSH 端口（12222）只是
