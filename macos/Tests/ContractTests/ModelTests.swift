@@ -112,6 +112,17 @@ import Foundation
     check("table_invalid 的补救：cca edit", m2.remedy(for: failure(.tableInvalid)) == .handoff(.edit(prefix: [])))
     check("app_missing 的补救：Claude App 给下载页，ChatGPT App 没有", m2.remedy(for: failure(.appMissing)) == .openURL(Remedy.claudeDownload)
           && m2.remedy(for: failure(.appMissing, .codex)) == Remedy.none)
+    check("tool_missing 的补救：cca 有辅助安装（hello.install_cli）时在终端里装（cca codex install-cli）", m2.installCLISupported
+          && m2.remedy(for: failure(.toolMissing, .codex)) == .handoff(.installCLI(prefix: ["codex"], tool: .codex)))
+    if var bob = m2.account(bobRef) {
+        check("账号页：终端能打开时没有「安装」", m2.installCLIHandoff(for: bob) == nil)
+        bob.can.cli = false
+        bob.canWhy["cli"] = .toolMissing
+        check("账号页：没装 claude 命令时“没装 X 命令”旁边有「安装」（cca install-cli）",
+              m2.installCLIHandoff(for: bob) == .installCLI(prefix: [], tool: .claude))
+    } else {
+        check("账号页：没装 claude 命令时“没装 X 命令”旁边有「安装」（cca install-cli）", false)
+    }
     check("其它失败没有补救", m2.remedy(for: failure(.lowPurity)) == Remedy.none
           && m2.remedy(for: Failure(reason: .loopGuard, code: .portClosed, message: "", stderrTail: "", exitCode: 1, tool: .claude,
                                     key: nil)) == Remedy.none)
@@ -183,6 +194,8 @@ import Foundation
     }, appVersion: "9.9.9")
     await m6.start()
     check("没配置路由器：port_closed 没有补救", !m6.routerConfigured && m6.remedy(for: failure(.portClosed)) == Remedy.none)
+    check("旧版 cca（hello 没有 install_cli）：tool_missing 没有补救，账号页也不给「安装」", !m6.installCLISupported
+          && m6.remedy(for: failure(.toolMissing)) == Remedy.none)
     m6.shutdown()
 
     // 接口版本、旧版 cca

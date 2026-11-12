@@ -13,7 +13,7 @@
 #   ./policy.sh nodes 参考配置 [策略组]
 #     只看不发布：打印会写进 nodes.json 的内容（策略组默认 OpenAi）
 #
-#   ./policy.sh lock claude|codex 邮箱 节点 [-C 映射仓库的目录] [-y]
+#   ./policy.sh lock claude|codex|agy 邮箱 节点 [-C 映射仓库的目录] [-y]
 #     把账号锁到节点：写进 policy.json，列出会改什么，确认后照常检查、签名、提交并推送（-y 不问）。别的机器都只有只读 key，
 #     cca policy request（App 账号菜单里的「请求维护者锁定节点」）生成的就是这条命令，发给维护者在 cca 的仓库里运行。
 #     映射仓库的目录默认是环境变量 CCA_POLICY_DIR，没有就是 cca 仓库旁边的 cca-policy。节点不在参考节点（nodes.json）里时提醒一句
@@ -47,7 +47,7 @@ usage() {
 用法：
   ./policy.sh 映射仓库的目录 ["提交说明"]     发布映射（目录里要有 policy.json；有 custom.yaml 时顺带发布参考节点）
   ./policy.sh nodes 参考配置 [策略组]          只看不发布：打印会写进 nodes.json 的参考节点（策略组默认 OpenAi）
-  ./policy.sh lock claude|codex 邮箱 节点 [-C 映射仓库的目录] [-y]
+  ./policy.sh lock claude|codex|agy 邮箱 节点 [-C 映射仓库的目录] [-y]
                                                把账号锁到节点，确认后发布（目录默认是 CCA_POLICY_DIR，没有就是 cca 仓库旁边的 cca-policy）
   ./policy.sh key [ls]                         列出各台机器的 deploy key：添加时间、最近一次拉取、别名
   ./policy.sh key add [公钥文件 | -] [别名]    加一把只读 deploy key：不写文件就用剪贴板里的公钥，不写别名就提示起一个
@@ -622,7 +622,7 @@ presence_cmd() {
 # 把账号锁到节点：cca policy request 生成的就是这条命令（发给维护者在这里运行），确认之后写进映射，后面照常发布
 # ---------------------------------------------------------------------------
 LOCK_DIR="" LOCK_MSG=""
-LOCK_USAGE="用法：./policy.sh lock claude|codex 邮箱 节点 [-C 映射仓库的目录] [-y]"
+LOCK_USAGE="用法：./policy.sh lock claude|codex|agy 邮箱 节点 [-C 映射仓库的目录] [-y]"
 lock_account() {   # lock_account 工具 邮箱 节点 [-C 目录] [-y]：写好 policy.json，发布要用的 LOCK_DIR、LOCK_MSG 留给后面
 	local dir yes="" tool="" email="" node="" plan rc=0
 	while [ $# -gt 0 ]; do

@@ -166,7 +166,7 @@ enum CcaError: Error, CustomStringConvertible, Equatable {
         case .cancelled: return "已取消"
         case .exit(let c, let tail): return tail.isEmpty ? "cca 出错了（退出码 \(c)）" : "cca 出错了（退出码 \(c)）：\(tail)"
         case .badOutput(let s, _): return s
-        case .codexDisabled: return "还没启用 ChatGPT 账号"
+        case .codexDisabled: return "还没启用这种账号"
         }
     }
 }
@@ -248,15 +248,22 @@ actor CcaClient {
     /// 最多重跑几轮（PROTOCOL 4.3 第 6 条）。
     let maxReruns = 3
     private var gates: [String: AsyncGate] = [:]
-    private(set) var codexEnabled = false
+    /// 能调用的工具（PROTOCOL 1）：Claude 一直能；`cca codex …`、`cca agy …` 只在 hello 说启用了时才能（不然会建出账号表）。
+    private(set) var enabledTools: Set<ToolID> = [.claude]
+    var codexEnabled: Bool { enabledTools.contains(.codex) }
 
     init(transport: Transport) {
         self.transport = transport
     }
 
-    /// 按最新的 hello 更新：`cca codex …` 能不能调用（PROTOCOL 1）。
+    /// 按最新的 hello 更新：哪些工具的命令能调用。
+    func setEnabledTools(_ tools: [ToolID]) {
+        enabledTools = Set(tools).union([.claude])
+    }
+
+    /// 只改 Codex 的（测试用）。
     func setCodexEnabled(_ enabled: Bool) {
-        codexEnabled = enabled
+        if enabled { enabledTools.insert(.codex) } else { enabledTools.remove(.codex) }
     }
 
     private func gate(_ name: String) -> AsyncGate {
@@ -331,8 +338,8 @@ actor CcaClient {
     /// 同一个闸门里的命令排队（整个流程，包括弹框和重跑，都在闸门里）。
     private func gated<T: Sendable>(_ command: CcaCommand, prompter: Prompter?, decode: @escaping @Sendable (CcaResponse) -> T?,
                                     onEvent: (@Sendable (CcaEvent) -> Void)?) async -> (T?, ExecResult) {
-        if let tool = command.tool, tool != .claude, !codexEnabled {
-            let f = Failure(reason: .codexDisabled, code: nil, message: CcaError.codexDisabled.description, stderrTail: "",
+        if let tool = command.tool, !enabledTools.contains(tool) {
+            let f = Failure(reason: .codexDisabled, code: nil, message: "还没启用 \(Texts.product(tool)) 账号", stderrTail: "",
                             exitCode: nil, tool: tool, key: command.key)
             return (nil, ExecResult(status: .failed(f), last: nil, runs: 0, grants: []))
         }

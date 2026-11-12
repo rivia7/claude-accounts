@@ -10,15 +10,16 @@ extension KnownValues {
     var isKnown: Bool { Self.allKnown.contains(self) }
 }
 
-/// 工具：Claude（`cca …`）和 Codex（`cca codex …`，界面上叫 ChatGPT）。
+/// 工具：Claude（`cca …`）、Codex（`cca codex …`，界面上叫 ChatGPT）和 Antigravity（`cca agy …`，Google 的 agy 命令行）。
 struct ToolID: KnownValues, Comparable {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
     static let claude = ToolID(rawValue: "claude")
     static let codex = ToolID(rawValue: "codex")
-    static let allKnown: [ToolID] = [.claude, .codex]
+    static let agy = ToolID(rawValue: "agy")
+    static let allKnown: [ToolID] = [.claude, .codex, .agy]
 
-    /// `cca` 后面的命令前缀（`cli_prefix`）：Claude 是空的，其它工具是 [工具名]（Codex 是 ["codex"]）。
+    /// `cca` 后面的命令前缀（`cli_prefix`）：Claude 是空的，其它工具是 [工具名]（Codex 是 ["codex"]，Antigravity 是 ["agy"]）。
     /// 这是唯一写死前缀的地方；`_gui state` 给了 `cli_prefix` 时界面以它为准。
     var defaultPrefix: [String] { self == .claude ? [] : [rawValue] }
 
@@ -72,7 +73,9 @@ struct CanWhy: KnownValues {
     static let noChrome = CanWhy(rawValue: "no_chrome")
     static let notLoggedIn = CanWhy(rawValue: "not_logged_in")
     static let toolMissing = CanWhy(rawValue: "tool_missing")
-    static let allKnown: [CanWhy] = [.apiAccount, .appMissing, .noChrome, .notLoggedIn, .toolMissing]
+    /// 这种账号没有这个功能（Antigravity 账号没有桌面 App 和查用量的接口）
+    static let unsupported = CanWhy(rawValue: "unsupported")
+    static let allKnown: [CanWhy] = [.apiAccount, .appMissing, .noChrome, .notLoggedIn, .toolMissing, .unsupported]
 }
 
 /// 顶层 `errors[]`：config_unreadable / table_unreadable / account_unreadable（某个账号的登录状态文件读不了，
@@ -324,12 +327,14 @@ struct FailCode: KnownValues {
     /// `cca [codex] key 账号 --show`：这个账号还没有存 API key / 钥匙串读不了（锁着、超时）。
     static let keyMissing = FailCode(rawValue: "key_missing")
     static let keychainUnavailable = FailCode(rawValue: "keychain_unavailable")
+    /// 这种账号没有这个功能（Antigravity 账号：桌面 App、查用量、第三方 API 账号、控制台的账单页、重置次数）。
+    static let unsupported = FailCode(rawValue: "unsupported")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
-                                       .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable]
+                                       .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -359,8 +364,10 @@ struct ConsentItem: KnownValues {
     static let resetCredit = ConsentItem(rawValue: "reset_credit")
     /// 删掉官方账号记下的 API key（范围是账号目录名，默认不同意）。
     static let keyForget = ConsentItem(rawValue: "key_forget")
+    /// 辅助安装直连不通：经内置代理的一个节点装 claude / codex / agy 命令（范围是节点名，默认同意；App 平时把 install-cli 交给终端）。
+    static let installProxy = ConsentItem(rawValue: "install_proxy")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .openClashVerge, .builtinCore,
-                                          .resetCredit, .keyForget]
+                                          .resetCredit, .keyForget, .installProxy]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

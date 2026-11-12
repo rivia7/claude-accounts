@@ -433,8 +433,8 @@ final class AppModel {
         } else {
             phase = .ready
         }
-        await client?.setCodexEnabled(h.codexEnabled)
-        if !h.codexEnabled && tool != .claude { tool = .claude }
+        await client?.setEnabledTools(h.enabledTools)
+        if !h.enabled(tool) { tool = .claude }
         if homeChanged { restartWatcher() }
         reconcileCore()
     }
@@ -1216,7 +1216,17 @@ final class AppModel {
             return .handoff(h)
         }
         if r == .routerSync && !routerConfigured { return .none }
+        if code == .toolMissing && !installCLISupported { return .none }
         return r
+    }
+
+    /// cca 能用官方安装脚本装 claude / codex / agy 命令（`hello.install_cli`，PROTOCOL 2.1）。
+    var installCLISupported: Bool { hello?.installCLI == 1 }
+
+    /// 账号页“没装 X 命令”旁边的「安装」：终端打不开是因为没装命令、cca 也有辅助安装时才有。
+    func installCLIHandoff(for a: Account) -> Handoff? {
+        guard installCLISupported, !a.can.cli, a.canWhy["cli"] == .toolMissing else { return nil }
+        return .installCLI(prefix: prefix(a.tool), tool: a.tool)
     }
 
     func loginHandoff(_ a: Account) -> Handoff {
@@ -1667,7 +1677,11 @@ final class AppModel {
 
     var codexEnabled: Bool { hello?.codexEnabled ?? false }
 
-    var visibleTools: [ToolID] { codexEnabled ? [.claude, .codex] : [.claude] }
+    /// 启用了的工具（Claude 一直有；Codex、Antigravity 有账号表时才有）
+    var visibleTools: [ToolID] { hello?.enabledTools ?? [.claude] }
+
+    /// 这个工具有没有桌面 App、第三方 API 账号、查用量的接口（cca 给的 features；还没读到 state 时按工具认）
+    func features(_ t: ToolID) -> ToolFeatures { toolState(t)?.features ?? .defaults(t) }
 
     func toolState(_ t: ToolID) -> ToolState? { state?.tool(t) }
 
@@ -1680,7 +1694,9 @@ final class AppModel {
     /// 交接命令的前缀：`_gui state` 给的 cli_prefix，没有就用默认的。
     func prefix(_ t: ToolID) -> [String] { toolState(t)?.cliPrefix ?? t.defaultPrefix }
 
-    func appLabel(_ t: ToolID) -> String { nonEmpty(toolState(t)?.appLabel) ?? (t == .codex ? "ChatGPT App" : "Claude App") }
+    func appLabel(_ t: ToolID) -> String {
+        nonEmpty(toolState(t)?.appLabel) ?? (t == .codex ? "ChatGPT App" : t == .agy ? "桌面 App" : "Claude App")
+    }
 
     var routerConfigured: Bool { state?.config?.routerConfigured ?? false }
     var localConfigured: Bool { state?.config?.localConfigured ?? false }
@@ -1717,7 +1733,7 @@ final class AppModel {
     // MARK: 选择
 
     /// 添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）。
-    func addHandoff(_ d: Employee.Department) -> Handoff { d.addHandoff(codexPrefix: prefix(.codex)) }
+    func addHandoff(_ d: Employee.Department) -> Handoff { d.addHandoff(prefix: d.tool.map { prefix($0) } ?? []) }
 
     /// 打开一个账号的页面（办公室的工位、分流图里的账号）：侧栏的工具跟着换过去。
     func show(_ ref: AccountRef) {
@@ -1727,7 +1743,7 @@ final class AppModel {
 
     /// 办公室：按组排好的工位，每个账号此刻的样子（和账号页那句话用同一份用量、实况）。
     func office(now: Double) -> Office {
-        Office.make(tools: state?.tools ?? [], codexEnabled: codexEnabled, usage: { self.usage(for: $0) },
+        Office.make(tools: state?.tools ?? [], enabled: visibleTools, usage: { self.usage(for: $0) },
                     live: { self.liveSlot(for: $0) }, now: now,
                     arrange: { d, people in self.arrangement.arranged(people, group: d.key, id: \.account.stableID) })
     }
@@ -1748,6 +1764,7 @@ final class AppModel {
         switch d {
         case .claude: members = accounts(.claude).filter { !$0.isAPI }
         case .chatgpt: members = accounts(.codex).filter { !$0.isAPI }
+        case .antigravity: members = accounts(.agy).filter { !$0.isAPI }
         case .contractors: members = visibleTools.flatMap { accounts($0) }.filter(\.isAPI)
         }
         return arrangement.arranged(members, group: d.key, id: \.stableID)
@@ -1755,17 +1772,18 @@ final class AppModel {
 
     /// 侧栏的分组：这个工具的官方账号（没有账号时这一组也在：标题上有添加按钮），有第三方 API 账号时再加一组。
     func accountGroups(_ t: ToolID) -> [AccountGroup] {
-        let official: Employee.Department = t == .codex ? .chatgpt : .claude
+        let official = Employee.Department.official(t)
         var out = [AccountGroup(department: official, accounts: arranged(official))]
         let api = arranged(.contractors).filter { $0.tool == t }
         if !api.isEmpty { out.append(AccountGroup(department: .contractors, accounts: api)) }
         return out
     }
 
-    /// 用量统计页的分组：两个工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有），和总览一样按用户排的顺序。
-    /// 第三方 API 账号没有订阅的额度，不在里面。
+    /// 用量统计页的分组：能查用量的工具的官方账号（Claude 一直有，ChatGPT 在启用了 Codex 时有；Antigravity 没有查用量的接口，
+    /// 不在里面），和总览一样按用户排的顺序。第三方 API 账号没有订阅的额度，也不在里面。
     func officialGroups() -> [AccountGroup] {
-        ([.claude] + (codexEnabled ? [.chatgpt] : [])).map { AccountGroup(department: $0, accounts: arranged($0)) }
+        visibleTools.filter { features($0).usage }.map { Employee.Department.official($0) }
+            .map { AccountGroup(department: $0, accounts: arranged($0)) }
     }
 
     /// 这个工具的账号（官方的在前，各组里按用户排的顺序）：菜单栏面板、第一次选中哪个账号用。

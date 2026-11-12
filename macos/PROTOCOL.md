@@ -22,7 +22,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。读 API key 只用 `cca [codex] key 账号 --show`（4.10），
   它的 stdout 只能经内存里的管道读，不能按 `runsToCompletion` 接到文件。
 - `cca codex …` 只在 `hello.tools.codex.enabled` 为真时才能调用：没有 `~/.cca/codex.json` 时运行任何 `cca codex …` 都会把它建出来，
-  维护者映射里的 Codex 账号随即被自动加进来、分走端口。
+  维护者映射里的 Codex 账号随即被自动加进来、分走端口。`cca agy …`（Antigravity）同理，只在 `hello.tools.agy.enabled` 为真时调用。
+- 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号、
+  查用量的接口和控制台账单页（`tools[].features`，2.2）：`usage`、`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，
+  App 不调（调了 cca 也只回 `fail` 的 `unsupported`）。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
   随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
@@ -56,7 +59,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "self": "/Users/me/.cca/bin/cca", "home": "/Users/me/.cca",
   "tools": {
     "claude": {"enabled": true, "bin": "/Users/me/.local/bin/claude"},
-    "codex": {"enabled": false, "bin": null}
+    "codex": {"enabled": false, "bin": null},
+    "agy": {"enabled": false, "bin": null}
   },
   "gui": {"app": "/Users/me/Applications/cca.app", "app_version": "2.9.0", "staged_version": null}
 }
@@ -66,12 +70,16 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `prompt`：提问会话（4.6）的版本。没有这个字段（旧版 cca）或者版本不认识时，App 不开提问会话，流程走终端交接（6）。
 - `forms`：配置路由器、配置本机 Clash、账号表能在 App 里填表（4.6）。没有这个字段时这三条走终端交接。
 - `dock`：有 `cca _dock-tidy`（6）：终端交接退出系统终端以后，交给 cca 去掉程序坞「最近使用的 App」里它留下的图标。没有这个字段时交接脚本不调它（旧版 cca 会把不认识的 `_dock-tidy` 当成启动账号）。
+- `install_cli`：有 `cca [codex|agy] install-cli`（辅助安装：用 claude / codex / agy 的官方安装脚本装命令，先直连，不通时问过再经内置代理的一个节点装）。
+  App 在账号的 `can_why.cli` 是 `tool_missing` 的地方（账号页“没装 X 命令”旁边）给「安装 X 命令…」，`fail` 的 `tool_missing` 也补救成它，都交给终端（6）。
+  没有这个字段（旧版 cca）时都不给。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
-- `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在。`bin` 是找到的 `claude` / `codex`，没装为 null。
+- `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
+  （旧版 cca 没有 `tools.agy`，当作没启用）。`bin` 是找到的 `claude` / `codex` / `agy`，没装为 null。App 只认识的工具才显示，`tools` 里别的键忽略。
 - `gui.app_version`：装着的 cca.app 的版本（没装为 null）；`gui.staged_version`：已经下载校验好、等 App 退出后再换上的版本（没有为 null）。
 - App 的版本号和 `cca_version` 不同时提示“更新并重新打开”（运行 `cca gui update --relaunch <App 的 pid>`，然后自己退出）。
 
-### 2.2 `cca _gui state`（只读快照，两个工具一起，不联网）
+### 2.2 `cca _gui state`（只读快照，各工具一起，不联网）
 
 ```json
 {
@@ -106,10 +114,18 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
       "accounts": [ "…账号，见下…" ]
     },
     {"id": "codex", "label": "Codex", "app_label": "ChatGPT App", "cli_prefix": ["codex"], "enabled": false, "bin": null,
+     "app": {"installed": false, "path": null}, "chrome": true, "settings_problems": [], "errors": [], "last": null, "accounts": []},
+    {"id": "agy", "label": "Antigravity", "app_label": "", "cli_prefix": ["agy"],
+     "features": {"app": false, "api": false, "usage": false}, "enabled": false, "bin": null,
      "app": {"installed": false, "path": null}, "chrome": true, "settings_problems": [], "errors": [], "last": null, "accounts": []}
   ]
 }
 ```
+
+工具（`tools[]`，顺序固定：claude、codex、agy；`codex.json`、`agy.json` 不存在时 `enabled` 为 false、`accounts` 是空的）：
+
+- `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）。Claude、Codex 都是 true，
+  Antigravity 都是 false：不显示桌面 App、添加第三方 API 账号、用量（用量统计页也不算它）。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有。
 
 账号（`tools[].accounts[]`，顺序就是账号表的顺序）：
 
@@ -154,10 +170,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   “在用”（总览里画成在用、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`。
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
   `app_missing`（没装对应的桌面 App）、`no_chrome`（没装 Google Chrome：网页版不能经账号的出口打开）、
-  `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
+  `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex / agy）、`unsupported`（这个工具没有这个功能：Antigravity 的 `app`、`usage`）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
   第三方 API 账号也可以）；旧版 cca 没有这一项，当作不能。`policy_lock` 是能不能请求维护者把节点锁进映射（4.8），没有对应的 `can_why`：不能就不显示这个入口。
   `billing` 是能不能打开控制台的账单页（`cca [codex] billing 账号`，用账号自己的浏览器实例和出口；订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，
-  所以 App 只给入口、不显示数字）：条件和 `web` 一样，也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
+  所以 App 只给入口、不显示数字）：条件和 `web` 一样（Antigravity 没有账单页，总是 false），也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
   `result` 的说明里会讲；`limit-resets` 也一样，网页版（`web`）不动剪贴板。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
   `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
   `devices` 是账号页有没有「设备」一节（3.4）：映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
@@ -213,7 +229,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `local_sync`：本机 Clash 的端口池是否最新，`ok` | `pending` | `n/a`（没配置本机 Clash）。
 - `nodes`：可选节点和用它的账号。
 
-`errors[]`：`{"code": "config_unreadable" | "table_unreadable" | "account_unreadable", "tool": "codex" | null, "message": "…"}`（文件读不了；
+`errors[]`：`{"code": "config_unreadable" | "table_unreadable" | "account_unreadable", "tool": "claude" | "codex" | "agy" | null, "message": "…"}`（文件读不了；
 `account_unreadable` 是某个账号目录里的登录状态文件读不了，这个账号当作没登录）。
 `tools[].errors[]`：账号表校验不过的地方，`{"code": "table_invalid", "message": "…"}`（有它时启动会失败，App 提示在终端里 `cca [codex] edit`）。
 `tools[].settings_problems[]`：共享设置里会盖掉账号代理 / 接口 / 凭证的项，形如 `"settings.json:ANTHROPIC_BASE_URL"`（只用来显示）。
@@ -222,8 +238,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `{"code": "policy_added", "tool", "key", "node"}`、`{"code": "policy_alias", "tool", "key"（新键）, "old_key"}`、
 `{"code": "policy_pinned", "tool", "key", "node", "old_node"}`、`{"code": "nodes_filled", "node"}`。
 
-`can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）；
-`web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in`；`cli`：`tool_missing`；`check` 总是可用。
+`can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）| `unsupported`（Antigravity）；
+`web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
 
 ### 2.3 `cca _gui live`（只读，要联网：连路由器或本机 Clash Verge）
 
@@ -406,9 +422,10 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
-  `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）。
+  `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
+  `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）。
   可能有好几条，最后一条是最终原因。
-- `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`），`display` 是给人看、能直接复制进终端的
+- `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
   `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key` | `edit`（账号表有表单改不了的问题：不是 JSON、键写错了）。App 能在表单里做的（`router_setup`、`local_setup`，要 `hello.forms`）直接开表单，别的走终端交接。
 
@@ -427,6 +444,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `builtin_core` | 空 | 在外面，这台 Mac 上没有 Clash 客户端：改用内置代理（第一次要下载约 21MB 的内核，见 7） | yes |
 | `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
 | `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；见 4.10） | no |
+| `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
   同意了用某个 IP 启动，换了 IP 要重新问）。
@@ -459,7 +477,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 
 ### 4.8 请求维护者锁定节点：`cca [codex] policy request 账号`
 
-别的机器只有只读 deploy key，改不了映射，只能请求：cca 写一条维护者直接运行的命令 `./policy.sh lock claude|codex 邮箱 节点`（账号和它现在的节点，不带别名，值按 shell 规则加好引号），用户发给维护者，维护者在 cca 的仓库里运行，确认后写进映射并发布。
+别的机器只有只读 deploy key，改不了映射，只能请求：cca 写一条维护者直接运行的命令 `./policy.sh lock claude|codex|agy 邮箱 节点`（账号和它现在的节点，不带别名，值按 shell 规则加好引号），用户发给维护者，维护者在 cca 的仓库里运行，确认后写进映射并发布。
 不交互、只读（不改账号表和映射），stdout 是那条命令，退出码 0；App 把它复制到剪贴板（有事件文件时 cca 不碰剪贴板，命令行里 cca 自己复制）。
 不能请求时（第三方 API 账号、这台机器没配置映射、已经被映射固定）退出码非 0，原因在 `fail` 事件里；`state` 账号的 `can.policy_lock` 是 false 时 App 不显示这个入口。
 App 只复制、不解析。
@@ -570,6 +588,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `local.client` | `local setup` | `choice` | 没有 Clash Verge 时：内置代理（默认）或手动配置别的客户端 |
 | `local.manual` | `local setup` | `code`、`text`、`secret`（可选） | 要加的配置；外部控制地址（校验 controller）、密钥。连不上时带着原因重问 |
 | `edit.form` | `[codex] edit` | `choice`（`menu`）、`text` | 账号表的常用项，一页：每个官方账号的节点（维护者固定的只有一个选项，答案不算数）；第三方 API 账号的接口地址、模型、出口、环境变量（只有 Claude 的有）。不显示 key。见下 |
+| `install.node` | `[codex\|agy] install-cli`、用到没装的命令时 | `choice` | 维护者的映射没指定安装用的节点（或者这台机器没有它的定义）时：经内置代理的哪个节点装（只用这一次，选了就算同意）。App 平时把 `install-cli` 交给终端 |
 | `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
 
 账号表的表单（`edit.form`）：字段 id 是 `n<编号>`（节点）、`u<编号>`（接口地址）、`m<编号>`（模型）、`e<编号>`（环境变量），编号是账号在表里的位置，App 不解释。不合格时同一个 `q` 带着 `error` 和已填的值再发一条，都合格才写账号表；
@@ -594,6 +613,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
+| `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
 | `router uninstall`、`local off`、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
 | `restore` | 没有入口 | 终端（要求 cca App 先退出） |

@@ -68,6 +68,12 @@ enum Snapshot {
                 m.tool = .codex
                 m.selection = first(.codex) { _ in true }.map { .account($0) }
             },
+            // Antigravity：CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json 时才有
+            Scene(name: "agy") { m in
+                guard m.visibleTools.contains(.agy) else { return }
+                m.tool = .agy
+                m.selection = first(.agy) { $0.login == .loggedIn }.map { .account($0) }
+            },
             Scene(name: "empty") { m in
                 m.tool = .claude
                 m.selection = nil

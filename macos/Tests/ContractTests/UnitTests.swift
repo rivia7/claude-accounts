@@ -58,6 +58,14 @@ func textTests() {
     check("node_missing → cca edit", Remedy.forCode(.nodeMissing, tool: .claude, key: "k") == .handoff(.edit(prefix: [])))
     check("no_router → cca router setup", Remedy.forCode(.noRouter, tool: .claude, key: nil) == .handoff(.routerSetup))
     check("local_unavailable → cca local setup", Remedy.forCode(.localUnavailable, tool: .claude, key: nil) == .handoff(.localSetup))
+    if case .handoff(let h) = Remedy.forCode(.toolMissing, tool: .agy, key: nil) {
+        check("tool_missing → 在系统终端里运行 cca agy install-cli（用官方安装脚本装）", h.arguments == ["agy", "install-cli"]
+              && h.display == "cca agy install-cli" && h.title == "安装 agy 命令" && !h.inApp && h.systemTerminal)
+    } else {
+        check("tool_missing → 在系统终端里运行 cca agy install-cli（用官方安装脚本装）", false)
+    }
+    check("Claude 的 tool_missing → cca install-cli", Remedy.forCode(.toolMissing, tool: .claude, key: nil) == .handoff(.installCLI(prefix: [], tool: .claude))
+          && Handoff.installCLI(prefix: [], tool: .claude).title == "安装 claude 命令")
     if case .handoff(let h) = Remedy.forCode(.notLoggedIn, tool: .codex, key: "f@example.com") {
         check("not_logged_in → cca codex login KEY", h.arguments == ["codex", "login", "f@example.com"])
     } else {

@@ -8,6 +8,8 @@ print("cca App 契约测试：\(fullMode ? "完整（手写数据 + 单元测试
 _ = runGeneric()
 if fullMode {
     fixtureAssertions()
+    agyFixtureTests()
+    await agyGateTests()
     await rerunProtocolTests()
     await gateTests()
     textTests()
@@ -27,6 +29,7 @@ if fullMode {
     await coreHostTests()
     await coreProcessTests()
     await modelTests()
+    await agyModelTests()
     await terminalModelTests()
     await coreModelTests()
     whatsNewTests()

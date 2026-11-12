@@ -16,6 +16,13 @@ func genericHello(_ name: String, _ d: Data) -> HelloDoc? {
     check("\(name) tools.claude.enabled 恒为 true", doc.tools[.claude]?.enabled == true)
     let codex = (raw["tools"] as? [String: Any])?["codex"] as? [String: Any]
     check("\(name) tools.codex.enabled 是布尔", isBool(codex?["enabled"]))
+    if let agy = (raw["tools"] as? [String: Any])?["agy"] as? [String: Any] {   // 旧版 cca 没有 tools.agy
+        check("\(name) tools.agy.enabled 是布尔", isBool(agy["enabled"]))
+    }
+    check("\(name) 启用的工具里一定有 Claude", doc.enabledTools.first == .claude)
+    if let v = raw["install_cli"] {   // 有辅助安装（cca install-cli）；旧版 cca 没有这个字段
+        check("\(name) install_cli 是 1", (v as? NSNumber)?.intValue == 1 && doc.installCLI == 1, "\(v)")
+    }
     let gui = raw["gui"] as? [String: Any]
     check("\(name) gui.app 是 ~/Applications/cca.app", (gui?["app"] as? String)?.hasSuffix("/Applications/cca.app") == true,
           "\(String(describing: gui?["app"]))")
@@ -102,7 +109,7 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
         check("\(n) can_why.\(k) 对应一个不可用的按钮", off)
     }
     if let can = ra["can"] as? [String: Any], can["billing"] != nil {
-        check("\(n) 账单页的条件和网页版一样", a.can.billing == a.can.web)
+        check("\(n) 账单页的条件和网页版一样（Antigravity 没有账单页）", a.can.billing == (a.can.web && t.id != .agy))
     }
     if let can = ra["can"] as? [String: Any], can["limit_resets"] != nil {
         check("\(n) 用量页只有 Claude 账号有，其余条件和网页版一样", a.can.limitResets == (t.id == .claude && a.can.web))
@@ -258,6 +265,16 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
         check("\(name) \(t.id.rawValue) errors 是对象数组", (rt["errors"] as? [Any])?.allSatisfy { $0 is [String: Any] } ?? false)
         if t.id == .claude { check("\(name) claude 的 cli_prefix 是空的", t.cliPrefix.isEmpty) }
         if t.id == .codex { check("\(name) codex 的 cli_prefix 是 [codex]", t.cliPrefix == ["codex"]) }
+        if let f = rt["features"] as? [String: Any] {   // 旧版 cca 没有 features
+            check("\(name) \(t.id.rawValue) features 都是布尔", ["app", "api", "usage"].allSatisfy { isBool(f[$0]) })
+        }
+        if t.id == .agy {
+            check("\(name) agy 的 cli_prefix 是 [agy]", t.cliPrefix == ["agy"])
+            check("\(name) agy 没有桌面 App、第三方 API 账号、查用量的接口", t.features == ToolFeatures(app: false, api: false, usage: false))
+            check("\(name) agy 的账号都是官方账号，查不了用量（unsupported）、开不了 App，没有账单页、用量页",
+                  t.accounts.allSatisfy { !$0.isAPI && !$0.can.usage && $0.canWhy["usage"] == .unsupported && !$0.can.app
+                      && $0.canWhy["app"] == .unsupported && !$0.can.billing && !$0.can.limitResets && $0.usage == nil })
+        }
         if let last = t.last { check("\(name) \(t.id.rawValue) last 是表里的账号", t.accounts.contains { $0.key == last }, last) }
         for (j, a) in t.accounts.enumerated() {
             accountInvariants(name, t, a, j < rawAccounts.count ? rawAccounts[j] : [:])

@@ -265,11 +265,13 @@ exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=2 HOME="$CCA_T/router/root" PATH="$CC
 S
 cat > "$T/bin/nc" <<'S'
 #!/bin/bash
-# 127.0.0.1：假 Clash Verge 内核、假内置代理内核（core/up 时）的监听端口；路由器：出门在外（$CCA_T/away）时一律连不上，平时 SSH 端口 22 连得上
+# 127.0.0.1：假 Clash Verge 内核、假内置代理内核（core/up 时）、辅助安装的临时内核（core_install/up 时）的监听端口；
+# 路由器：出门在外（$CCA_T/away）时一律连不上，平时 SSH 端口 22 连得上
 port="${@: -1}"; host="${@: -2:1}"
 case "$host" in
 	127.0.0.1) { [ ! -f "$CCA_T/verge/down" ] && grep -qx "$port" "$CCA_T/verge/listening"; } ||
-		{ [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; } ;;
+		{ [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; } ||
+		{ [ -f "$CCA_T/core_install/up" ] && grep -qx "$port" "$CCA_T/core_install/listening"; } ;;
 	*) [ -f "$CCA_T/away" ] && exit 1; [ "$port" = 22 ] && exit 0; grep -qx "$port" "$CCA_T/router/listening" ;;
 esac
 S
@@ -406,6 +408,22 @@ json.dump(rel, sys.stdout, ensure_ascii=False)
 PY
 		exit 0 ;;
 	https://github.com/*|https://*.githubusercontent.com/*|https://api.github.com/*) echo "GH unexpected $url" >> "$CCA_T/gh.log"; exit 22 ;;
+	https://claude.ai/install.sh|https://chatgpt.com/codex/install.sh|https://antigravity.google/cli/install.sh)
+		# 官方安装脚本（辅助安装）：直连时 install_direct_down 模拟连不上；经代理时只认辅助安装的临时内核（core_install）开着的端口，
+		# 记下经哪个节点（install.log 的 INSTALL-GET）。给的是 $CCA_T/fake_installer.sh（@T@、@N@ 换成沙箱和命令名）；
+		# install_html 模拟拿到的是出错的网页
+		case "$url" in *claude.ai*) n=claude ;; *chatgpt.com*) n=codex ;; *) n=agy ;; esac
+		if [ -n "$proxy" ]; then
+			p="${proxy##*:}"; ID="$CCA_T/core_install"
+			[ -f "$ID/up" ] && grep -qx "$p" "$ID/listening" || { echo "INSTALL-GET $n refused:$p" >> "$CCA_T/install.log"; exit 7; }
+			echo "INSTALL-GET $n via $(cat "$ID/sel/CCA-INSTALL")" >> "$CCA_T/install.log"
+		else
+			[ -f "$CCA_T/install_direct_down" ] && { echo "INSTALL-GET $n direct refused" >> "$CCA_T/install.log"; exit 7; }
+			echo "INSTALL-GET $n direct" >> "$CCA_T/install.log"
+		fi
+		if [ -f "$CCA_T/install_html" ]; then printf '<html>blocked</html>\n' > "${out:-/dev/stdout}"
+		else sed "s|@T@|$CCA_T|g; s|@N@|$n|g" "$CCA_T/fake_installer.sh" > "${out:-/dev/stdout}"; fi
+		exit 0 ;;
 esac
 if [ -n "$proxy" ]; then
 	port="${proxy##*:}"; phost="${proxy#*://}"; phost="${phost%:*}"
@@ -421,7 +439,7 @@ if [ -n "$proxy" ]; then
 		echo "CURL via :$port $url" >> "$CCA_T/curl.log"; net=203.0.113
 	fi
 	case "$url" in
-		https://claude.ai/cdn-cgi/trace|https://chatgpt.com/cdn-cgi/trace)   # 出口地区默认 US，$CCA_T/loc/<端口> 可以改（模拟节点跑到受限地区）
+		https://claude.ai/cdn-cgi/trace|https://chatgpt.com/cdn-cgi/trace|https://www.cloudflare.com/cdn-cgi/trace)   # 出口地区默认 US，$CCA_T/loc/<端口> 可以改（模拟节点跑到受限地区）
 			last=$((port - 7900)); [ "$port" = 7903 ] && last=1
 			printf 'fl=1\nip=%s.%s\nloc=%s\n' "$net" "$last" "$(cat "$CCA_T/loc/$port" 2>/dev/null || echo US)" ;;
 		https://api*.example.com/*)   # 第三方 API 的接口：不带 key 访问回 401；$CCA_T/api_down 时连不上
@@ -1035,6 +1053,115 @@ con.execute('INSERT INTO threads VALUES (?, ?, ?)', (tid, rollout, tag)); con.co
 PY
 exit 3
 S
+# 假的 agy（照 1.5.5 的行为）：--gemini_dir=目录 换数据目录（写在子命令前面）。acp --login 设了 SSH_CONNECTION 时在
+# antigravity-cli/log/acp-login-*.log 里写“Using file-based token storage because SSH session detected”（$CCA_T/agy_keychain：
+# 模拟不再这样的新版本），打印 Google 的登录网址（state 取 $CCA_T/agy_state）和问授权码的那一句（没有换行），从 stdin 读一行：
+# 读到头说 login cancelled、退出码 1；授权码（或整个网址里的 code）以 good 开头算成功（不是就报错再问），token 写进
+# antigravity-cli/antigravity-oauth-token（id_token_email 取 CCA_ACCOUNT 里的邮箱，一次性的 $CCA_T/agy_login_as 模拟登错号，
+# $CCA_T/agy_noemail 时不写邮箱，档位取 $CCA_T/agy_tier），说 Logged in as 邮箱.；换 token 时的代理记进 agy.log。
+# 其余（包括 cca 带着 --gemini_dir 传进来的 --version）当作一次会话：装机标识不是正好 36 个字符就重新生成（像真的），写共享的会话、历史、技能，设置用临时文件 + 改名保存，退出码 3
+cat > "$T/bin/agy" <<'S'
+#!/bin/bash
+LOG="$CCA_T/agy.log"
+echo "ARGS: $*" >> "$LOG"
+echo "ENV: SSH_CONNECTION=${SSH_CONNECTION-unset} https_proxy=${https_proxy-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} NO_PROXY=${NO_PROXY-unset} no_proxy=${no_proxy-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} CCA_PROXY=${CCA_PROXY-unset} GEMINI_API_KEY=${GEMINI_API_KEY-unset} GOOGLE_API_KEY=${GOOGLE_API_KEY-unset} GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT-unset} ANTIGRAVITY_GEMINI_DIR=${ANTIGRAVITY_GEMINI_DIR-unset} AGY_ACCOUNT=${AGY_ACCOUNT-unset} AGY_CA_CERT=${AGY_CA_CERT-unset} AGY_CLI_THEME=${AGY_CLI_THEME-unset} ALL_PROXY=${ALL_PROXY-unset} BROWSER=${BROWSER-unset} CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed)" >> "$LOG"
+exec python3 "$CCA_T/fake_agy.py" "$@"
+S
+cat > "$T/fake_agy.py" <<'S'
+import json, os, re, sys, time, uuid, urllib.parse as up
+t = os.environ['CCA_T']
+def log(s):
+    open(os.path.join(t, 'agy.log'), 'a').write(s + '\n')
+def mark(name):
+    p = os.path.join(t, name)
+    return (open(p).read().strip() or True) if os.path.exists(p) else None
+args = sys.argv[1:]
+g, gd = os.path.join(os.path.expanduser('~'), '.gemini'), False
+while args and (args[0].startswith('--gemini_dir') or args[0].startswith('--gemini-dir')):
+    a, gd = args.pop(0), True
+    if '=' in a:
+        g = a.split('=', 1)[1]
+    elif args:
+        g = args.pop(0)
+cli = os.path.join(g, 'antigravity-cli')
+os.makedirs(os.path.join(cli, 'log'), exist_ok=True)
+if args[:1] == ['--version'] and not gd:   # cca 启动时总带 --gemini_dir：带着它的 --version 当作一次会话（像假 codex）
+    print('1.5.5')
+    sys.exit(0)
+if args[:2] == ['acp', '--login']:
+    with open(os.path.join(cli, 'log', 'acp-login-%s-%d.log' % (time.strftime('%Y%m%d_%H%M%S'), os.getpid())), 'w') as f:
+        f.write('I1112 11:01:12.000000 1 main.go:1] agy 1.5.5\n')
+        if os.environ.get('SSH_CONNECTION') and not mark('agy_keychain'):
+            f.write('I1112 11:01:12.000001 1 composite_token_storage.go:125] Using file-based token storage because SSH session detected\n')
+    state = mark('agy_state')
+    state = state if isinstance(state, str) else 'st-agy'
+    q = [('access_type', 'offline'), ('client_id', '000000000000-test.apps.googleusercontent.com'), ('code_challenge', 'chal-test'),
+         ('code_challenge_method', 'S256'), ('prompt', 'consent'), ('redirect_uri', 'https://antigravity.google/oauth-callback'),
+         ('response_type', 'code'), ('scope', 'openid email profile'), ('state', state)]
+    print('Open this link in a browser to log in with Google:\n\n' + 'https://accounts.google.com/o/oauth2/auth?' + up.urlencode(q) + '\n', flush=True)
+    while True:
+        sys.stdout.write('Then paste the authorization code, or the full URL of the page you land on, and press Enter: ')
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if not line:
+            print('\nlogin cancelled', flush=True)
+            sys.exit(1)
+        code = line.strip()
+        if code.startswith('http'):
+            qq = dict(up.parse_qsl(up.urlsplit(code).query))
+            if qq.get('state') != state:
+                print('Error: state mismatch', flush=True)
+                sys.exit(1)
+            code = qq.get('code', '')
+        log('AGY-EXCHANGE code=%s https_proxy=%s HTTPS_PROXY=%s' % (code, os.environ.get('https_proxy', 'unset'), os.environ.get('HTTPS_PROXY', 'unset')))
+        if code.startswith('good'):
+            break
+        print('Error: failed to exchange the authorization code: invalid_grant', flush=True)
+    m = re.search(r'([^()\s]+@[^()\s]+)', os.environ.get('CCA_ACCOUNT', ''))
+    email = m.group(1).rstrip(')') if m else 'someone@example.com'
+    alt = os.path.join(t, 'agy_login_as')
+    if os.path.exists(alt):
+        email = open(alt).read().strip()
+        os.remove(alt)
+    tok = {'access_token': 'ya29.test', 'token_type': 'Bearer', 'refresh_token': '1//test', 'expiry': '2026-11-12T12:00:00Z'}
+    if not mark('agy_noemail'):
+        tok['id_token_email'] = email
+    tier = mark('agy_tier')
+    tok['user_tier'] = tier if isinstance(tier, str) else 'g1-pro-tier'
+    p = os.path.join(cli, 'antigravity-oauth-token')
+    fd = os.open(p + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.write(fd, json.dumps(tok).encode())
+    os.close(fd)
+    os.replace(p + '.tmp', p)
+    log('AGY-LOGIN %s @ %s' % (email, g))
+    print('Logged in as %s.' % email, flush=True)
+    sys.exit(0)
+while os.path.exists(os.path.join(t, 'hold')):   # 会话一直开着：回归里 touch $CCA_T/hold，删掉它会话才往下走、退出
+    time.sleep(0.1)
+tag = os.environ.get('CCA_ACCOUNT', 'x').split('(')[-1].split('@')[0].strip(')')
+iid = os.path.join(cli, 'installation_id')
+if not os.path.exists(iid) or len(open(iid).read()) != 36:
+    open(iid, 'w').write(str(uuid.uuid4()))
+js = os.path.join(cli, 'jetski_state.pbtxt')
+m = re.search(r'(?m)^installation_uuid:\s*"([^"]*)"', open(js).read()) if os.path.exists(js) else None
+log('AGY-DEVICE %s %s @ %s' % (open(iid).read(), m.group(1) if m else '-', g))
+conv = os.path.join(cli, 'conversations')
+os.makedirs(conv, exist_ok=True)
+open(os.path.join(conv, 'from-%s.pb' % tag), 'w').write('conversation ' + tag)
+open(os.path.join(cli, 'history.jsonl'), 'a').write(json.dumps({'display': 'hi from ' + tag}) + '\n')
+sp = os.path.join(cli, 'settings.json')   # 像 agy 保存设置：在原路径旁边写临时文件再改名（会把链接换成普通文件）
+cur = json.load(open(sp)) if os.path.exists(sp) else {}
+cur['lastWriter'] = tag
+open(sp + '.tmp', 'w').write(json.dumps(cur))
+os.replace(sp + '.tmp', sp)
+lc = os.path.join(cli, 'cache', 'last_conversations.json')
+os.makedirs(os.path.dirname(lc), exist_ok=True)
+j = json.load(open(lc)) if os.path.exists(lc) else {}
+j[os.getcwd()] = 'conv-' + tag
+open(lc, 'w').write(json.dumps(j))
+os.makedirs(os.path.join(g, 'config', 'skills', 'from-' + tag), exist_ok=True)
+sys.exit(3)
+S
 # 假 claude 的 auth login 在 $CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 Claude Code 2.1.322 走：本机 127.0.0.1 随机端口开回调
 # （redirect_uri 写 localhost），打印手动登录的网址和“Paste code here”，经 $BROWSER 打开自动的那个登录网址；回调的 state 不对回 400、
 # 整个登录失败，对的回 302 到成功页，再“换 token”：code 以 good 开头算成功（写 oauthAccount），否则失败。换 token 时的代理记进 claude.log
@@ -1403,8 +1530,10 @@ case "${1:-}" in -v) echo "Mihomo Meta v1.19.33 darwin arm64 with go1.26 (fake)"
 d="" f=""
 while [ $# -gt 0 ]; do case "$1" in -d) d="$2"; shift ;; -f) f="$2"; shift ;; esac; shift; done
 CD="$CCA_T/core"
+grep -q '"cca-install"' "$f" 2>/dev/null && CD="$CCA_T/core_install"   # 辅助安装的临时内核（入站叫 cca-install）：状态另放
+mkdir -p "$CD/groups" "$CD/sel"
 [ -f "$CD/start_fail" ] && { echo 'level=fatal msg="Parse config error: fake"' >&2; exit 1; }
-"$CCA_T/core_load" "$f" || exit 1
+FAKE_CORE_DIR="$CD" "$CCA_T/core_load" "$f" || exit 1
 printf '%s' "$d" > "$CD/home"; echo $$ > "$CD/pid"; echo START >> "$CD/core.log"
 trap 'rm -f "$CD/up"; : > "$CD/listening"; echo STOP >> "$CD/core.log"; exit 0' TERM INT
 touch "$CD/up"
@@ -1420,7 +1549,7 @@ cat > "$T/core_load" <<'S'
 # core/reject_text 里的文字出现在配置里就不收（模拟内核不认某个节点）。收下的：listening、groups/、sel/（选组里第一个，
 # 像 store-selected: false），控制接口的 socket 记在 sock，配置留一份 last_config.json
 import glob, json, os, sys
-cd = os.path.join(os.environ['CCA_T'], 'core')
+cd = os.environ.get('FAKE_CORE_DIR') or os.path.join(os.environ['CCA_T'], 'core')   # 假 mihomo 起辅助安装的临时内核时是 core_install
 text = open(sys.argv[1], encoding='utf-8').read()
 rj = os.path.join(cd, 'reject_text')
 if os.path.exists(rj) and open(rj).read().strip() and open(rj).read().strip() in text:
@@ -1446,6 +1575,30 @@ for g in gs:
     open(os.path.join(cd, 'sel', g['name']), 'w').write(g['proxies'][0])
 open(os.path.join(cd, 'sock'), 'w').write(c.get('external-controller-unix', ''))
 open(os.path.join(cd, 'last_config.json'), 'w').write(text)
+S
+# --- 辅助安装：假的官方安装脚本（假 curl 给出去时把 @T@ 换成沙箱、@N@ 换成命令名）。照真的那样装进 ~/.local/bin（链接到
+# 沙箱里挪开的假命令 @T@/<命令>.off）；在空环境里运行（拿不到 CCA_T），记下运行它的 shell 和环境（install.log 的 INSTALL-RUN）。
+# 它自己下载时：有代理就要连得上辅助安装的临时内核，直连时 install_dl_down 模拟下载不到；install_fail 模拟安装失败，
+# install_noop 模拟跑完了（退出码 0）却什么都没装
+cat > "$T/fake_installer.sh" <<'S'
+#!/bin/bash
+T='@T@'; n='@N@'
+leak=$(/usr/bin/env | /usr/bin/grep -E '^(CCA_|ANTHROPIC_|OPENAI_|CODEX_HOME=|CLAUDE_CODE_|GEMINI_|GOOGLE_|AGY_|SSH_)' | /usr/bin/cut -d= -f1 | /usr/bin/tr '\n' ' ')
+printf 'INSTALL-RUN %s shell=%s proxy=%s tmp=%s cfg=%s nonint=%s path0=%s leak=[%s]\n' "$n" "$(/bin/ps -o comm= -p $$)" "${HTTPS_PROXY:-}" \
+	"${TMPDIR:-}" "${CLAUDE_CONFIG_DIR:-}" "${CODEX_NON_INTERACTIVE:-}" "${PATH%%:*}" "$leak" >> "$T/install.log"
+if [ -n "${HTTPS_PROXY:-}" ]; then
+	p=${HTTPS_PROXY##*:}
+	{ [ -f "$T/core_install/up" ] && /usr/bin/grep -qx "$p" "$T/core_install/listening"; } || { echo "Download failed (proxy)" >&2; exit 1; }
+	via=$(cat "$T/core_install/sel/CCA-INSTALL")
+else
+	[ ! -f "$T/install_dl_down" ] || { echo "Download failed" >&2; exit 1; }
+	via=direct
+fi
+[ ! -f "$T/install_fail" ] || { echo "Installation failed (fake)" >&2; exit 1; }
+[ ! -f "$T/install_noop" ] || { echo "Notice: nothing to do (fake)"; exit 0; }
+mkdir -p "$HOME/.local/bin" && ln -sf "$T/$n.off" "$HOME/.local/bin/$n" || exit 1
+echo "INSTALL-DONE $n via=$via" >> "$T/install.log"
+echo "Installation complete (fake $n)"
 S
 chmod +x "$T"/bin/* "$T"/rbin/* "$T/verge_regen" "$T/edit.py" "$T/core_load"
 echo "sandbox ready: $T"

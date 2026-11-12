@@ -121,7 +121,7 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     }
 
     static func edit(prefix: [String]) -> Handoff {
-        Handoff(arguments: prefix + ["edit"], title: "编辑 \(prefix.isEmpty ? "Claude" : "ChatGPT") 账号表",
+        Handoff(arguments: prefix + ["edit"], title: "编辑 \(Texts.product(prefix.first.map(ToolID.init(rawValue:)) ?? .claude)) 账号表",
                 message: "在终端里用编辑器修改账号表，保存后 cca 会检查格式。", inApp: true, needsForms: true)
     }
 
@@ -146,6 +146,12 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。", inApp: true, needsForms: true)
     static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。", inApp: true, needsForms: true)
     static let install = Handoff(arguments: ["install"], title: "安装 cca", message: "在终端里完成 cca 的安装。")
+
+    /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
+    static func installCLI(prefix: [String], tool: ToolID) -> Handoff {
+        Handoff(arguments: prefix + ["install-cli"], title: "安装 \(Texts.cliCommand(tool)) 命令",
+                message: "在终端里用官方安装脚本安装；直连不通时会问要不要经内置代理装。装好后回到 cca。")
+    }
     static let update = Handoff(arguments: ["update"], title: "更新 cca", message: "在终端里把 cca 更新到最新版本。")
 }
 

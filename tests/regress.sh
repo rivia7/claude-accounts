@@ -651,15 +651,16 @@ ok "API 账号启动：地址、模型、关遥测经 --settings 的 env 传；a
 ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不走官方登录、不同步路由器；key 不出现在任何日志和命令行里" '! grep -q "sh -s" ssh.log && grep -q "CURL api direct https://api.example.com/anthropic" curl.log && [ "$(grep -c "cdn-cgi/trace" curl.log)" = "$n_trace" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && ! grep -q "$S1" claude.log "$T/env.log" security.log ssh.log curl.log open.log'
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
 ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址），也不加 --settings" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && ! lastline ARGS | grep -q -- --settings && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
-# Claude 默认对 ~/.cca 放开权限（加成工作目录），登录凭证和浏览器资料除外
-P1="--add-dir=$H/.cca --disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/backup/clash-verge-*.yaml),Edit(/$H/.cca/backup/clash-verge-*.yaml),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**)"
+# Claude 默认只把这个账号自己的目录（~/.cca/accounts 下）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料不管在不在工作目录里都挡住
+P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/backup/clash-verge-*.yaml),Edit(/$H/.cca/backup/clash-verge-*.yaml),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
+AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accounts/kimi-*)
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
-ok "Claude 默认对 ~/.cca 放开权限：--add-dir 加成工作目录，登录凭证和浏览器资料用 --disallowedTools 挡住；都写成 --x=值，后面的提示词不会被当成目录" '[ $rc -eq 3 ] && [ "$(lastline ARGS)" = "ARGS: $P1 看看 ~/.cca 里的配置" ]'
+ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录" '[ $rc -eq 3 ] && [ "$(lastline ARGS)" = "ARGS: --add-dir=${AAD} $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['claude_add_dir'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a2=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('claude_add_dir'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-ok "第三方 API 账号同样放开（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: $P1 --settings {" && [ "$a2" = "ARGS: --version" ]'
+ok "第三方 API 账号同样只放开它自己的目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $P1 --settings {" && [ "$a2" = "ARGS: --version" ]'
 cp "$H/.claude/settings.json" "$T/settings.bak"; n_args=$(grep -c "^ARGS: " claude.log)
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
@@ -1274,6 +1275,98 @@ run CCA_TTY="$(ans)" cca codex @dave --version >/dev/null 2>&1
 DD=$(ls -d "$H"/.cca/codex/accounts/dave-example-com-*)
 mkdir -p "$H/.cca/codex/accounts/orphan-000000/codex/worktrees/w"; printf '{"tokens": {"access_token": "at-SECRET"}}' > "$H/.cca/codex/accounts/orphan-000000/codex/auth.json"
 ok "（准备一键还原）dave 登录着、建过 git 工作树；另有一个从账号表里直接删掉、目录还留着登录凭证的账号" '[ -f "$DD/codex/auth.json" ] && [ -d "$DD/codex/worktrees/dave" ]'
+
+# 10f2. Antigravity（agy）账号：单独的账号表 agy.json，和 Claude、Codex 共用端口池；每个账号一个数据目录（--gemini_dir），
+# 设了 SSH_CONNECTION 让 agy 把登录 token 存进数据目录里的文件（不进钥匙串；cca 先在临时目录里探测这个版本确实这样，按程序缓存）；
+# ~/.gemini 里白名单上的条目共享；登录页在账号专属的 Chrome 里打开，授权码照常从 fd 3 问、交给 agy；没有查用量的接口、第三方 API
+# 账号和桌面 App。这一节最后删掉 agy 的账号和 agy.json（后面的用例照没用过 agy 写）
+G="$H/.gemini"; AGJ="$H/.cca/agy.json"
+alast() { lastline "$1" agy.log; }
+alk() { [ -L "$AG/$1" ] && [ "$(readlink "$AG/$1")" = "$G/$1" ]; }
+mkdir -p "$G/antigravity-cli/conversations" "$G/config/skills/mine"
+printf '{"theme": "dark"}' > "$G/antigravity-cli/settings.json"; echo '# 共享的规则' > "$G/GEMINI.md"
+printf '00000000-0000-4000-8000-000000000000' > "$G/antigravity-cli/installation_id"
+printf '{"id_token_email": "master@example.com"}' > "$G/antigravity-cli/antigravity-oauth-token"
+: > agy.log; : > open.log; : > curl.log; n0=$(reloads)
+out=$(run CCA_TTY="$(ans alice@example.com '' 1)" cca agy add 2>&1); rc=$?
+AGD=$(ls -d "$H"/.cca/agy/accounts/alice-example-com-* 2>/dev/null); AG="$AGD/gemini"
+agy_iid=$(cat "$AG/antigravity-cli/installation_id" 2>/dev/null); agy_uuid=$(sed -n 's/^installation_uuid:[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$AG/antigravity-cli/jetski_state.pbtxt" 2>/dev/null)
+ok "agy add：和 Claude 账号同一个邮箱也能加，记在 agy.json；账号目录在 ~/.cca/agy/accounts 下；说明用 Google 账号登录" '[ $rc -eq 0 ] && grep -q "\"alice@example.com\": \"US-A\"" "$AGJ" && [ -d "$AG" ] && printf "%s" "$out" | grep -q "添加 Antigravity 账号" && printf "%s" "$out" | grep -q "登录 Google（用 alice@example.com 登录"'
+ok "agy add：和 Claude、Codex 共用端口池（分到空着的 7902），路由器上的名字带 agy-，不重载" '[ "$(cfgv "c[\"agy\"][\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7902}" ] && grep -q "\"slot\": 2, \"name\": \"agy-alice-example-com-" "$R/etc/cca/accounts.yaml" && [ "$(sel CCA-2)" = US-A ] && [ "$(reloads)" = "$n0" ]'
+ok "agy add：登录前就固定好两个装机标识（installation_id 正好 36 个字符、不带换行；jetski_state.pbtxt 的 installation_uuid 是另一个），和 ~/.gemini 的不一样" '[ ${#agy_iid} = 36 ] && printf "%s\n" "$agy_iid" "$agy_uuid" | grep -Eqx "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}" && [ "$agy_iid" != "$agy_uuid" ] && [ "$agy_iid" != "$(cat "$G/antigravity-cli/installation_id")" ] && [ -f "$AGD/device.json" ]'
+out=$(run cca agy ls 2>&1)
+ok "cca agy ls：列出 Antigravity 账号（还没登录）" 'printf "%s" "$out" | grep -qE "1\. alice@example.com +未登录 +US-A"'
+: > agy.log; : > open.log; : > curl.log; rm -f "$H/.cca/agy/probe.json"
+out=$(run CCA_TTY="$(ans good-ag1)" GEMINI_API_KEY=evil-1 GOOGLE_CLOUD_PROJECT=evil-proj ANTIGRAVITY_GEMINI_DIR=/evil AGY_ACCOUNT=evil@example.com AGY_CLI_THEME=light AGY_CA_CERT="$T/ca.pem" ALL_PROXY=socks5://evil.invalid cca agy @alice --version 2>&1); rc=$?
+penv=$(grep -A1 "cca-agy-probe" agy.log | grep "^ENV: " | head -n 1)
+ok "agy 第一次用：先在临时的数据目录里跑一次 acp --login，确认这个版本设了 SSH_CONNECTION 时把登录存进文件；不联网（代理指向关着的端口），结果记下" 'grep -q "^ARGS: --gemini_dir=.*cca-agy-probe\..*/gemini acp --login$" agy.log && printf "%s" "$penv" | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=unset HTTPS_PROXY=http://127.0.0.1:9 " && printf "%s" "$penv" | grep -q "GEMINI_API_KEY=unset" && cfgok "json.load(open(\"$H/.cca/agy/probe.json\"))[\"files\"] is True"'
+ok "agy 登录：在账号自己的数据目录里登录；Google 的登录网址补上 login_hint，在账号专属的 Chrome 里、经账号的端口打开" 'grep -q "^ARGS: --gemini_dir=$AG acp --login$" agy.log && grep -F "accounts.google.com/o/oauth2/auth" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && grep -F "accounts.google.com/o/oauth2/auth" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7902" && grep -F "accounts.google.com/o/oauth2/auth" open.log | grep -qF "login_hint=alice%40example.com"'
+ok "agy 登录：授权码从终端贴回、交给 agy，换 token 经账号的端口；token 只在账号自己的数据目录里，~/.gemini 原来的登录不动" 'grep -q "AGY-EXCHANGE code=good-ag1 https_proxy=http://192.0.2.10:7902" agy.log && [ -f "$AG/antigravity-cli/antigravity-oauth-token" ] && [ ! -L "$AG/antigravity-cli/antigravity-oauth-token" ] && grep -q master "$G/antigravity-cli/antigravity-oauth-token" && printf "%s" "$out" | grep -q "授权码（登录后页面上显示的那一段" && ! printf "%s" "$out" | grep -q "Open this link"'
+ok "agy 启动：--gemini_dir 指向账号自己的数据目录（写在最前面），设了 SSH_CONNECTION，走账号的端口" '[ $rc -eq 3 ] && alast ARGS | grep -qx "ARGS: --gemini_dir=$AG --version" && alast ENV | grep -q "SSH_CONNECTION=127.0.0.1 22 127.0.0.1 22 https_proxy=http://192.0.2.10:7902 HTTPS_PROXY=http://192.0.2.10:7902 "'
+ok "agy 启动：继承来的 GEMINI_*、GOOGLE_*、ANTIGRAVITY_*、AGY_ACCOUNT（会换账号、数据目录）和 ALL_PROXY 不带进去并提示；界面开关 AGY_CLI_*、公司根证书 AGY_CA_CERT 留着；fd 3 关着" 'alast ENV | grep -q "GEMINI_API_KEY=unset GOOGLE_API_KEY=unset GOOGLE_CLOUD_PROJECT=unset ANTIGRAVITY_GEMINI_DIR=unset AGY_ACCOUNT=unset AGY_CA_CERT=$T/ca.pem AGY_CLI_THEME=light ALL_PROXY=unset " && alast ENV | grep -q "fd3=closed" && printf "%s" "$out" | grep -q "已为本次启动屏蔽环境里继承的"'
+ok "agy 启动前的出口检测：Google 没有 /cdn-cgi/trace，经 7902 看 www.cloudflare.com 看到的 IP" 'grep -q "CURL via :7902 https://www.cloudflare.com/cdn-cgi/trace" curl.log && grep -q "CURL via :7902 https://ip.net.coffee/api/iprisk/203.0.113.2" curl.log'
+ok "agy 启动：用的是 cca 固定的两个装机标识（agy 照用，没有换掉）" 'grep -q "AGY-DEVICE $agy_iid $agy_uuid @ $AG" agy.log && [ "$(cat "$AG/antigravity-cli/installation_id")" = "$agy_iid" ]'
+ok "共享：会话、记忆（brain）、历史、设置、GEMINI.md、技能，--continue 用的 last_conversations.json 都链接到 ~/.gemini；antigravity-cli、config 本身是账号自己的目录" 'alk GEMINI.md && alk antigravity-cli/conversations && alk antigravity-cli/brain && alk antigravity-cli/history.jsonl && alk antigravity-cli/settings.json && alk antigravity-cli/cache/last_conversations.json && alk config/skills && [ -d "$AG/antigravity-cli" ] && [ ! -L "$AG/antigravity-cli" ] && [ ! -L "$AG/config" ] && [ ! -L "$AG/antigravity-cli/cache" ]'
+ok "不共享：登录 token、装机标识、日志各账号一份" '[ ! -L "$AG/antigravity-cli/installation_id" ] && [ ! -L "$AG/antigravity-cli/jetski_state.pbtxt" ] && [ -d "$AG/antigravity-cli/log" ] && [ ! -L "$AG/antigravity-cli/log" ] && [ ! -e "$G/antigravity-cli/log" ]'
+ok "会话里写的共享内容回到 ~/.gemini：会话、历史、技能、--continue 的记录；agy 用临时文件改名保存的 settings.json 并回去再链接上" '[ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && [ -d "$G/config/skills/from-alice" ] && grep -q "conv-alice" "$G/antigravity-cli/cache/last_conversations.json" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j.get(\"lastWriter\") == \"alice\" and j.get(\"theme\") == \"dark\" else 1)" "$G/antigravity-cli/settings.json"'
+m=$(run CCA_TTY="$(ans q)" cca agy 2>&1)
+ok "cca agy 菜单：标题是 Antigravity，账号已登录；没有添加第三方 API 账号这一项" 'printf "%s" "$m" | grep -q "选择 Antigravity 账号" && printf "%s" "$m" | grep -qE "1\. alice@example.com +已登录 +US-A" && printf "%s" "$m" | grep -q "a      添加新账号" && ! printf "%s" "$m" | grep -q "第三方 API"'
+out=$(run cca agy usage 2>&1); rc=$?; out2=$(run CCA_TTY="$(ans)" cca agy add api 2>&1); rc2=$?; out3=$(run cca agy app alice 2>&1 </dev/null); rc3=$?; out4=$(run cca agy billing alice 2>&1 </dev/null); rc4=$?
+ok "agy 没有查用量的接口、第三方 API 账号、桌面 App 和控制台账单页：说清楚，什么都不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 agy 里用 /usage 看" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "没有第三方 API 账号" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "没有桌面 App" && [ $rc4 -ne 0 ] && printf "%s" "$out4" | grep -q "没有控制台的账单页"'
+edit_table 'j["kimi"] = {"base_url": "https://api.example.com/v1"}' "$AGJ"
+n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
+out=$(run cca agy @alice --version 2>&1 </dev/null); rc=$?
+edit_table 'j.pop("kimi")' "$AGJ"
+ok "agy.json 里写成第三方 API 账号：校验不过，说只能写节点名，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "「kimi」：Antigravity 没有第三方 API 账号：值只能写节点名" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
+cp "$G/antigravity-cli/settings.json" "$T/agy-settings.bak"; printf '{"theme": "dark", "gcp": {"project": "evil-proj"}}' > "$G/antigravity-cli/settings.json"
+out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
+cp "$T/agy-settings.bak" "$G/antigravity-cli/settings.json"
+out2=$(run CCA_TTY="$(ans)" cca agy @alice --gemini_dir=/tmp/elsewhere --version 2>&1); rc2=$?
+ok "共享的设置里给了 Google Cloud 项目（各账号会用同一个项目）、启动参数里另给 --gemini_dir（换掉账号的数据目录和登录）：拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "共享的 ~/.gemini 里有" && printf "%s" "$out" | grep -q "settings.json:gcp" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q -- "--gemini_dir" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+n_p=$(grep -c "cca-agy-probe" agy.log); run CCA_TTY="$(ans)" cca agy @alice --version >/dev/null 2>&1; rc=$?
+ok "（探测结果按 agy 程序缓存，不每次都跑）" '[ $rc -eq 3 ] && [ "$(grep -c "cca-agy-probe" agy.log)" = "$n_p" ]'
+rm -f "$H/.cca/agy/probe.json"; touch "$T/agy_keychain"; n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
+out=$(run CCA_TTY="$(ans)" cca agy @alice --version 2>&1); rc=$?
+rm -f "$T/agy_keychain" "$H/.cca/agy/probe.json"
+ok "换了新版的 agy、设了 SSH_CONNECTION 也不把登录存进文件（各账号会共用钥匙串里的同一份）：停止，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不再把登录存进账号自己的目录" && [ "$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)" = "$n_args" ]'
+echo mallory@example.com > "$T/agy_login_as"
+out=$(run CCA_TTY="$(ans good-ag2 n)" cca agy login alice 2>&1); rc=$?
+ok "cca agy login：先退出原来的登录（删掉 token）；登成了别的邮箱就不用，问过之后不继续" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "登录的是 mallory@example.com，不是 alice@example.com"'
+out=$(run CCA_TTY="$(ans 'https://antigravity.google/oauth-callback?code=good-x&state=st-wrong' bad-ag good-ag3)" cca agy login alice 2>&1); rc=$?
+ok "cca agy login：贴回的整个网址 state 对不上时不交给 agy、重问；授权码换不到 token 时照 agy 的原话说、再问；用对的邮箱重新登录，装机标识不变" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "state 对不上" && printf "%s" "$out" | grep -q "invalid_grant" && grep -q "AGY-EXCHANGE code=bad-ag " agy.log && ! grep -q "code=good-x" agy.log && printf "%s" "$out" | grep -q "alice@example.com 已重新登录" && grep -q "AGY-LOGIN alice@example.com @ $AG" agy.log && [ "$(cat "$AG/antigravity-cli/installation_id")" = "$agy_iid" ]'
+rm -f "$AG/antigravity-cli/antigravity-oauth-token"
+out=$(run CCA_TTY="$(ans '')" cca agy @alice --version 2>&1); rc=$?
+ok "agy 登录：直接回车取消，不启动，agy 不留在后台" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消登录" && gone "$T/fake_agy.py"'
+out=$(runev cca agy @alice --version 2>&1); rc=$?
+ok "图形界面里启动还没登录的 agy 账号：要在终端里登录，交接的命令带 agy" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"login\" and e[\"argv\"][:2] == [\"agy\", \"login\"] and e[\"display\"].startswith(\"cca agy login \")"'
+touch "$T/agy_noemail"
+out=$(run CCA_TTY="$(ans good-ag4)" cca agy @alice --version 2>&1); rc=$?
+rm -f "$T/agy_noemail"
+ok "token 里没有邮箱时（agy 换了格式）：按 agy 登录时说的 Logged in as 认" '[ $rc -eq 3 ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"email\"] == \"alice@example.com\" else 1)" "$AGD/agy-login.json"'
+: > open.log
+out=$(run CCA_REMOTE_LOGIN=1 CCA_TTY="$(ans good-ag5)" cca agy login alice 2>&1); rc=$?
+ok "agy 服务器上登录：给出 cca agy login-page 那一行（带节点和节点摘要），这里不打开浏览器；授权码贴回这里交给 agy，换 token 经账号的端口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "  cca agy login-page alice@example.com --node US-A --node-id $FPA '\''https://accounts.google.com/o/oauth2/auth?" && grep -q "AGY-EXCHANGE code=good-ag5 https_proxy=http://192.0.2.10:7902" agy.log && [ ! -s open.log ]'
+LPA="https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=x.apps.googleusercontent.com&code_challenge=CC&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=openid&state=st-agpage"
+: > open.log
+out=$(run cca agy login-page alice@example.com --node US-A "$LPA" 2>&1); rc=$?
+out2=$(run cca agy login-page alice@example.com --node US-A "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&code_challenge=CC&code_challenge_method=S256&state=st-x" 2>&1); rc2=$?
+ok "cca agy login-page（在 Mac 上）：在 agy 账号专属的 Chrome 里经它的端口打开 Google 的登录页（补上 login_hint），说把页面上的授权码抄回服务器；别的工具的登录网址不开" '[ $rc -eq 0 ] && grep -F "state=st-agpage" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && grep -F "state=st-agpage" open.log | grep -qF -- "--proxy-server=http://192.0.2.10:7902" && grep -F "state=st-agpage" open.log | grep -qF "login_hint=alice%40example.com" && printf "%s" "$out" | grep -q "回到服务器的终端粘贴" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "这不是 Antigravity 的登录网址" && [ "$(grep -c "auth.openai.com" open.log)" = 0 ]'
+: > open.log
+run CCA_TTY="$(ans)" cca agy web alice >/dev/null 2>&1
+out=$(run cca agy check alice 2>&1)
+ok "cca agy web 用账号专属的浏览器打开 antigravity.google；cca agy check 经账号的端口检测出口" 'grep -F "https://antigravity.google/" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && printf "%s" "$out" | grep -qE "alice@example.com +US-A +:7902"'
+GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
+ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API 和查用量；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": False} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is False and a[\"can_why\"][\"usage\"] == \"unsupported\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
+ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
+ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
+out=$(run cca help 2>&1)
+ok "cca help 有 Antigravity 一节" 'printf "%s" "$out" | grep -q "cca agy add" && printf "%s" "$out" | grep -q "Antigravity（Google 的 agy 命令行"'
+out=$(run CCA_TTY="$(ans y)" cca agy rm alice 2>&1); rc=$?
+ok "cca agy rm：退出登录、删掉账号目录；~/.gemini 里共享的会话、历史、设置和原来的登录都还在；7902 回到 REJECT；同一个邮箱的 Claude 账号不动" '[ $rc -eq 0 ] && [ ! -e "$AGD" ] && [ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && grep -q master "$G/antigravity-cli/antigravity-oauth-token" && [ "$(sel CCA-2)" = REJECT ] && [ -d "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" ] && [ "$(cfgv "c[\"ports\"]")" = "{'"'"'alice@example.com'"'"': 7901}" ]'
+rm -rf "$AGJ" "$H/.cca/agy"; python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop("agy", None); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+run cca ls >/dev/null 2>&1
+ok "（收尾）删掉 agy.json：后面的用例照没用过 agy 写" '[ ! -e "$AGJ" ] && [ "$(cfgv "\"agy\" in c")" = False ]'
 
 # 10g. 图形界面（cca App）的接口（macos/PROTOCOL.md）：只读的 cca _gui hello / state / live（JSON；不写文件、不经过自动更新），
 #      事件文件和带范围的同意（CCA_EVENTS / CCA_GRANT），出口检测结果（health.json、check --json），usage --json 的新字段。
@@ -2455,9 +2548,9 @@ bad() { out=$(cd "$MT" && run CCA_RELEASE_KEY="$T/relkey" ./policy.sh lock "$@" 
 unchanged() { [ "$(git -C "$MR" rev-parse HEAD)" = "$headx" ] && [ "$(cat "$MR/policy.json")" = "$sumx" ]; }
 noesc() { ! printf "%s" "$out" | grep -q "$(printf "\033")"; }
 bad claude
-ok "少写了参数：说用法，什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法：./policy.sh lock claude|codex 邮箱 节点" && unchanged'
+ok "少写了参数：说用法，什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法：./policy.sh lock claude|codex|agy 邮箱 节点" && unchanged'
 bad router e@example.com US-A
-ok "不认识的工具：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "工具应该是 claude 或 codex" && unchanged'
+ok "不认识的工具：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "工具应该是 claude、codex 或 agy" && unchanged'
 bad claude nonsense US-A
 ok "不像邮箱：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "邮箱不对" && unchanged'
 bad claude "e$(printf '\033')[2J@example.com" US-A
@@ -2740,6 +2833,114 @@ core_stop; rm -rf "$GA" "$CN" "$H/.cca/policy"; mv "$T/policy.core" "$H/.cca/pol
 cp "$T/config.core" "$H/.cca/config.json"; cp "$T/accounts.core" "$H/.cca/accounts.json"
 run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 
+# 11b5. 辅助安装（cca [codex|agy] install-cli；终端里用到没装的命令时先问）：官方安装脚本（假 curl 给 $T/fake_installer.sh）先直连，
+#       不行时问过再经内置代理的一个节点装：另起的临时内核（假 mihomo，状态在 $T/core_install），节点由维护者映射的 install_node
+#       指定，没指定时现选。节点定义是内置代理的那些（这里直接写 core/nodes.json）。这一节结束时映射、配置、命令都还原
+IL="$T/install.log"; ID="$T/core_install"; TI="$T/tmpi"; mkdir -p "$TI"; : > "$IL"
+NP="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"   # 不带 /opt/homebrew/bin（那里可能装着真的 codex）
+ri() { run PATH="$NP" TMPDIR="$TI" "$@"; }
+toff() { mv "$T/bin/$1" "$T/$1.off"; }   # 模拟没装这个命令（假的安装脚本装上时链接到 $T/<命令>.off）
+tback() { rm -f "$H/.local/bin/$1"; mv "$T/$1.off" "$T/bin/$1"; }
+ileft() { ls "$TI" | grep -c '^cca-cli\.'; }   # 留下的临时目录（应该都删了）
+icfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$ID/last_config.json" "$1"; }   # 临时内核收到的配置（c）
+istopped() { [ ! -f "$ID/up" ] && ! kill -0 "$(cat "$ID/pid")" 2>/dev/null && [ ! -e "$(cat "$ID/home")" ]; }   # 临时内核停了，它的目录（有节点密钥）删了
+ipol() {   # ipol 节点：映射照原来的，加上 install_node（空的就不加），签名后拉下来
+	pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j.update({"install_node": sys.argv[2]} if sys.argv[2] else {}); print(json.dumps(j, ensure_ascii=False))' "$T/pr.inst" "$1")"
+	run cca policy pull >/dev/null 2>&1
+}
+cp "$PR/policy.json" "$T/pr.inst"; rm -f "$T/pr.inst.sig"; [ ! -f "$PR/policy.json.sig" ] || cp "$PR/policy.json.sig" "$T/pr.inst.sig"
+rm -rf "$T/policy.inst"; cp -Rp "$H/.cca/policy" "$T/policy.inst"; cp "$H/.cca/config.json" "$T/config.inst"; cp "$H/.cca/accounts.json" "$T/accounts.inst"
+ok "_gui hello：说明有辅助安装（App 据此在“没装 X 命令”的地方给「安装」，交给终端运行 cca install-cli）" 'gj hello | jok "d[\"install_cli\"] == 1"'
+out=$(run cca help 2>&1)
+ok "cca help 里有 cca install-cli" 'printf "%s" "$out" | grep -q "cca install-cli  *用官方安装脚本装 Claude Code"'
+out=$(ri cca install-cli 2>&1); rc=$?
+ok "cca install-cli：已经装了就只说一声，不下载安装脚本" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "已经装了 claude：$T/bin/claude" && [ ! -s "$IL" ]'
+# 直连：在空环境里运行（不带账号、代理设置和 API key；claude 用一次性的配置目录），PATH 里有 ~/.local/bin（安装脚本不去改 shell 的配置文件）
+toff claude
+out=$(ri ANTHROPIC_API_KEY=sk-INSTALL-LEAK-1 CLAUDE_CODE_USE_BEDROCK=1 HTTPS_PROXY=http://127.0.0.1:9 cca install-cli 2>&1); rc=$?
+ok "cca install-cli（没装 claude）：直连下载官方安装脚本、运行，装进 ~/.local/bin 后说一声" '[ $rc -eq 0 ] && grep -qx "INSTALL-GET claude direct" "$IL" && grep -qx "INSTALL-DONE claude via=direct" "$IL" && printf "%s" "$out" | grep -qF "装好了 claude：$H/.local/bin/claude" && [ "$(readlink "$H/.local/bin/claude")" = "$T/claude.off" ]'
+ok "安装脚本在空环境里运行：bash，不带代理设置、API key 和 cca 自己的变量；临时目录在 TMPDIR 里，claude 用里面一次性的配置目录；用完删掉，不起临时内核" 'grep -q "^INSTALL-RUN claude shell=/bin/bash proxy= tmp=$TI/cca-cli\.[^ /]* cfg=$TI/cca-cli\.[^ /]*/claude nonint= path0=$H/.local/bin leak=\[\]$" "$IL" && [ "$(ileft)" = 0 ] && [ ! -e "$ID/pid" ] && ! grep -q sk-INSTALL-LEAK "$IL" env.log'
+tback claude
+toff codex; : > "$IL"
+if [ -x /opt/homebrew/bin/codex ] || [ -x /usr/local/bin/codex ]; then echo "SKIP  cca codex install-cli（这台机器的 /opt/homebrew/bin、/usr/local/bin 里装着 codex）"
+else
+	out=$(ri cca codex install-cli 2>&1); rc=$?
+	ok "cca codex install-cli：codex 的安装脚本用 sh 运行、不问问题（CODEX_NON_INTERACTIVE）；只装命令不建 Codex 的账号表" '[ $rc -eq 0 ] && grep -q "^INSTALL-RUN codex shell=/bin/sh proxy= tmp=$TI/cca-cli\.[^ /]* cfg= nonint=1 path0=$H/.local/bin leak=\[\]$" "$IL" && printf "%s" "$out" | grep -qF "装好了 codex：$H/.local/bin/codex"'
+fi
+tback codex
+# 直连拿不到安装脚本：经内置代理的节点（节点定义：路由器上拷来的 US-A～D、HK-A2）
+mkdir -p "$CN"; chmod 700 "$CN"
+python3 -c 'import json,sys,time; json.dump({"version": 1, "saved_at": time.time(), "nodes": [], "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (51 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-A", "US-B", "US-C", "US-D", "HK-A2"])]}, open(sys.argv[1], "w"))' "$CN/nodes.json"
+chmod 600 "$CN/nodes.json"
+toff agy; touch "$T/install_direct_down"; : > "$IL"; : > gh.log
+out=$(ri cca agy install-cli 2>&1); rc=$?
+ok "直连拿不到安装脚本、映射没指定安装节点、非交互：说明要在终端里选一个，不起临时内核、不装；不建 agy 的账号表" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本" && printf "%s" "$out" | grep -q "维护者映射没指定安装用的节点，要在终端里选一个：运行 cca agy install-cli" && [ ! -e "$ID/pid" ] && [ ! -e "$H/.local/bin/agy" ] && [ ! -e "$H/.cca/agy.json" ]'
+out=$(ri CCA_TTY="$(ans 2)" cca agy install-cli 2>&1); rc=$?
+ok "终端里现选一个节点（选了就是同意，不记下）：经它的临时代理拿到安装脚本、运行（安装脚本自己下载也经它）；内核文件第一次用时下载" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "经内置代理的哪个节点安装 agy？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && grep -q "^INSTALL-RUN agy shell=/bin/bash proxy=http://127.0.0.1:[0-9]* .* leak=\[\]$" "$IL" && printf "%s" "$out" | grep -qF "装好了 agy：$H/.local/bin/agy" && grep -q "^GH mihomo" gh.log && [ ! -e "$H/.cca/agy.json" ]'
+ok "临时内核：只在 127.0.0.1 上开一个入站（直通只有这个节点的组），规则只有 MATCH,REJECT，不开控制接口、通用的代理端口、TUN、DNS；装完就停，它的目录（有节点密钥）和临时目录都删掉" 'icfg "[l[\"listen\"] for l in c[\"listeners\"]] == [\"127.0.0.1\"] and c[\"listeners\"][0][\"proxy\"] == \"CCA-INSTALL\" and c[\"proxy-groups\"] == [{\"name\": \"CCA-INSTALL\", \"type\": \"select\", \"proxies\": [\"US-B\"]}] and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-B\"] and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\", \"external-controller-unix\"))" && istopped && [ "$(ileft)" = 0 ]'
+rm -f "$H/.local/bin/agy"
+# 维护者在映射里指定安装用的节点（install_node）：路由器上改过名的（cca 记下的 node_renames）按现在的名字
+ipol US-OLD
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['node_renames'] = {'US-OLD': 'US-B'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+out=$(run cca policy 2>&1)
+ok "映射里写了安装用的节点（install_node，旧版本的 cca 不认识它、照样用这份映射）：cca policy 说明；路由器上改过名的按现在的名字" 'grep -q "\"install_node\": \"US-OLD\"" "$H/.cca/policy/policy.json" && printf "%s" "$out" | grep -q "安装用的节点：US-B（直连装不上 claude / codex / agy 命令时，问过再经内置代理走它）"'
+: > "$IL"
+out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
+ok "映射指定了安装节点：直连拿不到时问过（默认是）再经它的临时代理装上" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本。经内置代理的节点 US-B 安装 agy 吗？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && istopped && [ "$(ileft)" = 0 ]'
+rm -f "$H/.local/bin/agy" "$ID/pid"; : > "$IL"
+out=$(ri CCA_TTY="$(ans n)" cca agy install-cli 2>&1); rc=$?
+ok "不同意：不起临时内核，什么都不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有安装 agy（以后可以运行 cca agy install-cli）" && [ ! -e "$ID/pid" ] && ! grep -q " via" "$IL" && [ ! -e "$H/.local/bin/agy" ]'
+out=$(runev PATH="$NP" TMPDIR="$TI" cca agy install-cli 2>&1); rc=$?
+ok "非交互（界面 App）：记一条 consent（install_proxy，范围是节点），不装" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"install_proxy\" and e[\"grant\"] == \"install_proxy:US-B\" and e[\"default\"] == \"yes\"" && [ ! -e "$ID/pid" ] && [ ! -e "$H/.local/bin/agy" ]'
+out=$(runev PATH="$NP" TMPDIR="$TI" CCA_GRANT=install_proxy:US-B cca agy install-cli 2>&1); rc=$?
+ok "同意之后带着授权重跑：经 US-B 装上" '[ $rc -eq 0 ] && [ -L "$H/.local/bin/agy" ] && istopped'
+rm -f "$H/.local/bin/agy"
+ipol US-Z; : > "$IL"
+out=$(ri CCA_TTY="$(ans 3)" cca agy install-cli 2>&1); rc=$?
+out2=$(run cca policy 2>&1)
+ok "映射指定的安装节点这台机器上没有定义：说一声，在终端里现选一个" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "维护者映射指定的安装节点 US-Z 在这台机器上没有定义" && grep -qx "INSTALL-GET agy via US-C" "$IL" && printf "%s" "$out2" | grep -q "安装用的节点：US-Z（这台机器的内置代理里没有它的定义：要装的时候现选一个）"'
+rm -f "$H/.local/bin/agy"; ipol US-B
+# 拿得到安装脚本、它自己直连下载不了（实际最常见）：直连没装成，问过经 US-B 再装一次
+rm -f "$T/install_direct_down"; touch "$T/install_dl_down"; : > "$IL"
+out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
+rm -f "$T/install_dl_down"
+ok "直连拿到了安装脚本、它自己下载不了：直连没装成，问过经 US-B 再装一次，装上" '[ $rc -eq 0 ] && grep -qx "INSTALL-GET agy direct" "$IL" && printf "%s" "$out" | grep -q "直连没装成。经内置代理的节点 US-B 安装 agy 吗？" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && [ -L "$H/.local/bin/agy" ] && istopped && [ "$(ileft)" = 0 ]'
+rm -f "$H/.local/bin/agy"; touch "$T/install_fail"; : > "$IL"
+out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
+rm -f "$T/install_fail"
+ok "安装脚本失败：经 US-B 再试也失败就照实说（安装脚本的输出照样给用户看）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "经 US-B 也没装成" && printf "%s" "$out" | grep -q "Installation failed (fake)" && [ "$(grep -c "^INSTALL-RUN agy" "$IL")" = 2 ] && istopped && [ "$(ileft)" = 0 ] && [ ! -e "$H/.local/bin/agy" ]'
+touch "$T/install_html"; : > "$IL"
+out=$(ri CCA_TTY="$(ans n)" cca agy install-cli 2>&1); rc=$?
+rm -f "$T/install_html"
+ok "拿到的不是脚本（比如出错的网页）：算没拿到，不运行" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本" && ! grep -q "^INSTALL-RUN" "$IL"'
+touch "$T/install_noop"; : > "$IL"
+out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
+rm -f "$T/install_noop"
+ok "安装脚本跑完了（退出码 0）却没找到命令：照实说，不再经内置代理试" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "安装脚本跑完了，却没找到 agy 命令" && [ "$(grep -c "^INSTALL-RUN agy" "$IL")" = 1 ] && ! printf "%s" "$out" | grep -q "经内置代理的节点"'
+touch "$T/install_direct_down" "$ID/start_fail"; : > "$IL"
+out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
+rm -f "$ID/start_fail"
+ok "临时内核起不来：照实说（带内核最后一行输出），不装，临时目录删掉" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "经 US-B 的临时代理没起来：.*Parse config error: fake" && ! grep -q " via" "$IL" && [ "$(ileft)" = 0 ] && [ ! -e "$H/.local/bin/agy" ]'
+tback agy; rm -f "$T/install_direct_down"
+# 用到没装的命令：终端里先问要不要装，装上后接着做；非交互时说明怎么装
+toff claude; : > "$IL"; : > claude.log
+out=$(ri CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
+ok "终端里启动账号、没装 claude：先问要不要装，装上后照常启动（用的是刚装上的）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "没找到 claude 命令。现在用官方安装脚本装上吗？" && grep -qx "INSTALL-DONE claude via=direct" "$IL" && [ -s claude.log ]'
+rm -f "$H/.local/bin/claude"; : > "$IL"
+out=$(runev PATH="$NP" cca @alice --version 2>&1); rc=$?
+ok "非交互（启动器、界面 App）没装 claude：不问不装，说明用 cca install-cli 装（原因码 tool_missing）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "找不到 claude 命令：运行 cca install-cli 用官方安装脚本装上" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"tool_missing\"" && [ ! -s "$IL" ]'
+tback claude
+# 维护者发布前的严格检查认识 install_node
+printf '{"version": 1, "claude": {"alice@example.com": "US-C"}, "install_node": "US-B"}\n' > "$T/inst.ok.json"
+printf '{"version": 1, "claude": {"alice@example.com": "US-C"}, "install_node": ["US-B"]}\n' > "$T/inst.bad.json"
+out=$(run cca _policy-check "$T/inst.bad.json" 2>&1); rc=$?
+ok "维护者发布前的严格检查认识 install_node，也查它的格式" 'run cca _policy-check "$T/inst.ok.json" >/dev/null 2>&1 && [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "install_node 应该是节点的名字"'
+# 还原：映射、配置、账号表，内置代理的目录（11b4 结束时就删了）
+cp "$T/pr.inst" "$PR/policy.json"; rm -f "$PR/policy.json.sig"; [ ! -f "$T/pr.inst.sig" ] || cp "$T/pr.inst.sig" "$PR/policy.json.sig"
+rm -rf "$H/.cca/policy" "$CN" "$ID"; mv "$T/policy.inst" "$H/.cca/policy"
+cp "$T/config.inst" "$H/.cca/config.json"; cp "$T/accounts.inst" "$H/.cca/accounts.json"
+ok "辅助安装用完不留东西：没建 agy 的账号表，~/.local/bin 里只剩原来的" '[ ! -e "$H/.cca/agy.json" ] && [ ! -e "$H/.local/bin/agy" ] && [ ! -e "$H/.local/bin/claude" ] && [ ! -e "$H/.local/bin/codex" ]'
+
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3" "$T/tmp3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
@@ -2751,6 +2952,10 @@ ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $r
 ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
 out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?
 ok "再运行一次：修复/重装，不重复写 PATH" '[ $rc -eq 0 ] && [ "$(grep -c "\.local/bin" "$H3/.zshrc")" = 1 ] && printf "%s" "$out" | grep -q "已经写在"'
+mv "$T/bin/claude" "$T/claude.off"; : > "$T/install.log"   # 新机器上还没装 Claude Code（一键安装不再要求先装好它）
+out=$(r3 CCA_TTY="$(ans n y n)" "$H3/.cca/bin/cca" install 2>&1); rc=$?
+rm -f "$H3/.local/bin/claude"; mv "$T/claude.off" "$T/bin/claude"
+ok "cca install：没装 Claude Code 时问过之后用官方安装脚本装上（~/.local/bin 不在 PATH 里也找得到）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" && grep -qx "INSTALL-DONE claude via=direct" "$T/install.log" && printf "%s" "$out" | grep -qF "装好了 claude：$H3/.local/bin/claude" && printf "%s" "$out" | grep -q "~/.local/bin 不在 PATH 里"'
 publish 9.9.21; echo "# 篡改" >> "$G/v9.9.21/cca"; rm -rf "$H3"; mkdir -p "$H3"
 out=$(r3 CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装：签名不对就不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "签名校验没通过" && [ ! -e "$H3/.cca" ]'
@@ -2877,6 +3082,12 @@ echo '{"claudeAiOauth": {"accessToken": "cred-LEFTOVER-SECRET"}}' > "$H/.cca/acc
 mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; [ -f "$H/.cca/policy/policy.json" ] || echo '{}' > "$H/.cca/policy/policy.json"
 NODEJ='{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}'
 for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do printf '%s\n' "$NODEJ" > "$H/.cca/policy/$f"; done
+# Antigravity 账号（10f2 收尾时删掉了 agy.json）：表里登录着的 gina 也退出登录；账号表里没有的账号目录（没退出登录）里的 token 同样不进备份
+echo '{"gina@example.com": "US-A"}' > "$H/.cca/agy.json"
+for a in "gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)" orphan-example-com; do
+	mkdir -p "$H/.cca/agy/accounts/$a/gemini/antigravity-cli"
+	echo '{"access_token": "ya29.agy-LEFTOVER-SECRET", "id_token_email": "gina@example.com"}' > "$H/.cca/agy/accounts/$a/gemini/antigravity-cli/antigravity-oauth-token"
+done
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
@@ -2887,5 +3098,6 @@ BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
 ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
+ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

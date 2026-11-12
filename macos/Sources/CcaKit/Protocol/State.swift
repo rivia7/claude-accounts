@@ -291,6 +291,34 @@ struct NodeUse: Decodable, Sendable, Equatable, Identifiable {
 }
 
 /// 一个工具（Claude / Codex）。
+/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）。旧版 cca 没有这个字段：
+/// 那时只有 Claude 和 Codex，都有。
+struct ToolFeatures: Decodable, Sendable, Equatable {
+    var app: Bool
+    var api: Bool
+    var usage: Bool
+
+    enum CodingKeys: String, CodingKey { case app, api, usage }
+
+    init(app: Bool, api: Bool, usage: Bool) {
+        self.app = app
+        self.api = api
+        self.usage = usage
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        app = c.bool(.app) ?? true
+        api = c.bool(.api) ?? true
+        usage = c.bool(.usage) ?? true
+    }
+
+    /// cca 没给 features 时：Antigravity 什么都没有，别的都有
+    static func defaults(_ id: ToolID) -> ToolFeatures {
+        id == .agy ? ToolFeatures(app: false, api: false, usage: false) : ToolFeatures(app: true, api: true, usage: true)
+    }
+}
+
 struct ToolState: Decodable, Sendable, Equatable, Identifiable {
     var id: ToolID
     var label: String?
@@ -304,6 +332,8 @@ struct ToolState: Decodable, Sendable, Equatable, Identifiable {
     var errors: [StateIssue]
     var last: String?
     var accounts: [Account]
+    /// 这个工具有没有桌面 App、第三方 API 账号、查用量的接口（Antigravity 都没有）
+    var features: ToolFeatures
 
     enum CodingKeys: String, CodingKey {
         case id, label
@@ -311,7 +341,7 @@ struct ToolState: Decodable, Sendable, Equatable, Identifiable {
         case cliPrefix = "cli_prefix"
         case enabled, bin, app, chrome
         case settingsProblems = "settings_problems"
-        case errors, last, accounts
+        case errors, last, accounts, features
     }
 
     init(from decoder: Decoder) throws {
@@ -328,6 +358,7 @@ struct ToolState: Decodable, Sendable, Equatable, Identifiable {
         app = c.lossy(AppInstall.self, .app)
         chrome = c.bool(.chrome) ?? true
         settingsProblems = c.lossyArray(String.self, .settingsProblems) ?? []
+        features = c.lossy(ToolFeatures.self, .features) ?? .defaults(id)
         errors = c.lossyArray(StateIssue.self, .errors) ?? []
         last = c.string(.last)
         accounts = (c.lossyArray(Account.self, .accounts) ?? []).map { a in

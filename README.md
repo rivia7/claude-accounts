@@ -9,14 +9,15 @@
 - **一眼看清用量**：`cca usage` 列出每个账号的 5 小时、本周额度用了多少、什么时候重置，挑个还有余量的账号接着干。
 - **第三方 API 也能当账号用**：兼容 Anthropic 接口的服务（填地址和 key），和官方账号一起出现在菜单里，可以直连，也可以走节点。
 - **Codex 也能多账号**：`cca codex` 管 ChatGPT 账号的 Codex（命令行和 ChatGPT 桌面 App），同样各自登录、各走各的出口，工作资料共用 `~/.codex`。
+- **Antigravity 也能多账号**：`cca agy` 管 Google 账号的 Antigravity 命令行（`agy`），同样各自登录、各走各的出口，工作资料共用 `~/.gemini`（见「Antigravity 账号」一节）。
 
 终端里的 Claude Code（`claude` 命令）、网页版 claude.ai 和 Claude 的 Mac 桌面 App 都支持（第三方 API 账号只用于 Claude Code）。Codex 那边支持 `codex` 命令、网页版 chatgpt.com 和 ChatGPT 桌面 App（Codex 的第三方 API 账号只用于 `codex` 命令）。
 
 ## 需要准备什么
 
 - 一台 Mac（Linux 服务器上也能用命令行，见「Linux 服务器」）
-- 装好 Claude Code（没装的话先运行 `curl -fsSL https://claude.ai/install.sh | bash`）
-- 用 Codex 的话：装好 `codex` 命令（npm、Homebrew 或 OpenAI 的安装脚本都行，cca 会在 PATH、`~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找）；要用桌面版的话装好 ChatGPT App
+- Claude Code（`claude` 命令）：没装也行，安装 cca 时会问要不要用官方安装脚本装上（见下面的「辅助安装」）
+- 用 Codex 的话：装好 `codex` 命令（npm、Homebrew 或 OpenAI 的安装脚本都行，cca 会在 PATH、`~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 里找；没装时 `cca codex install-cli` 用官方安装脚本装）；要用桌面版的话装好 ChatGPT App
 - Google Chrome（登录和网页版都用它）
 - 局域网里有一台装了 **OpenClash** 或 **ShellCrash** 的 OpenWrt 路由器（常说的"旁路由"），开着 SSH，你知道它的 IP 和 root 密码（只用直连的第三方 API 账号的话不需要，见「第三方 API 账号」一节）。用的是哪个 cca 会自动认出来；ShellCrash 要 1.9 或更新的版本、用 Meta（mihomo）内核，路由器上还要装好 ruby（`opkg update && opkg install ruby ruby-yaml`，OpenClash 自带）
 - 出门在外也要用的话：Mac 上装 **Clash Verge**（或其它基于 mihomo 的 Clash 客户端），里面有和路由器上同名的节点
@@ -41,9 +42,17 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 已经装过的，再运行一次这条命令就是修复或重装，账号和配置都会保留。
 
+### 辅助安装：claude、codex、agy 命令
+
+`cca install-cli`（Codex：`cca codex install-cli`，Antigravity：`cca agy install-cli`）用它们的官方安装脚本装命令，和官网上的 `curl -fsSL … | bash` 一样：脚本自己下载、校验，装进 `~/.local/bin`。安装 cca 时没找到 Claude Code、终端里用到没装的命令时，也会先问要不要装；cca App 里账号页“没装 X 命令”旁边有「安装 X 命令…」，在终端里运行同一条命令。
+
+- **先直连**。拿不到安装脚本、或者直连没装成（例如安装脚本自己下载不了）时，问过你再经 cca 内置代理的一个节点装：在本机临时起一个只走这个节点的代理端口（只在 127.0.0.1 上，不碰正在用的内置代理、Clash Verge 和路由器），装完就停；它的配置有节点密钥，放在只有你能读的临时目录里，用完删掉。
+- **用哪个节点**：维护者在映射里指定（`install_node`，见「维护者的账号 → 节点映射」）。没配置映射、映射没指定、或者这台机器没有这个节点的定义时，在终端里现选一个（只用这一次，不记下）。节点定义和内置代理的一样：在家时从路由器拷的可选节点，加上维护者参考节点。
+- **不带账号的东西**：安装脚本在空环境里运行，不带账号、代理设置和 API key；Claude Code 的安装（`claude install`）用一次性的配置目录，不往账号和 `~/.claude` 的配置里写（官方安装脚本只把下载的文件临时放在 `~/.claude/downloads`，装完删掉）。
+
 ## Linux 服务器
 
-Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要先装好 Claude Code，还要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、find：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。
+Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、find：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。Claude Code 没装也行：安装时会问要不要用官方安装脚本装上（服务器直连不通时可以经内置代理装，见「辅助安装」）。
 
 Linux 支持目前在测试版里（3.1.0-beta.14 起）。正式版发布以前，上面那行命令装的正式版还不支持 Linux，先用这一行装测试版（正式版发布以后就和 macOS 用同一行命令）：
 
@@ -97,6 +106,7 @@ Linux 上能用的是命令行：
 | 删除账号 | `cca rm 工作` |
 | 检查每个账号的出口 IP | `cca check` |
 | 打开图形界面（用量、节点分流、一键打开 App） | `cca gui` |
+| 装 claude 命令（Codex、Antigravity：`cca codex install-cli`、`cca agy install-cli`） | `cca install-cli`（官方安装脚本，直连不通时问过再经内置代理装） |
 | 出门在外：配置本机的 Clash 客户端（第一次在外面启动时也会问） | `cca local setup` |
 | 看现在走路由器还是本机 Clash | `cca local` |
 | 退出某个账号的登录、重新登录 | `cca login 工作` |
@@ -146,7 +156,7 @@ Linux 上能用的是命令行：
 
 维护者这边：
 
-1. 建一个私有仓库（例如 `cca-policy`），放一个 `policy.json`：`{"version": 1, "claude": {"name@example.com": "US-A"}, "codex": {"name@example.com": "US-B"}, "aliases": {"name@example.com": "工作"}}`。`aliases` 可以不写：它是各台机器自动加账号时用的别名（Claude、Codex 通用），没写的账号只写邮箱。旧版本的 cca 会忽略这一项，照样拉得到映射。
+1. 建一个私有仓库（例如 `cca-policy`），放一个 `policy.json`：`{"version": 1, "claude": {"name@example.com": "US-A"}, "codex": {"name@example.com": "US-B"}, "aliases": {"name@example.com": "工作"}}`。`aliases` 可以不写：它是各台机器自动加账号时用的别名（Claude、Codex 通用），没写的账号只写邮箱。旧版本的 cca 会忽略这一项，照样拉得到映射。还可以加一项 `"install_node": "节点名"`：辅助安装直连不通时经内置代理走的节点（写它在路由器上、参考配置里的名字），各台机器问过再用它；同样可以不写，旧版本的 cca 也会忽略它。
 2. 改好后在 cca 的仓库里运行 `./policy.sh 映射仓库的目录`：它会检查格式、确认仓库是私有的，然后用发布密钥签名，提交并推送。
 3. 有人发来公钥时，复制它，在 cca 的仓库里运行 `./policy.sh key add`：读剪贴板里的公钥，提示给它起个别名（谁的哪台机器；直接回车用公钥备注里的机器名，不能和已有的重复），加成只读的 deploy key。公钥在文件里时写成 `./policy.sh key add 文件 [别名]`。你自己的机器上，启动时的引导已经把公钥复制到剪贴板了，直接运行就行。之后按别名查、删、改：
    - `./policy.sh key`：列出各台机器的 key（添加时间、最近一次拉取、别名，标出你这台机器的）。
@@ -290,6 +300,27 @@ cxa @工作              # 简写：cxa 就是 cca codex（cxa、cxa usage、cxa
 
 启动前同样会检查：出口地区和纯净度（看 chatgpt.com 看到的 IP）；shell 里继承的 `OPENAI_*`、`CODEX_*`（例如会直接顶替登录的 `CODEX_ACCESS_TOKEN`）一律不带进去，只留公司网络根证书 `CODEX_CA_CERTIFICATE`；共享的 `~/.codex/config.toml` 或任一个 `*.config.toml` profile 里如果写了 `chatgpt_base_url`、`openai_base_url`、`experimental_realtime_ws_base_url`、`experimental_realtime_webrtc_call_base_url`、不是 `openai` 的 `model_provider`、不是 `file` 的 `cli_auth_credentials_store`、`forced_chatgpt_workspace_id`、`forced_login_method = "api"`、打开了 `respect_system_proxy`（也兼容旧版内嵌的 `profile` 配置），或者 `~/.codex/.env` 里写了代理、`OPENAI_*`，cca 会拒绝启动并指出来。账号内的配置合并回共享目录后还会再检查一次。
 
+## Antigravity 账号
+
+Google 的 Antigravity 命令行（`agy`）也能多账号，用法和 Codex 一样，前面加个 `agy`：
+
+```sh
+cca agy add            # 添加 Antigravity 账号：填 Google 账号的邮箱、别名（可选），选出口节点
+cca agy                # 选账号启动 agy（cca agy @工作 直接启动，后面的参数原样交给 agy）
+cca agy login 工作     # 重新登录
+```
+
+- **账号表分开记**：记在 `~/.cca/agy.json`，格式和 `accounts.json` 一样（只有 Google 账号，值是节点名）。和 Claude、Codex 账号共用路由器（或本机 Clash）上的同一组端口，每个账号一个端口、一个出口。
+- **各自登录**：每个账号有自己的数据目录（`~/.cca/agy/accounts/…/gemini`，cca 启动 agy 时用 `--gemini_dir` 指过去）。第一次启动时，cca 让 agy 生成 Google 的登录网址，补上账号的邮箱（`login_hint`），在**这个账号专属的 Chrome 窗口**里、经它的出口打开；登录后页面上显示一段授权码，把它（或者整个网址）粘贴回终端，cca 核对过再交给 agy，换 token 也经这个账号的出口。登录后 cca 还会核对邮箱，登成别的号就不启动。你原来 `~/.gemini` 里的登录不受影响，直接敲 `agy` 用的还是它。
+- **登录存在账号自己的目录里**：agy 平时把登录存进 macOS 钥匙串，不管数据目录在哪都是同一份，没法分账号。cca 启动 agy 时设上 `SSH_CONNECTION`（值是本机地址），agy 看到 SSH 会话就把登录存成数据目录里的文件（`antigravity-cli/antigravity-oauth-token`，只有你能读）。这不是 agy 公开的做法：每换一个版本，cca 先在临时目录里试一次（不联网），确认它还这样才用，不是就停下、不启动。副作用是 agy 会当自己在 SSH 会话里运行。cca 只读这个文件里的邮箱和套餐档位，不碰里面的 token。
+- **工作资料共用**：`~/.gemini` 里的会话（`conversations`）、记忆（`brain`）、历史、`settings.json`、`keybindings.json`、`GEMINI.md`、`AGENTS.md`，以及 `config/` 下的 MCP、技能、规则、工作流、插件等，所有账号共用一份；`--continue` 认的“这个目录上次的会话”也共用，换个账号照样接着聊。
+- **不共用的**：登录、两个装机标识（`installation_id` 和 `jetski_state.pbtxt` 里的 `installation_uuid`：添加账号时 cca 给每个账号各生成一份，之后固定不变）、日志、会话摘要的索引（`conversation_summaries.db` 等，agy 会按共享的会话重建）。
+- **没有的**：查用量的接口（在 agy 里用 `/usage` 看）、第三方 API 账号、桌面 App 和控制台的账单页；`cca agy usage`、`add api`、`app`、`billing` 会说清楚，什么都不做。
+- **其它命令**：`cca agy ls`、`edit`、`check`（出口检测：Google 的网站没有 `/cdn-cgi/trace`，经同一个端口看 Cloudflare 看到的 IP）、`web`（用账号专属的浏览器打开 antigravity.google）、`rm`，和 Claude 账号的同名命令一样。服务器上登录和 Claude、Codex 一样：给出在 Mac 上运行的 `cca agy login-page …` 那一行，Mac 上打开登录页，授权码抄回服务器的终端。
+- **图形界面**：用过 `cca agy` 之后，总览和侧栏里多一组 Antigravity 账号（装了 `agy` 命令时，侧栏底部也能「启用 Antigravity 账号」），能打开终端、网页版、检测出口；没有用量和桌面 App。
+
+启动前同样会检查：出口地区和纯净度；shell 里继承的 `GEMINI_*`、`ANTIGRAVITY_*`、`AGY_*`（例如会换掉账号的 `AGY_ACCOUNT`）、`GOOGLE_API_KEY`、`GOOGLE_APPLICATION_CREDENTIALS`、`GOOGLE_CLOUD_PROJECT` 这类会顶替登录或换项目的变量一律不带进去，只留界面开关 `AGY_CLI_*` 和公司网络根证书 `AGY_CA_CERT`；共享的 `~/.gemini/antigravity-cli/settings.json`（或这次的 `--settings`）里写了 Google Cloud 项目（`gcp`：各账号会记到同一个项目上），或者启动参数里另给了 `--gemini_dir`，cca 会拒绝启动并指出来。
+
 ## Claude App（桌面版）
 
 Claude 的 Mac 桌面 App 也能每个账号开一份：
@@ -427,7 +458,7 @@ cca clients mode auto              # 恢复每日自动检查和准备
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude 和 Codex）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key 也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude、Codex 和 Antigravity）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key 也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`、`~/.gemini`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
@@ -460,7 +491,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。给官方账号记下备查的 key（`cca key 工作`）也存在钥匙串里（条目名 `cca-ref-…`，Codex 的是 `cca-codex-ref-…`），cca 绝不拿它登录或启动账号，同样随 `cca rm`、`cca restore` 删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。Linux 服务器上没有钥匙串，这些 key 存成 `~/.cca/secrets` 下只有你能读的文件（目录 700、文件 600），同样随 `cca rm`、`cca restore` 删掉，不进备份包。
 
 **cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
-能。cca 启动 Claude Code 时把 `~/.cca` 加成工作目录（`--add-dir`），让 Claude 帮你看账号表、配置、映射和日志时不用一次次确认；改文件照你选的权限模式来。登录凭证和浏览器资料除外：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、写参考节点前留的 Clash Verge 配置备份（`backup/clash-verge-*.yaml`）、Codex 账号的 `auth.json`、各账号的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写（账号表里如果写了明文的 `key` 字段，Claude 是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
+只能直接看、改这个账号自己的目录。cca 启动 Claude Code 时把 `~/.cca/accounts/` 下这个账号的目录加成工作目录（`--add-dir`），里面有它的用量、出口检测结果和 Claude Code 在这个账号下的配置（`claude/`），Claude 帮你看这些时不用一次次确认；改文件照你选的权限模式来。账号表、`config.json`、映射、日志和别的账号的目录不在工作目录里，Claude 要读时照权限模式来（默认会先问你）。登录凭证和浏览器资料不管在不在工作目录里都不让碰：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、写参考节点前留的 Clash Verge 配置备份（`backup/clash-verge-*.yaml`）、Codex 账号的 `auth.json`、各账号（包括这个账号自己）的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写，直接拒绝、不会来问你（账号表里如果写了明文的 `key` 字段，你让 Claude 读账号表时它是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。
 
 **cca 会改我的 Clash Verge 配置吗？**
 端口池只在它的全局扩展脚本末尾加一段带标记的代码，不碰你的订阅、规则和其它设置；`cca local off` 或 `cca restore` 会把这段原样删掉，脚本恢复成原来的样子。维护者发布了参考节点时，你当前选用的配置里缺的那几个节点会直接写进去（行尾带 `# cca`，改之前的留一份在 `~/.cca/backup/`），见上面的「参考节点」。

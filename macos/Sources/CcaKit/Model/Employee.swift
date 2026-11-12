@@ -4,9 +4,9 @@ import Foundation
 /// 共用一份优先级），App 不重算 cca 的规则。账号本身的事（哪个组、套餐档位、在不在用）直接读账号，这里只多出两样：
 /// 头条状态（mood）和头条之外的小事（flags）。
 struct Employee: Equatable, Sendable, Identifiable {
-    /// 坐在哪个组：Claude 组、ChatGPT 组、外包（第三方 API 账号，两个工具的都在这里）
+    /// 坐在哪个组：Claude 组、ChatGPT 组、Antigravity 组、外包（第三方 API 账号，各工具的都在这里）
     enum Department: Hashable, Sendable, CaseIterable {
-        case claude, chatgpt, contractors
+        case claude, chatgpt, antigravity, contractors
     }
 
     /// 头条状态（哪个算头条由 Diagnosis.all 的顺序决定）
@@ -70,7 +70,7 @@ struct Employee: Equatable, Sendable, Identifiable {
     var isWorking: Bool { account.isWorking }
 
     static func department(of a: Account) -> Department {
-        a.isAPI ? .contractors : a.tool == .codex ? .chatgpt : .claude
+        a.isAPI ? .contractors : .official(a.tool)
     }
 
     static func make(_ a: Account, usage: UsageEntry?, live: LiveSlot?, now: Double) -> Employee {
@@ -109,17 +109,38 @@ extension Employee.Department {
         switch self {
         case .claude: return "claude"
         case .chatgpt: return "chatgpt"
+        case .antigravity: return "agy"
         case .contractors: return "api"
         }
     }
 
-    /// 添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）
-    func addHandoff(codexPrefix: [String]) -> Handoff {
+    /// 这一组是哪个工具的官方账号；第三方 API 账号的组各工具共用，是 nil
+    var tool: ToolID? {
         switch self {
-        case .claude: return .addAccount(prefix: [], product: "Claude")
-        case .chatgpt: return .addAccount(prefix: codexPrefix, product: "ChatGPT")
+        case .claude: return .claude
+        case .chatgpt: return .codex
+        case .antigravity: return .agy
+        case .contractors: return nil
+        }
+    }
+
+    /// 这个工具的官方账号坐哪一组（认不出的工具算 Claude 组）
+    static func official(_ t: ToolID) -> Employee.Department {
+        t == .codex ? .chatgpt : t == .agy ? .antigravity : .claude
+    }
+
+    /// 添加这个组的账号（办公室各组的标题、工具栏的“＋”菜单）。prefix 是这个工具的命令前缀（`_gui state` 的 cli_prefix）
+    func addHandoff(prefix: [String]) -> Handoff {
+        switch self {
+        case .claude: return .addAccount(prefix: prefix, product: "Claude")
+        case .chatgpt: return .addAccount(prefix: prefix, product: "ChatGPT")
+        case .antigravity: return .addAccount(prefix: prefix, product: "Antigravity")
         case .contractors: return .addAPI()
         }
+    }
+
+    func addHandoff(codexPrefix: [String]) -> Handoff {
+        addHandoff(prefix: self == .chatgpt ? codexPrefix : tool?.defaultPrefix ?? [])
     }
 }
 
@@ -136,18 +157,28 @@ struct Office: Equatable, Sendable {
     var people: [Employee] { rooms.flatMap(\.people) }
     var census: OfficeCensus { OfficeCensus(people) }
 
-    /// Claude 组一直有（空的也画出来，好让人知道从哪里添加）；ChatGPT 组在启用了 Codex 时有；外包有人才有。
-    static func make(tools: [ToolState], codexEnabled: Bool, usage: (Account) -> UsageEntry?,
+    /// Claude 组一直有（空的也画出来，好让人知道从哪里添加）；ChatGPT、Antigravity 组在启用了这个工具时有；外包有人才有。
+    static func make(tools: [ToolState], enabled: [ToolID], usage: (Account) -> UsageEntry?,
                      live: (AccountRef) -> LiveSlot?, now: Double,
                      arrange: (Employee.Department, [Employee]) -> [Employee] = { $1 }) -> Office {
-        let people = tools.filter { $0.id == .claude || ($0.id == .codex && codexEnabled) }
+        let on = Set(enabled).union([.claude])
+        let people = tools.filter { on.contains($0.id) }
             .flatMap(\.accounts)
             .map { Employee.make($0, usage: usage($0), live: live($0.ref), now: now) }
         let byDept = Dictionary(grouping: people, by: \.department)
         var rooms = [Room(department: .claude, people: arrange(.claude, byDept[.claude] ?? []))]
-        if codexEnabled { rooms.append(Room(department: .chatgpt, people: arrange(.chatgpt, byDept[.chatgpt] ?? []))) }
+        for t in ToolID.allKnown where t != .claude && on.contains(t) {
+            let d = Employee.Department.official(t)
+            rooms.append(Room(department: d, people: arrange(d, byDept[d] ?? [])))
+        }
         if let c = byDept[.contractors], !c.isEmpty { rooms.append(Room(department: .contractors, people: arrange(.contractors, c))) }
         return Office(rooms: rooms)
+    }
+
+    static func make(tools: [ToolState], codexEnabled: Bool, usage: (Account) -> UsageEntry?,
+                     live: (AccountRef) -> LiveSlot?, now: Double,
+                     arrange: (Employee.Department, [Employee]) -> [Employee] = { $1 }) -> Office {
+        make(tools: tools, enabled: codexEnabled ? [.claude, .codex] : [.claude], usage: usage, live: live, now: now, arrange: arrange)
     }
 }
 

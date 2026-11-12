@@ -1,6 +1,6 @@
 # cca.app（macOS 原生界面）
 
-cca 的图形界面：总览（所有账号一眼看全：哪个在用、哪个额度用完了、哪个没登录）、Claude / ChatGPT（Codex）账号、用量、节点分流，
+cca 的图形界面：总览（所有账号一眼看全：哪个在用、哪个额度用完了、哪个没登录）、Claude / ChatGPT（Codex）/ Antigravity 账号、用量、节点分流，
 打开每个账号自己的桌面 App、网页版或终端，检测出口，同步路由器。
 它只是 cca 的前端：**只经 [PROTOCOL.md](PROTOCOL.md) 和 cca 打交道**（运行 `cca _gui hello|state|live`、`cca [codex] usage|check … --json`、
 `cca [codex] app|web KEY`、`cca codex reset KEY --json`、`cca router sync`、`cca update --check --json`、`cca update 版本号`、
@@ -73,7 +73,7 @@ bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
 CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
 ```
 
-只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、empty、office、client-updates、stats（用量统计页）、pinned（有置顶账号的总览和侧栏），
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、pinned（有置顶账号的总览和侧栏），
 再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details、直接改别名的 rename、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
@@ -136,7 +136,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 每周用量（cca 给的 `usage_weeks`，PROTOCOL 2.2）：账号页「用量」下面的「每周用量」（`WeeklyUsage.swift`）是最近 12 周的一排竖条：和额度砖里的用量条（`Meter`）同一种条，只是竖着——灰色的底槽是这一周的额度，从下往上填到用了多少，填满就是用完，和额度砖一样按用了多少上色（绿 / 橙 / 红）；结束前一天没查到的填灰色（实际可能更多；和数据旧了的用量条一样，不靠透明度），中间重置过、超过 100% 的整根高出底槽（哪一段是重置前的 cca 不给，所以不在 100% 处断开）。用得很少时不像横着的条那样至少画一个圆点（竖着的条短，会显得比实际多），填的那段按底槽的形状裁。每根条在它那一周的正中间，日期写在正下方；不画坐标轴、网格线和每根上的数字：鼠标指着一周时那一列垫一层浅底（和卡片、列表行的悬停一样）、下面那一行换成这一周的细节，平时是统计（记下的几周平均用到多少、几周用完、几周没用到一半），读屏每根条都念。侧栏「总览」下面的「用量统计」（`UsageStatsPage.swift`）把官方账号排在一起比：Claude、ChatGPT 各一组，和总览一样的顺序，每个账号一行（头像和名字、小图（同样的竖条，和额度砖里的条一样细）、平均每周、本周），所有行同一个时间范围、同一个纵轴高度（有超过 100% 的就一起抬高），上下对得齐、高低能比；点一行进账号页。第三方 API 账号没有订阅的额度，不在里面。数字和哪一周填灰色都是 cca 给的；以前的用量官方不给，从 cca 开始记的那一周起一周一周长出来。
 - API key（PROTOCOL 4.10）：平时只显示 cca 给的掩码；点眼睛才向 cca 要一次明文（`KeyReveal`，不被观察、不进读屏，30 秒后、再点一下、换账号、
   离开页面时收起来）；「复制」写进剪贴板时标成机密，60 秒后还是它就清掉（`SecretClipboard`），提示里不写 key。官方账号的 key 只是备查。
-- 总览（`OfficePage.swift`，首页，侧栏最上面）：每个账号一张卡片，按 Claude 账号、ChatGPT 账号、第三方 API 账号分开排，按用户排的顺序（没排过的照账号表）、
+- 总览（`OfficePage.swift`，首页，侧栏最上面）：每个账号一张卡片，按 Claude 账号、ChatGPT 账号、Antigravity 账号（启用了才有）、第三方 API 账号分开排，按用户排的顺序（没排过的照账号表）、
   不随状态挪。画面设计上参考办公室（每张卡片画一个工位：桌子、显示器、椅子、坐着的人），**界面上的文字照实说**（账号、在用、空闲、额度用完、
   几点恢复、没登录、登错号、有问题），不写“办公室、员工、工位、在忙、休息、回来”这类比喻的词；代码里的类型名（`Office`、`Employee`）照设计参考起的，
   不出现在界面上。状态（`Employee` 的 mood：没登录 = 椅子空着、登错号 = 坐着灰色的人、有问题 = 端口连不上 / 节点选错 / 出口有问题、额度用完 = 趴在桌上、在用、空闲）
@@ -210,6 +210,9 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   （退出前等它退出）。cca 要内核又没开 App 时用 `open -g … --args --core` 在后台打开它（`CcaApp.launchedForCore`：什么情况下都不自己弹主窗口）。`core/config.yaml` 变了是
   CcaWatcher 的 `.core` 信号：看不见时也马上读 state。演示模式不跑内核。
 - **后台运行**：平时只有菜单栏图标（`LSUIElement`、`.accessory`，`.defaultLaunchBehavior(.suppressed)`，不恢复上次的窗口）。`cca gui`、更新后重新打开带 `--window`（`CcaApp.opensWindowAtLaunch`，演示模式也是）启动时开主窗口；第一次打开、cca 没准备好时连上之后也开。`WindowOpener.showMain` 换成 `.regular`（有 Dock 图标），刚换时激活不一定马上生效，稍等再激活一次、把窗口放到最前面；最后一个窗口（主窗口、设置）关掉时换回 `.accessory`，焦点还给之前的 App。Dock 里的“退出”、⌘Q 只回到后台（`applicationShouldTerminate` 返回 `.terminateCancel`、`WindowOpener.toBackground`），真的退出走 `AppExit.quit`（菜单栏面板和应用菜单的「退出」、更新后重新打开）；注销、重启、关机（`NSWorkspace.willPowerOffNotification`、退出事件里的 `kAEQuitReason`）和没有 Dock 图标时收到的退出请求也真的退出。
+- **安装命令**（PROTOCOL 2.1 的 `hello.install_cli`）：账号的终端打不开是因为没装 claude / codex / agy 命令（`can_why.cli` 是 `tool_missing`）时，账号页头“没装 X 命令”那句旁边有「安装 X 命令…」
+  （`AppModel.installCLIHandoff`；提示那一行的按钮，小一号的 `.bordered`），`fail` 的 `tool_missing` 也补救成它：在系统终端里运行 `cca [codex|agy] install-cli`
+  （官方安装脚本，直连不通时 cca 在终端里问要不要经内置代理装）。回到 App 时照常重新读 hello 和 state。旧版 cca 没有这个字段时不给。
 - **请求锁定到映射**（PROTOCOL 4.8）：账号的「…」和右键菜单里的「请求维护者锁定节点」（`can.policy_lock`）运行 `cca [codex] policy request`，把 stdout 的那条命令复制给用户发给维护者。
 - **查看 API 额度**：账号页“用量”一节底部“订阅附带的每月 API 额度”那一行的「在控制台查看」（右键菜单里的「在控制台查看 API 额度」；`can.billing`，第三方 API 账号、没装 Chrome 时没有）运行 `cca [codex] billing`，用账号自己的浏览器实例和出口打开控制台的账单页。订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，所以 App 不显示数字。
 - **查看重置次数**：Claude 账号页“用量”一节底部“重置次数和到期日”那一行的「在 claude.ai 查看」（右键菜单里的「在 claude.ai 查看重置次数」；`can.limit_resets`）运行 `cca limit-resets`，用账号自己的浏览器实例和出口打开 claude.ai 的用量页。这两个按钮打开前 cca 把账号邮箱放进剪贴板，要登录时粘贴（这些登录页不认网址里的邮箱参数）。Claude 的重置次数和到期日 cca 查不到（CLAUDE.md 里记着原因），所以总览上没有小票；ChatGPT 账号的次数和到期日直接显示。

@@ -247,7 +247,9 @@ struct MainToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                ForEach(Employee.Department.allCases, id: \.self) { d in
+                // Antigravity：启用了、或者装了 agy 命令才列出来
+                ForEach(Employee.Department.allCases.filter { $0 != .antigravity || model.visibleTools.contains(.agy)
+                            || model.hello?.tools[.agy]?.bin != nil }, id: \.self) { d in
                     let add = model.addHandoff(d)
                     Button(add.title + "…") { model.run(add) }
                 }

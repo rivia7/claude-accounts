@@ -19,7 +19,9 @@ struct AccountDetail: View {
                                 + "端口、纯净度这些细节，点「显示细节」。")
                     DetailHeader(account: a)
                     SectionColumns {
-                        if !a.isAPI {
+                        if !a.isAPI, !model.features(a.tool).usage {
+                            NoUsageSection(account: a)   // Antigravity：没有查用量的接口
+                        } else if !a.isAPI {
                             VStack(alignment: .leading, spacing: 32) {
                                 UsageSection(account: a)
                                 WeeklyUsageSection(account: a)
@@ -80,10 +82,19 @@ struct DetailHeader: View {
             }
             let reasons = disabledReasons(a)
             if !reasons.isEmpty {
-                Label(reasons.joined(separator: "；"), systemImage: "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Label(reasons.joined(separator: "；"), systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // 没装 claude / codex / agy 命令：在终端里用官方安装脚本装（cca 够新时才有）
+                    if let h = model.installCLIHandoff(for: a) {
+                        Button("安装 \(Texts.cliCommand(a.tool)) 命令…") { model.runInTerminal(h) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("在终端里运行 \(h.display)：用官方安装脚本安装，直连不通时会问要不要经内置代理装")
+                    }
+                }
             }
         }
     }
@@ -135,6 +146,7 @@ struct DetailHeader: View {
         let busy = model.activity(a.ref) != nil
         let label = model.appLabel(a.tool)
         let needsLogin = a.login == .loggedOut || a.login == .emailMismatch || model.loginExpired(a)
+        let hasApp = model.features(a.tool).app
         GlassRow(spacing: 8) {
             if needsLogin {
                 Button {
@@ -146,14 +158,16 @@ struct DetailHeader: View {
                 .help("在终端里运行 \(model.loginHandoff(a).display)")
             }
             if !a.isAPI {
-                Button {
-                    model.openApp(a.ref)
-                } label: {
-                    Label("打开 \(label)", systemImage: "macwindow")
+                if hasApp {
+                    Button {
+                        model.openApp(a.ref)
+                    } label: {
+                        Label("打开 \(label)", systemImage: "macwindow")
+                    }
+                    .glassButton(prominent: !needsLogin)
+                    .disabled(!a.can.app || busy)
+                    .help(reason("app", a) ?? "用这个账号的出口和独立的资料目录打开 \(label)")
                 }
-                .glassButton(prominent: !needsLogin)
-                .disabled(!a.can.app || busy)
-                .help(reason("app", a) ?? "用这个账号的出口和独立的资料目录打开 \(label)")
                 Button {
                     model.openWeb(a.ref)
                 } label: {
@@ -163,7 +177,7 @@ struct DetailHeader: View {
                 .disabled(!a.can.web || busy)
                 .help(reason("web", a) ?? "在这个账号自己的 Chrome 资料里打开网页版，走账号的出口")
             }
-            SessionButton(account: a, prominent: a.isAPI && !needsLogin, unavailable: reason("cli", a))
+            SessionButton(account: a, prominent: (a.isAPI || !hasApp) && !needsLogin, unavailable: reason("cli", a))
             Menu {
                 AccountManageItems(account: a, busy: busy)
             } label: {
@@ -182,7 +196,9 @@ struct DetailHeader: View {
         var out: [String] = []
         let label = model.appLabel(a.tool)
         if !a.isAPI {
-            if !a.can.app, let w = a.canWhy["app"] { out.append("打开 App：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
+            if !a.can.app, model.features(a.tool).app, let w = a.canWhy["app"] {
+                out.append("打开 App：" + Texts.canWhy(w, appLabel: label, tool: a.tool))
+            }
             if !a.can.web, let w = a.canWhy["web"] { out.append("网页版：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
         }
         if !a.can.cli, let w = a.canWhy["cli"] { out.append("终端：" + Texts.canWhy(w, appLabel: label, tool: a.tool)) }
@@ -199,6 +215,21 @@ struct DetailHeader: View {
         default: allowed = a.can.usage
         }
         return allowed ? nil : Texts.canWhy(w, appLabel: model.appLabel(a.tool), tool: a.tool)
+    }
+}
+
+/// 没有查用量接口的工具（Antigravity）：用量这一节只说去哪里看，不画额度、没有刷新按钮。
+struct NoUsageSection: View {
+    let account: Account
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader("用量") { EmptyView() }
+            Text(Texts.noUsage(account.tool))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -243,7 +274,7 @@ struct SessionButton: View {
     }
 
     private func helpText(_ a: Account, directory: String?) -> String {
-        let cli = a.tool == .codex ? "Codex" : "Claude Code"
+        let cli = Texts.cliName(a.tool)
         let t = model.terminalChoice
         guard let directory else { return "先选一个文件夹，再用 \(t.name) 在里面启动这个账号的 \(cli)" }
         guard t.isAutomatic else {

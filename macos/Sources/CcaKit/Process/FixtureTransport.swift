@@ -115,8 +115,8 @@ struct FixtureTransport: Transport {
     func send(_ request: CcaRequest, onEvent: (@Sendable (CcaEvent) -> Void)?) async throws -> CcaResponse {
         var args = request.arguments
         var tool = ToolID.claude
-        if args.first == "codex" {
-            tool = .codex
+        if let first = args.first, first == "codex" || first == "agy" {
+            tool = ToolID(rawValue: first)
             args.removeFirst()
         }
         let verb = args.first ?? "", sub = args.dropFirst().first ?? ""
@@ -130,7 +130,7 @@ struct FixtureTransport: Transport {
             return json(overrides["live"] ?? (local ? "live_local.json" : "live_router.json"))
         case ("usage", _):
             await pause(3)
-            let name = tool == .codex ? "usage_codex.json" : "usage_claude.json"
+            let name = tool == .claude ? "usage_claude.json" : "usage_\(tool.rawValue).json"
             guard let d = read(name) else { return missing(name) }
             let doc = try? DocumentDecoder.decode(UsageDoc.self, from: d)
             let any = doc?.accounts.contains { $0.source != .none } ?? false

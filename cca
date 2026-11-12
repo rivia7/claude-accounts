@@ -183,11 +183,11 @@ gui_result() {   # gui_result opened|activated 说明（需要先 eval "$(py env
 	[ -n "${CCA_EVENTS:-}" ] || return 0
 	gui_event result "\"code\":\"$1\",\"route\":$(jopt "${ROUTE:-}"),\"node\":$(jopt "${ACC_NODE:-}"),\"port\":${ACC_PORT:-null},\"message\":$(jstr "$2")"
 }
-gui_terminal() {   # gui_terminal 代码 说明 参数…：这一步要在终端里运行 cca 参数…（Codex 账号自动加上 codex）
+gui_terminal() {   # gui_terminal 代码 说明 参数…：这一步要在终端里运行 cca 参数…（Codex、Antigravity 账号自动加上 codex / agy）
 	[ -n "${CCA_EVENTS:-}" ] || return 0
 	local code="$1" msg="$2" cmd=cca a
 	shift 2
-	[ "${TOOL:-claude}" = codex ] && set -- codex "$@"
+	case "${TOOL:-claude}" in codex|agy) set -- "$TOOL" "$@" ;; esac
 	for a in "$@"; do cmd="$cmd $(shq "$a")"; done
 	gui_event terminal "\"code\":\"$code\",\"argv\":$(jarr "$@"),\"display\":$(jstr "$cmd"),\"message\":$(jstr "$msg")"
 }
@@ -419,17 +419,24 @@ if [ "$PYTHON" = /usr/bin/python3 ] && [ -n "$PYC_DIR" ]; then
 		unset _p
 	fi
 fi
-CLAUDE_BIN=$(command -v claude 2>/dev/null)
-[ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ] && CLAUDE_BIN="$HOME/.local/bin/claude"   # PATH 里还没加 ~/.local/bin 时
-CODEX_BIN=$(command -v codex 2>/dev/null)
-for _c in "$HOME/.local/bin/codex" /opt/homebrew/bin/codex /usr/local/bin/codex; do
-	[ -z "$CODEX_BIN" ] && [ -x "$_c" ] && CODEX_BIN="$_c"
-done
-unset _c
+find_bins() {   # 找 claude / codex / agy 命令：PATH 里的，或者官方安装器装的 ~/.local/bin（PATH 里还没加它时）；辅助安装装好后再找一次
+	local c
+	CLAUDE_BIN=$(command -v claude 2>/dev/null)
+	[ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ] && CLAUDE_BIN="$HOME/.local/bin/claude"
+	CODEX_BIN=$(command -v codex 2>/dev/null)
+	for c in "$HOME/.local/bin/codex" /opt/homebrew/bin/codex /usr/local/bin/codex; do
+		[ -z "$CODEX_BIN" ] && [ -x "$c" ] && CODEX_BIN="$c"
+	done
+	AGY_BIN=$(command -v agy 2>/dev/null)
+	[ -z "$AGY_BIN" ] && [ -x "$HOME/.local/bin/agy" ] && AGY_BIN="$HOME/.local/bin/agy"   # agy 自己的安装器装在 ~/.local/bin
+	case "${TOOL:-}" in codex) TOOL_BIN="$CODEX_BIN" ;; agy) TOOL_BIN="$AGY_BIN" ;; claude) TOOL_BIN="$CLAUDE_BIN" ;; esac
+}
+find_bins
 
 # 当前管的是哪个工具：默认 Claude Code；cca codex … 换成 Codex（use_tool）。各工具不同的步骤写成同名前缀的函数
 # （claude_login / codex_login …），用 tool 步骤名 调用；Python 那边按 CCA_TOOL 选同一个工具
 TOOL=claude CMD=cca TOOL_LABEL=Claude TOOL_BIN="$CLAUDE_BIN" TOOL_SETTINGS='~/.claude/settings.json' TRACE_HOST=claude.ai APP_LABEL='Claude App' BILLING_URL=https://platform.claude.com/settings/billing
+WEB_URL=https://claude.ai/ REGION_NAME=Claude INSTALL_URL=https://claude.ai/install.sh
 tool() { local s="$1"; shift; "${TOOL}_${s}" "$@"; }
 CODEX_ALIAS=cxa   # cxa …：等于 cca codex …（~/.local/bin/cxa 是指向同目录 cca 的相对链接，main 按调用名换成 codex 参数）
 
@@ -526,6 +533,31 @@ CODEX_SHARED_CONFIG = {'config.toml', 'hooks.json', '.env', 'AGENTS.md', 'AGENTS
 CODEX_FLAGS = ['--disable', 'system_proxy_fallback', '--disable', 'respect_system_proxy']
 CODEX_PROVIDER = 'cca'   # 第三方 API 账号：cca 经 -c 定义的模型服务名
 CODEX_CLIENT = 'codex_cli_rs'   # cca 经 app-server 登录、查用量时报的客户端名：和 codex login 发出的请求一样
+# agy（Google Antigravity CLI，内部代号 jetski）：--gemini_dir 把整个 ~/.gemini 换成账号目录（gemini/）。会话、记忆、全局的规则、
+# 技能、MCP 这些工作资料在子目录里（antigravity-cli/、config/：agy 自己的说明里全局的自定义都在 ~/.gemini/config/），所以名单写成
+# 相对路径，所在的子目录（AGY_NESTS）在账号目录里是真目录、里面放链接。没列出的都留在账号目录：登录 token（AGY_TOKEN）、
+# 安装标识（installation_id、jetski_state.pbtxt 的 installation_uuid）、日志、缓存、更新器的状态，以及以后新加的
+AGY_SHARED = {
+    'GEMINI.md', 'AGENTS.md',
+    'antigravity-cli/conversations', 'antigravity-cli/brain', 'antigravity-cli/annotations', 'antigravity-cli/implicit',
+    'antigravity-cli/presence', 'antigravity-cli/history.jsonl', 'antigravity-cli/settings.json',
+    'antigravity-cli/keybindings.json', 'antigravity-cli/cache/last_conversations.json',   # --continue 按它找这个目录上次的会话
+    'config/mcp_config.json', 'config/config.json', 'config/hooks.json', 'config/skills.json', 'config/plugins.json',
+    'config/projects', 'config/skills', 'config/rules', 'config/workflows', 'config/agents', 'config/plugins',
+    'config/GEMINI.md', 'config/AGENTS.md',
+}
+AGY_NESTS = ('antigravity-cli', 'antigravity-cli/cache', 'config')
+AGY_PRECREATE = ['antigravity-cli/conversations', 'antigravity-cli/brain', 'antigravity-cli/annotations',
+                 'antigravity-cli/implicit', 'antigravity-cli/presence', 'config/projects']
+AGY_SHARED_CONFIG = {'GEMINI.md', 'AGENTS.md', 'antigravity-cli/settings.json', 'antigravity-cli/keybindings.json',
+                     'config/mcp_config.json', 'config/config.json', 'config/hooks.json', 'config/skills.json',
+                     'config/plugins.json', 'config/GEMINI.md', 'config/AGENTS.md'}
+# 登录 token：设了 SSH_CONNECTION 时 agy 存进这个文件（不进钥匙串，1.5.5 实测：文件名照它读的路径），cca 只读里面的邮箱和档位
+AGY_TOKEN = 'antigravity-cli/antigravity-oauth-token'
+AGY_SSH = '127.0.0.1 22 127.0.0.1 22'   # 给 agy 的 SSH_CONNECTION：它只看有没有，写本机地址不带出真实 IP
+# agy 的档位 ID（StoredToken 的 user_tier）→ 叫法和档位。照 Gemini Code Assist 的档位 ID 写的，还没在真实账号上核对过：认不出的不显示
+AGY_TIERS = {'free-tier': ('Free', 'entry'), 'legacy-tier': ('Legacy', 'standard'), 'standard-tier': ('Standard', 'standard'),
+             'g1-pro-tier': ('Google AI Pro', 'standard'), 'g1-ultra-tier': ('Google AI Ultra', 'premium')}
 
 
 def die(msg):
@@ -621,6 +653,8 @@ class Tool:
     sroot = CCA_HOME                  # 账号目录都在 sroot/accounts/ 下
     master = os.path.join(HOME, '.claude')   # 共享主目录
     precreate = PRECREATE
+    nests = ()                        # 共享条目所在的子目录（相对主目录；空的是只共享顶层的条目）
+    config_names = CLAUDE_SHARED_CONFIG   # 共享配置（三方合并）：主目录里还没有时也记进基线
     sub = 'claude'                    # 账号目录里交给工具的配置目录（CLAUDE_CONFIG_DIR）
     settings_disp = '~/.claude/settings.json'   # 提示里"模型写在哪"
     state_key = None                  # config.json 里这个工具的 ports、last、api_ids、api_keys、ref_keys、key_hints 放在哪：None 是顶层
@@ -636,11 +670,16 @@ class Tool:
     url_example = 'https://api.example.com/anthropic'
     region_name = 'Claude'            # 出口在受限地区时的提示
     trace_host = 'claude.ai'          # 出口检测：经账号的端口取这个网站看到的 IP 和地区
+    web_url = 'https://claude.ai/'    # 网页版（cca web）
     billing_url = 'https://platform.claude.com/settings/billing'   # 控制台的账单页：每月 API 额度和余额只在这里显示，官方没有查询接口
     login_hosts = ('claude.com', 'claude.ai', 'platform.claude.com', 'console.anthropic.com')   # 登录页（补 login_hint）
+    login_paths = ('/oauth/authorize',)
     product = 'Claude Code'           # 查不了用量时的提示
     usage_windows = ('five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'seven_day_oauth_apps')   # cca usage --json 的窗口
     update_cmd = 'claude update'
+    install_url = 'https://claude.ai/install.sh'   # 官方安装脚本（辅助安装 install-cli：和官网上的 curl -fsSL … | bash 一样）
+    install_shell = 'bash'
+    has_app = has_api = has_usage = True   # 有桌面 App（cca app、启动器）、第三方 API 账号、查用量的接口
 
     def __init__(self):
         self.ids = {}   # 第三方 API 账号：账号表的键 → id（改别名时 id 不变，账号目录、钥匙串里的 key 和端口都跟着 id 走）
@@ -664,6 +703,11 @@ class Tool:
     def shares(self, n):
         """账号目录里的这个条目链接到共享主目录吗"""
         return n in CLAUDE_SHARED
+
+    def install_env(self, folder):
+        """官方安装脚本在空环境里运行时另加的变量：claude install 用一次性的配置目录（不往账号和 ~/.claude 的配置里写，不带设备标识，
+        和客户端更新里的 claude update 一样；安装脚本自己只把下载的文件临时放在 ~/.claude/downloads，装完删掉）"""
+        return cu_claude_env(folder)
 
     def shared_config(self, n):
         return n in CLAUDE_SHARED_CONFIG
@@ -698,9 +742,9 @@ class Tool:
         return []
 
     def run_args(self, key, v):
-        """启动账号时加在用户参数前面的：~/.cca 加成工作目录（cca_dir_args）；第三方 API 账号再加 --settings（地址、模型和
-        apiKeyHelper）"""
-        return cca_dir_args() + (['--settings', api_settings(key, v)] if is_api(v) else [])
+        """启动账号时加在用户参数前面的：这个账号自己的目录加成工作目录（cca_dir_args）；第三方 API 账号再加 --settings
+        （地址、模型和 apiKeyHelper）"""
+        return cca_dir_args(key) + (['--settings', api_settings(key, v)] if is_api(v) else [])
 
     def settings_problems(self):
         return claude_settings_problems()
@@ -720,6 +764,7 @@ class CodexTool(Tool):
     sroot = os.path.join(CCA_HOME, 'codex')
     master = os.path.join(HOME, '.codex')
     precreate = CODEX_PRECREATE
+    config_names = CODEX_SHARED_CONFIG
     sub = 'codex'                     # CODEX_HOME
     settings_disp = '~/.codex/config.toml'
     state_key = 'codex'
@@ -735,11 +780,17 @@ class CodexTool(Tool):
     url_example = 'https://api.example.com/v1'
     region_name = 'OpenAI'
     trace_host = 'chatgpt.com'
+    web_url = 'https://chatgpt.com/'
     billing_url = 'https://platform.openai.com/settings/organization/billing/overview'
     login_hosts = ('auth.openai.com',)
     product = 'Codex'
     usage_windows = ('five_hour', 'seven_day')
     update_cmd = 'codex update'
+    install_url = 'https://chatgpt.com/codex/install.sh'   # 跳到 releases.openai.com 的同一份；装进 ~/.codex/packages/standalone，~/.local/bin/codex 链过去
+    install_shell = 'sh'
+
+    def install_env(self, folder):
+        return {'CODEX_NON_INTERACTIVE': '1'}   # 不问问题（stdin 是 /dev/null）
 
     def shares(self, n):
         return n in CODEX_SHARED or codex_profile_file(n)
@@ -788,8 +839,86 @@ class CodexTool(Tool):
         return [load_quiet(usage_file(key))]
 
 
-CLAUDE, CODEX = Tool(), CodexTool()
-TOOLS = (CLAUDE, CODEX)   # 端口池里先 Claude 后 Codex：只有 Claude 账号时，路由器上的内容和以前逐字节一样
+class AgyTool(Tool):
+    """Antigravity（agy 命令）：--gemini_dir 指向账号目录，AGY_SHARED 上的条目共享。登录经 agy 自己的 acp --login（Google 的
+    登录页在账号的 Chrome 里打开，授权码粘贴回终端），token 存在账号目录的文件里：cca 设 SSH_CONNECTION，agy 看到 SSH 会话
+    就不用钥匙串（不是公开的做法，agy_probe 每个版本核对一次，不是就不启动）。没有桌面 App、第三方 API 账号和查用量的接口"""
+    name, label, cmd = 'agy', 'Antigravity', 'cca agy'
+    table = os.path.join(CCA_HOME, 'agy.json')
+    sroot = os.path.join(CCA_HOME, 'agy')
+    master = os.path.join(HOME, '.gemini')
+    precreate = AGY_PRECREATE
+    nests = AGY_NESTS
+    config_names = AGY_SHARED_CONFIG
+    sub = 'gemini'                    # --gemini_dir
+    settings_disp = '~/.gemini/antigravity-cli/settings.json'
+    state_key = 'agy'
+    kc_prefix = 'cca-agy-api-'
+    kc_ref_prefix = 'cca-agy-ref-'
+    pool_prefix = 'agy-'
+    launcher_prefix = 'Antigravity '
+    launcher_id = 'local.cca.launcher.agy.'
+    app_label = ''
+    app_proc = None
+    app_cmd = ''
+    api_fields = ()
+    url_example = ''
+    region_name = 'Google'
+    trace_host = 'www.cloudflare.com'   # Google 的网站没有 /cdn-cgi/trace：经同一个端口出去，出口一样，IP 和地区借 Cloudflare 的看
+    web_url = 'https://antigravity.google/'
+    billing_url = ''
+    login_hosts = ('accounts.google.com',)
+    login_paths = ('/o/oauth2/auth', '/o/oauth2/v2/auth')
+    product = 'Antigravity'
+    usage_windows = ()
+    update_cmd = 'agy update'
+    install_url = 'https://antigravity.google/cli/install.sh'   # 下载、SHA512 校验后装进 ~/.local/bin/agy，再跑 agy install（只看 PATH）
+    install_shell = 'bash'
+    has_app = has_api = has_usage = False
+
+    def install_env(self, folder):
+        return {}
+
+    def shares(self, n):
+        return n in AGY_SHARED
+
+    def shared_config(self, n):
+        return n in AGY_SHARED_CONFIG
+
+    def email(self, key):
+        return agy_claims(key).get('email') or ''
+
+    def who(self, key):
+        return agy_claims(key).get('email') or None
+
+    def plan(self, key, sub=None):
+        return AGY_TIERS.get(sub or agy_claims(key).get('tier'), ('',))[0]
+
+    def plan_tier(self, key, sub=None):
+        return AGY_TIERS.get(sub or agy_claims(key).get('tier'), ('', ''))[1]
+
+    def outdated_login_plan(self, key):
+        return ''
+
+    def sync(self, key):
+        pass
+
+    def run_args(self, key, v):
+        """数据目录换成账号目录：--gemini_dir 要写在子命令前面，所以放在用户参数前面"""
+        return ['--gemini_dir=' + cdir(key)]
+
+    def settings_problems(self):
+        return agy_settings_problems()
+
+    def usage_query(self, bin_, timeout):
+        die('%s 没有查用量的接口' % self.label)
+
+    def usage_caches(self, key):
+        return []
+
+
+CLAUDE, CODEX, AGY = Tool(), CodexTool(), AgyTool()
+TOOLS = (CLAUDE, CODEX, AGY)   # 端口池里先 Claude、再 Codex、最后 agy：只有 Claude 账号时，路由器上的内容和以前逐字节一样
 T = {x.name: x for x in TOOLS}.get(os.environ.get('CCA_TOOL') or 'claude') or die('cca(py): 未知工具 %s' % os.environ.get('CCA_TOOL'))
 TABS = {}   # 读进来的各工具账号表（工具名 → 表）；格式不对、读不了的不在里面
 ERRS = {}   # 各工具账号表的问题（工具名 → 错误列表）
@@ -990,6 +1119,8 @@ def url_problem(u, tool=None):
 def api_problems(c, k, v, tool=None):
     """第三方 API 账号这一项的问题（不带账号名的前缀，不回显 key 的值）"""
     tool = tool or T
+    if not tool.has_api:   # agy：只有 Google 账号
+        return ['%s 没有第三方 API 账号：值只能写节点名' % tool.label]
     errs = []
     if parse_key(k)[1] or ALIAS_BAD.search(k):
         errs.append('第三方 API 账号的键只写别名（不能有邮箱、括号、空格、引号或 @）')
@@ -1160,7 +1291,7 @@ def table_emails(t):
 
 
 def policy_problems(j, strict=False):
-    """映射文件的问题：{"version": 1, "claude": {"邮箱": "节点"}, "codex": {…}, "aliases": {"邮箱": "别名"}}。
+    """映射文件的问题：{"version": 1, "claude": {"邮箱": "节点"}, "codex": {…}, "aliases": {"邮箱": "别名"}, "install_node": "节点"}。
     strict（维护者发布前查）时不认识的字段、aliases 里的问题也算：客户端照样忽略它们（不合规的别名不用），免得以后
     加了新东西，旧版本的 cca 就整个不认、拉不到新的节点"""
     if not isinstance(j, dict):
@@ -1185,8 +1316,10 @@ def policy_problems(j, strict=False):
         errs += alias_problems(j, names)
         if 'presence' in j:   # 设备统计的服务器（客户端只在完全合格时启用，不合格就当没有）
             errs += presence_problems(j['presence'])
-        errs += ['不认识的字段 %s（只能有 version、%s、aliases、presence）' % (k, '、'.join(names))
-                 for k in j if k not in ('version', 'aliases', 'presence') and k not in names]
+        if 'install_node' in j and not (fill_name_ok(j['install_node']) and j['install_node'] not in FILL_BUILTIN):
+            errs.append('install_node 应该是节点的名字（辅助安装直连不通时经内置代理走的节点）')
+        errs += ['不认识的字段 %s（只能有 version、%s、aliases、presence、install_node）' % (k, '、'.join(names))
+                 for k in j if k not in ('version', 'aliases', 'presence', 'install_node') and k not in names]
     return errs
 
 
@@ -1244,7 +1377,7 @@ def cmd_policy_lock(action='', path='', tool='', email='', node=''):
         die('用法: cca _policy-lock plan|apply policy.json 工具 邮箱 节点')
     names, errs = {tool_.name: tool_.label for tool_ in TOOLS}, []
     if tool not in names:
-        errs.append('工具应该是 %s' % ' 或 '.join(names))
+        errs.append('工具应该是 %s 或 %s' % ('、'.join(list(names)[:-1]), list(names)[-1]))
     if re.search(r'[\x00-\x1f\x7f]', email) or not EMAIL_RE.match(email):
         errs.append('邮箱不对')
     if not fill_name_ok(node):
@@ -1663,15 +1796,18 @@ def router_accounts(c):
 
 
 # --- 账号设备标识：先于登录准备，重新登录和改别名都不换 -------------------------
+UUID_FIELDS = ('installation_id', 'installation_uuid')   # 写成 UUID 文本的设备标识（Codex、agy）
+
+
 def device_fields():
-    return ('installation_id',) if T is CODEX else ('userID', 'machineID')
+    return ('installation_id',) if T is CODEX else UUID_FIELDS if T is AGY else ('userID', 'machineID')
 
 
 def device_value(name, value):
     import uuid
     if not isinstance(value, str):
         return None
-    if name == 'installation_id':
+    if name in UUID_FIELDS:
         try:
             return str(uuid.UUID(value.strip()))
         except ValueError:
@@ -1679,10 +1815,30 @@ def device_value(name, value):
     return value if re.fullmatch(r'[0-9a-f]{64}', value) else None
 
 
+AGY_STATE_ID = lazy_re(r'(?m)^installation_uuid:[ \t]*\x22([^\x22\n]*)\x22[ \t]*$')   # jetski_state.pbtxt 顶层的那一项
+
+
+def agy_device_files(cd):
+    return os.path.join(cd, 'antigravity-cli', 'installation_id'), os.path.join(cd, 'antigravity-cli', 'jetski_state.pbtxt')
+
+
 def device_native(cd):
     if T is CLAUDE:
         j = load_quiet(os.path.join(cd, '.claude.json'))
         return j if isinstance(j, dict) else {}
+    if T is AGY:
+        out = {}
+        ids, state = agy_device_files(cd)
+        try:
+            with open(ids, encoding='utf-8') as f:
+                out['installation_id'] = f.read().strip()
+            with open(state, encoding='utf-8') as f:
+                m = AGY_STATE_ID.search(f.read())
+            if m:
+                out['installation_uuid'] = m.group(1)
+        except (OSError, UnicodeError):
+            pass
+        return out
     try:
         with open(os.path.join(cd, 'installation_id'), encoding='utf-8') as f:
             return {'installation_id': f.read().strip()}
@@ -1738,9 +1894,9 @@ def device_identity(key, native):
         value = fixed or device_value(n, native.get(n))
         # 未迁移的副本不能迫使已有固定标识的账号换设备；轮到副本首次启动时再为它分配。
         if not value or value in used[n] or (not fixed and value in legacy[n]):
-            value = str(uuid.uuid4()) if n == 'installation_id' else os.urandom(32).hex()
+            value = str(uuid.uuid4()) if n in UUID_FIELDS else os.urandom(32).hex()
             while value in used[n] or value in legacy[n]:
-                value = str(uuid.uuid4()) if n == 'installation_id' else os.urandom(32).hex()
+                value = str(uuid.uuid4()) if n in UUID_FIELDS else os.urandom(32).hex()
         identity[n] = value
     if identity != saved or not private_file(path):
         save_json(path, identity, 0o600, follow_symlinks=False)
@@ -1758,20 +1914,56 @@ def prepare_device(key):
         native = load_json(path, {})
         if not isinstance(native, dict):
             die('账号配置必须是 JSON 对象：%s' % path)
+        paths = [path]
+    elif T is AGY:
+        paths = list(agy_device_files(cd))
+        native = device_native(cd)
     else:
         path = os.path.join(cd, 'installation_id')
         native = device_native(cd)
-    identity = device_identity(key, native if private_file(path) else {})
-    if not private_file(path) or any(native.get(n) != identity[n] for n in device_fields()):
+        paths = [path]
+    private = all(private_file(p) for p in paths)
+    identity = device_identity(key, native if private else {})
+    if not private or any(native.get(n) != identity[n] for n in device_fields()):
         if T is CLAUDE:
             native.update({n: identity[n] for n in device_fields()})
             save_json(path, native, 0o600, follow_symlinks=False)
+        elif T is AGY:
+            agy_device_write(cd, identity)
         else:
             tmp = '%s.cca-%d.tmp' % (path, os.getpid())
             with open(tmp, 'w', encoding='utf-8') as f:
                 f.write(identity['installation_id'] + '\n')
             os.chmod(tmp, 0o600)
             os.replace(tmp, path)
+
+
+def write_private(path, text):
+    """原子替换成只有自己能读写的普通文件（原来是链接、硬链接时不写穿）"""
+    tmp = '%s.cca-%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def agy_device_write(cd, identity):
+    """agy 的两份设备标识：installation_id 只能是 36 个字符（带换行它认不出，会换成新的，1.5.5 实测）；jetski_state.pbtxt
+    只换（没有就加上）顶层的 installation_uuid 那一行，别的原样留着（没有这个文件时只写这一行，agy 照样读、补上别的）"""
+    ids, state = agy_device_files(cd)
+    os.makedirs(os.path.dirname(ids), exist_ok=True)
+    write_private(ids, identity['installation_id'])
+    try:
+        with open(state, encoding='utf-8') as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = ''
+    line = 'installation_uuid:  \x22%s\x22' % identity['installation_uuid']
+    if AGY_STATE_ID.search(text):
+        text = AGY_STATE_ID.sub(lambda m: line, text, count=1)
+    else:
+        text += ('' if not text or text.endswith('\n') else '\n') + line + '\n'
+    write_private(state, text)
 
 
 def cmd_device(key):
@@ -1990,6 +2182,20 @@ def merge_shared_config(src, dst, key, base):
     config_conflict(src, key)
 
 
+def link_levels(cd, master):
+    """要链接的各层：顶层（''）和 T.nests 里的子目录，[(相对路径, 账号目录里的, 主目录里的)]。子目录在账号目录里建成真目录
+    （里面放指向主目录同一位置的链接）；账号目录里那一层是链接（不是 cca 建的）时这一层不动，免得经它写到别处"""
+    out = []
+    for lvl in ('',) + tuple(T.nests):
+        lcd, lm = os.path.join(cd, lvl), os.path.join(master, lvl)
+        if lvl:
+            if os.path.islink(lcd) or (os.path.lexists(lcd) and not os.path.isdir(lcd)):
+                continue
+            os.makedirs(lcd, exist_ok=True)
+        out.append((lvl, lcd, lm))
+    return out
+
+
 def cmd_link(key):
     cd, master = cdir(key), T.master
     os.makedirs(cd, exist_ok=True)
@@ -2002,27 +2208,35 @@ def cmd_link(key):
         base = load_json(snapshot, {})
         if not isinstance(base, dict) or any(v is not None and not isinstance(v, str) for v in base.values()):
             die('共享配置基线格式错误：%s' % snapshot)
-        for n in sorted(os.listdir(cd)):
-            p, t = os.path.join(cd, n), os.path.join(master, n)
-            if not T.shares(n):
-                if T is CLAUDE:
-                    detach_legacy_shared(p, t)
-                continue
-            if os.path.islink(p):
-                if os.readlink(p) != t:
+        levels = link_levels(cd, master)
+        for lvl, lcd, lm in levels:
+            for name in sorted(os.listdir(lcd)):
+                n = os.path.join(lvl, name) if lvl else name   # 名单、基线里的写法（子目录里的写成相对路径）
+                p, t = os.path.join(lcd, name), os.path.join(lm, name)
+                if not T.shares(n):
+                    if T is CLAUDE:
+                        detach_legacy_shared(p, t)
+                    continue
+                if os.path.islink(p):
+                    if os.readlink(p) != t:
+                        os.unlink(p)
+                    continue
+                os.makedirs(lm, exist_ok=True)
+                if T.shared_config(n) and os.path.isfile(p) and (not os.path.lexists(t) or os.path.isfile(t)):
+                    merge_shared_config(p, t, key, base.get(n, MISSING))
                     os.unlink(p)
-                continue
-            if T.shared_config(n) and os.path.isfile(p) and (not os.path.lexists(t) or os.path.isfile(t)):
-                merge_shared_config(p, t, key, base.get(n, MISSING))
-                os.unlink(p)
-            else:
-                adopt(p, t, key)
-        for n in sorted(os.listdir(master)):
-            p = os.path.join(cd, n)
-            if T.shares(n) and not os.path.lexists(p):
-                os.symlink(os.path.join(master, n), p)
-        names = set(CLAUDE_SHARED_CONFIG if T is CLAUDE else CODEX_SHARED_CONFIG)
-        names.update(n for n in list(base) + os.listdir(master) if T.shared_config(n))
+                else:
+                    adopt(p, t, key)
+        listed = []
+        for lvl, lcd, lm in levels:
+            for name in (sorted(os.listdir(lm)) if os.path.isdir(lm) else []):
+                n = os.path.join(lvl, name) if lvl else name
+                listed.append(n)
+                p = os.path.join(lcd, name)
+                if T.shares(n) and not os.path.lexists(p):
+                    os.symlink(os.path.join(lm, name), p)
+        names = set(T.config_names)
+        names.update(n for n in list(base) + listed if T.shared_config(n))
         saved = {n: shared_text(os.path.join(master, n)) for n in sorted(names) if not os.path.isdir(os.path.join(master, n))}
         if saved != base or not os.path.exists(snapshot):
             save_json(snapshot, saved, 0o600, follow_symlinks=False)
@@ -2087,24 +2301,28 @@ def api_settings(key, v):
     return json.dumps({'apiKeyHelper': helper, 'env': api_env(v)}, ensure_ascii=False)
 
 
-# ~/.cca 里不放开给 Claude 的：登录凭证和浏览器资料（映射 deploy key 的私钥、维护者参考节点和内置代理里的节点密钥、Codex 的登录 token、
-# 各账号的 Chrome 和桌面 App 资料目录里的 cookie；没有钥匙串的系统上 Claude Code 的登录凭证、cca 存的 API key）
+# ~/.cca 里绝不给 Claude 读写的（在不在工作目录里都挡，用户同意了、bypassPermissions 时也一样）：登录凭证和浏览器资料（映射 deploy key
+# 的私钥、维护者参考节点和内置代理里的节点密钥、Codex 的登录 token、各账号的 Chrome 和桌面 App 资料目录里的 cookie，包括这个账号自己的；
+# 没有钥匙串的系统上 Claude Code 的登录凭证、cca 存的 API key）
 CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'backup/clash-verge-*.yaml', 'codex/accounts/*/codex/auth.json', 'accounts/*/chrome/**', 'accounts/*/desktop/**',
                    'codex/accounts/*/chrome/**', 'codex/accounts/*/desktop/**', 'core/nodes.json', 'core/config.yaml',
-                   'accounts/*/claude/.credentials.json', 'secrets/**')
+                   'accounts/*/claude/.credentials.json', 'secrets/**',
+                   'agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token', 'agy/accounts/*/chrome/**')
 
 
-def cca_dir_args():
-    """Claude Code 默认对 ~/.cca 放开权限：加成工作目录（--add-dir），账号表、配置、映射、日志读起来不用确认，改动照
-    权限模式走；登录凭证和浏览器资料用 --disallowedTools 挡住（CCA_DIR_PRIVATE，规则里 // 开头是绝对路径，Read 规则
-    也管 cat、head 这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
+def cca_dir_args(key):
+    """Claude Code 默认只对这个账号自己的目录（adir：~/.cca/accounts/<账号目录名>）放开权限：加成工作目录（--add-dir），
+    它的用量、出口检测、Claude Code 自己的配置读起来不用确认，改动照权限模式走。整个 ~/.cca 不加：账号表、config.json、映射、
+    别的账号的目录都不在工作目录里，读之前照权限模式确认。登录凭证和浏览器资料用 --disallowedTools 挡住整个 ~/.cca 的
+    （CCA_DIR_PRIVATE，包括这个账号自己的 Chrome、桌面 App 资料目录；规则里 // 开头是绝对路径，Read 规则也管 cat、head
+    这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
     路径里有空格、逗号、括号、引号时规则写不准，就整个不加。config.json 的 claude_add_dir 设成 false 不加"""
     c = load_quiet(CFG)
     root = os.path.realpath(CCA_HOME)
     if (isinstance(c, dict) and c.get('claude_add_dir') is False) or re.search(r'[\s,()\x22\x27\\]', root):
         return []
     rules = ['%s(/%s/%s)' % (tool, root, p) for p in CCA_DIR_PRIVATE for tool in ('Read', 'Edit')]
-    return ['--add-dir=' + CCA_HOME, '--disallowedTools=' + ','.join(rules)]
+    return ['--add-dir=' + adir(key), '--disallowedTools=' + ','.join(rules)]
 
 
 def toml_str(s):
@@ -2479,8 +2697,9 @@ def cmd_policy_node(email):
 
 
 def cmd_policy_summary():
-    """映射里各工具有几个账号，例如：Claude 3 个账号、Codex 1 个账号"""
-    print('、'.join('%s %d 个账号' % (tool.label, len(policy_map(tool))) for tool in TOOLS))
+    """映射里各工具有几个账号，例如：Claude 3 个账号、Codex 1 个账号（Antigravity 只在映射里有它的账号时才说）"""
+    print('、'.join('%s %d 个账号' % (tool.label, n) for tool, n in ((x, len(policy_map(x))) for x in TOOLS)
+                   if n or tool is not AGY))
 
 
 def cmd_policy_rows():
@@ -3035,17 +3254,235 @@ def cmd_name(key):
     print(name_of(key) if key else '')
 
 
-def cmd_login_url(key, url):
+def login_hint_url(key, url):
     """打开的登录地址（OAuth authorize）没带 login_hint 时补上账号邮箱，登录页就会预填它。claude auth login --email
-    自己会带，会话里执行 /login 时不带；codex 生成的登录网址都不带（OpenAI 的登录页不认的话只是忽略它）。"""
+    自己会带，会话里执行 /login 时不带；codex、agy 生成的登录网址都不带（OpenAI 的登录页不认的话只是忽略它；Google 的
+    登录页按它选好账号）。"""
     from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
     e = parse_key(key)[1]
     u = urlsplit(url)
-    if (e and u.scheme == 'https' and u.path.endswith('/oauth/authorize')
+    if (e and u.scheme == 'https' and u.path.endswith(tuple(T.login_paths))
             and u.hostname in T.login_hosts
             and 'login_hint' not in dict(parse_qsl(u.query, keep_blank_values=True))):
         url = urlunsplit(u._replace(query=(u.query + '&' if u.query else '') + urlencode({'login_hint': e})))
-    print(url)
+    return url
+
+
+def cmd_login_url(key, url):
+    print(login_hint_url(key, url))
+
+
+# --- agy 的登录：agy 自己打出 Google 的登录网址、从终端读授权码（登录后 Google 跳到 antigravity.google 的页面上显示授权码，
+# 不回本机）。cca 把网址交给账号专属的 Chrome（服务器上给出在 Mac 上运行的 login-page 那一行），授权码 cca 照常从 fd 3 问、
+# 核对过再写给 agy（它从 stdin 读）----------------------------------------------------------------------------------------
+AGY_REDIRECT = 'https://antigravity.google/oauth-callback'
+AGY_LOGIN_URL = lazy_re(r'https://accounts\.google\.com/[\x21-\x7e]+')
+AGY_LOGGED_IN = lazy_re(r'Logged in as (\S+?)\.?\s*$')
+AGY_CODE_PROMPT = lazy_re(r'paste the authorization code', re.I)
+AGY_FILE_TOKENS = lazy_re(r'Using file-based token storage because SSH session detected')
+
+
+def agy_login_target(url):
+    """agy 的登录网址（Google 的 OAuth、带 PKCE，回到 antigravity.google 的页面显示授权码）：返回 state；不是就 None"""
+    from urllib.parse import urlsplit, parse_qsl
+    if not isinstance(url, str) or not re.match(r'^https://[\x21-\x7e]{1,8192}$', url):
+        return None
+    try:
+        u = urlsplit(url)
+        q = dict(parse_qsl(u.query, keep_blank_values=True))
+    except ValueError:
+        return None
+    if (u.hostname not in AGY.login_hosts or u.path not in AGY.login_paths or q.get('response_type') != 'code'
+            or not q.get('code_challenge') or q.get('redirect_uri') != AGY_REDIRECT or not LOGIN_CODE_RE.match(q.get('state', ''))):
+        return None
+    return q['state']
+
+
+def agy_probe(bin_):
+    """这个版本的 agy 设了 SSH_CONNECTION 时是不是把登录存进数据目录里的文件（不进钥匙串）：cca 靠它让每个账号的登录分开，
+    这不是 agy 公开的做法，升级后可能变。在临时的数据目录里跑一次 acp --login（不联网：代理指向关着的端口，stdin 是空的，
+    它打出登录网址、读不到授权码就退出），看它的日志里有没有那一句。按 agy 程序文件（路径、大小、修改时间）缓存在
+    ~/.cca/agy/probe.json。返回 {'files': bool, ...}"""
+    import glob, subprocess, tempfile
+    real = os.path.realpath(bin_) if bin_ else ''
+    try:
+        st = os.stat(real)
+    except OSError:
+        return {'files': False, 'why': 'missing'}
+    sig = [real, st.st_size, int(st.st_mtime)]
+    path = os.path.join(AGY.sroot, 'probe.json')
+    j = load_quiet(path)
+    if isinstance(j, dict) and j.get('sig') == sig and isinstance(j.get('files'), bool):
+        return j
+    drop = lazy_re(r'^(AGY_|ANTIGRAVITY_|GEMINI_|GOOGLE_|SSH_|(HTTPS?|ALL|NO)_PROXY$)', re.I)
+    env = {k: v for k, v in os.environ.items() if not drop.match(k)}
+    env.update(SSH_CONNECTION=AGY_SSH, HTTPS_PROXY='http://127.0.0.1:9', HTTP_PROXY='http://127.0.0.1:9', NO_PROXY='')
+    logs = ''
+    with tempfile.TemporaryDirectory(prefix='cca-agy-probe.') as d:
+        g = os.path.join(d, 'gemini')
+        os.makedirs(g)
+        try:
+            subprocess.run([real, '--gemini_dir=' + g, 'acp', '--login'], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, cwd=d, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        for f in sorted(glob.glob(os.path.join(g, 'antigravity-cli', 'log', '*.log'))):
+            try:
+                with open(f, encoding='utf-8', errors='replace') as fh:
+                    logs += fh.read()
+            except OSError:
+                pass
+    j = {'sig': sig, 'files': bool(AGY_FILE_TOKENS.search(logs)), 'checked': int(time.time())}
+    if not RO:
+        save_json(path, j, 0o600)
+    return j
+
+
+def cmd_agy_probe(bin_):
+    """bash 的 agy_guard：退出码 0 是确认了登录存进账号目录的文件"""
+    sys.exit(0 if agy_probe(bin_).get('files') else 1)
+
+
+def agy_remote_note(key, url):
+    """服务器上登录：给出在 Mac 上运行的那一行（和 bash 的 remote_login 一样带别名、节点和节点摘要）"""
+    c, t, _ = ctx()
+    a, e = parse_key(key)
+    node = node_of(t[key])
+    fid = node_fp_here(c, node)
+    line = '%s login-page %s%s --node %s%s %s' % (T.cmd, shlex.quote(e or a), ' --alias %s' % shlex.quote(a) if a and e else '',
+                                                  shlex.quote(node), ' --node-id %s' % fid if fid else '', shlex.quote(url))
+    sys.stderr.write('\n%s 要登录：这台机器上没有它专属的浏览器，登录页在 Mac 上打开\n'
+                     '1. 在 Mac 的终端里运行这一行（用 %s 专属的 Chrome、经同一个节点 %s 打开登录页；Mac 上还没有这个账号的话，会问要不要加上）：\n\n'
+                     '  %s\n\n2. 在打开的页面上登录%s。登录完页面上会显示一段授权码\n3. 回到这里粘贴授权码、回车\n\n'
+                     % (name_of(key), name_of(key), node, line, '（用 %s）' % e if e else ''))
+
+
+def read_answer(prompt):
+    """从 fd 3 读一行答案（和 bash 的 ask 一样：终端，或 CCA_TTY 答案文件），提示写 stderr。一个字节一个字节地读，不多读：
+    答案文件后面的行还要留给 bash。没有 fd 3、读到头是 None"""
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    buf = b''
+    try:
+        while True:
+            ch = os.read(3, 1)
+            if not ch:
+                return buf.decode('utf-8', 'replace') if buf else None
+            if ch == b'\n':
+                return buf.decode('utf-8', 'replace')
+            buf += ch
+    except OSError:
+        return None
+
+
+def agy_code_problem(text, state):
+    """贴回来的授权码有什么不对：整个网址时核对是不是这次登录的（state 对得上），登录页报错时说出来。没问题是空字符串"""
+    from urllib.parse import urlsplit, parse_qsl
+    if not re.match(r'^[\x21-\x7e]{1,8192}$', text):
+        return '授权码应该是一行字母、数字和符号（不能有空格）'
+    if not re.match(r'^https?://', text):
+        return ''
+    try:
+        q = dict(parse_qsl(urlsplit(text).query, keep_blank_values=True))
+    except ValueError:
+        return '这个网址读不出来'
+    if q.get('error'):
+        return '登录页报错：%s' % re.sub(r'[^\x20-\x7e]', '', q['error'])[:80]
+    if not q.get('code'):
+        return '这个网址里没有授权码'
+    if state and q.get('state') != state:
+        return '这不是这次登录跳到的网址（state 对不上）：贴最后一次打开的登录页登录后显示的那一个'
+    return ''
+
+
+def cmd_agy_login(bin_, mode='local'):
+    """agy 账号登录（在 bash 设好的账号环境里前台运行）：agy --gemini_dir=账号目录 acp --login 打出 Google 的登录网址，补上
+    login_hint 后回调 cca _browser 在账号专属的 Chrome 里打开（mode=remote：服务器上，给出在 Mac 上运行的 login-page 那一行）。
+    登录后 Google 跳到 antigravity.google 的页面上显示授权码：cca 照常从 fd 3 问（终端或答案文件），核对过再写给 agy 的 stdin
+    （它自己从 stdin 读；直接回车取消）。agy 的英文提示换成中文，别的输出原样转到 stderr。登录成功时 agy 说的 Logged in as 邮箱
+    记进账号目录的 agy-login.json（只有 token 文件读不出邮箱时 agy_claims 才用）。退出码是 agy 的"""
+    import signal, subprocess
+    key = os.environ.get('CCA_ACCOUNT') or die('cca(py): 没有账号')
+    t = ctx()[1]
+    need(t, key)
+
+    def stop(*_):   # 和 Ctrl-C 一样：停掉 agy，不留下等授权码的进程
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+    p = subprocess.Popen([bin_, '--gemini_dir=' + cdir(key), 'acp', '--login'], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    buf, st = b'', {'opened': False, 'state': '', 'asked': 0, 'said': False}
+
+    def cancel(msg):
+        sys.stderr.write(msg + '\n')
+        st['said'] = True
+        raise KeyboardInterrupt
+
+    def ask_code():
+        while True:
+            st['asked'] += 1
+            if st['asked'] > 5:
+                cancel('试了好几次都没成，已停止登录')
+            code = read_answer('  授权码（登录后页面上显示的那一段，也可以贴整个网址；直接回车取消）：')
+            code = (code or '').strip()
+            if not code:
+                cancel('已取消登录')
+            why = agy_code_problem(code, st['state'])
+            if not why:
+                break
+            sys.stderr.write('  %s\n' % why)
+        try:
+            p.stdin.write(code.encode() + b'\n')
+            p.stdin.flush()
+        except OSError:
+            pass
+
+    def show(text):
+        m = AGY_LOGIN_URL.search(text)
+        if m and not st['opened']:
+            st['opened'] = True
+            url = login_hint_url(key, m.group(0))
+            st['state'] = agy_login_target(url) or ''
+            if mode == 'remote':
+                agy_remote_note(key, url)
+            elif subprocess.run([SELF_PATH, '_browser', url], stdin=subprocess.DEVNULL).returncode != 0:
+                cancel('没能在账号的浏览器里打开登录页，已停止登录')
+            return
+        m = AGY_LOGGED_IN.search(text)
+        if m and EMAIL_RE.match(m.group(1)):
+            save_json(os.path.join(adir(key), 'agy-login.json'), {'email': m.group(1), 'at': int(time.time())}, 0o600)
+        elif AGY_CODE_PROMPT.search(text):
+            ask_code()
+        elif text.strip() and not text.lstrip().startswith('Open this link in a browser'):
+            sys.stderr.write(text + '\n')
+    try:
+        fd = p.stdout.fileno()
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            buf += chunk
+            while buf:
+                if b'\n' in buf:
+                    line, buf = buf.split(b'\n', 1)
+                elif AGY_CODE_PROMPT.search(buf.decode('utf-8', 'replace')):   # 问授权码的那一句后面没有换行
+                    line, buf = buf, b''
+                else:
+                    break
+                show(line.decode('utf-8', 'replace').rstrip('\r'))
+        if buf:
+            show(buf.decode('utf-8', 'replace'))
+        rc = p.wait()
+    except KeyboardInterrupt:
+        p.terminate()
+        try:
+            p.wait(5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        if not st['said']:   # Ctrl-C、关掉终端
+            sys.stderr.write('\n已取消登录\n')
+        sys.exit(130)
+    sys.exit(rc)
 
 
 # --- 服务器上登录（bash 的 remote_login / cmd_login_page）：claude / codex 在服务器上跑登录、等本机的回调；登录页由 Mac 上的
@@ -3076,7 +3513,7 @@ def login_target(url):
 
 def cmd_login_check(url):
     """cca login-page 拿到的网址是不是这个工具的登录页（别的网址不在账号的浏览器里打开）"""
-    if login_target(url):
+    if agy_login_target(url) if T is AGY else login_target(url):
         return
     other = next((t for t in TOOLS if t is not T and urlsplit_host(url) in t.login_hosts), None)
     die('这不是 %s 的登录网址：要用服务器上的 cca 给出的那一整行%s' % (T.label, '（%s 账号用 %s login-page）' % (other.label, other.cmd) if other else ''))
@@ -3994,6 +4431,92 @@ def cmd_core_summary():
                               '；没有定义的节点：%s（用它们的账号在外面会被拒绝连接）' % '、'.join(miss) if miss else ''))
 
 
+# --- 辅助安装（bash 的“辅助安装”一节）：直连装不上 claude / codex / agy 时，经内置代理的一个节点装 ------------------------------
+INSTALL_GROUP = 'CCA-INSTALL'   # 临时内核里唯一的组（和内置代理的 CCA-n 一样：入站直通它）
+
+
+def policy_install_node():
+    """维护者映射里指定的安装节点（install_node）；没有、不合规都是空的。旧版本的 cca 不认识这一项，照样忽略它"""
+    j = load_quiet(POLICY_FILE)
+    n = j.get('install_node') if isinstance(j, dict) else None
+    return n if fill_name_ok(n) and n not in FILL_BUILTIN else ''
+
+
+def install_names():
+    """这台机器拿得到定义、能拿来装的节点（内置代理的节点定义：路由器上拷来的，加上维护者参考节点里补的），同名的只算一次"""
+    out = []
+    for p in core_defs():
+        if p['name'] not in out:
+            out.append(p['name'])
+    return out
+
+
+def install_resolve(c, want):
+    """映射要的安装节点在这里的节点定义里叫什么：同名的；路由器上改过名、cca 跟着改过的（node_alias）；名字都对不上时按服务器地址认
+    （参考节点里同名那个的摘要，或者可选节点记下的摘要）。认不出是空的"""
+    defs = core_defs()
+    names = [p['name'] for p in defs]
+    for n in (want, node_alias(c, want)):
+        if n in names:
+            return n
+    fps = {fill_fp(p) for p in (policy_fill() or {}).get('proxies', []) if p.get('name') == want}
+    if node_ids(c).get(want):
+        fps.add(node_ids(c)[want])
+    fps.discard('')
+    return next((p['name'] for p in defs if fill_fp(p) in fps), '')
+
+
+def install_proxy_config(name, port):
+    """临时内核的配置（JSON 写的，mihomo 照 YAML 读）：只有 127.0.0.1 上一个入站 cca-install，直通只有这个节点的组（和它经 dialer-proxy
+    用到的节点）；规则只有 MATCH,REJECT，不开控制接口、通用的代理端口、系统代理、TUN、DNS。节点没有定义时是 None"""
+    defs = core_pick(core_defs(), [name])
+    if not any(p['name'] == name for p in defs):
+        return None
+    return {'allow-lan': False, 'bind-address': '127.0.0.1', 'mode': 'rule', 'log-level': 'warning', 'find-process-mode': 'off',
+            'geo-auto-update': False, 'profile': {'store-selected': False, 'store-fake-ip': False},
+            'proxies': defs, 'proxy-groups': [{'name': INSTALL_GROUP, 'type': 'select', 'proxies': [name]}],
+            'listeners': [{'name': 'cca-install', 'type': 'mixed', 'listen': '127.0.0.1', 'port': port, 'users': [], 'proxy': INSTALL_GROUP}],
+            'rules': ['MATCH,REJECT']}
+
+
+def cmd_install_env(folder):
+    """辅助安装：官方安装脚本用什么 shell 运行（bash 的 INSTALL_SHELL），在空环境上另加哪些变量（数组 INSTALL_ENV）。folder 是这次的临时目录"""
+    sh(INSTALL_SHELL=T.install_shell)
+    sh_arrays(INSTALL_ENV=['%s=%s' % kv for kv in sorted(T.install_env(folder).items())])
+
+
+def cmd_install_node(action='get', name='', path=''):
+    """辅助安装的节点。get：映射指定的安装节点在这里叫什么（退出码 3：映射没指定；4：指定了、这台机器没有它的定义，stdout 是映射里写的
+    名字）；choices：这台机器拿得到定义的节点，一行一个（现选用）；proxy 节点 文件：把临时内核的配置写进文件（600，新建），打印端口"""
+    c = cfg_load()
+    if action == 'get':
+        want = policy_install_node()
+        if not want:
+            sys.exit(3)
+        got = install_resolve(c, want)
+        print(got or want)
+        sys.exit(0 if got else 4)
+    if action == 'choices':
+        for n in install_names():
+            print(n)
+        return
+    if action != 'proxy':
+        die('用法: install-node get|choices|proxy 节点 文件')
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:   # 系统给的空闲端口（临时端口段，碰不到端口池的 79xx）；关掉后到内核绑定之间被别人占了，内核起不来，bash 照实说
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    finally:
+        s.close()
+    conf = install_proxy_config(name, port)
+    if conf is None:
+        die('内置代理里没有节点 %s 的定义' % name)
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as f:
+        f.write(json.dumps(conf, ensure_ascii=False, indent=1) + '\n')
+    print(port)
+
+
 CORE_LOG = os.path.join(CORE_DIR, 'core.log')   # Linux 上内核的输出（macOS 上在界面 App 的缓存目录里）
 
 
@@ -4869,6 +5392,39 @@ def codex_settings_problems():
     return bad
 
 
+AGY_SETTINGS_BAD = ('gcp', 'gcp.project', 'gcp.location')   # 企业版许可的 Google Cloud 项目：共享的设置里写了，所有账号都记到这个项目上
+
+
+def agy_settings_keys(j, source):
+    if not isinstance(j, dict):
+        return [source + ':unreadable']
+    return ['%s:%s' % (source, k) for k in AGY_SETTINGS_BAD if k in j]
+
+
+def agy_settings_problems():
+    """共享的 agy 设置（~/.gemini/antigravity-cli/settings.json）里会把各账号换到同一个 Google Cloud 项目上的设置"""
+    path = os.path.join(AGY.master, 'antigravity-cli', 'settings.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            j = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return ['antigravity-cli/settings.json:unreadable']
+    return agy_settings_keys(j, 'antigravity-cli/settings.json')
+
+
+def agy_session_settings_problems(value, cwd):
+    """agy --settings：一段 JSON 或者文件路径（只给这次会话的设置），查法和共享的设置一样"""
+    try:
+        if value.lstrip().startswith('{'):
+            return agy_settings_keys(json.loads(value), '--settings')
+        with open(os.path.abspath(os.path.join(cwd, os.path.expanduser(value))), encoding='utf-8') as f:
+            return agy_settings_keys(json.load(f), '--settings')
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return ['--settings:unreadable_config']
+
+
 def project_settings_problems(cwd):
     """只检查当前目录及祖先；不扫描项目的无关子目录或相邻项目。"""
     bad, current = [], os.path.realpath(cwd)
@@ -4878,6 +5434,8 @@ def project_settings_problems(cwd):
                 path = os.path.join(current, '.claude', name)
                 if path != os.path.realpath(os.path.join(CLAUDE.master, name)):
                     bad.extend(claude_config_file_problems(path))
+        elif T is AGY:
+            return bad   # agy 项目里的 .agents/ 只有规则、技能、MCP 这些，没有会换账号、出口的设置
         else:
             path = os.path.join(current, '.codex', 'config.toml')
             if path != os.path.realpath(os.path.join(CODEX.master, 'config.toml')):
@@ -4901,6 +5459,9 @@ def launch_settings_problems(args):
                      '--system-prompt-file', '--append-system-prompt-file', '--add-dir', '--allowedTools',
                      '--allowed-tools', '--betas', '--disallowedTools', '--disallowed-tools', '--file',
                      '--mcp-config', '--tools')
+    agy_values = ('--add-dir', '--agent', '--conversation', '--effort', '--input-format', '--json-schema', '--log-file',
+                  '--mode', '--model', '--output-format', '--print-timeout', '--project', '--settings', '-p', '--print',
+                  '--prompt', '-i', '--prompt-interactive', '--gemini_dir', '--gemini-dir')
     codex_values = ('-c', '--config', '-p', '--profile', '-C', '--cd', '--enable', '--disable',
                     '-m', '--model', '-s', '--sandbox', '-a', '--ask-for-approval', '-i', '--image',
                     '--local-provider', '--remote-auth-token-env', '--remote', '--output-schema',
@@ -4918,7 +5479,7 @@ def launch_settings_problems(args):
                 value = value[1:]
         elif '=' in arg:
             value = arg.split('=', 1)[1]
-        takes_value = codex_values if T is CODEX else claude_values
+        takes_value = codex_values if T is CODEX else agy_values if T is AGY else claude_values
         if option in takes_value and value is None:
             if i == len(args):
                 bad.append(option + ':missing_value')
@@ -4929,6 +5490,12 @@ def launch_settings_problems(args):
                 settings.append(value)
             elif option == '--desktop':
                 bad.append('--desktop:use_cca_app')
+            continue
+        if T is AGY:
+            if option in ('--gemini_dir', '--gemini-dir'):
+                bad.append(option + ':account_override')   # 换掉数据目录就换掉了登录和设备标识
+            elif option == '--settings' and value is not None:
+                bad.extend(agy_session_settings_problems(value, cwd))
             continue
         if not arg.startswith('-'):
             if not positional_seen and arg == 'app':
@@ -6176,6 +6743,22 @@ def cmd_reset_done(tmp, key, mode='', credit=''):
 
 
 # --- Codex：登录身份、app-server（登录、查用量）、会话库里的路径 ----------------------------------------------
+def agy_claims(key):
+    """agy 账号登录的身份：账号目录里 token 文件（AGY_TOKEN，JSON）的 id_token_email 和 user_tier 两项（只读这两项，不碰
+    access / refresh token，也不保存、不转发）。token 文件在、读不出邮箱时（格式和 1.5.5 的不一样了）用 cca 登录时记下的
+    （agy 登录成功时自己说的 Logged in as，见 agy-login）。没登录、读不了都返回 {}"""
+    path = os.path.join(cdir(key), AGY_TOKEN)
+    j = load_quiet(path)
+    if isinstance(j, dict) and isinstance(j.get('id_token_email'), str) and j['id_token_email']:
+        tier = j.get('user_tier')
+        return {'email': j['id_token_email'], 'tier': tier if isinstance(tier, str) else ''}
+    if not os.path.isfile(path):
+        return {}
+    r = load_quiet(os.path.join(adir(key), 'agy-login.json'))
+    e = r.get('email') if isinstance(r, dict) else None
+    return {'email': e, 'tier': ''} if isinstance(e, str) and EMAIL_RE.match(e) else {}
+
+
 def codex_claims(key):
     """Codex 账号登录的身份：auth.json 里 id_token 的声明，只取邮箱、套餐和工作空间（不验签名；不碰 access / refresh
     token，也不保存、不转发）。没登录、用 API key 登录、读不了都返回 {}"""
@@ -7072,8 +7655,8 @@ def presence_scan(salt, targets, procs, apps, now, mono):
                     pass
             cli.append([round(max(now - m['since'], 0)), round(max(now - last, 0))])
         app = None
-        pat = app_proc_re(tool, os.path.join(d, 'desktop'))
-        apid = next((pid for pid in sorted(procs) if pat.search(procs[pid][4])), None)
+        pat = app_proc_re(tool, os.path.join(d, 'desktop')) if tool.app_proc else None   # agy 没有桌面 App
+        apid = next((pid for pid in sorted(procs) if pat.search(procs[pid][4])), None) if pat else None
         if apid:
             pids.add(apid)
             start, cpu, k = procs[apid][3], tree_cpu(apid, procs, kids), (apid, procs[apid][3])
@@ -7761,19 +8344,23 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
         if x:
             usage = usage_entry(usage_row(k, plan, source='cache', at=x['at'], rl=x['rl'],
                                           outdated_login_plan=T.outdated_login_plan(k)), now)
-    pat = None if api else app_proc_re(T, os.path.join(adir(k), 'desktop'))
-    pid = None if api else next((p for p, cmd in procs if pat.search(cmd)), None)
+    pat = None if api or not T.app_proc else app_proc_re(T, os.path.join(adir(k), 'desktop'))
+    pid = None if pat is None else next((p for p, cmd in procs if pat.search(cmd)), None)
     why = {}
     if api:
         why.update(app='api_account', web='api_account', usage='api_account')
     else:
-        if not env['app']:
+        if not T.has_app:
+            why['app'] = 'unsupported'    # agy 没有桌面 App
+        elif not env['app']:
             why['app'] = 'app_missing'
         elif T is CODEX and not env['bin']:
             why['app'] = 'tool_missing'   # ChatGPT App 打开前要用 codex 命令检查设置
         if not env['chrome']:
             why['web'] = 'no_chrome'      # 没有 Chrome 时 cca web 只能用默认浏览器打开，不经账号的出口
-        if not env['bin']:
+        if not T.has_usage:
+            why['usage'] = 'unsupported'  # agy 没有查用量的接口
+        elif not env['bin']:
             why['usage'] = 'tool_missing'
         elif login != 'logged_in':
             why['usage'] = 'not_logged_in'
@@ -7790,13 +8377,13 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
             'badge': {'label': b[0], 'color': b[1]} if b else None,
             'app': {'running': pid is not None, 'pid': pid}, 'cli': cli,
             'can': dict({x: x not in why for x in ('app', 'web', 'usage', 'check', 'cli')},
-                        billing='web' not in why,   # 控制台的账单页和网页版走同一条路（cmd_web）
+                        billing='web' not in why and bool(T.billing_url),   # 控制台的账单页和网页版走同一条路（cmd_web）；agy 没有
                         limit_resets=T is CLAUDE and 'web' not in why,   # claude.ai 的用量页，只有 Claude 账号有
                         policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm),
                         devices=bool(env.get('presence') and not api and e and e.lower() in pm),   # 账号页的「设备」（PROTOCOL 3.4）
                         api_key=True),   # 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
             'can_why': why, 'api_key': gui_api_key(c, k, v),
-            'usage': usage, 'usage_weeks': None if api else usage_weeks_view(k, now, x),
+            'usage': usage, 'usage_weeks': None if api or not T.has_usage else usage_weeks_view(k, now, x),
             'health': health_view(k, v, now)}
 
 
@@ -7866,6 +8453,7 @@ def cmd_gui_state():
                'chrome': os.environ.get('CCA_GUI_CHROME') == '1', 'presence': presence}
         enabled = tool is CLAUDE or os.path.exists(tool.table)
         entry = {'id': tool.name, 'label': tool.label, 'app_label': tool.app_label, 'cli_prefix': tool.cmd.split()[1:],
+                 'features': {'app': tool.has_app, 'api': tool.has_api, 'usage': tool.has_usage},
                  'enabled': enabled, 'bin': env['bin'], 'app': {'installed': bool(env['app']), 'path': env['app']},
                  'chrome': env['chrome'], 'settings_problems': [], 'errors': [], 'last': None, 'accounts': []}
         if enabled and tool.name in TABS:
@@ -7991,7 +8579,7 @@ def cmd_gui_live(route, host='', rc='0', at_home=''):
 def cmd_tool_env():
     """bash 切换到当前工具时要的变量"""
     sh(TABLE=T.table, CMD=T.cmd, TOOL_LABEL=T.label, TOOL_SETTINGS=T.settings_disp, TRACE_HOST=T.trace_host, APP_LABEL=T.app_label,
-       BILLING_URL=T.billing_url)
+       BILLING_URL=T.billing_url, WEB_URL=T.web_url, REGION_NAME=T.region_name, INSTALL_URL=T.install_url)
 
 
 def ver_key(v):
@@ -9271,7 +9859,7 @@ CMDS = {
     'local-env': cmd_local_env, 'local-set': cmd_local_set, 'local-script': cmd_local_script,
     'local-patch': cmd_local_patch, 'local-missing': cmd_local_missing, 'local-snippet': cmd_local_snippet, 'local-node': cmd_local_node,
     'core-config': cmd_core_config, 'core-nodes-save': cmd_core_nodes_save, 'core-missing': cmd_core_missing, 'core-summary': cmd_core_summary,
-    'core-stale': cmd_core_stale, 'core-keep': cmd_core_keep,
+    'core-stale': cmd_core_stale, 'core-keep': cmd_core_keep, 'install-env': cmd_install_env, 'install-node': cmd_install_node,
     'fill-acc': cmd_fill_acc, 'file-replace': cmd_file_replace,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
@@ -9281,6 +9869,7 @@ CMDS = {
     'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'login-check': cmd_login_check, 'login-forward': cmd_login_forward,
     'login-catch': cmd_login_catch, 'codex-fallback-off': cmd_codex_fallback_off,
+    'agy-login': cmd_agy_login, 'agy-probe': cmd_agy_probe,
     'node-fp': cmd_node_fp, 'login-page-acct': cmd_login_page_acct,
     'update-check': cmd_update_check, 'client-updates': cmd_client_updates,
     'policy-check': cmd_policy_check, 'policy-node': cmd_policy_node, 'policy-summary': cmd_policy_summary,
@@ -9369,20 +9958,24 @@ esac
 unset PY_PACKED
 py() { CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "${PYRUN[@]}" "$@"; }
 
-use_tool() {   # use_tool codex：这次命令管 Codex 账号（账号表 codex.json、CODEX_HOME、codex 命令）；账号表、命令前缀、文案由 py 给
+use_tool() {   # use_tool codex|agy：这次命令管 Codex（账号表 codex.json、CODEX_HOME、codex 命令）或 agy 的账号；账号表、命令前缀、文案由 py 给
 	TOOL="$1"
 	case "$TOOL" in
 		codex) TOOL_BIN="$CODEX_BIN" INHERITED_RE="$CODEX_INHERITED_RE" ;;
+		agy) TOOL_BIN="$AGY_BIN" INHERITED_RE="$AGY_INHERITED_RE" ;;
 		*) TOOL_BIN="$CLAUDE_BIN" INHERITED_RE="$CLAUDE_INHERITED_RE" ;;
 	esac
 	eval "$(py tool-env)"
 }
-need_bin() {   # 要运行工具本身的命令：没装就说明怎么装
+need_bin() {   # 要运行工具本身的命令：没装时，终端里问要不要现在用官方安装脚本装上（辅助安装，见 tool_install），别的时候说明怎么装
 	[ -n "$TOOL_BIN" ] && return 0
-	case "$TOOL" in
-		codex) FAIL_CODE=tool_missing die "找不到 codex 命令：先装 Codex（例如 npm install -g @openai/codex，或 brew install codex），再用 cca codex" ;;
-		*) FAIL_CODE=tool_missing die "找不到 claude 命令" ;;
-	esac
+	if interactive && [ -z "$PROMPT_GUI" ]; then
+		if confirm "没找到 ${TOOL} 命令。现在用官方安装脚本装上吗？" y; then
+			tool_install && return 0
+			exit 1
+		fi
+	fi
+	FAIL_CODE=tool_missing die "找不到 ${TOOL} 命令：运行 ${CMD} install-cli 用官方安装脚本装上（${INSTALL_URL}；直连不通时可以经内置代理装）"
 }
 
 # ---------------------------------------------------------------------------
@@ -10894,10 +11487,14 @@ router_sync() {   # 先跟上路由器上节点的改名，再同步。0 成功�
 	nodes_follow
 	router_push
 }
+edit_hint() {   # 各工具改账号表的命令（用着 Antigravity 时才提它）
+	printf 'Claude 账号用 cca edit，Codex 账号用 cca codex edit'
+	[ ! -f "$CCA_HOME/agy.json" ] || printf '，Antigravity 账号用 cca agy edit'
+}
 router_push() {   # 把账号表和路由器端脚本部署到路由器（返回值同 router_sync）
 	local out rc bundle
 	router_ready || { warn "还没配置路由器（cca router setup）"; return 1; }
-	py validate all || { warn "账号表有错误，先修正（Claude 账号用 cca edit，Codex 账号用 cca codex edit）"; return 1; }
+	py validate all || { warn "账号表有错误，先修正（$(edit_hint)）"; return 1; }
 	bundle=$(router_bundle) || { warn "生成路由器部署内容失败"; return 1; }
 	info "正在同步账号到路由器 ${ROUTER_HOST} …"
 	out=$(printf '%s\n' "$bundle" | rsh 'sh -s' 2>&1); rc=$?
@@ -11014,10 +11611,12 @@ cmd_add() {   # cca [codex] add [api]
 		cmd_router_setup || return 1
 	fi
 	say ""
-	say "${C_B}添加 ${TOOL_LABEL} 账号${C_0}    ${C_D}第三方 API 用 ${CMD} add api${C_0}"
+	if [ "$TOOL" = agy ]; then say "${C_B}添加 ${TOOL_LABEL} 账号${C_0}    ${C_D}Google 账号${C_0}"
+	else say "${C_B}添加 ${TOOL_LABEL} 账号${C_0}    ${C_D}第三方 API 用 ${CMD} add api${C_0}"; fi
 	say ""
 	case "$TOOL" in
 		codex) hint="第一次使用时在它专属的浏览器窗口里登录，登录后 cca 会核对是不是这个邮箱" ;;
+		agy) hint="第一次使用时在它专属的浏览器窗口里登录 Google（登录页会选好这个邮箱），登录后 cca 会核对" ;;
 		*) hint="第一次使用时在它专属的浏览器窗口里登录，登录页会预填这个邮箱" ;;
 	esac
 	ask_fields add.basic "添加 ${TOOL_LABEL} 账号" "" \
@@ -11039,6 +11638,7 @@ cmd_add() {   # cca [codex] add [api]
 	case "$TOOL" in
 		codex) info "第一次使用时会在它专属的浏览器窗口里登录 ChatGPT（用 ${ACC_EMAIL} 登录，登录后 cca 会核对）"
 		       codex_alias_ensure "$ACC_NAME" ;;
+		agy) info "第一次使用时会在它专属的浏览器窗口里登录 Google（用 ${ACC_EMAIL} 登录，登录后把页面上的授权码粘贴回终端）" ;;
 		*) info "第一次使用时会在它专属的浏览器窗口里登录，登录页会预填 ${ACC_EMAIL}" ;;
 	esac
 	ADDED_KEY="$key"
@@ -11057,6 +11657,7 @@ account_added() {   # account_added 键：新加的官方账号接上路由器�
 # 官方账号一样选用。直连时不需要路由器
 cmd_add_api() {
 	local alias url model secret node="" key title api url_hint url_q model_q env_hint
+	[ "$TOOL" != agy ] || FAIL_CODE=unsupported die "${TOOL_LABEL} 没有第三方 API 账号：只能加 Google 账号（${CMD} add）"
 	need_tty
 	case "$TOOL" in
 		codex) title="添加第三方 API 账号（Codex）" api="兼容 OpenAI Responses 接口的服务" env_hint=""
@@ -11332,7 +11933,11 @@ CLAUDE_INHERITED_RE="$INHERITED_RE"
 # Codex：CODEX_ACCESS_TOKEN / CODEX_API_KEY 会直接顶替账号的登录，*_URL_OVERRIDE 会把 token 发到别处，OPENAI_* 会带上
 # 别的组织、key；CODEX_HOME 等由 cca 设。只留 CODEX_CA_CERTIFICATE（公司网络的根证书，和账号无关）
 CODEX_INHERITED_RE='^(CODEX_.*|OPENAI_.*)$'
-INHERITED_KEEP='^CODEX_CA_CERTIFICATE$'
+# agy：AGY_ACCOUNT、AGY_ADC_AUTH、AGY_LLM_GATEWAY_* 会换掉账号的登录或把请求发到别处，ANTIGRAVITY_*、GEMINI_DIR 会换掉数据目录，
+# GEMINI_API_KEY、GOOGLE_API_KEY、GOOGLE_APPLICATION_CREDENTIALS 会顶替登录，GOOGLE_CLOUD_PROJECT 这些会把请求记到别的项目上。
+# 只留界面上的开关和公司网络的根证书（AGY_CA_CERT）
+AGY_INHERITED_RE='^(AGY_.*|ANTIGRAVITY_.*|GEMINI_.*|GOOGLE_(API_KEY|APPLICATION_CREDENTIALS|CREDENTIALS|CLOUD_(PROJECT|LOCATION|QUOTA_PROJECT|REGION|UNIVERSE_DOMAIN)|GENAI_.*|API_USE_.*))$'
+INHERITED_KEEP='^(CODEX_CA_CERTIFICATE|AGY_CA_CERT|AGY_CLI_(THEME|HIDE_LOGO|LOGO_STYLE|HIDE_ACCOUNT_INFO|MAC_OPTION_AS_ALT|FORCE_OSC|OSC|FAST_PROMPT_EDITOR|EXPERIMENTAL_RENDERING|DISABLE_[A-Z_]+))$'
 child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS 两个数组里，屏蔽掉的继承变量名在 DROPPED 里
 	local v
 	# 继承来的接口地址、凭证、模型一律不带进去：例如 shell 里 export 过 ANTHROPIC_BASE_URL，官方账号的登录 token
@@ -11358,6 +11963,11 @@ codex_env() {   # 会话、记忆等数据库不靠链接共享：CODEX_SQLITE_H
 	# 直连：codex 没有代理变量时会改用 macOS 的系统代理，NO_PROXY=* 才是真的直连
 	[ -n "$ACC_PROXY" ] || SETS+=(no_proxy='*' NO_PROXY='*')
 }
+agy_env() {   # 数据目录经参数（--gemini_dir，见 AgyTool.run_args）。SSH_CONNECTION：agy 看到 SSH 会话就把登录存进数据目录里的文件、
+	# 不用钥匙串（钥匙串里只有一份，所有账号会共用它；agy_guard 核对这个版本确实这样）。agy 和它跑的命令都会看到这个变量
+	SETS=(SSH_CONNECTION="127.0.0.1 22 127.0.0.1 22" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
+	[ -n "$ACC_PROXY" ] || SETS+=(no_proxy='*' NO_PROXY='*')
+}
 pyenv() { env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "${PYRUN[@]}" "$@"; }   # 在账号的环境里跑 py（先 child_env）
 
 logout_account() {   # 需要先 eval "$(py env 名称)"；官方账号退出登录；钥匙串里 cca 存的 key（第三方 API 账号的、官方账号记下备查的）都删掉
@@ -11380,6 +11990,9 @@ codex_logout() {   # codex logout 会去服务器上注销（经账号的出口�
 	fi
 	rm -f "$ACC_HOME/auth.json"
 }
+agy_logout() {   # agy 没有退出登录的命令：删掉账号目录里的登录 token 和 cca 登录时记下的邮箱
+	rm -f "$ACC_HOME/antigravity-cli/antigravity-oauth-token" "$ACC_DIR/agy-login.json"
+}
 
 auth_email() { tool email; }   # 已登录的邮箱（没登录是空的）
 claude_email() {   # 先读账号目录的 .claude.json，读不到再问 claude auth status
@@ -11398,6 +12011,7 @@ print((d.get("email") or "") if d.get("loggedIn") else "")')
 	printf '%s' "$e"
 }
 codex_email() { py email "$ACC_KEY"; }   # auth.json 里 id_token 的邮箱（只读这一项）
+agy_email() { py email "$ACC_KEY"; }   # 账号目录里登录 token 文件的 id_token_email（只读这一项和档位）
 
 # 账号表里有邮箱时：没登录就用这个邮箱登录（Claude 的登录页预填它）；登录的不是它就拒绝（否则会让别的账号走这个出口）
 ensure_login() {
@@ -11450,6 +12064,25 @@ claude_wipe() {   # 退出登错的账号（Claude Code 自己记着的 oauthAcc
 	"$PYTHON" -I -X utf8 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop("oauthAccount",None); json.dump(j,open(p,"w"),indent=2)' "$ACC_HOME/.claude.json" 2>/dev/null
 }
 codex_wipe() { codex_logout; }
+agy_wipe() { agy_logout; }
+agy_guard() {   # 这个版本的 agy 确实把登录存进账号目录的文件（不是钥匙串）才往下走：否则所有账号会共用钥匙串里的同一份登录
+	need_bin
+	py agy-probe "$AGY_BIN" && return 0
+	FAIL_CODE=login_unsupported die "这个版本的 agy 不再把登录存进账号自己的目录（各账号会共用钥匙串里的同一份登录），已停止：等 cca 跟上新版本后再用"
+}
+# agy 登录：agy 自己打出 Google 的登录网址、从终端读授权码（登录后跳到 antigravity.google 的页面上显示授权码，不回本机）。
+# 网址在账号专属的 Chrome 里打开（服务器上给出在 Mac 上运行的 login-page 那一行），授权码粘贴回这个终端
+agy_login() {
+	local mode=local
+	agy_guard
+	if login_remote; then mode=remote
+	else
+		has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
+		info "${ACC_NAME} 还没登录：正在它专属的浏览器窗口里打开 Google 的登录页${ACC_EMAIL:+（请用 ${ACC_EMAIL} 登录）}，登录后把页面上的授权码粘贴到这里"
+	fi
+	child_env
+	pyenv agy-login "$AGY_BIN" "$mode"   # 授权码由它从 fd 3 问（和 ask 一样），再交给 agy；agy 自己拿不到 fd 3
+}
 # Codex 登录：经 codex 的 app-server 拿到登录网址，在这个账号专属的 Chrome 里打开（整个登录都走账号的出口），登录完成后
 # codex 自己把凭证写进这个账号的 auth.json。
 codex_login() {   # 前台运行（Ctrl-C 能取消登录，不会留下占着 1455 端口的登录服务）；登录页由它回调 cca _browser 打开
@@ -11532,9 +12165,10 @@ remote_login() {   # remote_login 登录命令…（先 child_env；要直接是
 )
 }
 
-cmd_login_page() {   # cca [codex] login-page <账号> [--alias 别名] [--node 节点 [--node-id 摘要]] <登录网址>（在 Mac 上）：服务器上登录时
+cmd_login_page() {   # cca [codex|agy] login-page <账号> [--alias 别名] [--node 节点 [--node-id 摘要]] <登录网址>（在 Mac 上）：服务器上登录时
 	# 它给出这一行。用这个账号专属的 Chrome、经同一个节点打开登录页，接住登录后跳回 localhost 的验证码（code#state），放进剪贴板、
-	# 打到 stdout。节点按摘要认（两边叫法可以不同）；这台 Mac 上还没有这个账号时问要不要用同一个节点加上它
+	# 打到 stdout。节点按摘要认（两边叫法可以不同）；这台 Mac 上还没有这个账号时问要不要用同一个节点加上它。
+	# agy 的登录页登录后跳到 antigravity.google 的页面上显示授权码（不回 localhost）：只打开登录页，用户自己把授权码抄回服务器
 	local who="" node="" nid="" alias="" url="" key code rc plan LP_KEY LP_NODE LP_ALIAS
 	local use="用法: ${CMD} login-page <账号> [--alias 别名] [--node 节点 [--node-id 摘要]] <登录网址>"
 	while [ $# -gt 0 ]; do
@@ -11564,6 +12198,12 @@ cmd_login_page() {   # cca [codex] login-page <账号> [--alias 别名] [--node 
 	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
 	preflight app || exit 1
 	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
+	if [ "$TOOL" = agy ]; then
+		info "正在 ${ACC_NAME} 专属的浏览器里打开 Google 的登录页（经 ${ACC_PROXY:-直连} → ${ACC_NODE}）${ACC_EMAIL:+，请用 ${ACC_EMAIL} 登录}"
+		open_chrome "$(py login-url "$ACC_KEY" "$url" || printf '%s' "$url")" || exit 1   # 补上 login_hint（服务器上一般已经补过）
+		okay "登录完页面上会显示授权码：复制它，回到服务器的终端粘贴、回车"
+		return 0
+	fi
 	child_env
 	info "正在 ${ACC_NAME} 专属的浏览器里打开登录页（经 ${ACC_PROXY:-直连} → ${ACC_NODE}）${ACC_EMAIL:+，请用 ${ACC_EMAIL} 登录}；登录完这里会拿到验证码"
 	code=$(pyenv login-catch "$url" "${CCA_LOGIN_WAIT:-900}"); rc=$?   # 最多等 15 分钟（CCA_LOGIN_WAIT 秒：测试用）
@@ -11609,6 +12249,8 @@ cmd_rm() {
 			warn "$wt"
 		fi
 		msg="删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证${refk}、浏览器资料和 ChatGPT App 资料；共享的记忆/会话不受影响）"
+	elif [ "$TOOL" = agy ]; then
+		msg="删除账号 ${ACC_LABEL}？（退出登录，删除它的登录凭证${refk}和浏览器资料；共享的会话、记忆和设置不受影响）"
 	else
 		msg="删除账号 ${ACC_LABEL}？（退出登录、删除它的${KEYSTORE_CRED}${refk}、浏览器资料和 Claude App 资料；共享的记忆/会话不受影响）"
 	fi
@@ -11653,13 +12295,14 @@ menu() {   # 选中的账号别名打印到 stdout
 		say ""
 		say "${C_B}选择 ${TOOL_LABEL} 账号${C_0}    ${C_D}↑↓ 移动 · 回车确认 · 数字键直接选 · q 退出${C_0}"
 		say ""
-		arrow_menu "$cur" "${rows[@]}" "$add" "＋ 添加第三方 API 账号" "退出"
+		if [ "$TOOL" = agy ]; then arrow_menu "$cur" "${rows[@]}" "$add" "退出"   # agy 没有第三方 API 账号
+		else arrow_menu "$cur" "${rows[@]}" "$add" "＋ 添加第三方 API 账号" "退出"; fi
 		say ""
 		[ "$MENU_PICK" -ge 0 ] || return 1
 		if [ "$MENU_PICK" -lt "$n" ]; then echo "${keys[MENU_PICK]}"; return 0; fi
 		case $((MENU_PICK - n)) in
 			0) cmd_add >&2 && { py keys | tail -n 1; return 0; } ;;
-			1) cmd_add_api >&2 && { py keys | tail -n 1; return 0; } ;;
+			1) [ "$TOOL" = agy ] || { cmd_add_api >&2 && { py keys | tail -n 1; return 0; }; } ;;
 		esac
 		return 1
 	fi
@@ -11672,7 +12315,7 @@ menu() {   # 选中的账号别名打印到 stdout
 		[ -n "$last" ] && say "  回车   继续使用 $(py name "$last")"
 		say "  编号   切换到对应账号"
 		say "  a      添加新账号"
-		say "  p      添加第三方 API 账号"
+		[ "$TOOL" = agy ] || say "  p      添加第三方 API 账号"
 		say "  q      退出"
 		say ""
 		choice=$(ask "请选择：" "")
@@ -11683,7 +12326,8 @@ menu() {   # 选中的账号别名打印到 stdout
 		case "$choice" in
 			q|Q) return 1 ;;
 			a|A|n|N) cmd_add >&2 && { py keys | tail -n 1; return 0; } ;;
-			p|P) cmd_add_api >&2 && { py keys | tail -n 1; return 0; } ;;
+			p|P) [ "$TOOL" != agy ] || { warn "${TOOL_LABEL} 没有第三方 API 账号"; continue; }
+			     cmd_add_api >&2 && { py keys | tail -n 1; return 0; } ;;
 			*[!0-9]*) warn "没看懂「${choice}」：请输入编号、a、p 或 q" ;;
 			*) if [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ]; then echo "${keys[choice - 1]}"; return 0; fi
 			   warn "没有编号 ${choice}" ;;
@@ -11791,6 +12435,7 @@ settings_warn() {
 	gui_fail settings_conflict "共享的设置里有会盖掉账号自己的代理、接口地址或凭证的配置（${1}）"
 	case "$TOOL" in
 		codex) warn "共享的 ~/.codex 里有会把账号的登录发到别处、换掉账号或出口的配置（${1}）。删掉或改掉后再用 cca codex 启动（第三方 API 用 cca codex add api 加成账号）" ;;
+		agy) warn "共享的 ~/.gemini 里有会让各账号用同一个 Google Cloud 项目、换掉账号或凭证的配置（${1}）。删掉后再用 cca agy 启动" ;;
 		*) warn "共享的设置里有会盖掉每个账号自己的代理、接口地址或凭证的配置（${1}）。删掉后再用 cca 启动（第三方 API 用 cca add api 加成账号）" ;;
 	esac
 }
@@ -12052,9 +12697,11 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 )
 }
 
-cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站）。
+cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站），
+	# Antigravity 账号是 antigravity.google（WEB_URL）。
 	# mail 时打开后把账号的邮箱放进剪贴板：控制台这些登录页不认网址里的邮箱参数（实测），要登录时粘贴，免得在这个账号的浏览器里登错号
-	local key site="$TRACE_HOST" what="${3:-}" note=""
+	local key site="${WEB_URL#https://}" what="${3:-}" note=""
+	site="${site%%/*}"
 	mac_only "${what:-网页版}要在账号专属的 Chrome 里打开，"
 	key=$(pick_account "${1:-}") || return 0
 	eval "$(py env "$key")"
@@ -12081,11 +12728,15 @@ cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页�
 
 cmd_billing() {   # cca [codex] billing [账号]：控制台的账单页。订阅附带的每月 API 额度和余额只在这里显示（两家都没有用 API Key 查余额的接口），
 	# 走网页版的全部检查，用账号自己的浏览器实例和出口打开
+	[ -n "$BILLING_URL" ] || FAIL_CODE=unsupported die "${TOOL_LABEL} 账号没有控制台的账单页"
 	cmd_web "${1:-}" "$BILLING_URL" 控制台的账单页 mail
 }
 
 cmd_limit_resets() {   # cca limit-resets [账号]：claude.ai 的用量页。Claude 账号的重置次数和到期日只在这里显示（get_usage 不给，也不能拿登录凭证自己查）
-	[ "$TOOL" = claude ] || die "ChatGPT 账号的重置次数和到期日在 ${CMD} usage 里"
+	case "$TOOL" in
+		codex) die "ChatGPT 账号的重置次数和到期日在 ${CMD} usage 里" ;;
+		agy) FAIL_CODE=unsupported die "${TOOL_LABEL} 账号没有重置次数" ;;
+	esac
 	cmd_web "${1:-}" https://claude.ai/settings/usage 用量页 mail
 }
 
@@ -12130,6 +12781,13 @@ codex_app_path() {   # ChatGPT App 装在哪（CCA_CODEX_APP 可指定）：认 
 }
 claude_app_missing() { printf '%s' "没找到 Claude App：先从 https://claude.ai/download 下载安装"; }
 codex_app_missing() { printf '%s' "没找到 ChatGPT App（Codex 的桌面版）：运行 codex app 会打开它的安装页"; }
+# agy 没有能按账号多开的桌面 App（Antigravity 编辑器不认资料目录参数）：cca agy app 说清楚，删账号、还原时当作没开着
+agy_app_path() { return 1; }
+agy_app_missing() { printf '%s' "Antigravity 账号没有桌面 App 可开：用 cca agy @账号 在终端里用"; }
+agy_app_pid() { return 0; }
+agy_app_prepare() { return 0; }
+agy_app_open() { return 1; }
+agy_app_first() { return 0; }
 app_pid() {   # 资料目录按字面量匹配，路径里的点号等不能变成正则通配符
 	local pattern matches rc
 	# Linux 上没有桌面 App、账号专属的 Chrome：总是没开着。不跑 pgrep：没装 procps 的机器上没有它，127 会挡住 cca rm、restore
@@ -12149,6 +12807,7 @@ activate_pid() {   # 多开时 open -a 分不清是哪一个，按进程号切�
 
 launchers_sync() {   # 按账号表新建、改名、删除 ~/Applications 里当前工具的启动器；参数 remove-all 时全部删掉
 	local app out op n
+	[ "$TOOL" != agy ] || return 0   # agy 没有桌面 App，也就没有启动器
 	app=$(tool app_path) || app=""
 	out=$(py launchers "$LAUNCHER_DIR" "$SELF" "$app" "${1:-}") || return 1
 	while IFS=$'\t' read -r op n; do
@@ -12295,6 +12954,7 @@ app_launch_abort() {
 
 cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）；已经开着就切到它
 	local key app dir pid first="" i p rc ready="" app_wait
+	[ "$TOOL" != agy ] || FAIL_CODE=unsupported die "$(agy_app_missing)"
 	mac_only "${APP_LABEL}（桌面版）"
 	[ "${1:-}" = --launchers ] && { launchers_sync; return; }
 	app=$(tool app_path) || FAIL_CODE=app_missing die "$(tool app_missing)"
@@ -12615,7 +13275,7 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户端按提示手动加配置
 	local miss was
 	need_tty
-	py validate all || FAIL_CODE=table_invalid die "账号表有错误：先修正（Claude 账号用 cca edit，Codex 账号用 cca codex edit）"   # 本机端口池里有各工具的账号
+	py validate all || FAIL_CODE=table_invalid die "账号表有错误：先修正（$(edit_hint)）"   # 本机端口池里有各工具的账号
 	load_local
 	[ "$LOCAL_SLOTS" -gt 0 ] || { fail_warn error "还没有账号（${CMD} add）"; return 1; }
 	[ "$VERGE_FOUND" = 1 ] || { local_setup_other; return; }
@@ -13065,6 +13725,136 @@ cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器�
 	return 0
 }
 
+# ---------------------------------------------------------------------------
+# 辅助安装（cca [codex|agy] install-cli；用到 claude / codex / agy 却没装时，终端里先问要不要装）：用它们的官方安装脚本，和官网上的
+# curl -fsSL … | bash 一样（脚本自己下载、校验，装进 ~/.local/bin）。先直连；拿不到安装脚本、或者直连没装成时，问过再经内置代理装：
+# 另起一个临时的内核（cca 的 mihomo，只在 127.0.0.1 上开一个端口、只走安装用的节点；不碰在跑的内置代理、Clash Verge 和路由器），
+# 装完就停，它的配置（有节点密钥）放在只有自己能读的临时目录里、用完删掉。安装用的节点由维护者在映射里指定（install_node，节点名只在
+# 私有的映射里），定义是内置代理拿得到的那些（在家时从路由器拷的、维护者参考节点）；映射没指定、这台机器没有它的定义时在终端里现选
+# 一个（不记下）。安装脚本在空环境里运行（不带账号、代理设置和 API key）：claude install 用一次性的配置目录（不往账号和 ~/.claude 的
+# 配置里写，不带设备标识；安装脚本只把下载的文件临时放在 ~/.claude/downloads），codex 不问问题；PATH 里有 ~/.local/bin，安装脚本不去
+# 改 shell 的配置文件。实测（2026-11-12，经临时内核和一个 REALITY 节点）：codex 0.167.2、Claude Code 2.1.322 都装上了
+# ---------------------------------------------------------------------------
+install_get() {   # install_get 目标文件 [代理]：下载当前工具的官方安装脚本（只走 https，跳转也是）；拿到的不是脚本（比如出错的网页）算没拿到
+	local -a via=(--proxy '' --noproxy '*')
+	[ -z "${2:-}" ] || via=(--noproxy '' -x "$2")
+	curl -q -fsSL --proto '=https' --proto-redir '=https' --max-redirs 5 --connect-timeout 10 -m 120 "${via[@]}" -o "$1" "$INSTALL_URL" 2>/dev/null &&
+		[ "$(head -c 2 "$1" 2>/dev/null)" = '#!' ]
+}
+install_run() {   # install_run 安装脚本 临时目录 [代理]：在空环境里运行官方安装脚本，输出照样给用户看（走 stderr），返回它的退出码
+	local run=/bin/sh
+	local -a e=(PATH="$HOME/.local/bin:$PATH" HOME="$HOME" TMPDIR="$2" LANG=en_US.UTF-8 TERM="${TERM:-dumb}" "${INSTALL_ENV[@]}")
+	[ "$INSTALL_SHELL" = sh ] || run="${BASH:-/bin/bash}"   # claude、agy 的是 bash 脚本
+	[ -z "${3:-}" ] || e+=(HTTPS_PROXY="$3" https_proxy="$3" HTTP_PROXY="$3" http_proxy="$3" ALL_PROXY="$3" all_proxy="$3"
+		NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1)
+	env -i "${e[@]}" "$run" "$1" </dev/null >&2
+}
+install_proxy_up() {   # install_proxy_up 节点 临时目录：起一个只走这个节点的临时内核（install_once 的子 shell 里调：进程号记在 pid，端口在 INSTALL_PORT）
+	local i why
+	core_fetch || { warn "内置代理的内核没装上：${FETCH_ERR}"; return 1; }
+	mkdir -p "$2/core" && INSTALL_PORT=$(py install-node proxy "$1" "$2/proxy.json") || return 1
+	"$(core_bin)" -d "$2/core" -f "$2/proxy.json" >"$2/core.log" 2>&1 </dev/null &
+	pid=$!
+	for ((i = 0; i < 80; i++)); do   # 最多等 20 秒
+		port_open 127.0.0.1 "$INSTALL_PORT" && return 0
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.25
+	done
+	why=$(tail -n 1 "$2/core.log" 2>/dev/null | cut -c1-200)
+	warn "经 ${1} 的临时代理没起来${why:+：${why}}"
+	return 1
+}
+install_once() {   # install_once [节点]：下载、运行一次官方安装脚本，给了节点就经它的临时代理。0 安装脚本跑完了，3 拿不到安装脚本，4 安装脚本失败，5 临时代理没起来
+	(
+		tmp="" pid="" px=""
+		trap '[ -z "$pid" ] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }; [ -z "$tmp" ] || rm -rf "$tmp"' EXIT
+		trap 'exit 130' INT TERM HUP
+		tmp=$(mktemp -d "${TMPDIR:-/tmp}/cca-cli.XXXXXX") || exit 5
+		eval "$(py install-env "$tmp")" || exit 5
+		if [ -n "${1:-}" ]; then
+			install_proxy_up "$1" "$tmp" || exit 5
+			px="http://127.0.0.1:${INSTALL_PORT}"
+			info "经内置代理的 ${1} 下载安装脚本 ${INSTALL_URL} …"
+			retry3 install_get "$tmp/install.sh" "$px" || exit 3
+		else
+			info "直连下载安装脚本 ${INSTALL_URL} …"
+			install_get "$tmp/install.sh" || exit 3
+		fi
+		install_run "$tmp/install.sh" "$tmp" "$px" || exit 4
+		exit 0
+	)
+}
+install_node_pick() {   # 打印经内置代理安装用的节点：维护者映射指定的（返回 0）；映射没指定、这台机器没有它的定义时在终端里现选一个（返回 2，
+	                     # 选了就是同意，不记下）；选不了、取消时返回 1
+	local node rc n=0 def=0 sel
+	local -a names
+	node=$(py install-node get); rc=$?
+	[ $rc = 0 ] && { printf '%s' "$node"; return 0; }
+	[ $rc = 4 ] && warn "维护者映射指定的安装节点 ${node} 在这台机器上没有定义（内置代理的节点定义来自在家时从路由器拷的可选节点和维护者参考节点）"
+	while IFS= read -r node; do [ -n "$node" ] && { names[n]="$node"; n=$((n + 1)); }; done < <(py install-node choices)
+	if [ $n = 0 ]; then
+		warn "这台机器的内置代理还没有节点定义：在家启动一次账号（会从路由器拷可选节点），或者配置维护者的映射（cca policy setup）之后再装"
+		return 1
+	fi
+	interactive || { warn "维护者映射没指定安装用的节点，要在终端里选一个：运行 ${CMD} install-cli"; return 1; }
+	say "  经内置代理的哪个节点安装 ${TOOL}？（只用这一次）"
+	if [ -n "$PROMPT_GUI" ]; then
+		local -a opts=()
+		for ((sel = 0; sel < n; sel++)); do opts[sel]="opt=$((sel + 1))"$'\t'"${names[sel]}"$'\t'; done
+		sel=$(gui_ask choice "经内置代理的哪个节点安装 ${TOOL}？" 1 q=install.node label=节点 "${opts[@]}") || return 1
+	elif fancy_ok; then
+		arrow_menu "$def" "${names[@]}"
+		[ "$MENU_PICK" -ge 0 ] || return 1
+		sel=$((MENU_PICK + 1))
+	else
+		for ((sel = 0; sel < n; sel++)); do say "    $((sel + 1)). ${names[sel]}"; done
+		sel=$(ask "  选择节点编号（回车取消）：" "")
+	fi
+	case "$sel" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$sel" -ge 1 ] && [ "$sel" -le $n ] || return 1
+	printf '%s' "${names[sel - 1]}"
+	return 2
+}
+install_found() {   # 安装脚本跑完之后：重新找命令，找到了说一声
+	find_bins
+	[ -n "$TOOL_BIN" ] || return 1
+	okay "装好了 ${TOOL}：${TOOL_BIN}"
+	case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) info "~/.local/bin 不在 PATH 里：cca 照样找得到它；要在终端里直接运行 ${TOOL}，把它加进 PATH" ;; esac
+	return 0
+}
+tool_install() {   # tool_install：用官方安装脚本装当前工具的命令（先直连，不行时问过再经内置代理装）。装好了返回 0（TOOL_BIN 等换成新装的）
+	local rc why node
+	say "  用官方安装脚本安装 ${TOOL}：${INSTALL_URL}（脚本自己下载、校验，装进 ~/.local/bin）"
+	install_once; rc=$?
+	case $rc in   # 安装脚本跑完了却没找到命令：换个出口再跑一次也一样，不再经内置代理试
+		0) install_found && return 0; warn "安装脚本跑完了，却没找到 ${TOOL} 命令：看上面安装脚本的输出"; return 1 ;;
+		3) why="直连拿不到安装脚本" ;;
+		130) return 1 ;;
+		*) why="直连没装成" ;;
+	esac
+	warn "$why"
+	node=$(install_node_pick); rc=$?
+	case $rc in
+		0) consent install_proxy "$node" "经内置代理安装" "${why}。经内置代理的节点 ${node} 安装 ${TOOL} 吗？" \
+			"会在本机临时起一个只走 ${node} 的代理端口，装完就停；安装脚本照样从官方地址下载、自己校验，不带账号和登录信息。" y ||
+			{ info "没有安装 ${TOOL}（以后可以运行 ${CMD} install-cli）"; return 1; } ;;
+		2) ;;   # 现选的：选了就是同意
+		*) info "没有安装 ${TOOL}（以后可以运行 ${CMD} install-cli）"; return 1 ;;
+	esac
+	install_once "$node"; rc=$?
+	case $rc in
+		0) install_found && return 0; warn "安装脚本跑完了，却没找到 ${TOOL} 命令：看上面安装脚本的输出" ;;
+		3) warn "经 ${node} 也拿不到安装脚本（${INSTALL_URL}）" ;;
+		4) warn "经 ${node} 也没装成：看上面安装脚本的输出" ;;
+	esac
+	return 1
+}
+cmd_install_cli() {   # cca [codex|agy] install-cli：用官方安装脚本装 claude / codex / agy 命令（已经装了只说一声）
+	[ $# -eq 0 ] || die "用法: ${CMD} install-cli"
+	if [ -n "$TOOL_BIN" ]; then okay "已经装了 ${TOOL}：${TOOL_BIN}"; return 0; fi
+	tool_install || exit 1
+}
+
 cmd_check() {   # cca check [账号…] [--json]：各账号的出口、纯净度，和 DNS / WebRTC 泄露（DNS 这次重新测，同一个节点的账号只测一次）
 	local keys="" key ips="" rc host="" route="" since webrtc="" json="" rows="" nl=$'\n'   # rows：--json 时每个账号一行「键<TAB>health 的 JSON」
 	local HEALTH_SOURCE=check   # 结果照样记进各账号的 health.json（来源写 check）
@@ -13140,6 +13930,7 @@ run_account() {
 	local key="$1" rc e dropped bad pn
 	shift
 	need_bin
+	[ "$TOOL" != agy ] || agy_guard   # 这个版本的 agy 确实把登录存进账号目录的文件，才能让各账号分开登录
 	eval "$(py env "$key")" || die "读取账号失败: $key"
 	key="$ACC_KEY"
 	if [ "$ACC_KIND" = api ]; then
@@ -13299,6 +14090,7 @@ cmd_usage() {   # cca [codex] usage [账号…] [--json]（CCA_USAGE_JOBS：最�
 		esac
 		shift
 	done
+	[ "$TOOL" != agy ] || FAIL_CODE=unsupported die "${TOOL_LABEL} 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看"
 	need_bin
 	if [ ${#wanted[@]} -gt 0 ]; then
 		for q in "${wanted[@]}"; do
@@ -13666,22 +14458,24 @@ cmd_gui_api() {   # cca _gui hello|state|live（不经过自动更新和映射�
 	esac
 }
 gui_hello() {
-	local inst=false dev=false cx=false av="" sv=""
+	local inst=false dev=false cx=false ag=false av="" sv=""
 	[ -f "$CFG" ] && inst=true
 	dev_mode && dev=true
 	[ -f "$CCA_HOME/codex.json" ] && cx=true
+	[ -f "$CCA_HOME/agy.json" ] && ag=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
-	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s}},' "$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")"
+	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s},"agy":{"enabled":%s,"bin":%s}},' \
+		"$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")" "$ag" "$(jopt "$AGY_BIN")"
 	printf '"gui":{"app":%s,"app_version":%s,"staged_version":%s}}\n' "$(jstr "$GUI_APP")" "$(jopt "$av")" "$(jopt "$sv")"
 }
 gui_state() {   # bash 才知道的（找到的命令、App、Chrome）经环境变量交给 py gui-state；stdin 是路由器端代码（算同步摘要）
 	[ -f "$CFG" ] || die "还没安装：请在终端里运行 $SELF install"
 	{ router_sh; router_rb; } | CCA_RO=1 CCA_VERSION="$VERSION" CCA_GUI_CLAUDE_BIN="$CLAUDE_BIN" CCA_GUI_CODEX_BIN="$CODEX_BIN" \
-		CCA_GUI_CLAUDE_APP="$(claude_app_path)" CCA_GUI_CODEX_APP="$(codex_app_path)" CCA_GUI_CHROME="$(has_chrome && echo 1)" \
-		py gui-state
+		CCA_GUI_AGY_BIN="$AGY_BIN" CCA_GUI_CLAUDE_APP="$(claude_app_path)" CCA_GUI_CODEX_APP="$(codex_app_path)" \
+		CCA_GUI_CHROME="$(has_chrome && echo 1)" py gui-state
 }
 gui_live() {   # 端口池的实况：在家看路由器（经 SSH 跑这一版 router_sh 的 status，不依赖路由器上部署的版本），在外面看本机 Clash Verge
 	local route=none out="" rc=0 host="" g p node who
@@ -14070,6 +14864,8 @@ policy_status() {   # cca policy：映射仓库、这台机器的 deploy key、�
 	fill=$(py fill-summary)
 	[ -z "$fill" ] || say "  参考节点：维护者参考配置里${fill}（路由器和本机 Clash Verge 的配置文件里缺的直接写进去）"
 	[ ! -f "$POLICY_DIR/log" ] || say "  最近一次拉取：$(tail -n 1 "$POLICY_DIR/log")"
+	if fill=$(py install-node get); then say "  安装用的节点：${fill}（直连装不上 claude / codex / agy 命令时，问过再经内置代理走它）"
+	elif [ -n "$fill" ]; then say "  安装用的节点：${fill}（这台机器的内置代理里没有它的定义：要装的时候现选一个）"; fi
 	fill=$(py presence-note)
 	[ -z "$fill" ] || say "  ${fill}"
 	policy_rows
@@ -14171,7 +14967,6 @@ need_deps() {   # 安装时查依赖：install.sh 下载之前查的是同一份
 	# 校验更新、映射的签名用 ssh-keygen -Y，OpenSSH 8.1 才有（RHEL / Rocky 8 是 8.0）；认不出版本（不是 OpenSSH）时不拦
 	v=$(ssh -V 2>&1 | sed -n 's/^OpenSSH_\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)
 	case "$v" in [1-7].*|8.0) die "OpenSSH 太旧（${v}）：cca 校验更新和映射的签名要 8.1 或更新（ssh-keygen -Y）" ;; esac
-	[ -n "$CLAUDE_BIN" ] || die "没找到 Claude Code：先运行 curl -fsSL https://claude.ai/install.sh | bash 安装它，再重新安装 cca"
 	if on_linux; then warn "Linux 上能用的是命令行：账号的网络（路由器的端口池、cca 内置的代理）、登录（登录页在 Mac 上用账号专属的 Chrome 打开）、API key（存成权限 600 的文件）；桌面 App、网页版、图形界面这些只在 macOS 上"
 	elif [ "$(uname)" != Darwin ]; then warn "本脚本按 macOS 编写（钥匙串、open、Chrome 路径），其它系统需自行调整"; fi
 }
@@ -14256,6 +15051,13 @@ cmd_install() {
 	if ! router_ready && confirm "现在配置路由器（OpenClash 或 ShellCrash；SSH 免密 + 按端口分流）？" y; then
 		cmd_router_setup || warn "路由器配置没完成，稍后可运行 cca router setup"
 	fi
+	if [ -z "$CLAUDE_BIN" ]; then   # 辅助安装：直连不通时可以经内置代理装（要有节点定义：映射的参考节点，或者在家时从路由器拷的）
+		if confirm "没找到 Claude Code（claude 命令）。现在用官方安装脚本装上吗？" y; then
+			tool_install || warn "Claude Code 没装上：稍后运行 cca install-cli 再装"
+		else
+			info "以后用 cca install-cli 装 Claude Code（只用 Codex、Antigravity 账号的话不需要它）"
+		fi
+	fi
 	if [ -z "$(py keys)" ] && confirm "现在新增第一个账号？" y; then
 		cmd_add || true
 	fi
@@ -14267,7 +15069,7 @@ cmd_restore() {
 	local key bk out rc pid running="" wt="" t
 	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
 	need_tty
-	for t in claude codex; do   # 账号的桌面 App 开着时删它的资料目录会出问题
+	for t in claude codex agy; do   # 账号的桌面 App 开着时删它的资料目录会出问题（agy 没有桌面 App）
 		use_tool "$t"
 		while IFS= read -r key; do
 			[ -n "$key" ] || continue
@@ -14284,15 +15086,15 @@ cmd_restore() {
 	# 删 ~/.cca 之前要先打包备份（下面答应了的）：没有 tar 就什么都别动（有的 Linux 最小安装没有它）
 	command -v tar >/dev/null 2>&1 || die "这台机器上没有 tar，没法先打包备份配置，什么都没改：装上 tar 再还原$(pkg_hint tar)"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
-	say "  · 每个账号（Claude 和 Codex）：把会话里新产生的共享内容并回 ~/.claude、~/.codex，然后退出登录、删除它的登录凭证"
+	say "  · 每个账号（Claude、Codex 和 Antigravity）：把会话里新产生的共享内容并回 ~/.claude、~/.codex、~/.gemini，然后退出登录、删除它的登录凭证"
 	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理（用过的话）：停掉它的内核"
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
-	say "  · ~/.claude、~/.claude.json 和 ~/.codex 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
+	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
 	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
-	for t in claude codex; do
+	for t in claude codex agy; do
 		use_tool "$t"
 		while IFS= read -r key; do
 			[ -n "$key" ] || continue
@@ -14326,11 +15128,11 @@ cmd_restore() {
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点、维护者的参考节点，
 	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
 	# policy 的目录）；Clash Verge 配置的备份（backup/）是用户自己的配置文件，照样打包。登录凭证（Codex 的 auth.json、Linux 上
-	# Claude Code 的 .credentials.json）、密钥文件（secrets：上面按记账删过，没记上账的也不带）不打包
+	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）不打包
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
 		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
-		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'secrets' \
+		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
 		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null )
 	# 看包能不能完整读出来，不看 tar 的退出码：GNU tar 遇到打包时正好被改了的文件也返回 1，包照样是好的；磁盘满了写到一半的包读不完
 	if [ -s "$bk" ] && tar -tzf "$bk" >/dev/null 2>&1; then
@@ -14344,12 +15146,14 @@ cmd_restore() {
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
 	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; defaults delete "$GUI_ID" >/dev/null 2>&1; info "已删除界面 App ${GUI_APP}"; fi
 	rm -rf "${CCA_HOME:?}"
-	info "已还原。原来的 claude、codex 命令和 ~/.claude、~/.codex 不受影响"
+	info "已还原。原来的 claude、codex、agy 命令和 ~/.claude、~/.codex、~/.gemini 不受影响"
 }
 
 usage() {   # Linux（服务器）上不列只在 macOS 上的命令（网页版、桌面 App、图形界面），几处说法按平台换
 	local mac=1 host="这台 Mac " away="在外面走本机 Clash" cxlogin="第一次启动时在它专属的浏览器窗口里登录" leaks="DNS / WebRTC 泄露"
+	local aglogin="第一次启动时在它专属的浏览器窗口里登录，把页面上的授权码粘贴回终端"
 	on_linux && mac="" host="这台机器" away="连不上路由器时走 cca 内置的代理" cxlogin="第一次启动时给出在 Mac 上运行的 login-page 那一行" leaks="DNS 泄露"
+	on_linux && aglogin="第一次启动时给出在 Mac 上运行的 login-page 那一行，再把授权码贴回这里"
 	cat >&2 <<EOF
 cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记忆/配置共享；每个账号走路由器上 OpenClash / ShellCrash 的独立端口，${away}）
 
@@ -14433,6 +15237,17 @@ EOF
 EOF
 	cat >&2 <<EOF
 
+Antigravity（Google 的 agy 命令行；账号表 ~/.cca/agy.json，和 Claude、Codex 账号分开记）
+  cca agy [agy 参数]         弹出 Antigravity 账号菜单，选中后启动 agy；cca agy @<账号> [agy 参数] 跳过选择。
+                             每个账号一个数据目录（--gemini_dir），登录各自独立；~/.gemini 里的会话、记忆、设置、
+                             技能、MCP 等所有账号共用。启动前经该账号端口检测出口
+  cca agy add                新增 Antigravity 账号（用 Google 账号登录，${aglogin}）
+  cca agy ls | edit | rm | key | login${mac:+ | web} | check
+                             和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 antigravity.google）}；
+                             没有查用量的接口，也没有第三方 API 账号和桌面 App
+EOF
+	cat >&2 <<EOF
+
 路由器
   cca router setup           SSH 免密（只输一次密码）+ 部署分流；路由器上用 OpenClash 还是 ShellCrash 自动检测
                              （ShellCrash 要 Meta 内核，路由器上还要装 ruby：opkg install ruby ruby-yaml）
@@ -14483,6 +15298,9 @@ EOF
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa）
+  cca install-cli            用官方安装脚本装 Claude Code（cca codex install-cli、cca agy install-cli 装 codex、agy 命令）：
+                             先直连，拿不到时问过再经内置代理的一个节点装（维护者的映射指定，没指定时现选一个）；
+                             用到没装的命令时，终端里也会先问要不要装
   cca update                 立即更新到最新版本；平时每天自动检查一次，新版本在下次启动时自动安装
   cca update <版本号>        手动装指定的版本，例如测试版 2.6.0-beta.1（测试版不会自动装，只能这样装）
   cca update --check [--json] | --rollback | auto | notify | off
@@ -14494,7 +15312,7 @@ EOF
   cca clients install TOKEN 安装已验证的更新；凭据由 check 给出，须先退出对应的客户端
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
-                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写 ~/.cca）、
+                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写账号自己在 ~/.cca/accounts 里的目录）、
                              leak_check（设成 false：启动前不测 ${leaks}）、
                              presence（设成 false：${host}不向维护者的服务器报告、也不查设备统计）${mac:+、}
 EOF
@@ -14514,9 +15332,9 @@ main() {
 		install) cmd_install ;;
 		help|-h|--help) usage ;;
 		version|--cca-version) echo "$VERSION" ;;
-		_browser)   # 登录页的浏览器：Claude Code 经 BROWSER 调；Codex 账号登录时 cca 自己调（带着 CCA_TOOL=codex）
+		_browser)   # 登录页的浏览器：Claude Code 经 BROWSER 调；Codex、agy 账号登录时 cca 自己调（带着 CCA_TOOL）
 			shift
-			[ "${CCA_TOOL:-}" = codex ] && use_tool codex
+			case "${CCA_TOOL:-}" in codex|agy) use_tool "$CCA_TOOL" ;; esac
 			cmd_browser "$@" ;;
 		_api-key)   # 第三方 API 账号的 key：Claude Code 的 apiKeyHelper、codex 的 auth.command 回调，只打印 key
 			shift
@@ -14551,10 +15369,10 @@ main() {
 			gui_hook
 			# 用着 Codex（有 Codex 的账号表，或者这次就是 cca codex …）而 cxa 不见了（以前装的 cca 升级上来、被删掉了）：补上
 			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then codex_alias_ensure "" quiet; fi
-			if [ "${1:-}" = codex ]; then   # cca codex …：后面的子命令都作用于 Codex 账号
+			if [ "${1:-}" = codex ] || [ "${1:-}" = agy ]; then   # cca codex|agy …：后面的子命令都作用于 Codex / agy 的账号
+				use_tool "$1"
 				shift
-				use_tool codex
-				[ -f "$TABLE" ] || py init
+				[ -f "$TABLE" ] || [ "${1:-}" = install-cli ] || py init   # 只装命令不算用起这个工具（不建账号表，映射里的账号不加进来）
 			fi
 			dispatch "$@" ;;
 	esac
@@ -14583,6 +15401,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		local) shift; cmd_local "$@" ;;
 		policy) shift; cmd_policy "$@" ;;
 		devices) shift; cmd_devices "$@" ;;
+		install-cli) shift; cmd_install_cli "$@" ;;
 		@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;
 		--) shift; launch "$@" ;;
 		*) launch "$@" ;;

@@ -42,8 +42,11 @@ enum Remedy: Sendable, Equatable {
             guard let key else { return .none }
             return .handoff(.login(prefix: p, key: key, name: key))
         case .appMissing:
-            // ChatGPT App（Codex 的桌面版）没有固定的下载地址：cca 的说明里写着用 codex app 打开它的安装页
-            return tool == .codex ? .none : .openURL(claudeDownload)
+            // ChatGPT App（Codex 的桌面版）没有固定的下载地址：cca 的说明里写着用 codex app 打开它的安装页；Antigravity 没有桌面 App
+            return tool == .claude ? .openURL(claudeDownload) : .none
+        case .toolMissing:
+            // 辅助安装（cca 够新时才有，AppModel.remedy(for:) 按 hello.install_cli 把关）
+            return .handoff(.installCLI(prefix: p, tool: tool))
         default:
             return .none
         }
@@ -215,6 +218,7 @@ enum Texts {
         switch tool {
         case .claude: return "Claude"
         case .codex: return "ChatGPT"
+        case .agy: return "Antigravity"
         default: return tool.rawValue
         }
     }
@@ -237,7 +241,8 @@ enum Texts {
         case .appMissing: return "没装 \(appLabel)"
         case .noChrome: return "没装 Google Chrome：网页版要经账号的出口打开"
         case .notLoggedIn: return "还没登录，查不了用量"
-        case .toolMissing: return tool == .codex ? "没装 codex 命令" : "没装 claude 命令"
+        case .toolMissing: return "没装 \(cliCommand(tool)) 命令"
+        case .unsupported: return tool == .agy ? "Antigravity 账号没有桌面 App 和能查的用量接口" : "这种账号没有这个功能"
         default: return "现在不可用"
         }
     }
@@ -387,8 +392,26 @@ enum Texts {
         switch d {
         case .claude: return "Claude 账号"
         case .chatgpt: return "ChatGPT 账号"
+        case .antigravity: return "Antigravity 账号"
         case .contractors: return "第三方 API 账号"
         }
+    }
+
+    /// 工具自己的命令（终端里启动的那个）：claude、codex、agy
+    static func cliCommand(_ tool: ToolID) -> String { tool == .claude ? "claude" : tool.rawValue }
+
+    /// 在终端里用的那个程序的叫法（账号页「终端」按钮的提示）：Claude Code、Codex、agy
+    static func cliName(_ tool: ToolID) -> String {
+        switch tool {
+        case .codex: return "Codex"
+        case .agy: return "agy"
+        default: return "Claude Code"
+        }
+    }
+
+    /// 没有查用量接口的工具，用量那一节说去哪里看
+    static func noUsage(_ tool: ToolID) -> String {
+        tool == .agy ? "Antigravity 没有能在 agy 外面查的用量接口：在 agy 里用 /usage 看。" : "这种账号没有能查的用量接口。"
     }
 
     /// 套餐档位的叫法（读屏用；界面上靠徽章的样子区分）。不知道的档位为 nil。

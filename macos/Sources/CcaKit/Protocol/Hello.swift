@@ -15,6 +15,9 @@ struct HelloDoc: CcaDocument, Equatable {
     var forms: Int?
     /// 有 `cca _dock-tidy`（PROTOCOL 6）：终端交接退出系统终端后，去掉程序坞「最近使用的 App」里它留下的图标；旧版 cca 没有这个字段
     var dock: Int?
+    /// 有 `cca [codex|agy] install-cli`（辅助安装：用官方安装脚本装 claude / codex / agy 命令，直连不通时问过再经内置代理装）；
+    /// 旧版 cca 没有这个字段，“没装 X 命令”的地方不给「安装」
+    var installCLI: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -26,6 +29,7 @@ struct HelloDoc: CcaDocument, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case version, kind, api, prompt, reorder, forms, dock
+        case installCLI = "install_cli"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
         case installed
@@ -42,6 +46,7 @@ struct HelloDoc: CcaDocument, Equatable {
         reorder = c.int(.reorder)
         forms = c.int(.forms)
         dock = c.int(.dock)
+        installCLI = c.int(.installCLI)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true
@@ -55,8 +60,11 @@ struct HelloDoc: CcaDocument, Equatable {
         gui = c.lossy(HelloGUI.self, .gui)
     }
 
-    /// `cca codex …` 只有这里为真时才能调用（PROTOCOL 1）：缺字段一律当作没启用。
-    var codexEnabled: Bool { tools[.codex]?.enabled ?? false }
+    /// `cca codex …`、`cca agy …` 只有这里为真时才能调用（PROTOCOL 1）：Claude 一直能用，别的缺字段一律当作没启用。
+    func enabled(_ t: ToolID) -> Bool { t == .claude || (tools[t]?.enabled ?? false) }
+    /// 启用了的工具（认识的），按 Claude、Codex、Antigravity 的顺序。
+    var enabledTools: [ToolID] { ToolID.allKnown.filter { enabled($0) } }
+    var codexEnabled: Bool { enabled(.codex) }
 }
 
 struct HelloTool: Decodable, Sendable, Equatable {

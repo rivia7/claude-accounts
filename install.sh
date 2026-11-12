@@ -74,8 +74,7 @@ main() {
 		[[ "$want" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || fail "版本号不对：${want}（例如 2.6.0 或 2.6.0-beta.1）"
 		from="$REPO/releases/download/v$want"
 	fi
-	command -v claude >/dev/null 2>&1 || [ -x "$HOME/.local/bin/claude" ] ||
-		fail "没找到 Claude Code：先运行 curl -fsSL https://claude.ai/install.sh | bash 安装它，再执行这条安装命令"
+	# 没装 Claude Code 也照常装：cca install 会问要不要用官方安装脚本装上它（直连不通时可以经内置代理装）
 	# curl | bash 时标准输入是管道，安装要回答问题，得从终端读
 	if [ -z "${CCA_TTY:-}" ] && ! (: </dev/tty) 2>/dev/null; then
 		fail "需要在终端里运行这条命令（安装过程要回答几个问题）"

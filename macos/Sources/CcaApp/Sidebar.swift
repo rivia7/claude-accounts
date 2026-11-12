@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 侧栏：工具切换（Claude / ChatGPT），最上面是办公室（首页，所有账号一眼看全）、用量统计、节点分流和客户端更新（两种工具共用的），
+/// 侧栏：工具切换（Claude / ChatGPT / Antigravity），最上面是办公室（首页，所有账号一眼看全）、用量统计、节点分流和客户端更新（两种工具共用的），
 /// 下面是这个工具的账号（花名册）。
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
@@ -79,11 +79,13 @@ private struct AddAccountMenu: View {
 
     var body: some View {
         let t = model.tool
-        let official = model.addHandoff(t == .codex ? .chatgpt : .claude)
+        let official = model.addHandoff(.official(t))
         let api = Handoff.addAPI(prefix: model.prefix(t))
         Menu {
             Button(official.title + "…") { model.run(official) }
-            Button(api.title + "…") { model.run(api) }
+            if model.features(t).api {   // Antigravity 没有第三方 API 账号
+                Button(api.title + "…") { model.run(api) }
+            }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .semibold))
@@ -112,8 +114,10 @@ struct AccountMenu: View {
         Button("改别名…") { model.beginRename(a.ref) }
         Divider()
         if !a.isAPI {
-            Button("打开 \(model.appLabel(a.tool))") { model.openApp(a.ref) }
-                .disabled(!a.can.app || busy)
+            if model.features(a.tool).app {
+                Button("打开 \(model.appLabel(a.tool))") { model.openApp(a.ref) }
+                    .disabled(!a.can.app || busy)
+            }
             Button("打开网页版") { model.openWeb(a.ref) }
                 .disabled(!a.can.web || busy)
             if a.can.limitResets {
@@ -308,6 +312,17 @@ struct SidebarFooter: View {
                 }
                 .buttonStyle(.borderless)
                 .help("添加第一个 ChatGPT 账号（Codex）")
+            }
+            // Antigravity：装了 agy 命令才提（用的人少，没装时不占地方）
+            if model.phase == .ready, !model.visibleTools.contains(.agy), model.hello?.tools[.agy]?.bin != nil {
+                Button {
+                    model.run(.addAccount(prefix: ToolID.agy.defaultPrefix, product: "Antigravity"))
+                } label: {
+                    Label("启用 Antigravity 账号", systemImage: "plus.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("添加第一个 Antigravity 账号（Google 的 agy 命令行）")
             }
             HStack(spacing: 6) {
                 if model.stateLoading || model.updateChecking {
