@@ -194,22 +194,24 @@ out=$(run cca login-page alice@example.com "https://evil.example.com/oauth/autho
 out2=$(run cca login-page alice@example.com "https://auth.openai.com/oauth/authorize?response_type=code&code_challenge=x&state=s&redirect_uri=http%3A%2F%2Flocalhost%3A$lp%2Fauth%2Fcallback" 2>&1); rc2=$?
 out3=$(run cca login-page nobody@example.com "$LPU" 2>&1); rc3=$?
 ok "login-page：不是这个工具的登录页不打开（Codex 的提示用 cca codex login-page）；这台 Mac 上没有的账号说清楚" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这不是 Claude 的登录网址" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "Codex 账号用 cca codex login-page" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "这台 Mac 上没有 nobody@example.com 这个账号" && ! grep -q st-page1 open.log'
-python3 -c 'import socket, sys, time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(20)' "$lp" & busy=$!
+# 占住回调的端口，一直占到下面 kill 它为止：后面这几次 login-page 都靠它（端口被占时打开登录页就返回）。以前只占 20 秒，机器慢时
+# （xprotectd 忙着扫新文件，每次运行慢好几倍）没跑到后面就放了，login-page 真的去等回调，干等 15 分钟才失败。都带 CCA_LOGIN_WAIT=20：端口万一空了最多等 20 秒
+python3 -c 'import socket, sys, time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(600)' "$lp" & busy=$!
 sleep 0.3
-out=$(run cca login-page alice@example.com --node US-A "$LPU" 2>&1); rc=$?
+out=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A "$LPU" 2>&1); rc=$?
 ok "login-page：回调的端口被别的程序占着：照样打开登录页，说清楚登录后从地址栏复制整个网址贴回服务器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "被别的程序占着" && grep -q "state=st-page1" open.log'
 # 节点按地址摘要认（两边叫法可以不同）；Mac 上还没有这个账号时问要不要用同一个节点加上它。回调的端口还占着：打开登录页就返回
 : > open.log
-out2=$(run cca login-page alice@example.com --node US-A --node-id 0123456789abcdef "$LPU" 2>&1); rc2=$?
+out2=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A --node-id 0123456789abcdef "$LPU" 2>&1); rc2=$?
 n2=$(grep -c st-page1 open.log)
-out=$(run cca login-page alice@example.com --node US-A1 --node-id "$FPA" "$LPU" 2>&1); rc=$?
+out=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A1 --node-id "$FPA" "$LPU" 2>&1); rc=$?
 ok "login-page：节点按地址摘要认：服务器上叫 US-A1、地址和这边的 US-A 一样，照样打开；同名而地址不同的不打开" '[ $rc -eq 0 ] && grep -q "state=st-page1" open.log && [ $rc2 -ne 0 ] && [ "$n2" = 0 ] && printf "%s" "$out2" | grep -q "在服务器上走 US-A，在这台 Mac 上走 US-A：不是同一个节点"'
 t0=$(cat "$H/.cca/accounts.json"); : > open.log
-out=$(run CCA_TTY="$(ans n)" cca login-page dora@example.com --alias 新号 --node US-D2 --node-id "$FPD" "$LPU" 2>&1); rc=$?
-out2=$(run CCA_TTY="$(ans y)" cca login-page dora@example.com --node XX-Z --node-id 1111111111111111 "$LPU" 2>&1); rc2=$?
-out3=$(run CCA_TTY="$(ans n)" cca login-page dora@example.com --node US-C "$LPU" 2>&1); rc3=$?
+out=$(run CCA_LOGIN_WAIT=20 CCA_TTY="$(ans n)" cca login-page dora@example.com --alias 新号 --node US-D2 --node-id "$FPD" "$LPU" 2>&1); rc=$?
+out2=$(run CCA_LOGIN_WAIT=20 CCA_TTY="$(ans y)" cca login-page dora@example.com --node XX-Z --node-id 1111111111111111 "$LPU" 2>&1); rc2=$?
+out3=$(run CCA_LOGIN_WAIT=20 CCA_TTY="$(ans n)" cca login-page dora@example.com --node US-C "$LPU" 2>&1); rc3=$?
 ok "login-page：Mac 上还没有这个账号：按地址认出这边的 US-D，问要不要照服务器的别名加上，不加就不打开；这边没有这个节点的说清楚；旧版服务器没给摘要时按名字认" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这台 Mac 上还没有 新号（dora@example.com）：现在加上它吗（出口 US-D）？" && printf "%s" "$out" | grep -q "没有加上，也没打开登录页" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "这台 Mac 的可选节点里没有服务器上的 XX-Z（按地址也认不出）" && ! printf "%s" "$out2" | grep -q "现在加上它吗" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "这台 Mac 上还没有 dora@example.com：现在加上它吗（出口 US-C）？" && [ "$(cat "$H/.cca/accounts.json")" = "$t0" ] && ! grep -q st-page1 open.log'
-out=$(run CCA_TTY="$(ans y)" cca login-page dora@example.com --alias 新号 --node US-D2 --node-id "$FPD" "$LPU" 2>&1); rc=$?
+out=$(run CCA_LOGIN_WAIT=20 CCA_TTY="$(ans y)" cca login-page dora@example.com --alias 新号 --node US-D2 --node-id "$FPD" "$LPU" 2>&1); rc=$?
 ok "login-page：答应加上：用这边的 US-D 加上 新号（dora@example.com），同步路由器，接着在它专属的 Chrome 里经它的端口打开登录页" '[ $rc -eq 0 ] && tblok "t.get(\"新号(dora@example.com)\") == \"US-D\"" && printf "%s" "$out" | grep -q "已添加 新号（dora@example.com），出口 US-D" && grep -F "state=st-page1" open.log | grep -qF -- "--user-data-dir=$(ls -d "$H"/.cca/accounts/dora-example-com-*)/chrome" && [ -d "$H/Applications/Claude 新号.app" ]'
 kill $busy 2>/dev/null; wait $busy 2>/dev/null
 run CCA_TTY="$(ans y)" cca rm dora@example.com >/dev/null 2>&1
