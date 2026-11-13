@@ -50,21 +50,35 @@ struct UsageStatsPage: View {
         .navigationTitle("用量统计")
     }
 
-    /// 标题和一句说明：数字从哪来、从什么时候开始记。cca 有折合金额时右边是看哪种（额度用量 / 折合金额），金额模式多一个「刷新」
+    /// 标题和一句说明：数字从哪来、从什么时候开始记。cca 有折合金额时右边是看哪种（额度用量 / 折合金额），金额模式多出本机 / 所有设备、
+    /// 按周 / 按日（和账号页的折合金额共用）和「刷新」：一行放不下时（窗口窄）这三个挪到标题下面一行，右对齐（和看哪种的切换在同一边）
     private func header(_ accounts: [Account], mode: StatsMode, now: Double) -> some View {
         let since = accounts.compactMap { $0.usageWeeks?.sinceEpoch }.min()
         return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Text("用量统计").font(.system(size: 24, weight: .semibold))
-                if model.stateLoading { ProgressView().controlSize(.small) }
-                if model.costAvailable {
-                    Spacer(minLength: 8)
-                    if mode == .cost, model.costEnabled {
-                        SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
-                            .disabled(model.costRefreshing)
-                            .help("现在统计一次，再和各个账号的其他设备同步")
+            if model.costAvailable, mode == .cost, model.costEnabled {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        title
+                        Spacer(minLength: 8)
+                        costControls
+                        modePicker
                     }
-                    modePicker
+                    VStack(alignment: .trailing, spacing: 10) {
+                        HStack(spacing: 10) {
+                            title
+                            Spacer(minLength: 8)
+                            modePicker
+                        }
+                        HStack(spacing: 10) { costControls }
+                    }
+                }
+            } else {
+                HStack(spacing: 10) {
+                    title
+                    if model.costAvailable {
+                        Spacer(minLength: 8)
+                        modePicker
+                    }
                 }
             }
             Text(mode == .cost ? CostStatsContent.subtitle(model.state?.costTotal, scanning: model.costScanning, now: now)
@@ -74,6 +88,23 @@ struct UsageStatsPage: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var title: some View {
+        HStack(spacing: 10) {
+            Text("用量统计").font(.system(size: 24, weight: .semibold)).fixedSize()
+            if model.stateLoading { ProgressView().controlSize(.small) }
+        }
+    }
+
+    /// 金额模式的三个控件：和账号页「折合金额」的标题上一样的两个切换（两页共用一个设置）、一样的顺序，和「刷新」
+    @ViewBuilder
+    private var costControls: some View {
+        CostScopePicker()
+        CostGranularityPicker()
+        SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
+            .disabled(model.costRefreshing)
+            .help("现在统计一次，再和各个账号的其他设备同步")
     }
 
     /// 看哪种：额度用量（每周用到额度的百分之几）/ 折合金额（按官方 API 的价格折成多少美元）；记在 App 的设置里
@@ -126,25 +157,31 @@ private struct StatsHeader: View {
     }
 }
 
-/// 表头里小图上面的时间刻度：从今天往前每隔几周一个日期（这一栏窄时隔得多一点，日期不挤在一起），最右边是今天
-/// （额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）。写哪几个、写在哪由 CostChart.statsTicks 算
+/// 表头里小图上面的时间刻度：从今天往前每隔几周（折合金额按天看时每隔几天）一个日期（这一栏窄时隔得多一点，日期不挤在一起），
+/// 最右边是今天（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）。写哪几个、写在哪由 CostChart.statsTicks 算
 struct StatsTimeScale: View {
     let domain: ClosedRange<Double>
     let now: Double
+    var granularity: CostGranularity = .week
 
     var body: some View {
         GeometryReader { geo in
-            let ticks = CostChart.statsTicks(domain: domain, now: now, width: Double(geo.size.width))
+            let ticks = CostChart.statsTicks(domain: domain, now: now, width: Double(geo.size.width), granularity: granularity)
             ForEach(Array(ticks.enumerated()), id: \.offset) { i, tick in
-                Text(i == 0 ? "今天" : Self.day(tick.epoch))
+                Text(i == 0 ? "今天" : Self.day(back: ticks[0].epoch - tick.epoch, now: now))
                     .fixedSize()
                     .position(x: CGFloat(tick.x), y: geo.size.height / 2)
             }
         }
     }
 
-    private static func day(_ t: Double) -> String {
-        let c = Calendar.current.dateComponents([.month, .day], from: Date(timeIntervalSince1970: t))
+    /// 往前第几天的日期：按日历从今天往回数整天（不直接拿刻度的时间换算：演示数据平移过的一天不从零点开始，换算出来会差一天，
+    /// 和下面柱子的日期对不上）
+    private static func day(back seconds: Double, now: Double) -> String {
+        let cal = Calendar.current
+        let today = Date(timeIntervalSince1970: now)
+        let d = cal.date(byAdding: .day, value: -Int((seconds / 86400).rounded()), to: today) ?? today.addingTimeInterval(-seconds)
+        let c = cal.dateComponents([.month, .day], from: d)
         return "\(c.month ?? 0)/\(c.day ?? 0)"
     }
 }

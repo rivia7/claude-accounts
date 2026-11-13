@@ -88,35 +88,55 @@ enum Snapshot {
                 m.statsMode = .quota
                 m.selection = .usageStats
             },
-            // 折合金额：用量统计页的金额模式（普通、宽窗口），账号页的「折合金额」（按周、按日、看一台设备、还没有记录、ChatGPT 账号）
+            // 折合金额：用量统计页的金额模式（所有设备按周、宽窗口、按日、本机），账号页的「折合金额」（按周、按日、本机、还没有记录、ChatGPT 账号）。
+            // 本机 / 所有设备、按周 / 按日是两页共用的设置，每个场景都自己设好
             Scene(name: "stats-cost") { m in
+                m.costScope = .all
+                m.costGranularity = .week
                 m.statsMode = .cost
                 m.selection = .usageStats
             },
             Scene(name: "stats-cost-wide") { m in
                 window.setContentSize(NSSize(width: 1680, height: 1000))
+                m.costScope = .all
+                m.costGranularity = .week
+                m.statsMode = .cost
+                m.selection = .usageStats
+            },
+            Scene(name: "stats-cost-day") { m in
+                m.costScope = .all
+                m.costGranularity = .day
+                m.statsMode = .cost
+                m.selection = .usageStats
+            },
+            Scene(name: "stats-cost-me") { m in
+                m.costScope = .me
+                m.costGranularity = .week
                 m.statsMode = .cost
                 m.selection = .usageStats
             },
             Scene(name: "account-cost") { m in
+                m.costScope = .all
                 m.costGranularity = .week
                 if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
             },
             Scene(name: "account-cost-day") { m in
+                m.costScope = .all
                 m.costGranularity = .day
                 if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
             },
-            Scene(name: "account-cost-device") { m in
+            Scene(name: "account-cost-me") { m in
+                m.costScope = .me
                 m.costGranularity = .week
-                if let a = m.accounts(.claude).first(where: { ($0.cost?.devices.count ?? 0) >= 2 }) {
-                    m.showCost(a.ref, device: a.cost?.devices.first(where: { !$0.isMe })?.id)
-                }
+                if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
             },
             Scene(name: "account-cost-empty") { m in
+                m.costScope = .all
                 if let r = first(.claude, { $0.can.cost && $0.cost == nil }) { m.showCost(r) }
             },
             Scene(name: "account-cost-codex") { m in
                 guard m.visibleTools.contains(.codex) else { return }
+                m.costScope = .all
                 m.costGranularity = .week
                 if let r = first(.codex, { $0.cost != nil }) { m.showCost(r) }
             },
@@ -144,6 +164,7 @@ enum Snapshot {
         if only.isEmpty || only.contains("details") {
             guide.toggleDetails()
             let costDetails: @MainActor (AppModel) -> Void = { m in
+                m.costScope = .all
                 m.costGranularity = .week
                 if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
             }

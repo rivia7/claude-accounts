@@ -119,7 +119,7 @@ extension Texts {
     // MARK: 句子
 
     /// 鼠标指着一根柱子时（和读屏）：「11 月 4 日–11 日：$1,021.40 · 2,210 次请求」，还没过完的「本周到现在（11 月 4 日–11 日）：…」
-    /// 「今天到现在：…」；一台设备的没有请求数。这一项开始时还没有记录、有没有公开价格的模型时补一句
+    /// 「今天到现在：…」；只看本机时没有请求数（cca 只给整个账号的）。这一项开始时还没有记录、有没有公开价格的模型时补一句
     static func costBarDetail(_ bar: CostBar, granularity g: CostGranularity, scope: CostScope, currency: String,
                               now: Double, calendar: Calendar = .current) -> String {
         let p = bar.period
@@ -130,27 +130,29 @@ extension Texts {
             head = costRange(p, granularity: g, now: now, calendar: calendar)
         }
         var s = head + "：" + money(bar.usd, currency: currency)
-        if scope == .account, p.requests > 0 { s += " · " + grouped(p.requests) + " 次请求" }
+        if scope == .all, p.requests > 0 { s += " · " + grouped(p.requests) + " 次请求" }
         var notes: [String] = []
         if p.partial { notes.append("这一项开始时还没有记录，可能偏小") }
-        if scope == .account, p.unpricedRequests > 0 { notes.append("其中 \(grouped(p.unpricedRequests)) 次请求的模型没有公开价格，没算钱") }
+        if scope == .all, p.unpricedRequests > 0 { notes.append("其中 \(grouped(p.unpricedRequests)) 次请求的模型没有公开价格，没算钱") }
         return s + notes.map { "；" + $0 }.joined()
     }
 
     /// 图下面那一行（鼠标没指着柱子时）：按周「本周 $483.51 · 平均每周 $988.78（7 周）· 近 12 周合计 $8,052」，
-    /// 按天「今天 $38.91 · 近 30 天合计 $4,200」。都是 cca 给的 summary，平均算不出来（一项都没过完）时不写
+    /// 按天「今天 $38.91 · 平均每天 $140.20（29 天）· 近 30 天合计 $4,200」。都是 cca 给的 summary，平均算不出来（一项都没过完）时不写
     static func costCaption(_ s: CostSummary, granularity g: CostGranularity, currency: String) -> String {
+        let (current, average, count, total): (String, Double?, String?, String)
         switch g {
         case .week:
-            var parts = ["本周 " + money(s.currentUSD, currency: currency)]
-            if let avg = s.averageUSD {
-                parts.append("平均每周 " + money(avg, currency: currency) + (s.averageWeeks > 0 ? "（\(s.averageWeeks) 周）" : ""))
-            }
-            parts.append("近 12 周合计 " + money(s.weeksUSD, currency: currency))
-            return parts.joined(separator: " · ")
+            (current, average, total) = ("本周 " + money(s.currentUSD, currency: currency), s.averageUSD,
+                                         "近 12 周合计 " + money(s.weeksUSD, currency: currency))
+            count = s.averageWeeks > 0 ? "（\(s.averageWeeks) 周）" : nil
         case .day:
-            return "今天 " + money(s.todayUSD, currency: currency) + " · 近 30 天合计 " + money(s.daysUSD, currency: currency)
+            (current, average, total) = ("今天 " + money(s.todayUSD, currency: currency), s.averageDayUSD,
+                                         "近 30 天合计 " + money(s.daysUSD, currency: currency))
+            count = s.averageDays > 0 ? "（\(s.averageDays) 天）" : nil
         }
+        let avg = average.map { (g == .week ? "平均每周 " : "平均每天 ") + money($0, currency: currency) + (count ?? "") }
+        return ([current] + (avg.map { [$0] } ?? []) + [total]).joined(separator: " · ")
     }
 
     /// 一直显示的小字：按谁的价格折算、价格表是哪天的，不是实际花费
@@ -170,28 +172,28 @@ extension Texts {
         return "按\(who) 的价格折算" + (pricesDate.map { "（价格表 \(costPricesDate($0))）" } ?? "") + "，不是实际花费：订阅不按这个收费。"
     }
 
-    /// 同步的状态、还没算进来的设备（只在要说的时候有）：
-    /// old_server、not_logged_in、pending 说一句（灰字）；error、30 天内用过却没同步过金额的设备（missing）、很久没同步上来的设备说一句（橙色）。
-    /// local_only、off、ok 不说。撤销了的设备不提醒（数字本来就是撤销前同步来的）。
-    /// 看一台设备时（scope 是 .device）只说和它的数字有关的：别的设备同步来的才说同步的状态（这台设备自己的不经同步），
-    /// 只说它自己很久没同步上来；别的设备没算进来、没同步上来不影响它的数字，不说
-    static func costNotes(_ c: AccountCost, scope: CostScope = .account, now: Double, calendar: Calendar = .current) -> [CostNote] {
-        let device = CostChart.resolve(scope, in: c).deviceID.flatMap { c.device($0) }
+    /// 同步的状态、还没算进来的设备（看所有设备时，只在要说的时候有）：
+    /// old_server、not_logged_in、pending、local_only、off 说一句（灰字）；error、30 天内用过却没同步过金额的设备（missing）、
+    /// 很久没同步上来的设备说一句（橙色）。ok 不说。撤销了的设备不提醒（数字本来就是撤销前同步来的）。
+    /// 只看本机时什么都不说：这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它
+    static func costNotes(_ c: AccountCost, scope: CostScope = .all, now: Double, calendar: Calendar = .current) -> [CostNote] {
+        guard scope == .all else { return [] }
         var out: [CostNote] = []
-        if device?.isMe != true {
-            switch c.syncState {
-            case .oldServer: out.append(CostNote(text: "只算了这台设备：维护者的设备统计服务器还不支持同步金额"))
-            case .notLoggedIn: out.append(CostNote(text: "这台设备没登录这个账号，显示的是上次同步来的"))
-            case .pending: out.append(CostNote(text: "还没和别的设备同步过"))
-            case .error: out.append(CostNote(text: "上次同步没成功" + (c.sync?.message.map { "：" + $0 } ?? ""), warning: true))
-            default: break
-            }
+        // cca 没给 sync 时（syncState 当作 local_only）不知道为什么只有这台设备，不说
+        switch c.sync?.state.shown {
+        case .oldServer?: out.append(CostNote(text: "只算了这台设备：维护者的设备统计服务器还不支持同步金额"))
+        case .notLoggedIn?: out.append(CostNote(text: "这台设备没登录这个账号，显示的是上次同步来的"))
+        case .pending?: out.append(CostNote(text: "还没和别的设备同步过"))
+        case .localOnly?: out.append(CostNote(text: "只算了这台设备：这个账号不在维护者的映射里，或者这台设备没配置设备统计"))
+        case .off?: out.append(CostNote(text: "只算了这台设备：这台设备关掉了设备统计"))
+        case .error?: out.append(CostNote(text: "上次同步没成功" + (c.sync?.message.map { "：" + $0 } ?? ""), warning: true))
+        default: break
         }
         let missing = c.sync?.missing ?? []
-        if device == nil, !missing.isEmpty {
+        if !missing.isEmpty {
             out.append(CostNote(text: "还有 \(missing.count) 台设备没有算进来（\(names(missing.map(\.name)))，可能 cca 太旧）", warning: true))
         }
-        for d in c.devices where device == nil || d.id == device?.id {
+        for d in c.devices {
             if let text = costStale(d, now: now, calendar: calendar) { out.append(CostNote(text: text, warning: true)) }
         }
         return out
@@ -239,7 +241,7 @@ extension Texts {
         "上次和别的设备同步：" + pastTime(epoch, now: now, calendar: calendar)
     }
 
-    /// 设备的叫法（选看哪台设备的菜单、用量统计页各台设备那一行）：这台设备「studio-mac（这台）」，撤销了的「old-mini（已撤销）」
+    /// 设备的叫法（用量统计页各台设备那一行）：这台设备「studio-mac（这台）」，撤销了的「old-mini（已撤销）」
     static func costDeviceName(_ d: CostDevice) -> String {
         d.name + (d.isMe ? "（这台）" : d.revoked ? "（已撤销）" : "")
     }

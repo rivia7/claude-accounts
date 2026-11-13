@@ -469,6 +469,8 @@ class View(Base):
         self.assertEqual((s['weeks_usd'], s['current_usd'], s['days_usd'], s['today_usd']), (20.0, 11.0, 19.0, 5.0),
                          '三台设备加起来；撤销的那份只算 bob-mini 现在的 key 有数据以前的小时；坏的不算')
         self.assertEqual((s['average_usd'], s['average_weeks']), (1.6, 5), '平均：从有数据的那一周以后、过完的整周')
+        self.assertEqual((s['average_day_usd'], s['average_days']), (0.4828, 29),
+                         '按天的平均：从有数据的那天以后、过完的整天（10 月 15 日到 11 月 12 日，今天不算）：14 美元 / 29 天')
         self.assertEqual((s['requests'], s['unpriced_requests']), (10, 1))
         self.assertEqual(a['since_epoch'], float(self.at(2026, 10, 1, 10)))
         self.assertEqual([w['partial'] for w in a['weeks']][:8], [True] * 7 + [False], '有数据以前的周：数据不全')
@@ -481,6 +483,9 @@ class View(Base):
                          [('alice-mbp', True, False, False), ('bob-mini', False, False, False), ('carol-air', False, False, True)],
                          '这台设备在最前，别的按最近 30 天的多少排；两天没同步的标出来')
         self.assertEqual(devs[0]['id'], 'SHA256:me')
+        self.assertEqual({k: devs[0]['summary'][k] for k in ('average_usd', 'average_weeks', 'average_day_usd', 'average_days')},
+                         {'average_usd': 1.4, 'average_weeks': 5, 'average_day_usd': 0.3448, 'average_days': 29},
+                         '一台设备的平均按整个账号的那几周、那几天算（各台设备的平均加起来是整个账号的）')
         self.assertEqual(devs[1]['summary']['weeks_usd'], 3.0, 'bob-mini：现在的 2 + 撤销以前的 1（撤销以后的 9 不重复计）')
         self.assertEqual(sum(devs[0]['days_usd']), 15.0)
         self.assertEqual(len(devs[0]['weeks_usd']), 13)
@@ -491,15 +496,39 @@ class View(Base):
         self.assertIsNone(cv.account(ns['CLAUDE'], 'bob@example.com', None, True, True), '没有记录：None')
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['current_usd'], t['weeks_usd'], t['average_usd'], t['days_usd'], t['today_usd']), (15.0, 24.0, 1.6, 23.0, 5.0))
-        self.assertEqual(t['by_tool']['codex'], {'current_usd': 4.0, 'weeks_usd': 4.0, 'average_usd': None, 'days_usd': 4.0, 'today_usd': 0.0})
+        self.assertEqual(t['average_day_usd'], 0.4828, '按天的平均：有平均的账号加起来（Codex 只有一天、还没过完的整天）')
+        self.assertEqual(t['by_tool']['codex'], {'current_usd': 4.0, 'weeks_usd': 4.0, 'average_usd': None, 'average_day_usd': None,
+                                                 'days_usd': 4.0, 'today_usd': 0.0})
         self.assertEqual(t['by_tool']['claude']['weeks_usd'], 20.0)
         self.assertEqual((len(t['days']), t['days'][-2]['usd'], t['days'][-1]['current']), (30, 6.0, True), '11 月 12 日：bob-mini 的 2 + Codex 的 4')
+        me = t['me']
+        self.assertEqual({k: me[k] for k in ('current_usd', 'weeks_usd', 'average_usd', 'average_day_usd', 'days_usd', 'today_usd')},
+                         {'current_usd': 12.0, 'weeks_usd': 20.0, 'average_usd': 1.4, 'average_day_usd': 0.3448, 'days_usd': 19.0, 'today_usd': 5.0},
+                         'me：各账号里这台设备的那一份加起来（Claude 的 alice-mbp，Codex 只有这台）')
+        self.assertEqual(me['by_tool']['claude'], {'current_usd': 8.0, 'weeks_usd': 16.0, 'average_usd': 1.4, 'average_day_usd': 0.3448,
+                                                   'days_usd': 15.0, 'today_usd': 5.0})
+        self.assertEqual((len(me['days']), me['days'][-2]['usd'], me['days'][-1]['usd'], me['days'][-1]['date']), (30, 4.0, 5.0, '2026-11-13'),
+                         '11 月 12 日只有 Codex 的 4（bob-mini 的不算）')
+        self.assertEqual([d['start_epoch'] for d in me['days']], [d['start_epoch'] for d in t['days']])
         self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1}, '认不出是谁的：最近 30 天的')
         self.assertEqual(t['scan']['state'], 'ready')
         quota = {'weeks': [{'start_epoch': self.NOW - 2 * 86400, 'end_epoch': self.NOW + 5 * 86400}]}
         q = self.view().account(ns['CLAUDE'], 'alice@example.com', quota, True, True)
         self.assertEqual((q['weeks'][-1]['basis'], q['weeks'][-1]['start_epoch'], q['summary']['current_usd']),
                          ('quota', self.NOW - 2 * 86400, 7.0), '有额度窗口时，这一周按额度窗口算（周三 12:00 起：carol-air 周三 10 点的不算）')
+
+    def test_me_without_records(self):
+        ns = self.ns
+        self.local['acc']['claude:' + U1] = {}
+        self.write()
+        cv = self.view()
+        a = cv.account(ns['CLAUDE'], 'alice(alice@example.com)', None, True, True)
+        self.assertEqual([(d['name'], d['me']) for d in a['devices']], [('bob-mini', False), ('carol-air', False)],
+                         '这台设备没有这个账号的记录：不列这台设备，别的设备的照样有')
+        cv.account(ns['CODEX'], 'alice@example.com', None, True, True)
+        t = cv.total(['claude', 'codex'])
+        self.assertEqual((t['days_usd'], t['me']['days_usd'], t['me']['by_tool']['claude']['days_usd'], t['me']['by_tool']['claude']['average_usd']),
+                         (8.0, 4.0, 0.0, None), 'me 里没有这个账号（金额是 0、没有平均），只有 Codex 的 4')
 
     def test_sync_states(self):
         ns, C, k = self.ns, self.ns['CLAUDE'], 'alice(alice@example.com)'

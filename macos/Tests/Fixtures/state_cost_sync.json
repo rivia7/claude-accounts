@@ -134,7 +134,7 @@
     ]
   },
   "cost_total": {
-    "currency": "USD", "prices_date": "2026-11-01", "current_usd": 62.08, "weeks_usd": 1853.96, "average_usd": 159.05, "days_usd": 685.77, "today_usd": 5.48,
+    "currency": "USD", "prices_date": "2026-11-01", "current_usd": 62.08, "weeks_usd": 1853.96, "average_usd": 159.05, "average_day_usd": 23.46, "days_usd": 685.77, "today_usd": 5.48,
     "days": [
       {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "usd": 29.16},
       {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "usd": 15.5},
@@ -168,8 +168,47 @@
       {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "usd": 5.48}
     ],
     "by_tool": {
-      "claude": {"current_usd": 62.08, "weeks_usd": 1853.96, "average_usd": 159.05, "days_usd": 685.77, "today_usd": 5.48},
-      "codex": {"current_usd": 0, "weeks_usd": 0, "average_usd": null, "days_usd": 0, "today_usd": 0}
+      "claude": {"current_usd": 62.08, "weeks_usd": 1853.96, "average_usd": 159.05, "average_day_usd": 23.46, "days_usd": 685.77, "today_usd": 5.48},
+      "codex": {"current_usd": 0, "weeks_usd": 0, "average_usd": null, "average_day_usd": null, "days_usd": 0, "today_usd": 0}
+    },
+    "me": {
+      "current_usd": 37.94, "weeks_usd": 1018.22, "average_usd": 87.35, "average_day_usd": 14.34, "days_usd": 419.08, "today_usd": 3.35,
+      "days": [
+        {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "usd": 17.82},
+        {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "usd": 9.47},
+        {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "usd": 10.09},
+        {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "usd": 17.36},
+        {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "usd": 19.89},
+        {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "usd": 16.8},
+        {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "usd": 16.84},
+        {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "usd": 17.89},
+        {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "usd": 8.77},
+        {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "usd": 8.78},
+        {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "usd": 17.44},
+        {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "usd": 17.51},
+        {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "usd": 19.33},
+        {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "usd": 18.85},
+        {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "usd": 22.85},
+        {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "usd": 9.73},
+        {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "usd": 8.81},
+        {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "usd": 17.76},
+        {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "usd": 16.05},
+        {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "usd": 17.02},
+        {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "usd": 16.31},
+        {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "usd": 16.75},
+        {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "usd": 7.23},
+        {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "usd": 8.13},
+        {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "usd": 15.87},
+        {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "usd": 11.95},
+        {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "usd": 10.22},
+        {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "usd": 10.5},
+        {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "usd": 9.71},
+        {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "usd": 3.35}
+      ],
+      "by_tool": {
+        "claude": {"current_usd": 37.94, "weeks_usd": 1018.22, "average_usd": 87.35, "average_day_usd": 14.34, "days_usd": 419.08, "today_usd": 3.35},
+        "codex": {"current_usd": 0, "weeks_usd": 0, "average_usd": null, "average_day_usd": null, "days_usd": 0, "today_usd": 0}
+      }
     },
     "scan": {"state": "ready", "updated_epoch": 1794041940.0},
     "unattributed": {"days_usd": 1.25, "requests": 7}
@@ -292,11 +331,11 @@
               {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 15.89, "requests": 151, "unpriced_requests": 0, "tokens": {"input": 9691, "output": 82043, "cache_read": 13161664, "cache_write": 326547}},
               {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 5.48, "requests": 55, "unpriced_requests": 0, "tokens": {"input": 3280, "output": 29500, "cache_read": 4761338, "cache_write": 131003}}
             ],
-            "summary": {"weeks_usd": 1853.96, "current_usd": 62.08, "average_usd": 159.05, "average_weeks": 11, "days_usd": 685.77, "today_usd": 5.48, "requests": 17213, "unpriced_requests": 0},
+            "summary": {"weeks_usd": 1853.96, "current_usd": 62.08, "average_usd": 159.05, "average_weeks": 11, "days_usd": 685.77, "today_usd": 5.48, "average_day_usd": 23.46, "average_days": 29, "requests": 17213, "unpriced_requests": 0},
             "devices": [
-              {"id": "SHA256:fffffffffffffffffffffffffffffffffffffffffff", "name": "test-mac", "me": true, "revoked": false, "synced_epoch": 1794041940.0, "stale": false, "weeks_usd": [19.4, 56.46, 76.6, 64.81, 68.49, 90.18, 85.66, 91.65, 111.56, 103.33, 115.62, 96.52, 37.94], "days_usd": [17.82, 9.47, 10.09, 17.36, 19.89, 16.8, 16.84, 17.89, 8.77, 8.78, 17.44, 17.51, 19.33, 18.85, 22.85, 9.73, 8.81, 17.76, 16.05, 17.02, 16.31, 16.75, 7.23, 8.13, 15.87, 11.95, 10.22, 10.5, 9.71, 3.35], "summary": {"weeks_usd": 1018.22, "current_usd": 37.94, "average_usd": 87.35, "days_usd": 419.08, "today_usd": 3.35}},
-              {"id": "SHA256:ddddddddddddddddddddddddddddddddddddddddddd", "name": "dan-air", "me": false, "revoked": false, "synced_epoch": 1794040500.0, "stale": false, "weeks_usd": [12.35, 35.93, 48.75, 41.24, 43.58, 57.38, 54.51, 58.33, 70.99, 65.76, 73.58, 61.42, 24.14], "days_usd": [11.34, 6.03, 6.42, 11.05, 12.66, 10.69, 10.72, 11.39, 5.58, 5.59, 11.1, 11.14, 12.3, 11.99, 14.54, 6.19, 5.61, 11.3, 10.21, 10.83, 10.38, 10.66, 4.6, 5.17, 10.1, 7.6, 6.51, 6.68, 6.18, 2.13], "summary": {"weeks_usd": 647.96, "current_usd": 24.14, "average_usd": 55.59, "days_usd": 266.69, "today_usd": 2.13}},
-              {"id": "SHA256:9999999999999999999999999999999999999999999", "name": "old-air", "me": false, "revoked": true, "synced_epoch": 1789898400.0, "stale": true, "weeks_usd": [10.58, 30.8, 41.78, 35.35, 37.36, 31.91, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "days_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "summary": {"weeks_usd": 187.78, "current_usd": 0.0, "average_usd": 16.11, "days_usd": 0.0, "today_usd": 0.0}}
+              {"id": "SHA256:fffffffffffffffffffffffffffffffffffffffffff", "name": "test-mac", "me": true, "revoked": false, "synced_epoch": 1794041940.0, "stale": false, "weeks_usd": [19.4, 56.46, 76.6, 64.81, 68.49, 90.18, 85.66, 91.65, 111.56, 103.33, 115.62, 96.52, 37.94], "days_usd": [17.82, 9.47, 10.09, 17.36, 19.89, 16.8, 16.84, 17.89, 8.77, 8.78, 17.44, 17.51, 19.33, 18.85, 22.85, 9.73, 8.81, 17.76, 16.05, 17.02, 16.31, 16.75, 7.23, 8.13, 15.87, 11.95, 10.22, 10.5, 9.71, 3.35], "summary": {"weeks_usd": 1018.22, "current_usd": 37.94, "average_usd": 87.35, "average_weeks": 11, "days_usd": 419.08, "today_usd": 3.35, "average_day_usd": 14.34, "average_days": 29}},
+              {"id": "SHA256:ddddddddddddddddddddddddddddddddddddddddddd", "name": "dan-air", "me": false, "revoked": false, "synced_epoch": 1794040500.0, "stale": false, "weeks_usd": [12.35, 35.93, 48.75, 41.24, 43.58, 57.38, 54.51, 58.33, 70.99, 65.76, 73.58, 61.42, 24.14], "days_usd": [11.34, 6.03, 6.42, 11.05, 12.66, 10.69, 10.72, 11.39, 5.58, 5.59, 11.1, 11.14, 12.3, 11.99, 14.54, 6.19, 5.61, 11.3, 10.21, 10.83, 10.38, 10.66, 4.6, 5.17, 10.1, 7.6, 6.51, 6.68, 6.18, 2.13], "summary": {"weeks_usd": 647.96, "current_usd": 24.14, "average_usd": 55.59, "average_weeks": 11, "days_usd": 266.69, "today_usd": 2.13, "average_day_usd": 9.12, "average_days": 29}},
+              {"id": "SHA256:9999999999999999999999999999999999999999999", "name": "old-air", "me": false, "revoked": true, "synced_epoch": 1789898400.0, "stale": true, "weeks_usd": [10.58, 30.8, 41.78, 35.35, 37.36, 31.91, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "days_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "summary": {"weeks_usd": 187.78, "current_usd": 0.0, "average_usd": 16.11, "average_weeks": 11, "days_usd": 0.0, "today_usd": 0.0, "average_day_usd": 0.0, "average_days": 29}}
             ],
             "unpriced_models": [],
             "sync": {"state": "ok", "message": null, "checked_epoch": 1794041910.0, "missing": [{"name": "eve-mini", "used_epoch": 1794024000.0}]}

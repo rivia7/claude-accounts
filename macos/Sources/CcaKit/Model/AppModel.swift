@@ -160,8 +160,6 @@ final class AppModel {
     private(set) var costFailure: String?
     /// 上次跑 `cost sync` 的时间（没成也按间隔重试，见 CostPolling）
     @ObservationIgnored private var costAttempted: Double?
-    /// 账号页、用量统计页的折合金额看的是整个账号还是其中一台设备（只记在内存里）
-    private(set) var costScopes: [AccountRef: CostScope] = [:]
     /// 用量统计页点了一行：打开账号页、滚到「折合金额」那一节（账号页滚过去以后清掉）
     var costFocus: AccountRef?
     /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
@@ -232,11 +230,19 @@ final class AppModel {
         }
     }
 
-    /// 账号页的折合金额按周还是按天看
+    /// 折合金额按周还是按天看（账号页、用量统计页共用：从用量统计页点进账号页，看到的和那一行一样）
     var costGranularity: CostGranularity = .week {
         didSet {
             guard costGranularity != oldValue else { return }
             defaults.set(costGranularity.rawValue, forKey: Prefs.costGranularity)
+        }
+    }
+
+    /// 折合金额看本机还是所有设备（同上，两页共用）
+    var costScope: CostScope = .all {
+        didSet {
+            guard costScope != oldValue else { return }
+            defaults.set(costScope.rawValue, forKey: Prefs.costScope)
         }
     }
 
@@ -314,8 +320,9 @@ final class AppModel {
         static let arrangement = "accounts.arrangement"
         /// 用量统计页看额度用量还是折合金额（StatsMode）
         static let statsMode = "stats.mode"
-        /// 账号页的折合金额按周还是按天（CostGranularity）
+        /// 折合金额按周还是按天（CostGranularity）、看本机还是所有设备（CostScope）：账号页、用量统计页共用
         static let costGranularity = "cost.period"
+        static let costScope = "cost.scope"
         /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
@@ -354,6 +361,7 @@ final class AppModel {
         if let t = defaults.string(forKey: Prefs.tool) { tool = ToolID(rawValue: t) }
         if let m = defaults.string(forKey: Prefs.statsMode).flatMap(StatsMode.init(rawValue:)) { statsMode = m }
         if let g = defaults.string(forKey: Prefs.costGranularity).flatMap(CostGranularity.init(rawValue:)) { costGranularity = g }
+        if let v = defaults.string(forKey: Prefs.costScope).flatMap(CostScope.init(rawValue:)) { costScope = v }
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
         self.scheduler.onUsageTick = { [weak self] in self?.refreshUsageIfNeeded() }
         self.scheduler.clientCheckDelay = { [weak self] in self?.clientCheckDelay() ?? 3600 }
@@ -1408,18 +1416,8 @@ final class AppModel {
         return s == .scanning || (s == .never && costSyncing)
     }
 
-    /// 这个账号看的是整个账号还是其中一台设备（那台设备不在了就是整个账号）
-    func costScope(_ ref: AccountRef) -> CostScope {
-        CostChart.resolve(costScopes[ref] ?? .account, in: account(ref)?.cost)
-    }
-
-    func setCostScope(_ ref: AccountRef, _ scope: CostScope) {
-        costScopes[ref] = scope == .account ? nil : scope
-    }
-
-    /// 用量统计页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」
-    func showCost(_ ref: AccountRef, device: String? = nil) {
-        setCostScope(ref, device.map { .device($0) } ?? .account)
+    /// 用量统计页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」（按周还是按天、本机还是所有设备两页共用，不用另设）
+    func showCost(_ ref: AccountRef) {
         costFocus = ref
         show(ref)
     }

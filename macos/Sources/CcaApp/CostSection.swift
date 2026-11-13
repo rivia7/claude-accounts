@@ -13,8 +13,8 @@ struct CostBarChart: View {
     /// 纵轴最高到多少（CostChart.niceTop）：用量统计页所有行用同一个，各行的高低才能比
     let top: Double
     var currency = "USD"
-    /// 看的是整个账号还是一台设备（读屏里说不说请求数：一台设备的没有）
-    var scope: CostScope = .account
+    /// 读屏里说不说请求数：cca 只给整个账号的（看所有设备时），本机、一台设备的没有
+    var requests = true
     var compact = false
     let now: Double
     /// 鼠标指着的那一项（它的 endEpoch）；给了才跟着鼠标
@@ -64,7 +64,7 @@ struct CostBarChart: View {
 
     private func accessibility(_ bar: CostBar) -> (label: String, value: String) {
         var value = Texts.money(bar.usd, currency: currency)
-        if scope == .account, bar.period.requests > 0 { value += "，\(Texts.grouped(bar.period.requests)) 次请求" }
+        if requests, bar.period.requests > 0 { value += "，\(Texts.grouped(bar.period.requests)) 次请求" }
         if bar.period.partial { value += "，这一项开始时还没有记录" }
         let label = bar.period.current ? (granularity == .week ? "本周到现在" : "今天到现在")
             : Texts.costRange(bar.period, granularity: granularity, now: now)
@@ -148,6 +148,38 @@ struct CostPartialLegend: View {
     }
 }
 
+/// 看本机还是所有设备：账号页「折合金额」的标题、用量统计页的标题上各一个，两页共用一个设置（AppModel.costScope）
+struct CostScopePicker: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Picker("看哪些设备", selection: Binding(get: { model.costScope }, set: { model.costScope = $0 })) {
+            Text("本机").tag(CostScope.me)
+            Text("所有设备").tag(CostScope.all)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help("本机：只算这台设备上用的；所有设备：整个账号，各台设备加起来")
+    }
+}
+
+/// 按周还是按天看：同上，两页共用一个设置（AppModel.costGranularity）
+struct CostGranularityPicker: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Picker("按周还是按天", selection: Binding(get: { model.costGranularity }, set: { model.costGranularity = $0 })) {
+            Text("周").tag(CostGranularity.week)
+            Text("日").tag(CostGranularity.day)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help("周：最近 12 周和本周；日：最近 30 天")
+    }
+}
+
 /// 同步的状态、还没算进来的设备（cca 给的，Texts.costNotes 写成一句一句的）：要处理的橙色，别的灰字
 struct CostNoteLine: View {
     let note: CostNote
@@ -161,8 +193,8 @@ struct CostNoteLine: View {
 }
 
 /// 账号页的「折合金额」（在「每周用量」下面；cca 说这个账号有（`can.cost`）、cca 也有折合金额时才显示）：
-/// 这个账号（或者其中一台设备）最近 12 周每周、最近 30 天每天按官方 API 的价格折成多少美元。不是实际花费：订阅不按这个收费。
-/// 标题右边是多久以前统计的、看哪台设备（有两台以上时）、按周 / 按日和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
+/// 这个账号（所有设备加起来，或者只算这台设备）最近 12 周每周、最近 30 天每天按官方 API 的价格折成多少美元。不是实际花费：订阅不按这个收费。
+/// 标题右边是多久以前统计的、本机 / 所有设备、按周 / 按日（这两个和用量统计页共用）和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
 /// 再下面是同步的提示，显示细节时多几行（token、没有公开价格的模型、从什么时候开始有记录、上次同步）；最下面一直有一行小字：
 /// 按谁的价格折算、价格表是哪天的。数字都是 cca 给的（PROTOCOL 2.2 的 `cost`），App 只排版。
 struct CostSection: View {
@@ -203,38 +235,13 @@ struct CostSection: View {
             }
         }
         .layoutPriority(-1)   // 放不下时先让它省略，按钮不挤
-        if let c, CostChart.listsDevices(c) { devicePicker(c) }
-        if c != nil { granularityPicker }
+        if c != nil {
+            CostScopePicker()
+            CostGranularityPicker()
+        }
         SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
             .disabled(model.costRefreshing)
             .help("现在统计一次，再和这个账号的其他设备同步")
-    }
-
-    /// 看整个账号还是其中一台设备（这台设备排第一，cca 排好的）
-    private func devicePicker(_ c: AccountCost) -> some View {
-        let ref = account.ref
-        return Picker("看哪台设备", selection: Binding(get: { model.costScope(ref) }, set: { model.setCostScope(ref, $0) })) {
-            Text("整个账号").tag(CostScope.account)
-            Divider()
-            ForEach(c.devices) { d in
-                Text(Texts.costDeviceName(d)).tag(CostScope.device(d.id))
-            }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .fixedSize()
-        .help("看整个账号（所有设备加起来），或者其中一台设备")
-    }
-
-    private var granularityPicker: some View {
-        Picker("按周还是按日", selection: Binding(get: { model.costGranularity }, set: { model.costGranularity = $0 })) {
-            Text("周").tag(CostGranularity.week)
-            Text("日").tag(CostGranularity.day)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .help("周：最近 12 周和本周；日：最近 30 天")
     }
 
     // MARK: 内容
@@ -263,14 +270,14 @@ struct CostSection: View {
 
     private func tile(_ c: AccountCost, now: Double) -> some View {
         let g = model.costGranularity
-        let scope = model.costScope(account.ref)
+        let scope = model.costScope
         let bars = CostChart.bars(c, granularity: g, scope: scope)
         let hovered = bars.first { $0.id == hover.wrappedValue }
         return VStack(alignment: .leading, spacing: 10) {
             if CostChart.charted(bars) {
                 CostBarChart(bars: bars, granularity: g,
                              domain: CostChart.domain([CostChart.periods(c, g)], granularity: g, now: now),
-                             top: CostChart.niceTop(CostChart.maxUSD([bars])), currency: c.currency, scope: scope,
+                             top: CostChart.niceTop(CostChart.maxUSD([bars])), currency: c.currency, requests: scope == .all,
                              now: now, hover: hover.projectedValue)
                     .frame(height: 128)
                 Text(hovered.map { Texts.costBarDetail($0, granularity: g, scope: scope, currency: c.currency, now: now) }
@@ -282,7 +289,7 @@ struct CostSection: View {
                 // 图例：鼠标指着一项时也留着，这一块不变高矮
                 if bars.contains(where: { $0.period.partial && $0.usd > 0 }) { CostPartialLegend() }
             } else {
-                Text(g == .week ? "最近 12 周没有用量。" : "最近 30 天没有用量。")
+                Text((scope == .me ? "这台设备" : "") + (g == .week ? "最近 12 周没有用量。" : "最近 30 天没有用量。"))
                     .foregroundStyle(.secondary)
             }
             ForEach(Array(Texts.costNotes(c, scope: scope, now: now).enumerated()), id: \.offset) { _, n in
@@ -295,13 +302,14 @@ struct CostSection: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
     }
 
-    /// 显示细节时：指着的那一项（没指着时是本周 / 今天）的 token（只有整个账号的有）、没有公开价格的模型、从什么时候开始有记录、上次同步
+    /// 显示细节时：指着的那一项（没指着时是本周 / 今天）的 token（cca 只给整个账号的：看所有设备时才有）、没有公开价格的模型、
+    /// 从什么时候开始有记录、上次同步
     @ViewBuilder
     private func details(_ c: AccountCost, bars: [CostBar], hovered: CostBar?, scope: CostScope,
                          granularity g: CostGranularity, now: Double) -> some View {
         let bar = hovered ?? bars.last(where: \.period.current)
         VStack(alignment: .leading, spacing: 4) {
-            if scope == .account, let bar, let t = bar.period.tokens, t.total > 0 {
+            if scope == .all, let bar, let t = bar.period.tokens, t.total > 0 {
                 let when = hovered == nil || bar.period.current ? (g == .week ? "本周到现在" : "今天到现在")
                     : Texts.costRange(bar.period, granularity: g, now: now)
                 Text(when + "的 token：" + Texts.costTokens(t))

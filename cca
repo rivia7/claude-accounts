@@ -9279,13 +9279,16 @@ def usd(m):
     return None if m is None else round(m / 1e6, 4)
 
 
-def cost_summary(wr, dr, good):
-    """一方（整个账号或者一台设备）加起来：(百万分之一美元的 {weeks, current, days, today, average}, PROTOCOL 2.2 的 summary)。
-    wr、dr 是按周、按天的各项（7 个计数），good 是算平均的那几周（过完的、不是 partial、至少 6 天）"""
+def cost_summary(wr, dr, good, good_days):
+    """一方（整个账号或者一台设备）加起来：(百万分之一美元的 {weeks, current, days, today, average, average_day}, PROTOCOL 2.2 的 summary)。
+    wr、dr 是按周、按天的各项（7 个计数）；good、good_days 是算平均的那几周（过完的、不是 partial、至少 6 天）、那几天（过完的、不是 partial）。
+    一台设备的平均也按整个账号的这几项算：各台设备的平均加起来就是整个账号的"""
+    avg = lambda rows, sel: sum(rows[n][0] for n in sel) // len(sel) if sel else None
     m = {'weeks': sum(r[0] for r in wr), 'current': wr[-1][0], 'days': sum(r[0] for r in dr), 'today': dr[-1][0],
-         'average': sum(wr[n][0] for n in good) // len(good) if good else None}
+         'average': avg(wr, good), 'average_day': avg(dr, good_days)}
     return m, {'weeks_usd': usd(m['weeks']), 'current_usd': usd(m['current']), 'average_usd': usd(m['average']),
-               'days_usd': usd(m['days']), 'today_usd': usd(m['today'])}
+               'average_weeks': len(good), 'days_usd': usd(m['days']), 'today_usd': usd(m['today']),
+               'average_day_usd': usd(m['average_day']), 'average_days': len(good_days)}
 
 
 def cost_period_view(p, t, last, since):
@@ -9305,7 +9308,7 @@ class CostView:
         self.updated = cost_mtime('scanned')
         host = os.uname().nodename.split('.')[0] or 'Mac'
         self.me_name = self.sync.get('me') if cfg and isinstance(self.sync.get('me'), str) else host
-        self.accounts = []   # [(工具名, 各项的百万分之一美元)]：cost_total 加起来
+        self.accounts = []   # [(工具名, 整个账号的各项, 这台设备的各项)]（百万分之一美元）：cost_total 加起来
 
     def scan_state(self):
         if self.updated:
@@ -9379,19 +9382,23 @@ class CostView:
         dy = [cost_bin(self.days, d['h']) for d in devs]
         keep = [i for i, d in enumerate(devs) if sum(r[1] for r in wk[i]) or sum(r[1] for r in dy[i])]
         if not keep:
-            self.accounts.append((tool.name, None))
+            self.accounts.append((tool.name, None, None))
             return None
         since = float(min(int(x) for i in keep for x in devs[i]['h']))   # keep 里的设备都有数据
         good = [n for n, (s, e, _) in enumerate(weeks) if e <= self.now and since <= s and e - s >= 6 * 86400]
+        good_days = [n for n, (s, e, _) in enumerate(self.days) if e <= self.now and since <= s]
         total = lambda rows, count: [[sum(rows[i][n][x] for i in keep) for x in range(7)] for n in range(count)]
         wsum, dsum = total(wk, len(weeks)), total(dy, len(self.days))
-        m, summary = cost_summary(wsum, dsum, good)
-        summary.update(average_weeks=len(good), requests=sum(r[1] for r in wsum), unpriced_requests=sum(r[6] for r in wsum))
+        m, summary = cost_summary(wsum, dsum, good, good_days)
+        summary.update(requests=sum(r[1] for r in wsum), unpriced_requests=sum(r[6] for r in wsum))
         m['day_list'] = [r[0] for r in dsum]
-        self.accounts.append((tool.name, m))
+        parts = {i: cost_summary(wk[i], dy[i], good, good_days) for i in keep}
+        # 这台设备的那一份（cost_total 的 me 加起来）；这台设备没有这个账号的记录时没有
+        mine = next((dict(parts[i][0], day_list=[r[0] for r in dy[i]]) for i in keep if devs[i]['me']), None)
+        self.accounts.append((tool.name, m, mine))
         devices = [dict({x: devs[i][x] for x in ('id', 'name', 'me', 'revoked', 'synced_epoch', 'stale')},
                         weeks_usd=[usd(r[0]) for r in wk[i]], days_usd=[usd(r[0]) for r in dy[i]],
-                        summary=cost_summary(wk[i], dy[i], good)[1]) for i in keep]
+                        summary=parts[i][1]) for i in keep]
         devices.sort(key=lambda d: (not d['me'], -d['summary']['days_usd'], d['name']))   # 这台设备在前，别的按最近 30 天的多少
         return {'currency': 'USD', 'prices_date': COST_PRICES_DATE, 'since_epoch': since,
                 'weeks': [dict(cost_period_view(p, wsum[n], n == len(weeks) - 1, since), basis=p[2]) for n, p in enumerate(weeks)],
@@ -9399,23 +9406,30 @@ class CostView:
                 'summary': summary, 'devices': devices, 'unpriced_models': ums, 'sync': sync}
 
     def total(self, tools):
-        """顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None"""
+        """顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None。
+        顶层是各账号（所有设备）加起来的，me 是各账号里这台设备的那一份加起来的"""
         if not self.on or not self.accounts:
             return None
-        ms = [(t, m) for t, m in self.accounts if m]
 
         def agg(sel):
             avg = [m['average'] for m in sel if m['average'] is not None]
+            avd = [m['average_day'] for m in sel if m['average_day'] is not None]
             return {'current_usd': usd(sum(m['current'] for m in sel)), 'weeks_usd': usd(sum(m['weeks'] for m in sel)),
-                    'average_usd': usd(sum(avg)) if avg else None, 'days_usd': usd(sum(m['days'] for m in sel)),
-                    'today_usd': usd(sum(m['today'] for m in sel))}
+                    'average_usd': usd(sum(avg)) if avg else None, 'average_day_usd': usd(sum(avd)) if avd else None,
+                    'days_usd': usd(sum(m['days'] for m in sel)), 'today_usd': usd(sum(m['today'] for m in sel))}
+
+        def part(ms):
+            """ms 是 [(工具名, 各项)]：几项统计、30 天每天、按工具分开"""
+            out = agg([m for _, m in ms])
+            out['days'] = [{'start_epoch': s, 'end_epoch': e, 'date': d, 'current': n == len(self.days) - 1,
+                            'usd': usd(sum(m['day_list'][n] for _, m in ms))} for n, (s, e, d) in enumerate(self.days)]
+            out['by_tool'] = {t: agg([m for x, m in ms if x == t]) for t in tools if t in ('claude', 'codex')}
+            return out
         lo = self.days[0][0]
         orphan = [r for k, r in (self.local.get('orphan') or {}).items() if isinstance(k, str) and COST_HOUR_RE.match(k)
                   and int(k) + 1800 >= lo and isinstance(r, list) and len(r) == 7 and all(type(x) is int for x in r)]
-        out = dict(agg([m for _, m in ms]), currency='USD', prices_date=COST_PRICES_DATE)
-        out['days'] = [{'start_epoch': s, 'end_epoch': e, 'date': d, 'current': n == len(self.days) - 1,
-                        'usd': usd(sum(m['day_list'][n] for _, m in ms))} for n, (s, e, d) in enumerate(self.days)]
-        out['by_tool'] = {t: agg([m for x, m in ms if x == t]) for t in tools if t in ('claude', 'codex')}
+        out = dict(part([(t, m) for t, m, _ in self.accounts if m]), currency='USD', prices_date=COST_PRICES_DATE)
+        out['me'] = part([(t, m) for t, _, m in self.accounts if m])
         out['scan'] = {'state': self.scan_state(), 'updated_epoch': self.updated}
         out['unattributed'] = {'days_usd': usd(sum(r[0] for r in orphan)), 'requests': sum(r[1] for r in orphan)}
         return out

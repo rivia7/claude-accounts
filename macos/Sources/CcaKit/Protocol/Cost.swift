@@ -158,7 +158,7 @@ struct CostPeriod: Decodable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// 统计：账号的 `summary`、设备的 `summary`（没有 `average_weeks`、`requests`）、`cost_total` 顶层和 `by_tool` 的几项。
+/// 统计：账号的 `summary`、设备的 `summary`（没有 `requests`）、`cost_total` 顶层、`me` 和 `by_tool` 的几项（没有 `average_weeks`、`average_days`、`requests`）。
 struct CostSummary: Decodable, Sendable, Equatable {
     /// 列出的周期加起来
     var weeksUSD = 0.0
@@ -172,6 +172,10 @@ struct CostSummary: Decodable, Sendable, Equatable {
     var daysUSD = 0.0
     /// 今天
     var todayUSD = 0.0
+    /// 过完的、不是 partial 的天平均（今天不算）；一天都没有为 nil（旧版 cca 没有，也是 nil）
+    var averageDayUSD: Double?
+    /// 按天的平均算了几天
+    var averageDays = 0
     var requests = 0
     var unpricedRequests = 0
 
@@ -182,18 +186,22 @@ struct CostSummary: Decodable, Sendable, Equatable {
         case averageWeeks = "average_weeks"
         case daysUSD = "days_usd"
         case todayUSD = "today_usd"
+        case averageDayUSD = "average_day_usd"
+        case averageDays = "average_days"
         case requests
         case unpricedRequests = "unpriced_requests"
     }
 
     init(weeksUSD: Double = 0, currentUSD: Double = 0, averageUSD: Double? = nil, averageWeeks: Int = 0, daysUSD: Double = 0,
-         todayUSD: Double = 0, requests: Int = 0, unpricedRequests: Int = 0) {
+         todayUSD: Double = 0, averageDayUSD: Double? = nil, averageDays: Int = 0, requests: Int = 0, unpricedRequests: Int = 0) {
         self.weeksUSD = weeksUSD
         self.currentUSD = currentUSD
         self.averageUSD = averageUSD
         self.averageWeeks = averageWeeks
         self.daysUSD = daysUSD
         self.todayUSD = todayUSD
+        self.averageDayUSD = averageDayUSD
+        self.averageDays = averageDays
         self.requests = requests
         self.unpricedRequests = unpricedRequests
     }
@@ -206,6 +214,8 @@ struct CostSummary: Decodable, Sendable, Equatable {
         averageWeeks = max(c.int(.averageWeeks) ?? 0, 0)
         daysUSD = max(c.double(.daysUSD) ?? 0, 0)
         todayUSD = max(c.double(.todayUSD) ?? 0, 0)
+        averageDayUSD = c.double(.averageDayUSD).map { max($0, 0) }
+        averageDays = max(c.int(.averageDays) ?? 0, 0)
         requests = max(c.int(.requests) ?? 0, 0)
         unpricedRequests = max(c.int(.unpricedRequests) ?? 0, 0)
     }
@@ -430,6 +440,8 @@ struct AccountCost: Decodable, Sendable, Equatable {
         guard let id else { return nil }
         return devices.first { $0.id == id }
     }
+    /// 这台设备（它没有这个账号的记录时没有）
+    var me: CostDevice? { devices.first(where: \.isMe) }
     /// 设备间同步的状态（cca 没给时当作只有这台设备）
     var syncState: CostSyncState { sync?.state.shown ?? .localOnly }
 }
@@ -474,30 +486,28 @@ struct CostUnattributed: Decodable, Sendable, Equatable {
     }
 }
 
-/// `cost_total`（顶层，用量统计页金额模式的页头）：所有账号加起来。各账号的周期不一样，没有按周加起来的柱子。
-/// config.json 里关掉了折合金额、没有 Claude / Codex 的官方账号时为 null（旧版 cca 没有这个字段，同样当作 null）。
-struct CostTotal: Decodable, Sendable, Equatable {
-    var currency: String
-    var pricesDate: String?
-    /// 顶层的 current_usd、weeks_usd、average_usd、days_usd、today_usd
+/// `cost_total` 的一份：所有设备的（顶层的几项、`days`、`by_tool`），或者只算这台设备的（`me` 里同样几项）。
+struct CostTotalPart: Decodable, Sendable, Equatable {
+    /// current_usd、weeks_usd、average_usd、average_day_usd、days_usd、today_usd
     var summary: CostSummary
     /// 最近 30 个本地日历日，各账号加起来
     var days: [CostPeriod]
     /// 按工具分开的同样几项（只认识的工具：`by_tool` 的键就是数据）
     var byTool: [ToolID: CostSummary]
-    var scan: CostScan
-    var unattributed: CostUnattributed?
 
     enum CodingKeys: String, CodingKey {
-        case currency, days, scan, unattributed
-        case pricesDate = "prices_date"
+        case days
         case byTool = "by_tool"
+    }
+
+    init(summary: CostSummary = CostSummary(), days: [CostPeriod] = [], byTool: [ToolID: CostSummary] = [:]) {
+        self.summary = summary
+        self.days = days
+        self.byTool = byTool
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        currency = nonEmpty(c.string(.currency)) ?? "USD"
-        pricesDate = nonEmpty(c.string(.pricesDate))
         summary = (try? CostSummary(from: decoder)) ?? CostSummary()
         days = (c.lossyArray(CostPeriod.self, .days) ?? []).sorted { $0.endEpoch < $1.endEpoch }
         var tools: [ToolID: CostSummary] = [:]
@@ -506,11 +516,42 @@ struct CostTotal: Decodable, Sendable, Equatable {
             if t.isKnown { tools[t] = v }
         }
         byTool = tools
+    }
+
+    var today: CostPeriod? { days.last(where: \.current) }
+}
+
+/// `cost_total`（顶层，用量统计页金额模式的页头）：所有账号加起来。各账号的周期不一样，没有按周加起来的柱子。
+/// config.json 里关掉了折合金额、没有 Claude / Codex 的官方账号时为 null（旧版 cca 没有这个字段，同样当作 null）。
+struct CostTotal: Decodable, Sendable, Equatable {
+    var currency: String
+    var pricesDate: String?
+    /// 所有设备的（顶层的几项、`days`、`by_tool`）
+    var all: CostTotalPart
+    /// 只算这台设备的（`me`：各账号里这台设备的那一份加起来）；旧版 cca 没有
+    var me: CostTotalPart?
+    var scan: CostScan
+    var unattributed: CostUnattributed?
+
+    enum CodingKeys: String, CodingKey {
+        case currency, me, scan, unattributed
+        case pricesDate = "prices_date"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        currency = nonEmpty(c.string(.currency)) ?? "USD"
+        pricesDate = nonEmpty(c.string(.pricesDate))
+        all = (try? CostTotalPart(from: decoder)) ?? CostTotalPart()
+        me = c.lossy(CostTotalPart.self, .me)
         scan = c.lossy(CostScan.self, .scan) ?? CostScan()
         unattributed = c.lossy(CostUnattributed.self, .unattributed)
     }
 
-    var today: CostPeriod? { days.last(where: \.current) }
+    /// 看的那一方：所有设备的，或者这台设备的（旧版 cca 没给时没有）
+    func part(_ scope: CostScope) -> CostTotalPart? {
+        scope == .all ? all : me
+    }
 }
 
 /// `cca cost sync [--now] --json`（PROTOCOL 3.5）：统计和同步得怎么样（金额本身在 `_gui state` 里）。

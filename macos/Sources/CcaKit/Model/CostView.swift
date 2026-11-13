@@ -8,20 +8,14 @@ enum StatsMode: String, Sendable, CaseIterable {
     case quota, cost
 }
 
-/// 账号页的折合金额按周还是按天看。记在 App 的设置里。
+/// 折合金额按周还是按天看（账号页、用量统计页共用）。记在 App 的设置里。
 enum CostGranularity: String, Sendable, CaseIterable {
     case week, day
 }
 
-/// 看谁的：整个账号（所有设备加起来），或者其中一台设备（设备统计里的 id）。
-enum CostScope: Hashable, Sendable {
-    case account
-    case device(String)
-
-    var deviceID: String? {
-        if case .device(let id) = self { return id }
-        return nil
-    }
+/// 折合金额看谁的（账号页、用量统计页共用）：这台设备（本机），或者所有设备加起来（整个账号）。记在 App 的设置里。
+enum CostScope: String, Sendable, CaseIterable {
+    case me, all
 }
 
 /// 一根柱子：一个周期（或者一天），和看的那一方在这一项里折了多少钱。
@@ -84,7 +78,7 @@ enum CostChart {
     static func charted(_ bars: [CostBar]) -> Bool { bars.contains { $0.usd > 0 } }
 
     /// 账号页「每周用量」的图右边留多宽：和「折合金额」的大图右边的刻度一样宽（两张图的绘图区一样宽，同一周的条上下对齐），
-    /// 那里没画图时不留
+    /// 那里没画图时不留（看本机、这台设备没有用量时也不留）
     static func gutterLabels(_ c: AccountCost?, granularity g: CostGranularity, scope: CostScope) -> [String] {
         guard let c else { return [] }
         let bars = bars(c, granularity: g, scope: scope)
@@ -100,25 +94,21 @@ enum CostChart {
         g == .week ? c.weeks : c.days
     }
 
-    /// 看的这一方还在不在（换了 state 以后那台设备可能没了）：不在了、只剩一台设备（不列设备、没有选哪台的菜单，回不去）时看整个账号
-    static func resolve(_ scope: CostScope, in c: AccountCost?) -> CostScope {
-        if let id = scope.deviceID, listsDevices(c), c?.device(id) != nil { return scope }
-        return .account
-    }
-
-    /// 柱子：整个账号用 weeks / days 的 usd，一台设备用它的 weeks_usd / days_usd（和 weeks / days 一一对应，cca 给的）
+    /// 柱子：所有设备用 weeks / days 的 usd，本机用这台设备的（这台设备没有这个账号的记录时都是 0）
     static func bars(_ c: AccountCost, granularity g: CostGranularity, scope: CostScope) -> [CostBar] {
-        let list = periods(c, g)
-        guard let id = resolve(scope, in: c).deviceID, let d = c.device(id) else {
-            return list.map { CostBar(period: $0, usd: $0.usd) }
-        }
-        let values = g == .week ? d.weeksUSD : d.daysUSD
-        return list.enumerated().map { i, p in CostBar(period: p, usd: i < values.count ? values[i] : 0) }
+        scope == .all ? periods(c, g).map { CostBar(period: $0, usd: $0.usd) } : bars(c, granularity: g, device: c.me)
     }
 
-    /// 统计：整个账号的 summary，或者那台设备的
+    /// 一台设备的柱子（本机，用量统计页各台设备那一行）：它的 weeks_usd / days_usd（和 weeks / days 一一对应，cca 给的），
+    /// 没有这台设备时都是 0。周期（日期、partial）都是账号的
+    static func bars(_ c: AccountCost, granularity g: CostGranularity, device d: CostDevice?) -> [CostBar] {
+        let values = d.map { g == .week ? $0.weeksUSD : $0.daysUSD } ?? []
+        return periods(c, g).enumerated().map { i, p in CostBar(period: p, usd: i < values.count ? values[i] : 0) }
+    }
+
+    /// 统计：整个账号的 summary，或者这台设备的（没有记录时都是 0、没有平均）
     static func summary(_ c: AccountCost, scope: CostScope) -> CostSummary {
-        resolve(scope, in: c).deviceID.flatMap { c.device($0)?.summary } ?? c.summary
+        scope == .all ? c.summary : c.me?.summary ?? CostSummary()
     }
 
     /// 横轴的范围：最右边是最晚结束的那一项（这一周、今天的结束时间）和现在里晚的那个，往左 13 周 / 30 天。
@@ -149,17 +139,21 @@ enum CostChart {
         return (count - 1 - index) % stride == 0
     }
 
-    /// 用量统计页表头的日期（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）：从今天往前每隔几周一个。位置按时间算，
-    /// 挨着两头的往里挪到 edge（字不出这一栏）；离右边那个不到 dayLabelMinWidth 的不写。隔 2、3、4、6 周里取最密、又一个都不用
-    /// 跳过的（今天常常挨着右边、往里挪了，只看一周多宽的话它左边那个会被跳过，隔得不匀）；都要跳过时用隔 6 周的。
+    /// 用量统计页表头的日期（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）：从今天往前每隔几周（按天看时每隔几天）一个。
+    /// 位置按时间算，挨着两头的往里挪到 edge（字不出这一栏）；离右边那个不到 dayLabelMinWidth 的不写。按周隔 2、3、4、6 周，
+    /// 按天隔 7、14 天，取最密、又一个都不用跳过的（今天常常挨着右边、往里挪了，只看一周多宽的话它左边那个会被跳过，隔得不匀）；
+    /// 都要跳过时用最稀的。按周从现在往前数；按天从今天那一天的正中间往前数（和下面每天的柱子对齐：横轴的最右边是今天结束的时候）。
     /// 从右往左排，第一个是今天
-    static func statsTicks(domain: ClosedRange<Double>, now: Double, width: Double, edge: Double = 18) -> [StatsTick] {
+    static func statsTicks(domain: ClosedRange<Double>, now: Double, width: Double, granularity: CostGranularity = .week,
+                           edge: Double = 18) -> [StatsTick] {
         let span = domain.upperBound - domain.lowerBound
         guard span > 0, span.isFinite, now.isFinite, width > 2 * edge else { return [] }
+        let start = granularity == .week ? now : domain.upperBound - day / 2
+        let strides = granularity == .week ? [2, 3, 4, 6].map { Double($0) * week } : [7, 14].map { Double($0) * day }
         var out: [StatsTick] = []
-        for weeks in [2, 3, 4, 6] {
+        for step in strides {
             out = []
-            var t = now, skipped = false
+            var t = start, skipped = false
             while t >= domain.lowerBound {
                 let x = min(max((t - domain.lowerBound) / span * width, edge), width - edge)
                 if out.last.map({ $0.x - x >= dayLabelMinWidth }) ?? true {
@@ -167,14 +161,14 @@ enum CostChart {
                 } else {
                     skipped = true
                 }
-                t -= Double(weeks) * week
+                t -= step
             }
             if !skipped { break }
         }
         return out
     }
 
-    /// 用量统计页一行下面要不要列各台设备：有记录的设备至少两台（只有一台时和整个账号一样）
+    /// 用量统计页一行下面要不要列各台设备（看所有设备时）：有记录的设备至少两台（只有一台时和整个账号一样）
     static func listsDevices(_ c: AccountCost?) -> Bool {
         (c?.devices.count ?? 0) >= 2
     }

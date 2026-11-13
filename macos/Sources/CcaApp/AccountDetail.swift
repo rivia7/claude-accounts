@@ -29,7 +29,7 @@ struct AccountDetail: View {
                                     UsageSection(account: a)
                                     // 图的右边留出和下面折合金额的纵轴一样宽的一栏：同一周的条上下对齐
                                     WeeklyUsageSection(account: a, gutter: cost ? CostChart.gutterLabels(
-                                        a.cost, granularity: model.costGranularity, scope: model.costScope(a.ref)) : [])
+                                        a.cost, granularity: model.costGranularity, scope: model.costScope) : [])
                                     if cost {
                                         CostSection(account: a).id(CostSection.anchor)
                                     }

@@ -188,8 +188,8 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
     // 统计
     let s = c.summary, rs = raw["summary"] as? [String: Any] ?? [:]
     check("\(n) summary 的字段类型", ["weeks_usd", "current_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(rs[$0]) }
-          && ["average_weeks", "requests", "unpriced_requests"].allSatisfy { wholeCount(rs[$0]) }
-          && (nonNegative(rs["average_usd"]) || isNull(rs["average_usd"])))
+          && ["average_weeks", "average_days", "requests", "unpriced_requests"].allSatisfy { wholeCount(rs[$0]) }
+          && (nonNegative(rs["average_usd"]) || isNull(rs["average_usd"])) && (nonNegative(rs["average_day_usd"]) || isNull(rs["average_day_usd"])))
     check("\(n) weeks_usd 是列出的周期加起来", near(s.weeksUSD, w.map(\.usd).reduce(0, +), terms: w.count), "\(s.weeksUSD)")
     check("\(n) current_usd 是当前那一项", near(s.currentUSD, current.first?.usd ?? 0, terms: 1), "\(s.currentUSD)")
     check("\(n) days_usd 是 30 天加起来", near(s.daysUSD, d.map(\.usd).reduce(0, +), terms: d.count), "\(s.daysUSD)")
@@ -206,6 +206,14 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
     check("\(n) 一项都没有时 average_usd 为 null", (s.averageUSD == nil) == (s.averageWeeks == 0))
     if strict == loose, !strict.isEmpty, let avg = s.averageUSD {
         check("\(n) average_usd 是这几项的平均", near(avg, strict.map { w[$0].usd }.reduce(0, +) / Double(strict.count), terms: strict.count),
+              "\(avg)")
+    }
+    // 按天的平均：过完的、不是 partial 的那几天（今天不算）
+    let goodDays = d.indices.filter { !d[$0].current && !d[$0].partial }
+    check("\(n) average_days 是过完的、不是 partial 的几天", s.averageDays == goodDays.count, "\(s.averageDays) vs \(goodDays.count)")
+    check("\(n) 一天都没有时 average_day_usd 为 null", (s.averageDayUSD == nil) == goodDays.isEmpty)
+    if let avg = s.averageDayUSD, !goodDays.isEmpty {
+        check("\(n) average_day_usd 是这几天的平均", near(avg, goodDays.map { d[$0].usd }.reduce(0, +) / Double(goodDays.count), terms: goodDays.count),
               "\(avg)")
     }
     // 设备
@@ -228,7 +236,8 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
         check("\(dn) 金额不小于 0", ((rw ?? []) + (rdy ?? [])).allSatisfy { nonNegative($0) })
         let ds = rd["summary"] as? [String: Any] ?? [:]
         check("\(dn) summary 的字段类型", ["weeks_usd", "current_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(ds[$0]) }
-              && (nonNegative(ds["average_usd"]) || isNull(ds["average_usd"])))
+              && ["average_weeks", "average_days"].allSatisfy { wholeCount(ds[$0]) }
+              && (nonNegative(ds["average_usd"]) || isNull(ds["average_usd"])) && (nonNegative(ds["average_day_usd"]) || isNull(ds["average_day_usd"])))
     }
     check("\(n) 每一项是各台设备加起来", w.indices.allSatisfy { i in
         near(c.devices.map { $0.weeksUSD[i] }.reduce(0, +), w[i].usd, terms: c.devices.count + 1)
@@ -240,12 +249,20 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
               && near(ds.daysUSD, dv.daysUSD.reduce(0, +), terms: d.count)
               && near(ds.currentUSD, currentIndex.map { dv.weeksUSD[$0] } ?? 0, terms: 1)
               && near(ds.todayUSD, todayIndex.map { dv.daysUSD[$0] } ?? 0, terms: 1), "\(ds)")
-        check("\(dn) 有没有平均和整个账号一样（算的是同样几项）", (ds.averageUSD == nil) == (s.averageUSD == nil))
+        check("\(dn) 有没有平均和整个账号一样（算的是同样几项、几天）", (ds.averageUSD == nil) == (s.averageUSD == nil)
+              && (ds.averageDayUSD == nil) == (s.averageDayUSD == nil) && ds.averageWeeks == s.averageWeeks && ds.averageDays == s.averageDays)
         if strict == loose, !strict.isEmpty, let avg = ds.averageUSD {
             check("\(dn) 的平均是同样几项的平均", near(avg, strict.map { dv.weeksUSD[$0] }.reduce(0, +) / Double(strict.count), terms: strict.count),
                   "\(avg)")
         }
+        if let avg = ds.averageDayUSD, !goodDays.isEmpty {
+            check("\(dn) 的平均每天是同样几天的平均", near(avg, goodDays.map { dv.daysUSD[$0] }.reduce(0, +) / Double(goodDays.count), terms: goodDays.count),
+                  "\(avg)")
+        }
     }
+    let devAvg = c.devices.compactMap(\.summary.averageUSD), devDay = c.devices.compactMap(\.summary.averageDayUSD)
+    check("\(n) 各台设备的平均加起来是整个账号的", (s.averageUSD.map { near($0, devAvg.reduce(0, +), terms: devAvg.count + 1) } ?? devAvg.isEmpty)
+          && (s.averageDayUSD.map { near($0, devDay.reduce(0, +), terms: devDay.count + 1) } ?? devDay.isEmpty))
     // 没有公开价格的模型、同步
     check("\(n) unpriced_models 是字符串数组", (raw["unpriced_models"] as? [Any])?.allSatisfy { $0 is String } == true)
     check("\(n) 有没有公开价格的请求就列出模型", s.unpricedRequests == 0 || !c.unpricedModels.isEmpty)
@@ -271,40 +288,58 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
     }
     check("\(n) currency 是 USD", raw["currency"] as? String == "USD", "\(String(describing: raw["currency"]))")
     check("\(n) prices_date 是 YYYY-MM-DD", (raw["prices_date"] as? String).flatMap { Texts.costDateParts($0) } != nil)
-    check("\(n) 金额的类型", ["current_usd", "weeks_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(raw[$0]) }
-          && (nonNegative(raw["average_usd"]) || isNull(raw["average_usd"])))
-    thirtyDays(n, t.days, raw["days"] as? [[String: Any]], now: now)
     let accounts = doc.tools.flatMap(\.accounts)
-    let costs = accounts.compactMap(\.cost)
-    func sums(_ list: [AccountCost], _ s: CostSummary, _ label: String) {
-        check("\(label) current、weeks、days、today 是各账号加起来",
-              near(s.currentUSD, list.map(\.summary.currentUSD).reduce(0, +), terms: list.count)
-              && near(s.weeksUSD, list.map(\.summary.weeksUSD).reduce(0, +), terms: list.count)
-              && near(s.daysUSD, list.map(\.summary.daysUSD).reduce(0, +), terms: list.count)
-              && near(s.todayUSD, list.map(\.summary.todayUSD).reduce(0, +), terms: list.count), "\(s)")
-        let avgs = list.compactMap(\.summary.averageUSD)
-        check("\(label) average_usd 是有平均值的账号的平均加起来，一个都没有为 null", (s.averageUSD == nil) == avgs.isEmpty
-              && (s.averageUSD.map { near($0, avgs.reduce(0, +), terms: avgs.count) } ?? true), "\(String(describing: s.averageUSD))")
-    }
-    sums(costs, t.summary, n)
-    check("\(n) 每一天是各账号那一天加起来", t.days.allSatisfy { day in
-        let parts = costs.compactMap { c in c.days.first { $0.startEpoch == day.startEpoch }?.usd }
-        return near(day.usd, parts.reduce(0, +), terms: parts.count)
-    })
     let enabled = Set(doc.tools.filter(\.enabled).map(\.id.rawValue))
-    let rawByTool = raw["by_tool"] as? [String: Any]
-    check("\(n) by_tool 是对象，只列启用了的工具", rawByTool != nil && Set(rawByTool?.keys.map { $0 } ?? []).isSubset(of: enabled),
-          (rawByTool?.keys.sorted() ?? []).joined(separator: ","))
-    for (tool, s) in t.byTool {
-        sums(accounts.filter { $0.tool == tool }.compactMap(\.cost), s, "\(n) by_tool.\(tool.rawValue)")
+    /// 一份（顶层：所有设备；me：这台设备）：rows 是各账号的那一份（工具、统计、30 天），加起来应该是 part
+    func part(_ label: String, _ raw: [String: Any], _ p: CostTotalPart, _ rows: [(tool: ToolID, s: CostSummary, days: [CostPeriod])]) {
+        check("\(label) 金额的类型", ["current_usd", "weeks_usd", "days_usd", "today_usd"].allSatisfy { nonNegative(raw[$0]) }
+              && (nonNegative(raw["average_usd"]) || isNull(raw["average_usd"])) && (nonNegative(raw["average_day_usd"]) || isNull(raw["average_day_usd"])))
+        thirtyDays(label, p.days, raw["days"] as? [[String: Any]], now: now)
+        func sums(_ list: [CostSummary], _ s: CostSummary, _ label: String) {
+            check("\(label) current、weeks、days、today 是各账号加起来",
+                  near(s.currentUSD, list.map(\.currentUSD).reduce(0, +), terms: list.count)
+                  && near(s.weeksUSD, list.map(\.weeksUSD).reduce(0, +), terms: list.count)
+                  && near(s.daysUSD, list.map(\.daysUSD).reduce(0, +), terms: list.count)
+                  && near(s.todayUSD, list.map(\.todayUSD).reduce(0, +), terms: list.count), "\(s)")
+            let avgs = list.compactMap(\.averageUSD), days = list.compactMap(\.averageDayUSD)
+            check("\(label) average_usd、average_day_usd 是有平均值的账号的平均加起来，一个都没有为 null",
+                  (s.averageUSD == nil) == avgs.isEmpty && (s.averageUSD.map { near($0, avgs.reduce(0, +), terms: avgs.count) } ?? true)
+                  && (s.averageDayUSD == nil) == days.isEmpty && (s.averageDayUSD.map { near($0, days.reduce(0, +), terms: days.count) } ?? true),
+                  "\(String(describing: s.averageUSD)) \(String(describing: s.averageDayUSD))")
+        }
+        sums(rows.map(\.s), p.summary, label)
+        check("\(label) 每一天是各账号那一天加起来", p.days.allSatisfy { day in
+            let parts = rows.compactMap { r in r.days.first { $0.startEpoch == day.startEpoch }?.usd }
+            return near(day.usd, parts.reduce(0, +), terms: parts.count)
+        })
+        let rawByTool = raw["by_tool"] as? [String: Any]
+        check("\(label) by_tool 是对象，只列启用了的工具", rawByTool != nil && Set(rawByTool?.keys.map { $0 } ?? []).isSubset(of: enabled),
+              (rawByTool?.keys.sorted() ?? []).joined(separator: ","))
+        for (tool, s) in p.byTool {
+            sums(rows.filter { $0.tool == tool }.map(\.s), s, "\(label) by_tool.\(tool.rawValue)")
+        }
+        if !p.byTool.isEmpty {
+            let parts = Array(p.byTool.values)
+            check("\(label) by_tool 加起来是总数", near(p.summary.currentUSD, parts.map(\.currentUSD).reduce(0, +), terms: parts.count)
+                  && near(p.summary.weeksUSD, parts.map(\.weeksUSD).reduce(0, +), terms: parts.count)
+                  && near(p.summary.daysUSD, parts.map(\.daysUSD).reduce(0, +), terms: parts.count)
+                  && near(p.summary.todayUSD, parts.map(\.todayUSD).reduce(0, +), terms: parts.count))
+        }
     }
-    if !t.byTool.isEmpty {
-        let parts = Array(t.byTool.values)
-        check("\(n) by_tool 加起来是总数", near(t.summary.currentUSD, parts.map(\.currentUSD).reduce(0, +), terms: parts.count)
-              && near(t.summary.weeksUSD, parts.map(\.weeksUSD).reduce(0, +), terms: parts.count)
-              && near(t.summary.daysUSD, parts.map(\.daysUSD).reduce(0, +), terms: parts.count)
-              && near(t.summary.todayUSD, parts.map(\.todayUSD).reduce(0, +), terms: parts.count))
+    part(n, raw, t.all, accounts.compactMap { a in a.cost.map { (a.tool, $0.summary, $0.days) } })
+    // me：各账号里这台设备的那一份加起来（这台设备没有记录的账号不算）；按工具分开的工具和顶层一样
+    guard let rawMe = raw["me"] as? [String: Any], let me = t.me else {
+        check("\(n) 有 me", false)
+        return
     }
+    part(n + " me", rawMe, me, accounts.compactMap { a in
+        a.cost.flatMap { c in c.me.map { d in (a.tool, d.summary, c.days.enumerated().map { i, p in
+            CostPeriod(startEpoch: p.startEpoch, endEpoch: p.endEpoch, date: p.date, current: p.current, usd: i < d.daysUSD.count ? d.daysUSD[i] : 0)
+        }) } }
+    })
+    check("\(n) me 和顶层的工具一样、天一样", Set(me.byTool.keys) == Set(t.all.byTool.keys) && me.days.map(\.startEpoch) == t.all.days.map(\.startEpoch))
+    check("\(n) 这台设备的不比所有设备的多", me.summary.weeksUSD <= t.all.summary.weeksUSD + 0.01 && me.summary.daysUSD <= t.all.summary.daysUSD + 0.01
+          && zip(me.days, t.all.days).allSatisfy { $0.usd <= $1.usd + 0.01 })
     let scan = raw["scan"] as? [String: Any]
     check("\(n) scan 的字段类型", scan?["state"] is String && (isNumber(scan?["updated_epoch"]) || isNull(scan?["updated_epoch"])))
     if t.scan.state == .ready { check("\(n) 统计过（ready）就有 updated_epoch", t.scan.updatedEpoch != nil) }
@@ -821,7 +856,9 @@ func wrongTypes(_ x: Any) -> Any {
                              "currency", "prices_date", "date"]
     if var d = x as? [String: Any] {
         for (k, v) in d {
-            if numeric.contains(k) {
+            if v is [String: Any] {   // 同一个名字的对象（cost_total 的 me，设备的 me 是布尔）不是这里说的字段
+                d[k] = wrongTypes(v)
+            } else if numeric.contains(k) {
                 d[k] = "abc"
             } else if boolean.contains(k) {
                 d[k] = "yes"
@@ -930,7 +967,7 @@ func stateCounts(_ s: StateDoc) -> [Int] {
     return [s.tools.count, s.routing?.slots.count ?? -1, s.routing?.nodes.count ?? -1, s.notices.count, s.errors.count]
         + s.tools.map(\.accounts.count)
         + [costs.count, costs.map(\.weeks.count).reduce(0, +), costs.map(\.days.count).reduce(0, +), costs.map(\.devices.count).reduce(0, +),
-           s.costTotal?.days.count ?? -1, s.costTotal?.byTool.count ?? -1]
+           s.costTotal?.all.days.count ?? -1, s.costTotal?.all.byTool.count ?? -1, s.costTotal?.me?.days.count ?? -1, s.costTotal?.me?.byTool.count ?? -1]
 }
 
 /// 目录里每个文件按 kind（usage 旧版没有 kind 时看文件名）分派。

@@ -246,11 +246,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
        "tokens": {"input": 20100, "output": 160200, "cache_read": 40100223, "cache_write": 801100}}
     ],
     "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
-                "days_usd": 640.2, "today_usd": 31.2, "requests": 9120, "unpriced_requests": 4},
+                "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30, "requests": 9120, "unpriced_requests": 4},
     "devices": [
       {"id": "SHA256:…", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041000.0, "stale": false,
        "weeks_usd": [182.41], "days_usd": [31.2],
-       "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "days_usd": 640.2, "today_usd": 31.2}}
+       "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
+                   "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30}}
     ],
     "unpriced_models": ["codex-auto-review"],
     "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "missing": [{"name": "carol-air", "used_epoch": 1794000000.0}]}
@@ -267,13 +268,17 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   - `partial`：这一项开始时还没有记录（`since_epoch` 落在它里面或者后面），数字可能偏小。`since_epoch`：这个账号最早的一条记录
     （所有设备里最早的）。会话记录里带账号信息才算得进来：Claude Code 2.1.317、Codex 0.157 起才有，更早的、Claude 桌面 App 里的会话算不进来。
   - `summary`：`weeks_usd` 列出的周期加起来，`current_usd` 当前这一项，`average_usd` 过完的、不是 `partial`、至少 6 天的周期平均
-    （`average_weeks` 是算了几项：一项都没有时 `average_usd` 是 null、`average_weeks` 是 0），`days_usd` 30 天加起来，`today_usd` 今天，`requests` / `unpriced_requests` 列出的周期加起来。
+    （`average_weeks` 是算了几项：一项都没有时 `average_usd` 是 null、`average_weeks` 是 0），`days_usd` 30 天加起来，`today_usd` 今天，
+    `average_day_usd` 过完的、不是 `partial` 的那几天的平均（今天不算；`average_days` 是算了几天，一天都没有时 null 和 0；
+    旧版 cca 没有这两项，App 当作没有平均每天、不写），`requests` / `unpriced_requests` 列出的周期加起来。
   - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列；只有这台设备时只有一项。
     `id`：设备统计里的设备指纹，这台设备没开设备统计时是 `"local"`；`name`：设备统计里的名字（维护者给 deploy key 起的别名），
     这台设备没开时是主机名。`me`：这台设备。`revoked`：维护者撤销了这台设备的 key（数字是撤销前同步来的，照样算进合计；
     和现在某台设备同名的当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
     这台设备是最后一次统计的时间），`stale`：超过 36 小时没同步上来（那台设备没开、断网、cca 太旧），之后用的可能还没算进来。
-    `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`）。
+    `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`、`unpriced_requests`）。平均按整个账号的那几周、那几天算
+    （`average_weeks`、`average_days` 和账号的一样），所以各台设备的平均加起来就是整个账号的（旧版 cca 的设备 `summary` 没有
+    `average_weeks`、`average_days`、`average_day_usd`）。App 看「本机」时用 `me` 为真的那一台（这台设备没有这个账号的记录时没有，App 当作都是 0）。
   - `sync`：设备间同步的状态。`state`：`ok`（同步过，`checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
     `local_only`（只有这台设备：账号不在维护者的映射里，或者这台设备没配置设备统计）| `off`（config.json 里写了 `"presence": false`）|
     `not_logged_in`（这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的）| `old_server`（维护者的服务器还不支持，
@@ -314,18 +319,27 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 ```json
 "cost_total": {
   "currency": "USD", "prices_date": "2026-11-13",
-  "current_usd": 340.2, "weeks_usd": 3021.5, "average_usd": 812.0, "days_usd": 2101.0, "today_usd": 33.0,
+  "current_usd": 340.2, "weeks_usd": 3021.5, "average_usd": 812.0, "average_day_usd": 70.1, "days_usd": 2101.0, "today_usd": 33.0,
   "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 33.0}],
-  "by_tool": {"claude": {"current_usd": 300.1, "weeks_usd": 2800.2, "average_usd": 760.0, "days_usd": 1950.0, "today_usd": 30.0},
-              "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "days_usd": 151.0, "today_usd": 3.0}},
+  "by_tool": {"claude": {"current_usd": 300.1, "weeks_usd": 2800.2, "average_usd": 760.0, "average_day_usd": 65.0, "days_usd": 1950.0, "today_usd": 30.0},
+              "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "average_day_usd": 5.1, "days_usd": 151.0, "today_usd": 3.0}},
+  "me": {
+    "current_usd": 182.41, "weeks_usd": 1812.4, "average_usd": 430.3, "average_day_usd": 41.2, "days_usd": 1240.2, "today_usd": 31.2,
+    "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 31.2}],
+    "by_tool": {"claude": {"current_usd": 182.41, "weeks_usd": 1812.4, "average_usd": 430.3, "average_day_usd": 41.2, "days_usd": 1240.2, "today_usd": 31.2},
+                "codex": {"current_usd": 0.0, "weeks_usd": 0.0, "average_usd": null, "average_day_usd": null, "days_usd": 0.0, "today_usd": 0.0}}
+  },
   "scan": {"state": "ready", "updated_epoch": 1794041000.0},
   "unattributed": {"days_usd": 12.3, "requests": 40}
 }
 ```
 
 - 各账号的周期不一样（额度窗口各自的重置时间），所以没有按周加起来的柱子：`current_usd` 是各账号当前那一项加起来，`weeks_usd`、`days_usd`、
-  `today_usd` 同理；`average_usd` 是有平均值的账号的平均加起来（一个都没有为 null）。`days[]` 是最近 30 个本地日历日，各账号加起来（日期是共同的）。
+  `today_usd` 同理；`average_usd`、`average_day_usd` 是有平均值的账号的平均加起来（一个都没有为 null）。`days[]` 是最近 30 个本地日历日，
+  各账号加起来（日期是共同的）。
 - `by_tool`：按工具分开的同样几项，只列启用了的工具。
+- `me`：只算这台设备的同样几项（`days`、`by_tool` 也有，工具和顶层的一样）：各账号里 `me` 为真的那台设备的 `summary`、`days_usd` 加起来，
+  这台设备没有记录的账号不算（App 的「本机」）。顶层的几项是所有设备的。旧版 cca 没有这一项，App 的本机合计写「—」。
 - `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
   `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
 - `unattributed`：最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”这一句用。
