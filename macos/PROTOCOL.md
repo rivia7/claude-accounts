@@ -31,7 +31,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒、
-  `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）。
+  `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
+  `cost sync` 全局一次一个。
 - `app`、`web`、`billing`、`limit-resets`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -41,7 +42,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
   `codex.json`、`agy.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
   `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
-  App 看不见时也要马上重新读 `state`），以及 `bin/cca`（换了就重新 `hello`）；
+  App 看不见时也要马上重新读 `state`），`cost/local.json`、`cost/remote.json`、`cost/sync.json`（折合金额：这台设备的统计、
+  别的设备同步来的、同步的状态，见 2.2 的 `cost`；`cost/` 里别的文件不算），以及 `bin/cca`（换了就重新 `hello`）；
   桌面 App 的 bundle id：Claude App `com.anthropic.claudefordesktop`、ChatGPT App `com.openai.codex`（它们启动、退出时刷新 `app.running`）。
 
 ## 2. 只读的查询：`cca _gui hello | state | live`
@@ -74,6 +76,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `install_cli`：有 `cca [codex|agy] install-cli`（辅助安装：用 claude / codex / agy 的官方安装脚本装命令，先直连，不通时问过再经内置代理的一个节点装）。
   App 在账号的 `can_why.cli` 是 `tool_missing` 的地方（账号页“没装 X 命令”旁边）给「安装 X 命令…」，`fail` 的 `tool_missing` 也补救成它，都交给终端（6）。
   没有这个字段（旧版 cca）时都不给。
+- `cost`：有折合金额（`_gui state` 的 `cost`、`cost_total`，`cca cost sync --json`，见 2.2、3.5）。没有这个字段（旧版 cca）时
+  App 不显示折合金额、不调 `cost sync`。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
   （旧版 cca 没有 `tools.agy`，当作没启用）。`bin` 是找到的 `claude` / `codex` / `agy`，没装为 null。App 只认识的工具才显示，`tools` 里别的键忽略。
@@ -117,7 +121,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     {"id": "codex", "label": "Codex", "app_label": "ChatGPT App", "cli_prefix": ["codex"], "enabled": false, "bin": null,
      "app": {"installed": false, "path": null}, "chrome": true, "settings_problems": [], "errors": [], "last": null, "accounts": []},
     {"id": "agy", "label": "Antigravity", "app_label": "", "cli_prefix": ["agy"],
-     "features": {"app": false, "api": false, "usage": false}, "enabled": false, "bin": null,
+     "features": {"app": false, "api": false, "usage": false, "cost": false}, "enabled": false, "bin": null,
      "app": {"installed": false, "path": null}, "chrome": true, "settings_problems": [], "errors": [], "last": null, "accounts": []}
   ]
 }
@@ -125,8 +129,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 工具（`tools[]`，顺序固定：claude、codex、agy；`codex.json`、`agy.json` 不存在时 `enabled` 为 false、`accounts` 是空的）：
 
-- `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）。Claude、Codex 都是 true，
-  Antigravity 都是 false：不显示桌面 App、添加第三方 API 账号、用量（用量统计页也不算它）。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有。
+- `features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）、折合金额（`cost`）。Claude、Codex 都是 true，
+  Antigravity 都是 false：不显示桌面 App、添加第三方 API 账号、用量（用量统计页也不算它）。旧版 cca 没有这一项：Antigravity 当作都没有，别的都有
+  （`cost` 除外：没有这个键当作没有）。
 
 账号（`tools[].accounts[]`，顺序就是账号表的顺序）：
 
@@ -148,12 +153,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
               "from_device": "dan-air", "sync_error": null},
   "usage": { "…用量条目，见 3.1…" },
   "usage_weeks": { "…每周用量，见下面…" },
+  "cost": { "…折合金额，见下面…" },
   "health": { "…出口检测结果，见 3.3…" }
 }
 ```
 
 第三方 API 账号：`kind: "api"`、`login: "api"`、`email: ""`、`plan: ""`、`plan_tier: ""`、`badge: null`、`api: {"host": "api.example.com", "model": "model-x"}`
-（**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage`、`usage_weeks` 恒为 null。
+（**绝不**带 key）；直连的没有端口：`node`、`port`、`slot`、`group` 都是 null；走节点的照常有。`usage`、`usage_weeks`、`cost` 恒为 null。
 
 - `login`：`logged_in` | `logged_out` | `email_mismatch`（登录的不是这个账号，`login_email` 是实际登录的）| `api`。
 - `plan`：套餐的显示名（`Max`、`Pro 200`……），不知道为 `""`。
@@ -181,6 +187,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `devices` 是账号页有没有「设备」一节（3.4）：映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
   config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
   `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
+  `cost` 是账号页有没有「折合金额」一节、用量统计页的金额模式里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
+  config.json 里没写 `"cost": false`。没登录的也是 true（照样显示以前记下的）。同样没有对应的 `can_why`；旧版 cca 没有这一项，当作没有。
 - `api_key`：存没存 API key（4.10）。官方账号的是**记下备查**的（比如控制台里建的 key：只存进这台 Mac 的钥匙串，cca 绝不拿它登录或启动账号，
   那样会变成按量计费）；第三方 API 账号的是启动要用的那把。`saved`：存了没有（第三方 API 账号换了服务商、和存的时候域名不一样的算没存）；
   `hint`：掩码，存的时候 cca 算好的（开头 8 个字符里最后一个 `-` 以前的前缀 + `…` + 最后 4 个字符，例如 `sk-ant-…x7Qa`；短于 24 个字符的 key
@@ -218,6 +226,62 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （一周都没过完时为 null），`maxed` 用完（100% 及以上）的几周，`under_half` 没用到一半的几周。
 
   App 只排版、不重算：条的高低、哪一周填灰色、统计的数字都照这里的。
+- `cost`：折合金额（账号页的「折合金额」、用量统计页的金额模式）：这个账号用 Claude Code / Codex 干的活，按官方 API 的标价折成美元，
+  **不是实际花费**（订阅不按这个收费），只给 `can.cost` 为真的账号。cca 在后台读共享的会话记录（`~/.claude/projects`、`~/.codex/sessions`，
+  只取用量数字），按登录的账号身份、按小时累计，价格表写在 cca 里（`prices_date` 是核实价格的日期）。映射里的官方账号、开着设备统计时，
+  各台设备算的加密后经设备统计的服务器交换（`sync`），这里是所有设备加起来的。还没有任何记录（还没统计过、这个账号没用过）为 null。
+  `state` 只读：读 cca 已经统计好的，不现读会话记录；要更新就运行 `cca cost sync --json`（3.5）。
+
+  ```json
+  "cost": {
+    "currency": "USD", "prices_date": "2026-11-13", "since_epoch": 1793750400.0,
+    "weeks": [
+      {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "basis": "quota", "current": true, "partial": false,
+       "usd": 182.41, "requests": 2210, "unpriced_requests": 0,
+       "tokens": {"input": 120334, "output": 802112, "cache_read": 210334112, "cache_write": 4011223}}
+    ],
+    "days": [
+      {"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "partial": false,
+       "usd": 31.2, "requests": 410, "unpriced_requests": 0,
+       "tokens": {"input": 20100, "output": 160200, "cache_read": 40100223, "cache_write": 801100}}
+    ],
+    "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
+                "days_usd": 640.2, "today_usd": 31.2, "requests": 9120, "unpriced_requests": 4},
+    "devices": [
+      {"id": "SHA256:…", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041000.0, "stale": false,
+       "weeks_usd": [182.41], "days_usd": [31.2],
+       "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "days_usd": 640.2, "today_usd": 31.2}}
+    ],
+    "unpriced_models": ["codex-auto-review"],
+    "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "missing": [{"name": "carol-air", "used_epoch": 1794000000.0}]}
+  }
+  ```
+
+  - `weeks[]`：按时间排好、首尾相接，最多 13 项，只列结束在最近 12 周里的（和 `usage_weeks` 同一个范围）。一项是一个周期：
+    有 `usage_weeks` 记下的本周额度窗口的地方用它（`basis: "quota"`，和每周用量的柱子对得上），没有的时段按本地时间周一零点切
+    （`basis: "calendar"`）；不到一天的零头并进相邻的那一项。`current`：还没过完的那一项（最后一项）。
+  - `days[]`：最近 30 个本地日历日（夏令时的那天是 23 或 25 小时），最后一项是今天（`current`）。`date` 是本地日期，App 只拿来显示。
+  - 用量按小时累计，跨过边界的那一个小时整个算在它的中点所在的那一项里（半小时时区的零点前后最多差一个小时的用量）。
+  - `usd`：这一项折成多少美元（小数，App 自己按位数显示）；`requests` 请求数；`unpriced_requests`：其中没有公开价格的模型的请求数
+    （只计数、不算钱，模型名在 `unpriced_models`）；`tokens`：输入（不含缓存）、输出、缓存读、缓存写的 token 数，只给账号合计、不给每台设备。
+  - `partial`：这一项开始时还没有记录（`since_epoch` 落在它里面或者后面），数字可能偏小。`since_epoch`：这个账号最早的一条记录
+    （所有设备里最早的）。会话记录里带账号信息才算得进来：Claude Code 2.1.317、Codex 0.157 起才有，更早的、Claude 桌面 App 里的会话算不进来。
+  - `summary`：`weeks_usd` 列出的周期加起来，`current_usd` 当前这一项，`average_usd` 过完的、不是 `partial`、至少 6 天的周期平均
+    （`average_weeks` 是算了几项：一项都没有时 `average_usd` 是 null、`average_weeks` 是 0），`days_usd` 30 天加起来，`today_usd` 今天，`requests` / `unpriced_requests` 列出的周期加起来。
+  - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列；只有这台设备时只有一项。
+    `id`：设备统计里的设备指纹，这台设备没开设备统计时是 `"local"`；`name`：设备统计里的名字（维护者给 deploy key 起的别名），
+    这台设备没开时是主机名。`me`：这台设备。`revoked`：维护者撤销了这台设备的 key（数字是撤销前同步来的，照样算进合计；
+    和现在某台设备同名的当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
+    这台设备是最后一次统计的时间），`stale`：超过 36 小时没同步上来（那台设备没开、断网、cca 太旧），之后用的可能还没算进来。
+    `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`）。
+  - `sync`：设备间同步的状态。`state`：`ok`（同步过，`checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
+    `local_only`（只有这台设备：账号不在维护者的映射里，或者这台设备没配置设备统计）| `off`（config.json 里写了 `"presence": false`）|
+    `not_logged_in`（这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的）| `old_server`（维护者的服务器还不支持，
+    要维护者重新部署；显示上次同步来的，一般只有这台设备的）| `error`（最近一次没同步成，`message` 是给人看的原因，显示上次同步来的）。不认识的值当 `error` 显示。
+    `missing`：30 天内用过这个账号、却没同步过金额的设备（多半是 cca 太旧），`used_epoch` 是它最近一次用这个账号的时间；没有为 `[]`。
+    合计里不含它们的用量：App 要说明“还有 N 台设备没有算进来”。
+
+  App 只排版、不重算：柱的高低、哪一根是浅色（`partial`）、平均和合计都照这里的。
 - `health`：最近一次的出口检测结果（启动、`cca check` 时记下的），从没测过为 null。
 
 `config`：
@@ -243,6 +307,28 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `notices[]`：只读对账时“本来会做”的改动，下一次真正运行 cca 时会写进去：
 `{"code": "policy_added", "tool", "key", "node"}`、`{"code": "policy_alias", "tool", "key"（新键）, "old_key"}`、
 `{"code": "policy_pinned", "tool", "key", "node", "old_node"}`、`{"code": "nodes_filled", "node"}`。
+
+`cost_total`（顶层，用量统计页金额模式的页头）：所有账号的折合金额加起来。config.json 里写了 `"cost": false`、没有 Claude / Codex 的官方账号时为 null
+（旧版 cca 没有这个字段，同样当作 null）。
+
+```json
+"cost_total": {
+  "currency": "USD", "prices_date": "2026-11-13",
+  "current_usd": 340.2, "weeks_usd": 3021.5, "average_usd": 812.0, "days_usd": 2101.0, "today_usd": 33.0,
+  "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 33.0}],
+  "by_tool": {"claude": {"current_usd": 300.1, "weeks_usd": 2800.2, "average_usd": 760.0, "days_usd": 1950.0, "today_usd": 30.0},
+              "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "days_usd": 151.0, "today_usd": 3.0}},
+  "scan": {"state": "ready", "updated_epoch": 1794041000.0},
+  "unattributed": {"days_usd": 12.3, "requests": 40}
+}
+```
+
+- 各账号的周期不一样（额度窗口各自的重置时间），所以没有按周加起来的柱子：`current_usd` 是各账号当前那一项加起来，`weeks_usd`、`days_usd`、
+  `today_usd` 同理；`average_usd` 是有平均值的账号的平均加起来（一个都没有为 null）。`days[]` 是最近 30 个本地日历日，各账号加起来（日期是共同的）。
+- `by_tool`：按工具分开的同样几项，只列启用了的工具。
+- `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
+  `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
+- `unattributed`：最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”这一句用。
 
 `can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）| `unsupported`（Antigravity）；
 `web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
@@ -401,12 +487,35 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
   `can.devices` 为假时 App 本来就不会调用。
 - 这台 Mac 自己的上报不经 App：经 cca 启动映射里的账号（命令行会话、`cca app`）时 cca 在后台起一个上报进程，会话都关了它自己退出。
 
+### 3.5 `cca cost sync [--now] --json`：统计折合金额
+
+不带 `codex` 前缀（一次统计 Claude 和 Codex 两个工具）。先在前台把共享的会话记录里新增的部分读进来（第一次要全读一遍，可能要几十秒；
+之后一般不到一秒），再和别的设备同步（映射里的账号、开着设备统计时；没开就跳过）。结果在 `_gui state` 的 `cost`、`cost_total` 里，
+这里只说统计和同步得怎么样：
+
+```json
+{
+  "version": 1, "kind": "cost_sync", "generated_epoch": 1794042000.0,
+  "scan": {"state": "ready", "updated_epoch": 1794042000.0, "files": 190, "read_bytes": 123456, "records": 120, "first": false},
+  "sync": {"state": "ok", "message": null, "checked_epoch": 1794042000.0}
+}
+```
+
+- `scan`：`files` 看了几个会话记录文件，`read_bytes` 这次读了多少字节，`records` 这次新算进来几条用量，`first` 这次是不是第一次全读。
+- `sync.state`：`ok` | `skipped`（不用同步：没有映射里的账号、没开设备统计）| `old_server` | `error`（`message` 是原因）| `waiting`（上次失败了，
+  还没到重试的时候；`--now` 不等）。每个账号的同步状态在 `_gui state` 的 `cost.sync`。
+- 退出码：0 统计好了（同步失败也是 0，看 `sync`）；1 没统计成（`fail` 事件的 `code` 是 `cost_unavailable`，`message` 是原因，比如读不了、
+  另一个统计一直没结束）；2 用不了（`cost_off`：config.json 里写了 `"cost": false`，或者没有 Claude / Codex 的官方账号）。
+- App 何时运行：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（用量统计页的金额模式、账号页的「折合金额」）时每 5 分钟一次，
+  看不见时每 30 分钟一次（低优先级；用户 15 分钟没碰电脑、过热时不跑）；`scan.state` 是 `never` 时马上跑一次。用户点「刷新」时带 `--now`，不降优先级。
+  会话结束、`cca usage`、`cca devices` 时 cca 自己也会在后台统计（最多 5 分钟一次），App 看 `cost/local.json`、`remote.json`、`sync.json` 变了就重读 `state`（见 1）。
+
 ## 4. 事件和同意（`CCA_EVENTS`、`CCA_GRANT`）
 
 ### 4.1 事件文件
 
 运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
-`key --forget`）、检查更新（`update --check --json`）、查设备（`devices --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+`key --forget`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -429,7 +538,8 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
-  `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）。
+  `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
+  `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。

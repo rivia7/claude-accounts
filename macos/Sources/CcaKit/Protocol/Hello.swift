@@ -18,6 +18,9 @@ struct HelloDoc: CcaDocument, Equatable {
     /// 有 `cca [codex|agy] install-cli`（辅助安装：用官方安装脚本装 claude / codex / agy 命令，直连不通时问过再经内置代理装）；
     /// 旧版 cca 没有这个字段，“没装 X 命令”的地方不给「安装」
     var installCLI: Int?
+    /// 有折合金额（`_gui state` 的 `cost`、`cost_total`，`cca cost sync --json`，PROTOCOL 2.2、3.5）；旧版 cca 没有这个字段，
+    /// App 不显示折合金额、不调 `cost sync`（版本不是 CostAPI.version 时也一样）
+    var cost: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -28,7 +31,7 @@ struct HelloDoc: CcaDocument, Equatable {
     var gui: HelloGUI?
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, api, prompt, reorder, forms, dock
+        case version, kind, api, prompt, reorder, forms, dock, cost
         case installCLI = "install_cli"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
@@ -47,6 +50,7 @@ struct HelloDoc: CcaDocument, Equatable {
         forms = c.int(.forms)
         dock = c.int(.dock)
         installCLI = c.int(.installCLI)
+        cost = c.int(.cost)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true

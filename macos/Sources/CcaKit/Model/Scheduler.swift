@@ -89,8 +89,28 @@ enum PolicyPolling {
     }
 }
 
+/// 自动统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：看得见金额时（用量统计页的金额模式、账号页的「折合金额」）5 分钟一次，
+/// 看不见时 30 分钟一次；还没统计过（`scan.state` 是 never）时马上跑一次。不另开定时器：跟着查用量的那一下（每分钟一次）看到没到期，
+/// 用户走开了、系统过热时一样不跑。上次统计的时间取 cca 给的（`scan.updated_epoch`：会话结束时 cca 自己也会统计）和 App 上次试的里晚的那个，
+/// 没统计成也按间隔重试。
+enum CostPolling {
+    static let visibleInterval: TimeInterval = 5 * 60
+    static let hiddenInterval: TimeInterval = 30 * 60
+
+    static func interval(visible: Bool) -> TimeInterval {
+        visible ? visibleInterval : hiddenInterval
+    }
+
+    /// lastAttempt：App 上次跑 `cost sync` 的时间（没跑过是 nil）；updated：cca 上次统计的时间；never：cca 说还没统计过
+    static func isDue(lastAttempt: Double?, updated: Double?, never: Bool, visible: Bool, now: Double) -> Bool {
+        if never && lastAttempt == nil { return true }
+        let last = max(lastAttempt ?? 0, never ? 0 : updated ?? 0)
+        return now - last >= interval(visible: visible)
+    }
+}
+
 /// App 的定时器。都带容差，让系统把唤醒合在一起：
-/// - 用量和网络出口：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling）；
+/// - 用量、网络出口和折合金额：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling、CostPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
 /// - 账号页的「设备」看得见时马上查一次，之后每 60 秒一次（问维护者的服务器，很轻）；
 /// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；定时器自己不发安装命令（允许自动更新时由 cca 在检查里顺带装上）。

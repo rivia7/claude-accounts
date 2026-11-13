@@ -85,7 +85,40 @@ enum Snapshot {
                 m.selection = .clientUpdates
             },
             Scene(name: "stats") { m in
+                m.statsMode = .quota
                 m.selection = .usageStats
+            },
+            // 折合金额：用量统计页的金额模式（普通、宽窗口），账号页的「折合金额」（按周、按日、看一台设备、还没有记录、ChatGPT 账号）
+            Scene(name: "stats-cost") { m in
+                m.statsMode = .cost
+                m.selection = .usageStats
+            },
+            Scene(name: "stats-cost-wide") { m in
+                window.setContentSize(NSSize(width: 1680, height: 1000))
+                m.statsMode = .cost
+                m.selection = .usageStats
+            },
+            Scene(name: "account-cost") { m in
+                m.costGranularity = .week
+                if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
+            },
+            Scene(name: "account-cost-day") { m in
+                m.costGranularity = .day
+                if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
+            },
+            Scene(name: "account-cost-device") { m in
+                m.costGranularity = .week
+                if let a = m.accounts(.claude).first(where: { ($0.cost?.devices.count ?? 0) >= 2 }) {
+                    m.showCost(a.ref, device: a.cost?.devices.first(where: { !$0.isMe })?.id)
+                }
+            },
+            Scene(name: "account-cost-empty") { m in
+                if let r = first(.claude, { $0.can.cost && $0.cost == nil }) { m.showCost(r) }
+            },
+            Scene(name: "account-cost-codex") { m in
+                guard m.visibleTools.contains(.codex) else { return }
+                m.costGranularity = .week
+                if let r = first(.codex, { $0.cost != nil }) { m.showCost(r) }
             },
             // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
             Scene(name: "pinned") { m in
@@ -98,6 +131,7 @@ enum Snapshot {
             .split(separator: ",").map(String.init))
         let appearances: [(String, NSAppearance.Name)] = [("light", .aqua), ("dark", .darkAqua)]
         for scene in scenes where only.isEmpty || only.contains(scene.name) {
+            window.setContentSize(size)   // 宽窗口的场景自己再放大
             scene.apply(model)
             if scene.name == "routing" || scene.name == "office" { model.refreshLive() }
             for (label, name) in appearances {
@@ -109,7 +143,12 @@ enum Snapshot {
         // 显示细节时的账号页、分流页
         if only.isEmpty || only.contains("details") {
             guide.toggleDetails()
-            for (scene, apply) in [("claude-details", scenes[0].apply), ("routing-details", scenes[3].apply)] {
+            let costDetails: @MainActor (AppModel) -> Void = { m in
+                m.costGranularity = .week
+                if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
+            }
+            for (scene, apply) in [("claude-details", scenes[0].apply), ("routing-details", scenes[3].apply),
+                                   ("account-cost-details", costDetails)] {
                 apply(model)
                 NSApp.appearance = NSAppearance(named: .aqua)
                 try? await Task.sleep(nanoseconds: 900_000_000)

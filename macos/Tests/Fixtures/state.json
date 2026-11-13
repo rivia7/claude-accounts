@@ -186,6 +186,47 @@
       }
     ]
   },
+  "cost_total": {
+    "currency": "USD", "prices_date": "2026-11-01", "current_usd": 1324.9, "weeks_usd": 18160.52, "average_usd": 2048.52, "days_usd": 8874.43, "today_usd": 96.83,
+    "days": [
+      {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "usd": 345.39},
+      {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "usd": 177.4},
+      {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "usd": 189.31},
+      {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "usd": 367.1},
+      {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "usd": 398.15},
+      {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "usd": 353.62},
+      {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "usd": 334.44},
+      {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "usd": 368.73},
+      {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "usd": 198.12},
+      {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "usd": 202.34},
+      {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "usd": 424.95},
+      {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "usd": 433.87},
+      {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "usd": 386.04},
+      {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "usd": 408.86},
+      {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "usd": 396.95},
+      {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "usd": 208.24},
+      {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "usd": 179.79},
+      {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "usd": 368.71},
+      {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "usd": 316.63},
+      {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "usd": 315.32},
+      {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "usd": 303.18},
+      {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "usd": 306.33},
+      {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "usd": 157.25},
+      {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "usd": 143.06},
+      {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "usd": 304.72},
+      {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "usd": 293.66},
+      {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "usd": 290.11},
+      {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "usd": 317.52},
+      {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "usd": 287.81},
+      {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "usd": 96.83}
+    ],
+    "by_tool": {
+      "claude": {"current_usd": 780.59, "weeks_usd": 12733.52, "average_usd": 1460.87, "days_usd": 5553.9, "today_usd": 66.29},
+      "codex": {"current_usd": 544.31, "weeks_usd": 5427.0, "average_usd": 587.65, "days_usd": 3320.53, "today_usd": 30.54}
+    },
+    "scan": {"state": "ready", "updated_epoch": 1794041880.0},
+    "unattributed": {"days_usd": 12.3, "requests": 40}
+  },
   "tools": [
     {
       "id": "claude",
@@ -199,6 +240,7 @@
         "path": "/Applications/Claude.app"
       },
       "chrome": true,
+      "features": {"app": true, "api": true, "usage": true, "cost": true},
       "settings_problems": [],
       "errors": [],
       "last": "工作(bob@example.com)",
@@ -246,7 +288,8 @@
             "cli": true,
             "policy_lock": false,
             "devices": true,
-            "api_key": true
+            "api_key": true,
+            "cost": true
           },
           "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1793955600.0,
                       "from_device": "dan-air", "sync_error": null},
@@ -267,6 +310,65 @@
               {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 41, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
             ],
             "summary": {"weeks": 11, "average_percent": 84, "maxed": 3, "under_half": 0}
+          },
+          "cost": {
+            "currency": "USD", "prices_date": "2026-11-01", "since_epoch": 1789006987.0,
+            "weeks": [
+              {"start_epoch": 1786896000.0, "end_epoch": 1787500800.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1787500800.0, "end_epoch": 1788105600.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788105600.0, "end_epoch": 1788710400.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788710400.0, "end_epoch": 1788854400.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788854400.0, "end_epoch": 1789459200.0, "basis": "quota", "current": false, "partial": true, "usd": 606.88, "requests": 2768, "unpriced_requests": 0, "tokens": {"input": 164042, "output": 1425457, "cache_read": 253798445, "cache_write": 6245135}},
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "basis": "quota", "current": false, "partial": false, "usd": 673.51, "requests": 3126, "unpriced_requests": 0, "tokens": {"input": 195470, "output": 1557428, "cache_read": 283264475, "cache_write": 7116358}},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "basis": "quota", "current": false, "partial": false, "usd": 1138.96, "requests": 5260, "unpriced_requests": 0, "tokens": {"input": 322786, "output": 2679086, "cache_read": 471506135, "cache_write": 12017579}},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "basis": "quota", "current": false, "partial": false, "usd": 785.03, "requests": 3609, "unpriced_requests": 3, "tokens": {"input": 219903, "output": 1743315, "cache_read": 313001151, "cache_write": 8335425}},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "basis": "quota", "current": false, "partial": false, "usd": 1121.69, "requests": 5040, "unpriced_requests": 0, "tokens": {"input": 319504, "output": 2485309, "cache_read": 449910814, "cache_write": 11422997}},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "basis": "quota", "current": false, "partial": false, "usd": 1190.81, "requests": 5370, "unpriced_requests": 0, "tokens": {"input": 337795, "output": 2711036, "cache_read": 482170702, "cache_write": 12054800}},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "basis": "quota", "current": false, "partial": false, "usd": 1046.16, "requests": 4779, "unpriced_requests": 1, "tokens": {"input": 304295, "output": 2434620, "cache_read": 423189688, "cache_write": 10785638}},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "basis": "quota", "current": false, "partial": false, "usd": 875.96, "requests": 3934, "unpriced_requests": 0, "tokens": {"input": 241691, "output": 2032522, "cache_read": 363124022, "cache_write": 8631705}},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "basis": "quota", "current": true, "partial": false, "usd": 518.48, "requests": 2327, "unpriced_requests": 0, "tokens": {"input": 146741, "output": 1128071, "cache_read": 199181482, "cache_write": 5216937}}
+            ],
+            "days": [
+              {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "partial": false, "usd": 184.76, "requests": 864, "unpriced_requests": 0, "tokens": {"input": 58806, "output": 455416, "cache_read": 74536295, "cache_write": 1938780}},
+              {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "partial": false, "usd": 89.13, "requests": 403, "unpriced_requests": 0, "tokens": {"input": 25786, "output": 224348, "cache_read": 39770455, "cache_write": 890007}},
+              {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "partial": false, "usd": 95.94, "requests": 440, "unpriced_requests": 0, "tokens": {"input": 29066, "output": 222425, "cache_read": 42232907, "cache_write": 999528}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "partial": false, "usd": 180.17, "requests": 834, "unpriced_requests": 0, "tokens": {"input": 50007, "output": 389800, "cache_read": 71749291, "cache_write": 1884395}},
+              {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "partial": false, "usd": 213.17, "requests": 963, "unpriced_requests": 0, "tokens": {"input": 65077, "output": 529861, "cache_read": 80668563, "cache_write": 2204742}},
+              {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "partial": false, "usd": 173.14, "requests": 780, "unpriced_requests": 0, "tokens": {"input": 46494, "output": 399192, "cache_read": 68291368, "cache_write": 1626415}},
+              {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "partial": false, "usd": 177.64, "requests": 774, "unpriced_requests": 0, "tokens": {"input": 53654, "output": 390032, "cache_read": 65801715, "cache_write": 1694196}},
+              {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "partial": false, "usd": 209.78, "requests": 977, "unpriced_requests": 0, "tokens": {"input": 58406, "output": 488910, "cache_read": 93714637, "cache_write": 2224541}},
+              {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "partial": false, "usd": 112.93, "requests": 484, "unpriced_requests": 0, "tokens": {"input": 30423, "output": 220680, "cache_read": 46933234, "cache_write": 1112216}},
+              {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "partial": false, "usd": 100.98, "requests": 455, "unpriced_requests": 0, "tokens": {"input": 28463, "output": 257006, "cache_read": 40581449, "cache_write": 1092896}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "partial": false, "usd": 208.4, "requests": 931, "unpriced_requests": 0, "tokens": {"input": 55811, "output": 455067, "cache_read": 87950028, "cache_write": 2074549}},
+              {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "partial": false, "usd": 191.28, "requests": 857, "unpriced_requests": 0, "tokens": {"input": 52898, "output": 396035, "cache_read": 73754566, "cache_write": 1989917}},
+              {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "partial": false, "usd": 168.27, "requests": 791, "unpriced_requests": 1, "tokens": {"input": 47593, "output": 412229, "cache_read": 66484159, "cache_write": 1701583}},
+              {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "partial": false, "usd": 174.22, "requests": 764, "unpriced_requests": 0, "tokens": {"input": 48986, "output": 376754, "cache_read": 68068156, "cache_write": 1716549}},
+              {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "partial": false, "usd": 160.22, "requests": 744, "unpriced_requests": 0, "tokens": {"input": 44955, "output": 356276, "cache_read": 64847277, "cache_write": 1621227}},
+              {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "partial": false, "usd": 87.5, "requests": 394, "unpriced_requests": 0, "tokens": {"input": 27088, "output": 207431, "cache_read": 38505550, "cache_write": 965617}},
+              {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "partial": false, "usd": 82.82, "requests": 380, "unpriced_requests": 0, "tokens": {"input": 22677, "output": 205030, "cache_read": 33181275, "cache_write": 851990}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "partial": false, "usd": 189.9, "requests": 886, "unpriced_requests": 0, "tokens": {"input": 60115, "output": 443760, "cache_read": 78508495, "cache_write": 2030543}},
+              {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "partial": false, "usd": 155.0, "requests": 727, "unpriced_requests": 0, "tokens": {"input": 48879, "output": 398353, "cache_read": 66743979, "cache_write": 1668459}},
+              {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "partial": false, "usd": 147.06, "requests": 686, "unpriced_requests": 0, "tokens": {"input": 43068, "output": 360391, "cache_read": 68774369, "cache_write": 1492209}},
+              {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "partial": false, "usd": 142.0, "requests": 608, "unpriced_requests": 0, "tokens": {"input": 38996, "output": 313910, "cache_read": 51870355, "cache_write": 1357198}},
+              {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "partial": false, "usd": 146.36, "requests": 661, "unpriced_requests": 0, "tokens": {"input": 39458, "output": 332605, "cache_read": 59810840, "cache_write": 1361978}},
+              {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "partial": false, "usd": 82.26, "requests": 354, "unpriced_requests": 0, "tokens": {"input": 20805, "output": 170697, "cache_read": 30018700, "cache_write": 747363}},
+              {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "partial": false, "usd": 69.38, "requests": 313, "unpriced_requests": 0, "tokens": {"input": 19667, "output": 159083, "cache_read": 30195913, "cache_write": 646225}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "partial": false, "usd": 153.33, "requests": 700, "unpriced_requests": 0, "tokens": {"input": 41118, "output": 376951, "cache_read": 63309914, "cache_write": 1555641}},
+              {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "partial": false, "usd": 136.7, "requests": 607, "unpriced_requests": 0, "tokens": {"input": 37622, "output": 299181, "cache_read": 54700908, "cache_write": 1395314}},
+              {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "partial": false, "usd": 128.62, "requests": 582, "unpriced_requests": 0, "tokens": {"input": 38465, "output": 288144, "cache_read": 52076130, "cache_write": 1341000}},
+              {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "partial": false, "usd": 146.94, "requests": 655, "unpriced_requests": 0, "tokens": {"input": 40676, "output": 320107, "cache_read": 52075923, "cache_write": 1476106}},
+              {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 132.08, "requests": 593, "unpriced_requests": 0, "tokens": {"input": 37636, "output": 300929, "cache_read": 54772583, "cache_write": 1321349}},
+              {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 44.06, "requests": 191, "unpriced_requests": 0, "tokens": {"input": 10924, "output": 78386, "cache_read": 16446161, "cache_write": 430682}}
+            ],
+            "summary": {"weeks_usd": 7957.48, "current_usd": 518.48, "average_usd": 976.02, "average_weeks": 7, "days_usd": 4284.04, "today_usd": 44.06, "requests": 36213, "unpriced_requests": 4},
+            "devices": [
+              {"id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041880.0, "stale": false, "weeks_usd": [0.0, 0.0, 0.0, 0.0, 228.15, 253.2, 428.18, 306.53, 560.84, 595.41, 523.08, 437.98, 293.7], "days_usd": [92.38, 44.56, 47.97, 90.09, 106.59, 86.57, 88.82, 104.89, 56.46, 50.49, 104.2, 95.64, 84.14, 87.11, 80.11, 43.75, 41.41, 94.95, 77.5, 73.53, 71.0, 73.18, 41.13, 34.69, 76.66, 68.35, 64.31, 83.75, 82.55, 29.7], "summary": {"weeks_usd": 3627.07, "current_usd": 293.7, "average_usd": 443.6, "days_usd": 2176.48, "today_usd": 29.7}},
+              {"id": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "name": "alice-mini", "me": false, "revoked": false, "synced_epoch": 1794039600.0, "stale": false, "weeks_usd": [0.0, 0.0, 0.0, 0.0, 136.89, 151.92, 256.91, 183.92, 336.51, 357.24, 313.85, 262.79, 172.76], "days_usd": [55.43, 26.74, 28.78, 54.05, 63.95, 51.94, 53.29, 62.93, 33.88, 30.29, 62.52, 57.38, 50.48, 52.27, 48.07, 26.25, 24.85, 56.97, 46.5, 44.12, 42.6, 43.91, 24.68, 20.81, 46.0, 41.01, 38.59, 50.25, 49.53, 14.36], "summary": {"weeks_usd": 2172.79, "current_usd": 172.76, "average_usd": 266.16, "days_usd": 1302.43, "today_usd": 14.36}},
+              {"id": "SHA256:ccccccccccccccccccccccccccccccccccccccccccc", "name": "office-imac", "me": false, "revoked": false, "synced_epoch": 1793862000.0, "stale": true, "weeks_usd": [0.0, 0.0, 0.0, 0.0, 91.26, 101.28, 171.27, 122.61, 224.34, 238.16, 209.23, 175.19, 52.02], "days_usd": [36.95, 17.83, 19.19, 36.03, 42.63, 34.63, 35.53, 41.96, 22.59, 20.2, 41.68, 38.26, 33.65, 34.84, 32.04, 17.5, 16.56, 37.98, 31.0, 29.41, 28.4, 29.27, 16.45, 13.88, 30.67, 27.34, 25.72, 12.94, 0.0, 0.0], "summary": {"weeks_usd": 1385.36, "current_usd": 52.02, "average_usd": 177.44, "days_usd": 805.13, "today_usd": 0.0}},
+              {"id": "SHA256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "name": "old-mini", "me": false, "revoked": true, "synced_epoch": 1791201600.0, "stale": true, "weeks_usd": [0.0, 0.0, 0.0, 0.0, 150.58, 167.11, 282.6, 171.97, 0.0, 0.0, 0.0, 0.0, 0.0], "days_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "summary": {"weeks_usd": 772.26, "current_usd": 0.0, "average_usd": 88.81, "days_usd": 0.0, "today_usd": 0.0}}
+            ],
+            "unpriced_models": ["claude-research-preview"],
+            "sync": {"state": "ok", "message": null, "checked_epoch": 1794041700.0, "missing": [{"name": "carol-air", "used_epoch": 1793966400.0}]}
           },
           "can_why": {},
           "usage": {
@@ -397,7 +499,8 @@
             "check": true,
             "cli": true,
             "policy_lock": true,
-            "api_key": true
+            "api_key": true,
+            "cost": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
           "usage_weeks": {
@@ -408,6 +511,62 @@
               {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "used_percent": 60, "resets": 0, "last_epoch": 1791272100.0, "current": false, "partial": false}
             ],
             "summary": {"weeks": 3, "average_percent": 52, "maxed": 0, "under_half": 1}
+          },
+          "cost": {
+            "currency": "USD", "prices_date": "2026-11-01", "since_epoch": 1784527500.0,
+            "weeks": [
+              {"start_epoch": 1786896000.0, "end_epoch": 1787500800.0, "basis": "calendar", "current": false, "partial": false, "usd": 176.19, "requests": 1505, "unpriced_requests": 0, "tokens": {"input": 94462, "output": 761994, "cache_read": 136486881, "cache_write": 3453360}},
+              {"start_epoch": 1787500800.0, "end_epoch": 1788105600.0, "basis": "calendar", "current": false, "partial": false, "usd": 210.12, "requests": 1727, "unpriced_requests": 0, "tokens": {"input": 106871, "output": 859152, "cache_read": 154035618, "cache_write": 3936457}},
+              {"start_epoch": 1788105600.0, "end_epoch": 1788710400.0, "basis": "calendar", "current": false, "partial": false, "usd": 157.21, "requests": 1343, "unpriced_requests": 0, "tokens": {"input": 85692, "output": 647640, "cache_read": 119026714, "cache_write": 2963810}},
+              {"start_epoch": 1788710400.0, "end_epoch": 1789315200.0, "basis": "calendar", "current": false, "partial": false, "usd": 179.7, "requests": 1524, "unpriced_requests": 0, "tokens": {"input": 94391, "output": 745418, "cache_read": 136144096, "cache_write": 3459639}},
+              {"start_epoch": 1789315200.0, "end_epoch": 1789459200.0, "basis": "calendar", "current": false, "partial": false, "usd": 50.73, "requests": 424, "unpriced_requests": 0, "tokens": {"input": 28683, "output": 201991, "cache_read": 40324221, "cache_write": 975139}},
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "basis": "quota", "current": false, "partial": false, "usd": 382.32, "requests": 3197, "unpriced_requests": 0, "tokens": {"input": 199526, "output": 1639468, "cache_read": 292716323, "cache_write": 7233849}},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "basis": "quota", "current": false, "partial": false, "usd": 264.33, "requests": 2208, "unpriced_requests": 0, "tokens": {"input": 136434, "output": 1124298, "cache_read": 198713661, "cache_write": 5184362}},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "basis": "quota", "current": false, "partial": false, "usd": 416.3, "requests": 3480, "unpriced_requests": 0, "tokens": {"input": 219153, "output": 1644971, "cache_read": 316045633, "cache_write": 7749036}},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791734400.0, "basis": "calendar", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1792339200.0, "basis": "calendar", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792944000.0, "basis": "calendar", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793548800.0, "basis": "calendar", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1794153600.0, "basis": "calendar", "current": true, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}}
+            ],
+            "days": [
+              {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}}
+            ],
+            "summary": {"weeks_usd": 1836.9, "current_usd": 0.0, "average_usd": 178.62, "average_weeks": 10, "days_usd": 0.0, "today_usd": 0.0, "requests": 15408, "unpriced_requests": 0},
+            "devices": [
+              {"id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1791282000.0, "stale": false, "weeks_usd": [176.19, 210.12, 157.21, 179.7, 50.73, 382.32, 264.33, 416.3, 0.0, 0.0, 0.0, 0.0, 0.0], "days_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "summary": {"weeks_usd": 1836.9, "current_usd": 0.0, "average_usd": 178.62, "days_usd": 0.0, "today_usd": 0.0}}
+            ],
+            "unpriced_models": [],
+            "sync": {"state": "not_logged_in", "message": null, "checked_epoch": 1791282000.0, "missing": []}
           },
           "can_why": {
             "usage": "not_logged_in"
@@ -457,9 +616,11 @@
             "check": true,
             "cli": true,
             "policy_lock": true,
-            "api_key": true
+            "api_key": true,
+            "cost": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
+          "cost": null,
           "can_why": {},
           "usage": null,
           "health": null
@@ -506,7 +667,8 @@
             "check": true,
             "cli": true,
             "policy_lock": true,
-            "api_key": true
+            "api_key": true,
+            "cost": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
           "usage_weeks": {
@@ -521,6 +683,62 @@
               {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 63, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
             ],
             "summary": {"weeks": 6, "average_percent": 54, "maxed": 0, "under_half": 2}
+          },
+          "cost": {
+            "currency": "USD", "prices_date": "2026-11-01", "since_epoch": 1788318161.0,
+            "weeks": [
+              {"start_epoch": 1786896000.0, "end_epoch": 1787500800.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1787500800.0, "end_epoch": 1788105600.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788105600.0, "end_epoch": 1788710400.0, "basis": "calendar", "current": false, "partial": true, "usd": 156.02, "requests": 1024, "unpriced_requests": 0, "tokens": {"input": 63839, "output": 512046, "cache_read": 87170755, "cache_write": 2274678}},
+              {"start_epoch": 1788710400.0, "end_epoch": 1789315200.0, "basis": "calendar", "current": false, "partial": false, "usd": 270.64, "requests": 1823, "unpriced_requests": 0, "tokens": {"input": 111333, "output": 882189, "cache_read": 162298186, "cache_write": 4011146}},
+              {"start_epoch": 1789315200.0, "end_epoch": 1789920000.0, "basis": "calendar", "current": false, "partial": false, "usd": 307.15, "requests": 2060, "unpriced_requests": 0, "tokens": {"input": 125887, "output": 1005627, "cache_read": 190396958, "cache_write": 4617660}},
+              {"start_epoch": 1789920000.0, "end_epoch": 1790064000.0, "basis": "calendar", "current": false, "partial": false, "usd": 71.16, "requests": 488, "unpriced_requests": 0, "tokens": {"input": 30064, "output": 242785, "cache_read": 40868218, "cache_write": 1084967}},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "basis": "quota", "current": false, "partial": false, "usd": 310.97, "requests": 2071, "unpriced_requests": 0, "tokens": {"input": 131160, "output": 1033351, "cache_read": 187238040, "cache_write": 4711493}},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "basis": "quota", "current": false, "partial": false, "usd": 409.89, "requests": 2738, "unpriced_requests": 0, "tokens": {"input": 167356, "output": 1367407, "cache_read": 240191334, "cache_write": 6111020}},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "basis": "quota", "current": false, "partial": false, "usd": 349.3, "requests": 2303, "unpriced_requests": 0, "tokens": {"input": 143428, "output": 1095349, "cache_read": 208012689, "cache_write": 5245476}},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "basis": "quota", "current": false, "partial": false, "usd": 222.26, "requests": 1547, "unpriced_requests": 0, "tokens": {"input": 98223, "output": 776793, "cache_read": 138760316, "cache_write": 3306849}},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "basis": "quota", "current": false, "partial": false, "usd": 304.67, "requests": 2028, "unpriced_requests": 0, "tokens": {"input": 125735, "output": 970898, "cache_read": 184677507, "cache_write": 4529555}},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "basis": "quota", "current": false, "partial": false, "usd": 274.97, "requests": 1840, "unpriced_requests": 0, "tokens": {"input": 113218, "output": 907601, "cache_read": 172711158, "cache_write": 4241524}},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "basis": "quota", "current": true, "partial": false, "usd": 262.11, "requests": 1817, "unpriced_requests": 0, "tokens": {"input": 116357, "output": 922744, "cache_read": 171533558, "cache_write": 4189601}}
+            ],
+            "days": [
+              {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "partial": false, "usd": 56.39, "requests": 359, "unpriced_requests": 0, "tokens": {"input": 22312, "output": 166677, "cache_read": 33497980, "cache_write": 771793}},
+              {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "partial": false, "usd": 27.89, "requests": 182, "unpriced_requests": 0, "tokens": {"input": 11483, "output": 89895, "cache_read": 17391492, "cache_write": 420260}},
+              {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "partial": false, "usd": 30.18, "requests": 208, "unpriced_requests": 0, "tokens": {"input": 12604, "output": 93850, "cache_read": 19305229, "cache_write": 486353}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "partial": false, "usd": 58.65, "requests": 410, "unpriced_requests": 0, "tokens": {"input": 23959, "output": 191769, "cache_read": 37612780, "cache_write": 931247}},
+              {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "partial": false, "usd": 50.62, "requests": 332, "unpriced_requests": 0, "tokens": {"input": 21607, "output": 145853, "cache_read": 29171410, "cache_write": 700855}},
+              {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "partial": false, "usd": 40.0, "requests": 279, "unpriced_requests": 0, "tokens": {"input": 17669, "output": 147054, "cache_read": 25778752, "cache_write": 580153}},
+              {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "partial": false, "usd": 29.07, "requests": 204, "unpriced_requests": 0, "tokens": {"input": 12972, "output": 101649, "cache_read": 17508886, "cache_write": 437167}},
+              {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "partial": false, "usd": 41.21, "requests": 286, "unpriced_requests": 0, "tokens": {"input": 17242, "output": 153504, "cache_read": 24287879, "cache_write": 635171}},
+              {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "partial": false, "usd": 18.7, "requests": 134, "unpriced_requests": 0, "tokens": {"input": 8806, "output": 67640, "cache_read": 11305112, "cache_write": 301334}},
+              {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "partial": false, "usd": 17.93, "requests": 126, "unpriced_requests": 0, "tokens": {"input": 8129, "output": 65367, "cache_read": 11481816, "cache_write": 262532}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "partial": false, "usd": 39.9, "requests": 281, "unpriced_requests": 0, "tokens": {"input": 17444, "output": 135034, "cache_read": 26530754, "cache_write": 596619}},
+              {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "partial": false, "usd": 46.05, "requests": 315, "unpriced_requests": 0, "tokens": {"input": 19664, "output": 164776, "cache_read": 31276530, "cache_write": 694555}},
+              {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "partial": false, "usd": 48.69, "requests": 335, "unpriced_requests": 0, "tokens": {"input": 20672, "output": 157657, "cache_read": 34075304, "cache_write": 705397}},
+              {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "partial": false, "usd": 50.45, "requests": 333, "unpriced_requests": 0, "tokens": {"input": 21071, "output": 142247, "cache_read": 29378270, "cache_write": 666070}},
+              {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "partial": false, "usd": 48.06, "requests": 306, "unpriced_requests": 0, "tokens": {"input": 19153, "output": 136361, "cache_read": 24374718, "cache_write": 718291}},
+              {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "partial": false, "usd": 25.2, "requests": 172, "unpriced_requests": 0, "tokens": {"input": 10330, "output": 96279, "cache_read": 13765082, "cache_write": 403938}},
+              {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "partial": false, "usd": 27.35, "requests": 187, "unpriced_requests": 0, "tokens": {"input": 10970, "output": 86010, "cache_read": 15943493, "cache_write": 432066}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "partial": false, "usd": 50.89, "requests": 328, "unpriced_requests": 0, "tokens": {"input": 21475, "output": 155131, "cache_read": 32094571, "cache_write": 786549}},
+              {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "partial": false, "usd": 50.6, "requests": 344, "unpriced_requests": 0, "tokens": {"input": 21310, "output": 168073, "cache_read": 30646606, "cache_write": 815298}},
+              {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "partial": false, "usd": 43.71, "requests": 279, "unpriced_requests": 0, "tokens": {"input": 16735, "output": 144624, "cache_read": 25937760, "cache_write": 624734}},
+              {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "partial": false, "usd": 46.49, "requests": 297, "unpriced_requests": 0, "tokens": {"input": 19262, "output": 137596, "cache_read": 29424678, "cache_write": 688409}},
+              {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "partial": false, "usd": 43.96, "requests": 294, "unpriced_requests": 0, "tokens": {"input": 18524, "output": 133316, "cache_read": 29109304, "cache_write": 656452}},
+              {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "partial": false, "usd": 20.72, "requests": 145, "unpriced_requests": 0, "tokens": {"input": 9278, "output": 75471, "cache_read": 13348333, "cache_write": 322984}},
+              {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "partial": false, "usd": 23.6, "requests": 164, "unpriced_requests": 0, "tokens": {"input": 10037, "output": 82209, "cache_read": 14918726, "cache_write": 356393}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "partial": false, "usd": 48.46, "requests": 341, "unpriced_requests": 0, "tokens": {"input": 19755, "output": 166822, "cache_read": 31522785, "cache_write": 803043}},
+              {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "partial": false, "usd": 62.21, "requests": 415, "unpriced_requests": 0, "tokens": {"input": 28034, "output": 223445, "cache_read": 38571720, "cache_write": 924246}},
+              {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "partial": false, "usd": 68.78, "requests": 481, "unpriced_requests": 0, "tokens": {"input": 31432, "output": 232064, "cache_read": 44304346, "cache_write": 1147102}},
+              {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "partial": false, "usd": 67.47, "requests": 471, "unpriced_requests": 0, "tokens": {"input": 29773, "output": 237375, "cache_read": 46124386, "cache_write": 1129341}},
+              {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 64.4, "requests": 439, "unpriced_requests": 0, "tokens": {"input": 25710, "output": 235175, "cache_read": 41843819, "cache_write": 1028388}},
+              {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 22.23, "requests": 161, "unpriced_requests": 0, "tokens": {"input": 10377, "output": 79627, "cache_read": 14066294, "cache_write": 317028}}
+            ],
+            "summary": {"weeks_usd": 2939.14, "current_usd": 262.11, "average_usd": 306.23, "average_weeks": 8, "days_usd": 1269.86, "today_usd": 22.23, "requests": 19739, "unpriced_requests": 0},
+            "devices": [
+              {"id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041880.0, "stale": false, "weeks_usd": [0.0, 0.0, 156.02, 270.64, 307.15, 71.16, 310.97, 409.89, 349.3, 222.26, 304.67, 274.97, 262.11], "days_usd": [56.39, 27.89, 30.18, 58.65, 50.62, 40.0, 29.07, 41.21, 18.7, 17.93, 39.9, 46.05, 48.69, 50.45, 48.06, 25.2, 27.35, 50.89, 50.6, 43.71, 46.49, 43.96, 20.72, 23.6, 48.46, 62.21, 68.78, 67.47, 64.4, 22.23], "summary": {"weeks_usd": 2939.14, "current_usd": 262.11, "average_usd": 306.23, "days_usd": 1269.86, "today_usd": 22.23}}
+            ],
+            "unpriced_models": [],
+            "sync": {"state": "local_only", "message": null, "checked_epoch": null, "missing": []}
           },
           "can_why": {},
           "usage": {
@@ -639,7 +857,8 @@
             "check": true,
             "cli": true,
             "policy_lock": true,
-            "api_key": true
+            "api_key": true,
+            "cost": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
           "usage_weeks": {
@@ -658,6 +877,62 @@
               {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "used_percent": 30, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
             ],
             "summary": {"weeks": 10, "average_percent": 17, "maxed": 0, "under_half": 10}
+          },
+          "cost": {
+            "currency": "USD", "prices_date": "2026-11-01", "since_epoch": 1780364412.0,
+            "weeks": [
+              {"start_epoch": 1786896000.0, "end_epoch": 1787500800.0, "basis": "calendar", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1787500800.0, "end_epoch": 1787644800.0, "basis": "calendar", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1787644800.0, "end_epoch": 1788249600.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788249600.0, "end_epoch": 1788854400.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788854400.0, "end_epoch": 1789459200.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "basis": "quota", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "basis": "quota", "current": true, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}}
+            ],
+            "days": [
+              {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}}
+            ],
+            "summary": {"weeks_usd": 0.0, "current_usd": 0.0, "average_usd": 0.0, "average_weeks": 11, "days_usd": 0.0, "today_usd": 0.0, "requests": 0, "unpriced_requests": 0},
+            "devices": [
+              {"id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041880.0, "stale": false, "weeks_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "days_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "summary": {"weeks_usd": 0.0, "current_usd": 0.0, "average_usd": 0.0, "days_usd": 0.0, "today_usd": 0.0}}
+            ],
+            "unpriced_models": [],
+            "sync": {"state": "error", "message": "连不上设备统计的服务器（https://192.0.2.10:18443）", "checked_epoch": 1793775600.0, "missing": []}
           },
           "can_why": {},
           "usage": {
@@ -764,9 +1039,11 @@
             "check": true,
             "cli": true,
             "policy_lock": false,
-            "api_key": true
+            "api_key": true,
+            "cost": false
           },
           "api_key": {"saved": true, "hint": "sk-…9fK2", "source": "keychain"},
+          "cost": null,
           "can_why": {
             "app": "api_account",
             "web": "api_account",
@@ -839,9 +1116,11 @@
             "check": true,
             "cli": true,
             "policy_lock": false,
-            "api_key": true
+            "api_key": true,
+            "cost": false
           },
           "api_key": {"saved": true, "hint": "", "source": "table"},
+          "cost": null,
           "can_why": {
             "app": "api_account",
             "web": "api_account",
@@ -866,6 +1145,7 @@
         "path": "/Applications/ChatGPT.app"
       },
       "chrome": true,
+      "features": {"app": true, "api": true, "usage": true, "cost": true},
       "settings_problems": [],
       "errors": [],
       "last": "frank@example.com",
@@ -912,7 +1192,8 @@
             "check": true,
             "cli": true,
             "policy_lock": true,
-            "api_key": true
+            "api_key": true,
+            "cost": true
           },
           "api_key": {"saved": false, "hint": "", "source": ""},
           "usage_weeks": {
@@ -926,6 +1207,62 @@
               {"start_epoch": 1793509200.0, "end_epoch": 1794114000.0, "used_percent": 76, "resets": 0, "last_epoch": 1794041100.0, "current": true, "partial": false}
             ],
             "summary": {"weeks": 5, "average_percent": 93, "maxed": 2, "under_half": 0}
+          },
+          "cost": {
+            "currency": "USD", "prices_date": "2026-11-01", "since_epoch": 1788419550.0,
+            "weeks": [
+              {"start_epoch": 1786291200.0, "end_epoch": 1786896000.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1786896000.0, "end_epoch": 1787500800.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1787500800.0, "end_epoch": 1788105600.0, "basis": "calendar", "current": false, "partial": true, "usd": 0.0, "requests": 0, "unpriced_requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}},
+              {"start_epoch": 1788105600.0, "end_epoch": 1788710400.0, "basis": "calendar", "current": false, "partial": true, "usd": 181.5, "requests": 2019, "unpriced_requests": 0, "tokens": {"input": 8126270, "output": 1388255, "cache_read": 83639277, "cache_write": 0}},
+              {"start_epoch": 1788710400.0, "end_epoch": 1789315200.0, "basis": "calendar", "current": false, "partial": false, "usd": 302.1, "requests": 3337, "unpriced_requests": 0, "tokens": {"input": 13482416, "output": 2153454, "cache_read": 133304349, "cache_write": 0}},
+              {"start_epoch": 1789315200.0, "end_epoch": 1789920000.0, "basis": "calendar", "current": false, "partial": false, "usd": 320.79, "requests": 3614, "unpriced_requests": 0, "tokens": {"input": 14766128, "output": 2336393, "cache_read": 142871244, "cache_write": 0}},
+              {"start_epoch": 1789920000.0, "end_epoch": 1790485200.0, "basis": "calendar", "current": false, "partial": false, "usd": 317.93, "requests": 3513, "unpriced_requests": 0, "tokens": {"input": 14008361, "output": 2230812, "cache_read": 132251871, "cache_write": 0}},
+              {"start_epoch": 1790485200.0, "end_epoch": 1791090000.0, "basis": "quota", "current": false, "partial": false, "usd": 476.78, "requests": 5210, "unpriced_requests": 0, "tokens": {"input": 21216065, "output": 3304708, "cache_read": 199401767, "cache_write": 0}},
+              {"start_epoch": 1791090000.0, "end_epoch": 1791694800.0, "basis": "quota", "current": false, "partial": false, "usd": 688.84, "requests": 7684, "unpriced_requests": 0, "tokens": {"input": 31481001, "output": 4886125, "cache_read": 320855227, "cache_write": 0}},
+              {"start_epoch": 1791694800.0, "end_epoch": 1792299600.0, "basis": "quota", "current": false, "partial": false, "usd": 782.33, "requests": 8624, "unpriced_requests": 0, "tokens": {"input": 33967671, "output": 5644908, "cache_read": 365918763, "cache_write": 0}},
+              {"start_epoch": 1792299600.0, "end_epoch": 1792904400.0, "basis": "quota", "current": false, "partial": false, "usd": 1096.49, "requests": 12321, "unpriced_requests": 0, "tokens": {"input": 47177408, "output": 8032667, "cache_read": 490164067, "cache_write": 0}},
+              {"start_epoch": 1792904400.0, "end_epoch": 1793509200.0, "basis": "quota", "current": false, "partial": false, "usd": 715.93, "requests": 8049, "unpriced_requests": 5, "tokens": {"input": 33867282, "output": 5131362, "cache_read": 324629915, "cache_write": 0}},
+              {"start_epoch": 1793509200.0, "end_epoch": 1794114000.0, "basis": "quota", "current": true, "partial": false, "usd": 544.31, "requests": 6093, "unpriced_requests": 7, "tokens": {"input": 24811526, "output": 3875627, "cache_read": 241782921, "cache_write": 0}}
+            ],
+            "days": [
+              {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "partial": false, "usd": 104.24, "requests": 1158, "unpriced_requests": 0, "tokens": {"input": 4581554, "output": 862072, "cache_read": 48413874, "cache_write": 0}},
+              {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "partial": false, "usd": 60.38, "requests": 677, "unpriced_requests": 0, "tokens": {"input": 2600672, "output": 412063, "cache_read": 28803914, "cache_write": 0}},
+              {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "partial": false, "usd": 63.19, "requests": 653, "unpriced_requests": 0, "tokens": {"input": 2235714, "output": 435037, "cache_read": 27554040, "cache_write": 0}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "partial": false, "usd": 128.28, "requests": 1455, "unpriced_requests": 0, "tokens": {"input": 6407171, "output": 1022511, "cache_read": 58906345, "cache_write": 0}},
+              {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "partial": false, "usd": 134.36, "requests": 1454, "unpriced_requests": 0, "tokens": {"input": 6045161, "output": 958529, "cache_read": 62058180, "cache_write": 0}},
+              {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "partial": false, "usd": 140.48, "requests": 1508, "unpriced_requests": 0, "tokens": {"input": 5729763, "output": 999127, "cache_read": 61142997, "cache_write": 0}},
+              {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "partial": false, "usd": 127.73, "requests": 1468, "unpriced_requests": 0, "tokens": {"input": 5664574, "output": 906243, "cache_read": 67059973, "cache_write": 0}},
+              {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "partial": false, "usd": 117.74, "requests": 1292, "unpriced_requests": 0, "tokens": {"input": 4506294, "output": 846667, "cache_read": 55670735, "cache_write": 0}},
+              {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "partial": false, "usd": 66.49, "requests": 732, "unpriced_requests": 0, "tokens": {"input": 3018034, "output": 439561, "cache_read": 32037349, "cache_write": 0}},
+              {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "partial": false, "usd": 83.43, "requests": 911, "unpriced_requests": 0, "tokens": {"input": 3971982, "output": 608763, "cache_read": 40869566, "cache_write": 0}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "partial": false, "usd": 176.65, "requests": 1893, "unpriced_requests": 0, "tokens": {"input": 6594235, "output": 1250651, "cache_read": 74319507, "cache_write": 0}},
+              {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "partial": false, "usd": 196.54, "requests": 2258, "unpriced_requests": 0, "tokens": {"input": 8382454, "output": 1244260, "cache_read": 87301034, "cache_write": 0}},
+              {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "partial": false, "usd": 169.08, "requests": 1931, "unpriced_requests": 0, "tokens": {"input": 8142936, "output": 1171273, "cache_read": 74655943, "cache_write": 0}},
+              {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "partial": false, "usd": 184.19, "requests": 2097, "unpriced_requests": 0, "tokens": {"input": 7118678, "output": 1488151, "cache_read": 81070027, "cache_write": 0}},
+              {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "partial": false, "usd": 188.67, "requests": 2113, "unpriced_requests": 0, "tokens": {"input": 8171529, "output": 1493913, "cache_read": 85705990, "cache_write": 0}},
+              {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "partial": false, "usd": 95.54, "requests": 1083, "unpriced_requests": 0, "tokens": {"input": 4805657, "output": 736706, "cache_read": 45326016, "cache_write": 0}},
+              {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "partial": false, "usd": 69.62, "requests": 783, "unpriced_requests": 0, "tokens": {"input": 3484134, "output": 536754, "cache_read": 31146392, "cache_write": 0}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "partial": false, "usd": 127.92, "requests": 1419, "unpriced_requests": 0, "tokens": {"input": 5486061, "output": 971156, "cache_read": 63880161, "cache_write": 0}},
+              {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "partial": false, "usd": 111.03, "requests": 1234, "unpriced_requests": 0, "tokens": {"input": 4628071, "output": 843734, "cache_read": 51303330, "cache_write": 0}},
+              {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "partial": false, "usd": 124.55, "requests": 1390, "unpriced_requests": 5, "tokens": {"input": 5878983, "output": 819315, "cache_read": 56368930, "cache_write": 0}},
+              {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "partial": false, "usd": 114.69, "requests": 1316, "unpriced_requests": 0, "tokens": {"input": 6035741, "output": 836762, "cache_read": 47154512, "cache_write": 0}},
+              {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "partial": false, "usd": 116.01, "requests": 1330, "unpriced_requests": 0, "tokens": {"input": 5957115, "output": 805884, "cache_read": 53146427, "cache_write": 0}},
+              {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "partial": false, "usd": 54.27, "requests": 605, "unpriced_requests": 0, "tokens": {"input": 2540065, "output": 384645, "cache_read": 22635326, "cache_write": 0}},
+              {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "partial": false, "usd": 50.08, "requests": 556, "unpriced_requests": 0, "tokens": {"input": 2098060, "output": 353886, "cache_read": 20383472, "cache_write": 0}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "partial": false, "usd": 102.93, "requests": 1169, "unpriced_requests": 0, "tokens": {"input": 4293444, "output": 727245, "cache_read": 44918671, "cache_write": 0}},
+              {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "partial": false, "usd": 94.75, "requests": 1047, "unpriced_requests": 0, "tokens": {"input": 4737557, "output": 685071, "cache_read": 42368934, "cache_write": 0}},
+              {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "partial": false, "usd": 92.71, "requests": 1096, "unpriced_requests": 4, "tokens": {"input": 4248649, "output": 677775, "cache_read": 40001401, "cache_write": 0}},
+              {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "partial": false, "usd": 103.11, "requests": 1124, "unpriced_requests": 0, "tokens": {"input": 4938420, "output": 712564, "cache_read": 52592906, "cache_write": 0}},
+              {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 91.33, "requests": 1017, "unpriced_requests": 3, "tokens": {"input": 4275135, "output": 682712, "cache_read": 37791410, "cache_write": 0}},
+              {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 30.54, "requests": 322, "unpriced_requests": 0, "tokens": {"input": 1146095, "output": 169290, "cache_read": 12833662, "cache_write": 0}}
+            ],
+            "summary": {"weeks_usd": 5427.0, "current_usd": 544.31, "average_usd": 587.65, "average_weeks": 8, "days_usd": 3320.53, "today_usd": 30.54, "requests": 60464, "unpriced_requests": 12},
+            "devices": [
+              {"id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041880.0, "stale": false, "weeks_usd": [0.0, 0.0, 0.0, 181.5, 302.1, 320.79, 317.93, 476.78, 688.84, 782.33, 1096.49, 715.93, 544.31], "days_usd": [104.24, 60.38, 63.19, 128.28, 134.36, 140.48, 127.73, 117.74, 66.49, 83.43, 176.65, 196.54, 169.08, 184.19, 188.67, 95.54, 69.62, 127.92, 111.03, 124.55, 114.69, 116.01, 54.27, 50.08, 102.93, 94.75, 92.71, 103.11, 91.33, 30.54], "summary": {"weeks_usd": 5427.0, "current_usd": 544.31, "average_usd": 587.65, "days_usd": 3320.53, "today_usd": 30.54}}
+            ],
+            "unpriced_models": ["codex-auto-review"],
+            "sync": {"state": "old_server", "message": null, "checked_epoch": null, "missing": []}
           },
           "can_why": {},
           "usage": {

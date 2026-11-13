@@ -153,6 +153,17 @@ final class AppModel {
     /// 账号页「设备」一节（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号页看得见时一分钟查一次，只记在内存里
     private(set) var devices: [AccountRef: DevicesSnapshot] = [:]
     private(set) var devicesLoading: Set<AccountRef> = []
+    /// 折合金额（PROTOCOL 2.2、3.5）：正在跑几个 `cost sync`（全局一次一个，排着队）、用户点的「刷新」在不在里面
+    private(set) var costRuns = 0
+    private(set) var costRefreshing = false
+    /// 最近一次统计没成的原因（cca 的 fail 事件）；统计好了、关掉了就清掉
+    private(set) var costFailure: String?
+    /// 上次跑 `cost sync` 的时间（没成也按间隔重试，见 CostPolling）
+    @ObservationIgnored private var costAttempted: Double?
+    /// 账号页、用量统计页的折合金额看的是整个账号还是其中一台设备（只记在内存里）
+    private(set) var costScopes: [AccountRef: CostScope] = [:]
+    /// 用量统计页点了一行：打开账号页、滚到「折合金额」那一节（账号页滚过去以后清掉）
+    var costFocus: AccountRef?
     /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
     /// （`cca gui update`）；cca 已经比 App 新时只有后一步。
     enum UpdateStep: Equatable { case cca, app }
@@ -209,6 +220,23 @@ final class AppModel {
             reconcileDevicesPolling(restart: true)
             if selection == .office { refreshLiveIfStale() }
             if selection == .clientUpdates { refreshClientUpdates() }
+        }
+    }
+
+    /// 用量统计页看哪种：额度用量 / 折合金额
+    var statsMode: StatsMode = .quota {
+        didSet {
+            guard statsMode != oldValue else { return }
+            defaults.set(statsMode.rawValue, forKey: Prefs.statsMode)
+            startDueCostSync()   // 切到金额：上次统计过了 5 分钟就再统计一次
+        }
+    }
+
+    /// 账号页的折合金额按周还是按天看
+    var costGranularity: CostGranularity = .week {
+        didSet {
+            guard costGranularity != oldValue else { return }
+            defaults.set(costGranularity.rawValue, forKey: Prefs.costGranularity)
         }
     }
 
@@ -284,6 +312,10 @@ final class AppModel {
         static let terminalDirectories = "terminal.directories"
         /// 账号在各组里的排序和置顶（AccountArrangement 的 JSON）
         static let arrangement = "accounts.arrangement"
+        /// 用量统计页看额度用量还是折合金额（StatsMode）
+        static let statsMode = "stats.mode"
+        /// 账号页的折合金额按周还是按天（CostGranularity）
+        static let costGranularity = "cost.period"
         /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
@@ -320,6 +352,8 @@ final class AppModel {
         }
         if let transport = self.transport { client = CcaClient(transport: transport) }
         if let t = defaults.string(forKey: Prefs.tool) { tool = ToolID(rawValue: t) }
+        if let m = defaults.string(forKey: Prefs.statsMode).flatMap(StatsMode.init(rawValue:)) { statsMode = m }
+        if let g = defaults.string(forKey: Prefs.costGranularity).flatMap(CostGranularity.init(rawValue:)) { costGranularity = g }
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
         self.scheduler.onUsageTick = { [weak self] in self?.refreshUsageIfNeeded() }
         self.scheduler.clientCheckDelay = { [weak self] in self?.clientCheckDelay() ?? 3600 }
@@ -518,6 +552,7 @@ final class AppModel {
             reconcileCore()
             reconcilePolicyPolling()   // 映射可能是刚配置的
             reconcileDevicesPolling()  // 映射里刚加了设备统计的服务器、这个账号刚进了映射
+            if s.costTotal?.scan.state == .never { startDueCostSync() }   // 还没统计过：马上统计一次（PROTOCOL 3.5）
             // 2.9.0-beta.17 的顺序只记在 App 里：第一次读到账号表时写回去
             if !orderChecked {
                 orderChecked = true
@@ -629,6 +664,7 @@ final class AppModel {
     private func startDueRuns(lowPower: Bool) {
         startDueUsageRuns(lowPower: lowPower)
         startDueExitChecks(lowPower: lowPower)
+        startDueCostSync()
     }
 
     /// 刚点了“重新登录”、还没看到成功：这段时间每分钟查一次（登录过程中查到“没登录”不花什么）。
@@ -1344,6 +1380,108 @@ final class AppModel {
         }
     }
 
+    // MARK: 折合金额（PROTOCOL 2.2、3.5）
+
+    /// cca 有折合金额（`hello.cost` 是 App 认识的版本；旧版 cca 没有）
+    var costAvailable: Bool { hello?.cost == CostAPI.version }
+
+    /// 有能统计的账号：`cost_total` 不是 null（没关掉、有 Claude / Codex 的官方账号）。这时才显示金额、才跑 `cost sync`
+    var costEnabled: Bool { costAvailable && state?.costTotal != nil }
+
+    /// 看得见金额：用量统计页的金额模式，或者有「折合金额」一节的账号页（主窗口开着时）
+    var costVisible: Bool {
+        guard mainVisible, costEnabled else { return false }
+        switch selection {
+        case .usageStats?: return statsMode == .cost
+        case .account(let r)?: return account(r)?.can.cost == true
+        default: return false
+        }
+    }
+
+    /// 正在统计（自动的或者用户点的）
+    var costSyncing: Bool { costRuns > 0 }
+
+    /// 第一次统计还没做完：cca 说正在统计（scanning），或者还没统计过（never）而 App 正在跑 `cost sync`。
+    /// never 时没在跑（用户走开了、过热、上次没统计成）就不是“正在统计”，显示“还没统计”
+    var costScanning: Bool {
+        guard let s = state?.costTotal?.scan.state else { return false }
+        return s == .scanning || (s == .never && costSyncing)
+    }
+
+    /// 这个账号看的是整个账号还是其中一台设备（那台设备不在了就是整个账号）
+    func costScope(_ ref: AccountRef) -> CostScope {
+        CostChart.resolve(costScopes[ref] ?? .account, in: account(ref)?.cost)
+    }
+
+    func setCostScope(_ ref: AccountRef, _ scope: CostScope) {
+        costScopes[ref] = scope == .account ? nil : scope
+    }
+
+    /// 用量统计页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」
+    func showCost(_ ref: AccountRef, device: String? = nil) {
+        setCostScope(ref, device.map { .device($0) } ?? .account)
+        costFocus = ref
+        show(ref)
+    }
+
+    /// 用量统计页金额模式的分组：有折合金额的工具（`features.cost`）里 `can.cost` 的官方账号，和总览一样按用户排的顺序；
+    /// 一个都没有的组不列
+    func costGroups() -> [AccountGroup] {
+        visibleTools.filter { features($0).cost }.map { Employee.Department.official($0) }
+            .map { d in AccountGroup(department: d, accounts: arranged(d).filter(\.can.cost)) }
+            .filter { !$0.accounts.isEmpty }
+    }
+
+    /// 用户点「刷新」：马上统计、和别的设备同步（`--now`，不降优先级）
+    func refreshCost() {
+        guard costEnabled else { return }
+        syncCost(manual: true)
+    }
+
+    /// 定时统计（跟着查用量的那一下，见 CostPolling）：看得见金额时 5 分钟一次、看不见 30 分钟一次，还没统计过马上来一次；
+    /// 用户走开了、过热时不跑
+    private func startDueCostSync() {
+        guard phase == .ready, costEnabled, !costSyncing else { return }
+        let conditions = hooks.systemConditions()
+        guard conditions.idleSeconds < UsagePolling.awayAfter, !conditions.thermalPressure else { return }
+        let scan = state?.costTotal?.scan
+        guard CostPolling.isDue(lastAttempt: costAttempted, updated: scan?.updatedEpoch, never: scan?.state == .never,
+                                visible: costVisible, now: Date().timeIntervalSince1970) else { return }
+        syncCost(manual: false)
+    }
+
+    private func syncCost(manual: Bool) {
+        guard phase == .ready, let client else { return }
+        if manual {
+            guard !costRefreshing else { return }
+            costRefreshing = true
+        }
+        costRuns += 1
+        costAttempted = Date().timeIntervalSince1970
+        track { [weak self] in
+            let (_, r) = await client.document(.costSync(manual: manual), as: CostSyncDoc.self, prompter: nil)
+            guard let self else { return }
+            // 间隔从这次结束时算：第一次统计、等别的统计让出锁都可能跑满超时（300 秒，和看得见时的间隔一样长），
+            // 只记开始的时间的话，没成的那一次一结束就又到期了，接连重跑
+            self.costAttempted = Date().timeIntervalSince1970
+            self.costRuns -= 1
+            if manual { self.costRefreshing = false }
+            switch r.status {
+            case .success:
+                self.costFailure = nil
+            case .failed(let f) where f.reason == .cancelled:
+                return
+            case .failed(let f) where f.code == .costOff:
+                self.costFailure = nil   // 关掉了、没有能统计的账号：读了 state 金额就不显示了
+            case .failed(let f):
+                self.costFailure = nonEmpty(f.message) ?? "没能统计折合金额"
+            default:
+                break
+            }
+            await self.loadState()
+        }
+    }
+
     /// 能拉维护者的映射：配置了映射，cca 也够新（和 `hello.forms` 同一版起才有 `policy pull --json` 和 `next_check_epoch`；没有下次的时间，定时拉取就成了每 5 分钟一次）。
     var policyPullAvailable: Bool {
         formsSupported && state?.config?.policy?.configured == true
@@ -1646,6 +1784,7 @@ final class AppModel {
         scheduler.update(visible: isVisible, routingVisible: routingVisible)
         reconcileDevicesPolling()
         guard phase == .ready else { return }
+        startDueCostSync()   // 刚看到金额（打开用量统计页的金额模式、账号页）：上次统计过了 5 分钟就再统计一次
         if isVisible && !wasVisible {
             if helloDirty {
                 helloDirty = false

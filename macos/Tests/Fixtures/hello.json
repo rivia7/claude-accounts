@@ -1,6 +1,6 @@
 {
   "version": 1, "kind": "hello", "api": 1, "prompt": 1,
-  "reorder": 1, "forms": 1, "dock": 1, "install_cli": 1,
+  "reorder": 1, "forms": 1, "dock": 1, "install_cli": 1, "cost": 1,
   "cca_version": "2.9.0", "dev_mode": false, "installed": true,
   "self": "/Users/me/.cca/bin/cca", "home": "/Users/me/.cca",
   "tools": {

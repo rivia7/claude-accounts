@@ -1,0 +1,449 @@
+{
+  "version": 1,
+  "kind": "state",
+  "generated_at": 1794042000.0,
+  "cca_version": "3.2.0",
+  "errors": [],
+  "notices": [],
+  "config": {
+    "route_pref": "router",
+    "router": {
+      "configured": true,
+      "host": "192.0.2.10",
+      "ssh_port": 22,
+      "proxy_host": "192.0.2.10"
+    },
+    "local": {
+      "configured": false,
+      "client": "",
+      "name": ""
+    },
+    "nodes": [
+      "US-A",
+      "US-B"
+    ],
+    "min_trust": 50,
+    "leak_check": false,
+    "update": "auto",
+    "policy": {
+      "configured": true,
+      "repo": "example/cca-policy",
+      "next_check_epoch": 1794045600.0
+    }
+  },
+  "routing": {
+    "first_port": 7901,
+    "pool_size": 8,
+    "sync": "ok",
+    "local_sync": "n/a",
+    "slots": [
+      {
+        "slot": 1,
+        "group": "CCA-1",
+        "port": 7901,
+        "tool": "claude",
+        "key": "alice@example.com",
+        "node": "US-A",
+        "local_node": "US-A"
+      },
+      {
+        "slot": 2,
+        "group": "CCA-2",
+        "port": 7902,
+        "tool": "codex",
+        "key": "dave@example.com",
+        "node": "US-B",
+        "local_node": "US-B"
+      },
+      {
+        "slot": 3,
+        "group": "CCA-3",
+        "port": 7903,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 4,
+        "group": "CCA-4",
+        "port": 7904,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 5,
+        "group": "CCA-5",
+        "port": 7905,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 6,
+        "group": "CCA-6",
+        "port": 7906,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 7,
+        "group": "CCA-7",
+        "port": 7907,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      },
+      {
+        "slot": 8,
+        "group": "CCA-8",
+        "port": 7908,
+        "tool": null,
+        "key": null,
+        "node": "REJECT",
+        "local_node": "REJECT"
+      }
+    ],
+    "nodes": [
+      {
+        "name": "US-A",
+        "local_name": "US-A",
+        "users": [
+          {
+            "tool": "claude",
+            "key": "alice@example.com"
+          }
+        ]
+      },
+      {
+        "name": "US-B",
+        "local_name": "US-B",
+        "users": [
+          {
+            "tool": "codex",
+            "key": "dave@example.com"
+          }
+        ]
+      }
+    ]
+  },
+  "cost_total": {
+    "currency": "USD", "prices_date": "2026-11-01", "current_usd": 62.08, "weeks_usd": 1853.96, "average_usd": 159.05, "days_usd": 685.77, "today_usd": 5.48,
+    "days": [
+      {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "usd": 29.16},
+      {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "usd": 15.5},
+      {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "usd": 16.51},
+      {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "usd": 28.41},
+      {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "usd": 32.55},
+      {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "usd": 27.49},
+      {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "usd": 27.56},
+      {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "usd": 29.28},
+      {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "usd": 14.35},
+      {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "usd": 14.37},
+      {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "usd": 28.54},
+      {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "usd": 28.65},
+      {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "usd": 31.63},
+      {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "usd": 30.84},
+      {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "usd": 37.39},
+      {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "usd": 15.92},
+      {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "usd": 14.42},
+      {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "usd": 29.06},
+      {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "usd": 26.26},
+      {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "usd": 27.85},
+      {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "usd": 26.69},
+      {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "usd": 27.41},
+      {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "usd": 11.83},
+      {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "usd": 13.3},
+      {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "usd": 25.97},
+      {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "usd": 19.55},
+      {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "usd": 16.73},
+      {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "usd": 17.18},
+      {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "usd": 15.89},
+      {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "usd": 5.48}
+    ],
+    "by_tool": {
+      "claude": {"current_usd": 62.08, "weeks_usd": 1853.96, "average_usd": 159.05, "days_usd": 685.77, "today_usd": 5.48},
+      "codex": {"current_usd": 0, "weeks_usd": 0, "average_usd": null, "days_usd": 0, "today_usd": 0}
+    },
+    "scan": {"state": "ready", "updated_epoch": 1794041940.0},
+    "unattributed": {"days_usd": 1.25, "requests": 7}
+  },
+  "tools": [
+    {
+      "id": "claude",
+      "label": "Claude",
+      "app_label": "Claude App",
+      "cli_prefix": [],
+      "enabled": true,
+      "bin": "/Users/me/.local/bin/claude",
+      "app": {
+        "installed": false,
+        "path": null
+      },
+      "chrome": false,
+      "features": {
+        "app": true,
+        "api": true,
+        "usage": true,
+        "cost": true
+      },
+      "settings_problems": [],
+      "errors": [],
+      "last": "alice@example.com",
+      "accounts": [
+        {
+          "key": "alice@example.com",
+          "id": "alice-example-com-5e6f7a",
+          "alias": "",
+          "email": "alice@example.com",
+          "name": "alice@example.com",
+          "label": "alice@example.com",
+          "kind": "oauth",
+          "login": "logged_in",
+          "login_email": "alice@example.com",
+          "plan": "Pro 200",
+          "plan_tier": "standard",
+          "node": "US-A",
+          "port": 7901,
+          "slot": 1,
+          "group": "CCA-1",
+          "pinned": true,
+          "pinned_node": "US-A",
+          "is_last": true,
+          "api": null,
+          "badge": {
+            "label": "A",
+            "color": "#0A84FF"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
+          "can": {
+            "app": false,
+            "web": false,
+            "billing": false,
+            "limit_resets": false,
+            "usage": true,
+            "check": true,
+            "cli": true,
+            "policy_lock": false,
+            "devices": true,
+            "api_key": true,
+            "cost": true
+          },
+          "cost": {
+            "currency": "USD", "prices_date": "2026-11-01", "since_epoch": 1786498200.0,
+            "weeks": [
+              {"start_epoch": 1786435200.0, "end_epoch": 1787040000.0, "basis": "quota", "current": false, "partial": true, "usd": 42.33, "requests": 433, "unpriced_requests": 0, "tokens": {"input": 27080, "output": 223892, "cache_read": 37806906, "cache_write": 966924}},
+              {"start_epoch": 1787040000.0, "end_epoch": 1787644800.0, "basis": "quota", "current": false, "partial": false, "usd": 123.19, "requests": 1139, "unpriced_requests": 0, "tokens": {"input": 70843, "output": 582643, "cache_read": 103967708, "cache_write": 2580247}},
+              {"start_epoch": 1787644800.0, "end_epoch": 1788249600.0, "basis": "quota", "current": false, "partial": false, "usd": 167.13, "requests": 1566, "unpriced_requests": 0, "tokens": {"input": 99537, "output": 790436, "cache_read": 145019213, "cache_write": 3320431}},
+              {"start_epoch": 1788249600.0, "end_epoch": 1788854400.0, "basis": "quota", "current": false, "partial": false, "usd": 141.4, "requests": 1316, "unpriced_requests": 0, "tokens": {"input": 83250, "output": 684068, "cache_read": 118184390, "cache_write": 3025869}},
+              {"start_epoch": 1788854400.0, "end_epoch": 1789459200.0, "basis": "quota", "current": false, "partial": false, "usd": 149.43, "requests": 1404, "unpriced_requests": 0, "tokens": {"input": 87144, "output": 705064, "cache_read": 126006133, "cache_write": 3267386}},
+              {"start_epoch": 1789459200.0, "end_epoch": 1790064000.0, "basis": "quota", "current": false, "partial": false, "usd": 179.47, "requests": 1640, "unpriced_requests": 0, "tokens": {"input": 100846, "output": 836857, "cache_read": 147356280, "cache_write": 3664526}},
+              {"start_epoch": 1790064000.0, "end_epoch": 1790668800.0, "basis": "quota", "current": false, "partial": false, "usd": 140.17, "requests": 1326, "unpriced_requests": 0, "tokens": {"input": 83394, "output": 666116, "cache_read": 122999332, "cache_write": 2949840}},
+              {"start_epoch": 1790668800.0, "end_epoch": 1791273600.0, "basis": "quota", "current": false, "partial": false, "usd": 149.98, "requests": 1401, "unpriced_requests": 0, "tokens": {"input": 87347, "output": 715956, "cache_read": 125218525, "cache_write": 3091942}},
+              {"start_epoch": 1791273600.0, "end_epoch": 1791878400.0, "basis": "quota", "current": false, "partial": false, "usd": 182.55, "requests": 1693, "unpriced_requests": 0, "tokens": {"input": 106332, "output": 899933, "cache_read": 152891880, "cache_write": 3795077}},
+              {"start_epoch": 1791878400.0, "end_epoch": 1792483200.0, "basis": "quota", "current": false, "partial": false, "usd": 169.09, "requests": 1539, "unpriced_requests": 0, "tokens": {"input": 95023, "output": 752700, "cache_read": 137194951, "cache_write": 3520680}},
+              {"start_epoch": 1792483200.0, "end_epoch": 1793088000.0, "basis": "quota", "current": false, "partial": false, "usd": 189.2, "requests": 1716, "unpriced_requests": 0, "tokens": {"input": 110927, "output": 837303, "cache_read": 154789731, "cache_write": 3819398}},
+              {"start_epoch": 1793088000.0, "end_epoch": 1793692800.0, "basis": "quota", "current": false, "partial": false, "usd": 157.94, "requests": 1460, "unpriced_requests": 0, "tokens": {"input": 89058, "output": 761766, "cache_read": 131313791, "cache_write": 3346120}},
+              {"start_epoch": 1793692800.0, "end_epoch": 1794297600.0, "basis": "quota", "current": true, "partial": false, "usd": 62.08, "requests": 580, "unpriced_requests": 0, "tokens": {"input": 36465, "output": 282727, "cache_read": 50944439, "cache_write": 1273635}}
+            ],
+            "days": [
+              {"start_epoch": 1791475200.0, "end_epoch": 1791561600.0, "date": "2026-10-09", "current": false, "partial": false, "usd": 29.16, "requests": 262, "unpriced_requests": 0, "tokens": {"input": 15055, "output": 151301, "cache_read": 21693961, "cache_write": 581393}},
+              {"start_epoch": 1791561600.0, "end_epoch": 1791648000.0, "date": "2026-10-10", "current": false, "partial": false, "usd": 15.5, "requests": 147, "unpriced_requests": 0, "tokens": {"input": 9059, "output": 82470, "cache_read": 12028647, "cache_write": 355982}},
+              {"start_epoch": 1791648000.0, "end_epoch": 1791734400.0, "date": "2026-10-11", "current": false, "partial": false, "usd": 16.51, "requests": 155, "unpriced_requests": 0, "tokens": {"input": 9377, "output": 70595, "cache_read": 15038574, "cache_write": 356556}},
+              {"start_epoch": 1791734400.0, "end_epoch": 1791820800.0, "date": "2026-10-12", "current": false, "partial": false, "usd": 28.41, "requests": 265, "unpriced_requests": 0, "tokens": {"input": 17807, "output": 141224, "cache_read": 24679165, "cache_write": 553335}},
+              {"start_epoch": 1791820800.0, "end_epoch": 1791907200.0, "date": "2026-10-13", "current": false, "partial": false, "usd": 32.55, "requests": 309, "unpriced_requests": 0, "tokens": {"input": 20246, "output": 157902, "cache_read": 25945697, "cache_write": 695670}},
+              {"start_epoch": 1791907200.0, "end_epoch": 1791993600.0, "date": "2026-10-14", "current": false, "partial": false, "usd": 27.49, "requests": 250, "unpriced_requests": 0, "tokens": {"input": 15411, "output": 115233, "cache_read": 23622220, "cache_write": 602243}},
+              {"start_epoch": 1791993600.0, "end_epoch": 1792080000.0, "date": "2026-10-15", "current": false, "partial": false, "usd": 27.56, "requests": 239, "unpriced_requests": 0, "tokens": {"input": 14959, "output": 117461, "cache_read": 20115899, "cache_write": 545745}},
+              {"start_epoch": 1792080000.0, "end_epoch": 1792166400.0, "date": "2026-10-16", "current": false, "partial": false, "usd": 29.28, "requests": 254, "unpriced_requests": 0, "tokens": {"input": 15462, "output": 115015, "cache_read": 21687837, "cache_write": 582486}},
+              {"start_epoch": 1792166400.0, "end_epoch": 1792252800.0, "date": "2026-10-17", "current": false, "partial": false, "usd": 14.35, "requests": 138, "unpriced_requests": 0, "tokens": {"input": 8696, "output": 74957, "cache_read": 12970772, "cache_write": 321282}},
+              {"start_epoch": 1792252800.0, "end_epoch": 1792339200.0, "date": "2026-10-18", "current": false, "partial": false, "usd": 14.37, "requests": 133, "unpriced_requests": 0, "tokens": {"input": 7972, "output": 62086, "cache_read": 13811945, "cache_write": 315893}},
+              {"start_epoch": 1792339200.0, "end_epoch": 1792425600.0, "date": "2026-10-19", "current": false, "partial": false, "usd": 28.54, "requests": 265, "unpriced_requests": 0, "tokens": {"input": 17175, "output": 139485, "cache_read": 22663732, "cache_write": 619010}},
+              {"start_epoch": 1792425600.0, "end_epoch": 1792512000.0, "date": "2026-10-20", "current": false, "partial": false, "usd": 28.65, "requests": 270, "unpriced_requests": 0, "tokens": {"input": 16421, "output": 124405, "cache_read": 24112341, "cache_write": 555587}},
+              {"start_epoch": 1792512000.0, "end_epoch": 1792598400.0, "date": "2026-10-21", "current": false, "partial": false, "usd": 31.63, "requests": 291, "unpriced_requests": 0, "tokens": {"input": 17943, "output": 141905, "cache_read": 26449862, "cache_write": 661839}},
+              {"start_epoch": 1792598400.0, "end_epoch": 1792684800.0, "date": "2026-10-22", "current": false, "partial": false, "usd": 30.84, "requests": 274, "unpriced_requests": 0, "tokens": {"input": 16849, "output": 134467, "cache_read": 24256730, "cache_write": 612066}},
+              {"start_epoch": 1792684800.0, "end_epoch": 1792771200.0, "date": "2026-10-23", "current": false, "partial": false, "usd": 37.39, "requests": 343, "unpriced_requests": 0, "tokens": {"input": 22922, "output": 166005, "cache_read": 32765360, "cache_write": 818566}},
+              {"start_epoch": 1792771200.0, "end_epoch": 1792857600.0, "date": "2026-10-24", "current": false, "partial": false, "usd": 15.92, "requests": 151, "unpriced_requests": 0, "tokens": {"input": 10092, "output": 76550, "cache_read": 12625357, "cache_write": 319512}},
+              {"start_epoch": 1792857600.0, "end_epoch": 1792944000.0, "date": "2026-10-25", "current": false, "partial": false, "usd": 14.42, "requests": 141, "unpriced_requests": 0, "tokens": {"input": 9271, "output": 70526, "cache_read": 12902047, "cache_write": 308055}},
+              {"start_epoch": 1792944000.0, "end_epoch": 1793030400.0, "date": "2026-10-26", "current": false, "partial": false, "usd": 29.06, "requests": 257, "unpriced_requests": 0, "tokens": {"input": 17074, "output": 122683, "cache_read": 22079932, "cache_write": 553044}},
+              {"start_epoch": 1793030400.0, "end_epoch": 1793116800.0, "date": "2026-10-27", "current": false, "partial": false, "usd": 26.26, "requests": 222, "unpriced_requests": 0, "tokens": {"input": 14846, "output": 112816, "cache_read": 20146087, "cache_write": 489045}},
+              {"start_epoch": 1793116800.0, "end_epoch": 1793203200.0, "date": "2026-10-28", "current": false, "partial": false, "usd": 27.85, "requests": 243, "unpriced_requests": 0, "tokens": {"input": 14285, "output": 138046, "cache_read": 21248740, "cache_write": 562139}},
+              {"start_epoch": 1793203200.0, "end_epoch": 1793289600.0, "date": "2026-10-29", "current": false, "partial": false, "usd": 26.69, "requests": 267, "unpriced_requests": 0, "tokens": {"input": 15563, "output": 134920, "cache_read": 23806499, "cache_write": 609413}},
+              {"start_epoch": 1793289600.0, "end_epoch": 1793376000.0, "date": "2026-10-30", "current": false, "partial": false, "usd": 27.41, "requests": 254, "unpriced_requests": 0, "tokens": {"input": 16033, "output": 124499, "cache_read": 22709916, "cache_write": 579798}},
+              {"start_epoch": 1793376000.0, "end_epoch": 1793462400.0, "date": "2026-10-31", "current": false, "partial": false, "usd": 11.83, "requests": 114, "unpriced_requests": 0, "tokens": {"input": 7036, "output": 54796, "cache_read": 10523227, "cache_write": 226216}},
+              {"start_epoch": 1793462400.0, "end_epoch": 1793548800.0, "date": "2026-11-01", "current": false, "partial": false, "usd": 13.3, "requests": 124, "unpriced_requests": 0, "tokens": {"input": 7812, "output": 67184, "cache_read": 11914630, "cache_write": 287072}},
+              {"start_epoch": 1793548800.0, "end_epoch": 1793635200.0, "date": "2026-11-02", "current": false, "partial": false, "usd": 25.97, "requests": 241, "unpriced_requests": 0, "tokens": {"input": 14918, "output": 137481, "cache_read": 22148618, "cache_write": 594708}},
+              {"start_epoch": 1793635200.0, "end_epoch": 1793721600.0, "date": "2026-11-03", "current": false, "partial": false, "usd": 19.55, "requests": 176, "unpriced_requests": 0, "tokens": {"input": 10196, "output": 78010, "cache_read": 16049706, "cache_write": 382864}},
+              {"start_epoch": 1793721600.0, "end_epoch": 1793808000.0, "date": "2026-11-04", "current": false, "partial": false, "usd": 16.73, "requests": 155, "unpriced_requests": 0, "tokens": {"input": 10480, "output": 73101, "cache_read": 13935296, "cache_write": 334928}},
+              {"start_epoch": 1793808000.0, "end_epoch": 1793894400.0, "date": "2026-11-05", "current": false, "partial": false, "usd": 17.18, "requests": 156, "unpriced_requests": 0, "tokens": {"input": 9449, "output": 71728, "cache_read": 12930437, "cache_write": 349457}},
+              {"start_epoch": 1793894400.0, "end_epoch": 1793980800.0, "date": "2026-11-06", "current": false, "partial": false, "usd": 15.89, "requests": 151, "unpriced_requests": 0, "tokens": {"input": 9691, "output": 82043, "cache_read": 13161664, "cache_write": 326547}},
+              {"start_epoch": 1793980800.0, "end_epoch": 1794067200.0, "date": "2026-11-07", "current": true, "partial": false, "usd": 5.48, "requests": 55, "unpriced_requests": 0, "tokens": {"input": 3280, "output": 29500, "cache_read": 4761338, "cache_write": 131003}}
+            ],
+            "summary": {"weeks_usd": 1853.96, "current_usd": 62.08, "average_usd": 159.05, "average_weeks": 11, "days_usd": 685.77, "today_usd": 5.48, "requests": 17213, "unpriced_requests": 0},
+            "devices": [
+              {"id": "SHA256:fffffffffffffffffffffffffffffffffffffffffff", "name": "test-mac", "me": true, "revoked": false, "synced_epoch": 1794041940.0, "stale": false, "weeks_usd": [19.4, 56.46, 76.6, 64.81, 68.49, 90.18, 85.66, 91.65, 111.56, 103.33, 115.62, 96.52, 37.94], "days_usd": [17.82, 9.47, 10.09, 17.36, 19.89, 16.8, 16.84, 17.89, 8.77, 8.78, 17.44, 17.51, 19.33, 18.85, 22.85, 9.73, 8.81, 17.76, 16.05, 17.02, 16.31, 16.75, 7.23, 8.13, 15.87, 11.95, 10.22, 10.5, 9.71, 3.35], "summary": {"weeks_usd": 1018.22, "current_usd": 37.94, "average_usd": 87.35, "days_usd": 419.08, "today_usd": 3.35}},
+              {"id": "SHA256:ddddddddddddddddddddddddddddddddddddddddddd", "name": "dan-air", "me": false, "revoked": false, "synced_epoch": 1794040500.0, "stale": false, "weeks_usd": [12.35, 35.93, 48.75, 41.24, 43.58, 57.38, 54.51, 58.33, 70.99, 65.76, 73.58, 61.42, 24.14], "days_usd": [11.34, 6.03, 6.42, 11.05, 12.66, 10.69, 10.72, 11.39, 5.58, 5.59, 11.1, 11.14, 12.3, 11.99, 14.54, 6.19, 5.61, 11.3, 10.21, 10.83, 10.38, 10.66, 4.6, 5.17, 10.1, 7.6, 6.51, 6.68, 6.18, 2.13], "summary": {"weeks_usd": 647.96, "current_usd": 24.14, "average_usd": 55.59, "days_usd": 266.69, "today_usd": 2.13}},
+              {"id": "SHA256:9999999999999999999999999999999999999999999", "name": "old-air", "me": false, "revoked": true, "synced_epoch": 1789898400.0, "stale": true, "weeks_usd": [10.58, 30.8, 41.78, 35.35, 37.36, 31.91, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "days_usd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "summary": {"weeks_usd": 187.78, "current_usd": 0.0, "average_usd": 16.11, "days_usd": 0.0, "today_usd": 0.0}}
+            ],
+            "unpriced_models": [],
+            "sync": {"state": "ok", "message": null, "checked_epoch": 1794041910.0, "missing": [{"name": "eve-mini", "used_epoch": 1794024000.0}]}
+          },
+          "can_why": {
+            "app": "app_missing",
+            "web": "no_chrome"
+          },
+          "usage": null,
+          "health": null
+        },
+        {
+          "key": "直连接口",
+          "id": "api-1a2b3c",
+          "alias": "直连接口",
+          "email": "",
+          "name": "直连接口",
+          "label": "直连接口",
+          "kind": "api",
+          "login": "api",
+          "login_email": "",
+          "plan": "",
+          "plan_tier": "",
+          "node": null,
+          "port": null,
+          "slot": null,
+          "group": null,
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": {
+            "host": "api.example.com",
+            "model": "model-x"
+          },
+          "badge": null,
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
+          "can": {
+            "app": false,
+            "web": false,
+            "billing": false,
+            "limit_resets": false,
+            "usage": false,
+            "check": true,
+            "cli": true,
+            "policy_lock": false,
+            "devices": false,
+            "api_key": true,
+            "cost": false
+          },
+          "cost": null,
+          "can_why": {
+            "app": "api_account",
+            "web": "api_account",
+            "usage": "api_account"
+          },
+          "usage": null,
+          "health": null
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "app_label": "ChatGPT App",
+      "cli_prefix": [
+        "codex"
+      ],
+      "enabled": true,
+      "bin": "/Users/me/.local/bin/codex",
+      "app": {
+        "installed": false,
+        "path": null
+      },
+      "chrome": false,
+      "features": {
+        "app": true,
+        "api": true,
+        "usage": true,
+        "cost": true
+      },
+      "settings_problems": [],
+      "errors": [],
+      "last": null,
+      "accounts": [
+        {
+          "key": "dave@example.com",
+          "id": "dave-example-com-7a8b9c",
+          "alias": "",
+          "email": "dave@example.com",
+          "name": "dave@example.com",
+          "label": "dave@example.com",
+          "kind": "oauth",
+          "login": "logged_in",
+          "login_email": "dave@example.com",
+          "plan": "Plus",
+          "plan_tier": "standard",
+          "node": "US-B",
+          "port": 7902,
+          "slot": 2,
+          "group": "CCA-2",
+          "pinned": false,
+          "pinned_node": null,
+          "is_last": false,
+          "api": null,
+          "badge": {
+            "label": "D",
+            "color": "#30A46C"
+          },
+          "app": {
+            "running": false,
+            "pid": null
+          },
+          "cli": {
+            "running": false,
+            "sessions": 0,
+            "since_epoch": null
+          },
+          "can": {
+            "app": false,
+            "web": false,
+            "billing": false,
+            "limit_resets": false,
+            "usage": true,
+            "check": true,
+            "cli": true,
+            "policy_lock": false,
+            "devices": false,
+            "api_key": true,
+            "cost": true
+          },
+          "cost": null,
+          "can_why": {
+            "app": "app_missing",
+            "web": "no_chrome"
+          },
+          "usage": null,
+          "health": null
+        }
+      ]
+    }
+  ]
+}

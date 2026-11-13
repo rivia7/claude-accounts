@@ -681,6 +681,7 @@ class Tool:
     install_url = 'https://claude.ai/install.sh'   # 官方安装脚本（辅助安装 install-cli：和官网上的 curl -fsSL … | bash 一样）
     install_shell = 'bash'
     has_app = has_api = has_usage = True   # 有桌面 App（cca app、启动器）、第三方 API 账号、查用量的接口
+    has_cost = True                   # 折合金额（会话记录里有每次请求的用量，见“折合金额”一节）
 
     def __init__(self):
         self.ids = {}   # 第三方 API 账号：账号表的键 → id（改别名时 id 不变，账号目录、钥匙串里的 key 和端口都跟着 id 走）
@@ -889,7 +890,7 @@ class AgyTool(Tool):
     update_cmd = 'agy update'
     install_url = 'https://antigravity.google/cli/install.sh'   # 下载、SHA512 校验后装进 ~/.local/bin/agy，再跑 agy install（只看 PATH）
     install_shell = 'bash'
-    has_app = has_api = has_usage = False
+    has_app = has_api = has_usage = has_cost = False
 
     def install_env(self, folder):
         return {}
@@ -2252,7 +2253,8 @@ def link_levels(cd, master):
     return out
 
 
-def cmd_link(key):
+def cmd_link(key, after=''):
+    """py link 键 [cost]：链接共享目录；cost 是会话刚结束（在后台统计折合金额，最多 COST_EVERY 一次）"""
     cd, master = cdir(key), T.master
     os.makedirs(cd, exist_ok=True)
     os.makedirs(master, exist_ok=True)
@@ -2297,6 +2299,8 @@ def cmd_link(key):
         if saved != base or not os.path.exists(snapshot):
             save_json(snapshot, saved, 0o600, follow_symlinks=False)
     T.after_link(key)
+    if after == 'cost' and T.has_cost:
+        cost_kick()
 
 
 # --- 命令 -------------------------------------------------------------------
@@ -6757,6 +6761,8 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
         usage_table(rows, now, cols, color == '1', api)
     sys.stdout.flush()
     keyshare_kick()  # 开着设备统计时：记下备查的 API key 和登录了同一个账号的其他设备同步（后台，最多 KEYSHARE_EVERY 一次）
+    if T.has_cost:
+        cost_kick()   # 折合金额：在后台统计、和别的设备同步（最多 COST_EVERY 一次）
     sys.exit(0 if any(r['source'] != 'none' for r in rows) else 1)
 
 
@@ -6846,11 +6852,11 @@ def agy_claims(key):
     return {'email': e, 'tier': ''} if isinstance(e, str) and EMAIL_RE.match(e) else {}
 
 
-def codex_claims(key):
+def codex_claims(key, path=None):
     """Codex 账号登录的身份：auth.json 里 id_token 的声明，只取邮箱、套餐、工作空间和用户 id（不验签名；不碰 access / refresh
-    token，也不保存、不转发）。没登录、用 API key 登录、读不了都返回 {}"""
+    token，也不保存、不转发）。没登录、用 API key 登录、读不了都返回 {}。path：别处的 auth.json（折合金额认 ~/.codex 里直接登录的）"""
     import base64
-    j = load_quiet(os.path.join(cdir(key), 'auth.json'))
+    j = load_quiet(path or os.path.join(cdir(key), 'auth.json'))
     tok = j.get('tokens') if isinstance(j, dict) else None
     tok = tok.get('id_token') if isinstance(tok, dict) else None
     if not isinstance(tok, str) or tok.count('.') != 2:
@@ -7780,6 +7786,7 @@ def presence_post(cfg, op, payload, timeout=8):
     args = ['curl', '-q', '-sS', '-k', '--proxy', '', '--noproxy', '*', '--proto', '=https', '--max-redirs', '0',
             '--connect-timeout', '5', '-m', str(timeout), '--pinnedpubkey', ';'.join(cfg['pins']),
             '-H', 'Content-Type: application/json', '-H', 'X-Cca-Sig: ' + base64.b64encode(sig).decode('ascii'),
+            '-H', 'Expect:',   # 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
             '--data-binary', '@-', '-w', '\n%{http_code}', cfg['url'] + '/v1/' + op]
     try:
         r = subprocess.run(args, input=body, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout + 5)
@@ -7910,6 +7917,7 @@ def cmd_presence_agent():
                     raise   # 同步时被停掉（cca restore、关机）：照常报 end=down 再退出
                 except (Exception, SystemExit):   # 同步 API key 出了什么错都不能停掉上报（config.json 读不了时 die 是 SystemExit）
                     pass
+                cost_kick()   # 折合金额：在后台统计、和别的设备同步（最多 COST_EVERY 一次）
                 key_due = time.monotonic() + KEYSHARE_EVERY
             units, pids = presence_scan(cfg['salt'], targets, procs, apps, time.time(), mono)
             cur = sorted((a, len(u['cli']), bool(u['app'])) for a, u in units.items())
@@ -7945,10 +7953,26 @@ def cmd_presence_agent():
             presence_post(cfg, 'report', {'units': units, 'end': 'down'}, timeout=3)
 
 
+BG_ENV_DROP = ('CCA_EVENTS', 'CCA_GRANT', 'CCA_RO', 'CCA_PROMPT', 'CCA_TTY', 'CCA_YES', 'CCA_TOOL')   # 后台进程不带的：App 的提问会话、事件这些
+
+
+def spawn_background(*args):
+    """在后台起 cca 的一个子命令（上报进程、同步 API key、统计折合金额）：后台优先级（只用能效核，定时器和别的唤醒合在一起）、
+    自己一个会话、不接终端、不带 BG_ENV_DROP。起不了就算了（静默）"""
+    import subprocess
+    argv = [SELF_PATH] + list(args)
+    if os.access('/usr/sbin/taskpolicy', os.X_OK):
+        argv = ['/usr/sbin/taskpolicy', '-c', 'background'] + argv
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                         start_new_session=True, env={k: v for k, v in os.environ.items() if k not in BG_ENV_DROP})
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
 def presence_wake(key):
     """key（T 的）是映射里的官方账号、正在用：确保这台 Mac 的上报进程在跑（在跑的会经 kqueue 自己看到新的登记），
     不在就在后台起一个。静默：出什么错都不影响启动"""
-    import subprocess
     try:
         if not presence_mapped(policy_raw(T), key, None) or not presence_load()[1]:
             return
@@ -7959,14 +7983,8 @@ def presence_wake(key):
             except OSError:
                 return   # 在跑
             fcntl.flock(f, fcntl.LOCK_UN)
-        argv = [SELF_PATH, '_presence-agent']
-        if os.access('/usr/sbin/taskpolicy', os.X_OK):
-            argv = ['/usr/sbin/taskpolicy', '-c', 'background'] + argv   # 后台优先级：只用能效核，定时器和别的唤醒合在一起
-        env = {k: v for k, v in os.environ.items()
-               if k not in ('CCA_EVENTS', 'CCA_GRANT', 'CCA_RO', 'CCA_PROMPT', 'CCA_TTY', 'CCA_YES', 'CCA_TOOL')}
-        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         close_fds=True, start_new_session=True, env=env)
-    except (OSError, ValueError, subprocess.SubprocessError):
+        spawn_background('_presence-agent')
+    except (OSError, ValueError):
         pass
 
 
@@ -8016,48 +8034,70 @@ def keyshare_on(key, v):
     return T in (CLAUDE, CODEX) and not is_api(v) and presence_mapped(policy_raw(T), key, v) and bool(presence_load()[1])
 
 
-def keyshare_keys(salt, tool, email, ident):
-    """这个账号的两把密钥（加密、认证）：盐、工具、邮箱、登录身份一起派生"""
+KEYSHARE_LABEL = 'cca-keyshare-v1'   # 密钥、认证的标签（折合金额的是 COST_LABEL）
+
+
+def keyshare_keys(salt, tool, email, ident, label=KEYSHARE_LABEL):
+    """这个账号的两把密钥（加密、认证）：盐、工具、邮箱、登录身份一起派生；label 分开用途（折合金额的是 COST_LABEL）"""
     import hmac
-    root = hmac.new(bytes.fromhex(salt), ('cca-keyshare-v1\0%s\0%s\0%s' % (tool.name, email.lower(), ident)).encode('utf-8'),
+    root = hmac.new(bytes.fromhex(salt), ('%s\0%s\0%s\0%s' % (label, tool.name, email.lower(), ident)).encode('utf-8'),
                     hashlib.sha256).digest()
     return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
 
 
-def keyshare_xor(enc, nonce, data):
-    """HMAC-SHA256(加密密钥, nonce + 块号) 当密钥流（每块 32 字节）"""
+# 服务器存的密文（共享 API key、折合金额共用，格式在 server/README.md）：{"n": nonce, "c": 密文, "t": 认证}（base64）。
+# HMAC-SHA256(加密密钥, nonce + 块号) 按块（32 字节）当密钥流异或加密，再用另一把密钥认证 ad + nonce + 密文（先加密后认证；
+# ad 是标签、账号摘要这些，挪不到别的用途、别的账号上）。明文由调用的一方补齐。
+def blob_ad(*parts):
+    """认证里带着的：每一项后面一个 \\0"""
+    return ''.join(x + '\0' for x in parts).encode('ascii')
+
+
+def blob_xor(enc, nonce, data):
     import hmac
     stream = b''.join(hmac.new(enc, nonce + i.to_bytes(8, 'big'), hashlib.sha256).digest() for i in range((len(data) + 31) // 32))
     return bytes(a ^ b for a, b in zip(data, stream))
 
 
-def keyshare_tag(mac, aid, nonce, ct):
+def blob_tag(mac, ad, nonce, ct):
     import hmac
-    return hmac.new(mac, b'cca-keyshare-v1\0' + aid.encode('ascii') + b'\0' + nonce + ct, hashlib.sha256).digest()
+    return hmac.new(mac, ad + nonce + ct, hashlib.sha256).digest()
 
 
-def keyshare_seal(keys, aid, s, at):
-    """key（删掉时是 None）和时间 → 服务器存的那一份 {"n": nonce, "c": 密文, "t": 认证}（base64）"""
+def blob_seal(keys, ad, pt):
+    """补齐好的明文 → {"n", "c", "t"}；keys 是 (加密, 认证) 两把密钥"""
     import base64, secrets
-    pt = json.dumps({'v': 1, 'key': s, 'at': at}, separators=(',', ':')).encode('utf-8')
-    pt += b' ' * (-len(pt) % KEYSHARE_PAD)
     nonce = secrets.token_bytes(16)
-    ct = keyshare_xor(keys[0], nonce, pt)
+    ct = blob_xor(keys[0], nonce, pt)
     b64 = lambda b: base64.b64encode(b).decode('ascii')
-    return {'n': b64(nonce), 'c': b64(ct), 't': b64(keyshare_tag(keys[1], aid, nonce, ct))}
+    return {'n': b64(nonce), 'c': b64(ct), 't': b64(blob_tag(keys[1], ad, nonce, ct))}
 
 
-def keyshare_open(keys, aid, blob):
-    """服务器上的那一份解开：{"key": key | None, "at": 时间}；认证不过、格式不对（伪造的、别的账号的、坏了）是 None"""
+def blob_open(keys, ad, blob):
+    """blob_seal 反过来：明文（带着补齐）；格式不对、认证不过（伪造的、别的账号的、坏了）是 None"""
     import base64, binascii, hmac
     try:
         nonce, ct, tag = (base64.b64decode(blob[k], validate=True) for k in ('n', 'c', 't'))
     except (TypeError, KeyError, ValueError, binascii.Error):
         return None
-    if len(nonce) != 16 or not hmac.compare_digest(tag, keyshare_tag(keys[1], aid, nonce, ct)):
+    if len(nonce) != 16 or not hmac.compare_digest(tag, blob_tag(keys[1], ad, nonce, ct)):
+        return None
+    return blob_xor(keys[0], nonce, ct)
+
+
+def keyshare_seal(keys, aid, s, at):
+    """key（删掉时是 None）和时间 → 服务器存的那一份（blob_seal；明文用空格补齐到 KEYSHARE_PAD 的整数倍）"""
+    pt = json.dumps({'v': 1, 'key': s, 'at': at}, separators=(',', ':')).encode('utf-8')
+    return blob_seal(keys, blob_ad(KEYSHARE_LABEL, aid), pt + b' ' * (-len(pt) % KEYSHARE_PAD))
+
+
+def keyshare_open(keys, aid, blob):
+    """服务器上的那一份解开：{"key": key | None, "at": 时间}；认证不过、格式不对（伪造的、别的账号的、坏了）是 None"""
+    pt = blob_open(keys, blob_ad(KEYSHARE_LABEL, aid), blob)
+    if pt is None:
         return None
     try:
-        j = json.loads(keyshare_xor(keys[0], nonce, ct).decode('utf-8'))
+        j = json.loads(pt.decode('utf-8'))
     except (ValueError, UnicodeDecodeError):
         return None
     if not (isinstance(j, dict) and j.get('v') == 1 and is_num(j.get('at')) and j['at'] > 0
@@ -8282,7 +8322,6 @@ def keyshare_round(cfg, acc, timeout=15):
 
 def keyshare_kick(force=False):
     """在后台跑一次 cca _key-sync（同步记下备查的 API key）；force 以外还不到时候就不起进程。静默"""
-    import subprocess
     try:
         if not presence_load()[1]:
             return
@@ -8291,14 +8330,8 @@ def keyshare_kick(force=False):
         last = lambda k: j[k] if is_num(j.get(k)) else 0
         if not force and (time.time() - last('synced') < KEYSHARE_EVERY or time.time() < last('retry')):
             return
-        argv = [SELF_PATH, '_key-sync'] + (['force'] if force else [])
-        if os.access('/usr/sbin/taskpolicy', os.X_OK):
-            argv = ['/usr/sbin/taskpolicy', '-c', 'background'] + argv
-        env = {k: v for k, v in os.environ.items()
-               if k not in ('CCA_EVENTS', 'CCA_GRANT', 'CCA_RO', 'CCA_PROMPT', 'CCA_TTY', 'CCA_YES', 'CCA_TOOL')}
-        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         close_fds=True, start_new_session=True, env=env)
-    except (OSError, ValueError, subprocess.SubprocessError):
+        spawn_background('_key-sync', *(['force'] if force else []))
+    except (OSError, ValueError):
         pass
 
 
@@ -8316,6 +8349,1076 @@ def cmd_key_sync(mode=''):
         keyshare_sync(mode in ('force', 'now'), 8 if mode == 'now' else 15)
     except (OSError, ValueError, SystemExit):   # SystemExit：config.json 读不了（die 已经说了原因）
         pass
+
+
+# ---------------------------------------------------------------------------
+# 折合金额（cost）：这台设备上 Claude Code、Codex 的会话记录（共享的 ~/.claude/projects、~/.codex/sessions）里每一次请求的用量，
+# 按官方 API 的标价折成美元，按登录的账号身份（Claude 的 accountUuid、Codex 的 chatgpt_user_id）、按小时累计。不是实际花费
+# （订阅不按这个收费）。只读用量的数字（token 数、模型、时间、账号身份），不读对话的内容。
+# 会话记录里带账号信息才算得进来：Claude Code 在会话里写 session-owner（2.1.317 起；换了账号续接时它把会话复制成一个新的，
+# 所以按位置认：这一行以后的回复都是这个账号的），子代理的记录按它所在的会话认；Codex 的 session_meta 写 creator_user_id
+# （0.157 起；一个文件里第一个 session_meta 是它自己的，后面的是复制进来的历史），用量取 token_count 事件（token_usage_record
+# 写到一半就不写了，少算很多）。更早的、Claude 桌面 App 里的会话算不进来；Codex 续接别的账号建的会话时，用量记在建它的账号上。
+# 增量地读：每个文件记着读到哪（只读完整的行；文件被截短、换了、读过的末尾对不上就从头读），回复按消息 id 去重（Claude Code
+# 一条回复的每一块各写一行，复制的会话里也有），Codex 的按时间和累计的用量去重（同一次请求会报好几遍）。
+# 映射里的官方账号、开着设备统计时，各台设备算的经维护者的设备统计服务器交换（op ledger，见 server/README.md）：一台设备一份、
+# 只写自己的那一份，服务器只存密文（密钥和共享 API key 一样由盐、邮箱、登录身份派生，标签不同：别的设备、服务器都看不到）。
+# 统计在后台进程里做（cca _cost-sync：会话结束、cca usage、cca devices、上报进程里，最多 COST_EVERY 一次；App 定时跑
+# cca cost sync --json），_gui state 只读统计好的（cost/local.json、remote.json、sync.json）。config.json 的 "cost": false 关掉
+COST_DIR = os.path.join(CCA_HOME, 'cost')
+COST_PRICES_DATE = '2026-11-13'   # 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing）
+COST_BUILD = COST_PRICES_DATE + '/1'   # 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算
+COST_EVERY = 300                  # 后台统计最多隔这么久起一次
+COST_SYNC_EVERY = 600             # 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
+COST_KEEP = WEEKS_KEEP * WEEK     # scan.json 里的小时数据留这么久：从头重算时会话记录可能已经被 Claude Code 删掉了一部分，以前算过的靠它接上
+COST_PUBLISH = 14 * WEEK          # local.json 里、传给别的设备的留这么久（App 看最近 12 周和这一周）：只传显示得到的，密文小
+COST_SEEN = 35 * 86400            # 去重的记录留这么久；之后才读到的更早的回复（改了名、复制出来的文件）不算
+COST_STALE = 36 * 3600            # 别的设备超过这么久没传上来：之后用的可能还没算进来
+COST_BEAT = 12 * 3600             # 内容没变也隔这么久重传一次（别的设备按它看这台设备是不是还在同步）
+COST_RETRY = 6 * 3600             # 旧的服务器（404：还不收）隔这么久再试
+COST_DAYS = 30                    # 按天看最近这么多天
+COST_LABEL = 'cca-cost-v1'        # 密钥、认证的标签（和共享 API key 的分开）
+COST_PAD = 1024                   # 明文补齐到这么长的整数倍
+COST_BLOB_MAX = 98304             # 服务器收的一份密文最长多少个字符（base64）
+COST_PUT_MAX = 256 * 1024         # 一次请求最多传这么多密文（多了分几次）
+COST_WAIT = 240                   # cca cost sync 最多等正在跑的统计这么久
+COST_OLD = '维护者的设备统计服务器还不支持同步折合金额（维护者要更新服务器：./policy.sh presence deploy）'
+COST_HOUR_RE = lazy_re(r'^[0-9]{9,11}$')
+COST_DATE_RE = lazy_re(r'-(20[0-9]{6}|20[0-9]{2}-[0-9]{2}-[0-9]{2})$')
+# Anthropic 的标价（美元 / 百万 token）：输入、5 分钟缓存写、1 小时缓存写、缓存读、输出
+CLAUDE_PRICES = {
+    'claude-fable-5-2': (8, 10, 16, 0.20, 40), 'claude-mythos-5-2': (8, 10, 16, 0.20, 40),
+    'claude-fable-5-1': (10, 12.5, 20, 0.25, 50), 'claude-mythos-5-1': (10, 12.5, 20, 0.25, 50),
+    'claude-fable-5': (10, 12.5, 20, 1, 50), 'claude-mythos-5': (10, 12.5, 20, 1, 50),
+    'claude-opus-5-5': (4, 5, 8, 0.20, 20),
+    'claude-opus-5': (5, 6.25, 10, 0.50, 25), 'claude-opus-4-8': (5, 6.25, 10, 0.50, 25),
+    'claude-opus-4-7': (5, 6.25, 10, 0.50, 25), 'claude-opus-4-6': (5, 6.25, 10, 0.50, 25),
+    'claude-opus-4-5': (5, 6.25, 10, 0.50, 25),
+    'claude-opus-4-1': (15, 18.75, 30, 1.50, 75), 'claude-opus-4': (15, 18.75, 30, 1.50, 75),
+    'claude-sonnet-5-5': (2, 2.5, 4, 0.10, 10), 'claude-sonnet-5': (2, 2.5, 4, 0.20, 10),
+    'claude-sonnet-4-6': (3, 3.75, 6, 0.30, 15), 'claude-sonnet-4-5': (3, 3.75, 6, 0.30, 15),
+    'claude-sonnet-4': (3, 3.75, 6, 0.30, 15),
+    'claude-haiku-5-5': (0.10, 0.125, 0.20, 0.01, 0.50), 'claude-haiku-4-5': (1, 1.25, 2, 0.10, 5),
+}
+CLAUDE_LONG = {'claude-haiku-5-5': (100000, (0.50, 0.625, 1, 0.05, 2.50))}   # 一次请求的输入（含缓存）超过这么多 token 时的标价
+CLAUDE_FAST = {'claude-fable-5-2': (16, 80), 'claude-mythos-5-2': (16, 80), 'claude-opus-5-5': (8, 40),
+               'claude-opus-5': (10, 50), 'claude-opus-4-8': (10, 50)}   # 快速模式（usage.speed 是 fast）的输入、输出；缓存跟着输入翻倍
+CLAUDE_NO_GEO = {'claude-opus-4-5', 'claude-opus-4-1', 'claude-opus-4', 'claude-sonnet-4-5', 'claude-sonnet-4',
+                 'claude-haiku-4-5'}   # 4.6 以前的模型：只在美国推理（inference_geo 是 us）不加价，别的加 10%
+CLAUDE_WEB_SEARCH = 10000         # 网页搜索一次 0.01 美元（单位：百万分之一美元）
+# OpenAI 的标价（美元 / 百万 token）：输入、缓存读、缓存写（30 分钟）、输出；后一组是一次请求的输入超过 OPENAI_LONG 时的
+OPENAI_PRICES = {
+    'gpt-6.1-sol': ((2, 0.10, 2.50, 10), (4, 0.20, 5, 15)), 'gpt-6-astra': ((10, 1, 12.50, 50), (20, 2, 25, 75)),
+    'gpt-6.1-terra': ((1, 0.05, 1.25, 5), (2, 0.10, 2.50, 7.50)), 'gpt-6-sol': ((2, 0.20, 2.50, 10), (4, 0.40, 5, 15)),
+    'gpt-6-luna': ((0.10, 0.01, 0.125, 0.50), (0.20, 0.02, 0.25, 0.75)),
+    'gpt-5.6-sol': ((4, 0.40, 5, 20), (8, 0.80, 10, 30)), 'gpt-5.6-terra': ((2, 0.20, 2.50, 12), (4, 0.40, 5, 18)),
+    'gpt-5.6-luna': ((0.20, 0.02, 0.25, 1.20), (0.40, 0.04, 0.50, 1.80)),
+    'gpt-5.3-codex': ((1.75, 0.175, None, 14), None),
+}
+# gpt-5.6-sol 是促销价（官方写着到 2026-11-30，没写之后的价）：官方改价以后要按请求的时间分段、以前的照这个价，
+# 不能直接换掉（换了价要改 COST_BUILD，从头重算时以前的用量也会按新价算）
+OPENAI_LONG = 272000
+OPENAI_TIERS = {'priority': 2, 'fast': 2, 'flex': 0.5}   # Codex 的 service_tier → 标价的倍数（Priority 改名叫 Fast；Flex 半价）
+OPENAI_ULTRA = {'gpt-6.1-sol': 6, 'gpt-6-astra': 6}       # Ultrafast 只有这两个模型有标价（6 倍），别的按 Fast 算
+
+
+def cost_model(m):
+    """会话记录里的模型名 → 价格表里的写法：小写，去掉 [1m] 这类后缀和末尾的日期"""
+    if not isinstance(m, str):
+        return ''
+    return COST_DATE_RE.sub('', m.strip().lower().split('[', 1)[0])[:64]
+
+
+def cost_int(x):
+    """token 数这类计数：非负整数（bool、小数、大得离谱的都当 0）"""
+    return x if type(x) is int and 0 <= x < 10 ** 12 else 0
+
+
+def cost_claude(model, u):
+    """一条 Claude 回复的用量（message.usage）：(折合多少百万分之一美元：没有公开价格的模型是 None, (输入, 输出, 缓存读, 缓存写))"""
+    inp, out, cr = cost_int(u.get('input_tokens')), cost_int(u.get('output_tokens')), cost_int(u.get('cache_read_input_tokens'))
+    cc = u.get('cache_creation')
+    cc = cc if isinstance(cc, dict) else {}
+    w5, w1 = cost_int(cc.get('ephemeral_5m_input_tokens')), cost_int(cc.get('ephemeral_1h_input_tokens'))
+    if not (w5 or w1):
+        w5 = cost_int(u.get('cache_creation_input_tokens'))
+    tok = (inp, out, cr, w5 + w1)
+    p = CLAUDE_PRICES.get(model)
+    if p is None:
+        return None, tok
+    lp = CLAUDE_LONG.get(model)
+    if lp and inp + cr + w5 + w1 > lp[0]:
+        p = lp[1]
+    pin, p5, p1, pr, pout = p
+    fast = CLAUDE_FAST.get(model) if u.get('speed') == 'fast' else None
+    if fast:
+        k = fast[0] / pin
+        pin, p5, p1, pr, pout = fast[0], p5 * k, p1 * k, pr * k, fast[1]
+    micro = inp * pin + w5 * p5 + w1 * p1 + cr * pr + out * pout   # 美元 / 百万 token × token 数 = 百万分之一美元
+    if u.get('inference_geo') == 'us' and model not in CLAUDE_NO_GEO:
+        micro *= 1.1
+    stu = u.get('server_tool_use')
+    return micro + cost_int(stu.get('web_search_requests') if isinstance(stu, dict) else 0) * CLAUDE_WEB_SEARCH, tok
+
+
+def cost_codex(model, tier, u):
+    """一次 Codex 请求（token_count 的 last_token_usage：input_tokens 含缓存读、缓存写，output_tokens 含推理）：同 cost_claude"""
+    inp, cached, write, out = (cost_int(u.get(k)) for k in ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens'))
+    cached = min(cached, inp)
+    write = min(write, inp - cached)
+    plain = inp - cached - write
+    tok = (plain, out, cached, write)
+    p = OPENAI_PRICES.get(model)
+    if p is None:
+        return None, tok
+    pin, pc, pw, pout = p[1] if p[1] and inp > OPENAI_LONG else p[0]
+    k = OPENAI_ULTRA.get(model, 2) if tier == 'ultrafast' else OPENAI_TIERS.get(tier, 1)
+    return (plain * pin + cached * pc + write * (pin if pw is None else pw) + out * pout) * k, tok
+
+
+def cost_ts(s):
+    """会话记录里的时间（2026-11-13T08:30:00.123Z）→ 秒；别的写法交给 parse_ts"""
+    import calendar
+    if isinstance(s, str) and len(s) >= 20 and s[4] == '-' and s[10] == 'T' and s[-1] == 'Z':
+        try:
+            return float(calendar.timegm((int(s[0:4]), int(s[5:7]), int(s[8:10]), int(s[11:13]), int(s[14:16]), int(s[17:19]), 0, 0, 0)))
+        except ValueError:
+            pass
+    return parse_ts(s)
+
+
+def cost_tail(f, off):
+    """读到的位置前面 64 个字节的摘要：下次对得上才接着读（文件被换掉、改写过就从头读）"""
+    if off <= 0:
+        return ''
+    f.seek(max(0, off - 64))
+    return hashlib.sha1(f.read(min(64, off))).hexdigest()[:12]
+
+
+def cost_dir():
+    """建 COST_DIR，但不建 ~/.cca 本身（和 presence_dir 一样：cca restore 刚删掉它时，后台还没跑完的统计不该把它建回来）"""
+    if not os.path.isdir(COST_DIR):
+        try:
+            os.mkdir(COST_DIR, 0o700)
+        except FileExistsError:
+            pass
+
+
+def cost_save(name, data):
+    """cost/ 里的文件：紧凑的 JSON（scan.json 有几 MB）、600、原子替换。config.json 没了（cca restore 刚删掉 ~/.cca）不写：OSError"""
+    if not os.path.isfile(CFG):
+        raise OSError('%s 不在了' % CFG)
+    path = os.path.join(COST_DIR, name)
+    tmp = '%s.cca-%d.tmp' % (path, os.getpid())
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def cost_json(name):
+    """cost/ 里的一个文件（v 是 1 的对象）；没有、读不了、格式不对是 {}"""
+    j = load_quiet(os.path.join(COST_DIR, name))
+    return j if isinstance(j, dict) and j.get('v') == 1 else {}
+
+
+def cost_rows_ok(rows):
+    """{小时: [7 个计数]}：金额（百万分之一美元）、请求数、输入、输出、缓存读、缓存写、其中没有标价的请求数"""
+    return isinstance(rows, dict) and all(
+        isinstance(k, str) and COST_HOUR_RE.match(k) and isinstance(r, list) and len(r) == 7
+        and all(type(x) is int and 0 <= x <= 10 ** 15 for x in r) for k, r in rows.items())
+
+
+def cost_fresh():
+    return {'v': 1, 'build': COST_BUILD, 'done': False, 'files': {}, 'seen': {}, 'owners': {}, 'h': {}, 'orphan': {}, 'um': {}, 'who': {}}
+
+
+def cost_ident_ok(k):
+    """身份的写法：claude:<accountUuid>、codex:<chatgpt_user_id>"""
+    tool, _, ident = k.partition(':') if isinstance(k, str) else ('', '', '')
+    return tool in ('claude', 'codex') and 8 <= len(ident) <= 64
+
+
+def cost_who_kept(*docs):
+    """docs（scan.json、local.json 的内容）里记下的身份 → 邮箱，合在一起（后面的优先）；格式不对的项不要"""
+    out = {}
+    for d in docs:
+        w = d.get('who') if isinstance(d, dict) else None
+        for k, e in (w.items() if isinstance(w, dict) else []):
+            if cost_ident_ok(k) and isinstance(e, str) and EMAIL_RE.match(e):
+                out[k] = e.lower()
+    return out
+
+
+def cost_rows_kept(j, loc):
+    """从头重算时先留着以前算好的小时数据（重算完由 cost_keep_old 挑着用）：旧的 scan.json 里的（最多 COST_KEEP；上一次重算
+    没算完又要从头来时是它留着的那份），scan.json 没了（restore 的备份不带它）就用 local.json 里的（最近 COST_PUBLISH）"""
+    src = j['old'] if isinstance(j.get('old'), dict) else j
+    h, orphan = src.get('h'), src.get('orphan')
+    if not (isinstance(h, dict) and h):
+        h, orphan = loc.get('acc'), loc.get('orphan')
+    return {'h': {i: r for i, r in (h.items() if isinstance(h, dict) else []) if cost_ident_ok(i) and cost_rows_ok(r)},
+            'orphan': orphan if cost_rows_ok(orphan) else {}}
+
+
+def cost_keep_old(j, s):
+    """从头重算完（s 是读完这一遍的 CostScan）：会话记录可能已经删掉了一部分的小时，以前算过的沿用以前的，别的照重算的。
+    Claude Code 按修改时间删会话记录（默认 30 天），删掉的那些里的请求都早于现在还在的最早一个的修改时间（s.oldest）：
+    这个时间以后的小时会话记录是全的；以前的可能不全，用以前的价格、规则算的也比丢掉好"""
+    old = j.pop('old', None)
+    if not isinstance(old, dict):
+        return
+    far = s.now + 86400   # 这个工具的会话记录一个都没了：以前算的全留着
+    for ident, rows in (old.get('h') or {}).items():
+        if cost_ident_ok(ident) and cost_rows_ok(rows):
+            lo = s.oldest.get(ident.partition(':')[0], far)
+            for k, r in rows.items():
+                if int(k) < lo:
+                    j['h'].setdefault(ident, {})[k] = r
+    lo = max(s.oldest.values()) if s.oldest else far   # 认不出是谁的不分工具：几个工具的会话记录都全了以后才照重算的
+    rows = old.get('orphan')
+    for k, r in (rows.items() if cost_rows_ok(rows) else []):
+        if int(k) < lo:
+            j['orphan'][k] = r
+
+
+def cost_load_scan():
+    """scan.json（读到哪、去重、小时数据）；没有、价格表或规则变了、格式不对：从头来。从头来时以前记下的身份 → 邮箱照样留着
+    （scan.json、local.json 里的：退出登录了的账号，重算出来的用量照样认得出是谁的；restore 的备份不带 scan.json，带着 local.json）"""
+    j = cost_json('scan.json')
+    base = cost_fresh()
+    if (j.get('build') == COST_BUILD and all(isinstance(j.get(k), type(v)) for k, v in base.items())
+            and all(isinstance(x, dict) for x in j['files'].values()) and all(type(x) is int for x in j['seen'].values())
+            and all(isinstance(x, list) for x in j['owners'].values()) and cost_rows_ok(j['orphan'])
+            and all(isinstance(i, str) and cost_rows_ok(r) for i, r in j['h'].items())
+            and all(isinstance(m, dict) and all(type(x) is int for x in m.values()) for m in j['um'].values())):
+        j['who'] = cost_who_kept(j)
+        return j
+    loc = cost_json('local.json')
+    base['who'], base['old'] = cost_who_kept(loc, j), cost_rows_kept(j, loc)
+    return base
+
+
+class CostScan:
+    """读一遍会话记录里新增的部分，并进 j（scan.json 的内容，原地改）。第一次全读（j 的 done 还是 False）时按全部记录去重、
+    不管多早；之后比 COST_SEEN 更早的回复不算（去重的记录已经清掉了：多半是改了名、复制出来的文件里读过的）"""
+    def __init__(self, j, now):
+        self.j, self.now = j, now
+        self.first = not j['done']
+        self.cut = now - COST_SEEN
+        self.records = self.bytes = self.files = 0
+        self.mains = set()
+        self.oldest = {}   # 这一遍看到的会话记录里，各工具（claude、codex）最早的修改时间（cost_keep_old 用）
+
+    def add(self, tool, who, ts, key, micro, tok, model):
+        seen = self.j['seen']
+        if ts is None or not 1e9 <= ts <= self.now + 2 * 86400 or (not self.first and ts < self.cut) or key in seen:
+            return
+        hour = int(ts // 3600 * 3600)
+        seen[key] = hour
+        ident = '%s:%s' % (tool, who) if who else ''
+        rows = self.j['h'].setdefault(ident, {}) if ident else self.j['orphan']
+        b = rows.setdefault(str(hour), [0] * 7)
+        b[1] += 1
+        if micro is None:
+            b[6] += 1
+            if ident and model:   # 没有标价的模型：记最后一次见到它的小时（过了 COST_KEEP 就不列）
+                ms = self.j['um'].setdefault(ident, {})
+                ms[model] = max(ms.get(model, hour), hour)
+        else:
+            b[0] += int(micro + 0.5)
+        for i in range(4):
+            b[2 + i] += tok[i]
+        self.records += 1
+
+    def file(self, kind, path, sid):
+        """一个文件新增的完整的行（kind：main / sub 是 Claude 的主会话、子代理，rollout 是 Codex 的）"""
+        if kind == 'main':
+            self.mains.add(sid)
+        try:
+            with open(path, 'rb') as f:
+                self.read_file(f, kind, path, sid)
+        except OSError:   # 读的时候被删掉、读不了：下次再说
+            pass
+
+    def read_file(self, f, kind, path, sid):
+        st = os.fstat(f.fileno())
+        self.files += 1
+        tool = 'codex' if kind == 'rollout' else 'claude'
+        self.oldest[tool] = min(self.oldest.get(tool, st.st_mtime), st.st_mtime)
+        cur = self.j['files'].get(path)
+        if not (isinstance(cur, dict) and cur.get('ino') == st.st_ino and cur.get('dev') == st.st_dev
+                and type(cur.get('off')) is int and 0 < cur['off'] <= st.st_size and cost_tail(f, cur['off']) == cur.get('fp')):
+            cur = {'ino': st.st_ino, 'dev': st.st_dev, 'off': 0}   # 新的、换了、改写过：从头读（读过的靠去重不重复计）
+        self.j['files'][path] = cur
+        if cur['off'] == st.st_size:
+            return
+        f.seek(cur['off'])
+        pos, line = cur['off'], self.codex_line if kind == 'rollout' else self.claude_line
+        for raw in f:
+            if not raw.endswith(b'\n'):
+                break   # 还没写完的一行：下次再读
+            pos += len(raw)
+            try:
+                line(kind, cur, sid, raw)
+            except (ValueError, TypeError, AttributeError, KeyError, IndexError):   # 坏的一行：跳过
+                pass
+        self.bytes += pos - cur['off']
+        cur['off'], cur['fp'] = pos, cost_tail(f, pos)
+
+    def claude_line(self, kind, cur, sid, raw):
+        if raw.startswith(b'{"type":"session-owner"') and len(raw) < 600:
+            d = json.loads(raw)
+            u = d.get('accountUuid') if d.get('type') == 'session-owner' else None
+            u = u if isinstance(u, str) and 8 <= len(u) <= 64 else None
+            cur['own'] = u
+            tl = self.j['owners'].setdefault(sid, []) if kind == 'main' else None
+            if u and tl is not None and (not tl or tl[-1][1] != u):
+                tl.append([cur.get('ts') or 0, u])   # 从这条回复以后（子代理的记录按时间认）
+            return
+        if b'"usage"' not in raw or b'"assistant"' not in raw:
+            return
+        d = json.loads(raw)
+        m = d.get('message') if d.get('type') == 'assistant' else None
+        u = m.get('usage') if isinstance(m, dict) else None
+        if not isinstance(u, dict) or m.get('model') == '<synthetic>':
+            return   # <synthetic>：Claude Code 自己写的（出错提示之类），没有请求
+        ts = cost_ts(d.get('timestamp'))
+        if ts is None:
+            return
+        mid = m.get('id')
+        key = 'c' + hashlib.sha1(('%s\0%s' % (mid, d.get('requestId'))).encode('utf-8') if isinstance(mid, str) else raw).hexdigest()[:16]
+        who = cur.get('own')
+        if kind == 'main':
+            cur['ts'] = ts
+        elif not who:
+            for at, x in self.j['owners'].get(sid) or []:
+                if at <= ts:
+                    who = x
+        model = cost_model(m.get('model'))
+        micro, tok = cost_claude(model, u)
+        self.add('claude', who, ts, key, micro, tok, model)
+
+    def codex_line(self, kind, cur, sid, raw):
+        head = raw[:160]
+        if b'"token_count"' in head:
+            if cur.get('skip'):
+                return
+            d = json.loads(raw)
+            p = d.get('payload')
+            info = p.get('info') if isinstance(p, dict) and p.get('type') == 'token_count' else None
+            if not isinstance(info, dict):
+                return
+            tot = json.dumps(info.get('total_token_usage'), sort_keys=True, separators=(',', ':'))
+            if tot == cur.get('tot'):
+                return   # 累计的用量没变：同一次请求又报了一遍（只是额度更新了）
+            cur['tot'] = tot
+            last, ts = info.get('last_token_usage'), cost_ts(d.get('timestamp'))
+            if not isinstance(last, dict) or ts is None:
+                return
+            key = 'x' + hashlib.sha1(('%s\0%s' % (d.get('timestamp'), tot)).encode('utf-8')).hexdigest()[:16]
+            model = cur.get('model') or ''
+            micro, tok = cost_codex(model, cur.get('tier'), last)
+            self.add('codex', cur.get('who'), ts, key, micro, tok, model)
+        elif b'"session_meta"' in head:
+            if 'meta' in cur:
+                return   # 后面的 session_meta 是复制进来的历史（续接、分叉）
+            d = json.loads(raw)
+            p = d.get('payload') if d.get('type') == 'session_meta' else None
+            if not isinstance(p, dict):
+                return
+            u, prov = p.get('creator_user_id'), p.get('model_provider')
+            cur['meta'] = 1
+            cur['who'] = u if isinstance(u, str) and 8 <= len(u) <= 64 else None
+            cur['skip'] = isinstance(prov, str) and prov not in ('', 'openai')   # 第三方的接口（cca 的 API 账号也是）：不是官方账号的用量
+        elif b'"turn_context"' in head:
+            d = json.loads(raw)
+            p = d.get('payload')
+            if d.get('type') == 'turn_context' and isinstance(p, dict) and isinstance(p.get('model'), str):
+                cur['model'] = cost_model(p['model'])
+        elif b'"thread_settings_applied"' in head:
+            d = json.loads(raw)
+            p = d.get('payload')
+            s = p.get('thread_settings') if isinstance(p, dict) and p.get('type') == 'thread_settings_applied' else None
+            if isinstance(s, dict):
+                if isinstance(s.get('model'), str):
+                    cur['model'] = cost_model(s['model'])
+                cur['tier'] = s.get('service_tier') if isinstance(s.get('service_tier'), str) else None
+                prov = s.get('model_provider_id')
+                if isinstance(prov, str) and prov:
+                    cur['skip'] = prov != 'openai'
+
+
+def cost_files():
+    """要读的会话记录：[(种类, 路径, 会话 id)]。Claude 的主会话在前（子代理的记录按所在会话的账号认），各按建立的先后"""
+    import glob
+
+    def born(p):
+        try:
+            st = os.stat(p)
+        except OSError:
+            return (0, p)
+        return (getattr(st, 'st_birthtime', 0) or st.st_mtime, p)
+    root = glob.escape(os.path.join(CLAUDE.master, 'projects'))
+    out = [('main', p, os.path.basename(p)[:-6]) for p in sorted(glob.glob(os.path.join(root, '*', '*.jsonl')), key=born)]
+    out += [('sub', p, os.path.basename(os.path.dirname(os.path.dirname(p))))
+            for p in sorted(glob.glob(os.path.join(root, '*', '*', 'subagents', '*.jsonl')), key=born)]
+    for d in ('sessions', 'archived_sessions'):   # 归档是把文件挪过去：路径变了，重读的靠去重不重复计
+        out += [('rollout', p, '') for p in sorted(glob.glob(os.path.join(glob.escape(os.path.join(CODEX.master, d)), '**', '*.jsonl'),
+                                                             recursive=True))]
+    return out
+
+
+def cost_scan(j, now, checkpoint=None):
+    """读新增的会话记录、并进 j；checkpoint 隔一会儿调一次（第一次全读可能要好一会儿：先存一次，被打断了下次接着读）"""
+    s = CostScan(j, now)
+    live = set()
+    for kind, path, sid in cost_files():
+        live.add(path)
+        s.file(kind, path, sid)
+        if checkpoint:
+            checkpoint()
+    for p in [p for p in j['files'] if p not in live]:
+        del j['files'][p]
+    for sid in [x for x in j['owners'] if x not in s.mains]:
+        del j['owners'][sid]
+    cost_keep_old(j, s)
+    j['done'] = True
+    return s
+
+
+def cost_prune(j, now):
+    """scan.json 只留 COST_KEEP 的小时数据、COST_SEEN 的去重记录"""
+    lo = now - COST_KEEP
+    for rows in list(j['h'].values()) + [j['orphan']]:
+        for k in [k for k in rows if int(k) < lo]:
+            del rows[k]
+    j['h'] = {i: r for i, r in j['h'].items() if r}
+    lo_seen = now - COST_SEEN - 3600
+    j['seen'] = {k: v for k, v in j['seen'].items() if v >= lo_seen}
+    j['um'] = {i: ms for i, ms in ((i, {m: x for m, x in ms.items() if x >= lo}) for i, ms in j['um'].items()) if ms}
+
+
+def oauth_ident(path):
+    """Claude Code 的 .claude.json 里登录的账号：(accountUuid, 邮箱)；读不出是 (None, None)"""
+    j = load_quiet(path)
+    oa = j.get('oauthAccount') if isinstance(j, dict) else None
+    oa = oa if isinstance(oa, dict) else {}
+    return oa.get('accountUuid'), oa.get('emailAddress')
+
+
+def cost_who(j):
+    """这台设备上登录过的账号身份 → 邮箱（小写），记进 j 的 who：cca 的账号目录里的，和不经 cca 直接登录的（~/.claude.json、
+    ~/.codex/auth.json；只读 id_token 里的邮箱和用户 id）。以前记下的留着（退出登录了，以前的用量照样认得出是谁的）"""
+    found = []
+    for tool in (CLAUDE, CODEX):
+        t = load_quiet(tool.table) if os.path.exists(tool.table) else None
+        with using(tool):
+            for k, v in (t.items() if isinstance(t, dict) else []):
+                if is_api(v):
+                    continue
+                if tool is CLAUDE:
+                    found.append(('claude',) + oauth_ident(os.path.join(cdir(k), '.claude.json')))
+                else:
+                    x = codex_claims(k)
+                    found.append(('codex', x.get('user'), x.get('email')))
+    found.append(('claude',) + oauth_ident(MASTER_JSON))
+    x = codex_claims(None, os.path.join(CODEX.master, 'auth.json'))
+    found.append(('codex', x.get('user'), x.get('email')))
+    for tool, ident, email in found:
+        if isinstance(ident, str) and 8 <= len(ident) <= 64 and isinstance(email, str) and EMAIL_RE.match(email):
+            j['who']['%s:%s' % (tool, ident)] = email.lower()
+
+
+def cost_publish(j, now):
+    """local.json（_gui state、同步读它）：最近 COST_PUBLISH 的小时数据、身份 → 邮箱、没有标价的模型、认不出是谁的最近 31 天。
+    内容变了才写（App 看它变了就重读 state）"""
+    lo = now - COST_PUBLISH
+    acc = {i: r for i, r in ((i, {k: x for k, x in rows.items() if int(k) >= lo}) for i, rows in j['h'].items()) if r}
+    um = {i: sorted(m for m, x in ms.items() if x >= lo) for i, ms in j['um'].items()}
+    doc = {'v': 1, 'build': COST_BUILD, 'who': j['who'], 'acc': acc, 'um': {i: m for i, m in um.items() if m},
+           'orphan': {k: x for k, x in j['orphan'].items() if int(k) >= now - (COST_DAYS + 1) * 86400}}
+    if cost_json('local.json') != doc:
+        cost_save('local.json', doc)
+
+
+def cost_touch(name):
+    p = os.path.join(COST_DIR, name)
+    with open(p, 'a'):
+        pass
+    os.utime(p, None)
+
+
+def cost_mtime(name):
+    try:
+        return os.stat(os.path.join(COST_DIR, name)).st_mtime
+    except OSError:
+        return None
+
+
+class CostBusy(Exception):
+    pass
+
+
+def cost_run(sync_now=False, wait=0):
+    """统计一次：读新增的会话记录、发布 local.json，再和别的设备同步（到时候了才同步；sync_now 马上）。
+    同时只有一个（cost.lock）：wait 是最多等正在跑的那个多久，等不到是 CostBusy。返回 (统计的结果, 同步的结果)（PROTOCOL 3.5）"""
+    cost_dir()
+    with open(os.path.join(COST_DIR, 'cost.lock'), 'a') as lk:
+        until = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= until:
+                    raise CostBusy()
+                time.sleep(0.5)
+        me = os.getpid()
+        cost_save('worker.json', {'v': 1, 'pid': me, 'started': proc_starts({me}).get(me, 0)})
+        try:
+            now = time.time()
+            j = cost_load_scan()
+            first, last = not j['done'], [time.monotonic()]
+
+            def checkpoint():
+                if time.monotonic() - last[0] >= 20:
+                    cost_save('scan.json', j)
+                    last[0] = time.monotonic()
+            s = cost_scan(j, now, checkpoint)
+            cost_who(j)
+            cost_prune(j, now)
+            cost_save('scan.json', j)
+            cost_publish(j, now)
+            cost_touch('scanned')
+            scan = {'state': 'ready', 'updated_epoch': cost_mtime('scanned'), 'files': s.files, 'read_bytes': s.bytes,
+                    'records': s.records, 'first': first}
+            return scan, cost_sync(sync_now)
+        finally:
+            try:
+                os.unlink(os.path.join(COST_DIR, 'worker.json'))
+            except OSError:
+                pass
+
+
+def cost_seal(keys, aid, fp, doc):
+    """这台设备这个账号的数据 → 服务器存的那一份 {"n": nonce, "c": 密文, "t": 认证}（base64）。明文是压缩的 JSON，前面 4 个字节
+    是长度，用零字节补齐到 COST_PAD 的整数倍；认证里带着账号摘要和设备指纹（挪不到别的账号、别的设备上）。长度不省：zlib 虽然
+    认得出自己在哪结束，有了它读的一方不靠解压器判断补齐从哪开始，照 server/README.md 另写一份也简单"""
+    import zlib
+    z = zlib.compress(json.dumps(doc, separators=(',', ':')).encode('utf-8'), 9)
+    pt = len(z).to_bytes(4, 'big') + z
+    return blob_seal(keys, blob_ad(COST_LABEL, aid, fp), pt + b'\0' * (-len(pt) % COST_PAD))
+
+
+def cost_doc(d, now):
+    """别的设备传来的明文：{"v": 1, "at": 时间, "h": {小时: [7 个计数]}, "um": [没有标价的模型…]}；格式不对是 None"""
+    if not (isinstance(d, dict) and d.get('v') == 1 and is_num(d.get('at')) and 0 < d['at'] <= now + 86400):
+        return None
+    h, um = d.get('h'), d.get('um')
+    if not (cost_rows_ok(h) and len(h) <= 24 * 7 * 20 and isinstance(um, list)):
+        return None
+    return {'at': float(d['at']), 'h': h, 'um': [m for m in um if isinstance(m, str) and m.isprintable() and len(m) <= 64][:32]}
+
+
+def cost_open(keys, aid, fp, blob, now):
+    """服务器上别的设备的那一份解开；认证不过、格式不对（伪造的、别的账号的、坏了）是 None"""
+    import zlib
+    pt = blob_open(keys, blob_ad(COST_LABEL, aid, fp), blob)
+    if pt is None:
+        return None
+    n = int.from_bytes(pt[:4], 'big')
+    try:
+        z = zlib.decompressobj()
+        raw = z.decompress(pt[4:4 + n], 4 << 20)
+        return cost_doc(json.loads(raw.decode('utf-8')), now) if n <= len(pt) - 4 and not z.unconsumed_tail else None
+    except (zlib.error, ValueError, UnicodeDecodeError):
+        return None
+
+
+def cost_content(local, tool, email):
+    """这台设备上这个账号的小时数据：这个工具的、登录的邮箱是它的身份加起来（新的列表，可以改）；和没有标价的模型"""
+    who, h, um = cost_who_kept(local), {}, set()
+    for ident, rows in (local.get('acc') or {}).items():
+        if ident.startswith(tool.name + ':') and who.get(ident) == email and cost_rows_ok(rows):
+            for k, r in rows.items():
+                b = h.setdefault(k, [0] * 7)
+                for i in range(7):
+                    b[i] += r[i]
+            um.update(x for x in (local.get('um') or {}).get(ident) or [] if isinstance(x, str))
+    return h, sorted(um)
+
+
+def cost_items(cfg):
+    """要同步的账号：[(工具, 邮箱小写, slot（工具名:邮箱，sync.json、remote.json 里的键）, 账号摘要, 密钥)]：映射里的 Claude、Codex
+    官方账号，这台设备登录着（没登录的解不开，也不传）。账号表读不了是 None"""
+    targets = presence_targets()
+    if targets is None:
+        return None
+    out = []
+    for tool, key, _ in targets:
+        if tool not in (CLAUDE, CODEX):
+            continue
+        with using(tool):
+            ident = T.share_ident(key)
+        email = parse_key(key)[1].lower()
+        if ident and email:
+            out.append((tool, email, '%s:%s' % (tool.name, email), presence_aid(cfg['salt'], tool, email),
+                        keyshare_keys(cfg['salt'], tool, email, ident, COST_LABEL)))
+    return out
+
+
+def cost_sync(force=False):
+    """和别的设备交换（见上面这一节的说明）。force 以外最多 COST_SYNC_EVERY 一次、旧的服务器 COST_RETRY 以后再试。
+    返回 {"state", "message", "checked_epoch"}（PROTOCOL 3.5 的 sync）"""
+    cfg = presence_load()[1]
+    st = cost_json('sync.json') or {'v': 1}
+    res = lambda state, msg=None: {'state': state, 'message': msg, 'checked_epoch': st.get('ok_at') if is_num(st.get('ok_at')) else None}
+    if not cfg:
+        return res('skipped')
+    now = time.time()
+    num = lambda k: st[k] if is_num(st.get(k)) else 0
+    if not force and (0 <= now - num('at') < COST_SYNC_EVERY or 0 < num('retry') - now <= COST_RETRY):   # 在未来的（时钟快过）不当真
+        bad = st.get('state') in ('error', 'old_server')
+        return res('waiting' if bad else 'ok' if st.get('ok_at') else 'skipped', st.get('error') if bad else None)
+    items = cost_items(cfg)
+    if not items:
+        return res('skipped') if items is not None else res('error', '读不了账号表')
+    rem = cost_json('remote.json') or {'v': 1, 'acc': {}}
+    if not isinstance(rem.get('acc'), dict):
+        rem['acc'] = {}
+    old_rem = json.loads(json.dumps(rem))
+    st['at'] = now
+    err = cost_round(cfg, items, cost_json('local.json'), st, rem, now)
+    st['state'] = 'old_server' if err == COST_OLD else 'error' if err else 'ok'
+    st['error'] = err or None
+    if err == COST_OLD:
+        st['retry'] = now + COST_RETRY
+    else:
+        st.pop('retry', None)
+    if not err:
+        st['ok_at'] = now
+    if rem != old_rem:
+        cost_save('remote.json', rem)
+    cost_save('sync.json', st)
+    return res(st['state'], st['error'])
+
+
+def cost_round(cfg, items, local, st, rem, now):
+    """一轮：问服务器这些账号各台设备的（带着这台设备已经有的认证码：没变的不回），解开、存进 rem（remote.json 的内容）；这台设备的
+    变了、服务器上没有或者不是上次传的、隔了 COST_BEAT 就传上去。st（sync.json 的内容）原地改。返回没成的原因（成了是空的）"""
+    accs, racc = st.setdefault('acc', {}), rem['acc']
+    code, r = presence_post(cfg, 'ledger', {'get': [x[3] for x in items], 'have': cost_have(cfg, items, accs, racc)}, timeout=20)
+    if code in (404, 413):   # 旧的服务器：没有 /v1/ledger（body 超过它的 64 KB 上限时先回 413；早先试过的 /v1/cost 是另一种格式，不用它）
+        return COST_OLD
+    if code != 200 or not isinstance(r.get('cost'), dict):
+        return presence_why(cfg, code, r) if code != 200 else '设备统计的服务器回的内容看不懂'
+    if isinstance(r.get('me_name'), str) and r['me_name'].isprintable():
+        st['me'] = r['me_name'][:64]
+    missing = r.get('missing') if isinstance(r.get('missing'), dict) else {}
+    puts, sent = {}, {}
+    for tool, email, slot, aid, keys in items:
+        a = accs.setdefault(slot, {})
+        new, mine = cost_take(cfg, r['cost'].get(aid), keys, aid, racc.get(slot) or {}, now)
+        if new:
+            racc[slot] = new
+        else:
+            racc.pop(slot, None)
+        a['missing'] = cost_missing_view(missing.get(aid), now)
+        h, um = cost_content(local, tool, email)
+        doc = {'h': {k: x for k, x in h.items() if int(k) >= now - COST_PUBLISH}, 'um': um}
+        s = hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()[:16]
+        up = a.get('up_at') if is_num(a.get('up_at')) else 0
+        if mine is None or mine.get('tag') != a.get('tag') or a.get('sum') != s or not 0 <= now - up < COST_BEAT:
+            puts[aid] = cost_seal_fit(keys, aid, cfg['fp'], doc, now)
+            sent[slot] = (puts[aid]['t'], s)
+    err = cost_put(cfg, puts)
+    if err:
+        return err
+    for slot, (tag, s) in sent.items():
+        accs[slot].update(tag=tag, sum=s, up_at=now)
+    for x in items:
+        accs[x[2]]['checked'] = now
+    return ''
+
+
+def cost_have(cfg, items, accs, racc):
+    """问服务器时带上的：每个账号这台设备已经有的各台设备的认证码（没变的服务器就不回密文），和这台设备自己上次传的"""
+    have = {}
+    for _, _, slot, aid, _ in items:
+        have[aid] = {fp: e['tag'] for fp, e in (racc.get(slot) or {}).items() if isinstance(e, dict) and isinstance(e.get('tag'), str)}
+        mine = accs.get(slot)
+        if isinstance(mine, dict) and isinstance(mine.get('tag'), str):
+            have[aid][cfg['fp']] = mine['tag']
+    return have
+
+
+def cost_take(cfg, rows, keys, aid, old, now):
+    """服务器回的这个账号各台设备的 → ({设备指纹: remote.json 里的一项}, 这台设备自己的那一行 | None)。带着密文的解开
+    （认证不过的不要），没带的（没变，或者这次回得太多没给）用上次的（old）"""
+    new, mine = {}, None
+    for row in rows if isinstance(rows, list) else []:
+        if not (isinstance(row, dict) and isinstance(row.get('fp'), str) and isinstance(row.get('tag'), str)):
+            continue
+        if row.get('me') is True or row['fp'] == cfg['fp']:
+            mine = row
+            continue
+        prev = old.get(row['fp']) if isinstance(old.get(row['fp']), dict) else None
+        if isinstance(row.get('blob'), dict):
+            doc = cost_open(keys, aid, row['fp'], row['blob'], now)
+            if doc is None:
+                continue   # 认证不过（伪造的、坏了）：不要
+            e = dict(doc, tag=row['tag'])
+        elif prev:
+            e = dict(prev)   # 认证码照旧：没给的下次再取
+        else:
+            continue
+        name = row.get('name')
+        e['name'] = name[:64] if isinstance(name, str) and name.isprintable() and name else '?'
+        e['revoked'] = row.get('revoked') is True
+        new[row['fp']] = e
+    return new, mine
+
+
+def cost_missing_view(ms, now):
+    """服务器说 30 天内用过这个账号、却没传过折合金额的设备 → [{name, used_epoch}]（最多 32 台）"""
+    return [{'name': m['name'][:64], 'used_epoch': round(now - m['used_age'])} for m in (ms if isinstance(ms, list) else [])
+            if isinstance(m, dict) and isinstance(m.get('name'), str) and m['name'].isprintable() and is_num(m.get('used_age'))][:32]
+
+
+def cost_seal_fit(keys, aid, fp, doc, now):
+    """封好这台设备这个账号的数据（cost_seal）；太大了（很少见：14 周里小时很多、又压缩不了）就去掉最早的四分之一的小时，
+    直到放得下 COST_BLOB_MAX"""
+    doc = dict(doc)
+    blob = cost_seal(keys, aid, fp, dict(doc, v=1, at=now))
+    while len(blob['c']) > COST_BLOB_MAX and doc['h']:
+        ks = sorted(doc['h'], key=int)
+        doc['h'] = {k: doc['h'][k] for k in ks[len(ks) // 4 + 1:]}
+        blob = cost_seal(keys, aid, fp, dict(doc, v=1, at=now))
+    return blob
+
+
+def cost_put(cfg, puts):
+    """把这几份（{账号摘要: 密文}）传上去：一次最多 COST_PUT_MAX，多了分几次。返回没成的原因（成了是空的）"""
+    batches, size = [{}], 0
+    for aid, blob in puts.items():
+        if batches[-1] and size + len(blob['c']) > COST_PUT_MAX:
+            batches.append({})
+            size = 0
+        batches[-1][aid] = blob
+        size += len(blob['c'])
+    for batch in batches:
+        if not batch:
+            continue
+        code, r = presence_post(cfg, 'ledger', {'put': batch}, timeout=30)
+        if code == 404:
+            return COST_OLD
+        if code != 200:
+            return presence_why(cfg, code, r)
+    return ''
+
+
+def cost_on():
+    """折合金额开着吗：config.json 里没写 "cost": false"""
+    c = load_quiet(CFG)
+    return not (isinstance(c, dict) and c.get('cost') is False)
+
+
+def cost_kick():
+    """在后台跑一次 cca _cost-sync（读新增的会话记录、和别的设备同步）；上次起过还不到 COST_EVERY 就不起。静默。
+    CCA_COST=off（回归测试）不起"""
+    try:
+        if os.environ.get('CCA_COST') == 'off' or not os.path.isfile(CFG) or not cost_on():
+            return
+        stamp = cost_mtime('last')
+        if stamp and 0 <= time.time() - stamp < COST_EVERY:
+            return
+        cost_dir()
+        cost_touch('last')
+        spawn_background('_cost-sync')
+    except (OSError, ValueError):
+        pass
+
+
+def cmd_cost_worker(*args):
+    """cca _cost-sync：cost_kick 在后台起的；有别的统计在跑就走。出什么错都安静地退出（下次再来）"""
+    try:
+        if os.path.isfile(CFG) and cost_on():
+            cost_run()
+    except (CostBusy, OSError, ValueError, TypeError, KeyError, SystemExit):
+        pass
+
+
+def cost_accounts():
+    """这台设备上 Claude、Codex 的官方账号有几个（读不了的表不算）"""
+    n = 0
+    for tool in (CLAUDE, CODEX):
+        t = load_quiet(tool.table) if os.path.exists(tool.table) else None
+        n += sum(1 for v in (t.values() if isinstance(t, dict) else []) if not is_api(v))
+    return n
+
+
+def cmd_cost_sync(*args):
+    """cca cost sync [--now] [--json]（PROTOCOL 3.5）。退出码：0 统计好了（同步没成也是 0）；1 没统计成；2 用不了。没成时 stdout 是原因"""
+    if not cost_on():
+        print('折合金额关掉了（config.json 里写着 "cost": false）')
+        sys.exit(2)
+    if not cost_accounts():
+        print('没有 Claude、Codex 的官方账号：没有可统计的')
+        sys.exit(2)
+    try:
+        scan, sync = cost_run('--now' in args, COST_WAIT)
+    except CostBusy:
+        print('另一个统计一直没结束（等了 %d 秒）' % COST_WAIT)
+        sys.exit(1)
+    except (OSError, ValueError, TypeError, KeyError) as e:
+        print('统计折合金额没成：%s' % e)
+        sys.exit(1)
+    if '--json' in args:
+        print(json.dumps({'version': 1, 'kind': 'cost_sync', 'generated_epoch': time.time(), 'scan': scan, 'sync': sync}, ensure_ascii=False))
+        return
+    print('统计好了：看了 %d 个会话记录，新算进来 %d 条' % (scan['files'], scan['records']) +
+          {'ok': '；和其他设备同步好了', 'skipped': '', 'waiting': '', 'old_server': '；' + COST_OLD,
+           'error': '；和其他设备同步没成：%s' % sync['message']}.get(sync['state'], ''))
+
+
+def cmd_cost_stop():
+    """cca restore 之前：停掉正在统计的后台进程（它在 ~/.cca 删掉以后也不会写回来，这里只是不让它白跑）"""
+    import signal
+    j = cost_json('worker.json')
+    if not (isinstance(j.get('pid'), int) and type(j.get('started')) is int and j['started']):
+        return
+    alive = lambda: cli_alive(j['pid'], j['started'], proc_starts({j['pid']}))
+    if not alive():
+        return
+    try:
+        os.kill(j['pid'], signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(30):
+        if not alive():
+            return
+        time.sleep(0.1)
+
+
+# --- 折合金额的视图（_gui state 的 cost、cost_total，PROTOCOL 2.2）：只读 cost/ 里统计好的，按时段切、加起来 ---------------
+def cost_local_day(t, add=0):
+    """t 那一天（本地时间）往后数 add 天的零点"""
+    lt = time.localtime(t)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + add, 0, 0, 0, 0, 0, -1))
+
+
+def cost_days(now):
+    """最近 COST_DAYS 个本地日历日：[(开始, 结束, 日期)]，最后一项是今天（夏令时的那天 23 或 25 小时）"""
+    out = []
+    for i in range(COST_DAYS - 1, -1, -1):
+        s = cost_local_day(now, -i)
+        out.append((s, cost_local_day(now, -i + 1), time.strftime('%Y-%m-%d', time.localtime(s))))
+    return out
+
+
+def cost_weeks(quota, now):
+    """按周的时段：[(开始, 结束, basis)]，首尾相接，最后一项包含 now。有本周额度窗口（usage_weeks 的 weeks）的地方用它，
+    没有的时段按本地时间周一零点切；不到一天的零头并进前一项（没有前一项就并进后一项）。只留结束在最近 WEEKS_SHOW 周里的，最多 13 项"""
+    lo = now - WEEKS_SHOW * WEEK
+    lt = time.localtime(lo)
+    t = cost_local_day(lo, -lt.tm_wday)
+    out = []
+
+    def fill(until, cap=True):
+        nonlocal t
+        while t < until:
+            e = cost_local_day(t, 7 - time.localtime(t).tm_wday)   # 下一个周一零点
+            out.append([t, min(e, until) if cap else e, 'calendar'])
+            t = out[-1][1]
+    for w in quota or []:
+        s, e = max(w['start_epoch'], t), w['end_epoch']
+        if e - s <= 0:
+            continue
+        fill(s)
+        out.append([s, e, 'quota'])
+        t = e
+    if t <= now:
+        fill(now + 1, cap=False)   # 最后一项是这一周（到下周一零点）
+    i = 0
+    while i < len(out):
+        if out[i][1] - out[i][0] < 86400 and len(out) > 1:
+            if i:
+                out[i - 1][1] = out[i][1]
+            else:
+                out[1][0] = out[0][0]
+            del out[i]
+            continue
+        i += 1
+    return [tuple(p) for p in out if p[1] > lo][-(WEEKS_SHOW + 1):]
+
+
+def cost_bin(periods, h):
+    """小时数据按时段加起来：[[7 个计数]…]（和 periods 一一对应）；跨过边界的那个小时整个算在它的中点所在的时段"""
+    import bisect
+    starts, out = [p[0] for p in periods], [[0] * 7 for _ in periods]
+    for k, r in h.items():
+        mid = int(k) + 1800
+        i = bisect.bisect_right(starts, mid) - 1
+        if i >= 0 and mid < periods[i][1]:
+            b = out[i]
+            for x in range(7):
+                b[x] += r[x]
+    return out
+
+
+def usd(m):
+    """百万分之一美元 → 美元（PROTOCOL 里的小数）；None 还是 None"""
+    return None if m is None else round(m / 1e6, 4)
+
+
+def cost_summary(wr, dr, good):
+    """一方（整个账号或者一台设备）加起来：(百万分之一美元的 {weeks, current, days, today, average}, PROTOCOL 2.2 的 summary)。
+    wr、dr 是按周、按天的各项（7 个计数），good 是算平均的那几周（过完的、不是 partial、至少 6 天）"""
+    m = {'weeks': sum(r[0] for r in wr), 'current': wr[-1][0], 'days': sum(r[0] for r in dr), 'today': dr[-1][0],
+         'average': sum(wr[n][0] for n in good) // len(good) if good else None}
+    return m, {'weeks_usd': usd(m['weeks']), 'current_usd': usd(m['current']), 'average_usd': usd(m['average']),
+               'days_usd': usd(m['days']), 'today_usd': usd(m['today'])}
+
+
+def cost_period_view(p, t, last, since):
+    """PROTOCOL 2.2 的一项（weeks[]、days[]）：p 是 (开始, 结束, …)，t 是这一项的 7 个计数，last 是还没过完的那一项"""
+    return {'start_epoch': p[0], 'end_epoch': p[1], 'current': last, 'partial': since > p[0],
+            'usd': usd(t[0]), 'requests': t[1], 'unpriced_requests': t[6],
+            'tokens': {'input': t[2], 'output': t[3], 'cache_read': t[4], 'cache_write': t[5]}}
+
+
+class CostView:
+    """_gui state 里折合金额要的（一次读好）：这台设备统计的、别的设备同步来的、同步的状态，按天的时段"""
+    def __init__(self, c, now, cfg):
+        self.on, self.now, self.cfg = c.get('cost') is not False, now, cfg
+        self.presence_off = c.get('presence') is False
+        self.local, self.remote, self.sync = cost_json('local.json'), cost_json('remote.json'), cost_json('sync.json')
+        self.days = cost_days(now)
+        self.updated = cost_mtime('scanned')
+        host = os.uname().nodename.split('.')[0] or 'Mac'
+        self.me_name = self.sync.get('me') if cfg and isinstance(self.sync.get('me'), str) else host
+        self.accounts = []   # [(工具名, 各项的百万分之一美元)]：cost_total 加起来
+
+    def scan_state(self):
+        if self.updated:
+            return 'ready'
+        j = cost_json('worker.json')
+        if isinstance(j.get('pid'), int) and type(j.get('started')) is int and cli_alive(j['pid'], j['started'], proc_starts({j['pid']})):
+            return 'scanning'
+        return 'never'
+
+    def sync_view(self, slot, mapped, logged_in):
+        """账号的 sync（PROTOCOL 2.2）"""
+        a = (self.sync.get('acc') or {}).get(slot) if mapped and self.cfg else None
+        a = a if isinstance(a, dict) else {}
+        checked = a.get('checked') if is_num(a.get('checked')) else None
+        msg, gst = None, self.sync.get('state')
+        if self.presence_off:
+            state = 'off'
+        elif not (self.cfg and mapped):
+            state = 'local_only'
+        elif not logged_in:
+            state = 'not_logged_in'
+        elif gst == 'old_server':
+            state, msg = 'old_server', COST_OLD
+        elif gst == 'error' and (not checked or (is_num(self.sync.get('at')) and self.sync['at'] > checked)):
+            state, msg = 'error', self.sync.get('error') if isinstance(self.sync.get('error'), str) else None
+        else:
+            state = 'ok' if checked else 'pending'
+        ms = a.get('missing') if isinstance(a.get('missing'), list) else []
+        missing = [{'name': m['name'], 'used_epoch': m['used_epoch']} for m in ms if isinstance(m, dict) and isinstance(m.get('name'), str)
+                   and is_num(m.get('used_epoch')) and m['used_epoch'] > self.now - COST_DAYS * 86400] if state not in ('off', 'local_only') else []
+        return {'state': state, 'message': msg, 'checked_epoch': checked, 'missing': missing}
+
+    def devices(self, tool, email, slot, share):
+        """有数据的设备：[{id, name, me, revoked, synced_epoch, stale, h}]，这台设备在最前。维护者撤销了 key、又有一台同名的
+        （同一台换了 key）：并进那一台，它有数据以前的小时才用撤销的那份（不重复计）"""
+        h, um = cost_content(self.local, tool, email)
+        devs = [{'id': self.cfg['fp'] if self.cfg else 'local', 'name': self.me_name, 'me': True, 'revoked': False,
+                 'synced_epoch': self.updated, 'stale': False, 'h': h}]
+        ums = set(um)
+        for fp, e in ((self.remote.get('acc') or {}).get(slot) or {}).items() if share else ():
+            if not (isinstance(e, dict) and cost_rows_ok(e.get('h')) and is_num(e.get('at')) and isinstance(e.get('name'), str)):
+                continue
+            devs.append({'id': fp, 'name': e['name'], 'me': False, 'revoked': e.get('revoked') is True, 'synced_epoch': e['at'],
+                         'stale': self.now - e['at'] > COST_STALE, 'h': {k: list(r) for k, r in e['h'].items()}})
+            ums.update(x for x in e.get('um') or [] if isinstance(x, str))
+        active = {d['name']: d for d in devs if not d['revoked']}
+        out = []
+        for d in devs:
+            a = active.get(d['name']) if d['revoked'] else None
+            if a is None:
+                out.append(d)
+                continue
+            first = min((int(k) for k in a['h']), default=None)
+            for k, r in d['h'].items():
+                if first is None or int(k) < first:
+                    b = a['h'].setdefault(k, [0] * 7)
+                    for x in range(7):
+                        b[x] += r[x]
+        return out, sorted(ums)
+
+    def account(self, tool, k, weeks_view, mapped, logged_in):
+        """账号的 cost（PROTOCOL 2.2）；没有任何记录是 None。各项的百万分之一美元另记进 self.accounts（cost_total 用）"""
+        email = parse_key(k)[1].lower()
+        if not email:
+            return None
+        slot = '%s:%s' % (tool.name, email)
+        sync = self.sync_view(slot, mapped, logged_in)
+        devs, ums = self.devices(tool, email, slot, sync['state'] not in ('off', 'local_only'))
+        weeks = cost_weeks(weeks_view['weeks'] if weeks_view else None, self.now)
+        wk = [cost_bin(weeks, d['h']) for d in devs]
+        dy = [cost_bin(self.days, d['h']) for d in devs]
+        keep = [i for i, d in enumerate(devs) if sum(r[1] for r in wk[i]) or sum(r[1] for r in dy[i])]
+        if not keep:
+            self.accounts.append((tool.name, None))
+            return None
+        since = float(min(int(x) for i in keep for x in devs[i]['h']))   # keep 里的设备都有数据
+        good = [n for n, (s, e, _) in enumerate(weeks) if e <= self.now and since <= s and e - s >= 6 * 86400]
+        total = lambda rows, count: [[sum(rows[i][n][x] for i in keep) for x in range(7)] for n in range(count)]
+        wsum, dsum = total(wk, len(weeks)), total(dy, len(self.days))
+        m, summary = cost_summary(wsum, dsum, good)
+        summary.update(average_weeks=len(good), requests=sum(r[1] for r in wsum), unpriced_requests=sum(r[6] for r in wsum))
+        m['day_list'] = [r[0] for r in dsum]
+        self.accounts.append((tool.name, m))
+        devices = [dict({x: devs[i][x] for x in ('id', 'name', 'me', 'revoked', 'synced_epoch', 'stale')},
+                        weeks_usd=[usd(r[0]) for r in wk[i]], days_usd=[usd(r[0]) for r in dy[i]],
+                        summary=cost_summary(wk[i], dy[i], good)[1]) for i in keep]
+        devices.sort(key=lambda d: (not d['me'], -d['summary']['days_usd'], d['name']))   # 这台设备在前，别的按最近 30 天的多少
+        return {'currency': 'USD', 'prices_date': COST_PRICES_DATE, 'since_epoch': since,
+                'weeks': [dict(cost_period_view(p, wsum[n], n == len(weeks) - 1, since), basis=p[2]) for n, p in enumerate(weeks)],
+                'days': [dict(cost_period_view(p, dsum[n], n == len(self.days) - 1, since), date=p[2]) for n, p in enumerate(self.days)],
+                'summary': summary, 'devices': devices, 'unpriced_models': ums, 'sync': sync}
+
+    def total(self, tools):
+        """顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None"""
+        if not self.on or not self.accounts:
+            return None
+        ms = [(t, m) for t, m in self.accounts if m]
+
+        def agg(sel):
+            avg = [m['average'] for m in sel if m['average'] is not None]
+            return {'current_usd': usd(sum(m['current'] for m in sel)), 'weeks_usd': usd(sum(m['weeks'] for m in sel)),
+                    'average_usd': usd(sum(avg)) if avg else None, 'days_usd': usd(sum(m['days'] for m in sel)),
+                    'today_usd': usd(sum(m['today'] for m in sel))}
+        lo = self.days[0][0]
+        orphan = [r for k, r in (self.local.get('orphan') or {}).items() if isinstance(k, str) and COST_HOUR_RE.match(k)
+                  and int(k) + 1800 >= lo and isinstance(r, list) and len(r) == 7 and all(type(x) is int for x in r)]
+        out = dict(agg([m for _, m in ms]), currency='USD', prices_date=COST_PRICES_DATE)
+        out['days'] = [{'start_epoch': s, 'end_epoch': e, 'date': d, 'current': n == len(self.days) - 1,
+                        'usd': usd(sum(m['day_list'][n] for _, m in ms))} for n, (s, e, d) in enumerate(self.days)]
+        out['by_tool'] = {t: agg([m for x, m in ms if x == t]) for t in tools if t in ('claude', 'codex')}
+        out['scan'] = {'state': self.scan_state(), 'updated_epoch': self.updated}
+        out['unattributed'] = {'days_usd': usd(sum(r[0] for r in orphan)), 'requests': sum(r[1] for r in orphan)}
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -8708,6 +9811,7 @@ def cmd_presence_view(*args):
         accounts.append({'key': k, 'id': acct_id(k), 'devices': rows})
     failing = (load_quiet(os.path.join(PRESENCE_DIR, 'status.json')) or {}).get('error') or None
     keyshare_kick()   # 顺带：记下备查的 API key 和登录了同一个账号的其他设备同步（最多 KEYSHARE_EVERY 一次）
+    cost_kick()   # 折合金额也统计一次、和别的设备同步（最多 COST_EVERY 一次）
     if as_json:
         print(json.dumps({'version': 1, 'kind': 'devices', 'generated_epoch': recv, 'tool': T.name, 'me': j.get('me_name'),
                           'idle_after': j.get('idle'), 'offline_after': j.get('ttl'), 'reporting_error': failing,
@@ -8803,6 +9907,9 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
     if not env['bin']:
         why['cli'] = 'tool_missing'   # 第三方 API 账号也是经 claude / codex 命令用的
     b = badges.get(k)
+    weeks = None if api or not T.has_usage else usage_weeks_view(k, now, x)
+    cv = env.get('cost')
+    can_cost = bool(cv and cv.on and T.has_cost and not api)   # 折合金额（PROTOCOL 2.2 的 cost）
     return {'key': k, 'id': acct_id(k), 'alias': a, 'email': e, 'name': name_of(k), 'label': label_of(k),
             'kind': 'api' if api else 'oauth', 'login': login, 'login_email': '' if api else email_of(k),
             'plan': '' if not plan or plan == '—' else plan, 'plan_tier': tier if plan and plan != '—' else '',
@@ -8817,11 +9924,13 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
                         limit_resets=T is CLAUDE and 'web' not in why,   # claude.ai 的用量页，只有 Claude 账号有
                         policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm),
                         devices=bool(env.get('presence') and not api and e and e.lower() in pm),   # 账号页的「设备」（PROTOCOL 3.4）
-                        api_key=True),   # 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
+                        api_key=True,   # 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
+                        cost=can_cost),
             'can_why': why,
             'api_key': gui_api_key(c, k, v, share=bool(env.get('presence') and not api and e and e.lower() in pm and T in (CLAUDE, CODEX)),
                                    share_err=env.get('key_error')),
-            'usage': usage, 'usage_weeks': None if api or not T.has_usage else usage_weeks_view(k, now, x),
+            'usage': usage, 'usage_weeks': weeks,
+            'cost': cv.account(T, k, weeks, bool(e and e.lower() in pm), login == 'logged_in') if can_cost else None,
             'health': health_view(k, v, now)}
 
 
@@ -8884,15 +9993,17 @@ def cmd_gui_state():
                        'nodes': [{'name': n, 'local_name': lnames.get(n, n), 'users': users.get(n, [])} for n in c['nodes']]},
            'tools': []}
     procs = gui_procs()
-    presence = presence_load()[1] is not None
+    pcfg = presence_load()[1]
+    presence = pcfg is not None
     key_error = keyshare_error() if presence else None   # 记下备查的 API key 最近一次没同步成的原因（api_key 的 sync_error）
+    cv = CostView(c, now, pcfg)   # 折合金额：读一次统计好的（cost/ 里的），各账号按时段切
     for tool in TOOLS:
         name = tool.name.upper()
         env = {'bin': os.environ.get('CCA_GUI_%s_BIN' % name) or None, 'app': os.environ.get('CCA_GUI_%s_APP' % name) or None,
-               'chrome': os.environ.get('CCA_GUI_CHROME') == '1', 'presence': presence, 'key_error': key_error}
+               'chrome': os.environ.get('CCA_GUI_CHROME') == '1', 'presence': presence, 'key_error': key_error, 'cost': cv}
         enabled = tool is CLAUDE or os.path.exists(tool.table)
         entry = {'id': tool.name, 'label': tool.label, 'app_label': tool.app_label, 'cli_prefix': tool.cmd.split()[1:],
-                 'features': {'app': tool.has_app, 'api': tool.has_api, 'usage': tool.has_usage},
+                 'features': {'app': tool.has_app, 'api': tool.has_api, 'usage': tool.has_usage, 'cost': tool.has_cost},
                  'enabled': enabled, 'bin': env['bin'], 'app': {'installed': bool(env['app']), 'path': env['app']},
                  'chrome': env['chrome'], 'settings_problems': [], 'errors': [], 'last': None, 'accounts': []}
         if enabled and tool.name in TABS:
@@ -8914,6 +10025,7 @@ def cmd_gui_state():
         out['tools'].append(entry)
     errors += [{'code': 'account_unreadable', 'tool': t, 'message': '%s 读不了或格式不对（当作没登录）' % p}
                for t, p in dict.fromkeys(RO_BAD)]
+    out['cost_total'] = cv.total([x['id'] for x in out['tools'] if x['enabled']])
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
@@ -10394,6 +11506,7 @@ CMDS = {
     'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
     'presence-agent': cmd_presence_agent, 'presence-wake': cmd_presence_wake, 'presence-stop': cmd_presence_stop,
     'presence-note': cmd_presence_note, 'presence-view': cmd_presence_view, 'dock-tidy': cmd_dock_tidy,
+    'cost-worker': cmd_cost_worker, 'cost-sync': cmd_cost_sync, 'cost-stop': cmd_cost_stop,
     'prompt-emit': cmd_prompt_emit,
     'check-render': cmd_check_render,
 }
@@ -14514,7 +15627,7 @@ run_account() {
 	rc=$?
 	session_close
 	trap - INT TERM HUP
-	py link "$key" >/dev/null || warn "退出后链接共享目录失败"
+	py link "$key" cost >/dev/null || warn "退出后链接共享目录失败"
 	py sync "$key" >/dev/null || warn "退出后同步 .claude.json 失败"
 	e=$(py email "$key")
 	if [ -n "$ACC_EMAIL" ] && [ -n "$e" ] && [ "$(lower "$e")" != "$(lower "$ACC_EMAIL")" ]; then
@@ -15006,7 +16119,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/agy.json" ] && ag=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s},"agy":{"enabled":%s,"bin":%s}},' \
 		"$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")" "$ag" "$(jopt "$AGY_BIN")"
@@ -15468,6 +16581,20 @@ policy_request() {   # cca [codex] policy request 账号：一行给维护者直
 	else info "把上面这条命令发给维护者，在 cca 的仓库里运行"; fi
 }
 
+cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增的会话记录、和别的设备同步），两个工具一起；--json 给 App（PROTOCOL 3.5）
+	local a out rc
+	[ "${1:-}" = sync ] || die "用法: cca cost sync [--now] [--json]"
+	shift
+	for a in "$@"; do case "$a" in --now|--json) ;; *) die "不认识的参数: ${a}（用法: cca cost sync [--now] [--json]）" ;; esac; done
+	[ -f "$CFG" ] || { fail_warn cost_off "还没安装：请在终端里运行 $SELF install"; return 2; }   # 没有可统计的账号（PROTOCOL 3.5 的退出码 2）
+	out=$(py cost-sync "$@"); rc=$?
+	case $rc in
+		0) printf '%s\n' "$out" ;;
+		2) fail_warn cost_off "$out"; return 2 ;;
+		*) FAIL_CODE=cost_unavailable die "${out:-统计折合金额没成}" ;;
+	esac
+}
+
 cmd_devices() {   # cca [codex] devices [账号…] [--json]：映射里的账号连着哪些设备（维护者的服务器上看；--json 给 App，PROTOCOL 3.4）
 	local a json="" out rc
 	for a in "$@"; do [ "$a" = --json ] && json=1; done
@@ -15780,6 +16907,7 @@ cmd_restore() {
 	core_stop_stale   # 内置代理的内核（界面 App 退出时会停掉它，这里是 App 崩溃后留下的）
 	on_linux && core_boot off   # 开机起内核的那一行（上面换掉内置代理时已经删了；以前留下的也删）
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
+	py cost-stop 2>/dev/null       # 正在统计折合金额的后台进程也停掉
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点、维护者的参考节点，
 	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
@@ -15787,6 +16915,7 @@ cmd_restore() {
 	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）不打包
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
 		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' \
+		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
 		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null )
@@ -15976,6 +17105,7 @@ EOF
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写账号自己在 ~/.cca/accounts 里的目录）、
                              leak_check（设成 false：启动前不测 ${leaks}）、
+                             cost（设成 false：不统计按 API 标价折算的金额，App 里也不显示）、
                              presence（设成 false：${host}不向维护者的服务器报告、也不查设备统计）${mac:+、}
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
@@ -15988,7 +17118,7 @@ main() {
 	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) cmd_install ;;
@@ -16014,10 +17144,12 @@ main() {
 		_core-keep) CCA_SELF="$SELF" exec "${PYRUN[@]}" core-keep ;;   # 后台（Linux）：没有界面 App 时托管内置代理的内核（见 py 的 cmd_core_keep）
 		_presence-agent) CCA_SELF="$SELF" exec "${PYRUN[@]}" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
 		_key-sync) shift; CCA_SELF="$SELF" exec "${PYRUN[@]}" key-sync "$@" ;;   # 后台：记下备查的 API key 经设备统计的服务器加密同步（见 py 的 keyshare 一节）
+		_cost-sync) shift; CCA_SELF="$SELF" exec "${PYRUN[@]}" cost-worker "$@" ;;   # 后台：统计折合金额、和别的设备同步（见 py 的折合金额一节）
 		_dock-tidy) shift; cmd_dock_tidy "$@" ;;   # 后台：cca 打开的 App 实例退出后整理程序坞（见 py 的程序坞一节；终端交接的脚本也调，PROTOCOL 6）
 		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
 		gui) shift; cmd_gui "$@" ;;
 		clients) shift; cmd_clients "$@" ;;
+		cost) shift; cmd_cost "$@" ;;   # 统计折合金额（App 定时运行，PROTOCOL 3.5；不经过自动更新、映射拉取）
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
 		*)

@@ -1,0 +1,5 @@
+{
+  "version": 1, "kind": "cost_sync", "generated_epoch": 1794042000.0,
+  "scan": {"state": "ready", "updated_epoch": 1794042000.0, "files": 190, "read_bytes": 123456, "records": 120, "first": false},
+  "sync": {"state": "ok", "message": null, "checked_epoch": 1794042000.0}
+}

@@ -63,7 +63,7 @@ enum Remedy: Sendable, Equatable {
 }
 
 enum Texts {
-    private static let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
+    static let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
 
     /// 一段时长：不到 1 分钟 / 25 分钟 / 2 小时 13 分 / 3 天 4 小时（和 cca 的 span 一样）。
     static func span(_ seconds: Double) -> String {
@@ -97,13 +97,13 @@ enum Texts {
     }
 
     /// “周二 09:00”
-    private static func weekdayTime(_ epoch: Double, calendar: Calendar) -> String {
+    static func weekdayTime(_ epoch: Double, calendar: Calendar) -> String {
         let c = calendar.dateComponents([.weekday], from: Date(timeIntervalSince1970: epoch))
         return "周" + weekdays[((c.weekday ?? 1) - 1 + 7) % 7] + " " + clock(epoch, calendar: calendar)
     }
 
     /// “09:00”
-    private static func clock(_ epoch: Double, calendar: Calendar) -> String {
+    static func clock(_ epoch: Double, calendar: Calendar) -> String {
         let c = calendar.dateComponents([.hour, .minute], from: Date(timeIntervalSince1970: epoch))
         return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
     }
@@ -123,7 +123,7 @@ enum Texts {
     }
 
     /// “11 月 3 日”（不是今年的带年份：“2025 年 10 月 3 日”）
-    private static func dayText(_ epoch: Double, now: Double, calendar: Calendar) -> String {
+    static func dayText(_ epoch: Double, now: Double, calendar: Calendar) -> String {
         let c = calendar.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: epoch))
         let day = "\(c.month ?? 0) 月 \(c.day ?? 0) 日"
         return c.year == calendar.component(.year, from: Date(timeIntervalSince1970: now)) ? day : "\(c.year ?? 0) 年 " + day

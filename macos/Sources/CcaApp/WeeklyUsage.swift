@@ -16,6 +16,8 @@ struct WeeklyChart: View {
     var top: Double?
     /// 鼠标指着的那一周（它的 endEpoch）；给了才跟着鼠标
     var hover: Binding<Double?>?
+    /// 右边留出和这几个刻度一样宽的一栏（账号页：下面「折合金额」的大图的纵轴，CostChart.gutterLabels），两张图的绘图区一样宽
+    var gutter: [String] = []
 
     static let week: Double = 7 * 86400
 
@@ -38,73 +40,19 @@ struct WeeklyChart: View {
 
     var body: some View {
         let top = self.top ?? Self.scaleTop([weeks])
-        let hovered = hover?.wrappedValue
-        GeometryReader { geo in
-            let size = geo.size
-            let plot = max(size.height - topInset - dateRow, 1)
-            let slots = weeks.compactMap { slot($0, width: size.width) }
-            let chart = ZStack(alignment: .topLeading) {
-                ForEach(slots, id: \.week.id) { s in
-                    let on = s.week.endEpoch == hovered
-                    if on {
-                        // 鼠标指着的那一列垫一层浅底，和卡片、列表行的悬停一样
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.primary.opacity(0.06))
-                            .frame(width: max(s.width - 4, 0), height: size.height)
-                            .position(x: s.mid, y: size.height / 2)
-                    }
-                    WeekBar(percent: s.week.usedPercent, top: top,
-                            color: s.week.partial ? Meter.dimColor : Palette.usage(percent: s.week.usedPercent))
-                        .frame(width: min(barWidth, max(s.width * 0.6, 2)), height: plot)
-                        .position(x: s.mid, y: topInset + plot / 2)
-                        .accessibilityElement()
-                        .accessibilityLabel(Texts.weekLabel(s.week))
-                        .accessibilityValue(Texts.weekDetail(s.week, now: now))
-                    // 日期写在条的正下方；一周太窄（中间重新计时的）时不写，免得和旁边的挤在一起（鼠标指着时下面那一行会说）
-                    if !compact, s.width >= 30 {
-                        Text(Texts.weekLabel(s.week))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(on ? .primary : .secondary)
-                            .fixedSize()
-                            .position(x: s.mid, y: size.height - dateRow / 2)
-                            .accessibilityHidden(true)
-                    }
-                }
+        // 排法、悬停、日期都在 SlotChart（和折合金额的图共用）；日期写在条的正下方，一周太窄（中间重新计时的）时不写，
+        // 免得和旁边的挤在一起（鼠标指着时下面那一行会说）
+        HStack(alignment: .top, spacing: 8) {
+            SlotChart(items: weeks, domain: domain, barWidth: barWidth, topInset: topInset, dateRow: dateRow, hover: hover,
+                      label: { _, w, width in width >= CGFloat(CostChart.weekLabelMinWidth) ? Texts.weekLabel(w) : nil },
+                      accessibility: { w in (Texts.weekLabel(w), Texts.weekDetail(w, now: now)) }) { w in
+                WeekBar(percent: w.usedPercent, top: top,
+                        color: w.partial ? Meter.dimColor : Palette.usage(percent: w.usedPercent))
             }
-            .frame(width: size.width, height: size.height)
-            .contentShape(Rectangle())
-            if let hover {
-                // 整列都算：指着条旁边的空当、下面的日期也是这一周
-                chart.onContinuousHover { phase in
-                    guard case .active(let p) = phase else {
-                        hover.wrappedValue = nil
-                        return
-                    }
-                    hover.wrappedValue = slots.first { $0.x0 <= p.x && p.x < $0.x1 }?.week.endEpoch
-                }
-            } else {
-                chart
-            }
+            if !gutter.isEmpty { AxisColumn(labels: gutter) }   // 和折合金额的大图的 HStack 一样：间距 8、右边一栏
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("每周用量")
-    }
-
-    /// 一周在横轴上占的那一段（只算看得见的部分）
-    private struct Slot {
-        let week: UsageWeek
-        let x0: CGFloat
-        let x1: CGFloat
-        var mid: CGFloat { (x0 + x1) / 2 }
-        var width: CGFloat { x1 - x0 }
-    }
-
-    private func slot(_ w: UsageWeek, width: CGFloat) -> Slot? {
-        let span = domain.upperBound - domain.lowerBound
-        guard span > 0 else { return nil }
-        func x(_ t: Double) -> CGFloat { CGFloat((t - domain.lowerBound) / span) * width }
-        let x0 = max(x(w.startEpoch), 0), x1 = min(x(w.endEpoch), width)
-        return x1 - x0 >= 1 ? Slot(week: w, x0: x0, x1: x1) : nil
     }
 }
 
@@ -147,6 +95,8 @@ private struct WeekBar: View {
 /// 这是 cca 每次查用量时记下的，所以图从开始记的那一周起一周一周长出来。下面一行是统计，鼠标指着一周时换成那一周的细节。
 struct WeeklyUsageSection: View {
     let account: Account
+    /// 图的右边留多宽（WeeklyChart 的 gutter）：账号页给下面「折合金额」的大图的刻度
+    var gutter: [String] = []
     /// 鼠标指着的那一周（命令行工具编不了 @State 宏：State 类型直接用）
     private let hover = State<Double?>(initialValue: nil)
 
@@ -169,7 +119,8 @@ struct WeeklyUsageSection: View {
         if let uw = account.usageWeeks, !uw.weeks.isEmpty {
             let hovered = uw.weeks.first { $0.endEpoch == hover.wrappedValue }
             VStack(alignment: .leading, spacing: 10) {
-                WeeklyChart(weeks: uw.weeks, domain: WeeklyChart.domain([uw.weeks], now: now), now: now, hover: hover.projectedValue)
+                WeeklyChart(weeks: uw.weeks, domain: WeeklyChart.domain([uw.weeks], now: now), now: now, hover: hover.projectedValue,
+                            gutter: gutter)
                     .frame(height: 128)
                 Text(hovered.map { Texts.weekDetail($0, now: now) } ?? Texts.weeksSummary(uw.summary) ?? "这一周过完就有第一周的统计。")
                     .font(.caption)

@@ -331,7 +331,7 @@ esac
 exec "$REAL" "$@"
 S
 chmod 755 "$D/bin/curl"
-export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" CCA_POLICY_DEFAULT= LANG=C.UTF-8
+export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" CCA_POLICY_DEFAULT= LANG=C.UTF-8 CCA_COST=off
 unset CCA_HOME XDG_RUNTIME_DIR XDG_DATA_HOME DISPLAY WAYLAND_DISPLAY
 echo "  bash ${BASH_VERSION%%(*}，$(python3 --version 2>&1)，$(curl --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2)，nc：$(readlink -f "$(command -v nc)" 2>/dev/null || echo 无)，ps：$(readlink -f "$(command -v ps)" 2>/dev/null || echo 无)，ruby：$(ruby -e 'print RUBY_VERSION' 2>/dev/null || echo 无)"
 ans() { local f; f=$(mktemp "$D/ans.XXXXXX"); printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
@@ -582,6 +582,34 @@ if command -v openssl >/dev/null 2>&1; then
 else
 	echo "  （跳过设备统计：没有 openssl，生成不了服务器的证书）"
 fi
+
+# 折合金额：共享的会话记录里的用量按官方 API 的标价折算，按登录的身份认是谁的（Linux 上没有 st_birthtime：按修改时间排；
+# 进程的启动时间从 /proc 读）。会话结束后在后台统计一次（CCA_COST 在这一步清掉：别处是 off）；cca cost sync --json 是 App 用的那一条
+AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
+python3 - "$AD/claude/.claude.json" "$H" <<'PY'
+import json, os, sys, time
+p, home = sys.argv[1], sys.argv[2]
+j = json.load(open(p))
+j.setdefault('oauthAccount', {})['accountUuid'] = 'u-linux-alice-01'
+json.dump(j, open(p, 'w'))
+d = os.path.join(home, '.claude', 'projects', '-linux')
+os.makedirs(d, exist_ok=True)
+t = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() - 3600))
+line = lambda x: json.dumps(x, separators=(',', ':')) + '\n'
+open(os.path.join(d, 's-linux.jsonl'), 'w').write(
+    line({'type': 'session-owner', 'accountUuid': 'u-linux-alice-01', 'organizationUuid': 'o', 'sessionId': 's-linux'})
+    + line({'type': 'assistant', 'timestamp': t, 'requestId': 'r1', 'sessionId': 's-linux',
+            'message': {'id': 'm1', 'model': 'claude-opus-5-5', 'usage': {'input_tokens': 1000, 'output_tokens': 100}}}))
+PY
+CCA_COST= CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi >/dev/null 2>&1
+for i in $(seq 1 40); do [ -f "$H/.cca/cost/local.json" ] && break; sleep 0.25; done
+kicked=$([ -f "$H/.cca/cost/last" ] && [ -f "$H/.cca/cost/local.json" ] && echo yes)
+out=$("$C" cost sync --json 2>/dev/null); rc=$?
+got=$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); print("%s|%s" % (j["who"].get("claude:u-linux-alice-01"), sum(r[0] for r in j["acc"]["claude:u-linux-alice-01"].values())))' "$H/.cca/cost/local.json" 2>/dev/null)
+if [ $rc -eq 0 ] && [ "$kicked" = yes ] && [ "$got" = "alice@example.com|6000" ] && [ "$(stat -c %a "$H/.cca/cost")" = 700 ] && [ "$(stat -c %a "$H/.cca/cost/local.json")" = 600 ] &&
+	printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["kind"] == "cost_sync" and d["scan"]["state"] == "ready" else 1)'; then
+	ok "折合金额：会话结束后在后台统计（cca _cost-sync），按登录的身份认出是 alice 的（折合 0.006 美元）；cca cost sync --json 照样能跑；只给自己读"
+else no "折合金额（退出码 $rc，后台统计${kicked:-没起}）：${got:-没统计出来}；$(printf '%s' "$out" | tail -c 300)"; fi
 
 # Codex：添加账号（服务器上没有路由器、只配置了内置代理：节点从可选节点里选，不用先配置路由器）、服务器上登录（login-page 那一行
 # 带别名、节点和节点摘要；换 token 经账号的端口）、启动（关掉会换出口的开关，经账号的端口）、查用量（经账号的端口）、cxa 是 cca codex 的简写

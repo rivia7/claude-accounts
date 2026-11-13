@@ -37,12 +37,15 @@ struct StateDoc: CcaDocument, Equatable {
     var config: StateConfig?
     var routing: Routing?
     var tools: [ToolState]
+    /// 所有账号的折合金额加起来（用量统计页金额模式的页头，PROTOCOL 2.2）：关掉了、没有 Claude / Codex 的官方账号时为 nil，旧版 cca 没有
+    var costTotal: CostTotal?
 
     enum CodingKeys: String, CodingKey {
         case version, kind
         case generatedAt = "generated_at"
         case ccaVersion = "cca_version"
         case errors, notices, config, routing, tools
+        case costTotal = "cost_total"
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +59,7 @@ struct StateDoc: CcaDocument, Equatable {
         config = c.lossy(StateConfig.self, .config)
         routing = c.lossy(Routing.self, .routing)
         tools = c.lossyArray(ToolState.self, .tools) ?? []
+        costTotal = c.lossy(CostTotal.self, .costTotal)
     }
 
     func tool(_ id: ToolID) -> ToolState? { tools.first { $0.id == id } }
@@ -291,19 +295,22 @@ struct NodeUse: Decodable, Sendable, Equatable, Identifiable {
 }
 
 /// 一个工具（Claude / Codex）。
-/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）。旧版 cca 没有这个字段：
-/// 那时只有 Claude 和 Codex，都有。
+/// `tools[].features`：这个工具有没有桌面 App（`app`）、第三方 API 账号（`api`）、查用量的接口（`usage`）、折合金额（`cost`）。
+/// 旧版 cca 没有这个字段：那时只有 Claude 和 Codex，都有（折合金额除外：没有这个键当作没有）。
 struct ToolFeatures: Decodable, Sendable, Equatable {
     var app: Bool
     var api: Bool
     var usage: Bool
+    /// 折合金额（PROTOCOL 2.2）：旧版 cca 没有这个键，当作没有
+    var cost: Bool
 
-    enum CodingKeys: String, CodingKey { case app, api, usage }
+    enum CodingKeys: String, CodingKey { case app, api, usage, cost }
 
-    init(app: Bool, api: Bool, usage: Bool) {
+    init(app: Bool, api: Bool, usage: Bool, cost: Bool = false) {
         self.app = app
         self.api = api
         self.usage = usage
+        self.cost = cost
     }
 
     init(from decoder: Decoder) throws {
@@ -311,9 +318,10 @@ struct ToolFeatures: Decodable, Sendable, Equatable {
         app = c.bool(.app) ?? true
         api = c.bool(.api) ?? true
         usage = c.bool(.usage) ?? true
+        cost = c.bool(.cost) ?? false
     }
 
-    /// cca 没给 features 时：Antigravity 什么都没有，别的都有
+    /// cca 没给 features 时：Antigravity 什么都没有，别的都有（折合金额都没有）
     static func defaults(_ id: ToolID) -> ToolFeatures {
         id == .agy ? ToolFeatures(app: false, api: false, usage: false) : ToolFeatures(app: true, api: true, usage: true)
     }
@@ -420,6 +428,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var usage: UsageEntry?
     /// 最近几周每周用了多少（PROTOCOL 2.2；cca 记下的，官方账号才有；旧版 cca 没有，是 nil）
     var usageWeeks: UsageWeeks?
+    /// 折合金额（PROTOCOL 2.2；只给 `can.cost` 为真的账号，还没有任何记录、旧版 cca 是 nil）
+    var cost: AccountCost?
     var health: Health?
 
     var id: AccountRef { ref }
@@ -440,6 +450,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case apiKey = "api_key"
         case usage
         case usageWeeks = "usage_weeks"
+        case cost
         case health
     }
 
@@ -475,6 +486,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         apiKey = c.lossy(APIKeyInfo.self, .apiKey)
         usage = c.lossy(UsageEntry.self, .usage)
         usageWeeks = c.lossy(UsageWeeks.self, .usageWeeks)
+        cost = c.lossy(AccountCost.self, .cost)
         health = c.lossy(Health.self, .health)
     }
 
@@ -631,9 +643,12 @@ struct Can: Decodable, Sendable, Equatable {
     var devices: Bool = false
     /// 能不能记下 / 显示 / 复制 API key（`cca [codex] key`，PROTOCOL 4.10；旧版 cca 没有这一项，当作不能）
     var apiKey: Bool = false
+    /// 账号页有没有「折合金额」一节、用量统计页的金额模式里有没有这一行（Claude、Codex 的官方账号，没登录的也有；
+    /// PROTOCOL 2.2）。旧版 cca 没有这一项，当作没有
+    var cost: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case app, web, billing, usage, check, cli, devices
+        case app, web, billing, usage, check, cli, devices, cost
         case limitResets = "limit_resets"
         case policyLock = "policy_lock"
         case apiKey = "api_key"
@@ -653,6 +668,7 @@ struct Can: Decodable, Sendable, Equatable {
         policyLock = c.bool(.policyLock) ?? false
         devices = c.bool(.devices) ?? false
         apiKey = c.bool(.apiKey) ?? false
+        cost = c.bool(.cost) ?? false
     }
 }
 

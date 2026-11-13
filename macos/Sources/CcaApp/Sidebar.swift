@@ -210,14 +210,17 @@ struct OfficeRow: View {
 
 }
 
-/// 用量统计那一行：自己的图标（StatsMark，和总览、客户端更新一套画法）。
+/// 用量统计那一行：自己的图标（StatsMark，和总览、客户端更新一套画法）。cca 有折合金额时第二行也提它。
 struct UsageStatsRow: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         HStack(spacing: 10) {
             StatsMark(size: 22).frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("用量统计").font(.body.weight(.medium))
-                Text("每个账号每周用了多少").font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
+                Text(model.costEnabled ? "每周用了多少、折合多少钱" : "每个账号每周用了多少")
+                    .font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)
         }

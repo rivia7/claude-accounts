@@ -329,12 +329,16 @@ struct FailCode: KnownValues {
     static let keychainUnavailable = FailCode(rawValue: "keychain_unavailable")
     /// 这种账号没有这个功能（Antigravity 账号：桌面 App、查用量、第三方 API 账号、控制台的账单页、重置次数）。
     static let unsupported = FailCode(rawValue: "unsupported")
+    /// 统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：没统计成（message 是原因）/ 用不了（关掉了、没有 Claude / Codex 的官方账号）。
+    static let costUnavailable = FailCode(rawValue: "cost_unavailable")
+    static let costOff = FailCode(rawValue: "cost_off")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
-                                       .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported]
+                                       .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
+                                       .costUnavailable, .costOff]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

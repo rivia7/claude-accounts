@@ -15,23 +15,27 @@ import Foundation
 /// | `update --check --json` | update.json | — |
 /// | `clients status/check --json` | client_updates.json | — |
 /// | `devices KEY --json` | devices.json（键换成这次问的账号） | — |
+/// | `cost sync [--now] --json` | cost_sync.json | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。
 ///
 /// 演示模式（App 用 CCA_GUI_FIXTURES 打开）传 rebaseTo = 现在：夹具里的时间（`generated_at`、`checked_at`、`*_epoch`）
 /// 一起平移，让 state.json 的 generated_at 落在“现在”——几点重置、几点回来、多久前检测的，永远像刚生成的一样。
-/// 测试不传，读到的是原样的文件。
+/// 折合金额里每一天的本地日期（`date`）跟着挪整天：最后一天还是“今天”。测试不传，读到的是原样的文件。
 struct FixtureTransport: Transport {
     let directory: URL
     let stepDelay: TimeInterval
     let overrides: [String: String]
     /// 时间平移多少秒（不平移是 0）
     let shift: Double
+    /// 本地日期（`date`）挪几天：generated_at 那天到平移以后那天
+    let dayShift: Int
 
     var isFixture: Bool { true }
 
-    init(directory: URL, environment: [String: String] = [:], stepDelay: TimeInterval = 0.35, rebaseTo now: Double? = nil) {
+    init(directory: URL, environment: [String: String] = [:], stepDelay: TimeInterval = 0.35, rebaseTo now: Double? = nil,
+         calendar: Calendar = .current) {
         self.directory = directory
         self.stepDelay = stepDelay
         var o: [String: String] = [:]
@@ -43,13 +47,31 @@ struct FixtureTransport: Transport {
         let anchor = (try? Data(contentsOf: directory.appendingPathComponent(o["state"] ?? "state.json")))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             .flatMap { ($0["generated_at"] as? NSNumber)?.doubleValue }
-        shift = now.flatMap { n in anchor.map { n - $0 } } ?? 0
+        let delta = now.flatMap { n in anchor.map { n - $0 } } ?? 0
+        shift = delta
+        dayShift = anchor.map { Self.days(from: $0, to: $0 + delta, calendar: calendar) } ?? 0
+    }
+
+    /// 两个时刻之间隔了几个本地日历日（按零点数）
+    static func days(from a: Double, to b: Double, calendar: Calendar) -> Int {
+        let start = calendar.startOfDay(for: Date(timeIntervalSince1970: a))
+        let end = calendar.startOfDay(for: Date(timeIntervalSince1970: b))
+        return calendar.dateComponents([.day], from: start, to: end).day ?? 0
     }
 
     /// 把 JSON 里的时间平移 by 秒：`generated_at`、`checked_at` 和以 `_epoch` 结尾的数字（ISO 写法的 `*_at` 字符串、
-    /// `age_seconds` 不动）。读不懂就原样返回。
-    static func rebase(_ data: Data, by delta: Double) -> Data {
-        guard delta != 0, let obj = try? JSONSerialization.jsonObject(with: data) else { return data }
+    /// `age_seconds` 不动）；本地日期 `date`（`YYYY-MM-DD`，折合金额的每一天）挪 days 天（`prices_date` 这些不动）。读不懂就原样返回。
+    static func rebase(_ data: Data, by delta: Double, days: Int = 0) -> Data {
+        guard delta != 0 || days != 0, let obj = try? JSONSerialization.jsonObject(with: data) else { return data }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? cal.timeZone
+        func moved(_ s: String) -> String? {
+            guard let p = Texts.costDateParts(s),
+                  let d = cal.date(from: DateComponents(year: p.year, month: p.month, day: p.day, hour: 12)),
+                  let m = cal.date(byAdding: .day, value: days, to: d) else { return nil }
+            let c = cal.dateComponents([.year, .month, .day], from: m)
+            return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+        }
         func walk(_ x: Any) -> Any {
             if let d = x as? [String: Any] {
                 var out: [String: Any] = [:]
@@ -57,6 +79,8 @@ struct FixtureTransport: Transport {
                     if k == "generated_at" || k == "checked_at" || k.hasSuffix("_epoch"), let n = v as? NSNumber,
                        CFGetTypeID(n) != CFBooleanGetTypeID() {
                         out[k] = n.doubleValue + delta
+                    } else if k == "date", days != 0, let s = v as? String, let m = moved(s) {
+                        out[k] = m
                     } else {
                         out[k] = walk(v)
                     }
@@ -71,7 +95,7 @@ struct FixtureTransport: Transport {
 
     private func read(_ name: String) -> Data? {
         guard let d = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return nil }
-        return name.hasSuffix(".json") ? Self.rebase(d, by: shift) : d
+        return name.hasSuffix(".json") ? Self.rebase(d, by: shift, days: dayShift) : d
     }
 
     /// 演示时假装慢一点（看得到“刷新中…”这些进度）；测试里 stepDelay 是 0，不等
@@ -156,6 +180,9 @@ struct FixtureTransport: Transport {
         case ("devices", let key):
             guard let d = read("devices.json") else { return missing("devices.json") }
             return CcaResponse(exitCode: 0, stdout: Self.devicesFor(key, d), stderr: Data(), events: [])
+        case ("cost", "sync"):
+            await pause(3)
+            return json("cost_sync.json")
         case ("update", _):
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
         case ("key", _) where args.contains("--show"):

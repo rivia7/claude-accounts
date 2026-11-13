@@ -16,6 +16,10 @@
 - API key（keys）：映射里官方账号记下备查的 API key，经这里同步给登录了这个账号的其他设备。服务器只存设备传上来的密文
   （每个账号一份，新的整个换掉旧的），看不到 key，也分不出是 key 还是“删掉了”：密钥由盐、邮箱和账号的登录身份派生，只有
   登录过这个账号的设备算得出来；谁新谁旧、真的假的都由设备自己按密文里认证过的时间判断。存在状态文件旁边的 keys.json。
+- 折合金额（op ledger）：映射里官方账号的用量按官方 API 标价折成的金额，各台设备算自己的，经这里交换。服务器只存设备传上来的密文
+  （每个账号、每台设备一份，设备只能写自己的那一份；撤销设备后不删，是账号的用量，cost_keep 天没再传就删掉），密钥和 API key
+  一样只有登录过这个账号的设备算得出来。回的时候顺带说哪些设备 30 天内用过这个账号、却没传过（多半是 cca 太旧）。存在 cost-slots.json。
+  早先试过的 /v1/cost 是另一种格式，这一版不认（回 404：那时的客户端照旧版服务器处理，过几个小时再试）。
 - 连接：同一个 IP 最多同时 8 个，每个连接从接进来起最多 15 秒（TLS 握手 5 秒），慢吞吞、不说话的连接占不满服务器；
   POST 按 IP 限流，验签通过之后再按设备限流（别的设备拿你的指纹乱发请求，扣不到你的配额）。
 - 证书公钥的指纹（映射里的 presence.pins）在服务器上用 openssl 算：./policy.sh presence deploy 打印、写进映射。
@@ -47,9 +51,15 @@ MAX_CONN_IP = 8            # 同一个 IP 同时几个连接
 CONN_DEADLINE = 15         # 一个连接从接进来起最多多少秒（到点就断）
 HANDSHAKE_TIMEOUT = 5
 MAX_AGE = 10 * 365 * 86400
-MAX_KEYS_BODY = 1 << 20    # API key 的密文（/v1/keys）一次最多这么大
+MAX_SYNC_BODY = 1 << 20    # 交换密文的请求（/v1/keys、/v1/ledger）一次最多这么大
 MAX_KEYS = 4096            # API key 的密文最多存几个账号
 MAX_KEY_BLOB = 8192        # 一份密文（base64）最长多少个字符（key 最长 4096 个字符，补齐、加上时间后不到 6000）
+MAX_COST_BLOB = 98304      # 一份密文（base64）最长多少个字符（一台设备一个账号 14 周的小时数据，压缩后一般几十 KB）
+COST_SLOTS = 128           # 一台设备最多存几个账号的
+COST_DEVICE_BYTES = 4 << 20    # 一台设备存的密文加起来最多这么大
+COST_TOTAL_BYTES = 32 << 20    # 所有设备加起来最多这么大
+COST_RESP = 512 * 1024     # 一次回的密文最多这么多：多了的只带认证码不带密文，设备下次再取
+SYNC_OPS = {'keys': MAX_KEY_BLOB, 'ledger': MAX_COST_BLOB}   # 交换密文的 op → 一份密文最长多少个字符
 
 FP_RE = re.compile(r'^SHA256:[A-Za-z0-9+/]{43}$')
 AID_RE = re.compile(r'^[0-9a-f]{32}$')
@@ -57,6 +67,7 @@ NONCE_RE = re.compile(r'^[0-9a-f]{32}$')
 KEY_RE = re.compile(r'^ssh-ed25519 (AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43})$')
 NAME_BAD = re.compile(r'[\x00-\x1f\x7f]')
 B64_RE = re.compile(r'^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$')
+TAG_RE = re.compile(r'^[A-Za-z0-9+/]{43}=$')   # 认证码（32 字节的 base64）
 
 VERIFY_SLOTS = threading.BoundedSemaphore(4)   # 同时验几个签名（一个十几毫秒 CPU）
 
@@ -214,26 +225,30 @@ def parse_units(u):
     return out
 
 
-def parse_blob(b):
-    """keys 里设备传上来的一份密文：{"n": nonce, "c": 密文, "t": 校验}，都是 base64（服务器不懂里面是什么，只查形状和长度）"""
+def parse_blob(b, limit=MAX_KEY_BLOB):
+    """keys、cost 里设备传上来的一份密文：{"n": nonce, "c": 密文, "t": 校验}，都是 base64（服务器不懂里面是什么，只查形状和长度）"""
     if not (isinstance(b, dict) and set(b) == {'n', 'c', 't'} and all(isinstance(b[k], str) and B64_RE.match(b[k]) for k in b)):
         return None
-    if len(b['n']) != 24 or len(b['t']) != 44 or not 0 < len(b['c']) <= MAX_KEY_BLOB:
+    if len(b['n']) != 24 or len(b['t']) != 44 or not 0 < len(b['c']) <= limit:
         return None
     return {'n': b['n'], 'c': b['c'], 't': b['t']}
 
 
-def parse_keys(j):
-    """keys 的 put（{账号摘要: 密文}）和 get（[账号摘要…]）；不合格是 None"""
-    put, get = j.get('put') or {}, j.get('get') or []
-    if not (isinstance(put, dict) and len(put) <= MAX_ACCOUNTS and isinstance(get, list) and len(get) <= MAX_ACCOUNTS):
+def parse_sync(j, limit):
+    """keys、ledger 的 put（{账号摘要: 密文}）、get（[账号摘要…]）和 have（{账号摘要: {设备指纹: 认证码}}：设备手里已经有的，
+    没变的不回密文；只有 ledger 用）；不合格是 None"""
+    put, get, have = j.get('put') or {}, j.get('get') or [], j.get('have') or {}
+    if not (isinstance(put, dict) and isinstance(get, list) and isinstance(have, dict) and max(len(put), len(get), len(have)) <= MAX_ACCOUNTS):
         return None
-    if not all(isinstance(a, str) and AID_RE.match(a) for a in list(put) + get):
+    if not all(isinstance(a, str) and AID_RE.match(a) for a in list(put) + get + list(have)):
         return None
-    blobs = {aid: parse_blob(b) for aid, b in put.items()}
+    if not all(isinstance(h, dict) and len(h) <= 256 and all(isinstance(f, str) and FP_RE.match(f) and isinstance(t, str) and TAG_RE.match(t)
+                                                            for f, t in h.items()) for h in have.values()):
+        return None
+    blobs = {aid: parse_blob(b, limit) for aid, b in put.items()}
     if None in blobs.values():
         return None
-    return blobs, list(dict.fromkeys(get))
+    return blobs, list(dict.fromkeys(get)), have
 
 
 class Buckets:
@@ -275,6 +290,16 @@ def sessions(e):
     return list(e.get('cli') or []) + ([e['app']] if e.get('app') else [])
 
 
+def last_used(e):
+    """一台设备上一个账号最后一次有动静：记下的上次使用和开着的会话里最晚的"""
+    return max([e.get('used') or 0] + [x[1] for x in sessions(e)])
+
+
+def ago(now, t):
+    """t 以来多少秒（取整，不为负）"""
+    return round(max(now - t, 0))
+
+
 def load_doc(path, keys):
     """读状态文件：没有、读不了、格式不对是 None（读不了的在日志里说一声）"""
     try:
@@ -301,15 +326,21 @@ class Store:
     """state.json：{"seq": 设备清单的序号, "machines": {指纹: {"name", "key"}}, "beats": {指纹: {"seen", "end"}},
     "units": {指纹: {账号摘要: {"cli": [[开始, 最后动静]…], "app": [开始, 最后动静] | null, "used": 上次使用}}}}，时间都是服务器的。
     keys.json（另一个文件：心跳不用跟着重写它）：{"acc": {账号摘要: {"blob": 密文, "fp": 传的设备, "name": 它那时的名字,
-    "at": 什么时候传的}}}（撤销设备不删：是账号的）"""
-    def __init__(self, path, ttl, idle, retain, keys_path=None):
-        self.path, self.ttl, self.idle, self.retain = path, ttl, idle, retain
+    "at": 什么时候传的}}}（撤销设备不删：是账号的）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob", "name", "at"}}}}
+    （撤销设备不删，cost_keep 秒没再传的才删）"""
+    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400):
+        self.path, self.ttl, self.idle, self.retain, self.cost_keep = path, ttl, idle, retain, cost_keep
         self.keys_path = keys_path or os.path.join(os.path.dirname(path) or '.', 'keys.json')
+        self.cost_path = cost_path or os.path.join(os.path.dirname(path) or '.', 'cost-slots.json')
         self.lock = threading.Lock()
         self.data = {'v': 1, 'seq': 0, 'machines': {}, 'beats': {}, 'units': {}}
         self.data.update(load_doc(path, ('machines', 'beats', 'units')) or {})
         self.keys = {'v': 1, 'acc': {}}
         self.keys.update(load_doc(self.keys_path, ('acc',)) or {})
+        self.cost = {'v': 1, 'acc': {}}
+        self.cost.update(load_doc(self.cost_path, ('acc',)) or {})
+        self.cost['acc'] = {aid: {f: e for f, e in slots.items() if isinstance(e, dict) and parse_blob(e.get('blob'), MAX_COST_BLOB)}
+                            for aid, slots in self.cost['acc'].items() if isinstance(aid, str) and isinstance(slots, dict)}
 
     def save(self):
         save_doc(self.path, self.data)
@@ -320,7 +351,8 @@ class Store:
 
     def health(self, sig_ok):
         with self.lock:
-            return {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq']}
+            return {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'],
+                    'ops': ['report', 'view'] + list(SYNC_OPS)}
 
     def set_machines(self, body, sig, release_key):
         if not ssh_verify(release_key, NS_MACHINES, body, sig):
@@ -369,7 +401,7 @@ class Store:
                 e = cur.setdefault(aid, {'cli': [], 'app': None, 'used': 0})
                 e['cli'] = [[now - age, now - idle] for age, idle in u['cli']]
                 e['app'] = [now - u['app'][0], now - u['app'][1]] if u['app'] else None
-                e['used'] = max([e.get('used') or 0] + [x[1] for x in sessions(e)])
+                e['used'] = last_used(e)
             self.prune(now)
             self.save()
 
@@ -394,7 +426,10 @@ class Store:
             acc = self.keys['acc']
             if len(set(acc) | set(put)) > MAX_KEYS:
                 return 507, {'error': 'full'}
-            name = self.data['machines'][fp]['name']
+            m = self.data['machines'].get(fp)
+            if not m:   # 验签之后、拿到锁之前设备清单换了，这台被撤销了
+                return 403, {'error': 'denied'}
+            name = m['name']
             for aid, blob in put.items():
                 acc[aid] = {'blob': blob, 'fp': fp, 'name': name, 'at': now}
             if put:
@@ -404,14 +439,70 @@ class Store:
                 e = acc.get(aid)
                 if isinstance(e, dict) and isinstance(e.get('blob'), dict):
                     out[aid] = {'blob': e['blob'], 'name': e.get('name') if isinstance(e.get('name'), str) else None,
-                                'me': e.get('fp') == fp, 'age': round(max(now - (e.get('at') or 0), 0))}
+                                'me': e.get('fp') == fp, 'age': ago(now, e.get('at') or 0)}
             return 200, {'v': API, 'ok': True, 'me_name': name, 'keys': out}
+
+    def cost_sync(self, fp, put, get, have, now):
+        """折合金额的密文：先存这台设备传的（每个账号一份、只写自己的那一份），再回问的那些账号各台设备的（have 里认证码一样的、
+        这台设备自己的不带密文；撤销了的设备照样回，标上 revoked），和 30 天内经 cca 用过这个账号、却没传过的设备（missing）"""
+        with self.lock:
+            m = self.data['machines'].get(fp)
+            if not m:
+                return 403, {'error': 'denied'}
+            acc = self.cost['acc']
+            if put:
+                self.cost_prune(now)   # 先清掉很久没再传的：不然存满了以后谁都传不上来，也就一直清不掉
+                size = lambda e: len(e['blob']['c'])
+                mine = {aid: size(e[fp]) for aid, e in acc.items() if fp in e}
+                mine.update({aid: len(b['c']) for aid, b in put.items()})
+                total = sum(size(x) for aid, e in acc.items() for f, x in e.items() if not (f == fp and aid in put))
+                if len(mine) > COST_SLOTS or sum(mine.values()) > COST_DEVICE_BYTES or total + sum(len(b['c']) for b in put.values()) > COST_TOTAL_BYTES:
+                    return 507, {'error': 'full'}
+                for aid, blob in put.items():
+                    acc.setdefault(aid, {})[fp] = {'blob': blob, 'name': m['name'], 'at': now}
+                save_doc(self.cost_path, self.cost)
+            out, missing, budget = {}, {}, COST_RESP
+            for aid in get:
+                rows = []
+                for f, e in sorted((acc.get(aid) or {}).items(), key=lambda x: -(x[1].get('at') or 0)):   # 最近传过的先给密文
+                    cur = self.data['machines'].get(f)
+                    name = cur['name'] if cur else e.get('name')
+                    r = {'fp': f, 'name': name if isinstance(name, str) else None, 'me': f == fp, 'revoked': cur is None,
+                         'tag': e['blob']['t'], 'age': ago(now, e.get('at') or 0)}
+                    if f != fp and (have.get(aid) or {}).get(f) != r['tag'] and len(e['blob']['c']) <= budget:
+                        r['blob'] = e['blob']
+                        budget -= len(e['blob']['c'])
+                    rows.append(r)
+                out[aid] = rows
+                missing[aid] = self.cost_missing(aid, acc.get(aid) or {}, now, fp)
+            return 200, {'v': API, 'ok': True, 'me_name': m['name'], 'cost': out, 'missing': missing}
+
+    def cost_missing(self, aid, slots, now, me):
+        """retain 秒内经 cca 用过这个账号（上报的记录）、却从来没传过折合金额的设备；问的这台（me）不算：它先问、接着就传"""
+        out = []
+        for f, accts in self.data['units'].items():
+            e = accts.get(aid)
+            if f == me or f in slots or f not in self.data['machines'] or not isinstance(e, dict):
+                continue
+            used = last_used(e)
+            if used and now - used < self.retain:
+                out.append({'name': self.data['machines'][f]['name'], 'used_age': ago(now, used)})
+        return out
+
+    def cost_prune(self, now):
+        """cost_keep 秒没再传过的不要了（那台设备早就不用 cca 了）"""
+        acc = self.cost['acc']
+        for aid in list(acc):
+            for f in [f for f, e in acc[aid].items() if now - (e.get('at') or 0) > self.cost_keep]:
+                del acc[aid][f]
+            if not acc[aid]:
+                del acc[aid]
 
     def row(self, fp, e, now):
         beat = self.data['beats'].get(fp) or {}
         seen, end = beat.get('seen') or 0, beat.get('end')
         units = sessions(e)
-        age = lambda t: round(max(now - t, 0)) if t else None
+        age = lambda t: ago(now, t) if t else None
         last = max((u[1] for u in units), default=0)   # 开着的会话最后一次有动静
         if units and (end == 'down' or now - seen > self.ttl):
             state = 'offline'
@@ -465,7 +556,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             n = int(self.headers.get('Content-Length') or '')
         except ValueError:
             return self.send(411, {'error': 'bad'})
-        if n < 0 or n > (MAX_KEYS_BODY if self.path == '/v1/keys' else MAX_BODY):
+        op = self.path[len('/v1/'):] if self.path.startswith('/v1/') else ''
+        if n < 0 or n > (MAX_SYNC_BODY if op in SYNC_OPS else MAX_BODY):
             return self.send(413, {'error': 'bad'})
         body = self.rfile.read(n)
         try:
@@ -475,11 +567,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if len(body) != n or not sig or len(sig) > MAX_SIG:
             return self.send(400, {'error': 'bad'})
         now = time.time()
-        if self.path == '/v1/machines':
+        if op == 'machines':
             return self.send(*srv.store.set_machines(body, sig, srv.release_key))
-        if self.path not in ('/v1/report', '/v1/view', '/v1/keys'):
+        if op not in ('report', 'view') and op not in SYNC_OPS:
             return self.send(404, {'error': 'not_found'})
-        op = self.path[len('/v1/'):]
         try:
             j = json.loads(body.decode('utf-8'))
         except ValueError:
@@ -508,11 +599,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(400, {'error': 'bad'})
             srv.store.report(fp, units, end, now)
             return self.send(200, {'v': API, 'ok': True, 'ttl': srv.store.ttl, 'idle': srv.store.idle})
-        if op == 'keys':
-            parsed = parse_keys(j)
+        if op in SYNC_OPS:
+            parsed = parse_sync(j, SYNC_OPS[op])
             if parsed is None:
                 return self.send(400, {'error': 'bad'})
-            return self.send(*srv.store.key_sync(fp, parsed[0], parsed[1], now))
+            put, get, have = parsed
+            if op == 'keys':
+                return self.send(*srv.store.key_sync(fp, put, get, now))
+            return self.send(*srv.store.cost_sync(fp, put, get, have, now))
         aids = j.get('accounts')
         if not (isinstance(aids, list) and len(aids) <= MAX_ACCOUNTS and all(isinstance(a, str) and AID_RE.match(a) for a in aids)):
             return self.send(400, {'error': 'bad'})
@@ -608,6 +702,8 @@ def main():
     ap.add_argument('--idle', type=float, default=600, help='这么多秒没动静算闲置')
     ap.add_argument('--retain-days', type=float, default=30, help='上次使用的记录留几天')
     ap.add_argument('--keys', help='API key 的密文（默认在状态文件旁边的 keys.json）')
+    ap.add_argument('--cost', help='折合金额的密文（默认在状态文件旁边的 cost-slots.json）')
+    ap.add_argument('--cost-days', type=float, default=100, help='折合金额的密文这么多天没再传就删掉')
     ap.add_argument('--port-file', help='实际监听的端口写到这里（测试用）')
     a = ap.parse_args()
     with open(a.release_key) as f:
@@ -619,7 +715,7 @@ def main():
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(a.cert, a.key)
     sig_ok = self_test()
-    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys)
+    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400)
     srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, 'ssh-ed25519 ' + k.group(1), sig_ok)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:

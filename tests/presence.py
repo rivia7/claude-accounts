@@ -32,6 +32,7 @@ sys.dont_write_bytecode = True   # 不在 server/ 里留下 __pycache__
 spec = importlib.util.spec_from_file_location('cca_presence_server', SERVER)
 srvmod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srvmod)
+import spec_wire as sw   # noqa: E402  照 server/README.md 的格式独立实现的密文（不用 cca 的代码）
 
 
 def keygen(path, comment='test'):
@@ -58,33 +59,6 @@ def openssl_pin(cert):
     der = subprocess.run(['openssl', 'pkey', '-pubin', '-outform', 'der'], input=pub, stdout=subprocess.PIPE, check=True).stdout
     import hashlib
     return 'sha256//' + base64.b64encode(hashlib.sha256(der).digest()).decode()
-
-
-def spec_keys(salt, tool, email, ident):
-    """共享 API key 的格式（照 PROTOCOL 和 server/README 写的独立实现一遍，核对 cca 的）：两把 HMAC 密钥"""
-    import hashlib, hmac
-    root = hmac.new(bytes.fromhex(salt), ('cca-keyshare-v1\0%s\0%s\0%s' % (tool, email.lower(), ident)).encode(), hashlib.sha256).digest()
-    return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
-
-
-def spec_open(keys, aid, blob):
-    import hashlib, hmac
-    n, c, t = (base64.b64decode(blob[k]) for k in 'nct')
-    if not hmac.compare_digest(t, hmac.new(keys[1], b'cca-keyshare-v1\0' + aid.encode() + b'\0' + n + c, hashlib.sha256).digest()):
-        return None
-    stream = b''.join(hmac.new(keys[0], n + i.to_bytes(8, 'big'), hashlib.sha256).digest() for i in range((len(c) + 31) // 32))
-    return json.loads(bytes(x ^ y for x, y in zip(c, stream)))
-
-
-def spec_seal(keys, aid, doc):
-    import hashlib, hmac
-    pt = json.dumps(doc).encode()
-    pt += b' ' * (-len(pt) % 256)
-    n = secrets.token_bytes(16)
-    stream = b''.join(hmac.new(keys[0], n + i.to_bytes(8, 'big'), hashlib.sha256).digest() for i in range((len(pt) + 31) // 32))
-    c = bytes(x ^ y for x, y in zip(pt, stream))
-    t = hmac.new(keys[1], b'cca-keyshare-v1\0' + aid.encode() + b'\0' + n + c, hashlib.sha256).digest()
-    return {k: base64.b64encode(v).decode() for k, v in (('n', n), ('c', c), ('t', t))}
 
 
 class Server:
@@ -356,6 +330,103 @@ class ServerTest(unittest.TestCase):
                 self.assertEqual(store.keys['acc'][x]['blob'], b1)
 
 
+    def test_cost(self):
+        """折合金额的密文：每个账号、每台设备一份，设备只写自己的那一份；问的时候回各台设备的（认证码没变的、自己的不带密文），
+        撤销的设备照样回（标上 revoked），顺带说哪些设备用过这个账号却没传过；服务器只查形状和长度"""
+        self.srv.stop()
+        ServerTest.srv = Server(self.d)   # 限流的配额从头算
+        self.both()
+        a1, a2 = secrets.token_hex(16), secrets.token_hex(16)
+        fa, fb = self.fp(self.devpub), self.fp(self.dev2pub)
+        blob = lambda n=2048: {'n': base64.b64encode(secrets.token_bytes(16)).decode(), 'c': base64.b64encode(secrets.token_bytes(n)).decode(),
+                               't': base64.b64encode(secrets.token_bytes(32)).decode()}
+        st, j = self.srv.req('GET', '/v1/health')
+        self.assertIn('ledger', j['ops'], 'health 说支持哪些 op（维护者看服务器是不是新的）')
+        self.assertEqual(self.call('cost', accounts={a1: {'since': None, 'h': [[1, 2]]}})[0], 404,
+                         '早先试过的 /v1/cost（另一种格式）不认：那时的客户端照旧版服务器处理')
+        b1 = blob()
+        st, j = self.call('ledger', put={a1: b1}, get=[a1])
+        self.assertEqual((st, j['me_name'], j['missing']), (200, 'alice-mbp', {a1: []}), j)
+        [r] = j['cost'][a1]
+        self.assertEqual((r['fp'], r['name'], r['me'], r['revoked'], r['tag'], 'blob' in r), (fa, 'alice-mbp', True, False, b1['t'], False),
+                         '自己的不回密文')
+        st, j = self.call('ledger', key='dev2', get=[a1, a2, a1])
+        self.assertEqual((st, sorted(j['cost'])), (200, sorted([a1, a2])), j)
+        self.assertEqual(j['cost'][a2], [])
+        [r] = j['cost'][a1]
+        self.assertEqual((r['blob'], r['me'], r['name']), (b1, False, 'alice-mbp'))
+        self.assertLessEqual(r['age'], 2)
+        st, j = self.call('ledger', key='dev2', get=[a1], have={a1: {fa: b1['t']}})
+        self.assertNotIn('blob', j['cost'][a1][0], '认证码没变：不回密文')
+        st, j = self.call('ledger', key='dev2', get=[a1], have={a1: {fa: blob()['t']}})
+        self.assertEqual(j['cost'][a1][0]['blob'], b1, '变了：回')
+        b2 = blob(4096)
+        self.assertEqual(self.call('ledger', key='dev2', put={a1: b2})[0], 200)
+        st, j = self.call('ledger', get=[a1])
+        rows = {x['name']: x for x in j['cost'][a1]}
+        self.assertEqual((rows['bob-mini']['blob'], 'blob' in rows['alice-mbp']), (b2, False), '各台设备一份，互不覆盖')
+        b3 = blob(1024)
+        self.call('ledger', put={a1: b3})
+        st, j = self.call('ledger', key='dev2', get=[a1])
+        self.assertEqual({x['name']: x.get('blob') for x in j['cost'][a1]}, {'alice-mbp': b3, 'bob-mini': None}, '新传的换掉这台设备旧的')
+        ok = blob()
+        for bad in ({'put': {a1: dict(ok, x='1')}}, {'put': {a1: dict(ok, c='A' * 98308)}}, {'put': {a1: dict(ok, c='not base64!')}},
+                    {'put': {'NOT-AN-ID': ok}}, {'put': [ok]}, {'get': a1}, {'get': ['x']}, {'have': ['x']},
+                    {'have': {a1: {'bad-fp': ok['t']}}}, {'have': {a1: {fa: 'short'}}}, {'have': {'x': {}}},
+                    {'get': [secrets.token_hex(16) for _ in range(65)]}):
+            self.assertEqual(self.call('ledger', **bad)[0], 400, bad)
+        self.assertEqual(self.call('ledger', put={secrets.token_hex(16): blob(70000) for _ in range(10)})[0], 200,
+                         '一次传 10 个最长的（超过心跳的 64KB）也收')
+        # 用过这个账号（上报过）、却没传过折合金额的设备：多半是 cca 太旧
+        self.call('report', key='dev2', units={a2: {'cli': [[100, 0]], 'app': None}}, end=None)
+        st, j = self.call('ledger', get=[a2])
+        self.assertEqual([m['name'] for m in j['missing'][a2]], ['bob-mini'])
+        self.assertLessEqual(j['missing'][a2][0]['used_age'], 2)
+        self.assertEqual(self.call('ledger', key='dev2', get=[a2])[1]['missing'][a2], [],
+                         'bob-mini 自己第一次问（还没传）：不把它自己算成没传过的（它这一轮接着就传）')
+        self.call('ledger', key='dev2', put={a2: blob()})
+        self.assertEqual(self.call('ledger', get=[a2])[1]['missing'][a2], [], '传过了就不提')
+        raw = (self.d / 'cost-slots.json').read_text()
+        self.assertEqual(oct(os.stat(self.d / 'cost-slots.json').st_mode & 0o777), '0o600')
+        self.assertIn(b2['c'], raw)
+        self.srv.stop()
+        ServerTest.srv = Server(self.d)
+        st, j = self.call('ledger', key='dev2', get=[a1])
+        self.assertEqual({x['name']: x.get('blob') for x in j['cost'][a1]}, {'alice-mbp': b3, 'bob-mini': None}, '重启后还在')
+        self.machines([{'key': self.devpub, 'name': 'alice-mbp'}])
+        st, j = self.call('ledger', get=[a1])
+        rows = {x['name']: x for x in j['cost'][a1]}
+        self.assertEqual((rows['bob-mini']['revoked'], rows['bob-mini']['blob'], rows['alice-mbp']['revoked']), (True, b2, False),
+                         '撤销了的设备：它传的留着（是账号的用量），标上 revoked')
+        self.assertEqual(self.call('ledger', key='dev2', get=[a1])[0], 403, '撤销的设备不能再问')
+        with tempfile.TemporaryDirectory() as t:
+            store = srvmod.Store(os.path.join(t, 'state.json'), 150, 600, 86400, cost_keep=1000)
+            store.data['machines'] = {fa: {'name': 'alice-mbp', 'key': self.devpub}, fb: {'name': 'bob-mini', 'key': self.dev2pub}}
+            now = time.time()
+            x, y, z = (secrets.token_hex(16) for _ in range(3))
+            with mock.patch.object(srvmod, 'COST_SLOTS', 2):
+                self.assertEqual(store.cost_sync(fa, {x: ok, y: ok}, [], {}, now)[0], 200)
+                self.assertEqual(store.cost_sync(fa, {z: ok}, [], {}, now), (507, {'error': 'full'}), '一台设备最多这么多个账号')
+                self.assertEqual(store.cost_sync(fa, {x: b1}, [], {}, now)[0], 200, '已有的照常换')
+                self.assertEqual(store.cost_sync(fb, {z: ok}, [], {}, now)[0], 200, '别的设备不受影响')
+            with mock.patch.object(srvmod, 'COST_DEVICE_BYTES', len(ok['c']) * 2 + 10):
+                self.assertEqual(store.cost_sync(fb, {x: ok, y: ok}, [], {}, now)[0], 507, '一台设备存的加起来有上限')
+            with mock.patch.object(srvmod, 'COST_TOTAL_BYTES', len(ok['c']) * 4 - 1):
+                self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now)[0], 507, '所有设备加起来有上限')
+            store.cost_sync(fb, {x: blob(3000)}, [], {}, now + 5)   # 4000 个字符
+            fc = 'SHA256:' + 'C' * 43
+            store.data['machines'][fc] = {'name': 'carol-air', 'key': self.evilpub}
+            with mock.patch.object(srvmod, 'COST_RESP', 4500):
+                st, j = store.cost_sync(fc, {}, [x], {}, now + 6)
+                self.assertEqual([(r['name'], 'blob' in r) for r in j['cost'][x]], [('bob-mini', True), ('alice-mbp', False)],
+                                 '回的密文有上限：最近传的先给，别的下次再取')
+            self.assertEqual(store.cost_sync('SHA256:gone', {}, [x], {}, now)[0], 403)
+            with mock.patch.object(srvmod, 'COST_TOTAL_BYTES', len(ok['c']) * 2):
+                self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now + 2000)[0], 200,
+                                 '存满了：先清掉 cost_keep 秒没再传的，再看放不放得下（不然一直清不掉）')
+            self.assertEqual(sorted(store.cost['acc']), [y], 'cost_keep 秒没再传的删掉')
+
+
 class ClientTest(unittest.TestCase):
     """客户端（PY_SRC）：映射里那一节的检查、账号摘要、本机会话的扫描和闲置判定、经 curl + 公钥钉住连服务器"""
     @classmethod
@@ -390,6 +461,7 @@ class ClientTest(unittest.TestCase):
         (cca / 'accounts.json').write_text(json.dumps({self.key: 'US-A', 'bob@example.com': 'US-B'}))
         self.ns['ctx'] = lambda: ({}, json.loads((cca / 'accounts.json').read_text()), {})
         self.ns['keyshare_kick'] = lambda force=False: None   # cca devices 顺带在后台同步 API key：测试里不起进程（同步另外测）
+        self.ns['cost_kick'] = lambda: None   # 折合金额也一样
 
     def policy(self, presence):
         j = {'version': 1, 'claude': {'alice@example.com': 'US-A'}}
@@ -585,6 +657,7 @@ class ClientTest(unittest.TestCase):
                                          'PATH': os.environ.get('PATH', '/usr/bin:/bin')}, clear=True):
             ns = {}
             exec(compile(DEFINITIONS, str(CCA), 'exec'), ns)
+        ns['cost_kick'] = lambda: None
         pub = keygen(cca / 'policy' / 'id_ed25519', 'cca-policy@' + name)
         (cca / 'policy' / 'policy.json').write_text((self.cca / 'policy' / 'policy.json').read_text())
         (cca / 'config.json').write_text('{}')
@@ -622,12 +695,12 @@ class ClientTest(unittest.TestCase):
         C, X = ns['CLAUDE'], ns['CODEX']
         k = ns['keyshare_keys'](self.salt, C, 'Alice@Example.com', 'u-1234-5678')
         self.assertEqual(k, ns['keyshare_keys'](self.salt, C, 'alice@example.com', 'u-1234-5678'), '邮箱不分大小写')
-        self.assertEqual(k, spec_keys(self.salt, 'claude', 'alice@example.com', 'u-1234-5678'), '和文档写的一样')
+        self.assertEqual(k, sw.derive(sw.KEYSHARE, self.salt, 'claude', 'alice@example.com', 'u-1234-5678'), '和文档写的一样')
         aid, key = 'a' * 32, 'sk-ant-api03-' + 'x' * 60
         b = ns['keyshare_seal'](k, aid, key, 1794041280.5)
         self.assertEqual(ns['keyshare_open'](k, aid, b), {'key': key, 'at': 1794041280.5})
-        self.assertEqual(spec_open(k, aid, b)['key'], key, '照文档能解开')
-        self.assertEqual(ns['keyshare_open'](k, aid, spec_seal(k, aid, {'v': 1, 'key': key, 'at': 5.0})), {'key': key, 'at': 5.0},
+        self.assertEqual(sw.keyshare_open(k, aid, b)['key'], key, '照文档能解开')
+        self.assertEqual(ns['keyshare_open'](k, aid, sw.keyshare_seal(k, aid, {'v': 1, 'key': key, 'at': 5.0})), {'key': key, 'at': 5.0},
                          '照文档封的 cca 也认')
         self.assertEqual(srvmod.parse_blob(b), b, '服务器收这个形状')
         t = ns['keyshare_seal'](k, aid, None, 1794041281.0)
@@ -646,7 +719,7 @@ class ClientTest(unittest.TestCase):
             self.assertIsNone(ns['keyshare_open'](k, aid, junk), junk)
         for doc in ({'v': 2, 'key': key, 'at': 5.0}, {'v': 1, 'key': key, 'at': 0}, {'v': 1, 'key': key, 'at': 'x'},
                     {'v': 1, 'key': 'short', 'at': 5.0}, {'v': 1, 'key': '带空格 的 key', 'at': 5.0}, [1]):
-            self.assertIsNone(ns['keyshare_open'](k, aid, spec_seal(k, aid, doc)), '认证过、内容不对的也不认：%s' % doc)
+            self.assertIsNone(ns['keyshare_open'](k, aid, sw.keyshare_seal(k, aid, doc)), '认证过、内容不对的也不认：%s' % doc)
         lb = ns['keyshare_seal'](k, aid, 'k' * 4096, 1.0)
         self.assertEqual(srvmod.parse_blob(lb), lb, '最长的 key（4096 个字符）也在服务器收的长度以内')
 
@@ -671,7 +744,7 @@ class ClientTest(unittest.TestCase):
                 self.assertNotIn(secret, raw, '服务器上没有 key、邮箱、登录身份')
             self.assertEqual(list(json.loads(raw)['acc']), [aid])
             at1 = ns['cfg_load']()['key_hints'][acct]['at']
-            self.assertEqual(spec_open(spec_keys(self.salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, self.server_blob(aid))['at'], at1,
+            self.assertEqual(sw.keyshare_open(sw.derive(sw.KEYSHARE, self.salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, self.server_blob(aid))['at'], at1,
                              '传上去的时间是记下的时间')
             self.assertEqual(self.sync(nsc), '', '没登录 alice 的设备：不问也不传')
             self.assertFalse((ccac / 'secrets').exists())
@@ -697,7 +770,7 @@ class ClientTest(unittest.TestCase):
                 self.assertEqual(nsc['presence_post'](cfgc, 'keys', {'put': {aid: bad}})[0], 200)
                 self.assertEqual(self.sync(ns), '')
                 self.assertEqual(self.stored(ns), (0, K2), '旧的、认证不过的不认')
-                self.assertEqual(spec_open(spec_keys(self.salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, self.server_blob(aid))['key'], K2,
+                self.assertEqual(sw.keyshare_open(sw.derive(sw.KEYSHARE, self.salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, self.server_blob(aid))['key'], K2,
                                  '服务器上的旧了、坏了：传回这台设备的（自己修好）')
             # alice-mbp 删掉：bob-mini 上同步来的也删掉
             with mock.patch.dict(ns, {'keyshare_kick': lambda force=False: None, 'security': self.nokeychain}):
@@ -759,7 +832,7 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(self.stored(ns), (0, K1), 'alice-mbp 记下的新：不动')
             self.assertEqual(self.sync(nsb), '')
             self.assertEqual(self.stored(nsb), (0, K1), 'bob-mini 的旧：换成新的')
-            self.assertEqual(spec_open(spec_keys(self.salt, 'claude', 'alice@example.com', 'u-alice-0002'), aid, self.server_blob(aid))['key'], K1)
+            self.assertEqual(sw.keyshare_open(sw.derive(sw.KEYSHARE, self.salt, 'claude', 'alice@example.com', 'u-alice-0002'), aid, self.server_blob(aid))['key'], K1)
 
     def test_keyshare_bad_files(self):
         """账号的 .claude.json 读不出（半写、手改坏了）：当作没登录，这一轮不同步它，不退出；上报进程里同步出的错（包括 die 的
@@ -875,6 +948,119 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(ns['keyshare_error'](), err)
             self.assertEqual(ns['gui_api_key'](ns['cfg_load'](), self.key, 'US-A', True, err)['sync_error'], err)
             self.assertIsNone(ns['gui_api_key'](ns['cfg_load'](), self.key, 'US-A', False, err)['sync_error'], '不同步的账号不说')
+
+
+    # 折合金额：各台设备算自己的，经服务器交换密文
+    def cost_local(self, cca, ident, rows, who='alice@example.com'):
+        """这台设备统计好的（cost/local.json）：身份 ident 的小时数据"""
+        (cca / 'cost').mkdir(exist_ok=True)
+        (cca / 'cost' / 'local.json').write_text(json.dumps({'v': 1, 'build': 'x', 'who': {'claude:' + ident: who},
+                                                             'acc': {'claude:' + ident: rows}, 'um': {}, 'orphan': {}}))
+
+    def slots(self, aid):
+        return json.loads((self.d / 'cost-slots.json').read_text())['acc'].get(aid, {})
+
+    def test_cost_sync(self):
+        """alice-mbp、bob-mini 登录着 alice，carol-air 没有：两台互相取到对方的，服务器上只有密文；伪造的、重放的不认；
+        没变的不重传、不重取；撤销的设备留着、标上；用过却没传过的设备说一声"""
+        ns = self.ns
+        nsb, ccab, pubb = self.device('bob-mini', 'u-alice-0005')
+        nsc, ccac, pubc = self.device('carol-air', None)
+        self.machines([{'key': self.pub, 'name': 'alice-mbp'}, {'key': pubb, 'name': 'bob-mini'}, {'key': pubc, 'name': 'carol-air'}])
+        self.login(ns, 'u-alice-0005')
+        aid = ns['presence_aid'](self.salt, ns['CLAUDE'], 'alice@example.com')
+        hour = int(time.time() // 3600 * 3600) - 3600
+        self.cost_local(self.cca, 'u-alice-0005', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]})
+        self.cost_local(ccab, 'u-alice-0005', {str(hour - 86400): [3000000, 1, 50, 5, 0, 0, 0]})
+        self.cost_local(ccac, 'u-carol-0001', {str(hour): [1000000, 1, 1, 1, 0, 0, 0]}, 'carol@example.com')
+        r = ns['cost_sync'](True)
+        self.assertEqual(r['state'], 'ok', r)
+        raw = (self.d / 'cost-slots.json').read_text()
+        for secret in ('alice@example.com', 'u-alice-0005', '5000000', str(hour)):
+            self.assertNotIn(secret, raw, '服务器上没有邮箱、身份、金额、时间')
+        fa = ns['presence_load']()[1]['fp']
+        self.assertEqual(list(self.slots(aid)), [fa])
+        self.assertEqual(nsb['cost_sync'](True)['state'], 'ok')
+        rb = json.loads((ccab / 'cost' / 'remote.json').read_text())['acc']['claude:alice@example.com']
+        self.assertEqual([(e['name'], e['h'], e['revoked']) for e in rb.values()], [('alice-mbp', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]}, False)],
+                         'bob-mini 取到了 alice-mbp 的')
+        self.assertEqual(nsc['cost_sync'](True)['state'], 'skipped', 'carol-air 没登录 alice（解不开）：不问也不传')
+        self.assertEqual(sorted(self.slots(aid)), sorted([fa, nsb['presence_load']()[1]['fp']]))
+        at_a = self.slots(aid)[fa]['at']
+        posts = []
+        real = ns['presence_post']
+
+        def spy(cfg, op, payload, timeout=8):
+            posts.append(payload)
+            return real(cfg, op, payload, timeout)
+        with mock.patch.dict(ns, {'presence_post': spy}):
+            self.assertEqual(ns['cost_sync'](True)['state'], 'ok')
+            self.assertEqual(len(posts), 1, '这台设备的没变：只问，不传')
+            self.assertEqual(self.slots(aid)[fa]['at'], at_a)
+            ra = json.loads((self.cca / 'cost' / 'remote.json').read_text())['acc']['claude:alice@example.com']
+            self.assertEqual([e['name'] for e in ra.values()], ['bob-mini'])
+            posts.clear()
+            self.assertEqual(ns['cost_sync'](True)['state'], 'ok')
+            self.assertEqual(list(posts[0]['have'][aid].values()).count(None), 0)
+            self.assertEqual(len(posts[0]['have'][aid]), 2, '带着已经有的认证码（自己的、bob-mini 的）：没变的服务器不回密文')
+        cv = ns['CostView']({}, time.time(), ns['presence_load']()[1])
+        a = cv.account(ns['CLAUDE'], self.key, None, True, True)
+        self.assertEqual((a['summary']['days_usd'], [d['name'] for d in a['devices']], a['sync']['state']), (8.0, ['alice-mbp', 'bob-mini'], 'ok'),
+                         'App 看到的：两台设备加起来')
+        # carol-air 在设备清单里，在自己的那一份里放伪造的、重放 alice-mbp 的：认证里带着设备指纹，都不认
+        cfgc = nsc['presence_load']()[1]
+        fake = ns['cost_seal'](ns['keyshare_keys'](self.salt, ns['CLAUDE'], 'alice@example.com', 'u-wrong', ns['COST_LABEL']), aid, cfgc['fp'],
+                               {'v': 1, 'at': time.time(), 'h': {str(hour): [10 ** 9, 1, 0, 0, 0, 0, 0]}, 'um': []})
+        for bad in (fake, self.slots(aid)[fa]['blob']):
+            self.assertEqual(nsc['presence_post'](cfgc, 'ledger', {'put': {aid: bad}})[0], 200)
+            self.assertEqual(ns['cost_sync'](True)['state'], 'ok')
+            ra = json.loads((self.cca / 'cost' / 'remote.json').read_text())['acc']['claude:alice@example.com']
+            self.assertEqual([e['name'] for e in ra.values()], ['bob-mini'], '伪造的、重放的都不认')
+        # 撤销 bob-mini：它传的留着、标上；dan（用过 alice、没传过）
+        nsd, ccad, pubd = self.device('dan-air', 'u-alice-0005')
+        self.machines([{'key': self.pub, 'name': 'alice-mbp'}, {'key': pubc, 'name': 'carol-air'}, {'key': pubd, 'name': 'dan-air'}])
+        cfgd = nsd['presence_load']()[1]
+        self.assertEqual(nsd['presence_post'](cfgd, 'report', {'units': {aid: {'cli': [[60, 0]], 'app': None}}, 'end': None})[0], 200)
+        self.assertEqual(ns['cost_sync'](True)['state'], 'ok')
+        ra = json.loads((self.cca / 'cost' / 'remote.json').read_text())['acc']['claude:alice@example.com']
+        self.assertEqual([(e['name'], e['revoked']) for e in ra.values()], [('bob-mini', True)])
+        sync = json.loads((self.cca / 'cost' / 'sync.json').read_text())
+        self.assertEqual([m['name'] for m in sync['acc']['claude:alice@example.com']['missing']], ['dan-air'])
+        a = ns['CostView']({}, time.time(), ns['presence_load']()[1]).account(ns['CLAUDE'], self.key, None, True, True)
+        self.assertEqual(([(d['name'], d['revoked']) for d in a['devices']], [m['name'] for m in a['sync']['missing']]),
+                         ([('alice-mbp', False), ('bob-mini', True)], ['dan-air']))
+        for f in ('remote.json', 'sync.json'):
+            self.assertEqual(oct(os.stat(self.cca / 'cost' / f).st_mode & 0o777), '0o600', f)
+
+    def test_cost_old_server(self):
+        """旧的服务器（没有 /v1/ledger：404，body 太大时先回 413）：记下原因，6 小时后再试；App 说要维护者更新服务器"""
+        ns = self.ns
+        self.login(ns, 'u-alice-0006')
+        (self.cca / 'cost').mkdir()
+        calls = []
+        for code in (404, 413):
+            calls.clear()
+
+            def post(cfg, op, payload, timeout=8):
+                calls.append(op)
+                return code, {'error': 'not_found'}
+            (self.cca / 'cost' / 'sync.json').unlink() if (self.cca / 'cost' / 'sync.json').exists() else None
+            with mock.patch.dict(ns, {'presence_post': post}):
+                r = ns['cost_sync'](True)
+                self.assertEqual((r['state'], r['message']), ('old_server', ns['COST_OLD']), code)
+                self.assertIn('./policy.sh presence deploy', r['message'])
+                j = json.loads((self.cca / 'cost' / 'sync.json').read_text())
+                self.assertTrue(j['retry'] - time.time() > 5 * 3600, j)
+                self.assertEqual(ns['cost_sync']()['state'], 'waiting', '不 force：6 小时内不再试')
+                self.assertEqual(calls, ['ledger'])
+        calls.clear()
+        (self.cca / 'cost' / 'sync.json').write_text(json.dumps({'v': 1, 'at': time.time() + 3 * 86400, 'retry': time.time() + 30 * 86400,
+                                                                 'state': 'old_server', 'error': ns['COST_OLD']}))
+        with mock.patch.dict(ns, {'presence_post': post}):
+            ns['cost_sync']()
+        self.assertEqual(calls, ['ledger'], '记下的时间在未来（这台设备的时钟快过、又调回来了）：不当真，照常同步')
+        cv = ns['CostView']({}, time.time(), ns['presence_load']()[1])
+        self.assertEqual(cv.sync_view('claude:alice@example.com', True, True)['state'], 'old_server')
 
 
 class VerifyTest(unittest.TestCase):

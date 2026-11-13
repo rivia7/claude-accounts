@@ -18,12 +18,14 @@ func fixtureAssertions() {
         check("hello：gui", h.gui?.appVersion == "2.9.0" && h.gui?.stagedVersion == nil)
         check("hello：dock（cca 能整理程序坞，终端交接的脚本退出系统终端后调 _dock-tidy）", h.dock == 1)
         check("hello：install_cli（cca 能用官方安装脚本装 claude / codex / agy 命令）", h.installCLI == 1)
+        check("hello：cost（cca 有折合金额）", h.cost == 1 && h.cost == CostAPI.version)
     }
     if let h = loadFixture(HelloDoc.self, "hello_nocodex_notinstalled.json") {
         check("hello_nocodex_notinstalled：没安装、没启用 Codex", !h.installed && !h.codexEnabled && h.tools[.claude]?.bin == nil)
         check("hello_nocodex_notinstalled：gui.app_version 为 null", h.gui?.appVersion == nil)
         check("hello_nocodex_notinstalled：没有 dock（旧版 cca）", h.dock == nil)
         check("hello_nocodex_notinstalled：没有 install_cli（旧版 cca）", h.installCLI == nil)
+        check("hello_nocodex_notinstalled：没有 cost（旧版 cca）", h.cost == nil)
     }
     if let s = loadFixture(StateDoc.self, "state.json") {
         let c = s.tool(.claude), x = s.tool(.codex)

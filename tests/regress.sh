@@ -25,7 +25,7 @@ if [ -n "${TIMING:-}" ]; then
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -101,6 +101,7 @@ ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "
 ok "客户端更新：签名、安装确认、目标漂移与中断恢复" 'python3 "$D/client_updates.py"'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端的扫描、闲置判定、经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
+ok "折合金额：价格表、读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -444,7 +445,7 @@ ok "名字和服务器地址都变了（认不出）、非交互：说明哪个�
 # 在真的终端里（pty，不设 CCA_TTY）："换成哪个节点"和"现在重载吗"都要问得出来
 rm -f "$T/pty.done"
 { printf '%s\n' 3 y; for i in $(seq 1 300); do [ -f "$T/pty.done" ] && break; sleep 0.1; done; } |
-	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
+	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
 	PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; touch "$CCA_T/pty.done"' >/dev/null 2>&1
 ok "认不出、在真的终端里：列出路由器上的节点让用户选一个代替（选 US-C9），账号表跟着改，问过之后重载，照常启动" '[ -f "$T/pty.done" ] && grep -q "3\. US-C9" "$T/pty.log" && grep -q "「US-C」换成了「US-C9」" "$T/pty.log" && grep -q "现在重载吗" "$T/pty.log" && tblok "t[\"alice@example.com\"] == \"US-C9\"" && [ "$(sel CCA-1)" = US-C9 ]'
 ok "用户自己选的代替节点不算改名（维护者的映射里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
@@ -1009,7 +1010,7 @@ run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 
 # 10e. 不用路由器、只用直连的第三方 API 账号
 H4="$T/home4"; mkdir -p "$H4/.claude"
-r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 r4 CCA_TTY="$(ans n n)" bash "$CCA" install >/dev/null 2>&1
 out=$(r4 CCA_TTY="$(ans solo https://api.example.com/anthropic "$S1" '')" cca add api 2>&1); rc=$?
 out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
@@ -1369,7 +1370,7 @@ run CCA_TTY="$(ans)" cca agy web alice >/dev/null 2>&1
 out=$(run cca agy check alice 2>&1)
 ok "cca agy web 用账号专属的浏览器打开 gemini.google.com；cca agy check 经账号的端口检测出口" 'grep -F "https://gemini.google.com/" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && printf "%s" "$out" | grep -qE "alice@example.com +US-A +:7902"'
 GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
-ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API 和查用量；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": False} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is False and a[\"can_why\"][\"usage\"] == \"unsupported\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
+ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API 和查用量；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": False, \"cost\": False} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is False and a[\"can_why\"][\"usage\"] == \"unsupported\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True, \"cost\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
 ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
 ok "agy 的登录 token 从没出现在 cca 写的文件、日志和命令行里（cca 只读里面的邮箱和档位）" '! grep -rqF -e ya29.test -e 1//test --exclude antigravity-oauth-token "$H/.cca" && ! grep -qF -e ya29.test -e 1//test agy.log open.log curl.log "$T/env.log"'
 out=$(run cca help 2>&1)
@@ -1435,7 +1436,7 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True, \"cost\": False} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
 ok "_gui state：能不能打开账单页，条件和网页版一样（入口的显示由 cca 说了算）" 'printf "%s" "$out" | jok "all(a[\"can\"][\"billing\"] == a[\"can\"][\"web\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版一样" 'printf "%s" "$out" | jok "all(a[\"can\"][\"limit_resets\"] == (i == 0 and a[\"can\"][\"web\"]) for i, t in enumerate(d[\"tools\"]) for a in t[\"accounts\"])"'
 mv "$T/bin/claude" "$T/claude.off"
@@ -1692,6 +1693,79 @@ zz_future;Zz_future|
 EOF
 rm -f "$DD/usage.json"; [ ! -f "$T/dave.usage.bak" ] || mv "$T/dave.usage.bak" "$DD/usage.json"
 ok "套餐档位（ChatGPT）：按原始套餐值查表（Pro 100 / 200 是 advanced，Pro 500 是 premium），表里没有的新套餐不猜；用量缓存里没有套餐时用登录信息里的${bad}" '[ -z "$bad" ]'
+# 折合金额（PROTOCOL 2.2 的 cost、cost_total，3.5 的 cca cost sync --json）：共享的会话记录（~/.claude/projects、~/.codex/sessions）里每次请求的
+# 用量按官方 API 的标价折算，按登录的账号身份（Claude 的 accountUuid、Codex id_token 的 chatgpt_user_id）认是谁的；App 定时跑 cca cost sync --json，
+# _gui state 只读统计好的。alice 登录的身份换成 u-alice-0001，dave 的 id_token 里补上用户 id（假 codex 写的没有），这一段结束时还原
+cp -p "$AJ" "$T/cost.aj.json"; cp -p "$DD/codex/auth.json" "$T/cost.dave.json"
+setoa "$AJ" accountUuid=u-alice-0001
+costlog() {   # costlog 家目录 写法…：往会话记录里写（a 追加），见下面的 python
+	python3 - "$@" <<'PY'
+import base64, json, os, sys, time
+home, what = sys.argv[1], sys.argv[2:]
+now = time.time()
+iso = lambda t: time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(t))
+line = lambda d: json.dumps(d, separators=(',', ':')) + '\n'
+def reply(t, mid, model, inp, out, sid='s-cost-1'):
+    return line({'type': 'assistant', 'timestamp': iso(t), 'requestId': 'req_' + mid, 'sessionId': sid,
+                 'message': {'id': mid, 'model': model, 'role': 'assistant', 'usage': {'input_tokens': inp, 'output_tokens': out}}})
+d = os.path.join(home, '.claude', 'projects', '-cost')
+os.makedirs(d, exist_ok=True)
+if 'init' in what:
+    open(os.path.join(d, 's-cost-1.jsonl'), 'w').write(
+        line({'type': 'session-owner', 'accountUuid': 'u-alice-0001', 'organizationUuid': 'org-1', 'sessionId': 's-cost-1'})
+        + line({'type': 'user', 'timestamp': iso(now - 2 * 86400), 'message': {'role': 'user', 'content': 'SECRET-PROMPT-TEXT'}})
+        + reply(now - 2 * 86400, 'mc1', 'claude-opus-5-5', 1000, 100)
+        + reply(now - 86400, 'mc2', 'claude-sonnet-5-5[1m]', 2000, 1000) + reply(now - 86400, 'mc2', 'claude-sonnet-5-5[1m]', 2000, 1000)
+        + reply(now - 3600, 'mc3', 'claude-new-9', 10, 10))
+    open(os.path.join(d, 's-cost-0.jsonl'), 'w').write(reply(now - 3 * 3600, 'mc4', 'claude-opus-5-5', 1000, 100, 's-cost-0'))   # 没有 session-owner（旧版本）
+    x = os.path.join(home, '.codex', 'sessions', '2026', '11', '12')
+    os.makedirs(x, exist_ok=True)
+    ev = lambda t, kind, p: line({'timestamp': iso(t), 'type': kind, 'payload': p})
+    u = {'input_tokens': 10000, 'cached_input_tokens': 8000, 'output_tokens': 500, 'reasoning_output_tokens': 0, 'total_tokens': 10500}
+    tc = {'type': 'token_count', 'info': {'total_token_usage': u, 'last_token_usage': u}}
+    open(os.path.join(x, 'rollout-cost.jsonl'), 'w').write(
+        ev(now - 7200, 'session_meta', {'id': 'th-cost', 'creator_user_id': 'user-dave-0001', 'model_provider': 'openai'})
+        + ev(now - 7200, 'turn_context', {'model': 'gpt-6-astra'}) + ev(now - 7100, 'event_msg', tc) + ev(now - 7099, 'event_msg', tc))
+if 'more' in what:
+    open(os.path.join(d, 's-cost-1.jsonl'), 'a').write(reply(now - 600, 'mc5', 'claude-opus-5-5', 1000, 100))
+if 'dave' in what:   # dave 的 id_token 里补上用户 id（真的 id_token 有 chatgpt_user_id）
+    p = sys.argv[-1]
+    j = json.load(open(p))
+    h, c, sg = j['tokens']['id_token'].split('.')
+    claims = json.loads(base64.urlsafe_b64decode(c + '=' * (-len(c) % 4)))
+    claims['https://api.openai.com/auth']['chatgpt_user_id'] = 'user-dave-0001'
+    j['tokens']['id_token'] = '.'.join([h, base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('='), sg])
+    json.dump(j, open(p, 'w'))
+PY
+}
+costreq() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if sum(r[1] for r in j["acc"]["claude:u-alice-0001"].values()) == int(sys.argv[2]) else 1)' "$H/.cca/cost/local.json" "$1" 2>/dev/null; }   # 统计好的 alice 有这么多次请求
+costlog "$H" init dave "$DD/codex/auth.json"
+out=$(gj state)
+ok "_gui state：还没统计过：账号的 cost 是 null，cost_total 说还没统计；Claude、Codex 有这个功能（features.cost），官方账号 can.cost，第三方 API 账号没有" 'printf "%s" "$out" | jok "d[\"cost_total\"][\"scan\"] == {\"state\": \"never\", \"updated_epoch\": None} and d[\"tools\"][0][\"features\"][\"cost\"] is True and d[\"tools\"][1][\"features\"][\"cost\"] is True and all(a[\"cost\"] is None and a[\"can\"][\"cost\"] == (a[\"kind\"] == \"oauth\") for t in d[\"tools\"] for a in t[\"accounts\"])" && [ ! -e "$H/.cca/cost" ]'
+ok "_gui hello：cost 是 1（App 据此定时运行 cca cost sync，读 state 里的 cost、cost_total）" 'gj hello | jok "d[\"cost\"] == 1"'
+out=$(run cca cost sync --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$GF/cost_sync.json"
+ok "cost sync --json：第一次全读会话记录，算进来 5 次请求（同一条回复写了两行的只算一次）；没开设备统计时不同步" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"version\"] == 1 and d[\"kind\"] == \"cost_sync\" and d[\"scan\"][\"state\"] == \"ready\" and d[\"scan\"][\"first\"] is True and d[\"scan\"][\"records\"] == 5 and isinstance(d[\"scan\"][\"updated_epoch\"], float) and d[\"sync\"] == {\"state\": \"skipped\", \"message\": None, \"checked_epoch\": None}"'
+ok "统计好的只给自己读（cost/ 700，里面的文件 600），只有用量的数字，没有会话的内容" '[ "$(stat -f %Lp "$H/.cca/cost")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/cost/local.json")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/cost/scan.json")" = 600 ] && ! grep -rq SECRET-PROMPT-TEXT "$H/.cca/cost"'
+s2=$(snap); out=$(gj state); printf '%s' "$out" > "$GF/state_cost.json"
+ok "_gui state：alice 三次请求（一次没有标价）折合 0.02 美元、dave 0.053；只有这台设备（没开设备统计），按周 13 项、按天 30 项；读 state 不写文件" '[ "$(snap)" = "$s2" ] && printf "%s" "$out" | jok "(lambda a, x: a[\"summary\"][\"days_usd\"] == 0.02 and a[\"summary\"][\"requests\"] == 3 and a[\"summary\"][\"unpriced_requests\"] == 1 and a[\"unpriced_models\"] == [\"claude-new-9\"] and [(v[\"id\"], v[\"me\"]) for v in a[\"devices\"]] == [(\"local\", True)] and a[\"sync\"][\"state\"] == \"local_only\" and len(a[\"weeks\"]) == 13 and len(a[\"days\"]) == 30 and a[\"currency\"] == \"USD\" and x[\"summary\"][\"days_usd\"] == 0.053)(acct(0, \"alice@example.com\")[\"cost\"], acct(1, \"dave@example.com\")[\"cost\"])"'
+ok "_gui state：cost_total 把各账号加起来、按工具分开；认不出是谁的（没有 session-owner 的旧会话）另算" 'printf "%s" "$out" | jok "(lambda t: t[\"days_usd\"] == 0.073 and t[\"by_tool\"][\"claude\"][\"days_usd\"] == 0.02 and t[\"by_tool\"][\"codex\"][\"days_usd\"] == 0.053 and t[\"unattributed\"] == {\"days_usd\": 0.006, \"requests\": 1} and t[\"scan\"][\"state\"] == \"ready\" and len(t[\"days\"]) == 30)(d[\"cost_total\"])"'
+costlog "$H" more
+run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
+for i in $(seq 1 100); do costreq 4 && break; sleep 0.1; done
+ok "命令行会话结束后在后台统计一次（cca _cost-sync，最多 5 分钟一次）：新的请求算进来了" 'costreq 4 && [ -f "$H/.cca/cost/last" ] && gj state | jok "acct(0, \"alice@example.com\")[\"cost\"][\"summary\"][\"requests\"] == 4"'
+python3 -c 'import os,sys,time; t=time.time()-60; os.utime(sys.argv[1], (t, t))' "$H/.cca/cost/last"   # 上次起是 1 分钟以前
+run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
+ok "后台统计最多 5 分钟一次：1 分钟以前起过就不再起" '[ $(( $(date +%s) - $(stat -f %m "$H/.cca/cost/last") )) -ge 50 ]'
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["cost"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+out=$(runev cca cost sync --json 2>/dev/null); rc=$?; out2=$(gj state)
+ok "config.json 里写着 \"cost\": false：cost sync 不统计（退出码 2，fail 事件 cost_off），_gui state 没有折合金额" '[ $rc -eq 2 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cost_off\"" && printf "%s" "$out2" | jok "d[\"cost_total\"] is None and all(a[\"cost\"] is None and a[\"can\"][\"cost\"] is False for t in d[\"tools\"] for a in t[\"accounts\"])"'
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop("cost"); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+for i in $(seq 1 50); do [ -f "$H/.cca/cost/worker.json" ] || break; sleep 0.1; done   # 后台的统计跑完了（跑完删掉 worker.json）
+mv "$H/.cca/cost" "$T/cost.dir"; : > "$H/.cca/cost"
+out=$(runev cca cost sync --json 2>/dev/null); rc=$?
+rm -f "$H/.cca/cost"; mv "$T/cost.dir" "$H/.cca/cost"
+ok "统计不成（~/.cca/cost 不是目录）：退出码 1，fail 事件 cost_unavailable，stdout 不出 JSON" '[ $rc -eq 1 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cost_unavailable\""'
+cp -p "$T/cost.aj.json" "$AJ"; cp -p "$T/cost.dave.json" "$DD/codex/auth.json"
 # 10h. 提问会话（macos/PROTOCOL.md 4.6）：App 开的封闭流程，提问发成 ask 事件，答案从 fd 3 的管道读（tests/gui_session.py 扮演 App）
 sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道运行，stdin 接 /dev/null（App 就是这样开流程的）
 	local a="$1"; shift
@@ -2701,50 +2775,27 @@ ok "./policy.sh key add -R 别的仓库：不拿那个仓库的 key 当设备清
 # 记下的 API key 同步给登录了 alice 的其他设备：dan-air 也登录着 alice（身份 u-alice-0001：真的 accountUuid 是 UUID，cca 只认 8 个字符以上的），照 server/README.md 写的格式解开、封好，用自己的
 # deploy key 和服务器交换。这台 Mac 记下、删掉后马上在后台同步；之后的 cca _key-sync force 是同一件事，测试里直接跑
 dkey() {   # dkey get | junk | put KEY|- 时间：dan-air 取 alice 现在的（打印 JSON；none：没有；bad：认证不过）/ 传一份伪造的 / 传一份
-	python3 - "$T/dan" "$SVPORT" "$@" <<'PY'
-import base64, hashlib, hmac, http.client, json, secrets, ssl, subprocess, sys, time
-key, port, op = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-pub = open(key + '.pub').read().split()[1]
-fp = 'SHA256:' + base64.b64encode(hashlib.sha256(base64.b64decode(pub)).digest()).decode().rstrip('=')
-salt = bytes.fromhex('ab' * 16)
-aid = hmac.new(salt, b'claude\0alice@example.com', hashlib.sha256).hexdigest()[:32]
-root = hmac.new(salt, b'cca-keyshare-v1\0claude\0alice@example.com\0u-alice-0001', hashlib.sha256).digest()
-enc, mac = (hmac.new(root, x, hashlib.sha256).digest() for x in (b'enc', b'mac'))
-stream = lambda n, size: b''.join(hmac.new(enc, n + i.to_bytes(8, 'big'), hashlib.sha256).digest() for i in range((size + 31) // 32))
-tag = lambda n, c: hmac.new(mac, b'cca-keyshare-v1\0' + aid.encode() + b'\0' + n + c, hashlib.sha256).digest()
+	python3 -B - "$D" "$T/dan" "$SVPORT" "$@" <<'PY'
+import base64, json, secrets, sys
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
+key, port, op = sys.argv[2], int(sys.argv[3]), sys.argv[4]
+aid = sw.aid_of('ab' * 16, 'claude', 'alice@example.com')
+keys = sw.derive(sw.KEYSHARE, 'ab' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
 b64 = lambda x: base64.b64encode(x).decode()
-body = {'v': 1, 'op': 'keys', 'key': fp, 'ts': time.time(), 'nonce': secrets.token_hex(16)}
 if op == 'get':
-    body['get'] = [aid]
+    extra = {'get': [aid]}
 elif op == 'junk':
-    body['put'] = {aid: {'n': b64(secrets.token_bytes(16)), 'c': b64(secrets.token_bytes(256)), 't': b64(secrets.token_bytes(32))}}
+    extra = {'put': {aid: {'n': b64(secrets.token_bytes(16)), 'c': b64(secrets.token_bytes(256)), 't': b64(secrets.token_bytes(32))}}}
 else:
-    pt = json.dumps({'v': 1, 'key': None if sys.argv[4] == '-' else sys.argv[4], 'at': float(sys.argv[5])}).encode()
-    pt += b' ' * (-len(pt) % 256)
-    n = secrets.token_bytes(16)
-    c = bytes(x ^ y for x, y in zip(pt, stream(n, len(pt))))
-    body['put'] = {aid: {'n': b64(n), 'c': b64(c), 't': b64(tag(n, c))}}
-raw = json.dumps(body, separators=(',', ':')).encode()
-sig = subprocess.run(['ssh-keygen', '-Y', 'sign', '-q', '-n', 'cca-presence', '-f', key], input=raw, stdout=subprocess.PIPE, check=True).stdout
-ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-for attempt in range(6):   # 限流（429：每台设备每 2 秒一个，攒得下 30 个）：等一会儿再试
-    conn = http.client.HTTPSConnection('127.0.0.1', port, context=ctx, timeout=10)
-    conn.request('POST', '/v1/keys', body=raw, headers={'Content-Type': 'application/json', 'X-Cca-Sig': b64(sig)})
-    r = conn.getresponse(); j = json.loads(r.read() or b'{}')
-    if r.status != 429:
-        break
-    time.sleep(2)
-if r.status != 200:
+    extra = {'put': {aid: sw.keyshare_seal(keys, aid, {'v': 1, 'key': None if sys.argv[5] == '-' else sys.argv[5], 'at': float(sys.argv[6])})}}
+status, j = sw.post(key, port, 'keys', extra)
+if status != 200:
     sys.exit(1)
 if op == 'get':
     rec = j['keys'].get(aid)
-    if not rec:
-        print('none'); sys.exit(0)
-    blob = {k: base64.b64decode(v) for k, v in rec['blob'].items()}
-    if not hmac.compare_digest(blob['t'], tag(blob['n'], blob['c'])):
-        print('bad'); sys.exit(0)
-    d = json.loads(bytes(x ^ y for x, y in zip(blob['c'], stream(blob['n'], len(blob['c'])))))
-    print(json.dumps({'key': d['key'], 'at': d['at'], 'from': rec['name'], 'len': len(rec['blob']['c'])}))
+    d = rec and sw.keyshare_open(keys, aid, rec['blob'])
+    print('none' if not rec else 'bad' if d is None else json.dumps({'key': d['key'], 'at': d['at'], 'from': rec['name'], 'len': len(rec['blob']['c'])}))
 PY
 }
 dkval() { dkey get | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(json.loads(d)["key"] if d.startswith("{") else d)'; }   # 服务器上 alice 现在的 key（None：删掉了）
@@ -2768,6 +2819,42 @@ ok "cca key alice --forget：说登录了这个账号的其他设备上的也会
 dkey put "$KS2" "$(python3 -c 'import time; print(time.time())')"
 v=$(run cca key alice --show 2>/dev/null); rc=$?
 ok "这台 Mac 上没有、dan-air 又记下了：cca key alice --show 先同步一次再给（App 的「显示」「复制」同样）" '[ $rc -eq 0 ] && [ "$v" = "$KS2" ]'
+# 折合金额经服务器交换：各台设备只写自己的那一份，密文（密钥和 API key 一样由盐、邮箱、登录身份派生，标签是 cca-cost-v1；认证里带着设备指纹）。
+# 10g 里 alice 在这台 Mac 上 4 次请求、折合 0.026 美元。dan-air 照 server/README.md 写的格式封好、解开
+dcost() {   # dcost get | put 时间 美元：dan-air 解开这台 Mac 传的 alice 的那一份（打印 JSON；none：没有；bad：认证不过；明文没补齐到 1024 字节的整数倍时出错）/ 传自己的那一份
+	python3 -B - "$D" "$T/dan" "$SVPORT" "$PK.pub" "$@" <<'PY'
+import json, sys, time
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
+key, port, me, op = sys.argv[2], int(sys.argv[3]), sw.fp_of(sys.argv[4]), sys.argv[5]
+aid = sw.aid_of('ab' * 16, 'claude', 'alice@example.com')
+keys = sw.derive(sw.COST, 'ab' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
+if op == 'get':
+    extra = {'get': [aid]}
+else:
+    hour = int(float(sys.argv[6]) // 3600 * 3600)
+    doc = {'v': 1, 'at': time.time(), 'h': {str(hour): [int(float(sys.argv[7]) * 1e6), 1, 100, 10, 0, 0, 0]}, 'um': []}
+    extra = {'put': {aid: sw.cost_seal(keys, aid, sw.fp_of(key + '.pub'), doc)}}
+status, j = sw.post(key, port, 'ledger', extra)
+if status != 200:
+    sys.exit(1)
+if op == 'get':
+    row = next((x for x in j['cost'].get(aid, []) if x['fp'] == me and 'blob' in x), None)
+    d = row and sw.cost_open(keys, aid, me, row['blob'])
+    print('none' if not row else 'bad' if d is None else json.dumps({'usd': sum(x[0] for x in d['h'].values()) / 1e6,
+                                                                      'requests': sum(x[1] for x in d['h'].values()), 'name': row['name']}))
+PY
+}
+out=$(run cca cost sync --now --json 2>/dev/null </dev/null); rc=$?
+ok "cost sync --now --json：开了设备统计、alice 在映射里、登录着：加密传给服务器（服务器上没有邮箱、登录身份、金额，600）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"sync\"][\"state\"] == \"ok\" and isinstance(d[\"sync\"][\"checked_epoch\"], float)" && [ "$(stat -f %Lp "$SV/cost-slots.json")" = 600 ] && ! grep -q "example.com\|u-alice\|26000" "$SV/cost-slots.json"'
+v=$(dcost get)
+ok "dan-air（也登录着 alice）照文档的格式解得开这台 Mac 传的：4 次请求、折合 0.026 美元，明文补齐到 1024 字节的整数倍" 'printf "%s" "$v" | jok "d == {\"usd\": 0.026, \"requests\": 4, \"name\": \"$ME\"}"'
+dcost put "$(python3 -c 'import time; print(time.time() - 86400)')" 2.5; rc=$?
+run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_cost_sync.json"
+ok "dan-air 传了自己的那一份（2.5 美元）：同步后 alice 有两台设备（这台在前），合计 2.526 美元（全部账号 2.579：还有 dave 的 Codex），同步好了" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"me\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", True, False), (\"dan-air\", False, False)] and a[\"summary\"][\"days_usd\"] == 2.526 and a[\"sync\"][\"state\"] == \"ok\" and isinstance(a[\"sync\"][\"checked_epoch\"], float))(acct(0, \"alice@example.com\")[\"cost\"]) and d[\"cost_total\"][\"by_tool\"][\"claude\"][\"days_usd\"] == 2.526 and d[\"cost_total\"][\"days_usd\"] == 2.579"'
+runcmd "$(ans y)" "$P ./policy.sh key rm dan-air"
+run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
+ok "维护者撤销了 dan-air：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
 fi
@@ -3039,7 +3126,7 @@ ok "辅助安装用完不留东西：没建 agy 的账号表，~/.local/bin 里�
 #       经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。直连通的照旧问路由器。这一节结束时映射仓库、假命令都还原
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
-rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 scfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$SH/.cca/config.json" "$1"; }   # 服务器那边的 config.json（c）
 spub() { cat "$SH/.cca/policy/id_ed25519.pub"; }
 cp "$PR/policy.json" "$T/pr.srv"; rm -f "$T/pr.srv.sig"; [ ! -f "$PR/policy.json.sig" ] || cp "$PR/policy.json.sig" "$T/pr.srv.sig"
@@ -3080,7 +3167,7 @@ pks "$(ans)" rm -y "$salias" >/dev/null 2>&1
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3" "$T/tmp3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
-r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射；仓库不是默认的那个时，给维护者的命令带上 -R" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射" && printf "%s" "$out" | grep -q "    ./policy.sh key add -R example/cca-policy '\''ssh-ed25519 AAAA[^ ]* cca-policy@[^ ]*'\'' [^ ]*$"'
@@ -3234,6 +3321,7 @@ ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Cl
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
 ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
+ok "restore：备份里没有折合金额的缓存、别的设备同步来的（cost/scan.json、remote.json 这些），这台设备统计好的（cost/local.json）在" '! tar -tzf "$BK" | grep -qE "cost/(scan|remote|worker)\.json|cost/(last|scanned)$" && tar -tzf "$BK" | grep -q "cost/local\.json"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'

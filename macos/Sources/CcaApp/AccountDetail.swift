@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 一个账号的详情：身份和主要操作（打开 App、网页版）、“现在能不能用、下一步点什么”的一句话、用量和每周用量（第三方 API 账号是
+/// 一个账号的详情：身份和主要操作（打开 App、网页版）、“现在能不能用、下一步点什么”的一句话、用量、每周用量和折合金额（第三方 API 账号是
 /// 「API key」）、网络出口；映射里的账号还有「设备」（在哪些设备上用，DevicesSection）。
 /// 操作放在它作用的那一节旁边：刷新用量在“用量”的标题上，检测出口在“网络出口”的标题上。第一次来时顶上有一张提示卡片。
 /// 窗口宽的时候（全屏）用量（连同每周用量）和网络出口左右并排，窄了上下排（SectionColumns）；「设备」总是在下面占一整行。
@@ -10,33 +10,55 @@ struct AccountDetail: View {
 
     var body: some View {
         if let a = model.account(ref) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 32) {
-                    TipCard(id: "account-page", title: "这一页怎么看",
-                            message: "名字下面那句话说这个账号现在能不能用、下一步点什么。"
-                                + (a.isAPI ? "往下是它的 API key 和网络出口。"
-                                   : "往下是用量和网络出口；维护者映射里的账号，最下面还有它在哪些设备上用。")
-                                + "端口、纯净度这些细节，点「显示细节」。")
-                    DetailHeader(account: a)
-                    SectionColumns {
-                        if !a.isAPI, !model.features(a.tool).usage {
-                            NoUsageSection(account: a)   // Antigravity：没有查用量的接口
-                        } else if !a.isAPI {
-                            VStack(alignment: .leading, spacing: 32) {
-                                UsageSection(account: a)
-                                WeeklyUsageSection(account: a)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 32) {
+                        TipCard(id: "account-page", title: "这一页怎么看",
+                                message: "名字下面那句话说这个账号现在能不能用、下一步点什么。"
+                                    + (a.isAPI ? "往下是它的 API key 和网络出口。"
+                                       : "往下是用量和网络出口；维护者映射里的账号，最下面还有它在哪些设备上用。")
+                                    + "端口、纯净度这些细节，点「显示细节」。")
+                        DetailHeader(account: a)
+                        SectionColumns {
+                            if !a.isAPI, !model.features(a.tool).usage {
+                                NoUsageSection(account: a)   // Antigravity：没有查用量的接口
+                            } else if !a.isAPI {
+                                // 按官方 API 的价格折成多少美元（cca 有折合金额、这个账号有时）
+                                let cost = model.costEnabled && a.can.cost
+                                VStack(alignment: .leading, spacing: 32) {
+                                    UsageSection(account: a)
+                                    // 图的右边留出和下面折合金额的纵轴一样宽的一栏：同一周的条上下对齐
+                                    WeeklyUsageSection(account: a, gutter: cost ? CostChart.gutterLabels(
+                                        a.cost, granularity: model.costGranularity, scope: model.costScope(a.ref)) : [])
+                                    if cost {
+                                        CostSection(account: a).id(CostSection.anchor)
+                                    }
+                                }
+                            } else if a.can.apiKey {
+                                APIKeySection(account: a)
                             }
-                        } else if a.can.apiKey {
-                            APIKeySection(account: a)
+                            RouteSection(account: a)
                         }
-                        RouteSection(account: a)
+                        // 映射里的账号：在哪些设备上用（整行，不进并排的两栏）
+                        if a.can.devices { DevicesSection(account: a) }
                     }
-                    // 映射里的账号：在哪些设备上用（整行，不进并排的两栏）
-                    if a.can.devices { DevicesSection(account: a) }
+                    .padding(.top, 24)
+                    .padding(.bottom, 36)
+                    .pageColumn()
                 }
-                .padding(.top, 24)
-                .padding(.bottom, 36)
-                .pageColumn()
+                // 用量统计页点了这个账号（金额模式）：滚到「折合金额」。id 是“要滚的是不是这个账号”：这一页换账号时
+                // costFocus 和 ref 不一定在同一次更新里变，只看 costFocus 会拿着上一个账号的 ref 跑完、之后不再跑
+                .task(id: model.costFocus == ref) {
+                    guard model.costFocus == ref else { return }
+                    // 滚完、换了账号、离开这一页都算处理过了（别的账号要滚的不动）
+                    defer { if model.costFocus == ref { model.costFocus = nil } }
+                    // 等这一页排好再滚；刚换了账号、工具时上面几节过一会儿才排定，再对一次
+                    for delay: UInt64 in [80_000_000, 320_000_000] {
+                        try? await Task.sleep(nanoseconds: delay)
+                        guard !Task.isCancelled else { return }
+                        proxy.scrollTo(CostSection.anchor, anchor: .top)
+                    }
+                }
             }
             .navigationTitle(a.displayName)
         } else {

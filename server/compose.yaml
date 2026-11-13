@@ -5,6 +5,8 @@
 #   config/release.pub    维护者的发布公钥：只认它签的设备清单
 #   certs/                自签的 P-256 证书和私钥（私钥不出服务器）
 #   data/state.json       各台设备最近一次的报告、上次使用的时间（保留 30 天）
+#   data/keys.json        各个账号记下的 API key 的密文
+#   data/cost-slots.json  各个账号在各台设备上的折合金额的密文（100 天没再传的删掉）
 #   .env                  CCA_PRESENCE_PORT：对外的端口（默认 18443）；CCA_PRESENCE_IMAGE：用的 python 镜像
 services:
   cca-presence:
