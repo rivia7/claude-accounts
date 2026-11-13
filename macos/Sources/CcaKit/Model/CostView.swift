@@ -32,6 +32,12 @@ struct CostBar: Identifiable, Sendable, Equatable {
     var id: Double { period.endEpoch }
 }
 
+/// 用量统计页表头的一个日期（CostChart.statsTicks）：哪个时刻、在小图那一栏里的横坐标（字的中间）。
+struct StatsTick: Equatable, Sendable {
+    let epoch: Double
+    let x: Double
+}
+
 /// 页面上一行提示（同步的状态、哪台设备还没算进来）：warning 的用橙色，别的用灰字。
 struct CostNote: Sendable, Equatable {
     let text: String
@@ -48,7 +54,7 @@ enum CostChart {
     static let headroom = 0.9
     /// 按周看时一项窄于这个宽度（不到一天的零头并进去以后，中间换了切法的那一项）不写日期，和每周用量的图一样
     static let weekLabelMinWidth = 30.0
-    /// 按天看时日期之间至少隔这么宽（「11/30」放得下）
+    /// 按天看时日期之间至少隔这么宽（「11/30」放得下）；用量统计页表头的日期也是（statsTicks）
     static let dayLabelMinWidth = 34.0
 
     /// 纵轴最高到多少的候选（乘 10 的几次方）：一半也是整齐的数（刻度是 0、一半、最高）
@@ -141,6 +147,31 @@ enum CostChart {
     static func showsDayLabel(index: Int, count: Int, stride: Int) -> Bool {
         guard index >= 0, index < count, stride > 0 else { return false }
         return (count - 1 - index) % stride == 0
+    }
+
+    /// 用量统计页表头的日期（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）：从今天往前每隔几周一个。位置按时间算，
+    /// 挨着两头的往里挪到 edge（字不出这一栏）；离右边那个不到 dayLabelMinWidth 的不写。隔 2、3、4、6 周里取最密、又一个都不用
+    /// 跳过的（今天常常挨着右边、往里挪了，只看一周多宽的话它左边那个会被跳过，隔得不匀）；都要跳过时用隔 6 周的。
+    /// 从右往左排，第一个是今天
+    static func statsTicks(domain: ClosedRange<Double>, now: Double, width: Double, edge: Double = 18) -> [StatsTick] {
+        let span = domain.upperBound - domain.lowerBound
+        guard span > 0, span.isFinite, now.isFinite, width > 2 * edge else { return [] }
+        var out: [StatsTick] = []
+        for weeks in [2, 3, 4, 6] {
+            out = []
+            var t = now, skipped = false
+            while t >= domain.lowerBound {
+                let x = min(max((t - domain.lowerBound) / span * width, edge), width - edge)
+                if out.last.map({ $0.x - x >= dayLabelMinWidth }) ?? true {
+                    out.append(StatsTick(epoch: t, x: x))
+                } else {
+                    skipped = true
+                }
+                t -= Double(weeks) * week
+            }
+            if !skipped { break }
+        }
+        return out
     }
 
     /// 用量统计页一行下面要不要列各台设备：有记录的设备至少两台（只有一台时和整个账号一样）

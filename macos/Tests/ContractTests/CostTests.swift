@@ -143,6 +143,23 @@ func costUnitTests() {
     check("下标不对的不写", !CostChart.showsDayLabel(index: 30, count: 30, stride: 1) && !CostChart.showsDayLabel(index: -1, count: 30, stride: 1)
           && !CostChart.showsDayLabel(index: 0, count: 30, stride: 0))
 
+    // 用量统计页表头的日期（以前不管多宽都每 2 周一个：1080 宽的窗口里挤成「10/30今天」）
+    let wk = 7 * 86400.0
+    let dom13 = (now - 13 * wk + 2 * 86400)...(now + 2 * 86400)   // 这一周还有两天结束
+    func weeksApart(_ t: [StatsTick]) -> [Double] { zip(t, t.dropFirst()).map { ($0.epoch - $1.epoch) / wk } }
+    func roomy(_ t: [StatsTick]) -> Bool { zip(t, t.dropFirst()).allSatisfy { $0.x - $1.x >= CostChart.dayLabelMinWidth } }
+    let wide = CostChart.statsTicks(domain: dom13, now: now, width: 600)
+    check("表头（宽）：从今天往前每 2 周一个日期", wide.first?.epoch == now && weeksApart(wide) == Array(repeating: 2, count: 6) && roomy(wide),
+          "\(wide)")
+    let narrow = CostChart.statsTicks(domain: dom13, now: now, width: 185)
+    check("表头（窄：小图那一栏 185 点，和 1080 宽的窗口差不多）：今天挨着右边、往里挪了，这时隔 2 周、3 周都得跳过一个，所以隔 4 周，日期之间都放得下",
+          narrow.first?.epoch == now && weeksApart(narrow) == [4, 4, 4] && roomy(narrow), "\(narrow)")
+    check("表头：字不出这一栏（挨着两头的往里挪到 18 点）", (wide + narrow).allSatisfy { $0.x >= 18 }
+          && wide.allSatisfy { $0.x <= 582 } && narrow.allSatisfy { $0.x <= 167 })
+    check("表头（很窄）：放不下第二个时只写今天；一个都放不下、没有时间范围时不写",
+          CostChart.statsTicks(domain: dom13, now: now, width: 60).map(\.epoch) == [now]
+          && CostChart.statsTicks(domain: dom13, now: now, width: 30).isEmpty && CostChart.statsTicks(domain: 5...5, now: 5, width: 600).isEmpty)
+
     // 看谁的：整个账号或者一台设备（换了 state 以后不在了就回到整个账号）
     if let bob = loadFixture(StateDoc.self, "state.json")?.account(bobRef)?.cost {
         check("整个账号：柱子是 weeks 的 usd", CostChart.bars(bob, granularity: .week, scope: .account).map(\.usd) == bob.weeks.map(\.usd))

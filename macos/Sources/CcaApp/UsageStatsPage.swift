@@ -105,7 +105,7 @@ private enum StatsColumns {
     static let inset: CGFloat = 14
 }
 
-/// 表头：账号、小图的时间刻度（每两周一个日期，最右边是今天）、平均每周、本周。
+/// 表头：账号、小图的时间刻度（从今天往前每隔几周一个日期，最右边是今天）、平均每周、本周。
 private struct StatsHeader: View {
     let domain: ClosedRange<Double>
     let now: Double
@@ -126,22 +126,19 @@ private struct StatsHeader: View {
     }
 }
 
-/// 表头里小图上面的时间刻度：每两周一个日期，最右边是今天（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）
+/// 表头里小图上面的时间刻度：从今天往前每隔几周一个日期（这一栏窄时隔得多一点，日期不挤在一起），最右边是今天
+/// （额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）。写哪几个、写在哪由 CostChart.statsTicks 算
 struct StatsTimeScale: View {
     let domain: ClosedRange<Double>
     let now: Double
 
     var body: some View {
         GeometryReader { geo in
-            let span = domain.upperBound - domain.lowerBound
-            ForEach(0..<7) { k in
-                let t = now - Double(k) * 2 * WeeklyChart.week
-                let x = (t - domain.lowerBound) / span * geo.size.width
-                if x >= 0 {
-                    Text(k == 0 ? "今天" : Self.day(t))
-                        .fixedSize()
-                        .position(x: min(max(x, 18), geo.size.width - 18), y: geo.size.height / 2)
-                }
+            let ticks = CostChart.statsTicks(domain: domain, now: now, width: Double(geo.size.width))
+            ForEach(Array(ticks.enumerated()), id: \.offset) { i, tick in
+                Text(i == 0 ? "今天" : Self.day(tick.epoch))
+                    .fixedSize()
+                    .position(x: CGFloat(tick.x), y: geo.size.height / 2)
             }
         }
     }
