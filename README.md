@@ -52,13 +52,7 @@ curl -fsSL https://github.com/rivia7/claude-accounts/releases/latest/download/in
 
 ## Linux 服务器
 
-Linux 上也能装（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、find：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。Claude Code 没装也行：安装时会问要不要用官方安装脚本装上（服务器直连不通时经内置代理装，节点由维护者提供，见下面的「直连不通的服务器」）。
-
-Linux 支持目前在测试版里（3.1.0-beta.14 起）。正式版发布以前，上面那行命令装的正式版还不支持 Linux，先用这一行装测试版（正式版发布以后就和 macOS 用同一行命令）：
-
-```bash
-curl -fsSL https://github.com/rivia7/claude-accounts/releases/download/v3.1.0-beta.19/install.sh | bash -s 3.1.0-beta.19
-```
+Linux 上也能装，用上面「一键安装」的同一行命令（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、find：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。Claude Code 没装也行：安装时会问要不要用官方安装脚本装上（服务器直连不通时经内置代理装，节点由维护者提供，见下面的「直连不通的服务器」）。
 
 Linux 上能用的是命令行：
 

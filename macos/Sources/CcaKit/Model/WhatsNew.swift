@@ -20,6 +20,10 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.1.0", title: "cca 3.1 正式版", points: [
+            .init(symbol: "checkmark.seal",
+                  text: "这是 cca 3.1 正式版，包含 3.1.0 测试版到 beta.19 的全部内容：装在 Linux 服务器上、每周用量、账号在哪些设备上用、Antigravity 命令行等。装着测试版的机器会自动更新到它，以后照常只自动更新正式版。"),
+        ], art: "logo"),
         ReleaseNote(version: "3.1.0-beta.19", title: "Antigravity 账号也有简写了", points: [
             .init(symbol: "terminal",
                   text: "aga 就是 cca agy，和 cxa 就是 cca codex 一样：aga @别名 直接启动这个 Antigravity 账号，aga add 添加账号。安装 cca 时和 cxa 一起建好；已经在用 Antigravity 的机器，升级后下一次运行 cca 时自动补上（已经有别的 aga 命令时不覆盖它）。"),
