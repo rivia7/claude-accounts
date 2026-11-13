@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.2.0-beta.1", title: "API key 在设备间同步，客户端可以自动更新", points: [
+            .init(symbol: "key",
+                  text: "账号页记下的 API key 会同步给登录了同一个账号的其他设备：维护者映射里的 Claude、ChatGPT 账号，在一台设备上记下、换掉、删掉，别的设备跟着变，账号页写着是从哪台设备同步来的。key 加密以后经维护者的设备统计服务器传，服务器看不到 key，没登录这个账号的设备也解不开（旧版的服务器不收 key，要维护者更新一次）。"),
+            .init(symbol: "arrow.down.app",
+                  text: "「客户端更新」页多了「允许自动更新」（默认关）：打开后查到新版本就直接装，桌面 App 开着时等你退出它再装；终端里用官方安装器装的 Claude Code、Codex 也直接更新。"),
+            .init(symbol: "wrench.and.screwdriver",
+                  text: "Antigravity 账号的网页版改为打开 gemini.google.com；退出 agy 时不再误报 mcp_config.json 有冲突。"),
+        ], art: "logo"),
         ReleaseNote(version: "3.1.0", title: "cca 3.1 正式版", points: [
             .init(symbol: "checkmark.seal",
                   text: "这是 cca 3.1 正式版，包含 3.1.0 测试版到 beta.19 的全部内容：装在 Linux 服务器上、每周用量、账号在哪些设备上用、Antigravity 命令行等。装着测试版的机器会自动更新到它，以后照常只自动更新正式版。"),
