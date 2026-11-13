@@ -20,6 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.2.0-beta.2", title: "看看每个账号的用量折合多少美元", points: [
+            .init(symbol: "dollarsign.circle",
+                  text: "「用量统计」页标题右边可以切到「折合金额」：按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元。每个账号一行，有最近 12 周的小图、平均每周、本周和 12 周合计；顶上是所有账号加起来的，还有最近 30 天每天一根柱子的大图。点一行打开这个账号。"),
+            .init(symbol: "chart.bar.xaxis",
+                  text: "账号页「每周用量」下面多了「折合金额」：按周看最近 12 周和本周，按日看最近 30 天，鼠标指着一根柱子看那一项的细节。两张图里同一周的柱子上下对齐。"),
+            .init(symbol: "laptopcomputer.and.iphone",
+                  text: "维护者映射里的 Claude、ChatGPT 账号在好几台设备上用时，各台设备算出的金额经维护者的设备统计服务器加密同步（服务器看不到数字）：可以看整个账号加起来的，也可以只看其中一台设备。旧版的服务器不收，要维护者更新一次。"),
+            .init(symbol: "info.circle",
+                  text: "这不是实际花费，订阅不按这个收费。cca 只按 Claude Code、Codex 记在这台设备上的会话记录算每次请求用了多少 token，不读对话内容；网页版的用量不算。"),
+            .init(symbol: "calendar",
+                  text: "「用量统计」页窗口不宽时，表头的日期改成隔几周写一个，不再挤在一起。"),
+        ], art: "quota"),
         ReleaseNote(version: "3.2.0-beta.1", title: "API key 在设备间同步，客户端可以自动更新", points: [
             .init(symbol: "key",
                   text: "账号页记下的 API key 会同步给登录了同一个账号的其他设备：维护者映射里的 Claude、ChatGPT 账号，在一台设备上记下、换掉、删掉，别的设备跟着变，账号页写着是从哪台设备同步来的。key 加密以后经维护者的设备统计服务器传，服务器看不到 key，没登录这个账号的设备也解不开（旧版的服务器不收 key，要维护者更新一次）。"),
