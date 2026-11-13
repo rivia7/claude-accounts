@@ -79,6 +79,8 @@ struct DetailColumn: View {
                 OfficePage()
             case .usageStats?:
                 UsageStatsPage()
+            case .costStats?:
+                CostStatsPage()
             case .account(let ref)?:
                 AccountDetail(ref: ref)
             case .routing?:

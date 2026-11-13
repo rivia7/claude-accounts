@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 折合金额的柱状图：账号页「折合金额」的大图、用量统计页合计的 30 天（右边写纵轴的刻度、柱子下面写日期、跟着鼠标），
-/// 用量统计页每一行的小图（compact：不写日期、不画刻度，所有行同一个横轴、同一个纵轴）。
+/// 折合金额的柱状图：账号页「折合金额」的大图、折合金额页合计的 30 天（右边写纵轴的刻度、柱子下面写日期、跟着鼠标），
+/// 折合金额页每一行的小图（compact：不写日期、不画刻度，所有行同一个横轴、同一个纵轴）。
 /// 排法和每周用量的图一样（SlotChart）：一项占它那一段时间，柱子在正中间，鼠标指着的那一列垫一层浅底。
 /// 柱子是中性色：不用账号色，也不用用量的绿、橙、红（折了多少钱没有好坏）；开始时还没有记录的那一项（cca 标的 `partial`）
 /// 填灰色（和每周用量里没记全的那一周一样）。美元没有上限，所以和每周用量的图不同，画了纵轴：右边三个刻度（0、一半、最高，
@@ -10,7 +10,7 @@ struct CostBarChart: View {
     let bars: [CostBar]
     let granularity: CostGranularity
     let domain: ClosedRange<Double>
-    /// 纵轴最高到多少（CostChart.niceTop）：用量统计页所有行用同一个，各行的高低才能比
+    /// 纵轴最高到多少（CostChart.niceTop）：折合金额页所有行用同一个，各行的高低才能比
     let top: Double
     var currency = "USD"
     /// 读屏里说不说请求数：cca 只给整个账号的（看所有设备时），本机、一台设备的没有
@@ -148,7 +148,7 @@ struct CostPartialLegend: View {
     }
 }
 
-/// 看本机还是所有设备：账号页「折合金额」的标题、用量统计页的标题上各一个，两页共用一个设置（AppModel.costScope）
+/// 看本机还是所有设备：账号页「折合金额」的标题、折合金额页的标题上各一个，两页共用一个设置（AppModel.costScope）
 struct CostScopePicker: View {
     @Environment(AppModel.self) private var model
 
@@ -194,7 +194,7 @@ struct CostNoteLine: View {
 
 /// 账号页的「折合金额」（在「每周用量」下面；cca 说这个账号有（`can.cost`）、cca 也有折合金额时才显示）：
 /// 这个账号（所有设备加起来，或者只算这台设备）最近 12 周每周、最近 30 天每天按官方 API 的价格折成多少美元。不是实际花费：订阅不按这个收费。
-/// 标题右边是多久以前统计的、本机 / 所有设备、按周 / 按日（这两个和用量统计页共用）和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
+/// 标题右边是多久以前统计的、本机 / 所有设备、按周 / 按日（这两个和折合金额页共用）和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
 /// 再下面是同步的提示，显示细节时多几行（token、没有公开价格的模型、从什么时候开始有记录、上次同步）；最下面一直有一行小字：
 /// 按谁的价格折算、价格表是哪天的。数字都是 cca 给的（PROTOCOL 2.2 的 `cost`），App 只排版。
 struct CostSection: View {
@@ -204,7 +204,7 @@ struct CostSection: View {
     /// 鼠标指着的那一项（命令行工具编不了 @State 宏：State 类型直接用）
     private let hover = State<Double?>(initialValue: nil)
 
-    /// 用量统计页点了一行时滚到这里（ScrollViewReader 的 id）
+    /// 折合金额页点了一行时滚到这里（ScrollViewReader 的 id）
     static let anchor = "cost"
 
     var body: some View {

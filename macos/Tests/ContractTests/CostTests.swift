@@ -171,13 +171,13 @@ func costUnitTests() {
           CostChart.statsTicks(domain: dom13, now: now, width: 60).map(\.epoch) == [now]
           && CostChart.statsTicks(domain: dom13, now: now, width: 30).isEmpty && CostChart.statsTicks(domain: 5...5, now: 5, width: 600).isEmpty)
 
-    // 看谁的：所有设备加起来（整个账号）或者只看这台设备（本机）；用量统计页各台设备那一行看那一台
+    // 看谁的：所有设备加起来（整个账号）或者只看这台设备（本机）；折合金额页各台设备那一行看那一台
     if let bob = loadFixture(StateDoc.self, "state.json")?.account(bobRef)?.cost {
         check("所有设备：柱子是 weeks、days 的 usd", CostChart.bars(bob, granularity: .week, scope: .all).map(\.usd) == bob.weeks.map(\.usd)
               && CostChart.bars(bob, granularity: .day, scope: .all).map(\.usd) == bob.days.map(\.usd))
         check("本机：柱子是这台设备的 weeks_usd、days_usd", CostChart.bars(bob, granularity: .week, scope: .me).map(\.usd) == bob.me?.weeksUSD
               && CostChart.bars(bob, granularity: .day, scope: .me).map(\.usd) == bob.me?.daysUSD)
-        check("一台设备（用量统计页那一行）：它的", CostChart.bars(bob, granularity: .week, device: bob.device(aliceMini)).map(\.usd) == bob.device(aliceMini)?.weeksUSD
+        check("一台设备（折合金额页那一行）：它的", CostChart.bars(bob, granularity: .week, device: bob.device(aliceMini)).map(\.usd) == bob.device(aliceMini)?.weeksUSD
               && CostChart.bars(bob, granularity: .day, device: bob.device(aliceMini)).map(\.usd) == bob.device(aliceMini)?.daysUSD)
         check("柱子跟着周期（日期、partial 是账号的）", CostChart.bars(bob, granularity: .day, scope: .me).map(\.period) == bob.days
               && CostChart.bars(bob, granularity: .week, device: bob.device(aliceMini)).map(\.period) == bob.weeks)
@@ -506,21 +506,25 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
         let (t, m) = model(hello: oldHello)
         await m.start()
         m.setMainVisible(true)
-        m.selection = .usageStats
-        m.statsMode = .cost
+        m.selection = .costStats
         m.refreshUsageIfNeeded()
         m.refreshCost()
         try? await Task.sleep(nanoseconds: 100_000_000)
         check("旧版 cca（hello 没有 cost）：不显示折合金额、不统计", !m.costAvailable && !m.costEnabled && !m.costVisible && syncs(t).isEmpty)
         m.shutdown()
     }
-    // hello 的版本不认识：一样当作没有
+    // hello 的版本不认识：一样当作没有（侧栏不列折合金额页，选中了也在读到 state 时回总览）
     do {
         let (t, m) = model(hello: helloText.replacingOccurrences(of: #""cost": 1"#, with: #""cost": 2"#))
         await m.start()
         m.refreshCost()
         try? await Task.sleep(nanoseconds: 50_000_000)
         check("hello.cost 不是认识的版本：当作没有", !m.costAvailable && syncs(t).isEmpty)
+        m.selection = .costStats
+        let before = states(t)
+        m.refreshState()
+        check("没有认识的折合金额：读到 state 时从折合金额页回总览", await waitUntil { states(t) > before && m.selection == .office },
+              "\(String(describing: m.selection))")
         m.shutdown()
     }
     // cost_total 是 null（关掉了、没有可统计的账号）：不统计
@@ -528,12 +532,15 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
         let (t, m) = model(state: costState { $0["cost_total"] = NSNull() })
         await m.start()
         m.setMainVisible(true)
-        m.selection = .usageStats
-        m.statsMode = .cost
+        m.selection = .costStats
         m.refreshUsageIfNeeded()
         m.refreshCost()
         try? await Task.sleep(nanoseconds: 100_000_000)
         check("cost_total 为 null：不显示、不统计", m.costAvailable && !m.costEnabled && !m.costVisible && syncs(t).isEmpty)
+        let before = states(t)
+        m.refreshState()
+        check("cost_total 为 null：折合金额页照样留着（页面上说为什么没有数字）", await waitUntil { states(t) > before }
+              && m.selection == .costStats)
         m.shutdown()
     }
     // 还没统计过（scan.state 是 never）：读到 state 就马上统计一次（看不见也是），统计完重读 state
@@ -579,13 +586,12 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     check("看不见金额、10 分钟前统计过：不统计（看不见时 30 分钟一次）", !m.costVisible && syncs(t).isEmpty, "\(syncs(t).map(\.arguments))")
     m.selection = .usageStats
     try? await Task.sleep(nanoseconds: 50_000_000)
-    check("用量统计页的额度模式：看不见金额，不统计", m.statsMode == .quota && !m.costVisible && syncs(t).isEmpty)
-    m.statsMode = .cost
+    check("用量统计页：看不见金额，不统计", !m.costVisible && syncs(t).isEmpty)
+    m.selection = .costStats
     let visibleNow = m.costVisible
-    check("切到金额模式：看得见（5 分钟一次），马上统计一次（低优先级）", await waitUntil { syncs(t).count == 1 } && visibleNow
+    check("打开折合金额页：看得见（5 分钟一次），马上统计一次（低优先级）", await waitUntil { syncs(t).count == 1 } && visibleNow
           && syncs(t).last?.background == true && syncs(t).last?.arguments == ["cost", "sync", "--json"])
-    check("统计完重读 state", await waitUntil { !m.costSyncing })
-    check("设置记下了", prefs.string(forKey: "stats.mode") == "cost")
+    check("统计完重读 state，还在折合金额页", await waitUntil { !m.costSyncing } && m.selection == .costStats)
     m.refreshUsageIfNeeded()
     m.selection = .account(bobRef)
     try? await Task.sleep(nanoseconds: 80_000_000)
@@ -597,7 +603,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     m.selection = .office
     check("总览：看不见", !m.costVisible)
     m.setMainVisible(false)
-    m.selection = .usageStats
+    m.selection = .costStats
     check("窗口看不见：看不见", !m.costVisible)
     m.setMainVisible(true)
 
@@ -623,20 +629,20 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     check("关掉了（cost_off）：不当作出错", await waitUntil { m.costFailure == nil && !m.costRefreshing })
     reply.mode = .ok
 
-    // 看谁的（本机 / 所有设备）、按周还是按天：账号页和用量统计页共用一个设置；用量统计页点一行：打开账号页、滚到「折合金额」
+    // 看谁的（本机 / 所有设备）、按周还是按天：账号页和折合金额页共用一个设置；折合金额页点一行：打开账号页、滚到「折合金额」
     check("默认看所有设备、按周", m.costScope == .all && m.costGranularity == .week)
     m.costScope = .me
     check("换成本机：记在设置里", m.costScope == .me && prefs.string(forKey: "cost.scope") == "me")
-    m.selection = .usageStats
+    m.selection = .costStats
     m.showCost(bobRef)
-    check("用量统计页点一行：打开账号页、滚到折合金额，看的还是本机", m.selection == .account(bobRef) && m.costFocus == bobRef && m.costScope == .me)
+    check("折合金额页点一行：打开账号页、滚到折合金额，看的还是本机", m.selection == .account(bobRef) && m.costFocus == bobRef && m.costScope == .me)
     m.costFocus = nil
     let frankRef = AccountRef(tool: .codex, key: "frank@example.com")
     m.showCost(frankRef)
     check("ChatGPT 账号：换到 Codex", m.tool == .codex && m.selection == .account(frankRef))
     m.tool = .claude
     let groups = m.costGroups()
-    check("金额模式的分组：Claude、ChatGPT 的官方账号（第三方 API 账号不列），和总览一样的顺序",
+    check("折合金额页的分组：Claude、ChatGPT 的官方账号（第三方 API 账号不列），和总览一样的顺序",
           groups.map(\.department) == [.claude, .chatgpt]
           && groups.first?.accounts.map(\.key) == ["工作(bob@example.com)", "carol@example.com", "测试(dave@example.com)", "erin@example.com", "grace@example.com"]
           && groups.last?.accounts.map(\.key) == ["frank@example.com"], "\(groups.map { $0.accounts.map(\.key) })")
@@ -644,7 +650,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     check("按周 / 按天记在设置里", prefs.string(forKey: "cost.period") == "day")
     m.shutdown()
     let (_, again) = model(prefs: prefs)
-    check("下次打开还是金额模式、按天、本机", again.statsMode == .cost && again.costGranularity == .day && again.costScope == .me)
+    check("下次打开还是按天、本机", again.costGranularity == .day && again.costScope == .me)
     prefs.set("everyone", forKey: "cost.scope")
     let (_, odd) = model(prefs: prefs)
     check("设置里的值不认识：看所有设备", odd.costScope == .all)
@@ -656,8 +662,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
         let (t2, m2) = model(log: idle)
         await m2.start()
         m2.setMainVisible(true)
-        m2.selection = .usageStats
-        m2.statsMode = .cost
+        m2.selection = .costStats
         try? await Task.sleep(nanoseconds: 80_000_000)
         check("用户走开了：不统计", syncs(t2).isEmpty)
         idle.conditions = SystemConditions(thermalPressure: true)
@@ -674,8 +679,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
         let (t3, m3) = model(delay: 0.2)
         await m3.start()
         m3.setMainVisible(true)
-        m3.selection = .usageStats
-        m3.statsMode = .cost
+        m3.selection = .costStats
         m3.refreshCost()
         m3.refreshCost()
         _ = await waitUntil { syncs(t3).count >= 2 && !m3.costSyncing }

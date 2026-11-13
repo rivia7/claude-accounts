@@ -3,7 +3,7 @@ import SwiftUI
 /// 用量统计（侧栏的「用量统计」）：所有官方账号每周用了多少放在一起比，Claude、ChatGPT 各一组（和总览一样的顺序；第三方 API
 /// 账号没有订阅的额度，不在这里）。每个账号一行：头像和名字、最近 12 周的小柱状图（所有行同一个时间范围，上下对得齐）、
 /// 平均每周用到多少和几周用完 / 没用到一半、本周到现在。点一行进这个账号的页面。数字都是 cca 算好的（usage_weeks），App 只排版。
-/// cca 有折合金额时标题右边可以切到「折合金额」（CostStatsContent）：同样的几行换成按官方 API 的价格折成多少美元。
+/// 按官方 API 的价格折成多少美元是另一页（侧栏的「折合金额」，CostStatsPage）：钱没有额度、没有填满，图不一样。
 struct UsageStatsPage: View {
     @Environment(AppModel.self) private var model
 
@@ -15,29 +15,24 @@ struct UsageStatsPage: View {
                 let accounts = groups.flatMap(\.accounts)
                 let lists = accounts.map { $0.usageWeeks?.weeks ?? [] }
                 let scale = StatsScale(domain: WeeklyChart.domain(lists, now: now), top: WeeklyChart.scaleTop(lists))
-                let mode = model.costAvailable ? model.statsMode : .quota
                 VStack(alignment: .leading, spacing: 26) {
-                    header(accounts, mode: mode, now: now)
-                    if mode == .cost {
-                        CostStatsContent(now: now)
+                    header(accounts, now: now)
+                    TipCard(id: "usage-stats-page", title: "这一页怎么看",
+                            message: "每个账号一行，一根竖条是一周：填得越满用得越多，填满就是这一周的额度用完了；填成灰色的那一周结束前一天没查到，实际可能更多。"
+                                + "右边是平均每周用到多少、几周用完、几周没用到一半，和本周到现在。点一行看这个账号的详情。")
+                    if model.state == nil {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("正在读取账号…").foregroundStyle(.secondary)
+                        }
+                    } else if accounts.isEmpty {
+                        Text("还没有 Claude、ChatGPT 账号。第三方 API 账号没有订阅的额度，不在这里统计。")
+                            .foregroundStyle(.secondary)
                     } else {
-                        TipCard(id: "usage-stats-page", title: "这一页怎么看",
-                                message: "每个账号一行，一根竖条是一周：填得越满用得越多，填满就是这一周的额度用完了；填成灰色的那一周结束前一天没查到，实际可能更多。"
-                                    + "右边是平均每周用到多少、几周用完、几周没用到一半，和本周到现在。点一行看这个账号的详情。")
-                        if model.state == nil {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
-                                Text("正在读取账号…").foregroundStyle(.secondary)
-                            }
-                        } else if accounts.isEmpty {
-                            Text("还没有 Claude、ChatGPT 账号。第三方 API 账号没有订阅的额度，不在这里统计。")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
-                                StatsHeader(domain: scale.domain, now: now)
-                                ForEach(groups) { g in
-                                    StatsGroup(group: g, scale: scale, now: now)
-                                }
+                        VStack(alignment: .leading, spacing: 8) {
+                            StatsHeader(domain: scale.domain, now: now)
+                            ForEach(groups) { g in
+                                StatsGroup(group: g, scale: scale, now: now)
                             }
                         }
                     }
@@ -50,73 +45,31 @@ struct UsageStatsPage: View {
         .navigationTitle("用量统计")
     }
 
-    /// 标题和一句说明：数字从哪来、从什么时候开始记。cca 有折合金额时右边是看哪种（额度用量 / 折合金额），金额模式多出本机 / 所有设备、
-    /// 按周 / 按日（和账号页的折合金额共用）和「刷新」：一行放不下时（窗口窄）这三个挪到标题下面一行，右对齐（和看哪种的切换在同一边）
-    private func header(_ accounts: [Account], mode: StatsMode, now: Double) -> some View {
+    /// 标题和一句说明：数字从哪来、从什么时候开始记
+    private func header(_ accounts: [Account], now: Double) -> some View {
         let since = accounts.compactMap { $0.usageWeeks?.sinceEpoch }.min()
         return VStack(alignment: .leading, spacing: 6) {
-            if model.costAvailable, mode == .cost, model.costEnabled {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        title
-                        Spacer(minLength: 8)
-                        costControls
-                        modePicker
-                    }
-                    VStack(alignment: .trailing, spacing: 10) {
-                        HStack(spacing: 10) {
-                            title
-                            Spacer(minLength: 8)
-                            modePicker
-                        }
-                        HStack(spacing: 10) { costControls }
-                    }
-                }
-            } else {
-                HStack(spacing: 10) {
-                    title
-                    if model.costAvailable {
-                        Spacer(minLength: 8)
-                        modePicker
-                    }
-                }
-            }
-            Text(mode == .cost ? CostStatsContent.subtitle(model.state?.costTotal, scanning: model.costScanning, now: now)
-                 : since.map { "最近 12 周，每周用到额度的百分之几。cca 每次查用量时记一笔，" + Texts.weeksSince($0, now: now) + "。" }
+            StatsPageTitle(text: "用量统计")
+            Text(since.map { "最近 12 周，每周用到额度的百分之几。cca 每次查用量时记一笔，" + Texts.weeksSince($0, now: now) + "。" }
                     ?? "还没有记录：cca 每次查用量时会记下这一周用到多少，过完一周这里就有统计。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+}
 
-    private var title: some View {
+/// 统计页（用量统计、折合金额）的大标题：读 state 时后面转个圈
+struct StatsPageTitle: View {
+    @Environment(AppModel.self) private var model
+    let text: String
+
+    var body: some View {
         HStack(spacing: 10) {
-            Text("用量统计").font(.system(size: 24, weight: .semibold)).fixedSize()
+            Text(text).font(.system(size: 24, weight: .semibold)).fixedSize()
             if model.stateLoading { ProgressView().controlSize(.small) }
         }
-    }
-
-    /// 金额模式的三个控件：和账号页「折合金额」的标题上一样的两个切换（两页共用一个设置）、一样的顺序，和「刷新」
-    @ViewBuilder
-    private var costControls: some View {
-        CostScopePicker()
-        CostGranularityPicker()
-        SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
-            .disabled(model.costRefreshing)
-            .help("现在统计一次，再和各个账号的其他设备同步")
-    }
-
-    /// 看哪种：额度用量（每周用到额度的百分之几）/ 折合金额（按官方 API 的价格折成多少美元）；记在 App 的设置里
-    private var modePicker: some View {
-        Picker("看哪种", selection: Binding(get: { model.statsMode }, set: { model.statsMode = $0 })) {
-            Text("额度用量").tag(StatsMode.quota)
-            Text("折合金额").tag(StatsMode.cost)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .help("额度用量：每周用到额度的百分之几；折合金额：按官方 API 的价格折成多少美元（不是实际花费）")
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -158,7 +111,7 @@ private struct StatsHeader: View {
 }
 
 /// 表头里小图上面的时间刻度：从今天往前每隔几周（折合金额按天看时每隔几天）一个日期（这一栏窄时隔得多一点，日期不挤在一起），
-/// 最右边是今天（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）。写哪几个、写在哪由 CostChart.statsTicks 算
+/// 最右边是今天（用量统计页、折合金额页的表头共用，和各行的小图同一个时间范围）。写哪几个、写在哪由 CostChart.statsTicks 算
 struct StatsTimeScale: View {
     let domain: ClosedRange<Double>
     let now: Double

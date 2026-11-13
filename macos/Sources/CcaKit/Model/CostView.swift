@@ -3,17 +3,12 @@ import Foundation
 // 折合金额的图怎么排（纯函数，测试用）：柱的高低、哪一根是浅色、平均和合计都是 cca 给的（PROTOCOL 2.2 的 cost），
 // 这里只挑看谁的数字、算纵轴的刻度和横轴的范围、哪根柱子下面写日期。
 
-/// 用量统计页看哪种：额度用量（每周用到额度的百分之几）/ 折合金额（按官方 API 的标价折成美元）。记在 App 的设置里。
-enum StatsMode: String, Sendable, CaseIterable {
-    case quota, cost
-}
-
-/// 折合金额按周还是按天看（账号页、用量统计页共用）。记在 App 的设置里。
+/// 折合金额按周还是按天看（账号页、折合金额页共用）。记在 App 的设置里。
 enum CostGranularity: String, Sendable, CaseIterable {
     case week, day
 }
 
-/// 折合金额看谁的（账号页、用量统计页共用）：这台设备（本机），或者所有设备加起来（整个账号）。记在 App 的设置里。
+/// 折合金额看谁的（账号页、折合金额页共用）：这台设备（本机），或者所有设备加起来（整个账号）。记在 App 的设置里。
 enum CostScope: String, Sendable, CaseIterable {
     case me, all
 }
@@ -26,7 +21,7 @@ struct CostBar: Identifiable, Sendable, Equatable {
     var id: Double { period.endEpoch }
 }
 
-/// 用量统计页表头的一个日期（CostChart.statsTicks）：哪个时刻、在小图那一栏里的横坐标（字的中间）。
+/// 用量统计页、折合金额页表头的一个日期（CostChart.statsTicks）：哪个时刻、在小图那一栏里的横坐标（字的中间）。
 struct StatsTick: Equatable, Sendable {
     let epoch: Double
     let x: Double
@@ -48,7 +43,7 @@ enum CostChart {
     static let headroom = 0.9
     /// 按周看时一项窄于这个宽度（不到一天的零头并进去以后，中间换了切法的那一项）不写日期，和每周用量的图一样
     static let weekLabelMinWidth = 30.0
-    /// 按天看时日期之间至少隔这么宽（「11/30」放得下）；用量统计页表头的日期也是（statsTicks）
+    /// 按天看时日期之间至少隔这么宽（「11/30」放得下）；用量统计页、折合金额页表头的日期也是（statsTicks）
     static let dayLabelMinWidth = 34.0
 
     /// 纵轴最高到多少的候选（乘 10 的几次方）：一半也是整齐的数（刻度是 0、一半、最高）
@@ -99,7 +94,7 @@ enum CostChart {
         scope == .all ? periods(c, g).map { CostBar(period: $0, usd: $0.usd) } : bars(c, granularity: g, device: c.me)
     }
 
-    /// 一台设备的柱子（本机，用量统计页各台设备那一行）：它的 weeks_usd / days_usd（和 weeks / days 一一对应，cca 给的），
+    /// 一台设备的柱子（本机，折合金额页各台设备那一行）：它的 weeks_usd / days_usd（和 weeks / days 一一对应，cca 给的），
     /// 没有这台设备时都是 0。周期（日期、partial）都是账号的
     static func bars(_ c: AccountCost, granularity g: CostGranularity, device d: CostDevice?) -> [CostBar] {
         let values = d.map { g == .week ? $0.weeksUSD : $0.daysUSD } ?? []
@@ -112,7 +107,7 @@ enum CostChart {
     }
 
     /// 横轴的范围：最右边是最晚结束的那一项（这一周、今天的结束时间）和现在里晚的那个，往左 13 周 / 30 天。
-    /// 用量统计页所有行用同一个（上下对得齐），和每周用量的图一样按时间排，不按第几项排。
+    /// 折合金额页所有行用同一个（上下对得齐），和每周用量的图一样按时间排，不按第几项排。
     static func domain(_ lists: [[CostPeriod]], granularity g: CostGranularity, now: Double) -> ClosedRange<Double> {
         let right = max(now, lists.joined().map(\.endEpoch).max() ?? now)
         return (right - (g == .week ? weekSpan : daySpan))...right
@@ -139,7 +134,7 @@ enum CostChart {
         return (count - 1 - index) % stride == 0
     }
 
-    /// 用量统计页表头的日期（额度用量、折合金额两种表头共用，和各行的小图同一个时间范围）：从今天往前每隔几周（按天看时每隔几天）一个。
+    /// 用量统计页、折合金额页表头的日期（两页的表头共用，和各行的小图同一个时间范围）：从今天往前每隔几周（按天看时每隔几天）一个。
     /// 位置按时间算，挨着两头的往里挪到 edge（字不出这一栏）；离右边那个不到 dayLabelMinWidth 的不写。按周隔 2、3、4、6 周，
     /// 按天隔 7、14 天，取最密、又一个都不用跳过的（今天常常挨着右边、往里挪了，只看一周多宽的话它左边那个会被跳过，隔得不匀）；
     /// 都要跳过时用最稀的。按周从现在往前数；按天从今天那一天的正中间往前数（和下面每天的柱子对齐：横轴的最右边是今天结束的时候）。
@@ -168,7 +163,7 @@ enum CostChart {
         return out
     }
 
-    /// 用量统计页一行下面要不要列各台设备（看所有设备时）：有记录的设备至少两台（只有一台时和整个账号一样）
+    /// 折合金额页一行下面要不要列各台设备（看所有设备时）：有记录的设备至少两台（只有一台时和整个账号一样）
     static func listsDevices(_ c: AccountCost?) -> Bool {
         (c?.devices.count ?? 0) >= 2
     }

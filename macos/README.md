@@ -73,7 +73,7 @@ bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
 CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
 ```
 
-只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、stats-cost / stats-cost-wide / stats-cost-day / stats-cost-me（用量统计页的折合金额：所有设备按周、宽窗口 1680×1000、按日、本机）、account-cost / account-cost-day / account-cost-me / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、还没有记录、ChatGPT 账号）、pinned（有置顶账号的总览和侧栏），
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、cost / cost-wide / cost-day / cost-me（折合金额页：所有设备按周、宽窗口 1680×1000、按日、本机）、account-cost / account-cost-day / account-cost-me / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、还没有记录、ChatGPT 账号）、pinned（有置顶账号的总览和侧栏），
 再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details（账号页、分流页、折合金额）、直接改别名的 rename、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
@@ -88,7 +88,8 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   一根粗圆的线分成三支，主干蓝色，三支分开以后才分别流向玫红、青绿、琥珀。字形和颜色只写在 `Sources/CcaApp/LogoGlyph.swift` 一处：
   App 图标（白底上的这个字形，`tools/make-icon/main.swift`，build.sh 把 LogoGlyph.swift 一起编进去）、App 里不带底的 `BrandMark`、
   `Brand` 的颜色都取它；“总览”的图标是同一套颜色的 2×2 圆角方块 `OverviewMark`；“客户端更新”的图标 `UpdatesMark` 是一支箭头落进敞口的盒子，
-  同样粗圆的线（边长的 0.15），蓝渐变到青绿（整条 Logo 渐变只给最高档的套餐）。
+  同样粗圆的线（边长的 0.15），蓝渐变到青绿（整条 Logo 渐变只给最高档的套餐）；“用量统计”的 `StatsMark` 是三根高低不同的柱子，蓝渐变到紫；
+  “折合金额”的 `CostMark` 是美元符号（一笔 S，上下露出一小截竖线），琥珀渐变到玫红（Logo 末端的暖色）。
 - 以信息简洁易懂为主，不为装饰上色、画框。颜色只表达三件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，
   比如“已登录”不显示；提示、建议用系统的强调色），套餐的档位。档位要低调（`PlanBadge.swift`）：徽章和 `Tag` 一样是中性的胶囊、secondary 的字，颜色只在前面的小徽记上，
   一档比一档足——入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵（Ultra、Pro 500）Logo 渐变（`Brand.spectrum`：蓝 → 紫 → 玫红 → 琥珀）的四角星。
@@ -118,6 +119,10 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 账号页的设备（`DevicesSection.swift`，只有 cca 说 `can.devices` 的账号有，PROTOCOL 3.4）：在两栏下面占一整行，这台 Mac 排第一；状态点只表达状态
   （在用实心绿点、闲置绿圈、离线灰圈、没在用浅灰点），文字照实说（在用、开着，闲置 N 分钟、离线、没在用 · 上次使用）；离线的原因（可能休眠、断网）
   放在悬停说明里，怎么判断在用、闲置放在「显示细节」里。账号页看得见时一分钟查一次，看不见、换到别的页就停。
+- 侧栏（`Sidebar.swift`）：最上面是几种工具共用的几页——总览、用量统计、折合金额（cca 有它时）、节点分流、客户端更新，切工具时不变；
+  下面是工具切换（Claude / ChatGPT / Antigravity，启用了两种以上才有，`ToolPickerRow`，选不中的一行）和这个工具的账号。切换只管它下面列哪个工具的账号，
+  所以放在账号列表正上方，不放在侧栏顶上（放在顶上像是连上面那几页也跟着换）。一页只放一种图：额度用量（有底槽、填满就是用完）和折合金额
+  （美元没有上限、画纵轴）分成「用量统计」「折合金额」两页，不在一页里切换。
 - 账号的排序和置顶（`AccountArrangement`）：侧栏上下拖、总览里拖到别的卡片上，右键或账号页的「…」置顶。顺序以账号表为准：调整之后 App 写回账号表（`cca reorder`，PROTOCOL 4.7），终端里的菜单和编号也是这个顺序，在终端里改了顺序 App 也跟着变；
   写回之前界面先按拖出来的顺序显示，不等 cca。置顶记在 App 的设置里，账号按 `Account.stableID`（工具 + 账号目录名）认，改别名不丢。分组和总览一样：Claude、ChatGPT、第三方 API（两个工具共用一组，侧栏只显示当前工具的，拖动时只换这几个之间的先后）。置顶的只在置顶的里面挪，拖过界的停在边上。
 - 重新登录（`AppModel.relogin`，`cca [codex] login 账号`，在终端里）：右键或账号页的「…」随时可以；登录还好好的账号先弹窗（它会先退出现在的登录），登录失效的直接去终端。登录失效是查用量时才知道的（`error_code` 是 `auth`，`Diagnosis.loginExpired`）：Claude Code 不说原因（`nolimits`），用量那一行旁边放个「重新登录…」。
@@ -134,7 +139,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   「本周额度还剩 59%，明天 19:55 重置，建议先用这个账号。」，总览卡片右下角、侧栏和菜单栏面板的名字后面一个沙漏（`UseFirstMark`）。沙漏用强调色：
   是提示不是警告（绿是在用，橙、红是问题）；不算进“要处理”。
 - 每周用量（cca 给的 `usage_weeks`，PROTOCOL 2.2）：账号页「用量」下面的「每周用量」（`WeeklyUsage.swift`）是最近 12 周的一排竖条：和额度砖里的用量条（`Meter`）同一种条，只是竖着——灰色的底槽是这一周的额度，从下往上填到用了多少，填满就是用完，和额度砖一样按用了多少上色（绿 / 橙 / 红）；结束前一天没查到的填灰色（实际可能更多；和数据旧了的用量条一样，不靠透明度），中间重置过、超过 100% 的整根高出底槽（哪一段是重置前的 cca 不给，所以不在 100% 处断开）。用得很少时不像横着的条那样至少画一个圆点（竖着的条短，会显得比实际多），填的那段按底槽的形状裁。每根条在它那一周的正中间，日期写在正下方；不画坐标轴、网格线和每根上的数字：鼠标指着一周时那一列垫一层浅底（和卡片、列表行的悬停一样）、下面那一行换成这一周的细节，平时是统计（记下的几周平均用到多少、几周用完、几周没用到一半），读屏每根条都念。侧栏「总览」下面的「用量统计」（`UsageStatsPage.swift`）把官方账号排在一起比：Claude、ChatGPT 各一组，和总览一样的顺序，每个账号一行（头像和名字、小图（同样的竖条，和额度砖里的条一样细）、平均每周、本周），所有行同一个时间范围、同一个纵轴高度（有超过 100% 的就一起抬高），上下对得齐、高低能比；点一行进账号页。第三方 API 账号没有订阅的额度，不在里面。数字和哪一周填灰色都是 cca 给的；以前的用量官方不给，从 cca 开始记的那一周起一周一周长出来。
-- 折合金额（cca 给的 `cost`、`cost_total`，PROTOCOL 2.2、3.5）：按官方 API 的价格把用掉的 token 折成美元，**不是实际花费**：每个图下面一直有一行小字说按谁的价格（Claude 账号 Anthropic、ChatGPT 账号 OpenAI）、价格表是哪天的、订阅不按这个收费。账号页「每周用量」下面的「折合金额」（`CostSection.swift`）和用量统计页的「折合金额」（标题右边切换，`CostStats.swift`）是同一种柱子（`CostBarChart`）：和每周用量的图共用排法（`SlotChart.swift`：一项占它那段时间、柱子在正中间、日期在正下方、悬停垫浅底），柱子的形状也一样（两头圆，很少时按形状裁，不至少画一个圆点），但不填颜色：钱多少没有好坏，柱子一律中性的 `primary` 62%，不用账号色、也不用用量的绿 / 橙 / 红；开始时还没有记录的那一项（`partial`）填灰色（`Meter.dimColor`，和没记全的那一周一样）。美元没有上限、也没有“填满”，所以没有底槽，大图画纵轴：右边三个刻度（0、一半、最高，最高取整齐的数、最高的柱子最多到九成）和很淡的横线（`primary` 8%），账号页上面的「每周用量」在右边留出同样宽的一栏（`AxisColumn`，按同样的刻度撑开），两张图的绘图区一样宽、同一周的条上下对齐；用量统计页每一行的小图只画底下一条线，所有行同一个时间范围、同一个纵轴（才能比高低），小图放不下 120 点时（窗口窄）不画、表头不写日期。两页的标题右边都有同样的两个切换、同样的顺序：「本机 | 所有设备」（`CostScopePicker`：只算这台设备，或者各台设备加起来的整个账号）和「周 | 日」（`CostGranularityPicker`），两页共用一个设置（`AppModel.costScope`、`costGranularity`，记在 App 的设置里），从统计页点进账号页看到的和那一行一样；用量统计页的标题一行放不下时（窗口窄）这两个和「刷新」挪到标题下面一行、右对齐。用量统计页按日时每一行的小图是最近 30 天、右边三栏换成平均每天、今天、30 天合计，顶上的合计按日时多一张 30 天的柱状图（各账号的周期不一样，按周没有加起来的柱子，只有三个数）；看所有设备时有两台以上设备的账号下面缩进、灰字列出各台设备（点一台进账号页），看本机时不列。按周的周期和每周用量的一样（额度窗口，没有的时段按周一零点切），按日是最近 30 天。数字（每一项、平均、合计、本机的那一份、哪一项是灰色、同步的状态）都照 cca 给的，App 只排版、不重算；看所有设备时同步出错、有设备没算进来、很久没同步上来的设备用橙色一行说（统计页在名字后面一个橙色三角），只算了这台设备（不在映射里、关掉了设备统计、服务器还不支持）、还没同步过、没登录这个账号用灰字说；看本机时这些都不说（这台设备自己的数字不经同步）。token、没有公开价格的模型、从什么时候开始有记录放在「显示细节」里。
+- 折合金额（cca 给的 `cost`、`cost_total`，PROTOCOL 2.2、3.5）：按官方 API 的价格把用掉的 token 折成美元，**不是实际花费**：每个图下面一直有一行小字说按谁的价格（Claude 账号 Anthropic、ChatGPT 账号 OpenAI）、价格表是哪天的、订阅不按这个收费。账号页「每周用量」下面的「折合金额」（`CostSection.swift`）和侧栏的「折合金额」页（`CostStats.swift`）是同一种柱子（`CostBarChart`）：和每周用量的图共用排法（`SlotChart.swift`：一项占它那段时间、柱子在正中间、日期在正下方、悬停垫浅底），柱子的形状也一样（两头圆，很少时按形状裁，不至少画一个圆点），但不填颜色：钱多少没有好坏，柱子一律中性的 `primary` 62%，不用账号色、也不用用量的绿 / 橙 / 红；开始时还没有记录的那一项（`partial`）填灰色（`Meter.dimColor`，和没记全的那一周一样）。美元没有上限、也没有“填满”，所以没有底槽，大图画纵轴：右边三个刻度（0、一半、最高，最高取整齐的数、最高的柱子最多到九成）和很淡的横线（`primary` 8%），账号页上面的「每周用量」在右边留出同样宽的一栏（`AxisColumn`，按同样的刻度撑开），两张图的绘图区一样宽、同一周的条上下对齐；折合金额页每一行的小图只画底下一条线，所有行同一个时间范围、同一个纵轴（才能比高低），小图放不下 120 点时（窗口窄）不画、表头不写日期。两页的标题右边都有同样的两个切换、同样的顺序：「本机 | 所有设备」（`CostScopePicker`：只算这台设备，或者各台设备加起来的整个账号）和「周 | 日」（`CostGranularityPicker`），两页共用一个设置（`AppModel.costScope`、`costGranularity`，记在 App 的设置里），从折合金额页点进账号页看到的和那一行一样；折合金额页的标题一行放不下时（窗口窄）这两个和「刷新」挪到标题下面一行、右对齐。折合金额页按日时每一行的小图是最近 30 天、右边三栏换成平均每天、今天、30 天合计，顶上的合计按日时多一张 30 天的柱状图（各账号的周期不一样，按周没有加起来的柱子，只有三个数）；看所有设备时有两台以上设备的账号下面缩进、灰字列出各台设备（点一台进账号页），看本机时不列。按周的周期和每周用量的一样（额度窗口，没有的时段按周一零点切），按日是最近 30 天。数字（每一项、平均、合计、本机的那一份、哪一项是灰色、同步的状态）都照 cca 给的，App 只排版、不重算；看所有设备时同步出错、有设备没算进来、很久没同步上来的设备用橙色一行说（折合金额页在名字后面一个橙色三角），只算了这台设备（不在映射里、关掉了设备统计、服务器还不支持）、还没同步过、没登录这个账号用灰字说；看本机时这些都不说（这台设备自己的数字不经同步）。token、没有公开价格的模型、从什么时候开始有记录放在「显示细节」里。
 - API key（PROTOCOL 4.10）：平时只显示 cca 给的掩码；点眼睛才向 cca 要一次明文（`KeyReveal`，不被观察、不进读屏，30 秒后、再点一下、换账号、
   离开页面时收起来）；「复制」写进剪贴板时标成机密，60 秒后还是它就清掉（`SecretClipboard`），提示里不写 key。官方账号的 key 只是备查。
 - 总览（`OfficePage.swift`，首页，侧栏最上面）：每个账号一张卡片，按 Claude 账号、ChatGPT 账号、Antigravity 账号（启用了才有）、第三方 API 账号分开排，按用户排的顺序（没排过的照账号表）、
@@ -177,7 +182,7 @@ Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测�
                        CostView / CostTexts（折合金额的图怎么排：纵轴的刻度、横轴的范围、写哪些日期；金额、token 数和提示的文字）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、总览（OfficePage；插画 DeskArt）、
                        套餐徽章（PlanBadge）、账号页（AccountDetail：页头；
-                       UsageCard：用量；WeeklyUsage：每周用量的图（一排竖着的用量条）；CostSection：折合金额的一节和柱状图（CostBarChart）；SlotChart：按时间排的柱状图的骨架（每周用量、折合金额共用）和纵轴那一栏（AxisColumn）；APIKeySection：API key 那一行和第三方 API 账号的一节；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、用量统计（UsageStatsPage；折合金额模式 CostStats）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
+                       UsageCard：用量；WeeklyUsage：每周用量的图（一排竖着的用量条）；CostSection：折合金额的一节和柱状图（CostBarChart）；SlotChart：按时间排的柱状图的骨架（每周用量、折合金额共用）和纵轴那一栏（AxisColumn）；APIKeySection：API key 那一行和第三方 API 账号的一节；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、用量统计（UsageStatsPage）、折合金额（CostStats）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
                        可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
@@ -194,7 +199,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   title / question / detail / severity / default），同意了带上 `CCA_GRANT` 重跑。后台自动刷新用量不弹框：记下来显示一条横幅，点了再手动刷新。
 - **闸门**：同一个账号（工具 + 键）的 app / web / 改别名排队，key --show / --forget 也是（查设备由 AppModel 保证同一个账号一次一个）；每个工具的 usage 一次一个；同一个账号的重置额度一次一个；router sync 全局一个；
   更新 cca（`update 版本号`）和 gui update 全局一个（一个接着一个）。`cca codex …` 只在 `hello.tools.codex.enabled` 为真时运行。
-- **刷新**：用量自动刷新不管看不看得见（`Scheduler` 每分钟看一眼，`UsagePolling` 只挑到期的账号，到期了才起进程）：在用的账号看得见时 5 分钟一次、看不见时 10 分钟，没在用的看得见时 8 分钟、看不见时 1 小时，低电量模式慢一倍；用户 15 分钟没碰电脑、系统过热时不查，查失败也按间隔重试。登录失效的账号慢下来（看得见时 15 分钟、看不见时 1 小时），点了“重新登录”之后的 15 分钟里每分钟查一次，登录一完成就看得到。网络出口也定时检测（同一个定时器，`ExitPolling`，`cca [codex] check 这几个账号`，比查用量慢得多：在用的账号看得见时半小时、看不见时 1 小时，没在用的 2 小时、4 小时，低电量模式慢一倍；一次最多 6 个，最久没测的先测；没登录的账号不测；正在查用量时等下一分钟；不弹框、不占用账号的按钮）。自动刷新和后台检查客户端更新都以 utility 优先级运行（子进程继承），定时器带容差。折合金额（`cca cost sync --json`，PROTOCOL 3.5，`CostPolling`）跟着同一个定时器：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（用量统计页的金额模式、有「折合金额」的账号页）5 分钟一次、看不见 30 分钟一次，还没统计过（`scan.state` 是 `never`）马上一次；用户走开了、过热时不跑，没统计成按间隔重试、原因写在那一节下面；「刷新」带 `--now`、不降优先级。分流页开着时 live 每 60 秒。总览不定时查 live
+- **刷新**：用量自动刷新不管看不看得见（`Scheduler` 每分钟看一眼，`UsagePolling` 只挑到期的账号，到期了才起进程）：在用的账号看得见时 5 分钟一次、看不见时 10 分钟，没在用的看得见时 8 分钟、看不见时 1 小时，低电量模式慢一倍；用户 15 分钟没碰电脑、系统过热时不查，查失败也按间隔重试。登录失效的账号慢下来（看得见时 15 分钟、看不见时 1 小时），点了“重新登录”之后的 15 分钟里每分钟查一次，登录一完成就看得到。网络出口也定时检测（同一个定时器，`ExitPolling`，`cca [codex] check 这几个账号`，比查用量慢得多：在用的账号看得见时半小时、看不见时 1 小时，没在用的 2 小时、4 小时，低电量模式慢一倍；一次最多 6 个，最久没测的先测；没登录的账号不测；正在查用量时等下一分钟；不弹框、不占用账号的按钮）。自动刷新和后台检查客户端更新都以 utility 优先级运行（子进程继承），定时器带容差。折合金额（`cca cost sync --json`，PROTOCOL 3.5，`CostPolling`）跟着同一个定时器：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（折合金额页、有「折合金额」的账号页）5 分钟一次、看不见 30 分钟一次，还没统计过（`scan.state` 是 `never`）马上一次；用户走开了、过热时不跑，没统计成按间隔重试、原因写在那一节下面；「刷新」带 `--now`、不降优先级。分流页开着时 live 每 60 秒。总览不定时查 live
   （端口连不上、选错节点的账号看它）：切到总览、主窗口变得看得见时，上次的超过 2 分钟才查一次；分流页、总览开着时操作完（同步路由器等）也查。变得看得见时，有账号的用量过期或超过
   5 分钟就刷新。FSEvents 只当信号（accounts.json、codex.json、config.json、*/usage.json、*/health.json、命令行会话的登记 accounts/*/cli-<数字>.json、
   policy/policy.json、折合金额的 cost/local.json、cost/remote.json、cost/sync.json → state；bin/cca → hello；

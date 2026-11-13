@@ -164,6 +164,35 @@ struct StatsMark: View {
     }
 }
 
+/// “折合金额”的图标：美元符号（一笔 S，上下各露出一小截竖线）。和用量统计、客户端更新的图标一套画法（粗圆的线，线宽是边长的 0.15，
+/// 不带底），S 以 (0.5, 0.5) 中心对称；颜色是 Logo 的琥珀渐变到玫红（左上角先掺一点白）：Logo 末端的暖色，钱的意思，和别的几个图标分得开。
+struct CostMark: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        Canvas { ctx, s in
+            let w = s.width
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x * w, y: y * w) }
+            var g = Path()
+            g.move(to: p(0.71, 0.30))                                                                    // S：右上的收笔
+            g.addCurve(to: p(0.50, 0.21), control1: p(0.68, 0.24), control2: p(0.60, 0.21))
+            g.addCurve(to: p(0.29, 0.355), control1: p(0.39, 0.21), control2: p(0.29, 0.27))
+            g.addCurve(to: p(0.50, 0.50), control1: p(0.29, 0.44), control2: p(0.40, 0.475))
+            g.addCurve(to: p(0.71, 0.645), control1: p(0.60, 0.525), control2: p(0.71, 0.56))
+            g.addCurve(to: p(0.50, 0.79), control1: p(0.71, 0.73), control2: p(0.61, 0.79))
+            g.addCurve(to: p(0.29, 0.70), control1: p(0.40, 0.79), control2: p(0.32, 0.76))
+            g.move(to: p(0.50, 0.08)); g.addLine(to: p(0.50, 0.21))                                  // 上下露出的竖线
+            g.move(to: p(0.50, 0.79)); g.addLine(to: p(0.50, 0.92))
+            let shade = Gradient(stops: [.init(color: Brand.amber.mix(with: .white, by: 0.25), location: 0),
+                                         .init(color: Brand.amber, location: 0.35), .init(color: Brand.rose, location: 1)])
+            ctx.stroke(g, with: .linearGradient(shade, startPoint: p(0.15, 0), endPoint: p(0.85, 1)),
+                       style: StrokeStyle(lineWidth: w * 0.15, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 /// 周结算提醒的沙漏（侧栏、菜单栏的账号行，名字后面）：本周额度快重置了、还剩不少，建议先用这个账号。
 /// 用强调色：是提示不是警告（绿是在用，橙、红是问题）。悬停和读屏是同一句话；到了重置时间自己消失（每分钟按时间重算）。
 struct UseFirstMark: View {

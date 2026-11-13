@@ -2,7 +2,7 @@
 
 App 账号页里的“设备”一节来自这里：映射里的账号在某台 Mac 上经 cca 使用时（命令行会话、`cca app` 打开的桌面 App），那台 Mac 会报告给这台服务器。
 官方账号记下的 API key（`cca key 账号`、App 的「记录 API key…」）也经它同步给登录了这个账号的其他设备：设备只传密文，服务器存着转交，解不开。
-App「用量统计」里的折合金额（按官方 API 标价折算的用量）也一样：每台设备算自己的，经它交换密文，账号的合计才包括所有设备。
+App 的「折合金额」（按官方 API 标价折算的用量）也一样：每台设备算自己的，经它交换密文，账号的合计才包括所有设备。
 
 - 部署和更新：在 cca 的仓库里运行 `./policy.sh presence deploy root@主机`。它把这个目录装到服务器的 `/root/projects/cca-presence`，`--dir` 可以换位置。然后运行 `docker compose up -d`，把地址、证书公钥的指纹和盐写进映射目录的 `policy.json`，再推送设备清单。之后照常 `./policy.sh 映射目录` 发布映射。
 - 设备清单：`./policy.sh presence sync`。它把各台机器的 deploy key 用发布密钥签名（命名空间 `cca-devices`）推给服务器，`./policy.sh key add/rm/mv` 之后会自动推。服务器只认这份清单里的机器。

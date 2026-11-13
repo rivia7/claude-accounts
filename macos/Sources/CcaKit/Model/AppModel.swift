@@ -1,12 +1,14 @@
 import Foundation
 import Observation
 
-/// 侧栏选中的东西：办公室（首页，所有账号一眼看全）、某个账号、节点分流。
+/// 侧栏选中的东西：办公室（首页，所有账号一眼看全）、某个账号、用量统计、折合金额、节点分流、客户端更新。
 enum SidebarItem: Hashable, Sendable {
     case office
     case account(AccountRef)
     /// 用量统计：所有官方账号每周用了多少，放在一起比
     case usageStats
+    /// 折合金额：所有官方账号用掉的 token 按官方 API 的价格折成美元，放在一起比（cca 有折合金额时才有这一项）
+    case costStats
     case routing
     case clientUpdates
 
@@ -160,7 +162,7 @@ final class AppModel {
     private(set) var costFailure: String?
     /// 上次跑 `cost sync` 的时间（没成也按间隔重试，见 CostPolling）
     @ObservationIgnored private var costAttempted: Double?
-    /// 用量统计页点了一行：打开账号页、滚到「折合金额」那一节（账号页滚过去以后清掉）
+    /// 折合金额页点了一行：打开账号页、滚到「折合金额」那一节（账号页滚过去以后清掉）
     var costFocus: AccountRef?
     /// 「更新并重新打开」做到哪一步了：先把 cca 换成检查更新找到的新版本（`cca update 版本号`），再下载和它同版本的 App
     /// （`cca gui update`）；cca 已经比 App 新时只有后一步。
@@ -221,16 +223,7 @@ final class AppModel {
         }
     }
 
-    /// 用量统计页看哪种：额度用量 / 折合金额
-    var statsMode: StatsMode = .quota {
-        didSet {
-            guard statsMode != oldValue else { return }
-            defaults.set(statsMode.rawValue, forKey: Prefs.statsMode)
-            startDueCostSync()   // 切到金额：上次统计过了 5 分钟就再统计一次
-        }
-    }
-
-    /// 折合金额按周还是按天看（账号页、用量统计页共用：从用量统计页点进账号页，看到的和那一行一样）
+    /// 折合金额按周还是按天看（账号页、折合金额页共用：从折合金额页点进账号页，看到的和那一行一样）
     var costGranularity: CostGranularity = .week {
         didSet {
             guard costGranularity != oldValue else { return }
@@ -318,9 +311,7 @@ final class AppModel {
         static let terminalDirectories = "terminal.directories"
         /// 账号在各组里的排序和置顶（AccountArrangement 的 JSON）
         static let arrangement = "accounts.arrangement"
-        /// 用量统计页看额度用量还是折合金额（StatsMode）
-        static let statsMode = "stats.mode"
-        /// 折合金额按周还是按天（CostGranularity）、看本机还是所有设备（CostScope）：账号页、用量统计页共用
+        /// 折合金额按周还是按天（CostGranularity）、看本机还是所有设备（CostScope）：账号页、折合金额页共用
         static let costGranularity = "cost.period"
         static let costScope = "cost.scope"
         /// 各工具上次看的账号（侧栏换工具时选中它）
@@ -359,7 +350,6 @@ final class AppModel {
         }
         if let transport = self.transport { client = CcaClient(transport: transport) }
         if let t = defaults.string(forKey: Prefs.tool) { tool = ToolID(rawValue: t) }
-        if let m = defaults.string(forKey: Prefs.statsMode).flatMap(StatsMode.init(rawValue:)) { statsMode = m }
         if let g = defaults.string(forKey: Prefs.costGranularity).flatMap(CostGranularity.init(rawValue:)) { costGranularity = g }
         if let v = defaults.string(forKey: Prefs.costScope).flatMap(CostScope.init(rawValue:)) { costScope = v }
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
@@ -1396,11 +1386,11 @@ final class AppModel {
     /// 有能统计的账号：`cost_total` 不是 null（没关掉、有 Claude / Codex 的官方账号）。这时才显示金额、才跑 `cost sync`
     var costEnabled: Bool { costAvailable && state?.costTotal != nil }
 
-    /// 看得见金额：用量统计页的金额模式，或者有「折合金额」一节的账号页（主窗口开着时）
+    /// 看得见金额：折合金额页，或者有「折合金额」一节的账号页（主窗口开着时）
     var costVisible: Bool {
         guard mainVisible, costEnabled else { return false }
         switch selection {
-        case .usageStats?: return statsMode == .cost
+        case .costStats?: return true
         case .account(let r)?: return account(r)?.can.cost == true
         default: return false
         }
@@ -1416,13 +1406,13 @@ final class AppModel {
         return s == .scanning || (s == .never && costSyncing)
     }
 
-    /// 用量统计页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」（按周还是按天、本机还是所有设备两页共用，不用另设）
+    /// 折合金额页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」（按周还是按天、本机还是所有设备两页共用，不用另设）
     func showCost(_ ref: AccountRef) {
         costFocus = ref
         show(ref)
     }
 
-    /// 用量统计页金额模式的分组：有折合金额的工具（`features.cost`）里 `can.cost` 的官方账号，和总览一样按用户排的顺序；
+    /// 折合金额页的分组：有折合金额的工具（`features.cost`）里 `can.cost` 的官方账号，和总览一样按用户排的顺序；
     /// 一个都没有的组不列
     func costGroups() -> [AccountGroup] {
         visibleTools.filter { features($0).cost }.map { Employee.Department.official($0) }
@@ -1782,7 +1772,7 @@ final class AppModel {
         scheduler.update(visible: isVisible, routingVisible: routingVisible)
         reconcileDevicesPolling()
         guard phase == .ready else { return }
-        startDueCostSync()   // 刚看到金额（打开用量统计页的金额模式、账号页）：上次统计过了 5 分钟就再统计一次
+        startDueCostSync()   // 刚看到金额（打开折合金额页、账号页）：上次统计过了 5 分钟就再统计一次
         if isVisible && !wasVisible {
             if helloDirty {
                 helloDirty = false
@@ -2044,6 +2034,9 @@ final class AppModel {
         switch selection {
         case .office?, .usageStats?, .routing?, .clientUpdates?:
             return
+        case .costStats?:
+            // 侧栏只在 cca 有折合金额时列这一页：换成了没有它的旧版 cca 就回总览
+            if !costAvailable { selection = .office }
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }
             // 正在改名：旧键没了是改名的结果，改名完成后会换成新键（rename）

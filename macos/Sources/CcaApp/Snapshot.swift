@@ -85,35 +85,30 @@ enum Snapshot {
                 m.selection = .clientUpdates
             },
             Scene(name: "stats") { m in
-                m.statsMode = .quota
                 m.selection = .usageStats
             },
-            // 折合金额：用量统计页的金额模式（所有设备按周、宽窗口、按日、本机），账号页的「折合金额」（按周、按日、本机、还没有记录、ChatGPT 账号）。
+            // 折合金额：侧栏的「折合金额」页（所有设备按周、宽窗口、按日、本机），账号页的「折合金额」（按周、按日、本机、还没有记录、ChatGPT 账号）。
             // 本机 / 所有设备、按周 / 按日是两页共用的设置，每个场景都自己设好
-            Scene(name: "stats-cost") { m in
+            Scene(name: "cost") { m in
                 m.costScope = .all
                 m.costGranularity = .week
-                m.statsMode = .cost
-                m.selection = .usageStats
+                m.selection = .costStats
             },
-            Scene(name: "stats-cost-wide") { m in
+            Scene(name: "cost-wide") { m in
                 window.setContentSize(NSSize(width: 1680, height: 1000))
                 m.costScope = .all
                 m.costGranularity = .week
-                m.statsMode = .cost
-                m.selection = .usageStats
+                m.selection = .costStats
             },
-            Scene(name: "stats-cost-day") { m in
+            Scene(name: "cost-day") { m in
                 m.costScope = .all
                 m.costGranularity = .day
-                m.statsMode = .cost
-                m.selection = .usageStats
+                m.selection = .costStats
             },
-            Scene(name: "stats-cost-me") { m in
+            Scene(name: "cost-me") { m in
                 m.costScope = .me
                 m.costGranularity = .week
-                m.statsMode = .cost
-                m.selection = .usageStats
+                m.selection = .costStats
             },
             Scene(name: "account-cost") { m in
                 m.costScope = .all

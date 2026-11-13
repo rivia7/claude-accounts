@@ -241,7 +241,7 @@ extension Texts {
         "上次和别的设备同步：" + pastTime(epoch, now: now, calendar: calendar)
     }
 
-    /// 设备的叫法（用量统计页各台设备那一行）：这台设备「studio-mac（这台）」，撤销了的「old-mini（已撤销）」
+    /// 设备的叫法（折合金额页各台设备那一行）：这台设备「studio-mac（这台）」，撤销了的「old-mini（已撤销）」
     static func costDeviceName(_ d: CostDevice) -> String {
         d.name + (d.isMe ? "（这台）" : d.revoked ? "（已撤销）" : "")
     }
@@ -254,7 +254,7 @@ extension Texts {
         return scan.updatedEpoch.map { agoPhrase(now - $0) + "统计" }
     }
 
-    /// 认不出是哪个账号的用量（用量统计页的合计下面）：没有时是 nil
+    /// 认不出是哪个账号的用量（折合金额页的合计下面）：没有时是 nil
     static func costUnattributed(_ u: CostUnattributed?, currency: String) -> String? {
         guard let u else { return nil }
         let what: String

@@ -521,7 +521,7 @@ struct CostTotalPart: Decodable, Sendable, Equatable {
     var today: CostPeriod? { days.last(where: \.current) }
 }
 
-/// `cost_total`（顶层，用量统计页金额模式的页头）：所有账号加起来。各账号的周期不一样，没有按周加起来的柱子。
+/// `cost_total`（顶层，折合金额页的页头）：所有账号加起来。各账号的周期不一样，没有按周加起来的柱子。
 /// config.json 里关掉了折合金额、没有 Claude / Codex 的官方账号时为 null（旧版 cca 没有这个字段，同样当作 null）。
 struct CostTotal: Decodable, Sendable, Equatable {
     var currency: String

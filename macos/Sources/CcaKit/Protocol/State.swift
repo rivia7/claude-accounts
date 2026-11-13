@@ -37,7 +37,7 @@ struct StateDoc: CcaDocument, Equatable {
     var config: StateConfig?
     var routing: Routing?
     var tools: [ToolState]
-    /// 所有账号的折合金额加起来（用量统计页金额模式的页头，PROTOCOL 2.2）：关掉了、没有 Claude / Codex 的官方账号时为 nil，旧版 cca 没有
+    /// 所有账号的折合金额加起来（折合金额页的页头，PROTOCOL 2.2）：关掉了、没有 Claude / Codex 的官方账号时为 nil，旧版 cca 没有
     var costTotal: CostTotal?
 
     enum CodingKeys: String, CodingKey {
@@ -643,7 +643,7 @@ struct Can: Decodable, Sendable, Equatable {
     var devices: Bool = false
     /// 能不能记下 / 显示 / 复制 API key（`cca [codex] key`，PROTOCOL 4.10；旧版 cca 没有这一项，当作不能）
     var apiKey: Bool = false
-    /// 账号页有没有「折合金额」一节、用量统计页的金额模式里有没有这一行（Claude、Codex 的官方账号，没登录的也有；
+    /// 账号页有没有「折合金额」一节、折合金额页里有没有这一行（Claude、Codex 的官方账号，没登录的也有；
     /// PROTOCOL 2.2）。旧版 cca 没有这一项，当作没有
     var cost: Bool = false
 

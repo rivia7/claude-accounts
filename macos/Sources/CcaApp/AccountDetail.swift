@@ -46,7 +46,7 @@ struct AccountDetail: View {
                     .padding(.bottom, 36)
                     .pageColumn()
                 }
-                // 用量统计页点了这个账号（金额模式）：滚到「折合金额」。id 是“要滚的是不是这个账号”：这一页换账号时
+                // 折合金额页点了这个账号：滚到「折合金额」。id 是“要滚的是不是这个账号”：这一页换账号时
                 // costFocus 和 ref 不一定在同一次更新里变，只看 costFocus 会拿着上一个账号的 ref 跑完、之后不再跑
                 .task(id: model.costFocus == ref) {
                     guard model.costFocus == ref else { return }

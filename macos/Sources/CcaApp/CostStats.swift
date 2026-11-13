@@ -1,10 +1,67 @@
 import SwiftUI
 
-/// 用量统计页的「折合金额」（UsageStatsPage 标题右边切过来）：按官方 API 的价格，把每个账号用掉的 token 折成美元放在一起比。
-/// 不是实际花费：订阅不按这个收费。标题右边可以切本机 / 所有设备、按周 / 按日（和账号页的「折合金额」共用一个设置）。
-/// 顶上是所有账号加起来的（cca 给的 `cost_total`，本机时是它的 `me`：按周是本周、平均每周、近 12 周合计；按日是今天、平均每天、
-/// 近 30 天合计和最近 30 天每天一根柱子；启用了两种工具时分开列），下面每个账号一行，和额度用量一样按 Claude、ChatGPT 分组、
-/// 按用户排的顺序：名字、小柱子（最近 12 周每周一根或者最近 30 天每天一根，所有行同一个时间范围、同一个纵轴，高低才能比）、
+/// 折合金额（侧栏的「折合金额」）：按官方 API 的价格，把每个账号用掉的 token 折成美元放在一起比。不是实际花费：订阅不按这个收费。
+/// 和用量统计分开两页：钱没有额度、没有“填满”，图不一样（不画底槽，按纵轴的刻度比高低）。
+/// 标题右边是本机 / 所有设备、按周 / 按日（和账号页的「折合金额」共用一个设置）和「刷新」：一行放不下时（窗口窄）这三个挪到标题下面一行，右对齐。
+struct CostStatsPage: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ScrollView {
+            TimelineView(.periodic(from: .now, by: 60)) { ctx in
+                let now = ctx.date.timeIntervalSince1970
+                VStack(alignment: .leading, spacing: 26) {
+                    header(now: now)
+                    CostStatsContent(now: now)
+                }
+                .padding(.top, 24)
+                .padding(.bottom, 36)
+                .pageColumn()
+            }
+        }
+        .navigationTitle("折合金额")
+    }
+
+    /// 标题和一句说明（数字是什么、多久以前统计的）；有能统计的账号时右边是三个控件
+    private func header(now: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if model.costEnabled {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        StatsPageTitle(text: "折合金额")
+                        Spacer(minLength: 8)
+                        controls
+                    }
+                    VStack(alignment: .trailing, spacing: 10) {
+                        StatsPageTitle(text: "折合金额")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 10) { controls }
+                    }
+                }
+            } else {
+                StatsPageTitle(text: "折合金额")
+            }
+            Text(CostStatsContent.subtitle(model.state?.costTotal, scanning: model.costScanning, now: now))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 和账号页「折合金额」的标题上一样的两个切换（两页共用一个设置）、一样的顺序，和「刷新」
+    @ViewBuilder
+    private var controls: some View {
+        CostScopePicker()
+        CostGranularityPicker()
+        SectionAction(model.costRefreshing ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshCost() }
+            .disabled(model.costRefreshing)
+            .help("现在统计一次，再和各个账号的其他设备同步")
+    }
+}
+
+/// 折合金额页的内容：顶上是所有账号加起来的（cca 给的 `cost_total`，本机时是它的 `me`：按周是本周、平均每周、近 12 周合计；
+/// 按日是今天、平均每天、近 30 天合计和最近 30 天每天一根柱子；启用了两种工具时分开列），下面每个账号一行，和用量统计一样按 Claude、
+/// ChatGPT 分组、按用户排的顺序：名字、小柱子（最近 12 周每周一根或者最近 30 天每天一根，所有行同一个时间范围、同一个纵轴，高低才能比）、
 /// 平均、本周（今天）、合计；看所有设备时，有两台以上设备的账号下面缩进列出各台设备。点一行打开账号页的「折合金额」。
 /// 数字都是 cca 给的，App 只排版。
 struct CostStatsContent: View {
@@ -23,7 +80,7 @@ struct CostStatsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
-            TipCard(id: "usage-stats-cost", title: "折合金额怎么看",
+            TipCard(id: "cost-stats-page", title: "这一页怎么看",
                     message: "按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
                         + "右上角切换只看这台设备（本机）还是各台设备加起来（所有设备），按周还是按天看。"
                         + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"
@@ -121,7 +178,7 @@ private struct CostStatsScale {
     var empty: String { granularity == .week ? "最近 12 周没有用量" : "最近 30 天没有用量" }
 }
 
-/// 每一行的几栏有多宽（表头和各组的行共用，上下对齐；小图占剩下的宽度）。间距、左右内边距和额度用量的表一样
+/// 每一行的几栏有多宽（表头和各组的行共用，上下对齐；小图占剩下的宽度）。间距、左右内边距和用量统计的表一样
 private enum CostStatsColumns {
     static let name: CGFloat = 176
     static let average: CGFloat = 76
@@ -241,7 +298,7 @@ private struct CostTotalTile: View {
     }
 }
 
-/// 表头：账号、小图的时间刻度（和额度用量的表头一样；按日时每隔几天一个日期；不画小图时空着）、平均、本周（今天）、合计。
+/// 表头：账号、小图的时间刻度（和用量统计的表头一样；按日时每隔几天一个日期；不画小图时空着）、平均、本周（今天）、合计。
 private struct CostStatsHeader: View {
     let scale: CostStatsScale
     let now: Double
@@ -284,7 +341,7 @@ private struct CostStatsGroup: View {
             VStack(spacing: 0) {
                 ForEach(Array(group.accounts.enumerated()), id: \.element.id) { i, a in
                     if i > 0 { Divider().padding(.horizontal, CostStatsColumns.inset) }
-                    CostStatsRow(account: a, scale: scale, now: now, charts: charts)
+                    CostAccountRow(account: a, scale: scale, now: now, charts: charts)
                     if scale.scope == .all, let c = a.cost, CostChart.listsDevices(c) {
                         VStack(spacing: 0) {
                             ForEach(c.devices) { d in
@@ -336,7 +393,7 @@ private struct CostStatsChart: View {
     }
 }
 
-/// 右边三栏：平均（和额度用量的表一样加粗）、本周（今天）、合计。设备那几行用灰字
+/// 右边三栏：平均（和用量统计的表一样加粗）、本周（今天）、合计。设备那几行用灰字
 private struct CostStatsFigures: View {
     let summary: CostSummary?
     let currency: String
@@ -360,7 +417,7 @@ private struct CostStatsFigures: View {
 
 /// 一个账号一行：点了进账号页的「折合金额」。看所有设备、数字没算全（同步出错、有设备没算进来、很久没同步上来）时名字后面一个橙色的三角，
 /// 原因在悬停提示和读屏里。看本机时是这台设备的数字（它没有这个账号的记录时是 0）
-private struct CostStatsRow: View {
+private struct CostAccountRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
     let scale: CostStatsScale

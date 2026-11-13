@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 侧栏：工具切换（Claude / ChatGPT / Antigravity），最上面是办公室（首页，所有账号一眼看全）、用量统计、节点分流和客户端更新（两种工具共用的），
-/// 下面是这个工具的账号（花名册）。
+/// 侧栏：最上面是几种工具共用的几页：总览（首页，所有账号一眼看全）、用量统计、折合金额（cca 有它时）、节点分流、客户端更新；
+/// 下面是工具切换（Claude / ChatGPT / Antigravity，只管它下面列哪个工具的账号）和这个工具的账号（花名册）。
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
 
@@ -13,10 +13,19 @@ struct Sidebar: View {
                     .tag(SidebarItem.office)
                 UsageStatsRow()
                     .tag(SidebarItem.usageStats)
+                if model.costAvailable {
+                    CostStatsRow()
+                        .tag(SidebarItem.costStats)
+                }
                 RoutingRow()
                     .tag(SidebarItem.routing)
                 ClientUpdatesRow()
                     .tag(SidebarItem.clientUpdates)
+            }
+            if model.visibleTools.count > 1 {
+                Section {
+                    ToolPickerRow()
+                }
             }
             let groups = model.accountGroups(model.tool)
             ForEach(groups) { g in
@@ -24,23 +33,30 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if model.visibleTools.count > 1 {
-                Picker("工具", selection: $model.tool) {
-                    ForEach(model.visibleTools, id: \.self) { t in
-                        Text(Texts.product(t)).tag(t)
-                    }
-                }
-                .labelsHidden()
-                .toolPickerStyle()
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
         }
         .frame(minWidth: 250)
+    }
+}
+
+/// 工具切换（Claude / ChatGPT / Antigravity）：只换下面列哪个工具的账号（上面那几页几种工具共用，不跟着变），所以放在账号列表的正上方。
+/// 这一行不带 tag：选不中，点的只是切换本身。
+private struct ToolPickerRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Picker("工具", selection: $model.tool) {
+            ForEach(model.visibleTools, id: \.self) { t in
+                Text(Texts.product(t)).tag(t)
+            }
+        }
+        .labelsHidden()
+        .toolPickerStyle()
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+        .help("切换下面列出哪种工具的账号")
     }
 }
 
@@ -210,16 +226,31 @@ struct OfficeRow: View {
 
 }
 
-/// 用量统计那一行：自己的图标（StatsMark，和总览、客户端更新一套画法）。cca 有折合金额时第二行也提它。
+/// 用量统计那一行：自己的图标（StatsMark，和总览、客户端更新一套画法）。
 struct UsageStatsRow: View {
-    @Environment(AppModel.self) private var model
-
     var body: some View {
         HStack(spacing: 10) {
             StatsMark(size: 22).frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text("用量统计").font(.body.weight(.medium))
-                Text(model.costEnabled ? "每周用了多少、折合多少钱" : "每个账号每周用了多少")
+                Text("每个账号每周用了多少")
+                    .font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+        }
+        .sidebarRowPadding()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 折合金额那一行：自己的图标（CostMark，和用量统计一套画法）。只在 cca 有折合金额时列（Sidebar）。
+struct CostStatsRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            CostMark(size: 23).frame(width: 30, height: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("折合金额").font(.body.weight(.medium))
+                Text("按官方 API 的价格折成美元")
                     .font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)

@@ -187,7 +187,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `devices` 是账号页有没有「设备」一节（3.4）：映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
   config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
   `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
-  `cost` 是账号页有没有「折合金额」一节、用量统计页的金额模式里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
+  `cost` 是账号页有没有「折合金额」一节、折合金额页里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
   config.json 里没写 `"cost": false`。没登录的也是 true（照样显示以前记下的）。同样没有对应的 `can_why`；旧版 cca 没有这一项，当作没有。
 - `api_key`：存没存 API key（4.10）。官方账号的是**记下备查**的（比如控制台里建的 key：只存进这台 Mac 的钥匙串，cca 绝不拿它登录或启动账号，
   那样会变成按量计费）；第三方 API 账号的是启动要用的那把。`saved`：存了没有（第三方 API 账号换了服务商、和存的时候域名不一样的算没存）；
@@ -226,7 +226,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （一周都没过完时为 null），`maxed` 用完（100% 及以上）的几周，`under_half` 没用到一半的几周。
 
   App 只排版、不重算：条的高低、哪一周填灰色、统计的数字都照这里的。
-- `cost`：折合金额（账号页的「折合金额」、用量统计页的金额模式）：这个账号用 Claude Code / Codex 干的活，按官方 API 的标价折成美元，
+- `cost`：折合金额（账号页的「折合金额」、侧栏的「折合金额」页）：这个账号用 Claude Code / Codex 干的活，按官方 API 的标价折成美元，
   **不是实际花费**（订阅不按这个收费），只给 `can.cost` 为真的账号。cca 在后台读共享的会话记录（`~/.claude/projects`、`~/.codex/sessions`，
   只取用量数字），按登录的账号身份、按小时累计，价格表写在 cca 里（`prices_date` 是核实价格的日期）。映射里的官方账号、开着设备统计时，
   各台设备算的加密后经设备统计的服务器交换（`sync`），这里是所有设备加起来的。还没有任何记录（还没统计过、这个账号没用过）为 null。
@@ -313,7 +313,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `{"code": "policy_added", "tool", "key", "node"}`、`{"code": "policy_alias", "tool", "key"（新键）, "old_key"}`、
 `{"code": "policy_pinned", "tool", "key", "node", "old_node"}`、`{"code": "nodes_filled", "node"}`。
 
-`cost_total`（顶层，用量统计页金额模式的页头）：所有账号的折合金额加起来。config.json 里写了 `"cost": false`、没有 Claude / Codex 的官方账号时为 null
+`cost_total`（顶层，折合金额页的页头）：所有账号的折合金额加起来。config.json 里写了 `"cost": false`、没有 Claude / Codex 的官方账号时为 null
 （旧版 cca 没有这个字段，同样当作 null）。
 
 ```json
@@ -520,7 +520,7 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
   还没到重试的时候；`--now` 不等）。每个账号的同步状态在 `_gui state` 的 `cost.sync`。
 - 退出码：0 统计好了（同步失败也是 0，看 `sync`）；1 没统计成（`fail` 事件的 `code` 是 `cost_unavailable`，`message` 是原因，比如读不了、
   另一个统计一直没结束）；2 用不了（`cost_off`：config.json 里写了 `"cost": false`，或者没有 Claude / Codex 的官方账号）。
-- App 何时运行：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（用量统计页的金额模式、账号页的「折合金额」）时每 5 分钟一次，
+- App 何时运行：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（折合金额页、账号页的「折合金额」）时每 5 分钟一次，
   看不见时每 30 分钟一次（低优先级；用户 15 分钟没碰电脑、过热时不跑）；`scan.state` 是 `never` 时马上跑一次。用户点「刷新」时带 `--now`，不降优先级。
   会话结束、`cca usage`、`cca devices` 时 cca 自己也会在后台统计（最多 5 分钟一次），App 看 `cost/local.json`、`remote.json`、`sync.json` 变了就重读 `state`（见 1）。
 
