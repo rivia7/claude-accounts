@@ -22,6 +22,7 @@ class SharedState(unittest.TestCase):
         self.cca = self.home / '.cca'
         self.write_json(self.cca / 'accounts.json', dict.fromkeys(ACCOUNTS, 'US-A'))
         self.write_json(self.cca / 'codex.json', dict.fromkeys(ACCOUNTS, 'US-A'))
+        self.write_json(self.cca / 'agy.json', dict.fromkeys(ACCOUNTS, 'US-A'))
         self.write_json(self.home / '.claude.json', {
             'theme': 'dark', 'userID': 'a' * 64, 'machineID': 'b' * 64,
             'oauthAccount': {'emailAddress': 'default@example.com'},
@@ -54,13 +55,13 @@ class SharedState(unittest.TestCase):
     def directory(self, tool, key=ACCOUNTS[0]):
         ident = re.sub('[^a-z0-9]+', '-', key).strip('-')[:20].strip('-')
         ident += '-' + hashlib.sha1(key.encode()).hexdigest()[:6]
-        return self.cca / ('codex/accounts' if tool == 'codex' else 'accounts') / ident
+        return self.cca / {'codex': 'codex/accounts', 'agy': 'agy/accounts'}.get(tool, 'accounts') / ident
 
     def client(self, tool, key=ACCOUNTS[0]):
-        return self.directory(tool, key) / tool
+        return self.directory(tool, key) / ('gemini' if tool == 'agy' else tool)
 
     def master(self, tool):
-        return self.home / ('.' + tool)
+        return self.home / ('.gemini' if tool == 'agy' else '.' + tool)
 
     def identities(self, tool):
         return [(self.directory(tool, key) / 'device.json').read_bytes() for key in ACCOUNTS]
@@ -70,7 +71,7 @@ class SharedState(unittest.TestCase):
             self.run_cca(tool, key=key)
 
     def assert_saved_conflict(self, tool, key, original, stderr):
-        root = self.cca / ('codex' if tool == 'codex' else '')
+        root = self.cca / (tool if tool in ('codex', 'agy') else '')
         conflicts = root / 'conflicts' / self.directory(tool, key).name
         copies = [p for p in conflicts.rglob('*') if p.is_file() and p.read_text() == original]
         self.assertTrue(copies, '完整账号副本未保存在 %s' % conflicts)
@@ -322,6 +323,40 @@ class SharedState(unittest.TestCase):
         self.assertFalse(master.exists())
         self.assertFalse((self.client('claude', ACCOUNTS[1]) / 'settings.json').exists())
         self.assert_saved_conflict('claude', ACCOUNTS[0], broken, result.stderr)
+
+    def test_blank_json_placeholder_is_shared_without_conflict(self):
+        # agy 第一次运行时在 config/ 里建一个 0 字节的 mcp_config.json：退出时并回 ~/.gemini、链接上，不算冲突
+        name = 'config/mcp_config.json'
+        master, conflicts = self.master('agy') / name, self.cca / 'agy' / 'conflicts'
+        self.link_both('agy')   # 这时 ~/.gemini 里还没有它：两个账号的基线都是“没有”
+        self.assertFalse(master.exists())
+        self.write(self.client('agy') / name, '')
+        result = self.run_cca('agy')
+        self.assertNotIn('冲突', result.stderr)
+        self.assertEqual(master.read_text(), '')
+        self.assertTrue((self.client('agy') / name).is_symlink())
+        # 共享的是空文件（基线也是空的）：账号里写了内容照常并回去
+        servers = '{"mcpServers": {"docs": {"command": "docs-mcp"}}}'
+        self.atomic_write(self.client('agy') / name, servers)
+        result = self.run_cca('agy')
+        self.assertNotIn('冲突', result.stderr)
+        self.assertEqual(json.loads(master.read_text()), json.loads(servers))
+        # 另一个账号上次链接时还没有这个文件，这次 agy 给它建了个空的：共享的已经有内容，原样不动，不算冲突
+        self.write(self.client('agy', ACCOUNTS[1]) / name, '')
+        before = master.read_bytes()
+        os.utime(master, (100, 100))
+        result = self.run_cca('agy', key=ACCOUNTS[1])
+        self.assertNotIn('冲突', result.stderr)
+        self.assertEqual(master.read_bytes(), before)
+        self.assertEqual(master.stat().st_mtime, 100)
+        self.assertTrue((self.client('agy', ACCOUNTS[1]) / name).is_symlink())
+        self.assertFalse(conflicts.exists())
+        # 账号里是坏的 JSON：照旧不装、留下完整副本
+        broken = '{"mcpServers": {'
+        self.atomic_write(self.client('agy') / name, broken)
+        result = self.run_cca('agy')
+        self.assertEqual(json.loads(master.read_text()), json.loads(servers))
+        self.assert_saved_conflict('agy', ACCOUNTS[0], broken, result.stderr)
 
     def test_native_config_conflicts_keep_shared_preference_and_account_identity(self):
         self.link_both('claude')

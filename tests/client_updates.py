@@ -431,6 +431,108 @@ consent() { echo "consent $1 $2" >> "$TEST_LOG"; return "$CONSENT_RC"; }
             if installs:
                 self.assertIn('consent client_update ' + token, lines)
 
+    def config(self):
+        path = self.root / '.cca/config.json'
+        return json.loads(path.read_text()) if path.exists() else {}
+
+    def test_auto_install_is_off_by_default_and_follows_automatic_checks(self):
+        code, out, _ = self.command()
+        self.assertEqual(code, 0)
+        self.assertFalse(json.loads(out)['auto_install'])
+        self.assertEqual(self.command('mode', 'off')[0], 0)
+        code, out, _ = self.command('auto-install', 'on')   # 自动安装要先自动检查：一起打开
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(out)['auto_install'])
+        self.assertEqual((self.config()['client_updates'], self.config()['client_auto_install']), ('auto', True))
+        code, out, _ = self.command('mode', 'off')   # 不自动检查就查不到要装的：一起关掉
+        self.assertEqual(code, 0)
+        self.assertFalse(json.loads(out)['auto_install'])
+        self.assertNotIn('client_auto_install', self.config())
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        code, out, _ = self.command('auto-install', 'off')
+        self.assertEqual(code, 0)
+        self.assertEqual((json.loads(out)['mode'], json.loads(out)['auto_install']), ('auto', False))
+        self.assertNotIn('client_auto_install', self.config())
+        self.assertEqual(self.command('auto-install', 'maybe')[0], 1)
+
+    def test_allowed_auto_install_installs_right_after_the_check(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        code, out, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + out)
+        row = self.row(out)
+        self.assertEqual((row['status'], row['can_install'], row['auto_install_pending']), ('updated', False, False))
+        self.assertIn('已自动安装官方更新 2.0', row['message'])
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '200')
+        self.assertEqual(list(self.app.parent.glob('.cca-client-install-*')), [])
+
+    def test_turning_it_on_installs_what_is_staged_on_the_next_check_not_on_status(self):
+        self.stage()
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        code, out, _ = self.command()   # status 只读：不装
+        self.assertEqual(code, 0)
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '100')
+        self.assertEqual(self.row(out)['status'], 'staged')
+        code, out, errors = self.command('check')   # 还没到 6 小时：不再下载，直接装暂存的
+        self.assertEqual(code, 0, errors + out)
+        self.assertEqual(self.row(out)['status'], 'updated')
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '200')
+        self.assertEqual(len(self.downloads), 2)
+
+    def test_auto_install_waits_for_the_open_client_then_installs(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        self.processes = ('88 ' + str(self.app) + '/Contents/MacOS/ChatGPT\n').encode()
+        code, out, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + out)   # 开着不算出错
+        doc = json.loads(out)
+        row = self.row(out)
+        self.assertEqual((row['status'], row['can_install'], row['auto_install_pending']), ('staged', True, True))
+        self.assertIn('退出后自动安装', row['message'])
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '100')
+        self.assertLessEqual(doc['next_check_epoch'], self.ns['time'].time() + self.ns['CU_AUTO_RETRY'] + 5)
+        code, out, _ = self.command('auto-install', 'off')   # 关掉了就不再说退出后自动装
+        row = self.row(out)
+        self.assertFalse(row['auto_install_pending'])
+        self.assertNotIn('退出后自动安装', row['message'])
+        self.assertGreater(json.loads(out)['next_check_epoch'], self.ns['time'].time() + 3600)
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        self.processes = b'1 /sbin/launchd\n'
+        code, out, errors = self.command('check')
+        self.assertEqual(code, 0, errors + out)
+        row = self.row(out)
+        self.assertEqual((row['status'], row['auto_install_pending']), ('updated', False))
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '200')
+        state = json.loads((self.root / '.cca/client-updates/codex/state.json').read_text())
+        self.assertNotIn('auto_wait', state)
+
+    def test_turned_off_during_the_check_does_not_install(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        download = self.ns['cu_download']
+
+        def turn_off(url, destination, folder, package=False, expected_size=None):
+            download(url, destination, folder, package, expected_size)
+            if package:   # 下载安装包的时候，用户在终端里运行了 cca clients auto-install off（另一个进程：只改 config.json）
+                c = self.config()
+                c.pop('client_auto_install')
+                (self.root / '.cca/config.json').write_text(json.dumps(c))
+        self.ns['cu_download'] = turn_off
+        code, out, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + out)
+        row = self.row(out)
+        self.assertEqual((row['status'], row['can_install'], row['auto_install_pending']), ('staged', True, False))
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '100')
+
+    def test_native_update_while_waiting_is_not_overwritten(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        self.processes = ('88 ' + str(self.app) + '/Contents/MacOS/ChatGPT\n').encode()
+        self.assertEqual(self.command('check', 'force')[0], 0)
+        self.make_app(self.app, '3.0', '300')
+        self.processes = b'1 /sbin/launchd\n'
+        code, out, _ = self.command('check')
+        self.assertEqual(code, 1)
+        self.assertEqual(self.ns['cu_snapshot'](str(self.app))['build'], '300')
+        self.assertFalse(self.row(out)['auto_install_pending'])
+        state = json.loads((self.root / '.cca/client-updates/codex/state.json').read_text())
+        self.assertNotIn('auto_wait', state)
 
 
 class ClaudeClientUpdates(unittest.TestCase):
@@ -926,6 +1028,73 @@ class CliToolUpdates(unittest.TestCase):
         row = self.row(output)
         self.assertEqual(row['status'], 'error')
         self.assertFalse(row['can_install'])
+        again = self.row(self.command()[1])
+        self.assertEqual((again['status'], again['can_install']), ('available', True))
+
+    def test_allowed_auto_install_runs_the_official_updater_after_the_check(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        row = self.check()
+        self.assertEqual((row['status'], row['installed_version'], row['can_install']), ('updated', '2.1.0', False))
+        self.assertIn('已自动更新到 2.1.0', row['message'])
+        self.assertEqual([r[0] for r in self.updates()], [[str(self.claude), 'update']])
+        self.urls.clear()
+        self.assertEqual(self.command('check')[0], 0)   # 装好了：下次检查前不再跑
+        self.assertEqual((len(self.updates()), self.urls), (1, []))
+
+    def test_turned_off_right_before_the_update_does_not_run_it(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        versions = 0
+
+        def run(args, folder, timeout=30, env=None):
+            nonlocal versions
+            if args[-1] == '--version':
+                versions += 1
+                if versions == 2:   # 检查完、装之前（核对装的位置和版本时）：用户在终端里关掉了
+                    cfg = self.root / '.cca/config.json'
+                    c = json.loads(cfg.read_text())
+                    c.pop('client_auto_install')
+                    cfg.write_text(json.dumps(c))
+            return self.fake_run(args, folder, timeout, env)
+        self.ns['cu_run'] = run
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        self.assertGreaterEqual(versions, 2)   # 关掉的那一下发生过（最后列状态时还会再跑一次 --version）
+        self.assertEqual(self.updates(), [])
+        self.assertEqual((self.row(output)['status'], self.row(output)['can_install']), ('available', True))
+
+    def test_auto_install_leaves_npm_and_homebrew_to_the_user(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        npm = self.tool('lib/node_modules/@anthropic-ai/claude-code/cli.js')
+        os.environ['CCA_CLI_CLAUDE'] = str(npm)
+        self.body = json.dumps({'version': '2.1.0'}).encode()
+        row = self.check()
+        self.assertEqual((row['status'], row['can_install']), ('available', False))
+        self.assertEqual(self.updates(), [])
+
+    def test_auto_install_skips_a_tool_that_updated_itself_meanwhile(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        versions = 0
+
+        def run(args, folder, timeout=30, env=None):
+            nonlocal versions
+            if args[-1] == '--version':
+                versions += 1
+                if versions == 2:   # 检查完、装之前它自己更新了
+                    self.installed = self.latest
+            return self.fake_run(args, folder, timeout, env)
+        self.ns['cu_run'] = run
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 0, errors + output)
+        self.assertEqual(self.updates(), [])
+        self.assertEqual(self.row(output)['status'], 'current')
+
+    def test_failed_auto_install_says_why_and_keeps_the_button(self):
+        self.assertEqual(self.command('auto-install', 'on')[0], 0)
+        self.update_works = False
+        code, output, errors = self.command('check', 'force')
+        self.assertEqual(code, 1)
+        self.assertIn('network is down', errors)
+        self.assertEqual(self.row(output)['status'], 'error')
         again = self.row(self.command()[1])
         self.assertEqual((again['status'], again['can_install']), ('available', True))
 

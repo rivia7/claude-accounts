@@ -123,6 +123,13 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
             check("\(n) 没存的 api_key 没有掩码和来源", k.saved || (k.hint.isEmpty && k.source == .none))
             check("\(n) api_key 的来源认得", k.source.isKnown, k.source.rawValue)
             check("\(n) 账号表里写的 key 只有第三方 API 账号有", k.source != .table || a.kind == .api)
+            if let rk = raw as? [String: Any], rk["shared"] != nil {
+                // 同步（PROTOCOL 2.2）：映射里的官方账号、开着设备统计（和「设备」一样），Antigravity 不同步；来源、时间只给记下的
+                check("\(n) 会同步的和有「设备」的是同一批账号（Antigravity 除外）", k.shared == (a.can.devices && t.id != .agy))
+                check("\(n) 同步来源、记下的时间只给存着的 key", k.saved || (k.fromDevice == nil && k.savedEpoch == nil))
+                check("\(n) 同步的原因只给会同步的账号", k.shared || k.syncError == nil)
+                check("\(n) 第三方 API 账号不同步", a.kind != .api || (!k.shared && k.fromDevice == nil))
+            }
         }
     }
     if a.kind == .api {
@@ -707,6 +714,8 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
                 check("\(f) 客户端 ID 不为空且不重复", doc.clients.allSatisfy { !$0.id.isEmpty }
                       && Set(doc.clients.map(\.id)).count == doc.clients.count)
                 check("\(f) 可安装时有绑定检查结果的 token", doc.clients.allSatisfy { !$0.canInstall || nonEmpty($0.installToken) != nil })
+                check("\(f) 允许自动更新只在自动检查开着时；等客户端退出的都能装", (doc.autoInstall != true || doc.mode == "auto")
+                      && doc.clients.allSatisfy { !$0.autoInstallPending || ($0.canInstall && doc.autoInstall == true) })
             }
             tolerance(ClientUpdatesDoc.self, f, d) { [$0.clients.count] }
         default:

@@ -12,7 +12,25 @@ func clientUpdateProtocolTests() async {
           && CcaCommand.clientInstall(token: token).runsToCompletion
           && CcaCommand.clientMode(automatic: false).arguments == ["clients", "mode", "off", "--json"])
     check("所有客户端变更共享闸门", CcaCommand.clientCheck(force: true).gate == CcaCommand.clientInstall(token: token).gate
-          && CcaCommand.clientMode(automatic: true).gate == "client-update")
+          && CcaCommand.clientMode(automatic: true).gate == "client-update"
+          && CcaCommand.clientAutoInstall(enabled: true).gate == "client-update")
+    check("允许自动更新：开关只改设置；检查参数不变，但可能顺带安装，要跑完为止",
+          CcaCommand.clientAutoInstall(enabled: true).arguments == ["clients", "auto-install", "on", "--json"]
+          && CcaCommand.clientAutoInstall(enabled: false).arguments == ["clients", "auto-install", "off", "--json"]
+          && !CcaCommand.clientAutoInstall(enabled: true).runsToCompletion && CcaCommand.clientAutoInstall(enabled: true).timeout == 30
+          && CcaCommand.clientCheck(force: false, install: true).arguments == ["clients", "check", "--json"]
+          && CcaCommand.clientCheck(force: false, install: true).runsToCompletion
+          && CcaCommand.clientCheck(force: false, install: true).isBackground
+          && !CcaCommand.clientCheck(force: true, install: true).isBackground
+          && !CcaCommand.clientCheck(force: false).runsToCompletion)
+    let waiting = try? DocumentDecoder.decode(ClientUpdatesDoc.self, from: Data(SampleDocs.clientUpdates
+        .replacingOccurrences(of: #""mode":"auto","#, with: #""mode":"auto","auto_install":true,"#)
+        .replacingOccurrences(of: #""can_install":true,"#, with: #""can_install":true,"auto_install_pending":true,"#).utf8))
+    let plain = try? DocumentDecoder.decode(ClientUpdatesDoc.self, from: Data(SampleDocs.clientUpdates.utf8))
+    check("解码允许自动更新和等客户端退出：旧版 cca 没有这两项时没有开关、不在等",
+          waiting?.autoInstall == true && waiting?.autoInstallPending == true && waiting?.clients.first?.statusText == "退出后自动安装"
+          && waiting?.clients.first?.readyToInstall == true
+          && plain?.autoInstall == nil && plain?.autoInstallPending == false && plain?.clients.first?.statusText == "可以安装了")
     let current = SampleDocs.clientUpdates.replacingOccurrences(of: "sample-token", with: token)
     let consent = consentEvent("client_update", token, yes: false)
     let transport = ScriptedTransport { request, _ in
@@ -130,4 +148,73 @@ func clientUpdateProtocolTests() async {
     check("开发模式不自动检查", !devModel.scheduler.clientChecksRunning
           && !devTransport.requests.contains { $0.arguments.contains("check") })
     devModel.shutdown()
+}
+
+@MainActor func clientAutoInstallModelTests() async {
+    section("客户端更新：允许自动更新")
+    let state = String(decoding: fixture("state_nocodex.json") ?? Data(), as: UTF8.self)
+    let off = SampleDocs.clientUpdates.replacingOccurrences(of: #""mode":"auto","#, with: #""mode":"auto","auto_install":false,"#)
+    let on = off.replacingOccurrences(of: #""auto_install":false"#, with: #""auto_install":true"#)
+    let waiting = on.replacingOccurrences(of: #""can_install":true,"#, with: #""can_install":true,"auto_install_pending":true,"#)
+    let done = on.replacingOccurrences(of: #""status":"staged""#, with: #""status":"updated""#)
+        .replacingOccurrences(of: #""can_install":true"#, with: #""can_install":false"#)
+    let doc = TextBox(off)
+    let open = TextBox("1")   // ChatGPT 还开着
+    let t = ScriptedTransport(delay: 0.02) { request, _ in
+        switch request.arguments {
+        case ["_gui", "hello"]: return response(0, stdout: tinyHello)
+        case ["_gui", "state"]: return response(0, stdout: state)
+        case ["clients", "status", "--json"]: return response(0, stdout: doc.value)
+        case ["clients", "auto-install", "on", "--json"]: doc.set(on); return response(0, stdout: doc.value)
+        case ["clients", "auto-install", "off", "--json"]: doc.set(off); return response(0, stdout: doc.value)
+        case ["clients", "check", "--json"], ["clients", "check", "--force", "--json"]:
+            if doc.value != off { doc.set(open.value == "1" ? waiting : done) }
+            return response(0, stdout: doc.value)
+        default: return response(2)
+        }
+    }
+    let scheduler = Scheduler(clientCheckInterval: 3600)
+    let model = AppModel(environment: [:], home: tmpRoot.path, appVersion: "9.9.9", defaults: MemoryPrefs(),
+                         hooks: makeHooks(HookLog(), ScriptedPrompter([])), transport: t, scheduler: scheduler)
+    model.autoInstallSettle = 0.01
+    await model.start()
+    check("旧设置：不允许自动更新，检查不必跑完为止", model.clientUpdates?.autoInstall == false)
+    model.desktopAppsChanged(terminated: true)
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    check("没在等客户端退出：客户端退出不触发检查", !t.requests.contains { $0.arguments.first == "clients" && $0.arguments.contains("check") })
+
+    model.setClientUpdateAutoInstall(true)
+    _ = await waitUntil { model.clientUpdates?.autoInstallPending == true && !model.clientUpdatesBusy }
+    let checks = { t.requests.filter { $0.arguments == ["clients", "check", "--json"] } }
+    check("打开后马上在后台检查一次（不强制），这次检查要跑完为止", t.requests.contains { $0.arguments == ["clients", "auto-install", "on", "--json"] }
+          && checks().count == 1 && checks().first?.runsToCompletion == true
+          && model.toast?.text.contains("已允许自动更新") == true)
+    check("客户端开着：页面说退出后自动安装", model.clientUpdates?.clients.first?.statusText == "退出后自动安装")
+    model.desktopAppsChanged(terminated: false)
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    check("客户端打开不触发检查", checks().count == 1)
+    open.set("0")
+    let states = t.requests.filter { $0.arguments == ["_gui", "state"] }.count
+    model.desktopAppsChanged(terminated: true)
+    _ = await waitUntil { model.clientUpdates?.clients.first?.status == "updated" && !model.clientUpdatesBusy }
+    _ = await waitUntil { t.requests.filter { $0.arguments == ["_gui", "state"] }.count > states }
+    check("客户端退出后检查一次，装上了；重读 state", checks().count == 2 && model.clientUpdates?.autoInstallPending == false
+          && t.requests.filter { $0.arguments == ["_gui", "state"] }.count > states)
+
+    model.setClientUpdateAutoInstall(false)
+    _ = await waitUntil { model.clientUpdates?.autoInstall == false && !model.clientUpdatesBusy }
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    check("关掉：不再顺带检查，安装前先问", t.requests.contains { $0.arguments == ["clients", "auto-install", "off", "--json"] }
+          && checks().count == 2 && model.toast?.text.contains("已关闭自动更新") == true)
+    model.checkClientUpdates(manual: true)
+    _ = await waitUntil { !model.clientUpdatesBusy }
+    check("不允许自动更新时手动检查照旧（不必跑完为止）",
+          t.requests.last { $0.arguments == ["clients", "check", "--force", "--json"] }?.runsToCompletion == false)
+    model.shutdown()
+
+    let fixtureModel = makeModel(fixtureTransport())
+    await fixtureModel.start()
+    fixtureModel.setClientUpdateAutoInstall(true)
+    check("演示模式不改设置", fixtureModel.clientUpdateActivity == nil && fixtureModel.toast?.text.contains("不会更改自动更新设置") == true)
+    fixtureModel.shutdown()
 }

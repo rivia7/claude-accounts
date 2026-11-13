@@ -248,7 +248,8 @@
             "devices": true,
             "api_key": true
           },
-          "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain"},
+          "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1793955600.0,
+                      "from_device": "dan-air", "sync_error": null},
           "usage_weeks": {
             "since_epoch": 1787047200.0,
             "weeks": [

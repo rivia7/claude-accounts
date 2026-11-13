@@ -166,7 +166,7 @@ final class AppModel {
     var clientUpdatesReady: Int { clientUpdates?.updatableCount ?? 0 }
     private(set) var clientUpdatesError: String?
     private(set) var clientUpdatesLoading = false
-    enum ClientUpdateActivity: Equatable { case check, mode, install }
+    enum ClientUpdateActivity: Equatable { case check, mode, autoInstall, install }
     private(set) var clientUpdateActivity: ClientUpdateActivity?
     var clientUpdatesBusy: Bool { clientUpdateActivity != nil || clientUpdatesLoading }
     /// 点过“以后再说”的版本（记在 App 的设置里）：这个版本不再提示，出了更新的照常提示
@@ -257,6 +257,10 @@ final class AppModel {
     /// 每次查 live 加一：被取消、被取代的查询不改状态。
     @ObservationIgnored private var liveGeneration = 0
     @ObservationIgnored private var appsDebounce: Task<Void, Never>?
+    /// 允许自动更新、等着桌面客户端退出（ClientUpdatesDoc.autoInstallPending）：它退出后过这么久检查一次（cca 装上）。
+    /// 它的辅助进程比主程序晚几秒退出，还在的话 cca 接着等
+    @ObservationIgnored var autoInstallSettle: TimeInterval = 5
+    @ObservationIgnored private var autoInstallKick: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     /// 退出时要取消的任务（usage / check / live / 检查更新 / 更新 cca / gui update 的子进程）。app、web、router sync、重置额度
     /// 不在这里：它们的输出接文件，App 退出后照样跑完（PROTOCOL 1）。
@@ -1298,7 +1302,7 @@ final class AppModel {
 
     // MARK: 桌面客户端更新
 
-    /// 连上 cca 之后才开始定时。App 隐藏时也检查客户端更新；检查绝不安装，开发和演示模式不自动运行。
+    /// 连上 cca 之后才开始定时。App 隐藏时也检查客户端更新；默认检查不安装（允许自动更新时由 cca 在检查里顺带装上），开发和演示模式不自动运行。
     private func reconcileBackgroundPolling() {
         scheduler.updateUsagePolling(enabled: phase == .ready)
         scheduler.updateClientChecks(enabled: phase == .ready && !isFixtureMode && hello?.devMode != true)
@@ -1414,12 +1418,19 @@ final class AppModel {
             let conditions = hooks.systemConditions()   // 发现新版要下载、解包几百 MB：低电量、过热时晚点再说
             guard !conditions.lowPower, !conditions.thermalPressure else { return }
         }
-        runClientUpdate(.clientCheck(force: manual), activity: .check, manual: manual)
+        // 允许自动更新时这次检查可能顺带装上（cca 决定），要跑完为止
+        runClientUpdate(.clientCheck(force: manual, install: clientUpdates?.autoInstall == true), activity: .check, manual: manual)
     }
 
     func setClientUpdateAutomatic(_ enabled: Bool) {
         guard !isFixtureMode else { showToast("演示模式：不会更改自动检查设置", .info); return }
         runClientUpdate(.clientMode(automatic: enabled), activity: .mode, manual: true)
+    }
+
+    /// 允许自动更新（「客户端更新」页的第二个开关）：打开后马上在后台检查一次，下载好了的这就装上（客户端开着的等它退出）
+    func setClientUpdateAutoInstall(_ enabled: Bool) {
+        guard !isFixtureMode else { showToast("演示模式：不会更改自动更新设置", .info); return }
+        runClientUpdate(.clientAutoInstall(enabled: enabled), activity: .autoInstall, manual: true)
     }
 
     func installClientUpdate(_ entry: ClientUpdateEntry) {
@@ -1455,6 +1466,8 @@ final class AppModel {
                     message = entry.detail
                 } else if activity == .mode {
                     message = doc?.mode == "auto" ? "已开启自动检查；安装前仍会询问" : "已关闭自动检查"
+                } else if activity == .autoInstall {
+                    message = doc?.autoInstall == true ? "已允许自动更新：查到新版本就装，客户端开着时等它退出" : "已关闭自动更新：安装前会先问你"
                 } else if activity == .install {
                     message = doc?.clients.first(where: { $0.id == entryID })?.detail ?? "客户端更新操作已完成"
                 } else {
@@ -1468,7 +1481,10 @@ final class AppModel {
                     self.finish(result, failureTitle: "客户端更新未完成", success: message)
                 }
             }
-            if activity == .install { await self.loadState() }
+            if activity == .install || (activity == .check && doc?.clients.contains(where: { $0.status == "updated" }) == true) {
+                await self.loadState()
+            }
+            if activity == .autoInstall, result.isSuccess, doc?.autoInstall == true { self.checkClientUpdates(manual: false) }
         }
         if command.runsToCompletion {
             Task { await operation() }   // 安装事务必须完成或回滚，退出 App 也不杀进程。
@@ -1652,13 +1668,22 @@ final class AppModel {
     }
 
     /// Claude App / ChatGPT App 启动或退出：稍等一下再读 state（多开时会连着来好几个通知）。
-    func desktopAppsChanged() {
+    func desktopAppsChanged(terminated: Bool = false) {
         guard phase == .ready else { return }
         appsDebounce?.cancel()
         appsDebounce = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled, let self else { return }
             if self.isVisible { await self.loadState() } else { self.dirty = true }
+        }
+        // 允许自动更新、下载好了在等桌面客户端退出：退出了就检查一次（cca 装上），不用等到 15 分钟以后
+        if terminated, clientUpdates?.autoInstallPending == true {
+            autoInstallKick?.cancel()
+            autoInstallKick = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(max(0, self?.autoInstallSettle ?? 5) * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                self.checkClientUpdates(manual: false)
+            }
         }
     }
 

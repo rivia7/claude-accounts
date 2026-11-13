@@ -169,6 +169,27 @@ enum Texts {
         return parts.isEmpty ? "现在没有设备在用" : parts.joined(separator: " · ")
     }
 
+    // MARK: API key（PROTOCOL 2.2 的 api_key）
+
+    /// 官方账号 API key 那一行下面的一句。只有 cca 说这把 key 会经设备统计的服务器加密同步（`shared`）时才有：
+    /// 从别的设备同步来的说哪台、什么时候记下的；这台 Mac 记下的说别的设备也能看到；没同步成的照 cca 给的原因说。
+    static func apiKeyShare(_ k: APIKeyInfo, now: Double, calendar: Calendar = .current) -> String? {
+        guard k.shared else { return nil }
+        if let err = k.syncError { return "没能和其他设备同步：\(err)" }
+        guard k.saved else { return "记下后，登录了这个账号的其他设备也能看到（加密同步，维护者的服务器看不到 key）。" }
+        let when = k.savedEpoch.map { " " + pastTime($0, now: now, calendar: calendar) } ?? ""
+        if let from = k.fromDevice { return "\(from)\(when) 记下，已加密同步到这台 Mac。" }
+        return "这台 Mac\(when) 记下，登录了这个账号的其他设备也能看到（加密同步）。"
+    }
+
+    /// 「记录…」「输入…」的说明（悬停）
+    static func apiKeyRecordHelp(isAPI: Bool, shared: Bool) -> String {
+        if isAPI { return "输入这个账号的 key，存进这台 Mac 的钥匙串" }
+        return shared
+            ? "记一把 API key 备查（比如在控制台里建的）：存进这台 Mac 的钥匙串，并加密同步给登录了这个账号的其他设备；cca 不会拿它登录或启动这个账号"
+            : "记一把 API key 备查（比如在控制台里建的）：只存进这台 Mac 的钥匙串，cca 不会拿它登录或启动这个账号"
+    }
+
     /// 分模型的每周额度（Fable）下面那句话：它和本周总额度的关系（份额是 cca 认出来给的，PROTOCOL 3.1）。Fable 用的是本周总额度的一部分，
     /// 不是另外一份：平时“Fable 最多占本周额度的 50%，已占 6%”；它那份用完了时说清楚账号没用完：“Fable 的份额用完了，别的模型还能用本周
     /// 剩下的 49%”（本周的也用完了就只说前半句）。名字写在句子里：只写“最多用本周额度的 50%”会被看成整个账号最多只能用一半。

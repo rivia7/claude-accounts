@@ -757,6 +757,15 @@ class Tool:
         """最近一次的用量从哪找：cca 存的 usage.json，和 Claude Code 自己缓存的那份"""
         return [load_quiet(usage_file(key)), acct_json(key).get('cachedUsageUtilization')]
 
+    def share_ident(self, key):
+        """只有登录了这个账号的设备才知道的身份（共享 API key 的密钥由它派生，见 keyshare_keys）：accountUuid。每次现读，读不出
+        （.claude.json 半写、手改坏了）当作没登录，只是这一轮不同步这个账号。不经 acct_json：它读不了时退出（会停掉上报进程），
+        一个进程里又只读一次（上报进程一开好几天，看不到重新登录、退出登录）"""
+        j = load_quiet(os.path.join(cdir(key), '.claude.json'))
+        oa = j.get('oauthAccount') if isinstance(j, dict) else None
+        u = oa.get('accountUuid') if isinstance(oa, dict) else None
+        return u if isinstance(u, str) and len(u) >= 8 else None
+
 
 class CodexTool(Tool):
     """Codex：CODEX_HOME 是账号目录，~/.codex 里白名单上的条目共享；登录、用量都经 codex 自己的 app-server"""
@@ -839,6 +848,11 @@ class CodexTool(Tool):
     def usage_caches(self, key):
         return [load_quiet(usage_file(key))]
 
+    def share_ident(self, key):
+        """id_token 的 chatgpt_user_id（人，不分工作空间）"""
+        u = codex_claims(key).get('user')
+        return u if isinstance(u, str) and len(u) >= 8 else None
+
 
 class AgyTool(Tool):
     """Antigravity（agy 命令）：--gemini_dir 指向账号目录，AGY_SHARED 上的条目共享。登录经 agy 自己的 acp --login（Google 的
@@ -866,7 +880,7 @@ class AgyTool(Tool):
     url_example = ''
     region_name = 'Google'
     trace_host = 'www.cloudflare.com'   # Google 的网站没有 /cdn-cgi/trace：经同一个端口出去，出口一样，IP 和地区借 Cloudflare 的看
-    web_url = 'https://antigravity.google/'
+    web_url = 'https://gemini.google.com/'   # 网页版是 Gemini（antigravity.google 只是 agy 的介绍页和登录后显示授权码的页面）
     billing_url = ''
     login_hosts = ('accounts.google.com',)
     login_paths = ('/o/oauth2/auth', '/o/oauth2/v2/auth')
@@ -916,6 +930,9 @@ class AgyTool(Tool):
 
     def usage_caches(self, key):
         return []
+
+    def share_ident(self, key):
+        return None   # 没有只有登录了才知道的身份（token 文件里只读邮箱和档位）：API key 不同步
 
 
 CLAUDE, CODEX, AGY = Tool(), CodexTool(), AgyTool()
@@ -2186,13 +2203,19 @@ def merge_config_json(base, ours, theirs):
     return theirs, True
 
 
+def config_json(text):
+    """共享的 JSON 配置的内容：空文件当作空对象，不算坏的 JSON（agy 第一次运行时建的 config/mcp_config.json 就是 0 字节，
+    以前每次退出都报冲突）"""
+    return json.loads(text) if text.strip() else {}
+
+
 def merge_shared_config(src, dst, key, base):
     ours, theirs = shared_text(src), shared_text(dst)
     if ours == theirs or ours == base:
         return
     if src.endswith('.json'):
         try:
-            parsed = json.loads(ours)
+            parsed = config_json(ours)
         except ValueError:
             config_conflict(src, key)
             return
@@ -2201,14 +2224,14 @@ def merge_shared_config(src, dst, key, base):
         return
     if base is not MISSING and src.endswith('.json'):
         try:
-            merged, conflict = merge_config_json(json.loads(base) if base is not None else MISSING,
-                                                 parsed, json.loads(theirs) if theirs is not None else MISSING)
+            now = config_json(theirs) if theirs is not None else MISSING
+            merged, conflict = merge_config_json(config_json(base) if base is not None else MISSING, parsed, now)
         except ValueError:
             pass   # 无法解析的配置保留原文，不能拿不完整 JSON 覆盖共享版本。
         else:
             if conflict:
                 config_conflict(src, key)
-            if merged is not MISSING:
+            if merged is not MISSING and not eq(merged, now):   # 合出来和共享的一样（比如账号这份是空的）：共享的原样不动
                 save_json(dst, merged)
             return
     # TOML/普通文本不按行拼接，避免合成重复的 key/table；无基线也不猜哪份更新。
@@ -3099,8 +3122,9 @@ def kc_get(aid, host, ref=False):
     return kc_read(aid, host, ref)[1]
 
 
-def kc_book(aid, host, s, ref=False):
-    """config.json 里记下（s 是 key）或者删掉（s 是 None）这个账号存过的 key：api_keys / ref_keys 和 key_hints（掩码、域名）"""
+def kc_book(aid, host, s, ref=False, extra=None):
+    """config.json 里记下（s 是 key）或者删掉（s 是 None）这个账号存过的 key：api_keys / ref_keys 和 key_hints（掩码、域名；
+    extra：官方账号记下备查的还有 at（什么时候记下的）、from（从哪台设备同步来的，见 keyshare_sync））"""
     c = cfg_load()
     st = T.state(c, create=True)
     lst = kc_list(ref)
@@ -3111,7 +3135,7 @@ def kc_book(aid, host, s, ref=False):
         hints.pop(aid, None)
     else:   # 域名总是记下（换了服务商算没存）；短的 key 没有掩码，hint 是空字符串
         have.add(aid)
-        hints[aid] = {'host': host, 'hint': key_hint(s)}
+        hints[aid] = dict({'host': host, 'hint': key_hint(s)}, **(extra or {}))
     if have or not ref:
         st[lst] = sorted(have)
     else:
@@ -3132,13 +3156,14 @@ def kc_unbook(aid, ref=False):
 def kc_backfill(aid, host, s, ref=False):
     """读到了 key、config.json 里却没有它的掩码和域名（旧版本存的）：补上，App 以后就能显示它"""
     st = T.state(cfg_load())
-    if aid in (st.get(kc_list(ref)) or []) and kc_hints(st).get(aid) != {'host': host, 'hint': key_hint(s)}:
+    h = kc_hints(st).get(aid)
+    if aid in (st.get(kc_list(ref)) or []) and not (isinstance(h, dict) and h.get('host') == host and h.get('hint') == key_hint(s)):
         kc_book(aid, host, s, ref)
 
 
-def kc_put(aid, host, s, ref=False):
+def kc_put(aid, host, s, ref=False, extra=None):
     """先删掉这个账号的旧 key（不管哪个服务商的），再存新的。命令和十六进制的 key 都从 stdin 交给 security -i，
-    key 不出现在任何进程的命令行里；security -i 里的命令失败了它也返回 0，所以存完读回来比对"""
+    key 不出现在任何进程的命令行里；security -i 里的命令失败了它也返回 0，所以存完读回来比对。extra 见 kc_book"""
     if not host or re.search(r'\s', host):
         return False
     kc_del(aid, ref)
@@ -3151,7 +3176,7 @@ def kc_put(aid, host, s, ref=False):
         security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid, ref), s.encode('ascii').hex())).encode('ascii'))
     if kc_get(aid, host, ref) != s:
         return False
-    kc_book(aid, host, s, ref)
+    kc_book(aid, host, s, ref, extra)
     return True
 
 
@@ -3197,14 +3222,41 @@ def cmd_secret_set(key):
     if not secret_ok(s):
         die(SECRET_MSG)
     host, ref = kc_slot(t[key])
-    if not kc_put(acct_id(key), host, s, ref):
+    at = time.time()
+    with keyshare_edit(key, at) as ed:
+        ok = kc_put(acct_id(key), host, s, ref, {'at': at} if ref else None)
+        if ok and ref:
+            ed.mark(s)
+    if not ok:
         die('API key 存进密钥文件失败（看看 ~/.cca/secrets 的权限和磁盘空间）' if keyfile_store() else 'API key 存进钥匙串失败（钥匙串被锁住了？）')
+    if ref and keyshare_on(key, t[key]):   # 官方账号记下备查的：同步给登录了这个账号的其他设备；stdout 说一声给 bash 的文案
+        print('shared')
+        keyshare_kick(True)
 
 
 def cmd_secret_del(key):
-    """删掉这个账号存过的 key（第三方 API 账号的、官方账号记下备查的都删）"""
+    """删掉这个账号存过的 key（第三方 API 账号的、官方账号记下备查的都删）：只删这台设备上的（cca rm），不同步"""
     kc_del(acct_id(key))
     kc_del(acct_id(key), ref=True)
+
+
+def cmd_key_forget(key):
+    """cca [codex] key 账号 --forget（问过了）：删掉官方账号记下备查的 key，登录了这个账号的其他设备上的也删（同步）"""
+    t = table_load()
+    need(t, key)
+    with keyshare_edit(key, time.time()) as ed:
+        kc_del(acct_id(key), ref=True)
+        ed.mark(None)
+    if keyshare_on(key, t[key]):
+        keyshare_kick(True)
+
+
+def cmd_key_share(key):
+    """这个账号记下备查的 API key 会不会同步给登录了它的其他设备：会就打印 1（bash 的文案用）"""
+    t = table_load()
+    need(t, key)
+    if keyshare_on(key, t[key]):
+        print('1')
 
 
 def cmd_secret_status(key):
@@ -6703,6 +6755,8 @@ def cmd_usage_render(tmp, mode, cols, color, *keys):
         print(json.dumps(usage_json(rows, now, api), ensure_ascii=False, indent=2))
     else:
         usage_table(rows, now, cols, color == '1', api)
+    sys.stdout.flush()
+    keyshare_kick()  # 开着设备统计时：记下备查的 API key 和登录了同一个账号的其他设备同步（后台，最多 KEYSHARE_EVERY 一次）
     sys.exit(0 if any(r['source'] != 'none' for r in rows) else 1)
 
 
@@ -6793,7 +6847,7 @@ def agy_claims(key):
 
 
 def codex_claims(key):
-    """Codex 账号登录的身份：auth.json 里 id_token 的声明，只取邮箱、套餐和工作空间（不验签名；不碰 access / refresh
+    """Codex 账号登录的身份：auth.json 里 id_token 的声明，只取邮箱、套餐、工作空间和用户 id（不验签名；不碰 access / refresh
     token，也不保存、不转发）。没登录、用 API key 登录、读不了都返回 {}"""
     import base64
     j = load_quiet(os.path.join(cdir(key), 'auth.json'))
@@ -6812,7 +6866,8 @@ def codex_claims(key):
     prof, auth = (prof if isinstance(prof, dict) else {}), (auth if isinstance(auth, dict) else {})
     email = d.get('email') or prof.get('email')
     return {'email': email if isinstance(email, str) else '', 'plan': str(auth.get('chatgpt_plan_type') or ''),
-            'account': str(auth.get('chatgpt_account_id') or '')}
+            'account': str(auth.get('chatgpt_account_id') or ''),
+            'user': str(auth.get('chatgpt_user_id') or auth.get('user_id') or '')}
 
 
 # ChatGPT 套餐的叫法，和 codex 的 /status 一样（codex-rs/tui/src/subscription.rs 里 SubscriptionDisplay::Status
@@ -7836,6 +7891,7 @@ def cmd_presence_agent():
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     stamp, apps, shape, units, cfg = presence_stamp(), {}, None, {}, None
     due, fails = 0.0, 0   # 下一次该报的时刻：报成了是下一次心跳，没报成是退避结束（心跳到期、会话变了都等它）
+    key_due = 0.0   # 下一次同步记下备查的 API key（醒来时到了就同步，不为它多醒；keyshare_sync 自己也看上次同步的时间）
     try:
         while True:
             cfg = presence_load()[1]
@@ -7847,6 +7903,14 @@ def cmd_presence_agent():
                 presence_wait((), (), 5)
                 continue
             mono = time.monotonic()
+            if mono >= key_due:
+                try:
+                    keyshare_sync()
+                except Stop:
+                    raise   # 同步时被停掉（cca restore、关机）：照常报 end=down 再退出
+                except (Exception, SystemExit):   # 同步 API key 出了什么错都不能停掉上报（config.json 读不了时 die 是 SystemExit）
+                    pass
+                key_due = time.monotonic() + KEYSHARE_EVERY
             units, pids = presence_scan(cfg['salt'], targets, procs, apps, time.time(), mono)
             cur = sorted((a, len(u['cli']), bool(u['app'])) for a, u in units.items())
             if mono >= due or (cur != shape and not fails):
@@ -7927,6 +7991,331 @@ def cmd_presence_stop():
         if not alive():
             return
         time.sleep(0.1)
+
+
+# 共享 API key（官方账号记下备查的那一把：cca [codex] key 账号、App 的「记录 API key…」）。映射里的 Claude、Codex 官方账号、
+# 开着设备统计时，在一台设备上记下、换掉、删掉（--forget），经维护者的设备统计服务器同步给登录了这个账号的其他设备（op keys）。
+# 服务器只存密文：密钥由映射里的盐、邮箱和账号的登录身份（Tool.share_ident：Claude 的 accountUuid、Codex id_token 里的
+# chatgpt_user_id）派生，只有登录过这个账号的设备算得出来；服务器和没登录过它的设备看不到 key，也分不出是 key 还是删除（明文
+# 补齐到 KEYSHARE_PAD 的整数倍）。只用标准库：HMAC-SHA256 按块计数当流密码，另一把 HMAC 认证（先加密后认证，认证里带着
+# 账号摘要：挪不到别的账号上）。明文里有记下 / 删掉的时间，新的胜出（keyshare_round）：旧的、认证不过的（伪造、重放、坏了）
+# 不认；服务器上没有、认不出、比这台设备的旧时，这台设备把自己的传上去（自己修好）。只有在这台设备上记下、删掉才算改了
+# （keyshare_edit）：删账号（cca rm、cca edit）、cca restore 只删这台设备上的，不同步；钥匙串里的被删了，下次同步从服务器取回来。
+# 什么时候同步：记下、删掉之后马上（后台）；cca usage、cca devices 之后，和上报进程开着时，最多 KEYSHARE_EVERY 一次。
+# Antigravity 不同步（没有只有登录了才知道的身份）
+KEYSHARE_FILE = 'keys.json'    # PRESENCE_DIR 里：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
+                               # "synced": 上次同步, "retry": 旧的服务器什么时候再试, "error": 没同步成的原因}
+KEYSHARE_EVERY = 600           # 后台最多隔这么久同步一次（在这台设备上记下、删掉时马上）
+KEYSHARE_PAD = 256             # 明文补齐到这么长的整数倍：从密文的长短看不出是 key 还是删除、key 有多长
+KEYSHARE_RETRY = 6 * 3600      # 旧的服务器（404：还不收 key）：隔这么久再试
+KEYSHARE_OLD = '设备统计的服务器还不收 API key（维护者要更新服务器：./policy.sh presence deploy）'
+
+
+def keyshare_on(key, v):
+    """这个账号（T 的）记下备查的 key 会不会同步：映射里的 Claude、Codex 官方账号，这台设备开着设备统计"""
+    return T in (CLAUDE, CODEX) and not is_api(v) and presence_mapped(policy_raw(T), key, v) and bool(presence_load()[1])
+
+
+def keyshare_keys(salt, tool, email, ident):
+    """这个账号的两把密钥（加密、认证）：盐、工具、邮箱、登录身份一起派生"""
+    import hmac
+    root = hmac.new(bytes.fromhex(salt), ('cca-keyshare-v1\0%s\0%s\0%s' % (tool.name, email.lower(), ident)).encode('utf-8'),
+                    hashlib.sha256).digest()
+    return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
+
+
+def keyshare_xor(enc, nonce, data):
+    """HMAC-SHA256(加密密钥, nonce + 块号) 当密钥流（每块 32 字节）"""
+    import hmac
+    stream = b''.join(hmac.new(enc, nonce + i.to_bytes(8, 'big'), hashlib.sha256).digest() for i in range((len(data) + 31) // 32))
+    return bytes(a ^ b for a, b in zip(data, stream))
+
+
+def keyshare_tag(mac, aid, nonce, ct):
+    import hmac
+    return hmac.new(mac, b'cca-keyshare-v1\0' + aid.encode('ascii') + b'\0' + nonce + ct, hashlib.sha256).digest()
+
+
+def keyshare_seal(keys, aid, s, at):
+    """key（删掉时是 None）和时间 → 服务器存的那一份 {"n": nonce, "c": 密文, "t": 认证}（base64）"""
+    import base64, secrets
+    pt = json.dumps({'v': 1, 'key': s, 'at': at}, separators=(',', ':')).encode('utf-8')
+    pt += b' ' * (-len(pt) % KEYSHARE_PAD)
+    nonce = secrets.token_bytes(16)
+    ct = keyshare_xor(keys[0], nonce, pt)
+    b64 = lambda b: base64.b64encode(b).decode('ascii')
+    return {'n': b64(nonce), 'c': b64(ct), 't': b64(keyshare_tag(keys[1], aid, nonce, ct))}
+
+
+def keyshare_open(keys, aid, blob):
+    """服务器上的那一份解开：{"key": key | None, "at": 时间}；认证不过、格式不对（伪造的、别的账号的、坏了）是 None"""
+    import base64, binascii, hmac
+    try:
+        nonce, ct, tag = (base64.b64decode(blob[k], validate=True) for k in ('n', 'c', 't'))
+    except (TypeError, KeyError, ValueError, binascii.Error):
+        return None
+    if len(nonce) != 16 or not hmac.compare_digest(tag, keyshare_tag(keys[1], aid, nonce, ct)):
+        return None
+    try:
+        j = json.loads(keyshare_xor(keys[0], nonce, ct).decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not (isinstance(j, dict) and j.get('v') == 1 and is_num(j.get('at')) and j['at'] > 0
+            and (j.get('key') is None or secret_ok(j.get('key')))):
+        return None
+    return {'key': j['key'], 'at': float(j['at'])}
+
+
+def keyshare_sum(s):
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()[:16] if s else None
+
+
+def keyshare_slot(key):
+    """keys.json 里这个账号（T 的）的位置：按这台设备上的账号目录名，和盐无关（换了盐也认得出谁新）"""
+    return '%s:%s' % (T.name, acct_id(key))
+
+
+def presence_dir():
+    """建 PRESENCE_DIR，但不建 ~/.cca 本身：cca restore 刚删掉它时，后台还没跑完的同步不该把它建回来（没有时 OSError）"""
+    if not os.path.isdir(PRESENCE_DIR):
+        try:
+            os.mkdir(PRESENCE_DIR, 0o700)
+        except FileExistsError:
+            pass
+
+
+class KeyshareFile:
+    """keys.json 的读改写（keys.lock：在这台设备上记下、删掉 key 和同步时照服务器上的改 key 互斥，拿着的时间很短）"""
+    def __enter__(self):
+        presence_dir()
+        self.lk = open(os.path.join(PRESENCE_DIR, 'keys.lock'), 'a')
+        try:
+            fcntl.flock(self.lk, fcntl.LOCK_EX)
+            j = load_quiet(os.path.join(PRESENCE_DIR, KEYSHARE_FILE))
+        except BaseException:
+            self.lk.close()
+            raise
+        self.j = j if isinstance(j, dict) and j.get('v') == 1 and isinstance(j.get('acc'), dict) else {'v': 1, 'acc': {}}
+        return self.j
+
+    def __exit__(self, *exc):
+        try:
+            if exc[0] is None:
+                save_json(os.path.join(PRESENCE_DIR, KEYSHARE_FILE), self.j, 0o600)
+        finally:
+            self.lk.close()
+
+
+class keyshare_edit:
+    """with keyshare_edit(键, 时间) as ed：在这台设备上记下（换掉）、删掉这个账号（T 的）记下备查的 key，改完 ed.mark(key 或 None)
+    记下时间（同步时按它比新旧）。拿着 keys.lock：同步不会在这中间拿服务器上旧的盖掉刚记下的。没开设备统计时不记
+    （以后开了，记下的按 key_hints 里的时间算，删掉的不同步）；出错不影响记下、删掉本身"""
+    def __init__(self, key, at):
+        self.key, self.at, self.f = key, at, None
+
+    def __enter__(self):
+        try:
+            if presence_load()[1]:
+                f = KeyshareFile()
+                self.j, self.f = f.__enter__(), f
+        except (OSError, ValueError):
+            self.f = None
+        return self
+
+    def mark(self, s):
+        if self.f:
+            self.j['acc'][keyshare_slot(self.key)] = {'at': self.at, 'sum': keyshare_sum(s)}
+
+    def __exit__(self, *exc):
+        if self.f:
+            try:
+                self.f.__exit__(*exc)
+            except (OSError, ValueError):
+                pass
+
+
+def keystore_mtime(aid):
+    """钥匙串里（密钥文件）这个账号记下备查的那一条最后改的时间；读不出来是 None"""
+    if keyfile_store():
+        try:
+            return os.stat(os.path.join(SECRETS_DIR, kc_svc(aid, True))).st_mtime
+        except OSError:
+            return None
+    import calendar
+    rc, out = security('find-generic-password', '-a', REF_ACCT, '-s', kc_svc(aid, True))   # 不带 -w、-g：只有属性
+    m = re.search(rb'\x22mdat\x22<timedate>=[^\x22\n]*\x22(\d{14})Z', out) if rc == 0 else None
+    try:
+        return float(calendar.timegm(time.strptime(m.group(1).decode('ascii'), '%Y%m%d%H%M%S'))) if m else None
+    except ValueError:
+        return None
+
+
+def keyshare_local(key, e, booked, hint):
+    """这台设备上这个账号（T 的）现在的 {"at", "sum"}：e 是 keys.json 里记的，booked 是 config.json 里记着有没有 key，
+    hint 是它的 key_hints（at：记下的时间）。at 是 0：没有过（不传也不比）；sum 是 ?：没开设备统计时（或者旧版本）记下的，
+    不知道是哪一把，按记下的时间算（key_hints 里没有就看钥匙串里这一条的修改时间，都读不出来当作很早以前）"""
+    e = e if isinstance(e, dict) and is_num(e.get('at')) else None
+    h_at = hint.get('at') if isinstance(hint, dict) and is_num(hint.get('at')) and hint['at'] > 0 else None
+    if booked and (e is None or not e.get('sum') or h_at and h_at > e['at']):
+        return {'at': float(h_at or keystore_mtime(acct_id(key)) or 1.0), 'sum': '?'}
+    if e is None or not booked and e.get('sum'):   # 没有过；或者记下过、这台设备上又没有了：服务器上有的取回来
+        return {'at': 0, 'sum': None}
+    return {'at': float(e['at']), 'sum': e.get('sum')}
+
+
+def keyshare_note(code, cfg, j):
+    return KEYSHARE_OLD if code == 404 else presence_why(cfg, code, j) if code != 200 else '设备统计的服务器回的内容看不懂'
+
+
+def keyshare_sync(force=False, timeout=15):
+    """同步这台设备上映射里账号记下备查的 API key（见上面这一节的说明）。同时只有一个（keys-sync.lock）：别的正在同步时，force 的
+    （记下、删掉之后，--show 现取）等它跑完再同步（不然这次的改动要等到下一轮），别的就走；force 以外最多 KEYSHARE_EVERY 一次；
+    timeout 是每个请求最多等多久。返回没同步成的原因：成了是空的，没开设备统计、还不到时候、等不到是 None"""
+    cfg = presence_load()[1]
+    if not cfg:
+        return None
+    presence_dir()
+    with open(os.path.join(PRESENCE_DIR, 'keys-sync.lock'), 'a') as run:
+        until = time.monotonic() + (2 * timeout + 5 if force else 0)   # 正在跑的那一轮最多两个请求
+        while True:
+            try:
+                fcntl.flock(run, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= until:
+                    return None
+                time.sleep(0.2)
+        with KeyshareFile() as j:
+            now = time.time()
+            num = lambda k: j[k] if is_num(j.get(k)) else 0
+            if not force and (now - num('synced') < KEYSHARE_EVERY or now < num('retry')):
+                return None
+            j['synced'] = now
+            acc = {k: dict(v) for k, v in j['acc'].items() if isinstance(v, dict)}
+        err = keyshare_round(cfg, acc, timeout)
+        with KeyshareFile() as j:
+            if err:
+                j['error'] = err
+            else:
+                j.pop('error', None)
+            if err == KEYSHARE_OLD:
+                j['retry'] = time.time() + KEYSHARE_RETRY
+            else:
+                j.pop('retry', None)
+        return err
+
+
+def keyshare_round(cfg, acc, timeout=15):
+    """同步一轮：问服务器这些账号现在的，比新旧，取回来新的、传上去新的。acc 是开始时 keys.json 里记的：照服务器上的改、
+    传上去以后，只有这期间这台设备上没再记下、删掉（keys.json 里这一项没变）才算数，不然下一轮再比。返回没成的原因"""
+    targets = presence_targets()
+    if targets is None:
+        return '读不了账号表'
+    items, books = [], {}
+    for tool, key, _ in targets:
+        if tool not in (CLAUDE, CODEX):
+            continue
+        with using(tool):
+            ident = T.share_ident(key)
+            if not ident:
+                continue   # 这台设备没登录这个账号：解不开，也不传
+            if tool.name not in books:
+                st = T.state(cfg_load())
+                books[tool.name] = (set(st.get('ref_keys') or []), kc_hints(st))
+            booked, hints = books[tool.name]
+            email, slot = parse_key(key)[1], keyshare_slot(key)
+            items.append({'tool': tool, 'key': key, 'slot': slot, 'raw': acc.get(slot),
+                          'aid': presence_aid(cfg['salt'], tool, email), 'keys': keyshare_keys(cfg['salt'], tool, email, ident),
+                          'local': keyshare_local(key, acc.get(slot), acct_id(key) in booked, hints.get(acct_id(key))),
+                          'booked': acct_id(key) in booked})
+    if not items:
+        return ''
+    code, r = presence_post(cfg, 'keys', {'get': [x['aid'] for x in items]}, timeout=timeout)
+    if code != 200 or not isinstance(r.get('keys'), dict):
+        return keyshare_note(code, cfg, r)
+    puts, sent, err = {}, {}, ''
+    for x in items:
+        rec = r['keys'].get(x['aid'])
+        rec = rec if isinstance(rec, dict) else {}
+        remote = keyshare_open(x['keys'], x['aid'], rec.get('blob')) if rec else None
+        local = x['local']
+        with using(x['tool']):
+            aid = acct_id(x['key'])
+            if remote and remote['at'] > local['at']:   # 服务器上的新：照它改这台设备上的
+                new = {'at': remote['at'], 'sum': keyshare_sum(remote['key'])}
+                frm = rec.get('name') if isinstance(rec.get('name'), str) and rec.get('me') is not True else None
+                with KeyshareFile() as j:
+                    if j['acc'].get(x['slot']) != x['raw'] or not os.path.isfile(CFG):
+                        continue   # 这期间在这台设备上又记下、删掉了：下一轮再比（config.json 没了：cca restore 刚删掉 ~/.cca，什么都不写）
+                    if remote['key'] is None:
+                        kc_del(aid, ref=True)
+                        if kc_read(aid, REF_ACCT, True)[0] != 44:   # 没删掉（钥匙串锁着、读不了）：先不记，下一轮再删
+                            err = '其他设备上删掉的 API key 没能从这台设备的%s里删掉' % keystore_name()
+                            continue
+                    elif local['sum'] != new['sum'] or not x['booked']:
+                        if not kc_put(aid, REF_ACCT, remote['key'], True, dict({'at': remote['at']}, **({'from': frm[:64]} if frm else {}))):
+                            err = 'API key 存不进这台设备的%s' % keystore_name()
+                            continue
+                    j['acc'][x['slot']] = new
+            elif local['at'] > 0 and (remote is None or remote['at'] < local['at']):   # 这台设备上的新（或者服务器上没有、认不出）
+                s = None
+                if local['sum'] is not None:
+                    rc, s = kc_read(aid, REF_ACCT, True)
+                    if not s:
+                        if rc == 44:
+                            kc_unbook(aid, True)   # 钥匙串里已经没有了：下一轮取服务器上的
+                        elif rc != 0:
+                            err = '读不了这台设备的%s' % keystore_name()
+                        continue
+                puts[x['aid']] = keyshare_seal(x['keys'], x['aid'], s, local['at'])
+                sent[x['slot']] = (x['raw'], {'at': local['at'], 'sum': keyshare_sum(s)})
+    if puts:
+        code, r = presence_post(cfg, 'keys', {'put': puts}, timeout=timeout)
+        if code != 200:
+            return keyshare_note(code, cfg, r)
+        with KeyshareFile() as j:
+            for slot, (raw, new) in sent.items():
+                if j['acc'].get(slot) == raw:
+                    j['acc'][slot] = new
+    return err
+
+
+def keyshare_kick(force=False):
+    """在后台跑一次 cca _key-sync（同步记下备查的 API key）；force 以外还不到时候就不起进程。静默"""
+    import subprocess
+    try:
+        if not presence_load()[1]:
+            return
+        j = load_quiet(os.path.join(PRESENCE_DIR, KEYSHARE_FILE))
+        j = j if isinstance(j, dict) else {}
+        last = lambda k: j[k] if is_num(j.get(k)) else 0
+        if not force and (time.time() - last('synced') < KEYSHARE_EVERY or time.time() < last('retry')):
+            return
+        argv = [SELF_PATH, '_key-sync'] + (['force'] if force else [])
+        if os.access('/usr/sbin/taskpolicy', os.X_OK):
+            argv = ['/usr/sbin/taskpolicy', '-c', 'background'] + argv
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('CCA_EVENTS', 'CCA_GRANT', 'CCA_RO', 'CCA_PROMPT', 'CCA_TTY', 'CCA_YES', 'CCA_TOOL')}
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True, start_new_session=True, env=env)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
+def keyshare_error():
+    """最近一次没同步成的原因（cca devices、_gui state 显示）；成了、没同步过是 None"""
+    j = load_quiet(os.path.join(PRESENCE_DIR, KEYSHARE_FILE))
+    e = j.get('error') if isinstance(j, dict) else None
+    return e if isinstance(e, str) and e else None
+
+
+def cmd_key_sync(mode=''):
+    """cca _key-sync [force]：同步一次记下备查的 API key（keyshare_kick 在后台起的）；py key-sync now：cca key 账号 --show 这台设备上
+    没有时先同步一次（有人等着：每个请求最多等 8 秒）。没开设备统计、没同步成都是退出码 0：key 本身在不在由调用的地方再看"""
+    try:
+        keyshare_sync(mode in ('force', 'now'), 8 if mode == 'now' else 15)
+    except (OSError, ValueError, SystemExit):   # SystemExit：config.json 读不了（die 已经说了原因）
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -8318,6 +8707,7 @@ def cmd_presence_view(*args):
         rows.sort(key=lambda r: (not r['me'], order[r['state']], -(r['last_used_epoch'] or 0), r['name']))
         accounts.append({'key': k, 'id': acct_id(k), 'devices': rows})
     failing = (load_quiet(os.path.join(PRESENCE_DIR, 'status.json')) or {}).get('error') or None
+    keyshare_kick()   # 顺带：记下备查的 API key 和登录了同一个账号的其他设备同步（最多 KEYSHARE_EVERY 一次）
     if as_json:
         print(json.dumps({'version': 1, 'kind': 'devices', 'generated_epoch': recv, 'tool': T.name, 'me': j.get('me_name'),
                           'idle_after': j.get('idle'), 'offline_after': j.get('ttl'), 'reporting_error': failing,
@@ -8331,6 +8721,9 @@ def cmd_presence_view(*args):
             lines.append('    30 天内没有设备经 cca 用过')
     if failing:
         lines.append('  这台 Mac 最近一次没报成：%s' % failing)
+    key_err = keyshare_error()
+    if key_err:
+        lines.append('  记下的 API key 最近一次没同步成：%s' % key_err)
     print('\n'.join(lines))
 
 
@@ -8342,23 +8735,33 @@ def cmd_presence_note():
     reason, cfg = presence_load()
     if cfg:
         print('设备统计：映射里的账号在这台 Mac 上用的时候（命令行会话、cca app 打开的 App），会报告给维护者的服务器 %s，'
-              '配置了同一份映射的设备在账号页能看到这台 Mac 在不在用（不想报告：config.json 里加上 "presence": false）' % cfg['url'])
+              '配置了同一份映射的设备在账号页能看到这台 Mac 在不在用；给这些账号记下备查的 API key（cca key 账号）也经它加密同步给'
+              '登录了同一个账号的其他设备，服务器看不到 key（都不想要：config.json 里加上 "presence": false）' % cfg['url'])
     else:
         print('设备统计：' + reason)
 
 
-def gui_api_key(c, k, v):
+def gui_api_key(c, k, v, share=False, share_err=None):
     """_gui state 的 api_key（PROTOCOL 2.2）：存没存 key、掩码、在哪。照 config.json 里记的说（存的时候算好的掩码），不读钥匙串；
-    第三方 API 账号换了服务商（域名和存的时候不一样）算没存——启动时也取不到它"""
+    第三方 API 账号换了服务商（域名和存的时候不一样）算没存——启动时也取不到它。官方账号记下备查的还有：shared（会经设备统计
+    的服务器加密同步给登录了这个账号的其他设备，见 keyshare 一节）、saved_epoch（什么时候记下的）、from_device（从哪台设备
+    同步来的）、sync_error（最近一次没同步成的原因，share_err）"""
+    out = {'saved': False, 'hint': '', 'source': '', 'shared': bool(share), 'saved_epoch': None, 'from_device': None,
+           'sync_error': share_err if share else None}
     if is_api(v) and secret_ok(v.get('key')):
-        return {'saved': True, 'hint': key_hint(v['key']), 'source': 'table'}
+        return dict(out, saved=True, hint=key_hint(v['key']), source='table')
     aid, st = acct_id(k), T.state(c)
     h = kc_hints(st).get(aid)
     h = h if isinstance(h, dict) else {}
     host, ref = kc_slot(v)
     saved = aid in (st.get(kc_list(ref)) or []) and h.get('host', host) == host
     hint = h.get('hint') if saved and h.get('host') == host and isinstance(h.get('hint'), str) else ''
-    return {'saved': saved, 'hint': hint if HINT_RE.match(hint) else '', 'source': 'keychain' if saved else ''}
+    out.update(saved=saved, hint=hint if HINT_RE.match(hint) else '', source='keychain' if saved else '')
+    if saved and ref:
+        out['saved_epoch'] = h['at'] if is_num(h.get('at')) and h['at'] > 0 else None
+        frm = h.get('from')
+        out['from_device'] = frm if isinstance(frm, str) and frm and frm.isprintable() else None
+    return out
 
 
 def gui_account(c, k, v, procs, badges, pm, env, now, cli):
@@ -8415,7 +8818,9 @@ def gui_account(c, k, v, procs, badges, pm, env, now, cli):
                         policy_lock=bool(not api and e and c.get('policy') and e.lower() not in pm),
                         devices=bool(env.get('presence') and not api and e and e.lower() in pm),   # 账号页的「设备」（PROTOCOL 3.4）
                         api_key=True),   # 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
-            'can_why': why, 'api_key': gui_api_key(c, k, v),
+            'can_why': why,
+            'api_key': gui_api_key(c, k, v, share=bool(env.get('presence') and not api and e and e.lower() in pm and T in (CLAUDE, CODEX)),
+                                   share_err=env.get('key_error')),
             'usage': usage, 'usage_weeks': None if api or not T.has_usage else usage_weeks_view(k, now, x),
             'health': health_view(k, v, now)}
 
@@ -8480,10 +8885,11 @@ def cmd_gui_state():
            'tools': []}
     procs = gui_procs()
     presence = presence_load()[1] is not None
+    key_error = keyshare_error() if presence else None   # 记下备查的 API key 最近一次没同步成的原因（api_key 的 sync_error）
     for tool in TOOLS:
         name = tool.name.upper()
         env = {'bin': os.environ.get('CCA_GUI_%s_BIN' % name) or None, 'app': os.environ.get('CCA_GUI_%s_APP' % name) or None,
-               'chrome': os.environ.get('CCA_GUI_CHROME') == '1', 'presence': presence}
+               'chrome': os.environ.get('CCA_GUI_CHROME') == '1', 'presence': presence, 'key_error': key_error}
         enabled = tool is CLAUDE or os.path.exists(tool.table)
         entry = {'id': tool.name, 'label': tool.label, 'app_label': tool.app_label, 'cli_prefix': tool.cmd.split()[1:],
                  'features': {'app': tool.has_app, 'api': tool.has_api, 'usage': tool.has_usage},
@@ -8663,13 +9069,15 @@ def cmd_update_check(current, mode='', fallback='', repo=''):
 
 
 # 中央桌面包检查：Claude（com.anthropic.claudefordesktop，Squirrel）和 ChatGPT（com.openai.codex，Sparkle）。
-# auto 仅自动检查和暂存，安装总要用户确认。不读取账号目录，也不修改原版客户端的更新器设置。
+# auto 仅自动检查和暂存，安装要用户确认；用户打开「允许自动更新」（config.json 的 client_auto_install，cu_auto_install）后，
+# 检查完马上装（cu_auto）。不读取账号目录，也不修改原版客户端的更新器设置。
 CU_FEED = 'https://persistent.oaistatic.com/codex-app-prod/appcast.xml'
 CU_MAX_PACKAGE = 2 * 1024 * 1024 * 1024
 CU_NS = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 # 一次 check 最多用多久：App 等 900 秒，超时会杀掉 cca
 CU_CHECK_SECONDS = 840
 CU_CHECK_INTERVAL = 6 * 3600   # 后台多久检查一次：每次只是两个小请求，发现新版才下载
+CU_AUTO_RETRY = 15 * 60        # 允许自动更新、下载好了而桌面客户端开着（等它退出再装）：后台多久再来看一次
 CU_BUDGET = None
 
 
@@ -8858,6 +9266,12 @@ def cu_mode():
     c = load_quiet(CFG)
     value = c.get('client_updates', 'auto') if isinstance(c, dict) else 'auto'
     return 'off' if value == 'off' else 'auto'
+
+
+def cu_auto_install():
+    """允许自动更新（config.json 的 client_auto_install，默认不允许）：自动检查开着时才算数（不检查也就查不到要装的）"""
+    c = load_quiet(CFG)
+    return isinstance(c, dict) and c.get('client_auto_install') is True and cu_mode() == 'auto'
 
 
 def cu_target():
@@ -9322,7 +9736,7 @@ def cu_view(state=None, problem=None):
            'installed_version': None, 'available_version': None, 'staged_version': None,
            'package_version': None, 'package_build': None, 'install_token': None, 'can_install': False,
            'status': state.get('status', 'unchecked'), 'message': state.get('message', '尚未检查官方更新'),
-           'checked_epoch': state.get('checked_epoch')}
+           'checked_epoch': state.get('checked_epoch'), 'auto_install_pending': False}
     try:
         snapshot = cu_snapshot(cu_target(), False)
         row['installed_version'] = snapshot['version']
@@ -9341,20 +9755,28 @@ def cu_view(state=None, problem=None):
             elif (state.get('status') in ('staged', 'running')
                   and cu_build(stage['metadata']['build']) > cu_build(snapshot['build'])):
                 row.update(install_token=stage['token'], can_install=True)
+                if state.get('auto_wait') and cu_auto_install():   # 允许自动更新、上次要装时客户端开着（cu_auto）：等它退出
+                    row.update(auto_install_pending=True,
+                               message='已下载好 %s：%s 还开着，退出后自动安装' % (stage['metadata']['version'], CU.label))
     except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
         row.update(status=getattr(e, 'status', 'blocked'), message=getattr(e, 'message', '无法安全读取客户端状态'))
     if os.path.lexists(os.path.join(CCA_HOME, 'client-updates', CU.id, 'transaction.json')):
         row.update(status='needs_recheck', message='上次安装尚未完成，请运行检查以安全恢复',
-                   install_token=None, can_install=False)
+                   install_token=None, can_install=False, auto_install_pending=False)
     if problem:
-        row.update(status=problem.status, message=problem.message, install_token=None, can_install=False)
+        row.update(status=problem.status, message=problem.message, install_token=None, can_install=False,
+                   auto_install_pending=False)
     return row
 
 
 def cu_next_check(rows):
-    """下次该后台检查的时间：App 睡到这时候再来问，不用隔一会儿起一个进程。关了自动检查、一个客户端都没装时是 None"""
+    """下次该后台检查的时间：App 睡到这时候再来问，不用隔一会儿起一个进程。关了自动检查、一个客户端都没装时是 None；
+    有下载好、等桌面客户端退出后自动安装的（auto_install_pending），最多 CU_AUTO_RETRY 以后再来"""
     times = [r.get('checked_epoch') or 0 for r in rows if r.get('status') != 'missing']
-    return min(times) + CU_CHECK_INTERVAL if times and cu_mode() != 'off' else None
+    if not times or cu_mode() == 'off':
+        return None
+    due = min(times) + CU_CHECK_INTERVAL
+    return min(due, time.time() + CU_AUTO_RETRY) if any(r.get('auto_install_pending') for r in rows) else due
 
 
 def cu_doc(problems=None):
@@ -9371,7 +9793,7 @@ def cu_doc(problems=None):
         rows.append(cu_view(state, problem))
     CU = current
     return {'version': 1, 'kind': 'client_updates', 'generated_epoch': time.time(),
-            'mode': cu_mode(), 'next_check_epoch': cu_next_check(rows), 'clients': rows}
+            'mode': cu_mode(), 'auto_install': cu_auto_install(), 'next_check_epoch': cu_next_check(rows), 'clients': rows}
 
 
 def cu_check(state, force=False):
@@ -9730,7 +10152,7 @@ def cu_cli_view(state, problem):
            'installed_version': None, 'available_version': None, 'staged_version': None,
            'package_version': None, 'package_build': None, 'install_token': None, 'can_install': False,
            'status': state.get('status', 'unchecked'), 'message': state.get('message', '尚未检查官方更新'),
-           'checked_epoch': state.get('checked_epoch')}
+           'checked_epoch': state.get('checked_epoch'), 'auto_install_pending': False}
     if not path:
         row.update(status='missing', message='没有找到 %s 命令' % CU.command)
         return row
@@ -9787,6 +10209,45 @@ def cu_cli_install(state, token, root):
     return state
 
 
+def cu_auto(state):
+    """允许自动更新时（cu_auto_install），检查完马上把查到的更新装上：打开开关就是同意，不再问。桌面客户端开着时不装、不算出错：
+    记下 auto_wait，等它退出（cu_next_check 把下次检查提前到 CU_AUTO_RETRY 以后，App 看到客户端退出时也来查一次）；终端工具只装
+    官方安装器装的（npm、Homebrew 装的要用户自己的环境，照旧提示在终端里运行什么）；claude 平时会自己更新，已经不比现在的新就不装。
+    返回更新后的 state；装的时候出错照常抛出（这次检查的结果里说原因）"""
+    stage = state.get('stage')
+    if not isinstance(stage, dict) or not stage.get('token'):
+        return state
+    version = stage['metadata']['version']
+    if CU.cli:
+        if stage.get('method') != 'self':
+            return state
+        try:
+            cu_cli_validate(stage)
+        except ClientUpdateError:
+            return state   # 装的位置变了、它已经自己更新过了：照 status 说的，下次检查重新算
+    elif state.get('status') not in ('staged', 'running'):
+        return state
+    try:
+        if not CU.cli:
+            cu_no_processes(stage['target']['path'])   # 先只看开没开着：开着的不用先校验几百 MB 的安装包
+        if not cu_auto_install():   # 装之前再看一眼：这一会儿用户关掉了（clients auto-install off、mode off）就不装
+            return state
+        state = cu_install(state, stage['token'])
+    except ClientUpdateError as e:
+        if e.status == 'running':   # 开着（或者刚好又打开了）：等它退出
+            if not state.get('auto_wait'):
+                state['auto_wait'] = True
+                cu_save_state(state)
+            return state
+        state.pop('auto_wait', None)   # 别的原因装不了：不再每 15 分钟试一次，照常 6 小时后再检查
+        cu_save_state(state)
+        raise
+    state.pop('auto_wait', None)
+    state['message'] = ('已自动更新到 %s，下次启动时用新版本' if CU.cli else '已自动安装官方更新 %s') % version
+    cu_save_state(state)
+    return state
+
+
 def cu_token_client(token):
     """安装凭据是哪个客户端的；都对不上时停在第一个，由 cu_validate_plan 说凭据失效"""
     global CU
@@ -9831,14 +10292,17 @@ def cu_check_all(force, problems):
             state = cu_read_state()
             with ClientUpdateLock(os.path.join(root, 'install.lock')):
                 state = cu_recover(state)
-            if not cu_check(state, force).get('stage'):
+            state = cu_check(state, force)
+            if cu_auto_install():   # 允许自动更新：查到了就装（桌面客户端开着时等它退出）。每个客户端查完现读：检查途中关掉了就不装
+                state = cu_auto(state)
+            if not state.get('stage'):
                 cu_drop_package()
         except (ClientUpdateError, OSError, ValueError, TypeError, KeyError) as e:
             problems[client.id] = cu_problem(e)
 
 
 def cmd_client_updates(action='status', arg=''):
-    if action not in ('status', 'check', 'mode', 'plan', 'install'):
+    if action not in ('status', 'check', 'mode', 'auto-install', 'plan', 'install'):
         die('未知客户端更新操作')
     problems = {}
     try:
@@ -9848,6 +10312,18 @@ def cmd_client_updates(action='status', arg=''):
             with Lock():
                 c = load_json(CFG, {})
                 c['client_updates'] = arg
+                if arg == 'off':
+                    c.pop('client_auto_install', None)   # 不自动检查就查不到要装的：允许自动更新一起关掉
+                save_json(CFG, c)
+        elif action == 'auto-install':
+            if arg not in ('on', 'off'):
+                cu_error('blocked', '允许自动更新只能是 on 或 off')
+            with Lock():
+                c = load_json(CFG, {})
+                if arg == 'on':
+                    c.update(client_auto_install=True, client_updates='auto')   # 自动安装要先自动检查
+                else:
+                    c.pop('client_auto_install', None)
                 save_json(CFG, c)
         elif action == 'plan':
             cu_token_client(arg)
@@ -9898,7 +10374,7 @@ CMDS = {
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
-    'key-show': cmd_key_show,
+    'key-show': cmd_key_show, 'key-forget': cmd_key_forget, 'key-share': cmd_key_share, 'key-sync': cmd_key_sync,
     'usage-query': cmd_usage_query, 'usage-render': cmd_usage_render, 'login-plan-forget': cmd_login_plan_forget,
     'reset-consume': cmd_reset_consume, 'reset-plan': cmd_reset_plan, 'reset-done': cmd_reset_done,
     'tool-env': cmd_tool_env, 'login-flow': cmd_login_flow, 'login-check': cmd_login_check, 'login-forward': cmd_login_forward,
@@ -11777,13 +12253,16 @@ api_key_prompt() {   # api_key_prompt [图形界面的说明]：输入 key 存�
 	local s title="${ACC_NAME} 的 API key"
 	[ "$ACC_KIND" = api ] || title="记录 ${ACC_NAME} 的 API key"
 	s=$(api_key_ask "  ${ACC_NAME} 的 API key（输入时不显示）：" "$title" "${1:-}") || { say "  已取消"; return 1; }
-	if ! printf '%s' "$s" | py secret-set "$ACC_KEY" 2>/dev/null; then   # key 已经检查过（api_key_ask），失败只会是钥匙串
+	local shared msg   # secret-set 的 stdout：官方账号记下的这把会同步给登录了这个账号的其他设备时是 shared
+	if ! shared=$(printf '%s' "$s" | py secret-set "$ACC_KEY" 2>/dev/null); then   # key 已经检查过（api_key_ask），失败只会是钥匙串
 		if keyfile_store; then fail_warn keychain_unavailable "API key 存进密钥文件失败：看看 ~/.cca/secrets 的权限和磁盘空间"
 		else fail_warn keychain_unavailable "API key 存进钥匙串失败（钥匙串被锁住了？）：解锁后再试一次"; fi
 		return 1
 	fi
-	okay "已把 ${ACC_NAME} 的 API key 存进${KEYSTORE}"
-	gui_done key_saved "已把 ${ACC_NAME} 的 API key 存进${KEYSTORE}" "$ACC_KEY"
+	msg="已把 ${ACC_NAME} 的 API key 存进${KEYSTORE}"
+	[ "$shared" != shared ] || msg="${msg}，登录了这个账号的其他设备也能看到（经设备统计的服务器加密同步）"
+	okay "$msg"
+	gui_done key_saved "$msg" "$ACC_KEY"
 }
 
 api_key_ready() {   # 启动前：key 在账号表里或钥匙串里（按现在的接口域名）；都没有时在终端里问
@@ -11830,6 +12309,8 @@ key_set() {   # cca key 账号（需要先 eval "$(py env 名称)"）
 	local note=""
 	if [ "$ACC_KIND" != api ]; then
 		note="只记在${KEYSTORE_AT}里备查（比如在控制台里建的 key）：cca 不会拿它登录或启动这个账号"
+		[ "$(py key-share "$ACC_KEY")" != 1 ] ||
+			note="记在${KEYSTORE_AT}里备查（比如在控制台里建的 key），并加密同步给登录了这个账号的其他设备（维护者的服务器看不到 key）：cca 不会拿它登录或启动这个账号"
 		[ -n "$PROMPT_GUI" ] || info "$note"
 	elif [ "$(py secret-status "$ACC_KEY")" = table ]; then
 		note="账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 ${CMD} edit"
@@ -11842,8 +12323,14 @@ key_show() {   # cca key 账号 --show：key 原样打到 stdout（不换行；�
 	if [ -n "${CLAUDECODE:-}" ] && [ -z "${CCA_EVENTS:-}" ]; then
 		die "在 Claude Code 里不显示 API key（会进对话记录）：请在终端或 cca App 里看"
 	fi
-	py key-show "$ACC_KEY"
-	case $? in
+	local rc=0
+	py key-show "$ACC_KEY" || rc=$?
+	if [ $rc = 3 ] && [ "$ACC_KIND" != api ] && [ "$(py key-share "$ACC_KEY")" = 1 ]; then
+		# 这台设备上没有（或者钥匙串里的被删了）：先和设备统计的服务器同步一次（登录了这个账号的其他设备可能记下过），再看
+		py key-sync now
+		rc=0; py key-show "$ACC_KEY" || rc=$?
+	fi
+	case $rc in
 		0) [ ! -t 1 ] || echo >&2 ;;
 		3) FAIL_CODE=key_missing die "${ACC_NAME} 还没有存 API key（${CMD} key ${ACC_NAME} 存一个）" ;;
 		4) keyfile_store && FAIL_CODE=keychain_unavailable die "读不了 ~/.cca/secrets 里的密钥文件：看看它的权限"
@@ -11859,16 +12346,20 @@ key_forget() {   # cca key 账号 --forget：删掉官方账号记下备查的 A
 		gui_done key_forgotten "${ACC_NAME} 没有记下 API key" "$ACC_KEY"
 		return 0
 	fi
-	consent key_forget "$ACC_ID" "删除 ${ACC_NAME} 的 API key" "删除记下的这把 API key 吗？" \
-		"只删掉 cca 在${KEYSTORE_AT}里记的这一份，控制台里的 key 本身不受影响。" n
+	local what="只删掉 cca 在${KEYSTORE_AT}里记的这一份，控制台里的 key 本身不受影响。" msg="已删除 ${ACC_NAME} 记下的 API key"
+	if [ "$(py key-share "$ACC_KEY")" = 1 ]; then
+		what="登录了这个账号的其他设备上同步来的也一起删掉（经设备统计的服务器同步）；控制台里的 key 本身不受影响。"
+		msg="${msg}，登录了这个账号的其他设备上的也会删掉"
+	fi
+	consent key_forget "$ACC_ID" "删除 ${ACC_NAME} 的 API key" "删除记下的这把 API key 吗？" "$what" n
 	case $? in
 		0) ;;
 		1) info "没有删除"; return 0 ;;
 		*) die "要先同意：在终端里运行 ${CMD} key ${ACC_NAME} --forget（会先问你）" ;;
 	esac
-	py secret-del "$ACC_KEY"
-	okay "已删除 ${ACC_NAME} 记下的 API key"
-	gui_done key_forgotten "已删除 ${ACC_NAME} 记下的 API key" "$ACC_KEY"
+	py key-forget "$ACC_KEY"
+	okay "$msg"
+	gui_done key_forgotten "$msg" "$ACC_KEY"
 }
 
 # 账号表、端口池有变化时要不要同步路由器：配置过路由器，或者有走端口的账号（只有直连的第三方 API 账号时不用）
@@ -12737,7 +13228,7 @@ open_chrome() {   # 子 shell 持有启动锁，所有返回路径自动释放�
 }
 
 cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页版：claude.ai，Codex 账号是 chatgpt.com（和出口检测是同一个网站），
-	# Antigravity 账号是 antigravity.google（WEB_URL）。
+	# Antigravity 账号是 gemini.google.com（WEB_URL）。
 	# mail 时打开后把账号的邮箱放进剪贴板：控制台这些登录页不认网址里的邮箱参数（实测），要登录时粘贴，免得在这个账号的浏览器里登错号
 	local key site="${WEB_URL#https://}" what="${3:-}" note=""
 	site="${site%%/*}"
@@ -14388,14 +14879,15 @@ client_update_py() {   # 客户端更新独立于账号准备和 cca 自身更�
 		CCA_CLI_CLAUDE="$CLAUDE_BIN" CCA_CLI_CODEX="$CODEX_BIN" py client-updates "$@"
 }
 
-cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOKEN [--json]
+cmd_clients() {   # cca clients status|check [--force]|mode auto|off|auto-install on|off|install TOKEN [--json]
+	# auto-install on：允许自动更新（检查完马上装，桌面客户端开着时等它退出；打开它就是同意，不再一个个问）
 	local action="${1:-status}" arg="" json="" out rc plan CU_VERSION CU_INSTALLED CU_TARGET CU_LABEL CU_NOTE
 	[ $# -eq 0 ] || shift
 	case "$action" in
 		status) ;;
 		check) ;;
-		mode|install) arg="${1:-}"; [ $# -eq 0 ] || shift ;;
-		*) die "用法: cca clients status|check [--force]|mode auto|off|install TOKEN [--json]" ;;
+		mode|install|auto-install) arg="${1:-}"; [ $# -eq 0 ] || shift ;;
+		*) die "用法: cca clients status|check [--force]|mode auto|off|auto-install on|off|install TOKEN [--json]" ;;
 	esac
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -14407,6 +14899,7 @@ cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOK
 	done
 	case "$action" in
 		mode) case "$arg" in auto|off) ;; *) die "用法: cca clients mode auto|off [--json]" ;; esac ;;
+		auto-install) case "$arg" in on|off) ;; *) die "用法: cca clients auto-install on|off [--json]" ;; esac ;;
 		install)
 			[[ "$arg" =~ ^[0-9a-f]{64}$ ]] || die "安装凭据无效，请重新检查客户端更新"
 			plan=$(client_update_py plan "$arg") || return 1
@@ -14419,7 +14912,7 @@ cmd_clients() {   # cca clients status|check [--force]|mode auto|off|install TOK
 	if [ -n "$out" ]; then
 		if [ -n "$json" ]; then printf '%s\n' "$out"
 		else
-			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("客户端自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭")); [print(c.get("label", c.get("id", "")) + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", []) if c.get("status") != "missing"]'
+			printf '%s\n' "$out" | "$PYTHON" -I -c 'import json,sys; d=json.load(sys.stdin); print("客户端自动检查：" + ("开启" if d.get("mode") == "auto" else "关闭") + "；允许自动更新：" + ("开启（查到新版本就装，客户端开着时等它退出）" if d.get("auto_install") else "关闭（安装前先问你）")); [print(c.get("label", c.get("id", "")) + "：" + c.get("message", c.get("status", "")) + ("\n安装：cca clients install " + c["install_token"] if c.get("can_install") and c.get("install_token") else "")) for c in d.get("clients", []) if c.get("status") != "missing"]'
 		fi
 	fi
 	return "$rc"
@@ -15410,7 +15903,7 @@ Antigravity（Google 的 agy 命令行；账号表 ~/.cca/agy.json，和 Claude�
                              一起建在 ~/.local/bin；添加 Antigravity 账号时没有的话也会补上）
   cca agy add                新增 Antigravity 账号（用 Google 账号登录，${aglogin}）
   cca agy ls | edit | rm | key | login${mac:+ | web} | check
-                             和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 antigravity.google）}；
+                             和上面同名的命令一样，作用于 Antigravity 账号${mac:+（web 打开 gemini.google.com）}；
                              没有查用量的接口，也没有第三方 API 账号和桌面 App
 EOF
 	cat >&2 <<EOF
@@ -15474,8 +15967,10 @@ EOF
                              只检查（装着测试版时也看更新的测试版；--json 给界面 App）/ 退回上一版 / 自动安装（默认）/
                              只提示 / 关闭
   cca clients status [--json] 查看桌面客户端和终端工具（Claude Code、Codex）的更新状态（与 cca 自身更新分开）
-  cca clients check --force  从官方更新源检查、下载并验证，安装前必须确认
-  cca clients mode auto|off  开启/关闭 GUI 的每日自动检查和准备
+  cca clients check --force  从官方更新源检查、下载并验证，安装前要确认（允许自动更新时直接装）
+  cca clients mode auto|off  开启/关闭 GUI 的自动检查和准备（关掉时允许自动更新也一起关掉）
+  cca clients auto-install on|off
+                             允许自动更新：查到新版本就装、不再先问（桌面客户端开着时等它退出再装）/ 恢复安装前确认
   cca clients install TOKEN 安装已验证的更新；凭据由 check 给出，须先退出对应的客户端
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
@@ -15493,7 +15988,7 @@ main() {
 	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) cmd_install ;;
@@ -15518,6 +16013,7 @@ main() {
 		_core-nodes) shift; cmd_core_nodes "$@" ;;   # 后台：从路由器拷节点定义、下载内核给内置代理
 		_core-keep) CCA_SELF="$SELF" exec "${PYRUN[@]}" core-keep ;;   # 后台（Linux）：没有界面 App 时托管内置代理的内核（见 py 的 cmd_core_keep）
 		_presence-agent) CCA_SELF="$SELF" exec "${PYRUN[@]}" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
+		_key-sync) shift; CCA_SELF="$SELF" exec "${PYRUN[@]}" key-sync "$@" ;;   # 后台：记下备查的 API key 经设备统计的服务器加密同步（见 py 的 keyshare 一节）
 		_dock-tidy) shift; cmd_dock_tidy "$@" ;;   # 后台：cca 打开的 App 实例退出后整理程序坞（见 py 的程序坞一节；终端交接的脚本也调，PROTOCOL 6）
 		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
 		gui) shift; cmd_gui "$@" ;;

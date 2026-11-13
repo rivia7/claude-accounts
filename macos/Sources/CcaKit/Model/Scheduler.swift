@@ -93,7 +93,7 @@ enum PolicyPolling {
 /// - 用量和网络出口：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
 /// - 账号页的「设备」看得见时马上查一次，之后每 60 秒一次（问维护者的服务器，很轻）；
-/// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；它从不负责安装。
+/// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；定时器自己不发安装命令（允许自动更新时由 cca 在检查里顺带装上）。
 @MainActor
 final class Scheduler {
     var usageInterval: TimeInterval

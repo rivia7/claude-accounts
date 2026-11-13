@@ -28,15 +28,16 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   App 不调（调了 cca 也只回 `fail` 的 `unsupported`）。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
-  随时可以跑。`clients check|mode|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
+  随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒、
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）。
 - `app`、`web`、`billing`、`limit-resets`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
-- `clients install TOKEN` 同样运行至完成，退出 App 不终止安装事务；`clients check` 和 `clients mode` 可取消。检查建议超时 900 秒，
-  安装的下载/事务超时由后端控制，`clients status` 30 秒（要现跑 `claude --version`、`codex --version`，刚更新完第一次启动较慢），`clients mode` 30 秒。
+- `clients install TOKEN` 同样运行至完成，退出 App 不终止安装事务；`clients mode`、`clients auto-install` 可取消，`clients check` 平时也可取消，
+  但允许了自动更新（文档的 `auto_install` 为 true，见 8）时检查完可能马上安装，要和 `install` 一样运行至完成。检查建议超时 900 秒，
+  安装的下载/事务超时由后端控制，`clients status` 30 秒（要现跑 `claude --version`、`codex --version`，刚更新完第一次启动较慢），`clients mode`、`clients auto-install` 30 秒。
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
   `codex.json`、`agy.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
   `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
@@ -143,7 +144,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
   "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true, "api_key": true},
   "can_why": {},
-  "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain"},
+  "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1794020000.0,
+              "from_device": "dan-air", "sync_error": null},
   "usage": { "…用量条目，见 3.1…" },
   "usage_weeks": { "…每周用量，见下面…" },
   "health": { "…出口检测结果，见 3.3…" }
@@ -184,6 +186,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `hint`：掩码，存的时候 cca 算好的（开头 8 个字符里最后一个 `-` 以前的前缀 + `…` + 最后 4 个字符，例如 `sk-ant-…x7Qa`；短于 24 个字符的 key
   没有掩码，是 `""`，App 画圆点）；`source`：`keychain`（钥匙串里）| `table`（账号表的 `key` 字段里，明文；只有第三方 API 账号有）| `""`（没存）。
   `state` 不读钥匙串，掩码照 config.json 里记的说；**明文只在用户点「显示」「复制」时经 `key --show` 要**。旧版 cca 没有这个字段，当作 null。
+  官方账号记下的那一把会同步给登录了这个账号的其他设备时（4.10），还有：`shared`：会不会同步（映射里的 Claude、ChatGPT 官方账号、这台 Mac 开着
+  设备统计，和 `can.devices` 是同一批账号，Antigravity 除外；不同步的是 false）；`saved_epoch`：什么时候记下的（这台 Mac 记下的，或者别的设备
+  记下、同步来的；不知道是 null）；`from_device`：从哪台设备同步来的（设备统计里的名字；这台 Mac 自己记下的是 null）；`sync_error`：最近一次
+  没同步成的原因（给人看的话；成了、不同步的是 null）。旧版 cca 没有这几项：当作不同步。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `usage_weeks`：每周用量（账号页的「每周用量」、侧栏的「用量统计」）：最近 12 周每周用到这一周额度的百分之几，和这几周的统计。
   Claude、OpenAI 都不给以前的用量，这是 cca 每次查到用量时（`cca usage`、重置额度）记在账号目录里的，从开始记的那一周起一周一周长出来；
@@ -443,7 +449,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `open_clash_verge` | 空 | 在外面，Clash Verge 没开：打开它 | yes |
 | `builtin_core` | 空 | 在外面，这台 Mac 上没有 Clash 客户端：改用内置代理（第一次要下载约 21MB 的内核，见 7） | yes |
 | `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
-| `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；见 4.10） | no |
+| `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；会同步的账号，登录了它的其他设备上的也删；见 4.10） | no |
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
@@ -503,7 +509,12 @@ App 开着就拉，不管窗口看不看得见（过热时跳过，下一次再�
   没有：退出码 1，`fail` 的 `code` 是 `key_missing`；钥匙串读不了：`keychain_unavailable`。App 复制时自己写剪贴板：标成机密
   （`org.nspasteboard.ConcealedType`，剪贴板管理器不记），60 秒后剪贴板还是它就清掉，退出 App 前也清。
 - 删除（`--forget`，只给官方账号）：要同意（4.2 的 `key_forget`，默认不删），删好是 `result` 的 `key_forgotten`；第三方 API 账号的 key 启动要用，
-  不在这里删（`fail` 的 `api_account`）。删除账号（`rm`）、`restore` 时 cca 一起删。
+  不在这里删（`fail` 的 `api_account`）。删除账号（`rm`）、`restore` 时 cca 一起删（只删这台 Mac 上的）。
+- 同步（官方账号记下的那一把，`api_key.shared` 为 true 的账号）：映射里的 Claude、ChatGPT 官方账号、开着设备统计时，在一台设备上记下、换掉、
+  删掉（`--forget`），cca 经维护者的设备统计服务器同步给登录了这个账号的其他设备：服务器只存密文，密钥由映射里的盐、邮箱和账号的登录身份派生，
+  只有登录过这个账号的设备解得开；新的胜出。什么时候同步由 cca 定（记下、删掉后马上，之后 `usage`、`devices` 时顺带，最多 10 分钟一次），
+  同步来的 key 写进这台 Mac 的钥匙串和 config.json，App 收到 config.json 变了的刷新提示后重新读 `state` 就看得到（`from_device`）；
+  这台 Mac 上还没有、点「显示」「复制」时 `--show` 先同步一次再读。App 不做别的，同步不了的原因照 `sync_error` 说。
 
 ### 4.5 重置额度：`cca codex reset KEY --json`
 
@@ -696,8 +707,12 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 管理 `com.anthropic.claudefordesktop`（Claude）和 `com.openai.codex`（ChatGPT）两个桌面客户端，以及终端里的 Claude Code、Codex 命令；和 cca 自身的 `update` 命令分开。
 
 - `cca clients status --json`：只读本机状态，启动和进入客户端更新页时调用。
-- `cca clients check [--force] --json`：检查并准备更新，不安装。后台不带 `--force`，每个客户端 6 小时最多查一次，节流由 cca 负责；用户点“立即检查”时加 `--force`。
-- `cca clients mode auto|off --json`：设置自动检查。默认 `auto`，含义仅是自动检查和准备软件包。
+- `cca clients check [--force] --json`：检查并准备更新；没允许自动更新时不安装。后台不带 `--force`，每个客户端 6 小时最多查一次，节流由 cca 负责；用户点“立即检查”时加 `--force`。
+  允许了自动更新时，检查完马上装上查到的（没到 6 小时、不再联网的那次也装已经下载好的）：桌面客户端开着时不装、不算出错，那一行 `auto_install_pending` 为 true，
+  等它退出；终端工具只装官方安装器装的（`can_install` 为 true 的那种），已经自己更新过的不装。装的时候出错和 `install` 一样写在那一行、退出码 1。
+- `cca clients mode auto|off --json`：设置自动检查。默认 `auto`，含义是自动检查和准备软件包；设成 `off` 时连允许自动更新一起关掉。
+- `cca clients auto-install on|off --json`：允许自动更新（默认不允许）。`on` 同时把模式设成 `auto`（不检查就查不到要装的）；打开它就是同意以后查到的更新都装，
+  不再每次发 consent。只改设置，不检查、不安装：App 打开后自己接着跑一次后台的 `clients check`。
 - `cca clients install TOKEN --json`：用户明确点击安装后调用；cca 返回 `client_update` consent，grant 为 `client_update:TOKEN`，默认不同意。
   TOKEN 绑定检查时的目标和软件包哈希，App 原样传递，不解析或生成。目标变化后原授权失效，必须重新检查。
 
@@ -706,13 +721,13 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
 ```json
 {
   "version": 1, "kind": "client_updates", "generated_epoch": 1794042000,
-  "mode": "auto", "next_check_epoch": 1794063600,
+  "mode": "auto", "auto_install": false, "next_check_epoch": 1794063600,
   "clients": [{
     "id": "codex", "label": "ChatGPT", "path": "/Applications/ChatGPT.app",
     "installed_version": "1.0", "available_version": "1.1", "staged_version": "1.1",
     "status": "staged", "message": "软件包已准备好，等待确认安装。", "checked_epoch": 1794041940,
     "install_token": "opaque-checked-target-and-package-hash", "can_install": true,
-    "package_version": "1.1", "package_build": "1100"
+    "package_version": "1.1", "package_build": "1100", "auto_install_pending": false
   }]
 }
 ```
@@ -724,8 +739,11 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
   `busy` 显示「正在更新」，`unsupported` 显示「这个系统暂时没有可用的安装包」。
 - `can_install` 与非空 `install_token` 决定安装按钮是否可用。`needs_recheck` 清空旧 token，UI 显示「要安装的版本变了，请重新检查后再安装」。
 - `next_check_epoch`：下次该后台检查的时间（模式为 off、一个客户端都没装时为 null）。GUI 运行期间睡到这个时间再运行 `clients check`，窗口隐藏时也继续，不隔一会儿起一个进程；已经到了、这次没查成时 15 分钟后再来；
-  没有这个字段时每小时看一次。模式为 off、开发模式或演示数据时不自动检查，低电量模式、系统过热时往后推。定时器不发安装命令，重入时跳过；后台检查以低优先级（utility）运行。
-- 安装仅在用户点击并同意后进行，所有对应客户端进程退出后才允许替换；不强杀进程，不注册 LaunchAgent，不修改原生 updater 设置。
+  没有这个字段时每小时看一次。有 `auto_install_pending` 的行时，cca 给的时间最多是 15 分钟以后。模式为 off、开发模式或演示数据时不自动检查，低电量模式、系统过热时往后推。定时器不发安装命令，重入时跳过；后台检查以低优先级（utility）运行。
+- `auto_install`：用户允许了自动更新，只在模式是 `auto` 时为 true（旧版 cca 没有这个字段：当作没有这个开关，不显示）。
+- `auto_install_pending`（每一行；旧版 cca 没有，当作 false）：允许了自动更新、下载好了而桌面客户端还开着，等它退出后由 cca 自动装（这一行 `can_install` 照样为 true，安装按钮照样能用；
+  `message` 说明在等）。GUI 看到 Claude / ChatGPT 桌面 App 退出、又有这样的行时，过几秒（它的辅助进程比主程序晚退出）跑一次后台的 `clients check`。
+- 没允许自动更新时，安装仅在用户点击并同意后进行。不管哪种，所有对应客户端进程退出后才允许替换；不强杀进程，不注册 LaunchAgent，不修改原生 updater 设置。
 
 ### 8.1 在解压前验证官方归档签名
 

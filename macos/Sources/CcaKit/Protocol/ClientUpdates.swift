@@ -7,6 +7,9 @@ struct ClientUpdatesDoc: CcaDocument, Equatable {
     var kind: String?
     var generatedEpoch: Double?
     var mode: String?
+    /// 允许自动更新（「客户端更新」页的开关）：后台检查查到新版本就装，不再先问；只在自动检查开着时是 true。
+    /// 旧版 cca 没有这个字段（nil）：没有这个开关
+    var autoInstall: Bool?
     /// 下次该后台检查的时间：App 睡到这时候再来问（关了自动检查、没有客户端时是 nil）
     var nextCheckEpoch: Double?
     var clients: [ClientUpdateEntry]
@@ -14,6 +17,7 @@ struct ClientUpdatesDoc: CcaDocument, Equatable {
     enum CodingKeys: String, CodingKey {
         case version, kind, mode, clients
         case generatedEpoch = "generated_epoch"
+        case autoInstall = "auto_install"
         case nextCheckEpoch = "next_check_epoch"
     }
 
@@ -24,8 +28,12 @@ struct ClientUpdatesDoc: CcaDocument, Equatable {
         kind = c.string(.kind)
         generatedEpoch = c.double(.generatedEpoch)
         mode = c.string(.mode)
+        autoInstall = c.bool(.autoInstall)
         clients = c.lossyArray(ClientUpdateEntry.self, .clients) ?? []
     }
+
+    /// 有下载好、等桌面客户端退出后自动安装的：客户端退出时 App 马上检查一次（cca 会装上）
+    var autoInstallPending: Bool { clients.contains(where: \.autoInstallPending) }
 
     /// 有新版本的客户端有几个（侧栏「客户端更新」右边的标签）
     var updatableCount: Int { clients.filter(\.hasUpdate).count }
@@ -47,12 +55,15 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
     var canInstall: Bool
     var packageVersion: String?
     var packageBuild: String?
+    /// 允许自动更新、下载好了而客户端还开着：等它退出后由 cca 自动安装（安装按钮照样能用）
+    var autoInstallPending: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, label, kind, path, status, message
         case installedVersion = "installed_version", availableVersion = "available_version", stagedVersion = "staged_version"
         case checkedEpoch = "checked_epoch", installToken = "install_token", canInstall = "can_install"
         case packageVersion = "package_version", packageBuild = "package_build"
+        case autoInstallPending = "auto_install_pending"
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +82,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
         canInstall = c.bool(.canInstall) ?? false
         packageVersion = c.string(.packageVersion)
         packageBuild = c.stringish(.packageBuild)
+        autoInstallPending = c.bool(.autoInstallPending) ?? false
     }
 
     var isCLI: Bool { kind == "cli" }
@@ -85,6 +97,7 @@ struct ClientUpdateEntry: Decodable, Sendable, Equatable, Identifiable {
     }
 
     var statusText: String {
+        if autoInstallPending { return "退出后自动安装" }
         switch status {
         case "missing": return "还没装"
         case "current": return "已是最新版本"

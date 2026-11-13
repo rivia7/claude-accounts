@@ -13,6 +13,9 @@
   桌面 App 同样一对；end 是 "none"（什么都没开了，之后不再心跳）或 "down"（上报进程被停掉）。
 - 状态在读的时候按存下的数据和现在的时间算，没有清理线程：开着会话却 ttl 秒没心跳、或者报过 end=down → offline；
   没开会话 → none；有会话 idle 秒内有动静 → in_use，否则 idle。只有相对秒数上线，两边的时钟对不对不影响状态。
+- API key（keys）：映射里官方账号记下备查的 API key，经这里同步给登录了这个账号的其他设备。服务器只存设备传上来的密文
+  （每个账号一份，新的整个换掉旧的），看不到 key，也分不出是 key 还是“删掉了”：密钥由盐、邮箱和账号的登录身份派生，只有
+  登录过这个账号的设备算得出来；谁新谁旧、真的假的都由设备自己按密文里认证过的时间判断。存在状态文件旁边的 keys.json。
 - 连接：同一个 IP 最多同时 8 个，每个连接从接进来起最多 15 秒（TLS 握手 5 秒），慢吞吞、不说话的连接占不满服务器；
   POST 按 IP 限流，验签通过之后再按设备限流（别的设备拿你的指纹乱发请求，扣不到你的配额）。
 - 证书公钥的指纹（映射里的 presence.pins）在服务器上用 openssl 算：./policy.sh presence deploy 打印、写进映射。
@@ -44,12 +47,16 @@ MAX_CONN_IP = 8            # 同一个 IP 同时几个连接
 CONN_DEADLINE = 15         # 一个连接从接进来起最多多少秒（到点就断）
 HANDSHAKE_TIMEOUT = 5
 MAX_AGE = 10 * 365 * 86400
+MAX_KEYS_BODY = 1 << 20    # API key 的密文（/v1/keys）一次最多这么大
+MAX_KEYS = 4096            # API key 的密文最多存几个账号
+MAX_KEY_BLOB = 8192        # 一份密文（base64）最长多少个字符（key 最长 4096 个字符，补齐、加上时间后不到 6000）
 
 FP_RE = re.compile(r'^SHA256:[A-Za-z0-9+/]{43}$')
 AID_RE = re.compile(r'^[0-9a-f]{32}$')
 NONCE_RE = re.compile(r'^[0-9a-f]{32}$')
 KEY_RE = re.compile(r'^ssh-ed25519 (AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43})$')
 NAME_BAD = re.compile(r'[\x00-\x1f\x7f]')
+B64_RE = re.compile(r'^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$')
 
 VERIFY_SLOTS = threading.BoundedSemaphore(4)   # 同时验几个签名（一个十几毫秒 CPU）
 
@@ -207,6 +214,28 @@ def parse_units(u):
     return out
 
 
+def parse_blob(b):
+    """keys 里设备传上来的一份密文：{"n": nonce, "c": 密文, "t": 校验}，都是 base64（服务器不懂里面是什么，只查形状和长度）"""
+    if not (isinstance(b, dict) and set(b) == {'n', 'c', 't'} and all(isinstance(b[k], str) and B64_RE.match(b[k]) for k in b)):
+        return None
+    if len(b['n']) != 24 or len(b['t']) != 44 or not 0 < len(b['c']) <= MAX_KEY_BLOB:
+        return None
+    return {'n': b['n'], 'c': b['c'], 't': b['t']}
+
+
+def parse_keys(j):
+    """keys 的 put（{账号摘要: 密文}）和 get（[账号摘要…]）；不合格是 None"""
+    put, get = j.get('put') or {}, j.get('get') or []
+    if not (isinstance(put, dict) and len(put) <= MAX_ACCOUNTS and isinstance(get, list) and len(get) <= MAX_ACCOUNTS):
+        return None
+    if not all(isinstance(a, str) and AID_RE.match(a) for a in list(put) + get):
+        return None
+    blobs = {aid: parse_blob(b) for aid, b in put.items()}
+    if None in blobs.values():
+        return None
+    return blobs, list(dict.fromkeys(get))
+
+
 class Buckets:
     """令牌桶限流：每个键每秒 rate 个，最多攒 burst 个"""
     def __init__(self, rate, burst):
@@ -246,29 +275,44 @@ def sessions(e):
     return list(e.get('cli') or []) + ([e['app']] if e.get('app') else [])
 
 
+def load_doc(path, keys):
+    """读状态文件：没有、读不了、格式不对是 None（读不了的在日志里说一声）"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            d = json.load(f)
+        if isinstance(d, dict) and all(isinstance(d.get(k), dict) for k in keys):
+            return d
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        sys.stderr.write('cca-presence: %s 读不了（%s），从空的开始\n' % (path, e))
+    return None
+
+
+def save_doc(path, data):
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+    os.replace(tmp, path)
+
+
 class Store:
     """state.json：{"seq": 设备清单的序号, "machines": {指纹: {"name", "key"}}, "beats": {指纹: {"seen", "end"}},
-    "units": {指纹: {账号摘要: {"cli": [[开始, 最后动静]…], "app": [开始, 最后动静] | null, "used": 上次使用}}}}，时间都是服务器的"""
-    def __init__(self, path, ttl, idle, retain):
+    "units": {指纹: {账号摘要: {"cli": [[开始, 最后动静]…], "app": [开始, 最后动静] | null, "used": 上次使用}}}}，时间都是服务器的。
+    keys.json（另一个文件：心跳不用跟着重写它）：{"acc": {账号摘要: {"blob": 密文, "fp": 传的设备, "name": 它那时的名字,
+    "at": 什么时候传的}}}（撤销设备不删：是账号的）"""
+    def __init__(self, path, ttl, idle, retain, keys_path=None):
         self.path, self.ttl, self.idle, self.retain = path, ttl, idle, retain
+        self.keys_path = keys_path or os.path.join(os.path.dirname(path) or '.', 'keys.json')
         self.lock = threading.Lock()
         self.data = {'v': 1, 'seq': 0, 'machines': {}, 'beats': {}, 'units': {}}
-        try:
-            with open(path, encoding='utf-8') as f:
-                d = json.load(f)
-            if isinstance(d, dict) and all(isinstance(d.get(k), dict) for k in ('machines', 'beats', 'units')):
-                self.data.update(d)
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError) as e:
-            sys.stderr.write('cca-presence: %s 读不了（%s），从空的开始\n' % (path, e))
+        self.data.update(load_doc(path, ('machines', 'beats', 'units')) or {})
+        self.keys = {'v': 1, 'acc': {}}
+        self.keys.update(load_doc(self.keys_path, ('acc',)) or {})
 
     def save(self):
-        tmp = '%s.%d.tmp' % (self.path, os.getpid())
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(self.data, f, ensure_ascii=False, separators=(',', ':'))
-        os.replace(tmp, self.path)
+        save_doc(self.path, self.data)
 
     def machine(self, fp):
         with self.lock:
@@ -344,6 +388,25 @@ class Store:
                 if not sessions(e) and (e.get('used') or 0) < old:
                     d['units'][fp].pop(aid)
 
+    def key_sync(self, fp, put, get, now):
+        """API key 的密文：先存这台设备传的（整个换掉），再回问的和传的那些账号现在的（没有的不回）。账号太多时不收新的"""
+        with self.lock:
+            acc = self.keys['acc']
+            if len(set(acc) | set(put)) > MAX_KEYS:
+                return 507, {'error': 'full'}
+            name = self.data['machines'][fp]['name']
+            for aid, blob in put.items():
+                acc[aid] = {'blob': blob, 'fp': fp, 'name': name, 'at': now}
+            if put:
+                save_doc(self.keys_path, self.keys)
+            out = {}
+            for aid in list(dict.fromkeys(get + list(put))):
+                e = acc.get(aid)
+                if isinstance(e, dict) and isinstance(e.get('blob'), dict):
+                    out[aid] = {'blob': e['blob'], 'name': e.get('name') if isinstance(e.get('name'), str) else None,
+                                'me': e.get('fp') == fp, 'age': round(max(now - (e.get('at') or 0), 0))}
+            return 200, {'v': API, 'ok': True, 'me_name': name, 'keys': out}
+
     def row(self, fp, e, now):
         beat = self.data['beats'].get(fp) or {}
         seen, end = beat.get('seen') or 0, beat.get('end')
@@ -402,7 +465,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             n = int(self.headers.get('Content-Length') or '')
         except ValueError:
             return self.send(411, {'error': 'bad'})
-        if n < 0 or n > MAX_BODY:
+        if n < 0 or n > (MAX_KEYS_BODY if self.path == '/v1/keys' else MAX_BODY):
             return self.send(413, {'error': 'bad'})
         body = self.rfile.read(n)
         try:
@@ -414,7 +477,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         now = time.time()
         if self.path == '/v1/machines':
             return self.send(*srv.store.set_machines(body, sig, srv.release_key))
-        if self.path not in ('/v1/report', '/v1/view'):
+        if self.path not in ('/v1/report', '/v1/view', '/v1/keys'):
             return self.send(404, {'error': 'not_found'})
         op = self.path[len('/v1/'):]
         try:
@@ -445,6 +508,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(400, {'error': 'bad'})
             srv.store.report(fp, units, end, now)
             return self.send(200, {'v': API, 'ok': True, 'ttl': srv.store.ttl, 'idle': srv.store.idle})
+        if op == 'keys':
+            parsed = parse_keys(j)
+            if parsed is None:
+                return self.send(400, {'error': 'bad'})
+            return self.send(*srv.store.key_sync(fp, parsed[0], parsed[1], now))
         aids = j.get('accounts')
         if not (isinstance(aids, list) and len(aids) <= MAX_ACCOUNTS and all(isinstance(a, str) and AID_RE.match(a) for a in aids)):
             return self.send(400, {'error': 'bad'})
@@ -539,6 +607,7 @@ def main():
     ap.add_argument('--ttl', type=float, default=150, help='开着会话却这么多秒没心跳就算离线')
     ap.add_argument('--idle', type=float, default=600, help='这么多秒没动静算闲置')
     ap.add_argument('--retain-days', type=float, default=30, help='上次使用的记录留几天')
+    ap.add_argument('--keys', help='API key 的密文（默认在状态文件旁边的 keys.json）')
     ap.add_argument('--port-file', help='实际监听的端口写到这里（测试用）')
     a = ap.parse_args()
     with open(a.release_key) as f:
@@ -550,7 +619,7 @@ def main():
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(a.cert, a.key)
     sig_ok = self_test()
-    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400)
+    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys)
     srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, 'ssh-ed25519 ' + k.group(1), sig_ok)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:

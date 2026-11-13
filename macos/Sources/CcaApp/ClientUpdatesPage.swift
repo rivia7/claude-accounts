@@ -16,12 +16,31 @@ struct ClientUpdatesPage: View {
                                          set: { model.setClientUpdateAutomatic($0) })) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("自动检查更新")
-                            Text("定期看有没有新版本，桌面 App 的会先下载好。安装前一定先问你；客户端还开着时不会替换。")
+                            Text("定期看有没有新版本，桌面 App 的会先下载好；客户端还开着时不会替换。")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
+                        // 说明占满一行：两个开关都靠右、上下对齐
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .toggleStyle(.switch)
                     .disabled(model.clientUpdates == nil || model.clientUpdatesBusy)
+                    // 旧版 cca 没有 auto_install：没有这个开关
+                    if model.clientUpdates?.autoInstall != nil {
+                        Divider()
+                        Toggle(isOn: Binding(get: { model.clientUpdates?.autoInstall == true },
+                                             set: { model.setClientUpdateAutoInstall($0) })) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("允许自动更新")
+                                Text(model.clientUpdates?.mode == "auto"
+                                     ? "查到新版本就直接装，不再先问。桌面 App 开着时不替换，等你退出它再装；终端里的 Claude Code、Codex 只自动更新官方安装器装的，开着的会话不受影响。"
+                                     : "要先打开自动检查。打开后查到新版本就直接装，不再先问。")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .toggleStyle(.switch)
+                        .disabled(model.clientUpdates?.mode != "auto" || model.clientUpdatesBusy)
+                    }
                     if model.hello?.devMode == true || model.isFixtureMode {
                         Text(model.isFixtureMode ? "演示数据：不会自动检查或安装。" : "开发模式：只在手动操作时检查。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -60,7 +79,9 @@ struct ClientUpdatesPage: View {
                 Text("客户端更新").font(.system(size: 24, weight: .semibold))
                 if model.clientUpdatesBusy { ProgressView().controlSize(.small) }
             }
-            Text("这台 Mac 上的桌面 App，和终端里的 Claude Code、Codex。有新版本时由你决定什么时候安装。")
+            Text(model.clientUpdates?.autoInstall == true
+                 ? "这台 Mac 上的桌面 App，和终端里的 Claude Code、Codex。有新版本时自动安装，桌面 App 开着时等你退出它。"
+                 : "这台 Mac 上的桌面 App，和终端里的 Claude Code、Codex。有新版本时由你决定什么时候安装。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }

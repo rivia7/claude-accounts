@@ -176,7 +176,7 @@ struct TutorialCard {
         TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。关掉主窗口后 cca 还在后台运行，要彻底退出点这里面的「退出」。"),
             ("arrow.down.circle", "cca 有新版本时窗口顶上会提示，点「更新并重新打开」；点左下角的版本号随时检查 cca 更新。"),
-            ("arrow.down.app", "桌面 App 和终端里的 Claude Code、Codex 的更新在左侧「客户端更新」页：自动检查，你确认后才安装。"),
+            ("arrow.down.app", "桌面 App 和终端里的 Claude Code、Codex 的更新在左侧「客户端更新」页：自动检查，默认你确认后才安装；也可以打开「允许自动更新」。"),
             ("book", "想再看一遍这个教程：点左下角的「新手教程」或工具栏的问号；「帮助」菜单里还有每个版本的更新说明。"),
         ], art: .menubar),
     ]

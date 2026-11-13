@@ -98,7 +98,7 @@ Linux 上能用的是命令行：
 | 添加第三方 API 账号 | `cca add api`，或者在菜单里选"＋ 添加第三方 API 账号" |
 | 查看各账号的用量 | `cca usage`（只看一个：`cca usage 工作`；给脚本用：`cca usage --json`） |
 | 换第三方 API 账号的 key | `cca key kimi` |
-| 给官方账号记一把 API key 备查 | `cca key 工作`（只存进钥匙串，cca 不拿它启动；`--show` 打出来，`--forget` 删掉） |
+| 给官方账号记一把 API key 备查 | `cca key 工作`（存进钥匙串，cca 不拿它启动；`--show` 打出来，`--forget` 删掉；维护者映射里的账号会加密同步给登录了它的其他设备） |
 | 查看所有账号 | `cca ls` |
 | 改别名 | `cca rename 账号 新别名`（写 `-` 去掉别名；登录、资料、端口都不变；cca App 里点名字旁边的笔） |
 | 换节点（也能改别名） | `cca edit` |
@@ -317,7 +317,7 @@ aga @工作              # 简写：aga 就是 cca agy（aga、aga add、aga ls 
 - **工作资料共用**：`~/.gemini` 里的会话（`conversations`）、记忆（`brain`）、历史、`settings.json`、`keybindings.json`、`GEMINI.md`、`AGENTS.md`，以及 `config/` 下的 MCP、技能、规则、工作流、插件等，所有账号共用一份；`--continue` 认的“这个目录上次的会话”也共用，换个账号照样接着聊。
 - **不共用的**：登录、两个装机标识（`installation_id` 和 `jetski_state.pbtxt` 里的 `installation_uuid`：添加账号时 cca 给每个账号各生成一份，之后固定不变）、日志、会话摘要的索引（`conversation_summaries.db` 等，agy 会按共享的会话重建）。
 - **没有的**：查用量的接口（在 agy 里用 `/usage` 看）、第三方 API 账号、桌面 App 和控制台的账单页；`cca agy usage`、`add api`、`app`、`billing` 会说清楚，什么都不做。
-- **其它命令**：`cca agy ls`、`edit`、`check`（出口检测：Google 的网站没有 `/cdn-cgi/trace`，经同一个端口看 Cloudflare 看到的 IP）、`web`（用账号专属的浏览器打开 antigravity.google）、`rm`，和 Claude 账号的同名命令一样。服务器上登录和 Claude、Codex 一样：给出在 Mac 上运行的 `cca agy login-page …` 那一行，Mac 上打开登录页，授权码抄回服务器的终端。
+- **其它命令**：`cca agy ls`、`edit`、`check`（出口检测：Google 的网站没有 `/cdn-cgi/trace`，经同一个端口看 Cloudflare 看到的 IP）、`web`（用账号专属的浏览器打开 Gemini 网页版 gemini.google.com）、`rm`，和 Claude 账号的同名命令一样。服务器上登录和 Claude、Codex 一样：给出在 Mac 上运行的 `cca agy login-page …` 那一行，Mac 上打开登录页，授权码抄回服务器的终端。
 - **简写 `aga`**：`aga` 就是 `cca agy`，后面接什么都一样（`aga`、`aga @工作`、`aga add`……），和 Codex 的 `cxa` 一样：`cca install` 时和 `cca` 一起放进 `~/.local/bin`；用着 Antigravity 的机器上 `aga` 不见了（比如以前装的 cca 升级上来），下一次运行 cca 时自动补上。已经有别的 `aga` 命令时不会覆盖它。
 - **图形界面**：用过 `cca agy` 之后，总览和侧栏里多一组 Antigravity 账号（装了 `agy` 命令时，侧栏底部也能「启用 Antigravity 账号」），能打开终端、网页版、检测出口；没有用量和桌面 App。
 
@@ -358,7 +358,7 @@ cca gui
 - 一键打开这个账号的 Claude App / ChatGPT App、网页版，检测出口，刷新用量；
 - 本周额度快重置了、还剩不少的账号，名字旁边有个沙漏，提醒你先用它，别浪费；
 - 每周用量：账号页的「每周用量」是最近 12 周每周用到额度的百分之几（一周一根竖条，填满就是用完，鼠标指着一周看细节），左边的「用量统计」把所有账号排在一起比，哪个总不够用、哪个常常剩一大半，一眼看出来。Claude、OpenAI 不给以前的用量，所以是 cca 每次查用量时记一笔，从装上这个版本的那一周开始一周一周攒起来；
-- 账号的 API key（第三方 API 账号的，或者给官方账号记下备查的）：默认只显示掩码，点眼睛看全文，一键复制（剪贴板标成机密，60 秒后自动清掉）；
+- 账号的 API key（第三方 API 账号的，或者给官方账号记下备查的）：默认只显示掩码，点眼睛看全文，一键复制（剪贴板标成机密，60 秒后自动清掉）；维护者映射里的官方账号，在一台设备上记下、换掉、删掉，登录了这个账号的其他设备上也跟着变（经设备统计的服务器加密同步，服务器解不开），账号页写着是从哪台设备同步来的；
 - 「节点分流」一页列出端口池每个槽位：应选的节点、路由器（在外面是本机 Clash Verge）上实际选中的、端口通不通，不一致时一键同步路由器；
 - 菜单栏图标里是精简的账号列表和用量（5 小时、本周，Claude 账号还有 Fable），点一下就能打开账号的 App。
 
@@ -414,23 +414,25 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
 
 ## 自动更新
 
-### ChatGPT 桌面客户端
+### 桌面客户端和终端工具
 
-cca GUI 的「客户端更新」页管理已安装的 ChatGPT 桌面客户端（`com.openai.codex`）。GUI 运行期间默认每天检查一次，即使主窗口隐藏也会检查；发现新版本后下载到独立缓存，验证官方包签名、App 签名、开发者身份和版本，再显示可安装状态。开发模式和演示模式不会自动检查。
+cca GUI 的「客户端更新」页管理这台 Mac 上的 Claude、ChatGPT 桌面客户端（`com.anthropic.claudefordesktop`、`com.openai.codex`）和终端里的 Claude Code、Codex。GUI 运行期间默认每 6 小时检查一次，即使主窗口隐藏也会检查；桌面客户端发现新版本后下载到独立缓存，验证官方包签名（Claude 是官方给的 SHA-256 和大小）、App 签名、开发者身份和版本，再显示可安装状态。终端工具只查版本：官方安装器装的用它们自己的 `update` 命令更新，npm、Homebrew 装的提示在终端里运行什么。开发模式和演示模式不会自动检查。
 
-安装始终需要确认。请先退出所有 ChatGPT 实例，再点「安装更新」；下载不会打断正在使用的 App。确认只适用于当时检查过的安装包和目标版本。如果原生更新器或其他工具改动了 App，cca 会停止本次安装，要求重新检查。不会自动降级，也不会自动提权。
+默认安装前先问你：请先退出这个客户端的所有实例，再点「安装更新」；下载不会打断正在使用的 App，确认只适用于当时检查过的安装包和目标版本。打开「允许自动更新」后，查到新版本就直接安装、不再询问：桌面客户端开着时不会被关掉，等你退出它以后再装（GUI 看到它退出就来装，最晚 15 分钟后）；终端里开着的会话继续用旧版本，新开的才是新版本。不管哪种方式，原生更新器或其他工具改动了 App 时都会停止本次安装、要求重新检查；不会自动降级，也不会自动提权。
 
-命令行使用同一流程（需要安装或编译好 cca GUI，供安装包验签使用）：
+命令行使用同一流程（桌面客户端需要安装或编译好 cca GUI，供安装包验签使用）：
 
 ```bash
 cca clients status                 # 查看状态
-cca clients check --force          # 立即检查、下载并验证
+cca clients check --force          # 立即检查、下载并验证（允许自动更新时顺便装好）
 cca clients install TOKEN          # 将 TOKEN 换成检查给出的凭据；确认后安装
-cca clients mode off               # 关闭自动检查；手动检查仍可用
-cca clients mode auto              # 恢复每日自动检查和准备
+cca clients auto-install on        # 允许自动更新：查到新版本就装，不再询问
+cca clients auto-install off       # 恢复安装前先确认
+cca clients mode off               # 关闭自动检查（允许自动更新也一起关掉）；手动检查仍可用
+cca clients mode auto              # 恢复自动检查和准备
 ```
 
-此入口只更新 ChatGPT 桌面客户端，不更新 Claude、Chrome 或终端工具；也不改变它们的更新设置。更新包请求不带账号登录凭证或共享安装 ID，但更新服务器仍可看到下载连接的 IP。新版本通过发行方签名验证，不等于已经重新完成设备指纹隔离审计。
+不改变这些客户端自己的更新设置。更新包请求不带账号登录凭证或共享安装 ID，但更新服务器仍可看到下载连接的 IP。新版本通过发行方签名验证，不等于已经重新完成设备指纹隔离审计。
 
 ### cca 本身
 
@@ -490,7 +492,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 升级时，旧版指向共享主目录的未知条目链接会拆成账号自己的副本，源文件保留；用户自建的外部链接不动。旧共享目录若含内部符号链接，自动拆分会停止并指出路径，避免追随外部目录或循环链接。已有设备 ID 不因这项迁移重置。共享与续接会保留共同上下文，因此客户端标识独立并不意味着服务端无法关联账号。
 
 **第三方 API 的 key 存在哪？**
-默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。给官方账号记下备查的 key（`cca key 工作`）也存在钥匙串里（条目名 `cca-ref-…`，Codex 的是 `cca-codex-ref-…`），cca 绝不拿它登录或启动账号，同样随 `cca rm`、`cca restore` 删掉。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。Linux 服务器上没有钥匙串，这些 key 存成 `~/.cca/secrets` 下只有你能读的文件（目录 700、文件 600），同样随 `cca rm`、`cca restore` 删掉，不进备份包。
+默认存在 macOS 钥匙串里（条目名 `cca-api-…`），启动时经 Claude Code 的 `apiKeyHelper` 交给它，不出现在命令行参数和环境变量里。删除账号（`cca rm`）或一键还原（`cca restore`）时一起删掉。给官方账号记下备查的 key（`cca key 工作`）也存在钥匙串里（条目名 `cca-ref-…`，Codex 的是 `cca-codex-ref-…`），cca 绝不拿它登录或启动账号，同样随 `cca rm`、`cca restore` 删掉（只删这台设备上的）。维护者映射里的 Claude、ChatGPT 官方账号、开着设备统计时，这把 key 经维护者的设备统计服务器同步给登录了这个账号的其他设备：只传密文，密钥由账号的登录身份派生，服务器和没登录过这个账号的设备都解不开；`cca key 工作 --forget` 删掉时其他设备上同步来的也一起删。只有你自己在账号表里写了 `key` 字段时，key 才会以明文存在账号表里（文件只有你能读；`cca restore` 打的备份包也只有你能读）。Linux 服务器上没有钥匙串，这些 key 存成 `~/.cca/secrets` 下只有你能读的文件（目录 700、文件 600），同样随 `cca rm`、`cca restore` 删掉，不进备份包。
 
 **cca 启动的 Claude Code 能直接看、改 `~/.cca` 吗？**
 只能直接看、改这个账号自己的目录。cca 启动 Claude Code 时把 `~/.cca/accounts/` 下这个账号的目录加成工作目录（`--add-dir`），里面有它的用量、出口检测结果和 Claude Code 在这个账号下的配置（`claude/`），Claude 帮你看这些时不用一次次确认；改文件照你选的权限模式来。账号表、`config.json`、映射、日志和别的账号的目录不在工作目录里，Claude 要读时照权限模式来（默认会先问你）。登录凭证和浏览器资料不管在不在工作目录里都不让碰：映射的 deploy key 私钥、维护者参考节点（`policy/nodes.json`，里面有节点的密钥）、写参考节点前留的 Clash Verge 配置备份（`backup/clash-verge-*.yaml`）、Codex 账号的 `auth.json`、各账号（包括这个账号自己）的 Chrome 和桌面 App 资料目录，cca 用 `--disallowedTools` 挡住了 Claude 的读写，直接拒绝、不会来问你（账号表里如果写了明文的 `key` 字段，你让 Claude 读账号表时它是看得到的，key 最好存钥匙串）。不想放开的话，在 `~/.cca/config.json` 里写上 `"claude_add_dir": false`。只管 cca 启动的 Claude Code，Codex 和桌面 App 不受影响。

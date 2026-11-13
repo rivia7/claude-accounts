@@ -513,17 +513,31 @@ struct APIInfo: Decodable, Sendable, Equatable {
 /// `api_key`（PROTOCOL 2.2）：这个账号存没存 API key。官方账号的是记下备查的（cca 不拿它启动），第三方 API 账号的是启动要用的。
 /// `hint` 是掩码（`sk-ant-…x7Qa`；短的 key 没有，是空的），存的时候 cca 算好的，**不是** key；明文只在点「显示」「复制」时
 /// 经管道向 cca 要（`cca [codex] key 账号 --show`）。
+/// 官方账号记下的那一把可能经设备统计的服务器加密同步给登录了这个账号的其他设备（`shared`）：`fromDevice` 是从哪台设备同步来的，
+/// `savedEpoch` 是什么时候记下的，`syncError` 是最近一次没同步成的原因（都是 cca 给的；旧版 cca 没有这几个字段：当作不同步）。
 struct APIKeyInfo: Decodable, Sendable, Equatable {
     var saved: Bool
     var hint: String
     var source: APIKeySource
+    var shared = false
+    var savedEpoch: Double?
+    var fromDevice: String?
+    var syncError: String?
 
-    enum CodingKeys: String, CodingKey { case saved, hint, source }
+    enum CodingKeys: String, CodingKey {
+        case saved, hint, source, shared
+        case savedEpoch = "saved_epoch", fromDevice = "from_device", syncError = "sync_error"
+    }
 
-    init(saved: Bool, hint: String, source: APIKeySource) {
+    init(saved: Bool, hint: String, source: APIKeySource, shared: Bool = false, savedEpoch: Double? = nil,
+         fromDevice: String? = nil, syncError: String? = nil) {
         self.saved = saved
         self.hint = hint
         self.source = source
+        self.shared = shared
+        self.savedEpoch = savedEpoch
+        self.fromDevice = fromDevice
+        self.syncError = syncError
     }
 
     init(from decoder: Decoder) throws {
@@ -531,6 +545,10 @@ struct APIKeyInfo: Decodable, Sendable, Equatable {
         saved = c.bool(.saved) ?? false
         hint = c.string(.hint) ?? ""
         source = c.lossy(APIKeySource.self, .source) ?? APIKeySource(rawValue: "")
+        shared = c.bool(.shared) ?? false
+        savedEpoch = c.double(.savedEpoch)
+        fromDevice = c.string(.fromDevice).flatMap { $0.isEmpty ? nil : $0 }
+        syncError = c.string(.syncError).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 

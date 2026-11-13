@@ -36,6 +36,7 @@ if fullMode {
     await featureModelTests()
     await clientUpdateProtocolTests()
     await clientUpdateModelTests()
+    await clientAutoInstallModelTests()
     await pollingTests()
     await devicesTests()
     arrangementTests()

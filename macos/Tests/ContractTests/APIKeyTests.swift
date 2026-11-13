@@ -43,6 +43,37 @@ func apiKeyTests() async {
     check("api_key：解码", saved.apiKey == APIKeyInfo(saved: true, hint: "sk-ant-…x7Qa", source: .keychain) && saved.can.apiKey)
     check("旧版 cca 没有 api_key、can.api_key：没有入口", account().apiKey == nil && !account().can.apiKey)
     check("api_key：类型不对的字段当作没存", account(["api_key": ["saved": "yes", "hint": 3]]).apiKey == APIKeyInfo(saved: false, hint: "", source: .none))
+    check("旧版 cca 的 api_key 没有同步的字段：当作不同步", saved.apiKey?.shared == false && saved.apiKey?.fromDevice == nil
+          && saved.apiKey?.savedEpoch == nil && saved.apiKey?.syncError == nil)
+    let synced = account(["api_key": ["saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1794020000.5,
+                                      "from_device": "dan-air", "sync_error": NSNull()]])
+    check("api_key：同步来的（来源、记下的时间）", synced.apiKey == APIKeyInfo(saved: true, hint: "sk-ant-…x7Qa", source: .keychain, shared: true,
+                                                                       savedEpoch: 1794020000.5, fromDevice: "dan-air"))
+    check("api_key：空的来源、原因当作没有", account(["api_key": ["saved": true, "hint": "", "source": "keychain", "shared": true, "from_device": "",
+                                                       "sync_error": ""]]).apiKey == APIKeyInfo(saved: true, hint: "", source: .keychain, shared: true))
+
+    // 账号页那一行下面的一句（只有 cca 说会同步时才有）
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    let now = 1794042000.0   // 2026-11-07 17:00（上海）
+    let mine = APIKeyInfo(saved: true, hint: "h", source: .keychain, shared: true, savedEpoch: now - 3600)
+    check("同步：这台 Mac 记下的", Texts.apiKeyShare(mine, now: now, calendar: cal) == "这台 Mac 16:00 记下，登录了这个账号的其他设备也能看到（加密同步）。",
+          Texts.apiKeyShare(mine, now: now, calendar: cal) ?? "nil")
+    var from = mine
+    from.fromDevice = "dan-air"
+    from.savedEpoch = now - 86400
+    check("同步：别的设备记下、同步来的", Texts.apiKeyShare(from, now: now, calendar: cal) == "dan-air 昨天 17:00 记下，已加密同步到这台 Mac。",
+          Texts.apiKeyShare(from, now: now, calendar: cal) ?? "nil")
+    from.savedEpoch = nil
+    check("同步：不知道什么时候记下的就不写时间", Texts.apiKeyShare(from, now: now, calendar: cal) == "dan-air 记下，已加密同步到这台 Mac。")
+    check("同步：还没记下", Texts.apiKeyShare(APIKeyInfo(saved: false, hint: "", source: .none, shared: true), now: now)?.hasPrefix("记下后，登录了这个账号的其他设备也能看到") == true)
+    var failing = from
+    failing.syncError = "设备统计的服务器还不收 API key（维护者要更新服务器：./policy.sh presence deploy）"
+    check("同步：没同步成时照 cca 的原因说", Texts.apiKeyShare(failing, now: now) == "没能和其他设备同步：设备统计的服务器还不收 API key（维护者要更新服务器：./policy.sh presence deploy）")
+    check("不同步的账号：不说", Texts.apiKeyShare(APIKeyInfo(saved: true, hint: "h", source: .keychain, fromDevice: "dan-air"), now: now) == nil)
+    check("「记录…」的说明：会同步的说清楚", Texts.apiKeyRecordHelp(isAPI: false, shared: true).contains("加密同步给登录了这个账号的其他设备")
+          && Texts.apiKeyRecordHelp(isAPI: false, shared: false).contains("只存进这台 Mac")
+          && Texts.apiKeyRecordHelp(isAPI: true, shared: true) == "输入这个账号的 key，存进这台 Mac 的钥匙串")
 
     // 明文：只收 cca 打出来的一串可见 ASCII，打印、调试输出、dump 里都只是「<密文>」
     let key = "sk-test-" + String(repeating: "x", count: 30)
@@ -134,7 +165,8 @@ func apiKeyTests() async {
         m.shutdown()
         return
     }
-    check("演示数据：bob 存了 key，只有掩码；carol 没存", bob.apiKey == APIKeyInfo(saved: true, hint: "sk-ant-…x7Qa", source: .keychain)
+    check("演示数据：bob 存了 key，只有掩码（从 dan-air 同步来的）；carol 没存",
+          bob.apiKey == APIKeyInfo(saved: true, hint: "sk-ant-…x7Qa", source: .keychain, shared: true, savedEpoch: 1793955600, fromDevice: "dan-air")
           && c.apiKey?.saved == false && bob.can.apiKey)
     m.copyAPIKey(bob)
     _ = await waitUntil { m.toast != nil }

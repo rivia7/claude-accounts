@@ -775,7 +775,7 @@ R1=sk-ant-api03-REFtest0123456789abcdWXYZ; R2=sk-ant-api03-REFtest9876543210zyxw
 AAID=$(basename "$(ls -d "$H"/.cca/accounts/alice-example-com-*)")
 : > "$T/env.log"; rm -f "$T/security.stdin" "$T/claude.key"
 out=$(run CCA_TTY="$(ans "$R1")" cca key alice 2>&1); rc=$?
-ok "cca key 官方账号：记一把 API key 备查，存进钥匙串单独的条目（cca-ref-，账户名 reference），config.json 记下掩码；key 不进命令行和日志" '[ $rc -eq 0 ] && [ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$R1" ] && [ -z "$(kcd alice)" ] && cfgok "c[\"ref_keys\"] == [\"$AAID\"] and c[\"key_hints\"][\"$AAID\"] == {\"host\": \"reference\", \"hint\": \"sk-ant-…WXYZ\"}" && ! grep -qF "$R1" security.log "$T/security.stdin" "$T/env.log" && printf "%s" "$out" | grep -q "cca 不会拿它登录或启动"'
+ok "cca key 官方账号：记一把 API key 备查，存进钥匙串单独的条目（cca-ref-，账户名 reference），config.json 记下掩码和记下的时间；key 不进命令行和日志；没配置设备统计时不说同步" '[ $rc -eq 0 ] && [ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$R1" ] && [ -z "$(kcd alice)" ] && cfgok "c[\"ref_keys\"] == [\"$AAID\"] and dict(c[\"key_hints\"][\"$AAID\"], at=0) == {\"host\": \"reference\", \"hint\": \"sk-ant-…WXYZ\", \"at\": 0} and c[\"key_hints\"][\"$AAID\"][\"at\"] > 1.7e9" && ! grep -qF "$R1" security.log "$T/security.stdin" "$T/env.log" && printf "%s" "$out" | grep -q "cca 不会拿它登录或启动" && ! printf "%s" "$out" | grep -q "其他设备" && [ ! -e "$H/.cca/presence/keys.json" ]'
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
 out=$(run cca _api-key "$AAID" 2>/dev/null); rc2=$?
 ok "官方账号记的 key 绝不拿来启动：不加 --settings，apiKeyHelper 的回调也不给它" '[ $rc -eq 3 ] && ! lastline ARGS | grep -q -- --settings && [ ! -e "$T/claude.key" ] && [ $rc2 -ne 0 ] && [ -z "$out" ]'
@@ -786,7 +786,7 @@ ok "在 Claude Code 的会话里运行 --show：不打出来（会进对话记�
 run cca rename alice@example.com 主号 >/dev/null 2>&1
 v=$(run cca key 主号 --show 2>/dev/null); st=$(gj state)
 run cca rename 主号 - >/dev/null 2>&1
-ok "改了别名记下的 key 还在（按账号目录名认）；_gui state 的 api_key 照 config.json 说（掩码），不读钥匙串" '[ "$v" = "$R1" ] && printf "%s" "$st" | jok "acct(0, \"主号(alice@example.com)\")[\"api_key\"] == {\"saved\": True, \"hint\": \"sk-ant-…WXYZ\", \"source\": \"keychain\"} and acct(0, \"主号(alice@example.com)\")[\"can\"][\"api_key\"]" && ! printf "%s" "$st" | grep -qF "$R1"'
+ok "改了别名记下的 key 还在（按账号目录名认）；_gui state 的 api_key 照 config.json 说（掩码），不读钥匙串" '[ "$v" = "$R1" ] && printf "%s" "$st" | jok "(lambda k: dict(k, saved_epoch=0) == {\"saved\": True, \"hint\": \"sk-ant-…WXYZ\", \"source\": \"keychain\", \"shared\": False, \"saved_epoch\": 0, \"from_device\": None, \"sync_error\": None} and k[\"saved_epoch\"] > 1.7e9)(acct(0, \"主号(alice@example.com)\")[\"api_key\"]) and acct(0, \"主号(alice@example.com)\")[\"can\"][\"api_key\"]" && ! printf "%s" "$st" | grep -qF "$R1"'
 v=$(run cca key kimi --show 2>/dev/null); out=$(runev cca key kimi --forget 2>&1); rc=$?
 ok "第三方 API 账号：--show 和启动时取的一样；--forget 不删它的 key（启动要用）" '[ "$v" = "$S3" ] && [ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"api_account\"" && [ "$(kc kimi)" = "$S3" ]'
 run CCA_TTY="$(ans "$R2")" cca key alice >/dev/null 2>&1
@@ -1317,6 +1317,7 @@ ok "agy 启动：用的是 cca 固定的两个装机标识（agy 照用，没有
 ok "共享：会话、记忆（brain）、历史、设置、GEMINI.md、技能，--continue 用的 last_conversations.json 都链接到 ~/.gemini；antigravity-cli、config 本身是账号自己的目录" 'alk GEMINI.md && alk antigravity-cli/conversations && alk antigravity-cli/brain && alk antigravity-cli/history.jsonl && alk antigravity-cli/settings.json && alk antigravity-cli/cache/last_conversations.json && alk config/skills && [ -d "$AG/antigravity-cli" ] && [ ! -L "$AG/antigravity-cli" ] && [ ! -L "$AG/config" ] && [ ! -L "$AG/antigravity-cli/cache" ]'
 ok "不共享：登录 token、装机标识、日志各账号一份" '[ ! -L "$AG/antigravity-cli/installation_id" ] && [ ! -L "$AG/antigravity-cli/jetski_state.pbtxt" ] && [ -d "$AG/antigravity-cli/log" ] && [ ! -L "$AG/antigravity-cli/log" ] && [ ! -e "$G/antigravity-cli/log" ]'
 ok "会话里写的共享内容回到 ~/.gemini：会话、历史、技能、--continue 的记录；agy 用临时文件改名保存的 settings.json 并回去再链接上" '[ -f "$G/antigravity-cli/conversations/from-alice.pb" ] && grep -q "hi from alice" "$G/antigravity-cli/history.jsonl" && [ -d "$G/config/skills/from-alice" ] && grep -q "conv-alice" "$G/antigravity-cli/cache/last_conversations.json" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j.get(\"lastWriter\") == \"alice\" and j.get(\"theme\") == \"dark\" else 1)" "$G/antigravity-cli/settings.json"'
+ok "agy 第一次运行时建的空 config/mcp_config.json：退出时并回 ~/.gemini、链接上，不当成坏的 JSON 报冲突" '[ -f "$G/config/mcp_config.json" ] && [ ! -s "$G/config/mcp_config.json" ] && alk config/mcp_config.json && ! printf "%s" "$out" | grep -q "有冲突或无法合并" && [ ! -e "$H/.cca/agy/conflicts" ]'
 m=$(run CCA_TTY="$(ans q)" cca agy 2>&1)
 ok "cca agy 菜单：标题是 Antigravity，账号已登录；没有添加第三方 API 账号这一项" 'printf "%s" "$m" | grep -q "选择 Antigravity 账号" && printf "%s" "$m" | grep -qE "1\. alice@example.com +已登录 +US-A" && printf "%s" "$m" | grep -q "a      添加新账号" && ! printf "%s" "$m" | grep -q "第三方 API"'
 n_args=$(grep -c "^ARGS: --gemini_dir=$AG --version" agy.log)
@@ -1366,7 +1367,7 @@ ok "cca agy login-page（在 Mac 上）：在 agy 账号专属的 Chrome 里经�
 : > open.log
 run CCA_TTY="$(ans)" cca agy web alice >/dev/null 2>&1
 out=$(run cca agy check alice 2>&1)
-ok "cca agy web 用账号专属的浏览器打开 antigravity.google；cca agy check 经账号的端口检测出口" 'grep -F "https://antigravity.google/" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && printf "%s" "$out" | grep -qE "alice@example.com +US-A +:7902"'
+ok "cca agy web 用账号专属的浏览器打开 gemini.google.com；cca agy check 经账号的端口检测出口" 'grep -F "https://gemini.google.com/" open.log | grep -qF -- "--user-data-dir=$AGD/chrome" && printf "%s" "$out" | grep -qE "alice@example.com +US-A +:7902"'
 GF0="$T/guifx"; mkdir -p "$GF0"; out=$(gj state); printf '%s' "$out" > "$GF0/state_agy.json"; out2=$(gj hello); printf '%s' "$out2" > "$GF0/hello_agy.json"
 ok "_gui state：第三种工具 agy（Antigravity，命令前缀 agy），features 说明没有桌面 App、第三方 API 和查用量；alice 登录着、档位按 token 里的 user_tier，槽位 2；不能的事 can_why 是 unsupported" 'printf "%s" "$out" | jok "(lambda t: t[\"id\"] == \"agy\" and t[\"label\"] == \"Antigravity\" and t[\"cli_prefix\"] == [\"agy\"] and t[\"features\"] == {\"app\": False, \"api\": False, \"usage\": False} and t[\"enabled\"] is True and t[\"bin\"] and (lambda a: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Google AI Pro\" and a[\"plan_tier\"] == \"standard\" and a[\"slot\"] == 2 and a[\"can\"][\"app\"] is False and a[\"can_why\"][\"app\"] == \"unsupported\" and a[\"can\"][\"usage\"] is False and a[\"can_why\"][\"usage\"] == \"unsupported\" and a[\"can\"][\"billing\"] is False and a[\"can\"][\"limit_resets\"] is False and a[\"can\"][\"cli\"] is True and a[\"can\"][\"web\"] is True and a[\"usage_weeks\"] is None)(t[\"accounts\"][0]))(d[\"tools\"][2]) and d[\"tools\"][0][\"features\"] == {\"app\": True, \"api\": True, \"usage\": True} and d[\"routing\"][\"slots\"][1][\"tool\"] == \"agy\""'
 ok "_gui hello：agy 已启用，找到了 agy 命令" 'printf "%s" "$out2" | jok "d[\"tools\"][\"agy\"][\"enabled\"] is True and d[\"tools\"][\"agy\"][\"bin\"]"'
@@ -1434,7 +1435,7 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\"})(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
 ok "_gui state：能不能打开账单页，条件和网页版一样（入口的显示由 cca 说了算）" 'printf "%s" "$out" | jok "all(a[\"can\"][\"billing\"] == a[\"can\"][\"web\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版一样" 'printf "%s" "$out" | jok "all(a[\"can\"][\"limit_resets\"] == (i == 0 and a[\"can\"][\"web\"]) for i, t in enumerate(d[\"tools\"]) for a in t[\"accounts\"])"'
 mv "$T/bin/claude" "$T/claude.off"
@@ -1448,12 +1449,12 @@ K1=sk-proj-GUItest0123456789abcdEFGH
 run CCA_TTY="$(ans "$K1")" cca key alice >/dev/null 2>&1
 edit_table 'j["kimi3"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-0123456789wxyz", "id": "kimi3"}'
 n_find=$(grep -c "find-generic-password" security.log); out=$(gj state); printf '%s' "$out" > "$GF/state_api_keys.json"
-ok "_gui state 的 api_key：官方账号记的 key 只给掩码（sk-proj-…EFGH），账号表里写的 key 也只给掩码（sk-GUI-…wxyz），没存的是空的；不读钥匙串" '! printf "%s" "$out" | grep -qF "$K1" && ! printf "%s" "$out" | grep -q sk-GUI-SECRET && [ "$(grep -c "find-generic-password" security.log)" = "$n_find" ] && printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"api_key\"] == {\"saved\": True, \"hint\": \"sk-proj-…EFGH\", \"source\": \"keychain\"} and acct(0, \"kimi3\")[\"api_key\"] == {\"saved\": True, \"hint\": \"sk-GUI-…wxyz\", \"source\": \"table\"} and acct(1, \"dave@example.com\")[\"api_key\"] == {\"saved\": False, \"hint\": \"\", \"source\": \"\"} and all(a[\"can\"][\"api_key\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
+ok "_gui state 的 api_key：官方账号记的 key 只给掩码（sk-proj-…EFGH），账号表里写的 key 也只给掩码（sk-GUI-…wxyz），没存的是空的；不读钥匙串" '! printf "%s" "$out" | grep -qF "$K1" && ! printf "%s" "$out" | grep -q sk-GUI-SECRET && [ "$(grep -c "find-generic-password" security.log)" = "$n_find" ] && printf "%s" "$out" | jok "(lambda k: dict(k, saved_epoch=0) == {\"saved\": True, \"hint\": \"sk-proj-…EFGH\", \"source\": \"keychain\", \"shared\": False, \"saved_epoch\": 0, \"from_device\": None, \"sync_error\": None} and k[\"saved_epoch\"] > 1.7e9)(acct(0, \"alice@example.com\")[\"api_key\"]) and acct(0, \"kimi3\")[\"api_key\"] == {\"saved\": True, \"hint\": \"sk-GUI-…wxyz\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None} and acct(1, \"dave@example.com\")[\"api_key\"] == {\"saved\": False, \"hint\": \"\", \"source\": \"\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None} and all(a[\"can\"][\"api_key\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 edit_table 'j.pop("kimi3")'; run CCA_GRANT="key_forget:${AD##*/}" cca key alice --forget >/dev/null 2>&1; run cca ls >/dev/null 2>&1
 # 短的 key（kimi 的 sk-test-CCCC3333）没有掩码，也记着存的时候的域名：换了服务商同样算没存
 edit_table 'j["kimi"]["base_url"] = j["kimi"]["base_url"].replace("//api.example.com", "//api9.example.com")'; out=$(gj state)
 edit_table 'j["kimi"]["base_url"] = j["kimi"]["base_url"].replace("//api9.example.com", "//api.example.com")'; out2=$(gj state)
-ok "_gui state 的 api_key：第三方 API 账号换了服务商（域名和存的时候不一样）算没存，短的 key（没有掩码）也一样；换回来又算存了" 'printf "%s" "$out" | jok "acct(0, \"kimi\")[\"api_key\"] == {\"saved\": False, \"hint\": \"\", \"source\": \"\"}" && printf "%s" "$out2" | jok "acct(0, \"kimi\")[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"keychain\"}"'
+ok "_gui state 的 api_key：第三方 API 账号换了服务商（域名和存的时候不一样）算没存，短的 key（没有掩码）也一样；换回来又算存了" 'printf "%s" "$out" | jok "acct(0, \"kimi\")[\"api_key\"] == {\"saved\": False, \"hint\": \"\", \"source\": \"\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None}" && printf "%s" "$out2" | jok "acct(0, \"kimi\")[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"keychain\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None}"'
 cp "$AD/claude/.claude.json" "$T/alice.claude.json"; printf '{"oauthAccount": ' > "$AD/claude/.claude.json"
 out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state_account_unreadable.json"
 cp "$T/alice.claude.json" "$AD/claude/.claude.json"
@@ -2604,6 +2605,7 @@ PIN="sha256//$(openssl x509 -in "$SV/cert.pem" -pubkey -noout | openssl pkey -pu
 PRD="$H/.cca/presence"
 cp -p "$H/.cca/config.json" "$T/pres.config.json"; cp -p "$H/.cca/accounts.json" "$T/pres.accounts.json"; cp -p "$T/deploy_keys.json" "$T/pres.keys.json"
 cp -p "$PR/policy.json" "$T/pres.pr.json"; cp -p "$PR/policy.json.sig" "$T/pres.pr.sig"; cp -p "$H/.cca/policy/policy.json" "$T/pres.local.json"; cp -p "$MR/policy.json" "$T/pres.mr.json"
+cp -p "$AJ" "$T/pres.aj.json"   # 下面 API key 的同步按登录身份（accountUuid）认，用完还原
 withp() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]={"url":"https://127.0.0.1:%s" % sys.argv[2],"pins":[sys.argv[3]],"salt":"ab"*16}; print(json.dumps(j))' "$T/pres.pr.json" "$SVPORT" "${1:-$PIN}"; }   # withp [指纹]：现在发布的映射加上 presence 一节
 dv() { run cca devices alice@example.com --json 2>/dev/null; }   # 问服务器：alice 连着哪些设备
 dstate() { dv | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' 2>/dev/null; }
@@ -2668,9 +2670,6 @@ dwait "$ME:none:0"; rc=$?
 for i in $(seq 1 30); do alive "$a2" || break; sleep 0.1; done
 ok "会话都关了：马上报“没在用”（留着上次使用），上报进程自己退出，这台 Mac 上不再有它" '[ $rc -eq 0 ] && ! alive "$a2" && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"last_used_epoch\"] is not None"'
 ok "上报不经账号的出口：直连（钉住证书公钥），不经路由器和本机 Clash" '! grep -q "127.0.0.1:$SVPORT" curl.log 2>/dev/null'
-if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
-	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
-fi
 AK=$(python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$H/.cca/accounts.json")
 out=$(runev cca devices "$AK" --json); rc=$?
 ok "不在映射里的账号（第三方 API 账号）：不统计，fail 事件 devices_off" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"不在维护者的映射里\" in e[\"message\"]"'
@@ -2699,10 +2698,83 @@ ssh-keygen -q -t ed25519 -N "" -C "cca-policy@eve-air" -f "$T/eve"
 runcmd "$(ans eve-air)" "$P ./policy.sh key add -R example/other '$T/eve.pub'"
 out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1)
 ok "./policy.sh key add -R 别的仓库：不拿那个仓库的 key 当设备清单推给服务器（服务器照样认得原来那些机器）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "推送到的是 example/cca-policy，不是 example/other" && printf "%s" "$out2" | grep -q "认得 $((NK + 1)) 台设备"'
+# 记下的 API key 同步给登录了 alice 的其他设备：dan-air 也登录着 alice（身份 u-alice-0001：真的 accountUuid 是 UUID，cca 只认 8 个字符以上的），照 server/README.md 写的格式解开、封好，用自己的
+# deploy key 和服务器交换。这台 Mac 记下、删掉后马上在后台同步；之后的 cca _key-sync force 是同一件事，测试里直接跑
+dkey() {   # dkey get | junk | put KEY|- 时间：dan-air 取 alice 现在的（打印 JSON；none：没有；bad：认证不过）/ 传一份伪造的 / 传一份
+	python3 - "$T/dan" "$SVPORT" "$@" <<'PY'
+import base64, hashlib, hmac, http.client, json, secrets, ssl, subprocess, sys, time
+key, port, op = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+pub = open(key + '.pub').read().split()[1]
+fp = 'SHA256:' + base64.b64encode(hashlib.sha256(base64.b64decode(pub)).digest()).decode().rstrip('=')
+salt = bytes.fromhex('ab' * 16)
+aid = hmac.new(salt, b'claude\0alice@example.com', hashlib.sha256).hexdigest()[:32]
+root = hmac.new(salt, b'cca-keyshare-v1\0claude\0alice@example.com\0u-alice-0001', hashlib.sha256).digest()
+enc, mac = (hmac.new(root, x, hashlib.sha256).digest() for x in (b'enc', b'mac'))
+stream = lambda n, size: b''.join(hmac.new(enc, n + i.to_bytes(8, 'big'), hashlib.sha256).digest() for i in range((size + 31) // 32))
+tag = lambda n, c: hmac.new(mac, b'cca-keyshare-v1\0' + aid.encode() + b'\0' + n + c, hashlib.sha256).digest()
+b64 = lambda x: base64.b64encode(x).decode()
+body = {'v': 1, 'op': 'keys', 'key': fp, 'ts': time.time(), 'nonce': secrets.token_hex(16)}
+if op == 'get':
+    body['get'] = [aid]
+elif op == 'junk':
+    body['put'] = {aid: {'n': b64(secrets.token_bytes(16)), 'c': b64(secrets.token_bytes(256)), 't': b64(secrets.token_bytes(32))}}
+else:
+    pt = json.dumps({'v': 1, 'key': None if sys.argv[4] == '-' else sys.argv[4], 'at': float(sys.argv[5])}).encode()
+    pt += b' ' * (-len(pt) % 256)
+    n = secrets.token_bytes(16)
+    c = bytes(x ^ y for x, y in zip(pt, stream(n, len(pt))))
+    body['put'] = {aid: {'n': b64(n), 'c': b64(c), 't': b64(tag(n, c))}}
+raw = json.dumps(body, separators=(',', ':')).encode()
+sig = subprocess.run(['ssh-keygen', '-Y', 'sign', '-q', '-n', 'cca-presence', '-f', key], input=raw, stdout=subprocess.PIPE, check=True).stdout
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+for attempt in range(6):   # 限流（429：每台设备每 2 秒一个，攒得下 30 个）：等一会儿再试
+    conn = http.client.HTTPSConnection('127.0.0.1', port, context=ctx, timeout=10)
+    conn.request('POST', '/v1/keys', body=raw, headers={'Content-Type': 'application/json', 'X-Cca-Sig': b64(sig)})
+    r = conn.getresponse(); j = json.loads(r.read() or b'{}')
+    if r.status != 429:
+        break
+    time.sleep(2)
+if r.status != 200:
+    sys.exit(1)
+if op == 'get':
+    rec = j['keys'].get(aid)
+    if not rec:
+        print('none'); sys.exit(0)
+    blob = {k: base64.b64decode(v) for k, v in rec['blob'].items()}
+    if not hmac.compare_digest(blob['t'], tag(blob['n'], blob['c'])):
+        print('bad'); sys.exit(0)
+    d = json.loads(bytes(x ^ y for x, y in zip(blob['c'], stream(blob['n'], len(blob['c'])))))
+    print(json.dumps({'key': d['key'], 'at': d['at'], 'from': rec['name'], 'len': len(rec['blob']['c'])}))
+PY
+}
+dkval() { dkey get | python3 -c 'import json,sys; d=sys.stdin.read().strip(); print(json.loads(d)["key"] if d.startswith("{") else d)'; }   # 服务器上 alice 现在的 key（None：删掉了）
+dkwait() { local i; for i in $(seq 1 40); do [ "$(dkval)" = "$1" ] && return 0; sleep 0.5; done; return 1; }   # 后台的同步是 background 优先级：最多等 20 秒
+setoa "$AJ" accountUuid=u-alice-0001
+KS1="sk-ant-api03-REGRESSshare$(printf 'a%.0s' $(seq 1 20))"; KS2="sk-ant-api03-REGRESSdan$(printf 'b%.0s' $(seq 1 24))"
+out=$(run CCA_TTY="$(ans "$KS1")" cca key alice 2>&1); rc=$?
+dkwait "$KS1"; rc2=$?; L1=$(dkey get | python3 -c 'import json,sys; print(json.load(sys.stdin)["len"])' 2>/dev/null)
+ok "记下 alice 的 API key（映射里的账号、开着设备统计）：说登录了这个账号的其他设备也能看到，马上在后台加密传给服务器；dan-air 照文档的格式解得开；服务器上没有 key、邮箱、登录身份（600）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录了这个账号的其他设备也能看到" && [ $rc2 -eq 0 ] && [ "$(stat -f %Lp "$SV/keys.json")" = 600 ] && ! grep -q "REGRESSshare\|example.com\|u-alice" "$SV/keys.json" && [ "$(stat -f %Lp "$PRD/keys.json")" = 600 ] && ! grep -q "REGRESSshare" "$PRD/keys.json"'
+out=$(gj state)
+ok "_gui state：alice 记下的 key 会同步（shared），这台 Mac 自己记下的没有来源、有记下的时间；第三方 API 账号不同步" 'printf "%s" "$out" | jok "(lambda k: k[\"shared\"] is True and k[\"saved\"] and k[\"from_device\"] is None and k[\"saved_epoch\"] > d[\"generated_at\"] - 300 and k[\"sync_error\"] is None)(acct(0, \"alice@example.com\")[\"api_key\"]) and not any(a[\"api_key\"][\"shared\"] for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
+dkey put "$KS2" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key_hints"][sys.argv[2]]["at"] + 0.5)' "$H/.cca/config.json" "$AAID")"; rc=$?   # 比这台 Mac 记下的晚半秒（不用将来的时间：之后在这台 Mac 上删掉，删掉的那一下才是新的）
+run cca _key-sync force >/dev/null 2>&1
+v=$(run cca key alice --show 2>/dev/null); out=$(gj state); printf "%s" "$out" > "$T/guifx3/state_keys.json"
+ok "dan-air 换了一把（比这台 Mac 记下的新）：同步后这台 Mac 的钥匙串里换成它（--show 给新的），_gui state 说是从 dan-air 同步来的" '[ $rc -eq 0 ] && [ "$v" = "$KS2" ] && [ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$KS2" ] && printf "%s" "$out" | jok "(lambda k: k[\"from_device\"] == \"dan-air\" and k[\"saved\"] and k[\"hint\"] == \"sk-ant-…bbbb\")(acct(0, \"alice@example.com\")[\"api_key\"])"'
+dkey junk; run cca _key-sync force >/dev/null 2>&1
+ok "服务器上的被换成认证不过的（伪造的、坏了）：这台 Mac 不认，把自己的传回去" '[ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$KS2" ] && [ "$(dkval)" = "$KS2" ]'
+out=$(run CCA_TTY="$(ans y)" cca key alice --forget 2>&1); rc=$?
+dkwait None; rc2=$?; L2=$(dkey get | python3 -c 'import json,sys; print(json.load(sys.stdin)["len"])' 2>/dev/null)
+ok "cca key alice --forget：说登录了这个账号的其他设备上的也会删掉；删掉也同步（dan-air 解开是删除，密文和 key 一样长）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "其他设备上的也会删掉" && [ $rc2 -eq 0 ] && [ ! -e "$T/keychain/cca-ref-$AAID" ] && [ -n "$L1" ] && [ "$L1" = "$L2" ]'
+dkey put "$KS2" "$(python3 -c 'import time; print(time.time())')"
+v=$(run cca key alice --show 2>/dev/null); rc=$?
+ok "这台 Mac 上没有、dan-air 又记下了：cca key alice --show 先同步一次再给（App 的「显示」「复制」同样）" '[ $rc -eq 0 ] && [ "$v" = "$KS2" ]'
+if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
+	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
+fi
 kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; SVP=""
 cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"; cp -p "$T/pres.keys.json" "$T/deploy_keys.json"
 cp -p "$T/pres.pr.json" "$PR/policy.json"; cp -p "$T/pres.pr.sig" "$PR/policy.json.sig"; cp -p "$T/pres.local.json" "$H/.cca/policy/policy.json"
-cp -p "$T/pres.mr.json" "$MR/policy.json"; rm -rf "$PRD"
+cp -p "$T/pres.mr.json" "$MR/policy.json"; cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 
 # 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开
 #       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时

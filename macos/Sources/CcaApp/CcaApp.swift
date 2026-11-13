@@ -162,7 +162,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let token = ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 guard let id = app?.bundleIdentifier, AppDelegate.desktopApps.contains(id) else { return }
-                MainActor.assumeIsolated { self?.model.desktopAppsChanged() }
+                let terminated = note.name == NSWorkspace.didTerminateApplicationNotification
+                MainActor.assumeIsolated { self?.model.desktopAppsChanged(terminated: terminated) }
             }
             observers.append((ws, token))
         }

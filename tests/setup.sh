@@ -1166,6 +1166,9 @@ j = json.load(open(lc)) if os.path.exists(lc) else {}
 j[os.getcwd()] = 'conv-' + tag
 open(lc, 'w').write(json.dumps(j))
 os.makedirs(os.path.join(g, 'config', 'skills', 'from-' + tag), exist_ok=True)
+mcp = os.path.join(g, 'config', 'mcp_config.json')   # 像真的 agy（1.5.x）：config/ 里没有就建一个 0 字节的 mcp_config.json
+if not os.path.lexists(mcp):
+    open(mcp, 'w').close()
 sys.exit(3)
 S
 # 假 claude 的 auth login 在 $CCA_T/oauth_flow 存在时（内容是这次的 state）照真的 Claude Code 2.1.322 走：本机 127.0.0.1 随机端口开回调
