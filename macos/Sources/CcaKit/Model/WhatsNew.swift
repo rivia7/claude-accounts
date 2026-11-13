@@ -20,36 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
-        ReleaseNote(version: "3.2.0-beta.3", title: "折合金额可以只看这台设备，也能按天看", points: [
-            .init(symbol: "laptopcomputer.and.iphone",
-                  text: "账号页和「用量统计」页的「折合金额」标题右边都有「本机 | 所有设备」：本机只算在这台设备上用的，所有设备是各台设备加起来的整个账号。两页用同一个设置，在一页切了，另一页跟着变。"),
-            .init(symbol: "calendar",
-                  text: "「用量统计」页的折合金额也能切「周 | 日」：按日时每个账号一行最近 30 天的小图，右边是平均每天、今天和 30 天合计；顶上的合计按日时有最近 30 天每天一根柱子的大图，按周时是本周、平均每周和近 12 周合计。"),
-            .init(symbol: "list.bullet.indent",
-                  text: "账号页原来选看哪一台设备的菜单换成了「本机 | 所有设备」。想比较各台设备，在「用量统计」页选所有设备：有好几台设备的账号下面分台列着。"),
-            .init(symbol: "info.circle",
-                  text: "看所有设备时，只算了这台设备（账号不在维护者的映射里、这台设备关掉了设备统计）用灰字说明，同步出错、有设备没算进来照旧用橙色提醒。窗口窄时，这几个切换挪到标题下面一行。"),
-        ], art: "quota"),
-        ReleaseNote(version: "3.2.0-beta.2", title: "看看每个账号的用量折合多少美元", points: [
+        ReleaseNote(version: "3.2.0", title: "cca 3.2 正式版：看看每个账号的用量折合多少美元", points: [
             .init(symbol: "dollarsign.circle",
-                  text: "「用量统计」页标题右边可以切到「折合金额」：按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元。每个账号一行，有最近 12 周的小图、平均每周、本周和 12 周合计；顶上是所有账号加起来的，还有最近 30 天每天一根柱子的大图。点一行打开这个账号。"),
-            .init(symbol: "chart.bar.xaxis",
-                  text: "账号页「每周用量」下面多了「折合金额」：按周看最近 12 周和本周，按日看最近 30 天，鼠标指着一根柱子看那一项的细节。两张图里同一周的柱子上下对齐。"),
+                  text: "左边新增「折合金额」：按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元（不是实际花费），可以切「本机 | 所有设备」「周 | 日」，账号页里也有。只读 Claude Code、Codex 会话记录里的用量数字，不读对话内容。"),
             .init(symbol: "laptopcomputer.and.iphone",
-                  text: "维护者映射里的 Claude、ChatGPT 账号在好几台设备上用时，各台设备算出的金额经维护者的设备统计服务器加密同步（服务器看不到数字）：可以看整个账号加起来的，也可以只看其中一台设备。旧版的服务器不收，要维护者更新一次。"),
-            .init(symbol: "info.circle",
-                  text: "这不是实际花费，订阅不按这个收费。cca 只按 Claude Code、Codex 记在这台设备上的会话记录算每次请求用了多少 token，不读对话内容；网页版的用量不算。"),
-            .init(symbol: "calendar",
-                  text: "「用量统计」页窗口不宽时，表头的日期改成隔几周写一个，不再挤在一起。"),
-        ], art: "quota"),
-        ReleaseNote(version: "3.2.0-beta.1", title: "API key 在设备间同步，客户端可以自动更新", points: [
-            .init(symbol: "key",
-                  text: "账号页记下的 API key 会同步给登录了同一个账号的其他设备：维护者映射里的 Claude、ChatGPT 账号，在一台设备上记下、换掉、删掉，别的设备跟着变，账号页写着是从哪台设备同步来的。key 加密以后经维护者的设备统计服务器传，服务器看不到 key，没登录这个账号的设备也解不开（旧版的服务器不收 key，要维护者更新一次）。"),
+                  text: "维护者映射里的账号在几台设备上登录时，各台设备的折合金额、记下的 API key 经维护者的设备统计服务器加密同步，服务器看不到内容；旧版的服务器要维护者更新一次。"),
             .init(symbol: "arrow.down.app",
-                  text: "「客户端更新」页多了「允许自动更新」（默认关）：打开后查到新版本就直接装，桌面 App 开着时等你退出它再装；终端里用官方安装器装的 Claude Code、Codex 也直接更新。"),
-            .init(symbol: "wrench.and.screwdriver",
-                  text: "Antigravity 账号的网页版改为打开 gemini.google.com；退出 agy 时不再误报 mcp_config.json 有冲突。"),
-        ], art: "logo"),
+                  text: "「客户端更新」页多了「允许自动更新」（默认关）：查到新版本就直接装，桌面 App 开着时等你退出它再装。"),
+            .init(symbol: "sidebar.left",
+                  text: "左边的「Claude | ChatGPT」切换挪到了账号列表正上方，只换下面列出的账号。"),
+        ], art: "quota"),
         ReleaseNote(version: "3.1.0", title: "cca 3.1 正式版", points: [
             .init(symbol: "checkmark.seal",
                   text: "这是 cca 3.1 正式版，包含 3.1.0 测试版到 beta.19 的全部内容：装在 Linux 服务器上、每周用量、账号在哪些设备上用、Antigravity 命令行等。装着测试版的机器会自动更新到它，以后照常只自动更新正式版。"),
