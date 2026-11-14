@@ -192,6 +192,8 @@ struct CardSheet<Footer: View>: View {
     let points: [(String, String)]
     let page: Int
     let pages: Int
+    /// 一页叫什么（新手教程是「步」，更新说明是「张」），翻页那里的悬停说明和读屏都用它
+    let unit: String
     let select: (Int) -> Void
     @ViewBuilder let footer: Footer
 
@@ -233,7 +235,7 @@ struct CardSheet<Footer: View>: View {
             Spacer(minLength: 10)
             HStack(spacing: 10) {
                 if pages > 1 {
-                    PageDots(count: pages, current: page, select: select)
+                    PageDots(count: pages, current: page, unit: unit, select: select)
                 }
                 Spacer()
                 footer
@@ -259,7 +261,7 @@ struct TutorialSheet: View {
         let card = cards[i]
         let last = i == cards.count - 1
         CardSheet(name: "新手教程", art: card.art, caption: "第 \(i + 1) 步，共 \(cards.count) 步", title: card.title,
-                  points: card.points, page: i, pages: cards.count, select: { guide.step = $0 }) {
+                  points: card.points, page: i, pages: cards.count, unit: "步", select: { guide.step = $0 }) {
             if last {
                 Button {
                     guide.step = 0
@@ -294,7 +296,7 @@ struct WhatsNewSheet: View {
             let last = i == notes.count - 1
             CardSheet(name: "更新说明", art: TutorialCard.Art(rawValue: note.art) ?? .logo, caption: "\(note.version) 更新了什么",
                       title: note.title, points: note.points.map { ($0.symbol, $0.text) }, page: i, pages: notes.count,
-                      select: { guide.step = $0 }) {
+                      unit: "张", select: { guide.step = $0 }) {
                 if !last {
                     Button("关闭") { guide.dismissSheet() }
                         .keyboardShortcut(.cancelAction)
@@ -319,6 +321,8 @@ struct PageDots: View {
     static let maxDots = 12
     let count: Int
     let current: Int
+    /// 一页叫什么（「步」「张」）
+    let unit: String
     let select: (Int) -> Void
 
     var body: some View {
@@ -326,10 +330,11 @@ struct PageDots: View {
             Text("\(current + 1) / \(count)")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("第 \(current + 1) 页，共 \(count) 页")
+                .accessibilityLabel("第 \(current + 1) \(unit)，共 \(count) \(unit)")
         } else {
             HStack(spacing: 4) {
                 ForEach(0..<count, id: \.self) { i in
+                    let label = "第 \(i + 1) \(unit)"
                     Button {
                         select(i)
                     } label: {
@@ -341,8 +346,8 @@ struct PageDots: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("第 \(i + 1) 步")
-                    .accessibilityLabel("第 \(i + 1) 步")
+                    .help(label)
+                    .accessibilityLabel(label)
                 }
             }
         }

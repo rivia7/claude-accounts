@@ -56,7 +56,6 @@ struct MenuBarContent: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 BrandMark(size: 28)
@@ -88,11 +87,8 @@ struct MenuBarContent: View {
                 }
             }
             if model.visibleTools.count > 1 {
-                Picker("工具", selection: $model.tool) {
-                    ForEach(model.visibleTools, id: \.self) { Text(Texts.product($0)).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                ToolPicker()
+                    .pickerStyle(.segmented)
             }
             content
             if let t = model.toast {
