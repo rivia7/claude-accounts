@@ -182,7 +182,7 @@ struct TutorialCard {
     ]
 }
 
-/// 卡片弹层（新手教程、更新说明共用）：上面一幅小图，下面一行小字、标题和几条带图标的要点，最下面是翻页的小圆点和按钮。
+/// 卡片弹层（新手教程、更新说明共用）：上面一幅小图，下面一行小字、标题和几条带图标的要点，最下面是第几页（`PageDots`）和按钮。
 struct CardSheet<Footer: View>: View {
     /// 读屏软件念的名字（新手教程、更新说明）
     let name: String
@@ -312,28 +312,38 @@ struct WhatsNewSheet: View {
     }
 }
 
-/// 第几步的点：现在这一步是一根短条；点哪个点就跳到哪一步。
+/// 第几页：一排点，现在这一页是一根短条，点哪个点就跳到哪一页。页数多了（更新说明一个版本一张，几十张）一排点会把旁边的按钮
+/// 挤得看不见字，超过 `maxDots` 页就只写「3 / 37」，翻页用旁边的按钮。
 struct PageDots: View {
+    /// 最多画这么多个点：12 个点约 190 宽，更新说明中间几页的三个按钮（关闭、上一张、更早的版本）旁边还放得下
+    static let maxDots = 12
     let count: Int
     let current: Int
     let select: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<count, id: \.self) { i in
-                Button {
-                    select(i)
-                } label: {
-                    Capsule()
-                        .fill(i == current ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
-                        .frame(width: i == current ? 18 : 7, height: 7)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 2)
-                        .contentShape(Rectangle())
+        if count > Self.maxDots {
+            Text("\(current + 1) / \(count)")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("第 \(current + 1) 页，共 \(count) 页")
+        } else {
+            HStack(spacing: 4) {
+                ForEach(0..<count, id: \.self) { i in
+                    Button {
+                        select(i)
+                    } label: {
+                        Capsule()
+                            .fill(i == current ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
+                            .frame(width: i == current ? 18 : 7, height: 7)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 2)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("第 \(i + 1) 步")
+                    .accessibilityLabel("第 \(i + 1) 步")
                 }
-                .buttonStyle(.plain)
-                .help("第 \(i + 1) 步")
-                .accessibilityLabel("第 \(i + 1) 步")
             }
         }
     }
