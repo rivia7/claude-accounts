@@ -42,21 +42,31 @@ struct Sidebar: View {
 
 /// 工具切换（Claude / ChatGPT / Antigravity）：只换下面列哪个工具的账号（上面那几页几种工具共用，不跟着变），所以放在账号列表的正上方。
 /// 这一行不带 tag：选不中，点的只是切换本身。
+/// 几段一样宽，每段都要放下最长的名字，在侧栏的列表行里也不往窄里压（按它要的宽度摆，放不下就截掉一截）。所以挑放得下的样子：
+/// 标准大小，放不下换小一号，还放不下（三种工具、侧栏拖到最窄）换成下拉菜单。两种工具时标准大小总放得下，样子不变。
 private struct ToolPickerRow: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            picker.toolPickerStyle()
+            picker.toolPickerStyle().controlSize(.small)
+            picker.pickerStyle(.menu).fixedSize()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+        .help("切换下面列出哪种工具的账号")
+    }
+
+    /// 还没定样子的切换（样子各自加：pickerStyle 是里面的说了算，加在外面盖不掉）
+    private var picker: some View {
         @Bindable var model = model
-        Picker("工具", selection: $model.tool) {
+        return Picker("工具", selection: $model.tool) {
             ForEach(model.visibleTools, id: \.self) { t in
                 Text(Texts.product(t)).tag(t)
             }
         }
         .labelsHidden()
-        .toolPickerStyle()
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
-        .help("切换下面列出哪种工具的账号")
     }
 }
 
