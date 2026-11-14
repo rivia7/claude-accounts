@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.2.1", title: "侧栏的工具切换、更新说明的按钮不再被挤掉", points: [
+            .init(symbol: "sidebar.left",
+                  text: "Claude、ChatGPT、Antigravity 三种工具都在用时，侧栏拖窄后账号列表上方的切换不再被截掉一截：放不下就换小一号，还放不下换成下拉菜单。只用两种工具时样子不变。"),
+            .init(symbol: "book",
+                  text: "「帮助」菜单的「更新说明」已经有三十多张，底下一排小圆点会把旁边的按钮挤得看不见字。超过 12 张时改成只写第几张、一共几张（比如「3 / 37」），翻页用旁边的按钮。"),
+        ], art: "sidebar"),
         ReleaseNote(version: "3.2.0", title: "cca 3.2 正式版：看看每个账号的用量折合多少美元", points: [
             .init(symbol: "dollarsign.circle",
                   text: "左边新增「折合金额」：按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元（不是实际花费），可以切「本机 | 所有设备」「周 | 日」，账号页里也有。只读 Claude Code、Codex 会话记录里的用量数字，不读对话内容。"),
