@@ -196,8 +196,8 @@ out3=$(run cca login-page nobody@example.com "$LPU" 2>&1); rc3=$?
 ok "login-page：不是这个工具的登录页不打开（Codex 的提示用 cca codex login-page）；这台 Mac 上没有的账号说清楚" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这不是 Claude 的登录网址" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "Codex 账号用 cca codex login-page" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "这台 Mac 上没有 nobody@example.com 这个账号" && ! grep -q st-page1 open.log'
 # 占住回调的端口，一直占到下面 kill 它为止：后面这几次 login-page 都靠它（端口被占时打开登录页就返回）。以前只占 20 秒，机器慢时
 # （xprotectd 忙着扫新文件，每次运行慢好几倍）没跑到后面就放了，login-page 真的去等回调，干等 15 分钟才失败。都带 CCA_LOGIN_WAIT=20：端口万一空了最多等 20 秒
-python3 -c 'import socket, sys, time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(600)' "$lp" & busy=$!
-sleep 0.3
+python3 -c 'import socket, sys, time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); open(sys.argv[2], "w").close(); time.sleep(600)' "$lp" "$T/lp.busy" & busy=$!
+for i in $(seq 1 100); do [ -e "$T/lp.busy" ] && break; sleep 0.1; done   # 等它真的占上了（机器慢时 python 起来也要一会儿）
 out=$(run CCA_LOGIN_WAIT=20 cca login-page alice@example.com --node US-A "$LPU" 2>&1); rc=$?
 ok "login-page：回调的端口被别的程序占着：照样打开登录页，说清楚登录后从地址栏复制整个网址贴回服务器" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "被别的程序占着" && grep -q "state=st-page1" open.log'
 # 节点按地址摘要认（两边叫法可以不同）；Mac 上还没有这个账号时问要不要用同一个节点加上它。回调的端口还占着：打开登录页就返回
@@ -2663,17 +2663,19 @@ ok "上次写进去了、没发布成：再运行一次时提醒还没发布，�
 for f in accounts.json codex.json config.json; do cp -p "$T/lock.$f" "$H/.cca/$f"; done; cp -p "$T/lock.policy.json" "$PD"; cp -p "$T/lock.policy.json" "$PR/policy.json"; cp -p "$T/lock.policy.json.sig" "$PR/policy.json.sig"
 
 # 11b3c. 设备统计（presence）：维护者在映射里配置了设备统计的服务器（真的 server/cca-presence.py：127.0.0.1 上随机端口、测试证书、
-#        测试发布密钥，ttl 3 秒）之后，映射里的账号经 cca 用的时候这台 Mac 在后台起一个上报进程，把开着的会话报给服务器；
+#        测试发布密钥，ttl 是 STTL 秒）之后，映射里的账号经 cca 用的时候这台 Mac 在后台起一个上报进程，把开着的会话报给服务器；
 #        cca devices 问服务器这个账号连着哪些设备。设备清单由维护者 ./policy.sh presence sync（假 gh 的 deploy key）推给服务器。
 #        测试里的会话没有终端：在跑就算在用。这一节结束时停掉服务器，映射、配置、假的映射仓库、假 GitHub 上的 key 都还原
 SV="$T/presence-srv"; mkdir -p "$SV"
+STTL=10   # 服务器这么多秒没收到上报就算离线。上报进程 60 秒才一次心跳，所以「在用」只在每次上报后的这几秒里看得到：
+          # 以前是 3 秒，机器慢时（xprotectd 忙着扫新文件，cca 每次运行慢好几倍）看到在用以后再问一两次就过了
 openssl ecparam -name prime256v1 -genkey -noout -out "$SV/key.pem" 2>/dev/null
 openssl req -new -x509 -key "$SV/key.pem" -subj /CN=cca-presence -days 2 -out "$SV/cert.pem" 2>/dev/null
 cp "$T/relkey.pub" "$SV/release.pub"
 srv_start() {   # srv_start [端口]：起服务器（状态文件留着，重启后接着用）
 	rm -f "$SV/port"
 	python3 -I "$D/../server/cca-presence.py" --listen "127.0.0.1:${1:-0}" --port-file "$SV/port" --cert "$SV/cert.pem" --key "$SV/key.pem" \
-		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl 3 >>"$SV/log" 2>&1 &
+		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl "$STTL" >>"$SV/log" 2>&1 &
 	SVP=$!
 	local i; for i in $(seq 1 50); do [ -s "$SV/port" ] && return 0; sleep 0.1; done; return 1
 }
@@ -2685,7 +2687,7 @@ cp -p "$PR/policy.json" "$T/pres.pr.json"; cp -p "$PR/policy.json.sig" "$T/pres.
 cp -p "$AJ" "$T/pres.aj.json"   # 下面 API key 的同步按登录身份（accountUuid）认，用完还原
 withp() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]={"url":"https://127.0.0.1:%s" % sys.argv[2],"pins":[sys.argv[3]],"salt":"ab"*16}; print(json.dumps(j))' "$T/pres.pr.json" "$SVPORT" "${1:-$PIN}"; }   # withp [指纹]：现在发布的映射加上 presence 一节
 dv() { run cca devices alice@example.com --json 2>/dev/null; }   # 问服务器：alice 连着哪些设备
-dstate() { dv | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' 2>/dev/null; }
+dstate() { dv > "$T/dv.json"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' "$T/dv.json" 2>/dev/null; }   # 问到的留在 dv.json
 dwait() { local i; for i in $(seq 1 60); do [ "$(dstate)" = "$1" ] && return 0; sleep 0.2; done; return 1; }   # 等服务器上 alice 的设备变成这样
 apid() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$PRD/agent.json" 2>/dev/null; }   # 上报进程的进程号
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
@@ -2724,9 +2726,9 @@ ok "cca devices：还没有设备经 cca 用过 alice（这台 Mac 已经被认�
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS1=$!
 waitmark "$AD"; m1=$(marks "$AD")
 dwait "$ME:in_use:1"; rc=$?; a1=$(apid)
+mkdir -p "$T/guifx3"; cp "$T/dv.json" "$T/guifx3/devices.json"   # 契约测试解码的是 dwait 看到在用的那一份
+out=$(run cca devices 2>&1)   # 看到在用就马上问：过了 STTL 秒（下一次心跳之前）服务器就算离线了
 ok "映射里的账号开着会话：后台的上报进程马上报给服务器（在用、1 个会话、这台 Mac 排第一）；上报进程只有一个，后台优先级" '[ $rc -eq 0 ] && alive "$a1" && ps -o command= -p "$a1" | grep -q presence-agent && [ "$(ps -o pri= -p "$a1" | tr -d " ")" -le 20 ] && dv | jok "(lambda x: x[\"me\"] is True and x[\"since_epoch\"] and x[\"last_used_epoch\"] and x[\"last_active_epoch\"])(d[\"accounts\"][0][\"devices\"][0])"'
-mkdir -p "$T/guifx3"; dv > "$T/guifx3/devices.json"
-out=$(run cca devices 2>&1)
 ok "cca devices（给人看的）：每个映射里的账号连着哪些设备，这台 Mac 标出来" 'printf "%s" "$out" | grep -q "Claude 账号连着的设备" && printf "%s" "$out" | grep -qF "${ME}（这台 Mac）  在用 · 命令行里 1 个会话"'
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS2=$!
 waitmark "$AD" 2
@@ -2736,9 +2738,9 @@ m2=$(marks "$AD" | grep -vx "$m1"); t2=$(pgrep -P "$m2")
 kill -KILL "$m2"
 dwait "$ME:in_use:1"; rc=$?
 ok "cca 被 kill -9（来不及删登记）：上报进程看到它退出，马上改报 1 个" '[ $rc -eq 0 ]'
-kill -KILL "$a1"; sleep 4
+kill -KILL "$a1"; sleep 4   # dwait 接着等到过了 STTL 秒；服务器回的 seen_age 是取整的秒数，所以下面比 STTL - 1
 dwait "$ME:offline:1"; rc=$?
-ok "上报进程被 kill -9（就像这台 Mac 睡着了、断网了）：服务器 ttl 秒收不到心跳，算离线（最后看到时开着 1 个会话）" '[ $rc -eq 0 ] && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"seen_epoch\"] < d[\"generated_epoch\"] - 3"'
+ok "上报进程被 kill -9（就像这台 Mac 睡着了、断网了）：服务器 ttl 秒收不到心跳，算离线（最后看到时开着 1 个会话）" '[ $rc -eq 0 ] && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"seen_epoch\"] < d[\"generated_epoch\"] - $((STTL - 1))"'
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS3=$!
 dwait "$ME:in_use:2"; rc=$?; a2=$(apid)
 ok "再启动一次：上报进程重新起来，报全部开着的（2 个）" '[ $rc -eq 0 ] && alive "$a2" && [ "$a2" != "$a1" ]'
