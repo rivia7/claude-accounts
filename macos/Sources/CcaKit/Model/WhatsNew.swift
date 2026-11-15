@@ -20,7 +20,13 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
-        ReleaseNote(version: "3.2.1", title: "侧栏的工具切换、更新说明的按钮不再被挤掉", points: [
+        ReleaseNote(version: "3.2.2", title: "换账号接着做同一个会话，任务清单也接得上", points: [
+            .init(symbol: "checklist",
+                  text: "Claude Code 在会话里列的任务清单以前每个账号各存一份，换账号恢复同一个会话后清单是空的。现在各账号共用一份；以前各存的会自动合到一起，同一个会话两边不一样时留较新的，另一份存进 ~/.cca/conflicts。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "换账号接着做：先退出原来的 Claude Code（退出时会显示会话 ID），再在同一个项目目录里运行 cca @另一个账号 --resume 会话ID。工作流（Workflow）只能在原来的会话里续跑。"),
+        ], art: "fan"),
+        ReleaseNote(version: "3.2.1",title: "侧栏的工具切换、更新说明的按钮不再被挤掉", points: [
             .init(symbol: "sidebar.left",
                   text: "Claude、ChatGPT、Antigravity 三种工具都在用时，侧栏拖窄后账号列表上方的切换不再被截掉一截：放不下就换小一号，还放不下换成下拉菜单。只用两种工具时样子不变。"),
             .init(symbol: "book",
