@@ -86,6 +86,7 @@ class SharedState(unittest.TestCase):
                 'history.jsonl': '{"display":"old prompt"}\n',
                 'projects/-workspace/session.jsonl': '{"sessionId":"shared-session"}\n',
                 'projects/-workspace/memory/MEMORY.md': '# 项目记忆\n',
+                'tasks/shared-session/1.json': '{"id":"1","subject":"续接的任务"}',
                 'skills/example/SKILL.md': '# 技能\n',
                 'rules/example.md': '# 规则\n',
                 'hooks/notify.sh': '#!/bin/sh\n# 通用钩子\n',
@@ -122,6 +123,63 @@ class SharedState(unittest.TestCase):
                 self.assertIn('new prompt', (self.client(tool, ACCOUNTS[1]) / 'history.jsonl').read_text())
                 self.link_both(tool)
                 self.assertEqual(self.identities(tool), original_ids)
+
+    def stamp(self, path, when):
+        for p in [path, *path.rglob('*')]:
+            os.utime(p, (when, when), follow_symlinks=False)
+
+    def test_task_lists_are_shared_from_the_first_launch(self):
+        self.link_both('claude')
+        self.assertTrue((self.master('claude') / 'tasks').is_dir())
+        for key in ACCOUNTS:
+            self.assertTrue((self.client('claude', key) / 'tasks').is_symlink())
+        self.write(self.client('claude') / 'tasks' / 'session-a' / '1.json', '{"id":"1"}')
+        self.assertEqual((self.client('claude', ACCOUNTS[1]) / 'tasks' / 'session-a' / '1.json').read_text(), '{"id":"1"}')
+
+    def test_task_lists_kept_per_account_are_adopted_whole(self):
+        """tasks 共享以前各账号各有一份：并回时同一个列表整份认，不逐个文件拼"""
+        self.link_both('claude')
+        original_ids = self.identities('claude')
+        master, mine = self.master('claude') / 'tasks', self.client('claude') / 'tasks'
+        mine.unlink()
+        lists = {   # 列表：(共享的那份, 修改时间), (这个账号的那份, 修改时间)
+            'only-here': ((None, 0), ({'1.json': 'alice 1'}, 100)),
+            'same': (({'1.json': 'same 1', '.highwatermark': '1'}, 100),
+                     ({'1.json': 'same 1', '.highwatermark': '1'}, 200)),
+            'newer-here': (({'1.json': 'old shared 1', '2.json': 'old shared 2', '.highwatermark': '2'}, 100),
+                           ({'1.json': 'alice 1', '.highwatermark': '1'}, 200)),
+            'older-here': (({'1.json': 'new shared 1', '.highwatermark': '1'}, 200),
+                           ({'1.json': 'stale alice 1', '2.json': 'stale alice 2'}, 100)),
+        }
+        for name, sides in lists.items():
+            for root, (files, when) in zip((master, mine), sides):
+                if files:
+                    for f, text in files.items():
+                        self.write(root / name / f, text)
+                    self.stamp(root / name, when)
+        for root, text, when in ((master, 'shared note', 100), (mine, 'alice note', 200)):
+            self.write(root / 'note.txt', text)
+            os.utime(root / 'note.txt', (when, when))
+        result = self.run_cca('claude')
+        self.assertTrue(mine.is_symlink())
+        expected = {
+            'only-here': {'1.json': 'alice 1'},
+            'same': {'1.json': 'same 1', '.highwatermark': '1'},
+            'newer-here': {'1.json': 'alice 1', '.highwatermark': '1'},
+            'older-here': {'1.json': 'new shared 1', '.highwatermark': '1'},
+        }
+        for key in ACCOUNTS:
+            tasks = self.client('claude', key) / 'tasks'
+            self.assertEqual({p.name: {f.name: f.read_text() for f in p.iterdir()}
+                              for p in tasks.iterdir() if p.is_dir()}, expected)
+            self.assertEqual((tasks / 'note.txt').read_text(), 'alice note')
+        box = self.cca / 'conflicts' / self.directory('claude').name
+        kept = {p.name.split('.')[0]: {f.name: f.read_text() for f in p.iterdir()} for p in box.iterdir()}
+        self.assertEqual(kept, {'tasks-newer-here': lists['newer-here'][0][0],
+                                'tasks-older-here': lists['older-here'][1][0]})
+        for p in box.iterdir():
+            self.assertIn(str(p), result.stderr)
+        self.assertEqual(self.identities('claude'), original_ids)
 
     def test_unknown_runtime_state_is_not_imported_or_shared(self):
         for tool in ('claude', 'codex'):

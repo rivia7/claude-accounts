@@ -496,9 +496,10 @@ RESTRICTED = {'CN': '中国大陆', 'HK': '香港', 'MO': '澳门', 'RU': '俄�
 MISSING = object()
 
 # 工作资料明确共享，新增未知条目默认留在账号目录，避免客户端升级后把身份/运行状态共享出去。
-# projects 包含完整会话和项目记忆；保留这些目录才能跨账号续接。
+# projects 包含完整会话和项目记忆（工作流的进度记录也在会话目录里）；保留这些目录才能跨账号续接。
+# tasks 是会话的任务列表（tasks/<列表 ID>，列表 ID 默认是会话 ID；todos 是它以前的存法）。
 CLAUDE_SHARED = {
-    'projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'plans', 'file-history', 'ide',
+    'projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'tasks', 'plans', 'file-history', 'ide',
     'settings.json', 'settings.local.json', 'history.jsonl', 'CLAUDE.md', 'CLAUDE.local.md',
     'AGENTS.md', 'AGENTS.override.md', 'keybindings.json', 'rules', 'output-styles', 'themes',
     'workflows', 'agent-memory', 'agent-memory-local', 'memory', 'memories', 'prompts', 'hooks',
@@ -506,7 +507,7 @@ CLAUDE_SHARED = {
 CLAUDE_SHARED_CONFIG = {'settings.json', 'settings.local.json', 'keybindings.json',
                         'CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'}
 # ~/.claude 里还没有也先建好、并在账号目录里链接的共享目录
-PRECREATE = ['projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'plans', 'file-history', 'ide']
+PRECREATE = ['projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'tasks', 'plans', 'file-history', 'ide']
 # ~/.claude.json 里与账号无关、跨账号同步的键；其余（oauthAccount、订阅、功能开关缓存等）留在各账号
 SHARED_KEYS = [
     'projects', 'mcpServers', 'githubRepoPaths',
@@ -2118,6 +2119,54 @@ def merge_tree(src, dst):
         dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
 
 
+def tree_state(path):
+    """目录里的每一项（相对路径、内容摘要或链接目标）和最晚的修改时间（文件和目录都算，不跟随链接）"""
+    items, newest = [], os.lstat(path).st_mtime
+    for root, dirs, files in os.walk(path):
+        dirs.sort()
+        for n in dirs + sorted(files):
+            p = os.path.join(root, n)
+            newest = max(newest, os.lstat(p).st_mtime)
+            if os.path.islink(p):
+                items.append((os.path.relpath(p, path), 'link:' + os.readlink(p)))
+            elif n in files:
+                with open(p, 'rb') as f:
+                    items.append((os.path.relpath(p, path), hashlib.sha256(f.read()).hexdigest()))
+    return items, newest
+
+
+def adopt_task_lists(src, dst, key):
+    """账号自己的 tasks/ 并回共享的：任务列表（tasks/<列表 ID>）整份认。tasks 共享以前换账号续接过的会话，两边各有
+    一份同一个列表，任务编号各自从 1 起，逐个文件拼会混进过时的任务：一样的丢掉这边的；不一样的留较新的那份，
+    较旧的整份移进 conflicts"""
+    import shutil, uuid
+    for name in sorted(os.listdir(src)):
+        s, d = os.path.join(src, name), os.path.join(dst, name)
+        if not os.path.lexists(d):
+            shutil.move(s, d)
+            continue
+        if any(os.path.islink(p) for p in (s, d)) or os.path.isdir(s) != os.path.isdir(d):
+            aside(s, key)
+            continue
+        if not os.path.isdir(s):
+            merge_file(s, d)
+            os.unlink(s)
+            continue
+        (mine, mine_at), (shared, shared_at) = tree_state(s), tree_state(d)
+        if mine == shared:
+            shutil.rmtree(s)
+            continue
+        older = d if mine_at > shared_at else s
+        box = os.path.join(T.sroot, 'conflicts', acct_id(key))
+        os.makedirs(box, mode=0o700, exist_ok=True)
+        kept = os.path.join(box, 'tasks-%s.%s' % (name, uuid.uuid4().hex))
+        shutil.move(older, kept)
+        if older == d:
+            shutil.move(s, d)
+        sys.stderr.write('cca: 任务列表 %s 在 %s 和这个账号里各有一份，留下较新的，较旧的那份移到 %s\n'
+                         % (name, dst.replace(HOME, '~', 1), kept))
+
+
 def adopt(src, dst, key):
     """会话里新建的、或被原子写替换掉链接的真实条目：并回共享主目录（~/.claude、~/.codex）后改回链接。"""
     import shutil
@@ -2126,7 +2175,10 @@ def adopt(src, dst, key):
     elif os.path.isdir(src):
         if not os.path.isdir(dst):
             return aside(src, key)
-        merge_tree(src, dst)
+        if T is CLAUDE and os.path.basename(src) == 'tasks':
+            adopt_task_lists(src, dst, key)
+        else:
+            merge_tree(src, dst)
         shutil.rmtree(src)
     elif os.path.isdir(dst):
         return aside(src, key)
