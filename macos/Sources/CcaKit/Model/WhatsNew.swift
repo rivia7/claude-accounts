@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.1", title: "邮箱助手：登录邮件里的链接自动打开（测试版）", points: [
+            .init(symbol: "envelope.badge",
+                  text: "把各 Claude 账号的邮箱都转发到一个 Gmail，运行一次 cca mail setup（填 Gmail 地址和应用专用密码）。之后用 cca login、第一次启动账号、登录网页版时，cca 在后台只读地看这个 Gmail，登录邮件一到就在这个账号专属的浏览器里打开里面的链接。只在 macOS 上。"),
+            .init(symbol: "lock.shield",
+                  text: "只认 Gmail 核验过 Anthropic 签名、而且发给这个账号的登录邮件；链接只交给账号自己的浏览器，不显示、不保存、不记日志。另有 cca mail test（逐封说认不认、链接只说样子）、cca mail open、cca mail forget，cca restore 会一并清掉。"),
+        ]),
         ReleaseNote(version: "3.2.2", title: "换账号接着做同一个会话，任务清单也接得上", points: [
             .init(symbol: "checklist",
                   text: "Claude Code 在会话里列的任务清单以前每个账号各存一份，换账号恢复同一个会话后清单是空的。现在各账号共用一份；以前各存的会自动合到一起，同一个会话两边不一样时留较新的，另一份存进 ~/.cca/conflicts。"),
