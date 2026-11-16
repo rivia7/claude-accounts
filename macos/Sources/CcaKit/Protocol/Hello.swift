@@ -21,6 +21,9 @@ struct HelloDoc: CcaDocument, Equatable {
     /// 有折合金额（`_gui state` 的 `cost`、`cost_total`，`cca cost sync --json`，PROTOCOL 2.2、3.5）；旧版 cca 没有这个字段，
     /// App 不显示折合金额、不调 `cost sync`（版本不是 CostAPI.version 时也一样）
     var cost: Int?
+    /// 有邮箱助手的 App 入口（账号页的「邮箱」一节，PROTOCOL 2.4、4.11：`mail setup`、`_gui mail-list`、`mail open --msg`、`mail forget`）；
+    /// 旧版 cca 没有这个字段，App 不显示「邮箱」一节、不调这些命令
+    var mail: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -31,7 +34,7 @@ struct HelloDoc: CcaDocument, Equatable {
     var gui: HelloGUI?
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, api, prompt, reorder, forms, dock, cost
+        case version, kind, api, prompt, reorder, forms, dock, cost, mail
         case installCLI = "install_cli"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
@@ -51,6 +54,7 @@ struct HelloDoc: CcaDocument, Equatable {
         dock = c.int(.dock)
         installCLI = c.int(.installCLI)
         cost = c.int(.cost)
+        mail = c.int(.mail)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true

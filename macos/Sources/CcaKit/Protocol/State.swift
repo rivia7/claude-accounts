@@ -423,6 +423,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var cli: CLIRun?
     var can: Can
     var canWhy: [String: CanWhy]
+    /// 邮箱助手状态（账号页的「邮箱」一节，PROTOCOL 2.2、4.11）：只给 `can.mail` 为真的账号，其余（含旧版 cca）是 nil
+    var mail: MailConfig?
     /// 存没存 API key、掩码（PROTOCOL 2.2；旧版 cca 没有，是 nil）
     var apiKey: APIKeyInfo?
     var usage: UsageEntry?
@@ -445,7 +447,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case node, port, slot, group, pinned
         case pinnedNode = "pinned_node"
         case isLast = "is_last"
-        case api, badge, app, cli, can
+        case api, badge, app, cli, can, mail
         case canWhy = "can_why"
         case apiKey = "api_key"
         case usage
@@ -483,6 +485,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         cli = c.lossy(CLIRun.self, .cli)
         can = c.lossy(Can.self, .can) ?? Can()
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
+        mail = c.lossy(MailConfig.self, .mail)
         apiKey = c.lossy(APIKeyInfo.self, .apiKey)
         usage = c.lossy(UsageEntry.self, .usage)
         usageWeeks = c.lossy(UsageWeeks.self, .usageWeeks)
@@ -646,9 +649,12 @@ struct Can: Decodable, Sendable, Equatable {
     /// 账号页有没有「折合金额」一节、折合金额页里有没有这一行（Claude、Codex 的官方账号，没登录的也有；
     /// PROTOCOL 2.2）。旧版 cca 没有这一项，当作没有
     var cost: Bool = false
+    /// 账号页有没有「邮箱」一节（邮箱助手，PROTOCOL 4.11；只有 Claude 官方账号、账号表里写了邮箱）。
+    /// 旧版 cca 没有这一项，当作没有
+    var mail: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case app, web, billing, usage, check, cli, devices, cost
+        case app, web, billing, usage, check, cli, devices, cost, mail
         case limitResets = "limit_resets"
         case policyLock = "policy_lock"
         case apiKey = "api_key"
@@ -669,7 +675,35 @@ struct Can: Decodable, Sendable, Equatable {
         devices = c.bool(.devices) ?? false
         apiKey = c.bool(.apiKey) ?? false
         cost = c.bool(.cost) ?? false
+        mail = c.bool(.mail) ?? false
     }
+}
+
+/// 账号的邮箱助手状态（`account.mail`，PROTOCOL 2.2、4.11）：只读 config.json、不碰钥匙串。
+/// `source`：`account`（这个账号单独配了 Gmail）| `default`（用的是默认那个，所有账号共用）| `""`（没配置）。
+/// 应用专用密码存不存在、能不能连上，要调 `_gui mail-list` 才知道。
+struct MailConfig: Decodable, Sendable, Equatable {
+    /// 解析得到收登录邮件的 Gmail 了没有
+    var configured: Bool
+    /// 那个 Gmail 地址（没配置为 nil）
+    var user: String?
+    /// 这个账号用的是单独配的还是默认的
+    var source: String?
+    /// 登录时自不自动打开登录邮件里的链接
+    var auto: Bool
+
+    enum CodingKeys: String, CodingKey { case configured, user, source, auto }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        configured = c.bool(.configured) ?? false
+        user = c.string(.user)
+        source = c.string(.source)
+        auto = c.bool(.auto) ?? true
+    }
+
+    /// 这个账号单独配了 Gmail（不是用的默认那个）
+    var isAccountSpecific: Bool { source == "account" }
 }
 
 func nonEmpty(_ s: String?) -> String? {

@@ -152,6 +152,14 @@ struct FixtureTransport: Transport {
         case ("_gui", "live"):
             let local = request.extraEnvironment["CCA_ROUTE"] == "local"
             return json(overrides["live"] ?? (local ? "live_local.json" : "live_router.json"))
+        case ("_gui", "mail-list"):
+            await pause(2)
+            return json("mail_list.json")
+        case ("mail", "open"):
+            await pause(2)
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data("已在账号的浏览器里打开登录邮件里的链接\n".utf8), events: [])
+        case ("mail", "forget"):
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data("已移除邮箱助手的设置\n".utf8), events: [])
         case ("usage", _):
             await pause(3)
             let name = tool == .claude ? "usage_claude.json" : "usage_\(tool.rawValue).json"
@@ -212,6 +220,7 @@ struct FixtureTransport: Transport {
         var args = arguments
         if args.first == "codex" { args.removeFirst() }
         if args.first == "key" || args.first == "rm" { args = [args[0]] }
+        if args.first == "mail", args.dropFirst().first == "setup" { args = ["mail", "setup"] }   // 默认 / --account 都用同一个演示流程
         let name = "flow_" + args.joined(separator: "_") + ".flow"
         guard let d = read(name) else { throw SessionUnsupported() }
         return DemoSession(data: d)

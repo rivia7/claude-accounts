@@ -5,6 +5,12 @@ protocol Prompter: Sendable {
     func confirm(_ consent: ConsentEvent) async -> Bool
 }
 
+/// 移除邮箱助手设置的范围（`cca mail forget`，PROTOCOL 4.11）：只移这个账号单独配的（改回默认）/ 只移默认（各账号单独配的留着）。
+enum MailForgetScope: String, Sendable, Hashable {
+    case account
+    case `default`
+}
+
 /// 会改东西的 cca 命令（带事件文件、走重跑流程）。
 enum CcaCommand: Sendable, Hashable {
     case usage(ToolID, key: String?)
@@ -54,10 +60,15 @@ enum CcaCommand: Sendable, Hashable {
     /// 的文档，金额本身在 `_gui state` 里。manual 是用户点的「刷新」：带 `--now`（上次同步失败了也不等重试的时间）、不降优先级；
     /// 定时的低优先级。全局一次一个。
     case costSync(manual: Bool)
+    /// 在账号的浏览器里打开某封登录邮件（`cca mail open KEY --msg 文件夹:uid:uidvalidity`，PROTOCOL 4.11）：
+    /// cca 重新取这封、再核对、打开里面的链接；要跑完为止，进 `launch:` 闸门。mail 只给 Claude。
+    case mailOpen(ToolID, key: String, msg: String)
+    /// 移除邮箱助手设置（`cca mail forget`，PROTOCOL 4.11）：account 时 key 是账号的键，default 时 key 是 nil。
+    case mailForget(ToolID, key: String?, scope: MailForgetScope)
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync: return nil
         }
@@ -66,7 +77,8 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k): return k
+        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _): return k
+        case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall,
              .clientInstall, .costSync: return nil
         }
@@ -115,6 +127,12 @@ enum CcaCommand: Sendable, Hashable {
         case .keyShow(_, let k): return prefix + ["key", k, "--show"]
         case .keyForget(_, let k): return prefix + ["key", k, "--forget"]
         case .costSync(let manual): return ["cost", "sync"] + (manual ? ["--now"] : []) + ["--json"]
+        case .mailOpen(_, let k, let msg): return prefix + ["mail", "open", k, "--msg", msg]
+        case .mailForget(_, let k, let scope):
+            switch scope {
+            case .account: return prefix + ["mail", "forget", "--account", k ?? ""]
+            case .default: return prefix + ["mail", "forget", "--default"]
+            }
         }
     }
 
@@ -124,7 +142,8 @@ enum CcaCommand: Sendable, Hashable {
         case .usage, .usagePoll: return 150
         case .check: return 180
         case .checkPoll: return 300
-        case .app, .web, .billing, .limitResets: return 120
+        case .app, .web, .billing, .limitResets, .mailOpen: return 120
+        case .mailForget: return 60
         case .routerSync, .policyPull: return 180
         case .guiUpdate, .update: return 300
         case .rename, .reorder, .policyRequest: return 60
@@ -140,10 +159,10 @@ enum CcaCommand: Sendable, Hashable {
     /// 半路杀掉可能用掉了却没记下重置后的用量。
     var runsToCompletion: Bool {
         switch self {
-        case .app, .web, .billing, .limitResets, .routerSync, .reset, .clientInstall: return true
+        case .app, .web, .billing, .limitResets, .mailOpen, .routerSync, .reset, .clientInstall: return true
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
-             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync: return false
+             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget: return false
         }
     }
 
@@ -151,7 +170,8 @@ enum CcaCommand: Sendable, Hashable {
     /// router sync 全局一个；更新 cca、gui update 全局一个（一个接着一个）。
     var gate: String? {
         switch self {
-        case .app(let t, let k), .web(let t, let k), .billing(let t, let k), .limitResets(let t, let k), .rename(let t, let k, _): return "launch:\(t.rawValue):\(k)"
+        case .app(let t, let k), .web(let t, let k), .billing(let t, let k), .limitResets(let t, let k), .rename(let t, let k, _), .mailOpen(let t, let k, _): return "launch:\(t.rawValue):\(k)"
+        case .mailForget: return nil   // 快速改 config.json：不占闸门
         case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
         case .reorder(let t, _): return "reorder:\(t.rawValue)"   // 连着拖几次：一个接一个，最后拖的那次写在最后
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
@@ -307,6 +327,12 @@ actor CcaClient {
         var extra: [String: String] = [:]
         if let route, route == .router || route == .local { extra["CCA_ROUTE"] = route.rawValue }
         return try await query(LiveDoc.self, ["_gui", "live"], timeout: 30, extra: extra)
+    }
+
+    /// 账号页「邮箱」一节的登录邮件列表（`cca _gui mail-list --account KEY [小时]`，PROTOCOL 2.4）：只读、要联网（连 Gmail，慢几秒）。
+    /// 文档自带 `error`（没配置、连不上）；硬错误（崩溃、超时）才 throw。mail 只给 Claude，前缀固定是空的。
+    func mailList(key: String, hours: Int = 24) async throws -> MailListDoc {
+        try await query(MailListDoc.self, ["_gui", "mail-list", "--account", key, String(hours)], timeout: 45)
     }
 
     private func query<T: CcaDocument>(_ type: T.Type, _ args: [String], timeout: TimeInterval,

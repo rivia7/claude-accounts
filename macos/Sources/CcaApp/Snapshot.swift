@@ -56,6 +56,13 @@ enum Snapshot {
                 m.tool = .claude
                 m.selection = first(.claude) { $0.login != .loggedIn && !$0.isAPI }.map { .account($0) }
             },
+            Scene(name: "account-mail") { m in
+                m.tool = .claude
+                if let r = first(.claude, { $0.can.mail && $0.mail?.configured == true }) {
+                    m.selection = .account(r)
+                    m.refreshMail(r)   // 拉一次登录邮件，列表展开（窗口在后面，不自动拉）
+                }
+            },
             Scene(name: "claude-api") { m in
                 m.tool = .claude
                 m.selection = first(.claude) { $0.isAPI && $0.health != nil }.map { .account($0) }

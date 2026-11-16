@@ -371,6 +371,7 @@ enum Texts {
         case .sync: return "同步路由器…"
         case .rename: return "改别名…"
         case .reset: return "重置额度…"
+        case .mail: return "打开登录邮件…"
         }
     }
 

@@ -278,7 +278,12 @@ struct ResultCode: KnownValues {
     static let localReady = ResultCode(rawValue: "local_ready")
     /// 删掉了官方账号记下的 API key（`cca [codex] key 账号 --forget`；本来就没有时也是它）。
     static let keyForgotten = ResultCode(rawValue: "key_forgotten")
-    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten]
+    /// 邮箱助手配好了（`cca mail setup [--account]`，PROTOCOL 4.11）。
+    static let mailReady = ResultCode(rawValue: "mail_ready")
+    /// 移除了邮箱助手的设置（`cca mail forget`）。
+    static let mailForgotten = ResultCode(rawValue: "mail_forgotten")
+    static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
+                                         .mailReady, .mailForgotten]
 }
 
 struct FailCode: KnownValues {
@@ -332,13 +337,15 @@ struct FailCode: KnownValues {
     /// 统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：没统计成（message 是原因）/ 用不了（关掉了、没有 Claude / Codex 的官方账号）。
     static let costUnavailable = FailCode(rawValue: "cost_unavailable")
     static let costOff = FailCode(rawValue: "cost_off")
+    /// 邮箱助手：连不上 Gmail（网络 / 代理 / 证书 / 认证，`cca mail setup`，PROTOCOL 4.11）。
+    static let mailConnect = FailCode(rawValue: "mail_connect")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff]
+                                       .costUnavailable, .costOff, .mailConnect]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

@@ -153,6 +153,21 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                 message: "在终端里用官方安装脚本安装；直连不通时会问要不要经内置代理装。装好后回到 cca。")
     }
     static let update = Handoff(arguments: ["update"], title: "更新 cca", message: "在终端里把 cca 更新到最新版本。")
+
+    /// 配置邮箱助手（`cca mail setup [--account]`，PROTOCOL 4.11；邮箱助手只给 Claude，前缀固定是空的）：
+    /// account 为 nil 时配默认（所有 Claude 账号共用），否则给这个账号单独配一个 Gmail（覆盖默认）。要 `hello.mail`（旧版 cca 没有，不走终端）。
+    static func mailSetup(account: AccountRef?) -> Handoff {
+        if let account {
+            return Handoff(arguments: ["mail", "setup", "--account", account.key],
+                           title: "为这个账号单独配置邮箱",
+                           message: "填收它的登录邮件的 Gmail 地址和应用专用密码（只给这个账号用，覆盖默认）。应用专用密码只存进这台 Mac 的钥匙串。",
+                           inApp: true, needsForms: true)
+        }
+        return Handoff(arguments: ["mail", "setup"],
+                       title: "配置默认邮箱",
+                       message: "填收登录邮件的 Gmail 地址和应用专用密码（所有 Claude 账号默认共用）。各账号把邮箱转发到这个 Gmail，cca 按收件人认是哪个账号。应用专用密码只存进这台 Mac 的钥匙串。",
+                       inApp: true, needsForms: true)
+    }
 }
 
 enum TerminalHandoff {

@@ -1,0 +1,2 @@
+{"v":1,"ev":"ask","seq":1,"q":"mail.setup","title":"邮箱助手","message":"配置默认 Gmail（所有 Claude 账号共用）。各账号把邮箱转发到这个 Gmail，cca 按收件人认是哪个账号。要 Gmail 的应用专用密码（先开两步验证，在 myaccount.google.com/apppasswords 建，16 个字母），只存进钥匙串、不显示、不保存链接","fields":[{"id":"addr","kind":"text","label":"Gmail 地址","hint":"收登录邮件的 Gmail 地址"},{"id":"pw","kind":"secret","label":"应用专用密码","hint":"16 个字母，空格不用输"}]}
+{"v":1,"ev":"result","code":"mail_ready","tool":"claude","key":null,"message":"邮箱助手配好了：team-login@gmail.com"}

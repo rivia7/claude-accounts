@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "kind": "mail-list",
+  "generated_at": 1794042020,
+  "hours": 24,
+  "account": "工作",
+  "key": "工作(bob@example.com)",
+  "user": "team-login@gmail.com",
+  "folders": ["所有邮件", "垃圾邮件"],
+  "truncated": false,
+  "rows": [
+    {
+      "got_epoch": 1794041900,
+      "folder": "所有邮件",
+      "subject": "Your secure link to Claude is here",
+      "from": ["no-reply-abc123@mail.anthropic.com"],
+      "to": ["bob@example.com"],
+      "account": {"key": "工作(bob@example.com)", "name": "工作"},
+      "dkim": [{"result": "pass", "domain": "mail.anthropic.com"}],
+      "verdict": {"ok": true, "why": null, "why_text": null},
+      "link_shape": "https://claude.ai/magic-link（# 后面 67 个字符，不显示）",
+      "openable": true,
+      "msg": {"folder": "[Gmail]/All Mail", "uid": 12345, "uidvalidity": 678}
+    },
+    {
+      "got_epoch": 1794039100,
+      "folder": "所有邮件",
+      "subject": "Your secure link to Verification Portal is here",
+      "from": ["no-reply-zzz999@mail.anthropic.com"],
+      "to": ["bob@example.com"],
+      "account": {"key": "工作(bob@example.com)", "name": "工作"},
+      "dkim": [{"result": "pass", "domain": "mail.anthropic.com"}],
+      "verdict": {"ok": false, "why": "subject", "why_text": "标题不像登录邮件"},
+      "link_shape": null,
+      "openable": false,
+      "msg": null
+    },
+    {
+      "got_epoch": 1794035600,
+      "folder": "垃圾邮件",
+      "subject": "Your secure link to Claude is here",
+      "from": ["no-reply@phisher.example.com"],
+      "to": ["bob@example.com"],
+      "account": {"key": "工作(bob@example.com)", "name": "工作"},
+      "dkim": null,
+      "verdict": {"ok": false, "why": "dkim", "why_text": "Gmail 的验证结果里没有 Anthropic 的签名通过（转发时邮件被改过，或者不是 Anthropic 发的）"},
+      "link_shape": null,
+      "openable": false,
+      "msg": null
+    }
+  ],
+  "error": null
+}

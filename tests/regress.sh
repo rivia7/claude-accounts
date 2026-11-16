@@ -257,6 +257,37 @@ printf '#!/bin/bash\npython3 "%s/mail_fake.py" eml "%s/box/all/9.eml" --to alice
 out=$(run "${MENV[@]}" CCA_TTY="$(ans)" cca login alice 2>&1); rc=$?
 rm -f "$T/mail_send" "$T/mail_login"
 ok "登录时：后台盯着 Gmail，登录邮件一到就在 alice 专属的 Chrome 里打开里面的链接，登录接着完成；登录结束就不再盯" '[ $rc -eq 0 ] && grep -q "MAIL-LOGIN opened" claude.log && grep -F "tok-L1" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && printf "%s" "$out" | grep -q "邮箱助手：已连上 inbox@example.com" && printf "%s" "$out" | grep -q "已在 alice@example.com 专属的浏览器里打开登录邮件里的链接" && printf "%s" "$out" | grep -q "已重新登录" && ! printf "%s" "$out" | grep -q "没通过核对" && gone "mail-watch alice@example.com" && ! grep -q VIOLATION "$MB/imap.log"'
+# 账号页的「邮箱」一节（PROTOCOL 4.11）：列表（_gui mail-list，只读 JSON，不含链接）、打开指定这一封（open --msg）、单独配 Gmail（setup --account）
+akey=$(python3 -c 'import json,sys;print([k for k in json.load(open(sys.argv[1])) if "alice@example.com" in k][0])' "$H/.cca/accounts.json")
+bkey=$(python3 -c 'import json,sys;print([k for k in json.load(open(sys.argv[1])) if "bob@example.com" in k][0])' "$H/.cca/accounts.json")
+meml 5 alice@example.com tok-T5 --at $((now - 120))   # alice 的一封新登录邮件（uid 5 = 5.eml，tok-T5）
+out=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>&1); rc=$?
+mluser=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin)["user"])' 2>/dev/null)
+mlshape=$(printf '%s' "$out" | python3 -c 'import json,sys;d=json.load(sys.stdin);op=[r for r in d["rows"] if r["openable"]];print(1 if (d["error"] is None and all(r["to"]==["alice@example.com"] for r in d["rows"]) and op and op[0]["msg"] and op[0]["link_shape"] and "magic-link" in op[0]["link_shape"] and all("tok-" not in (r["link_shape"] or "") for r in d["rows"])) else 0)' 2>/dev/null)
+ok "mail-list：实时列这个账号的登录邮件（元数据 + 核对结论 + 链接样子 + 不透明句柄），账号作用域（别的账号的不列），绝不含链接本身；只读" '[ $rc -eq 0 ] && [ "$mluser" = inbox@example.com ] && [ "$mlshape" = 1 ] && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -q VIOLATION "$MB/imap.log"'
+# 按 uid 精确取 T5（uid 5）的句柄，和排序 / 时间无关：打开它应得到 tok-T5
+handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["openable"] and x["msg"]["uid"] == 5][0]["msg"];print("%s:%s:%s"%(r["folder"],r["uid"],r["uidvalidity"]))' 2>/dev/null)
+: > open.log
+out=$(run "${MENV[@]}" cca mail open "$akey" --msg "$handle" 2>&1); rc=$?
+ok "mail open --msg：按句柄重新取、再核对、打开指定的那一封（tok-T5），在 alice 的 Chrome 里经它的端口；链接不在输出里、不进 ~/.cca" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-T5" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -rqs "tok-T" "$H/.cca"'
+printf '{"user":"bob-inbox@example.com","password":"abcdefghijklmnop"}' > "$MB/ctl.json"   # 让假 Gmail 认 bob-inbox（单一用户）：测这个账号单独配的 Gmail
+out=$(run "${MENV[@]}" CCA_TTY="$(ans bob-inbox@example.com abcdefghijklmnop)" cca mail setup --account 副号 2>&1); rc=$?
+bslug=$(basename "$(ls -d "$H"/.cca/accounts/bob-example-com-*)")
+ok "mail setup --account：这个账号单独用一个 Gmail（存进 mail.accounts[acct_id]、钥匙串按地址），默认那个不动、互不影响" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "副号 单独用这个 Gmail" && cfgok "c[\"mail\"][\"user\"] == \"inbox@example.com\"" && cfgok "c[\"mail\"][\"accounts\"][\"'"$bslug"'\"][\"user\"] == \"bob-inbox@example.com\"" && [ "$(cat "$T/keychain/cca-mail/bob-inbox@example.com")" = abcdefghijklmnop ] && [ -e "$T/keychain/cca-mail/inbox@example.com" ]'
+out=$(run "${MENV[@]}" cca _gui mail-list --account "副号(bob@example.com)" 2>&1); rc=$?
+mlbuser=$(printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin)["user"])' 2>/dev/null)
+ok "mail-list：账号单独配了 Gmail 就连它的（不是默认那个）" '[ $rc -eq 0 ] && [ "$mlbuser" = bob-inbox@example.com ]'
+printf '{}' > "$MB/ctl.json"   # 恢复假 Gmail 认默认 inbox@example.com
+out=$(run cca mail forget --account 副号 2>&1); rc=$?
+ok "mail forget --account：只移这个账号单独配的（改回默认），默认那个留着，没人用的地址从钥匙串删掉" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "单独配置的 Gmail" && cfgok "c[\"mail\"][\"user\"] == \"inbox@example.com\"" && ! cfgok "c.get(\"mail\", {}).get(\"accounts\")" && [ ! -e "$T/keychain/cca-mail/bob-inbox@example.com" ] && [ -e "$T/keychain/cca-mail/inbox@example.com" ]'
+out=$(run cca mail forget --default 2>&1); rc=$?
+ok "mail forget --default：只移默认（各账号单独配的留着；这里没有，所以全没了）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已移除默认 Gmail" && ! cfgok "\"mail\" in c"'
+run "${MENV[@]}" CCA_TTY="$(ans inbox@example.com abcdefghijklmnop)" cca mail setup >/dev/null 2>&1   # 复原默认，下面的 forget（全部）照常有东西可删
+# 删了账号后，它单独配的 Gmail 覆盖（mail.accounts）和没人再用的应用专用密码也清掉（写个账号表里没有的「幽灵」覆盖，跑一条 Claude 命令触发清理）
+edit_table 'j.setdefault("mail", {}).setdefault("accounts", {})["ghost-slug-123"] = {"user": "ghost@example.com"}' "$H/.cca/config.json"
+printf 'ghostpassword1234' > "$T/keychain/cca-mail/ghost@example.com"
+run "${MENV[@]}" cca mail open "$akey" --wait 0 >/dev/null 2>&1   # 任一会同步的 Claude 命令都会走 secrets-forget → 清掉孤儿覆盖（cca rm/edit 删账号后同样）
+ok "删账号后清掉它单独配的 Gmail 覆盖和没人用的应用专用密码（默认那个不动）" '! cfgok "\"ghost-slug-123\" in c.get(\"mail\", {}).get(\"accounts\", {})" && [ ! -e "$T/keychain/cca-mail/ghost@example.com" ] && cfgok "c[\"mail\"][\"user\"] == \"inbox@example.com\"" && [ -e "$T/keychain/cca-mail/inbox@example.com" ]'
 out=$(run cca mail forget 2>&1); rc=$?
 ok "mail forget：删掉钥匙串里的应用专用密码、config.json 的 mail 和 ~/.cca/mail" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-mail" ] && ! cfgok "\"mail\" in c" && [ ! -e "$H/.cca/mail" ]'
 rm -f "$T/scutil.txt"
@@ -1489,9 +1520,15 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True, \"cost\": False} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量、邮箱助手" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True, \"mail\": False, \"cost\": False} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"mail\"] is None and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
 ok "_gui state：能不能打开账单页，条件和网页版一样（入口的显示由 cca 说了算）" 'printf "%s" "$out" | jok "all(a[\"can\"][\"billing\"] == a[\"can\"][\"web\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版一样" 'printf "%s" "$out" | jok "all(a[\"can\"][\"limit_resets\"] == (i == 0 and a[\"can\"][\"web\"]) for i, t in enumerate(d[\"tools\"]) for a in t[\"accounts\"])"'
+# 账号页的「邮箱」一节（PROTOCOL 4.11）：配了默认 Gmail（直接写 config.json，不用连 Gmail），state 只读 config.json、不碰钥匙串
+edit_table 'j["mail"] = {"user": "team-login@example.com"}' "$H/.cca/config.json"
+nfp=$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)
+stm=$(gj state)
+ok "_gui state：Claude 官方账号 can.mail、account.mail 说走默认 / 单独配 / 没配置（只读 config.json，不碰钥匙串）；Codex、第三方 API 账号没有" 'printf "%s" "$stm" | jok "(lambda a: a[\"can\"][\"mail\"] is True and a[\"mail\"] == {\"configured\": True, \"user\": \"team-login@example.com\", \"source\": \"default\", \"auto\": True})(acct(0, \"alice@example.com\")) and acct(0, \"kimi2\")[\"can\"][\"mail\"] is False and acct(0, \"kimi2\")[\"mail\"] is None and acct(1, \"dave@example.com\")[\"can\"][\"mail\"] is False and acct(1, \"dave@example.com\")[\"mail\"] is None" && [ "$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)" = "$nfp" ]'
+edit_table 'j.pop("mail", None)' "$H/.cca/config.json"
 mv "$T/bin/claude" "$T/claude.off"
 out=$(run PATH="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" cca _gui state </dev/null 2>/dev/null)
 mv "$T/claude.off" "$T/bin/claude"

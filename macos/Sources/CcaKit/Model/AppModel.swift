@@ -16,7 +16,7 @@ enum SidebarItem: Hashable, Sendable {
 }
 
 enum ActivityKind: Sendable, Equatable {
-    case app, web, billing, limitResets, check, sync, rename, reset
+    case app, web, billing, limitResets, check, sync, rename, reset, mail
 }
 
 /// 一个账号正在做的事（按钮旁边显示进度）。
@@ -155,6 +155,9 @@ final class AppModel {
     /// 账号页「设备」一节（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号页看得见时一分钟查一次，只记在内存里
     private(set) var devices: [AccountRef: DevicesSnapshot] = [:]
     private(set) var devicesLoading: Set<AccountRef> = []
+    /// 账号页「邮箱」一节的登录邮件列表（`cca _gui mail-list`，PROTOCOL 2.4、4.11）：按需拉（展开 / 刷新），只记在内存里
+    private(set) var mailLists: [AccountRef: MailListSnapshot] = [:]
+    private(set) var mailLoading: Set<AccountRef> = []
     /// 折合金额（PROTOCOL 2.2、3.5）：正在跑几个 `cost sync`（全局一次一个，排着队）、用户点的「刷新」在不在里面
     private(set) var costRuns = 0
     private(set) var costRefreshing = false
@@ -834,8 +837,10 @@ final class AppModel {
             })
             guard let self else { return }
             self.activities[ref] = nil
-            let opened = kind == .web ? "已打开网页版" : kind == .billing ? "已打开账单页" : kind == .limitResets ? "已打开用量页" : "已打开 \(self.appLabel(ref.tool))"
+            let opened = kind == .web ? "已打开网页版" : kind == .billing ? "已打开账单页" : kind == .limitResets ? "已打开用量页"
+                : kind == .mail ? "已在浏览器里打开登录邮件里的链接" : "已打开 \(self.appLabel(ref.tool))"
             self.finish(r, failureTitle: title, success: r.resultEvent?.message ?? opened)
+            if kind == .mail { self.refreshMail(ref) }   // 打开后刷新：这封标为已打开过
             await self.afterAction()
         }
     }
@@ -1281,6 +1286,58 @@ final class AppModel {
 
     /// cca 能用官方安装脚本装 claude / codex / agy 命令（`hello.install_cli`，PROTOCOL 2.1）。
     var installCLISupported: Bool { hello?.installCLI == 1 }
+
+    /// cca 有邮箱助手的 App 入口（`hello.mail`，PROTOCOL 2.1）：旧版 cca 没有，账号页不显示「邮箱」一节。
+    var mailSupported: Bool { hello?.mail == 1 }
+
+    /// 账号页「邮箱」一节：问一次这个账号的登录邮件（实时连 Gmail，慢几秒）。拉不成时上次拉到的照样显示，旁边说原因。
+    func refreshMail(_ ref: AccountRef) {
+        guard phase == .ready, let client, mailSupported, !mailLoading.contains(ref), account(ref)?.can.mail == true else { return }
+        mailLoading.insert(ref)
+        track { [weak self] in
+            do {
+                let doc = try await client.mailList(key: ref.key, hours: 24)
+                guard let self else { return }
+                self.mailLoading.remove(ref)
+                self.mailLists[ref] = MailListSnapshot(doc: doc, error: nil,
+                                                       fetchedEpoch: doc.generatedAt ?? Date().timeIntervalSince1970)
+            } catch {
+                guard let self else { return }
+                self.mailLoading.remove(ref)
+                if case CcaError.cancelled = error { return }
+                var s = self.mailLists[ref] ?? MailListSnapshot()
+                s.error = (error as? CcaError)?.description ?? "没能查到登录邮件"
+                self.mailLists[ref] = s
+            }
+        }
+    }
+
+    /// 在这个账号专属的浏览器里打开某封登录邮件（cca 重新取、再核对、打开里面的链接）。
+    func openMailMessage(_ ref: AccountRef, _ handle: MailHandle) {
+        launch(ref, kind: .mail, command: .mailOpen(ref.tool, key: ref.key, msg: handle.argument), title: "没能打开登录邮件")
+    }
+
+    /// 配置 / 更换邮箱助手：account 为 nil 配默认（所有 Claude 账号共用），否则给这个账号单独配。
+    func mailSetup(_ account: AccountRef?) {
+        guard mailSupported else { return }
+        run(.mailSetup(account: account))
+    }
+
+    /// 移除邮箱助手设置（移完重读 state，「邮箱」一节会刷新）。
+    func mailForget(_ ref: AccountRef, scope: MailForgetScope) {
+        guard phase == .ready, let client, mailSupported, activities[ref] == nil else { return }
+        activities[ref] = Activity(kind: .mail)
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(.mailForget(ref.tool, key: scope == .account ? ref.key : nil, scope: scope),
+                                         prompter: prompter)
+            guard let self else { return }
+            self.activities[ref] = nil
+            self.mailLists[ref] = nil
+            self.finish(r, failureTitle: "没能移除邮箱助手", success: r.resultEvent?.message ?? "已移除")
+            await self.afterAction()
+        }
+    }
 
     /// 账号页“没装 X 命令”旁边的「安装」：终端打不开是因为没装命令、cca 也有辅助安装时才有。
     func installCLIHandoff(for a: Account) -> Handoff? {

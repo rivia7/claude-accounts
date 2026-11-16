@@ -449,6 +449,18 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
     if a.kind == .api {
         check("\(n) API 账号没有折合金额", a.cost == nil && isNull(ra["cost"]) && !a.can.cost)
     }
+    // 邮箱助手（PROTOCOL 2.2、4.11）：can.mail 只给 Claude 官方账号（有邮箱），有 mail 的账号 can.mail 为真，第三方 API 账号都没有
+    if let can = ra["can"] as? [String: Any], can["mail"] != nil {
+        check("\(n) can.mail 是布尔", isBool(can["mail"]))
+        if a.can.mail { check("\(n) 有「邮箱」的是 Claude 官方账号、有邮箱", t.id == .claude && !a.isAPI && nonEmpty(a.email) != nil) }
+    }
+    if a.kind == .api {
+        check("\(n) API 账号没有邮箱助手", a.mail == nil && isNull(ra["mail"]) && !a.can.mail)
+    }
+    if let raw = ra["mail"], !isNull(raw) {
+        check("\(n) 有 mail 的账号 can.mail 为真", a.can.mail)
+        check("\(n) mail.source 是 account / default / 空", [nil, "account", "default", ""].contains(a.mail?.source))
+    }
     if let raw = ra["cost"], !isNull(raw) {
         check("\(n) 有 cost 的账号 can.cost 为真", a.can.cost)
         costInvariants(n + " cost", raw as? [String: Any] ?? [:], a.cost, now: now)
@@ -735,6 +747,33 @@ func genericDevices(_ name: String, _ d: Data) -> DevicesDoc? {
 }
 
 @discardableResult
+func genericMailList(_ name: String, _ d: Data) -> MailListDoc? {
+    guard let doc = decodeOrFail(MailListDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) kind mail-list", doc.kind == "mail-list")
+    check("\(name) generated_at 是数字", isNumber(raw["generated_at"]))
+    let rawRows = raw["rows"] as? [[String: Any]] ?? []
+    check("\(name) 有 error 时 rows 空", doc.error == nil || doc.rows.isEmpty)
+    check("\(name) 行都解码了", rawRows.count == doc.rows.count)
+    for row in doc.rows {
+        // 通过核对的才有句柄和链接样子；没通过的说原因
+        if row.verdict.ok {
+            check("\(name) 通过核对的没有 why", row.verdict.why == nil)
+        } else {
+            check("\(name) 没通过核对的有原因", nonEmpty(row.verdict.whyText) != nil && nonEmpty(row.verdict.why) != nil)
+            check("\(name) 没通过核对的不能打开、没有句柄", !row.openable && row.msg == nil)
+        }
+        // openable 必有句柄；句柄才是回传给 cca 的东西
+        check("\(name) openable 的有句柄", !row.openable || row.msg != nil)
+        // 绝不含真链接：只有 link_shape 这一个和链接有关的字段
+        let r = rawRows.first { ($0["got_epoch"] as? NSNumber)?.doubleValue == row.gotEpoch }
+        check("\(name) 行里只有 link_shape、没有真链接字段", r == nil || (r!["link"] == nil && r!["url"] == nil && r!["magic_link"] == nil))
+    }
+    return doc
+}
+
+@discardableResult
 func genericUpdate(_ name: String, _ d: Data) -> UpdateDoc? {
     guard let doc = decodeOrFail(UpdateDoc.self, name, d) else { return nil }
     let raw = jsonObject(d) as? [String: Any] ?? [:]
@@ -1008,6 +1047,9 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "devices":
             genericDevices(f, d)
             tolerance(DevicesDoc.self, f, d) { [$0.accounts.count, $0.accounts.reduce(0) { $0 + $1.devices.count }] }
+        case "mail-list":
+            genericMailList(f, d)
+            tolerance(MailListDoc.self, f, d) { [$0.rows.count, $0.folders.count] }
         case "update":
             genericUpdate(f, d)
             tolerance(UpdateDoc.self, f, d) { [$0.latest == nil ? 0 : 1] }

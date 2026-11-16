@@ -26,14 +26,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - 下文写成 `cca [codex] …` 的命令，Antigravity 账号的前缀是 `agy`（`_gui state` 的 `cli_prefix`）。Antigravity 没有桌面 App、第三方 API 账号、
   查用量的接口和控制台账单页（`tools[].features`，2.2）：`usage`、`app`、`billing`、`limit-resets`、`reset`、`add api` 这些它都没有，
   App 不调（调了 cca 也只回 `fail` 的 `unsupported`）。
-- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
-  一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live`、`update --check --json`
+- 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `mail open` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
+  一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live|mail-list`、`update --check --json`
   随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
-- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
+- 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`_gui mail-list` 45 秒（连 Gmail）、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` / `mail open` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒、
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
   `cost sync` 全局一次一个。
-- `app`、`web`、`billing`、`limit-resets`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
+- `app`、`web`、`billing`、`limit-resets`、`mail open`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
 - `clients install TOKEN` 同样运行至完成，退出 App 不终止安装事务；`clients mode`、`clients auto-install` 可取消，`clients check` 平时也可取消，
@@ -78,6 +78,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   没有这个字段（旧版 cca）时都不给。
 - `cost`：有折合金额（`_gui state` 的 `cost`、`cost_total`，`cca cost sync --json`，见 2.2、3.5）。没有这个字段（旧版 cca）时
   App 不显示折合金额、不调 `cost sync`。
+- `mail`：有邮箱助手的 App 入口（账号页的「邮箱」一节，4.11：`cca mail setup [--account]`、`cca _gui mail-list`、`cca mail open --msg`、`cca mail forget`，
+  见 2.2 的 `can.mail` / `account.mail`、2.4）。没有这个字段（旧版 cca）时 App 不显示「邮箱」一节、不调这些命令（旧版 cca 没有 `mail list`，`cca mail setup` 会被当成启动账号）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
   （旧版 cca 没有 `tools.agy`，当作没启用）。`bin` 是找到的 `claude` / `codex` / `agy`，没装为 null。App 只认识的工具才显示，`tools` 里别的键忽略。
@@ -147,10 +149,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
   "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
-  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true, "api_key": true},
+  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true, "api_key": true, "mail": true},
   "can_why": {},
   "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1794020000.0,
               "from_device": "dan-air", "sync_error": null},
+  "mail": {"configured": true, "user": "team-login@gmail.com", "source": "default", "auto": true},
   "usage": { "…用量条目，见 3.1…" },
   "usage_weeks": { "…每周用量，见下面…" },
   "cost": { "…折合金额，见下面…" },
@@ -189,6 +192,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
   `cost` 是账号页有没有「折合金额」一节、折合金额页里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
   config.json 里没写 `"cost": false`。没登录的也是 true（照样显示以前记下的）。同样没有对应的 `can_why`；旧版 cca 没有这一项，当作没有。
+  `mail` 是账号页有没有「邮箱」一节（4.11，邮箱助手）：只有 Claude 的官方账号、账号表里写了邮箱时为 true（和 `hello.mail` 一起把关）。
+  同样没有对应的 `can_why`：不能就不显示这一节、不调 `mail` 的命令；旧版 cca 没有这一项，当作没有。
 - `api_key`：存没存 API key（4.10）。官方账号的是**记下备查**的（比如控制台里建的 key：只存进这台 Mac 的钥匙串，cca 绝不拿它登录或启动账号，
   那样会变成按量计费）；第三方 API 账号的是启动要用的那把。`saved`：存了没有（第三方 API 账号换了服务商、和存的时候域名不一样的算没存）；
   `hint`：掩码，存的时候 cca 算好的（开头 8 个字符里最后一个 `-` 以前的前缀 + `…` + 最后 4 个字符，例如 `sk-ant-…x7Qa`；短于 24 个字符的 key
@@ -198,6 +203,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   设备统计，和 `can.devices` 是同一批账号，Antigravity 除外；不同步的是 false）；`saved_epoch`：什么时候记下的（这台 Mac 记下的，或者别的设备
   记下、同步来的；不知道是 null）；`from_device`：从哪台设备同步来的（设备统计里的名字；这台 Mac 自己记下的是 null）；`sync_error`：最近一次
   没同步成的原因（给人看的话；成了、不同步的是 null）。旧版 cca 没有这几项：当作不同步。
+- `mail`：这个账号的邮箱助手状态（账号页的「邮箱」一节，4.11；只在 `can.mail` 为 true 的账号上有，否则为 null）。只读 config.json、**不碰钥匙串**：
+  `configured`：解析得到收登录邮件的 Gmail 了没有（这个账号单独配的覆盖，或默认那个）；`user`：那个 Gmail 地址（没配置为 null）；
+  `source`：`account`（这个账号单独配了 Gmail）| `default`（用的是默认那个，所有账号共用）| `null`（没配置）；`auto`：登录时自不自动打开登录邮件里的链接。
+  旧版 cca 没有这个字段，当作 null（不显示「邮箱」一节）。应用专用密码存不存在、能不能连上，要调 `cca _gui mail-list`（2.4）才知道。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `usage_weeks`：每周用量（账号页的「每周用量」、侧栏的「用量统计」）：最近 12 周每周用到这一周额度的百分之几，和这几周的统计。
   Claude、OpenAI 都不给以前的用量，这是 cca 每次查到用量时（`cca usage`、重置额度）记在账号目录里的，从开始记的那一周起一周一周长出来；
@@ -376,6 +385,45 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `state`：`ok` | `drift`（选中的不是应选的，同步路由器能修好）| `closed`（这台 Mac 连不上这个端口）| `unknown`（拿不到选中的节点）| `empty`（空槽位）。
 - 慢：路由器那边要几秒。只在窗口可见时查：分流页打开时每 60 秒一次；总览（首页）不定时查，切到它、窗口变得可见时上次的超过 2 分钟才查一次，操作（同步路由器等）之后也查。
 
+### 2.4 `cca _gui mail-list [--account KEY] [小时]`（只读，要联网：连 Gmail）
+
+账号页的「邮箱」一节（4.11）展开 / 点刷新时按需拉一次（像 `live` 一样联网、慢几秒）。`--account KEY` 时连这个账号解析到的 Gmail（这个账号单独配的，
+或默认那个）、只列发给它的登录相关邮件；不写时连默认 Gmail、跨账号列。`CCA_RO=1` 下运行，只读 IMAP（不标已读、不改不删），**绝不含登录链接本身**（只给“样子”）。
+默认看最近 24 小时（可写别的，最多 336）。要 `hello.mail`（没有就不调）。
+
+```json
+{
+  "version": 1, "kind": "mail-list", "generated_at": 1794042020, "hours": 24,
+  "account": "工作", "key": "工作(alice@example.com)", "user": "team-login@gmail.com",
+  "folders": ["所有邮件", "垃圾邮件"], "truncated": false,
+  "rows": [
+    {
+      "got_epoch": 1794041900, "folder": "所有邮件",
+      "subject": "Your secure link to Claude is here",
+      "from": ["no-reply-abc123@mail.anthropic.com"], "to": ["alice@example.com"],
+      "account": {"key": "工作(alice@example.com)", "name": "工作"},
+      "dkim": [{"result": "pass", "domain": "mail.anthropic.com"}],
+      "verdict": {"ok": true, "why": null, "why_text": null},
+      "link_shape": "https://claude.ai/magic-link（# 后面 67 个字符，不显示）",
+      "openable": true,
+      "msg": {"folder": "[Gmail]/All Mail", "uid": 12345, "uidvalidity": 678}
+    }
+  ],
+  "error": null
+}
+```
+
+- `error`：`null`，或 `{"code": …, "message": "…"}`。`code`：`not_configured`（没配置邮箱助手）| `no_password`（钥匙串 / 密钥文件里没有应用专用密码）|
+  `route`（连接方式写错了）| `connect`（连 Gmail 出错：网络、代理、证书、认证）。有 `error` 时 `rows` 是空的（`user` 可能已给出）。
+- 每封邮件（按收到时间倒序，最多 50 封，`truncated` 为真表示还有更多）：`got_epoch` Gmail 收到的时间；`folder` 给人看的邮件夹名；
+  `subject`、`from`、`to` 是邮件头里的（发件人写的，照实显示，不参与判断）；`account` 按收件人认出的账号（`{key, name}`，认不出为 null）；
+  `dkim` 是 Gmail 写的验证结果（`[{result, domain}]`，不是 Gmail 写的为 null，没有 DKIM 为空数组）。
+- `verdict`：cca 的核对结论。`ok` 为真表示是这个账号的真登录邮件（Anthropic 发、Gmail 验过签名、收件人对、标题像登录邮件）；
+  `why` 是没通过的原因码（`subject` | `from` | `dkim` | `unsigned` | `to` | `nolink` | `old` | `dup`），`why_text` 是给人看的那句话（`ok` 时都是 null）。
+- `link_shape`：登录链接的“样子”（协议、主机、路径，`#` / `?` 后面只说有多长，**不含链接内容**）；只有 `verdict.ok` 时才有，否则 null。
+- `openable`：能不能在这个账号的浏览器里打开（`verdict.ok` 且认出了账号）。`msg` 是打开时要回传的不透明句柄（`{folder, uid, uidvalidity}`，
+  只有 `openable` 时才有）：交给 `cca mail open KEY --msg 文件夹:uid:uidvalidity`（4.11）。App 只用它当句柄，不解析。打开按钮另外要这个工具的 `chrome` 为真（2.2）。
+
 ## 3. 用量、出口检测
 
 ### 3.1 `cca [codex] usage [账号…] --json`
@@ -529,7 +577,7 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
 ### 4.1 事件文件
 
 运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
-`key --forget`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+`key --forget`、`mail open`、`mail forget`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -542,7 +590,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened` | `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready`，带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -553,7 +601,8 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
   `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
-  `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）。
+  `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
+  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
@@ -724,8 +773,9 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `local.manual` | `local setup` | `code`、`text`、`secret`（可选） | 要加的配置；外部控制地址（校验 controller）、密钥。连不上时带着原因重问 |
 | `edit.form` | `[codex] edit` | `choice`（`menu`）、`text` | 账号表的常用项，一页：每个官方账号的节点（维护者固定的只有一个选项，答案不算数）；第三方 API 账号的接口地址、模型、出口、环境变量（只有 Claude 的有）。不显示 key。见下 |
 | `install.node` | `[codex\|agy] install-cli`、用到没装的命令时 | `choice` | 维护者的映射没指定安装用的节点（或者这台机器没有它的定义）时：经内置代理的哪个节点装（只用这一次，选了就算同意）。App 平时把 `install-cli` 交给终端 |
-| `mail.address` | `mail setup` | `text` | 邮箱助手：收登录邮件的 Gmail 地址（预填上次的；地址不对、要换地址时重问） |
-| `mail.password` | `mail setup` | `secret` | 这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道。App 平时没有入口，在终端里用 |
+| `mail.setup` | `mail setup [--account]` | `text`、`secret` | 邮箱助手（App 里一页问完，4.11）：收登录邮件的 Gmail 地址（校验 gmail，预填上次的）、应用专用密码（校验 `any`，Gmail 的密码带空格）。cca 登录一次核对过才存进钥匙串；地址 / 密码不对、连不上时带着原因重问 |
+| `mail.address` | `mail setup`（终端） | `text` | 邮箱助手的终端流程：收登录邮件的 Gmail 地址（预填上次的；地址不对、要换地址时重问）。App 里用 `mail.setup` 一页问完 |
+| `mail.password` | `mail setup`（终端） | `secret` | 邮箱助手的终端流程：这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道 |
 | `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
 
 账号表的表单（`edit.form`）：字段 id 是 `n<编号>`（节点）、`u<编号>`（接口地址）、`m<编号>`（模型）、`e<编号>`（环境变量），编号是账号在表里的位置，App 不解释。不合格时同一个 `q` 带着 `error` 和已填的值再发一条，都合格才写账号表；
@@ -748,13 +798,32 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
+| `mail setup [--account]` | 账号页「邮箱」一节的「配置 / 更换」 | 提问会话（`mail.setup`；要 `hello.mail`，4.11） |
+| `_gui mail-list`、`mail open --msg`、`mail forget` | 「邮箱」一节的列表 / 刷新、每封的「在浏览器打开」、「移除」 | 无交互命令（4.11、2.4；`mail open` 进 `launch:` 闸门） |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
 | `router uninstall`、`local off`、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
-| `mail`（`setup`、`status`、`test`、`open`、`forget`） | 没有入口（登录在终端里，登录时自动打开登录邮件里的链接也在那里） | 终端里自己运行 |
+| `mail`（`setup`、`open`、`forget`） | 账号页的「邮箱」一节（4.11；要 `hello.mail`，旧版 cca 没有入口） | 提问会话（`setup`）/ 无交互命令 |
+| `mail`（`status`、`test`） | 没有入口 | 终端里自己运行（诊断用） |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
 | `restore` | 没有入口 | 终端（要求 cca App 先退出） |
+
+### 4.11 邮箱助手：账号页的「邮箱」一节
+
+要 `hello.mail` 且账号的 `can.mail` 为真（只有 Claude 官方账号、账号表里写了邮箱）。账号的 `mail`（2.2）给这一节的状态（走默认 / 单独配 / 没配置、自不自动打开）；
+只读 config.json，不碰钥匙串。各账号默认共用一个 Gmail（默认那个），也可以单独给某个账号配一个（覆盖默认）。登录链接是一次性凭证，**始终不交给 App**：
+列表只有元数据和链接的“样子”，打开由 cca 自己在账号的浏览器里完成。
+
+- **配置 / 更换**（`mail setup`）：提问会话（`mail.setup`）。配默认用 `cca mail setup`，给这个账号单独配用 `cca mail setup --account KEY`。一页问 Gmail 地址 + 应用专用密码，
+  cca 登录一次核对过才存（应用专用密码只进这台机器的钥匙串 / 密钥文件，**绝不进映射 policy**）；成功发 `result` 的 `mail_ready`，连不上发 `fail` 的 `mail_connect`，存不进发 `keychain_unavailable`。
+- **列表**（`cca _gui mail-list --account KEY [小时]`，2.4）：这一节展开 / 点刷新时按需拉一次（联网、慢几秒；不随开页自动拉）。每封登录相关邮件给元数据、Gmail 验证、核对结论、
+  链接的样子；通过核对的（`openable`）带一个不透明句柄 `msg`。
+- **在浏览器打开**（`cca mail open KEY --msg 文件夹:uid:uidvalidity`）：把句柄原样回传，cca 重新取这封、再核对一遍、在这个账号专属的浏览器里打开里面的登录链接
+  （复用登录时那套出口 / 浏览器检查，进 `launch:<tool>:<key>` 闸门）。成功发 `result` 的 `opened`；已经打开过、邮件不在了、没通过核对时退出非 0，原因在 stderr（App 读尾部）。
+  打开按钮还要这个工具的 `chrome`（2.2）为真。
+- **移除**（`cca mail forget`）：`--account KEY` 只移这个账号单独配的（改回默认）；`--default` 只移默认（各账号单独配的留着）；不带参数移全部（`cca restore` 也用）。
+  成功发 `result` 的 `mail_forgotten`。地址没有别处再用了才删钥匙串里的应用专用密码。
 
 ## 5. `cca gui`
 

@@ -41,6 +41,8 @@ struct AccountDetail: View {
                         }
                         // 映射里的账号：在哪些设备上用（整行，不进并排的两栏）
                         if a.can.devices { DevicesSection(account: a) }
+                        // 邮箱助手：收登录邮件的 Gmail、最近的登录邮件、在浏览器里打开（整行）
+                        if model.mailSupported, a.can.mail { MailSection(account: a) }
                     }
                     .padding(.top, 24)
                     .padding(.bottom, 36)

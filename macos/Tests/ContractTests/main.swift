@@ -42,6 +42,7 @@ if fullMode {
     await clientAutoInstallModelTests()
     await pollingTests()
     await devicesTests()
+    await mailTests()
     arrangementTests()
     await accountListModelTests()
     await exitPollingTests()
