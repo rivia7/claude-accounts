@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.3", title: "邮箱助手：信任一个转发中转、把非登录邮件折起来", points: [
+            .init(symbol: "exclamationmark.shield",
+                  text: "有些隐私别名 / 转发服务会去掉 Anthropic 的签名、用自己的域名重签，这样转来的登录邮件以前会被拦下。现在能给某个账号单独「信任一个转发中转」——不安全的开关，默认关，只在你清楚这个中转可信、别名没泄露时才开。"),
+            .init(symbol: "line.3.horizontal.decrease",
+                  text: "「邮箱」一节默认只列像登录邮件的，标题不像的先折起来、点一下再展开；经可信中转认下的那封会标上「不安全」。"),
+        ], art: "envelope"),
         ReleaseNote(version: "3.3.0-beta.2", title: "邮箱助手搬进界面：在账号页配置、看登录邮件、一键打开", points: [
             .init(symbol: "envelope.badge",
                   text: "每个 Claude 账号的页面新增「邮箱」一节：在这里填收登录邮件的 Gmail，不用再去终端。默认所有账号共用一个，也能给某个账号单独配一个。只在 macOS 上。"),
