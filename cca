@@ -3939,7 +3939,7 @@ MAIL_BURST = 50       # 按 UID 取新邮件的头时，一个邮件夹一轮最
 MAIL_WATCH_MAX = 900  # 登录时最多盯这么久（秒）
 MAIL_DOMAIN_RE = lazy_re(r'^[a-z0-9-]+(\.[a-z0-9-]+)+$')
 MAIL_ADDR_RE = lazy_re(r'^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$')   # Gmail 地址（小写；也是钥匙串的账户名，交给 security -i）
-MAIL_HDRS = ('FROM', 'TO', 'SUBJECT', 'MESSAGE-ID', 'AUTHENTICATION-RESULTS', 'DKIM-SIGNATURE')   # 先只取这些头来核对
+MAIL_HDRS = ('FROM', 'TO', 'SUBJECT', 'REPLY-TO', 'MESSAGE-ID', 'AUTHENTICATION-RESULTS', 'DKIM-SIGNATURE')   # 先只取这些头来核对（Reply-To 给信任中转的判定：中转标注原件来自 Anthropic）
 MAIL_SIGNED = ('from', 'to', 'subject')   # 这几个头必须在 Anthropic 的签名里、各只有一个：签名之外的头谁都能改、能加
 MAIL_Q = '\x22'       # IMAP 里的双引号
 MAIL_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
@@ -4534,22 +4534,41 @@ def mail_ar(msg):
     return out
 
 
-def mail_signed(msg, rule):
-    """Gmail 验过的、rule 的域名签的那个 DKIM 签名覆盖了哪些头（小写的集合）；没有是 None。按 header.b（签名的开头几个字符）
+def mail_fwd_ok(d, forwarder):
+    """域名 d 是不是信任的中转 forwarder（按标签认后缀，和 domain_ok 一样）"""
+    d = (d or '').lower()
+    f = (forwarder or '').lower()
+    return bool(f) and (d == f or d.endswith('.' + f))
+
+
+def mail_from_alias(msg):
+    """From 的显示名里的邮箱（信任中转把原始别名放在显示名里，像 "alias@x" <noreply@fwd>，用来认是哪个账号）；没有是空字符串"""
+    from email.utils import parseaddr
+    name = parseaddr(str(msg.get('From') or ''))[0].strip().lower()
+    return name if MAIL_ADDR_RE.match(name) else ''
+
+
+def mail_signed_for(msg, dom_ok):
+    """Gmail 验过的、dom_ok(域名) 为真的那个 DKIM 签名覆盖了哪些头（小写的集合）；没有是 None。按 header.b（签名的开头几个字符）
     认是哪个签名；对上好几个时分不清，不认"""
     for res, dom, b in mail_ar(msg) or []:
-        if res != 'pass' or not rule.domain_ok(dom):
+        if res != 'pass' or not dom_ok(dom):
             continue
         sigs = [tg for tg in (mail_tags(v) for v in msg.get_all('DKIM-Signature') or [])
-                if rule.domain_ok(tg.get('d')) and (dom == tg.get('d', '').lower() or dom.endswith('.' + tg.get('d', '').lower()))
+                if dom_ok(tg.get('d')) and (dom == (tg.get('d') or '').lower() or dom.endswith('.' + (tg.get('d') or '').lower()))
                 and tg.get('b', '').startswith(b)]
         if len(sigs) == 1:
             return {h.strip().lower() for h in sigs[0].get('h', '').split(':') if h.strip()}
     return None
 
 
-def mail_judge(rule, msg, got, acct, since):
-    """这封邮件是不是 acct（小写的邮箱）这一次登录的登录邮件：是返回 None，不是返回原因（MAIL_WHY 的键）。got 是 Gmail 收到它的时间"""
+def mail_signed(msg, rule):
+    return mail_signed_for(msg, rule.domain_ok)
+
+
+def mail_judge(rule, msg, got, acct, since, forwarder=None):
+    """这封邮件是不是 acct（小写的邮箱）这一次登录的登录邮件：是返回 None，不是返回原因（MAIL_WHY 的键）。got 是 Gmail 收到它的时间。
+    forwarder 给定时（这个账号开了「信任转发中转」，默认不开）：From 是 Anthropic 时照严格路走，From 是这个中转时走 mail_judge_fwd"""
     if got < since - MAIL_SKEW:
         return 'old'
     if not rule.subject_ok(mail_text(msg.get('Subject'))):
@@ -4557,23 +4576,44 @@ def mail_judge(rule, msg, got, acct, since):
     if any(len(msg.get_all(h) or []) > 1 for h in MAIL_SIGNED):
         return 'dup'
     frm = mail_addrs(msg, 'From')
-    if len(frm) != 1 or not rule.domain_ok(frm[0].rpartition('@')[2]):
+    if len(frm) != 1:
         return 'from'
-    signed = mail_signed(msg, rule)
-    if signed is None:
+    dom = frm[0].rpartition('@')[2]
+    if rule.domain_ok(dom):
+        signed = mail_signed(msg, rule)
+        if signed is None:
+            return 'dkim'
+        if not set(MAIL_SIGNED) <= signed:
+            return 'unsigned'
+        if not acct or acct not in mail_addrs(msg, 'To'):
+            return 'to'
+        return None
+    if forwarder and mail_fwd_ok(dom, forwarder):
+        return mail_judge_fwd(rule, msg, acct, forwarder)
+    return 'from'
+
+
+def mail_judge_fwd(rule, msg, acct, forwarder):
+    """信任的中转 forwarder 转发的登录邮件（账号显式开了「信任转发中转」，不安全、默认关）：中转没有 Anthropic 的直签了，所以靠
+    「中转的 DKIM 覆盖 From/To/Subject/Reply-To（中转之后改不了这几项）+ From 显示名是这个账号的别名（路由）+ Reply-To 是单个
+    Anthropic 地址（中转标注原件来自 Anthropic）」。安全边界只到「信任这个中转 + 别名不泄露」：别名泄露，知道的人可经中转注入登录链接。
+    返回 None 放行，否则原因（MAIL_WHY 的键）"""
+    signed = mail_signed_for(msg, lambda d: mail_fwd_ok(d, forwarder))
+    if signed is None or not {'from', 'to', 'subject', 'reply-to'} <= signed:
         return 'dkim'
-    if not set(MAIL_SIGNED) <= signed:
-        return 'unsigned'
-    if not acct or acct not in mail_addrs(msg, 'To'):
+    if not acct or mail_from_alias(msg) != acct:
         return 'to'
+    rt = mail_addrs(msg, 'Reply-To')
+    if len(rt) != 1 or not rule.domain_ok(rt[0].rpartition('@')[2]):
+        return 'from'
     return None
 
 
-def mail_judge_any(rules, msg, got, acct, since):
+def mail_judge_any(rules, msg, got, acct, since, forwarder=None):
     """(过了的那条规则, None)；都没过时 (核对得最远的那条, 原因)"""
     best = (rules[0] if rules else None, 'subject')
     for r in rules:
-        why = mail_judge(r, msg, got, acct, since)
+        why = mail_judge(r, msg, got, acct, since, forwarder)
         if why is None:
             return r, None
         if MAIL_ORDER.index(why) > MAIL_ORDER.index(best[1]):
@@ -4691,14 +4731,14 @@ def mail_nap(secs, end, alive, now, sleep):
         sleep(max(0.01, min(0.5, until - now())))
 
 
-def mail_verdict(rule, raw, got, acct, since):
+def mail_verdict(rule, raw, got, acct, since, forwarder=None):
     """取来的全文照样再核对一遍、取出链接：(没通过的原因或 None, 链接或 None, 解析好的邮件)"""
     msg = mail_parse(raw)
-    why = mail_judge(rule, msg, got, acct, since)
+    why = mail_judge(rule, msg, got, acct, since, forwarder)
     return why, None if why else mail_extract(rule, msg), msg
 
 
-def mail_take(src, p, acct, since, deliver, again):
+def mail_take(src, p, acct, since, deliver, again, forwarder=None):
     """认领、取全文、照全文再核对一遍、取出链接、打开：返回 ok、used（打开过了）、fail（浏览器没打开，链接还没用掉）、refused，
     或者没通过核对的原因。只有打开了才记下（别的照原来的状态还原：下次照样核对、照实说原因）；Gmail 那边出错时往外抛（下一轮再来）"""
     prev = mail_claim(p['dg'], again)
@@ -4706,7 +4746,7 @@ def mail_take(src, p, acct, since, deliver, again):
         return 'used'
     st = 'fail'
     try:
-        why, link, _ = mail_verdict(p['rule'], src.full(p), p['got'], acct, since)
+        why, link, _ = mail_verdict(p['rule'], src.full(p), p['got'], acct, since, forwarder)
         st = why or ('nolink' if not link else deliver(link))
         return st
     finally:
@@ -4714,7 +4754,7 @@ def mail_take(src, p, acct, since, deliver, again):
 
 
 def mail_hunt(src, rules, acct, since, end, deliver, once=False, again=False, alive=None, say=None, hello=None, idle=None,
-              now=time.time, sleep=time.sleep):
+              now=time.time, sleep=time.sleep, forwarder=None):
     """找 acct 的登录邮件，找到就交给 deliver(链接)（返回 ok、refused、fail）。once：手动（cca mail open），打开了、浏览器打不开就停，
     第一次就连不上马上停；否则一直盯到 end、alive() 为假（登录结束了）。来了好几封只开最新的一封（之前的多半已经失效）；浏览器
     没打开的过一会儿（CCA_MAIL_RETRY，默认 2 秒）再试，一共三次（到了 end 也试完）；这一轮从取头到打开都成了才算连上了（取不到全文的
@@ -4740,13 +4780,13 @@ def mail_hunt(src, rules, acct, since, end, deliver, once=False, again=False, al
                 hello = None
             for c in new:
                 msg = mail_parse(c['hdr'])
-                rule, why = mail_judge_any(rules, msg, c['got'], acct, since)
+                rule, why = mail_judge_any(rules, msg, c['got'], acct, since, forwarder)
                 if why:
                     reject(why)
                 elif pend is None or (c['got'], c['uid']) > (pend['got'], pend['uid']):
                     pend = dict(c, rule=rule, dg=mail_digest(msg, c), tries=0, at=0.0)
             if pend is not None and now() >= pend['at']:
-                st = mail_take(src, pend, acct, since, deliver, again)
+                st = mail_take(src, pend, acct, since, deliver, again, forwarder)
                 if st == 'ok':
                     res['opened'] += 1
                     res['code'], pend = 'opened', None
@@ -4823,21 +4863,26 @@ def mail_one(m, auto_default=True, proxy_default='system'):
 
 def mail_cfg(c, key=None):
     """默认的邮箱助手设置（key 是 None），或某账号解析后的设置（覆盖 config.json 的 mail.accounts[acct_id] → 默认 mail）。
-    返回 {user, auto, proxy, source: 'account'|'default'} 或 None（没配置、地址不对）"""
+    返回 {user, auto, proxy, source: 'account'|'default', forwarder} 或 None（没有可连的 Gmail）。
+    forwarder 是这个账号单独登记的「信任转发中转」域名（不安全、默认不登记；不继承默认；只在 key 给定时有意义），没有是 None"""
     m = c.get('mail')
     if not isinstance(m, dict):
         return None
     default = mail_one(m)
+    ov = None
     if key is not None:
         accts = m.get('accounts')
         ov = accts.get(acct_id(key)) if isinstance(accts, dict) else None
-        one = mail_one(ov, default['auto'] if default else True, default['proxy'] if default else 'system') if isinstance(ov, dict) else None
-        if one:
-            one['source'] = 'account'
-            return one
-    if default:
-        default['source'] = 'default'
-    return default
+    one = mail_one(ov, default['auto'] if default else True, default['proxy'] if default else 'system') if isinstance(ov, dict) else None
+    if one:
+        one['source'] = 'account'
+    elif default:
+        one = dict(default, source='default')
+    if one is None:
+        return None
+    fwd = ov.get('forwarder') if isinstance(ov, dict) else None
+    one['forwarder'] = fwd.lower() if isinstance(fwd, str) and MAIL_DOMAIN_RE.match(fwd.lower()) else None
+    return one
 
 
 def mail_all_addrs(c):
@@ -4858,11 +4903,13 @@ def mail_all_addrs(c):
 
 
 def mail_view(c, key):
-    """账号页的邮箱助手状态（_gui state；只读 config.json，不碰钥匙串）：{configured, user, source, auto}。
-    source：account（这个账号单独配的 Gmail）| default（用默认那个）| None（没配置）"""
+    """账号页的邮箱助手状态（_gui state；只读 config.json，不碰钥匙串）：{configured, user, source, auto, forwarder}。
+    source：account（这个账号单独配的 Gmail）| default（用默认那个）| None（没配置）。
+    forwarder：这个账号登记的「信任转发中转」域名（不安全开关，默认 null）"""
     m = mail_cfg(c, key)
     return {'configured': bool(m), 'user': m['user'] if m else None,
-            'source': m.get('source') if m else None, 'auto': m['auto'] if m else True}
+            'source': m.get('source') if m else None, 'auto': m['auto'] if m else True,
+            'forwarder': m.get('forwarder') if m else None}
 
 
 def mail_pw_problem(rc):
@@ -5067,6 +5114,38 @@ def mail_forget_orphans():
         ks_del(MAIL_SVC, a)
 
 
+def cmd_mail_trust_forwarder(key, domain):
+    """cca mail trust-forwarder 账号 域名|off：给这个账号登记（或关闭）「信任转发中转」（不安全、默认不登记）。
+    存 config.json 的 mail.accounts[acct_id].forwarder。退出码：0 好了；2 域名不对"""
+    aid = acct_id(key)
+    off = domain in ('off', '')
+    d = domain.strip().lower()
+    if not off and not MAIL_DOMAIN_RE.match(d):
+        sys.stderr.write('! 中转域名写成 relay.example.com 这样（不带 @、http://、端口和空格）\n')
+        sys.exit(2)
+    c = cfg_load()
+    m = c.get('mail') if isinstance(c.get('mail'), dict) else {}
+    accts = m.get('accounts') if isinstance(m.get('accounts'), dict) else {}
+    cur = accts.get(aid) if isinstance(accts.get(aid), dict) else {}
+    if off:
+        cur.pop('forwarder', None)
+    else:
+        cur['forwarder'] = d
+    if cur:
+        accts[aid] = cur
+        m['accounts'] = accts
+        c['mail'] = m
+    else:   # 这个账号的覆盖空了：清掉
+        accts.pop(aid, None)
+        if not accts:
+            m.pop('accounts', None)
+        if m:
+            c['mail'] = m
+        else:
+            c.pop('mail', None)
+    cfg_save(c)
+
+
 def cmd_mail_test(hours='24'):
     """cca mail test [小时]：用存着的设置连一次 Gmail，逐封说最近这么多小时里 Anthropic 发来的（或者标题像登录邮件的）邮件：
     收到的时间、标题、发件人、收件人、Gmail 的验证结果、核对的结果和链接的样子（不打出链接本身）。只读：不标已读"""
@@ -5076,7 +5155,8 @@ def cmd_mail_test(hours='24'):
     except ValueError:
         die('用法: cca mail test [小时]')
     rules = mail_rules()
-    names = {parse_key(k)[1].lower(): name_of(k) for k in table_load() if parse_key(k)[1]}
+    c = cfg_load()
+    names = {parse_key(k)[1].lower(): k for k in table_load() if parse_key(k)[1]}
     since = time.time() - h * 3600
     sys.stderr.write('正在连接 %s（%s）…\n' % (MAIL_HOST, mail_route_note(route)))
     box = MailBox(m['user'], pw, route)
@@ -5096,19 +5176,28 @@ def cmd_mail_test(hours='24'):
         for got, u, label, name, raw in rows[:20]:
             msg = mail_parse(raw)
             to = mail_addrs(msg, 'To')
-            acct = next((a for a in to if a in names), to[0] if to else '')
-            rule, why = mail_judge_any(rules, msg, got, acct, since)
+            frm = mail_addrs(msg, 'From')
+            acctkey = next((names[a] for a in to if a in names), None)   # 严格：收件人是账号邮箱
+            rfwd = (mail_cfg(c, acctkey) or {}).get('forwarder') if acctkey else None
+            if acctkey is None:   # 信任中转路由：From 显示名是开了 trust-forwarder 的账号的别名
+                cand = names.get(mail_from_alias(msg))
+                cfwd = (mail_cfg(c, cand) or {}).get('forwarder') if cand else None
+                if cfwd and frm and mail_fwd_ok(frm[0].rpartition('@')[2], cfwd):
+                    acctkey, rfwd = cand, cfwd
+            via = rfwd and frm and mail_fwd_ok(frm[0].rpartition('@')[2], rfwd)
+            acct = parse_key(acctkey)[1].lower() if acctkey else (to[0] if to else '')
+            rule, why = mail_judge_any(rules, msg, got, acct, since, rfwd)
             ar = mail_ar(msg)
             show('  %s  %s  %s' % (time.strftime('%m-%d %H:%M', time.localtime(got)), label, mail_text(msg.get('Subject'))[:80] or '（没有标题）'))
-            show('      发件人 %s → 收件人 %s%s' % ('、'.join(mail_addrs(msg, 'From')) or '？', '、'.join(to) or '？',
-                                            '（账号 %s）' % names[acct] if acct in names else '（不是账号表里的邮箱）'))
+            show('      发件人 %s → 收件人 %s%s' % ('、'.join(frm) or '？', '、'.join(to) or '？',
+                                            ('（账号 %s%s）' % (name_of(acctkey), '，经可信中转' if via else '')) if acctkey else '（不是账号表里的邮箱）'))
             show('      Gmail 的验证：%s' % ('不是 Gmail 写的验证结果' if ar is None else
                                         '、'.join('dkim=%s %s' % (r, d or '？') for r, d, _ in ar) or '没有 DKIM 签名'))
             if why:
                 print('      ✗ 没通过：%s' % MAIL_WHY[why])
                 continue
             box.examine(name)
-            why, link, full = mail_verdict(rule, box.message(u), got, acct, since)
+            why, link, full = mail_verdict(rule, box.message(u), got, acct, since, rfwd)
             if link:
                 print('      ✓ 通过核对，链接 %s' % mail_shape(link))
             elif why:
@@ -5130,10 +5219,10 @@ def mail_handle(s):
     return parts[0], int(parts[1]), int(parts[2])
 
 
-def mail_open_one(src, rules, acct, folder, uid, valid, deliver, again):
+def mail_open_one(src, rules, acct, folder, uid, valid, deliver, again, forwarder=None):
     """打开 App 里点中的这一封登录邮件：取它的头定出规则和收到的时间，再核对、取链接、打开。
     返回 {code: opened | used | gone | error | fail | refused | 没通过核对的原因, text}。用户明确点开这一封，
-    所以不按「这次登录开始以后」卡（old 检查只防自动打开旧邮件），核对靠 DKIM + 收件人 + 标题"""
+    所以不按「这次登录开始以后」卡（old 检查只防自动打开旧邮件），核对靠 DKIM + 收件人 + 标题（开了信任中转的账号另走那条）"""
     try:
         src.box.open()
         v = src.box.examine(folder)
@@ -5144,12 +5233,12 @@ def mail_open_one(src, rules, acct, folder, uid, valid, deliver, again):
             return {'code': 'gone', 'text': '邮件不在了'}
         got, hdr = hdrs[uid]
         msg = mail_parse(hdr)
-        rule, why = mail_judge_any(rules, msg, got, acct, got)
+        rule, why = mail_judge_any(rules, msg, got, acct, got, forwarder)
         if why:
             return {'code': why, 'text': MAIL_WHY[why]}
         p = {'folder': folder, 'uid': uid, 'got': got, 'rule': rule,
              'dg': mail_digest(msg, {'folder': folder, 'uid': uid, 'got': got})}
-        st = mail_take(src, p, acct, got, deliver, again)
+        st = mail_take(src, p, acct, got, deliver, again, forwarder)
         return {'code': 'opened' if st == 'ok' else st, 'text': MAIL_WHY.get(st, '')}
     except MailError as e:
         return {'code': 'error', 'text': e.text}
@@ -5162,7 +5251,7 @@ def cmd_mail_open(key, secs='90', again='', msg=''):
     acct = parse_key(key)[1].lower()
     if not acct:
         die('账号表里 %s 没写邮箱：认不出哪封登录邮件是它的' % name_of(key))
-    rules = mail_rules()
+    rules, fwd = mail_rules(), m.get('forwarder')
     src = MailSource(m['user'], pw, route, rules)
     say = lambda s: sys.stderr.write(s + '\n')
     if msg:
@@ -5172,7 +5261,7 @@ def cmd_mail_open(key, secs='90', again='', msg=''):
             src.close()
             die('--msg 要写成 文件夹:uid:uidvalidity')
         try:
-            res = mail_open_one(src, rules, acct, folder, uid, valid, mail_deliver(key), again == 'again')
+            res = mail_open_one(src, rules, acct, folder, uid, valid, mail_deliver(key), again == 'again', fwd)
         except KeyboardInterrupt:
             sys.stderr.write('已取消\n')
             sys.exit(130)
@@ -5199,7 +5288,7 @@ def cmd_mail_open(key, secs='90', again='', msg=''):
     idle = (lambda: say('• 等 %s 的登录邮件（最多 %d 秒，Ctrl-C 取消）…' % (acct, secs))) if secs else None
     try:
         res = mail_hunt(src, rules, acct, t0 - MAIL_RECENT, t0 + secs, mail_deliver(key), once=True, again=again == 'again',
-                        say=say, idle=idle)
+                        say=say, idle=idle, forwarder=fwd)
     except KeyboardInterrupt:
         sys.stderr.write('已取消\n')
         sys.exit(130)
@@ -5276,25 +5365,35 @@ def cmd_gui_mail_list(acct='', hours='24'):
         for got, u, label, name, valid, raw in found[:50]:
             msg = mail_parse(raw)
             to = mail_addrs(msg, 'To')
-            acctkey = next((names[a] for a in to if a in names), None)
+            frm = mail_addrs(msg, 'From')
+            acctkey = next((names[a] for a in to if a in names), None)   # 严格：收件人是账号邮箱
+            rfwd = (mail_cfg(c, acctkey) or {}).get('forwarder') if acctkey else None
+            if acctkey is None:   # 信任中转路由：From 显示名是某个开了 trust-forwarder 的账号的别名，且 From 域名是它登记的中转
+                alias = mail_from_alias(msg)
+                cand = names.get(alias)
+                cfwd = (mail_cfg(c, cand) or {}).get('forwarder') if cand else None
+                if cfwd and frm and mail_fwd_ok(frm[0].rpartition('@')[2], cfwd):
+                    acctkey, rfwd = cand, cfwd
             tgt = parse_key(acctkey)[1].lower() if acctkey else None
             if want and tgt != want:   # 账号作用域：只留发给这个账号的
                 continue
             judge = tgt or (to[0] if to else '')
-            rule, why = mail_judge_any(rules, msg, got, judge, since)
+            rule, why = mail_judge_any(rules, msg, got, judge, since, rfwd)
             ar = mail_ar(msg)
+            via = 'forwarder' if rfwd and frm and mail_fwd_ok(frm[0].rpartition('@')[2], rfwd) else None
             row = {'got_epoch': int(got), 'folder': label, 'subject': mail_text(msg.get('Subject')),
-                   'from': mail_addrs(msg, 'From'), 'to': to,
+                   'from': frm, 'to': to,
                    'account': {'key': acctkey, 'name': name_of(acctkey)} if acctkey else None,
                    'dkim': None if ar is None else [{'result': r, 'domain': d or ''} for r, d, _ in ar],
                    'verdict': {'ok': not why, 'why': why, 'why_text': MAIL_WHY[why] if why else None},
-                   'link_shape': None, 'openable': False, 'msg': None}
+                   'link_shape': None, 'openable': False, 'via': None, 'msg': None}
             if not why:
                 box.examine(name)
-                why2, link, _ = mail_verdict(rule, box.message(u), got, judge, since)
+                why2, link, _ = mail_verdict(rule, box.message(u), got, judge, since, rfwd)
                 if link:
                     row['link_shape'] = mail_shape(link)
                     row['openable'] = bool(acctkey)
+                    row['via'] = via   # 经可信中转认的（不安全）：App 标注；严格 Anthropic 的是 null
                     row['msg'] = {'folder': name, 'uid': int(u), 'uidvalidity': int(valid) if valid is not None else 0}
                 else:
                     w = why2 or 'nolink'
@@ -5343,7 +5442,8 @@ def mail_watch(key, alive):
     hello = lambda: say('• 邮箱助手：已连上 %s（%s），%s 的登录邮件一到就在它专属的浏览器里打开' % (m['user'], mail_route_note(route), name))
     limit = MAIL_WATCH_MAX
     try:
-        res = mail_hunt(src, rules, acct, start, start + limit, mail_deliver(key), alive=alive, say=say, hello=hello)
+        res = mail_hunt(src, rules, acct, start, start + limit, mail_deliver(key), alive=alive, say=say, hello=hello,
+                        forwarder=m.get('forwarder'))
     finally:
         src.close()
     if res['code'] == 'opened':
@@ -13052,6 +13152,7 @@ CMDS = {
     'prompt-emit': cmd_prompt_emit,
     'check-render': cmd_check_render,
     'mail-setup': cmd_mail_setup, 'mail-status': cmd_mail_status, 'mail-ready': cmd_mail_ready, 'mail-forget': cmd_mail_forget,
+    'mail-trust-forwarder': cmd_mail_trust_forwarder,
     'mail-test': cmd_mail_test, 'mail-open': cmd_mail_open, 'mail-watch': cmd_mail_watch, 'mail-link-check': cmd_mail_link_check,
     'mail-get-user': cmd_mail_get_user, 'gui-mail-list': cmd_gui_mail_list,
 }
@@ -15457,7 +15558,7 @@ cmd_mail_open_link() {   # cca _mail-open <账号>：邮箱助手找到的登录
 	okay "邮箱助手：已在 ${ACC_NAME} 专属的浏览器里打开登录邮件里的链接（经 ${ACC_PROXY:-直连} → ${ACC_NODE}）"
 }
 cmd_mail() {   # cca mail [status | setup [--account 账号] [--proxy 方式] | test [小时] | open [账号] [--wait 秒] [--again] [--msg …] | forget [--account 账号 | --default]]
-	local use="用法: ${CMD} mail [status | setup [--account 账号] [--proxy direct|socks5://主机:端口|http://主机:端口] | test [小时] | open [账号] [--wait 秒] [--again] | forget [--account 账号 | --default]]"
+	local use="用法: ${CMD} mail [status | setup [--account 账号] [--proxy direct|socks5://主机:端口|http://主机:端口] | test [小时] | open [账号] [--wait 秒] [--again] | forget [--account 账号 | --default] | trust-forwarder <账号> [<中转域名>|off]]"
 	mac_only "邮箱助手要在账号专属的 Chrome 里打开登录链接，"
 	[ "$TOOL" = claude ] || FAIL_CODE=unsupported die "邮箱助手只用于 Claude 账号（登录邮件是 Anthropic 发的）：用 cca mail …"
 	case "${1:-status}" in
@@ -15466,9 +15567,42 @@ cmd_mail() {   # cca mail [status | setup [--account 账号] [--proxy 方式] | 
 		test) shift; py mail-test "$@" ;;
 		open) shift; mail_open_cmd "$@" ;;
 		forget) shift; mail_forget_cmd "$@" ;;
+		trust-forwarder) shift; mail_trust_forwarder_cmd "$@" ;;
 		help|-h|--help) say "$use" ;;
 		*) die "$use" ;;
 	esac
+}
+mail_trust_forwarder_cmd() {   # cca mail trust-forwarder <账号> [<中转域名> | off]：给这个账号登记（或关闭）「信任转发中转」。
+	# 不安全（默认不登记）：中转把 Anthropic 的签名去掉了，只能靠「信任这个中转 + 别名不泄露」。要先确认
+	local who="" dom="" acct rc
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-*) die "用法: ${CMD} mail trust-forwarder <账号> [<中转域名> | off]" ;;
+			*) if [ -z "$who" ]; then who=$1; elif [ -z "$dom" ]; then dom=$1; else die "用法: ${CMD} mail trust-forwarder <账号> [<中转域名> | off]"; fi; shift ;;
+		esac
+	done
+	[ -n "$who" ] || die "用法: ${CMD} mail trust-forwarder <账号> [<中转域名> | off]"
+	acct=$(py resolve "$who") || die "没有账号 ${who}"
+	eval "$(py env "$acct")"
+	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：没有登录邮件"
+	[ -n "$ACC_EMAIL" ] || die "账号表里 ${ACC_NAME} 没写邮箱：认不出登录邮件"
+	if [ "$dom" = off ]; then
+		py mail-trust-forwarder "$acct" off && { gui_done mail_ready "已关闭 ${ACC_NAME} 的信任转发中转" "$acct"; okay "已关闭 ${ACC_NAME} 的信任转发中转（改回只认 Anthropic 直签）"; }
+		return
+	fi
+	py mail-ready "$acct" || exit 1   # 没配置这个账号的邮箱就先说
+	need_tty
+	local why="开了「信任转发中转」后，cca 会接受这个中转 DKIM 签过、且标注原件来自 Anthropic 的登录邮件——中转把 Anthropic 的签名去掉了，没有密码学依据证明真来自 Anthropic。安全从「只信 Anthropic 直签」降到「信这个中转 + 你的别名不泄露」：别名一旦泄露，知道的人可经它给你发伪造的登录邮件，打开后你会登进攻击者的账号。"
+	[ -n "$PROMPT_GUI" ] || say "${C_Y}⚠️ 不安全${C_0}：${why}"   # 终端里先把警告说清楚（confirm 只显示问题；图形界面在 ask 的 message 和 consent 里）
+	if [ -z "$dom" ]; then
+		dom=$(ask "信任哪个转发中转的域名（像 relay.example.com；回车取消）: " "" q=mail.forwarder "title=信任转发中转（不安全）" "message=${why}" label=中转域名)
+		[ -n "$dom" ] || { say "已取消"; return 1; }
+	fi
+	consent mail_trust_forwarder "$dom" "信任转发中转（不安全）" "确定为 ${ACC_NAME} 信任转发中转 ${dom}？（不安全，见说明）" "$why" n || { say "已取消"; return 1; }
+	py mail-trust-forwarder "$acct" "$dom"; rc=$?
+	[ $rc -eq 0 ] || return 1
+	gui_done mail_ready "已为 ${ACC_NAME} 信任转发中转 ${dom}（不安全）" "$acct"
+	okay "已为 ${ACC_NAME} 信任转发中转 ${dom}（不安全）：这个中转转来的、标注来自 Anthropic 的登录邮件会被接受"
 }
 mail_forget_cmd() {   # cca mail forget [--account 账号 | --default]：移除这个账号单独配的 Gmail / 只移默认 / 全部（无参数，restore 也用）
 	local who="" acct="" mode="" m

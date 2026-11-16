@@ -11,6 +11,8 @@ struct MailSection: View {
     private let expanded = State(initialValue: false)
     /// 移除默认邮箱的确认（影响所有账号）
     private let confirmRemoveDefault = State(initialValue: false)
+    /// 展开那些标题不像登录邮件的（默认折叠，免得正经的登录邮件被淹没）
+    private let showNonLogin = State(initialValue: false)
 
     var body: some View {
         let mail = account.mail
@@ -32,6 +34,7 @@ struct MailSection: View {
                 configMenu(mail)
             }
             statusRow(mail)
+            forwarderRow(mail)
             if showList {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     listContent(snap, loading: loading, now: context.date.timeIntervalSince1970)
@@ -74,6 +77,15 @@ struct MailSection: View {
                 Divider()
                 Button("移除默认邮箱（所有账号）…", role: .destructive) { confirmRemoveDefault.wrappedValue = true }
             }
+            if mail?.configured == true {
+                Divider()
+                if mail?.trustsForwarder == true {
+                    Button("更换信任的转发中转…") { model.mailTrustForwarder(account.ref) }
+                    Button("关掉信任转发中转", role: .destructive) { model.mailTrustForwarderOff(account.ref) }
+                } else {
+                    Button("信任一个转发中转（不安全）…") { model.mailTrustForwarder(account.ref) }
+                }
+            }
         } label: {
             Label(mail?.configured == true ? "配置" : "配置邮箱…", systemImage: "gearshape")
         }
@@ -108,6 +120,24 @@ struct MailSection: View {
         let where_ = mail.isAccountSpecific ? "这个账号单独用 \(user) 收登录邮件" : "登录邮件走默认 Gmail \(user)"
         let auto = mail.auto ? "，登录时自动打开里面的链接" : "，登录时不自动打开（用下面的列表手动打开）"
         return where_ + auto
+    }
+
+    // MARK: 信任转发中转（不安全）
+
+    /// 开了「信任转发中转」时的警示行：这个开关让 cca 放弃验 Anthropic 的签名、改信这个域名，所以一直显眼地提示，并给个「关掉」。
+    @ViewBuilder
+    private func forwarderRow(_ mail: MailConfig?) -> some View {
+        if let fwd = nonEmpty(mail?.forwarder) {
+            let busy = model.activity(account.ref) != nil
+            InfoRow(Text("信任来自 \(fwd) 的转发（不安全）：这个中转重签了邮件，cca 没法再验 Anthropic 的签名，只能信这个域名。只在你清楚它可信时才开着"),
+                    systemImage: "exclamationmark.shield", tint: .orange) {
+                Button("关掉") { model.mailTrustForwarderOff(account.ref) }
+                    .buttonStyle(.glass)
+                    .controlSize(.regular)
+                    .disabled(busy)
+                    .help("不再信任这个中转：发件人是它的登录邮件会重新被拦下")
+            }
+        }
     }
 
     // MARK: 登录邮件列表
@@ -149,8 +179,20 @@ struct MailSection: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    ForEach(doc.rows) { row in
+                    // 标题不像登录邮件的（verdict.why == "subject"）默认折叠，免得把正经的登录邮件淹没
+                    let loginRows = doc.rows.filter { !$0.isNonLogin }
+                    let nonLoginRows = doc.rows.filter { $0.isNonLogin }
+                    ForEach(loginRows) { row in
                         MailRowView(account: account, row: row, now: now)
+                    }
+                    if loginRows.isEmpty, !nonLoginRows.isEmpty {
+                        Label("最近 24 小时的邮件都不像登录邮件", systemImage: "tray")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !nonLoginRows.isEmpty {
+                        nonLoginDisclosure(nonLoginRows, now: now)
                     }
                     if doc.truncated {
                         Text("只显示最近的 50 封").font(.caption).foregroundStyle(.secondary)
@@ -165,6 +207,28 @@ struct MailSection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 4)
+    }
+
+    /// 折叠起来的「非登录邮件」：一个展开/收起的按钮，展开后把它们列在下面。
+    @ViewBuilder
+    private func nonLoginDisclosure(_ rows: [MailRow], now: Double) -> some View {
+        Button {
+            withAnimation(.snappy) { showNonLogin.wrappedValue.toggle() }
+        } label: {
+            Label(showNonLogin.wrappedValue ? "收起非登录邮件" : "显示 \(rows.count) 封非登录邮件",
+                  systemImage: showNonLogin.wrappedValue ? "chevron.down" : "line.3.horizontal.decrease")
+                .labelStyle(FixedIconLabelStyle(iconWidth: RowMetrics.actionIconWidth, spacing: 6))
+                .font(.callout)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .padding(.top, 2)
+        .help("标题不像登录邮件的（cca 按标题先筛掉的），默认折叠")
+        if showNonLogin.wrappedValue {
+            ForEach(rows) { row in
+                MailRowView(account: account, row: row, now: now)
+            }
+        }
     }
 }
 
@@ -186,6 +250,7 @@ struct MailRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if let folder = nonEmpty(row.folder) { Tag(text: folder) }
+                if row.viaForwarder { Tag(text: "经可信中转（不安全）", color: .orange, systemImage: "exclamationmark.shield") }
                 Spacer(minLength: 8)
                 if let got = row.gotEpoch {
                     Text(Date(timeIntervalSince1970: got), format: .dateTime.month().day().hour().minute())

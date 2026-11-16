@@ -63,6 +63,13 @@ enum Snapshot {
                     m.refreshMail(r)   // 拉一次登录邮件，列表展开（窗口在后面，不自动拉）
                 }
             },
+            Scene(name: "account-mail-forwarder") { m in
+                m.tool = .claude
+                if let r = first(.claude, { $0.mail?.trustsForwarder == true }) {
+                    m.selection = .account(r)   // 开了「信任转发中转」：警示行 + 列表里「经可信中转（不安全）」的那封
+                    m.refreshMail(r)
+                }
+            },
             Scene(name: "claude-api") { m in
                 m.tool = .claude
                 m.selection = first(.claude) { $0.isAPI && $0.health != nil }.map { .account($0) }

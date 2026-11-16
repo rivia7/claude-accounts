@@ -460,6 +460,15 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
     if let raw = ra["mail"], !isNull(raw) {
         check("\(n) 有 mail 的账号 can.mail 为真", a.can.mail)
         check("\(n) mail.source 是 account / default / 空", [nil, "account", "default", ""].contains(a.mail?.source))
+        // 信任转发中转（PROTOCOL 4.11）：forwarder 可缺省 / null / 字符串；有值时 trustsForwarder 为真（不安全开关）
+        if let mraw = raw as? [String: Any] {
+            check("\(n) mail.forwarder 是字符串或缺省", mraw["forwarder"] == nil || isNull(mraw["forwarder"]) || mraw["forwarder"] is String)
+        }
+        if let f = a.mail?.forwarder {
+            check("\(n) mail.forwarder 非空、trustsForwarder 为真", !f.isEmpty && a.mail?.trustsForwarder == true)
+        } else {
+            check("\(n) 没登记中转时 trustsForwarder 为假", a.mail?.trustsForwarder == false)
+        }
     }
     if let raw = ra["cost"], !isNull(raw) {
         check("\(n) 有 cost 的账号 can.cost 为真", a.can.cost)
@@ -766,9 +775,15 @@ func genericMailList(_ name: String, _ d: Data) -> MailListDoc? {
         }
         // openable 必有句柄；句柄才是回传给 cca 的东西
         check("\(name) openable 的有句柄", !row.openable || row.msg != nil)
+        // via（PROTOCOL 2.4）：nil = Anthropic 直签（安全）；"forwarder" = 经可信中转认的（不安全），只会落在能打开、通过核对的行上
+        check("\(name) via 是 forwarder 或缺省", row.via == nil || row.via == "forwarder")
+        if row.viaForwarder {
+            check("\(name) 经可信中转的行通过核对、可打开", row.verdict.ok && row.openable)
+        }
         // 绝不含真链接：只有 link_shape 这一个和链接有关的字段
         let r = rawRows.first { ($0["got_epoch"] as? NSNumber)?.doubleValue == row.gotEpoch }
         check("\(name) 行里只有 link_shape、没有真链接字段", r == nil || (r!["link"] == nil && r!["url"] == nil && r!["magic_link"] == nil))
+        check("\(name) via 字段是 forwarder / null / 缺省", r == nil || r!["via"] == nil || isNull(r!["via"]) || (r!["via"] as? String) == "forwarder")
     }
     return doc
 }

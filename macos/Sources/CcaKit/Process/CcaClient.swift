@@ -65,10 +65,13 @@ enum CcaCommand: Sendable, Hashable {
     case mailOpen(ToolID, key: String, msg: String)
     /// 移除邮箱助手设置（`cca mail forget`，PROTOCOL 4.11）：account 时 key 是账号的键，default 时 key 是 nil。
     case mailForget(ToolID, key: String?, scope: MailForgetScope)
+    /// 关掉一个账号的「信任转发中转」（`cca mail trust-forwarder KEY off`，PROTOCOL 4.11）：快速改 config.json，emit `mail_ready`。
+    /// 开启是不安全操作，走 `Handoff.mailTrustForwarder`（要问域名、要同意）；关闭没有风险，直接跑。
+    case mailTrustForwarderOff(ToolID, key: String)
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _): return t
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync: return nil
         }
@@ -77,7 +80,7 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _): return k
+        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _), .mailTrustForwarderOff(_, let k): return k
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall,
              .clientInstall, .costSync: return nil
@@ -133,6 +136,7 @@ enum CcaCommand: Sendable, Hashable {
             case .account: return prefix + ["mail", "forget", "--account", k ?? ""]
             case .default: return prefix + ["mail", "forget", "--default"]
             }
+        case .mailTrustForwarderOff(_, let k): return prefix + ["mail", "trust-forwarder", k, "off"]
         }
     }
 
@@ -143,7 +147,7 @@ enum CcaCommand: Sendable, Hashable {
         case .check: return 180
         case .checkPoll: return 300
         case .app, .web, .billing, .limitResets, .mailOpen: return 120
-        case .mailForget: return 60
+        case .mailForget, .mailTrustForwarderOff: return 60
         case .routerSync, .policyPull: return 180
         case .guiUpdate, .update: return 300
         case .rename, .reorder, .policyRequest: return 60
@@ -162,7 +166,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app, .web, .billing, .limitResets, .mailOpen, .routerSync, .reset, .clientInstall: return true
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
-             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget: return false
+             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff: return false
         }
     }
 
@@ -171,7 +175,7 @@ enum CcaCommand: Sendable, Hashable {
     var gate: String? {
         switch self {
         case .app(let t, let k), .web(let t, let k), .billing(let t, let k), .limitResets(let t, let k), .rename(let t, let k, _), .mailOpen(let t, let k, _): return "launch:\(t.rawValue):\(k)"
-        case .mailForget: return nil   // 快速改 config.json：不占闸门
+        case .mailForget, .mailTrustForwarderOff: return nil   // 快速改 config.json：不占闸门
         case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
         case .reorder(let t, _): return "reorder:\(t.rawValue)"   // 连着拖几次：一个接一个，最后拖的那次写在最后
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"

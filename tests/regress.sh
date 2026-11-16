@@ -270,6 +270,27 @@ handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | pyt
 : > open.log
 out=$(run "${MENV[@]}" cca mail open "$akey" --msg "$handle" 2>&1); rc=$?
 ok "mail open --msg：按句柄重新取、再核对、打开指定的那一封（tok-T5），在 alice 的 Chrome 里经它的端口；链接不在输出里、不进 ~/.cca" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-T5" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -rqs "tok-T" "$H/.cca"'
+# 信任转发中转（不安全，默认关，每账号独立，PROTOCOL 4.11）：隐私别名/转发服务（像 relay.example.com）去掉 Anthropic 的 DKIM、用自己域名重签 → 默认拒；登记了才接受
+fwdeml() { python3 "$D/mail_fake.py" eml "$MB/box/all/$1.eml" --to inbox@example.com --from "\"$2\" <noreply@relay.example.com>" --dkim-d relay.example.com --sign from:to:subject:reply-to:date --reply-to "Anthropic <no-reply@mail.anthropic.com>" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
+fwdeml 6 alice@example.com tok-F1 --at $((now - 60))
+fwdeml 7 alice@example.com tok-F2 --reply-to "X <evil@phisher.example.com>" --at $((now - 50))   # Reply-To 非 Anthropic（攻击变体）：登记了也拒
+aslug=$(basename "$AD")
+has6=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin)["rows"] if "noreply@relay.example.com" in r["from"]))' 2>/dev/null)
+ok "信任转发中转：默认不开时，中转重签、去掉了 Anthropic 签名的邮件认不出账号、不进这个账号的列表" '[ "$has6" = 0 ]'
+out=$(run CCA_TTY="$(ans y)" cca mail trust-forwarder alice relay.example.com 2>&1); rc=$?
+ok "mail trust-forwarder：带不安全警告 + 确认，登记这个账号的信任中转（存 config.mail.accounts[acct_id].forwarder，各账号独立）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不安全" && printf "%s" "$out" | grep -q "别名一旦泄露" && cfgok "c[\"mail\"][\"accounts\"][\"'"$aslug"'\"][\"forwarder\"] == \"relay.example.com\""'
+out=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>&1)
+f1ok=$(printf '%s' "$out" | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["msg"] and x["msg"]["uid"]==6];print(1 if (r and r[0]["openable"] and r[0]["via"]=="forwarder" and r[0]["verdict"]["ok"]) else 0)' 2>/dev/null)
+f2rej=$(printf '%s' "$out" | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if "noreply@relay.example.com" in x["from"] and x.get("msg") is None and x["verdict"]["why"]=="from"];print(1 if r else 0)' 2>/dev/null)
+ok "信任转发中转：登记后，中转转来、标注来自 Anthropic、它的 DKIM 覆盖 Reply-To 的登录邮件被路由到账号、经可信中转认（via=forwarder）、可打开；Reply-To 非 Anthropic 的拒；绝不含链接" '[ "$f1ok" = 1 ] && [ "$f2rej" = 1 ] && ! printf "%s" "$out" | grep -q "tok-F"'
+handle=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;r=[x for x in json.load(sys.stdin)["rows"] if x["openable"] and x["msg"]["uid"]==6][0]["msg"];print("%s:%s:%s"%(r["folder"],r["uid"],r["uidvalidity"]))' 2>/dev/null)
+: > open.log
+out=$(run "${MENV[@]}" cca mail open "$akey" --msg "$handle" 2>&1); rc=$?
+ok "信任转发中转：open --msg 按句柄打开这封（经可信中转认的），在 alice 的 Chrome 里打开 tok-F1" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-F1" open.log | grep -qF -- "--user-data-dir=$AD/chrome"'
+out=$(run cca mail trust-forwarder alice off 2>&1); rc=$?
+has6b=$(run "${MENV[@]}" cca _gui mail-list --account "$akey" 2>/dev/null | python3 -c 'import json,sys;print(sum(1 for r in json.load(sys.stdin)["rows"] if "noreply@relay.example.com" in r["from"]))' 2>/dev/null)
+ok "mail trust-forwarder off：关掉后回到只认 Anthropic 直签，中转重签的邮件又不进列表了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已关闭" && ! cfgok "c.get(\"mail\",{}).get(\"accounts\",{}).get(\"'"$aslug"'\",{}).get(\"forwarder\")" && [ "$has6b" = 0 ]'
+rm -f "$MB/box/all/6.eml" "$MB/box/all/7.eml"
 printf '{"user":"bob-inbox@example.com","password":"abcdefghijklmnop"}' > "$MB/ctl.json"   # 让假 Gmail 认 bob-inbox（单一用户）：测这个账号单独配的 Gmail
 out=$(run "${MENV[@]}" CCA_TTY="$(ans bob-inbox@example.com abcdefghijklmnop)" cca mail setup --account 副号 2>&1); rc=$?
 bslug=$(basename "$(ls -d "$H"/.cca/accounts/bob-example-com-*)")
@@ -1527,7 +1548,7 @@ ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版�
 edit_table 'j["mail"] = {"user": "team-login@example.com"}' "$H/.cca/config.json"
 nfp=$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)
 stm=$(gj state)
-ok "_gui state：Claude 官方账号 can.mail、account.mail 说走默认 / 单独配 / 没配置（只读 config.json，不碰钥匙串）；Codex、第三方 API 账号没有" 'printf "%s" "$stm" | jok "(lambda a: a[\"can\"][\"mail\"] is True and a[\"mail\"] == {\"configured\": True, \"user\": \"team-login@example.com\", \"source\": \"default\", \"auto\": True})(acct(0, \"alice@example.com\")) and acct(0, \"kimi2\")[\"can\"][\"mail\"] is False and acct(0, \"kimi2\")[\"mail\"] is None and acct(1, \"dave@example.com\")[\"can\"][\"mail\"] is False and acct(1, \"dave@example.com\")[\"mail\"] is None" && [ "$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)" = "$nfp" ]'
+ok "_gui state：Claude 官方账号 can.mail、account.mail 说走默认 / 单独配 / 没配置（只读 config.json，不碰钥匙串）；Codex、第三方 API 账号没有" 'printf "%s" "$stm" | jok "(lambda a: a[\"can\"][\"mail\"] is True and a[\"mail\"] == {\"configured\": True, \"user\": \"team-login@example.com\", \"source\": \"default\", \"auto\": True, \"forwarder\": None})(acct(0, \"alice@example.com\")) and acct(0, \"kimi2\")[\"can\"][\"mail\"] is False and acct(0, \"kimi2\")[\"mail\"] is None and acct(1, \"dave@example.com\")[\"can\"][\"mail\"] is False and acct(1, \"dave@example.com\")[\"mail\"] is None" && [ "$(grep -c "find-generic-password" "$T/security.log" 2>/dev/null || echo 0)" = "$nfp" ]'
 edit_table 'j.pop("mail", None)' "$H/.cca/config.json"
 mv "$T/bin/claude" "$T/claude.off"
 out=$(run PATH="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" cca _gui state </dev/null 2>/dev/null)

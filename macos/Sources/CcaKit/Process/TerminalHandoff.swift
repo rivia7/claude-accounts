@@ -168,6 +168,15 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                        message: "填收登录邮件的 Gmail 地址和应用专用密码（所有 Claude 账号默认共用）。各账号把邮箱转发到这个 Gmail，cca 按收件人认是哪个账号。应用专用密码只存进这台 Mac 的钥匙串。",
                        inApp: true, needsForms: true)
     }
+
+    /// 为一个账号登记「信任转发中转」（`cca mail trust-forwarder KEY`，PROTOCOL 4.11）：问过中转域名后登记。
+    /// 这是**不安全**的开关——中转服务重签了邮件，cca 没法再验 Anthropic 的签名，只能信这个域名。要 `hello.mail`，没有不走终端。
+    static func mailTrustForwarder(account: AccountRef) -> Handoff {
+        Handoff(arguments: ["mail", "trust-forwarder", account.key],
+                title: "信任一个转发中转",
+                message: "填中转服务的域名（比如 relay.example.com）。登记后，发件人是这个域名、收件人是本账号的登录邮件也会被当成真的——只有在你清楚这个中转可信时才开。",
+                inApp: true, needsForms: true)
+    }
 }
 
 enum TerminalHandoff {

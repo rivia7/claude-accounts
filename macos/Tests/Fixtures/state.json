@@ -1945,7 +1945,8 @@
             "configured": true,
             "user": "team-login@gmail.com",
             "source": "default",
-            "auto": true
+            "auto": true,
+            "forwarder": null
           }
         },
         {
@@ -2829,7 +2830,8 @@
             "configured": false,
             "user": null,
             "source": null,
-            "auto": true
+            "auto": true,
+            "forwarder": null
           }
         },
         {
@@ -2891,7 +2893,8 @@
             "configured": true,
             "user": "dave-login@gmail.com",
             "source": "account",
-            "auto": true
+            "auto": true,
+            "forwarder": "relay.example.com"
           }
         },
         {
@@ -3880,7 +3883,8 @@
             "configured": true,
             "user": "team-login@gmail.com",
             "source": "default",
-            "auto": false
+            "auto": false,
+            "forwarder": null
           }
         },
         {
@@ -4893,7 +4897,8 @@
             "configured": true,
             "user": "team-login@gmail.com",
             "source": "default",
-            "auto": true
+            "auto": true,
+            "forwarder": null
           }
         },
         {

@@ -1339,6 +1339,27 @@ final class AppModel {
         }
     }
 
+    /// 登记「信任转发中转」（不安全）：要问中转域名、要同意，走提问会话（`cca mail trust-forwarder KEY`）。
+    func mailTrustForwarder(_ ref: AccountRef) {
+        guard mailSupported else { return }
+        run(.mailTrustForwarder(account: ref))
+    }
+
+    /// 关掉「信任转发中转」：没有风险，直接跑（跑完重读 state，「邮箱」一节会刷新）。
+    func mailTrustForwarderOff(_ ref: AccountRef) {
+        guard phase == .ready, let client, mailSupported, activities[ref] == nil else { return }
+        activities[ref] = Activity(kind: .mail)
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(.mailTrustForwarderOff(ref.tool, key: ref.key), prompter: prompter)
+            guard let self else { return }
+            self.activities[ref] = nil
+            self.mailLists[ref] = nil
+            self.finish(r, failureTitle: "没能关掉信任转发中转", success: r.resultEvent?.message ?? "已关掉")
+            await self.afterAction()
+        }
+    }
+
     /// 账号页“没装 X 命令”旁边的「安装」：终端打不开是因为没装命令、cca 也有辅助安装时才有。
     func installCLIHandoff(for a: Account) -> Handoff? {
         guard installCLISupported, !a.can.cli, a.canWhy["cli"] == .toolMissing else { return nil }

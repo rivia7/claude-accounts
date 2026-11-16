@@ -75,7 +75,7 @@ def rand(n, chars=string.ascii_letters + string.digits):
 
 def build_eml(to, link=None, subject='Your secure link to Claude is here', frm='Anthropic <no-reply@mail.anthropic.com>',
               sign='from:to:subject:date:message-id:mime-version:content-type', ar='pass', dkim_d='mail.anthropic.com',
-              msgid=None, extra=(), above=(), body_links=None, html=True, text=True):
+              msgid=None, extra=(), above=(), body_links=None, html=True, text=True, reply_to=None):
     """一封登录邮件（字节）。sign 是 DKIM 签名的 h=；ar 是最上面那条（Gmail 写的）Authentication-Results 里 DKIM 的结果：
     pass、fail、none（没有 DKIM 结果）、missing（没有这一条）；above 是插在最上面的头（模拟别人加的）、extra 加在后面"""
     link = link or GOOD_LINK % rand(12)
@@ -98,8 +98,10 @@ def build_eml(to, link=None, subject='Your secure link to Claude is here', frm='
               '\tbh=%s=;' % rand(43),
               '\tb=%s' % b[:76]] + ['\t %s' % b[i:i + 76] for i in range(76, len(b), 76)]
     lines += list(extra)
-    lines += ['From: %s' % frm, 'To: %s' % to, 'Subject: %s' % subject,
-              'Date: %s' % email.utils.formatdate(localtime=False), 'Message-ID: %s' % msgid, 'MIME-Version: 1.0']
+    lines += ['From: %s' % frm, 'To: %s' % to, 'Subject: %s' % subject]
+    if reply_to is not None:
+        lines.append('Reply-To: %s' % reply_to)
+    lines += ['Date: %s' % email.utils.formatdate(localtime=False), 'Message-ID: %s' % msgid, 'MIME-Version: 1.0']
     links = body_links if body_links is not None else [link]
     boundary = 'b-' + rand(16)
     parts = []
@@ -605,13 +607,14 @@ def main():
     e.add_argument('--ar', default='pass')
     e.add_argument('--from', dest='frm', default='Anthropic <no-reply@mail.anthropic.com>')
     e.add_argument('--dkim-d', default='mail.anthropic.com')
+    e.add_argument('--reply-to', dest='reply_to')
     e.add_argument('--at', type=float)
     e.add_argument('--msgid')
     a = ap.parse_args()
     if a.cmd == 'serve':
         serve(a.dir)
     elif a.cmd == 'eml':
-        put_eml(a.path, build_eml(a.to, a.link, a.subject, a.frm, a.sign, a.ar, a.dkim_d, a.msgid), a.at)
+        put_eml(a.path, build_eml(a.to, a.link, a.subject, a.frm, a.sign, a.ar, a.dkim_d, a.msgid, reply_to=a.reply_to), a.at)
     else:
         ap.print_help()
         sys.exit(2)

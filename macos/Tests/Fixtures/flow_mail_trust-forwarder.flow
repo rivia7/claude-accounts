@@ -1,0 +1,2 @@
+{"v":1,"ev":"ask","seq":1,"q":"mail.forwarder","title":"信任转发中转（不安全）","message":"开了「信任转发中转」后，cca 会接受这个中转 DKIM 签过、且标注原件来自 Anthropic 的登录邮件——中转把 Anthropic 的签名去掉了，没有密码学依据证明真来自 Anthropic。安全从「只信 Anthropic 直签」降到「信这个中转 + 你的别名不泄露」：别名一旦泄露，知道的人可经它给你发伪造的登录邮件，打开后你会登进攻击者的账号。","fields":[{"id":"v","kind":"text","label":"中转域名","default":"","value":"","error":"","hint":"中转服务的域名，像 relay.example.com（回车取消）","optional":false}]}
+{"v":1,"ev":"result","code":"mail_ready","tool":"claude","key":null,"message":"已为这个账号信任转发中转 relay.example.com（不安全）"}

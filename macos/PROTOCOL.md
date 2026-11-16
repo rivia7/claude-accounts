@@ -153,7 +153,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "can_why": {},
   "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1794020000.0,
               "from_device": "dan-air", "sync_error": null},
-  "mail": {"configured": true, "user": "team-login@gmail.com", "source": "default", "auto": true},
+  "mail": {"configured": true, "user": "team-login@gmail.com", "source": "default", "auto": true, "forwarder": null},
   "usage": { "…用量条目，见 3.1…" },
   "usage_weeks": { "…每周用量，见下面…" },
   "cost": { "…折合金额，见下面…" },
@@ -205,7 +205,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   没同步成的原因（给人看的话；成了、不同步的是 null）。旧版 cca 没有这几项：当作不同步。
 - `mail`：这个账号的邮箱助手状态（账号页的「邮箱」一节，4.11；只在 `can.mail` 为 true 的账号上有，否则为 null）。只读 config.json、**不碰钥匙串**：
   `configured`：解析得到收登录邮件的 Gmail 了没有（这个账号单独配的覆盖，或默认那个）；`user`：那个 Gmail 地址（没配置为 null）；
-  `source`：`account`（这个账号单独配了 Gmail）| `default`（用的是默认那个，所有账号共用）| `null`（没配置）；`auto`：登录时自不自动打开登录邮件里的链接。
+  `source`：`account`（这个账号单独配了 Gmail）| `default`（用的是默认那个，所有账号共用）| `null`（没配置）；`auto`：登录时自不自动打开登录邮件里的链接；
+  `forwarder`：这个账号登记的「信任转发中转」域名（4.11，不安全的开关，默认 null）。
   旧版 cca 没有这个字段，当作 null（不显示「邮箱」一节）。应用专用密码存不存在、能不能连上，要调 `cca _gui mail-list`（2.4）才知道。
 - `usage`：最近一次的用量（缓存，不联网）。只给 `login == logged_in` 的官方账号；没有缓存为 null。
 - `usage_weeks`：每周用量（账号页的「每周用量」、侧栏的「用量统计」）：最近 12 周每周用到这一周额度的百分之几，和这几周的统计。
@@ -405,7 +406,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
       "dkim": [{"result": "pass", "domain": "mail.anthropic.com"}],
       "verdict": {"ok": true, "why": null, "why_text": null},
       "link_shape": "https://claude.ai/magic-link（# 后面 67 个字符，不显示）",
-      "openable": true,
+      "openable": true, "via": null,
       "msg": {"folder": "[Gmail]/All Mail", "uid": 12345, "uidvalidity": 678}
     }
   ],
@@ -423,6 +424,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `link_shape`：登录链接的“样子”（协议、主机、路径，`#` / `?` 后面只说有多长，**不含链接内容**）；只有 `verdict.ok` 时才有，否则 null。
 - `openable`：能不能在这个账号的浏览器里打开（`verdict.ok` 且认出了账号）。`msg` 是打开时要回传的不透明句柄（`{folder, uid, uidvalidity}`，
   只有 `openable` 时才有）：交给 `cca mail open KEY --msg 文件夹:uid:uidvalidity`（4.11）。App 只用它当句柄，不解析。打开按钮另外要这个工具的 `chrome` 为真（2.2）。
+- `via`：这封是怎么通过核对的。`null`（或没有这个字段）= Anthropic 直签（安全）；`"forwarder"` = 经这个账号登记的「信任转发中转」认的（不安全，4.11）——
+  App 在这类行上标明「经可信中转（不安全）」。`why == "subject"` 的「非登录邮件」App 默认折叠隐藏、给个开关展开。
 
 ## 3. 用量、出口检测
 
@@ -776,6 +779,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `mail.setup` | `mail setup [--account]` | `text`、`secret` | 邮箱助手（App 里一页问完，4.11）：收登录邮件的 Gmail 地址（校验 gmail，预填上次的）、应用专用密码（校验 `any`，Gmail 的密码带空格）。cca 登录一次核对过才存进钥匙串；地址 / 密码不对、连不上时带着原因重问 |
 | `mail.address` | `mail setup`（终端） | `text` | 邮箱助手的终端流程：收登录邮件的 Gmail 地址（预填上次的；地址不对、要换地址时重问）。App 里用 `mail.setup` 一页问完 |
 | `mail.password` | `mail setup`（终端） | `secret` | 邮箱助手的终端流程：这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道 |
+| `mail.forwarder` | `mail trust-forwarder` | `text` | 「信任转发中转」要信任的中转域名（像 relay.example.com）。问之前 / 之后都有不安全的警告（页面 `message` + 随后的 `consent.mail_trust_forwarder`，4.11）。只给 Claude 账号 |
 | `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
 
 账号表的表单（`edit.form`）：字段 id 是 `n<编号>`（节点）、`u<编号>`（接口地址）、`m<编号>`（模型）、`e<编号>`（环境变量），编号是账号在表里的位置，App 不解释。不合格时同一个 `q` 带着 `error` 和已填的值再发一条，都合格才写账号表；
@@ -799,6 +803,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
 | `mail setup [--account]` | 账号页「邮箱」一节的「配置 / 更换」 | 提问会话（`mail.setup`；要 `hello.mail`，4.11） |
+| `mail trust-forwarder <账号>` | 「邮箱」一节的「信任转发中转（不安全）」开关 | 提问会话（`mail.forwarder` + `consent.mail_trust_forwarder`，4.11）；关闭是 `cca mail trust-forwarder <账号> off` |
 | `_gui mail-list`、`mail open --msg`、`mail forget` | 「邮箱」一节的列表 / 刷新、每封的「在浏览器打开」、「移除」 | 无交互命令（4.11、2.4；`mail open` 进 `launch:` 闸门） |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
@@ -824,6 +829,12 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   打开按钮还要这个工具的 `chrome`（2.2）为真。
 - **移除**（`cca mail forget`）：`--account KEY` 只移这个账号单独配的（改回默认）；`--default` 只移默认（各账号单独配的留着）；不带参数移全部（`cca restore` 也用）。
   成功发 `result` 的 `mail_forgotten`。地址没有别处再用了才删钥匙串里的应用专用密码。
+- **信任转发中转（不安全，默认关，每个账号各自一个开关）**（`cca mail trust-forwarder <账号> <中转域名> | off`）：有些隐私别名 / 转发服务（如 `relay.example.com`）
+  会把 Anthropic 的 DKIM 签名去掉、用自己的域名重签，cca 因此**正确地**拒掉这类邮件（没有密码学依据证明真来自 Anthropic）。开了这个开关、登记某个中转域名 F 后，cca 对这个账号
+  额外接受「F 的 DKIM 签过且覆盖 From/To/Subject/Reply-To + From 显示名是这个账号的别名 + Reply-To 是单个 Anthropic 域名地址 + 标题像登录邮件」的邮件。
+  **这是安全降级**：信任从「只信 Anthropic 直签」降到「信这个中转 + 你的别名不泄露」——别名一旦泄露，知道的人可经 F 给你发伪造的登录邮件，打开后你会登进攻击者的账号。
+  所以 App 的开关默认关、打开前弹**明确的不安全警告**（cca 先在 `mail.forwarder` 的页面 `message` 里说明、再发 `consent.mail_trust_forwarder` 确认；两处都讲清风险）。
+  状态在 `account.mail.forwarder`（2.2，null = 没开）；经这个中转认的列表行带 `via: "forwarder"`（2.4），App 上标明「经可信中转（不安全）」。关闭是 `… off`。成功发 `result` 的 `mail_ready`。
 
 ## 5. `cca gui`
 

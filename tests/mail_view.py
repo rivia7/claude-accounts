@@ -165,9 +165,10 @@ class Parse(Base):
 
 
 class Judge(Base):
-    def judge(self, raw, acct='alice@example.com', got=None, since=None):
+    def judge(self, raw, acct='alice@example.com', got=None, since=None, forwarder=None):
         now = time.time()
-        return self.ns['mail_judge'](self.rule, self.msg(raw), now if got is None else got, acct, now - 60 if since is None else since)
+        return self.ns['mail_judge'](self.rule, self.msg(raw), now if got is None else got, acct,
+                                     now - 60 if since is None else since, forwarder)
 
     def test_good_and_each_failure(self):
         good = mf.build_eml('Alice@Example.com')
@@ -223,6 +224,32 @@ class Judge(Base):
                 'dkim=pass header.i=@mail.anthropic.com (unterminated header.b={b}',
                 'dkim pass header.i=@mail.anthropic.com header.b={b}'):
             self.assertEqual(self.judge(self.ar_mail(res)), 'dkim', res)
+
+    def fwd(self, alias='alice@example.com', frm=None, dkim_d='relay.example.com', sign='from:to:subject:reply-to:date',
+            ar='pass', reply_to='Anthropic <no-reply@mail.anthropic.com>', subject='Your secure link to Claude is here'):
+        """一封经信任中转 relay.example.com 转发的登录邮件：中转把 Anthropic 的签名去掉、用自己域名重签，From 显示名放原始别名，
+        Reply-To 标注原件来自 Anthropic。收件人是收集用的 Gmail（不是账号邮箱）"""
+        return mf.build_eml('collect@gmail.com', frm=frm if frm is not None else '"%s" <noreply@relay.example.com>' % alias,
+                            dkim_d=dkim_d, sign=sign, ar=ar, reply_to=reply_to, subject=subject)
+
+    def test_trusted_forwarder(self):
+        # 开了「信任转发中转」（账号登记了 relay.example.com）才放行；默认关、换成别的域名、Reply-To 非 Anthropic、别名对不上、
+        # 中转 DKIM 没覆盖 Reply-To、验证失败、标题不像 —— 全拒。安全边界只到「信任这个中转 + 别名不泄露」
+        self.assertIsNone(self.judge(self.fwd(), forwarder='relay.example.com'), '正常转发 + 登记了中转 → 放行')
+        self.assertIsNone(self.judge(self.fwd(), forwarder='sub.relay.example.com'.split('.', 1)[1]), '中转按标签认后缀')
+        self.assertEqual(self.judge(self.fwd()), 'from', '默认不开（forwarder=None）→ 拒')
+        self.assertEqual(self.judge(self.fwd(), forwarder='evil.com'), 'from', '登记的是别的域名 → 拒')
+        self.assertEqual(self.judge(self.fwd(reply_to='X <a@evil.com>'), forwarder='relay.example.com'), 'from', 'Reply-To 非 Anthropic → 拒')
+        self.assertEqual(self.judge(self.fwd(reply_to=None), forwarder='relay.example.com'), 'from', '没有 Reply-To → 拒')
+        self.assertEqual(self.judge(self.fwd(frm='"bob@example.com" <noreply@relay.example.com>'), forwarder='relay.example.com'), 'to', 'From 显示名别名对不上账号 → 拒')
+        self.assertEqual(self.judge(self.fwd(frm='noreply@relay.example.com'), forwarder='relay.example.com'), 'to', 'From 显示名不是别名 → 拒')
+        self.assertEqual(self.judge(self.fwd(sign='from:to:subject:date'), forwarder='relay.example.com'), 'dkim', '中转 DKIM 没覆盖 Reply-To → 拒')
+        self.assertEqual(self.judge(self.fwd(ar='fail'), forwarder='relay.example.com'), 'dkim', '中转 DKIM 验证失败 → 拒')
+        self.assertEqual(self.judge(self.fwd(dkim_d='evil.com'), forwarder='relay.example.com'), 'dkim', 'DKIM 签名域名不是中转 → 拒')
+        self.assertEqual(self.judge(self.fwd(subject='Your secure link to Verification Portal is here'), forwarder='relay.example.com'), 'subject', '标题不像登录邮件 → 拒')
+        # 严格 Anthropic 直签的邮件：开了中转也照走严格路、照常放行；别的账号的转发邮件不认成这个账号
+        self.assertIsNone(self.judge(mf.build_eml('alice@example.com'), forwarder='relay.example.com'), '严格直签 + 开了中转 → 仍放行')
+        self.assertEqual(self.judge(self.fwd(alias='alice@example.com'), acct='bob@example.com', forwarder='relay.example.com'), 'to', '发给 alice 的转发邮件对 bob 不算')
 
     def test_signature_matched_by_header_b(self):
         raw = mf.build_eml('alice@example.com')

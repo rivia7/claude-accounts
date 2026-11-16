@@ -16,6 +16,8 @@ import Foundation
 /// | `clients status/check --json` | client_updates.json | — |
 /// | `devices KEY --json` | devices.json（键换成这次问的账号） | — |
 /// | `cost sync [--now] --json` | cost_sync.json | — |
+/// | `mail trust-forwarder KEY off` | 直接成功 | — |
+/// | `mail trust-forwarder KEY`（提问会话） | flow_mail_trust-forwarder.flow | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。
@@ -160,6 +162,8 @@ struct FixtureTransport: Transport {
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data("已在账号的浏览器里打开登录邮件里的链接\n".utf8), events: [])
         case ("mail", "forget"):
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data("已移除邮箱助手的设置\n".utf8), events: [])
+        case ("mail", "trust-forwarder") where args.last == "off":
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data("已关掉信任转发中转\n".utf8), events: [])
         case ("usage", _):
             await pause(3)
             let name = tool == .claude ? "usage_claude.json" : "usage_\(tool.rawValue).json"
@@ -221,6 +225,7 @@ struct FixtureTransport: Transport {
         if args.first == "codex" { args.removeFirst() }
         if args.first == "key" || args.first == "rm" { args = [args[0]] }
         if args.first == "mail", args.dropFirst().first == "setup" { args = ["mail", "setup"] }   // 默认 / --account 都用同一个演示流程
+        if args.first == "mail", args.dropFirst().first == "trust-forwarder" { args = ["mail", "trust-forwarder"] }   // 不管哪个账号都用同一个演示流程
         let name = "flow_" + args.joined(separator: "_") + ".flow"
         guard let d = read(name) else { throw SessionUnsupported() }
         return DemoSession(data: d)

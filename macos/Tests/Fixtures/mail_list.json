@@ -20,7 +20,22 @@
       "verdict": {"ok": true, "why": null, "why_text": null},
       "link_shape": "https://claude.ai/magic-link（# 后面 67 个字符，不显示）",
       "openable": true,
+      "via": null,
       "msg": {"folder": "[Gmail]/All Mail", "uid": 12345, "uidvalidity": 678}
+    },
+    {
+      "got_epoch": 1794041200,
+      "folder": "所有邮件",
+      "subject": "Your secure link to Claude is here",
+      "from": ["noreply@relay.example.com"],
+      "to": ["team-login@gmail.com"],
+      "account": {"key": "工作(bob@example.com)", "name": "工作"},
+      "dkim": [{"result": "pass", "domain": "relay.example.com"}],
+      "verdict": {"ok": true, "why": null, "why_text": null},
+      "link_shape": "https://claude.ai/magic-link（# 后面 67 个字符，不显示）",
+      "openable": true,
+      "via": "forwarder",
+      "msg": {"folder": "[Gmail]/All Mail", "uid": 12346, "uidvalidity": 678}
     },
     {
       "got_epoch": 1794039100,
@@ -33,6 +48,7 @@
       "verdict": {"ok": false, "why": "subject", "why_text": "标题不像登录邮件"},
       "link_shape": null,
       "openable": false,
+      "via": null,
       "msg": null
     },
     {
@@ -42,10 +58,11 @@
       "from": ["no-reply@phisher.example.com"],
       "to": ["bob@example.com"],
       "account": {"key": "工作(bob@example.com)", "name": "工作"},
-      "dkim": null,
-      "verdict": {"ok": false, "why": "dkim", "why_text": "Gmail 的验证结果里没有 Anthropic 的签名通过（转发时邮件被改过，或者不是 Anthropic 发的）"},
+      "dkim": [{"result": "pass", "domain": "phisher.example.com"}],
+      "verdict": {"ok": false, "why": "from", "why_text": "发件人不是 Anthropic"},
       "link_shape": null,
       "openable": false,
+      "via": null,
       "msg": null
     }
   ],

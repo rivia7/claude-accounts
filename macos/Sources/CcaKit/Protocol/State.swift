@@ -691,8 +691,10 @@ struct MailConfig: Decodable, Sendable, Equatable {
     var source: String?
     /// 登录时自不自动打开登录邮件里的链接
     var auto: Bool
+    /// 这个账号登记的「信任转发中转」域名（不安全的开关，默认 nil = 关；PROTOCOL 4.11）
+    var forwarder: String?
 
-    enum CodingKeys: String, CodingKey { case configured, user, source, auto }
+    enum CodingKeys: String, CodingKey { case configured, user, source, auto, forwarder }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -700,10 +702,13 @@ struct MailConfig: Decodable, Sendable, Equatable {
         user = c.string(.user)
         source = c.string(.source)
         auto = c.bool(.auto) ?? true
+        forwarder = nonEmpty(c.string(.forwarder))
     }
 
     /// 这个账号单独配了 Gmail（不是用的默认那个）
     var isAccountSpecific: Bool { source == "account" }
+    /// 开了「信任转发中转」（不安全）
+    var trustsForwarder: Bool { forwarder != nil }
 }
 
 func nonEmpty(_ s: String?) -> String? {

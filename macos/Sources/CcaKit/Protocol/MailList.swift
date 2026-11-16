@@ -76,14 +76,21 @@ struct MailRow: Decodable, Sendable, Equatable, Identifiable {
     var linkShape: String?
     /// 能不能在这个账号的浏览器里打开（通过核对且认出了账号）
     var openable: Bool
+    /// 这封是怎么通过核对的：nil = Anthropic 直签（安全）；`"forwarder"` = 经这个账号登记的「信任转发中转」认的（不安全，PROTOCOL 4.11）
+    var via: String?
     /// 打开时要回传的不透明句柄（只有 openable 时才有）
     var msg: MailHandle?
+
+    /// 是不是经「信任转发中转」（不安全）认的
+    var viaForwarder: Bool { via == "forwarder" }
+    /// 标题不像登录邮件（App 默认折叠这类）
+    var isNonLogin: Bool { verdict.why == "subject" }
 
     /// 稳定 id：句柄（有的话）或 邮件夹+时间
     var id: String { msg.map { "\($0.folder):\($0.uid):\($0.uidvalidity)" } ?? "\(folder ?? ""):\(gotEpoch ?? 0)" }
 
     enum CodingKeys: String, CodingKey {
-        case folder, subject, from, to, account, dkim, verdict, openable, msg
+        case folder, subject, from, to, account, dkim, verdict, openable, via, msg
         case gotEpoch = "got_epoch"
         case linkShape = "link_shape"
     }
@@ -100,6 +107,7 @@ struct MailRow: Decodable, Sendable, Equatable, Identifiable {
         verdict = c.lossy(MailVerdict.self, .verdict) ?? MailVerdict(ok: false, why: nil, whyText: nil)
         linkShape = c.string(.linkShape)
         openable = c.bool(.openable) ?? false
+        via = c.string(.via)
         msg = c.lossy(MailHandle.self, .msg)
     }
 

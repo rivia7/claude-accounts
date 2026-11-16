@@ -16,6 +16,15 @@ import Foundation
     check("命令：mail forget --account / --default",
           forgetAcct.arguments == ["mail", "forget", "--account", "工作(bob@example.com)"]
           && forgetDef.arguments == ["mail", "forget", "--default"] && forgetAcct.gate == nil)
+    // 信任转发中转（PROTOCOL 4.11）：关闭是快速改 config.json 的普通命令（不占闸门、不跑完为止、60 秒）；
+    // 开启是不安全操作，走提问会话（要问域名、要同意）。
+    let trustOff = CcaCommand.mailTrustForwarderOff(.claude, key: "工作(bob@example.com)")
+    check("命令：mail trust-forwarder KEY off（不占闸门、不跑完为止、60 秒）",
+          trustOff.arguments == ["mail", "trust-forwarder", "工作(bob@example.com)", "off"]
+          && trustOff.gate == nil && !trustOff.runsToCompletion && trustOff.timeout == 60 && trustOff.key == "工作(bob@example.com)")
+    let trust = Handoff.mailTrustForwarder(account: AccountRef(tool: .claude, key: "工作(bob@example.com)"))
+    check("mail trust-forwarder 开启是提问会话（要 forms）",
+          trust.arguments == ["mail", "trust-forwarder", "工作(bob@example.com)"] && trust.inApp && trust.needsForms)
 
     // MARK: 配置的提问会话（Handoff）
     let def = Handoff.mailSetup(account: nil)
@@ -26,12 +35,26 @@ import Foundation
 
     // MARK: 文档解码
     if let d = fixture("mail_list.json"), let doc = try? DocumentDecoder.decode(MailListDoc.self, from: d) {
-        check("mail-list 解码：3 封，第一封能打开、有句柄、链接只给样子",
-              doc.rows.count == 3 && doc.error == nil && doc.rows[0].openable
+        check("mail-list 解码：4 封，第一封 Anthropic 直签能打开、via 为空、链接只给样子",
+              doc.rows.count == 4 && doc.error == nil && doc.rows[0].openable
               && doc.rows[0].msg?.argument == "[Gmail]/All Mail:12345:678"
-              && doc.rows[0].linkShape != nil && doc.rows[0].verdict.ok)
+              && doc.rows[0].linkShape != nil && doc.rows[0].verdict.ok && doc.rows[0].via == nil && !doc.rows[0].viaForwarder)
+        // 经可信中转（不安全）的那封：via==forwarder、能打开、通过核对、有句柄、只给链接样子
+        if let fwd = doc.rows.first(where: { $0.viaForwarder }) {
+            check("mail-list：经可信中转的行 via==forwarder、可打开、通过核对、有句柄、不含真链接",
+                  fwd.via == "forwarder" && fwd.openable && fwd.verdict.ok && fwd.msg != nil && fwd.linkShape != nil)
+        } else {
+            check("mail_list.json 里有一封经可信中转的（via==forwarder）", false)
+        }
+        // 标题不像登录邮件的：why==subject、App 默认折叠（isNonLogin）、不能打开
+        if let nonLogin = doc.rows.first(where: { $0.isNonLogin }) {
+            check("mail-list：非登录邮件 why==subject、isNonLogin、不能打开",
+                  nonLogin.verdict.why == "subject" && !nonLogin.openable && nonLogin.via == nil)
+        } else {
+            check("mail_list.json 里有一封非登录邮件（why==subject）", false)
+        }
         check("mail-list：没通过核对的说原因、不能打开",
-              !doc.rows[1].openable && doc.rows[1].verdict.ok == false && nonEmpty(doc.rows[1].verdict.whyText) != nil)
+              doc.rows.contains { !$0.openable && $0.verdict.ok == false && nonEmpty($0.verdict.whyText) != nil })
     } else {
         check("mail_list.json 夹具能解码", false)
     }
@@ -60,7 +83,7 @@ import Foundation
     m.selection = .account(bob.ref)
     check("开账号页不自动拉登录邮件（翻账号不卡）", askedMail().isEmpty)
     m.refreshMail(bob.ref)
-    check("点「查看」后拉到了", await waitUntil { m.mailLists[bob.ref]?.doc?.rows.count == 3 }, "\(askedMail())")
+    check("点「查看」后拉到了", await waitUntil { m.mailLists[bob.ref]?.doc?.rows.count == 4 }, "\(askedMail())")
     check("问的带 --account 这个账号、24 小时", askedMail().first == ["_gui", "mail-list", "--account", bob.key, "24"])
     // 打开某封（进 launch 闸门，不该 crash）
     if let h = m.mailLists[bob.ref]?.doc?.rows.first(where: { $0.openable })?.msg {
