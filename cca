@@ -15,7 +15,8 @@
 #   · 每个账号一个 CLAUDE_CONFIG_DIR（官方文档的多账号做法），目录按邮箱命名，改别名不影响登录。登录走
 #     官方流程，凭证由 Claude Code 自己存进钥匙串；本脚本不读取、不保存、不转发任何 token（查用量也是让
 #     Claude Code 自己去查）。登录页预填账号表里的邮箱，并拒绝"槽位里登录的不是这个邮箱"的情况，避免一个
-#     账号走了另一个账号的出口。
+#     账号走了另一个账号的出口。用了邮箱助手（cca mail）时经手登录邮件里的一次性登录链接：核对过才交给这个
+#     账号专属的 Chrome，不显示、不保存。
 #   · 第三方 API 账号的 key 由本脚本存进钥匙串（或写在账号表的 key 字段），经 apiKeyHelper 交给 Claude Code：
 #     不出现在命令行参数和环境变量里；地址、模型经 --settings 传入，共享的 settings.json 盖不掉。
 #   · 账号目录里除账号/进程状态外，全部用符号链接指向 ~/.claude（记忆、会话历史、设置、技能、插件、
@@ -676,6 +677,7 @@ class Tool:
     billing_url = 'https://platform.claude.com/settings/billing'   # 控制台的账单页：每月 API 额度和余额只在这里显示，官方没有查询接口
     login_hosts = ('claude.com', 'claude.ai', 'platform.claude.com', 'console.anthropic.com')   # 登录页（补 login_hint）
     login_paths = ('/oauth/authorize',)
+    mail_rules = ('claude-login',)    # 邮箱助手认哪几种登录邮件（MAIL_RULES 的键；cca mail）
     product = 'Claude Code'           # 查不了用量时的提示
     usage_windows = ('five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'seven_day_oauth_apps')   # cca usage --json 的窗口
     update_cmd = 'claude update'
@@ -795,6 +797,7 @@ class CodexTool(Tool):
     web_url = 'https://chatgpt.com/'
     billing_url = 'https://platform.openai.com/settings/organization/billing/overview'
     login_hosts = ('auth.openai.com',)
+    mail_rules = ()
     product = 'Codex'
     usage_windows = ('five_hour', 'seven_day')
     update_cmd = 'codex update'
@@ -886,6 +889,7 @@ class AgyTool(Tool):
     billing_url = ''
     login_hosts = ('accounts.google.com',)
     login_paths = ('/o/oauth2/auth', '/o/oauth2/v2/auth')
+    mail_rules = ()
     product = 'Antigravity'
     usage_windows = ()
     update_cmd = 'agy update'
@@ -3163,15 +3167,46 @@ def kc_hints(st):
     return h if isinstance(h, dict) else {}
 
 
-def kc_read(aid, host, ref=False):
-    """(security 的退出码, key)：钥匙串里这个账号、这个服务商的 key；没有（退出码 44）、读不了（锁着、超时）或不是可见的
-    ASCII 时 key 是空字符串（没有钥匙串的系统读密钥文件）"""
+def ks_read(svc, acct):
+    """(security 的退出码, 秘密)：钥匙串里服务名 svc、账户名 acct 的那一条（没有钥匙串的系统读密钥文件）；没有（退出码 44）、
+    读不了（锁着、超时）或不是可见的 ASCII 时是空字符串。cca 存的秘密（第三方 API 的 key、记下备查的 key、邮箱助手的应用专用
+    密码）都经 ks_read、ks_write、ks_del"""
     if keyfile_store():
-        rc, s = keyfile_read(host, kc_svc(aid, ref))
+        rc, s = keyfile_read(acct, svc)
     else:
-        rc, out = security('find-generic-password', '-a', host, '-s', kc_svc(aid, ref), '-w')
+        rc, out = security('find-generic-password', '-a', acct, '-s', svc, '-w')
         s = out.decode('utf-8', 'replace').strip()
     return rc, s if rc == 0 and SECRET_RE.match(s) else ''
+
+
+def ks_write(svc, acct, s):
+    """存进去：钥匙串里同一个账户名的那一条换掉（别的账户名的留着），密钥文件一个服务名只有一份。命令和十六进制的秘密都从
+    stdin 交给 security -i，不出现在任何进程的命令行里；security -i 里的命令失败了它也返回 0，所以存完读回来比对"""
+    if keyfile_store():
+        try:
+            keyfile_write(acct, svc, s)
+        except OSError:
+            return False
+    else:
+        security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (acct, svc, s.encode('ascii').hex())).encode('ascii'))
+    return ks_read(svc, acct)[1] == s
+
+
+def ks_del(svc, acct=None):
+    """删掉这个服务名的秘密（给了 acct 只删这个账户名的）：钥匙串里每次删一条，删到没有为止"""
+    if keyfile_store():
+        if acct is None or keyfile_read(acct, svc)[0] == 0:
+            keyfile_del(svc)
+        return
+    who = ('-a', acct) if acct else ()
+    for _ in range(20):
+        if security('delete-generic-password', *who, '-s', svc)[0] != 0:
+            break
+
+
+def kc_read(aid, host, ref=False):
+    """(security 的退出码, key)：钥匙串里这个账号、这个服务商的 key（见 ks_read）"""
+    return ks_read(kc_svc(aid, ref), host)
 
 
 def kc_get(aid, host, ref=False):
@@ -3218,32 +3253,19 @@ def kc_backfill(aid, host, s, ref=False):
 
 
 def kc_put(aid, host, s, ref=False, extra=None):
-    """先删掉这个账号的旧 key（不管哪个服务商的），再存新的。命令和十六进制的 key 都从 stdin 交给 security -i，
-    key 不出现在任何进程的命令行里；security -i 里的命令失败了它也返回 0，所以存完读回来比对。extra 见 kc_book"""
+    """先删掉这个账号的旧 key（不管哪个服务商的），再存新的（ks_write：经 security -i 的 stdin，存完读回来比对）。extra 见 kc_book"""
     if not host or re.search(r'\s', host):
         return False
     kc_del(aid, ref)
-    if keyfile_store():
-        try:
-            keyfile_write(host, kc_svc(aid, ref), s)
-        except OSError:
-            return False
-    else:
-        security('-i', data=('add-generic-password -U -a %s -s %s -X %s\n' % (host, kc_svc(aid, ref), s.encode('ascii').hex())).encode('ascii'))
-    if kc_get(aid, host, ref) != s:
+    if not ks_write(kc_svc(aid, ref), host, s):
         return False
     kc_book(aid, host, s, ref, extra)
     return True
 
 
 def kc_del(aid, ref=False):
-    """删掉这个账号在钥匙串里的 key（每次删一条，不管哪个服务商的，删到没有为止；密钥文件一个服务名只有一份）"""
-    if keyfile_store():
-        keyfile_del(kc_svc(aid, ref))
-    else:
-        for _ in range(20):
-            if security('delete-generic-password', '-s', kc_svc(aid, ref))[0] != 0:
-                break
+    """删掉这个账号在钥匙串里的 key（不管哪个服务商的，见 ks_del）"""
+    ks_del(kc_svc(aid, ref))
     kc_unbook(aid, ref)
 
 
@@ -3891,6 +3913,1176 @@ def cmd_login_catch(url, timeout='900'):
     finally:
         for s in socks:
             s.close()
+
+
+# --- 邮箱助手（cca mail，只在 macOS 上）：Claude 账号的邮箱转发到一个 Gmail。账号登录时 Anthropic 发来的登录邮件，cca 经 IMAP
+# （imap.gmail.com:993，Gmail 的应用专用密码；只用标准库的 imaplib、ssl）只读地找到它，把里面的登录链接交给这个账号专属的
+# Chrome 打开。分层：路（mail_route：照 macOS 的系统代理，不读环境变量：cca 起的进程里 https_proxy 是账号的出口）→ 隧道
+# （mail_dial）→ TLS（mail_tls：照常校验证书）→ 只读的 IMAP（MailBox：EXAMINE、UID SEARCH、BODY.PEEK，没有通用的命令入口）→
+# 核对（mail_judge：只信 Gmail 自己写的验证结果和 Anthropic 签过名的邮件头）→ 取链接（MailRule.link_ok）→ 盯邮箱（mail_hunt）→
+# 打开（cca _mail-open，链接经 stdin）。各站点的认法只在 MAIL_RULES 里，Tool.mail_rules 指过去。
+# 链接是一次性的登录凭证：不打印、不记日志、不存盘、不进环境变量，只交给这个账号的 Chrome（和 cca 打开的所有网址一样，打开它的
+# open 和 Chrome 的那一下会在命令行上出现不到一秒；Anthropic 的说明：在别的设备上打开登录链接只显示一个验证码）
+MAIL_HOST, MAIL_PORT = 'imap.gmail.com', 993
+MAIL_SVC = 'cca-mail'   # 钥匙串（没有钥匙串的系统是密钥文件）里应用专用密码的服务名；账户名是 Gmail 地址：换了地址取不到旧的
+MAIL_DIR = os.path.join(CCA_HOME, 'mail')   # 700：used.json（打开过的登录邮件，只记摘要）、last.json（上次的结果）、used.lock
+MAIL_RECENT = 1800    # cca mail open：最近半小时里收到的才算
+MAIL_SKEW = 60        # 两边时钟的误差：登录开始前一分钟内收到的也算
+MAIL_FETCH_MAX = 262144   # 一封邮件最多取这么多字节（登录邮件只有几十 KB）
+MAIL_BURST = 50       # 按 UID 取新邮件的头时，一个邮件夹一轮最多取这么多封（最新的）
+MAIL_WATCH_MAX = 900  # 登录时最多盯这么久（秒）
+MAIL_DOMAIN_RE = lazy_re(r'^[a-z0-9-]+(\.[a-z0-9-]+)+$')
+MAIL_ADDR_RE = lazy_re(r'^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$')   # Gmail 地址（小写；也是钥匙串的账户名，交给 security -i）
+MAIL_HDRS = ('FROM', 'TO', 'SUBJECT', 'MESSAGE-ID', 'AUTHENTICATION-RESULTS', 'DKIM-SIGNATURE')   # 先只取这些头来核对
+MAIL_SIGNED = ('from', 'to', 'subject')   # 这几个头必须在 Anthropic 的签名里、各只有一个：签名之外的头谁都能改、能加
+MAIL_Q = '\x22'       # IMAP 里的双引号
+MAIL_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+MAIL_PROXY_HINT = '连 Gmail 的方式可以指定：cca mail setup --proxy socks5://127.0.0.1:7897（direct 是直连）'
+MAIL_ORDER = ('old', 'subject', 'dup', 'from', 'dkim', 'unsigned', 'to', 'nolink')
+MAIL_WHY = {   # 没通过核对的原因（按核对的先后）
+    'old': '是这次登录开始以前收到的',
+    'subject': '标题不像登录邮件',
+    'dup': '发件人、收件人或标题的邮件头有好几个（邮件被加过东西）',
+    'from': '发件人不是 Anthropic',
+    'dkim': 'Gmail 的验证结果里没有 Anthropic 的签名通过（转发时邮件被改过，或者不是 Anthropic 发的）',
+    'unsigned': '发件人、收件人、标题不全在 Anthropic 的签名里，认不出是不是发给这个账号的',
+    'to': '收件人不是这个账号的邮箱',
+    'nolink': '邮件里没找到登录链接（邮件的格式变了？）',
+    'refused': '打开之前再核对一遍链接时没通过',   # cca _mail-open 不肯打开（不是 mail_judge 的结果，不进 MAIL_ORDER）
+}
+
+
+def mail_knob(name, default):
+    """测试用的时间开关（CCA_MAIL_POLL 几秒看一次邮箱、CCA_MAIL_RETRY 连不上 Gmail、浏览器没打开时先等多久）：不是正数时用默认值"""
+    try:
+        v = float(os.environ.get(name) or default)
+    except ValueError:
+        v = default
+    return v if v > 0 else default
+
+
+class MailRule:
+    """一类登录邮件的认法：MAIL_RULES 里一条一项（以后加 Console 的登录链接也是加一条规则；只认链接，邮件里的验证码装不下）"""
+
+    def __init__(self, name, what, domains, subjects, search, hosts, paths):
+        self.name, self.what = name, what
+        self.domains = domains     # 发件人和 DKIM 签名的域名（按标签认后缀：mail.anthropic.com 算，evilanthropic.com 不算）
+        self.subjects = subjects   # 标题（正则，不分大小写）
+        self.search = search       # 在 Gmail 上粗筛的 IMAP 搜索条件（只为少取几封，本地照样逐项核对）
+        self.hosts, self.paths = hosts, paths   # 链接的主机（原样相等）和路径（原样相等；/ 结尾的按前缀）
+
+    def domain_ok(self, d):
+        d = (d or '').lower()
+        return any(d == x or d.endswith('.' + x) for x in self.domains)
+
+    def subject_ok(self, s):
+        return any(re.search(p, s or '', re.I) for p in self.subjects)
+
+    def link_ok(self, url):
+        """是不是这一类的登录链接：https、主机原样相等（挡住 claude.ai.evil.com、claude.ai@evil.com、带端口、大写这些写法）、
+        路径在名单里；只有可见的 ASCII，没有引号、尖括号、反斜杠，不超过 2048 个字符"""
+        from urllib.parse import urlsplit
+        if (not isinstance(url, str) or len(url) > 2048 or not re.match(r'^[\x21-\x7e]+$', url)
+                or re.search(r'[\x22\x27<>\\]', url)):
+            return False
+        try:
+            u = urlsplit(url)
+        except ValueError:
+            return False
+        return (u.scheme == 'https' and u.netloc in self.hosts
+                and any(u.path == p or (p.endswith('/') and u.path.startswith(p)) for p in self.paths))
+
+
+MAIL_RULES = {
+    # claude.ai 用邮箱登录时发的登录邮件。真邮件（2026-11-16 核对）标题是 Your secure link to Claude is here，发件人
+    # no-reply-<随机>@mail.anthropic.com，Gmail 验 dkim=pass mail.anthropic.com。帮助中心写的是 Secure link to log in to
+    # Claude.ai、也有人收到过 Your secure link to Claude.ai is here，一并认。标题里 claude 后面那个词是应用名（attacker 能把 OAuth
+    # 应用取名叫别的，比如见过 Your secure link to Verification Portal is here）：所以只认应用名是 Claude / Claude.ai 的，别的不开
+    'claude-login': MailRule('claude-login', 'claude.ai 的登录链接', ('anthropic.com',),
+                             (r'\bsecure link to (log in to )?claude(\.ai)?(?![\w.-])',),
+                             ('OR', 'FROM', MAIL_Q + 'anthropic.com' + MAIL_Q, 'SUBJECT', MAIL_Q + 'secure link' + MAIL_Q),
+                             ('claude.ai',), ('/magic-link',)),
+}
+
+
+class MailError(Exception):
+    """连 Gmail 出的错：code 是 net、proxy、tls、auth、imap、login、proto 之一，text 给人看"""
+
+    def __init__(self, code, text):
+        Exception.__init__(self, text)
+        self.code, self.text = code, text
+
+
+class MailRetry(MailError):
+    """过一会儿可能就好了（网络、代理、Gmail 那边断开）：整个会话丢掉，等一会儿重连"""
+
+
+class MailFatal(MailError):
+    """不会自己好：密码不对、没开 IMAP、证书校验不过、连接方式写错了"""
+
+
+def mail_clean(s):
+    """别人写的文字（邮件头、Gmail 的回话）打到终端以前：控制字符（C0、DEL、C1）和看不见的、改变显示顺序的格式字符换成空格，
+    免得里面的转义序列擦掉、改写前面的输出"""
+    return re.sub(r'[\x00-\x1f\x7f-\x9f​-‏‪-‮⁠-⁩﻿]', ' ', str(s))
+
+
+def mail_oserr(e):
+    """出错的原因（给人看的一小段：一行、不带控制字符，imaplib 的 b'…' 去掉）"""
+    s = str(getattr(e, 'strerror', None) or e or type(e).__name__)
+    s = re.sub(r'^b[\x22\x27](.*)[\x22\x27]$', r'\1', s)
+    return ' '.join(mail_clean(s).split())[:160] or type(e).__name__
+
+
+# 路：照 macOS 的系统代理（和系统设置里网络的代理一样），不读环境变量
+def mail_proxy_parse(text):
+    """scutil --proxy 的输出 → (顶层的键值, 例外列表)：只认两格缩进的顶层「键 : 值」（__SCOPED__ 里按网卡分的不管）"""
+    kv, exc, inexc = {}, [], False
+    for line in text.splitlines():
+        if inexc:
+            m = re.match(r'^    \d+ : (.+)$', line)
+            if m:
+                exc.append(m.group(1).strip())
+                continue
+            inexc = False
+        m = re.match(r'^  (\w+) : (.*)$', line)
+        if m:
+            if m.group(1) == 'ExceptionsList':
+                inexc = True
+            else:
+                kv[m.group(1)] = m.group(2).strip()
+    return kv, exc
+
+
+def mail_sysproxy():
+    import subprocess
+    try:
+        out = subprocess.run(['scutil', '--proxy'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}, []
+    return mail_proxy_parse(out.decode('utf-8', 'replace'))
+
+
+def mail_bypass(host, pats):
+    """系统代理的例外里有没有这个主机（*.gmail.com、.gmail.com、imap.gmail.com 这些写法）"""
+    import fnmatch
+    for p in pats:
+        p = p.strip().lower()
+        if p and (fnmatch.fnmatchcase(host, p) or (p.startswith('.') and host.endswith(p))):
+            return True
+    return False
+
+
+def mail_route_note(r):
+    return '直连' if r[0] == 'direct' else '经代理 %s:%d，%s' % (r[1], r[2], 'SOCKS5' if r[0] == 'socks5' else 'HTTP CONNECT')
+
+
+def mail_route_exit(r, c):
+    """这条路是不是账号的出口：这一次的 CCA_PROXY，或者端口池里的端口（本机、路由器上的）"""
+    from urllib.parse import urlsplit
+    host, port = r[1].lower(), r[2]
+    try:
+        u = urlsplit(os.environ.get('CCA_PROXY') or '')
+        if u.hostname and (u.hostname.lower(), u.port) == (host, port):
+            return True
+    except ValueError:
+        pass
+    ports = {p for tool in TOOLS for p in (tool.state(c).get('ports') or {}).values() if isinstance(p, int)}
+    near = {'127.0.0.1', 'localhost', '::1', str(c.get('proxy_host') or '').lower(), str((c.get('router') or {}).get('host') or '').lower()}
+    return port in ports and host in near
+
+
+def mail_route(spec, c, sysp=None):
+    """连 Gmail 走哪条路：('direct', '', 0)、('socks5', 主机, 端口) 或 ('http', 主机, 端口)。spec 是 config.json 的 mail.proxy：
+    system（默认：照系统代理，SOCKS 优先，再是 HTTPS、HTTP 代理的 CONNECT；没开代理、只有 PAC、例外里有 Gmail 时直连）、direct、
+    socks5://主机:端口、http://主机:端口。走不通就报错，不换别的路。指到账号出口的不用：Gmail 和 Claude 账号不能从同一个出口出去"""
+    if spec in (None, '', 'system'):
+        kv, exc = sysp if sysp is not None else mail_sysproxy()
+        r = ('direct', '', 0)
+        if not mail_bypass(MAIL_HOST, exc):
+            for kind, k in (('socks5', 'SOCKS'), ('http', 'HTTPS'), ('http', 'HTTP')):
+                h, p = kv.get(k + 'Proxy', ''), kv.get(k + 'Port', '')
+                if kv.get(k + 'Enable') == '1' and h and p.isdigit() and 0 < int(p) < 65536:
+                    r = (kind, h, int(p))
+                    break
+    elif spec == 'direct':
+        r = ('direct', '', 0)
+    else:
+        m = re.match(r'^(socks5h?|http)://(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):(\d{1,5})/?$', spec)
+        if not m or not 0 < int(m.group(3)) < 65536:
+            raise MailFatal('proxy', '连 Gmail 的方式 %s 认不出：要写 system、direct、socks5://主机:端口 或 http://主机:端口' % spec)
+        r = ('socks5' if m.group(1).startswith('socks') else 'http', m.group(2).strip('[]'), int(m.group(3)))
+    if r[0] != 'direct' and mail_route_exit(r, c):
+        raise MailFatal('proxy', '代理 %s:%d 是账号的出口，Gmail 不能经它连。%s' % (r[1], r[2], MAIL_PROXY_HINT))
+    return r
+
+
+# 隧道、TLS
+def mail_recv(s, n):
+    buf = b''
+    while len(buf) < n:
+        b = s.recv(n - len(buf))
+        if not b:
+            raise MailRetry('proxy', '代理断开了连接')
+        buf += b
+    return buf
+
+
+def mail_socks5(s):
+    """SOCKS5（不带认证），目标写域名：交给代理解析"""
+    host = MAIL_HOST.encode('ascii')
+    s.sendall(b'\x05\x01\x00')
+    if mail_recv(s, 2) != b'\x05\x00':
+        raise MailRetry('proxy', 'SOCKS5 代理要认证，或者不认这个请求（cca 只用不带认证的 SOCKS5）')
+    s.sendall(b'\x05\x01\x00\x03' + bytes([len(host)]) + host + MAIL_PORT.to_bytes(2, 'big'))
+    head = mail_recv(s, 4)
+    if head[1] != 0:
+        raise MailRetry('proxy', 'SOCKS5 代理没能连上 %s:%d（错误码 %d）' % (MAIL_HOST, MAIL_PORT, head[1]))
+    n = {1: 4, 4: 16}.get(head[3])
+    if n is None:
+        if head[3] != 3:
+            raise MailRetry('proxy', 'SOCKS5 代理的回应认不出')
+        n = mail_recv(s, 1)[0]
+    mail_recv(s, n + 2)
+
+
+def mail_connect(s):
+    """HTTP 代理的 CONNECT：一个字节一个字节地读回应（后面就是 TLS，不能多读）"""
+    target = '%s:%d' % (MAIL_HOST, MAIL_PORT)
+    s.sendall(('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target)).encode('ascii'))
+    buf = b''
+    while not buf.endswith(b'\r\n\r\n'):
+        if len(buf) > 8192:
+            raise MailRetry('proxy', 'HTTP 代理的回应太长')
+        buf += mail_recv(s, 1)
+    line = buf.split(b'\r\n', 1)[0].decode('latin-1')
+    if not re.match(r'^HTTP/1\.[01] 200\b', line):
+        raise MailRetry('proxy', 'HTTP 代理不肯连 %s（%s）' % (target, re.sub(r'[^\x20-\x7e]', '?', line)[:80]))
+
+
+def mail_dial(r, timeout=15):
+    """连上 imap.gmail.com:993（还没有 TLS）：直连，或者经代理"""
+    import socket
+    where = '%s:%d' % (MAIL_HOST, MAIL_PORT) if r[0] == 'direct' else '代理 %s:%d' % (r[1], r[2])
+    try:
+        s = socket.create_connection((MAIL_HOST, MAIL_PORT) if r[0] == 'direct' else (r[1], r[2]), timeout)
+    except OSError as e:
+        raise MailRetry('net', '连不上 %s（%s）' % (where, mail_oserr(e)))
+    try:
+        s.settimeout(timeout)
+        if r[0] == 'socks5':
+            mail_socks5(s)
+        elif r[0] == 'http':
+            mail_connect(s)
+    except OSError as e:
+        s.close()
+        raise MailRetry('proxy', '%s 没有接通 Gmail（%s）' % (where, mail_oserr(e)))
+    except MailError:
+        s.close()
+        raise
+    return s
+
+
+def mail_tls(s, timeout=20):
+    """在连好的套接字上做 TLS，照常校验 imap.gmail.com 的证书（不用 IMAP4_SSL：不传 context 时它不校验），绝不跳过校验。
+    CCA_MAIL_CAFILE（只给测试）：另外信任这个 CA，只在 HOME 换过（测试的沙箱）、套接字连的是本机（测试的代理）时才算"""
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    except (AttributeError, ValueError):
+        ctx.options |= getattr(ssl, 'OP_NO_TLSv1', 0) | getattr(ssl, 'OP_NO_TLSv1_1', 0)
+    if not ctx.cert_store_stats().get('x509_ca') and os.path.isfile('/etc/ssl/cert.pem'):
+        ctx.load_verify_locations('/etc/ssl/cert.pem')   # python.org 的 Python 没装根证书时用系统的
+    ca = os.environ.get('CCA_MAIL_CAFILE')
+    if ca and home_swapped():
+        try:
+            if s.getpeername()[0] in ('127.0.0.1', '::1'):
+                ctx.load_verify_locations(ca)
+        except OSError:
+            pass
+    try:
+        t = ctx.wrap_socket(s, server_hostname=MAIL_HOST)
+    except ssl.SSLCertVerificationError as e:
+        s.close()
+        raise MailFatal('tls', 'Gmail 的证书校验没通过（%s）：网络里有东西在拦截 TLS，或者这个 Python 缺根证书。cca 不会跳过校验'
+                        % mail_oserr(getattr(e, 'verify_message', None) or e))
+    except (OSError, ValueError) as e:
+        s.close()
+        raise MailRetry('net', '和 Gmail 的 TLS 握手没成（%s）' % mail_oserr(e))
+    t.settimeout(timeout)
+    return t
+
+
+# IMAP：只读
+MAIL_LIST_RE = lazy_re(r'^\(([^)]*)\) (?:\x22(?:[^\x22\\]|\\.)*\x22|NIL) (\x22(?:[^\x22\\]|\\.)*\x22|[^\s\x22()]+)$')
+
+
+def mail_imap(sock):
+    """imaplib 的会话，用连好、做好 TLS 的套接字（3.8 到 3.14 的 IMAP4 都经 _create_socket 拿套接字，再按各自的版本包装）"""
+    import imaplib
+
+    class Imap(imaplib.IMAP4):
+        def _create_socket(self, timeout=None):
+            return sock
+    return Imap(MAIL_HOST, MAIL_PORT)
+
+
+def mail_epoch(s):
+    """INTERNALDATE（15-Nov-2026 10:00:00 +0800：Gmail 收到这封邮件的时间，发件人写不了）→ 时间戳；认不出是 None"""
+    import calendar
+    m = re.match(r'^\s*(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d\d):(\d\d):(\d\d) ([+-])(\d\d)(\d\d)$', s)
+    if not m or m.group(2).title() not in MAIL_MONTHS:
+        return None
+    t = calendar.timegm((int(m.group(3)), MAIL_MONTHS.index(m.group(2).title()) + 1, int(m.group(1)),
+                         int(m.group(4)), int(m.group(5)), int(m.group(6))))
+    off = (int(m.group(8)) * 60 + int(m.group(9))) * 60
+    return t - off if m.group(7) == '+' else t + off
+
+
+def mail_since(t):
+    """IMAP 的 SINCE（只到天、不看时区）：往前多算一天，本地再按 INTERNALDATE 细比"""
+    g = time.gmtime(t - 86400)
+    return '%02d-%s-%d' % (g.tm_mday, MAIL_MONTHS[g.tm_mon - 1], g.tm_year)
+
+
+def mail_crit(rules, since):
+    """Gmail 上粗筛的搜索条件：SINCE 加上各条规则的条件（好几条时 OR 起来）"""
+    terms = [list(r.search) for r in rules]
+    while len(terms) > 1:
+        a, b = terms.pop(0), terms.pop(0)
+        terms.insert(0, ['OR', '(%s)' % ' '.join(a), '(%s)' % ' '.join(b)])
+    return ['SINCE', mail_since(since)] + (terms[0] if terms else [])
+
+
+def mail_fetch_parse(data):
+    """UID FETCH 的回应 → {uid: (INTERNALDATE 的时间戳, literal 的字节)}：各项的先后不定，UID 也可能写在 literal 后面"""
+    recs, out = [], {}
+    for item in data or []:
+        if isinstance(item, tuple) and len(item) == 2:
+            recs.append([item[0].decode('latin-1', 'replace'), item[1]])
+        elif recs and isinstance(item, bytes) and not re.match(rb'^\d+ \(', item):
+            recs[-1][0] += ' ' + item.decode('latin-1', 'replace')
+    for meta, lit in recs:
+        u = re.search(r'\bUID (\d+)', meta)
+        d = re.search(r'\bINTERNALDATE \x22([^\x22]+)\x22', meta)
+        t = mail_epoch(d.group(1)) if d else None
+        if u and t is not None and isinstance(lit, bytes):
+            out[int(u.group(1))] = (t, lit)
+    return out
+
+
+class MailBox:
+    """登录好的 Gmail 会话，只读：只用 LOGIN、CAPABILITY、LIST、EXAMINE、UID SEARCH、UID FETCH 的 BODY.PEEK（不标已读）、LOGOUT。
+    不 SELECT、不 STORE、不删不移，也没有通用的命令入口。出错时整个会话丢掉（超时以后 imaplib 读不回来），下次重连"""
+
+    def __init__(self, user, pw, route, timeout=20):
+        self.user, self.pw, self.route, self.timeout = user, pw, route, timeout
+        self.im = None
+
+    def open(self):
+        import imaplib
+        s = mail_tls(mail_dial(self.route), self.timeout)
+        try:
+            self.im = mail_imap(s)
+        except (OSError, imaplib.IMAP4.error) as e:
+            s.close()
+            raise MailRetry('net', 'Gmail 没有正常应答（%s）' % mail_oserr(e))
+        try:
+            self.im.login(self.user, self.pw)
+        except (imaplib.IMAP4.abort, OSError) as e:   # abort 是 error 的子类：先认
+            self.close()
+            raise MailRetry('net', '和 Gmail 的连接断了（%s）' % mail_oserr(e))
+        except imaplib.IMAP4.error as e:   # NO：按 Gmail 的原话分，认不出的当作过一会儿再试（临时出错、同时连得太多……）
+            self.close()
+            why = mail_oserr(e)
+            if re.search(r'not enabled for IMAP|IMAP (access )?is disabled', why, re.I):
+                raise MailFatal('imap', '这个 Gmail 没开 IMAP：Gmail 的设置 → 转发和 POP/IMAP → 启用 IMAP（公司的邮箱要管理员允许）')
+            if re.search(r'AUTHENTICATIONFAILED|Invalid credentials|Application-specific password required', why, re.I):
+                raise MailFatal('auth', 'Gmail 不认这个密码：要用应用专用密码（16 个字母），不是 Gmail 的登录密码；没开两步验证的账号建不了应用专用密码')
+            raise MailRetry('login', 'Gmail 这次没让登录（%s）' % why)
+
+    def cmd(self, fn, *args):
+        import imaplib
+        if self.im is None:
+            raise MailRetry('net', '和 Gmail 的连接断了')
+        try:
+            typ, data = fn(*args)
+        except (imaplib.IMAP4.abort, OSError) as e:   # abort 是 error 的子类：先认
+            self.close()
+            raise MailRetry('net', '和 Gmail 的连接断了（%s）' % mail_oserr(e))
+        except imaplib.IMAP4.error as e:   # BAD：Gmail 不认这个请求
+            self.close()
+            raise MailRetry('proto', 'Gmail 不认 cca 的请求（%s）' % mail_oserr(e))
+        if typ != 'OK':
+            self.close()
+            raise MailRetry('proto', 'Gmail 不认 cca 的请求（%s）' % mail_oserr(data[-1] if data else typ))
+        return data
+
+    def folders(self):
+        """要看的邮件夹 [(给人看的名字, IMAP 里的名字)]：所有邮件和垃圾邮件，按 Gmail 的特殊用途标记（\\All、\\Junk）认，不认名字
+        （名字会本地化）；没有 \\All（Gmail 的设置里没让它在 IMAP 里显示）时看收件箱"""
+        rows = []
+        for item in self.cmd(self.im.list):
+            m = MAIL_LIST_RE.match(item.decode('latin-1', 'replace')) if isinstance(item, bytes) else None
+            if m:
+                rows.append((m.group(1).lower().split(), m.group(2)))
+        allm = next((n for a, n in rows if '\\all' in a), None)
+        junk = next((n for a, n in rows if '\\junk' in a), None)
+        return [('所有邮件', allm) if allm else ('收件箱', 'INBOX')] + ([('垃圾邮件', junk)] if junk else [])
+
+    def examine(self, folder):
+        """只读地打开一个邮件夹（EXAMINE），返回 (UIDVALIDITY, UIDNEXT)：没给的是 None"""
+        self.cmd(self.im.select, folder, True)
+        vals = []
+        for code in ('UIDVALIDITY', 'UIDNEXT'):
+            d = self.im.response(code)[1]
+            v = d[-1] if d else None
+            vals.append(int(v) if isinstance(v, bytes) and v.isdigit() else None)
+        return tuple(vals)
+
+    def search(self, crit):
+        data = self.cmd(self.im.uid, 'SEARCH', *crit)
+        return [int(x) for x in b' '.join(d for d in data if isinstance(d, bytes)).split() if x.isdigit()]
+
+    def headers(self, uids):
+        """{uid: (Gmail 收到的时间, 头的字节)}；uids 是 UID 的列表，或者 (起, 止) 的区间（含两头）"""
+        if isinstance(uids, tuple):
+            spec = '%d:%d' % uids
+        elif uids:
+            spec = ','.join(str(u) for u in uids)
+        else:
+            return {}
+        return mail_fetch_parse(self.cmd(self.im.uid, 'FETCH', spec,
+                                         '(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (%s)])' % ' '.join(MAIL_HDRS)))
+
+    def message(self, uid):
+        got = mail_fetch_parse(self.cmd(self.im.uid, 'FETCH', str(uid), '(UID INTERNALDATE BODY.PEEK[]<0.%d>)' % MAIL_FETCH_MAX)).get(uid)
+        if not got:
+            raise MailRetry('proto', 'Gmail 没给出这封邮件')
+        return got[1]
+
+    def close(self, polite=False):
+        import imaplib
+        im, self.im = self.im, None
+        if im is None:
+            return
+        try:
+            if polite:
+                im.logout()
+            else:
+                im.shutdown()
+        except (OSError, imaplib.IMAP4.error):
+            pass
+
+
+class MailSource:
+    """盯邮箱时的新邮件来源（mail_hunt 只用 poll 和 full）：每一轮各邮件夹 EXAMINE 一次。断了下一轮重连，看过的不再给"""
+
+    def __init__(self, user, pw, route, rules):
+        self.box = MailBox(user, pw, route)
+        self.rules = rules
+        self.where = None   # [(给人看的名字, IMAP 里的名字)]
+        self.next = {}      # IMAP 里的名字 → (UIDVALIDITY, 下一轮从这个 UID 看起)
+        self.seen = set()   # (IMAP 里的名字, UIDVALIDITY, UID)
+
+    def poll(self, since):
+        """这一轮的新邮件 [{folder, label, uid, got, hdr, seen}]（只有头）。第一次（UIDVALIDITY 变了也是）按日期和规则搜索，
+        再加上最新的 MAIL_BURST 封；之后只按 UID 取 UIDNEXT 往后的、在本地筛，不经 Gmail 的搜索（刚到的邮件它可能还没编进索引）。
+        整轮都成了才记下看过了（中途断了的下一轮从头再看，免得漏掉）"""
+        if self.box.im is None:
+            self.box.open()
+            self.where = self.where or self.box.folders()
+        out, nxt = [], {}
+        for label, name in self.where:
+            valid, unext = self.box.examine(name)
+            last = self.next.get(name)
+            got = {}
+            if last and valid is not None and last[0] == valid and unext is not None:
+                if unext > last[1]:
+                    got = self.box.headers((max(last[1], unext - MAIL_BURST), unext - 1))
+            else:
+                got = self.box.headers(self.box.search(mail_crit(self.rules, since)))
+                if unext is not None and unext > 1:
+                    got.update(self.box.headers((max(1, unext - MAIL_BURST), unext - 1)))
+            for u, (t, hdr) in sorted(got.items()):
+                if (name, valid, u) not in self.seen:
+                    out.append({'folder': name, 'label': label, 'uid': u, 'got': t, 'hdr': hdr, 'seen': (name, valid, u)})
+            if valid is not None and unext is not None:
+                nxt[name] = (valid, max(unext, last[1]) if last and last[0] == valid else unext)
+        self.next.update(nxt)
+        self.seen.update(c['seen'] for c in out)
+        return out
+
+    def full(self, cand):
+        if self.box.im is None:
+            self.box.open()
+        self.box.examine(cand['folder'])
+        return self.box.message(cand['uid'])
+
+    def close(self):
+        self.box.close(True)
+
+
+# 核对：只看 Gmail 写的验证结果和 Anthropic 签过名的头
+def mail_parse(raw):
+    from email import message_from_bytes
+    return message_from_bytes(raw or b'')
+
+
+def mail_text(v):
+    """邮件头的值（可能是 =?utf-8?…?= 编码的）→ 文字，一行、不带控制字符（mail_clean）"""
+    from email.header import decode_header, make_header
+    try:
+        s = str(make_header(decode_header(str(v or ''))))
+    except Exception:   # 头是别人写的：解不开就用原样的
+        s = str(v or '')
+    return ' '.join(mail_clean(s).split())
+
+
+def mail_addrs(msg, name):
+    from email.utils import getaddresses
+    return [a.lower() for _, a in getaddresses([str(x) for x in (msg.get_all(name) or [])]) if '@' in a]
+
+
+def mail_tags(v):
+    """DKIM-Signature 的 tag=value（值去掉空白）"""
+    out = {}
+    for part in str(v or '').split(';'):
+        k, _, val = part.partition('=')
+        k = k.strip().lower()
+        if k:
+            out.setdefault(k, re.sub(r'\s+', '', val))
+    return out
+
+
+def mail_ar_items(v):
+    """Authentication-Results 的值按 RFC 8601 切开：(authserv-id, [[(名字, 值), …], …])，每项结果的第一对是 method=result，
+    后面是 ptype.property=value（名字小写）。注释（可以嵌套、带反斜杠转义）去掉；引号里的整段算值的一部分，里面的分号、等号、
+    括号都不算（smtp.mailfrom 的本地部分是发件人写的，Gmail 照抄）。写法不对（引号、括号不配对，名字=值对不上）是 None：整条不信"""
+    segs, cur, tok, depth, i = [], [], '', 0, 0
+    while i < len(v):
+        ch = v[i]
+        if depth:   # 注释里
+            if ch == '\\':
+                i += 1
+            depth += {'(': 1, ')': -1}.get(ch, 0)
+        elif ch == '\x22':
+            j = i + 1
+            while j < len(v) and v[j] != '\x22':
+                j += 2 if v[j] == '\\' else 1
+            if j >= len(v):
+                return None
+            tok += v[i:j + 1]
+            i = j
+        elif ch == '(' or ch in ';=' or ch.isspace():
+            if tok:
+                cur.append(tok)
+                tok = ''
+            if ch == '(':
+                depth = 1
+            elif ch == '=':
+                cur.append('=')
+            elif ch == ';':
+                segs.append(cur)
+                cur = []
+        else:
+            tok += ch
+        i += 1
+    if depth:
+        return None
+    if tok:
+        cur.append(tok)
+    segs.append(cur)
+    if not segs[0] or '=' in segs[0]:
+        return None
+    out = []
+    for seg in segs[1:]:
+        if not seg or seg == ['none']:
+            continue
+        if len(seg) % 3 or any(seg[k + 1] != '=' or '=' in (seg[k], seg[k + 2]) for k in range(0, len(seg), 3)):
+            return None
+        out.append([(seg[k].lower(), seg[k + 2]) for k in range(0, len(seg), 3)])
+    return segs[0][0].lower(), out
+
+
+def mail_ar(msg):
+    """最上面那一条 Authentication-Results 里的 DKIM 结果 [(结果, 域名, header.b)]（Gmail 收信时把它加在最上面，邮件里原有的、
+    发件人写的都在它下面）：它不是 mx.google.com 写的、写法不对时是 None。域名取 header.d，没有时取 header.i 的 @ 后面；
+    名字重复、域名或 header.b 的样子不对（header.b 至少 8 个 base64 字符）的那一项记成 ?，不算通过"""
+    ars = msg.get_all('Authentication-Results') or []
+    items = mail_ar_items(' '.join(str(ars[0]).split())) if ars else None
+    if not items or items[0] != 'mx.google.com':
+        return None
+    out = []
+    for pairs in items[1]:
+        if pairs[0][0] != 'dkim':
+            continue
+        p = dict(pairs[1:])
+        i = re.match(r'^[A-Za-z0-9._+-]*@(.+)$', p.get('header.i', ''))
+        d = (p.get('header.d') or (i.group(1) if i else '')).lower()
+        b = p.get('header.b', '')
+        ok = len(p) == len(pairs) - 1 and MAIL_DOMAIN_RE.match(d) and re.match(r'^[A-Za-z0-9+/]{8,}$', b)
+        out.append((pairs[0][1].lower(), d, b) if ok else ('?', '', ''))
+    return out
+
+
+def mail_signed(msg, rule):
+    """Gmail 验过的、rule 的域名签的那个 DKIM 签名覆盖了哪些头（小写的集合）；没有是 None。按 header.b（签名的开头几个字符）
+    认是哪个签名；对上好几个时分不清，不认"""
+    for res, dom, b in mail_ar(msg) or []:
+        if res != 'pass' or not rule.domain_ok(dom):
+            continue
+        sigs = [tg for tg in (mail_tags(v) for v in msg.get_all('DKIM-Signature') or [])
+                if rule.domain_ok(tg.get('d')) and (dom == tg.get('d', '').lower() or dom.endswith('.' + tg.get('d', '').lower()))
+                and tg.get('b', '').startswith(b)]
+        if len(sigs) == 1:
+            return {h.strip().lower() for h in sigs[0].get('h', '').split(':') if h.strip()}
+    return None
+
+
+def mail_judge(rule, msg, got, acct, since):
+    """这封邮件是不是 acct（小写的邮箱）这一次登录的登录邮件：是返回 None，不是返回原因（MAIL_WHY 的键）。got 是 Gmail 收到它的时间"""
+    if got < since - MAIL_SKEW:
+        return 'old'
+    if not rule.subject_ok(mail_text(msg.get('Subject'))):
+        return 'subject'
+    if any(len(msg.get_all(h) or []) > 1 for h in MAIL_SIGNED):
+        return 'dup'
+    frm = mail_addrs(msg, 'From')
+    if len(frm) != 1 or not rule.domain_ok(frm[0].rpartition('@')[2]):
+        return 'from'
+    signed = mail_signed(msg, rule)
+    if signed is None:
+        return 'dkim'
+    if not set(MAIL_SIGNED) <= signed:
+        return 'unsigned'
+    if not acct or acct not in mail_addrs(msg, 'To'):
+        return 'to'
+    return None
+
+
+def mail_judge_any(rules, msg, got, acct, since):
+    """(过了的那条规则, None)；都没过时 (核对得最远的那条, 原因)"""
+    best = (rules[0] if rules else None, 'subject')
+    for r in rules:
+        why = mail_judge(r, msg, got, acct, since)
+        if why is None:
+            return r, None
+        if MAIL_ORDER.index(why) > MAIL_ORDER.index(best[1]):
+            best = (r, why)
+    return best
+
+
+def mail_links(msg):
+    """正文里的链接（HTML 的 <a href>、纯文本里的网址），按出现的先后；附件里的不算"""
+    from html.parser import HTMLParser
+    links = []
+
+    class Anchors(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == 'a':
+                links.extend(v for k, v in attrs if k == 'href' and v)
+
+    for part in msg.walk():
+        if part.is_multipart() or part.get_content_disposition() == 'attachment':
+            continue
+        ct = part.get_content_type()
+        if ct not in ('text/html', 'text/plain'):
+            continue
+        raw = part.get_payload(decode=True) or b''
+        try:
+            text = raw.decode(part.get_content_charset() or 'utf-8', 'replace')
+        except LookupError:
+            text = raw.decode('utf-8', 'replace')
+        try:
+            if ct == 'text/html':
+                p = Anchors()
+                p.feed(text)
+                p.close()
+            else:
+                links.extend(re.findall(r'https://[^\s<>\x22\x27\\]+', text))
+        except Exception:   # 正文是别人写的：解析不了就当没有链接
+            pass
+    return [l.strip() for l in links]
+
+
+def mail_extract(rule, msg):
+    return next((u for u in mail_links(msg) if rule.link_ok(u)), None)
+
+
+def mail_shape(url):
+    """链接的样子（给 cca mail test 看）：协议、主机和路径，后面的部分只说有多长，不打出来"""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return '（认不出的链接，%d 个字符）' % len(url)
+    rest = '、'.join('%s 后面 %d 个字符' % (k, len(v)) for k, v in (('?', u.query), ('#', u.fragment)) if v)
+    return '%s://%s%s%s' % (u.scheme, u.netloc, u.path, '（%s，不显示）' % rest if rest else '')
+
+
+# 打开过的登录邮件：MAIL_DIR/used.json（{摘要: {at, st: claim | done, pid}}，只记摘要，两天前的顺手清掉），先认领再打开：
+# 两个 cca 同时盯着同一个账号（两个终端都在登录它、cca mail open 和登录时的同时）只打开一次
+def mail_digest(msg, cand):
+    mid = ' '.join(str(msg.get('Message-ID') or '').split()) or '%s|%s' % (cand['folder'], cand['uid'])
+    return hashlib.sha256(('%s\n%d' % (mid, int(cand['got']))).encode('utf-8', 'replace')).hexdigest()[:16]
+
+
+def mail_used(fn):
+    os.makedirs(MAIL_DIR, mode=0o700, exist_ok=True)
+    with open(os.path.join(MAIL_DIR, 'used.lock'), 'a') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        p = os.path.join(MAIL_DIR, 'used.json')
+        d = load_quiet(p)
+        now = time.time()
+        d = {k: v for k, v in (d if isinstance(d, dict) else {}).items()
+             if isinstance(v, dict) and isinstance(v.get('at'), (int, float)) and now - v['at'] < 2 * 86400}
+        before = json.dumps(d, sort_keys=True)
+        r = fn(d, now)
+        if json.dumps(d, sort_keys=True) != before:
+            save_json(p, d, 0o600)
+        return r
+
+
+def mail_claim(dg, again=False):
+    """认领这封邮件：返回 False 是不该再打开（打开过、别的 cca 正在打开它），否则是原来的状态（没打开时照它还原）"""
+    def f(d, now):
+        v = d.get(dg) or {}
+        st = v.get('st')
+        if st == 'done' and not again:
+            return False
+        if st == 'claim' and now - v['at'] < 120 and v.get('pid') != os.getpid() and mail_pid_alive(v.get('pid')):
+            return False
+        d[dg] = {'at': now, 'st': 'claim', 'pid': os.getpid()}
+        return st if st == 'done' else None
+    return mail_used(f)
+
+
+def mail_mark(dg, st):
+    def f(d, now):
+        if st:
+            d[dg] = {'at': now, 'st': st}
+        else:
+            d.pop(dg, None)
+    mail_used(f)
+
+
+def mail_pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+# 盯邮箱
+def mail_nap(secs, end, alive, now, sleep):
+    """睡 secs 秒（到 end 为止），每半秒看一次 alive()"""
+    until = min(now() + secs, end)
+    while now() < until and alive():
+        sleep(max(0.01, min(0.5, until - now())))
+
+
+def mail_verdict(rule, raw, got, acct, since):
+    """取来的全文照样再核对一遍、取出链接：(没通过的原因或 None, 链接或 None, 解析好的邮件)"""
+    msg = mail_parse(raw)
+    why = mail_judge(rule, msg, got, acct, since)
+    return why, None if why else mail_extract(rule, msg), msg
+
+
+def mail_take(src, p, acct, since, deliver, again):
+    """认领、取全文、照全文再核对一遍、取出链接、打开：返回 ok、used（打开过了）、fail（浏览器没打开，链接还没用掉）、refused，
+    或者没通过核对的原因。只有打开了才记下（别的照原来的状态还原：下次照样核对、照实说原因）；Gmail 那边出错时往外抛（下一轮再来）"""
+    prev = mail_claim(p['dg'], again)
+    if prev is False:
+        return 'used'
+    st = 'fail'
+    try:
+        why, link, _ = mail_verdict(p['rule'], src.full(p), p['got'], acct, since)
+        st = why or ('nolink' if not link else deliver(link))
+        return st
+    finally:
+        mail_mark(p['dg'], 'done' if st == 'ok' else prev)
+
+
+def mail_hunt(src, rules, acct, since, end, deliver, once=False, again=False, alive=None, say=None, hello=None, idle=None,
+              now=time.time, sleep=time.sleep):
+    """找 acct 的登录邮件，找到就交给 deliver(链接)（返回 ok、refused、fail）。once：手动（cca mail open），打开了、浏览器打不开就停，
+    第一次就连不上马上停；否则一直盯到 end、alive() 为假（登录结束了）。来了好几封只开最新的一封（之前的多半已经失效）；浏览器
+    没打开的过一会儿（CCA_MAIL_RETRY，默认 2 秒）再试，一共三次（到了 end 也试完）；这一轮从取头到打开都成了才算连上了（取不到全文的
+    那封照连不上退避）。hello：第一次连上时调；idle：第一轮看完还没有能打开的时调（cca mail open
+    说要等）。返回 {code: opened | none | fail | 最后连不上时 MailError 的 code, text, opened, used, rejected: {原因: 封数}}"""
+    alive = alive or (lambda: True)
+    say = say or (lambda s: None)
+    poll, base = mail_knob('CCA_MAIL_POLL', 3), mail_knob('CCA_MAIL_RETRY', 2)
+    res = {'code': 'none', 'text': '', 'opened': 0, 'used': 0, 'rejected': {}}
+    wait, fails, pend, polled = base, 0, None, False
+
+    def reject(why):
+        res['rejected'][why] = res['rejected'].get(why, 0) + 1
+        if not once and why not in ('old', 'subject', 'to'):   # 别的账号的登录邮件（同时在登录几个账号）不说
+            say('! 邮箱助手：收到一封像是登录邮件的邮件，没通过核对（%s），没有打开：要用的话自己点里面的链接' % MAIL_WHY[why])
+
+    while alive():
+        try:
+            new = src.poll(since)
+            polled = True
+            if hello:
+                hello()
+                hello = None
+            for c in new:
+                msg = mail_parse(c['hdr'])
+                rule, why = mail_judge_any(rules, msg, c['got'], acct, since)
+                if why:
+                    reject(why)
+                elif pend is None or (c['got'], c['uid']) > (pend['got'], pend['uid']):
+                    pend = dict(c, rule=rule, dg=mail_digest(msg, c), tries=0, at=0.0)
+            if pend is not None and now() >= pend['at']:
+                st = mail_take(src, pend, acct, since, deliver, again)
+                if st == 'ok':
+                    res['opened'] += 1
+                    res['code'], pend = 'opened', None
+                    if once:
+                        return res
+                elif st == 'fail' and pend['tries'] < 2:
+                    pend['tries'] += 1
+                    pend['at'] = now() + base
+                else:
+                    pend = None
+                    if st == 'used':
+                        res['used'] += 1
+                    elif st == 'fail':
+                        res['code'] = 'fail'
+                        if once:
+                            return res
+                        say('! 邮箱助手：收到登录邮件了，但没能打开浏览器（原因见上面）：链接没有用掉，处理好后运行 cca mail open %s' % acct)
+                    elif st in MAIL_WHY:
+                        reject(st)
+            if idle and pend is None:
+                idle()
+            idle = None
+            fails, wait = 0, base
+        except MailFatal as e:
+            res.update(code=e.code, text=e.text)
+            return res
+        except MailRetry as e:
+            if once and not polled:
+                res.update(code=e.code, text=e.text)
+                return res
+            fails += 1
+            if fails == 3 and not once:
+                say('! 邮箱助手：连不上 Gmail（%s），还在重试；登录照常进行，邮件到了也可以自己点里面的链接' % e.text)
+            if now() >= end:
+                res.update(code=e.code, text=e.text)
+                break
+            mail_nap(min(wait, 30), end, alive, now, sleep)
+            wait = min(wait * 2, 30)
+            continue
+        if pend is not None:   # 浏览器没打开的那一封：到点再试
+            mail_nap(pend['at'] - now(), pend['at'], alive, now, sleep)
+        elif now() >= end:
+            break
+        else:
+            mail_nap(poll, end, alive, now, sleep)
+    return res
+
+
+def mail_deliver(key):
+    """打开的办法：链接经 stdin 交给 cca _mail-open 账号（它核对后在账号专属的 Chrome 里打开，打开了那一句也是它说的）"""
+    import subprocess
+
+    def deliver(link):   # 不带 BG_ENV_DROP（图形界面的事件文件、答案文件这些），CCA_PROXY 留着
+        try:
+            rc = subprocess.run([SELF_PATH, '_mail-open', key], input=(link + '\n').encode('ascii'), stdout=subprocess.DEVNULL,
+                                timeout=90, env={k: v for k, v in os.environ.items() if k not in BG_ENV_DROP}).returncode
+        except (OSError, subprocess.SubprocessError, UnicodeError):
+            return 'fail'
+        return 'ok' if rc == 0 else 'refused' if rc == 2 else 'fail'
+    return deliver
+
+
+# 设置：config.json 的 mail（{user, auto, proxy}），应用专用密码在钥匙串里（不进 api_keys、ref_keys：secrets-forget 碰不到它）
+def mail_cfg(c):
+    """{user, auto（默认开）, proxy（默认 system）}；没配置、地址不对是 None"""
+    m = c.get('mail')
+    if not isinstance(m, dict) or not isinstance(m.get('user'), str) or not MAIL_ADDR_RE.match(m['user'].lower()):
+        return None
+    p = m.get('proxy')
+    return {'user': m['user'].lower(), 'auto': m.get('auto') is not False, 'proxy': p if isinstance(p, str) and p else 'system'}
+
+
+def mail_pw_problem(rc):
+    return ('%s里没有应用专用密码：运行 cca mail setup' % keystore_name() if rc == 44
+            else '%s读不了应用专用密码（锁着？）：解锁后再试' % keystore_name())
+
+
+def mail_ready(c=None):
+    """(设置, 密码, 路)：没配置、密码取不到、连接方式写错了就说清楚、退出"""
+    c = c or cfg_load()
+    m = mail_cfg(c)
+    if not m:
+        die('还没配置邮箱助手：运行 cca mail setup')
+    rc, pw = ks_read(MAIL_SVC, m['user'])
+    if not pw:
+        die('邮箱助手：%s' % mail_pw_problem(rc))
+    try:
+        return m, pw, mail_route(m['proxy'], c)
+    except MailFatal as e:
+        die(e.text)
+
+
+def mail_last(name, text):
+    """上次的结果（cca mail status 看）"""
+    try:
+        os.makedirs(MAIL_DIR, mode=0o700, exist_ok=True)
+        save_json(os.path.join(MAIL_DIR, 'last.json'), {'at': int(time.time()), 'name': name, 'text': text}, 0o600)
+    except OSError:
+        pass
+
+
+def mail_rules():
+    return [MAIL_RULES[n] for n in T.mail_rules]
+
+
+def cmd_mail_setup(addr, proxy=''):
+    """cca mail setup：stdin 是应用专用密码。登录一次、列出邮件夹，通过了才存进钥匙串、写 config.json 的 mail。
+    退出码：0 好了；2 地址不对；3 密码不对（2、3 bash 重问）；4 连不上（网络、代理、证书）；5 存不进钥匙串"""
+    def stop(rc, text):
+        sys.stderr.write('! %s\n' % text)
+        sys.exit(rc)
+    addr = addr.strip().lower()
+    if not MAIL_ADDR_RE.match(addr):
+        stop(2, '这不像邮箱地址（只认字母、数字和 . _ % + - 组成的地址）')
+    pw = re.sub(r'\s+', '', sys.stdin.read())
+    if not SECRET_RE.match(pw):
+        stop(3, '应用专用密码是 16 个字母（空格不用输）')
+    c = cfg_load()
+    spec = proxy or (mail_cfg(c) or {}).get('proxy') or 'system'
+    try:
+        route = mail_route(spec, c)
+        sys.stderr.write('正在连接 %s（%s）…\n' % (MAIL_HOST, mail_route_note(route)))
+        box = MailBox(addr, pw, route)
+        box.open()
+        try:
+            where = box.folders()
+        finally:
+            box.close(True)
+    except MailFatal as e:
+        stop(3 if e.code == 'auth' else 4, e.text)
+    except MailRetry as e:
+        stop(4, '%s。%s' % (e.text, MAIL_PROXY_HINT) if e.code in ('net', 'proxy') else e.text)
+    if not ks_write(MAIL_SVC, addr, pw):   # 存不进去时原来的设置和密码都还在，照样能用
+        stop(5, '应用专用密码没能存进%s（%s）' % (keystore_name(), '看看 ~/.cca/secrets 的权限和磁盘空间' if keyfile_store() else '钥匙串锁着？'))
+    c = cfg_load()
+    old = (mail_cfg(c) or {}).get('user')
+    new = {'user': addr}
+    if (c.get('mail') or {}).get('auto') is False:
+        new['auto'] = False   # 用户关掉过的自动打开不改回来
+    if spec != 'system':
+        new['proxy'] = spec
+    c['mail'] = new
+    cfg_save(c)
+    if old and old != addr:
+        ks_del(MAIL_SVC, old)   # 换了 Gmail 地址：新的存好、设置改好了才删旧的
+    sys.stderr.write('✓ 已登录 %s，看这些邮件夹：%s\n✓ 已保存：应用专用密码在%s里，设置在 %s 的 mail 一项。之后在 cca 里登录 Claude 账号时，'
+                     '它的登录邮件一到就自动在它专属的浏览器里打开（cca login、第一次启动账号、网页版里的登录）；别的时候用 cca mail open 账号\n'
+                     % (addr, '、'.join(n for n, _ in where), keystore_name(), CFG))
+
+
+def cmd_mail_status():
+    c = cfg_load()
+    m = mail_cfg(c)
+    if not m:
+        print('还没配置邮箱助手：运行 cca mail setup（Claude 账号的登录邮件转发到一个 Gmail，登录时 cca 在账号专属的浏览器里打开邮件里的登录链接）')
+        return
+    rc, pw = ks_read(MAIL_SVC, m['user'])
+    try:
+        route = mail_route_note(mail_route(m['proxy'], c)) + ('（照系统代理）' if m['proxy'] == 'system' else '')
+    except MailFatal as e:
+        route = e.text
+    rows = [('邮箱', '%s（%s）' % (m['user'], '应用专用密码在%s里' % keystore_name() if pw else mail_pw_problem(rc))),
+            ('连接方式', route),
+            ('登录时', '自动打开登录邮件里的链接（cca login、第一次启动账号、网页版里的登录、cca login-page）' if m['auto']
+             else '不自动打开（config.json 的 mail.auto 是 false）：用 cca mail open 账号')]
+    last = load_quiet(os.path.join(MAIL_DIR, 'last.json'))
+    if isinstance(last, dict) and isinstance(last.get('at'), int) and isinstance(last.get('text'), str):
+        rows.append(('上次', '%s %s：%s' % (time.strftime('%m-%d %H:%M', time.localtime(last['at'])), last.get('name') or '', last['text'])))
+    print('邮箱助手')
+    for k, v in rows:
+        print('  %s%s%s' % (k, ' ' * (10 - dw(k)), v))
+
+
+def cmd_mail_ready():
+    mail_ready()
+
+
+def cmd_mail_get_user():
+    """配置过的 Gmail 地址（cca mail setup 重新配置时当默认值）；没配置是空行"""
+    print((mail_cfg(cfg_load()) or {}).get('user', ''))
+
+
+def cmd_mail_forget():
+    """删掉钥匙串里的应用专用密码、config.json 的 mail 和 ~/.cca/mail（cca mail forget、cca restore；没配置过也照样能跑）"""
+    import shutil
+    ks_del(MAIL_SVC)
+    c = cfg_load()
+    if 'mail' in c:
+        del c['mail']
+        cfg_save(c)
+    shutil.rmtree(MAIL_DIR, ignore_errors=True)
+
+
+def cmd_mail_test(hours='24'):
+    """cca mail test [小时]：用存着的设置连一次 Gmail，逐封说最近这么多小时里 Anthropic 发来的（或者标题像登录邮件的）邮件：
+    收到的时间、标题、发件人、收件人、Gmail 的验证结果、核对的结果和链接的样子（不打出链接本身）。只读：不标已读"""
+    m, pw, route = mail_ready()
+    try:
+        h = max(1, min(int(hours), 336))
+    except ValueError:
+        die('用法: cca mail test [小时]')
+    rules = mail_rules()
+    names = {parse_key(k)[1].lower(): name_of(k) for k in table_load() if parse_key(k)[1]}
+    since = time.time() - h * 3600
+    sys.stderr.write('正在连接 %s（%s）…\n' % (MAIL_HOST, mail_route_note(route)))
+    box = MailBox(m['user'], pw, route)
+    try:
+        box.open()
+        where = box.folders()
+        print('✓ 已登录 %s，看这些邮件夹：%s' % (m['user'], '、'.join(n for n, _ in where)))
+        rows = []
+        for label, name in where:
+            box.examine(name)
+            for u, (got, raw) in box.headers(box.search(mail_crit(rules, since))).items():
+                if got >= since:
+                    rows.append((got, u, label, name, raw))
+        rows.sort(reverse=True)
+        print('最近 %d 小时里 Anthropic 发来的（或者标题像登录邮件的）有 %d 封%s' % (h, len(rows), '，下面是最近的 20 封：' if len(rows) > 20 else '：' if rows else ''))
+        show = lambda s: print(mail_clean(s))   # 标题、地址、链接的主机都是发件人写的
+        for got, u, label, name, raw in rows[:20]:
+            msg = mail_parse(raw)
+            to = mail_addrs(msg, 'To')
+            acct = next((a for a in to if a in names), to[0] if to else '')
+            rule, why = mail_judge_any(rules, msg, got, acct, since)
+            ar = mail_ar(msg)
+            show('  %s  %s  %s' % (time.strftime('%m-%d %H:%M', time.localtime(got)), label, mail_text(msg.get('Subject'))[:80] or '（没有标题）'))
+            show('      发件人 %s → 收件人 %s%s' % ('、'.join(mail_addrs(msg, 'From')) or '？', '、'.join(to) or '？',
+                                            '（账号 %s）' % names[acct] if acct in names else '（不是账号表里的邮箱）'))
+            show('      Gmail 的验证：%s' % ('不是 Gmail 写的验证结果' if ar is None else
+                                        '、'.join('dkim=%s %s' % (r, d or '？') for r, d, _ in ar) or '没有 DKIM 签名'))
+            if why:
+                print('      ✗ 没通过：%s' % MAIL_WHY[why])
+                continue
+            box.examine(name)
+            why, link, full = mail_verdict(rule, box.message(u), got, acct, since)
+            if link:
+                print('      ✓ 通过核对，链接 %s' % mail_shape(link))
+            elif why:
+                print('      ✗ 没通过：%s' % MAIL_WHY[why])
+            else:
+                hosts = sorted({urlsplit_host(l) or '？' for l in mail_links(full)})
+                show('      ✗ 没通过：邮件里没有%s%s' % (rule.what, '（里面的链接在这些主机上：%s）' % '、'.join(hosts) if hosts else ''))
+    except MailError as e:
+        die(e.text)
+    finally:
+        box.close(True)
+
+
+def cmd_mail_open(key, secs='90', again=''):
+    """cca mail open：最近半小时里这个账号最新的一封登录邮件，交给 cca _mail-open 打开；没有就最多等 secs 秒。
+    退出码：0 打开了；1 没有（原因打到 stderr）；130 取消"""
+    m, pw, route = mail_ready()
+    acct = parse_key(key)[1].lower()
+    if not acct:
+        die('账号表里 %s 没写邮箱：认不出哪封登录邮件是它的' % name_of(key))
+    try:
+        secs = max(0, min(int(secs), 900))
+    except ValueError:
+        die('--wait 后面要写秒数')
+    rules, t0 = mail_rules(), time.time()
+    src = MailSource(m['user'], pw, route, rules)
+    say = lambda s: sys.stderr.write(s + '\n')
+    idle = (lambda: say('• 等 %s 的登录邮件（最多 %d 秒，Ctrl-C 取消）…' % (acct, secs))) if secs else None
+    try:
+        res = mail_hunt(src, rules, acct, t0 - MAIL_RECENT, t0 + secs, mail_deliver(key), once=True, again=again == 'again',
+                        say=say, idle=idle)
+    except KeyboardInterrupt:
+        sys.stderr.write('已取消\n')
+        sys.exit(130)
+    finally:
+        src.close()
+    if res['code'] == 'opened':
+        mail_last(name_of(key), '打开了登录邮件里的链接（cca mail open）')
+        return
+    if res['code'] not in ('none', 'fail'):
+        die('邮箱助手：%s' % res['text'])
+    if res['code'] == 'fail':
+        msg = '收到登录邮件了，但没能打开浏览器（原因见上面）'
+    elif res['used']:
+        msg = '最近的登录邮件已经打开过了：等新的一封，或者加 --again 再打开一次'
+    else:
+        msg = ('最近 30 分钟里没有 %s 的登录邮件：在登录页上用邮箱登录（Anthropic 会发来登录邮件），收到后再运行 cca mail open %s'
+               '（--wait 秒数 可以多等一会儿）' % (acct, name_of(key)))
+    rej = {k: n for k, n in res['rejected'].items() if k not in ('old', 'subject')}
+    if rej:
+        msg += '；另有 %d 封没通过核对（%s），运行 cca mail test 看详情' % (sum(rej.values()), '；'.join(MAIL_WHY[k] for k in rej))
+    die(msg)
+
+
+def cmd_mail_watch(key):
+    """登录时在后台盯邮箱（bash 的 mail_watch_start 起它，登录结束时 TERM；cca 不在了、盯够 15 分钟也停）：这个账号的登录邮件一到
+    就交给 cca _mail-open。没配置、关掉了自动、账号表里没写邮箱时什么都不做；出什么错都只说一句，退出码总是 0，绝不影响登录"""
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))   # 登录结束：马上走（正在打开的 cca _mail-open 是另一个进程，照样做完）
+    signal.signal(signal.SIGINT, signal.SIG_IGN)   # Ctrl-C 是给登录的：cca 退出以后这里看父进程不在了自己走
+    parent = os.getppid()
+    try:
+        mail_watch(key, lambda: os.getppid() == parent)
+    except MailError as e:
+        sys.stderr.write('! 邮箱助手：%s，这次不看邮箱（登录照常进行）\n' % e.text)
+    except SystemExit:
+        pass
+    except Exception as e:   # 绝不让登录跟着出错：只说一句
+        sys.stderr.write('! 邮箱助手出错了（%s），这次不看邮箱（登录照常进行）\n' % type(e).__name__)
+    sys.exit(0)
+
+
+def mail_watch(key, alive):
+    c = cfg_load()
+    m = mail_cfg(c)
+    acct = parse_key(key)[1].lower()
+    rules = mail_rules()
+    if not m or not m['auto'] or not rules or not acct:
+        return
+    rc, pw = ks_read(MAIL_SVC, m['user'])
+    if not pw:
+        raise MailFatal('keychain', mail_pw_problem(rc))
+    route = mail_route(m['proxy'], c)
+    name, start = name_of(key), time.time()
+    src = MailSource(m['user'], pw, route, rules)
+    say = lambda s: sys.stderr.write(s + '\n')
+    hello = lambda: say('• 邮箱助手：已连上 %s（%s），%s 的登录邮件一到就在它专属的浏览器里打开' % (m['user'], mail_route_note(route), name))
+    limit = MAIL_WATCH_MAX
+    try:
+        res = mail_hunt(src, rules, acct, start, start + limit, mail_deliver(key), alive=alive, say=say, hello=hello)
+    finally:
+        src.close()
+    if res['code'] == 'opened':
+        mail_last(name, '打开了登录邮件里的链接')
+    elif res['code'] not in ('none', 'fail'):
+        mail_last(name, res['text'])
+        say('! 邮箱助手：%s，不再看邮箱（登录照常进行）' % res['text'])
+    elif alive():
+        mail_last(name, '%d 分钟里没等到登录邮件' % max(1, int(limit // 60)))
+        say('• 邮箱助手：%d 分钟里没等到 %s 的登录邮件，不再看了' % (max(1, int(limit // 60)), name))
+
+
+def cmd_mail_link_check():
+    """cca _mail-open 的核对：stdin 的链接是不是这个工具的某一条规则认的登录链接（不对时往 stderr 说，不打出链接）"""
+    url = sys.stdin.readline().strip()
+    if not any(r.link_ok(url) for r in mail_rules()):
+        die('邮箱助手给的链接不是登录链接，没有打开')
 
 
 def cmd_get(field):
@@ -9686,6 +10878,15 @@ def dock_poll(waited):
     return 2.0 if waited < 60 else 10.0 if waited < 600 else 30.0
 
 
+def home_swapped():
+    """HOME 换过、不是这个用户真正的主目录（测试的沙箱；认不出也算）：只给测试的开关只在这时才认，测试也碰不到用户真正的设置"""
+    import pwd
+    try:
+        return os.path.realpath(os.path.expanduser('~')) != os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:
+        return True
+
+
 def cmd_dock_tidy(app='', lockdir=''):
     """cca _dock-tidy App：去掉程序坞「最近使用的 App」里这个 App 退出后留下的图标（bash 的 dock_watch 等它退出以后调）。
     先在 lockdir/exited 里记一笔（这个文件的修改时间就是最近一次退出）；锁（tidy.lock）有人拿着就走，拿着锁的那个会把记着的一起整理。
@@ -9699,13 +10900,8 @@ def cmd_dock_tidy(app='', lockdir=''):
     if isinstance(c, dict) and c.get('dock_tidy') is False:
         return
     domain = os.environ.get('CCA_DOCK_PREFS') or DOCK_DOMAIN   # 测试里是沙箱里的文件
-    if domain == DOCK_DOMAIN:
-        import pwd
-        try:
-            if os.path.realpath(os.path.expanduser('~')) != os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir):
-                return   # HOME 换过（测试的沙箱）：程序坞的设置还是这个用户真正的那一份，不碰
-        except KeyError:
-            return
+    if domain == DOCK_DOMAIN and home_swapped():
+        return   # 测试的沙箱：程序坞的设置还是这个用户真正的那一份，不碰
     try:
         get, put = dock_prefs(domain)
     except (OSError, AttributeError):
@@ -11575,6 +12771,9 @@ CMDS = {
     'cost-worker': cmd_cost_worker, 'cost-sync': cmd_cost_sync, 'cost-stop': cmd_cost_stop,
     'prompt-emit': cmd_prompt_emit,
     'check-render': cmd_check_render,
+    'mail-setup': cmd_mail_setup, 'mail-status': cmd_mail_status, 'mail-ready': cmd_mail_ready, 'mail-forget': cmd_mail_forget,
+    'mail-test': cmd_mail_test, 'mail-open': cmd_mail_open, 'mail-watch': cmd_mail_watch, 'mail-link-check': cmd_mail_link_check,
+    'mail-get-user': cmd_mail_get_user,
 }
 if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
     die('cca(py): 未知子命令 %s' % sys.argv[1:])
@@ -13755,6 +14954,7 @@ ensure_login() {
 }
 claude_login() {
 	local -a em=()
+	local rc
 	[ -n "$ACC_EMAIL" ] && em=(--email "$ACC_EMAIL")
 	if ! login_remote; then
 		has_chrome || { fail_warn no_chrome "登录需要 Google Chrome：已停止，避免使用系统浏览器的登录状态和出口"; return 1; }
@@ -13766,7 +14966,11 @@ claude_login() {
 		remote_login env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth login --claudeai "${em[@]}"
 		return
 	fi
+	mail_watch_start   # 邮箱助手（配置过的话）：登录邮件一到就在账号的浏览器里打开里面的链接
 	env "${UNSETS[@]}" "${SETS[@]}" "$CLAUDE_BIN" auth login --claudeai "${em[@]}" 3<&-
+	rc=$?
+	mail_watch_stop
+	return $rc
 }
 claude_wipe() {   # 退出登错的账号（Claude Code 自己记着的 oauthAccount 也去掉，免得还当它登录着）
 	claude_logout
@@ -13915,7 +15119,9 @@ cmd_login_page() {   # cca [codex|agy] login-page <账号> [--alias 别名] [--n
 	fi
 	child_env
 	info "正在 ${ACC_NAME} 专属的浏览器里打开登录页（经 ${ACC_PROXY:-直连} → ${ACC_NODE}）${ACC_EMAIL:+，请用 ${ACC_EMAIL} 登录}；登录完这里会拿到验证码"
+	mail_watch_start   # 邮箱助手（配置过的话）：登录邮件一到就在账号的浏览器里打开里面的链接
 	code=$(pyenv login-catch "$url" "${CCA_LOGIN_WAIT:-900}"); rc=$?   # 最多等 15 分钟（CCA_LOGIN_WAIT 秒：测试用）
+	mail_watch_stop
 	case $rc in
 		0) okay "拿到验证码了，已经复制到剪贴板：回到服务器的终端粘贴、回车" ;;
 		3) okay "拿到验证码了（没能放进剪贴板）：复制下面这一行，回到服务器的终端粘贴、回车" ;;
@@ -13939,6 +15145,107 @@ cmd_login() {   # cca [codex] login <账号>：退出这个账号现在的登录
 	[ -n "$(auth_email)" ] && tool wipe
 	ensure_login || exit 1
 	okay "${ACC_LABEL} 已重新登录"
+}
+
+# ---------------------------------------------------------------------------
+# 邮箱助手（cca mail，只在 macOS 上）：Claude 账号的邮箱转发到一个 Gmail，登录时 Anthropic 发来的登录邮件由后台的 py mail-watch
+# 经 IMAP 找到，里面的登录链接经 stdin 交给 cca _mail-open，在这个账号专属的 Chrome 里打开（细节见 py 的邮箱助手一节）
+# ---------------------------------------------------------------------------
+mail_watch_start() {   # 登录前在后台起 py mail-watch（没配置邮箱助手、关掉了自动、工具没有登录邮件时它马上退出）。它连 Gmail 照系统代理、
+	# 不经账号的出口；打开链接时用这次 cca 选好的出口（CCA_PROXY，和 cca _browser 一样）。服务器上登录不经这里：登录页在 Mac 上打开
+	CCA_PROXY="$ACC_PROXY" CCA_SELF="$SELF" CCA_TOOL="$TOOL" "${PYRUN[@]}" mail-watch "$ACC_KEY" 3<&- </dev/null >/dev/null &
+	MAIL_PID=$!   # 直接是外部命令（不是函数）：$! 就是它本身，停的时候 TERM 得到。cca 被 Ctrl-C、kill 掉时它看到父进程不在了自己退出
+}
+mail_watch_stop() {   # 登录结束（成功、失败都一样）：停掉它
+	[ -n "${MAIL_PID:-}" ] || return 0
+	kill -TERM "$MAIL_PID" 2>/dev/null
+	wait "$MAIL_PID" 2>/dev/null
+	MAIL_PID=""
+	return 0
+}
+cmd_mail_open_link() {   # cca _mail-open <账号>：邮箱助手找到的登录链接从 stdin 读（不进命令行、环境变量和文件），核对过再在账号专属的
+	# Chrome 里打开。退出码：0 打开了；2 链接不对；3 没能打开浏览器（原因 open_chrome 说了）
+	local key="${1:-}" url="" envs
+	IFS= read -r url || [ -n "$url" ] || return 2
+	url=${url%$'\r'}
+	printf '%s' "$url" | py mail-link-check || return 2
+	envs=$(py env "$key") || return 3
+	eval "$envs"
+	[ "$ACC_KIND" != api ] || return 2
+	[ -n "${CCA_PROXY:-}" ] && ACC_PROXY="$CCA_PROXY"   # 启动登录的那个 cca 选好的出口（在外面时是本机 Clash 的端口）
+	open_chrome "$url" || return 3
+	okay "邮箱助手：已在 ${ACC_NAME} 专属的浏览器里打开登录邮件里的链接（经 ${ACC_PROXY:-直连} → ${ACC_NODE}）"
+}
+cmd_mail() {   # cca mail [status | setup [--proxy 方式] | test [小时] | open [账号] [--wait 秒] [--again] | forget]
+	local use="用法: ${CMD} mail [status | setup [--proxy direct|socks5://主机:端口|http://主机:端口] | test [小时] | open [账号] [--wait 秒] [--again] | forget]"
+	mac_only "邮箱助手要在账号专属的 Chrome 里打开登录链接，"
+	[ "$TOOL" = claude ] || FAIL_CODE=unsupported die "邮箱助手只用于 Claude 账号（登录邮件是 Anthropic 发的）：用 cca mail …"
+	case "${1:-status}" in
+		status) py mail-status ;;
+		setup) shift; mail_setup "$@" ;;
+		test) shift; py mail-test "$@" ;;
+		open) shift; mail_open_cmd "$@" ;;
+		forget) py mail-forget && okay "已删除邮箱助手的设置和${KEYSTORE_AT}里的应用专用密码" ;;
+		help|-h|--help) say "$use" ;;
+		*) die "$use" ;;
+	esac
+}
+mail_setup() {   # cca mail setup [--proxy 方式]：问 Gmail 地址和应用专用密码，登录一次核对过再存
+	local proxy="" addr="" pw rc
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--proxy) [ $# -ge 2 ] || die "--proxy 后面要写连接方式"; proxy=$2; shift 2 ;;
+			--proxy=*) proxy=${1#--proxy=}; shift ;;
+			*) die "用法: ${CMD} mail setup [--proxy system|direct|socks5://主机:端口|http://主机:端口]" ;;
+		esac
+	done
+	need_tty
+	say "${C_B}邮箱助手${C_0}：账号登录时，Anthropic 发来的登录邮件一到你的 Gmail，cca 就在这个账号专属的浏览器里打开里面的登录链接"
+	say "  · 先把各 Claude 账号的邮箱转发到这个 Gmail（cca 按邮件的收件人认是哪个账号；账号本身就是这个 Gmail 的话不用转发）"
+	say "  · 经 IMAP 只读：不改、不删、不标已读。只认 Anthropic 发给这个账号、登录开始以后收到、Gmail 验过签名的邮件；链接只交给账号的浏览器，不显示、不保存"
+	say "  · 要 Gmail 的应用专用密码（要先开两步验证，在 https://myaccount.google.com/apppasswords 建；16 个字母，不是 Gmail 的登录密码），存进${KEYSTORE_AT}"
+	say "  · 应用专用密码能读这个邮箱里的所有邮件：最好用一个只收这些转发邮件的 Gmail"
+	addr=$(py mail-get-user)
+	while :; do
+		addr=$(ask "Gmail 地址${addr:+（回车用 ${addr}）}（回车取消）: " "$addr" q=mail.address "title=邮箱助手" label=Gmail\ 地址)
+		[ -n "$addr" ] || { say "已取消"; return 1; }
+		while :; do
+			pw=$(ask_secret "应用专用密码（输入时不显示，空格不用输；回车取消）: " q=mail.password "title=邮箱助手" label=应用专用密码)
+			[ -n "$pw" ] || { say "已取消"; return 1; }
+			printf '%s' "$pw" | py mail-setup "$addr" ${proxy:+"$proxy"}; rc=$?
+			case $rc in
+				0) return 0 ;;
+				3) continue ;;   # 密码不对：重输密码
+				2) break ;;      # 地址不对：重输地址
+				*) return 1 ;;
+			esac
+		done
+	done
+}
+mail_open_cmd() {   # cca mail open [账号] [--wait 秒] [--again]：手动打开这个账号最近一封登录邮件里的链接（登录桌面 App 时这样用：
+	# 在账号的浏览器里打开，页面上显示的验证码抄回 App）
+	local who="" secs=90 again="" key
+	local use="用法: ${CMD} mail open [账号] [--wait 秒] [--again]"
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--wait) [ $# -ge 2 ] || die "$use"; secs=$2; shift 2 ;;
+			--wait=*) secs=${1#--wait=}; shift ;;
+			--again) again=again; shift ;;
+			-*) die "$use" ;;
+			*) [ -z "$who" ] || die "$use"; who=$1; shift ;;
+		esac
+	done
+	case "$secs" in ''|*[!0-9]*) die "--wait 后面要写秒数" ;; esac
+	py mail-ready || exit 1   # 没配置就马上说（不用先花几秒检测出口）
+	key=$(pick_account "$who") || return 0
+	eval "$(py env "$key")"
+	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：没有登录邮件"
+	[ -n "$ACC_EMAIL" ] || die "账号表里 ${ACC_NAME} 没写邮箱：认不出哪封登录邮件是它的"
+	has_chrome || { fail_warn no_chrome "没装 Google Chrome：登录链接要在账号专属的 Chrome 里打开"; return 1; }
+	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
+	preflight app || exit 1
+	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
+	CCA_PROXY="$ACC_PROXY" CCA_SELF="$SELF" CCA_TOOL="$TOOL" "${PYRUN[@]}" mail-open "$ACC_KEY" "$secs" ${again:+"$again"} 3<&-
 }
 
 cmd_rm() {
@@ -16915,7 +18222,7 @@ cmd_install() {
 }
 
 cmd_restore() {
-	local key bk out rc pid running="" wt="" t a
+	local key bk out rc pid running="" wt="" t a mail_user
 	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
 	need_tty
 	for t in claude codex agy; do   # 账号的桌面 App 开着时删它的资料目录会出问题（agy 没有桌面 App）
@@ -16937,6 +18244,8 @@ cmd_restore() {
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude、Codex 和 Antigravity）：把会话里新产生的共享内容并回 ~/.claude、~/.codex、~/.gemini，然后退出登录、删除它的登录凭证"
 	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
+	mail_user=$(py mail-get-user 2>/dev/null)
+	[ -z "$mail_user" ] || say "  · 邮箱助手：删掉${KEYSTORE}里 ${mail_user} 的应用专用密码（Google 账号里的那个应用专用密码要你自己去撤销）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 本机 Clash Verge（配置过的话）：删掉全局扩展脚本里 cca 的那一段，移除本机端口池；内置代理（用过的话）：停掉它的内核"
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
@@ -16957,6 +18266,7 @@ cmd_restore() {
 		launchers_sync remove-all
 	done
 	use_tool claude
+	py mail-forget 2>/dev/null   # 邮箱助手：钥匙串里的应用专用密码（没配置过也照样跑：什么都不删）
 	if router_ready; then
 		out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" 2>&1); rc=$?
 		[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  │ /' >&2
@@ -17054,13 +18364,17 @@ EOF
                              （在 Mac 上）服务器上登录时用：用这个账号专属的 Chrome、经同一个节点打开登录页，
                              接住登录后跳回来的验证码，复制到剪贴板。节点按地址认（两边叫法可以不同）；
                              这台 Mac 上还没有这个账号时，问要不要用同一个节点加上它
+  cca mail setup             邮箱助手：Claude 账号的邮箱转发到一个 Gmail，登录时 Anthropic 发来的登录邮件一到，就在
+                             账号专属的浏览器里打开里面的链接（经 IMAP 只读，要 Gmail 的应用专用密码；--proxy 指定怎么连 Gmail）
+  cca mail open [账号]       手动打开这个账号最近一封登录邮件里的链接（--wait 秒数 多等一会儿，--again 再打开一次）；
+                             cca mail [status] | test [小时] | forget：看设置 / 逐封说最近的登录邮件认不认 / 删掉设置和密码
   cca gui                    打开图形界面（cca App：各账号的用量、节点分流，一键打开桌面 App、网页版）；没装就先下载
                              和 cca 同版本的 App 装进 ~/Applications（要 macOS 26 或更新）。cca gui update | remove
 EOF
 	else cat >&2 <<EOF
   cca login <账号>           退出这个账号现在的登录，重新登录：这台机器上没有账号专属的浏览器，给出一行在 Mac 上运行的
                              cca login-page 命令（用账号专属的 Chrome、经同一个节点打开登录页），再把拿到的验证码贴回这里
-  网页版、桌面 App、图形界面（web、billing、limit-resets、app、gui）要用账号专属的 Chrome 或 App，只在 macOS 上
+  网页版、桌面 App、图形界面、邮箱助手（web、billing、limit-resets、app、gui、mail）要用账号专属的 Chrome 或 App，只在 macOS 上
 EOF
 	fi
 	cat >&2 <<EOF
@@ -17175,7 +18489,8 @@ EOF
                              presence（设成 false：${host}不向维护者的服务器报告、也不查设备统计）${mac:+、}
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
-                             dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）
+                             dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）、
+                             mail（cca mail setup 写的；auto 设成 false：登录时不再自动打开登录邮件里的链接）
 EOF
 }
 
@@ -17184,7 +18499,7 @@ main() {
 	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_dock-tidy|_dock-wait) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) cmd_install ;;
@@ -17194,6 +18509,7 @@ main() {
 			shift
 			case "${CCA_TOOL:-}" in codex|agy) use_tool "$CCA_TOOL" ;; esac
 			cmd_browser "$@" ;;
+		_mail-open) shift; cmd_mail_open_link "$@" ;;   # 邮箱助手找到的登录链接（经 stdin）：在账号专属的 Chrome 里打开（py 的 mail-watch、mail-open 调用）
 		_api-key)   # 第三方 API 账号的 key：Claude Code 的 apiKeyHelper、codex 的 auth.command 回调，只打印 key
 			shift
 			if [ "${1:-}" = codex ]; then shift; use_tool codex; fi
@@ -17257,6 +18573,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		web) shift; cmd_web "$@" ;;
 		billing) shift; cmd_billing "$@" ;;
 		limit-resets) shift; cmd_limit_resets "$@" ;;
+		mail) shift; cmd_mail "$@" ;;
 		app) shift; cmd_app "$@" ;;
 		check) shift; cmd_check "$@" ;;
 		router) shift; cmd_router "$@" ;;

@@ -859,6 +859,12 @@ if [ "${1:-}" = -i ]; then
 fi
 one "$@"
 S
+# 假的 scutil --proxy（邮箱助手照系统代理连 Gmail）：系统代理的设置取 $CCA_T/scutil.txt，没有这个文件就是没开代理
+cat > "$T/bin/scutil" <<'S'
+#!/bin/bash
+[ "${1:-}" = --proxy ] || exit 1
+if [ -f "$CCA_T/scutil.txt" ]; then cat "$CCA_T/scutil.txt"; else printf '<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n  ProxyAutoConfigEnable : 0\n  SOCKSEnable : 0\n}\n'; fi
+S
 # 假的 get_usage：按账号目录里登录的邮箱回 $CCA_T/usage/<邮箱>.json（没有这个文件就当没有订阅用量）；
 # usage/unsupported：回"不支持"；usage/hang：卡住不回
 cat > "$T/fake_usage.py" <<'S'
@@ -928,6 +934,17 @@ PY
 			[ -n "$email" ] || email="someone@example.com"
 			# $CCA_T/oauth_flow（内容是这次的 state）：像真的 Claude Code 一样在本机开回调、经 BROWSER 打开登录页，等浏览器跳回来再换 token
 			[ -f "$CCA_T/oauth_flow" ] && exec python3 "$CCA_T/fake_oauth.py" "$P" "$email"
+			# $CCA_T/mail_send 在时（邮箱助手）：像在登录页上点了用邮箱登录——跑它（往假 Gmail 里放一封登录邮件），等 cca 在账号的
+			# 浏览器里打开邮件里的链接（open.log 里出现 $CCA_T/mail_login 里的链接），最多 20 秒，才算登录好
+			if [ -x "$CCA_T/mail_send" ]; then
+				"$CCA_T/mail_send"
+				want=$(cat "$CCA_T/mail_login"); i=0
+				until grep -qF -- "$want" "$CCA_T/open.log" 2>/dev/null; do
+					i=$((i + 1)); [ $i -le 200 ] || { echo "MAIL-LOGIN timeout" >> "$LOG"; exit 1; }
+					sleep 0.1
+				done
+				echo "MAIL-LOGIN opened" >> "$LOG"
+			fi
 			python3 -c 'import json,os,sys; p=sys.argv[1]; j=json.load(open(p)) if os.path.exists(p) else {}; j["oauthAccount"]={"emailAddress":sys.argv[2]}; json.dump(j,open(p,"w"),indent=2)' "$P" "$email"
 			echo "LOGIN $email @ $CLAUDE_CONFIG_DIR" >> "$LOG" ;;
 		logout)

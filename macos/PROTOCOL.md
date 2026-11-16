@@ -724,6 +724,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `local.manual` | `local setup` | `code`、`text`、`secret`（可选） | 要加的配置；外部控制地址（校验 controller）、密钥。连不上时带着原因重问 |
 | `edit.form` | `[codex] edit` | `choice`（`menu`）、`text` | 账号表的常用项，一页：每个官方账号的节点（维护者固定的只有一个选项，答案不算数）；第三方 API 账号的接口地址、模型、出口、环境变量（只有 Claude 的有）。不显示 key。见下 |
 | `install.node` | `[codex\|agy] install-cli`、用到没装的命令时 | `choice` | 维护者的映射没指定安装用的节点（或者这台机器没有它的定义）时：经内置代理的哪个节点装（只用这一次，选了就算同意）。App 平时把 `install-cli` 交给终端 |
+| `mail.address` | `mail setup` | `text` | 邮箱助手：收登录邮件的 Gmail 地址（预填上次的；地址不对、要换地址时重问） |
+| `mail.password` | `mail setup` | `secret` | 这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道。App 平时没有入口，在终端里用 |
 | `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
 
 账号表的表单（`edit.form`）：字段 id 是 `n<编号>`（节点）、`u<编号>`（接口地址）、`m<编号>`（模型）、`e<编号>`（环境变量），编号是账号在表里的位置，App 不解释。不合格时同一个 `q` 带着 `error` 和已填的值再发一条，都合格才写账号表；
@@ -750,6 +752,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
 | `router uninstall`、`local off`、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
+| `mail`（`setup`、`status`、`test`、`open`、`forget`） | 没有入口（登录在终端里，登录时自动打开登录邮件里的链接也在那里） | 终端里自己运行 |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
 | `restore` | 没有入口 | 终端（要求 cca App 先退出） |
 

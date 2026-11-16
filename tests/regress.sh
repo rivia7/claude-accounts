@@ -7,7 +7,8 @@ CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
 T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
 SVP=""   # 设备统计的测试服务器（11b3c 那一节才开）
-trap '[ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
+MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
+trap '[ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
 bash "$D/setup.sh" "$T" >/dev/null || exit 1
 cd "$T" || exit 1
 # TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>sleep 了几秒<TAB>说明”；
@@ -102,6 +103,7 @@ ok "客户端更新：签名、安装确认、目标漂移与中断恢复" 'pyth
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端的扫描、闲置判定、经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：价格表、读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
+ok "邮箱助手：认登录邮件的规则、连 Gmail 的路（照系统代理、不经账号的出口）、只读的 IMAP（真的 TLS）、只信 Gmail 的验证结果和签过名的头、盯邮箱（最新的一封、重试、断线不漏）、打开过的不再打开" 'python3 "$D/mail_view.py" 2>/dev/null'
 
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
@@ -216,6 +218,53 @@ ok "login-page：答应加上：用这边的 US-D 加上 新号（dora@example.c
 kill $busy 2>/dev/null; wait $busy 2>/dev/null
 run CCA_TTY="$(ans y)" cca rm dora@example.com >/dev/null 2>&1
 ok "删掉刚加的 新号：账号表、启动器都照旧" '[ "$(cat "$H/.cca/accounts.json")" = "$t0" ] && [ ! -e "$H/Applications/Claude 新号.app" ] && ! ls -d "$H"/.cca/accounts/dora-example-com-* >/dev/null 2>&1'
+
+# 3b3. 邮箱助手（cca mail）：Claude 账号的登录邮件转发到一个 Gmail，登录时 cca 经 IMAP（只读）找到它，在账号专属的 Chrome 里打开
+# 里面的登录链接。假的 Gmail 是 tests/mail_fake.py（真的 TLS、只读 IMAP：会改邮箱的命令一律回 BAD 并记 VIOLATION），经它的假代理
+# （一个端口同时认 SOCKS5 和 HTTP CONNECT）连，证书是测试的 CA（CCA_MAIL_CAFILE：只在连的是本机时才信）；系统代理由假 scutil 给
+# （$T/scutil.txt）。meml UID 收件人 记号 [选项…] 往所有邮件里放一封登录邮件（链接是 https://claude.ai/magic-link#记号）
+MB="$T/mailbox"
+python3 "$D/mail_fake.py" serve "$MB" >/dev/null 2>&1 & MBP=$!
+for i in $(seq 1 100); do [ -f "$MB/ports.json" ] && break; sleep 0.1; done
+MPX=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$MB/ports.json")
+MENV=(CCA_MAIL_CAFILE="$MB/pki/ca.pem" CCA_MAIL_POLL=0.2 CCA_MAIL_RETRY=0.2)
+meml() { python3 "$D/mail_fake.py" eml "$MB/box/all/$1.eml" --to "$2" --link "https://claude.ai/magic-link#$3" "${@:4}"; }
+out=$(run cca mail 2>&1); rc=$?
+out2=$(run cca mail open alice --wait 0 2>&1); rc2=$?
+ok "邮箱助手：没配置时 cca mail 说怎么配置，cca mail open 说先配置" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还没配置邮箱助手：运行 cca mail setup" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "还没配置邮箱助手"'   # cca codex mail 在 10f 测：它会让 Codex 算用起来了
+printf '<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n  }\n  SOCKSEnable : 1\n  SOCKSPort : %s\n  SOCKSProxy : 127.0.0.1\n}\n' "$MPX" > "$T/scutil.txt"
+: > "$T/security.stdin"
+out=$(run "${MENV[@]}" CCA_TTY="$(ans inbox@example.com 'wrong pass word xx' 'abcd efgh ijkl mnop')" cca mail setup 2>&1); rc=$?
+ok "mail setup：照系统代理（SOCKS5）连 Gmail、登录一次；密码不对重问；对了才存进钥匙串（经 security -i 的十六进制，不进命令行）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "Gmail 不认这个密码" && printf "%s" "$out" | grep -q "已登录 inbox@example.com，看这些邮件夹：所有邮件、垃圾邮件" && [ "$(cat "$T/keychain/cca-mail/inbox@example.com")" = abcdefghijklmnop ] && grep -q "add-generic-password -U -a inbox@example.com -s cca-mail -X 6162" "$T/security.stdin" && ! grep -q abcdefghijklmnop "$T/security.log" && ! grep -qs abcdefghijklmnop "$T/env.log" && cfgok "c[\"mail\"] == {\"user\": \"inbox@example.com\"}" && grep -q "PROXY socks5 imap.gmail.com:993" "$MB/imap.log"'
+out=$(run "${MENV[@]}" cca mail status 2>&1)
+ok "mail status：邮箱、连接方式（照系统代理）、登录时自动打开" 'printf "%s" "$out" | grep -q "inbox@example.com（应用专用密码在钥匙串里）" && printf "%s" "$out" | grep -q "经代理 127.0.0.1:${MPX}，SOCKS5（照系统代理）" && printf "%s" "$out" | grep -q "自动打开登录邮件里的链接"'
+now=$(date +%s)
+meml 1 alice@example.com tok-T1 --at $((now - 600)); meml 2 carol@example.com tok-T2 --at $((now - 300)); meml 3 alice@example.com tok-T3 --ar fail --at $((now - 900))
+out=$(run "${MENV[@]}" cca mail test 2>&1); rc=$?
+ok "mail test：逐封说最近的登录邮件认不认（收件人是不是账号、Gmail 的验证、链接的样子），不打出链接；只读" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "有 3 封" && printf "%s" "$out" | grep -q "（账号 alice@example.com）" && printf "%s" "$out" | grep -q "不是账号表里的邮箱" && printf "%s" "$out" | grep -q "✓ 通过核对，链接 https://claude.ai/magic-link（# 后面" && printf "%s" "$out" | grep -q "Gmail 的验证结果里没有 Anthropic 的签名通过" && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -q VIOLATION "$MB/imap.log"'
+: > open.log
+out=$(run "${MENV[@]}" cca mail open alice 2>&1); rc=$?
+ok "mail open：最近半小时里这个账号最新的、通过核对的一封，在它专属的 Chrome 里经它的端口打开（链接不在输出里，也不记进 ~/.cca）" '[ $rc -eq 0 ] && grep -F "https://claude.ai/magic-link#tok-T1" open.log | grep -F -- "--user-data-dir=$AD/chrome" | grep -qF -- "--proxy-server=http://192.0.2.10:7901" && ! grep -qE "tok-T[23]" open.log && printf "%s" "$out" | grep -q "已在 alice@example.com 专属的浏览器里打开登录邮件里的链接（经 http://192.0.2.10:7901 → US-A）" && ! printf "%s" "$out" | grep -q "tok-T" && ! grep -rqs "tok-T" "$H/.cca"'
+out=$(run "${MENV[@]}" cca mail open alice --wait 0 2>&1); rc=$?
+out2=$(run "${MENV[@]}" cca mail open alice --again 2>&1); rc2=$?
+ok "mail open：打开过的那封不再打开（--again 再打开一次）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "最近的登录邮件已经打开过了" && [ $rc2 -eq 0 ] && [ "$(grep -c "tok-T1" open.log)" = 2 ]'
+out=$(run "${MENV[@]}" cca mail open 副号 --wait 1 2>&1); rc=$?
+ok "mail open：没有这个账号的登录邮件：等一会儿（--wait），说清楚怎么做；别的账号的不开" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "等 bob@example.com 的登录邮件（最多 1 秒" && printf "%s" "$out" | grep -q "最近 30 分钟里没有 bob@example.com 的登录邮件" && [ "$(grep -c "magic-link" open.log)" = 2 ]'
+# 登录时：假 claude 的 auth login 在 $T/mail_send 在时先跑它（像在登录页上点了用邮箱登录，Anthropic 发来登录邮件），等 open.log 里出现
+# $T/mail_login 里的链接才算登录好
+printf '%s\n' "https://claude.ai/magic-link#tok-L1" > "$T/mail_login"
+printf '#!/bin/bash\npython3 "%s/mail_fake.py" eml "%s/box/all/9.eml" --to alice@example.com --link "https://claude.ai/magic-link#tok-L1"\n' "$D" "$MB" > "$T/mail_send"; chmod 755 "$T/mail_send"
+out=$(run "${MENV[@]}" CCA_TTY="$(ans)" cca login alice 2>&1); rc=$?
+rm -f "$T/mail_send" "$T/mail_login"
+ok "登录时：后台盯着 Gmail，登录邮件一到就在 alice 专属的 Chrome 里打开里面的链接，登录接着完成；登录结束就不再盯" '[ $rc -eq 0 ] && grep -q "MAIL-LOGIN opened" claude.log && grep -F "tok-L1" open.log | grep -qF -- "--user-data-dir=$AD/chrome" && printf "%s" "$out" | grep -q "邮箱助手：已连上 inbox@example.com" && printf "%s" "$out" | grep -q "已在 alice@example.com 专属的浏览器里打开登录邮件里的链接" && printf "%s" "$out" | grep -q "已重新登录" && ! printf "%s" "$out" | grep -q "没通过核对" && gone "mail-watch alice@example.com" && ! grep -q VIOLATION "$MB/imap.log"'
+out=$(run cca mail forget 2>&1); rc=$?
+ok "mail forget：删掉钥匙串里的应用专用密码、config.json 的 mail 和 ~/.cca/mail" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-mail" ] && ! cfgok "\"mail\" in c" && [ ! -e "$H/.cca/mail" ]'
+rm -f "$T/scutil.txt"
+out=$(run "${MENV[@]}" CCA_TTY="$(ans inbox@example.com abcdefghijklmnop)" cca mail setup --proxy "http://127.0.0.1:$MPX" 2>&1); rc=$?
+out2=$(run "${MENV[@]}" CCA_TTY="$(ans '' abcdefghijklmnop)" cca mail setup --proxy socks5://127.0.0.1:7901 2>&1); rc2=$?
+ok "mail setup --proxy：指定 HTTP 代理（CONNECT）；指到账号的出口（端口池）的不用；再配置时默认用上次的地址" '[ $rc -eq 0 ] && grep -q "PROXY http imap.gmail.com:993" "$MB/imap.log" && cfgok "c[\"mail\"][\"proxy\"] == \"http://127.0.0.1:$MPX\"" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "（回车用 inbox@example.com）" && printf "%s" "$out2" | grep -q "127.0.0.1:7901 是账号的出口，Gmail 不能经它连"'
+run cca mail forget >/dev/null 2>&1
+kill "$MBP" 2>/dev/null; wait "$MBP" 2>/dev/null; MBP=""
 
 # 3c. Claude App 多开：每个账号一份资料目录、走自己的端口；启动器跟着账号表走
 L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
@@ -1048,6 +1097,8 @@ ok "以前装的 cca 升级后还没有 cxa：没用过 Codex 时不补；第一
 out=$(run cca ls 2>&1); out2=$(run cca codex ls 2>&1); out3=$(run cxa ls 2>&1)
 ok "cca ls / cca codex ls：各列各的账号；两边轮流用不会反复同步路由器" '! printf "%s%s" "$out" "$out2" | grep -q "正在同步" && printf "%s" "$out2" | grep -qE "1\. alice@example.com +未登录 +US-B" && ! printf "%s" "$out" | grep -q "US-B"'
 ok "cxa ls 就是 cca codex ls" '[ -n "$out3" ] && [ "$out3" = "$out2" ]'
+out=$(run cca codex mail 2>&1); rc=$?
+ok "cca codex mail：邮箱助手只用于 Claude 账号" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "邮箱助手只用于 Claude 账号"'
 rm -f "$H/.local/bin/cxa"; out=$(run cca ls 2>&1); out2=$(run cca ls 2>&1)
 ok "用着 Codex 的机器上 cxa 不见了：下一次运行 cca（哪个子命令都行）就补上，只说一次" '[ "$(readlink "$H/.local/bin/cxa")" = cca ] && printf "%s" "$out" | grep -q "以后可以直接用 cxa 代替 cca codex" && ! printf "%s" "$out2" | grep -q "以后可以直接用 cxa"'
 : > open.log; : > curl.log
@@ -3318,6 +3369,9 @@ for a in "gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)" o
 	echo '{"access_token": "ya29.agy-LEFTOVER-SECRET", "id_token_email": "gina@example.com"}' > "$H/.cca/agy/accounts/$a/gemini/antigravity-cli/antigravity-oauth-token"
 done
 ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
+# 邮箱助手配置过：应用专用密码在钥匙串里
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mail"]={"user": "inbox@example.com"}; json.dump(c, open(p, "w"))' "$H/.cca/config.json"
+mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail/inbox@example.com"
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
@@ -3330,5 +3384,6 @@ ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes
 ok "restore：备份里没有折合金额的缓存、别的设备同步来的（cost/scan.json、remote.json 这些），这台设备统计好的（cost/local.json）在" '! tar -tzf "$BK" | grep -qE "cost/(scan|remote|worker)\.json|cost/(last|scanned)$" && tar -tzf "$BK" | grep -q "cost/local\.json"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
+ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 echo "---- $pass passed, $fail failed"

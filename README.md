@@ -65,7 +65,7 @@ Linux 上能用的是命令行：
 - **登录**：服务器上没有账号专属的浏览器。`cca login 工作` 给出一行在 Mac 上运行的命令，登录页在 Mac 上用这个账号专属的 Chrome 打开，再把拿到的验证码贴回服务器（见「常见问题」）。Mac 上还没有这个账号的话，会问要不要用同一个节点加上它。
 - **泄露检测**：只测 DNS。WebRTC 只和浏览器、桌面 App 有关，服务器上没有它们。
 - **API key**：存成 `~/.cca/secrets` 下只有你能读的文件。
-- 网页版、桌面 App、图形界面（`cca web`、`billing`、`limit-resets`、`app`、`gui`）只在 macOS 上。
+- 网页版、桌面 App、图形界面、邮箱助手（`cca web`、`billing`、`limit-resets`、`app`、`gui`、`mail`）只在 macOS 上。
 
 ## 日常使用
 
@@ -109,9 +109,21 @@ Linux 上能用的是命令行：
 | 出门在外：配置本机的 Clash 客户端（第一次在外面启动时也会问） | `cca local setup` |
 | 看现在走路由器还是本机 Clash | `cca local` |
 | 退出某个账号的登录、重新登录 | `cca login 工作` |
+| 登录时自动打开登录邮件里的链接（各账号的邮箱转发到一个 Gmail） | `cca mail setup`（见下面的「邮箱助手」） |
 | Codex：选账号启动 / 直接启动 / 添加账号 / 查用量 | `cca codex` / `cca codex @工作` / `cca codex add` / `cca codex usage`（`cca codex` 可以简写成 `cxa`） |
 | Antigravity：选账号启动 / 直接启动 / 添加账号 | `cca agy` / `cca agy @工作` / `cca agy add`（`cca agy` 可以简写成 `aga`） |
 | 查看全部命令 | `cca help` |
+
+### 邮箱助手：登录邮件里的链接自动打开
+
+用邮箱登录 claude.ai 时，Anthropic 会发来一封登录邮件，要点里面的链接。账号多了，每次去各自的邮箱里找很麻烦：把各个 Claude 账号的邮箱都转发到同一个 Gmail，运行一次 `cca mail setup`。之后在 cca 里登录（`cca login`、第一次启动账号、网页版前的登录、Mac 上的 `cca login-page`）时，登录邮件一到，cca 就在**这个账号专属的 Chrome** 里打开里面的链接，登录接着往下走；登录结束就不再看邮箱。
+
+- 要这个 Gmail 的**应用专用密码**（先开两步验证，在 https://myaccount.google.com/apppasswords 建），cca 登录一次核对过才存进钥匙串。它能读这个邮箱里的所有邮件：最好单独用一个只收这些转发邮件的 Gmail。
+- **只读**：经 IMAP 只看，不标已读、不删不移。连 Gmail 照系统的代理设置（`cca mail setup --proxy socks5://127.0.0.1:7897` 可以指定，`direct` 是直连），不经账号的出口。
+- **只认真的登录邮件**：Gmail 验过 Anthropic 的签名（发件人、收件人、标题都在签名里）、收件人是这个账号的邮箱、在这次登录开始以后收到的，链接是 claude.ai 的登录链接。不对的不打开，会说原因。
+- 要用**转发**：cca 只信 Gmail 收信时自己写下的签名核对结果。别用 Gmail 的「查看其他账号的邮件」（POP3 收取）把邮件收进来：那样收进来的邮件不一定带着 Gmail 自己核对过的结果。
+- 链接是一次性的登录凭证：cca 只把它交给这个账号的浏览器，不显示、不保存。
+- 别的时候（比如在桌面 App 里登录）用 `cca mail open 工作` 手动打开最近一封；`cca mail test` 逐封说最近的登录邮件认不认（不显示链接），`cca mail` 看设置，`cca mail forget` 删掉设置和密码。不想登录时自动打开：把 `~/.cca/config.json` 里 `mail` 的 `auto` 设成 `false`。
 
 ## 账号表
 
@@ -465,7 +477,7 @@ cca clients mode auto              # 恢复自动检查和准备
 cca restore
 ```
 
-撤销 cca 做过的全部改动：每个账号（Claude、Codex 和 Antigravity）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key 也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`、`aga`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`、`~/.gemini`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
+撤销 cca 做过的全部改动：每个账号（Claude、Codex 和 Antigravity）退出登录，并删除它的登录凭证（钥匙串里第三方 API 账号的 key、给官方账号记下备查的 key、邮箱助手的 Gmail 应用专用密码也一起删掉）；路由器上的端口和配置全部移除；Clash Verge 全局扩展脚本里 cca 加的那段删掉（维护者的参考节点写进了你的配置文件的，留着：行尾带 `# cca`，不要的话自己删）；最后删除本机的 cca（包括 `cxa`、`aga`）、各账号的 App 启动器和图形界面 cca App（删除前会把配置打包备份到你的主目录，不含登录凭证）。Codex 账号建的 git 工作树（`worktrees/`）在账号目录里，会一起删掉，也不在备份里，还原前会提醒。你原来的 `~/.claude`、`~/.codex`、`~/.gemini`（对话记录、设置等）不受影响。卸载前先退出各账号的桌面 App。
 
 ## 常见问题
 
@@ -476,6 +488,8 @@ cca restore
 不会。登录完全走官方的 `claude auth login`，凭证由 Claude Code 自己存进 macOS 钥匙串；cca 不读取、不保存，也不转发任何登录凭证。`cca usage` 查用量也是让 Claude Code 自己去查。
 
 在 Linux 服务器上没有账号专属的 Chrome：`cca login 工作` 照常在服务器上跑官方的登录，给出一行 `cca login-page …`，在 Mac 上运行它，Mac 上的 cca 用这个账号专属的 Chrome、经同一个节点打开登录页，登录完把验证码复制到剪贴板，贴回服务器即可（节点按地址认，两边叫法不同也行；Mac 上还没有这个账号时，会问要不要用同一个节点加上它）。经手的只是这个一次性的验证码：cca 核对过是这一次登录的，才交给服务器上正在等着的 Claude Code（或 codex），由它自己经账号的出口换成凭证、自己保存（Claude Code 在 Linux 上存成账号目录里只有你能读的 `.credentials.json`）。
+
+用了邮箱助手（`cca mail`）的话，cca 还经手登录邮件里的一次性登录链接：核对过是 Anthropic 发给这个账号、这次登录开始以后收到的，才交给这个账号专属的 Chrome 打开，不显示、不保存、不交给别的程序。之后的登录照样由 Claude Code 自己完成、自己保存凭证。
 
 **Codex 的登录凭证呢？**
 登录、刷新都由 codex 自己完成，凭证由它写进账号目录里的 `auth.json`。cca 只从里面的 id_token 读出邮箱、套餐和工作空间 ID（核对登录的是不是这个账号），不碰真正用来访问的 access / refresh token，也不保存、不转发。

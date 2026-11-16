@@ -682,17 +682,17 @@ else no "cca check（退出码 $rc）：${hv:-没有 health.json}；$(printf '%s
 
 # 只在 macOS 上的命令：说清楚（不说"没装 Chrome""要 macOS 26"这些），cca help 不列它们
 bad=""
-for c in web billing limit-resets app gui; do
+for c in web billing limit-resets app gui mail; do
 	out=$("$C" "$c" 2>&1) && bad="$bad $c（退出码 0）"
 	printf '%s' "$out" | grep -q '只在 macOS 上；这台 Linux 上用命令行' || bad="$bad $c：$(printf '%s' "$out" | tail -n 1)"
 done
-if [ -z "$bad" ]; then ok "cca web、billing、limit-resets、app、gui：说只在 macOS 上"; else no "只在 macOS 上的命令：$bad"; fi
+if [ -z "$bad" ]; then ok "cca web、billing、limit-resets、app、gui、mail：说只在 macOS 上"; else no "只在 macOS 上的命令：$bad"; fi
 out=$("$C" help 2>&1)
-if ! printf '%s' "$out" | grep -qE '^  cca (web|billing|limit-resets|app|gui|login-page) |^  cca codex app ' &&
+if ! printf '%s' "$out" | grep -qE '^  cca (web|billing|limit-resets|app|gui|login-page|mail) |^  cca codex app ' &&
 	printf '%s' "$out" | grep -q '只在 macOS 上' && printf '%s' "$out" | grep -q '由 cca 在后台运行' && printf '%s' "$out" | grep -q '^  cca usage ' &&
 	! printf '%s' "$out" | grep -q 'WebRTC'; then
 	ok "cca help：不列只在 macOS 上的命令，内置代理说的是由 cca 在后台运行，泄露检测不提 WebRTC"
-else no "cca help：$(printf '%s' "$out" | grep -E '^  cca (web|billing|limit-resets|app|gui|login-page) |^  cca codex app |WebRTC' | head -n 2)"; fi
+else no "cca help：$(printf '%s' "$out" | grep -E '^  cca (web|billing|limit-resets|app|gui|login-page|mail) |^  cca codex app |WebRTC' | head -n 2)"; fi
 
 # 内嵌 Python 的编译缓存：每个版本一份，写新的一份时顺手删掉 7 天前写的旧缓存和没写完的临时文件（没有 XDG_RUNTIME_DIR 时缓存在
 # ~/.cache 里，系统不会清，不删就越积越多）；7 天内的、python3 指针、名字不像缓存的都留着，读缓存时不动。用 XDG_RUNTIME_DIR 指到沙箱
