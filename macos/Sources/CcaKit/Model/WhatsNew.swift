@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.2", title: "邮箱助手搬进界面：在账号页配置、看登录邮件、一键打开", points: [
+            .init(symbol: "envelope.badge",
+                  text: "每个 Claude 账号的页面新增「邮箱」一节：在这里填收登录邮件的 Gmail，不用再去终端。默认所有账号共用一个，也能给某个账号单独配一个。只在 macOS 上。"),
+            .init(symbol: "tray.and.arrow.down",
+                  text: "点「查看最近的登录邮件」就只读地连一次 Gmail，逐封标出认不认；通过核对的那封点「在浏览器打开」，在这个账号专属的浏览器里打开里面的登录链接。"),
+            .init(symbol: "lock.shield",
+                  text: "登录链接始终不交给界面（只显示标题、发件人和链接的“样子”），打开由 cca 自己完成；应用专用密码只进钥匙串，绝不进映射、不记日志。"),
+        ], art: "envelope"),
         ReleaseNote(version: "3.3.0-beta.1", title: "邮箱助手：登录邮件里的链接自动打开（测试版）", points: [
             .init(symbol: "envelope.badge",
                   text: "把各 Claude 账号的邮箱都转发到一个 Gmail，运行一次 cca mail setup（填 Gmail 地址和应用专用密码）。之后用 cca login、第一次启动账号、登录网页版时，cca 在后台只读地看这个 Gmail，登录邮件一到就在这个账号专属的浏览器里打开里面的链接。只在 macOS 上。"),
