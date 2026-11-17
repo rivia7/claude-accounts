@@ -967,6 +967,8 @@ def cfg_fill(c):
     c.setdefault('ports', {})
     c.setdefault('last', '')
     c.setdefault('synced', '')
+    # device_id（这台设备的随机标识，多设备共用一个路由器时写进路由器的 owners、认出哪些槽位是别的设备的）：
+    # 按需生成、空了清掉（见 cfg_clean / device_id），换路由器也不变
     return c
 
 
@@ -1701,6 +1703,9 @@ def cfg_clean(c):
         s = c.get(tool.state_key) if tool.state_key else None
         if isinstance(s, dict) and not any(s.get(k) for k in ('ports', 'last', 'api_ids', 'api_keys', 'ref_keys', 'key_hints', 'policy_skip')):
             del c[tool.state_key]
+    for k in ('device_id',):   # 空的不留在 config.json 里
+        if k in c and not c[k]:
+            del c[k]
 
 
 def cfg_save(c):
@@ -1849,6 +1854,170 @@ def router_accounts(c):
     if f:
         out['fill'] = f
     return out
+
+
+def device_id(c):
+    """这台设备的随机标识（多设备共用一个路由器时写进路由器的 owners，合并时据此认出哪些槽位是别的设备的）：懒生成，非隐私、
+    不含主机名。调用方（cmd_router_merge，非只读）负责 cfg_save 落盘。"""
+    did = c.get('device_id')
+    if not did:
+        import secrets
+        did = c['device_id'] = secrets.token_hex(8)
+    return did
+
+
+def router_merge(c, remote):
+    """多设备共用一个路由器：把本机账号合并进路由器现有的并集。remote 是回读来的 {'accounts': [...], 'owners': {槽位: 设备标识}}。
+    owners 认出哪些槽位是别的设备的（原样保留）、哪些是我自己的（不在账号表里的就是我删掉的，去掉）。owners 读不到（旧版 cca、
+    全新路由器、升级前的备份还原）时当作全是我的 → 直接覆盖（和今天一样）。会写回 c：本机账号的端口改成并集里的槽位。
+    返回 (accounts 载荷, owners)；单设备时 accounts 载荷和 router_accounts(c) 逐字节一样。"""
+    did = device_id(c)
+    racc = remote.get('accounts') if isinstance(remote, dict) else None
+    racc = racc if isinstance(racc, list) else []
+    rown = remote.get('owners') if isinstance(remote, dict) else None
+    rown = rown if isinstance(rown, dict) else {}
+    owner_of = lambda s: rown.get(str(s))
+    mine = [(tool.pool_prefix + acct_id(k, tool), node_of(v), k, tool) for tool, k, v, p in pool(c)]
+    # 别的设备的槽位：owners 里标着、且不是我这台（owners 读不到时谁都不是"别的设备"，走单设备的覆盖）
+    others = [a for a in racc if isinstance(a, dict) and a.get('name')
+              and owner_of(a.get('slot')) and owner_of(a.get('slot')) != did]
+    if not others:                      # 单设备 / 只有我这台：accounts.yaml 和今天逐字节一样（我删掉的账号不在 router_accounts 里，自动去掉）
+        payload = router_accounts(c)
+        owners = {str(a['slot']): did for a in payload['accounts']}
+        return payload, owners
+    # 多设备：按身份（账号名）合并成并集。共用的账号（两台都有）天然共用一个槽位、同一个出口
+    remote_slot = {a['name']: a['slot'] for a in racc if isinstance(a, dict) and isinstance(a.get('slot'), int)}
+    used, union, owners = set(), [], {}
+    for a in others:                    # 别的设备的槽位：原样保留，owner 不动
+        s = int(a['slot'])
+        if s > 0 and s not in used:
+            used.add(s)
+            union.append({'slot': s, 'name': a['name'], 'node': a.get('node')})
+            owners[str(s)] = owner_of(s)
+    placed = {a['name'] for a in union}
+    mine_slot = {}
+    for name, node, k, tool in mine:
+        if name in placed:              # 共用账号：已经在并集里（别的设备推的），沿用它的槽位、不重复
+            mine_slot[(tool.name, k)] = next(a['slot'] for a in union if a['name'] == name)
+            continue
+        s = remote_slot.get(name)       # 我上次推过这个账号：沿用它的槽位
+        if not (isinstance(s, int) and s > 0 and s not in used):
+            s = 1
+            while s in used:
+                s += 1
+        used.add(s)
+        union.append({'slot': s, 'name': name, 'node': node})
+        owners[str(s)] = did
+        mine_slot[(tool.name, k)] = s
+    slots = max(POOL_STEP, -(-max(used) // POOL_STEP) * POOL_STEP) if used else 0
+    onodes = [a.get('node') for a in others if a.get('node') and a.get('node') != 'REJECT']
+    payload = {'base': FIRST_PORT - 1, 'slots': slots,
+               'nodes': list(dict.fromkeys(list(c['nodes']) + onodes)),
+               'accounts': sorted(union, key=lambda a: a['slot'])}
+    f = policy_fill()
+    if f:
+        payload['fill'] = f
+    for tool in TOOLS:                  # 本机账号的端口改成并集里的槽位（启动、本机 Clash 用的端口 = 并集槽位）
+        ports = tool.state(c).get('ports')
+        if isinstance(ports, dict):
+            for key in list(ports):
+                if (tool.name, key) in mine_slot:
+                    ports[key] = FIRST_PORT - 1 + mine_slot[(tool.name, key)]
+    return payload, owners
+
+
+def cmd_router_merge():
+    """把路由器回读来的 accounts.yaml + owners（stdin，中间用 ---CCA-OWN--- 隔开；空的就是全新/单设备）和本机账号合并成并集，
+    写回 config.json（本机端口 → 并集槽位、device_id），输出要推的 accounts.yaml / ports / select / owners 四段"""
+    c = ctx()[0]
+    errs = all_errors()
+    if errs:
+        die('账号表有错误，未同步：\n  ' + '\n  '.join(errs))
+    acc_txt, _, own_txt = sys.stdin.read().partition('\n---CCA-OWN---\n')
+    remote = {}
+    try:
+        a = json.loads(acc_txt.strip()) if acc_txt.strip() else None
+        if isinstance(a, dict):
+            remote['accounts'] = a.get('accounts')
+    except ValueError:
+        pass
+    try:
+        o = json.loads(own_txt.strip()) if own_txt.strip() else None
+        if isinstance(o, dict):
+            remote['owners'] = o
+    except ValueError:
+        pass
+    payload, owners = router_merge(c, remote)
+    if not RO:
+        cfg_save(c)
+    base, n = payload['base'], payload['slots']
+    slot_node = {a['slot']: a['node'] for a in payload['accounts']}
+    print(json.dumps(payload, ensure_ascii=False))
+    print('---CCA-PORTS---')
+    for s in range(1, n + 1):
+        print(base + s)
+    print('---CCA-SELECT---')
+    for s in range(1, n + 1):
+        print('CCA-%d\t%s' % (s, slot_node.get(s, 'REJECT')))
+    print('---CCA-OWN---')
+    print(json.dumps(owners, ensure_ascii=False))
+
+
+def cmd_slot_name(slot):
+    """回读的 accounts.yaml（stdin）里某个槽位上的账号名；route_router 用它校验路由器上这个端口现在是不是我这个账号"""
+    try:
+        d = json.loads(sys.stdin.read() or '{}')
+    except ValueError:
+        d = {}
+    s = int(slot)
+    for a in (d.get('accounts') if isinstance(d, dict) else []) or []:
+        if isinstance(a, dict) and a.get('slot') == s:
+            print(a.get('name') or '')
+            return
+    print('')
+
+
+def cmd_router_evict():
+    """卸载时：路由器回读的 accounts.yaml + owners（stdin，用 ---CCA-OWN--- 隔开）里去掉我这台的槽位，保留别的设备的。
+    还有别的设备 → 输出剩下的 accounts.yaml / ports / select / owners 四段（调用方推上去，撤掉我的那部分）；
+    没有别的设备（或 owners 读不到）→ 只打印 EMPTY，调用方据此整体拆除路由器。"""
+    c = ctx()[0]
+    did = device_id(c)
+    acc_txt, _, own_txt = sys.stdin.read().partition('\n---CCA-OWN---\n')
+    try:
+        a = json.loads(acc_txt.strip()) if acc_txt.strip() else {}
+    except ValueError:
+        a = {}
+    try:
+        o = json.loads(own_txt.strip()) if own_txt.strip() else {}
+    except ValueError:
+        o = {}
+    racc = (a.get('accounts') if isinstance(a, dict) else None) or []
+    rown = o if isinstance(o, dict) else {}
+    others = [x for x in racc if isinstance(x, dict) and x.get('name')
+              and rown.get(str(x.get('slot'))) and rown.get(str(x.get('slot'))) != did]
+    if not others:
+        if not RO:
+            cfg_save(c)   # 落盘 device_id（懒生成的）
+        print('EMPTY')
+        return
+    top = max(x['slot'] for x in others)
+    slots = max(POOL_STEP, -(-top // POOL_STEP) * POOL_STEP)
+    nodes = list(dict.fromkeys([x.get('node') for x in others if x.get('node') and x.get('node') != 'REJECT']))
+    accounts = sorted(({'slot': x['slot'], 'name': x['name'], 'node': x.get('node')} for x in others), key=lambda x: x['slot'])
+    owners = {str(x['slot']): rown.get(str(x['slot'])) for x in others}
+    slot_node = {x['slot']: x['node'] for x in accounts}
+    if not RO:
+        cfg_save(c)
+    print(json.dumps({'base': FIRST_PORT - 1, 'slots': slots, 'nodes': nodes, 'accounts': accounts}, ensure_ascii=False))
+    print('---CCA-PORTS---')
+    for s in range(1, slots + 1):
+        print(FIRST_PORT - 1 + s)
+    print('---CCA-SELECT---')
+    for s in range(1, slots + 1):
+        print('CCA-%d\t%s' % (s, slot_node.get(s, 'REJECT')))
+    print('---CCA-OWN---')
+    print(json.dumps(owners, ensure_ascii=False))
 
 
 # --- 账号设备标识：先于登录准备，重新登录和改别名都不换 -------------------------
@@ -2387,6 +2556,7 @@ def cmd_env(key):
     # ACC_FLAGS 是 cca 运行这个工具时都要加的
     sh(ACC_KEY=key, ACC_ID=acct_id(key), ACC_ALIAS=a, ACC_EMAIL=e, ACC_NAME=a or e, ACC_LABEL=label_of(key),
        ACC_KIND='api' if api else 'oauth', ACC_NODE=node_of(v) or '直连', ACC_PORT=port or '',
+       ACC_POOLNAME=T.pool_prefix + acct_id(key),   # 路由器端口池里这个账号的名字（route_router 回读校验槽位用）
        ACC_SLOT=port - FIRST_PORT + 1 if port else '', ACC_PROXY='http://%s:%d' % (host, port) if host and port else '',
        ACC_BASE_URL=api_url(v) if api else '', ACC_MODEL=(v.get('model') or '') if api else '',
        ACC_DIR=adir(key), ACC_HOME=cdir(key), ACC_MASTER=T.master, ACC_CHROME_DIR=os.path.join(adir(key), 'chrome'),
@@ -2479,7 +2649,7 @@ def cmd_router_env():
 
 def cmd_router_set(host, port, user, key):
     c = cfg_load()
-    c['router'] = {'host': host, 'port': int(port), 'user': user, 'key': key}
+    c['router'] = {'host': host, 'port': int(port), 'user': user, 'key': key}   # 换路由器：新路由器上没有 owners 文件，第一次推会直接覆盖
     c['proxy_host'] = host
     cfg_save(c)
 
@@ -13116,7 +13286,7 @@ CMDS = {
     'get': cmd_get, 'set': cmd_set, 'nodes-allowed': cmd_nodes_allowed, 'set-nodes': cmd_set_nodes, 'nodes-import': cmd_nodes_import,
     'restricted': cmd_restricted,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
-    'accounts-json': cmd_accounts_json, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest, 'sync-state': cmd_sync_state,
+    'accounts-json': cmd_accounts_json, 'router-merge': cmd_router_merge, 'router-evict': cmd_router_evict, 'slot-name': cmd_slot_name, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest, 'sync-state': cmd_sync_state,
     'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'launch-check': cmd_launch_check, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
@@ -14419,9 +14589,13 @@ RB
 }
 
 # 一次 SSH 会话完成部署：写入脚本和账号表、装钩子/cron、热加载
-router_bundle() {
-	local acc
-	acc=$(py accounts-json) || return 1
+router_bundle() {   # stdin：回读的 accounts.yaml + owners（router_push 传进来，用 ---CCA-OWN--- 隔开；空的就是全新/单设备）
+	local acc ports sel own merged
+	merged=$(py router-merge) || return 1   # 合并成并集、写回本机端口，输出 accounts.yaml / ports / select / owners 四段
+	acc=$(printf '%s\n' "$merged" | sed -n '1p')
+	ports=$(printf '%s\n' "$merged" | sed -n '/^---CCA-PORTS---$/,/^---CCA-SELECT---$/p' | sed '1d;$d')
+	sel=$(printf '%s\n' "$merged" | sed -n '/^---CCA-SELECT---$/,/^---CCA-OWN---$/p' | sed '1d;$d')
+	own=$(printf '%s\n' "$merged" | sed -n '/^---CCA-OWN---$/,$p' | sed '1d')
 	echo 'set -e'
 	echo 'R="${CCA_ROOT:-}"'
 	echo 'for c in netstat curl; do command -v "$c" >/dev/null 2>&1 || { echo "路由器缺少命令: $c"; exit 1; }; done'
@@ -14433,8 +14607,9 @@ router_bundle() {
 	echo 'chmod 755 "$R/etc/cca/cca-router.sh.new" && mv -f "$R/etc/cca/cca-router.sh.new" "$R/etc/cca/cca-router.sh"'
 	echo "cat > \"\$R/etc/cca/apply.rb\" <<'CCA_EOF_RB'"; router_rb; echo 'CCA_EOF_RB'
 	echo "cat > \"\$R/etc/cca/accounts.yaml\" <<'CCA_EOF_ACC'"; printf '%s\n' "$acc"; echo 'CCA_EOF_ACC'
-	echo "cat > \"\$R/etc/cca/ports\" <<'CCA_EOF_PORTS'"; py ports; echo 'CCA_EOF_PORTS'
-	echo "cat > \"\$R/etc/cca/select\" <<'CCA_EOF_SEL'"; py select-lines; echo 'CCA_EOF_SEL'
+	echo "cat > \"\$R/etc/cca/ports\" <<'CCA_EOF_PORTS'"; [ -z "$ports" ] || printf '%s\n' "$ports"; echo 'CCA_EOF_PORTS'
+	echo "cat > \"\$R/etc/cca/select\" <<'CCA_EOF_SEL'"; [ -z "$sel" ] || printf '%s\n' "$sel"; echo 'CCA_EOF_SEL'
+	echo "cat > \"\$R/etc/cca/owners\" <<'CCA_EOF_OWN'"; printf '%s\n' "$own"; echo 'CCA_EOF_OWN'
 	echo '"$R/etc/cca/cca-router.sh" install'
 	echo '"$R/etc/cca/cca-router.sh" apply'
 }
@@ -14760,13 +14935,36 @@ edit_hint() {   # 各工具改账号表的命令（用着 Antigravity 时才提�
 	printf 'Claude 账号用 cca edit，Codex 账号用 cca codex edit'
 	[ ! -f "$CCA_HOME/agy.json" ] || printf '，Antigravity 账号用 cca agy edit'
 }
+router_lock_read() {   # 抢路由器上的推送锁，同时回读 accounts.yaml / owners（一次 ssh）。抢不到（别的设备正在推、锁还不陈旧）返回 1。
+	# 锁是 /etc/cca/push.lock 目录，里面 ts 记获取时间；超过 120 秒算陈旧（持有者崩了）破锁重拿。推完由 router_unlock 放锁
+	local out
+	out=$(printf '%s' 'R="${CCA_ROOT:-}/etc/cca"; mkdir -p "$R" 2>/dev/null
+if mkdir "$R/push.lock" 2>/dev/null; then date +%s > "$R/push.lock/ts" 2>/dev/null; echo CCA-LOCK-OK
+else
+  ts=$(cat "$R/push.lock/ts" 2>/dev/null); now=$(date +%s)
+  if [ -z "$ts" ] || [ "$((now - ts))" -gt 120 ]; then
+    rm -rf "$R/push.lock"; mkdir "$R/push.lock" 2>/dev/null && { date +%s > "$R/push.lock/ts"; echo CCA-LOCK-OK; } || echo CCA-LOCK-BUSY
+  else echo CCA-LOCK-BUSY; fi
+fi
+cat "$R/accounts.yaml" 2>/dev/null; echo; echo ---CCA-OWN---; cat "$R/owners" 2>/dev/null' | rsh 'sh -s' 2>/dev/null)
+	case "$out" in
+		CCA-LOCK-BUSY*) return 1 ;;
+		CCA-LOCK-OK*) printf '%s' "$out" | sed '1d' ;;   # 去掉第一行的锁状态，剩下的是回读的 accounts.yaml + owners
+		*) printf '%s' "$out" ;;   # 连不上等（没拿到锁状态）：当没锁照常走，推不成会在下面报错
+	esac
+}
+router_unlock() { rsh "rm -rf $RDIR/push.lock" </dev/null >/dev/null 2>&1 || :; }   # 放掉推送锁
+
 router_push() {   # 把账号表和路由器端脚本部署到路由器（返回值同 router_sync）
-	local out rc bundle
+	local out rc bundle remote
 	router_ready || { warn "还没配置路由器（cca router setup）"; return 1; }
 	py validate all || { warn "账号表有错误，先修正（$(edit_hint)）"; return 1; }
-	bundle=$(router_bundle) || { warn "生成路由器部署内容失败"; return 1; }
+	# 并发锁 + 回读：抢到锁（别的设备没在同时推）才推，回读 accounts.yaml + owners 合并时保留别的设备的槽位（读不到就当全新/单设备覆盖）
+	remote=$(router_lock_read) || { info "路由器端口池正被别的设备更新，这次先不同步（下次会自动补；启动前会回读校验，不会走错出口）"; return 0; }
+	bundle=$(printf '%s' "$remote" | router_bundle) || { warn "生成路由器部署内容失败"; router_unlock; return 1; }
 	info "正在同步账号到路由器 ${ROUTER_HOST} …"
 	out=$(printf '%s\n' "$bundle" | rsh 'sh -s' 2>&1); rc=$?
+	router_unlock
 	[ -n "$out" ] && printf '%s\n' "$out" | LC_ALL=C sed 's/^/  │ /' >&2
 	if [ $rc -eq 3 ]; then
 		if allow_reload "$out"; then
@@ -14803,6 +15001,40 @@ router_sync_soon() {   # 增删改账号后同步到路由器；在外面连不�
 	router_sync
 }
 
+router_uninstall() {   # 多设备共用一个路由器时只撤掉我这台（账号端口 + 登录公钥），分流保留给别的设备；我是唯一一台（或读不到 owners）才整体拆除
+	local remote reduced acc ports sel own key
+	router_ready || return 1
+	remote=$(rsh "cat $RDIR/accounts.yaml 2>/dev/null; echo; echo ---CCA-OWN---; cat $RDIR/owners 2>/dev/null" </dev/null 2>/dev/null)
+	reduced=$(printf '%s' "$remote" | py router-evict) || { warn "算不出要保留的部分，没有改动路由器"; return 1; }
+	if [ "$reduced" = EMPTY ]; then
+		rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub"   # 只有我这台（或路由器上没有 owners）：整体拆除
+		return
+	fi
+	warn "这个路由器还有别的设备在用：只撤掉这台 Mac 的账号端口和它的登录公钥，分流保留给别的设备"
+	acc=$(printf '%s\n' "$reduced" | sed -n '1p')
+	ports=$(printf '%s\n' "$reduced" | sed -n '/^---CCA-PORTS---$/,/^---CCA-SELECT---$/p' | sed '1d;$d')
+	sel=$(printf '%s\n' "$reduced" | sed -n '/^---CCA-SELECT---$/,/^---CCA-OWN---$/p' | sed '1d;$d')
+	own=$(printf '%s\n' "$reduced" | sed -n '/^---CCA-OWN---$/,$p' | sed '1d')
+	key=$(cat "$ROUTER_KEY.pub")
+	{
+		echo 'set -e'
+		echo 'R="${CCA_ROOT:-}"'
+		echo 'mkdir -p "$R/etc/cca"'
+		echo "cat > \"\$R/etc/cca/accounts.yaml\" <<'CCA_EOF_ACC'"; printf '%s\n' "$acc"; echo 'CCA_EOF_ACC'
+		echo "cat > \"\$R/etc/cca/ports\" <<'CCA_EOF_PORTS'"; [ -z "$ports" ] || printf '%s\n' "$ports"; echo 'CCA_EOF_PORTS'
+		echo "cat > \"\$R/etc/cca/select\" <<'CCA_EOF_SEL'"; [ -z "$sel" ] || printf '%s\n' "$sel"; echo 'CCA_EOF_SEL'
+		echo "cat > \"\$R/etc/cca/owners\" <<'CCA_EOF_OWN'"; printf '%s\n' "$own"; echo 'CCA_EOF_OWN'
+		echo "cat > \"\$R/etc/cca/evict.key\" <<'CCA_EOF_KEY'"; printf '%s\n' "$key"; echo 'CCA_EOF_KEY'
+		echo 'for f in "$R/etc/dropbear/authorized_keys" "$HOME/.ssh/authorized_keys"; do'
+		echo '  [ -f "$f" ] || continue'
+		echo '  grep -vxFf "$R/etc/cca/evict.key" "$f" > "$f.cca.$$" 2>/dev/null || :'
+		echo '  mv "$f.cca.$$" "$f"'
+		echo 'done'
+		echo 'rm -f "$R/etc/cca/evict.key"'
+		echo 'CCA_ALLOW_RELOAD=1 "$R/etc/cca/cca-router.sh" apply'
+	} | rsh 'sh -s'
+}
+
 cmd_router() {
 	case "${1:-status}" in
 		setup) cmd_router_setup ;;
@@ -14817,8 +15049,8 @@ cmd_router() {
 		uninstall)
 			router_ready || die "还没配置路由器（cca router setup）"
 			need_tty
-			confirm "从路由器移除 cca（钩子、cron、端口池、/etc/cca、SSH 公钥）？立即移除端口池要让 OpenClash / ShellCrash 重载一次（约 20 秒）" n || return 0
-			rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" ;;
+			confirm "从路由器移除 cca（钩子、cron、端口池、/etc/cca、SSH 公钥；如果还有别的设备共用这个路由器，只撤掉这台 Mac 的那部分）？立即移除端口池要让 OpenClash / ShellCrash 重载一次（约 20 秒）" n || return 0
+			router_uninstall ;;
 		*) die "用法: cca router setup|sync|status|nodes|log|ssh|uninstall" ;;
 	esac
 }
@@ -15887,6 +16119,21 @@ router_ensure() {   # 让路由器确认端口池在，并把各槽位切到账�
 	fail_warn sync_failed "路由器账号节点未能核实，已停止使用端口池（避免走错出口）。排查：cca router status / cca router sync"
 	return 1
 }
+router_slot_check() {   # 路由器上 ACC_SLOT 的账号就是我这个账号吗（按账号名认，和出口节点、改名无关）：多设备共用时，
+	                      # 别的设备或旧版 cca 可能把这个槽位改走。对不上就重新同步一次，还对不上就停——宁可断开也不走错出口
+	local got
+	got=$(rsh "cat $RDIR/accounts.yaml 2>/dev/null" </dev/null 2>/dev/null | py slot-name "$ACC_SLOT")
+	[ "$got" = "$ACC_POOLNAME" ] && return 0
+	warn "路由器上端口 ${ACC_PORT} 现在的账号和这台 Mac 对不上（可能别的设备或旧版 cca 改过）：重新同步一次"
+	router_sync || { fail_warn sync_failed "重新同步没成功，为避免走错出口已停止。排查：cca router status / cca router sync"; return 1; }
+	eval "$(py env "$ACC_KEY")" || return 1   # 并集可能把我的账号排到别的槽位：重取 ACC_SLOT/ACC_PORT/ACC_POOLNAME/ACC_PROXY
+	router_ensure || return 1
+	port_open "$PROXY_HOST" "$ACC_PORT" || { fail_warn port_closed "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"; return 1; }
+	got=$(rsh "cat $RDIR/accounts.yaml 2>/dev/null" </dev/null 2>/dev/null | py slot-name "$ACC_SLOT")
+	[ "$got" = "$ACC_POOLNAME" ] && return 0
+	fail_warn sync_failed "路由器上端口 ${ACC_PORT} 的账号仍和这台 Mac 对不上（可能别的设备在反复覆盖端口池），为避免走错出口已停止。排查：cca router status / cca router sync"
+	return 1
+}
 route_router() {   # 在家：经路由器的端口池
 	[ -n "$ACC_PROXY" ] || { fail_warn no_router "还没配置路由器（cca router setup）"; TOOL=claude gui_terminal router_setup "还没配置路由器：在终端里配置一次" router setup; return 1; }
 	load_router
@@ -15895,6 +16142,7 @@ route_router() {   # 在家：经路由器的端口池
 		fail_warn port_closed "端口 ${PROXY_HOST}:${ACC_PORT} 不通。为避免走错出口，已停止。排查：cca router status / cca router sync"
 		return 1
 	}
+	router_slot_check || return 1   # 多设备共用一个路由器：回读确认这个端口现在确实是我这个账号，不是才继续（杜绝悄悄走错出口）
 	core_nodes_hook   # 在外面会走内置代理的机器：节点定义旧了就在后台从路由器拷一份新的
 	ROUTE=router
 }
@@ -16767,22 +17015,33 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 	ROUTE=local
 }
 cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户端按提示手动加配置
-	local miss was
+	local miss was vdetail
 	need_tty
 	py validate all || FAIL_CODE=table_invalid die "账号表有错误：先修正（$(edit_hint)）"   # 本机端口池里有各工具的账号
 	load_local
-	[ "$LOCAL_SLOTS" -gt 0 ] || { fail_warn error "还没有账号（${CMD} add）"; return 1; }
+	# 不要求先加账号：没有走节点的账号时也能先把本机客户端配好，端口池随后随账号补齐（LOCAL_SLOTS=0）
 	[ "$VERGE_FOUND" = 1 ] || { local_setup_other; return; }
 	say ""
-	say "  检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
-	say "  开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组 CCA-n，启动账号前 cca 把它切到账号的节点；然后让 Clash Verge 重新加载一次配置。"
+	if [ "${LOCAL_SLOTS:-0}" -gt 0 ]; then
+		say "  检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
+		say "  开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组 CCA-n，启动账号前 cca 把它切到账号的节点；然后让 Clash Verge 重新加载一次配置。"
+		vdetail="检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST} 开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组，启动账号前切到账号的节点，然后让 Clash Verge 重新加载一次配置。原来的配置、规则和系统代理都不变。${FILL_ID:+维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。}"
+	else
+		say "  检测到 Clash Verge。现在还没有走节点的账号，cca 先把它选成本机客户端；以后每加一个走节点的账号，"
+		say "  启动它时 cca 自动在 Clash Verge 的「全局扩展脚本」里补一个端口（127.0.0.1，从 ${LOCAL_FIRST} 起）、切到账号的节点。"
+		vdetail="检测到 Clash Verge。现在还没有走节点的账号，cca 先把它选成本机客户端，在「全局扩展脚本」里留好位置；以后每加一个走节点的账号，启动它时 cca 自动补一个端口（127.0.0.1，从 ${LOCAL_FIRST} 起）、切到账号的节点、重新加载一次配置。原来的配置、规则和系统代理都不变。${FILL_ID:+维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。}"
+	fi
 	say "  原来的配置、规则和系统代理都不变；不想用了运行 cca local off 删掉。"
 	[ -z "$FILL_ID" ] || say "  维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。"
-	confirm "现在配置 Clash Verge 吗？" y q=local.verge "title=配置本机 Clash" \
-		"detail=检测到 Clash Verge。cca 会在它的「全局扩展脚本」末尾加一段代码：在本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST} 开 ${LOCAL_SLOTS} 个端口，每个端口一个策略组，启动账号前切到账号的节点，然后让 Clash Verge 重新加载一次配置。原来的配置、规则和系统代理都不变。${FILL_ID:+维护者发布了参考节点：Clash Verge 当前的配置里缺的会直接写进去（行尾带 # cca，改之前的留一份）。}" || { gui_cancelled; return 1; }
+	confirm "现在配置 Clash Verge 吗？" y q=local.verge "title=配置本机 Clash" "detail=${vdetail}" || { gui_cancelled; return 1; }
 	was="$LOCAL_CLIENT"
 	py local-set client clash-verge || return 1
 	[ "$was" != builtin ] || core_retire
+	if [ "${LOCAL_SLOTS:-0}" = 0 ]; then   # 还没有走节点的账号：先记下选了 Clash Verge，端口池等加账号后自动补（启动账号时 local_ensure 写进全局扩展脚本）
+		okay "已把 Clash Verge 选成本机客户端：加了走节点的账号之后，启动时 cca 自动在它里面补端口"
+		gui_done local_ready "已配置 Clash Verge（加账号后自动补端口）"
+		return 0
+	fi
 	local_ensure || { gui_fail local_unavailable "Clash Verge 的端口池没有就绪（详情里有原因）"; return 1; }
 	miss=$(py local-missing "$VERGE_DIR/clash-verge.yaml")
 	[ -z "$miss" ] || fail_warn node_missing "Clash Verge 里没有这些节点：${miss}。用它们的账号在外面会被拒绝连接，直到 Clash Verge 里有同名（或服务器地址相同）的节点"
@@ -16792,10 +17051,10 @@ cmd_local_setup() {   # Clash Verge 自动配置；其它基于 mihomo 的客户
 local_setup_other() {   # 没装 Clash Verge：用内置代理（默认），或者手动配置别的基于 mihomo 的客户端
 	say ""
 	if on_linux; then
-		say "  可以用 cca 内置的代理：cca 在后台跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST} 每个端口走一个账号的节点"
+		say "  可以用 cca 内置的代理：cca 在后台跑一个 mihomo 内核，本机 127.0.0.1（从 ${LOCAL_FIRST} 起）每个走节点的账号一个端口"
 		say "  （第一次要下载约 21MB）。节点用维护者的参考节点，在家时也从路由器拷一份；也可以手动配置别的基于 mihomo 的客户端。"
 	else
-		say "  没找到 Clash Verge。可以用 cca 内置的代理：在界面 App 里跑一个 mihomo 内核，本机 127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
+		say "  没找到 Clash Verge。可以用 cca 内置的代理：在界面 App 里跑一个 mihomo 内核，本机 127.0.0.1（从 ${LOCAL_FIRST} 起）"
 		say "  每个端口走一个账号的节点（第一次要下载约 21MB），节点用在家时从路由器拷的那份；也可以手动配置别的基于 mihomo 的客户端。"
 	fi
 	if ! core_possible; then
@@ -16844,6 +17103,11 @@ manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：�
 	if [ -n "$PROMPT_GUI" ]; then
 		manual_form "$was" || return 1
 		py local-set applied "$LOCAL_WANT"
+		if [ "${LOCAL_SLOTS:-0}" = 0 ]; then
+			okay "已配置好本机 Clash 客户端：加了走节点的账号之后，启动时 cca 自动补端口"
+			gui_done local_ready "已配置本机 Clash 客户端（加账号后自动补端口）"
+			return 0
+		fi
 		local_ensure || { gui_fail local_unavailable "本机 Clash 的端口池没有就绪（详情里有原因）"; return 1; }
 		okay "本机端口池已就绪：127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
 		gui_done local_ready "本机端口池已就绪：127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}"
@@ -16851,10 +17115,15 @@ manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：�
 	fi
 	say ""
 	say "  其它基于 mihomo（Clash Meta 内核）的客户端也可以，要手动做两件事："
-	say "  1. 把下面 listeners 和 proxy-groups 的条目，分别追加到客户端配置（或覆写）里的同名列表，保存并重新加载："
-	say ""
-	py local-snippet | sed 's/^/       /' >&2
-	say ""
+	if [ "${LOCAL_SLOTS:-0}" -gt 0 ]; then
+		say "  1. 把下面 listeners 和 proxy-groups 的条目，分别追加到客户端配置（或覆写）里的同名列表，保存并重新加载："
+		say ""
+		py local-snippet | sed 's/^/       /' >&2
+		say ""
+	else
+		say "  1. 现在还没有走节点的账号，暂时没有要粘贴的端口条目；加了账号之后再运行 cca local setup 拿要加的 listeners/proxy-groups。"
+		say ""
+	fi
 	say "  2. 打开客户端的外部控制（external-controller），cca 用它切换各账号的节点"
 	confirm "这两件都做好了吗？" y || return 1
 	ctl=$(ask "  外部控制地址（例如 127.0.0.1:9090；Unix socket 写 unix:/路径）：" "")
@@ -16872,6 +17141,10 @@ manual_setup() {   # 其它基于 mihomo（Clash Meta 内核）的客户端：�
 		return 1
 	fi
 	py local-set applied "$LOCAL_WANT"
+	if [ "${LOCAL_SLOTS:-0}" = 0 ]; then
+		okay "已配置好本机 Clash 客户端的外部控制：加了走节点的账号之后，运行 cca local setup 拿要粘贴的端口条目；启动账号时 cca 自动切节点"
+		return 0
+	fi
 	local_ensure || return 1
 	okay "本机端口池已就绪：127.0.0.1:${LOCAL_FIRST}–${LOCAL_LAST}，连不上路由器时账号自动走这里"
 }
@@ -18759,7 +19032,7 @@ cmd_restore() {
 	use_tool claude
 	py mail-forget 2>/dev/null   # 邮箱助手：钥匙串里的应用专用密码（没配置过也照样跑：什么都不删）
 	if router_ready; then
-		out=$(rsh "CCA_ALLOW_RELOAD=1 $RDIR/cca-router.sh uninstall" < "$ROUTER_KEY.pub" 2>&1); rc=$?
+		out=$(router_uninstall 2>&1); rc=$?
 		[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  │ /' >&2
 		if [ $rc -eq 0 ]; then
 			info "路由器已还原"

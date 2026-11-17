@@ -2117,6 +2117,32 @@ ok "lint：cca、install.sh、release.sh、policy.sh、macos 的脚本和 App �
 out=$(run cca router status 2>&1)
 ok "router status：列出槽位、端口和选中节点" 'printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A" && printf "%s" "$out" | grep -q "槽位 CCA-2 :7902 监听中 → REJECT"'
 
+# 11a2. 多设备共用一个路由器（owners 认所有权；只在 macOS 上）：现在路由器上只有 alice@槽位 1（owner = 这台）
+cp "$R/etc/cca/accounts.yaml" "$T/md_acc.bak"; cp "$R/etc/cca/owners" "$T/md_own.bak"
+cp "$H/.cca/config.json" "$T/md_cfg.bak"; cp "$H/.cca/accounts.json" "$T/md_tbl.bak"
+cp "$R/etc/dropbear/authorized_keys" "$T/md_keys.bak" 2>/dev/null
+deva=$(cfgv 'c.get("device_id")')
+# 直接写路由器的 accounts.yaml + owners，扮演"另一台设备"占了槽位 2（owner bbbb…，节点 US-B）
+python3 - "$R/etc/cca/accounts.yaml" "$R/etc/cca/owners" <<'PY'
+import json, sys
+acc = json.load(open(sys.argv[1])); acc['slots'] = max(acc.get('slots', 0), 8)
+acc['accounts'] = [a for a in acc['accounts'] if a['slot'] != 2] + [{'slot': 2, 'name': 'carol-dev2', 'node': 'US-B'}]
+acc['nodes'] = list(dict.fromkeys(acc['nodes'] + ['US-B']))
+json.dump(acc, open(sys.argv[1], 'w'), ensure_ascii=False)
+own = json.load(open(sys.argv[2])); own['2'] = 'bbbb1111bbbb1111'; json.dump(own, open(sys.argv[2], 'w'))
+PY
+edit_table 'j["bob@example.com"] = "US-C"'
+out=$(run CCA_YES=1 cca router sync -y 2>&1)
+ok "多设备共用：同步保留别的设备的账号（carol@2），自己的 bob 排到空槽位 3，不互相覆盖" '[ "$(sel CCA-2)" = US-B ] && [ "$(sel CCA-3)" = US-C ] && grep -q "carol-dev2" "$R/etc/cca/accounts.yaml" && python3 -c "import json,sys; o=json.load(open(sys.argv[1])); sys.exit(0 if o.get(\"2\")==\"bbbb1111bbbb1111\" and o.get(\"3\")==sys.argv[2] else 1)" "$R/etc/cca/owners" "$deva"'
+# 卸载按 owner：路由器还有别的设备（carol）→ 只撤这台（alice、bob），保留 carol，/etc/cca 不整体删
+out=$(run CCA_YES=1 CCA_TTY="$(ans y)" cca router uninstall 2>&1)
+ok "多设备共用：卸载时路由器还有别的设备，只撤这台的账号、保留别的设备的（carol），不整体拆除" 'grep -q "carol-dev2" "$R/etc/cca/accounts.yaml" && ! grep -q "alice-example-com" "$R/etc/cca/accounts.yaml" && ! grep -q "bob-example-com" "$R/etc/cca/accounts.yaml" && [ -e "$R/etc/cca" ] && printf "%s" "$out" | grep -q "还有别的设备在用"'
+# 还原路由器和账号表，后面的用例照旧
+cp "$T/md_acc.bak" "$R/etc/cca/accounts.yaml"; cp "$T/md_own.bak" "$R/etc/cca/owners"
+cp "$T/md_cfg.bak" "$H/.cca/config.json"; cp "$T/md_tbl.bak" "$H/.cca/accounts.json"
+[ -f "$T/md_keys.bak" ] && cp "$T/md_keys.bak" "$R/etc/dropbear/authorized_keys"
+run CCA_YES=1 cca router sync -y >/dev/null 2>&1
+
 # 11b. 自动更新：假的 GitHub Releases + 测试用发布密钥
 G="$T/gh"; mkdir -p "$G"
 ssh-keygen -q -t ed25519 -N '' -C test-release -f "$T/relkey"; ssh-keygen -q -t ed25519 -N '' -f "$T/evilkey"
