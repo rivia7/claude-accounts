@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.6", title: "没有路由器的笔记本也能配：内置代理 + 维护者节点", points: [
+            .init(symbol: "laptopcomputer",
+                  text: "配置向导新增「没有路由器」一项：用 cca 自带的内置代理（内核在这个 App 里跑，要 macOS 26），节点由维护者的私有映射提供。映射里已经有节点就直接配好、接着添加账号。"),
+            .init(symbol: "key.fill",
+                  text: "还没配过映射的，向导生成一把只读 deploy key、显示一行发给维护者运行的命令（已复制到剪贴板）；维护者加好后 App 会自动拉取映射、导入节点，你再点「开始配置」就能加账号——不卡在这一步。"),
+        ], art: "route"),
         ReleaseNote(version: "3.3.0-beta.5", title: "新装更省心：图形界面一步步引导配置", points: [
             .init(symbol: "sparkles",
                   text: "macOS 上的一键安装脚本现在默认装好并打开图形界面 App，剩下的配置在 App 里一步步做，不用再对着终端填。老系统（macOS 26 以前）自动回退到终端引导；想在终端里配置照样运行 cca install。"),

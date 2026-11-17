@@ -1942,6 +1942,20 @@ printf '{}' > "$H/.cca/accounts.json"
 out=$(sess '{"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
+# 没有路由器笔记本（B2，第二期）：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没配过映射/没节点 → 显示给维护者的 deploy key 那一行，不阻塞
+cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
+b2_had_policy=0; [ -d "$H/.cca/policy" ] && { b2_had_policy=1; rm -rf "$T/policy.b2"; cp -R "$H/.cca/policy" "$T/policy.b2"; }
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"   # 端口池清空(Claude+Codex)→ LOCAL_SLOTS=0,core_setup 早返回不下载/不起内核
+out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("policy", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+rm -rf "$H/.cca/policy"
+out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.repo":[{"v":"me/cca-policy"}],"onboard.policy":[{}]}' -- cca _onboard 2>&1); rc=$?
+ok "没有路由器笔记本：没配过映射、没节点 → 问映射仓库、生成 deploy key、在 code 字段里显示给维护者运行的那一行，不阻塞；记下仓库但不记 onboarded（欢迎卡片留着回来继续）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.repo onboard.policy" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"fields\"][0][\"kind\"] == \"code\" and \"./policy.sh key add\" in e[\"fields\"][0][\"value\"]" && gj state | jok "cfg.get(\"policy\") == \"me/cca-policy\" and not cfg.get(\"onboarded\")"'
+cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
+rm -rf "$H/.cca/policy"; [ "$b2_had_policy" = 1 ] && cp -R "$T/policy.b2" "$H/.cca/policy"
 unlisten 7901; n=$(reloads)
 out=$(sess '{}' --eof-at consent.router_reload -- cca router sync 2>&1); rc=$?
 ok "提问会话：默认“是”的同意，问的时候 App 关掉管道：按取消，不重载" '[ $rc -ne 0 ] && [ "$(reloads)" = "$n" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'

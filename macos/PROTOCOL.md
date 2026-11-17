@@ -763,7 +763,9 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 
 | 题号 | 命令 | 控件 | 问什么 |
 |---|---|---|---|
-| `onboard.net` | `_onboard`（配置向导） | `choice` | 这台 Mac 怎么给账号联网（第一期：路由器 / 先跳过；无路由器笔记本下一期加）。已经配过路由器时不问，直接到加账号 |
+| `onboard.net` | `_onboard`（配置向导） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理 + 维护者节点，B2）/ 先跳过。已经配过路由器时不问，直接到加账号 |
+| `onboard.repo` | `_onboard`（没有路由器） | `text` | 没有默认映射仓库时：问维护者的映射仓库（owner/name） |
+| `onboard.policy` | `_onboard`（没有路由器） | `code` | 显示给维护者运行的那一行（把这台机器加成只读 deploy key；只显示、不回答）。维护者加好后 App 自动拉取映射、导入节点 |
 | `onboard.add` | `_onboard`（配置向导） | `confirm` | 网络配好后：现在添加第一个账号吗（接着走 `add.basic` / `add.node`） |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
 | `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
