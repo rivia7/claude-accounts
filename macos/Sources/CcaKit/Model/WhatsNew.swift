@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.4", title: "多台 Mac 共用一个路由器不冲突；配本机代理不用先加账号", points: [
+            .init(symbol: "network",
+                  text: "两台 Mac 在同一个局域网里管同一个路由器时，不再互相覆盖端口分流：各自的账号共用同一套端口、保留对方的；启动前会回读确认这个端口确实是自己的账号，对不上就重新同步、还不对就断开（宁可断开也不走错出口）。"),
+            .init(symbol: "slider.horizontal.3",
+                  text: "配置本机 Clash / 内置代理 / 手动客户端时不再要求先加账号：先把客户端选好，端口等加了走节点的账号再自动补上。"),
+        ], art: "route"),
         ReleaseNote(version: "3.3.0-beta.3", title: "邮箱助手：信任一个转发中转、把非登录邮件折起来", points: [
             .init(symbol: "exclamationmark.shield",
                   text: "有些隐私别名 / 转发服务会去掉 Anthropic 的签名、用自己的域名重签，这样转来的登录邮件以前会被拦下。现在能给某个账号单独「信任一个转发中转」——不安全的开关，默认关，只在你清楚这个中转可信、别名没泄露时才开。"),
