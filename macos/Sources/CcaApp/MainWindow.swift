@@ -65,7 +65,15 @@ struct SplitView: View {
             case .whatsNew: WhatsNewSheet().environment(guide)
             }
         }
-        .onAppear { guide.startIfNeeded() }
+        // 等 cca 连上、读到 state 再决定弹不弹教程：还没配置过时（首页正给配置向导的欢迎）先不弹，让欢迎卡片带头；配好之后再弹
+        .task {
+            var tries = 0
+            while model.state == nil, model.phase == .ready, tries < 40 {
+                tries += 1
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            guide.startIfNeeded(skip: model.needsOnboarding)
+        }
     }
 }
 

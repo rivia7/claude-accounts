@@ -57,7 +57,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="3.3.0-beta.4"
+VERSION="3.3.0-beta.5"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -11754,6 +11754,24 @@ def policy_next_check():
         return None
 
 
+def onboarded(c):
+    """配置向导还要不要出现：显式标记过（cmd_onboard 做完写的），或者这台机器已经有账号 / 配过路由器 / 配过本机客户端
+    （老用户升级上来：自然算配置过，不打扰）→ 不再出现。全新装、什么都没配时才是 False。只读，不写文件"""
+    if c.get('onboarded'):
+        return True
+    if (c.get('router') or {}).get('host') or (c.get('local') or {}).get('client'):
+        return True
+    return any(TABS.get(tool.name) for tool in TOOLS)
+
+
+def cmd_onboard_done():
+    """cca(py) onboard-done：记下这台机器已经走过配置向导（config.json 的 onboarded），以后 App 不再弹向导。
+    cmd_onboard 做完、以及 App 的"以后再说"（--skip）调用"""
+    c = cfg_load()
+    c['onboarded'] = True
+    cfg_save(c)
+
+
 def cmd_gui_state():
     """cca _gui state：图形界面的只读快照，两个工具一起。CCA_RO=1 下运行：对账只在内存里做，不写文件、不往 stderr 说
     （本来会做的改动在 notices 里）。读不了的文件报在 errors 里，不退出。stdin 是路由器端代码（算同步摘要）；
@@ -11797,7 +11815,8 @@ def cmd_gui_state():
                       'local': local_info(c),
                       'nodes': c['nodes'], 'min_trust': c['min_trust'], 'leak_check': c.get('leak_check') is not False,
                       'update': c['update'], 'policy': {'configured': bool(pol), 'repo': pol if isinstance(pol, str) else None,
-                                                         'next_check_epoch': policy_next_check() if pol else None}},
+                                                         'next_check_epoch': policy_next_check() if pol else None},
+                      'onboarded': onboarded(c)},
            'routing': {'first_port': FIRST_PORT, 'pool_size': pool_size(c),
                        'sync': 'n/a' if not r.get('host') else 'ok' if sync_digest(c, code) == c.get('synced') else 'pending',
                        'local_sync': 'n/a' if not loc.get('client') else 'ok' if local_want(c) == loc.get('applied') else 'pending',
@@ -13315,7 +13334,7 @@ CMDS = {
     'policy-have': cmd_policy_have, 'policy-forget': cmd_policy_forget,
     'fill-check': cmd_fill_check, 'fill-summary': cmd_fill_summary, 'nodes-fill': cmd_nodes_fill,
     'leak-probe': cmd_leak_probe, 'leak-verdict': cmd_leak_verdict,
-    'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
+    'gui-state': cmd_gui_state, 'gui-live': cmd_gui_live, 'onboard-done': cmd_onboard_done, 'health-save': cmd_health_save, 'health-note': cmd_health_note,
     'presence-agent': cmd_presence_agent, 'presence-wake': cmd_presence_wake, 'presence-stop': cmd_presence_stop,
     'presence-note': cmd_presence_note, 'presence-view': cmd_presence_view, 'dock-tidy': cmd_dock_tidy,
     'cost-worker': cmd_cost_worker, 'cost-sync': cmd_cost_sync, 'cost-stop': cmd_cost_stop,
@@ -18920,7 +18939,40 @@ builtin_onboard() {   # builtin_onboard 接着配置的命令：服务器上直�
 	return 0
 }
 
+cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App 启动的提问会话，PROMPT_GUI 下跑）。把"选上网方式 → 配置 → 加第一个账号"
+	                # 串成一步步的引导，复用现有的路由器/本机客户端/加账号表单；做完记下 onboarded（以后 App 不再弹向导）。
+	                # --skip：不配置、只记下（App 首页「以后再说」用）。取消（答案管道关掉）走 gui_abort：不记 onboarded，下次还能再来
+	local mode
+	if [ "${1:-}" = --skip ]; then py onboard-done; return 0; fi
+	if [ -z "$PROMPT_GUI" ]; then info "配置向导在 cca App 里使用（或运行 ${SELF} install 在终端里配置）"; return 0; fi
+	if ! router_ready; then
+		# 上网方式：第一期只给「路由器」这条完整支持的路；无路由器笔记本（内置代理 + 维护者节点，B2）留到第二期再加进来
+		mode=$(gui_ask choice "这台 Mac 怎么给账号联网？" router \
+			"q=onboard.net" "title=配置向导" "message=给每个账号分配独立的网络出口，启动前 cca 会先检查。之后随时能在设置里改。" \
+			"opt=router"$'\t'"路由器（OpenClash / ShellCrash）"$'\t'"家里/办公室有改好的路由器，按端口给每个账号分流" \
+			"opt=skip"$'\t'"先跳过，稍后在总览里配置"$'\t'"") || return 1
+		case "$mode" in
+			router)
+				ROUTER_FORM_WHY="官方账号要经路由器的端口出去，先配置路由器。"
+				cmd_router_setup || return 1 ;;   # 取消时 gui_abort 已经杀掉进程；软失败就把失败交给 App，不记 onboarded
+			*)   # skip
+				py onboard-done
+				gui_done onboarded "随时在总览里点「＋」添加账号、配置网络出口。"
+				return 0 ;;
+		esac
+	fi
+	# 路由器就绪 → 加第一个账号（已经有账号的——重新走向导时——不再问）
+	if [ -z "$(py keys)" ] && confirm "现在添加第一个账号？" y \
+		"q=onboard.add" "title=配置向导" "detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
+		cmd_add || true
+	fi
+	py onboard-done
+	gui_done onboarded "配置完成！在总览里打开账号使用，或继续添加更多账号。"
+}
+
 cmd_install() {
+	local gui=""   # --gui（install.sh 在 macOS 上传）：基础安装后装好并打开图形界面 App，配置在 App 的引导向导里走；老 macOS、失败时自动回退到终端
+	[ "${1:-}" = --gui ] && gui=1
 	need_deps
 	need_tty
 	mkdir -p "$CCA_HOME/accounts" "$CCA_HOME/bin" "$CCA_HOME/backup" || die "无法创建 $CCA_HOME"
@@ -18957,6 +19009,17 @@ cmd_install() {
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
 	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
+	if [ -n "$gui" ] && gui_os_ok; then   # 默认 GUI 安装：装好并打开 App，剩下的（上网方式、第一个账号）在 App 的引导向导里走
+		say ""
+		info "正在安装图形界面 cca App…"
+		if ( cmd_gui ); then   # 子 shell：cmd_gui 自己的 EXIT trap 不影响这里
+			say ""
+			okay "基础安装完成。接下来在打开的 cca App 里按引导完成配置（选上网方式、添加第一个账号）。"
+			info "想在终端里配置就运行 cca install。"
+			return 0
+		fi
+		warn "图形界面没能装上或打开，改在终端里配置。"
+	fi
 	local onboard=""   # 服务器上直连不通（见 builtin_onboard）：ok 配置好了内置代理；skip 没配置好（等维护者确认之后再运行 cca install）
 	if server_builtin; then
 		if builtin_onboard "cca install"; then onboard=ok; else onboard=skip; fi
@@ -19266,7 +19329,7 @@ main() {
 	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
-		install) cmd_install ;;
+		install) shift; cmd_install "$@" ;;
 		help|-h|--help) usage ;;
 		version|--cca-version) echo "$VERSION" ;;
 		_browser)   # 登录页的浏览器：Claude Code 经 BROWSER 调；Codex、agy 账号登录时 cca 自己调（带着 CCA_TOOL）
@@ -19345,6 +19408,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		policy) shift; cmd_policy "$@" ;;
 		devices) shift; cmd_devices "$@" ;;
 		install-cli) shift; cmd_install_cli "$@" ;;
+		_onboard) shift; cmd_onboard "$@" ;;   # 图形界面的配置向导（提问会话，App 首次运行启动；走和 add 一样的派发路径）
 		@*) OPT_ACCOUNT="${1#@}"; shift; [ "${1:-}" = "--" ] && shift; launch "$@" ;;
 		--) shift; launch "$@" ;;
 		*) launch "$@" ;;

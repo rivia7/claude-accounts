@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.5", title: "新装更省心：图形界面一步步引导配置", points: [
+            .init(symbol: "sparkles",
+                  text: "macOS 上的一键安装脚本现在默认装好并打开图形界面 App，剩下的配置在 App 里一步步做，不用再对着终端填。老系统（macOS 26 以前）自动回退到终端引导；想在终端里配置照样运行 cca install。"),
+            .init(symbol: "list.number",
+                  text: "第一次打开、还没配置过时，首页给个「开始配置」：选这台 Mac 怎么给账号联网 → 配好路由器 → 添加第一个账号，每一步都有说明，傻瓜式填完就能用（无路由器的笔记本下一个测试版再支持）。"),
+        ], art: "fan"),
         ReleaseNote(version: "3.3.0-beta.4", title: "多台 Mac 共用一个路由器不冲突；配本机代理不用先加账号", points: [
             .init(symbol: "network",
                   text: "两台 Mac 在同一个局域网里管同一个路由器时，不再互相覆盖端口分流：各自的账号共用同一套端口、保留对方的；启动前会回读确认这个端口确实是自己的账号，对不上就重新同步、还不对就断开（宁可断开也不走错出口）。"),

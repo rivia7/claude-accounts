@@ -125,6 +125,18 @@ final class AppModel {
     private(set) var state: StateDoc?
     private(set) var stateError: String?
     private(set) var stateLoading = false
+
+    /// 第一次装好、还没配置过（cca 说 `config.onboarded == false`）：首页给个「开始配置」的欢迎，点了走配置向导（`Handoff.onboard`）。
+    /// 只在连上、读到 state 之后才算数（旧版 cca 不给这个字段 → 不弹）。
+    var needsOnboarding: Bool { phase == .ready && (state?.config?.needsOnboarding ?? false) }
+    /// 首页欢迎卡片这次会话里关掉了（「以后再说」）：不持久——下次打开 App 还会出现（真配置过后 needsOnboarding 自然变 false）。
+    /// 在向导里选了「先跳过」才会持久（cca 记下 onboarded）。
+    var onboardingDismissed = false
+    /// 首页要不要显示欢迎卡片。
+    var showWelcome: Bool { needsOnboarding && !onboardingDismissed }
+
+    /// 启动配置向导（首页「开始配置」）。
+    func startOnboarding() { run(.onboard) }
     private(set) var live: LiveDoc?
     private(set) var liveError: String?
     private(set) var liveLoading = false

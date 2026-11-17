@@ -1921,6 +1921,27 @@ out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm gui2 2>&1); rc=$?; cp "$T/ev.j
 ok "提问会话：删除账号答是：账号和钥匙串里的 key 都删了" '[ $rc -eq 0 ] && tblok "\"gui2\" not in t" && [ ! -e "$KC2/api.example.com" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"removed\""'
 out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm 图一 2>&1); rc=$?
 ok "提问会话：删除官方账号" '[ $rc -eq 0 ] && tblok "not any(\"gui1@\" in k for k in t)"'
+# 配置向导（_onboard，App 首次运行引导：选上网方式 → 配好 → 加第一个账号；做完记下 onboarded，以后不再弹）
+cp "$H/.cca/config.json" "$T/cfg.onb.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onb.bak"
+out=$(sess '{}' -- cca _onboard --skip 2>&1); rc=$?
+ok "配置向导：--skip（App「以后再说」）只记下 onboarded、不提问" '[ $rc -eq 0 ] && [ -z "$(asks)" ] && gj state | jok "cfg.get(\"onboarded\") is True and d[\"config\"][\"onboarded\"] is True"'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+onb_before=$(tsum)
+out=$(sess '{}' -- cca _onboard 2>&1); rc=$?
+ok "配置向导：路由器已配好、已有账号 → 不再追问，记下 onboarded、给完成事件、不动账号表" '[ $rc -eq 0 ] && [ -z "$(asks)" ] && [ "$(tsum)" = "$onb_before" ] && gj state | jok "cfg.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- cca _onboard 2>&1); rc=$?
+ok "配置向导：没配过路由器 → 先选上网方式（choice，默认路由器；第一期给路由器/跳过）；选跳过：记下 onboarded、不配置、给完成事件" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.net ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][0][\"value\"] == \"router\" and e[\"fields\"][0][\"options\"][-1][\"value\"] == \"skip\" and e[\"fields\"][0][\"default\"] == \"router\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+out=$(sess '{"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- cca _onboard 2>&1); rc=$?
+ok "配置向导：选「路由器」→ 接着走配置路由器表单（router.basic）；在那页取消就不记 onboarded" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net router.basic" ] && gj state | jok "not cfg.get(\"onboarded\")"'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"
+out=$(sess '{"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
 unlisten 7901; n=$(reloads)
 out=$(sess '{}' --eof-at consent.router_reload -- cca router sync 2>&1); rc=$?
 ok "提问会话：默认“是”的同意，问的时候 App 关掉管道：按取消，不重载" '[ $rc -ne 0 ] && [ "$(reloads)" = "$n" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
@@ -2298,6 +2319,17 @@ ok "自己删掉了 App：cca 更新后不再装回来" '[ ! -e "$GA" ] && ! gre
 run cca gui >/dev/null 2>&1
 out=$(run cca gui remove 2>&1); rc=$?
 ok "cca gui remove：删掉 App 和下载目录" '[ $rc -eq 0 ] && [ ! -e "$GA" ] && [ ! -e "$H/.cca/gui" ]'
+# cca install --gui（install.sh 在 macOS 上传的）：基础安装后装好并打开图形界面 App，剩下的配置在 App 的引导向导里走；
+# 老 macOS（26 以前）或 App 装不上时自动回退到终端引导。不带 --gui 的 cca install 仍是终端引导
+IGV=$(ver); publish_app "$IGV"   # IGV 而不是 V：V 是本机 Clash Verge 的目录（上面定义），别覆盖它
+cp "$H/.cca/config.json" "$T/cfg.ig.bak"; cp "$H/.cca/accounts.json" "$T/tbl.ig.bak"; : > open.log
+out=$(run CCA_TTY="$(ans)" cca install --gui 2>&1); rc=$?
+ok "cca install --gui：macOS 26+ 装好并打开 App，剩下的配置交给 App 的引导向导——不在终端里问路由器/账号" '[ $rc -eq 0 ] && grep -qxF "OPEN [$GA] [--args] [--window]" open.log && [ "$(gver)" = "$IGV" ] && printf "%s" "$out" | grep -q "基础安装完成" && printf "%s" "$out" | grep -q "在打开的 cca App 里按引导" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号"'
+run cca gui remove >/dev/null 2>&1; : > open.log
+out=$(run CCA_GUI_OS=15 CCA_TTY="$(ans)" cca install --gui 2>&1); rc=$?
+ok "cca install --gui：macOS 26 以前自动回退到终端引导（不装 App、不提图形界面）" '[ $rc -eq 0 ] && [ ! -e "$GA" ] && ! grep -q OPEN open.log && ! printf "%s" "$out" | grep -q "正在安装图形界面"'
+run cca gui remove >/dev/null 2>&1
+cp "$T/cfg.ig.bak" "$H/.cca/config.json"; cp "$T/tbl.ig.bak" "$H/.cca/accounts.json"
 mkdir -p "$T/devgui/Sources" "$T/devgui/tools"
 cat > "$T/devgui/build.sh" <<'EOF'
 #!/bin/bash

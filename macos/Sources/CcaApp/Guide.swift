@@ -51,8 +51,9 @@ final class Guide {
 
     /// 第一次连上 cca 时：第一次装就打开教程（看过、跳过过的不再自动打开）；升级了就给这几个版本更新了什么
     /// （WhatsNew.onLaunch：给了就记作看过，以后不再自动给）。
-    func startIfNeeded() {
-        guard sheet == nil else { return }
+    /// `skip`（还没配置过、首页正给配置向导的欢迎时）：先不弹教程/更新说明，也不记作看过——让欢迎卡片带头，配好之后再弹。
+    func startIfNeeded(skip: Bool = false) {
+        guard sheet == nil, !skip else { return }
         let done = prefs.bool(forKey: Keys.done)
         let r = WhatsNew.onLaunch(tutorialDone: done, lastSeen: prefs.string(forKey: Keys.whatsNewSeen), current: appVersion)
         if let seen = r.seen { prefs.set(seen, forKey: Keys.whatsNewSeen) }
@@ -780,6 +781,44 @@ struct TipCard: View {
             .overlay(shape.strokeBorder(Color.accentColor.opacity(0.2), lineWidth: 0.5))
             .accessibilityElement(children: .contain)
         }
+    }
+}
+
+// MARK: 配置向导的欢迎
+
+/// 首页顶上的欢迎卡片：第一次装好、还没配置过（`model.showWelcome`）时出现。「开始配置」走配置向导（`Handoff.onboard`），
+/// 「以后再说」这次先收起（不持久；真配置过后自然不再出现）。
+struct WelcomeBanner: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "sparkles")
+                .font(.title)
+                .foregroundStyle(.tint)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("欢迎使用 cca").font(.title3.weight(.semibold))
+                Text("只要配置一次：选好这台 Mac 怎么给账号联网，再添加第一个账号——cca 会一步步引导你填。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button("开始配置") { model.startOnboarding() }
+                        .buttonStyle(.glassProminent)
+                    Button("以后再说") { withAnimation(.snappy) { model.onboardingDismissed = true } }
+                        .buttonStyle(.glass)
+                }
+                .controlSize(.large)
+                .padding(.top, 4)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(shape.fill(Color.accentColor.opacity(0.08)))
+        .overlay(shape.strokeBorder(Color.accentColor.opacity(0.22), lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
     }
 }
 

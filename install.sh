@@ -98,10 +98,13 @@ main() {
 	[ -z "$want" ] || [ "$v" = "$want" ] || fail "下载到的是 ${v}，不是 ${want}，没有安装"
 	info "已下载 cca ${v}，签名校验通过"
 
+	# macOS 上默认装图形界面并在 App 里引导配置（--gui；macOS 26 以下、或 App 装不上时，cca 自动回退到终端引导）。Linux 走终端
+	local sub=install
+	[ "$os" = Darwin ] && sub="install --gui"
 	if [ -n "${CCA_TTY:-}" ]; then
-		bash "$tmp/cca" install
+		bash "$tmp/cca" $sub
 	else
-		bash "$tmp/cca" install </dev/tty
+		bash "$tmp/cca" $sub </dev/tty
 	fi
 }
 

@@ -305,6 +305,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `router.configured`：配置过路由器；`proxy_host` 是账号端口所在的主机（可能和 `host` 不同）。
 - `local.configured` / `client`：本机 Clash 客户端（`clash-verge` | `manual` | `builtin` | `""`）。`builtin` 是内置代理：App 要托管
   它的内核（见 7）。`name` 是给人看的名字（`Clash Verge`、`内置代理`……），App 照着显示。
+- `onboarded`：这台机器走过配置向导、或者已经有账号/配过路由器/配过本机客户端。`false` 时 App 首页给个「开始配置」的欢迎（`WelcomeBanner`），
+  点了走配置向导（`cca _onboard` 提问会话，要 `hello.forms`）。旧版 cca 没有这个字段：当作已配置，不弹向导。
 
 `routing`：
 
@@ -761,6 +763,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 
 | 题号 | 命令 | 控件 | 问什么 |
 |---|---|---|---|
+| `onboard.net` | `_onboard`（配置向导） | `choice` | 这台 Mac 怎么给账号联网（第一期：路由器 / 先跳过；无路由器笔记本下一期加）。已经配过路由器时不问，直接到加账号 |
+| `onboard.add` | `_onboard`（配置向导） | `confirm` | 网络配好后：现在添加第一个账号吗（接着走 `add.basic` / `add.node`） |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
 | `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
 | `api.basic` | `[codex] add api` | `text`、`text`、`secret`、`text` | 别名、接口地址（校验 url）、API key、模型（可选，校验 model） |
@@ -790,6 +794,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 
 | 命令 | App 里 | 方式 |
 |---|---|---|
+| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`） |
 | `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
 | `[codex] key` | 账号页「…」、右键菜单、API key 那一行的「记录…」「输入…」 | 提问会话 |
 | `[codex] key KEY --show`、`--forget` | API key 那一行的眼睛、「复制」；「…」、右键菜单里的「删除记下的 API key…」 | 无交互命令（4.10；`--show` 只经内存里的管道读，`--forget` 要同意） |

@@ -121,13 +121,15 @@ struct StateConfig: Decodable, Sendable, Equatable {
     var leakCheck: Bool?
     var update: String?
     var policy: PolicyConfig?
+    /// 这台机器走过配置向导、或者已经有账号/路由器/本机客户端（老版 cca 没有这个字段 → 当作已配置，不弹向导）。
+    var onboarded: Bool?
 
     enum CodingKeys: String, CodingKey {
         case routePref = "route_pref"
         case router, local, nodes
         case minTrust = "min_trust"
         case leakCheck = "leak_check"
-        case update, policy
+        case update, policy, onboarded
     }
 
     init(from decoder: Decoder) throws {
@@ -140,10 +142,13 @@ struct StateConfig: Decodable, Sendable, Equatable {
         leakCheck = c.bool(.leakCheck)
         update = c.stringish(.update)
         policy = c.lossy(PolicyConfig.self, .policy)
+        onboarded = c.bool(.onboarded)
     }
 
     var routerConfigured: Bool { router?.configured ?? false }
     var localConfigured: Bool { local?.configured ?? false }
+    /// 配置向导还要不要出现：只有 cca 明确说 false 时才要（字段缺省、或 true 都不弹）。
+    var needsOnboarding: Bool { onboarded == false }
 }
 
 struct RouterConfig: Decodable, Sendable, Equatable {
