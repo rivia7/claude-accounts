@@ -57,7 +57,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="3.3.0"
+VERSION="3.4.0-beta.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -5988,20 +5988,25 @@ def cmd_local_env():
     ctl = 'unix:@core' if client == 'builtin' else ''   # @core：bash 的 core_sock
     want = local_want(c)
     b = core_bind(c) if client == 'builtin' else None   # local_want 刚按节点定义查过（一个进程只查一次）
+    unode, ustate = udp_state(c) if sys.platform == 'darwin' else ('', 'off')   # 本机 UDP 走节点（在外面启动时 bash 的 udp_launch_check 看）
     sh(LOCAL_CLIENT=client, LOCAL_NAME=local_label(client), LOCAL_CTL=ctl, LOCAL_SECRET='',
        LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=want,
        LOCAL_SLOTS=n, LOCAL_FIRST=FIRST_PORT, LOCAL_LAST=FIRST_PORT + n - 1,
-       LOCAL_BIND=b['iface'] if b else '', LOCAL_BIND_VIA=b['via'] if b else '', LOCAL_BIND_DNS=' '.join(b['dns']) if b else '')
+       LOCAL_BIND=b['iface'] if b else '', LOCAL_BIND_VIA=b['via'] if b else '', LOCAL_BIND_DNS=' '.join(b['dns']) if b else '',
+       LOCAL_UDP=unode, LOCAL_UDP_STATE=ustate)
 
 
 def cmd_local_set(*kv):
-    """local-set 键 值 …；换客户端（或 client 设成空）时清掉旧的设置（关掉过内置代理的记号 core_off 也一起清掉）"""
+    """local-set 键 值 …；换客户端（或 client 设成空）时清掉旧的设置（关掉过内置代理的记号 core_off、本机 UDP 走节点 udp 也一起清掉）。
+    udp 设成空是关掉本机 UDP 走节点：去掉这一项"""
     c = cfg_load()
     loc = c['local']
     for k, v in zip(kv[::2], kv[1::2]):
         if k == 'client' and v != loc.get('client'):
             loc.clear()
-        if v or k != 'client':
+        if k == 'udp' and not v:
+            loc.pop(k, None)
+        elif v or k != 'client':
             loc[k] = v
     cfg_save(c)
 
@@ -6794,6 +6799,186 @@ def cmd_install_node(action='get', name='', path=''):
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as f:
         f.write(json.dumps(conf, ensure_ascii=False, indent=1) + '\n')
     print(port)
+
+
+# --- 本机 UDP 走节点（cca local udp，只在 macOS 上；bash 的同名一节）-----------------------------------------------------------------
+# 内置代理的内核是普通用户的进程，只在 127.0.0.1 上开账号的端口，碰不到这台 Mac 自己的 UDP：WebRTC、QUIC 这些直连出去，STUN 看到
+# 的是本地网络的出口（在国内就是中国大陆的地址）。macOS 上开 TUN 要 root，所以另装一个 root 的系统服务（LaunchDaemon local.cca.udp）：
+# /Library/Application Support/cca-udp 里一份 root 自己的 mihomo 和配置，只开 TUN，UDP 交给选定的节点，TCP 照旧直连，DNS（53 端口）、
+# 局域网、ZeroTier / Tailscale、代理内核自己的流量不经过它。launchd 在 ~/.cca/udp/on 存在时起它（KeepAlive 的 PathState，开机后也是），
+# 开关文件没了它自己停下、退出：开关不用管理员密码；装、换节点、节点定义变了、卸载要输一次。root 那边的文件只在输管理员密码的那一步
+# 从私有的临时目录拷过去、按摘要逐个核对后才换上：普通用户的进程改不了它跑什么，只能开关
+UDP_LABEL = 'local.cca.udp'
+UDP_HELPER = 1   # root 那边的启动脚本（bash 的 udp_run_sh）、launchd 的配置、规则的版本：改了要加 1（装着的旧版显示要重新装）
+UDP_FLAG = os.path.join(CCA_HOME, 'udp', 'on')
+UDP_EXCLUDE = ['10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16',
+               '224.0.0.0/4', '240.0.0.0/4', 'fc00::/7', 'fe80::/10', 'ff00::/8']   # 不进 TUN：局域网、组播、链路本地、CGNAT（Tailscale）
+UDP_DIRECT_PROCS = '^(zerotier-one|tailscaled|mihomo.*|verge-mihomo.*)$'   # 这些进程的 UDP 照旧直连：虚拟局域网打洞、别的代理内核
+                                                                         # （cca 自己的内核开着 TUN 时本来就绑定物理网卡，这里再保一次）
+UDP_ALWAYS = ('hysteria', 'hysteria2', 'tuic', 'wireguard')   # 不写 udp: true 也转发 UDP 的节点类型
+
+
+def udp_paths():
+    """root 那边的位置：(目录, launchd 配置, 日志, 文件的属主)。测试的沙箱（home_swapped）里换进沙箱，碰不到真的 /Library"""
+    if home_swapped():
+        base = os.path.join(os.path.expanduser('~'), 'udp-root')
+        return (os.environ.get('CCA_UDP_ROOT') or os.path.join(base, 'cca-udp'),
+                os.environ.get('CCA_UDP_PLIST') or os.path.join(base, UDP_LABEL + '.plist'),
+                os.environ.get('CCA_UDP_LOG') or os.path.join(base, 'cca-udp.log'), '%d:%d' % (os.getuid(), os.getgid()))
+    return ('/Library/Application Support/cca-udp', '/Library/LaunchDaemons/%s.plist' % UDP_LABEL, '/Library/Logs/cca-udp.log',
+            'root:wheel')
+
+
+def udp_name_ok(n):
+    """能写进规则的节点名（规则用逗号分字段）"""
+    return isinstance(n, str) and bool(n) and not re.search(r'[,\x00-\x1f\x7f]', n)
+
+
+def udp_capable(p):
+    """这个节点转发 UDP 吗（mihomo 里 ss、vmess、vless、trojan 这些要写 udp: true；http、ssh 不转发）"""
+    return isinstance(p, dict) and (p.get('type') in UDP_ALWAYS or (p.get('udp') is True and p.get('type') not in ('http', 'ssh')))
+
+
+def udp_config(name):
+    """root 那边的 TUN 内核的配置（JSON 写的，mihomo 照 YAML 读），节点没有定义、不转发 UDP 时是 None。只放这个节点（和它经
+    dialer-proxy 用到的）：别的节点变了不用重新装。没有入站、控制接口，不劫持 DNS（照系统的走）。规则：TCP 直连；DNS 直连；
+    虚拟局域网、别的代理内核的 UDP 直连；其余 UDP 交给节点"""
+    defs = core_pick(core_defs(), [name])
+    if not udp_name_ok(name) or not udp_capable(next((p for p in defs if p['name'] == name), None)):
+        return None
+    cfg = {'mode': 'rule', 'log-level': 'warning', 'ipv6': True, 'allow-lan': False, 'find-process-mode': 'strict',
+           'geo-auto-update': False, 'profile': {'store-selected': False, 'store-fake-ip': False},
+           'tun': {'enable': True, 'stack': 'mixed', 'auto-route': True, 'auto-detect-interface': True, 'strict-route': False,
+                   'dns-hijack': [], 'route-exclude-address': UDP_EXCLUDE},
+           'proxies': defs,
+           'rules': ['NETWORK,TCP,DIRECT', 'DST-PORT,53,DIRECT', 'PROCESS-NAME-REGEX,%s,DIRECT' % UDP_DIRECT_PROCS,
+                     'NETWORK,UDP,%s' % name, 'MATCH,DIRECT']}
+    return json.dumps(cfg, ensure_ascii=False, indent=1) + '\n'
+
+
+def udp_info():
+    """root 那边装着的（info.json：节点、配置的摘要……，谁都能读、没有密钥）；没装、读不了时是 None"""
+    j = load_quiet(os.path.join(udp_paths()[0], 'info.json'))
+    return j if isinstance(j, dict) and j.get('v') == 1 else None
+
+
+def udp_state(c):
+    """本机 UDP 走节点：(设的节点, 状态)。状态：off（没开）| ok | stale（装着的配置和现在算出来的不一样：节点定义变了、cca 改了
+    模板，要重新装）| missing（root 的系统服务没装：被删掉了）| undefined（内置代理里已经没有这个节点转发 UDP 的定义）"""
+    loc = c.get('local') or {}
+    node = loc.get('udp') if loc.get('client') == 'builtin' else ''
+    if not isinstance(node, str) or not node:
+        return '', 'off'
+    text = udp_config(node)
+    if text is None:
+        return node, 'undefined'
+    info = udp_info()
+    if not info:
+        return node, 'missing'
+    if (info.get('helper') != UDP_HELPER or info.get('node') != node or
+            info.get('sum') != hashlib.sha256(text.encode('utf-8')).hexdigest()):
+        return node, 'stale'
+    return node, 'ok'
+
+
+def udp_running(procs=None):
+    """root 那边的 TUN 内核在跑吗（普通用户的 ps 也看得到 root 进程的命令行；和 bash 的 udp_running 一样认）"""
+    mark = udp_paths()[0] + '/mihomo -d '
+    rows = gui_procs() if procs is None else procs
+    return any(mark in cmd for _, cmd in rows)
+
+
+def udp_view(c, procs=None):
+    """_gui state 的 config.local.udp（PROTOCOL 2.2）：只在 macOS 上，别的系统是 None"""
+    if sys.platform != 'darwin':
+        return None
+    node, state = udp_state(c)
+    return {'node': node or None, 'state': state, 'installed': udp_info() is not None,
+            'running': udp_running(procs) if node else False}
+
+
+def udp_leak_hint():
+    """WebRTC 直连风险的补充：这台 Mac 用内置代理时，怎么让它自己的 UDP 也经节点出去（cca local udp）"""
+    if sys.platform != 'darwin':
+        return ''
+    c = load_quiet(CFG)
+    if not isinstance(c, dict) or (c.get('local') or {}).get('client') != 'builtin':
+        return ''
+    node, state = udp_state(c)
+    if state == 'off':
+        return '。用内置代理时，cca local udp on 节点 能让这台 Mac 的 UDP 也经节点出去（要输一次管理员密码）'
+    return '。设了本机 UDP 走节点（%s），现在没起作用：cca local udp 查看' % node
+
+
+def cmd_udp_env():
+    """bash 的 udp_env：root 那边的位置、设的节点和状态、装着的是哪个节点"""
+    c = cfg_load()
+    root, plist, log, owner = udp_paths()
+    node, state = udp_state(c)
+    info = udp_info() or {}
+    sh(UDP_ROOT=root, UDP_PLIST=plist, UDP_LOG=log, UDP_OWNER=owner, UDP_LABEL=UDP_LABEL, UDP_FLAG=UDP_FLAG,
+       UDP_NODE=node, UDP_STATE=state, UDP_INSTALLED=info.get('node') if isinstance(info.get('node'), str) else '')
+
+
+def cmd_udp_node(want=''):
+    """这台 Mac 的 UDP 交给哪个节点：want 在这台机器的节点定义里叫什么（同名、改过名的、按服务器地址认，和辅助安装一样）。
+    认不出时退出码 2，认出了、它不转发 UDP 时 3；这两种 stdout 都是能选的节点（转发 UDP 的，一行一个）"""
+    c = cfg_load()
+    defs = {}
+    for p in core_defs():   # 同名的以第一个为准（和 core_pick 一样）
+        defs.setdefault(p['name'], p)
+    got = install_resolve(c, want) if want else ''
+    if got and udp_name_ok(got) and udp_capable(defs.get(got)):
+        print(got)
+        return
+    for n in install_names():
+        if udp_name_ok(n) and udp_capable(defs.get(n)):
+            print(n)
+    sys.exit(3 if got else 2)
+
+
+def cmd_udp_build(name, folder, core_bin, core_version):
+    """把要装到 root 那边的文件写进私有的临时目录 folder（bash 已经写好启动脚本 cca-udp）：config.yaml（600，有节点密钥）、plist、
+    info.json；输出它们和内核文件的摘要（bash 写进用管理员权限运行的脚本，root 拷完逐个核对）。B_SAME=1：装着的就是这一份"""
+    import plistlib
+    text = udp_config(name)
+    if text is None:
+        die('内置代理里没有节点 %s 转发 UDP 的定义' % name)
+    root = udp_paths()[0]
+
+    def put(fn, data, mode):
+        with os.fdopen(os.open(os.path.join(folder, fn), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), 'wb') as f:
+            f.write(data)
+        return hashlib.sha256(data).hexdigest()
+
+    def file_sum(p):
+        h = hashlib.sha256()
+        with open(p, 'rb') as f:
+            for b in iter(lambda: f.read(1 << 20), b''):
+                h.update(b)
+        return h.hexdigest()
+    s_cfg = put('config.yaml', text.encode('utf-8'), 0o600)
+    s_plist = put('plist', plistlib.dumps({'Label': UDP_LABEL, 'ProgramArguments': [root + '/cca-udp'],
+                                            'KeepAlive': {'PathState': {UDP_FLAG: True}}, 'ThrottleInterval': 5}), 0o644)
+    s_run, s_bin = file_sum(os.path.join(folder, 'cca-udp')), file_sum(core_bin)
+    info = {'v': 1, 'helper': UDP_HELPER, 'node': name, 'sum': s_cfg, 'core': core_version, 'bin': s_bin, 'run': s_run,
+            'plist': s_plist, 'flag': UDP_FLAG, 'saved_at': int(time.time())}
+    old = udp_info() or {}
+    same = all(old.get(k) == info[k] for k in info if k != 'saved_at')
+    s_info = put('info.json', (json.dumps(info, ensure_ascii=False, indent=1) + '\n').encode('utf-8'), 0o644)
+    sh(B_CFG=s_cfg, B_PLIST=s_plist, B_RUN=s_run, B_BIN=s_bin, B_INFO=s_info, B_SAME='1' if same else '')
+
+
+def cmd_udp_probe():
+    """这台 Mac 的 UDP 现在从哪出去：STUN 看到的地址、国家代码、归属地（直连查），一行一个，没有的项写 -；一个都没测到时退出码 1"""
+    ips = stun_ips(1.5)
+    if not ips:
+        sys.exit(1)
+    now = time.time()
+    geo = leak_geo(ips, '', {k: g for k, g in (leak_cache().get('geo') or {}).items() if geo_fresh(g, now)})
+    for ip in ips:
+        g = geo.get(ip_prefix(ip)) or {}
+        print('%s\t%s\t%s' % (ip, g.get('cc') or '-', leak_where(g) or '-'))
 
 
 CORE_LOG = os.path.join(CORE_DIR, 'core.log')   # Linux 上内核的输出（macOS 上在界面 App 的缓存目录里）
@@ -7974,7 +8159,7 @@ def cmd_leak_verdict(path, key, exit_ip, exit_cc, detail=''):
             state['webrtc'] = 'leak'
             parts.append('WebRTC 直连风险：%s' % at)
             warns.append(('webrtc', 'WebRTC 直连风险：本机 UDP 的 STUN 探测看到中国大陆的地址 %s，与账号的出口不同。这是本机网络探测，'
-                          '尚未验证浏览器或 %s 是否会暴露该 IP；应在实际客户端验证 WebRTC 路由，并限制绕过账号代理的 UDP 流量' % (at, T.app_label)))
+                          '尚未验证浏览器或 %s 是否会暴露该 IP；应在实际客户端验证 WebRTC 路由，并限制绕过账号代理的 UDP 流量%s' % (at, T.app_label, udp_leak_hint())))
         elif all(re.fullmatch('[a-z]{2}', cc_of(ip)) for ip in leaked):   # 别的地区只作提醒
             state['webrtc'] = 'note'
             parts.append('WebRTC 备注：STUN 看到 %s，与账号的出口不同' % at)
@@ -12028,6 +12213,7 @@ def cmd_gui_state():
                        'nodes': [{'name': n, 'local_name': lnames.get(n, n), 'users': users.get(n, [])} for n in c['nodes']]},
            'tools': []}
     procs = gui_procs()
+    out['config']['local']['udp'] = udp_view(c, procs)   # 本机 UDP 走节点（只在 macOS 上，别的系统是 null）
     pcfg = presence_load()[1]
     presence = pcfg is not None
     key_error = keyshare_error() if presence else None   # 记下备查的 API key 最近一次没同步成的原因（api_key 的 sync_error）
@@ -13515,6 +13701,7 @@ CMDS = {
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set,
+    'udp-env': cmd_udp_env, 'udp-node': cmd_udp_node, 'udp-build': cmd_udp_build, 'udp-probe': cmd_udp_probe,
     'local-node': cmd_local_node,
     'core-config': cmd_core_config, 'core-nodes-save': cmd_core_nodes_save, 'core-missing': cmd_core_missing, 'core-summary': cmd_core_summary,
     'node-check': cmd_node_check, 'node-testconfig': cmd_node_testconfig, 'node-save': cmd_node_save, 'node-ls': cmd_node_ls, 'node-rm': cmd_node_rm,
@@ -17186,6 +17373,7 @@ route_local() {   # 出门在外：经本机 Clash 的端口池（需要先 eval
 	port_open 127.0.0.1 "$ACC_PORT" || { fail_warn port_closed "本机端口 127.0.0.1:${ACC_PORT} 不通。排查：cca local status"; return 1; }
 	ACC_PROXY="http://127.0.0.1:${ACC_PORT}"
 	ROUTE=local
+	[ -z "${LOCAL_UDP:-}" ] || udp_launch_check   # 设了本机 UDP 走节点：开关文件在不在、装着的旧没旧
 }
 cmd_local_setup() {   # 配置内置代理（cca 自带的 mihomo 内核）当本机出口：没有路由器、或在外面连不上路由器时，账号经它走各自的节点
 	need_tty
@@ -17346,7 +17534,8 @@ cmd_local() {
 			local_remove
 			if [ "$LOCAL_CLIENT" = builtin ]; then okay "已关掉内置代理，拷来的节点定义删掉了（之后在外面连不上路由器时会再问）"
 			else okay "已移除本机 Clash 的端口池（之后在外面连不上路由器时会再问）"; fi ;;
-		*) die "用法: cca local [status|setup|off]" ;;
+		udp) shift; cmd_local_udp "$@" ;;
+		*) die "用法: cca local [status|setup|off|udp]" ;;
 	esac
 }
 
@@ -17578,6 +17767,10 @@ core_retire() {   # 不再用内置代理（关掉、换成别的客户端；先
 	              # 免得它还占着端口。界面 App（Linux 上是 cca _core-keep）看到配置没了会停掉它；没在托管（或者 10 秒还没停）就按 pid 文件停掉
 	local i ctl="$LOCAL_CTL"
 	rm -f "$CORE_DIR/config.yaml" "$CORE_DIR/nodes.json"
+	if [ -e "$UDP_FLAG" ]; then   # 本机 UDP 走节点只给内置代理用：一起关掉（root 的内核看开关文件没了自己停下）
+		rm -f "$UDP_FLAG"
+		info "本机 UDP 走节点也关掉了（系统服务还装着、不在运行；删掉它运行 cca local udp uninstall）"
+	fi
 	on_linux && { core_boot off || warn "没能从 crontab 里删掉开机起内核的那一行（带 ${CORE_BOOT_TAG}）：自己删一下（crontab -e）"; }
 	if on_linux || gui_running; then
 		LOCAL_CTL="unix:$(core_sock)"
@@ -17637,6 +17830,274 @@ cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器�
 	done
 	rmdir "$lk" 2>/dev/null
 	return 0
+}
+
+# ---------------------------------------------------------------------------
+# 本机 UDP 走节点（cca local udp，只在 macOS 上、只给内置代理；PY 的同名一节）：内置代理只在 127.0.0.1 上开账号的端口，这台 Mac 自己的
+# UDP（浏览器的 WebRTC、QUIC 这些）照旧直连，STUN 看到的是本地网络的出口。macOS 上开 TUN 要 root：输一次管理员密码，装一个 root 的
+# 系统服务（LaunchDaemon local.cca.udp）。~/.cca/udp/on 在时 launchd 起它（开机后也是）：一个只开 TUN 的 mihomo，UDP 交给选定的节点，
+# TCP、DNS、局域网、ZeroTier / Tailscale、代理内核自己的流量照旧直连；开关文件没了它自己停下、退出（不留 root 进程）。开、关不用密码；
+# root 那边的文件只在输密码的那一步从私有的临时目录拷过去，按摘要逐个核对、内核校验过配置才换上：普通用户的进程改不了它跑什么
+# ---------------------------------------------------------------------------
+UDP_FLAG="$CCA_HOME/udp/on"
+udp_env() { eval "$(py udp-env)"; }   # UDP_ROOT、UDP_PLIST、UDP_LOG、UDP_OWNER、UDP_LABEL、UDP_FLAG；设的节点 UDP_NODE、状态 UDP_STATE、装着的 UDP_INSTALLED
+udp_running() { ps -axww -o command= 2>/dev/null | grep -qF -- "$UDP_ROOT/mihomo -d "; }   # root 的内核在跑（普通用户的 ps 也看得到它的命令行）
+udp_loaded() { launchctl print "system/$UDP_LABEL" >/dev/null 2>&1; }
+udp_present() { [ -e "$UDP_PLIST" ] || [ -e "$UDP_ROOT" ] || udp_loaded; }
+udp_flag_on() { ( umask 077; mkdir -p "${UDP_FLAG%/*}" ) && touch "$UDP_FLAG"; }
+udp_run_sh() {   # root 那边的启动脚本 cca-udp（launchd 在开关文件在时起它）：开关文件没了就停内核、退出；内核自己退出了以退出码 1 结束，
+	              # launchd 过 ThrottleInterval 再起。日志超过 1MB 先清空。改了要把 PY 的 UDP_HELPER 加 1（装着的旧版会显示要重新装）
+	printf '#!/bin/sh\n# cca local udp：这台 Mac 的 UDP 经节点出去（cca 生成；删掉它运行 cca local udp uninstall）\nD=%s\nFLAG=%s\nLOG=%s\n' \
+		"$(shq "$UDP_ROOT")" "$(shq "$UDP_FLAG")" "$(shq "$UDP_LOG")"
+	cat <<'EOF'
+[ -e "$FLAG" ] || exit 0
+[ -z "$(find "$LOG" -size +1024k 2>/dev/null)" ] || : > "$LOG"
+"$D/mihomo" -d "$D" -f "$D/config.yaml" >> "$LOG" 2>&1 &
+pid=$!
+trap 'kill $pid 2>/dev/null; wait $pid 2>/dev/null; exit 0' TERM INT HUP
+while kill -0 $pid 2>/dev/null; do
+	if [ ! -e "$FLAG" ]; then kill $pid 2>/dev/null; wait $pid 2>/dev/null; exit 0; fi
+	sleep 2 &
+	wait $!
+done
+exit 1
+EOF
+}
+udp_root_script() {   # udp_root_script install 临时目录 | uninstall：用管理员权限运行的脚本（经 osascript 的参数传过去：里面没有密钥，只有路径和摘要）。
+	                   # install：从临时目录拷进旁边的新目录（只有 root 能进），按 py udp-build 给的摘要逐个核对，改属主和权限，内核校验过配置，
+	                   # 才停掉旧的、换上、装 launchd 的配置（开关文件在的话 launchd 马上起它）；中途出错时旧的照跑
+	printf 'set -e\numask 022\nD=%s\nP=%s\nL=%s\nO=%s\nLABEL=%s\n' "$(shq "$UDP_ROOT")" "$(shq "$UDP_PLIST")" "$(shq "$UDP_LOG")" "$(shq "$UDP_OWNER")" "$(shq "$UDP_LABEL")"
+	cat <<'EOF'
+case "$D" in /*/cca-udp) ;; *) echo "cca-udp: 目录不对：$D" >&2; exit 5 ;; esac
+EOF
+	if [ "$1" = uninstall ]; then
+		printf 'launchctl bootout "system/$LABEL" 2>/dev/null || true\nrm -f "$P" "$L"\nrm -rf "$D" "$D.new"\n'
+		return 0
+	fi
+	printf 'S=%s\nB=%s\nSUMS=%s\n' "$(shq "$2")" "$(shq "$(core_bin)")" "'mihomo:$B_BIN config.yaml:$B_CFG cca-udp:$B_RUN info.json:$B_INFO plist:$B_PLIST'"
+	cat <<'EOF'
+N="$D.new"
+rm -rf "$N"
+mkdir -p "${D%/*}" "${P%/*}"
+mkdir -m 700 "$N"
+cp "$B" "$N/mihomo"
+for f in config.yaml cca-udp info.json plist; do cp "$S/$f" "$N/$f"; done
+for x in $SUMS; do
+	f=${x%%:*}
+	[ "$(shasum -a 256 "$N/$f" | cut -d' ' -f1)" = "${x#*:}" ] || { echo "cca-udp: $f 和 cca 生成的不一样，没有换上" >&2; rm -rf "$N"; exit 3; }
+done
+chown "$O" "$N" "$N/mihomo" "$N/config.yaml" "$N/cca-udp" "$N/info.json" "$N/plist"
+chmod 755 "$N" "$N/mihomo" "$N/cca-udp"
+chmod 600 "$N/config.yaml"
+chmod 644 "$N/info.json" "$N/plist"
+"$N/mihomo" -t -d "$N" -f "$N/config.yaml" > "$N/test.log" 2>&1 || { echo "cca-udp: 内核校验配置没通过：$(tail -n 1 "$N/test.log")" >&2; rm -rf "$N"; exit 4; }
+rm -f "$N/test.log"
+launchctl bootout "system/$LABEL" 2>/dev/null || true
+mv -f "$N/plist" "$P"
+rm -rf "$D"
+mv "$N" "$D"
+touch "$L"
+chown "$O" "$L"
+chmod 644 "$L"
+launchctl bootstrap system "$P"
+EOF
+}
+udp_admin() {   # udp_admin 说明 脚本：用管理员权限运行脚本（系统的授权框，输这台 Mac 的登录密码：cca 碰不到密码）。脚本经 osascript 的参数
+	             # 传过去（do shell script：root 的 /bin/sh）。返回 0 成功；2 取消了授权；1 失败（原因在 UDP_ERR）
+	local out
+	UDP_ERR=""
+	out=$(osascript -e 'on run argv' -e 'do shell script (item 1 of argv) with prompt (item 2 of argv) with administrator privileges' \
+		-e 'end run' "$2" "$1" 2>&1 </dev/null) && return 0
+	case "$out" in *'(-128)'*) UDP_ERR="取消了授权"; return 2 ;; esac
+	UDP_ERR=$(printf '%s\n' "$out" | tail -n 1 | sed 's/^.*execution error: //; s/ *([0-9-]*)$//')
+	[ -n "$UDP_ERR" ] || UDP_ERR="osascript 运行失败"
+	return 1
+}
+udp_pick() {   # udp_pick 能选的节点（一行一个）：这台 Mac 的 UDP 交给哪个节点；打印选中的，取消、选不了返回 1
+	local n=0 sel name
+	local -a names opts
+	while IFS= read -r name; do [ -n "$name" ] && { names[n]="$name"; n=$((n + 1)); }; done <<< "$1"
+	if [ $n = 0 ]; then
+		warn "内置代理里还没有转发 UDP 的节点定义：在家启动一次账号（会从路由器拷可选节点），或者配置维护者的映射（cca policy setup）、cca node add 加一个"
+		return 1
+	fi
+	interactive || { warn "要选一个节点：运行 cca local udp on 节点"; return 1; }
+	if [ -n "$PROMPT_GUI" ]; then
+		for ((sel = 0; sel < n; sel++)); do opts[sel]="opt=$((sel + 1))"$'\t'"${names[sel]}"$'\t'; done
+		sel=$(gui_ask choice "这台 Mac 的 UDP 经哪个节点出去？" 1 q=local.udp label=节点 "title=本机 UDP 走节点" \
+			"detail=浏览器的 WebRTC、QUIC 这些 UDP 经这个节点出去，TCP 照旧直连。要装一个系统服务，系统会弹出授权框问管理员密码。" "${opts[@]}") || return 1
+	else
+		say "  这台 Mac 的 UDP（浏览器的 WebRTC、QUIC 这些）经哪个节点出去？"
+		if fancy_ok; then
+			arrow_menu 0 "${names[@]}"
+			[ "$MENU_PICK" -ge 0 ] || return 1
+			sel=$((MENU_PICK + 1))
+		else
+			for ((sel = 0; sel < n; sel++)); do say "    $((sel + 1)). ${names[sel]}"; done
+			sel=$(ask "  选择节点编号（回车取消）：" "")
+		fi
+	fi
+	case "$sel" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$sel" -ge 1 ] && [ "$sel" -le $n ] || return 1
+	printf '%s' "${names[sel - 1]}"
+}
+udp_install() {   # udp_install 节点：装上 root 那边的系统服务（装着的就是这一份、launchd 里也有它时不用再装）。返回 0 装好了；2 取消了授权；
+	               # 1 失败（原因在 UDP_ERR）
+	local node="$1" tmp rc
+	UDP_ERR=""
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/cca-udp.XXXXXX") || { UDP_ERR="建不了临时目录"; return 1; }
+	chmod 700 "$tmp"
+	udp_run_sh > "$tmp/cca-udp"
+	B_CFG="" B_SAME=""
+	eval "$(py udp-build "$node" "$tmp" "$(core_bin)" "$CORE_VERSION")"
+	if [ -z "$B_CFG" ]; then rm -rf "$tmp"; UDP_ERR="生成配置失败"; return 1; fi
+	if [ -n "$B_SAME" ] && [ -e "$UDP_PLIST" ] && udp_loaded; then rm -rf "$tmp"; return 0; fi
+	info "要用管理员权限装一个系统服务（${UDP_LABEL}）：系统会弹出授权框，输入这台 Mac 的登录密码"
+	udp_admin "cca 要安装系统服务「本机 UDP 走节点」：这台 Mac 的 UDP（浏览器的 WebRTC 等）经节点 ${node} 出去，TCP 照旧直连。" \
+		"$(udp_root_script install "$tmp")"; rc=$?
+	rm -rf "$tmp"
+	return $rc
+}
+udp_wait() {   # udp_wait up|down：等 root 的内核起来（最多 15 秒；起来后再等一会儿，TUN 配好路由）/ 停下（最多 6 秒）
+	local i
+	if [ "$1" = up ]; then
+		for i in $(seq 1 60); do udp_running && { sleep "${CCA_UDP_SETTLE:-1}"; return 0; }; sleep 0.25; done
+		return 1
+	fi
+	for i in $(seq 1 24); do udp_running || return 0; sleep 0.25; done
+	return 1
+}
+udp_report() {   # 这台 Mac 的 UDP 现在从哪出去：STUN 看到的地址（归属地直连查）
+	local ip cc where at any="" cn=""
+	while IFS=$'\t' read -r ip cc where; do
+		[ -n "$ip" ] || continue
+		any=1
+		[ "$where" = - ] && where=""
+		at="${ip} "
+		[ -z "$where" ] || at="${ip}（${where}）"
+		[ "$cc" = cn ] && cn="${ip}${where:+（${where}）}"
+		info "STUN 看到这台 Mac 的 UDP 从 ${at}出去"
+	done < <(py udp-probe)
+	[ -n "$any" ] || warn "STUN 没测到这台 Mac 的 UDP 从哪出去（网络不通，或者节点不转发 UDP）"
+	[ -z "$cn" ] || fail_warn error "STUN 看到的是中国大陆的地址 ${cn}：这台 Mac 的 UDP 还在直连"
+	return 0
+}
+udp_why() {   # 系统服务没在运行的原因（接在提示后面）
+	local l
+	if [ ! -e "$UDP_FLAG" ]; then printf '：开关文件 %s 不在（cca local udp on 打开）' "$UDP_FLAG"
+	elif ! udp_loaded; then printf '：launchd 里没有它（系统设置 › 通用 › 登录项与扩展 里要允许它在后台运行；或者 cca local udp on 重新装）'
+	else
+		l=$(tail -n 1 "$UDP_LOG" 2>/dev/null | cut -c1-200)
+		[ -z "$l" ] || printf '（日志 %s 的最后一行：%s）' "$UDP_LOG" "$l"
+	fi
+}
+udp_core_follow() {   # 开关 TUN 之后：内置代理的内核在跑的话照现在的路由重新加载一次（开着 TUN 时它绑定物理网卡连节点，见 bind_note）
+	load_local
+	[ "$LOCAL_CLIENT" = builtin ] && [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || return 0
+	lctl GET /version
+	[ "$LCODE" = 200 ] || return 0
+	core_reload && [ -n "${LOCAL_BIND:-}" ] && info "$(bind_note)"
+	return 0
+}
+udp_on() {   # cca local udp on [节点] / pick：这台 Mac 的 UDP 经这个节点出去（不给时用设过的、装着的那个，都没有就问；pick 总是问）
+	local want="${1:-}" pick="${2:-}" node rc
+	load_local
+	[ "$LOCAL_CLIENT" = builtin ] || FAIL_CODE=local_unavailable die "本机 UDP 走节点只给内置代理用：先配置内置代理（cca local setup）"
+	udp_env
+	[ -n "$want" ] || [ -n "$pick" ] || want="${UDP_NODE:-$UDP_INSTALLED}"
+	node=$(py udp-node "$want"); rc=$?
+	if [ $rc != 0 ]; then
+		case "$rc:$want" in
+			2:?*) warn "内置代理里没有节点「${want}」的定义（节点定义来自在家时从路由器拷的可选节点、维护者参考节点和自定义节点）" ;;
+			3:?*) warn "节点「${want}」不转发 UDP（它的定义里没有 udp: true）" ;;
+		esac
+		node=$(udp_pick "$node") || { gui_cancelled; return 1; }
+	fi
+	core_fetch || FAIL_CODE=local_unavailable die "内置代理的内核没装上：${FETCH_ERR}"
+	udp_install "$node"; rc=$?
+	[ $rc != 2 ] || { say "已取消：什么都没改"; gui_cancelled; return 1; }
+	[ $rc = 0 ] || die "没装上本机 UDP 走节点的系统服务：${UDP_ERR}"
+	py local-set udp "$node" || return 1
+	udp_flag_on || die "建不了开关文件 ${UDP_FLAG}"
+	if udp_wait up; then
+		okay "这台 Mac 的 UDP 现在经节点 ${node} 出去（TCP 照旧直连；关掉：cca local udp off）"
+	else
+		fail_warn error "开关打开了，系统服务 ${UDP_LABEL} 却没起来$(udp_why)"
+	fi
+	udp_report
+	udp_core_follow
+	gui_done local_udp "这台 Mac 的 UDP 经节点 ${node} 出去"
+}
+udp_off() {   # cca local udp off：关掉（删开关文件，root 的内核自己停下；系统服务留着，再开同一个节点不用密码）
+	udp_env
+	rm -f "$UDP_FLAG"
+	py local-set udp '' || return 1
+	udp_wait down || warn "系统服务 ${UDP_LABEL} 还没停下"
+	if [ -n "$UDP_INSTALLED" ]; then okay "已关掉：这台 Mac 的 UDP 照旧直连（系统服务还装着、不在运行，再开同一个节点不用输密码；删掉它运行 cca local udp uninstall）"
+	else okay "已关掉：这台 Mac 的 UDP 照旧直连"; fi
+	udp_core_follow
+	gui_done local_udp "已关掉本机 UDP 走节点"
+}
+udp_uninstall() {   # cca local udp uninstall：关掉，并删掉 root 的系统服务（要管理员密码）
+	local rc
+	udp_env
+	rm -f "$UDP_FLAG"
+	[ -z "$UDP_NODE" ] || py local-set udp ''
+	if ! udp_present; then
+		info "本机 UDP 走节点的系统服务没装"
+		gui_done local_udp "本机 UDP 走节点的系统服务没装"
+		return 0
+	fi
+	info "要用管理员权限删掉系统服务 ${UDP_LABEL}：系统会弹出授权框，输入这台 Mac 的登录密码"
+	udp_admin "cca 要删掉系统服务「本机 UDP 走节点」（${UDP_LABEL}）。" "$(udp_root_script uninstall)"; rc=$?
+	case $rc in
+		0) okay "已删掉系统服务 ${UDP_LABEL}：这台 Mac 的 UDP 照旧直连" ;;
+		2) warn "取消了：系统服务 ${UDP_LABEL} 还装着（不在运行）"; return 1 ;;
+		*) warn "没删掉系统服务（${UDP_ERR}）。可以手动删：sudo launchctl bootout system/${UDP_LABEL}; sudo rm -rf $(shq "$UDP_ROOT") $(shq "$UDP_PLIST") $(shq "$UDP_LOG")"; return 1 ;;
+	esac
+	udp_core_follow
+	gui_done local_udp "已删掉本机 UDP 走节点的系统服务"
+}
+udp_status() {   # cca local udp：设的节点、系统服务在不在跑、STUN 看到的出口
+	load_local
+	udp_env
+	say ""
+	if [ "$LOCAL_CLIENT" != builtin ]; then
+		info "本机 UDP 走节点只给内置代理用（cca local setup 配置内置代理）"
+		[ -z "$UDP_INSTALLED" ] || info "系统服务 ${UDP_LABEL} 还装着：删掉它运行 cca local udp uninstall"
+	else
+		case "$UDP_STATE" in
+			off) info "没开：这台 Mac 的 UDP（浏览器的 WebRTC、QUIC 这些）直连出去。cca local udp on [节点] 让它经节点出去（要输一次管理员密码）" ;;
+			ok) if udp_running; then okay "这台 Mac 的 UDP 经节点 ${UDP_NODE} 出去（系统服务 ${UDP_LABEL} 在运行；TCP 照旧直连）"
+				else warn "设了经节点 ${UDP_NODE}，系统服务 ${UDP_LABEL} 却没在运行$(udp_why)"; fi ;;
+			stale) warn "设了经节点 ${UDP_NODE}，装着的配置是旧的（节点的定义变了，或者 cca 更新了）：运行 cca local udp on 重新装（要输管理员密码）" ;;
+			missing) warn "设了经节点 ${UDP_NODE}，系统服务却不在了：运行 cca local udp on 重新装（要输管理员密码）" ;;
+			undefined) warn "设了经节点 ${UDP_NODE}，内置代理里已经没有它转发 UDP 的定义（装着的系统服务还用着以前那份）：在家启动一次账号拷节点定义，或者 cca local udp on 节点 换一个" ;;
+		esac
+	fi
+	udp_report
+	say ""
+}
+udp_launch_check() {   # 在外面启动账号时（设了本机 UDP 走节点，LOCAL_UDP、LOCAL_UDP_STATE 来自 local-env）：开关文件不在就补上；
+	                    # 装着的旧了只提醒（要输密码，启动时不问）
+	case "$LOCAL_UDP_STATE" in
+		ok) [ -e "$UDP_FLAG" ] || udp_flag_on ;;
+		stale|missing) warn "本机 UDP 走节点（${LOCAL_UDP}）要重新装一次：运行 cca local udp on（要输管理员密码）" ;;
+		undefined) warn "本机 UDP 走节点：内置代理里已经没有节点「${LOCAL_UDP}」转发 UDP 的定义（cca local udp 查看）" ;;
+	esac
+	return 0
+}
+cmd_local_udp() {   # cca local udp [on [节点] | 节点 | pick | off | uninstall]
+	mac_only "本机 UDP 走节点（cca local udp）"
+	case "${1:-}" in
+		''|status) udp_status ;;
+		on) udp_on "${2:-}" ;;
+		pick) udp_on "" pick ;;
+		off) udp_off ;;
+		uninstall) udp_uninstall ;;
+		-*|help) die "用法: cca local udp [on [节点] | pick | off | uninstall]" ;;
+		*) udp_on "$1" ;;
+	esac
 }
 
 # ---------------------------------------------------------------------------
@@ -19244,6 +19705,7 @@ cmd_restore() {
 	[ -z "$mail_user" ] || say "  · 邮箱助手：删掉${KEYSTORE}里 ${mail_user} 的应用专用密码（Google 账号里的那个应用专用密码要你自己去撤销）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 内置代理（用过的话）：停掉它的内核，删掉配置和拷来的节点"
+	if ! on_linux; then udp_env; udp_present && say "  · 本机 UDP 走节点：删掉 root 的系统服务 ${UDP_LABEL}（要输管理员密码）"; fi
 	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
 	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
@@ -19276,6 +19738,7 @@ cmd_restore() {
 	fi
 	load_local
 	if local_ready; then local_remove; info "本机 ${LOCAL_NAME} 里 cca 的端口池已移除"; fi
+	if ! on_linux && udp_present; then udp_uninstall || warn "本机 UDP 走节点的系统服务没删掉（原因见上面），接着还原别的"; fi
 	core_stop_stale   # 内置代理的内核（界面 App 退出时会停掉它，这里是 App 崩溃后留下的）
 	on_linux && core_boot off   # 开机起内核的那一行（上面换掉内置代理时已经删了；以前留下的也删）
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
@@ -19430,6 +19893,9 @@ EOF
                              运行，以下由 cca 在后台运行）。节点在家时从路由器拷一份；不在维护者映射里的账号，
                              用 cca node add 填一个。在外面第一次启动时也会问
   cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接或 Clash 节点配置，只给没有路由器的机器）
+  cca local udp [on [节点]]  这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）也经节点出去：内置代理只管账号的端口，
+                             这些照旧直连。开着时一个 root 的系统服务只接 UDP（TCP 照旧直连），装的时候要输一次
+                             管理员密码；不带参数看现在从哪出去，pick 换节点，off 关掉，uninstall 删掉系统服务
   cca local off              停掉内置代理的内核、删掉它的配置和拷来的节点
                              平时自动判断：连得上路由器走路由器，连不上走内置代理（只经 VPN、ZeroTier 这类
                              虚拟网卡连得到路由器的不算在家）；想固定一种，把 ${CFG} 的 route 改成 router 或 local。

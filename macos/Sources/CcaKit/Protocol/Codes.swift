@@ -140,6 +140,23 @@ struct LocalClient: KnownValues {
     static let allKnown: [LocalClient] = [.builtin, .unset]
 }
 
+/// 本机 UDP 走节点的状态（`config.local.udp.state`，PROTOCOL 2.2、7.1）：cca 判断，App 只照着显示。
+struct LocalUDPState: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    /// 没开（本机客户端不是内置代理时也是它）
+    static let off = LocalUDPState(rawValue: "off")
+    /// 装着的就是设的这一份
+    static let ok = LocalUDPState(rawValue: "ok")
+    /// 装着的配置旧了（节点的定义变了、cca 更新了）：再打开一次，要输管理员密码
+    static let stale = LocalUDPState(rawValue: "stale")
+    /// 设了，系统服务却不在了
+    static let missing = LocalUDPState(rawValue: "missing")
+    /// 内置代理里已经没有这个节点转发 UDP 的定义
+    static let undefined = LocalUDPState(rawValue: "undefined")
+    static let allKnown: [LocalUDPState] = [.off, .ok, .stale, .missing, .undefined]
+}
+
 struct Backend: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
@@ -280,8 +297,10 @@ struct ResultCode: KnownValues {
     static let mailReady = ResultCode(rawValue: "mail_ready")
     /// 移除了邮箱助手的设置（`cca mail forget`）。
     static let mailForgotten = ResultCode(rawValue: "mail_forgotten")
+    /// 本机 UDP 走节点：打开、换节点、关掉、删掉系统服务（`cca local udp …`，PROTOCOL 7.1）。
+    static let localUDP = ResultCode(rawValue: "local_udp")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
-                                         .mailReady, .mailForgotten]
+                                         .mailReady, .mailForgotten, .localUDP]
 }
 
 struct FailCode: KnownValues {

@@ -779,8 +779,63 @@ cat > "$T/bin/osascript" <<'S'
 # 画启动器图标（osascript -l JavaScript badge.js 原图标 输出 标识 颜色）：有 fake_icons 时只写一行（见下面的 sips）
 [ "${1:-}" = -l ] && [ -f "$CCA_T/fake_icons" ] && [ "${3##*/}" = badge.js ] && { printf 'fake-png %s %s\n' "$6" "$7" > "$5"; exit 0; }
 [ "${1:-}" = -l ] && exec /usr/bin/osascript "$@"   # JavaScript（画启动器图标、切换窗口）交给真的 osascript
+# 用管理员权限运行脚本（cca local udp：osascript -e 'on run argv' -e 'do shell script (item 1 of argv) … with administrator privileges'
+# -e 'end run' 脚本 说明）：在沙箱里用当前用户照样跑（root 那边的位置 cca 已经换进沙箱，见 PY 的 udp_paths）。osa_cancel 时像在授权框里
+# 点了取消；脚本失败时像真的一样报 execution error（stderr 的最后一行和退出码）
+if [ "${2:-}" = 'on run argv' ] && [[ "${4:-}" == *'with administrator privileges'* ]]; then
+	printf 'OSA-ADMIN %s\n%s\nOSA-END\n' "${8:-}" "$7" >> "$CCA_T/osascript.log"   # 说明和脚本（都是命令行上的：查里面没有密钥）
+	[ ! -f "$CCA_T/osa_cancel" ] || { echo "0:180: execution error: User canceled. (-128)" >&2; exit 1; }
+	out=$(/bin/sh -c "$7" 2>&1 </dev/null 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&-); rc=$?
+	[ $rc = 0 ] && exit 0
+	echo "0:180: execution error: $(printf '%s\n' "$out" | tail -n 1) ($rc)" >&2
+	exit 1
+fi
 exit 0
 S
+# 假的 launchctl（cca local udp 的系统服务）：bootstrap / bootout / print system/<label>，命令行记在 launchctl.log。装上的 launchd 配置
+# 拷进 $CCA_T/launchd/<label>.plist；照 KeepAlive 的 PathState 起停程序（和 launchd 一样）：bootstrap 时在后台起一个看门的，开关文件在、
+# 程序没在跑就起它（记 START），launchd 配置没了（bootout）就停掉程序、自己退出。沙箱删掉以后看门的也自己退出
+cat > "$T/bin/launchctl" <<'S'
+#!/bin/bash
+echo "LAUNCHCTL $*" >> "$CCA_T/launchctl.log"
+L="$CCA_T/launchd"; mkdir -p "$L"
+label=${2#system/}
+case "${1:-}" in
+	print)
+		[ -f "$L/$label.plist" ] || { echo "Could not find service \"$label\" in domain for system" >&2; exit 113; }
+		pid=$(cat "$L/$label.pid" 2>/dev/null)
+		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then printf '%s = {\n\tstate = running\n\tpid = %s\n}\n' "$2" "$pid"
+		else printf '%s = {\n\tstate = not running\n}\n' "$2"; fi ;;
+	bootout)
+		[ -f "$L/$label.plist" ] || { echo "Boot-out failed: 3: No such process" >&2; exit 3; }
+		rm -f "$L/$label.plist"
+		w=$(cat "$L/$label.watch" 2>/dev/null); [ -z "$w" ] || kill "$w" 2>/dev/null
+		pid=$(cat "$L/$label.pid" 2>/dev/null)
+		if [ -n "$pid" ]; then
+			kill "$pid" 2>/dev/null
+			for i in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; /bin/sleep 0.1; done
+		fi
+		rm -f "$L/$label.pid" "$L/$label.watch" ;;
+	bootstrap)
+		IFS=$'\t' read -r label flag prog < <(python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); print("\t".join([p["Label"], list(p["KeepAlive"]["PathState"])[0], p["ProgramArguments"][0]]))' "$3") || exit 5
+		[ ! -f "$L/$label.plist" ] || { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }
+		cp "$3" "$L/$label.plist"
+		(
+			trap 'exit 0' TERM
+			while [ -f "$L/$label.plist" ]; do
+				pid=$(cat "$L/$label.pid" 2>/dev/null)
+				if [ -e "$flag" ] && { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; }; then
+					"$prog" </dev/null >/dev/null 2>&1 &
+					echo $! > "$L/$label.pid"; echo "START $label" >> "$CCA_T/launchctl.log"
+				fi
+				/bin/sleep 0.2 & wait $!
+			done
+		) </dev/null >/dev/null 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+		echo $! > "$L/$label.watch" ;;
+esac
+exit 0
+S
+chmod 755 "$T/bin/launchctl"
 # 启动器图标的另外两步（sips 缩成各个尺寸、iconutil 打包）。真画一个启动器的图标要将近 1 秒，回归里加一批账号时很慢：
 # 检查图标的用例（regress.sh 3c）之后 touch $CCA_T/fake_icons，换成只把参数和输入拼起来的假的（标识、颜色变了图标照样变）
 cat > "$T/bin/sips" <<'S'
@@ -1465,6 +1520,8 @@ d="" f="" test=""
 while [ $# -gt 0 ]; do case "$1" in -d) d="$2"; shift ;; -f) f="$2"; shift ;; -t) test=1 ;; esac; shift; done
 CD="$CCA_T/core"
 grep -q '"cca-install"' "$f" 2>/dev/null && CD="$CCA_T/core_install"   # 辅助安装的临时内核（入站叫 cca-install）：状态另放
+grep -q '"tun"' "$f" 2>/dev/null && CD="$CCA_T/core_udp"   # 本机 UDP 走节点的 TUN 内核（cca local udp，root 的系统服务）：状态另放
+mkdir -p "$CD/groups" "$CD/sel"
 if [ -n "$test" ]; then   # -t 只校验配置、不起内核（cca node add 用它校验自定义节点；core/reject_text 命中就不过）
 	if FAKE_CORE_DIR="$CD" "$CCA_T/core_load" "$f" >/dev/null 2>&1; then echo "configuration file $f test is successful"; exit 0; fi
 	echo "level=error msg=\"configuration file test failed\"" >&2; exit 1

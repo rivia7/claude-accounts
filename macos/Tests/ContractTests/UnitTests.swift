@@ -50,6 +50,18 @@ func textTests() {
     check("账号的登录状态读不了", StateErrorCode.accountUnreadable.isKnown && Texts.stateError(try! JSONDecoder().decode(
         StateIssue.self, from: Data(#"{"code":"account_unreadable","tool":"claude","message":""}"#.utf8))).contains("当作没登录"))
     check("cca 不会用的失败码不在已知列表里", !FailCode(rawValue: "drift").isKnown)
+    // 本机 UDP 走节点（config.local.udp，PROTOCOL 7.1）：旧版 cca、Linux 上没有；认不出的状态照原样留着，不当作没开
+    func local(_ j: String) -> LocalConfig { try! JSONDecoder().decode(LocalConfig.self, from: Data(j.utf8)) }
+    let lu = local(#"{"configured":true,"client":"builtin","name":"内置代理","udp":{"node":"US-A","state":"ok","installed":true,"running":true}}"#).udp
+    check("本机 UDP：开着、在运行", lu == LocalUDP(node: "US-A", state: .ok, installed: true, running: true) && lu?.active == true
+          && Texts.localUDP(lu!).contains("经 US-A 出去") && ResultCode.localUDP.isKnown)
+    check("本机 UDP：旧版 cca 没有这一项、Linux 上是 null", local(#"{"configured":true,"client":"builtin"}"#).udp == nil
+          && local(#"{"configured":true,"client":"builtin","udp":null}"#).udp == nil)
+    let odd = local(#"{"configured":true,"client":"builtin","udp":{"node":"US-A","state":"later","installed":true,"running":true}}"#).udp
+    check("本机 UDP：认不出的状态不当作没开、也不算在用", odd?.state.isKnown == false && odd?.state != .off && odd?.active == false
+          && Texts.localUDP(odd!).contains("cca local udp"))
+    check("本机 UDP：装着的旧了、开着没在运行", Texts.localUDP(LocalUDP(node: "US-A", state: .stale, installed: true, running: true)).contains("重新装")
+          && Texts.localUDP(LocalUDP(node: "US-A", state: .ok, installed: true, running: false)).contains("没在运行"))
 
     section("补救")
     check("port_closed → 同步路由器", Remedy.forCode(.portClosed, tool: .claude, key: "k") == .routerSync)

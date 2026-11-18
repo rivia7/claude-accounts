@@ -1142,6 +1142,7 @@ func auditState(_ s: StateDoc) -> [String] {
     }
     a.add("config.route_pref", s.config?.routePref)
     a.add("config.local.client", s.config?.local?.client)
+    a.add("config.local.udp.state", s.config?.local?.udp?.state)
     if let r = s.routing {
         a.add("routing.sync", r.sync)
         a.add("routing.local_sync", r.localSync)

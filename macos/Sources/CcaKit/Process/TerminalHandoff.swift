@@ -148,6 +148,15 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                                  message: "一步步选好上网方式、添加第一个账号。", inApp: true, needsForms: true)
     static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。", inApp: true, needsForms: true)
     static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。", inApp: true, needsForms: true)
+    /// 本机 UDP 走节点（`cca local udp …`，PROTOCOL 7.1）：装、换节点、删掉系统服务时系统自己弹授权框问管理员密码（不经 App）。
+    static let localUDPOn = Handoff(arguments: ["local", "udp", "on"], title: "本机 UDP 走节点",
+                                    message: "让这台 Mac 的 UDP 也经节点出去；系统会弹出授权框问管理员密码。", inApp: true)
+    static let localUDPPick = Handoff(arguments: ["local", "udp", "pick"], title: "本机 UDP 换节点",
+                                      message: "选这台 Mac 的 UDP 经哪个节点出去；系统会弹出授权框问管理员密码。", inApp: true)
+    static let localUDPOff = Handoff(arguments: ["local", "udp", "off"], title: "关掉本机 UDP 走节点",
+                                     message: "这台 Mac 的 UDP 恢复直连（系统服务留着，再打开不用密码）。", inApp: true)
+    static let localUDPUninstall = Handoff(arguments: ["local", "udp", "uninstall"], title: "删掉本机 UDP 走节点的系统服务",
+                                           message: "系统会弹出授权框问管理员密码。", inApp: true)
     static let install = Handoff(arguments: ["install"], title: "安装 cca", message: "在终端里完成 cca 的安装。")
 
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。

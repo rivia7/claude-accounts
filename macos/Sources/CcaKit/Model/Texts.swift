@@ -309,6 +309,19 @@ enum Texts {
         }
     }
 
+    /// 本机 UDP 走节点那一行（节点分流页，PROTOCOL 7.1）：照 cca 给的状态说。
+    static func localUDP(_ u: LocalUDP) -> String {
+        let node = nonEmpty(u.node) ?? "—"
+        switch u.state {
+        case .off: return "本机 UDP：直连（浏览器的 WebRTC、QUIC 这些不经节点）"
+        case .ok: return u.running ? "本机 UDP：经 \(node) 出去（TCP 照旧直连）" : "本机 UDP：设了经 \(node)，系统服务没在运行"
+        case .stale: return "本机 UDP：经 \(node)，装着的配置旧了，要重新装一次"
+        case .missing: return "本机 UDP：设了经 \(node)，系统服务却不在了，要重新装"
+        case .undefined: return "本机 UDP：内置代理里已经没有 \(node) 转发 UDP 的定义"
+        default: return "本机 UDP：状态认不出（在终端里运行 cca local udp 看看）"
+        }
+    }
+
     static func slotState(_ s: SlotState) -> String {
         switch s {
         case .ok: return "正常"

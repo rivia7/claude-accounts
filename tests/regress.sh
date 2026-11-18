@@ -133,6 +133,7 @@ ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名�
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
 ok "泄露检测：失败结果不误报通过，区分宿主探针与浏览器" 'python3 "$D/isolation_leaks.py"'
+ok "本机 UDP 走节点：TUN 配置只把 UDP 交给节点，状态、选节点、要装到 root 那边的文件和摘要" 'python3 "$D/local_udp.py"'
 ok "配置隔离：完整 TOML、项目配置与启动参数检查" 'python3 "$D/isolation_settings.py"'
 ok "凭证隔离：固定钥匙串目录，屏蔽继承凭证描述符" 'python3 "$D/isolation_credentials.py"'
 ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'python3 "$D/isolation_network.py"'
@@ -3051,7 +3052,7 @@ rm -f "$CD/reject_text"
 run cca @alice --version >/dev/null 2>&1
 ok "内核收下了：端口池缩回 8 个" '! grep -qx 7909 "$CD/listening" && grep -qx 7908 "$CD/listening"'
 out=$(gj state)
-ok "_gui state：本机客户端是内置代理（名字由 cca 给），已经同步" 'printf "%s" "$out" | jok "d[\"config\"][\"local\"] == {\"configured\": True, \"client\": \"builtin\", \"name\": \"内置代理\"} and d[\"routing\"][\"local_sync\"] == \"ok\""'
+ok "_gui state：本机客户端是内置代理（名字由 cca 给），已经同步" 'printf "%s" "$out" | jok "d[\"config\"][\"local\"] == {\"configured\": True, \"client\": \"builtin\", \"name\": \"内置代理\", \"udp\": {\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False}} and d[\"routing\"][\"local_sync\"] == \"ok\""'
 out=$(gj live)
 ok "_gui live：在外面看内置代理：在运行，alice 的槽位正常" 'printf "%s" "$out" | jok "d[\"route\"] == \"local\" and d[\"local\"][\"name\"] == \"内置代理\" and d[\"local\"][\"running\"] is True and d[\"slots\"][0][\"state\"] == \"ok\""'
 # 内核文件校验不对、界面 App 没装
@@ -3121,6 +3122,103 @@ ok "提问会话：配置本机出口：GUI 问用不用内置代理，答是就
 # 还原：配置、账号表、映射还原
 core_stop; rm -rf "$GA" "$CN" "$H/.cca/policy"; mv "$T/policy.core" "$H/.cca/policy"
 cp "$T/config.core" "$H/.cca/config.json"; cp "$T/accounts.core" "$H/.cca/accounts.json"
+
+fi
+if sect 11b4u; then
+# 11b4u. 本机 UDP 走节点（cca local udp，只在 macOS 上、只给内置代理）：root 那边换进沙箱（HOME 换过时 udp_paths 在 $H/udp-root），假的
+#        osascript 用当前用户跑管理员脚本（$T/osa_cancel：在授权框里点了取消），假的 launchctl 照 PathState 起停 cca-udp（$T/launchd），
+#        假内核看到 TUN 的配置时状态放在 $T/core_udp（$T/core_udp/reject_text 里的文字出现在配置里就校验不过）。节点定义直接写
+#        core/nodes.json，STUN 用假的服务器。这一节结束时卸掉系统服务，配置、账号表、内核目录都还原
+mkver "$(ver)" "$H/.cca/bin/cca"   # 分节续跑时快照里装着的 cca 可能比仓库里的旧
+CD="$T/core"; CN="$H/.cca/core"; CU="$T/core_udp"; UR="$H/udp-root"; UF="$H/.cca/udp/on"
+ru() { run CCA_UDP_SETTLE=0 "$@"; }
+uup() { local i; for i in $(seq 1 60); do [ -f "$CU/up" ] && return 0; sleep 0.1; done; return 1; }
+udown() { local i; for i in $(seq 1 60); do [ -f "$CU/up" ] || return 0; sleep 0.1; done; return 1; }
+ucfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$UR/cca-udp/config.yaml" "$1"; }   # 装着的 TUN 配置（c）满足条件
+admins() { local n; n=$(grep -c '^OSA-ADMIN' "$T/osascript.log" 2>/dev/null); echo "${n:-0}"; }   # 弹过几次授权框
+utmp() { sed -n 's/^S=//p' "$T/osascript.log" | tail -n 1 | tr -d "'"; }   # 最近一次管理员脚本拷文件的临时目录
+ustate() { gj state | jok "d[\"config\"][\"local\"][\"udp\"] == $1"; }
+core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; for i in $(seq 1 30); do [ -f "$CD/up" ] || return 0; sleep 0.1; done; }
+cp "$H/.cca/config.json" "$T/config.udp"; cp "$H/.cca/accounts.json" "$T/accounts.udp"
+rm -rf "$T/policy.udp"; mv "$H/.cca/policy" "$T/policy.udp"; mkdir -p "$H/.cca/policy"   # 不用映射（它固定的节点会盖掉下面给 alice 设的）
+edit_table 'j["alice@example.com"] = "US-A"'
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; c.pop('policy', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+mkdir -p "$CN"; chmod 700 "$CN"
+python3 - "$CN/nodes.json" "$H/.cca/config.json" <<'P'
+import json, sys, time
+nodes = json.load(open(sys.argv[2]))['nodes']
+px = {'US-A': {'type': 'vless', 'server': '192.0.2.21', 'port': 443, 'uuid': 'udp-secret-a', 'udp': True, 'tls': True},
+      'US-B': {'type': 'trojan', 'server': '192.0.2.22', 'port': 443, 'password': 'udp-secret-b'},
+      'US-C': {'type': 'ss', 'server': '192.0.2.23', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'udp-secret-c', 'udp': True}}
+out = [dict(px.get(n) or {'type': 'ss', 'server': '192.0.2.29', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x', 'udp': True}, name=n) for n in nodes]
+json.dump({'version': 1, 'saved_at': time.time(), 'nodes': nodes, 'proxies': out}, open(sys.argv[1], 'w'))
+P
+chmod 600 "$CN/nodes.json"
+: > "$T/osascript.log"; : > "$T/launchctl.log"; : > env.log
+out=$(ru cca local udp on US-A 2>&1 </dev/null); rc=$?
+ok "cca local udp on：还没用内置代理时不装（只给内置代理用），不弹授权框" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "只给内置代理用" && [ "$(admins)" = 0 ] && [ ! -e "$UR" ]'
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {'client': 'builtin'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+out=$(ru cca local udp 2>&1 </dev/null)
+ok "cca local udp：没开时说这台 Mac 的 UDP 直连、怎么打开；STUN 没测到也照实说" 'printf "%s" "$out" | grep -q "没开：这台 Mac 的 UDP" && printf "%s" "$out" | grep -q "cca local udp on \[节点\]" && printf "%s" "$out" | grep -q "STUN 没测到"'
+ok "_gui state：config.local.udp 是没开、没装" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False}"'
+out=$(ru cca local udp on US-B 2>&1 </dev/null); rc=$?
+ok "cca local udp on 不转发 UDP 的节点：说清楚；非交互时不现选、不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "节点「US-B」不转发 UDP" && printf "%s" "$out" | grep -q "运行 cca local udp on 节点" && [ "$(admins)" = 0 ] && cfgok "not c[\"local\"].get(\"udp\")"'
+out=$(ru cca local udp on NOPE 2>&1 </dev/null); rc=$?
+ok "cca local udp on 认不出的节点：说内置代理里没有它的定义；非交互时不现选、不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「NOPE」的定义" && [ "$(admins)" = 0 ] && [ ! -e "$UR" ]'
+rm -f "$T/stun.port"; python3 -I "$T/fake_stun.py" "$T" & STUN_PID=$!
+for i in $(seq 1 50); do [ -s "$T/stun.port" ] && break; sleep 0.1; done; STUN="127.0.0.1:$(cat "$T/stun.port")"
+echo 198.51.100.21 > "$T/stun_ip"
+: > gh.log
+out=$(ru CCA_TTY="$(ans 1)" cca local udp on 2>&1); rc=$?
+ok "cca local udp on（终端里现选，只列转发 UDP 的节点）：弹一次授权框装上系统服务，打开开关，root 的内核起来，说 STUN 看到的出口" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "1. US-A" && ! printf "%s" "$out" | grep -q "US-B" && printf "%s" "$out" | grep -q "现在经节点 US-A 出去" && printf "%s" "$out" | grep -q "从 198.51.100.21" && [ "$(admins)" = 1 ] && uup && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && [ -f "$UF" ] && [ "$(stat -f %Lp "$H/.cca/udp")" = 700 ] && grep -q "^GH mihomo" gh.log'
+ok "装到 root 那边的：内核（和内置代理的同一份）、配置（600，只有这个节点，只把 UDP 交给它）、启动脚本（755）、info.json（644，没有密钥）、日志；launchd 配置照开关文件起停" '[ -x "$UR/cca-udp/mihomo" ] && cmp -s "$UR/cca-udp/mihomo" "$CN/mihomo-v1.19.33" && [ "$(stat -f %Lp "$UR/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/config.yaml")" = 600 ] && [ "$(stat -f %Lp "$UR/cca-udp/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/info.json")" = 644 ] && [ -f "$UR/cca-udp.log" ] && ucfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\"] and c[\"rules\"][0] == \"NETWORK,TCP,DIRECT\" and c[\"rules\"][-2:] == [\"NETWORK,UDP,US-A\", \"MATCH,DIRECT\"] and c[\"tun\"][\"enable\"] and \"external-controller\" not in c" && ! grep -q udp-secret "$UR/cca-udp/info.json" "$UR/local.cca.udp.plist" && python3 -c "import plistlib,sys; p=plistlib.load(open(sys.argv[1],\"rb\")); sys.exit(0 if p[\"KeepAlive\"] == {\"PathState\": {sys.argv[2]: True}} and p[\"ProgramArguments\"] == [sys.argv[3] + \"/cca-udp\"] else 1)" "$UR/local.cca.udp.plist" "$UF" "$UR/cca-udp"'
+ok "节点密钥不进命令行和日志（管理员脚本是 osascript 的参数，launchctl、env 的命令行）；临时目录用完删掉" '! grep -q udp-secret "$T/osascript.log" "$T/launchctl.log" env.log && tmpd=$(utmp) && [ -n "$tmpd" ] && [ ! -e "$tmpd" ] && grep -q "^SUMS=.*mihomo:[0-9a-f]\{64\} config.yaml:[0-9a-f]\{64\}" "$T/osascript.log"'
+ok "launchd：bootstrap 装上，开关文件在就起 cca-udp" 'grep -q "^LAUNCHCTL bootstrap system $UR/local.cca.udp.plist$" "$T/launchctl.log" && grep -q "^START local.cca.udp$" "$T/launchctl.log"'
+ok "_gui state：config.local.udp 是开着、装好了、在运行" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True}"'
+out=$(ru cca local udp 2>&1 </dev/null)
+ok "cca local udp：说经哪个节点出去、系统服务在运行，和 STUN 看到的出口" 'printf "%s" "$out" | grep -q "经节点 US-A 出去（系统服务 local.cca.udp 在运行" && printf "%s" "$out" | grep -q "从 198.51.100.21"'
+out=$(ru cca local udp on US-A 2>&1 </dev/null); rc=$?
+ok "再开同一个节点（装着的就是这一份）：不再弹授权框" '[ $rc -eq 0 ] && [ "$(admins)" = 1 ] && [ -f "$CU/up" ]'
+out=$(ru cca local udp off 2>&1 </dev/null); rc=$?
+ok "cca local udp off：删掉开关文件，root 的内核自己停下；系统服务留着（不用密码）" '[ $rc -eq 0 ] && udown && [ ! -e "$UF" ] && cfgok "\"udp\" not in c[\"local\"]" && [ "$(admins)" = 1 ] && [ -f "$UR/local.cca.udp.plist" ] && printf "%s" "$out" | grep -q "系统服务还装着"'
+ok "_gui state：关掉以后是 off（装着、没在运行）" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": True, \"running\": False}"'
+out=$(ru cca local udp on 2>&1 </dev/null); rc=$?
+ok "cca local udp on 不写节点：用装着的那个（不弹授权框），又起来了" '[ $rc -eq 0 ] && uup && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && [ "$(admins)" = 1 ]'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(server='192.0.2.31') for x in j['proxies'] if x['name'] == 'US-A']; json.dump(j, open(p, 'w'))" "$CN/nodes.json"
+ok "节点定义变了：_gui state 说装着的配置旧了（还在运行）" 'ustate "{\"node\": \"US-A\", \"state\": \"stale\", \"installed\": True, \"running\": True}"'
+mkdir -p "$GA/Contents/MacOS"
+printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$GA/Contents/Info.plist"
+touch "$T/away"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在外面启动账号：装着的旧了只提醒（启动时不弹授权框），照常经内置代理启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "本机 UDP 走节点（US-A）要重新装一次" && [ "$(admins)" = 1 ] && [ "$(cat "$CD/sel/CCA-1" 2>/dev/null)" = US-A ]'
+out=$(ru cca local udp on 2>&1 </dev/null); rc=$?
+ok "cca local udp on：照新的节点定义重新装（再弹一次授权框），root 的内核换上新的配置" '[ $rc -eq 0 ] && [ "$(admins)" = 2 ] && ucfg "c[\"proxies\"][0][\"server\"] == \"192.0.2.31\"" && uup && ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True}"'
+touch "$T/osa_cancel"
+out=$(ru cca local udp on US-C 2>&1 </dev/null); rc=$?
+rm -f "$T/osa_cancel"
+ok "授权框里点了取消：什么都不改（还是经 US-A，装着的也还是它，照跑）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消" && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && ucfg "c[\"rules\"][-2] == \"NETWORK,UDP,US-A\"" && [ -f "$CU/up" ]'
+echo 192.0.2.23 > "$CU/reject_text"
+out=$(ru cca local udp on US-C 2>&1 </dev/null); rc=$?
+rm -f "$CU/reject_text"
+ok "内核校验 root 那边的新配置没通过：不换上，原来的照跑，说原因" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内核校验配置没通过" && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && ucfg "c[\"rules\"][-2] == \"NETWORK,UDP,US-A\"" && [ ! -e "$UR/cca-udp.new" ] && [ -f "$CU/up" ] && run launchctl print system/local.cca.udp >/dev/null 2>&1'
+out=$(ru cca local udp on US-C 2>&1 </dev/null); rc=$?
+ok "换成 US-C：重新装，root 的内核换上只有 US-C 的配置" '[ $rc -eq 0 ] && cfgok "c[\"local\"][\"udp\"] == \"US-C\"" && ucfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-C\"]" && uup'
+rm -f "$UF"; udown
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在外面启动账号：设了本机 UDP 走节点、开关文件却不在：补上，root 的内核又起来" '[ $rc -eq 3 ] && [ -f "$UF" ] && uup'
+out=$(sess '{"local.udp":[{"v":"1"}]}' -- cca local udp pick 2>&1); rc=$?
+ok "提问会话：换节点（cca local udp pick 总是问；App 里现选，不列不转发 UDP 的），选好照常装上、打开，有结果事件" '[ $rc -eq 0 ] && [ "$(asks)" = local.udp ] && evq "e.get(\"q\") == \"local.udp\" and e[\"fields\"][0][\"options\"][0][\"label\"] == \"US-A\" and not any(o[\"label\"] == \"US-B\" for o in e[\"fields\"][0][\"options\"])" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_udp\"" && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && uup'
+out=$(ru cca local off 2>&1 </dev/null); rc=$?
+ok "cca local off（不再用内置代理）：本机 UDP 走节点一起关掉（开关文件删掉，root 的内核停下），系统服务留着" '[ $rc -eq 0 ] && udown && [ ! -e "$UF" ] && printf "%s" "$out" | grep -q "本机 UDP 走节点也关掉了" && cfgok "\"udp\" not in c.get(\"local\", {})" && [ -f "$UR/local.cca.udp.plist" ]'
+n=$(admins)
+out=$(ru cca local udp uninstall 2>&1 </dev/null); rc=$?
+ok "cca local udp uninstall：弹一次授权框，bootout、删掉 root 那边的文件、launchd 配置和日志" '[ $rc -eq 0 ] && [ "$(admins)" = $((n + 1)) ] && [ ! -e "$UR/cca-udp" ] && [ ! -e "$UR/local.cca.udp.plist" ] && [ ! -e "$UR/cca-udp.log" ] && grep -q "^LAUNCHCTL bootout system/local.cca.udp$" "$T/launchctl.log" && [ ! -e "$T/launchd/local.cca.udp.plist" ]'
+out=$(ru cca local udp uninstall 2>&1 </dev/null); rc=$?
+ok "没装时 uninstall：说没装，不弹授权框" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "系统服务没装" && [ "$(admins)" = $((n + 1)) ]'
+kill "$STUN_PID" 2>/dev/null; wait "$STUN_PID" 2>/dev/null; STUN="" STUN_PID=""
+core_stop; rm -f "$T/away" "$T/stun_ip"; rm -rf "$GA" "$CN" "$UR" "$H/.cca/udp" "$T/launchd" "$CU"
+rm -rf "$H/.cca/policy"; mv "$T/policy.udp" "$H/.cca/policy"
+cp "$T/config.udp" "$H/.cca/config.json"; cp "$T/accounts.udp" "$H/.cca/accounts.json"
 
 fi
 if sect 11b5; then

@@ -330,6 +330,7 @@ struct RouteStrip: View {
 /// 出口检测的明细：纯净度、DNS、WebRTC 三块，下面是标签、说明和什么时候测的。
 /// 结果好坏只看 cca 给的 `result`（不在 App 里拿纯净度和设定比）。旧结果（过时、换了节点）用灰色显示。
 struct HealthDetails: View {
+    @Environment(AppModel.self) private var model
     let account: Account
 
     var body: some View {
@@ -357,6 +358,18 @@ struct HealthDetails: View {
                     }
                     .fixedSize(horizontal: false, vertical: true)
                 }
+                if h.kind != .api, !dim, h.leak?.webrtc == .leak, let u = udpOffer, let a = LocalUDPAction.primary(u) {
+                    HStack(spacing: 10) {
+                        Text(u.state == .off ? "这台 Mac 自己的 UDP 还在直连（内置代理只管账号的端口）：可以让它也经节点出去，要输一次管理员密码。"
+                                             : Texts.localUDP(u))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        RowAction(a.title, systemImage: a.systemImage) { model.run(a.handoff) }
+                            .disabled(model.flow != nil)
+                    }
+                }
                 if !h.tags.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(h.tags, id: \.self) { Tag(text: $0) }
@@ -375,6 +388,12 @@ struct HealthDetails: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// WebRTC 看到了中国大陆的地址、用的是内置代理、本机 UDP 走节点没在起作用时：给个打开它的入口（PROTOCOL 7.1）。
+    private var udpOffer: LocalUDP? {
+        guard let l = model.state?.config?.local, l.client == .builtin, let u = l.udp, !u.active else { return nil }
+        return u
     }
 
     /// 纯净度：分数和条的颜色跟着 cca 的 result 走（纯净度低于设定时 result 是 low_purity）。

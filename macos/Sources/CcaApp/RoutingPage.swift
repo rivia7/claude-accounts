@@ -47,6 +47,7 @@ struct RoutingPage: View {
                     SlotIssues(rows: rows)
                     DirectAccounts()
                 }
+                LocalUDPRow()
             }
             .padding(.top, 24)
             .padding(.bottom, 36)
@@ -690,6 +691,53 @@ struct DirectAccounts: View {
                 }
             }
             .font(.callout)
+        }
+    }
+}
+
+/// 本机 UDP 走节点（内置代理时才有，PROTOCOL 7.1）：这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC）经不经节点出去。
+/// 状态照 cca 给的 `config.local.udp` 说；打开、换节点、关掉、删掉都是提问会话（装、删系统服务时系统自己弹授权框问管理员密码）。
+struct LocalUDPRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let l = model.state?.config?.local, l.client == .builtin, let u = l.udp {
+            InfoRow(Text(Texts.localUDP(u)), systemImage: "antenna.radiowaves.left.and.right", tint: tint(u)) {
+                if let a = LocalUDPAction.primary(u) {
+                    RowAction(a.title, systemImage: a.systemImage) { model.run(a.handoff) }
+                }
+                if u.active {
+                    RowAction("换节点…", systemImage: "arrow.left.arrow.right") { model.run(.localUDPPick) }
+                }
+                if u.state != .off {
+                    RowAction("关掉", systemImage: "xmark.circle") { model.run(.localUDPOff) }
+                } else if u.installed {
+                    RowAction("删掉系统服务…", systemImage: "trash") { model.run(.localUDPUninstall) }
+                }
+            }
+            .disabled(model.flow != nil)
+            .help("内置代理只管账号的端口，这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）平时直连。打开后一个系统服务只把 UDP 交给节点，TCP 照旧直连；装、换节点时要输一次管理员密码。")
+        }
+    }
+
+    private func tint(_ u: LocalUDP) -> Color? {
+        if u.state == .off { return nil }
+        return u.active ? .green : .orange
+    }
+}
+
+/// 本机 UDP 走节点的主操作（分流页那一行、账号页 WebRTC 泄露旁边共用）：照 cca 给的状态挑，规则不在 App 里重算。
+struct LocalUDPAction {
+    let title: String
+    let systemImage: String
+    let handoff: Handoff
+
+    static func primary(_ u: LocalUDP) -> LocalUDPAction? {
+        switch u.state {
+        case .off: return LocalUDPAction(title: "经节点出去…", systemImage: "antenna.radiowaves.left.and.right", handoff: .localUDPOn)
+        case .ok: return u.running ? nil : LocalUDPAction(title: "重新打开", systemImage: "arrow.clockwise", handoff: .localUDPOn)
+        case .stale, .missing: return LocalUDPAction(title: "重新装…", systemImage: "arrow.clockwise", handoff: .localUDPOn)
+        default: return LocalUDPAction(title: "换节点…", systemImage: "arrow.left.arrow.right", handoff: .localUDPPick)
         }
     }
 }

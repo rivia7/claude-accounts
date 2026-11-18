@@ -96,7 +96,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "config": {
     "route_pref": "auto",
     "router": {"configured": true, "host": "192.0.2.10", "ssh_port": 22, "proxy_host": "192.0.2.10"},
-    "local": {"configured": true, "client": "clash-verge", "name": "Clash Verge"},
+    "local": {"configured": true, "client": "clash-verge", "name": "Clash Verge",
+              "udp": {"node": null, "state": "off", "installed": false, "running": false}},
     "nodes": ["US-A", "US-B", "US-C", "US-D"],
     "min_trust": 50, "leak_check": true, "update": "auto",
     "policy": {"configured": true, "repo": "example/cca-policy", "next_check_epoch": 1794045600.0}
@@ -305,6 +306,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `router.configured`：配置过路由器；`proxy_host` 是账号端口所在的主机（可能和 `host` 不同）。
 - `local.configured` / `client`：本机 Clash 客户端（`clash-verge` | `manual` | `builtin` | `""`）。`builtin` 是内置代理：App 要托管
   它的内核（见 7）。`name` 是给人看的名字（`Clash Verge`、`内置代理`……），App 照着显示。
+- `local.udp`：本机 UDP 走节点（`cca local udp`，见 7.1）。只在 macOS 上（Linux 上是 null；旧版 cca 没有这一项，当作 null）：
+  `{"node": "US-A" | null, "state": "off" | "ok" | "stale" | "missing" | "undefined", "installed": bool, "running": bool}`。`node` 是设的节点（没开是 null）；
+  `state`：`off` 没开（本机客户端不是内置代理时也是 `off`）| `ok` 装着的就是设的这一份 | `stale` 装着的配置旧了（节点的定义变了、cca 更新了：
+  再打开一次，要输管理员密码）| `missing` 设了，系统服务却不在了 | `undefined` 内置代理里已经没有这个节点转发 UDP 的定义；`installed`：root 的系统服务
+  装着（不管开没开）；`running`：root 的内核在跑（`ok` 却没在跑：刚开机还没起来，或者系统设置里没允许它在后台运行）。认不出的 `state` 当作有问题，
+  提示在终端里运行 `cca local udp` 看。
 - `onboarded`：这台机器走过配置向导、或者已经有账号/配过路由器/配过本机客户端。`false` 时 App 首页给个「开始配置」的欢迎（`WelcomeBanner`），
   点了走配置向导（`cca _onboard` 提问会话，要 `hello.forms`）。旧版 cca 没有这个字段：当作已配置，不弹向导。
 
@@ -596,7 +603,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -772,6 +779,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
 | `node.custom` | `[codex] add` / `node add`（选节点时「自定义代理…」） | `text` | 粘贴一条分享链接（vmess/vless/ss/trojan/hysteria2/tuic）当出口节点；多行 Clash 配置在终端 `cca node add` |
 | `local.builtin` | `local setup` / 在外面首次启动 | `confirm` | 用内置代理吗（cca 跑一个 mihomo 内核，每个账号一个本机端口走各自节点） |
+| `local.udp` | `local udp on [节点]` | `choice` | 这台 Mac 自己的 UDP（WebRTC、QUIC）经哪个节点出去：只列转发 UDP 的节点。不写节点、设过的和装着的都没有（或者认不出、不转发 UDP）时才问；接着系统会弹授权框（管理员密码，不经 App，见 2.2 的 `config.local.udp`） |
 | `api.basic` | `[codex] add api` | `text`、`text`、`secret`、`text` | 别名、接口地址（校验 url）、API key、模型（可选，校验 model） |
 | `api.node` | `[codex] add api` | `choice` | 出口节点（第一项是直连）。没有可选节点时不问 |
 | `key.secret` | `[codex] key 账号` | `secret` | API key（第三方 API 账号：换 key；官方账号：记一把备查的，页上的 `message` 说明 cca 不拿它启动） |
@@ -815,7 +823,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
-| `router uninstall`、`local off`、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
+| `local udp on`、`pick`、`off`、`uninstall` | 节点分流页的「本机 UDP」一行（内置代理时才有）、账号页 WebRTC 泄露旁边的按钮 | 提问会话（`local.udp`；装、删系统服务时系统自己弹授权框，不经 App，7.1） |
+| `router uninstall`、`local off`、`local udp`（查看）、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
 | `mail`（`setup`、`open`、`forget`） | 账号页的「邮箱」一节（4.11；要 `hello.mail`，旧版 cca 没有入口） | 提问会话（`setup`）/ 无交互命令 |
 | `mail`（`status`、`test`） | 没有入口 | 终端里自己运行（诊断用） |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
@@ -915,6 +924,22 @@ Clash 的一样（`127.0.0.1:7901…`），配置、节点、切换都由 cca �
   用户从菜单栏打开主窗口时照常显示。App 开着时 cca 不再 `open`（会弹出主窗口），而是写 `core/config.yaml`：
   App 看到它变了就重新读 `state`、接着起内核（看不见时也读）。
 - 演示数据（`CCA_GUI_FIXTURES`）不运行内核。
+
+### 7.1 本机 UDP 走节点（`cca local udp`）
+
+内置代理只管账号的端口：这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）照旧直连，在国内时 WebRTC 检测会看到大陆的地址。
+`cca local udp on [节点]` 装一个 root 的系统服务（launchd 的 `local.cca.udp`，文件在 `/Library/Application Support/cca-udp`，日志
+`/Library/Logs/cca-udp.log`）：它跑第二个 mihomo 内核、开 TUN，只把 UDP 交给这个节点；TCP、DNS（53 端口）、局域网和保留地址、
+ZeroTier / Tailscale、代理内核自己的流量照旧直连。
+
+- 只给内置代理（`config.local.client == "builtin"`），只在 macOS 上；只能选转发 UDP 的节点（定义里写了 `udp: true`，或者 hysteria、tuic、wireguard 这类）。
+- 装、换节点、重新装、删掉时系统弹授权框问管理员密码（cca 碰不到密码，App 不参与）；root 那边的文件按摘要核对、内核校验过配置才换上，出错时原来的照跑。
+  装好以后开、关只是 `~/.cca/udp/on` 这个开关文件（launchd 照它起停，开机后也照它），不用密码。`cca local off`、换客户端时一起关掉（系统服务留着）。
+- App：照 `config.local.udp` 显示状态。打开（`local udp on`）、换节点（`local udp pick`：总是问）、重新装、关掉（`local udp off`）、删掉系统服务
+  （`local udp uninstall`）都是提问会话，选节点的那一问是 `local.udp`（4.6）。做完是 `result` 事件 `local_udp`；授权框里点了取消是 `fail` 的
+  `cancelled`（什么都没改）；没用内置代理时 `fail` 是 `local_unavailable`。
+- 开着 TUN 时内置代理的内核要绑定物理网卡连节点：开、关之后 cca 当场重新加载在跑的内置代理（`routing.local_sync` 可能先是 `pending`，
+  下次在外面启动账号时也会重新加载）。
 
 ## 8. 客户端更新（桌面客户端和终端工具）
 

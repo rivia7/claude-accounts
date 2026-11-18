@@ -176,15 +176,50 @@ struct LocalConfig: Decodable, Sendable, Equatable {
     var configured: Bool
     var client: LocalClient?
     var name: String?
+    /// 本机 UDP 走节点（`cca local udp`，PROTOCOL 7.1）。只在 macOS 上有；Linux 上、旧版 cca 是 nil。
+    var udp: LocalUDP?
 
-    enum CodingKeys: String, CodingKey { case configured, client, name }
+    enum CodingKeys: String, CodingKey { case configured, client, name, udp }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         configured = c.bool(.configured) ?? false
         client = c.lossy(LocalClient.self, .client)
         name = c.string(.name)
+        udp = c.lossy(LocalUDP.self, .udp)
     }
+}
+
+/// `config.local.udp`：这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC）经不经节点出去。内置代理只管账号的端口，这些平时直连；
+/// 打开后一个 root 的系统服务（TUN）只把 UDP 交给设的节点。状态由 cca 判断，App 只照着显示。
+struct LocalUDP: Decodable, Sendable, Equatable {
+    /// 设的节点；没开是 nil
+    var node: String?
+    var state: LocalUDPState
+    /// root 的系统服务装着（不管开没开）
+    var installed: Bool
+    /// root 的内核在跑
+    var running: Bool
+
+    enum CodingKeys: String, CodingKey { case node, state, installed, running }
+
+    init(node: String?, state: LocalUDPState, installed: Bool, running: Bool) {
+        self.node = node
+        self.state = state
+        self.installed = installed
+        self.running = running
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        node = c.string(.node)
+        state = c.lossy(LocalUDPState.self, .state) ?? LocalUDPState(rawValue: "")
+        installed = c.bool(.installed) ?? false
+        running = c.bool(.running) ?? false
+    }
+
+    /// 开着、root 的内核在跑：UDP 正经节点出去
+    var active: Bool { state == .ok && running }
 }
 
 struct PolicyConfig: Decodable, Sendable, Equatable {

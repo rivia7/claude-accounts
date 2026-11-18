@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.4.0-beta.1", title: "这台 Mac 的 UDP 也能经节点出去", points: [
+            .init(symbol: "antenna.radiowaves.left.and.right",
+                  text: "用内置代理时，这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）以前照旧直连，国内的 WebRTC 检测会看到大陆的地址。现在可以让它们也经一个节点出去：节点分流页的「本机 UDP」一行，或者终端里 cca local udp on 节点。"),
+            .init(symbol: "lock.shield",
+                  text: "要装一个系统服务（只接 UDP，TCP 照旧直连），装的时候系统弹授权框输一次管理员密码；之后开、关都不用密码，开机后照常生效。cca local udp off 关掉，uninstall 删掉。"),
+            .init(symbol: "exclamationmark.triangle",
+                  text: "账号页的 WebRTC 看到大陆地址、又在用内置代理时，旁边直接给出打开它的按钮。"),
+        ], art: "route"),
         ReleaseNote(version: "3.3.0", title: "cca 3.3 正式版：配置更简单，出门在外统一用内置代理", points: [
             .init(symbol: "sparkles",
                   text: "macOS 上一键安装后自动打开图形界面 App，第一次打开手把手引导你选这台 Mac 怎么联网、添加第一个账号，新手教程还配了图文步骤卡。"),
