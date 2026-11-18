@@ -57,7 +57,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="3.3.0-beta.8"
+VERSION="3.3.0-beta.9"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -5920,8 +5920,11 @@ def local_want(c):
     want = [sorted(m.get(n, n) for n in c['nodes']), pool_size(c)]
     f = policy_fill()
     if (c.get('local') or {}).get('client') == 'builtin':   # 内置代理：节点定义变了（路由器上改了节点、参考节点更新）也要重新加载
-        defs = core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])
+        defs = core_node_defs(c, m)
         want.append(hashlib.sha1(json.dumps(defs, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest())
+        b = core_bind(c, defs)
+        if b:   # 出站绑定了物理网卡（别的程序开着 TUN）：网卡、DNS 变了也要重新加载（没绑定时摘要和以前一样）
+            want.append([b['iface'], b['dns']])
     elif f and (c.get('local') or {}).get('fill') == f['id']:   # 参考节点进了内置代理：变了也要重新加载
         want.append(f['id'])                                     # （没有参考节点时摘要和以前一样）
     return hashlib.sha1(json.dumps(want).encode('utf-8')).hexdigest()
@@ -5983,9 +5986,12 @@ def cmd_local_env():
         client = ''
     n = pool_size(c)
     ctl = 'unix:@core' if client == 'builtin' else ''   # @core：bash 的 core_sock
+    want = local_want(c)
+    b = core_bind(c) if client == 'builtin' else None   # local_want 刚按节点定义查过（一个进程只查一次）
     sh(LOCAL_CLIENT=client, LOCAL_NAME=local_label(client), LOCAL_CTL=ctl, LOCAL_SECRET='',
-       LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=local_want(c),
-       LOCAL_SLOTS=n, LOCAL_FIRST=FIRST_PORT, LOCAL_LAST=FIRST_PORT + n - 1)
+       LOCAL_APPLIED=loc.get('applied', ''), LOCAL_WANT=want,
+       LOCAL_SLOTS=n, LOCAL_FIRST=FIRST_PORT, LOCAL_LAST=FIRST_PORT + n - 1,
+       LOCAL_BIND=b['iface'] if b else '', LOCAL_BIND_VIA=b['via'] if b else '', LOCAL_BIND_DNS=' '.join(b['dns']) if b else '')
 
 
 def cmd_local_set(*kv):
@@ -6489,21 +6495,138 @@ def core_missing(c):
     return [n for n in c['nodes'] if m.get(n, n) not in have]
 
 
+def core_node_defs(c, m=None):
+    """内置代理里放哪些节点定义：可选节点（按内置代理里的叫法）和它们经 dialer-proxy 用到的"""
+    m = local_names(c) if m is None else m
+    return core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])
+
+
+# 别的程序开着 TUN 时（Clash 客户端的虚拟网卡模式、VPN 之类），内置代理的出站绑定到物理网卡（只在 macOS 上，见 core_bind）。
+# 虚拟网卡：VPN、ZeroTier、Tailscale、WireGuard、Clash 客户端的 TUN 这类隧道和虚拟局域网。bash 的 VIRTUAL_IFACE_RE 是同一份名单
+# （只经它们连得到的路由器不算在家），要一起改（回归里核对）
+VIRTUAL_IFACE_RE = lazy_re(r'^(utun|ipsec|ppp|tun|tap|gif|stf|feth|zt|wg|tailscale|nebula|vti|gre|ipip|ip6|sit|Meta|Mihomo|singbox)')
+CORE_ROUTE_PROBE = '1.1.1.1'   # 节点的服务器都写成域名时，拿这个公网地址看公网的流量走哪块网卡（只查路由表，不发包）
+CORE_BIND = []                 # core_bind 的结果：一个进程只查一次
+
+
+def sys_cmd_out(*argv):
+    """系统命令（route、netstat、ipconfig）的输出；没有这个命令、失败、超时时是空的。PATH 后面补上 /usr/sbin、/sbin"""
+    import subprocess
+    env = dict(os.environ, PATH=os.environ.get('PATH', '/usr/bin:/bin') + ':/usr/sbin:/sbin')
+    try:
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return r.stdout.decode('utf-8', 'replace') if r.returncode == 0 else ''
+
+
+def virtual_iface(name):
+    return bool(name) and VIRTUAL_IFACE_RE.match(name) is not None
+
+
+def route_iface(addr):
+    """连这个 IP 走哪块网卡（macOS 的 route get：只查路由表）；查不到是空的。IPv6 要带 -inet6（不带时 route 当它是主机名去解析）"""
+    for line in sys_cmd_out(*(('route', '-n', 'get') + (('-inet6',) if ':' in addr else ()) + (addr,))).splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0] == 'interface:':
+            return f[1]
+    return ''
+
+
+def phys_iface():
+    """物理网卡：默认路由（netstat 里也列着各网卡自己的默认路由）里第一块不是虚拟网卡的；没有是空的"""
+    for line in sys_cmd_out('netstat', '-rn', '-f', 'inet').splitlines():
+        f = line.split()
+        if len(f) >= 4 and f[0] == 'default' and not virtual_iface(f[3]):
+            return f[3]
+    return ''
+
+
+def core_dns(phys):
+    """绑定物理网卡时节点的域名用哪些 DNS：内核自己照系统配的 DNS 查（查询也走绑定的网卡，不会被 TUN 劫持成假 IP），系统的 DNS
+    经物理网卡到得了就不另配（空的）。系统的 DNS 是 TUN 自己的地址（不是公网地址、又走虚拟网卡：198.18.0.2 这类；还有本机的
+    127.0.0.1）时到不了，改用物理网卡从 DHCP 拿到的；DHCP 也没给就不配（服务器写成 IP 的节点照样能用）"""
+    import ipaddress
+
+    def usable(a):
+        a, _, scope = a.partition('%')
+        try:
+            ip = ipaddress.ip_address(a)
+        except ValueError:
+            return False
+        if ip.is_loopback or ip.is_unspecified:
+            return False
+        return ip.is_global or not virtual_iface(scope or route_iface(a))
+
+    try:
+        with open(os.environ.get('CCA_RESOLV_CONF') or '/etc/resolv.conf', encoding='utf-8', errors='replace') as f:
+            mine = [w[1] for w in (l.split() for l in f) if len(w) > 1 and w[0] == 'nameserver']
+    except OSError:
+        mine = []
+    if any(usable(a) for a in mine):
+        return []
+    m = re.search(r'domain_name_server \(ip_mult\): \{([^}]*)\}', sys_cmd_out('ipconfig', 'getpacket', phys))
+    out = []
+    for a in (m.group(1).split(',') if m else []):
+        a = a.strip()
+        if usable(a) and a not in out:
+            out.append(a)
+    return out
+
+
+def core_bind(c, defs=()):
+    """内置代理的出站要不要绑定网卡：{'iface': 物理网卡, 'via': 虚拟网卡, 'dns': [DNS…]}，不用时是 None。只在 macOS 上：别的程序
+    开着 TUN（Clash 客户端的虚拟网卡模式、VPN 之类）把去节点的流量路由到虚拟网卡上时，内核连节点的连接会被它截走，照它自己的规则走
+    （可能再套一层代理，就连不上了）。这时把出站绑定到物理网卡（macOS 照这块网卡自己的路由走，绕开 TUN；mihomo 的 interface-name）。
+    看节点服务器里第一个写成公网 IPv4 的走哪块网卡（常常没有 IPv6 的路由），没有时看 CORE_ROUTE_PROBE。开关 TUN、换网络都会变：生成配置、算摘要时现查。
+    config.json 的 core_bind: false 关掉（要经 VPN 才连得到节点的网络）"""
+    if not CORE_BIND:
+        import ipaddress
+        b = None
+        if sys.platform == 'darwin' and c.get('core_bind') is not False:
+            probe = CORE_ROUTE_PROBE
+            for p in defs:
+                try:
+                    a = ipaddress.ip_address(str(p.get('server')))
+                    if a.version == 4 and a.is_global:
+                        probe = str(p['server'])
+                        break
+                except ValueError:
+                    pass
+            via = route_iface(probe)
+            phys = phys_iface() if virtual_iface(via) else ''
+            if phys:
+                b = {'iface': phys, 'via': via, 'dns': core_dns(phys)}
+        CORE_BIND.append(b)
+    return CORE_BIND[0]
+
+
 def core_config(c, sock):
     """内置代理的配置（mihomo）：只有本机 127.0.0.1 上的入站 cca-n，各自直通策略组 CCA-n（成员：分到的节点
     排第一，没有定义的拿掉，分到的没有就 REJECT 排第一）；不开通用的代理端口、系统代理、TUN、DNS，规则只有一条 MATCH,REJECT
-    （入站都指定了组，用不到规则）；控制接口只开 Unix socket；不记选中的节点（重新加载后选组里第一个，就是账号的节点）"""
-    m = local_names(c)
-    defs = core_pick(core_defs(), [m.get(n, n) for n in c['nodes']])
+    （入站都指定了组，用不到规则）；控制接口只开 Unix socket；不记选中的节点（重新加载后选组里第一个，就是账号的节点）。
+    别的程序开着 TUN 时出站绑定到物理网卡（core_bind；系统的 DNS 到不了时另配物理网卡的 DNS），没开时和以前逐字节一样"""
+    defs = core_node_defs(c)
     have = {p['name'] for p in defs}
     groups, listeners = [], []
     for g, port, order in slot_orders(c, local=True):
         groups.append({'name': g, 'type': 'select', 'proxies': local_members(order, have)})
         listeners.append({'name': g.lower(), 'type': 'mixed', 'listen': '127.0.0.1', 'port': port, 'users': [], 'proxy': g})
-    return {'allow-lan': False, 'bind-address': '127.0.0.1', 'mode': 'rule', 'log-level': 'warning', 'find-process-mode': 'off',
-            'geo-auto-update': False, 'profile': {'store-selected': False, 'store-fake-ip': False},
-            'external-controller-unix': sock, 'proxies': defs, 'proxy-groups': groups, 'listeners': listeners,
-            'rules': ['MATCH,REJECT']}
+    cfg = {'allow-lan': False, 'bind-address': '127.0.0.1', 'mode': 'rule', 'log-level': 'warning', 'find-process-mode': 'off',
+           'geo-auto-update': False, 'profile': {'store-selected': False, 'store-fake-ip': False},
+           'external-controller-unix': sock, 'proxies': defs, 'proxy-groups': groups, 'listeners': listeners,
+           'rules': ['MATCH,REJECT']}
+    return core_bind_apply(cfg, c, defs)
+
+
+def core_bind_apply(cfg, c, defs):
+    """开着 TUN 时给内核的配置加上出站绑定（系统的 DNS 到不了时再加 DNS），见 core_bind；没开时配置不变"""
+    b = core_bind(c, defs)
+    if b:
+        cfg['interface-name'] = b['iface']
+        if b['dns']:
+            cfg['dns'] = {'enable': True, 'ipv6': True, 'default-nameserver': b['dns'], 'nameserver': b['dns']}
+    return cfg
 
 
 def core_dir():
@@ -6622,15 +6745,17 @@ def install_resolve(c, want):
 
 def install_proxy_config(name, port):
     """临时内核的配置（JSON 写的，mihomo 照 YAML 读）：只有 127.0.0.1 上一个入站 cca-install，直通只有这个节点的组（和它经 dialer-proxy
-    用到的节点）；规则只有 MATCH,REJECT，不开控制接口、通用的代理端口、系统代理、TUN、DNS。节点没有定义时是 None"""
+    用到的节点）；规则只有 MATCH,REJECT，不开控制接口、通用的代理端口、系统代理、TUN、DNS（开着 TUN 时和内置代理一样绑定物理网卡，
+    见 core_bind）。节点没有定义时是 None"""
     defs = core_pick(core_defs(), [name])
     if not any(p['name'] == name for p in defs):
         return None
-    return {'allow-lan': False, 'bind-address': '127.0.0.1', 'mode': 'rule', 'log-level': 'warning', 'find-process-mode': 'off',
+    c = load_quiet(CFG)
+    return core_bind_apply({'allow-lan': False, 'bind-address': '127.0.0.1', 'mode': 'rule', 'log-level': 'warning', 'find-process-mode': 'off',
             'geo-auto-update': False, 'profile': {'store-selected': False, 'store-fake-ip': False},
             'proxies': defs, 'proxy-groups': [{'name': INSTALL_GROUP, 'type': 'select', 'proxies': [name]}],
             'listeners': [{'name': 'cca-install', 'type': 'mixed', 'listen': '127.0.0.1', 'port': port, 'users': [], 'proxy': INSTALL_GROUP}],
-            'rules': ['MATCH,REJECT']}
+            'rules': ['MATCH,REJECT']}, c if isinstance(c, dict) else {}, defs)
 
 
 def cmd_install_env(folder):
@@ -11959,14 +12084,15 @@ def gui_reach(host, ports):
     return out
 
 
-def cmd_gui_live(route, host='', rc='0', at_home=''):
+def cmd_gui_live(route, host='', rc='0', at_home='', reach=''):
     """cca _gui live：端口池的实况（只读）。stdin 是 bash 收集的原始数据：在路由器上是这一版 router_sh 的 status 输出
     （rc 是 ssh 的退出码），在本机是控制接口的 V<TAB>状态码、逐组 G<TAB>组<TAB>状态码<TAB>选中的节点。
     应选的节点按这台 Mac 的账号表算（不看路由器上的应为），选中的不一样就是 drift，同步一次就好"""
     c, _, _ = ctx()
     text = sys.stdin.read()
     r = c.get('router') or {}
-    router = {'configured': bool(r.get('host')), 'host': r.get('host') or None, 'reachable': at_home == 'yes', 'backend': None,
+    reach = reach or at_home   # 连不连得上路由器（不管经哪块网卡）；at_home 是算不算在家（只经 VPN、ZeroTier 这类虚拟网卡连得到的不算）
+    router = {'configured': bool(r.get('host')), 'host': r.get('host') or None, 'reachable': reach == 'yes', 'backend': None,
               'running': None, 'hook': None, 'cron': None, 'error': None}
     local = dict(local_info(c), running=None, error=None)
     lines = [l for l in text.splitlines() if l.strip()]
@@ -11974,7 +12100,7 @@ def cmd_gui_live(route, host='', rc='0', at_home=''):
     if route == 'router':
         if not router['configured']:
             router['error'] = {'code': 'not_configured', 'message': '还没配置路由器（cca router setup）'}
-        elif at_home != 'yes':
+        elif reach != 'yes':
             router['error'] = {'code': 'unreachable', 'message': '连不上路由器 %s' % r.get('host')}
         elif rc != '0':
             router['error'] = {'code': 'unreachable' if rc == '255' else 'status_failed', 'message': lines[-1] if lines else ''}
@@ -15096,7 +15222,7 @@ router_sync_soon() {   # 增删改账号后同步到路由器；在外面连不�
 	# 没配置路由器、只用本机的客户端（服务器上 cca 内置的代理）：没有路由器要同步（和 sync_if_changed 一样），本机的端口池启动时配好
 	if ! router_ready && [ -n "$LOCAL_SET" ]; then return 0; fi
 	if router_ready && ! at_home; then
-		info "现在连不上路由器 ${ROUTER_HOST}：回到家里的网络后，下次启动 cca 时会自动同步"
+		info "现在$(away_what)：回到家里的网络后，下次启动 cca 时会自动同步"
 		return 0
 	fi
 	router_sync
@@ -16117,7 +16243,7 @@ cmd_list() {
 		router_ready && verify_ports
 	else
 		load_local
-		if local_ready; then verify_ports 127.0.0.1; else info "现在连不上路由器：在外面要先配置本机 Clash（cca local setup）"; fi
+		if local_ready; then verify_ports 127.0.0.1; else info "现在$(away_what)：在外面要先配置内置代理（cca local setup）"; fi
 	fi
 	return 0
 }
@@ -16182,16 +16308,34 @@ pick_account() {   # 参数给了就解析参数，否则交互选择
 }
 
 # 这次走哪条路：在家走路由器的端口池；连不上路由器（出门在外）走本机 Clash 客户端的端口池（见下面"出门在外"一节）
-probe() {   # probe 主机 端口…：任一端口 1 秒内连得上就返回 0（并行探测，在外面时最多等 1 秒）
+probe() {   # probe 主机 端口…：任一端口 1 秒内连得上就返回 0（并行探测，在外面时最多等 1 秒）。
+	          # 设了 PROBE_IF（网卡名，只在 macOS 上）时绑定这块网卡探：照这块网卡自己的路由走，绕开虚拟网卡的路由
 	local h="$1" p ok=1
 	local -a pids=()
 	shift
 	for p in "$@"; do
-		if [ "$(uname)" = Darwin ]; then nc -z -G 1 "$h" "$p" >/dev/null 2>&1 & else nc -z -w 1 "$h" "$p" >/dev/null 2>&1 & fi
+		if [ "$(uname)" = Darwin ]; then nc -z -G 1 ${PROBE_IF:+-b "$PROBE_IF"} "$h" "$p" >/dev/null 2>&1 & else nc -z -w 1 "$h" "$p" >/dev/null 2>&1 & fi
 		pids+=($!)
 	done
 	for p in "${pids[@]}"; do wait "$p" && ok=0; done
 	return $ok
+}
+# 虚拟网卡：VPN、ZeroTier、Tailscale、WireGuard、Clash 客户端的 TUN 这类隧道和虚拟局域网（macOS 的 utun、ipsec、ppp、feth（ZeroTier），
+# Linux 的 tun、tap、wg、zt、tailscale、Meta / Mihomo（Clash 的 TUN）……）。PY_SRC 的 VIRTUAL_IFACE_RE 是同一份名单，要一起改（回归里核对）
+VIRTUAL_IFACE_RE='^(utun|ipsec|ppp|tun|tap|gif|stf|feth|zt|wg|tailscale|nebula|vti|gre|ipip|ip6|sit|Meta|Mihomo|singbox)'
+virtual_iface() { [[ $1 =~ $VIRTUAL_IFACE_RE ]]; }
+route_iface() {   # route_iface IP：连这个 IP 走哪块网卡（只查路由表，不发包）；查不到是空的。主机名不查（是空的）：macOS 的 route get
+	                # 会解析它（IPv6 不带 -inet6 时也当主机名），开着 TUN 时解析出来的是它的假 IP
+	local fam=""
+	case "$1" in
+		*:*) fam=-inet6 ;;
+		''|*[!0-9.]*) return 0 ;;
+	esac
+	if on_linux; then ip route get "$1" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1
+	else route -n get $fam "$1" 2>/dev/null | awk '$1 == "interface:" { print $2; exit }'; fi
+}
+phys_iface() {   # 物理网卡（macOS）：默认路由里第一块不是虚拟网卡的（netstat 也列着各网卡自己的默认路由）；没有是空的
+	netstat -rn -f inet 2>/dev/null | awk -v re="$VIRTUAL_IFACE_RE" '$1 == "default" && $4 !~ re { print $4; exit }'
 }
 default_gateway() {   # 默认网关的 IP（初始化时探局域网里有没有路由器用）。设了 CCA_GATEWAY（含空值）就直接用它、不读路由表（测试、特殊网络）
 	if [ -n "${CCA_GATEWAY+x}" ]; then printf '%s' "${CCA_GATEWAY}"; return; fi
@@ -16242,13 +16386,32 @@ detect_router() {   # 探一次局域网里有没有装了 Clash 的路由器：
 	rm -rf "$dir"
 	printf '%s' "${DETECTED_ROUTER}"
 }
-at_home() {   # 连得上路由器（SSH 端口或端口池的第一个端口）就算在家；一次命令只探测一次
+at_home() {   # 连得上路由器（SSH 端口或端口池的第一个端口）就算在家；一次命令只探测一次。
+	# 去路由器的路由走虚拟网卡（在外面经 ZeroTier、VPN 也连得到家里的路由器）时不算在家：macOS 上绑定物理网卡再探（在家开着 Clash
+	# 客户端的 TUN、路由器不在本网段时照样认得出在家），Linux 上不算在家。ROUTER_VIA 是那块虚拟网卡，ROUTER_REACH 是不管经哪块
+	# 网卡连不连得上（两个探测同时做，不多等）：只经虚拟网卡连得到时，提示照实说（away_what），界面 App 的实况照样看得到路由器
 	if [ -z "${AT_HOME:-}" ]; then
 		load_router
-		AT_HOME=no
-		[ -n "$ROUTER_HOST" ] && probe "$ROUTER_HOST" "$ROUTER_PORT" "$POOL_FIRST" && AT_HOME=yes
+		AT_HOME=no ROUTER_REACH=no ROUTER_VIA=""
+		if [ -n "$ROUTER_HOST" ]; then
+			local via phys="" rp
+			via=$(route_iface "$ROUTER_HOST")
+			if virtual_iface "$via"; then
+				ROUTER_VIA=$via
+				probe "$ROUTER_HOST" "$ROUTER_PORT" "$POOL_FIRST" & rp=$!
+				on_linux || phys=$(phys_iface)
+				[ -n "$phys" ] && PROBE_IF="$phys" probe "$ROUTER_HOST" "$ROUTER_PORT" "$POOL_FIRST" && AT_HOME=yes
+				wait "$rp" && ROUTER_REACH=yes
+			elif probe "$ROUTER_HOST" "$ROUTER_PORT" "$POOL_FIRST"; then AT_HOME=yes; fi
+			[ "$AT_HOME" = no ] || ROUTER_REACH=yes
+		fi
 	fi
 	[ "$AT_HOME" = yes ]
+}
+away_what() {   # away_what [连不上时的补充]：不在家的说法（at_home 之后用）。只经虚拟网卡连得到路由器时照实说（免得以为路由器坏了）
+	if [ "${ROUTER_REACH:-}" = yes ] && [ -n "${ROUTER_VIA:-}" ]; then
+		printf '路由器 %s 只经虚拟网卡 %s（VPN、ZeroTier 这类）连得到，不算在家' "$ROUTER_HOST" "$ROUTER_VIA"
+	else printf '连不上路由器%s%s' "${ROUTER_HOST:+ ${ROUTER_HOST}}" "${1:-}"; fi
 }
 want_local() {   # 这次走本机 Clash 吗：按 config.json 的 route（CCA_ROUTE 可临时指定）；auto 时看连不连得上路由器
 	load_router
@@ -16993,7 +17156,7 @@ local_ensure() {   # 本机端口池可用：内置代理的内核在跑、配�
 
 local_offer() {   # 在外面、还没配置内置代理：交互时接着配置（core_setup）；界面 App 里问一句改用内置代理（同意后带授权重跑）；
 	               # 其它非交互的（启动器、脚本）说清楚，交给终端
-	warn "连不上路由器${ROUTER_HOST:+ ${ROUTER_HOST}}（可能不在家里的网络）"
+	warn "$(away_what '（可能不在家里的网络）')"
 	if ! core_possible; then
 		fail_warn local_unavailable "这台机器（$(uname -m)）没有内置代理的内核版本：在外面用不了内置代理，只能走路由器"
 		return 1
@@ -17046,7 +17209,7 @@ cmd_local_status() {
 	local g p node name st now
 	load_local
 	if at_home; then info "现在连得上路由器 ${ROUTER_HOST}：账号走路由器的端口"
-	else info "现在连不上路由器${ROUTER_HOST:+ ${ROUTER_HOST}}：账号走内置代理的端口"; fi
+	else info "现在$(away_what)：账号走内置代理的端口"; fi
 	if ! local_ready; then
 		info "还没配置内置代理（cca local setup）"
 		return 0
@@ -17060,6 +17223,7 @@ cmd_local_status() {
 	fi
 	say ""
 	say "  内置代理（控制接口 ${LOCAL_CTL}）"
+	[ -z "${LOCAL_BIND:-}" ] || say "  $(bind_note)"
 	while IFS=$'\t' read -r g p node name; do
 		if port_open 127.0.0.1 "$p"; then st="监听中"; else st="${C_R}不通${C_0}"; fi
 		lctl GET "/proxies/$g"
@@ -17303,11 +17467,18 @@ core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面
 	core_fetch || { warn "内置代理的内核没装上：${FETCH_ERR}"; return 1; }
 	py core-config "$(core_sock)" || { warn "生成内置代理的配置失败"; return 1; }
 	core_up || return 1
-	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || ! local_ports_ok; then core_reload || return 1; fi
+	if [ "$LOCAL_APPLIED" != "$LOCAL_WANT" ] || ! local_ports_ok; then
+		core_reload || return 1
+		[ -z "${LOCAL_BIND:-}" ] || info "$(bind_note)"
+	fi
 	local_select_all; rc=$?
 	[ $rc -eq 0 ] && return 0
 	[ $rc -eq 2 ] || return 1
 	core_reload && local_select_all
+}
+bind_note() {   # 内置代理的出站绑定了物理网卡（别的程序开着 TUN，见 PY 的 core_bind）时的说明
+	printf '别的程序开着虚拟网卡 %s（Clash 客户端的 TUN、VPN 这类）：内置代理连节点时绑定物理网卡 %s，绕开它%s' "$LOCAL_BIND_VIA" "$LOCAL_BIND" \
+		"${LOCAL_BIND_DNS:+；节点的域名经 ${LOCAL_BIND_DNS} 解析（系统的 DNS 经物理网卡到不了）}"
 }
 core_up() {   # 内核在跑（控制接口能用）；没在跑就让界面 App（Linux 上是 cca _core-keep）起它，最多等 20 秒
 	local i
@@ -17625,7 +17796,7 @@ cmd_check() {   # cca check [账号…] [--json]：各账号的出口、纯净�
 			host="$PROXY_HOST" route=router
 			if want_local; then   # 在外面：先让本机端口池就绪、切好节点
 				load_local
-				local_ready || FAIL_CODE=local_unavailable die "连不上路由器，本机 Clash 也还没配置：运行 cca local setup"
+				local_ready || FAIL_CODE=local_unavailable die "$(away_what)，内置代理也还没配置：运行 cca local setup"
 				local_ensure || return 1
 				host=127.0.0.1 route=local
 			else
@@ -17742,7 +17913,7 @@ sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路�
 		# 没配置路由器、只用本机的客户端（服务器上 cca 内置的代理）：没有路由器要同步，本机的端口池启动时配好
 		if ! router_ready && [ -n "$LOCAL_SET" ]; then return 0; fi
 		if router_ready && ! at_home; then
-			info "账号表或路由器端脚本有变化：现在连不上路由器，回到家里的网络后再同步"
+			info "账号表或路由器端脚本有变化：现在$(away_what)，回到家里的网络后再同步"
 			return 0
 		fi
 		info "账号表或路由器端脚本有变化，先同步到路由器"
@@ -18253,7 +18424,7 @@ gui_live() {   # 端口池的实况：在家看路由器（经 SSH 跑这一版 
 	case "$route" in
 		router)
 			host="$PROXY_HOST"
-			if [ "$AT_HOME" = yes ]; then
+			if [ "${ROUTER_REACH:-}" = yes ]; then   # 只经虚拟网卡连得到（不算在家）也照样看：设成只走路由器时账号就经它
 				if router_ready; then
 					out=$(router_sh | rsh 'sh -s status' 2>&1); rc=$?   # 脚本从管道进 ssh 的 stdin（别再接 /dev/null）
 				else
@@ -18271,7 +18442,7 @@ gui_live() {   # 端口池的实况：在家看路由器（经 SSH 跑这一版 
 				done < <(py slot-rows)
 			fi ;;
 	esac
-	printf '%s\n' "$out" | py gui-live "$route" "$host" "$rc" "${AT_HOME:-no}"
+	printf '%s\n' "$out" | py gui-live "$route" "$host" "$rc" "${AT_HOME:-no}" "${ROUTER_REACH:-no}"
 }
 
 gui_os_major() { local v; v=$(sw_vers -productVersion 2>/dev/null); printf '%s' "${CCA_GUI_OS:-${v%%.*}}"; }
@@ -19260,8 +19431,9 @@ EOF
                              用 cca node add 填一个。在外面第一次启动时也会问
   cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接或 Clash 节点配置，只给没有路由器的机器）
   cca local off              停掉内置代理的内核、删掉它的配置和拷来的节点
-                             平时自动判断：连得上路由器走路由器，连不上走内置代理；
-                             想固定一种，把 ${CFG} 的 route 改成 router 或 local
+                             平时自动判断：连得上路由器走路由器，连不上走内置代理（只经 VPN、ZeroTier 这类
+                             虚拟网卡连得到路由器的不算在家）；想固定一种，把 ${CFG} 的 route 改成 router 或 local。
+                             别的程序开着 TUN（Clash 客户端的虚拟网卡模式、VPN）时，内置代理绑定物理网卡连节点
 EOF
 	else cat >&2 <<EOF
 连不上路由器时（云服务器、不在家）改走 cca 内置的代理
@@ -19271,8 +19443,8 @@ EOF
                              在外面第一次启动时也会问
   cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接或 Clash 节点配置）
   cca local off              停掉内置代理的内核、删掉它的配置和拷来的节点
-                             平时自动判断：连得上路由器走路由器，连不上走内置代理；
-                             想固定一种，把 ${CFG} 的 route 改成 router 或 local
+                             平时自动判断：连得上路由器走路由器，连不上走内置代理（只经 VPN、ZeroTier 这类
+                             虚拟网卡连得到路由器的不算）；想固定一种，把 ${CFG} 的 route 改成 router 或 local
 EOF
 	fi
 	cat >&2 <<EOF

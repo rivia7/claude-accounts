@@ -240,8 +240,8 @@ while [ $i -lt $n ]; do
 done
 dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
-# 出门在外（$CCA_T/away）：连不上路由器
-[ -f "$CCA_T/away" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }
+# 出门在外（$CCA_T/away）：连不上路由器（$CCA_T/vpn 时经 ZeroTier、VPN 连得上）
+[ -f "$CCA_T/away" ] && [ ! -f "$CCA_T/vpn" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }
 # 路由器上还没装公钥（$CCA_T/router_needs_password 里是密码）：密钥登录被拒；提问会话的密码登录像真的 ssh 一样经 SSH_ASKPASS 取密码，
 # 对了才算装上公钥（删掉这个文件）。askpass 第二次读不到东西，不会卡住（$CCA_T/askpass_twice 时读两次，模拟 ssh 问了两遍）
 if [ -f "$CCA_T/router_needs_password" ]; then
@@ -266,14 +266,51 @@ S
 cat > "$T/bin/nc" <<'S'
 #!/bin/bash
 # 127.0.0.1：假内置代理内核（core/up 时）、辅助安装的临时内核（core_install/up 时）的监听端口；
-# 路由器：出门在外（$CCA_T/away）时一律连不上，平时 SSH 端口 22 连得上
-port="${@: -1}"; host="${@: -2:1}"
+# 路由器：出门在外（$CCA_T/away）时连不上，平时 SSH 端口 22 连得上。$CCA_T/vpn 时模拟在外面经 ZeroTier、VPN 也连得到家里的路由器：
+# 不绑定网卡的照样连得上，绑定物理网卡（-b，cca 认出去路由器的路由走虚拟网卡时）的连不上。探路由器的命令行记在 nc.log
+port="${@: -1}"; host="${@: -2:1}"; bound=""
+for a in "$@"; do [ "$a" = -b ] && bound=1; done
 case "$host" in
 	127.0.0.1) { [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; } ||
 		{ [ -f "$CCA_T/core_install/up" ] && grep -qx "$port" "$CCA_T/core_install/listening"; } ;;
-	*) [ -f "$CCA_T/away" ] && exit 1; [ "$port" = 22 ] && exit 0; grep -qx "$port" "$CCA_T/router/listening" ;;
+	*) echo "NC $*" >> "$CCA_T/nc.log"
+		if [ -f "$CCA_T/away" ]; then [ -f "$CCA_T/vpn" ] && [ -z "$bound" ] || exit 1; fi
+		[ "$port" = 22 ] && exit 0; grep -qx "$port" "$CCA_T/router/listening" ;;
 esac
 S
+# 路由表（cca 认去路由器、去节点的路由走不走虚拟网卡）：假 route 只认 route -n get 地址：$CCA_T/route_if/<地址> 里写着网卡就走它
+# （模拟 ZeroTier、VPN 的路由）；$CCA_T/tun 在时（模拟别的程序开着 TUN）去公网地址（文档用的、私有的网段以外）的走 utun9；其余走 en0。
+# 假 netstat -rn -f inet：默认路由在 en0（$CCA_T/tun 时再加一条 utun9 的；$CCA_T/netstat.txt 在时照它）。
+# 假 ipconfig getpacket 网卡：DHCP 给的 DNS 是 $CCA_T/dhcp_dns 里的（逗号隔开），默认 192.0.2.53
+cat > "$T/bin/route" <<'S'
+#!/bin/bash
+[ "$1" = -n ] && shift
+[ "$1" = get ] || exit 1
+shift; case "$1" in -inet|-inet6) shift ;; esac
+[ -n "$1" ] || exit 1
+a="$1"
+if [ -f "$CCA_T/route_if/$a" ]; then i=$(cat "$CCA_T/route_if/$a")
+elif [ -f "$CCA_T/tun" ]; then
+	case "$a" in default|127.*|10.*|192.168.*|192.0.2.*|198.51.100.*|203.0.113.*) i=en0 ;; *) i=utun9 ;; esac
+else i=en0; fi
+printf '   route to: %s\ndestination: default\n       mask: default\n    gateway: 192.0.2.1\n  interface: %s\n      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>\n' "$a" "$i"
+S
+cat > "$T/bin/netstat" <<'S'
+#!/bin/bash
+[ "$*" = "-rn -f inet" ] || exit 1
+[ -f "$CCA_T/netstat.txt" ] && exec cat "$CCA_T/netstat.txt"
+printf 'Routing tables\n\nInternet:\nDestination        Gateway            Flags               Netif Expire\n'
+[ -f "$CCA_T/tun" ] && printf 'default            link#30            UCSg                utun9       \n'
+printf 'default            192.0.2.1          UGScg                 en0       \n'
+printf '127                127.0.0.1          UCS                   lo0       \n'
+S
+cat > "$T/bin/ipconfig" <<'S'
+#!/bin/bash
+[ "$1" = getpacket ] && [ -n "$2" ] || exit 1
+printf 'op = BOOTREPLY\nyiaddr = 192.0.2.77\ndomain_name_server (ip_mult): {%s}\nend (none):\n' "$(cat "$CCA_T/dhcp_dns" 2>/dev/null || echo 192.0.2.53)"
+S
+# 系统配的 DNS（cca 只在内置代理要绑定物理网卡时看它，见 PY 的 core_dns；run 带着 CCA_RESOLV_CONF 指向它，不读真的 /etc/resolv.conf）
+printf 'nameserver 192.0.2.53\n' > "$T/resolv.conf"
 # claude.ai trace：出口 IP = 203.0.113.(端口-7900)，7903 故意与 7901 同出口；iprisk：默认干净，可按 IP 放 risk/<ip>.json 覆盖
 cat > "$T/bin/curl" <<'S'
 #!/bin/bash
@@ -377,7 +414,7 @@ if [ -n "$proxy" ]; then
 		s=$(cat "$LD/sel/CCA-$((port - 7900))" 2>/dev/null); [ -n "$s" ] && [ "$s" != REJECT ] || exit 56
 		echo "CURL via local:$port $url" >> "$CCA_T/curl.log"; net=198.51.100
 	else
-		[ -f "$CCA_T/away" ] && exit 7
+		[ -f "$CCA_T/away" ] && [ ! -f "$CCA_T/vpn" ] && exit 7   # 在外面经 ZeroTier、VPN（$CCA_T/vpn）照样连得到路由器的端口
 		grep -qx "$port" "$CCA_T/router/listening" || exit 7
 		echo "CURL via :$port $url" >> "$CCA_T/curl.log"; net=203.0.113
 	fi

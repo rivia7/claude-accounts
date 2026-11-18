@@ -378,7 +378,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 }
 ```
 
-- `route`：`router` | `local` | `none`（哪边都没配置）。`at_home`：连得上路由器（1 秒探测）。`proxy_host`：账号端口现在在哪台机器上
+- `route`：`router` | `local` | `none`（哪边都没配置）。`at_home`：算不算在家（连得上路由器（1 秒探测），而且不是只经 VPN、ZeroTier
+  这类虚拟网卡连得到）；`router.reachable` 是经哪块网卡都算的连得上（只经虚拟网卡连得到时 `at_home` 是 false、它是 true）。`proxy_host`：账号端口现在在哪台机器上
   （看路由器时是路由器的地址，看本机时是 `127.0.0.1`，`none` 时为 null），App 显示「地址:端口」用它。
 - `router.error` / `local.error`：`null` 或 `{"code": "unreachable" | "status_failed" | "not_configured" | "not_running", "message": "…"}`。
   `router.backend`：`OpenClash` | `ShellCrash` | null。`local.running`：本机客户端（Clash Verge、内置代理的内核……）的控制接口能不能连上

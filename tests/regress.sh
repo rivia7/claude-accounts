@@ -26,7 +26,7 @@ if [ -n "${TIMING:-}" ]; then
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -2078,6 +2078,17 @@ PY
 }
 lt=$(lint_tiers)
 ok "套餐档位：CODEX_TIERS 和 CODEX_PLANS 的套餐一一对应${lt#ok}" '[ "$lt" = ok ]'
+lint_ifaces() {   # 虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE（at_home）和 PY_SRC 的（内置代理的出站绑定）是同一份
+	python3 -I - "$CCA" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding='utf-8').read()
+b = re.search(r"^VIRTUAL_IFACE_RE='([^']*)'$", s, re.M)
+p = re.search(r"^VIRTUAL_IFACE_RE = lazy_re\(r'([^']*)'\)", s, re.M)
+print('ok' if b and p and b.group(1) == p.group(1) else '：bash 的 %s，PY_SRC 的 %s' % (b and b.group(1), p and p.group(1)))
+PY
+}
+lv=$(lint_ifaces)
+ok "虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE 和 PY_SRC 的一样${lv#ok}" '[ "$lv" = ok ]'
 lint_imports() {   # PY_SRC 顶上只 import 每次都要用的模块（每次 py 都是新进程，少 import 一个就省一点启动时间），别的在用到的函数里 import：
 	# 函数里用到的标准库模块，顶上、这个函数和外层函数里都没 import（也没有同名的变量），运行到那里就是 NameError
 	python3 -I - "$CCA" <<'PY'
@@ -2970,6 +2981,41 @@ ok "在外面：经内置代理的 7901 出去（CCA-1 选中 US-A），Claude C
 run cca usage alice >/dev/null 2>&1
 ok "在外面 cca usage：经内置代理的端口查" 'grep "^USAGE: " claude.log | tail -n 1 | grep -q "email=alice@example.com https_proxy=http://127.0.0.1:7901"'
 ok "内置代理的配置（600）：只有 127.0.0.1 上的入站（各自直通 CCA-n）、可选节点、一条 MATCH,REJECT；不开通用的代理端口、TUN、DNS；控制接口只开 Unix socket，不记选中的节点" '[ "$(stat -f %Lp "$CN/config.yaml")" = 600 ] && ccfg "all(l[\"listen\"] == \"127.0.0.1\" and l[\"proxy\"] == \"CCA-%d\" % (l[\"port\"] - 7900) for l in c[\"listeners\"]) and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\")) and c[\"external-controller-unix\"].endswith(\".sock\") and c[\"profile\"][\"store-selected\"] is False and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A2\"] and c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-A\""'
+# 别的程序开着 TUN（Clash 客户端的虚拟网卡模式、VPN）：去节点的流量走虚拟网卡时，内核的出站绑定到物理网卡（macOS 的 interface-name）
+cp "$CN/config.yaml" "$T/core.notun"; n0=$(creloads); touch "$T/tun"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "开着 TUN（去公网的路由走 utun9）：内置代理的出站绑定物理网卡 en0、重新加载一次，照常启动；系统的 DNS 经物理网卡到得了就不另配 DNS" '[ $rc -eq 3 ] && [ "$(creloads)" = $((n0 + 1)) ] && ccfg "c[\"interface-name\"] == \"en0\" and \"dns\" not in c" && printf "%s" "$out" | grep -q "别的程序开着虚拟网卡 utun9（Clash 客户端的 TUN、VPN 这类）：内置代理连节点时绑定物理网卡 en0" && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log'
+run cca @alice --version >/dev/null 2>&1
+out=$(run cca local 2>&1)
+ok "开着 TUN 再启动：不再重新加载；cca local 说出站绑定了哪块网卡" '[ "$(creloads)" = $((n0 + 1)) ] && printf "%s" "$out" | grep -q "绑定物理网卡 en0，绕开它"'
+out=$(gj state)
+ok "开着 TUN：_gui state 的本机端口池是同步好的（摘要里带着绑定的网卡）" 'printf "%s" "$out" | jok "d[\"routing\"][\"local_sync\"] == \"ok\""'
+printf 'nameserver 198.18.0.2\nnameserver 127.0.0.1\n' > "$T/resolv.conf"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "系统的 DNS 是 TUN 自己的地址（走虚拟网卡）、本机的：改用物理网卡从 DHCP 拿到的 DNS 解析节点的域名，重新加载一次" '[ $rc -eq 3 ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "c[\"interface-name\"] == \"en0\" and c[\"dns\"][\"nameserver\"] == [\"192.0.2.53\"] and c[\"dns\"][\"default-nameserver\"] == [\"192.0.2.53\"]" && printf "%s" "$out" | grep -q "节点的域名经 192.0.2.53 解析"'
+printf 'nameserver 192.0.2.53\n' > "$T/resolv.conf"
+cfgset() { python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); exec(sys.argv[2]); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json" "$1"; }
+cfgset 'c["core_bind"] = False'
+run cca @alice --version >/dev/null 2>&1
+ok "config.json 的 core_bind: false：开着 TUN 也不绑定" 'ccfg "\"interface-name\" not in c and \"dns\" not in c"'
+cfgset 'c.pop("core_bind")'; rm -f "$T/tun"
+run cca @alice --version >/dev/null 2>&1
+ok "关掉 TUN：配置和开 TUN 以前逐字节一样（不绑定、不配 DNS）" 'cmp -s "$T/core.notun" "$CN/config.yaml"'
+# 在外面经 ZeroTier、VPN 也连得到家里的路由器（去路由器的路由走虚拟网卡）：不算在家，照样走内置代理；绑定物理网卡探路由器
+mkdir -p "$T/route_if"; echo feth9 > "$T/route_if/192.0.2.10"; touch "$T/vpn"; : > ssh.log; : > curl.log; : > nc.log
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在外面经 ZeroTier 连得到路由器（路由走 feth9）：绑定物理网卡探不通，不算在家，经内置代理出去，不连路由器" '[ $rc -eq 3 ] && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log && ! grep -q "CURL via :" curl.log && [ ! -s ssh.log ] && grep -q "^NC -z -G 1 -b en0 192.0.2.10 " nc.log'
+out=$(run cca local 2>&1)
+ok "cca local：说路由器只经虚拟网卡连得到、不算在家" 'printf "%s" "$out" | grep -q "路由器 192.0.2.10 只经虚拟网卡 feth9（VPN、ZeroTier 这类）连得到，不算在家：账号走内置代理的端口"'
+out=$(gj live)
+ok "_gui live：经 ZeroTier 连得到路由器时看内置代理（不算在家），路由器算连得上" 'printf "%s" "$out" | jok "d[\"route\"] == \"local\" and d[\"at_home\"] is False and d[\"router\"][\"reachable\"] is True and d[\"router\"][\"error\"] is None"'
+: > curl.log
+out=$(run CCA_ROUTE=router cca @alice --version 2>&1); rc=$?
+ok "设成只走路由器（route: router）：经 ZeroTier 照样走路由器的端口" '[ $rc -eq 3 ] && grep -q "CURL via :7901 https://claude.ai/cdn-cgi/trace" curl.log && ! grep -q "CURL via local:" curl.log'
+rm -f "$T/vpn"; : > curl.log
+out=$(run cca local 2>&1)
+ok "ZeroTier 也连不上了：照旧说连不上路由器" 'printf "%s" "$out" | grep -q "现在连不上路由器 192.0.2.10：账号走内置代理的端口"'
+rm -rf "$T/route_if"
 n0=$(creloads); : > open.log; : > gh.log
 run cca @alice --version >/dev/null 2>&1
 ok "再启动：内核在跑，不再下载、不打开界面 App、不重新加载" '[ "$(creloads)" = "$n0" ] && [ ! -s open.log ] && ! grep -q "GH mihomo" gh.log'
@@ -3032,6 +3078,10 @@ ok "macOS 26 以下也能用内置代理（内核由 cca 在后台无头运行�
 rm -f "$T/away"; : > ssh.log
 run cca @alice --version >/dev/null 2>&1; sleep 1
 ok "关掉过内置代理：在家不再拷节点定义" '! grep -q "sh -s defs" ssh.log && [ ! -e "$CN/nodes.json" ]'
+mkdir -p "$T/route_if"; echo utun9 > "$T/route_if/192.0.2.10"; : > curl.log; : > nc.log
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在家开着 TUN、去路由器的路由走 utun9：绑定物理网卡探得通，照样算在家、走路由器的端口" '[ $rc -eq 3 ] && grep -q "CURL via :7901 https://claude.ai/cdn-cgi/trace" curl.log && grep -q "^NC -z -G 1 -b en0 192.0.2.10 " nc.log'
+rm -rf "$T/route_if"
 out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
 ok "cca local setup：用内置代理（问一句），在家先从路由器拷节点定义，然后让内核就绪" 'printf "%s" "$out" | grep -q "用内置代理吗" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ -f "$CD/up" ]'
 # 自定义节点（只给没有路由器、用内置代理的机器）：分享链接 / Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json（600），名字加进可选节点
@@ -3119,7 +3169,10 @@ ok "直连拿不到安装脚本、映射没指定安装节点、非交互：说�
 out=$(ri CCA_TTY="$(ans 2)" cca agy install-cli 2>&1); rc=$?
 ok "终端里现选一个节点（选了就是同意，不记下）：经它的临时代理拿到安装脚本、运行（安装脚本自己下载也经它）；内核文件第一次用时下载" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "经内置代理的哪个节点安装 agy？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && grep -q "^INSTALL-RUN agy shell=/bin/bash proxy=http://127.0.0.1:[0-9]* .* leak=\[\]$" "$IL" && printf "%s" "$out" | grep -qF "装好了 agy：$H/.local/bin/agy" && grep -q "^GH mihomo" gh.log && [ ! -e "$H/.cca/agy.json" ]'
 ok "临时内核：只在 127.0.0.1 上开一个入站（直通只有这个节点的组），规则只有 MATCH,REJECT，不开控制接口、通用的代理端口、TUN、DNS；装完就停，它的目录（有节点密钥）和临时目录都删掉" 'icfg "[l[\"listen\"] for l in c[\"listeners\"]] == [\"127.0.0.1\"] and c[\"listeners\"][0][\"proxy\"] == \"CCA-INSTALL\" and c[\"proxy-groups\"] == [{\"name\": \"CCA-INSTALL\", \"type\": \"select\", \"proxies\": [\"US-B\"]}] and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-B\"] and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\", \"external-controller-unix\"))" && istopped && [ "$(ileft)" = 0 ]'
-rm -f "$H/.local/bin/agy"
+rm -f "$H/.local/bin/agy"; touch "$T/tun"; : > "$IL"
+out=$(ri CCA_TTY="$(ans 2)" cca agy install-cli 2>&1); rc=$?
+ok "开着 TUN（去公网的路由走 utun9）：临时内核和内置代理一样把出站绑定到物理网卡 en0，照常装好" '[ $rc -eq 0 ] && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && icfg "c[\"interface-name\"] == \"en0\" and \"dns\" not in c" && istopped'
+rm -f "$T/tun" "$H/.local/bin/agy"
 # 维护者在映射里指定安装用的节点（install_node）：路由器上改过名的（cca 记下的 node_renames）按现在的名字
 ipol US-OLD
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['node_renames'] = {'US-OLD': 'US-B'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"

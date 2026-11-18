@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.9", title: "出门在外判断更准：经 ZeroTier / VPN 连到路由器不算在家，开着 TUN 也能用内置代理", points: [
+            .init(symbol: "network",
+                  text: "在外面开着 ZeroTier、VPN 时也连得上家里的路由器，以前会被当成在家、走路由器的出口。现在只经这类虚拟网卡连得到路由器的不算在家，照样走内置代理；在家开着 Clash 客户端的 TUN 时照样认得出在家。想在外面也经 ZeroTier 走路由器，把 config.json 的 route 改成 router。"),
+            .init(symbol: "arrow.triangle.branch",
+                  text: "这台 Mac 上的 Clash 客户端开着 TUN（虚拟网卡模式）时，内置代理连节点的连接以前会被它截走，出口检测拿不到 IP。现在内置代理自动绑定物理网卡连节点、绕开 TUN，系统的 DNS 用不了时改用 DHCP 给的，不用关 TUN；cca local 里能看到绑定在哪块网卡。"),
+        ], art: "route"),
         ReleaseNote(version: "3.3.0-beta.8", title: "出门在外更省心：统一用内置代理，不再需要 Clash Verge", points: [
             .init(symbol: "bolt.horizontal.circle",
                   text: "出门在外连不上路由器时，现在统一用 cca 自带的内置代理（mihomo 内核）：macOS 26 以上在这个 App 里跑，26 以下由 cca 在后台跑，全版本都能用。不用再装 Clash Verge 或手动配别的客户端；cca local off 停掉内核、删掉配置和拷来的节点。"),
