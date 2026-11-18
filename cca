@@ -9086,7 +9086,7 @@ def usage_entry(r, now):
          'fetched_at': iso(at) if at else None, 'fetched_epoch': at or None, 'age_seconds': int(now - at) if at else None,
          'stale': bool(at) and now - at >= USAGE_STALE,
          'error': usage_why(r) if r['why'] else None, 'error_code': r['why'] or None, 'error_detail': (r['msg'] or None) if r['why'] else None}
-    for k in T.usage_windows:   # 窗口原样给：没有 5 小时限制的套餐接口不给 five_hour，就是 null。别拿 limits 里的 is_active 判断（CLAUDE.md）
+    for k in T.usage_windows:   # 窗口原样给：没有 5 小时限制的套餐接口不给 five_hour，就是 null。别拿 limits 里的 is_active 判断（docs/dev/usage.md）
         a[k] = w(rl.get(k))
     shares = weekly_shares(rl)
     a['model_scoped'] = [dict(w(m) or {}, name=m.get('display_name'), **shares.get(name_key(m.get('display_name')), {}))

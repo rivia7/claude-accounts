@@ -223,7 +223,7 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   （官方安装脚本，直连不通时 cca 在终端里问要不要经内置代理装）。回到 App 时照常重新读 hello 和 state。旧版 cca 没有这个字段时不给。
 - **请求锁定到映射**（PROTOCOL 4.8）：账号的「…」和右键菜单里的「请求维护者锁定节点」（`can.policy_lock`）运行 `cca [codex] policy request`，把 stdout 的那条命令复制给用户发给维护者。
 - **查看 API 额度**：账号页“用量”一节底部“订阅附带的每月 API 额度”那一行的「在控制台查看」（右键菜单里的「在控制台查看 API 额度」；`can.billing`，第三方 API 账号、没装 Chrome 时没有）运行 `cca [codex] billing`，用账号自己的浏览器实例和出口打开控制台的账单页。订阅附带的每月 API 额度和余额只在那里显示，官方没有查询接口，所以 App 不显示数字。
-- **查看重置次数**：Claude 账号页“用量”一节底部“重置次数和到期日”那一行的「在 claude.ai 查看」（右键菜单里的「在 claude.ai 查看重置次数」；`can.limit_resets`）运行 `cca limit-resets`，用账号自己的浏览器实例和出口打开 claude.ai 的用量页。这两个按钮打开前 cca 把账号邮箱放进剪贴板，要登录时粘贴（这些登录页不认网址里的邮箱参数）。Claude 的重置次数和到期日 cca 查不到（CLAUDE.md 里记着原因），所以总览上没有小票；ChatGPT 账号的次数和到期日直接显示。
+- **查看重置次数**：Claude 账号页“用量”一节底部“重置次数和到期日”那一行的「在 claude.ai 查看」（右键菜单里的「在 claude.ai 查看重置次数」；`can.limit_resets`）运行 `cca limit-resets`，用账号自己的浏览器实例和出口打开 claude.ai 的用量页。这两个按钮打开前 cca 把账号邮箱放进剪贴板，要登录时粘贴（这些登录页不认网址里的邮箱参数）。Claude 的重置次数和到期日 cca 查不到（docs/dev/usage.md 里记着原因），所以总览上没有小票；ChatGPT 账号的次数和到期日直接显示。
 - **提问会话**（PROTOCOL 4.6）：添加账号、换 key、删除账号、编辑账号表、配置路由器、配置本机 Clash 这些流程在 App 里问完：`ProcessSession` 开一个 cca 进程，fd 3 是答案管道（`CCA_PROMPT=1`），`FlowModel` 把 `ask` 事件变成页面，`FlowSheet` 显示。cca 不支持（`hello.prompt`）时走下面的终端交接。
 - **客户端更新**（`ClientUpdatesPage`，PROTOCOL 8）：桌面 App 和终端里的 Claude Code、Codex 一页管，每行一张卡片，图标中性灰、固定宽度（桌面 App 是窗口，
   `kind=cli` 是终端），能装的才有「安装更新…」、要重新检查的才有「重新检查」。版本、能不能更新、为什么都是 cca 给的。侧栏这一行有新版本时右边写「N 个可更新」。
