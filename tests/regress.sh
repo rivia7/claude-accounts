@@ -26,7 +26,7 @@ if [ -n "${TIMING:-}" ]; then
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -623,7 +623,7 @@ ok "名字和服务器地址都变了（认不出）、非交互：说明哪个�
 # 在真的终端里（pty，不设 CCA_TTY）："换成哪个节点"和"现在重载吗"都要问得出来
 rm -f "$T/pty.done"
 { printf '%s\n' 3 y; for i in $(seq 1 300); do [ -f "$T/pty.done" ] && break; sleep 0.1; done; } |
-	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
+	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
 	PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; touch "$CCA_T/pty.done"' >/dev/null 2>&1
 ok "认不出、在真的终端里：列出路由器上的节点让用户选一个代替（选 US-C9），账号表跟着改，问过之后重载，照常启动" '[ -f "$T/pty.done" ] && grep -q "3\. US-C9" "$T/pty.log" && grep -q "「US-C」换成了「US-C9」" "$T/pty.log" && grep -q "现在重载吗" "$T/pty.log" && tblok "t[\"alice@example.com\"] == \"US-C9\"" && [ "$(sel CCA-1)" = US-C9 ]'
 ok "用户自己选的代替节点不算改名（维护者的映射里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
@@ -724,93 +724,13 @@ ok "下一版 ShellCrash 上 cca router uninstall：configs/task/bfstart 只删 
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
 fi
-if sect 10b; then
-# 10b. 出门在外：连不上路由器时改走本机 Clash Verge（全局扩展脚本 + 热加载，不重启它），回家后自动走回路由器
-V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VS="$V/profiles/Script.js"
-vreloads() { grep -c '^RELOAD$' "$T/verge/verge.log" 2>/dev/null || echo 0; }
-vsel() { cat "$T/verge/sel/$1" 2>/dev/null || echo -; }
-lastenv() { grep "^ENV: " claude.log | tail -n 1; }
-touch "$T/away"; : > ssh.log
-out=$(run cca @alice --version 2>&1); rc=$?
-ok "在外面、还没配置本机 Clash、非交互：说明原因，不启动，也不去连路由器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "连不上路由器 192.0.2.10" && printf "%s" "$out" | grep -q "cca local setup" && [ ! -s ssh.log ] && [ "$(vreloads)" = 0 ]'
-out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
-ok "在外面：问过之后配置 Clash Verge（全局扩展脚本末尾加一段，热加载一次，不重启它）" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "现在配置 Clash Verge 吗" && grep -q ">>> cca >>>" "$VS" && [ "$(vreloads)" = 1 ] && grep -qx 7908 "$T/verge/listening" && ! grep -q clash-verge-rev open.log'
-ok "在外面：经本机 7901 出去（CCA-1 切到 US-A），Claude Code 拿到的代理也是它" '[ "$(vsel CCA-1)" = US-A ] && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log && lastenv | grep -q "https_proxy=http://127.0.0.1:7901" && lastenv | grep -q "CCA_PROXY=http://127.0.0.1:7901" && [ ! -s ssh.log ]'
-ok "热加载的配置：原来的节点、组和规则都在，CCA 组接在后面；Clash Verge 里没有的 US-D 不放进组" 'ruby -ryaml -rjson -e "c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))[\"payload\"]); g = c[\"proxy-groups\"]; exit(c[\"proxies\"].size == 4 && g[0][\"name\"] == \"Proxy\" && g.size == 9 && c[\"rules\"] == [\"MATCH,Proxy\"] && c[\"listeners\"].size == 8 && g[1][\"proxies\"] == %w[US-A US-B US-C REJECT] && g[2][\"proxies\"] == %w[REJECT US-A US-B US-C] ? 0 : 1)" "$T/verge/last_put.json"'
-"$T/verge_regen"
-ok "全局扩展脚本：用真的 JavaScript 引擎跑一遍（像 Clash Verge 重新生成配置），结果和热加载的一样，选中的节点保留" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); g = c[\"proxy-groups\"]; exit(g[0][\"name\"] == \"Proxy\" && g.size == 9 && c[\"rules\"] == [\"MATCH,Proxy\"] && c[\"listeners\"].map { |l| l[\"port\"] } == (7901..7908).to_a && c[\"listeners\"].all? { |l| l[\"listen\"] == \"127.0.0.1\" && l[\"users\"] == [] } && g[1] == {\"name\" => \"CCA-1\", \"type\" => \"select\", \"proxies\" => %w[US-A US-B US-C REJECT]} ? 0 : 1)" "$T/verge/regen.json" && [ "$(vsel CCA-1)" = US-A ]'
-ok "全局扩展脚本：在已经带端口池的配置上再跑一次，结果不变" '/usr/bin/osascript -l JavaScript "$T/verge/run_script.js" "$VS" "$T/verge/regen.json" > "$T/verge/regen2.json" && ruby -rjson -e "exit(JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1])) ? 0 : 1)" "$T/verge/regen.json" "$T/verge/regen2.json"'
-sed -i '' '4s|.*|  config.rules.unshift("DOMAIN,user.example,DIRECT"); return config;|' "$VS"; "$T/verge_regen"
-ok "全局扩展脚本：用户自己的 main 照常执行，端口池加在它的结果上" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); exit(c[\"rules\"] == [\"DOMAIN,user.example,DIRECT\", \"MATCH,Proxy\"] && c[\"listeners\"].size == 8 ? 0 : 1)" "$T/verge/regen.json"'
-sed -i '' '4s|.*|  return config;|' "$VS"
-n0=$(vreloads)
-run cca @alice --version >/dev/null 2>&1
-ok "在外面再启动：不再重载，只确认选中节点" '[ "$(vreloads)" = "$n0" ]'
-printf US-B > "$T/verge/sel/CCA-1"
-run cca @alice --version >/dev/null 2>&1
-ok "选中被改：启动前经控制接口纠正回 US-A，不重载" '[ "$(vsel CCA-1)" = US-A ] && [ "$(vreloads)" = "$n0" ]'
-edit_table 'j["alice@example.com"] = "US-C"'
-out=$(run cca @alice --version 2>&1)
-ok "在外面换节点：经控制接口切到 US-C，不重载；脚本里 CCA-1 默认的节点跟着改；路由器等回家再同步" '[ "$(vsel CCA-1)" = US-C ] && [ "$(vreloads)" = "$n0" ] && grep -qF "[\"CCA-1\", 7901, [\"US-C\"" "$VS" && printf "%s" "$out" | grep -q "回到家里的网络后再同步" && [ ! -s ssh.log ]'
-edit_table 'j["alice@example.com"] = "US-D"'
-out=$(run cca @alice --version 2>&1); rc=$?
-ok "在外面：Clash Verge 里没有账号的节点时不启动（宁可断开也不换出口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有节点「US-D」" && [ "$(vsel CCA-1)" = REJECT ]'
-edit_table 'j["alice@example.com"] = "US-A"'
-out=$(run CCA_TTY="$(ans carol@example.com 小号 2)" cca add 2>&1)
-ok "在外面加账号：不连路由器，回家后下次启动再同步" 'printf "%s" "$out" | grep -q "回到家里的网络后" && grep -q "小号(carol@example.com)" "$H/.cca/accounts.json" && [ ! -s ssh.log ]'
-: > open.log
-run CCA_TTY="$(ans)" cca web 小号 >/dev/null 2>&1
-ok "在外面：网页版和第一次登录也走本机端口（CCA-2 切到 US-B）" '[ "$(vsel CCA-2)" = US-B ] && grep -q "LOGIN carol@example.com" claude.log && tail -n 1 open.log | grep -qF -- "--proxy-server=http://127.0.0.1:7902"'
-: > open.log
-run CCA_ACCOUNT='小号(carol@example.com)' CCA_PROXY=http://127.0.0.1:7902 "$H/.cca/bin/open-url" 'https://claude.com/cai/oauth/authorize?code=true' >/dev/null 2>&1
-ok "登录时打开的浏览器用启动它的 cca 选好的出口（在外面是本机端口）" 'grep -qF -- "--proxy-server=http://127.0.0.1:7902" open.log'
-out=$(run cca check 2>&1)
-ok "在外面 cca check：经本机端口检测各账号的出口" 'printf "%s" "$out" | grep -q "198.51.100.1" && printf "%s" "$out" | grep -q "198.51.100.2" && [ ! -s ssh.log ]'
-out=$(run cca ls 2>&1)
-ok "在外面 cca ls：看本机端口" 'printf "%s" "$out" | grep -q "alice@example.com 的本机端口 7901 已就绪"'
-out=$(run cca local 2>&1)
-ok "cca local：现在走哪条路、各端口的监听状态和选中的节点" 'printf "%s" "$out" | grep -q "现在连不上路由器 192.0.2.10" && printf "%s" "$out" | grep -q "CCA-1  127.0.0.1:7901  监听中  → US-A   alice@example.com"'
-touch "$T/verge/down"
-out=$(run cca @alice --version 2>&1); rc=$?
-ok "Clash Verge 没在运行、非交互：说明后停止" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "Clash Verge 没在运行"'
-n0=$(vreloads)
-run CCA_TTY="$(ans y)" cca @alice --version >/dev/null 2>&1; rc=$?
-ok "Clash Verge 没在运行、交互：问过之后打开它（它按全局扩展脚本生成端口池），不用再热加载" '[ $rc -eq 3 ] && grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log && [ "$(vreloads)" = $((n0 + 1)) ] && [ "$(vsel CCA-1)" = US-A ]'
-edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(3, 10)})'
-n0=$(vreloads)
-run cca @alice --version >/dev/null 2>&1
-ok "在外面端口池要扩容（第 9 个账号）：自动热加载一次 Clash Verge，变成 16 个端口" '[ "$(vreloads)" = $((n0 + 1)) ] && grep -qx 7916 "$T/verge/listening" && [ "$(vsel CCA-9)" = US-B ]'
-edit_table '[j.pop("u%d@example.com" % i) for i in range(3, 10)]'
-touch "$T/verge/reload_reject"
-out=$(run cca @alice --version 2>&1); rc=$?
-ok "Clash Verge 的内核拒绝新配置：说明原因，不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没接受新配置（HTTP 400）"'
-rm -f "$T/verge/reload_reject"
-# Clash Verge 里同一个节点叫别的名字（US-B 改叫 Verge-B，地址不变）：按服务器地址换算成 Verge 里的叫法，账号表不动
-cp "$T/verge/base.yaml" "$T/verge/base.orig"
-sed -i '' 's/^- name: US-B$/- name: Verge-B/' "$T/verge/base.yaml"; "$T/verge_regen"
-out=$(run cca @小号 --version 2>&1); rc=$?
-ok "在外面：Clash Verge 里 US-B 叫 Verge-B（地址一样）：换算成 Verge-B 照常启动，账号表不动，端口池里也用 Verge 的叫法" '[ $rc -eq 3 ] && [ "$(vsel CCA-2)" = Verge-B ] && grep -q "\"小号(carol@example.com)\": \"US-B\"" "$H/.cca/accounts.json" && ! printf "%s" "$out" | grep -q "没有节点" && grep -qF "[\"CCA-2\", 7902, [\"Verge-B\"" "$VS"'
-out=$(run cca local 2>&1)
-ok "cca local：选中的是 Verge 里叫 Verge-B 的节点" 'printf "%s" "$out" | grep -q "CCA-2  127.0.0.1:7902  监听中  → Verge-B   小号"'
-cp "$T/verge/base.orig" "$T/verge/base.yaml"; "$T/verge_regen"
-run cca @小号 --version >/dev/null 2>&1
-ok "Verge 里改回 US-B：跟着换算回来" '[ "$(vsel CCA-2)" = US-B ] && grep -qF "[\"CCA-2\", 7902, [\"US-B\"" "$VS"'
-rm -f "$T/away"; n0=$(vreloads); : > ssh.log
-run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
-ok "回到家：自动走回路由器，补同步在外面改过的账号表（CCA-2 → US-B），不碰 Clash Verge" '[ $rc -eq 3 ] && grep -q "sh -s" ssh.log && [ "$(sel CCA-2)" = US-B ] && [ "$(vreloads)" = "$n0" ] && lastenv | grep -q "https_proxy=http://192.0.2.10:7901"'
-run cca local off >/dev/null 2>&1
-ok "cca local off：全局扩展脚本逐字节还原，端口池从内核里移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening" && [ "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"local\"])" "$H/.cca/config.json")" = "{}" ]'
-run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1
-ok "cca local setup：在家也能先配置好" 'grep -q ">>> cca >>>" "$VS" && grep -qx 7901 "$T/verge/listening"'
-run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
-
-fi
 if sect 10c; then
 # 10c. 第三方 API 账号：直连 / 走节点；key 存钥匙串，经 apiKeyHelper 交给 Claude Code（不进命令行，也不进环境变量）
 kcd() { ls -d "$T/keychain/${2:-cca-api-}$1-"* 2>/dev/null | head -n 1; }   # 钥匙串里这个账号的条目（目录里一个服务商一个文件）[服务名前缀]
 kc() { local d; d=$(kcd "$1" "${2:-}"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
 kch() { local d; d=$(kcd "$1"); [ -n "$d" ] && ls "$d"; }   # 存它的服务商（接口的域名）
 lastline() { grep "^$1: " "${2:-claude.log}" | tail -n 1; }   # [日志]
+lastenv() { grep "^ENV: " claude.log | tail -n 1; }   # 最后一次启动 claude 的环境变量那一行
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
 : > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/anthropic/ "$S1" kimi-k2 '')" cca add api 2>&1); rc=$?
@@ -838,7 +758,7 @@ ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不�
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
 ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址），也不加 --settings" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && ! lastline ARGS | grep -q -- --settings && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
 # Claude 默认只把这个账号自己的目录（~/.cca/accounts 下）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料不管在不在工作目录里都挡住
-P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/backup/clash-verge-*.yaml),Edit(/$H/.cca/backup/clash-verge-*.yaml),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
+P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
 AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accounts/kimi-*)
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
 ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录" '[ $rc -eq 3 ] && [ "$(lastline ARGS)" = "ARGS: --add-dir=${AAD} $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
@@ -1155,10 +1075,6 @@ out=$(run cca usage 2>&1)
 setoa "$AJ" 'planDisplayName=Ultra Plus'; out2=$(run cca usage alice 2>&1)
 setoa "$AJ" organizationRateLimitTier=default_claude_max_5x planDisplayName=; setoa "$BJ" organizationType=claude_pro organizationRateLimitTier=default_claude_ai
 ok "套餐叫法和官网一样：原来的 Max 20x 现在叫 Ultra，Team 的 5x 档位是 Team Premium；Claude Code 存了官方给的套餐名（planDisplayName）时照它写" 'printf "%s" "$out" | grep -qE "alice@example.com +Ultra +13%" && printf "%s" "$out" | grep -qE "bob@example.com +Team Premium +50%" && printf "%s" "$out2" | grep -qE "alice@example.com +Ultra Plus +13%"'
-touch "$T/away"
-run cca usage alice >/dev/null 2>&1
-ok "在外面 cca usage：经本机 Clash 的端口查" 'grep "^USAGE: " claude.log | tail -n 1 | grep -q "email=alice@example.com https_proxy=http://127.0.0.1:7901"'
-rm -f "$T/away"
 run CLAUDECODE=1 cca usage alice >/dev/null 2>&1
 ok "在 Claude Code 里（! 前缀）运行 cca usage：查询的子进程不带 CLAUDECODE" 'lastenv | grep -q "CLAUDECODE=unset"'
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.pop(\"oauthAccount\"); json.dump(j, open(p, \"w\"))" "$BJ"
@@ -1198,7 +1114,7 @@ fi
 if sect 10e; then
 # 10e. 不用路由器、只用直连的第三方 API 账号
 H4="$T/home4"; mkdir -p "$H4/.claude"
-r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 r4 CCA_TTY="$(ans n n)" bash "$CCA" install >/dev/null 2>&1
 out=$(r4 CCA_TTY="$(ans solo https://api.example.com/anthropic "$S1" '')" cca add api 2>&1); rc=$?
 out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
@@ -1662,7 +1578,7 @@ cp "$AD/claude/.claude.json" "$T/alice.claude.json"; printf '{"oauthAccount": ' 
 out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state_account_unreadable.json"
 cp "$T/alice.claude.json" "$AD/claude/.claude.json"
 ok "_gui state：某个账号的 .claude.json 坏了也照样输出：这个账号当作没登录，errors 里说是哪个文件" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"login\"] == \"logged_out\" and any(e[\"code\"] == \"account_unreadable\" and e[\"tool\"] == \"claude\" and \".claude.json\" in e[\"message\"] for e in d[\"errors\"])"'
-# 实况：在家看路由器，在外面看本机 Clash Verge
+# 实况：在家看路由器，在外面看本机内置代理
 s1=$(snap); out=$(gj live); printf '%s' "$out" > "$GF/live_router.json"
 ok "_gui live（在家）：看路由器（OpenClash 在运行，钩子、cron 都在），分到账号的槽位都是 ok，空槽位是 empty；只读" '[ "$(snap)" = "$s1" ] && printf "%s" "$out" | jok "d[\"route\"] == \"router\" and d[\"at_home\"] is True and d[\"router\"][\"backend\"] == \"OpenClash\" and d[\"router\"][\"running\"] is True and d[\"router\"][\"hook\"] is True and d[\"router\"][\"cron\"] is True and d[\"router\"][\"error\"] is None and all(s[\"state\"] == (\"ok\" if s[\"key\"] else \"empty\") for s in d[\"slots\"]) and d[\"slots\"][0][\"selected\"] == d[\"slots\"][0][\"expected\"] and d[\"slots\"][0][\"listening\"] is True"'
 oth=US-D; [ "$(sel CCA-1)" = US-D ] && oth=US-B
@@ -1675,7 +1591,7 @@ touch "$T/away"
 out=$(run CCA_ROUTE=router cca _gui live </dev/null 2>/dev/null); printf '%s' "$out" > "$GF/live_unreachable.json"
 out2=$(gj live); printf '%s' "$out2" > "$GF/live_local.json"
 rm -f "$T/away"
-ok "_gui live（在外面）：指定看路由器时说连不上（槽位 closed）；默认看本机 Clash Verge 的端口池" 'printf "%s" "$out" | jok "d[\"route\"] == \"router\" and d[\"at_home\"] is False and d[\"router\"][\"error\"][\"code\"] == \"unreachable\" and all(s[\"state\"] in (\"closed\", \"empty\") for s in d[\"slots\"])" && printf "%s" "$out2" | jok "d[\"route\"] == \"local\" and d[\"local\"][\"configured\"] is True and d[\"local\"][\"name\"] == \"Clash Verge\" and d[\"local\"][\"running\"] is True and d[\"slots\"][0][\"key\"] == \"alice@example.com\""'
+ok "_gui live（在外面）：指定看路由器时说连不上（槽位 closed）；默认看本机出口（还没配置内置代理）" 'printf "%s" "$out" | jok "d[\"route\"] == \"router\" and d[\"at_home\"] is False and d[\"router\"][\"error\"][\"code\"] == \"unreachable\" and all(s[\"state\"] in (\"closed\", \"empty\") for s in d[\"slots\"])" && printf "%s" "$out2" | jok "d[\"route\"] == \"local\" and d[\"local\"][\"configured\"] is False"'
 # 出口检测结果：启动、cca check 都记进账号目录的 health.json
 run cca @alice --version >/dev/null 2>&1
 ok "启动时记下出口检测结果（health.json，只给自己读）：来源 launch、结果 ok、出口 IP、泄露检测的状态" '[ "$(stat -f %Lp "$AD/health.json")" = 600 ] && jok "d[\"source\"] == \"launch\" and d[\"result\"] == \"ok\" and d[\"ip\"] == \"203.0.113.1\" and d[\"trust\"] == 97 and d[\"port\"] == 7901 and d[\"leak\"][\"dns\"] == \"ok\"" < "$AD/health.json"'
@@ -1734,13 +1650,6 @@ run cca @alice --version >/dev/null 2>&1 </dev/null   # 先跑一次：上一条
 out=$(run cca @alice --version 2>&1 </dev/null); rc=$?
 out2=$(run CCA_EVENTS=/nonexistent/dir/ev.jsonl cca @alice --version 2>&1 </dev/null); rc2=$?
 ok "事件文件指向写不了的地方：命令照常，输出和不设事件文件时一样（bash 打不开文件的报错也不漏出来）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && [ "$out" = "$out2" ]'
-# 在外面、Clash Verge 没开：问要不要打开它
-touch "$T/away" "$T/verge/down"; : > open.log
-out=$(runev cca @alice --version 2>&1); rc=$?
-ok "图形界面：在外面、Clash Verge 没在运行：记一条 consent（open_clash_verge），不打开它、不启动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"open_clash_verge\" and e[\"grant\"] == \"open_clash_verge\"" && [ -f "$T/verge/down" ] && ! grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log'
-out=$(runev CCA_GRANT=open_clash_verge cca @alice --version 2>&1); rc=$?
-ok "图形界面：同意之后打开 Clash Verge，照常启动" '[ $rc -eq 3 ] && grep -q "io.github.clash-verge-rev.clash-verge-rev" open.log && [ ! -f "$T/verge/down" ]'
-rm -f "$T/away"
 # Claude Code 记的套餐过时了（outdated_login_plan）：契约测试要解码不是 null 的（下面查用量时 alice 又回到 max）
 canned alice@example.com 13 41 pro
 out=$(run cca usage --json 2>/dev/null); printf '%s' "$out" > "$GF/usage_claude_outdated.json"
@@ -2024,8 +1933,18 @@ out=$(sess '{}' -- cca _onboard 2>&1); rc=$?
 ok "配置向导：路由器已配好、已有账号 → 不再追问，记下 onboarded、给完成事件、不动账号表" '[ $rc -eq 0 ] && [ -z "$(asks)" ] && [ "$(tsum)" = "$onb_before" ] && gj state | jok "cfg.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- cca _onboard 2>&1); rc=$?
-ok "配置向导：没配过路由器 → 先选上网方式（choice，默认路由器；第一期给路由器/跳过）；选跳过：记下 onboarded、不配置、给完成事件" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.net ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][0][\"value\"] == \"router\" and e[\"fields\"][0][\"options\"][-1][\"value\"] == \"skip\" and e[\"fields\"][0][\"default\"] == \"router\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- env CCA_GUI_OS=26 cca _onboard 2>&1); rc=$?
+ok "配置向导：没配过路由器、探不到局域网里的路由器、能用内置代理 → 上网方式默认内置代理（自动模式：探不到就内置代理）；选项仍是路由器/内置代理/跳过；选跳过：记下 onboarded、不配置" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.net ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][0][\"value\"] == \"router\" and e[\"fields\"][0][\"options\"][-1][\"value\"] == \"skip\" and e[\"fields\"][0][\"default\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- env CCA_GUI_OS=15 cca _onboard 2>&1); rc=$?
+ok "配置向导：macOS 26 以下也能用内置代理（内核由 cca 在后台无头运行）→ 探不到路由器时默认也选内置代理" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"builtin\""'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+echo "192.168.9.1:9090" > "$T/clash_router"   # 假局域网：192.168.9.1:9090 上有个 Clash 控制口
+out=$(sess '{"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- env CCA_GATEWAY=192.168.9.1 cca _onboard 2>&1); rc=$?
+rm -f "$T/clash_router"
+ok "配置向导：自动探到局域网里装了 Clash 的路由器 → 上网方式默认「路由器」、页说明带探到的地址，选路由器后配置表单里地址已预填" '[ "$(asks)" = "onboard.net router.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"router\" and \"192.168.9.1\" in e.get(\"message\", \"\")" && evq "e.get(\"q\") == \"router.basic\" and e[\"fields\"][0][\"value\"] == \"192.168.9.1\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 out=$(sess '{"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- cca _onboard 2>&1); rc=$?
@@ -2079,11 +1998,9 @@ ok "提问会话：配置路由器：节点多选一页（现在的预先选好�
 out=$(sess '{"router.basic":[{"host":"192.0.2.10","user":"root","port":"22"}],"router.nodes":[{"v":"1 2 3 4"}]}' -- cca router setup 2>&1); rc=$?
 ok "提问会话：配置路由器：密钥已经能登录时不问密码，可选节点没变也不多同步一次" '[ $rc -eq 0 ] && [ "$(asks)" = "router.basic router.nodes" ] && [ "$(evn result)" = 1 ]'
 cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"
-# 配置本机 Clash（local.verge；没装 Clash Verge 时的 local.client / local.manual 在 11b4）
-out=$(sess '{"local.verge":[{"v":"n"}]}' -- cca local setup 2>&1); rc=$?
-ok "提问会话：配置本机 Clash：说明要做什么，答否按取消收场，什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = local.verge ] && evq "e.get(\"q\") == \"local.verge\" and \"全局扩展脚本\" in e[\"fields\"][0][\"detail\"] and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\"" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && cmp -s "$H/.cca/config.json" "$T/cfg.bak"'
-out=$(sess '{"local.verge":[{"v":"y"}]}' -- cca local setup 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_local_verge.jsonl"
-ok "提问会话：配置本机 Clash：答是就配好（有结果事件），和终端里一样" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && grep -q ">>> cca >>>" "$VS" && grep -qx 7901 "$T/verge/listening"'
+# 配置本机出口（local.builtin）：问用不用内置代理
+out=$(sess '{"local.builtin":[{"v":"n"}]}' -- cca local setup 2>&1); rc=$?
+ok "提问会话：配置本机出口：问用不用内置代理，答否按取消收场，什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = local.builtin ] && evq "e.get(\"q\") == \"local.builtin\" and e[\"fields\"][0][\"kind\"] == \"confirm\"" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && cmp -s "$H/.cca/config.json" "$T/cfg.bak"'
 run cca local off >/dev/null 2>&1
 cp "$T/tbl.bak" "$H/.cca/accounts.json"; cp "$T/cfg.bak" "$H/.cca/config.json"
 # 账号表表单（edit.form）：节点、接口地址、模型、环境变量；cca 校验，不显示 key；表坏了才去终端
@@ -2136,7 +2053,7 @@ lint_prompts() {   # 提问只能经基元：别的地方直接读 fd 3，图形
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 doc = open(sys.argv[2], encoding='utf-8').read()
-allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'policy_wait', 'cmd_edit'}
+allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'policy_wait', 'cmd_edit', 'node_read_block'}
 bad, fn = [], ''
 for line in src.split('\n'):
     m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\(\) \{', line)
@@ -2436,7 +2353,7 @@ out=$(run cca gui remove 2>&1); rc=$?
 ok "cca gui remove：删掉 App 和下载目录" '[ $rc -eq 0 ] && [ ! -e "$GA" ] && [ ! -e "$H/.cca/gui" ]'
 # cca install --gui（install.sh 在 macOS 上传的）：基础安装后装好并打开图形界面 App，剩下的配置在 App 的引导向导里走；
 # 老 macOS（26 以前）或 App 装不上时自动回退到终端引导。不带 --gui 的 cca install 仍是终端引导
-IGV=$(ver); publish_app "$IGV"   # IGV 而不是 V：V 是本机 Clash Verge 的目录（上面定义），别覆盖它
+IGV=$(ver); publish_app "$IGV"
 cp "$H/.cca/config.json" "$T/cfg.ig.bak"; cp "$H/.cca/accounts.json" "$T/tbl.ig.bak"; : > open.log
 out=$(run CCA_TTY="$(ans)" cca install --gui 2>&1); rc=$?
 ok "cca install --gui：macOS 26+ 装好并打开 App，剩下的配置交给 App 的引导向导——不在终端里问路由器/账号" '[ $rc -eq 0 ] && grep -qxF "OPEN [$GA] [--args] [--window]" open.log && [ "$(gver)" = "$IGV" ] && printf "%s" "$out" | grep -q "基础安装完成" && printf "%s" "$out" | grep -q "在打开的 cca App 里按引导" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号"'
@@ -2468,6 +2385,9 @@ PR="$T/policy_repo"; mkdir -p "$PR"; PK="$H/.cca/policy/id_ed25519"
 pol() {   # pol JSON [签名密钥]：写进假的私有映射仓库并签名
 	printf '%s\n' "$1" > "$PR/policy.json"; rm -f "$PR/policy.json.sig"
 	ssh-keygen -Y sign -q -n cca-policy -f "${2:-$T/relkey}" "$PR/policy.json" 2>/dev/null
+}
+nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签名（参考节点和映射用不同的命名空间）；原在已删的 11b2b 节，11b6 仍用
+	rm -f "$PR/nodes.json.sig"; ssh-keygen -Y sign -q -n cca-nodes -f "${1:-$T/relkey}" "$PR/nodes.json" 2>/dev/null
 }
 pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
 # 终端里启动账号时，还没配置映射就引导（默认仓库用 CCA_POLICY_DEFAULT 换成假的；平时的用例里它是空的，不引导）
@@ -2612,184 +2532,6 @@ out2=$(run cca policy 2>&1)
 ok "映射里的节点在路由器上改了名、映射还没更新：账号表跟着改成 HK-A2，不会被映射改回旧名字，照常启动" '[ $rc -eq 3 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && [ "$(sel CCA-1)" = HK-A2 ] && ! printf "%s" "$out" | grep -q "按维护者的映射固定为" && printf "%s" "$out2" | grep -q "Claude  alice@example.com → HK-A2（映射里写的是 HK-A，路由器上已经改名）"'
 pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
 ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
-
-fi
-if sect 11b2b; then
-# 11b2b. 维护者参考配置里的节点：./policy.sh 从维护者的 custom.yaml 抽出策略组 OpenAi 和它引用的节点（nodes.json，命名空间
-#        cca-nodes 签名），各台机器拉映射时一起拉；缺的直接写进路由器（OpenClash 选用的配置、ShellCrash 的订阅配置）和本机
-#        Clash Verge 当前选用的配置文件（行尾带 # cca），名字补进同名策略组。这一节结束时路由器、账号表、Clash Verge 都还原
-rm -rf "$T/router.snap"; cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
-cp "$T/verge/base.yaml" "$T/verge/base.snap"; cp "$V/profiles.yaml" "$T/verge/profiles.snap"
-nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签名（参考节点和映射用不同的命名空间）
-	rm -f "$PR/nodes.json.sig"; ssh-keygen -Y sign -q -n cca-nodes -f "${1:-$T/relkey}" "$PR/nodes.json" 2>/dev/null
-}
-rget() {   # rget 配置 'Ruby 表达式'：c 是读出来的配置，g 是它的 OpenAi 组成员，px 是节点名
-	ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; g = ((c["proxy-groups"] || []).find { |x| x["name"] == "OpenAi" } || {})["proxies"]; px = (c["proxies"] || []).map { |p| p["name"] }; exit(eval(ARGV[1]) ? 0 : 1)' "$1" "$2"
-}
-added() {   # added 原来的 现在的：现在的只是在原来的基础上加了行（原来的一行没删、没改）；输出加的行里带 # cca 的有几行
-	          # （块写法的节点只有 name 那一行带，组成员每行都带）
-	diff "$1" "$2" | awk '/^</ || /^---/ { bad = 1 } /^>/ && / # cca$/ { n++ } END { if (bad) print "x"; else print n + 0 }'
-}
-one_line() {   # one_line 配置文件 节点 一行写法 [缩进]：把 cca 写成块写法的节点换回 2.8.0-beta.5～7 写的一行（模拟旧版本写的）
-	python3 -c "import re,sys; p, n, f, i = sys.argv[1:5]; s = open(p).read(); t = re.sub(r\"(?m)^%s- name: %s # cca\\n(?:%s  .*\\n)*\" % (i, re.escape(n), i), lambda m: i + \"- \" + f + \" # cca\\n\", s, count=1); assert t != s; open(p, \"w\").write(t)" "$1" "$2" "$3" "${4:-}"
-}
-fill_tmp() { ls "$R"/tmp/cca.src.* "$R"/tmp/cca.fill.* 2>/dev/null; }   # 参考节点用过的临时文件（应该都删了）
-cat > "$T/custom.yaml" <<'Y'
-proxies:
-  - {name: AI-A, type: ss, server: 192.0.2.21, port: 8388, cipher: aes-128-gcm, password: x}
-  - name: AI-B
-    type: vless
-    server: 192.0.2.22
-    port: 443
-    uuid: 00000000-0000-4000-8000-000000000001
-    tls: true
-    servername: www.example.com
-    flow: xtls-rprx-vision
-    reality-opts:
-      public-key: -test-public-key
-      short-id: '0a1b2c3d4e5f6789'
-  - {name: US-A, type: ss, server: 192.0.2.1, port: 8388, cipher: aes-128-gcm, password: other}
-  - {name: AI-B2, type: ss, server: 192.0.2.2, port: 8388, cipher: aes-128-gcm, password: x}
-  - {name: LAN-ONLY, type: ss, server: 192.0.2.99, port: 8388, cipher: aes-128-gcm, password: x}
-proxy-groups:
-  - {name: Proxy, type: select, proxies: [LAN-ONLY, AI-A]}
-  - name: OpenAi
-    type: select
-    proxies:
-      - Proxy
-      - AI-A
-      - AI-B
-      - US-A
-      - AI-B2
-rules:
-  - SRC-IP-CIDR,192.0.2.100/32,Proxy
-  - MATCH,Proxy
-Y
-out=$(run bash "$D/../policy.sh" nodes "$T/custom.yaml" 2>"$T/pn.err"); rc=$?
-printf '%s\n' "$out" > "$PR/nodes.json"
-ok "policy.sh nodes：从维护者的配置里只抽出策略组 OpenAi 引用的节点（组成员里的策略组不算，规则、别的节点都不带），格式检查通过" '[ $rc -eq 0 ] && grep -q "参考节点：策略组「OpenAi」里的 4 个节点（Proxy 不是节点，不算）" "$T/pn.err" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j[\"version\"] == 1 and j[\"group\"] == \"OpenAi\" and [p[\"name\"] for p in j[\"proxies\"]] == [\"AI-A\", \"AI-B\", \"US-A\", \"AI-B2\"] and j[\"proxies\"][1][\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" else 1)" "$PR/nodes.json" && ! grep -q "LAN-ONLY\|SRC-IP" "$PR/nodes.json" && run bash "$CCA" _fill-check "$PR/nodes.json" >/dev/null'
-nodes_pub
-# 用户路由器上的配置：有 OpenAi 组（块写法，只有 US-A），没有 AI-A、AI-B；AI-B2 和 US-B 是同一个节点（地址一样）
-awk '{ print } /^proxy-groups:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" }' "$SRC" > "$T/src.tmp" && cat "$T/src.tmp" > "$SRC"; oc_restart
-cp "$SRC" "$T/src.fill"; n0=$(reloads); r0=$(restarts)
-out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "拉映射时一起拉参考节点（验签通过才换上，只有自己能读），马上同步：缺的直接写进 OpenClash 选用的配置文件，说明要重启一次才用得上，问过后重启（不热加载）" '[ $rc -eq 0 ] && [ "$(stat -f %Lp "$H/.cca/policy/nodes.json")" = 600 ] && printf "%s" "$out" | grep -q "已更新映射（.*；参考节点：策略组 OpenAi 的 4 个节点）" && printf "%s" "$out" | grep -qF "已把维护者参考配置里的节点写进 OpenClash 的配置文件 ${SRC}：补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B（行尾带 # cca；改之前的在 $R/etc/cca/source.bak.yaml）" && printf "%s" "$out" | grep -q "OpenClash 的配置文件里新写了维护者参考配置里的节点，要用上只能重启一次 OpenClash" && printf "%s" "$out" | grep -q "现在重启 OpenClash 吗" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ]'
-ok "OpenClash 的配置文件：AI-A、AI-B 一个一行插在 proxies 开头，名字接在 OpenAi 组后面，行尾都带 # cca，别的一个字节不动；US-A 是用户自己的（定义不动、不重复）；AI-B2 地址和 US-B 一样，组里加的是 US-B；原来的留了备份" '[ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$SRC" "px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\" && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" && g == %w[US-A AI-A AI-B US-B]" && cmp -s "$R/etc/cca/source.bak.yaml" "$T/src.fill"'
-ok "写之前用内核 -t 校验过（拿正在用的运行配置加上这些节点），记下了这一版的 id；重启后按写好的配置文件生成运行配置，里面就有；临时文件都删了" 'grep -q "^CORE .* -t -d $R/etc/openclash -f $R/tmp/cca.fill\." router.log && [ -s "$R/etc/cca/fill.ok" ] && grep -qF "\"id\": \"$(cat "$R/etc/cca/fill.ok")\"" "$R/etc/cca/accounts.yaml" && rget "$RC" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && g == %w[US-A AI-A AI-B US-B]" && [ ! -e "$R/etc/cca/fill.pending" ] && [ -z "$(fill_tmp)" ]'
-out=$(run cca router nodes 2>&1); out2=$(run cca router status 2>&1); out3=$(run cca policy 2>&1)
-ok "cca router nodes 列得出写进去的节点；cca router status、cca policy 说明参考节点" 'printf "%s" "$out" | grep -qx AI-A && printf "%s" "$out" | grep -qx AI-B && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有" && printf "%s" "$out3" | grep -q "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点（路由器和本机 Clash Verge 的配置文件里缺的直接写进去）"'
-cp "$SRC" "$T/src.filled"; c0=$(grep -c '^CORE' router.log); r0=$(restarts); n0=$(reloads)
-out=$(run cca router sync 2>&1); rc=$?
-ok "再同步一次：配置文件里都有了，不再写、不重启也不重载，也不再拿内核校验" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && ! printf "%s" "$out" | grep -q "写进 OpenClash 的配置文件"'
-one_line "$SRC" AI-A '{name: "AI-A", type: "ss", server: "192.0.2.21", port: 8388, cipher: "aes-128-gcm", password: "x"}' '  '
-out=$(run cca router sync 2>&1); rc=$?
-ok "2.8.0-beta.5～7 写成一行的参考节点：同步时改成和别的节点一样的块写法（内容没变：不重启、不重载、不再拿内核校验）" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && [ ! -e "$R/etc/cca/fill.pending" ]'
-edit_table 'j["nodes"].append("AI-A")' "$H/.cca/config.json"; edit_table 'j["ai@example.com"] = "AI-A"'
-out=$(run cca router sync -y 2>&1); rc=$?; s=$(( $(cfgv 'c["ports"]["ai@example.com"]') - 7900 ))
-ok "写进去的节点可以当账号的出口：选进可选节点、账号用它，端口切到 AI-A" '[ $rc -eq 0 ] && [ "$(sel "CCA-$s")" = AI-A ]'
-c0=$(grep -c '^CORE' router.log); r0=$(restarts); oc_restart
-ok "OpenClash 重启：配置文件里本来就有，钩子不用再写（也不拿内核试），账号的端口照常走 AI-A" '[ "$(restarts)" = $((r0 + 1)) ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && rget "$RC" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$s")" = AI-A ] && cmp -s "$SRC" "$T/src.filled"'
-cp "$T/src.fill" "$SRC"; r0=$(restarts); oc_restart
-out=$(run cca router sync 2>&1); rc=$?
-ok "订阅更新把配置文件整个换掉了：OpenClash 启动时钩子写回去，这次生成的运行配置里也照样带上，不用为这个再重启一次" '[ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$RC" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$s")" = AI-A ] && [ ! -e "$R/etc/cca/fill.pending" ] && grep -q "【cca】已把维护者参考配置里的节点写进配置文件 $SRC" "$R/tmp/openclash.log" && [ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ]'
-echo 192.0.2.22 > "$R/core_reject"; rm -f "$R/etc/cca/fill.ok"; cp "$T/src.fill" "$SRC"; oc_restart
-ok "这台路由器的内核不认参考配置里的节点（还没校验过的这一版）：启动时钩子先拿内核试，不通过就不写（OpenClash 照常起来，端口池照常），用它的账号宁可断开" 'cmp -s "$SRC" "$T/src.fill" && ! rget "$RC" "px.include?(\"AI-A\")" && [ "$(nl_)" -gt 0 ] && [ "$(sel "CCA-$s")" = REJECT ] && grep -q "维护者参考配置里的节点没通过 OpenClash 内核的校验，没有写进配置文件" "$R/tmp/cca-router.log" && [ ! -e "$R/etc/cca/fill.ok" ] && [ -z "$(fill_tmp)" ]'
-c0=$(grep -c '^CORE' router.log); out=$(run cca router status 2>&1); oc_restart
-ok "没通过校验的记下了：再启动不再拿内核试；cca router status 说还缺什么、为什么" '[ "$(grep -c "^CORE" router.log)" = "$c0" ] && printf "%s" "$out" | grep -q "OpenClash 的配置文件里还要补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B（这一版还没在这台路由器的内核上校验过）" && printf "%s" "$out" | grep -q "上次没写成：维护者参考配置里的节点没通过 OpenClash 内核的校验"'
-out=$(run cca router sync -y 2>&1); rc=$?
-ok "同步时照样再校验一次，内核还是不认：说明没写，配置文件不动，用它的账号断开" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者参考配置里的节点没通过 OpenClash 内核的校验，没有写进配置文件" && cmp -s "$SRC" "$T/src.fill" && [ "$(sel "CCA-$s")" = REJECT ] && [ ! -e "$R/etc/cca/fill.ok" ]'
-rm -f "$R/core_reject"; r0=$(restarts); n0=$(reloads)
-out=$(run cca router sync -y 2>&1); rc=$?
-ok "内核认了（比如升级了）：同步时写进配置文件，重启一次用上，账号的端口回到 AI-A" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ] && [ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$RC" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$s")" = AI-A ] && [ -s "$R/etc/cca/fill.ok" ]'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(port=8443) for x in j['proxies'] if x['name'] == 'AI-B']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "维护者改了参考配置里的节点：cca 写进去的那一行跟着改（不会多出一个），问过后重启" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "按参考配置更新了节点 AI-B" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(diff "$T/src.prev" "$SRC" | grep -c "^[<>]")" = 2 ] && rget "$SRC" "px.count(\"AI-B\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443"'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(password='changed') for x in j['proxies'] if x['name'] == 'US-A']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "参考配置里和用户自己的节点同名的改了：用户的那个不动（不是 cca 写的），也不用重启" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.prev" && [ "$(restarts)" = "$r0" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\""'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(password='y2') for x in j['proxies'] if x['name'] == 'AI-A']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-r0=$(restarts); out=$(run cca policy pull 2>&1); rc=$?
-out2=$(run cca router status 2>&1)
-ok "非交互时要重启也不重启：配置文件照样写好，说清楚这次的改动要等 OpenClash 下次重启；cca router status 也这么说" '[ "$(restarts)" = "$r0" ] && printf "%s" "$out" | grep -q "没有重启：这次的改动要等 OpenClash 下次重启" && [ -e "$R/etc/cca/fill.pending" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"x\"" && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有（新写进去的要等 OpenClash 重启后才用上）"'
-r0=$(restarts); n_cli=$(grep -c '^ARGS:' claude.log); out=$(run CCA_TTY="$(ans n)" cca @ai --version 2>&1); rc=$?
-ok "在家启动账号：必要重启只问一次；拒绝后即使节点同名也阻断，不调用客户端" '[ $rc -eq 1 ] && [ "$(printf "%s" "$out" | grep -c "现在重启 OpenClash 吗")" = 1 ] && [ "$(restarts)" = "$r0" ] && [ "$(sel "CCA-$s")" = AI-A ] && printf "%s" "$out" | grep -q "路由器账号节点未能核实" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ]'
-out=$(run CCA_TTY="$(ans y)" cca router sync 2>&1); rc=$?
-ok "再同步时同意重启：用上配置文件里新写的" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && [ ! -e "$R/etc/cca/fill.pending" ] && [ "$(sel "CCA-$s")" = AI-A ]'
-cp "$H/.cca/policy/nodes.json" "$T/nodes.good"; nodes_pub "$T/evilkey"
-out=$(run cca policy pull 2>&1); rc=$?
-nodes_pub; python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'][0].pop('server'); json.dump(j, open(p, 'w'))" "$PR/nodes.json"; nodes_pub
-out2=$(run cca policy pull 2>&1); rc2=$?
-ok "参考节点不是发布密钥签的、格式不对：映射和参考节点都不换，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "参考节点（nodes.json）的签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参考节点（nodes.json）的格式不对：第 1 个节点「AI-A」：server 不对" && cmp -s "$H/.cca/policy/nodes.json" "$T/nodes.good"'
-cp "$T/nodes.good" "$PR/nodes.json"
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'].append({'name': 'SC-X', 'type': 'ss', 'server': '192.0.2.29', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x'}); json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-# ShellCrash：订阅配置里有 OpenAi 组（块写法）；参考节点里的 SC-X 和它的自定义节点重名，不写
-rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp -R "$T/shellcrash/." "$R/"; echo CrashCore > "$R/core"
-awk '{ sub(/^  - name: HK-A$/, "  - name: HK-A2") } /^rules:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" } { print }' "$T/shellcrash/etc/ShellCrash/yamls/config.yaml" > "$SCD/yamls/config.yaml"
-cp "$SCD/yamls/config.yaml" "$T/sc_base.fill"; sc_restart; n0=$(reloads); r0=$(restarts)
-out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "ShellCrash：缺的写进订阅配置、名字补进 OpenAi 组，问过后重启一次（不热加载）；和它的自定义节点重名的 SC-X 不写（说明原因，只有一个 SC-X）" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 5 ] && rget "$SCR" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B]" && printf "%s" "$out" | grep -q "参考节点「SC-X」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写" && printf "%s" "$out" | grep -q "现在重启 ShellCrash 吗" && [ "$(sel "CCA-$s")" = AI-A ] && ! grep -q SCBAD router.log'
-out=$(run cca router sync 2>&1); rc=$?
-out2=$(run cca router nodes 2>&1)
-ok "ShellCrash 再同步：配置文件里都有了，不用重启也不用重载；cca router nodes 列得出参考节点，不列自定义节点" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && printf "%s" "$out2" | grep -qx AI-A && ! printf "%s" "$out2" | grep -q SC-X'
-cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; r0=$(restarts); sc_restart
-ok "ShellCrash 的订阅更新把订阅配置换掉了：启动时钩子在它拼运行配置之前写回去，这次启动就用上" '[ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 5 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$s")" = AI-A ] && [ ! -e "$R/etc/cca/fill.pending" ] && ! grep -q SCBAD router.log'
-python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); b='  - name: OpenAi\n    type: select\n    proxies:\n      - US-A\n'; assert s.count(b) == 1; open(p, 'w').write(s.replace(b, '  - {name: OpenAi, type: select, proxies: [US-A]}\n'))" "$T/sc_base.fill"
-cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; sc_restart; n0=$(reloads); r0=$(restarts)
-out=$(run cca router sync 2>&1); rc=$?
-ok "订阅配置里 OpenAi 组写成一行的：只写节点、组不动（说明为什么）；同步时不用再重载、重启" 'grep -q "策略组 OpenAi 不是一行一项的写法" "$R/tmp/cca-router.log" && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 2 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A]" && ! grep -q SCBAD router.log && [ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = "$r0" ]'
-rm -rf "$R"; cp -R "$T/router.snap" "$R"
-# 本机 Clash Verge：当前选用的是本地配置（Verge 里也有 OpenAi 组）；在外面启动账号时写进这份配置，热加载一次。
-# Codex 的 dave 同时需要 US-D：功能用例先备齐全池节点，不能靠忽略另一个账号的切换失败来通过。
-awk '/^proxy-groups:$/ { print "- {name: US-D, type: ss, server: 192.0.2.4, port: 8388, cipher: aes-128-gcm, password: x}" } /^rules:$/ { print "- name: OpenAi"; print "  type: select"; print "  proxies:"; print "  - US-A" } { print }' "$T/verge/base.snap" > "$V/profiles/Lprofile1.yaml"
-cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.orig"
-printf '%s\n' '- uid: Lprofile1' '  type: local' '  name: 测试配置' '  file: Lprofile1.yaml' >> "$V/profiles.yaml"
-"$T/verge_regen"; touch "$T/away"; n0=$(vreloads)
-out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
-ok "在外面：参考节点写进 Clash Verge 当前选用的配置（行尾带 # cca，原来的留一份），热加载一次，走 AI-A 的账号照常启动" '[ $rc -eq 3 ] && [ "$(vreloads)" = $((n0 + 1)) ] && [ "$(vsel "CCA-$s")" = AI-A ] && printf "%s" "$out" | grep -q "已把维护者参考配置里的节点写进 Clash Verge 当前的配置「测试配置」：补上节点 AI-A、AI-B、SC-X；策略组 OpenAi 里加上 AI-A、AI-B、US-B、SC-X（行尾带 # cca；改之前的在 ~/.cca/backup/clash-verge-Lprofile1.yaml）" && [ "$(added "$T/verge/prof.orig" "$V/profiles/Lprofile1.yaml")" = 7 ] && cmp -s "$H/.cca/backup/clash-verge-Lprofile1.yaml" "$T/verge/prof.orig" && rget "$V/profiles/Lprofile1.yaml" "px.include?(\"AI-A\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X]"'
-ok "热加载的运行配置照写好的配置补上：节点一个不多、名字接在 OpenAi 组后面；全局扩展脚本里不带参考节点" 'ruby -ryaml -rjson -e "c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))[\"payload\"]); px = c[\"proxies\"].map { |p| p[\"name\"] }; g = c[\"proxy-groups\"].find { |x| x[\"name\"] == \"OpenAi\" }[\"proxies\"]; exit(px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X] ? 0 : 1)" "$T/verge/last_put.json" && grep -q ">>> cca >>>" "$VS" && ! grep -q "ccaFill\|192\.0\.2\.2[12]" "$VS"'
-"$T/verge_regen"
-ok "Clash Verge 重新生成配置（真的 JavaScript 引擎跑全局扩展脚本）：参考节点来自它的配置文件，和热加载的一样" 'ruby -rjson -e "c = JSON.parse(File.read(ARGV[0])); px = c[\"proxies\"].map { |p| p[\"name\"] }; g = c[\"proxy-groups\"].find { |x| x[\"name\"] == \"OpenAi\" }[\"proxies\"]; exit(px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B SC-X] && c[\"proxy-groups\"].find { |x| x[\"name\"] == \"CCA-$s\" }[\"proxies\"][0] == \"AI-A\" ? 0 : 1)" "$T/verge/regen.json" && [ "$(vsel "CCA-$s")" = AI-A ]'
-n0=$(vreloads); out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
-ok "再在外面启动：配置里都有了，不再写、也不再热加载" '[ $rc -eq 3 ] && [ "$(vreloads)" = "$n0" ] && ! printf "%s" "$out" | grep -q "写进 Clash Verge" && [ "$(vsel "CCA-$s")" = AI-A ]'
-# 模拟运行中的内核丢了另一账号组的目标成员；当前 ai 仍正确也不能吞掉全池失败。
-dave_group="CCA-$(( $(cfgv 'c["codex"]["ports"]["dave@example.com"]') - 7900 ))"
-cp "$T/verge/groups/$dave_group" "$T/verge/dave.group"
-grep -vx US-D "$T/verge/dave.group" > "$T/verge/groups/$dave_group"; printf US-C > "$T/verge/sel/$dave_group"
-n_cli=$(grep -c '^ARGS:' claude.log); out=$(runev cca @ai --version 2>&1); rc=$?
-ok "本机全池门禁：其他账号的节点不可选时置 REJECT；当前账号即使节点正确也拒绝启动" '[ $rc -eq 1 ] && [ "$(vsel "CCA-$s")" = AI-A ] && [ "$(vsel "$dave_group")" = REJECT ] && printf "%s" "$out" | grep -q "${dave_group} 切换到 US-D 后未能核实" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"local_unavailable\"" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ] && [ "$(vreloads)" = "$n0" ]'
-cp "$T/verge/dave.group" "$T/verge/groups/$dave_group"
-out=$(run cca @ai --version 2>&1); rc=$?
-ok "其他账号的节点恢复后：全池重新核验通过，当前账号才恢复启动，无需热加载" '[ $rc -eq 3 ] && [ "$(vsel "$dave_group")" = US-D ] && [ "$(vsel "CCA-$s")" = AI-A ] && [ "$(vreloads)" = "$n0" ]'
-cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.filled"
-python3 - "$H/.cca/policy/nodes.json" > "$T/ai_a.flow" <<'PY'
-import json, sys
-p = [x for x in json.load(open(sys.argv[1]))["proxies"] if x["name"] == "AI-A"][0]
-print("{" + ", ".join("%s: %s" % (k, json.dumps(v)) for k, v in p.items()) + "}")
-PY
-one_line "$V/profiles/Lprofile1.yaml" AI-A "$(cat "$T/ai_a.flow")"
-n0=$(vreloads); out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
-ok "Clash Verge 配置里以前写成一行的参考节点：改成块写法（内容没变，不用热加载）" '[ $rc -eq 3 ] && cmp -s "$V/profiles/Lprofile1.yaml" "$T/verge/prof.filled" && [ "$(vreloads)" = "$n0" ]'
-out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1); out2=$(run cca local 2>&1)
-ok "cca local setup：参考节点不算 Clash Verge 里没有的；cca local 说参考节点已经写进配置" '! printf "%s" "$out" | grep "Clash Verge 里没有这些节点" | grep -q AI-A && printf "%s" "$out2" | grep -q "参考节点：已写进 Clash Verge 当前的配置「测试配置」"'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(port=9443) for x in j['proxies'] if x['name'] == 'AI-B']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-run cca policy pull >/dev/null 2>&1; cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.prev"; n0=$(vreloads)
-out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
-ok "维护者改了节点：Clash Verge 配置里 cca 写的那一行跟着改，热加载的运行配置里也换成新的（不会多出一个）" '[ $rc -eq 3 ] && [ "$(vreloads)" = $((n0 + 1)) ] && printf "%s" "$out" | grep -q "按参考配置更新了节点 AI-B" && [ "$(diff "$T/verge/prof.prev" "$V/profiles/Lprofile1.yaml" | grep -c "^[<>]")" = 2 ] && ruby -ryaml -rjson -e "c = YAML.safe_load(JSON.parse(File.read(ARGV[0]))[\"payload\"]); b = c[\"proxies\"].select { |p| p[\"name\"] == \"AI-B\" }; exit(b.size == 1 && b[0][\"port\"] == 9443 ? 0 : 1)" "$T/verge/last_put.json"'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'].append({'name': 'AI-C', 'type': 'ss', 'server': '192.0.2.23', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x'}); json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-run cca policy pull >/dev/null 2>&1; echo 192.0.2.23 > "$T/verge/reject_text"; cp "$V/profiles/Lprofile1.yaml" "$T/verge/prof.prev"; n0=$(vreloads)
-out=$(run CCA_TTY="$(ans)" cca @ai --version 2>&1); rc=$?
-ok "Clash Verge 的内核不认新加的参考节点：配置文件不写，照配置里原有的再热加载一次，账号照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "Clash Verge 的内核不认维护者参考配置里的节点，没有写进它的配置" && grep -q "RELOAD rejected text" "$T/verge/verge.log" && [ "$(vreloads)" = $((n0 + 1)) ] && cmp -s "$T/verge/prof.prev" "$V/profiles/Lprofile1.yaml" && [ "$(vsel "CCA-$s")" = AI-A ] && [ -z "$(ls "$H/.cca" | grep "^local\.fill\.\|^fill\.")" ]'
-# 维护者的映射要某个账号走参考节点，这台机器的可选节点里还没有它：自动加进可选节点（记下摘要），账号随后照常加进来
-pol '{"version": 1, "claude": {"alice@example.com": "HK-A2", "bea@example.com": "AI-B"}}'
-out=$(run cca policy pull 2>&1); rc=$?
-ok "映射要的节点是维护者的参考节点、还不在可选节点里：自动加进可选节点（说一声），映射里的账号照常加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "维护者的映射要 bea@example.com 走节点 AI-B：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 bea@example.com，出口 AI-B" && cfgok "\"AI-B\" in c[\"nodes\"] and c[\"node_ids\"].get(\"AI-B\")" && tblok "t.get(\"bea@example.com\") == \"AI-B\""'
-pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'
-# 还原：维护者不再发布参考节点（映射仓库里删掉 nodes.json），拉下来后这台机器上的也删掉
-rm -f "$PR/nodes.json" "$PR/nodes.json.sig"; out=$(run cca policy pull 2>&1)
-ok "映射仓库里没有 nodes.json 了：这台机器上的参考节点也删掉" '[ ! -e "$H/.cca/policy/nodes.json" ] && ! printf "%s" "$out" | grep -q "参考节点："'
-rm -f "$T/away" "$T/verge/reject_text" "$V/profiles/Lprofile1.yaml" "$H/.cca/backup/clash-verge-Lprofile1.yaml"
-cp "$T/verge/profiles.snap" "$V/profiles.yaml"; cp "$T/verge/base.snap" "$T/verge/base.yaml"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
-run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 
 fi
 if sect 11b3; then
@@ -3176,8 +2918,7 @@ core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; f
 nodes_wait() { local i; for i in $(seq 1 80); do [ -f "$CN/nodes.json" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && return 0; sleep 0.1; done; return 1; }
 cp "$H/.cca/config.json" "$T/config.core"; cp "$H/.cca/accounts.json" "$T/accounts.core"
 run cca local off >/dev/null 2>&1
-mv "$V" "$V.off"; touch "$T/verge/down"   # 这台 Mac 上没有 Clash 客户端了
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy', None); c.pop('local', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"   # 连 local 一起清掉（上一句 cca local off 记的 core_off）：模拟全新机器，在家照样拷节点
 rm -rf "$T/policy.core"; mv "$H/.cca/policy" "$T/policy.core"; mkdir -p "$H/.cca/policy"
 edit_table 'j["alice@example.com"] = "US-A"'
 mkdir -p "$GA/Contents/MacOS"
@@ -3222,10 +2963,12 @@ touch "$T/away"; : > ssh.log; : > open.log; : > gh.log; : > curl.log
 out=$(runev cca @alice --version 2>&1); rc=$?
 ok "在外面、没有 Clash 客户端、非交互（界面 App）：记一条 consent（builtin_core），不下载、不启动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"builtin_core\" and e[\"grant\"] == \"builtin_core\"" && ! grep -q "GH mihomo" gh.log && ! cfgok "c[\"local\"].get(\"client\")"'
 out=$(run cca @alice --version 2>&1); rc=$?
-ok "在外面、没有 Clash 客户端、非交互（Dock 上的启动器、脚本）：说明可以用内置代理，交给终端（cca local setup），不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没装的话可以用 cca 内置的代理）：在终端里运行 cca local setup 配置一次" && ! cfgok "c[\"local\"].get(\"client\")" && ! grep -q "GH mihomo" gh.log'
+ok "在外面、还没配置内置代理、非交互（Dock 上的启动器、脚本）：说明可以用内置代理，交给终端（cca local setup），不启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在终端里运行 cca local setup 配置一次" && ! cfgok "c[\"local\"].get(\"client\")" && ! grep -q "GH mihomo" gh.log'
 out=$(runev CCA_GRANT=builtin_core cca @alice --version 2>&1); rc=$?
 ok "界面 App 里同意之后（带着授权重跑）：改用内置代理：下载内核（按 SHA256 校验），在后台打开界面 App（--core），App 起内核，账号照常启动" '[ $rc -eq 3 ] && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo mihomo-darwin-.*-v1.19.33.gz$" gh.log && grep -qF "OPEN [-g] [$GA] [--args] [--core]" open.log && grep -qx START "$CD/core.log" && [ "$(cat "$CD/home")" = "$CN" ] && [ "$(cat "$CN/mihomo.pid")" = "$(cat "$CD/pid")" ] && [ -z "$(ls "$CN" | grep "^dl\.")" ]'
 ok "在外面：经内置代理的 7901 出去（CCA-1 选中 US-A），Claude Code 拿到的代理也是它；不连路由器" '[ "$(csel CCA-1)" = US-A ] && grep -q "CURL via local:7901 https://claude.ai/cdn-cgi/trace" curl.log && lastenv | grep -q "https_proxy=http://127.0.0.1:7901" && [ ! -s ssh.log ]'
+run cca usage alice >/dev/null 2>&1
+ok "在外面 cca usage：经内置代理的端口查" 'grep "^USAGE: " claude.log | tail -n 1 | grep -q "email=alice@example.com https_proxy=http://127.0.0.1:7901"'
 ok "内置代理的配置（600）：只有 127.0.0.1 上的入站（各自直通 CCA-n）、可选节点、一条 MATCH,REJECT；不开通用的代理端口、TUN、DNS；控制接口只开 Unix socket，不记选中的节点" '[ "$(stat -f %Lp "$CN/config.yaml")" = 600 ] && ccfg "all(l[\"listen\"] == \"127.0.0.1\" and l[\"proxy\"] == \"CCA-%d\" % (l[\"port\"] - 7900) for l in c[\"listeners\"]) and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\")) and c[\"external-controller-unix\"].endswith(\".sock\") and c[\"profile\"][\"store-selected\"] is False and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A2\"] and c[\"proxy-groups\"][0][\"proxies\"][0] == \"US-A\""'
 n0=$(creloads); : > open.log; : > gh.log
 run cca @alice --version >/dev/null 2>&1
@@ -3243,7 +2986,7 @@ out=$(run cca @alice --version 2>&1); rc=$?
 ok "账号的节点内置代理里没有定义：重新加载（组里 REJECT 排第一），不启动，说明怎么补" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「US-D」的定义" && [ "$(csel CCA-1)" = REJECT ] && [ "$(creloads)" = $((n0 + 1)) ]'
 out=$(run cca local 2>&1)
 ok "cca local：内置代理的端口和选中的节点；节点定义从哪来、缺哪个" 'printf "%s" "$out" | grep -q "内置代理（控制接口 unix:" && printf "%s" "$out" | grep -q "CCA-1  127.0.0.1:7901  监听中  → REJECT" && printf "%s" "$out" | grep -q "节点定义：从路由器拷的 4 个" && printf "%s" "$out" | grep -q "没有定义的节点：US-D"'
-# 维护者的参考节点补上路由器那份里没有的（和往路由器、Clash Verge 里补的同一套规则：同名的以路由器的为准）
+# 维护者的参考节点补上路由器那份里没有的（和往路由器里补的同一套规则：同名的以路由器的为准）
 printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-D", "type": "ss", "server": "192.0.2.4", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}, {"name": "US-A", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "y"}, {"name": "AI-Z", "type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$H/.cca/policy/nodes.json"
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "维护者的参考节点补上缺的 US-D：重新加载一次，照常启动；同名的 US-A 以路由器的为准，不是可选节点的 AI-Z 不放" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = US-D ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"HK-A2\", \"US-D\"] and c[\"proxies\"][0][\"server\"] == \"192.0.2.1\""'
@@ -3277,40 +3020,57 @@ ok "没装界面 App、非交互（启动器、脚本）：说明，交给终端
 mv "$GA.off" "$GA"
 run cca @alice --version >/dev/null 2>&1
 ok "装回界面 App：再下载内核、起内核，照常启动" '[ -x "$CN/mihomo-v1.19.33" ] && [ -f "$CD/up" ] && [ "$(csel CCA-1)" = US-A ]'
-# 终端里（交互）在外面、还没配置本机客户端：照 cca local setup 的流程问（没装 Clash Verge 时默认内置代理，选 n 手动配置别的客户端）
+# 终端里（交互）在外面、还没配置本机客户端：照 cca local setup 的流程问（用内置代理吗）
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
-ok "终端里在外面、还没配置本机客户端：照 cca local setup 问（没装 Clash Verge 时默认用内置代理），答 y 照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "用内置代理吗" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(csel CCA-1)" = US-A ]'
+ok "终端里在外面、还没配置本机客户端：照 cca local setup 问（用内置代理吗），答 y 照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "用内置代理吗" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(csel CCA-1)" = US-A ]'
 # 关掉、在家重新配置
 run cca local off >/dev/null 2>&1
 ok "cca local off：关掉内置代理（记下关掉过），节点定义和配置删掉，停掉内核（界面 App 没开着时）；内核文件留着" 'cfgok "c[\"local\"] == {\"core_off\": \"1\"}" && [ ! -e "$CN/nodes.json" ] && [ ! -e "$CN/config.yaml" ] && [ ! -f "$CD/up" ] && [ -x "$CN/mihomo-v1.19.33" ]'
 out=$(run CCA_GUI_OS=15 cca @alice --version 2>&1); rc=$?
-ok "macOS 太旧（内置代理在界面 App 里运行，要 macOS 26）：说明要装 Clash 客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理要 macOS 26 或更新"'
+ok "macOS 26 以下也能用内置代理（内核由 cca 在后台无头运行，不要界面 App）：还没配置时交给 cca local setup，不再说要 macOS 26" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca local setup" && ! printf "%s" "$out" | grep -q "要 macOS 26"'
 rm -f "$T/away"; : > ssh.log
 run cca @alice --version >/dev/null 2>&1; sleep 1
 ok "关掉过内置代理：在家不再拷节点定义" '! grep -q "sh -s defs" ssh.log && [ ! -e "$CN/nodes.json" ]'
 out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
-ok "cca local setup：没装 Clash Verge 时默认用内置代理；在家先从路由器拷节点定义，然后让内核就绪" 'printf "%s" "$out" | grep -q "用内置代理吗" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ -f "$CD/up" ]'
+ok "cca local setup：用内置代理（问一句），在家先从路由器拷节点定义，然后让内核就绪" 'printf "%s" "$out" | grep -q "用内置代理吗" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ -f "$CD/up" ]'
+# 自定义节点（只给没有路由器、用内置代理的机器）：分享链接 / Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json（600），名字加进可选节点
+cp "$H/.cca/config.json" "$T/cfg.cn.bak"
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('router',None); json.dump(c,open(p,'w'),indent=2,ensure_ascii=False)" "$H/.cca/config.json"
+out=$(sess '{"add.basic":[{"email":"cn@example.com","alias":""}]}' --eof-at add.node -- cca add 2>&1); rc=$?
+ok "加账号选节点：没有路由器、能用内置代理时，末尾多一项「自定义代理…」（选它可粘贴分享链接 / Clash 节点）" '[ "$(asks)" = "add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and any(\"自定义代理\" in o[\"label\"] for o in e[\"fields\"][0][\"options\"])"'
+VMLINK=$(python3 -c "import base64,json;print('vmess://'+base64.b64encode(json.dumps({'ps':'My Node','add':'198.51.100.9','port':'443','id':'uu','aid':'0','net':'ws','host':'h.example.com','path':'/p','tls':'tls','scy':'auto'}).encode()).decode())")
+out=$(run cca node add "$VMLINK" 2>&1); rc=$?
+ok "cca node add 分享链接：解析 vmess、内核 -t 校验、存进 custom-nodes.json（600），名字加进可选节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加好了自定义节点「My Node」" && [ "$(stat -f %Lp "$CN/custom-nodes.json")" = 600 ] && python3 -c "import json,sys; p=json.load(open(sys.argv[1]))[\"proxies\"][0]; sys.exit(0 if p[\"name\"]==\"My Node\" and p[\"server\"]==\"198.51.100.9\" and p[\"type\"]==\"vmess\" and p[\"network\"]==\"ws\" else 1)" "$CN/custom-nodes.json" && cfgok "\"My Node\" in c[\"nodes\"]"'
+ok "cca node ls：列出自定义节点（名字、类型、服务器:端口）" 'run cca node ls 2>&1 | grep -q "My Node（vmess 198.51.100.9:443）"'
+out=$(run cca node add "这不是节点配置" 2>&1); rc=$?
+ok "cca node add 认不出的内容：报错、不存（custom-nodes.json 还是只有一个）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "认不出" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if len(j[\"proxies\"])==1 else 1)" "$CN/custom-nodes.json"'
+echo "203.0.113.77" > "$T/core/reject_text"
+out=$(run cca node add "vless://u@203.0.113.77:443?security=tls#Bad" 2>&1); rc=$?
+rm -f "$T/core/reject_text"
+ok "cca node add 内核 -t 校验没过：报错、不存" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "校验没通过" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if len(j[\"proxies\"])==1 else 1)" "$CN/custom-nodes.json"'
+python3 -c "import json,sys; p=sys.argv[1]; t=json.load(open(p)); t[\"甲(z@example.com)\"]=\"My Node\"; json.dump(t,open(p,'w'),ensure_ascii=False)" "$H/.cca/accounts.json"
+out=$(run cca node rm "My Node" 2>&1); rc=$?
+ok "cca node rm：还有账号在用时不删（说哪个账号在用）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "还有账号在用" && cfgok "\"My Node\" in c[\"nodes\"]"'
+python3 -c "import json,sys; p=sys.argv[1]; t=json.load(open(p)); t.pop(\"甲(z@example.com)\",None); json.dump(t,open(p,'w'),ensure_ascii=False)" "$H/.cca/accounts.json"
+out=$(run cca node rm "My Node" 2>&1); rc=$?
+ok "cca node rm：从 custom-nodes.json 和可选节点里去掉" '[ $rc -eq 0 ] && ! cfgok "\"My Node\" in c[\"nodes\"]" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if not j[\"proxies\"] else 1)" "$CN/custom-nodes.json"'
+cp "$T/cfg.cn.bak" "$H/.cca/config.json"
+out=$(run cca node add "$VMLINK" 2>&1); rc=$?
+ok "配置了路由器的机器：cca node add 拒绝（出口节点在 cca router setup 里选）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "配置了路由器"'
+rm -f "$CN/custom-nodes.json"
 rm -f "$CN"/mihomo-v*; : > gh.log
 run cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 50); do [ -x "$CN/mihomo-v1.19.33" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done
 ok "已经用内置代理、内核文件不在（比如 cca 升级换了内核版本）：在家启动后在后台先下好（在外面直连 GitHub 可能很慢）" '[ -x "$CN/mihomo-v1.19.33" ] && grep -q "^GH mihomo" gh.log'
-# 配置本机 Clash 的表单（没装 Clash Verge）：内置代理 / 手动配置别的客户端
-run cca local off >/dev/null 2>&1; core_stop
+# 配置本机出口的表单（local.builtin）：GUI 里问一句用不用内置代理
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); (c.get('local') or {}).pop('client', None); json.dump(c, open(p, 'w'), ensure_ascii=False)" "$H/.cca/config.json"   # 前面已把 local.client 设成 builtin；清掉它，cmd_local_setup 才会问 local.builtin
 : > env.log
-out=$(sess '{"local.client":[{"v":"2"}],"local.manual":[{"ctl":"不是地址","secret":""},{"ctl":"unix:/tmp/cca-none.sock","secret":"CLASH-SECRET-SENTINEL"}]}' -- cca local setup 2>&1); rc=$?
-ok "提问会话：配置本机 Clash：没装 Clash Verge 时选内置代理或手动配置；手动配置的一页有要加的配置（只显示，不用答）、外部控制地址、密钥" '[ "$(asks)" = "local.client local.manual local.manual local.manual" ] && evq "e.get(\"q\") == \"local.client\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"default\"] == \"1\" and len(e[\"fields\"][0][\"options\"]) == 2" && evq "e.get(\"seq\") == 2 and e[\"fields\"][0][\"kind\"] == \"code\" and \"listeners:\" in e[\"fields\"][0][\"value\"] and \"proxy-groups:\" in e[\"fields\"][0][\"value\"] and e[\"fields\"][2][\"kind\"] == \"secret\" and e[\"fields\"][2][\"optional\"]"'
-ok "提问会话：配置本机 Clash：地址写错、连不上都带着原因重问，连不上时不留配置；密钥不进事件文件和命令行" 'evq "e.get(\"seq\") == 3 and e[\"fields\"][1][\"error\"]" && evq "e.get(\"seq\") == 4 and \"连不上 unix:/tmp/cca-none.sock\" in e[\"fields\"][1][\"error\"] and e[\"fields\"][1][\"value\"] == \"unix:/tmp/cca-none.sock\"" && ! cfgok "c[\"local\"].get(\"client\")" && ! grep -qF CLASH-SECRET-SENTINEL "$T/ev.jsonl" env.log py.count'
-out=$(sess '{"local.client":[{"v":"1"}]}' -- cca local setup 2>&1); rc=$?
-ok "提问会话：配置本机 Clash：选内置代理：配好（有结果事件）" '[ $rc -eq 0 ] && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && [ -f "$CD/up" ]'
-# 换回 Clash Verge（cca local setup）：先停掉内置代理的内核（它还占着 127.0.0.1 的端口），删掉它的配置和拷来的节点
-mv "$V.off" "$V"; rm -f "$T/verge/down"
-out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
-ok "从内置代理换回 Clash Verge：先停掉内置代理的内核、删掉它的配置和拷来的节点，再配置 Clash Verge" '[ ! -f "$CD/up" ] && [ ! -e "$CN/config.yaml" ] && [ ! -e "$CN/nodes.json" ] && cfgok "c[\"local\"][\"client\"] == \"clash-verge\"" && printf "%s" "$out" | grep -q "现在配置 Clash Verge 吗"'
-# 还原：配置、账号表、映射还原，重新配置 Clash Verge
+out=$(sess '{"local.builtin":[{"v":"y"}]}' -- cca local setup 2>&1); rc=$?
+ok "提问会话：配置本机出口：GUI 问用不用内置代理，答是就配好（有结果事件）" '[ $rc -eq 0 ] && [ "$(asks)" = local.builtin ] && evq "e.get(\"q\") == \"local.builtin\" and e[\"fields\"][0][\"kind\"] == \"confirm\"" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && [ -f "$CD/up" ]'
+# 还原：配置、账号表、映射还原
 core_stop; rm -rf "$GA" "$CN" "$H/.cca/policy"; mv "$T/policy.core" "$H/.cca/policy"
 cp "$T/config.core" "$H/.cca/config.json"; cp "$T/accounts.core" "$H/.cca/accounts.json"
-run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 
 fi
 if sect 11b5; then
@@ -3430,7 +3190,7 @@ if sect 11b6; then
 #       经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。直连通的照旧问路由器。这一节结束时映射仓库、假命令都还原
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
-rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 scfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$SH/.cca/config.json" "$1"; }   # 服务器那边的 config.json（c）
 spub() { cat "$SH/.cca/policy/id_ed25519.pub"; }
 cp "$PR/policy.json" "$T/pr.srv"; rm -f "$T/pr.srv.sig"; [ ! -f "$PR/policy.json.sig" ] || cp "$PR/policy.json.sig" "$T/pr.srv.sig"
@@ -3473,7 +3233,7 @@ if sect 11c; then
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3" "$T/tmp3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
-r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射；仓库不是默认的那个时，给维护者的命令带上 -R" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射" && printf "%s" "$out" | grep -q "    ./policy.sh key add -R example/cca-policy '\''ssh-ed25519 AAAA[^ ]* cca-policy@[^ ]*'\'' [^ ]*$"'
@@ -3628,7 +3388,6 @@ mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
-ok "restore：Clash Verge 全局扩展脚本里 cca 的那一段删掉（逐字节还原），本机端口池移除" 'cmp -s "$VS" "$T/pristine_script.js" && ! grep -qx 7901 "$T/verge/listening"'
 ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)

@@ -134,12 +134,10 @@ struct SyncState: KnownValues {
 struct LocalClient: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
-    static let clashVerge = LocalClient(rawValue: "clash-verge")
-    static let manual = LocalClient(rawValue: "manual")
-    /// 内置代理：App 托管的 mihomo 内核（PROTOCOL 7）
+    /// 内置代理：cca 托管的 mihomo 内核（macOS 26+ 在 App 里，以下在后台；PROTOCOL 7）
     static let builtin = LocalClient(rawValue: "builtin")
     static let unset = LocalClient(rawValue: "")
-    static let allKnown: [LocalClient] = [.clashVerge, .manual, .builtin, .unset]
+    static let allKnown: [LocalClient] = [.builtin, .unset]
 }
 
 struct Backend: KnownValues {
@@ -369,7 +367,6 @@ struct ConsentItem: KnownValues {
     static let routerRestart = ConsentItem(rawValue: "router_restart")
     static let lowPurity = ConsentItem(rawValue: "low_purity")
     static let codexFallbackOff = ConsentItem(rawValue: "codex_fallback_off")
-    static let openClashVerge = ConsentItem(rawValue: "open_clash_verge")
     static let builtinCore = ConsentItem(rawValue: "builtin_core")
     /// 重置额度会用掉一次重置机会（范围是账号目录名，默认不同意）。
     static let resetCredit = ConsentItem(rawValue: "reset_credit")
@@ -377,7 +374,7 @@ struct ConsentItem: KnownValues {
     static let keyForget = ConsentItem(rawValue: "key_forget")
     /// 辅助安装直连不通：经内置代理的一个节点装 claude / codex / agy 命令（范围是节点名，默认同意；App 平时把 install-cli 交给终端）。
     static let installProxy = ConsentItem(rawValue: "install_proxy")
-    static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .openClashVerge, .builtinCore,
+    static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy]
 }
 

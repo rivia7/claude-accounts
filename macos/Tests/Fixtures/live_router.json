@@ -17,9 +17,9 @@
     "error": null
   },
   "local": {
-    "configured": true,
-    "client": "clash-verge",
-    "name": "Clash Verge",
+    "configured": false,
+    "client": "",
+    "name": "内置代理",
     "running": null,
     "error": null
   },

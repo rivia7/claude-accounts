@@ -17,11 +17,10 @@
     "error": null
   },
   "local": {
-    "configured": true,
-    "client": "clash-verge",
-    "name": "Clash Verge",
-    "running": true,
-    "error": null
+    "configured": false,
+    "client": "",
+    "name": "内置代理",
+    "running": null
   },
   "slots": [
     {
@@ -30,8 +29,8 @@
       "port": 7901,
       "tool": "claude",
       "key": "工作(bob@example.com)",
-      "expected": "Verge-B",
-      "selected": "Verge-B",
+      "expected": "US-B",
+      "selected": "US-B",
       "in_kernel": true,
       "listening": true,
       "reachable": true,

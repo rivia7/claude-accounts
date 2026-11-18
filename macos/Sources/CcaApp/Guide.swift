@@ -191,7 +191,7 @@ struct TutorialCard {
         TutorialCard(title: "改别名、换外观", points: [
             ("pencil", "直接点账号页上的名字就能改别名：回车保存，Esc 取消。"),
             ("circle.lefthalf.filled", "左下角的按钮切换浅色、深色，或者跟随系统。"),
-            ("plus", "添加账号：点左边账号列表上的「＋」；配置路由器、本机 Clash：点工具栏的「＋」，按提示完成。"),
+            ("plus", "添加账号：点左边账号列表上的「＋」；配置路由器、内置代理：点工具栏的「＋」，按提示完成。"),
         ], art: .rename),
         TutorialCard(title: "菜单栏、更新和帮助", points: [
             ("menubar.rectangle", "屏幕顶上菜单栏的 cca 图标：不开主窗口也能看额度、一键打开账号。关掉主窗口后 cca 还在后台运行，要彻底退出点这里面的「退出」。"),

@@ -202,26 +202,18 @@ apply_now
         self.assertIn('US-D', (self.root / 'missing-source').read_text())
         self.assertFalse((self.root / 'unexpected-restart').exists())
 
-    def test_local_bad_selection_does_not_reload_and_claim_ready(self):
-        result = self.run_shell(['local_ensure'], '''
-load_local() { LOCAL_CLIENT=manual LOCAL_APPLIED=same LOCAL_WANT=same; }
-local_up() { return 0; }
-local_ports_ok() { return 0; }
-local_select_all() { return 1; }
-local_apply() { touch unexpected-reload; return 0; }
-local_ensure
-''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.root / 'unexpected-reload').exists())
-
     def test_missing_local_group_can_be_rebuilt_and_checked(self):
-        result = self.run_shell(['local_ensure'], '''
-load_local() { LOCAL_CLIENT=manual LOCAL_APPLIED=same LOCAL_WANT=same; }
-local_up() { return 0; }
+        result = self.run_shell(['core_ensure'], '''
+core_possible() { return 0; }
+core_fetch() { return 0; }
+py() { return 0; }
+core_sock() { echo unused; }
+core_up() { return 0; }
 local_ports_ok() { return 0; }
 local_select_all() { [ -f rebuilt ] && return 0; return 2; }
-local_apply() { touch rebuilt; }
-local_ensure
+core_reload() { touch rebuilt; return 0; }
+LOCAL_APPLIED=same LOCAL_WANT=same
+core_ensure
 ''')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / 'rebuilt').exists())

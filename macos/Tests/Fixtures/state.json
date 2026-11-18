@@ -26,9 +26,9 @@
       "proxy_host": "192.0.2.10"
     },
     "local": {
-      "configured": true,
-      "client": "clash-verge",
-      "name": "Clash Verge"
+      "configured": false,
+      "client": "",
+      "name": "内置代理"
     },
     "nodes": [
       "US-A",
@@ -58,8 +58,7 @@
         "port": 7901,
         "tool": "claude",
         "key": "工作(bob@example.com)",
-        "node": "US-B",
-        "local_node": "Verge-B"
+        "node": "US-B"
       },
       {
         "slot": 2,
@@ -67,8 +66,7 @@
         "port": 7902,
         "tool": "claude",
         "key": "carol@example.com",
-        "node": "US-C",
-        "local_node": "US-C"
+        "node": "US-C"
       },
       {
         "slot": 3,
@@ -76,8 +74,7 @@
         "port": 7903,
         "tool": "claude",
         "key": "测试(dave@example.com)",
-        "node": "US-D",
-        "local_node": "US-D"
+        "node": "US-D"
       },
       {
         "slot": 4,
@@ -85,8 +82,7 @@
         "port": 7904,
         "tool": "claude",
         "key": "香港接口",
-        "node": "HK-A",
-        "local_node": "HK-A"
+        "node": "HK-A"
       },
       {
         "slot": 5,
@@ -94,8 +90,7 @@
         "port": 7905,
         "tool": "codex",
         "key": "frank@example.com",
-        "node": "US-A",
-        "local_node": "US-A"
+        "node": "US-A"
       },
       {
         "slot": 6,
@@ -103,8 +98,7 @@
         "port": 7906,
         "tool": "claude",
         "key": "erin@example.com",
-        "node": "US-A",
-        "local_node": "US-A"
+        "node": "US-A"
       },
       {
         "slot": 7,
@@ -112,8 +106,7 @@
         "port": 7907,
         "tool": "claude",
         "key": "grace@example.com",
-        "node": "US-C",
-        "local_node": "US-C"
+        "node": "US-C"
       },
       {
         "slot": 8,
@@ -121,14 +114,12 @@
         "port": 7908,
         "tool": null,
         "key": null,
-        "node": "REJECT",
-        "local_node": "REJECT"
+        "node": "REJECT"
       }
     ],
     "nodes": [
       {
         "name": "US-A",
-        "local_name": "US-A",
         "users": [
           {
             "tool": "claude",
@@ -142,7 +133,6 @@
       },
       {
         "name": "US-B",
-        "local_name": "Verge-B",
         "users": [
           {
             "tool": "claude",
@@ -152,7 +142,6 @@
       },
       {
         "name": "US-C",
-        "local_name": "US-C",
         "users": [
           {
             "tool": "claude",
@@ -166,7 +155,6 @@
       },
       {
         "name": "US-D",
-        "local_name": "US-D",
         "users": [
           {
             "tool": "claude",
@@ -176,7 +164,6 @@
       },
       {
         "name": "HK-A",
-        "local_name": "HK-A",
         "users": [
           {
             "tool": "claude",

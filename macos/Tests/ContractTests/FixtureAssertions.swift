@@ -71,9 +71,8 @@ func fixtureAssertions() {
         check("state：路由器待同步", s.routing?.sync == .pending && s.routing?.localSync == .ok)
         check("state：notices", s.notices.count == 2 && s.notices[0].code == .policyPinned && s.notices[0].oldNode == "US-A"
               && s.notices[1].code == .nodesFilled && s.notices[1].tool == nil && s.notices[1].node == "HK-A")
-        check("state：config", s.config?.routerConfigured == true && s.config?.localConfigured == true && s.config?.minTrust == 50
-              && s.config?.local?.client == .clashVerge && s.config?.policy?.repo == "example/cca-policy")
-        check("state：本机 Clash 的叫法", s.routing?.slot(1)?.localNode == "Verge-B")
+        check("state：config", s.config?.routerConfigured == true && s.config?.localConfigured == false && s.config?.minTrust == 50
+              && s.config?.policy?.repo == "example/cca-policy")
         check("state：bob 的 Claude Code 还记着 Pro（账号现在是 Ultra），别的账号没有（null、Codex 没这个字段）",
               bob?.usage?.outdatedLoginPlan == "Pro" && s.account(AccountRef(tool: .claude, key: "erin@example.com"))?.usage?.outdatedLoginPlan == nil
               && frank?.usage?.outdatedLoginPlan == nil)
@@ -131,8 +130,8 @@ func fixtureAssertions() {
         check("live_router_drift：有 drift", l.hasDrift && l.summary?.drift == 2)
     }
     if let l = loadFixture(LiveDoc.self, "live_local.json") {
-        check("live_local：本机 Clash", l.route == .local && l.local?.running == true && l.router?.reachable == false
-              && l.router?.error == nil && l.slot(1)?.expected == "Verge-B" && l.proxyHost == "127.0.0.1")
+        check("live_local：在外面（还没配置本机出口）", l.route == .local && l.local?.configured == false && l.router?.reachable == false
+              && l.router?.error == nil && l.proxyHost == "127.0.0.1")
     }
     if let l = loadFixture(LiveDoc.self, "live_unreachable.json") {
         check("live_unreachable：已分配的槽位都 closed", l.slots.filter { $0.tool != nil }.allSatisfy { $0.state == .closed }

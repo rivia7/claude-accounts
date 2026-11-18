@@ -97,7 +97,7 @@ struct RouteSection: View {
             s.symbol = a.pinned ? "lock.fill" : nil
             var notes: [String] = []
             if a.pinned { notes.append("维护者锁定") }
-            if let local = localName(a), local != node { notes.append("Clash Verge 里叫 \(local)") }
+            if let local = localName(a), local != node { notes.append("本机叫 \(local)") }
             s.detail = notes.isEmpty ? nil : notes.joined(separator: "\n")
             if a.pinned { s.help = "维护者的映射锁定了这个账号的节点（\(a.pinnedNode ?? node)），这里不能改" }
             if broken { s.status = .unknown; s.line = .broken }
@@ -240,7 +240,7 @@ struct RouteStrip: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if let d = s.detail, !d.isEmpty {
-                            // 最多三行：说明里可能自带换行（“维护者锁定”下面一行“Clash Verge 里叫 …”），站窄时第二段还能再折一行
+                            // 最多三行：说明里可能自带换行（“维护者锁定”下面一行“本机叫 …”），站窄时第二段还能再折一行
                             Text(d)
                                 .font(.caption)
                                 .foregroundStyle(s.detailTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))

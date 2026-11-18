@@ -78,7 +78,7 @@ struct RoutingPage: View {
             let name = local ? (nonEmpty(n.localName) ?? n.name) : n.name
             var note: String?
             if let ln = nonEmpty(n.localName), ln != n.name {
-                note = local ? "路由器上叫 \(n.name)" : "Clash Verge 里叫 \(ln)"
+                note = local ? "路由器上叫 \(n.name)" : "本机叫 \(ln)"
             }
             return MapNode(name: name, note: note, users: n.users.count)
         }
@@ -90,7 +90,7 @@ struct RoutingPage: View {
         return out
     }
 
-    /// 中间面板的名字：OpenClash / ShellCrash / Clash Verge，下面一行是路由器的地址。
+    /// 中间面板的名字：OpenClash / ShellCrash / 内置代理，下面一行是路由器的地址。
     private var panelTitle: (String, String?) {
         let live = model.live
         if lookingLocal {

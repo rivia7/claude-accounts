@@ -769,6 +769,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `onboard.add` | `_onboard`（配置向导） | `confirm` | 网络配好后：现在添加第一个账号吗（接着走 `add.basic` / `add.node`） |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
 | `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
+| `node.custom` | `[codex] add` / `node add`（选节点时「自定义代理…」） | `text` | 粘贴一条分享链接（vmess/vless/ss/trojan/hysteria2/tuic）当出口节点；多行 Clash 配置在终端 `cca node add` |
+| `local.builtin` | `local setup` / 在外面首次启动 | `confirm` | 用内置代理吗（cca 跑一个 mihomo 内核，每个账号一个本机端口走各自节点） |
 | `api.basic` | `[codex] add api` | `text`、`text`、`secret`、`text` | 别名、接口地址（校验 url）、API key、模型（可选，校验 model） |
 | `api.node` | `[codex] add api` | `choice` | 出口节点（第一项是直连）。没有可选节点时不问 |
 | `key.secret` | `[codex] key 账号` | `secret` | API key（第三方 API 账号：换 key；官方账号：记一把备查的，页上的 `message` 说明 cca 不拿它启动） |
@@ -777,9 +779,6 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `router.basic` | `router setup` | `text` ×3 | 路由器地址（校验 host）、SSH 用户（校验 sshuser）、SSH 端口（校验 port），预填现在的；连不上时带着原因重问 |
 | `router.password` | `router setup` | `secret` | SSH 密码（只在密钥还不能登录时问；错了带着原因重问）。只经答案管道：cca 用 `SSH_ASKPASS` 交给 ssh，经私有目录里的 FIFO，读一次 |
 | `router.nodes` | `router setup` | `multi`（至少一个） | 账号可用的出口节点（现在的预先选好；还有账号在用的不能去掉） |
-| `local.verge` | `local setup` | `confirm` | 有 Clash Verge 时：配置它吗 |
-| `local.client` | `local setup` | `choice` | 没有 Clash Verge 时：内置代理（默认）或手动配置别的客户端 |
-| `local.manual` | `local setup` | `code`、`text`、`secret`（可选） | 要加的配置；外部控制地址（校验 controller）、密钥。连不上时带着原因重问 |
 | `edit.form` | `[codex] edit` | `choice`（`menu`）、`text` | 账号表的常用项，一页：每个官方账号的节点（维护者固定的只有一个选项，答案不算数）；第三方 API 账号的接口地址、模型、出口、环境变量（只有 Claude 的有）。不显示 key。见下 |
 | `install.node` | `[codex\|agy] install-cli`、用到没装的命令时 | `choice` | 维护者的映射没指定安装用的节点（或者这台机器没有它的定义）时：经内置代理的哪个节点装（只用这一次，选了就算同意）。App 平时把 `install-cli` 交给终端 |
 | `mail.setup` | `mail setup [--account]` | `text`、`secret` | 邮箱助手（App 里一页问完，4.11）：收登录邮件的 Gmail 地址（校验 gmail，预填上次的）、应用专用密码（校验 `any`，Gmail 的密码带空格）。cca 登录一次核对过才存进钥匙串；地址 / 密码不对、连不上时带着原因重问 |

@@ -222,7 +222,7 @@ enum Snapshot {
                 ("flow-api", .addAPI(), 0), ("flow-api-node", .addAPI(), 1),
                 ("flow-key", .apiKey(prefix: [], key: "kimi", name: "kimi"), 0),
                 ("flow-router", .routerSetup, 0), ("flow-router-password", .routerSetup, 1), ("flow-router-nodes", .routerSetup, 2),
-                ("flow-local", .localSetup, 0), ("flow-local-manual", .localSetup, 1),
+                ("flow-local", .localSetup, 0),
                 ("flow-edit", .edit(prefix: []), 0),
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
                 ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),

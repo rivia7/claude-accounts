@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.8", title: "出门在外更省心：统一用内置代理，不再需要 Clash Verge", points: [
+            .init(symbol: "bolt.horizontal.circle",
+                  text: "出门在外连不上路由器时，现在统一用 cca 自带的内置代理（mihomo 内核）：macOS 26 以上在这个 App 里跑，26 以下由 cca 在后台跑，全版本都能用。不用再装 Clash Verge 或手动配别的客户端；cca local off 停掉内核、删掉配置和拷来的节点。"),
+            .init(symbol: "link.badge.plus",
+                  text: "没有路由器、账号又不在维护者映射里时，可以自己粘一条分享链接（vmess、vless、ss、trojan 等）或一段 Clash 节点配置当出口：cca node add 加，cca node ls / rm 看和删，加之前 cca 先用内核校验一下。"),
+            .init(symbol: "wifi",
+                  text: "配置分流时自动探测当前网络的网关支不支持 Clash，向导默认帮你选好走路由器还是内置代理、把路由器地址也预填上，少填几步。"),
+        ], art: "route"),
         ReleaseNote(version: "3.3.0-beta.7", title: "配置更有谱：新手教程手把手带你配好第一台 Mac", points: [
             .init(symbol: "list.number",
                   text: "新手教程前面加了几张配置步骤卡：选这台 Mac 怎么联网（路由器 / 没有路由器用内置代理 / 先跳过）、添加第一个账号，照着一步步就能配好。首页的欢迎卡片也多了「先看看怎么配置」，动手之前先看图文。"),
