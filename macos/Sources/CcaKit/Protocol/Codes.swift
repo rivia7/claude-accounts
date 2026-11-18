@@ -299,8 +299,10 @@ struct ResultCode: KnownValues {
     static let mailForgotten = ResultCode(rawValue: "mail_forgotten")
     /// 本机 UDP 走节点：打开、换节点、关掉、删掉系统服务（`cca local udp …`，PROTOCOL 7.1）。
     static let localUDP = ResultCode(rawValue: "local_udp")
+    /// 配置向导走完了（`cca _onboard`，PROTOCOL 4.6）：中途的 `added`、`router_ready` 等被它盖掉。
+    static let onboarded = ResultCode(rawValue: "onboarded")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
-                                         .mailReady, .mailForgotten, .localUDP]
+                                         .mailReady, .mailForgotten, .localUDP, .onboarded]
 }
 
 struct FailCode: KnownValues {

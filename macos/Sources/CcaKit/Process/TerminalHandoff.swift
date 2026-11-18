@@ -143,9 +143,9 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         Handoff(arguments: prefix + ["rm", key], title: "删除 \(name)", message: "在终端里确认后删除这个账号。", inApp: true)
     }
 
-    /// 配置向导（`cca _onboard`，App 首次运行时引导：选上网方式 → 配置 → 加第一个账号）。要 `hello.forms`；旧版 cca 没有，退回终端的 `cca install`。
+    /// 配置向导（`cca _onboard`，App 首次运行时引导：维护者的映射 → 网络出口 → 添加账号）。要 `hello.forms`；旧版 cca 没有，退回终端的 `cca install`。
     static let onboard = Handoff(arguments: ["_onboard"], title: "配置向导",
-                                 message: "一步步选好上网方式、添加第一个账号。", inApp: true, needsForms: true)
+                                 message: "一步步连上维护者的映射、选好网络出口、添加账号。", inApp: true, needsForms: true)
     static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。", inApp: true, needsForms: true)
     static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。", inApp: true, needsForms: true)
     /// 本机 UDP 走节点（`cca local udp …`，PROTOCOL 7.1）：装、换节点、删掉系统服务时系统自己弹授权框问管理员密码（不经 App）。

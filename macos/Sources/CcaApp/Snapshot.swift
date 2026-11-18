@@ -223,6 +223,7 @@ enum Snapshot {
                 ("flow-key", .apiKey(prefix: [], key: "kimi", name: "kimi"), 0),
                 ("flow-router", .routerSetup, 0), ("flow-router-password", .routerSetup, 1), ("flow-router-nodes", .routerSetup, 2),
                 ("flow-local", .localSetup, 0),
+                ("flow-onboard", .onboard, 0), ("flow-onboard-net", .onboard, 1), ("flow-onboard-add", .onboard, 2),
                 ("flow-edit", .edit(prefix: []), 0),
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
                 ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),

@@ -57,7 +57,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="3.4.0-beta.1"
+VERSION="3.4.0-beta.2"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -261,6 +261,26 @@ gui_answer() {   # gui_answer 序号 字段：读这一页这个字段的答案�
 			"$1 $2 "*) ANSWER=${line#"$1 $2 "}; return 0 ;;
 			"$1 "*) gui_abort ;;   # 同一页的字段对不上就停下：别把值放错地方（可能是密钥）
 		esac
+	done
+}
+gui_answer_wait() {   # gui_answer_wait "序号…" 字段 [秒数]：读这个字段的答案，放进 ANSWER。cca 边等边干活、会自己换页的一页用（policy_wait_page：
+	                    # 等维护者时自动重拉，拉到了自己发下一页，App 收到新的一页就换掉这一页）。第一个参数是这一题先后发过的序号（空格隔开，最后一个
+	                    # 是现在这一页）：只是换了说明再发的同一题，换页前点的答案照样认，别的序号的丢掉。秒数：最多等这么久（整数），到时间了返回 1；
+	                    # 不写就一直等。读到头是取消；现在这一页的字段对不上就停下（同 gui_answer）。不能在 $(…) 里调用
+	local line rc t0 s cur="${1##* }"
+	while :; do
+		t0=$SECONDS
+		if [ -n "${3:-}" ]; then IFS= read -r -t "$3" line <&3; else IFS= read -r line <&3; fi
+		rc=$?
+		if [ $rc -ne 0 ]; then
+			# 到时间了：bash 4 起退出码大于 128；macOS 的 bash 3.2 和读到头一样是 1，按等了多久分（读到头是马上返回的）
+			[ -n "${3:-}" ] && { [ $rc -gt 128 ] || [ $((SECONDS - t0)) -ge 1 ]; } && return 1
+			gui_abort
+		fi
+		for s in $1; do
+			case "$line" in "$s $2 "*) ANSWER=${line#"$s $2 "}; return 0 ;; esac
+		done
+		case "$line" in "$cur "*) gui_abort ;; esac
 	done
 }
 gui_fields() {
@@ -2963,9 +2983,11 @@ def cmd_policy_ask():
 
 
 def cmd_policy_decline():
-    """引导里选了「不用映射」：以后启动不再问（cca policy setup 会清掉这个标记）"""
+    """引导里选了「不用映射」：以后启动不再问（cca policy setup 会清掉这个标记）。配置向导里先记下了仓库再选的不用：仓库也去掉
+    （deploy key、拉到过的映射由 bash 删掉），App 不再定时拉"""
     c = cfg_load()
     c['policy_declined'] = True
+    c.pop('policy', None)
     cfg_save(c)
 
 
@@ -5725,9 +5747,15 @@ def cmd_sync_state(quiet=''):
 
 
 def cmd_nodes_preselect(*names):
-    """路由器上的这些节点里，现在已经是可选节点的编号（从 1 起，空格隔开）"""
-    allowed = set(ctx()[0]['nodes'])
-    print(' '.join(str(i) for i, n in enumerate(names, 1) if n in allowed))
+    """路由器上的这些节点里，预先选好的编号（从 1 起，空格隔开）：现在的可选节点，加上维护者的映射里这台机器的账号要用的
+    （配置向导第 1 步拉到映射、第 2 步配置路由器时不用自己找；这台机器删掉过的账号不算）"""
+    c = ctx()[0]
+    want = set(c['nodes'])
+    for tool in TOOLS:
+        if policy_in_use(tool):
+            skip = set(tool.state(c).get('policy_skip') or [])
+            want.update(n for e, n in policy_map(tool, c).items() if e not in skip)
+    print(' '.join(str(i) for i, n in enumerate(names, 1) if n in want))
 
 
 def cmd_nodes_lost(*picked):
@@ -15406,8 +15434,9 @@ verify_ports() {   # verify_ports [127.0.0.1] [all]：各账号的出口端口�
 }
 
 router_sync_soon() {   # 增删改账号后同步到路由器；在外面连不上路由器时，等回家后的下次启动（摘要对不上会自动补同步）
-	# 没配置路由器、只用本机的客户端（服务器上 cca 内置的代理）：没有路由器要同步（和 sync_if_changed 一样），本机的端口池启动时配好
-	if ! router_ready && [ -n "$LOCAL_SET" ]; then return 0; fi
+	# 从来没配置过路由器（没有地址：加账号不再要求先配置路由器），或者只用本机的客户端（cca 内置的代理）：没有路由器要同步
+	# （和 sync_if_changed 一样），本机的端口池启动时配好。配置过、只是现在用不了（比如密钥没了）的照常报同步失败
+	if ! router_ready && { [ -z "$ROUTER_HOST" ] || [ -n "$LOCAL_SET" ]; }; then return 0; fi
 	if router_ready && ! at_home; then
 		info "现在$(away_what)：回到家里的网络后，下次启动 cca 时会自动同步"
 		return 0
@@ -15523,22 +15552,26 @@ pick_node() {   # pick_node [direct] [给图形界面的 k=v…]：从可选节�
 	return 0
 }
 cmd_add() {   # cca [codex] add [api]
-	local email alias key node out hint
+	local email alias key node out hint pmsg=""
 	[ "${1:-}" = api ] && { cmd_add_api; return; }
 	need_tty
-	# 没配置路由器：先配置。服务器上（从来没配置过路由器（没有地址），只配置了本机的代理，可选节点来自维护者的参考节点）有可选节点就不用，
-	# 还没有、直连又不通的，等维护者确认这台机器、导入节点（builtin_onboard）；配置过、只是现在用不了（比如密钥没了）的，照样先重新配置
-	if ! router_ready; then
-		# macOS：没有路由器时现读本机客户端（内置代理，向导或 cca local setup 配的）——LOCAL_SET 平时只在 py env 里设过，fresh 进程里是空的，
-		# 不读它就会把配好内置代理的无路由器笔记本也逼去配路由器。Linux（服务器）照旧（空 → 交给 server_builtin 的自动判断）
-		on_linux || { [ -n "$LOCAL_SET" ] || { load_local; LOCAL_SET="$LOCAL_CLIENT"; }; }
-		if [ -n "$ROUTER_HOST" ] || [ -z "$LOCAL_SET" ] || [ -z "$(py nodes-allowed)" ]; then
-			if server_builtin; then
-				builtin_onboard "${CMD} add" || return 1
-			else
-				info "官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
-				ROUTER_FORM_WHY="官方账号要经路由器的端口出去，先配置路由器（只用第三方 API 账号的话不需要路由器）。"
+	# 不要求先配置路由器：有可选节点（路由器上选的、维护者映射里的参考节点、自定义代理）就能加。一个都没有时先导入维护者映射里的节点，
+	# 还没有的话，选节点那步可以粘贴一个自定义代理（内置代理用）。只有这样也不行时才先配置路由器：配置过路由器、只是现在用不了（比如密钥
+	# 没了），或者这台机器用不了内置代理。服务器上（从来没配置过路由器、直连不通）照旧等维护者确认这台机器、导入节点（builtin_onboard）
+	if ! router_ready && [ -z "$(py nodes-allowed)" ]; then
+		if server_builtin; then
+			builtin_onboard "${CMD} add" || return 1
+		else
+			policy_import
+			if [ -n "$(py nodes-allowed)" ]; then
+				:
+			elif [ -n "$ROUTER_HOST" ] || ! node_custom_ok; then
+				info "还没有可选的出口节点：先配置路由器，账号从路由器的节点里选出口（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
+				ROUTER_FORM_WHY="还没有可选的出口节点：先配置路由器，账号从它的节点里选出口（只用第三方 API 账号的话不需要路由器）。"
 				cmd_router_setup || return 1
+			else
+				info "还没有可选的出口节点：选节点那步可以粘贴一个自定义代理（分享链接，内置代理用）；家里有装了 OpenClash / ShellCrash 的路由器的话，先运行 ${CMD} router setup"
+				pmsg="还没有可选的出口节点：粘贴一个自定义代理（分享链接）当它的出口，经 cca 内置的代理出去。家里有改好的路由器的话，之后配置路由器再换节点。"
 			fi
 		fi
 	fi
@@ -15562,7 +15595,7 @@ cmd_add() {   # cca [codex] add [api]
 	else
 		say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
 		say ""
-		node=$(pick_node q=add.node "title=添加 ${TOOL_LABEL} 账号" "message=给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）") || return 1
+		node=$(pick_node q=add.node "title=添加 ${TOOL_LABEL} 账号" "message=${pmsg:-给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）}") || return 1
 	fi
 	say ""
 	key=$(py add "$email" "$alias" "$node") || return 1
@@ -15615,9 +15648,9 @@ cmd_add_api() {
 		say ""
 		node=$(pick_node direct q=api.node "title=${title}" "message=${alias} 走哪个出口？国内的服务一般直连；要经代理的选一个节点") || return 1
 		say ""
-		if [ -n "$node" ] && ! router_ready; then
-			info "走节点要先配置路由器"
-			ROUTER_FORM_WHY="走节点要先配置路由器。"
+		if [ -n "$node" ] && ! router_ready && ! core_possible; then   # 和官方账号一样不要求路由器（没有路由器时经内置代理），只有内置代理也用不了时才先配置
+			info "走节点要先配置路由器（这台机器用不了 cca 内置的代理）"
+			ROUTER_FORM_WHY="走节点要先配置路由器（这台机器用不了 cca 内置的代理）。"
 			cmd_router_setup || return 1
 		fi
 	fi
@@ -18371,8 +18404,8 @@ sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路�
 	fi
 	if [ "${st%%	*}" != "${st#*	}" ]; then
 		router_needed || return 0   # 只有直连的第三方 API 账号、也没配置路由器：没有要同步的
-		# 没配置路由器、只用本机的客户端（服务器上 cca 内置的代理）：没有路由器要同步，本机的端口池启动时配好
-		if ! router_ready && [ -n "$LOCAL_SET" ]; then return 0; fi
+		# 从来没配置过路由器，或者只用本机的客户端（cca 内置的代理）：没有路由器要同步，本机的端口池启动时配好
+		if ! router_ready && { [ -z "$ROUTER_HOST" ] || [ -n "$LOCAL_SET" ]; }; then return 0; fi
 		if router_ready && ! at_home; then
 			info "账号表或路由器端脚本有变化：现在$(away_what)，回到家里的网络后再同步"
 			return 0
@@ -19166,6 +19199,7 @@ policy_pull() {   # policy_pull [--json]：现在就拉一次，说明结果；�
 		summary="$(py policy-summary)${fill:+；参考节点：${fill}}"
 		[ "$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)" = "$before" ] || changed=true
 		if [ "$changed" = true ]; then okay "已更新映射（${summary}）"; else okay "映射没有变化（${summary}）"; fi
+		policy_import   # 没配置过路由器（没有路由器的笔记本、服务器）：映射里账号的节点导入可选节点，账号随即加进来
 		policy_rows
 		# 账号表刚照映射改过：马上同步到路由器（后台拉取不做这一步，它不能问、不能重载，留给下一条命令）。要重载的这里不问（没有终端、App 的定时拉取也不弹框），
 		# 账号表已经上传，端口池等用户点“同步”或下次重启
@@ -19197,14 +19231,14 @@ policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、�
 	# 默认就管 POLICY_REPO_DEFAULT
 	[ "$repo" = "$POLICY_REPO_DEFAULT" ] || opt=" -R ${repo}"
 	line="./policy.sh key add${opt} $(shq "$(cat "$POLICY_DIR/id_ed25519.pub")") $(shq "$host")"
-	POLICY_PREPARE_LINE="$line"   # 图形界面（无路由器向导）照它在 code 字段里显示这一行
+	POLICY_PREPARE_LINE="$line" POLICY_PREPARE_COPIED=""   # 图形界面（配置向导的第 1 步）照它在 code 字段里显示这一行
 	say ""
 	say "  映射仓库：${repo}。把下面这一行发给维护者（顺便说一声是谁的哪台机器），由维护者在 cca 的仓库里运行，"
 	say "  把这台机器的公钥加成这个仓库的只读 deploy key："
 	say ""
 	say "    ${line}"
 	say ""
-	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then say "  （这一行已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
+	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then POLICY_PREPARE_COPIED=1; say "  （这一行已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
 }
 policy_got() {   # 拉到了映射（policy_fetch 成功之后）：记下来，说一声
 	policy_log "拉取成功"
@@ -19523,44 +19557,136 @@ builtin_onboard() {   # builtin_onboard 接着配置的命令：服务器上直�
 	return 0
 }
 
-onboard_builtin() {   # 向导的「没有路由器（内置代理）」：macOS 上用 cca 内置的 mihomo（内核在界面 App 里跑），节点由维护者的映射提供（无路由器笔记本 B2）。
-	                    # 配过映射、拉到了节点 → 当场配好内置代理、返回 0（向导接着加第一个账号）；没配过/还没拉到节点 → 生成 deploy key、在 code
-	                    # 字段里显示给维护者的那一行、存好仓库，不阻塞收尾（返回 2：App 日后自动拉取映射、导入节点，用户再回来加账号）；用不了返回 1
-	local repo
-	if ! core_possible; then gui_fail local_unavailable "没有路由器时用 cca 内置的代理，但这台机器没有内核版本（$(uname -m)）；或者配置一个路由器"; return 1; fi
-	if ! command -v git >/dev/null 2>&1; then gui_fail local_unavailable "拉维护者的映射要 git，这台机器上没有"; return 1; fi
-	repo=$(py policy-repo); [ -n "$repo" ] || repo="$POLICY_REPO_DEFAULT"
-	if [ -n "$repo" ] && [ -f "$POLICY_DIR/id_ed25519" ] && policy_fetch; then   # 以前确认过、或 key 已经加好：拉一次、导入映射里这台机器能用的节点
-		policy_got
-		py nodes-import >/dev/null 2>&1 || true
-	fi
-	if [ -n "$(py nodes-allowed)" ]; then   # 有可选节点 → 配好内置代理，接着加账号
-		policy_rows
-		py local-set client builtin >/dev/null || { gui_fail local_unavailable "配置内置代理失败"; return 1; }
-		LOCAL_SET=builtin   # 让后面 cmd_add 的 guard 认出本机客户端（内置代理），不再逼着配路由器
-		core_setup || true   # core_setup 自己发 gui_done local_ready / fail；端口池还空（没账号）时也返回 0
-		return 0
-	fi
-	# 没配过映射，或配了但还没拉到节点（维护者还没加 key）：问仓库（没有默认时）、生成 deploy key、显示那一行、不阻塞收尾
-	if [ -z "$repo" ]; then
-		repo=$(gui_ask text "维护者的映射仓库（owner/name，维护者会告诉你）" "" q=onboard.repo "title=没有路由器：配置映射" "hint=例如 someone/cca-policy") || return 1
-		[[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { gui_fail local_unavailable "仓库格式不对（应为 owner/name，比如 someone/cca-policy）"; return 1; }
-	fi
-	policy_prepare "$repo"   # 生成这台机器的 deploy key，设 POLICY_PREPARE_LINE
-	ask_fields onboard.policy "没有路由器：维护者提供节点" "没有路由器时节点要维护者在私有映射里提供。把下面这一行发给维护者，由 Ta 在 cca 的仓库里运行，把你这台机器加成只读的 deploy key。加好后 App 会自动拉取映射、导入节点，你再回来点「开始配置」添加账号。" \
-		"line|code|||要维护者运行的命令||POLICY_PREPARE_LINE" || return 1
-	return 2
+# ---- 配置向导（cca _onboard，App 首次运行的引导）：① 维护者的映射 → ② 网络出口 → ③ 添加账号 ----
+onboard_policy_applies() {   # 向导里有没有「维护者的映射」这一步：没选过不用映射，而且知道映射仓库（配置过的，或者维护者的默认仓库）
+	[ -z "$(py get policy_declined)" ] || return 1
+	[ -n "$POLICY_REPO_DEFAULT" ] || [ -n "$(py policy-repo)" ]
 }
 
-cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App 启动的提问会话，PROMPT_GUI 下跑）。把"选上网方式 → 配置 → 加第一个账号"
-	                # 串成一步步的引导，复用现有的路由器/本机客户端/加账号表单；做完记下 onboarded（以后 App 不再弹向导）。
-	                # --skip：不配置、只记下（App 首页「以后再说」用）。取消（答案管道关掉）走 gui_abort：不记 onboarded，下次还能再来
-	local mode rc
+onboard_policy_quick() {   # 配置过映射（有仓库、有 deploy key：以前走过向导、在终端里配置过、一键安装时带了 CCA_POLICY_REPO）时先拉一次：
+	                         # 拉到了，或者这次没拉成、但有上次拉到的（不是 GitHub 不认 key）返回 0——向导不用问这一步
+	[ -n "$(py policy-repo)" ] && [ -f "$POLICY_DIR/id_ed25519" ] || return 1
+	info "正在拉取维护者的映射…"
+	if policy_fetch; then policy_got; return 0; fi
+	policy_log "$POLICY_ERR"
+	if [ -z "$POLICY_DENIED" ] && [ -f "$POLICY_DIR/policy.json" ]; then   # 连不上 GitHub 之类：接着用上次拉到的
+		warn "这次没拉到映射：${POLICY_ERR}（接着用上次拉到的）"
+		return 0
+	fi
+	return 1
+}
+
+onboard_policy() {   # 向导第 1 步那一页：维护者的映射。拉到了返回 0；先跳过、选了不用、用不了返回 1
+	local repo rc
+	repo=$(py policy-repo); [ -n "$repo" ] || repo="$POLICY_REPO_DEFAULT"
+	if ! command -v git >/dev/null 2>&1; then
+		fail_warn policy_unavailable "拉维护者的映射要 git：运行 xcode-select --install 装上苹果的命令行工具，再在终端里运行 cca policy setup ${repo}"
+		return 1
+	fi
+	policy_prepare "$repo"   # 记下仓库、生成这台机器的 deploy key（有了就用原来的）：POLICY_PREPARE_LINE 是给维护者的那一行
+	policy_wait_page; rc=$?
+	case $rc in
+		0) return 0 ;;
+		2) py policy-decline   # 不用映射：仓库、deploy key、拉到过的映射都不留（账号表不再受它约束），以后不再问
+		   rm -f "$POLICY_DIR/id_ed25519" "$POLICY_DIR/id_ed25519.pub" "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" "$POLICY_DIR/checked"
+		   info "不用维护者的映射：以后想用，在终端里运行 cca policy setup" ;;
+		*) info "先跳过：维护者加上公钥之后，App 会自动拉取映射（也可以在终端里运行 cca policy pull 马上拉）" ;;
+	esac
+	return 1
+}
+
+policy_wait_page() {   # 向导第 1 步的那一页（提问会话）：显示给维护者的那一行，等维护者把这台机器的公钥加上——每隔几秒自动拉一次（和 policy_wait
+	                     # 一样，最多 30 分钟），拉到了自己进下一步（App 收到下一页就换掉这一页）；拉不到的原因变了才换一页。用户也可以先跳过、
+	                     # 或者说不用映射。0 拉到了；1 先跳过；2 不用映射。CCA_POLICY_POLL：每隔几秒（整数，测试用）
+	local poll="${CCA_POLICY_POLL:-5}" i max st last="" seqs="" msg
+	case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
+	max=$((1800 / poll))
+	msg="映射由维护者发布：给账号固定出口节点，没有路由器时也提供内置代理用的节点，映射里的账号会自动加进来。把下面这一行发给维护者"
+	[ -z "$POLICY_PREPARE_COPIED" ] || msg="${msg}（已复制到剪贴板）"
+	msg="${msg}，由维护者在 cca 的仓库里运行，把这台 Mac 加成映射仓库的只读 deploy key。加好后这里会自动进入下一步。"
+	for ((i = 0; ; i++)); do
+		if [ $i -lt $max ]; then
+			policy_fetch && { policy_got; return 0; }
+			if [ -n "$POLICY_DENIED" ]; then st=wait; else st="err:${POLICY_ERR}"; fi
+		else
+			st=timeout
+		fi
+		if [ "$st" != "$last" ]; then   # 同一题换一页：换页前点的答案照样认（序号都记着）
+			[ "$st" = timeout ] || policy_log "$POLICY_ERR"
+			seqs="${seqs:+${seqs} }$(policy_wait_spec "$msg" "$st" "$poll" | py prompt-emit)" || gui_abort
+			last=$st
+		fi
+		if [ "$st" = timeout ]; then
+			gui_answer_wait "$seqs" next
+		else
+			gui_answer_wait "$seqs" next "$poll" || continue   # 到时间了：再拉一次
+		fi
+		[ "$ANSWER" = decline ] && return 2
+		return 1
+	done
+}
+policy_wait_spec() {   # policy_wait_spec 页说明 状态 秒数：policy_wait_page 那一页的描述（给 py prompt-emit）。状态：wait（还没加上）| timeout | err:原因
+	local l hint="" err=""
+	case "$2" in
+		wait) hint="正在等维护者加上：每 ${3} 秒自动检查一次" ;;
+		timeout) hint="等了 30 分钟还没加上，不再自动检查：先跳过，维护者加好后 App 会自动拉取映射" ;;
+		*) err="这次没拉到映射：${2#err:}（每 ${3} 秒自动重试）" ;;
+	esac
+	gui_kv "q=onboard.policy" "title=${ONB_TITLE:-维护者的映射}" "message=$1"
+	gui_kv field=line kind=code "label=给维护者运行的命令" "hint=${hint}" "error=${err}"
+	while IFS= read -r l; do printf 'code=%s\n' "$l"; done <<< "$POLICY_PREPARE_LINE"
+	gui_kv field=next kind=choice "label=维护者还没加好的话" default=skip \
+		"opt=skip"$'\t'"先跳过，接着配置网络出口"$'\t'"维护者加好后 App 会自动拉取映射" \
+		"opt=decline"$'\t'"不用维护者的映射"$'\t'"没有维护者时选它；以后想用，在终端里运行 cca policy setup"
+}
+
+policy_import() {   # 没配置过路由器时导入维护者映射里的节点（参考节点：映射指定的安装节点、映射里这台机器的账号要用的），映射里的账号
+	                  # 随后加进来（配置向导、加账号时还没有可选节点、cca policy pull 和 App 的定时拉取）。配置过路由器的不导入：路由器上选可选
+	                  # 节点时参考节点也列在里面，可选节点里有了以后的新节点由 policy_nodes_fill 照常补
+	local added n list=""
+	load_router
+	[ -z "$ROUTER_HOST" ] && [ -f "$POLICY_DIR/policy.json" ] || return 0
+	added=$(py nodes-import 2>/dev/null) || return 0   # 一个都没有：加账号时再选（自定义代理）
+	while IFS= read -r n; do [ -z "$n" ] || list="${list:+${list}、}${n}"; done <<< "$added"
+	[ -z "$list" ] || okay "已导入维护者提供的节点：${list}（这台机器的可选节点）"
+	return 0
+}
+
+onboard_builtin() {   # 向导第 2 步选了「没有路由器（内置代理）」：本机的客户端用 cca 内置的代理（mihomo；macOS 26 起内核在界面 App 里跑）。
+	                    # 节点是映射里的参考节点（policy_import 已经导入），或者第 3 步加账号时粘贴的自定义代理。用不了返回 1
+	if ! core_possible; then gui_fail local_unavailable "这台机器用不了 cca 内置的代理（内核没有 $(uname -m) 的版本）：配置一个路由器"; return 1; fi
+	py local-set client builtin >/dev/null || { gui_fail local_unavailable "配置内置代理失败"; return 1; }
+	LOCAL_SET=builtin
+	core_setup || true   # 自己发 gui_done local_ready / fail；端口池还空（没有账号）时不起内核
+	return 0
+}
+
+onboard_title() {   # onboard_title 这一步的名字：向导的页标题 ONB_TITLE（第几步、共几步；只有一步时不写）。n、total 是 cmd_onboard 的
+	n=$((n + 1))
+	if [ "$total" -gt 1 ]; then ONB_TITLE="第 ${n} 步（共 ${total} 步）：$1"; else ONB_TITLE="$1"; fi
+}
+
+cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App 启动的提问会话，PROMPT_GUI 下跑），三步：
+	                # ① 维护者的映射（onboard_policy：给维护者的那一行，等维护者加上这台机器的公钥，拉到了自己进下一步；可以先跳过、说不用）；
+	                # ② 网络出口（onboard.net：路由器 / 内置代理 / 先跳过；路由器、本机的客户端已经配好时不问）；
+	                # ③ 添加账号（不要求配置了路由器：没有可选节点时选节点那步可以粘贴自定义代理）。
+	                # 做完记下 onboarded（以后 App 不再弹向导）。--skip：不配置、只记下。取消（答案管道关掉）走 gui_abort：不记 onboarded，下次还能再来
+	local mode pol="" askpol="" asknet="" keys0 keys1 k added="" n=0 total=1 det net_default net_msg
 	if [ "${1:-}" = --skip ]; then py onboard-done; return 0; fi
 	if [ -z "$PROMPT_GUI" ]; then info "配置向导在 cca App 里使用（或运行 ${SELF} install 在终端里配置）"; return 0; fi
-	if ! router_ready; then
-		local net_default net_msg det   # 自动模式：先探局域网里有没有装了 Clash 的路由器，探到就默认选路由器、地址填好；探不到就默认内置代理（要能用）
-		det=$(detect_router)
+	keys0=$(py keys)
+	# 先数要问几步（页标题写第几步、共几步）：映射配置过、拉一下就拉到了的不问；路由器、本机的客户端配好了的不问网络出口
+	if onboard_policy_applies; then
+		if onboard_policy_quick; then pol=1; else askpol=1; total=$((total + 1)); fi
+	fi
+	if ! router_ready && [ -z "$LOCAL_SET" ]; then asknet=1; total=$((total + 1)); fi
+	if [ -n "$askpol" ]; then   # ① 维护者的映射
+		onboard_title "维护者的映射"
+		onboard_policy && pol=1
+	fi
+	if [ -n "$asknet" ]; then   # ② 网络出口
+		onboard_title "网络出口"
+		det=$(detect_router)   # 自动模式：先探局域网里有没有装了 Clash 的路由器，探到就默认选路由器、地址填好；探不到就默认内置代理（要能用）
 		net_msg="给每个账号分配独立的网络出口，启动前 cca 会先检查。之后随时能在设置里改。"
 		if [ -n "$det" ]; then
 			net_default=router; ROUTER_HINT_HOST="$det"
@@ -19568,33 +19694,40 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 		elif core_possible; then net_default=builtin
 		else net_default=router
 		fi
+		[ -z "$pol" ] || net_msg="拉到了维护者的映射（$(py policy-summary)）：网络出口配好后，映射里的账号自动加进来。${net_msg}"
 		mode=$(gui_ask choice "这台 Mac 怎么给账号联网？" "$net_default" \
-			"q=onboard.net" "title=配置向导" "message=${net_msg}" \
+			"q=onboard.net" "title=${ONB_TITLE}" "message=${net_msg}" \
 			"opt=router"$'\t'"路由器（OpenClash / ShellCrash）"$'\t'"家里/办公室有改好的路由器，按端口给每个账号分流" \
 			"opt=builtin"$'\t'"没有路由器（用 cca 内置的代理）"$'\t'"节点由维护者映射提供，或自己填一个；内核由 cca 运行" \
-			"opt=skip"$'\t'"先跳过，稍后在总览里配置"$'\t'"") || return 1
+			"opt=skip"$'\t'"先跳过，以后再配置"$'\t'"接着添加账号；启动账号时 cca 会再问怎么联网") || return 1
 		case "$mode" in
-			router)
-				ROUTER_FORM_WHY="官方账号要经路由器的端口出去，先配置路由器。"
-				cmd_router_setup || return 1 ;;   # 取消时 gui_abort 已经杀掉进程；软失败就把失败交给 App，不记 onboarded
-			builtin)   # 没有路由器：内置代理 + 维护者节点（B2）
-				onboard_builtin; rc=$?
-				case $rc in
-					0) : ;;   # 配好了内置代理、有节点：接着加第一个账号
-					2) gui_done onboarded "已记下维护者的映射仓库。维护者加好 deploy key 后 App 会自动拉取、导入节点，再回来点「开始配置」添加账号。"
-					   return 0 ;;   # 等维护者加 key：不记 onboarded，欢迎卡片留着方便回来继续
-					*) return 1 ;;
-				esac ;;
-			*)   # skip
-				py onboard-done
-				gui_done onboarded "随时在总览里点「＋」添加账号、配置网络出口。"
-				return 0 ;;
+			router) cmd_router_setup || return 1 ;;   # 取消时 gui_abort 已经杀掉进程；软失败就把失败交给 App，不记 onboarded
+			builtin) policy_import; onboard_builtin || return 1 ;;
+			*) policy_import ;;   # 先跳过：映射里的节点照样导入（加账号时能选，启动时 cca 再问怎么联网）
 		esac
+	elif ! router_ready; then
+		policy_import   # 本机的客户端（内置代理）已经配好：映射里的节点照样导入
 	fi
-	# 路由器就绪 → 加第一个账号（已经有账号的——重新走向导时——不再问）
-	if [ -z "$(py keys)" ] && confirm "现在添加第一个账号？" y \
-		"q=onboard.add" "title=配置向导" "detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
-		cmd_add || true
+	onboard_title "添加账号"   # ③ 添加账号
+	keys1=$(py keys)
+	if [ -z "$keys1" ]; then
+		if confirm "现在添加第一个账号？" y "q=onboard.add" "title=${ONB_TITLE}" \
+			"detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
+			cmd_add || true
+		fi
+	elif [ "$keys1" != "$keys0" ]; then   # 映射里的账号这次加进来了：问要不要再加一个自己的
+		while IFS= read -r k; do
+			[ -n "$k" ] && ! printf '%s\n' "$keys0" | grep -qxF -- "$k" && added="${added:+${added}、}${k%%(*}"
+		done <<< "$keys1"
+		if confirm "还要再添加一个账号吗？" n "q=onboard.add" "title=${ONB_TITLE}" "message=已按维护者的映射添加了 ${added}。" \
+			"detail=映射里没有的账号在这里添加：填登录邮箱、选一个出口节点。"; then
+			cmd_add || true
+		fi
+	fi
+	# 映射里的账号这次加进来了、还没同步到路由器（刚配好路由器时还没有账号，配置路由器那一步不同步）：现在同步，要重载时当场问
+	if [ "$(py keys)" != "$keys0" ] && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
+		router_sync_soon
+		case $? in 0|3) ;; *) fail_warn sync_failed "账号还没同步到路由器：修好后在节点分流页点「同步」（或者运行 cca router sync）" ;; esac
 	fi
 	py onboard-done
 	gui_done onboarded "配置完成！在总览里打开账号使用，或继续添加更多账号。"
@@ -19644,7 +19777,7 @@ cmd_install() {
 		info "正在安装图形界面 cca App…"
 		if ( cmd_gui ); then   # 子 shell：cmd_gui 自己的 EXIT trap 不影响这里
 			say ""
-			okay "基础安装完成。接下来在打开的 cca App 里按引导完成配置（选上网方式、添加第一个账号）。"
+			okay "基础安装完成。接下来在打开的 cca App 里按引导完成配置（连上维护者的映射、选网络出口、添加账号）。"
 			info "想在终端里配置就运行 cca install。"
 			return 0
 		fi
@@ -20005,7 +20138,7 @@ main() {
 				exit 0
 			fi
 			update_hook "$@"
-			policy_hook
+			[ "${1:-}" = _onboard ] || policy_hook   # 配置向导自己在第 1 步拉映射（拉不到时边等边拉）：不在后台另拉一次
 			gui_hook
 			# 用着 Codex / agy（有它的账号表，或者这次就是 cca codex|agy …）而 cxa / aga 不见了（以前装的 cca 升级上来、被删掉了）：补上
 			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then tool_alias_ensure codex "" quiet; fi

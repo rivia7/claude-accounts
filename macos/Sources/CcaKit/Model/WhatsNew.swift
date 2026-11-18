@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.4.0-beta.2", title: "配置向导改成三步：先连映射，再选网络出口，最后添加账号", points: [
+            .init(symbol: "list.number",
+                  text: "第一次打开 App 的配置向导按这个顺序走：连上维护者的映射、选这台 Mac 怎么给账号联网、添加账号。页上写着第几步、一共几步，已经配好的步骤自动跳过。"),
+            .init(symbol: "person.badge.key",
+                  text: "连映射那一步给出发给维护者的一行命令，维护者加好后页面自己进入下一步，不用一直点。维护者一时没空可以先跳过，加好后 App 定时拉取映射时会自动补上节点和映射里的账号。"),
+            .init(symbol: "person.crop.circle.badge.plus",
+                  text: "添加账号不再要求先配置路由器：没有路由器、也还没有可选的节点时，选节点那一步可以直接粘贴一个自定义代理（分享链接）。"),
+        ], art: "onboard"),
         ReleaseNote(version: "3.4.0-beta.1", title: "这台 Mac 的 UDP 也能经节点出去", points: [
             .init(symbol: "antenna.radiowaves.left.and.right",
                   text: "用内置代理时，这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）以前照旧直连，国内的 WebRTC 检测会看到大陆的地址。现在可以让它们也经一个节点出去：节点分流页的「本机 UDP」一行，或者终端里 cca local udp on 节点。"),

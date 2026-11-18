@@ -89,9 +89,17 @@ final class FlowModel: Identifiable {
     @ObservationIgnored private var unreadable = false
 
     private func begin(_ e: AskEvent) {
+        // 还没交答案时 cca 自己换了同一题的一页（边等边干活的页，比如配置向导等维护者时只换了说明）：用户已经改了的选择留着，
+        // 在新的一页上还能选的才算。交了答案之后再来的同一题是 cca 重问（带着原因和它给的值），照 cca 的来
+        var kept: [String: String] = [:]
+        if case .asking(let prev) = phase, prev.q == e.q { kept = draft }
         var d: [String: String] = [:]
         for f in e.fields where f.kind != .secret && f.kind != .confirm && f.kind != .code {
-            d[f.id] = f.value.isEmpty ? f.defaultValue : f.value
+            if let v = kept[f.id], FlowModel.fits(v, f) {
+                d[f.id] = v
+            } else {
+                d[f.id] = f.value.isEmpty ? f.defaultValue : f.value
+            }
         }
         draft = d
         secrets.removeAll()
@@ -175,6 +183,16 @@ final class FlowModel: Identifiable {
         draft = [:]
         workingSince = Date()
         phase = .working
+    }
+
+    /// 草稿里的值在这个字段上还能用吗（选择题、多选题的值都要是它的选项）。
+    nonisolated static func fits(_ value: String, _ f: PromptField) -> Bool {
+        let values = Set(f.options.map(\.value))
+        switch f.kind {
+        case .choice: return value.isEmpty || values.contains(value)
+        case .multi: return value.split(separator: " ").allSatisfy { values.contains(String($0)) }
+        default: return true
+        }
     }
 
     /// 答案是一行一个字段：换行不能混进去。文字去掉前后的空白，密文原样（中间的换行去掉）。

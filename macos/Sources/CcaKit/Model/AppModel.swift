@@ -130,7 +130,7 @@ final class AppModel {
     /// 只在连上、读到 state 之后才算数（旧版 cca 不给这个字段 → 不弹）。
     var needsOnboarding: Bool { phase == .ready && (state?.config?.needsOnboarding ?? false) }
     /// 首页欢迎卡片这次会话里关掉了（「以后再说」）：不持久——下次打开 App 还会出现（真配置过后 needsOnboarding 自然变 false）。
-    /// 在向导里选了「先跳过」才会持久（cca 记下 onboarded）。
+    /// 走完配置向导才会持久（中间哪一步先跳过都算，cca 记下 onboarded）。
     var onboardingDismissed = false
     /// 首页要不要显示欢迎卡片。
     var showWelcome: Bool { needsOnboarding && !onboardingDismissed }

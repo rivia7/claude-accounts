@@ -138,17 +138,18 @@ struct TutorialCard {
         ], art: .fan),
         // 配置步骤卡（setupStart…）：第一次装好、在 App 里一步步配置时照着走；配好后、点「新手教程」时也能当参考再看。
         TutorialCard(title: "先把这台 Mac 配置好", points: [
-            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 一步步带你走——先选这台 Mac 怎么给账号联网，再添加第一个账号。"),
+            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 分三步带你走——连上维护者的映射、选这台 Mac 怎么给账号联网、添加账号。"),
+            ("person.badge.key", "连上映射：向导给出一行命令，发给维护者运行，把这台 Mac 加进维护者的映射（给账号固定出口节点，没有路由器时也提供节点）。加好后自动进入下一步；维护者一时没空就先跳过，之后 App 会自动拉取。"),
             ("list.number", "每一步都有说明，照着填就行；中途点「以后再说」也行，随时能从总览的「开始配置」接着来。"),
             ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」。"),
         ], art: .onboard),
         TutorialCard(title: "选这台 Mac 怎么联网", points: [
             ("wifi.router", "有路由器：家里/办公室有改好的旁路由（装了 OpenClash 或 ShellCrash），向导里填地址、输一次密码装免密登录、勾选允许用的节点，按端口给每个账号分流。"),
-            ("laptopcomputer", "没有路由器：用 cca 自带的内置代理（内核在这个 App 里跑，要 macOS 26），节点由维护者的私有映射提供；还没配过的，向导给一行命令发给维护者，加好后自动导入。"),
-            ("arrow.forward", "先跳过：还没想好也行，先进总览，以后在工具栏的「＋」里再配。"),
+            ("laptopcomputer", "没有路由器：用 cca 自带的内置代理（内核在这个 App 里跑），节点由维护者的映射提供（第 1 步连上了就自动导入）；没有维护者的话，添加账号时粘贴一个自定义代理（分享链接）。"),
+            ("arrow.forward", "先跳过：还没想好也行，接着添加账号；以后在工具栏的「＋」里再配。"),
         ], art: .netchoice),
-        TutorialCard(title: "添加第一个账号", points: [
-            ("person.badge.plus", "选好网络后，向导问要不要加第一个账号：填登录邮箱、起个别名（可留空）、选一个出口节点。"),
+        TutorialCard(title: "添加账号", points: [
+            ("person.badge.plus", "最后一步添加账号：映射里的账号会自动加进来；要加别的，填登录邮箱、起个别名（可留空）、选一个出口节点。不用先配置路由器。"),
             ("globe", "第一次使用时，会在这个账号专属的浏览器窗口里登录——每个账号各用各的登录资料，换账号不用重登。"),
             ("checkmark.circle", "加好就能用了：在总览点这张卡片打开账号。想再加就点账号列表上的「＋」。"),
         ], art: .addacct),
@@ -482,10 +483,10 @@ struct TutorialArt: View {
         }
     }
 
-    /// 配置向导的三步：选上网方式 → 配好网络 → 加第一个账号（第一步高亮）。
+    /// 配置向导的三步：维护者的映射 → 网络出口 → 添加账号（第一步高亮）。
     private var onboardArt: some View {
-        let steps: [(String, String)] = [("point.3.connected.trianglepath.dotted", "选上网方式"),
-                                         ("wifi.router", "配好网络"), ("person.badge.plus", "加第一个账号")]
+        let steps: [(String, String)] = [("person.badge.key", "连上映射"),
+                                         ("wifi.router", "选网络出口"), ("person.badge.plus", "添加账号")]
         return HStack(spacing: 6) {
             ForEach(steps.indices, id: \.self) { i in
                 VStack(spacing: 8) {
@@ -513,8 +514,8 @@ struct TutorialArt: View {
     private var netchoiceArt: some View {
         let opts: [(String, String, String)] = [
             ("wifi.router", "路由器", "OpenClash / ShellCrash，按端口分流"),
-            ("laptopcomputer", "没有路由器", "用 App 内置的代理，节点由维护者提供"),
-            ("arrow.forward", "先跳过", "以后在总览里配"),
+            ("laptopcomputer", "没有路由器", "用 cca 内置的代理，节点由维护者提供或自己填"),
+            ("arrow.forward", "先跳过", "接着添加账号，以后再配"),
         ]
         return panel {
             VStack(spacing: 0) {
@@ -928,7 +929,7 @@ struct WelcomeBanner: View {
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 7) {
                 Text("欢迎使用 cca").font(.title3.weight(.semibold))
-                Text("只要配置一次：选好这台 Mac 怎么给账号联网，再添加第一个账号——cca 会一步步引导你填。")
+                Text("只要配置一次：连上维护者的映射、选好这台 Mac 怎么给账号联网，再添加账号——cca 会一步步引导你填。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

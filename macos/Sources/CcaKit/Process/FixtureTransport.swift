@@ -18,6 +18,7 @@ import Foundation
 /// | `cost sync [--now] --json` | cost_sync.json | — |
 /// | `mail trust-forwarder KEY off` | 直接成功 | — |
 /// | `mail trust-forwarder KEY`（提问会话） | flow_mail_trust-forwarder.flow | — |
+/// | `_onboard`（配置向导，提问会话） | flow__onboard.flow | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。

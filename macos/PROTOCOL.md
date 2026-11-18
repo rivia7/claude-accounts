@@ -603,7 +603,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -759,6 +759,9 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 答案：每个字段一行 `<seq> <字段 id> <值>\n`（只有一个字段的页，字段 id 就是 `v`），按 `fields` 的顺序写进 fd 3；值里不能有换行。一页的字段对不上（id 不对）时 cca 按取消处理，免得把值放错地方。
 App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同一个 `q` 带着 `error` 和已填的值再发一条 `ask`。
 
+- 一页还没回答时，cca 也可能自己发新的一页（边等边干活的页，比如配置向导第 1 步等维护者加公钥：状态变了带着新的说明再发一页，等到了直接发下一页）：
+  App 照常换成新的这一页；还没交答案时来的是同一题（题号相同），用户已经改了的选择留着（新的一页上还能选的才算），别的题、交了答案之后的重问照 cca 给的值。
+  只是换了说明再发的同一题（题号、字段、选项都不变），换页前发出的答案 cca 照样认；别的旧答案序号对不上，cca 丢掉。
 - 取消：App 关掉答案管道。cca 读到 EOF 就发 `fail cancelled` 然后退出（SIGTERM），**绝不当成回车取默认值**（默认“是”的确认不能因为 App 退出就被同意了）。App 崩溃、退出时同样。
 - 显示不了的一页（字段类型不认识、选择题没有选项）：App 关掉管道，失败页上有“改在终端里完成”，不能漏掉问题。
 - 等待（cca 在干活，没在问）：App 显示 stderr 最新的一行，原样显示，不解析。超过 30 秒没结束时给“停止”按钮（给进程组发 SIGTERM）。
@@ -771,12 +774,11 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 
 | 题号 | 命令 | 控件 | 问什么 |
 |---|---|---|---|
-| `onboard.net` | `_onboard`（配置向导） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理 + 维护者节点，B2）/ 先跳过。已经配过路由器时不问，直接到加账号 |
-| `onboard.repo` | `_onboard`（没有路由器） | `text` | 没有默认映射仓库时：问维护者的映射仓库（owner/name） |
-| `onboard.policy` | `_onboard`（没有路由器） | `code` | 显示给维护者运行的那一行（把这台机器加成只读 deploy key；只显示、不回答）。维护者加好后 App 自动拉取映射、导入节点 |
-| `onboard.add` | `_onboard`（配置向导） | `confirm` | 网络配好后：现在添加第一个账号吗（接着走 `add.basic` / `add.node`） |
+| `onboard.policy` | `_onboard`（配置向导第 1 步） | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不用映射，去掉仓库和 deploy key，以后不再问）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答。选过不用映射、没有映射仓库（也没有维护者的默认仓库）时没有这一步，拉一次就拉到了时也不问 |
+| `onboard.net` | `_onboard`（配置向导第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。没配置路由器时，映射里账号的参考节点在这一步之后导入（映射里的账号随即加进来） |
+| `onboard.add` | `_onboard`（配置向导第 3 步） | `confirm` | 还没有账号：现在添加第一个账号吗（默认是）；映射里的账号这次加进来了：还要再添加一个吗（默认否，`message` 说加了谁）。接着走 `add.basic` / `add.node`，不要求配置了路由器 |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
-| `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问 |
+| `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问。没有路由器、还没有可选节点时只有「自定义代理…」一项（`message` 说明），选它接着问 `node.custom` |
 | `node.custom` | `[codex] add` / `node add`（选节点时「自定义代理…」） | `text` | 粘贴一条分享链接（vmess/vless/ss/trojan/hysteria2/tuic）当出口节点；多行 Clash 配置在终端 `cca node add` |
 | `local.builtin` | `local setup` / 在外面首次启动 | `confirm` | 用内置代理吗（cca 跑一个 mihomo 内核，每个账号一个本机端口走各自节点） |
 | `local.udp` | `local udp on [节点]` | `choice` | 这台 Mac 自己的 UDP（WebRTC、QUIC）经哪个节点出去：只列转发 UDP 的节点。不写节点、设过的和装着的都没有（或者认不出、不转发 UDP）时才问；接着系统会弹授权框（管理员密码，不经 App，见 2.2 的 `config.local.udp`） |
@@ -804,7 +806,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 
 | 命令 | App 里 | 方式 |
 |---|---|---|
-| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`） |
+| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`）。三步：维护者的映射（`onboard.policy`）→ 网络出口（`onboard.net`）→ 添加账号（`onboard.add`），页标题写着第几步、共几步（只数这次要问的；只有一步时不写）；做完 `result` 的 `onboarded` |
 | `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
 | `[codex] key` | 账号页「…」、右键菜单、API key 那一行的「记录…」「输入…」 | 提问会话 |
 | `[codex] key KEY --show`、`--forget` | API key 那一行的眼睛、「复制」；「…」、右键菜单里的「删除记下的 API key…」 | 无交互命令（4.10；`--show` 只经内存里的管道读，`--forget` 要同意） |

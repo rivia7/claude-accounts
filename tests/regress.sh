@@ -1924,7 +1924,8 @@ out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm gui2 2>&1); rc=$?; cp "$T/ev.j
 ok "提问会话：删除账号答是：账号和钥匙串里的 key 都删了" '[ $rc -eq 0 ] && tblok "\"gui2\" not in t" && [ ! -e "$KC2/api.example.com" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"removed\""'
 out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm 图一 2>&1); rc=$?
 ok "提问会话：删除官方账号" '[ $rc -eq 0 ] && tblok "not any(\"gui1@\" in k for k in t)"'
-# 配置向导（_onboard，App 首次运行引导：选上网方式 → 配好 → 加第一个账号；做完记下 onboarded，以后不再弹）
+# 配置向导（_onboard，App 首次运行引导：① 维护者的映射 → ② 网络出口 → ③ 添加账号；做完记下 onboarded，以后不再弹）。平时的用例里
+# CCA_POLICY_DEFAULT 是空的：没有映射那一步（下面单独测）
 cp "$H/.cca/config.json" "$T/cfg.onb.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onb.bak"
 out=$(sess '{}' -- cca _onboard --skip 2>&1); rc=$?
 ok "配置向导：--skip（App「以后再说」）只记下 onboarded、不提问" '[ $rc -eq 0 ] && [ -z "$(asks)" ] && gj state | jok "cfg.get(\"onboarded\") is True and d[\"config\"][\"onboarded\"] is True"'
@@ -1955,18 +1956,33 @@ printf '{}' > "$H/.cca/accounts.json"
 out=$(sess '{"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
-# 没有路由器笔记本（B2，第二期）：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没配过映射/没节点 → 显示给维护者的 deploy key 那一行，不阻塞
+# 没有路由器笔记本：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没有可选节点 → 加账号时粘贴自定义代理（下面）
 cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
 b2_had_policy=0; [ -d "$H/.cca/policy" ] && { b2_had_policy=1; rm -rf "$T/policy.b2"; cp -R "$H/.cca/policy" "$T/policy.b2"; }
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"   # 端口池清空(Claude+Codex)→ LOCAL_SLOTS=0,core_setup 早返回不下载/不起内核
 out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
-cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("policy", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+# 没有路由器、没有可选节点、没有映射：加账号不要求先配置路由器（以前会接着走配置路由器的表单），选节点那步可以粘贴自定义代理
+cp "$T/cfg.b2.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); c.pop("policy", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
 rm -rf "$H/.cca/policy"
-out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.repo":[{"v":"me/cca-policy"}],"onboard.policy":[{}]}' -- cca _onboard 2>&1); rc=$?
-ok "没有路由器笔记本：没配过映射、没节点 → 问映射仓库、生成 deploy key、在 code 字段里显示给维护者运行的那一行，不阻塞；记下仓库但不记 onboarded（欢迎卡片留着回来继续）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.repo onboard.policy" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"fields\"][0][\"kind\"] == \"code\" and \"./policy.sh key add\" in e[\"fields\"][0][\"value\"]" && gj state | jok "cfg.get(\"policy\") == \"me/cca-policy\" and not cfg.get(\"onboarded\")"'
+out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
+ok "没有路由器、没有可选节点、没有映射：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+# 第 1 步：维护者的映射（有默认仓库时才有这一步）。维护者还没加上这台机器的公钥（假 git 一直拒绝）
+cp "$T/cfg.b2.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("policy", None); c.pop("policy_declined", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
+rm -rf "$H/.cca/policy"; touch "$T/policy_denied"; : > git.log; rm -f "$T/clipboard"
+out=$(sess '{"onboard.policy":[{"next":"skip"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
+ok "配置向导第 1 步（有维护者的默认仓库）：给维护者运行的那一行（只显示，已复制到剪贴板）、正在等的说明，和「先跳过 / 不用映射」；标题写着第 1 步（共 3 步）" '[ "$(asks)" = "onboard.policy onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"].startswith(\"第 1 步（共 3 步）\") and e[\"fields\"][0][\"kind\"] == \"code\" and e[\"fields\"][0][\"value\"].startswith(\"./policy.sh key add \") and \"正在等维护者加上\" in e[\"fields\"][0][\"hint\"] and e[\"fields\"][1][\"kind\"] == \"choice\" and e[\"fields\"][1][\"default\"] == \"skip\" and [o[\"value\"] for o in e[\"fields\"][1][\"options\"]] == [\"skip\", \"decline\"] and \"已复制到剪贴板\" in e[\"message\"]" && grep -q "^\./policy\.sh key add " "$T/clipboard"'
+ok "配置向导第 1 步先跳过：记下仓库、留着 deploy key（App 之后自动拉），接着问网络出口（第 2 步）、加账号（第 3 步），做完记下 onboarded" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 2 步（共 3 步）\")" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"].startswith(\"第 3 步（共 3 步）\") and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "c.get(\"policy\") == \"example/cca-policy\" and c.get(\"onboarded\") is True" && [ -f "$H/.cca/policy/id_ed25519" ] && grep -q "^GIT clone" git.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+out=$(sess '{"onboard.policy":[{"next":"decline"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
+ok "配置向导第 1 步选「不用维护者的映射」：去掉仓库、删掉 deploy key（还是同一把：没加上），记下不用，接着到第 2 步" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy onboard.net onboard.add" ] && cfgok "not c.get(\"policy\") and c.get(\"policy_declined\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && [ "$(grep -c "^GIT clone" git.log)" -ge 2 ]'
+out=$(sess '{"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy cca _onboard 2>&1); rc=$?
+ok "选过不用映射，再走一遍向导：没有映射那一步（不问也不拉），网络出口是第 1 步（共 2 步）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 1 步（共 2 步）\")" && [ ! -e "$H/.cca/policy/id_ed25519" ]'
+rm -f "$T/policy_denied"
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
 rm -rf "$H/.cca/policy"; [ "$b2_had_policy" = 1 ] && cp -R "$T/policy.b2" "$H/.cca/policy"
 unlisten 7901; n=$(reloads)
@@ -1977,9 +1993,14 @@ ok "提问会话：同意答否：不重载" '[ "$(reloads)" = "$n" ] && [ "$(ev
 out=$(sess '{"consent.router_reload":[{"v":"y"}]}' -- cca router sync 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_consent.jsonl"
 ok "提问会话：同意当场问（不用重跑），带标题和完整的说明（路由器的说明有好几行，最后一行也在），答是就重载" '[ $rc -eq 0 ] && [ "$(reloads)" = "$((n + 1))" ] && evq "e.get(\"q\") == \"consent.router_reload\" and e[\"title\"] and e[\"fields\"][0][\"kind\"] == \"confirm\" and \"约 20 秒\" in e[\"fields\"][0][\"detail\"] and e[\"fields\"][0][\"default\"] == \"y\""'
 mv "$H/.cca/router_ed25519" "$T/rk.bak"
+before=$(tsum)
 out=$(sess '{}' -- cca add 2>&1); rc=$?
-mv "$T/rk.bak" "$H/.cca/router_ed25519"
-ok "提问会话：添加账号时还没配置路由器：接着在表单里配置（说明为什么要配置），取消时什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = router.basic ] && evq "e.get(\"q\") == \"router.basic\" and \"官方账号要经路由器\" in e[\"message\"]" && [ "$(evn terminal)" = 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
+ok "提问会话：添加账号不要求路由器能用（路由器的密钥不在了）：有可选节点就直接填账号，不先配置路由器；取消时什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = add.basic ] && [ "$(evn terminal)" = 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ "$(tsum)" = "$before" ]'
+cp "$H/.cca/config.json" "$T/cfg.rk.bak"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+out=$(sess '{}' -- cca add 2>&1); rc=$?
+cp "$T/cfg.rk.bak" "$H/.cca/config.json"; mv "$T/rk.bak" "$H/.cca/router_ed25519"
+ok "提问会话：配置过路由器、只是现在用不了，又一个可选节点都没有：先重新配置路由器（说明为什么），取消时什么都不改" '[ $rc -ne 0 ] && [ "$(asks)" = router.basic ] && evq "e.get(\"q\") == \"router.basic\" and \"还没有可选的出口节点\" in e[\"message\"]" && [ "$(evn terminal)" = 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ "$(tsum)" = "$before" ]'
 # 配置路由器（router.basic / router.password / router.nodes）：地址不通的重问；密码经 askpass 交给 ssh，不进命令行、环境变量、事件文件；
 # 取消时不盖掉原来的配置
 cp "$H/.cca/accounts.json" "$T/tbl.bak"; cp "$H/.cca/config.json" "$T/cfg.bak"; RPW='rtr-PW-SENTINEL-1 with space'
@@ -2054,7 +2075,7 @@ lint_prompts() {   # 提问只能经基元：别的地方直接读 fd 3，图形
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 doc = open(sys.argv[2], encoding='utf-8').read()
-allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'policy_wait', 'cmd_edit', 'node_read_block'}
+allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'gui_answer_wait', 'policy_wait', 'cmd_edit', 'node_read_block'}
 bad, fn = [], ''
 for line in src.split('\n'):
     m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\(\) \{', line)
@@ -2421,6 +2442,30 @@ python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'
 rm -rf "$H/.cca/policy"
 out=$(run $P CCA_TTY="$(ans 1 s)" cca @alice --version 2>&1); rc=$?
 ok "引导里输入 s 先跳过：照常启动，说明之后每天自动拉" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "先跳过：维护者加上公钥之后，cca 每天会自动拉一次映射" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ] && [ ! -f "$H/.cca/policy/policy.json" ]'
+# 配置向导（App）第 1 步：等维护者时这一页不用点，每隔几秒自动拉，拉到映射自己进第 2 步；没有路由器时导入映射里账号的参考节点，映射里的账号
+# 自动加进来，第 3 步只问还要不要再加。这一段结束时配置、账号表、映射仓库都还原
+cp "$H/.cca/config.json" "$T/cfg.ow.bak"; cp "$H/.cca/accounts.json" "$T/tbl.ow.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.ow.bak"
+cp "$PR/policy.json" "$T/pr.ow"; cp "$PR/policy.json.sig" "$T/pr.ow.sig"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); c.pop("local", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
+pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}}'
+python3 -c 'import json,sys; json.dump({"version": 1, "group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (91 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-S", "US-X"])]}, open(sys.argv[1], "w"))' "$PR/nodes.json"; nodes_pub
+printf 2 > "$T/policy_denied_n"; : > git.log
+out=$(sess '{"onboard.policy":[null,null,null],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env $P CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
+ok "配置向导第 1 步：等维护者时这一页不用点，每隔几秒自动拉，维护者加上公钥后拉到映射、自己进第 2 步（页上说拉到了）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy onboard.net onboard.add" ] && [ "$(grep -c "^GIT clone" git.log)" = 3 ] && evq "e.get(\"q\") == \"onboard.net\" and \"拉到了维护者的映射（Claude 1 个账号\" in e[\"message\"]" && [ -f "$H/.cca/policy/policy.json" ]'
+ok "没有路由器：第 2 步先跳过也导入映射里账号的参考节点（别的参考节点不导入），映射里的账号自动加进来；第 3 步只问还要不要再加（默认不加），说明加了谁" 'cfgok "c[\"nodes\"] == [\"US-S\"] and c.get(\"onboarded\") is True" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}" && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"default\"] == \"n\" and \"sam\" in e.get(\"message\", \"\")"'
+# 映射已经配置好（比如一键安装时带了 CCA_POLICY_REPO，维护者也加好了公钥）：拉一下就拉到了，没有映射那一页，也不算一步
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; c.pop("node_ids", None); c.pop("onboarded", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"; : > git.log
+out=$(sess '{"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env $P CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
+ok "配置向导：映射已经配置好、拉一下就拉到了 → 不问映射那一步，网络出口是第 1 步（共 2 步）、页上说拉到了映射" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.add" ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 1 步（共 2 步）：网络出口\" and \"拉到了维护者的映射\" in e[\"message\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
+# 第 1 步先跳过的：维护者加好后靠 App 的定时拉取（cca policy pull --json，终端里的 cca policy pull 一样）补上节点和账号
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; c.pop("node_ids", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+printf '{}' > "$H/.cca/accounts.json"
+out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>"$T/pull.err" </dev/null); rc=$?
+ok "没有路由器：App 的定时拉取（cca policy pull --json）拉到映射后导入映射里账号的参考节点，映射里的账号随即加进来；stdout 只有 JSON，不提同步路由器" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"policy_pull\"" && grep -q "已导入维护者提供的节点：US-S" "$T/pull.err" && ! grep -q "同步" "$T/pull.err" && cfgok "c[\"nodes\"] == [\"US-S\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
+cp "$T/cfg.ow.bak" "$H/.cca/config.json"; cp "$T/tbl.ow.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.ow.bak" ] && cp "$T/cdx.ow.bak" "$H/.cca/codex.json"
+cp "$T/pr.ow" "$PR/policy.json"; cp "$T/pr.ow.sig" "$PR/policy.json.sig"; rm -f "$PR/nodes.json" "$PR/nodes.json.sig"
 # 还原成没配置映射（账号表改回 US-A），接着测 cca policy setup
 rm -f "$T/policy_denied_n"
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"

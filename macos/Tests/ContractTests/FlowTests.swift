@@ -174,6 +174,35 @@ func flowProtocolTests() async {
         check("等太久可以停掉", s.stopped == 1)
     }
     do {
+        // cca 边等边干活的一页（配置向导等维护者）：还没交答案时同一题换了说明再发一页，用户改了的选择留着；别的题、交了之后的重问照 cca 的来
+        let (s, f, _) = make()
+        func page(_ seq: Int, _ q: String, hint: String = "") -> CcaEvent {
+            .ask(AskEvent(seq: seq, q: q, title: "", message: "", fields: [
+                PromptField(id: "line", kind: .code, value: "./policy.sh key add x", hint: hint),
+                PromptField(id: "next", kind: .choice, defaultValue: "skip",
+                            options: [PromptOption(value: "skip", label: "先跳过"), PromptOption(value: "decline", label: "不用")])]))
+        }
+        s.feed(page(1, "onboard.policy", hint: "正在等"))
+        _ = await waitUntil { if case .asking = f.phase { return true }; return false }
+        f.draft["next"] = "decline"
+        s.feed(page(2, "onboard.policy", hint: "这次没拉到"))
+        _ = await waitUntil { if case .asking(let e) = f.phase { return e.seq == 2 }; return false }
+        check("同一题换了说明再发：还没交的选择留着", f.draft["next"] == "decline")
+        f.submit()
+        check("答案用新的序号", s.answers.last == ["2 next decline"])
+        s.feed(page(3, "onboard.policy"))
+        _ = await waitUntil { if case .asking(let e) = f.phase { return e.seq == 3 }; return false }
+        check("交了答案之后的同一题：照 cca 给的值", f.draft["next"] == "skip")
+        f.draft["next"] = "decline"
+        s.feed(page(4, "onboard.net"))
+        _ = await waitUntil { if case .asking(let e) = f.phase { return e.seq == 4 }; return false }
+        check("换了一题：草稿不带过去", f.draft["next"] == "skip")
+        f.draft["next"] = "gone"
+        s.feed(page(5, "onboard.net"))
+        _ = await waitUntil { if case .asking(let e) = f.phase { return e.seq == 5 }; return false }
+        check("留着的值在新的一页上不是选项：照 cca 的来", f.draft["next"] == "skip")
+    }
+    do {
         let (s, f, _) = make()
         s.feed(ask(1, [PromptField(id: "c", kind: .code, value: "a\nb"), PromptField(id: "u", kind: .text, value: "x")]))
         _ = await waitUntil { f.phase != .working }
