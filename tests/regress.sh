@@ -4,12 +4,12 @@
 # 用法：bash tests/regress.sh（只在 macOS 上跑；全部用假命令，不联网、不碰真实的 ~/.cca 和路由器）
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
-T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX") && T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）
+if [ -n "${CKPT:-}" ]; then T="${TMPDIR:-/tmp}/cca-ckpt.sandbox"; mkdir "$T.lock" 2>/dev/null || { echo "另一个分节续跑（CKPT/FROM/ONLY）在用同一个沙箱 ${T}：一次只能跑一个，先等它跑完，或删掉 $T.lock" >&2; exit 1; }; [ -n "${FROM:-}${ONLY:-}" ] || rm -rf "$T"; mkdir -p "$T"; else T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX"); fi; T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）；CKPT 时用 $TMPDIR 下的固定沙箱 + $T.lock 防并发（分节续跑：路径要稳定、在 /var/folders 下、一次只能一个）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
 SVP=""   # 设备统计的测试服务器（11b3c 那一节才开）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
-trap '[ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"' EXIT
-bash "$D/setup.sh" "$T" >/dev/null || exit 1
+trap '[ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
+[ -n "${FROM:-}${ONLY:-}" ] || bash "$D/setup.sh" "$T" >/dev/null || exit 1   # 分节续跑时跳过建沙箱：快照恢复会填好 $T
 cd "$T" || exit 1
 # TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>sleep 了几秒<TAB>说明”；
 # python 的次数靠 CCA_PYTHON 指向的一个记数的小脚本（只在 TIMING 时用，平时 cca 照常找 python3），sleep 靠 $T/bin 里的 sleep
@@ -90,6 +90,45 @@ evq() { python3 -c 'import json,sys; ev=[json.loads(l) for l in open(sys.argv[1]
 evn() { grep -c "\"ev\":\"$1\"" "$T/ev.jsonl"; }   # 这种事件有几条
 runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   # 带事件文件运行（stdin 不是终端：App 就是这样调的）
 claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
+# 分节续跑（省开发时间；发版和平时照样跑全量，sect 恒为真）：
+#   CKPT=目录 bash tests/regress.sh                       跑一次全量，在每节开头存下沙箱快照（tar $T + 变量）
+#   CKPT=目录 FROM=10h bash tests/regress.sh              从某节恢复快照、只跑那节到结尾
+#   CKPT=目录 ONLY="10h 11b4" bash tests/regress.sh       只跑这几节，各自从自己的快照起
+# 不带 CKPT/FROM/ONLY 时 sect 恒返回 0，一行不漏地跑全量（下面每节都包在 if sect 节名; then … fi 里）。
+sect() {
+	local name=$1 _v _fn
+	if [ -n "${CKPT:-}" ] && [ -z "${FROM:-}${ONLY:-}" ]; then   # 建快照：这一节开始时的沙箱 + 这时各节新设的变量和函数（跨节用到的 ${VS}、node_rn… 要带上）
+		( cd "$T" && tar czf "$CKPT/$name.tgz" . ) 2>/dev/null
+		# 只存各节新设的变量：compgen -v 现在的减去前置基线 ${_BASE}。按名字 declare -p（带引号、多行值都对；bash 3.2 不带名字的 declare -p 没有 declare 前缀，不能用）
+		# 去掉 declare 前缀存成普通赋值：bash 3.2 没有 declare -g，恢复是在 _ckpt_restore 函数里 source 的，declare -- 会建成函数局部变量、一出函数就没了（跨节的 $GF/$VS 全丢），普通赋值才落到全局
+		{ for _v in $(compgen -v 2>/dev/null); do case "$_BASE" in *" $_v "*) continue ;; esac; case "$_v" in name|_v|_fn|_BASE|_BASEF|_GO) continue ;; esac; declare -p "$_v" 2>/dev/null | sed '1s/^declare -[^ ]* //'; done; } > "$CKPT/$name.vars"
+		# 各节新定义的函数也要带上（基线以后的；前置阶段的 ok/run/sect… 不动，续跑时用当前这份）
+		{ for _fn in $(compgen -A function 2>/dev/null); do case "$_BASEF" in *" $_fn "*) continue ;; esac; declare -f "$_fn" 2>/dev/null; done; } > "$CKPT/$name.fns"
+		return 0
+	fi
+	if [ -n "${ONLY:-}" ]; then   # 只跑列出的这几节，各自从自己的快照起
+		case " $ONLY " in *" $name "*) _ckpt_restore "$name"; return $? ;; *) return 1 ;; esac
+	fi
+	if [ -n "${FROM:-}" ]; then   # 从某节恢复、跑到结尾
+		[ -n "${_GO:-}" ] && return 0
+		[ "$name" = "$FROM" ] && { _GO=1; _ckpt_restore "$name"; return $?; }
+		return 1
+	fi
+	return 0
+}
+_ckpt_restore() {   # 恢复某节开始时的沙箱和变量；计数（pass/fail）接着本次续跑的、不取快照里的
+	local name=$1 _p=$pass _f=$fail
+	[ -f "$CKPT/$name.tgz" ] || { echo "FAIL  缺 $name 的快照：先 CKPT=$CKPT bash tests/regress.sh 建一次"; fail=$((fail + 1)); return 1; }
+	find "$T" -mindepth 1 -delete 2>/dev/null
+	tar xzf "$CKPT/$name.tgz" -C "$T"
+	[ -f "$CKPT/$name.vars" ] && . "$CKPT/$name.vars" 2>/dev/null
+	[ -f "$CKPT/$name.fns" ] && . "$CKPT/$name.fns" 2>/dev/null   # 各节新定义的函数（node_rn 这类跨节用的）
+	pass=$_p; fail=$_f
+	return 0
+}
+_BASE=" $(compgen -v 2>/dev/null | tr '\n' ' ')"   # 分节续跑的变量基线：前置阶段已有的变量名（建快照时只存这之后各节新设的）
+_BASEF=" $(compgen -A function 2>/dev/null | tr '\n' ' ')"   # 函数基线：前置阶段已有的函数（ok/run/sect…；只存各节新定义的）
+if sect unit; then
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
@@ -105,6 +144,8 @@ ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周
 ok "折合金额：价格表、读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 ok "邮箱助手：认登录邮件的规则、连 Gmail 的路（照系统代理、不经账号的出口）、只读的 IMAP（真的 TLS）、只信 Gmail 的验证结果和签过名的头、盯邮箱（最新的一封、重试、断线不漏）、打开过的不再打开" 'python3 "$D/mail_view.py" 2>/dev/null'
 
+fi
+if sect 1; then
 # 1. 安装 + 第一个账号：建端口池需要一次重载，先征求同意
 out=$(run CCA_TTY="$(ans y 192.0.2.10 '' '' '1 2 3 4' y alice@example.com '' 1 y)" bash "$CCA" install 2>&1)
 ok "install：从路由器的节点里选可选节点" 'python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"nodes\"]==[\"US-A\",\"US-B\",\"US-C\",\"US-D\"] else 1)" "$H/.cca/config.json" && printf "%s" "$out" | grep -q "账号可选的出口节点：US-A、US-B、US-C、US-D"'
@@ -123,6 +164,8 @@ ok "install：钩子 / cron / sysupgrade" 'grep -q ">>> cca >>>" "$R/etc/opencla
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); alice_device=$(claude_device "$AD")
 ok "install：未登录时已生成账号自己的设备标识" 'printf "%s\n" "$alice_device" | grep -Eq "^[0-9a-f]{64}:[0-9a-f]{64}$" && [ -f "$AD/device.json" ]'
 
+fi
+if sect 2; then
 # 2. 再加账号（邮箱、别名分两行填）：不重载，API 切换
 out=$(run CCA_TTY="$(ans bob@example.com 工作 2)" cca add 2>&1)
 ok "add bob：不重载，CCA-2 经 API 切到 US-B，文件里默认顺序同步更新" '[ "$(reloads)" = 1 ] && [ "$(sel CCA-2)" = US-B ] && [ "$(first CCA-2)" = US-B ]'
@@ -138,12 +181,16 @@ run CCA_TTY="$(ans)" cca web 小号 >/dev/null 2>&1
 ok "web：没登录时先用账号邮箱登录（登录页预填），再打开 claude.ai" 'grep -q "ARGS: auth login --claudeai --email carol@example.com" claude.log && grep -q "https://claude.ai/" open.log'
 run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
 
+fi
+if sect 3; then
 # 3. 登录 + 启动 + 出口检测
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
 ok "alice：预填邮箱登录 → 启动，退出码透传" '[ $rc -eq 3 ] && grep -q "ARGS: auth login --claudeai --email alice@example.com" claude.log'
 ok "Claude 登录时已读到固定设备标识，退出同步不改变" 'grep -qF "LOGIN-DEVICE $alice_device @ $AD/claude" claude.log && [ "$(claude_device "$AD")" = "$alice_device" ]'
 ok "alice：出口检测经 :7901（trace + iprisk）" 'grep -q "CURL via :7901 https://ip.net.coffee/api/iprisk/203.0.113.1" curl.log'
 
+fi
+if sect 3b; then
 # 3b. 有别名的账号：按邮箱登录；只改别名不换账号目录、不重新登录、端口和"上次使用"跟着走
 run CCA_TTY="$(ans)" cca @工作 --version >/dev/null 2>&1
 d1=$(grep "^ENV: " claude.log | tail -n 1 | sed 's/.*CLAUDE_CONFIG_DIR=\([^ ]*\).*/\1/')
@@ -161,6 +208,8 @@ run CCA_ACCOUNT='副号(bob@example.com)' "$H/.cca/bin/open-url" 'https://claude
 run CCA_ACCOUNT='副号(bob@example.com)' "$H/.cca/bin/open-url" 'https://example.com/a?b=1' >/dev/null 2>&1
 ok "会话里 /login 打开的登录地址没带邮箱时补上 login_hint，其它地址原样打开" 'grep -q "authorize?code=true&client_id=c&state=s&login_hint=bob%40example.com" open.log && grep -q "login_hint=x%40y.z\]" open.log && [ "$(grep -c login_hint open.log)" = 2 ] && grep -q "https://example.com/a?b=1\]" open.log'
 
+fi
+if sect 3b2; then
 # 3b2. 服务器上登录（Linux 上没有账号专属的 Chrome；CCA_REMOTE_LOGIN=1 在 macOS 上模拟）：claude 照常在这里登录、开本机的回调，
 # 它要打开的登录网址经 BROWSER 交给 cca，cca 写成一行 cca login-page 命令（Mac 上运行它打开登录页）；贴回来的验证码核对过 state
 # 才转给本机的回调（不经代理），换 token 照常经账号的端口。假 claude 在 $T/oauth_flow 存在时照真的走（内容是这次的 state）
@@ -219,6 +268,8 @@ kill $busy 2>/dev/null; wait $busy 2>/dev/null
 run CCA_TTY="$(ans y)" cca rm dora@example.com >/dev/null 2>&1
 ok "删掉刚加的 新号：账号表、启动器都照旧" '[ "$(cat "$H/.cca/accounts.json")" = "$t0" ] && [ ! -e "$H/Applications/Claude 新号.app" ] && ! ls -d "$H"/.cca/accounts/dora-example-com-* >/dev/null 2>&1'
 
+fi
+if sect 3b3; then
 # 3b3. 邮箱助手（cca mail）：Claude 账号的登录邮件转发到一个 Gmail，登录时 cca 经 IMAP（只读）找到它，在账号专属的 Chrome 里打开
 # 里面的登录链接。假的 Gmail 是 tests/mail_fake.py（真的 TLS、只读 IMAP：会改邮箱的命令一律回 BAD 并记 VIOLATION），经它的假代理
 # （一个端口同时认 SOCKS5 和 HTTP CONNECT）连，证书是测试的 CA（CCA_MAIL_CAFILE：只在连的是本机时才信）；系统代理由假 scutil 给
@@ -318,6 +369,8 @@ ok "mail setup --proxy：指定 HTTP 代理（CONNECT）；指到账号的出口
 run cca mail forget >/dev/null 2>&1
 kill "$MBP" 2>/dev/null; wait "$MBP" 2>/dev/null; MBP=""
 
+fi
+if sect 3c; then
 # 3c. Claude App 多开：每个账号一份资料目录、走自己的端口；启动器跟着账号表走
 L="$H/Applications"; BD=$(ls -d "$H"/.cca/accounts/bob-example-com-*)
 ok "启动器：每个账号一个，改别名后自动改名" '[ -x "$L/Claude alice.app/Contents/MacOS/cca-launcher" ] && [ -d "$L/Claude 副号.app" ] && [ ! -e "$L/Claude 工作.app" ] && plutil -extract CFBundleIdentifier raw "$L/Claude 副号.app/Contents/Info.plist" | grep -q "^local.cca.launcher.bob-example-com-"'
@@ -382,6 +435,8 @@ edit_table 'j.pop("alice@corp.example")'
 run cca app --launchers >/dev/null 2>&1
 ok "启动器：不再重名后改回短名字" '[ -d "$L/Claude alice.app" ] && [ ! -e "$L/Claude alice@corp.example.app" ] && [ ! -e "$L/Claude alice@example.com.app" ]'
 
+fi
+if sect 3d; then
 # 3d. DNS / WebRTC 泄露检测（照 ip.net.coffee 的 DNS、WebRTC 检测页）：和出口检测同时在后台跑，只提示不拦。DNS 经账号的端口测，
 #     结果按 线路|节点 缓存（启动不用每次等它），cca check 重新测；WebRTC 直连问 STUN（平时 CCA_STUN 指向不通的端口）
 rm -f "$H/.cca/leak.json"; : > curl.log; mkdir -p "$T/dns" "$T/geo"
@@ -438,6 +493,8 @@ rm -f "$T/dns_down"
 ok "ip.net.coffee 的 DNS 检测接口连不上：注明没测成，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "泄露  DNS 没测成.* · WebRTC 没测成"'
 rm -rf "$T/dns" "$T/geo" "$T/stun_ip" "$H/.cca/leak.json"
 
+fi
+if sect 4; then
 # 4. 选中节点被改动（仪表盘手动切 / 缓存恢复错）→ 启动前自动纠正，不重载
 printf US-D > "$R/sel/CCA-1"
 run cca @alice --version >/dev/null 2>&1
@@ -445,16 +502,22 @@ ok "选中被改：启动前经 API 纠正回 US-A，不重载" '[ "$(sel CCA-1)
 printf HK-A > "$R/sel/CCA-1"; rr ensure
 ok "选中被改：cron 自愈也会纠正" '[ "$(sel CCA-1)" = US-A ] && [ "$(reloads)" = 1 ]'
 
+fi
+if sect 5; then
 # 5. 手改账号表换节点：只走 API
 edit_table 'j["副号(bob@example.com)"]="US-C"'
 run cca @bob >/dev/null 2>&1
 ok "手改账号表换节点：启动时同步，CCA-2 → US-C，不重载" '[ "$(sel CCA-2)" = US-C ] && [ "$(reloads)" = 1 ]'
 
+fi
+if sect 6; then
 # 6. 删除账号：槽位回到 REJECT，不重载
 run CCA_TTY="$(ans y)" cca rm bob >/dev/null 2>&1
 ok "rm bob：退出登录、删钥匙串；CCA-2 → REJECT；不重载" 'grep -q "delete-generic-password -s Claude Code-credentials-" security.log && [ "$(sel CCA-2)" = REJECT ] && [ "$(reloads)" = 1 ] && ! grep -q bob "$H/.cca/accounts.json"'
 ok "rm：账号的启动器一起删掉，别的账号的还在" '[ ! -e "$H/Applications/Claude 副号.app" ] && [ -d "$H/Applications/Claude alice.app" ]'
 
+fi
+if sect 7; then
 # 7. 端口池不够（第 9 个账号）：需要重载 → 非交互时不重载，交互时问
 edit_table 'j.update({"u%d@example.com" % i: "US-D" for i in range(2, 10)})'
 out=$(run cca router sync 2>&1); rc=$?
@@ -467,6 +530,8 @@ ok "图形界面：范围不对的同意不算（同意的是重载 ShellCrash�
 run CCA_GRANT=router_reload:OpenClash cca router sync >/dev/null 2>&1 </dev/null
 ok "端口池扩容：同意后（图形界面里点了同意，带着授权重跑）重载一次，变成 16 个槽位" '[ "$(nl_)" = 16 ] && [ "$(reloads)" = 2 ] && [ "$(sel CCA-9)" = US-D ]'
 
+fi
+if sect 8; then
 # 8. 重载异常：明确拒绝 / 断开没生效 → 还原；断开但生效 → 成功
 edit_table '[j.pop("u%d@example.com" % i) for i in range(2, 10)]'
 touch "$R/reload_reject"; before=$(nl_)
@@ -480,6 +545,8 @@ out=$(run cca router sync -y 2>&1); rc=$?
 ok "重载超时拿不到响应但已生效：按端口判成功（缩回 8 个槽位）" '[ $rc -eq 0 ] && [ "$(nl_)" = 8 ] && ! grep -qx 7909 "$R/listening"'
 rm -f "$R/reload_drop"
 
+fi
+if sect 8b; then
 # 8b. 旧入站占着端口（真实路由器上发生过）：第一次重载 7901 绑定失败 → 自动再重载一次
 edit_table 'j.update({"u%d@example.com" % i: "US-D" for i in range(2, 10)})'
 touch "$R/reload_conflict_once"; n0=$(reloads)
@@ -488,6 +555,8 @@ ok "旧入站占端口：第一次没绑上 7901，自动再重载一次后成�
 edit_table '[j.pop("u%d@example.com" % i) for i in range(2, 10)]'
 run cca router sync -y >/dev/null 2>&1
 
+fi
+if sect 8c; then
 # 8c. 内核落后于运行配置文件（文件重新生成过、内核还没重新加载；真实路由器上遇到过）：内核的 CCA-1 里没有 US-A，文件里有。
 #     不能只看文件的结构就当作不用重载：先改为 REJECT，问过再重载一次（同步、启动前核对都一样）
 cp "$R/core.yaml" "$T/core.snap"
@@ -511,6 +580,8 @@ rm -f "$R/kernel_stale"; cp "$T/core.snap" "$R/core.yaml"
 out=$(run cca router sync 2>&1); rc=$?
 ok "（还原）内核和运行配置文件一致了：经 API 切回 US-A，不重载" '[ $rc -eq 0 ] && [ "$(sel CCA-1)" = US-A ] && [ "$(reloads)" = "$n0" ]'
 
+fi
+if sect 9; then
 # 9. OpenClash 升级/重装：钩子丢了、重启后没有端口池
 cp pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh"
 cp "$R/etc/openclash/config/custom.yaml" "$RC"; printf '7890\n7891\n7892\n7893\n7895\n9090\n' > "$R/listening"; rm -f "$R"/sel/CCA-*
@@ -520,12 +591,16 @@ cp pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh"
 run CCA_TTY="$(ans y)" cca @alice --version >/dev/null 2>&1; rc=$?
 ok "启动时发现端口池不在：征得同意后重载，补回钩子，正常启动" '[ $rc -eq 3 ] && [ "$(nl_)" = 8 ] && [ "$(sel CCA-1)" = US-A ] && grep -q ">>> cca >>>" "$R/etc/openclash/custom/openclash_custom_overwrite.sh"'
 
+fi
+if sect 10; then
 # 10. OpenClash 启动时由钩子注入端口池（不额外重载）
 cp "$R/etc/openclash/config/custom.yaml" "$R/tmp/custom.yaml"
 grep -v '^\. /usr/share\|LOG_OUT' "$R/etc/openclash/custom/openclash_custom_overwrite.sh" > ow_run.sh
 env CCA_ROOT="$R" CCA_T="$T" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin" /bin/dash ow_run.sh "$R/tmp/custom.yaml"
 ok "钩子：启动时把 8 个槽位注入配置，CCA-1 默认 US-A" '[ "$(ruby -ryaml -e "c=YAML.load_file(ARGV[0]); print c[\"listeners\"].size" "$R/tmp/custom.yaml")" = 8 ] && ruby -ryaml -e "c=YAML.load_file(ARGV[0]); exit(c[\"proxy-groups\"].find { |g| g[\"name\"]==\"CCA-1\" }[\"proxies\"][0]==\"US-A\" ? 0 : 1)" "$R/tmp/custom.yaml"'
 
+fi
+if sect 10a; then
 # 10a. 路由器上给节点改了名：按服务器地址认出来，可选节点和账号表跟着改；认不出时交互让用户选一个代替。
 #      运行配置文件被删了：切换节点照常，要调整端口池时征得同意后重启 OpenClash（这一节结束时整个还原）
 cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
@@ -577,6 +652,8 @@ out=$(run cca router sync 2>&1); rc=$?
 ok "运行配置文件被删了、账号的节点 OpenClash 的配置里也没有：重启也没用，不提重启，同步判失败" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "切换到 US-D 失败" && ! printf "%s" "$out" | grep -q "重启一次 OpenClash" && [ "$(restarts)" = "$r0" ]'
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
+fi
+if sect 10a2; then
 # 10a2. ShellCrash（juewuy/ShellCrash）：自动认出在跑的是它（OpenClash 也装着但没在跑）；端口池在它启动时由 task/bfstart
 #       里的一行钩子注入（订阅配置一个字节不动），热加载经它主目录里的链接（mihomo 不肯重载 /tmp 里的文件）。这一节结束时整个还原
 rm -rf "$T/router.snap"; cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
@@ -646,6 +723,8 @@ out=$(run CCA_TTY="$(ans y)" cca router uninstall 2>&1)
 ok "下一版 ShellCrash 上 cca router uninstall：configs/task/bfstart 只删 cca 那一行（逐字节还原），端口池移除" 'cmp -s "$SCD/configs/task/bfstart" "$T/shellcrash/etc/ShellCrash/task/bfstart" && [ ! -e "$SCD/task/bfstart" ] && [ "$(scl)" = 0 ] && [ ! -e "$R/etc/cca" ]'
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
+fi
+if sect 10b; then
 # 10b. 出门在外：连不上路由器时改走本机 Clash Verge（全局扩展脚本 + 热加载，不重启它），回家后自动走回路由器
 V="$H/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev"; VS="$V/profiles/Script.js"
 vreloads() { grep -c '^RELOAD$' "$T/verge/verge.log" 2>/dev/null || echo 0; }
@@ -725,6 +804,8 @@ run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1
 ok "cca local setup：在家也能先配置好" 'grep -q ">>> cca >>>" "$VS" && grep -qx 7901 "$T/verge/listening"'
 run CCA_TTY="$(ans y)" cca rm 小号 >/dev/null 2>&1
 
+fi
+if sect 10c; then
 # 10c. 第三方 API 账号：直连 / 走节点；key 存钥匙串，经 apiKeyHelper 交给 Claude Code（不进命令行，也不进环境变量）
 kcd() { ls -d "$T/keychain/${2:-cca-api-}$1-"* 2>/dev/null | head -n 1; }   # 钥匙串里这个账号的条目（目录里一个服务商一个文件）[服务名前缀]
 kc() { local d; d=$(kcd "$1" "${2:-}"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
@@ -922,6 +1003,8 @@ ok "密钥文件：第三方 API 账号的 key 按接口的域名存，启动时
 run CCA_KEYSTORE=file CCA_TTY="$(ans y)" cca rm kf >/dev/null 2>&1; rc=$?
 ok "密钥文件：删掉第三方 API 账号，它的 key 文件一起删" '[ $rc -eq 0 ] && [ ! -e "$KFA" ] && ! grep -q "\"kf\"" "$H/.cca/accounts.json"'
 
+fi
+if sect 10d; then
 # 10d. 订阅用量：经每个官方账号自己的出口，让 Claude Code 自己查（get_usage），查不到时显示缓存；菜单里附上最近一次的
 setoa() {   # setoa .claude.json 字段=值…：改 oauthAccount（套餐、accountUuid）
 	python3 - "$@" <<'PY'
@@ -1111,6 +1194,8 @@ run CCA_TTY="$(ans y)" cca rm bob >/dev/null 2>&1
 ok "cca rm 官方账号：记下备查的 API key 一起删掉（钥匙串的条目和 config.json 里的记录）" '[ "$had" = yes ] && [ ! -e "$T/keychain/cca-ref-$BAID" ] && cfgok "\"ref_keys\" not in c and \"$BAID\" not in c.get(\"key_hints\", {})"'
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 
+fi
+if sect 10e; then
 # 10e. 不用路由器、只用直连的第三方 API 账号
 H4="$T/home4"; mkdir -p "$H4/.claude"
 r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
@@ -1129,6 +1214,8 @@ ok "没配置路由器、只配置了本机的代理（服务器上）：添加�
 r4 CCA_TTY="$(ans y)" cca rm erin@example.com >/dev/null 2>&1
 cp -p "$T/h4.config.json" "$H4/.cca/config.json"
 
+fi
+if sect 10f; then
 # 10f. Codex 账号：单独的账号表 codex.json，和 Claude 账号共用端口池；每个账号一个 CODEX_HOME，~/.codex 里白名单上的
 # 条目共享；登录经 codex 的 app-server、在账号专属的浏览器里；用量经 app-server 查
 X="$H/.codex"; CX="$H/.cca/codex.json"
@@ -1383,6 +1470,8 @@ DD=$(ls -d "$H"/.cca/codex/accounts/dave-example-com-*)
 mkdir -p "$H/.cca/codex/accounts/orphan-000000/codex/worktrees/w"; printf '{"tokens": {"access_token": "at-SECRET"}}' > "$H/.cca/codex/accounts/orphan-000000/codex/auth.json"
 ok "（准备一键还原）dave 登录着、建过 git 工作树；另有一个从账号表里直接删掉、目录还留着登录凭证的账号" '[ -f "$DD/codex/auth.json" ] && [ -d "$DD/codex/worktrees/dave" ]'
 
+fi
+if sect 10f2; then
 # 10f2. Antigravity（agy）账号：单独的账号表 agy.json，和 Claude、Codex 共用端口池；每个账号一个数据目录（--gemini_dir），
 # 设了 SSH_CONNECTION 让 agy 把登录 token 存进数据目录里的文件（不进钥匙串；cca 先在临时目录里探测这个版本确实这样，按程序缓存）；
 # ~/.gemini 里白名单上的条目共享；登录页在账号专属的 Chrome 里打开，授权码照常从 fd 3 问、交给 agy；没有查用量的接口、第三方 API
@@ -1486,6 +1575,8 @@ rm -rf "$AGJ" "$H/.cca/agy"; python3 -c 'import json,sys; p=sys.argv[1]; c=json.
 run cca ls >/dev/null 2>&1
 ok "（收尾）删掉 agy.json：后面的用例照没用过 agy 写" '[ ! -e "$AGJ" ] && [ "$(cfgv "\"agy\" in c")" = False ]'
 
+fi
+if sect 10g; then
 # 10g. 图形界面（cca App）的接口（macos/PROTOCOL.md）：只读的 cca _gui hello / state / live（JSON；不写文件、不经过自动更新），
 #      事件文件和带范围的同意（CCA_EVENTS / CCA_GRANT），出口检测结果（health.json、check --json），usage --json 的新字段。
 #      输出存进 $GF，这一节最后交给 App 的契约测试解码（macos/test.sh；没有 swiftc 时跳过并说明）
@@ -1878,6 +1969,8 @@ out=$(runev cca cost sync --json 2>/dev/null); rc=$?
 rm -f "$H/.cca/cost"; mv "$T/cost.dir" "$H/.cca/cost"
 ok "统计不成（~/.cca/cost 不是目录）：退出码 1，fail 事件 cost_unavailable，stdout 不出 JSON" '[ $rc -eq 1 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cost_unavailable\""'
 cp -p "$T/cost.aj.json" "$AJ"; cp -p "$T/cost.dave.json" "$DD/codex/auth.json"
+fi
+if sect 10h; then
 # 10h. 提问会话（macos/PROTOCOL.md 4.6）：App 开的封闭流程，提问发成 ask 事件，答案从 fd 3 的管道读（tests/gui_session.py 扮演 App）
 sess() {   # sess 答案JSON [驱动的参数…] -- 命令…：带答案管道运行，stdin 接 /dev/null（App 就是这样开流程的）
 	local a="$1"; shift
@@ -2124,6 +2217,8 @@ else
 	echo "SKIP  App 的契约测试（没有 swiftc 或 macos/test.sh）"
 fi
 
+fi
+if sect 11; then
 # 11. 文字和编码
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
@@ -2152,6 +2247,8 @@ ok "lint：cca、install.sh、release.sh、policy.sh、macos 的脚本和 App �
 out=$(run cca router status 2>&1)
 ok "router status：列出槽位、端口和选中节点" 'printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A" && printf "%s" "$out" | grep -q "槽位 CCA-2 :7902 监听中 → REJECT"'
 
+fi
+if sect 11a2; then
 # 11a2. 多设备共用一个路由器（owners 认所有权；只在 macOS 上）：现在路由器上只有 alice@槽位 1（owner = 这台）
 cp "$R/etc/cca/accounts.yaml" "$T/md_acc.bak"; cp "$R/etc/cca/owners" "$T/md_own.bak"
 cp "$H/.cca/config.json" "$T/md_cfg.bak"; cp "$H/.cca/accounts.json" "$T/md_tbl.bak"
@@ -2178,6 +2275,8 @@ cp "$T/md_cfg.bak" "$H/.cca/config.json"; cp "$T/md_tbl.bak" "$H/.cca/accounts.j
 [ -f "$T/md_keys.bak" ] && cp "$T/md_keys.bak" "$R/etc/dropbear/authorized_keys"
 run CCA_YES=1 cca router sync -y >/dev/null 2>&1
 
+fi
+if sect 11b; then
 # 11b. 自动更新：假的 GitHub Releases + 测试用发布密钥
 G="$T/gh"; mkdir -p "$G"
 ssh-keygen -q -t ed25519 -N '' -C test-release -f "$T/relkey"; ssh-keygen -q -t ed25519 -N '' -f "$T/evilkey"
@@ -2263,6 +2362,8 @@ ok "装了测试版之后，出了更新的正式版照常自动更新；这次�
 publish 9.9.15-beta.1; out=$(run cca update --check --json 2>/dev/null); out2=$(run cca update --check 2>&1); rm -rf "$G/v9.9.15-beta.1"
 ok "update --check：正式版上只看正式版（更新的 9.9.15-beta.1 不算），已是最新" 'printf "%s" "$out" | jok "d[\"channel\"] == \"stable\" and d[\"latest\"] == \"9.9.14\" and d[\"available\"] is False" && printf "%s" "$out2" | grep -q "已是最新版本 9.9.14"'
 
+fi
+if sect 11b1; then
 # 11b1. 图形界面 App（cca gui）：Release 附带的 cca-app.zip（命名空间 cca-app 签名），只装和 cca 同版本的；App 开着时先下载放着，
 #       退出后再换；cca 更新后，下一次运行 cca 时在后台跟着更新；开发模式从源码编译（这里用假的 build.sh）
 GA="$H/Applications/cca.app"
@@ -2359,6 +2460,8 @@ out=$(run CCA_GUI_SRC="$T/devgui" bash "$CCA" gui 2>&1); rc=$?
 out2=$(run CCA_GUI_SRC="$T/devgui" bash "$CCA" gui 2>&1)
 ok "开发模式（git 仓库里的 cca）：cca gui 从源码编译（源码没变不再编），用仓库里的 cca 打开编好的 App，不装进 ~/Applications" '[ $rc -eq 0 ] && [ "$(grep -c "^BUILD .*--arch native" "$T/build.log")" = 1 ] && grep -qF "OPEN [--env] [CCA_GUI_CCA=$CCAP] [$T/devgui/build/cca.app]" open.log && [ ! -e "$GA" ]'
 
+fi
+if sect 11b2; then
 # 11b2. 维护者的账号 → 节点映射：私有仓库（假 git）+ 这台机器的 deploy key + 发布密钥签名
 # （这时装着的是 mkver 换成测试密钥的版本，映射用 $T/relkey 签）
 PR="$T/policy_repo"; mkdir -p "$PR"; PK="$H/.cca/policy/id_ed25519"
@@ -2510,6 +2613,8 @@ ok "映射里的节点在路由器上改了名、映射还没更新：账号表�
 pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
 ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
 
+fi
+if sect 11b2b; then
 # 11b2b. 维护者参考配置里的节点：./policy.sh 从维护者的 custom.yaml 抽出策略组 OpenAi 和它引用的节点（nodes.json，命名空间
 #        cca-nodes 签名），各台机器拉映射时一起拉；缺的直接写进路由器（OpenClash 选用的配置、ShellCrash 的订阅配置）和本机
 #        Clash Verge 当前选用的配置文件（行尾带 # cca），名字补进同名策略组。这一节结束时路由器、账号表、Clash Verge 都还原
@@ -2686,6 +2791,8 @@ rm -f "$T/away" "$T/verge/reject_text" "$V/profiles/Lprofile1.yaml" "$H/.cca/bac
 cp "$T/verge/profiles.snap" "$V/profiles.yaml"; cp "$T/verge/base.snap" "$T/verge/base.yaml"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 
+fi
+if sect 11b3; then
 # 11b3. 维护者管理各台机器的 deploy key（policy.sh key）：假 gh 模拟 GitHub 的 deploy key 接口（存在 $T/deploy_keys.json），
 # 有 $T/policy_keys 时假 git 按它认 deploy key（没加上就拒绝，认出来了记下最近使用）
 PS="$D/../policy.sh"; touch "$T/policy_keys"; : > ghcli.log
@@ -2749,6 +2856,8 @@ out2=$(run $NOPD CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
 ok "仓库：CCA_POLICY_DEFAULT 设成空、又没写 -R 时不猜；-R 指定别的仓库；都没设时用 cca 里写的默认仓库" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不知道是哪个映射仓库：加上 -R 维护者/仓库" && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "example/other 上还没有 deploy key" && [ -n "$defrepo" ] && grep -q "^GH api GET repos/$defrepo/keys" ghcli.log'
 rm -f "$T/policy_keys"
 
+fi
+if sect 11b3b; then
 # 11b3b. 把账号锁进映射：这台机器生成一条命令（cca policy request），维护者在 cca 的仓库里直接运行（policy.sh lock），确认后写进映射、
 #        签名推送，再拉回来这个账号就被固定了。policy.sh 读旁边那份 cca 的发布公钥：放在假的维护者目录里，用测试发布密钥的 cca；
 #        映射仓库就放在它旁边（默认的位置）。这一节用自己的映射，结束时账号表、配置、映射、假的映射仓库都还原
@@ -2843,6 +2952,8 @@ runcmd "$(ans)" "./policy.sh lock claude pub@example.com US-A -y"
 ok "上次写进去了、没发布成：再运行一次时提醒还没发布，告诉维护者怎么发布" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还有没发布的改动" && printf "%s" "$out" | grep -qF "./policy.sh $MR"'
 for f in accounts.json codex.json config.json; do cp -p "$T/lock.$f" "$H/.cca/$f"; done; cp -p "$T/lock.policy.json" "$PD"; cp -p "$T/lock.policy.json" "$PR/policy.json"; cp -p "$T/lock.policy.json.sig" "$PR/policy.json.sig"
 
+fi
+if sect 11b3c; then
 # 11b3c. 设备统计（presence）：维护者在映射里配置了设备统计的服务器（真的 server/cca-presence.py：127.0.0.1 上随机端口、测试证书、
 #        测试发布密钥，ttl 是 STTL 秒）之后，映射里的账号经 cca 用的时候这台 Mac 在后台起一个上报进程，把开着的会话报给服务器；
 #        cca devices 问服务器这个账号连着哪些设备。设备清单由维护者 ./policy.sh presence sync（假 gh 的 deploy key）推给服务器。
@@ -3050,6 +3161,8 @@ cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json"
 cp -p "$T/pres.pr.json" "$PR/policy.json"; cp -p "$T/pres.pr.sig" "$PR/policy.json.sig"; cp -p "$T/pres.local.json" "$H/.cca/policy/policy.json"
 cp -p "$T/pres.mr.json" "$MR/policy.json"; cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 
+fi
+if sect 11b4; then
 # 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开
 #       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时
 #       从路由器拷（core/nodes.json），再补维护者的参考节点。这一节不用映射（config.json 里的 policy、~/.cca/policy 先挪开），
@@ -3199,6 +3312,8 @@ core_stop; rm -rf "$GA" "$CN" "$H/.cca/policy"; mv "$T/policy.core" "$H/.cca/pol
 cp "$T/config.core" "$H/.cca/config.json"; cp "$T/accounts.core" "$H/.cca/accounts.json"
 run CCA_TTY="$(ans y)" cca local setup >/dev/null 2>&1; "$T/verge_regen"
 
+fi
+if sect 11b5; then
 # 11b5. 辅助安装（cca [codex|agy] install-cli；终端里用到没装的命令时先问）：官方安装脚本（假 curl 给 $T/fake_installer.sh）先直连，
 #       不行时问过再经内置代理的一个节点装：另起的临时内核（假 mihomo，状态在 $T/core_install），节点由维护者映射的 install_node
 #       指定，没指定时现选。节点定义是内置代理的那些（这里直接写 core/nodes.json）。这一节结束时映射、配置、命令都还原
@@ -3307,6 +3422,8 @@ rm -rf "$H/.cca/policy" "$CN" "$ID"; mv "$T/policy.inst" "$H/.cca/policy"
 cp "$T/config.inst" "$H/.cca/config.json"; cp "$T/accounts.inst" "$H/.cca/accounts.json"
 ok "辅助安装用完不留东西：没建 agy 的账号表，~/.local/bin 里只剩原来的" '[ ! -e "$H/.cca/agy.json" ] && [ ! -e "$H/.local/bin/agy" ] && [ ! -e "$H/.local/bin/claude" ] && [ ! -e "$H/.local/bin/codex" ]'
 
+fi
+if sect 11b6; then
 # 11b6. 服务器上安装（CCA_REMOTE_LOGIN=1：Mac 上走服务器的流程）：从没配置过路由器、直连不通（假 curl：direct_down 连不上，direct_loc 是
 #       直连的出口地区）时，cca install、cca add 不问路由器，给出维护者运行的一行命令（公钥和别名写在里面），之后每隔几秒自动拉映射（回车
 #       马上拉，s 先跳过）；维护者加上以后导入映射指定的安装节点和映射里账号的节点（参考节点），配置内置代理（假内核、假的界面 App），
@@ -3351,6 +3468,8 @@ ok "服务器上能直连：照旧问要不要配置路由器，不等维护者�
 cp "$T/pr.srv" "$PR/policy.json"; rm -f "$PR/policy.json.sig" "$PR/nodes.json" "$PR/nodes.json.sig"; [ ! -f "$T/pr.srv.sig" ] || cp "$T/pr.srv.sig" "$PR/policy.json.sig"
 pks "$(ans)" rm -y "$salias" >/dev/null 2>&1
 
+fi
+if sect 11c; then
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3" "$T/tmp3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
@@ -3394,6 +3513,8 @@ out=$(r3 CCA_PYTHON="$T/oldpy/python3" "$H3/.cca/bin/cca" install 2>&1); rc=$?
 out2=$(r3 PATH="$T/oldssh:$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$H3/.cca/bin/cca" install 2>&1); rc2=$?
 ok "cca install 也查 Python、OpenSSH 的版本（手动下载的）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca 要 Python 3.8 或更新（.*python3 是 3.6）" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "OpenSSH 太旧（8.0）"'
 
+fi
+if sect 11d; then
 # 11d. 程序坞：cca 打开的 App 实例（账号的 Chrome、桌面 App）、终端交接用完退出的系统终端，退出以后去掉程序坞「最近使用的 App」里
 # 留下的图标（cca _dock-tidy）。测试里程序坞的设置是 $T/dock/dock.plist（run 带着 CCA_DOCK_PREFS；CCA_DOCK_SETTLE=0：不等），
 # 假 killall 只记一笔，假 lsappinfo 回 $T/lsappinfo.txt，假 open 像 LaunchServices 那样在后台跑小 App（跑完在 open.log 记 DOCK-APP-DONE）
@@ -3476,6 +3597,8 @@ rm -f "$T/lsappinfo.txt"; wait $TH
 ok "程序坞：已经有一个在整理（拿着锁）时，新来的记一笔就走，由那一个一起整理" 'perl -e "exit($t1 - $t0 < 2 ? 0 : 1)" && [ "$n1" = 1 ]'
 ok "程序坞：有的 App 的记录一直不清（它起的进程还在）时不拖累别的：别的先整理（重启前它的图标也拿掉，新的程序坞照着记录加回一个，不会多），记录没了再整理它" '[ "$r1" = "Preview:nobid A-back" ] && [ "$(kills)" = 2 ] && [ "$(dk get)" = "Preview:nobid" ] && [ -z "$(ls "$DK/cca-dock" | grep exited)" ]'
 
+fi
+if sect 12; then
 # 12. 一键还原：移除端口池需要重载（restore 已确认）
 cp -R "$T/appsrc/9.9.16/cca.app" "$GA"; "$GA/Contents/MacOS/cca" & GUIPID=$!; sleep 0.3
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
@@ -3516,4 +3639,5 @@ ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启�
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
+fi
 echo "---- $pass passed, $fail failed"
