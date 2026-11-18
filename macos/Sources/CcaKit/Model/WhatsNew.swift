@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.3.0-beta.7", title: "配置更有谱：新手教程手把手带你配好第一台 Mac", points: [
+            .init(symbol: "list.number",
+                  text: "新手教程前面加了几张配置步骤卡：选这台 Mac 怎么联网（路由器 / 没有路由器用内置代理 / 先跳过）、添加第一个账号，照着一步步就能配好。首页的欢迎卡片也多了「先看看怎么配置」，动手之前先看图文。"),
+            .init(symbol: "book",
+                  text: "README 的安装教程也更新到了现在的流程：macOS 上一键安装后自动打开图形界面、在 App 里引导配置，三种联网方式和终端配置都写清楚了。"),
+        ], art: "onboard"),
         ReleaseNote(version: "3.3.0-beta.6", title: "没有路由器的笔记本也能配：内置代理 + 维护者节点", points: [
             .init(symbol: "laptopcomputer",
                   text: "配置向导新增「没有路由器」一项：用 cca 自带的内置代理（内核在这个 App 里跑，要 macOS 26），节点由维护者的私有映射提供。映射里已经有节点就直接配好、接着添加账号。"),

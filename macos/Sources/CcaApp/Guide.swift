@@ -64,8 +64,8 @@ final class Guide {
         }
     }
 
-    func openTutorial() {
-        step = 0
+    func openTutorial(at step: Int = 0) {
+        self.step = step
         sheet = .tutorial
     }
 
@@ -125,7 +125,10 @@ struct TutorialCard {
     let art: Art
 
     /// 小图；更新说明（ReleaseNote.art）按名字找，认不出就画 Logo
-    enum Art: String { case fan, office, sidebar, open, quota, route, map, rename, menubar, badges, logo }
+    enum Art: String { case fan, onboard, netchoice, addacct, office, sidebar, open, quota, route, map, rename, menubar, badges, logo }
+
+    /// 配置步骤卡从第几张起（紧跟开头"一台 Mac，好几个账号"那张）：首页欢迎卡片的「先看看怎么配置」跳到这里。
+    static let setupStart = 1
 
     static let all: [TutorialCard] = [
         TutorialCard(title: "一台 Mac，好几个账号", points: [
@@ -133,6 +136,22 @@ struct TutorialCard {
             ("point.3.connected.trianglepath.dotted", "每个账号有自己的登录资料和网络出口，启动前 cca 会先检查。"),
             ("lock.shield", "每个账号用自己的登录和浏览器资料，换账号不用重新登录。"),
         ], art: .fan),
+        // 配置步骤卡（setupStart…）：第一次装好、在 App 里一步步配置时照着走；配好后、点「新手教程」时也能当参考再看。
+        TutorialCard(title: "先把这台 Mac 配置好", points: [
+            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 一步步带你走——先选这台 Mac 怎么给账号联网，再添加第一个账号。"),
+            ("list.number", "每一步都有说明，照着填就行；中途点「以后再说」也行，随时能从总览的「开始配置」接着来。"),
+            ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」。"),
+        ], art: .onboard),
+        TutorialCard(title: "选这台 Mac 怎么联网", points: [
+            ("wifi.router", "有路由器：家里/办公室有改好的旁路由（装了 OpenClash 或 ShellCrash），向导里填地址、输一次密码装免密登录、勾选允许用的节点，按端口给每个账号分流。"),
+            ("laptopcomputer", "没有路由器：用 cca 自带的内置代理（内核在这个 App 里跑，要 macOS 26），节点由维护者的私有映射提供；还没配过的，向导给一行命令发给维护者，加好后自动导入。"),
+            ("arrow.forward", "先跳过：还没想好也行，先进总览，以后在工具栏的「＋」里再配。"),
+        ], art: .netchoice),
+        TutorialCard(title: "添加第一个账号", points: [
+            ("person.badge.plus", "选好网络后，向导问要不要加第一个账号：填登录邮箱、起个别名（可留空）、选一个出口节点。"),
+            ("globe", "第一次使用时，会在这个账号专属的浏览器窗口里登录——每个账号各用各的登录资料，换账号不用重登。"),
+            ("checkmark.circle", "加好就能用了：在总览点这张卡片打开账号。想再加就点账号列表上的「＋」。"),
+        ], art: .addacct),
         TutorialCard(title: "总览：哪个在用，哪个额度用完了", points: [
             ("square.grid.2x2", "打开 App 先看到总览：每个账号一张卡片，Claude、ChatGPT、第三方 API 账号分开排好。"),
             ("desktopcomputer", "图里的屏幕在滚代码、聊天，说明这个账号正在用（App 开着，或者终端里有会话）。"),
@@ -365,6 +384,9 @@ struct TutorialArt: View {
         Group {
             switch art {
             case .fan: fanArt
+            case .onboard: onboardArt
+            case .netchoice: netchoiceArt
+            case .addacct: addacctArt
             case .office: officeArt
             case .sidebar: sidebarArt
             case .open: openArt
@@ -457,6 +479,111 @@ struct TutorialArt: View {
                     avatar(k, size: 34).position(ends[k])
                 }
             }
+        }
+    }
+
+    /// 配置向导的三步：选上网方式 → 配好网络 → 加第一个账号（第一步高亮）。
+    private var onboardArt: some View {
+        let steps: [(String, String)] = [("point.3.connected.trianglepath.dotted", "选上网方式"),
+                                         ("wifi.router", "配好网络"), ("person.badge.plus", "加第一个账号")]
+        return HStack(spacing: 6) {
+            ForEach(steps.indices, id: \.self) { i in
+                VStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(i == 0 ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Surface.tile))
+                            .frame(width: 48, height: 48)
+                            .overlay { if i != 0 { Circle().strokeBorder(Surface.hairline, lineWidth: 0.5) } }
+                        Image(systemName: steps[i].0)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(i == 0 ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
+                    }
+                    Text("第 \(i + 1) 步").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                    Text(steps[i].1).font(.caption.weight(.medium))
+                }
+                .frame(width: 94)
+                if i < steps.count - 1 {
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    /// 选上网方式的样子：三个选项，第一个选中（路由器 / 没有路由器 / 先跳过）。
+    private var netchoiceArt: some View {
+        let opts: [(String, String, String)] = [
+            ("wifi.router", "路由器", "OpenClash / ShellCrash，按端口分流"),
+            ("laptopcomputer", "没有路由器", "用 App 内置的代理，节点由维护者提供"),
+            ("arrow.forward", "先跳过", "以后在总览里配"),
+        ]
+        return panel {
+            VStack(spacing: 0) {
+                ForEach(opts.indices, id: \.self) { i in
+                    let on = i == 0
+                    HStack(spacing: 11) {
+                        Image(systemName: opts[i].0)
+                            .font(.title3)
+                            .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .frame(width: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(opts[i].1).font(.callout.weight(.semibold))
+                            Text(opts[i].2).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(on ? Color.accentColor.opacity(0.08) : Color.clear)
+                    if i < opts.count - 1 { Divider().padding(.leading, 51) }
+                }
+            }
+        }
+        .frame(width: 408)
+    }
+
+    /// 添加账号的样子：登录邮箱、出口节点，一个「添加」按钮。
+    private var addacctArt: some View {
+        panel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 9) {
+                    Image(systemName: "person.crop.circle.badge.plus").font(.title2).foregroundStyle(.tint)
+                    Text("添加账号").font(.headline)
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    acctField("登录邮箱", "name@email.com", placeholder: true)
+                    acctField("出口节点", "US-B", trailing: "chevron.up.chevron.down").frame(width: 120)
+                }
+                HStack {
+                    Spacer()
+                    Label("添加", systemImage: "plus")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(Color.accentColor))
+                }
+            }
+            .padding(16)
+        }
+        .frame(width: 430)
+    }
+
+    private func acctField(_ label: String, _ value: String, placeholder: Bool = false, trailing: String? = nil) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(value).font(.callout)
+                    .foregroundStyle(placeholder ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                Spacer(minLength: 4)
+                if let trailing { Image(systemName: trailing).font(.caption2).foregroundStyle(.secondary) }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(shape.fill(.background))
+            .overlay(shape.strokeBorder(Surface.hairline, lineWidth: 1))
         }
     }
 
@@ -790,6 +917,7 @@ struct TipCard: View {
 /// 「以后再说」这次先收起（不持久；真配置过后自然不再出现）。
 struct WelcomeBanner: View {
     @Environment(AppModel.self) private var model
+    @Environment(Guide.self) private var guide
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -807,6 +935,8 @@ struct WelcomeBanner: View {
                 HStack(spacing: 10) {
                     Button("开始配置") { model.startOnboarding() }
                         .buttonStyle(.glassProminent)
+                    Button("先看看怎么配置") { guide.openTutorial(at: TutorialCard.setupStart) }
+                        .buttonStyle(.glass)
                     Button("以后再说") { withAnimation(.snappy) { model.onboardingDismissed = true } }
                         .buttonStyle(.glass)
                 }
