@@ -5978,14 +5978,6 @@ def cmd_local_node(n):
     print(local_names(cfg_load()).get(n, n))
 
 
-def cmd_fill_acc():
-    """给 Mac 上跑的 apply.rb --fill-source 的账号表：只有参考节点"""
-    f = policy_fill()
-    if not f:
-        sys.exit(1)
-    print(json.dumps({'fill': f}, ensure_ascii=False))
-
-
 def cmd_file_replace(src, dst):
     """把 src 的内容原子地换进 dst（保留 dst 的权限），然后删掉 src"""
     with open(src, encoding='utf-8', newline='') as f:
@@ -14020,7 +14012,7 @@ CMDS = {
     'core-config': cmd_core_config, 'core-nodes-save': cmd_core_nodes_save, 'core-missing': cmd_core_missing, 'core-summary': cmd_core_summary,
     'node-check': cmd_node_check, 'node-testconfig': cmd_node_testconfig, 'node-save': cmd_node_save, 'node-ls': cmd_node_ls, 'node-rm': cmd_node_rm,
     'core-stale': cmd_core_stale, 'core-keep': cmd_core_keep, 'install-env': cmd_install_env, 'install-node': cmd_install_node,
-    'fill-acc': cmd_fill_acc, 'file-replace': cmd_file_replace,
+    'file-replace': cmd_file_replace,
     'slot-rows': cmd_slot_rows, 'add-api': cmd_add_api, 'api-key-out': cmd_api_key_out,
     'secret-check': cmd_secret_check, 'secret-set': cmd_secret_set, 'secret-del': cmd_secret_del,
     'secret-status': cmd_secret_status, 'secrets-missing': cmd_secrets_missing, 'secrets-forget': cmd_secrets_forget,
@@ -17658,13 +17650,10 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 }
 
 # ---------------------------------------------------------------------------
-# 出门在外：连不上路由器时改走本机的 Clash 客户端。端口池和路由器上的一样：127.0.0.1 上的 mixed 入站 cca-n
-# （端口 7900+n）→ select 策略组 CCA-n，启动账号前经客户端内核的控制接口把组切到账号的节点（不用重载）。
-# 内置代理的端口池：写进内核的配置，经控制接口热加载
-# 正在运行的内核（PUT /configs，和它自己改完配置后的做法一样，不用重启）；其它基于 mihomo 的客户端由用户
-# 手动加配置，cca 经它的外部控制接口切换节点。
+# 出门在外：连不上路由器时改走本机的 Clash，也就是 cca 内置代理的 mihomo 内核（3.3.0-beta.8 起只有它）。端口池和路由器上的
+# 一样：127.0.0.1 上的 mixed 入站 cca-n（端口 7900+n）→ select 策略组 CCA-n，启动账号前经内核的控制接口把组切到账号的节点
+# （不用重载）。端口池写进内核的配置，经控制接口热加载正在运行的内核（PUT /configs，和它自己改完配置后的做法一样，不用重启）。
 # ---------------------------------------------------------------------------
-VERGE_ID="io.github.clash-verge-rev.clash-verge-rev"
 load_local() {
 	eval "$(py local-env)"
 	[ "$LOCAL_CTL" = unix:@core ] && LOCAL_CTL="unix:$(core_sock)"   # 内置代理（见下面"内置代理"一节）
@@ -17831,7 +17820,7 @@ node_read_block() {   # 终端：读一段多行粘贴（分享链接或 Clash �
 node_add() {   # node_add [分享链接]：解析 → 校验 → 存。成功后 ADDED_NODE 是节点名
 	ADDED_NODE=""
 	if ! node_custom_ok; then
-		if ! core_possible; then warn "自定义节点要用内置代理（$(core_runs_where)），这台机器用不了（macOS 要 26 或更新；或者内核没有这个架构）"
+		if ! core_possible; then warn "自定义节点要用内置代理，这台机器用不了（内置代理的内核没有 $(uname -m) 这个架构）"
 		else warn "这台机器配置了路由器：出口节点在 ${CMD} router setup 里选；自定义节点只给没有路由器、用内置代理的机器"; fi
 		return 1
 	fi
@@ -18094,9 +18083,9 @@ core_launch() {   # 内核由界面 App 托管：App 没开就在后台打开它
 	fi
 	open -g "$GUI_APP" --args --core || { warn "打开 ${GUI_APP} 失败"; return 1; }
 }
-# Linux 上开机后起内置代理的内核：用户自己的 crontab 里一行 @reboot（不用 root、不靠 systemd），运行 cca _core-keep（它看内置代理
-# 还在用、配置文件在才起内核）。只动带 # cca-core 记号的那一行，别的原样留着。cca local setup 选内置代理时问一次，
-# 不再用内置代理（cca local off、换客户端、cca restore）时删掉
+# 内核由 cca 在后台托管时（core_headless：Linux、macOS 26 以下），开机后起内置代理的内核：用户自己的 crontab 里一行 @reboot（不用
+# root、不靠 systemd），运行 cca _core-keep（它看内置代理还在用、配置文件在才起内核）。只动带 # cca-core 记号的那一行，别的原样
+# 留着。cca local setup 选内置代理时问一次，不再用内置代理（cca local off、cca restore）时删掉：加、删都看 core_headless
 CORE_BOOT_TAG="# cca-core"
 core_boot() {   # core_boot has|on|off；没有 crontab 命令、读不了用户的 crontab（不是"还没有"）、写不进去时返回 1
 	local cur line err="$CCA_HOME/crontab.err.$$" nl=$'\n'
@@ -18139,7 +18128,7 @@ core_reload() {   # 照账号表重新生成配置，交给在跑的内核重新
 	local_ports_ok || { warn "内置代理重新加载了配置，但端口 ${LOCAL_FIRST}–${LOCAL_LAST} 没有全部监听（可能被别的程序占用了）"; return 1; }
 	py local-set applied "$LOCAL_WANT"
 }
-core_retire() {   # 不再用内置代理（关掉、换成别的客户端；先改好 config.json 里的客户端）：删掉配置和拷来的节点（有密钥），等内核停下，
+core_retire() {   # 不再用内置代理（cca local off；先改好 config.json 里的客户端）：删掉配置和拷来的节点（有密钥），等内核停下，
 	              # 免得它还占着端口。界面 App（Linux 上是 cca _core-keep）看到配置没了会停掉它；没在托管（或者 10 秒还没停）就按 pid 文件停掉
 	local i ctl="$LOCAL_CTL"
 	rm -f "$CORE_DIR/config.yaml" "$CORE_DIR/nodes.json"
@@ -18147,7 +18136,7 @@ core_retire() {   # 不再用内置代理（关掉、换成别的客户端；先
 		rm -f "$UDP_FLAG"
 		info "本机 UDP 走节点也关掉了（系统服务还装着、不在运行；删掉它运行 cca local udp uninstall）"
 	fi
-	on_linux && { core_boot off || warn "没能从 crontab 里删掉开机起内核的那一行（带 ${CORE_BOOT_TAG}）：自己删一下（crontab -e）"; }
+	core_headless && { core_boot off || warn "没能从 crontab 里删掉开机起内核的那一行（带 ${CORE_BOOT_TAG}）：自己删一下（crontab -e）"; }
 	if on_linux || gui_running; then
 		LOCAL_CTL="unix:$(core_sock)"
 		for i in $(seq 1 40); do lctl GET /version; [ "$LCODE" = 200 ] || break; sleep 0.25; done
@@ -20216,7 +20205,7 @@ cmd_restore() {
 	if local_ready; then local_remove; info "本机 ${LOCAL_NAME} 里 cca 的端口池已移除"; fi
 	if ! on_linux && udp_present; then udp_uninstall || warn "本机 UDP 走节点的系统服务没删掉（原因见上面），接着还原别的"; fi
 	core_stop_stale   # 内置代理的内核（界面 App 退出时会停掉它，这里是 App 崩溃后留下的）
-	on_linux && core_boot off   # 开机起内核的那一行（上面换掉内置代理时已经删了；以前留下的也删）
+	core_headless && core_boot off   # 开机起内核的那一行（Linux、macOS 26 以下才会加；上面关掉内置代理时已经删了，以前留下的也删）
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
 	py cost-stop 2>/dev/null       # 正在统计折合金额的后台进程也停掉
 	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"

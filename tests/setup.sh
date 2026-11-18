@@ -477,6 +477,17 @@ cat > "$T/bin/env" <<'S'
 { printf 'ENV'; printf ' [%s]' "$@"; echo; } >> "$CCA_T/env.log"
 exec /usr/bin/env "$@"
 S
+# 假的 crontab：用户的 crontab 存在 $CCA_T/crontab（没有这个文件就是还没有），绝不碰这台 Mac 上真的。内置代理的内核由 cca 在后台
+# 托管时（macOS 26 以下，测试里用 CCA_GUI_OS 模拟）才会读写它
+cat > "$T/bin/crontab" <<'S'
+#!/bin/sh
+case "$1" in
+	-l) [ -f "$CCA_T/crontab" ] || { echo "crontab: no crontab for $(id -un)" >&2; exit 1; }; cat "$CCA_T/crontab" ;;
+	-) cat > "$CCA_T/crontab" ;;
+	*) echo "crontab: 测试里只支持 -l 和 -" >&2; exit 2 ;;
+esac
+S
+chmod 755 "$T/bin/crontab"
 # 假 git：只管 clone（cca 拉维护者的映射用）：记下网址、GIT_SSH_COMMAND 和 GIT_CONFIG_GLOBAL；policy_denied 时像
 # deploy key 还没加上那样拒绝，policy_offline 时像连不上 GitHub（带着 git 自己的套话），否则把 $CCA_T/policy_repo
 # 里的文件拷过去。别的子命令交给真的 git

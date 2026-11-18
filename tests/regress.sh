@@ -2478,7 +2478,7 @@ pol() {   # pol JSON [签名密钥]：写进假的私有映射仓库并签名
 	printf '%s\n' "$1" > "$PR/policy.json"; rm -f "$PR/policy.json.sig"
 	ssh-keygen -Y sign -q -n cca-policy -f "${2:-$T/relkey}" "$PR/policy.json" 2>/dev/null
 }
-nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签名（参考节点和映射用不同的命名空间）；原在已删的 11b2b 节，11b6 仍用
+nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签名（参考节点和映射用不同的命名空间）；11b2b、11b6 用
 	rm -f "$PR/nodes.json.sig"; ssh-keygen -Y sign -q -n cca-nodes -f "${1:-$T/relkey}" "$PR/nodes.json" 2>/dev/null
 }
 pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
@@ -2648,6 +2648,138 @@ out2=$(run cca policy 2>&1)
 ok "映射里的节点在路由器上改了名、映射还没更新：账号表跟着改成 HK-A2，不会被映射改回旧名字，照常启动" '[ $rc -eq 3 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && [ "$(sel CCA-1)" = HK-A2 ] && ! printf "%s" "$out" | grep -q "按维护者的映射固定为" && printf "%s" "$out2" | grep -q "Claude  alice@example.com → HK-A2（映射里写的是 HK-A，路由器上已经改名）"'
 pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
 ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
+
+fi
+if sect 11b2b; then
+# 11b2b. 维护者参考配置里的节点写进路由器：./policy.sh 从维护者的 custom.yaml 抽出策略组 OpenAi 和它引用的节点（nodes.json，命名空间
+#        cca-nodes 签名），各台机器拉映射时一起拉；缺的直接写进路由器的配置文件（OpenClash 选用的配置、ShellCrash 的订阅配置，行尾带
+#        # cca），名字补进同名策略组。3.3.0-beta.8 删 Clash Verge 时这一节整个删掉过，这里恢复的是路由器这一半。
+#        这一节结束时路由器、config.json、账号表和映射仓库都还原
+rm -rf "$T/router.snap"; cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
+rget() {   # rget 配置 'Ruby 表达式'：c 是读出来的配置，g 是它的 OpenAi 组成员，px 是节点名
+	ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; g = ((c["proxy-groups"] || []).find { |x| x["name"] == "OpenAi" } || {})["proxies"]; px = (c["proxies"] || []).map { |p| p["name"] }; exit(eval(ARGV[1]) ? 0 : 1)' "$1" "$2"
+}
+added() {   # added 原来的 现在的：现在的只是在原来的基础上加了行（原来的一行没删、没改）；输出加的行里带 # cca 的有几行
+	          # （块写法的节点只有 name 那一行带，组成员每行都带）
+	diff "$1" "$2" | awk '/^</ || /^---/ { bad = 1 } /^>/ && / # cca$/ { n++ } END { if (bad) print "x"; else print n + 0 }'
+}
+one_line() {   # one_line 配置文件 节点 一行写法 [缩进]：把 cca 写成块写法的节点换回 2.8.0-beta.5～7 写的一行（模拟旧版本写的）
+	python3 -c "import re,sys; p, n, f, i = sys.argv[1:5]; s = open(p).read(); t = re.sub(r\"(?m)^%s- name: %s # cca\\n(?:%s  .*\\n)*\" % (i, re.escape(n), i), lambda m: i + \"- \" + f + \" # cca\\n\", s, count=1); assert t != s; open(p, \"w\").write(t)" "$1" "$2" "$3" "${4:-}"
+}
+fill_tmp() { ls "$R"/tmp/cca.src.* "$R"/tmp/cca.fill.* 2>/dev/null; }   # 参考节点用过的临时文件（应该都删了）
+cat > "$T/custom.yaml" <<'Y'
+proxies:
+  - {name: AI-A, type: ss, server: 192.0.2.21, port: 8388, cipher: aes-128-gcm, password: x}
+  - name: AI-B
+    type: vless
+    server: 192.0.2.22
+    port: 443
+    uuid: 00000000-0000-4000-8000-000000000001
+    tls: true
+    servername: www.example.com
+    flow: xtls-rprx-vision
+    reality-opts:
+      public-key: -test-public-key
+      short-id: '0a1b2c3d4e5f6789'
+  - {name: US-A, type: ss, server: 192.0.2.1, port: 8388, cipher: aes-128-gcm, password: other}
+  - {name: AI-B2, type: ss, server: 192.0.2.2, port: 8388, cipher: aes-128-gcm, password: x}
+  - {name: LAN-ONLY, type: ss, server: 192.0.2.99, port: 8388, cipher: aes-128-gcm, password: x}
+proxy-groups:
+  - {name: Proxy, type: select, proxies: [LAN-ONLY, AI-A]}
+  - name: OpenAi
+    type: select
+    proxies:
+      - Proxy
+      - AI-A
+      - AI-B
+      - US-A
+      - AI-B2
+rules:
+  - SRC-IP-CIDR,192.0.2.100/32,Proxy
+  - MATCH,Proxy
+Y
+out=$(run bash "$D/../policy.sh" nodes "$T/custom.yaml" 2>"$T/pn.err"); rc=$?
+printf '%s\n' "$out" > "$PR/nodes.json"
+ok "policy.sh nodes：从维护者的配置里只抽出策略组 OpenAi 引用的节点（组成员里的策略组不算，规则、别的节点都不带），格式检查通过" '[ $rc -eq 0 ] && grep -q "参考节点：策略组「OpenAi」里的 4 个节点（Proxy 不是节点，不算）" "$T/pn.err" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j[\"version\"] == 1 and j[\"group\"] == \"OpenAi\" and [p[\"name\"] for p in j[\"proxies\"]] == [\"AI-A\", \"AI-B\", \"US-A\", \"AI-B2\"] and j[\"proxies\"][1][\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" else 1)" "$PR/nodes.json" && ! grep -q "LAN-ONLY\|SRC-IP" "$PR/nodes.json" && run bash "$CCA" _fill-check "$PR/nodes.json" >/dev/null'
+nodes_pub
+# 用户路由器上的配置：有 OpenAi 组（块写法，只有 US-A），没有 AI-A、AI-B；AI-B2 和 US-B 是同一个节点（地址一样）
+awk '{ print } /^proxy-groups:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" }' "$SRC" > "$T/src.tmp" && cat "$T/src.tmp" > "$SRC"; oc_restart
+cp "$SRC" "$T/src.fill"; n0=$(reloads); r0=$(restarts)
+out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "拉映射时一起拉参考节点（验签通过才换上，只有自己能读），马上同步：缺的直接写进 OpenClash 选用的配置文件，说明要重启一次才用得上，问过后重启（不热加载）" '[ $rc -eq 0 ] && [ "$(stat -f %Lp "$H/.cca/policy/nodes.json")" = 600 ] && printf "%s" "$out" | grep -q "已更新映射（.*；参考节点：策略组 OpenAi 的 4 个节点）" && printf "%s" "$out" | grep -qF "已把维护者参考配置里的节点写进 OpenClash 的配置文件 ${SRC}：补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B（行尾带 # cca；改之前的在 $R/etc/cca/source.bak.yaml）" && printf "%s" "$out" | grep -q "OpenClash 的配置文件里新写了维护者参考配置里的节点，要用上只能重启一次 OpenClash" && printf "%s" "$out" | grep -q "现在重启 OpenClash 吗" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ]'
+ok "OpenClash 的配置文件：AI-A、AI-B 一个一行插在 proxies 开头，名字接在 OpenAi 组后面，行尾都带 # cca，别的一个字节不动；US-A 是用户自己的（定义不动、不重复）；AI-B2 地址和 US-B 一样，组里加的是 US-B；原来的留了备份" '[ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$SRC" "px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\" && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" && g == %w[US-A AI-A AI-B US-B]" && cmp -s "$R/etc/cca/source.bak.yaml" "$T/src.fill"'
+ok "写之前用内核 -t 校验过（拿正在用的运行配置加上这些节点），记下了这一版的 id；重启后按写好的配置文件生成运行配置，里面就有；临时文件都删了" 'grep -q "^CORE .* -t -d $R/etc/openclash -f $R/tmp/cca.fill\." router.log && [ -s "$R/etc/cca/fill.ok" ] && grep -qF "\"id\": \"$(cat "$R/etc/cca/fill.ok")\"" "$R/etc/cca/accounts.yaml" && rget "$RC" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && g == %w[US-A AI-A AI-B US-B]" && [ ! -e "$R/etc/cca/fill.pending" ] && [ -z "$(fill_tmp)" ]'
+out=$(run cca router nodes 2>&1); out2=$(run cca router status 2>&1); out3=$(run cca policy 2>&1)
+ok "cca router nodes 列得出写进去的节点；cca router status、cca policy 说明参考节点" 'printf "%s" "$out" | grep -qx AI-A && printf "%s" "$out" | grep -qx AI-B && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有" && printf "%s" "$out3" | grep -q "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点（路由器配置文件里缺的直接写进去；内置代理直接进内核的节点定义）"'
+cp "$SRC" "$T/src.filled"; c0=$(grep -c '^CORE' router.log); r0=$(restarts); n0=$(reloads)
+out=$(run cca router sync 2>&1); rc=$?
+ok "再同步一次：配置文件里都有了，不再写、不重启也不重载，也不再拿内核校验" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && ! printf "%s" "$out" | grep -q "写进 OpenClash 的配置文件"'
+one_line "$SRC" AI-A '{name: "AI-A", type: "ss", server: "192.0.2.21", port: 8388, cipher: "aes-128-gcm", password: "x"}' '  '
+out=$(run cca router sync 2>&1); rc=$?
+ok "2.8.0-beta.5～7 写成一行的参考节点：同步时改成和别的节点一样的块写法（内容没变：不重启、不重载、不再拿内核校验）" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && [ ! -e "$R/etc/cca/fill.pending" ]'
+edit_table 'j["nodes"].append("AI-A")' "$H/.cca/config.json"; edit_table 'j["ai@example.com"] = "AI-A"'
+out=$(run cca router sync -y 2>&1); rc=$?; fs=$(( $(cfgv 'c["ports"]["ai@example.com"]') - 7900 ))
+ok "写进去的节点可以当账号的出口：选进可选节点、账号用它，端口切到 AI-A" '[ $rc -eq 0 ] && [ "$(sel "CCA-$fs")" = AI-A ]'
+c0=$(grep -c '^CORE' router.log); r0=$(restarts); oc_restart
+ok "OpenClash 重启：配置文件里本来就有，钩子不用再写（也不拿内核试），账号的端口照常走 AI-A" '[ "$(restarts)" = $((r0 + 1)) ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && rget "$RC" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$fs")" = AI-A ] && cmp -s "$SRC" "$T/src.filled"'
+cp "$T/src.fill" "$SRC"; r0=$(restarts); oc_restart
+out=$(run cca router sync 2>&1); rc=$?
+ok "订阅更新把配置文件整个换掉了：OpenClash 启动时钩子写回去，这次生成的运行配置里也照样带上，不用为这个再重启一次" '[ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$RC" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$fs")" = AI-A ] && [ ! -e "$R/etc/cca/fill.pending" ] && grep -q "【cca】已把维护者参考配置里的节点写进配置文件 $SRC" "$R/tmp/openclash.log" && [ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ]'
+echo 192.0.2.22 > "$R/core_reject"; rm -f "$R/etc/cca/fill.ok"; cp "$T/src.fill" "$SRC"; oc_restart
+ok "这台路由器的内核不认参考配置里的节点（还没校验过的这一版）：启动时钩子先拿内核试，不通过就不写（OpenClash 照常起来，端口池照常），用它的账号宁可断开" 'cmp -s "$SRC" "$T/src.fill" && ! rget "$RC" "px.include?(\"AI-A\")" && [ "$(nl_)" -gt 0 ] && [ "$(sel "CCA-$fs")" = REJECT ] && grep -q "维护者参考配置里的节点没通过 OpenClash 内核的校验，没有写进配置文件" "$R/tmp/cca-router.log" && [ ! -e "$R/etc/cca/fill.ok" ] && [ -z "$(fill_tmp)" ]'
+c0=$(grep -c '^CORE' router.log); out=$(run cca router status 2>&1); oc_restart
+ok "没通过校验的记下了：再启动不再拿内核试；cca router status 说还缺什么、为什么" '[ "$(grep -c "^CORE" router.log)" = "$c0" ] && printf "%s" "$out" | grep -q "OpenClash 的配置文件里还要补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B（这一版还没在这台路由器的内核上校验过）" && printf "%s" "$out" | grep -q "上次没写成：维护者参考配置里的节点没通过 OpenClash 内核的校验"'
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "同步时照样再校验一次，内核还是不认：说明没写，配置文件不动，用它的账号断开" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者参考配置里的节点没通过 OpenClash 内核的校验，没有写进配置文件" && cmp -s "$SRC" "$T/src.fill" && [ "$(sel "CCA-$fs")" = REJECT ] && [ ! -e "$R/etc/cca/fill.ok" ]'
+rm -f "$R/core_reject"; r0=$(restarts); n0=$(reloads)
+out=$(run cca router sync -y 2>&1); rc=$?
+ok "内核认了（比如升级了）：同步时写进配置文件，重启一次用上，账号的端口回到 AI-A" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ] && [ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$RC" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$fs")" = AI-A ] && [ -s "$R/etc/cca/fill.ok" ]'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(port=8443) for x in j['proxies'] if x['name'] == 'AI-B']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
+cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "维护者改了参考配置里的节点：cca 写进去的那一行跟着改（不会多出一个），问过后重启" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "按参考配置更新了节点 AI-B" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(diff "$T/src.prev" "$SRC" | grep -c "^[<>]")" = 2 ] && rget "$SRC" "px.count(\"AI-B\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443"'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(password='changed') for x in j['proxies'] if x['name'] == 'US-A']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
+cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "参考配置里和用户自己的节点同名的改了：用户的那个不动（不是 cca 写的），也不用重启" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.prev" && [ "$(restarts)" = "$r0" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\""'
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(password='y2') for x in j['proxies'] if x['name'] == 'AI-A']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
+r0=$(restarts); out=$(run cca policy pull 2>&1); rc=$?
+out2=$(run cca router status 2>&1)
+ok "非交互时要重启也不重启：配置文件照样写好，说清楚这次的改动要等 OpenClash 下次重启；cca router status 也这么说" '[ "$(restarts)" = "$r0" ] && printf "%s" "$out" | grep -q "没有重启：这次的改动要等 OpenClash 下次重启" && [ -e "$R/etc/cca/fill.pending" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"x\"" && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有（新写进去的要等 OpenClash 重启后才用上）"'
+r0=$(restarts); n_cli=$(grep -c '^ARGS:' claude.log); out=$(run CCA_TTY="$(ans n)" cca @ai --version 2>&1); rc=$?
+ok "在家启动账号：必要重启只问一次；拒绝后即使节点同名也阻断，不调用客户端" '[ $rc -eq 1 ] && [ "$(printf "%s" "$out" | grep -c "现在重启 OpenClash 吗")" = 1 ] && [ "$(restarts)" = "$r0" ] && [ "$(sel "CCA-$fs")" = AI-A ] && printf "%s" "$out" | grep -q "路由器账号节点未能核实" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ]'
+out=$(run CCA_TTY="$(ans y)" cca router sync 2>&1); rc=$?
+ok "再同步时同意重启：用上配置文件里新写的" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && [ ! -e "$R/etc/cca/fill.pending" ] && [ "$(sel "CCA-$fs")" = AI-A ]'
+cp "$H/.cca/policy/nodes.json" "$T/nodes.good"; nodes_pub "$T/evilkey"
+out=$(run cca policy pull 2>&1); rc=$?
+nodes_pub; python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'][0].pop('server'); json.dump(j, open(p, 'w'))" "$PR/nodes.json"; nodes_pub
+out2=$(run cca policy pull 2>&1); rc2=$?
+ok "参考节点不是发布密钥签的、格式不对：映射和参考节点都不换，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "参考节点（nodes.json）的签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参考节点（nodes.json）的格式不对：第 1 个节点「AI-A」：server 不对" && cmp -s "$H/.cca/policy/nodes.json" "$T/nodes.good"'
+cp "$T/nodes.good" "$PR/nodes.json"
+python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'].append({'name': 'SC-X', 'type': 'ss', 'server': '192.0.2.29', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x'}); json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
+# ShellCrash：订阅配置里有 OpenAi 组（块写法）；参考节点里的 SC-X 和它的自定义节点重名，不写
+rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp -R "$T/shellcrash/." "$R/"; echo CrashCore > "$R/core"
+awk '{ sub(/^  - name: HK-A$/, "  - name: HK-A2") } /^rules:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" } { print }' "$T/shellcrash/etc/ShellCrash/yamls/config.yaml" > "$SCD/yamls/config.yaml"
+cp "$SCD/yamls/config.yaml" "$T/sc_base.fill"; sc_restart; n0=$(reloads); r0=$(restarts)
+out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+ok "ShellCrash：缺的写进订阅配置、名字补进 OpenAi 组，问过后重启一次（不热加载）；和它的自定义节点重名的 SC-X 不写（说明原因，只有一个 SC-X）" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 5 ] && rget "$SCR" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B]" && printf "%s" "$out" | grep -q "参考节点「SC-X」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写" && printf "%s" "$out" | grep -q "现在重启 ShellCrash 吗" && [ "$(sel "CCA-$fs")" = AI-A ] && ! grep -q SCBAD router.log'
+out=$(run cca router sync 2>&1); rc=$?
+out2=$(run cca router nodes 2>&1)
+ok "ShellCrash 再同步：配置文件里都有了，不用重启也不用重载；cca router nodes 列得出参考节点，不列自定义节点" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && printf "%s" "$out2" | grep -qx AI-A && ! printf "%s" "$out2" | grep -q SC-X'
+cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; r0=$(restarts); sc_restart
+ok "ShellCrash 的订阅更新把订阅配置换掉了：启动时钩子在它拼运行配置之前写回去，这次启动就用上" '[ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 5 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$fs")" = AI-A ] && [ ! -e "$R/etc/cca/fill.pending" ] && ! grep -q SCBAD router.log'
+python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); b='  - name: OpenAi\n    type: select\n    proxies:\n      - US-A\n'; assert s.count(b) == 1; open(p, 'w').write(s.replace(b, '  - {name: OpenAi, type: select, proxies: [US-A]}\n'))" "$T/sc_base.fill"
+cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; sc_restart; n0=$(reloads); r0=$(restarts)
+out=$(run cca router sync 2>&1); rc=$?
+ok "订阅配置里 OpenAi 组写成一行的：只写节点、组不动（说明为什么）；同步时不用再重载、重启" 'grep -q "策略组 OpenAi 不是一行一项的写法" "$R/tmp/cca-router.log" && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 2 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A]" && ! grep -q SCBAD router.log && [ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = "$r0" ]'
+# 维护者的映射要某个账号走参考节点，这台机器的可选节点里还没有它：自动加进可选节点（记下摘要），账号随后照常加进来（新端口问过后生效）
+pol '{"version": 1, "claude": {"alice@example.com": "HK-A2", "bea@example.com": "AI-B"}}'
+out=$(run CCA_TTY="$(ans y y)" cca policy pull 2>&1); rc=$?
+ok "映射要的节点是维护者的参考节点、还不在可选节点里：自动加进可选节点（说一声），映射里的账号照常加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "维护者的映射要 bea@example.com 走节点 AI-B：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 bea@example.com，出口 AI-B" && cfgok "\"AI-B\" in c[\"nodes\"] and c[\"node_ids\"].get(\"AI-B\")" && tblok "t.get(\"bea@example.com\") == \"AI-B\""'
+pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'
+# 还原：路由器、config.json、账号表回到这一节开头。维护者不再发布参考节点（映射仓库里删掉 nodes.json），拉下来后这台机器上的也删掉
+rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
+rm -f "$PR/nodes.json" "$PR/nodes.json.sig"; out=$(run cca policy pull 2>&1)
+ok "映射仓库里没有 nodes.json 了：这台机器上的参考节点也删掉" '[ ! -e "$H/.cca/policy/nodes.json" ] && ! printf "%s" "$out" | grep -q "参考节点："'
+cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
 fi
 if sect 11b3; then
@@ -3640,11 +3772,15 @@ ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
 # 邮箱助手配置过：应用专用密码在钥匙串里
 python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mail"]={"user": "inbox@example.com"}; json.dump(c, open(p, "w"))' "$H/.cca/config.json"
 mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail/inbox@example.com"
-out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
+# macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
+# 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
+printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
+out=$(run CCA_GUI_OS=15 CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
 ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
+ok "restore：macOS 26 以下（内核由 cca 在后台托管）也删掉 crontab 里开机起内核的那一行，别的行留着" '! grep -qF "# cca-core" "$T/crontab" && grep -qx "0 3 \* \* \* echo user-job" "$T/crontab"'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
 ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'

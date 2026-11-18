@@ -11,8 +11,6 @@
 #     API key 存成 600 的文件 → 维护者的映射（假 git：验签、照映射加账号、签名不对不换）→ 设备统计（真的 server/cca-presence.py：
 #     会话开着报在用、关了报没在用；会话的登记、进程的启动时间从 /proc 读）→ Codex（假的 codex 和 app-server：添加、服务器上登录、
 #     启动、查用量、cxa）→ 真实的出口和泄露检测（测试节点直连出去；服务器上不测 WebRTC）→ 只在 macOS 上的命令说清楚 → cca local off
-#   Linux 桌面上的 Clash Verge（数据目录 ~/.local/share/…，内核是真的 mihomo、经数据目录里的 verge-mihomo.sock 控制）：没有图形界面时
-#     说清楚，有时打开它，配置端口池、经它出去，cca local off 去掉
 #   服务器上不用路由器（全新的 HOME，直连通不通由假 curl 定）：直连不通时 cca install 不问路由器，给出维护者运行的那一行，先跳过；
 #     维护者加上公钥后再运行：拉到映射、导入映射指定的节点、照映射加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
@@ -435,7 +433,7 @@ else no "cca local status：$(printf '%s' "$st" | head -n 5)"; fi
 
 # 测试节点（本机另一个 mihomo，用 cca 刚下载的内核）和本机的 HTTP 服务：经账号的端口 → CCA-1 → US-A → DIRECT → 它
 core=$(ls "$H"/.cca/core/mihomo-v* 2>/dev/null | head -n 1)
-[ -x "$core" ] && cp "$core" "$D/mihomo"   # 后面 Clash Verge、假路由器的内核也用它
+[ -x "$core" ] && cp "$core" "$D/mihomo"   # 后面服务器上不用路由器那一节、假路由器的内核也用它
 echo '{"mixed-port": 18080, "bind-address": "127.0.0.1", "allow-lan": false, "mode": "direct", "log-level": "warning"}' > "$D/up/config.yaml"
 [ -x "$D/mihomo" ] && { "$D/mihomo" -d "$D/up" -f "$D/up/config.yaml" > "$D/up.log" 2>&1 & echo $! >> "$D/pids"; }
 echo cca-linux-ok > "$D/www/ok.txt"
@@ -725,58 +723,6 @@ if [ -z "$(keeper)" ] && ! listen 7901 && ! grep -qF '# cca-core' "$D/crontab" &
 	ok "cca local off：托管进程退出、内核停了，crontab 里开机起内核的那一行删掉（别的行留着）"
 else no "cca local off：托管进程${k:+/内核}$([ -n "$(keeper)" ] && echo 还在)；crontab 是「$(tr '\n' '|' < "$D/crontab" 2>/dev/null)」"; fi
 grep -iE 'level=(error|fatal)|panic' "$H/.cca/core/core.log" 2>/dev/null | head -n 2 | sed 's/^/  内核日志：/'
-
-# Linux 桌面上的 Clash Verge（Rev）：数据目录 ~/.local/share/io.github.clash-verge-rev.clash-verge-rev（XDG_DATA_HOME 没设时），
-# 内核（真的 mihomo）由它带着 -ext-ctl-unix <数据目录>/verge-mihomo.sock 起，运行配置里不写这个 socket。没在运行时：没有图形界面
-# 就说清楚、不去开；有（DISPLAY）就问过后打开 clash-verge（这里是个假的，像真的一样起内核）
-VD="$H/.local/share/io.github.clash-verge-rev.clash-verge-rev"; mkdir -p "$VD/profiles" "$D/vbin"
-printf '%s\n' '# Profiles Config for Clash Verge' '' 'current: Lprofile1' 'items:' '- uid: Merge' '  type: merge' '  file: Merge.yaml' \
-	'- uid: Script' '  type: script' '  file: Script.js' > "$VD/profiles.yaml"
-printf '// Define main function (script entry)\n\nfunction main(config, profileName) {\n  return config;\n}\n' > "$VD/profiles/Script.js"
-cat > "$VD/clash-verge.yaml" <<'Y'
-# Clash Verge
-
-mode: rule
-log-level: warning
-external-controller: ''
-secret: set-your-secret
-profile:
-  store-selected: true
-proxies:
-- name: US-A
-  type: socks5
-  server: 127.0.0.1
-  port: 18080
-proxy-groups:
-- name: Proxy
-  type: select
-  proxies:
-  - US-A
-  - DIRECT
-rules:
-- MATCH,Proxy
-Y
-cat > "$D/vbin/clash-verge" <<S
-#!/bin/sh
-echo \$\$ > "$D/verge.pid"
-exec "$D/mihomo" -d "$VD" -f "$VD/clash-verge.yaml" -ext-ctl-unix "$VD/verge-mihomo.sock" > "$D/verge.log" 2>&1
-S
-chmod 755 "$D/vbin/clash-verge"
-out=$(CCA_TTY=$(ans y) "$C" local setup 2>&1); rc=$?
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q '检测到 Clash Verge' && printf '%s' "$out" | grep -q '这里没有图形界面，打不开 Clash Verge：先在桌面上打开它，再试'; then
-	ok "Clash Verge 认出来了（~/.local/share 里的数据目录）；没在运行、又没有图形界面时说清楚，不去开它"
-else no "Clash Verge 没在运行、没有图形界面（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)"; fi
-out=$(DISPLAY=:99 PATH="$D/vbin:$PATH" CCA_TTY=$(ans y y) "$C" local setup 2>&1); rc=$?
-st=$("$C" local status 2>&1)
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '本机端口池已就绪：Clash Verge 127.0.0.1:7901' && [ -S "$VD/verge-mihomo.sock" ] &&
-	grep -qF '// >>> cca >>>' "$VD/profiles/Script.js" && printf '%s' "$st" | grep -q 'CCA-1  127.0.0.1:7901  监听中  → US-A' && [ "$(get)" = cca-linux-ok ]; then
-	ok "有图形界面时问过后打开 Clash Verge，等它的内核起来（verge-mihomo.sock），全局扩展脚本加上端口池、热加载，经它出去"
-else no "Clash Verge（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)；$(printf '%s' "$st" | head -n 3)"; fi
-out=$("$C" local off 2>&1)
-for i in $(seq 1 20); do listen 7901 || break; sleep 0.25; done
-if ! grep -qF '>>> cca >>>' "$VD/profiles/Script.js" && ! listen 7901 && [ -S "$VD/verge-mihomo.sock" ]; then ok "cca local off：全局扩展脚本里 cca 的那一段删掉，端口池撤掉（Clash Verge 照跑）"
-else no "Clash Verge 的 cca local off：$(printf '%s' "$out" | tail -n 2)"; fi
-kill "$(cat "$D/verge.pid" 2>/dev/null)" 2>/dev/null
 
 # cca restore：先打包备份配置（GNU / busybox 的 tar；登录凭证、密钥文件、参考节点不进包里），再删掉 ~/.cca、~/.local/bin 里的 cca、cxa 和 aga、
 # crontab 里开机起内核的那一行（别的行留着）。没有 tar 的（Amazon Linux 的最小安装）：先停下，什么都不动

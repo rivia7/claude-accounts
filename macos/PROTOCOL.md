@@ -96,7 +96,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "config": {
     "route_pref": "auto",
     "router": {"configured": true, "host": "192.0.2.10", "ssh_port": 22, "proxy_host": "192.0.2.10"},
-    "local": {"configured": true, "client": "clash-verge", "name": "Clash Verge",
+    "local": {"configured": true, "client": "builtin", "name": "内置代理",
               "udp": {"node": null, "state": "off", "installed": false, "running": false}},
     "nodes": ["US-A", "US-B", "US-C", "US-D"],
     "min_trust": 50, "leak_check": true, "update": "auto",
@@ -107,7 +107,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     "sync": "ok", "local_sync": "n/a",
     "slots": [
       {"slot": 1, "group": "CCA-1", "port": 7901, "tool": "claude", "key": "alice@example.com", "node": "US-A", "local_node": "US-A"},
-      {"slot": 2, "group": "CCA-2", "port": 7902, "tool": "claude", "key": "工作(bob@example.com)", "node": "US-B", "local_node": "Verge-B"},
+      {"slot": 2, "group": "CCA-2", "port": 7902, "tool": "claude", "key": "工作(bob@example.com)", "node": "US-B", "local_node": "US-B2"},
       {"slot": 3, "group": "CCA-3", "port": 7903, "tool": null, "key": null, "node": "REJECT", "local_node": "REJECT"}
     ],
     "nodes": [{"name": "US-A", "local_name": "US-A", "users": [{"tool": "claude", "key": "alice@example.com"}]}]
@@ -304,8 +304,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 - `route_pref`：`auto`（连得上路由器走路由器，连不上走本机 Clash）| `router` | `local`。
 - `router.configured`：配置过路由器；`proxy_host` 是账号端口所在的主机（可能和 `host` 不同）。
-- `local.configured` / `client`：本机 Clash 客户端（`clash-verge` | `manual` | `builtin` | `""`）。`builtin` 是内置代理：App 要托管
-  它的内核（见 7）。`name` 是给人看的名字（`Clash Verge`、`内置代理`……），App 照着显示。
+- `local.configured` / `client`：本机 Clash（`builtin` | `""`）。3.3.0-beta.8 起本机出口只有内置代理（`builtin`，App 要托管它的内核，
+  见 7）；以前配的 `clash-verge` / `manual` 当作没配置，报 `""`。`name` 是给人看的名字（现在总是 `内置代理`），App 照着显示。
 - `local.udp`：本机 UDP 走节点（`cca local udp`，见 7.1）。只在 macOS 上（Linux 上是 null；旧版 cca 没有这一项，当作 null）：
   `{"node": "US-A" | null, "state": "off" | "ok" | "stale" | "missing" | "undefined", "installed": bool, "running": bool}`。`node` 是设的节点（没开是 null）；
   `state`：`off` 没开（本机客户端不是内置代理时也是 `off`）| `ok` 装着的就是设的这一份 | `stale` 装着的配置旧了（节点的定义变了、cca 更新了：
@@ -318,7 +318,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `routing`：
 
 - `slots`：端口池的每个槽位（数量是 `pool_size`，8 的倍数）。`tool` / `key` 为 null 的是空槽位（`node` 是 `REJECT`）。
-  `local_node` 是本机 Clash Verge 里的叫法（不用 Clash Verge、换算不了时和 `node` 一样）。
+  `local_node` 是内置代理的节点定义里的叫法（按服务器地址认：路由器上改了名、还没同步时也认得出；没配内置代理、认不出时和 `node` 一样）。
 - `sync`：路由器和这台 Mac 上的账号表一致吗。`ok` | `pending`（下次启动账号时会同步，也可以点“同步路由器”）| `n/a`（没配置路由器）。
 - `local_sync`：本机 Clash 的端口池是否最新，`ok` | `pending` | `n/a`（没配置本机 Clash）。
 - `nodes`：可选节点和用它的账号。
@@ -366,7 +366,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）| `unsupported`（Antigravity）；
 `web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
 
-### 2.3 `cca _gui live`（只读，要联网：连路由器或本机 Clash Verge）
+### 2.3 `cca _gui live`（只读，要联网：连路由器或本机内置代理的内核）
 
 按 `route_pref` 选看哪一边（环境变量 `CCA_ROUTE=router|local` 可以指定看另一边）：
 
@@ -376,7 +376,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "route": "router", "route_pref": "auto", "at_home": true, "proxy_host": "192.0.2.10",
   "router": {"configured": true, "host": "192.0.2.10", "reachable": true, "backend": "OpenClash",
              "running": true, "hook": true, "cron": true, "error": null},
-  "local": {"configured": true, "client": "clash-verge", "name": "Clash Verge", "running": null, "error": null},
+  "local": {"configured": true, "client": "builtin", "name": "内置代理", "running": null, "error": null},
   "slots": [
     {"slot": 1, "group": "CCA-1", "port": 7901, "tool": "claude", "key": "alice@example.com",
      "expected": "US-A", "selected": "US-A", "in_kernel": true, "listening": true, "reachable": true, "state": "ok"}
@@ -389,7 +389,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   这类虚拟网卡连得到）；`router.reachable` 是经哪块网卡都算的连得上（只经虚拟网卡连得到时 `at_home` 是 false、它是 true）。`proxy_host`：账号端口现在在哪台机器上
   （看路由器时是路由器的地址，看本机时是 `127.0.0.1`，`none` 时为 null），App 显示「地址:端口」用它。
 - `router.error` / `local.error`：`null` 或 `{"code": "unreachable" | "status_failed" | "not_configured" | "not_running", "message": "…"}`。
-  `router.backend`：`OpenClash` | `ShellCrash` | null。`local.running`：本机客户端（Clash Verge、内置代理的内核……）的控制接口能不能连上
+  `router.backend`：`OpenClash` | `ShellCrash` | null。`local.running`：本机内置代理的内核的控制接口能不能连上
   （没看这一边时为 null）。
 - 槽位：`expected` 是应该选中的节点（这台 Mac 的账号表算出来的；看本机时是本机的叫法），`selected` 是内核里现在选中的（拿不到为 null），
   `in_kernel`：内核里有没有这个组，`listening`：路由器 / 本机上这个端口在不在监听（拿不到为 null），`reachable`：这台 Mac 连不连得上这个端口。
@@ -634,7 +634,6 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `router_restart` | 后端名 | 运行配置不见了、或刚写进了参考节点，只能重启一次（所有连接都会断一下） | yes |
 | `low_purity` | 出口 IP | 出口纯净度低于设定，问是否仍然用这个出口启动 | no |
 | `codex_fallback_off` | 空 | 第一次打开 ChatGPT App：用 `codex features disable system_proxy_fallback` 在共享的 config.toml 里关掉系统代理回退 | yes |
-| `open_clash_verge` | 空 | 在外面，Clash Verge 没开：打开它 | yes |
 | `builtin_core` | 空 | 在外面，这台 Mac 上没有 Clash 客户端：改用内置代理（第一次要下载约 21MB 的内核，见 7） | yes |
 | `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
 | `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；会同步的账号，登录了它的其他设备上的也删；见 4.10） | no |
