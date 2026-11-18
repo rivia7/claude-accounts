@@ -771,15 +771,15 @@ ok "第三方 API 账号同样只放开它自己的目录（在 --settings 前�
 cp "$H/.claude/settings.json" "$T/settings.bak"; n_args=$(grep -c "^ARGS: " claude.log)
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "共享 settings.json 的 env 里有 ANTHROPIC_BASE_URL：拒绝启动并指出来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:ANTHROPIC_BASE_URL" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
+ok "共享 settings.json 的 env 里有 ANTHROPIC_BASE_URL：拒绝启动并指出来" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL）" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
 cp "$T/settings.bak" "$H/.claude/settings.json"
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j[\"apiKeyHelper\"]=\"echo x\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
 out=$(run CCA_TTY="$(ans)" cca @kimi --version 2>&1); rc=$?
-ok "共享 settings.json 里有 apiKeyHelper：第三方 API 账号也拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:apiKeyHelper"'
+ok "共享 settings.json 里有 apiKeyHelper：第三方 API 账号也拒绝启动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（apiKeyHelper）"'
 cp "$T/settings.bak" "$H/.claude/settings.json"
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"NO_PROXY\"]=\"*\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "共享 settings.json 的 env 里有 NO_PROXY：拒绝启动（会让请求绕过账号的端口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:NO_PROXY"'
+ok "共享 settings.json 的 env 里有 NO_PROXY：拒绝启动（会让请求绕过账号的端口）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了代理（env.NO_PROXY）"'
 cp "$T/settings.bak" "$H/.claude/settings.json"
 # 账号目录的 settings.json 被客户端原子替换：预检主配置时仍正常，合并后也必须重新检查。
 shared_client="$(ls -d "$H"/.cca/accounts/alice-example-com-*)/claude"
@@ -796,10 +796,69 @@ os.replace(path + '.test-new', path)
 PY
 n_args=$(grep -c "^ARGS: " claude.log)
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "账号原子保存的 settings.json 合并后含 ANTHROPIC_BASE_URL：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "settings.json:ANTHROPIC_BASE_URL" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
+ok "账号原子保存的 settings.json 合并后含 ANTHROPIC_BASE_URL：再次检查并拒绝启动客户端" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL）" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
 cp "$T/settings.atomic.bak" "$H/.claude/settings.json"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
 ok "恢复共享配置后账号正常启动，settings.json 重新保持共享链接" '[ $rc -eq 3 ] && [ -L "$shared_client/settings.json" ] && cmp -s "$shared_client/settings.json" "$H/.claude/settings.json"'
+# 另一台电脑上直接在 ~/.claude/settings.json 的 env 里配了第三方 API：说清楚是哪份文件、哪几项、为什么不继续，给出 cca settings fix；
+# fix 问过后先把整份原文备份在旁边（600），再只去掉这几项（连同官方账号用不了的模型名），别的设置不动；从头到尾不说值
+cp "$H/.claude/settings.json" "$T/settings.fix.bak"
+python3 - "$H/.claude/settings.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+j = json.load(open(p))
+j['env'] = dict(j.get('env', {}), ANTHROPIC_BASE_URL='https://api.example.com/anthropic', ANTHROPIC_AUTH_TOKEN='sk-fix-0000',
+                ANTHROPIC_MODEL='kimi-k2', ANTHROPIC_DEFAULT_OPUS_MODEL='claude-opus-4-5', API_TIMEOUT_MS='600000')
+j['model'] = 'kimi-k2'
+j['apiKeyHelper'] = 'echo sk-fix-0000'
+j['permissions'] = {'allow': ['Bash(ls:*)']}
+json.dump(j, open(p, 'w'), indent=2)
+PY
+cp "$H/.claude/settings.json" "$T/settings.fix.orig"; n_args=$(grep -c "^ARGS: " claude.log)
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "共享 settings.json 里配了第三方 API：说清楚是哪份文件、哪几项、为什么不继续，给出 cca settings fix 和 cca add api（不说值、不启动）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL、env.ANTHROPIC_AUTH_TOKEN、apiKeyHelper）。" && printf "%s" "$out" | grep -qF "这份设置所有账号共用" && printf "%s" "$out" | grep -qF "运行 cca settings fix 修复" && printf "%s" "$out" | grep -qF "用 cca add api 把它加成一个单独的账号" && ! printf "%s" "$out" | grep -q "sk-fix-0000\|api.example.com\|kimi-k2" && [ "$(grep -c "^ARGS: " claude.log)" = "$n_args" ]'
+out=$(run cca settings 2>&1); rc=$?
+ok "cca settings：同样的说明，退出码 1" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 里设置了第三方 API（"'
+out=$(run CCA_TTY="$(ans n)" cca settings fix 2>&1); rc=$?
+ok "cca settings fix 先列出要去掉的（连同官方账号用不了的模型名；Claude 的模型名和别的设置不在里面），答 n 什么都不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "env.ANTHROPIC_MODEL、model（官方账号用不了的模型名）" && ! printf "%s" "$out" | grep -q "ANTHROPIC_DEFAULT_OPUS_MODEL\|API_TIMEOUT_MS\|permissions" && printf "%s" "$out" | grep -qF "没有改动" && cmp -s "$H/.claude/settings.json" "$T/settings.fix.orig" && ! ls "$H/.claude" | grep -q cca-backup'
+out=$(run CCA_TTY="$(ans y)" cca settings fix 2>&1); rc=$?
+BK=$(ls "$H/.claude" | grep '^settings\.json\.cca-backup-' | head -n 1)
+chk=$(python3 - "$H/.claude/settings.json" <<'PY'
+import json, sys
+j = json.load(open(sys.argv[1]))
+e = j.get('env', {})
+assert not any(k in e for k in ('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL'))
+assert e['ANTHROPIC_DEFAULT_OPUS_MODEL'] == 'claude-opus-4-5' and e['API_TIMEOUT_MS'] == '600000'
+assert 'apiKeyHelper' not in j and 'model' not in j and j['permissions'] == {'allow': ['Bash(ls:*)']}
+print('ok')
+PY
+)
+ok "答 y：原文整份备份在旁边（600），只去掉这几项，别的设置原样留着；说备份在哪、怎么恢复、cca add api（不说值）" '[ $rc -eq 0 ] && [ -n "$BK" ] && cmp -s "$H/.claude/$BK" "$T/settings.fix.orig" && [ "$(stat -f %Lp "$H/.claude/$BK")" = 600 ] && [ "$chk" = ok ] && printf "%s" "$out" | grep -qF "已修复 ~/.claude/settings.json：去掉了 5 项" && printf "%s" "$out" | grep -qF "cp ~/.claude/$BK ~/.claude/settings.json" && printf "%s" "$out" | grep -qF "cca add api" && ! printf "%s" "$out" | grep -q "sk-fix-0000"'
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
+out=$(run CCA_TTY="$(ans)" cca settings fix 2>&1); rc2=$?
+ok "修好以后账号照常启动，账号目录里的 settings.json 还是指向共享的那份；再运行一次 fix：没有要修的" '[ $rc -eq 3 ] && [ -L "$shared_client/settings.json" ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -qF "没有要修的"'
+rm -f "$H/.claude/$BK"; cp "$T/settings.fix.orig" "$H/.claude/settings.json"
+out=$(runev cca settings fix 2>&1); rc=$?
+SC=$(python3 -c 'import json,sys; print(next(e["grant"] for e in map(json.loads, open(sys.argv[1])) if e["ev"] == "consent"))' "$T/ev.jsonl" 2>/dev/null)
+ok "非交互（界面 App）：记一条 consent（settings_fix，范围是这次要改的摘要，不带值），不改" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"settings_fix\" and len(e[\"scope\"]) == 16 and \"sk-fix-0000\" not in str(e)" && [ "$SC" = "settings_fix:$(printf "%s" "$SC" | cut -d: -f2)" ] && cmp -s "$H/.claude/settings.json" "$T/settings.fix.orig"'
+runev CCA_GRANT=settings_fix:0000000000000000 cca settings fix >/dev/null 2>&1; rc=$?
+runev CCA_GRANT="$SC" cca settings fix >/dev/null 2>&1; rc2=$?
+ok "范围不对的同意不算；带着这次的同意（CCA_GRANT）再跑就改好" '[ $rc -ne 0 ] && [ $rc2 -eq 0 ] && ! grep -q ANTHROPIC_AUTH_TOKEN "$H/.claude/settings.json" && [ "$(ls "$H/.claude" | grep -c "^settings\.json\.cca-backup-")" = 1 ]'
+rm -f "$H/.claude"/settings.json.cca-backup-*
+mkdir -p "$T/dotfiles"; mv "$H/.claude/settings.json" "$T/settings.fix.real"
+python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j.setdefault("env", {})["HTTPS_PROXY"]="http://127.0.0.1:9"; json.dump(j, open(sys.argv[2], "w"))' "$T/settings.fix.real" "$T/dotfiles/settings.json"
+ln -s "$T/dotfiles/settings.json" "$H/.claude/settings.json"
+out=$(run CCA_TTY="$(ans y)" cca settings fix 2>&1); rc=$?
+ok "settings.json 是指向别处（dotfiles）的链接：改它指向的文件、链接留着，备份在 ~/.claude 里（不写进链接指向的目录）；只有代理时只去掉代理、不提 cca add api" '[ $rc -eq 0 ] && [ -L "$H/.claude/settings.json" ] && ! grep -q HTTPS_PROXY "$T/dotfiles/settings.json" && ls "$H/.claude" | grep -q "^settings\.json\.cca-backup-" && ! ls "$T/dotfiles" | grep -q cca-backup && printf "%s" "$out" | grep -qF "env.HTTPS_PROXY（代理）" && ! printf "%s" "$out" | grep -qF "cca add api"'
+rm -f "$H/.claude/settings.json" "$H/.claude"/settings.json.cca-backup-*; mv "$T/settings.fix.real" "$H/.claude/settings.json"
+printf '{"env": {' > "$T/settings.bad"; cp "$T/settings.bad" "$H/.claude/settings.json"
+out=$(run CCA_TTY="$(ans y)" cca settings fix 2>&1); rc=$?
+ok "不是合法的 JSON：不改、不备份，说清楚" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "~/.claude/settings.json 不是合法的 JSON 设置，cca 不改它" && cmp -s "$H/.claude/settings.json" "$T/settings.bad" && ! ls "$H/.claude" | grep -q cca-backup'
+cp "$T/settings.fix.bak" "$H/.claude/settings.json"
+mkdir -p "$T/proj/.claude"; printf '{"env": {"ANTHROPIC_BASE_URL": "https://api.example.com"}}' > "$T/proj/.claude/settings.local.json"
+out=$(cd "$T/proj" && run CCA_TTY="$(ans y)" cca settings fix 2>&1); rc=$?
+ok "项目设置里的 cca settings fix 不改：照实说是哪份文件、要手动删" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -qF "项目设置 " && printf "%s" "$out" | grep -qF "/proj/.claude/settings.local.json 里设置了第三方 API（env.ANTHROPIC_BASE_URL）。" && printf "%s" "$out" | grep -qF "删掉这几项再启动" && grep -q ANTHROPIC_BASE_URL "$T/proj/.claude/settings.local.json" && ! ls "$H/.claude" | grep -q cca-backup'
+rm -rf "$T/proj" "$T/dotfiles"
 edit_table "j['kimi']['key'] = '$S2'"
 rm -f "$T/claude.key"; n_find=$(grep -c "find-generic-password" security.log)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; rc=$?

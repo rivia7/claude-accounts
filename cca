@@ -7845,6 +7845,262 @@ def cmd_launch_check(*args):
     settings_check_result(launch_settings_problems(args))
 
 
+# ---- 共享设置的说明和修复（bash 的 settings_warn、cca settings fix；只给 Claude）----
+# 会盖掉账号自己设置的几类：(类, 认哪些名字, 叫法, 带着它启动会怎样)，顺序就是说明里的先后。CRED_ENV 以后加了这里认不出的名字，算 other
+SETTINGS_KINDS = (
+    ('api', lazy_re(r'^(ANTHROPIC_(BASE_URL|AUTH_TOKEN|API_KEY)|apiKeyHelper)$', re.I), '第三方 API',
+     '每个账号都会改用这个第三方 API，官方账号的登录信息还可能被发到那个地址'),
+    ('cloud', lazy_re(r'^CLAUDE_CODE_(USE_[A-Z_]+|PROVIDER_MANAGED_BY_HOST)$', re.I), '云厂商或网关的开关',
+     '每个账号都会改走那个云厂商或网关'),
+    ('proxy', lazy_re(r'^(HTTPS?|ALL|NO)_PROXY$', re.I), '代理', '账号会绕开 cca 给它分的出口'),
+    ('login', lazy_re(r'^CLAUDE_(CONFIG_DIR|SECURESTORAGE_CONFIG_DIR|CODE_OAUTH_TOKEN|CODE_[A-Z_]*_FILE_DESCRIPTOR)$', re.I),
+     '账号目录或登录凭证', '各账号会混用同一份登录'),
+)
+SETTINGS_OTHER = ('other', None, '会换掉账号设置的变量', '账号会被换到别处')
+SETTINGS_UNREADABLE = ('invalid_config', 'invalid_or_unreadable_config', 'unreadable_config')
+PROJECT_SETTINGS = lazy_re(r'/\.claude/settings(\.local)?\.json$')
+# 去掉第三方 API、云厂商或网关时跟着去掉的：官方账号用不了的模型（值不是 Claude 的模型名、别名）、发给它的请求头
+SETTINGS_MODEL_ENV = lazy_re(r'^(ANTHROPIC_(MODEL|SMALL_FAST_MODEL|DEFAULT_[A-Z0-9_]+_MODEL)|CLAUDE_CODE_SUBAGENT_MODEL)$')
+CLAUDE_MODEL_NAME = lazy_re(r'^(claude-[a-z0-9-]+|default|best|opus|sonnet|haiku|fable|opusplan)(\[1m\])?$', re.I)
+
+
+def home_tilde(path):
+    return '~' + path[len(HOME):] if path == HOME or path.startswith(HOME + os.sep) else path
+
+
+def shell_path(path):
+    """给人复制进终端的路径：主目录写成 ~"""
+    if path.startswith(HOME + os.sep):
+        return '~/' + shlex.quote(path[len(HOME) + 1:])
+    return shlex.quote(path)
+
+
+def settings_kind(name):
+    return next((k for k in SETTINGS_KINDS if k[1].match(name)), SETTINGS_OTHER)
+
+
+def settings_groups(names):
+    """[(类, [写法…])]，按 SETTINGS_KINDS 的先后；env 里的写成 env.名字"""
+    out = []
+    for kind in SETTINGS_KINDS + (SETTINGS_OTHER,):
+        hit = [n if n == 'apiKeyHelper' else 'env.' + n for n in names if settings_kind(n) is kind]
+        if hit:
+            out.append((kind, hit))
+    return out
+
+
+def settings_kinds_text(groups):
+    return '，还有'.join('%s（%s）' % (kind[2], '、'.join(hit)) for kind, hit in groups)
+
+
+def settings_explain(bad):
+    """settings_warn 的说明（Claude）：哪份文件、哪几项、带着它启动会怎样、怎么办，一句一行。只说路径和名字，不说值"""
+    by_src = {}
+    for label in dict.fromkeys(bad):
+        if label.endswith(':env:invalid_config'):
+            src, name = label[:-len(':env:invalid_config')], 'invalid_config'
+        else:
+            src, _, name = label.rpartition(':')
+            src, name = (src, name) if src else (label, '')
+        by_src.setdefault(src, []).append(name)
+    head, rest, shared = [], [], []
+    for src, names in by_src.items():
+        broken = any(n in SETTINGS_UNREADABLE for n in names)
+        groups = settings_groups([n for n in names if n and n not in SETTINGS_UNREADABLE])
+        if src in ('settings.json', 'settings.local.json'):   # 共享的 ~/.claude/settings.json 这些（claude_settings_problems）
+            path = home_tilde(os.path.join(CLAUDE.master, src))
+            if broken:
+                head.append('%s 读不了，或者不是合法的 JSON：cca 确认不了里面有没有会换掉账号的设置，所以没有继续。'
+                            '把它改对（或者挪走）再试。' % path)
+            elif groups:
+                shared.append((path, groups))
+        elif src == '--settings' or src.startswith(os.sep):   # 启动参数给的设置，这个目录和上层目录的项目设置
+            project = src != '--settings' and PROJECT_SETTINGS.search(src)
+            where = '项目设置 ' + home_tilde(src) if project else \
+                '启动参数 --settings' + ('' if src == '--settings' else ' 给的 ' + home_tilde(src))
+            if broken:
+                rest.append('%s 读不了，或者不是合法的 JSON，所以 cca 没有继续。' % where)
+            elif groups:
+                api = any(kind[0] == 'api' for kind, _ in groups)
+                rest.append('%s 里设置了%s。' % (where, settings_kinds_text(groups)))
+                rest.append('%s带着它启动的话%s，所以 cca 没有继续。%s%s' % (
+                    '在这个目录下启动时 Claude Code 也会读它，' if project else '', '；'.join(kind[3] for kind, _ in groups),
+                    '删掉这几项再启动' if project else '去掉它再启动',
+                    '（第三方 API 用 %s add api 加成单独的账号）。' % T.cmd if api else '。'))
+        else:   # 别的启动参数
+            for name in names:
+                if name == 'missing_value':
+                    rest.append('启动参数 %s 后面少了值。' % src)
+                elif name == 'use_cca_app':
+                    rest.append('启动参数里有 %s：要打开这个账号的 Claude App，用 %s app。' % (src, T.cmd))
+                else:
+                    rest.append('启动参数 %s 不能经 cca 用%s。' % (src, '（%s）' % name if name else ''))
+    if shared:
+        kinds = [kind for kind in SETTINGS_KINDS + (SETTINGS_OTHER,) if any(k is kind for _, groups in shared for k, _ in groups)]
+        head += ['%s 里设置了%s。' % (path, settings_kinds_text(groups)) for path, groups in shared]
+        head.append('%s所有账号共用，带着它启动的话%s，所以 cca 没有继续。'
+                    % ('这份设置' if len(shared) == 1 else '这几份设置', '；'.join(kind[3] for kind in kinds)))
+        head.append('运行 %s settings fix 修复：先把整份文件备份在旁边，再只去掉这几项，别的设置不动。' % T.cmd)
+        if any(kind[0] == 'api' for kind in kinds):
+            head.append('修复以后还要用这个第三方 API 的话，用 %s add api 把它加成一个单独的账号。' % T.cmd)
+    return head + rest
+
+
+def cmd_settings_explain(mode, *args):
+    """py settings-explain shared | launch [启动参数…]：settings_warn 给人看的说明（只给 Claude），一句一行；
+    shared 照 settings-check 查，launch 照 launch-check 查（同样的启动参数）"""
+    bad = launch_settings_problems(args) if mode == 'launch' else T.settings_problems()
+    lines = settings_explain(bad) if bad else []
+    if lines:
+        print('\n'.join(lines))
+
+
+def claude_model_name(value):
+    return isinstance(value, str) and bool(CLAUDE_MODEL_NAME.match(value.strip()))
+
+
+def settings_fix_keys(data):
+    """一份 Claude 设置里 cca settings fix 要去掉的 (env 里的名字, 顶层的名字)：会盖掉账号的（和 claude_config_problems 同一套）；
+    去掉了第三方 API、云厂商或网关时，连同官方账号用不了的模型名（留着的话官方账号的请求会因为模型不对失败）和发给它的请求头"""
+    env = data.get('env') or {}
+    drop_env = [k for k in env if SETTINGS_BAD.match(k)]
+    drop_top = ['apiKeyHelper'] if data.get('apiKeyHelper') else []
+    if drop_top or any(settings_kind(k)[0] in ('api', 'cloud') for k in drop_env):
+        drop_env += [k for k in env if k not in drop_env and (
+            k == 'ANTHROPIC_CUSTOM_HEADERS' or SETTINGS_MODEL_ENV.match(k) and not claude_model_name(env[k]))]
+        if 'model' in data and not claude_model_name(data['model']):
+            drop_top.append('model')
+    return drop_env, drop_top
+
+
+def settings_fix_parts(drop_env, drop_top):
+    """要去掉的几项按类说：['env.A、env.B（第三方 API）', …]"""
+    parts = ['%s（%s）' % ('、'.join(hit), kind[2]) for kind, hit in
+             settings_groups([k for k in drop_env if SETTINGS_BAD.match(k)] + [k for k in drop_top if k == 'apiKeyHelper'])]
+    model = ['env.' + k for k in drop_env if SETTINGS_MODEL_ENV.match(k)] + [k for k in drop_top if k == 'model']
+    if model:
+        parts.append('%s（官方账号用不了的模型名）' % '、'.join(model))
+    if 'ANTHROPIC_CUSTOM_HEADERS' in drop_env:
+        parts.append('env.ANTHROPIC_CUSTOM_HEADERS（发给第三方接口的请求头）')
+    return parts
+
+
+def settings_fix_plan():
+    """cca settings fix 要改的：([(路径, 原文, 改好的, 去掉 env 里的, 去掉顶层的)], '')。只改共享的 ~/.claude/settings.json、
+    settings.local.json（项目设置、启动参数给的不改）；有一份读不了、不是 JSON 的，返回 (None, 说明)，整个都不改"""
+    plan = []
+    for name in ('settings.json', 'settings.local.json'):
+        path = os.path.join(CLAUDE.master, name)
+        try:
+            with open(path, 'rb') as f:
+                raw = f.read()
+        except FileNotFoundError:
+            if os.path.lexists(path):
+                return None, '%s 是个指向不存在的文件的链接，cca 不改它' % home_tilde(path)
+            continue
+        except OSError:
+            return None, '%s 读不了，cca 不改它' % home_tilde(path)
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except (UnicodeError, ValueError, RecursionError):
+            data = None
+        if not isinstance(data, dict) or not isinstance(data.get('env', {}), dict):
+            return None, '%s 不是合法的 JSON 设置，cca 不改它：先把它改对（或者挪走）再试' % home_tilde(path)
+        drop_env, drop_top = settings_fix_keys(data)
+        if drop_env or drop_top:
+            new = {k: v for k, v in data.items() if k not in drop_top}
+            if drop_env:
+                env = {k: v for k, v in data['env'].items() if k not in drop_env}
+                if env:
+                    new['env'] = env
+                else:
+                    new.pop('env')
+            plan.append((path, raw, new, drop_env, drop_top))
+    return plan, ''
+
+
+def settings_fix_digest(plan):
+    """这次要改的摘要：同意的范围（界面 App 同意后带着它重跑；文件变了就对不上，重新问）"""
+    h = hashlib.sha256()
+    for path, raw, _, drop_env, drop_top in plan:
+        h.update(json.dumps([path, hashlib.sha256(raw).hexdigest(), drop_env, drop_top]).encode())
+    return h.hexdigest()[:16]
+
+
+def settings_backup(path, raw):
+    """原文整份备份在 path 旁边：是链接时在链接旁边（不写进它指向的目录，比如 dotfiles 的仓库）。600，名字带日期时间，不覆盖已有的"""
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    for i in range(100):
+        backup = '%s.cca-backup-%s%s' % (path, stamp, '-%d' % i if i else '')
+        try:
+            fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, 'wb') as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        return backup
+    raise FileExistsError(path)
+
+
+def cmd_settings_fix(action, digest=''):
+    """py settings-fix plan | apply 摘要（cca settings fix）。plan：第一行是摘要（同意的范围），后面是给人看的说明；没有要改的
+    退出码 3。apply：拿着 sync.lock（py link 也在锁里改共享的配置）照同一个摘要改，每份先整份备份在旁边再原子替换（是链接的照旧
+    写到它指向的文件）；摘要对不上（刚被改过）退出码 2，什么都不动。读不了、不是 JSON、写不了：退出码 4，stdout 是说明"""
+    if action == 'plan':
+        plan, why = settings_fix_plan()
+        if plan is None:
+            print(why)
+            sys.exit(4)
+        if not plan:
+            sys.exit(3)
+        print(settings_fix_digest(plan))
+        for path, _, _, drop_env, drop_top in plan:
+            print('%s 里要去掉：%s。' % (home_tilde(path), '；'.join(settings_fix_parts(drop_env, drop_top))))
+        print('别的设置不动；改之前先把整份原文备份在旁边（文件名后面加 .cca-backup-日期时间，只有你自己能读）。')
+        print('改了以后，不经 cca、直接运行 claude 也不再用这几项；想恢复原样，把备份拷回去就行。')
+        return
+    done, api = [], False
+    with Lock():
+        plan, why = settings_fix_plan()
+        if plan is None:
+            print(why)
+            sys.exit(4)
+        if not plan or settings_fix_digest(plan) != digest:
+            sys.exit(2)
+        backups, cur = [], plan[0][0]
+        try:
+            for path, raw, _, _, _ in plan:
+                cur = path
+                backups.append(settings_backup(path, raw))
+            for path, raw, _, _, _ in plan:
+                with open(path, 'rb') as f:
+                    if f.read() != raw:   # 备份的这会儿又被改过：都不动
+                        for backup in backups:
+                            os.unlink(backup)
+                        sys.exit(2)
+            for (path, _, new, drop_env, drop_top), backup in zip(plan, backups):
+                cur = path
+                save_json(path, new)
+                done.append((path, backup, len(drop_env) + len(drop_top)))
+                api = api or 'apiKeyHelper' in drop_top or any(settings_kind(k)[0] == 'api' for k in drop_env)
+        except OSError as e:
+            for backup in backups[len(done):]:
+                try:
+                    os.unlink(backup)
+                except OSError:
+                    pass
+            print('%s 改不了（%s）%s' % (home_tilde(cur), e.strerror or e, '，前面的已经改好' if done else '，什么都没改'))
+            sys.exit(4)
+    for path, backup, n in done:
+        print('已修复 %s：去掉了 %d 项' % (home_tilde(path), n))
+        print('原来的整份文件备份在 %s（只有你自己能读）' % home_tilde(backup))
+        print('想恢复原样：cp %s %s' % (shell_path(backup), shell_path(path)))
+    if api:
+        print('还要用这个第三方 API 的话：%s add api 把它加成一个单独的账号（接口地址、模型和 key 都在备份文件里）' % T.cmd)
+
+
 def cmd_codex_fallback_off():
     """桌面 App 只能依赖共享配置；无效或不可读不能等同于已关闭回退。"""
     try:
@@ -8504,9 +8760,11 @@ def cmd_login_plan_forget(key):
 
 
 def usage_cached(key):
-    """最近一次的用量：cca 存的 usage.json 和 Claude Code 的 cachedUsageUtilization 取新的那份；
-    登录的已经不是存它的那个账号时不算。返回 {at: 秒, rl: 用量窗口} 或 None"""
-    uuid, best = T.who(key), None
+    """最近一次的用量：cca 存的 usage.json 和 Claude Code 的 cachedUsageUtilization 取新的那份（一样新时取 usage.json）；
+    登录的已经不是存它的那个账号时不算。返回 {at: 秒, rl: 用量窗口} 或 None。
+    新的那份没有分模型的每周额度（model_scoped）时照另一份补上（usage_scoped_fill）：Claude Code 的缓存是 /api/oauth/usage 的原样，
+    没有这一项（get_usage 才从 limits 里挑出来），每次查用量时它都比 usage.json 早写几秒，这几秒里读到的用量少了 Fable 那几行"""
+    uuid, found = T.who(key), []
     for x in T.usage_caches(key):
         if not isinstance(x, dict) or not isinstance(x.get('utilization'), dict):
             continue
@@ -8515,9 +8773,36 @@ def usage_cached(key):
             continue
         if uuid and x.get('accountUuid') and x['accountUuid'] != uuid:
             continue
-        if not best or at / 1000.0 > best['at']:
-            best = {'at': at / 1000.0, 'rl': x['utilization']}
+        found.append({'at': at / 1000.0, 'rl': x['utilization']})
+    if not found:
+        return None
+    found.sort(key=lambda x: -x['at'])   # sort 是稳定的：一样新时还是 usage.json 在前
+    best = found[0]
+    if 'model_scoped' not in best['rl']:
+        prev = next((x['rl'] for x in found[1:] if isinstance(x['rl'].get('model_scoped'), list)), None)
+        if prev is not None:
+            best = dict(best, rl=usage_scoped_fill(best['rl'], prev))
     return best
+
+
+def usage_scoped_fill(rl, prev):
+    """rl 没有分模型的每周额度（model_scoped）时，照 prev 的 model_scoped 有哪几个模型补上：从 rl 的 limits 里取（kind 是 weekly_scoped、
+    scope.model 是这个模型的那一项：percent、resets_at，和 get_usage 给的一样），取不到（limits 被拿掉了、没有这一项）照搬 prev 的那一项，
+    哪一行都不会少。prev 里没有的模型不加：get_usage 只给一部分模型（Claude Code 照自己的名单挑），cca 不猜"""
+    got = {}
+    for lim in dicts(rl, 'limits'):
+        scope = lim.get('scope') if lim.get('kind') == 'weekly_scoped' else None
+        model = scope.get('model') if isinstance(scope, dict) else None
+        name = model.get('display_name') if isinstance(model, dict) else None
+        if isinstance(name, str) and name_key(name) and name_key(name) not in got and is_num(lim.get('percent')):
+            got[name_key(name)] = {'display_name': name, 'utilization': lim['percent'], 'resets_at': lim.get('resets_at')}
+    out, seen = [], set()
+    for m in dicts(prev, 'model_scoped'):
+        k = name_key(m.get('display_name'))
+        if k not in seen:
+            seen.add(k)
+            out.append(got.get(k, m) if k else m)
+    return dict(rl, model_scoped=out)
 
 
 def usage_save(key, rl, sub=None):
@@ -13725,7 +14010,8 @@ CMDS = {
     'restricted': cmd_restricted,
     'nodes-follow': cmd_nodes_follow, 'nodes-rename': cmd_nodes_rename,
     'accounts-json': cmd_accounts_json, 'router-merge': cmd_router_merge, 'router-evict': cmd_router_evict, 'slot-name': cmd_slot_name, 'ports': cmd_ports, 'select-lines': cmd_select_lines, 'digest': cmd_digest, 'sync-state': cmd_sync_state,
-    'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'launch-check': cmd_launch_check, 'coffee': cmd_coffee,
+    'keychain': cmd_keychain, 'settings-check': cmd_settings_check, 'launch-check': cmd_launch_check, 'settings-explain': cmd_settings_explain,
+    'settings-fix': cmd_settings_fix, 'coffee': cmd_coffee,
     'rows': cmd_rows, 'node-rows': cmd_node_rows, 'node-default': cmd_node_default,
     'link': cmd_link, 'sync': cmd_sync, 'device': cmd_device, 'launchers': cmd_launchers,
     'local-env': cmd_local_env, 'local-set': cmd_local_set,
@@ -16719,13 +17005,70 @@ health_note() {   # health_note 结果：没有出口检测数据的结果（第
 	HEALTH_JSON=$(py health-note "$ACC_KEY" "${HEALTH_SOURCE:-launch}" "$kind" "$1" "${ROUTE:-}" "${ACC_PORT:+$ACC_NODE}" "$ACC_PORT" \
 		"${COFFEE_LINE:-}" 2>/dev/null)
 }
-settings_warn() {
-	gui_fail settings_conflict "共享的设置里有会盖掉账号自己的代理、接口地址或凭证的配置（${1}）"
+settings_warn() {   # settings_warn 问题 [-- 启动参数…]：py settings-check（带 -- 时是 launch-check，同样的启动参数）查出的问题。
+	                 # Claude 的由 py settings-explain 说清楚是哪份文件、哪几项、带着它启动会怎样、怎么办（只说路径和名字，不说值）
+	local bad="$1" msg=""
+	shift
+	if [ "$TOOL" = claude ]; then
+		if [ "${1:-}" = -- ]; then shift; msg=$(py settings-explain launch "$@"); else msg=$(py settings-explain shared); fi
+	fi
+	if [ -n "$msg" ]; then
+		gui_fail settings_conflict "$(printf '%s' "$msg" | tr -d '\n')"
+		printf '%s\n' "$msg" | { IFS= read -r line; warn "$line"; while IFS= read -r line; do printf '%s\n' "  ${line}" >&2; done; }
+		return 0
+	fi
+	gui_fail settings_conflict "共享的设置里有会盖掉账号自己的代理、接口地址或凭证的配置（${bad}）"
 	case "$TOOL" in
-		codex) warn "共享的 ~/.codex 里有会把账号的登录发到别处、换掉账号或出口的配置（${1}）。删掉或改掉后再用 cca codex 启动（第三方 API 用 cca codex add api 加成账号）" ;;
-		agy) warn "共享的 ~/.gemini 里有会让各账号用同一个 Google Cloud 项目、换掉账号或凭证的配置（${1}）。删掉后再用 cca agy 启动" ;;
-		*) warn "共享的设置里有会盖掉每个账号自己的代理、接口地址或凭证的配置（${1}）。删掉后再用 cca 启动（第三方 API 用 cca add api 加成账号）" ;;
+		codex) warn "共享的 ~/.codex 里有会把账号的登录发到别处、换掉账号或出口的配置（${bad}）。删掉或改掉后再用 cca codex 启动（第三方 API 用 cca codex add api 加成账号）" ;;
+		agy) warn "共享的 ~/.gemini 里有会让各账号用同一个 Google Cloud 项目、换掉账号或凭证的配置（${bad}）。删掉后再用 cca agy 启动" ;;
+		*) warn "共享的设置里有会盖掉每个账号自己的代理、接口地址或凭证的配置（${bad}）。删掉后再用 cca 启动（第三方 API 用 cca add api 加成账号）" ;;
 	esac
+}
+
+# ---- 共享设置（cca settings）----
+cmd_settings() {   # cca [codex|agy] settings [check | fix]：查共享设置和这个目录的项目设置里会盖掉账号自己设置的配置（launch-check
+	               # 那一套，说明见 settings_warn）。fix 只给 Claude：问过（consent settings_fix，范围是这次要改的摘要）后先把
+	               # ~/.claude/settings.json（settings.local.json）整份备份在旁边，再只去掉这几项（py settings-fix）；项目设置、启动参数不改
+	local bad out rc scope plan line
+	case "${1:-check}" in
+		check)
+			if bad=$(py launch-check); then okay "没有发现会盖掉账号自己设置的配置"; return 0; fi
+			settings_warn "$bad" --
+			exit 1 ;;
+		fix) ;;
+		*) die "用法：${CMD} settings [check | fix]" ;;
+	esac
+	[ "$TOOL" = claude ] || FAIL_CODE=unsupported die "${CMD} settings fix 只修 Claude Code 的共享设置；${TOOL_LABEL} 的请照 ${CMD} settings 说的手动改"
+	out=$(py settings-fix plan); rc=$?
+	case $rc in
+		0) ;;
+		3)
+			if bad=$(py launch-check); then okay "~/.claude 里的共享设置没有要修的"; return 0; fi
+			settings_warn "$bad" --   # 剩下的是项目设置、启动参数这类：cca 不改，照实说
+			exit 1 ;;
+		4) die "$out" ;;
+		*) die "没能读取 Claude Code 的共享设置" ;;
+	esac
+	scope=$(printf '%s\n' "$out" | head -n 1)
+	plan=$(printf '%s\n' "$out" | tail -n +2)
+	printf '%s\n' "$plan" | { IFS= read -r line; info "$line"; while IFS= read -r line; do printf '%s\n' "  ${line}" >&2; done; }
+	consent settings_fix "$scope" "修复 Claude Code 的共享设置" "现在备份并去掉这几项吗？" "$(printf '%s' "$plan" | tr -d '\n')" y
+	case $? in
+		0) ;;
+		1) info "没有改动"; return 0 ;;
+		*) die "要先同意：在终端里运行 ${CMD} settings fix（会先问你）" ;;
+	esac
+	out=$(py settings-fix apply "$scope"); rc=$?
+	case $rc in
+		0) ;;
+		2) die "这几份设置刚被改过，没有动它们：再运行一次 ${CMD} settings fix" ;;
+		4) die "$out" ;;
+		*) die "没能修复 Claude Code 的共享设置" ;;
+	esac
+	printf '%s\n' "$out" | { IFS= read -r line; okay "$line"; while IFS= read -r line; do printf '%s\n' "  ${line}" >&2; done; }
+	bad=$(py launch-check) && return 0
+	settings_warn "$bad" --   # 还剩项目设置这类 cca 不改的
+	exit 1
 }
 
 # 经账号端口检测出口：claude.ai（Codex 账号是 chatgpt.com）看到的 IP + ip.net.coffee 的风险数据（不上报会话）
@@ -18351,10 +18694,10 @@ run_account() {
 		fi
 		api_key_ready || exit 1
 	fi
-	if ! bad=$(py launch-check "$@"); then settings_warn "$bad"; return 1; fi
+	if ! bad=$(py launch-check "$@"); then settings_warn "$bad" -- "$@"; return 1; fi
 	preflight || exit 1
 	prepare_account "$key" || die "初始化账号目录失败"
-	if ! bad=$(py launch-check "$@"); then settings_warn "$bad"; return 1; fi
+	if ! bad=$(py launch-check "$@"); then settings_warn "$bad" -- "$@"; return 1; fi
 	[ "$ACC_KIND" = api ] || ensure_login || exit 1
 	pn=$(py set-last "$key")   # 顺带拿到横幅里套餐那一句（Claude Code 记的套餐过时了才有）
 	say ""
@@ -19932,6 +20275,8 @@ cca $VERSION — Claude Code / Codex 多账号（账号独立登录，历史/记
   cca key <账号>             第三方 API 账号：重新输入 key；官方账号：记一把 API key 备查（存进${KEYSTORE}，cca 不拿它启动）
   cca key <账号> --show      把 key 打出来（App 里的「显示」「复制」）；--forget 删掉官方账号记的 key
   cca edit                   用编辑器改账号表，保存后校验并同步（只改别名不影响登录和端口）
+  cca settings [fix]         查共享的 ~/.claude/settings.json 里会盖掉每个账号自己设置的配置（第三方 API、代理……）；
+                             fix：先把整份文件备份在旁边，再只去掉这几项（第三方 API 改用 cca add api 加成账号）
   cca rename <账号> <新别名>  改别名（写 - 去掉别名，只留邮箱）：登录、资料、端口都不变，启动器跟着改名
   cca reorder <账号>…        按这个顺序排账号表（没写到的接在后面）：菜单、编号跟着变，端口、路由器都不动
   cca ls                     列出账号、登录状态和端口
@@ -20146,7 +20491,7 @@ main() {
 			if [ "${1:-}" = codex ] || [ "${1:-}" = agy ]; then   # cca codex|agy …：后面的子命令都作用于 Codex / agy 的账号
 				use_tool "$1"
 				shift
-				[ -f "$TABLE" ] || [ "${1:-}" = install-cli ] || py init   # 只装命令不算用起这个工具（不建账号表，映射里的账号不加进来）
+				[ -f "$TABLE" ] || [ "${1:-}" = install-cli ] || [ "${1:-}" = settings ] || py init   # 只装命令、查设置不算用起这个工具（不建账号表，映射里的账号不加进来）
 			fi
 			dispatch "$@" ;;
 	esac
@@ -20172,6 +20517,7 @@ dispatch() {   # 各工具共用的子命令（当前工具由 use_tool 选定�
 		mail) shift; cmd_mail "$@" ;;
 		app) shift; cmd_app "$@" ;;
 		check) shift; cmd_check "$@" ;;
+		settings) shift; cmd_settings "$@" ;;
 		router) shift; cmd_router "$@" ;;
 		local) shift; cmd_local "$@" ;;
 		node) shift; cmd_node "$@" ;;

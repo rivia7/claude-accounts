@@ -575,16 +575,23 @@ enum Texts {
     }
 
     /// 工位下面那一行：现在怎么样。brief：工位上的短写法（在忙什么看左上角的小图标，整句在悬停提示和读屏里）。
+    /// 在用时有问题，问题跟在后面：“在用 · 端口连不上”（整句：“Claude App 开着 · 端口连不上”）。
     static func mood(_ e: Employee, appLabel: String, now: Double, brief: Bool = false) -> String {
-        switch e.mood {
+        guard e.mood == .working else { return problem(e.mood, now: now, brief: brief) ?? "空闲" }
+        let doing = working(app: e.app, appLabel: appLabel, sessions: e.sessions, since: e.since, now: now)
+        if let t = e.trouble, let p = problem(t, now: now, brief: brief) { return (brief ? "在用" : doing) + " · " + p }
+        return brief ? "在用" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "") : doing
+    }
+
+    /// 有问题时的那一句；在用、空闲是 nil
+    private static func problem(_ m: Employee.Mood, now: Double, brief: Bool) -> String? {
+        switch m {
         case .absent: return "还没登录"
         case .wrongPerson(let email): return email.map { "登录的是 \($0)" } ?? "登录的不是这个账号"
         case .expired: return brief ? "登录已失效" : "登录已失效，要重新登录"
         case .unwell(let a): return ailment(a)
         case .resting(let until): return "额度用完了" + (until.map { "，" + backAt(epoch: $0, now: now) } ?? "")
-        case .working where brief: return "在用" + (e.since.map { "，" + elapsed(since: $0, now: now) } ?? "")
-        case .working: return working(app: e.app, appLabel: appLabel, sessions: e.sessions, since: e.since, now: now)
-        case .idle: return "空闲"
+        case .working, .idle: return nil
         }
     }
 

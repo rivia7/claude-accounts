@@ -179,7 +179,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `since_epoch` 是最早那个会话开始的时间（Unix 秒），没有会话时为 null。官方账号、第三方 API 账号都有；`cca usage`、登录、`app-server`
   起的 claude / codex 不算，没经 cca 启动的也不算。cca 启动工具前在账号目录登记 `cli-<cca 的进程号>.json`，工具一退出就删；cca 被 `kill -9`、
   断电留下的登记，`state` 按进程号 + 进程的启动时间核对（对不上不算，也不删文件）。没有这个字段（旧版 cca）当作没有会话。
-  “在用”（总览里画成在用、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`。
+  “在用”（总览里画成在用、头像右下角的绿点）由 App 自己判断：`app.running || cli.running`；账号有问题（没登录、端口连不上……）时照样算在用，问题跟在后面。
 - `can` / `can_why`：按钮可不可用、为什么不可用。原因码：`api_account`（第三方 API 账号没有 App / 网页版 / 订阅用量）、
   `app_missing`（没装对应的桌面 App）、`no_chrome`（没装 Google Chrome：网页版不能经账号的出口打开）、
   `not_logged_in`（没登录，查不了用量）、`tool_missing`（没装 claude / codex / agy）、`unsupported`（这个工具没有这个功能：Antigravity 的 `app`、`usage`）。`cli` 是能不能在终端里打开（`cca [codex] @账号`，
@@ -474,6 +474,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `model_scoped[]`：按模型的每周额度（Claude 的 Fable；Codex 另外计的额度）。Claude 的条目在 cca 认得出时**另有**它和本周总额度的关系：
   `allowance_percent_of_weekly`（最多能用本周总额度的百分之几，例如 50）、`used_percent_of_weekly`（已经用掉本周总额度的百分之几）；认不出时
   没有这两个字段。`utilization` 是这个模型自己那份额度用了多少。
+  用量取的是 Claude Code 自己那份更新的缓存时（它没有这一项），cca 照上次查到的有哪几个模型从缓存的 `limits` 里补上（取不到照搬上次的）：
+  查用量的那几秒里条目不会少几行，App 不用自己留着旧的。
 - `reset_credits`（Codex，还能重置几次额度，codex 原样给的）：`availableCount` 次数；`credits[]` 每一次的明细（可能比次数少，codex 只给了次数时
   没有），`id`、`title`（没有为 null，界面上叫“完整重置”）、`status`（`available` 才能用）、`expiresAt` / `grantedAt`（codex 原样给的）。cca 另加：
   每一次的 `expires_epoch`（Unix 秒，不过期为 null），和还能用的里面最早过期的那次的 `next_expires_epoch`（都不过期、没有明细时为 null；
@@ -605,7 +607,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
 - `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
-  `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict` | `region_restricted` | `no_exit_ip` |
+  `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；Claude 的 `message` 说清楚是哪份文件、哪几项、怎么办，共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
   `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
@@ -637,6 +639,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
 | `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；会同步的账号，登录了它的其他设备上的也删；见 4.10） | no |
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
+| `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
   同意了用某个 IP 启动，换了 IP 要重新问）。

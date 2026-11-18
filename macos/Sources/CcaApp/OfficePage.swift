@@ -175,10 +175,10 @@ private struct DeskCard: View {
         return a.isAPI ? Texts.product(a.tool) + " · " + m : m
     }
 
-    /// 状态前面的小记号：颜色只表达状态（正常时不出现绿色以外的）
+    /// 状态前面的小记号：颜色只表达状态（正常时不出现绿色以外的；在用、又有问题时是问题的颜色，文字照样以“在用”开头）
     @ViewBuilder
     private func moodMark(_ e: Employee) -> some View {
-        switch e.mood {
+        switch e.mood == .working ? e.trouble ?? .working : e.mood {
         case .working: Circle().fill(Color.green).frame(width: 6, height: 6)
         case .absent: Circle().fill(Color.gray).frame(width: 6, height: 6)
         case .wrongPerson, .expired: Circle().fill(Color.orange).frame(width: 6, height: 6)

@@ -9,7 +9,8 @@ struct Employee: Equatable, Sendable, Identifiable {
         case claude, chatgpt, antigravity, contractors
     }
 
-    /// 头条状态（哪个算头条由 Diagnosis.all 的顺序决定）
+    /// 头条状态：在用（桌面 App 开着、命令行里有会话）时总是在用，有问题时问题跟在后面（trouble）；没在用时是 Diagnosis.all 里
+    /// 排在最前的那个问题，没有问题是空闲
     enum Mood: Equatable, Sendable {
         /// 没登录：椅子空着
         case absent
@@ -21,7 +22,7 @@ struct Employee: Equatable, Sendable, Identifiable {
         case unwell(Ailment)
         /// 5 小时或本周的额度用完了：趴着睡觉，until 是用完的窗口里最晚重置的时间
         case resting(until: Double?)
-        /// 在用：桌面 App 开着，或者有经 cca 启动的命令行会话
+        /// 在用：桌面 App 开着，或者有经 cca 启动的命令行会话（有问题时问题在 trouble 里，照样算在用）
         case working
         /// 一切正常，没在用
         case idle
@@ -56,6 +57,9 @@ struct Employee: Equatable, Sendable, Identifiable {
     var flags: [Flag]
     /// 本周额度快重置了、还剩不少，建议先用（不改头条、不算小标记；卡片上画一个沙漏）
     var useFirst: UseFirst? = nil
+    /// 有问题时是哪一个（没登录、登错号、登录失效、线路或出口、额度用完：Diagnosis.all 里排在最前的那个），没问题是 nil。
+    /// 没在用时它就是头条；在用时头条是在用，它跟在后面（“在用 · 端口连不上”），要处理的照样算进点名的“要处理”
+    var trouble: Mood? = nil
 
     var id: AccountRef { account.ref }
     var department: Department { Self.department(of: account) }
@@ -74,7 +78,7 @@ struct Employee: Equatable, Sendable, Identifiable {
     }
 
     static func make(_ a: Account, usage: UsageEntry?, live: LiveSlot?, now: Double) -> Employee {
-        var mood: Mood?
+        var mood: Mood?   // 有问题时是哪一个（trouble）
         var flags: [Flag] = []
         var useFirst: UseFirst?
         for d in Diagnosis.all(a, usage: usage, live: live, now: now) {
@@ -99,7 +103,18 @@ struct Employee: Equatable, Sendable, Identifiable {
             case .useFirst(let f): useFirst = f
             }
         }
-        return Employee(account: a, mood: mood ?? (a.isWorking ? .working : .idle), flags: flags, useFirst: useFirst)
+        // 在用就是在用（桌面 App 开着、命令行里有会话）：有问题也不改，问题跟在后面
+        return Employee(account: a, mood: a.isWorking ? .working : mood ?? .idle, flags: flags, useFirst: useFirst, trouble: mood)
+    }
+}
+
+extension Employee.Mood {
+    /// 要用户动手的问题：没登录、登错号、登录失效、线路或出口有问题（额度用完只是等，不算）
+    var needsAttention: Bool {
+        switch self {
+        case .absent, .wrongPerson, .expired, .unwell: return true
+        case .resting, .working, .idle: return false
+        }
     }
 }
 
@@ -190,7 +205,9 @@ struct OfficeCensus: Equatable, Sendable {
         total = people.count
         for p in people {
             switch p.mood {
-            case .working: working += 1
+            case .working:
+                working += 1
+                if p.trouble?.needsAttention == true { workingTroubled += 1 }
             case .idle: idle += 1
             case .resting: resting += 1
             case .absent: absent += 1
@@ -201,6 +218,9 @@ struct OfficeCensus: Equatable, Sendable {
         }
     }
 
-    /// 要用户动手的：没登录、登错号、登录失效、线路或出口有问题
-    var needsAttention: Int { absent + wrongPerson + expired + unwell }
+    /// 在用、同时有要用户动手的问题的（算在“在用”里，不算进上面几样）
+    var workingTroubled = 0
+
+    /// 要用户动手的：没登录、登错号、登录失效、线路或出口有问题（在用的也算）
+    var needsAttention: Int { absent + wrongPerson + expired + unwell + workingTroubled }
 }

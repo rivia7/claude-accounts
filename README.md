@@ -125,6 +125,7 @@ Linux 上能用的是命令行：
 | 查看所有账号 | `cca ls` |
 | 改别名 | `cca rename 账号 新别名`（写 `-` 去掉别名；登录、资料、端口都不变；cca App 里点名字旁边的笔） |
 | 换节点（也能改别名） | `cca edit` |
+| `~/.claude/settings.json` 里配过第三方 API、代理，cca 不肯启动 | `cca settings fix`（先把整份文件备份在旁边，再只去掉那几项，别的设置不动；第三方 API 改用 `cca add api` 加成账号） |
 | 删除账号 | `cca rm 工作` |
 | 检查每个账号的出口 IP | `cca check` |
 | 打开图形界面（用量、节点分流、一键打开 App） | `cca gui` |
@@ -448,7 +449,7 @@ cca 会先通过这个账号的出口检查一遍，有问题就不启动：
   - **WebRTC**：不经代理向 STUN 服务器（UDP）探测这台 Mac 的出口。与账号出口不同时提示“直连风险”；一致时只说明 STUN 出口一致，均不代表已在浏览器内验证。超时、失败或没有取得 IP 时显示“没测成”，不会显示“无泄露”。账号 Chrome 另设 `--webrtc-ip-handling-policy=disable_non_proxied_udp`，关闭时合并独立 profile 的偏好并清除 WebRTC URL 例外，运行时发现偏好改变会要求重开。此限制可能影响语音或视频连接；企业策略、扩展优先级及原生 App 仍需单独验证，不能把宿主探针结果当成浏览器验收。
   - `cca check` 每次都重新测，并写出解析器在哪；不想测的话在 `~/.cca/config.json` 里加上 `"leak_check": false`。`cca web` 也执行启动前出口与泄露检查。DNS 没有返回解析器或无法确认归属地时按未验证处理；正常结果仅说明未发现地区异常，不代表已验证浏览器 DNS。
 - **登录的是不是这个账号**：如果这个账号的窗口里登录成了别的邮箱，会拒绝启动并提示你重新登录，免得一个账号用了另一个账号的出口。
-- **共享设置有没有"串号"的配置**：`~/.claude/settings.json`（或 `settings.local.json`）的 env 里如果写了代理（包括 `NO_PROXY`）、`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商开关（`CLAUDE_CODE_USE_BEDROCK` / `VERTEX` / `FOUNDRY` / `MANTLE` 等），或者写了 `apiKeyHelper`，会盖掉每个账号自己的设置（官方账号的登录 token 甚至会被发到别的地址），cca 会拒绝启动并指出来。
+- **共享设置有没有"串号"的配置**：`~/.claude/settings.json`（或 `settings.local.json`）的 env 里如果写了代理（包括 `NO_PROXY`）、`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`、云厂商开关（`CLAUDE_CODE_USE_BEDROCK` / `VERTEX` / `FOUNDRY` / `MANTLE` 等），或者写了 `apiKeyHelper`，会盖掉每个账号自己的设置（官方账号的登录 token 甚至会被发到别的地址），cca 会拒绝启动，说清楚是哪份文件、哪几项。运行 `cca settings fix` 修复：先把整份原文备份在旁边（`settings.json.cca-backup-日期时间`，只有你自己能读），再只去掉这几项，连同只有那个第三方 API 认的模型名（`ANTHROPIC_MODEL` 这类，官方账号用不了），别的设置不动；还要用那个第三方 API 的话，用 `cca add api` 把它加成一个单独的账号。项目里的 `.claude/settings.json`、启动参数 `--settings` 给的，cca 不改，照实说要删哪几项。
 - **shell 环境**：shell 里 export 的 `ANTHROPIC_*`（包括 `ANTHROPIC_MODEL`）、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CODE_*_FILE_DESCRIPTOR` 和云厂商开关，cca 启动时一律不带进去，并提示屏蔽了哪些。Claude 的 `CLAUDE_CONFIG_DIR` 和 `CLAUDE_SECURESTORAGE_CONFIG_DIR` 均固定为账号目录，保持原有钥匙串命名；共享及项目 settings 也不能覆盖这些凭证来源。官方账号要换模型，写进 `~/.claude/settings.json` 或在会话里用 `/model`。
 - **第三方 API 账号**：只确认接口地址经它的出口连得上。
 

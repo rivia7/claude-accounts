@@ -395,8 +395,10 @@ struct ConsentItem: KnownValues {
     static let keyForget = ConsentItem(rawValue: "key_forget")
     /// 辅助安装直连不通：经内置代理的一个节点装 claude / codex / agy 命令（范围是节点名，默认同意；App 平时把 install-cli 交给终端）。
     static let installProxy = ConsentItem(rawValue: "install_proxy")
+    /// `cca settings fix`：先备份共享的 ~/.claude/settings.json，再去掉会盖掉各账号设置的几项（范围是这次要改的摘要，默认同意；App 不运行这条命令）。
+    static let settingsFix = ConsentItem(rawValue: "settings_fix")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy]
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

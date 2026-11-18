@@ -209,5 +209,61 @@ class UsageView(unittest.TestCase):
         self.assertEqual(view('alice@example.com', now)['summary'], {'weeks': 0, 'average_percent': None, 'maxed': 0, 'under_half': 0})
 
 
+    def test_usage_cached_keeps_model_scoped(self):
+        """Claude Code 的用量缓存（cachedUsageUtilization）比 usage.json 新时：它没有 model_scoped，照 usage.json 有哪几个模型从它的 limits 补上
+        （数字取新的；limits 被拿掉了照搬旧的），Fable 那几行不会一闪没了；usage.json 里没有的模型不加，账号对不上的不算"""
+        T, cached, entry = self.ns['T'], self.ns['usage_cached'], self.ns['usage_entry']
+        ends = '2099-01-01T00:00:00Z'
+
+        def mine(at, rl, uuid='u-1'):
+            return {'fetchedAtMs': at * 1000, 'accountUuid': uuid, 'utilization': rl}
+
+        weekly = {'kind': 'weekly_all', 'percent': 61, 'resets_at': ends, 'scope': None}
+        fable = {'kind': 'weekly_scoped', 'percent': 44, 'resets_at': ends, 'scope': {'model': {'id': None, 'display_name': 'Fable'}}}
+        ours = {'five_hour': None, 'seven_day': {'utilization': 60, 'resets_at': ends},
+                'limits': [dict(weekly, percent=60), dict(fable, percent=43)],
+                'model_scoped': [{'display_name': 'Fable', 'utilization': 43, 'resets_at': ends}],
+                'weekly_scoped_shares': [{'limit_index': 1, 'used_percent_of_weekly': 21, 'allowance_percent_of_weekly': 50}]}
+        theirs = {'five_hour': None, 'seven_day': {'utilization': 61, 'resets_at': ends}, 'limits': [weekly, fable],
+                  'weekly_scoped_shares': [{'limit_index': 1, 'used_percent_of_weekly': 22, 'allowance_percent_of_weekly': 50}]}
+
+        def pick(caches):
+            with mock.patch.object(T, 'usage_caches', lambda key: caches), mock.patch.object(T, 'who', lambda key: 'u-1'):
+                return cached('bob@example.com')
+
+        x = pick([mine(self.now - 10, ours), mine(self.now - 2, theirs)])
+        self.assertEqual(x['at'], self.now - 2)
+        self.assertEqual(x['rl']['seven_day']['utilization'], 61)
+        self.assertEqual(x['rl']['model_scoped'], [{'display_name': 'Fable', 'utilization': 44, 'resets_at': ends}])
+        self.assertNotIn('model_scoped', theirs)   # 只在返回的那份里补，读到的不改
+        row = {'key': 'bob@example.com', 'name': 'bob@example.com', 'email': 'bob@example.com', 'plan': 'Ultra', 'source': 'cache',
+               'at': x['at'], 'rl': x['rl'], 'why': None, 'msg': ''}
+        e = entry(row, self.now)
+        self.assertIsNone(e['five_hour'])
+        self.assertEqual([(m['name'], m['utilization'], m.get('allowance_percent_of_weekly'), m.get('used_percent_of_weekly'))
+                          for m in e['model_scoped']], [('Fable', 44, 50, 22)])
+        # usage.json 是新的那份：原样
+        self.assertIs(pick([mine(self.now - 1, ours), mine(self.now - 2, theirs)])['rl'], ours)
+        # 一样新：取 usage.json
+        self.assertIs(pick([mine(self.now - 2, ours), mine(self.now - 2, theirs)])['rl'], ours)
+        # limits 被拿掉了（Claude Code 查不到时拿缓存顶上的那种）：照搬 usage.json 的那一项
+        bare = {k: v for k, v in theirs.items() if k != 'limits'}
+        self.assertEqual(pick([mine(self.now - 10, ours), mine(self.now - 2, bare)])['rl']['model_scoped'], ours['model_scoped'])
+        # limits 里没有这个模型了：也照搬，哪一行都不少（下一次查到时以查到的为准）
+        gone = dict(theirs, limits=[weekly])
+        self.assertEqual(pick([mine(self.now - 10, ours), mine(self.now - 2, gone)])['rl']['model_scoped'], ours['model_scoped'])
+        # usage.json 里没有分模型的额度（[]）：不照 limits 加，cca 不猜 get_usage 给哪几个模型
+        none = dict(ours, model_scoped=[])
+        self.assertEqual(pick([mine(self.now - 10, none), mine(self.now - 2, theirs)])['rl']['model_scoped'], [])
+        # 只有 Claude Code 的缓存（cca 还没查过）：不补
+        self.assertNotIn('model_scoped', pick([None, mine(self.now - 2, theirs)])['rl'])
+        # usage.json 是别的账号的（换过登录）：不拿它补
+        self.assertNotIn('model_scoped', pick([mine(self.now - 10, ours, uuid='u-2'), mine(self.now - 2, theirs)])['rl'])
+        # 名字重复的只留一个；limits 里的不是数字时照搬旧的
+        dup = dict(ours, model_scoped=ours['model_scoped'] * 2)
+        odd = dict(theirs, limits=[weekly, dict(fable, percent=None)])
+        self.assertEqual(pick([mine(self.now - 10, dup), mine(self.now - 2, odd)])['rl']['model_scoped'], ours['model_scoped'])
+        self.assertIsNone(pick([None, None]))
+
 if __name__ == '__main__':
     unittest.main()

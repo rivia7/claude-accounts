@@ -111,7 +111,9 @@ func officeTests() async {
           && usage(five: 10, outdated: "").outdatedLoginPlan == nil && usage(five: 10, outdated: 3).outdatedLoginPlan == nil)
 
     // 员工的状态
-    check("没登录：椅子空着", mood(acct(["login": "logged_out", "app": ["running": true]])) == .absent)
+    check("没登录：椅子空着", mood(acct(["login": "logged_out"])) == .absent)
+    let away = Employee.make(acct(["login": "logged_out", "app": ["running": true]]), usage: nil, live: nil, now: now0)
+    check("没登录、桌面 App 开着：照样算在用，没登录跟在后面", away.mood == .working && away.trouble == .absent && away.app)
     check("登错号：坐着别人", mood(acct(["login": "email_mismatch", "login_email": "eve@example.com"])) == .wrongPerson(loginEmail: "eve@example.com"))
     check("端口连不上", mood(acct(), nil, slot("closed")) == .unwell(.portClosed) && Employee.Ailment.portClosed.severe)
     check("选错节点（橙）", mood(acct(), nil, slot("drift")) == .unwell(.wrongNode) && !Employee.Ailment.wrongNode.severe)
@@ -123,7 +125,14 @@ func officeTests() async {
     check("命令行里在用：在忙", mood(acct(["cli": ["running": true, "sessions": 1, "since_epoch": now0]])) == .working)
     check("什么都没开：空闲", mood(acct()) == .idle)
     let sick = Employee.make(acct(["app": ["running": true]]), usage: nil, live: slot("closed"), now: now0)
-    check("有毛病时也记得 App 开着", sick.app && sick.isWorking && sick.mood == .unwell(.portClosed))
+    check("有毛病时 App 开着：算在用，毛病跟在后面", sick.app && sick.isWorking && sick.mood == .working && sick.trouble == .unwell(.portClosed))
+    let tired = Employee.make(acct(["cli": ["running": true, "sessions": 1, "since_epoch": now0]]), usage: usage(five: 100), live: nil, now: now0)
+    check("额度用完、命令行还开着：在用，额度用完跟在后面", tired.mood == .working && tired.trouble == .resting(until: now0 + 3600))
+    check("点名：在用的算在用；有要处理的问题的也算进要处理，额度用完的不算",
+          OfficeCensus([sick, away, tired]).working == 3 && OfficeCensus([sick, away, tired]).needsAttention == 2
+          && OfficeCensus([sick, away, tired]).unwell == 0 && Texts.officeSummary(OfficeCensus([sick, away, tired])) == "3 个账号 · 3 个在用")
+    check("没问题时没有 trouble；没在用时 trouble 就是头条", Employee.make(acct(["app": ["running": true]]), usage: nil, live: nil, now: now0).trouble == nil
+          && Employee.make(acct(), usage: nil, live: slot("closed"), now: now0).trouble == .unwell(.portClosed))
     let near = Employee.make(acct(["health": health("ok", dns: "leak")]), usage: usage(five: 92), live: nil, now: now0)
     check("快用完、泄露是小标记，不改头条", near.mood == .idle && near.flags == [.nearLimit, .leak])
     check("没装 App、没检测过的小标记", Employee.make(missing, usage: nil, live: nil, now: now0).flags == [.noApp]
@@ -156,7 +165,11 @@ func officeTests() async {
     let resting = Employee.make(acct(), usage: usage(five: 100, week: 20, fiveResets: 1794050010), live: nil, now: now0)
     check("工位下面那一行", Texts.mood(resting, appLabel: "Claude App", now: now0).hasPrefix("额度用完了，")
           && Texts.mood(Employee.make(acct(["login": "logged_out"]), usage: nil, live: nil, now: now0), appLabel: "", now: now0) == "还没登录"
-          && Texts.mood(sick, appLabel: "", now: now0) == "端口连不上")
+          && Texts.mood(Employee.make(acct(), usage: nil, live: slot("closed"), now: now0), appLabel: "", now: now0) == "端口连不上")
+    check("在用、又有问题：在用在前，问题跟在后面", Texts.mood(sick, appLabel: "Claude App", now: now0) == "Claude App 开着 · 端口连不上"
+          && Texts.mood(sick, appLabel: "Claude App", now: now0, brief: true) == "在用 · 端口连不上"
+          && Texts.mood(away, appLabel: "Claude App", now: now0, brief: true) == "在用 · 还没登录"
+          && Texts.mood(tired, appLabel: "", now: now0, brief: true).hasPrefix("在用 · 额度用完了，"))
     check("档位的叫法", Texts.planTier(.premium) == "尊贵" && Texts.planTier(.entry) == "入门" && Texts.planTier(.unknown) == nil)
     check("读屏念的一整句", Texts.deskLabel(Employee.make(acct(["key": "工作(bob@example.com)", "name": "工作", "plan": "Ultra",
           "plan_tier": "premium", "app": ["running": true]]), usage: nil, live: nil, now: now0), appLabel: "Claude App", now: now0)
@@ -187,10 +200,15 @@ func officeTests() async {
         if let ld = fixture("live_unreachable.json"), let live = try? DocumentDecoder.decode(LiveDoc.self, from: ld) {
             let o2 = Office.make(tools: s.tools, codexEnabled: true, usage: { $0.usage }, live: { live.slot(for: $0) }, now: now0)
             let m2 = Dictionary(uniqueKeysWithValues: o2.people.map { ($0.account.key, $0.mood) })
+            let t2 = Dictionary(uniqueKeysWithValues: o2.people.map { ($0.account.key, $0.trouble) })
             check("路由器连不上：走路由器的人都端口不通（没登录、登错号的照旧，直连的不受影响）",
                   ["工作(bob@example.com)", "erin@example.com", "grace@example.com", "香港接口", "frank@example.com"]
-                    .allSatisfy { m2[$0] == .unwell(.portClosed) } && m2["carol@example.com"] == .absent
-                  && m2["测试(dave@example.com)"] == .wrongPerson(loginEmail: "eve@example.com") && m2["直连接口"] == .idle, "\(m2)")
+                    .allSatisfy { t2[$0] == .unwell(.portClosed) } && m2["carol@example.com"] == .absent
+                  && m2["测试(dave@example.com)"] == .wrongPerson(loginEmail: "eve@example.com") && m2["直连接口"] == .idle, "\(t2)")
+            check("路由器连不上：在用的照样算在用（bob 的 App 开着、香港接口的命令行开着），其余的端口不通",
+                  m2["工作(bob@example.com)"] == .working && m2["香港接口"] == .working
+                  && ["erin@example.com", "grace@example.com", "frank@example.com"].allSatisfy { m2[$0] == .unwell(.portClosed) }
+                  && o2.census.working == 2 && o2.census.needsAttention == 7, "\(m2) \(o2.census)")
         }
     } else {
         check("读 state.json", false)
