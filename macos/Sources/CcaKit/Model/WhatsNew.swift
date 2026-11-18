@@ -20,22 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
-        ReleaseNote(version: "3.4.0-beta.2", title: "配置向导改成三步：先连映射，再选网络出口，最后添加账号", points: [
+        ReleaseNote(version: "3.4.0", title: "cca 3.4 正式版：配置向导三步走，这台 Mac 的 UDP 也能经节点出去", points: [
             .init(symbol: "list.number",
-                  text: "第一次打开 App 的配置向导按这个顺序走：连上维护者的映射、选这台 Mac 怎么给账号联网、添加账号。页上写着第几步、一共几步，已经配好的步骤自动跳过。"),
-            .init(symbol: "person.badge.key",
-                  text: "连映射那一步给出发给维护者的一行命令，维护者加好后页面自己进入下一步，不用一直点。维护者一时没空可以先跳过，加好后 App 定时拉取映射时会自动补上节点和映射里的账号。"),
-            .init(symbol: "person.crop.circle.badge.plus",
-                  text: "添加账号不再要求先配置路由器：没有路由器、也还没有可选的节点时，选节点那一步可以直接粘贴一个自定义代理（分享链接）。"),
-        ], art: "onboard"),
-        ReleaseNote(version: "3.4.0-beta.1", title: "这台 Mac 的 UDP 也能经节点出去", points: [
+                  text: "配置向导三步走：连上维护者的映射、选这台 Mac 怎么联网、添加账号，配好的步骤自动跳过；添加账号不再要求先配置路由器。"),
             .init(symbol: "antenna.radiowaves.left.and.right",
-                  text: "用内置代理时，这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）以前照旧直连，国内的 WebRTC 检测会看到大陆的地址。现在可以让它们也经一个节点出去：节点分流页的「本机 UDP」一行，或者终端里 cca local udp on 节点。"),
-            .init(symbol: "lock.shield",
-                  text: "要装一个系统服务（只接 UDP，TCP 照旧直连），装的时候系统弹授权框输一次管理员密码；之后开、关都不用密码，开机后照常生效。cca local udp off 关掉，uninstall 删掉。"),
-            .init(symbol: "exclamationmark.triangle",
-                  text: "账号页的 WebRTC 看到大陆地址、又在用内置代理时，旁边直接给出打开它的按钮。"),
-        ], art: "route"),
+                  text: "用内置代理时，这台 Mac 自己的 UDP（WebRTC、QUIC）也能经节点出去：节点分流页的「本机 UDP」，或者 cca local udp on。"),
+            .init(symbol: "wrench.and.screwdriver",
+                  text: "共享的 ~/.claude/settings.json 里配了第三方 API、代理时说清楚是哪几项；cca settings fix 先整份备份，再只去掉这几项。"),
+            .init(symbol: "chart.bar",
+                  text: "后台刷新用量时，侧栏里 Fable 那一行不再一闪就没了。"),
+            .init(symbol: "desktopcomputer",
+                  text: "总览里 App 开着、终端里有会话的账号一律算在用，有问题写成「在用 · 端口连不上」。"),
+        ], art: "onboard"),
         ReleaseNote(version: "3.3.0", title: "cca 3.3 正式版：配置更简单，出门在外统一用内置代理", points: [
             .init(symbol: "sparkles",
                   text: "macOS 上一键安装后自动打开图形界面 App，第一次打开手把手引导你选这台 Mac 怎么联网、添加第一个账号，新手教程还配了图文步骤卡。"),
