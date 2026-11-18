@@ -144,6 +144,8 @@ final class AppModel {
     private(set) var usageRuns: [ToolID: [String: UsageEntry]] = [:]
     private(set) var usageRefreshing: Set<ToolID> = []
     private(set) var usageRefreshingKeys: Set<AccountRef> = []
+    /// 一键检测所有账号出口时，正在测的工具（分流页区头的「检测全部出口」据此显示“检测中…”）。要被观察，不能 @ObservationIgnored。
+    private(set) var checkingExits: Set<ToolID> = []
     /// 自动刷新上次试过的时间：查失败时 fetchedEpoch 不变，靠它按间隔重试，不每分钟试一次。
     @ObservationIgnored private var usageAttempted: [AccountRef: Double] = [:]
     /// 自动检测出口：上次试的时间、正在测的工具
@@ -873,6 +875,36 @@ final class AppModel {
             if let ips = doc?.sharedExitIPs, !ips.isEmpty { text += "（几个账号共用出口 IP：\(ips.joined(separator: "、"))）" }
             self.finish(r, failureTitle: "没能检测出口", success: text)
             await self.afterAction()
+        }
+    }
+
+    /// 一键检测所有账号的出口（分流页区头的「检测全部出口」）：所有启用工具下能检测的账号一起，
+    /// 复用后台轮询用的批量 check。结果照样记进各账号的 health.json，读一次 state 就有了；不弹框、不占用账号自己的按钮。
+    func checkAllExits() {
+        guard phase == .ready, let client, checkingExits.isEmpty else { return }
+        let now = Date().timeIntervalSince1970
+        for t in visibleTools where toolState(t)?.enabled ?? (t == .claude) {
+            guard !exitPolling.contains(t) else { continue }   // 这个工具正好在后台测，跳过
+            let keys = accounts(t).filter { $0.can.check && ($0.isAPI || $0.login == .loggedIn) && activities[$0.ref] == nil }.map(\.key)
+            guard !keys.isEmpty else { continue }
+            for k in keys { exitAttempted[AccountRef(tool: t, key: k)] = now }
+            exitPolling.insert(t)
+            checkingExits.insert(t)
+            track { [weak self] in
+                _ = await client.execute(.checkPoll(t, keys: keys), prompter: nil)
+                guard let self else { return }
+                self.exitPolling.remove(t)
+                self.checkingExits.remove(t)
+                await self.loadState()
+            }
+        }
+    }
+
+    /// 有没有能检测出口的账号（登录了的官方账号，或第三方 API 账号）——分流页那个「检测全部出口」据此决定显不显示。
+    var anyCheckableAccount: Bool {
+        visibleTools.contains { t in
+            (toolState(t)?.enabled ?? (t == .claude))
+                && accounts(t).contains { $0.can.check && ($0.isAPI || $0.login == .loggedIn) }
         }
     }
 

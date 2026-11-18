@@ -20,64 +20,18 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
-        ReleaseNote(version: "3.3.0-beta.9", title: "出门在外判断更准：经 ZeroTier / VPN 连到路由器不算在家，开着 TUN 也能用内置代理", points: [
-            .init(symbol: "network",
-                  text: "在外面开着 ZeroTier、VPN 时也连得上家里的路由器，以前会被当成在家、走路由器的出口。现在只经这类虚拟网卡连得到路由器的不算在家，照样走内置代理；在家开着 Clash 客户端的 TUN 时照样认得出在家。想在外面也经 ZeroTier 走路由器，把 config.json 的 route 改成 router。"),
-            .init(symbol: "arrow.triangle.branch",
-                  text: "这台 Mac 上的 Clash 客户端开着 TUN（虚拟网卡模式）时，内置代理连节点的连接以前会被它截走，出口检测拿不到 IP。现在内置代理自动绑定物理网卡连节点、绕开 TUN，系统的 DNS 用不了时改用 DHCP 给的，不用关 TUN；cca local 里能看到绑定在哪块网卡。"),
-        ], art: "route"),
-        ReleaseNote(version: "3.3.0-beta.8", title: "出门在外更省心：统一用内置代理，不再需要 Clash Verge", points: [
-            .init(symbol: "bolt.horizontal.circle",
-                  text: "出门在外连不上路由器时，现在统一用 cca 自带的内置代理（mihomo 内核）：macOS 26 以上在这个 App 里跑，26 以下由 cca 在后台跑，全版本都能用。不用再装 Clash Verge 或手动配别的客户端；cca local off 停掉内核、删掉配置和拷来的节点。"),
-            .init(symbol: "link.badge.plus",
-                  text: "没有路由器、账号又不在维护者映射里时，可以自己粘一条分享链接（vmess、vless、ss、trojan 等）或一段 Clash 节点配置当出口：cca node add 加，cca node ls / rm 看和删，加之前 cca 先用内核校验一下。"),
-            .init(symbol: "wifi",
-                  text: "配置分流时自动探测当前网络的网关支不支持 Clash，向导默认帮你选好走路由器还是内置代理、把路由器地址也预填上，少填几步。"),
-        ], art: "route"),
-        ReleaseNote(version: "3.3.0-beta.7", title: "配置更有谱：新手教程手把手带你配好第一台 Mac", points: [
-            .init(symbol: "list.number",
-                  text: "新手教程前面加了几张配置步骤卡：选这台 Mac 怎么联网（路由器 / 没有路由器用内置代理 / 先跳过）、添加第一个账号，照着一步步就能配好。首页的欢迎卡片也多了「先看看怎么配置」，动手之前先看图文。"),
-            .init(symbol: "book",
-                  text: "README 的安装教程也更新到了现在的流程：macOS 上一键安装后自动打开图形界面、在 App 里引导配置，三种联网方式和终端配置都写清楚了。"),
-        ], art: "onboard"),
-        ReleaseNote(version: "3.3.0-beta.6", title: "没有路由器的笔记本也能配：内置代理 + 维护者节点", points: [
-            .init(symbol: "laptopcomputer",
-                  text: "配置向导新增「没有路由器」一项：用 cca 自带的内置代理（内核在这个 App 里跑，要 macOS 26），节点由维护者的私有映射提供。映射里已经有节点就直接配好、接着添加账号。"),
-            .init(symbol: "key.fill",
-                  text: "还没配过映射的，向导生成一把只读 deploy key、显示一行发给维护者运行的命令（已复制到剪贴板）；维护者加好后 App 会自动拉取映射、导入节点，你再点「开始配置」就能加账号——不卡在这一步。"),
-        ], art: "route"),
-        ReleaseNote(version: "3.3.0-beta.5", title: "新装更省心：图形界面一步步引导配置", points: [
+        ReleaseNote(version: "3.3.0", title: "cca 3.3 正式版：配置更简单，出门在外统一用内置代理", points: [
             .init(symbol: "sparkles",
-                  text: "macOS 上的一键安装脚本现在默认装好并打开图形界面 App，剩下的配置在 App 里一步步做，不用再对着终端填。老系统（macOS 26 以前）自动回退到终端引导；想在终端里配置照样运行 cca install。"),
-            .init(symbol: "list.number",
-                  text: "第一次打开、还没配置过时，首页给个「开始配置」：选这台 Mac 怎么给账号联网 → 配好路由器 → 添加第一个账号，每一步都有说明，傻瓜式填完就能用（无路由器的笔记本下一个测试版再支持）。"),
-        ], art: "fan"),
-        ReleaseNote(version: "3.3.0-beta.4", title: "多台 Mac 共用一个路由器不冲突；配本机代理不用先加账号", points: [
+                  text: "macOS 上一键安装后自动打开图形界面 App，第一次打开手把手引导你选这台 Mac 怎么联网、添加第一个账号，新手教程还配了图文步骤卡。"),
+            .init(symbol: "bolt.horizontal.circle",
+                  text: "出门在外连不上路由器时统一用 cca 自带的内置代理（全版本都能用），不用再装 Clash Verge；没有路由器时还能 cca node add 粘条分享链接自己加节点。"),
+            .init(symbol: "envelope.badge",
+                  text: "邮箱助手：登录邮件一到就自动在账号专属的浏览器里打开里面的链接（在账号页配置，只在 macOS 上）。"),
             .init(symbol: "network",
-                  text: "两台 Mac 在同一个局域网里管同一个路由器时，不再互相覆盖端口分流：各自的账号共用同一套端口、保留对方的；启动前会回读确认这个端口确实是自己的账号，对不上就重新同步、还不对就断开（宁可断开也不走错出口）。"),
-            .init(symbol: "slider.horizontal.3",
-                  text: "配置本机 Clash / 内置代理 / 手动客户端时不再要求先加账号：先把客户端选好，端口等加了走节点的账号再自动补上。"),
+                  text: "两台 Mac 共用一个路由器不再互相覆盖端口；经 ZeroTier / VPN 连路由器不算在家，别的程序开着 TUN 也能用内置代理。"),
+            .init(symbol: "checkmark.shield",
+                  text: "节点分流页新增「检测全部出口」：一次把所有账号的出口和 DNS / WebRTC 泄露都测一遍，不用一个个点。"),
         ], art: "route"),
-        ReleaseNote(version: "3.3.0-beta.3", title: "邮箱助手：信任一个转发中转、把非登录邮件折起来", points: [
-            .init(symbol: "exclamationmark.shield",
-                  text: "有些隐私别名 / 转发服务会去掉 Anthropic 的签名、用自己的域名重签，这样转来的登录邮件以前会被拦下。现在能给某个账号单独「信任一个转发中转」——不安全的开关，默认关，只在你清楚这个中转可信、别名没泄露时才开。"),
-            .init(symbol: "line.3.horizontal.decrease",
-                  text: "「邮箱」一节默认只列像登录邮件的，标题不像的先折起来、点一下再展开；经可信中转认下的那封会标上「不安全」。"),
-        ], art: "envelope"),
-        ReleaseNote(version: "3.3.0-beta.2", title: "邮箱助手搬进界面：在账号页配置、看登录邮件、一键打开", points: [
-            .init(symbol: "envelope.badge",
-                  text: "每个 Claude 账号的页面新增「邮箱」一节：在这里填收登录邮件的 Gmail，不用再去终端。默认所有账号共用一个，也能给某个账号单独配一个。只在 macOS 上。"),
-            .init(symbol: "tray.and.arrow.down",
-                  text: "点「查看最近的登录邮件」就只读地连一次 Gmail，逐封标出认不认；通过核对的那封点「在浏览器打开」，在这个账号专属的浏览器里打开里面的登录链接。"),
-            .init(symbol: "lock.shield",
-                  text: "登录链接始终不交给界面（只显示标题、发件人和链接的“样子”），打开由 cca 自己完成；应用专用密码只进钥匙串，绝不进映射、不记日志。"),
-        ], art: "envelope"),
-        ReleaseNote(version: "3.3.0-beta.1", title: "邮箱助手：登录邮件里的链接自动打开（测试版）", points: [
-            .init(symbol: "envelope.badge",
-                  text: "把各 Claude 账号的邮箱都转发到一个 Gmail，运行一次 cca mail setup（填 Gmail 地址和应用专用密码）。之后用 cca login、第一次启动账号、登录网页版时，cca 在后台只读地看这个 Gmail，登录邮件一到就在这个账号专属的浏览器里打开里面的链接。只在 macOS 上。"),
-            .init(symbol: "lock.shield",
-                  text: "只认 Gmail 核验过 Anthropic 签名、而且发给这个账号的登录邮件；链接只交给账号自己的浏览器，不显示、不保存、不记日志。另有 cca mail test（逐封说认不认、链接只说样子）、cca mail open、cca mail forget，cca restore 会一并清掉。"),
-        ]),
         ReleaseNote(version: "3.2.2", title: "换账号接着做同一个会话，任务清单也接得上", points: [
             .init(symbol: "checklist",
                   text: "Claude Code 在会话里列的任务清单以前每个账号各存一份，换账号恢复同一个会话后清单是空的。现在各账号共用一份；以前各存的会自动合到一起，同一个会话两边不一样时留较新的，另一份存进 ~/.cca/conflicts。"),

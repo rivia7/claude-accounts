@@ -164,6 +164,11 @@ struct RoutingHeader: View {
                 SectionAction("刷新", systemImage: "arrow.clockwise") { model.refreshLive() }
                     .disabled(model.liveLoading)
                     .help("重新读取路由器 / 本机 Clash 上各个端口现在的样子")
+                if model.anyCheckableAccount {
+                    SectionAction(model.checkingExits.isEmpty ? "检测全部出口" : "检测中…", systemImage: "checkmark.shield") { model.checkAllExits() }
+                        .disabled(!model.checkingExits.isEmpty || model.phase != .ready)
+                        .help("一次检测所有账号现在的出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险（会访问检测网站；和账号页的「检测出口」一样，只是一次测全部）")
+                }
                 if model.policyPullAvailable {
                     SectionAction(model.policyPulling ? "拉取中…" : "拉取映射", systemImage: "arrow.down.to.line") { model.pullPolicyNow() }
                         .disabled(model.policyPulling)
