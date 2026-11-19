@@ -602,7 +602,7 @@ mod tests {
         }
     }
 
-    /// tests/mail_view.py 的 Rules
+    /// 原来 tests/mail_view.py 的 Rules
     #[test]
     fn link_must_be_exactly_a_claude_login_link() {
         let ok = |u: &str| MAIL_RULES[0].link_ok(u);
@@ -682,7 +682,7 @@ mod tests {
         }
     }
 
-    /// tests/mail_view.py 的 Lint.test_every_rule_is_known：各工具的 mail_rules 里写的名字 MAIL_RULES 里都有
+    /// 原来 tests/mail_view.py 的 Lint.test_every_rule_is_known：各工具的 mail_rules 里写的名字 MAIL_RULES 里都有
     /// （原来写错了是 KeyError；`mail_rules()` 这里是跳过，所以更要守着），Codex 没有规则
     #[test]
     fn every_rule_is_known() {

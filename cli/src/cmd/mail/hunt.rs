@@ -160,6 +160,17 @@ pub struct Hunt<'a> {
     pub sleep: &'a dyn Fn(f64),
     /// 这个进程的进程号（认领时记下）
     pub pid: u32,
+    /// 几秒看一次邮箱（平时 3 秒）、连不上 Gmail 和浏览器没打开时先等多久（平时 2 秒）：命令里照 `Hunt::knobs()` 取
+    /// （测试用的开关 CCA_MAIL_POLL、CCA_MAIL_RETRY），单元测试直接给，不看进程的环境变量
+    pub poll: f64,
+    pub base: f64,
+}
+
+impl Hunt<'_> {
+    /// (poll, base)：`mail_knob('CCA_MAIL_POLL', 3), mail_knob('CCA_MAIL_RETRY', 2)`
+    pub fn knobs() -> (f64, f64) {
+        (mail_knob("CCA_MAIL_POLL", 3.0), mail_knob("CCA_MAIL_RETRY", 2.0))
+    }
 }
 
 /// 找到的、还没打开的那一封
@@ -256,7 +267,7 @@ pub fn mail_hunt(
     mut idle: Option<&dyn Fn()>,
 ) -> R<Found> {
     let _frame = super::py_frame();
-    let (poll, base) = (mail_knob("CCA_MAIL_POLL", 3.0), mail_knob("CCA_MAIL_RETRY", 2.0));
+    let (poll, base) = (h.poll, h.base);
     let mut res = Found { code: "none".into(), ..Found::default() };
     let (mut wait, mut fails, mut polled) = (base, 0u32, false);
     let mut pend: Option<Pend> = None;
@@ -463,7 +474,7 @@ mod tests {
         fs::load_quiet(&path::join(dir, "used.json")).and_then(|v| v.as_dict()).unwrap_or_default()
     }
 
-    /// tests/mail_view.py 的 Used.test_claim_once_across_processes
+    /// 原来 tests/mail_view.py 的 Used.test_claim_once_across_processes
     #[test]
     fn claim_once_across_processes() {
         use std::os::unix::fs::PermissionsExt;
@@ -484,6 +495,7 @@ mod tests {
         assert_eq!(keys, ["d1", "d3"]);
         let mode = |p: &str| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!((mode(&dir), mode(&path::join(&dir, "used.json"))), (0o700, 0o600));
+        assert!(!std::fs::read_to_string(path::join(&dir, "used.json")).unwrap().contains("magic"), "只记摘要，链接不进文件");
         // 认领的人不在了（进程号是编的）：可以接手
         let d = used(&dir);
         d.set("d4", dict! { "at" => time::time(), "st" => "claim", "pid" => 0x7fff_fff0i64 });
@@ -492,7 +504,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// tests/mail_view.py 的 Used.test_old_records_are_dropped
+    /// 原来 tests/mail_view.py 的 Used.test_old_records_are_dropped
     #[test]
     fn old_records_are_dropped() {
         let dir = tmpdir("old");
@@ -624,6 +636,8 @@ mod tests {
                 now: &now,
                 sleep: &sleep,
                 pid: std::process::id(),
+                poll: 3.0,
+                base: 2.0,
             };
             let mut src = Scripted { rounds: c.list("rounds").unwrap().items(), emails: emails.clone(), polls: 0 };
             let say = |s: &str| said.borrow_mut().push(s.to_string());
@@ -651,7 +665,7 @@ mod tests {
         }
     }
 
-    // --- tests/mail_view.py 的 Hunt：假的邮件来源、假的时钟 ------------------------------------------------------------------
+    // --- 原来 tests/mail_view.py 的 Hunt：假的邮件来源、假的时钟 ------------------------------------------------------------------
 
     enum Round {
         Mails(Vec<Cand>),
@@ -712,7 +726,7 @@ mod tests {
         fn hunt(&self, src: &mut FakeSource, results: &[&str], secs: f64, once: bool, again: bool, alive: &dyn Fn() -> bool, idle: Option<&dyn Fn()>) -> Found {
             let rules = [&MAIL_RULES[0]];
             let (now, sleep) = (|| self.clock.get(), |s: f64| self.clock.set(self.clock.get() + s));
-            let h = Hunt { dir: &self.dir, rules: &rules, acct: "alice@example.com", forwarder: None, again, once, now: &now, sleep: &sleep, pid: std::process::id() };
+            let h = Hunt { dir: &self.dir, rules: &rules, acct: "alice@example.com", forwarder: None, again, once, now: &now, sleep: &sleep, pid: std::process::id(), poll: 3.0, base: 2.0 };
             let mut results: Vec<String> = results.iter().map(|s| s.to_string()).collect();
             let mut deliver = |link: &str| -> R<String> {
                 self.opened.borrow_mut().push((((self.clock.get() - T0) * 10.0).round() / 10.0, link.to_string()));
@@ -745,10 +759,10 @@ mod tests {
     #[test]
     fn opens_only_the_newest_and_keeps_watching() {
         let w = World::new("newest");
-        let (a, b) = (eml("body html only"), eml("body text only"));
+        let (a, b) = (eml("hunt old link"), eml("hunt new link"));
         let mut src = source(vec![Round::Mails(vec![w.cand(1, &a, 5.0), w.cand(2, &b, 1.0)])], &[(1, &a), (2, &b)]);
         let res = w.run(&mut src, &[], 30.0, false);
-        assert_eq!(links(&w), ["https://claude.ai/magic-link#tok-T"]);
+        assert_eq!(links(&w), ["https://claude.ai/magic-link#tok-new"]);
         assert_eq!((res.code.as_str(), res.opened), ("opened", 1));
         assert!(src.polls > 5, "打开以后接着看（登录结束才停）");
         assert!(w.said.borrow().is_empty());
@@ -763,7 +777,7 @@ mod tests {
         assert_eq!(res.code, "opened");
         w.opened.borrow_mut().clear();
         w.said.borrow_mut().clear();
-        let b = eml("subject encoded");
+        let b = eml("hunt second good");
         let res = w.run(&mut source(vec![Round::Mails(vec![w.cand(2, &b, 0.0)])], &[(2, &b)]), &["fail", "fail", "fail"], 30.0, false);
         assert_eq!((w.opened.borrow().len(), res.code.as_str()), (3, "fail"));
         assert_eq!(w.said.borrow().iter().filter(|s| s.contains("没能打开浏览器")).count(), 1);
@@ -848,7 +862,7 @@ mod tests {
     #[test]
     fn rejections_quiet_or_said() {
         let w = World::new("reject");
-        let mails = [(1, eml("to bob")), (2, eml("subject receipt")), (3, eml("from evil")), (4, eml("ar fail"))];
+        let mails = [(1, eml("to bob")), (2, eml("hunt subject Receipt")), (3, eml("hunt from x@evil")), (4, eml("ar fail"))];
         let cands = mails.iter().map(|(u, r)| w.cand(*u, r, 0.0)).collect();
         let res = w.run(&mut source(vec![Round::Mails(cands)], &[]), &[], 5.0, false);
         let count = |why: &str| res.rejected.iter().find(|(w, _)| w == why).map(|(_, n)| *n);
@@ -889,7 +903,7 @@ mod tests {
     #[test]
     fn mails_not_opened_are_checked_again_next_time() {
         let w = World::new("nolink");
-        let a = eml("body tracking link");
+        let a = eml("hunt help link only");
         for _ in 0..2 {
             let res = w.run(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &[], 5.0, true);
             assert_eq!((res.rejected.clone(), res.used), (vec![("nolink".to_string(), 1)], 0), "没打开的不记下：下次照样核对、照实说原因");

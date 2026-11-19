@@ -17,7 +17,7 @@ use crate::py::{Fail, R};
 use crate::re;
 use std::ffi::{CStr, CString};
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream};
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -284,10 +284,11 @@ fn attribute_error(what: &str, v: &V, attr: &str) -> Fail {
     Fail::Other("AttributeError", vec![format!("'{kind}' object has no attribute '{attr}'（config.json 的 {what}）")])
 }
 
-/// 这条路是不是账号的出口：这一次的 CCA_PROXY，或者端口池里的端口（本机、路由器上的）
-pub fn mail_route_exit(r: &Route, c: &Dict) -> R<bool> {
+/// 这条路是不是账号的出口：这一次的 CCA_PROXY，或者端口池里的端口（本机、路由器上的）。
+/// cca_proxy 是环境变量 CCA_PROXY 的值，调用的人取了给进来（单元测试不去动进程的环境变量）
+pub fn mail_route_exit(r: &Route, c: &Dict, cca_proxy: &str) -> R<bool> {
     let (host, port) = (r.host.to_lowercase(), r.port);
-    if let Ok(u) = urlsplit(&getenv("CCA_PROXY").unwrap_or_default()) {
+    if let Ok(u) = urlsplit(cca_proxy) {
         if let Some(h) = u.hostname().filter(|h| !h.is_empty()) {
             // 端口写得不对（u.port 出 ValueError）：当作不是
             if let Ok(p) = u.port() {
@@ -321,6 +322,11 @@ pub fn mail_route_exit(r: &Route, c: &Dict) -> R<bool> {
 /// CONNECT；没开代理、只有 PAC、例外里有 Gmail 时直连）、direct、socks5://主机:端口、http://主机:端口。走不通就报错，
 /// 不换别的路。指到账号出口的不用：Gmail 和 Claude 账号不能从同一个出口出去
 pub fn mail_route(spec: Option<&str>, c: &Dict, sysp: Option<SysProxy>) -> R<Route> {
+    route_with(spec, c, sysp, &getenv("CCA_PROXY").unwrap_or_default())
+}
+
+/// `mail_route`，这一次的 CCA_PROXY 由调用的人给（见 `mail_route_exit`）
+fn route_with(spec: Option<&str>, c: &Dict, sysp: Option<SysProxy>, cca_proxy: &str) -> R<Route> {
     let r = match spec {
         None | Some("") | Some("system") => {
             let (kv, exc) = sysp.unwrap_or_else(mail_sysproxy);
@@ -359,7 +365,7 @@ pub fn mail_route(spec: Option<&str>, c: &Dict, sysp: Option<SysProxy>) -> R<Rou
             }
         }
     };
-    if r.via != Via::Direct && mail_route_exit(&r, c)? {
+    if r.via != Via::Direct && mail_route_exit(&r, c, cca_proxy)? {
         return Err(mail_fatal("proxy", format!("代理 {}:{} 是账号的出口，Gmail 不能经它连。{}", r.host, r.port, MAIL_PROXY_HINT)));
     }
     Ok(r)
@@ -584,12 +590,17 @@ pub fn mail_dial(r: &Route, timeout: f64) -> R<TcpStream> {
     }
 }
 
+/// CCA_MAIL_CAFILE（只给测试的另一份 CA）这一次认不认：只在 HOME 换过（测试的沙箱）、套接字连的是本机（测试的代理）时才算。
+/// 用户真正的主目录下、连的不是本机时一律不认：环境变量换不掉对 Gmail 的证书校验
+fn test_ca(ca: Option<&str>, swapped: impl FnOnce() -> bool, peer: impl FnOnce() -> Option<IpAddr>) -> Option<&str> {
+    ca.filter(|ca| !ca.is_empty()).filter(|_| swapped() && peer().is_some_and(|ip| matches!(ip.to_string().as_str(), "127.0.0.1" | "::1")))
+}
+
 /// 在连好的套接字上做 TLS，照常校验 imap.gmail.com 的证书，绝不跳过校验。
 /// CCA_MAIL_CAFILE（只给测试）：另外信任这个 CA，只在 HOME 换过（测试的沙箱）、套接字连的是本机（测试的代理）时才算
 pub fn mail_tls(s: TcpStream, timeout: f64) -> R<TlsStream> {
-    let ca = getenv("CCA_MAIL_CAFILE").filter(|ca| !ca.is_empty());
-    let local = || s.peer_addr().is_ok_and(|peer| matches!(peer.ip().to_string().as_str(), "127.0.0.1" | "::1"));
-    let extra = ca.as_deref().filter(|_| home_swapped() && local());
+    let ca = getenv("CCA_MAIL_CAFILE");
+    let extra = test_ca(ca.as_deref(), home_swapped, || s.peer_addr().ok().map(|peer| peer.ip()));
     match tls::connect(s, MAIL_HOST, extra) {
         Ok(t) => {
             let _ = t.set_timeout(timeout);
@@ -620,7 +631,7 @@ mod tests {
     use crate::py::obj::V;
     use std::net::TcpListener;
 
-    /// tests/mail_view.py 的 Route
+    /// 原来 tests/mail_view.py 的 Route
     const SCUTIL: &str = concat!(
         "<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n    1 : 169.254/16\n  }\n  FTPPassive : 1\n",
         "  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7891\n",
@@ -628,8 +639,9 @@ mod tests {
         "  __SCOPED__ : <dictionary> {\n    en0 : <dictionary> {\n      SOCKSPort : 1\n    }\n  }\n}\n"
     );
 
+    /// 不带这一次的 CCA_PROXY（跑测试的这个进程的环境里有没有、是什么都不管）
     fn route(spec: Option<&str>, sysp: Option<SysProxy>, c: Option<Dict>) -> R<Route> {
-        mail_route(spec, &c.unwrap_or_default(), Some(sysp.unwrap_or_else(|| mail_proxy_parse(SCUTIL))))
+        route_with(spec, &c.unwrap_or_default(), Some(sysp.unwrap_or_else(|| mail_proxy_parse(SCUTIL))), "")
     }
 
     fn via(v: Via, host: &str, port: u16) -> Route {
@@ -713,11 +725,49 @@ mod tests {
             assert!(e.is("MailFatal") && mail_error(&e).unwrap().1.contains("是账号的出口，Gmail 不能经它连。"), "{spec}");
         }
         assert_eq!(route(Some("socks5://127.0.0.1:7897"), None, Some(c())).unwrap(), via(Via::Socks5, "127.0.0.1", 7897));
+        // 这一次的 CCA_PROXY（账号的出口）就是它：同一个主机和端口，写成 socks5 还是 http 都不行
+        let sysp = || Some(mail_proxy_parse(SCUTIL));
+        let e = route_with(Some("socks5://127.0.0.1:7897"), &c(), sysp(), "http://127.0.0.1:7897").unwrap_err();
+        assert!(e.is("MailFatal"));
+        assert_eq!(
+            mail_error(&e),
+            Some(("proxy", format!("代理 127.0.0.1:7897 是账号的出口，Gmail 不能经它连。{MAIL_PROXY_HINT}").as_str()))
+        );
+        // 别的端口、别的主机、写坏了的 CCA_PROXY 不算
+        for other in ["http://127.0.0.1:7898", "http://192.0.2.10:7897", "", "http://127.0.0.1:x7897", "nonsense"] {
+            assert_eq!(route_with(Some("socks5://127.0.0.1:7897"), &c(), sysp(), other).unwrap(), via(Via::Socks5, "127.0.0.1", 7897), "{other}");
+        }
+        assert!(mail_route_exit(&via(Via::Http, "LOCALHOST", 7897), &Dict::new(), "socks5://localhost:7897").unwrap(), "主机名不分大小写");
         // 手改坏了的 config.json：原来是没人接的 AttributeError
         let bad = dict! { "ports" => crate::list![7901] };
         assert!(route(Some("socks5://127.0.0.1:7901"), None, Some(bad)).unwrap_err().is("AttributeError"));
         let bad = dict! { "router" => "192.0.2.10" };
         assert!(route(Some("socks5://127.0.0.1:7901"), None, Some(bad)).unwrap_err().is("AttributeError"));
+    }
+
+    /// tests/mail_view.py 的 Wire.test_tls_is_always_verified 的后一半（「HOME 是用户真正的主目录：只给测试的 CA 不认」）：
+    /// 那一条在外面测不了——辅助程序要在真的主目录下跑才走得到。这里钉住认不认的规则；不认的时候握手确实过不了，
+    /// tests/mail_view.py 的同名用例用空的 CCA_MAIL_CAFILE 测
+    #[test]
+    fn test_ca_only_in_a_swapped_home_and_to_this_machine() {
+        fn ip(s: &'static str) -> impl FnOnce() -> Option<IpAddr> {
+            move || Some(s.parse().unwrap())
+        }
+        let ca = Some("/tmp/test-ca.pem");
+        assert_eq!(test_ca(ca, || true, ip("127.0.0.1")), ca);
+        assert_eq!(test_ca(ca, || true, ip("::1")), ca);
+        assert_eq!(test_ca(ca, || false, ip("127.0.0.1")), None, "HOME 是用户真正的主目录：不认");
+        assert_eq!(test_ca(ca, || false, ip("::1")), None);
+        for far in ["192.0.2.10", "127.0.0.2", "::ffff:127.0.0.1", "2001:db8::1"] {
+            assert_eq!(test_ca(ca, || true, ip(far)), None, "连的不是本机（{far}）：不认");
+        }
+        assert_eq!(test_ca(ca, || true, || None), None, "问不出对方是谁：不认");
+        assert_eq!(test_ca(Some(""), || true, ip("127.0.0.1")), None);
+        assert_eq!(test_ca(None, || true, ip("127.0.0.1")), None);
+        // 没给这个变量时不去问 HOME、不去问对方
+        assert_eq!(test_ca(None, || panic!("不该问"), || panic!("不该问")), None);
+        assert_eq!(test_ca(Some(""), || panic!("不该问"), || panic!("不该问")), None);
+        assert_eq!(test_ca(ca, || false, || panic!("不该问")), None);
     }
 
     #[test]

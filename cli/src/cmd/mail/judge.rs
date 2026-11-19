@@ -2,7 +2,7 @@
 //!
 //! 只信两样：Gmail 收信时写在最上面的那条 Authentication-Results（`mail_ar`），和它验过的那个 DKIM 签名盖住的头
 //! （`mail_signed_for`）。签名之外的头谁都能改、能加，所以发件人、收件人、标题必须都在签名里、各只有一个。
-//! 这一块是安全上要紧的逻辑：每个条件都照原文，tests/mail_view.py 里的检查都搬过来了（对照数据在
+//! 这一块是安全上要紧的逻辑：每个条件都照原文，原来 tests/mail_view.py 里对它的检查都搬过来了（对照数据在
 //! tests/vectors/mail.json 的 judge 等几节）。
 
 use super::header::{mail_addrs, mail_text, parseaddr};
@@ -465,7 +465,7 @@ mod tests {
         }
     }
 
-    /// tests/mail_view.py 的 Judge、Links、Clean 里的每一条检查，结论照那边写的（邮件是对照数据 judge 一节里同名的那一封：
+    /// 原来 tests/mail_view.py 的 Judge、Links、Clean 里的每一条检查，结论照那边写的（邮件是对照数据 judge 一节里同名的那一封：
     /// 生成对照数据时就是照那些测试里的写法做的）。上面是和真的 Python 逐项比，这里是把「该是什么」再钉一遍
     #[test]
     fn every_check_in_mail_view() {
@@ -510,7 +510,11 @@ mod tests {
         // Judge.test_trusted_forwarder
         let relay = Some("relay.example.com");
         assert_eq!(judge("fwd good", alice, now, relay), None, "正常转发 + 登记了中转 → 放行");
-        assert_eq!(judge("fwd sub relay", alice, now, relay), None, "中转按标签认后缀");
+        // 那边这一条写的是 forwarder='sub.relay.example.com'.split('.', 1)[1]，也就是 relay.example.com：照字面
+        assert_eq!(judge("fwd good", alice, now, "sub.relay.example.com".split_once('.').map(|x| x.1)), None, "中转按标签认后缀");
+        // 真按后缀认的那种：信是 mx.relay.example.com 发的、签的，登记的是 relay.example.com；反过来（登记的是子域名）不认
+        assert_eq!(judge("fwd sub relay", alice, now, relay), None, "中转的子域名发的也算");
+        assert_eq!(judge("fwd good", alice, now, Some("sub.relay.example.com")), Some("from"), "登记的是子域名、信是上一级域名发的 → 拒");
         assert_eq!(judge("fwd good", alice, now, None), Some("from"), "默认不开 → 拒");
         assert_eq!(judge("fwd good", alice, now, Some("evil.com")), Some("from"), "登记的是别的域名 → 拒");
         for (name, why) in [

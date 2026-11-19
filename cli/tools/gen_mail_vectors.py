@@ -1517,7 +1517,7 @@ DOMAINS = ['anthropic.com', 'mail.anthropic.com', 'MAIL.Anthropic.COM', 'evilant
 
 
 def judge_emails():
-    """(名字, 邮件, [(got, since, acct, forwarder)…])：tests/mail_view.py 里核对用的那些邮件，加上各种边角"""
+    """(名字, 邮件, [(got, since, acct, forwarder)…])：原来 tests/mail_view.py 里核对用的那些邮件，加上各种边角"""
     sys.path.insert(0, os.path.join(REPO, 'tests'))
     import mail_fake as mf
     mf.email.utils.formatdate = lambda *a, **kw: 'Sun, 15 Nov 2026 10:00:00 -0000'   # 生成的邮件每次都一样
@@ -1694,6 +1694,13 @@ def judge_emails():
     add('message-id 8bit', head + b'Message-ID: <ab\xe9c@mail.anthropic.com>\r\n\r\nx\r\n')
     add('empty', b'')
     add('headers only', head)
+    # 原来 tests/mail_view.py 的 Hunt 里各条检查现做的那几封（盯邮箱的单元测试照字面用；加在最后，前面各封的随机部分不变）
+    add('hunt old link', mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-old'))
+    add('hunt new link', mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-new'))
+    add('hunt second good', mf.build_eml('alice@example.com'))
+    add('hunt subject Receipt', mf.build_eml('alice@example.com', subject='Receipt'))
+    add('hunt from x@evil', mf.build_eml('alice@example.com', frm='x@evil.example.com'))
+    add('hunt help link only', mf.build_eml('alice@example.com', body_links=['https://www.anthropic.com/help']))
     return out
 
 
@@ -2292,7 +2299,7 @@ def hunt_cases():
     net = lambda t: {'retry': ['net', t]}
     A, H, T = 'good', 'body html only', 'body text only'
     S = [
-        # tests/mail_view.py 的 Hunt 里那些
+        # 原来 tests/mail_view.py 的 Hunt 里那些
         ('newest of two, keeps watching', [M((1, H, 5), (2, T, 1))], {}),
         ('browser fails twice then works', [M((1, A, 0))], dict(deliver=['fail', 'fail', 'ok'])),
         ('browser fails three times', [M((2, 'subject encoded', 0))], dict(deliver=['fail', 'fail', 'fail'])),

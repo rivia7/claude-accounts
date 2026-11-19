@@ -1,6 +1,6 @@
 //! imap.rs 的单元测试：对照数据（tests/vectors/mail.json）里的时间、FETCH 的回应、LIST 的行；`MailBox` 对着照剧本回答的
 //! 假服务器（明文、只在 127.0.0.1 上）走一遍，结果和发出去的命令都和 Python 的 imaplib 一样；`MailSource` 配假的会话
-//! （tests/mail_view.py 的 Source）。
+//! （原来 tests/mail_view.py 的 Source）。
 
 use super::*;
 use crate::cmd::mail::testing::{bytes_of, vectors};
@@ -17,7 +17,7 @@ fn rule() -> &'static MailRule {
     &MAIL_RULES[0]
 }
 
-/// tests/mail_view.py 的 Parse.test_internaldate
+/// 原来 tests/mail_view.py 的 Parse.test_internaldate
 #[test]
 fn internaldate() {
     let e = |s: &str| mail_epoch(s).unwrap();
@@ -39,7 +39,7 @@ fn internaldate() {
     }
 }
 
-/// tests/mail_view.py 的 Parse.test_search_criteria
+/// 原来 tests/mail_view.py 的 Parse.test_search_criteria
 #[test]
 fn search_criteria() {
     let t = mail_epoch("15-Nov-2026 00:30:00 +0000").unwrap().unwrap() as f64;
@@ -73,7 +73,7 @@ fn fetched(got: BTreeMap<u64, (i64, Vec<u8>)>) -> V {
     V::from(got.into_iter().map(|(u, (t, lit))| V::from(list![u as i64, t, latin1(&lit)])).collect::<Vec<_>>())
 }
 
-/// tests/mail_view.py 的 Parse.test_fetch_parse_any_order，加上对照数据
+/// 原来 tests/mail_view.py 的 Parse.test_fetch_parse_any_order，加上对照数据
 #[test]
 fn fetch_parse_any_order() {
     let d = "\"15-Nov-2026 02:00:00 +0000\"";
@@ -299,7 +299,7 @@ fn sessions_like_imaplib() {
     }
 }
 
-// --- MailSource：tests/mail_view.py 的 Source（假的 MailBox） --------------------------------------------------------------
+// --- MailSource：原来 tests/mail_view.py 的 Source（假的 MailBox） --------------------------------------------------------------
 
 #[derive(Default)]
 struct FakeBox {

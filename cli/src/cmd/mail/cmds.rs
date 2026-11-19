@@ -616,7 +616,8 @@ pub fn cmd_mail_open(args: &[String]) -> R<()> {
     let mut src = MailSource::new(MailBox::new(&m.at("user").py_str(), &pw, &route), &rules);
     let say = |s: &str| err!("{s}");
     let (now, sleep) = (|| time::time(), |s: f64| sleep_interruptible(s));
-    let h = Hunt { dir: &MAIL_DIR, rules: &rules, acct: &acct, forwarder: fwd.as_deref(), again, once: true, now: &now, sleep: &sleep, pid: std::process::id() };
+    let (poll, base) = Hunt::knobs();
+    let h = Hunt { dir: &MAIL_DIR, rules: &rules, acct: &acct, forwarder: fwd.as_deref(), again, once: true, now: &now, sleep: &sleep, pid: std::process::id(), poll, base };
     let mut deliver = mail_deliver(key);
     let opened = || mail_last(&name_of(key), "打开了登录邮件里的链接（cca mail open）");
     if !msg.is_empty() {
@@ -834,7 +835,8 @@ fn mail_watch(key: &str, alive: &dyn Fn() -> bool, limit: f64) -> R<()> {
     let hello = || say(&format!("• 邮箱助手：已连上 {}（{}），{} 的登录邮件一到就在它专属的浏览器里打开", user, mail_route_note(&route), name));
     let fwd = m.str("forwarder");
     let (now, sleep) = (|| time::time(), |s: f64| sleep_interruptible(s));
-    let h = Hunt { dir: &MAIL_DIR, rules: &rules, acct: &acct, forwarder: fwd.as_deref(), again: false, once: false, now: &now, sleep: &sleep, pid: std::process::id() };
+    let (poll, base) = Hunt::knobs();
+    let h = Hunt { dir: &MAIL_DIR, rules: &rules, acct: &acct, forwarder: fwd.as_deref(), again: false, once: false, now: &now, sleep: &sleep, pid: std::process::id(), poll, base };
     let mut deliver = mail_deliver(key);
     let res = mail_hunt(&h, &mut src, start, start + limit, &mut deliver, alive, &say, Some(&hello), None);
     src.close();
