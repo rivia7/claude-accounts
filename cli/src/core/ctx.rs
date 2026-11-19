@@ -338,6 +338,17 @@ pub fn oauth_of(key: &str) -> R<Dict> {
     Ok(acct_json(key)?.dict("oauthAccount").unwrap_or_default())
 }
 
+impl Tool {
+    /// `T.email(key)`：登录的邮箱（只读账号目录里的状态，不联网）
+    pub fn email(&self, key: &str) -> R<String> {
+        use super::tool::Kind;
+        match self.kind {
+            Kind::Claude => Ok(oauth_of(key)?.get("emailAddress").filter(|v| v.truthy()).map_or(String::new(), |v| v.py_str())),
+            Kind::Codex | Kind::Agy => unimplemented!("{} 的登录身份还没移植（codex_claims / agy_claims）", self.name),
+        }
+    }
+}
+
 /// 路由器上的端口池按 8 个槽位一档；槽位够用时增删账号、换节点都不用重载 OpenClash / ShellCrash
 pub const POOL_STEP: i64 = 8;
 

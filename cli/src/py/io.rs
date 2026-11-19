@@ -109,6 +109,18 @@ pub fn read_stdin() -> String {
     String::from_utf8_lossy(&read_stdin_bytes()).into_owned()
 }
 
+/// `sys.stdin.read()`。和 `open()` 读文件不一样：POSIX 上的 sys.stdin 不做通用换行，`\r\n` 原样留着（对拍核实过）
+pub fn read_stdin_text() -> String {
+    read_stdin()
+}
+
+/// `sys.stdin.readline()`：读一行（带着结尾的换行；读到头是空串）
+pub fn read_stdin_line() -> String {
+    let mut line = String::new();
+    let _ = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line);
+    line
+}
+
 /// `sys.stdin.buffer.read()`
 pub fn read_stdin_bytes() -> Vec<u8> {
     let mut data = Vec::new();

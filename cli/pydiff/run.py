@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""对拍：同一份沙箱状态上分别跑原来的 Python（cca 里的 PY_SRC）和 Rust 的 cca-core，逐字节比 stdout、stderr、退出码
+和跑完以后沙箱里的文件。有差别就是移植错了（或者主干改了 PY_SRC，Rust 还没跟上）。
+
+    cargo build && python3 -I cli/pydiff/run.py            全部用例
+    python3 -I cli/pydiff/run.py -k policy                  名字里带 policy 的
+    python3 -I cli/pydiff/run.py -v -k keys/alias           失败时把两边的输出全打出来
+    CCA_CORE=cli/target/release/cca-core python3 -I …       换一个 cca-core
+
+用例在 cli/pydiff/cases/ 下，一个模块一份文件（写法见 cases/table.py 开头）。沙箱是临时目录里的假 HOME：不碰真的
+~/.cca，不联网；要起外部命令的用例自己在沙箱的 bin/ 里放假命令。只是开发时用的工具，不随 cca 发布。"""
+import difflib
+import hashlib
+import importlib
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CLI = os.path.dirname(HERE)
+REPO = os.path.dirname(CLI)
+CORE = os.path.abspath(os.environ.get('CCA_CORE') or os.path.join(CLI, 'target', 'debug', 'cca-core'))
+CASES = []
+
+
+def py_src():
+    """cca 里内嵌的 Python 源码"""
+    with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
+        return f.read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+
+
+class Box:
+    """一个用例的沙箱：home 是假的 HOME，下面的方法往里放夹具"""
+
+    def __init__(self, home):
+        self.home = home
+        self.cca = os.path.join(home, '.cca')
+        self.bin = os.path.join(home, 'bin')   # 假命令放这里（在 PATH 最前面）
+
+    def path(self, rel):
+        return os.path.join(self.home, rel)
+
+    def write(self, rel, text, mode=0o600):
+        p = self.path(rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'wb') as f:
+            f.write(text if isinstance(text, bytes) else text.encode('utf-8'))
+        os.chmod(p, mode)
+        return p
+
+    def json(self, rel, data, mode=0o600, **kw):
+        import json
+        kw.setdefault('ensure_ascii', False)
+        kw.setdefault('indent', 2)
+        return self.write(rel, json.dumps(data, **kw) + '\n', mode)
+
+    def cfg(self, data):
+        return self.json('.cca/config.json', data)
+
+    def table(self, data, tool='claude'):
+        return self.json('.cca/%s.json' % {'claude': 'accounts'}.get(tool, tool), data)
+
+    def policy(self, data):
+        return self.json('.cca/policy/policy.json', data)
+
+    def fill(self, data):
+        return self.json('.cca/policy/nodes.json', data)
+
+    def fake(self, name, script):
+        """沙箱里的假命令（/bin/sh 脚本）"""
+        return self.write('bin/' + name, '#!/bin/sh\n' + script, 0o755)
+
+
+def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True):
+    """登记一个用例。被装饰的函数拿到 Box，往沙箱里放夹具。
+    mask：[(正则, 替换成什么)…]，比之前两边都先换掉（时间戳、随机数这些每次不一样的东西）"""
+    def reg(setup):
+        CASES.append(dict(name=name, argv=argv, stdin=stdin if isinstance(stdin, bytes) else stdin.encode('utf-8'),
+                          env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree, setup=setup))
+        return setup
+    return reg
+
+
+def tree_digest(root, masks):
+    """沙箱里每个文件、目录、链接的样子：路径、种类、权限、链接指向哪、内容"""
+    out = {}
+    for d, dirs, files in os.walk(root):
+        dirs.sort()
+        for n in sorted(dirs + files):
+            p = os.path.join(d, n)
+            rel = os.path.relpath(p, root)
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                out[rel] = 'link -> %s' % os.readlink(p)
+            elif stat.S_ISDIR(st.st_mode):
+                out[rel] = 'dir %o' % (st.st_mode & 0o777)
+            else:
+                with open(p, 'rb') as f:
+                    data = f.read()
+                try:
+                    text = apply_masks(data.decode('utf-8'), masks)
+                except UnicodeDecodeError:
+                    text = 'sha256:' + hashlib.sha256(data).hexdigest()
+                out[rel] = 'file %o\n%s' % (st.st_mode & 0o777, text)
+    return out
+
+
+def apply_masks(text, masks):
+    for pat, rep in masks:
+        text = re.sub(pat, rep, text)
+    return text
+
+
+def run_one(cmd, c, home, tmp):
+    env = {'HOME': home, 'PATH': '%s/bin:/usr/bin:/bin:/usr/sbin:/sbin' % home, 'LANG': 'en_US.UTF-8', 'TZ': 'Asia/Shanghai',
+           'TMPDIR': tmp, 'CCA_TOOL': c['tool'], 'CCA_SELF': os.path.join(home, '.cca', 'bin', 'cca'), 'CCA_BIN': ''}
+    env.update(c['env'])
+    env = {k: v for k, v in env.items() if v is not None}
+    try:
+        p = subprocess.run(cmd + c['argv'], input=c['stdin'], capture_output=True, env=env, cwd=c['cwd'] or home, timeout=60)
+        out, err, rc = p.stdout, p.stderr, p.returncode
+    except subprocess.TimeoutExpired as e:
+        out, err, rc = e.stdout or b'', (e.stderr or b'') + b'\n[pydiff: timeout]', -999
+    dec = lambda b: apply_masks(b.decode('utf-8', 'replace'), c['mask'])
+    return {'stdout': dec(out), 'stderr': dec(err), 'rc': rc, 'tree': tree_digest(home, c['mask']) if c['tree'] else {}}
+
+
+def diff_text(a, b, what):
+    lines = list(difflib.unified_diff(a.splitlines(), b.splitlines(), 'python ' + what, 'rust ' + what, lineterm='', n=2))
+    return '\n'.join('      ' + x for x in lines[:60])
+
+
+def compare(py, rs):
+    """两边的差别（空的就是一样）"""
+    out = []
+    if py['rc'] != rs['rc']:
+        out.append('    退出码：python %s，rust %s' % (py['rc'], rs['rc']))
+    if py['stdout'] != rs['stdout']:
+        out.append('    stdout 不一样：\n' + diff_text(py['stdout'], rs['stdout'], 'stdout'))
+    if 'Traceback (most recent call last)' in py['stderr']:
+        # Python 那边是没人接的异常：调用栈对不上，只要求 Rust 这边也出错、也说了点什么
+        if not rs['stderr'].strip():
+            out.append('    python 出了没人接的异常，rust 的 stderr 是空的')
+    elif py['stderr'] != rs['stderr']:
+        out.append('    stderr 不一样：\n' + diff_text(py['stderr'], rs['stderr'], 'stderr'))
+    for rel in sorted(set(py['tree']) | set(rs['tree'])):
+        a, b = py['tree'].get(rel), rs['tree'].get(rel)
+        if a != b:
+            if a is None or b is None:
+                out.append('    文件 %s：%s' % (rel, 'python 有，rust 没有' if b is None else 'rust 有，python 没有'))
+            else:
+                out.append('    文件 %s 不一样：\n%s' % (rel, diff_text(a, b, rel)))
+    return out
+
+
+def main():
+    args = sys.argv[1:]
+    verbose = '-v' in args
+    pick = [args[i + 1] for i, a in enumerate(args) if a == '-k' and i + 1 < len(args)]
+    if not os.access(CORE, os.X_OK):
+        sys.exit('找不到 %s：先在 cli/ 里 cargo build' % CORE)
+    sys.path.insert(0, HERE)
+    sys.modules.setdefault('run', sys.modules['__main__'])   # 用例里的 from run import case 要拿到这一份（不是再导入一份）
+    for f in sorted(os.listdir(os.path.join(HERE, 'cases'))):
+        if f.endswith('.py') and not f.startswith('_'):
+            importlib.import_module('cases.' + f[:-3])
+    base = os.path.realpath(tempfile.mkdtemp(prefix='cca-pydiff.'))
+    src = os.path.join(base, 'py_src.py')
+    with open(src, 'w', encoding='utf-8') as f:
+        f.write(py_src())
+    home, pre, tmp = os.path.join(base, 'h'), os.path.join(base, 'pre'), os.path.join(base, 'tmp')
+    os.makedirs(tmp)
+    oracle = [sys.executable, '-I', '-X', 'utf8', src]
+    passed = failed = 0
+    seen = set()
+    try:
+        for c in CASES:
+            if c['name'] in seen:
+                sys.exit('用例重名：%s' % c['name'])
+            seen.add(c['name'])
+            if pick and not any(p in c['name'] for p in pick):
+                continue
+            for d in (home, pre):
+                shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(home)
+            c['setup'](Box(home))
+            shutil.copytree(home, pre, symlinks=True)
+            py = run_one(oracle, c, home, tmp)
+            shutil.rmtree(home)
+            shutil.copytree(pre, home, symlinks=True)
+            rs = run_one([CORE], c, home, tmp)
+            diffs = compare(py, rs)
+            if diffs:
+                failed += 1
+                print('FAIL  %s   %s' % (c['name'], ' '.join(c['argv'])))
+                print('\n'.join(diffs))
+                if verbose:
+                    for who, r in (('python', py), ('rust', rs)):
+                        print('    --- %s rc=%s\n    stdout: %r\n    stderr: %r' % (who, r['rc'], r['stdout'], r['stderr']))
+            else:
+                passed += 1
+                if verbose:
+                    print('PASS  %s' % c['name'])
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    print('---- 对拍：%d 通过，%d 失败' % (passed, failed))
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == '__main__':
+    main()

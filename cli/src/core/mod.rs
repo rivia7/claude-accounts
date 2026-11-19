@@ -4,4 +4,5 @@ pub mod base;
 pub mod ctx;
 pub mod model;
 pub mod policy;
+pub mod sync;
 pub mod tool;

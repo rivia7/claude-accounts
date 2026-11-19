@@ -105,6 +105,13 @@ pub fn sh(kv: &[(&str, &str)]) {
     }
 }
 
+/// `sh(K=v, …)`，值是 Python 的值：照 `str(v)` 写（None 就是 `None`，原来就这样）
+pub fn sh_vals(kv: &[(&str, V)]) {
+    for (k, v) in kv {
+        crate::out!("{}={}", k, sh_quote(&v.py_str()));
+    }
+}
+
 /// `sh_arrays(NAME=[…])`：bash 数组 `NAME=(项 …)`
 pub fn sh_array(name: &str, items: &[String]) {
     crate::out!("{}=({})", name, items.iter().map(|x| sh_quote(x)).collect::<Vec<_>>().join(" "));
