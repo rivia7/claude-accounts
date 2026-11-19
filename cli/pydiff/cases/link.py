@@ -1275,6 +1275,79 @@ chain('link/agy/scenario-blank-json-placeholder', [
 ], tool='agy')
 
 
+# --- tests/device_identity.py 的各个场景（那边只测 Claude、Codex，这里 agy 也照样走一遍）。前面 device/ 那一组是同样的路、
+#     标识给定的单步用例；这里照测试原样一步步来（第一步的标识是随机的，后面各步比的是它们留没留住） ---
+
+def seed(tool, ids, key=A):
+    """测试里的 seed_client：客户端文件里先有这组标识（Claude 的还带着登录和别的配置）"""
+    return lambda b: client(b, tool, ids, key, **({'oauthAccount': {'emailAddress': key}, 'localPreference': True} if tool == 'claude' else {}))
+
+
+def drop_client(tool, key=A):
+    """客户端把自己存的设备标识删了（退出登录、重置）"""
+    def f(b):
+        os.unlink(b.path(client_file(tool, key)))
+        if tool == 'agy':
+            os.unlink(b.path(cdir(tool, key) + '/antigravity-cli/jetski_state.pbtxt'))
+    return f
+
+
+def copy_identity(tool, src, dst):
+    """dst 的客户端文件里是 src 现在的标识（旧版整个目录拷出来的副本）"""
+    def f(b):
+        with open(b.path(adir(tool, src) + '/device.json'), encoding='utf-8') as fh:
+            j = json.load(fh)
+        seed(tool, tuple(j[n] for n in FIELDS[tool]), dst)(b)
+    return f
+
+
+for T in TOOLS:
+    NAME, WAIT = group(T)
+    WORLD = [dev_world, agy_master]
+    RECORDS = (adir(T, A) + '/device.json', adir(T, B) + '/device.json')
+
+    # test_new_accounts_are_distinct_and_stable_after_alias_and_sync
+    chain(NAME + '/scenario-identity-new-accounts', WORLD + [
+        step('link', A), step('link', B), step('sync', A), step('link', '工作(%s)' % A), step('sync', B), step('link', '工作(%s)' % B),
+    ], tool=T, **WAIT)
+
+    # test_client_reset_restores_the_same_identity
+    chain(NAME + '/scenario-identity-client-reset', WORLD + [
+        step('link', A), drop_client(T), step('link', A), seed(T, IDS[T][0]), step('link', A),
+    ], tool=T, **WAIT)
+
+    # test_unique_existing_identity_and_other_account_data_survive_migration
+    chain(NAME + '/scenario-identity-unique-existing', WORLD + [seed(T, IDS[T][0]), step('link', A)], tool=T, **WAIT)
+
+    # test_duplicate_legacy_profiles_get_independent_values
+    chain(NAME + '/scenario-identity-duplicate-legacy', WORLD + [
+        seed(T, IDS[T][0], A), seed(T, IDS[T][0], B), step('link', A), step('link', B), step('link', A), step('link', B),
+    ], tool=T, **WAIT)
+
+    # test_shared_links_are_detached_without_changing_master：链接的、硬链接的各一个账号
+    chain(NAME + '/scenario-identity-shared-links', WORLD + [
+        lambda b, T=T: symlink(b, '~/' + master_file(T), client_file(T, A)), step('link', A),
+        lambda b, T=T: hardlink(b, master_file(T), client_file(T, B)), step('link', B, hardlinks=[(master_file(T), client_file(T, B))]),
+        step('link', A), step('link', B),
+    ], tool=T, **WAIT)
+
+    # test_symlink_alias_of_account_does_not_rotate_identity
+    chain(NAME + '/scenario-identity-symlink-alias', WORLD + [
+        step('link', A), lambda b, T=T: symlink(b, '~/' + adir(T), ROOT[T] + '/linked-copy'), step('link', A), step('link', A),
+    ], tool=T, **WAIT)
+
+    # test_legacy_copy_does_not_rotate_an_already_managed_account
+    chain(NAME + '/scenario-identity-legacy-copy', WORLD + [
+        step('link', A), copy_identity(T, A, B), step('link', A), step('link', B), step('link', A), step('link', B),
+    ], tool=T, **WAIT)
+
+    # test_shared_identity_record_is_fully_migrated_on_first_prepare
+    chain(NAME + '/scenario-identity-shared-record', WORLD + [
+        step('link', A), lambda b, RECORDS=RECORDS: hardlink(b, *RECORDS), step('device', A, hardlinks=[RECORDS]),
+        step('device', A), step('device', A), step('device', B), step('device', A),
+    ], tool=T, **WAIT)
+
+
 # --- 一次会话前后（照 tests/setup.sh 里假客户端写文件的样子；回归的 claude / codex / agy 各节就是这么走的） ---
 
 def session(tool, key):
