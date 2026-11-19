@@ -1,642 +1,200 @@
 #!/usr/bin/env python3
-"""邮箱助手（cca mail）：认登录邮件的规则、连 Gmail 的路（照系统代理、不经账号的出口）、只读的 IMAP、核对（只信 Gmail 写的
-验证结果和 Anthropic 签过名的头）、盯邮箱（最新的一封、浏览器打不开时重试、断线重连不漏邮件）、打开过的不再打开；
-还有经本机的假 Gmail（tests/mail_fake.py：真的 TLS、只读 IMAP）走一遍 setup / test / open / 登录时盯邮箱。临时 HOME，不联网。"""
-import ast
-import contextlib
-import io
+"""邮箱助手（cca mail）：把 cca 的辅助程序（cli/ 的 cca-core）当黑盒，经本机的假 Gmail（tests/mail_fake.py：真的 TLS、只读 IMAP，
+假代理同时认 SOCKS5 和 HTTP CONNECT）走一遍 setup / test / open / 登录时盯邮箱 / forget：只读的会话、登录和代理出的错、证书照常
+校验、没有「所有邮件」时看收件箱、Gmail 的搜索跟不上时照样找到新邮件、断线重连不漏邮件、最新的一封只开一次、链接只经 stdin。
+
+每个用例一个临时 HOME，只连 127.0.0.1；钥匙串是假的 security、系统代理是假的 scutil（都在 PATH 最前面），打开链接的
+cca _mail-open 换成记下链接的小脚本。应用专用密码是编的（abcdefghijklmnop），照样只从 stdin 交给辅助程序。
+
+原来这一份把内嵌的 Python 当库执行。不用连 Gmail 的那些检查（认登录邮件的规则、连 Gmail 的路、解析、核对、盯邮箱的假时钟、
+打开过的不再打开）现在在辅助程序自己的单元测试里，照原来的输入和结论一条条搬过去的（cargo test，回归的 unit 一节也跑）；
+各在哪里见下面每个类名后面的那一行。"""
 import json
 import os
 from pathlib import Path
-import re
+import shutil
+import signal
 import stat
+import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mail_fake as mf  # noqa: E402
+from helper_bin import HELPER  # noqa: E402
 
-CCA = Path(__file__).resolve().parents[1] / 'cca'
-SOURCE = CCA.read_text().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
-DEFINITIONS = SOURCE.split('\nif len(sys.argv) < 2', 1)[0]
 PW = 'abcdefghijklmnop'
 ALL = '"[Gmail]/All Mail"'
-
-
-class Base(unittest.TestCase):
-    """每个用例一个临时 HOME 和一份新执行的 PY_SRC（全局变量按这个 HOME 算）"""
-    extra_env = {}
-
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='cca-mail-')
-        self.addCleanup(self.temp.cleanup)
-        self.home = Path(self.temp.name) / 'home'
-        (self.home / '.cca').mkdir(parents=True)
-        env = {'HOME': str(self.home), 'CCA_HOME': str(self.home / '.cca'), 'CCA_TOOL': 'claude', 'CCA_KEYSTORE': 'file',
-               'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
-        env.update(self.extra_env)
-        p = mock.patch.dict(os.environ, env, clear=True)
-        p.start()
-        self.addCleanup(p.stop)
-        self.ns = {}
-        exec(compile(DEFINITIONS, str(CCA), 'exec'), self.ns)
-        self.rule = self.ns['MAIL_RULES']['claude-login']
-
-    def msg(self, raw):
-        return self.ns['mail_parse'](raw)
-
-
-class Rules(Base):
-    def test_link_must_be_exactly_a_claude_login_link(self):
-        ok = self.rule.link_ok
-        self.assertTrue(ok('https://claude.ai/magic-link#tok-abc:YWxpY2U'))
-        self.assertTrue(ok('https://claude.ai/magic-link?x=1#t'))
-        for bad in ('http://claude.ai/magic-link#t', 'https://claude.ai.evil.com/magic-link#t', 'https://claude.ai@evil.com/magic-link#t',
-                    'https://evil.com/claude.ai/magic-link', 'https://claude.ai:443/magic-link#t', 'https://Claude.ai/magic-link#t',
-                    'https://claude.ai/magic-linkx#t', 'https://claude.ai/magic-link/../logout', 'https://claude.ai/login#t',
-                    'https://claude.ai/magic-link#t"onload', "https://claude.ai/magic-link#t'x", 'https://claude.ai/magic-link#a<b',
-                    'https://claude.ai/magic-link#a\\b', 'https://claude.ai/magic-link# t', 'https://claude.ai/magic-link#\u4e2d',
-                    'https://claude.ai/magic-link#' + 'a' * 2048, 'javascript:alert(1)', '', None, 7):
-            self.assertFalse(ok(bad), bad)
-
-    def test_sender_domain_by_label_suffix(self):
-        d = self.rule.domain_ok
-        self.assertTrue(d('anthropic.com') and d('mail.anthropic.com') and d('MAIL.Anthropic.COM'))
-        self.assertFalse(d('evilanthropic.com') or d('anthropic.com.evil.com') or d('') or d(None))
-
-    def test_subject(self):
-        s = lambda v: self.rule.subject_ok(self.ns['mail_text'](v))
-        self.assertTrue(s('Your secure link to Claude is here'))   # 真邮件（2026-11-16 核对）；转发会加后缀
-        self.assertTrue(s('Your secure link to Claude is here | 2026-11-16 10:36:30'))
-        self.assertTrue(s('轉寄: Your secure link to Claude is here'))
-        self.assertTrue(s('Secure link to log in to Claude.ai | 2026-11-15'))   # 帮助中心写的说法
-        self.assertTrue(s('Your secure link to Claude.ai is here'))
-        self.assertTrue(s('=?utf-8?q?Secure_link_to_log_in_to_Claude=2Eai?='))
-        # 应用名不是 Claude 的不认：Verification Portal 是真从 mail.anthropic.com 发出、dkim 也过的（见过），只靠签名挡不住
-        self.assertFalse(s('Your secure link to Verification Portal is here'))
-        self.assertFalse(s('Your receipt from Anthropic') or s('Secure link to log in to Claude-ai')
-                         or s('Your secure link to Claudexyz is here'))
-
-
-class Route(Base):
-    SCUTIL = ('<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n    1 : 169.254/16\n  }\n  FTPPassive : 1\n'
-              '  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7891\n'
-              '  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 1\n  SOCKSPort : 7892\n  SOCKSProxy : 127.0.0.1\n'
-              '  __SCOPED__ : <dictionary> {\n    en0 : <dictionary> {\n      SOCKSPort : 1\n    }\n  }\n}\n')
-
-    def route(self, spec, kv=None, exc=None, c=None):
-        sysp = self.ns['mail_proxy_parse'](self.SCUTIL) if kv is None else (kv, exc or [])
-        return self.ns['mail_route'](spec, c or {}, sysp)
-
-    def test_scutil_parse_top_level_only(self):
-        kv, exc = self.ns['mail_proxy_parse'](self.SCUTIL)
-        self.assertEqual((kv['SOCKSPort'], kv['HTTPSProxy'], exc), ('7892', '127.0.0.1', ['*.local', '169.254/16']))
-
-    def test_system_proxy_socks_first_then_https_then_http(self):
-        self.assertEqual(self.route('system'), ('socks5', '127.0.0.1', 7892))
-        kv, _ = self.ns['mail_proxy_parse'](self.SCUTIL)
-        kv['SOCKSEnable'] = '0'
-        self.assertEqual(self.route('', kv), ('http', '127.0.0.1', 7891))
-        kv['HTTPSEnable'] = '0'
-        self.assertEqual(self.route(None, kv), ('http', '127.0.0.1', 7890))
-        kv['HTTPEnable'] = '0'
-        self.assertEqual(self.route('system', kv), ('direct', '', 0))
-        self.assertEqual(self.route('system', {'ProxyAutoConfigEnable': '1'}), ('direct', '', 0), '只有 PAC：直连')
-
-    def test_system_proxy_exceptions(self):
-        kv, _ = self.ns['mail_proxy_parse'](self.SCUTIL)
-        for pat in ('*.gmail.com', '.gmail.com', 'imap.gmail.com', 'IMAP.GMAIL.COM'):
-            self.assertEqual(self.route('system', kv, [pat]), ('direct', '', 0), pat)
-        self.assertEqual(self.route('system', kv, ['*.google.com']), ('socks5', '127.0.0.1', 7892))
-
-    def test_explicit_specs(self):
-        self.assertEqual(self.route('direct'), ('direct', '', 0))
-        self.assertEqual(self.route('socks5://127.0.0.1:7897'), ('socks5', '127.0.0.1', 7897))
-        self.assertEqual(self.route('socks5h://proxy.example.com:1080/'), ('socks5', 'proxy.example.com', 1080))
-        self.assertEqual(self.route('http://[::1]:8080'), ('http', '::1', 8080))
-        for bad in ('socks4://127.0.0.1:1', 'http://127.0.0.1', 'http://127.0.0.1:0', 'http://127.0.0.1:70000', 'http://a b:1',
-                    'https://127.0.0.1:1', 'system2'):
-            with self.assertRaises(self.ns['MailFatal'], msg=bad):
-                self.route(bad)
-
-    def test_never_through_an_account_exit(self):
-        c = {'ports': {'alice@example.com': 7901}, 'proxy_host': '192.0.2.10', 'codex': {'ports': {'dave@example.com': 7905}}}
-        for spec in ('socks5://127.0.0.1:7901', 'http://192.0.2.10:7901', 'http://localhost:7905'):
-            with self.assertRaises(self.ns['MailFatal'], msg=spec):
-                self.route(spec, c=c)
-        self.assertEqual(self.route('socks5://127.0.0.1:7897', c=c), ('socks5', '127.0.0.1', 7897))
-        with mock.patch.dict(os.environ, {'CCA_PROXY': 'http://127.0.0.1:7897'}):
-            with self.assertRaises(self.ns['MailFatal']):
-                self.route('socks5://127.0.0.1:7897', c=c)
-
-
-class Parse(Base):
-    def test_internaldate(self):
-        e = self.ns['mail_epoch']
-        self.assertEqual(e('15-Nov-2026 10:00:00 +0800'), e('15-Nov-2026 02:00:00 +0000'))
-        self.assertEqual(e(' 5-Nov-2026 02:00:00 -0130'), e('05-Nov-2026 03:30:00 +0000'))
-        self.assertEqual(e('15-Nov-2026 02:00:00 +0000'), 1794708000)
-        for bad in ('15-Foo-2026 02:00:00 +0000', '2026-11-15 02:00:00', ''):
-            self.assertIsNone(e(bad))
-
-    def test_search_criteria(self):
-        t = self.ns['mail_epoch']('15-Nov-2026 00:30:00 +0000')
-        self.assertEqual(self.ns['mail_since'](t), '14-Nov-2026')
-        crit = self.ns['mail_crit']([self.rule], t)
-        self.assertEqual(crit, ['SINCE', '14-Nov-2026', 'OR', 'FROM', '"anthropic.com"', 'SUBJECT', '"secure link"'])
-        two = self.ns['mail_crit']([self.rule, self.rule], t)
-        self.assertEqual(two[:3], ['SINCE', '14-Nov-2026', 'OR'])
-        self.assertTrue(two[3].startswith('(OR FROM') and two[4].startswith('(OR FROM'))
-
-    def test_fetch_parse_any_order(self):
-        p = self.ns['mail_fetch_parse']
-        d = '"15-Nov-2026 02:00:00 +0000"'
-        a = [(('1 FETCH (UID 5 INTERNALDATE %s BODY[HEADER.FIELDS (FROM)] {9}' % d).encode(), b'From: x\r\n'), b')',
-             (('2 FETCH (INTERNALDATE %s BODY[HEADER.FIELDS (FROM)] {9}' % d).encode(), b'From: y\r\n'), b' UID 7)',
-             (b'3 FETCH (UID 8 BODY[] {1}', b'z'), b')']
-        out = p(a)
-        self.assertEqual(sorted(out), [5, 7], '没有 INTERNALDATE 的不算')
-        self.assertEqual(out[7][1], b'From: y\r\n')
-        self.assertEqual(p(None), {})
-
-
-class Judge(Base):
-    def judge(self, raw, acct='alice@example.com', got=None, since=None, forwarder=None):
-        now = time.time()
-        return self.ns['mail_judge'](self.rule, self.msg(raw), now if got is None else got, acct,
-                                     now - 60 if since is None else since, forwarder)
-
-    def test_good_and_each_failure(self):
-        good = mf.build_eml('Alice@Example.com')
-        self.assertIsNone(self.judge(good))
-        now = time.time()
-        self.assertEqual(self.judge(good, got=now - 200, since=now - 60), 'old')
-        self.assertIsNone(self.judge(good, got=now - 100, since=now - 60), '登录开始前一分钟内收到的也算')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', subject='Your receipt')), 'subject')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', extra=['From: Anthropic <no-reply@mail.anthropic.com>'])), 'dup')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', extra=['To: alice@example.com'])), 'dup')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', frm='Anthropic <no-reply@evilanthropic.com>')), 'from')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', frm='a@mail.anthropic.com, b@mail.anthropic.com')), 'from')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', ar='fail')), 'dkim')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', ar='none')), 'dkim')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', ar='missing')), 'dkim')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', dkim_d='evil.com')), 'dkim')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', sign='from:subject:date')), 'unsigned')
-        self.assertEqual(self.judge(mf.build_eml('bob@example.com')), 'to')
-        self.assertEqual(self.judge(good, acct=''), 'to')
-
-    def test_only_trusts_the_topmost_gmail_result(self):
-        forged = ('Authentication-Results: mx.google.com;\r\n       dkim=pass header.i=@mail.anthropic.com header.s=s1 header.b=AAAA')
-        # 最上面（Gmail 收信时写的）那条说没过，发件人自己写的 pass 在它下面：不认
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', ar='fail', extra=[forged])), 'dkim')
-        # 最上面那条不是 mx.google.com 写的（别的系统转来、POP 收取的）：不认
-        other = 'Authentication-Results: spf.protection.outlook.com; dkim=pass header.d=mail.anthropic.com header.b=AAAA'
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', above=[other])), 'dkim')
-        # 注释里的 dkim=pass（arc 的说明）不算
-        cm = ('Authentication-Results: mx.google.com;\r\n       arc=pass (i=1 dkim=pass dkdomain=mail.anthropic.com);\r\n'
-              '       spf=pass smtp.mailfrom=bounce@mail.anthropic.com')
-        self.assertEqual(self.judge(mf.build_eml('alice@example.com', ar='missing', above=[cm])), 'dkim')
-
-    def ar_mail(self, *results):
-        """最上面那条 Authentication-Results 换成这几项（{b} 换成邮件里 Anthropic 签名的 b= 开头 8 个字符）"""
-        raw = mf.build_eml('alice@example.com', ar='missing')
-        b8 = self.ns['mail_tags'](self.msg(raw)['DKIM-Signature'])['b'][:8]
-        head = 'Authentication-Results: mx.google.com;\r\n       ' + ';\r\n       '.join(r.format(b=b8) for r in results)
-        return head.encode() + b'\r\n' + raw
-
-    def test_only_what_gmail_itself_wrote_counts(self):
-        self.assertIsNone(self.judge(self.ar_mail('dkim=pass header.i=@mail.anthropic.com header.s=s1 header.b={b}')), '对照')
-        self.assertIsNone(self.judge(self.ar_mail('dkim=pass (ok \\) (nested)) header.i=@mail.anthropic.com header.s=s1 header.b={b}')),
-                          '注释可以嵌套、带转义')
-        for res in (
-                # 发件人写的 smtp.mailfrom（带引号的本地部分里能有分号、等号），Gmail 照抄进来：不当成一项结果
-                'dkim=fail header.i=@mail.anthropic.com header.b={b}; '
-                'spf=pass smtp.mailfrom="x;dkim=pass header.i=@mail.anthropic.com header.b={b}"@evil.example.com',
-                'dkim=pass header.i="a header.d=mail.anthropic.com"@evil.example.com header.s=s1 header.b={b}',   # 藏在引号里
-                'dkim=pass header.i=@evil.example.com header.i=@mail.anthropic.com header.b={b}',   # 同一个名字两次：分不清
-                'dkim=pass header.i=@mail.anthropic.com header.s=s1 header.b=AbC',   # header.b 太短：哪个签名都对得上
-                'dkim=pass header.i=@mail.anthropic.com header.s=s1',
-                'dkim=pass header.i=@mail.anthropic.com header.b={b} "unterminated',   # 写法不对：整条不信
-                'dkim=pass header.i=@mail.anthropic.com (unterminated header.b={b}',
-                'dkim pass header.i=@mail.anthropic.com header.b={b}'):
-            self.assertEqual(self.judge(self.ar_mail(res)), 'dkim', res)
-
-    def fwd(self, alias='alice@example.com', frm=None, dkim_d='relay.example.com', sign='from:to:subject:reply-to:date',
-            ar='pass', reply_to='Anthropic <no-reply@mail.anthropic.com>', subject='Your secure link to Claude is here'):
-        """一封经信任中转 relay.example.com 转发的登录邮件：中转把 Anthropic 的签名去掉、用自己域名重签，From 显示名放原始别名，
-        Reply-To 标注原件来自 Anthropic。收件人是收集用的 Gmail（不是账号邮箱）"""
-        return mf.build_eml('collect@gmail.com', frm=frm if frm is not None else '"%s" <noreply@relay.example.com>' % alias,
-                            dkim_d=dkim_d, sign=sign, ar=ar, reply_to=reply_to, subject=subject)
-
-    def test_trusted_forwarder(self):
-        # 开了「信任转发中转」（账号登记了 relay.example.com）才放行；默认关、换成别的域名、Reply-To 非 Anthropic、别名对不上、
-        # 中转 DKIM 没覆盖 Reply-To、验证失败、标题不像 —— 全拒。安全边界只到「信任这个中转 + 别名不泄露」
-        self.assertIsNone(self.judge(self.fwd(), forwarder='relay.example.com'), '正常转发 + 登记了中转 → 放行')
-        self.assertIsNone(self.judge(self.fwd(), forwarder='sub.relay.example.com'.split('.', 1)[1]), '中转按标签认后缀')
-        self.assertEqual(self.judge(self.fwd()), 'from', '默认不开（forwarder=None）→ 拒')
-        self.assertEqual(self.judge(self.fwd(), forwarder='evil.com'), 'from', '登记的是别的域名 → 拒')
-        self.assertEqual(self.judge(self.fwd(reply_to='X <a@evil.com>'), forwarder='relay.example.com'), 'from', 'Reply-To 非 Anthropic → 拒')
-        self.assertEqual(self.judge(self.fwd(reply_to=None), forwarder='relay.example.com'), 'from', '没有 Reply-To → 拒')
-        self.assertEqual(self.judge(self.fwd(frm='"bob@example.com" <noreply@relay.example.com>'), forwarder='relay.example.com'), 'to', 'From 显示名别名对不上账号 → 拒')
-        self.assertEqual(self.judge(self.fwd(frm='noreply@relay.example.com'), forwarder='relay.example.com'), 'to', 'From 显示名不是别名 → 拒')
-        self.assertEqual(self.judge(self.fwd(sign='from:to:subject:date'), forwarder='relay.example.com'), 'dkim', '中转 DKIM 没覆盖 Reply-To → 拒')
-        self.assertEqual(self.judge(self.fwd(ar='fail'), forwarder='relay.example.com'), 'dkim', '中转 DKIM 验证失败 → 拒')
-        self.assertEqual(self.judge(self.fwd(dkim_d='evil.com'), forwarder='relay.example.com'), 'dkim', 'DKIM 签名域名不是中转 → 拒')
-        self.assertEqual(self.judge(self.fwd(subject='Your secure link to Verification Portal is here'), forwarder='relay.example.com'), 'subject', '标题不像登录邮件 → 拒')
-        # 严格 Anthropic 直签的邮件：开了中转也照走严格路、照常放行；别的账号的转发邮件不认成这个账号
-        self.assertIsNone(self.judge(mf.build_eml('alice@example.com'), forwarder='relay.example.com'), '严格直签 + 开了中转 → 仍放行')
-        self.assertEqual(self.judge(self.fwd(alias='alice@example.com'), acct='bob@example.com', forwarder='relay.example.com'), 'to', '发给 alice 的转发邮件对 bob 不算')
-
-    def test_signature_matched_by_header_b(self):
-        raw = mf.build_eml('alice@example.com')
-        m = self.msg(raw)
-        sig = m['DKIM-Signature']
-        # 再加一个 b 开头一样的签名：分不清是哪个，不认
-        twin = 'DKIM-Signature: ' + ' '.join(str(sig).split()).replace('h=from:to:subject', 'h=date')
-        self.assertEqual(self.judge(raw.replace(b'\r\nFrom:', ('\r\n' + twin + '\r\nFrom:').encode(), 1)), 'dkim')
-        # b 开头不一样的另一个签名不影响
-        other = 'DKIM-Signature: v=1; a=rsa-sha256; d=mail.anthropic.com; s=s2; h=date; bh=x=; b=ZZZZZZZZZZZZ'
-        self.assertIsNone(self.judge(raw.replace(b'\r\nFrom:', ('\r\n' + other + '\r\nFrom:').encode(), 1)))
-
-    def test_judge_any_reports_the_furthest_reason(self):
-        r, why = self.ns['mail_judge_any']([self.rule], self.msg(mf.build_eml('bob@example.com')), time.time(), 'alice@example.com', 0)
-        self.assertEqual((r is self.rule, why), (True, 'to'))
-
-
-class Clean(Base):
-    def test_text_written_by_others_cannot_drive_the_terminal(self):
-        from email.header import Header
-        t = self.ns['mail_text'](Header('\x1b[2K\x1b[1A✓ 通过核对\x9b31m\u202e\x07', 'utf-8').encode())
-        self.assertIn('通过核对', t)
-        self.assertIsNone(re.search('[\x00-\x1f\x7f-\x9f\u202e]', t), repr(t))
-        e = self.ns['mail_oserr'](Exception('a\x1b]52;c;ZXZpbA==\x07b\x9d'))
-        self.assertIsNone(re.search('[\x00-\x1f\x7f-\x9f]', e), repr(e))
-
-
-class Links(Base):
-    def test_extracts_first_login_link_from_html_or_text(self):
-        raw = mf.build_eml('alice@example.com', body_links=['https://www.anthropic.com/help', 'https://claude.ai/magic-link#tok-X'])
-        self.assertEqual(self.ns['mail_extract'](self.rule, self.msg(raw)), 'https://claude.ai/magic-link#tok-X')
-        txt = mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-T', html=False)
-        self.assertEqual(self.ns['mail_extract'](self.rule, self.msg(txt)), 'https://claude.ai/magic-link#tok-T')
-        none = mf.build_eml('alice@example.com', body_links=['https://links.example.com/ls/click?u=https%3A%2F%2Fclaude.ai'])
-        self.assertIsNone(self.ns['mail_extract'](self.rule, self.msg(none)))
-
-    def test_attachments_are_ignored(self):
-        raw = (b'From: no-reply@mail.anthropic.com\r\nContent-Type: multipart/mixed; boundary="b"\r\n\r\n--b\r\n'
-               b'Content-Type: text/plain\r\n\r\nhello\r\n--b\r\nContent-Type: text/html\r\nContent-Disposition: attachment; filename=x.html\r\n\r\n'
-               b'<a href="https://claude.ai/magic-link#tok-att">x</a>\r\n--b--\r\n')
-        self.assertIsNone(self.ns['mail_extract'](self.rule, self.msg(raw)))
-
-    def test_shape_never_shows_the_token(self):
-        s = self.ns['mail_shape']('https://claude.ai/magic-link?a=1#tok-secret')
-        self.assertNotIn('secret', s)
-        self.assertIn('https://claude.ai/magic-link', s)
-
-
-class Used(Base):
-    def test_claim_once_across_processes(self):
-        claim, mark = self.ns['mail_claim'], self.ns['mail_mark']
-        self.assertIsNone(claim('d1'))
-        self.assertIsNone(claim('d1'), '自己认领过的可以再认领')
-        with mock.patch.object(self.ns['os'], 'getpid', return_value=1):   # 另一个进程（pid 1 一直在）：120 秒内不抢
-            self.assertIs(claim('d1'), False)
-        mark('d1', 'done')
-        self.assertIs(claim('d1'), False)
-        self.assertEqual(claim('d1', again=True), 'done', '--again：照样打开，失败时照原来的状态还原')
-        mark('d1', 'done')
-        self.assertIsNone(claim('d3'))
-        mark('d3', None)
-        self.assertIsNone(claim('d3'), '没打开时去掉认领，下次照样能开')
-        used = json.loads(Path(self.home / '.cca' / 'mail' / 'used.json').read_text())
-        self.assertEqual(set(used), {'d1', 'd3'})
-        self.assertEqual(stat.S_IMODE(os.stat(self.home / '.cca' / 'mail').st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE(os.stat(self.home / '.cca' / 'mail' / 'used.json').st_mode), 0o600)
-        self.assertNotIn('magic', json.dumps(used))
-
-    def test_old_records_are_dropped(self):
-        p = self.home / '.cca' / 'mail'
-        p.mkdir(mode=0o700)
-        (p / 'used.json').write_text(json.dumps({'old': {'at': time.time() - 3 * 86400, 'st': 'done'}, 'junk': 5}))
-        self.assertIsNone(self.ns['mail_claim']('new'))
-        self.assertEqual(set(json.loads(Path(p / 'used.json').read_text())), {'new'})
-
-
-class FakeSource:
-    def __init__(self, rounds, msgs):
-        self.rounds, self.msgs = list(rounds), msgs
-        self.polls = 0
-
-    def poll(self, since):
-        self.polls += 1
-        r = self.rounds.pop(0) if self.rounds else []
-        if isinstance(r, Exception):
-            raise r
-        return r
-
-    def full(self, cand):
-        return self.msgs[cand['uid']]
-
-
-class Hunt(Base):
-    extra_env = {'CCA_MAIL_POLL': '3', 'CCA_MAIL_RETRY': '2'}
-
-    def setUp(self):
-        Base.setUp(self)
-        self.clock = [1000000.0]
-        self.said = []
-        self.opened = []
-
-    def now(self):
-        return self.clock[0]
-
-    def sleep(self, s):
-        self.clock[0] += s
-
-    def cand(self, uid, raw, ago=0):
-        return {'folder': ALL, 'label': '所有邮件', 'uid': uid, 'got': 1000000.0 - ago, 'hdr': raw, 'seen': (ALL, 1, uid)}
-
-    def deliver(self, results):
-        res = list(results)
-
-        def d(link):
-            self.opened.append((round(self.clock[0] - 1000000.0, 1), link))
-            return res.pop(0) if res else 'ok'
-        return d
-
-    def hunt(self, src, results=(), secs=30, **kw):
-        return self.ns['mail_hunt'](src, [self.rule], 'alice@example.com', self.clock[0] - 10, self.clock[0] + secs, self.deliver(results),
-                                    say=self.said.append, now=self.now, sleep=self.sleep, **kw)
-
-    def test_opens_only_the_newest_and_keeps_watching(self):
-        a = mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-old')
-        b = mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-new')
-        src = FakeSource([[self.cand(1, a, 5), self.cand(2, b, 1)]], {1: a, 2: b})
-        res = self.hunt(src)
-        self.assertEqual([l for _, l in self.opened], ['https://claude.ai/magic-link#tok-new'])
-        self.assertEqual((res['code'], res['opened']), ('opened', 1))
-        self.assertGreater(src.polls, 5, '打开以后接着看（登录结束才停）')
-        self.assertEqual(self.said, [])
-
-    def test_browser_failure_retries_three_times_then_says_so(self):
-        a = mf.build_eml('alice@example.com')
-        res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), ['fail', 'fail', 'ok'])
-        self.assertEqual([t for t, _ in self.opened], [0.0, 2.0, 4.0])
-        self.assertEqual(res['code'], 'opened')
-        self.opened, self.said = [], []
-        res = self.hunt(FakeSource([[self.cand(2, mf.build_eml('alice@example.com'))]], {2: mf.build_eml('alice@example.com')}),
-                        ['fail', 'fail', 'fail'])
-        self.assertEqual((len(self.opened), res['code']), (3, 'fail'))
-        self.assertEqual(len([s for s in self.said if '没能打开浏览器' in s]), 1)
-
-    def test_retries_finish_even_past_the_end(self):
-        a = mf.build_eml('alice@example.com')
-        res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), ['fail', 'fail', 'ok'], secs=1)
-        self.assertEqual((len(self.opened), res['code']), (3, 'opened'))
-
-    def test_once_stops_on_browser_failure(self):
-        a = mf.build_eml('alice@example.com')
-        res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), ['fail'] * 3, secs=600, once=True)
-        self.assertEqual((res['code'], len(self.opened)), ('fail', 3))
-        self.assertLess(self.clock[0] - 1000000.0, 10)
-        self.assertEqual(self.said, [], 'cca mail open 自己说结果')
-
-    def test_connection_trouble_backs_off_and_says_once(self):
-        R = self.ns['MailRetry']
-        src = FakeSource([R('net', 'x1'), R('net', 'x2'), R('net', 'x3'), R('net', 'x4'), []], {})
-        res = self.hunt(src, secs=60)
-        self.assertEqual(len([s for s in self.said if '连不上 Gmail' in s]), 1)
-        self.assertEqual(res['code'], 'none', '后来连上了')
-        res = self.hunt(FakeSource([R('net', 'down')] * 50, {}), secs=20)
-        self.assertEqual((res['code'], res['text']), ('net', 'down'), '到最后也没连上：说最后的原因')
-
-    def test_once_fails_fast_only_before_the_first_poll(self):
-        R = self.ns['MailRetry']
-        res = self.hunt(FakeSource([R('proxy', '代理断开了连接')], {}), once=True)
-        self.assertEqual((res['code'], self.clock[0]), ('proxy', 1000000.0))
-        a = mf.build_eml('alice@example.com')
-        res = self.hunt(FakeSource([[], R('net', 'blip'), [self.cand(3, a)]], {3: a}), once=True, secs=60)
-        self.assertEqual(res['code'], 'opened', '中途断一下接着等')
-
-    def test_fatal_stops_at_once(self):
-        res = self.hunt(FakeSource([self.ns['MailFatal']('auth', 'Gmail 不认这个密码')], {}))
-        self.assertEqual(res['code'], 'auth')
-
-    def test_idle_called_only_when_nothing_to_open(self):
-        seen = []
-        a = mf.build_eml('alice@example.com')
-        self.hunt(FakeSource([[]], {}), once=True, secs=10, idle=lambda: seen.append('idle'))
-        self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), once=True, secs=10, idle=lambda: seen.append('bad'))
-        self.assertEqual(seen, ['idle'])
-
-    def test_used_mails_are_not_opened_again_unless_again(self):
-        a = mf.build_eml('alice@example.com')
-        self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), once=True)
-        res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), once=True, secs=5)
-        self.assertEqual((len(self.opened), res['used'], res['code']), (1, 1, 'none'))
-        res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), once=True, again=True)
-        self.assertEqual((len(self.opened), res['code']), (2, 'opened'))
-
-    def test_rejections_quiet_or_said(self):
-        mails = {1: mf.build_eml('bob@example.com'), 2: mf.build_eml('alice@example.com', subject='Receipt'),
-                 3: mf.build_eml('alice@example.com', frm='x@evil.example.com'), 4: mf.build_eml('alice@example.com', ar='fail')}
-        res = self.hunt(FakeSource([[self.cand(u, r) for u, r in mails.items()]], mails), secs=5)
-        self.assertEqual(res['rejected'], {'to': 1, 'subject': 1, 'from': 1, 'dkim': 1})
-        self.assertEqual(len(self.said), 2, '别的账号的、标题不像的不说；发件人、签名不对的说')
-        self.assertEqual(self.opened, [])
-
-    def test_stops_when_login_is_over(self):
-        alive = iter([True, True, True, False])
-        src = FakeSource([], {})
-        self.hunt(src, secs=600, alive=lambda: next(alive, False))
-        self.assertLessEqual(src.polls, 2)
-
-    def test_mail_that_cannot_be_fetched_backs_off(self):
-        R = self.ns['MailRetry']
-        a = mf.build_eml('alice@example.com')
-
-        class Gone(FakeSource):
-            def full(self, cand):
-                raise R('proto', 'Gmail 没给出这封邮件')
-        src = Gone([[self.cand(1, a)]], {})
-        res = self.hunt(src, secs=120)
-        self.assertEqual(len([s for s in self.said if 'Gmail 没给出这封邮件' in s]), 1)
-        self.assertLess(src.polls, 15, '取不到全文的那封照连不上退避，不是每两秒取一次')
-        self.assertEqual(res['code'], 'proto')
-
-    def test_mails_not_opened_are_checked_again_next_time(self):
-        a = mf.build_eml('alice@example.com', body_links=['https://www.anthropic.com/help'])
-        for _ in range(2):
-            res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), once=True, secs=5)
-            self.assertEqual((res['rejected'], res['used']), ({'nolink': 1}, 0), '没打开的不记下：下次照样核对、照实说原因')
-
-    def test_refused_counts_as_rejected(self):
-        a = mf.build_eml('alice@example.com')
-        res = self.hunt(FakeSource([[self.cand(1, a)]], {1: a}), ['refused'], secs=5)
-        self.assertEqual((res['rejected'], len(self.opened)), ({'refused': 1}, 1))
-        self.assertTrue(any('打开之前再核对' in s for s in self.said))
-
-
-class Keystore(Base):
-    """ks_read / ks_write / ks_del 走钥匙串的那一支：假的 security 把条目放在字典里（和 tests/setup.sh 的一样认 -a、-s、-X）"""
-
-    def setUp(self):
-        Base.setUp(self)
-        self.kc, self.calls = {}, []
-        self.ns['keyfile_store'] = lambda: False
-
-        def one(w):
-            o = {w[i]: w[i + 1] for i in range(1, len(w) - 1) if w[i] in ('-a', '-s', '-X')}
-            hit = [k for k in self.kc if k[0] == o.get('-s') and o.get('-a', k[1]) == k[1]]
-            if w[0] == 'add-generic-password':
-                self.kc[(o['-s'], o['-a'])] = bytes.fromhex(o['-X']).decode()
-                return 0, b''
-            if not hit:
-                return 44, b''
-            if w[0] == 'find-generic-password':
-                return 0, (self.kc[hit[0]] + '\n').encode()
-            del self.kc[hit[0]]
-            return 0, b''
-
-        def security(*args, data=None):
-            self.calls.append(args)
-            if args[0] != '-i':
-                return one(list(args))
-            for line in data.decode().splitlines():
-                one(line.split())
-            return 0, b''
-        self.ns['security'] = security
-
-    def test_write_replaces_the_same_account_only_and_delete_can_pick_one(self):
-        ks, a, b = self.ns, 'abcdefghijklmnop', 'ponmlkjihgfedcba'
-        self.assertTrue(ks['ks_write']('svc', 'a@example.com', a))
-        self.assertTrue(ks['ks_write']('svc', 'b@example.com', b))
-        self.assertTrue(ks['ks_write']('svc', 'b@example.com', a))
-        self.assertEqual((ks['ks_read']('svc', 'a@example.com'), ks['ks_read']('svc', 'b@example.com')), ((0, a), (0, a)))
-        ks['ks_del']('svc', 'a@example.com')
-        self.assertEqual(set(self.kc), {('svc', 'b@example.com')}, '只删这个账户名的')
-        ks['ks_del']('svc')
-        self.assertEqual(self.kc, {})
-        self.assertFalse([c for c in self.calls if c[0] != '-i' and (a in c or b in c)], '秘密不进命令行')
-
-
-class FakeBox:
-    """MailSource 用的假 MailBox：各邮件夹的 (UIDVALIDITY, UIDNEXT) 和邮件；记下每次调用"""
-
-    def __init__(self):
-        self.im = None
-        self.state = {'A': (1, 10), 'J': (5, 3)}
-        self.msgs = {'A': {u: (u * 1.0, b'Subject: %d\r\n' % u) for u in range(1, 10)}, 'J': {1: (1.0, b'x'), 2: (2.0, b'y')}}
-        self.hits = {'A': [2, 4], 'J': [1]}
-        self.calls, self.cur, self.fail = [], None, None
-
-    def open(self):
-        self.im = object()
-        self.calls.append('open')
-
-    def folders(self):
-        return [('所有邮件', 'A'), ('垃圾邮件', 'J')]
-
-    def examine(self, name):
-        self.cur = name
-        self.calls.append(('examine', name))
-        if self.fail == name:
-            self.fail, self.im = None, None
-            raise MailRetryBox('net', 'gone')
-        return self.state[name]
-
-    def search(self, crit):
-        self.calls.append(('search', self.cur))
-        return list(self.hits[self.cur])
-
-    def headers(self, uids):
-        self.calls.append(('headers', self.cur, uids))
-        if isinstance(uids, tuple):
-            uids = range(uids[0], uids[1] + 1)
-        return {u: self.msgs[self.cur][u] for u in uids if u in self.msgs[self.cur]}
-
-    def message(self, uid):
-        return self.msgs[self.cur][uid][1]
-
-    def close(self, polite=False):
-        self.im = None
-
-
-MailRetryBox = None
-
-
-class Source(Base):
-    def setUp(self):
-        Base.setUp(self)
-        global MailRetryBox
-        MailRetryBox = self.ns['MailRetry']
-        self.src = self.ns['MailSource']('u@example.com', PW, ('direct', '', 0), [self.rule])
-        self.box = self.src.box = FakeBox()
-
-    def uids(self, out):
-        return sorted((c['folder'], c['uid']) for c in out)
-
-    def test_first_round_searches_and_takes_the_latest_burst(self):
-        out = self.src.poll(0)
-        self.assertEqual(self.uids(out), [('A', u) for u in range(1, 10)] + [('J', 1), ('J', 2)])
-        self.assertIn(('search', 'A'), self.box.calls)
-        self.assertIn(('headers', 'A', (1, 9)), self.box.calls)
-
-    def test_later_rounds_fetch_new_uids_without_searching(self):
-        self.src.poll(0)
-        self.box.calls = []
-        self.assertEqual(self.src.poll(0), [])
-        self.assertFalse([c for c in self.box.calls if c[0] in ('search', 'headers')], 'UIDNEXT 没变：不搜索也不取')
-        self.box.msgs['A'][10] = (10.0, b'Subject: new\r\n')
-        self.box.state['A'] = (1, 11)
-        self.box.calls = []
-        out = self.src.poll(0)
-        self.assertEqual(self.uids(out), [('A', 10)])
-        self.assertEqual([c for c in self.box.calls if c[0] in ('search', 'headers')], [('headers', 'A', (10, 10))])
-
-    def test_uidvalidity_change_searches_again(self):
-        self.src.poll(0)
-        self.box.state['A'] = (2, 10)
-        self.box.calls = []
-        out = self.src.poll(0)
-        self.assertIn(('search', 'A'), self.box.calls)
-        self.assertEqual(len(out), 9, '换了 UIDVALIDITY：同样的 UID 是另外的邮件')
-
-    def test_a_round_cut_short_loses_nothing(self):
-        self.box.fail = 'J'
-        with self.assertRaises(self.ns['MailRetry']):
-            self.src.poll(0)
-        out = self.src.poll(0)
-        self.assertIn(('A', 4), self.uids(out), '断在第二个邮件夹：第一个邮件夹里的下一轮照样给')
-        self.assertEqual(self.box.calls.count('open'), 2)
-
-
-class Lint(Base):
-    def test_python38_syntax_and_lazy_imports(self):
-        ast.parse(SOURCE, feature_version=(3, 8))
-        tree = ast.parse(SOURCE)
-        top = {a.name for n in tree.body if isinstance(n, ast.Import) for a in n.names}
-        top |= {n.module for n in tree.body if isinstance(n, ast.ImportFrom)}
-        self.assertFalse(top & {'imaplib', 'ssl', 'socket', 'email', 'html', 'subprocess'}, top)
-
-    def test_every_rule_is_known(self):
-        for tool in self.ns['TOOLS']:
-            for r in tool.mail_rules:
-                self.assertIn(r, self.ns['MAIL_RULES'])
-        self.assertEqual(self.ns['CodexTool'].mail_rules, ())
-
-
-class WireBase(Base):
-    """经本机的假 Gmail：真的 TLS（测试的 CA，CCA_MAIL_CAFILE）、经假代理（SOCKS5 / HTTP CONNECT）。每个子类一个假 Gmail"""
+SPAM = '"[Gmail]/Spam"'
+MAC = sys.platform == 'darwin'
+
+# 原来的各个类现在在哪（辅助程序的单元测试，名字是 Rust 的测试函数）：
+# Rules：cli/src/cmd/mail.rs 的 link_must_be_exactly_a_claude_login_link、sender_domain_by_label_suffix、subject
+# Route：cli/src/cmd/mail/route.rs 的 scutil_parse_top_level_only、system_proxy_socks_first_then_https_then_http、system_proxy_exceptions、explicit_specs、never_through_an_account_exit
+# Parse：cli/src/cmd/mail/imap/tests.rs 的 internaldate、search_criteria、fetch_parse_any_order
+# Judge、Clean、Links：cli/src/cmd/mail/judge.rs 的 every_check_in_mail_view（每条检查照字面；judgement_like_python 另外和原来 Python 的结果逐项比）
+# Used：cli/src/cmd/mail/hunt.rs 的 claim_once_across_processes、old_records_are_dropped
+# Hunt：cli/src/cmd/mail/hunt.rs 里同名的 14 个（opens_only_the_newest_and_keeps_watching …… refused_counts_as_rejected）
+# Source：cli/src/cmd/mail/imap/tests.rs 的 first_round_searches_and_takes_the_latest_burst、later_rounds_fetch_new_uids_without_searching、uidvalidity_change_searches_again、a_round_cut_short_loses_nothing
+# Lint：test_every_rule_is_known 在 cli/src/cmd/mail.rs 的 every_rule_is_known；test_python38_syntax_and_lazy_imports 查的是内嵌 Python 的写法，没有了
+# Keystore：下面的 Keystore（经假的 security 走真的进程）；原来进程里的那一条在 cli/src/cmd/secrets.rs 的 write_replaces_the_same_account_only_and_delete_can_pick_one
+
+# 假的钥匙串（和 tests/setup.sh、cli/pydiff/cases/secrets.py 的一样）：条目存在 ~/keychain/<服务名>/<账户名>，每次的命令行记在
+# ~/security.log，-i 从 stdin 读到的命令记在 ~/security.stdin；~/keychain_locked 在的时候存不进去
+SECURITY = r'''#!/bin/sh
+T="$HOME"; KC="$T/keychain"
+printf 'SECURITY %s\n' "$*" >> "$T/security.log"
+one() {
+	[ $# -gt 0 ] || return 1
+	cmd="$1"; shift
+	svc=""; acct=""; hex=""; w=0; prev=""
+	for a in "$@"; do
+		case "$prev" in -s) svc="$a" ;; -a) acct="$a" ;; -X) hex="$a" ;; esac
+		[ "$a" = -w ] && w=1
+		prev="$a"
+	done
+	[ -n "$svc" ] || return 1
+	if [ -n "$acct" ]; then f="$KC/$svc/$acct"; else f=$(ls "$KC/$svc/"* 2>/dev/null | head -n 1); fi
+	case "$cmd" in
+		add-generic-password)
+			[ -f "$T/keychain_locked" ] && return 36
+			mkdir -p "$KC/$svc"
+			printf '%s' "$hex" | xxd -r -p > "$KC/$svc/${acct:-_}"
+			return 0 ;;
+		find-generic-password)
+			[ -n "$f" ] && [ -f "$f" ] || return 44
+			[ $w = 1 ] && { cat "$f"; echo; }
+			return 0 ;;
+		delete-generic-password)
+			[ -n "$f" ] && [ -f "$f" ] || return 44
+			rm -f "$f"; rmdir "$KC/$svc" 2>/dev/null
+			return 0 ;;
+	esac
+	return 1
+}
+if [ "${1:-}" = -i ]; then
+	while IFS= read -r line; do
+		printf '%s\n' "$line" >> "$T/security.stdin"
+		set -f; set -- $line; set +f
+		one "$@"
+	done
+	exit 0
+fi
+one "$@"
+'''
+# 假的 scutil：系统代理就是假代理。用例都写明了连接方式；哪一条不小心走了「照系统代理」，也连不到真的 Gmail 上去
+SCUTIL = '#!/bin/sh\ncat "$HOME/scutil.txt"\n'
+# 假的 cca：辅助程序起 `$CCA_SELF _mail-open <账号>`、链接从 stdin 给它。记下账号和链接；另记参数个数、环境变量里有没有链接
+OPENER = '''#!/bin/sh
+[ "$1" = _mail-open ] || exit 9
+IFS= read -r url
+printf "%%s %%s\\n" "$2" "$url" >> %(opened)s
+printf "%%s %%s\\n" "$#" "$(env | grep -c magic-link)" >> %(seen)s
+exit "$(cat %(rc)s 2>/dev/null || echo 0)"
+'''
+PKI = None
+
+
+def setUpModule():
+    global PKI
+    if MAC:
+        PKI = tempfile.mkdtemp(prefix='cca-mail-pki-')
+        mf.make_pki(os.path.join(PKI, 'pki'))
+
+
+def tearDownModule():
+    if PKI:
+        shutil.rmtree(PKI, ignore_errors=True)
+
+
+class Running:
+    """正在跑的一条辅助程序命令：输出接在文件上，跑着的时候就能看"""
+
+    def __init__(self, t, argv, env):
+        self.t = t
+        n = len(t.running)
+        self.out, self.err = (Path(t.temp.name) / ('run-%d.%s' % (n, x)) for x in ('out', 'err'))
+        with open(self.out, 'wb') as o, open(self.err, 'wb') as e:
+            self.p = subprocess.Popen([HELPER] + list(argv), stdin=subprocess.DEVNULL, stdout=o, stderr=e, env=env, cwd=str(t.home))
+        t.running.append(self)
+
+    def stderr(self):
+        return self.err.read_text(encoding='utf-8', errors='replace')
+
+    def wait(self, timeout=60):
+        code = self.p.wait(timeout)
+        return code, self.out.read_text(encoding='utf-8', errors='replace'), self.stderr()
+
+    def kill(self):
+        if self.p.poll() is None:
+            self.p.kill()
+            self.p.wait()
+
+
+class Watch:
+    """后台的 cca-core mail-watch（登录时 bash 起的那个）。中间隔一个 sh 当它的父进程，就像登录时的 cca：
+    over() 是 cca 不在了（sh 退出，mail-watch 看父进程没了自己收尾、记下上次的结果）；term() 是登录结束时的 TERM"""
+
+    def __init__(self, t, key, env):
+        self.t = t
+        n = len(t.running)
+        self.err, pidf = (Path(t.temp.name) / ('watch-%d.%s' % (n, x)) for x in ('err', 'pid'))
+        script = 'err=$1; pidf=$2; shift 2; "$@" 2>"$err" </dev/null & echo $! > "$pidf"; read _'
+        self.sh = subprocess.Popen(['/bin/sh', '-c', script, 'sh', str(self.err), str(pidf), HELPER, 'mail-watch', key],
+                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, env=env, cwd=str(t.home))
+        t.running.append(self)
+        self.pid = None
+        self.pid = int(t.wait_for(lambda: pidf.exists() and pidf.read_text().endswith('\n') and pidf.read_text(), 'mail-watch 起来'))
+
+    def stderr(self):
+        return self.err.read_text(encoding='utf-8', errors='replace') if self.err.exists() else ''
+
+    def gone(self):
+        try:
+            os.kill(self.pid, 0)
+        except OSError:
+            return True
+        return False
+
+    def release(self):
+        if self.sh.poll() is None:
+            self.sh.stdin.close()
+            self.sh.wait(20)
+
+    def over(self):
+        """cca 不在了：它自己收尾。返回它说的话"""
+        self.release()
+        self.t.wait_for(self.gone, 'mail-watch 看父进程不在了自己退出')
+        return self.stderr()
+
+    def term(self):
+        """登录结束：TERM，马上走"""
+        self.kill(signal.SIGTERM)
+        self.t.wait_for(self.gone, 'mail-watch 收到 TERM 退出')
+        return self.stderr()
+
+    def kill(self, sig=signal.SIGKILL):
+        if self.pid is not None and not self.gone():
+            try:
+                os.kill(self.pid, sig)
+            except OSError:
+                pass
+        self.release()
+
+
+@unittest.skipUnless(MAC, '邮箱助手只在 macOS 上有（别的系统的辅助程序不带 TLS、没有钥匙串）')
+class Box(unittest.TestCase):
+    """每个用例一个临时 HOME；每个子类一个假 Gmail 和假代理（真的 TLS：证书是 setUpModule 里一次性的 CA 签的，
+    辅助程序经 CCA_MAIL_CAFILE 信任它——这个变量只在 HOME 换过、连的是本机时才算数）"""
+    keystore = 'file'   # 密钥文件（~/.cca/secrets/cca-mail）；'keychain' 是假的 security
 
     @classmethod
     def setUpClass(cls):
         cls.dir = tempfile.mkdtemp(prefix='cca-mail-wire-')
-        cls.ca = mf.make_pki(os.path.join(cls.dir, 'pki'))
+        shutil.copytree(os.path.join(PKI, 'pki'), os.path.join(cls.dir, 'pki'))
+        cls.ca = os.path.join(cls.dir, 'pki', 'ca.pem')
         for k, _, _ in mf.FOLDERS:
             os.makedirs(os.path.join(cls.dir, 'box', k), exist_ok=True)
         cls.srv = mf.Server(cls.dir)
@@ -646,25 +204,48 @@ class WireBase(Base):
 
     @classmethod
     def tearDownClass(cls):
-        import shutil
         cls.srv.ls.close()
         cls.px.ls.close()
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     def setUp(self):
-        self.extra_env = {'CCA_MAIL_CAFILE': self.ca, 'CCA_MAIL_POLL': '0.1', 'CCA_MAIL_RETRY': '0.1'}
-        Base.setUp(self)
+        self.temp = tempfile.TemporaryDirectory(prefix='cca-mail-')
+        self.addCleanup(self.temp.cleanup)
+        top = Path(self.temp.name)
+        self.home = top / 'home'
+        (self.home / '.cca').mkdir(parents=True)
+        (self.home / 'bin').mkdir()
+        self.opened, self.rc, self.seen = top / 'opened.log', top / 'rc', top / 'seen.log'
+        fake = top / 'fake-cca'
+        for path, text in ((self.home / 'bin' / 'security', SECURITY), (self.home / 'bin' / 'scutil', SCUTIL),
+                           (fake, OPENER % {'opened': self.opened, 'seen': self.seen, 'rc': self.rc})):
+            path.write_text(text)
+            path.chmod(0o755)
+        (self.home / 'scutil.txt').write_text('<dictionary> {\n  SOCKSEnable : 1\n  SOCKSPort : %d\n  SOCKSProxy : 127.0.0.1\n}\n' % self.px.port)
+        (self.home / '.cca' / 'accounts.json').write_text(json.dumps({'alice@example.com': 'US-A', '工作(bob@example.com)': 'US-B'}))
+        self.env = {'HOME': str(self.home), 'CCA_HOME': str(self.home / '.cca'), 'CCA_TOOL': 'claude', 'CCA_SELF': str(fake),
+                    'PATH': '%s:/usr/bin:/bin:/usr/sbin:/sbin' % (self.home / 'bin'), 'LANG': 'en_US.UTF-8',
+                    'CCA_MAIL_CAFILE': self.ca, 'CCA_MAIL_POLL': '0.1', 'CCA_MAIL_RETRY': '0.1'}
+        if self.keystore == 'file':
+            self.env['CCA_KEYSTORE'] = 'file'
+        self.assertEqual(shutil.which('security', path=self.env['PATH']), str(self.home / 'bin' / 'security'), '真的钥匙串不能碰')
         for k, _, _ in mf.FOLDERS:
             for f in Path(self.dir, 'box', k).glob('*.eml'):
                 f.unlink()
         self.ctl({})
         open(os.path.join(self.dir, 'imap.log'), 'w').close()
-        self.socks = ('socks5', '127.0.0.1', self.px.port)
-        self.http = ('http', '127.0.0.1', self.px.port)
+        self.socks = 'socks5://127.0.0.1:%d' % self.px.port
+        self.http = 'http://127.0.0.1:%d' % self.px.port
+        self.secret = self.home / '.cca' / 'secrets' / 'cca-mail'
+        self.running = []
+        self.addCleanup(lambda: [r.kill() for r in self.running])
 
+    # --- 假 Gmail
     def ctl(self, d):
-        with open(os.path.join(self.dir, 'ctl.json'), 'w') as f:
+        tmp = os.path.join(self.dir, 'ctl.json.tmp')
+        with open(tmp, 'w') as f:
             json.dump(d, f)
+        os.replace(tmp, os.path.join(self.dir, 'ctl.json'))
 
     def put(self, uid, raw, ago=0, folder='all'):
         mf.put_eml(os.path.join(self.dir, 'box', folder, '%d.eml' % uid), raw, time.time() - ago)
@@ -673,177 +254,310 @@ class WireBase(Base):
         with open(os.path.join(self.dir, 'imap.log')) as f:
             return f.read()
 
-    def box(self, route=None, pw=PW):
-        b = self.ns['MailBox']('inbox@example.com', pw, route or self.socks)
-        self.addCleanup(b.close)
-        return b
+    # --- 辅助程序
+    def environ(self, env):
+        e = dict(self.env)
+        for k, v in env.items():
+            if v is None:
+                e.pop(k, None)
+            else:
+                e[k] = v
+        return e
+
+    def cca(self, *argv, stdin='', timeout=60, **env):
+        """跑一条辅助程序的命令：(退出码, stdout, stderr)。stdin 是交给它的应用专用密码（setup）"""
+        r = subprocess.run([HELPER] + list(argv), input=stdin.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           env=self.environ(env), cwd=str(self.home), timeout=timeout)
+        return r.returncode, r.stdout.decode('utf-8', 'replace'), r.stderr.decode('utf-8', 'replace')
+
+    def start(self, *argv, **env):
+        return Running(self, argv, self.environ(env))
+
+    def watch(self, key='alice@example.com', **env):
+        return Watch(self, key, self.environ(env))
+
+    def wait_for(self, cond, what, secs=30):
+        end = time.time() + secs
+        while time.time() < end:
+            v = cond()
+            if v:
+                return v
+            time.sleep(0.02)
+        self.fail('等了 %d 秒也没等到：%s' % (secs, what))
+
+    def setup_ok(self, proxy=None):
+        code, _, err = self.cca('mail-setup', 'Inbox@Example.com', proxy or self.socks, stdin='abcd efgh ijkl mnop\n')
+        self.assertEqual(code, 0, err)
+        return err
+
+    # --- 设置和存着的密码
+    def config(self):
+        return json.loads((self.home / '.cca' / 'config.json').read_text())
+
+    def save(self, c):
+        (self.home / '.cca' / 'config.json').write_text(json.dumps(c, ensure_ascii=False, indent=2) + '\n')
+
+    def stored(self, addr):
+        """存着的这个地址的应用专用密码（没有是空串）：密钥文件记着地址和密码；假钥匙串一个地址一个文件"""
+        if self.keystore == 'file':
+            try:
+                d = json.loads(self.secret.read_text())
+            except OSError:
+                return ''
+            return d['key'] if d.get('host') == addr else ''
+        f = self.home / 'keychain' / 'cca-mail' / addr
+        return f.read_text() if f.exists() else ''
+
+    def readable(self, addr):
+        """辅助程序自己取不取得到这个地址的密码（原来直接调 ks_read）：把 mail.user 临时换成它，跑 mail-ready"""
+        keep = (self.home / '.cca' / 'config.json').read_text()
+        c = json.loads(keep)
+        c['mail'] = dict(c['mail'], user=addr)
+        self.save(c)
+        try:
+            return self.cca('mail-ready')
+        finally:
+            (self.home / '.cca' / 'config.json').write_text(keep)
+
+    def mail_list(self, *argv):
+        code, out, err = self.cca('gui-mail-list', *argv, CCA_RO='1')
+        self.assertEqual((code, err), (0, ''))
+        return json.loads(out)
 
 
-
-class Wire(WireBase):
+class Wire(Box):
     def test_read_only_session_through_socks_and_http(self):
         self.put(3, mf.build_eml('alice@example.com'), 60)
-        for route in (self.socks, self.http):
-            b = self.box(route)
-            b.open()
-            self.assertEqual(b.folders(), [('所有邮件', ALL), ('垃圾邮件', '"[Gmail]/Spam"')])
-            self.assertEqual(b.examine(ALL), (11, 4))
-            self.assertEqual(b.search(self.ns['mail_crit']([self.rule], time.time() - 3600)), [3])
-            self.assertIn(b'From:', b.headers([3])[3][1])
-            self.assertIn(b'magic-link', b.message(3))
-            b.close(True)
+        for n, proxy in enumerate((self.socks, self.http)):
+            # folders() == [('所有邮件', ALL), ('垃圾邮件', '"[Gmail]/Spam"')]：给人看的名字在输出里，IMAP 里的名字在发出去的 EXAMINE 里
+            self.assertIn('看这些邮件夹：所有邮件、垃圾邮件', self.setup_ok(proxy))
+            d = self.mail_list('', '2')
+            self.assertEqual((d['error'], d['folders']), (None, ['所有邮件', '垃圾邮件']))
+            self.assertEqual(len(d['rows']), 1)
+            row = d['rows'][0]
+            # examine(ALL) 的 UIDVALIDITY 是 11、search(…) == [3]、headers([3]) 里有 From、message(3) 里有登录链接
+            self.assertEqual(row['msg'], {'folder': ALL, 'uid': 3, 'uidvalidity': 11})
+            self.assertEqual((row['from'], row['to']), (['no-reply@mail.anthropic.com'], ['alice@example.com']))
+            self.assertTrue(row['link_shape'].startswith('https://claude.ai/magic-link'), row)
+            code, out, err = self.cca('mail-test', '2')
+            self.assertEqual(code, 0, err)
+            self.assertIn('通过核对，链接 https://claude.ai/magic-link（# 后面', out)
+            # examine(ALL) 的 UIDNEXT 是 4：盯邮箱的第一轮除了搜到的，还按 UID 取到 UIDNEXT 前一封（1:3）
+            code, _, err = self.cca('mail-open', 'alice@example.com', '0', 'again' if n else '')
+            self.assertEqual(code, 0, err)
         log = self.log()
+        for line in ('IMAP EXAMINE %s' % ALL, 'IMAP EXAMINE %s' % SPAM, 'IMAP UID FETCH 3 (UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (',
+                     'IMAP UID FETCH 1:3 (UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (', 'IMAP UID FETCH 3 (UID INTERNALDATE BODY.PEEK[]<0.'):
+            self.assertIn(line, log)
         self.assertIn('PROXY socks5 imap.gmail.com:993', log)
         self.assertIn('PROXY http imap.gmail.com:993', log)
         self.assertIn('BODY.PEEK[HEADER.FIELDS', log)
         self.assertNotIn('VIOLATION', log)
         self.assertNotIn(PW, log)
+        self.assertEqual({l.split(' ')[1] + (' ' + l.split(' ')[2] if l.split(' ')[1] == 'UID' else '') for l in log.splitlines() if l.startswith('IMAP ')},
+                         {'CAPABILITY', 'LOGIN', 'LIST', 'EXAMINE', 'UID SEARCH', 'UID FETCH', 'LOGOUT'}, '只读的会话只有这几种命令')
 
     def test_login_errors(self):
-        with self.assertRaises(self.ns['MailFatal']) as e:
-            self.box(pw='wrongwrongwrongw').open()
-        self.assertEqual(e.exception.code, 'auth')
-        self.ctl({'imap_disabled': True})
-        with self.assertRaises(self.ns['MailFatal']) as e:
-            self.box().open()
-        self.assertEqual(e.exception.code, 'imap')
+        # 原来看的是 MailBox.open() 抛的是哪一类错（MailFatal / MailRetry）和它的 code；从外面看：setup 的退出码（3 是密码不对，
+        # 重问密码；4 是别的）和说的话各不一样，登录时盯邮箱遇到不会自己好的错马上停、过会儿可能好的接着试
+        setup = lambda pw=PW: self.cca('mail-setup', 'inbox@example.com', self.socks, stdin=pw)
+        code, _, err = setup('wrongwrongwrongw')   # auth
+        self.assertEqual(code, 3, err)
+        self.assertIn('Gmail 不认这个密码：要用应用专用密码（16 个字母）', err)
+        self.ctl({'imap_disabled': True})   # imap
+        code, _, err = setup()
+        self.assertEqual(code, 4, err)
+        self.assertIn('这个 Gmail 没开 IMAP', err)
         self.ctl({'login_no': '[ALERT] Application-specific password required: https://support.google.com/accounts/answer/185833 (Failure)'})
-        with self.assertRaises(self.ns['MailFatal']) as e:
-            self.box().open()
-        self.assertEqual(e.exception.code, 'auth')
+        code, _, err = setup()   # auth
+        self.assertEqual(code, 3, err)
+        self.assertIn('Gmail 不认这个密码：要用应用专用密码（16 个字母）', err)
         self.ctl({'login_no': '[UNAVAILABLE] Temporary System Error'})   # 别的 NO：过一会儿再试，带着 Gmail 的原话
-        with self.assertRaises(self.ns['MailRetry']) as e:
-            self.box().open()
-        self.assertEqual(e.exception.code, 'login')
-        self.assertIn('Temporary System Error', e.exception.text)
+        code, _, err = setup()   # login
+        self.assertEqual(code, 4, err)
+        self.assertIn('Gmail 这次没让登录（[UNAVAILABLE] Temporary System Error）', err)
+        self.assertIn('Temporary System Error', err)
+        self.assertFalse(self.secret.exists(), '没登录上的都不存')
+        # 不会自己好的（MailFatal）：登录时盯邮箱说一句就不再看了
+        self.ctl({})
+        self.setup_ok()
+        for fatal, said in (({'password': 'ponmlkjihgfedcba'}, 'Gmail 不认这个密码'), ({'imap_disabled': True}, '这个 Gmail 没开 IMAP')):
+            self.ctl(fatal)
+            code, _, err = self.cca('mail-watch', 'alice@example.com', timeout=30)
+            self.assertEqual(code, 0)
+            self.assertIn(said, err)
+            self.assertIn('不再看邮箱（登录照常进行）', err)
+        # 过一会儿可能就好了的（MailRetry）：接着试，第三次没连上时说一句
+        self.ctl({'login_no': '[UNAVAILABLE] Temporary System Error'})
+        w = self.watch()
+        self.wait_for(lambda: '还在重试' in w.stderr(), '连不上 Gmail 的那一句')
+        err = w.term()
+        self.assertIn('连不上 Gmail（Gmail 这次没让登录（[UNAVAILABLE] Temporary System Error）），还在重试', err)
+        self.assertNotIn('不再看邮箱', err)
 
     def test_tls_is_always_verified(self):
-        with mock.patch.dict(os.environ, {'CCA_MAIL_CAFILE': ''}):
-            with self.assertRaises(self.ns['MailFatal']) as e:
-                self.box().open()
-        self.assertEqual(e.exception.code, 'tls')
-        with mock.patch.dict(self.ns, {'home_swapped': lambda: False}):   # HOME 是用户真正的主目录：只给测试的 CA 不认
-            with self.assertRaises(self.ns['MailFatal']) as e:
-                self.box().open()
-        self.assertEqual(e.exception.code, 'tls')
+        # 不给测试的 CA：假 Gmail 的证书就是「不认识的机构签的」，校验过不去，什么都不存
+        for ca in ('', '/nonexistent/ca.pem'):
+            code, _, err = self.cca('mail-setup', 'inbox@example.com', self.socks, stdin=PW, CCA_MAIL_CAFILE=ca)
+            self.assertEqual(code, 4, err)
+            self.assertIn('Gmail 的证书校验没通过', err)
+            self.assertIn('cca 不会跳过校验', err)
+            self.assertFalse(self.secret.exists())
+            self.assertNotIn('IMAP ', self.log(), '握手没成：一条 IMAP 命令都没发出去')
+        # 证书校验过不去是不会自己好的（MailFatal，code 是 tls）：登录时盯邮箱说一句就停
+        self.setup_ok()
+        code, _, err = self.cca('mail-watch', 'alice@example.com', timeout=30, CCA_MAIL_CAFILE='')
+        self.assertEqual(code, 0)
+        self.assertIn('Gmail 的证书校验没通过', err)
+        self.assertIn('不再看邮箱（登录照常进行）', err)
+        # 原来的后一半——HOME 是用户真正的主目录时，只给测试的 CA 不认——从外面测不了（辅助程序得在真的主目录下跑）：
+        # 认不认的规则在 cli/src/cmd/mail/route.rs 的单元测试 test_ca_only_in_a_swapped_home_and_to_this_machine 里
 
     def test_proxy_errors_are_retryable(self):
-        for mode in ('refuse', 'auth'):
+        # 原来看的是 MailRetry 和它的 code（proxy / net）；从外面看：setup 说的话（这两种后面都带「连接方式可以指定」那一句），
+        # 登录时盯邮箱接着试、不停
+        hint = '连 Gmail 的方式可以指定：cca mail setup --proxy socks5://127.0.0.1:7897（direct 是直连）'
+        for mode, proxy, said in (('refuse', self.http, 'HTTP 代理不肯连 imap.gmail.com:993（HTTP/1.1 403 Forbidden）'),
+                                  ('auth', self.socks, 'SOCKS5 代理要认证，或者不认这个请求（cca 只用不带认证的 SOCKS5）')):
             self.ctl({'proxy': mode})
-            with self.assertRaises(self.ns['MailRetry']) as e:
-                self.box(self.socks if mode == 'auth' else self.http).open()
-            self.assertEqual(e.exception.code, 'proxy', mode)
+            code, _, err = self.cca('mail-setup', 'inbox@example.com', proxy, stdin=PW)
+            self.assertEqual(code, 4, mode)
+            self.assertIn('%s。%s' % (said, hint), err, mode)   # proxy
         self.ctl({})
-        with self.assertRaises(self.ns['MailRetry']) as e:
-            self.box(('socks5', '127.0.0.1', 9)).open()
-        self.assertEqual(e.exception.code, 'net')
+        code, _, err = self.cca('mail-setup', 'inbox@example.com', 'socks5://127.0.0.1:9', stdin=PW)
+        self.assertEqual(code, 4)
+        self.assertIn('连不上 代理 127.0.0.1:9（', err)   # net；括号里是系统的说法（Connection refused）
+        self.assertIn('）。%s' % hint, err)
+        self.assertFalse(self.secret.exists())
+        self.setup_ok()
+        for change, said in ((lambda: self.ctl({'proxy': 'refuse'}), 'SOCKS5 代理没能连上 imap.gmail.com:993（错误码 5）'),
+                             (lambda: self.ctl({'proxy': 'auth'}), 'SOCKS5 代理要认证'),
+                             (lambda: self.save(dict(self.config(), mail={'user': 'inbox@example.com', 'proxy': 'socks5://127.0.0.1:9'})),
+                              '连不上 代理 127.0.0.1:9（')):
+            change()
+            w = self.watch()
+            self.wait_for(lambda: '还在重试' in w.stderr(), said)
+            err = w.term()
+            self.assertIn('连不上 Gmail（%s' % said, err)
+            self.assertNotIn('不再看邮箱', err)
 
     def test_no_all_mail_falls_back_to_inbox_and_odd_fetch_order(self):
         self.ctl({'no_all': True, 'uid_after_literal': True})
         self.put(2, mf.build_eml('alice@example.com'), 10, folder='inbox')
-        b = self.box()
-        b.open()
-        self.assertEqual(b.folders(), [('收件箱', 'INBOX'), ('垃圾邮件', '"[Gmail]/Spam"')])
-        b.examine('INBOX')
-        self.assertEqual(sorted(b.headers((1, 5))), [2])
+        # folders() == [('收件箱', 'INBOX'), ('垃圾邮件', '"[Gmail]/Spam"')]
+        self.assertIn('看这些邮件夹：收件箱、垃圾邮件', self.setup_ok())
+        d = self.mail_list('', '2')
+        self.assertEqual((d['error'], d['folders']), (None, ['收件箱', '垃圾邮件']))
+        self.assertEqual([r['msg'] for r in d['rows']], [{'folder': 'INBOX', 'uid': 2, 'uidvalidity': 11}], 'UID 写在 literal 后面的也认得出')
+        # headers((1, 5)) 认出 2：按 UID 的区间取头（盯邮箱第一轮的 1:2），那封照样找到、打开
+        code, _, err = self.cca('mail-open', 'alice@example.com', '0')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.opened.read_text().splitlines()), 1)
+        log = self.log()
+        for line in ('IMAP EXAMINE INBOX', 'IMAP EXAMINE %s' % SPAM, 'IMAP UID FETCH 1:2 (UID INTERNALDATE BODY.PEEK[HEADER.FIELDS ('):
+            self.assertIn(line, log)
+        self.assertNotIn('IMAP EXAMINE %s' % ALL, log)
+        self.assertNotIn('VIOLATION', log)
 
     def test_new_mail_found_even_if_gmail_search_lags(self):
         self.ctl({'index_lag': 3600})   # 刚到的邮件 SEARCH 一律搜不到
-        src = self.ns['MailSource']('inbox@example.com', PW, self.socks, [self.rule])
-        self.addCleanup(src.close)
-        self.assertEqual(src.poll(time.time() - 60), [])
-        self.put(1, mf.build_eml('alice@example.com'))
-        out = src.poll(time.time() - 60)
-        self.assertEqual([c['uid'] for c in out], [1])
-        self.assertNotIn('VIOLATION', self.log())
+        self.setup_ok()
+        p = self.start('mail-open', 'alice@example.com', '20')
+        # 第一轮什么都没有（poll() == []）：说要等
+        self.wait_for(lambda: '等 alice@example.com 的登录邮件' in p.stderr(), '第一轮看完')
+        self.assertFalse(self.opened.exists())
+        self.put(1, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-LAG'))
+        code, _, err = p.wait()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.opened.read_text(), 'alice@example.com https://claude.ai/magic-link#tok-LAG\n')
+        log = self.log()
+        self.assertIn('IMAP UID FETCH 1:1 (UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (', log, '不靠搜索：按 UIDNEXT 往后取')
+        self.assertNotIn('VIOLATION', log)
 
     def test_dropped_connection_reconnects(self):
-        self.put(1, mf.build_eml('alice@example.com'), 5)
+        self.setup_ok()
+        open(os.path.join(self.dir, 'imap.log'), 'w').close()
+        self.put(1, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-DROP'), 5)
         self.ctl({'drop': 'UID SEARCH'})
-        src = self.ns['MailSource']('inbox@example.com', PW, self.socks, [self.rule])
-        self.addCleanup(src.close)
-        with self.assertRaises(self.ns['MailRetry']):
-            src.poll(time.time() - 60)
+        w = self.watch()
+        self.wait_for(lambda: 'DROP UID SEARCH' in self.log(), '这一轮半路断开')   # poll() 抛 MailRetry
+        self.assertFalse(self.opened.exists())
         self.ctl({})
-        self.assertEqual([c['uid'] for c in src.poll(time.time() - 60)], [1])
+        self.wait_for(lambda: self.opened.exists() and self.opened.read_text(), '重连以后找到那一封')   # 再 poll()：[1]
+        time.sleep(0.3)
+        err = w.term()
+        self.assertEqual(self.opened.read_text(), 'alice@example.com https://claude.ai/magic-link#tok-DROP\n')
+        self.assertGreaterEqual(self.log().count('IMAP LOGIN'), 2, '断了以后重新登录')
+        self.assertIn('已连上 inbox@example.com', err)
+        self.assertNotIn('VIOLATION', self.log())
 
 
-class Commands(WireBase):
-    """cca mail setup / test / open 和登录时盯邮箱（在这个进程里调 PY_SRC 的命令；打开链接的 cca _mail-open 换成记下链接的小脚本）"""
-
-    def setUp(self):
-        WireBase.setUp(self)
-        self.opened = Path(self.temp.name) / 'opened.log'
-        fake = Path(self.temp.name) / 'fake-cca'
-        fake.write_text('#!/bin/sh\n[ "$1" = _mail-open ] || exit 9\nIFS= read -r url\nprintf "%%s %%s\\n" "$2" "$url" >> %s\n'
-                        'exit "$(cat %s 2>/dev/null || echo 0)"\n' % (self.opened, Path(self.temp.name) / 'rc'))
-        fake.chmod(0o755)
-        os.environ['CCA_SELF'] = str(fake)
-        self.ns['SELF_PATH'] = str(fake)
-        (self.home / '.cca' / 'accounts.json').write_text(json.dumps({'alice@example.com': 'US-A', '工作(bob@example.com)': 'US-B'}))
-
-    def run_cmd(self, name, *args, stdin=''):
-        out, err = io.StringIO(), io.StringIO()
-        code = 0
-        with mock.patch.object(sys, 'stdin', io.StringIO(stdin)), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                self.ns[name](*args)
-            except SystemExit as e:
-                code = e.code if isinstance(e.code, int) else 1
-        return code, out.getvalue(), err.getvalue()
-
-    def setup_ok(self):
-        code, _, err = self.run_cmd('cmd_mail_setup', 'Inbox@Example.com', 'socks5://127.0.0.1:%d' % self.px.port, stdin='abcd efgh ijkl mnop\n')
-        self.assertEqual(code, 0, err)
-        return err
+class Commands(Box):
+    """cca mail setup / test / open 和登录时盯邮箱：跑辅助程序的 mail-setup、mail-test、mail-open、mail-watch、mail-forget……
+    （打开链接的 cca _mail-open 换成记下链接的小脚本）"""
 
     def test_setup_checks_then_saves(self):
-        code, _, err = self.run_cmd('cmd_mail_setup', 'inbox@example.com', 'socks5://127.0.0.1:%d' % self.px.port, stdin='wrongwrongwrongw')
+        code, _, err = self.cca('mail-setup', 'inbox@example.com', self.socks, stdin='wrongwrongwrongw')
         self.assertEqual(code, 3)
         self.assertIn('应用专用密码', err)
-        self.assertFalse((self.home / '.cca' / 'secrets' / 'cca-mail').exists(), '没登录上不存')
-        self.assertEqual(self.run_cmd('cmd_mail_setup', 'not-an-address', '', stdin=PW)[0], 2)
-        self.assertEqual(self.run_cmd('cmd_mail_setup', 'a;b@example.com', '', stdin=PW)[0], 2)
-        self.assertEqual(self.run_cmd('cmd_mail_setup', 'inbox@example.com', 'socks5://127.0.0.1:9', stdin=PW)[0], 4)
+        self.assertFalse(self.secret.exists(), '没登录上不存')
+        self.assertEqual(self.cca('mail-setup', 'not-an-address', '', stdin=PW)[0], 2)
+        self.assertEqual(self.cca('mail-setup', 'a;b@example.com', '', stdin=PW)[0], 2)
+        self.assertEqual(self.cca('mail-setup', 'inbox@example.com', 'socks5://127.0.0.1:9', stdin=PW)[0], 4)
         err = self.setup_ok()
         self.assertIn('所有邮件、垃圾邮件', err)
-        c = json.loads(Path(self.home / '.cca' / 'config.json').read_text())
-        self.assertEqual(c['mail'], {'user': 'inbox@example.com', 'proxy': 'socks5://127.0.0.1:%d' % self.px.port})
-        f = self.home / '.cca' / 'secrets' / 'cca-mail'
+        c = self.config()
+        self.assertEqual(c['mail'], {'user': 'inbox@example.com', 'proxy': self.socks})
+        f = self.secret
         self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600)
-        self.assertEqual(json.loads(Path(f).read_text())['key'], PW, '空格去掉了')
-        self.assertEqual(self.ns['ks_read']('cca-mail', 'inbox@example.com'), (0, PW))
-        self.assertEqual(self.ns['ks_read']('cca-mail', 'other@example.com')[1], '', '换了地址取不到旧的')
-        code, out, _ = self.run_cmd('cmd_mail_status')
+        self.assertEqual(stat.S_IMODE(f.parent.stat().st_mode), 0o700)
+        self.assertEqual(json.loads(f.read_text())['key'], PW, '空格去掉了')
+        # ks_read('cca-mail', 'inbox@example.com') == (0, PW)：记的是这个地址和这个密码，辅助程序取得到、拿它登录得上
+        self.assertEqual(self.stored('inbox@example.com'), PW)
+        self.assertEqual(self.readable('inbox@example.com')[0], 0)
+        self.assertEqual(self.cca('mail-test', '1')[0], 0)
+        # ks_read('cca-mail', 'other@example.com')[1] == ''
+        self.assertEqual(self.stored('other@example.com'), '', '换了地址取不到旧的')
+        code, _, err = self.readable('other@example.com')
+        self.assertEqual(code, 1)
+        self.assertIn('密钥文件里没有应用专用密码', err)
+        code, out, _ = self.cca('mail-status')
         self.assertIn('inbox@example.com', out)
         self.assertIn('自动打开', out)
-        self.assertEqual(self.run_cmd('cmd_mail_get_user')[1], 'inbox@example.com\n')
+        self.assertEqual(self.cca('mail-get-user')[1], 'inbox@example.com\n')
+        self.assertFalse((self.home / 'security.log').exists(), '用密钥文件时不碰钥匙串')
 
     def test_new_address_replaces_the_old_only_once_saved(self):
+        # 原来把 ks_write 换成总是失败的；这里用钥匙串那一支，让假的 security 存不进去（钥匙串锁着）
+        self.keystore = 'keychain'
+        del self.env['CCA_KEYSTORE']
         self.setup_ok()
-        read = lambda u: self.ns['ks_read']('cca-mail', u)[1]
-        user = lambda: self.ns['mail_cfg'](self.ns['cfg_load']())['user']
+        read = self.stored
+        user = lambda: self.config()['mail']['user']
+        self.assertEqual((read('inbox@example.com'), user()), (PW, 'inbox@example.com'))
         self.ctl({'user': 'new@example.com', 'password': PW})
-        with mock.patch.dict(self.ns, {'ks_write': lambda *a: False}):   # 存不进去（钥匙串锁着、磁盘满了）
-            code, _, err = self.run_cmd('cmd_mail_setup', 'new@example.com', '', stdin=PW)
+        (self.home / 'keychain_locked').write_text('')   # 存不进去（钥匙串锁着、磁盘满了）
+        code, _, err = self.cca('mail-setup', 'new@example.com', '', stdin=PW)
         self.assertEqual(code, 5, err)
+        self.assertIn('应用专用密码没能存进钥匙串（钥匙串锁着？）', err)
         self.assertEqual((read('inbox@example.com'), user()), (PW, 'inbox@example.com'), '原来的密码、设置都还在，照样能用')
-        self.assertEqual(self.run_cmd('cmd_mail_setup', 'new@example.com', '', stdin=PW)[0], 0)
+        self.assertEqual(self.cca('mail-ready')[0], 0)
+        (self.home / 'keychain_locked').unlink()
+        self.assertEqual(self.cca('mail-setup', 'new@example.com', '', stdin=PW)[0], 0)
         self.assertEqual((read('new@example.com'), read('inbox@example.com'), user()), (PW, '', 'new@example.com'))
+        self.assertEqual(self.cca('mail-ready')[0], 0)
 
     def test_setup_when_gmail_refuses_for_now(self):
         self.ctl({'login_no': '[UNAVAILABLE] Temporary System Error'})
-        code, _, err = self.run_cmd('cmd_mail_setup', 'inbox@example.com', 'socks5://127.0.0.1:%d' % self.px.port, stdin=PW)
+        code, _, err = self.cca('mail-setup', 'inbox@example.com', self.socks, stdin=PW)
         self.assertEqual(code, 4, '不是密码不对：不重问密码')
         self.assertIn('Gmail 这次没让登录（[UNAVAILABLE] Temporary System Error）', err)
         self.assertNotIn('连 Gmail 的方式可以指定', err)
 
     def test_setup_keeps_auto_off(self):
-        c = self.ns['cfg_load']()
-        c['mail'] = {'user': 'inbox@example.com', 'auto': False}
-        self.ns['cfg_save'](c)
+        self.save({'mail': {'user': 'inbox@example.com', 'auto': False}})
         self.setup_ok()
-        self.assertIs(json.loads(Path(self.home / '.cca' / 'config.json').read_text())['mail']['auto'], False)
+        self.assertIs(self.config()['mail']['auto'], False)
 
     def test_mail_test_lists_without_showing_links(self):
         self.setup_ok()
@@ -852,7 +566,7 @@ class Commands(WireBase):
         self.put(7, mf.build_eml('alice@example.com', ar='fail', link='https://claude.ai/magic-link#tok-SECRET3'), 30)
         self.put(8, mf.build_eml('alice@example.com', subject='Secure link to log in to Claude.ai \x1b[2K\x1b[1A', ar='fail',
                                  frm='"\x1b]52;c;eA==\x07" <x@mail.anthropic.com>'), 20)
-        code, out, err = self.run_cmd('cmd_mail_test', '2')
+        code, out, err = self.cca('mail-test', '2')
         self.assertEqual(code, 0, err)
         self.assertNotIn('SECRET', out + err)
         self.assertNotIn('\x1b', out, '发件人写的转义序列不原样打到终端')
@@ -861,83 +575,130 @@ class Commands(WireBase):
         self.assertIn('不是账号表里的邮箱', out)
         self.assertIn('Gmail 的验证结果里没有 Anthropic 的签名通过', out)
         self.assertNotIn('VIOLATION', self.log())
+        # App 的邮件列表（_gui mail-list）也一样：只给链接的样子
+        d = self.mail_list('', '2')
+        self.assertEqual(len(d['rows']), 4)
+        self.assertNotIn('SECRET', json.dumps(d))
 
     def test_open_hands_the_newest_link_over_stdin_once(self):
         self.setup_ok()
         self.put(5, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-A1'), 600)
         self.put(6, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-A2'), 300)
         self.put(7, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-OLD'), 3 * 3600)
-        code, _, err = self.run_cmd('cmd_mail_open', 'alice@example.com', '0')
+        code, _, err = self.cca('mail-open', 'alice@example.com', '0')
         self.assertEqual(code, 0, err)
         self.assertEqual(self.opened.read_text(), 'alice@example.com https://claude.ai/magic-link#tok-A2\n')
-        code, _, err = self.run_cmd('cmd_mail_open', 'alice@example.com', '0')
+        code, _, err = self.cca('mail-open', 'alice@example.com', '0')
         self.assertEqual(code, 1)
         self.assertIn('已经打开过了', err)
-        code, _, err = self.run_cmd('cmd_mail_open', 'alice@example.com', '0', 'again')
+        code, _, err = self.cca('mail-open', 'alice@example.com', '0', 'again')
         self.assertEqual(code, 0, err)
         self.assertEqual(self.opened.read_text().count('tok-A2'), 2)
         self.assertNotIn('tok-', err)
-        code, _, err = self.run_cmd('cmd_mail_open', '工作(bob@example.com)', '0')
+        code, _, err = self.cca('mail-open', '工作(bob@example.com)', '0')
         self.assertEqual(code, 1)
         self.assertIn('最近 30 分钟里没有 bob@example.com 的登录邮件', err)
         self.assertNotIn('VIOLATION', self.log())
+        # 链接只经 stdin 给 cca _mail-open：命令行上只有 _mail-open 和账号，环境变量里没有它；也不存盘（used.json 只记摘要）
+        self.assertEqual(set(self.seen.read_text().splitlines()), {'2 0'})
+        mail = self.home / '.cca' / 'mail'
+        self.assertEqual((stat.S_IMODE(mail.stat().st_mode), stat.S_IMODE((mail / 'used.json').stat().st_mode)), (0o700, 0o600))
+        for f in mail.iterdir():
+            self.assertNotIn('magic', f.read_text(), f.name)
+            self.assertNotIn('tok-', f.read_text(), f.name)
 
     def test_open_waits_for_a_new_mail(self):
         self.setup_ok()
-        threading.Timer(0.6, lambda: self.put(9, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-W'))).start()
-        code, _, err = self.run_cmd('cmd_mail_open', 'alice@example.com', '20')
+        p = self.start('mail-open', 'alice@example.com', '20')
+        self.wait_for(lambda: '等 alice@example.com 的登录邮件' in p.stderr(), '第一轮看完、说要等')
+        self.put(9, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-W'))
+        code, _, err = p.wait()
         self.assertEqual(code, 0, err)
         self.assertIn('等 alice@example.com 的登录邮件', err)
         self.assertIn('tok-W', self.opened.read_text())
 
     def test_open_reports_browser_failure(self):
         self.setup_ok()
-        (Path(self.temp.name) / 'rc').write_text('3')
+        self.rc.write_text('3')
         self.put(5, mf.build_eml('alice@example.com'), 10)
-        code, _, err = self.run_cmd('cmd_mail_open', 'alice@example.com', '0')
+        code, _, err = self.cca('mail-open', 'alice@example.com', '0')
         self.assertEqual(code, 1)
         self.assertIn('没能打开浏览器', err)
         self.assertEqual(len(self.opened.read_text().splitlines()), 3)
-        (Path(self.temp.name) / 'rc').write_text('0')
-        self.assertEqual(self.run_cmd('cmd_mail_open', 'alice@example.com', '0')[0], 0, '没用掉：修好后照样能开')
+        self.rc.write_text('0')
+        self.assertEqual(self.cca('mail-open', 'alice@example.com', '0')[0], 0, '没用掉：修好后照样能开')
 
     def test_watch_opens_the_mail_that_arrives_during_login(self):
         self.setup_ok()
         self.put(4, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-before'), 120)
-        done = threading.Event()
-        threading.Timer(0.5, lambda: self.put(5, mf.build_eml('bob@example.com', link='https://claude.ai/magic-link#tok-bob'))).start()
-        threading.Timer(0.8, lambda: self.put(6, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-login'))).start()
-
-        def alive():
-            if self.opened.exists() and 'tok-login' in self.opened.read_text():
-                threading.Timer(0.5, done.set).start()
-            return not done.is_set()
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.ns['mail_watch']('alice@example.com', alive)
+        w = self.watch()
+        self.wait_for(lambda: '已连上 inbox@example.com' in w.stderr(), '连上 Gmail')
+        time.sleep(0.3)
+        self.put(5, mf.build_eml('bob@example.com', link='https://claude.ai/magic-link#tok-bob'))
+        time.sleep(0.3)
+        self.put(6, mf.build_eml('alice@example.com', link='https://claude.ai/magic-link#tok-login'))
+        self.wait_for(lambda: self.opened.exists() and 'tok-login' in self.opened.read_text(), '打开登录邮件')
+        time.sleep(0.5)
+        err = w.over()   # 登录结束（原来是 alive() 变假）
         self.assertEqual(self.opened.read_text(), 'alice@example.com https://claude.ai/magic-link#tok-login\n',
                          '登录开始前就到了的、别的账号的都不开')
-        self.assertIn('已连上 inbox@example.com', err.getvalue())
-        self.assertNotIn('没通过核对', err.getvalue(), '别的账号的登录邮件不说')
-        self.assertIn('打开了登录邮件里的链接', json.loads(Path(self.home / '.cca' / 'mail' / 'last.json').read_text())['text'])
+        self.assertIn('已连上 inbox@example.com', err)
+        self.assertNotIn('没通过核对', err, '别的账号的登录邮件不说')
+        self.assertIn('打开了登录邮件里的链接', json.loads((self.home / '.cca' / 'mail' / 'last.json').read_text())['text'])
 
     def test_watch_does_nothing_without_config_or_when_auto_is_off(self):
-        self.ns['mail_watch']('alice@example.com', lambda: True)   # 没配置：马上返回
+        self.assertEqual(self.cca('mail-watch', 'alice@example.com', timeout=30), (0, '', ''))   # 没配置：马上返回
         self.setup_ok()
-        c = self.ns['cfg_load']()
+        c = self.config()
         c['mail']['auto'] = False
-        self.ns['cfg_save'](c)
-        self.ns['mail_watch']('alice@example.com', lambda: True)
+        self.save(c)
+        self.assertEqual(self.cca('mail-watch', 'alice@example.com', timeout=30), (0, '', ''))
         self.assertNotIn('LOGIN', self.log().split('IMAP LOGOUT')[-1])
 
     def test_forget_removes_everything(self):
         self.setup_ok()
-        self.ns['mail_claim']('x')
-        self.run_cmd('cmd_mail_forget')
-        self.assertFalse((self.home / '.cca' / 'secrets' / 'cca-mail').exists())
+        # 原来直接调 mail_claim('x') 建出 ~/.cca/mail；这里真打开一封（used.json、last.json 都在里面）
+        self.put(5, mf.build_eml('alice@example.com'), 10)
+        self.assertEqual(self.cca('mail-open', 'alice@example.com', '0')[0], 0)
+        self.assertTrue((self.home / '.cca' / 'mail' / 'used.json').exists())
+        self.assertEqual(self.cca('mail-forget')[0], 0)
+        self.assertFalse(self.secret.exists())
         self.assertFalse((self.home / '.cca' / 'mail').exists())
-        self.assertNotIn('mail', json.loads(Path(self.home / '.cca' / 'config.json').read_text()))
-        self.assertEqual(self.run_cmd('cmd_mail_forget')[0], 0, '没配置过也照样能跑')
+        self.assertNotIn('mail', self.config())
+        self.assertEqual(self.cca('mail-forget')[0], 0, '没配置过也照样能跑')
+
+
+class Keystore(Box):
+    """ks_read / ks_write / ks_del 走钥匙串的那一支：假的 security 把条目放在 ~/keychain 里（和 tests/setup.sh 的一样认 -a、-s、-X）。
+    原来在进程里直接调这三个函数（那一条在 cli/src/cmd/secrets.rs 的单元测试里）；这里经 mail-setup / mail-forget 走真的进程"""
+    keystore = 'keychain'
+
+    def entries(self):
+        d = self.home / 'keychain' / 'cca-mail'
+        return {f.name: f.read_text() for f in d.iterdir()} if d.exists() else {}
+
+    def test_write_replaces_the_same_account_only_and_delete_can_pick_one(self):
+        a, b = 'abcdefghijklmnop', 'ponmlkjihgfedcba'
+        setup = lambda user, pw, acct='': (self.ctl({'user': user, 'password': pw}),
+                                           self.cca('mail-setup', user, self.socks, acct, stdin=pw))[1]
+        self.assertEqual(setup('a@example.com', a)[0], 0)                        # ks_write('svc', 'a@example.com', a)
+        self.assertEqual(setup('b@example.com', b, 'alice@example.com')[0], 0)   # ks_write('svc', 'b@example.com', b)
+        self.assertEqual(self.entries(), {'a@example.com': a, 'b@example.com': b})
+        self.assertEqual(setup('b@example.com', a, 'alice@example.com')[0], 0)   # ks_write('svc', 'b@example.com', a)：只换同一个账户名的
+        self.assertEqual(self.entries(), {'a@example.com': a, 'b@example.com': a})
+        # ks_read：两个地址各自取得到（默认的那个、alice 单独用的那个）
+        self.assertEqual((self.cca('mail-ready')[0], self.cca('mail-ready', 'alice@example.com')[0]), (0, 0))
+        self.assertEqual(self.cca('mail-forget', 'default')[0], 0)               # ks_del('svc', 'a@example.com')
+        self.assertEqual(set(self.entries()), {'b@example.com'}, '只删这个账户名的')
+        self.assertEqual(self.cca('mail-forget')[0], 0)                          # ks_del('svc')
+        self.assertEqual(self.entries(), {})
+        calls = (self.home / 'security.log').read_text()
+        self.assertIn('SECURITY -i\n', calls)
+        self.assertIn('find-generic-password -a b@example.com -s cca-mail -w', calls)
+        for secret in (a, b, a.encode().hex(), b.encode().hex()):
+            self.assertNotIn(secret, calls, '秘密不进命令行')
+        self.assertIn(a.encode().hex(), (self.home / 'security.stdin').read_text(), '只从 stdin 给 security -i')
+        self.assertFalse(self.secret.exists(), '用钥匙串时不写密钥文件')
 
 
 if __name__ == '__main__':
