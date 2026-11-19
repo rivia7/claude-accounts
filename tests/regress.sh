@@ -2970,7 +2970,10 @@ cp -p "$AJ" "$T/pres.aj.json"   # 下面 API key 的同步按登录身份（acco
 withp() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]={"url":"https://127.0.0.1:%s" % sys.argv[2],"pins":[sys.argv[3]],"salt":"ab"*16}; print(json.dumps(j))' "$T/pres.pr.json" "$SVPORT" "${1:-$PIN}"; }   # withp [指纹]：现在发布的映射加上 presence 一节
 dv() { run cca devices alice@example.com --json 2>/dev/null; }   # 问服务器：alice 连着哪些设备
 dstate() { dv > "$T/dv.json"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' "$T/dv.json" 2>/dev/null; }   # 问到的留在 dv.json
-dwait() { local i; for i in $(seq 1 60); do [ "$(dstate)" = "$1" ] && return 0; sleep 0.2; done; return 1; }   # 等服务器上 alice 的设备变成这样
+# 等服务器上 alice 的设备变成这样。一秒左右问一次：服务器给每台设备限了流（每秒 0.5 个请求、最多攒 30 个，上报进程的上报和这里的查询
+# 算在一起）。cca 还内嵌着 Python 的时候问一次就要大半秒，后面只歇 0.2 秒正好；换成辅助程序以后问一次不到 0.2 秒，还歇 0.2 秒的话
+# 十几秒就把配额问光了，上报进程报不上去（请求太频繁），状态一直不变
+dwait() { local i; for i in $(seq 1 60); do [ "$(dstate)" = "$1" ] && return 0; sleep 0.8; done; return 1; }
 apid() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$PRD/agent.json" 2>/dev/null; }   # 上报进程的进程号
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
 pol "$(withp)"

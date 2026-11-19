@@ -584,14 +584,15 @@ if command -v openssl >/dev/null 2>&1; then
 	CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi >/dev/null 2>&1 & S1=$!
 	for i in $(seq 1 40); do [ -f "$AD/cli-$S1.json" ] && break; sleep 0.25; done
 	mk=$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); print("%s:%s" % (j["pid"], j["tool"]))' "$AD/cli-$S1.json" 2>/dev/null)
-	for i in $(seq 1 60); do [ "$(dstate)" = linux-test:in_use:1 ] && break; sleep 0.25; done
+	# 一秒左右问一次：服务器给每台设备限了流（每秒 0.5 个请求、最多攒 30 个），问得太勤上报进程就报不上去了
+	for i in $(seq 1 60); do [ "$(dstate)" = linux-test:in_use:1 ] && break; sleep 0.8; done
 	st1=$(dstate)
 	ap=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$H/.cca/presence/agent.json" 2>/dev/null)
 	if [ "$code" = 200 ] && [ "$mk" = "$S1:claude" ] && [ "$st1" = linux-test:in_use:1 ] && [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; then
 		ok "设备统计：会话开着时登记 cli-<进程号>.json（启动时间从 /proc 读），后台的上报进程报给服务器：在用、1 个会话"
 	else no "设备统计：设备清单 HTTP ${code:-无}，登记 ${mk:-没有}，服务器上是「${st1:-空}」，上报进程 ${ap:-没有}；$(tail -n 2 "$SV/log" 2>/dev/null | tr '\n' ' ')$(cat "$H/.cca/presence/status.json" 2>/dev/null)"; fi
 	rm -f "$D/hold"; wait "$S1" 2>/dev/null
-	for i in $(seq 1 80); do [ "$(dstate)" = linux-test:none:0 ] && break; sleep 0.25; done
+	for i in $(seq 1 80); do [ "$(dstate)" = linux-test:none:0 ] && break; sleep 0.8; done
 	st2=$(dstate)
 	for i in $(seq 1 40); do { [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; } || break; sleep 0.25; done
 	if [ "$st2" = linux-test:none:0 ] && [ ! -e "$AD/cli-$S1.json" ] && ! { [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; }; then
