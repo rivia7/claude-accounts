@@ -16,8 +16,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-    DEFINITIONS = f.read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0].split('\nif len(sys.argv) < 2', 1)[0]
+sys.path.insert(0, HERE)
+import pysrc   # noqa: E402
+DEFINITIONS = pysrc.definitions()
 home = tempfile.mkdtemp(prefix='cca-vectors-')
 os.makedirs(os.path.join(home, '.cca'))
 os.environ.update({'HOME': home, 'CCA_HOME': os.path.join(home, '.cca'), 'CCA_TOOL': 'claude'})

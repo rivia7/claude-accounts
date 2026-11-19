@@ -29,10 +29,10 @@ def load():
     sandbox = tempfile.mkdtemp(prefix='cca-vectors.')
     atexit.register(shutil.rmtree, sandbox, True)   # 临时的主目录：用完删掉
     os.environ.update(HOME=sandbox, CCA_HOME=os.path.join(sandbox, '.cca'), CCA_TOOL='claude')
-    with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-        src = f.read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import pysrc
     ns = {}
-    exec(compile(src.split('\nif len(sys.argv) < 2', 1)[0], 'cca', 'exec'), ns)
+    exec(compile(pysrc.definitions(), 'cca', 'exec'), ns)
     return ns
 
 

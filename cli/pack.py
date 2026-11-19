@@ -29,9 +29,11 @@ def main():
             sys.exit('pack.py：参数写成 目标=路径，目标是 %s 之一' % '、'.join(TARGETS))
         paths[t] = p
     s = io.open(src, encoding='utf-8').read()
-    marker = 'HELPER_SUMS=""   # 发布时由 cli/pack.py 填上：「目标=SHA-256」，空格隔开\n'
-    if s.count(marker) != 1:
-        sys.exit('pack.py：%s 里没有（或者不止一处）HELPER_SUMS="" 那一行：先用 cli/switch.py 改写' % src)
+    # cca 里以 HELPER_SUMS="" 开头的那一行（后面的注释随便改）：正好一处
+    lines = [l for l in s.split('\n') if l.startswith('HELPER_SUMS=""')]
+    if len(lines) != 1:
+        sys.exit('pack.py：%s 里没有（或者不止一处）以 HELPER_SUMS="" 开头的那一行（已经接过辅助程序了？）' % src)
+    marker = lines[0] + '\n'
     if not s.endswith('\nmain "$@"\nexit\n'):
         sys.exit('pack.py：%s 的结尾不是 main "$@" 和 exit（已经接过辅助程序了？）' % src)
     sums, tail = [], []

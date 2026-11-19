@@ -873,15 +873,10 @@ RULE = MAIL_RULES['claude-login']
 
 
 def check_reference():
-    """抄来的函数和 cca 里 PY_SRC 的原文一字不差（cca 里已经没有 PY_SRC 时不查）"""
-    try:
-        with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-            src = f.read()
-    except OSError:
-        return
-    if "PY_SRC=$(cat <<'PY'\n" not in src:
-        return
-    py = src.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+    """抄来的函数和 PY_SRC 的原文一字不差（PY_SRC 经 tools/pysrc.py 取：cca 里没有了就从 PORTED_FROM 记的提交里取）"""
+    sys.path.insert(0, HERE)
+    import pysrc
+    py = pysrc.py_src()
     bad = []
     for obj in REFERENCE:
         m = re.search(r'^(?:def|class) %s\b.*?(?=^\S|\Z)' % re.escape(obj.__name__), py, re.M | re.S)
@@ -2499,14 +2494,9 @@ PATHS = (
 def path_limits(old):
     """各条路上最多套几层。cca 里已经没有 PY_SRC 时沿用 old（上一次生成的那一节）"""
     import subprocess
-    try:
-        with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-            src = f.read()
-    except OSError:
-        return old
-    if "PY_SRC=$(cat <<'PY'\n" not in src:
-        return old
-    py = src.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+    sys.path.insert(0, HERE)
+    import pysrc
+    py = pysrc.py_src()
     check = 'if len(sys.argv) < 2 or sys.argv[1] not in CMDS:\n'
     if py.count(check) != 1:
         sys.exit('PY_SRC 最后分派子命令的写法变了：path_limits 要跟着改')

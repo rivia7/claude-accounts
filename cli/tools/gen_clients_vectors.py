@@ -54,8 +54,9 @@ def unb64(v):
 
 
 def py_src():
-    with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-        return f.read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+    sys.path.insert(0, HERE)
+    import pysrc
+    return pysrc.py_src()
 
 
 DEFINITIONS = py_src().split('\nif len(sys.argv) < 2', 1)[0]

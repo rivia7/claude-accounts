@@ -10,7 +10,6 @@ PY_SRC 是从带着它的那一份 cca 里取的：仓库里的 cca 切换以后
 函数在一个不存在的 CCA_HOME 下跑（和 cargo test 用的是同一个，见 cli/.cargo/config.toml），不读写任何真的文件。"""
 import json
 import os
-import subprocess
 import sys
 from unittest import mock
 
@@ -21,14 +20,9 @@ SALT = 'ab' * 16
 
 
 def load():
-    head = "PY_SRC=$(cat <<'PY'\n"
-    with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-        text = f.read()
-    if head not in text:
-        with open(os.path.join(REPO, 'cli', 'PORTED_FROM')) as f:
-            rev = f.read().split()[0]
-        text = subprocess.run(['git', '-C', REPO, 'show', rev + ':cca'], stdout=subprocess.PIPE, check=True).stdout.decode('utf-8')
-    src = text.split(head, 1)[1].split('\nPY\n)', 1)[0]
+    sys.path.insert(0, HERE)
+    import pysrc
+    src = pysrc.py_src()
     ns = {}
     with mock.patch.dict(os.environ, {'HOME': '/nonexistent', 'CCA_HOME': CCA_HOME, 'CCA_TOOL': 'claude', 'TZ': 'Asia/Shanghai'}, clear=True):
         exec(compile(src.split('\nif len(sys.argv) < 2', 1)[0], 'PY_SRC', 'exec'), ns)

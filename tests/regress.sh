@@ -156,9 +156,9 @@ ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'p
 ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$D/isolation_runtime.py"'
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
 ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'python3 "$D/client_updates.py"'
-ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端的扫描、闲置判定、经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
+ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
-ok "折合金额：价格表、读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
+ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
 
 fi
