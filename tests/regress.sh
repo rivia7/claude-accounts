@@ -4,7 +4,7 @@
 # 用法：bash tests/regress.sh（只在 macOS 上跑；全部用假命令，不联网、不碰真实的 ~/.cca 和路由器）
 D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
-if [ -n "${CKPT:-}" ]; then T="${TMPDIR:-/tmp}/cca-ckpt.sandbox"; mkdir "$T.lock" 2>/dev/null || { echo "另一个分节续跑（CKPT/FROM/ONLY）在用同一个沙箱 ${T}：一次只能跑一个，先等它跑完，或删掉 $T.lock" >&2; exit 1; }; [ -n "${FROM:-}${ONLY:-}" ] || rm -rf "$T"; mkdir -p "$T"; else T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX"); fi; T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）；CKPT 时用 $TMPDIR 下的固定沙箱 + $T.lock 防并发（分节续跑：路径要稳定、在 /var/folders 下、一次只能一个）
+if [ -n "${CKPT:-}" ]; then mkdir -p "$CKPT"; T="${TMPDIR:-/tmp}/cca-ckpt.sandbox"; mkdir "$T.lock" 2>/dev/null || { echo "另一个分节续跑（CKPT/FROM/ONLY）在用同一个沙箱 ${T}：一次只能跑一个，先等它跑完，或删掉 $T.lock" >&2; exit 1; }; [ -n "${FROM:-}${ONLY:-}" ] || rm -rf "$T"; mkdir -p "$T"; else T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX"); fi; T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）；CKPT 时用 $TMPDIR 下的固定沙箱 + $T.lock 防并发（分节续跑：路径要稳定、在 /var/folders 下、一次只能一个）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
 SVP=""   # 设备统计的测试服务器（11b3c 那一节才开）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
