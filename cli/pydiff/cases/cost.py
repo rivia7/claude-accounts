@@ -910,3 +910,63 @@ def _(b):
     os.chmod(b.path('.cca/cost'), 0o700)
     ledger(b)
     ledger(b, nth=2)
+
+
+# --- 按天、按周切时段（cost_days、cost_weeks）：靠本地时区和夏令时 ------------------------------------------------------
+# 这两个函数没有自己的子命令（_gui state 里用）：cca-core 这边有一个只给对拍用的 _cost-periods，原来的那边直接调 PY_SRC 里的函数
+# （oracle=）。“现在”是写死的时刻，在几个时区下各比一遍：夏令时开始 / 结束的那一天（23 / 25 小时）、周一零点前后、半小时的时区
+PERIODS_ORACLE = r'''
+import io, json, os, sys
+ns = {}
+src = io.open(os.environ['PYDIFF_CCA'], encoding='utf-8').read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+argv, sys.argv = sys.argv, ['cca-py']
+exec(compile(src.split('\nif len(sys.argv) < 2', 1)[0], 'PY_SRC', 'exec'), ns)
+now = float(argv[1])
+quota = json.loads(argv[2]) if len(argv) > 2 else None
+rows = lambda ps: [[p[0], p[1], p[2]] for p in ps]
+print(json.dumps({'days': rows(ns['cost_days'](now)), 'weeks': rows(ns['cost_weeks'](quota, now))}, ensure_ascii=False))
+'''
+ZONES = ['Asia/Shanghai', 'UTC', 'America/Los_Angeles', 'America/New_York', 'Europe/London', 'Australia/Sydney', 'Asia/Kathmandu', 'America/St_Johns',
+         'Pacific/Chatham', 'Pacific/Kiritimati', 'America/Sao_Paulo']
+MOMENTS = [
+    ('2026-11-13-noon-utc', 1794571200.0), ('us-fall-back-day', 1793523600.0), ('us-fall-back-week-later', 1794128400.5), ('us-spring-forward', 1773000000.0),
+    ('eu-fall-back', 1792900000.25), ('eu-spring-forward', 1774750000.0), ('sydney-spring-forward', 1791050000.0), ('sydney-fall-back', 1775320000.0),
+    ('monday-midnight-utc', 1794787200.0), ('just-before-monday-utc', 1794787199.0), ('new-year', 1798761600.0), ('leap-day-2028', 1835395200.0), ('integer-now', 1794571200),
+]
+for zone in ZONES:
+    for name, now in MOMENTS:
+        @ccase('periods/%s-%s' % (zone.replace('/', '-'), name), ['_cost-periods', repr(now)], env={'TZ': zone, 'PYDIFF_CCA': run.REPO + '/cca'},
+               oracle=[sys.executable, '-I', '-X', 'utf8', '-c', PERIODS_ORACLE], tree=False)
+        def _(b):
+            pass
+
+
+def quota_cases():
+    now = 1794571200.0   # 2026-11-13 12:00 UTC（周五）
+    r1 = now - 16 * D - 5400   # 两周多以前的一个重置时刻
+    week = lambda s, n=1: {'start_epoch': s, 'end_epoch': s + n * W}
+    yield 'tests-three-windows', now, [week(r1 - W), week(r1), {'start_epoch': r1 + W + 3 * D, 'end_epoch': r1 + 17 * D}]
+    yield 'ints', int(now), [{'start_epoch': int(r1), 'end_epoch': int(r1) + W}, {'start_epoch': int(r1) + W, 'end_epoch': int(r1) + 2 * W}]
+    yield 'mixed-int-float', now, [{'start_epoch': int(r1), 'end_epoch': r1 + W + 0.5}, {'start_epoch': r1 + W + 0.5, 'end_epoch': int(r1) + 2 * W}]
+    yield 'thirteen-weeks-of-windows', now, [week(now - 15 * W + i * W + 3600) for i in range(16)]
+    yield 'only-current', now, [week(now - 2 * D)]
+    yield 'window-in-the-future', now, [week(now + 3 * D)]
+    yield 'window-long-ago', now, [week(now - 40 * W)]
+    yield 'overlapping', now, [week(r1), week(r1 + 3 * D), week(r1 + 5 * D)]
+    yield 'empty-and-backwards', now, [{'start_epoch': r1, 'end_epoch': r1}, {'start_epoch': r1 + D, 'end_epoch': r1}, week(r1)]
+    yield 'short-head', now, [week(1794787200.0 - 4 * W + 5 * 3600)]     # 周一 05:00 开始：前面 5 个小时并进前一项
+    yield 'short-gap', now, [week(r1 - W), week(r1 + 3600)]               # 中间断了一个小时
+    yield 'short-tail-windows', now, [{'start_epoch': r1, 'end_epoch': r1 + 3600}, {'start_epoch': r1 + 3600, 'end_epoch': r1 + 7200}, week(r1 + 7200)]
+    yield 'first-is-short', now, [{'start_epoch': now - 13 * W, 'end_epoch': now - 13 * W + 3600}]
+    yield 'ends-exactly-now', now, [week(now - W)]
+    yield 'bools-and-zero', now, [{'start_epoch': False, 'end_epoch': True}, {'start_epoch': 0, 'end_epoch': 0}]
+    yield 'empty-list', now, []
+    yield 'null', now, None
+
+
+for name, now, quota in quota_cases():
+    for zone in ('Asia/Shanghai', 'America/Los_Angeles', 'UTC'):
+        @ccase('periods-quota/%s-%s' % (name, zone.replace('/', '-')), ['_cost-periods', repr(now), json.dumps(quota)], env={'TZ': zone, 'PYDIFF_CCA': run.REPO + '/cca'},
+               oracle=[sys.executable, '-I', '-X', 'utf8', '-c', PERIODS_ORACLE], tree=False)
+        def _(b):
+            pass

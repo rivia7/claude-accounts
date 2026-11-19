@@ -147,3 +147,243 @@ def _(b):
 @case('health-save/too-few-args', ['health-save', 'bob@example.com', 'launch', 'router', 'US-B', '7902', '50', TRACE])
 def _(b):
     world(b)
+
+
+# --- gui-live：端口池的实况 --------------------------------------------------------------------------------------------
+# nc 是假的：端口 7902 连不上，别的连得上；各端口各记一个文件（几个探测是并行的，记进同一个文件先后不定）
+import os      # noqa: E402
+import time    # noqa: E402
+
+NC = '''for a in "$@"; do p="$a"; done
+printf '%s\\n' "nc $*" > "$HOME/nc-$p.log"
+case "$p" in 7902) exit 1 ;; esac
+exit 0
+'''
+STATUS = '''OpenClash：运行中
+钩子：已安装
+自愈 cron：未安装
+
+槽位 CCA-1 :7901 监听中 → US-A
+槽位 CCA-2 :7902 监听中 → HK-A（应为 US-B）
+槽位 CCA-3 :7903 未监听 → （内核里没有）
+槽位 CCA-4 :7904 监听中 → ?
+槽位 CCA-5 :7905 监听中 →
+槽位 CCA-6 :7906 监听中 → US-A（应为 US-A）
+槽位 CCA-9 :7909 监听中 → 不在端口池里的
+槽位 写得不对
+别的行
+'''
+LIVE_TABLE = {'主号(alice@example.com)': 'US-A', 'bob@example.com': 'US-B', '走节点': {'base_url': 'https://api2.example.com/v1/', 'node': 'HK-A'},
+              'carol@example.com': 'US-A', 'dave@example.com': 'HK-A', '直连': {'base_url': 'https://api.example.com/anthropic'}}
+LOCAL_TEXT = 'V\t200\nG\tCCA-1\t200\tUS-A\nG\tCCA-2\t200\tHK-A\nG\tCCA-3\t404\nG\tCCA-4\t200\t\nG\tCCA-5\t200\nG\nX\ty\nG\tCCA-6\n'
+
+
+def live(name, argv, stdin=STATUS, cfg=None, table=LIVE_TABLE, **kw):
+    kw.setdefault('mask', NOW)
+
+    @case('gui-live/' + name, ['gui-live'] + argv, stdin=stdin, **kw)
+    def _(b):
+        world(b, table=table, cfg=cfg, codex={'erin@example.com': 'US-B'})
+        b.fake('nc', NC)
+
+
+live('router-home', ['router', '192.0.2.10', '0', 'yes', 'yes'])
+live('router-reach-defaults-to-at-home', ['router', '192.0.2.10', '0', 'yes'])
+live('router-away-but-reachable', ['router', '192.0.2.10', '0', 'no', 'yes'])
+live('router-unreachable', ['router', '192.0.2.10', '0', 'no', 'no'])
+live('router-at-home-empty', ['router', '192.0.2.10', '0'])
+live('router-ssh-failed', ['router', '192.0.2.10', '255', 'yes', 'yes'], stdin='ssh: connect to host 192.0.2.10 port 22: Operation timed out\n')
+live('router-status-failed', ['router', '192.0.2.10', '3', 'yes', 'yes'], stdin='line 1\n最后一行说的是原因\n\n')
+live('router-status-failed-no-output', ['router', '192.0.2.10', '1', 'yes', 'yes'], stdin='')
+live('router-not-running', ['router', '192.0.2.10', '0', 'yes', 'yes'], stdin='ShellCrash：未运行\n钩子：已安装\n自愈 cron：已安装\n槽位 CCA-1 :7901 未监听 → US-A\n')
+live('router-not-configured', ['router', '192.0.2.10', '0', 'yes', 'yes'], cfg={'router': {}})
+live('router-no-host-arg', ['router', '', '0', 'yes', 'yes'])
+live('router-crlf', ['router', '192.0.2.10', '0', 'yes', 'yes'], stdin=STATUS.replace('\n', '\r\n'))
+live('router-empty-status', ['router', '192.0.2.10', '0', 'yes', 'yes'], stdin='')
+live('local', ['local', '127.0.0.1', '0', 'no'], stdin=LOCAL_TEXT, cfg={'local': {'client': 'builtin'}})
+live('local-not-running', ['local', '127.0.0.1', '0', 'no'], stdin='V\t000\n', cfg={'local': {'client': 'builtin'}})
+live('local-not-configured', ['local', '127.0.0.1', '0', 'no'], stdin=LOCAL_TEXT)
+live('local-no-version-line', ['local', '127.0.0.1'], stdin='G\tCCA-1\t200\tUS-A\n', cfg={'local': {'client': 'builtin'}})
+live('none', ['none', '192.0.2.10', '0', 'no'])
+live('none-no-host', ['none'])
+live('odd-route', ['wifi', '192.0.2.10', '0', 'yes', 'yes'])
+live('route-pref', ['router', '192.0.2.10', '0', 'yes', 'yes'], cfg={'route': 'local'})
+live('empty-table', ['router', '192.0.2.10', '0', 'yes', 'yes'], table={})
+live('no-args', [])
+live('too-many-args', ['router', 'h', '0', 'yes', 'yes', 'x'])
+live('ro', ['router', '192.0.2.10', '0', 'yes', 'yes'], env={'CCA_RO': '1'})
+live('codex', ['router', '192.0.2.10', '0', 'yes', 'yes'], tool='codex')
+live('bad-table', ['router', '192.0.2.10', '0', 'yes', 'yes'], table={'主号(alice@example.com)': 'NOPE'})
+
+
+@case('gui-live/nc-missing', ['gui-live', 'router', '192.0.2.10', '0', 'yes', 'yes'], stdin=STATUS, mask=NOW, env={'PATH': '%HOME%/nowhere:/usr/bin:/bin'})
+def _(b):   # 没有 nc：都算连不上
+    world(b, table=LIVE_TABLE)
+    os.makedirs(b.path('nowhere'))
+    b.write('nowhere/nc', '#!/bin/sh\nexit 127\n', 0o644)   # 不能执行
+
+
+# --- gui-state：界面的只读快照 ------------------------------------------------------------------------------------------
+# bash 是带着 CCA_RO=1 跑它的（不写文件）；这里两种都跑。ps 是假的（cases/session.py 的）。Claude 官方账号要经邮箱助手的 mail_view
+STATE_MASK = NOW + [(r'"(generated_at|fetched_epoch)": [0-9.]+', r'"\1": <现在>'), (r'"age_seconds": -?[0-9]+', '"age_seconds": <多久以前>'),
+                    (r'"fetched_at": "[^"]*"', '"fetched_at": "<查到的时间>"')]
+GUI_ENV = {'CCA_RO': '1', 'CCA_VERSION': '9.9.9', 'CCA_GUI_CLAUDE_BIN': '/usr/local/bin/claude', 'CCA_GUI_CLAUDE_APP': '/Applications/Claude.app',
+           'CCA_GUI_CODEX_BIN': '/usr/local/bin/codex', 'CCA_GUI_CODEX_APP': '', 'CCA_GUI_AGY_BIN': '', 'CCA_GUI_CHROME': '1', 'CCA_COST': 'off'}
+ROUTER_CODE = 'router code\nline 2\n'
+
+
+def state(name, setup, env=None, stdin=ROUTER_CODE, tool='claude', **kw):
+    kw.setdefault('mask', STATE_MASK)
+    e = dict(GUI_ENV)
+    e.update(env or {})
+    e = {k: v for k, v in e.items() if v is not None}
+
+    @case('gui-state/' + name, ['gui-state'], stdin=stdin, env=e, tool=tool, **kw)
+    def _(b):
+        from cases.session import PS
+        b.fake('ps', PS)
+        setup(b)
+
+
+def no_claude_official(b, **cfg):
+    """Claude 这边只有第三方 API 账号，Codex 有官方账号和 API 账号，agy 两个账号"""
+    from cases import usage as U
+    now = time.time()
+    world(b, table={'kimi': {'base_url': 'https://api.example.com/anthropic', 'model': 'm-1'}, '走节点': {'base_url': 'https://api2.example.com/v1/', 'node': 'HK-A', 'id': 'zjd'}},
+          codex={'工作(erin@example.com)': 'US-A', 'frank@example.com': 'HK-A', 'kimi': {'base_url': 'https://api.example.com/v1'}},
+          agy={'gina@example.com': 'US-B', '副(henry@example.com)': 'US-A'}, cfg=cfg or None)
+    U.codex_login(b, '工作(erin@example.com)')
+    U.cache(b, '工作(erin@example.com)', U.rl(5, 9, now), now - 30, tool='codex')
+    U.agy_login(b, 'gina@example.com')
+
+
+state('no-claude-official', no_claude_official)
+state('no-claude-official-not-ro', no_claude_official, env={'CCA_RO': None})
+state('no-claude-official-nothing-installed', no_claude_official, env={'CCA_GUI_CLAUDE_BIN': '', 'CCA_GUI_CLAUDE_APP': '', 'CCA_GUI_CODEX_BIN': '', 'CCA_GUI_CHROME': '0', 'CCA_VERSION': None})
+state('no-claude-official-codex-tool', no_claude_official, tool='codex')
+state('extra-arg', no_claude_official, stdin='')
+
+
+def fresh(b):
+    pass
+
+
+state('nothing-at-all', fresh)                                    # 全新的机器：没有 ~/.cca
+state('nothing-at-all-not-ro', fresh, env={'CCA_RO': None})
+
+
+def only_config(b):
+    b.cfg({'version': 2, 'router': {'host': '192.0.2.10', 'port': 2222, 'user': 'root'}, 'proxy_host': '192.0.2.11', 'nodes': ['US-A', 'US-B'], 'min_trust': 70,
+           'leak_check': False, 'update': 'manual', 'route': 'router', 'policy': 'git@example.com:me/policy.git', 'onboarded': True, 'synced': 'x'})
+    p = b.write('.cca/policy/checked', '')
+    os.utime(p, (1794000000.5, 1794000000.5))
+
+
+state('only-config', only_config)
+
+
+def unreadable(b):
+    no_claude_official(b)
+    b.write('.cca/config.json', '{oops')
+    b.write('.cca/codex.json', '[1, 2]')
+    b.write('.cca/agy.json', '{oops')
+
+
+state('unreadable-files', unreadable)
+
+
+def table_errors(b):
+    world(b, table={'kimi': {'base_url': 'not a url'}}, codex={'erin@example.com': 'NOPE', 'frank@example.com': 'US-A'})
+
+
+state('table-errors', table_errors)
+
+
+def synced(b):
+    """路由器同步过（摘要对得上）、内置代理配过"""
+    import hashlib
+    no_claude_official(b, local={'client': 'builtin', 'applied': 'something else'})
+
+
+state('local-configured', synced)
+
+
+def codex_rich(b):
+    """Codex 官方账号：登录着、用量缓存、每周用量、出口检测的结果、命令行会话、桌面 App 开着、映射里的账号（设备统计、折合金额）"""
+    from cases import usage as U
+    from cases.cost import ROW, U1, hour
+    from cases.secrets import PRESENCE, PUB
+    from cases.session import T0_EPOCH
+    now = time.time()
+    world(b, table={'kimi': {'base_url': 'https://api.example.com/anthropic'}},
+          codex={'工作(erin@example.com)': 'US-A', 'frank@example.com': 'HK-A', 'kimi': {'base_url': 'https://api.example.com/v1', 'model': 'gpt-x'}},
+          cfg={'policy': 'git@example.com:me/policy.git', 'codex': {'last': 'frank@example.com', 'ref_keys': [ident('erin@example.com')],
+                                                                    'key_hints': {ident('erin@example.com'): {'host': 'reference', 'hint': 'sk-proj…QRST', 'at': 1794000000.5, 'from': '书房的 Mac'}}}},
+          policy={'version': 1, 'codex': {'Erin@example.com': 'US-A'}, 'presence': PRESENCE})
+    b.write('.cca/policy/id_ed25519.pub', PUB, 0o644)
+    b.write('.cca/policy/id_ed25519', 'PRIVATE KEY PLACEHOLDER\n')
+    os.utime(b.write('.cca/policy/checked', ''), (1794000000.5, 1794000000.5))
+    erin, frank = '.cca/codex/accounts/' + ident('erin@example.com'), '.cca/codex/accounts/' + ident('frank@example.com')
+    U.codex_login(b, '工作(erin@example.com)', plan='pro', user='user-AbCdEfGhIjKlMnOp')
+    U.cache(b, '工作(erin@example.com)', U.rl(5, 9, now), now - 30, tool='codex')
+    wk = 7 * 86400
+    end = int(now // 3600 * 3600) + 3 * 86400
+    b.write(erin + '/usage-weeks.json', json.dumps({'version': 1, 'weeks': [
+        {'end': end - 2 * wk, 'peak': 88, 'first': end - 3 * wk + 60, 'last': end - 2 * wk - 60, 'carried': 0, 'resets': 0},
+        {'end': end - wk, 'peak': 40.5, 'first': end - 2 * wk + 60, 'last': end - wk - 60, 'carried': 12, 'resets': 1},
+        {'end': end, 'peak': 9, 'first': end - wk + 60, 'last': int(now) - 30}]}, indent=2) + '\n')
+    b.json(erin + '/health.json', {'checked_at': now - 120, 'source': 'launch', 'result': 'ok', 'route': 'router', 'node': 'US-A', 'port': 7902, 'ip': '198.51.100.7'})
+    b.json(frank + '/health.json', {'checked_at': now - 9 * 86400, 'source': 'check', 'result': 'low_purity', 'node': 'US-B'})
+    b.write(erin + '/cli-4242.json', json.dumps({'v': 1, 'tool': 'codex', 'id': ident('erin@example.com'), 'pid': 4242, 'started': T0_EPOCH, 'since': 1794024000.5}))
+    b.write(erin + '/cli-77.json', json.dumps({'v': 1, 'tool': 'codex', 'id': ident('erin@example.com'), 'pid': 77, 'started': T0_EPOCH, 'since': 1794024000.5}))
+    b.write('ps-lstart.txt', ' 4242 Sat Nov  7 12:08:55 2026\n')
+    os.makedirs(b.path(erin + '/desktop'))
+    b.write('ps-command.txt', '    1 /sbin/launchd\n 5151 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --user-data-dir=%s --x\n 5152 /usr/bin/other\n' % b.path(erin + '/desktop'))
+    # 折合金额：这台设备统计的、别的设备同步来的
+    cost = {'v': 1, 'build': '2026-11-13/1', 'who': {'codex:user-AbCdEfGhIjKlMnOp': 'erin@example.com', 'claude:' + U1: 'alice@example.com'},
+            'acc': {'codex:user-AbCdEfGhIjKlMnOp': {hour(now - 2 * 3600): ROW, hour(now - 26 * 3600): [2500000, 4, 10, 20, 30, 40, 1], hour(now - 9 * 86400): ROW,
+                                                    hour(now - 40 * 86400): [9000000, 9, 1, 1, 1, 1, 0], hour(now - 100 * 86400): ROW},
+                    'claude:' + U1: {hour(now - 3 * 3600): ROW}},
+            'um': {'codex:user-AbCdEfGhIjKlMnOp': ['gpt-unknown-9']}, 'orphan': {hour(now - 5 * 3600): [700000, 2, 1, 1, 1, 1, 0], hour(now - 60 * 86400): ROW, 'bad': [1]}}
+    b.write('.cca/cost/local.json', json.dumps(cost))
+    slot = {'SHA256:bob': {'h': {hour(now - 30 * 3600): [2000000, 1, 1, 1, 1, 1, 0]}, 'um': ['gpt-other'], 'at': now - 600, 'name': 'bob-mini', 'revoked': False, 'tag': 't1'},
+            'SHA256:bob-old': {'h': {hour(now - 20 * 86400): ROW, hour(now - 28 * 3600): [9000000, 1, 1, 1, 1, 1, 0]}, 'um': [], 'at': now - 30 * 86400, 'name': 'bob-mini', 'revoked': True, 'tag': 't2'},
+            'SHA256:carol': {'h': {hour(now - 50 * 3600): ROW}, 'um': [], 'at': now - 2 * 86400, 'name': 'carol-air', 'revoked': False, 'tag': 't3'},
+            'SHA256:junk': {'h': {'x': [1]}, 'at': now, 'name': 'junk', 'tag': 't4'}, 'SHA256:quiet': {'h': {}, 'um': [], 'at': now - 60, 'name': 'no-usage', 'tag': 't5'}}
+    b.write('.cca/cost/remote.json', json.dumps({'v': 1, 'acc': {'codex:erin@example.com': slot}}))
+    b.write('.cca/cost/sync.json', json.dumps({'v': 1, 'state': 'ok', 'at': 1794000100.5, 'ok_at': 1794000100.5, 'me': 'erin-mbp', 'acc': {'codex:erin@example.com': {
+        'checked': 1794000100.5, 'missing': [{'name': 'dan-air', 'used_epoch': int(now) - 3600}, {'name': 'old-air', 'used_epoch': int(now) - 60 * 86400}, 'junk']}}}))
+    os.utime(b.write('.cca/cost/scanned', ''), (1794000200.25, 1794000200.25))
+    os.chmod(b.path('.cca/cost'), 0o700)
+    b.write('.cca/presence/keys.json', json.dumps({'v': 1, 'acc': {}, 'error': '读不了这台设备的钥匙串'}))
+    os.chmod(b.path('.cca/presence'), 0o700)
+
+
+state('codex-rich', codex_rich)
+state('codex-rich-not-ro', codex_rich, env={'CCA_RO': None})
+state('codex-rich-la-time', codex_rich, env={'TZ': 'America/Los_Angeles'})          # 夏令时结束的那一天在最近 30 天里时：那天 25 小时
+state('codex-rich-cost-off', lambda b: (codex_rich(b), b.cfg(dict(json.load(open(b.path('.cca/config.json'))), cost=False))))
+state('codex-rich-presence-off', lambda b: (codex_rich(b), b.cfg(dict(json.load(open(b.path('.cca/config.json'))), presence=False))))
+state('codex-rich-no-deploy-key', lambda b: (codex_rich(b), os.unlink(b.path('.cca/policy/id_ed25519'))))
+
+
+for name, sync in [('error', {'state': 'error', 'error': '连不上', 'at': 1794000300.0}), ('error-older-than-checked', {'state': 'error', 'error': '连不上', 'at': 1794000000.0}),
+                   ('old-server', {'state': 'old_server'}), ('never-checked', {'state': 'ok', 'acc': {}}), ('error-not-str', {'state': 'error', 'error': 5, 'at': 1794000300.0}),
+                   ('not-v1', {'v': 2}), ('me-not-str', {'me': 5})]:
+    def sync_state(b, sync=sync):
+        codex_rich(b)
+        base = json.load(open(b.path('.cca/cost/sync.json')))
+        base.update(sync)
+        b.write('.cca/cost/sync.json', json.dumps(base))
+    state('codex-rich-sync-' + name, sync_state)
+
+
+def scanning(b):
+    codex_rich(b)
+    os.unlink(b.path('.cca/cost/scanned'))
+    from cases.session import T0_EPOCH
+    b.write('.cca/cost/worker.json', json.dumps({'v': 1, 'pid': 4242, 'started': T0_EPOCH}))
+
+
+state('codex-rich-scanning', scanning)
+state('codex-rich-never-scanned', lambda b: (codex_rich(b), os.unlink(b.path('.cca/cost/scanned'))))

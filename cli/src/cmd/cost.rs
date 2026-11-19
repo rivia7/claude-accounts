@@ -1,5 +1,4 @@
-//! 折合金额（`cost_model` 到 `cmd_cost_stop`）：cost-worker、cost-sync、cost-stop。视图（`cost_local_day` 到 `CostView`，
-//! _gui state 用）还没移植。
+//! 折合金额（`cost_model` 到 `CostView`）：cost-worker、cost-sync、cost-stop，和 _gui state 用的视图（`CostView`）。
 //!
 //! 这台设备上 Claude Code、Codex 的会话记录（共享的 ~/.claude/projects、~/.codex/sessions）里每一次请求的用量，按官方 API 的
 //! 标价折成美元，按登录的账号身份（Claude 的 accountUuid、Codex 的 chatgpt_user_id）、按小时累计。不是实际花费（订阅不按这个
@@ -19,7 +18,7 @@ use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, shar
 use super::presence::{presence_aid, presence_load, presence_post, presence_targets, presence_why, spawn_background};
 use super::session::{cli_alive, proc_starts};
 use super::codex::codex_claims;
-use super::usage::{parse_ts, WEEK, WEEKS_KEEP};
+use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
 use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, EMAIL_RE, MASTER_JSON};
 use crate::core::model::{cdir, is_api, parse_key};
@@ -29,7 +28,7 @@ use crate::py::hash::{sha1_hex, sha256_hex};
 use crate::py::obj::{Dict, List, V};
 use crate::py::proc::getenv;
 use crate::py::re::Re;
-use crate::py::time::{monotonic, sleep, time, timegm};
+use crate::py::time::{localtime, mktime, monotonic, sleep, strftime_local, time, timegm};
 use crate::py::{exit, json, num, path, shutil, text, zlib, Fail, R};
 use crate::{dict, list, out};
 use std::io::{BufRead, Read, Seek, SeekFrom};
@@ -38,7 +37,12 @@ use std::os::unix::io::AsRawFd;
 use std::sync::LazyLock;
 
 /// 这个模块移植好的子命令
-pub const CMDS: &[Cmd] = &[Cmd::all("cost-worker", cmd_cost_worker), Cmd::all("cost-sync", cmd_cost_sync), Cmd::all("cost-stop", cmd_cost_stop)];
+pub const CMDS: &[Cmd] = &[
+    Cmd::all("cost-worker", cmd_cost_worker),
+    Cmd::all("cost-sync", cmd_cost_sync),
+    Cmd::all("cost-stop", cmd_cost_stop),
+    Cmd::all("_cost-periods", cmd_cost_periods),
+];
 
 pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "cost"));
 /// 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing）
@@ -1514,5 +1518,589 @@ pub fn cmd_cost_stop(args: &[String]) -> R<()> {
         }
         sleep(0.1);
     }
+    Ok(())
+}
+
+// --- 折合金额的视图（_gui state 的 cost、cost_total，PROTOCOL 2.2）：只读 cost/ 里统计好的，按时段切、加起来 ---------------
+
+/// 7 个计数：金额（百万分之一美元）、请求数、输入、输出、缓存读、缓存写、其中没有标价的请求数。原来是 Python 的整数（不会溢出）：
+/// 一项最多 10^15，加起来用 i128
+type Counts = [i128; 7];
+/// {小时: 计数}
+type Hours = std::collections::BTreeMap<i64, Counts>;
+
+/// 一个时段：开始、结束（原来是什么数就是什么数：额度窗口给的整数、本地零点算出来的小数，输出时写法不一样）
+#[derive(Clone)]
+pub struct Period {
+    pub start: V,
+    pub end: V,
+    /// 按周的：calendar / quota；按天的：日期（2026-11-13）
+    pub tag: String,
+}
+
+impl Period {
+    fn s(&self) -> f64 {
+        self.start.as_pynum().unwrap_or(0.0)
+    }
+
+    fn e(&self) -> f64 {
+        self.end.as_pynum().unwrap_or(0.0)
+    }
+}
+
+/// t 那一天（本地时间）往后数 add 天的零点
+pub fn cost_local_day(t_: f64, add: i32) -> f64 {
+    let lt = localtime(t_);
+    mktime(lt.year, lt.mon, lt.mday + add, 0, 0, 0, -1)
+}
+
+/// 最近 COST_DAYS 个本地日历日：[(开始, 结束, 日期)]，最后一项是今天（夏令时的那天 23 或 25 小时）
+pub fn cost_days(now: f64) -> Vec<Period> {
+    let mut out = Vec::new();
+    for i in (0..COST_DAYS as i32).rev() {
+        let s = cost_local_day(now, -i);
+        out.push(Period { start: V::from(s), end: V::from(cost_local_day(now, -i + 1)), tag: strftime_local("%Y-%m-%d", s) });
+    }
+    out
+}
+
+/// 按周的时段：[(开始, 结束, basis)]，首尾相接，最后一项包含 now。有本周额度窗口（usage_weeks 的 weeks）的地方用它，
+/// 没有的时段按本地时间周一零点切；不到一天的零头并进前一项（没有前一项就并进后一项）。只留结束在最近 WEEKS_SHOW 周里的，最多 13 项
+pub fn cost_weeks(quota: Option<&V>, now: f64) -> Vec<Period> {
+    let lo = now - (WEEKS_SHOW * WEEK) as f64;
+    let mut t_ = V::from(cost_local_day(lo, -localtime(lo).wday));
+    let num_ = |v: &V| v.as_pynum().unwrap_or_else(|| panic!("TypeError: 时段的边界是 {}，不是数", v.py_repr()));
+    let mut out: Vec<Period> = Vec::new();
+    // 从 t 起按日历周补到 until：每项到下一个周一零点，cap 时不超过 until
+    let fill = |out: &mut Vec<Period>, t_: &mut V, until: &V, cap: bool| {
+        while num_(t_) < num_(until) {
+            let from = num_(t_);
+            let e = V::from(cost_local_day(from, 7 - localtime(from).wday)); // 下一个周一零点
+            let end = if cap && num_(until) < num_(&e) { until.clone() } else { e };
+            out.push(Period { start: t_.clone(), end: end.clone(), tag: "calendar".into() });
+            *t_ = end;
+        }
+    };
+    // for w in quota or []
+    let quota = match quota.filter(|q| q.truthy()) {
+        None => Vec::new(),
+        Some(V::List(q)) => q.items(),
+        Some(other) => panic!("TypeError: 额度窗口是 {}，不是列表", other.py_repr()),
+    };
+    for w in quota {
+        let w = w.as_dict().unwrap_or_else(|| panic!("TypeError: 额度窗口里的一项不是对象"));
+        let (ws, e) = (w.at("start_epoch"), w.at("end_epoch"));
+        // max(w['start_epoch'], t)：一样大时是前一个
+        let s = if num_(&t_) > num_(&ws) { t_.clone() } else { ws };
+        if num_(&e) - num_(&s) <= 0.0 {
+            continue;
+        }
+        fill(&mut out, &mut t_, &s, true);
+        out.push(Period { start: s, end: e.clone(), tag: "quota".into() });
+        t_ = e;
+    }
+    if num_(&t_) <= now {
+        fill(&mut out, &mut t_, &V::from(now + 1.0), false); // 最后一项是这一周（到下周一零点）
+    }
+    let mut i = 0;
+    while i < out.len() {
+        if out[i].e() - out[i].s() < 86400.0 && out.len() > 1 {
+            if i > 0 {
+                out[i - 1].end = out[i].end.clone();
+            } else {
+                out[1].start = out[0].start.clone();
+            }
+            out.remove(i);
+            continue;
+        }
+        i += 1;
+    }
+    let kept: Vec<Period> = out.into_iter().filter(|p| p.e() > lo).collect();
+    let skip = kept.len().saturating_sub(WEEKS_SHOW as usize + 1);
+    kept.into_iter().skip(skip).collect()
+}
+
+/// 小时数据按时段加起来：[[7 个计数]…]（和 periods 一一对应）；跨过边界的那个小时整个算在它的中点所在的时段
+fn cost_bin(periods: &[Period], h: &Hours) -> Vec<Counts> {
+    let mut out = vec![[0i128; 7]; periods.len()];
+    for (k, r) in h {
+        let mid = (*k + 1800) as f64;
+        // bisect.bisect_right(starts, mid) - 1：最后一个开始不晚于 mid 的时段
+        let after = periods.partition_point(|p| p.s() <= mid);
+        if after > 0 && mid < periods[after - 1].e() {
+            for x in 0..7 {
+                out[after - 1][x] += r[x];
+            }
+        }
+    }
+    out
+}
+
+/// 百万分之一美元 → 美元（PROTOCOL 里的小数）
+fn usd(m: i128) -> f64 {
+    num::round_to(m as f64 / 1e6, 4)
+}
+
+fn usd_opt(m: Option<i128>) -> V {
+    m.map_or(V::None, |m| V::from(usd(m)))
+}
+
+/// 一方（整个账号或者一台设备）的几项（百万分之一美元）
+#[derive(Clone)]
+struct Money {
+    weeks: i128,
+    current: i128,
+    days: i128,
+    today: i128,
+    average: Option<i128>,
+    average_day: Option<i128>,
+    day_list: Vec<i128>,
+}
+
+/// 一方（整个账号或者一台设备）加起来：(百万分之一美元的几项, PROTOCOL 2.2 的 summary)。wr、dr 是按周、按天的各项；good、
+/// good_days 是算平均的那几周（过完的、不是 partial、至少 6 天）、那几天（过完的、不是 partial）。一台设备的平均也按整个
+/// 账号的这几项算：各台设备的平均加起来就是整个账号的
+fn cost_summary(wr: &[Counts], dr: &[Counts], good: &[usize], good_days: &[usize]) -> (Money, Dict) {
+    let avg = |rows: &[Counts], sel: &[usize]| -> Option<i128> {
+        if sel.is_empty() {
+            return None;
+        }
+        Some(sel.iter().map(|n| rows[*n][0]).sum::<i128>().div_euclid(sel.len() as i128))
+    };
+    let m = Money {
+        weeks: wr.iter().map(|r| r[0]).sum(),
+        current: wr.last().expect("至少有这一周")[0],
+        days: dr.iter().map(|r| r[0]).sum(),
+        today: dr.last().expect("至少有今天")[0],
+        average: avg(wr, good),
+        average_day: avg(dr, good_days),
+        day_list: Vec::new(),
+    };
+    let summary = dict! {
+        "weeks_usd" => usd(m.weeks), "current_usd" => usd(m.current), "average_usd" => usd_opt(m.average), "average_weeks" => good.len(),
+        "days_usd" => usd(m.days), "today_usd" => usd(m.today), "average_day_usd" => usd_opt(m.average_day), "average_days" => good_days.len(),
+    };
+    (m, summary)
+}
+
+/// 计数写进 JSON：放得进 i64 的是整数（实际都是）
+fn count_v(n: i128) -> V {
+    match i64::try_from(n) {
+        Ok(n) => V::Int(n),
+        Err(_) => V::Big(n.to_string().into()),
+    }
+}
+
+/// PROTOCOL 2.2 的一项（weeks[]、days[]）：p 是时段，t 是这一项的 7 个计数，last 是还没过完的那一项
+fn cost_period_view(p: &Period, t_: &Counts, last: bool, since: f64) -> Dict {
+    dict! {
+        "start_epoch" => &p.start, "end_epoch" => &p.end, "current" => last, "partial" => since > p.s(),
+        "usd" => usd(t_[0]), "requests" => count_v(t_[1]), "unpriced_requests" => count_v(t_[6]),
+        "tokens" => dict! { "input" => count_v(t_[2]), "output" => count_v(t_[3]), "cache_read" => count_v(t_[4]), "cache_write" => count_v(t_[5]) },
+    }
+}
+
+/// 核对过的 {小时: [7 个计数]} → 按小时查的表
+fn hours_of(rows: &Dict) -> Hours {
+    let mut h = Hours::new();
+    for (k, r) in rows.items() {
+        let r = r.as_list().expect("cost_rows_ok 核对过");
+        let mut c = [0i128; 7];
+        for (x, slot) in c.iter_mut().enumerate() {
+            *slot = r.at(x as isize).as_int().unwrap_or(0) as i128;
+        }
+        h.insert(text::to_int(&k).unwrap_or(0), c);
+    }
+    h
+}
+
+/// 有数据的一台设备
+struct Device {
+    id: V,
+    name: String,
+    me: bool,
+    revoked: bool,
+    synced_epoch: V,
+    stale: bool,
+    h: Hours,
+}
+
+/// _gui state 里折合金额要的（一次读好）：这台设备统计的、别的设备同步来的、同步的状态，按天的时段
+pub struct CostView {
+    pub on: bool,
+    now: f64,
+    cfg: Option<Dict>,
+    presence_off: bool,
+    local: Dict,
+    remote: Dict,
+    sync: Dict,
+    days: Vec<Period>,
+    updated: Option<f64>,
+    me_name: String,
+    /// [(工具名, 整个账号的各项, 这台设备的各项)]（百万分之一美元）：cost_total 加起来
+    accounts: Vec<(&'static str, Option<Money>, Option<Money>)>,
+}
+
+impl CostView {
+    pub fn new(c: &Dict, now: f64, cfg: Option<&Dict>) -> CostView {
+        let is_false = |k: &str| matches!(c.get(k), Some(V::Bool(false)));
+        let sync = cost_json("sync.json");
+        // os.uname().nodename.split('.')[0] or 'Mac'
+        let host = {
+            // SAFETY: uts 是清零的可写内存；uname 成功时各项是以 0 结尾的字符串
+            let node = unsafe {
+                let mut uts: libc::utsname = std::mem::zeroed();
+                if libc::uname(&mut uts) == 0 {
+                    std::ffi::CStr::from_ptr(uts.nodename.as_ptr()).to_string_lossy().into_owned()
+                } else {
+                    String::new()
+                }
+            };
+            let short = node.split('.').next().unwrap_or("").to_string();
+            if short.is_empty() { "Mac".to_string() } else { short }
+        };
+        let cfg = cfg.filter(|c| !c.is_empty()).cloned();
+        let me_name = match sync.str("me").filter(|_| cfg.is_some()) {
+            Some(me) => me.to_string(),
+            None => host,
+        };
+        CostView {
+            on: !is_false("cost"),
+            now,
+            presence_off: is_false("presence"),
+            local: cost_json("local.json"),
+            remote: cost_json("remote.json"),
+            sync,
+            days: cost_days(now),
+            updated: cost_mtime("scanned"),
+            me_name,
+            cfg,
+            accounts: Vec::new(),
+        }
+    }
+
+    fn scan_state(&self) -> &'static str {
+        if self.updated.is_some_and(|u| u != 0.0) {
+            return "ready";
+        }
+        let j = cost_json("worker.json");
+        // isinstance(pid, int) and type(started) is int and cli_alive(…)
+        if let (Some(pid), Some(V::Int(started))) = (j.get("pid"), j.get("started")) {
+            match pid {
+                V::Int(pid) if cli_alive(pid, started, &proc_starts(&[pid])) => return "scanning",
+                V::Bool(true) if !cfg!(target_os = "linux") => {
+                    // 布尔值在 Python 里也算 int：True 当成进程号去问（ps 的参数写成 True，问不到）
+                    super::session::ps_lstart("True");
+                }
+                _ => {}
+            }
+        }
+        "never"
+    }
+
+    /// 账号的 sync（PROTOCOL 2.2）
+    fn sync_view(&self, slot: &str, mapped: bool, logged_in: bool) -> Dict {
+        let shared = self.cfg.is_some() && mapped;
+        // (self.sync.get('acc') or {}).get(slot)
+        let a = if shared {
+            match self.sync.get("acc").filter(|a| a.truthy()) {
+                None => None,
+                Some(V::Dict(acc)) => acc.dict(slot),
+                Some(other) => panic!("AttributeError: sync.json 的 acc 是 {}", other.py_repr()),
+            }
+        } else {
+            None
+        };
+        let a = a.unwrap_or_default();
+        let checked = a.get("checked").filter(is_num);
+        let gst = self.sync.get("state");
+        let gst = gst.as_ref().and_then(|g| g.as_str());
+        let mut msg = V::None;
+        let state = if self.presence_off {
+            "off"
+        } else if !shared {
+            "local_only"
+        } else if !logged_in {
+            "not_logged_in"
+        } else if gst == Some("old_server") {
+            msg = V::from(COST_OLD);
+            "old_server"
+        } else if gst == Some("error")
+            && (!checked.as_ref().is_some_and(|c| c.truthy())
+                || self.sync.get("at").filter(is_num).is_some_and(|at| at.as_num() > checked.as_ref().and_then(|c| c.as_num())))
+        {
+            msg = self.sync.get("error").filter(|e| e.is_str()).unwrap_or(V::None);
+            "error"
+        } else if checked.as_ref().is_some_and(|c| c.truthy()) {
+            "ok"
+        } else {
+            "pending"
+        };
+        let mut missing = Vec::new();
+        if state != "off" && state != "local_only" {
+            for m in a.list("missing").map(|m| m.items()).unwrap_or_default() {
+                let Some(m) = m.as_dict() else { continue };
+                let (Some(name), Some(used)) = (m.get("name").filter(|n| n.is_str()), m.get("used_epoch").filter(is_num)) else { continue };
+                if used.as_num().is_some_and(|u| u > self.now - (COST_DAYS * 86400) as f64) {
+                    missing.push(V::Dict(dict! { "name" => name, "used_epoch" => used }));
+                }
+            }
+        }
+        dict! { "state" => state, "message" => msg, "checked_epoch" => checked, "missing" => missing }
+    }
+
+    /// 有数据的设备，这台设备在最前。维护者撤销了 key、又有一台同名的（同一台换了 key）：并进那一台，它有数据以前的小时
+    /// 才用撤销的那份（不重复计）。第二个返回值：没有标价的模型（排好序）
+    fn devices(&self, tool: &Tool, email: &str, slot: &str, share: bool) -> (Vec<Device>, Vec<String>) {
+        let (h, mut ums) = cost_content(&self.local, tool, email);
+        let me_id = match &self.cfg {
+            Some(cfg) => cfg.at("fp"),
+            None => V::from("local"),
+        };
+        let mut devs = vec![Device { id: me_id, name: self.me_name.clone(), me: true, revoked: false, synced_epoch: V::from(self.updated), stale: false, h: hours_of(&h) }];
+        if share {
+            // ((self.remote.get('acc') or {}).get(slot) or {}).items()
+            let acc = match self.remote.get("acc").filter(|a| a.truthy()) {
+                None => None,
+                Some(V::Dict(acc)) => acc.get(slot).filter(|s| s.truthy()),
+                Some(other) => panic!("AttributeError: remote.json 的 acc 是 {}", other.py_repr()),
+            };
+            let entries = match acc {
+                None => Vec::new(),
+                Some(V::Dict(s)) => s.items(),
+                Some(other) => panic!("AttributeError: remote.json 里 {slot} 那一项是 {}", other.py_repr()),
+            };
+            for (fp, e) in entries {
+                let Some(e) = e.as_dict() else { continue };
+                let (Some(rows), Some(at), Some(name)) = (e.get("h").filter(|h| cost_rows_ok(Some(h))), e.get("at").filter(is_num), e.str("name")) else { continue };
+                devs.push(Device {
+                    id: V::from(fp),
+                    name: name.to_string(),
+                    me: false,
+                    revoked: matches!(e.get("revoked"), Some(V::Bool(true))),
+                    stale: self.now - at.as_num().unwrap_or(0.0) > COST_STALE,
+                    synced_epoch: at,
+                    h: hours_of(&rows.as_dict().expect("cost_rows_ok 核对过")),
+                });
+                // e.get('um') or []
+                let models = match e.get("um").filter(|u| u.truthy()) {
+                    None => Vec::new(),
+                    Some(V::List(u)) => u.items(),
+                    Some(V::Dict(u)) => u.keys().into_iter().map(V::from).collect(),
+                    Some(V::Str(u)) => u.chars().map(|ch| V::str(ch.to_string())).collect(),
+                    Some(other) => panic!("TypeError: remote.json 里的 um 是 {}", other.py_repr()),
+                };
+                for m in models {
+                    if let Some(m) = m.as_str().filter(|m| !ums.iter().any(|x| x == m)) {
+                        ums.push(m.to_string());
+                    }
+                }
+            }
+        }
+        // active = {d['name']: d for d in devs if not d['revoked']}：同名的后来的算数
+        let active_of = |devs: &[Device], name: &str| devs.iter().rposition(|d| !d.revoked && d.name == name);
+        let mut merged: Vec<bool> = vec![false; devs.len()];
+        for i in 0..devs.len() {
+            if !devs[i].revoked {
+                continue;
+            }
+            let Some(a) = active_of(&devs, &devs[i].name) else { continue };
+            merged[i] = true;
+            let first = devs[a].h.keys().next().copied();
+            let extra: Vec<(i64, Counts)> = devs[i].h.iter().filter(|(k, _)| first.is_none_or(|f| **k < f)).map(|(k, r)| (*k, *r)).collect();
+            for (k, r) in extra {
+                let b = devs[a].h.entry(k).or_insert([0; 7]);
+                for x in 0..7 {
+                    b[x] += r[x];
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for (i, d) in devs.into_iter().enumerate() {
+            if !merged[i] {
+                out.push(d);
+            }
+        }
+        ums.sort();
+        (out, ums)
+    }
+
+    /// 账号的 cost（PROTOCOL 2.2）；没有任何记录是 None。各项的百万分之一美元另记进 self.accounts（cost_total 用）
+    pub fn account(&mut self, tool: &'static Tool, k: &str, weeks_view: Option<&Dict>, mapped: bool, logged_in: bool) -> V {
+        let email = parse_key(k).1.to_lowercase();
+        if email.is_empty() {
+            return V::None;
+        }
+        let slot = format!("{}:{}", tool.name, email);
+        let sync = self.sync_view(&slot, mapped, logged_in);
+        let share = !matches!(sync.at("state").as_str(), Some("off") | Some("local_only"));
+        let (devs, ums) = self.devices(tool, &email, &slot, share);
+        let quota = weeks_view.filter(|w| !w.is_empty()).map(|w| w.at("weeks"));
+        let weeks = cost_weeks(quota.as_ref(), self.now);
+        let wk: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&weeks, &d.h)).collect();
+        let dy: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&self.days, &d.h)).collect();
+        let requests = |rows: &[Counts]| rows.iter().map(|r| r[1]).sum::<i128>();
+        let keep: Vec<usize> = (0..devs.len()).filter(|i| requests(&wk[*i]) != 0 || requests(&dy[*i]) != 0).collect();
+        if keep.is_empty() {
+            self.accounts.push((tool.name, None, None));
+            return V::None;
+        }
+        // keep 里的设备都有数据
+        let since = keep.iter().filter_map(|i| devs[*i].h.keys().next()).min().copied().expect("keep 里的设备都有数据") as f64;
+        let good: Vec<usize> = weeks.iter().enumerate().filter(|(_, p)| p.e() <= self.now && since <= p.s() && p.e() - p.s() >= 6.0 * 86400.0).map(|(n, _)| n).collect();
+        let good_days: Vec<usize> = self.days.iter().enumerate().filter(|(_, p)| p.e() <= self.now && since <= p.s()).map(|(n, _)| n).collect();
+        let total = |rows: &[Vec<Counts>], count: usize| -> Vec<Counts> {
+            (0..count)
+                .map(|n| {
+                    let mut c = [0i128; 7];
+                    for i in &keep {
+                        for x in 0..7 {
+                            c[x] += rows[*i][n][x];
+                        }
+                    }
+                    c
+                })
+                .collect()
+        };
+        let (wsum, dsum) = (total(&wk, weeks.len()), total(&dy, self.days.len()));
+        let (mut m, summary) = cost_summary(&wsum, &dsum, &good, &good_days);
+        summary.set("requests", count_v(wsum.iter().map(|r| r[1]).sum()));
+        summary.set("unpriced_requests", count_v(wsum.iter().map(|r| r[6]).sum()));
+        m.day_list = dsum.iter().map(|r| r[0]).collect();
+        let parts: Vec<(usize, Money, Dict)> = keep
+            .iter()
+            .map(|i| {
+                let (pm, ps) = cost_summary(&wk[*i], &dy[*i], &good, &good_days);
+                (*i, pm, ps)
+            })
+            .collect();
+        // 这台设备的那一份（cost_total 的 me 加起来）；这台设备没有这个账号的记录时没有
+        let mine = parts.iter().find(|(i, _, _)| devs[*i].me).map(|(i, pm, _)| {
+            let mut pm = pm.clone();
+            pm.day_list = dy[*i].iter().map(|r| r[0]).collect();
+            pm
+        });
+        self.accounts.push((tool.name, Some(m), mine));
+        let mut devices: Vec<Dict> = parts
+            .iter()
+            .map(|(i, _, ps)| {
+                let d = &devs[*i];
+                dict! {
+                    "id" => &d.id, "name" => d.name.as_str(), "me" => d.me, "revoked" => d.revoked, "synced_epoch" => &d.synced_epoch, "stale" => d.stale,
+                    "weeks_usd" => wk[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
+                    "days_usd" => dy[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
+                    "summary" => ps,
+                }
+            })
+            .collect();
+        // 这台设备在前，别的按最近 30 天的多少
+        devices.sort_by(|a, b| {
+            let key = |d: &Dict| (!d.truthy("me"), -d.dict("summary").expect("刚建的").at("days_usd").as_num().unwrap_or(0.0));
+            let (ka, kb) = (key(a), key(b));
+            ka.0.cmp(&kb.0).then(ka.1.partial_cmp(&kb.1).unwrap_or(std::cmp::Ordering::Equal)).then_with(|| a.at("name").py_str().cmp(&b.at("name").py_str()))
+        });
+        let weeks_out: Vec<V> = weeks
+            .iter()
+            .enumerate()
+            .map(|(n, p)| {
+                let d = cost_period_view(p, &wsum[n], n == weeks.len() - 1, since);
+                d.set("basis", p.tag.as_str());
+                V::Dict(d)
+            })
+            .collect();
+        let days_out: Vec<V> = self
+            .days
+            .iter()
+            .enumerate()
+            .map(|(n, p)| {
+                let d = cost_period_view(p, &dsum[n], n == self.days.len() - 1, since);
+                d.set("date", p.tag.as_str());
+                V::Dict(d)
+            })
+            .collect();
+        V::Dict(dict! {
+            "currency" => "USD", "prices_date" => COST_PRICES_DATE, "since_epoch" => since, "weeks" => weeks_out, "days" => days_out,
+            "summary" => summary, "devices" => devices.into_iter().map(V::Dict).collect::<Vec<V>>(),
+            "unpriced_models" => ums.iter().map(|m| V::from(m.as_str())).collect::<Vec<V>>(), "sync" => sync,
+        })
+    }
+
+    /// 顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None。
+    /// 顶层是各账号（所有设备）加起来的，me 是各账号里这台设备的那一份加起来的
+    pub fn total(&self, tools: &[&str]) -> V {
+        if !self.on || self.accounts.is_empty() {
+            return V::None;
+        }
+        let agg = |sel: &[&Money]| -> Dict {
+            let avg: Vec<i128> = sel.iter().filter_map(|m| m.average).collect();
+            let avd: Vec<i128> = sel.iter().filter_map(|m| m.average_day).collect();
+            dict! {
+                "current_usd" => usd(sel.iter().map(|m| m.current).sum()), "weeks_usd" => usd(sel.iter().map(|m| m.weeks).sum()),
+                "average_usd" => if avg.is_empty() { V::None } else { V::from(usd(avg.iter().sum())) },
+                "average_day_usd" => if avd.is_empty() { V::None } else { V::from(usd(avd.iter().sum())) },
+                "days_usd" => usd(sel.iter().map(|m| m.days).sum()), "today_usd" => usd(sel.iter().map(|m| m.today).sum()),
+            }
+        };
+        // ms 是 [(工具名, 各项)]：几项统计、30 天每天、按工具分开
+        let part = |ms: &[(&'static str, &Money)]| -> Dict {
+            let all: Vec<&Money> = ms.iter().map(|(_, m)| *m).collect();
+            let out = agg(&all);
+            let days: Vec<V> = self
+                .days
+                .iter()
+                .enumerate()
+                .map(|(n, p)| {
+                    V::Dict(dict! {
+                        "start_epoch" => &p.start, "end_epoch" => &p.end, "date" => p.tag.as_str(), "current" => n == self.days.len() - 1,
+                        "usd" => usd(ms.iter().map(|(_, m)| m.day_list[n]).sum()),
+                    })
+                })
+                .collect();
+            out.set("days", days);
+            let by_tool = Dict::new();
+            for tool in tools.iter().filter(|x| **x == "claude" || **x == "codex") {
+                let sel: Vec<&Money> = ms.iter().filter(|(x, _)| x == tool).map(|(_, m)| *m).collect();
+                by_tool.set(*tool, agg(&sel));
+            }
+            out.set("by_tool", by_tool);
+            out
+        };
+        let lo = self.days[0].s();
+        // (self.local.get('orphan') or {}).items()
+        let orphan_rows = match self.local.get("orphan").filter(|o| o.truthy()) {
+            None => Vec::new(),
+            Some(V::Dict(o)) => o.items(),
+            Some(other) => panic!("AttributeError: local.json 的 orphan 是 {}", other.py_repr()),
+        };
+        let (mut orphan_micro, mut orphan_requests) = (0i128, 0i128);
+        for (k, r) in orphan_rows {
+            let ints = r.as_list().filter(|r| r.len() == 7 && r.items().iter().all(is_int));
+            let Some(r) = ints.filter(|_| COST_HOUR_RE.matches(&k) && hour_of(&k) + 1800.0 >= lo) else { continue };
+            orphan_micro += r.at(0).as_int().unwrap_or(0) as i128;
+            orphan_requests += r.at(1).as_int().unwrap_or(0) as i128;
+        }
+        let whole: Vec<(&'static str, &Money)> = self.accounts.iter().filter_map(|(t_, m, _)| m.as_ref().map(|m| (*t_, m))).collect();
+        let mine: Vec<(&'static str, &Money)> = self.accounts.iter().filter_map(|(t_, _, m)| m.as_ref().map(|m| (*t_, m))).collect();
+        let out = part(&whole);
+        out.set("currency", "USD");
+        out.set("prices_date", COST_PRICES_DATE);
+        out.set("me", part(&mine));
+        out.set("scan", dict! { "state" => self.scan_state(), "updated_epoch" => self.updated });
+        out.set("unattributed", dict! { "days_usd" => usd(orphan_micro), "requests" => count_v(orphan_requests) });
+        V::Dict(out)
+    }
+}
+
+/// 只给对拍用（`_cost-periods <现在> [额度窗口的 JSON]`）：打印 cost_days、cost_weeks 切出来的时段。这两个函数靠本地时区、
+/// 夏令时，拿固定的“现在”在几个时区下和原来的 Python 逐字比（cases/cost.py 的 periods 一组）
+pub fn cmd_cost_periods(args: &[String]) -> R<()> {
+    arity("cmd_cost_periods", args, 1, 2)?;
+    let now = text::to_float(&args[0]).ok_or_else(|| Fail::Value("现在要是一个数".into()))?;
+    let quota = match args.get(1) {
+        Some(q) => Some(json::loads(q)?),
+        None => None,
+    };
+    let rows = |ps: Vec<Period>| -> Vec<V> { ps.into_iter().map(|p| V::List(List::from_vec(vec![p.start, p.end, V::from(p.tag)]))).collect() };
+    out!("{}", json::dumps(&V::Dict(dict! { "days" => rows(cost_days(now)), "weeks" => rows(cost_weeks(quota.as_ref(), now)) }), json::LINE));
     Ok(())
 }
