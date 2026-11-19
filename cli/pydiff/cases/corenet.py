@@ -1758,29 +1758,60 @@ def Box_cfg(box, data):
 
 
 # ---- udp_leak_hint：WebRTC 直连风险那一句后面的补充（用着内置代理时）---------------------------------------------------------
-# 它是经 leak-verdict 说出来的。cli/src/cmd/leak.rs 里现在放的是等这一块的替身（用着内置代理时 unimplemented!），换成
-# cmd::corenet::udp_leak_hint 以后把下面这个开关去掉：这几条就是那一半的对拍。移植时临时把 leak.rs 接到 corenet 上跑过，都一样。
-if os.environ.get('CCA_PYDIFF_UDP_HINT') == '1':
-    from cases.leak import EXIT_IP, KEY, probe_file
+# 它是经 leak-verdict 说出来的（cli/src/cmd/leak.rs 调 cmd::corenet::udp_leak_hint）
+from cases.leak import EXIT_IP, KEY, probe_file
 
-    def hint(name, local, tool='claude', installed=None, defs=U_DEFS):
-        @case('leak-verdict/udp-hint-' + name, ['leak-verdict', 'probe.json', KEY, EXIT_IP, 'US', 'detail'], env=ENV, mask=LEAK_MASK, tool=tool)
-        def _(b):
-            leak_net(b, geoip={SEEN2: where('cn', 'Example CN')}, cfg={'version': 2, 'nodes': U_NODES, 'local': local})
-            net(b)
-            if defs is not None:
-                cache(b, defs, nodes=U_NODES)
-            if installed:
-                install_udp(b, installed)
-            probe_file(b, {'stun': {'ips': [SEEN2]}})
+def hint(name, local, tool='claude', installed=None, defs=U_DEFS):
+    @case('leak-verdict/udp-hint-' + name, ['leak-verdict', 'probe.json', KEY, EXIT_IP, 'US', 'detail'], env=ENV, mask=LEAK_MASK, tool=tool)
+    def _(b):
+        leak_net(b, geoip={SEEN2: where('cn', 'Example CN')}, cfg={'version': 2, 'nodes': U_NODES, 'local': local})
+        net(b)
+        if defs is not None:
+            cache(b, defs, nodes=U_NODES)
+        if installed:
+            install_udp(b, installed)
+        probe_file(b, {'stun': {'ips': [SEEN2]}})
 
-    hint('off', dict(BUILTIN))
-    hint('off-codex', dict(BUILTIN), tool='codex')
-    hint('ok', dict(BUILTIN, udp='US-A'), installed='US-A')
-    hint('missing', dict(BUILTIN, udp='US-A'))
-    hint('stale', dict(BUILTIN, udp='US-A'), installed='HK-A')
-    hint('undefined', dict(BUILTIN, udp='US-B'))
-    hint('undefined-no-defs', dict(BUILTIN, udp='US-A'), defs=None)
-    hint('udp-not-text', dict(BUILTIN, udp=5))
-    hint('udp-empty', dict(BUILTIN, udp=''))
-    hint('odd-name', dict(BUILTIN, udp='节点 "A"'), defs=[dict(U_VLESS, name='节点 "A"')])
+hint('off', dict(BUILTIN))
+hint('off-codex', dict(BUILTIN), tool='codex')
+hint('ok', dict(BUILTIN, udp='US-A'), installed='US-A')
+hint('missing', dict(BUILTIN, udp='US-A'))
+hint('stale', dict(BUILTIN, udp='US-A'), installed='HK-A')
+hint('undefined', dict(BUILTIN, udp='US-B'))
+hint('undefined-no-defs', dict(BUILTIN, udp='US-A'), defs=None)
+hint('udp-not-text', dict(BUILTIN, udp=5))
+hint('udp-empty', dict(BUILTIN, udp=''))
+hint('odd-name', dict(BUILTIN, udp='节点 "A"'), defs=[dict(U_VLESS, name='节点 "A"')])
+
+
+# ---- file-replace：把一个文件的内容原子地换进另一个（保留权限），再删掉来源。原来的 CMDS 里有、现在没人调 -----------------------
+for name, src, dst, mode in [
+    ('plain', '新的内容\n第二行\n', '旧的\n', 0o600), ('keeps-mode-644', 'new\n', 'old\n', 0o644), ('keeps-mode-755', '#!/bin/sh\necho hi\n', '#!/bin/sh\n', 0o755),
+    ('dst-missing', 'new\n', None, None), ('crlf-kept', 'a\r\nb\rc\n', 'old', 0o600), ('empty', '', 'old', 0o640), ('no-final-newline', 'x', 'old\n', 0o600),
+    ('not-utf8', b'caf\xe9\n', 'old\n', 0o600), ('bom', '﻿x\n', 'old\n', 0o600), ('src-missing', None, 'old\n', 0o600),
+]:
+    @case('file-replace/' + name, ['file-replace', '%HOME%/src.txt', '%HOME%/dst.txt'])
+    def _(b, src=src, dst=dst, mode=mode):
+        if src is not None:
+            b.write('src.txt', src, 0o640)
+        if dst is not None:
+            b.write('dst.txt', dst, mode)
+
+
+@case('file-replace/dst-is-a-link', ['file-replace', '%HOME%/src.txt', '%HOME%/dst.txt'])   # 链接本身被换成普通文件，指向的文件不动
+def _(b):
+    b.write('src.txt', 'new\n')
+    b.write('real.txt', 'real\n', 0o640)
+    os.symlink(b.path('real.txt'), b.path('dst.txt'))
+
+
+@case('file-replace/src-is-a-directory', ['file-replace', '%HOME%/src', '%HOME%/dst.txt'])
+def _(b):
+    os.makedirs(b.path('src'))
+    b.write('dst.txt', 'old\n')
+
+
+for name, argv in [('no-args', ['file-replace']), ('one-arg', ['file-replace', 'a']), ('three-args', ['file-replace', 'a', 'b', 'c'])]:
+    @case('file-replace/' + name, argv)
+    def _(b):
+        pass

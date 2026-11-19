@@ -75,6 +75,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("udp-build", cmd_udp_build),
     Cmd::all("udp-probe", cmd_udp_probe),
     Cmd::all("core-keep", cmd_core_keep),
+    Cmd::all("file-replace", cmd_file_replace),
 ];
 
 // --- 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，界面 App 托管的 mihomo 内核（bash 的"内置代理"一节） ----------------
@@ -961,7 +962,21 @@ pub fn cmd_install_node(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 原子替换文本文件，保留原来的权限（客户端随时可能来读）。现在只有 file-replace 用它（那个子命令没有调用方，没移植）
+/// 把 src 的内容原子地换进 dst（保留 dst 的权限），然后删掉 src。（现在的 bash 不调它了；留着是因为原来的 CMDS 里有）
+pub fn cmd_file_replace(args: &[String]) -> R<()> {
+    arity("cmd_file_replace", args, 2, 2)?;
+    // open(src, encoding="utf-8", newline="")：换行原样，不是 UTF-8 是没人接的 UnicodeDecodeError
+    let raw = std::fs::read(&args[0])?;
+    let content = match std::str::from_utf8(&raw) {
+        Ok(content) => content,
+        Err(e) => return Err(crate::py::Fail::Value(crate::py::json::utf8_error_text(&raw, &e))),
+    };
+    write_text(&args[1], content)?;
+    std::fs::remove_file(&args[0])?;
+    Ok(())
+}
+
+/// 原子替换文本文件，保留原来的权限（客户端随时可能来读）。现在只有 file-replace 用它
 pub fn write_text(p: &str, content: &str) -> R<()> {
     let mode = match fs::mode_of(p) {
         Ok(mode) => mode,

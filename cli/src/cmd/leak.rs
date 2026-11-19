@@ -444,34 +444,6 @@ fn region_code(cc: Option<V>) -> bool {
     }
 }
 
-/// corenet 的 `udp_leak_hint`（WebRTC 直连风险的补充：这台 Mac 用内置代理时，怎么让它自己的 UDP 也经节点出去）。
-/// corenet 还没移植。它开头的两条不靠 corenet——不是 macOS、没用内置代理都是空串——照原样写在这里，这样不用内置代理的
-/// 机器上 WebRTC 直连风险那一句现在就是对的；用着内置代理时要看本机 UDP 走节点的状态，那一半等 corenet。
-/// corenet 移植后，这个函数整个换成它的 `udp_leak_hint`
-fn udp_leak_hint() -> String {
-    if !cfg!(target_os = "macos") {
-        return String::new();
-    }
-    let Some(V::Dict(c)) = load_quiet(&CFG) else {
-        return String::new();
-    };
-    // (c.get('local') or {}).get('client') != 'builtin'
-    let client = match c.get("local") {
-        Some(V::Dict(local)) => local.get("client"),
-        Some(v) if v.truthy() => panic!("AttributeError: '{}' object has no attribute 'get'", type_name(&v)),
-        _ => None,
-    };
-    if !matches!(client, Some(V::Str(s)) if &*s == "builtin") {
-        return String::new();
-    }
-    udp_leak_hint_builtin()
-}
-
-/// 用着内置代理时的那一半：要 `udp_state`（本机 UDP 走节点设了没有、起没起作用），在 corenet 里
-fn udp_leak_hint_builtin() -> String {
-    unimplemented!("用着内置代理时 WebRTC 直连风险后面的那句补充（corenet：udp_leak_hint）")
-}
-
 /// 汇总 leak-probe 的结果（exit_ip / exit_cc 是这次出口检测拿到的）：第一行是给横幅的一句话，每个泄露再一行
 /// W<TAB>dns|webrtc<TAB>说明，只作提醒的一行 N<TAB>webrtc<TAB>说明，最后是机器看的状态 S<TAB>dns|webrtc<TAB>ok|leak|note|failed
 /// （出口检测结果里记下，见 health-save；leak_finish 只认 W、N、S 行）；把新结果写进缓存。detail（cca check）时一句话里多写点。
@@ -585,7 +557,7 @@ pub fn cmd_leak_verdict(args: &[String]) -> R<()> {
                      尚未验证浏览器或 {} 是否会暴露该 IP；应在实际客户端验证 WebRTC 路由，并限制绕过账号代理的 UDP 流量{}",
                     at,
                     t().app_label,
-                    udp_leak_hint()
+                    crate::cmd::corenet::udp_leak_hint()
                 ),
             ));
         } else if leaked.iter().all(|ip| region_code(cc_of(ip))) {

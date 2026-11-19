@@ -8,6 +8,7 @@
 //! 从私有的临时目录拷过去、按摘要逐个核对后才换上：普通用户的进程改不了它跑什么，只能开关
 
 use super::{client_builtin, core_defs, core_pick, def_name, install_names, install_resolve, sect, type_name};
+use crate::cmd::dock::home_swapped;
 use crate::cmd::leak::{geo_fresh, ip_prefix, leak_cache, leak_geo, leak_where, stun_ips};
 use crate::cmd::session::gui_procs;
 use crate::cmd::{arg, arity};
@@ -41,15 +42,6 @@ const UDP_EXCLUDE: &[&str] = &[
 const UDP_DIRECT_PROCS: &str = "^(zerotier-one|tailscaled|mihomo.*|verge-mihomo.*)$";
 /// 不写 udp: true 也转发 UDP 的节点类型
 const UDP_ALWAYS: &[&str] = &["hysteria", "hysteria2", "tuic", "wireguard"];
-
-/// HOME 换过、不是这个用户真正的主目录（测试的沙箱；认不出也算）：只给测试的开关只在这时才认，测试也碰不到用户真正的设置。
-/// 原来在程序坞那一节（`cmd/dock.rs` 还没移植），先放一份在这里
-fn home_swapped() -> bool {
-    match path::home_from_passwd() {
-        Some(real) => path::realpath(&path::expanduser("~")) != path::realpath(&real),
-        None => true,
-    }
-}
 
 /// root 那边的位置：(目录, launchd 配置, 日志, 文件的属主)。测试的沙箱（home_swapped）里换进沙箱，碰不到真的 /Library
 pub fn udp_paths() -> (String, String, String, String) {
