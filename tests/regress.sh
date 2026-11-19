@@ -640,7 +640,7 @@ ok "名字和服务器地址都变了（认不出）、非交互：说明哪个�
 # 在真的终端里（pty，不设 CCA_TTY）："换成哪个节点"和"现在重载吗"都要问得出来
 rm -f "$T/pty.done"
 { printf '%s\n' 3 y; for i in $(seq 1 300); do [ -f "$T/pty.done" ] && break; sleep 0.1; done; } |
-	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
+	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
 	PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; touch "$CCA_T/pty.done"' >/dev/null 2>&1
 ok "认不出、在真的终端里：列出路由器上的节点让用户选一个代替（选 US-C9），账号表跟着改，问过之后重载，照常启动" '[ -f "$T/pty.done" ] && grep -q "3\. US-C9" "$T/pty.log" && grep -q "「US-C」换成了「US-C9」" "$T/pty.log" && grep -q "现在重载吗" "$T/pty.log" && tblok "t[\"alice@example.com\"] == \"US-C9\"" && [ "$(sel CCA-1)" = US-C9 ]'
 ok "用户自己选的代替节点不算改名（维护者的映射里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
@@ -1190,7 +1190,7 @@ fi
 if sect 10e; then
 # 10e. 不用路由器、只用直连的第三方 API 账号
 H4="$T/home4"; mkdir -p "$H4/.claude"
-r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_HELPER="$HELPERWRAP" PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 r4 CCA_TTY="$(ans n n)" bash "$CCA" install >/dev/null 2>&1
 out=$(r4 CCA_TTY="$(ans solo https://api.example.com/anthropic "$S1" '')" cca add api 2>&1); rc=$?
 out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
@@ -2254,6 +2254,15 @@ PY
 }
 ld=$(lint_dollar)
 ok "lint：cca、install.sh、release.sh、policy.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
+lint_helper_env() {   # 回归里自己拼环境运行 cca 的地方（不经 run 的那几处）都要带着 CCA_HELPER="$HELPERWRAP"：不带的话那一处用的是
+	# 仓库里 cli/target/release 下的那一份，release.sh 跑回归时（CCA_HELPER 指着要发布的那一份）它可能是以前编的、甚至没有。
+	# 运行 policy.sh 的那一处不算（它不运行 cca）
+	local bad
+	bad=$(grep -n 'env -i ' "$D/regress.sh" | grep -v 'CCA_HELPER=' | grep -v 'bash "\$PS"' | cut -d: -f1 | tr '\n' ' ')
+	[ -z "$bad" ] && echo ok || echo "：第 ${bad}行"
+}
+lh=$(lint_helper_env)
+ok "lint：回归里自己拼环境运行 cca 的地方都带着 CCA_HELPER（release.sh 跑回归时，整套用的才都是要发布的那一份辅助程序）${lh#ok}" '[ "$lh" = ok ]'
 out=$(run cca router status 2>&1)
 ok "router status：列出槽位、端口和选中节点" 'printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-A" && printf "%s" "$out" | grep -q "槽位 CCA-2 :7902 监听中 → REJECT"'
 
@@ -3607,7 +3616,7 @@ if sect 11b6; then
 #       经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。直连通的照旧问路由器。这一节结束时映射仓库、假命令都还原
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
-rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 scfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$SH/.cca/config.json" "$1"; }   # 服务器那边的 config.json（c）
 spub() { cat "$SH/.cca/policy/id_ed25519.pub"; }
 cp "$PR/policy.json" "$T/pr.srv"; rm -f "$T/pr.srv.sig"; [ ! -f "$PR/policy.json.sig" ] || cp "$PR/policy.json.sig" "$T/pr.srv.sig"
@@ -3650,7 +3659,7 @@ if sect 11c; then
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3" "$T/tmp3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
-r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_HELPER="$HELPERWRAP" SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射；仓库不是默认的那个时，给维护者的命令带上 -R" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射" && printf "%s" "$out" | grep -q "    ./policy.sh key add -R example/cca-policy '\''ssh-ed25519 AAAA[^ ]* cca-policy@[^ ]*'\'' [^ ]*$"'
