@@ -20,7 +20,13 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
-        ReleaseNote(version: "3.4.0", title: "cca 3.4 正式版：配置向导三步走，这台 Mac 的 UDP 也能经节点出去", points: [
+        ReleaseNote(version: "3.4.1", title: "不再用内置代理时，开机自动启动它的那一行一起删掉", points: [
+            .init(symbol: "trash",
+                  text: "macOS 26 以下由 cca 在后台运行内置代理时，cca local off、cca restore 也会删掉 crontab 里开机自动启动内核的那一行（以前只在 Linux 上删）。"),
+            .init(symbol: "text.bubble",
+                  text: "用不了内置代理时，添加自定义节点的提示照实说是内核没有这台机器的架构，不再说要 macOS 26。"),
+        ]),
+        ReleaseNote(version: "3.4.0",title: "cca 3.4 正式版：配置向导三步走，这台 Mac 的 UDP 也能经节点出去", points: [
             .init(symbol: "list.number",
                   text: "配置向导三步走：连上维护者的映射、选这台 Mac 怎么联网、添加账号，配好的步骤自动跳过；添加账号不再要求先配置路由器。"),
             .init(symbol: "antenna.radiowaves.left.and.right",
