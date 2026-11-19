@@ -7,8 +7,6 @@
 这里验证 cca 的偏好清理和启动参数对受控 ICE 的效果，不验证硬件指纹，
 也不覆盖企业策略、已安装扩展或浏览器的其他网络通道。不会保存候选 IP。
 """
-import base64
-import gzip
 import http.server
 import json
 import os
@@ -24,10 +22,10 @@ import threading
 import unittest
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helper_bin import HELPER   # cca 的辅助程序（cli/）：先 cd cli && cargo build --release
+
 SCRIPT = (Path(__file__).resolve().parents[1] / 'cca').read_text()
-SOURCE = SCRIPT.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
-PY_BOOT = SCRIPT.split("PY_BOOT='", 1)[1].split("'\n", 1)[0]
-SOURCE_PACKED = base64.b64encode(gzip.compress(SOURCE.encode(), mtime=0)).decode()
 CHROME_OPEN = re.search(r'^chrome_open_url\(\) \{\n.*?^\}', SCRIPT, re.M | re.S).group()
 CHROME = os.environ.get('CCA_TEST_CHROME_BIN', '')
 ACCOUNT = 'native-browser@example.com'
@@ -147,7 +145,7 @@ class NativeChromeIsolation(unittest.TestCase):
 
     def helper(self, tool, *args):
         result = subprocess.run(
-            [sys.executable, '-I', '-X', 'utf8', '-c', PY_BOOT, '', SOURCE_PACKED, *args],
+            [HELPER, *args],
             env=dict(self.env, CCA_TOOL=tool), capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
