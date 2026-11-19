@@ -58,7 +58,7 @@ python3 -I pydiff/run.py [-k 名字] [-v] [-s] [-t]                    # 对拍�
 
 只用这几个常见的纯 Rust 库，加新的之前先问维护者：`libc`、`regex`（关掉了用不着的特性）、`sha1`、`sha2`、`miniz_oxide`（zlib：折合金额和别的设备交换的那一份是压缩的）、`unicode-normalization`；只有 macOS 的构建带 `rustls` + `ring`（邮箱助手连 Gmail 的 IMAP；证书照系统的 `/etc/ssl/cert.pem` 验）。HTTP 一律经 `curl`（和原来一样），不带 HTTP 库。JSON、属性列表、TOML、YAML 的一小部分、base64、URL、IP 地址都是 `cli/src/py/` 里自己照 CPython 写的（有对照数据）。
 
-发布的四份辅助程序各 4～5 MB（`opt-level = 2`、整体 LTO、`panic = "abort"`、去掉符号；macOS 的两份带 TLS，大一些）；接上以后发布的 `cca` 约 12 MB（原来 0.9 MB），大小由 `release.sh` 打出来。`release.sh` 编的时候带 `--remap-path-prefix`，程序里不留编译机器的路径。
+发布的四份辅助程序：`aarch64-apple-darwin` 4.7 MB、`x86_64-apple-darwin` 5.6 MB、`x86_64-unknown-linux-musl` 5.3 MB、`aarch64-unknown-linux-musl` 4.1 MB（`opt-level = 2`、整体 LTO、`panic = "abort"`、去掉符号；macOS 的两份带 TLS）；接上以后发布的 `cca` 约 13 MB（原来 0.9 MB），大小由 `release.sh` 打出来。试过的减小体积的办法（没采用，要先整套验证）：依赖库按体积优化（`[profile.release.package.<库>] opt-level = "s"`）再去掉 `regex` 的 `perf` 特性，一份少 11%（4680 → 4179 KB），一次调用的用时没有变化；连自己的代码也按体积优化是少 24%。`release.sh` 编的时候带 `--remap-path-prefix`，程序里不留编译机器的路径。
 
 ## 测试
 
