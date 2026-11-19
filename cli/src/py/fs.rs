@@ -32,6 +32,11 @@ pub fn load_json(p: &str) -> R<Option<V>> {
     }
 }
 
+/// `open(path)` 失败时 `str(e)` 的样子：`[Errno 2] No such file or directory: '/路径'`（带着文件名的 repr）
+pub fn open_error_text(e: &io::Error, p: &str) -> String {
+    format!("{}: {}", crate::py::fail::os_error_text(e), crate::py::obj::repr_str(p))
+}
+
 /// `load_quiet(path)`：读不了、格式不对都当作没有（缓存之类，不值得为它报错退出）
 pub fn load_quiet(p: &str) -> Option<V> {
     json::loads_file_bytes(&fs::read(p).ok()?).ok()
