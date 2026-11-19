@@ -11,6 +11,7 @@
 //! 替换时和 Python 还有一处不同：能匹配空串的正则，紧挨着上一个匹配的那个空匹配 `regex` 不算，原来的代码没有靠它的。
 
 use regex::{Captures, Regex};
+use std::sync::OnceLock;
 
 pub const I: u32 = 1;
 pub const M: u32 = 2;
@@ -22,12 +23,15 @@ const PY_SPACE: &str = r"\t\n\x0b\x0c\r\x1c-\x1f \x85\xa0  -     �
 const PY_WORD: &str = r"\p{L}\p{N}_";
 
 pub struct Re {
+    /// 翻译好的正则（带着开头的标志）；三种匹配方式各自第一次用到时才编译，多数正则只用得到一种
+    prefix: String,
+    body: String,
     /// 哪里都能匹配（`re.search`）
-    any: Regex,
+    any: OnceLock<Regex>,
     /// 只从开头匹配（`re.match`）
-    head: Regex,
+    head: OnceLock<Regex>,
     /// 开头到结尾（`re.fullmatch`）
-    full: Regex,
+    full: OnceLock<Regex>,
     /// 正则里有不带 `re.M` 的 `$`：文字以换行结尾时，去掉这个换行再试一次
     dollar: bool,
 }
@@ -85,18 +89,26 @@ impl Re {
             }
         }
         let prefix = if prefix.is_empty() { String::new() } else { format!("(?{prefix})") };
-        let build = |p: String| {
-            regex::RegexBuilder::new(&p)
-                .size_limit(64 << 20)
-                .build()
-                .unwrap_or_else(|e| panic!("正则 {pattern:?} 翻译成 {p:?} 后编译不了：{e}"))
-        };
-        Re {
-            any: build(format!("{prefix}{body}")),
-            head: build(format!(r"{prefix}\A(?:{body})")),
-            full: build(format!(r"{prefix}\A(?:{body})\z")),
-            dollar,
-        }
+        let re = Re { prefix, body, any: OnceLock::new(), head: OnceLock::new(), full: OnceLock::new(), dollar };
+        #[cfg(debug_assertions)]
+        re.any(); // 调试版里当场编译一次：写错的正则不用等到用到它的那条路才发现
+        re
+    }
+
+    fn build(&self, p: String) -> Regex {
+        regex::RegexBuilder::new(&p).size_limit(64 << 20).build().unwrap_or_else(|e| panic!("正则 {:?} 翻译成 {p:?} 后编译不了：{e}", self.body))
+    }
+
+    fn any(&self) -> &Regex {
+        self.any.get_or_init(|| self.build(format!("{}{}", self.prefix, self.body)))
+    }
+
+    fn head(&self) -> &Regex {
+        self.head.get_or_init(|| self.build(format!(r"{}\A(?:{})", self.prefix, self.body)))
+    }
+
+    fn full(&self) -> &Regex {
+        self.full.get_or_init(|| self.build(format!(r"{}\A(?:{})\z", self.prefix, self.body)))
     }
 
     fn run<'t>(&self, rx: &Regex, text: &'t str) -> Option<Match<'t>> {
@@ -116,17 +128,17 @@ impl Re {
 
     /// `rx.search(text)`
     pub fn search<'t>(&self, text: &'t str) -> Option<Match<'t>> {
-        self.run(&self.any, text)
+        self.run(self.any(), text)
     }
 
     /// `rx.match(text)`：只从开头匹配
     pub fn match_<'t>(&self, text: &'t str) -> Option<Match<'t>> {
-        self.run(&self.head, text)
+        self.run(self.head(), text)
     }
 
     /// `rx.fullmatch(text)`
     pub fn fullmatch<'t>(&self, text: &'t str) -> Option<Match<'t>> {
-        self.full.captures(text).map(|caps| Match { caps })
+        self.full().captures(text).map(|caps| Match { caps })
     }
 
     /// `bool(rx.search(text))`
@@ -141,13 +153,13 @@ impl Re {
 
     /// `rx.finditer(text)`
     pub fn finditer<'t>(&self, text: &'t str) -> Vec<Match<'t>> {
-        let mut out: Vec<Match<'t>> = self.any.captures_iter(text).map(|caps| Match { caps }).collect();
+        let mut out: Vec<Match<'t>> = self.any().captures_iter(text).map(|caps| Match { caps }).collect();
         if self.dollar && text.ends_with('\n') {
             // 去掉结尾的换行才匹配得到的那一个（`$` 在换行之前）
             let from = out.last().map_or(0, |m| m.end(0));
             let cut = &text[..text.len() - 1];
             if from <= cut.len() {
-                if let Some(caps) = self.any.captures_at(cut, from) {
+                if let Some(caps) = self.any().captures_at(cut, from) {
                     let m0 = caps.get(0).unwrap();
                     if m0.end() == cut.len() && !(m0.is_empty() && from == cut.len() && !out.is_empty()) {
                         out.push(Match { caps });
