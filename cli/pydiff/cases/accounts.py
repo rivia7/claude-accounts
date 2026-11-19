@@ -525,3 +525,126 @@ def _(b):
 @case('sync-state/too-many-args', ['sync-state', '1', '2'], stdin=CODE)
 def _(b):
     synced(b)
+
+
+# --- rows（菜单里每个账号一行）、set-last（记下这次启动的账号，顺带说套餐过时的那一句）---------------------------------------
+# 登录状态、用量缓存的夹具用 cases/usage.py 的。用量那一格里的“还有多久重置”是照现在算的：夹具离整分钟差 30 秒，两边先后跑不会跨过去
+def menu_world(b, last=None, **cfg):
+    import time as _t
+    from cases import usage as U
+    now = _t.time()
+    table = dict(U.RICH_TABLE, **{'走节点': {'base_url': 'https://api2.example.com/v1/', 'node': 'HK-A'}})
+    c = dict(cfg)
+    if last:
+        c['last'] = last
+    world(b, table=table, cfg=c or None)
+    U.claude_login(b, U.RICH[0], organizationRateLimitTier='default_claude_max_20x')     # 登录着、有刚查的用量
+    U.cache(b, U.RICH[0], U.rl(13, 41, now), now - 90)
+    U.claude_login(b, U.RICH[1])                                                         # 登录着、用量是很久以前的
+    U.cache(b, U.RICH[1], U.rl(98, 72, now - 9 * 86400), now - 9 * 86400)
+    U.claude_login(b, U.RICH[2], emailAddress='someone-else@example.com')                # 登录的不是这个账号
+    U.cache(b, U.RICH[2], U.rl(7, 33, now), now - 60)
+    # RICH[3]：没登录
+
+
+for name, argv in [('default', ['rows']), ('cols-200', ['rows', '200']), ('cols-80', ['rows', '80']), ('cols-60', ['rows', '60']), ('cols-46', ['rows', '46']),
+                   ('cols-40', ['rows', '40']), ('cols-10', ['rows', '10']), ('cols-word', ['rows', 'wide']), ('cols-empty', ['rows', '']),
+                   ('cols-fullwidth', ['rows', '１２０']), ('cols-negative', ['rows', '-80']), ('too-many-args', ['rows', '80', 'x'])]:
+    @case('rows/' + name, argv)
+    def _(b):
+        menu_world(b, last='alice@example.com')
+
+
+for name, last in [('last-api', 'kimi'), ('last-with-alias', '工作(bob@example.com)'), ('last-unknown', 'ghost@example.com'), ('last-not-str', 5), ('no-last', None)]:
+    @case('rows/' + name, ['rows', '120'])
+    def _(b, last=last):
+        menu_world(b, last=last)
+
+
+@case('rows/ro', ['rows', '120'], env={'CCA_RO': '1'})
+def _(b):
+    menu_world(b, last='alice@example.com')
+
+
+@case('rows/empty-table', ['rows'])
+def _(b):
+    world(b, table={})
+
+
+@case('rows/no-table', ['rows'])
+def _(b):
+    b.cfg({'version': 2, 'nodes': ['US-A']})
+
+
+@case('rows/only-api', ['rows'])
+def _(b):
+    world(b, table={'kimi': {'base_url': 'https://api.example.com/anthropic'}, '走节点': {'base_url': 'https://api2.example.com/v1/', 'node': 'HK-A'}})
+
+
+@case('rows/no-aliases', ['rows', '100'])   # 都没有别名：别名那一列不留
+def _(b):
+    from cases import usage as U
+    world(b, table={'alice@example.com': 'US-A', 'bob@example.com': 'US-B'})
+    U.claude_login(b, 'alice@example.com')
+
+
+@case('rows/long-names', ['rows', '100'])   # 别名最多占 16 格、邮箱 32 格，超出的截掉
+def _(b):
+    from cases import usage as U
+    world(b, table={'一个很长很长的别名一个很长很长的别名(a-very-long-mailbox-name-indeed@mail.example.com)': 'US-A', '短(bob@example.com)': 'US-B'})
+    U.claude_login(b, '一个很长很长的别名一个很长很长的别名(a-very-long-mailbox-name-indeed@mail.example.com)')
+
+
+@case('rows/bad-table', ['rows'])
+def _(b):
+    world(b, table={'主号(alice@example.com)': 'NOPE'})
+
+
+@case('rows/codex', ['rows', '120'], tool='codex')
+def _(b):
+    import time as _t
+    from cases import usage as U
+    world(b, codex={'erin@example.com': 'US-A', '科(frank@example.com)': 'HK-A', 'kimi': {'base_url': 'https://api.example.com/v1'}}, cfg={'codex': {'last': '科(frank@example.com)'}})
+    U.codex_login(b, 'erin@example.com')
+    U.cache(b, 'erin@example.com', U.rl(5, 9, _t.time()), _t.time() - 30, tool='codex')
+
+
+@case('rows/agy', ['rows', '120'], tool='agy')
+def _(b):
+    from cases import usage as U
+    world(b, agy={'gina@example.com': 'US-B', 'henry@example.com': 'US-A'})
+    U.agy_login(b, 'gina@example.com')
+
+
+for name, argv, tool in [('claude', ['set-last', 'alice@example.com'], 'claude'), ('with-alias', ['set-last', '工作(bob@example.com)'], 'claude'),
+                         ('unknown-key', ['set-last', 'ghost@example.com'], 'claude'), ('empty-key', ['set-last', ''], 'claude'), ('api', ['set-last', 'kimi'], 'claude'),
+                         ('codex', ['set-last', 'erin@example.com'], 'codex'), ('agy', ['set-last', 'gina@example.com'], 'agy'),
+                         ('no-args', ['set-last'], 'claude'), ('two-args', ['set-last', 'a', 'b'], 'claude')]:
+    @case('set-last/' + name, argv, tool=tool)
+    def _(b):
+        menu_world(b, last='dave@example.com')
+        b.table({'erin@example.com': 'US-A'}, 'codex')
+        b.table({'gina@example.com': 'US-B'}, 'agy')
+
+
+for name, sub, kw in [('outdated-pro', 'pro', {}), ('outdated-max-vs-pro', 'max', {'organizationType': 'claude_pro', 'organizationRateLimitTier': None}), ('same', 'max', {}),
+                      ('other-account', 'pro', {'accountUuid': 'uuid-someone-else'}), ('not-logged-in', 'pro', None)]:
+    @case('set-last/plan-' + name, ['set-last', 'alice@example.com'])   # Claude Code 登录时记的套餐过时了：顺带说一句
+    def _(b, sub=sub, kw=kw):
+        import time as _t
+        from cases import usage as U
+        world(b, table={'alice@example.com': 'US-A'})
+        if kw is not None:
+            U.claude_login(b, 'alice@example.com', **kw)
+        U.cache(b, 'alice@example.com', U.rl(), _t.time() - 3600 - 30, uuid='uuid-alice', login_plan=sub)
+
+
+@case('set-last/ro', ['set-last', 'alice@example.com'], env={'CCA_RO': '1'})
+def _(b):
+    menu_world(b)
+
+
+@case('set-last/config-unreadable', ['set-last', 'alice@example.com'])
+def _(b):
+    menu_world(b)
+    b.write('.cca/config.json', '{oops')

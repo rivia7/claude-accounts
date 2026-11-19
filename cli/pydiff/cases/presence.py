@@ -642,3 +642,175 @@ for name, during in [('real-session-exits', exits), ('real-session-stopped', kil
     def _(b):
         sharing(b)
         reply(b, 'report', {'ok': True})
+
+
+# --- presence-view（cca devices）---------------------------------------------------------------------------------------
+# 服务器回的是“多久以前”（秒），cca 照收到回答的时刻换成时间再说成“几点 / 昨天几点 / 周几 / 几月几日”“闲置多久”“多久前”。
+# 夹具里的“多久以前”在放夹具的那一刻现算：让换出来的时间落在某一分钟的第 30 秒、时长离整分钟差 30 秒，两边先后跑差的那一两秒
+# 不会跨过去（跨零点的那一分钟里跑会差一天，碰上了重跑）
+VIEW_MASK = MASK + [(r'"(generated_epoch|since_epoch|last_active_epoch|last_used_epoch|seen_epoch)": \d+(\.\d+)?', r'"\1": <T>')]
+
+
+def ago_to(secs_back):
+    """多久以前，使得「现在 - 它」落在 secs_back 秒以前那一分钟的第 30 秒"""
+    now = time.time()
+    return now - ((now - secs_back) // 60 * 60 + 30)
+
+
+EACH_LOG = '#!/bin/sh\nprintf \'%s EVENTS=[%s] TOOL=[%s]\\n\' "cca $*" "$CCA_EVENTS" "$CCA_TOOL" >> "$HOME/calls$1.log"\n'
+
+
+def vcase(name, argv, **kw):
+    """cca devices 顺带在后台起 _key-sync 和 _cost-sync：两个进程谁先写完不一定，假的 cca 各记各的文件"""
+    kw.setdefault('mask', VIEW_MASK)
+    kw.setdefault('settle', 0.5)
+
+    def reg(setup):
+        def own_logs(b):
+            setup(b)
+            b.write('.cca/bin/cca', EACH_LOG, 0o755)
+        return pcase('view/' + name, argv, **kw)(own_logs)
+    return reg
+
+
+def view_world(b, rows=None, body=None, code=200, rc=0, table=None, **kw):
+    sharing(b, table=table, **kw)
+    if body is None:
+        body = {'accounts': {aid_of('alice@example.com'): rows if rows is not None else []}, 'me_name': '这台 Mac', 'idle': 600, 'ttl': 150}
+    reply(b, 'view', body, code=code, rc=rc)
+
+
+def all_states():
+    return [
+        {'fp': 'SHA256:other-1', 'name': '书房的 Mac', 'state': 'idle', 'cli': 1, 'app': False, 'since_age': ago_to(5 * 3600), 'idle_age': 3600 + 12 * 60 + 30, 'used_age': 3600 + 12 * 60 + 30, 'seen_age': 20},
+        {'fp': FP_SELF, 'name': '这台 Mac', 'state': 'in_use', 'cli': 2, 'app': True, 'since_age': ago_to(3 * 3600), 'idle_age': 5, 'used_age': 5, 'seen_age': 5},
+        {'fp': 'SHA256:other-2', 'name': '笔记本', 'state': 'offline', 'cli': 1, 'app': False, 'since_age': ago_to(30 * 3600), 'idle_age': 7200, 'used_age': ago_to(26 * 3600), 'seen_age': 4 * 3600 + 30},
+        {'fp': 'SHA256:other-3', 'name': '刚断的', 'state': 'offline', 'cli': 0, 'app': True, 'used_age': ago_to(600), 'seen_age': 30},
+        {'fp': 'SHA256:other-4', 'name': '很久没消息', 'state': 'offline', 'used_age': None, 'seen_age': None},
+        {'fp': 'SHA256:other-5', 'name': '上周用过', 'state': 'none', 'used_age': ago_to(4 * 86400)},
+        {'fp': 'SHA256:other-6', 'name': '上个月用过', 'state': 'none', 'used_age': ago_to(25 * 86400)},
+        {'fp': 'SHA256:other-7', 'name': '去年用过', 'state': 'none', 'used_age': ago_to(400 * 86400)},
+        {'fp': 'SHA256:other-8', 'name': '昨天用过', 'state': 'none', 'used_age': ago_to(24 * 3600)},
+        {'fp': 'SHA256:other-9', 'name': '没用过', 'state': 'none'},
+        {'fp': 'SHA256:other-a', 'name': '只开着 App', 'state': 'in_use', 'cli': 0, 'app': True},
+        {'fp': 'SHA256:other-b', 'name': '闲置没说多久', 'state': 'idle', 'cli': True, 'app': 1},
+        {'fp': 'SHA256:other-c', 'name': '状态不认识', 'state': 'sleeping'}, {'fp': 'SHA256:other-d', 'state': 'idle'}, {'name': 5, 'state': 'idle'}, 'junk', None,
+        {'name': '没有指纹', 'state': 'idle', 'cli': 2.0, 'app': 'yes', 'idle_age': 'x', 'since_age': True},
+    ]
+
+
+import base64 as _b64   # noqa: E402
+import hashlib as _hl   # noqa: E402
+from cases.secrets import PUB as _PUB   # noqa: E402
+FP_SELF = 'SHA256:' + _b64.b64encode(_hl.sha256(_b64.b64decode(_PUB.split()[1])).digest()).decode().rstrip('=')   # 夹具里那把公钥的指纹
+
+for name, argv, tool in [('all-text', ['presence-view'], 'claude'), ('all-json', ['presence-view', '--json'], 'claude'), ('by-alias', ['presence-view', '主号'], 'claude'),
+                         ('by-email-json', ['presence-view', '--json', 'alice@example.com'], 'claude'), ('json-last', ['presence-view', 'alice@example.com', '--json'], 'claude'),
+                         ('same-account-twice', ['presence-view', '主号', 'alice@example.com'], 'claude')]:
+    @vcase('states-' + name, argv, tool=tool)
+    def _(b):
+        view_world(b, all_states())
+
+
+for name, argv, why in [('unknown-name', ['presence-view', 'ghost'], None), ('not-mapped', ['presence-view', 'bob@example.com'], None), ('api-account', ['presence-view', '直连'], None),
+                        ('mapped-then-not', ['presence-view', '主号', 'bob@example.com'], None), ('empty-name', ['presence-view', ''], None)]:
+    @vcase('names-' + name, argv)
+    def _(b):
+        view_world(b, all_states())
+
+
+for name, kw in [('no-presence', dict(policy=dict(SHARING, presence=None))), ('presence-off', dict(cfg={'presence': False})), ('no-deploy-key', dict(key=False)),
+                 ('bad-presence', dict(policy=dict(SHARING, presence=dict(PRESENCE, pins=[]))))]:
+    for mode in ([], ['--json']):
+        @vcase('unusable-%s%s' % (name, '-json' if mode else ''), ['presence-view'] + mode)
+        def _(b, kw=kw):
+            view_world(b, all_states(), **kw)
+
+
+@vcase('nobody-mapped-here', ['presence-view'])   # 映射里的账号这台设备上一个都没有：不问服务器
+def _(b):
+    view_world(b, table={'bob@example.com': 'US-B'})
+
+
+@vcase('nobody-mapped-here-json', ['presence-view', '--json'])
+def _(b):
+    view_world(b, table={'bob@example.com': 'US-B'})
+
+
+@vcase('no-devices', ['presence-view'])
+def _(b):
+    view_world(b, [])
+
+
+@vcase('bad-table', ['presence-view'])
+def _(b):
+    view_world(b, table={'主号(alice@example.com)': 'NOPE'})
+
+
+for name, kw in [
+    ('unreachable', None), ('403', dict(body={}, code=403)), ('500', dict(body='oops', code=500)), ('429', dict(body={}, code=429)), ('pin-mismatch', dict(body='', rc=90)),
+    ('clock', dict(body={'error': 'clock', 'now': 1794000000}, code=400)), ('200-not-json', dict(body='hello')), ('200-accounts-list', dict(body={'accounts': []})),
+    ('200-no-accounts', dict(body={'me_name': 'x'})),
+]:
+    for mode in ([], ['--json']):
+        @vcase('server-%s%s' % (name, '-json' if mode else ''), ['presence-view'] + mode, mask=VIEW_MASK + [(r'差了 \d+ 秒', '差了 <N> 秒')])
+        def _(b, kw=kw):
+            sharing(b)
+            if kw:
+                reply(b, 'view', **kw)
+
+
+for name, body in [
+    ('rows-is-dict', {'accounts': {'%AID%': {'a': 1}}}), ('rows-is-str', {'accounts': {'%AID%': 'xyz'}}), ('rows-null', {'accounts': {'%AID%': None}}),
+    ('account-missing', {'accounts': {}}), ('me-name-number', {'accounts': {'%AID%': []}, 'me_name': 5, 'idle': 'x', 'ttl': [1]}),
+    ('me-name-empty', {'accounts': {'%AID%': []}, 'me_name': '', 'idle': None}), ('no-extras', {'accounts': {'%AID%': []}}),
+]:
+    for mode in ([], ['--json']):
+        @vcase('shape-%s%s' % (name, '-json' if mode else ''), ['presence-view'] + mode)
+        def _(b, body=body):
+            sharing(b)
+            reply(b, 'view', json.dumps(body).replace('%AID%', aid_of('alice@example.com')))
+
+
+@vcase('sorted', ['presence-view', '--json'])   # 这台设备在前，再按状态（在用、闲置、离线、没在用）、最近用过的在前、名字
+def _(b):
+    rows = [{'fp': 'f%d' % i, 'name': n, 'state': s, 'used_age': u} for i, (n, s, u) in enumerate([
+        ('丙', 'none', 500), ('乙', 'none', 100), ('甲', 'none', 100), ('丁', 'none', None), ('b', 'offline', 10), ('a', 'idle', 900), ('c', 'in_use', 5000), ('B', 'in_use', 5000),
+        ('无', 'none', 0)])]
+    view_world(b, rows + [{'fp': FP_SELF, 'name': 'zz 这台', 'state': 'none', 'used_age': 99999}])
+
+
+for name, files in [('report-failing', {'status.json': {'error': '连不上设备统计的服务器（https://192.0.2.10:18443）', 'at': 1.5}}), ('report-ok', {'status.json': {'error': '', 'at': 1.5}}),
+                    ('key-sync-failing', {'keys.json': {'v': 1, 'acc': {}, 'synced': 1.0, 'error': '读不了这台设备的钥匙串'}}),
+                    ('both-failing', {'status.json': {'error': 'x'}, 'keys.json': {'v': 1, 'acc': {}, 'synced': 1.0, 'error': 'y'}}),
+                    ('status-not-json', {'status.json': '{oops'}), ('keys-error-not-str', {'keys.json': {'v': 1, 'acc': {}, 'error': 5}})]:
+    for mode in ([], ['--json']):
+        @vcase('notes-%s%s' % (name, '-json' if mode else ''), ['presence-view'] + mode)
+        def _(b, files=files):
+            view_world(b, all_states()[:2])
+            for n, data in files.items():
+                b.write('.cca/presence/' + n, data if isinstance(data, str) else json.dumps(data))
+            os.chmod(b.path('.cca/presence'), 0o700)
+
+
+@vcase('codex', ['presence-view'], tool='codex')
+def _(b):
+    sharing(b, codex={'erin@example.com': 'US-A'})
+    reply(b, 'view', {'accounts': {aid_of('erin@example.com', 'CODEX'): [{'fp': FP_SELF, 'name': '这台 Mac', 'state': 'in_use', 'cli': 1, 'app': True, 'since_age': ago_to(3600)}]}, 'me_name': '这台 Mac'})
+
+
+@vcase('codex-json', ['presence-view', '--json'], tool='codex')
+def _(b):
+    sharing(b, codex={'erin@example.com': 'US-A'})
+    reply(b, 'view', {'accounts': {aid_of('erin@example.com', 'CODEX'): [{'fp': 'x', 'name': '别的', 'state': 'idle', 'cli': 1, 'idle_age': 660 + 30}]}})
+
+
+@vcase('agy', ['presence-view'], tool='agy')
+def _(b):
+    sharing(b, agy={'gina@example.com': 'US-B'})
+    reply(b, 'view', {'accounts': {aid_of('gina@example.com', 'AGY'): [{'fp': 'x', 'name': '别的', 'state': 'in_use', 'cli': 3, 'app': False}]}})
+
+
+@vcase('ro', ['presence-view'], env={'CCA_RO': '1'})
+def _(b):
+    view_world(b, all_states()[:3])

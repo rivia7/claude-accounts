@@ -104,9 +104,15 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
     }
     st.set("ports", ports);
     let last = st.get("last").unwrap_or(V::None);
+    // st.get("last") not in t：列表、字典不能当键查（原来是没人接的 TypeError）
+    if last.is_list() || last.is_dict() {
+        panic!("TypeError: unhashable type（config.json 里的 last 是 {}）", last.py_repr());
+    }
     if !last.as_str().is_some_and(|s| table.has(s)) {
         let lid = match last.as_str() {
             Some(s) if !s.is_empty() => known_id(s),
+            // 不是文字又不是空的（数字、true）：原来 acct_id 拿它当文字用，是没人接的 TypeError
+            None if last.truthy() => panic!("TypeError: expected string or bytes-like object（config.json 里的 last 是 {}）", last.py_repr()),
             _ => String::new(),
         };
         let found = table.keys().into_iter().find(|k| acct_id(k, tool) == lid);

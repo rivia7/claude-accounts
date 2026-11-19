@@ -1,15 +1,17 @@
 //! 设备统计（`presence_problems` 到 `cmd_presence_stop`、`past_time` 到 `cmd_presence_note`）：presence-agent、presence-wake、
 //! presence-stop、presence-view、presence-note。
 //!
-//! 移植了：presence-agent（上报进程）、presence-wake、presence-stop、presence-note，和别处要用的 `presence_problems`、
-//! `presence_load`、`presence_post`、`spawn_background`。还没移植的：presence-view（等 usage 模块的 `span`、`ago`）。
+//! 都移植了；别处要用的：`presence_problems`、`presence_load`、`presence_post`、`presence_targets`、`app_proc_re`、`spawn_background`。
 
 use super::cost::cost_kick;
-use super::keyshare::{is_num, keyshare_sync, KEYSHARE_EVERY};
+use super::keyshare::{is_num, keyshare_error, keyshare_kick, keyshare_sync, KEYSHARE_EVERY};
 use super::session::{cli_alive, cli_marks, lstart_epoch, proc_scan, proc_starts, ps_lstart, ps_rows, ProcInfo};
+use super::table::account_named;
+use super::usage::{ago, day_gap, span, weekday_clock};
 use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, SELF_PATH};
-use crate::core::model::{adir, is_api, parse_key};
+use crate::core::ctx::ctx;
+use crate::core::model::{acct_id, adir, is_api, label_of, name_of, parse_key};
 use crate::core::policy::{policy_raw, POLICY_FILE};
 use crate::core::tool::{t, tools, Tool, Using};
 use crate::py::base64::{b64decode, b64encode};
@@ -19,10 +21,10 @@ use crate::py::obj::{repr_str, Dict, List, V};
 use crate::py::proc::{env_set, environ, execv, Cmd as Proc, In, Out};
 use crate::py::rand::{token_hex, urandom};
 use crate::py::re::{self, Re};
-use crate::py::time::{monotonic, sleep, time};
-use crate::py::{json, num, path, shutil, signal, text};
+use crate::py::time::{localtime, monotonic, sleep, time};
+use crate::py::{exit, json, num, path, shutil, signal, text};
 use crate::py::{Fail, R};
-use crate::{dict, list};
+use crate::{dict, list, out};
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::sync::LazyLock;
@@ -33,6 +35,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("presence-wake", cmd_presence_wake),
     Cmd::all("presence-stop", cmd_presence_stop),
     Cmd::all("presence-note", cmd_presence_note),
+    Cmd::all("presence-view", cmd_presence_view),
 ];
 
 pub static PRESENCE_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "presence"));
@@ -767,6 +770,204 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
         let dirs: Vec<&str> = targets.iter().map(|(_, _, d)| d.as_str()).collect();
         presence_wait(&pids, &dirs, due - monotonic())?;
     }
+}
+
+// --- cca devices（presence-view）--------------------------------------------------------------------------------------------
+
+/// 过去的某个时刻（和 App 的 Texts.pastTime 一样）：今天的写几点，昨天的写“昨天 几点”，一周内写星期几，再早写日期
+pub fn past_time(t_: f64, now: f64) -> R<String> {
+    let (lt, ln) = (localtime(t_), localtime(now));
+    let days = day_gap(t_, now)?;
+    Ok(if days <= 0 {
+        format!("{:02}:{:02}", lt.hour, lt.min)
+    } else if days == 1 {
+        format!("昨天 {:02}:{:02}", lt.hour, lt.min)
+    } else if days < 7 {
+        weekday_clock(&lt)
+    } else {
+        let year = if lt.year == ln.year { String::new() } else { format!("{} 年 ", lt.year) };
+        format!("{}{} 月 {} 日", year, lt.mon, lt.mday)
+    })
+}
+
+/// `'%d' % x`（x 是整数或者布尔值）
+fn count_of(x: &V) -> i64 {
+    match x {
+        V::Bool(b) => *b as i64,
+        other => other.as_int().unwrap_or(0),
+    }
+}
+
+/// cca devices 里一台设备的状态（和 App 的 Texts.deviceState 说法一样；离线的说明 App 里在悬停时显示）
+fn presence_line(d: &Dict, now: f64) -> R<String> {
+    let epoch = |k: &str| d.get(k).filter(|x| x.truthy()).and_then(|x| x.as_num());
+    let mut what: Vec<String> = Vec::new();
+    if d.truthy("cli") {
+        what.push(format!("命令行里 {} 个会话", count_of(&d.at("cli"))));
+    }
+    if d.truthy("app") {
+        what.push(format!("{} 开着", t().app_label));
+    }
+    let what = what.join("、");
+    let used = match epoch("last_used_epoch") {
+        Some(at) => format!(" · 上次使用 {}", past_time(at, now)?),
+        None => String::new(),
+    };
+    let dot_what = if what.is_empty() { String::new() } else { format!(" · {what}") };
+    let state = d.at("state");
+    Ok(match state.as_str() {
+        Some("in_use") => {
+            let since = match epoch("since_epoch") {
+                Some(at) => format!(" · {} 起", past_time(at, now)?),
+                None => String::new(),
+            };
+            format!("在用{dot_what}{since}")
+        }
+        Some("idle") => {
+            let idle = match epoch("last_active_epoch") {
+                Some(at) => format!(" {}", span(now - at)?),
+                None => String::new(),
+            };
+            format!("开着，闲置{idle}{dot_what}")
+        }
+        Some("offline") => {
+            let seen = match epoch("seen_epoch") {
+                None => "很久以前".to_string(),
+                Some(at) if now - at < 60.0 => "刚刚".to_string(),
+                Some(at) => format!("{}前", ago(now - at)?),
+            };
+            format!("离线{used}（{seen}最后一次回报，当时还开着会话：可能休眠、断网，或者被强行结束了，不知道现在还用不用）")
+        }
+        _ => format!("没在用{used}"),
+    })
+}
+
+/// cca [codex] devices [账号…] [--json]：映射里的账号现在连着哪些设备（问维护者的服务器）。--json 是给 App 的（PROTOCOL 3.4）。
+/// 退出码：0 成功；1 服务器那边没成；2 用不了（这台 Mac 没配置、关掉了，账号不在映射里）。没成时 stdout 是原因
+pub fn cmd_presence_view(args: &[String]) -> R<()> {
+    let as_json = args.iter().any(|a| a == "--json");
+    let names: Vec<&String> = args.iter().filter(|a| *a != "--json").collect();
+    let (reason, cfg) = presence_load()?;
+    let Some(cfg) = cfg else {
+        out!("{reason}");
+        return exit(2);
+    };
+    let (table, pm) = (ctx()?.1, policy_raw(t()));
+    let keys: Vec<String> = if names.is_empty() {
+        table.items().iter().filter(|(k, v)| presence_mapped(&pm, k, v)).map(|(k, _)| k.to_string()).collect()
+    } else {
+        names.iter().map(|n| account_named(&table, n)).collect::<R<_>>()?
+    };
+    for k in &keys {
+        if !presence_mapped(&pm, k, &table.at(k)) {
+            out!("{} 不在维护者的映射里：只统计映射里的官方账号", name_of(k));
+            return exit(2);
+        }
+    }
+    let salt = cfg.at("salt").py_str();
+    // {账号摘要: 键}：摘要一样的（同一个邮箱写了两次）后来的顶掉，位置不变
+    let aids = Dict::new();
+    for k in &keys {
+        aids.set(presence_aid(&salt, t().name, &parse_key(k).1)?, k.as_str());
+    }
+    let (code, j) = if aids.is_empty() {
+        (200, dict! { "accounts" => Dict::new() })
+    } else {
+        let wanted: Vec<V> = aids.keys().into_iter().map(V::from).collect();
+        presence_post(&cfg, "view", &dict! { "accounts" => wanted }, 8)?
+    };
+    let recv = time();
+    let Some(by_account) = j.dict("accounts").filter(|_| code == 200) else {
+        out!("{}", if code != 200 { presence_why(&cfg, code, &j)? } else { "设备统计的服务器回的内容看不懂".to_string() });
+        return exit(1);
+    };
+    let ep = |age: Option<V>| -> V {
+        match age.filter(is_num).and_then(|a| a.as_num()) {
+            Some(age) => V::from(num::round_to(recv - age, 3)),
+            None => V::None,
+        }
+    };
+    let order = |state: &str| ["in_use", "idle", "offline", "none"].iter().position(|s| *s == state);
+    let accounts = List::new();
+    for (aid, k) in aids.items() {
+        let k = k.py_str();
+        // j['accounts'].get(aid) or []
+        let raw = match by_account.get(&aid).filter(|r| r.truthy()) {
+            None => Vec::new(),
+            Some(V::List(rows)) => rows.items(),
+            Some(V::Dict(_)) | Some(V::Str(_)) => Vec::new(), // 逐项看到的是键 / 字符，都不是字典
+            Some(other) => panic!("TypeError: '{}' object is not iterable", if other.is_bool() { "bool" } else { "number" }),
+        };
+        let mut rows: Vec<Dict> = Vec::new();
+        for r in raw {
+            let Some(r) = r.as_dict() else { continue };
+            let Some(name) = r.str("name") else { continue };
+            let state = r.get("state").unwrap_or(V::None);
+            if state.is_list() || state.is_dict() {
+                panic!("TypeError: unhashable type（服务器回的 state 是 {}）", state.py_repr());
+            }
+            let Some(state) = state.as_str().filter(|s| order(s).is_some()) else { continue };
+            let fp = r.get("fp");
+            rows.push(dict! {
+                "id" => fp.clone(), "name" => name, "me" => fp.is_some_and(|f| f.py_eq(&cfg.at("fp"))), "state" => state,
+                "cli" => r.get("cli").filter(|c| c.isinstance_int()).unwrap_or(V::Int(0)), "app" => matches!(r.get("app"), Some(V::Bool(true))),
+                "since_epoch" => ep(r.get("since_age")), "last_active_epoch" => ep(r.get("idle_age")),
+                "last_used_epoch" => ep(r.get("used_age")), "seen_epoch" => ep(r.get("seen_age")),
+            });
+        }
+        // 这台设备在前，再按状态、最近用过的在前、名字
+        rows.sort_by(|a, b| {
+            let key = |r: &Dict| (!r.truthy("me"), order(&r.at("state").py_str()), -r.get("last_used_epoch").filter(|x| x.truthy()).and_then(|x| x.as_num()).unwrap_or(0.0));
+            let (ka, kb) = (key(a), key(b));
+            ka.0.cmp(&kb.0)
+                .then(ka.1.cmp(&kb.1))
+                .then(ka.2.partial_cmp(&kb.2).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.at("name").py_str().cmp(&b.at("name").py_str()))
+        });
+        let devices: Vec<V> = rows.into_iter().map(V::Dict).collect();
+        accounts.push(dict! { "key" => k.as_str(), "id" => acct_id(&k, t()), "devices" => devices });
+    }
+    // (load_quiet(status.json) or {}).get('error') or None
+    let failing = match load_quiet(&path::join(&PRESENCE_DIR, "status.json")).filter(|s| s.truthy()) {
+        None => None,
+        Some(V::Dict(s)) => s.get("error").filter(|e| e.truthy()),
+        Some(other) => panic!("AttributeError: status.json 里是 {}，不是对象", other.py_repr()),
+    };
+    keyshare_kick(false); // 顺带：记下备查的 API key 和登录了同一个账号的其他设备同步（最多 KEYSHARE_EVERY 一次）
+    cost_kick(); // 折合金额也统计一次、和别的设备同步（最多 COST_EVERY 一次）
+    if as_json {
+        let doc = dict! {
+            "version" => 1, "kind" => "devices", "generated_epoch" => recv, "tool" => t().name, "me" => j.get("me_name"),
+            "idle_after" => j.get("idle"), "offline_after" => j.get("ttl"), "reporting_error" => failing, "accounts" => accounts,
+        };
+        out!("{}", json::dumps(&V::Dict(doc), json::LINE));
+        return Ok(());
+    }
+    let me = match j.get("me_name").filter(|m| m.truthy()) {
+        Some(m) => format!("，这台 Mac 叫 {}", m.py_str()),
+        None => String::new(),
+    };
+    let mut lines = vec![format!("{} 账号连着的设备（维护者的服务器上的记录{}）：", t().label, me)];
+    for a in accounts.items() {
+        let a = a.as_dict().expect("刚建的");
+        lines.push(format!("  {}", label_of(&a.at("key").py_str())));
+        let devices = a.list("devices").expect("刚建的");
+        for d in devices.items() {
+            let d = d.as_dict().expect("刚建的");
+            lines.push(format!("    · {}{}  {}", d.at("name").py_str(), if d.truthy("me") { "（这台 Mac）" } else { "" }, presence_line(&d, recv)?));
+        }
+        if devices.is_empty() {
+            lines.push("    30 天内没有设备经 cca 用过".to_string());
+        }
+    }
+    if let Some(failing) = failing {
+        lines.push(format!("  这台 Mac 最近一次没报成：{}", failing.py_str()));
+    }
+    if let Some(key_err) = keyshare_error() {
+        lines.push(format!("  记下的 API key 最近一次没同步成：{key_err}"));
+    }
+    out!("{}", lines.join("\n"));
+    Ok(())
 }
 
 #[cfg(test)]

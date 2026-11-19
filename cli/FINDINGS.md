@@ -55,6 +55,9 @@
   调到就是 NameError；这两个函数自己也没有调用方。没有移植。（读代码看出来的）
 - **两个子命令没有调用方。** `accounts-json`（`cmd_accounts_json`）、`file-replace`（`cmd_file_replace`）在 `CMDS` 里，
   但 cca、tests、macos、docs 里都没有调用它们的地方。照样移植了（免得“有这个名字却不能用”），确认不要了可以从 `CMDS` 里删掉。
+- **config.json 里的 `last` 被改成数字、列表时，所有命令都是调用栈。** `reconcile` 里 `st.get('last') not in t`（列表、字典
+  不能当键查）、`acct_id(st['last'], tool)`（拿数字当文字用）都是没人接的 TypeError；每条经 `ctx()` 的命令都过这里。只有
+  手改坏了才会这样。照样移植（Rust 里是 panic）。（对拍 `rows/last-not-str` 看得到）
 - **`Lock` 没有管住账号表和 config.json 的写入。** `sync.lock` 只在 device / link / sync / reorder / node-save / node-rm 等处拿，
   `ctx()` 里的 `cfg_save`、`cmd_add`、`cmd_rm`、`cmd_rename`、`cmd_edit_apply` 都是“读、改、整份写回”而不拿锁：
   两条命令同时跑（比如 App 的后台命令和终端里的命令）时，后写的会盖掉先写的改动。（读代码看出来的）

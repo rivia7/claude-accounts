@@ -36,6 +36,8 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("rename", cmd_rename),
     Cmd::all("reorder", cmd_reorder),
     Cmd::all("rm", cmd_rm),
+    Cmd::all("rows", cmd_rows),
+    Cmd::all("set-last", cmd_set_last),
     Cmd::all("node-rows", cmd_node_rows),
     Cmd::all("node-default", cmd_node_default),
     Cmd::all("nodes-allowed", cmd_nodes_allowed),
@@ -502,6 +504,70 @@ pub fn node_users(table: &Dict, n: &str) -> Vec<String> {
 fn menu_width(cols: &str) -> usize {
     let n = if text::isdigit(cols) { text::to_int(cols).unwrap_or(80) } else { 80 };
     (n.max(40) - 6) as usize
+}
+
+/// 菜单里每个账号一行：别名、邮箱（第三方 API 账号写接口的域名）、状态、出口节点，官方账号再附上最近一次的
+/// 用量（只读缓存，不联网）；按显示宽度对齐（没有别名的账号别名列留空）
+pub fn cmd_rows(args: &[String]) -> R<()> {
+    arity("cmd_rows", args, 0, 1)?;
+    let (c, table, _) = ctx()?;
+    if table.is_empty() {
+        return Ok(());
+    }
+    let width = menu_width(arg(args, 0, "80"));
+    let now = crate::py::time::time();
+    // (键, 别名, 邮箱 / 域名, 状态, 节点, 用量)
+    let mut rows: Vec<(Rc<str>, String, String, String, String, String)> = Vec::new();
+    for (k, v) in table.items() {
+        let (a, e) = parse_key(&k);
+        if is_api(&v) {
+            let node = node_of(&v);
+            let node = if node.is_empty() { "直连".to_string() } else { node.to_string() };
+            rows.push((k, a, api_host(&v.as_dict().expect("is_api 说它是字典")), "API".into(), node, String::new()));
+        } else {
+            let st = super::gui::short_state(&k)?;
+            let used = if st == "已登录" { super::usage::usage_cell(&k, now)? } else { String::new() };
+            rows.push((k, a, e, st.to_string(), node_of(&v).to_string(), used));
+        }
+    }
+    let widest = |col: fn(&(Rc<str>, String, String, String, String, String)) -> &String| rows.iter().map(|r| uni::width(col(r))).max().unwrap_or(0);
+    let (aw, ew, nw) = (widest(|r| &r.1).min(16), widest(|r| &r.2).min(32), widest(|r| &r.4));
+    let last = t().state(&c, false).get("last");
+    for (k, a, e, state, node, used) in &rows {
+        let mut cells = Vec::new();
+        if aw != 0 {
+            cells.push(text::fit(a, aw, true));
+        }
+        if ew != 0 {
+            cells.push(text::fit(e, ew, true));
+        }
+        cells.push(text::fit(state, 8, true));
+        cells.push(text::fit(node, nw, true));
+        if !used.is_empty() {
+            cells.push(used.clone());
+        }
+        let mut line = text::rstrip(&cells.join("   ")).to_string();
+        if last.as_ref().is_some_and(|l| l.as_str() == Some(&**k)) {
+            line.push_str("   · 上次使用");
+        }
+        out!("{}", text::fit(&line, width, false));
+    }
+    Ok(())
+}
+
+/// 记下这次启动的账号（菜单里默认选它）。顺便打印启动横幅里套餐那一句：Claude Code 记的套餐过时了才有（login_plan_note），
+/// 启动时本来就要起这个辅助程序，不为它再起一个
+pub fn cmd_set_last(args: &[String]) -> R<()> {
+    arity("cmd_set_last", args, 1, 1)?;
+    let key = &args[0];
+    let c = cfg_load()?;
+    t().state(&c, true).set("last", key.as_str());
+    cfg_save(&c)?;
+    let old = t().outdated_login_plan(key)?;
+    if !old.is_empty() {
+        out!("{}", super::usage::login_plan_note(key, &old, &t().plan(key, &V::None)?));
+    }
+    Ok(())
 }
 
 /// 选节点菜单：每个可选节点一行，注明已被当前工具的哪些账号使用、路由器上是否存在
