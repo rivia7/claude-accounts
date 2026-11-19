@@ -385,7 +385,7 @@ pub fn cmd_agy_login(args: &[String]) -> R<()> {
     let mut child = match Proc::new([bin_, &gemini, "acp", "--login"]).stdin(In::Bytes(Vec::new())).stdout(Out::Capture).stderr(Out::ToStdout).spawn() {
         Ok(child) => child,
         Err(ProcError::Os(e)) => return Err(e.into()),
-        Err(ProcError::Timeout { .. }) => unreachable!("spawn 不限时"),
+        Err(ProcError::Timeout { .. } | ProcError::Interrupted) => unreachable!("spawn 不限时，也不会被信号打断"),
     };
     let mut kid = Kid::of(&child);
     let out = child.stdout.take().expect("stdout 要的是管道");

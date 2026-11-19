@@ -27,14 +27,12 @@ pub use forward::cmd_login_forward;
 
 use super::table::account_named;
 use super::{arg, arity, Cmd};
-use crate::core::base::{sh, CCA_HOME, EMAIL_RE};
+use crate::core::base::{sh, EMAIL_RE};
 use crate::core::ctx::ctx;
 use crate::core::model::{cfg_load, is_api, label_of, node_of, parse_key};
-use crate::core::policy::{alias_problem, fill_fp, fill_plan, node_ids, policy_fill, policy_map};
+use crate::core::policy::{alias_problem, fill_fp, node_ids, policy_fill, policy_map};
 use crate::core::tool::{agy, t, tools, Kind};
-use crate::py::fs::load_quiet;
 use crate::py::obj::{Dict, V};
-use crate::py::path;
 use crate::py::text;
 use crate::py::url::{parse_qsl, quote, urlsplit};
 use crate::py::{die, Fail, R};
@@ -229,40 +227,6 @@ pub fn urlsplit_host(url: &str) -> String {
     urlsplit(url).ok().and_then(|u| u.hostname()).unwrap_or_default()
 }
 
-// ---- 内置代理那一块（cmd::corenet）的 core_cache / core_custom / core_defs：那个模块还没移植，node_fp_here 又要用，先照原样
-// 放一份私有的。它移植好以后删掉这三个，改用那边的 ----
-
-/// core/nodes.json：{'proxies': [节点定义…], 'saved_at': 时间, 'nodes': 拷的时候的可选节点}；没有、读不了时是空的
-fn core_cache() -> Dict {
-    match load_quiet(&path::join_all(&[&CCA_HOME, "core", "nodes.json"])) {
-        Some(V::Dict(j)) if j.list("proxies").is_some() => j,
-        _ => Dict::new(),
-    }
-}
-
-/// 节点定义的列表里像样的那些：是字典、name 是字符串
-fn named_defs(px: Option<V>) -> Vec<Dict> {
-    let Some(V::List(px)) = px else { return Vec::new() };
-    px.items().iter().filter_map(|p| p.as_dict()).filter(|p| p.str("name").is_some()).collect()
-}
-
-/// core/custom-nodes.json 里用户自定义的节点定义；没有、读不了时是空的
-fn core_custom() -> Vec<Dict> {
-    let j = load_quiet(&path::join_all(&[&CCA_HOME, "core", "custom-nodes.json"]));
-    named_defs(j.and_then(|j| j.as_dict()).and_then(|j| j.get("proxies")))
-}
-
-/// 内置代理能用的节点定义（还没按可选节点挑）：路由器上拷来的，加上维护者参考节点里要补的（和往路由器里补的
-/// 同一套规则 fill_plan：同名的、服务器一样的以路由器的为准）
-fn core_defs() -> Vec<Dict> {
-    let mut px = named_defs(core_cache().get("proxies"));
-    px.extend(core_custom());
-    let have: Vec<(String, String)> = px.iter().map(|p| (p.at("name").py_str(), fill_fp(p))).collect();
-    let names: Vec<String> = have.iter().map(|(n, _)| n.clone()).collect();
-    px.extend(fill_plan(&have, &names, policy_fill().as_ref()).0);
-    px
-}
-
 /// 这台机器上节点 n（账号表里的叫法）的摘要：路由器同步时记下的（node_ids），没有就从内置代理拷来的节点定义、维护者的
 /// 参考节点里按名字找。认不出是空的。node_ids 里记的原样返回（被手改成别的类型时也是：原来就这样）
 pub fn node_fp_here(c: &Dict, n: &str) -> V {
@@ -270,7 +234,7 @@ pub fn node_fp_here(c: &Dict, n: &str) -> V {
         return f;
     }
     let fill = policy_fill().and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
-    let found = core_defs().into_iter().chain(fill.iter().filter_map(|p| p.as_dict())).find(|p| p.get("name").is_some_and(|name| name.as_str() == Some(n)));
+    let found = crate::cmd::corenet::core_defs().into_iter().chain(fill.iter().filter_map(|p| p.as_dict())).find(|p| p.get("name").is_some_and(|name| name.as_str() == Some(n)));
     V::from(found.map_or(String::new(), |p| fill_fp(&p)))
 }
 
