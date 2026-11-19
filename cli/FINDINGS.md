@@ -14,6 +14,31 @@
 - **属性列表（plist）的值是一棵树。** 二进制文件里几处引用同一个数组 / 字典时读成各自一份，再写出去也各写一份；自己套自己的
   读不了；字典的键只认字符串；XML 只认 UTF-8、带 BOM 的 UTF-16、ISO-8859-1（见 `cli/src/py/plist.rs` 开头）。
 - **TLS 出错原因的文字**（邮箱助手）是 rustls 的，原来是 OpenSSL 的；分类（证书校验没通过 / 别的握手失败）一样。
+- **邮箱助手的邮件解析、IMAP 照 CPython 3.14.0 的行为手写**（email、email.header、email.utils、html.parser、imaplib、fnmatch；
+  对照数据 `cli/tests/vectors/mail.json`）。这几个库各版本在边角上本来就不一样（macOS 自带的 3.9 和 3.14 就不同），Rust 这边固定成
+  3.14.0 的。在这之上有几处做不到照样：
+  - **字符集只认 UTF-8、US-ASCII、ISO-8859-1 / Latin-1、Windows-1252**（连同 Python 给它们的各种别名）。Python 认识的别的字符集
+    （GBK、Big5、Shift_JIS、UTF-16……）在这里走原来「不认识这个字符集」的那条路：标题里的 `=?gbk?…?=` 不解码、照原样；正文照
+    UTF-8 解（解不了的字节成 U+FFFD）；RFC 2231 的参数值用原样的。会不一样的输入：标题用这些字符集编码的邮件（核对标题时看到的
+    是没解码的文字——Anthropic 的登录邮件标题是 ASCII，转发时加上的中文前后缀 Gmail 用 UTF-8）；正文是 UTF-16 这类和 ASCII
+    不兼容的字符集的邮件（里面的链接取不出来，报「邮件里没找到登录链接」；GBK 这类兼容 ASCII 的，链接照样取得出，只有纯文本
+    正文里链接后面紧跟着全角空格这类非 ASCII 的空白时不一样：Python 在那里断开，这里它成了 U+FFFD、连进链接里，这样的链接
+    通不过 `link_ok`）。对照数据的 judge 一节里 `links_unknown` 记着这种时候 Rust 该给什么。
+  - **一层套一层的上限照 3.14.0 直接跑 PY_SRC 时的算。** 地址里的注释、组，multipart / message 套到 Python 调用栈一千层的上限
+    就是 RecursionError，落在第几层看解析的那个函数自己在第几层、是不是这个进程里头一次解析地址（见下面 mail 一节）。Rust 这边
+    照这个规律算，每条路的上限两边都对拍过（`mail/*/nested-…`）。和别处一样（settings 一节「套得太深、数字太长……」那一条）：
+    经 PY_BOOT 起的真的 cca 早一层到头，3.9 的层数又不同，这些不跟。
+  - **放不进 64 位的数当作没有**：UID、UIDVALIDITY、UIDNEXT（IMAP 里它们是 32 位的；Python 是多大都行的整数）。`cca mail open --msg`
+    里手写的这种 UID 照样发给 Gmail（原来就这样），但回应里这么大的 UID 认不出，说「邮件不在了」。
+  - **Ctrl-C。** 原来 Python 在哪一句都可能抛 KeyboardInterrupt；这里是信号处理函数记一笔，等邮件歇着的时候、读写被打断的时候、
+    每条 IMAP 命令之前、等 `cca _mail-open` 的时候看到了才往上传（「已取消」、退出码 130 一样）。处理函数只在 `cca mail open`
+    原来 `try` 的那一段装；那之前（读钥匙串、问系统代理）按 Ctrl-C 是系统默认的直接结束，没有 Python 的调用栈。
+  - **关连接时多发一个 TLS 的 close_notify**（Python 的 `shutdown` 直接关套接字）；信任的根证书只读 `/etc/ssl/cert.pem`
+    （原来是那个 Python 链的 OpenSSL 的默认位置：macOS 自带的 Python 就是这个文件，Homebrew 的是它自己那份）。
+  - **系统代理的主机名里有非 ASCII 字符时不做 IDNA 转换**（原样交给系统解析；Python 先转成 `xn--…`）。`mail.proxy` 里手写的
+    代理地址本来就只收 ASCII 的主机名。
+- **原来先后不定的地方定了先后**（邮箱助手）：`cca mail setup`、`cca mail forget default|account` 删掉没人再用的旧地址的应用专用密码，
+  原来按集合的顺序，现在按地址排（实际一次最多删一个）。
 - **`.claude.json` 里落单的代理项**读进来时换成 U+FFFD（见下面 PY_SRC 的第四条）。
 - **原来先后不定的地方定了先后**：删了账号以后清掉没人再用的应用专用密码（`mail_forget_orphans`），原来按集合的顺序，现在按地址排。
 - **文件名不是 UTF-8 的条目**（link）：列目录的地方跳过，整棵并走 / 拷走 / 删掉的地方报错停下；原来能处理这种名字（APFS 上建不出来）。
@@ -481,3 +506,66 @@ Rust 这边照原样移植，行为一样。
 - **`login-page-acct` 把 config.json 的 `nodes` 直接当列表用。** 被手改成字符串时按字符遍历、按“是不是它的一段”判断
   （`"nodes": "US-A,HK-A"`、服务器上的节点叫 `A`，结果是 `LP_NODE=A`）；是 `null`、数字时是调用栈。
   （`login-page-acct/nodes-string/A`、`nodes-null/…`、`nodes-number/…`）
+
+## mail
+
+邮箱助手（`mail_knob` 到 `cmd_mail_link_check`）。下面各条都照原样移植了；对拍用例在 `cli/pydiff/cases/mail.py`（假的 Gmail、代理、
+钥匙串、浏览器），解析和盯邮箱的对照数据在 `cli/tests/vectors/mail.json`。
+
+- **一封别人发来的邮件就能让登录时的自动打开停掉，让 `cca mail test` 和 App 的邮件列表出不来。** `mail_addrs` 解析 From / To 时，
+  地址里的注释、组一层套一层（`From: ((((…` 几百层）到了 Python 调用栈的上限就是 RecursionError，哪儿都没接：
+  - `mail_hunt`（登录时盯邮箱、`cca mail open`）：`mail_judge` 先看时间和标题、再解析地址，这两项都由发件人定——登录的那十几分钟里
+    来一封标题写成 `Your secure link to Claude is here` 的这种邮件，`cmd_mail_watch` 接住后说一句「邮箱助手出错了（RecursionError），
+    这次不看邮箱」就退出，这次登录不再自动打开；`cca mail open` 是调用栈、退出码 1。
+  - `cca mail test`、`_gui mail-list`：每一封搜出来的（FROM anthropic.com 或 SUBJECT "secure link"）都先解析 To / From 再核对，
+    最近这些小时里有一封这种邮件，整个命令就是调用栈（`_gui mail-list` 连 JSON 都不出），直到它过了时间。
+  用例：`mail/watch/hostile-mail-is-an-error-said-once`、`mail/test/deep-comment-is-an-uncaught-error`，对照数据 hunt 一节的 hostile 两条。
+  同一类的还有全文里 multipart / message 套上千层（`mail_parse`；头通过了核对才取全文，别人发不出来）。
+- **「套几层出错」每条路不一样，同一条路上头一次和后面的也不一样。** 在 CPython 3.14.0 上直接跑 PY_SRC 实测（注释 / 组最多几层）：
+  `cmd_mail_test`、`cmd_gui_mail_list` 里直接解析收件人 496 / 992（这个进程里头一次解析地址），紧接着解析发件人 495 / 991；
+  经 `mail_judge_any → mail_judge` 再解析一遍少一层注释、两层组；`cca mail open`（经 `mail_hunt`）头一封的发件人 494 / 989，登录时
+  （多隔一层 `mail_watch`）494 / 988；头通过核对以后取全文再核对一遍又深一层，好的登录邮件发件人实际只能套 493 层。「头一次多一层」
+  是解释器的事：3.11 起执行过的调用会换成专门的指令，`getaddresses`、`parseaddr` 里 `_AddressList(…)` 这种「建对象、进 `__init__`」的
+  换了以后多占一层调用栈。邮件结构是每多隔一层函数少一层：直接调 `mail_parse` 984 层，`cca mail test` 取全文 983，`cca mail open`
+  981，登录时 980。数字本身无所谓（都远超正常邮件），记下来是因为它说明这个上限不是谁定的，是碰巧。Rust 这边照这个规律算
+  （`cli/src/cmd/mail.rs` 的 `py_frame`），用例 `mail/test/nested-…`、`mail/gui-list/nested-…`、`mail/open/nested-…`、`mail/open/msg-nested-…`、
+  `mail/watch/nested-…` 是各条路上限的两边。
+- **另外几处没人接的异常**（都照样移植成同一类错）：
+  - 全文里 `Content-Type` 的参数续行号（`x*999…9*=`）超过 4300 位、`charset` 里有 NUL：ValueError（`mail_links`；只有头已经通过核对的
+    邮件才取全文，要 Anthropic 签过名的邮件才走得到）。
+  - Gmail 的回应里 INTERNALDATE 的年份是 0000（`calendar.timegm`）、UID / UIDVALIDITY / literal 的大小超过 4300 位（`int()`）：ValueError；
+    CAPABILITY 里有非 ASCII 字节：UnicodeDecodeError。只有 Gmail 自己（TLS 里面）发得出来。4300 位的上限是 3.9.14 / 3.10.7 以后的
+    Python 才有的，macOS 自带的 3.9.6 上这几处不出错。
+  - `cca mail open --msg` 的邮件夹名里有非 ASCII 字符：UnicodeEncodeError（imaplib 把参数按 ASCII 编码）。用例 `mail/open/msg-folder-not-ascii`。
+  - 连接方式写成 `http://a..b:8080` 这种主机名里有空的一段的：`socket.create_connection` 里 idna 编码出的 UnicodeError，不是 OSError，
+    `mail_dial` 不接。用例 `mail/setup/route-empty-label`。
+  - config.json 的 `ports`（或某个工具的 `ports`）、`router` 不是对象：`mail_route_exit` 里 AttributeError（`cca mail setup`、`mail ready`
+    是调用栈；`mail-watch` 说「出错了（AttributeError）」）。用例 `mail/ready/ports-not-a-dict`、`mail/watch/ports-not-a-dict-is-an-error-said-once`。
+  - `~/.cca/mail` 是个文件：`mail_used` 里 `os.makedirs` 的 FileExistsError（`cca mail open` 是调用栈，而且在登录好、取到邮件之后才出）。
+    用例 `mail/open/mail-dir-is-a-file`、`mail/watch/mail-dir-is-a-file`。
+- **`MailBox.cmd` 里「和 Gmail 的连接断了」那一句走不到。** `folders`、`examine`、`search`、`headers`、`message` 都写成
+  `self.cmd(self.im.list, …)`：会话已经关掉（`self.im` 是 None）时，先求值 `self.im.list` 就是 AttributeError，进不到 `cmd` 里的
+  `if self.im is None: raise MailRetry`。现在各处出了错都不再接着用同一个会话（`MailSource` 每次先看 `im is None` 再重连），实际碰不到；
+  哪天有人在出错以后接着调，得到的是没人接的 AttributeError 而不是「过会儿再试」。对照数据 imap 一节里 `"py": "AttributeError"` 的那些。
+- **`mail_judge_any` 把「太旧」报成「标题不像」。** `best` 从 `(rules[0], 'subject')` 起，只有排得更靠后的原因才换掉它，而 `old` 在
+  `MAIL_ORDER` 里排第一：一条规则都没过、原因是 `old` 时返回的是 `subject`。现在看不出差别（`mail_hunt` 里这两个原因都不说，
+  `cca mail open` 数「另有几封没通过核对」时两个都不算，`cca mail test`、`_gui mail-list` 事先按时间筛过）；哪天要按原因分开说就错了。
+  对照数据 hunt 一节的「old mail is ignored quietly」。
+- **`cca mail setup --account` 重新配置时，这个账号登记的信任中转（forwarder）没了。** 新的覆盖只从旧的带回 `auto: false`，`proxy` 按这次的
+  算，`forwarder` 不带。是有意（不安全的开关不悄悄留着）还是漏了，看不出来；App 里换一个 Gmail 以后「信任转发中转」会变回关。
+  用例 `mail/setup/account-keeps-auto-off-drops-forwarder`。
+- **`_gui mail-list 账号` 对没写邮箱的账号不按账号筛。** `want = parse_key(acct)[1].lower()` 是空串，`if want and tgt != want` 不成立：
+  列出来的是默认 Gmail 里所有账号的登录邮件（`account`、`key` 还是这个账号）。用例 `mail/gui-list/alias-only-is-not-scoped`。
+- **`cca mail status` 里名字长的那一行，名字和后面的内容粘在一起。** `'  %s%s%s' % (k, ' ' * (10 - dw(k)), v)`，`账号 ` 加名字超过 10 格时
+  一个空格都不补：`账号 bob@example.cominbox@example.com（…）`。只写邮箱、没起别名的账号都会这样。用例 `mail/status/long-names`。
+- **IMAP 命令的参数原样拼进去。** imaplib（3.9、3.14 都是）只给 LOGIN 的密码加引号，别的参数不加引号、不查控制字符：
+  `cca mail open --msg` 的邮件夹名直接进了 `EXAMINE 名字`——名字里有空格而没带引号的会被 Gmail 当成两个参数，带 CR LF 的能在后面
+  夹带别的命令。这个值是命令行上给的（App 传回的是 LIST 给出的带引号的名字），不是邮件里来的，所以只算「只读」的保证有个缺口：
+  原来「没有通用的命令入口」这句话对 `--msg` 不完全成立。Rust 这边照样原样发；用例 `mail/open/msg-folder-with-crlf`（假 Gmail 的
+  日志里多出一条 `ZZZZ9 NOOP`）、`mail/open/msg-folder-with-space`。LOGIN 的用户名同样不加引号（`MAIL_ADDR_RE` 允许的 `%` 按 IMAP
+  的写法不能出现在不带引号的参数里；Gmail 的地址里没有它——这一句是读代码看出来的）。
+- **取不到全文的那一封会一直占着。** `mail_take` 里 `src.full` 出错（Gmail 说没有这封、连接断了）时 `pend` 不清，之后每一轮都只重试它，
+  直到盯完；这期间来的更旧的邮件不看（更新的会换掉它）。注释里写的是「取不到全文的那封照连不上退避」，是有意的；记一笔是因为
+  一封被删掉的候选邮件会让这次 `cca mail open` 以「Gmail 没给出这封邮件」收场，而不是去开第二新的那封。对照数据 hunt 一节的
+  「mail that cannot be fetched backs off」。
+
