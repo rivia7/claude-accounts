@@ -90,13 +90,16 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 | `time.time()`、`localtime`、`strftime`、`mktime`、`calendar.timegm` | `py::time::*` |
 | `hashlib.sha1/sha256(…).hexdigest()`、`hmac`、`os.urandom`、`uuid.uuid4()` | `py::hash::*`、`py::rand::*` |
 | `urlsplit`、`parse_qsl`、`quote`、`unquote`、`ipaddress` | `py::url::*`、`py::ipaddr::*`（规则是 CPython 3.14 的，有对照数据） |
+| `base64.b64encode` / `b64decode(s)` / `b64decode(s, validate=True)` / `urlsafe_b64decode` | `py::base64::{b64encode, b64decode(s, false), b64decode(s, true), urlsafe_b64decode}`；出错是 `Fail::Value`（binascii.Error 是 ValueError 的子类），说明和 CPython 一样 |
+| `plistlib.load` / `loads` / `dumps(v)` / `dumps(v, fmt=FMT_BINARY)` | `py::plist::{loads, dumps_xml, dumps_binary}`，值是 `py::plist::P`（不是 `V`：属性列表有数据和日期）。输出和 plistlib 逐字节一样；异常类对得上（ExpatError 不是 ValueError：`e.is("ExpatError")`）。和 Python 不一样的三处写在文件头 |
+| `open(path)` 失败时的 `str(e)` | `py::fs::open_error_text(&e, path)`（带文件名的 repr） |
 | `with Lock():` | `let _lock = core::base::Lock::acquire()?;`（离开作用域解锁；不能重入） |
 | 全局的 `T`、`with using(tool):` | `core::tool::t()`、`let _g = Using::tool(tool);` |
 | `ctx()`、`cfg_load()`、`cfg_save(c)`、`T.state(c)` | `core::ctx::{ctx, cfg_save}`、`core::model::cfg_load`、`tool.state(&c, create)` |
 | `sh(K=v)` / `sh_arrays(N=[…])` | `core::base::{sh, sh_vals, sh_array}` |
 | `notice(code, text, k=v)` | `core::base::notice(code, text, dict!{…})` |
 
-兼容层没有的（base64、plist、TOML、zip、XML、邮件解析、TLS、sqlite……）由第一个用到它的模块在交回时提出来，写在
+兼容层没有的（zip、XML、邮件解析、TLS、sqlite、kqueue……）由第一个用到它的模块在交回时提出来，写在
 `cli/src/py/` 下，照同样的规矩：行为照 CPython，期望值从真的 Python 取（`cli/tools/gen_vectors.py` 那种对照数据最好）。
 
 ## 容易错的地方
