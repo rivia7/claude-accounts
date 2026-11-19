@@ -409,3 +409,45 @@ def scanning(b):
 
 state('codex-rich-scanning', scanning)
 state('codex-rich-never-scanned', lambda b: (codex_rich(b), os.unlink(b.path('.cca/cost/scanned'))))
+
+
+# --- gui-state：有 Claude 官方账号（账号页的「邮箱」一节：mail_view） ----------------------------------------------------------
+def claude_official(b, mail=Ellipsis, **cfg):
+    """Claude 有两个官方账号（一个登录着、有用量缓存、有上次的出口检测）、一个第三方 API 账号；Codex 一个官方账号"""
+    from cases import usage as U
+    now = time.time()
+    c = dict(cfg)
+    if mail is not Ellipsis:
+        c['mail'] = mail
+    world(b, table={'alice@example.com': 'US-A', '主号(bob@example.com)': 'HK-A', 'kimi': {'base_url': 'https://api.example.com/anthropic', 'model': 'm-1'}},
+          codex={'erin@example.com': 'US-A'}, cfg=c or None)
+    U.claude_login(b, 'alice@example.com')
+    U.cache(b, 'alice@example.com', U.rl(21, 47, now), now - 45)
+    b.json(U.acct('alice@example.com') + '/health.json', {'checked_at': now - 300, 'source': 'launch', 'result': 'ok', 'route': 'router', 'node': 'US-A', 'port': 7901, 'ip': '198.51.100.9'})
+    U.claude_login(b, '主号(bob@example.com)', organizationType='claude_pro', organizationRateLimitTier='default_claude_ai')
+
+
+ALICE_ID, BOB_ID = ident('alice@example.com'), ident('bob@example.com')
+state('claude-official', claude_official)                                        # 没配置邮箱助手
+state('claude-official-not-ro', claude_official, env={'CCA_RO': None})
+state('claude-official-codex-tool', claude_official, tool='codex')
+for name, mail in [
+    ('mail-default', {'user': 'Inbox@Example.com'}),                                                       # 默认的 Gmail，两个账号都用它
+    ('mail-default-auto-off-proxy', {'user': 'inbox@example.com', 'auto': False, 'proxy': 'http://127.0.0.1:8080'}),
+    ('mail-auto-not-bool', {'user': 'inbox@example.com', 'auto': 0, 'proxy': ''}),                          # auto 只有 false 才算关；proxy 空的按默认
+    ('mail-override', {'user': 'inbox@example.com', 'auto': False, 'accounts': {BOB_ID: {'user': 'Bob-Inbox@example.com'}}}),   # 账号单独配的：没写的继承默认那一项
+    ('mail-override-own-auto', {'user': 'inbox@example.com', 'auto': False, 'accounts': {BOB_ID: {'user': 'bob-inbox@example.com', 'auto': True, 'proxy': 'direct'}}}),
+    ('mail-override-only', {'accounts': {BOB_ID: {'user': 'bob-inbox@example.com'}}}),                      # 没有默认，只有 bob 单独配了
+    ('mail-override-bad-address', {'user': 'inbox@example.com', 'accounts': {BOB_ID: {'user': 'not an address'}}}),   # 覆盖的地址不对：用默认那个
+    ('mail-forwarder', {'user': 'inbox@example.com', 'accounts': {ALICE_ID: {'forwarder': 'Relay.Example.com'}, BOB_ID: {'user': 'bob-inbox@example.com', 'forwarder': 'relay2.example.com'}}}),
+    ('mail-forwarder-bad', {'user': 'inbox@example.com', 'accounts': {ALICE_ID: {'forwarder': 'not a domain'}, BOB_ID: {'forwarder': 5}}}),
+    ('mail-forwarder-without-mailbox', {'accounts': {ALICE_ID: {'forwarder': 'relay.example.com'}}}),       # 登记了中转但没有可连的 Gmail：没配置
+    ('mail-bad-address', {'user': 'not an address'}),
+    ('mail-user-not-str', {'user': 5}),
+    ('mail-not-dict', 'oops'),
+    ('mail-empty', {}),
+    ('mail-accounts-not-dict', {'user': 'inbox@example.com', 'accounts': ['x']}),
+    ('mail-override-not-dict', {'user': 'inbox@example.com', 'accounts': {BOB_ID: 'x', ALICE_ID: None}}),
+    ('mail-keyed-by-something-else', {'user': 'inbox@example.com', 'accounts': {'bob@example.com': {'user': 'bob-inbox@example.com'}, '主号(bob@example.com)': {'user': 'x@example.com'}}}),
+]:
+    state('claude-official-' + name, lambda b, mail=mail: claude_official(b, mail=mail))

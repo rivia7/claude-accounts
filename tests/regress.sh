@@ -2284,6 +2284,30 @@ if [ -e "$(dirname "$CCA")/.git" ]; then
 	out=$(run bash "$CCA" update 2>&1)
 	ok "开发模式（git 仓库里的 cca）：不自动更新" 'printf "%s" "$out" | grep -q "开发模式" && [ ! -e "$G/latest" ] && ! grep -q "GH " gh.log 2>/dev/null'
 fi
+# 换代的那一次更新：还内嵌着 Python 的旧版本（cli/PORTED_FROM 记的那个主干提交的 cca）用它自己的更新流程装上接着辅助程序的
+# 新版本——下载、验签（旧版本要求新文件 bash -n 通过、有 VERSION 那一行）、换上；新版本第一次运行自己解出辅助程序。在另一个 HOME 里
+# 做（不动下面用的更新状态）。旧版本的 cca 从 git 里取（CCA_OLD_CCA=文件 可以另指一份）；取不到（不在 git 仓库里）就跳过。
+# 等没有还内嵌 Python 的版本在用了，这个用例就可以删掉
+OLDCCA="$T/old-cca"
+if [ -n "${CCA_OLD_CCA:-}" ]; then cp "$CCA_OLD_CCA" "$OLDCCA"
+else git -C "$D/.." show "$(cut -d' ' -f1 "$D/../cli/PORTED_FROM" 2>/dev/null):cca" > "$OLDCCA" 2>/dev/null || rm -f "$OLDCCA"; fi
+if [ -s "$OLDCCA" ] && grep -q "^PY_SRC=" "$OLDCCA"; then
+	OH="$T/oldhome"; mkdir -p "$OH/.cca/bin" "$G/v9.9.1"
+	oldv=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$OLDCCA")
+	sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$OLDCCA" > "$OH/.cca/bin/cca"; chmod 755 "$OH/.cca/bin/cca"
+	mkver 9.9.1 "$G/v9.9.1/cca"; ssh-keygen -Y sign -q -n cca-release -f "$T/relkey" "$G/v9.9.1/cca" 2>/dev/null
+	ro() { run HOME="$OH" CCA_HELPER= "$@"; }   # 旧版本用 PATH 里的 python3；新版本自己解辅助程序（不指定）
+	v0=$(ro "$OH/.cca/bin/cca" version 2>&1)
+	out=$(ro "$OH/.cca/bin/cca" update 9.9.1 2>&1); rc=$?
+	out2=$(ro "$OH/.cca/bin/cca" _gui hello 2>/dev/null)
+	ok "换代的更新：内嵌 Python 的旧版本（${oldv}）自己更新到接着辅助程序的新版本，新版本第一次运行解出辅助程序、照常工作，旧版本留作回退" '[ "$v0" = "$oldv" ] && [ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新到 9.9.1（原来是 ${oldv}）" && [ "$(ro "$OH/.cca/bin/cca" version)" = 9.9.1 ] && grep -q "^HELPER_SUMS=\"$HOST_TARGET=" "$OH/.cca/bin/cca" && ! grep -q "^PY_SRC=" "$OH/.cca/bin/cca" && printf "%s" "$out2" | jok "d[\"kind\"] == \"hello\" and d[\"cca_version\"] == \"9.9.1\" and d[\"dev_mode\"] is False" && grep -q "^PY_SRC=" "$OH/.cca/update/cca.prev"'
+	out=$(ro "$OH/.cca/bin/cca" update --rollback 2>&1)
+	ok "换代的更新：退得回去（cca update --rollback 换回内嵌 Python 的那一版）" '[ "$(ro "$OH/.cca/bin/cca" version)" = "$oldv" ] && printf "%s" "$out" | grep -q "已退回 ${oldv}"'
+	rm -rf "$OH" "$G/v9.9.1"
+else
+	echo "SKIP  换代的更新（取不到内嵌 Python 的旧版本：不在 git 仓库里；CCA_OLD_CCA=文件 可以指一份）"
+fi
+rm -f "$OLDCCA"
 mkdir -p "$T/dl"; mkver 2.0.0 "$T/dl/cca"
 run CCA_TTY="$(ans)" bash "$T/dl/cca" install >/dev/null 2>&1
 ok "发布版安装：复制到 ~/.cca/bin/cca 并链接，open-url 也指向它" '[ "$(readlink "$H/.local/bin/cca")" = "$H/.cca/bin/cca" ] && grep -q "$H/.cca/bin/cca _browser" "$H/.cca/bin/open-url" && [ "$(ver)" = 2.0.0 ]'

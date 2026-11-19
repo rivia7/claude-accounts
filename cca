@@ -5314,7 +5314,7 @@ fetch_release() {   # fetch_release 版本：下载并校验，成功后放在 $
 	local v="$1" tmp got rc=1
 	FETCH_ERR="下载失败（网络不通、GitHub 暂时不可用，或者没有这个版本）"
 	mkdir -p "$UPD" && tmp=$(mktemp -d "$UPD/dl.XXXXXX") || return 1
-	if retry3 curl -fsSL -m 120 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&
+	if retry3 curl -fsSL -m 300 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&
 		retry3 curl -fsSL -m 30 -o "$tmp/cca.sig" "$UPDATE_REPO/releases/download/v$v/cca.sig" 2>/dev/null; then
 		FETCH_ERR="签名校验没通过（文件可能被篡改或不完整），没有安装"
 		if got=$(verify_release "$tmp/cca" "$tmp/cca.sig") && [ "$got" = "$v" ]; then

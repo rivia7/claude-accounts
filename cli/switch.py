@@ -174,6 +174,9 @@ sub('need_deps() {   # 安装时查依赖：install.sh 下载之前查的是同�
 sub('	for c in ssh ssh-keygen nc curl perl gunzip find; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"; done\n',
     '	for c in ssh ssh-keygen nc curl perl gunzip base64 find; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"; done\n', 'need_deps 的命令')
 sub('			pacman:python3) p=python ;;\n			*:gunzip) p=gzip ;;\n', '			*:gunzip) p=gzip ;;\n			*:base64) p=coreutils ;;\n', 'pkg_hint')
+# 发布的 cca 接着四种机器的辅助程序，从 0.9 MB 变成约 10 MB：下载的时限照界面 App、内核那两处（300 秒）
+sub('''	if retry3 curl -fsSL -m 120 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&''',
+    '''	if retry3 curl -fsSL -m 300 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&''', '下载新版本的时限')
 
 # --- 5. 注释里说到 Python 的地方 --------------------------------------------------------------------------------------
 sub('（如 zh_CN.GBK、GB18030）时，Python 等会按 GBK 编码输出，', '（如 zh_CN.GBK、GB18030）时，有的命令会按 GBK 编码输出，', '注释：locale')
