@@ -143,9 +143,15 @@ mod tests {
     fn raise_check_sleep_and_subprocess() {
         raise_on(libc::SIGUSR2, "Stop");
         assert!(check().is_ok() && !pending());
-        // SAFETY: 给自己的线程发一个装了处理函数的信号
-        let me = unsafe { libc::pthread_self() };
-        unsafe { libc::pthread_kill(me, libc::SIGUSR2) };
+        // 线程号存成整数：pthread_t 在 musl 上是指针，不能直接带进别的线程
+        // SAFETY: 只是问自己的线程号
+        let me = unsafe { libc::pthread_self() } as usize;
+        // 给这个测试的线程发一个装了处理函数的信号（它还活着：别的线程里用的那两次，下面都等它们 join 了才往下走）
+        let poke = move || {
+            // SAFETY: me 是还活着的线程的线程号，信号装了处理函数
+            unsafe { libc::pthread_kill(me as libc::pthread_t, libc::SIGUSR2) };
+        };
+        poke();
         assert!(pending());
         let e = check().unwrap_err();
         assert!(e.is("Stop") && !e.is_os_or_value() && !e.is_exit());
@@ -154,8 +160,7 @@ mod tests {
         // 睡着的时候来：马上醒
         let killer = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
-            // SAFETY: me 是还活着的测试线程（下面 join 这条线程以后它才往下走）
-            unsafe { libc::pthread_kill(me, libc::SIGUSR2) };
+            poke();
         });
         let t0 = crate::py::time::monotonic();
         let r = sleep(5.0);
@@ -166,8 +171,7 @@ mod tests {
         // 等子进程的时候来：杀掉子进程，那一笔留给调用方
         let killer = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
-            // SAFETY: 同上
-            unsafe { libc::pthread_kill(me, libc::SIGUSR2) };
+            poke();
         });
         let t0 = crate::py::time::monotonic();
         let e = crate::py::proc::Cmd::new(["/bin/sleep", "5"]).capture().timeout(8.0).run().unwrap_err();
@@ -178,8 +182,7 @@ mod tests {
         assert!(sleep(0.01).is_ok());
 
         // 发给这条线程的，别的线程（别的测试）看不到、接不走
-        // SAFETY: 给自己的线程发一个装了处理函数的信号
-        unsafe { libc::pthread_kill(me, libc::SIGUSR2) };
+        poke();
         let other = std::thread::spawn(|| (pending(), check().is_ok()));
         assert_eq!(other.join().unwrap(), (false, true));
         assert!(pending() && check().unwrap_err().is("Stop"));
