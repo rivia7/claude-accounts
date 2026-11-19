@@ -5,6 +5,7 @@
     cargo build && python3 -I cli/pydiff/run.py            全部用例
     python3 -I cli/pydiff/run.py -k policy                  名字里带 policy 的
     python3 -I cli/pydiff/run.py -v -k keys/alias           失败时把两边的输出全打出来
+    python3 -I cli/pydiff/run.py -s -k env/codex            通过的也打出输出（确认用例真的走到了想测的那条路）
     CCA_CORE=cli/target/release/cca-core python3 -I …       换一个 cca-core
 
 用例在 cli/pydiff/cases/ 下，一个模块一份文件（写法见 cases/table.py 开头）。沙箱是临时目录里的假 HOME：不碰真的
@@ -119,9 +120,12 @@ def run_one(cmd, c, home, tmp):
     env = {'HOME': home, 'PATH': '%s/bin:/usr/bin:/bin:/usr/sbin:/sbin' % home, 'LANG': 'en_US.UTF-8', 'TZ': 'Asia/Shanghai',
            'TMPDIR': tmp, 'CCA_TOOL': c['tool'], 'CCA_SELF': os.path.join(home, '.cca', 'bin', 'cca'), 'CCA_BIN': ''}
     env.update(c['env'])
-    env = {k: v for k, v in env.items() if v is not None}
+    # 用例里写的 %HOME% 换成沙箱的 HOME（登记用例的时候还不知道它在哪）
+    env = {k: v.replace('%HOME%', home) for k, v in env.items() if v is not None}
+    argv = [a.replace('%HOME%', home) for a in c['argv']]
+    cwd = (c['cwd'] or home).replace('%HOME%', home)
     try:
-        p = subprocess.run(cmd + c['argv'], input=c['stdin'], capture_output=True, env=env, cwd=c['cwd'] or home, timeout=60)
+        p = subprocess.run(cmd + argv, input=c['stdin'], capture_output=True, env=env, cwd=cwd, timeout=60)
         out, err, rc = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
         out, err, rc = e.stdout or b'', (e.stderr or b'') + b'\n[pydiff: timeout]', -999
@@ -205,6 +209,8 @@ def main():
                 passed += 1
                 if verbose:
                     print('PASS  %s' % c['name'])
+                if '-s' in args:   # 通过的也把输出打出来看一眼（确认用例真的走到了想测的那条路）
+                    print('      rc=%s\n      stdout: %s\n      stderr: %s' % (rs['rc'], rs['stdout'].replace('\n', '\n              '), rs['stderr'].replace('\n', '\n              ')))
     finally:
         shutil.rmtree(base, ignore_errors=True)
     print('---- 对拍：%d 通过，%d 失败' % (passed, failed))
