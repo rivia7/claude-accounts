@@ -1,0 +1,40 @@
+[package]
+name = "cca-core"
+version = "0.0.0"          # 不单独发布：版本号跟着 cca 脚本里的 VERSION
+edition = "2021"
+rust-version = "1.100"
+publish = false
+description = "cca 的辅助程序：原来内嵌在 cca 里的 Python（PY_SRC）的 Rust 版，子命令、参数、输出逐字节一致"
+license = "MIT"
+
+[[bin]]
+name = "cca-core"
+path = "src/main.rs"
+
+# 依赖只用这几个常见的纯 Rust 库（见 docs/dev/rust.md 的「依赖」）：加新的之前先问维护者。版本由 Cargo.lock 锁定，构建一律 --locked
+[dependencies]
+libc = "0.2"
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case", "unicode-gencat"] }
+sha1 = { version = "0.10", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[profile.release]
+opt-level = 2
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+
+[profile.dev]
+panic = "abort"            # 和发布版一样：没人接的 panic 走 main 的钩子，退出码 1
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# 移植时逐行对着 Python 写，这几条会逼着改写法、反而对不上原文
+too_many_arguments = "allow"
+type_complexity = "allow"
+new_without_default = "allow"
+len_without_is_empty = "allow"
