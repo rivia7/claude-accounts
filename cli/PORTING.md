@@ -121,6 +121,11 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 | `urlsplit`、`parse_qsl`、`quote`、`unquote`、`ipaddress` | `py::url::*`、`py::ipaddr::*`（规则是 CPython 3.14 的，有对照数据） |
 | `base64.b64encode` / `b64decode(s)` / `b64decode(s, validate=True)` / `urlsafe_b64decode` | `py::base64::{b64encode, b64decode(s, false), b64decode(s, true), urlsafe_b64decode}`；出错是 `Fail::Value`（binascii.Error 是 ValueError 的子类），说明和 CPython 一样 |
 | `plistlib.load` / `loads` / `dumps(v)` / `dumps(v, fmt=FMT_BINARY)` | `py::plist::{loads, dumps_xml, dumps_binary}`，值是 `py::plist::P`（不是 `V`：属性列表有数据和日期）。输出和 plistlib 逐字节一样；异常类对得上（ExpatError 不是 ValueError：`e.is("ExpatError")`）。和 Python 不一样的三处写在文件头 |
+| `tomllib.loads` | `py::toml`（值是 `V`；错误的说明和 tomllib 一样，有对照数据） |
+| `xml.etree.ElementTree.fromstring` | `py::xml::fromstring`（`Tree::root()`、`El::{tag, text, get, children, findall, find, findtext}`；带 DOCTYPE 的一律不收，只认四种编码） |
+| `zipfile.ZipFile` | `py::zip::ZipFile`（`infolist`、`open_member`、`read`；只读，不支持 bzip2 / lzma / zstd） |
+| `zlib.compress` / `decompress`、`ssl`（TLS 客户端） | `py::zlib`、`py::tls`（只有 macOS 的构建带） |
+| `signal.signal(sig, 处理函数)` | `py::signal::{raise_on, check, sleep}`（见下面「信号处理函数里 raise 的」） |
 | `open(path)` 失败时的 `str(e)` | `py::fs::open_error_text(&e, path)`（带文件名的 repr） |
 | `with Lock():` | `let _lock = core::base::Lock::acquire()?;`（离开作用域解锁；不能重入） |
 | 全局的 `T`、`with using(tool):` | `core::tool::t()`、`let _g = Using::tool(tool);` |
@@ -146,6 +151,9 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 - `cmd::router`：`device_id`、`router_merge`、`parse_node_list`、`node_match`、`nodes_rename`、`nodes_record`、`node_users_all`
 - `cmd::accounts`：`cmd_env` 用的 `api_env`、`api_settings`、`bypass_list`、`Tool::flags / run_args`，`edit_sum`、`env_text`、`env_parse`、`node_users`
 - `cmd::table`：`need`、`account_named`、`all_errors`
+- `cmd::usage`：`usage_cached`、`usage_row`、`usage_entry`、`usage_weeks_view`、`span`、`ago`、`day_gap`；`cmd::codex`：`codex_claims`、`agy_claims`
+- `cmd::corenet`：`slot_orders`、`local_names`、`local_info`、`local_want`、`core_defs`、`udp_view`、`udp_leak_hint`、`write_text`
+- `cmd::cost`：`CostView`；`cmd::mail`：`mail_cfg`、`mail_view`、`mail_ready`；`cmd::clients`：`cu_claude_channel`、`cu_claude_env`
 
 别的模块还没移植、你又绕不开的函数：在自己的文件里放一个私有的替身，照原函数开头“没开这个功能就什么也不做”的那句判断
 先答了（常见的路要走得通），真要它干活的地方才 `unimplemented!("…（哪个模块的哪个函数）")`；报告里列出挡住了哪些路。
