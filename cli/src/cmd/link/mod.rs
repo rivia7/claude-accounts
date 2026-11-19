@@ -131,17 +131,12 @@ pub fn cmd_link(args: &[String]) -> R<()> {
     }
     t().after_link(key)?;
     if after == "cost" && t().has_cost {
-        cost_kick()?;
+        super::cost::cost_kick();
     }
     Ok(())
 }
 
 // --- 别的模块的、还没移植的：调用的地方照原样留着，等那个模块移植了，把这里换成真的调用 ---
-
-/// 在后台跑一次 cca _cost-sync（最多 COST_EVERY 一次）。`link 键 cost`（Claude、Codex）走到这里
-fn cost_kick() -> R<()> {
-    unimplemented!("会话结束后在后台统计折合金额还没移植（cost 模块：cost_kick）")
-}
 
 /// Codex 的会话库（state_N.sqlite）里经账号目录的会话路径改写成 ~/.codex 下的同一个文件。Codex 的 `link` 每次都走到这里
 fn codex_fix_rollouts() -> R<()> {
@@ -150,10 +145,8 @@ fn codex_fix_rollouts() -> R<()> {
 
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[
-    // link：Codex 的收尾 codex_fix_rollouts 还没移植，所以没有 codex。Claude 的链接本身都对上了（对拍里有），但 bash 在每次
-    // 会话结束时调的是 `py link 键 cost`，最后要 cost_kick（也还没移植）：混合版里先照旧交给 Python，等 cost_kick 接上了
-    // 把 claude 加进来；两处都接上以后改成 Cmd::all
-    Cmd::only("link", cmd_link, &["agy"]),
+    // link：Codex 的收尾 codex_fix_rollouts 还没移植，所以没有 codex；接上以后改成 Cmd::all
+    Cmd::only("link", cmd_link, &["claude", "agy"]),
     Cmd::all("sync", cmd_sync),
     Cmd::all("device", cmd_device),
 ];

@@ -135,6 +135,7 @@ def clone_tree(src, dst):
         st = os.lstat(s)
         if stat.S_ISLNK(st.st_mode):
             os.symlink(os.readlink(s), d)
+            shutil.copystat(s, d, follow_symlinks=False)   # 链接自己的修改时间也照旧
         elif stat.S_ISDIR(st.st_mode):
             os.mkdir(d)
             for n in os.listdir(s):

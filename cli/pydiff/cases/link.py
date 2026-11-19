@@ -39,6 +39,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 import run
 from run import case
@@ -2254,3 +2255,57 @@ def _(b, cd):
     put(b, '.gemini/config/GEMINI.md', '# config shared\n')
     put(b, cd + '/GEMINI.md', '# top mine\n')
     put(b, cd + '/config/AGENTS.md', '# config mine\n')
+
+
+# --- cost_kick 真的起后台统计的几条路（cost 模块里这一个函数已经移植）。SELF_PATH 是沙箱里假的 cca：把收到的参数记进
+# calls.log；settle 等它写完。cost/last 的修改时间每次不一样，只比它在不在（lcase 默认不比修改时间）
+COST_AGENT = '#!/bin/sh\nprintf \'%s EVENTS=[%s] TOOL=[%s] KEEP=[%s]\\n\' "cca $*" "$CCA_EVENTS" "$CCA_TOOL" "$KEEP_ME" >> "$HOME/calls.log"\n'
+COST_ENV = {'CCA_EVENTS': '/dev/null', 'KEEP_ME': 'yes'}
+
+
+def costing(b, tool='claude', cfg=None, last=None):
+    linked(b, tool)
+    b.cfg(dict({'version': 2}, **(cfg or {})))
+    put(b, '.cca/bin/cca', COST_AGENT, 0o755)
+    if last is not None:
+        p = put(b, '.cca/cost/last', '', 0o644)
+        os.chmod(os.path.dirname(p), 0o700)
+        t = time.time() - last
+        os.utime(p, (t, t))
+
+
+@lcase('link-cost/claude/kicks', ['link', A, 'cost'], env=COST_ENV, settle=0.6)
+def _(b):
+    costing(b)
+
+
+@lcase('link-cost/claude/kicks-when-stamp-is-old', ['link', A, 'cost'], env=COST_ENV, settle=0.6)
+def _(b):
+    costing(b, last=3600)
+
+
+@lcase('link-cost/claude/too-soon', ['link', A, 'cost'], env=COST_ENV, settle=0.4)
+def _(b):
+    costing(b, last=30)
+
+
+@lcase('link-cost/claude/stamp-in-the-future-kicks', ['link', A, 'cost'], env=COST_ENV, settle=0.6)
+def _(b):
+    costing(b, last=-3600)
+
+
+@lcase('link-cost/claude/cost-dir-is-a-file', ['link', A, 'cost'], env=COST_ENV, settle=0.4)
+def _(b):
+    costing(b)
+    put(b, '.cca/cost', 'not a directory', 0o600)
+
+
+@lcase('link-cost/claude/config-not-json-still-kicks', ['link', A, 'cost'], env=COST_ENV, settle=0.6)
+def _(b):
+    costing(b)
+    put(b, '.cca/config.json', '{oops', 0o600)
+
+
+@lcase('link/claude/no-cost-argument-no-kick', ['link', A], env=COST_ENV, settle=0.4)
+def _(b):
+    costing(b)
