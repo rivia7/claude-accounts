@@ -199,6 +199,7 @@ pub fn strptime_local(s: &str, fmt: &str) -> Option<f64> {
 }
 
 /// `(date.fromtimestamp(a) - date.fromtimestamp(b)).days`：按本地日历差几天
+#[cfg(test)]
 pub fn local_days_between(a: f64, b: f64) -> i64 {
     let day = |t: f64| {
         let tm = localtime(t);

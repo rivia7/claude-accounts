@@ -17,12 +17,14 @@ use std::time::Duration;
 #[derive(Debug)]
 pub enum TlsError {
     /// 证书校验没通过（过期、不是可信的机构签的、域名对不上……）
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // 只有 macOS 的构建带 TLS
     Cert(String),
     /// 别的：连接断了、超时、对方不说 TLS、协议版本太旧……
     Other(String),
 }
 
 /// PEM 文件里的各张证书（DER）：`-----BEGIN CERTIFICATE-----` 到 `-----END CERTIFICATE-----` 之间的 base64
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // 只有 macOS 的构建带 TLS
 pub fn pem_certificates(pem: &str) -> Vec<Vec<u8>> {
     const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
     const END: &str = "-----END CERTIFICATE-----";

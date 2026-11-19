@@ -20,8 +20,7 @@ mod catch;
 mod forward;
 mod sys;
 
-#[allow(unused_imports)] // agy_probe、read_answer：别的模块也要用（名字和原来一样），它们移植时从这里拿
-pub use agy::{agy_probe, cmd_agy_login, cmd_agy_probe, read_answer};
+pub use agy::{cmd_agy_login, cmd_agy_probe};
 pub use catch::cmd_login_catch;
 pub use forward::cmd_login_forward;
 

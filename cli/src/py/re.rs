@@ -197,6 +197,7 @@ impl Re {
     }
 
     /// `rx.sub(repl, text, count=1)`
+    #[cfg(test)]
     pub fn sub_once(&self, repl: &str, text: &str) -> String {
         match self.search(text) {
             Some(m) => format!("{}{}{}", &text[..m.start(0)], expand(repl, &m), &text[m.end(0)..]),

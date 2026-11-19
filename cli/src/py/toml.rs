@@ -98,6 +98,7 @@ pub struct Temporal {
 
 impl Temporal {
     /// `x.isoformat()`
+    #[cfg(test)]
     pub fn isoformat(&self) -> String {
         let mut out = String::new();
         if let Some((y, m, d)) = self.date {
@@ -120,6 +121,7 @@ impl Temporal {
 }
 
 /// `tomllib.loads(s)`，像从脚本最外层调用的那样（`loads` 自己在调用栈的第 2 层）
+#[cfg(test)]
 pub fn loads(s: &str) -> Result<Dict, TomlError> {
     loads_at(s, 2)
 }

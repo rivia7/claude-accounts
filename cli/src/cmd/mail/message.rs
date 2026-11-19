@@ -8,7 +8,7 @@
 //!
 //! 原来靠 Python 的调用栈上限（一千层）挡住套得太深的邮件，那时是没人接的 RecursionError；这里照量出来的层数（`MAX_DEPTH`）。
 
-use super::codec::{self, int_too_long, raw_unicode_escape, Codec, Lookup, INT_MAX_STR_DIGITS};
+use super::codec::{self, int_too_long, raw_unicode_escape, Lookup, INT_MAX_STR_DIGITS};
 use crate::py::text;
 use crate::py::{Fail, R};
 use std::collections::VecDeque;
@@ -726,14 +726,6 @@ pub fn mail_parse(raw: &[u8]) -> R<Message> {
 /// 照 UTF-8 解的字符集（`get_content_charset() or 'utf-8'` 再 `decode(…, 'replace')`，不认识的字符集也照 UTF-8）
 pub fn decode_text(part: &Message, raw: &[u8]) -> R<String> {
     codec::decode_body(part.get_content_charset()?.as_deref(), raw)
-}
-
-/// 认得出的字符集（测试里核对用）
-pub fn known_charset(name: &str) -> Option<Codec> {
-    match codec::lookup(name) {
-        Lookup::Known(c) => Some(c),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

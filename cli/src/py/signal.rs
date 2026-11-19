@@ -12,11 +12,12 @@
 //! 隔一段 `check()` 一次。
 
 use super::fail::{Fail, R};
-#[cfg_attr(test, allow(unused_imports))] // 测试里“来过”按线程记（per_thread），用不到全局的那个标志
+#[cfg(not(test))] // 测试里“来过”按线程记（per_thread），用不到全局的那个标志
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// 装了处理函数的信号来过、还没人接
+#[cfg(not(test))]
 static RAISED: AtomicBool = AtomicBool::new(false);
 /// 来了以后 `check()` 抛的异常类（最后一次 `raise_on` 给的）
 static CLASS: Mutex<&'static str> = Mutex::new("KeyboardInterrupt");

@@ -64,6 +64,7 @@ impl Fail {
     }
 
     /// 没人接住时进程的退出码
+    #[cfg(test)]
     pub fn code(&self) -> i32 {
         match self {
             Fail::Exit(n) => *n,
@@ -104,11 +105,6 @@ pub fn die<T>(msg: impl Into<String>) -> R<T> {
 /// `sys.exit(n)`
 pub fn exit<T>(code: i32) -> R<T> {
     Err(Fail::Exit(code))
-}
-
-/// `raise ValueError(说明)`
-pub fn value_error<T>(msg: impl Into<String>) -> R<T> {
-    Err(Fail::Value(msg.into()))
 }
 
 /// `str(OSError)` 的样子：`[Errno 2] No such file or directory`（系统给的说明，不带 Rust 加的「(os error 2)」）

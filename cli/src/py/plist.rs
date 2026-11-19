@@ -76,20 +76,6 @@ impl P {
         }
     }
 
-    pub fn as_array(&self) -> Option<&[P]> {
-        match self {
-            P::Array(a) => Some(a),
-            _ => None,
-        }
-    }
-
-    pub fn as_dict(&self) -> Option<&[(String, P)]> {
-        match self {
-            P::Dict(d) => Some(d),
-            _ => None,
-        }
-    }
-
     /// Python 里这个值算不算真（`x or 默认值`）
     pub fn truthy(&self) -> bool {
         match self {

@@ -74,6 +74,7 @@ pub fn floordiv(a: i64, b: i64) -> i64 {
 }
 
 /// `a % b`（结果和 b 同号）
+#[cfg(test)]
 pub fn pymod(a: i64, b: i64) -> i64 {
     let r = a % b;
     if r != 0 && ((r < 0) != (b < 0)) {

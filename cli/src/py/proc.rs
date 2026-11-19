@@ -71,6 +71,7 @@ impl Done {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
 
+    #[cfg(test)]
     pub fn err(&self) -> String {
         String::from_utf8_lossy(&self.stderr).into_owned()
     }
@@ -80,18 +81,25 @@ impl Done {
 pub enum ProcError {
     /// 起不来（找不到命令是 FileNotFoundError，也是 OSError）
     Os(io::Error),
-    /// `subprocess.TimeoutExpired`：超时前拿到的输出也带着
-    Timeout { stdout: Vec<u8>, stderr: Vec<u8> },
+    /// `subprocess.TimeoutExpired`：超时前拿到的输出也带着（和原来的异常一样；现在的调用方都不看，测试看 stdout）
+    Timeout {
+        #[cfg_attr(not(test), allow(dead_code))]
+        stdout: Vec<u8>,
+        #[allow(dead_code)]
+        stderr: Vec<u8>,
+    },
     /// 等它的时候，处理函数会 raise 的信号来了（`py::signal::raise_on` 装的；没装过就不会有）：子进程已经杀掉。
     /// 原来是那个异常从 `subprocess.run` 里冒出来；这里那一笔还留着，调用方接着 `py::signal::check()?` 把它传上去
     Interrupted,
 }
 
 impl ProcError {
+    #[cfg(test)]
     pub fn is_timeout(&self) -> bool {
         matches!(self, ProcError::Timeout { .. })
     }
 
+    #[cfg(test)]
     pub fn is_not_found(&self) -> bool {
         matches!(self, ProcError::Os(e) if e.kind() == io::ErrorKind::NotFound)
     }
@@ -374,6 +382,7 @@ pub fn env_set(env: &mut Vec<(String, String)>, k: &str, v: &str) {
 }
 
 /// 环境里去掉一个变量
+#[cfg(test)]
 pub fn env_drop(env: &mut Vec<(String, String)>, k: &str) {
     env.retain(|(x, _)| x != k);
 }

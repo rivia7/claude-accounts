@@ -117,6 +117,8 @@ pub struct ZipInfo {
     /// 本地文件头在哪（加上了压缩包前面多出来的那一段）。原来是 Python 的整数，可以是负的、可以很大
     pub header_offset: i128,
     pub external_attr: u32,
+    /// 哪种系统上打的包（`ZipInfo.create_system`；调试输出里看得到，别的地方不用）
+    #[allow(dead_code)]
     pub create_system: u8,
     pub extract_version: u8,
     /// 下一个本地文件头（或者目录表）从哪开始：数据不能越过它

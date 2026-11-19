@@ -28,11 +28,6 @@ pub fn rstrip_chars<'a>(s: &'a str, chars: &str) -> &'a str {
     s.trim_end_matches(|c| chars.contains(c))
 }
 
-/// `s.lstrip(chars)`
-pub fn lstrip_chars<'a>(s: &'a str, chars: &str) -> &'a str {
-    s.trim_start_matches(|c| chars.contains(c))
-}
-
 /// `s.split()`：按连着的空白切，开头结尾的空白不算
 pub fn split_ws(s: &str) -> Vec<&str> {
     s.split(uni::is_space).filter(|x| !x.is_empty()).collect()
@@ -156,11 +151,6 @@ pub fn isspace(s: &str) -> bool {
 /// `s.isprintable()`（空串算能打印）
 pub fn isprintable(s: &str) -> bool {
     s.chars().all(uni::is_printable)
-}
-
-/// `s.isalnum()`
-pub fn isalnum(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(uni::is_alnum)
 }
 
 /// `int(s)`：前后的空白、正负号、数字之间的下划线、各种文字的十进制数字都认；别的是 ValueError（这里是 None）

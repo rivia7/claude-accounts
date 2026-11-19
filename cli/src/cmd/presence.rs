@@ -318,9 +318,6 @@ impl Procs {
         &self.rows
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
 }
 
 /// 全部进程 {pid: (ppid, 终端, CPU 秒数, 启动时间戳, 命令行)}（一次 ps；Linux 上读 /proc）；读不了是 None

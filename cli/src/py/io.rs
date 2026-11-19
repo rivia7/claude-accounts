@@ -4,7 +4,6 @@
 //! stderr 则是一行一写。回归里常把两边合在一起（`2>&1`）看，子命令自己起的进程也往同一个地方写，先后顺序由这个
 //! 时机决定。所以不用 `println!`（它总是一行一写）：输出一律经这里的 `out!` / `err!`。
 
-use std::io::Write;
 use std::sync::Mutex;
 
 struct Stream {
@@ -94,13 +93,6 @@ pub fn finish() -> bool {
     flush_out();
     flush_err();
     !out().broken
-}
-
-/// 原始字节直接写到 stdout（先把攒着的文字写出去，保持先后）
-pub fn write_out_bytes(data: &[u8]) {
-    flush_out();
-    let _ = std::io::stdout().write_all(data);
-    let _ = std::io::stdout().flush();
 }
 
 /// `sys.stdin.read()`：读到头，不是 UTF-8 的字节换成 U+FFFD（Python 在 `-X utf8` 下是 surrogateescape，

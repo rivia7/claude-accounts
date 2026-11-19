@@ -231,10 +231,7 @@ impl List {
         self.0.borrow_mut().push(v.into());
     }
 
-    pub fn insert(&self, i: usize, v: impl Into<V>) {
-        self.0.borrow_mut().insert(i, v.into());
-    }
-
+    #[cfg(test)]
     pub fn remove(&self, i: usize) -> V {
         self.0.borrow_mut().remove(i)
     }
@@ -246,11 +243,6 @@ impl List {
     /// `list(l)`：快照
     pub fn items(&self) -> Vec<V> {
         self.0.borrow().clone()
-    }
-
-    /// 换成这些项（`l[:] = …`）
-    pub fn replace(&self, v: Vec<V>) {
-        *self.0.borrow_mut() = v;
     }
 
     /// `x in l`（照 Python 的 ==）
@@ -266,10 +258,6 @@ impl List {
     /// 里面的字符串（不是字符串的项跳过）
     pub fn strs(&self) -> Vec<Rc<str>> {
         self.0.borrow().iter().filter_map(|v| v.rc_str()).collect()
-    }
-
-    pub fn copy(&self) -> List {
-        List::from_vec(self.items())
     }
 
     pub fn same(&self, other: &List) -> bool {
@@ -305,10 +293,6 @@ impl V {
     /// `type(x) is int`：整数，布尔值不算
     pub fn is_int(&self) -> bool {
         matches!(self, V::Int(_) | V::Big(_))
-    }
-
-    pub fn is_float(&self) -> bool {
-        matches!(self, V::Float(_))
     }
 
     /// `isinstance(x, int)`：Python 里布尔值也是 int

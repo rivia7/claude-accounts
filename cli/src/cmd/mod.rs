@@ -1,7 +1,7 @@
 //! 各个子命令，按原来 PY_SRC 里的分节一节一个模块。
 //!
-//! `NAMES` 是原来的 `CMDS` 里的全部名字（先后照它）；每个模块自己有一张 `CMDS`，列着它移植好的子命令。
-//! 移植一个子命令：在它所属的模块里写 `pub fn cmd_xxx(args: &[String]) -> R<()>`，加进那个模块的 `CMDS`，别的文件不用动。
+//! 每个模块自己有一张 `CMDS`，列着它的子命令。加一个子命令：在它所属的模块里写 `pub fn cmd_xxx(args: &[String]) -> R<()>`，
+//! 加进那个模块的 `CMDS`，别的文件不用动。`NAMES` 是原来 Python 的 `CMDS` 里的全部名字（先后照它），测试拿它核对一个不少。
 
 pub mod accounts;
 pub mod clients;
@@ -32,24 +32,12 @@ pub type Run = fn(&[String]) -> R<()>;
 pub struct Cmd {
     pub name: &'static str,
     pub run: Run,
-    /// 对哪几个工具移植好了（开发时的混合版按它决定要不要交给 Python）
-    pub tools: &'static [&'static str],
 }
 
 impl Cmd {
-    /// 三种工具都移植好了
+    /// 一个子命令（三种工具走同一个函数，差别在 `core::tool::t()`）
     pub const fn all(name: &'static str, run: Run) -> Cmd {
-        Cmd { name, run, tools: &["claude", "codex", "agy"] }
-    }
-
-    /// 先只移植了 Claude 的（别的工具在混合版里照旧交给 Python）
-    pub const fn claude_only(name: &'static str, run: Run) -> Cmd {
-        Cmd { name, run, tools: &["claude"] }
-    }
-
-    /// 只移植了这几个工具的
-    pub const fn only(name: &'static str, run: Run, tools: &'static [&'static str]) -> Cmd {
-        Cmd { name, run, tools }
+        Cmd { name, run }
     }
 }
 
@@ -78,14 +66,9 @@ const MODULES: &[&[Cmd]] = &[
     shell::CMDS,
 ];
 
-/// 移植好的子命令
+/// 按名字找子命令
 pub fn find(name: &str) -> Option<&'static Cmd> {
     MODULES.iter().flat_map(|m| m.iter()).find(|c| c.name == name)
-}
-
-/// 原来有这个子命令（移植了没有另说），或者是后来加的（`shell` 模块的 `sh-…`：bash 里原来内嵌的小段 Python）
-pub fn known(name: &str) -> bool {
-    NAMES.contains(&name) || find(name).is_some()
 }
 
 /// 参数个数不对：Python 里是没人接的 TypeError（打印调用栈，退出码 1）
@@ -102,6 +85,7 @@ pub fn arg<'a>(args: &'a [String], i: usize, default: &'a str) -> &'a str {
 }
 
 /// 原来的 `CMDS` 里的名字，先后照它（主干增删子命令时跟着改）
+#[cfg(test)]
 pub const NAMES: &[&str] = &[
     "init", "env", "router-env", "router-set", "keys", "resolve", "validate", "email", "check", "add", "rm", "rename",
     "reorder", "set-last", "session-open", "name", "login-url", "private-profile", "runtime-record", "browser-profile",
@@ -138,14 +122,17 @@ mod tests {
         assert_eq!((NAMES[0], NAMES[148]), ("init", "gui-mail-list"));
     }
 
+    /// 原来的 149 个子命令一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）；没有登记两次的
     #[test]
-    fn every_ported_command_is_known_and_listed_once() {
+    fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();
         for c in MODULES.iter().flat_map(|m| m.iter()) {
-            assert!(known(c.name), "{} 不在 NAMES 里", c.name);
+            assert!(NAMES.contains(&c.name) || c.name.starts_with("sh-") || c.name.starts_with('_'), "{} 不是原来的子命令", c.name);
             assert!(!seen.contains(&c.name), "{} 登记了两次", c.name);
-            assert!(!c.tools.is_empty());
             seen.push(c.name);
+        }
+        for name in NAMES {
+            assert!(find(name).is_some(), "{name} 没有移植");
         }
     }
 }

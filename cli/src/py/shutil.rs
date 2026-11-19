@@ -39,11 +39,6 @@ pub fn st_mtime(m: &fs::Metadata) -> f64 {
     stat_time(m.mtime(), m.mtime_nsec())
 }
 
-/// `st.st_atime`（算法同 `st_mtime`）
-pub fn st_atime(m: &fs::Metadata) -> f64 {
-    stat_time(m.atime(), m.atime_nsec())
-}
-
 /// stat 里的一个时间（秒、纳秒）→ Python 看到的小数秒数（见 `st_mtime`）
 pub fn stat_time(sec: i64, nsec: i64) -> f64 {
     let (sec, nsec) = (sec as f64, nsec as f64);

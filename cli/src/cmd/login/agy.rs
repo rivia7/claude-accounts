@@ -190,12 +190,6 @@ fn agy_remote_note(key: &str, url: &str) -> R<()> {
     Ok(())
 }
 
-/// 从 fd 3 读一行答案（和 bash 的 ask 一样：终端，或 CCA_TTY 答案文件），提示写 stderr。一个字节一个字节地读，不多读：
-/// 答案文件后面的行还要留给 bash。没有 fd 3、读到头是 None
-pub fn read_answer(prompt: &str) -> Option<String> {
-    read_answer_on(3, prompt).unwrap_or(None)
-}
-
 /// `read_answer` 的主体，从 fd 读。卡在读上的时候来了要停下的信号是 `Stop::Interrupt`（原来是从 os.read 里抛出来的
 /// KeyboardInterrupt）
 fn read_answer_on(fd: RawFd, prompt: &str) -> Result<Option<String>, Stop> {

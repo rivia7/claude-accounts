@@ -299,6 +299,10 @@ mod tests {
         // SAFETY: fds 放得下两个描述符；拿到的两个都马上交给 OwnedFd 管
         unsafe {
             assert_eq!(libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()), 0);
+            // 别的测试这时起的子进程不能把这两头带走：带走了，这边关掉对方以后 recv 也等不到 EOF
+            for fd in fds {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
             (PySock::new(OwnedFd::from_raw_fd(fds[0]), 0.3).unwrap(), OwnedFd::from_raw_fd(fds[1]))
         }
     }
