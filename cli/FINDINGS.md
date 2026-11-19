@@ -85,3 +85,41 @@
 - **比修改时间新旧用的是小数的秒。** `merge_file`、`adopt_task_lists` 比的是 `st_mtime`（float）：现在的时间戳上两个文件差不到
   约 240 纳秒就算一样新；最后一位还随平台变（arm64 上 CPython 把 `秒 + 1e-9 × 纳秒` 合成一次乘加，x86-64 上是先乘后加）。
   Rust 这边照 arm64 上实测的算法做了（`pylib.rs` 的 `st_mtime`）。不算错，记一笔：想要确定的结果该比 `st_mtime_ns`。
+
+## leak
+
+出口检测的解析和 DNS / WebRTC 泄露检测（`coffee_parse` 到 `cmd_leak_verdict`）。带着对拍用例名字的是实跑核实过的（cli/pydiff/cases/leak.py）。
+
+- **`coffee` 的退出码 1 有两个意思。** 退出码 1 是“纯净度低于 min_trust”，可 Python 里没人接的异常也是退出码 1（这时 stdout 是空的）。
+  bash 的 `coffee_check` 分不出来：照“出口纯净度偏低”问要不要继续，那一句里出口的信息是空的。触发：config.json 的 `min_trust`
+  不是整数的写法（`50.5`、`"abc"`、`null`：`cfg_load` 只在没有这一项时补 50，不看类型），而且要拿到了评分、出口不在受限地区才会走到
+  `int(min_trust)`（平时看不出来）；或者 iprisk 的 `countryCode`、`asOrganization` / `company_name` 是数字、列表这类不是文字的值。
+  `health-save` 用的是同一个 `coffee_parse`，这时 health.json 也没写。（退出码和空的 stdout：coffee/min/abc、coffee/org/bad-number、
+  coffee/cc/bad-number；bash 和 health-save 那一半是读代码看出来的）
+- **评分是 `NaN` 时放行，布尔值也当评分。** `trust_score` 用 `isinstance(…, (int, float))` 认：`true` 当 1 分，那一行写的是
+  「纯净度 True（可疑）」；`NaN`（Python 的 json 认这个写法）档位算“可疑”，但 `score < int(min_trust)` 是假，退出码 0，不提示偏低。
+  （coffee/score/NaN、coffee/score/true）
+- **受限地区只看 iprisk 的 `countryCode`，有它就不看 trace 的 `loc`。** `cc = d.get('countryCode') or loc`：claude.ai 的 trace 说出口在
+  HK、ip.net.coffee 的库里是 US 时不算受限地区，退出码 0。两边的归属地对不上时该信谁，由维护者定（查用量前的 `coffee_check region`
+  不带 iprisk，看的是 `loc`）。（coffee/restricted/loc-ignored-when-risk-has-cc）
+- **归属地接口回答了一个没有地区代码的 JSON 对象时，按“查到了”记 7 天。** `leak_geo` 里回答只要是个字典就不带 `miss`，`cc` 是空的：
+  ip.net.coffee 回 `{}`、`{"error": …}` 时（curl 没带 `-f`，HTTP 出错退出码也是 0），这个网段 7 天里一直是「解析器归属地不完整」/
+  「归属地没查到」，不像连不上、不是 JSON 那样一小时后重查。（leak-probe/geo-empty-object）
+- **「WebRTC 没测成」那一句点名的可能不是没查到归属地的那个地址。** `shown = (cn or leaked)[0]`：STUN 看到两个和出口不同的地址、
+  第一个查到了（不是中国大陆）、第二个没查到时，说的是「STUN 看到 <第一个>，归属地没查到」。（leak-verdict/webrtc-unknown-one-of-two）
+- **agy 的 WebRTC 说明里缺了 App 的名字。** `T.app_label` 对 agy 是空串：「尚未验证浏览器或  是否会暴露该 IP」，中间两个空格。
+  （leak-verdict/webrtc-leak-agy、leak-verdict/webrtc-note-agy）
+- **`IP_TEXT` 只看字符，结尾多一个换行也算。** `^[0-9A-Fa-f:.]{2,45}$` 配 `re.match`：`ab`、`203.0.113.53\n` 都算 IP，进了 servers，
+  查归属地的网址里也带着那个换行（查不到，结论是没测成，不会当成没问题）。ip.net.coffee 的回答不对时才遇得到。
+  （leak-probe/servers-hex-word-passes-for-an-ip、leak-probe/servers-trailing-newline）
+- **`stun_probe` 说“错误都返回空”，有两种其实是线程里没人接的异常。** `socket.socket(af, …)` 在 `try` 外面（解析出了 IPv6 地址、
+  内核却建不了 IPv6 套接字时）；`getaddrinfo` 把主机名按 idna 编码失败是 UnicodeError，不是 OSError（`CCA_STUN=a..b:9`）。结果一样是
+  这一路没有地址，只是 stderr 上多一段调用栈（bash 把 leak-probe 的 stderr 丢掉了）。cca-core 这两种情况往 stderr 说一句，同样没有结果。
+  （leak-probe/stun-host-python-cannot-encode；建不了套接字的那种是读代码看出来的）
+- **macOS 上几个线程同时解析主机名，偶尔有一个卡住一秒以上。** `stun_ips` 一口气起 4 个线程（两个服务器 × IPv4 / IPv6）各自
+  `getaddrinfo`。开发机（macOS 27.2.1）上实测：新进程里 4 个线程同时解析 127.0.0.1、localhost（各按 IPv4、IPv6），C 写的小程序
+  6000 次里 8 次有一个 localhost 的解析超过 1 秒没回来（线程错开 300 微秒起还有 2 次；只有一个线程解析时 8000 次 0 次）；原来的
+  Python（`CCA_STUN=127.0.0.1:端口,localhost:端口`）3000 次里 2 次，cca-core 4000 次里 2 次。`stun_ips` 的等待上限（超时 + 0.5 秒）
+  兜得住，那一路按没测到算：偶尔少一个服务器或者少 IPv6 的结果，leak-probe 多花 1.5 秒。不是移植带来的；对拍里的假 STUN 因此只写数字地址。
+- **`leak.json` 的读改写没有锁。** `leak-verdict` 读缓存、改、整份写回，不拿 `Lock`：两个账号同时启动（App 的后台检查和终端里的启动）时
+  后写的盖掉先写的。只是缓存，丢了的下次重测。（读代码看出来的）
