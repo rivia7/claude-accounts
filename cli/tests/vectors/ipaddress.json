@@ -1,0 +1,1243 @@
+{
+ "python": "3.14",
+ "cases": [
+  {
+   "in": "0.0.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "0.0.0.0",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "0.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "0.255.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "0.255.255.255",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "0.255.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "1.1.1.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "1.1.1.1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "1.1.1.0/24"
+    }
+   }
+  },
+  {
+   "in": "8.8.8.8",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "8.8.8.8",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "8.8.8.0/24"
+    }
+   }
+  },
+  {
+   "in": "10.0.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "10.0.0.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "10.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "11.0.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "11.0.0.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "11.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "100.64.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "100.64.0.1",
+     "private": false,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "100.64.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "100.127.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "100.127.255.255",
+     "private": false,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "100.127.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "100.128.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "100.128.0.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "100.128.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "127.0.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "127.0.0.1",
+     "private": true,
+     "loopback": true,
+     "global": false,
+     "net48": null,
+     "net24": "127.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "127.255.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "127.255.255.255",
+     "private": true,
+     "loopback": true,
+     "global": false,
+     "net48": null,
+     "net24": "127.255.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "128.0.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "128.0.0.1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "128.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "169.254.1.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "169.254.1.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "169.254.1.0/24"
+    }
+   }
+  },
+  {
+   "in": "169.255.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "169.255.0.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "169.255.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "172.15.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "172.15.255.255",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "172.15.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "172.16.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "172.16.0.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "172.16.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "172.31.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "172.31.255.255",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "172.31.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "172.32.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "172.32.0.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "172.32.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.0.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "192.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.0.9",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.0.9",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "192.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.0.10",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.0.10",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "192.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.0.170",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.0.170",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "192.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.0.171",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.0.171",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "192.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.0.172",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.0.172",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "192.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.1.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.1.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "192.0.1.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.2.10",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.2.10",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "192.0.2.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.0.3.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.0.3.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "192.0.3.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.88.99.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.88.99.1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "192.88.99.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.168.2.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.168.2.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "192.168.2.0/24"
+    }
+   }
+  },
+  {
+   "in": "192.169.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "192.169.0.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "192.169.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "198.17.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "198.17.255.255",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "198.17.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "198.18.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "198.18.0.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "198.18.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "198.19.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "198.19.255.255",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "198.19.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "198.20.0.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "198.20.0.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "198.20.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "198.51.100.7",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "198.51.100.7",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "198.51.100.0/24"
+    }
+   }
+  },
+  {
+   "in": "203.0.113.9",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "203.0.113.9",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "203.0.113.0/24"
+    }
+   }
+  },
+  {
+   "in": "203.0.114.0",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "203.0.114.0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "203.0.114.0/24"
+    }
+   }
+  },
+  {
+   "in": "224.0.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "224.0.0.1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "224.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "239.255.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "239.255.255.255",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": null,
+     "net24": "239.255.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "240.0.0.1",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "240.0.0.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "240.0.0.0/24"
+    }
+   }
+  },
+  {
+   "in": "255.255.255.255",
+   "out": {
+    "ok": {
+     "version": 4,
+     "str": "255.255.255.255",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": null,
+     "net24": "255.255.255.0/24"
+    }
+   }
+  },
+  {
+   "in": "01.2.3.4",
+   "out": {
+    "err": "'01.2.3.4' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1.2.3",
+   "out": {
+    "err": "'1.2.3' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1.2.3.4.5",
+   "out": {
+    "err": "'1.2.3.4.5' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "256.1.1.1",
+   "out": {
+    "err": "'256.1.1.1' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1.2.3.-4",
+   "out": {
+    "err": "'1.2.3.-4' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": " 1.2.3.4",
+   "out": {
+    "err": "' 1.2.3.4' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1.2.3.4 ",
+   "out": {
+    "err": "'1.2.3.4 ' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "١.2.3.4",
+   "out": {
+    "err": "'١.2.3.4' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1..3.4",
+   "out": {
+    "err": "'1..3.4' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "0x7f.0.0.1",
+   "out": {
+    "err": "'0x7f.0.0.1' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1.2.3.04",
+   "out": {
+    "err": "'1.2.3.04' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "::",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::1",
+     "private": true,
+     "loopback": true,
+     "global": false,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::2",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::2",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::ffff:1.2.3.4",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::ffff:1.2.3.4",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::ffff:10.0.0.1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::ffff:10.0.0.1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::ffff:127.0.0.1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::ffff:127.0.0.1",
+     "private": true,
+     "loopback": true,
+     "global": false,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::1.2.3.4",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "::102:304",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "64:ff9b::1.2.3.4",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "64:ff9b::102:304",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "64:ff9b::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "64:ff9b:1::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "64:ff9b:1::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "64:ff9b:1::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "100::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "100::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "100::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "100:0:0:1::",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "100:0:0:1::",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "100::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "2001::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:1::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:1::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:1::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:1::2",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:1::2",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:1::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:1::3",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:1::3",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "2001:1::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:3::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:3::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:3::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:4:112::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:4:112::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:4:112::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:20::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:20::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:20::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:30::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:30::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:30::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:db8::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:db8::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "2001:db8::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2001:200::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2001:200::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2001:200::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2002::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2002::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "2002::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2400:cb00::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2400:cb00::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2400:cb00::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "2606:4700:4700::1111",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "2606:4700:4700::1111",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "2606:4700:4700::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "3fff::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "3fff::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "3fff::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "3fff:fff:ffff::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "3fff:fff:ffff::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "3fff:fff:ffff::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "3fff:1000::",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "3fff:1000::",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "3fff:1000::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "fc00::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "fc00::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "fc00::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "fd12:3456::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "fd12:3456::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "fd12:3456::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "fe80::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "fe80::1",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "fe80::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "fe80::1%eth0",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "fe80::1%eth0",
+     "private": true,
+     "loopback": false,
+     "global": false,
+     "net48": "fe80::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "fec0::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "fec0::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "fec0::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "ff02::1",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "ff02::1",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "ff02::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "1:2:3:4:5:6:7:8",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "1:2:3:4:5:6:7:8",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "1:2:3::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "1:2:3:4:5:6:7::",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "1:2:3:4:5:6:7:0",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "1:2:3::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::1:2:3:4:5:6:7",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "0:1:2:3:4:5:6:7",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "0:1:2::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "1::8",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "1::8",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "1::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "1:2:3:4:5:6:7:8:9",
+   "out": {
+    "err": "'1:2:3:4:5:6:7:8:9' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": ":::",
+   "out": {
+    "err": "':::' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1::2::3",
+   "out": {
+    "err": "'1::2::3' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "12345::",
+   "out": {
+    "err": "'12345::' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "g::1",
+   "out": {
+    "err": "'g::1' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "1:2:3:4:5:6:1.2.3.4",
+   "out": {
+    "ok": {
+     "version": 6,
+     "str": "1:2:3:4:5:6:102:304",
+     "private": false,
+     "loopback": false,
+     "global": true,
+     "net48": "1:2:3::/48",
+     "net24": null
+    }
+   }
+  },
+  {
+   "in": "::1%",
+   "out": {
+    "err": "'::1%' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "::1%a%b",
+   "out": {
+    "err": "'::1%a%b' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "[::1]",
+   "out": {
+    "err": "'[::1]' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "",
+   "out": {
+    "err": "'' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "localhost",
+   "out": {
+    "err": "'localhost' does not appear to be an IPv4 or IPv6 address"
+   }
+  },
+  {
+   "in": "example.com",
+   "out": {
+    "err": "'example.com' does not appear to be an IPv4 or IPv6 address"
+   }
+  }
+ ]
+}

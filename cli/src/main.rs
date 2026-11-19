@@ -3,6 +3,7 @@
 
 #![allow(dead_code)] // 地基先行：各模块移植进来之前，很多函数还没有调用方
 
+mod cmd;
 mod core;
 mod py;
 

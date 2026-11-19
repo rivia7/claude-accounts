@@ -1,0 +1,317 @@
+{
+ "python": "3.14",
+ "cases": {
+  "parse_qsl": [
+   {
+    "in": "",
+    "out": [],
+    "keep": []
+   },
+   {
+    "in": "a=1&b=2",
+    "out": [
+     [
+      "a",
+      "1"
+     ],
+     [
+      "b",
+      "2"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "1"
+     ],
+     [
+      "b",
+      "2"
+     ]
+    ]
+   },
+   {
+    "in": "a=1;b=2",
+    "out": [
+     [
+      "a",
+      "1;b=2"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "1;b=2"
+     ]
+    ]
+   },
+   {
+    "in": "a=%E4%B8%AD&b=x+y",
+    "out": [
+     [
+      "a",
+      "中"
+     ],
+     [
+      "b",
+      "x y"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "中"
+     ],
+     [
+      "b",
+      "x y"
+     ]
+    ]
+   },
+   {
+    "in": "a&b=",
+    "out": [],
+    "keep": [
+     [
+      "a",
+      ""
+     ],
+     [
+      "b",
+      ""
+     ]
+    ]
+   },
+   {
+    "in": "=x",
+    "out": [
+     [
+      "",
+      "x"
+     ]
+    ],
+    "keep": [
+     [
+      "",
+      "x"
+     ]
+    ]
+   },
+   {
+    "in": "a=1&a=2",
+    "out": [
+     [
+      "a",
+      "1"
+     ],
+     [
+      "a",
+      "2"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "1"
+     ],
+     [
+      "a",
+      "2"
+     ]
+    ]
+   },
+   {
+    "in": "code=abc%0A&state=x",
+    "out": [
+     [
+      "code",
+      "abc\n"
+     ],
+     [
+      "state",
+      "x"
+     ]
+    ],
+    "keep": [
+     [
+      "code",
+      "abc\n"
+     ],
+     [
+      "state",
+      "x"
+     ]
+    ]
+   },
+   {
+    "in": "a=%ZZ&b=%ff",
+    "out": [
+     [
+      "a",
+      "%ZZ"
+     ],
+     [
+      "b",
+      "�"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "%ZZ"
+     ],
+     [
+      "b",
+      "�"
+     ]
+    ]
+   },
+   {
+    "in": "a==b&c=d=e",
+    "out": [
+     [
+      "a",
+      "=b"
+     ],
+     [
+      "c",
+      "d=e"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "=b"
+     ],
+     [
+      "c",
+      "d=e"
+     ]
+    ]
+   },
+   {
+    "in": "&&a=1&&",
+    "out": [
+     [
+      "a",
+      "1"
+     ]
+    ],
+    "keep": [
+     [
+      "a",
+      "1"
+     ]
+    ]
+   }
+  ],
+  "quote": [
+   {
+    "in": "",
+    "quote": "",
+    "quote_safe_empty": "",
+    "unquote": ""
+   },
+   {
+    "in": "abc",
+    "quote": "abc",
+    "quote_safe_empty": "abc",
+    "unquote": "abc"
+   },
+   {
+    "in": "a b",
+    "quote": "a%20b",
+    "quote_safe_empty": "a%20b",
+    "unquote": "a b"
+   },
+   {
+    "in": "a/b?c=d&e",
+    "quote": "a/b%3Fc%3Dd%26e",
+    "quote_safe_empty": "a%2Fb%3Fc%3Dd%26e",
+    "unquote": "a/b?c=d&e"
+   },
+   {
+    "in": "中文",
+    "quote": "%E4%B8%AD%E6%96%87",
+    "quote_safe_empty": "%E4%B8%AD%E6%96%87",
+    "unquote": "中文"
+   },
+   {
+    "in": "a%20b",
+    "quote": "a%2520b",
+    "quote_safe_empty": "a%2520b",
+    "unquote": "a b"
+   },
+   {
+    "in": "it's~_.-",
+    "quote": "it%27s~_.-",
+    "quote_safe_empty": "it%27s~_.-",
+    "unquote": "it's~_.-"
+   },
+   {
+    "in": "\u0000",
+    "quote": "%00%7F",
+    "quote_safe_empty": "%00%7F",
+    "unquote": "\u0000"
+   },
+   {
+    "in": "a+b",
+    "quote": "a%2Bb",
+    "quote_safe_empty": "a%2Bb",
+    "unquote": "a+b"
+   }
+  ],
+  "urljoin": [
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "z",
+    "out": "https://a.example.com/x/z"
+   },
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "/z",
+    "out": "https://a.example.com/z"
+   },
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "//b.example.com/z",
+    "out": "https://b.example.com/z"
+   },
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "https://c.example.com/",
+    "out": "https://c.example.com/"
+   },
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "../z",
+    "out": "https://a.example.com/z"
+   },
+   {
+    "base": "https://a.example.com/x/y?q",
+    "url": "?r",
+    "out": "https://a.example.com/x/y?r"
+   },
+   {
+    "base": "https://a.example.com/x/",
+    "url": "./a/../b",
+    "out": "https://a.example.com/x/b"
+   },
+   {
+    "base": "https://a.example.com",
+    "url": "p",
+    "out": "https://a.example.com/p"
+   },
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "",
+    "out": "https://a.example.com/x/y"
+   },
+   {
+    "base": "https://a.example.com/x/y",
+    "url": "#f",
+    "out": "https://a.example.com/x/y#f"
+   }
+  ]
+ }
+}

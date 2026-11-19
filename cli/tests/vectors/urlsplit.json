@@ -1,0 +1,1055 @@
+{
+ "python": "3.14",
+ "cases": [
+  {
+   "in": "",
+   "out": {
+    "ok": {
+     "scheme": "",
+     "netloc": "",
+     "path": "",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://api.example.com/anthropic",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "api.example.com",
+     "path": "/anthropic",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "api.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://api.example.com/v1/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "api.example.com",
+     "path": "/v1/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "api.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "HTTP://Example.COM:8080/a?b=1#c",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "Example.COM:8080",
+     "path": "/a",
+     "query": "b=1",
+     "fragment": "c",
+     "username": null,
+     "password": null,
+     "hostname": "example.com",
+     "port": {
+      "ok": 8080
+     }
+    }
+   }
+  },
+  {
+   "in": "http://user:pw@host.example.com:99/p",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "user:pw@host.example.com:99",
+     "path": "/p",
+     "query": "",
+     "fragment": "",
+     "username": "user",
+     "password": "pw",
+     "hostname": "host.example.com",
+     "port": {
+      "ok": 99
+     }
+    }
+   }
+  },
+  {
+   "in": "http://user@host/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "user@host",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": "user",
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://:pw@host/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": ":pw@host",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": "",
+     "password": "pw",
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://@host/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "@host",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": "",
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://a:b:c@host/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "a:b:c@host",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": "a",
+     "password": "b:c",
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://[::1]:8443/x",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "[::1]:8443",
+     "path": "/x",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "::1",
+     "port": {
+      "ok": 8443
+     }
+    }
+   }
+  },
+  {
+   "in": "https://[fe80::1%25eth0]/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "[fe80::1%25eth0]",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "fe80::1%25eth0",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://[::1",
+   "out": {
+    "err": "Invalid IPv6 URL"
+   }
+  },
+  {
+   "in": "http://::1]/",
+   "out": {
+    "err": "Invalid IPv6 URL"
+   }
+  },
+  {
+   "in": "http://[v1.x]/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "[v1.x]",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "v1.x",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://[1.2.3.4]/",
+   "out": {
+    "err": "An IPv4 address cannot be in brackets"
+   }
+  },
+  {
+   "in": "http://x[::1]/",
+   "out": {
+    "err": "Invalid IPv6 URL"
+   }
+  },
+  {
+   "in": "http://[::1]x/",
+   "out": {
+    "err": "Invalid IPv6 URL"
+   }
+  },
+  {
+   "in": "http://[::1]x:80/",
+   "out": {
+    "err": "Invalid IPv6 URL"
+   }
+  },
+  {
+   "in": "http://host:80a/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host:80a",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "err": "Port could not be cast to integer value as '80a'"
+     }
+    }
+   }
+  },
+  {
+   "in": "http://host:99999/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host:99999",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "err": "Port out of range 0-65535"
+     }
+    }
+   }
+  },
+  {
+   "in": "http://host:/p",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host:",
+     "path": "/p",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://host:-1/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host:-1",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "err": "Port could not be cast to integer value as '-1'"
+     }
+    }
+   }
+  },
+  {
+   "in": "http://host:٣/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host:٣",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "err": "Port could not be cast to integer value as '٣'"
+     }
+    }
+   }
+  },
+  {
+   "in": "http://HOST.Example.com./p",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "HOST.Example.com.",
+     "path": "/p",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host.example.com.",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http:/onlypath",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "",
+     "path": "/onlypath",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http:onlypath",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "",
+     "path": "onlypath",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "//host/p",
+   "out": {
+    "ok": {
+     "scheme": "",
+     "netloc": "host",
+     "path": "/p",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "/just/path?q#f",
+   "out": {
+    "ok": {
+     "scheme": "",
+     "netloc": "",
+     "path": "/just/path",
+     "query": "q",
+     "fragment": "f",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "no-scheme.example.com/p",
+   "out": {
+    "ok": {
+     "scheme": "",
+     "netloc": "",
+     "path": "no-scheme.example.com/p",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "mailto:me@example.com",
+   "out": {
+    "ok": {
+     "scheme": "mailto",
+     "netloc": "",
+     "path": "me@example.com",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "file:///etc/passwd",
+   "out": {
+    "ok": {
+     "scheme": "file",
+     "netloc": "",
+     "path": "/etc/passwd",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "javascript:alert(1)",
+   "out": {
+    "ok": {
+     "scheme": "javascript",
+     "netloc": "",
+     "path": "alert(1)",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "h+t.t-p://x/",
+   "out": {
+    "ok": {
+     "scheme": "h+t.t-p",
+     "netloc": "x",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "x",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "1http://x/",
+   "out": {
+    "ok": {
+     "scheme": "",
+     "netloc": "",
+     "path": "1http://x/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "ht_tp://x/",
+   "out": {
+    "ok": {
+     "scheme": "",
+     "netloc": "",
+     "path": "ht_tp://x/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": " https://lead.example.com/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "lead.example.com",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "lead.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://trail.example.com/ ",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "trail.example.com",
+     "path": "/ ",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "trail.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "\u0001https://c0.example.com/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "c0.example.com",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "c0.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "ht\ttps://tab.example.com/a\nb",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "tab.example.com",
+     "path": "/ab",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "tab.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://例子.example.com/路径?查询=值#片段",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "例子.example.com",
+     "path": "/路径",
+     "query": "查询=值",
+     "fragment": "片段",
+     "username": null,
+     "password": null,
+     "hostname": "例子.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://ex℀mple.com/",
+   "out": {
+    "err": "netloc 'ex℀mple.com' contains invalid characters under NFKC normalization"
+   }
+  },
+  {
+   "in": "https://a.example.com/p?x=1&y=2;z=3",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "a.example.com",
+     "path": "/p",
+     "query": "x=1&y=2;z=3",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "a.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://a.example.com?x",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "a.example.com",
+     "path": "",
+     "query": "x",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "a.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://a.example.com#f",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "a.example.com",
+     "path": "",
+     "query": "",
+     "fragment": "f",
+     "username": null,
+     "password": null,
+     "hostname": "a.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://a.example.com/p#f?notquery",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "a.example.com",
+     "path": "/p",
+     "query": "",
+     "fragment": "f?notquery",
+     "username": null,
+     "password": null,
+     "hostname": "a.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://localhost:7901",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "localhost:7901",
+     "path": "",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "localhost",
+     "port": {
+      "ok": 7901
+     }
+    }
+   }
+  },
+  {
+   "in": "http://127.0.0.1:7901/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "127.0.0.1:7901",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "127.0.0.1",
+     "port": {
+      "ok": 7901
+     }
+    }
+   }
+  },
+  {
+   "in": "socks5://127.0.0.1:1080",
+   "out": {
+    "ok": {
+     "scheme": "socks5",
+     "netloc": "127.0.0.1:1080",
+     "path": "",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "127.0.0.1",
+     "port": {
+      "ok": 1080
+     }
+    }
+   }
+  },
+  {
+   "in": "https://claude.ai/oauth/authorize?code=true&client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=abc",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "claude.ai",
+     "path": "/oauth/authorize",
+     "query": "code=true&client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&state=abc",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "claude.ai",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "unix:/tmp/x.sock",
+   "out": {
+    "ok": {
+     "scheme": "unix",
+     "netloc": "",
+     "path": "/tmp/x.sock",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://host\\evil/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host\\evil",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host\\evil",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://host/a b",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "host",
+     "path": "/a b",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "HTTPS://UPPER/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "UPPER",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "upper",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://-bad-.example.com/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "-bad-.example.com",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "-bad-.example.com",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https:///nohost",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "",
+     "path": "/nohost",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://:443/",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": ":443",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": null,
+     "port": {
+      "ok": 443
+     }
+    }
+   }
+  },
+  {
+   "in": "http://[::ffff:1.2.3.4]:80/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "[::ffff:1.2.3.4]:80",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "::ffff:1.2.3.4",
+     "port": {
+      "ok": 80
+     }
+    }
+   }
+  },
+  {
+   "in": "http://[::1]:/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "[::1]:",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "::1",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "http://[::1]:0x50/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "[::1]:0x50",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "::1",
+     "port": {
+      "err": "Port could not be cast to integer value as '0x50'"
+     }
+    }
+   }
+  },
+  {
+   "in": "http://user:p%40ss@host/",
+   "out": {
+    "ok": {
+     "scheme": "http",
+     "netloc": "user:p%40ss@host",
+     "path": "/",
+     "query": "",
+     "fragment": "",
+     "username": "user",
+     "password": "p%40ss",
+     "hostname": "host",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "ws://x",
+   "out": {
+    "ok": {
+     "scheme": "ws",
+     "netloc": "x",
+     "path": "",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "x",
+     "port": {
+      "ok": null
+     }
+    }
+   }
+  },
+  {
+   "in": "https://x:65535",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "x:65535",
+     "path": "",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "x",
+     "port": {
+      "ok": 65535
+     }
+    }
+   }
+  },
+  {
+   "in": "https://x:65536",
+   "out": {
+    "ok": {
+     "scheme": "https",
+     "netloc": "x:65536",
+     "path": "",
+     "query": "",
+     "fragment": "",
+     "username": null,
+     "password": null,
+     "hostname": "x",
+     "port": {
+      "err": "Port out of range 0-65535"
+     }
+    }
+   }
+  }
+ ]
+}

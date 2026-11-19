@@ -5,6 +5,7 @@ pub mod fail;
 pub mod fs;
 pub mod hash;
 pub mod io;
+pub mod ipaddr;
 pub mod json;
 pub mod num;
 pub mod obj;
@@ -15,6 +16,7 @@ pub mod re;
 pub mod text;
 pub mod time;
 pub mod uni;
+pub mod url;
 
 pub use fail::{die, exit, Fail, R};
 pub use obj::{Dict, List, V};

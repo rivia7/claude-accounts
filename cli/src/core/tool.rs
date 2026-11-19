@@ -327,6 +327,23 @@ thread_local! {
     static TABS: RefCell<[Option<Dict>; 3]> = const { RefCell::new([None, None, None]) };
     /// 各工具账号表的问题
     static ERRS: RefCell<[Option<Vec<String>>; 3]> = const { RefCell::new([None, None, None]) };
+    /// 账号目录里的 .claude.json，一次进程里只读一次（原来的 `ACCT_JSON`，按账号的键记；换工具时清掉）
+    static ACCT_JSON: RefCell<HashMap<String, Dict>> = RefCell::new(HashMap::new());
+}
+
+/// `ACCT_JSON.get(key)`
+pub fn acct_json_cached(key: &str) -> Option<Dict> {
+    ACCT_JSON.with(|m| m.borrow().get(key).cloned())
+}
+
+/// `ACCT_JSON[key] = j`
+pub fn acct_json_store(key: &str, j: &Dict) {
+    ACCT_JSON.with(|m| m.borrow_mut().insert(key.to_string(), j.clone()));
+}
+
+/// `ACCT_JSON.clear()`
+pub fn acct_json_clear() {
+    ACCT_JSON.with(|m| m.borrow_mut().clear());
 }
 
 impl Tool {
@@ -376,6 +393,11 @@ impl Tool {
         ERRS.with(|m| m.borrow_mut()[self.index()] = Some(errs));
     }
 
+    /// `ERRS.clear()` 里这个工具的那一份
+    pub fn clear_errs(&self) {
+        ERRS.with(|m| m.borrow_mut()[self.index()] = None);
+    }
+
     /// `tool.state(c, create)`：config.json 里属于这个工具的那部分（ports、last、api_ids、api_keys、ref_keys、
     /// key_hints、policy_skip）。Claude 的就是 c 自己。别的工具那一节不在（或不是字典）时给一个新的空字典：
     /// create 时接到 c 上，否则不接（往里写的东西不会进 c，原来就是这样）
@@ -416,20 +438,24 @@ impl Tool {
     }
 }
 
-/// 换掉当前工具，离开作用域时换回来（原来的 `with using(工具)`）
+/// 换掉当前工具，离开作用域时换回来（原来的 `with using(工具)`）。按键缓存的 .claude.json 跟着清掉：
+/// 同一个邮箱可以既是 Claude 账号又是 Codex 账号
 pub struct Using {
     prev: usize,
 }
 
 impl Using {
     pub fn tool(tool: &Tool) -> Using {
-        Using { prev: CURRENT.swap(tool.index(), Ordering::Relaxed) }
+        let prev = CURRENT.swap(tool.index(), Ordering::Relaxed);
+        acct_json_clear();
+        Using { prev }
     }
 }
 
 impl Drop for Using {
     fn drop(&mut self) {
         CURRENT.store(self.prev, Ordering::Relaxed);
+        acct_json_clear();
     }
 }
 
