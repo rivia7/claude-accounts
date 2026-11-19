@@ -1,0 +1,1016 @@
+{
+ "python": "3.14",
+ "cases": {
+  "decode": [
+   {
+    "in": "",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "ok": ""
+    },
+    "urlsafe": {
+     "ok": ""
+    }
+   },
+   {
+    "in": "YQ==",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "ok": "61"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YWI=",
+    "loose": {
+     "ok": "6162"
+    },
+    "strict": {
+     "ok": "6162"
+    },
+    "urlsafe": {
+     "ok": "6162"
+    }
+   },
+   {
+    "in": "YWJj",
+    "loose": {
+     "ok": "616263"
+    },
+    "strict": {
+     "ok": "616263"
+    },
+    "urlsafe": {
+     "ok": "616263"
+    }
+   },
+   {
+    "in": "YWJjZA==",
+    "loose": {
+     "ok": "61626364"
+    },
+    "strict": {
+     "ok": "61626364"
+    },
+    "urlsafe": {
+     "ok": "61626364"
+    }
+   },
+   {
+    "in": "YQ",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YQ=",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YWI",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "Y",
+    "loose": {
+     "err": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4"
+    },
+    "strict": {
+     "err": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4"
+    },
+    "urlsafe": {
+     "err": "Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4"
+    }
+   },
+   {
+    "in": "YWJjZ",
+    "loose": {
+     "err": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4"
+    },
+    "strict": {
+     "err": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4"
+    },
+    "urlsafe": {
+     "err": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4"
+    }
+   },
+   {
+    "in": "YWJjZGVmZ",
+    "loose": {
+     "err": "Invalid base64-encoded string: number of data characters (9) cannot be 1 more than a multiple of 4"
+    },
+    "strict": {
+     "err": "Invalid base64-encoded string: number of data characters (9) cannot be 1 more than a multiple of 4"
+    },
+    "urlsafe": {
+     "err": "Invalid base64-encoded string: number of data characters (9) cannot be 1 more than a multiple of 4"
+    }
+   },
+   {
+    "in": "====",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "err": "Leading padding not allowed"
+    },
+    "urlsafe": {
+     "ok": ""
+    }
+   },
+   {
+    "in": "=",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "err": "Leading padding not allowed"
+    },
+    "urlsafe": {
+     "ok": ""
+    }
+   },
+   {
+    "in": "==",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "err": "Leading padding not allowed"
+    },
+    "urlsafe": {
+     "ok": ""
+    }
+   },
+   {
+    "in": "===",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "err": "Leading padding not allowed"
+    },
+    "urlsafe": {
+     "ok": ""
+    }
+   },
+   {
+    "in": "YQ===",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YQ====",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YQ==YQ==",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YQ==x",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YQ==\n",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YWJj\n",
+    "loose": {
+     "ok": "616263"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "616263"
+    }
+   },
+   {
+    "in": "YW Jj",
+    "loose": {
+     "ok": "616263"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "616263"
+    }
+   },
+   {
+    "in": "YW\nJj\n",
+    "loose": {
+     "ok": "616263"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "616263"
+    }
+   },
+   {
+    "in": " YWJj",
+    "loose": {
+     "ok": "616263"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "616263"
+    }
+   },
+   {
+    "in": "YW-_",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "616fbf"
+    }
+   },
+   {
+    "in": "YW+/",
+    "loose": {
+     "ok": "616fbf"
+    },
+    "strict": {
+     "ok": "616fbf"
+    },
+    "urlsafe": {
+     "ok": "616fbf"
+    }
+   },
+   {
+    "in": "-_-_",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "fbffbf"
+    }
+   },
+   {
+    "in": "+/+/",
+    "loose": {
+     "ok": "fbffbf"
+    },
+    "strict": {
+     "ok": "fbffbf"
+    },
+    "urlsafe": {
+     "ok": "fbffbf"
+    }
+   },
+   {
+    "in": "*YQ==",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "Y*Q*=*=",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YQ=a",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Discontinuous padding not allowed"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YQ=aa",
+    "loose": {
+     "ok": "61069a"
+    },
+    "strict": {
+     "err": "Discontinuous padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "61069a"
+    }
+   },
+   {
+    "in": "YQ=a=",
+    "loose": {
+     "ok": "6106"
+    },
+    "strict": {
+     "err": "Discontinuous padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "6106"
+    }
+   },
+   {
+    "in": "a=aa",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Discontinuous padding not allowed"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "ab=c",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Discontinuous padding not allowed"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "abc=d",
+    "loose": {
+     "ok": "69b7"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "69b7"
+    }
+   },
+   {
+    "in": "abcd=",
+    "loose": {
+     "ok": "69b71d"
+    },
+    "strict": {
+     "err": "Excess padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "69b71d"
+    }
+   },
+   {
+    "in": "abcd==",
+    "loose": {
+     "ok": "69b71d"
+    },
+    "strict": {
+     "err": "Excess padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "69b71d"
+    }
+   },
+   {
+    "in": "abcde===",
+    "loose": {
+     "err": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4"
+    },
+    "strict": {
+     "err": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4"
+    },
+    "urlsafe": {
+     "err": "Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4"
+    }
+   },
+   {
+    "in": "=abcd",
+    "loose": {
+     "ok": "69b71d"
+    },
+    "strict": {
+     "err": "Leading padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "69b71d"
+    }
+   },
+   {
+    "in": "=YQ==",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Leading padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "Y=Q==",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Discontinuous padding not allowed"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YQ=\n=",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "中文",
+    "loose": {
+     "err": "string argument should contain only ASCII characters"
+    },
+    "strict": {
+     "err": "string argument should contain only ASCII characters"
+    },
+    "urlsafe": {
+     "err": "string argument should contain only ASCII characters"
+    }
+   },
+   {
+    "in": "YQ==中",
+    "loose": {
+     "err": "string argument should contain only ASCII characters"
+    },
+    "strict": {
+     "err": "string argument should contain only ASCII characters"
+    },
+    "urlsafe": {
+     "err": "string argument should contain only ASCII characters"
+    }
+   },
+   {
+    "in": "YQ==\u0000",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "\u0000",
+    "loose": {
+     "ok": ""
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "ok": ""
+    }
+   },
+   {
+    "in": "eyJhbGciOiJIUzI1NiJ9",
+    "loose": {
+     "ok": "7b22616c67223a224853323536227d"
+    },
+    "strict": {
+     "ok": "7b22616c67223a224853323536227d"
+    },
+    "urlsafe": {
+     "ok": "7b22616c67223a224853323536227d"
+    }
+   },
+   {
+    "in": "////",
+    "loose": {
+     "ok": "ffffff"
+    },
+    "strict": {
+     "ok": "ffffff"
+    },
+    "urlsafe": {
+     "ok": "ffffff"
+    }
+   },
+   {
+    "in": "++++",
+    "loose": {
+     "ok": "fbefbe"
+    },
+    "strict": {
+     "ok": "fbefbe"
+    },
+    "urlsafe": {
+     "ok": "fbefbe"
+    }
+   },
+   {
+    "in": "AAAA",
+    "loose": {
+     "ok": "000000"
+    },
+    "strict": {
+     "ok": "000000"
+    },
+    "urlsafe": {
+     "ok": "000000"
+    }
+   },
+   {
+    "in": "AA==",
+    "loose": {
+     "ok": "00"
+    },
+    "strict": {
+     "ok": "00"
+    },
+    "urlsafe": {
+     "ok": "00"
+    }
+   },
+   {
+    "in": "AB==",
+    "loose": {
+     "ok": "00"
+    },
+    "strict": {
+     "ok": "00"
+    },
+    "urlsafe": {
+     "ok": "00"
+    }
+   },
+   {
+    "in": "AAB=",
+    "loose": {
+     "ok": "0000"
+    },
+    "strict": {
+     "ok": "0000"
+    },
+    "urlsafe": {
+     "ok": "0000"
+    }
+   },
+   {
+    "in": "YR==",
+    "loose": {
+     "ok": "61"
+    },
+    "strict": {
+     "ok": "61"
+    },
+    "urlsafe": {
+     "ok": "61"
+    }
+   },
+   {
+    "in": "YWJ=",
+    "loose": {
+     "ok": "6162"
+    },
+    "strict": {
+     "ok": "6162"
+    },
+    "urlsafe": {
+     "ok": "6162"
+    }
+   },
+   {
+    "in": "YW=",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YWJjZA=",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YWJjZGU=",
+    "loose": {
+     "ok": "6162636465"
+    },
+    "strict": {
+     "ok": "6162636465"
+    },
+    "urlsafe": {
+     "ok": "6162636465"
+    }
+   },
+   {
+    "in": "YWJjZGVm",
+    "loose": {
+     "ok": "616263646566"
+    },
+    "strict": {
+     "ok": "616263646566"
+    },
+    "urlsafe": {
+     "ok": "616263646566"
+    }
+   },
+   {
+    "in": "YWJjZGVmZw",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YWJjZGVmZw=",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "YWJjZGVmZw==",
+    "loose": {
+     "ok": "61626364656667"
+    },
+    "strict": {
+     "ok": "61626364656667"
+    },
+    "urlsafe": {
+     "ok": "61626364656667"
+    }
+   },
+   {
+    "in": "YWJjZGVmZw===",
+    "loose": {
+     "ok": "61626364656667"
+    },
+    "strict": {
+     "err": "Excess data after padding"
+    },
+    "urlsafe": {
+     "ok": "61626364656667"
+    }
+   },
+   {
+    "in": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+    "loose": {
+     "err": "Invalid base64-encoded string: number of data characters (201) cannot be 1 more than a multiple of 4"
+    },
+    "strict": {
+     "err": "Invalid base64-encoded string: number of data characters (201) cannot be 1 more than a multiple of 4"
+    },
+    "urlsafe": {
+     "err": "Invalid base64-encoded string: number of data characters (201) cannot be 1 more than a multiple of 4"
+    }
+   },
+   {
+    "in": "c3ViamVjdHM_X3h5eg",
+    "loose": {
+     "err": "Invalid base64-encoded string: number of data characters (17) cannot be 1 more than a multiple of 4"
+    },
+    "strict": {
+     "err": "Only base64 data is allowed"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "c3ViamVjdHM/X3h5eg==",
+    "loose": {
+     "ok": "7375626a656374733f5f78797a"
+    },
+    "strict": {
+     "ok": "7375626a656374733f5f78797a"
+    },
+    "urlsafe": {
+     "ok": "7375626a656374733f5f78797a"
+    }
+   },
+   {
+    "in": "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IuS4reaWhyJ9",
+    "loose": {
+     "ok": "7b22737562223a2231323334353637383930222c226e616d65223a22e4b8ade69687227d"
+    },
+    "strict": {
+     "ok": "7b22737562223a2231323334353637383930222c226e616d65223a22e4b8ade69687227d"
+    },
+    "urlsafe": {
+     "ok": "7b22737562223a2231323334353637383930222c226e616d65223a22e4b8ade69687227d"
+    }
+   },
+   {
+    "in": "e30",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "bnVsbA",
+    "loose": {
+     "err": "Incorrect padding"
+    },
+    "strict": {
+     "err": "Incorrect padding"
+    },
+    "urlsafe": {
+     "err": "Incorrect padding"
+    }
+   },
+   {
+    "in": "dHJ1ZQ==",
+    "loose": {
+     "ok": "74727565"
+    },
+    "strict": {
+     "ok": "74727565"
+    },
+    "urlsafe": {
+     "ok": "74727565"
+    }
+   }
+  ],
+  "encode": [
+   {
+    "hex": "",
+    "b64": "",
+    "urlsafe": ""
+   },
+   {
+    "hex": "61",
+    "b64": "YQ==",
+    "urlsafe": "YQ=="
+   },
+   {
+    "hex": "6162",
+    "b64": "YWI=",
+    "urlsafe": "YWI="
+   },
+   {
+    "hex": "616263",
+    "b64": "YWJj",
+    "urlsafe": "YWJj"
+   },
+   {
+    "hex": "61626364",
+    "b64": "YWJjZA==",
+    "urlsafe": "YWJjZA=="
+   },
+   {
+    "hex": "00",
+    "b64": "AA==",
+    "urlsafe": "AA=="
+   },
+   {
+    "hex": "fffefd",
+    "b64": "//79",
+    "urlsafe": "__79"
+   },
+   {
+    "hex": "fbff",
+    "b64": "+/8=",
+    "urlsafe": "-_8="
+   },
+   {
+    "hex": "fbffbf",
+    "b64": "+/+/",
+    "urlsafe": "-_-_"
+   },
+   {
+    "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/w==",
+    "urlsafe": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn-AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq-wsbKztLW2t7i5uru8vb6_wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t_g4eLj5OXm5-jp6uvs7e7v8PHy8_T19vf4-fr7_P3-_w=="
+   },
+   {
+    "hex": "e4b8ade69687",
+    "b64": "5Lit5paH",
+    "urlsafe": "5Lit5paH"
+   },
+   {
+    "hex": "7b22616c67223a226e6f6e65227d",
+    "b64": "eyJhbGciOiJub25lIn0=",
+    "urlsafe": "eyJhbGciOiJub25lIn0="
+   },
+   {
+    "hex": "25",
+    "b64": "JQ==",
+    "urlsafe": "JQ=="
+   },
+   {
+    "hex": "4aaf",
+    "b64": "Sq8=",
+    "urlsafe": "Sq8="
+   },
+   {
+    "hex": "6fd439",
+    "b64": "b9Q5",
+    "urlsafe": "b9Q5"
+   },
+   {
+    "hex": "94f95ec3",
+    "b64": "lPleww==",
+    "urlsafe": "lPleww=="
+   },
+   {
+    "hex": "b91e83e84d",
+    "b64": "uR6D6E0=",
+    "urlsafe": "uR6D6E0="
+   },
+   {
+    "hex": "de43a80d72d7",
+    "b64": "3kOoDXLX",
+    "urlsafe": "3kOoDXLX"
+   },
+   {
+    "hex": "0368cd3297fc61",
+    "b64": "A2jNMpf8YQ==",
+    "urlsafe": "A2jNMpf8YQ=="
+   },
+   {
+    "hex": "288df257bc2186eb",
+    "b64": "KI3yV7whhus=",
+    "urlsafe": "KI3yV7whhus="
+   },
+   {
+    "hex": "4db2177ce146ab1075",
+    "b64": "TbIXfOFGqxB1",
+    "urlsafe": "TbIXfOFGqxB1"
+   },
+   {
+    "hex": "72d73ca1066bd0359aff",
+    "b64": "ctc8oQZr0DWa/w==",
+    "urlsafe": "ctc8oQZr0DWa_w=="
+   },
+   {
+    "hex": "97fc61c62b90f55abf2489",
+    "b64": "l/xhxiuQ9Vq/JIk=",
+    "urlsafe": "l_xhxiuQ9Vq_JIk="
+   },
+   {
+    "hex": "bc2186eb50b51a7fe449ae13",
+    "b64": "vCGG61C1Gn/kSa4T",
+    "urlsafe": "vCGG61C1Gn_kSa4T"
+   },
+   {
+    "hex": "e146ab1075da3fa4096ed3389d",
+    "b64": "4UarEHXaP6QJbtM4nQ==",
+    "urlsafe": "4UarEHXaP6QJbtM4nQ=="
+   },
+   {
+    "hex": "066bd0359aff64c92e93f85dc227",
+    "b64": "BmvQNZr/ZMkuk/hdwic=",
+    "urlsafe": "BmvQNZr_ZMkuk_hdwic="
+   },
+   {
+    "hex": "2b90f55abf2489ee53b81d82e74cb1",
+    "b64": "K5D1Wr8kie5TuB2C50yx",
+    "urlsafe": "K5D1Wr8kie5TuB2C50yx"
+   },
+   {
+    "hex": "50b51a7fe449ae1378dd42a70c71d63b",
+    "b64": "ULUaf+RJrhN43UKnDHHWOw==",
+    "urlsafe": "ULUaf-RJrhN43UKnDHHWOw=="
+   },
+   {
+    "hex": "75da3fa4096ed3389d0267cc3196fb60c5",
+    "b64": "ddo/pAlu0zidAmfMMZb7YMU=",
+    "urlsafe": "ddo_pAlu0zidAmfMMZb7YMU="
+   },
+   {
+    "hex": "9aff64c92e93f85dc2278cf156bb2085ea4f",
+    "b64": "mv9kyS6T+F3CJ4zxVrsghepP",
+    "urlsafe": "mv9kyS6T-F3CJ4zxVrsghepP"
+   },
+   {
+    "hex": "bf2489ee53b81d82e74cb1167be045aa0f74d9",
+    "b64": "vySJ7lO4HYLnTLEWe+BFqg902Q==",
+    "urlsafe": "vySJ7lO4HYLnTLEWe-BFqg902Q=="
+   }
+  ]
+ }
+}

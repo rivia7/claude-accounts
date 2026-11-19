@@ -6,6 +6,7 @@
 
 原来的实现用的是用户机器上那个 Python 的标准库，各版本的行为有出入；Rust 这边固定成生成这些文件的那个版本。
 换 Python 版本重新生成后，差异会在 git diff 和 cargo test 里看得到。"""
+import base64
 import ipaddress
 import json
 import os
@@ -47,6 +48,29 @@ JOINS = [('https://a.example.com/x/y', 'z'), ('https://a.example.com/x/y', '/z')
          ('https://a.example.com/x/', './a/../b'), ('https://a.example.com', 'p'), ('https://a.example.com/x/y', ''), ('https://a.example.com/x/y', '#f')]
 
 
+B64 = [
+    '', 'YQ==', 'YWI=', 'YWJj', 'YWJjZA==', 'YQ', 'YQ=', 'YWI', 'Y', 'YWJjZ', 'YWJjZGVmZ', '====', '=', '==', '===', 'YQ===', 'YQ====', 'YQ==YQ==', 'YQ==x',
+    'YQ==\n', 'YWJj\n', 'YW Jj', 'YW\nJj\n', ' YWJj', 'YW-_', 'YW+/', '-_-_', '+/+/', '*YQ==', 'Y*Q*=*=', 'YQ=a', 'YQ=aa', 'YQ=a=', 'a=aa', 'ab=c', 'abc=d',
+    'abcd=', 'abcd==', 'abcde===', '=abcd', '=YQ==', 'Y=Q==', 'YQ=\n=', '中文', 'YQ==中', 'YQ==\x00', '\x00', 'eyJhbGciOiJIUzI1NiJ9', '////', '++++', 'AAAA', 'AA==',
+    'AB==', 'AAB=', 'YR==', 'YWJ=', 'YW=', 'YWJjZA=', 'YWJjZGU=', 'YWJjZGVm', 'YWJjZGVmZw', 'YWJjZGVmZw=', 'YWJjZGVmZw==', 'YWJjZGVmZw===', 'A' * 200 + 'B',
+    'c3ViamVjdHM_X3h5eg', 'c3ViamVjdHM/X3h5eg==', 'eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IuS4reaWhyJ9', 'e30', 'bnVsbA', 'dHJ1ZQ=='
+]
+B64_RAW = [b'', b'a', b'ab', b'abc', b'abcd', b'\x00', b'\xff\xfe\xfd', b'\xfb\xff', b'\xfb\xff\xbf', bytes(range(256)), '中文'.encode('utf-8'),
+           b'{"alg":"none"}'] + [bytes((i * 37 + j * 101) % 256 for j in range(i)) for i in range(1, 20)]
+
+
+def b64_case(s):
+    return {'in': s, 'loose': attempt_hex(lambda: base64.b64decode(s)), 'strict': attempt_hex(lambda: base64.b64decode(s, validate=True)),
+            'urlsafe': attempt_hex(lambda: base64.urlsafe_b64decode(s))}
+
+
+def attempt_hex(f):
+    try:
+        return {'ok': f().hex()}
+    except ValueError as e:
+        return {'err': str(e)}
+
+
 def attempt(f):
     try:
         return {'ok': f()}
@@ -81,6 +105,10 @@ def main():
             'parse_qsl': [{'in': q, 'out': [list(x) for x in parse_qsl(q)], 'keep': [list(x) for x in parse_qsl(q, keep_blank_values=True)]} for q in QUERIES],
             'quote': [{'in': s, 'quote': quote(s), 'quote_safe_empty': quote(s, safe=''), 'unquote': unquote(s)} for s in QUOTES],
             'urljoin': [{'base': b, 'url': u, 'out': urljoin(b, u)} for b, u in JOINS],
+        },
+        'base64.json': {
+            'decode': [b64_case(s) for s in B64],
+            'encode': [{'hex': r.hex(), 'b64': base64.b64encode(r).decode('ascii'), 'urlsafe': base64.urlsafe_b64encode(r).decode('ascii')} for r in B64_RAW],
         },
     }
     for name, data in files.items():
