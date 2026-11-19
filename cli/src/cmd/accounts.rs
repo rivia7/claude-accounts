@@ -2,27 +2,45 @@
 //! nodes-allowed / set-nodes / nodes-preselect / nodes-lost / select-lines、sync-state、slot-rows、accounts-json、file-replace（PY_SRC 的 `cmd_env` 到 `cmd_rm`、
 //! `cmd_nodes_allowed` 到 `cmd_set_nodes`、`cmd_slot_rows`）。
 //!
-//! 移植了：env。其余还没移植。
+//! 还没移植的：rows、set-last（要用量那一块）、edit-form / edit-apply、select-lines、sync-state、slot-rows。
 
 use super::codex::codex_probe;
-use super::table::need;
-use super::{arity, Cmd};
+use super::table::{account_named, need};
+use super::{arg, arity, Cmd};
 use crate::core::base::*;
-use crate::core::ctx::ctx;
+use crate::core::ctx::{cfg_save, ctx, policy_skip_add};
 use crate::core::model::*;
-use crate::core::tool::{t, Kind, Tool, CODEX_PROVIDER};
-use crate::dict;
-use crate::py::fs::load_quiet;
+use crate::core::policy::{alias_problem, policy_in_use, policy_map, policy_raw};
+use crate::core::tool::{t, tools, Kind, Tool, CODEX_PROVIDER};
+use crate::py::fs::{load_quiet, save_json};
+use crate::py::io;
 use crate::py::json;
-use crate::py::obj::{Dict, V};
+use crate::py::obj::{Dict, List, V};
 use crate::py::path;
 use crate::py::proc::env_or_empty;
 use crate::py::text::{self, sh_quote};
-use crate::py::R;
-use crate::re;
+use crate::py::uni;
+use crate::py::{die, exit, Fail, R};
+use crate::{dict, err, out, re};
+use std::rc::Rc;
 
 /// 这个模块移植好的子命令
-pub const CMDS: &[Cmd] = &[Cmd::all("env", cmd_env)];
+pub const CMDS: &[Cmd] = &[
+    Cmd::all("env", cmd_env),
+    Cmd::all("prompt-emit", cmd_prompt_emit),
+    Cmd::all("check", cmd_check),
+    Cmd::all("add", cmd_add),
+    Cmd::all("add-api", cmd_add_api),
+    Cmd::all("rename", cmd_rename),
+    Cmd::all("reorder", cmd_reorder),
+    Cmd::all("rm", cmd_rm),
+    Cmd::all("node-rows", cmd_node_rows),
+    Cmd::all("node-default", cmd_node_default),
+    Cmd::all("nodes-allowed", cmd_nodes_allowed),
+    Cmd::all("nodes-preselect", cmd_nodes_preselect),
+    Cmd::all("nodes-lost", cmd_nodes_lost),
+    Cmd::all("set-nodes", cmd_set_nodes),
+];
 
 /// 每个账号都输出全部变量（不适用的为空）：bash 里循环 eval 时不会留着上一个账号的值。
 /// ACC_HOME 是交给工具的配置目录（CLAUDE_CONFIG_DIR / CODEX_HOME），ACC_ARGS 是启动时加在用户参数前面的，
@@ -173,6 +191,419 @@ pub fn codex_api_args(key: &str, v: &Dict) -> Vec<String> {
         out.push(format!("model={}", toml_str(&m.py_str())));
     }
     out
+}
+
+/// 提问会话（PROTOCOL 4.6）：把一页提问写进事件文件，打印序号。描述从 stdin 读（k=v，一行一条；field= 开始一个字段）。
+/// 序号 = 文件里已有的 ask 事件数 + 1：提问常在子 shell 里，变量带不出来
+pub fn cmd_prompt_emit(args: &[String]) -> R<()> {
+    arity("cmd_prompt_emit", args, 0, 0)?;
+    let Some(events) = crate::py::proc::getenv("CCA_EVENTS").filter(|s| !s.is_empty()) else {
+        return die("cca(py): 没有事件文件");
+    };
+    let fields = List::new();
+    let page = dict! { "v" => 1, "ev" => "ask", "seq" => 0, "q" => "", "title" => "", "message" => "", "fields" => &fields };
+    let mut cur: Option<Dict> = None;
+    let input = io::read_stdin_text();
+    for line in input.split_inclusive('\n') {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        let Some((k, v)) = line.split_once('=') else { continue };
+        if matches!(k, "q" | "title" | "message" | "submit") {
+            page.set(k, v);
+            continue;
+        }
+        if k == "field" {
+            let f = dict! { "id" => v, "kind" => "text", "label" => "", "default" => "", "value" => "", "error" => "", "hint" => "", "optional" => false };
+            fields.push(&f);
+            cur = Some(f);
+            continue;
+        }
+        let Some(cur) = &cur else { continue };
+        match k {
+            "prompt" => {
+                if !cur.truthy("label") {
+                    cur.set("label", prompt_label(v));
+                }
+            }
+            "optional" => cur.set(k, v == "1"),
+            "opt" => {
+                let mut parts = v.split('\t').chain(["", ""]);
+                let (value, label, note) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let opts = match cur.list("options") {
+                    Some(l) => l,
+                    None => {
+                        let l = List::new();
+                        cur.set("options", &l);
+                        l
+                    }
+                };
+                opts.push(dict! { "value" => value, "label" => label, "note" => note });
+            }
+            "min" => {
+                let n = text::to_int(v).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(v))))?;
+                cur.set(k, n);
+            }
+            // 多行文字（kind 是 code 的字段）：一行一条
+            "code" => {
+                let old = cur.at("value").py_str();
+                cur.set("value", if old.is_empty() { v.to_string() } else { format!("{old}\n{v}") });
+            }
+            // 空的 label 不盖掉已有的（prompt 那一行可能已经给过名字）
+            "kind" | "label" | "default" | "value" | "error" | "hint" | "detail" | "severity" | "skip" | "section" | "style" if !v.is_empty() || k != "label" => {
+                cur.set(k, v)
+            }
+            _ => {}
+        }
+    }
+    let seen = std::fs::read(&events)?;
+    let asks = seen.split_inclusive(|b| *b == b'\n').filter(|row| row.windows(10).any(|w| w == b"\"ev\":\"ask\"")).count();
+    page.set("seq", asks + 1);
+    let mut line = json::dumps(&V::Dict(page), json::Fmt::new().utf8().compact());
+    line.push('\n');
+    use std::io::Write;
+    std::fs::OpenOptions::new().append(true).create(true).open(&events)?.write_all(line.as_bytes())?;
+    out!("{}", asks + 1);
+    Ok(())
+}
+
+/// 没有专门写名字时，用终端的提示语当名字（去掉前后的空白、冒号和方括号里的默认值）
+pub fn prompt_label(p: &str) -> String {
+    let s = re!(r"\s*\[[^\]]*\]\s*[：:]?\s*$").sub("", text::strip(p));
+    text::rstrip_chars(&s, "：: ").to_string()
+}
+
+/// 这不像邮箱、或者这个邮箱已经在账号表里了；没问题返回空字符串
+pub fn email_problem(table: &Dict, email: &str) -> String {
+    if !EMAIL_RE.matches(email) {
+        return "这不像邮箱地址（例如 name@example.com）".into();
+    }
+    for k in table.keys() {
+        if parse_key(&k).1.to_lowercase() == email.to_lowercase() {
+            return format!("这个邮箱已经添加过了：{}", label_of(&k));
+        }
+    }
+    String::new()
+}
+
+/// 新增账号时逐项校验：合格时打印规范化后的值（邮箱转小写），不合格时打印原因并返回 1
+pub fn cmd_check(args: &[String]) -> R<()> {
+    arity("cmd_check", args, 2, 2)?;
+    let field = args[0].as_str();
+    let mut value = text::strip(&args[1]).to_string();
+    match field {
+        "email" | "gmail" => value = value.to_lowercase(),
+        "url" => value = value.trim_end_matches('/').to_string(),
+        _ => {}
+    }
+    let problem = |ok: bool, msg: &str| if ok { String::new() } else { msg.to_string() };
+    let p = if value.is_empty() {
+        String::new()
+    } else {
+        match field {
+            // Gmail 地址（小写；也是钥匙串的账户名，交给 security -i）
+            "gmail" => problem(re!(r"^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$").matches(&value), "这不像邮箱地址（只认字母、数字和 . _ % + - 组成的地址）"),
+            "url" => url_problem(&value, t()),
+            "model" => problem(MODEL_RE.matches(&value), MODEL_MSG),
+            "host" => problem(HOST_RE.matches(&value), "地址写成 192.168.1.2 或者主机名（不带 http://、端口和空格）"),
+            "sshuser" => problem(SSH_USER_RE.matches(&value), "用户名只能有字母、数字、点、下划线和连字符"),
+            "port" => {
+                let ok = re!(r"^[0-9]{1,5}$").matches(&value) && text::to_int(&value).is_some_and(|n| (1..=65535).contains(&n));
+                problem(ok, "端口是 1–65535 之间的数字")
+            }
+            "controller" => problem(CONTROLLER_RE.matches(&value), "写成 127.0.0.1:9090、http://地址:端口，Unix socket 写 unix:/路径"),
+            "email" => email_problem(&table_load(t())?, &value),
+            _ => alias_problem(&table_load(t())?, &value),
+        }
+    };
+    out!("{}", if p.is_empty() { &value } else { &p });
+    exit(if p.is_empty() { 0 } else { 1 })
+}
+
+/// 新增账号，打印账号表里的键：有别名是「别名(邮箱)」，没有就是邮箱。维护者的映射里有这个邮箱时，节点用映射的
+pub fn cmd_add(args: &[String]) -> R<()> {
+    arity("cmd_add", args, 3, 3)?;
+    let (c, table, _) = ctx()?;
+    let (email, alias) = (text::strip(&args[0]).to_lowercase(), text::strip(&args[1]).to_string());
+    let mut p = email_problem(&table, &email);
+    if p.is_empty() && !alias.is_empty() {
+        p = alias_problem(&table, &alias);
+    }
+    if !p.is_empty() {
+        return die(p);
+    }
+    let want = policy_map(t(), None).get(&email).filter(|n| n.truthy()).map(|n| n.py_str());
+    let node = want.clone().unwrap_or_else(|| args[2].clone());
+    let nodes = c.at("nodes");
+    if nodes.truthy() && !nodes.as_list().is_some_and(|l| l.has_str(&node)) {
+        let why = if want.is_some() { "（维护者的映射要求这个账号走它：运行 cca router setup 重新选可选节点）" } else { "" };
+        return die(format!("节点「{node}」不在可选列表{why}"));
+    }
+    let key = if alias.is_empty() { email.clone() } else { format!("{alias}({email})") };
+    table.set(key.as_str(), &node);
+    save_json(&t().table, &V::Dict(table.clone()), Some(0o600), true)?;
+    let st = t().state(&c, false);
+    if let Some(V::List(skip)) = st.get("policy_skip") {
+        // 删掉过的映射里的账号又加回来了：以后照常跟着映射
+        if skip.has_str(&email) {
+            let rest: Vec<V> = skip.items().into_iter().filter(|e| e.as_str() != Some(email.as_str())).collect();
+            if rest.is_empty() {
+                st.pop("policy_skip");
+            } else {
+                st.set("policy_skip", rest);
+            }
+            cfg_save(&c)?;
+        }
+    }
+    ctx()?;
+    out!("{key}");
+    Ok(())
+}
+
+/// 新增第三方 API 账号，打印账号表里的键（就是别名）。id 取别名（和别的账号目录撞了就加数字），改别名时它不变
+pub fn cmd_add_api(args: &[String]) -> R<()> {
+    arity("cmd_add_api", args, 2, 4)?;
+    let (c, table, _) = ctx()?;
+    let alias = text::strip(&args[0]).to_string();
+    let e = dict! { "base_url" => text::strip(&args[1]).trim_end_matches('/') };
+    let model = text::strip(arg(args, 2, ""));
+    if !model.is_empty() {
+        e.set("model", model);
+    }
+    e.set("node", arg(args, 3, ""));
+    let mut p = if alias.is_empty() { "需要一个别名".to_string() } else { alias_problem(&table, &alias) };
+    if p.is_empty() {
+        p = api_problems(&c, &alias, &e, t()).join("；");
+    }
+    if !p.is_empty() {
+        return die(p);
+    }
+    let taken: Vec<String> = table.keys().iter().map(|k| acct_id(k, t())).collect();
+    let (mut id, mut n) = (alias.clone(), 2);
+    while taken.contains(&ident(&id)) {
+        id = format!("{alias}-{n}");
+        n += 1;
+    }
+    e.set("id", id);
+    table.set(alias.as_str(), e);
+    save_json(&t().table, &V::Dict(table.clone()), Some(0o600), true)?;
+    ctx()?;
+    out!("{alias}");
+    Ok(())
+}
+
+/// 改别名（cca rename，图形界面的“改别名…”也用它）：只换账号表里的键，值和顺序都不变。官方账号按邮箱认、
+/// 第三方 API 账号按 id 认，账号目录、端口、“上次使用”、路由器的摘要都跟着走（acct_id 不变）。新别名写 - 去掉别名、只留邮箱。
+/// 成功时打印新的键；不行时把原因打到 stdout、退出码 3（bash 把它报成 alias_invalid）
+pub fn cmd_rename(args: &[String]) -> R<()> {
+    arity("cmd_rename", args, 2, 2)?;
+    let (_, table, _) = ctx()?;
+    let key = args[0].as_str();
+    need(&table, key)?;
+    let mut alias = text::strip(&args[1]).to_string();
+    if alias == "-" {
+        alias.clear();
+    }
+    let email = parse_key(key).1;
+    let api = is_api(&table.at(key));
+    let bad = |msg: String| -> R<()> {
+        out!("{msg}");
+        exit(3)
+    };
+    if !api && email.is_empty() {
+        // 只写了别名的官方账号：按别名认，换了别名就换了账号目录
+        return bad(format!(
+            "{} 的键里没有邮箱：改名会换掉它的账号目录（登录、浏览器资料都在里面）。先用 {} edit 补上邮箱，写成「别名(邮箱)」",
+            key,
+            t().cmd
+        ));
+    }
+    let new = if alias.is_empty() {
+        if api {
+            return bad("第三方 API 账号必须有别名".to_string());
+        }
+        email
+    } else {
+        let others = Dict::from_pairs(table.items().into_iter().filter(|(k, _)| &**k != key));
+        let p = alias_problem(&others, &alias);
+        if !p.is_empty() {
+            return bad(p);
+        }
+        if api {
+            alias
+        } else {
+            format!("{alias}({email})")
+        }
+    };
+    if new != key {
+        let renamed = Dict::from_pairs(table.items().into_iter().map(|(k, v)| (if &*k == key { new.clone() } else { k.to_string() }, v)));
+        save_json(&t().table, &V::Dict(renamed.clone()), Some(0o600), true)?;
+        t().set_ids(&renamed); // 第三方 API 账号：新键 → id，对账时端口、“上次使用”按 id 跟着走
+        ctx()?;
+    }
+    out!("{new}");
+    Ok(())
+}
+
+/// cca reorder：按这个顺序排账号表（没写到的账号接在后面，先后不变）。图形界面调整账号顺序时用它。
+/// 只改账号表里的先后；第一次调整之前先记下原来的顺序（base_order），端口池、摘要、颜色都不跟着变
+pub fn cmd_reorder(args: &[String]) -> R<()> {
+    let _lock = Lock::acquire()?;
+    let (c, table, _) = ctx()?;
+    let mut order: Vec<String> = Vec::new();
+    for n in args {
+        let k = account_named(&table, n)?;
+        if !order.contains(&k) {
+            order.push(k);
+        }
+    }
+    for k in table.keys() {
+        if !order.iter().any(|o| **o == *k) {
+            order.push(k.to_string());
+        }
+    }
+    if !order.iter().map(String::as_str).eq(table.keys().iter().map(|k| &**k)) {
+        let base: Vec<String> = base_order(&c, &table, t()).iter().map(|k| acct_id(k, t())).collect();
+        t().state(&c, false).set("order_base", crate::py::obj::str_list(base));
+        cfg_save(&c)?;
+        let sorted = Dict::from_pairs(order.iter().map(|k| (k.as_str(), table.at(k))));
+        save_json(&t().table, &V::Dict(sorted), Some(0o600), true)?;
+    }
+    Ok(())
+}
+
+pub fn cmd_rm(args: &[String]) -> R<()> {
+    arity("cmd_rm", args, 1, 1)?;
+    let table = table_load(t())?;
+    let key = args[0].as_str();
+    need(&table, key)?;
+    let e = if is_api(&table.at(key)) { String::new() } else { parse_key(key).1.to_lowercase() };
+    if !e.is_empty() && policy_raw(t()).has(&e) {
+        // 映射里的账号：记下来，不然下一条命令又按映射把它加回来
+        policy_skip_add(t(), std::slice::from_ref(&e))?;
+        err!("• {} 在维护者的映射里：这台机器上不会再自动加回来（要加回来：{} add）", label_of(key), t().cmd);
+    }
+    table.pop(key);
+    save_json(&t().table, &V::Dict(table.clone()), Some(0o600), true)?;
+    ctx()?;
+    Ok(())
+}
+
+/// 账号表 t 里用这个节点的账号。选节点只看当前工具的：每个账号最好用不同的出口，是免得同一家服务商把几个账号
+/// 关联起来，Claude 账号和 Codex 账号是两家的，共用一个出口不要紧
+pub fn node_users(table: &Dict, n: &str) -> Vec<String> {
+    table.items().iter().filter(|(_, v)| &*node_of(v) == n).map(|(k, _)| name_of(k)).collect()
+}
+
+/// `max(int(cols) if str(cols).isdigit() else 80, 40) - 6`：菜单一行最多多宽
+fn menu_width(cols: &str) -> usize {
+    let n = if text::isdigit(cols) { text::to_int(cols).unwrap_or(80) } else { 80 };
+    (n.max(40) - 6) as usize
+}
+
+/// 选节点菜单：每个可选节点一行，注明已被当前工具的哪些账号使用、路由器上是否存在
+pub fn cmd_node_rows(args: &[String]) -> R<()> {
+    arity("cmd_node_rows", args, 0, 2)?;
+    let (c, table, _) = ctx()?;
+    let onrouter = arg(args, 0, "");
+    let have: Option<Vec<&str>> = if onrouter.is_empty() { None } else { Some(onrouter.split('\n').collect()) };
+    let width = menu_width(arg(args, 1, "80"));
+    let nodes: Vec<String> = c.at("nodes").as_list().map(|l| l.items().iter().map(|n| n.py_str()).collect()).unwrap_or_default();
+    let nw = nodes.iter().map(|n| uni::width(n)).chain([8]).max().unwrap_or(8);
+    for n in &nodes {
+        let mut notes = Vec::new();
+        let users = node_users(&table, n);
+        if !users.is_empty() {
+            notes.push(format!("已被 {} 使用", users.join("、")));
+        }
+        if have.as_ref().is_some_and(|h| !h.contains(&n.as_str())) {
+            notes.push("路由器上没有这个节点".to_string());
+        }
+        let line = text::fit(&format!("{}   {}", text::fit(n, nw, true), notes.join("；")), width, false);
+        out!("{}", text::rstrip(&line));
+    }
+    Ok(())
+}
+
+/// 默认选中第一个还没被当前工具的账号用的节点（别的工具的账号不算，见 node_users）
+pub fn cmd_node_default(args: &[String]) -> R<()> {
+    arity("cmd_node_default", args, 0, 0)?;
+    let (c, table, _) = ctx()?;
+    let used: Vec<Rc<str>> = table.values().iter().map(node_of).collect();
+    let nodes = c.at("nodes").as_list().map(|l| l.items()).unwrap_or_default();
+    let first = nodes.iter().position(|n| !used.iter().any(|u| n.as_str() == Some(&**u))).unwrap_or(0);
+    out!("{first}");
+    Ok(())
+}
+
+pub fn cmd_nodes_allowed(args: &[String]) -> R<()> {
+    arity("cmd_nodes_allowed", args, 0, 0)?;
+    let (c, table, _) = ctx()?;
+    for n in c.at("nodes").as_list().map(|l| l.items()).unwrap_or_default() {
+        let n = n.py_str();
+        out!("{}\t{}", n, node_users(&table, &n).join("、"));
+    }
+    Ok(())
+}
+
+/// 路由器上的这些节点里，预先选好的编号（从 1 起，空格隔开）：现在的可选节点，加上维护者的映射里这台机器的账号要用的
+/// （配置向导第 1 步拉到映射、第 2 步配置路由器时不用自己找；这台机器删掉过的账号不算）
+pub fn cmd_nodes_preselect(args: &[String]) -> R<()> {
+    let c = ctx()?.0;
+    let mut want: Vec<String> = c.at("nodes").as_list().map(|l| l.items().iter().map(|n| n.py_str()).collect()).unwrap_or_default();
+    for tool in tools() {
+        if policy_in_use(tool) {
+            let skip: Vec<Rc<str>> = match tool.state(&c, false).get("policy_skip") {
+                Some(V::List(l)) => l.strs(),
+                _ => Vec::new(),
+            };
+            for (e, n) in policy_map(tool, Some(&c)).items() {
+                if !skip.contains(&e) {
+                    want.push(n.py_str());
+                }
+            }
+        }
+    }
+    let picked: Vec<String> = args.iter().enumerate().filter(|(_, n)| want.contains(n)).map(|(i, _)| (i + 1).to_string()).collect();
+    out!("{}", picked.join(" "));
+    Ok(())
+}
+
+/// 这次选的节点里少了哪些还有账号在用的（各工具的都看）：「节点（账号、账号）」
+pub fn cmd_nodes_lost(args: &[String]) -> R<()> {
+    let c = ctx()?.0;
+    let mut who: Vec<(Rc<str>, Vec<String>)> = Vec::new();
+    for (tool, k, v, _) in pool(&c) {
+        let node = node_of(&v);
+        match who.iter_mut().find(|(n, _)| *n == node) {
+            Some((_, names)) => names.push(shown(tool, &k)),
+            None => who.push((node, vec![shown(tool, &k)])),
+        }
+    }
+    let mut lost = Vec::new();
+    for n in c.at("nodes").as_list().map(|l| l.items()).unwrap_or_default() {
+        let n = n.py_str();
+        if let Some((_, names)) = who.iter().find(|(x, _)| **x == *n) {
+            if !args.contains(&n) {
+                lost.push(format!("{}（{}）", n, names.join("、")));
+            }
+        }
+    }
+    out!("{}", lost.join("；"));
+    Ok(())
+}
+
+pub fn cmd_set_nodes(args: &[String]) -> R<()> {
+    let mut nodes: Vec<&str> = Vec::new(); // dict.fromkeys(nodes)：去重，保持先后
+    for n in args {
+        if !n.is_empty() && !nodes.contains(&n.as_str()) {
+            nodes.push(n);
+        }
+    }
+    if nodes.is_empty() {
+        return die("至少选一个节点");
+    }
+    let c = cfg_load()?;
+    c.set("nodes", crate::py::obj::str_list(nodes));
+    cfg_save(&c)
 }
 
 /// NO_PROXY 写法 → Chromium --proxy-bypass-list 写法（和 Claude App 自己的转换一致）
