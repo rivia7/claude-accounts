@@ -18,6 +18,7 @@ pub mod re;
 pub mod text;
 pub mod time;
 pub mod tls;
+pub mod toml;
 pub mod uni;
 pub mod url;
 

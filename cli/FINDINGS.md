@@ -123,3 +123,54 @@
   兜得住，那一路按没测到算：偶尔少一个服务器或者少 IPv6 的结果，leak-probe 多花 1.5 秒。不是移植带来的；对拍里的假 STUN 因此只写数字地址。
 - **`leak.json` 的读改写没有锁。** `leak-verdict` 读缓存、改、整份写回，不拿 `Lock`：两个账号同时启动（App 的后台检查和终端里的启动）时
   后写的盖掉先写的。只是缓存，丢了的下次重测。（读代码看出来的）
+
+## settings
+
+共享设置的检查、说明和修复（`cmd_settings_check` 到 `cmd_codex_fallback_off`）。下面除了注明的都是对拍时实跑出来的（用例在
+`pydiff/cases/settings.py`）。
+
+- **内嵌的 tomli（`TOMLI_EMBEDDED`、`tomli_fallback`）移植后用不着了。** Rust 这边是照 tomllib / tomli 2.3.0 逐个函数搬过来的解析器
+  （`src/py/toml.rs`），不分 Python 版本；那段压缩的源码、加载它的函数、`tests/isolation_settings.py` 里核对它摘要和版本的测试都没有
+  移植，切换以后可以从 `cca` 里删掉。解析器是照着它写的，它的 MIT 许可说明已经抄在 `src/py/toml.rs` 开头。拿内嵌的那份在 macOS
+  自带的 Python 3.9.6 上跑了一遍 `tests/vectors/toml.json`：除了下面说的整数位数，结果（值、出错的说法和位置）和 3.14 的 tomllib 一样。
+- **`--settings` 后面少了值时，说明说错了。** `launch-check` 给的是 `--settings:missing_value`，`settings_explain` 先按“启动参数给的设置”
+  那一支处理，把 `missing_value` 当成了变量名：「启动参数 --settings 里设置了会换掉账号设置的变量（env.missing_value）。带着它启动的话
+  账号会被换到别处……去掉它再启动。」别的参数少了值说的是「启动参数 --model 后面少了值。」触发：`cca @账号 --settings`。
+- **共享的配置是指向别处的链接（dotfiles）时，又被当成项目配置查一遍。** `project_settings_problems` 靠
+  `路径 != realpath(~/.claude/settings.json)` 跳过已经当共享设置查过的那份；它是链接时两边不相等，于是在主目录下面任何目录启动，
+  除了 `settings.json:NO_PROXY` 还会多出一条 `/Users/…/.claude/settings.json:NO_PROXY`，说明里既说“这份设置所有账号共用……运行
+  cca settings fix”，又说“项目设置 ~/.claude/settings.json……删掉这几项再启动”。Codex 更糟：共享的 config.toml 里本来允许开着
+  `system_proxy_fallback`（启动时用 `--disable` 关掉），当成项目配置再查时不允许，于是 `~/.codex/config.toml` 是链接、里面写着
+  `system_proxy_fallback = true` 的人，在主目录下面启动会被 `…/.codex/config.toml:features.system_proxy_fallback` 拦住。
+- **`--settings` 给的文件碰巧叫 `…/.claude/settings.json` 时被说成项目设置。** `settings_explain` 按路径的样子（`PROJECT_SETTINGS`）认项目
+  设置，于是说「在这个目录下启动时 Claude Code 也会读它……删掉这几项再启动」，其实它是启动参数给的、那个目录也不一定是当前目录。
+- **agy 的共享设置是坏链接时当作没有。** `agy_settings_problems` 只接 `FileNotFoundError` 就返回空，没有像 `config_text` 那样再看
+  `lexists`：`~/.gemini/antigravity-cli/settings.json` 是指向不存在的文件的链接时放行，Claude、Codex 的同样情况是拦住的
+  （“坏链接……不能当成空配置”）。
+- **`settings-fix` 的动作只认 `plan`，别的一律当 `apply`。** `py settings-fix check 摘要`、打错的动作名都会真的去改（摘要对得上的话）。
+  bash 只传 plan / apply，现在碰不到。
+- **`env` 不是对象时，同一份文件里的 `apiKeyHelper` 不报。** `claude_config_problems` 发现 `env` 类型不对就返回
+  `…:env:invalid_config`，后面的 `apiKeyHelper` 不看了。照样拦得住启动，只是说明里少一项。
+- **键名以换行结尾也算匹配，输出里会多出换行。** `SETTINGS_BAD`、`SETTINGS_KINDS`、`SETTINGS_MODEL_ENV` 这些正则以 `$` 结尾，Python 的 `$`
+  在结尾的换行之前也匹配：`"HTTPS_PROXY\n"` 这样的键会报出来，`settings-check` 那一行、`settings-fix plan` 的说明中间就断成两行。
+- **`re.I` 把 İ（U+0130）、ı（U+0131）当成 i。** `ANTHROPıC_BASE_URL` 这样的键也被当成 `ANTHROPIC_BASE_URL` 拦住、被 `settings fix`
+  去掉（它并不是那个变量）。照样移植了；`regex` 库不这么认，这个模块里自己补了一下，别处用到 `re.I` 的正则（`ENV_RESERVED` 等）
+  Rust 这边现在不认这两个字符。
+- **套得太深、数字太长在哪里算读不了，原来取决于 Python 的版本和调用的路径。** 各处把 RecursionError 和格式不对一样当作读不了，
+  但它在哪一层出现不固定：JSON 在 3.11 及以前大约套 990 层（和调用栈共用一千层的上限），3.12 起按 C 的栈算，这台机器上的 3.14 是
+  27741 层；TOML 的行内数组、行内表、一层套一层的 profiles 看调用栈已经有几层（`settings-check` 里数组 494 层，`launch-check` 里共享的
+  config.toml 493 层、`-c` 的值 495 层；3.9.6 上实测调用栈还要早一层到头——那时比较运算也占一层递归——`settings-check` 里就成了
+  493 层；经 PY_BOOT 起的再早一层）；十进制整数超过 4300 位报错是 3.9.14 / 3.10.7 以后才有的（macOS 自带的 3.9.6 没有）。Rust 这边
+  固定成：TOML 和 profiles 照 3.14 直接跑 PY_SRC 时的层数（每条路都对拍过上限两边），JSON 1000 层，整数 4300 位。
+- **启动参数里有不是 UTF-8 的字节时（比如 GBK 终端里打的中文），`-c 键=值` 被说成 invalid_config。** Python 把这些字节读成落单的
+  代理项（surrogateescape）；值没加引号时退回去拼 `键 = json.dumps(值)`，`json.dumps` 把它们写成 `\udcXX`，TOML 不收这种转义，于是
+  `codex -c model_instructions=中文`（GBK）被 `-c:invalid_config` 拦住。Rust 这边参数在 main.rs 里已经换成 U+FFFD，这种值会放行（键照样
+  查，`-c chatgpt_base_url=…` 还是拦得住）——和原实现不一样的一处，起因在参数的读法，不在这个模块。同样的原因，Linux 上名字不是
+  UTF-8 的 `--settings` 文件、`-C` 目录 Rust 找不到（Python 找得到）。
+- **`settings fix` 遇到落单的代理项。** settings.json 的字符串里有 `"\ud83d"` 这样不成对的半个字符时，Python 在备份之后、写回时抛
+  UnicodeEncodeError（没人接：退出码 1，留下备份和写了一半的 `settings.json.cca-进程号.tmp`，原文件没动）；Rust 读进来时已经把它换成
+  U+FFFD（见上面 PY_SRC 一节），会照常改完，写回去的那个字符也就成了 U+FFFD（原文在备份里）——说好“别的设置不动”，这里动了一个
+  字符。两边手动跑过，没放进对拍（结果不一样）。
+- **`_gui state` 里接 `SystemExit` 的那一句是死代码。** `cmd_gui_state` 调 `T.settings_problems()` 时写着
+  `except SystemExit:   # 共享的设置文件格式不对（load_json 报错退出）`，现在三种工具的 `settings_problems` 都不经 `load_json`、不会退出，
+  `'%s:unreadable' % T.settings_disp` 这个结果出不来了。Rust 这边 `Tool::settings_problems` 直接返回列表。（读代码看出来的）

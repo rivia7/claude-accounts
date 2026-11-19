@@ -308,10 +308,327 @@ def p_loads():
     return out
 
 
+# ---- TOML：tomllib.loads 认什么、不认什么、给出什么值（Rust 的移植在 src/py/toml.rs）----------------------------------
+import datetime
+import random
+import tomllib
+
+# 让 tomllib.loads 自己落在调用栈的这一层（最外层的模块是第 1 层）：行内数组、行内表套得太深时在哪一层出 RecursionError
+# 跟着它走。cca 里 py settings-check 读共享的 config.toml 时它就在第 8 层
+TOML_FRAME = 8
+
+
+def toml_nested(opening, closing, n, inner=''):
+    return 'a = ' + opening * n + inner + closing * n
+
+
+TOML_DOCS = [
+    # 空的、空白、注释、换行
+    '', ' ', '\t', '\n', '\n\n\n', ' \t \n', '# 注释', '#', '# c\n', 'a = 1 # 行尾的注释', 'a = 1 #', 'a = 1#c', '# 制表符\t可以', '#\x00', '# x\x7f',
+    '# x\x1f', '# x\x0b', '# a\r\n# b\r\n', 'a = 1\r\nb = 2\r\n', 'a = 1\rb = 2', '\r', 'a = 1\r', '# c\r', '# c\r\n', '\ufeffa = 1', '\x0c', '\x00',
+    'a = 1\x00', '\u00a0a = 1', 'a = 1\u00a0', 'a = 1\u2028b = 2', 'a = 1\n\n\nb = 2\n', '\n\na=1', 'a=1\n', '  a  =  1  ', '\ta\t=\t1\t',
+    # 一句话的样子不对
+    'a = 1 b = 2', 'a = 1, b = 2', 'a', 'a =', 'a = ', '= 1', ' = 1', 'a == 1', 'a = = 1', 'a : 1', 'a = 1 ;', '!', 'é = 1', '中 = 1', '$ = 1',
+    '"a" = 1 "b" = 2', 'a = # c', 'a = \n1', 'a\n= 1', 'a = 1 = 2', '=', '.', ',', ']', '}', '{', '{}', 'a b', '😀 = 1', '"😀" = 1',
+    # 键：裸的、带引号的、带点的、重复的
+    'key = "value"', 'bare_key = 1', 'bare-key = 1', '1234 = 1', '- = 1', '_ = 1', '-_-_ = 1', 'A-Z_a-z_0-9 = 1', '"192.0.2.1" = 1',
+    '"character encoding" = 1', '"ʎǝʞ" = 1', "'key2' = 1", "'quoted \"value\"' = 1", '"" = 1', "'' = 1", '"\\u0041" = 1', '"a\\tb" = 1',
+    '"a\\nb" = 1', '"\\"" = 1', "'a\\b' = 1", '"a\nb" = 1', "'a\nb' = 1", '"""a""" = 1', "'''a''' = 1", '"a\\x" = 1', '"a\\ud800" = 1', '"a = 1',
+    "'a = 1", '"a"b = 1', 'a"b" = 1', "a'b' = 1", '"a" . "b" = 1', '1979-05-27 = 1', '07:32:00 = 1', '1.5 = 1', '1e5 = 1', '+1 = 1', 'true = 1',
+    'inf = 1', 'nan = false', '0x10 = 1', 'a.true = 1', 'true.false = 1',
+    'physical.color = "orange"', 'physical.shape = "round"\nphysical.color = "red"', 'site."example.com" = true', 'a . b . c = 1', 'a\t.\tb = 1',
+    '3.14159 = "pi"', 'a."b".\'c\' = 1', 'a. = 1', '.a = 1', 'a..b = 1', 'a.b. = 1', 'a.\nb = 1', '"a"."b" = 1', 'a.b = 1\na.c = 2', 'a.b = 1\na.b = 2',
+    'a.b = 1\na.b.c = 2', 'a.b.c = 1\na.b = 2', 'a = 1\na.b = 2', 'a.b = 1\na = 2', 'a = "x"\na.b = 2', 'a = [1]\na.b = 2', 'a.b = 1\n"a".c = 2',
+    'apple.type = "fruit"\norange.type = "fruit"\napple.skin = "thin"\norange.skin = "thick"', 'fruit.apple.smooth = true\nfruit.orange = 2',
+    'fruit.apple = 1\nfruit.apple.smooth = true', 'name = 1\nname = 2', 'spelling = 1\n"spelling" = 2', "a = 1\n'a' = 2", '"a b" = 1\n"a b" = 2',
+    'A = 1\na = 2', '"\\u0061" = 1\na = 2', 'a.b.c.d.e.f = 1', 'a.b.c = 1\na.b.d = 2\na.e = 3\nf = 4', '"it\'s".\'say "hi"\' = 1\n"it\'s".\'say "hi"\' = 2',
+    # 基本字符串和转义
+    'a = "I\'m a string. \\"You can quote me\\". Name\\tJos\\u00E9\\nLocation\\tSF."', 'a = "\\b\\t\\n\\f\\r\\"\\\\"',
+    'a = "\\u00e9\\u00E9\\U0001F600\\U0001f600"', 'a = "\\u0000"', 'a = "\\u007f"', 'a = "\\ud7ff\\ue000"', 'a = "\\U0010FFFF"', 'a = "\\ud800"',
+    'a = "\\udfff"', 'a = "\\U00110000"', 'a = "\\UFFFFFFFF"', 'a = "\\u12"', 'a = "\\u12g4"', 'a = "\\U0001F60"', 'a = "\\u"', 'a = "\\U"',
+    'a = "\\u123', 'a = "\\x41"', 'a = "\\e"', 'a = "\\/"', 'a = "\\ "', 'a = "\\a"', 'a = "\\0"', 'a = "\\\'"', 'a = "\\', 'a = "\\"', 'a = "abc\\',
+    'a = "\\é"', 'a = "\\u00é9"', 'a = "\\u４１４１"', 'a = "\\😀"', 'a = "tab\there"', 'a = "line\nbreak"', 'a = "nul\x00"', 'a = "del\x7f"',
+    'a = "us\x1f"', 'a = "cr\rhere"', 'a = "crlf\r\nhere"', 'a = "中文 é 😀"', 'a = "', 'a = "abc', 'a = ""', 'a = "" "b"', 'a = "a" "b"', 'a = "a"b',
+    'a = "#not a comment" # comment', 'a = "\u2028\u2029\u0085\u00a0"', 'a = "\\\\\\\\"', 'a = "\\\\\\"', 'a = "é\x01"', 'a = "中\\q"',
+    # 多行的基本字符串
+    'a = """\nRoses are red\nViolets are blue"""', 'a = """Roses"""', 'a = """"""', 'a = """\n"""', 'a = """\n\n"""', 'a = """\r\nline\r\n"""',
+    'a = """The quick brown \\\n\n\n  fox jumps over \\\n    the lazy dog."""', 'a = """\\\n       The quick brown \\\n       fox.\\\n       """',
+    'a = """a \\   \n   b"""', 'a = """a \\ \t \n\n b"""', 'a = """a \\  b"""', 'a = """a \\', 'a = """a \\  ', 'a = """a \\\n', 'a = """a\\\n"""',
+    'a = """a \\\t\n b"""', 'a = """a \\\r\n b"""', 'a = """a\\ \r\n b"""',
+    'a = """Here are two quotation marks: "". Simple enough."""', 'a = """Here are three quotation marks: ""\\"."""',
+    'a = """Here are fifteen quotation marks: ""\\"""\\"""\\"""\\"""\\"."""', 'a = """"This," she said, "is just a pointless statement.""""',
+    'a = """"a""""', 'a = """a"""""', 'a = """a""""""', 'a = """""a"""', 'a = """""""', 'a = """"""""', 'a = """\\u00e9\\t\\\\"""', 'a = """\\x"""',
+    'a = """ctrl\x01"""', 'a = """tab\tnl\n"""', 'a = """cr\rx"""', 'a = """del\x7f"""', 'a = """abc', 'a = """abc"', 'a = """abc""', 'a = """\n\n\nabc"""',
+    'a = """a"""b', 'a = """a""" # c', 'a = """中文\n😀"""', 'a = """\\ud800"""', 'a = """\\', 'a = """\\"""',
+    # 字面字符串
+    "a = 'C:\\Users\\nodejs\\templates'", "a = '\\\\ServerX\\admin$\\system32\\'", "a = 'Tom \"Dubs\" Preston-Werner'", "a = '<\\i\\c*\\s*>'", "a = ''",
+    "a = 'tab\there'", "a = 'nl\nhere'", "a = 'nul\x00'", "a = 'del\x7f'", "a = 'abc", "a = '", "a = 'a' 'b'", "a = 'é中😀'", "a = 'abc\nb = 'x'",
+    "a = 'cr\rx'", "a = 'é\x01'", "a = 'x'y", "a = 'x' # c",
+    "a = '''\nThe first newline is\ntrimmed in raw strings.\n   All other whitespace\n   is preserved.\n'''", "a = '''I [dw]on't need \\d{2} apples'''",
+    "a = ''''That,' she said, 'is still pointless.''''", "a = '''Here are fifteen quotation marks: \"\"\"\"\"\"\"\"\"\"\"\"\"\"\"'''", "a = '''a'''''",
+    "a = '''a''''''", "a = ''''''", "a = '''''''", "a = ''''''''", "a = '''\n'''", "a = '''ctrl\x01'''", "a = '''tab\tok'''", "a = '''cr\rx'''",
+    "a = '''\r\nx\r\n'''", "a = '''abc", "a = '''abc''", "a = '''\\\n  x'''", "a = '''中\x00'''", "a = '''a'''b",
+    # 整数
+    'a = +99', 'a = 42', 'a = 0', 'a = -17', 'a = +0', 'a = -0', 'a = 1_000', 'a = 5_349_221', 'a = 53_49_221', 'a = 1_2_3_4_5', 'a = 0xDEADBEEF',
+    'a = 0xdeadbeef', 'a = 0xdead_beef', 'a = 0xDead_Beef', 'a = 0o01234567', 'a = 0o755', 'a = 0b11010110', 'a = 0b0', 'a = 0x0', 'a = 0o0',
+    'a = 0x00FF', 'a = 0b0000_0001', 'a = 01', 'a = 00', 'a = +01', 'a = -01', 'a = 1__0', 'a = _1', 'a = 1_', 'a = 1_ ', 'a = 0x', 'a = 0x_1',
+    'a = 0x1_', 'a = 0x1__2', 'a = 0X1', 'a = 0O1', 'a = 0B1', 'a = +0x1', 'a = -0x1', 'a = 0xG', 'a = 0xfg', 'a = 0b2', 'a = 0b12', 'a = 0o8',
+    'a = 0o78', 'a = 0_0', 'a = +', 'a = -', 'a = --1', 'a = ++1', 'a = +-1', 'a = 1 000', 'a = 1,000', 'a = 1a', 'a = 0b', 'a = 0o', 'a = ٣',
+    'a = １２', 'a = 9223372036854775807', 'a = 9223372036854775808', 'a = -9223372036854775808', 'a = -9223372036854775809',
+    'a = +9223372036854775808', 'a = 0x7FFFFFFFFFFFFFFF', 'a = 0x8000000000000000', 'a = 0xFFFFFFFFFFFFFFFF', 'a = 0o777777777777777777777',
+    'a = 0o1000000000000000000000', 'a = 0o1777777777777777777777', 'a = 0b' + '1' * 63, 'a = 0b' + '1' * 64, 'a = 0b' + '1' * 65,
+    'a = 123456789012345678901234567890', 'a = -123_456_789_012_345_678_901_234_567_890', 'a = 0x' + 'F' * 40,
+    'a = 0x000' + 'abcdef0123456789' * 4, 'a = 0o' + '1234567' * 20, 'a = 0b' + '10' * 100,
+    # 十进制最多 4300 位（int() 的上限，下划线、正负号不算）；0x / 0o / 0b 不限，十进制写不下 4300 位的记成 hex()
+    'a = ' + '9' * 4300, 'a = ' + '9' * 4301, 'a = -' + '1' * 4301, 'a = ' + '_'.join(['12'] * 2150), 'a = ' + '_'.join(['12'] * 2151),
+    'a = 0x' + 'f' * 3571, 'a = 0x' + 'f' * 3572, 'a = 0o1' + '0' * 4761, 'a = 0o1' + '7' * 4762, 'a = 0b1' + '0' * 14284, 'a = 0b1' + '0' * 14285,
+    # 小数
+    'a = +1.0', 'a = 3.1415', 'a = -0.01', 'a = 5e+22', 'a = 1e06', 'a = -2E-2', 'a = 6.626e-34', 'a = 224_617.445_991_228', 'a = 0.0', 'a = +0.0',
+    'a = -0.0', 'a = 0e0', 'a = -0e0', 'a = 1e1_0', 'a = 1_0e1_0', 'a = 0.1e1', 'a = 1E5', 'a = 1e+5', 'a = 1e-5', 'a = 1.0e0', 'a = 9007199254740993.0',
+    'a = 0.30000000000000004', 'a = 1e400', 'a = -1e400', 'a = 1e-400', 'a = 4.9e-324', 'a = 2.5e-324', 'a = 1.7976931348623157e308',
+    'a = 1.7976931348623159e308', 'a = 123456789012345678901234567890.0', 'a = 0.1234567890123456789012345678901234567890',
+    'a = ' + '9' * 5000 + '.0', 'a = 1.' + '0' * 400 + '1', 'a = 1e16', 'a = 1e-5', 'a = 0.0001', 'a = 123456789.125', 'a = 1e22', 'a = 1e23',
+    'a = inf', 'a = +inf', 'a = -inf', 'a = nan', 'a = +nan', 'a = -nan', 'a = Inf', 'a = NaN', 'a = INF', 'a = infinity', 'a = nanx', 'a = +in',
+    'a = in', 'a = na', 'a = 1.2.3', 'a = 1e2.3', 'a = 1_e2', 'a = 1e_2', 'a = 1._2', 'a = 1_.2', 'a = 1.2_', 'a = 1.', 'a = .1', 'a = 1.e1', 'a = 1e',
+    'a = 1e+', 'a = 1E', 'a = +.5', 'a = 0x1.8p1', 'a = 1e1e1', 'a = 01.5', 'a = 1.5f', 'a = 1,5', 'a = -inf_', 'a = +nan1', 'a = 0.', 'a = 0e',
+    # 布尔值
+    'a = true', 'a = false', 'a = True', 'a = FALSE', 'a = truex', 'a = falsey', 'a = tru', 'a = fals', 'a = t', 'a = f', 'a = true false',
+    'a = yes', 'a = null', 'a = none',
+    # 日期和时间
+    'a = 1979-05-27T07:32:00Z', 'a = 1979-05-27T00:32:00-07:00', 'a = 1979-05-27T00:32:00.999999-07:00', 'a = 1979-05-27 07:32:00Z',
+    'a = 1979-05-27t07:32:00z', 'a = 1979-05-27T07:32:00', 'a = 1979-05-27T00:32:00.999999', 'a = 1979-05-27', 'a = 07:32:00', 'a = 00:32:00.999999',
+    'a = 00:00:00', 'a = 23:59:59.999999', 'a = 07:32:00.5', 'a = 07:32:00.123456789', 'a = 07:32:00.000001', 'a = 07:32:00.0000001',
+    'a = 1979-05-27T07:32:00.1234567890123Z', 'a = 1979-05-27T07:32:00+00:00', 'a = 1979-05-27T07:32:00-00:00', 'a = 1979-05-27T07:32:00+23:59',
+    'a = 1979-05-27T07:32:00-23:59', 'a = 1979-05-27T07:32:00+05:30', 'a = 1979-05-27T07:32:00-00:30', 'a = 0001-01-01',
+    'a = 9999-12-31T23:59:59.999999+23:59', 'a = 2024-02-29', 'a = 2000-02-29', 'a = 1600-02-29T00:00:00Z', 'a = 0000-01-01',
+    'a = 0000-01-01T00:00:00Z', 'a = 1979-02-30', 'a = 2023-02-29', 'a = 1900-02-29', 'a = 2100-02-29', 'a = 1979-04-31', 'a = 1979-06-31T00:00:00',
+    'a = 1979-09-31', 'a = 1979-11-31', 'a = 1979-12-31', 'a = 1979-01-31', 'a = 1979-13-01', 'a = 1979-00-10', 'a = 1979-05-32', 'a = 1979-05-00',
+    'a = 1979-05-27T24:00:00', 'a = 1979-05-27T07:60:00', 'a = 1979-05-27T07:32:60', 'a = 1979-05-27T07:32', 'a = 1979-05-27T07', 'a = 1979-05-27T',
+    'a = 1979-05-27 ', 'a = 1979-05-27 # c', 'a = 1979-05-27 x', 'a = 1979-05-27T07:32:00+24:00', 'a = 1979-05-27T07:32:00+07:60',
+    'a = 1979-05-27T07:32:00+07', 'a = 1979-05-27T07:32:00+0700', 'a = 1979-05-27T07:32:00 +07:00', 'a = 1979-05-27T07:32:00.',
+    'a = 1979-05-27T07:32:00.Z', 'a = 1979-05-27T07:32:00ZZ', 'a = 07:32', 'a = 7:32:00', 'a = 24:00:00', 'a = 07:32:00Z', 'a = 07:32:00+01:00',
+    'a = 07:32:00.', 'a = 1979-5-27', 'a = 79-05-27', 'a = 19790527', 'a = 1979-05-27T07:32:00z ', 'a = 12345-01-01', 'a = 1979-05-271',
+    'a = 1979-05-27-01', 'a = [1979-05-27, 07:32:00, 1979-05-27T07:32:00Z]', 'a = {d = 1979-05-27}', 'a = 1979-05-27\n[a.b]', 'a = 1979-05-27\na.b = 1',
+    'a = 1979-05-27  07:32:00', 'a = 1979-05-27\t07:32:00', 'a = 1979-05-27_07:32:00', 'a = １979-05-27',
+    # 数组
+    'a = [1, 2, 3]', 'a = [ "red", "yellow", "green" ]', 'a = [ [ 1, 2 ], [3, 4, 5] ]', 'a = [ [ 1, 2 ], ["a", "b", "c"] ]',
+    'a = [ "all", \'strings\', """are the same""", \'\'\'type\'\'\' ]', 'a = [ 0.1, 0.2, 0.5, 1, 2, 5 ]',
+    'a = [ "Foo Bar <foo@example.com>", { name = "Baz Qux", email = "bazqux@example.com", url = "https://example.com/bazqux" } ]', 'a = []',
+    'a = [ ]', 'a = [\n]', 'a = [\n1, 2, 3\n]', 'a = [\n1,\n2, # this is ok\n]', 'a = [1,]', 'a = [1, ]', 'a = [,]', 'a = [,1]', 'a = [1,,2]',
+    'a = [1 2]', 'a = [1', 'a = [1,', 'a = [', 'a = ]', 'a = [1]]', 'a = [[]]', 'a = [[[[]]]]', 'a = [[], [[]], [[], []]]',
+    'a = [ # c\n 1 # c\n , # c\n 2 # c\n ] # c', 'a = [\n# only a comment\n]', 'a = [1, # c\x00\n]', 'a = [ {x = 1}, {x = 2} ]', 'a = [true, false]',
+    'a = [1.5, inf, nan]', 'a = ["a"\n,\n"b"\n]', 'a = [1\n\n\n]', 'a = [1;2]', 'a = [a]', 'a = [1=2]', 'a = [\t1\t,\t2\t]', 'a = [1,2,3,]',
+    'a = [1, 2] 3', 'a = [1, 2]]', 'a = [1, [2, [3, [4, {b = [5, {c = 6}]}]]]]', 'a = [\r\n1,\r\n2\r\n]', 'a = [1, # 中文\n 2]', 'a = ["é", \'中\', 😀]',
+    # 表
+    '[table]', '[table]\nkey = 1', '[a.b.c]', '[ d.e.f ]', '[ g .  h  . i ]', '[ j . "ʞ" . \'l\' ]', '[a]\n[b]', '[a]\nx = 1\n[b]\nx = 2', '[x.y.z.w]\n[x]',
+    '[a.b]\n[a]', '[a]\n[a.b]', '[a]\n[a]', '[a]\nb = 1\n[a]', '[a]\n[b]\n[a]', '[a]\nb = 1\n[a.b]', '[a]\nb = 1\n[a.b.c]', '[a.b]\nc = 1\n[a]\nb = 2',
+    '[a]\nb.c = 1\n[a.b]', '[a]\nb.c = 1\n[a.b.d]', '[a]\nb.c = 1\n[a.b.c]', '[]', '[ ]', '[a.]', '[.a]', '[a..b]', '[a', '[a]]', '[a] b = 1', '[a] # c',
+    '[a]#c', '[a]x', '  [a]  ', '\t[a]\t', '[a\n]', '[\na]', '["a"]', "['a']", '[""]', '["a.b"]', '[a."b.c".d]', '[a b]', '[a=b]', '[a]\n[a."b"]\n[a.b]',
+    '[é]', '["é"]', '[1]', '[-]', '[a]\n\n\n[b]\n\n', 'a = 1\n[a]', 'a.b = 1\n[a]', 'a.b = 1\n[a.c]', 'a.b.c = 1\n[a.b.d]', 'a.b.c = 1\n[a.b]',
+    '[a]\nb.c = 1\nb.d = 2', '[a]\nb.c = 1\n[x]\n[a.b]', '[a]\nb.c = 1\n[x]\nb.c = 1', '[a]\nb.c = 1\n[x]\n[a]',
+    '[fruit]\napple.color = "red"\napple.taste.sweet = true\n[fruit.apple]', '[fruit]\napple.color = "red"\napple.taste.sweet = true\n[fruit.apple.taste]',
+    '[fruit]\napple.color = "red"\napple.taste.sweet = true\n[fruit.apple.texture]\nsmooth = true', '[a]\nb = {}\n[a.b]', '[a]\nb = {}\n[a.b.c]',
+    '[a]\nb = []\n[a.b]', '[a]\nb = []\n[[a.b]]', '[a]\nb = [{}]\n[a.b.c]', 'a = {}\na.b = 1', 'a = {b = 1}\na.c = 2', 'a = []\na.b = 1',
+    'a = [{}]\na.b = 1', '[t]\na = {}\n[t.a]', 'a = {b = {}}\n[a.b.c]', '[a.b.c]\nx = 1\n[a]\ny = 2\n[a.b]\nz = 3', '[a.b.c]\n[a.b.c]',
+    '[a.b.c]\n[a.b]\n[a.b]', '[a]\n"b" = 1\n[a]\nc = 2', '[a]\n[a.b]\n[a.b.c]\n[a.b]', '[a."b c"]\nd = 1\n[a."b c".e]', '[a]\n\tb = 1\n  [c]\n\td = 2',
+    '[a]\nb = 1 [c]', '[a][b]', '[a]\n[b', '[a.b]\n[a.b.c]\n[a]\nb.d = 1',
+    # 出错的说法里带着键（Python 的 repr：引号、转义、不能打印的字符）
+    '["it\'s"]\n["it\'s"]', '[\'say "hi"\']\n[\'say "hi"\']', '["a\\nb"]\n["a\\nb"]', '["é"."中"]\n["é"."中"]', '["\\u0001"]\n["\\u0001"]',
+    '["😀"]\n["😀"]', '["both \' and \\""]\n["both \' and \\""]', '["\\u00a0\\u200b\\u2028"]\n["\\u00a0\\u200b\\u2028"]',
+    '["\\U000E0001"]\n["\\U000E0001"]', '["\\u007f"]\n["\\u007f"]', '["a\\\\b"]\n["a\\\\b"]', '[""]\n[""]', '["".""]\n["".""]',
+    '[a."b\\tc"]\nd = 1\n[a]\n"b\\tc".e = 2', '"é" = {}\n["é".x]', '[["it\'s"]]\n"k\\r" = []\n[["it\'s"."k\\r"]]', 'a."\\u0085" = []\na."\\u0085".b = 1',
+    # 行内表
+    'a = { first = "Alice", last = "Example" }', 'a = { x = 1, y = 2 }', 'a = { type.name = "pug" }', 'a = {}', 'a = { }', 'a = {\t}',
+    'a = {a = {b = {c = {}}}}', 'a = { x = 1, }', 'a = {,}', 'a = { , x = 1}', 'a = { x = 1,, y = 2 }', 'a = { x = 1 y = 2 }', 'a = {\n x = 1 }',
+    'a = { x = 1\n}', 'a = { x = 1,\n y = 2 }', 'a = { x = [\n1,\n2\n] }', 'a = { x = """\nmultiline""" }', 'a = { x = 1', 'a = {', 'a = { x',
+    'a = { x = }', 'a = { = 1 }', 'a = {x=1}}', 'a = }', 'a = { x = 1, x = 2 }', 'a = { x = 1, "x" = 2 }', 'a = { a.b = 1, a.c = 2 }',
+    'a = { a.b = 1, a.b = 2 }', 'a = { a = 1, a.b = 2 }', 'a = { a.b = 1, a = 2 }', 'a = { a = {b = 1}, a.c = 2 }', 'a = { a = [1], a.b = 2 }',
+    'a = { a = {}, a.b = 2 }', 'a = { a.b = {c = 1}, a.b.d = 2 }', 'a = { a.b.c = 1, a.b.d = 2, a.e = 3 }', 'a = { a = [{}], a.b = 1 }',
+    'a = { "a b" = 1, \'c d\' = 2 }', 'a = { x = 1 } # c', 'a = { x = 1 # c\n}', 'a = { # c\n}', 'point = { x = 1, y = 2 }\nanimal = { type.name = "pug" }',
+    'name = { first = "Alice" }\nname.last = "x"', '[product]\ntype = { name = "Nail" }\ntype.edible = false',
+    '[product]\ntype.name = "Nail"\ntype = { edible = false }', 'a = { b = 1 }\n[a]', 'a = { b = 1 }\n[a.c]', 'a = { b = 1 }\n[[a]]',
+    'a = { b = 1 }\n[[a.c]]', 'a = {x = {y = [ {z = 1} ]}}', 'a = { "it\'s" = 1, "it\'s" = 2 }', 'a = { \'say "hi"\' = 1, \'say "hi"\' = 2 }',
+    'a = { "中\\n" = 1, "中\\n" = 2 }', 'a = { "\\u0001" = 1, "\\u0001" = 2 }', 'a = { "😀" = 1, "😀" = 2 }', 'a = { b.c = 1, b.c.d = 2 }',
+    'a = { b = [], b.c = 1 }', 'a = { b.c = [], b.c.d = 1 }', 'a = { b.c = 1, b = 2 }', 'a = { x = { y = 1 }, x = 2 }', 'a = {x = 1}{y = 2}',
+    # 表的数组
+    '[[products]]\nname = "Hammer"\nsku = 738594937\n\n[[products]]  # empty table within the array\n\n[[products]]\nname = "Nail"\nsku = 284758393\n'
+    'color = "gray"',
+    '[[fruits]]\nname = "apple"\n[fruits.physical]\ncolor = "red"\nshape = "round"\n[[fruits.varieties]]\nname = "red delicious"\n[[fruits.varieties]]\n'
+    'name = "granny smith"\n[[fruits]]\nname = "banana"\n[[fruits.varieties]]\nname = "plantain"',
+    '[fruit.physical]\ncolor = "red"\n[[fruit]]\nname = "apple"', 'fruits = []\n[[fruits]]',
+    '[[fruits]]\nname = "apple"\n[[fruits.varieties]]\nname = "red delicious"\n[fruits.varieties]\nname = "granny smith"',
+    '[[fruits]]\nname = "apple"\n[fruits.physical]\ncolor = "red"\n[[fruits.physical]]\ncolor = "green"', '[[a]]', '[[a]]\n[[a]]', '[[a]]\n[a]',
+    '[a]\n[[a]]', '[[a]]\n[a.b]', '[[a]]\n[a.b]\n[[a]]\n[a.b]', '[[a]]\n[a.b]\n[a.b]', '[[a]]\n[[a.b]]\n[a.b]', '[[a]]\n[[a.b]]\n[[a.b]]\n[[a]]\n[[a.b]]',
+    '[[a.b]]\n[[a]]', '[[a.b]]\n[a]\nc = 1', '[[a.b]]\n[a]\nb = 1', '[[a]]\nb = 1\n[[a]]\nb = 2\n[a.c]\nd = 3', '[[]]', '[[ ]]', '[[a]', '[[a]]]', '[[a] ]',
+    '[ [a]]', '[[a]]x', '[[a]] # c', '[[a.]]', '[[a."b"]]', '[["a.b"]]', 'a = 1\n[[a]]', 'a = [1]\n[[a]]', 'a.b = 1\n[[a]]', 'a.b = 1\n[[a.b]]',
+    '[a]\nb = 1\n[[a.b]]', '[[a]]\nb.c = 1\n[[a.b]]', '[[a]]\nb.c = 1\n[a.b]', '[[a]]\nb = {}\n[a.b]', '[[a]]\nb = []\n[[a.b]]',
+    '[[a]]\n[[a.b.c]]\n[a.b.c.d]\n[[a.b.c]]\n[a.b.c.d]', '[[a]]\nb.c = 1\n[[a]]\nb.c = 2', '[[a]]\n[a.b]\nc = 1\n[[a]]\n[a.b]\nc = 2\n[[a.b.d]]',
+    '[[a]]\n[[a.b]]\n[[a.b.c]]\nx = 1\n[[a]]\n[[a.b]]\n[a.b.c]\nx = 2', '[[a]] [[a]]', '[[a]]\n[[a', '[["a"]]\n[[\'a\']]\n[[a]]',
+    # 整份的文件
+    '# This is a TOML document\n\ntitle = "TOML Example"\n\n[owner]\nname = "Alice Example"\ndob = 1979-05-27T07:32:00-08:00\n\n[database]\n'
+    'enabled = true\nports = [ 8000, 8001, 8002 ]\ndata = [ ["delta", "phi"], [3.14] ]\ntemp_targets = { cpu = 79.5, case = 72.0 }\n\n[servers]\n\n'
+    '[servers.alpha]\nip = "192.0.2.1"\nrole = "frontend"\n\n[servers.beta]\nip = "192.0.2.2"\nrole = "backend"\n',
+    'model = "sample-model"\nmodel_reasoning_effort = "ultra"\nservice_tier = "priority"\ntext = """A note containing chatgpt_base_url = "example"\n'
+    'features = { respect_system_proxy = true }\n"""\nwhen = 2026-11-08T12:00:00Z\nchoices = [1, 2, 3]\n[features]\nrespect_system_proxy = false\n'
+    'system_proxy_fallback = false\n[projects."/tmp/test-project"]\ntrust_level = "trusted"\n[[sample]]\nname = "one"\n',
+    'chatgpt_base_url = """\nhttps://example.invalid"""\n', "chatgpt_base_url = '''\nhttps://example.invalid'''\n",
+    '"\\u0063hatgpt_base_url" = "https://example.invalid"\n', '[profiles.other]\nchatgpt_base_url = "https://example.invalid"\n',
+    'profiles.other.chatgpt_base_url = "https://example.invalid"\n', 'profiles = { other = { chatgpt_base_url = "https://example.invalid" } }\n',
+    'features = { respect_system_proxy = true }', 'features.respect_system_proxy = true', '["features"]\n"respect_system_proxy" = true',
+    'profiles = { "deep.review" = { features = { respect_system_proxy = true } } }', '"features.respect_system_proxy" = true',
+    'profile = "safe"\n[profiles.safe]\nmodel="m"\n[profiles."unused.review"]\ncli_auth_credentials_store="keyring"', 'model="unterminated',
+    'model="a"\nmodel="b"', 'features = "not a table"', 'profiles = []', 'sqlite_home = [', 'features={',
+    '[package]\nname = "x"\nversion = "0.1.0"\n\n[dependencies]\nlibc = "0.2"\nregex = { version = "1", default-features = false, features = ["std"] }\n\n'
+    '[profile.release]\nopt-level = 2\nlto = "fat"\n\n[[bin]]\nname = "x"\npath = "src/main.rs"\n',
+    # 行内数组、行内表套到上限前后（loads 在第 8 层：数组到 494 层、行内表到 329 层还行）
+    toml_nested('[', ']', 100), toml_nested('[', ']', 494), toml_nested('[', ']', 495), toml_nested('[', ']', 600), toml_nested('[', ']', 5000),
+    toml_nested('{a = ', '}', 100, '1'), toml_nested('{a = ', '}', 329, '1'), toml_nested('{a = ', '}', 330, '1'), toml_nested('{a = ', '}', 400, '1'),
+    toml_nested('[{a = ', '}]', 197, '1'), toml_nested('[{a = ', '}]', 198, '1'), toml_nested('[{a = ', '}]', 199, '1'), toml_nested('[', ']', 493, '"x"'),
+    toml_nested('[', ']', 494, '"x"'), toml_nested('[', ']', 492, '"\\u00e9"'), toml_nested('[', ']', 493, '"\\u00e9"'), toml_nested('{"a" = ', '}', 328, '1'),
+    toml_nested('{"a" = ', '}', 329, '1'), 'a = ' + '[' * 10, 'a = ' + '[' * 494, 'a = ' + '[' * 495, 'a = ' + '[' * 496, 'a = ' + '[' * 2000,
+    'a = ' + '{a = ' * 329, 'a = ' + '{a = ' * 330, 'a = ' + '[' * 494 + '?', 'a = ' + '[' * 495 + '?', '.'.join(['a'] * 500) + ' = 1',
+    '[' + '.'.join(['a'] * 300) + ']\nb = 1', toml_nested('[', ']', 494) + '\nb = ' + '[' * 495 + ']' * 495,
+]
+
+# 拿来随机改动的几份（改动出来的大多不合法：出错的地方、说法也要一样）
+TOML_MUTATED = [
+    'title = "TOML"\n[owner]\nname = "Alice"\ndob = 1979-05-27T07:32:00-08:00\n',
+    'a.b = 1\n[c]\nd = { e = [1, 2.5, "x"], f.g = true }\n[[h]]\ni = 0x1F\n[[h]]\ni = 07:32:00\n',
+    'k = """\nmulti \\\n   line"""\nl = \'literal\'\nm = \'\'\'raw\n\'\'\'\n"quoted key" = "\\u00e9\\t"\n',
+    '[a]\nb.c = 1\n[a.d]\ne = [ [1, 2], [{f = 1}] ] # c\n[[a.g]]\nh = -0.5e+3\n',
+    'x = [ 1, # 一\n  2, # 二\n]\ny = { "中" = "文", z = 1979-05-27 }\n',
+    'n = +1_000\no = 0o17\np = 0b11\nq = inf\nr = -nan\ns = 1e-2\nt = 0.5\n',
+    '[[t]]\n[t.u]\nv = 1\n[[t]]\n[t.u]\nv = 2\n[w]\nx.y.z = "é😀"\n',
+]
+
+
+def toml_mutants():
+    rng = random.Random(20261119)
+    pieces = ['"', "'", '"""', "'''", '\\', '\n', '\r\n', '\t', ' ', '[', ']', '[[', ']]', '{', '}', '=', '.', ',', '#', '0', '1', '_', '-', '+', ':',
+              'T', 'Z', 'e', 'x', 'inf', 'nan', 'true', '\\u00e9', '\\U0001F600', 'é', '中', '😀', '\x00', '\x7f', 'a', 'a.b', ' = ', '1979-05-27', '07:32:00']
+    out = []
+    for doc in TOML_MUTATED:
+        for _ in range(64):
+            i, j, op, piece = rng.randrange(len(doc) + 1), rng.randrange(len(doc) + 1), rng.randrange(5), pieces[rng.randrange(len(pieces))]
+            if op == 0:
+                out.append(doc[:i] + doc[i + 1:])           # 删一个字符
+            elif op == 1:
+                out.append(doc[:i] + piece + doc[i:])       # 插一段
+            elif op == 2:
+                out.append(doc[:i] + piece + doc[i + 1:])   # 换一个字符
+            elif op == 3:
+                out.append(doc[:max(i, j)] + doc[min(i, j):])   # 重复一段
+            else:
+                out.append(doc[:i])                         # 截断
+    return out
+
+
+# 结果刚好卡在调用栈上限上的：(文件, 结果)。生成时找出 loads 最深在第几层还是这个结果，再深一层就是 RecursionError
+TOML_FRAMES = [
+    ('', 'ok'), ('# c', 'ok'), ('a = 1', 'ok'), ('a = true', 'ok'), ('a = "x"', 'ok'), ('a = "x\\u00e9"', 'ok'), ('"k" = 1', 'ok'),
+    ('"k\\u0041" = 1', 'ok'), ("a = 'x'", 'ok'), ("'k' = 1", 'ok'), ('a = """x"""', 'ok'), ('a = """x\\u00e9"""', 'ok'), ('a = """x\\\n  y"""', 'ok'),
+    ("a = '''x'''", 'ok'), ('a = []', 'ok'), ('a = [1]', 'ok'), ('a = [[[]]]', 'ok'), ('a = [ # c\n ]', 'ok'), ('a = {}', 'ok'), ('a = {b = 1}', 'ok'),
+    ('a = {b = {c = {d = 1}}}', 'ok'), ('a = {"b" = 1}', 'ok'), ('a = 1979-05-27', 'ok'), ('a = 1979-05-27T07:32:00-07:13', 'ok'), ('a = 07:32:00', 'ok'),
+    ('a = 1.5', 'ok'), ('a = inf', 'ok'), ('[a]', 'ok'), ('[[a]]', 'ok'), ('["a\\u0041"]', 'ok'), ('a.b.c = 1', 'ok'), ('a = [[["x"]]]', 'ok'),
+    ('a = [[[{}]]]', 'ok'), ('a = [[[{a = 1, b = 2}]]]', 'ok'), ('a = [[[1979-05-27T07:32:00+03:21]]]', 'ok'), ('[[a]]\n[[a]]\n[a.b]\nc = 1', 'ok'),
+    ("a = 'x\x01'", 'TOMLDecodeError'), ("a = 'x", 'TOMLDecodeError'), ('a = "x\x01"', 'TOMLDecodeError'), ('a = "\\u12"', 'TOMLDecodeError'),
+    ('a = "\\ud800"', 'TOMLDecodeError'), ('a = ?', 'TOMLDecodeError'), ('?', 'TOMLDecodeError'), ('a = 1\na = 2', 'TOMLDecodeError'),
+    ('a = [[[1, 2', 'TOMLDecodeError'), ('a = {b = {c = 1, c = 2}}', 'TOMLDecodeError'), ('a = 1979-02-30', 'TOMLDecodeError'),
+]
+
+TOML_INT_LIMIT = 10 ** 4300   # 十进制超过 4300 位的整数 Python 转不成十进制的文字（str()、json.dumps 都是 ValueError）
+
+
+def toml_frame_index():
+    """调用者那一层在调用栈的第几层（最外层的模块是第 1 层）"""
+    f, n = sys._getframe(1), 0
+    while f:
+        n += 1
+        f = f.f_back
+    return n
+
+
+def toml_loads_at(doc, frame):
+    """让 tomllib.loads 自己落在调用栈的第 frame 层"""
+    here = toml_frame_index()
+    if here >= frame:
+        raise AssertionError('调用栈已经有 %d 层，到不了第 %d 层' % (here, frame))
+    if here == frame - 1:
+        return tomllib.loads(doc)
+    return toml_loads_at(doc, frame)
+
+
+def toml_result(doc, frame):
+    """(结果的种类, 解析出来的值或者出错的说法)"""
+    try:
+        return 'ok', toml_loads_at(doc, frame)
+    except tomllib.TOMLDecodeError as e:
+        return 'TOMLDecodeError', str(e)
+    except RecursionError:
+        return 'RecursionError', ''
+    except ValueError as e:
+        return 'ValueError', str(e)
+
+
+def toml_plain(v):
+    """日期、时间和大到转不成十进制的整数换成带记号的字符串，别的原样"""
+    if isinstance(v, dict):
+        return {k: toml_plain(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [toml_plain(x) for x in v]
+    if isinstance(v, datetime.datetime):
+        return '@datetime ' + v.isoformat()
+    if isinstance(v, datetime.date):
+        return '@date ' + v.isoformat()
+    if isinstance(v, datetime.time):
+        return '@time ' + v.isoformat()
+    if isinstance(v, int) and not isinstance(v, bool) and abs(v) >= TOML_INT_LIMIT:
+        return '@int ' + hex(v)
+    return v
+
+
+def toml_text(value):
+    """解析出来的值写成 JSON 的文字：Rust 那边照 json.dumps(…, ensure_ascii=False) 的写法逐字比（键的先后、整数还是小数都在里面）"""
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(100000)   # 套了几百层的值：只在换写法时放宽，解析时用的还是默认的上限
+    try:
+        return json.dumps(toml_plain(value), ensure_ascii=False)
+    finally:
+        sys.setrecursionlimit(limit)
+
+
+def toml_vectors():
+    docs = []
+    for doc in dict.fromkeys(TOML_DOCS + toml_mutants()):
+        kind, value = toml_result(doc, TOML_FRAME)
+        if kind == 'ok':
+            docs.append({'in': doc, 'ok': toml_text(value)})
+        elif kind == 'RecursionError':
+            docs.append({'in': doc, 'err': kind})
+        else:
+            docs.append({'in': doc, 'err': kind, 'msg': value})
+    frames = []
+    for doc, want in TOML_FRAMES:
+        lo, hi = TOML_FRAME, sys.getrecursionlimit() + 1   # 第 lo 层是这个结果，第 hi 层不是
+        if toml_result(doc, lo)[0] != want:
+            raise AssertionError('%r 在第 %d 层不是 %s' % (doc, lo, want))
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if toml_result(doc, mid)[0] == want:
+                lo = mid
+            else:
+                hi = mid
+        if toml_result(doc, hi)[0] != 'RecursionError':
+            raise AssertionError('%r 在第 %d 层不是 RecursionError' % (doc, hi))
+        frames.append({'in': doc, 'want': 'ok' if want == 'ok' else 'ValueError', 'max': lo})
+    return {'frame': TOML_FRAME, 'docs': docs, 'frames': frames}
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
     files = {
+        'toml.json': toml_vectors(),
         'urlsplit.json': [url_case(u) for u in URLS],
         'ipaddress.json': [ip_case(s) for s in IPS],
         'urlquery.json': {
