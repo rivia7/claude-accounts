@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.0-beta.1", title: "测试版：cca 内嵌的 Python 换成了原生程序，更快、更省", points: [
+            .init(symbol: "bolt",
+                  text: "cca 里原来内嵌的 Python 换成了原生程序：一条命令里 cca 自己占的时间降到原来的几分之一（比如 cca ls 从约 0.5 秒到约 0.1 秒），后台的上报进程内存从约 31 MB 降到约 6 MB。用法、配置和文件都没变。"),
+            .init(symbol: "shippingbox",
+                  text: "不再需要 python3。cca 这个文件大了（约 13 MB，四种机器用的程序都接在里面），第一次运行时解出这台机器的那一份。"),
+            .init(symbol: "arrow.uturn.backward",
+                  text: "只支持 Intel / Apple 芯片的 Mac，x86_64 / arm64 的 Linux。这是测试版：发现和以前不一样的地方，用 cca update --rollback 退回上一个版本。"),
+        ]),
         ReleaseNote(version: "3.4.1", title: "不再用内置代理时，开机自动启动它的那一行一起删掉", points: [
             .init(symbol: "trash",
                   text: "macOS 26 以下由 cca 在后台运行内置代理时，cca local off、cca restore 也会删掉 crontab 里开机自动启动内核的那一行（以前只在 Linux 上删）。"),
