@@ -30,8 +30,10 @@
     经 PY_BOOT 起的真的 cca 早一层到头，3.9 的层数又不同，这些不跟。
   - **放不进 64 位的数当作没有**：UID、UIDVALIDITY、UIDNEXT（IMAP 里它们是 32 位的；Python 是多大都行的整数）。`cca mail open --msg`
     里手写的这种 UID 照样发给 Gmail（原来就这样），但回应里这么大的 UID 认不出，说「邮件不在了」。
-  - **Ctrl-C。** 原来 Python 在哪一句都可能抛 KeyboardInterrupt；这里是信号处理函数记一笔，等邮件歇着的时候、读写被打断的时候、
-    每条 IMAP 命令之前、等 `cca _mail-open` 的时候看到了才往上传（「已取消」、退出码 130 一样）。处理函数只在 `cca mail open`
+  - **Ctrl-C。** 原来 Python 在哪一句都可能抛 KeyboardInterrupt；这里是信号处理函数记一笔，等邮件歇着的时候、和代理握手的读被打断的
+    时候、每条 IMAP 命令之前、等 `cca _mail-open` 的时候看到了才往上传（「已取消」、退出码 130 一样）。**正卡在 TLS 的读上时
+    （等 Gmail 回一条命令）要等这次读回来才看得到**：rustls 把被信号打断的读自己接着读了（0.23 的 `complete_io`），Gmail 一直不回的话
+    最多等到 20 秒的超时才说「已取消」，原来是马上说（说的话、退出码一样，只是晚；这一条没有对拍用例）。处理函数只在 `cca mail open`
     原来 `try` 的那一段装；那之前（读钥匙串、问系统代理）按 Ctrl-C 是系统默认的直接结束，没有 Python 的调用栈。
   - **关连接时多发一个 TLS 的 close_notify**（Python 的 `shutdown` 直接关套接字）；信任的根证书只读 `/etc/ssl/cert.pem`
     （原来是那个 Python 链的 OpenSSL 的默认位置：macOS 自带的 Python 就是这个文件，Homebrew 的是它自己那份）。
