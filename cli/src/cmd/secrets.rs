@@ -15,14 +15,15 @@
 //!
 //! 秘密绝不进任何进程的命令行和环境变量：存钥匙串时，命令和十六进制的秘密都经 `security -i` 的 stdin 交过去。
 
+use super::keyshare::{keyshare_edit, keyshare_kick, keyshare_on};
+use super::mail::mail_forget_orphans;
 use super::table::need;
 use super::{arg, arity, Cmd};
-use crate::core::base::{secret_re_match, CCA_HOME, CFG, SECRET_MSG};
+use crate::core::base::{secret_re_match, CCA_HOME, SECRET_MSG};
 use crate::core::ctx::{cfg_save, ctx};
 use crate::core::model::{acct_id, api_host, cfg_load, is_api, key_hint, secret_ok, table_load, REF_ACCT};
-use crate::core::policy::POLICY_FILE;
 use crate::core::tool::{claude, t};
-use crate::py::fs::{self, load_quiet};
+use crate::py::fs;
 use crate::py::hash::to_hex;
 use crate::py::io;
 use crate::py::json;
@@ -35,7 +36,7 @@ use crate::py::{die, exit, Fail, R};
 use crate::{dict, err, out, out_raw, re};
 use std::collections::HashSet;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::LazyLock;
 
 /// 密钥文件放在这里（`~/.cca/secrets`）
@@ -75,41 +76,9 @@ pub fn keyfile_read(host: &str, svc: &str) -> (i32, String) {
     }
 }
 
-/// `os.makedirs(p, mode=mode, exist_ok=True)`：Python 3.7 起 mode 只管最后一层，中间新建的各层是默认权限（777 过 umask）。
-/// 兼容层的 `fs::makedirs_mode` 每一层都用 mode，对不上，所以写在这里
-fn makedirs_leaf_mode(p: &str, mode: u32) -> std::io::Result<()> {
-    let head = path::dirname(p);
-    if !head.is_empty() && !path::basename(p).is_empty() && !path::exists(&head) {
-        match fs::makedirs(&head) {
-            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
-            _ => {}
-        }
-    }
-    match std::fs::DirBuilder::new().mode(mode).create(p) {
-        // 建不了：已经是目录（跟着链接看）就算了，别的原样报
-        Err(e) if !path::isdir(p) => Err(e),
-        _ => Ok(()),
-    }
-}
-
-/// `os.fsync(fd)`：就是 fsync(2)。不用 `File::sync_all`：它在 macOS 上是 F_FULLFSYNC，慢得多，有的文件系统还不支持
-fn fsync(f: &std::fs::File) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-    loop {
-        // SAFETY: f 开着，fd 有效
-        if unsafe { libc::fsync(f.as_raw_fd()) } == 0 {
-            return Ok(());
-        }
-        let e = std::io::Error::last_os_error();
-        if e.kind() != std::io::ErrorKind::Interrupted {
-            return Err(e);
-        }
-    }
-}
-
 /// 存成密钥文件：目录 700，文件建的时候就是 600（`O_EXCL|O_NOFOLLOW` 的临时文件），fsync 后原子替换
 pub fn keyfile_write(host: &str, svc: &str, s: &str) -> R<()> {
-    makedirs_leaf_mode(&SECRETS_DIR, 0o700)?;
+    fs::makedirs_mode(&SECRETS_DIR, 0o700)?;
     fs::chmod(&SECRETS_DIR, 0o700)?;
     let p = path::join(&SECRETS_DIR, svc);
     let tmp = format!("{}.cca-{}.tmp", p, std::process::id());
@@ -120,7 +89,7 @@ pub fn keyfile_write(host: &str, svc: &str, s: &str) -> R<()> {
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).custom_flags(libc::O_NOFOLLOW).mode(0o600).open(&tmp)?;
     let mut text = json::dumps(&V::Dict(dict! { "v" => 1, "host" => host, "key" => s }), json::Fmt::new());
     text.push('\n');
-    let written = f.write_all(text.as_bytes()).and_then(|()| fsync(&f));
+    let written = f.write_all(text.as_bytes()).and_then(|()| fs::fsync(&f));
     drop(f); // 先关上再改名
     if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, &p)) {
         let _ = std::fs::remove_file(&tmp);
@@ -405,66 +374,6 @@ pub fn api_secret(k: &str, v: &Dict) -> String {
     }
 }
 
-// --- 别的模块里的函数，还没移植 -------------------------------------------------------------------------------------
-// 调用的地方照原样写着；那几个模块移植好了，把这一段删掉、换成它们的函数就行。
-// 原函数在「没开设备统计」「没有单独配邮箱的账号」时什么也不做，而记下、删掉 key 的每一条路都要先经过它们：这一种这里
-// 先答了（只有原函数开头那一句判断），不然这个模块的子命令一个都跑不到头。真要它们干活的时候是 unimplemented!
-
-/// presence 模块的 `presence_load()[1]` 是不是空的，只认得出肯定没开的三种（原函数最前面的三个返回）：config.json 里写着
-/// `"presence": false`、没有维护者的映射、映射里没有 presence 一节。映射里有 presence 一节时开没开要看它合不合格、
-/// 有没有 deploy key（presence_problems、presence_key），那是 presence 模块的事，这里答 false（不知道）
-fn presence_surely_off() -> bool {
-    if load_quiet(&CFG).and_then(|c| c.as_dict()).is_some_and(|c| matches!(c.get("presence"), Some(V::Bool(false)))) {
-        return true;
-    }
-    match load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()) {
-        None => true,
-        Some(j) => matches!(j.get("presence"), None | Some(V::None)),
-    }
-}
-
-/// keyshare 模块的 `with keyshare_edit(键, 时间) as ed`：在这台设备上记下、删掉官方账号记下备查的 key 时拿着 keys.lock，
-/// 改完 `ed.mark(key 或 None)` 记下时间。没开设备统计时不记：进去、mark、出来都什么也不做
-struct KeyshareEdit;
-
-fn keyshare_edit(_key: &str, _at: f64) -> KeyshareEdit {
-    if presence_surely_off() {
-        return KeyshareEdit;
-    }
-    unimplemented!("共享记下的 API key 还没移植（keyshare：keyshare_edit）")
-}
-
-impl KeyshareEdit {
-    /// `ed.mark(s)`
-    fn mark(&mut self, _s: Option<&str>) {}
-
-    /// `__exit__`；ok：with 里面没出异常
-    fn exit(self, _ok: bool) {}
-}
-
-/// keyshare 模块的 `keyshare_on(key, v)`：这个账号记下备查的 key 会不会同步（映射里的 Claude、Codex 官方账号，开着设备统计）
-fn keyshare_on(_key: &str, _v: &V) -> bool {
-    if presence_surely_off() {
-        return false;
-    }
-    unimplemented!("共享记下的 API key 还没移植（keyshare：keyshare_on）")
-}
-
-/// keyshare 模块的 `keyshare_kick(force)`：在后台跑一次 cca _key-sync（经 spawn_background）。keyshare_on 是真的才会调到
-fn keyshare_kick(_force: bool) {
-    unimplemented!("共享记下的 API key 还没移植（keyshare：keyshare_kick）")
-}
-
-/// mail 模块的 `mail_forget_orphans()`：清掉 config.json 里已经不在 Claude 账号表里的账号的 mail 覆盖（mail.accounts），
-/// 地址没人再用了就删钥匙串里的应用专用密码。没有单独配邮箱的账号时什么也不做
-fn mail_forget_orphans() -> R<()> {
-    let c = cfg_load()?;
-    if !c.dict("mail").and_then(|m| m.dict("accounts")).is_some_and(|a| !a.is_empty()) {
-        return Ok(());
-    }
-    unimplemented!("邮箱助手还没移植（mail：mail_forget_orphans）")
-}
-
 // --- 子命令 -------------------------------------------------------------------------------------------------------
 
 /// apiKeyHelper 回调（Claude Code 启动时和之后每 5 分钟左右来取一次）：把 key 打到 stdout。
@@ -527,7 +436,7 @@ pub fn cmd_secret_set(args: &[String]) -> R<()> {
         });
     }
     // 官方账号记下备查的：同步给登录了这个账号的其他设备；stdout 说一声给 bash 的文案
-    if is_ref && keyshare_on(key, &v) {
+    if is_ref && keyshare_on(key, &v)? {
         out!("shared");
         keyshare_kick(true);
     }
@@ -554,7 +463,7 @@ pub fn cmd_key_forget(args: &[String]) -> R<()> {
     }
     ed.exit(del.is_ok());
     del?;
-    if keyshare_on(key, &table.at(key)) {
+    if keyshare_on(key, &table.at(key))? {
         keyshare_kick(true);
     }
     Ok(())
@@ -566,7 +475,7 @@ pub fn cmd_key_share(args: &[String]) -> R<()> {
     let key = args[0].as_str();
     let table = table_load(t())?;
     need(&table, key)?;
-    if keyshare_on(key, &table.at(key)) {
+    if keyshare_on(key, &table.at(key))? {
         out!("1");
     }
     Ok(())

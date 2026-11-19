@@ -466,3 +466,62 @@ def _(b):
 @case('edit-apply/no-digest', ['edit-apply'], stdin='')
 def _(b):
     world(b)
+
+
+# --- sync-state：校验 + 清掉没主的 key + 摘要（要动钥匙串：沙箱里放 cases/secrets.py 那个假的 security）---
+from cases.router import ident as acct_ident   # noqa: E402
+from cases.secrets import SECURITY             # noqa: E402
+
+CODE = '#!/bin/sh\n# 路由器端的脚本（假的）\necho ok\n'
+
+
+def synced(b, cfg=None, **kw):
+    world(b, cfg=dict({'ports': dict(PORTS), 'synced': 'abc123'}, **(cfg or {})), **kw)
+    b.fake('security', SECURITY)
+
+
+SYNCS = [
+    ('plain', [], {}), ('plain-quiet', ['1'], {}), ('never-synced', [], {'cfg': {'synced': ''}}), ('synced-not-a-string', [], {'cfg': {'synced': 0}}),
+    ('table-errors', [], {'table': {'a b': 'US-A', 'bob@example.com': 'ZZ'}}), ('table-errors-quiet', ['quiet'], {'table': {'a b': 'US-A', 'bob@example.com': 'ZZ'}}),
+    ('notice-then-ok', [], {'policy': {'version': 1, 'claude': {'carol@example.com': 'US-A'}}}),
+    ('notice-then-ok-quiet', ['q'], {'policy': {'version': 1, 'claude': {'carol@example.com': 'US-A'}}}),
+    ('orphan-keys', [], {'cfg': {'api_keys': ['gone-aaaaaa', acct_ident('直连')], 'ref_keys': ['left-bbbbbb'],
+                                 'key_hints': {'gone-aaaaaa': {'host': 'api.example.com', 'hint': ''}, 'left-bbbbbb': {'host': 'reference', 'hint': 'sk-…WXYZ'}}}}),
+    ('orphan-keys-quiet', ['1'], {'cfg': {'api_keys': ['gone-aaaaaa'], 'ref_keys': ['left-bbbbbb']}}),
+]
+for name, argv, kw in SYNCS:
+    @case('sync-state/%s' % name, ['sync-state'] + argv, stdin=CODE)
+    def _(b, kw=kw):
+        synced(b, **kw)
+        b.write('keychain/cca-api-gone-aaaaaa/api.example.com', 'sk-test-AAAA1111')
+        b.write('keychain/cca-ref-left-bbbbbb/reference', 'sk-ant-api03-REFtest0123456789abcdWXYZ')
+
+
+for name, argv in [('table-not-json', []), ('table-not-json-quiet', ['1'])]:
+    @case('sync-state/%s' % name, ['sync-state'] + argv, stdin=CODE)
+    def _(b):
+        synced(b)
+        b.write('.cca/accounts.json', '{"a": ')
+
+
+for name, argv in [('config-not-an-object', []), ('config-not-an-object-quiet', ['1'])]:
+    @case('sync-state/%s' % name, ['sync-state'] + argv, stdin=CODE)
+    def _(b):
+        synced(b)
+        b.write('.cca/config.json', '[1, 2]')
+
+
+@case('sync-state/codex', ['sync-state', ''], stdin=CODE, tool='codex')
+def _(b):
+    synced(b, codex=CODEX_TABLE, cfg={'codex': {'ports': {}, 'last': '', 'api_keys': ['gone-cccccc']}})
+    b.write('keychain/cca-codex-api-gone-cccccc/api.example.com', 'sk-test-AAAA1111')
+
+
+@case('sync-state/empty-stdin', ['sync-state'], stdin='')
+def _(b):
+    synced(b)
+
+
+@case('sync-state/too-many-args', ['sync-state', '1', '2'], stdin=CODE)
+def _(b):
+    synced(b)

@@ -120,6 +120,21 @@ pub fn rmtree(p: &str) -> io::Result<()> {
     fs::remove_dir_all(p)
 }
 
+/// `os.fsync(fd)`：就是 fsync(2)。不用 `File::sync_all`：它在 macOS 上是 F_FULLFSYNC，慢得多，有的文件系统还不支持
+pub fn fsync(f: &fs::File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: f 开着，fd 有效
+        if unsafe { libc::fsync(f.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+}
+
 /// `os.utime(p)`：访问时间、修改时间都改成现在
 pub fn utime_now(p: &str) -> io::Result<()> {
     let c = std::ffi::CString::new(p).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;

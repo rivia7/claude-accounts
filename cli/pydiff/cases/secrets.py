@@ -14,7 +14,7 @@ key-show、key-forget、key-share。
 用例里的 key 都是编的。夹具里只用假数据：节点 US-A…、路由器 192.0.2.10、邮箱和接口 example.com。
 
 设备统计开着（映射里有 presence 一节）时记下、删掉 key 要经 keyshare 模块，单独配了邮箱的账号（config.json 的 mail.accounts）
-清理时要经 mail 模块：这两块还没移植，cca-core 走到那里是 unimplemented!，这里没有它们的用例。"""
+清理时要经 mail 模块：这两块要用的那几个函数已经移植，用例在文件最后两节。"""
 import hashlib
 import json
 import os
@@ -1719,3 +1719,142 @@ def _(b):
 def _(b):
     world(b, cfg={'codex': {'ports': {}, 'last': '', 'api_keys': [KIMI]}}, codex=CODEX)
     kf(b, XAPI + KIMI, {'v': 1, 'host': 'api.example.com', 'key': R2})
+
+
+# --- 设备统计开着时记下、删掉 key（keyshare 模块的 keyshare_edit / keyshare_on / keyshare_kick）---------------------------
+# 映射里有 presence 一节、这台机器有 deploy key：记下备查的 key 的时间记进 ~/.cca/presence/keys.json，并在后台起一次
+# cca _key-sync force（SELF_PATH 是沙箱里假的 cca：把收到的参数和环境变量记进 calls.log；settle 等它写完）
+PIN = 'sha256//' + 'A' * 43 + '='
+PRESENCE = {'url': 'https://192.0.2.10:18443/', 'pins': [PIN], 'salt': 'ab' * 16}
+PUB = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f cca-policy\n'
+SHARING = {'version': 1, 'claude': {'ALICE@example.com': 'US-A'}, 'codex': {'erin@example.com': 'US-A'}, 'agy': {'gina@example.com': 'US-B'}, 'presence': PRESENCE}
+AGENT = '#!/bin/sh\nprintf \'%s EVENTS=[%s] TOOL=[%s] KEEP=[%s]\\n\' "cca $*" "$CCA_EVENTS" "$CCA_TOOL" "$KEEP_ME" >> "$HOME/calls.log"\n'
+BG = {'CCA_EVENTS': '/dev/null', 'KEEP_ME': 'yes'}
+
+
+def sharing(b, policy=SHARING, key=True, pub=PUB, keys=None, **kw):
+    world(b, policy=policy, **kw)
+    if pub is not None:
+        b.write('.cca/policy/id_ed25519.pub', pub, 0o644)
+    if key:
+        b.write('.cca/policy/id_ed25519', 'PRIVATE KEY PLACEHOLDER\n')
+    b.write('.cca/bin/cca', AGENT, 0o755)
+    if keys is not None:
+        b.write('.cca/presence/keys.json', keys if isinstance(keys, str) else json.dumps(keys))
+        os.chmod(b.path('.cca/presence'), 0o700)
+
+
+OLD_KEYS = {'v': 1, 'acc': {'claude:%s' % BOB: {'at': 5.5, 'sum': None}, 'claude:%s' % ALICE: {'at': 1.0, 'sum': 'old'}}, 'synced': 1794024000, 'error': 'x'}
+for name, argv, stdin, kw in [
+    ('set-ref-mapped', ['secret-set', '主号(alice@example.com)'], R1, {}),
+    ('set-ref-mapped-existing-keys', ['secret-set', '主号(alice@example.com)'], R1, {'keys': OLD_KEYS}),
+    ('set-ref-mapped-bad-keys-file', ['secret-set', '主号(alice@example.com)'], R1, {'keys': '[1, 2'}),
+    ('set-ref-mapped-wrong-version', ['secret-set', '主号(alice@example.com)'], R1, {'keys': {'v': 2, 'acc': {'x': 1}}}),
+    ('set-ref-not-mapped', ['secret-set', 'bob@example.com'], R1, {}),
+    ('set-api', ['secret-set', '直连'], S1, {}),
+    ('set-ref-bad-key', ['secret-set', '主号(alice@example.com)'], 'short', {}),
+    ('set-ref-no-deploy-key', ['secret-set', '主号(alice@example.com)'], R1, {'key': False}),
+    ('set-ref-presence-off', ['secret-set', '主号(alice@example.com)'], R1, {'cfg': {'presence': False}}),
+    ('set-ref-bad-presence', ['secret-set', '主号(alice@example.com)'], R1, {'policy': dict(SHARING, presence=dict(PRESENCE, pins=[]))}),
+    ('forget-mapped', ['key-forget', '主号(alice@example.com)'], '', {'keys': OLD_KEYS}),
+    ('forget-not-mapped', ['key-forget', 'bob@example.com'], '', {}),
+    ('forget-api', ['key-forget', '直连'], '', {}),
+    ('share-mapped', ['key-share', '主号(alice@example.com)'], '', {}),
+    ('share-not-mapped', ['key-share', 'bob@example.com'], '', {}),
+    ('share-api', ['key-share', '直连'], '', {}),
+    ('share-no-deploy-key', ['key-share', '主号(alice@example.com)'], '', {'pub': None}),
+    ('share-pub-not-utf8', ['key-share', '主号(alice@example.com)'], '', {'pub': b'ssh-ed25519 \xff\xfe x\n'}),
+    ('set-pub-not-utf8', ['secret-set', '主号(alice@example.com)'], R1, {'pub': b'ssh-ed25519 \xff\xfe x\n'}),
+]:
+    @kcase('keyshare-%s' % name, argv, stdin=stdin, env=BG, mask=AT, settle=0.6)
+    def _(b, kw=kw):
+        sharing(b, **kw)
+        kc(b, REF + ALICE, 'reference', R2)
+        kc(b, REF + BOB, 'reference', R2)
+
+
+@kcase('keyshare-set-ref-locked-keychain', ['secret-set', '主号(alice@example.com)'], stdin=R1, env=BG, mask=AT, settle=0.6)
+def _(b):
+    sharing(b)
+    switch(b, 'keychain_locked')
+
+
+@kcase('keyshare-set-ref-keyfile', ['secret-set', '主号(alice@example.com)'], stdin=R1, env=dict(BG, **FILE), mask=AT, settle=0.6)
+def _(b):
+    sharing(b)
+
+
+@kcase('keyshare-presence-dir-is-a-file', ['secret-set', '主号(alice@example.com)'], stdin=R1, env=BG, mask=AT, settle=0.6)
+def _(b):
+    sharing(b)
+    b.write('.cca/presence', 'not a directory')
+
+
+@kcase('keyshare-codex-mapped', ['secret-set', 'erin@example.com'], stdin=R2, tool='codex', env=BG, mask=AT, settle=0.6)
+def _(b):
+    sharing(b, codex=CODEX)
+
+
+@kcase('keyshare-agy-never-shares', ['secret-set', 'gina@example.com'], stdin=R2, tool='agy', env=BG, mask=AT, settle=0.6)
+def _(b):
+    sharing(b, agy={'gina@example.com': 'US-B'})
+
+
+@kcase('keyshare-codex-share', ['key-share', 'erin@example.com'], tool='codex', settle=0.3)
+def _(b):
+    sharing(b, codex=CODEX)
+
+
+# --- 删了账号以后清掉它单独配的邮箱（mail 模块的 mail_forget_orphans）-------------------------------------------------------
+MAIL_SVC = 'cca-mail'
+GONE1, GONE2 = ident('gone1@example.com'), ident('gone2@example.com')
+
+
+def mail_cfg(accounts, user='main@example.com', **more):
+    m = dict({'user': user, 'auto': True}, **more) if user else dict(more)
+    if accounts is not None:
+        m['accounts'] = accounts
+    return {'mail': m}
+
+
+MAILS = [
+    ('orphans-removed', mail_cfg({ALICE: {'user': 'Alice.Box@example.com'}, GONE1: {'user': 'gone1.box@example.com', 'forwarder': 'relay.example.com'},
+                                  GONE2: {'user': 'MAIN@example.com'}, 'junk': 'not a dict'})),
+    ('all-orphans', mail_cfg({GONE1: {'user': 'gone1.box@example.com'}, GONE2: {'user': 'gone2.box@example.com'}})),
+    ('all-orphans-no-default', mail_cfg({GONE1: {'user': 'gone1.box@example.com'}}, user=None)),
+    ('orphan-shares-address-with-live', mail_cfg({ALICE: {'user': 'shared.box@example.com'}, GONE1: {'user': 'Shared.Box@example.com'}})),
+    ('orphan-bad-address', mail_cfg({GONE1: {'user': 'not an address'}, GONE2: {'user': 5}})),
+    ('no-orphans', mail_cfg({ALICE: {'user': 'alice.box@example.com'}, BOB: {}})),
+    ('accounts-empty', mail_cfg({})), ('accounts-not-a-dict', mail_cfg(['x'])), ('mail-not-a-dict', {'mail': 'x'}), ('no-mail', {}),
+]
+# 原实现删几个地址的先后是集合的顺序（每次运行都不一样），cca-core 按地址排：比的时候不分是哪一个
+ANY_GONE = [(r'gone[12]\.box', 'gone?.box')]
+for name, cfg in MAILS:
+    @kcase('mail-orphans-%s' % name, ['secrets-forget'], mask=ANY_GONE)
+    def _(b, cfg=cfg):
+        world(b, cfg=cfg)
+        for addr in ('main@example.com', 'alice.box@example.com', 'gone1.box@example.com', 'gone2.box@example.com', 'shared.box@example.com'):
+            kc(b, MAIL_SVC, addr, 'abcdefghijklmnop')
+
+    @kcase('mail-orphans-%s-keyfile' % name, ['secrets-forget'], env=FILE)
+    def _(b, cfg=cfg):
+        world(b, cfg=cfg)
+        kf(b, MAIL_SVC, {'v': 1, 'host': 'gone1.box@example.com', 'key': 'abcdefghijklmnop'})
+
+
+@kcase('mail-orphans-scope-all-leaves-mail', ['secrets-forget', 'all'])
+def _(b):
+    world(b, cfg=MAILS[0][1])
+    kc(b, MAIL_SVC, 'gone1.box@example.com', 'abcdefghijklmnop')
+
+
+@kcase('mail-orphans-codex-leaves-mail', ['secrets-forget'], tool='codex')
+def _(b):
+    world(b, cfg=MAILS[0][1], codex=CODEX)
+    kc(b, MAIL_SVC, 'gone1.box@example.com', 'abcdefghijklmnop')
+
+
+@kcase('mail-orphans-claude-table-broken', ['secrets-forget'])
+def _(b):
+    world(b, cfg=MAILS[0][1])
+    b.write('.cca/accounts.json', '{oops')

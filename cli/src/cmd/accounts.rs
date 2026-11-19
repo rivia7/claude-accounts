@@ -2,7 +2,7 @@
 //! nodes-allowed / set-nodes / nodes-preselect / nodes-lost / select-lines、sync-state、slot-rows、accounts-json、file-replace（PY_SRC 的 `cmd_env` 到 `cmd_rm`、
 //! `cmd_nodes_allowed` 到 `cmd_set_nodes`、`cmd_slot_rows`）。
 //!
-//! 还没移植的：rows、set-last（要用量那一块）、select-lines、slot-rows（要内置代理那一块）、sync-state（要密钥那一块）。
+//! 还没移植的：rows、set-last（要用量那一块）、select-lines、slot-rows（要内置代理那一块）。
 
 use super::codex::codex_probe;
 use super::table::{account_named, need};
@@ -44,6 +44,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("set-nodes", cmd_set_nodes),
     Cmd::all("edit-form", cmd_edit_form),
     Cmd::all("edit-apply", cmd_edit_apply),
+    Cmd::all("sync-state", cmd_sync_state),
 ];
 
 /// 每个账号都输出全部变量（不适用的为空）：bash 里循环 eval 时不会留着上一个账号的值。
@@ -608,6 +609,71 @@ pub fn cmd_set_nodes(args: &[String]) -> R<()> {
     let c = cfg_load()?;
     c.set("nodes", crate::py::obj::str_list(nodes));
     cfg_save(&c)
+}
+
+/// 这个值在的时候 stderr 接到 /dev/null（`os.dup2(null, 2)`）：里面说的话（包括 die 的那一句、panic 的那一句）都不出声；
+/// 没了的时候接回去
+struct QuietStderr {
+    saved: i32,
+    null: i32,
+}
+
+impl QuietStderr {
+    fn new() -> R<QuietStderr> {
+        io::flush_err();
+        // SAFETY: 都是对这个进程自己的描述符做 dup / open / dup2，路径是以 0 结尾的常量
+        unsafe {
+            let saved = libc::dup(2);
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+            if saved < 0 || null < 0 || libc::dup2(null, 2) < 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            Ok(QuietStderr { saved, null })
+        }
+    }
+}
+
+impl Drop for QuietStderr {
+    fn drop(&mut self) {
+        io::flush_err();
+        // SAFETY: saved、null 是 new 里开的，还开着
+        unsafe {
+            libc::dup2(self.saved, 2);
+            libc::close(self.saved);
+            libc::close(self.null);
+        }
+    }
+}
+
+/// sync_if_changed 开头要的一次给（几乎每条命令都走这里，原来要起四次 python：validate、secrets-forget、digest、
+/// get synced）。账号表有错就返回 1，错误写 stderr；quiet 时校验这一步的 stderr 全不要（和 py validate 2>/dev/null 一样）。
+/// 没错就清掉已经不在账号表里的 key（secrets-forget），再打印「账号表 + 路由器端代码（stdin）的摘要<TAB>上次同步的摘要」
+pub fn cmd_sync_state(args: &[String]) -> R<()> {
+    arity("cmd_sync_state", args, 0, 1)?;
+    let quiet = !arg(args, 0, "").is_empty();
+    let checked = {
+        let _silence = if quiet { Some(QuietStderr::new()?) } else { None };
+        ctx().map(|(_, _, errs)| {
+            for e in &errs {
+                err!("! {e}");
+            }
+            errs
+        })
+    };
+    let errs = match checked {
+        Ok(errs) => errs,
+        // quiet：die 的那一句已经写进了 /dev/null；出了意外也只返回 1（同样不说），交给不带 quiet 的那次说清楚
+        Err(e) if quiet && !matches!(e, Fail::Exit(_)) => return exit(1),
+        Err(e) => return Err(e),
+    };
+    if !errs.is_empty() {
+        return exit(1);
+    }
+    super::secrets::cmd_secrets_forget(&[])?;
+    let c = ctx()?.0;
+    let synced = c.get("synced").filter(|s| s.truthy()).map_or(String::new(), |s| s.py_str());
+    out!("{}\t{}", crate::core::sync::sync_digest(&c, &io::read_stdin_text()), synced);
+    Ok(())
 }
 
 // --- 提问会话里的账号表表单（cca [codex] edit，PROTOCOL 4.6）：节点、接口地址、模型、环境变量。App 不碰账号表，也看不到 key ---

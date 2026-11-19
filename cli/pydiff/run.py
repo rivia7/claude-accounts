@@ -112,6 +112,16 @@ def tree_digest(root, masks):
     return out
 
 
+# 会动到这台机器、会联网的命令：对拍的沙箱里一律是假的。用例自己放了假命令就用它的，没放的调到就报错（两边都一样报，
+# 用例会因为多出 unexpected-commands.log 被看出来）。写了绝对路径的命令（lsregister、taskpolicy）挡不住，用例要自己绕开
+GUARDED = ['security', 'osascript', 'open', 'launchctl', 'ssh', 'scp', 'curl', 'git', 'nc', 'crontab', 'defaults', 'killall', 'pkill', 'sudo',
+           'networksetup', 'scutil', 'codesign', 'spctl', 'hdiutil', 'ditto', 'claude', 'codex', 'agy', 'mihomo']
+GUARD = '''echo "pydiff：这个用例没有给 %s 准备假命令" >&2
+printf '%%s\\n' "$0 $*" >> "$HOME/unexpected-commands.log"
+exit 127
+'''
+
+
 def clone_tree(src, dst):
     """整棵树拷一份：链接照旧是链接，硬链接照旧连在一起（shutil.copytree 会把它们拆成两个文件），权限和时间不变"""
     seen = {}
@@ -204,7 +214,7 @@ def main():
     home, pre, tmp = os.path.join(base, 'h'), os.path.join(base, 'pre'), os.path.join(base, 'tmp')
     os.makedirs(tmp)
     oracle = [sys.executable, '-I', '-X', 'utf8', src]
-    passed = failed = 0
+    passed = failed = strays = 0
     seen = set()
     try:
         for c in CASES:
@@ -216,13 +226,21 @@ def main():
             for d in (home, pre):
                 shutil.rmtree(d, ignore_errors=True)
             os.makedirs(home)
-            c['setup'](Box(home))
+            box = Box(home)
+            c['setup'](box)
+            for name in GUARDED:   # 用例没准备假命令的：放一个只会报错的，免得跑到这台机器上真的那个
+                if not os.path.lexists(box.path('bin/' + name)):
+                    box.fake(name, GUARD % name)
             clone_tree(home, pre)
             py = run_one(oracle, c, home, tmp)
             shutil.rmtree(home)
             clone_tree(pre, home)
             rs = run_one([CORE], c, home, tmp)
             diffs = compare(py, rs)
+            stray = rs['tree'].get('unexpected-commands.log') or py['tree'].get('unexpected-commands.log')
+            if stray:   # 两边一样也要说：这个用例调到了没准备假命令的东西，测的多半不是想测的
+                strays += 1
+                print('STRAY %s 调到了没有准备假命令的：%s' % (c['name'], ' | '.join(stray.splitlines()[1:])[:300]))
             if diffs:
                 failed += 1
                 print('FAIL  %s   %s' % (c['name'], ' '.join(c['argv'])))
@@ -241,8 +259,8 @@ def main():
                     print('      rc=%s\n      stdout: %s\n      stderr: %s' % (rs['rc'], rs['stdout'].replace('\n', '\n              '), rs['stderr'].replace('\n', '\n              ')))
     finally:
         shutil.rmtree(base, ignore_errors=True)
-    print('---- 对拍：%d 通过，%d 失败' % (passed, failed))
-    sys.exit(1 if failed else 0)
+    print('---- 对拍：%d 通过，%d 失败%s' % (passed, failed, '，%d 个调到了没准备假命令的' % strays if strays else ''))
+    sys.exit(1 if failed or strays else 0)
 
 
 if __name__ == '__main__':
