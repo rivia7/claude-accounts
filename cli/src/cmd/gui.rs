@@ -382,53 +382,6 @@ struct GuiEnv<'a> {
     cost: &'a mut CostView,
 }
 
-/// `mail_view(c, k)`（邮箱助手：账号页的「邮箱」一节）。在 mail 那一批里移植，合进来以后换成它
-fn mail_view(c: &Dict, key: &str) -> V {
-    let m = mail_cfg(c, key);
-    let field = |k: &str, default: V| m.as_ref().map_or(default, |m| m.get(k).unwrap_or(V::None));
-    V::Dict(dict! {
-        "configured" => m.is_some(),
-        "user" => field("user", V::None),
-        "source" => field("source", V::None),
-        "auto" => field("auto", V::Bool(true)),
-        "forwarder" => field("forwarder", V::None),
-    })
-}
-
-/// `mail_cfg(c, key)`：某账号解析后的邮箱助手设置（覆盖 config.json 的 mail.accounts[acct_id] → 默认 mail）：
-/// {user, auto, proxy, source: 'account' | 'default', forwarder} 或 None（没有可连的 Gmail）。
-/// mail 那一批合进来以前先放在这里（只有 key 给定的这一种用法），合进来以后换成它的
-fn mail_cfg(c: &Dict, key: &str) -> Option<Dict> {
-    let m = c.dict("mail")?;
-    let default = super::mail::mail_one(&V::Dict(m.clone()), true, "system");
-    let ov = m.dict("accounts").and_then(|a| a.get(&acct_id(key, t()))).and_then(|o| o.as_dict());
-    let one = ov.as_ref().and_then(|o| {
-        let (auto, proxy) = match &default {
-            Some(d) => (d.at("auto").truthy(), d.at("proxy").py_str()),
-            None => (true, "system".to_string()),
-        };
-        super::mail::mail_one(&V::Dict(o.clone()), auto, &proxy)
-    });
-    let one = match (one, default) {
-        (Some(one), _) => {
-            one.set("source", "account");
-            one
-        }
-        (None, Some(default)) => {
-            let one = Dict::new(); // dict(default, source='default')
-            for (k, v) in default.items() {
-                one.set(k, v);
-            }
-            one.set("source", "default");
-            one
-        }
-        (None, None) => return None,
-    };
-    let fwd = ov.and_then(|o| o.str("forwarder").map(|f| f.to_lowercase())).filter(|f| super::mail::MAIL_DOMAIN_RE.matches(f));
-    one.set("forwarder", fwd.map_or(V::None, V::from));
-    Some(one)
-}
-
 /// _gui state 里的一个账号（当前工具是它的工具）；cli 是 cli_view 的结果
 fn gui_account(c: &Dict, k: &str, v: &V, procs: &[(i64, String)], badges: &[(Rc<str>, (String, &'static str))], pm: &Dict, env: &mut GuiEnv, now: f64, cli: Dict) -> R<Dict> {
     let tool = t();
@@ -530,7 +483,7 @@ fn gui_account(c: &Dict, k: &str, v: &V, procs: &[(i64, String)], badges: &[(Rc<
         "badge" => badge,
         "app" => dict! { "running" => pid.is_some(), "pid" => pid }, "cli" => cli,
         "can" => can, "can_why" => why,
-        "mail" => if with_mail { mail_view(c, k) } else { V::None },
+        "mail" => if with_mail { V::Dict(super::mail::mail_view(c, k)) } else { V::None },
         "api_key" => gui_api_key(c, k, v, share, &share_err)?,
         "usage" => usage, "usage_weeks" => weeks,
         "cost" => cost,
