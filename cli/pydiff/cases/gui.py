@@ -362,6 +362,28 @@ def codex_rich(b):
 state('codex-rich', codex_rich)
 state('codex-rich-not-ro', codex_rich, env={'CCA_RO': None})
 state('codex-rich-la-time', codex_rich, env={'TZ': 'America/Los_Angeles'})          # 夏令时结束的那一天在最近 30 天里时：那天 25 小时
+state('codex-rich-kathmandu', codex_rich, env={'TZ': 'Asia/Kathmandu'})              # 一天从整点过 15 分开始：跨过边界的那个小时按中点归哪一天
+state('codex-rich-st-johns', codex_rich, env={'TZ': 'America/St_Johns'})
+
+
+def me_without_records(b):
+    """这台设备没有这个账号的记录，别的设备有（tests/cost_view.py 的 test_me_without_records）：设备里没有这台，cost_total 的 me 是空的"""
+    codex_rich(b)
+    local = json.load(open(b.path('.cca/cost/local.json')))
+    del local['acc']['codex:user-AbCdEfGhIjKlMnOp']
+    b.write('.cca/cost/local.json', json.dumps(local))
+
+
+state('codex-rich-me-without-records', me_without_records)
+
+
+def nobody_has_records(b):
+    codex_rich(b)
+    b.write('.cca/cost/local.json', json.dumps({'v': 1, 'acc': {}, 'who': {}, 'um': {}, 'orphan': {}}))
+    b.write('.cca/cost/remote.json', json.dumps({'v': 1, 'acc': {}}))
+
+
+state('codex-rich-no-records-at-all', nobody_has_records)
 state('codex-rich-cost-off', lambda b: (codex_rich(b), b.cfg(dict(json.load(open(b.path('.cca/config.json'))), cost=False))))
 state('codex-rich-presence-off', lambda b: (codex_rich(b), b.cfg(dict(json.load(open(b.path('.cca/config.json'))), presence=False))))
 state('codex-rich-no-deploy-key', lambda b: (codex_rich(b), os.unlink(b.path('.cca/policy/id_ed25519'))))

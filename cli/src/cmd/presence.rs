@@ -5,7 +5,7 @@
 
 use super::cost::cost_kick;
 use super::keyshare::{is_num, keyshare_error, keyshare_kick, keyshare_sync, KEYSHARE_EVERY};
-use super::session::{cli_alive, cli_marks, lstart_epoch, proc_scan, proc_starts, ps_lstart, ps_rows, ProcInfo};
+use super::session::{cli_alive, cli_marks_at, lstart_epoch, proc_scan, proc_starts, ps_lstart, ps_rows, ProcInfo};
 use super::table::account_named;
 use super::usage::{ago, day_gap, span, weekday_clock};
 use super::{arity, Cmd};
@@ -400,7 +400,7 @@ pub fn presence_scan(salt: &str, targets: &[Target], procs: &Procs, apps: &mut A
     for (tool, key, d) in targets {
         let marks = {
             let _using = Using::tool(tool);
-            cli_marks(key)
+            cli_marks_at(d, key) // d 就是这个工具下的 adir(key)（presence_targets 给的）
         };
         let cli = List::new();
         for m in &marks {
@@ -646,6 +646,16 @@ fn flock(f: &std::fs::File, op: libc::c_int) -> bool {
     unsafe { libc::flock(f.as_raw_fd(), op) == 0 }
 }
 
+/// 没报成：隔多久再试。服务器不认这台 Mac（403）等维护者同步，10 分钟；别的按退避，5 秒起翻倍、最多 2 分钟（fails 是连着
+/// 没报成的次数，从 1 起）
+fn retry_after(code: i64, fails: u32) -> f64 {
+    if code == 403 {
+        600.0
+    } else {
+        (5.0 * 2f64.powi(fails.min(16) as i32)).min(120.0)
+    }
+}
+
 /// 上报进程一路带着的状态（被停掉时要拿最后一次的 units 去报 end=down）
 struct Agent {
     cfg: Option<Dict>,
@@ -742,8 +752,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
                 presence_status("")?;
             } else {
                 fails += 1;
-                // 不认这台 Mac：等维护者同步
-                due = mono + if code == 403 { 600.0 } else { (5.0 * 2f64.powi(fails.min(16) as i32)).min(120.0) };
+                due = mono + retry_after(code, fails);
                 presence_status(&presence_why(&cfg, code, &j)?)?;
             }
         }
@@ -1017,6 +1026,64 @@ mod tests {
                 step.list("apps").unwrap().items().iter().map(|a| a.as_list().unwrap().items().iter().map(|x| x.py_str()).collect::<Vec<_>>().join(" ")).collect();
             assert_eq!(got, want, "{label}：采样");
         }
+    }
+
+    /// tests/presence.py 的 test_identity：指纹和 `ssh-keygen -l -E sha256` 给的一样（这把公钥是编的，期望值是 ssh-keygen 算的）
+    #[test]
+    fn ssh_fp_like_ssh_keygen() {
+        assert_eq!(ssh_fp("AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f").as_deref(), Some("SHA256:ZkAslGjFiUHdGf/WUL8rQvkib4PTvQatUV0OUQSncCA"));
+        assert_eq!(ssh_fp("not base64!"), None);
+        let a = presence_aid("abababababababababababababababab", "claude", "Alice@Example.com").unwrap();
+        assert_eq!(a.len(), 32);
+        assert_eq!(a, presence_aid("abababababababababababababababab", "claude", "alice@example.com").unwrap(), "邮箱不分大小写");
+        assert_ne!(a, presence_aid("abababababababababababababababab", "codex", "alice@example.com").unwrap(), "Claude 账号和 Codex 账号不撞");
+        assert_ne!(a, presence_aid("11111111111111111111111111111111", "claude", "alice@example.com").unwrap(), "换了盐就认不出");
+    }
+
+    /// tests/presence.py 的 test_agent_backoff 里的几个数：报不出去按退避再试（10、20 秒……最多 2 分钟），服务器不认这台 Mac 时 10 分钟
+    #[test]
+    fn retry_backs_off() {
+        assert_eq!((1..=7).map(|n| retry_after(0, n)).collect::<Vec<_>>(), [10.0, 20.0, 40.0, 80.0, 120.0, 120.0, 120.0]);
+        assert_eq!(retry_after(500, 1), 10.0);
+        assert_eq!(retry_after(0, 4_000_000), 120.0);
+        assert_eq!((retry_after(403, 1), retry_after(403, 9)), (600.0, 600.0));
+        for _ in 0..200 {
+            let beat = PRESENCE_BEAT * uniform(0.9, 1.1);
+            assert!((54.0..66.0).contains(&beat), "心跳在 60 秒上下：{beat}");
+        }
+    }
+
+    /// tests/presence.py 的 test_scan_cli_idle_from_tty：命令行会话的闲置时间 = 现在 - 它终端的最后一次输入 / 输出（真的开一个伪终端）
+    #[test]
+    fn scan_cli_idle_from_tty() {
+        let dir = fs::TempDir::new().unwrap();
+        let (key, now) = ("alice@example.com", time());
+        let mark = dict! { "v" => 1, "tool" => "claude", "id" => crate::core::model::acct_id(key, claude()), "pid" => 4242, "started" => 1000, "since" => now - 300.0 };
+        std::fs::write(path::join(&dir.path, "cli-4242.json"), json::dumps(&V::Dict(mark), json::LINE)).unwrap();
+        // SAFETY: openpty 要两个可写的 int 和一段放名字的缓冲区；utimes 的路径以 0 结尾、时间是两项的数组
+        let tty = unsafe {
+            let (mut master, mut slave) = (0, 0);
+            let mut name = [0 as libc::c_char; 128];
+            assert_eq!(libc::openpty(&mut master, &mut slave, name.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()), 0);
+            let stamp = |secs: f64| libc::timeval { tv_sec: secs.trunc() as _, tv_usec: (secs.fract() * 1e6) as _ };
+            // 最后一次输入 120 秒前、输出 200 秒前
+            assert_eq!(libc::utimes(name.as_ptr(), [stamp(now - 120.0), stamp(now - 200.0)].as_ptr()), 0);
+            std::ffi::CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned()
+        };
+        let short = tty.strip_prefix("/dev/").unwrap().to_string();
+        assert!(TTY_RE.matches(&short), "{short}");
+        let targets: Vec<Target> = vec![(claude(), key.to_string(), dir.path.clone())];
+        let salt = "abababababababababababababababab";
+        let aid = presence_aid(salt, "claude", key).unwrap();
+        let scan = |tty_: &str, start: i64, there: bool| {
+            let rows = if there { vec![(4242, ProcInfo { ppid: 1, tty: tty_.to_string(), cpu: 1.0, start, cmd: "bash cca".into() })] } else { Vec::new() };
+            let (units, pids) = presence_scan(salt, &targets, &Procs::from_rows(rows), &mut AppSamples::new(), now, 1000.0).unwrap();
+            (json::dumps(&V::Dict(units), json::LINE), pids)
+        };
+        assert_eq!(scan(&short, 1000, true), (format!("{{\"{aid}\": {{\"cli\": [[300, 120]], \"app\": null}}}}"), vec![4242]), "闲置 = 现在 - 最后一次输入 / 输出；盯着这个会话的进程");
+        assert_eq!(scan(&short, 1003, true).0, "{}", "进程号被重用（启动时间对不上）：不算");
+        assert_eq!(scan(&short, 1000, false).0, "{}", "cca 被 kill -9 留下的登记：进程没了，不算");
+        assert_eq!(scan("??", 1000, true).0, format!("{{\"{aid}\": {{\"cli\": [[300, 0]], \"app\": null}}}}"), "没有终端：在跑就算在干活");
     }
 
     #[test]

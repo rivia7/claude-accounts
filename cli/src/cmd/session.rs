@@ -315,12 +315,17 @@ fn cli_mark_pid(name: &str) -> Option<i64> {
 
 /// 账号目录里登记的命令行会话（只读）；格式、工具、账号目录名、进程号和文件名对不上的不算
 pub fn cli_marks(key: &str) -> Vec<Dict> {
-    let (d, aid) = (adir(key), acct_id(key, t()));
-    let Ok(names) = fs::listdir_sorted(&d) else { return Vec::new() };
+    cli_marks_at(&adir(key), key)
+}
+
+/// `cli_marks`，账号目录由调用方给（就是 `adir(key)`；上报进程手里已经有它，测试里可以换成临时目录）
+pub fn cli_marks_at(d: &str, key: &str) -> Vec<Dict> {
+    let aid = acct_id(key, t());
+    let Ok(names) = fs::listdir_sorted(d) else { return Vec::new() };
     let mut out = Vec::new();
     for n in names {
         let Some(pid) = cli_mark_pid(&n) else { continue };
-        let Some(j) = load_quiet(&path::join(&d, &n)).and_then(|j| j.as_dict()) else { continue };
+        let Some(j) = load_quiet(&path::join(d, &n)).and_then(|j| j.as_dict()) else { continue };
         let eq = |k: &str, want: V| j.get(k).is_some_and(|v| v.py_eq(&want));
         if eq("v", V::Int(1)) && eq("tool", V::from(t().name)) && eq("id", V::from(aid.as_str())) && eq("pid", V::Int(pid)) && j.get("started").is_some_and(|s| s.is_int()) && j.get("since").is_some_and(|s| s.isinstance_num()) {
             out.push(j);
