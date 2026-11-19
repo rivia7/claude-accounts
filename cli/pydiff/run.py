@@ -128,7 +128,7 @@ def tree_digest(root, masks):
 
 # 会动到这台机器、会联网的命令：对拍的沙箱里一律是假的。用例自己放了假命令就用它的，没放的调到就报错（两边都一样报，
 # 用例会因为多出 unexpected-commands.log 被看出来）。写了绝对路径的命令（lsregister、taskpolicy）挡不住，用例要自己绕开
-GUARDED = ['security', 'osascript', 'open', 'launchctl', 'ssh', 'scp', 'curl', 'git', 'nc', 'crontab', 'defaults', 'killall', 'pkill', 'sudo', 'lsappinfo',
+GUARDED = ['security', 'osascript', 'open', 'pbcopy', 'launchctl', 'ssh', 'scp', 'curl', 'git', 'nc', 'crontab', 'defaults', 'killall', 'pkill', 'sudo', 'lsappinfo',
            'networksetup', 'scutil', 'codesign', 'spctl', 'hdiutil', 'ditto', 'claude', 'codex', 'agy', 'mihomo']
 GUARD = '''echo "pydiff：这个用例没有给 %s 准备假命令" >&2
 printf '%%s\\n' "$0 $*" >> "$HOME/unexpected-commands.log"
@@ -164,6 +164,15 @@ def apply_masks(text, masks):
     return text
 
 
+def hold_fd3(path='/dev/null'):
+    """这个进程的 3 号描述符一直占着：平时是 /dev/null，fd3 用例运行期间换成答案文件。不占着的话，用例文件导入时建的
+    套接字、文件会落在 3 号上（cases/leak.py 的假 STUN 服务器就碰上过），fd3 用例一 dup2 就把它顶掉了"""
+    fd = os.open(path, os.O_RDONLY)
+    if fd != 3:
+        os.dup2(fd, 3)
+        os.close(fd)
+
+
 def run_one(cmd, c, home, tmp):
     env = {'HOME': home, 'PATH': '%s/bin:/usr/bin:/bin:/usr/sbin:/sbin' % home, 'LANG': 'en_US.UTF-8', 'TZ': 'Asia/Shanghai',
            'TMPDIR': tmp, 'CCA_TOOL': c['tool'], 'CCA_SELF': os.path.join(home, '.cca', 'bin', 'cca'), 'CCA_BIN': ''}
@@ -177,10 +186,7 @@ def run_one(cmd, c, home, tmp):
         answers = os.path.join(tmp, 'fd3')
         with open(answers, 'wb') as f:
             f.write(c['fd3'])
-        fd = os.open(answers, os.O_RDONLY)
-        if fd != 3:   # 文件可能刚好就开在 3 号上
-            os.dup2(fd, 3)
-            os.close(fd)
+        hold_fd3(answers)
     cleanup = c['before'](Box(home)) if c.get('before') else None
     try:
         p = subprocess.Popen(cmd + argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd,
@@ -199,7 +205,7 @@ def run_one(cmd, c, home, tmp):
             side.join(10)
     finally:
         if answers:
-            os.close(3)
+            hold_fd3()   # 3 号不空出来（见 hold_fd3）
         if callable(cleanup):
             cleanup()
     if c['settle']:
@@ -242,6 +248,7 @@ def main():
     pick = [args[i + 1] for i, a in enumerate(args) if a == '-k' and i + 1 < len(args)]
     if not os.access(CORE, os.X_OK):
         sys.exit('找不到 %s：先在 cli/ 里 cargo build' % CORE)
+    hold_fd3()   # 在导入用例之前
     sys.path.insert(0, HERE)
     sys.modules.setdefault('run', sys.modules['__main__'])   # 用例里的 from run import case 要拿到这一份（不是再导入一份）
     for f in sorted(os.listdir(os.path.join(HERE, 'cases'))):

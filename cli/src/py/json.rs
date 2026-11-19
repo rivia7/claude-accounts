@@ -67,9 +67,10 @@ pub fn utf8_error_text(raw: &[u8], e: &std::str::Utf8Error) -> String {
     }
 }
 
-/// 对象、数组最多套这么多层。Python 的解析器套到一千层上下是 RecursionError（不是 ValueError，多数地方没人接）；这里
-/// 当作写错了的 JSON（读配置的地方当作读不了，读会话记录的地方跳过这一行），也免得很深的输入把栈用完。正常的文件到不了几十层
-const MAX_DEPTH: usize = 512;
+/// 对象、数组最多套这么多层。Python 的解析器套得太深是 RecursionError（不是 ValueError，多数地方没人接；3.9 是 992 层起，
+/// 3.12 以后一万多层）；这里取一千层，再深当作写错了的 JSON（读配置的地方当作读不了，读会话记录的地方跳过这一行），也免得
+/// 很深的输入把栈用完（调试版一层要一千多字节的栈）。正常的文件到不了几十层
+const MAX_DEPTH: usize = 1000;
 
 struct Parser<'a> {
     s: &'a str,
