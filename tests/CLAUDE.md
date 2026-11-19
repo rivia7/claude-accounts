@@ -13,5 +13,6 @@
 - 方向键菜单和 readline 输入要在真 pty 里测：`script -q 日志 bash 驱动脚本`，配合定时输入
 - 别让用例干等：`run` 带着 `CCA_RETRY_WAIT=0`（下载、映射拉取失败后不等 2 秒再试），假 ssh 的 `CCA_WAIT=2`；等不到才判失败的用例把等待调短（`CCA_APP_WAIT=1`：cca app 等 App 打开资料目录），等后台任务时等它写下的结果（`wait_log`），不要等满超时。3c 检查完启动器图标后 `touch "$T/fake_icons"`：以后新建、重画的启动器图标用假的 osascript（badge.js）、sips、iconutil（真画一个将近 1 秒）
 - 假 `ssh` 像真的一样把 stdin 读走（只读普通文件，也就是 bash 3.2 的 here-string，终端、管道不碰）：循环里调 ssh 吞掉后面输入的问题测得出来。假的路由器控制接口要密钥（`test-secret`，uci 的 `dashboard_password` 也是它），密钥不对回 401
+- 不经 `run`、自己拼 `env -i` 运行 cca 的地方（真终端的那种、另一个 HOME 的 `r3` / `r4` / `rs`）要带上 `CCA_HELPER="$HELPERWRAP"`：不带的话那一处用的是仓库里 `cli/target/release` 下的那一份，`release.sh` 跑回归时（`CCA_HELPER` 指着要发布的那一份）测的就不是同一份了。有 lint 守着；想自己验证就照 `release.sh` 的方式在一份不带 `cli/target` 的仓库拷贝里跑
 - 测试辅助脚本只用沙箱里的路径，不能靠 `$HOME`：在 `run` 外面直接调用时 `$HOME` 是真实的主目录（会碰到真的 `~/.cca`、`~/.claude` 等）
 - 菜单行很宽：要看行尾的内容时用 `run COLUMNS=160 …`（`tput cols` 认 `COLUMNS`）
