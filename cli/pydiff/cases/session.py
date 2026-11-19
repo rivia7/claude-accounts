@@ -227,6 +227,15 @@ for name, kw in WAKES:
         mapped(b, **kw)
 
 
+for name, kw in WAKES + [('no-policy-file', {'policy': None}), ('presence-null', {'policy': {'version': 1, 'presence': None}}), ('policy-not-an-object', {'policy': [1]})]:
+    @case('presence-note/%s' % name, ['presence-note'])
+    def _(b, kw=kw):
+        if kw.get('policy', 0) is None:
+            world(b)
+        else:
+            mapped(b, **kw)
+
+
 @case('presence-wake/api-account', ['presence-wake', '直连'], settle=0.3)
 def _(b):
     mapped(b)

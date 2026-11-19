@@ -24,7 +24,8 @@ use crate::py::R;
 use std::sync::LazyLock;
 
 /// 这个模块移植好的子命令
-pub const CMDS: &[Cmd] = &[Cmd::all("presence-wake", cmd_presence_wake), Cmd::all("presence-stop", cmd_presence_stop)];
+pub const CMDS: &[Cmd] =
+    &[Cmd::all("presence-wake", cmd_presence_wake), Cmd::all("presence-stop", cmd_presence_stop), Cmd::all("presence-note", cmd_presence_note)];
 
 pub static PRESENCE_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "presence"));
 
@@ -165,6 +166,22 @@ pub fn presence_wake(key: &str) {
 pub fn cmd_presence_wake(args: &[String]) -> R<()> {
     arity("cmd_presence_wake", args, 1, 1)?;
     presence_wake(&args[0]);
+    Ok(())
+}
+
+/// cca policy 里的一句：这台 Mac 会不会把映射里账号的使用情况报告给维护者的服务器
+pub fn cmd_presence_note(args: &[String]) -> R<()> {
+    arity("cmd_presence_note", args, 0, 0)?;
+    if !load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()).is_some_and(|j| j.has("presence")) {
+        return Ok(());
+    }
+    match presence_load()? {
+        (_, Some(cfg)) => crate::out!(
+            "设备统计：映射里的账号在这台 Mac 上用的时候（命令行会话、cca app 打开的 App），会报告给维护者的服务器 {}，配置了同一份映射的设备在账号页能看到这台 Mac 在不在用；给这些账号记下备查的 API key（cca key 账号）也经它加密同步给登录了同一个账号的其他设备，服务器看不到 key（都不想要：config.json 里加上 \"presence\": false）",
+            cfg.at("url").py_str()
+        ),
+        (reason, None) => crate::out!("设备统计：{reason}"),
+    }
     Ok(())
 }
 
