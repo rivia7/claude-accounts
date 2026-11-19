@@ -682,6 +682,19 @@ mod tests {
         }
     }
 
+    /// tests/mail_view.py 的 Lint.test_every_rule_is_known：各工具的 mail_rules 里写的名字 MAIL_RULES 里都有
+    /// （原来写错了是 KeyError；`mail_rules()` 这里是跳过，所以更要守着），Codex 没有规则
+    #[test]
+    fn every_rule_is_known() {
+        for tool in crate::core::tool::tools() {
+            for name in tool.mail_rules {
+                assert!(mail_rule(name).is_some(), "{name}");
+            }
+        }
+        assert!(crate::core::tool::codex().mail_rules.is_empty());
+        assert_eq!(crate::core::tool::claude().mail_rules, ["claude-login"]);
+    }
+
     /// CCA_MAIL_POLL / CCA_MAIL_RETRY 写成各种样子时取到多少（默认值 3）
     #[test]
     fn knob_values_like_python() {
