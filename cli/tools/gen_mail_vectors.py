@@ -1487,6 +1487,366 @@ def oserr_case(text, klass):
     return {'text': text, 'class': klass, 'clean': mail_clean(text), 'oserr': mail_oserr(e)}
 
 
+# --- 路：系统代理、通配符 --------------------------------------------------------------------------------------------
+SCUTILS = [
+    '', '<dictionary> {\n}\n', 'No proxy settings\n',
+    ('<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n    1 : 169.254/16\n  }\n  FTPPassive : 1\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n'
+     '  HTTPSEnable : 1\n  HTTPSPort : 7891\n  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 1\n  SOCKSPort : 7892\n  SOCKSProxy : 127.0.0.1\n'
+     '  __SCOPED__ : <dictionary> {\n    en0 : <dictionary> {\n      SOCKSPort : 1\n    }\n  }\n}\n'),
+    '  SOCKSEnable : 1\n  SOCKSEnable : 0\n  SOCKSProxy :   spaced host  \n  SOCKSPort :\n', '  A : 1\r\n  B : 2\r  C : 3\x0b  D : 4\x1c  E : 5   F : 6\n',
+    '  ExceptionsList : <array> {\n    0 : a\n    10 : b\n     2 : too deep\n    x : not a number\n  After : 1\n    3 : not in the list any more\n',
+    '  ExceptionsList : x\n    0 : first\n  ExceptionsList : y\n    1 : second\n  K : v\n', ' K : one space\n   K : three spaces\n\tK : tab\n  K: no space\n  K :no space\n  K  : two\n  K : \n  K : a : b\n',
+    '  中文 : v\n  kéy : v\n  k-y : v\n  k.y : v\n  k_y1 : v\n  ١ : v\n', '  ExceptionsList : <array> {\n    ١ : arabic digit index\n    0 :  padded  \n    1 : \n  }\n',
+    '  HTTPProxy : 127.0.0.1\n  HTTPProxy : 192.0.2.10\n', '  ProxyAutoConfigEnable : 1\n  ProxyAutoConfigURLString : http://example.com/proxy.pac\n',
+]
+FN_PATS = [
+    '*.gmail.com', '.gmail.com', 'imap.gmail.com', 'IMAP.GMAIL.COM', '*.google.com', '*', '', '?', '*.com', 'imap.*', 'imap.gmail.co?', 'imap.gmail.com?', '?map.gmail.com', 'imap[.]gmail[.]com', 'imap.gmail.co[a-z]',
+    'imap.gmail.co[!m]', 'imap.gmail.co[!a-l]', 'imap.gmail.co[m-a]', 'imap.gmail.co[]m]', 'imap.gmail.co[!]]', 'imap.gmail.co[', 'imap.gmail.co[m', 'imap.gmail.co[]', 'imap.gmail.co[!]', 'imap.gmail.co[^m]',
+    'imap.gmail.co[m^]', 'imap.gmail.co[\\m]', 'imap.gmail.co[-m]', 'imap.gmail.co[m-]', 'imap.gmail.co[a-c-m]', 'imap.gmail.co[a-cl-n]', 'imap.gmail.co[a--]', 'imap.gmail.co[--m]', 'imap.gmail.co[m&&m]',
+    'imap.gmail.co[m||x]', 'imap.gmail.co[~~m]', 'imap.gmail.co[[m]', 'imap.gmail.co[[:alpha:]]', 'i*p.g*l.c*m', 'i**p***', '*i*m*a*p*', '*imap.gmail.com*', 'imap.gmail.com*', '*imap.gmail.comx', '*x*', '*.', '.*',
+    'imap\\.gmail\\.com', 'imap.gmail.com\n', '169.254/16', '*.local', 'localhost', '127.0.0.1', '10.0.0.0/8', '<local>', 'imap.gmail.c[n-l]m', 'imap.gmail.c[o-o]m', 'imap.gmail.c[a-co-o]m', 'imap.gmail.c[!!]m',
+    'imap.gmail.c[!-]m', 'imap.gmail.c[-!]m', 'imap.gmail.c[!--o]m', 'imap.gmail.c[n-o-p]m', 'imap.gmail.c[o-n-p]m', 'imap.gmail.c[a-b-c-d-o]m', '[i][m][a][p].gmail.com', '[a-z]*[!a-z]*', '*[.]*[.]*', '[!.]*',
+]
+
+
+def fnmatch_cases(rng, extra):
+    pairs = [('imap.gmail.com', p) for p in FN_PATS] + [(n, p) for n in ('', 'a', 'ab', 'a-b', 'a]b', 'a\\b', 'a^b', 'a!b', 'A', 'é', '\n', '-', ']', '[', '&', '~', '|')
+                                                        for p in ('?', '*', '[a]', '[!a]', '[a-z]', '[]]', '[!]]', '[-]', '[\\]', '[\\\\]', '[^]', '[!^]', '[a-]', '[-a]', '[&]', '[~]', '[|]', '[[]',
+                                                                  'a[]]b', 'a[-]b', 'a[\\]b', 'a[!-]b', 'a[^]b', 'a[!]b', 'a[]b', '[a-b-c]', '[z-a]', '[!z-a]', '[a-a]', 'é', '[à-ÿ]')]
+    alpha = 'aimp.gl*?[]!-^\\&~|c'
+    for _ in range(400 * extra):
+        pairs.append((rng.choice(('imap.gmail.com', 'a', 'ab-c', 'a.b', 'm]', 'x!y^', 'i\\p', 'a&b|c~')), ''.join(pick(rng, alpha, 0, 8))))
+    out = []
+    for name, pat in dict.fromkeys(pairs):
+        out.append({'name': name, 'pat': pat, 'ok': fnmatch.fnmatchcase(name, pat)})
+    return out
+
+
+# --- IMAP：时间、搜索条件、FETCH 的回应 --------------------------------------------------------------------------------
+EPOCHS = [
+    '15-Nov-2026 10:00:00 +0800', '15-Nov-2026 02:00:00 +0000', ' 5-Nov-2026 02:00:00 -0130', '05-Nov-2026 03:30:00 +0000', '15-Foo-2026 02:00:00 +0000', '2026-11-15 02:00:00', '', '15-nov-2026 02:00:00 +0000',
+    '15-NOV-2026 02:00:00 +0000', '15-nOV-2026 02:00:00 +0000', '5-Nov-2026 02:00:00 +0000', '  5-Nov-2026 02:00:00 +0000', '\t5-Nov-2026 02:00:00 +0000', ' 5-Nov-2026 02:00:00 +0000', '005-Nov-2026 02:00:00 +0000',
+    '15-Nov-26 02:00:00 +0000', '15-Nov-02026 02:00:00 +0000', '15-Nov-2026  02:00:00 +0000', '15-Nov-2026 2:00:00 +0000', '15-Nov-2026 02:00:00 0000', '15-Nov-2026 02:00:00 +000', '15-Nov-2026 02:00:00 +00000',
+    '15-Nov-2026 02:00:00 +0000\n', '15-Nov-2026 02:00:00 +0000\n\n', '15-Nov-2026 02:00:00 +0000 ', '15-Nov-2026 02:00:00 UTC', '15-Nov-2026 02:00:00 +9999', '15-Nov-2026 02:00:00 -9999', '00-Jan-1970 00:00:00 +0000',
+    '99-Dec-9999 99:99:99 +0000', '01-Jan-0001 00:00:00 +0000', '01-Jan-0000 00:00:00 +0000', '31-Feb-2026 25:61:61 +0000', '29-Feb-2028 00:00:00 +0530', '01-Jan-1970 00:00:00 +0000', '31-Dec-1969 23:59:59 +0000',
+    '١٥-Nov-2026 02:00:00 +0000', '15-Nov-٢٠٢٦ 02:00:00 +0000', '15-Növ-2026 02:00:00 +0000', '15-Sept-2026 02:00:00 +0000', '15-May-2026 02:00:00 +0000', '15-may-2026 02:00:00 -0000',
+]
+SINCES = [0, 1, 86399, 86400, 86401, 1794708000, 1794708000.9, 1794787199, 1794787200, 951782400, 951868800, 946684800, 978307199.5, 4102444800, 1740787200, 1709251200, 1.5e9, 2e9, 1794700800 + 86400 * 46]
+FETCHES = [
+    None, [], [None], ['1 (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000")'], [['1 FETCH (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[HEADER.FIELDS (FROM)] {9}', 'From: x\r\n'], ')'],
+    [['1 FETCH (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[HEADER.FIELDS (FROM)] {9}', 'From: x\r\n'], ')',
+     ['2 FETCH (INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[HEADER.FIELDS (FROM)] {9}', 'From: y\r\n'], ' UID 7)', ['3 FETCH (UID 8 BODY[] {1}', 'z'], ')'],
+    [['1 (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[] {3}', 'abc'], ')', '2 (UID 6 FLAGS (\\Seen))', ' UID 9'],
+    [['1 (INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[] {3}', 'abc'], 'UID 6)'], [['1 (INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[] {3}', 'abc'], '12 (UID 6)'],
+    [['1 (INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[] {3}', 'abc'], '12 UID 6)'], [['1 (INTERNALDATE "15-Nov-2026 02:00:00 +0000" BODY[] {3}', 'abc'], '(UID 6)'],
+    [['1 (uid 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (XUID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (_UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'],
+    [['1 (½UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (éUID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 ( UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'],
+    [['1 (UID x UID 6 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (UID 5 UID 6 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (UID  5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'],
+    [['1 (UID 5 XINTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (UID 5 INTERNALDATE "" INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000 {1}', 'a'], ')'],
+    [['1 (UID 5 INTERNALDATE "bad" {1}', 'a'], ')'], [['1 (UID 5 INTERNALDATE "bad" INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (UID 5 internaldate "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'],
+    [['1 (UID 5 INTERNALDATE "01-Jan-0000 00:00:00 +0000" {1}', 'a'], ')'], [['1 (UID ' + '9' * 4301 + ' INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')'], [['1 (UID 005 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {0}', ''], ')'],
+    [['1 (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')', ['2 (UID 5 INTERNALDATE "16-Nov-2026 02:00:00 +0000" {1}', 'b'], ')'],
+    [['1 (UID 9 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], ')', ['2 (UID 3 INTERNALDATE "16-Nov-2026 02:00:00 +0000" {1}', 'b'], ')'],
+    [')', ['1 (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], None, ')', '', ' ', 'UID 77'], [['1 (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', 'a'], '1 (not a new one', '1x (UID 8)'],
+    [['\xff\xfe (UID 5 INTERNALDATE "15-Nov-2026 02:00:00 +0000" {1}', '\xff'], '\xff)'],
+]
+LIST_ROWS = [
+    '(\\HasNoChildren) "/" "INBOX"', '(\\All \\HasNoChildren) "/" "[Gmail]/All Mail"', '(\\HasNoChildren \\Junk) "/" "[Gmail]/Spam"', '(\\HasChildren \\Noselect) "/" "[Gmail]"', '() "/" INBOX', '() NIL INBOX',
+    '() nil INBOX', '() "/" ""', '() "/" "a\\"b"', '() "/" "a\\\\"', '() "/" "a\\"', '() "/" "a"b"', '() "." "a b"', '() "/" a b', '() "/" a(b', '() "/" a)b', '() "/" a"b', '(\\All) "/" &UXZO1mWHTvZZOQ-',
+    '(\\ALL \\junk) "/" x', '(a)b) "/" x', '((nested)) "/" x', '(\\All)  "/" x', '(\\All) "/"  x', '(\\All) "/" x ', ' (\\All) "/" x', '(\\All) "/" x\n', '(\\All) "/" x\n\n', '(\\All) "\\"" x', '(\\All) "\\\\" x',
+    '(\\All) "//" x', '(\\All) / x', '(\\All) "" x', '(\\All) "/" x y', '(\\All) "/" xéy', '(\\All) "/" "xéy"', '(\\All) "/" "a\nb"', '(\\All) "/" "a\\\nb"', '(\\All\n) "/" x', '\\All "/" x', '',
+    '(\\All) "/"', '(\\All) "/" {5}', '(\\All) "/" x\x1cy', '(\\All) "/" x\x0by', '(\\All \\Junk \\Trash) "/" "[Gmail]/&V4NXPpCuTvY-"',
+]
+
+
+def fetch_case(data):
+    def item(x):
+        if x is None or isinstance(x, str):
+            return None if x is None else x.encode('latin-1')
+        return (x[0].encode('latin-1'), x[1].encode('latin-1'))
+    arg = None if data is None else [item(x) for x in data]
+    out = {'data': data}
+    try:
+        got = mail_fetch_parse(arg)
+        out['out'] = [[u, t, b2s(lit)] for u, (t, lit) in sorted(got.items())]
+    except ValueError as e:
+        out['error'] = cls(e)
+    return out
+
+
+def epoch_case(s):
+    try:
+        return {'in': s, 'out': mail_epoch(s)}
+    except ValueError as e:
+        return {'in': s, 'error': cls(e)}
+
+
+def list_row_case(s):
+    m = MAIL_LIST_RE.match(s)
+    return {'in': s, 'out': None if not m else [m.group(1), m.group(2)]}
+
+
+# --- IMAP：照剧本回答的假服务器（明文，不经 TLS），MailBox 的各个方法走一遍 ----------------------------------------------------
+class LikeTls:
+    """明文的套接字装成 ssl 模块的套接字的样子：超时的说法照 TLS 的（原来的连接总是经 TLS 的）"""
+
+    def __init__(self, s):
+        self.s = s
+
+    def recv(self, n):
+        try:
+            return self.s.recv(n)
+        except TimeoutError:
+            raise TimeoutError('The read operation timed out') from None
+
+    def sendall(self, data):
+        try:
+            return self.s.sendall(data)
+        except TimeoutError:
+            raise TimeoutError('The write operation timed out') from None
+
+    def __getattr__(self, name):
+        return getattr(self.s, name)
+
+
+class Script(threading.Thread):
+    """一个剧本：conns 是先后各次连接怎么演。每次连接：greet（连上就发的）、steps（每收到一条命令回一段，None 是不回）、
+    end（剧本演完以后：close 关掉、hang 接着读不回、rst 马上重置、line-rst 再读一条命令才重置）。回答里的 {TAG} 换成这条命令的
+    tag。收到的命令（tag 换成 TAG）记下来"""
+
+    def __init__(self, conns):
+        threading.Thread.__init__(self, daemon=True)
+        self.conns, self.sent = conns, []
+        self.ls = socket.socket()
+        self.ls.bind(('127.0.0.1', 0))
+        self.ls.listen(4)
+        self.port = self.ls.getsockname()[1]
+
+    def run(self):
+        for conn in self.conns:
+            try:
+                s, _ = self.ls.accept()
+            except OSError:
+                return
+            try:
+                self.play(s, conn)
+            except OSError:
+                pass
+
+    def play(self, s, conn):
+        import struct
+        f = s.makefile('rb')
+        if conn.get('greet') is not None:
+            s.sendall(conn['greet'].encode('latin-1'))
+        for reply in conn.get('steps', []):
+            line = f.readline()
+            if not line:
+                break
+            tag = line.split(b' ', 1)[0]
+            self.sent.append(b2s(b'TAG' + line[len(tag):]))
+            if reply is not None:
+                s.sendall(reply.encode('latin-1').replace(b'{TAG}', tag))
+        end = conn.get('end', 'close')
+        if end == 'hang':
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                tag = line.split(b' ', 1)[0]
+                self.sent.append(b2s(b'TAG' + line[len(tag):]))
+        elif end in ('rst', 'line-rst'):
+            if end == 'line-rst':
+                line = f.readline()
+                if line:
+                    self.sent.append(b2s(b'TAG' + line[len(line.split(b' ', 1)[0]):]))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        f.close()
+        s.close()
+
+
+CAPA = '* CAPABILITY IMAP4rev1 UNSELECT\r\n{TAG} OK done\r\n'
+HELLO = {'greet': '* OK Gimap ready\r\n'}
+LOGIN_OK = '{TAG} OK authenticated\r\n'
+LIST3 = ('* LIST (\\HasNoChildren) "/" "INBOX"\r\n* LIST (\\All \\HasNoChildren) "/" "[Gmail]/All Mail"\r\n* LIST (\\HasNoChildren \\Junk) "/" "[Gmail]/Spam"\r\n{TAG} OK Success\r\n')
+EXAM = ('* FLAGS (\\Seen)\r\n* OK [PERMANENTFLAGS ()] Flags permitted.\r\n* OK [UIDVALIDITY 11] UIDs valid.\r\n* 3 EXISTS\r\n* 0 RECENT\r\n* OK [UIDNEXT 4] Predicted next UID.\r\n'
+        '{TAG} OK [READ-ONLY] selected. (Success)\r\n')
+DATE = '"15-Nov-2026 02:00:00 +0000"'
+FETCH1 = '* 1 FETCH (UID 1 INTERNALDATE %s BODY[HEADER.FIELDS (FROM)] {9}\r\nFrom: x\r\n)\r\n{TAG} OK Success\r\n' % DATE
+BYE = '* BYE LOGOUT Requested\r\n{TAG} OK 73 good day\r\n'
+
+
+def session(*steps, greet=HELLO['greet'], end='close'):
+    """一次连接：欢迎、CAPABILITY、LOGIN 照常，后面接这些回答"""
+    return {'greet': greet, 'steps': [CAPA, LOGIN_OK] + list(steps), 'end': end}
+
+
+def imap_scripts():
+    """(名字, 各次连接的剧本, 这边依次做什么)"""
+    full = ['open', 'folders', ['examine', '"[Gmail]/All Mail"'], 'search', ['headers', [1, 2]], ['range', 1, 3], ['message', 1], 'logout']
+    out = [
+        ('full session', [session(LIST3, EXAM, '* SEARCH 1 2 3\r\n{TAG} OK SEARCH completed\r\n', FETCH1, FETCH1, FETCH1.replace('BODY[HEADER.FIELDS (FROM)]', 'BODY[]<0>'), BYE)], full),
+        ('ops on a box that was never opened', [], ['folders', ['examine', 'INBOX'], 'search', ['headers', [1]], ['headers', []], ['message', 1], 'logout', 'shutdown']),
+    ]
+    # 欢迎的那一行
+    for name, greet in (('preauth', '* PREAUTH ready\r\n'), ('bye', '* BYE Temporary failure\r\n'), ('garbage', 'hello\r\n'), ('empty line', '\r\n'), ('lf only', '* OK x\n'), ('no newline', '* OK x'),
+                        ('continuation', '+ go ahead\r\n'), ('lowercase', '* ok ready\r\n'), ('ok no space', '* OK[x]\r\n'), ('no', '* NO go away\r\n'), ('bad', '* BAD go away\r\n'),
+                        ('quotes', '* BYE it\'s "over" \\ \x1b[2K\xff\r\n'), ('status form', '* 5 OK x\r\n'), ('tagged', 'A1 OK x\r\n'), ('ok empty', '* OK\r\n'), ('ok with code', '* OK [ALERT] hi [x]\r\n'),
+                        ('long bye', '* BYE ' + 'x' * 300 + '\r\n'), ('cr in line', '* OK a\rb\r\n'), ('nul', '* OK a\x00b\r\n')):
+        out.append(('greeting ' + name, [{'greet': greet, 'steps': [CAPA, LOGIN_OK, BYE]}], ['open', 'logout']))
+    out.append(('greeting eof', [{'greet': None, 'steps': []}], ['open', 'folders']))
+    out.append(('greeting stall', [{'greet': None, 'steps': [], 'end': 'hang'}], ['open']))
+    out.append(('greeting rst', [{'greet': None, 'steps': [], 'end': 'rst'}], ['open']))
+    out.append(('capability stall', [{'greet': HELLO['greet'], 'steps': [], 'end': 'hang'}], ['open']))
+    out.append(('greeting too long', [{'greet': '* OK ' + 'x' * 1000001 + '\r\n', 'steps': [CAPA]}], ['open']))
+    # CAPABILITY
+    for name, capa in (('none', '{TAG} OK done\r\n'), ('no', '{TAG} NO nope\r\n'), ('no with imap4', '{TAG} NO try IMAP4rev1 later\r\n'), ('bad', '{TAG} BAD nope\r\n'), ('not imap4', '* CAPABILITY POP3\r\n{TAG} OK done\r\n'),
+                       ('imap4 only', '* CAPABILITY IMAP4\r\n{TAG} OK done\r\n'), ('lowercase', '* CAPABILITY imap4rev1\r\n{TAG} OK done\r\n'), ('8bit', '* CAPABILITY IMAP4rev1 \xff\r\n{TAG} OK done\r\n'),
+                       ('literal', '* CAPABILITY {8}\r\nIMAP4rev1\r\n{TAG} OK done\r\n'), ('literal then text', '* CAPABILITY {3}\r\nabc IMAP4rev1\r\n{TAG} OK done\r\n'),
+                       ('twice', '* CAPABILITY POP3\r\n* CAPABILITY IMAP4rev1\r\n{TAG} OK done\r\n'), ('wrong tag', '* CAPABILITY IMAP4rev1\r\nZZZZ9 OK done\r\n'), ('bye', '* BYE shutting down\r\n{TAG} OK done\r\n'),
+                       ('empty', '* CAPABILITY\r\n{TAG} OK done\r\n'), ('tagged odd type', '* CAPABILITY IMAP4rev1\r\n{TAG} PREAUTH x\r\n'), ('tagged no data', '* CAPABILITY IMAP4rev1\r\n{TAG} OK\r\n'),
+                       ('tabs', '* CAPABILITY\tIMAP4rev1\r\n{TAG} OK done\r\n'), ('tab inside', '* CAPABILITY X\tIMAP4rev1\x0bY\r\n{TAG} OK done\r\n'), ('eof', None)):
+        out.append(('capability ' + name, [{'greet': HELLO['greet'], 'steps': [capa, LOGIN_OK, BYE] if capa else [None]}], ['open', 'logout']))
+    # LOGIN
+    for name, reply in (('auth failed', '{TAG} NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)\r\n'), ('imap disabled', '{TAG} NO [ALERT] Your account is not enabled for IMAP use. (Failure)\r\n'),
+                        ('imap disabled 2', '{TAG} NO IMAP access is disabled for your domain\r\n'), ('imap disabled 3', '{TAG} NO imap IS DISABLED\r\n'),
+                        ('app password', '{TAG} NO [ALERT] Application-specific password required: https://support.google.com/accounts/answer/185833 (Failure)\r\n'),
+                        ('unavailable', '{TAG} NO [UNAVAILABLE] Temporary System Error\r\n'), ('no empty', '{TAG} NO \r\n'), ('no quotes', '{TAG} NO it\'s "bad" \\ \x1b[2K\xff\r\n'), ('no long', '{TAG} NO ' + 'x' * 300 + '\r\n'),
+                        ('no single quote', "{TAG} NO it's bad\r\n"), ('bad', '{TAG} BAD Invalid credentials\r\n'), ('bye first', '* BYE Too many connections\r\n{TAG} NO x\r\n'), ('odd type', '{TAG} FOO bar\r\n'),
+                        ('read-only code', '* OK [READ-ONLY] odd\r\n{TAG} OK authenticated\r\n'), ('capability inside', '* CAPABILITY IMAP4rev1 X\r\n{TAG} OK [CAPABILITY IMAP4rev1] ok\r\n'),
+                        ('invalid credentials lower', '{TAG} NO invalid CREDENTIALS\r\n'), ('unexpected', 'what\r\n'), ('continuation', '+ send more\r\n{TAG} OK authenticated\r\n'), ('eof', None)):
+        steps = [CAPA, reply, LIST3, BYE] if reply else [CAPA]
+        out.append(('login ' + name, [{'greet': HELLO['greet'], 'steps': steps}], ['open', 'folders', 'logout']))
+    out.append(('login stall', [{'greet': HELLO['greet'], 'steps': [CAPA], 'end': 'hang'}], ['open', 'folders']))
+    out.append(('login rst', [{'greet': HELLO['greet'], 'steps': [CAPA], 'end': 'line-rst'}], ['open']))
+    # LIST
+    for name, reply in (('no all', '* LIST (\\HasNoChildren) "/" "INBOX"\r\n* LIST (\\HasNoChildren \\Junk) "/" "[Gmail]/Spam"\r\n{TAG} OK Success\r\n'), ('only inbox', '* LIST () "/" INBOX\r\n{TAG} OK Success\r\n'),
+                        ('none', '{TAG} OK Success\r\n'), ('no', '{TAG} NO [SERVERBUG] try again\r\n'), ('bad', '{TAG} BAD Could not parse command\r\n'), ('odd type', '{TAG} FOO x\r\n'),
+                        ('odd type with rows', '* LIST (\\All) "/" x\r\n{TAG} FOO x\r\n'), ('upper flags', '* LIST (\\ALL) "/" a\r\n* LIST (\\JUNK \\All) "/" b\r\n{TAG} OK Success\r\n'),
+                        ('two all', '* LIST (\\All) "/" first\r\n* LIST (\\All) "/" second\r\n{TAG} OK Success\r\n'), ('quoted names', '* LIST (\\All) "/" "a \\"q\\" b"\r\n* LIST (\\Junk) NIL "x\\\\y"\r\n{TAG} OK Success\r\n'),
+                        ('literal name', '* LIST (\\All) "/" {7}\r\nAll Box\r\n* LIST (\\Junk) "/" J\r\n{TAG} OK Success\r\n'), ('8bit name', '* LIST (\\All) "/" "\xe9\xff"\r\n{TAG} OK Success\r\n'),
+                        ('garbage rows', '* LIST\r\n* LIST x\r\n* LIST (\\All)\r\n* LSUB (\\All) "/" lsub\r\n* 3 EXISTS\r\n{TAG} OK Success\r\n'), ('bye', '* BYE going down\r\n'), ('eof mid', '* LIST (\\All) "/" a\r\n'),
+                        ('unterminated', '* LIST (\\All) "/" a'), ('unexpected', 'garbage \xff\r\n'), ('wrong tag', 'ZZZZ1 OK x\r\n'), ('too long', '* LIST ' + 'x' * 1000001 + '\r\n{TAG} OK\r\n'),
+                        ('ok with rows after', '{TAG} OK Success\r\n* LIST (\\All) "/" late\r\n'), ('same name', '* LIST (\\All \\Junk) "/" both\r\n{TAG} OK Success\r\n')):
+        out.append(('list ' + name, [session(reply, EXAM, BYE)], ['open', 'folders', ['examine', 'INBOX'], 'logout']))
+    out.append(('list stall', [session(end='hang')], ['open', 'folders', 'folders']))
+    out.append(('list rst', [session(end='line-rst')], ['open', 'folders']))
+    # EXAMINE
+    for name, reply in (('no uidnext', '* OK [UIDVALIDITY 11] ok\r\n{TAG} OK [READ-ONLY] done\r\n'), ('nothing', '{TAG} OK done\r\n'), ('not numbers', '* OK [UIDVALIDITY x] ok\r\n* OK [UIDNEXT 4 5] ok\r\n{TAG} OK done\r\n'),
+                        ('twice', '* OK [UIDVALIDITY 1] a\r\n* OK [UIDVALIDITY 2] b\r\n* OK [UIDNEXT 9] c\r\n* OK [UIDNEXT 10] d\r\n{TAG} OK done\r\n'), ('greedy bracket', '* OK [UIDNEXT 4] Predicted] next\r\n{TAG} OK done\r\n'),
+                        ('no bracket end', '* OK [UIDNEXT 4 next\r\n{TAG} OK done\r\n'), ('code only', '* OK [UIDNEXT]\r\n* OK [UIDVALIDITY ]\r\n{TAG} OK done\r\n'), ('in no and bad', '* NO [UIDNEXT 7] x\r\n* BAD [UIDVALIDITY 8] y\r\n{TAG} OK done\r\n'),
+                        ('in other type', '* FOO [UIDNEXT 7] x\r\n{TAG} OK [UIDVALIDITY 3] done\r\n'), ('leading zeros', '* OK [UIDVALIDITY 0011] ok\r\n* OK [UIDNEXT 0] ok\r\n{TAG} OK done\r\n'),
+                        ('too many digits', '* OK [UIDVALIDITY ' + '1' * 4301 + '] ok\r\n{TAG} OK done\r\n'), ('no', '{TAG} NO [NONEXISTENT] Unknown Mailbox: INBOX (Failure)\r\n'), ('bad', '{TAG} BAD nope\r\n'),
+                        ('read-write', '* OK [UIDVALIDITY 11] ok\r\n{TAG} OK [READ-WRITE] done\r\n'), ('lower code', '* OK [uidnext 4] ok\r\n{TAG} OK done\r\n'), ('spaces', '* OK  [UIDNEXT 4] ok\r\n* OK [UIDVALIDITY  5] ok\r\n{TAG} OK done\r\n'),
+                        ('bye', '* BYE bye\r\n{TAG} OK done\r\n'), ('eof', None)):
+        steps = [reply, '* SEARCH\r\n{TAG} OK done\r\n', BYE] if reply else []
+        out.append(('examine ' + name, [session(*steps)], ['open', ['examine', 'INBOX'], 'search', 'logout']))
+    out.append(('examine quoted and odd names', [session(EXAM, EXAM, EXAM, BYE)], ['open', ['examine', '"[Gmail]/All Mail"'], ['examine', 'a b'], ['examine', ''], 'logout']))
+    out.append(('examine not ascii', [session(EXAM, BYE)], ['open', ['examine', 'café'], ['examine', 'INBOX'], 'logout']))
+    # UID SEARCH
+    for name, reply in (('hits', '* SEARCH 1 2 3\r\n{TAG} OK done\r\n'), ('empty', '* SEARCH\r\n{TAG} OK done\r\n'), ('none', '{TAG} OK done\r\n'), ('two lines', '* SEARCH 1 2\r\n* SEARCH 3\r\n{TAG} OK done\r\n'),
+                        ('junk', '* SEARCH 1 x 2a -3 4.5 +6 07 \t8\x0b9\r\n{TAG} OK done\r\n'), ('literal', '* SEARCH {3}\r\n1 2 5\r\n{TAG} OK done\r\n'), ('no', '{TAG} NO [CANNOT] x\r\n'),
+                        ('bad', '{TAG} BAD Could not parse command\r\n'), ('too many digits', '* SEARCH ' + '7' * 4301 + '\r\n{TAG} OK done\r\n'), ('esearch', '* ESEARCH (TAG "x") UID ALL 1:3\r\n{TAG} OK done\r\n'),
+                        ('bye after', '{TAG} OK done\r\n* BYE later\r\n'), ('eof', None)):
+        steps = [EXAM, reply, FETCH1, BYE] if reply else [EXAM]
+        out.append(('search ' + name, [session(*steps)], ['open', ['examine', 'INBOX'], 'search', ['headers', [1]], 'logout']))
+    out.append(('search before examine', [session(BYE)], ['open', 'search', 'logout']))
+    out.append(('search after failed examine', [session('{TAG} NO nope\r\n', BYE)], ['open', ['examine', 'x'], 'search', 'logout']))
+    # UID FETCH
+    two = ('* 1 FETCH (UID 1 INTERNALDATE %s BODY[HEADER.FIELDS (FROM)] {9}\r\nFrom: x\r\n)\r\n* 2 FETCH (INTERNALDATE %s BODY[HEADER.FIELDS (FROM)] {9}\r\nFrom: y\r\n UID 2)\r\n{TAG} OK Success\r\n' % (DATE, DATE))
+    for name, reply in (('two, uid after literal', two), ('no date', '* 1 FETCH (UID 1 BODY[] {1}\r\nz)\r\n{TAG} OK done\r\n'), ('no literal', '* 1 FETCH (UID 1 INTERNALDATE %s)\r\n{TAG} OK done\r\n' % DATE),
+                        ('zero literal', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {0}\r\n)\r\n{TAG} OK done\r\n' % DATE), ('two literals', '* 1 FETCH (UID 1 INTERNALDATE %s A {2}\r\nab B {3}\r\ncde)\r\n{TAG} OK done\r\n' % DATE),
+                        ('literal with crlf inside', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {12}\r\na\r\n{TAG} OK\r\n)\r\n{TAG} OK done\r\n' % DATE), ('short literal then eof', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {50}\r\nshort' % DATE),
+                        ('literal then eof', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {5}\r\nshort' % DATE), ('not a literal', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {x}\r\n{TAG} OK done\r\n' % DATE),
+                        ('brace in middle', '* 1 FETCH (UID 1 {3} INTERNALDATE %s)\r\n{TAG} OK done\r\n' % DATE), ('none', '{TAG} OK done\r\n'), ('no', '{TAG} NO x\r\n'), ('bad', '{TAG} BAD Would mark as read\r\n'),
+                        ('other uid', '* 1 FETCH (UID 9 INTERNALDATE %s BODY[] {1}\r\nz)\r\n{TAG} OK done\r\n' % DATE), ('expunge between', '* 5 EXPUNGE\r\n* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {1}\r\nz)\r\n* 2 EXISTS\r\n{TAG} OK done\r\n' % DATE),
+                        ('8bit literal', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {4}\r\n\xff\x00\r\n)\r\n{TAG} OK done\r\n' % DATE), ('huge size', '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {99999999999999999999999}\r\nabc' % DATE),
+                        ('too many digits', '* 1 FETCH (UID 1 BODY[] {' + '1' * 4301 + '}\r\nabc'), ('bad date year 0', '* 1 FETCH (UID 1 INTERNALDATE "01-Jan-0000 00:00:00 +0000" BODY[] {1}\r\nz)\r\n{TAG} OK done\r\n'),
+                        ('status without data', '* 1 FETCH\r\n{TAG} OK done\r\n'), ('fetch not status form', '* FETCH (UID 1 INTERNALDATE %s BODY[] {1}\r\nz)\r\n{TAG} OK done\r\n' % DATE)):
+        out.append(('fetch ' + name, [session(EXAM, reply, reply, BYE)], ['open', ['examine', 'INBOX'], ['headers', [1, 2]], ['message', 1], 'logout']))
+    out.append(('fetch stall mid literal', [session(EXAM, '* 1 FETCH (UID 1 INTERNALDATE %s BODY[] {50}\r\nshort' % DATE, end='hang')], ['open', ['examine', 'INBOX'], ['message', 1], ['message', 1]]))
+    # 断线重连、LOGOUT
+    out.append(('reconnect after drop', [session(EXAM), session(EXAM, FETCH1, BYE)], ['open', ['examine', 'INBOX'], ['message', 1], 'open', ['examine', 'INBOX'], ['message', 1], 'logout']))
+    out.append(('logout only ok', [session('{TAG} OK bye\r\n')], ['open', 'logout', 'folders']))
+    out.append(('logout eof', [session()], ['open', 'logout', 'logout']))
+    out.append(('logout stall', [session(end='hang')], ['open', 'logout']))
+    out.append(('logout bad', [session('{TAG} BAD no\r\n')], ['open', 'logout']))
+    out.append(('logout bye without tag', [session('* BYE see you\r\n')], ['open', 'logout']))
+    out.append(('shutdown without logout', [session(end='hang')], ['open', 'shutdown', 'folders']))
+    out.append(('password is quoted', [{'greet': HELLO['greet'], 'steps': [CAPA, LOGIN_OK, BYE]}], [['open_as', 'inbox@example.com', 'ab"cd\\ef gh(ij)kl{m}n*%'], 'logout']))
+    out.append(('user not ascii', [{'greet': HELLO['greet'], 'steps': [CAPA, LOGIN_OK, BYE]}], [['open_as', 'café@example.com', 'abcdefghijklmnop'], 'logout']))
+    return out
+
+
+def imap_case(name, conns, ops, timeout=0.4):
+    srv = Script(conns)
+    srv.start()
+    IMAP_PORT[0] = srv.port   # mail_dial 连到这个剧本
+    env = {'box': None}
+
+    def make(user='inbox@example.com', pw='abcdefghijklmnop'):
+        return MailBox(user, pw, ('direct', '', 0), timeout)
+
+    env['box'] = make()
+    results = []
+    for op in ops:
+        kind = op if isinstance(op, str) else op[0]
+        box = env['box']
+        try:
+            if kind == 'open':
+                r = box.open()
+            elif kind == 'open_as':
+                box = env['box'] = make(op[1], op[2])
+                r = box.open()
+            elif kind == 'folders':
+                r = [list(x) for x in box.folders()]
+            elif kind == 'examine':
+                r = list(box.examine(op[1]))
+            elif kind == 'search':
+                r = box.search(mail_crit([RULE], 1794708000))
+            elif kind == 'headers':
+                r = [[u, t, b2s(h)] for u, (t, h) in sorted(box.headers(op[1]).items())]
+            elif kind == 'range':
+                r = [[u, t, b2s(h)] for u, (t, h) in sorted(box.headers((op[1], op[2])).items())]
+            elif kind == 'message':
+                r = b2s(box.message(op[1]))
+            elif kind == 'logout':
+                r = box.close(True)
+            elif kind == 'shutdown':
+                r = box.close()
+            else:
+                raise KeyError(kind)
+            res = {'ok': r}
+        except MailFatal as e:
+            res = {'fatal': [e.code, e.text]}
+        except MailRetry as e:   # 说明里带着这次随机的 tag 的（服务器原样回了它）：换成 TAG
+            res = {'retry': [e.code, re.sub(r'\b[A-P]{4}(\d+ )', r'TAG\1', e.text)]}
+        except Exception as e:   # 原来没有人接的异常
+            res = {'py': cls(e)}
+        res['alive'] = env['box'].im is not None
+        results.append(res)
+    env['box'].close()   # 还开着的会话关掉（不算在剧本里）：假服务器才演得完
+    srv.ls.close()
+    srv.join(3)
+    return {'name': name, 'conns': conns, 'ops': ops, 'timeout': timeout, 'results': results, 'sent': srv.sent}
+
+
+def mail_dial(r, timeout=15):
+    """参照实现里的 MailBox 要的：这里连到 Script（IMAP_PORT 是当前剧本的端口）"""
+    return socket.create_connection(('127.0.0.1', IMAP_PORT[0]), 5)
+
+
+def mail_tls(s, timeout=20):
+    s.settimeout(timeout)
+    return LikeTls(s)
+
+
+IMAP_PORT = [0]
+
+
+def imap_cases():
+    return [imap_case(name, conns, ops) for name, conns, ops in imap_scripts()]
+
+
 ADDR_NESTS = (('comment', '', '(', ')', ' a@example.com'), ('domain comment', 'a@', '(', ')', 'b.example.com'), ('phrase comment', 'x ', '(', ')', ' <a@example.com>'),
               ('route comment', '<', '(', ')', 'a@example.com>'), ('group comment', 'g: ', '(', ')', 'a@example.com;'), ('group', '', 'a:', '', ''))
 MSG_NESTS = (('rfc822', 'Content-Type: message/rfc822\r\n\r\n', 'Subject: x\r\n\r\nhi\r\n'), ('multipart', 'Content-Type: multipart/mixed; boundary=b%d\r\n\r\n--b%d\r\n', '\r\nhi\r\n'))
@@ -1563,6 +1923,13 @@ def vectors(seed, extra):
         'oserr': [oserr_case(t, k) for t, k in OSERR],
         'judge': [judge_case(*j) for j in judge_emails()],
         'limits': LIMITS,
+        'proxy_parse': [(lambda r: {'in': x, 'kv': r[0], 'exc': r[1]})(mail_proxy_parse(x)) for x in SCUTILS],
+        'fnmatch': fnmatch_cases(rng, extra),
+        'epoch': [epoch_case(x) for x in EPOCHS],
+        'since': [{'t': t, 'since': mail_since(t), 'crit': mail_crit([RULE], t), 'crit2': mail_crit([RULE, RULE], t), 'crit3': mail_crit([RULE, RULE, RULE], t), 'crit0': mail_crit([], t)} for t in SINCES],
+        'fetch_parse': [fetch_case(x) for x in FETCHES],
+        'list_row': [list_row_case(x) for x in LIST_ROWS],
+        'imap': imap_cases(),
     }
     return cases
 

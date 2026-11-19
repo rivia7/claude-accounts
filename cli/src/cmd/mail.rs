@@ -18,8 +18,10 @@ pub mod codec;
 pub mod header;
 pub mod html;
 mod html5;
+pub mod imap;
 pub mod judge;
 pub mod message;
+pub mod route;
 
 use super::secrets::ks_del;
 use super::Cmd;
@@ -249,6 +251,42 @@ pub fn mail_oserr(text: &str, class: &str) -> String {
     } else {
         out.to_string()
     }
+}
+
+/// Ctrl-C 按过了（`cca mail open` 等邮件的时候）：原来是 Python 在主线程里抛 KeyboardInterrupt，这里是信号处理函数记一笔，
+/// 等待、读写出错的地方看到了就照 KeyboardInterrupt 往上传
+static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_sigint(_: libc::c_int) {
+    INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 从现在起 Ctrl-C 不直接结束进程，而是记下来（不带 SA_RESTART：正卡着的读写、睡眠会被打断，回来就看得到）
+pub(crate) fn catch_sigint() {
+    // SAFETY: sigaction 是纯数据，全 0 是合法的值；处理函数只存一个原子变量
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = on_sigint as *const () as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
+    }
+}
+
+pub(crate) fn interrupted() -> bool {
+    INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// 原来的 KeyboardInterrupt（不是 Exception 的子类：`except Exception`、`except MailError` 都接不住它）
+pub(crate) fn keyboard_interrupt() -> Fail {
+    Fail::Other("KeyboardInterrupt", Vec::new())
+}
+
+/// 按过 Ctrl-C 了就别往下做了
+pub(crate) fn check_interrupt() -> R<()> {
+    if interrupted() {
+        return Err(keyboard_interrupt());
+    }
+    Ok(())
 }
 
 /// 邮件的结构、地址里的注释原来是一层一层递归着解析的，这里照样（层数到了 Python 的上限报 RecursionError）。
