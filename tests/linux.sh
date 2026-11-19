@@ -348,7 +348,7 @@ exec "$REAL" "$@"
 S
 chmod 755 "$D/bin/curl"
 export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" CCA_POLICY_DEFAULT= LANG=C.UTF-8 CCA_COST=off
-unset CCA_HOME XDG_RUNTIME_DIR XDG_DATA_HOME DISPLAY WAYLAND_DISPLAY
+unset CCA_HOME XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CACHE_HOME DISPLAY WAYLAND_DISPLAY   # XDG_CACHE_HOME：辅助程序解在它里面，不清掉就解到沙箱外面去了
 echo "  bash ${BASH_VERSION%%(*}，$(python3 --version 2>&1)，$(curl --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2)，nc：$(readlink -f "$(command -v nc)" 2>/dev/null || echo 无)，ps：$(readlink -f "$(command -v ps)" 2>/dev/null || echo 无)，ruby：$(ruby -e 'print RUBY_VERSION' 2>/dev/null || echo 无)"
 ans() { local f; f=$(mktemp "$D/ans.XXXXXX"); printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
 fp() { printf '%s' "$1" | sha256sum | cut -c1-16; }   # 节点摘要（node_fp：类型|服务器|端口|TLS 域名 的 sha256 前 16 位）
@@ -656,7 +656,7 @@ if [ $rc -eq 0 ] && printf '%s' "$out" | grep -qE 'carol.* 13% .* 41% ' && grep 
 else no "cca codex usage（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)"; fi
 # 查用量途中按 Ctrl-C、关掉终端（TERM）：后台的查询忽略 SIGINT，cca 自己停掉它们和它们起的进程，不等查询超时。
 # Debian 的容器没有 procps（没有 pkill）：走读 /proc 的那条路
-queries() {   # 这次测试里还在跑的用量查询：python 的 usage-query 和它起的 app-server（按 HOME 认）
+queries() {   # 这次测试里还在跑的用量查询：辅助程序的 usage-query 和它起的 app-server（按 HOME 认）
 	local p
 	for p in /proc/[0-9]*; do
 		{ tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null | grep -qE 'usage-query|app-server' &&
@@ -714,20 +714,20 @@ if ! printf '%s' "$out" | grep -qE '^  cca (web|billing|limit-resets|app|gui|log
 else no "cca help：$(printf '%s' "$out" | grep -E '^  cca (web|billing|limit-resets|app|gui|login-page|mail) |^  cca codex app |WebRTC' | head -n 2)"; fi
 
 # 辅助程序：发布的 cca 第一次运行时把这台机器的那一份解到 ~/.cache/cca-helper 里（XDG_CACHE_HOME 指了别处就在那里；不放在
-# XDG_RUNTIME_DIR：那是内存盘，退出登录就清空），文件名是它的 SHA-256，只有自己能读写执行；解新的一份时顺手删掉 7 天前解出来的
-# （旧版本的、没解完的临时文件），7 天内的留着；以后每次直接用，不再解。不用 python3（PATH 里藏起它照样能跑）
+# XDG_RUNTIME_DIR：那是内存盘，退出登录就清空），文件名是它的 SHA-256，只有自己能读写执行；解新的一份时顺手删掉 30 天前解出来的
+# （旧版本的、没解完的临时文件），30 天内的留着；以后每次直接用，不再解。不用 python3（PATH 里藏起它照样能跑）
 HS=$(sha256sum "$HB" | cut -d' ' -f1)
 HCD="$D/xdgc/cca-helper"; mkdir -p -m 700 "$D/xdgc" "$HCD"
 for n in aaaa1 aaaa2.4242 bbbb1; do echo x > "$HCD/$n"; done
-touch -d '8 days ago' "$HCD/aaaa1" 2>/dev/null || touch -d "@$(( $(date +%s) - 8 * 86400 ))" "$HCD/aaaa1"
-touch -d '30 days ago' "$HCD/aaaa2.4242" 2>/dev/null || touch -d "@$(( $(date +%s) - 30 * 86400 ))" "$HCD/aaaa2.4242"
-touch -d '6 days ago' "$HCD/bbbb1" 2>/dev/null || touch -d "@$(( $(date +%s) - 6 * 86400 ))" "$HCD/bbbb1"
+touch -d '32 days ago' "$HCD/aaaa1" 2>/dev/null || touch -d "@$(( $(date +%s) - 32 * 86400 ))" "$HCD/aaaa1"
+touch -d '90 days ago' "$HCD/aaaa2.4242" 2>/dev/null || touch -d "@$(( $(date +%s) - 90 * 86400 ))" "$HCD/aaaa2.4242"
+touch -d '28 days ago' "$HCD/bbbb1" 2>/dev/null || touch -d "@$(( $(date +%s) - 28 * 86400 ))" "$HCD/bbbb1"
 XDG_CACHE_HOME="$D/xdgc" XDG_RUNTIME_DIR="$D/xdgr" "$C" ls >/dev/null 2>&1; l1=$(ls "$HCD" | LC_ALL=C sort | tr '\n' ' ')
 i1=$(stat -c '%i %Y' "$HCD/$HS" 2>/dev/null)
 XDG_CACHE_HOME="$D/xdgc" XDG_RUNTIME_DIR="$D/xdgr" "$C" ls >/dev/null 2>&1; l2=$(ls "$HCD" | LC_ALL=C sort | tr '\n' ' ')
 if [ "$l1" = "$(printf '%s\n' "$HS" bbbb1 | LC_ALL=C sort | tr '\n' ' ')" ] && [ "$l1" = "$l2" ] && [ -n "$i1" ] && [ "$(stat -c '%i %Y' "$HCD/$HS")" = "$i1" ] &&
 	[ "$(stat -c %a "$HCD/$HS")" = 700 ] && [ "$(stat -c %a "$HCD")" = 700 ] && [ "$(sha256sum "$HCD/$HS" | cut -d' ' -f1)" = "$HS" ] && [ ! -e "$D/xdgr" ]; then
-	ok "辅助程序：第一次运行解到缓存目录的 cca-helper 里（文件名是 SHA-256，只有自己能读写执行），删掉 7 天前的，7 天内的留着；第二次不再解"
+	ok "辅助程序：第一次运行解到缓存目录的 cca-helper 里（文件名是 SHA-256，只有自己能读写执行），删掉 30 天前的，30 天内的留着；第二次不再解"
 else no "辅助程序的缓存：第一次后 ${l1:-空的}；第二次后 ${l2:-空的}；$(ls -la "$HCD" 2>&1 | tail -n 4 | tr '\n' ' ')"; fi
 if [ -x "$H/.cache/cca-helper/$HS" ] && [ ! -e "$H/.cache/cca-py" ]; then ok "辅助程序：平时解在 ~/.cache/cca-helper 里"
 else no "辅助程序不在 ~/.cache/cca-helper 里：$(ls -la "$H/.cache" 2>&1 | tail -n 5 | tr '\n' ' ')"; fi

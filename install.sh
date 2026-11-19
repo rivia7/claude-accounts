@@ -81,7 +81,7 @@ main() {
 	if [ -n "$want" ]; then info "正在下载 cca ${want}…"; else info "正在下载最新版 cca…"; fi
 	for f in cca cca.sig; do
 		for i in 1 2 3; do   # 有的网络偶尔会丢新连接，多试几次
-			curl -fsSL -m 300 -o "$tmp/$f" "$from/$f" 2>/dev/null && break   # cca 接着四种机器的辅助程序，约 10 MB
+			curl -fsSL -m 300 -o "$tmp/$f" "$from/$f" 2>/dev/null && break   # cca 接着四种机器的辅助程序，约 13 MB
 			[ "$i" = 3 ] && fail "下载失败（网络不通、GitHub 暂时不可用${want:+，或者没有 ${want} 这个版本}），稍后再试"
 			sleep 2
 		done
