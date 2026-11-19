@@ -2203,6 +2203,21 @@ def int_case(s):
     return {'in': s, 'hours': max(1, min(n, 336)), 'secs': max(0, min(n, 900))}
 
 
+# --- CCA_MAIL_POLL / CCA_MAIL_RETRY 写成各种样子时 mail_knob 取到多少（默认值 3；结果写成 repr） -------------------------------
+KNOBS = ['3', '0.3', '1.5', ' 2 ', '+.5', '5.', '1e-2', '1E2', '1_0', '1_0.0_1', '1__0', '_1', '1_', '0', '-1', '-0.0', '', ' ', '   ', 'x', '2s', '0x10', 'nan', 'NaN',
+         '-nan', '+nan', 'inf', 'Infinity', 'INF', '-inf', '+inf', 'infinit', 'infinityx', '1e400', '1e-400', '-1e400', '\x1c5', '5\x1f', '\x1d5\xa0', '\x855\xa0', '\t8\n',
+         '５', '٣.٥', '1,5', '.', 'e5', '1e', '1e+', '0.0', '00.5', '1.5e+0_1', 'in_f', 'n_an', '1_e2', '1._5', '5_.5', '1e_2', '1e2_', '+ 5', '++5', '5 5', '0.000001',
+         '123456789012345678901234567890', '1e22', '1e16', '0.1', '2.5e-5', '9007199254740993', '　5 ', '5​', '1٠']
+
+
+def knob_case(s):
+    os.environ['CCA_MAIL_VECTOR_KNOB'] = s
+    try:
+        return {'in': s, 'out': repr(float(mail_knob('CCA_MAIL_VECTOR_KNOB', 3)))}
+    finally:
+        del os.environ['CCA_MAIL_VECTOR_KNOB']
+
+
 # --- 盯邮箱：mail_hunt 配假的邮件来源、假的时钟、假的「打开」 --------------------------------------------------------------
 T0 = 1794708000
 BOX = '\x22[Gmail]/All Mail\x22'
@@ -2607,6 +2622,7 @@ def vectors(seed, extra, old_paths):
         'cfg': [cfg_case(c) for c in cfg_inputs()],
         'handle': [handle_case(x) for x in HANDLES],
         'int': [int_case(x) for x in INTS],
+        'knob': [knob_case(x) for x in KNOBS],
         'hunt': hunt_cases(),
     }
     return cases

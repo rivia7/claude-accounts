@@ -107,8 +107,15 @@ pub fn mail_why(code: &str) -> Option<&'static str> {
 
 /// 测试用的时间开关（CCA_MAIL_POLL 几秒看一次邮箱、CCA_MAIL_RETRY 连不上 Gmail、浏览器没打开时先等多久）：不是正数时用默认值
 pub fn mail_knob(name: &str, default: f64) -> f64 {
-    let v = match getenv(name).filter(|s| !s.is_empty()) {
-        Some(s) => text::to_float(&s).unwrap_or(default),
+    knob_value(getenv(name).as_deref(), default)
+}
+
+/// `float(值 or default)`：认不出、不是正数（nan 也算）时用默认值。\x1c–\x1f 在 `str.strip()` 里算空白，float() 不认
+/// （`py::text::to_float` 是照 strip 写的，这一点和 Python 不一样：带这几个字符的这里先挡掉）
+fn knob_value(raw: Option<&str>, default: f64) -> f64 {
+    let v = match raw.filter(|s| !s.is_empty()) {
+        Some(s) if s.contains(|c| ('\x1c'..='\x1f').contains(&c)) => default,
+        Some(s) => text::to_float(s).unwrap_or(default),
         None => default,
     };
     if v > 0.0 {
@@ -673,6 +680,18 @@ mod tests {
             same(mail_one(&mail, true, "system"), c.at("one"), &what);
             same(mail_one(&mail, false, "direct"), c.at("one_off"), &what);
         }
+    }
+
+    /// CCA_MAIL_POLL / CCA_MAIL_RETRY 写成各种样子时取到多少（默认值 3）
+    #[test]
+    fn knob_values_like_python() {
+        let cases = vectors("knob");
+        assert!(cases.len() > 40);
+        for c in cases {
+            let raw = c.at("in").py_str();
+            assert_eq!(V::Float(knob_value(Some(&raw), 3.0)).py_repr(), c.at("out").py_str(), "{raw:?}");
+        }
+        assert_eq!(knob_value(None, 3.0), 3.0);
     }
 
     #[test]

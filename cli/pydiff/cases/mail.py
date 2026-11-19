@@ -627,6 +627,11 @@ def _(b):
     world(b)
 
 
+@mcase('get-user/agy', ['mail-get-user'], tool='agy')
+def _(b):
+    world(b, agy={'gina@example.com': 'US-A'})
+
+
 @mcase('get-user/broken-config', ['mail-get-user'])
 def _(b):
     world(b)
@@ -680,6 +685,21 @@ def _(b):
 @mcase('ready/codex', ['mail-ready', 'erin@example.com'], tool='codex')
 def _(b):
     world(b, codex=CODEX)
+
+
+@mcase('ready/codex-override-by-codex-key', ['mail-ready', 'erin@example.com'], tool='codex')
+def _(b):
+    world(b, mail=dict(MAIL, accounts={ident('erin@example.com'): {'user': 'erin-box@example.com'}}), codex=CODEX)
+
+
+@mcase('ready/agy', ['mail-ready', 'gina@example.com'], tool='agy')
+def _(b):
+    world(b, agy={'gina@example.com': 'US-A'})
+
+
+@mcase('ready/agy-no-password', ['mail-ready'], tool='agy')
+def _(b):
+    world(b, pw=None, agy={'gina@example.com': 'US-A'})
 
 
 @mcase('ready/too-many-args', ['mail-ready', A, 'x'])
@@ -1276,6 +1296,28 @@ def _(b):
     put(b, 6, eml('(' * 1200 + ')' * 1200 + ' alice@example.com'), 50)
 
 
+def hostile_box(b):
+    """头里的怪东西：不是 UTF-8 的字节、编码过的字（解不出来的、解出来是控制字符的）、JSON 里要转义的字符、折行"""
+    put(b, 5, eml(subject='Your secure link to Claude is here "q" \\ / </script>    \U0001F600 \x7f\x01'), 60)
+    put(b, 6, eml().replace(b'Subject: Your', b'Subject: \xff\xfe Y\xc3\xa9 \xed\xa0\x80 Your', 1), 55)
+    put(b, 7, eml(subject='=?utf-8?b?/v8=?= =?iso-8859-1?q?caf=E9?= =?utf-8?q?=ED=A0=80_=F0=9F=98=80?= =?us-ascii?q?=FF?= Your secure link to Claude is here'), 50)
+    put(b, 8, eml().replace(b'From: Anthropic <', b'From: "Anthr\xf6pic \\"x\\"" <', 1), 45)
+    put(b, 9, eml('"Al\\"ice" <ALICE@Example.COM>, =?utf-8?q?B=C3=B6b?= <bob@example.com>'), 40)
+    put(b, 10, eml().replace(b'To: alice@example.com', b'To: al\xefce@example.com, alice@example.com', 1), 35)
+    put(b, 11, eml(subject='=?windows-1252?q?=80uro_=81?= =?latin1?b?4A==?= =?UTF8?Q?secure_link_to_Claude?=\x00x'), 30)
+    put(b, 12, eml(subject='Your secure link\r\n to Claude\r\n\tis here'), 25)
+    put(b, 13, eml('alice@example.com (\xe4 comment), "b\xf6b" <bob@example.com>'), 20)
+    put(b, 14, eml(frm='=?utf-8?q?=22=5C?= <no-reply@mail.anthropic.com>', subject=' Your secure link to Claude is here　'), 15)
+
+
+for name, argv, env in [('test/hostile-bytes', ['mail-test', '2'], {}), ('gui-list/hostile-bytes', ['gui-mail-list', '', '2'], RO),
+                        ('gui-list/hostile-bytes-one-account', ['gui-mail-list', A, '2'], RO)]:
+    @mcase(name, argv, env=env)
+    def _(b):
+        world(b)
+        hostile_box(b)
+
+
 @mcase('gui-list/empty', ['gui-mail-list'], env=RO)
 def _(b):
     world(b)
@@ -1331,6 +1373,10 @@ for name, argv, kw, rc in [
     # 邮件夹名原样拼进 EXAMINE（imaplib 不加引号、不查控制字符）：带空格的成了两个参数，带 CR LF 的后面那一段是另一条命令
     ('msg-folder-with-space', [A, '0', '', '[Gmail]/All Mail:5:11'], {}, None),
     ('msg-folder-with-crlf', [A, '0', '', 'INBOX\r\nZZZZ9 NOOP:5:11'], {}, None),
+    ('msg-uid-0', [A, '0', '', '"[Gmail]/All Mail":0:11'], {}, None), ('msg-leading-zeros', [A, '0', '', '"[Gmail]/All Mail":005:0011'], {}, None),
+    ('msg-validity-00-not-checked', [A, '0', '', '"[Gmail]/All Mail":5:00'], {}, None),
+    ('msg-uid-too-many-digits', [A, '0', '', '"[Gmail]/All Mail":%s:11' % ('5' * 4301)], {}, None),
+    ('msg-padded-digits-are-not-digits', [A, '0', '', '"[Gmail]/All Mail": 5:11'], {}, None),
 ]:
     @mcase('open/' + name, ['mail-open'] + argv)
     def _(b, kw=kw, rc=rc):
@@ -1489,6 +1535,23 @@ def _(b):
     put(b, 5, eml('erin@example.com'), 60)
 
 
+@mcase('open/codex-msg-has-no-rules', ['mail-open', 'erin@example.com', '0', '', '"[Gmail]/All Mail":5:11'], tool='codex')
+def _(b):
+    world(b, codex=CODEX)
+    put(b, 5, eml('erin@example.com'), 60)
+
+
+@mcase('open/agy-has-no-rules', ['mail-open', 'gina@example.com', '0'], tool='agy')
+def _(b):
+    world(b, agy={'gina@example.com': 'US-A'})
+    put(b, 5, eml('gina@example.com'), 60)
+
+
+@mcase('open/agy-not-configured', ['mail-open', 'gina@example.com', '0'], tool='agy')
+def _(b):
+    world(b, mail=None, agy={'gina@example.com': 'US-A'})
+
+
 @mcase('open/hostile-mail-is-an-uncaught-error', ['mail-open', A, '0'])
 def _(b):
     world(b)
@@ -1546,7 +1609,8 @@ def _(b):
 def arrives_uidvalidity_changes(b):
     first_look_done(b)
     deliver(b)
-    b.write('gmail/box/all/.uidvalidity', '12\n')   # 邮件夹重建了：同样的 UID 是另外的邮件，要重新搜
+    if in_time():
+        b.write('gmail/box/all/.uidvalidity', '12\n')   # 邮件夹重建了：同样的 UID 是另外的邮件，要重新搜
 
 
 @mcase('open/waits-uidvalidity-changes', ['mail-open', A, '30'], env=SLOW, during=arrives_uidvalidity_changes)
@@ -1569,6 +1633,15 @@ for name, switches in [('no-uidvalidity', dict(no_uidvalidity=True)), ('no-uidne
 def _(b):
     world(b)
     put(b, 4, eml(tok='OLD'), 3 * 3600)
+
+
+# CCA_MAIL_POLL 写得不对时用默认的 3 秒（float() 认不出的、不是正数的），inf 是一直等到头：等 3 秒的话都正好看两次邮箱
+for name, poll in [('not-a-number', '0.1s'), ('control-char-is-not-blank', '\x1c0.1'), ('negative', '-0.1'), ('nan', 'nan'), ('inf', 'inf'),
+                   ('underscore-between-digits', '1_0'), ('fullwidth-digits', '１０')]:
+    @mcase('open/poll-knob-' + name, ['mail-open', A, '3'], env={'CCA_MAIL_POLL': poll})
+    def _(b):
+        world(b)
+        put(b, 4, eml(tok='OLD'), 3 * 3600)
 
 
 @mcase('open/waits-in-vain-others-arrive', ['mail-open', A, '3'], env=SLOW, during=arrives)
