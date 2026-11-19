@@ -628,6 +628,62 @@ mod tests {
         }
     }
 
+    /// tests/presence.py 的 test_keyshare_crypto 里只能在进程内看的那几处：邮箱不分大小写；换了身份、盐、工具的密钥解不开；形状不对的
+    /// 密文、认证过但内容不对的明文都不认（服务器不收形状不对的，经它送不到客户端手里）；删除和 key 一样长
+    #[test]
+    fn open_refuses_junk_like_python_test() {
+        let (salt, aid, key) = ("00".repeat(16), "a".repeat(32), format!("sk-ant-api03-{}", "x".repeat(60)));
+        let keys_of = |salt: &str, tool: &str, email: &str, ident: &str| keyshare_keys(salt, tool, email, ident, KEYSHARE_LABEL).unwrap();
+        let k = keys_of(&salt, "claude", "Alice@Example.com", "u-1234-5678");
+        assert_eq!(k, keys_of(&salt, "claude", "alice@example.com", "u-1234-5678"), "邮箱不分大小写");
+        let b = keyshare_seal(&k, &aid, Some(&key), &V::Float(1794041280.5)).unwrap();
+        let opened = keyshare_open(&k, &aid, &V::Dict(b.clone())).unwrap().unwrap();
+        assert_eq!(json::dumps(&V::Dict(opened), json::Fmt::new()), format!(r#"{{"key": "{key}", "at": 1794041280.5}}"#));
+        let gone = keyshare_seal(&k, &aid, None, &V::Float(1794041281.0)).unwrap();
+        assert_eq!(json::dumps(&V::Dict(keyshare_open(&k, &aid, &V::Dict(gone.clone())).unwrap().unwrap()), json::Fmt::new()), r#"{"key": null, "at": 1794041281.0}"#);
+        assert_eq!(gone.at("c").py_str().len(), b.at("c").py_str().len(), "删除和 key 一样长：服务器分不出来");
+        for other in [
+            keys_of(&salt, "claude", "alice@example.com", "u-other-0000"), // 没登录这个账号（身份不对）
+            keys_of(&"11".repeat(16), "claude", "alice@example.com", "u-1234-5678"), // 换了盐
+            keys_of(&salt, "codex", "alice@example.com", "u-1234-5678"),   // 同一个邮箱的 Codex 账号
+        ] {
+            assert!(keyshare_open(&other, &aid, &V::Dict(b.clone())).unwrap().is_none());
+        }
+        assert!(keyshare_open(&k, &"b".repeat(32), &V::Dict(b.clone())).unwrap().is_none(), "挪到别的账号上：认证不过");
+        let with = |field: &str, v: V| {
+            let x = b.copy();
+            x.set(field, v);
+            V::Dict(x)
+        };
+        let mut c = b64decode(&b.at("c").py_str(), true).unwrap();
+        c[5] ^= 1;
+        assert!(keyshare_open(&k, &aid, &with("c", V::from(b64encode(&c)))).unwrap().is_none(), "改过的");
+        for junk in [V::None, V::Dict(Dict::new()), V::from("x"), V::Dict(dict! { "n" => "x", "c" => "y", "t" => "z" }), with("n", V::Int(12)), with("n", b.at("t"))] {
+            assert!(keyshare_open(&k, &aid, &junk).unwrap().is_none(), "{junk:?}");
+        }
+        // 照文档封好的（明文是 JSON，空格补齐到 256 字节的整数倍）、认证得过，内容不对的也不认
+        let ad = blob_ad(&[KEYSHARE_LABEL, &aid]).unwrap();
+        for doc in [
+            format!(r#"{{"v": 2, "key": "{key}", "at": 5.0}}"#),
+            format!(r#"{{"v": 1, "key": "{key}", "at": 0}}"#),
+            format!(r#"{{"v": 1, "key": "{key}", "at": "x"}}"#),
+            r#"{"v": 1, "key": "short", "at": 5.0}"#.to_string(),
+            r#"{"v": 1, "key": "带空格 的 key", "at": 5.0}"#.to_string(),
+            "[1]".to_string(),
+        ] {
+            let mut pt = doc.clone().into_bytes();
+            pt.resize(pt.len().div_ceil(KEYSHARE_PAD) * KEYSHARE_PAD, b' ');
+            let sealed = V::Dict(blob_seal(&k, &ad, &pt));
+            assert_eq!(blob_open(&k, &ad, &sealed), Some(pt), "认证得过：{doc}");
+            assert!(keyshare_open(&k, &aid, &sealed).unwrap().is_none(), "认证过、内容不对的也不认：{doc}");
+        }
+        let good = format!(r#"{{"v": 1, "key": "{key}", "at": 5.0}}"#);
+        let mut pt = good.into_bytes();
+        pt.resize(KEYSHARE_PAD, b' ');
+        let opened = keyshare_open(&k, &aid, &V::Dict(blob_seal(&k, &ad, &pt))).unwrap().unwrap();
+        assert_eq!((opened.at("key").py_str(), opened.at("at").as_num()), (key, Some(5.0)), "照文档封的也认");
+    }
+
     #[test]
     fn presence_aid_matches_python() {
         let aid = crate::cmd::presence::presence_aid(&"ab".repeat(16), "claude", "Alice@Example.com").unwrap();

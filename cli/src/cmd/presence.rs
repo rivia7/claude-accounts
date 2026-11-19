@@ -1102,6 +1102,47 @@ mod tests {
             let beat = PRESENCE_BEAT * uniform(0.9, 1.1);
             assert!((54.0..66.0).contains(&beat), "心跳在 60 秒上下：{beat}");
         }
+        assert_eq!(KEYSHARE_EVERY, 600.0, "上报进程里记下的 API key 两次同步至少隔 10 分钟");
+    }
+
+    /// tests/presence.py 的 test_scan_app_cpu：桌面 App 看进程树的 CPU——开了很久的第一次见到先当作刚好闲置满 10 分钟，隔 30 秒以上的两次
+    /// 采样之间用掉不少 CPU（含子进程）才算有动静；别的资料目录不算
+    #[test]
+    fn scan_app_cpu_like_python_test() {
+        let (key, dir, salt, now) = ("alice@example.com", "/nonexistent/cca-unit-tests/acct", "00".repeat(16), 1795000000.25);
+        let targets: Vec<Target> = vec![(claude(), key.to_string(), dir.to_string())];
+        let aid = presence_aid(&salt, "claude", key).unwrap();
+        let start = num::round(now - 3600.0);
+        let table = |cpu: f64, cmd: String| {
+            Procs::from_rows(vec![
+                (500, ProcInfo { ppid: 1, tty: "??".into(), cpu, start, cmd }),
+                (501, ProcInfo { ppid: 500, tty: "??".into(), cpu: 5.0, start, cmd: "Claude Helper".into() }),
+            ])
+        };
+        let app = format!("/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir={dir}/desktop --proxy-server=x");
+        let mut apps = AppSamples::new();
+        let mut scan = |cpu: f64, t: f64, mono: f64| presence_scan(&salt, &targets, &table(cpu, app.clone()), &mut apps, t, mono).unwrap().0;
+        let app_of = |units: &Dict| units.dict(&aid).unwrap().list("app").unwrap().items().iter().map(|x| x.as_int().unwrap()).collect::<Vec<_>>();
+        assert_eq!(app_of(&scan(10.0, now, 1000.0)), [3600, 600], "开了很久、第一次见到：先当作刚好闲置满 10 分钟");
+        assert_eq!(app_of(&scan(10.5, now + 40.0, 1040.0))[1], 640, "CPU 几乎没动：还是闲置");
+        assert_eq!(app_of(&scan(14.0, now + 80.0, 1080.0))[1], 0, "一拍里用掉不少 CPU（含子进程）：有动静");
+        assert_eq!(app_of(&scan(14.0, now + 90.0, 1090.0))[1], 10, "隔得太近的采样不算，最后动静照旧");
+        assert!(scan(14.0, now + 90.0, 1090.0).dict(&aid).unwrap().list("cli").unwrap().is_empty(), "没有命令行会话");
+        let other = table(1.0, format!("/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir={dir}/desktop-x"));
+        assert!(presence_scan(&salt, &targets, &other, &mut AppSamples::new(), now, 1.0).unwrap().0.is_empty(), "别的资料目录不算");
+    }
+
+    /// tests/presence.py 的 test_past_time：过去的某个时刻怎么写（今天的写几点，昨天、一周内、再早的各有写法；本地时间）
+    #[test]
+    fn past_time_like_python_test() {
+        use crate::py::time::mktime;
+        let when = |t_: f64, now: f64| past_time(t_, now).unwrap();
+        let now = mktime(2026, 11, 10, 15, 30, 0, -1);
+        assert_eq!(when(now - 3600.0, now), "14:30");
+        assert_eq!(when(mktime(2026, 11, 9, 18, 40, 0, -1), now), "昨天 18:40");
+        assert_eq!(when(mktime(2026, 11, 6, 9, 5, 0, -1), now), "周五 09:05");
+        assert_eq!(when(mktime(2026, 10, 20, 9, 5, 0, -1), now), "10 月 20 日");
+        assert_eq!(when(mktime(2025, 10, 20, 9, 5, 0, -1), now), "2025 年 10 月 20 日");
     }
 
     /// tests/presence.py 的 test_scan_cli_idle_from_tty：命令行会话的闲置时间 = 现在 - 它终端的最后一次输入 / 输出（真的开一个伪终端）

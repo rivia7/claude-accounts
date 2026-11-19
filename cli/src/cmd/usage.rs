@@ -863,10 +863,15 @@ pub fn weeks_add(weeks: &mut Vec<Week>, rl: &Dict, at: f64) -> R<bool> {
 
 /// usage_save 里：查到的本周用量记进 usage-weeks.json
 fn weeks_record(key: &str, rl: &Dict, at: f64) -> R<()> {
-    let mut weeks = weeks_load(key);
+    weeks_record_at(&weeks_file(key), rl, at)
+}
+
+/// weeks_record 的做法；p 是这个账号的 usage-weeks.json（weeks_file(key)；测试里是临时目录里的）。没记下新东西就不写
+fn weeks_record_at(p: &str, rl: &Dict, at: f64) -> R<()> {
+    let mut weeks = weeks_parse(load_quiet(p));
     if weeks_add(&mut weeks, rl, at)? {
         let doc = dict! { "version" => 1, "weeks" => weeks.iter().map(|w| V::Dict(w.to_dict())).collect::<Vec<V>>() };
-        quiet_os(save_json(&weeks_file(key), &V::Dict(doc), Some(0o600), true))?;
+        quiet_os(save_json(p, &V::Dict(doc), Some(0o600), true))?;
     }
     Ok(())
 }
@@ -2138,6 +2143,35 @@ mod tests {
         assert!(add(&mut weeks, rl(20.0, 1800259200.0), 7.0));
         assert_eq!(json::dumps(&V::Dict(weeks[0].to_dict()), json::Fmt::new()), r#"{"end": 1800259200.0, "peak": 20.0, "first": 5, "last": 7.0, "carried": 44, "resets": 3}"#);
         assert!(week_num(&V::Int(999_999_999_999_999_999)) && !week_num(&V::Int(1_000_000_000_000_000_000)) && !week_num(&V::Float(1e18)) && !week_num(&V::Bool(true)));
+    }
+
+    #[test]
+    fn weeks_record_file_like_python_test() {
+        // tests/usage_view.py 的 test_weeks_record_file：查到用量时记进账号目录的 usage-weeks.json（600）；同一次查询不重写，
+        // 坏的项读的时候不要
+        use std::os::unix::fs::MetadataExt;
+        let dir = crate::py::fs::TempDir::new().unwrap();
+        let p = path::join(&dir.path, "usage-weeks.json");
+        let load = || weeks_parse(load_quiet(&p));
+        let dump = |weeks: Vec<Week>| json::dumps(&V::from(weeks.iter().map(|w| V::Dict(w.to_dict())).collect::<Vec<V>>()), json::Fmt::new());
+        let now = time::time();
+        let rl = dict! { "seven_day" => dict! { "utilization" => 12.5, "resets_at" => now + 86400.0 } };
+        weeks_record_at(&p, &rl, now).unwrap();
+        let st = std::fs::metadata(&p).unwrap();
+        assert_eq!(st.mode() & 0o777, 0o600);
+        assert_eq!(load().iter().map(|w| (num(&w.peak), num(&w.first))).collect::<Vec<_>>(), [(12.5, now)]);
+        weeks_record_at(&p, &rl, now).unwrap();
+        let again = std::fs::metadata(&p).unwrap();
+        assert_eq!((again.ino(), again.mtime(), again.mtime_nsec()), (st.ino(), st.mtime(), st.mtime_nsec()), "同一次查询不重写");
+        std::fs::write(&p, r#"{"version": 1, "weeks": [{"end": "x"}, "bad", {"end": 1, "peak": 2, "first": 3, "last": 4}]}"#).unwrap();
+        assert_eq!(dump(load()), r#"[{"end": 1, "peak": 2, "first": 3, "last": 4, "carried": 0, "resets": 0}]"#);
+        std::fs::write(
+            &p,
+            r#"{"version": 1, "weeks": [{"end": 1, "peak": NaN, "first": 3, "last": 4}, {"end": 5, "peak": 6, "first": 7, "last": 8, "carried": Infinity, "resets": NaN}]}"#,
+        )
+        .unwrap();
+        assert_eq!(dump(load()), r#"[{"end": 5, "peak": 6, "first": 7, "last": 8, "carried": 0, "resets": 0}]"#);
+        assert!(weeks_parse(load_quiet(&path::join(&dir.path, "nobody.json"))).is_empty(), "没有记录的账号");
     }
 
     #[test]

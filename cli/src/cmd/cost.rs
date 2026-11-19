@@ -42,6 +42,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("cost-sync", cmd_cost_sync),
     Cmd::all("cost-stop", cmd_cost_stop),
     Cmd::all("_cost-periods", cmd_cost_periods),
+    Cmd::all("_cost-view", cmd_cost_view),
 ];
 
 pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "cost"));
@@ -1353,12 +1354,9 @@ fn cost_busy() -> Fail {
     Fail::Other("CostBusy", Vec::new())
 }
 
-/// 统计一次：读新增的会话记录、发布 local.json，再和别的设备同步（到时候了才同步；sync_now 马上）。
-/// 同时只有一个（cost.lock）：wait 是最多等正在跑的那个多久，等不到是 CostBusy。返回 (统计的结果, 同步的结果)（PROTOCOL 3.5）
-fn cost_run(sync_now: bool, wait: f64) -> R<(Dict, Dict)> {
-    cost_dir().map_err(|e| at_path(e, &COST_DIR))?;
-    let lock_path = path::join(&COST_DIR, "cost.lock");
-    let lk = std::fs::OpenOptions::new().append(true).create(true).open(&lock_path).map_err(|e| at_path(e, &lock_path))?;
+/// 拿 cost.lock（lock_path）：同时只有一个统计在跑。最多等正在跑的那个 wait 秒，等不到是 CostBusy。锁在返回的文件关上时放开
+fn cost_lock(lock_path: &str, wait: f64) -> R<std::fs::File> {
+    let lk = std::fs::OpenOptions::new().append(true).create(true).open(lock_path).map_err(|e| at_path(e, lock_path))?;
     let until = monotonic() + wait;
     // SAFETY: lk 开着，fd 有效
     while unsafe { libc::flock(lk.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -1367,6 +1365,14 @@ fn cost_run(sync_now: bool, wait: f64) -> R<(Dict, Dict)> {
         }
         sleep(0.5);
     }
+    Ok(lk)
+}
+
+/// 统计一次：读新增的会话记录、发布 local.json，再和别的设备同步（到时候了才同步；sync_now 马上）。
+/// 同时只有一个（cost.lock）：wait 是最多等正在跑的那个多久，等不到是 CostBusy。返回 (统计的结果, 同步的结果)（PROTOCOL 3.5）
+fn cost_run(sync_now: bool, wait: f64) -> R<(Dict, Dict)> {
+    cost_dir().map_err(|e| at_path(e, &COST_DIR))?;
+    let _lk = cost_lock(&path::join(&COST_DIR, "cost.lock"), wait)?;
     let me = std::process::id() as i64;
     cost_save("worker.json", &V::Dict(dict! { "v" => 1, "pid" => me, "started" => proc_starts(&[me]).get(&me).copied().unwrap_or(0) }))?;
     let run = || -> R<(Dict, Dict)> {
@@ -1833,15 +1839,7 @@ pub fn cmd_cost_sync(args: &[String]) -> R<()> {
     }
     let (scan, sync) = match cost_run(flag("--now"), COST_WAIT as f64) {
         Ok(done) => done,
-        Err(e) if e.is("CostBusy") => {
-            out!("另一个统计一直没结束（等了 {COST_WAIT} 秒）");
-            return exit(1);
-        }
-        Err(e) if e.is_os_or_value() || e.is("TypeError") || e.is("KeyError") => {
-            out!("统计折合金额没成：{e}");
-            return exit(1);
-        }
-        Err(e) => return Err(e),
+        Err(e) => return cost_sync_failed(e),
     };
     if flag("--json") {
         let doc = dict! { "version" => 1, "kind" => "cost_sync", "generated_epoch" => time(), "scan" => scan, "sync" => sync };
@@ -1856,6 +1854,19 @@ pub fn cmd_cost_sync(args: &[String]) -> R<()> {
     };
     out!("统计好了：看了 {} 个会话记录，新算进来 {} 条{}", scan.at("files").py_str(), scan.at("records").py_str(), tail);
     Ok(())
+}
+
+/// cca cost sync 没统计成（cost_run 出的错）：另一个统计一直没结束、读写出了错的说原因（stdout）、退出码 1；别的错照旧往上传
+fn cost_sync_failed(e: Fail) -> R<()> {
+    if e.is("CostBusy") {
+        out!("另一个统计一直没结束（等了 {COST_WAIT} 秒）");
+        return exit(1);
+    }
+    if e.is_os_or_value() || e.is("TypeError") || e.is("KeyError") {
+        out!("统计折合金额没成：{e}");
+        return exit(1);
+    }
+    Err(e)
 }
 
 /// cca restore 之前：停掉正在统计的后台进程（它在 ~/.cca 删掉以后也不会写回来，这里只是不让它白跑）
@@ -2476,9 +2487,177 @@ pub fn cmd_cost_periods(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// 只给测试用（`_cost-view <现在> <要看什么的 JSON>`；tests/cost_view.py、tests/presence.py）：照 cost/ 里现在的文件给出 CostView 的结果。
+/// CostView 靠“现在”和本地时区切时段，_gui state 里的“现在”定不住：测试拿固定的时刻、固定的时区（TZ）核对。要看什么：
+/// {"config": config.json 里它看的那两项（cost、presence）, "presence": 设备统计的配置（presence_load 的结果；写 "load" 是现读，没有是没开）,
+///  "accounts": [[工具, 账号表的键, usage_weeks 或 null, 在不在映射里, 登录着没有]…], "sync": [[slot, 在不在映射里, 登录着没有]…],
+///  "tools": [启用了的工具名…]}
+/// 打印一行 {"accounts": [各账号的 cost…], "sync": [各 slot 的 sync…], "total": cost_total, "scan": 统计到哪一步了}
+pub fn cmd_cost_view(args: &[String]) -> R<()> {
+    arity("cmd_cost_view", args, 2, 2)?;
+    let bad = |what: &str| Fail::Value(format!("_cost-view：{what}"));
+    let now = text::to_float(&args[0]).ok_or_else(|| bad("现在要是一个数"))?;
+    let spec = json::loads(&args[1])?.as_dict().ok_or_else(|| bad("要看什么要是一个对象"))?;
+    let cfg = match spec.get("presence") {
+        Some(V::Str(s)) if &*s == "load" => presence_load()?.1,
+        Some(V::Dict(cfg)) => Some(cfg),
+        _ => None,
+    };
+    let mut cv = CostView::new(&spec.dict("config").unwrap_or_default(), now, cfg.as_ref());
+    let rows = |k: &str| spec.list(k).map(|l| l.items()).unwrap_or_default();
+    let mut accounts = Vec::new();
+    for a in rows("accounts") {
+        let a = a.as_list().filter(|a| a.len() == 5).ok_or_else(|| bad("账号要写成 [工具, 键, usage_weeks, 在不在映射里, 登录着没有]"))?;
+        let name = a.at(0).py_str();
+        let tool = crate::core::tool::tools().iter().find(|t| t.name == name).ok_or_else(|| bad("没有这个工具"))?;
+        let _using = Using::tool(tool);
+        accounts.push(cv.account(tool, &a.at(1).py_str(), a.at(2).as_dict().as_ref(), a.at(3).truthy(), a.at(4).truthy()));
+    }
+    let mut sync = Vec::new();
+    for x in rows("sync") {
+        let x = x.as_list().filter(|x| x.len() == 3).ok_or_else(|| bad("sync 要写成 [slot, 在不在映射里, 登录着没有]"))?;
+        sync.push(V::Dict(cv.sync_view(&x.at(0).py_str(), x.at(1).truthy(), x.at(2).truthy())));
+    }
+    let names: Vec<String> = rows("tools").iter().map(|n| n.py_str()).collect();
+    let tools: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
+    out!("{}", json::dumps(&V::Dict(dict! { "accounts" => accounts, "sync" => sync, "total" => cv.total(&tools), "scan" => cv.scan_state() }), json::LINE));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn d(text_: &str) -> Dict {
+        json::loads(text_).unwrap_or_else(|e| panic!("{text_}：{e}")).as_dict().expect("是个对象")
+    }
+
+    /// `assertAlmostEqual`（差不到小数点后 7 位）
+    fn near(got: Option<f64>, want: f64, what: &str) {
+        let got = got.unwrap_or_else(|| panic!("{what}：没有金额"));
+        assert!((got - want).abs() < 5e-8, "{what}：{got} != {want}");
+    }
+
+    #[test]
+    fn model_names_like_python_test() {
+        // tests/cost_view.py 的 Prices.test_model_names：会话记录里的模型名 → 价格表里的写法
+        let long = "m".repeat(100);
+        for (raw, want) in [
+            (V::from("claude-opus-5-5[1m]"), "claude-opus-5-5"),
+            (V::from("claude-sonnet-4-5-20250929"), "claude-sonnet-4-5"),
+            (V::from("Claude-Haiku-4-5"), "claude-haiku-4-5"),
+            (V::from("claude-x-2026-01-15"), "claude-x"),
+            (V::from("gpt-6-astra"), "gpt-6-astra"),
+            (V::from(" gpt-6.1-sol "), "gpt-6.1-sol"),
+            (V::None, ""),
+            (V::Int(5), ""),
+            (V::from(long.as_str()), &long[..64]),
+        ] {
+            assert_eq!(cost_model(Some(&raw)), want, "{raw:?}");
+        }
+        assert_eq!(cost_model(None), "");
+    }
+
+    #[test]
+    fn claude_prices_like_python_test() {
+        // tests/cost_view.py 的 Prices.test_claude
+        let f = |model: &str, u: &str| cost_claude(model, &d(u));
+        let with = |more: &str| format!(r#"{{"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 10000, "cache_creation": {{"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 500}}{more}}}"#);
+        let u = with("");
+        let (usd, tok) = f("claude-opus-5-5", &u);
+        near(usd, 1000.0 * 4.0 + 2000.0 * 5.0 + 500.0 * 8.0 + 10000.0 * 0.2 + 100.0 * 20.0, "opus 5.5");
+        assert_eq!(tok, [1000, 100, 10000, 2500], "(输入, 输出, 缓存读, 缓存写)");
+        near(f("claude-opus-5-5", &with(r#", "speed": "fast""#)).0, 1000.0 * 8.0 + 2000.0 * 10.0 + 500.0 * 16.0 + 10000.0 * 0.4 + 100.0 * 40.0, "快速模式：输入、输出按快速模式的标价，缓存跟着输入翻倍");
+        near(f("claude-sonnet-5-5", &with(r#", "speed": "fast""#)).0, f("claude-sonnet-5-5", &u).0.unwrap(), "没有快速模式标价的模型照常");
+        near(f("claude-opus-5-5", &with(r#", "inference_geo": "us""#)).0, f("claude-opus-5-5", &u).0.unwrap() * 1.1, "只在美国推理：加 10%");
+        near(f("claude-sonnet-4-5", &with(r#", "inference_geo": "us""#)).0, 1000.0 * 3.0 + 2000.0 * 3.75 + 500.0 * 6.0 + 10000.0 * 0.3 + 100.0 * 15.0, "4.6 以前的模型不加价");
+        near(f("claude-opus-5-5", r#"{"cache_creation_input_tokens": 1000}"#).0, 1000.0 * 5.0, "没有分 5 分钟、1 小时的：按 5 分钟算");
+        near(f("claude-opus-5-5", r#"{"output_tokens": 10, "server_tool_use": {"web_search_requests": 3}}"#).0, 10.0 * 20.0 + 3.0 * 10000.0, "网页搜索一次 0.01 美元");
+        near(f("claude-haiku-5-5", r#"{"input_tokens": 50000, "output_tokens": 1000}"#).0, 50000.0 * 0.1 + 1000.0 * 0.5, "haiku 5.5");
+        near(
+            f("claude-haiku-5-5", r#"{"input_tokens": 90000, "cache_read_input_tokens": 20000, "output_tokens": 1000}"#).0,
+            90000.0 * 0.5 + 20000.0 * 0.05 + 1000.0 * 2.5,
+            "输入（含缓存）超过 10 万 token：长上下文的标价",
+        );
+        assert_eq!(f("claude-unknown-9", &u), (None, [1000, 100, 10000, 2500]), "没有公开价格的：只数 token");
+        for junk in ["true", "-5", "1.5", r#""100""#, "10000000000000", "null"] {
+            assert_eq!(f("claude-opus-5-5", &format!(r#"{{"input_tokens": {junk}, "output_tokens": 1}}"#)).1, [0, 1, 0, 0], "{junk}");
+        }
+    }
+
+    #[test]
+    fn codex_prices_like_python_test() {
+        // tests/cost_view.py 的 Prices.test_codex
+        let f = |model: &str, tier: Option<&str>, u: &str| cost_codex(model, tier, &d(u));
+        let u = r#"{"input_tokens": 10000, "cached_input_tokens": 8000, "cache_write_input_tokens": 0, "output_tokens": 500, "reasoning_output_tokens": 300}"#;
+        let base = 2000.0 * 10.0 + 8000.0 * 1.0 + 500.0 * 50.0;
+        assert_eq!(f("gpt-6-astra", Some("default"), u), (Some(base), [2000, 500, 8000, 0]), "输入含缓存读；推理算在输出里");
+        for (tier, k) in [(None, 1.0), (Some("priority"), 2.0), (Some("fast"), 2.0), (Some("flex"), 0.5), (Some("ultrafast"), 6.0)] {
+            near(f("gpt-6-astra", tier, u).0, base * k, &format!("{tier:?}"));
+        }
+        near(f("gpt-6-sol", Some("ultrafast"), u).0, (2000.0 * 2.0 + 8000.0 * 0.2 + 500.0 * 10.0) * 2.0, "没有 Ultrafast 标价的模型按 Fast 算");
+        near(f("gpt-6-astra", None, r#"{"input_tokens": 300000}"#).0, 300000.0 * 20.0, "输入超过 272K：长上下文的标价");
+        let write = r#"{"input_tokens": 5000, "cached_input_tokens": 1000, "cache_write_input_tokens": 2000}"#;
+        near(f("gpt-6-astra", None, write).0, 2000.0 * 10.0 + 1000.0 * 1.0 + 2000.0 * 12.5, "缓存写");
+        near(f("gpt-5.3-codex", None, write).0, 2000.0 * 1.75 + 1000.0 * 0.175 + 2000.0 * 1.75, "没有缓存写标价的按输入算");
+        near(f("gpt-5.3-codex", None, r#"{"input_tokens": 300000}"#).0, 300000.0 * 1.75, "没有长上下文标价的照常");
+        assert_eq!(f("gpt-6-astra", None, r#"{"input_tokens": 100, "cached_input_tokens": 500}"#).1, [0, 0, 100, 0], "缓存不超过输入");
+        assert_eq!(f("codex-auto-review", None, u), (None, [2000, 500, 8000, 0]));
+    }
+
+    #[test]
+    fn bin_by_midpoint_like_python_test() {
+        // tests/cost_view.py 的 Periods.test_bin_by_midpoint：跨过边界的小时按中点算；时段以外的不算
+        let period = |s: i64, e: i64, tag: &str| Period { start: V::Int(s), end: V::Int(e), tag: tag.to_string() };
+        let periods = [period(1000 * 3600, 1000 * 3600 + 5400, "x"), period(1000 * 3600 + 5400, 1003 * 3600, "y")];
+        let h: Hours = [(1000, 1), (1001, 2), (1002, 4), (999, 8), (1003, 16)].into_iter().map(|(hour, usd)| (hour * 3600, [usd, 1, 0, 0, 0, 0, 0])).collect();
+        assert_eq!(cost_bin(&periods, &h).iter().map(|r| r[0]).collect::<Vec<_>>(), [1, 6]);
+    }
+
+    #[test]
+    fn content_like_python_test() {
+        // tests/cost_view.py 的 Scan.test_run_and_publish 里看 cost_content 的那几处：这台设备上这个账号的小时数据——
+        // 这个工具的、登录的邮箱是它的身份加起来，工具分开（local.json 是那个用例统计出来的样子）
+        let local = d(r#"{"v": 1, "build": "2026-11-13/1",
+            "who": {"claude:aaaaaaaa-0000-4000-8000-000000000001": "alice@example.com", "claude:aaaaaaaa-0000-4000-8000-000000000002": "bob@example.com",
+                    "codex:user-cccccccccccccccccccccccc": "carol@example.com"},
+            "acc": {"claude:aaaaaaaa-0000-4000-8000-000000000001": {"1794900000": [12000, 2, 2000, 200, 0, 0, 0], "1794903600": [0, 1, 1000, 100, 0, 0, 1]},
+                    "claude:aaaaaaaa-0000-4000-8000-000000000002": {"1794907200": [12000, 2, 2000, 200, 0, 0, 0]},
+                    "codex:user-cccccccccccccccccccccccc": {"1794900000": [140000, 3, 5000, 600, 8000, 0, 0]}},
+            "um": {"claude:aaaaaaaa-0000-4000-8000-000000000001": ["claude-unknown-1"]}, "orphan": {"1794900000": [6000, 1, 1000, 100, 0, 0, 0]}}"#);
+        let (h, um) = cost_content(&local, claude(), "alice@example.com");
+        let usd: i64 = h.values().iter().map(|r| r.as_list().unwrap().at(0).as_int().unwrap()).sum();
+        assert_eq!((usd, um), (12000, vec!["claude-unknown-1".to_string()]));
+        let (h, um) = cost_content(&local, codex(), "alice@example.com");
+        assert!(h.is_empty() && um.is_empty(), "工具分开");
+        assert_eq!(cost_content(&local, codex(), "carol@example.com").0.len(), 1);
+    }
+
+    #[test]
+    fn lock_waits_then_gives_up() {
+        // tests/cost_view.py 的 Scan.test_sync_command 的最后一段（那里把 COST_WAIT 换成 0.2 秒）：另一个统计拿着 cost.lock 一直没结束，
+        // 等够了时间是 CostBusy（cca cost sync 说一句、退出码 1，见下面的 sync_failures_exit_1）；它放了锁就拿得到
+        let dir = crate::py::fs::TempDir::new().unwrap();
+        let p = path::join(&dir.path, "cost.lock");
+        let held = cost_lock(&p, 0.0).unwrap();
+        let t0 = monotonic();
+        assert!(cost_lock(&p, 0.2).is_err_and(|e| e.is("CostBusy")));
+        assert!(monotonic() - t0 >= 0.2, "等了给的那么久");
+        assert!(cost_lock(&p, 0.0).is_err_and(|e| e.is("CostBusy")), "后台的那种不等");
+        drop(held);
+        assert!(cost_lock(&p, 0.0).is_ok());
+        assert!(cost_lock(&path::join(&dir.path, "nowhere/cost.lock"), 0.0).is_err_and(|e| e.is_os()));
+    }
+
+    #[test]
+    fn sync_failures_exit_1() {
+        // cca cost sync：另一个统计一直没结束、读写出了错都是退出码 1（原因说在 stdout）；别的错照旧往上传
+        assert!(matches!(cost_sync_failed(cost_busy()), Err(Fail::Exit(1))));
+        assert!(matches!(cost_sync_failed(Fail::Os(std::io::Error::other("磁盘满了"))), Err(Fail::Exit(1))));
+        assert!(matches!(cost_sync_failed(Fail::Value("写坏了".into())), Err(Fail::Exit(1))));
+        assert!(matches!(cost_sync_failed(Fail::Die("config.json 读不了".into())), Err(Fail::Die(_))));
+        assert_eq!(COST_WAIT, 240);
+    }
 
     #[test]
     fn compact_seen_reads_only_well_formed_entries() {

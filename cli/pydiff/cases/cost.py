@@ -970,3 +970,110 @@ for name, now, quota in quota_cases():
                oracle=[sys.executable, '-I', '-X', 'utf8', '-c', PERIODS_ORACLE], tree=False)
         def _(b):
             pass
+
+
+# --- App 要的视图（CostView：_gui state 的 cost、cost_total）-------------------------------------------------------------
+# 和时段一样靠“现在”和本地时区（_gui state 里的“现在”定不住）：cca-core 这边是只给测试用的 _cost-view，原来的那边直接调 PY_SRC 里的
+# CostView（oracle=）。夹具是 tests/cost_view.py 的 View 那一组（现在 = 2026-11-13 12:00 UTC，周五）：那边拿固定的期望值核对，
+# 这里逐字节和原来的比
+VIEW_ORACLE = r"""
+import io, json, os, sys
+ns = {}
+src = io.open(os.environ['PYDIFF_CCA'], encoding='utf-8').read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+argv, sys.argv = sys.argv, ['cca-py']
+exec(compile(src.split('\nif len(sys.argv) < 2', 1)[0], 'PY_SRC', 'exec'), ns)
+now, spec = float(argv[1]), json.loads(argv[2])
+cfg = spec.get('presence')
+cfg = ns['presence_load']()[1] if cfg == 'load' else cfg if isinstance(cfg, dict) else None
+cv = ns['CostView'](spec.get('config') or {}, now, cfg)
+tools = {'claude': ns['CLAUDE'], 'codex': ns['CODEX'], 'agy': ns['AGY']}
+accounts = [cv.account(tools[a[0]], a[1], a[2] if isinstance(a[2], dict) else None, bool(a[3]), bool(a[4])) for a in spec.get('accounts') or []]
+sync = [cv.sync_view(x[0], bool(x[1]), bool(x[2])) for x in spec.get('sync') or []]
+print(json.dumps({'accounts': accounts, 'sync': sync, 'total': cv.total(spec.get('tools') or []), 'scan': cv.scan_state()}, ensure_ascii=False))
+"""
+VNOW = 1794571200.0
+VCFG = {'url': 'https://192.0.2.10:18443', 'pins': [], 'salt': '00' * 16, 'key': '/x', 'fp': 'SHA256:me'}
+V_ALICE = ['claude', 'alice(alice@example.com)', None, True, True]
+V_CODEX = ['codex', 'alice@example.com', None, True, True]
+V_NOBODY = ['claude', 'bob@example.com', None, True, True]
+
+
+def view_files(b, edit=None, scanned=True):
+    """tests/cost_view.py 的 View.setUp 放的那几个文件；edit(local, remote, sync) 改一改再写"""
+    at = lambda y, mo, d, hh: str(calendar.timegm((y, mo, d, hh, 0, 0)))
+    row = lambda usd, req=1, unpriced=0: [int(usd * 1000000), req, 1000 * req, 100 * req, 0, 0, unpriced]
+    local = {'v': 1, 'build': 'x', 'who': {'claude:' + U1: 'alice@example.com', 'codex:' + CX: 'alice@example.com'},
+             'acc': {'claude:' + U1: {at(2026, 10, 1, 10): row(1), at(2026, 11, 3, 10): row(7, 3, 1), at(2026, 11, 10, 10): row(3), at(2026, 11, 13, 9): row(5, 2)},
+                     'codex:' + CX: {at(2026, 11, 12, 8): row(4)}},
+             'um': {'claude:' + U1: ['claude-unknown-1']}, 'orphan': {at(2026, 11, 12, 1): row(0.5), at(2026, 9, 1, 1): row(100)}}
+    slot = {'SHA256:bob': {'h': {at(2026, 11, 12, 10): row(2)}, 'um': ['claude-other'], 'at': VNOW - 600, 'name': 'bob-mini', 'revoked': False, 'tag': 't1'},
+            'SHA256:bob-old': {'h': {at(2026, 10, 20, 10): row(1), at(2026, 11, 12, 11): row(9)}, 'um': [], 'at': VNOW - 30 * D, 'name': 'bob-mini', 'revoked': True, 'tag': 't2'},
+            'SHA256:carol': {'h': {at(2026, 11, 11, 10): row(1)}, 'um': [], 'at': VNOW - 2 * D, 'name': 'carol-air', 'revoked': False, 'tag': 't3'},
+            'SHA256:junk': {'h': {'x': [1]}, 'at': VNOW, 'name': 'junk', 'tag': 't4'}}
+    remote = {'v': 1, 'acc': {'claude:alice@example.com': slot}}
+    sync = {'v': 1, 'state': 'ok', 'at': VNOW - 100, 'ok_at': VNOW - 100, 'me': 'alice-mbp',
+            'acc': {'claude:alice@example.com': {'checked': VNOW - 100, 'missing': [{'name': 'dan-air', 'used_epoch': VNOW - 3600}, {'name': 'old-air', 'used_epoch': VNOW - 60 * D}]}}}
+    if edit:
+        edit(local, remote, sync)
+    for name, doc in (('local.json', local), ('remote.json', remote), ('sync.json', sync)):
+        b.write('.cca/cost/' + name, json.dumps(doc))
+    if scanned:
+        os.utime(b.write('.cca/cost/scanned', ''), (1794571000.25, 1794571000.25))
+    os.chmod(b.path('.cca/cost'), 0o700)
+
+
+def vcase(name, spec, edit=None, scanned=True, zone='UTC', extra=None):
+    full = dict({'config': {}, 'presence': VCFG, 'accounts': [], 'sync': [], 'tools': ['claude', 'codex']}, **spec)
+
+    @ccase('view/' + name, ['_cost-view', repr(VNOW), json.dumps(full)], env={'TZ': zone, 'PYDIFF_CCA': run.oracle_cca()},
+           oracle=[sys.executable, '-I', '-X', 'utf8', '-c', VIEW_ORACLE])
+    def _(b):
+        b.cfg({})
+        view_files(b, edit, scanned)
+        if extra:
+            extra(b)
+
+
+def no_me(local, remote, sync):
+    local['acc']['claude:' + U1] = {}
+
+
+vcase('account', {'accounts': [V_ALICE, V_CODEX, V_NOBODY]})
+for zone in ('Asia/Shanghai', 'America/Los_Angeles', 'Asia/Kathmandu'):
+    vcase('account-' + zone.replace('/', '-'), {'accounts': [V_ALICE, V_CODEX, V_NOBODY]}, zone=zone)
+vcase('quota', {'accounts': [['claude', 'alice@example.com', {'weeks': [{'start_epoch': VNOW - 2 * D, 'end_epoch': VNOW + 5 * D}]}, True, True]]})
+vcase('quota-empty', {'accounts': [['claude', 'alice@example.com', {}, True, True], ['claude', 'alice@example.com', {'weeks': []}, True, True]]})
+vcase('me-without-records', {'accounts': [V_ALICE, V_CODEX]}, edit=no_me)
+vcase('key-without-email', {'accounts': [['claude', '只有别名', None, True, True]]})
+vcase('agy-and-no-tools', {'accounts': [V_ALICE, ['agy', 'alice@example.com', None, True, True]], 'tools': []})
+vcase('presence-off', {'accounts': [V_ALICE], 'config': {'presence': False}})
+vcase('cost-off', {'accounts': [V_ALICE], 'config': {'cost': False}})
+vcase('local-only', {'accounts': [V_ALICE], 'presence': None})
+vcase('not-mapped', {'accounts': [['claude', 'alice(alice@example.com)', None, False, True]]})
+vcase('not-logged-in', {'accounts': [['claude', 'alice(alice@example.com)', None, True, False]]})
+vcase('no-accounts', {})
+vcase('sync-list', {'sync': [['claude:alice@example.com', True, True], ['claude:alice@example.com', False, True], ['codex:nobody@example.com', True, True]]})
+for name, change in [('old-server', dict(state='old_server')), ('error', dict(state='error', error='连不上', at=VNOW - 50)),
+                     ('error-before-checked', dict(state='error', error='连不上', at=VNOW - 200)), ('error-not-text', dict(state='error', error=5, at=VNOW - 50))]:
+    vcase('sync-' + name, {'accounts': [V_ALICE]}, edit=lambda local, remote, sync, change=change: sync.update(change))
+vcase('sync-pending', {'accounts': [V_ALICE]}, edit=lambda local, remote, sync: sync['acc']['claude:alice@example.com'].pop('checked'))
+vcase('never-scanned', {'accounts': [V_ALICE]}, scanned=False)
+
+
+def worker(started):
+    def put(b):
+        b.fake('ps', PS)
+        b.write('ps-lstart.txt', ' 4242 Sat Nov  7 12:08:55 2026\n')
+        b.write('.cca/cost/worker.json', json.dumps({'v': 1, 'pid': 4242, 'started': started}))
+    return put
+
+
+vcase('scanning', {'accounts': [V_ALICE]}, scanned=False, zone='Asia/Shanghai', extra=worker(T0_EPOCH))
+vcase('scanning-pid-reused', {'accounts': [V_ALICE]}, scanned=False, zone='Asia/Shanghai', extra=worker(1))
+
+
+@ccase('view/presence-loaded', ['_cost-view', repr(VNOW), json.dumps({'presence': 'load', 'accounts': [V_ALICE], 'tools': ['claude']})],
+       env={'TZ': 'UTC', 'PYDIFF_CCA': run.oracle_cca()}, oracle=[sys.executable, '-I', '-X', 'utf8', '-c', VIEW_ORACLE])
+def _(b):   # 设备统计的配置现读（映射、deploy key）：这台设备的 id 是 deploy key 的指纹
+    shared(b)
+    view_files(b)

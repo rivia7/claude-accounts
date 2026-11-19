@@ -807,6 +807,44 @@ pub fn cmd_gui_live(args: &[String]) -> R<()> {
 mod tests {
     use super::*;
 
+    /// tests/presence.py 的 test_keyshare、test_keyshare_old_server 里看 gui_api_key 的那几处：_gui state 的 api_key 照 config.json 里
+    /// 记下的说（存了没有、掩码、什么时候记下的、从哪台设备同步来的），会同步的账号带上最近一次没同步成的原因
+    #[test]
+    fn api_key_like_python_test() {
+        let key = "alice(alice@example.com)";
+        let aid = acct_id(key, t());
+        let node = V::from("US-A");
+        let dump = |c: &Dict, share: bool, err: &V| json::dumps(&V::Dict(gui_api_key(c, key, &node, share, err).unwrap()), json::Fmt::new().utf8());
+        let hint = key_hint(&format!("sk-ant-api03-{}", "a".repeat(40)));
+        assert_eq!(hint, "sk-ant-…aaaa");
+        let booked = |extra: Dict| {
+            let h = dict! { "host" => "reference", "hint" => hint.as_str() };
+            h.update(&extra);
+            dict! { "ref_keys" => crate::list![aid.as_str()], "key_hints" => dict! { aid.as_str() => h } }
+        };
+        // 别的设备上记下、同步来的（keyshare_round 存的时候带着记下的时间和那台设备的名字）
+        assert_eq!(
+            dump(&booked(dict! { "at" => 1795000000.25, "from" => "alice-mbp" }), true, &V::None),
+            r#"{"saved": true, "hint": "sk-ant-…aaaa", "source": "keychain", "shared": true, "saved_epoch": 1795000000.25, "from_device": "alice-mbp", "sync_error": null}"#,
+            "App 照记下的说：从哪台设备来的、什么时候记下的"
+        );
+        // 这台设备自己记下的：没有来源
+        assert_eq!(
+            dump(&booked(dict! { "at" => 1795000000.25 }), true, &V::None),
+            r#"{"saved": true, "hint": "sk-ant-…aaaa", "source": "keychain", "shared": true, "saved_epoch": 1795000000.25, "from_device": null, "sync_error": null}"#
+        );
+        // 删掉了（别的设备上删掉、同步过来也一样）：没存
+        assert_eq!(
+            dump(&Dict::new(), true, &V::None),
+            r#"{"saved": false, "hint": "", "source": "", "shared": true, "saved_epoch": null, "from_device": null, "sync_error": null}"#
+        );
+        // 最近一次没同步成的原因：会同步的账号才说
+        let err = V::from("设备统计的服务器还不收 API key（维护者要更新服务器：./policy.sh presence deploy）");
+        let said = |share: bool| gui_api_key(&booked(Dict::new()), key, &node, share, &err).unwrap().at("sync_error");
+        assert!(said(true).py_eq(&err));
+        assert!(said(false).is_none(), "不同步的账号不说");
+    }
+
     #[test]
     fn ver_key_orders_like_bash_ver_gt() {
         let k = |s: &str| ver_key(s).unwrap();
