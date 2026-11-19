@@ -3,6 +3,7 @@
 //!
 //! 这一块的子命令都移植了。
 
+use super::link::private_file;
 use super::presence::presence_wake;
 use super::table::need;
 use super::{arg, arity, Cmd};
@@ -30,14 +31,6 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("runtime-record", cmd_runtime_record),
     Cmd::all("session-open", cmd_session_open),
 ];
-
-/// 旧配置可能把设备文件链到共享目录；不能沿用共享值，更不能写穿链接
-pub fn private_file(p: &str) -> R<bool> {
-    if path::islink(p) {
-        return Ok(false);
-    }
-    Ok(!path::exists(p) || std::fs::metadata(p)?.nlink() == 1)
-}
 
 /// ps 的 lstart（C 语言环境的写法：Sat Nov  7 12:08:55 2026，本地时间）换成时间戳；读不懂返回 0
 pub fn lstart_epoch(s: &str) -> i64 {
@@ -191,7 +184,7 @@ pub fn browser_profile(key: &str, prepare: bool) -> R<()> {
     for name in &names {
         let folder = path::join(&root, name);
         let p = path::join(&folder, "Preferences");
-        if path::islink(&folder) || !private_file(&p)? {
+        if path::islink(&folder) || !private_file(&p) {
             return die(format!("浏览器偏好不能通过链接共享：{p}"));
         }
         let data = load_json(&p)?.unwrap_or_else(|| V::Dict(Dict::new()));
@@ -306,7 +299,7 @@ pub fn cmd_runtime_record(args: &[String]) -> R<()> {
     let p = path::join(&adir(key), &format!("{kind}-runtime.json"));
     if action == "write" {
         save_json(&p, &current, Some(0o600), false)?;
-    } else if !private_file(&p)? || !load_quiet(&p).is_some_and(|saved| saved.py_eq(&current)) {
+    } else if !private_file(&p) || !load_quiet(&p).is_some_and(|saved| saved.py_eq(&current)) {
         return die("客户端的运行记录、账号节点或启动条件已变化；请先退出该实例，再用 cca 重新打开");
     }
     Ok(())

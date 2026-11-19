@@ -114,3 +114,36 @@ def _(b):
 @case('update-check/no-args', ['update-check'], stdin='[]')
 def _(b):
     pass
+
+
+# --- health-save：出口检测的结果记进 health.json（解析用 leak 模块的 coffee_parse，夹具借它的）---
+from cases.leak import RISK, TRACE, risk   # noqa: E402
+
+SAVES = [
+    ('ok', ['50', TRACE, json.dumps(RISK)]),
+    ('ok-with-leak-line', ['50', TRACE, json.dumps(RISK), '出口干净', 'DNS 没有泄露', 'WebRTC 没有直连风险', 'ok', 'ok']),
+    ('leak-partial', ['50', TRACE, json.dumps(RISK), '横幅那一句', '', '', '', 'risk']),
+    ('no-leak-line-ignores-rest', ['50', TRACE, json.dumps(RISK), '', 'dns 说明', 'webrtc 说明', 'ok', 'ok']),
+    ('low-purity', ['99', TRACE, json.dumps(risk(trust_score=60))]),
+    ('restricted', ['50', TRACE.replace('loc=US', 'loc=CN'), json.dumps(risk(countryCode='cn'))]),
+    ('no-exit', ['50', '', '']),
+    ('no-score', ['50', TRACE, '{}']),
+    ('risk-not-json', ['50', TRACE, '<html>502</html>']),
+    ('tags', ['50', TRACE, json.dumps(risk(is_datacenter=True, isResidential=False, is_vpn=True))]),
+    ('unicode-org', ['50', TRACE, json.dumps(risk(asOrganization='例子网络 ☁'), ensure_ascii=False)]),
+    ('bad-min-trust', ['abc', TRACE, json.dumps(RISK)]),
+]
+for name, tail in SAVES:
+    @case('health-save/%s' % name, ['health-save', 'bob@example.com', 'launch', 'router', 'US-B', '7902'] + tail, mask=NOW)
+    def _(b):
+        world(b)
+
+
+@case('health-save/codex-no-route', ['health-save', 'erin@example.com', 'check', '', '', '', '50', TRACE, json.dumps(RISK)], tool='codex', mask=NOW)
+def _(b):
+    world(b, codex={'erin@example.com': 'HK-A'})
+
+
+@case('health-save/too-few-args', ['health-save', 'bob@example.com', 'launch', 'router', 'US-B', '7902', '50', TRACE])
+def _(b):
+    world(b)

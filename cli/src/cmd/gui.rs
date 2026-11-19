@@ -2,8 +2,9 @@
 //! onboard-done、gui-state、gui-live、tool-env、update-check。格式见 macos/PROTOCOL.md：只能加字段；删改要升 bash 的 GUI_API，
 //! 同时改 Swift 模型（macos/Sources/CcaKit/Protocol）和回归测试（10g）。
 //!
-//! 还没移植的：health-save（要出口检测的解析）、gui-state、gui-live。
+//! 还没移植的：gui-state、gui-live。
 
+use super::leak::coffee_parse;
 use super::usage::parse_ts;
 use super::{arg, arity, Cmd};
 use crate::core::base::sh;
@@ -23,6 +24,7 @@ use crate::{dict, out, re};
 
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[
+    Cmd::all("health-save", cmd_health_save),
     Cmd::all("health-note", cmd_health_note),
     Cmd::all("check-render", cmd_check_render),
     Cmd::all("onboard-done", cmd_onboard_done),
@@ -80,6 +82,26 @@ pub fn health_write(key: &str, source: &str, kind: &str, route: &str, node: &str
     }
     out!("{}", json::dumps(&h, json::LINE));
     Ok(())
+}
+
+/// coffee_check 之后（启动、cca check）：这次的出口检测记进 health.json。泄露的状态用 leak-verdict 的 S 行，不解析中文
+pub fn cmd_health_save(args: &[String]) -> R<()> {
+    arity("cmd_health_save", args, 8, 13)?;
+    let r = coffee_parse(&args[5], &args[6], &args[7])?;
+    let (line, dns_msg, webrtc_msg, dns, webrtc) = (arg(args, 8, ""), arg(args, 9, ""), arg(args, 10, ""), arg(args, 11, ""), arg(args, 12, ""));
+    let or_none = |s: &str| if s.is_empty() { V::None } else { V::from(s) };
+    // 有横幅那一句才有 S 行（leak-verdict）
+    let leak = if line.is_empty() {
+        V::None
+    } else {
+        V::Dict(dict! { "dns" => or_none(dns), "webrtc" => or_none(webrtc), "line" => line, "dns_message" => dns_msg, "webrtc_message" => webrtc_msg })
+    };
+    let rc = r.at("rc").as_int().unwrap_or_else(|| panic!("KeyError: {}", r.at("rc").py_repr()));
+    let mut fields = vec![("result", V::from(health_result(rc))), ("message", r.at("line")), ("leak", leak)];
+    for k in ["ip", "country", "org", "trust", "trust_label", "tags", "restricted_region", "note"] {
+        fields.push((k, r.at(k)));
+    }
+    health_write(&args[0], &args[1], "exit", &args[2], &args[3], &args[4], &fields)
 }
 
 /// 没有出口检测数据的结果也记进 health.json：第三方 API 账号的接口连不连得上（api_ok / api_unreachable）、端口不通
