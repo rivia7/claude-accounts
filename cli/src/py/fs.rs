@@ -90,6 +90,83 @@ pub fn save_json(p: &str, data: &V, mode: Option<u32>, follow_symlinks: bool) ->
     Ok(())
 }
 
+/// `put(path, data, mode)`（原来启动器、内置代理那几处用的）：内容没变就不写（不打扰 Spotlight / 启动台）；返回是否写了。
+/// 原来没有这个文件才算“没有”，别的读不了（是个目录、没权限）照样报错
+pub fn put(p: &str, data: &[u8], mode: u32) -> io::Result<bool> {
+    match fs::read(p) {
+        Ok(old) if old == data => return Ok(false),
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o666).open(p)?.write_all(data)?;
+    chmod(p, mode)?;
+    Ok(true)
+}
+
+/// `shutil.rmtree(p)`：p 本身是链接时不删（Python 报 OSError），里面的链接只删链接
+pub fn rmtree(p: &str) -> io::Result<()> {
+    if fs::symlink_metadata(p)?.file_type().is_symlink() {
+        return Err(io::Error::other("Cannot call rmtree on a symbolic link"));
+    }
+    fs::remove_dir_all(p)
+}
+
+/// `os.utime(p)`：访问时间、修改时间都改成现在
+pub fn utime_now(p: &str) -> io::Result<()> {
+    let c = std::ffi::CString::new(p).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: c 是以 0 结尾的路径；times 传空指针就是“现在”
+    if unsafe { libc::utimes(c.as_ptr(), std::ptr::null()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// `tempfile.gettempdir()`：TMPDIR、TEMP、TMP 里第一个能用的目录，再是 /tmp、/var/tmp、/usr/tmp，都不行就用当前目录
+pub fn gettempdir() -> String {
+    let usable = |d: &String| !d.is_empty() && path::isdir(d) && std::ffi::CString::new(d.as_str()).is_ok_and(|c| {
+        // SAFETY: c 是以 0 结尾的路径
+        unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
+    });
+    let from_env = ["TMPDIR", "TEMP", "TMP"].iter().filter_map(|k| crate::py::proc::getenv(k));
+    let fixed = ["/tmp", "/var/tmp", "/usr/tmp"].iter().map(|d| d.to_string());
+    from_env.chain(fixed).find(usable).map_or_else(|| path::abspath("."), |d| path::abspath(&d))
+}
+
+/// `os.mkdir(p, 0o700)`：只建这一层，已经有了是错
+fn makedir_private(p: &str) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().mode(0o700).create(p)
+}
+
+/// `tempfile.TemporaryDirectory()`：只有自己能进的临时目录（`tmp` 加 8 个随机字符），离开作用域时整个删掉
+pub struct TempDir {
+    pub path: String,
+}
+
+impl TempDir {
+    pub fn new() -> io::Result<TempDir> {
+        const NAMES: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+        let base = gettempdir();
+        for _ in 0..100 {
+            let name: String = crate::py::rand::urandom(8).iter().map(|b| NAMES[*b as usize % NAMES.len()] as char).collect();
+            let p = path::join(&base, &format!("tmp{name}"));
+            match makedir_private(&p) {
+                Ok(()) => return Ok(TempDir { path: p }),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "No usable temporary directory name found"))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 /// `sorted(os.listdir(p))`：名字不是 UTF-8 的条目跳过
 pub fn listdir_sorted(p: &str) -> io::Result<Vec<String>> {
     let mut names: Vec<String> = fs::read_dir(p)?.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect();

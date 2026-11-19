@@ -209,6 +209,9 @@ def main():
                 passed += 1
                 if verbose:
                     print('PASS  %s' % c['name'])
+                if '-t' in args:   # 跑完以后沙箱里有什么（确认夹具和假命令真的起了作用）
+                    for rel in sorted(rs['tree']):
+                        print('      %s: %s' % (rel, rs['tree'][rel][:400].replace('\n', '\n          ')))
                 if '-s' in args:   # 通过的也把输出打出来看一眼（确认用例真的走到了想测的那条路）
                     print('      rc=%s\n      stdout: %s\n      stderr: %s' % (rs['rc'], rs['stdout'].replace('\n', '\n              '), rs['stderr'].replace('\n', '\n              ')))
     finally:
