@@ -399,6 +399,33 @@ fn py_iter(v: Option<V>) -> Vec<V> {
     }
 }
 
+/// `d.update(v or {})`，v 是探测结果里读出来的、没验过的值。正常是字典。Python 的 update 还收“一串两项的东西”，
+/// 所以 `[["网段", {…}]]`、`["us"]`（两个字符的文字：键 u、值 s）这样的列表也算数，照做；别的（数字、true、有哪一项不是两项的）
+/// 是没人接的 TypeError / ValueError。键不是文字的（`[[5, {…}]]`）Python 收，这里的字典放不下，也按出错算——
+/// 探测结果是 leak-probe 刚写的，只有手写的文件才会这样
+fn dict_update(d: &Dict, v: Option<V>) {
+    let pairs = match v {
+        Some(V::Dict(other)) => return d.update(&other),
+        Some(V::List(pairs)) => pairs.items(),
+        Some(V::Str(s)) => s.chars().map(|c| V::str(c.to_string())).collect(),
+        Some(v) if v.truthy() => panic!("TypeError: '{}' object is not iterable", type_name(&v)),
+        _ => return,
+    };
+    for (i, pair) in pairs.iter().enumerate() {
+        let two = match pair {
+            V::None | V::Bool(_) | V::Int(_) | V::Big(_) | V::Float(_) => {
+                panic!("TypeError: cannot convert dictionary update sequence element #{i} to a sequence")
+            }
+            other => py_iter(Some(other.clone())),
+        };
+        match &two[..] {
+            [V::Str(k), v] => d.set(k.clone(), v),
+            [_, _] => panic!("TypeError: 探测结果里 geo 的第 {i} 项的键不是文字"),
+            _ => panic!("ValueError: dictionary update sequence element #{} has length {}; 2 is required", i, two.len()),
+        }
+    }
+}
+
 /// `(geo.get(k) or {}).get(field)`：这个网段记下的归属地里的一项。记的不是字典是没人接的 AttributeError
 fn geo_field(geo: &Dict, k: &str, field: &str) -> Option<V> {
     match geo.get(k) {
@@ -462,11 +489,7 @@ pub fn cmd_leak_verdict(args: &[String]) -> R<()> {
     let geo = Dict::from_pairs(section(&cache, "geo").items().into_iter().filter(|(_, g)| geo_fresh(g, now)));
     let dns = Dict::from_pairs(section(&cache, "dns").items().into_iter().filter(|(_, v)| leak_dns_fresh(Some(v), 0.0)));
     if let Some(found) = p.dict("dns") {
-        match found.get("geo") {
-            Some(V::Dict(g)) => geo.update(&g),
-            Some(v) if v.truthy() => panic!("TypeError: 探测结果里的 geo 不是字典（{}）", type_name(&v)),
-            _ => {}
-        }
+        dict_update(&geo, found.get("geo")); // geo.update(p['dns'].get('geo') or {})
         let servers: Vec<V> = py_iter(found.get("servers")).into_iter().filter(|s| s.is_str()).collect();
         dns.set(key, dict! { "t" => now, "ok" => found.truthy("ok"), "servers" => servers });
     }
