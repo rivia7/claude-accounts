@@ -114,11 +114,26 @@ pub fn walk(top: &str, mut visit: impl FnMut(&str, &mut Vec<String>, &[String]) 
 
 /// `filecmp.cmp(a, b, shallow=False)`：两个都是普通文件、一样大、内容逐字节一样
 pub fn filecmp(a: &str, b: &str) -> io::Result<bool> {
+    use std::io::Read;
     let (ma, mb) = (fs::metadata(a)?, fs::metadata(b)?);
     if !ma.is_file() || !mb.is_file() || ma.len() != mb.len() {
         return Ok(false);
     }
-    Ok(fs::read(a)? == fs::read(b)?)
+    // 一块一块比（原来也是）：共享目录里的大文件不用整个读进内存
+    let (fa, fb) = (fs::File::open(a)?, fs::File::open(b)?);
+    let (mut ba, mut bb) = (Vec::new(), Vec::new());
+    loop {
+        ba.clear();
+        bb.clear();
+        let n = (&fa).take(65536).read_to_end(&mut ba)?;
+        let m = (&fb).take(65536).read_to_end(&mut bb)?;
+        if n != m || ba != bb {
+            return Ok(false);
+        }
+        if n == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 /// `with open(p, 'w', encoding='utf-8') as f: f.write(text)`：已有的截断（跟着链接），新建的是 666 过 umask
@@ -822,6 +837,17 @@ mod tests {
         assert!(filecmp(&f("a"), &f("b")).unwrap() && filecmp(&f("a"), &f("link")).unwrap());
         assert!(!filecmp(&f("a"), &f("c")).unwrap() && !filecmp(&f("a"), &f("longer")).unwrap() && !filecmp(&f("a"), &f("dir")).unwrap());
         assert!(filecmp(&f("a"), &f("none")).is_err());
+        // 比一块大的文件：只差最后一个字节也比得出
+        let mut big = vec![7u8; 200_000];
+        fs::write(f("big1"), &big).unwrap();
+        fs::write(f("big2"), &big).unwrap();
+        assert!(filecmp(&f("big1"), &f("big2")).unwrap());
+        *big.last_mut().unwrap() = 8;
+        fs::write(f("big2"), &big).unwrap();
+        assert!(!filecmp(&f("big1"), &f("big2")).unwrap());
+        fs::write(f("empty1"), "").unwrap();
+        fs::write(f("empty2"), "").unwrap();
+        assert!(filecmp(&f("empty1"), &f("empty2")).unwrap());
         fs::remove_dir_all(&d).unwrap();
     }
 
@@ -1036,10 +1062,8 @@ mod tests {
         assert!(e.to_string().contains("sub/secret"), "{e}");
         fs::set_permissions(format!("{src}/sub/secret"), fs::Permissions::from_mode(0o600)).unwrap();
         let mut want = tree(&src);
-        want.retain(|l| !l.starts_with("sub/secret:"));
-        let mut got = tree(&format!("{d}/partial"));
-        got.retain(|l| !l.starts_with("sub/secret:")); // Python 也一样：打开目的文件在先，读不了源文件时留下一个空的
-        assert_eq!(got, want);
+        want.retain(|l| !l.starts_with("sub/secret:")); // 读不了的那个没拷（源文件打不开就不建目的文件），别的一样不少
+        assert_eq!(tree(&format!("{d}/partial")), want);
         assert!(copytree(&format!("{d}/none"), &format!("{d}/x")).is_err() && !path::lexists(&format!("{d}/x")));
         rmtree_reset(&d).unwrap();
     }
