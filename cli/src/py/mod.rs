@@ -15,6 +15,7 @@ pub mod plist;
 pub mod proc;
 pub mod rand;
 pub mod re;
+pub mod shutil;
 pub mod text;
 pub mod time;
 pub mod tls;

@@ -5,7 +5,7 @@
 //! 原来的 `MISSING`（“字典里没有这个键”，和 JSON 的 null 不是一回事）在这里是 `Option<V>` 的 `None`。
 
 use super::device::prepare_device;
-use super::pylib::*;
+use crate::py::shutil::*;
 use crate::core::base::*;
 use crate::core::model::{acct_id, cdir};
 use crate::core::tool::{t, Kind, SHARED_KEYS};

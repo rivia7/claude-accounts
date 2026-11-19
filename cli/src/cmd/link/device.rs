@@ -3,7 +3,7 @@
 //! `device.json`（账号目录里，600）是账号的固定标识；客户端自己存的那份（Claude 的 `.claude.json` 里的 userID / machineID、
 //! Codex 的 `installation_id`、agy 的 `installation_id` 和 `jetski_state.pbtxt`）每次照它修回来。`prepare_device` 要在 `Lock` 里调。
 
-use super::pylib::{listdir, uuid_str, write_text};
+use crate::py::shutil::{listdir, uuid_str, write_text};
 use crate::core::base::*;
 use crate::core::model::{adir, cdir};
 use crate::core::tool::{t, Kind};

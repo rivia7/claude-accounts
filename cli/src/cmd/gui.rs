@@ -9,12 +9,14 @@ use super::usage::parse_ts;
 use super::{arg, arity, Cmd};
 use crate::core::base::sh;
 use crate::core::ctx::cfg_save;
-use crate::core::model::{adir, cfg_load, name_of};
+use crate::cmd::secrets::{kc_hints, kc_list, kc_slot, py_in};
+use crate::core::base::{CCA_HOME, HINT_RE};
+use crate::core::model::{acct_id, adir, cfg_load, is_api, key_hint, name_of, node_of, parse_key, secret_ok};
 use crate::core::tool::t;
-use crate::py::fs::save_json;
+use crate::py::fs::{load_quiet, save_json};
 use crate::py::io;
 use crate::py::json;
-use crate::py::obj::{repr_str, List, V};
+use crate::py::obj::{repr_str, Dict, List, V};
 use crate::py::path;
 use crate::py::text;
 use crate::py::time::time;
@@ -82,6 +84,97 @@ pub fn health_write(key: &str, source: &str, kind: &str, route: &str, node: &str
     }
     out!("{}", json::dumps(&h, json::LINE));
     Ok(())
+}
+
+/// _gui state 里的 health：health.json 加上 age_seconds、stale、applies（测的时候用的节点就是账号现在的节点）
+pub fn health_view(key: &str, v: &V, now: f64) -> Option<Dict> {
+    let h = load_quiet(&health_file(key))?.as_dict()?;
+    // isinstance(at, bool) or not isinstance(at, (int, float))：布尔值不算数
+    let at = h.get("checked_at").filter(crate::cmd::keyshare::is_num)?.as_num()?;
+    let node = h.get("node").filter(|n| n.truthy());
+    let current = node_of(v);
+    let applies = match (&node, current.is_empty()) {
+        (None, true) => true,
+        (Some(n), false) => n.as_str() == Some(&*current),
+        _ => false,
+    };
+    h.set("age_seconds", (now - at).max(0.0).trunc() as i64);
+    h.set("stale", now - at >= HEALTH_STALE as f64);
+    h.set("applies", applies);
+    Some(h)
+}
+
+/// 登录状态（只读账号目录，不联网）：logged_in / logged_out / email_mismatch（登录的不是这个账号）
+pub fn login_code(key: &str) -> R<&'static str> {
+    let e = t().email(key)?;
+    if e.is_empty() {
+        return Ok("logged_out");
+    }
+    let want = parse_key(key).1;
+    Ok(if !want.is_empty() && e.to_lowercase() != want.to_lowercase() { "email_mismatch" } else { "logged_in" })
+}
+
+pub fn short_state(key: &str) -> R<&'static str> {
+    Ok(match login_code(key)? {
+        "logged_out" => "未登录",
+        "email_mismatch" => "邮箱不符",
+        _ => "已登录",
+    })
+}
+
+/// _gui state 的 api_key（PROTOCOL 2.2）：存没存 key、掩码、在哪。照 config.json 里记的说（存的时候算好的掩码），不读钥匙串；
+/// 第三方 API 账号换了服务商（域名和存的时候不一样）算没存——启动时也取不到它。官方账号记下备查的还有：shared（会经设备统计
+/// 的服务器加密同步给登录了这个账号的其他设备，见 keyshare 一节）、saved_epoch（什么时候记下的）、from_device（从哪台设备
+/// 同步来的）、sync_error（最近一次没同步成的原因，share_err）
+pub fn gui_api_key(c: &Dict, k: &str, v: &V, share: bool, share_err: &V) -> R<Dict> {
+    let out = dict! {
+        "saved" => false, "hint" => "", "source" => "", "shared" => share, "saved_epoch" => V::None, "from_device" => V::None,
+        "sync_error" => if share { share_err.clone() } else { V::None },
+    };
+    if let Some(key) = v.as_dict().filter(|_| is_api(v)).and_then(|d| d.get("key")).filter(secret_ok) {
+        out.set("saved", true);
+        out.set("hint", key_hint(&key.py_str()));
+        out.set("source", "table");
+        return Ok(out);
+    }
+    let (aid, st) = (acct_id(k, t()), t().state(c, false));
+    let h = kc_hints(&st).dict(&aid).unwrap_or_default();
+    let (host, is_ref) = kc_slot(v);
+    // h.get("host", host) == host：没记域名的（旧版本存的）算对得上
+    let host_ok = h.get("host").is_none_or(|x| x.as_str() == Some(host.as_str()));
+    let saved = py_in(&aid, st.get(kc_list(is_ref)))? && host_ok;
+    let hint = if saved && h.get("host").is_some_and(|x| x.as_str() == Some(host.as_str())) { h.str("hint").map_or(String::new(), |s| s.to_string()) } else { String::new() };
+    out.set("saved", saved);
+    out.set("hint", if HINT_RE.matches(&hint) { hint } else { String::new() });
+    out.set("source", if saved { "keychain" } else { "" });
+    if saved && is_ref {
+        let at = h.get("at").filter(crate::cmd::keyshare::is_num).filter(|a| a.as_num().is_some_and(|a| a > 0.0));
+        out.set("saved_epoch", at.unwrap_or(V::None));
+        let from = h.get("from").filter(|f| f.as_str().is_some_and(|f| !f.is_empty() && text::isprintable(f)));
+        out.set("from_device", from.unwrap_or(V::None));
+    }
+    Ok(out)
+}
+
+/// App 多久拉一次映射（App 不重算，看 state 的 next_check_epoch）；命令行还是启动时一天一次
+pub const POLICY_POLL_INTERVAL: f64 = 3600.0;
+
+/// App 下次该拉映射的时间：上次拉（$POLICY_DIR/checked）之后过 POLICY_POLL_INTERVAL 秒；没拉过是 None
+pub fn policy_next_check() -> Option<f64> {
+    Some(crate::py::shutil::getmtime(&path::join_all(&[&CCA_HOME, "policy", "checked"])).ok()? + POLICY_POLL_INTERVAL)
+}
+
+/// 配置向导还要不要出现：显式标记过（cmd_onboard 做完写的），或者这台机器已经有账号 / 配过路由器 / 配过本机客户端
+/// （老用户升级上来：自然算配置过，不打扰）→ 不再出现。全新装、什么都没配时才是 False。只读，不写文件
+pub fn onboarded(c: &Dict) -> bool {
+    if c.truthy("onboarded") {
+        return true;
+    }
+    let set = |section: &str, field: &str| c.get(section).filter(|s| s.truthy()).and_then(|s| s.as_dict()).is_some_and(|s| s.truthy(field));
+    if set("router", "host") || set("local", "client") {
+        return true;
+    }
+    crate::core::tool::tools().iter().any(|tool| tool.tab().is_some_and(|tab| !tab.is_empty()))
 }
 
 /// coffee_check 之后（启动、cca check）：这次的出口检测记进 health.json。泄露的状态用 leak-verdict 的 S 行，不解析中文

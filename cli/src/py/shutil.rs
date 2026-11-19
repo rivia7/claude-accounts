@@ -1,6 +1,8 @@
-//! 这个模块要用、兼容层（`cli/src/py/`）里还没有的 Python 标准库行为：`os.walk`、`shutil` 的 copy2 / copytree / rmtree / move、
-//! `filecmp.cmp`、`tempfile.TemporaryDirectory`、`uuid.UUID`、`bytes.splitlines`、只给最后一层权限的 `os.makedirs`……
-//! 行为照 CPython 3.14（测试里的期望值都是拿真的 Python 跑出来的）。先放在这里只给本模块用，以后该移进兼容层。
+//! `os.walk`、`shutil` 的 copy2 / copytree / rmtree / move、`filecmp.cmp`、`tempfile.TemporaryDirectory`、`uuid.UUID`、
+//! `bytes.splitlines`、`os.stat(p).st_mtime`（小数的秒，和 CPython 算出来的逐位一样）……
+//! 行为照 CPython 3.14（测试里的期望值都是拿真的 Python 跑出来的）。移植 link 模块时写的，后来挪到兼容层给大家用；
+//! 和 `py::fs` 有几个重的（`rmtree`、`TemporaryDirectory` / `TempDir`、`makedirs_leaf_mode` / `makedirs_mode`）：这里的更细
+//! （删只读的目录、拷到一半出错接着拷），新代码要这些细节时用这里的。
 //!
 //! 路径照兼容层的约定是 UTF-8 的字符串。名字不是 UTF-8 的条目：只是列一列的地方跳过（和 `py::fs::listdir_sorted` 一样）；
 //! 要整棵拷走、并回、删掉的地方报错停下——Python 能照常处理这种名字，这里处理不了，但不能当它不存在（跳过就等于丢东西）。

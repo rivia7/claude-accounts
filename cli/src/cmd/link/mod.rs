@@ -6,12 +6,11 @@
 //!
 //! - `device.rs`：账号设备标识
 //! - `shared.rs`：三方合并、并回、拆旧链接
-//! - `pylib.rs`：兼容层里还没有的 Python 标准库行为（os.walk、shutil、filecmp……），以后该移进 `cli/src/py/`
+//! - 文件操作（os.walk、shutil、filecmp……）在兼容层的 `py::shutil`（移植这个模块时写的）
 //!
 //! 收尾的两步在别的模块：`cost::cost_kick`（会话结束后在后台统计折合金额）、`codex::codex_fix_rollouts`（Codex 的会话库）。
 
 mod device;
-mod pylib;
 mod shared;
 
 #[allow(unused_imports)]
@@ -26,6 +25,7 @@ use crate::core::tool::{t, Kind, Tool};
 use crate::py::fs::{self, listdir_sorted, load_json, save_json};
 use crate::py::obj::{Dict, V};
 use crate::py::path;
+use crate::py::shutil as pylib;
 use crate::py::{die, R};
 use std::collections::BTreeSet;
 

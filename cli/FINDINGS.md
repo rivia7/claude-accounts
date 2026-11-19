@@ -41,6 +41,10 @@
 
 ## 测试
 
+- **`tests/usage_view.py` 里有一个偶发失败的测试。** `test_usage_cached_keeps_model_scoped` 用 `assertEqual(x['at'], self.now - 2)`
+  比两个浮点数：一边是把时间换成毫秒整数再除回来的，末位会差一点（例：`1795065882.2942758 != 1795065882.294276`）。
+  实测连跑 41 次碰到一次；整套回归里它算一个用例，所以回归大约每 40 轮会莫名挂一次（这次移植的第 4 轮混合版回归就碰上了）。
+  改成 `assertAlmostEqual(…, places=3)` 就行。
 - **`tests/router_merge.py` 没接进回归。** `regress.sh` 的 unit 一节跑 15 个 Python 单测文件，没有它（只在 docs/dev/router.md 里提到）。
 
 ## secrets
