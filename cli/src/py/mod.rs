@@ -17,6 +17,7 @@ pub mod rand;
 pub mod re;
 pub mod text;
 pub mod time;
+pub mod tls;
 pub mod uni;
 pub mod url;
 

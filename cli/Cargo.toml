@@ -19,6 +19,11 @@ sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false, features = ["std"] }
 
+# 邮箱助手连 Gmail 的 IMAP 要 TLS：只有 macOS 的构建带（邮箱助手要用账号专属的 Chrome 打开登录链接，Linux 上没有这个功能）。
+# 证书照系统的 /etc/ssl/cert.pem 验（和原来 Python 的 ssl.create_default_context() 一样），不带另一份根证书
+[target.'cfg(target_os = "macos")'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
 [profile.release]
 opt-level = 2
 lto = "fat"
