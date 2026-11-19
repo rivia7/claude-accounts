@@ -3774,9 +3774,18 @@ mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail
 # macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
+# 装着的是接着辅助程序的那一份（11b 的 mkver）：它解出来的辅助程序在这个用户的临时目录的 cca-helper 里（run 不带 TMPDIR），还原时
+# 也要删掉。带着 CCA_HELPER 跑回归（TIMING、release.sh）时用的不是解出来的那一份，这一条不查
+rh=""; rh0=""
+if [ -z "$HELPERWRAP" ]; then
+	hs=$(sed -n 's/^HELPER_SUMS="[^=]*=\([0-9a-f]*\)"$/\1/p' "$H/.cca/bin/cca" 2>/dev/null)
+	[ -z "$hs" ] || rh="$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
+	[ -n "$rh" ] && [ -x "$rh" ] && rh0=1
+fi
 out=$(run CCA_GUI_OS=15 CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
+ok "restore：解出来的辅助程序（缓存目录里这个版本的那一份）也删掉" '[ -z "$rh" ] || { [ "$rh0" = 1 ] && [ ! -e "$rh" ]; }'
 ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 ok "restore：macOS 26 以下（内核由 cca 在后台托管）也删掉 crontab 里开机起内核的那一行，别的行留着" '! grep -qF "# cca-core" "$T/crontab" && grep -qx "0 3 \* \* \* echo user-job" "$T/crontab"'

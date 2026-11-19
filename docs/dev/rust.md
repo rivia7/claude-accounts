@@ -25,7 +25,7 @@
 
 `cca` 开头的 `helper_find`（在定义 `py` 之前）定出 `HELPER`：
 
-- **发布的 cca**：`release.sh` 用 `cli/pack.py` 把四种机器的那一份（gzip 再 base64，各自包在一个 `: <<'CCA-HELPER-END'` 里）接在文件最后、`exit` 的后面——bash 读到 `exit` 就不往下读，`bash -n` 也照样通过；`HELPER_SUMS="目标=SHA-256 …"` 记着各自的校验值。第一次运行时把这台机器的那一份解到缓存目录的 `cca-helper/<SHA-256>`（`helper_unpack`：`sed` 切出来、`base64` 解码、`gunzip`，校验值对了、试着运行过才 `mv` 换上；目录 700、只认自己的、不是链接；顺手删掉 7 天前解出来的旧版本和没解完的临时文件）。以后每次只看一眼“文件在不在、是不是我的”，**不为它起任何进程**。缓存目录：macOS 是这个用户自己的临时目录（`/var/folders/…/T/`，`TMPDIR` 不是它时问 `getconf DARWIN_USER_TEMP_DIR`），Linux 是 `${XDG_CACHE_HOME:-~/.cache}`（不放 `XDG_RUNTIME_DIR`：那是内存盘，退出登录就清空）。缓存没了（系统清理、重启）下次运行自己再解，约 0.1 秒
+- **发布的 cca**：`release.sh` 用 `cli/pack.py` 把四种机器的那一份（gzip 再 base64，各自包在一个 `: <<'CCA-HELPER-END'` 里）接在文件最后、`exit` 的后面——bash 读到 `exit` 就不往下读，`bash -n` 也照样通过；`HELPER_SUMS="目标=SHA-256 …"` 记着各自的校验值。第一次运行时把这台机器的那一份解到缓存目录的 `cca-helper/<SHA-256>`（`helper_unpack`：`sed` 切出来、`base64` 解码、`gunzip`，校验值对了、试着运行过才 `mv` 换上；目录 700、只认自己的、不是链接；顺手删掉 7 天前解出来的旧版本和没解完的临时文件）。以后每次只看一眼“文件在不在、是不是我的”，**不为它起任何进程**。缓存目录：macOS 是这个用户自己的临时目录（`/var/folders/…/T/`，`TMPDIR` 不是它时问 `getconf DARWIN_USER_TEMP_DIR`），Linux 是 `${XDG_CACHE_HOME:-~/.cache}`（不放 `XDG_RUNTIME_DIR`：那是内存盘，退出登录就清空）。缓存没了（系统清理、重启）下次运行自己再解，约 0.1 秒；`cca restore` 最后删掉这个版本解出来的那一份
 - **仓库里的 cca**（`HELPER_SUMS` 空着）：用 `cli/target/release/cca-core`，没有就说先 `cd cli && cargo build --release`。改了 Rust 要重新编才生效（`tests/regress.sh` 开头会编）
 - `CCA_HELPER=路径`：指定用哪一份（回归的 TIMING、`release.sh` 跑回归时用；测试以外别用）
 - 目标按 bash 的 `HOSTTYPE`、`OSTYPE` 定（不起 `uname`；`HOSTTYPE` 认不出来时才问 `uname -m`：32 位的 bash 跑在 64 位系统上）：`aarch64` / `x86_64` × `apple-darwin` / `unknown-linux-musl`。别的机器说没有这种机器用的辅助程序（`install.sh` 下载之前也查）

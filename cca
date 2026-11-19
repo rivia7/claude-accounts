@@ -6572,6 +6572,7 @@ cmd_restore() {
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
 	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; defaults delete "$GUI_ID" >/dev/null 2>&1; info "已删除界面 App ${GUI_APP}"; fi
 	rm -rf "${CCA_HOME:?}"
+	case "$HELPER" in "$CACHE_DIR/cca-helper/"*) rm -f "$HELPER"; rmdir "$CACHE_DIR/cca-helper" 2>/dev/null ;; esac   # 解出来的辅助程序（缓存目录里这个版本的那一份）
 	info "已还原。原来的 claude、codex、agy 命令和 ~/.claude、~/.codex、~/.gemini 不受影响"
 }
 

@@ -179,6 +179,12 @@ sub('			pacman:python3) p=python ;;\n			*:gunzip) p=gzip ;;\n', '			*:gunzip) p=
 sub('''	if retry3 curl -fsSL -m 120 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&''',
     '''	if retry3 curl -fsSL -m 300 -o "$tmp/cca" "$UPDATE_REPO/releases/download/v$v/cca" 2>/dev/null &&''', '下载新版本的时限')
 
+# cca restore：这个版本解出来的辅助程序也删掉（别的版本的、别人指定的不动）。放在最后：前面每一步都还要用它
+sub('''	rm -rf "${CCA_HOME:?}"
+	info "已还原。''', '''	rm -rf "${CCA_HOME:?}"
+	case "$HELPER" in "$CACHE_DIR/cca-helper/"*) rm -f "$HELPER"; rmdir "$CACHE_DIR/cca-helper" 2>/dev/null ;; esac   # 解出来的辅助程序（缓存目录里这个版本的那一份）
+	info "已还原。''', 'restore 删掉解出来的辅助程序')
+
 # --- 5. 注释里说到 Python 的地方 --------------------------------------------------------------------------------------
 sub('（如 zh_CN.GBK、GB18030）时，Python 等会按 GBK 编码输出，', '（如 zh_CN.GBK、GB18030）时，有的命令会按 GBK 编码输出，', '注释：locale')
 sub('用 tool 步骤名 调用；Python 那边按 CCA_TOOL 选同一个工具', '用 tool 步骤名 调用；辅助程序那边按 CCA_TOOL 选同一个工具', '注释：tool')
