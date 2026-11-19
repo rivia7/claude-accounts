@@ -2,7 +2,7 @@
 
 ## 查用量
 - `cca usage` 用的 `get_usage` 是 Claude Code 标为实验性的 SDK 控制请求：`claude -p --safe-mode --no-session-persistence --strict-mcp-config --input-format stream-json --output-format stream-json --verbose`，stdin 写一行请求，拿到 `control_response` 之前别关 stdin；字段要宽松解析，不支持时返回 `error: Unsupported control request subtype`。查询必须经账号自己的端口（和启动一样），登错号、出口在受限地区时不查。Claude 的重置次数（`/limit-reset`，内部代号 `cedar_ember`，2.1.319 核实）不在 `get_usage` 里：它读的是不带 `cedar_ember=1` 的 `/api/oauth/usage`，这个字段恒为 null，别的控制请求也拿不到；不要用账号的 OAuth token 自己调（条款不允许第三方收集、转用登录凭证，也违背 cca 不碰登录凭证的约定），官方能看的地方是 `claude.ai/settings/usage`（`cca limit-resets 账号`，App 账号菜单的「在 claude.ai 查看重置次数」，`can.limit_resets`，走 `cmd_web` 的全部检查）
-- `cca usage` 的表格一个账号一行，整行不超过 `term_cols - 2`（`usage_table`）：放不下时依次收起有别名的账号的邮箱、套餐那一列、两个重置时间；备注至少留 `USAGE_NOTE_FLOOR` 格，按「；」分项取舍（`fit_note`），用缓存的行原因在前；表格下面的提示太长就换短的说法。回归里要看备注全文、长提示的断言带 `COLUMNS=`（默认 80 列）；`tests/usage_view.py` 逐个宽度核对
+- `cca usage` 的表格一个账号一行，整行不超过 `term_cols - 2`（`usage_table`）：放不下时依次收起有别名的账号的邮箱、套餐那一列、两个重置时间；备注至少留 `USAGE_NOTE_FLOOR` 格，按「；」分项取舍（`fit_note`），用缓存的行原因在前；表格下面的提示太长就换短的说法。回归里要看备注全文、长提示的断言带 `COLUMNS=`（默认 80 列）；`tests/usage_view.py` 逐个宽度核对（运行辅助程序的 `usage-render`；备注的取舍、重置时间的写法在 `cli/src/cmd/usage.rs` 的单元测试里）
 - 登录失效（改过密码、在别处退出过）：本地的登录信息还在，`login` 还是 `logged_in`，查用量时才知道。Codex 的 app-server 明确说（`Rpc.failure` 认 `access token could not be refreshed`、`401 Unauthorized`，`error_code` 是 `auth`，App 里 `Diagnosis.loginExpired`）；Claude Code 2.1.319 的 `get_usage` 查不到时一律回 `rate_limits: null`，分不清是登录失效还是网络问题（`nolimits`），只在用量那一行放个重新登录的入口，不说失效。重新登录是 `cca [codex] login 账号`（`AppModel.relogin`），要终端（`need_tty`）
 
 ## 额度
@@ -22,6 +22,6 @@
 
 ## 测试
 - 用量：假 `claude` 的 stream-json 分支是 `$T/fake_usage.py`，按登录的邮箱回 `$T/usage/<邮箱>.json`（`canned` 生成），`$T/usage/unsupported`、`$T/usage/hang` 模拟不支持和卡住；`$T/loc/<端口>` 改 claude.ai trace 里的出口地区
-- 每周用量：规则的细节在 `tests/usage_view.py`（`weeks_add`、`usage_weeks_view` 直接调 辅助程序的函数）；regress 的 `cca usage` 那一节先删 alice 的 `usage-weeks.json` 从头记（前面的周结算提醒用过别的重置时间，会多出一周）。`canned` / `ccanned` 的本周重置时间每次按现在算，整个回归跑下来也差不到 1 小时，算同一周；把用量调低超过 5 个百分点就是“中间重置过”
+- 每周用量：规则的细节在 `cli/src/cmd/usage.rs` 的单元测试（`weeks_add_like_python_test`、`weeks_record_file_like_python_test`）和 `tests/usage_view.py`（查到用量时记下的文件、经 `_gui state` 看 `usage_weeks`）；regress 的 `cca usage` 那一节先删 alice 的 `usage-weeks.json` 从头记（前面的周结算提醒用过别的重置时间，会多出一周）。`canned` / `ccanned` 的本周重置时间每次按现在算，整个回归跑下来也差不到 1 小时，算同一周；把用量调低超过 5 个百分点就是“中间重置过”
 - 重置额度：假 app-server 的 `account/rateLimitResetCredit/consume` 按 `$T/codex_usage/<邮箱>.json` 办（`ccanned` 的第 5 个参数是剩余次数；用量都是 0 回 nothingToReset，否则清零、去掉用掉的那一次写回文件，日志 `RPC resetConsume`），`codex_usage/reset_outcome` 指定结果，`codex_usage/reset_unsupported` 模拟旧版 codex
 - 总览要的 `plan_tier`、`cli`（regress.sh 10g 末尾）：假 `claude` / `codex` 在 `$T/hold` 存在时一直不退出（`touch` 它，后台跑 `run cca @alice --version &`，`waitmark 账号目录` 等登记出现，`marks` 读登记的进程号：`$!` 不是 cca 的进程号；删掉 hold 会话才结束）；旧登记用 `mark 账号目录 工具 账号目录名 进程号 启动时间戳` 手写，`pstart 进程号` 用和 cca 一样的算法取启动时间。档位：Claude 用 `setoa` 改 alice 的 oauthAccount（先把她的 usage.json 挪开：它的 subscription_type 会顶替空的种类），Codex 直接写 dave 的 usage.json（`utilization.plan`）

@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""折合金额（cost）：价格表、读会话记录（增量、去重、按账号身份认）、时段（本地日历日；额度窗口和日历周）、_gui state 的 cost、cost_total，
-密文的格式（照 server/README.md 独立实现一遍核对）。临时 HOME、内嵌 Python，不联网。"""
+"""折合金额（cost）：读会话记录（增量、去重、按账号身份认）、时段（本地日历日；额度窗口和日历周）、_gui state 的 cost、cost_total，
+密文的格式（照 server/README.md 独立实现一遍核对）。临时 HOME、cca 的辅助程序（cca-core cost-sync / cost-worker，和只给测试用的
+_cost-periods、_cost-view：给定“现在”、给定时区看时段和视图），不联网：设备统计的服务器是假的 curl。
+
+只能在进程内测的几处在辅助程序自己的单元测试里（cargo test），下面各留了一行说它在哪。"""
 import base64
+import fcntl
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import random
+import re
+import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
-from unittest import mock
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
-CCA = ROOT / 'cca'
-SOURCE = CCA.read_text().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
-DEFINITIONS = SOURCE.split('\nif len(sys.argv) < 2', 1)[0]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helper_bin import HELPER   # noqa: E402
 
 sys.dont_write_bytecode = True   # 不在 server/ 里留下 __pycache__
 _spec = importlib.util.spec_from_file_location('cca_presence_server', ROOT / 'server' / 'cca-presence.py')
@@ -30,6 +36,26 @@ U2 = 'aaaaaaaa-0000-4000-8000-000000000002'
 U3 = 'user-' + 'c' * 24
 U4 = 'user-' + 'd' * 24
 M = 1000000   # 一美元 = 这么多个百万分之一美元
+WEEK = 7 * 86400
+# cli/src/cmd/cost.rs 的同名常量
+COST_PRICES_DATE = '2026-11-13'
+COST_OLD = '维护者的设备统计服务器还不支持同步折合金额（维护者要更新服务器：./policy.sh presence deploy）'
+COST_PUBLISH = 14 * WEEK   # 传给别的设备的留这么久
+
+# 假的设备统计服务器（curl）：请求（签过名的 JSON）一个一个记进 ~/sent/，照 ~/server/get、~/server/put 里准备好的回（没有就是连不上）
+CURL = r'''mkdir -p "$HOME/sent"
+f="$HOME/sent/$(ls "$HOME/sent" | wc -l | tr -d ' ').json"
+cat > "$f"
+if grep -q '"put":' "$f"; then reply="$HOME/server/put"; else reply="$HOME/server/get"; fi
+[ -f "$reply" ] || exit 7
+cat "$reply"
+printf '\n200'
+'''
+# 假的 ssh-keygen：签名是固定的一段（假服务器不验）
+KEYGEN = r'''cat > /dev/null
+printf -- '-----BEGIN SSH SIGNATURE-----\nRkFLRQ==\n-----END SSH SIGNATURE-----\n'
+'''
+GUARD = 'echo "测试没有给 %s 准备假命令：$*" >> "$HOME/unexpected-commands.log"\nexit 127\n'
 
 
 def jl(*rows):
@@ -40,18 +66,95 @@ def iso(ts):
     return time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)) + '.000Z'
 
 
+def ident(email):
+    """账号目录的名字：邮箱里字母数字以外的换成 -（最多 20 个字符），加上邮箱摘要的前 6 位"""
+    s = re.sub('[^a-z0-9]+', '-', email.lower()).strip('-')[:20].strip('-') or 'acct'
+    return '%s-%s' % (s, hashlib.sha1(email.encode()).hexdigest()[:6])
+
+
+def fake_pub(seed):
+    """一把编出来的 ed25519 公钥（32 个连着的字节）：只用来算设备指纹"""
+    blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + bytes(range(seed, seed + 32))
+    return 'ssh-ed25519 %s cca-policy@test\n' % base64.b64encode(blob).decode()
+
+
+def reply(ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100):
+    """Claude Code 的会话记录里的一条回复"""
+    return {'type': 'assistant', 'timestamp': iso(ts), 'requestId': 'req_' + mid, 'sessionId': sid,
+            'message': {'id': mid, 'model': model, 'role': 'assistant', 'usage': {'input_tokens': inp, 'output_tokens': out}}}
+
+
+def owner(uuid, sid='s1'):
+    return {'type': 'session-owner', 'accountUuid': uuid, 'organizationUuid': 'org-1', 'sessionId': sid}
+
+
+def content(local, tool, email):
+    """local.json（这台设备统计好的）里这个工具、登录的邮箱是 email 的那些身份加起来：({小时: [7 个计数]}, [没有标价的模型…])"""
+    h, um = {}, set()
+    for who, rows in local['acc'].items():
+        if who.startswith(tool + ':') and local['who'].get(who) == email:
+            for k, r in rows.items():
+                h[k] = [a + b for a, b in zip(h.get(k, [0] * 7), r)]
+            um.update(local['um'].get(who, []))
+    return h, sorted(um)
+
+
+class Home:
+    """一个临时的 HOME（一台设备）：往里放夹具、在里面跑辅助程序"""
+    def __init__(self, home, tz):
+        self.home = Path(home)
+        self.cca = self.home / '.cca'
+        self.cca.mkdir(parents=True)
+        (self.home / 'bin').mkdir()
+        (self.cca / 'config.json').write_text('{}')
+        for name in ('security', 'curl', 'ssh', 'ssh-keygen'):   # 真的钥匙串、网络碰不到：要用的由用例换成假的
+            self.fake(name, GUARD % name)
+        self.env = {'HOME': str(self.home), 'CCA_HOME': str(self.cca), 'CCA_TOOL': 'claude', 'TZ': tz,
+                    'PATH': '%s:/usr/bin:/bin' % (self.home / 'bin'), 'CCA_KEYSTORE': 'file'}
+
+    def fake(self, name, script):
+        p = self.home / 'bin' / name
+        p.write_text('#!/bin/sh\n' + script)
+        p.chmod(0o755)
+
+    def write(self, path, data, mode=None):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data if isinstance(data, str) else json.dumps(data))
+        if mode is not None:
+            path.chmod(mode)
+        return path
+
+    def run(self, *argv, **env):
+        return subprocess.run([HELPER] + [str(a) for a in argv], env=dict(self.env, **env), stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=120)
+
+    def cdir(self, key):
+        """账号目录里 Claude Code 的配置目录"""
+        return self.cca / 'accounts' / ident(key.split('(')[-1].rstrip(')')) / 'claude'
+
+    def sync(self, *flags, rc=0):
+        """cca cost sync --json：统计一次（读新增的会话记录、发布 local.json），到时候了再和别的设备同步。返回它打印的那份"""
+        r = self.run('cost-sync', '--json', *flags)
+        if (r.returncode, r.stderr) != (rc, ''):
+            raise AssertionError('cost-sync 的退出码是 %d（该是 %d）：%s%s' % (r.returncode, rc, r.stdout, r.stderr))
+        return json.loads(r.stdout) if rc == 0 else r.stdout
+
+    def cost(self, name):
+        return json.loads((self.cca / 'cost' / name).read_text())
+
+
 class Base(unittest.TestCase):
     TZ = 'Asia/Shanghai'
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cca-cost-')
         self.addCleanup(self.temp.cleanup)
-        self.home = Path(self.temp.name).resolve()
-        self.cca = self.home / '.cca'
-        self.cca.mkdir()
-        (self.cca / 'config.json').write_text('{}')
+        self.root = Path(self.temp.name).resolve()
+        self.dev = Home(self.root / 'home', self.TZ)
+        self.home, self.cca = self.dev.home, self.dev.cca
         old_tz = os.environ.get('TZ')
-        os.environ['TZ'] = self.TZ
+        os.environ['TZ'] = self.TZ   # 用例自己算时间（mktime、localtime）也照这个时区
         time.tzset()
 
         def restore():
@@ -61,61 +164,13 @@ class Base(unittest.TestCase):
                 os.environ['TZ'] = old_tz
             time.tzset()
         self.addCleanup(restore)
-        with mock.patch.dict(os.environ, {'HOME': str(self.home), 'CCA_HOME': str(self.cca), 'CCA_TOOL': 'claude', 'TZ': self.TZ,
-                                         'PATH': os.environ.get('PATH', '/usr/bin:/bin')}, clear=True):
-            self.ns = {}
-            exec(compile(DEFINITIONS, str(CCA), 'exec'), self.ns)
-        self.ns['cost_kick'] = lambda: None
+        self.addCleanup(lambda: self.assertEqual([str(p) for p in self.root.glob('*/unexpected-commands.log')], [], '调到了没准备假命令的'))
 
 
-class Prices(Base):
-    def test_model_names(self):
-        f = self.ns['cost_model']
-        for raw, want in (('claude-opus-5-5[1m]', 'claude-opus-5-5'), ('claude-sonnet-4-5-20250929', 'claude-sonnet-4-5'),
-                          ('Claude-Haiku-4-5', 'claude-haiku-4-5'), ('claude-x-2026-01-15', 'claude-x'), ('gpt-6-astra', 'gpt-6-astra'),
-                          (' gpt-6.1-sol ', 'gpt-6.1-sol'), (None, ''), (5, ''), ('m' * 100, 'm' * 64)):
-            self.assertEqual(f(raw), want, raw)
-
-    def test_claude(self):
-        f = self.ns['cost_claude']
-        u = {'input_tokens': 1000, 'output_tokens': 100, 'cache_read_input_tokens': 10000,
-             'cache_creation': {'ephemeral_5m_input_tokens': 2000, 'ephemeral_1h_input_tokens': 500}}
-        usd, tok = f('claude-opus-5-5', u)
-        self.assertAlmostEqual(usd, 1000 * 4 + 2000 * 5 + 500 * 8 + 10000 * 0.2 + 100 * 20)
-        self.assertEqual(tok, (1000, 100, 10000, 2500), '(输入, 输出, 缓存读, 缓存写)')
-        self.assertAlmostEqual(f('claude-opus-5-5', dict(u, speed='fast'))[0], 1000 * 8 + 2000 * 10 + 500 * 16 + 10000 * 0.4 + 100 * 40,
-                               msg='快速模式：输入、输出按快速模式的标价，缓存跟着输入翻倍')
-        self.assertAlmostEqual(f('claude-sonnet-5-5', dict(u, speed='fast'))[0], f('claude-sonnet-5-5', u)[0], msg='没有快速模式标价的模型照常')
-        self.assertAlmostEqual(f('claude-opus-5-5', dict(u, inference_geo='us'))[0], f('claude-opus-5-5', u)[0] * 1.1, msg='只在美国推理：加 10%')
-        self.assertAlmostEqual(f('claude-sonnet-4-5', dict(u, inference_geo='us'))[0], 1000 * 3 + 2000 * 3.75 + 500 * 6 + 10000 * 0.3 + 100 * 15,
-                               msg='4.6 以前的模型不加价')
-        self.assertAlmostEqual(f('claude-opus-5-5', {'cache_creation_input_tokens': 1000})[0], 1000 * 5, msg='没有分 5 分钟、1 小时的：按 5 分钟算')
-        self.assertAlmostEqual(f('claude-opus-5-5', {'output_tokens': 10, 'server_tool_use': {'web_search_requests': 3}})[0], 10 * 20 + 3 * 10000,
-                               msg='网页搜索一次 0.01 美元')
-        self.assertAlmostEqual(f('claude-haiku-5-5', {'input_tokens': 50000, 'output_tokens': 1000})[0], 50000 * 0.1 + 1000 * 0.5)
-        self.assertAlmostEqual(f('claude-haiku-5-5', {'input_tokens': 90000, 'cache_read_input_tokens': 20000, 'output_tokens': 1000})[0],
-                               90000 * 0.5 + 20000 * 0.05 + 1000 * 2.5, msg='输入（含缓存）超过 10 万 token：长上下文的标价')
-        self.assertEqual(f('claude-unknown-9', u), (None, (1000, 100, 10000, 2500)), '没有公开价格的：只数 token')
-        for junk in (True, -5, 1.5, '100', 10 ** 13, None):
-            self.assertEqual(f('claude-opus-5-5', {'input_tokens': junk, 'output_tokens': 1})[1], (0, 1, 0, 0), junk)
-
-    def test_codex(self):
-        f = self.ns['cost_codex']
-        u = {'input_tokens': 10000, 'cached_input_tokens': 8000, 'cache_write_input_tokens': 0, 'output_tokens': 500,
-             'reasoning_output_tokens': 300}
-        base = 2000 * 10 + 8000 * 1 + 500 * 50
-        self.assertEqual(f('gpt-6-astra', 'default', u), (base, (2000, 500, 8000, 0)), '输入含缓存读；推理算在输出里')
-        for tier, k in ((None, 1), ('priority', 2), ('fast', 2), ('flex', 0.5), ('ultrafast', 6)):
-            self.assertAlmostEqual(f('gpt-6-astra', tier, u)[0], base * k, msg=tier)
-        self.assertAlmostEqual(f('gpt-6-sol', 'ultrafast', u)[0], (2000 * 2 + 8000 * 0.2 + 500 * 10) * 2, msg='没有 Ultrafast 标价的模型按 Fast 算')
-        self.assertAlmostEqual(f('gpt-6-astra', None, {'input_tokens': 300000})[0], 300000 * 20, msg='输入超过 272K：长上下文的标价')
-        self.assertAlmostEqual(f('gpt-6-astra', None, {'input_tokens': 5000, 'cached_input_tokens': 1000, 'cache_write_input_tokens': 2000})[0],
-                               2000 * 10 + 1000 * 1 + 2000 * 12.5)
-        self.assertAlmostEqual(f('gpt-5.3-codex', None, {'input_tokens': 5000, 'cached_input_tokens': 1000, 'cache_write_input_tokens': 2000})[0],
-                               2000 * 1.75 + 1000 * 0.175 + 2000 * 1.75, msg='没有缓存写标价的按输入算')
-        self.assertAlmostEqual(f('gpt-5.3-codex', None, {'input_tokens': 300000})[0], 300000 * 1.75, msg='没有长上下文标价的照常')
-        self.assertEqual(f('gpt-6-astra', None, {'input_tokens': 100, 'cached_input_tokens': 500})[1], (0, 0, 100, 0), '缓存不超过输入')
-        self.assertEqual(f('codex-auto-review', None, u), (None, (2000, 500, 8000, 0)))
+# 价格表（Prices）只能在进程内测，在 cli/src/cmd/cost.rs 的单元测试里：
+# test_model_names（会话记录里的模型名 → 价格表里的写法）：model_names_like_python_test
+# test_claude（Anthropic 的标价：缓存、快速模式、只在美国推理、长上下文、网页搜索、没有公开价格的）：claude_prices_like_python_test
+# test_codex（OpenAI 的标价：档位、长上下文、缓存写）：codex_prices_like_python_test
 
 
 class Scan(Base):
@@ -128,12 +183,9 @@ class Scan(Base):
         self.rollouts.mkdir(parents=True)
 
     def reply(self, ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100):
-        return {'type': 'assistant', 'timestamp': iso(ts), 'requestId': 'req_' + mid, 'sessionId': sid,
-                'message': {'id': mid, 'model': model, 'role': 'assistant', 'usage': {'input_tokens': inp, 'output_tokens': out}}}
+        return reply(ts, mid, sid, model, inp, out)
 
-    @staticmethod
-    def owner(uuid, sid='s1'):
-        return {'type': 'session-owner', 'accountUuid': uuid, 'organizationUuid': 'org-1', 'sessionId': sid}
+    owner = staticmethod(owner)
 
     def codex(self, ts, kind, payload):
         return {'timestamp': iso(ts), 'type': kind, 'payload': payload}
@@ -142,13 +194,19 @@ class Scan(Base):
         return self.codex(ts, 'event_msg', {'type': 'token_count', 'info': {'total_token_usage': total, 'last_token_usage': last},
                                             'rate_limits': {}})
 
-    def scan(self):
-        j = self.j if hasattr(self, 'j') else self.ns['cost_fresh']()
-        self.j = j
-        return self.ns['cost_scan'](j, time.time())
+    def run_cost(self):
+        """统计一次（cca cost sync）：(统计的结果, 同步的结果)"""
+        doc = self.dev.sync()
+        return doc['scan'], doc['sync']
 
-    def total(self, ident):
-        rows = self.j['orphan'] if ident is None else self.j['h'].get(ident, {})
+    def scan(self):
+        """读一遍会话记录里新增的：看了几个文件、新算进来几条、读了多少字节；self.j 是读完以后记下的（scan.json）"""
+        s = self.run_cost()[0]
+        self.j = self.dev.cost('scan.json')
+        return types.SimpleNamespace(files=s['files'], records=s['records'], bytes=s['read_bytes'])
+
+    def total(self, who):
+        rows = self.j['orphan'] if who is None else self.j['h'].get(who, {})
         return [sum(r[i] for r in rows.values()) for i in range(7)]
 
     def write_all(self):
@@ -188,6 +246,7 @@ class Scan(Base):
             self.tokens(t0 + 5, tot1, last1)))
 
     def test_scan_and_increments(self):
+        self.dev.write(self.cca / 'accounts.json', {'bob(bob@example.com)': 'US-A'})   # 有官方账号才统计
         self.write_all()
         s = self.scan()
         astra = (2000 * 10 + 8000 * 1 + 500 * 50) * 2
@@ -231,18 +290,17 @@ class Scan(Base):
         self.assertEqual(self.scan().records, 1, '坏的一行跳过，后面的照读')
 
     def test_run_and_publish(self):
-        """cost_run：统计、认出各个身份是谁（cca 的账号目录、~/.claude.json、~/.codex/auth.json）、发布 local.json"""
+        """统计一次：读会话记录、认出各个身份是谁（cca 的账号目录、~/.claude.json、~/.codex/auth.json）、发布 local.json"""
         self.write_all()
-        ns = self.ns
         (self.home / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': U1, 'emailAddress': 'Alice@Example.com'}}))
         (self.cca / 'accounts.json').write_text(json.dumps({'bob(bob@example.com)': 'US-A', 'kimi': {'base_url': 'https://api.example.com'}}))
-        cd = Path(ns['cdir']('bob(bob@example.com)'))
+        cd = self.dev.cdir('bob(bob@example.com)')
         cd.mkdir(parents=True)
         (cd / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': U2, 'emailAddress': 'bob@example.com'}}))
         claims = base64.urlsafe_b64encode(json.dumps({'email': 'carol@example.com', 'https://api.openai.com/auth': {
             'chatgpt_user_id': U3, 'chatgpt_plan_type': 'pro'}}).encode()).decode().rstrip('=')
         (self.home / '.codex' / 'auth.json').write_text(json.dumps({'tokens': {'id_token': 'e30.%s.sig' % claims}}))
-        scan, sync = ns['cost_run']()
+        scan, sync = self.run_cost()
         self.assertEqual((scan['state'], scan['first'], scan['records'], sync['state']), ('ready', True, 9, 'skipped'))
         local = json.loads((self.cca / 'cost' / 'local.json').read_text())
         self.assertEqual(local['who'], {'claude:' + U1: 'alice@example.com', 'claude:' + U2: 'bob@example.com', 'codex:' + U3: 'carol@example.com'})
@@ -252,47 +310,49 @@ class Scan(Base):
         for name in ('local.json', 'scan.json'):
             self.assertEqual(oct(os.stat(self.cca / 'cost' / name).st_mode & 0o777), '0o600', name)
         self.assertFalse((self.cca / 'cost' / 'worker.json').exists(), '跑完删掉 worker.json')
-        h, um = ns['cost_content'](local, ns['CLAUDE'], 'alice@example.com')
+        # 这个账号在这台设备上的（辅助程序里取它的 cost_content：cli/src/cmd/cost.rs 的单元测试 content_like_python_test）
+        h, um = content(local, 'claude', 'alice@example.com')
         self.assertEqual((sum(r[0] for r in h.values()), um), (12000, ['claude-unknown-1']))
-        self.assertEqual(ns['cost_content'](local, ns['CODEX'], 'alice@example.com'), ({}, []), '工具分开')
+        self.assertEqual(content(local, 'codex', 'alice@example.com'), ({}, []), '工具分开')
         before = (self.cca / 'cost' / 'local.json').stat().st_mtime_ns
         time.sleep(0.01)
-        scan, _ = ns['cost_run']()
+        scan, _ = self.run_cost()
         self.assertEqual((scan['first'], scan['records']), (False, 0))
         self.assertEqual((self.cca / 'cost' / 'local.json').stat().st_mtime_ns, before, '内容没变不重写（App 看它变了才重读）')
         (self.home / '.claude.json').write_text('{}')
-        ns['cost_run']()
+        self.run_cost()
         self.assertEqual(json.loads((self.cca / 'cost' / 'local.json').read_text())['who'].get('claude:' + U1), 'alice@example.com',
                          '退出登录了：以前记下的身份照样认得')
         j = json.loads((self.cca / 'cost' / 'scan.json').read_text())
         j['build'] = 'old'
         (self.cca / 'cost' / 'scan.json').write_text(json.dumps(j))
-        self.assertEqual(ns['cost_run']()[0]['records'], 9, '价格表、规则变了：从头重算')
+        self.assertEqual(self.run_cost()[0]['records'], 9, '价格表、规则变了：从头重算')
         local = json.loads((self.cca / 'cost' / 'local.json').read_text())
         self.assertEqual(local['who'].get('claude:' + U1), 'alice@example.com', '从头重算：退出登录了的 alice 照样认得（以前记下的留着）')
-        self.assertEqual(sum(r[0] for r in ns['cost_content'](local, ns['CLAUDE'], 'alice@example.com')[0].values()), 12000)
+        self.assertEqual(sum(r[0] for r in content(local, 'claude', 'alice@example.com')[0].values()), 12000)
         (self.cca / 'cost' / 'scan.json').unlink()
-        self.assertEqual(ns['cost_run']()[0]['records'], 9, 'scan.json 没了（restore 的备份不带它）：从头重算')
+        self.assertEqual(self.run_cost()[0]['records'], 9, 'scan.json 没了（restore 的备份不带它）：从头重算')
         self.assertEqual(json.loads((self.cca / 'cost' / 'local.json').read_text())['who'].get('claude:' + U1), 'alice@example.com',
                          '身份照 local.json 里记下的')
         (self.cca / 'config.json').unlink()
-        with self.assertRaises(OSError):
-            ns['cost_run']()   # cca restore 刚删掉 ~/.cca：不写回来
+        said = self.dev.sync(rc=1)   # cca restore 刚删掉 ~/.cca：不写回来（写文件的地方出错，没统计成）
+        self.assertIn('统计折合金额没成', said)
+        self.assertIn(str(self.cca / 'config.json'), said)
         self.assertFalse((self.cca / 'config.json').exists())
 
     def test_rebuild_keeps_history(self):
         """从头重算（价格表、规则变了）：早于现在还在的最早的会话记录（修改时间）的小时，会话记录可能删掉了一部分（Claude Code
         默认删掉 30 天以前的），以前算过的沿用以前的；以后的照会话记录重算。scan.json 没了（restore）就用 local.json 里的"""
+        self.dev.write(self.cca / 'accounts.json', {'alice@example.com': 'US-A'})   # 有官方账号才统计
         self.write_all()
-        ns = self.ns
         (self.home / '.claude.json').write_text(json.dumps({'oauthAccount': {'accountUuid': U1, 'emailAddress': 'alice@example.com'}}))
-        ns['cost_run']()
+        self.run_cost()
         lo = self.t0 - 86400   # 会话记录的修改时间都改成 t0 的前一天：从这时起会话记录是全的
         for p in self.home.rglob('*.jsonl'):
             os.utime(p, (lo, lo))
         scan = self.cca / 'cost' / 'scan.json'
         j = json.loads(scan.read_text())
-        a, ident = j['h']['claude:' + U1], 'claude:' + U1
+        a, who = j['h']['claude:' + U1], 'claude:' + U1
         gone, late, real = str(lo - 10 * 86400), str(self.t0 + 5 * 3600), str(self.t0)
         want = a[real]
         a[gone] = [5000000, 1, 10, 1, 0, 0, 0]   # 早于它：那个会话记录删掉了，重算算不出来
@@ -301,70 +361,86 @@ class Scan(Base):
         j['orphan'][gone] = [1000, 1, 0, 0, 0, 0, 0]
         j['build'] = 'old'
         scan.write_text(json.dumps(j))
-        self.assertEqual(ns['cost_run']()[0]['records'], 9)
+        self.assertEqual(self.run_cost()[0]['records'], 9)
         j = json.loads(scan.read_text())
         self.assertNotIn('old', j, '挑完就不留了')
-        self.assertEqual(j['h'][ident].get(gone), [5000000, 1, 10, 1, 0, 0, 0], '会话记录可能删掉了的小时：沿用以前算好的')
-        self.assertNotIn(late, j['h'][ident], '会话记录是全的小时：照重算的')
-        self.assertEqual(j['h'][ident][real], want)
+        self.assertEqual(j['h'][who].get(gone), [5000000, 1, 10, 1, 0, 0, 0], '会话记录可能删掉了的小时：沿用以前算好的')
+        self.assertNotIn(late, j['h'][who], '会话记录是全的小时：照重算的')
+        self.assertEqual(j['h'][who][real], want)
         self.assertEqual(j['orphan'].get(gone), [1000, 1, 0, 0, 0, 0, 0], '认不出是谁的同样')
         local = json.loads((self.cca / 'cost' / 'local.json').read_text())
-        self.assertEqual(local['acc'][ident].get(gone), [5000000, 1, 10, 1, 0, 0, 0])
+        self.assertEqual(local['acc'][who].get(gone), [5000000, 1, 10, 1, 0, 0, 0])
         scan.unlink()   # restore 的备份不带 scan.json：从 local.json 里取
-        ns['cost_run']()
-        self.assertEqual(json.loads(scan.read_text())['h'][ident].get(gone), [5000000, 1, 10, 1, 0, 0, 0], '从 local.json 里取')
+        self.run_cost()
+        self.assertEqual(json.loads(scan.read_text())['h'][who].get(gone), [5000000, 1, 10, 1, 0, 0, 0], '从 local.json 里取')
         j = json.loads(scan.read_text())
-        j['build'], j['old'] = 'old', {'h': {ident: {gone: [8000000, 2, 0, 0, 0, 0, 0]}}, 'orphan': {}}   # 上一次重算没算完
+        j['build'], j['old'] = 'old', {'h': {who: {gone: [8000000, 2, 0, 0, 0, 0, 0]}}, 'orphan': {}}   # 上一次重算没算完
         scan.write_text(json.dumps(j))
-        ns['cost_run']()
-        self.assertEqual(json.loads(scan.read_text())['h'][ident].get(gone), [8000000, 2, 0, 0, 0, 0, 0],
+        self.run_cost()
+        self.assertEqual(json.loads(scan.read_text())['h'][who].get(gone), [8000000, 2, 0, 0, 0, 0, 0],
                          '上一次重算没算完又要从头来：用那一次留着的（重算到一半的不算以前的）')
         for p in self.home.rglob('*.jsonl'):
             p.unlink()
         j = json.loads(scan.read_text())
         j['build'] = 'old'
         scan.write_text(json.dumps(j))
-        ns['cost_run']()
-        self.assertEqual(json.loads(scan.read_text())['h'][ident].get(real), want, '会话记录一个都没了：以前算的全留着')
+        self.run_cost()
+        self.assertEqual(json.loads(scan.read_text())['h'][who].get(real), want, '会话记录一个都没了：以前算的全留着')
 
     def test_sync_command(self):
-        ns = self.ns
-        out = []
-        with mock.patch('builtins.print', lambda *a, **k: out.append(' '.join(map(str, a)))), self.assertRaises(SystemExit) as e:
-            ns['cmd_cost_sync']('--json')
-        self.assertEqual(e.exception.code, 2, '没有官方账号：用不了')
+        r = self.dev.run('cost-sync', '--json')
+        self.assertEqual(r.returncode, 2, '没有官方账号：用不了')
         (self.cca / 'accounts.json').write_text(json.dumps({'bob(bob@example.com)': 'US-A'}))
         (self.cca / 'config.json').write_text('{"cost": false}')
-        with mock.patch('builtins.print', lambda *a, **k: out.append(' '.join(map(str, a)))), self.assertRaises(SystemExit) as e:
-            ns['cmd_cost_sync']('--json')
-        self.assertEqual(e.exception.code, 2)
-        self.assertIn('"cost": false', out[-1])
+        r = self.dev.run('cost-sync', '--json')
+        self.assertEqual(r.returncode, 2)
+        self.assertIn('"cost": false', r.stdout)
         (self.cca / 'config.json').write_text('{}')
         self.write_all()
-        out.clear()
-        with mock.patch('builtins.print', lambda *a, **k: out.append(' '.join(map(str, a)))):
-            ns['cmd_cost_sync']('--json', '--now')
-        doc = json.loads(out[-1])
+        doc = self.dev.sync('--now')
         self.assertEqual((doc['version'], doc['kind'], doc['scan']['state'], doc['scan']['records'], doc['sync']['state']),
                          (1, 'cost_sync', 'ready', 9, 'skipped'), '没开设备统计：不同步')
+        # 另一个统计正在跑（拿着 cost.lock）：后台的那种（cost-worker）马上走，cca cost sync 等它跑完再统计。
+        # 等满了还没结束是退出码 1（要等 4 分钟）：cli/src/cmd/cost.rs 的单元测试 lock_waits_then_gives_up、sync_failures_exit_1
+        with open(self.proj / 's1.jsonl', 'a') as f:
+            f.write(jl(self.reply(self.t0 + 9600, 'm7')))
+        before = (self.cca / 'cost' / 'scan.json').read_bytes()
         lock = open(self.cca / 'cost' / 'cost.lock', 'a')
-        import fcntl
         fcntl.flock(lock, fcntl.LOCK_EX)
+        waiting = None
         try:
-            with mock.patch.dict(ns, {'COST_WAIT': 0.2}), self.assertRaises(SystemExit) as e, \
-                    mock.patch('builtins.print', lambda *a, **k: out.append(' '.join(map(str, a)))):
-                ns['cmd_cost_sync']('--json')
-            self.assertEqual(e.exception.code, 1, '另一个统计一直没结束')
+            t0 = time.monotonic()
+            r = self.dev.run('cost-worker')
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
+            self.assertLess(time.monotonic() - t0, 30)   # 等的话要等到放锁（这里一直不放：cca cost sync 的那种等满 4 分钟）
+            self.assertEqual((self.cca / 'cost' / 'scan.json').read_bytes(), before, '没统计')
+            waiting = subprocess.Popen([HELPER, 'cost-sync', '--json'], env=self.dev.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                waiting.wait(1.2)   # 还在等
         finally:
             lock.close()
+            if waiting is not None:
+                try:
+                    out, err = waiting.communicate(timeout=60)
+                finally:   # 不管等没等到都不留下它：只停这里起的这一个进程
+                    waiting.kill()
+                    waiting.wait()
+        self.assertEqual((waiting.returncode, err, json.loads(out)['scan']['records']), (0, '', 1), '放了锁以后照常统计')
 
 
 class Periods(Base):
     TZ = 'America/New_York'
 
+    def periods(self, now, quota=None):
+        """按天、按周切出来的时段（辅助程序只给测试用的 _cost-periods）：{'days': [[开始, 结束, 日期]…], 'weeks': [[开始, 结束, 按什么切的]…]}"""
+        r = self.dev.run('_cost-periods', repr(now), *([] if quota is None else [json.dumps(quota)]))
+        self.assertEqual((r.returncode, r.stderr), (0, ''))
+        return json.loads(r.stdout)
+
     def test_days_across_dst(self):
         now = time.mktime((2026, 11, 13, 12, 0, 0, 0, 0, -1))
-        days = self.ns['cost_days'](now)
+        days = self.periods(now)['days']
         self.assertEqual(len(days), 30)
         self.assertTrue(days[-1][0] <= now < days[-1][1], '最后一项是今天')
         self.assertTrue(all(a[1] == b[0] for a, b in zip(days, days[1:])), '首尾相接')
@@ -375,7 +451,7 @@ class Periods(Base):
 
     def test_calendar_weeks(self):
         now = time.mktime((2026, 11, 13, 12, 0, 0, 0, 0, -1))
-        weeks = self.ns['cost_weeks'](None, now)
+        weeks = self.periods(now)['weeks']
         self.assertEqual(len(weeks), 13, '最近 12 周和这一周')
         self.assertTrue(all(a[1] == b[0] for a, b in zip(weeks, weeks[1:])))
         self.assertTrue(all(b == 'calendar' and time.localtime(s).tm_wday == 0 and time.localtime(s)[3:6] == (0, 0, 0) for s, e, b in weeks),
@@ -391,7 +467,7 @@ class Periods(Base):
         r1 = time.mktime((2026, 10, 28, 10, 30, 0, 0, 0, -1))   # 周三 10:30 重置
         quota = [{'start_epoch': r1 - 7 * 86400, 'end_epoch': r1}, {'start_epoch': r1, 'end_epoch': r1 + 7 * 86400},
                  {'start_epoch': r1 + 7 * 86400 + 3 * 86400, 'end_epoch': r1 + 17 * 86400}]   # 中间断了 3 天；最后一项包含 now
-        weeks = self.ns['cost_weeks'](quota, now)
+        weeks = self.periods(now, quota)['weeks']
         self.assertTrue(all(a[1] == b[0] for a, b in zip(weeks, weeks[1:])), weeks)
         self.assertTrue(weeks[-1][0] <= now < weeks[-1][1])
         self.assertEqual([b for _, _, b in weeks][-5:], ['calendar', 'quota', 'quota', 'calendar', 'quota'])
@@ -403,18 +479,37 @@ class Periods(Base):
         self.assertEqual(time.strftime('%a %H:%M', time.localtime(before[0])), 'Mon 00:00',
                          '额度窗口前面一周的零头（周一到周三 10:30）比一天长：单独一项')
         s5 = time.mktime((2026, 10, 19, 5, 0, 0, 0, 0, -1))   # 周一 05:00 开始的额度窗口：前面只有 5 个小时
-        w2 = self.ns['cost_weeks']([{'start_epoch': s5, 'end_epoch': s5 + 7 * 86400}], now)
+        w2 = self.periods(now, [{'start_epoch': s5, 'end_epoch': s5 + 7 * 86400}])['weeks']
         idx = [i for i, p in enumerate(w2) if p[2] == 'quota'][0]
         self.assertEqual((w2[idx - 1][0], w2[idx - 1][1]), (time.mktime((2026, 10, 12, 0, 0, 0, 0, 0, -1)), s5), '不到一天的零头并进前一项')
         self.assertTrue(all(a[1] == b[0] for a, b in zip(w2, w2[1:])) and w2[-1][0] <= now < w2[-1][1])
         self.assertTrue(len(w2) <= 13 and len(weeks) <= 13)
 
-    def test_bin_by_midpoint(self):
-        b = self.ns['cost_bin']
-        periods = [(1000 * 3600, 1000 * 3600 + 5400, 'x'), (1000 * 3600 + 5400, 1003 * 3600, 'y')]
-        h = {str(1000 * 3600): [1, 1, 0, 0, 0, 0, 0], str(1001 * 3600): [2, 1, 0, 0, 0, 0, 0], str(1002 * 3600): [4, 1, 0, 0, 0, 0, 0],
-             str(999 * 3600): [8, 1, 0, 0, 0, 0, 0], str(1003 * 3600): [16, 1, 0, 0, 0, 0, 0]}
-        self.assertEqual([r[0] for r in b(periods, h)], [1, 6], '跨过边界的小时按中点算；时段以外的不算')
+    # test_bin_by_midpoint（小时数据按时段加起来：跨过边界的小时按中点算）：cli/src/cmd/cost.rs 的单元测试 bin_by_midpoint_like_python_test
+
+
+class CostView:
+    """辅助程序里的 CostView（_gui state 的 cost、cost_total 靠它），经只给测试用的 _cost-view 看：“现在”是给定的。
+    c 是 config.json 里它看的那两项，cfg 是设备统计的配置（None：没开）。每问一次都照 cost/ 里现在的文件现算"""
+    def __init__(self, dev, c, now, cfg):
+        self.dev, self.now = dev, now
+        self.spec = {'config': c, 'presence': cfg, 'accounts': [], 'sync': [], 'tools': []}
+
+    def ask(self, **more):
+        r = self.dev.run('_cost-view', repr(self.now), json.dumps(dict(self.spec, **more)))
+        if (r.returncode, r.stderr) != (0, ''):
+            raise AssertionError('_cost-view 没成：退出码 %d，%s' % (r.returncode, r.stderr))
+        return json.loads(r.stdout)
+
+    def account(self, tool, key, quota, mapped, logged_in):
+        self.spec['accounts'].append([tool, key, quota, mapped, logged_in])
+        return self.ask()['accounts'][-1]
+
+    def total(self, tools):
+        return self.ask(tools=tools)['total']
+
+    def scan_state(self):
+        return self.ask()['scan']
 
 
 class View(Base):
@@ -458,13 +553,12 @@ class View(Base):
             (self.cca / 'cost' / name).write_text(json.dumps(doc))
 
     def view(self, c=None, cfg='default'):
-        return self.ns['CostView'](c or {}, self.NOW, self.cfg if cfg == 'default' else cfg)
+        return CostView(self.dev, c or {}, self.NOW, self.cfg if cfg == 'default' else cfg)
 
     def test_account(self):
-        ns = self.ns
         cv = self.view()
-        a = cv.account(ns['CLAUDE'], 'alice(alice@example.com)', None, True, True)
-        self.assertEqual((a['currency'], a['prices_date'], len(a['weeks']), len(a['days'])), ('USD', ns['COST_PRICES_DATE'], 13, 30))
+        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        self.assertEqual((a['currency'], a['prices_date'], len(a['weeks']), len(a['days'])), ('USD', COST_PRICES_DATE, 13, 30))
         s = a['summary']
         self.assertEqual((s['weeks_usd'], s['current_usd'], s['days_usd'], s['today_usd']), (20.0, 11.0, 19.0, 5.0),
                          '三台设备加起来；撤销的那份只算 bob-mini 现在的 key 有数据以前的小时；坏的不算')
@@ -491,9 +585,9 @@ class View(Base):
         self.assertEqual(len(devs[0]['weeks_usd']), 13)
         self.assertEqual(a['sync'], {'state': 'ok', 'message': None, 'checked_epoch': self.NOW - 100,
                                      'missing': [{'name': 'dan-air', 'used_epoch': self.NOW - 3600}]}, '30 天以前用过的不提')
-        x = cv.account(ns['CODEX'], 'alice@example.com', None, True, True)
+        x = cv.account('codex', 'alice@example.com', None, True, True)
         self.assertEqual((x['summary']['weeks_usd'], [d['name'] for d in x['devices']]), (4.0, ['alice-mbp']), '工具分开')
-        self.assertIsNone(cv.account(ns['CLAUDE'], 'bob@example.com', None, True, True), '没有记录：None')
+        self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '没有记录：None')
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['current_usd'], t['weeks_usd'], t['average_usd'], t['days_usd'], t['today_usd']), (15.0, 24.0, 1.6, 23.0, 5.0))
         self.assertEqual(t['average_day_usd'], 0.4828, '按天的平均：有平均的账号加起来（Codex 只有一天、还没过完的整天）')
@@ -513,25 +607,24 @@ class View(Base):
         self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1}, '认不出是谁的：最近 30 天的')
         self.assertEqual(t['scan']['state'], 'ready')
         quota = {'weeks': [{'start_epoch': self.NOW - 2 * 86400, 'end_epoch': self.NOW + 5 * 86400}]}
-        q = self.view().account(ns['CLAUDE'], 'alice@example.com', quota, True, True)
+        q = self.view().account('claude', 'alice@example.com', quota, True, True)
         self.assertEqual((q['weeks'][-1]['basis'], q['weeks'][-1]['start_epoch'], q['summary']['current_usd']),
                          ('quota', self.NOW - 2 * 86400, 7.0), '有额度窗口时，这一周按额度窗口算（周三 12:00 起：carol-air 周三 10 点的不算）')
 
     def test_me_without_records(self):
-        ns = self.ns
         self.local['acc']['claude:' + U1] = {}
         self.write()
         cv = self.view()
-        a = cv.account(ns['CLAUDE'], 'alice(alice@example.com)', None, True, True)
+        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
         self.assertEqual([(d['name'], d['me']) for d in a['devices']], [('bob-mini', False), ('carol-air', False)],
                          '这台设备没有这个账号的记录：不列这台设备，别的设备的照样有')
-        cv.account(ns['CODEX'], 'alice@example.com', None, True, True)
+        cv.account('codex', 'alice@example.com', None, True, True)
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['days_usd'], t['me']['days_usd'], t['me']['by_tool']['claude']['days_usd'], t['me']['by_tool']['claude']['average_usd']),
                          (8.0, 4.0, 0.0, None), 'me 里没有这个账号（金额是 0、没有平均），只有 Codex 的 4')
 
     def test_sync_states(self):
-        ns, C, k = self.ns, self.ns['CLAUDE'], 'alice(alice@example.com)'
+        C, k = 'claude', 'alice(alice@example.com)'
         st = lambda cv, mapped=True, logged=True: cv.account(C, k, None, mapped, logged)['sync']
         self.assertEqual(st(self.view({'presence': False}))['state'], 'off')
         lo = self.view(cfg=None)
@@ -543,7 +636,7 @@ class View(Base):
         self.sync['state'] = 'old_server'
         self.write()
         s = st(self.view())
-        self.assertEqual((s['state'], s['message']), ('old_server', ns['COST_OLD']))
+        self.assertEqual((s['state'], s['message']), ('old_server', COST_OLD))
         self.sync.update(state='error', error='连不上', at=self.NOW - 50)
         self.write()
         self.assertEqual((st(self.view())['state'], st(self.view())['message']), ('error', '连不上'), '这个账号上次同步好了以后又出错了')
@@ -560,66 +653,153 @@ class View(Base):
     def test_scan_state(self):
         (self.cca / 'cost' / 'scanned').unlink()
         self.assertEqual(self.view().scan_state(), 'never')
-        me = os.getpid()
-        (self.cca / 'cost' / 'worker.json').write_text(json.dumps({'v': 1, 'pid': me, 'started': self.ns['proc_starts']({me})[me]}))
+        me = os.getpid()   # 一个真的进程和它的启动时间（辅助程序也是问 ps，照 C 的写法、按它的时区读）
+        said = subprocess.run(['/bin/ps', '-o', 'lstart=', '-p', str(me)], env={'LC_ALL': 'C', 'LANG': 'C', 'TZ': self.TZ}, capture_output=True, text=True, check=True).stdout
+        started = int(time.mktime(time.strptime(' '.join(said.split()), '%a %b %d %H:%M:%S %Y')))
+        (self.cca / 'cost' / 'worker.json').write_text(json.dumps({'v': 1, 'pid': me, 'started': started}))
         self.assertEqual(self.view().scan_state(), 'scanning')
         (self.cca / 'cost' / 'worker.json').write_text(json.dumps({'v': 1, 'pid': me, 'started': 1}))
         self.assertEqual(self.view().scan_state(), 'never', '进程号被重用了')
 
 
 class Crypto(Base):
+    SALT = 'ab' * 16
+    KEY = 'alice(Alice@Example.com)'   # 账号表里邮箱的大小写随人写：账号摘要、密钥都按小写的算
+
+    def device(self, name, seed):
+        """映射里的账号 alice、开着设备统计、登录着（身份 U1）的一台设备；deploy key 是编的（seed 不同指纹就不同），服务器是假的 curl"""
+        d = Home(self.root / name, self.TZ)
+        d.write(d.cca / 'accounts.json', {self.KEY: 'US-A'})
+        d.write(d.cca / 'policy' / 'policy.json', {'version': 1, 'claude': {'alice@example.com': 'US-A'}, 'presence': {
+            'url': 'https://192.0.2.10:18443', 'pins': ['sha256//' + 'A' * 43 + '='], 'salt': self.SALT}})
+        d.write(d.cca / 'policy' / 'id_ed25519.pub', fake_pub(seed))
+        d.write(d.cca / 'policy' / 'id_ed25519', '测试用的占位：签名的是假的 ssh-keygen\n')
+        d.write(d.cdir(self.KEY) / '.claude.json', {'oauthAccount': {'accountUuid': U1, 'emailAddress': 'Alice@Example.com'}})
+        d.fake('ssh-keygen', KEYGEN)
+        d.fake('curl', CURL)
+        d.fp = sw.fp_of(str(d.cca / 'policy' / 'id_ed25519.pub'))
+        self.serve(d, [])
+        return d
+
+    def serve(self, d, rows):
+        """假服务器手里这个账号各台设备的（rows）；传上来的照收"""
+        d.write(d.home / 'server' / 'get', {'cost': {self.aid: rows}, 'missing': {}, 'me_name': 'alice-mbp'})
+        d.write(d.home / 'server' / 'put', {'cost': {}})
+
+    def sent(self, d):
+        """这台设备发给服务器的请求（按先后）"""
+        return [json.loads(p.read_text()) for p in sorted((d.home / 'sent').glob('*.json'), key=lambda p: int(p.stem))]
+
+    def upload(self, d):
+        """同步一次，返回这次传上去的那一份密文"""
+        before = len(self.sent(d))
+        self.assertEqual(d.sync('--now')['sync']['state'], 'ok')
+        ask, put = self.sent(d)[before:]
+        self.assertEqual((ask['op'], ask['key'], ask['get'], put['key'], list(put['put'])), ('ledger', d.fp, [self.aid], d.fp, [self.aid]),
+                         '先问、再传；设备指纹、账号摘要和文档写的一样')
+        return put['put'][self.aid]
+
+    def local_rows(self, d, rows):
+        """这台设备以前统计好的（cost/local.json）：身份 U1 的小时数据。没有会话记录、没有 scan.json 时统计照它接上"""
+        d.write(d.cca / 'cost' / 'local.json', {'v': 1, 'build': 'x', 'who': {'claude:' + U1: 'alice@example.com'}, 'acc': {'claude:' + U1: rows},
+                                                'um': {}, 'orphan': {}})
+
     def test_seal_open(self):
-        ns, C, X = self.ns, self.ns['CLAUDE'], self.ns['CODEX']
-        salt, aid, fp = 'ab' * 16, 'a' * 32, 'SHA256:' + 'F' * 43
-        k = ns['keyshare_keys'](salt, C, 'Alice@Example.com', U1, ns['COST_LABEL'])
-        self.assertEqual(k, sw.derive(sw.COST, salt, 'claude', 'alice@example.com', U1), '和文档写的一样')
-        self.assertNotEqual(k, ns['keyshare_keys'](salt, C, 'alice@example.com', U1), '和共享 API key 的密钥不通')
+        salt = self.SALT
+        self.aid = aid = sw.aid_of(salt, 'claude', 'alice@example.com')
+        k = sw.derive(sw.COST, salt, 'claude', 'alice@example.com', U1)
+        a = self.device('alice-mbp', 0)
+        hour = int(time.time() // 3600 * 3600) - 3600
+        a.write(a.home / '.claude' / 'projects' / '-work' / 's1.jsonl',
+                jl(owner(U1), reply(hour + 60, 'm1'), reply(hour + 120, 'm2', model='claude-x')))
+        b = self.upload(a)
         now = time.time()
-        doc = {'v': 1, 'at': now, 'h': {'1794567600': [1, 2, 3, 4, 5, 6, 0]}, 'um': ['claude-x']}
-        b = ns['cost_seal'](k, aid, fp, doc)
-        self.assertEqual(sw.cost_open(k, aid, fp, b), doc, '照文档能解开')
-        self.assertEqual(ns['cost_open'](k, aid, fp, b, now), {'at': now, 'h': doc['h'], 'um': ['claude-x']})
-        self.assertEqual(ns['cost_open'](k, aid, fp, sw.cost_seal(k, aid, fp, doc), now)['h'], doc['h'], '照文档封的 cca 也认')
+        doc = sw.cost_open(k, aid, a.fp, b)   # 和文档写的一样的密钥、认证里带的东西：照文档能解开
+        self.assertEqual(doc, {'v': 1, 'at': doc['at'], 'h': {str(hour): [6000, 2, 2000, 200, 0, 0, 1]}, 'um': ['claude-x']})
+        self.assertTrue(now - 600 < doc['at'] <= now)   # 传的时候的时间
+        self.assertEqual((doc['h'], doc['um']), content(a.cost('local.json'), 'claude', 'alice@example.com'), '传的是这台设备统计好的那一份')
+        self.assertIsNone(sw.unseal(sw.COST, sw.derive(sw.KEYSHARE, salt, 'claude', 'alice@example.com', U1), [aid, a.fp], b), '和共享 API key 的密钥不通')
         self.assertEqual(srvmod.parse_blob(b, srvmod.MAX_COST_BLOB), b, '服务器收这个形状')
         self.assertEqual(len(base64.b64decode(b['c'])) % 1024, 0)
-        self.assertNotEqual(ns['cost_seal'](k, aid, fp, doc)['c'], b['c'], '每次的 nonce 不同')
-        for o, a2, f2 in ((ns['keyshare_keys'](salt, C, 'alice@example.com', U2, ns['COST_LABEL']), aid, fp),   # 身份不对
-                          (ns['keyshare_keys'](salt, X, 'alice@example.com', U1, ns['COST_LABEL']), aid, fp),   # 同一个邮箱的 Codex 账号
-                          (k, 'b' * 32, fp), (k, aid, 'SHA256:' + 'G' * 43)):   # 挪到别的账号、别的设备上
-            self.assertIsNone(ns['cost_open'](o, a2, f2, b, now))
-        c = bytearray(base64.b64decode(b['c']))
+        again = self.upload(a)
+        self.assertNotEqual((again['n'], again['c']), (b['n'], b['c']), '每次的 nonce 不同')
+        self.assertNotEqual(again['n'], b['n'])
+
+        # 另一台设备（bob-mini）从服务器取回来的：alice-mbp 传的、照文档封的都认；认证不过的、内容不对的不认
+        fp = lambda label: 'SHA256:' + base64.b64encode(hashlib.sha256(label.encode()).digest()).decode().rstrip('=')
+        rows, want = [], {}
+
+        def row(label, blob, fp_=None, accept=None):
+            f = fp_ or fp(label)
+            rows.append({'fp': f, 'tag': 't-' + label, 'name': label, 'blob': blob})
+            if accept is not None:
+                want[f] = dict(accept, tag='t-' + label, name=label, revoked=False)
+
+        row('alice-mbp', b, a.fp, {'at': doc['at'], 'h': doc['h'], 'um': ['claude-x']})
+        seal = lambda label, d, keys=k, aid_=aid, fp_=None, **kw: sw.cost_seal(keys, aid_, fp_ or fp(label), d, **kw)
+        spec = {'v': 1, 'at': now, 'h': {'1794567600': [1, 2, 3, 4, 5, 6, 0]}, 'um': ['claude-x']}
+        row('spec', seal('spec', spec), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 照文档封的 cca 也认
+        row('other-ident', seal('other-ident', spec, sw.derive(sw.COST, salt, 'claude', 'alice@example.com', U2)))   # 身份不对
+        row('other-tool', seal('other-tool', spec, sw.derive(sw.COST, salt, 'codex', 'alice@example.com', U1)))   # 同一个邮箱的 Codex 账号
+        row('other-account', seal('other-account', spec, aid_='b' * 32))   # 挪到别的账号上
+        row('other-device', seal('other-device', spec, fp_='SHA256:' + 'G' * 43))   # 挪到别的设备上
+        ok = seal('tampered', spec)
+        c = bytearray(base64.b64decode(ok['c']))
         c[7] ^= 1
-        self.assertIsNone(ns['cost_open'](k, aid, fp, dict(b, c=base64.b64encode(bytes(c)).decode()), now), '改过的')
-        for junk in (None, {}, 'x', {'n': 'x', 'c': 'y', 't': 'z'}, dict(b, n=12), dict(b, n=b['t'])):
-            self.assertIsNone(ns['cost_open'](k, aid, fp, junk, now), junk)
+        row('tampered', dict(ok, c=base64.b64encode(bytes(c)).decode()))   # 改过的
+        ok = seal('junk', spec)
+        for i, junk in enumerate((None, {}, 'x', {'n': 'x', 'c': 'y', 't': 'z'}, dict(ok, n=12), dict(ok, n=ok['t']))):
+            rows.append({'fp': fp('junk'), 'tag': 't-junk-%d' % i, 'name': 'junk', 'blob': junk})
         bad_docs = ({'v': 2, 'at': now, 'h': {}, 'um': []}, {'v': 1, 'at': now + 3 * 86400, 'h': {}, 'um': []},
                     {'v': 1, 'at': 'x', 'h': {}, 'um': []}, {'v': 1, 'at': now, 'h': {'x': [1] * 7}, 'um': []},
                     {'v': 1, 'at': now, 'h': {'1794567600': [1] * 6}, 'um': []}, {'v': 1, 'at': now, 'h': {'1794567600': [-1] * 7}, 'um': []},
                     {'v': 1, 'at': now, 'h': {}, 'um': 'x'}, [1])
-        for d in bad_docs:
-            self.assertIsNone(ns['cost_open'](k, aid, fp, sw.cost_seal(k, aid, fp, d), now), '认证过、内容不对的也不认：%s' % (d,))
+        for i, d in enumerate(bad_docs):   # 认证过、内容不对的也不认
+            row('bad-doc-%d' % i, seal('bad-doc-%d' % i, d))
         many = {str(1794567600 - 3600 * i): [0] * 7 for i in range(24 * 7 * 20 + 1)}
-        self.assertIsNone(ns['cost_open'](k, aid, fp, sw.cost_seal(k, aid, fp, {'v': 1, 'at': now, 'h': many, 'um': []}), now), '太多小时')
+        row('too-many-hours', seal('too-many-hours', {'v': 1, 'at': now, 'h': many, 'um': []}))   # 太多小时
         um = ['ok-model', 5, 'x' * 65, 'bad\nname'] + ['m%d' % i for i in range(40)]
-        self.assertEqual(ns['cost_open'](k, aid, fp, sw.cost_seal(k, aid, fp, {'v': 1, 'at': now, 'h': {}, 'um': um}), now)['um'],
-                         ['ok-model'] + ['m%d' % i for i in range(31)], '没有标价的模型名：只收能显示的、最多 32 个')
-        bomb = sw.cost_seal(k, aid, fp, None, raw=zlib.compress(b'{"v":1,"um":["' + b'x' * (5 << 20) + b'"]}'))
-        self.assertIsNone(ns['cost_open'](k, aid, fp, bomb, now), '解压出来太大的不要')
-        lie = sw.seal(sw.COST, k, [aid, fp], (5000).to_bytes(4, 'big') + bytes(1020))
-        self.assertIsNone(ns['cost_open'](k, aid, fp, lie, now), '长度比内容长')
-        h = {str(1794567600 - 3600 * i): [123456789, 50, 5000000, 300000, 90000000, 2000000, 1] for i in range(14 * 7 * 24)}
-        big = ns['cost_seal'](k, aid, fp, {'v': 1, 'at': now, 'h': h, 'um': []})
-        self.assertLessEqual(len(big['c']), ns['COST_BLOB_MAX'], '14 周每个小时都有记录也放得下')
-        self.assertEqual(ns['COST_BLOB_MAX'], srvmod.MAX_COST_BLOB, '客户端和服务器的上限一样')
+        row('models', seal('models', {'v': 1, 'at': now, 'h': {}, 'um': um}),
+            accept={'at': now, 'h': {}, 'um': ['ok-model'] + ['m%d' % i for i in range(31)]})   # 没有标价的模型名：只收能显示的、最多 32 个
+        row('bomb', seal('bomb', None, raw=zlib.compress(b'{"v":1,"um":["' + b'x' * (5 << 20) + b'"]}')))   # 解压出来太大的不要
+        row('lie', sw.seal(sw.COST, k, [aid, fp('lie')], (5000).to_bytes(4, 'big') + bytes(1020)))   # 长度比内容长
+        bob = self.device('bob-mini', 32)
+        self.serve(bob, rows)
+        self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
+        got = bob.cost('remote.json')['acc']['claude:alice@example.com']
+        self.assertEqual(sorted(e['name'] for e in got.values()), ['alice-mbp', 'models', 'spec'], '别的都不认')
+        self.assertEqual(got, want)
+
+        # 小时很多的：14 周每个小时都有记录也放得下；压缩不了的放不下，去掉最早的直到放得下
+        limit = int(re.search(r'pub const COST_BLOB_MAX: usize = (\d+);', (ROOT / 'cli' / 'src' / 'cmd' / 'cost.rs').read_text()).group(1))
+        self.assertEqual(limit, srvmod.MAX_COST_BLOB, '客户端和服务器的上限一样')
+        hour0 = int(time.time() // 3600 * 3600)
+        hours = [str(hour0 - 3600 * i) for i in range(14 * 7 * 24)]
+        published = lambda rows, at: {k: v for k, v in rows.items() if int(k) >= at - COST_PUBLISH}   # 只传最近 14 周的（正好落在界线上的那个小时可能不在）
+        full = self.device('carol-air', 64)
+        h = {x: [123456789, 50, 5000000, 300000, 90000000, 2000000, 1] for x in hours}
+        self.local_rows(full, h)
+        big = self.upload(full)
+        self.assertLessEqual(len(big['c']), limit, '14 周每个小时都有记录也放得下')
+        opened = sw.cost_open(k, aid, full.fp, big)
+        self.assertEqual(opened['h'], published(h, opened['at']))
+        self.assertGreaterEqual(len(opened['h']), len(hours) - 1)
         rnd = random.Random(7)   # 压缩不了的数字，小时又多：放不下，去掉最早的直到放得下
-        huge = {'h': {str(1794567600 - 3600 * i): [rnd.randrange(10 ** 12) for _ in range(7)] for i in range(14 * 7 * 24)}, 'um': []}
-        self.assertGreater(len(ns['cost_seal'](k, aid, fp, dict(huge, v=1, at=now))['c']), ns['COST_BLOB_MAX'], '这份原样封放不下')
-        fit = ns['cost_seal_fit'](k, aid, fp, huge, now)
-        kept = ns['cost_open'](k, aid, fp, fit, now)['h']
-        newest = sorted(huge['h'], key=int)[-len(kept):]
-        self.assertLessEqual(len(fit['c']), ns['COST_BLOB_MAX'], '去掉一部分以后放得下')
-        self.assertTrue(0 < len(kept) < len(huge['h']) and sorted(kept, key=int) == newest, '留下的是最近的那些小时')
-        self.assertEqual(len(huge['h']), 14 * 7 * 24, '传进来的那份不改')
+        huge = {'h': {x: [rnd.randrange(10 ** 12) for _ in range(7)] for x in hours}, 'um': []}
+        self.assertGreater(len(sw.cost_seal(k, aid, full.fp, dict(huge, v=1, at=now))['c']), limit, '这份原样封放不下')
+        dan = self.device('dan-air', 96)
+        self.local_rows(dan, huge['h'])
+        fit = self.upload(dan)
+        opened = sw.cost_open(k, aid, dan.fp, fit)
+        kept = opened['h']
+        whole = published(huge['h'], opened['at'])
+        newest = sorted(whole, key=int)[-len(kept):]
+        self.assertLessEqual(len(fit['c']), limit, '去掉一部分以后放得下')
+        self.assertTrue(0 < len(kept) < len(whole) and sorted(kept, key=int) == newest, '留下的是最近的那些小时')
+        self.assertEqual(kept, {x: huge['h'][x] for x in newest})
+        mine = content(dan.cost('local.json'), 'claude', 'alice@example.com')[0]   # 统计比传早一点：正好落在界线上的那个小时可能还在
+        self.assertTrue(set(whole) <= set(mine) and mine == {x: huge['h'][x] for x in mine}, '这台设备统计好的那份不改')
+        self.assertGreaterEqual(len(whole), 14 * 7 * 24 - 1)
 
 
 if __name__ == '__main__':
