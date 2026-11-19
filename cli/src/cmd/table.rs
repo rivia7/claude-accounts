@@ -402,7 +402,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("keys", cmd_keys),
     Cmd::all("resolve", cmd_resolve),
     Cmd::all("validate", cmd_validate),
-    Cmd::claude_only("email", cmd_email),
+    Cmd::all("email", cmd_email),
     Cmd::all("name", cmd_name),
     Cmd::all("get", cmd_get),
     Cmd::all("set", cmd_set),

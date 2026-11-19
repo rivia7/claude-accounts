@@ -21,7 +21,6 @@ use crate::py::{json, path, shutil, signal, text};
 use crate::{dict, re};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::io::AsRawFd;
-use std::rc::Rc;
 
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[Cmd::all("key-sync", cmd_key_sync)];
@@ -284,15 +283,10 @@ pub const KEYSHARE_OLD: &str = "设备统计的服务器还不收 API key（维�
 pub fn share_ident(tool: &Tool, key: &str) -> Option<String> {
     let u = match tool.kind {
         Kind::Claude => load_quiet(&path::join(&cdir(key), ".claude.json"))?.as_dict()?.dict("oauthAccount")?.str("accountUuid")?,
-        Kind::Codex => codex_claims_user(key)?,
+        Kind::Codex => super::codex::codex_claims(key, None).str("user")?,
         Kind::Agy => return None,
     };
     (text::len(&u) >= 8).then(|| u.to_string())
-}
-
-/// `codex_claims(key).get('user')`（是字符串才算）。codex_claims 在 usage+codex 那一批里移植，合进来以后换成它
-fn codex_claims_user(_key: &str) -> Option<Rc<str>> {
-    unimplemented!("codex_claims 还没合进来（usage+codex 那一批）：Codex 账号的 API key 同步先用不了")
 }
 
 /// `%Y%m%d%H%M%S`（14 位数字，UTC）→ 时间戳；不是一个真的时刻是 None（原来是 time.strptime 的 ValueError）

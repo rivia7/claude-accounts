@@ -18,7 +18,8 @@
 use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, Keys};
 use super::presence::{presence_aid, presence_load, presence_post, presence_targets, presence_why, spawn_background};
 use super::session::{cli_alive, proc_starts};
-use super::usage::parse_ts;
+use super::codex::codex_claims;
+use super::usage::{parse_ts, WEEK, WEEKS_KEEP};
 use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, EMAIL_RE, MASTER_JSON};
 use crate::core::model::{cdir, is_api, parse_key};
@@ -48,11 +49,10 @@ pub const COST_BUILD: &str = "2026-11-13/1";
 pub const COST_EVERY: f64 = 300.0;
 /// 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
 pub const COST_SYNC_EVERY: f64 = 600.0;
-const WEEK: f64 = 7.0 * 86400.0;
 /// scan.json 里的小时数据留这么久（WEEKS_KEEP 周）：从头重算时会话记录可能已经被 Claude Code 删掉了一部分，以前算过的靠它接上
-pub const COST_KEEP: f64 = 60.0 * WEEK;
+pub const COST_KEEP: f64 = (WEEKS_KEEP as i64 * WEEK) as f64;
 /// local.json 里、传给别的设备的留这么久（App 看最近 12 周和这一周）：只传显示得到的，密文小
-pub const COST_PUBLISH: f64 = 14.0 * WEEK;
+pub const COST_PUBLISH: f64 = (14 * WEEK) as f64;
 /// 去重的记录留这么久；之后才读到的更早的回复（改了名、复制出来的文件）不算
 pub const COST_SEEN: f64 = 35.0 * 86400.0;
 /// 别的设备超过这么久没传上来：之后用的可能还没算进来
@@ -888,11 +888,6 @@ fn oauth_ident(p: &str) -> (Option<V>, Option<V>) {
     (oa.get("accountUuid"), oa.get("emailAddress"))
 }
 
-/// `codex_claims(key, path)` 里的 (user, email)。codex_claims 在 usage+codex 那一批里移植，合进来以后换成它
-fn codex_claims_pair(_key: Option<&str>, _path: Option<&str>) -> (Option<V>, Option<V>) {
-    unimplemented!("codex_claims 还没合进来（usage+codex 那一批）：有 Codex 账号、或者 ~/.codex/auth.json 时折合金额先统计不了")
-}
-
 /// 这台设备上登录过的账号身份 → 邮箱（小写），记进 j 的 who：cca 的账号目录里的，和不经 cca 直接登录的（~/.claude.json、
 /// ~/.codex/auth.json；只读 id_token 里的邮箱和用户 id）。以前记下的留着（退出登录了，以前的用量照样认得出是谁的）
 fn cost_who(j: &Dict) {
@@ -908,17 +903,15 @@ fn cost_who(j: &Dict) {
                 let (u, e) = oauth_ident(&path::join(&cdir(&k), ".claude.json"));
                 found.push(("claude", u, e));
             } else {
-                let (u, e) = codex_claims_pair(Some(&k), None);
-                found.push(("codex", u, e));
+                let x = codex_claims(&k, None);
+                found.push(("codex", x.get("user"), x.get("email")));
             }
         }
     }
     let (u, e) = oauth_ident(&MASTER_JSON);
     found.push(("claude", u, e));
-    let auth = path::join(&codex().master, "auth.json");
-    // 没有这个文件时 codex_claims 给的是空的：不用等它合进来
-    let (u, e) = if path::exists(&auth) { codex_claims_pair(None, Some(&auth)) } else { (None, None) };
-    found.push(("codex", u, e));
+    let x = codex_claims("", Some(&path::join(&codex().master, "auth.json")));
+    found.push(("codex", x.get("user"), x.get("email")));
     let who = j.dict("who").expect("scan.json 核对过");
     for (tool, ident, email) in found {
         let ident = ident.as_ref().and_then(|i| i.as_str()).filter(|i| (8..=64).contains(&text::len(i)));

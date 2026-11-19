@@ -817,7 +817,7 @@ fn run_browser(url: &str) -> R<()> {
         Ok(child) => child,
         Err(ProcError::Os(e)) if e.raw_os_error().is_none() => return Err(Fail::Value("embedded null byte".into())),
         Err(ProcError::Os(e)) => return Err(Fail::Other("OSError", vec![fs::open_error_text(&e, &SELF_PATH)])),
-        Err(ProcError::Timeout { .. }) => unreachable!("spawn 不等它，没有超时"),
+        Err(ProcError::Timeout { .. } | ProcError::Interrupted) => unreachable!("spawn 不等它：没有超时，也不会被信号打断"),
     };
     let mut delay = 0.0005;
     loop {
