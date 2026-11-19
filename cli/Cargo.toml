@@ -14,7 +14,8 @@ path = "src/main.rs"
 # 依赖只用这几个常见的纯 Rust 库（见 docs/dev/rust.md 的「依赖」）：加新的之前先问维护者。版本由 Cargo.lock 锁定，构建一律 --locked
 [dependencies]
 libc = "0.2"
-regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case", "unicode-gencat"] }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }   # zlib：折合金额和别的设备交换的那一份是压缩的
+regex ={ version = "1", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case", "unicode-gencat"] }
 sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false, features = ["std"] }

@@ -624,6 +624,44 @@ def toml_vectors():
     return {'frame': TOML_FRAME, 'docs': docs, 'frames': frames}
 
 
+def zlib_vectors():
+    """zlib.decompressobj().decompress(data, max_length)：解出来的（摘要）、有没有没解完的输入（unconsumed_tail）；坏了是 error"""
+    import zlib
+    plain = [b'', b'a', b'hello hello hello hello', bytes(range(256)) * 3, b'{"v":1,"at":1795000000.5,"h":{"1794024000":[1,2,3,4,5,6,7]},"um":[]}' * 40,
+             b''.join(hashlib.sha256(b'%d' % i).digest() for i in range(40))]
+    cases = []
+
+    def add(name, data, limit):
+        z = zlib.decompressobj()
+        try:
+            raw = z.decompress(data, limit)
+            cases.append({'name': name, 'hex': data.hex(), 'limit': limit, 'len': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'tail': bool(z.unconsumed_tail)})
+        except zlib.error:
+            cases.append({'name': name, 'hex': data.hex(), 'limit': limit, 'error': True})
+    for i, p in enumerate(plain):
+        for level in (0, 1, 6, 9):
+            c = zlib.compress(p, level)
+            add('whole-%d-l%d' % (i, level), c, 4 << 20)
+            if level == 9:
+                add('exact-limit-%d' % i, c, max(len(p), 1))
+                add('one-short-%d' % i, c, max(len(p) - 1, 1))
+                add('small-limit-%d' % i, c, 16)
+                add('garbage-after-%d' % i, c + b'trailing junk', 4 << 20)
+                add('no-trailer-%d' % i, c[:-4], 4 << 20)
+                add('half-trailer-%d' % i, c[:-2], 4 << 20)
+                add('cut-in-half-%d' % i, c[:len(c) // 2], 4 << 20)
+                add('first-byte-only-%d' % i, c[:1], 4 << 20)
+                add('bad-checksum-%d' % i, c[:-1] + bytes([c[-1] ^ 0x55]), 4 << 20)
+                add('bad-header-%d' % i, b'\x00\x00' + c[2:], 4 << 20)
+                add('flipped-middle-%d' % i, c[:len(c) // 2] + bytes([c[len(c) // 2] ^ 0xff]) + c[len(c) // 2 + 1:], 4 << 20)
+    add('empty-input', b'', 4 << 20)
+    add('not-zlib', b'plain text, not compressed at all', 4 << 20)
+    add('gzip-not-zlib', bytes.fromhex('1f8b0800000000000003cb48cdc9c90700866a6c3605000000'), 4 << 20)
+    add('raw-deflate', zlib.compress(b'hello', 9)[2:-4], 4 << 20)
+    add('preset-dict-flag', bytes([0x78, 0xbb]) + zlib.compress(b'hello', 9)[2:], 4 << 20)
+    return cases
+
+
 def main():
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
@@ -641,6 +679,7 @@ def main():
             'encode': [{'hex': r.hex(), 'b64': base64.b64encode(r).decode('ascii'), 'urlsafe': base64.urlsafe_b64encode(r).decode('ascii')} for r in B64_RAW],
         },
         'plist.json': {'dumps': [p_dump_case(n, v) for n, v in p_dumps()], 'loads': p_loads()},
+        'zlib.json': zlib_vectors(),
     }
     for name, data in files.items():
         with open(os.path.join(out, name), 'w', encoding='utf-8') as f:

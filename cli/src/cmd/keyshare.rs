@@ -190,7 +190,18 @@ pub fn keyshare_keys(salt: &str, tool: &str, email: &str, ident: &str, label: &s
 pub fn blob_ad(parts: &[&str]) -> R<Vec<u8>> {
     let joined: String = parts.iter().map(|x| format!("{x}\0")).collect();
     if !joined.is_ascii() {
-        return Err(crate::py::Fail::Value("'ascii' codec can't encode characters: ordinal not in range(128)".into()));
+        // str(UnicodeEncodeError)：第一段连着的非 ASCII 字符在哪（按字符数）
+        let chars: Vec<char> = joined.chars().collect();
+        let start = chars.iter().position(|c| !c.is_ascii()).expect("刚核对过有");
+        let end = start + chars[start..].iter().take_while(|c| !c.is_ascii()).count();
+        let what = if end - start == 1 {
+            let c = chars[start] as u32;
+            let esc = if c < 0x100 { format!("\\x{c:02x}") } else if c < 0x10000 { format!("\\u{c:04x}") } else { format!("\\U{c:08x}") };
+            format!("character '{esc}' in position {start}")
+        } else {
+            format!("characters in position {}-{}", start, end - 1)
+        };
+        return Err(crate::py::Fail::Value(format!("'ascii' codec can't encode {what}: ordinal not in range(128)")));
     }
     Ok(joined.into_bytes())
 }

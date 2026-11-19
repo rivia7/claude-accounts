@@ -24,7 +24,7 @@ impl std::fmt::Display for JsonError {
 
 /// `json.loads(文字)`
 pub fn loads(s: &str) -> Result<V, JsonError> {
-    let mut p = Parser { s, b: s.as_bytes(), i: 0 };
+    let mut p = Parser { s, b: s.as_bytes(), i: 0, depth: 0 };
     if s.starts_with('\u{feff}') {
         return Err(p.err("Unexpected UTF-8 BOM (decode using utf-8-sig)", 0));
     }
@@ -67,10 +67,15 @@ pub fn utf8_error_text(raw: &[u8], e: &std::str::Utf8Error) -> String {
     }
 }
 
+/// 对象、数组最多套这么多层。Python 的解析器套到一千层上下是 RecursionError（不是 ValueError，多数地方没人接）；这里
+/// 当作写错了的 JSON（读配置的地方当作读不了，读会话记录的地方跳过这一行），也免得很深的输入把栈用完。正常的文件到不了几十层
+const MAX_DEPTH: usize = 512;
+
 struct Parser<'a> {
     s: &'a str,
     b: &'a [u8],
     i: usize,
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -115,13 +120,15 @@ impl Parser<'_> {
                 self.i += 1;
                 Ok(V::Str(Rc::from(self.string(start)?)))
             }
-            Some(b'{') => {
+            Some(b'{') | Some(b'[') => {
+                if self.depth >= MAX_DEPTH {
+                    return Err(self.err("Too deeply nested", start));
+                }
+                self.depth += 1;
                 self.i += 1;
-                self.object()
-            }
-            Some(b'[') => {
-                self.i += 1;
-                self.array()
+                let v = if self.b[start] == b'{' { self.object() } else { self.array() };
+                self.depth -= 1;
+                v
             }
             Some(b'n') if self.eat("null") => Ok(V::None),
             Some(b't') if self.eat("true") => Ok(V::Bool(true)),
@@ -544,6 +551,16 @@ mod tests {
     #[test]
     fn duplicate_keys_keep_first_position_last_value() {
         assert_eq!(rt(r#"{"a": 1, "b": 2, "a": 3}"#, Fmt::new()), r#"{"a": 3, "b": 2}"#);
+    }
+
+    #[test]
+    fn nesting_has_a_limit() {
+        let nested = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+        assert!(loads(&nested(MAX_DEPTH)).is_ok());
+        assert!(loads(&nested(MAX_DEPTH + 1)).unwrap_err().0.starts_with("Too deeply nested"));
+        // 很深的输入不会把栈用完；并排的不算深
+        assert!(loads(&nested(200_000)).is_err());
+        assert!(loads(&format!("[{}1]", "[{\"a\":[]}],".repeat(5000))).is_ok());
     }
 
     #[test]

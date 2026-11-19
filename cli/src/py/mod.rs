@@ -23,6 +23,7 @@ pub mod tls;
 pub mod toml;
 pub mod uni;
 pub mod url;
+pub mod zlib;
 
 pub use fail::{die, exit, Fail, R};
 #[allow(unused_imports)]
