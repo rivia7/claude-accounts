@@ -4,9 +4,12 @@
 pub fn urandom(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
     for chunk in buf.chunks_mut(256) {
-        // SAFETY: chunk 是有效的可写内存，长度不超过 getentropy 的上限 256
-        let rc = unsafe { libc::getentropy(chunk.as_mut_ptr().cast(), chunk.len()) };
-        if rc != 0 {
+        // SAFETY: chunk 是有效的可写内存，长度不超过 256（getentropy 的上限；getrandom 这么短也是一次给全）
+        #[cfg(target_os = "linux")]
+        let ok = unsafe { libc::getrandom(chunk.as_mut_ptr().cast(), chunk.len(), 0) } == chunk.len() as isize;
+        #[cfg(not(target_os = "linux"))]
+        let ok = unsafe { libc::getentropy(chunk.as_mut_ptr().cast(), chunk.len()) } == 0;
+        if !ok {
             panic!("取不到系统的随机数：{}", std::io::Error::last_os_error());
         }
     }

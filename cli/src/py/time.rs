@@ -84,6 +84,7 @@ fn tz_ready() {
 }
 
 /// `time.localtime(t)`
+#[allow(deprecated)] // musl 上 libc::time_t 标着“以后要改成 64 位”：只是提醒，写法不用变
 pub fn localtime(t: f64) -> Tm {
     tz_ready();
     let secs = t.floor() as libc::time_t;
@@ -96,6 +97,7 @@ pub fn localtime(t: f64) -> Tm {
 }
 
 /// `time.gmtime(t)`
+#[allow(deprecated)]
 pub fn gmtime(t: f64) -> Tm {
     let secs = t.floor() as libc::time_t;
     // SAFETY: 同上

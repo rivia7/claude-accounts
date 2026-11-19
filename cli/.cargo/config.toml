@@ -1,0 +1,8 @@
+# 从 macOS 交叉编译 Linux 的 helper（静态链接 musl）：用 Rust 自带的 rust-lld 链接，不用装别的工具链。
+#   cargo build --release --locked --target x86_64-unknown-linux-musl
+#   cargo build --release --locked --target aarch64-unknown-linux-musl
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
