@@ -355,3 +355,114 @@ def _(b):
 @case('prompt-emit/bad-min', ['prompt-emit'], stdin='field=a\nmin=x\n', env={'CCA_EVENTS': '%HOME%/ev.jsonl'})
 def _(b):
     b.write('ev.jsonl', '')
+
+
+# --- 账号表的表单（edit-form / edit-apply）---
+def edit_sum(table):
+    """账号表的键和先后的摘要：照 cca 的 edit_sum 现算"""
+    import hashlib
+    import json
+    return hashlib.sha1(json.dumps(list(table), ensure_ascii=False).encode('utf-8')).hexdigest()[:12]
+
+
+def answers(**kw):
+    return ''.join('%s\t%s\n' % (k.replace('_', '!'), v) for k, v in kw.items())
+
+
+KEYED = {'主号(alice@example.com)': 'US-A', 'bob@example.com': 'US-B',
+         '直连': {'base_url': 'https://api.example.com/anthropic', 'model': 'm-1', 'key': 'sk-test-0000000000000000'},
+         '走节点': {'base_url': 'https://api2.example.com/v1/', 'node': 'HK-A', 'env': {'X': '1', 'Y': 'a b'}, 'id': 'zjd'}}
+FORMS = [
+    ('plain', '', {}),
+    ('prev-and-errors', 'n0\tHK-A\nn1\tZZ\nu2\thttps://other.example.com/v9\nm2\t\nn2\tUS-B\ne2\tA=1\nm3\tbig\nn3\t\ne3\t\n!m2\t模型名里不能有空格或引号\n!\t整页的问题\n'
+                        '!!!e3\t名字不对\nno tab here\n!n9\t没有这个字段\n\n', {}),
+    ('empty-page-error', '!\t\n', {}),
+    ('codex', '', {'tool': 'codex', 'codex': {'erin@example.com': 'HK-A', '接口': {'base_url': 'https://api.example.com/v1', 'model': 'gpt-x', 'node': 'US-A'}}}),
+    ('codex-prev', 'e1\tA=1\nm1\tnew-model\n', {'tool': 'codex', 'codex': {'erin@example.com': 'HK-A', '接口': {'base_url': 'https://api.example.com/v1'}}}),
+    ('agy', '', {'tool': 'agy', 'agy': {'gina@example.com': 'US-B', '吉(hana@example.com)': 'US-B'}}),
+    ('officials-only', '', {'table': {'主号(alice@example.com)': 'US-A', 'bob@example.com': 'US-A', 'carol@example.com': 'US-A'}}),
+    ('node-not-allowed', '', {'table': {'bob@example.com': 'ZZ', '接口': {'base_url': 'https://api.example.com/v1', 'node': 'YY'}}}),
+    ('pinned', 'n0\tHK-A\n', {'policy': {'version': 1, 'claude': {'Alice@example.com': 'US-B', 'bob@example.com': 'ZZ-none'}}}),
+    ('no-nodes-officials', '', {'cfg': {'nodes': []}}),
+    ('no-nodes-apis-only', '', {'cfg': {'nodes': []}, 'table': {'直连': {'base_url': 'https://api.example.com/v1', 'env': {'A': 1, 'B': True, 'C': None, 'D': "it's"}}}}),
+    ('empty-table', '', {'table': {}}),
+    ('odd-values', '', {'table': {'直连': {'base_url': 'https://api.example.com/v1/', 'model': 5, 'env': 'junk'}, '另一个': {'base_url': 'https://api.example.com/v1', 'model': ''}}}),
+    ('unfixable-key', '', {'table': {'a b': 'US-A', 'bob@example.com': 'US-B'}}),
+    ('unfixable-fields', '', {'table': {'直连': {'base_url': 'https://api.example.com/v1', 'extra': 1, 'key': 5, 'id': 'a b'}}}),
+    ('unfixable-long', '', {'table': dict(('坏 %02d' % i, 'US-A') for i in range(40))}),
+]
+for name, text, kw in FORMS:
+    kw = dict(kw)
+    tool = kw.pop('tool', 'claude')
+
+    @case('edit-form/%s' % name, ['edit-form'], stdin=text, tool=tool)
+    def _(b, kw=kw):
+        world(b, **kw)
+
+
+@case('edit-form/no-table', ['edit-form'])
+def _(b):
+    b.cfg({'nodes': ['US-A']})
+
+
+@case('edit-form/table-not-json', ['edit-form'])
+def _(b):
+    world(b)
+    b.write('.cca/accounts.json', '{oops')
+
+
+@case('edit-form/table-is-a-list', ['edit-form'], tool='codex')
+def _(b):
+    world(b)
+    b.write('.cca/codex.json', '["US-A"]')
+
+
+SAME_ANSWERS = answers(n0='US-A', n1='US-B', u2='https://api.example.com/anthropic', m2='m-1', n2='', e2='', u3='https://api2.example.com/v1',
+                       m3='', n3='HK-A', e3="X=1 Y='a b'")
+APPLIES = [
+    ('wrong-digest', 'n0\tHK-A\n', {}, 'bad'),
+    ('no-answers', '', {}, None),
+    ('same', SAME_ANSWERS, {}, None),
+    ('same-url-normalized', SAME_ANSWERS.replace('https://api2.example.com/v1', '  https://api2.example.com/v1///  '), {}, None),
+    ('official-node', SAME_ANSWERS.replace('n0\tUS-A', 'n0\tHK-A'), {}, None),
+    ('official-node-not-allowed', SAME_ANSWERS.replace('n1\tUS-B', 'n1\tZZ').replace('n3\tHK-A', 'n3\t YY '), {}, None),
+    ('url-same-host-keeps-key', SAME_ANSWERS.replace('https://api.example.com/anthropic', 'https://API.example.com/v2/'), {}, None),
+    ('url-new-host-drops-key', SAME_ANSWERS.replace('https://api.example.com/anthropic', 'https://other.example.com/anthropic'), {}, None),
+    ('url-bad', SAME_ANSWERS.replace('https://api.example.com/anthropic', 'http://api.example.com').replace('https://api2.example.com/v1', 'ftp://x'), {}, None),
+    ('model-set-and-clear', SAME_ANSWERS.replace('m2\tm-1', 'm2\t').replace('m3\t', 'm3\t  big-2  '), {}, None),
+    ('model-bad', SAME_ANSWERS.replace('m2\tm-1', 'm2\ta b'), {}, None),
+    ('direct-goes-via-node', SAME_ANSWERS.replace('n2\t', 'n2\tUS-B'), {'cfg': {'ports': {'主号(alice@example.com)': 7901, 'bob@example.com': 7902, '走节点': 7903}}}, None),
+    ('node-cleared', SAME_ANSWERS.replace('n3\tHK-A', 'n3\t'), {}, None),
+    ('env-changed', SAME_ANSWERS.replace('e2\t', 'e2\tFOO=bar BAZ="q u x" EMPTY=').replace("e3\tX=1 Y='a b'", 'e3\t'), {}, None),
+    ('env-requoted-same', SAME_ANSWERS.replace("e3\tX=1 Y='a b'", 'e3\tX="1"   Y=a\\ b'), {}, None),
+    ('env-bad-quote', SAME_ANSWERS.replace('e2\t', "e2\tA='oops"), {}, None),
+    ('env-no-equals', SAME_ANSWERS.replace('e2\t', 'e2\tA=1 ' + 'x' * 60), {}, None),
+    ('env-reserved', SAME_ANSWERS.replace('e2\t', 'e2\tANTHROPIC_API_KEY=x 1BAD=y MY_TOKEN=z HOME=/x'), {}, None),
+    ('everything-wrong', answers(n0='ZZ', n1='', u2='', m2='a"b', n2='YY', e2='=x', u3='nope', m3="a'b", n3='ZZ', e3='A'), {}, None),
+    ('duplicate-answers', SAME_ANSWERS + 'n0\tHK-A\nn0\tUS-B\n', {}, None),
+    ('pinned-ignores-answer', SAME_ANSWERS.replace('n0\tUS-A', 'n0\tHK-A').replace('n1\tUS-B', 'n1\tHK-A'), {'policy': {'version': 1, 'claude': {'ALICE@example.com': 'US-A'}}}, None),
+    ('missing-official-answers', answers(u2='https://api.example.com/anthropic', m2='m-1', u3='https://api2.example.com/v1'), {}, None),
+]
+for name, text, kw, digest in APPLIES:
+    @case('edit-apply/%s' % name, ['edit-apply', digest or edit_sum(KEYED)], stdin=text)
+    def _(b, kw=kw):
+        world(b, table=KEYED, **kw)
+
+
+CODEX_KEYED = {'erin@example.com': 'HK-A', '接口': {'base_url': 'https://api.example.com/v1', 'model': 'gpt-x', 'node': 'US-A', 'key': 'sk-test-1111111111111111'}}
+for name, text in [('same', answers(n0='HK-A', u1='https://api.example.com/v1', m1='gpt-x', n1='US-A')),
+                   ('env-ignored', answers(n0='HK-A', u1='https://api.example.com/v1', m1='gpt-x', n1='US-A', e1='A=1')),
+                   ('changed', answers(n0='US-B', u1='https://api.example.org/v1', m1='', n1=''))]:
+    @case('edit-apply/codex-%s' % name, ['edit-apply', edit_sum(CODEX_KEYED)], stdin=text, tool='codex')
+    def _(b):
+        world(b, codex=CODEX_KEYED)
+
+
+@case('edit-apply/agy', ['edit-apply', edit_sum({'gina@example.com': 'US-B'})], stdin='n0\tHK-A\n', tool='agy')
+def _(b):
+    world(b, agy={'gina@example.com': 'US-B'})
+
+
+@case('edit-apply/no-digest', ['edit-apply'], stdin='')
+def _(b):
+    world(b)

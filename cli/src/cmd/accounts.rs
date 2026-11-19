@@ -2,17 +2,18 @@
 //! nodes-allowed / set-nodes / nodes-preselect / nodes-lost / select-lines、sync-state、slot-rows、accounts-json、file-replace（PY_SRC 的 `cmd_env` 到 `cmd_rm`、
 //! `cmd_nodes_allowed` 到 `cmd_set_nodes`、`cmd_slot_rows`）。
 //!
-//! 还没移植的：rows、set-last（要用量那一块）、edit-form / edit-apply、select-lines、sync-state、slot-rows。
+//! 还没移植的：rows、set-last（要用量那一块）、select-lines、slot-rows（要内置代理那一块）、sync-state（要密钥那一块）。
 
 use super::codex::codex_probe;
 use super::table::{account_named, need};
 use super::{arg, arity, Cmd};
 use crate::core::base::*;
-use crate::core::ctx::{cfg_save, ctx, policy_skip_add};
+use crate::core::ctx::{cfg_save, ctx, policy_skip_add, table_problems};
 use crate::core::model::*;
 use crate::core::policy::{alias_problem, policy_in_use, policy_map, policy_raw};
 use crate::core::tool::{t, tools, Kind, Tool, CODEX_PROVIDER};
 use crate::py::fs::{load_quiet, save_json};
+use crate::py::hash::sha1_hex;
 use crate::py::io;
 use crate::py::json;
 use crate::py::obj::{Dict, List, V};
@@ -22,6 +23,7 @@ use crate::py::text::{self, sh_quote};
 use crate::py::uni;
 use crate::py::{die, exit, Fail, R};
 use crate::{dict, err, out, re};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// 这个模块移植好的子命令
@@ -40,6 +42,8 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("nodes-preselect", cmd_nodes_preselect),
     Cmd::all("nodes-lost", cmd_nodes_lost),
     Cmd::all("set-nodes", cmd_set_nodes),
+    Cmd::all("edit-form", cmd_edit_form),
+    Cmd::all("edit-apply", cmd_edit_apply),
 ];
 
 /// 每个账号都输出全部变量（不适用的为空）：bash 里循环 eval 时不会留着上一个账号的值。
@@ -604,6 +608,292 @@ pub fn cmd_set_nodes(args: &[String]) -> R<()> {
     let c = cfg_load()?;
     c.set("nodes", crate::py::obj::str_list(nodes));
     cfg_save(&c)
+}
+
+// --- 提问会话里的账号表表单（cca [codex] edit，PROTOCOL 4.6）：节点、接口地址、模型、环境变量。App 不碰账号表，也看不到 key ---
+
+/// 账号表的键和先后的摘要：表单按编号对应账号，表在中途变了（映射更新、别处改了别名）就重新出表单
+pub fn edit_sum(table: &Dict) -> String {
+    let keys = V::List(List::from_vec(table.keys().into_iter().map(V::Str).collect()));
+    text::head(&sha1_hex(json::dumps(&keys, json::LINE)), 12).to_string()
+}
+
+/// 环境变量在表单里的写法：A=1 B='带空格的值'
+pub fn env_text(env: Option<&V>) -> String {
+    match env {
+        Some(V::Dict(d)) => d.items().iter().map(|(k, v)| format!("{}={}", k, sh_quote(&v.py_str()))).collect::<Vec<_>>().join(" "),
+        _ => String::new(),
+    }
+}
+
+/// 表单里的环境变量 → (字典, 问题)
+pub fn env_parse(s: &str) -> (Dict, String) {
+    let Ok(words) = text::sh_split(s) else {
+        return (Dict::new(), "引号没有配对".to_string());
+    };
+    let out = Dict::new();
+    for w in &words {
+        let (k, sep, v) = text::partition(w, "=");
+        if sep.is_empty() {
+            return (Dict::new(), format!("写成 名字=值，多个用空格隔开（「{}」里没有 =）", text::head(k, 40)));
+        }
+        out.set(k, v);
+    }
+    (out, String::new())
+}
+
+/// 表单改不了的问题（键写错了、有不认识的字段、key 或 id 不对）：把表单能改的项换成合格的值，再校验一遍
+fn edit_unfixable(c: &Dict, table: &Dict, pm: &Dict) -> Vec<String> {
+    let probe = Dict::new();
+    for (k, v) in table.items() {
+        match v.as_dict().filter(|_| is_api(&v)) {
+            Some(d) => {
+                let p = Dict::from_pairs(d.items().into_iter().filter(|(f, _)| !matches!(&**f, "model" | "node" | "env")));
+                p.set("base_url", "https://api.example.com");
+                probe.set(k, p);
+            }
+            None => probe.set(k, "x"),
+        }
+    }
+    let c = c.copy();
+    c.set("nodes", crate::list!["x"]);
+    table_problems(&c, &probe, t(), pm)
+}
+
+/// stdin 里「字段<TAB>值」的各行（没有 TAB 的行不算；同一个字段后写的算数）
+fn read_fields() -> Vec<(String, String)> {
+    let input = io::read_stdin_text();
+    input.split('\n').map(|line| text::partition(line, "\t")).filter(|(_, sep, _)| !sep.is_empty()).map(|(k, _, v)| (k.to_string(), v.to_string())).collect()
+}
+
+/// 表单的一个字段（给 prompt-emit 的 k=v 各行；空着的不写，field 和 value 总是写）
+#[derive(Default)]
+struct Field<'a> {
+    id: &'a str,
+    kind: &'a str,
+    label: &'a str,
+    value: &'a str,
+    section: &'a str,
+    hint: &'a str,
+    optional: bool,
+    style: &'a str,
+    error: String,
+}
+
+/// 表单的一页：打印 edit_sum，后面是这一页的描述（k=v，一行一条，给 prompt-emit）。stdin：上次填的（字段<TAB>值）和问题（!字段<TAB>原因，
+/// 字段空着是整页的）。退出码 3：表单改不了（stdout 是原因，去终端）；4：还没有账号；5：还没有可选节点（stdout 是原因）
+pub fn cmd_edit_form(args: &[String]) -> R<()> {
+    arity("cmd_edit_form", args, 0, 0)?;
+    let tool = t();
+    if !path::exists(&tool.table) || !load_quiet(&tool.table).is_some_and(|j| j.is_dict()) {
+        if path::exists(&tool.table) {
+            out!("{} 不是正确的 JSON", tool.table);
+            return exit(3);
+        }
+        out!("还没有账号");
+        return exit(4);
+    }
+    let (c, table, _) = ctx()?;
+    let (mut prev, mut ferr): (HashMap<String, String>, HashMap<String, String>) = Default::default();
+    for (k, v) in read_fields() {
+        let which = if k.starts_with('!') { &mut ferr } else { &mut prev };
+        which.insert(k.trim_start_matches('!').to_string(), v);
+    }
+    if table.is_empty() {
+        out!("还没有账号");
+        return exit(4);
+    }
+    let pm = policy_map(tool, Some(&c));
+    let bad = edit_unfixable(&c, &table, &pm);
+    if !bad.is_empty() {
+        out!("{}", text::head(&bad.join("；"), 500));
+        return exit(3);
+    }
+    let nodes = c.at("nodes").as_list().map(|l| l.items()).unwrap_or_default();
+    let in_nodes = |s: &str| nodes.iter().any(|n| n.as_str() == Some(s));
+    if nodes.is_empty() && table.values().iter().any(|v| !is_api(v)) {
+        out!("还没有可选节点：先配置路由器");
+        return exit(5);
+    }
+    let mut used: Vec<(Rc<str>, Vec<Rc<str>>)> = Vec::new(); // 节点 → 用它的账号
+    for (k, v) in table.items() {
+        let n = node_of(&v);
+        if n.is_empty() {
+            continue;
+        }
+        match used.iter_mut().find(|(x, _)| *x == n) {
+            Some((_, keys)) => keys.push(k),
+            None => used.push((n, vec![k])),
+        }
+    }
+    let apis = table.values().iter().any(is_api);
+    let message = ferr.get("").filter(|m| !m.is_empty()).map_or("改完点“保存”，cca 会检查，需要的话同步到路由器。", |m| m.as_str());
+    let mut out: Vec<String> = vec![edit_sum(&table), "q=edit.form".into(), "submit=保存".into(), format!("message={message}")];
+    let put = |out: &mut Vec<String>, f: Field| {
+        let error = if f.error.is_empty() { ferr.get(f.id).cloned().unwrap_or_default() } else { f.error };
+        let rows = [("field", f.id), ("kind", f.kind), ("label", f.label), ("value", f.value), ("section", f.section), ("hint", f.hint), ("style", f.style), ("error", &error)];
+        out.extend(rows.iter().filter(|(k, v)| !v.is_empty() || matches!(*k, "field" | "value")).map(|(k, v)| format!("{k}={v}")));
+        if f.optional {
+            out.push("optional=1".into());
+        }
+    };
+    let node_opts = |out: &mut Vec<String>, k: &str| {
+        for n in &nodes {
+            let users = used.iter().find(|(x, _)| n.as_str() == Some(&**x)).map(|(_, keys)| keys.as_slice()).unwrap_or_default();
+            let who: Vec<String> = users.iter().filter(|x| &***x != k).map(|x| name_of(x)).collect();
+            let note = if who.is_empty() { String::new() } else { format!("已被 {} 使用", who.join("、")) };
+            out.push(format!("opt={0}\t{0}\t{1}", n.py_str(), note));
+        }
+    };
+    let has_env = tool.api_fields.contains(&"env");
+    for (i, (k, v)) in table.items().into_iter().enumerate() {
+        let nid = format!("n{i}");
+        let Some(d) = v.as_dict().filter(|_| is_api(&v)) else {
+            let section = if apis { "官方账号" } else { "" };
+            let email = parse_key(&k).1;
+            let want = if email.is_empty() { None } else { pm.get(&email.to_lowercase()).filter(|w| w.truthy()) };
+            let label = label_of(&k);
+            if let Some(want) = want {
+                let want = want.py_str();
+                let error = if in_nodes(&want) { String::new() } else { format!("维护者的映射要求它走「{want}」，这个节点不在可选列表：先在“配置路由器”里选上它") };
+                let (hint, style) = ("维护者固定了这个账号的节点", "menu");
+                put(&mut out, Field { id: &nid, kind: "choice", label: &label, value: &want, section, hint, style, error, ..Default::default() });
+                out.push(format!("opt={want}\t{want}\t"));
+                continue;
+            }
+            let cur = prev.get(&nid).cloned().unwrap_or_else(|| v.as_str().unwrap_or("").to_string());
+            let ok = in_nodes(&cur);
+            let error = if ok { String::new() } else { format!("节点「{cur}」不在可选列表，换一个") };
+            put(&mut out, Field { id: &nid, kind: "choice", label: &label, value: if ok { &cur } else { "" }, section, style: "menu", error, ..Default::default() });
+            node_opts(&mut out, &k);
+            continue;
+        };
+        let section = &format!("第三方 API：{}", name_of(&k));
+        let fid = format!("u{i}");
+        let url = prev.get(&fid).cloned().unwrap_or_else(|| api_url(&d));
+        put(&mut out, Field { id: &fid, kind: "text", label: "接口地址", value: &url, section, hint: "换了服务商（域名变了）要重新输入 key", ..Default::default() });
+        let fid = format!("m{i}");
+        let model = prev.get(&fid).cloned().unwrap_or_else(|| d.get("model").filter(|m| m.truthy()).map_or(String::new(), |m| m.py_str()));
+        let hint = if has_env { "填了会同时用作 opus / sonnet / haiku" } else { "服务商不认 codex 默认的模型名时请填上" };
+        put(&mut out, Field { id: &fid, kind: "text", label: "模型（可选）", value: &model, section, hint, optional: true, ..Default::default() });
+        if !nodes.is_empty() {
+            let cur = prev.get(&nid).cloned().unwrap_or_else(|| node_of(&v).to_string());
+            let ok = in_nodes(&cur);
+            let error = if cur.is_empty() || ok { String::new() } else { format!("节点「{cur}」不在可选列表，换一个") };
+            put(&mut out, Field { id: &nid, kind: "choice", label: "出口", value: if ok { &cur } else { "" }, section, optional: true, style: "menu", error, ..Default::default() });
+            node_opts(&mut out, &k);
+            out.push("skip=直连（不经代理）".into());
+        }
+        if has_env {
+            let fid = format!("e{i}");
+            let env = prev.get(&fid).cloned().unwrap_or_else(|| env_text(d.get("env").as_ref()));
+            let hint = "写成 名字=值，多个用空格隔开；密钥不要写在这里";
+            put(&mut out, Field { id: &fid, kind: "text", label: "环境变量（可选）", value: &env, section, hint, optional: true, ..Default::default() });
+        }
+    }
+    out!("{}", out.iter().map(|x| x.replace('\n', " ")).collect::<Vec<_>>().join("\n"));
+    Ok(())
+}
+
+/// 表单的答案（stdin：字段<TAB>值）：合格就写进账号表，打印 changed / same；不合格退出 3，stdout 一行一个问题（!字段<TAB>原因）
+pub fn cmd_edit_apply(args: &[String]) -> R<()> {
+    arity("cmd_edit_apply", args, 1, 1)?;
+    let tool = t();
+    let (c, table, _) = ctx()?;
+    if edit_sum(&table) != args[0] {
+        out!("!\t账号表刚刚变了（维护者的映射更新了，或者在别处改过）：下面是最新的内容，再确认一次");
+        return exit(3);
+    }
+    let ans: HashMap<String, String> = read_fields().into_iter().collect();
+    let answer = |id: &str| ans.get(id).map_or("", |s| s.as_str());
+    let pm = policy_map(tool, Some(&c));
+    let nodes = c.at("nodes").as_list().map(|l| l.items()).unwrap_or_default();
+    let in_nodes = |s: &str| nodes.iter().any(|n| n.as_str() == Some(s));
+    let has_env = tool.api_fields.contains(&"env");
+    let new = Dict::new();
+    let mut bad: Vec<(String, String)> = Vec::new();
+    for (i, (k, v)) in table.items().into_iter().enumerate() {
+        let nid = format!("n{i}");
+        let n = ans.get(&nid);
+        let Some(d) = v.as_dict().filter(|_| is_api(&v)) else {
+            let email = parse_key(&k).1;
+            match n {
+                // 维护者固定的不看答案
+                Some(n) if email.is_empty() || !pm.has(&email.to_lowercase()) => {
+                    if in_nodes(n) {
+                        new.set(k, n.as_str());
+                    } else {
+                        bad.push((nid, "这个节点不在可选列表".into()));
+                        new.set(k, v);
+                    }
+                }
+                _ => new.set(k, v),
+            }
+            continue;
+        };
+        let w = d.copy();
+        let uid = format!("u{i}");
+        let url = text::strip(answer(&uid)).trim_end_matches('/');
+        let p = url_problem(url, tool);
+        if !p.is_empty() {
+            bad.push((uid, p));
+        } else {
+            let moved = w.copy();
+            moved.set("base_url", url);
+            if api_host(&moved) != api_host(&d) {
+                w.pop("key"); // 换了服务商：账号表里写的是旧服务商的 key，不能发给新的（和钥匙串按域名存一样），保存后问新的
+            }
+            w.set("base_url", url);
+        }
+        let mid = format!("m{i}");
+        let m = text::strip(answer(&mid));
+        if m.is_empty() {
+            w.pop("model");
+        } else if model_ok(&V::from(m)) {
+            w.set("model", m);
+        } else {
+            bad.push((mid, MODEL_MSG.into()));
+        }
+        if let Some(n) = n {
+            let n = text::strip(n);
+            if !n.is_empty() && !in_nodes(n) {
+                bad.push((nid, "这个节点不在可选列表".into()));
+            } else if !n.is_empty() || w.truthy("node") {
+                w.set("node", n);
+            }
+        }
+        let eid = format!("e{i}");
+        if let Some(raw) = ans.get(&eid).filter(|_| has_env) {
+            let (env, mut p) = env_parse(raw);
+            if p.is_empty() {
+                p = api_problems(&c, &k, &dict! { "base_url" => "https://api.example.com", "env" => &env }, tool).join("；");
+            }
+            if !p.is_empty() {
+                bad.push((eid, p));
+            } else if env_text(Some(&V::Dict(env.clone()))) != env_text(d.get("env").as_ref()) {
+                if env.is_empty() {
+                    w.pop("env");
+                } else {
+                    w.set("env", env);
+                }
+            }
+        }
+        new.set(k, w);
+    }
+    if !bad.is_empty() {
+        for (f, why) in &bad {
+            out!("!{f}\t{why}");
+        }
+        return exit(3);
+    }
+    if V::Dict(new.clone()).py_eq(&V::Dict(table)) {
+        out!("same");
+        return Ok(());
+    }
+    save_json(&tool.table, &V::Dict(new), Some(0o600), true)?;
+    ctx()?; // 重新对账（直连改走节点时分配端口）
+    out!("changed");
+    Ok(())
 }
 
 /// NO_PROXY 写法 → Chromium --proxy-bypass-list 写法（和 Claude App 自己的转换一致）
