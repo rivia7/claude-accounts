@@ -408,9 +408,12 @@ impl V {
                 }
                 a.len() == b.len() && a.items().iter().all(|(k, v)| b.get(k).is_some_and(|w| v.py_eq(&w)))
             }
+            // 放不进 i64 的整数和小数：小数正好是这个整数才相等（和别的整数、布尔值一定不等：值不在它们的范围里）
+            (V::Big(a), V::Float(f)) | (V::Float(f), V::Big(a)) => f.is_finite() && f.fract() == 0.0 && format!("{f:.0}") == **a,
             _ => match (self.num_key(), o.num_key()) {
                 (Some(Num::I(a)), Some(Num::I(b))) => a == b,
-                (Some(a), Some(b)) => a.f() == b.f(),
+                (Some(Num::I(a)), Some(Num::F(b))) | (Some(Num::F(b)), Some(Num::I(a))) => int_eq_float(a, b),
+                (Some(Num::F(a)), Some(Num::F(b))) => a == b,
                 _ => false,
             },
         }
@@ -485,14 +488,12 @@ enum Num {
     F(f64),
 }
 
-impl Num {
-    fn f(&self) -> f64 {
-        match self {
-            Num::I(i) => *i as f64,
-            Num::F(f) => *f,
-        }
-    }
+/// 整数 == 小数：Python 比的是精确的值，不是先把整数变成小数（那样 2**53 以上相邻的几个整数都“等于”同一个小数：
+/// `9007199254740993 == 9007199254740992.0` 是 False）。小数是整数值、落在 i64 的范围里时 `as i64` 是精确的
+fn int_eq_float(i: i64, f: f64) -> bool {
+    f.fract() == 0.0 && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) && f as i64 == i
 }
+
 
 /// `repr(字符串)`：默认单引号，里面有单引号、没有双引号时换成双引号；不可打印的字符写成转义
 pub fn repr_str(s: &str) -> String {
@@ -685,6 +686,27 @@ mod tests {
         let b = dict! { "y" => list![1, 2], "x" => 1.0 };
         assert!(V::Dict(a).py_eq(&V::Dict(b)));
         assert!(!V::from(list![1, 2]).py_eq(&V::from(list![2, 1])));
+        // 整数和小数比精确的值（期望值是 Python 算的）
+        let eq = |a: V, b: V| (a.py_eq(&b), b.py_eq(&a));
+        assert_eq!(eq(V::Int(9007199254740992), V::Float(9007199254740992.0)), (true, true));
+        assert_eq!(eq(V::Int(9007199254740993), V::Float(9007199254740992.0)), (false, false));
+        assert_eq!(eq(V::Int(1795078097521852400), V::Float(1.7950780975218524e18)), (false, false));
+        assert_eq!(eq(V::Int(1795078097521852416), V::Float(1.7950780975218524e18)), (true, true));
+        assert_eq!(eq(V::Int(i64::MAX), V::Float(i64::MAX as f64)), (false, false)); // 这个小数是 2**63
+        assert_eq!(eq(V::Int(i64::MIN), V::Float(i64::MIN as f64)), (true, true));
+        assert_eq!(eq(V::Int(1), V::Float(1.5)), (false, false));
+        assert_eq!(eq(V::Int(0), V::Float(-0.0)), (true, true));
+        assert_eq!(eq(V::Int(0), V::Float(f64::NAN)), (false, false));
+        assert_eq!(eq(V::Int(0), V::Float(f64::INFINITY)), (false, false));
+        assert_eq!(eq(V::Bool(true), V::Float(1.0)), (true, true));
+        assert_eq!(eq(V::Float(f64::NAN), V::Float(f64::NAN)), (false, false));
+        // 放不进 i64 的整数
+        let big = |s: &str| V::Big(s.into());
+        assert_eq!(eq(big("9223372036854775808"), V::Float(2f64.powi(63))), (true, true));
+        assert_eq!(eq(big("1000000000000000019884624838656"), V::Float(1e30)), (true, true));
+        assert_eq!(eq(big("1000000000000000000000000000000"), V::Float(1e30)), (false, false)); // 10**30 != 1e30
+        assert_eq!(eq(big("-9223372036854775809"), V::Float(-(2f64.powi(63)))), (false, false));
+        assert_eq!(eq(big("9223372036854775808"), V::Int(i64::MAX)), (false, false));
     }
 
     #[test]
