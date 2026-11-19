@@ -1,62 +1,100 @@
 #!/usr/bin/env python3
-"""Account isolation guards: real TOML grammar, config sources and CLI overrides.
+"""配置隔离：共享的设置、项目设置、启动参数里会把账号换到别处的地方都拦住（完整的 TOML 语法、各个来源、命令行覆盖）。
 
-All fixtures live under a temporary HOME; neither clients nor the network are used.
-Run once with stdlib tomllib and once with the embedded Python 3.9 fallback.
-"""
+临时 HOME、cca 的辅助程序（cca-core settings-check / launch-check / codex-fallback-off；账号表里的 env 经 validate 和 env，
+会话库的路径修复经 Codex 的 link），不起客户端、不联网。
+
+原来每个场景跑两遍：一遍用标准库的 tomllib，一遍用给旧版 Python 内嵌的 tomli。辅助程序只有一个 TOML 解析器
+（cli/src/py/toml.rs，照 tomllib 一个函数一个函数译过来的），所以只跑一遍；这里交给它的每一份 TOML 另外都收在它的对照数据里
+（cli/tools/gen_vectors.py 的 TOML_SETTINGS_FILES / TOML_SETTINGS_OVERRIDES → cli/tests/vectors/toml.json，cargo test 的
+matches_cpython_vectors 拿 CPython 的解析结果和出错的说法逐份核对）。内嵌 tomli 的摘要和版本、内嵌 Python 的字节码缓存
+（PY_BOOT）随内嵌的 Python 一起没有了；辅助程序自己怎么解出来、怎么缓存在 tests/regress.sh 里测。
+
+原来直接调内部函数的三处，这里经子命令测，辅助程序自己的单元测试（cargo test）里另有照原来的结果写的：profile 的名字和
+文件名怎么认（cli/src/core/tool.rs 的 profile_names_match_discovery）、哪些变量名是保留的（cli/src/core/base.rs 的
+credential_sources_are_reserved）、第三方 API 账号交给 Claude Code 的环境（cli/src/cmd/accounts.rs 的
+api_env_never_carries_reserved_names）。"""
 import contextlib
-import base64
-import gzip
-import hashlib
-import io
 import json
-import os
 from pathlib import Path
-import tempfile
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
-from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helper_bin import HELPER
 
-SCRIPT = (Path(__file__).resolve().parents[1] / 'cca').read_text()
-SOURCE = SCRIPT.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
-PY_BOOT = SCRIPT.split("PY_BOOT='", 1)[1].split("'\n", 1)[0]
-DEFINITIONS = compile(SOURCE.split('\nCMDS = {', 1)[0], '<cca-isolation-tests>', 'exec')
+# 会动到这台机器、会联网的命令：沙箱的 PATH 最前面放只会报错的替身。这里用到的子命令只读写沙箱里的文件
+# （修会话库的那一个另外起系统的 sqlite3），一个都不该调到
+GUARDED = ('security', 'osascript', 'open', 'pbcopy', 'launchctl', 'ssh', 'scp', 'curl', 'git', 'nc', 'crontab', 'defaults', 'killall', 'pkill',
+           'sudo', 'lsappinfo', 'networksetup', 'scutil', 'codesign', 'spctl', 'hdiutil', 'ditto', 'claude', 'codex', 'agy', 'mihomo', 'ps')
+GUARD = '#!/bin/sh\nprintf \'%s\\n\' "$0 $*" >> "$HOME/unexpected-commands.log"\nexit 127\n'
 
 
 class SettingsGuardTests(unittest.TestCase):
-    fallback = False
-
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cca-isolation-')
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.project = self.home / 'project'
         self.project.mkdir()
-        self.ns = {}
-        with mock.patch.dict(os.environ, {'HOME': str(self.home), 'CCA_TOOL': 'codex',
-                                         'CCA_HOME': str(self.home / '.cca')}, clear=False):
-            exec(DEFINITIONS, self.ns)
-        if self.fallback:
-            self.ns['toml_loads'] = self.ns['tomli_fallback']().loads
-        self.getcwd = mock.patch('os.getcwd', return_value=str(self.project))
-        self.getcwd.start()
-        self.addCleanup(self.getcwd.stop)
+        (self.home / 'bin').mkdir()
+        for name in GUARDED:
+            (self.home / 'bin' / name).write_text(GUARD)
+            (self.home / 'bin' / name).chmod(0o755)
+        stray = self.home / 'unexpected-commands.log'
+        self.addCleanup(lambda: self.assertEqual(stray.read_text() if stray.exists() else '', '', '调到了没有准备假命令的外部命令'))
+        self.env = {'HOME': str(self.home), 'CCA_HOME': str(self.home / '.cca'), 'PATH': '%s:/usr/bin:/bin' % (self.home / 'bin')}
 
     def write(self, relative, text):
         path = self.home / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        path.write_text(text, encoding='utf-8')
         return path
 
-    def shared(self, tool='codex'):
-        self.ns['T'] = self.ns[tool.upper()]
-        return self.ns[tool + '_settings_problems']()
+    def helper(self, *argv, tool='codex', cwd=None):
+        """在项目目录（或 cwd）里跑一个子命令"""
+        return subprocess.run([HELPER, *argv], env=dict(self.env, CCA_TOOL=tool), cwd=str(cwd or self.project),
+                              stdin=subprocess.DEVNULL, capture_output=True, encoding='utf-8', timeout=30)
 
-    def launch(self, *args, tool='codex'):
-        self.ns['T'] = self.ns[tool.upper()]
-        return self.ns['launch_settings_problems'](args)
+    def problems(self, *argv, tool='codex', cwd=None):
+        """settings-check / launch-check 查出来的问题。没有：什么都不输出，退出码 0；有：退出码 1，stdout 一行，
+        空格隔开的「来源:配置键」（出了别的错——stderr 上有话、退出码对不上——不算查出了问题）"""
+        r = self.helper(*argv, tool=tool, cwd=cwd)
+        self.assertEqual(r.stderr, '')
+        self.assertEqual(r.returncode, 1 if r.stdout else 0, r.stdout)
+        if not r.stdout:
+            return []
+        self.assertEqual(r.stdout.count('\n'), 1, r.stdout)
+        return r.stdout.rstrip('\n').split(' ')
+
+    def shared(self, tool='codex'):
+        return self.problems('settings-check', tool=tool)
+
+    def launch(self, *args, tool='codex', cwd=None):
+        return self.problems('launch-check', *args, tool=tool, cwd=cwd)
+
+    def fallback_off(self):
+        """codex-fallback-off 的退出码（0：共享的配置确实关掉了桌面 App 的系统代理回退）"""
+        r = self.helper('codex-fallback-off')
+        self.assertEqual((r.stdout, r.stderr), ('', ''))
+        return r.returncode
+
+    def api_account(self, env):
+        """Claude 的账号表里放一个第三方 API 账号，env 是它要带给 Claude Code 的变量"""
+        self.write('.cca/accounts.json', json.dumps({'api': {'base_url': 'https://example.invalid', 'env': env}}))
+
+    def api_launch(self):
+        """bash 启动这个第三方 API 账号时拿到的（env 子命令的输出）：(交给 Claude Code 的环境, 整份输出)。
+        环境在启动参数 ACC_ARGS 里 --settings 的 env"""
+        r = self.helper('env', 'api', tool='claude')
+        self.assertEqual((r.returncode, r.stderr), (0, ''))
+        args = [line for line in r.stdout.splitlines() if line.startswith('ACC_ARGS=(')]
+        args = shlex.split(args[0][len('ACC_ARGS=('):-1])
+        return json.loads(args[args.index('--settings') + 1])['env'], r.stdout
 
     def test_multiline_escaped_and_dotted_sensitive_keys(self):
         for text in (
@@ -101,9 +139,11 @@ class SettingsGuardTests(unittest.TestCase):
     def test_profile_names_match_discovery_and_cannot_escape_checked_files(self):
         for name in ('deep-review', '工作 配置', 'review.v2', 'with spaces'):
             with self.subTest(name=name):
-                self.write('.codex/' + name + '.config.toml', 'model="sample-model"\n')
                 self.write('.codex/config.toml', 'profile=' + json.dumps(name) + '\n')
-                self.assertTrue(self.ns['codex_profile_file'](name + '.config.toml'))
+                # 叫这个名字的 profile 文件找得到、照样查：里面有不该有的键就报出来（名字里有空格，这里看整行）
+                self.write('.codex/' + name + '.config.toml', 'chatgpt_base_url="https://example.invalid"\n')
+                self.assertIn(name + '.config.toml:chatgpt_base_url', ' '.join(self.shared()))
+                self.write('.codex/' + name + '.config.toml', 'model="sample-model"\n')
                 self.assertEqual(self.shared(), [])
                 self.assertEqual(self.launch('--profile', name), [])
                 self.assertEqual(self.launch('-c', 'profile=' + json.dumps(name)), [])
@@ -163,18 +203,14 @@ name = "one"
         self.write('.codex/config.toml', 'profile="x"\n[features]\nsystem_proxy_fallback=false\n'
                    '[profiles.x.features]\nsystem_proxy_fallback=true\n')
         self.assertTrue(self.shared())
-        with self.assertRaises(SystemExit) as caught:
-            self.ns['cmd_codex_fallback_off']()
-        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(self.fallback_off(), 1)
         self.write('.codex/config.toml', '[features]\nsystem_proxy_fallback=false\n')
         self.write('.codex/deep.config.toml', 'features={system_proxy_fallback=true}\n')
         self.assertTrue(self.shared())
         (self.home / '.codex/deep.config.toml').unlink()
         self.write('.codex/config.toml', '[features]\nsystem_proxy_fallback=true\n')
         self.assertEqual(self.shared(), [])
-        with self.assertRaises(SystemExit) as caught:
-            self.ns['cmd_codex_fallback_off']()
-        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(self.fallback_off(), 1)
 
     def test_dotenv_credentials_and_proxy_variables_are_blocked(self):
         for name in ('CODEX_ACCESS_TOKEN', 'CODEX_API_KEY', 'CODEX_HOME',
@@ -224,9 +260,17 @@ name = "one"
                 self.assertEqual(self.launch(tool='claude'), [str(project.resolve()) + ':' + name])
                 project.unlink()
                 self.assertEqual(self.launch('--settings', content, tool='claude'), ['--settings:' + name])
-                self.assertTrue(self.ns['ENV_RESERVED'].match(name))
-                self.assertNotIn(name, self.ns['api_env']({'base_url': 'https://example.invalid',
-                                                        'env': {name: 'private-fixture-value'}}))
+                # 第三方 API 账号的 env 里也不能设：校验账号表时拒绝（ENV_RESERVED）；就算表里写了，交给 Claude Code 的
+                # 环境里也没有它（api_env），别的变量照带
+                self.api_account({name: 'private-fixture-value', 'EDITOR': 'vi'})
+                r = self.helper('validate', tool='claude')
+                self.assertEqual((r.returncode, r.stdout), (1, ''))
+                self.assertIn('env 里不能设 %s（' % name, r.stderr)
+                self.assertNotIn('private-fixture-value', r.stderr)
+                env, said = self.api_launch()
+                self.assertNotIn(name, env)
+                self.assertNotIn('private-fixture-value', said)
+                self.assertEqual((env['ANTHROPIC_BASE_URL'], env['EDITOR']), ('https://example.invalid', 'vi'))
 
     def test_required_option_values_do_not_end_guard_scanning(self):
         self.assertEqual(self.launch('--system-prompt', '--settings', tool='claude'), [])
@@ -270,8 +314,7 @@ name = "one"
         self.write('project/.codex/config.toml', 'features={respect_system_proxy=true}')
         nested = self.project / 'nested'
         nested.mkdir()
-        with mock.patch('os.getcwd', return_value=str(nested)):
-            self.assertTrue(self.launch())
+        self.assertTrue(self.launch(cwd=nested))
         self.assertTrue(self.launch('-C', str(self.home / 'other')))
         (self.project / '.codex/config.toml').unlink()
         self.assertEqual(self.launch(), [])
@@ -299,19 +342,16 @@ name = "one"
         ):
             with self.subTest(text=text):
                 self.write('.codex/config.toml', text)
-                with self.assertRaises(SystemExit) as caught:
-                    self.ns['cmd_codex_fallback_off']()
-                self.assertEqual(caught.exception.code, expected)
+                self.assertEqual(self.fallback_off(), expected)
 
     def test_command_failure_does_not_echo_values(self):
         self.write('.codex/config.toml', 'chatgpt_base_url="unique-private-value"')
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as caught:
-            self.ns['cmd_launch_check']('-c', 'model=benign')
-        self.assertEqual(caught.exception.code, 1)
-        self.assertIn('chatgpt_base_url', output.getvalue())
-        self.assertNotIn('unique-private-value', output.getvalue())
+        r = self.helper('launch-check', '-c', 'model=benign')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('chatgpt_base_url', r.stdout)
+        self.assertNotIn('unique-private-value', r.stdout + r.stderr)
 
+    @unittest.skipUnless(shutil.which('sqlite3'), '辅助程序改会话库用系统的 sqlite3 命令，没装时这一步跳过')
     def test_rollout_repair_uses_real_toml_and_reports_invalid_config(self):
         import sqlite3
         databases = self.home / 'databases'
@@ -324,57 +364,36 @@ name = "one"
             connection.execute('INSERT INTO threads VALUES (?, ?)', ('test-thread', original))
             connection.commit()
         self.write('.codex/config.toml', 'sqlite_home = """\n' + str(databases) + '"""\n')
-        self.ns['codex_fix_rollouts']()
+        # 会话库的路径修复是 Codex 账号 link（每次会话前后都跑）的最后一步
+        self.write('.cca/codex.json', json.dumps({'erin@example.com': 'US-A'}))
+        r = self.helper('link', 'erin@example.com')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
         with contextlib.closing(sqlite3.connect(database)) as connection:
             self.assertEqual(connection.execute('SELECT rollout_path FROM threads').fetchone()[0], str(target))
         self.write('.codex/config.toml', 'sqlite_home = [')
-        errors = io.StringIO()
-        with contextlib.redirect_stderr(errors):
-            self.ns['codex_fix_rollouts']()
-        self.assertIn('跳过会话路径修复', errors.getvalue())
+        r = self.helper('link', 'erin@example.com')
+        self.assertEqual((r.returncode, r.stdout), (0, ''))
+        self.assertIn('跳过会话路径修复', r.stderr)
 
-
-class EmbeddedParserTests(SettingsGuardTests):
-    fallback = True
-
-    def test_embedded_source_integrity_and_version(self):
-        import base64
-        import zlib
-        data = zlib.decompress(base64.b64decode(self.ns['TOMLI_EMBEDDED']))
-        recorded = SOURCE.split('# Source JSON SHA256: ', 1)[1].splitlines()[0]
-        self.assertEqual(hashlib.sha256(data).hexdigest(), recorded)
-        self.assertEqual(self.ns['tomli_fallback']().__version__, '2.3.0')
-
-
-class BootstrapTests(unittest.TestCase):
-    def run_boot(self, source, directory, *args, env=None, stdin=''):
-        packed = base64.b64encode(gzip.compress(source.encode(), mtime=0)).decode()
-        return subprocess.run([sys.executable, '-I', '-X', 'utf8', '-c', PY_BOOT, str(directory), packed, *args],
-                              input=stdin, capture_output=True, text=True, env=env, timeout=15)
-
-    def test_snapshot_stdin_arguments_and_cache_digest(self):
-        with tempfile.TemporaryDirectory(prefix='cca-bootstrap-') as d:
-            cache = Path(d) / 'cache'
-            source = 'import json,sys; print(json.dumps([sys.argv[1:],sys.stdin.read()]))'
-            first = self.run_boot(source, cache, 'one', '--two', stdin='stdin stays available')
-            self.assertEqual(first.returncode, 0, first.stderr)
-            self.assertEqual(json.loads(first.stdout), [['one', '--two'], 'stdin stays available'])
-            before = sorted(p.name for p in cache.iterdir())
-            self.assertEqual(len(before), 1)
-            again = self.run_boot(source, cache, 'again')
-            self.assertEqual(again.returncode, 0, again.stderr)
-            self.assertEqual(sorted(p.name for p in cache.iterdir()), before)
-            changed = self.run_boot('print("new snapshot")', cache)
-            self.assertEqual(changed.stdout.strip(), 'new snapshot')
-            self.assertEqual(len(list(cache.iterdir())), 2)
-
-    def test_full_source_with_large_inherited_environment(self):
+    def test_large_inherited_environment(self):
+        # 原来是「整份内嵌的 Python 当参数传、再带着很大的环境」起不起得来（BootstrapTests）；辅助程序没有那么长的参数，
+        # 留下的是：继承来的环境很大时照常工作
         with tempfile.TemporaryDirectory(prefix='cca-bootstrap-') as d:
             env = {'HOME': d, 'PATH': '/usr/bin:/bin', 'CCA_TOOL': 'codex', 'CCA_POLICY_DEFAULT': '',
                    'CCA_TEST_LARGE_ENV': 'x' * 90000}
-            result = self.run_boot(SOURCE, Path(d) / 'cache', 'settings-check', env=env)
+            result = subprocess.run([HELPER, 'settings-check'], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                    encoding='utf-8', timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, '')
+
+
+# 原来还有的几个，现在在别处：
+# - EmbeddedParserTests（上面每个场景换成内嵌的 tomli 再跑一遍）：解析器只有一个了；同样的输入由 cli/src/py/toml.rs 的
+#   matches_cpython_vectors 拿 cli/tests/vectors/toml.json 逐份对照
+# - EmbeddedParserTests.test_embedded_source_integrity_and_version：内嵌的 tomli 没有了，不用再核对它的摘要和版本
+# - BootstrapTests.test_snapshot_stdin_arguments_and_cache_digest：PY_BOOT 的字节码缓存没有了；辅助程序按摘要解出来、
+#   不重复解、清旧的在 tests/regress.sh 的「辅助程序：…」那几个用例里
+# - BootstrapTests.test_full_source_with_large_inherited_environment：就是上面的 test_large_inherited_environment
 
 
 if __name__ == '__main__':
