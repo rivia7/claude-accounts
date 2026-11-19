@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
-from device_identity import PY_BOOT, SOURCE_PACKED, ACCOUNTS
+from device_identity import HELPER, ACCOUNTS
 
 
 class SharedState(unittest.TestCase):
@@ -41,7 +41,7 @@ class SharedState(unittest.TestCase):
         os.replace(temporary, path)
 
     def run_cca(self, tool, command='link', key=ACCOUNTS[0], expected=0):
-        args = [sys.executable, '-I', '-X', 'utf8', '-c', PY_BOOT, '', SOURCE_PACKED, command]
+        args = [HELPER, command]
         if key is not None:
             args.append(key)
         result = subprocess.run(

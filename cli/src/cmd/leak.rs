@@ -82,17 +82,24 @@ fn join_until<T>(rx: &mpsc::Receiver<T>, end: f64) -> Vec<T> {
     }
 }
 
-/// 经 curl 取网址（测试里的假 curl 照样管得到）：proxy 是账号的端口，空的是直连。拿不到返回 None
-fn leak_curl(url: &str, proxy: &str, timeout: f64) -> Option<String> {
-    let timeout = timeout.max(0.5);
-    let limit = format!("{timeout:.1}");
-    let mut argv = vec!["curl", "-q", "-s", "-m", &limit];
+/// 探针的 curl 命令行：第一个参数是 -q（不读 ~/.curlrc：里面的 proxy / noproxy 会把探针带到别的路上）；路由写明——
+/// 经账号的端口时 `--noproxy ''`（盖掉环境里的 NO_PROXY），直连时 `--noproxy '*'`（盖掉环境里的代理）
+fn leak_curl_argv<'a>(url: &'a str, proxy: &'a str, limit: &'a str) -> Vec<&'a str> {
+    let mut argv = vec!["curl", "-q", "-s", "-m", limit];
     if proxy.is_empty() {
         argv.extend(["--noproxy", "*"]);
     } else {
         argv.extend(["--noproxy", "", "-x", proxy]);
     }
     argv.push(url);
+    argv
+}
+
+/// 经 curl 取网址（测试里的假 curl 照样管得到）：proxy 是账号的端口，空的是直连。拿不到返回 None
+fn leak_curl(url: &str, proxy: &str, timeout: f64) -> Option<String> {
+    let timeout = timeout.max(0.5);
+    let limit = format!("{timeout:.1}");
+    let argv = leak_curl_argv(url, proxy, &limit);
     // 起不来、超时（多给 2 秒，到时杀掉）、退出码不是 0 都算拿不到
     match Proc::new(argv).stdin(In::Null).stdout(Out::Capture).stderr(Out::Null).timeout(timeout + 2.0).run() {
         Ok(done) if done.rc == 0 => Some(done.out()),
@@ -626,6 +633,23 @@ pub const CMDS: &[Cmd] = &[Cmd::all("coffee", cmd_coffee), Cmd::all("leak-probe"
 
 #[cfg(test)]
 mod tests {
+    /// 探针不继承主机的代理设置、不读 curl 的配置文件（CLAUDE.md「切节点……探针、控制接口用的 curl」那一条）
+    #[test]
+    fn leak_probe_has_explicit_route_and_no_curl_config() {
+        for (proxy, bypass) in [("http://192.0.2.10:7901", ""), ("", "*")] {
+            let argv = super::leak_curl_argv("https://example.com", proxy, "3.0");
+            assert_eq!(argv[0], "curl");
+            assert_eq!(argv[1], "-q", "curl 要先被告知不读 .curlrc，再解析别的参数");
+            let at = argv.iter().position(|a| *a == "--noproxy").expect("--noproxy");
+            assert_eq!(argv[at + 1], bypass);
+            assert_eq!(argv.contains(&"-x"), !proxy.is_empty());
+            if !proxy.is_empty() {
+                assert_eq!(argv[argv.iter().position(|a| *a == "-x").unwrap() + 1], proxy);
+            }
+            assert_eq!(*argv.last().unwrap(), "https://example.com");
+        }
+    }
+
     use super::*;
 
     #[test]

@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Account network boundaries: temporary files and fake router/curl, never network access."""
-import ast
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
 
 
 CCA = Path(__file__).resolve().parents[1] / 'cca'
@@ -336,18 +334,8 @@ test "$LCODE" = 200
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_curl_route(self.curl_calls()[0], '*')
 
-    def test_python_leak_probe_has_explicit_route_and_no_curl_config(self):
-        source = SOURCE.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
-        node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'leak_curl')
-        ns = {}
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(CCA), 'exec'), ns)
-        for proxy in ('http://192.0.2.10:7901', ''):
-            with self.subTest(proxy=proxy), mock.patch('subprocess.run') as run:
-                run.return_value = subprocess.CompletedProcess([], 0, b'{}')
-                self.assertEqual(ns['leak_curl']('https://example.com', proxy), '{}')
-                args = run.call_args.args[0]
-                self.assertEqual(args[0], 'curl')
-                self.assert_curl_route(args[1:], '' if proxy else '*')
+    # 辅助程序里的探针（leak_curl）不继承主机的代理设置、不读 curl 的配置：cli/src/cmd/leak.rs 的
+    # leak_probe_has_explicit_route_and_no_curl_config（cargo test）
 
 
 if __name__ == '__main__':

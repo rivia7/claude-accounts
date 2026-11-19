@@ -16,7 +16,7 @@ RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44s
 
 # 整个安装过程包在函数里，脚本最后一行才执行：curl | bash 下载到一半断了也不会执行半截脚本
 main() {
-	local c py f i v os miss="" want="${1#[vV]}" from="$REPO/releases/latest/download"
+	local c f i v os miss="" want="${1#[vV]}" from="$REPO/releases/latest/download"
 	fail() { printf '\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 	info() { printf '\033[32m•\033[0m %s\n' "$*" >&2; }
 	pkg_hint() {   # pkg_hint 命令…：Linux 上装这些命令的那一行（认出包管理器时，前面带「：」）。和 cca 的 pkg_hint 一样
@@ -36,8 +36,8 @@ main() {
 				dnf:nc|yum:nc) p=nmap-ncat ;;
 				pacman:nc) p=openbsd-netcat ;;
 				*:nc) p=netcat-openbsd ;;
-				pacman:python3) p=python ;;
 				*:gunzip) p=gzip ;;
+				*:base64) p=coreutils ;;
 				*:find) p=findutils ;;
 				*) p=$c ;;
 			esac
@@ -54,19 +54,14 @@ main() {
 
 	os=$(uname)
 	case "$os" in Darwin|Linux) ;; *) fail "cca 只支持 macOS 和 Linux（这台是 ${os}）" ;; esac
-	# 和 cca install 查的一样（need_deps）；Linux 上 python3 也可能没装（macOS 的 /usr/bin/python3 总在，下面另查）
-	for c in curl ssh ssh-keygen nc perl gunzip find; do
+	# cca 里接着一个原生的辅助程序，只有这四种机器的
+	c=$(uname -m)
+	case "$c" in arm64|aarch64|x86_64|amd64) ;; *) fail "cca 只支持 Intel / Apple 芯片的 Mac，x86_64 / arm64 的 Linux（这台是 ${c}）" ;; esac
+	# 和 cca install 查的一样（need_deps）
+	for c in curl ssh ssh-keygen nc perl gunzip base64 find; do
 		command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"
 	done
-	py=$(command -v python3 2>/dev/null)
-	[ -n "$py" ] || [ "$os" = Darwin ] || miss="${miss:+$miss }python3"
 	[ -z "$miss" ] || fail "缺少命令 ${miss// /、}，先装上再执行这条安装命令$(pkg_hint $miss)"
-	# macOS 的 /usr/bin/python3 只是个占位，没装命令行工具时一运行就弹安装窗口
-	if [ -z "$py" ] || { [ "$os" = Darwin ] && [ "$py" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; }; then
-		fail "需要 python3：先运行 xcode-select --install 装上苹果的命令行工具，装好后再执行这条安装命令"
-	fi
-	v=$("$py" -I -c 'import sys; print("%d.%d" % sys.version_info[:2]); sys.exit(sys.version_info < (3, 8))' 2>/dev/null) ||
-		fail "cca 要 Python 3.8 或更新（这台的 python3 是 ${v:-更早的版本}）"
 	# 校验发布签名的 ssh-keygen -Y 是 OpenSSH 8.1 才有的（RHEL / Rocky 8 是 8.0）；认不出版本（不是 OpenSSH）时照常往下走
 	v=$(ssh -V 2>&1 | sed -n 's/^OpenSSH_\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)
 	case "$v" in [1-7].*|8.0) fail "OpenSSH 太旧（${v}）：校验 cca 的发布签名要 8.1 或更新（ssh-keygen -Y）" ;; esac

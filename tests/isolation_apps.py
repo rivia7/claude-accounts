@@ -10,6 +10,9 @@ import tempfile
 import time
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helper_bin import HELPER   # cca 的辅助程序：切出来的 bash 函数里用它（"$HELPER" sh-flock、sh-ps-tree 这些）
+
 
 SOURCE = (Path(__file__).resolve().parents[1] / 'cca').read_text()
 ENV = SOURCE[SOURCE.index("INHERITED_RE='^"):SOURCE.index('\npyenv()')]
@@ -46,7 +49,7 @@ class AppIsolation(unittest.TestCase):
         self.profile.mkdir()
         self.env = {
             'HOME': str(self.root), 'PATH': str(self.bin) + ':/usr/bin:/bin:/usr/sbin:/sbin',
-            'PYTHON': sys.executable, 'ACC_DIR': str(self.root), 'AUDIT_ROOT': str(self.root),
+            'PYTHON': sys.executable, 'HELPER': HELPER, 'ACC_DIR': str(self.root), 'AUDIT_ROOT': str(self.root),
             'ACC_HOME': str(self.root / 'config'), 'ACC_MASTER': str(self.root / 'master'),
             'ACC_KEY': 'test@example.com', 'ACC_KIND': 'oauth',
             'ACC_PROXY': 'http://127.0.0.1:7999', 'CCA_NO_PROXY': 'localhost',

@@ -8,25 +8,36 @@ if [ -n "${CKPT:-}" ]; then T="${TMPDIR:-/tmp}/cca-ckpt.sandbox"; mkdir "$T.lock
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
 SVP=""   # 设备统计的测试服务器（11b3c 那一节才开）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
-trap '[ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
+HC=""    # 辅助程序的缓存目录（10g 测“解出来”的那几个用例才建；在这个用户的临时目录里）
+trap '[ -z "$HC" ] || rm -rf "$HC"; [ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
 [ -n "${FROM:-}${ONLY:-}" ] || bash "$D/setup.sh" "$T" >/dev/null || exit 1   # 分节续跑时跳过建沙箱：快照恢复会填好 $T
 cd "$T" || exit 1
-# TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>sleep 了几秒<TAB>说明”；
-# python 的次数靠 CCA_PYTHON 指向的一个记数的小脚本（只在 TIMING 时用，平时 cca 照常找 python3），sleep 靠 $T/bin 里的 sleep
+# 辅助程序（cli/ 的 Rust 程序）：仓库里的 cca 用 cli/target/release 里编出来的那一份，这里先编（没改过就是零点几秒；--locked --offline：
+# 照 Cargo.lock、不联网，依赖没下过的先在 cli/ 里 cargo fetch 一次）。CCA_HELPER=路径：不编，整套回归用这一份（release.sh 用它
+# 指到要发布的那一份；没装 Rust 的机器上也可以这样跑）。HOST_TARGET：这台机器的目标（mkver 给假的发布版接辅助程序用，见 cli/pack.py）
+HELPER_BIN="${CCA_HELPER:-}"
+if [ -z "$HELPER_BIN" ]; then
+	HELPER_BIN="$(dirname "$CCA")/cli/target/release/cca-core"
+	( cd "$(dirname "$CCA")/cli" && cargo build --release --locked --offline ) > "$T/cargo.log" 2>&1 ||
+		{ tail -n 30 "$T/cargo.log" >&2; echo "辅助程序编不出来（cd cli && cargo build --release）" >&2; exit 1; }
+fi
+[ -x "$HELPER_BIN" ] || { echo "辅助程序不在：$HELPER_BIN" >&2; exit 1; }
+case "$(uname -m)" in arm64) HOST_TARGET=aarch64-apple-darwin ;; *) HOST_TARGET=x86_64-apple-darwin ;; esac
+# TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次辅助程序<TAB>sleep 了几秒<TAB>说明”；
+# 次数靠 CCA_HELPER 指向的一个记数的小脚本（只在 TIMING 时用），sleep 靠 $T/bin 里的 sleep
 #（cca、假命令、经假 ssh 跑的路由器端都从 PATH 找它；后台进程的也算在内）
-PYWRAP="${CCA_PYWRAP:-}"   # CCA_PYWRAP：换掉 cca 用的 python3（移植 Rust 时的混合版：指到转给 cca-core 的小脚本，见 cli/mixed.sh）
+HELPERWRAP="${CCA_HELPER:-}"
 if [ -n "${TIMING:-}" ]; then
 	: > "$TIMING"; : > "$T/py.count"; TIMING_PY=0
-	PYWRAP="$T/pycount"
-	# 每次记一行：参数里短的、不带换行的那些（长的是内嵌的 Python 源码），第一个不是开关、不是目录的就是 py 的子命令。
-	# 用 dash 写：/bin/sh（bash）带着几百 KB 的参数起一次要多花二三十毫秒，比要量的还多；python 用它转发到的真正的那个（和 cca 一样）
-	printf '#!/bin/dash\nfor a in "$@"; do case $a in *"\n"*) ;; *) [ ${#a} -lt 120 ] && printf "%%s " "$a" ;; esac; done >> "%s/py.count"; echo >> "%s/py.count"\nexec %s "$@"\n' \
-		"$T" "$T" "$(PATH=/opt/homebrew/bin:/usr/bin:/bin python3 -I -c 'import sys; print(sys.executable)')" > "$PYWRAP"
-	chmod 755 "$PYWRAP"
+	HELPERWRAP="$T/pycount"
+	# 每次记一行：py 的子命令和它的参数（长的、带换行的不记）
+	printf '#!/bin/dash\nfor a in "$@"; do case $a in *"\n"*) ;; *) [ ${#a} -lt 120 ] && printf "%%s " "$a" ;; esac; done >> "%s/py.count"; echo >> "%s/py.count"\nexec "%s" "$@"\n' \
+		"$T" "$T" "$HELPER_BIN" > "$HELPERWRAP"
+	chmod 755 "$HELPERWRAP"
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_PYTHON="$PYWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_HELPER="$HELPERWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -129,6 +140,7 @@ _ckpt_restore() {   # 恢复某节开始时的沙箱和变量；计数（pass/fa
 _BASE=" $(compgen -v 2>/dev/null | tr '\n' ' ')"   # 分节续跑的变量基线：前置阶段已有的变量名（建快照时只存这之后各节新设的）
 _BASEF=" $(compgen -A function 2>/dev/null | tr '\n' ' ')"   # 函数基线：前置阶段已有的函数（ok/run/sect…；只存各节新定义的）
 if sect unit; then
+ok "辅助程序（cli/）自己的单元测试：cargo test" '( cd "$D/../cli" && cargo test --locked --offline ) > "$T/cargo-test.log" 2>&1'
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
@@ -1567,38 +1579,52 @@ out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state.json"
 ok "_gui state：Claude、Codex 的账号和账号表一样（顺序也一样），端口和 config.json 一样，账号目录名是 cca 算的" '[ $rc -eq 0 ] && jok "[a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]] == list(tab(\"accounts.json\")) and [a[\"key\"] for a in d[\"tools\"][1][\"accounts\"]] == list(tab(\"codex.json\")) and all(a[\"port\"] == cfg[\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][0][\"accounts\"]) and all(a[\"port\"] == cfg[\"codex\"][\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][1][\"accounts\"]) and acct(0, \"alice@example.com\")[\"id\"] == \"${AD##*/}\"" < "$GF/state.json"'
 ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存），槽位 1；Codex 的 dave 在槽位 3；路由器已同步" 'jok "(lambda a, x: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Max\" and a[\"slot\"] == 1 and a[\"group\"] == \"CCA-1\" and a[\"usage\"][\"source\"] == \"cache\" and a[\"usage\"][\"five_hour\"][\"utilization\"] >= 0 and isinstance(a[\"usage\"][\"five_hour\"][\"resets_epoch\"], float) and a[\"badge\"][\"label\"] == \"A\" and a[\"app\"] == {\"running\": False, \"pid\": None} and x[\"login\"] == \"logged_in\" and x[\"slot\"] == 3)(acct(0, \"alice@example.com\"), acct(1, \"dave@example.com\")) and d[\"routing\"][\"sync\"] == \"ok\" and d[\"routing\"][\"slots\"][2][\"tool\"] == \"codex\" and d[\"routing\"][\"pool_size\"] % 8 == 0" < "$GF/state.json"'
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
-out=$(run OSTYPE=linux-gnu cca _gui hello </dev/null 2>/dev/null); tr=$(run OSTYPE=linux-gnu bash -x "$CCA" _gui hello </dev/null 2>&1 >/dev/null)
-ok "Linux 上内嵌 Python 的源码拆成几段传（exec 的单个参数最多 128KB；bash 认环境里的 OSTYPE，这里借它模拟）：bash 3.2 照样按字节切、PY_BOOT 拼回来，结果和不拆一样" '[ -n "$out" ] && [ "$out" = "$(gj hello)" ] && printf "%s" "$tr" | grep -q "unset _a _lc _lcs"'
-# 内嵌 Python 的编译缓存（PY_BOOT）：每个版本一份，写新的一份时顺手删掉 7 天前写的旧缓存和没写完的临时文件；7 天内的、python3 指针、
-# 名字不像缓存的都留着，读缓存时什么都不改。TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面（沙箱不在那里就没法不碰真的缓存目录）。
-# 开头把沙箱规整成了 /private/var/folders/…，cca 只认 /var/folders/…：换回这个写法交给它（/var 是指向 /private/var 的链接，同一个目录）
-TL=${T#/private}
-case "$TL" in
-/var/folders/*)
-PC="$T/pyc/cca-py"; mkdir -p -m 700 "$T/pyc" "$PC"
-for n in 0123456789abcdef1-30906f0 0123456789abcdef2-30906f0.4242 0123456789abcdef3-30e00f0 python3 notes-0123456789abcdef5 0123456789abcdefk-1; do echo x > "$PC/$n"; done
-python3 - "$PC" <<'P'
-import os, sys, time
-for n, days in (('0123456789abcdef1-30906f0', 8), ('0123456789abcdef2-30906f0.4242', 30), ('0123456789abcdef3-30e00f0', 6),
-                ('python3', 30), ('notes-0123456789abcdef5', 30), ('0123456789abcdefk-1', 30)):
-    t = time.time() - days * 86400
-    os.utime(os.path.join(sys.argv[1], n), (t, t))
-P
-run TMPDIR="$TL/pyc/" cca ls >/dev/null 2>&1; l1=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
-run TMPDIR="$TL/pyc/" cca ls >/dev/null 2>&1; l2=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
-v=$(python3 - "$l1" <<'P'
-import re, sys
-s = set(sys.argv[1].split())
-new = [n for n in s if re.fullmatch(r'[0-9a-f]{17,}-[0-9a-f]+', n) and not n.startswith('0123456789abcdef')]
-keep = {'0123456789abcdef3-30e00f0', '0123456789abcdefk-1', 'notes-0123456789abcdef5', 'python3'}
-gone = {'0123456789abcdef1-30906f0', '0123456789abcdef2-30906f0.4242'}
-print('ok' if keep <= s and not s & gone and len(new) == 1 else 'bad')
-P
-)
-ok "内嵌 Python 的编译缓存：写新的一份时删掉 7 天前写的旧缓存和没写完的临时文件，7 天内的、python3 指针、名字不像缓存的都留着；读缓存时不动" '[ "$v" = ok ] && [ "$l1" = "$l2" ]'
-;;
-*) echo "SKIP  内嵌 Python 的编译缓存（沙箱不在 /var/folders 下，cca 不会把缓存放进沙箱）" ;;
-esac
+# 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cli/pack.py），第一次用时解到
+# 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
+# 这几个用例不带 CCA_HELPER（TIMING、release.sh 跑回归时带着它，那样就不解了）；缓存目录单独建一个（HC，退出时删），不碰真的
+HC=$(mktemp -d "$(getconf DARWIN_USER_TEMP_DIR)cca-test-helper.XXXXXX"); HC=$(cd "$HC" && pwd -P); HCL=${HC#/private}
+hrun() { run CCA_HELPER= TMPDIR="$HCL/" "$@"; }   # hrun 命令…：不指定辅助程序，缓存目录是 $HC
+HSUM=$(shasum -a 256 "$HELPER_BIN" | cut -d' ' -f1)
+mkdir -p "$T/hc/dev"; cp "$CCA" "$T/hc/dev/cca"; : > "$T/hc/dev/.git"
+out=$(hrun "$T/hc/dev/cca" version 2>&1); rc=$?
+ok "辅助程序：仓库里的 cca（没接辅助程序）还没编出来时说清楚怎么编，不往下走" '[ $rc -eq 1 ] && [ "$out" = "cca: 这一份 cca 是仓库里的源码，没带辅助程序：先编出来（cd $T/hc/dev/cli && cargo build --release）" ]'
+out=$(run CCA_HELPER="$HELPER_BIN" "$T/hc/dev/cca" version 2>&1); rc=$?
+ok "辅助程序：CCA_HELPER 指定用哪一份（测试用）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ]'
+python3 -I "$D/../cli/pack.py" "$CCA" "$T/hc/cca" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null
+ok "辅助程序：接上以后（cli/pack.py）还是一个语法正确的 bash 文件，校验值写在 HELPER_SUMS 里" 'bash -n "$T/hc/cca" && grep -qx "HELPER_SUMS=\"$HOST_TARGET=$HSUM\"" "$T/hc/cca" && [ "$(tail -n 1 "$T/hc/cca")" = CCA-HELPER-END ]'
+out=$(hrun "$T/hc/cca" version 2>&1); rc=$?
+ok "辅助程序：发布的 cca 第一次运行时解到缓存目录的 cca-helper 里（文件名是 SHA-256，校验过，只有自己能读写执行）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ] && [ "$(ls "$HC/cca-helper")" = "$HSUM" ] && [ "$(stat -f %Lp "$HC/cca-helper/$HSUM")" = 700 ] && [ "$(stat -f %Lp "$HC/cca-helper")" = 700 ] && [ "$(shasum -a 256 "$HC/cca-helper/$HSUM" | cut -d" " -f1)" = "$HSUM" ]'
+i1=$(stat -f '%i %m' "$HC/cca-helper/$HSUM")
+tr=$(hrun bash -x "$T/hc/cca" version 2>&1 >/dev/null)
+ok "辅助程序：以后每次直接用解好的那一份，不再解，也不为它起任何进程" '[ "$(stat -f "%i %m" "$HC/cca-helper/$HSUM")" = "$i1" ] && ! printf "%s" "$tr" | grep -qE "^\++ (sed|base64|gunzip|shasum|mkdir|chmod|find|mv) "'
+rm -rf "$HC/cca-helper"; mkdir -m 700 "$HC/cca-helper"
+for n in aaaa1 aaaa2.4242 bbbb1; do echo x > "$HC/cca-helper/$n"; done
+touch -t "$(date -v-8d +%Y%m%d%H%M)" "$HC/cca-helper/aaaa1"; touch -t "$(date -v-30d +%Y%m%d%H%M)" "$HC/cca-helper/aaaa2.4242"; touch -t "$(date -v-6d +%Y%m%d%H%M)" "$HC/cca-helper/bbbb1"
+hrun "$T/hc/cca" version >/dev/null 2>&1
+ok "辅助程序：解新的一份时顺手删掉 7 天前解出来的（旧版本的、没解完的临时文件），7 天内的留着" '[ "$(ls "$HC/cca-helper" | LC_ALL=C sort | tr "\n" " ")" = "$(printf "%s\n" "$HSUM" bbbb1 | LC_ALL=C sort | tr "\n" " ")" ]'
+rm -rf "$HC/cca-helper"
+head -c $(( $(wc -c < "$T/hc/cca") - 20000 )) "$T/hc/cca" > "$T/hc/cut"; chmod 755 "$T/hc/cut"
+out=$(hrun "$T/hc/cut" version 2>&1); rc=$?
+sed "s/^HELPER_SUMS=\"$HOST_TARGET=$HSUM\"$/HELPER_SUMS=\"$HOST_TARGET=${HSUM%????}0000\"/" "$T/hc/cca" > "$T/hc/bad"; chmod 755 "$T/hc/bad"
+out2=$(hrun "$T/hc/bad" version 2>&1); rc2=$?
+ok "辅助程序：文件不完整（下载到一半）、校验值对不上时不用，说清楚，缓存目录里不留东西" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "解不出辅助程序" && [ $rc2 -eq 1 ] && printf "%s" "$out2" | grep -q "解不出辅助程序" && [ -z "$(ls "$HC/cca-helper")" ]'
+rm -rf "$HC/cca-helper"; mkdir "$HC/elsewhere"; ln -s "$HC/elsewhere" "$HC/cca-helper"
+out=$(hrun "$T/hc/cca" version 2>&1); rc=$?
+ok "辅助程序：缓存目录是个链接时不用它" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "缓存目录 $HCL/cca-helper 用不了" && [ -z "$(ls "$HC/elsewhere")" ]'
+rm -f "$HC/cca-helper"
+mkdir -p "$T/hc/oddcpu"; printf '#!/bin/sh\n[ "$1" = -m ] && { echo riscv64; exit 0; }\nexec /usr/bin/uname "$@"\n' > "$T/hc/oddcpu/uname"; chmod +x "$T/hc/oddcpu/uname"
+out=$(hrun HOSTTYPE=riscv64 PATH="$T/hc/oddcpu:$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/hc/cca" version 2>&1); rc=$?
+out2=$(hrun OSTYPE=linux-gnu "$T/hc/cca" version 2>&1); rc2=$?   # bash 认环境里的 HOSTTYPE、OSTYPE，这里借它模拟；这一份只接了这台 Mac 的
+out3=$(hrun HOSTTYPE=armv7l "$T/hc/cca" version 2>&1)   # 32 位的 bash 跑在 64 位的系统上：HOSTTYPE 认不出来时问 uname -m
+ok "辅助程序：没有这种机器用的（别的芯片；这一份没接 Linux 的）时说清楚；bash 的 HOSTTYPE 认不出来时照 uname -m" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "没有这种机器用的辅助程序（riscv64 " && [ $rc2 -eq 1 ] && printf "%s" "$out2" | grep -q "没有这种机器用的辅助程序" && [ "$out3" = "$VER" ]'
+rm -rf "$HC/cca-helper"
+mkdir -p "$T/hc/nob64"; for n in bash sed gunzip shasum getconf mkdir chmod mv rm find cat locale grep dirname basename readlink; do ln -sf "$(PATH=/usr/bin:/bin command -v "$n")" "$T/hc/nob64/$n"; done
+out=$(hrun PATH="$T/hc/nob64" /bin/bash "$T/hc/cca" version 2>&1); rc=$?
+ok "辅助程序：解的时候缺命令（base64）说缺什么" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "缺少命令 base64（解出辅助程序要用）"'
+rm -rf "$HC/cca-helper"
+( hrun "$T/hc/cca" version > "$T/hc/p1" 2>&1 & hrun "$T/hc/cca" version > "$T/hc/p2" 2>&1 & wait )
+ok "辅助程序：两个 cca 同时第一次运行，都成功，只留下一份" '[ "$(cat "$T/hc/p1")" = "$VER" ] && [ "$(cat "$T/hc/p2")" = "$VER" ] && [ "$(ls "$HC/cca-helper")" = "$HSUM" ]'
+rm -rf "$HC" "$T/hc"; HC=""
 edit_table 'j["ports"].pop("alice@example.com")' "$H/.cca/config.json"
 out=$(gj state)
 ok "_gui state 只在内存里对账：config.json 里少了的端口照样算出来（7901），文件不改；下一次真正运行 cca 时才写回去" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"port\"] == 7901" && cfgok "\"alice@example.com\" not in c[\"ports\"]" && run cca ls >/dev/null 2>&1 && cfgok "c[\"ports\"][\"alice@example.com\"] == 7901"'
@@ -2149,69 +2175,16 @@ PY
 }
 lp=$(lint_prompts)
 ok "lint：提问只经基元（别处不读 fd 3），每个题号都在 PROTOCOL 的映射表里${lp#ok}" '[ "$lp" = ok ]'
-lint_tiers() {   # CODEX_TIERS 和 CODEX_PLANS 的键一一对应（OpenAI 加了新套餐，叫法和档位要一起补）
-	python3 -I - "$CCA" <<'PY'
-import ast, re, sys
-s = open(sys.argv[1], encoding='utf-8').read()
-g = lambda n: set(ast.literal_eval(re.search(r'^%s = (\{.*?\})\n' % n, s, re.S | re.M).group(1)))
-print('ok' if g('CODEX_PLANS') == g('CODEX_TIERS') else '：对不上 %s' % sorted(g('CODEX_PLANS') ^ g('CODEX_TIERS')))
-PY
-}
-lt=$(lint_tiers)
-ok "套餐档位：CODEX_TIERS 和 CODEX_PLANS 的套餐一一对应${lt#ok}" '[ "$lt" = ok ]'
-lint_ifaces() {   # 虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE（at_home）和 PY_SRC 的（内置代理的出站绑定）是同一份
-	python3 -I - "$CCA" <<'PY'
+lint_ifaces() {   # 虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE（at_home）和辅助程序的（内置代理的出站绑定，cli/src/cmd/corenet/bind.rs）是同一份
+	python3 -I - "$CCA" "$D/../cli/src/cmd/corenet/bind.rs" <<'PY'
 import re, sys
-s = open(sys.argv[1], encoding='utf-8').read()
-b = re.search(r"^VIRTUAL_IFACE_RE='([^']*)'$", s, re.M)
-p = re.search(r"^VIRTUAL_IFACE_RE = lazy_re\(r'([^']*)'\)", s, re.M)
-print('ok' if b and p and b.group(1) == p.group(1) else '：bash 的 %s，PY_SRC 的 %s' % (b and b.group(1), p and p.group(1)))
+b = re.search(r"^VIRTUAL_IFACE_RE='([^']*)'$", open(sys.argv[1], encoding='utf-8').read(), re.M)
+p = re.search(r'^pub const VIRTUAL_IFACE_RE: &str = r"([^"]*)";$', open(sys.argv[2], encoding='utf-8').read(), re.M)
+print('ok' if b and p and b.group(1) == p.group(1) else '：bash 的 %s，辅助程序的 %s' % (b and b.group(1), p and p.group(1)))
 PY
 }
 lv=$(lint_ifaces)
-ok "虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE 和 PY_SRC 的一样${lv#ok}" '[ "$lv" = ok ]'
-lint_imports() {   # PY_SRC 顶上只 import 每次都要用的模块（每次 py 都是新进程，少 import 一个就省一点启动时间），别的在用到的函数里 import：
-	# 函数里用到的标准库模块，顶上、这个函数和外层函数里都没 import（也没有同名的变量），运行到那里就是 NameError
-	python3 -I - "$CCA" <<'PY'
-import ast, sys
-s = open(sys.argv[1], encoding='utf-8').read()
-head = "PY_SRC=$(cat <<'PY'\n"
-a = s.index(head) + len(head)
-tree = ast.parse(s[a:s.index('\nPY\n)', a)])
-mods = getattr(sys, 'stdlib_module_names', None) or {'base64', 'filecmp', 'glob', 'plistlib', 'shutil', 'socket', 'sqlite3', 'struct', 'subprocess', 'tempfile', 'threading', 'types', 'unicodedata', 'uuid', 'zlib'}
-def bound(node):
-    out = set()
-    for n in ast.walk(node):
-        if isinstance(n, (ast.Import, ast.ImportFrom)):
-            out |= {(x.asname or x.name).split('.')[0] for x in n.names}
-        elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
-            out.add(n.id)
-        elif isinstance(n, ast.arg):
-            out.add(n.arg)
-        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out.add(n.name)
-        elif isinstance(n, ast.ExceptHandler) and n.name:
-            out.add(n.name)
-    return out
-top = set()
-for n in tree.body:
-    top |= {n.name} if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else bound(n)
-bad = set()
-def walk(node, outer):
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            names = outer | bound(child) | top
-            bad.update('%s 用了 %s' % (getattr(child, 'name', 'lambda'), n.id) for n in ast.walk(child)
-                       if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in mods and n.id not in names)
-            walk(child, names)
-        else:
-            walk(child, outer)
-walk(tree, set())
-print('ok' if not bad else '：' + '、'.join(sorted(bad)))
-PY
-}
-li=$(lint_imports)
-ok "lint：PY_SRC 的函数里用到的标准库模块都 import 过（顶上只 import 每次都用的几个）${li#ok}" '[ "$li" = ok ]'
+ok "虚拟网卡的名单：bash 的 VIRTUAL_IFACE_RE 和辅助程序的一样${lv#ok}" '[ "$lv" = ok ]'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码这一节 cca 的真实输出（macos/test.sh）" 'bash "$D/../macos/test.sh" "$GF" > "$T/contract.log" 2>&1'
 	S3=sk-GUI-PROMPT-SENTINEL3-1357924680
@@ -2291,9 +2264,11 @@ G="$T/gh"; mkdir -p "$G"
 ssh-keygen -q -t ed25519 -N '' -C test-release -f "$T/relkey"; ssh-keygen -q -t ed25519 -N '' -f "$T/evilkey"
 TESTPUB=$(cut -d' ' -f1,2 "$T/relkey.pub")
 mkver() {   # mkver 版本 输出文件 [路由器脚本标记]：换成测试密钥、改版本号，可在路由器脚本里加个标记
-	# 内置代理的内核换成假的 mihomo（setup.sh 打包、算好的校验值）
+	# 内置代理的内核换成假的 mihomo（setup.sh 打包、算好的校验值）。像发布的那样接着辅助程序（只接这台机器的那一份；$T/cca.packed
+	# 是仓库里的 cca 接好的：第一次用、或者 cca、辅助程序比它新（分节续跑时快照里那份是旧的）时做一份，之后只在它上面改这几行）
+	{ [ "$T/cca.packed" -nt "$CCA" ] && [ "$T/cca.packed" -nt "$HELPER_BIN" ]; } || python3 -I "$D/../cli/pack.py" "$CCA" "$T/cca.packed" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null || return 1
 	sed -e "s|^VERSION=\".*\"$|VERSION=\"$1\"|" -e "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" \
-		-e "s|^CORE_SHA256_ARM64=\".*\"$|CORE_SHA256_ARM64=\"$(cat "$T/mihomo/sha256")\"|" -e "s|^CORE_SHA256_AMD64=\".*\"$|CORE_SHA256_AMD64=\"$(cat "$T/mihomo/sha256")\"|" "$CCA" > "$2"
+		-e "s|^CORE_SHA256_ARM64=\".*\"$|CORE_SHA256_ARM64=\"$(cat "$T/mihomo/sha256")\"|" -e "s|^CORE_SHA256_AMD64=\".*\"$|CORE_SHA256_AMD64=\"$(cat "$T/mihomo/sha256")\"|" "$T/cca.packed" > "$2"
 	[ -n "${3:-}" ] && sed -i '' "s|^# cca-router：|# cca-router（$3）：|" "$2"
 	chmod 755 "$2"
 }
@@ -3646,19 +3621,19 @@ out=$(r3 "$H3/.cca/bin/cca" update --rollback 2>&1)
 ok "一键安装装上的测试版也能退回" '[ "$("$H3/.cca/bin/cca" version)" = 9.9.22 ] && printf "%s" "$out" | grep -q "已退回 9.9.22"'
 # 下载用的临时目录在 TMPDIR 里：装好了、签名不对没装都要删掉（以前 tmp 是 main 的 local，装完 main 返回以后 EXIT trap 才跑，看不到它，每装一次留下一份）
 ok "一键安装用完删掉下载用的临时目录（装好了、签名不对没装都删）" '! ls -d "$T/tmp3"/cca-install.* >/dev/null 2>&1'
-# 依赖太旧（RHEL / Rocky 8 的 OpenSSH 8.0、Python 3.6 这类）：下载之前就说清楚；cca install 自己也查（手动下载的）
-mkdir -p "$T/oldssh" "$T/oldpy"
+# 依赖太旧（RHEL / Rocky 8 的 OpenSSH 8.0 这类）：下载之前就说清楚；cca install 自己也查（手动下载的）
+mkdir -p "$T/oldssh"
 printf '#!/bin/sh\n[ "$1" = -V ] || exit 1\necho "OpenSSH_8.0p1, OpenSSL 1.1.1k  FIPS 25 Mar 2021" >&2\n' > "$T/oldssh/ssh"
-printf '#!/bin/sh\necho 3.6\nexit 1\n' > "$T/oldpy/python3"   # 照 install.sh、need_deps 的问法回答：打印版本，低于要求时退出码 1
-chmod +x "$T/oldssh/ssh" "$T/oldpy/python3"
+chmod +x "$T/oldssh/ssh"
 n_gh=$(grep -c "GH latest-get" gh.log)
 out=$(r3 PATH="$T/oldssh:$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
 ok "一键安装：OpenSSH 太旧（8.0；校验发布签名的 ssh-keygen -Y 要 8.1）时说清楚，不下载" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "OpenSSH 太旧（8.0）" && [ "$(grep -c "GH latest-get" gh.log)" = "$n_gh" ]'
-out=$(r3 PATH="$T/oldpy:$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
-ok "一键安装：Python 太旧（3.6）时说清楚，不下载" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca 要 Python 3.8 或更新（这台的 python3 是 3.6）" && [ "$(grep -c "GH latest-get" gh.log)" = "$n_gh" ]'
-out=$(r3 CCA_PYTHON="$T/oldpy/python3" "$H3/.cca/bin/cca" install 2>&1); rc=$?
+# 辅助程序只有四种机器的（Intel / Apple 芯片的 Mac，x86_64 / arm64 的 Linux）：别的机器下载之前就说清楚（假的 uname 说自己是 riscv64）
+mkdir -p "$T/oddcpu"; printf '#!/bin/sh\n[ "$1" = -m ] && { echo riscv64; exit 0; }\nexec /usr/bin/uname "$@"\n' > "$T/oddcpu/uname"; chmod +x "$T/oddcpu/uname"
+out=$(r3 PATH="$T/oddcpu:$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" CCA_TTY="$(ans y n n)" bash "$T/install.sh" 2>&1); rc=$?
+ok "一键安装：这种机器（riscv64）用不了时说清楚，不下载" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca 只支持 Intel / Apple 芯片的 Mac，x86_64 / arm64 的 Linux（这台是 riscv64）" && [ "$(grep -c "GH latest-get" gh.log)" = "$n_gh" ]'
 out2=$(r3 PATH="$T/oldssh:$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$H3/.cca/bin/cca" install 2>&1); rc2=$?
-ok "cca install 也查 Python、OpenSSH 的版本（手动下载的）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca 要 Python 3.8 或更新（.*python3 是 3.6）" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "OpenSSH 太旧（8.0）"'
+ok "cca install 也查 OpenSSH 的版本（手动下载的）" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "OpenSSH 太旧（8.0）"'
 
 fi
 if sect 11d; then

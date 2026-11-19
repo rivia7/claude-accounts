@@ -29,7 +29,7 @@ def main():
             sys.exit('pack.py：参数写成 目标=路径，目标是 %s 之一' % '、'.join(TARGETS))
         paths[t] = p
     s = io.open(src, encoding='utf-8').read()
-    marker = 'HELPER_SUMS=""   # 发布时由 cli/pack.py 填上：一行一个「目标 SHA-256」\n'
+    marker = 'HELPER_SUMS=""   # 发布时由 cli/pack.py 填上：「目标=SHA-256」，空格隔开\n'
     if s.count(marker) != 1:
         sys.exit('pack.py：%s 里没有（或者不止一处）HELPER_SUMS="" 那一行：先用 cli/switch.py 改写' % src)
     if not s.endswith('\nmain "$@"\nexit\n'):
@@ -42,10 +42,10 @@ def main():
             raw = open(paths[t], 'rb').read()
         except OSError as e:
             sys.exit('pack.py：读不了 %s 的辅助程序（%s）：先编出来，或者用 %s=路径 指定' % (t, e, t))
-        sums.append('%s %s' % (t, hashlib.sha256(raw).hexdigest()))
+        sums.append('%s=%s' % (t, hashlib.sha256(raw).hexdigest()))
         packed = base64.encodebytes(gzip.compress(raw, 9, mtime=0)).decode('ascii')
         tail.append("#CCA-HELPER %s\n: <<'CCA-HELPER-END'\n%sCCA-HELPER-END\n" % (t, packed))
-    s = s.replace(marker, 'HELPER_SUMS="%s"\n' % '\n'.join(sums)) + ''.join(tail)
+    s = s.replace(marker, 'HELPER_SUMS="%s"\n' % ' '.join(sums)) + ''.join(tail)
     with io.open(out, 'w', encoding='utf-8') as f:
         f.write(s)
     os.chmod(out, 0o755)
