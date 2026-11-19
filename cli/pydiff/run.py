@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,13 +78,17 @@ class Box:
         return self.write('bin/' + name, '#!/bin/sh\n' + script, 0o755)
 
 
-def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0):
+def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0, fd3=None, during=None, timeout=60):
     """登记一个用例。被装饰的函数拿到 Box，往沙箱里放夹具。
     mask：[(正则, 替换成什么)…]，比之前两边都先换掉（时间戳、随机数这些每次不一样的东西）
-    settle：命令退出以后再等几秒才看沙箱（它起了后台进程，等后台进程把该写的写完）"""
+    settle：命令退出以后再等几秒才看沙箱（它起了后台进程，等后台进程把该写的写完）
+    fd3：交互输入（cca 的提问从 3 号描述符读答案）：给了就把这些内容接在子进程的 fd 3 上，读完就是到头
+    during：命令运行期间并行做的事，during(box)：在另一条线程里跑（比如等它监听了端口以后发一个请求）；两边各跑一遍
+    timeout：最多等几秒（到时间杀掉，算失败）"""
     def reg(setup):
-        CASES.append(dict(name=name, argv=argv, stdin=stdin if isinstance(stdin, bytes) else stdin.encode('utf-8'),
-                          env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree, settle=settle, setup=setup))
+        raw = lambda x: x if x is None or isinstance(x, bytes) else x.encode('utf-8')
+        CASES.append(dict(name=name, argv=argv, stdin=raw(stdin), env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree,
+                          settle=settle, fd3=raw(fd3), during=during, timeout=timeout, setup=setup))
         return setup
     return reg
 
@@ -157,11 +162,33 @@ def run_one(cmd, c, home, tmp):
     env = {k: v.replace('%HOME%', home) for k, v in env.items() if v is not None}
     argv = [a.replace('%HOME%', home) for a in c['argv']]
     cwd = (c['cwd'] or home).replace('%HOME%', home)
+    answers = None
+    if c['fd3'] is not None:   # 答案放进文件，接在这个进程的 fd 3 上传给子进程（3 号在这里平时没人用）
+        answers = os.path.join(tmp, 'fd3')
+        with open(answers, 'wb') as f:
+            f.write(c['fd3'])
+        fd = os.open(answers, os.O_RDONLY)
+        if fd != 3:   # 文件可能刚好就开在 3 号上
+            os.dup2(fd, 3)
+            os.close(fd)
     try:
-        p = subprocess.run(cmd + argv, input=c['stdin'], capture_output=True, env=env, cwd=cwd, timeout=60)
-        out, err, rc = p.stdout, p.stderr, p.returncode
-    except subprocess.TimeoutExpired as e:
-        out, err, rc = e.stdout or b'', (e.stderr or b'') + b'\n[pydiff: timeout]', -999
+        p = subprocess.Popen(cmd + argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd,
+                             pass_fds=(3,) if answers else ())
+        side = threading.Thread(target=c['during'], args=(Box(home),), daemon=True) if c['during'] else None
+        if side:
+            side.start()
+        try:
+            out, err = p.communicate(c['stdin'], timeout=c['timeout'])
+            rc = p.returncode
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out, err = p.communicate()
+            err, rc = err + b'\n[pydiff: timeout]', -999
+        if side:
+            side.join(10)
+    finally:
+        if answers:
+            os.close(3)
     if c['settle']:
         time.sleep(c['settle'])
     dec = lambda b: apply_masks(b.decode('utf-8', 'replace'), c['mask'])

@@ -50,6 +50,19 @@ cargo clippy -- -D warnings          # 交回前要干净
 换掉，但只换那一小段。要起外部命令的，在沙箱里放假命令（`b.fake('security', '…')`），让假命令把收到的参数记进文件——
 对拍连沙箱里的文件一起比，参数不一样就会被发现。联网的、要等很久的路也用假命令走通。
 
+对拍的沙箱和 `case(…)` 的参数（都在 `pydiff/run.py` 开头的说明里）：
+- **真命令挡在外面。** `security`、`osascript`、`open`、`launchctl`、`ssh`、`curl`、`git`、`claude`、`codex`…… 在沙箱里默认是只会报错的
+  替身；用例调到了没准备假命令的东西会报 `STRAY`、算失败。要用哪个就 `b.fake(名字, 脚本)` 放自己的。写了绝对路径的命令
+  （`lsregister`、`taskpolicy`）挡不住：用例要绕开会真的动到这台机器的路（见 `cases/launchers.py` 开头）。
+- **钥匙串只用假的。** `from cases.secrets import SECURITY`，`b.fake('security', SECURITY)`（条目是沙箱里 `keychain/服务名/账户名`
+  这些文件，收到的命令记在 `security.log`）。单元测试里 `secrets::security()` 只走 `secrets::testing::set_security` 装的假的。
+- `mask=[(正则, 替换)]`：遮掉每次不一样的一小段；`settle=秒数`：命令起了后台进程，等它写完再看沙箱；
+  `fd3='答案\n'`：交互输入（cca 的提问从 3 号描述符读）；`during=函数`：命令运行期间在另一条线程里做的事（给它监听的端口
+  发请求）；`timeout=秒数`；`env={'PATH': '%HOME%/nowhere'}`：命令找不到的那条路。
+- `-s` 把通过的用例的输出也打出来，`-t` 再列出跑完以后沙箱里的文件：**写完用例一定要看一眼**，确认真的走到了想测的那条路
+  （假命令被调到了、文件真的写了），不是两边一起提前返回。
+- 沙箱里的硬链接、权限、修改时间两边是一样的（拷的时候保留）。
+
 Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里属于这个模块的检查：能用对拍表达的写成对拍用例，
 只能调内部函数的写成 Rust 的 `#[cfg(test)]` 测试（期望值从 Python 的测试里搬，别自己推）。
 
@@ -84,7 +97,10 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 | `sys.stdin.read()` / `.readline()` | `py::io::{read_stdin_text, read_stdin_line}`（不转换 `\r\n`） |
 | `die(msg)` / `sys.exit(n)` | `return die(msg)` / `return exit(n)`（都是 `Err`，`?` 往上传） |
 | `except (OSError, ValueError):` | `Err(e) if e.is_os_or_value()`；`FileNotFoundError` → `e.is_not_found()`；自己的异常类 → `Fail::Other("类名", …)` 和 `e.is("类名")` |
-| `subprocess.run([...], capture_output=True, timeout=30)` | `py::proc::Cmd::new([...]).capture().timeout(30.0).run()` → `Done { rc, stdout, stderr }`；超时是 `ProcError::Timeout`，找不到命令是 `ProcError::Os` |
+| `subprocess.run([...], capture_output=True, timeout=30)` | `py::proc::Cmd::new([...]).capture().timeout(30.0).run()` → `Done { rc, stdout, stderr }`；超时是 `ProcError::Timeout`，找不到命令是 `ProcError::Os`。`stdin=DEVNULL` → `.stdin(In::Null)`，`stdout=DEVNULL` → `.stdout(Out::Null)`，`input=数据` → `.input(数据)`，`start_new_session=True` → `.new_session()`，`Popen` → `.spawn()`。子进程不带 3 号以上的文件描述符（和 Python 默认的 `close_fds=True` 一样，`Cmd` 已经做了） |
+| `os.makedirs(p, exist_ok=True)` / `os.makedirs(p, mode=0o700, exist_ok=True)` | `py::fs::makedirs` / `makedirs_mode`（只有最里面那一层用给的权限，和 Python 3.7 起一样） |
+| `put(path, data, mode)`（内容没变不写）、`shutil.rmtree`、`os.utime(p)`、`os.fsync`、`tempfile.TemporaryDirectory()` | `py::fs::{put, rmtree, utime_now, fsync, TempDir}` |
+| `set(x or [])` / `sorted(…)` / `x in (y or [])`（值可能被手改成别的类型） | `cmd::secrets::{py_set, py_sorted, py_in}` |
 | `os.environ.get(k)` | `py::proc::getenv(k)` |
 | `os.path.*` | `py::path::*`（`realpath` 遇到不存在的路径不报错，和 Python 一样） |
 | `time.time()`、`localtime`、`strftime`、`mktime`、`calendar.timegm` | `py::time::*` |
@@ -102,7 +118,31 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 兼容层没有的（zip、XML、邮件解析、TLS、sqlite、kqueue……）由第一个用到它的模块在交回时提出来，写在
 `cli/src/py/` 下，照同样的规矩：行为照 CPython，期望值从真的 Python 取（`cli/tools/gen_vectors.py` 那种对照数据最好）。
 
+## 别的模块里已经有的
+
+要用别的模块的函数，先 `grep -rn 'pub fn 名字' cli/src` 看是不是已经移植了（名字和 Python 里一样）。除了各模块的子命令，
+这些常被别处用到的已经有了：
+
+- `cmd::secrets`：`kc_*`、`ks_read / ks_write / ks_del`、`api_secret`、`security`、`keyfile_store`、`keystore_name`
+- `cmd::presence`：`presence_problems`、`presence_load`、`presence_key`、`presence_mapped`、`presence_wake`、`spawn_background`、`PRESENCE_DIR`
+- `cmd::keyshare`：`keyshare_on`、`keyshare_edit`、`keyshare_kick`、`KeyshareFile`、`keyshare_sum`、`keyshare_slot`、`is_num`
+- `cmd::mail`：`MAIL_SVC`、`MAIL_ADDR_RE`、`MAIL_DOMAIN_RE`、`mail_one`、`mail_all_addrs`、`mail_forget_orphans`
+- `cmd::session`：`ps_rows`、`proc_scan`、`proc_starts`、`gui_procs`、`cli_marks / cli_alive / cli_view`、`profile_path`、`private_file`、`lstart_epoch`
+- `cmd::gui`：`health_file`、`health_write`、`health_result`、`ver_key`；`cmd::usage`：`parse_ts`；`cmd::codex`：`codex_probe`
+- `cmd::launchers`：`subprocess_quiet`、`launcher_names`、`launcher_badges`、`launcher_tool`
+- `cmd::router`：`device_id`、`router_merge`、`parse_node_list`、`node_match`、`nodes_rename`、`nodes_record`、`node_users_all`
+- `cmd::accounts`：`cmd_env` 用的 `api_env`、`api_settings`、`bypass_list`、`Tool::flags / run_args`，`edit_sum`、`env_text`、`env_parse`、`node_users`
+- `cmd::table`：`need`、`account_named`、`all_errors`
+
+别的模块还没移植、你又绕不开的函数：在自己的文件里放一个私有的替身，照原函数开头“没开这个功能就什么也不做”的那句判断
+先答了（常见的路要走得通），真要它干活的地方才 `unimplemented!("…（哪个模块的哪个函数）")`；报告里列出挡住了哪些路。
+
 ## 容易错的地方
+
+- **原来顺序不定的地方。** Python 遍历集合（`set`）的先后每次运行都不一样（字符串的哈希是随机的）。输出、起命令的先后靠它时，
+  Rust 里排好序，在注释和 FINDINGS 里说一声；对拍用例避开或者用 mask 抹掉差别。
+- **`except Exception` 接不住 `die()`，但接得住别的。** 原来 `try: … except Exception: 退一步` 的地方：`Fail::Die / Exit` 往上传，
+  `Fail::Os / Value / Other` 走退一步的那条路（见 `cmd_sync_state`）。原来把 stderr 接到 /dev/null 的，照样接（`QuietStderr`）。
 
 - **字典的顺序就是输出的顺序。** 生成 JSON、打印、算摘要都靠插入顺序；`d[k] = v` 已有的键留在原位，`pop` 后再 `set` 排到最后。
   Python 里先建一个新字典再赋回去的，照样新建，别在原字典上改（顺序会不一样）。
