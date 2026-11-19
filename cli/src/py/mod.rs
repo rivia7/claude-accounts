@@ -11,6 +11,7 @@ pub mod json;
 pub mod num;
 pub mod obj;
 pub mod path;
+pub mod plist;
 pub mod proc;
 pub mod rand;
 pub mod re;
