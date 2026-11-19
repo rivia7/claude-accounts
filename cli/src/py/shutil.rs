@@ -36,7 +36,17 @@ fn unsupported(e: &io::Error) -> bool {
 /// 先乘后加的在秒数小的时候对不上。x86-64 的通用版本没有乘加指令，是先乘后加（没实测）。
 /// 两个挨得很近的修改时间比新旧（`merge_file`、`adopt_task_lists`）靠的就是这最后一位
 pub fn st_mtime(m: &fs::Metadata) -> f64 {
-    let (sec, nsec) = (m.mtime() as f64, m.mtime_nsec() as f64);
+    stat_time(m.mtime(), m.mtime_nsec())
+}
+
+/// `st.st_atime`（算法同 `st_mtime`）
+pub fn st_atime(m: &fs::Metadata) -> f64 {
+    stat_time(m.atime(), m.atime_nsec())
+}
+
+/// stat 里的一个时间（秒、纳秒）→ Python 看到的小数秒数（见 `st_mtime`）
+pub fn stat_time(sec: i64, nsec: i64) -> f64 {
+    let (sec, nsec) = (sec as f64, nsec as f64);
     if cfg!(target_arch = "aarch64") {
         1e-9f64.mul_add(nsec, sec)
     } else {

@@ -25,13 +25,28 @@
 - **两个死函数调用了不存在的函数。** `flow_get`、`fill_members`（`write_text` 后面）调用 `yaml_unquote`，全文件没有它的定义，
   调到就是 NameError；这两个函数自己也没有调用方。没有移植。（读代码看出来的）
 - **两个子命令没有调用方。** `accounts-json`（`cmd_accounts_json`）、`file-replace`（`cmd_file_replace`）在 `CMDS` 里，
-  但 cca、tests、macos、docs 里都没有调用它们的地方。先不移植，确认不要了可以从 `CMDS` 里删掉。
+  但 cca、tests、macos、docs 里都没有调用它们的地方。照样移植了（免得“有这个名字却不能用”），确认不要了可以从 `CMDS` 里删掉。
 - **`Lock` 没有管住账号表和 config.json 的写入。** `sync.lock` 只在 device / link / sync / reorder / node-save / node-rm 等处拿，
   `ctx()` 里的 `cfg_save`、`cmd_add`、`cmd_rm`、`cmd_rename`、`cmd_edit_apply` 都是“读、改、整份写回”而不拿锁：
   两条命令同时跑（比如 App 的后台命令和终端里的命令）时，后写的会盖掉先写的改动。（读代码看出来的）
 - **`.claude.json` 里有落单的代理项时会出错退出。** Claude Code（Node）截断带表情的文字时可能写出 `"\ud83d"` 这样不成对的
   半个字符；Python 读得进来，但 `save_json`（`ensure_ascii=False`）往 UTF-8 文件里写它时抛 UnicodeEncodeError。
   Rust 这边读进来时把它换成 U+FFFD，不会出错（有意和原实现不一样，见最前面一节）。（读代码看出来的）
+
+## presence / keyshare
+
+- **Linux 上的上报进程每 5 秒醒一次。** `presence_wait` 靠 kqueue 睡到“会话进程退出、账号目录里有变化”；Linux 没有 kqueue，
+  退回 `time.sleep(min(timeout, 5))`：有会话开着的时候，每 5 秒读一遍 config.json、映射、各张账号表，再把 /proc 里所有进程
+  扫一遍。照样移植了（Rust 版醒一次便宜得多）；要省可以在 Linux 上用 inotify 加 pidfd 做同样的等待。（读代码看出来的）
+- **“还不到时候”也会把 keys.json 重写一遍。** `keyshare_sync` 里 `with KeyshareFile() as j:` 中间 `return None`（离上次同步
+  不到 10 分钟）也算正常退出，`__exit__` 照样 `save_json`：内容没变也重写一次文件（文件坏了的时候是换成一份空的）。照样移植。
+  （对拍 `presence/key-sync/when-not-yet` 看得到）
+- **status.json 里不是对象时上报进程会崩。** `presence_status` 的 `(load_quiet(p) or {}).get('error', '')`：文件里是列表、
+  字符串、数字时是没人接的 AttributeError，上报进程退出（下次启动 cca 时再起来，又崩）。只有手改坏了才会这样。照样移植
+  （Rust 里是 panic）。（读代码看出来的）
+- **keys.json 里某个账号那一项不是对象时，这个账号永远取不回服务器上的新 key。** `keyshare_sync` 开头只把是对象的项拷进
+  `acc`，`keyshare_round` 里拿 `j['acc'].get(slot) != x['raw']`（raw 是 None）当成“这期间在这台设备上改过”，每一轮都跳过。
+  只有手改坏了才会这样；在这台设备上重新记一次 key 就好了。照样移植。（读代码看出来的）
 
 ## bash
 

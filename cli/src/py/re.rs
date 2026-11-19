@@ -352,6 +352,28 @@ fn translate(p: &str, multiline: bool) -> (String, bool) {
     (out, dollar)
 }
 
+thread_local! {
+    /// 运行时拼出来的正则编译好的那一份（按写法记）
+    static COMPILED: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<Re>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// `re.compile(pattern)`，带着 Python 那样的缓存（最多 512 个）：运行时拼出来的写法，一样的就用上次编译好的。
+/// 常驻的进程里每一轮都要用的（上报进程找桌面 App 的那个）不用每次重新编译；只用一次的还是 `Re::new`
+pub fn compile(pattern: &str) -> std::rc::Rc<Re> {
+    COMPILED.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(re) = c.get(pattern) {
+            return re.clone();
+        }
+        if c.len() >= 512 {
+            c.clear();
+        }
+        let re = std::rc::Rc::new(Re::new(pattern));
+        c.insert(pattern.to_string(), re.clone());
+        re
+    })
+}
+
 /// 写在代码里的正则：第一次用到时编译，之后一直用同一份。`re!(r"^\d+$")`、`re!(r"abc", re::I)`
 #[macro_export]
 macro_rules! re {

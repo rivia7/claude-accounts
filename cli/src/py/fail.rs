@@ -55,6 +55,14 @@ impl Fail {
         matches!(self, Fail::Die(_) | Fail::Exit(_))
     }
 
+    /// 接住了、不再往上传的地方调一下（`except SystemExit: pass` 这一类）：原来 `die()` 在抛出之前就把说明写到 stderr 了，
+    /// 这里的说明是带在 `Fail::Die` 里、到 main 才写的，接住的地方要替它写出来
+    pub fn swallowed(&self) {
+        if let Fail::Die(msg) = self {
+            crate::err!("{msg}");
+        }
+    }
+
     /// 没人接住时进程的退出码
     pub fn code(&self) -> i32 {
         match self {

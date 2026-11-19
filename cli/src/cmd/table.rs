@@ -239,6 +239,19 @@ pub fn cmd_ports(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// 端口池里有各工具的账号：哪张账号表有错误（或读不了）都不同步，免得把别的工具的账号同步错。
+/// （现在的 bash 不调它了：同步用 sync-state；留着是因为原来的 CMDS 里有）
+pub fn cmd_accounts_json(args: &[String]) -> R<()> {
+    arity("cmd_accounts_json", args, 0, 0)?;
+    let c = ctx()?.0;
+    let errs = all_errors();
+    if !errs.is_empty() {
+        return die(format!("账号表有错误，未同步：\n  {}", errs.join("\n  ")));
+    }
+    out!("{}", crate::py::json::dumps(&V::Dict(crate::core::sync::router_accounts(&c)), crate::py::json::LINE));
+    Ok(())
+}
+
 /// 账号表 + 路由器端代码（从 stdin 读）的摘要：cca 更新改了路由器脚本，下次启动也会重新部署
 pub fn cmd_digest(args: &[String]) -> R<()> {
     arity("cmd_digest", args, 0, 0)?;
@@ -396,6 +409,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("nodes-import", cmd_nodes_import),
     Cmd::all("restricted", cmd_restricted),
     Cmd::all("ports", cmd_ports),
+    Cmd::all("accounts-json", cmd_accounts_json),
     Cmd::all("digest", cmd_digest),
     Cmd::all("policy-node", cmd_policy_node),
     Cmd::all("policy-summary", cmd_policy_summary),

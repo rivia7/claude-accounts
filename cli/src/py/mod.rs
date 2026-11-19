@@ -16,6 +16,7 @@ pub mod proc;
 pub mod rand;
 pub mod re;
 pub mod shutil;
+pub mod signal;
 pub mod text;
 pub mod time;
 pub mod tls;

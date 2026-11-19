@@ -82,6 +82,9 @@ pub enum ProcError {
     Os(io::Error),
     /// `subprocess.TimeoutExpired`：超时前拿到的输出也带着
     Timeout { stdout: Vec<u8>, stderr: Vec<u8> },
+    /// 等它的时候，处理函数会 raise 的信号来了（`py::signal::raise_on` 装的；没装过就不会有）：子进程已经杀掉。
+    /// 原来是那个异常从 `subprocess.run` 里冒出来；这里那一笔还留着，调用方接着 `py::signal::check()?` 把它传上去
+    Interrupted,
 }
 
 impl ProcError {
@@ -206,11 +209,14 @@ impl Cmd {
             In::Bytes(b) => b.clone(),
             _ => Vec::new(),
         };
-        let (stdout, stderr, timed_out) = pump(&mut child, &input, deadline);
-        if timed_out || !wait_until(&mut child, deadline) {
+        let (stdout, stderr, mut end) = pump(&mut child, &input, deadline);
+        if end == End::Done {
+            end = wait_until(&mut child, deadline);
+        }
+        if end != End::Done {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(ProcError::Timeout { stdout, stderr });
+            return Err(if end == End::Signal { ProcError::Interrupted } else { ProcError::Timeout { stdout, stderr } });
         }
         let status = child.wait().map_err(ProcError::Os)?;
         let rc = status.code().unwrap_or_else(|| -status.signal().unwrap_or(0));
@@ -218,9 +224,20 @@ impl Cmd {
     }
 }
 
+/// 等子进程是怎么结束的
+#[derive(Clone, Copy, PartialEq)]
+enum End {
+    /// 读到头了 / 退出了
+    Done,
+    /// 到期限了
+    Deadline,
+    /// 处理函数会 raise 的信号来了（`py::signal`）
+    Signal,
+}
+
 /// 把 input 喂给子进程的 stdin，同时把它的 stdout、stderr 读到头（三个管道一起看着，谁也不会堵住谁）。
-/// 第三个返回值：到期限了还没读到头
-fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec<u8>, bool) {
+/// 第三个返回值：读到头了，还是到期限了、被信号打断了
+fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec<u8>, End) {
     use std::os::fd::AsRawFd;
     let mut stdin = child.stdin.take();
     let (mut out, mut err) = (child.stdout.take(), child.stderr.take());
@@ -235,6 +252,9 @@ fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec
     }
     let mut buf = [0u8; 65536];
     while stdin.is_some() || out.is_some() || err.is_some() {
+        if super::signal::pending() {
+            return (got_out, got_err, End::Signal);
+        }
         let mut fds = Vec::with_capacity(3);
         if let Some(s) = &stdin {
             fds.push(libc::pollfd { fd: s.as_raw_fd(), events: libc::POLLOUT, revents: 0 });
@@ -250,7 +270,7 @@ fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec
             Some(d) => {
                 let left = d - super::time::monotonic();
                 if left <= 0.0 {
-                    return (got_out, got_err, true);
+                    return (got_out, got_err, End::Deadline);
                 }
                 (left * 1000.0).ceil().min(i32::MAX as f64) as i32
             }
@@ -298,28 +318,46 @@ fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec
             }
         }
     }
-    (got_out, got_err, false)
+    (got_out, got_err, End::Done)
 }
 
-/// 等子进程退出，最晚等到 deadline；false 是到点了还没退出
-fn wait_until(child: &mut Child, deadline: Option<f64>) -> bool {
+/// 等子进程退出，最晚等到 deadline（到点了还没退出是 `End::Deadline`）。不限时的交给调用方的 wait()：那里信号打断不了，
+/// 现在要能被打断的地方（上报进程）起的命令都限了时
+fn wait_until(child: &mut Child, deadline: Option<f64>) -> End {
     let Some(deadline) = deadline else {
-        return true; // 不限时：交给调用方的 wait()
+        return End::Done;
     };
     // 和 Python 一样：一开始 0.5 毫秒看一次，每次加倍，最多 50 毫秒
     let mut delay = 0.0005;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return true,
+            Ok(Some(_)) | Err(_) => return End::Done,
             Ok(None) => {}
+        }
+        if super::signal::pending() {
+            return End::Signal;
         }
         let left = deadline - super::time::monotonic();
         if left <= 0.0 {
-            return false;
+            return End::Deadline;
         }
         delay = f64::min(delay * 2.0, 0.05).min(left);
         super::time::sleep(delay);
     }
+}
+
+/// `os.execv(path, argv)`：这个进程换成另一个程序（不在 PATH 里找，环境照旧）。回来了就是没换成，返回原因。
+/// 和 Python 一样不替你 flush：缓冲里还有要写出去的，先 `py::io::flush_out()`
+pub fn execv(path: &str, argv: &[&str]) -> io::Error {
+    let c = |s: &str| std::ffi::CString::new(s).ok();
+    let (Some(path), Some(args)) = (c(path), argv.iter().map(|a| c(a)).collect::<Option<Vec<_>>>()) else {
+        return io::Error::new(io::ErrorKind::InvalidInput, "embedded null byte");
+    };
+    let mut ptrs: Vec<*const libc::c_char> = args.iter().map(|a| a.as_ptr()).collect();
+    ptrs.push(std::ptr::null());
+    // SAFETY: path 和 ptrs 里各项都是以 0 结尾的字符串，ptrs 以空指针结尾，调用期间都活着
+    unsafe { libc::execv(path.as_ptr(), ptrs.as_ptr()) };
+    io::Error::last_os_error()
 }
 
 /// `os.environ` 的一份拷贝，可以增删后交给 `Cmd::env`

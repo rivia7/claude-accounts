@@ -156,12 +156,9 @@ pub fn gui_api_key(c: &Dict, k: &str, v: &V, share: bool, share_err: &V) -> R<Di
     Ok(out)
 }
 
-/// App 多久拉一次映射（App 不重算，看 state 的 next_check_epoch）；命令行还是启动时一天一次
-pub const POLICY_POLL_INTERVAL: f64 = 3600.0;
-
 /// App 下次该拉映射的时间：上次拉（$POLICY_DIR/checked）之后过 POLICY_POLL_INTERVAL 秒；没拉过是 None
 pub fn policy_next_check() -> Option<f64> {
-    Some(crate::py::shutil::getmtime(&path::join_all(&[&CCA_HOME, "policy", "checked"])).ok()? + POLICY_POLL_INTERVAL)
+    Some(crate::py::shutil::getmtime(&path::join_all(&[&CCA_HOME, "policy", "checked"])).ok()? + crate::core::policy::POLICY_POLL_INTERVAL as f64)
 }
 
 /// 配置向导还要不要出现：显式标记过（cmd_onboard 做完写的），或者这台机器已经有账号 / 配过路由器 / 配过本机客户端

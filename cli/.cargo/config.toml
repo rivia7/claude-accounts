@@ -6,3 +6,8 @@ linker = "rust-lld"
 
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
+
+# cargo test / cargo run 起的进程绝不碰真的 ~/.cca：没另外指定时，CCA_HOME 指到一个不存在的目录
+# （对拍直接跑 target/ 下的程序，用的是它自己沙箱里的 HOME，不经这里）
+[env]
+CCA_HOME = { value = "/nonexistent/cca-unit-tests", force = false }

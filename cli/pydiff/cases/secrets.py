@@ -9,6 +9,7 @@ key-show、key-forget、key-share。
     keychain_unreadable  读不了（find 退出码 51）
     keychain_sticky      删不掉、却说删掉了（delete 一直返回 0：看最多删几次）
     keychain_mangle      存进去的不是给它的那个（读回来对不上）
+    keychain_attrs       不带 -w 查一条时打印的属性（这个文件的内容；真的 security 在这里列出创建、修改时间）
 密钥文件那一支（不是 macOS 时用的）用 env=FILE（CCA_KEYSTORE=file）：这时不该调 security，沙箱里不该出现 security.log。
 
 用例里的 key 都是编的。夹具里只用假数据：节点 US-A…、路由器 192.0.2.10、邮箱和接口 example.com。
@@ -51,6 +52,7 @@ one() {
 			[ -f "$T/keychain_unreadable" ] && return 51
 			[ -n "$f" ] && [ -f "$f" ] || return 44
 			[ $w = 1 ] && { cat "$f"; echo; }
+			[ $w = 0 ] && [ -f "$T/keychain_attrs" ] && cat "$T/keychain_attrs"   # 不带 -w：只有属性（修改时间在里面）
 			return 0 ;;
 		delete-generic-password)
 			[ -n "$f" ] && [ -f "$f" ] || return 44

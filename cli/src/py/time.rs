@@ -20,6 +20,13 @@ pub fn monotonic() -> f64 {
     ts.tv_sec as f64 + ts.tv_nsec as f64 / 1e9
 }
 
+/// 一段时间（秒，不小于 0）写成系统调用要的 timespec（nanosleep、kevent 的超时）
+#[allow(deprecated)] // musl 上 libc::time_t 标着“以后要改成 64 位”：只是提醒，写法不用变
+pub fn timespec(secs: f64) -> libc::timespec {
+    let secs = if secs.is_finite() && secs > 0.0 { secs } else { 0.0 };
+    libc::timespec { tv_sec: secs.trunc() as libc::time_t, tv_nsec: (secs.fract() * 1e9) as libc::c_long }
+}
+
 /// `time.sleep(secs)`
 pub fn sleep(secs: f64) {
     if secs > 0.0 {

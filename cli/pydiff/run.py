@@ -78,19 +78,21 @@ class Box:
         return self.write('bin/' + name, '#!/bin/sh\n' + script, 0o755)
 
 
-def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0, fd3=None, during=None, timeout=60, oracle=None):
+def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0, fd3=None, during=None, timeout=60, oracle=None, before=None):
     """登记一个用例。被装饰的函数拿到 Box，往沙箱里放夹具。
     mask：[(正则, 替换成什么)…]，比之前两边都先换掉（时间戳、随机数这些每次不一样的东西）
     settle：命令退出以后再等几秒才看沙箱（它起了后台进程，等后台进程把该写的写完）
     fd3：交互输入（cca 的提问从 3 号描述符读答案）：给了就把这些内容接在子进程的 fd 3 上，读完就是到头
     during：命令运行期间并行做的事，during(box)：在另一条线程里跑（比如等它监听了端口以后发一个请求）；两边各跑一遍
+    before：命令开始之前先做完的事，before(box)（两边各做一遍，在拷好的沙箱上）：起一个真的进程、先拿住一把锁……
+    返回值能调用的话，命令结束、during 也做完以后调它收尾，然后才看沙箱
     timeout：最多等几秒（到时间杀掉，算失败）
     oracle：对照的一边换成这条命令（列表；后面接上 argv 里子命令名之后的参数），不跑 PY_SRC。给 bash 里原来内嵌的那几小段
     Python 用：`oracle=[sys.executable, '-I', '-c', 那一小段]`，cca-core 这边照常跑 argv"""
     def reg(setup):
         raw = lambda x: x if x is None or isinstance(x, bytes) else x.encode('utf-8')
         CASES.append(dict(name=name, argv=argv, stdin=raw(stdin), env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree,
-                          settle=settle, fd3=raw(fd3), during=during, timeout=timeout, oracle=oracle, setup=setup))
+                          settle=settle, fd3=raw(fd3), during=during, timeout=timeout, oracle=oracle, before=before, setup=setup))
         return setup
     return reg
 
@@ -179,6 +181,7 @@ def run_one(cmd, c, home, tmp):
         if fd != 3:   # 文件可能刚好就开在 3 号上
             os.dup2(fd, 3)
             os.close(fd)
+    cleanup = c['before'](Box(home)) if c.get('before') else None
     try:
         p = subprocess.Popen(cmd + argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd,
                              pass_fds=(3,) if answers else ())
@@ -197,6 +200,8 @@ def run_one(cmd, c, home, tmp):
     finally:
         if answers:
             os.close(3)
+        if callable(cleanup):
+            cleanup()
     if c['settle']:
         time.sleep(c['settle'])
     dec = lambda b: apply_masks(b.decode('utf-8', 'replace'), c['mask'])
@@ -287,8 +292,11 @@ def main():
                 passed += 1
                 if verbose:
                     print('PASS  %s' % c['name'])
-                if '-t' in args:   # 跑完以后沙箱里有什么（确认夹具和假命令真的起了作用）
+                if '-t' in args:   # 跑完以后沙箱里有什么（确认夹具和假命令真的起了作用）；PYDIFF_SHOW=curl.log,keychain 只看路径里带这些的
+                    show = [x for x in os.environ.get('PYDIFF_SHOW', '').split(',') if x]
                     for rel in sorted(rs['tree']):
+                        if show and not any(x in rel for x in show):
+                            continue
                         print('      %s: %s' % (rel, rs['tree'][rel][:400].replace('\n', '\n          ')))
                 if '-s' in args:   # 通过的也把输出打出来看一眼（确认用例真的走到了想测的那条路）
                     print('      rc=%s\n      stdout: %s\n      stderr: %s' % (rs['rc'], rs['stdout'].replace('\n', '\n              '), rs['stderr'].replace('\n', '\n              ')))

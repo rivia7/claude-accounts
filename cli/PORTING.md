@@ -59,12 +59,24 @@ cargo clippy -- -D warnings          # 交回前要干净
 - `mask=[(正则, 替换)]`：遮掉每次不一样的一小段；`settle=秒数`：命令起了后台进程，等它写完再看沙箱；
   `fd3='答案\n'`：交互输入（cca 的提问从 3 号描述符读）；`during=函数`：命令运行期间在另一条线程里做的事（给它监听的端口
   发请求）；`timeout=秒数`；`env={'PATH': '%HOME%/nowhere'}`：命令找不到的那条路。
-- `-s` 把通过的用例的输出也打出来，`-t` 再列出跑完以后沙箱里的文件：**写完用例一定要看一眼**，确认真的走到了想测的那条路
-  （假命令被调到了、文件真的写了），不是两边一起提前返回。
+  `before=函数`：命令开始之前先做完的事（起一个真的进程、先拿住一把锁；`during` 是并行的，赶不上很快就做完的 Rust），
+  它的返回值能调用的话，命令结束以后调它收尾（杀掉进程、删掉名字里带进程号的文件），然后才比沙箱。
+- **常驻的进程**（上报进程这种不停循环的）：假命令照沙箱里的文件回话，`during` 里等它做了该做的（`cases/presence.py` 的
+  `wait_log`：等假 curl 记下某个请求），再改那些文件或者发 SIGTERM 让它收场。等到了以后留一点时间再动手：请求还在假命令
+  手里时把进程停掉，两边停在假命令的哪一步是碰运气的。
+- `-s` 把通过的用例的输出也打出来，`-t` 再列出跑完以后沙箱里的文件（`PYDIFF_SHOW=curl.log,keychain/` 只看路径里带这些的）：
+  **写完用例一定要看一眼**，确认真的走到了想测的那条路（假命令被调到了、文件真的写了），不是两边一起提前返回。
 - 沙箱里的硬链接、权限、修改时间两边是一样的（拷的时候保留）。
 
 Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里属于这个模块的检查：能用对拍表达的写成对拍用例，
 只能调内部函数的写成 Rust 的 `#[cfg(test)]` 测试（期望值从 Python 的测试里搬，别自己推）。
+
+对拍够不着的内部函数（结果被 mask 盖住的、要等很久才走得到的）：`tools/gen_src_vectors.py` 直接调 PY_SRC 里的函数，把一批
+输入的结果写进 `tests/vectors/src_*.json`，Rust 的测试读它来比（`presence.rs` 的测试：进程树的 CPU 怎么加、隔 30 秒才采样）。
+小数用 `repr()` 的写法存、用 `num::float_repr` 比，差最后一位也看得出来。
+
+`cargo test` 起的进程里 `CCA_HOME` 指到一个不存在的目录（`.cargo/config.toml`）：单元测试碰不到真的 `~/.cca`。要读写文件的
+测试自己建临时目录、把路径当参数传；靠 `CCA_HOME` 下有东西的逻辑用对拍测。
 
 完成的标准：这个模块的子命令都在 `CMDS` 里；`cargo test`、`cargo clippy -- -D warnings`、整套对拍全过；
 没移植的函数（如果有）在报告里列出来。
@@ -166,6 +178,17 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 - **正则。** 把模式原样搬过来就行；注意 `re.match` 只管开头、`re.search` 哪里都行、`re.fullmatch` 要整串。
   同一个模式在循环里用的写成 `re!(…)`（只编译一次）。
 - **`T` 是隐含的参数。** `adir`、`cdir`、`acct_json`、`kc_*` 这些都看当前工具；原来 `with using(x)` 里调的，Rust 里也要在 `Using::tool(x)` 的作用域里调。
+- **信号处理函数里 `raise` 的**（上报进程的 `Stop`、等登录时的 `KeyboardInterrupt`）：用 `py::signal`。`raise_on(信号, "异常类")`
+  装上，会阻塞的地方（`signal::sleep`、等子进程、kqueue）被打断以后 `signal::check()?` 把它当异常传上去；`py::proc` 等子进程时
+  看到信号来了会杀掉子进程、返回 `ProcError::Interrupted`（那一笔留着，调用方接着 `check()?`）。原来 `except Stop:` 的地方看
+  `e.is("Stop")`。Python 是任意两条字节码之间都可能冒出来，Rust 只在这些检查点：检查点之间别留下“被打断才会有”的
+  副作用（把被打断的请求当成失败记下来之类），所以每个会被打断的子进程调用后面紧跟一个 `check()?`。
+- **`except SystemExit: pass` 接住 `die()` 的地方**：原来 `die()` 抛出之前就把说明写到 stderr 了，Rust 里说明带在 `Fail::Die` 里、
+  到 main 才写。接住不再往上传的地方调一下 `e.swallowed()`，说明才不会丢。
+- **`with 上下文管理器:` 里的 `return` / `continue`** 也算正常退出，`__exit__` 照样做收尾（`KeyshareFile` 就是在这时写回文件的）。
+  Rust 里把 with 的身体写成一个返回 `R<T>` 的闭包，出来以后按 `is_ok()` 收尾（`keyshare.rs` 的 `with_keys`）。
+- **运行时拼出来的正则**（`re.compile(a + re.escape(b))`）：Python 的 `re.compile` 有缓存，常驻进程里每一轮都用的不会重新编译。
+  Rust 里用 `py::re::compile(写法)`（带同样的缓存）；转义用 `py::re::escape`。
 
 ## 提交
 

@@ -1,0 +1,853 @@
+{
+ "cpu_secs": [
+  [
+   "0:00.03",
+   "0.03"
+  ],
+  [
+   "12:34.56",
+   "754.56"
+  ],
+  [
+   "1:02:03",
+   "3723.0"
+  ],
+  [
+   "1-02:03:04.50",
+   "93784.5"
+  ],
+  [
+   "2-00:00:00",
+   "172800.0"
+  ],
+  [
+   "",
+   "0.0"
+  ],
+  [
+   "x",
+   "0.0"
+  ],
+  [
+   "1:x",
+   "0.0"
+  ],
+  [
+   "-5",
+   "5.0"
+  ],
+  [
+   "1-",
+   "0.0"
+  ],
+  [
+   "-",
+   "0.0"
+  ],
+  [
+   "1-2-3:04",
+   "0.0"
+  ],
+  [
+   "00:60",
+   "60.0"
+  ],
+  [
+   "1:2:3:4",
+   "223384.0"
+  ],
+  [
+   " 5",
+   "5.0"
+  ],
+  [
+   "5 ",
+   "5.0"
+  ],
+  [
+   "1_0:00",
+   "600.0"
+  ],
+  [
+   "inf",
+   "inf"
+  ],
+  [
+   "nan:1",
+   "nan"
+  ],
+  [
+   "1e3",
+   "1000.0"
+  ],
+  [
+   "٣:٠٥",
+   "185.0"
+  ],
+  [
+   "0x10",
+   "0.0"
+  ],
+  [
+   "1-0:0:0.5",
+   "86400.5"
+  ],
+  [
+   "a-1:00",
+   "0.0"
+  ],
+  [
+   "0:00.00",
+   "0.0"
+  ],
+  [
+   "999:59.99",
+   "59999.99"
+  ],
+  [
+   "100-23:59:59.99",
+   "8726399.99"
+  ],
+  [
+   "1.5-0:01",
+   "0.0"
+  ],
+  [
+   "+1-0:01",
+   "86401.0"
+  ],
+  [
+   "0:0:0:0:1",
+   "1.0"
+  ],
+  [
+   ":",
+   "0.0"
+  ],
+  [
+   "1:",
+   "0.0"
+  ],
+  [
+   ":1",
+   "0.0"
+  ],
+  [
+   "-1:00",
+   "60.0"
+  ],
+  [
+   "1--2:00",
+   "0.0"
+  ],
+  [
+   "0.1:0.2:0.3",
+   "372.3"
+  ]
+ ],
+ "scan": {
+  "salt": "abababababababababababababababab",
+  "key": "alice@example.com",
+  "dir": "/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398",
+  "steps": [
+   {
+    "label": "开了很久的 App 第一次见到：先当作刚好闲置满 10 分钟",
+    "now": 1795000000.75,
+    "mono": 5000.5,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      50.25,
+      1794000001,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      100.0,
+      1794000000,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1794000002,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1794000003,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1794000003,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       1000001,
+       600
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1794000000,
+      "151.24999999999997",
+      "5000.5",
+      "1794999400.75"
+     ]
+    ]
+   },
+   {
+    "label": "隔了不到 30 秒：不采样",
+    "now": 1795000020.75,
+    "mono": 5020.5,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      60.0,
+      1794000001,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      190.0,
+      1794000000,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1794000002,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1794000003,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1794000003,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       1000021,
+       620
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1794000000,
+      "151.24999999999997",
+      "5000.5",
+      "1794999400.75"
+     ]
+    ]
+   },
+   {
+    "label": "隔了 30 秒，CPU 没怎么动：还是闲置",
+    "now": 1795000031.25,
+    "mono": 5031.0,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      50.25,
+      1794000001,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      100.5,
+      1794000000,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1794000002,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1794000003,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1794000003,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       1000031,
+       630
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1794000000,
+      "151.74999999999997",
+      "5031.0",
+      "1794999400.75"
+     ]
+    ]
+   },
+   {
+    "label": "又隔了 60 秒，平均用了 3% 多一点：有动静",
+    "now": 1795000091.25,
+    "mono": 5091.0,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      51.06,
+      1794000001,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      101.5,
+      1794000000,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1794000002,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1794000003,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1794000003,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       1000091,
+       0
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1794000000,
+      "153.55999999999997",
+      "5091.0",
+      "1795000091.25"
+     ]
+    ]
+   },
+   {
+    "label": "再隔 60 秒，正好差一点不到 3%",
+    "now": 1795000151.25,
+    "mono": 5151.0,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      51.85,
+      1794000001,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      102.5,
+      1794000000,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1794000002,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1794000003,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1794000003,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       1000151,
+       60
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1794000000,
+      "155.35",
+      "5151.0",
+      "1795000091.25"
+     ]
+    ]
+   },
+   {
+    "label": "隔 45 秒，用了很多",
+    "now": 1795000196.25,
+    "mono": 5196.0,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      60.0,
+      1794000001,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      140.0,
+      1794000000,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1794000002,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1794000003,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1794000003,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       1000196,
+       0
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1794000000,
+      "200.99999999999997",
+      "5196.0",
+      "1795000196.25"
+     ]
+    ]
+   },
+   {
+    "label": "App 重启了（进程号一样、启动时间不一样）：刚打开的算在用",
+    "now": 1795000200.75,
+    "mono": 5200.5,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1795000190,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      0.5,
+      1795000191,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      1.0,
+      1795000190,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1795000192,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1795000193,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1795000193,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       11,
+       11
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1795000190,
+      "2.5000000000000004",
+      "5200.5",
+      "1795000190.0"
+     ]
+    ]
+   },
+   {
+    "label": "没有 App 了：采样清掉",
+    "now": 1795000260.75,
+    "mono": 5260.5,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1794000000,
+      "unrelated --user-data-dir=/elsewhere"
+     ]
+    ],
+    "units": {},
+    "pids": [],
+    "apps": []
+   },
+   {
+    "label": "又开了：重新算",
+    "now": 1795000300.75,
+    "mono": 5300.5,
+    "procs": [
+     [
+      1,
+      0,
+      "??",
+      12.5,
+      1000,
+      "/sbin/launchd"
+     ],
+     [
+      777,
+      1,
+      "ttys001",
+      3.0,
+      1795000295,
+      "unrelated --user-data-dir=/elsewhere"
+     ],
+     [
+      501,
+      500,
+      "??",
+      0.5,
+      1795000296,
+      "Claude Helper --type=renderer"
+     ],
+     [
+      500,
+      1,
+      "??",
+      3.0,
+      1795000295,
+      "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/nonexistent/cca-unit-tests/accounts/alice-example-com-fc2398/desktop --proxy-server=http://192.0.2.10:7901"
+     ],
+     [
+      502,
+      501,
+      "??",
+      0.1,
+      1795000297,
+      "Claude Helper (GPU)"
+     ],
+     [
+      503,
+      502,
+      "??",
+      0.2,
+      1795000298,
+      "grandchild"
+     ],
+     [
+      504,
+      500,
+      "??",
+      0.7,
+      1795000298,
+      "Claude Helper --type=utility"
+     ]
+    ],
+    "units": {
+     "88f5ce63b50ec830552331fbc5afe3e5": {
+      "cli": [],
+      "app": [
+       6,
+       6
+      ]
+     }
+    },
+    "pids": [
+     500
+    ],
+    "apps": [
+     [
+      500,
+      1795000295,
+      "4.5",
+      "5300.5",
+      "1795000295.0"
+     ]
+    ]
+   }
+  ]
+ }
+}

@@ -182,6 +182,19 @@ def _(b):
     world(b, table={'u%d@example.com' % i: NODES[i % 3] for i in range(11)})
 
 
+for name, argv, kw in [
+    ('plain', ['accounts-json'], {}),
+    ('all-tools', ['accounts-json'], {'codex': {'erin@example.com': 'US-A', '科(frank@example.com)': 'HK-A'}, 'agy': {'gina@example.com': 'US-B'}}),
+    ('codex-tool', ['accounts-json'], {'codex': {'erin@example.com': 'US-A'}}),
+    ('bad-table', ['accounts-json'], {'table': {'主号(alice@example.com)': 'NOPE'}}),
+    ('bad-other-table', ['accounts-json'], {'codex': {'erin@example.com': 'NOPE'}}),
+    ('extra-arg', ['accounts-json', 'x'], {}),
+]:
+    @case('accounts-json/' + name, argv, tool='codex' if name == 'codex-tool' else 'claude')
+    def _(b, kw=kw):
+        world(b, **kw)
+
+
 @case('digest/plain', ['digest'], stdin='router code\nline 2\r\nline 3\n')
 def _(b):
     world(b)

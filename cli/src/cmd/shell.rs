@@ -232,17 +232,12 @@ pub fn cmd_dock_wait(args: &[String]) -> R<()> {
     }
     io::flush_out();
     // os.execv：换成后面的命令；锁文件的描述符带过去（和原来一样，命令跑完才放）
-    let c_args: Vec<std::ffi::CString> = argv.iter().filter_map(|a| std::ffi::CString::new(a.as_str()).ok()).collect();
-    if c_args.len() == argv.len() {
-        if let Some((f, _)) = &lock {
-            // SAFETY: f 开着；去掉 close-on-exec，让锁跟着换上去的命令
-            unsafe { libc::fcntl(f.as_raw_fd(), libc::F_SETFD, 0) };
-        }
-        let mut ptrs: Vec<*const libc::c_char> = c_args.iter().map(|a| a.as_ptr()).collect();
-        ptrs.push(std::ptr::null());
-        // SAFETY: ptrs 以空指针结尾，各项都是以 0 结尾的字符串，在调用期间活着
-        unsafe { libc::execv(ptrs[0], ptrs.as_ptr()) };
+    if let Some((f, _)) = &lock {
+        // SAFETY: f 开着；去掉 close-on-exec，让锁跟着换上去的命令
+        unsafe { libc::fcntl(f.as_raw_fd(), libc::F_SETFD, 0) };
     }
+    let argv: Vec<&str> = argv.iter().map(|a| a.as_str()).collect();
+    let _ = crate::py::proc::execv(argv[0], &argv);
     out_raw!("");
     Ok(()) // 换不上去（命令不在了）就算了
 }
