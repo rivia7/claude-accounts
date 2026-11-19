@@ -1,6 +1,8 @@
 #!/bin/bash
-# 发布当前提交（版本号取自 cca 里的 VERSION）：跑 App 的单元测试 → 跑回归 → 签名 → 编译界面 App → 打 tag → 推送 → 创建 GitHub Release
-# （附件：cca、cca.sig、一键安装脚本 install.sh、界面 App cca-app.zip 和它的签名 cca-app.zip.sig）
+# 发布当前提交（版本号取自 cca 里的 VERSION）：编辅助程序 → 跑 App 的单元测试 → 跑回归 → 把辅助程序接到 cca 后面 → 签名 → 编译界面 App
+# → 打 tag → 推送 → 创建 GitHub Release
+# （附件：cca（接着四种机器的辅助程序）、cca.sig、一键安装脚本 install.sh、界面 App cca-app.zip 和它的签名 cca-app.zip.sig）
+# 要装 Rust（rustup）和四个目标：rustup target add aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 # 用法：./release.sh ["更新说明"]；签名私钥默认 ~/.ssh/cca_release_ed25519（可用 CCA_RELEASE_KEY 指定）
 # VERSION 是 X.Y.Z-beta.N 时发成测试版（GitHub 的 pre-release，不设为 Latest）：自动更新和一键安装都不会装它，
 # 只能 cca update X.Y.Z-beta.N 或 install.sh 指定版本手动装
@@ -25,6 +27,17 @@ pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' cca)
 	fail "cca 里的 RELEASE_KEY 和 $KEY.pub 不是一对"
 [ "$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' install.sh)" = "$pub" ] || fail "install.sh 里的 RELEASE_KEY 和 cca 里的不一致"
 
+# 辅助程序（cli/ 的 Rust 程序，原来是 cca 里内嵌的 Python）：四种机器各编一份，签名前接到 cca 后面（cli/pack.py）。照 Cargo.lock 编
+# （--locked）；程序里不留这台机器的路径（--remap-path-prefix：依赖库出错位置的字符串里本来带着 ~/.cargo 的绝对路径）
+echo "• 编辅助程序（四种机器）…"
+TARGETS="aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl"
+for t in $TARGETS; do
+	( cd cli && RUSTFLAGS="--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=." cargo build --release --locked --target "$t" ) >/dev/null 2>&1 ||
+		fail "辅助程序编不出来：cd cli && cargo build --release --locked --target ${t}（没装这个目标就先 rustup target add ${t}）"
+	! LC_ALL=C grep -qaF "$HOME/" "cli/target/$t/release/cca-core" || fail "辅助程序（${t}）里带着这台机器的路径"
+done
+case "$(uname -m)" in arm64) host=aarch64-apple-darwin ;; *) host=x86_64-apple-darwin ;; esac
+
 # App 的单元测试（macos/test.sh 不带参数：手写的夹具、各部件的单元测试，更新说明的用词和版本先后也在这里查）。
 # 回归里只拿 cca 的真实输出跑契约测试的解码部分（macos/test.sh 目录），这些都不跑。放在回归前面：没通过就不用等回归
 echo "• 跑 App 的单元测试…"
@@ -35,13 +48,20 @@ ut=$(bash macos/test.sh 2>&1) || {
 }
 echo "  $(printf '%s\n' "$ut" | tail -n 1)"
 
+# 回归用的就是要发布的那一份辅助程序（CCA_HELPER：不另编）
 echo "• 跑回归测试…"
-res=$(bash tests/regress.sh 2>&1 | tail -n 1)
+res=$(CCA_HELPER="$PWD/cli/target/$host/release/cca-core" bash tests/regress.sh 2>&1 | tail -n 1)
 case "$res" in *", 0 failed") echo "  $res" ;; *) fail "回归测试没通过：${res}" ;; esac
 
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
-cp cca "$out/cca"
+# 发布的 cca：仓库里的 cca 后面接上四种机器的辅助程序。接好以后在一个空的 HOME 里真的运行一次（解出这台机器的那一份、校验，
+# 经它报出版本号：cca _gui hello 只读，不联网）
+python3 -I cli/pack.py cca "$out/cca" >/dev/null || fail "辅助程序没接上（cli/pack.py）"
+bash -n "$out/cca" || fail "接上辅助程序的 cca 语法不对"
+mkdir "$out/home"
+env -i HOME="$out/home" PATH=/usr/bin:/bin:/usr/sbin:/sbin "$out/cca" _gui hello 2>/dev/null | grep -q "\"cca_version\": *\"$v\"" || fail "接上辅助程序的 cca 运行不了"
+echo "  发布的 cca：$(( $(wc -c < "$out/cca") / 1024 )) KB"
 cp install.sh "$out/install.sh"
 ssh-keygen -Y sign -q -n cca-release -f "$KEY" "$out/cca"
 printf 'cca-release %s\n' "$pub" > "$out/allowed"

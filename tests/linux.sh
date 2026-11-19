@@ -16,14 +16,26 @@
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
+# 辅助程序（cli/ 的 Rust 程序）用静态链接的那一份：cli/target/<x86_64|aarch64>-unknown-linux-musl/release/cca-core。--docker 时在宿主机上
+# 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
 set -u
 R=$(cd "$(dirname "$0")/.." && pwd)
+case "$(uname -m)" in x86_64|amd64) HT=x86_64-unknown-linux-musl ;; aarch64|arm64) HT=aarch64-unknown-linux-musl ;; *) HT="" ;; esac
+helper_build() {   # 这台机器（容器和宿主机是同一种芯片）的辅助程序：编出来；没有 cargo 时用已经编好的
+	[ -n "$HT" ] || { echo "辅助程序没有这种机器的（$(uname -m)）" >&2; return 1; }
+	if command -v cargo >/dev/null 2>&1; then
+		( cd "$R/cli" && cargo build --release --locked --target "$HT" ) >/dev/null 2>&1 ||
+			{ echo "辅助程序编不出来：cd cli && cargo build --release --locked --target ${HT}（没装这个目标就先 rustup target add ${HT}）" >&2; return 1; }
+	fi
+	[ -x "$R/cli/target/$HT/release/cca-core" ] || { echo "辅助程序还没编出来：cd cli && cargo build --release --locked --target $HT" >&2; return 1; }
+}
 IMAGES="ubuntu:22.04 ubuntu:24.04 ubuntu:26.04 debian:12 debian:13 rockylinux/rockylinux:9 almalinux:10 fedora:43 amazonlinux:2023 alpine:3.22 archlinux:latest opensuse/leap:16.0"
 
 if [ "${1:-}" = --docker ]; then
 	shift
 	[ $# -gt 0 ] || set -- $IMAGES
 	command -v docker >/dev/null 2>&1 || { echo "没有 docker" >&2; exit 2; }
+	helper_build || exit 2   # 仓库是只读挂进容器的，辅助程序在这里先编好
 	L=$(mktemp -d "${TMPDIR:-/tmp}/cca-linux.XXXXXX"); mkdir -p "$L/core"
 	# 内置代理的内核只下载一次（GitHub 慢的时候十几个容器同时下容易超时），校验过放进 $L/core 给各个容器（CCA_LINUX_CORE_CACHE；
 	# cca 照样校验）。没下成就让各个容器自己下
@@ -90,6 +102,12 @@ if [ "${1:-}" = --in-container ]; then   # 容器里（sh 跑的，可能还没�
 fi
 
 [ "$(uname -s)" = Linux ] || { echo "只在 Linux 上跑（macOS 上用 tests/regress.sh）" >&2; exit 2; }
+HB="${CCA_HELPER:-}"; unset CCA_HELPER   # 下面的 cca 都是接着辅助程序的那一份（像发布的一样自己解出来），不靠这个变量
+if [ -z "$HB" ]; then
+	HB="$R/cli/target/$HT/release/cca-core"
+	[ -x "$HB" ] || helper_build || exit 2
+fi
+[ -x "$HB" ] || { echo "辅助程序不在：$HB" >&2; exit 2; }
 pass=0; fail=0
 ok() { echo "  ✓ $*"; pass=$((pass + 1)); }
 no() { echo "  ✗ $*"; fail=$((fail + 1)); }
@@ -341,7 +359,9 @@ FPA=$(fp 'socks5|127.0.0.1|18080|')
 I="$D/i"; mkdir -p "$I/gh" "$I/bin" "$I/home" "$I/tmp"
 ssh-keygen -q -t ed25519 -N '' -C test-release -f "$I/relkey" </dev/null
 pub=$(cut -d' ' -f1-2 "$I/relkey.pub")
-sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$R/cca" > "$I/gh/cca"
+# 像发布的那样接着辅助程序（cli/pack.py；这里只接这台机器的那一份）：第一次运行时解到 ~/.cache/cca-helper 里
+python3 -I "$R/cli/pack.py" "$R/cca" "$I/cca.packed" --only "$HT=$HB" >/dev/null || { echo "  ✗ 辅助程序没接上（cli/pack.py）"; echo "  结果：0 通过，1 失败"; exit 1; }
+sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$I/cca.packed" > "$I/gh/cca"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$R/install.sh" > "$I/install.sh"
 ssh-keygen -q -Y sign -f "$I/relkey" -n cca-release "$I/gh/cca" </dev/null
 # 下面用的 cca：同一份（认这次的发布密钥：映射、设备清单都用它签），旁边有 .git（开发模式：不自动更新，不去连 GitHub）
@@ -692,30 +712,29 @@ if ! printf '%s' "$out" | grep -qE '^  cca (web|billing|limit-resets|app|gui|log
 	ok "cca help：不列只在 macOS 上的命令，内置代理说的是由 cca 在后台运行，泄露检测不提 WebRTC"
 else no "cca help：$(printf '%s' "$out" | grep -E '^  cca (web|billing|limit-resets|app|gui|login-page|mail) |^  cca codex app |WebRTC' | head -n 2)"; fi
 
-# 内嵌 Python 的编译缓存：每个版本一份，写新的一份时顺手删掉 7 天前写的旧缓存和没写完的临时文件（没有 XDG_RUNTIME_DIR 时缓存在
-# ~/.cache 里，系统不会清，不删就越积越多）；7 天内的、python3 指针、名字不像缓存的都留着，读缓存时不动。用 XDG_RUNTIME_DIR 指到沙箱
-PC="$D/xdg/cca-py"; mkdir -p -m 700 "$D/xdg" "$PC"
-for n in 0123456789abcdef1-30906f0 0123456789abcdef2-30906f0.4242 0123456789abcdef3-30e00f0 python3 notes-0123456789abcdef5 0123456789abcdefk-1; do echo x > "$PC/$n"; done
-python3 - "$PC" <<'P'
-import os, sys, time
-for n, days in (('0123456789abcdef1-30906f0', 8), ('0123456789abcdef2-30906f0.4242', 30), ('0123456789abcdef3-30e00f0', 6),
-                ('python3', 30), ('notes-0123456789abcdef5', 30), ('0123456789abcdefk-1', 30)):
-    t = time.time() - days * 86400
-    os.utime(os.path.join(sys.argv[1], n), (t, t))
-P
-XDG_RUNTIME_DIR="$D/xdg" "$C" ls >/dev/null 2>&1; l1=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
-XDG_RUNTIME_DIR="$D/xdg" "$C" ls >/dev/null 2>&1; l2=$(ls "$PC" | LC_ALL=C sort | tr '\n' ' ')
-v=$(python3 - "$l1" <<'P'
-import re, sys
-s = set(sys.argv[1].split())
-new = [n for n in s if re.fullmatch(r'[0-9a-f]{17,}-[0-9a-f]+', n) and not n.startswith('0123456789abcdef')]
-keep = {'0123456789abcdef3-30e00f0', '0123456789abcdefk-1', 'notes-0123456789abcdef5', 'python3'}
-gone = {'0123456789abcdef1-30906f0', '0123456789abcdef2-30906f0.4242'}
-print('ok' if keep <= s and not s & gone and len(new) == 1 else 'bad')
-P
-)
-if [ "$v" = ok ] && [ "$l1" = "$l2" ]; then ok "内嵌 Python 的编译缓存：写新的一份时删掉 7 天前写的旧缓存和没写完的临时文件，别的都留着；读缓存时不动"
-else no "内嵌 Python 的编译缓存：第一次后 ${l1:-空的}；第二次后 ${l2:-空的}"; fi
+# 辅助程序：发布的 cca 第一次运行时把这台机器的那一份解到 ~/.cache/cca-helper 里（XDG_CACHE_HOME 指了别处就在那里；不放在
+# XDG_RUNTIME_DIR：那是内存盘，退出登录就清空），文件名是它的 SHA-256，只有自己能读写执行；解新的一份时顺手删掉 7 天前解出来的
+# （旧版本的、没解完的临时文件），7 天内的留着；以后每次直接用，不再解。不用 python3（PATH 里藏起它照样能跑）
+HS=$(sha256sum "$HB" | cut -d' ' -f1)
+HCD="$D/xdgc/cca-helper"; mkdir -p -m 700 "$D/xdgc" "$HCD"
+for n in aaaa1 aaaa2.4242 bbbb1; do echo x > "$HCD/$n"; done
+touch -d '8 days ago' "$HCD/aaaa1" 2>/dev/null || touch -d "@$(( $(date +%s) - 8 * 86400 ))" "$HCD/aaaa1"
+touch -d '30 days ago' "$HCD/aaaa2.4242" 2>/dev/null || touch -d "@$(( $(date +%s) - 30 * 86400 ))" "$HCD/aaaa2.4242"
+touch -d '6 days ago' "$HCD/bbbb1" 2>/dev/null || touch -d "@$(( $(date +%s) - 6 * 86400 ))" "$HCD/bbbb1"
+XDG_CACHE_HOME="$D/xdgc" XDG_RUNTIME_DIR="$D/xdgr" "$C" ls >/dev/null 2>&1; l1=$(ls "$HCD" | LC_ALL=C sort | tr '\n' ' ')
+i1=$(stat -c '%i %Y' "$HCD/$HS" 2>/dev/null)
+XDG_CACHE_HOME="$D/xdgc" XDG_RUNTIME_DIR="$D/xdgr" "$C" ls >/dev/null 2>&1; l2=$(ls "$HCD" | LC_ALL=C sort | tr '\n' ' ')
+if [ "$l1" = "$(printf '%s\n' "$HS" bbbb1 | LC_ALL=C sort | tr '\n' ' ')" ] && [ "$l1" = "$l2" ] && [ -n "$i1" ] && [ "$(stat -c '%i %Y' "$HCD/$HS")" = "$i1" ] &&
+	[ "$(stat -c %a "$HCD/$HS")" = 700 ] && [ "$(stat -c %a "$HCD")" = 700 ] && [ "$(sha256sum "$HCD/$HS" | cut -d' ' -f1)" = "$HS" ] && [ ! -e "$D/xdgr" ]; then
+	ok "辅助程序：第一次运行解到缓存目录的 cca-helper 里（文件名是 SHA-256，只有自己能读写执行），删掉 7 天前的，7 天内的留着；第二次不再解"
+else no "辅助程序的缓存：第一次后 ${l1:-空的}；第二次后 ${l2:-空的}；$(ls -la "$HCD" 2>&1 | tail -n 4 | tr '\n' ' ')"; fi
+if [ -x "$H/.cache/cca-helper/$HS" ] && [ ! -e "$H/.cache/cca-py" ]; then ok "辅助程序：平时解在 ~/.cache/cca-helper 里"
+else no "辅助程序不在 ~/.cache/cca-helper 里：$(ls -la "$H/.cache" 2>&1 | tail -n 5 | tr '\n' ' ')"; fi
+mkdir -p "$D/nopy"
+for f in /usr/local/bin/* /usr/bin/* /bin/* /usr/sbin/* /sbin/*; do n=${f##*/}; case "$n" in python*|pypy*) ;; *) [ -e "$D/nopy/$n" ] || ln -s "$f" "$D/nopy/$n" ;; esac; done
+out=$(PATH="$D/nopy" "$C" ls 2>&1); rc=$?
+if [ $rc -eq 0 ] && [ -n "$out" ] && ! PATH="$D/nopy" command -v python3 >/dev/null 2>&1; then ok "cca 不用 python3：PATH 里没有它，cca ls 照样列出账号"
+else no "PATH 里没有 python3 时 cca ls（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)"; fi
 
 out=$("$C" local off 2>&1)
 for i in $(seq 1 20); do [ -z "$(keeper)" ] && ! listen 7901 && break; sleep 0.25; done

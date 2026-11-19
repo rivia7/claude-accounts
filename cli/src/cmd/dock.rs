@@ -32,26 +32,74 @@ const DOCK_GRACE: f64 = 60.0;
 /// 记录一直不清的 App 最多等这么久（越等查得越慢：dock_poll），过了就不管它了
 const DOCK_WAIT_MAX: f64 = 3600.0;
 
-/// 经 CoreFoundation 读写 cfprefsd 里的设置（原来用 ctypes 调的同一组函数）
+/// 经 CoreFoundation 读写 cfprefsd 里的设置（原来用 ctypes 调的同一组函数）。
+/// 用到的时候才载入这个库（dlopen，和原来的 ctypes 一样）：写成 `#[link]` 的话，每一条子命令起来都要先载入它和它带着的一串库
+/// ——实测多 2600 万条指令、5 MB 内存，而用得着它的只有整理程序坞这一条
 #[cfg(target_os = "macos")]
 mod cf {
     use crate::py::plist::{self, P};
-    use std::ffi::{c_char, c_long, c_ulong, c_void, CString};
+    use std::ffi::{c_char, c_long, c_ulong, c_void, CStr, CString};
+    use std::sync::OnceLock;
 
     type Ref = *const c_void;
 
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        fn CFStringCreateWithCString(alloc: Ref, s: *const c_char, encoding: u32) -> Ref;
-        fn CFPreferencesCopyAppValue(key: Ref, app: Ref) -> Ref;
-        fn CFPreferencesSetAppValue(key: Ref, value: Ref, app: Ref);
-        fn CFPreferencesAppSynchronize(app: Ref) -> u8;
-        fn CFPropertyListCreateData(alloc: Ref, list: Ref, format: c_long, options: c_ulong, error: *mut Ref) -> Ref;
-        fn CFPropertyListCreateWithData(alloc: Ref, data: Ref, options: c_ulong, format: *mut c_long, error: *mut Ref) -> Ref;
-        fn CFDataCreate(alloc: Ref, bytes: *const u8, len: c_long) -> Ref;
-        fn CFDataGetLength(data: Ref) -> c_long;
-        fn CFDataGetBytePtr(data: Ref) -> *const u8;
-        fn CFRelease(obj: Ref);
+    /// 用到的那几个函数
+    struct Lib {
+        string_create_with_cstring: unsafe extern "C" fn(Ref, *const c_char, u32) -> Ref,
+        preferences_copy_app_value: unsafe extern "C" fn(Ref, Ref) -> Ref,
+        preferences_set_app_value: unsafe extern "C" fn(Ref, Ref, Ref),
+        preferences_app_synchronize: unsafe extern "C" fn(Ref) -> u8,
+        property_list_create_data: unsafe extern "C" fn(Ref, Ref, c_long, c_ulong, *mut Ref) -> Ref,
+        property_list_create_with_data: unsafe extern "C" fn(Ref, Ref, c_ulong, *mut c_long, *mut Ref) -> Ref,
+        data_create: unsafe extern "C" fn(Ref, *const u8, c_long) -> Ref,
+        data_get_length: unsafe extern "C" fn(Ref) -> c_long,
+        data_get_byte_ptr: unsafe extern "C" fn(Ref) -> *const u8,
+        release: unsafe extern "C" fn(Ref),
+    }
+
+    /// 库里的一个函数；T 是它的函数指针类型
+    ///
+    /// # Safety
+    /// handle 是 dlopen 给的；T 必须是和这个符号的 C 声明一致的 `extern "C" fn` 指针类型
+    unsafe fn symbol<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
+        assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<*mut c_void>());
+        // SAFETY: handle 有效，name 以 0 结尾
+        let p = unsafe { libc::dlsym(handle, name.as_ptr()) };
+        // SAFETY: T 和指针一样大（上面核对过），调用方保证它就是这个符号的类型
+        (!p.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, T>(&p) })
+    }
+
+    /// CoreFoundation：第一次用到时载入，载不了是 None（原来是 ctypes 的 OSError）
+    fn lib() -> Option<&'static Lib> {
+        static LIB: OnceLock<Option<Lib>> = OnceLock::new();
+        LIB.get_or_init(|| {
+            // SAFETY: 路径以 0 结尾；库载入以后一直留着（不 dlclose），里面的函数指针一直有效
+            let h = unsafe { libc::dlopen(c"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation".as_ptr(), libc::RTLD_LAZY) };
+            if h.is_null() {
+                return None;
+            }
+            // SAFETY: 各个字段的类型就是这些函数在 CoreFoundation 头文件里的声明
+            unsafe {
+                Some(Lib {
+                    string_create_with_cstring: symbol(h, c"CFStringCreateWithCString")?,
+                    preferences_copy_app_value: symbol(h, c"CFPreferencesCopyAppValue")?,
+                    preferences_set_app_value: symbol(h, c"CFPreferencesSetAppValue")?,
+                    preferences_app_synchronize: symbol(h, c"CFPreferencesAppSynchronize")?,
+                    property_list_create_data: symbol(h, c"CFPropertyListCreateData")?,
+                    property_list_create_with_data: symbol(h, c"CFPropertyListCreateWithData")?,
+                    data_create: symbol(h, c"CFDataCreate")?,
+                    data_get_length: symbol(h, c"CFDataGetLength")?,
+                    data_get_byte_ptr: symbol(h, c"CFDataGetBytePtr")?,
+                    release: symbol(h, c"CFRelease")?,
+                })
+            }
+        })
+        .as_ref()
+    }
+
+    /// 载得了 CoreFoundation
+    pub fn available() -> bool {
+        lib().is_some()
     }
 
     const UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
@@ -62,72 +110,75 @@ mod cf {
 
     impl Drop for Held {
         fn drop(&mut self) {
-            if !self.0.is_null() {
+            if let (false, Some(cf)) = (self.0.is_null(), lib()) {
                 // SAFETY: 是我们自己拿到（Create / Copy）的对象，只放一次
-                unsafe { CFRelease(self.0) }
+                unsafe { (cf.release)(self.0) }
             }
         }
     }
 
-    fn string(s: &str) -> Held {
+    fn string(cf: &Lib, s: &str) -> Held {
         let c = CString::new(s).unwrap_or_default();
         // SAFETY: c 是以 0 结尾的 UTF-8
-        Held(unsafe { CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), UTF8) })
+        Held(unsafe { (cf.string_create_with_cstring)(std::ptr::null(), c.as_ptr(), UTF8) })
     }
 
     /// CF 的属性列表对象 → 我们的值（经它自己写出来的 XML）
-    fn to_plist(v: &Held) -> Option<P> {
+    fn to_plist(cf: &Lib, v: &Held) -> Option<P> {
         // SAFETY: v 是有效的属性列表对象；返回的 data 由 Held 放掉；字节在 data 活着的时候拷出来
         let bytes = unsafe {
-            let data = Held(CFPropertyListCreateData(std::ptr::null(), v.0, XML, 0, std::ptr::null_mut()));
+            let data = Held((cf.property_list_create_data)(std::ptr::null(), v.0, XML, 0, std::ptr::null_mut()));
             if data.0.is_null() {
                 return None;
             }
-            std::slice::from_raw_parts(CFDataGetBytePtr(data.0), CFDataGetLength(data.0) as usize).to_vec()
+            std::slice::from_raw_parts((cf.data_get_byte_ptr)(data.0), (cf.data_get_length)(data.0) as usize).to_vec()
         };
         plist::loads(&bytes).ok()
     }
 
     /// 我们的值 → CF 的属性列表对象（经 XML）
-    fn from_plist(value: &P) -> crate::py::R<Option<Held>> {
+    fn from_plist(cf: &Lib, value: &P) -> crate::py::R<Option<Held>> {
         let raw = plist::dumps_xml(value)?;
         // SAFETY: raw 在调用期间活着；data 用完就放
         let v = unsafe {
-            let data = Held(CFDataCreate(std::ptr::null(), raw.as_ptr(), raw.len() as c_long));
+            let data = Held((cf.data_create)(std::ptr::null(), raw.as_ptr(), raw.len() as c_long));
             if data.0.is_null() {
                 return Ok(None);
             }
-            Held(CFPropertyListCreateWithData(std::ptr::null(), data.0, 0, std::ptr::null_mut(), std::ptr::null_mut()))
+            Held((cf.property_list_create_with_data)(std::ptr::null(), data.0, 0, std::ptr::null_mut(), std::ptr::null_mut()))
         };
         Ok(if v.0.is_null() { None } else { Some(v) })
     }
 
     pub fn get(domain: &str, key: &str) -> Option<P> {
-        let (d, k) = (string(domain), string(key));
+        let cf = lib()?;
+        let (d, k) = (string(cf, domain), string(cf, key));
         // SAFETY: d、k 是有效的 CFString；Copy 出来的对象由 Held 放掉
         let v = unsafe {
-            CFPreferencesAppSynchronize(d.0); // 程序坞刚写的也要读到（不用这个进程里缓存的）
-            Held(CFPreferencesCopyAppValue(k.0, d.0))
+            (cf.preferences_app_synchronize)(d.0); // 程序坞刚写的也要读到（不用这个进程里缓存的）
+            Held((cf.preferences_copy_app_value)(k.0, d.0))
         };
         if v.0.is_null() {
             return None;
         }
-        to_plist(&v)
+        to_plist(cf, &v)
     }
 
     pub fn put(domain: &str, key: &str, value: &P) -> crate::py::R<bool> {
-        let Some(v) = from_plist(value)? else { return Ok(false) };
-        let (d, k) = (string(domain), string(key));
+        let Some(cf) = lib() else { return Ok(false) };
+        let Some(v) = from_plist(cf, value)? else { return Ok(false) };
+        let (d, k) = (string(cf, domain), string(cf, key));
         // SAFETY: 三个都是有效的 CF 对象
         Ok(unsafe {
-            CFPreferencesSetAppValue(k.0, v.0, d.0);
-            CFPreferencesAppSynchronize(d.0) != 0
+            (cf.preferences_set_app_value)(k.0, v.0, d.0);
+            (cf.preferences_app_synchronize)(d.0) != 0
         })
     }
 
     #[cfg(test)]
     pub fn round_trip(value: &P) -> Option<P> {
-        to_plist(&from_plist(value).ok()??)
+        let cf = lib()?;
+        to_plist(cf, &from_plist(cf, value).ok()??)
     }
 }
 
@@ -145,7 +196,7 @@ impl Prefs {
             return Some(Prefs::File(domain.to_string()));
         }
         #[cfg(target_os = "macos")]
-        return Some(Prefs::Domain(domain.to_string()));
+        return cf::available().then(|| Prefs::Domain(domain.to_string()));
         #[cfg(not(target_os = "macos"))]
         None
     }
