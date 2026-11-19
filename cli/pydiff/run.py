@@ -30,10 +30,38 @@ CORE = os.path.abspath(os.environ.get('CCA_CORE') or os.path.join(CLI, 'target',
 CASES = []
 
 
+_ORACLE = {}
+PY_HEAD = "PY_SRC=$(cat <<'PY'\n"
+
+
+def oracle_cca():
+    """带着内嵌 Python 的那份 cca 在哪（对照的那一边从它里面取 PY_SRC）。仓库里的 cca 还带着就用它；切换以后它里面没有
+    Python 了，从 cli/PORTED_FROM 记的那个主干提交里取出来，放进临时目录（对拍结束时删掉）"""
+    if not _ORACLE:
+        p = os.path.join(REPO, 'cca')
+        with open(p, encoding='utf-8') as f:
+            text = f.read()
+        if PY_HEAD not in text:
+            with open(os.path.join(CLI, 'PORTED_FROM')) as f:
+                rev = f.read().split()[0]
+            got = subprocess.run(['git', '-C', REPO, 'show', rev + ':cca'], capture_output=True)
+            if got.returncode != 0:
+                sys.exit('对照用的 cca 取不出来（git show %s:cca）：%s' % (rev, got.stderr.decode('utf-8', 'replace').strip()))
+            text = got.stdout.decode('utf-8')
+            d = tempfile.mkdtemp(prefix='cca-oracle.')
+            import atexit
+            atexit.register(shutil.rmtree, d, True)
+            p = os.path.join(d, 'cca')
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(text)
+        _ORACLE.update(path=p, text=text)
+    return _ORACLE['path']
+
+
 def py_src():
-    """cca 里内嵌的 Python 源码"""
-    with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
-        return f.read().split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+    """原来内嵌在 cca 里的 Python 源码"""
+    oracle_cca()
+    return _ORACLE['text'].split(PY_HEAD, 1)[1].split('\nPY\n)', 1)[0]
 
 
 class Box:

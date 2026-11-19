@@ -935,7 +935,7 @@ MOMENTS = [
 ]
 for zone in ZONES:
     for name, now in MOMENTS:
-        @ccase('periods/%s-%s' % (zone.replace('/', '-'), name), ['_cost-periods', repr(now)], env={'TZ': zone, 'PYDIFF_CCA': run.REPO + '/cca'},
+        @ccase('periods/%s-%s' % (zone.replace('/', '-'), name), ['_cost-periods', repr(now)], env={'TZ': zone, 'PYDIFF_CCA': run.oracle_cca()},
                oracle=[sys.executable, '-I', '-X', 'utf8', '-c', PERIODS_ORACLE], tree=False)
         def _(b):
             pass
@@ -966,7 +966,7 @@ def quota_cases():
 
 for name, now, quota in quota_cases():
     for zone in ('Asia/Shanghai', 'America/Los_Angeles', 'UTC'):
-        @ccase('periods-quota/%s-%s' % (name, zone.replace('/', '-')), ['_cost-periods', repr(now), json.dumps(quota)], env={'TZ': zone, 'PYDIFF_CCA': run.REPO + '/cca'},
+        @ccase('periods-quota/%s-%s' % (name, zone.replace('/', '-')), ['_cost-periods', repr(now), json.dumps(quota)], env={'TZ': zone, 'PYDIFF_CCA': run.oracle_cca()},
                oracle=[sys.executable, '-I', '-X', 'utf8', '-c', PERIODS_ORACLE], tree=False)
         def _(b):
             pass
