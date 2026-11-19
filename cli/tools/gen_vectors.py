@@ -536,6 +536,57 @@ TOML_FRAMES = [
     ('a = [[[1, 2', 'TOMLDecodeError'), ('a = {b = {c = 1, c = 2}}', 'TOMLDecodeError'), ('a = 1979-02-30', 'TOMLDecodeError'),
 ]
 
+# tests/isolation_settings.py 里交给解析器的每一份文字（共享的和项目里的 config.toml、profile 文件）。那份测试原来每个场景跑两遍
+# （标准库的 tomllib、给旧版 Python 内嵌的 tomli），现在只有 src/py/toml.rs 一个解析器：这里保证同样的输入都对照过。
+# 上面「整份的文件」里已经有的也照写，不怕重复（生成时去重）
+TOML_SETTINGS_FILES = [
+    'chatgpt_base_url = """\nhttps://example.invalid"""\n', "chatgpt_base_url = '''\nhttps://example.invalid'''\n",
+    '"chatgpt_base_url" = "https://example.invalid"\n', '"\\u0063hatgpt_base_url" = "https://example.invalid"\n',
+    '[profiles.other]\nchatgpt_base_url = "https://example.invalid"\n', 'profiles.other.chatgpt_base_url = "https://example.invalid"\n',
+    'profiles = { other = { chatgpt_base_url = "https://example.invalid" } }\n',
+    'features = { respect_system_proxy = true }', 'features.respect_system_proxy = true', '["features"]\n"respect_system_proxy" = true',
+    'profiles = { "deep.review" = { features = { respect_system_proxy = true } } }', '"features.respect_system_proxy" = true',
+    'profile = "safe"\n[profiles.safe]\nmodel="m"\n[profiles."unused.review"]\ncli_auth_credentials_store="keyring"', 'model="m"',
+    'forced_chatgpt_workspace_id="test-workspace"', 'chatgpt_base_url="https://example.invalid"\n', 'model="sample-model"\n',
+    'profile="deep-review"\n', 'profile="\\u5de5\\u4f5c \\u914d\\u7f6e"\n', 'profile="review.v2"\n', 'profile="with spaces"\n',
+    'profile="../outside"\n', 'profile="/tmp/outside"\n', 'profile="nested/profile"\n', 'profile=".hidden"\n', 'profile=""\n',
+    'profile="bad\\nname"\n', 'profile=123\n',
+    'model="unterminated', 'model="a"\nmodel="b"', 'features = "not a table"', 'profiles = []',
+    'model = "sample-model"\nmodel_reasoning_effort = "ultra"\nservice_tier = "priority"\ntext = """A note containing chatgpt_base_url = "example"\n'
+    'features = { respect_system_proxy = true }\n"""\nwhen = 2026-11-08T12:00:00Z\nchoices = [1, 2, 3]\n[features]\nrespect_system_proxy = false\n'
+    'system_proxy_fallback = false\n[projects."/tmp/test-project"]\ntrust_level = "trusted"\n[[sample]]\nname = "one"\n',
+    '[model_providers.openai]\nbase_url="https://example.invalid"',
+    'profile="x"\n[features]\nsystem_proxy_fallback=false\n[profiles.x.features]\nsystem_proxy_fallback=true\n',
+    '[features]\nsystem_proxy_fallback=false\n', 'features={system_proxy_fallback=true}\n', '[features]\nsystem_proxy_fallback=true\n',
+    'chatgpt_base_url="https://example.invalid"', 'features={respect_system_proxy=true}', 'model="safe-model"\n',
+    'features={system_proxy_fallback=false}', '[features]\nsystem_proxy_fallback=false', 'features={system_proxy_fallback=true}',
+    'features={system_proxy_fallback="false"}', 'features={', 'chatgpt_base_url="unique-private-value"',
+    # sqlite_home 在测试里是临时目录，每次不一样：这里放一份样子一样的
+    'sqlite_home = """\n/tmp/cca-isolation/databases"""\n', 'sqlite_home = [',
+]
+# 同一份测试里 -c / --config 的值：整句先当 TOML 解析，解析不了（值没加引号）时改拼成「键 = "值"」再解析一次
+# （launch_settings_problems）；两种写法都对照
+TOML_SETTINGS_OVERRIDES = [
+    'profile="deep-review"', 'profile="\\u5de5\\u4f5c \\u914d\\u7f6e"', 'profile="review.v2"', 'profile="with spaces"', 'profile="../outside"',
+    'profile="/tmp/outside"', 'profile="nested/profile"', 'profile=".hidden"', 'profile=""', 'profile="bad\\nname"', 'profile=123',
+    'chatgpt_base_url=https://example.invalid', 'chatgpt_base_url="https://example.invalid"', 'model_provider=custom',
+    'features={respect_system_proxy=true}', 'features.system_proxy_fallback=true', 'model=sample-model', 'model_reasoning_effort="ultra"',
+    'model=benign',
+]
+
+
+def toml_settings_docs():
+    out = list(TOML_SETTINGS_FILES)
+    for value in TOML_SETTINGS_OVERRIDES:
+        out.append(value)
+        try:
+            tomllib.loads(value)
+        except tomllib.TOMLDecodeError:
+            key, raw = value.split('=', 1)
+            out.append('%s = %s' % (key, json.dumps(raw)))
+    return out
+
+
 TOML_INT_LIMIT = 10 ** 4300   # 十进制超过 4300 位的整数 Python 转不成十进制的文字（str()、json.dumps 都是 ValueError）
 
 
@@ -599,7 +650,7 @@ def toml_text(value):
 
 def toml_vectors():
     docs = []
-    for doc in dict.fromkeys(TOML_DOCS + toml_mutants()):
+    for doc in dict.fromkeys(TOML_DOCS + toml_mutants() + toml_settings_docs()):
         kind, value = toml_result(doc, TOML_FRAME)
         if kind == 'ok':
             docs.append({'in': doc, 'ok': toml_text(value)})

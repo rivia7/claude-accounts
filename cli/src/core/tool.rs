@@ -501,6 +501,55 @@ mod tests {
     }
 
     #[test]
+    fn profile_names_match_discovery() {
+        // tests/isolation_settings.py 的 test_profile_names_match_discovery_and_cannot_escape_checked_files：能选的 profile 就是
+        // ~/.codex 里会被找到、照样校验的那个文件，名字逃不出这个目录。后两项是原来的 Python 给的：
+        // codex_profile_file(名字 + '.config.toml')、codex_profile_name(名字)
+        for (name, file, selectable) in [
+            ("deep-review", true, true),
+            ("工作 配置", true, true),
+            ("review.v2", true, true),
+            ("with spaces", true, true),
+            ("../outside", false, false),
+            ("/tmp/outside", false, false),
+            ("nested/profile", false, false),
+            (".hidden", false, false),
+            ("", false, false),
+            // 控制字符：文件找得到，但不能选
+            ("bad\nname", true, false),
+            ("a\tb", true, false),
+            ("a\u{7f}b", true, false),
+            ("tab\u{1f}", true, false),
+            ("a\u{80}b", true, true),
+            ("x.config.toml", true, true),
+            ("a/", false, false),
+            ("..", false, false),
+            (".", false, false),
+            (" ", true, true),
+            ("é", true, true),
+            ("trailing.", true, true),
+        ] {
+            assert_eq!(codex_profile_file(&format!("{name}.config.toml")), file, "{name:?}");
+            assert_eq!(codex_profile_name(name), selectable, "{name:?}");
+        }
+        for (file, want) in [
+            ("deep-review.config.toml", true),
+            ("工作 配置.config.toml", true),
+            (".config.toml", false),
+            (".hidden.config.toml", false),
+            ("config.toml", false),
+            ("a/b.config.toml", false),
+            ("/abs.config.toml", false),
+            ("x.config.toml/", false),
+            ("notes.toml", false),
+            ("x.config.toml.bak", false),
+            ("X.CONFIG.TOML", false),
+        ] {
+            assert_eq!(codex_profile_file(file), want, "{file:?}");
+        }
+    }
+
+    #[test]
     fn using_restores() {
         assert_eq!(t().name, "claude");
         {

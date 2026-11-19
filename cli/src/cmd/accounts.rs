@@ -1089,3 +1089,51 @@ fn probe_flags(x: &Dict) -> Vec<String> {
         other => panic!("TypeError: codex 探测结果里的 flags 不是列表（{}）", other.py_repr()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_env_never_carries_reserved_names() {
+        // tests/isolation_settings.py 的 test_claude_configuration_cannot_replace_credential_sources：换掉账号目录、登录凭证来源的
+        // 变量就算写进了第三方 API 账号的 env（校验账号表时会拒绝），也不交给 Claude Code。期望值是原来的 api_env 给的
+        let env_of = |account: &str| json::dumps(&V::Dict(api_env(&json::loads(account).unwrap().as_dict().unwrap())), json::LINE);
+        let bare = r#"{"ANTHROPIC_BASE_URL": "https://example.invalid", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}"#;
+        let reserved = [
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+            "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+            "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+            "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+            "CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR",
+        ];
+        for name in reserved {
+            let account = format!(r#"{{"base_url": "https://example.invalid", "env": {{"{name}": "private-fixture-value"}}}}"#);
+            assert_eq!(env_of(&account), bare, "{name}");
+        }
+        // 和别的变量混在一起：保留的名字（不分大小写，cca 自己的、BROWSER 也是）去掉，别的照带，值都写成文字
+        let mixed: Vec<String> = reserved.iter().map(|name| format!(r#""{name}": "private-fixture-value""#)).collect();
+        let account = format!(
+            r#"{{"base_url": "https://example.invalid", "env": {{{}, "EDITOR": "vi", "API_TIMEOUT_MS": 600000, "cca_x": "1", "browser": "none"}}}}"#,
+            mixed.join(", ")
+        );
+        assert_eq!(
+            env_of(&account),
+            r#"{"ANTHROPIC_BASE_URL": "https://example.invalid", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "EDITOR": "vi", "API_TIMEOUT_MS": "600000"}"#
+        );
+        // 模型照 model 字段，env 里写的最后覆盖；不像变量名的不带
+        assert_eq!(
+            env_of(
+                r#"{"base_url": "https://example.invalid/v1/", "model": "m-1", "env": {"ANTHROPIC_MODEL": "other", "1BAD": "x", "A B": "y", "OK_1": 1.5, "T": true, "N": null}}"#
+            ),
+            concat!(
+                r#"{"ANTHROPIC_BASE_URL": "https://example.invalid/v1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "ANTHROPIC_MODEL": "other", "#,
+                r#""ANTHROPIC_DEFAULT_OPUS_MODEL": "m-1", "ANTHROPIC_DEFAULT_SONNET_MODEL": "m-1", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "m-1", "#,
+                r#""OK_1": "1.5", "T": "True", "N": "None"}"#
+            )
+        );
+        assert_eq!(env_of(r#"{"base_url": "https://example.invalid", "env": ["x"]}"#), bare);
+        assert_eq!(env_of(r#"{"base_url": "https://example.invalid", "model": "has space"}"#), bare);
+    }
+}

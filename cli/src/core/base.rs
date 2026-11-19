@@ -165,4 +165,38 @@ mod tests {
         assert!(secret_re_match("sk-12345") && secret_re_match("sk-12345\n") && !secret_re_match("short") && !secret_re_match("has space1"));
         assert!(HOST_RE.matches("192.0.2.10") && HOST_RE.matches("::1") && !HOST_RE.matches("-oProxyCommand"));
     }
+
+    #[test]
+    fn credential_sources_are_reserved() {
+        // tests/isolation_settings.py 的 test_claude_configuration_cannot_replace_credential_sources：换掉账号目录、登录凭证来源的
+        // 变量，共享的设置里不能有（SETTINGS_BAD），第三方 API 账号的 env 里也不能设（ENV_RESERVED）。后两项是原来的 Python 给的
+        for (name, reserved, settings_bad) in [
+            ("CLAUDE_CONFIG_DIR", true, true),
+            ("CLAUDE_SECURESTORAGE_CONFIG_DIR", true, true),
+            ("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", true, true),
+            ("CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", true, true),
+            ("CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR", true, true),
+            ("CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR", true, true),
+            ("claude_config_dir", true, true),
+            ("CLAUDE_CODE_OAUTH_TOKEN", true, true),
+            ("CLAUDE_CODE__FILE_DESCRIPTOR", true, true),
+            ("https_proxy", true, true),
+            // cca 自己的变量、BROWSER：只是账号的 env 里不能设
+            ("CCA_TOOL", true, false),
+            ("cca_x", true, false),
+            ("CCA_", true, false),
+            ("BROWSER", true, false),
+            ("browser", true, false),
+            ("EDITOR", false, false),
+            ("CLAUDE_CODE_FILE_DESCRIPTOR", false, false),
+            ("CLAUDE_CONFIG_DIR2", false, false),
+            ("XCLAUDE_CONFIG_DIR", false, false),
+            ("CCAX", false, false),
+            ("API_TIMEOUT_MS", false, false),
+            ("ANTHROPIC_MODEL", false, false),
+        ] {
+            assert_eq!(ENV_RESERVED.matches(name), reserved, "ENV_RESERVED：{name}");
+            assert_eq!(SETTINGS_BAD.matches(name), settings_bad, "SETTINGS_BAD：{name}");
+        }
+    }
 }

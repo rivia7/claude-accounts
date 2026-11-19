@@ -5792,6 +5792,214 @@
    {
     "in": "[[t]]\n[t.u]\nv = 1\n[[t]]\n[t.u]\nv = 2\n[w]\n-x.y.z = \"é😀\"\n",
     "ok": "{\"t\": [{\"u\": {\"v\": 1}}, {\"u\": {\"v\": 2}}], \"w\": {\"-x\": {\"y\": {\"z\": \"é😀\"}}}}"
+   },
+   {
+    "in": "\"chatgpt_base_url\" = \"https://example.invalid\"\n",
+    "ok": "{\"chatgpt_base_url\": \"https://example.invalid\"}"
+   },
+   {
+    "in": "model=\"m\"",
+    "ok": "{\"model\": \"m\"}"
+   },
+   {
+    "in": "forced_chatgpt_workspace_id=\"test-workspace\"",
+    "ok": "{\"forced_chatgpt_workspace_id\": \"test-workspace\"}"
+   },
+   {
+    "in": "chatgpt_base_url=\"https://example.invalid\"\n",
+    "ok": "{\"chatgpt_base_url\": \"https://example.invalid\"}"
+   },
+   {
+    "in": "model=\"sample-model\"\n",
+    "ok": "{\"model\": \"sample-model\"}"
+   },
+   {
+    "in": "profile=\"deep-review\"\n",
+    "ok": "{\"profile\": \"deep-review\"}"
+   },
+   {
+    "in": "profile=\"\\u5de5\\u4f5c \\u914d\\u7f6e\"\n",
+    "ok": "{\"profile\": \"工作 配置\"}"
+   },
+   {
+    "in": "profile=\"review.v2\"\n",
+    "ok": "{\"profile\": \"review.v2\"}"
+   },
+   {
+    "in": "profile=\"with spaces\"\n",
+    "ok": "{\"profile\": \"with spaces\"}"
+   },
+   {
+    "in": "profile=\"../outside\"\n",
+    "ok": "{\"profile\": \"../outside\"}"
+   },
+   {
+    "in": "profile=\"/tmp/outside\"\n",
+    "ok": "{\"profile\": \"/tmp/outside\"}"
+   },
+   {
+    "in": "profile=\"nested/profile\"\n",
+    "ok": "{\"profile\": \"nested/profile\"}"
+   },
+   {
+    "in": "profile=\".hidden\"\n",
+    "ok": "{\"profile\": \".hidden\"}"
+   },
+   {
+    "in": "profile=\"\"\n",
+    "ok": "{\"profile\": \"\"}"
+   },
+   {
+    "in": "profile=\"bad\\nname\"\n",
+    "ok": "{\"profile\": \"bad\\nname\"}"
+   },
+   {
+    "in": "profile=123\n",
+    "ok": "{\"profile\": 123}"
+   },
+   {
+    "in": "[model_providers.openai]\nbase_url=\"https://example.invalid\"",
+    "ok": "{\"model_providers\": {\"openai\": {\"base_url\": \"https://example.invalid\"}}}"
+   },
+   {
+    "in": "profile=\"x\"\n[features]\nsystem_proxy_fallback=false\n[profiles.x.features]\nsystem_proxy_fallback=true\n",
+    "ok": "{\"profile\": \"x\", \"features\": {\"system_proxy_fallback\": false}, \"profiles\": {\"x\": {\"features\": {\"system_proxy_fallback\": true}}}}"
+   },
+   {
+    "in": "[features]\nsystem_proxy_fallback=false\n",
+    "ok": "{\"features\": {\"system_proxy_fallback\": false}}"
+   },
+   {
+    "in": "features={system_proxy_fallback=true}\n",
+    "ok": "{\"features\": {\"system_proxy_fallback\": true}}"
+   },
+   {
+    "in": "[features]\nsystem_proxy_fallback=true\n",
+    "ok": "{\"features\": {\"system_proxy_fallback\": true}}"
+   },
+   {
+    "in": "chatgpt_base_url=\"https://example.invalid\"",
+    "ok": "{\"chatgpt_base_url\": \"https://example.invalid\"}"
+   },
+   {
+    "in": "features={respect_system_proxy=true}",
+    "ok": "{\"features\": {\"respect_system_proxy\": true}}"
+   },
+   {
+    "in": "model=\"safe-model\"\n",
+    "ok": "{\"model\": \"safe-model\"}"
+   },
+   {
+    "in": "features={system_proxy_fallback=false}",
+    "ok": "{\"features\": {\"system_proxy_fallback\": false}}"
+   },
+   {
+    "in": "[features]\nsystem_proxy_fallback=false",
+    "ok": "{\"features\": {\"system_proxy_fallback\": false}}"
+   },
+   {
+    "in": "features={system_proxy_fallback=true}",
+    "ok": "{\"features\": {\"system_proxy_fallback\": true}}"
+   },
+   {
+    "in": "features={system_proxy_fallback=\"false\"}",
+    "ok": "{\"features\": {\"system_proxy_fallback\": \"false\"}}"
+   },
+   {
+    "in": "chatgpt_base_url=\"unique-private-value\"",
+    "ok": "{\"chatgpt_base_url\": \"unique-private-value\"}"
+   },
+   {
+    "in": "sqlite_home = \"\"\"\n/tmp/cca-isolation/databases\"\"\"\n",
+    "ok": "{\"sqlite_home\": \"/tmp/cca-isolation/databases\"}"
+   },
+   {
+    "in": "profile=\"deep-review\"",
+    "ok": "{\"profile\": \"deep-review\"}"
+   },
+   {
+    "in": "profile=\"\\u5de5\\u4f5c \\u914d\\u7f6e\"",
+    "ok": "{\"profile\": \"工作 配置\"}"
+   },
+   {
+    "in": "profile=\"review.v2\"",
+    "ok": "{\"profile\": \"review.v2\"}"
+   },
+   {
+    "in": "profile=\"with spaces\"",
+    "ok": "{\"profile\": \"with spaces\"}"
+   },
+   {
+    "in": "profile=\"../outside\"",
+    "ok": "{\"profile\": \"../outside\"}"
+   },
+   {
+    "in": "profile=\"/tmp/outside\"",
+    "ok": "{\"profile\": \"/tmp/outside\"}"
+   },
+   {
+    "in": "profile=\"nested/profile\"",
+    "ok": "{\"profile\": \"nested/profile\"}"
+   },
+   {
+    "in": "profile=\".hidden\"",
+    "ok": "{\"profile\": \".hidden\"}"
+   },
+   {
+    "in": "profile=\"\"",
+    "ok": "{\"profile\": \"\"}"
+   },
+   {
+    "in": "profile=\"bad\\nname\"",
+    "ok": "{\"profile\": \"bad\\nname\"}"
+   },
+   {
+    "in": "profile=123",
+    "ok": "{\"profile\": 123}"
+   },
+   {
+    "in": "chatgpt_base_url=https://example.invalid",
+    "err": "TOMLDecodeError",
+    "msg": "Invalid value (at line 1, column 18)"
+   },
+   {
+    "in": "chatgpt_base_url = \"https://example.invalid\"",
+    "ok": "{\"chatgpt_base_url\": \"https://example.invalid\"}"
+   },
+   {
+    "in": "model_provider=custom",
+    "err": "TOMLDecodeError",
+    "msg": "Invalid value (at line 1, column 16)"
+   },
+   {
+    "in": "model_provider = \"custom\"",
+    "ok": "{\"model_provider\": \"custom\"}"
+   },
+   {
+    "in": "features.system_proxy_fallback=true",
+    "ok": "{\"features\": {\"system_proxy_fallback\": true}}"
+   },
+   {
+    "in": "model=sample-model",
+    "err": "TOMLDecodeError",
+    "msg": "Invalid value (at line 1, column 7)"
+   },
+   {
+    "in": "model = \"sample-model\"",
+    "ok": "{\"model\": \"sample-model\"}"
+   },
+   {
+    "in": "model_reasoning_effort=\"ultra\"",
+    "ok": "{\"model_reasoning_effort\": \"ultra\"}"
+   },
+   {
+    "in": "model=benign",
+    "err": "TOMLDecodeError",
+    "msg": "Invalid value (at line 1, column 7)"
+   },
+   {
+    "in": "model = \"benign\"",
+    "ok": "{\"model\": \"benign\"}"
    }
   ],
   "frames": [
