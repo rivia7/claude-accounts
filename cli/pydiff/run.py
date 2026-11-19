@@ -106,6 +106,11 @@ def tree_digest(root, masks):
                 out[rel] = 'link -> %s' % os.readlink(p)
             elif stat.S_ISDIR(st.st_mode):
                 out[rel] = 'dir %o' % (st.st_mode & 0o777)
+            elif n.endswith('.sqlite') and os.path.getsize(p):
+                # 数据库比内容不比字节：文件头里记着最后改它的 SQLite 的版本，原来用的是 Python 带的库，cca-core 用系统的 sqlite3
+                dump = subprocess.run(['/usr/bin/sqlite3', p, '.dump'], capture_output=True)
+                out[rel] = 'sqlite %o\n%s' % (st.st_mode & 0o777, dump.stdout.decode('utf-8', 'replace') if dump.returncode == 0 else
+                                             'sha256:' + hashlib.sha256(open(p, 'rb').read()).hexdigest())
             else:
                 with open(p, 'rb') as f:
                     data = f.read()

@@ -8,7 +8,7 @@
 //! - `shared.rs`：三方合并、并回、拆旧链接
 //! - `pylib.rs`：兼容层里还没有的 Python 标准库行为（os.walk、shutil、filecmp……），以后该移进 `cli/src/py/`
 //!
-//! 还没移植、先用 `unimplemented!` 顶着的两处在本文件末尾：`cost_kick`（cost 模块）、`codex_fix_rollouts`（codex 模块）。
+//! 收尾的两步在别的模块：`cost::cost_kick`（会话结束后在后台统计折合金额）、`codex::codex_fix_rollouts`（Codex 的会话库）。
 
 mod device;
 mod pylib;
@@ -52,7 +52,7 @@ impl Tool {
     /// `T.after_link(key)`：链接好以后各工具自己的收尾。Codex 把会话库里经账号目录的路径改到 ~/.codex
     pub fn after_link(&self, _key: &str) -> R<()> {
         match self.kind {
-            Kind::Codex => codex_fix_rollouts(),
+            Kind::Codex => super::codex::codex_fix_rollouts(),
             Kind::Claude | Kind::Agy => Ok(()),
         }
     }
@@ -136,17 +136,9 @@ pub fn cmd_link(args: &[String]) -> R<()> {
     Ok(())
 }
 
-// --- 别的模块的、还没移植的：调用的地方照原样留着，等那个模块移植了，把这里换成真的调用 ---
-
-/// Codex 的会话库（state_N.sqlite）里经账号目录的会话路径改写成 ~/.codex 下的同一个文件。Codex 的 `link` 每次都走到这里
-fn codex_fix_rollouts() -> R<()> {
-    unimplemented!("Codex 会话库里的路径改写还没移植（codex 模块：codex_fix_rollouts，要 TOML 和 sqlite）")
-}
-
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[
-    // link：Codex 的收尾 codex_fix_rollouts 还没移植，所以没有 codex；接上以后改成 Cmd::all
-    Cmd::only("link", cmd_link, &["claude", "agy"]),
+    Cmd::all("link", cmd_link),
     Cmd::all("sync", cmd_sync),
     Cmd::all("device", cmd_device),
 ];
