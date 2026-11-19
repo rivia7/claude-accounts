@@ -552,10 +552,18 @@ pub fn presence_status(text_: &str) -> R<()> {
     Ok(())
 }
 
+/// 这些目录现在的样子（修改时间到纳秒、inode；没有的是 None）：目录里建、删、换名一个文件，它的修改时间就变
+pub fn dir_stamps(dirs: &[&str]) -> Vec<Option<(i64, i64, u64)>> {
+    dirs.iter().map(|d| std::fs::metadata(d).ok().map(|st| (st.mtime(), st.mtime_nsec(), st.ino()))).collect()
+}
+
 /// 睡 timeout 秒（至少 1 秒）；这些进程有一个退出、这些目录里有文件建 / 删 / 换名（登记出现、消失）就提前醒。
-/// 被 SIGTERM 打断是 Stop
+/// 被 SIGTERM 打断是 Stop。
+/// seen 是调用方去看这些目录之前记下的 `dir_stamps`：开始盯着以后先比一次，已经不一样了（看的时候、上报的时候又有登记
+/// 出现或者消失）就不睡，马上回去再看。原来没有这一步：变化正好落在“看完了、还没开始盯”的那一小段里就漏掉了，要等到下一次
+/// 心跳（一分钟）才报——两个会话差不多同时结束时，后结束的那个常落在这一段里（在报前一个的变化）
 #[cfg(target_os = "macos")]
-pub fn presence_wait(pids: &[i64], dirs: &[&str], timeout: f64) -> R<()> {
+pub fn presence_wait(pids: &[i64], dirs: &[&str], timeout: f64, seen: &[Option<(i64, i64, u64)>]) -> R<()> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     signal::check()?;
     let timeout = timeout.max(1.0);
@@ -602,6 +610,10 @@ pub fn presence_wait(pids: &[i64], dirs: &[&str], timeout: f64) -> R<()> {
         fds.push(unsafe { OwnedFd::from_raw_fd(fd) });
         add(fd as usize, libc::EVFILT_VNODE, libc::EV_ADD | libc::EV_CLEAR, libc::NOTE_WRITE);
     }
+    if dir_stamps(dirs) != seen {
+        signal::sleep(0.3)?; // 和下面等到事件时一样：等这一批文件写完再看
+        return signal::check();
+    }
     let deadline = monotonic() + timeout;
     loop {
         let ts = crate::py::time::timespec(deadline - monotonic());
@@ -623,7 +635,7 @@ pub fn presence_wait(pids: &[i64], dirs: &[&str], timeout: f64) -> R<()> {
 
 /// 没有 kqueue 的系统（Linux）：退回 5 秒看一次
 #[cfg(not(target_os = "macos"))]
-pub fn presence_wait(_pids: &[i64], _dirs: &[&str], timeout: f64) -> R<()> {
+pub fn presence_wait(_pids: &[i64], _dirs: &[&str], timeout: f64, _seen: &[Option<(i64, i64, u64)>]) -> R<()> {
     signal::sleep(if timeout.is_nan() { 1.0 } else { timeout.clamp(1.0, 5.0) })
 }
 
@@ -708,12 +720,14 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
             return Ok(()); // 映射里去掉了、这台 Mac 关掉了、cca restore 了：不再报
         };
         let targets = presence_targets();
+        // 账号目录在看之前的样子（在问进程、读登记之前记下）：等的时候拿它比，看的这段时间里变了的不会漏
+        let seen = dir_stamps(&targets.iter().flatten().map(|(_, _, d)| d.as_str()).collect::<Vec<_>>());
         let procs = match &targets {
             Some(t) if !t.is_empty() => presence_procs(),
             _ => Some(Procs::default()),
         };
         let (Some(targets), Some(procs)) = (targets, procs) else {
-            presence_wait(&[], &[], 5.0)?;
+            presence_wait(&[], &[], 5.0, &[])?;
             continue;
         };
         signal::check()?;
@@ -777,7 +791,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
             return Ok(());
         }
         let dirs: Vec<&str> = targets.iter().map(|(_, _, d)| d.as_str()).collect();
-        presence_wait(&pids, &dirs, due - monotonic())?;
+        presence_wait(&pids, &dirs, due - monotonic(), &seen)?;
     }
 }
 
@@ -986,6 +1000,40 @@ mod tests {
 
     fn vectors() -> Dict {
         json::loads(include_str!("../../tests/vectors/src_presence.json")).unwrap().as_dict().unwrap()
+    }
+
+    /// 去看账号目录和开始盯着它之间又变了（登记出现、消失）：不睡到下一次心跳，马上回去再看
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wait_does_not_sleep_through_a_change_made_while_scanning() {
+        let dir = std::env::temp_dir().join(format!("cca-presence-wait-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+        let seen = dir_stamps(&[d]);
+        assert!(seen[0].is_some() && dir_stamps(&["/nonexistent/cca-presence-wait"]) == [None]);
+        // 没变：睡满（这里 1 秒）
+        let t0 = monotonic();
+        presence_wait(&[], &[d], 1.0, &seen).unwrap();
+        assert!(monotonic() - t0 >= 0.9, "{}", monotonic() - t0);
+        // “看的时候”来了一个登记：给了很长的时限也马上回来
+        std::fs::write(dir.join("cli-4242.json"), "{}").unwrap();
+        assert_ne!(dir_stamps(&[d]), seen);
+        let t0 = monotonic();
+        presence_wait(&[], &[d], 60.0, &seen).unwrap();
+        assert!(monotonic() - t0 < 5.0, "{}", monotonic() - t0);
+        // 盯着的时候才变的：照旧被事件叫醒
+        let seen = dir_stamps(&[d]);
+        let path = dir.join("cli-4242.json");
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::fs::remove_file(path).unwrap();
+        });
+        let t0 = monotonic();
+        presence_wait(&[], &[d], 60.0, &seen).unwrap();
+        assert!((0.2..5.0).contains(&(monotonic() - t0)), "{}", monotonic() - t0);
+        late.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 期望值是原来的 Python 算的（tools/gen_src_vectors.py）

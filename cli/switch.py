@@ -51,8 +51,9 @@ cut('PYTHON="${CCA_PYTHON:-$(command -v python3 2>/dev/null)}"\n', '\t\tunset _p
 case "${TMPDIR:-}:$OSTYPE" in
 	/var/folders/*) CACHE_DIR="${TMPDIR%/}" ;;
 	*:darwin*) CACHE_DIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null); CACHE_DIR="${CACHE_DIR%/}" ;;
-	*) CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}" ;;
+	*) CACHE_DIR="" ;;
 esac
+[ -n "$CACHE_DIR" ] || CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
 ''', 'PYTHON 的查找、缓存目录')
 
 HELPER_BOOT = r'''# ---------------------------------------------------------------------------
