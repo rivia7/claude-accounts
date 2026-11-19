@@ -200,7 +200,8 @@ fn glob_compile(pat: &str) -> Result<Vec<Glob>, Fail> {
                     out.push(Glob::Any);
                 } else {
                     // & ~ | 在正则的字符组里要转义（照 Python 读的话都只是字符本身）
-                    let mut stuff: String = stuff.chars().flat_map(|c| if matches!(c, '&' | '~' | '|') { vec!['\\', c] } else { vec![c] }).collect();
+                    let mut stuff: String =
+                        stuff.chars().flat_map(|c| if matches!(c, '&' | '~' | '|') { vec!['\\', c] } else { vec![c] }).collect();
                     if let Some(rest) = stuff.strip_prefix('!') {
                         stuff = format!("^{rest}");
                     } else if stuff.starts_with(['^', '[']) {
@@ -440,7 +441,10 @@ fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>, (String, &'static s
             if !ai.ai_addr.is_null() {
                 if ai.ai_family == libc::AF_INET && ai.ai_addrlen as usize >= std::mem::size_of::<libc::sockaddr_in>() {
                     let sa = &*ai.ai_addr.cast::<libc::sockaddr_in>();
-                    out.push(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr)), u16::from_be(sa.sin_port))));
+                    out.push(SocketAddr::V4(SocketAddrV4::new(
+                        Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr)),
+                        u16::from_be(sa.sin_port),
+                    )));
                 } else if ai.ai_family == libc::AF_INET6 && ai.ai_addrlen as usize >= std::mem::size_of::<libc::sockaddr_in6>() {
                     let sa = &*ai.ai_addr.cast::<libc::sockaddr_in6>();
                     let ip = Ipv6Addr::from(sa.sin6_addr.s6_addr);
@@ -552,7 +556,8 @@ fn mail_connect(s: &mut TcpStream) -> Result<(), Tunnel> {
     let line: Vec<char> = buf[..end].iter().map(|b| *b as char).collect();
     // ^HTTP/1\.[01] 200\b：200 后面不能紧跟着字（Python 的 \w：字母数字和下划线）
     let head: String = line.iter().take(12).collect();
-    let ok = (head == "HTTP/1.0 200" || head == "HTTP/1.1 200") && !line.get(12).is_some_and(|c| *c == '_' || crate::py::uni::is_alnum(*c));
+    let ok = (head == "HTTP/1.0 200" || head == "HTTP/1.1 200")
+        && !line.get(12).is_some_and(|c| *c == '_' || crate::py::uni::is_alnum(*c));
     if !ok {
         let shown: String = line.iter().map(|c| if (' '..='~').contains(c) { *c } else { '?' }).take(80).collect();
         return Err(proxy_retry(format!("HTTP 代理不肯连 {target}（{shown}）")));
@@ -593,7 +598,8 @@ pub fn mail_dial(r: &Route, timeout: f64) -> R<TcpStream> {
 /// CCA_MAIL_CAFILE（只给测试的另一份 CA）这一次认不认：只在 HOME 换过（测试的沙箱）、套接字连的是本机（测试的代理）时才算。
 /// 用户真正的主目录下、连的不是本机时一律不认：环境变量换不掉对 Gmail 的证书校验
 fn test_ca(ca: Option<&str>, swapped: impl FnOnce() -> bool, peer: impl FnOnce() -> Option<IpAddr>) -> Option<&str> {
-    ca.filter(|ca| !ca.is_empty()).filter(|_| swapped() && peer().is_some_and(|ip| matches!(ip.to_string().as_str(), "127.0.0.1" | "::1")))
+    ca.filter(|ca| !ca.is_empty())
+        .filter(|_| swapped() && peer().is_some_and(|ip| matches!(ip.to_string().as_str(), "127.0.0.1" | "::1")))
 }
 
 /// 在连好的套接字上做 TLS，照常校验 imap.gmail.com 的证书，绝不跳过校验。
@@ -626,8 +632,8 @@ pub fn mail_tls(s: TcpStream, timeout: f64) -> R<TlsStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmd::mail::testing::vectors;
     use crate::cmd::mail::mail_error;
+    use crate::cmd::mail::testing::vectors;
     use crate::dict;
     use crate::py::obj::V;
     use std::net::TcpListener;
@@ -693,22 +699,38 @@ mod tests {
         for pat in ["*.gmail.com", ".gmail.com", "imap.gmail.com", "IMAP.GMAIL.COM"] {
             assert_eq!(route(Some("system"), Some((kv.clone(), vec![pat.to_string()])), None).unwrap(), Route::direct(), "{pat}");
         }
-        assert_eq!(route(Some("system"), Some((kv, vec!["*.google.com".to_string()])), None).unwrap(), via(Via::Socks5, "127.0.0.1", 7892));
+        assert_eq!(
+            route(Some("system"), Some((kv, vec!["*.google.com".to_string()])), None).unwrap(),
+            via(Via::Socks5, "127.0.0.1", 7892)
+        );
     }
 
     #[test]
     fn explicit_specs() {
         assert_eq!(route(Some("direct"), None, None).unwrap(), Route::direct());
         assert_eq!(route(Some("socks5://127.0.0.1:7897"), None, None).unwrap(), via(Via::Socks5, "127.0.0.1", 7897));
-        assert_eq!(route(Some("socks5h://proxy.example.com:1080/"), None, None).unwrap(), via(Via::Socks5, "proxy.example.com", 1080));
+        assert_eq!(
+            route(Some("socks5h://proxy.example.com:1080/"), None, None).unwrap(),
+            via(Via::Socks5, "proxy.example.com", 1080)
+        );
         assert_eq!(route(Some("http://[::1]:8080"), None, None).unwrap(), via(Via::Http, "::1", 8080));
-        for bad in ["socks4://127.0.0.1:1", "http://127.0.0.1", "http://127.0.0.1:0", "http://127.0.0.1:70000", "http://a b:1", "https://127.0.0.1:1", "system2"]
-        {
+        for bad in [
+            "socks4://127.0.0.1:1",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:70000",
+            "http://a b:1",
+            "https://127.0.0.1:1",
+            "system2",
+        ] {
             let e = route(Some(bad), None, None).unwrap_err();
             assert!(e.is("MailFatal"), "{bad}");
             assert_eq!(
                 mail_error(&e),
-                Some(("proxy", format!("连 Gmail 的方式 {bad} 认不出：要写 system、direct、socks5://主机:端口 或 http://主机:端口").as_str()))
+                Some((
+                    "proxy",
+                    format!("连 Gmail 的方式 {bad} 认不出：要写 system、direct、socks5://主机:端口 或 http://主机:端口").as_str()
+                ))
             );
         }
     }
@@ -736,9 +758,16 @@ mod tests {
         );
         // 别的端口、别的主机、写坏了的 CCA_PROXY 不算
         for other in ["http://127.0.0.1:7898", "http://192.0.2.10:7897", "", "http://127.0.0.1:x7897", "nonsense"] {
-            assert_eq!(route_with(Some("socks5://127.0.0.1:7897"), &c(), sysp(), other).unwrap(), via(Via::Socks5, "127.0.0.1", 7897), "{other}");
+            assert_eq!(
+                route_with(Some("socks5://127.0.0.1:7897"), &c(), sysp(), other).unwrap(),
+                via(Via::Socks5, "127.0.0.1", 7897),
+                "{other}"
+            );
         }
-        assert!(mail_route_exit(&via(Via::Http, "LOCALHOST", 7897), &Dict::new(), "socks5://localhost:7897").unwrap(), "主机名不分大小写");
+        assert!(
+            mail_route_exit(&via(Via::Http, "LOCALHOST", 7897), &Dict::new(), "socks5://localhost:7897").unwrap(),
+            "主机名不分大小写"
+        );
         // 手改坏了的 config.json：原来是没人接的 AttributeError
         let bad = dict! { "ports" => crate::list![7901] };
         assert!(route(Some("socks5://127.0.0.1:7901"), None, Some(bad)).unwrap_err().is("AttributeError"));
@@ -851,7 +880,10 @@ mod tests {
             ("proxy".into(), "SOCKS5 代理的回应认不出".into())
         );
         assert_eq!(dial_err(Via::Socks5, vec![b"\x05".to_vec()], false, 2.0), ("proxy".into(), "代理断开了连接".into()));
-        assert_eq!(dial_err(Via::Socks5, vec![], true, 0.2), ("proxy".into(), "代理 127.0.0.1:PORT 没有接通 Gmail（timed out）".into()));
+        assert_eq!(
+            dial_err(Via::Socks5, vec![], true, 0.2),
+            ("proxy".into(), "代理 127.0.0.1:PORT 没有接通 Gmail（timed out）".into())
+        );
     }
 
     #[test]
@@ -893,8 +925,14 @@ mod tests {
 
     #[test]
     fn io_errors_like_python() {
-        assert_eq!(io_text(&io::Error::from_raw_os_error(libc::ECONNREFUSED)), ("Connection refused".into(), "ConnectionRefusedError"));
-        assert_eq!(io_text(&io::Error::from_raw_os_error(libc::ECONNRESET)), ("Connection reset by peer".into(), "ConnectionResetError"));
+        assert_eq!(
+            io_text(&io::Error::from_raw_os_error(libc::ECONNREFUSED)),
+            ("Connection refused".into(), "ConnectionRefusedError")
+        );
+        assert_eq!(
+            io_text(&io::Error::from_raw_os_error(libc::ECONNRESET)),
+            ("Connection reset by peer".into(), "ConnectionResetError")
+        );
         assert_eq!(io_text(&io::Error::from_raw_os_error(libc::EPIPE)), ("Broken pipe".into(), "BrokenPipeError"));
         assert_eq!(io_text(&io::Error::from(io::ErrorKind::WouldBlock)).0, "timed out");
         assert_eq!(io_text(&io::Error::from(io::ErrorKind::TimedOut)).0, "timed out");

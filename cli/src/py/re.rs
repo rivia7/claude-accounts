@@ -96,7 +96,10 @@ impl Re {
     }
 
     fn build(&self, p: String) -> Regex {
-        regex::RegexBuilder::new(&p).size_limit(64 << 20).build().unwrap_or_else(|e| panic!("正则 {:?} 翻译成 {p:?} 后编译不了：{e}", self.body))
+        regex::RegexBuilder::new(&p)
+            .size_limit(64 << 20)
+            .build()
+            .unwrap_or_else(|e| panic!("正则 {:?} 翻译成 {p:?} 后编译不了：{e}", self.body))
     }
 
     fn any(&self) -> &Regex {

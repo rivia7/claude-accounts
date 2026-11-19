@@ -59,7 +59,8 @@ pub fn cmd_router_env(args: &[String]) -> R<()> {
 pub fn cmd_router_set(args: &[String]) -> R<()> {
     arity("cmd_router_set", args, 4, 4)?;
     let c = cfg_load()?;
-    let port = text::to_int(&args[1]).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[1]))))?;
+    let port = text::to_int(&args[1])
+        .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[1]))))?;
     // 换路由器：新路由器上没有 owners 文件，第一次推会直接覆盖
     c.set("router", dict! { "host" => &args[0], "port" => port, "user" => &args[2], "key" => &args[3] });
     c.set("proxy_host", &args[0]);
@@ -89,7 +90,8 @@ pub fn account_named(table: &Dict, q: &str) -> R<String> {
     }
     if text::isdigit(q) {
         // 原来是 int(q)：² 这类“是数字但不是十进制数字”的在 Python 里会出错退出
-        let n = text::to_int(q).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(q))))?;
+        let n = text::to_int(q)
+            .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(q))))?;
         if 1 <= n && n as usize <= keys.len() {
             return Ok(keys[n as usize - 1].to_string());
         }
@@ -337,7 +339,14 @@ pub fn cmd_policy_rows(args: &[String]) -> R<()> {
             } else {
                 format!("（映射里写的是 {}，路由器上已经改名）", written.map_or("None".to_string(), |w| w.py_str()))
             };
-            rows.push(format!("    {}  {} → {}{}{}", tool.label, label_of(&k), n, note, if bad { "（不在可选节点里，这个账号用不了）" } else { "" }));
+            rows.push(format!(
+                "    {}  {} → {}{}{}",
+                tool.label,
+                label_of(&k),
+                n,
+                note,
+                if bad { "（不在可选节点里，这个账号用不了）" } else { "" }
+            ));
         }
         let miss = policy_missing(&c, &table, tool);
         if !miss.is_empty() && !policy_in_use(tool) {

@@ -173,7 +173,10 @@ mod tests {
     fn pem_blocks_are_found_and_decoded() {
         let pem = "junk\n-----BEGIN CERTIFICATE-----\nAQID\nBAU=\n-----END CERTIFICATE-----\ntext between\n-----BEGIN CERTIFICATE-----\n/w==\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nnot closed";
         assert_eq!(pem_certificates(pem), vec![vec![1, 2, 3, 4, 5], vec![0xff]]);
-        assert!(pem_certificates("").is_empty() && pem_certificates("-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----").is_empty());
+        assert!(
+            pem_certificates("").is_empty()
+                && pem_certificates("-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----").is_empty()
+        );
     }
 
     /// 系统的根证书读得出来（macOS 上这个文件一直都有；别的系统不查）

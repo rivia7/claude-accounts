@@ -78,7 +78,8 @@ pub fn splitlines(s: &str) -> Vec<&str> {
     let mut start = 0;
     let mut it = s.char_indices().peekable();
     while let Some((i, c)) = it.next() {
-        let brk = matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+        let brk =
+            matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}');
         if !brk {
             continue;
         }
@@ -193,7 +194,10 @@ pub fn to_float(s: &str) -> Option<f64> {
     let s = if s.is_ascii() {
         s
     } else {
-        ascii = s.chars().map(|c| if c.is_ascii() { Some(c) } else { uni::decimal_value(c).and_then(|d| char::from_digit(d, 10)) }).collect::<Option<String>>()?;
+        ascii = s
+            .chars()
+            .map(|c| if c.is_ascii() { Some(c) } else { uni::decimal_value(c).and_then(|d| char::from_digit(d, 10)) })
+            .collect::<Option<String>>()?;
         &ascii
     };
     let b = s.as_bytes();

@@ -494,7 +494,6 @@ fn int_eq_float(i: i64, f: f64) -> bool {
     f.fract() == 0.0 && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) && f as i64 == i
 }
 
-
 /// `repr(字符串)`：默认单引号，里面有单引号、没有双引号时换成双引号；不可打印的字符写成转义
 pub fn repr_str(s: &str) -> String {
     let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };

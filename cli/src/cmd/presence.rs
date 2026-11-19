@@ -53,11 +53,18 @@ pub static PRESENCE_SALT_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^([0-9a-f
 /// 严格检查；客户端只在完全合格时启用（不合格就当没有，映射的其余部分照用）
 pub fn presence_problems(p: &V) -> Vec<String> {
     let Some(p) = p.as_dict() else {
-        return vec!["presence 应该是 {\"url\": \"https://地址:端口\", \"pins\": [\"sha256//…\"], \"salt\": \"…\"} 形式的对象".to_string()];
+        return vec![
+            "presence 应该是 {\"url\": \"https://地址:端口\", \"pins\": [\"sha256//…\"], \"salt\": \"…\"} 形式的对象".to_string()
+        ];
     };
     let mut errs = Vec::new();
     let url = p.get("url");
-    let port = url.as_ref().and_then(|u| u.as_str()).and_then(|u| PRESENCE_URL_RE.match_(u)).and_then(|m| m.name("port")).and_then(text::to_int);
+    let port = url
+        .as_ref()
+        .and_then(|u| u.as_str())
+        .and_then(|u| PRESENCE_URL_RE.match_(u))
+        .and_then(|m| m.name("port"))
+        .and_then(text::to_int);
     if !port.is_some_and(|n| (1..=65535).contains(&n)) {
         errs.push("presence.url 应该是 https://地址:端口（例如 https://203.0.113.10:18443）".to_string());
     }
@@ -120,7 +127,8 @@ pub fn presence_load() -> R<(String, Option<Dict>)> {
 /// 上报用的账号摘要：服务器只看到它，看不到邮箱（盐在签名的映射里，各台 Mac 算出来的一样）
 pub fn presence_aid(salt: &str, tool: &str, email: &str) -> R<String> {
     let compact: String = salt.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    let key = crate::py::hash::from_hex(&compact).ok_or_else(|| crate::py::Fail::Value("non-hexadecimal number found in fromhex() arg".into()))?;
+    let key = crate::py::hash::from_hex(&compact)
+        .ok_or_else(|| crate::py::Fail::Value("non-hexadecimal number found in fromhex() arg".into()))?;
     let digest = crate::py::hash::hmac_sha256(&key, format!("{}\0{}", tool, email.to_lowercase()).as_bytes());
     Ok(crate::py::hash::to_hex(&digest)[..32].to_string())
 }
@@ -319,7 +327,6 @@ impl Procs {
     pub fn rows(&self) -> &[(i64, ProcInfo)] {
         &self.rows
     }
-
 }
 
 /// 全部进程 {pid: (ppid, 终端, CPU 秒数, 启动时间戳, 命令行)}（一次 ps；Linux 上读 /proc）；读不了是 None
@@ -339,7 +346,13 @@ pub fn presence_procs() -> Option<Procs> {
         let f = text::split_ws_n(&rest, 8);
         if f.len() >= 8 && text::isdigit(f[0]) {
             let Some(ppid) = text::to_int(f[0]) else { continue };
-            let info = ProcInfo { ppid, tty: f[1].to_string(), cpu: cpu_secs(f[2]), start: lstart_epoch(&f[3..8].join(" ")), cmd: f.get(8).map_or(String::new(), |s| s.to_string()) };
+            let info = ProcInfo {
+                ppid,
+                tty: f[1].to_string(),
+                cpu: cpu_secs(f[2]),
+                start: lstart_epoch(&f[3..8].join(" ")),
+                cmd: f.get(8).map_or(String::new(), |s| s.to_string()),
+            };
             out.push((pid, info));
         }
     }
@@ -381,7 +394,14 @@ fn mark_int(m: &Dict, k: &str) -> i64 {
 
 /// 这一轮开着的会话：({账号摘要: {"cli": [[开了多久, 闲置多久]…], "app": [开了多久, 闲置多久] | None}}, 要盯着退出的进程号)。
 /// apps 是桌面 App 的 CPU 采样（这里更新）
-pub fn presence_scan(salt: &str, targets: &[Target], procs: &Procs, apps: &mut AppSamples, now: f64, mono: f64) -> R<(Dict, Vec<i64>)> {
+pub fn presence_scan(
+    salt: &str,
+    targets: &[Target],
+    procs: &Procs,
+    apps: &mut AppSamples,
+    now: f64,
+    mono: f64,
+) -> R<(Dict, Vec<i64>)> {
     let units = Dict::new();
     let mut pids: Vec<i64> = Vec::new();
     let mut live: HashSet<(i64, i64)> = HashSet::new();
@@ -436,7 +456,11 @@ pub fn presence_scan(salt: &str, targets: &[Target], procs: &Procs, apps: &mut A
             live.insert(k);
             let rec = match apps.get_mut(&k) {
                 // 第一次见到：刚打开的算在用，开了很久的先当作刚好闲置满 10 分钟，下一拍看 CPU
-                None => *apps.entry(k).or_insert([cpu, mono, if now - (start as f64) < PRESENCE_IDLE { start as f64 } else { now - PRESENCE_IDLE }]),
+                None => *apps.entry(k).or_insert([
+                    cpu,
+                    mono,
+                    if now - (start as f64) < PRESENCE_IDLE { start as f64 } else { now - PRESENCE_IDLE },
+                ]),
                 Some(rec) => {
                     if mono - rec[1] >= 30.0 {
                         // 隔得太近的两次采样不准：至少隔 30 秒
@@ -470,7 +494,11 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     doc.set("nonce", token_hex(16));
     let body = json::dumps(&V::Dict(doc), json::Fmt::new().utf8().compact());
     let key = cfg.at("key").py_str();
-    let sign = Proc::new(["ssh-keygen", "-Y", "sign", "-q", "-n", "cca-presence", "-f", key.as_str()]).input(body.as_bytes()).stdout(Out::Capture).stderr(Out::Null).timeout(10.0);
+    let sign = Proc::new(["ssh-keygen", "-Y", "sign", "-q", "-n", "cca-presence", "-f", key.as_str()])
+        .input(body.as_bytes())
+        .stdout(Out::Capture)
+        .stderr(Out::Null)
+        .timeout(10.0);
     let sig = sign.run().map(|done| done.stdout).unwrap_or_default();
     signal::check()?;
     if sig.is_empty() {
@@ -478,11 +506,34 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     }
     let pins: Vec<String> = cfg.list("pins").map(|p| p.items().iter().map(|x| x.py_str()).collect()).unwrap_or_default();
     let args: Vec<String> = [
-        "curl", "-q", "-sS", "-k", "--proxy", "", "--noproxy", "*", "--proto", "=https", "--max-redirs", "0", "--connect-timeout", "5", "-m",
-        &timeout.to_string(), "--pinnedpubkey", &pins.join(";"), "-H", "Content-Type: application/json", "-H",
+        "curl",
+        "-q",
+        "-sS",
+        "-k",
+        "--proxy",
+        "",
+        "--noproxy",
+        "*",
+        "--proto",
+        "=https",
+        "--max-redirs",
+        "0",
+        "--connect-timeout",
+        "5",
+        "-m",
+        &timeout.to_string(),
+        "--pinnedpubkey",
+        &pins.join(";"),
+        "-H",
+        "Content-Type: application/json",
+        "-H",
         &format!("X-Cca-Sig: {}", b64encode(&sig)),
-        "-H", "Expect:", // 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
-        "--data-binary", "@-", "-w", "\n%{http_code}",
+        "-H",
+        "Expect:", // 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
+        "--data-binary",
+        "@-",
+        "-w",
+        "\n%{http_code}",
         &format!("{}/v1/{}", cfg.at("url").py_str(), op),
     ]
     .iter()
@@ -503,7 +554,8 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
         return Ok((0, dict! { "error" => "unreachable" }));
     }
     let j = json::loads(out).ok().and_then(|j| j.as_dict()).unwrap_or_default();
-    let code = text::to_int(code).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", repr_str(code))))?;
+    let code =
+        text::to_int(code).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", repr_str(code))))?;
     Ok((code, j))
 }
 
@@ -943,7 +995,13 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         }
         // 这台设备在前，再按状态、最近用过的在前、名字
         rows.sort_by(|a, b| {
-            let key = |r: &Dict| (!r.truthy("me"), order(&r.at("state").py_str()), -r.get("last_used_epoch").filter(|x| x.truthy()).and_then(|x| x.as_num()).unwrap_or(0.0));
+            let key = |r: &Dict| {
+                (
+                    !r.truthy("me"),
+                    order(&r.at("state").py_str()),
+                    -r.get("last_used_epoch").filter(|x| x.truthy()).and_then(|x| x.as_num()).unwrap_or(0.0),
+                )
+            };
             let (ka, kb) = (key(a), key(b));
             ka.0.cmp(&kb.0)
                 .then(ka.1.cmp(&kb.1))
@@ -980,7 +1038,12 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         let devices = a.list("devices").expect("刚建的");
         for d in devices.items() {
             let d = d.as_dict().expect("刚建的");
-            lines.push(format!("    · {}{}  {}", d.at("name").py_str(), if d.truthy("me") { "（这台 Mac）" } else { "" }, presence_line(&d, recv)?));
+            lines.push(format!(
+                "    · {}{}  {}",
+                d.at("name").py_str(),
+                if d.truthy("me") { "（这台 Mac）" } else { "" },
+                presence_line(&d, recv)?
+            ));
         }
         if devices.is_empty() {
             lines.push("    30 天内没有设备经 cca 用过".to_string());
@@ -1063,18 +1126,48 @@ mod tests {
             let rows = step.list("procs").unwrap().items().into_iter().map(|p| {
                 let p = p.as_list().unwrap();
                 let int = |i: isize| p.at(i).as_int().unwrap();
-                (int(0), ProcInfo { ppid: int(1), tty: p.at(2).py_str(), cpu: p.at(3).as_num().unwrap(), start: int(4), cmd: p.at(5).py_str() })
+                (
+                    int(0),
+                    ProcInfo {
+                        ppid: int(1),
+                        tty: p.at(2).py_str(),
+                        cpu: p.at(3).as_num().unwrap(),
+                        start: int(4),
+                        cmd: p.at(5).py_str(),
+                    },
+                )
             });
             let procs = Procs::from_rows(rows);
-            let (units, mut pids) = presence_scan(&salt, &targets, &procs, &mut apps, step.at("now").as_num().unwrap(), step.at("mono").as_num().unwrap()).unwrap();
+            let (units, mut pids) = presence_scan(
+                &salt,
+                &targets,
+                &procs,
+                &mut apps,
+                step.at("now").as_num().unwrap(),
+                step.at("mono").as_num().unwrap(),
+            )
+            .unwrap();
             pids.sort_unstable();
             assert_eq!(json::dumps(&V::Dict(units), json::LINE), json::dumps(&step.at("units"), json::LINE), "{label}：units");
-            assert_eq!(pids, step.list("pids").unwrap().items().iter().map(|p| p.as_int().unwrap()).collect::<Vec<_>>(), "{label}：pids");
-            let mut got: Vec<String> =
-                apps.iter().map(|(k, v)| format!("{} {} {} {} {}", k.0, k.1, num::float_repr(v[0]), num::float_repr(v[1]), num::float_repr(v[2]))).collect();
+            assert_eq!(
+                pids,
+                step.list("pids").unwrap().items().iter().map(|p| p.as_int().unwrap()).collect::<Vec<_>>(),
+                "{label}：pids"
+            );
+            let mut got: Vec<String> = apps
+                .iter()
+                .map(|(k, v)| {
+                    format!("{} {} {} {} {}", k.0, k.1, num::float_repr(v[0]), num::float_repr(v[1]), num::float_repr(v[2]))
+                })
+                .collect();
             got.sort();
-            let want: Vec<String> =
-                step.list("apps").unwrap().items().iter().map(|a| a.as_list().unwrap().items().iter().map(|x| x.py_str()).collect::<Vec<_>>().join(" ")).collect();
+            let want: Vec<String> = step
+                .list("apps")
+                .unwrap()
+                .items()
+                .iter()
+                .map(|a| a.as_list().unwrap().items().iter().map(|x| x.py_str()).collect::<Vec<_>>().join(" "))
+                .collect();
             assert_eq!(got, want, "{label}：采样");
         }
     }
@@ -1082,12 +1175,19 @@ mod tests {
     /// tests/presence.py 的 test_identity：指纹和 `ssh-keygen -l -E sha256` 给的一样（这把公钥是编的，期望值是 ssh-keygen 算的）
     #[test]
     fn ssh_fp_like_ssh_keygen() {
-        assert_eq!(ssh_fp("AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f").as_deref(), Some("SHA256:ZkAslGjFiUHdGf/WUL8rQvkib4PTvQatUV0OUQSncCA"));
+        assert_eq!(
+            ssh_fp("AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f").as_deref(),
+            Some("SHA256:ZkAslGjFiUHdGf/WUL8rQvkib4PTvQatUV0OUQSncCA")
+        );
         assert_eq!(ssh_fp("not base64!"), None);
         let a = presence_aid("abababababababababababababababab", "claude", "Alice@Example.com").unwrap();
         assert_eq!(a.len(), 32);
         assert_eq!(a, presence_aid("abababababababababababababababab", "claude", "alice@example.com").unwrap(), "邮箱不分大小写");
-        assert_ne!(a, presence_aid("abababababababababababababababab", "codex", "alice@example.com").unwrap(), "Claude 账号和 Codex 账号不撞");
+        assert_ne!(
+            a,
+            presence_aid("abababababababababababababababab", "codex", "alice@example.com").unwrap(),
+            "Claude 账号和 Codex 账号不撞"
+        );
         assert_ne!(a, presence_aid("11111111111111111111111111111111", "claude", "alice@example.com").unwrap(), "换了盐就认不出");
     }
 
@@ -1121,8 +1221,11 @@ mod tests {
         };
         let app = format!("/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir={dir}/desktop --proxy-server=x");
         let mut apps = AppSamples::new();
-        let mut scan = |cpu: f64, t: f64, mono: f64| presence_scan(&salt, &targets, &table(cpu, app.clone()), &mut apps, t, mono).unwrap().0;
-        let app_of = |units: &Dict| units.dict(&aid).unwrap().list("app").unwrap().items().iter().map(|x| x.as_int().unwrap()).collect::<Vec<_>>();
+        let mut scan =
+            |cpu: f64, t: f64, mono: f64| presence_scan(&salt, &targets, &table(cpu, app.clone()), &mut apps, t, mono).unwrap().0;
+        let app_of = |units: &Dict| {
+            units.dict(&aid).unwrap().list("app").unwrap().items().iter().map(|x| x.as_int().unwrap()).collect::<Vec<_>>()
+        };
         assert_eq!(app_of(&scan(10.0, now, 1000.0)), [3600, 600], "开了很久、第一次见到：先当作刚好闲置满 10 分钟");
         assert_eq!(app_of(&scan(10.5, now + 40.0, 1040.0))[1], 640, "CPU 几乎没动：还是闲置");
         assert_eq!(app_of(&scan(14.0, now + 80.0, 1080.0))[1], 0, "一拍里用掉不少 CPU（含子进程）：有动静");
@@ -1168,14 +1271,27 @@ mod tests {
         let salt = "abababababababababababababababab";
         let aid = presence_aid(salt, "claude", key).unwrap();
         let scan = |tty_: &str, start: i64, there: bool| {
-            let rows = if there { vec![(4242, ProcInfo { ppid: 1, tty: tty_.to_string(), cpu: 1.0, start, cmd: "bash cca".into() })] } else { Vec::new() };
-            let (units, pids) = presence_scan(salt, &targets, &Procs::from_rows(rows), &mut AppSamples::new(), now, 1000.0).unwrap();
+            let rows = if there {
+                vec![(4242, ProcInfo { ppid: 1, tty: tty_.to_string(), cpu: 1.0, start, cmd: "bash cca".into() })]
+            } else {
+                Vec::new()
+            };
+            let (units, pids) =
+                presence_scan(salt, &targets, &Procs::from_rows(rows), &mut AppSamples::new(), now, 1000.0).unwrap();
             (json::dumps(&V::Dict(units), json::LINE), pids)
         };
-        assert_eq!(scan(&short, 1000, true), (format!("{{\"{aid}\": {{\"cli\": [[300, 120]], \"app\": null}}}}"), vec![4242]), "闲置 = 现在 - 最后一次输入 / 输出；盯着这个会话的进程");
+        assert_eq!(
+            scan(&short, 1000, true),
+            (format!("{{\"{aid}\": {{\"cli\": [[300, 120]], \"app\": null}}}}"), vec![4242]),
+            "闲置 = 现在 - 最后一次输入 / 输出；盯着这个会话的进程"
+        );
         assert_eq!(scan(&short, 1003, true).0, "{}", "进程号被重用（启动时间对不上）：不算");
         assert_eq!(scan(&short, 1000, false).0, "{}", "cca 被 kill -9 留下的登记：进程没了，不算");
-        assert_eq!(scan("??", 1000, true).0, format!("{{\"{aid}\": {{\"cli\": [[300, 0]], \"app\": null}}}}"), "没有终端：在跑就算在干活");
+        assert_eq!(
+            scan("??", 1000, true).0,
+            format!("{{\"{aid}\": {{\"cli\": [[300, 0]], \"app\": null}}}}"),
+            "没有终端：在跑就算在干活"
+        );
     }
 
     #[test]

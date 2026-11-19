@@ -134,7 +134,8 @@ impl PySock {
             if left < 0.0 {
                 return Err(NetErr::Timeout);
             }
-            let mut p = libc::pollfd { fd: self.fd.as_raw_fd(), events: if writing { libc::POLLOUT } else { libc::POLLIN }, revents: 0 };
+            let mut p =
+                libc::pollfd { fd: self.fd.as_raw_fd(), events: if writing { libc::POLLOUT } else { libc::POLLIN }, revents: 0 };
             let ms = (left * 1000.0).ceil().min(i32::MAX as f64) as i32;
             // SAFETY: p 是有效的可写内存，个数如实给出
             let n = unsafe { libc::poll(&mut p, 1, ms) };

@@ -3,7 +3,6 @@
 //! `device.json`（账号目录里，600）是账号的固定标识；客户端自己存的那份（Claude 的 `.claude.json` 里的 userID / machineID、
 //! Codex 的 `installation_id`、agy 的 `installation_id` 和 `jetski_state.pbtxt`）每次照它修回来。`prepare_device` 要在 `Lock` 里调。
 
-use crate::py::shutil::{listdir, uuid_str, write_text};
 use crate::core::base::*;
 use crate::core::model::{adir, cdir};
 use crate::core::tool::{t, Kind};
@@ -12,6 +11,7 @@ use crate::py::obj::{Dict, V};
 use crate::py::path;
 use crate::py::rand;
 use crate::py::re::Re;
+use crate::py::shutil::{listdir, uuid_str, write_text};
 use crate::py::text;
 use crate::py::{die, R};
 use crate::{dict, re};
@@ -99,7 +99,14 @@ type Seen = HashMap<&'static str, HashSet<String>>;
 
 /// `device_identity` 里定下各字段取什么值的那一段（原来写在一起；单独出来是为了能测“撞了再换”这种靠随机数碰不到的路）。
 /// own 是这个账号固定记录里的，native 是客户端自己存的；fresh 给一个新值
-fn settle_identity(fields: &[&'static str], own: &Dict, native: &Dict, used: &Seen, legacy: &Seen, fresh: &mut dyn FnMut(&str) -> String) -> Dict {
+fn settle_identity(
+    fields: &[&'static str],
+    own: &Dict,
+    native: &Dict,
+    used: &Seen,
+    legacy: &Seen,
+    fresh: &mut dyn FnMut(&str) -> String,
+) -> Dict {
     let identity = dict! { "version" => 1 };
     for n in fields {
         let fixed = device_value(n, own.get(n).as_ref());
@@ -130,7 +137,11 @@ pub fn device_identity(key: &str, native: &Dict) -> R<Dict> {
     let fields = device_fields();
     let mut used: Seen = fields.iter().map(|n| (*n, HashSet::new())).collect();
     let mut legacy: Seen = fields.iter().map(|n| (*n, HashSet::new())).collect();
-    let master = if t().kind == Kind::Claude { load_quiet(&MASTER_JSON).and_then(|j| j.as_dict()) } else { Some(device_native(&t().master)) };
+    let master = if t().kind == Kind::Claude {
+        load_quiet(&MASTER_JSON).and_then(|j| j.as_dict())
+    } else {
+        Some(device_native(&t().master))
+    };
     if let Some(master) = master {
         for n in fields {
             if let Some(value) = device_value(n, master.get(n).as_ref()) {
@@ -280,7 +291,10 @@ mod tests {
         assert_eq!(device_value("userID", None), None);
         let v = |s: &str| device_value("installation_id", Some(&V::from(s)));
         assert_eq!(v(" ABCDEF01-2345-6789-ABCD-EF0123456789\n").as_deref(), Some("abcdef01-2345-6789-abcd-ef0123456789"));
-        assert_eq!(device_value("installation_uuid", Some(&V::from("{abcdef0123456789abcdef0123456789}"))).as_deref(), Some("abcdef01-2345-6789-abcd-ef0123456789"));
+        assert_eq!(
+            device_value("installation_uuid", Some(&V::from("{abcdef0123456789abcdef0123456789}"))).as_deref(),
+            Some("abcdef01-2345-6789-abcd-ef0123456789")
+        );
         assert_eq!(v("not-a-uuid"), None);
         assert_eq!(v(&hex), None);
         assert_eq!(device_value("installation_id", Some(&V::None)), None);
@@ -318,16 +332,32 @@ mod tests {
         assert_eq!(queue, ["7".repeat(64)]);
         // 两边都没有合法的值：换新的
         let mut once = vec!["6".repeat(64), "5".repeat(64)];
-        let got = settle_identity(fields, &dict! { "userID" => "short" }, &dict! { "machineID" => V::None }, &none, &none, &mut |_: &str| once.remove(0));
-        assert_eq!(V::Dict(got).py_repr(), format!("{{'version': 1, 'userID': '{}', 'machineID': '{}'}}", "6".repeat(64), "5".repeat(64)));
+        let got = settle_identity(
+            fields,
+            &dict! { "userID" => "short" },
+            &dict! { "machineID" => V::None },
+            &none,
+            &none,
+            &mut |_: &str| once.remove(0),
+        );
+        assert_eq!(
+            V::Dict(got).py_repr(),
+            format!("{{'version': 1, 'userID': '{}', 'machineID': '{}'}}", "6".repeat(64), "5".repeat(64))
+        );
     }
 
     #[test]
     fn fresh_values_have_the_clients_shapes() {
         let (x, y) = (fresh_device_value("userID"), fresh_device_value("machineID"));
-        assert!(x != y && device_value("userID", Some(&V::from(x.as_str()))).is_some() && device_value("machineID", Some(&V::from(y.as_str()))).is_some());
+        assert!(
+            x != y
+                && device_value("userID", Some(&V::from(x.as_str()))).is_some()
+                && device_value("machineID", Some(&V::from(y.as_str()))).is_some()
+        );
         let (u, w) = (fresh_device_value("installation_id"), fresh_device_value("installation_uuid"));
-        assert!(u != w && u.len() == 36 && device_value("installation_id", Some(&V::from(u.as_str()))).as_deref() == Some(u.as_str()));
+        assert!(
+            u != w && u.len() == 36 && device_value("installation_id", Some(&V::from(u.as_str()))).as_deref() == Some(u.as_str())
+        );
         assert_eq!(device_value("installation_uuid", Some(&V::from(w.as_str()))).as_deref(), Some(w.as_str()));
     }
 
@@ -348,7 +378,10 @@ mod tests {
         // 原子替换：链接换成普通文件，原来指向的那份不动
         write_private(&format!("{d}/soft"), "y").unwrap();
         assert!(private_file(&format!("{d}/soft")));
-        assert_eq!((std::fs::read_to_string(&f).unwrap().as_str(), std::fs::read_to_string(format!("{d}/soft")).unwrap().as_str()), ("x", "y"));
+        assert_eq!(
+            (std::fs::read_to_string(&f).unwrap().as_str(), std::fs::read_to_string(format!("{d}/soft")).unwrap().as_str()),
+            ("x", "y")
+        );
         assert_eq!(fs::mode_of(&format!("{d}/soft")).unwrap(), 0o600);
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -374,7 +407,8 @@ mod tests {
         std::fs::write(&ids, "abc").unwrap();
         assert_eq!(shown(Kind::Agy), "{'installation_id': 'abc', 'installation_uuid': 'x'}");
         // 只认顶层的那一行（行首、整行）
-        std::fs::write(&state, "nested {\n  installation_uuid: \"inner\"\n}\ninstallation_uuid:\t\"top\" \t\r\nother: 1\n").unwrap();
+        std::fs::write(&state, "nested {\n  installation_uuid: \"inner\"\n}\ninstallation_uuid:\t\"top\" \t\r\nother: 1\n")
+            .unwrap();
         assert_eq!(shown(Kind::Agy), "{'installation_id': 'abc', 'installation_uuid': 'top'}");
         std::fs::write(&state, "installation_uuid: \"a\" # 注释\n").unwrap();
         assert_eq!(shown(Kind::Agy), "{'installation_id': 'abc'}");
@@ -402,9 +436,16 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&state).unwrap(), format!("{line}\n"));
         assert_eq!((fs::mode_of(&ids).unwrap(), fs::mode_of(&state).unwrap()), (0o600, 0o600));
         // 只换第一处顶层的那一行，别的原样；\r\n 读进来成了 \n
-        std::fs::write(&state, "a: 1\r\ninstallation_uuid: \"old\"\nb {\n  installation_uuid: \"inner\"\n}\ninstallation_uuid: \"second\"\n").unwrap();
+        std::fs::write(
+            &state,
+            "a: 1\r\ninstallation_uuid: \"old\"\nb {\n  installation_uuid: \"inner\"\n}\ninstallation_uuid: \"second\"\n",
+        )
+        .unwrap();
         agy_device_write(&d, &identity).unwrap();
-        assert_eq!(std::fs::read_to_string(&state).unwrap(), format!("a: 1\n{line}\nb {{\n  installation_uuid: \"inner\"\n}}\ninstallation_uuid: \"second\"\n"));
+        assert_eq!(
+            std::fs::read_to_string(&state).unwrap(),
+            format!("a: 1\n{line}\nb {{\n  installation_uuid: \"inner\"\n}}\ninstallation_uuid: \"second\"\n")
+        );
         // 没有那一行：加在最后（原来结尾没有换行的先补一个）
         std::fs::write(&state, "a: 1").unwrap();
         agy_device_write(&d, &identity).unwrap();

@@ -4,11 +4,38 @@
 use crate::py::url::urlsplit;
 use crate::py::{Fail, R};
 
-const USES_RELATIVE: [&str; 20] =
-    ["", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss"];
+const USES_RELATIVE: [&str; 20] = [
+    "", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu",
+    "sftp", "svn", "svn+ssh", "ws", "wss",
+];
 const USES_NETLOC: [&str; 27] = [
-    "", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn",
-    "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss", "itms-services",
+    "",
+    "ftp",
+    "http",
+    "gopher",
+    "nntp",
+    "telnet",
+    "imap",
+    "wais",
+    "file",
+    "mms",
+    "https",
+    "shttp",
+    "snews",
+    "prospero",
+    "rtsp",
+    "rtsps",
+    "rtspu",
+    "rsync",
+    "svn",
+    "svn+ssh",
+    "sftp",
+    "nfs",
+    "git",
+    "git+ssh",
+    "ws",
+    "wss",
+    "itms-services",
 ];
 
 /// `_urlsplit(url, None)` 的结果：没有的那一段是 None

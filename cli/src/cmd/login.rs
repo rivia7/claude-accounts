@@ -110,7 +110,13 @@ fn ascii_encode_error(s: &str) -> Option<Fail> {
         format!("characters in position {at}-{}", at + run - 1)
     } else {
         let n = ch as u32;
-        let shown = if n < 0x100 { format!("\\x{n:02x}") } else if n < 0x10000 { format!("\\u{n:04x}") } else { format!("\\U{n:08x}") };
+        let shown = if n < 0x100 {
+            format!("\\x{n:02x}")
+        } else if n < 0x10000 {
+            format!("\\u{n:04x}")
+        } else {
+            format!("\\U{n:08x}")
+        };
         format!("character '{shown}' in position {at}")
     };
     Some(Fail::Value(format!("'ascii' codec can't encode {what}: ordinal not in range(128)")))
@@ -208,7 +214,11 @@ pub fn login_target(url: &str) -> Option<(String, u16, String, String)> {
 pub fn cmd_login_check(args: &[String]) -> R<()> {
     arity("cmd_login_check", args, 1, 1)?;
     let url = args[0].as_str();
-    let ok = if t().kind == Kind::Agy { agy_login_target(url).is_some_and(|state| !state.is_empty()) } else { login_target(url).is_some() };
+    let ok = if t().kind == Kind::Agy {
+        agy_login_target(url).is_some_and(|state| !state.is_empty())
+    } else {
+        login_target(url).is_some()
+    };
     if ok {
         return Ok(());
     }
@@ -233,7 +243,10 @@ pub fn node_fp_here(c: &Dict, n: &str) -> V {
         return f;
     }
     let fill = policy_fill().and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
-    let found = crate::cmd::corenet::core_defs().into_iter().chain(fill.iter().filter_map(|p| p.as_dict())).find(|p| p.get("name").is_some_and(|name| name.as_str() == Some(n)));
+    let found = crate::cmd::corenet::core_defs()
+        .into_iter()
+        .chain(fill.iter().filter_map(|p| p.as_dict()))
+        .find(|p| p.get("name").is_some_and(|name| name.as_str() == Some(n)));
     V::from(found.map_or(String::new(), |p| fill_fp(&p)))
 }
 
@@ -360,13 +373,21 @@ mod tests {
     fn validators_like_the_python_regexes() {
         // 右边是 Python 的 re.match(…) 给的真假
         assert!(visible_ascii("a") && visible_ascii("!~") && visible_ascii("abc\n") && visible_ascii(&"x".repeat(8192)));
-        assert!(!visible_ascii("") && !visible_ascii("\n") && !visible_ascii("a b") && !visible_ascii("abc\n\n") && !visible_ascii("中"));
+        assert!(
+            !visible_ascii("")
+                && !visible_ascii("\n")
+                && !visible_ascii("a b")
+                && !visible_ascii("abc\n\n")
+                && !visible_ascii("中")
+        );
         assert!(!visible_ascii(&"x".repeat(8193)) && !visible_ascii("a\tb") && !visible_ascii("a\u{7f}"));
         assert!(https_url("https://x") && https_url("https://x\n") && https_url(&format!("https://{}", "x".repeat(8192))));
         assert!(!https_url("https://") && !https_url("http://x") && !https_url("HTTPS://x") && !https_url(" https://x"));
         assert!(!https_url("https://a b") && !https_url(&format!("https://{}", "x".repeat(8193))) && !https_url("https://x\n\n"));
         assert!(login_code_re("abc") && login_code_re("a\"b$c~!") && login_code_re("abc\n") && login_code_re(&"x".repeat(4096)));
-        assert!(!login_code_re("") && !login_code_re("a#b") && !login_code_re("a b") && !login_code_re("#") && !login_code_re("\n"));
+        assert!(
+            !login_code_re("") && !login_code_re("a#b") && !login_code_re("a b") && !login_code_re("#") && !login_code_re("\n")
+        );
         assert!(!login_code_re(&"x".repeat(4097)) && !login_code_re("abc\n\n") && !login_code_re("é"));
         assert_eq!(ascii_only("a\u{1}b中c d~\u{7f}", None, 80), "abc d~");
         assert_eq!(ascii_only("a\u{1}b中c d~\u{7f}", Some('?'), 200), "a?b?c d~?");
@@ -381,9 +402,15 @@ mod tests {
             Some(Fail::Value(m)) => m,
             other => panic!("{other:?}"),
         };
-        assert_eq!(said("GET /中 HTTP/1.1"), "'ascii' codec can't encode character '\\u4e2d' in position 5: ordinal not in range(128)");
+        assert_eq!(
+            said("GET /中 HTTP/1.1"),
+            "'ascii' codec can't encode character '\\u4e2d' in position 5: ordinal not in range(128)"
+        );
         assert_eq!(said("café#st"), "'ascii' codec can't encode character '\\xe9' in position 3: ordinal not in range(128)");
-        assert_eq!(said("a\u{1f600}b"), "'ascii' codec can't encode character '\\U0001f600' in position 1: ordinal not in range(128)");
+        assert_eq!(
+            said("a\u{1f600}b"),
+            "'ascii' codec can't encode character '\\U0001f600' in position 1: ordinal not in range(128)"
+        );
         assert_eq!(said("码码#x"), "'ascii' codec can't encode characters in position 0-1: ordinal not in range(128)");
         assert_eq!(said("xéèy中"), "'ascii' codec can't encode characters in position 1-2: ordinal not in range(128)");
         assert!(ascii_encode_error("ok").is_none() && ascii_encode_error("").is_none());
@@ -408,11 +435,20 @@ mod tests {
             ("https://claude.ai/oauth/authorize#frag", "https://claude.ai/oauth/authorize?login_hint=alice%40example.com#frag"),
             ("https://claude.ai/oauth/authorize?a=1#", "https://claude.ai/oauth/authorize?a=1&login_hint=alice%40example.com"),
             (" https://claude.ai/oauth/\tauthorize?a=1\n", "https://claude.ai/oauth/authorize?a=1&login_hint=alice%40example.com"),
-            ("https://u:p@claude.ai:443/x/oauth/authorize?a=1&&b", "https://u:p@claude.ai:443/x/oauth/authorize?a=1&&b&login_hint=alice%40example.com"),
-            ("https://claude.ai/oauth/authorize?LOGIN_HINT=x", "https://claude.ai/oauth/authorize?LOGIN_HINT=x&login_hint=alice%40example.com"),
+            (
+                "https://u:p@claude.ai:443/x/oauth/authorize?a=1&&b",
+                "https://u:p@claude.ai:443/x/oauth/authorize?a=1&&b&login_hint=alice%40example.com",
+            ),
+            (
+                "https://claude.ai/oauth/authorize?LOGIN_HINT=x",
+                "https://claude.ai/oauth/authorize?LOGIN_HINT=x&login_hint=alice%40example.com",
+            ),
             // 不动的：已经带了、不是 https、别的域名、别的路径
             ("https://claude.ai/oauth/authorize?login_hint", "https://claude.ai/oauth/authorize?login_hint"),
-            ("https://claude.ai/oauth/authorize?a=1&login_hint=x%40y.z", "https://claude.ai/oauth/authorize?a=1&login_hint=x%40y.z"),
+            (
+                "https://claude.ai/oauth/authorize?a=1&login_hint=x%40y.z",
+                "https://claude.ai/oauth/authorize?a=1&login_hint=x%40y.z",
+            ),
             ("http://claude.ai/oauth/authorize?a=1", "http://claude.ai/oauth/authorize?a=1"),
             ("https://claude.ai./oauth/authorize?a=1", "https://claude.ai./oauth/authorize?a=1"),
             ("https://auth.openai.com/oauth/authorize?a=1", "https://auth.openai.com/oauth/authorize?a=1"),
@@ -422,7 +458,10 @@ mod tests {
             assert_eq!(hint(k, url), want, "{url}");
         }
         assert_eq!(hint("只有别名", "https://claude.ai/oauth/authorize?a=1"), "https://claude.ai/oauth/authorize?a=1");
-        assert_eq!(hint("o'neil+x@example.com", "https://claude.com/cai/oauth/authorize"), "https://claude.com/cai/oauth/authorize?login_hint=o%27neil%2Bx%40example.com");
+        assert_eq!(
+            hint("o'neil+x@example.com", "https://claude.com/cai/oauth/authorize"),
+            "https://claude.com/cai/oauth/authorize?login_hint=o%27neil%2Bx%40example.com"
+        );
         assert!(matches!(login_hint_url(k, "https://[::1/oauth/authorize"), Err(Fail::Value(m)) if m == "Invalid IPv6 URL"));
         // Codex、agy 的登录页在对拍里（这里不换当前工具：它是全进程的，别的测试同时在跑）
     }
@@ -437,8 +476,18 @@ mod tests {
         assert_eq!(with("http://127.0.0.1:8/"), Some(("127.0.0.1".into(), 8, "/".into(), "st-1".into())));
         assert_eq!(with("http://LocalHost:65535"), Some(("localhost".into(), 65535, "/".into(), "st-1".into())));
         assert_eq!(with("http://localhost:1455/a%2520b?x=1%23f"), Some(("localhost".into(), 1455, "/a%20b".into(), "st-1".into())));
-        for bad in ["http://localhost/cb", "http://localhost:0/cb", "http://localhost:65536/cb", "http://localhost:x/cb", "https://localhost:1/cb",
-                    "http://example.com:1/cb", "http://[::1]:1/cb", "http://[::1/cb", "localhost:1455", ""] {
+        for bad in [
+            "http://localhost/cb",
+            "http://localhost:0/cb",
+            "http://localhost:65536/cb",
+            "http://localhost:x/cb",
+            "https://localhost:1/cb",
+            "http://example.com:1/cb",
+            "http://[::1]:1/cb",
+            "http://[::1/cb",
+            "localhost:1455",
+            "",
+        ] {
             assert_eq!(with(bad), None, "{bad}");
         }
         assert_eq!(target(&CB.replace("state=st-1", "state=a%23b")), None);
@@ -448,8 +497,14 @@ mod tests {
         assert_eq!(target(&format!("{CB}&state=two")).map(|t| t.3), Some("two".into()));
         assert_eq!(target(&CB.replace("code_challenge=CC", "code_challenge=")), None);
         assert_eq!(target(&CB.replace("response_type=code", "response_type=token")), None);
-        for url in [format!("http://claude.ai/oauth/authorize?{CB}"), format!("https://claude.ai/oauth/authorize/?{CB}"), format!("https://evil.example.com/oauth/authorize?{CB}"),
-                    format!("https://auth.openai.com/oauth/authorize?{CB}"), format!("https://claude.ai/oauth/authorize?{CB} "), format!("https://claude.ai/oauth/authorize?{CB}\n\n")] {
+        for url in [
+            format!("http://claude.ai/oauth/authorize?{CB}"),
+            format!("https://claude.ai/oauth/authorize/?{CB}"),
+            format!("https://evil.example.com/oauth/authorize?{CB}"),
+            format!("https://auth.openai.com/oauth/authorize?{CB}"),
+            format!("https://claude.ai/oauth/authorize?{CB} "),
+            format!("https://claude.ai/oauth/authorize?{CB}\n\n"),
+        ] {
             assert_eq!(login_target(&url), None, "{url}");
         }
         assert!(login_target(&format!("https://platform.claude.com/x/oauth/authorize?{CB}\n")).is_some());
@@ -462,14 +517,25 @@ mod tests {
         assert_eq!(agy_login_target(&format!("https://accounts.google.com/o/oauth2/auth?{q}")), Some("st-agy".into()));
         assert_eq!(agy_login_target(&format!("https://accounts.google.com/o/oauth2/v2/auth?{q}")), Some("st-agy".into()));
         assert_eq!(agy_login_target(&format!("https://Accounts.Google.com/o/oauth2/auth?{q}&x")), Some("st-agy".into()));
-        for bad in [format!("https://accounts.google.com/o/oauth2/auth/?{q}"), format!("https://accounts.google.com/x/o/oauth2/auth?{q}"), format!("http://accounts.google.com/o/oauth2/auth?{q}"),
-                    format!("https://google.com/o/oauth2/auth?{q}"), format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("antigravity.google", "antigravity.example.com")),
-                    format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("state=st-agy", "state=a%20b")), format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("code_challenge=CC", "x=1")),
-                    format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("response_type=code", "response_type=")), "https://accounts.google.com/o/oauth2/auth".to_string(), String::new()] {
+        for bad in [
+            format!("https://accounts.google.com/o/oauth2/auth/?{q}"),
+            format!("https://accounts.google.com/x/o/oauth2/auth?{q}"),
+            format!("http://accounts.google.com/o/oauth2/auth?{q}"),
+            format!("https://google.com/o/oauth2/auth?{q}"),
+            format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("antigravity.google", "antigravity.example.com")),
+            format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("state=st-agy", "state=a%20b")),
+            format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("code_challenge=CC", "x=1")),
+            format!("https://accounts.google.com/o/oauth2/auth?{}", q.replace("response_type=code", "response_type=")),
+            "https://accounts.google.com/o/oauth2/auth".to_string(),
+            String::new(),
+        ] {
             assert_eq!(agy_login_target(&bad), None, "{bad}");
         }
         assert_eq!(urlsplit_host("https://User@Accounts.Google.com:443/x"), "accounts.google.com");
-        assert_eq!((urlsplit_host("no-scheme/path"), urlsplit_host("https://[::1/x"), urlsplit_host("")), (String::new(), String::new(), String::new()));
+        assert_eq!(
+            (urlsplit_host("no-scheme/path"), urlsplit_host("https://[::1/x"), urlsplit_host("")),
+            (String::new(), String::new(), String::new())
+        );
     }
 
     #[test]
@@ -478,7 +544,9 @@ mod tests {
         assert_eq!(strs(&V::from(list!["US-A", 1])), ["US-A", "1"]);
         assert_eq!(strs(&V::from("节点A")), ["节", "点", "A"]);
         assert_eq!(strs(&V::Dict(dict! { "a" => 1, "b" => 2 })), ["a", "b"]);
-        assert!(matches!(py_iter(&V::None), Err(Fail::Other("TypeError", m)) if m[0] == "TypeError: 'NoneType' object is not iterable"));
+        assert!(
+            matches!(py_iter(&V::None), Err(Fail::Other("TypeError", m)) if m[0] == "TypeError: 'NoneType' object is not iterable")
+        );
         assert!(py_iter(&V::Int(3)).is_err() && py_iter(&V::Bool(true)).is_err());
         assert!(py_contains(&V::from(list!["US-A"]), "US-A").unwrap() && !py_contains(&V::from(list!["US-A"]), "US").unwrap());
         assert!(py_contains(&V::from("US-A,US-B"), "US").unwrap() && py_contains(&V::Dict(dict! { "US-A" => 1 }), "US-A").unwrap());

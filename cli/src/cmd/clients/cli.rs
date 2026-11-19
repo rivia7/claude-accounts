@@ -2,7 +2,10 @@
 
 use super::feed::cu_cli_latest;
 use super::pyv::*;
-use super::{cu, cu_download, cu_run, cu_save_state, cu_target, cu_validate_plan, cu_version, cu_version_str, getenv, home, with_tempdir, ClientUpdateLock};
+use super::{
+    cu, cu_download, cu_run, cu_save_state, cu_target, cu_validate_plan, cu_version, cu_version_str, getenv, home, with_tempdir,
+    ClientUpdateLock,
+};
 use crate::py::fs::gettempdir;
 use crate::py::obj::{Dict, V};
 use crate::py::proc::Done;
@@ -16,7 +19,14 @@ use crate::{dict, re};
 fn cu_cli_run(args: &[String], folder: &str, timeout: f64) -> R<Done> {
     let home = home();
     let mut env: Vec<(String, String)> = vec![
-        ("PATH".into(), format!("{}:{}", path::join_all(&[&home, ".local", "bin"]), getenv("PATH").unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into()))),
+        (
+            "PATH".into(),
+            format!(
+                "{}:{}",
+                path::join_all(&[&home, ".local", "bin"]),
+                getenv("PATH").unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into())
+            ),
+        ),
         ("HOME".into(), home),
         ("TMPDIR".into(), folder.to_string()),
         ("LANG".into(), "en_US.UTF-8".into()),
@@ -128,7 +138,14 @@ pub fn cu_cli_check(state: &Dict, root: &str) -> R<()> {
             },
         );
         state.set("status", "available");
-        state.set("message", if method == "self" { format!("可以直接更新到 {latest}") } else { format!("有新版本 {}：在终端里运行 {}", latest, cu.advice(method, &cask)) });
+        state.set(
+            "message",
+            if method == "self" {
+                format!("可以直接更新到 {latest}")
+            } else {
+                format!("有新版本 {}：在终端里运行 {}", latest, cu.advice(method, &cask))
+            },
+        );
         Ok(())
     };
     let result = body();
@@ -168,7 +185,9 @@ pub fn cu_cli_view(state: &Dict, problem: Option<&(String, String)>) -> R<Dict> 
             _ => None,
         };
         row.set("available_version", latest.clone());
-        if latest.as_ref().is_some_and(|l| l.truthy()) && cu_version(latest.as_ref().expect("上面看过"))? <= cu_version_str(&installed)? {
+        if latest.as_ref().is_some_and(|l| l.truthy())
+            && cu_version(latest.as_ref().expect("上面看过"))? <= cu_version_str(&installed)?
+        {
             // 刚更新过的留着“已更新到 X”那句话
             if !matches!(state.get("status"), Some(V::Str(s)) if &*s == "updated") {
                 row.set("status", "current");
@@ -176,7 +195,9 @@ pub fn cu_cli_view(state: &Dict, problem: Option<&(String, String)>) -> R<Dict> 
             }
         } else if let Some(V::Dict(stage)) = &stage {
             let stage_v = V::Dict(stage.clone());
-            if matches!(stage.get("method"), Some(V::Str(m)) if &*m == "self") && sub2(&stage_v, "target", "path")?.eq_py(&V::from(target.as_str())) {
+            if matches!(stage.get("method"), Some(V::Str(m)) if &*m == "self")
+                && sub2(&stage_v, "target", "path")?.eq_py(&V::from(target.as_str()))
+            {
                 row.set("install_token", at(stage, "token")?);
                 row.set("can_install", true);
             }
@@ -207,7 +228,9 @@ pub fn cu_cli_validate(stage: &Dict) -> R<Dict> {
     let stage_v = V::Dict(stage.clone());
     let target = cu_target()?;
     // not path or path != stage['target']['path'] or stage.get('method') != 'self'
-    let moved = target.is_empty() || !sub2(&stage_v, "target", "path")?.eq_py(&V::from(target.as_str())) || !matches!(stage.get("method"), Some(V::Str(m)) if &*m == "self");
+    let moved = target.is_empty()
+        || !sub2(&stage_v, "target", "path")?.eq_py(&V::from(target.as_str()))
+        || !matches!(stage.get("method"), Some(V::Str(m)) if &*m == "self");
     if moved {
         return cu_error("needs_recheck", format!("{} 的安装位置变了，请重新检查", cu.command));
     }

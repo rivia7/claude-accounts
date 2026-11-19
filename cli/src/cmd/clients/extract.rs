@@ -50,7 +50,8 @@ fn resolve_strict(filename: &str) -> std::io::Result<String> {
     // 还没解的各段，倒着放；None 是记号：它下面那一项是一个链接的路径，解到这里时 path 就是这个链接最后指向的地方
     let mut rest: Vec<Option<String>> = filename.split('/').rev().map(|s| Some(s.to_string())).collect();
     let mut part_count = rest.len();
-    let mut path = if filename.starts_with('/') { "/".to_string() } else { std::env::current_dir()?.to_string_lossy().into_owned() };
+    let mut path =
+        if filename.starts_with('/') { "/".to_string() } else { std::env::current_dir()?.to_string_lossy().into_owned() };
     let mut seen: HashMap<String, Option<String>> = HashMap::new();
     while part_count > 0 {
         let Some(name) = rest.pop().expect("part_count 说还有") else {
@@ -107,7 +108,9 @@ pub fn cu_extract(archive: &str, folder: &str) -> R<String> {
     super::tests::on_extract(archive);
     match extract(archive, folder) {
         // except (zipfile.BadZipFile, UnicodeError, OSError, RuntimeError, ValueError)：里面自己报的 ClientUpdateError 不在其中
-        Err(e) if e.is("BadZipFile") || e.is_os_or_value() || e.is("RuntimeError") || e.is("NotImplementedError") => cu_error("blocked", "无法安全解压官方安装包"),
+        Err(e) if e.is("BadZipFile") || e.is_os_or_value() || e.is("RuntimeError") || e.is("NotImplementedError") => {
+            cu_error("blocked", "无法安全解压官方安装包")
+        }
         other => other,
     }
 }
@@ -118,7 +121,10 @@ fn extract(archive: &str, folder: &str) -> R<String> {
     };
     let z = ZipFile::open(archive).map_err(zip_fail)?;
     let entries = z.infolist();
-    if entries.is_empty() || entries.len() > 100000 || entries.iter().map(|x| x.file_size as u128).sum::<u128>() > 8 * 1024 * 1024 * 1024 {
+    if entries.is_empty()
+        || entries.len() > 100000
+        || entries.iter().map(|x| x.file_size as u128).sum::<u128>() > 8 * 1024 * 1024 * 1024
+    {
         return cu_error("blocked", "官方安装包条目数量或解压大小超出限制");
     }
     let mut seen: HashSet<String> = HashSet::new();
@@ -152,7 +158,11 @@ fn extract(archive: &str, folder: &str) -> R<String> {
                 Err(e) => return Err(Fail::Value(crate::py::json::utf8_error_text(e.as_bytes(), &e.utf8_error()))),
             };
             let resolved = link_resolved(&name, &target);
-            if target.is_empty() || target.starts_with('/') || has_unsafe_char(&target) || !resolved.starts_with(&format!("{app_name}/")) {
+            if target.is_empty()
+                || target.starts_with('/')
+                || has_unsafe_char(&target)
+                || !resolved.starts_with(&format!("{app_name}/"))
+            {
                 return cu_error("blocked", "安装包包含指向程序外的链接");
             }
             links.insert(key, target);

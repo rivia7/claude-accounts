@@ -18,7 +18,11 @@ pub fn expanduser(p: &str) -> String {
     let home = home.trim_end_matches('/');
     let rest = &p[1..];
     if home.is_empty() {
-        if rest.is_empty() { "/".into() } else { rest.to_string() }
+        if rest.is_empty() {
+            "/".into()
+        } else {
+            rest.to_string()
+        }
     } else {
         format!("{home}{rest}")
     }
@@ -63,7 +67,11 @@ pub fn dirname(p: &str) -> String {
         Some(i) => {
             let head = &p[..i + 1];
             let cut = head.trim_end_matches('/');
-            if cut.is_empty() { head.to_string() } else { cut.to_string() }
+            if cut.is_empty() {
+                head.to_string()
+            } else {
+                cut.to_string()
+            }
         }
     }
 }
@@ -81,7 +89,13 @@ pub fn normpath(p: &str) -> String {
     if p.is_empty() {
         return ".".into();
     }
-    let lead = if p.starts_with("//") && !p.starts_with("///") { 2 } else if p.starts_with('/') { 1 } else { 0 };
+    let lead = if p.starts_with("//") && !p.starts_with("///") {
+        2
+    } else if p.starts_with('/') {
+        1
+    } else {
+        0
+    };
     let mut parts: Vec<&str> = Vec::new();
     for c in p.split('/') {
         if c.is_empty() || c == "." {
@@ -95,7 +109,11 @@ pub fn normpath(p: &str) -> String {
     }
     let body = parts.join("/");
     let out = format!("{}{}", "/".repeat(lead), body);
-    if out.is_empty() { ".".into() } else { out }
+    if out.is_empty() {
+        ".".into()
+    } else {
+        out
+    }
 }
 
 /// `os.path.abspath(p)`
@@ -109,7 +127,11 @@ pub fn abspath(p: &str) -> String {
 
 /// `os.path.realpath(p)`：符号链接都解开；不存在的、解不开的（链接成环）那一段原样留着
 pub fn realpath(p: &str) -> String {
-    let start = if p.starts_with('/') { "/".to_string() } else { std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|_| "/".into()) };
+    let start = if p.starts_with('/') {
+        "/".to_string()
+    } else {
+        std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|_| "/".into())
+    };
     let mut seen = std::collections::HashMap::new();
     let (path, _) = join_real(&start, p, &mut seen);
     abspath(&path)
@@ -183,7 +205,11 @@ pub fn relpath(p: &str, start: &str) -> String {
     let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
     let mut parts: Vec<&str> = vec![".."; b.len() - common];
     parts.extend(&a[common..]);
-    if parts.is_empty() { ".".into() } else { parts.join("/") }
+    if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    }
 }
 
 /// `os.path.exists(p)`（跟着链接看）

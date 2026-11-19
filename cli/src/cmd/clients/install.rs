@@ -1,7 +1,10 @@
 //! 替换桌面客户端：核对进程、无覆盖的改名、事务记录（transaction.json）和中断以后的恢复（`cu_no_processes` 到 `cu_install`）。
 
 use super::pyv::*;
-use super::{bytes_strip, cli, cu, cu_bundle, cu_build, cu_content, cu_private, cu_root, cu_run, cu_save_state, cu_snapshot, cu_validate_plan, cu_verify_archive, extract, strs, ClientUpdateLock};
+use super::{
+    bytes_strip, cli, cu, cu_build, cu_bundle, cu_content, cu_private, cu_root, cu_run, cu_save_state, cu_snapshot,
+    cu_validate_plan, cu_verify_archive, extract, strs, ClientUpdateLock,
+};
 use crate::py::fs::{self, load_quiet, save_json};
 use crate::py::obj::{Dict, V};
 use crate::py::shutil::{self, TemporaryDirectory};
@@ -57,7 +60,11 @@ pub fn cu_no_processes(paths: &[V]) -> R<()> {
     let cu = cu();
     let executables = cu_run(&strs(&["/bin/ps", "-axww", "-o", "pid=,comm="]), "/private/tmp", 20.0, None)?;
     let result = cu_run(&strs(&["/bin/ps", "-axww", "-o", "pid=,command="]), "/private/tmp", 20.0, None)?;
-    if executables.rc != 0 || bytes_strip(&executables.stdout).is_empty() || result.rc != 0 || bytes_strip(&result.stdout).is_empty() {
+    if executables.rc != 0
+        || bytes_strip(&executables.stdout).is_empty()
+        || result.rc != 0
+        || bytes_strip(&result.stdout).is_empty()
+    {
         return cu_error("blocked", "无法核验客户端进程，未替换程序");
     }
     let mut commands: HashMap<String, String> = HashMap::new();
@@ -203,7 +210,9 @@ pub fn cu_recover(state: &Dict) -> R<()> {
             return Ok(None);
         }
         let work = path_str(&work)?; // os.path.dirname(work)
-        if path::dirname(&work) != path::dirname(&target) || re!(r"\.cca-client-install-[a-z0-9_]+").fullmatch(path::basename(&work)).is_none() {
+        if path::dirname(&work) != path::dirname(&target)
+            || re!(r"\.cca-client-install-[a-z0-9_]+").fullmatch(path::basename(&work)).is_none()
+        {
             return Ok(None);
         }
         if !eq_opt(&V::from(path::join(&work, "previous.app")), data.get("backup")) {

@@ -25,7 +25,10 @@ mod udp;
 pub use bind::{core_bind, core_bind_apply, virtual_iface, Bind, CORE_ROUTE_PROBE, VIRTUAL_IFACE_RE};
 pub use keep::cmd_core_keep;
 #[allow(unused_imports)] // udp_view：_gui state；udp_leak_hint：leak-verdict；udp_running、udp_paths：bash 那一半对应的几处
-pub use udp::{cmd_udp_build, cmd_udp_env, cmd_udp_node, cmd_udp_probe, udp_leak_hint, udp_paths, udp_running, udp_state, udp_view, UDP_FLAG, UDP_HELPER, UDP_LABEL};
+pub use udp::{
+    cmd_udp_build, cmd_udp_env, cmd_udp_node, cmd_udp_probe, udp_leak_hint, udp_paths, udp_running, udp_state, udp_view, UDP_FLAG,
+    UDP_HELPER, UDP_LABEL,
+};
 
 use super::clients::cu_claude_env;
 use super::router::{node_match, node_users_all};
@@ -185,7 +188,9 @@ fn join_strs(items: &[V]) -> String {
     let strs: Vec<&str> = items
         .iter()
         .enumerate()
-        .map(|(i, v)| v.as_str().unwrap_or_else(|| panic!("TypeError: sequence item {}: expected str instance, {} found", i, type_name(v))))
+        .map(|(i, v)| {
+            v.as_str().unwrap_or_else(|| panic!("TypeError: sequence item {}: expected str instance, {} found", i, type_name(v)))
+        })
         .collect();
     strs.join("、")
 }
@@ -241,7 +246,8 @@ pub fn slot_orders(c: &Dict, local: bool) -> Vec<(String, i64, Vec<V>)> {
 /// 和全局扩展脚本里的算法一样：只留客户端里有的节点；分到的节点不在时 REJECT 排第一
 fn local_members(order: &[V], have: &[Rc<str>]) -> Vec<V> {
     let is_reject = |n: &V| n.as_str() == Some("REJECT");
-    let m: Vec<V> = order.iter().filter(|n| is_reject(n) || matches!(hashable(n), V::Str(s) if have.contains(s))).cloned().collect();
+    let m: Vec<V> =
+        order.iter().filter(|n| is_reject(n) || matches!(hashable(n), V::Str(s) if have.contains(s))).cloned().collect();
     if m[0].py_eq(&order[0]) {
         return m;
     }
@@ -331,7 +337,7 @@ pub fn cmd_local_env(args: &[String]) -> R<()> {
     let ctl = if builtin { "unix:@core" } else { "" }; // @core：bash 的 core_sock
     let want = local_want(&c)?;
     let b = if builtin { core_bind(&c, &[]) } else { None }; // local_want 刚按节点定义查过（一个进程只查一次）
-    // 本机 UDP 走节点（在外面启动时 bash 的 udp_launch_check 看）
+                                                             // 本机 UDP 走节点（在外面启动时 bash 的 udp_launch_check 看）
     let (unode, ustate) = if cfg!(target_os = "macos") { udp_state(&c) } else { (String::new(), "off") };
     let (iface, via, dns) = match b {
         Some(b) => (b.iface, b.via, b.dns.join(" ")),
@@ -463,7 +469,11 @@ pub fn cmd_node_check(args: &[String]) -> R<()> {
     };
     let c = cfg_load()?;
     let cleaned = node_clean_name(p.get("name"));
-    let base = if cleaned.is_empty() { p.get("type").and_then(|kind| kind.as_str()).expect("node_parse 核对过 type 是文字").to_string() } else { cleaned };
+    let base = if cleaned.is_empty() {
+        p.get("type").and_then(|kind| kind.as_str()).expect("node_parse 核对过 type 是文字").to_string()
+    } else {
+        cleaned
+    };
     let (mut name, mut i) = (base.clone(), 2);
     while !node_name_free(&c, &name)? {
         name = format!("{base}-{i}");
@@ -568,7 +578,9 @@ pub fn cmd_node_rm(args: &[String]) -> R<()> {
 fn cache_age(j: &Dict) -> f64 {
     let saved = match j.get("saved_at").filter(|at| at.truthy()) {
         Some(at) => {
-            let n = at.as_pynum().unwrap_or_else(|| panic!("TypeError: unsupported operand type(s) for -: 'float' and '{}'", type_name(&at)));
+            let n = at
+                .as_pynum()
+                .unwrap_or_else(|| panic!("TypeError: unsupported operand type(s) for -: 'float' and '{}'", type_name(&at)));
             if n.is_infinite() && !matches!(at, V::Float(_)) {
                 panic!("OverflowError: int too large to convert to float");
             }
@@ -637,7 +649,13 @@ fn core_pick(px: &[Dict], names: &[V]) -> Vec<Dict> {
     }
     let mut keep: HashMap<Rc<str>, bool> = HashMap::new();
 
-    fn need(n: &str, path: &mut Vec<Rc<str>>, order: &[(Rc<str>, &Dict)], by: &HashMap<Rc<str>, usize>, keep: &mut HashMap<Rc<str>, bool>) -> bool {
+    fn need(
+        n: &str,
+        path: &mut Vec<Rc<str>>,
+        order: &[(Rc<str>, &Dict)],
+        by: &HashMap<Rc<str>, usize>,
+        keep: &mut HashMap<Rc<str>, bool>,
+    ) -> bool {
         // 一层层递归：Python 到递归上限是没人接的 RecursionError。具体第几层随子命令（调用栈有多深）和 Python 的版本差一两层，
         // 这里固定成 PICK_DEPTH 层（见 FINDINGS.md）
         if path.len() >= PICK_DEPTH {
@@ -820,14 +838,19 @@ pub fn cmd_core_summary(args: &[String]) -> R<()> {
         format!("从路由器拷的 {} 个（{}）", cached_proxies(&j).len(), when)
     };
     // names = {p['name'] for p in core_cache().get('proxies', []) if isinstance(p, dict)}：对象里没有 name 是没人接的 KeyError
-    let names: Vec<V> = cached_proxies(&core_cache()).iter().filter_map(|p| p.as_dict()).map(|p| hashable(&p.at("name")).clone()).collect();
+    let names: Vec<V> =
+        cached_proxies(&core_cache()).iter().filter_map(|p| p.as_dict()).map(|p| hashable(&p.at("name")).clone()).collect();
     let m = core_names(&c);
     // 可选节点真正用到的（参考节点只算补进来的）
     let used = core_pick(&core_defs(), &wanted_names(&c, &m));
     let extra = used.iter().map(def_name).filter(|n| !names.iter().any(|have| have.as_str() == Some(n))).count();
     let miss = core_missing(&c);
     let filled = if extra > 0 { format!("，补上维护者参考节点 {extra} 个") } else { String::new() };
-    let lacking = if miss.is_empty() { String::new() } else { format!("；没有定义的节点：{}（用它们的账号在外面会被拒绝连接）", join_strs(&miss)) };
+    let lacking = if miss.is_empty() {
+        String::new()
+    } else {
+        format!("；没有定义的节点：{}（用它们的账号在外面会被拒绝连接）", join_strs(&miss))
+    };
     out!("节点定义：{src}{filled}{lacking}");
     Ok(())
 }
@@ -856,7 +879,15 @@ fn install_resolve(c: &Dict, want: &str) -> String {
         }
     }
     let mut fps: Vec<String> = match policy_fill() {
-        Some(f) => f.list("proxies").unwrap_or_default().items().iter().filter_map(|p| p.as_dict()).filter(|p| p.str("name").as_deref() == Some(want)).map(|p| fill_fp(&p)).collect(),
+        Some(f) => f
+            .list("proxies")
+            .unwrap_or_default()
+            .items()
+            .iter()
+            .filter_map(|p| p.as_dict())
+            .filter(|p| p.str("name").as_deref() == Some(want))
+            .map(|p| fill_fp(&p))
+            .collect(),
         None => Vec::new(),
     };
     // fps.add(node_ids(c)[want])：记下的摘要不是文字的（手改的）永远对不上
@@ -991,10 +1022,20 @@ mod tests {
     fn local_info_like_python() {
         // 右边是原来的 local_info 给的（_gui state / live 的 config.local）：只有 builtin 算配置过，名字总是「内置代理」
         let info = |c: Dict| json::dumps(&V::Dict(local_info(&c)), json::LINE);
-        let (on, off) = (r#"{"configured": true, "client": "builtin", "name": "内置代理"}"#, r#"{"configured": false, "client": "", "name": "内置代理"}"#);
+        let (on, off) = (
+            r#"{"configured": true, "client": "builtin", "name": "内置代理"}"#,
+            r#"{"configured": false, "client": "", "name": "内置代理"}"#,
+        );
         assert_eq!(info(dict! { "local" => dict! { "client" => "builtin", "udp" => "US-A" } }), on);
-        for local in [V::Dict(dict! { "client" => "clash-verge" }), V::Dict(dict! { "client" => "" }), V::Dict(Dict::new()), V::None, V::Dict(dict! { "client" => 5 }),
-                      V::List(List::new()), V::Dict(dict! { "client" => "Builtin" })] {
+        for local in [
+            V::Dict(dict! { "client" => "clash-verge" }),
+            V::Dict(dict! { "client" => "" }),
+            V::Dict(Dict::new()),
+            V::None,
+            V::Dict(dict! { "client" => 5 }),
+            V::List(List::new()),
+            V::Dict(dict! { "client" => "Builtin" }),
+        ] {
             assert_eq!(info(dict! { "local" => local }), off);
         }
         assert_eq!(info(Dict::new()), off);
@@ -1103,7 +1144,12 @@ mod tests {
     #[test]
     fn members_keep_assigned_node_first() {
         let have: Vec<Rc<str>> = ["US-A", "US-B"].iter().map(|s| Rc::from(*s)).collect();
-        let m = |order: &[&str]| local_members(&order.iter().map(|n| V::from(*n)).collect::<Vec<_>>(), &have).iter().map(|v| v.py_str()).collect::<Vec<_>>();
+        let m = |order: &[&str]| {
+            local_members(&order.iter().map(|n| V::from(*n)).collect::<Vec<_>>(), &have)
+                .iter()
+                .map(|v| v.py_str())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(m(&["US-A", "US-B", "HK-A", "REJECT"]), ["US-A", "US-B", "REJECT"]);
         assert_eq!(m(&["HK-A", "US-A", "US-B", "REJECT"]), ["REJECT", "US-A", "US-B"]);
         assert_eq!(m(&["REJECT", "US-A", "HK-A"]), ["REJECT", "US-A"]);

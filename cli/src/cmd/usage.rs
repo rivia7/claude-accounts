@@ -4,7 +4,9 @@
 //! 这一块的子命令都移植了。`Tool` 里按工具分派、和用量 / 套餐有关的几个方法（who、plan、plan_tier、outdated_login_plan、
 //! usage_query、usage_caches）也在这里；Codex 那一半（app-server、登录身份）在 codex.rs。
 
-use super::codex::{agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped};
+use super::codex::{
+    agy_claims, codex_claims, codex_plan_label, codex_plan_tier, codex_usage_query, json_loads_bytes, temp_file, Got, Piped,
+};
 use super::cost::cost_kick;
 use super::keyshare::{is_num, keyshare_kick};
 use super::{arg, arity, Cmd};
@@ -304,8 +306,16 @@ pub fn claude_usage_query(claude: &str, timeout: &str) -> R<()> {
     let err = temp_file()?;
     let cwd = if path::isdir(&cd) { path::dirname(&cd) } else { CCA_HOME.clone() };
     let argv = [
-        claude, "-p", "--safe-mode", "--no-session-persistence", "--strict-mcp-config",
-        "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+        claude,
+        "-p",
+        "--safe-mode",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
     ];
     let mut p = match Piped::spawn(&argv, &cwd, err) {
         Ok(p) => p,
@@ -330,7 +340,10 @@ pub fn claude_usage_query(claude: &str, timeout: &str) -> R<()> {
                 let old = re!(r"unknown option|nsupported").found(&tail.join(" "));
                 let msg = match tail.last() {
                     Some(last) => text::head(last, 200).to_string(),
-                    None => format!("没有回应就退出了（退出码 {}）", p.returncode().map_or_else(|| "None".to_string(), |rc| rc.to_string())),
+                    None => format!(
+                        "没有回应就退出了（退出码 {}）",
+                        p.returncode().map_or_else(|| "None".to_string(), |rc| rc.to_string())
+                    ),
                 };
                 out = dict! { "ok" => false, "why" => if old { "unsupported" } else { "error" }, "msg" => msg };
                 break;
@@ -376,7 +389,8 @@ pub fn parse_ts(s: &V) -> R<Option<f64>> {
         V::Str(s) => s,
         _ => return Ok(None),
     };
-    let Some(m) = re!(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(\.\d+)?)?\s*(Z|[+-]\d\d:?\d\d)?$").match_(text::strip(s)) else {
+    let Some(m) = re!(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(\.\d+)?)?\s*(Z|[+-]\d\d:?\d\d)?$").match_(text::strip(s))
+    else {
         return Ok(None);
     };
     let int = |i: usize| text::to_int(m.g(i)).unwrap_or(0);
@@ -820,7 +834,14 @@ fn weeks_parse(j: Option<V>) -> Vec<Week> {
         for e in dicts(&j, "weeks") {
             let f = |k: &str| e.get(k).filter(week_num);
             if let (Some(end), Some(peak), Some(first), Some(last)) = (f("end"), f("peak"), f("first"), f("last")) {
-                out.push(Week { end, peak, first, last, carried: f("carried").unwrap_or(V::Int(0)), resets: f("resets").map_or(0, |r| num(&r).trunc() as i64) });
+                out.push(Week {
+                    end,
+                    peak,
+                    first,
+                    last,
+                    carried: f("carried").unwrap_or(V::Int(0)),
+                    resets: f("resets").map_or(0, |r| num(&r).trunc() as i64),
+                });
             }
         }
     }
@@ -838,7 +859,14 @@ pub fn weeks_add(weeks: &mut Vec<Week>, rl: &Dict, at: f64) -> R<bool> {
     }
     let pct = num(&w.pct);
     let Some(i) = weeks.iter().position(|x| (num(&x.end) - end).abs() <= WEEK_SAME) else {
-        weeks.push(Week { end: V::Float(end), peak: V::Float(pct), first: V::Float(at), last: V::Float(at), carried: V::Int(0), resets: 0 });
+        weeks.push(Week {
+            end: V::Float(end),
+            peak: V::Float(pct),
+            first: V::Float(at),
+            last: V::Float(at),
+            carried: V::Int(0),
+            resets: 0,
+        });
         sort_stable(weeks, |a, b| n_lt(&a.end, &b.end));
         if weeks.len() > WEEKS_KEEP {
             weeks.drain(..weeks.len() - WEEKS_KEEP);
@@ -927,7 +955,8 @@ fn weeks_view(mut weeks: Vec<Week>, now: f64, cached: Option<&Cached>) -> R<Opti
             since = &e.first;
         }
     }
-    let average = if done.is_empty() { V::None } else { V::Int(half_up(true_div(done.iter().map(|p| *p as i128).sum(), done.len() as u32))) };
+    let average =
+        if done.is_empty() { V::None } else { V::Int(half_up(true_div(done.iter().map(|p| *p as i128).sum(), done.len() as u32))) };
     Ok(Some(dict! {
         "since_epoch" => since, "weeks" => out,
         "summary" => dict! {
@@ -952,7 +981,11 @@ fn cell_text(u: Option<&Cached>, now: f64) -> R<String> {
     let mut cells = Vec::new();
     for (label, k) in [("5h", "five_hour"), ("周", "seven_day")] {
         if let Some(w) = win(&u.rl.get(k).unwrap_or(V::None), now)? {
-            cells.push(format!("{} {}", label, if w.reset { "已重置".to_string() } else { format!("{}%", py_round(&w.pct)?.text) }));
+            cells.push(format!(
+                "{} {}",
+                label,
+                if w.reset { "已重置".to_string() } else { format!("{}%", py_round(&w.pct)?.text) }
+            ));
         }
     }
     if cells.is_empty() {
@@ -1008,7 +1041,14 @@ pub fn usage_why(r: &Row, table: WhyTable) -> R<String> {
     hashable(&r.why)?;
     let template = r.why.as_str().and_then(|why| table.text(why)).or_else(|| table.text("error")).unwrap_or("");
     let msg = if r.msg.truthy() { r.msg.py_str() } else { "原因不明".to_string() };
-    let fill = [("name", r.name.as_str()), ("msg", msg.as_str()), ("cmd", t().cmd), ("host", t().trace_host), ("product", t().product), ("update", t().update_cmd)];
+    let fill = [
+        ("name", r.name.as_str()),
+        ("msg", msg.as_str()),
+        ("cmd", t().cmd),
+        ("host", t().trace_host),
+        ("product", t().product),
+        ("update", t().update_cmd),
+    ];
     // `模板.format(名字=值, …)`：一遍扫过去换，填进去的字不再当模板看
     let mut out = String::new();
     let mut rest = template;
@@ -1080,10 +1120,14 @@ pub fn usage_notes(rl: &Dict, now: f64) -> R<Vec<String>> {
             Some(e) => Some(tm_checked(num(&e), true)?),
             None => None,
         };
-        let expires = lt.map_or_else(String::new, |lt| format!("（{}{} 月 {} 日过期）", if n.many { "最早 " } else { "" }, lt.mon, lt.mday));
+        let expires =
+            lt.map_or_else(String::new, |lt| format!("（{}{} 月 {} 日过期）", if n.many { "最早 " } else { "" }, lt.mon, lt.mday));
         out.push(format!("剩余重置 {} 次{}", n.text, expires));
     }
-    let mut pairs: Vec<(V, V)> = vec![(V::from("Opus"), rl.get("seven_day_opus").unwrap_or(V::None)), (V::from("Sonnet"), rl.get("seven_day_sonnet").unwrap_or(V::None))];
+    let mut pairs: Vec<(V, V)> = vec![
+        (V::from("Opus"), rl.get("seven_day_opus").unwrap_or(V::None)),
+        (V::from("Sonnet"), rl.get("seven_day_sonnet").unwrap_or(V::None)),
+    ];
     pairs.extend(dicts(rl, "model_scoped").into_iter().map(|m| (m.get("display_name").unwrap_or(V::None), V::Dict(m))));
     // 没用过的（0%）不写，免得一排 0%；JSON 里照样都有
     for (label, w) in pairs {
@@ -1178,7 +1222,11 @@ pub fn weekly_shares(rl: &Dict) -> R<Dict> {
                 Some(i) => limit_index(&i, limits.len())?.map(|i| limits[i].clone()),
                 None => None,
             };
-            name = lim.and_then(|l| l.as_dict()).and_then(|l| l.dict("scope")).and_then(|s| s.dict("model")).and_then(|m| m.get("display_name"));
+            name = lim
+                .and_then(|l| l.as_dict())
+                .and_then(|l| l.dict("scope"))
+                .and_then(|s| s.dict("model"))
+                .and_then(|m| m.get("display_name"));
         } else if shares.len() == 1 && ms.len() == 1 {
             name = ms[0].get("display_name");
         }
@@ -1227,7 +1275,9 @@ pub fn reset_credits_view(rc: Option<V>) -> R<Option<Dict>> {
 pub fn reset_credits_open(rc: &Dict) -> Vec<Dict> {
     let mut cs: Vec<Dict> = dicts(rc, "credits")
         .into_iter()
-        .filter(|c| c.get("status").is_some_and(|s| s.as_str() == Some("available")) && c.str("id").is_some_and(|id| !id.is_empty()))
+        .filter(|c| {
+            c.get("status").is_some_and(|s| s.as_str() == Some("available")) && c.str("id").is_some_and(|id| !id.is_empty())
+        })
         .collect();
     let expires = |c: &Dict| c.get("expires_epoch").filter(is_num).map_or(f64::INFINITY, |e| num(&e));
     sort_stable(&mut cs, |a, b| expires(a) < expires(b));
@@ -1287,15 +1337,21 @@ pub fn usage_entry(r: &Row, now: f64) -> R<Dict> {
     a.set("email", if r.email.is_empty() { V::None } else { V::from(&r.email) });
     a.set("plan", &r.plan);
     a.set("source", r.source);
-    a.set("fetched_at", match at {
-        Some(at) => V::from(iso(at)?),
-        None => V::None,
-    });
+    a.set(
+        "fetched_at",
+        match at {
+            Some(at) => V::from(iso(at)?),
+            None => V::None,
+        },
+    );
     a.set("fetched_epoch", at);
-    a.set("age_seconds", match at {
-        Some(at) => V::Int(py_int(now - at)?),
-        None => V::None,
-    });
+    a.set(
+        "age_seconds",
+        match at {
+            Some(at) => V::Int(py_int(now - at)?),
+            None => V::None,
+        },
+    );
     a.set("stale", at.is_some_and(|at| now - at >= USAGE_STALE));
     a.set("error", if failed { V::from(usage_why(r, WhyTable::Usage)?) } else { V::None });
     a.set("error_code", if failed { r.why.clone() } else { V::None });
@@ -1351,7 +1407,11 @@ pub fn usage_has_windows(rl: &V) -> R<bool> {
 /// 后台带回来的用量（usage_result 里查用量的格式）：至少认得出一个窗口的才算查到，返回它；没有、认不出返回 None
 pub fn usage_take(r: &Dict) -> R<Option<Dict>> {
     let Some(u) = r.dict("usage").filter(|_| r.truthy("ok")) else { return Ok(None) };
-    Ok(if u.truthy("rate_limits_available") && usage_has_windows(&u.get("rate_limits").unwrap_or(V::None))? { Some(u) } else { None })
+    Ok(if u.truthy("rate_limits_available") && usage_has_windows(&u.get("rate_limits").unwrap_or(V::None))? {
+        Some(u)
+    } else {
+        None
+    })
 }
 
 /// 查到的那份用量里的窗口（usage_take 核对过它是字典）
@@ -1450,7 +1510,17 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
             Some(at) => reset_short(at, now, week)?,
             None => String::new(),
         };
-        Ok((format!("{:>3}%", p.text), resets, if p.val >= 90.0 { "31" } else if p.val >= 70.0 { "33" } else { "" }))
+        Ok((
+            format!("{:>3}%", p.text),
+            resets,
+            if p.val >= 90.0 {
+                "31"
+            } else if p.val >= 70.0 {
+                "33"
+            } else {
+                ""
+            },
+        ))
     };
     struct Line<'a> {
         r: &'a Row,
@@ -1501,19 +1571,29 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
         let cells: Vec<&Cell> = data.iter().filter_map(|d| if five { d.five.as_ref() } else { d.week.as_ref() }).collect();
         let rw = if on { cells.iter().map(|c| uni::width(&c.1)).max().unwrap_or(0) } else { 0 };
         let head = if rw > 0 { format!("{title}/重置") } else { title.to_string() };
-        let w = cells.iter().map(|c| uni::width(&c.0) + if rw > 0 && !c.1.is_empty() { 1 + rw } else { 0 }).chain([uni::width(&head)]).max().unwrap_or(0);
+        let w = cells
+            .iter()
+            .map(|c| uni::width(&c.0) + if rw > 0 && !c.1.is_empty() { 1 + rw } else { 0 })
+            .chain([uni::width(&head)])
+            .max()
+            .unwrap_or(0);
         (head, w as i64)
     };
     // 各列的宽：账号、套餐（收起来是 0）、5 小时、本周
     let layout = |show: Show| -> (i64, i64, i64, i64) {
         let a = rows.iter().map(|r| uni::width(&acct(r, show))).chain([uni::width("账号")]).max().unwrap_or(0) as i64;
-        let p = if show.plan { rows.iter().map(|r| uni::width(&r.plan)).chain([uni::width("套餐")]).max().unwrap_or(0) as i64 } else { 0 };
+        let p = if show.plan {
+            rows.iter().map(|r| uni::width(&r.plan)).chain([uni::width("套餐")]).max().unwrap_or(0) as i64
+        } else {
+            0
+        };
         (a, p, win_col(true, "5 小时", show.r5).1, win_col(false, "本周", show.r7).1)
     };
     // 这样排时一行剩下给备注的宽（可能是负数）
     let slack = |a: i64, p: i64, f: i64, k: i64| total - (2 + a + (if p != 0 { 2 + p } else { 0 }) + 2 + f + 2 + k);
     // 查到了的行的第一项备注
-    let firsts: Vec<i64> = data.iter().filter(|d| d.five.is_some() && !d.notes.is_empty()).map(|d| uni::width(&d.notes[0]) as i64).collect();
+    let firsts: Vec<i64> =
+        data.iter().filter(|d| d.five.is_some() && !d.notes.is_empty()).map(|d| uni::width(&d.notes[0]) as i64).collect();
     // 备注那一列（连同前面的两格）想要的宽
     let want = firsts.iter().max().map_or(0, |m| USAGE_NOTE_FLOOR.min(*m) + 2);
     let mut show = Show { email: true, plan: true, r5: true, r7: true };
@@ -1556,7 +1636,11 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
         // 查不到：从 5 小时那一列起写原因
         let (Some(five), Some(week)) = (&d.five, &d.week) else {
             let start = 2 + a + 2 + if p != 0 { p + 2 } else { 0 };
-            lines.push(format!("  {}  {}", painted(&cells), paint(&fit(&d.notes[0], wide.saturating_sub(start).max(10), false), "2")));
+            lines.push(format!(
+                "  {}  {}",
+                painted(&cells),
+                paint(&fit(&d.notes[0], wide.saturating_sub(start).max(10), false), "2")
+            ));
             continue;
         };
         for ((pct, resets, code), width, on) in [(five, f, show.r5), (week, k, show.r7)] {
@@ -1566,10 +1650,17 @@ fn usage_table_lines(rows: &[Row], now: f64, cols: &str, color: bool, api: &[Str
         let line = format!("  {}", painted(&cells));
         let note = if !d.notes.is_empty() && room != 0 { fit_note(&d.notes, room) } else { String::new() };
         lost = lost || (!d.notes.is_empty() && room == 0);
-        lines.push(if note.is_empty() { text::rstrip(&line).to_string() } else { format!("{}  {}", line, paint(&note, if dim.is_empty() { "" } else { "2" })) });
+        lines.push(if note.is_empty() {
+            text::rstrip(&line).to_string()
+        } else {
+            format!("{}  {}", line, paint(&note, if dim.is_empty() { "" } else { "2" }))
+        });
     }
     if lost {
-        lines.push(paint(&fit(&format!("  （终端太窄，备注没显示：拉宽一点，或者用 {} usage --json 看全部）", t().cmd), wide, false), "2"));
+        lines.push(paint(
+            &fit(&format!("  （终端太窄，备注没显示：拉宽一点，或者用 {} usage --json 看全部）", t().cmd), wide, false),
+            "2",
+        ));
     }
     // Claude Code 记的套餐过时了：表格下面单独一行（太长就换短一点的说法，整行不超过终端的宽度）
     for r in rows {
@@ -1636,7 +1727,8 @@ pub fn cmd_usage_render(args: &[String]) -> R<()> {
     let items = table.items();
     let official: Vec<&str> = items.iter().filter(|(_, v)| !is_api(v)).map(|(k, _)| &**k).collect();
     let all_official = keys.iter().all(|k| official.contains(&k.as_str())) && official.iter().all(|o| keys.iter().any(|k| k == o));
-    let api: Vec<String> = if all_official { items.iter().filter(|(_, v)| is_api(v)).map(|(k, _)| k.to_string()).collect() } else { Vec::new() };
+    let api: Vec<String> =
+        if all_official { items.iter().filter(|(_, v)| is_api(v)).map(|(k, _)| k.to_string()).collect() } else { Vec::new() };
     if mode == "json" {
         out!("{}", json::dumps(&V::Dict(usage_json(&rows, now, &api)?), json::FILE));
     } else {
@@ -1705,10 +1797,27 @@ pub fn credit_label(c: &Dict) -> R<String> {
 pub fn cmd_reset_plan(args: &[String]) -> R<()> {
     arity("cmd_reset_plan", args, 2, 2)?;
     let (tmp, key) = (args[0].as_str(), args[1].as_str());
-    let stop = |(code, msg): (String, String)| sh(&[("RC_CODE", code.as_str()), ("RC_MSG", msg.as_str()), ("RC_COUNT", ""), ("RC_ID", ""), ("RC_NEXT", ""), ("RC_LIST", "")]);
+    let stop = |(code, msg): (String, String)| {
+        sh(&[
+            ("RC_CODE", code.as_str()),
+            ("RC_MSG", msg.as_str()),
+            ("RC_COUNT", ""),
+            ("RC_ID", ""),
+            ("RC_NEXT", ""),
+            ("RC_LIST", ""),
+        ])
+    };
     let r = usage_result(tmp, 0)?;
     let Some(u) = usage_take(&r)? else {
-        stop(reset_fail(key, &if r.truthy("ok") { dict! { "why" => "nolimits" } } else { r }, WhyTable::Reset)?);
+        stop(reset_fail(
+            key,
+            &if r.truthy("ok") {
+                dict! { "why" => "nolimits" }
+            } else {
+                r
+            },
+            WhyTable::Reset,
+        )?);
         return Ok(());
     };
     let rl = rate_limits(&u);
@@ -1744,14 +1853,22 @@ pub fn cmd_reset_done(args: &[String]) -> R<()> {
     let r = usage_result(tmp, 1)?;
     let outcome = if r.truthy("ok") { r.get("outcome").unwrap_or(V::None) } else { V::None };
     if outcome.as_str() == Some("no_credit") {
-        let msg = if credit.is_empty() { format!("{name} 没有能用的重置机会了") } else { format!("{name} 的这次重置机会已经不能用了（可能刚在别处用掉了），刷新用量看看还剩几次") };
+        let msg = if credit.is_empty() {
+            format!("{name} 没有能用的重置机会了")
+        } else {
+            format!("{name} 的这次重置机会已经不能用了（可能刚在别处用掉了），刷新用量看看还剩几次")
+        };
         sh(&[("RC_OUTCOME", "no_credit"), ("RC_CODE", "no_reset_credit"), ("RC_DOC", ""), ("RC_MSG", msg.as_str())]);
         return Ok(());
     }
     hashable(&outcome)?;
     // 已经请求重置了，结果不知道（超时、出错）
     let Some((outcome, said)) = outcome.as_str().and_then(|o| Some((o, reset_said(o)?))) else {
-        let r = if r.truthy("ok") { dict! { "why" => "error", "msg" => "看不懂 codex 回的结果" } } else { r };
+        let r = if r.truthy("ok") {
+            dict! { "why" => "error", "msg" => "看不懂 codex 回的结果" }
+        } else {
+            r
+        };
         let (code, msg) = reset_fail(key, &r, WhyTable::Unsure)?;
         sh(&[("RC_OUTCOME", ""), ("RC_CODE", code.as_str()), ("RC_MSG", msg.as_str()), ("RC_DOC", "")]);
         return Ok(());
@@ -1814,7 +1931,9 @@ impl Tool {
     pub fn plan(&self, key: &str, sub: &V) -> R<String> {
         Ok(match self.kind {
             Kind::Claude => plan_label(&oauth_of(key)?, sub),
-            Kind::Codex => codex_plan_label(&if sub.truthy() { sub.clone() } else { codex_claims(key, None).get("plan").unwrap_or(V::None) }),
+            Kind::Codex => {
+                codex_plan_label(&if sub.truthy() { sub.clone() } else { codex_claims(key, None).get("plan").unwrap_or(V::None) })
+            }
             Kind::Agy => agy_tier(key, sub)?.0.to_string(),
         })
     }
@@ -1823,7 +1942,9 @@ impl Tool {
     pub fn plan_tier(&self, key: &str, sub: &V) -> R<&'static str> {
         Ok(match self.kind {
             Kind::Claude => claude_plan_tier(&oauth_of(key)?, sub),
-            Kind::Codex => codex_plan_tier(&if sub.truthy() { sub.clone() } else { codex_claims(key, None).get("plan").unwrap_or(V::None) }),
+            Kind::Codex => {
+                codex_plan_tier(&if sub.truthy() { sub.clone() } else { codex_claims(key, None).get("plan").unwrap_or(V::None) })
+            }
             Kind::Agy => agy_tier(key, sub)?.1,
         })
     }
@@ -1870,7 +1991,13 @@ pub(super) mod vectors {
 
     /// 一节对照数据的各行（每行是一个列表）
     pub fn rows(section: &str) -> Vec<Vec<V>> {
-        load().list(section).unwrap_or_else(|| panic!("对照数据里没有 {section}")).items().iter().map(|r| r.as_list().expect("一行是个列表").items()).collect()
+        load()
+            .list(section)
+            .unwrap_or_else(|| panic!("对照数据里没有 {section}"))
+            .items()
+            .iter()
+            .map(|r| r.as_list().expect("一行是个列表").items())
+            .collect()
     }
 
     /// Python 的 repr 写的数（nan、inf、-inf 也认）
@@ -1957,7 +2084,13 @@ mod tests {
         }
         for r in rows("true_div") {
             let n: i128 = r[0].as_str().unwrap().parse().unwrap();
-            assert_eq!(float_repr(true_div(n, r[1].as_int().unwrap() as u32)), r[2].py_str(), "{} / {}", r[0].py_str(), r[1].py_str());
+            assert_eq!(
+                float_repr(true_div(n, r[1].as_int().unwrap() as u32)),
+                r[2].py_str(),
+                "{} / {}",
+                r[0].py_str(),
+                r[1].py_str()
+            );
         }
         for r in rows("weekday_clock") {
             let int = |i: usize| r[i].as_int().unwrap() as i32;
@@ -1966,7 +2099,11 @@ mod tests {
         }
         // 5 小时的窗口（week 是 false）只写还有多久：和时区无关
         for r in rows("reset_short") {
-            check(reset_short(number(&r[0]), number(&r[1]), false), &r[2], &format!("reset_short({}, {})", r[0].py_str(), r[1].py_str()));
+            check(
+                reset_short(number(&r[0]), number(&r[1]), false),
+                &r[2],
+                &format!("reset_short({}, {})", r[0].py_str(), r[1].py_str()),
+            );
         }
     }
 
@@ -1978,14 +2115,21 @@ mod tests {
         assert_eq!(reset_short(now + 30.0, now, false).unwrap(), "不到1分钟后");
         assert_eq!(reset_short(now + 25.0 * 60.0 + 5.0, now, true).unwrap(), "25分钟后"); // 本周的一小时以内也写还有多久
         let lt = time::localtime(now + 3.0 * 86400.0);
-        assert_eq!(reset_short(now + 3.0 * 86400.0, now, true).unwrap(), format!("周{} {:02}:{:02}", WEEKDAYS[lt.wday as usize], lt.hour, lt.min));
+        assert_eq!(
+            reset_short(now + 3.0 * 86400.0, now, true).unwrap(),
+            format!("周{} {:02}:{:02}", WEEKDAYS[lt.wday as usize], lt.hour, lt.min)
+        );
         // 今天、明天按本地的日历日算
         let lt = time::localtime(now);
         let midnight = time::mktime(lt.year, lt.mon, lt.mday + 1, 0, 0, 0, -1);
         if midnight - now > 2.0 * 3600.0 + 60.0 {
             assert!(reset_short(now + 2.0 * 3600.0, now, true).unwrap().starts_with("今天 "));
         }
-        assert!(reset_short(midnight + 3600.0 * 5.0, now, true).unwrap().starts_with(if midnight + 3600.0 * 5.0 - now < 3600.0 { "5" } else { "明天 " }));
+        assert!(reset_short(midnight + 3600.0 * 5.0, now, true).unwrap().starts_with(if midnight + 3600.0 * 5.0 - now < 3600.0 {
+            "5"
+        } else {
+            "明天 "
+        }));
         assert_eq!(day_gap(now, midnight + 86400.0 + 60.0).unwrap(), 2);
         assert_eq!(day_gap(midnight + 60.0, now).unwrap(), -1);
         // 年份装不进 date 的：原来是没人接的 ValueError
@@ -2004,7 +2148,13 @@ mod tests {
             assert_eq!(claude_plan_tier(&oa, sub), r[5].py_str(), "claude_plan_tier {what}");
         }
         for r in rows("outdated") {
-            assert_eq!(claude_login_plan_outdated(&r[0].as_dict().unwrap(), r[1].as_str().unwrap()), r[2].py_str(), "{} / {}", r[0].py_repr(), r[1].py_repr());
+            assert_eq!(
+                claude_login_plan_outdated(&r[0].as_dict().unwrap(), r[1].as_str().unwrap()),
+                r[2].py_str(),
+                "{} / {}",
+                r[0].py_repr(),
+                r[1].py_repr()
+            );
         }
         // agy 的档位表和 PY_SRC 的 AGY_TIERS 一样
         let tiers = vectors::load().dict("agy_tiers").unwrap();
@@ -2079,7 +2229,10 @@ mod tests {
     #[test]
     fn fit_note_like_python_test() {
         // tests/usage_view.py 的 test_fit_note
-        let parts: Vec<String> = ["剩余重置 2 次（最早 12 月 5 日过期）", "GPT-5-Pro 本周 30%", "credits 余额 12.5"].iter().map(|s| s.to_string()).collect();
+        let parts: Vec<String> = ["剩余重置 2 次（最早 12 月 5 日过期）", "GPT-5-Pro 本周 30%", "credits 余额 12.5"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(fit_note(&parts, 200), parts.join("；"));
         assert_eq!(fit_note(&parts, 60), "剩余重置 2 次（最早 12 月 5 日过期）；GPT-5-Pro 本周 30%；…");
         assert_eq!(fit_note(&parts, 20), "剩余重置 2 次…"); // 第一项都放不下：先去掉括号里的补充
@@ -2091,10 +2244,12 @@ mod tests {
         // tests/usage_view.py 的 test_use_first
         let now = time::time();
         let at = |secs: f64| (now + secs).floor();
-        let rl = |pct: V, secs: f64| dict! { "seven_day" => dict! { "utilization" => pct, "resets_at" => iso(now + secs).unwrap() } };
+        let rl =
+            |pct: V, secs: f64| dict! { "seven_day" => dict! { "utilization" => pct, "resets_at" => iso(now + secs).unwrap() } };
         let left = |pct: V, secs: f64, why: &V| use_first(&rl(pct, secs), now, why).unwrap();
         let got = left(V::Int(41), 36000.0, &V::None).unwrap();
-        assert!(V::Dict(got).py_eq(&V::Dict(dict! { "left_percent" => 59, "from_epoch" => at(36000.0) - 86400.0, "until_epoch" => at(36000.0) })));
+        assert!(V::Dict(got)
+            .py_eq(&V::Dict(dict! { "left_percent" => 59, "from_epoch" => at(36000.0) - 86400.0, "until_epoch" => at(36000.0) })));
         assert_eq!(left(V::Float(80.4), 36000.0, &V::None).unwrap().at("left_percent").as_int(), Some(20)); // 按四舍五入后显示的百分比（80%）
         assert!(left(V::Float(80.5), 36000.0, &V::None).is_none()); // 显示 81%：还剩 19%
         assert!(left(V::Int(41), -60.0, &V::None).is_none()); // 重置时间已经过了：缓存里的数不算数
@@ -2133,16 +2288,27 @@ mod tests {
         assert!(!add(&mut weeks, rl(10.0, f64::INFINITY), t + 400.0));
         assert_eq!((num(&weeks[0].peak), num(&weeks[0].last)), (40.0, t + 240.0));
         for i in 1..70 {
-            add(&mut weeks, rl(i as f64, end + i as f64 * w), t + i as f64 * w); // 新的一周接在后面，最多留 WEEKS_KEEP 周
+            add(&mut weeks, rl(i as f64, end + i as f64 * w), t + i as f64 * w);
+            // 新的一周接在后面，最多留 WEEKS_KEEP 周
         }
         assert_eq!(weeks.len(), WEEKS_KEEP);
         assert_eq!(num(&weeks[weeks.len() - 1].end), end + 69.0 * w);
         assert!(weeks.windows(2).all(|p| num(&p[0].end) <= num(&p[1].end)));
         // 文件里写的是整数的，没改到的项照样是整数
-        let mut weeks = weeks_parse(Some(j(r#"{"weeks": [{"end": 1800259200, "peak": 41, "first": 5, "last": 6, "carried": 3, "resets": 2.9}]}"#)));
+        let mut weeks = weeks_parse(Some(j(
+            r#"{"weeks": [{"end": 1800259200, "peak": 41, "first": 5, "last": 6, "carried": 3, "resets": 2.9}]}"#,
+        )));
         assert!(add(&mut weeks, rl(20.0, 1800259200.0), 7.0));
-        assert_eq!(json::dumps(&V::Dict(weeks[0].to_dict()), json::Fmt::new()), r#"{"end": 1800259200.0, "peak": 20.0, "first": 5, "last": 7.0, "carried": 44, "resets": 3}"#);
-        assert!(week_num(&V::Int(999_999_999_999_999_999)) && !week_num(&V::Int(1_000_000_000_000_000_000)) && !week_num(&V::Float(1e18)) && !week_num(&V::Bool(true)));
+        assert_eq!(
+            json::dumps(&V::Dict(weeks[0].to_dict()), json::Fmt::new()),
+            r#"{"end": 1800259200.0, "peak": 20.0, "first": 5, "last": 7.0, "carried": 44, "resets": 3}"#
+        );
+        assert!(
+            week_num(&V::Int(999_999_999_999_999_999))
+                && !week_num(&V::Int(1_000_000_000_000_000_000))
+                && !week_num(&V::Float(1e18))
+                && !week_num(&V::Bool(true))
+        );
     }
 
     #[test]
@@ -2153,7 +2319,9 @@ mod tests {
         let dir = crate::py::fs::TempDir::new().unwrap();
         let p = path::join(&dir.path, "usage-weeks.json");
         let load = || weeks_parse(load_quiet(&p));
-        let dump = |weeks: Vec<Week>| json::dumps(&V::from(weeks.iter().map(|w| V::Dict(w.to_dict())).collect::<Vec<V>>()), json::Fmt::new());
+        let dump = |weeks: Vec<Week>| {
+            json::dumps(&V::from(weeks.iter().map(|w| V::Dict(w.to_dict())).collect::<Vec<V>>()), json::Fmt::new())
+        };
         let now = time::time();
         let rl = dict! { "seven_day" => dict! { "utilization" => 12.5, "resets_at" => now + 86400.0 } };
         weeks_record_at(&p, &rl, now).unwrap();
@@ -2163,7 +2331,8 @@ mod tests {
         weeks_record_at(&p, &rl, now).unwrap();
         let again = std::fs::metadata(&p).unwrap();
         assert_eq!((again.ino(), again.mtime(), again.mtime_nsec()), (st.ino(), st.mtime(), st.mtime_nsec()), "同一次查询不重写");
-        std::fs::write(&p, r#"{"version": 1, "weeks": [{"end": "x"}, "bad", {"end": 1, "peak": 2, "first": 3, "last": 4}]}"#).unwrap();
+        std::fs::write(&p, r#"{"version": 1, "weeks": [{"end": "x"}, "bad", {"end": 1, "peak": 2, "first": 3, "last": 4}]}"#)
+            .unwrap();
         assert_eq!(dump(load()), r#"[{"end": 1, "peak": 2, "first": 3, "last": 4, "carried": 0, "resets": 0}]"#);
         std::fs::write(
             &p,
@@ -2180,9 +2349,13 @@ mod tests {
         // 照 usage.json 有哪几个模型从它的 limits 补上；usage.json 里没有的模型不加，账号对不上的不算
         let now = time::time();
         let ends = "2099-01-01T00:00:00Z";
-        let mine = |at: f64, rl: &Dict, uuid: &str| Some(V::Dict(dict! { "fetchedAtMs" => at * 1000.0, "accountUuid" => uuid, "utilization" => rl }));
+        let mine = |at: f64, rl: &Dict, uuid: &str| {
+            Some(V::Dict(dict! { "fetchedAtMs" => at * 1000.0, "accountUuid" => uuid, "utilization" => rl }))
+        };
         let weekly = d(r#"{"kind": "weekly_all", "percent": 61, "resets_at": "2099-01-01T00:00:00Z", "scope": null}"#);
-        let fable = d(r#"{"kind": "weekly_scoped", "percent": 44, "resets_at": "2099-01-01T00:00:00Z", "scope": {"model": {"id": null, "display_name": "Fable"}}}"#);
+        let fable = d(
+            r#"{"kind": "weekly_scoped", "percent": 44, "resets_at": "2099-01-01T00:00:00Z", "scope": {"model": {"id": null, "display_name": "Fable"}}}"#,
+        );
         let with = |base: &Dict, k: &str, v: V| {
             let c = base.copy();
             c.set(k, v);
@@ -2203,11 +2376,23 @@ mod tests {
         let x = pick(vec![mine(now - 10.0, &ours, "u-1"), mine(now - 2.0, &theirs, "u-1")]).unwrap();
         assert_eq!(x.at, (now - 2.0) * 1000.0 / 1000.0);
         assert_eq!(x.rl.dict("seven_day").unwrap().at("utilization").as_int(), Some(61));
-        assert_eq!(dump(x.rl.get("model_scoped")), r#"[{"display_name": "Fable", "utilization": 44, "resets_at": "2099-01-01T00:00:00Z"}]"#);
+        assert_eq!(
+            dump(x.rl.get("model_scoped")),
+            r#"[{"display_name": "Fable", "utilization": 44, "resets_at": "2099-01-01T00:00:00Z"}]"#
+        );
         assert!(!theirs.has("model_scoped")); // 只在返回的那份里补，读到的不改
         let mut row = Row {
-            key: "bob@example.com".into(), name: "bob@example.com".into(), alias: String::new(), email: "bob@example.com".into(), plan: "Ultra".into(),
-            source: "cache", at: Some(x.at), rl: x.rl.clone(), why: V::None, msg: V::from(""), outdated_login_plan: String::new(),
+            key: "bob@example.com".into(),
+            name: "bob@example.com".into(),
+            alias: String::new(),
+            email: "bob@example.com".into(),
+            plan: "Ultra".into(),
+            source: "cache",
+            at: Some(x.at),
+            rl: x.rl.clone(),
+            why: V::None,
+            msg: V::from(""),
+            outdated_login_plan: String::new(),
         };
         let e = usage_entry(&row, now).unwrap();
         assert!(e.at("five_hour").is_none());
@@ -2221,21 +2406,34 @@ mod tests {
         assert!(pick(vec![mine(now - 2.0, &ours, "u-1"), mine(now - 2.0, &theirs, "u-1")]).unwrap().rl.same(&ours));
         // limits 被拿掉了（Claude Code 查不到时拿缓存顶上的那种）：照搬 usage.json 的那一项
         let bare = Dict::from_pairs(theirs.items().into_iter().filter(|(k, _)| &**k != "limits"));
-        assert_eq!(dump(pick(vec![mine(now - 10.0, &ours, "u-1"), mine(now - 2.0, &bare, "u-1")]).unwrap().rl.get("model_scoped")), dump(Some(scoped.clone())));
+        assert_eq!(
+            dump(pick(vec![mine(now - 10.0, &ours, "u-1"), mine(now - 2.0, &bare, "u-1")]).unwrap().rl.get("model_scoped")),
+            dump(Some(scoped.clone()))
+        );
         // limits 里没有这个模型了：也照搬，哪一行都不少（下一次查到时以查到的为准）
         let gone = with(&theirs, "limits", V::from(crate::list![&weekly]));
-        assert_eq!(dump(pick(vec![mine(now - 10.0, &ours, "u-1"), mine(now - 2.0, &gone, "u-1")]).unwrap().rl.get("model_scoped")), dump(Some(scoped.clone())));
+        assert_eq!(
+            dump(pick(vec![mine(now - 10.0, &ours, "u-1"), mine(now - 2.0, &gone, "u-1")]).unwrap().rl.get("model_scoped")),
+            dump(Some(scoped.clone()))
+        );
         // usage.json 里没有分模型的额度（[]）：不照 limits 加，cca 不猜 get_usage 给哪几个模型
         let none = with(&ours, "model_scoped", j("[]"));
-        assert_eq!(dump(pick(vec![mine(now - 10.0, &none, "u-1"), mine(now - 2.0, &theirs, "u-1")]).unwrap().rl.get("model_scoped")), "[]");
+        assert_eq!(
+            dump(pick(vec![mine(now - 10.0, &none, "u-1"), mine(now - 2.0, &theirs, "u-1")]).unwrap().rl.get("model_scoped")),
+            "[]"
+        );
         // 只有 Claude Code 的缓存（cca 还没查过）：不补
         assert!(!pick(vec![None, mine(now - 2.0, &theirs, "u-1")]).unwrap().rl.has("model_scoped"));
         // usage.json 是别的账号的（换过登录）：不拿它补
         assert!(!pick(vec![mine(now - 10.0, &ours, "u-2"), mine(now - 2.0, &theirs, "u-1")]).unwrap().rl.has("model_scoped"));
         // 名字重复的只留一个；limits 里的不是数字时照搬旧的
-        let twice = with(&ours, "model_scoped", V::from(crate::list![scoped.as_list().unwrap().at(0), scoped.as_list().unwrap().at(0)]));
+        let twice =
+            with(&ours, "model_scoped", V::from(crate::list![scoped.as_list().unwrap().at(0), scoped.as_list().unwrap().at(0)]));
         let odd = with(&theirs, "limits", V::from(crate::list![&weekly, with(&fable, "percent", V::None)]));
-        assert_eq!(dump(pick(vec![mine(now - 10.0, &twice, "u-1"), mine(now - 2.0, &odd, "u-1")]).unwrap().rl.get("model_scoped")), dump(Some(scoped.clone())));
+        assert_eq!(
+            dump(pick(vec![mine(now - 10.0, &twice, "u-1"), mine(now - 2.0, &odd, "u-1")]).unwrap().rl.get("model_scoped")),
+            dump(Some(scoped.clone()))
+        );
         assert!(pick(vec![None, None]).is_none());
         // 数据旧了、取到的时间：JSON 里的 age_seconds 朝 0 截断
         row.at = Some(now - 1410.9);
@@ -2247,7 +2445,16 @@ mod tests {
 
     /// tests/usage_view.py 的那四行：查到了的（备注两项）、Claude Code 记的套餐过时的、端口不通用缓存顶上的、没登录的
     fn table_rows(now: f64) -> Vec<Row> {
-        let row = |alias: &str, email: &str, plan: &str, five: i64, week: i64, source: &'static str, why: V, msg: &str, extra: Option<Dict>, old: &str| {
+        let row = |alias: &str,
+                   email: &str,
+                   plan: &str,
+                   five: i64,
+                   week: i64,
+                   source: &'static str,
+                   why: V,
+                   msg: &str,
+                   extra: Option<Dict>,
+                   old: &str| {
             let rl = dict! {
                 "five_hour" => dict! { "utilization" => five, "resets_at" => iso(now + 2.0 * 3600.0 + 13.0 * 60.0 + 30.0).unwrap() },
                 "seven_day" => dict! { "utilization" => week, "resets_at" => iso(now + 3.0 * 86400.0 + 5.0 * 3600.0).unwrap() },
@@ -2290,7 +2497,11 @@ mod tests {
             // 每个账号正好一行（别名、没有别名的邮箱总有一个看得到）
             for r in &rows {
                 let shown = if r.alias.is_empty() { &r.email } else { &r.alias };
-                assert_eq!(lines.iter().filter(|l| l.contains(shown.as_str()) && !l.trim_start().starts_with('!')).count(), 1, "{cols} 列：{shown}");
+                assert_eq!(
+                    lines.iter().filter(|l| l.contains(shown.as_str()) && !l.trim_start().starts_with('!')).count(),
+                    1,
+                    "{cols} 列：{shown}"
+                );
             }
         }
     }
@@ -2323,15 +2534,27 @@ mod tests {
         assert!(lines[5].starts_with("\x1b[33m  ! alice@example.com"));
         // 一行也没有：原来是没人接的 ValueError（max() 的参数是空的）
         assert!(matches!(usage_table_lines(&[], now, "80", false, &[]), Err(Fail::Value(_))));
-        assert_eq!((cols_of("").unwrap(), cols_of("x").unwrap(), cols_of("１２０").unwrap(), cols_of("-5").unwrap()), (80, 80, 120, 80));
+        assert_eq!(
+            (cols_of("").unwrap(), cols_of("x").unwrap(), cols_of("１２０").unwrap(), cols_of("-5").unwrap()),
+            (80, 80, 120, 80)
+        );
         assert!(cols_of("²").is_err() && cols_of(&"9".repeat(30)).unwrap() > 1 << 40);
     }
 
     #[test]
     fn why_texts() {
         let row = |why: V, msg: V| Row {
-            key: "工作(bob@example.com)".into(), name: "工作".into(), alias: "工作".into(), email: "bob@example.com".into(), plan: String::new(), source: "none",
-            at: None, rl: Dict::new(), why, msg, outdated_login_plan: String::new(),
+            key: "工作(bob@example.com)".into(),
+            name: "工作".into(),
+            alias: "工作".into(),
+            email: "bob@example.com".into(),
+            plan: String::new(),
+            source: "none",
+            at: None,
+            rl: Dict::new(),
+            why,
+            msg,
+            outdated_login_plan: String::new(),
         };
         let said = |why: &str, msg: &str, table: WhyTable| usage_why(&row(V::from(why), V::from(msg)), table).unwrap();
         assert_eq!(said("login", "", WhyTable::Usage), "还没登录（cca @工作 登录）");
@@ -2347,6 +2570,9 @@ mod tests {
         assert!(usage_why(&row(j("[1]"), V::None), WhyTable::Usage).is_err_and(|e| e.is("TypeError")));
         assert_eq!(reset_fail_code("auth"), "not_logged_in");
         assert_eq!(reset_fail_code("timeout"), "error");
-        assert_eq!(login_plan_note("工作(bob@example.com)", "Pro", "Max"), "Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login 工作）");
+        assert_eq!(
+            login_plan_note("工作(bob@example.com)", "Pro", "Max"),
+            "Claude Code 里记的套餐还是 Pro（登录时记下的，不会自己更新），账号现在是 Max：重新登录一次就会更新（cca login 工作）"
+        );
     }
 }

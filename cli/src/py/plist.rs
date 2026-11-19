@@ -855,7 +855,10 @@ impl<'a> XmlReader<'a> {
 
     fn name(&mut self) -> R<&'a str> {
         let rest = self.rest();
-        let end = rest.char_indices().find(|(i, c)| if *i == 0 { !is_name_start(*c) } else { !is_name_char(*c) }).map_or(rest.len(), |(i, _)| i);
+        let end = rest
+            .char_indices()
+            .find(|(i, c)| if *i == 0 { !is_name_start(*c) } else { !is_name_char(*c) })
+            .map_or(rest.len(), |(i, _)| i);
         if end == 0 {
             return self.bad("not well-formed (invalid token)");
         }
@@ -874,7 +877,9 @@ impl<'a> XmlReader<'a> {
             rest = &rest[end + 1..];
             let number = match name.strip_prefix('#') {
                 Some(n) => match n.strip_prefix('x') {
-                    Some(hex) if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) => Some(u32::from_str_radix(hex, 16).ok()),
+                    Some(hex) if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                        Some(u32::from_str_radix(hex, 16).ok())
+                    }
                     None if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => Some(n.parse::<u32>().ok()),
                     _ => return self.bad("not well-formed (invalid token)"),
                 },
@@ -1231,11 +1236,17 @@ fn int_digits(s: &str, radix: u32) -> Option<i128> {
 /// 文件的字节 → 文字：UTF-8（BOM 去掉）、带 BOM 的 UTF-16、声明了 ISO-8859-1 / US-ASCII 的
 fn decode_xml(data: &[u8]) -> R<String> {
     let utf16 = |be: bool, body: &[u8]| {
-        let units: Vec<u16> = body.chunks(2).filter(|c| c.len() == 2).map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) }).collect();
+        let units: Vec<u16> = body
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) })
+            .collect();
         String::from_utf16(&units).or_else(|_| expat("not well-formed (invalid token)", 1))
     };
     let text = match data {
-        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8(rest.to_vec()).or_else(|_| expat("not well-formed (invalid token)", 1))?,
+        [0xef, 0xbb, 0xbf, rest @ ..] => {
+            String::from_utf8(rest.to_vec()).or_else(|_| expat("not well-formed (invalid token)", 1))?
+        }
         [0xfe, 0xff, rest @ ..] => utf16(true, rest)?,
         [0xff, 0xfe, rest @ ..] => utf16(false, rest)?,
         _ => {
@@ -1247,7 +1258,9 @@ fn decode_xml(data: &[u8]) -> R<String> {
                 Some(after[1..].split(quote).next()?.to_string())
             });
             match declared.as_deref() {
-                None | Some("utf-8") | Some("utf8") => String::from_utf8(data.to_vec()).or_else(|_| expat("not well-formed (invalid token)", 1))?,
+                None | Some("utf-8") | Some("utf8") => {
+                    String::from_utf8(data.to_vec()).or_else(|_| expat("not well-formed (invalid token)", 1))?
+                }
                 Some("iso-8859-1") | Some("us-ascii") => data.iter().map(|b| *b as char).collect(),
                 Some(_) => return expat("unknown encoding", 1),
             }
@@ -1317,10 +1330,15 @@ mod tests {
             "uid" => P::Uid(val.py_str().parse().unwrap()),
             "array" => P::Array(val.as_list().unwrap().items().iter().map(build).collect()),
             "dict" => P::Dict(
-                val.as_list().unwrap().items().iter().map(|kv| {
-                    let kv = kv.as_list().unwrap();
-                    (kv.at(0).py_str(), build(&kv.at(1)))
-                }).collect(),
+                val.as_list()
+                    .unwrap()
+                    .items()
+                    .iter()
+                    .map(|kv| {
+                        let kv = kv.as_list().unwrap();
+                        (kv.at(0).py_str(), build(&kv.at(1)))
+                    })
+                    .collect(),
             ),
             other => panic!("不认识的标记 {other}"),
         }

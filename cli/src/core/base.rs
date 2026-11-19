@@ -159,10 +159,19 @@ mod tests {
         let m = PAIR_RE.match_("主号（me@example.com）").unwrap();
         assert_eq!((m.g(1), m.g(2)), ("主号", "me@example.com"));
         assert!(ALIAS_BAD.found("a@b") && !ALIAS_BAD.found("工作"));
-        assert!(SETTINGS_BAD.matches("https_proxy") && SETTINGS_BAD.matches("CLAUDE_CODE_USE_BEDROCK") && !SETTINGS_BAD.matches("API_TIMEOUT_MS"));
+        assert!(
+            SETTINGS_BAD.matches("https_proxy")
+                && SETTINGS_BAD.matches("CLAUDE_CODE_USE_BEDROCK")
+                && !SETTINGS_BAD.matches("API_TIMEOUT_MS")
+        );
         assert!(ENV_RESERVED.matches("CCA_X") && ENV_RESERVED.matches("browser"));
         assert!(ENV_SECRETISH.found("MY_API_KEY") && ENV_SECRETISH.found("token") && !ENV_SECRETISH.found("KEYBOARD"));
-        assert!(secret_re_match("sk-12345") && secret_re_match("sk-12345\n") && !secret_re_match("short") && !secret_re_match("has space1"));
+        assert!(
+            secret_re_match("sk-12345")
+                && secret_re_match("sk-12345\n")
+                && !secret_re_match("short")
+                && !secret_re_match("has space1")
+        );
         assert!(HOST_RE.matches("192.0.2.10") && HOST_RE.matches("::1") && !HOST_RE.matches("-oProxyCommand"));
     }
 

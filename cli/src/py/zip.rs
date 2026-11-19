@@ -208,7 +208,12 @@ fn end_rec_data(file: &File, filesize: u64) -> Result<Option<EndRec>, ZipError> 
     let data = read_at(file, (filesize - SIZE_END_CENT_DIR) as i128, SIZE_END_CENT_DIR)?;
     if data.len() == SIZE_END_CENT_DIR as usize && &data[0..4] == b"PK\x05\x06" && data[20..22] == [0, 0] {
         // 签名对、没有注释
-        let rec = EndRec { zip64: false, size: u32_at(&data, 12) as u64, offset: u32_at(&data, 16) as u64, location: filesize - SIZE_END_CENT_DIR };
+        let rec = EndRec {
+            zip64: false,
+            size: u32_at(&data, 12) as u64,
+            offset: u32_at(&data, 16) as u64,
+            location: filesize - SIZE_END_CENT_DIR,
+        };
         return end_rec_data64(file, filesize - SIZE_END_CENT_DIR, rec).map(Some);
     }
     // 要么不是 zip，要么带着注释：在文件末尾找记录的签名（注释最长 64K）
@@ -293,7 +298,8 @@ impl ZipFile {
                 return bad("Bad magic number for central directory");
             }
             at += SIZE_CENTRAL_DIR;
-            let (name_len, extra_len, comment_len) = (u16_at(centdir, 28) as usize, u16_at(centdir, 30) as usize, u16_at(centdir, 32) as usize);
+            let (name_len, extra_len, comment_len) =
+                (u16_at(centdir, 28) as usize, u16_at(centdir, 30) as usize, u16_at(centdir, 32) as usize);
             // fp.read(n)：不够就有多少算多少
             let mut take = |n: usize| -> &[u8] {
                 let piece = &data[at.min(data.len())..(at + n).min(data.len())];
@@ -360,14 +366,21 @@ impl ZipFile {
         }
         let fname_str = decode_name(&fname, u16_at(&fheader, 6) & 0x800 != 0)?;
         if fname_str != info.orig_filename {
-            return bad(format!("File name in directory {} and header {} differ.", crate::py::obj::repr_str(&info.orig_filename), crate::py::obj::repr_str(&fname_str)));
+            return bad(format!(
+                "File name in directory {} and header {} differ.",
+                crate::py::obj::repr_str(&info.orig_filename),
+                crate::py::obj::repr_str(&fname_str)
+            ));
         }
         if data_start + info.compress_size as i128 > info.end_offset && info.end_offset != info.header_offset {
             // 正好和下一项指着同一处的原来只是警告（接着读）
             return bad(format!("Overlapped entries: {} (possible zip bomb)", crate::py::obj::repr_str(&info.orig_filename)));
         }
         if info.flag_bits & 1 != 0 {
-            return Err(ZipError::Runtime(format!("File {} is encrypted, password required for extraction", crate::py::obj::repr_str(&info.filename))));
+            return Err(ZipError::Runtime(format!(
+                "File {} is encrypted, password required for extraction",
+                crate::py::obj::repr_str(&info.filename)
+            )));
         }
         let inflater = match info.compress_type {
             ZIP_STORED => None,
@@ -666,7 +679,11 @@ mod tests {
                 (Err(e), Some(class)) if class.py_str() == class_of(&e) => continue,
                 (Ok(z), None) => z,
                 (got, _) => {
-                    wrong.push(format!("{name}：打开时 python {:?}，rust {:?}", want.get("err").map(|c| c.py_str()), got.err().map(|e| format!("{e:?}"))));
+                    wrong.push(format!(
+                        "{name}：打开时 python {:?}，rust {:?}",
+                        want.get("err").map(|c| c.py_str()),
+                        got.err().map(|e| format!("{e:?}"))
+                    ));
                     continue;
                 }
             };
@@ -685,7 +702,12 @@ mod tests {
                 for (k, v) in got.items() {
                     // 长度可能超过 i64：都写成文字比
                     if v.py_str() != want.at(&k).py_str() {
-                        wrong.push(format!("{name} / {}：{k} python {}，rust {}", info.filename, want.at(&k).py_repr(), v.py_repr()));
+                        wrong.push(format!(
+                            "{name} / {}：{k} python {}，rust {}",
+                            info.filename,
+                            want.at(&k).py_repr(),
+                            v.py_repr()
+                        ));
                     }
                 }
                 let read = want.dict("read").unwrap();
@@ -703,7 +725,8 @@ mod tests {
                         all.extend(block);
                     }
                 }));
-                for (how, got, want) in [("read", whole, wanted(&read)), ("chunks", chunks, wanted(&want.dict("chunks").unwrap()))] {
+                for (how, got, want) in [("read", whole, wanted(&read)), ("chunks", chunks, wanted(&want.dict("chunks").unwrap()))]
+                {
                     if got == want {
                         continue;
                     }

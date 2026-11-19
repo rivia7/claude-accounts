@@ -34,7 +34,9 @@ def ranges(pred):
 
 def table(name, doc, pred):
     rs = ranges(pred)
+    print()   # 空行写在每张表前面：写在后面的话文件最后多一行空行，rustfmt 会去掉它
     print('/// %s（%d 段）' % (doc, len(rs)))
+    print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
     print('pub const %s: &[(u32, u32)] = &[' % name)
     line = '   '
     for a, b in rs:
@@ -46,12 +48,10 @@ def table(name, doc, pred):
     if line.strip():
         print(line)
     print('];')
-    print()
 
 
 print('// 由 cli/tools/gen_unicode.py 生成，不要手改。Unicode %s（CPython %d.%d 的 unicodedata）。' % (
     unicodedata.unidata_version, sys.version_info[0], sys.version_info[1]))
-print()
 table('WIDE', '`unicodedata.east_asian_width(c) in "WF"`：终端里占两格的字符', lambda c: unicodedata.east_asian_width(c) in 'WF')
 table('NONPRINT', '`not c.isprintable()`', lambda c: not c.isprintable())
 table('SPACE', '`c.isspace()`：`str.strip()`、`str.split()` 认的空白', lambda c: c.isspace())

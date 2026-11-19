@@ -65,13 +65,18 @@ const ALIASES: &[(&str, Codec)] = &[
 ];
 
 /// `encodings` 包里这四个字符集的模块名（规范化以后的名字直接就是模块名时用）
-const MODULES: &[(&str, Codec)] =
-    &[("ascii", Codec::Ascii), ("cp1252", Codec::Cp1252), ("iso8859_1", Codec::Latin1), ("latin_1", Codec::Latin1), ("utf_8", Codec::Utf8)];
+const MODULES: &[(&str, Codec)] = &[
+    ("ascii", Codec::Ascii),
+    ("cp1252", Codec::Cp1252),
+    ("iso8859_1", Codec::Latin1),
+    ("latin_1", Codec::Latin1),
+    ("utf_8", Codec::Utf8),
+];
 
 /// Windows-1252 的 0x80–0x9f（0 是没定义的那五个）；0xa0 以上和 Latin-1 一样
 const CP1252_HIGH: [u16; 32] = [
-    0x20ac, 0x0000, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x0000, 0x017d, 0x0000, 0x0000,
-    0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x0000, 0x017e, 0x0178,
+    0x20ac, 0x0000, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x0000, 0x017d, 0x0000,
+    0x0000, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x0000, 0x017e, 0x0178,
 ];
 
 /// 字符集的名字规范化（CPython 3.14 的 `_Py_normalize_encoding`，按 UTF-8 的字节看）：ASCII 的字母数字和点留着、转成小写，
@@ -462,10 +467,16 @@ mod tests {
         assert!(cases.len() > 100);
         for c in cases {
             let data = bytes_of(&c.at("data"));
-            for (key, codec) in [("utf-8", Codec::Utf8), ("ascii", Codec::Ascii), ("latin-1", Codec::Latin1), ("cp1252", Codec::Cp1252)] {
+            for (key, codec) in
+                [("utf-8", Codec::Utf8), ("ascii", Codec::Ascii), ("latin-1", Codec::Latin1), ("cp1252", Codec::Cp1252)]
+            {
                 let want = c.at(key).as_dict().unwrap();
                 assert_eq!(codec.decode_replace(&data), want.at("replace").py_str(), "{key} {data:?}");
-                assert_eq!(codec.decode_strict(&data), want.get("strict").and_then(|s| s.rc_str()).map(|s| s.to_string()), "{key} strict {data:?}");
+                assert_eq!(
+                    codec.decode_strict(&data),
+                    want.get("strict").and_then(|s| s.rc_str()).map(|s| s.to_string()),
+                    "{key} strict {data:?}"
+                );
             }
             assert_eq!(bytes_repr(&data), c.at("repr").py_str());
         }
@@ -492,7 +503,17 @@ mod tests {
 
     #[test]
     fn digits_limit() {
-        assert!(int_too_long(4301).to_string().starts_with("Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits"));
-        assert!(octal_ok(b"644") && octal_ok(b" 0o7_7 ") && octal_ok(b"+0") && !octal_ok(b"8") && !octal_ok(b"") && !octal_ok(b"7_") && !octal_ok(b"0o"));
+        assert!(int_too_long(4301)
+            .to_string()
+            .starts_with("Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits"));
+        assert!(
+            octal_ok(b"644")
+                && octal_ok(b" 0o7_7 ")
+                && octal_ok(b"+0")
+                && !octal_ok(b"8")
+                && !octal_ok(b"")
+                && !octal_ok(b"7_")
+                && !octal_ok(b"0o")
+        );
     }
 }

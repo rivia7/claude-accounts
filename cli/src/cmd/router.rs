@@ -56,7 +56,9 @@ fn py_int(v: &V) -> i64 {
         V::Int(i) => *i,
         V::Bool(b) => *b as i64,
         V::Float(f) => f.trunc() as i64,
-        V::Str(s) => text::to_int(s).unwrap_or_else(|| panic!("ValueError: invalid literal for int() with base 10: {}", v.py_repr())),
+        V::Str(s) => {
+            text::to_int(s).unwrap_or_else(|| panic!("ValueError: invalid literal for int() with base 10: {}", v.py_repr()))
+        }
         _ => panic!("TypeError: int() argument must be a string or a real number, not {}", v.py_repr()),
     }
 }
@@ -95,8 +97,10 @@ pub fn router_merge(c: &Dict, remote: &Dict) -> (Dict, Dict) {
     let racc = remote.list("accounts").map(|l| l.items()).unwrap_or_default();
     let rown = remote.dict("owners").unwrap_or_default();
     let owner_of = |s: &V| rown.get(&s.py_str());
-    let mine: Vec<(String, std::rc::Rc<str>, std::rc::Rc<str>, &'static Tool)> =
-        pool(c).into_iter().map(|(tool, k, v, _)| (format!("{}{}", tool.pool_prefix, acct_id(&k, tool)), node_of(&v), k, tool)).collect();
+    let mine: Vec<(String, std::rc::Rc<str>, std::rc::Rc<str>, &'static Tool)> = pool(c)
+        .into_iter()
+        .map(|(tool, k, v, _)| (format!("{}{}", tool.pool_prefix, acct_id(&k, tool)), node_of(&v), k, tool))
+        .collect();
     // 别的设备的槽位：owners 里标着、且不是我这台（owners 读不到时谁都不是"别的设备"，走单设备的覆盖）
     let others = others_of(&racc, &rown, &did);
     if others.is_empty() {
@@ -137,12 +141,18 @@ pub fn router_merge(c: &Dict, remote: &Dict) -> (Dict, Dict) {
         let name_v = V::from(name);
         if placed.iter().any(|p| p.py_eq(&name_v)) {
             // 共用账号：已经在并集里（别的设备推的），沿用它的槽位、不重复
-            let s = union.iter().find(|a| a.at("name").py_eq(&name_v)).map(|a| py_int(&a.at("slot"))).expect("刚在 placed 里找到过");
+            let s =
+                union.iter().find(|a| a.at("name").py_eq(&name_v)).map(|a| py_int(&a.at("slot"))).expect("刚在 placed 里找到过");
             mine_slot.push((tool.name, k.clone(), s));
             continue;
         }
         // 我上次推过这个账号：沿用它的槽位
-        let mut s = remote_slot.iter().find(|(n, _)| n.py_eq(&name_v)).map(|(_, s)| *s).filter(|s| *s > 0 && !used.contains(s)).unwrap_or(0);
+        let mut s = remote_slot
+            .iter()
+            .find(|(n, _)| n.py_eq(&name_v))
+            .map(|(_, s)| *s)
+            .filter(|s| *s > 0 && !used.contains(s))
+            .unwrap_or(0);
         if s == 0 {
             s = 1;
             while used.contains(&s) {
@@ -191,7 +201,9 @@ fn read_two_parts() -> (String, String) {
 fn print_sections(payload: &Dict, base: i64, slots: i64, owners: &Dict) {
     let accounts = payload.list("accounts").unwrap_or_default().items();
     // 槽位 → 节点（字典：同一个槽位后写的盖掉先写的）
-    let node_at = |s: i64| accounts.iter().rev().filter_map(|a| a.as_dict()).find(|a| a.at("slot").py_eq(&V::Int(s))).map(|a| a.at("node").py_str());
+    let node_at = |s: i64| {
+        accounts.iter().rev().filter_map(|a| a.as_dict()).find(|a| a.at("slot").py_eq(&V::Int(s))).map(|a| a.at("node").py_str())
+    };
     out!("{}", json::dumps(&V::Dict(payload.clone()), json::LINE));
     out!("---CCA-PORTS---");
     for s in 1..=slots {
@@ -236,7 +248,8 @@ pub fn cmd_slot_name(args: &[String]) -> R<()> {
     arity("cmd_slot_name", args, 1, 1)?;
     let input = io::read_stdin_text();
     let d = json::loads(if input.is_empty() { "{}" } else { &input }).unwrap_or_else(|_| V::Dict(Dict::new()));
-    let s = text::to_int(&args[0]).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[0]))))?;
+    let s = text::to_int(&args[0])
+        .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[0]))))?;
     let accounts = d.as_dict().and_then(|d| d.list("accounts")).map(|l| l.items()).unwrap_or_default();
     for a in accounts.iter().filter_map(|a| a.as_dict()) {
         if a.get("slot").is_some_and(|x| x.py_eq(&V::Int(s))) {
@@ -281,7 +294,10 @@ pub fn cmd_router_evict(args: &[String]) -> R<()> {
         owners.set(slot.as_str(), rown.get(&slot).unwrap_or(V::None));
     }
     others.sort_by_key(|x| py_int(&x.at("slot")));
-    let accounts: Vec<V> = others.iter().map(|x| V::Dict(dict! { "slot" => x.at("slot"), "name" => x.at("name"), "node" => x.get("node").unwrap_or(V::None) })).collect();
+    let accounts: Vec<V> = others
+        .iter()
+        .map(|x| V::Dict(dict! { "slot" => x.at("slot"), "name" => x.at("name"), "node" => x.get("node").unwrap_or(V::None) }))
+        .collect();
     if !*RO {
         cfg_save(&c)?;
     }
@@ -381,7 +397,8 @@ pub fn parse_node_list(text: &str) -> Vec<(String, String)> {
 /// 可选节点 n（记下的摘要 f）在节点列表 have=[(名字, 摘要)] 里现在叫什么：地址对上一个节点就是它（名字改没改都算，
 /// 两个节点互换名字也认得出），对上好几个时同名的优先；地址对不上（换了服务器，或者以前没记摘要）再按名字。找不到返回空
 pub fn node_match(n: &str, f: &V, have: &[(String, String)]) -> String {
-    let cand: Vec<&str> = have.iter().filter(|(_, g)| f.truthy() && f.as_str() == Some(g.as_str())).map(|(m, _)| m.as_str()).collect();
+    let cand: Vec<&str> =
+        have.iter().filter(|(_, g)| f.truthy() && f.as_str() == Some(g.as_str())).map(|(m, _)| m.as_str()).collect();
     if cand.contains(&n) {
         return n.to_string();
     }
@@ -595,7 +612,8 @@ pub fn cmd_policy_request(args: &[String]) -> R<()> {
 /// 也不原样显示，免得搅乱维护者的终端
 pub fn cmd_policy_lock(args: &[String]) -> R<()> {
     arity("cmd_policy_lock", args, 0, 5)?;
-    let (action, file, tool, email, node) = (arg(args, 0, ""), arg(args, 1, ""), arg(args, 2, ""), arg(args, 3, ""), arg(args, 4, ""));
+    let (action, file, tool, email, node) =
+        (arg(args, 0, ""), arg(args, 1, ""), arg(args, 2, ""), arg(args, 3, ""), arg(args, 4, ""));
     if !matches!(action, "plan" | "apply") || file.is_empty() {
         return die("用法: cca _policy-lock plan|apply policy.json 工具 邮箱 节点");
     }

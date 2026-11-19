@@ -433,7 +433,9 @@ pub fn mail_cfg(c: &Dict, key: Option<&str>) -> Option<Dict> {
 /// forwarder：这个账号登记的「信任转发中转」域名（不安全开关，默认 null）
 pub fn mail_view(c: &Dict, key: &str) -> Dict {
     match mail_cfg(c, Some(key)) {
-        Some(m) => dict! { "configured" => true, "user" => m.at("user"), "source" => m.at("source"), "auto" => m.at("auto"), "forwarder" => m.at("forwarder") },
+        Some(m) => {
+            dict! { "configured" => true, "user" => m.at("user"), "source" => m.at("source"), "auto" => m.at("auto"), "forwarder" => m.at("forwarder") }
+        }
         None => dict! { "configured" => false, "user" => V::None, "source" => V::None, "auto" => true, "forwarder" => V::None },
     }
 }
@@ -651,7 +653,11 @@ mod tests {
         assert!(s("=?utf-8?q?Secure_link_to_log_in_to_Claude=2Eai?="));
         // 应用名不是 Claude 的不认：Verification Portal 是真从 mail.anthropic.com 发出、dkim 也过的（见过），只靠签名挡不住
         assert!(!s("Your secure link to Verification Portal is here"));
-        assert!(!s("Your receipt from Anthropic") && !s("Secure link to log in to Claude-ai") && !s("Your secure link to Claudexyz is here"));
+        assert!(
+            !s("Your receipt from Anthropic")
+                && !s("Secure link to log in to Claude-ai")
+                && !s("Your secure link to Claudexyz is here")
+        );
     }
 
     /// config.json 的 mail 一节怎么读：默认的那一项、各账号的覆盖、信任的中转、引用到的地址
@@ -660,7 +666,8 @@ mod tests {
         let cases = vectors("cfg");
         assert!(cases.len() > 25);
         // 照 repr 比：键的先后、True 和 1 的差别都算
-        let same = |got: Option<Dict>, want: V, what: &str| assert_eq!(got.map_or(V::None, V::Dict).py_repr(), want.py_repr(), "{what}");
+        let same =
+            |got: Option<Dict>, want: V, what: &str| assert_eq!(got.map_or(V::None, V::Dict).py_repr(), want.py_repr(), "{what}");
         for c in cases {
             let cfg = c.dict("c").unwrap();
             let what = V::Dict(cfg.clone()).py_repr();

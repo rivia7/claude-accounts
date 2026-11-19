@@ -5,7 +5,6 @@
 //! 原来的 `MISSING`（“字典里没有这个键”，和 JSON 的 null 不是一回事）在这里是 `Option<V>` 的 `None`。
 
 use super::device::prepare_device;
-use crate::py::shutil::*;
 use crate::core::base::*;
 use crate::core::model::{acct_id, cdir};
 use crate::core::tool::{t, Kind, SHARED_KEYS};
@@ -17,6 +16,7 @@ use crate::py::num;
 use crate::py::obj::{Dict, V};
 use crate::py::path;
 use crate::py::rand;
+use crate::py::shutil::*;
 use crate::py::text;
 use crate::py::time;
 use crate::py::{die, R};
@@ -212,7 +212,12 @@ pub fn adopt_task_lists(src: &str, dst: &str, key: &str) -> R<()> {
         if older == &d {
             shutil_move(&s, &d)?;
         }
-        err!("cca: 任务列表 {} 在 {} 和这个账号里各有一份，留下较新的，较旧的那份移到 {}", name, dst.replacen(HOME.as_str(), "~", 1), kept);
+        err!(
+            "cca: 任务列表 {} 在 {} 和这个账号里各有一份，留下较新的，较旧的那份移到 {}",
+            name,
+            dst.replacen(HOME.as_str(), "~", 1),
+            kept
+        );
     }
     Ok(())
 }
@@ -432,7 +437,11 @@ mod tests {
     #[test]
     fn eq_treats_missing_as_its_own_value() {
         assert!(eq(&None, &None) && !eq(&None, &Some(V::None)) && !eq(&Some(V::None), &None));
-        assert!(eq(&Some(V::None), &Some(V::None)) && eq(&Some(V::Int(1)), &Some(V::Bool(true))) && eq(&Some(V::Int(1)), &Some(V::Float(1.0))));
+        assert!(
+            eq(&Some(V::None), &Some(V::None))
+                && eq(&Some(V::Int(1)), &Some(V::Bool(true)))
+                && eq(&Some(V::Int(1)), &Some(V::Float(1.0)))
+        );
         assert!(eq(&j(r#"{"a": 1, "b": [1, 2]}"#), &j(r#"{"b": [1, 2], "a": 1.0}"#)) && !eq(&j("[1, 2]"), &j("[2, 1]")));
     }
 
@@ -487,7 +496,10 @@ mod tests {
         }
         assert_eq!(config_json(" [1] ").unwrap().py_repr(), "[1]");
         assert_eq!(config_json("{\"a\":").unwrap_err().0, "Expecting value: line 1 column 6 (char 5)");
-        assert_eq!(config_json("\u{feff}{}").unwrap_err().0, "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)");
+        assert_eq!(
+            config_json("\u{feff}{}").unwrap_err().0,
+            "Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)"
+        );
         assert!(config_json("not json\n").is_err());
     }
 
@@ -567,7 +579,7 @@ mod tests {
         assert!(path::islink(&format!("{d}/link.md")));
         assert_eq!(read(&format!("{d}/real.md")), "new");
         assert_eq!(fs::listdir_sorted(&d).unwrap(), ["dst.md", "link.md", "real.md", "src.md"]); // 临时文件没留下
-        // 一个不存在：是错（原来是没人接的 FileNotFoundError）
+                                                                                                 // 一个不存在：是错（原来是没人接的 FileNotFoundError）
         assert!(merge_file(&src, &format!("{d}/none.md")).is_err());
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -624,7 +636,13 @@ mod tests {
             dirs.sort();
             for n in dirs.iter().chain(files) {
                 let p = path::join(root, n);
-                let what = if path::islink(&p) { format!("-> {}", readlink(&p).unwrap()) } else if path::isdir(&p) { "/".to_string() } else { read(&p) };
+                let what = if path::islink(&p) {
+                    format!("-> {}", readlink(&p).unwrap())
+                } else if path::isdir(&p) {
+                    "/".to_string()
+                } else {
+                    read(&p)
+                };
                 seen.push(format!("{} {}", path::relpath(&p, &dst), what));
             }
             Ok(())
@@ -715,10 +733,20 @@ mod tests {
         detach_legacy_shared(&format!("{client}/runtime"), &format!("{master}/runtime")).unwrap();
         assert!(!path::islink(&format!("{client}/state.json")) && !path::islink(&format!("{client}/runtime")));
         assert!(!path::samefile(&format!("{client}/state.json"), &format!("{master}/state.json")));
-        assert_eq!((read(&format!("{client}/state.json")).as_str(), fs::mode_of(&format!("{client}/state.json")).unwrap()), ("state", 0o640));
+        assert_eq!(
+            (read(&format!("{client}/state.json")).as_str(), fs::mode_of(&format!("{client}/state.json")).unwrap()),
+            ("state", 0o640)
+        );
         assert_eq!(mtime_ns(&format!("{client}/state.json")), (100, 0));
         assert_eq!(read(&format!("{client}/runtime/sub/lease")), "lease");
-        assert_eq!((fs::mode_of(&format!("{client}/runtime/sub")).unwrap(), mtime_ns(&format!("{client}/runtime/sub")), mtime_ns(&format!("{client}/runtime"))), (0o750, (150, 0), (150, 0)));
+        assert_eq!(
+            (
+                fs::mode_of(&format!("{client}/runtime/sub")).unwrap(),
+                mtime_ns(&format!("{client}/runtime/sub")),
+                mtime_ns(&format!("{client}/runtime"))
+            ),
+            (0o750, (150, 0), (150, 0))
+        );
         assert_eq!(fs::listdir_sorted(&client).unwrap(), ["runtime", "state.json"]); // 临时目录没留下
         assert_eq!(read(&format!("{master}/runtime/sub/lease")), "lease");
         // 不是链接、指向别处的链接、指向主目录里别的名字的链接：不动
@@ -737,7 +765,9 @@ mod tests {
         std::os::unix::fs::symlink(format!("{d}/outside"), format!("{master}/nested/a/inner")).unwrap();
         std::os::unix::fs::symlink(format!("{master}/nested"), format!("{client}/nested")).unwrap();
         match detach_legacy_shared(&format!("{client}/nested"), &format!("{master}/nested")) {
-            Err(crate::py::Fail::Die(m)) => assert_eq!(m, format!("旧共享目录包含内部符号链接，无法自动拆分，原目录未改动：{client}/nested")),
+            Err(crate::py::Fail::Die(m)) => {
+                assert_eq!(m, format!("旧共享目录包含内部符号链接，无法自动拆分，原目录未改动：{client}/nested"))
+            }
             other => panic!("{other:?}"),
         }
         assert_eq!(readlink(&format!("{client}/nested")).unwrap(), format!("{master}/nested"));
@@ -748,7 +778,11 @@ mod tests {
     #[test]
     fn merge_helpers_handle_plain_values() {
         // list! / dict! 造出来的值和读进来的一样合并
-        let (v, conflict) = merge_config_json(Some(V::Dict(dict! { "a" => list![1] })), Some(V::Dict(dict! { "a" => list![1], "b" => 2 })), Some(V::Dict(dict! { "a" => list![1, 2] })));
+        let (v, conflict) = merge_config_json(
+            Some(V::Dict(dict! { "a" => list![1] })),
+            Some(V::Dict(dict! { "a" => list![1], "b" => 2 })),
+            Some(V::Dict(dict! { "a" => list![1, 2] })),
+        );
         assert_eq!((json::dumps(&v.unwrap(), json::LINE).as_str(), conflict), (r#"{"a": [1, 2], "b": 2}"#, false));
     }
 }

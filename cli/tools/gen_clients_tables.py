@@ -17,7 +17,9 @@ from xml.parsers import expat
 
 
 def emit_ranges(name, doc, rs):
+    print()   # 空行写在每张表前面：写在后面的话文件最后多一行空行，rustfmt 会去掉它
     print('/// %s（%d 段）' % (doc, len(rs)))
+    print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
     print('pub const %s: &[(u32, u32)] = &[' % name)
     line = '   '
     for a, b in rs:
@@ -29,7 +31,6 @@ def emit_ranges(name, doc, rs):
     if line.strip():
         print(line)
     print('];')
-    print()
 
 
 def to_ranges(cps):
@@ -58,6 +59,7 @@ def casefold():
         if c.casefold() != c:
             rows.append((cp, c.casefold()))
     print('/// `c.casefold()` 和 c 不一样的字符：(字符, 变成什么)，按字符排好（%d 项）' % len(rows))
+    print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
     print('pub const CASEFOLD: &[(u32, &str)] = &[')
     line = '   '
     for cp, folded in rows:
@@ -82,7 +84,6 @@ def parses(data):
 def xml():
     print('// 由 cli/tools/gen_clients_tables.py 生成，不要手改。expat %s（CPython %d.%d 的 pyexpat）一个字符一个字符试出来的。' % (
         expat.EXPAT_VERSION.replace('expat_', ''), sys.version_info[0], sys.version_info[1]))
-    print()
     start, more = [], []
     for cp in range(0x80, 0x10000):
         if 0xD800 <= cp <= 0xDFFF:
@@ -123,6 +124,7 @@ def cp437():
     high = bytes(range(0x80, 0x100)).decode('cp437')
     assert bytes(range(0x80)).decode('cp437') == ''.join(map(chr, range(0x80)))
     print('/// cp437 的 0x80–0xFF 依次是这些字符（0x00–0x7F 和 ASCII 一样）')
+    print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
     print('pub const CP437_HIGH: [char; 128] = [')
     for i in range(0, 128, 16):
         print('    ' + ' '.join("'\\u{%x}'," % ord(c) for c in high[i:i + 16]))

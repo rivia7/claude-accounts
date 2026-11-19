@@ -24,7 +24,8 @@ use unicode_normalization::UnicodeNormalization;
 pub const CMDS: &[Cmd] = &[Cmd::all("launchers", cmd_launchers), Cmd::all("keychain", cmd_keychain)];
 
 pub const LAUNCHER_MARK: &str = "cca-launcher.json";
-pub const LSREGISTER: &str = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+pub const LSREGISTER: &str =
+    "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 /// 起一个不关心结果的命令：不接输入输出，最多等 30 秒，起不来、超时都不管
 pub fn subprocess_quiet(argv: &[&str]) {
@@ -76,7 +77,13 @@ pub fn launcher_names(table: &Dict) -> Vec<(Rc<str>, String)> {
         .map(|k| {
             let (a, e) = parse_key(&k);
             let before_at = e.split('@').next().unwrap_or("");
-            let n = if !a.is_empty() { a } else if !before_at.is_empty() { before_at.to_string() } else { k.to_string() };
+            let n = if !a.is_empty() {
+                a
+            } else if !before_at.is_empty() {
+                before_at.to_string()
+            } else {
+                k.to_string()
+            };
             (k, n)
         })
         .collect();
@@ -84,7 +91,15 @@ pub fn launcher_names(table: &Dict) -> Vec<(Rc<str>, String)> {
         .iter()
         .map(|(k, n)| {
             let (a, e) = parse_key(k);
-            let n = if short.iter().filter(|(_, x)| x == n).count() > 1 && a.is_empty() { if e.is_empty() { k.to_string() } else { e } } else { n.clone() };
+            let n = if short.iter().filter(|(_, x)| x == n).count() > 1 && a.is_empty() {
+                if e.is_empty() {
+                    k.to_string()
+                } else {
+                    e
+                }
+            } else {
+                n.clone()
+            };
             (k.clone(), format!("{}{}", t().launcher_prefix, re!(r"[/:]").sub("-", &n)))
         })
         .collect()
@@ -136,11 +151,17 @@ pub fn launcher_badges(c: &Dict, table: &Dict, names: &[(Rc<str>, String)]) -> V
         let n = text::skip(name, text::len(t().launcher_prefix));
         let n = if n.is_empty() { "?" } else { n };
         let first = n.chars().next().expect("上面保证了不是空的");
-        let label = if uni::is_wide(first) { n.chars().take(2).filter(|ch| uni::is_wide(*ch)).collect() } else { first.to_uppercase().collect::<String>() };
+        let label = if uni::is_wide(first) {
+            n.chars().take(2).filter(|ch| uni::is_wide(*ch)).collect()
+        } else {
+            first.to_uppercase().collect::<String>()
+        };
         // int(sha1 的十六进制, 16) % 颜色数
         let free: Vec<&'static str> = BADGE_COLORS.iter().copied().filter(|color| !used.contains(color)).collect();
         let free = if free.is_empty() { BADGE_COLORS.to_vec() } else { free };
-        let i = sha1_hex(acct_id(&k, t())).chars().fold(0usize, |acc, d| (acc * 16 + d.to_digit(16).unwrap_or(0) as usize) % free.len());
+        let i = sha1_hex(acct_id(&k, t()))
+            .chars()
+            .fold(0usize, |acc, d| (acc * 16 + d.to_digit(16).unwrap_or(0) as usize) % free.len());
         let color = free[i];
         used.push(color);
         out.push((k, (label, color)));
@@ -155,7 +176,8 @@ fn render_icon(src: &str, label: &str, color: &str) -> Option<Vec<u8>> {
         (done.rc == 0).then_some(())
     };
     let d = TempDir::new().ok()?;
-    let (js, png, iset) = (path::join(&d.path, "badge.js"), path::join(&d.path, "icon.png"), path::join(&d.path, "AppIcon.iconset"));
+    let (js, png, iset) =
+        (path::join(&d.path, "badge.js"), path::join(&d.path, "icon.png"), path::join(&d.path, "AppIcon.iconset"));
     std::fs::write(&js, BADGE_JS).ok()?;
     run(&["osascript", "-l", "JavaScript", &js, src, &png, label, color])?;
     std::fs::create_dir(&iset).ok()?;
@@ -180,7 +202,8 @@ fn write_icon(b: &str, app: &str, badge: &(String, &'static str), mark: &Dict, m
         },
         other => panic!("AttributeError: Info.plist 不是字典（{other:?}）"),
     };
-    let icon = path::join_all(&[app, "Contents", "Resources", &if icon.ends_with(".icns") { icon } else { format!("{icon}.icns") }]);
+    let icon =
+        path::join_all(&[app, "Contents", "Resources", &if icon.ends_with(".icns") { icon } else { format!("{icon}.icns") }]);
     let src = std::fs::read(&icon)?;
     let mut seed = src.clone();
     seed.extend_from_slice(format!("|{}|{}|{}", badge.0, badge.1, BADGE_VERSION).as_bytes());
@@ -264,7 +287,9 @@ pub fn cmd_launchers(args: &[String]) -> R<()> {
     let (ldir, cca, app, mode) = (args[0].as_str(), args[1].as_str(), arg(args, 2, ""), arg(args, 3, ""));
     let table = Dict::from_pairs(table_load(t())?.items().into_iter().filter(|(_, v)| !is_api(v)));
     let names = launcher_names(&table);
-    let cfg = load_quiet(&CFG).filter(|c| c.truthy()).map_or_else(Dict::new, |c| c.as_dict().unwrap_or_else(|| panic!("AttributeError: config.json 不是对象")));
+    let cfg = load_quiet(&CFG)
+        .filter(|c| c.truthy())
+        .map_or_else(Dict::new, |c| c.as_dict().unwrap_or_else(|| panic!("AttributeError: config.json 不是对象")));
     let badges = launcher_badges(&cfg, &table, &names);
     // 路径 → 账号（两个账号的启动器同名时后一个算数，位置照前一个）
     let mut want: Vec<(String, Rc<str>)> = Vec::new();
@@ -280,7 +305,10 @@ pub fn cmd_launchers(args: &[String]) -> R<()> {
     if path::isdir(ldir) {
         for n in fs::listdir_sorted(ldir)? {
             let p = path::join(ldir, &n);
-            if n.ends_with(".app") && !want.iter().any(|(x, _)| *x == p) && launcher_tool(&p).is_some_and(|tool| tool.as_str() == Some(t().name)) {
+            if n.ends_with(".app")
+                && !want.iter().any(|(x, _)| *x == p)
+                && launcher_tool(&p).is_some_and(|tool| tool.as_str() == Some(t().name))
+            {
                 fs::rmtree(&p)?;
                 out!("-\t{}", &n[..n.len() - 4]);
             }

@@ -7,6 +7,7 @@ use super::sys::{interrupted, run_browser, trap, NetErr, PySock, Stop};
 use super::{ascii_encode_error, ascii_only, login_target, q_get, q_some};
 use crate::cmd::{arg, arity};
 use crate::core::tool::t;
+use crate::out;
 use crate::py::num::floordiv;
 use crate::py::obj::repr_str;
 use crate::py::proc::{Cmd as Proc, Out};
@@ -14,7 +15,6 @@ use crate::py::text;
 use crate::py::time::time;
 use crate::py::url::{parse_qsl, urlsplit};
 use crate::py::{die, exit, Fail, R};
-use crate::out;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
@@ -83,7 +83,12 @@ fn login_catch_one(conn: &PySock, path: &str, state: &str) -> Result<Caught, Sto
         return Ok(Caught::Nothing);
     }
     if q_get(&q, "state") != Some(state) {
-        login_catch_reply(conn, "400 Bad Request", "不是这一次的登录", "<p>这一页不是这一次登录跳回来的。回到终端看看 cca login-page 有没有在运行。</p>")?;
+        login_catch_reply(
+            conn,
+            "400 Bad Request",
+            "不是这一次的登录",
+            "<p>这一页不是这一次登录跳回来的。回到终端看看 cca login-page 有没有在运行。</p>",
+        )?;
         return Ok(Caught::Nothing);
     }
     match q_some(&q, "code") {
@@ -157,7 +162,8 @@ fn accept(listener: &OwnedFd) -> Result<io::Result<OwnedFd>, Stop> {
 
 /// `select.select(socks, [], [], secs)[0]`：有连接在等的那几个监听（先后照 socks）
 fn select(socks: &[OwnedFd], secs: f64) -> Result<Vec<&OwnedFd>, Stop> {
-    let mut fds: Vec<libc::pollfd> = socks.iter().map(|s| libc::pollfd { fd: s.as_raw_fd(), events: libc::POLLIN, revents: 0 }).collect();
+    let mut fds: Vec<libc::pollfd> =
+        socks.iter().map(|s| libc::pollfd { fd: s.as_raw_fd(), events: libc::POLLIN, revents: 0 }).collect();
     let ms = (secs * 1000.0).ceil().min(i32::MAX as f64) as i32;
     // SAFETY: fds 是有效的数组，个数如实给出
     let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) };
@@ -250,7 +256,10 @@ fn wait_for_callback(socks: &[OwnedFd], path: &str, state: &str, secs: f64) -> R
             match login_catch_one(&conn, path, state)? {
                 Caught::Nothing => continue,
                 Caught::Refused(why) => {
-                    let body = format!("<p>登录页说：<code>{}</code></p><p>回到服务器的终端直接回车取消，再重新登录一遍。</p>", html_escape(&why));
+                    let body = format!(
+                        "<p>登录页说：<code>{}</code></p><p>回到服务器的终端直接回车取消，再重新登录一遍。</p>",
+                        html_escape(&why)
+                    );
                     login_catch_reply(&conn, "200 OK", "没有登录成功", &body)?;
                     return Err(Fail::Die(format!("登录页说没有登录成功：{why}")).into());
                 }
@@ -267,7 +276,11 @@ fn wait_for_callback(socks: &[OwnedFd], path: &str, state: &str, secs: f64) -> R
                     }
                     let body = format!(
                         "<p>{}回到服务器的终端，粘贴、回车，服务器上就登录好了。之后可以关掉这一页。</p><pre>{}</pre>",
-                        if copied { "验证码已经复制到剪贴板（就是下面这一行）：" } else { "复制下面这一行验证码，" },
+                        if copied {
+                            "验证码已经复制到剪贴板（就是下面这一行）："
+                        } else {
+                            "复制下面这一行验证码，"
+                        },
                         html_escape(&text)
                     );
                     login_catch_reply(&conn, "200 OK", "这边登录好了，还差一步", &body)?;
@@ -414,9 +427,19 @@ mod tests {
                 ]
             );
             let replies = client.join().unwrap();
-            assert!(replies[0].starts_with("HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "), "{}", replies[0]);
-            assert!(replies[0].ends_with("<h2>找不到</h2>") && replies[0].contains("\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n<!doctype html>"));
-            assert!(replies[1].starts_with("HTTP/1.1 400 Bad Request\r\n") && replies[1].ends_with("<p>这一页不是这一次登录跳回来的。回到终端看看 cca login-page 有没有在运行。</p>"));
+            assert!(
+                replies[0].starts_with("HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: "),
+                "{}",
+                replies[0]
+            );
+            assert!(
+                replies[0].ends_with("<h2>找不到</h2>")
+                    && replies[0].contains("\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n<!doctype html>")
+            );
+            assert!(
+                replies[1].starts_with("HTTP/1.1 400 Bad Request\r\n")
+                    && replies[1].ends_with("<p>这一页不是这一次登录跳回来的。回到终端看看 cca login-page 有没有在运行。</p>")
+            );
             // 不是 GET、半截的请求：什么都不回，直接关
             assert_eq!((replies[2].as_str(), replies[3].as_str()), ("", ""));
             // 是回调的：login_catch_one 自己不回（等复制完由外面回）

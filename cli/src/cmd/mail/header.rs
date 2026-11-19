@@ -752,7 +752,9 @@ mod tests {
             match c.get("error") {
                 Some(want) => assert!(matches!(&got, Err(Fail::Other(class, _)) if *class == want.py_str()), "{values:?} {got:?}"),
                 None => {
-                    let pairs = |list: Vec<(String, String)>| V::from(list.into_iter().map(|(n, a)| V::from(crate::list![n, a])).collect::<Vec<_>>());
+                    let pairs = |list: Vec<(String, String)>| {
+                        V::from(list.into_iter().map(|(n, a)| V::from(crate::list![n, a])).collect::<Vec<_>>())
+                    };
                     let got = pairs(got.unwrap());
                     assert!(got.py_eq(&c.at("pairs")), "{values:?}\n  这里：{got:?}\n  Python：{:?}", c.at("pairs"));
                     // 严格的检查之前，解析器自己切出来的
@@ -788,7 +790,11 @@ mod tests {
         for c in cases {
             let (kind, max) = (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize);
             assert!(getaddresses(&[nest(&kind, max)]).is_ok(), "{kind} 套 {max} 层");
-            assert!(matches!(getaddresses(&[nest(&kind, max + 1)]), Err(Fail::Other("RecursionError", _))), "{kind} 套 {} 层", max + 1);
+            assert!(
+                matches!(getaddresses(&[nest(&kind, max + 1)]), Err(Fail::Other("RecursionError", _))),
+                "{kind} 套 {} 层",
+                max + 1
+            );
         }
         // 各条路上实测的（对照数据的 limit_paths 一节：真的 PY_SRC、真的调用深度，一个数起一个进程量）：隔着几层函数调的
         // 少几层，这个进程里头一次经 getaddresses / parseaddr 的多一层
@@ -796,7 +802,8 @@ mod tests {
         let paths: Vec<_> = vectors("limit_paths").into_iter().filter(|c| c.at("what").py_str() == "address").collect();
         assert!(paths.len() >= 16);
         for c in paths {
-            let (kind, max, depth) = (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize, c.at("depth").as_int().unwrap() as usize);
+            let (kind, max, depth) =
+                (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize, c.at("depth").as_int().unwrap() as usize);
             let limit = ADDR_FRAMES + usize::from(c.at("first").truthy()) - depth;
             assert!(ok(&kind, max, limit) && !ok(&kind, max + 1, limit), "{}：{kind} 最多 {max} 层", c.at("path").py_str());
         }

@@ -86,7 +86,14 @@ pub fn on_run(args: &[String], folder: &str, timeout: f64, env: Option<&[(String
     Some(hook(args, folder, timeout, env))
 }
 
-pub fn on_download(url: &str, destination: &str, folder: &str, package: bool, _expected_size: Option<&V>, _empty: &[&str]) -> Option<R<Option<String>>> {
+pub fn on_download(
+    url: &str,
+    destination: &str,
+    folder: &str,
+    package: bool,
+    _expected_size: Option<&V>,
+    _empty: &[&str],
+) -> Option<R<Option<String>>> {
     let hook = HOOKS.with(|h| h.borrow().download.clone())?;
     Some(hook(url, destination, folder, package))
 }
@@ -187,7 +194,9 @@ fn same_outcome(got: &Dict, want: &Dict) -> bool {
     match (got.get("err"), want.get("err")) {
         (Some(g), Some(w)) => {
             let (g, w) = (g.py_str(), w.py_str());
-            g == w || (os.contains(&g.as_str()) && os.contains(&w.as_str())) || (g == "ValueError" && matches!(w.as_str(), "UnicodeDecodeError" | "JSONDecodeError"))
+            g == w
+                || (os.contains(&g.as_str()) && os.contains(&w.as_str()))
+                || (g == "ValueError" && matches!(w.as_str(), "UnicodeDecodeError" | "JSONDecodeError"))
         }
         (None, None) => {
             let show = |d: &Dict| json::dumps(&V::Dict(dict! { "ok" => d.get("ok"), "cu" => d.get("cu") }), json::LINE);
@@ -232,20 +241,39 @@ fn check_functions(v: &Dict, wrong: &mut Vec<String>) {
             wrong.push(format!("{what}\n   python: {}\n   rust:   {}", show(want), show(got)));
         }
     };
-    let rows = |k: &str| -> Vec<List> { v.list(k).unwrap_or_else(|| panic!("对照数据里没有 {k}")).items().iter().map(|r| r.as_list().expect("一行是个列表")).collect() };
+    let rows = |k: &str| -> Vec<List> {
+        v.list(k)
+            .unwrap_or_else(|| panic!("对照数据里没有 {k}"))
+            .items()
+            .iter()
+            .map(|r| r.as_list().expect("一行是个列表"))
+            .collect()
+    };
 
     // 地址规则：四种客户端各自认哪些地址
     for row in rows("url") {
         let (id, url, package) = (row.at(0).py_str(), row.at(1), row.at(2).truthy());
         set_cu(client(&id));
-        check(format!("cu_url {id} package={package} {}", url.py_repr()), &outcome(cu_url_v(&url, package).map(V::from)), &row.at(3).as_dict().unwrap());
+        check(
+            format!("cu_url {id} package={package} {}", url.py_repr()),
+            &outcome(cu_url_v(&url, package).map(V::from)),
+            &row.at(3).as_dict().unwrap(),
+        );
     }
     // 版本号、构建号
     for row in rows("version") {
-        check(format!("cu_version {}", row.at(0).py_repr()), &outcome(cu_version(&row.at(0)).map(versions)), &row.at(1).as_dict().unwrap());
+        check(
+            format!("cu_version {}", row.at(0).py_repr()),
+            &outcome(cu_version(&row.at(0)).map(versions)),
+            &row.at(1).as_dict().unwrap(),
+        );
     }
     for row in rows("build") {
-        check(format!("cu_build {}", row.at(0).py_repr()), &outcome(cu_build(&row.at(0)).map(versions)), &row.at(1).as_dict().unwrap());
+        check(
+            format!("cu_build {}", row.at(0).py_repr()),
+            &outcome(cu_build(&row.at(0)).map(versions)),
+            &row.at(1).as_dict().unwrap(),
+        );
     }
     for row in rows("build_order") {
         let (a, b) = (row.at(0), row.at(1));
@@ -270,12 +298,20 @@ fn check_functions(v: &Dict, wrong: &mut Vec<String>) {
     set_cu(&CU_CLAUDE);
     for row in rows("squirrel") {
         let (name, data, arch) = (row.at(0).py_str(), test_blob(&row.at(1)), row.at(2).py_str());
-        check(format!("cu_parse_squirrel {name} {arch}"), &outcome(feed::cu_parse_squirrel(&data, &arch).map(V::Dict)), &row.at(3).as_dict().unwrap());
+        check(
+            format!("cu_parse_squirrel {name} {arch}"),
+            &outcome(feed::cu_parse_squirrel(&data, &arch).map(V::Dict)),
+            &row.at(3).as_dict().unwrap(),
+        );
     }
     set_cu(&CU_CLAUDE_CLI);
     for row in rows("cli_latest") {
         let data = test_blob(&row.at(0));
-        check(format!("cu_cli_latest {:?}", String::from_utf8_lossy(&data)), &outcome(feed::cu_cli_latest(&data).map(V::from)), &row.at(1).as_dict().unwrap());
+        check(
+            format!("cu_cli_latest {:?}", String::from_utf8_lossy(&data)),
+            &outcome(feed::cu_cli_latest(&data).map(V::from)),
+            &row.at(1).as_dict().unwrap(),
+        );
     }
     // 三个手写的判断（原来是带前瞻、后顾或者拼出来的正则）
     for row in rows("version_search") {
@@ -292,38 +328,51 @@ fn check_functions(v: &Dict, wrong: &mut Vec<String>) {
         assert_eq!(install::path_in_command(&p, &command), row.at(2).truthy(), "path_in_command {p:?} {command:?}");
     }
     for row in rows("environment") {
-        let got = List::from_vec(cu_environment(&row.at(0).py_str()).into_iter().map(|(k, v)| V::List(crate::list![k, v])).collect());
+        let got =
+            List::from_vec(cu_environment(&row.at(0).py_str()).into_iter().map(|(k, v)| V::List(crate::list![k, v])).collect());
         assert_eq!(V::List(got).py_repr(), row.at(1).py_repr());
     }
     // 进程列表：两次 ps 的输出是对照数据里给的
     for row in rows("processes") {
-        let (name, id, command, comm) = (row.at(0).py_str(), row.at(1).py_str(), test_blob(&row.at(2)), (!row.at(3).is_none()).then(|| test_blob(&row.at(3))));
+        let (name, id, command, comm) =
+            (row.at(0).py_str(), row.at(1).py_str(), test_blob(&row.at(2)), (!row.at(3).is_none()).then(|| test_blob(&row.at(3))));
         let (paths, want) = (row.at(4).as_list().unwrap().items(), row.at(5).as_dict().unwrap());
         set_cu(client(&id));
         let calls = Rc::new(RefCell::new(Vec::new()));
         let seen = calls.clone();
         HOOKS.with(|h| {
-            h.borrow_mut().run = Some(Rc::new(move |args: &[String], folder: &str, timeout: f64, _env: Option<&[(String, String)]>| {
-                seen.borrow_mut().push(V::List(crate::list![crate::py::obj::str_list(args), folder, timeout]));
-                let stdout = match (&comm, args.last().map(String::as_str)) {
-                    (Some(comm), Some("pid=,comm=")) => comm.clone(),
-                    _ => command.clone(),
-                };
-                Ok(Done { rc: 0, stdout, stderr: Vec::new() })
-            }))
+            h.borrow_mut().run =
+                Some(Rc::new(move |args: &[String], folder: &str, timeout: f64, _env: Option<&[(String, String)]>| {
+                    seen.borrow_mut().push(V::List(crate::list![crate::py::obj::str_list(args), folder, timeout]));
+                    let stdout = match (&comm, args.last().map(String::as_str)) {
+                        (Some(comm), Some("pid=,comm=")) => comm.clone(),
+                        _ => command.clone(),
+                    };
+                    Ok(Done { rc: 0, stdout, stderr: Vec::new() })
+                }))
         });
         let got = outcome(install::cu_no_processes(&paths).map(|()| V::None));
         check(format!("cu_no_processes {name}"), &got, &want);
-        assert!(V::List(List::from_vec(calls.borrow().clone())).py_eq(&want.at("calls")), "cu_no_processes {name} 起的命令：{:?}", calls.borrow());
+        assert!(
+            V::List(List::from_vec(calls.borrow().clone())).py_eq(&want.at("calls")),
+            "cu_no_processes {name} 起的命令：{:?}",
+            calls.borrow()
+        );
     }
     set_cu(&CU_CODEX);
     for row in rows("processes_rc") {
         let rcs: Vec<i64> = row.at(0).as_list().unwrap().items().iter().map(|n| n.as_int().unwrap()).collect();
         let left = Rc::new(RefCell::new(rcs.clone()));
         HOOKS.with(|h| {
-            h.borrow_mut().run = Some(Rc::new(move |_: &[String], _: &str, _: f64, _: Option<&[(String, String)]>| Ok(Done { rc: left.borrow_mut().remove(0) as i32, stdout: b"1 x\n".to_vec(), stderr: Vec::new() })))
+            h.borrow_mut().run = Some(Rc::new(move |_: &[String], _: &str, _: f64, _: Option<&[(String, String)]>| {
+                Ok(Done { rc: left.borrow_mut().remove(0) as i32, stdout: b"1 x\n".to_vec(), stderr: Vec::new() })
+            }))
         });
-        check(format!("cu_no_processes rc={rcs:?}"), &outcome(install::cu_no_processes(&[V::from("/Applications/ChatGPT.app")]).map(|()| V::None)), &row.at(1).as_dict().unwrap());
+        check(
+            format!("cu_no_processes rc={rcs:?}"),
+            &outcome(install::cu_no_processes(&[V::from("/Applications/ChatGPT.app")]).map(|()| V::None)),
+            &row.at(1).as_dict().unwrap(),
+        );
     }
     HOOKS.with(|h| h.borrow_mut().run = None);
 }
@@ -347,7 +396,14 @@ fn listing(folder: &str) -> BTreeMap<String, String> {
                 out.insert(rel, format!("dir {:o}", st.permissions().mode() & 0o777));
                 stack.push(p);
             } else {
-                out.insert(rel, format!("file {:o} {}", st.permissions().mode() & 0o7777, crate::py::hash::sha256_hex(std::fs::read(&p).unwrap())));
+                out.insert(
+                    rel,
+                    format!(
+                        "file {:o} {}",
+                        st.permissions().mode() & 0o7777,
+                        crate::py::hash::sha256_hex(std::fs::read(&p).unwrap())
+                    ),
+                );
             }
         }
     }
@@ -383,7 +439,8 @@ fn check_extract(v: &Dict, wrong: &mut Vec<String>) {
             if !umask_022 {
                 got_tree.retain(|_, v| !v.starts_with("dir "));
             }
-            let want_tree: BTreeMap<String, String> = want_tree.into_iter().filter(|(_, v)| umask_022 || !v.starts_with("dir ")).collect();
+            let want_tree: BTreeMap<String, String> =
+                want_tree.into_iter().filter(|(_, v)| umask_022 || !v.starts_with("dir ")).collect();
             if got_tree != want_tree {
                 wrong.push(format!("cu_extract {name} 解出来的东西\n   python: {want_tree:?}\n   rust:   {got_tree:?}"));
             }
@@ -506,7 +563,9 @@ fn target_is_found_by_bundle_id() {
     // 环境变量：CCA_CLIENT_… 设了就照它（空的就是没装），没设再看 CCA_…_APP（空的不算）
     let with_env = |pairs: &[(&str, &str)]| {
         let env = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        WORLD.with(|w| *w.borrow_mut() = Some(World { home: path::join(&temp.0, "home"), cca_home: path::join(&temp.0, "home/.cca"), env }));
+        WORLD.with(|w| {
+            *w.borrow_mut() = Some(World { home: path::join(&temp.0, "home"), cca_home: path::join(&temp.0, "home/.cca"), env })
+        });
     };
     set_cu(&CU_CODEX);
     with_env(&[("CCA_CLIENT_CODEX_APP", "/a/ChatGPT.app"), ("CCA_CODEX_APP", "/b/ChatGPT.app")]);
@@ -593,7 +652,9 @@ impl State {
             .into_owned();
         if let Some(generated) = rx!(r#""generated_epoch": (\d{9,}\.\d+)"#).captures(&text).map(|m| m[1].parse::<f64>().unwrap()) {
             text = rx!(r#""next_check_epoch": (\d{9,}\.\d+)"#)
-                .replace_all(&text, |m: &Captures| format!("\"next_check_epoch\": \"<T+{}>\"", num::round((m[1].parse::<f64>().unwrap() - generated) / 60.0) * 60))
+                .replace_all(&text, |m: &Captures| {
+                    format!("\"next_check_epoch\": \"<T+{}>\"", num::round((m[1].parse::<f64>().unwrap() - generated) / 60.0) * 60)
+                })
                 .into_owned();
         }
         text = rx!(r#""(generated_epoch|checked_epoch)": \d{9,}\.\d+"#).replace_all(&text, "\"$1\": \"<T>\"").into_owned();
@@ -720,7 +781,11 @@ fn fake_run(state: &Rc<RefCell<State>>, args: &[String], folder: &str, timeout: 
         if r.truthy("fail") {
             return cu_error("error", "更新校验命令失败或超时");
         }
-        return done(r.get("rc").and_then(|n| n.as_int()).unwrap_or(0) as i32, r.get("stdout_b64").map_or(Vec::new(), |b| test_blob(&b)), b"");
+        return done(
+            r.get("rc").and_then(|n| n.as_int()).unwrap_or(0) as i32,
+            r.get("stdout_b64").map_or(Vec::new(), |b| test_blob(&b)),
+            b"",
+        );
     }
     if let Some(rc) = st.fake.get("cli_run_rc").and_then(|n| n.as_int()) {
         return done(rc as i32, Vec::new(), b"");
@@ -729,7 +794,8 @@ fn fake_run(state: &Rc<RefCell<State>>, args: &[String], folder: &str, timeout: 
         return done(0, format!("{}{}", st.text("cli_installed"), st.text("cli_suffix")).into_bytes(), b"");
     }
     if last == "update" {
-        let conf = env.and_then(|env| env.iter().find(|(k, _)| k == "CLAUDE_CONFIG_DIR")).map(|(_, v)| path::join(v, "settings.json"));
+        let conf =
+            env.and_then(|env| env.iter().find(|(k, _)| k == "CLAUDE_CONFIG_DIR")).map(|(_, v)| path::join(v, "settings.json"));
         if let Some(settings) = conf.and_then(|p| std::fs::read_to_string(p).ok()) {
             record.set("settings", settings);
         }
@@ -810,7 +876,9 @@ fn fake_rename(state: &Rc<RefCell<State>>, source: &str, destination: &str) -> R
     let root = state.borrow().root.clone();
     let matches = |when: &Dict, _: &mut u32| {
         let is = |k: &str, actual: &str| when.get(k).is_none_or(|w| w.py_str().replace("<ROOT>", &root) == actual);
-        is("source", source) && is("destination", destination) && source.ends_with(&when.get("source_endswith").map_or(String::new(), |s| s.py_str()))
+        is("source", source)
+            && is("destination", destination)
+            && source.ends_with(&when.get("source_endswith").map_or(String::new(), |s| s.py_str()))
     };
     state.borrow_mut().fire("rename", true, &matches)?;
     install::rename_exclusive(source, destination)?;
@@ -879,8 +947,12 @@ fn replay(scenario: &Dict) -> Vec<String> {
         let (s1, s2, s3, s4) = (state.clone(), state.clone(), state.clone(), state.clone());
         HOOKS.with(|h| {
             let mut h = h.borrow_mut();
-            h.run = Some(Rc::new(move |args: &[String], folder: &str, timeout: f64, env: Option<&[(String, String)]>| fake_run(&s1, args, folder, timeout, env)));
-            h.download = Some(Rc::new(move |url: &str, destination: &str, _folder: &str, package: bool| fake_download(&s2, url, destination, package)));
+            h.run = Some(Rc::new(move |args: &[String], folder: &str, timeout: f64, env: Option<&[(String, String)]>| {
+                fake_run(&s1, args, folder, timeout, env)
+            }));
+            h.download = Some(Rc::new(move |url: &str, destination: &str, _folder: &str, package: bool| {
+                fake_download(&s2, url, destination, package)
+            }));
             h.rename = Some(Rc::new(move |source: &str, destination: &str| fake_rename(&s3, source, destination)));
             h.rmtree = Some(Rc::new(move |work: &str| {
                 let fails = s4.borrow().fake.get("rmtree_fails").filter(|f| !f.is_none())?.py_str();
@@ -919,7 +991,14 @@ fn replay(scenario: &Dict) -> Vec<String> {
             }
             let now = tree(&state);
             if now != want_tree {
-                let changed: Vec<String> = now.keys().chain(want_tree.keys()).filter(|k| now.get(*k) != want_tree.get(*k)).cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+                let changed: Vec<String> = now
+                    .keys()
+                    .chain(want_tree.keys())
+                    .filter(|k| now.get(*k) != want_tree.get(*k))
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
                 for k in changed {
                     differs(&format!("以后的文件 {k}"), format!("{:?}", now.get(&k)), format!("{:?}", want_tree.get(&k)));
                 }
@@ -944,7 +1023,12 @@ fn replay(scenario: &Dict) -> Vec<String> {
                     v => env.insert(text("key"), v.py_str().replace("<ROOT>", &root)),
                 };
             }),
-            "write" => write_file(&here(&text("path")), &test_blob(&step.at("b64")), step.get("mode").and_then(|m| m.as_int()).map(|m| m as u32), step.get("dirmode").and_then(|m| m.as_int()).map(|m| m as u32)),
+            "write" => write_file(
+                &here(&text("path")),
+                &test_blob(&step.at("b64")),
+                step.get("mode").and_then(|m| m.as_int()).map(|m| m as u32),
+                step.get("dirmode").and_then(|m| m.as_int()).map(|m| m as u32),
+            ),
             "mkdir" => {
                 let (p, mode) = (here(&text("path")), step.at("mode").as_int().unwrap() as u32);
                 crate::py::fs::makedirs_mode(&p, mode).unwrap();
@@ -985,8 +1069,19 @@ fn replay(scenario: &Dict) -> Vec<String> {
                 let arg = match step.get("token").filter(|t| !t.is_none()) {
                     Some(reference) => {
                         let reference = reference.as_list().unwrap();
-                        let doc = docs.get(&(reference.at(0).as_int().unwrap() as usize)).expect("那一步打出过状态文档").as_dict().unwrap();
-                        let row = doc.list("clients").unwrap().items().into_iter().map(|c| c.as_dict().unwrap()).find(|c| c.at("id").py_str() == reference.at(1).py_str()).unwrap();
+                        let doc = docs
+                            .get(&(reference.at(0).as_int().unwrap() as usize))
+                            .expect("那一步打出过状态文档")
+                            .as_dict()
+                            .unwrap();
+                        let row = doc
+                            .list("clients")
+                            .unwrap()
+                            .items()
+                            .into_iter()
+                            .map(|c| c.as_dict().unwrap())
+                            .find(|c| c.at("id").py_str() == reference.at(1).py_str())
+                            .unwrap();
                         row.at("install_token").py_str()
                     }
                     None => text("arg"),
@@ -1028,10 +1123,22 @@ fn replay(scenario: &Dict) -> Vec<String> {
                         differs(&format!("起的第 {} 条命令", i + 1), one(&got_calls), one(&want_calls));
                     }
                 }
-                differs("下载过的地址", format!("{:?}", st.downloads), format!("{:?}", want.list("downloads").unwrap().items().iter().map(|u| u.py_str()).collect::<Vec<_>>()));
-                differs("删目录时事务记录还在不在", format!("{:?}", st.rmtree_saw), format!("{:?}", want.list("rmtree_saw").unwrap().items().iter().map(|b| b.truthy()).collect::<Vec<_>>()));
+                differs(
+                    "下载过的地址",
+                    format!("{:?}", st.downloads),
+                    format!("{:?}", want.list("downloads").unwrap().items().iter().map(|u| u.py_str()).collect::<Vec<_>>()),
+                );
+                differs(
+                    "删目录时事务记录还在不在",
+                    format!("{:?}", st.rmtree_saw),
+                    format!("{:?}", want.list("rmtree_saw").unwrap().items().iter().map(|b| b.truthy()).collect::<Vec<_>>()),
+                );
                 let slept = HOOKS.with(|h| h.borrow().slept.clone().unwrap_or_default());
-                differs("睡了几秒", format!("{slept:?}"), format!("{:?}", want.list("slept").unwrap().items().iter().map(|n| n.as_pynum().unwrap()).collect::<Vec<_>>()));
+                differs(
+                    "睡了几秒",
+                    format!("{slept:?}"),
+                    format!("{:?}", want.list("slept").unwrap().items().iter().map(|n| n.as_pynum().unwrap()).collect::<Vec<_>>()),
+                );
             }
             "call" => {
                 let want = step.dict("want").unwrap();
@@ -1083,7 +1190,11 @@ fn replay(scenario: &Dict) -> Vec<String> {
                     V::List(crate::list![V::from(crate::py::hash::sha256_hex(test_blob(&d.at(0)))), d.at(1)])
                 });
                 if !same_outcome(&got, &want) {
-                    differs("结果", show(&got), show(&Dict::from_pairs(want.items().into_iter().filter(|(k, _)| matches!(&**k, "ok" | "cu" | "err")))));
+                    differs(
+                        "结果",
+                        show(&got),
+                        show(&Dict::from_pairs(want.items().into_iter().filter(|(k, _)| matches!(&**k, "ok" | "cu" | "err")))),
+                    );
                 }
                 differs("下载下来的文件", V::from(extra.get("dest")).py_repr(), V::from(want_dest).py_repr());
                 let st = state.borrow();
@@ -1096,7 +1207,11 @@ fn replay(scenario: &Dict) -> Vec<String> {
                 }
                 drop(st);
                 let slept = HOOKS.with(|h| h.borrow().slept.clone().unwrap_or_default());
-                differs("睡了几秒", format!("{slept:?}"), format!("{:?}", want.list("slept").unwrap().items().iter().map(|n| n.as_pynum().unwrap()).collect::<Vec<_>>()));
+                differs(
+                    "睡了几秒",
+                    format!("{slept:?}"),
+                    format!("{:?}", want.list("slept").unwrap().items().iter().map(|n| n.as_pynum().unwrap()).collect::<Vec<_>>()),
+                );
                 check_tree(&want, &mut differs);
             }
             other => panic!("不认识的步骤：{other}"),

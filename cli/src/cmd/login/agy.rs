@@ -81,8 +81,10 @@ fn read_logs(dir: &str) -> String {
     }
     let Ok(entries) = std::fs::read_dir(dir) else { return String::new() };
     // `*.log`：以 .log 结尾；`*` 不认点开头的名字
-    let mut names: Vec<std::ffi::OsString> =
-        entries.filter_map(|e| Some(e.ok()?.file_name())).filter(|n| n.as_bytes().ends_with(b".log") && !n.as_bytes().starts_with(b".")).collect();
+    let mut names: Vec<std::ffi::OsString> = entries
+        .filter_map(|e| Some(e.ok()?.file_name()))
+        .filter(|n| n.as_bytes().ends_with(b".log") && !n.as_bytes().starts_with(b"."))
+        .collect();
     names.sort();
     let mut logs = String::new();
     for n in names {
@@ -131,7 +133,9 @@ pub fn agy_probe(bin_: &str) -> R<Dict> {
             env.push((k, v));
         }
     }
-    for (k, v) in [("SSH_CONNECTION", AGY_SSH), ("HTTPS_PROXY", "http://127.0.0.1:9"), ("HTTP_PROXY", "http://127.0.0.1:9"), ("NO_PROXY", "")] {
+    for (k, v) in
+        [("SSH_CONNECTION", AGY_SSH), ("HTTPS_PROXY", "http://127.0.0.1:9"), ("HTTP_PROXY", "http://127.0.0.1:9"), ("NO_PROXY", "")]
+    {
         proc::env_set(&mut env, k, v);
     }
     let logs = {
@@ -374,14 +378,20 @@ pub fn cmd_agy_login(args: &[String]) -> R<()> {
     trap(libc::SIGINT, true);
     // stdin=PIPE、stdout=PIPE、stderr=STDOUT（In::Bytes 在 spawn 时就是一条开着的管道）
     let gemini = format!("--gemini_dir={}", cdir(&key));
-    let mut child = match Proc::new([bin_, &gemini, "acp", "--login"]).stdin(In::Bytes(Vec::new())).stdout(Out::Capture).stderr(Out::ToStdout).spawn() {
+    let mut child = match Proc::new([bin_, &gemini, "acp", "--login"])
+        .stdin(In::Bytes(Vec::new()))
+        .stdout(Out::Capture)
+        .stderr(Out::ToStdout)
+        .spawn()
+    {
         Ok(child) => child,
         Err(ProcError::Os(e)) => return Err(e.into()),
         Err(ProcError::Timeout { .. } | ProcError::Interrupted) => unreachable!("spawn 不限时，也不会被信号打断"),
     };
     let mut kid = Kid::of(&child);
     let out = child.stdout.take().expect("stdout 要的是管道");
-    let mut login = Login { key: &key, mode, has_fd3, stdin: child.stdin.take(), opened: false, state: String::new(), asked: 0, said: false };
+    let mut login =
+        Login { key: &key, mode, has_fd3, stdin: child.stdin.take(), opened: false, state: String::new(), asked: 0, said: false };
     match login.follow(out.as_raw_fd(), &mut kid) {
         Ok(rc) => exit(rc),
         Err(Stop::Fail(e)) => Err(e),
@@ -422,12 +432,40 @@ mod tests {
             assert_eq!(AGY_CODE_PROMPT.found(s), want, "{s}");
         }
         for (s, want) in [
-            ("AGY_X", true), ("agy_x", true), ("AGYX", false), ("ANTIGRAVITY_GEMINI_DIR", true), ("GEMINI_API_KEY", true), ("GEM\u{130}N\u{130}_X", true),
-            ("gem\u{131}n\u{131}_x", true), ("GOOGLE_API_KEY", true), ("google_x", true), ("SSH_AUTH_SOCK", true), ("\u{17f}\u{17f}h_x", true), ("S\u{17f}H_", true),
-            ("HTTP_PROXY", true), ("https_proxy", true), ("HTTPS_PROXY", true), ("ALL_PROXY", true), ("all_proxy", true), ("NO_PROXY", true), ("no_proxy", true),
-            ("NO_PROXYX", false), ("HTTP_PROXY\n", true), ("HTTPSS_PROXY", false), ("XHTTP_PROXY", false), ("HTTP_PROXY_X", false), ("PATH", false), ("HOME", false),
-            ("CCA_ACCOUNT", false), ("ANT\u{130}GRAV\u{130}TY_", true), ("ant\u{131}grav\u{131}ty_", true), ("NO_PROXY\n\n", false), ("FTP_PROXY", false),
-            ("HTTP\u{17f}_PROXY", true), ("http\u{17f}_proxy", true), ("https_proxy\n", true),
+            ("AGY_X", true),
+            ("agy_x", true),
+            ("AGYX", false),
+            ("ANTIGRAVITY_GEMINI_DIR", true),
+            ("GEMINI_API_KEY", true),
+            ("GEM\u{130}N\u{130}_X", true),
+            ("gem\u{131}n\u{131}_x", true),
+            ("GOOGLE_API_KEY", true),
+            ("google_x", true),
+            ("SSH_AUTH_SOCK", true),
+            ("\u{17f}\u{17f}h_x", true),
+            ("S\u{17f}H_", true),
+            ("HTTP_PROXY", true),
+            ("https_proxy", true),
+            ("HTTPS_PROXY", true),
+            ("ALL_PROXY", true),
+            ("all_proxy", true),
+            ("NO_PROXY", true),
+            ("no_proxy", true),
+            ("NO_PROXYX", false),
+            ("HTTP_PROXY\n", true),
+            ("HTTPSS_PROXY", false),
+            ("XHTTP_PROXY", false),
+            ("HTTP_PROXY_X", false),
+            ("PATH", false),
+            ("HOME", false),
+            ("CCA_ACCOUNT", false),
+            ("ANT\u{130}GRAV\u{130}TY_", true),
+            ("ant\u{131}grav\u{131}ty_", true),
+            ("NO_PROXY\n\n", false),
+            ("FTP_PROXY", false),
+            ("HTTP\u{17f}_PROXY", true),
+            ("http\u{17f}_proxy", true),
+            ("https_proxy\n", true),
         ] {
             assert_eq!(AGY_PROBE_DROP.matches(s), want, "{s:?}");
         }
@@ -457,7 +495,10 @@ mod tests {
         assert!(EMAIL_RE.matches("a@b.c.") && !EMAIL_RE.matches("."));
         let url = |s: &str| AGY_LOGIN_URL.search(s).map(|m| m.g(0).to_string());
         for (s, want) in [
-            ("see https://accounts.google.com/o/oauth2/auth?a=1&b=2 now", Some("https://accounts.google.com/o/oauth2/auth?a=1&b=2")),
+            (
+                "see https://accounts.google.com/o/oauth2/auth?a=1&b=2 now",
+                Some("https://accounts.google.com/o/oauth2/auth?a=1&b=2"),
+            ),
             ("https://accounts.google.com/", None),
             ("https://accounts.google.com/x\ty", Some("https://accounts.google.com/x")),
             ("http://accounts.google.com/x", None),
@@ -543,7 +584,20 @@ mod tests {
     #[test]
     fn bracket_classes_in_a_path_part() {
         // glob.has_magic 认的不止这些；这里只问“这一截照 fnmatch 是不是对不上它自己”
-        for (part, want) in [("plain", false), ("a[b]c", true), ("a[bc", false), ("a]b[c", false), ("[]", false), ("[]]", true), ("[!]", false), ("[!]]", true), ("[!a]", true), ("x[", false), ("a*b?c", false), ("[a][", true)] {
+        for (part, want) in [
+            ("plain", false),
+            ("a[b]c", true),
+            ("a[bc", false),
+            ("a]b[c", false),
+            ("[]", false),
+            ("[]]", true),
+            ("[!]", false),
+            ("[!]]", true),
+            ("[!a]", true),
+            ("x[", false),
+            ("a*b?c", false),
+            ("[a][", true),
+        ] {
             assert_eq!(has_bracket_class(part), want, "{part}");
         }
     }

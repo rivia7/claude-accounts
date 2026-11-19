@@ -298,7 +298,8 @@ pub fn join_names(items: &V) -> String {
 /// 第三方 API 账号这一项的问题（不带账号名的前缀，不回显 key 的值）
 pub fn api_problems(c: &Dict, k: &str, v: &Dict, tool: &Tool) -> Vec<String> {
     if !tool.has_api {
-        return vec![format!("{} 没有第三方 API 账号：值只能写节点名", tool.label)]; // agy：只有 Google 账号
+        return vec![format!("{} 没有第三方 API 账号：值只能写节点名", tool.label)];
+        // agy：只有 Google 账号
     }
     let mut errs = Vec::new();
     if !parse_key(k).1.is_empty() || ALIAS_BAD.found(k) {
@@ -440,7 +441,7 @@ mod tests {
         let ok = dict! { "base_url" => "https://api.example.com/v1", "model" => "m-1", "node" => "US-A", "env" => dict! { "X" => "1", "N" => 2 } };
         assert!(api_problems(&c, "别名", &ok, claude()).is_empty());
         let bad = dict! { "base_url" => 1, "model" => "a b", "node" => "ZZ", "extra" => 1, "key" => "short",
-                          "env" => dict! { "1X" => "a", "HTTPS_PROXY" => "x", "MY_TOKEN" => "x", "OK" => true, "NL" => "a\nb" }, "id" => "a@b" };
+        "env" => dict! { "1X" => "a", "HTTPS_PROXY" => "x", "MY_TOKEN" => "x", "OK" => true, "NL" => "a\nb" }, "id" => "a@b" };
         assert_eq!(
             api_problems(&c, "别名(me@example.com)", &bad, claude()),
             [
@@ -459,7 +460,10 @@ mod tests {
             ]
         );
         assert_eq!(api_problems(&c, "x", &ok, agy()), ["Antigravity 没有第三方 API 账号：值只能写节点名"]);
-        assert_eq!(api_problems(&c, "x", &dict! { "base_url" => "https://a.example.com", "env" => dict! {} }, codex()), ["不认识的字段 env（能用的有 base_url、model、node、key、id）"]);
+        assert_eq!(
+            api_problems(&c, "x", &dict! { "base_url" => "https://a.example.com", "env" => dict! {} }, codex()),
+            ["不认识的字段 env（能用的有 base_url、model、node、key、id）"]
+        );
     }
 
     #[test]
@@ -471,6 +475,9 @@ mod tests {
         c.set("order_base", list![ident("a@example.com")]);
         assert_eq!(keys(base_order(&c, &table, claude())), ["a@example.com", "b@example.com", "直连"]);
         let r = routed(&c, &table, claude());
-        assert_eq!(r.iter().map(|(k, _, p)| (k.to_string(), p.as_int().unwrap())).collect::<Vec<_>>(), [("a@example.com".to_string(), 7901), ("b@example.com".to_string(), 7902)]);
+        assert_eq!(
+            r.iter().map(|(k, _, p)| (k.to_string(), p.as_int().unwrap())).collect::<Vec<_>>(),
+            [("a@example.com".to_string(), 7901), ("b@example.com".to_string(), 7902)]
+        );
     }
 }

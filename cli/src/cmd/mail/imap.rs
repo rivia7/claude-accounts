@@ -255,7 +255,9 @@ impl Imap {
                     | io::ErrorKind::ConnectionRefused
                     | io::ErrorKind::BrokenPipe => return Ok(false),
                     // TLS 的套接字读超时，Python 是这句话
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => return Err(ImapErr::Os("The read operation timed out".into(), "TimeoutError")),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+                        return Err(ImapErr::Os("The read operation timed out".into(), "TimeoutError"))
+                    }
                     _ => {
                         let (why, class) = io_text(&e);
                         return Err(ImapErr::Os(why, class));
@@ -347,7 +349,9 @@ impl Imap {
                 let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
                 let after = rest[digits..].strip_prefix(b" ").filter(|_| digits > 0)?;
                 let n = type_len(after, true);
-                (n > 0).then(|| (String::from_utf8_lossy(&after[..n]).into_owned(), Some(rest[..digits].to_vec()), after_space(&after[n..])))
+                (n > 0).then(|| {
+                    (String::from_utf8_lossy(&after[..n]).into_owned(), Some(rest[..digits].to_vec()), after_space(&after[n..]))
+                })
             };
             let Some((t, data, data2)) = plain.or_else(status) else {
                 if resp.starts_with(b"+") {
@@ -419,7 +423,10 @@ impl Imap {
                 let c = arg.chars().nth(i).unwrap_or(' ');
                 return Err(ImapErr::Py(Fail::Other(
                     "UnicodeEncodeError",
-                    vec![format!("'ascii' codec can't encode character {} in position {i}: ordinal not in range(128)", crate::py::obj::repr_str(&c.to_string()))],
+                    vec![format!(
+                        "'ascii' codec can't encode character {} in position {i}: ordinal not in range(128)",
+                        crate::py::obj::repr_str(&c.to_string())
+                    )],
                 )));
             }
             data.push(b' ');
@@ -573,7 +580,8 @@ pub fn mail_epoch(s: &str) -> R<Option<i64>> {
         return Ok(None);
     };
     let mon = m.g(2);
-    let title: String = mon.chars().enumerate().map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() }).collect();
+    let title: String =
+        mon.chars().enumerate().map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() }).collect();
     let Some(month) = MAIL_MONTHS.iter().position(|x| *x == title) else {
         return Ok(None);
     };
@@ -612,7 +620,9 @@ fn is_word(c: char) -> bool {
 fn after_word<'a>(cs: &'a [char], word: &'a str) -> impl Iterator<Item = usize> + 'a {
     let w: Vec<char> = word.chars().collect();
     let n = w.len();
-    (0..cs.len().saturating_sub(n - 1)).filter(move |&i| cs[i..].starts_with(&w) && (i == 0 || !is_word(cs[i - 1]))).map(move |i| i + n)
+    (0..cs.len().saturating_sub(n - 1))
+        .filter(move |&i| cs[i..].starts_with(&w) && (i == 0 || !is_word(cs[i - 1])))
+        .map(move |i| i + n)
 }
 
 /// UID 这些数字：位数太多原来是 `int()` 的 ValueError；放不进 64 位的当没有（IMAP 里它们是 32 位的）
@@ -699,7 +709,11 @@ pub struct MailBox {
 impl MailBox {
     pub fn new(user: &str, pw: &str, route: &Route) -> MailBox {
         let route = route.clone();
-        MailBox::with_connector(user, pw, Box::new(move || Ok(Box::new(mail_tls(mail_dial(&route, 15.0)?, 20.0)?) as Box<dyn Wire>)))
+        MailBox::with_connector(
+            user,
+            pw,
+            Box::new(move || Ok(Box::new(mail_tls(mail_dial(&route, 15.0)?, 20.0)?) as Box<dyn Wire>)),
+        )
     }
 
     pub fn with_connector(user: &str, pw: &str, connector: Connector) -> MailBox {
@@ -737,9 +751,14 @@ impl MailBox {
                 self.close(false);
                 let why = e.oserr();
                 if re!(r"not enabled for IMAP|IMAP (access )?is disabled", crate::py::re::I).found(&why) {
-                    return Err(mail_fatal("imap", "这个 Gmail 没开 IMAP：Gmail 的设置 → 转发和 POP/IMAP → 启用 IMAP（公司的邮箱要管理员允许）"));
+                    return Err(mail_fatal(
+                        "imap",
+                        "这个 Gmail 没开 IMAP：Gmail 的设置 → 转发和 POP/IMAP → 启用 IMAP（公司的邮箱要管理员允许）",
+                    ));
                 }
-                if re!(r"AUTHENTICATIONFAILED|Invalid credentials|Application-specific password required", crate::py::re::I).found(&why) {
+                if re!(r"AUTHENTICATIONFAILED|Invalid credentials|Application-specific password required", crate::py::re::I)
+                    .found(&why)
+                {
                     return Err(mail_fatal(
                         "auth",
                         "Gmail 不认这个密码：要用应用专用密码（16 个字母），不是 Gmail 的登录密码；没开两步验证的账号建不了应用专用密码",

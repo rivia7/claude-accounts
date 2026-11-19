@@ -39,7 +39,10 @@ pub const CMDS: &[Cmd] = &[
 fn text_of(v: Option<V>, what: &str) -> R<String> {
     match v {
         Some(V::Str(s)) => Ok(s.to_string()),
-        other => Err(Fail::Other("TypeError", vec![format!("can only concatenate str (not \"{}\") to str：{what}", other.map_or("NoneType".into(), |v| v.py_repr()))])),
+        other => Err(Fail::Other(
+            "TypeError",
+            vec![format!("can only concatenate str (not \"{}\") to str：{what}", other.map_or("NoneType".into(), |v| v.py_repr()))],
+        )),
     }
 }
 
@@ -50,7 +53,11 @@ pub fn cmd_auth_email(args: &[String]) -> R<()> {
     let Some(d) = d.as_dict() else {
         return Err(Fail::Other("AttributeError", vec![format!("'{}' object has no attribute 'get'", d.py_repr())]));
     };
-    let email = if d.truthy("loggedIn") { d.get("email").filter(|e| e.truthy()).map_or(String::new(), |e| e.py_str()) } else { String::new() };
+    let email = if d.truthy("loggedIn") {
+        d.get("email").filter(|e| e.truthy()).map_or(String::new(), |e| e.py_str())
+    } else {
+        String::new()
+    };
     out!("{email}");
     Ok(())
 }
@@ -77,7 +84,8 @@ pub fn cmd_oauth_drop(args: &[String]) -> R<()> {
 /// 这个进程退出以后 bash 手里的描述符还拿着它
 pub fn cmd_flock(args: &[String]) -> R<()> {
     arity("cmd_flock", args, 1, 1)?;
-    let fd = text::to_int(&args[0]).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[0]))))?;
+    let fd = text::to_int(&args[0])
+        .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[0]))))?;
     // SAFETY: 只是对一个描述符号做 flock，号不对会返回错误
     if unsafe { libc::flock(fd as i32, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return exit(1);
@@ -106,7 +114,10 @@ pub fn cmd_re_escape(args: &[String]) -> R<()> {
 /// stdin 是 `ps -axo pid=,ppid=`：输出这个进程和它现在的子孙的进程号（从小到大，逗号隔开）
 pub fn cmd_ps_tree(args: &[String]) -> R<()> {
     arity("cmd_ps_tree", args, 1, 1)?;
-    let int = |s: &str| text::to_int(s).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(s))));
+    let int = |s: &str| {
+        text::to_int(s)
+            .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(s))))
+    };
     let root = int(&args[0])?;
     let mut rows: Vec<(i64, i64)> = Vec::new();
     let input = io::read_stdin_text();
@@ -118,7 +129,8 @@ pub fn cmd_ps_tree(args: &[String]) -> R<()> {
     }
     let mut pids = vec![root];
     loop {
-        let found: Vec<i64> = rows.iter().filter(|(pid, parent)| pids.contains(parent) && !pids.contains(pid)).map(|(pid, _)| *pid).collect();
+        let found: Vec<i64> =
+            rows.iter().filter(|(pid, parent)| pids.contains(parent) && !pids.contains(pid)).map(|(pid, _)| *pid).collect();
         if found.is_empty() {
             break;
         }
@@ -155,7 +167,11 @@ pub fn cmd_clients_text(args: &[String]) -> R<()> {
     out!(
         "客户端自动检查：{}；允许自动更新：{}",
         if auto { "开启" } else { "关闭" },
-        if d.truthy("auto_install") { "开启（查到新版本就装，客户端开着时等它退出）" } else { "关闭（安装前先问你）" }
+        if d.truthy("auto_install") {
+            "开启（查到新版本就装，客户端开着时等它退出）"
+        } else {
+            "关闭（安装前先问你）"
+        }
     );
     let clients = match d.get("clients") {
         None => Vec::new(),
@@ -171,7 +187,11 @@ pub fn cmd_clients_text(args: &[String]) -> R<()> {
         }
         let label = text_of(c.get("label").or_else(|| Some(c.get("id").unwrap_or_else(|| V::from("")))), "label")?;
         let message = text_of(c.get("message").or_else(|| Some(c.get("status").unwrap_or_else(|| V::from("")))), "message")?;
-        let install = if c.truthy("can_install") && c.truthy("install_token") { format!("\n安装：cca clients install {}", text_of(c.get("install_token"), "install_token")?) } else { String::new() };
+        let install = if c.truthy("can_install") && c.truthy("install_token") {
+            format!("\n安装：cca clients install {}", text_of(c.get("install_token"), "install_token")?)
+        } else {
+            String::new()
+        };
         out!("{label}：{message}{install}");
     }
     Ok(())
@@ -193,7 +213,9 @@ fn wait_for_exit(pid: i64) {
         change.fflags = libc::NOTE_EXIT;
         if libc::kevent(kq, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) == 0 {
             let mut event: libc::kevent = std::mem::zeroed();
-            while libc::kevent(kq, std::ptr::null(), 0, &mut event, 1, std::ptr::null()) < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {}
+            while libc::kevent(kq, std::ptr::null(), 0, &mut event, 1, std::ptr::null()) < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {}
         }
         libc::close(kq);
     }
@@ -210,12 +232,14 @@ pub fn cmd_dock_wait(args: &[String]) -> R<()> {
     if args.len() < 3 {
         return Err(Fail::Other("IndexError", vec!["list index out of range".into()]));
     }
-    let pid = text::to_int(&args[0]).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[0]))))?;
+    let pid = text::to_int(&args[0])
+        .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(&args[0]))))?;
     let (d, argv) = (args[1].as_str(), &args[2..]);
     let mut lock: Option<(std::fs::File, String)> = None;
     if !d.is_empty() {
         let name = path::join(d, &format!("{pid}.wait"));
-        if let Ok(f) = fs::makedirs_mode(d, 0o700).and_then(|()| std::fs::OpenOptions::new().append(true).create(true).open(&name)) {
+        if let Ok(f) = fs::makedirs_mode(d, 0o700).and_then(|()| std::fs::OpenOptions::new().append(true).create(true).open(&name))
+        {
             // SAFETY: f 开着，fd 有效
             if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
                 if std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
@@ -264,7 +288,10 @@ mod tests {
     fn re_escape_like_python() {
         // 期望值是 CPython 3.14 的 re.escape
         assert_eq!(re_escape("/Users/me/.cca/accounts/a-b_c (1)/desktop"), r"/Users/me/\.cca/accounts/a\-b_c\ \(1\)/desktop");
-        assert_eq!(re_escape("a.b*c+d?e|f^g$h[i]j{k}l\\m&n~o#p\tq\nr"), "a\\.b\\*c\\+d\\?e\\|f\\^g\\$h\\[i\\]j\\{k\\}l\\\\m\\&n\\~o\\#p\\\tq\\\nr");
+        assert_eq!(
+            re_escape("a.b*c+d?e|f^g$h[i]j{k}l\\m&n~o#p\tq\nr"),
+            "a\\.b\\*c\\+d\\?e\\|f\\^g\\$h\\[i\\]j\\{k\\}l\\\\m\\&n\\~o\\#p\\\tq\\\nr"
+        );
         assert_eq!(re_escape("中文 \"'<>,;:=!@%_`/"), "中文\\ \"'<>,;:=!@%_`/");
         assert_eq!(re_escape(""), "");
     }

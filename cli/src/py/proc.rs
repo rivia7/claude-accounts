@@ -273,7 +273,10 @@ fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec
     if stdin.is_some() && input.is_empty() {
         stdin = None; // 没有要喂的：马上关上
     }
-    for fd in [stdin.as_ref().map(|s| s.as_raw_fd()), out.as_ref().map(|s| s.as_raw_fd()), err.as_ref().map(|s| s.as_raw_fd())].into_iter().flatten() {
+    for fd in [stdin.as_ref().map(|s| s.as_raw_fd()), out.as_ref().map(|s| s.as_raw_fd()), err.as_ref().map(|s| s.as_raw_fd())]
+        .into_iter()
+        .flatten()
+    {
         // SAFETY: fd 是刚拿到的、自己的管道
         unsafe { libc::fcntl(fd, libc::F_SETFL, libc::fcntl(fd, libc::F_GETFL) | libc::O_NONBLOCK) };
     }
@@ -318,7 +321,8 @@ fn pump(child: &mut Child, input: &[u8], deadline: Option<f64>) -> (Vec<u8>, Vec
                 if w > 0 {
                     sent += w as usize;
                 }
-                let gone = w < 0 && !matches!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted);
+                let gone =
+                    w < 0 && !matches!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted);
                 if sent == input.len() || gone {
                     stdin = None; // 喂完了，或者它不读了（管道断了不算错）
                 }
@@ -429,7 +433,7 @@ mod tests {
         // 等它退出（这时它是僵尸，进程号还占着；别的测试起子进程时也可能先把它收了，所以不在这里查“还占着”）
         std::thread::sleep(std::time::Duration::from_millis(300));
         Cmd::new(["/bin/sh", "-c", "exit 0"]).stdin(In::Null).run().unwrap(); // 起下一个子进程时顺手收走
-        // SAFETY: 只是问这个进程号在不在
+                                                                              // SAFETY: 只是问这个进程号在不在
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "收走以后这个进程号应该不在了");
         // 还在跑的不动
         let child = Cmd::new(["/bin/sleep", "2"]).stdin(In::Null).spawn().unwrap();
@@ -482,7 +486,12 @@ mod tests {
 
     #[test]
     fn env_and_merge() {
-        let d = Cmd::new(["/bin/sh", "-c", "echo $A; echo e >&2"]).env(vec![("A".into(), "1".into())]).stdout(Out::Capture).stderr(Out::ToStdout).run().unwrap();
+        let d = Cmd::new(["/bin/sh", "-c", "echo $A; echo e >&2"])
+            .env(vec![("A".into(), "1".into())])
+            .stdout(Out::Capture)
+            .stderr(Out::ToStdout)
+            .run()
+            .unwrap();
         assert_eq!(d.out(), "1\ne\n");
         let mut env = vec![("A".to_string(), "1".to_string())];
         env_set(&mut env, "A", "2");

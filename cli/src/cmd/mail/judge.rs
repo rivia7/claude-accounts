@@ -11,8 +11,8 @@ use super::message::{decode_text, hstr, Message};
 use super::{MailRule, MAIL_ADDR_RE, MAIL_DOMAIN_RE, MAIL_ORDER, MAIL_SIGNED, MAIL_SKEW};
 use crate::py::hash::sha256_hex;
 use crate::py::url::urlsplit;
-use crate::py::{text, uni};
 use crate::py::R;
+use crate::py::{text, uni};
 use crate::re;
 
 /// DKIM-Signature 的 tag=value（值去掉空白）：名字小写，同名的只留第一个
@@ -180,7 +180,14 @@ fn domain_of(addr: &str) -> &str {
 
 /// 这封邮件是不是 acct（小写的邮箱）这一次登录的登录邮件：是返回 None，不是返回原因（MAIL_WHY 的键）。got 是 Gmail 收到它的时间。
 /// forwarder 给定时（这个账号开了「信任转发中转」，默认不开）：From 是 Anthropic 时照严格路走，From 是这个中转时走 mail_judge_fwd
-pub fn mail_judge(rule: &MailRule, msg: &Message, got: f64, acct: &str, since: f64, forwarder: Option<&str>) -> R<Option<&'static str>> {
+pub fn mail_judge(
+    rule: &MailRule,
+    msg: &Message,
+    got: f64,
+    acct: &str,
+    since: f64,
+    forwarder: Option<&str>,
+) -> R<Option<&'static str>> {
     let _frame = super::py_frame();
     if got < since - MAIL_SKEW {
         return Ok(Some("old"));
@@ -291,8 +298,11 @@ pub fn mail_shape(url: &str) -> String {
     let Ok(u) = urlsplit(url) else {
         return format!("（认不出的链接，{} 个字符）", text::len(url));
     };
-    let rest: Vec<String> =
-        [("?", &u.query), ("#", &u.fragment)].iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!("{} 后面 {} 个字符", k, text::len(v))).collect();
+    let rest: Vec<String> = [("?", &u.query), ("#", &u.fragment)]
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{} 后面 {} 个字符", k, text::len(v)))
+        .collect();
     let tail = if rest.is_empty() { String::new() } else { format!("（{}，不显示）", rest.join("、")) };
     format!("{}://{}{}{}", u.scheme, u.netloc, u.path, tail)
 }
@@ -331,7 +341,8 @@ mod tests {
         let cases = vectors("tags");
         assert!(cases.len() > 30);
         for c in cases {
-            let got = V::from(mail_tags(&c.at("in").py_str()).into_iter().map(|(k, v)| V::from(crate::list![k, v])).collect::<Vec<_>>());
+            let got =
+                V::from(mail_tags(&c.at("in").py_str()).into_iter().map(|(k, v)| V::from(crate::list![k, v])).collect::<Vec<_>>());
             assert!(got.py_eq(&c.at("out")), "{:?}: {got:?} / {:?}", c.at("in"), c.at("out"));
         }
     }
@@ -408,7 +419,8 @@ mod tests {
                 s.sort();
                 s.dedup();
             }
-            let want_signed: Option<Vec<String>> = c.at("signed").as_list().map(|l| l.strs().iter().map(|s| s.to_string()).collect());
+            let want_signed: Option<Vec<String>> =
+                c.at("signed").as_list().map(|l| l.strs().iter().map(|s| s.to_string()).collect());
             assert_eq!(signed, want_signed, "{what}：签名盖住的头");
             assert_eq!(mail_text(msg.get("Subject")), c.at("subject").py_str(), "{what}：标题");
             for (key, name) in [("from", "From"), ("to", "To"), ("reply_to", "Reply-To")] {
@@ -432,7 +444,9 @@ mod tests {
                 }
                 // 只有一条规则时 mail_judge_any 说的原因：比「标题不像」核对得更远才换（old 报成 subject）
                 match mail_judge_any(&[rule()], &msg, got, &j.at("acct").py_str(), since, fwd.as_deref()) {
-                    Ok((r, w)) => assert_eq!((r.is_some(), w.map(str::to_string)), (true, opt(j.get("any"))), "{what}：mail_judge_any {j:?}"),
+                    Ok((r, w)) => {
+                        assert_eq!((r.is_some(), w.map(str::to_string)), (true, opt(j.get("any"))), "{what}：mail_judge_any {j:?}")
+                    }
                     Err(e) => assert_eq!(Some(format!("!{}", class_of(&e))), opt(j.get("any")), "{what}：mail_judge_any {j:?}"),
                 }
                 let none = mail_judge_any(&[], &msg, got, &j.at("acct").py_str(), since, fwd.as_deref()).unwrap();
@@ -447,7 +461,13 @@ mod tests {
             match (mail_links(&msg), want_links) {
                 (Err(e), V::Str(want)) => assert_eq!(format!("!{}", class_of(&e)), &*want, "{what}：链接"),
                 (Ok(links), want) => {
-                    let want: Vec<String> = want.as_list().unwrap_or_else(|| panic!("{what}：Python 出了 {want:?}")).strs().iter().map(|s| s.to_string()).collect();
+                    let want: Vec<String> = want
+                        .as_list()
+                        .unwrap_or_else(|| panic!("{what}：Python 出了 {want:?}"))
+                        .strs()
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
                     assert_eq!(links, want, "{what}：链接");
                     assert_eq!(mail_extract(rule(), &msg).unwrap(), opt(want_extract), "{what}：登录链接");
                 }
@@ -476,7 +496,9 @@ mod tests {
         };
         let now = 1794708000.0;
         let alice = "alice@example.com";
-        let judge = |name: &str, acct: &str, got: f64, fwd: Option<&str>| mail_judge(rule(), &msg(name), got, acct, now - 60.0, fwd).unwrap();
+        let judge = |name: &str, acct: &str, got: f64, fwd: Option<&str>| {
+            mail_judge(rule(), &msg(name), got, acct, now - 60.0, fwd).unwrap()
+        };
         // Judge.test_good_and_each_failure
         assert_eq!(judge("good", alice, now, None), None);
         assert_eq!(judge("good", alice, now - 200.0, None), Some("old"));
@@ -514,7 +536,11 @@ mod tests {
         assert_eq!(judge("fwd good", alice, now, "sub.relay.example.com".split_once('.').map(|x| x.1)), None, "中转按标签认后缀");
         // 真按后缀认的那种：信是 mx.relay.example.com 发的、签的，登记的是 relay.example.com；反过来（登记的是子域名）不认
         assert_eq!(judge("fwd sub relay", alice, now, relay), None, "中转的子域名发的也算");
-        assert_eq!(judge("fwd good", alice, now, Some("sub.relay.example.com")), Some("from"), "登记的是子域名、信是上一级域名发的 → 拒");
+        assert_eq!(
+            judge("fwd good", alice, now, Some("sub.relay.example.com")),
+            Some("from"),
+            "登记的是子域名、信是上一级域名发的 → 拒"
+        );
         assert_eq!(judge("fwd good", alice, now, None), Some("from"), "默认不开 → 拒");
         assert_eq!(judge("fwd good", alice, now, Some("evil.com")), Some("from"), "登记的是别的域名 → 拒");
         for (name, why) in [

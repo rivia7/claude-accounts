@@ -263,7 +263,7 @@ pub fn leak_where(g: Option<&V>) -> String {
 /// 要的只是那边的解析器来查过：不等图片请求做完（HTTPS 往返要一两秒），最多一秒就开始问。patient（cca check）：每个请求多等一会儿
 fn leak_dns(proxy: &str, deadline: f64, patient: bool) -> (bool, Vec<String>) {
     let tok = &rand::uuid4().replace('-', "")[..20]; // uuid.uuid4().hex[:20]
-    // 两个请求各等多久在起线程之前就算好了（原来是建 Thread 对象时求的值）
+                                                     // 两个请求各等多久在起线程之前就算好了（原来是建 Thread 对象时求的值）
     let limits: Vec<f64> = (0..2).map(|_| f64::min(if patient { 6.0 } else { 2.5 }, deadline - time())).collect();
     let (tx, rx) = mpsc::channel::<()>();
     for (i, limit) in limits.into_iter().enumerate() {
@@ -350,7 +350,11 @@ pub fn cmd_leak_probe(args: &[String]) -> R<()> {
     let cache = leak_cache();
     let patient = !since.is_empty(); // cca check：给了开始时间
     let deadline = time() + if patient { LEAK_CHECK_DEADLINE } else { LEAK_DEADLINE };
-    let res = if webrtc != "0" { dict! { "stun" => dict! { "ips" => List::new() } } } else { dict! { "webrtc" => "off" } };
+    let res = if webrtc != "0" {
+        dict! { "stun" => dict! { "ips" => List::new() } }
+    } else {
+        dict! { "webrtc" => "off" }
+    };
     let known = Dict::from_pairs(section(&cache, "geo").items().into_iter().filter(|(_, g)| geo_fresh(g, time())));
     let cached = section(&cache, "dns").get(key);
     let since = match since {
@@ -457,7 +461,8 @@ fn region_code(cc: Option<V>) -> bool {
 /// 本机 STUN IP 直连查归属地：别让账号的出口和它一起出现在别人那里
 pub fn cmd_leak_verdict(args: &[String]) -> R<()> {
     arity("cmd_leak_verdict", args, 4, 5)?;
-    let (path, key, exit_ip, exit_cc, detail) = (args[0].as_str(), args[1].as_str(), args[2].as_str(), args[3].as_str(), arg(args, 4, ""));
+    let (path, key, exit_ip, exit_cc, detail) =
+        (args[0].as_str(), args[1].as_str(), args[2].as_str(), args[3].as_str(), arg(args, 4, ""));
     let Some(V::Dict(p)) = load_quiet(path) else {
         return Ok(());
     };
@@ -484,7 +489,8 @@ pub fn cmd_leak_verdict(args: &[String]) -> R<()> {
             .into_iter()
             .map(|s| s.rc_str().unwrap_or_else(|| panic!("TypeError: 解析器不是文字（{}）", type_name(&s))))
             .collect();
-        let cn: Vec<&Rc<str>> = sv.iter().filter(|s| matches!(geo_field(&geo, &ip_prefix(s), "cc"), Some(V::Str(c)) if &*c == "cn")).collect();
+        let cn: Vec<&Rc<str>> =
+            sv.iter().filter(|s| matches!(geo_field(&geo, &ip_prefix(s), "cc"), Some(V::Str(c)) if &*c == "cn")).collect();
         let unknown = sv.iter().filter(|s| !region_code(geo_field(&geo, &ip_prefix(s), "cc"))).count();
         if d.truthy("ok") && !cn.is_empty() && !exit_cc.is_empty() && exit_cc.to_uppercase() != "CN" {
             state.push(("dns", "leak"));
@@ -583,7 +589,10 @@ pub fn cmd_leak_verdict(args: &[String]) -> R<()> {
             // 归属地查不到：说不清是不是中国大陆，也不能当作没问题
             state.push(("webrtc", "failed"));
             parts.push(format!("WebRTC 没测成（STUN 看到 {shown}，归属地没查到，浏览器状态未验证）"));
-            notes.push(("webrtc", format!("本机 UDP 的 STUN 探测看到 {shown}，与账号的出口不同，但归属地没查到，判断不了是不是中国大陆的地址")));
+            notes.push((
+                "webrtc",
+                format!("本机 UDP 的 STUN 探测看到 {shown}，与账号的出口不同，但归属地没查到，判断不了是不是中国大陆的地址"),
+            ));
         }
     } else if !ips.is_empty() {
         state.push(("webrtc", "ok"));
@@ -629,7 +638,8 @@ pub fn cmd_leak_verdict(args: &[String]) -> R<()> {
 }
 
 /// 这个模块移植好的子命令
-pub const CMDS: &[Cmd] = &[Cmd::all("coffee", cmd_coffee), Cmd::all("leak-probe", cmd_leak_probe), Cmd::all("leak-verdict", cmd_leak_verdict)];
+pub const CMDS: &[Cmd] =
+    &[Cmd::all("coffee", cmd_coffee), Cmd::all("leak-probe", cmd_leak_probe), Cmd::all("leak-verdict", cmd_leak_verdict)];
 
 #[cfg(test)]
 mod tests {
@@ -691,7 +701,9 @@ mod tests {
     #[test]
     fn curl_time_limit_is_written_like_python() {
         // '%.1f' % x：按这个小数真正的值取到一位，正好一半时取偶数
-        for (x, want) in [(0.25, "0.2"), (0.35, "0.3"), (2.45, "2.5"), (2.5, "2.5"), (0.05, "0.1"), (3.0, "3.0"), (0.75, "0.8"), (4.96, "5.0")] {
+        for (x, want) in
+            [(0.25, "0.2"), (0.35, "0.3"), (2.45, "2.5"), (2.5, "2.5"), (0.05, "0.1"), (3.0, "3.0"), (0.75, "0.8"), (4.96, "5.0")]
+        {
             assert_eq!(format!("{x:.1}"), want);
         }
     }
@@ -706,7 +718,11 @@ mod tests {
             }
             V::Dict(g)
         };
-        assert!(geo_fresh(&geo(60.0, false), now) && geo_fresh(&geo(LEAK_GEO_TTL - 5.0, false), now) && !geo_fresh(&geo(LEAK_GEO_TTL + 5.0, false), now));
+        assert!(
+            geo_fresh(&geo(60.0, false), now)
+                && geo_fresh(&geo(LEAK_GEO_TTL - 5.0, false), now)
+                && !geo_fresh(&geo(LEAK_GEO_TTL + 5.0, false), now)
+        );
         // 没查到的只记一小时
         assert!(geo_fresh(&geo(3590.0, true), now) && !geo_fresh(&geo(3610.0, true), now));
         // 没有 t 的当作很久以前；不是字典的不算
@@ -714,11 +730,22 @@ mod tests {
         assert!(geo_fresh(&V::Dict(dict! { "t" => true }), 5.0)); // 布尔值也是数
         let dns = |age: f64, ok: V| V::Dict(dict! { "t" => now - age, "ok" => ok, "servers" => List::new() });
         // 测成的 6 小时、没测成的 10 分钟（tests/isolation_leaks.py：空的 DNS 结果只短暂缓存）
-        assert!(leak_dns_fresh(Some(&dns(LEAK_DNS_TTL - 5.0, true.into())), 0.0) && !leak_dns_fresh(Some(&dns(LEAK_DNS_TTL + 5.0, true.into())), 0.0));
-        assert!(leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL - 5.0, false.into())), 0.0) && !leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL + 1.0, false.into())), 0.0));
-        assert!(!leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL + 1.0, V::None)), 0.0) && !leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL + 1.0, 0.into())), 0.0));
+        assert!(
+            leak_dns_fresh(Some(&dns(LEAK_DNS_TTL - 5.0, true.into())), 0.0)
+                && !leak_dns_fresh(Some(&dns(LEAK_DNS_TTL + 5.0, true.into())), 0.0)
+        );
+        assert!(
+            leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL - 5.0, false.into())), 0.0)
+                && !leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL + 1.0, false.into())), 0.0)
+        );
+        assert!(
+            !leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL + 1.0, V::None)), 0.0)
+                && !leak_dns_fresh(Some(&dns(LEAK_FAIL_TTL + 1.0, 0.into())), 0.0)
+        );
         // since（cca check 开始的时间）之前测的不算
-        assert!(!leak_dns_fresh(Some(&dns(60.0, true.into())), now - 30.0) && leak_dns_fresh(Some(&dns(60.0, true.into())), now - 90.0));
+        assert!(
+            !leak_dns_fresh(Some(&dns(60.0, true.into())), now - 30.0) && leak_dns_fresh(Some(&dns(60.0, true.into())), now - 90.0)
+        );
         // 没有 t、t 不是数字、不是字典
         assert!(!leak_dns_fresh(Some(&V::Dict(dict! { "ok" => true })), 0.0));
         assert!(!leak_dns_fresh(Some(&V::Dict(dict! { "t" => "now", "ok" => true })), 0.0));
@@ -739,7 +766,9 @@ mod tests {
         assert_eq!(strs(V::Dict(dict! { "k1" => 1, "k2" => 2 })), ["k1", "k2"]);
         assert!(py_iter(Some(V::Int(0))).is_empty() && py_iter(Some(V::None)).is_empty() && py_iter(None).is_empty());
         assert!(region_code(Some("cn".into())) && !region_code(Some("CN".into())) && !region_code(Some("usa".into())));
-        assert!(!region_code(Some("".into())) && !region_code(None) && !region_code(Some(V::None)) && !region_code(Some("us\n".into())));
+        assert!(
+            !region_code(Some("".into())) && !region_code(None) && !region_code(Some(V::None)) && !region_code(Some("us\n".into()))
+        );
     }
 
     #[test]

@@ -74,7 +74,9 @@ mod cf {
         static LIB: OnceLock<Option<Lib>> = OnceLock::new();
         LIB.get_or_init(|| {
             // SAFETY: 路径以 0 结尾；库载入以后一直留着（不 dlclose），里面的函数指针一直有效
-            let h = unsafe { libc::dlopen(c"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation".as_ptr(), libc::RTLD_LAZY) };
+            let h = unsafe {
+                libc::dlopen(c"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation".as_ptr(), libc::RTLD_LAZY)
+            };
             if h.is_null() {
                 return None;
             }
@@ -226,7 +228,13 @@ impl Prefs {
                 d.set(key, value);
                 let raw = plist::dumps_binary(&d)?;
                 let tmp = format!("{}.cca-{}.tmp", file, std::process::id());
-                let written = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o666).open(&tmp).and_then(|mut f| f.write_all(&raw));
+                let written = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o666)
+                    .open(&tmp)
+                    .and_then(|mut f| f.write_all(&raw));
                 Ok(written.and_then(|()| std::fs::rename(&tmp, file)).is_ok())
             }
             #[cfg(target_os = "macos")]
@@ -245,7 +253,9 @@ impl Prefs {
 
 /// 程序坞的一个图标指着的 App 的位置（真实路径）；不是文件的图标是 None
 fn dock_tile_path(tile: &P) -> R<Option<String>> {
-    let Some(u) = tile.get("tile-data").and_then(|d| d.get("file-data")).and_then(|f| f.get("_CFURLString")).and_then(|u| u.as_str()) else {
+    let Some(u) =
+        tile.get("tile-data").and_then(|d| d.get("file-data")).and_then(|f| f.get("_CFURLString")).and_then(|u| u.as_str())
+    else {
         return Ok(None);
     };
     if !u.starts_with("file://") {
@@ -270,7 +280,10 @@ fn dock_tile_is(tile: &P, bid: Option<&str>, app: Option<&str>) -> R<bool> {
 
 /// App 的 (bundle id, 主程序的路径)：从 Info.plist 读，读不到的是 None
 fn dock_app(app: &str) -> R<(Option<String>, Option<String>)> {
-    let info = match std::fs::read(path::join_all(&[app, "Contents", "Info.plist"])).map_err(Fail::from).and_then(|raw| plist::loads(&raw)) {
+    let info = match std::fs::read(path::join_all(&[app, "Contents", "Info.plist"]))
+        .map_err(Fail::from)
+        .and_then(|raw| plist::loads(&raw))
+    {
         Ok(info) => info,
         Err(e) if e.is_os_or_value() => P::Null,
         Err(e) => return Err(e),
@@ -468,7 +481,11 @@ impl Tidy {
         // since：最近一次重启（开始时是退出）；held：没记录的 App 从什么时候起在陪着等
         let (mut since, mut held): (f64, Option<f64>) = (time(), None);
         loop {
-            let last = self.note.as_ref().and_then(|n| std::fs::metadata(n).ok()).map_or(0.0, |m| m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9);
+            let last = self
+                .note
+                .as_ref()
+                .and_then(|n| std::fs::metadata(n).ok())
+                .map_or(0.0, |m| m.mtime() as f64 + m.mtime_nsec() as f64 / 1e9);
             let left = since.max(last) + self.quiet - time();
             if left > 0.0 {
                 sleep(left.min(5.0));
@@ -485,7 +502,9 @@ impl Tidy {
             let mut stuck = Vec::new();
             for p in &self.pending {
                 let bid = dock_app(p)?.0;
-                if exited.iter().any(|(b, r)| b.as_ref().is_some_and(|b| !b.is_empty() && Some(b) == bid.as_ref()) || r.as_deref() == Some(p.as_str())) {
+                if exited.iter().any(|(b, r)| {
+                    b.as_ref().is_some_and(|b| !b.is_empty() && Some(b) == bid.as_ref()) || r.as_deref() == Some(p.as_str())
+                }) {
                     stuck.push(p.clone());
                 }
             }
@@ -555,7 +574,16 @@ pub fn cmd_dock_tidy(args: &[String]) -> R<()> {
         None => (DOCK_QUIET, DOCK_LOOK, DOCK_GRACE),
     };
     let first = path::realpath(app);
-    let mut tidy = Tidy { prefs, pending: vec![first.clone()], added: HashMap::from([(first.clone(), monotonic())]), tries: HashMap::new(), note: None, quiet, look, grace };
+    let mut tidy = Tidy {
+        prefs,
+        pending: vec![first.clone()],
+        added: HashMap::from([(first.clone(), monotonic())]),
+        tries: HashMap::new(),
+        note: None,
+        quiet,
+        look,
+        grace,
+    };
     let mut lock: Option<std::fs::File> = None;
     if !lockdir.is_empty() {
         let exited = path::join(lockdir, "exited");
@@ -605,7 +633,10 @@ mod tests {
 
     #[test]
     fn poll_intervals() {
-        assert_eq!((dock_poll(0.0), dock_poll(59.9), dock_poll(60.0), dock_poll(599.0), dock_poll(600.0)), (2.0, 2.0, 10.0, 10.0, 30.0));
+        assert_eq!(
+            (dock_poll(0.0), dock_poll(59.9), dock_poll(60.0), dock_poll(599.0), dock_poll(600.0)),
+            (2.0, 2.0, 10.0, 10.0, 30.0)
+        );
     }
 
     #[test]
@@ -634,7 +665,16 @@ mod tests {
     #[test]
     fn core_foundation_round_trip() {
         let value = P::dict([
-            ("recent-apps", P::Array(vec![P::dict([("tile-data", P::dict([("bundle-identifier", P::from("com.example.app")), ("book", P::Data(vec![0, 1, 2, 255]))])), ("GUID", P::Int(4242))])])),
+            (
+                "recent-apps",
+                P::Array(vec![P::dict([
+                    (
+                        "tile-data",
+                        P::dict([("bundle-identifier", P::from("com.example.app")), ("book", P::Data(vec![0, 1, 2, 255]))]),
+                    ),
+                    ("GUID", P::Int(4242)),
+                ])]),
+            ),
             ("show-recents", P::from(true)),
             ("tilesize", P::Real(48.5)),
             ("名字", P::from("中文 & <标记>")),

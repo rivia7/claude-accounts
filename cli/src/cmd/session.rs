@@ -90,7 +90,12 @@ fn proc_scan_at(root: &str, pids: Option<&[i64]>, tck: f64) -> Option<Vec<(i64, 
     let pids = match pids {
         Some(p) => p,
         None => {
-            all = std::fs::read_dir(root).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|n| text::isdigit(n)).map(|n| text::to_int(&n)).collect::<Option<_>>()?;
+            all = std::fs::read_dir(root)
+                .ok()?
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter(|n| text::isdigit(n))
+                .map(|n| text::to_int(&n))
+                .collect::<Option<_>>()?;
             &all
         }
     };
@@ -98,7 +103,10 @@ fn proc_scan_at(root: &str, pids: Option<&[i64]>, tck: f64) -> Option<Vec<(i64, 
     let mut out: Vec<(i64, ProcInfo)> = Vec::new();
     for pid in pids {
         // 读不到是刚退出
-        let (Ok(st), Ok(cmd)) = (std::fs::read(format!("{root}/{pid}/stat")), std::fs::read(format!("{root}/{pid}/cmdline"))) else { continue };
+        let (Ok(st), Ok(cmd)) = (std::fs::read(format!("{root}/{pid}/stat")), std::fs::read(format!("{root}/{pid}/cmdline")))
+        else {
+            continue;
+        };
         let st = String::from_utf8_lossy(&st).into_owned();
         let cmd: Vec<u8> = cmd.iter().map(|b| if *b == 0 { b' ' } else { *b }).collect();
         let cmd = text::strip(&String::from_utf8_lossy(&cmd)).to_string();
@@ -109,7 +117,9 @@ fn proc_scan_at(root: &str, pids: Option<&[i64]>, tck: f64) -> Option<Vec<(i64, 
         };
         let f = text::split_ws(rest);
         let int = |i: usize| f.get(i).and_then(|s| text::to_int(s));
-        let (Some(ppid), Some(nr), Some(utime), Some(stime), Some(start)) = (int(1), int(4), int(11), int(12), int(19)) else { continue };
+        let (Some(ppid), Some(nr), Some(utime), Some(stime), Some(start)) = (int(1), int(4), int(11), int(12), int(19)) else {
+            continue;
+        };
         let (major, minor) = ((nr >> 8) & 0xfff, (nr & 0xff) | ((nr >> 12) & 0xfff00));
         let tty = if (136..=143).contains(&major) {
             format!("pts/{}", (major - 136) * 256 + minor)
@@ -192,7 +202,11 @@ pub fn browser_profile(key: &str, prepare: bool) -> R<()> {
             return die(format!("无法读取浏览器 WebRTC 偏好：{p}"));
         };
         let webrtc = data.setdefault("webrtc", Dict::new()).as_dict().expect("上面核对过是字典");
-        let wanted = [("ip_handling_policy", V::from("disable_non_proxied_udp")), ("ip_handling_url", V::List(List::new())), ("local_ips_allowed_urls", V::List(List::new()))];
+        let wanted = [
+            ("ip_handling_policy", V::from("disable_non_proxied_udp")),
+            ("ip_handling_url", V::List(List::new())),
+            ("local_ips_allowed_urls", V::List(List::new())),
+        ];
         if prepare {
             fs::makedirs_mode(&folder, 0o700)?;
             for (k, v) in wanted {
@@ -244,7 +258,17 @@ fn app_binary(app: &str) -> R<Option<(String, String)>> {
 
 /// 记录可核对的启动条件；不读取进程环境、Cookie 或凭证，不声称验证客户端所有请求
 #[allow(clippy::too_many_arguments)]
-fn runtime_snapshot(key: &str, kind: &str, pid: &str, profile: &str, app: &str, proxy: &str, route: &str, bypass: &str, no_proxy: &str) -> R<Dict> {
+fn runtime_snapshot(
+    key: &str,
+    kind: &str,
+    pid: &str,
+    profile: &str,
+    app: &str,
+    proxy: &str,
+    route: &str,
+    bypass: &str,
+    no_proxy: &str,
+) -> R<Dict> {
     let (_, table, _) = ctx()?;
     need(&table, key)?;
     let pid = int_arg(pid)?;
@@ -278,7 +302,9 @@ fn runtime_snapshot(key: &str, kind: &str, pid: &str, profile: &str, app: &str, 
     if !command.starts_with(&format!("{binary} ")) {
         return die("客户端进程不属于当前选择的程序，请退出旧实例后重开");
     }
-    let (Ok(st), Ok(binary_st)) = (std::fs::metadata(&info_path), std::fs::metadata(&binary)) else { return die("无法核验客户端程序版本") };
+    let (Ok(st), Ok(binary_st)) = (std::fs::metadata(&info_path), std::fs::metadata(&binary)) else {
+        return die("无法核验客户端程序版本");
+    };
     let mtime_ns = |m: &std::fs::Metadata| m.mtime() * 1_000_000_000 + m.mtime_nsec();
     let version = crate::list![st.size() as i64, mtime_ns(&st), binary_st.size() as i64, mtime_ns(&binary_st)];
     Ok(dict! {
@@ -295,7 +321,17 @@ pub fn cmd_runtime_record(args: &[String]) -> R<()> {
         return die("未知客户端运行记录操作");
     }
     let _lock = Lock::acquire()?;
-    let current = V::Dict(runtime_snapshot(key, kind, &args[3], &args[4], &args[5], &args[6], arg(args, 7, ""), arg(args, 8, ""), arg(args, 9, ""))?);
+    let current = V::Dict(runtime_snapshot(
+        key,
+        kind,
+        &args[3],
+        &args[4],
+        &args[5],
+        &args[6],
+        arg(args, 7, ""),
+        arg(args, 8, ""),
+        arg(args, 9, ""),
+    )?);
     let p = path::join(&adir(key), &format!("{kind}-runtime.json"));
     if action == "write" {
         save_json(&p, &current, Some(0o600), false)?;
@@ -327,7 +363,13 @@ pub fn cli_marks_at(d: &str, key: &str) -> Vec<Dict> {
         let Some(pid) = cli_mark_pid(&n) else { continue };
         let Some(j) = load_quiet(&path::join(d, &n)).and_then(|j| j.as_dict()) else { continue };
         let eq = |k: &str, want: V| j.get(k).is_some_and(|v| v.py_eq(&want));
-        if eq("v", V::Int(1)) && eq("tool", V::from(t().name)) && eq("id", V::from(aid.as_str())) && eq("pid", V::Int(pid)) && j.get("started").is_some_and(|s| s.is_int()) && j.get("since").is_some_and(|s| s.isinstance_num()) {
+        if eq("v", V::Int(1))
+            && eq("tool", V::from(t().name))
+            && eq("id", V::from(aid.as_str()))
+            && eq("pid", V::Int(pid))
+            && j.get("started").is_some_and(|s| s.is_int())
+            && j.get("since").is_some_and(|s| s.isinstance_num())
+        {
             out.push(j);
         }
     }
@@ -372,12 +414,17 @@ pub fn cmd_session_open(args: &[String]) -> R<()> {
     let starts = proc_starts(&pids);
     let Some(started) = starts.get(&pid).copied() else { return Ok(()) };
     for (p, file) in &old {
-        let mark = load_quiet(file).and_then(|j| j.as_dict()).and_then(|j| j.get("started")).filter(|s| s.is_int()).and_then(|s| s.as_int());
+        let mark = load_quiet(file)
+            .and_then(|j| j.as_dict())
+            .and_then(|j| j.get("started"))
+            .filter(|s| s.is_int())
+            .and_then(|s| s.as_int());
         if *p == pid || !mark.is_some_and(|s| cli_alive(*p, s, &starts)) {
             let _ = std::fs::remove_file(file);
         }
     }
-    let mark = dict! { "v" => 1, "tool" => t().name, "id" => acct_id(key, t()), "pid" => pid, "started" => started, "since" => time() };
+    let mark =
+        dict! { "v" => 1, "tool" => t().name, "id" => acct_id(key, t()), "pid" => pid, "started" => started, "since" => time() };
     save_json(&path::join(&d, &format!("cli-{pid}.json")), &V::Dict(mark), Some(0o600), true)?;
     presence_wake(key); // 映射里的账号：报告给维护者的服务器（上报进程在后台，不拖慢启动）
     Ok(())
@@ -424,7 +471,10 @@ mod tests {
         let root = root.to_str().unwrap();
         let got = proc_scan_at(root, Some(&[42, 43, 44, 45, 99]), 100.0).unwrap();
         assert_eq!(got.len(), 3);
-        assert_eq!(got[0], (42, ProcInfo { ppid: 7, tty: "pts/3".into(), cpu: 2.0, start: 1700000123, cmd: "/usr/bin/thing --flag value".into() }));
+        assert_eq!(
+            got[0],
+            (42, ProcInfo { ppid: 7, tty: "pts/3".into(), cpu: 2.0, start: 1700000123, cmd: "/usr/bin/thing --flag value".into() })
+        );
         assert_eq!(got[1], (43, ProcInfo { ppid: 1, tty: "tty1".into(), cpu: 0.1, start: 1700000002, cmd: String::new() }));
         assert_eq!(got[2].1.tty, "?");
         let mut all: Vec<i64> = proc_scan_at(root, None, 100.0).unwrap().into_iter().map(|(p, _)| p).collect();

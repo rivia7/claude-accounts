@@ -87,29 +87,97 @@ pub struct Tool {
 }
 
 pub const CLAUDE_SHARED: &[&str] = &[
-    "projects", "skills", "commands", "agents", "plugins", "todos", "tasks", "plans", "file-history", "ide",
-    "settings.json", "settings.local.json", "history.jsonl", "CLAUDE.md", "CLAUDE.local.md",
-    "AGENTS.md", "AGENTS.override.md", "keybindings.json", "rules", "output-styles", "themes",
-    "workflows", "agent-memory", "agent-memory-local", "memory", "memories", "prompts", "hooks",
+    "projects",
+    "skills",
+    "commands",
+    "agents",
+    "plugins",
+    "todos",
+    "tasks",
+    "plans",
+    "file-history",
+    "ide",
+    "settings.json",
+    "settings.local.json",
+    "history.jsonl",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "keybindings.json",
+    "rules",
+    "output-styles",
+    "themes",
+    "workflows",
+    "agent-memory",
+    "agent-memory-local",
+    "memory",
+    "memories",
+    "prompts",
+    "hooks",
 ];
-pub const CLAUDE_SHARED_CONFIG: &[&str] =
-    &["settings.json", "settings.local.json", "keybindings.json", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md"];
-pub const PRECREATE: &[&str] = &["projects", "skills", "commands", "agents", "plugins", "todos", "tasks", "plans", "file-history", "ide"];
+pub const CLAUDE_SHARED_CONFIG: &[&str] = &[
+    "settings.json",
+    "settings.local.json",
+    "keybindings.json",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "AGENTS.md",
+    "AGENTS.override.md",
+];
+pub const PRECREATE: &[&str] =
+    &["projects", "skills", "commands", "agents", "plugins", "todos", "tasks", "plans", "file-history", "ide"];
 /// ~/.claude.json 里与账号无关、跨账号同步的键；其余（oauthAccount、订阅、功能开关缓存等）留在各账号
 pub const SHARED_KEYS: &[&str] = &[
-    "projects", "mcpServers", "githubRepoPaths",
-    "hasCompletedOnboarding", "lastOnboardingVersion", "installMethod", "autoUpdates",
-    "autoUpdatesProtectedForNative", "theme", "editorMode", "verbose", "preferredNotifChannel",
-    "autoCompactEnabled", "autoConnectIde", "autoInstallIdeExtension", "diffTool",
-    "diffSidebarOpen", "showSpinnerTree", "fileCheckpointingEnabled", "terminalProgressBarEnabled",
-    "respectGitignore", "hasIdeOnboardingBeenShown", "hasCompletedClaudeInChromeOnboarding",
-    "claudeInChromeDefaultEnabled", "shiftEnterKeyBindingInstalled", "optionAsMetaKeyInstalled",
-    "hasUsedBackslashReturn", "lastReleaseNotesSeen", "tipsHistory",
-    "officialMarketplaceAutoInstallAttempted", "officialMarketplaceAutoInstalled",
+    "projects",
+    "mcpServers",
+    "githubRepoPaths",
+    "hasCompletedOnboarding",
+    "lastOnboardingVersion",
+    "installMethod",
+    "autoUpdates",
+    "autoUpdatesProtectedForNative",
+    "theme",
+    "editorMode",
+    "verbose",
+    "preferredNotifChannel",
+    "autoCompactEnabled",
+    "autoConnectIde",
+    "autoInstallIdeExtension",
+    "diffTool",
+    "diffSidebarOpen",
+    "showSpinnerTree",
+    "fileCheckpointingEnabled",
+    "terminalProgressBarEnabled",
+    "respectGitignore",
+    "hasIdeOnboardingBeenShown",
+    "hasCompletedClaudeInChromeOnboarding",
+    "claudeInChromeDefaultEnabled",
+    "shiftEnterKeyBindingInstalled",
+    "optionAsMetaKeyInstalled",
+    "hasUsedBackslashReturn",
+    "lastReleaseNotesSeen",
+    "tipsHistory",
+    "officialMarketplaceAutoInstallAttempted",
+    "officialMarketplaceAutoInstalled",
 ];
 pub const CODEX_SHARED: &[&str] = &[
-    "config.toml", ".env", "AGENTS.md", "AGENTS.override.md", "hooks.json", "history.jsonl", "session_index.jsonl",
-    "sessions", "archived_sessions", "memories", "skills", "rules", "prompts", "plugins", "agents", "themes",
+    "config.toml",
+    ".env",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "hooks.json",
+    "history.jsonl",
+    "session_index.jsonl",
+    "sessions",
+    "archived_sessions",
+    "memories",
+    "skills",
+    "rules",
+    "prompts",
+    "plugins",
+    "agents",
+    "themes",
 ];
 pub const CODEX_PRECREATE: &[&str] = &["sessions", "archived_sessions", "memories", "skills", "rules", "plugins"];
 pub const CODEX_SHARED_CONFIG: &[&str] = &["config.toml", "hooks.json", ".env", "AGENTS.md", "AGENTS.override.md"];
@@ -120,23 +188,52 @@ pub const CODEX_PROVIDER: &str = "cca";
 /// cca 经 app-server 登录、查用量时报的客户端名：和 codex login 发出的请求一样
 pub const CODEX_CLIENT: &str = "codex_cli_rs";
 pub const AGY_SHARED: &[&str] = &[
-    "GEMINI.md", "AGENTS.md",
-    "antigravity-cli/conversations", "antigravity-cli/brain", "antigravity-cli/annotations", "antigravity-cli/implicit",
-    "antigravity-cli/presence", "antigravity-cli/history.jsonl", "antigravity-cli/settings.json",
-    "antigravity-cli/keybindings.json", "antigravity-cli/cache/last_conversations.json",
-    "config/mcp_config.json", "config/config.json", "config/hooks.json", "config/skills.json", "config/plugins.json",
-    "config/projects", "config/skills", "config/rules", "config/workflows", "config/agents", "config/plugins",
-    "config/GEMINI.md", "config/AGENTS.md",
+    "GEMINI.md",
+    "AGENTS.md",
+    "antigravity-cli/conversations",
+    "antigravity-cli/brain",
+    "antigravity-cli/annotations",
+    "antigravity-cli/implicit",
+    "antigravity-cli/presence",
+    "antigravity-cli/history.jsonl",
+    "antigravity-cli/settings.json",
+    "antigravity-cli/keybindings.json",
+    "antigravity-cli/cache/last_conversations.json",
+    "config/mcp_config.json",
+    "config/config.json",
+    "config/hooks.json",
+    "config/skills.json",
+    "config/plugins.json",
+    "config/projects",
+    "config/skills",
+    "config/rules",
+    "config/workflows",
+    "config/agents",
+    "config/plugins",
+    "config/GEMINI.md",
+    "config/AGENTS.md",
 ];
 pub const AGY_NESTS: &[&str] = &["antigravity-cli", "antigravity-cli/cache", "config"];
 pub const AGY_PRECREATE: &[&str] = &[
-    "antigravity-cli/conversations", "antigravity-cli/brain", "antigravity-cli/annotations",
-    "antigravity-cli/implicit", "antigravity-cli/presence", "config/projects",
+    "antigravity-cli/conversations",
+    "antigravity-cli/brain",
+    "antigravity-cli/annotations",
+    "antigravity-cli/implicit",
+    "antigravity-cli/presence",
+    "config/projects",
 ];
 pub const AGY_SHARED_CONFIG: &[&str] = &[
-    "GEMINI.md", "AGENTS.md", "antigravity-cli/settings.json", "antigravity-cli/keybindings.json",
-    "config/mcp_config.json", "config/config.json", "config/hooks.json", "config/skills.json",
-    "config/plugins.json", "config/GEMINI.md", "config/AGENTS.md",
+    "GEMINI.md",
+    "AGENTS.md",
+    "antigravity-cli/settings.json",
+    "antigravity-cli/keybindings.json",
+    "config/mcp_config.json",
+    "config/config.json",
+    "config/hooks.json",
+    "config/skills.json",
+    "config/plugins.json",
+    "config/GEMINI.md",
+    "config/AGENTS.md",
 ];
 /// 登录 token：设了 SSH_CONNECTION 时 agy 存进这个文件（不进钥匙串），cca 只读里面的邮箱和档位
 pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
@@ -466,7 +563,9 @@ pub fn codex_profile_file(name: &str) -> bool {
 
 /// 选择的 profile 必须是会被发现并校验的同目录配置；允许 Unicode 和空格
 pub fn codex_profile_name(name: &str) -> bool {
-    !name.is_empty() && !name.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}') && codex_profile_file(&format!("{name}.config.toml"))
+    !name.is_empty()
+        && !name.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}')
+        && codex_profile_file(&format!("{name}.config.toml"))
 }
 
 #[cfg(test)]
@@ -489,7 +588,8 @@ mod tests {
 
     #[test]
     fn ids_and_shares() {
-        let table = dict! { "官方(me@example.com)" => "US-A", "api1" => dict! { "id" => "api1-x" }, "api2" => dict! { "id" => "" } };
+        let table =
+            dict! { "官方(me@example.com)" => "US-A", "api1" => dict! { "id" => "api1-x" }, "api2" => dict! { "id" => "" } };
         codex().set_ids(&table);
         assert_eq!(codex().id_of("api1").as_deref(), Some("api1-x"));
         assert_eq!(codex().id_of("api2"), None);

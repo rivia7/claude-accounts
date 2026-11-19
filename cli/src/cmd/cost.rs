@@ -14,10 +14,10 @@
 //! 统计在后台进程里做（cca _cost-sync：会话结束、cca usage、cca devices、上报进程里，最多 COST_EVERY 一次；App 定时跑
 //! cca cost sync --json），_gui state 只读统计好的（cost/local.json、remote.json、sync.json）。config.json 的 "cost": false 关掉
 
+use super::codex::codex_claims;
 use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, Keys};
 use super::presence::{presence_aid, presence_load, presence_post, presence_targets, presence_why, spawn_background};
 use super::session::{cli_alive, proc_starts};
-use super::codex::codex_claims;
 use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
 use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, EMAIL_RE, MASTER_JSON};
@@ -117,7 +117,8 @@ const CLAUDE_FAST: &[(&str, f64, f64)] = &[
     ("claude-opus-4-8", 10.0, 50.0),
 ];
 /// 4.6 以前的模型：只在美国推理（inference_geo 是 us）不加价，别的加 10%
-const CLAUDE_NO_GEO: &[&str] = &["claude-opus-4-5", "claude-opus-4-1", "claude-opus-4", "claude-sonnet-4-5", "claude-sonnet-4", "claude-haiku-4-5"];
+const CLAUDE_NO_GEO: &[&str] =
+    &["claude-opus-4-5", "claude-opus-4-1", "claude-opus-4", "claude-sonnet-4-5", "claude-sonnet-4", "claude-haiku-4-5"];
 /// 网页搜索一次 0.01 美元（单位：百万分之一美元）
 const CLAUDE_WEB_SEARCH: f64 = 10000.0;
 
@@ -200,7 +201,12 @@ pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
 
 /// 一次 Codex 请求（token_count 的 last_token_usage：input_tokens 含缓存读、缓存写，output_tokens 含推理）：同 cost_claude
 pub fn cost_codex(model: &str, tier: Option<&str>, u: &Dict) -> (Option<f64>, [i64; 4]) {
-    let (inp, cached, write, out) = (tokens(u, "input_tokens"), tokens(u, "cached_input_tokens"), tokens(u, "cache_write_input_tokens"), tokens(u, "output_tokens"));
+    let (inp, cached, write, out) = (
+        tokens(u, "input_tokens"),
+        tokens(u, "cached_input_tokens"),
+        tokens(u, "cache_write_input_tokens"),
+        tokens(u, "output_tokens"),
+    );
     let cached = cached.min(inp);
     let write = write.min(inp - cached);
     let plain = inp - cached - write;
@@ -225,7 +231,9 @@ pub fn cost_ts(s: Option<&V>) -> R<Option<f64>> {
         let c: Vec<char> = t.chars().collect();
         if c.len() >= 20 && c[4] == '-' && c[10] == 'T' && c[c.len() - 1] == 'Z' {
             let int = |a: usize, b: usize| text::to_int(&c[a..b].iter().collect::<String>());
-            if let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(sec)) = (int(0, 4), int(5, 7), int(8, 10), int(11, 13), int(14, 16), int(17, 19)) {
+            if let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(sec)) =
+                (int(0, 4), int(5, 7), int(8, 10), int(11, 13), int(14, 16), int(17, 19))
+            {
                 // calendar.timegm 只核对年、月（datetime.date(年, 月, 1)）：不对的是 ValueError，落到 parse_ts
                 if (1..=9999).contains(&y) && (1..=12).contains(&mo) {
                     return Ok(Some(timegm(y, mo, d, h, mi, sec) as f64));
@@ -283,7 +291,13 @@ pub fn cost_save(name: &str, data: &V) -> R<()> {
     let dest = path::join(&COST_DIR, name);
     let tmp = format!("{}.cca-{}.tmp", dest, std::process::id());
     let write = || -> R<()> {
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| at_path(e, &tmp))?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| at_path(e, &tmp))?;
         f.write_all(json::dumps(data, json::Fmt::new().utf8().compact()).as_bytes())?;
         drop(f);
         std::fs::rename(&tmp, &dest).map_err(|e| {
@@ -300,12 +314,17 @@ pub fn cost_save(name: &str, data: &V) -> R<()> {
 
 /// cost/ 里的一个文件（v 是 1 的对象）；没有、读不了、格式不对是 {}
 pub fn cost_json(name: &str) -> Dict {
-    load_quiet(&path::join(&COST_DIR, name)).and_then(|j| j.as_dict()).filter(|j| j.get("v").is_some_and(|v| v.py_eq(&V::Int(1)))).unwrap_or_default()
+    load_quiet(&path::join(&COST_DIR, name))
+        .and_then(|j| j.as_dict())
+        .filter(|j| j.get("v").is_some_and(|v| v.py_eq(&V::Int(1))))
+        .unwrap_or_default()
 }
 
 /// 7 个计数：都是整数（不是布尔值），不小于 0、不超过 10^15
 fn counts_ok(r: &V) -> bool {
-    r.as_list().is_some_and(|r| r.len() == 7 && r.items().iter().all(|x| matches!(x, V::Int(n) if (0..=1_000_000_000_000_000).contains(n))))
+    r.as_list().is_some_and(|r| {
+        r.len() == 7 && r.items().iter().all(|x| matches!(x, V::Int(n) if (0..=1_000_000_000_000_000).contains(n)))
+    })
 }
 
 /// {小时: [7 个计数]}：金额（百万分之一美元）、请求数、输入、输出、缓存读、缓存写、其中没有标价的请求数
@@ -739,7 +758,13 @@ fn scan_save(j: &Dict, seen: &Seen) -> R<()> {
     let dest = path::join(&COST_DIR, "scan.json");
     let tmp = format!("{}.cca-{}.tmp", dest, std::process::id());
     let write = || -> R<()> {
-        let f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| at_path(e, &tmp))?;
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| at_path(e, &tmp))?;
         let mut w = std::io::BufWriter::with_capacity(256 * 1024, f);
         w.write_all(&body.as_bytes()[..at])?;
         w.write_all(b"{")?;
@@ -788,11 +813,11 @@ fn cost_load_scan() -> (Dict, Seen) {
     });
     if let Some(seen) = seen.filter(|_| {
         shape
-        && all("files", &|x| x.is_dict())
-        && all("owners", &|x| x.is_list())
-        && cost_rows_ok(j.get("orphan").as_ref())
-        && all("h", &|r| cost_rows_ok(Some(r)))
-        && all("um", &|m| m.as_dict().is_some_and(|m| m.values().iter().all(is_int)))
+            && all("files", &|x| x.is_dict())
+            && all("owners", &|x| x.is_list())
+            && cost_rows_ok(j.get("orphan").as_ref())
+            && all("h", &|r| cost_rows_ok(Some(r)))
+            && all("um", &|m| m.as_dict().is_some_and(|m| m.values().iter().all(is_int)))
     }) {
         j.set("who", cost_who_kept(&[&j]));
         return (j, seen);
@@ -863,7 +888,18 @@ fn ident_str(u: Option<V>) -> Option<V> {
 impl CostScan {
     fn new(j: &Dict, seen: Seen, now: f64) -> CostScan {
         let first = !j.at("done").truthy();
-        CostScan { j: j.clone(), seen, now, first, cut: now - COST_SEEN, records: 0, bytes: 0, files: 0, mains: Default::default(), oldest: Vec::new() }
+        CostScan {
+            j: j.clone(),
+            seen,
+            now,
+            first,
+            cut: now - COST_SEEN,
+            records: 0,
+            bytes: 0,
+            files: 0,
+            mains: Default::default(),
+            oldest: Vec::new(),
+        }
     }
 
     /// key 是 (c 或 x, 摘要的前 8 个字节)：原来写成一个字符加 16 位十六进制的字符串
@@ -888,7 +924,13 @@ impl CostScan {
                 bump(6, 1);
                 if !ident.is_empty() && !model.is_empty() {
                     // 没有标价的模型：记最后一次见到它的小时（过了 COST_KEEP 就不列）
-                    let ms = self.j.dict("um").expect("scan.json 核对过").setdefault(&ident, Dict::new()).as_dict().expect("scan.json 核对过");
+                    let ms = self
+                        .j
+                        .dict("um")
+                        .expect("scan.json 核对过")
+                        .setdefault(&ident, Dict::new())
+                        .as_dict()
+                        .expect("scan.json 核对过");
                     let last = ms.get(model).and_then(|x| x.as_int()).unwrap_or(hour);
                     ms.set(model, last.max(hour));
                 }
@@ -967,7 +1009,8 @@ impl CostScan {
                 break; // 还没写完的一行：下次再读
             }
             pos += raw.len() as i64;
-            let done = if kind == FileKind::Rollout { self.codex_line(&cur, &raw) } else { self.claude_line(kind, &cur, sid, &raw) };
+            let done =
+                if kind == FileKind::Rollout { self.codex_line(&cur, &raw) } else { self.claude_line(kind, &cur, sid, &raw) };
             match done {
                 // 坏的一行：跳过
                 Err(e) if e.is_value() => {}
@@ -991,7 +1034,8 @@ impl CostScan {
                 return Ok(());
             }
             // 主会话：owners 里先有它这一项（没认出账号也有，是空的）
-            let tl = self.j.dict("owners").expect("scan.json 核对过").setdefault(sid, List::new()).as_list().expect("scan.json 核对过");
+            let tl =
+                self.j.dict("owners").expect("scan.json 核对过").setdefault(sid, List::new()).as_list().expect("scan.json 核对过");
             if let Some(u) = u {
                 // tl[-1][1] != u：上一项不是 [时间, 账号] 的样子原来是 IndexError / TypeError（跳过这一行）
                 let changed = match tl.items().last() {
@@ -1020,7 +1064,9 @@ impl CostScan {
         let Some(ts) = cost_ts(d.get("timestamp").as_ref())? else { return Ok(()) };
         // 'c' + sha1(…).hexdigest()[:16]
         let key = match m.get("id") {
-            Some(V::Str(mid)) => (b'c', sha1_head(format!("{}\0{}", mid, d.get("requestId").unwrap_or(V::None).py_str()).as_bytes())),
+            Some(V::Str(mid)) => {
+                (b'c', sha1_head(format!("{}\0{}", mid, d.get("requestId").unwrap_or(V::None).py_str()).as_bytes()))
+            }
             _ => (b'c', sha1_head(raw)),
         };
         let mut who = cur.get("own").unwrap_or(V::None);
@@ -1093,7 +1139,9 @@ impl CostScan {
         } else if has(head, b"\"thread_settings_applied\"") {
             let d = line_doc(raw)?;
             let p = d.dict("payload");
-            let s = p.filter(|p| p.get("type").is_some_and(|t| t.as_str() == Some("thread_settings_applied"))).and_then(|p| p.dict("thread_settings"));
+            let s = p
+                .filter(|p| p.get("type").is_some_and(|t| t.as_str() == Some("thread_settings_applied")))
+                .and_then(|p| p.dict("thread_settings"));
             if let Some(s) = s {
                 if let Some(model) = s.get("model").filter(|m| m.is_str()) {
                     cur.set("model", cost_model(Some(&model)));
@@ -1320,8 +1368,14 @@ fn cost_publish(j: &Dict, now: f64) -> R<()> {
     }
     let um = Dict::new();
     for (i, ms) in j.dict("um").expect("scan.json 核对过").items() {
-        let mut models: Vec<std::rc::Rc<str>> =
-            ms.as_dict().expect("scan.json 核对过").items().into_iter().filter(|(_, x)| x.as_num().is_some_and(|x| x >= lo)).map(|(m, _)| m).collect();
+        let mut models: Vec<std::rc::Rc<str>> = ms
+            .as_dict()
+            .expect("scan.json 核对过")
+            .items()
+            .into_iter()
+            .filter(|(_, x)| x.as_num().is_some_and(|x| x >= lo))
+            .map(|(m, _)| m)
+            .collect();
         models.sort();
         if !models.is_empty() {
             um.set(i, V::List(List::from_vec(models.into_iter().map(V::from).collect())));
@@ -1374,7 +1428,10 @@ fn cost_run(sync_now: bool, wait: f64) -> R<(Dict, Dict)> {
     cost_dir().map_err(|e| at_path(e, &COST_DIR))?;
     let _lk = cost_lock(&path::join(&COST_DIR, "cost.lock"), wait)?;
     let me = std::process::id() as i64;
-    cost_save("worker.json", &V::Dict(dict! { "v" => 1, "pid" => me, "started" => proc_starts(&[me]).get(&me).copied().unwrap_or(0) }))?;
+    cost_save(
+        "worker.json",
+        &V::Dict(dict! { "v" => 1, "pid" => me, "started" => proc_starts(&[me]).get(&me).copied().unwrap_or(0) }),
+    )?;
     let run = || -> R<(Dict, Dict)> {
         let now = time();
         let (j, seen) = cost_load_scan();
@@ -1427,7 +1484,12 @@ fn cost_doc(d: &V, now: f64) -> Option<Dict> {
     if !(cost_rows_ok(h.as_ref()) && h.as_ref()?.as_dict()?.len() <= 24 * 7 * 20) {
         return None;
     }
-    let models: Vec<V> = um.items().into_iter().filter(|m| m.as_str().is_some_and(|m| text::isprintable(m) && text::len(m) <= 64)).take(32).collect();
+    let models: Vec<V> = um
+        .items()
+        .into_iter()
+        .filter(|m| m.as_str().is_some_and(|m| text::isprintable(m) && text::len(m) <= 64))
+        .take(32)
+        .collect();
     Some(dict! { "at" => at, "h" => h, "um" => models })
 }
 
@@ -1527,12 +1589,17 @@ fn cost_items(cfg: &Dict) -> R<Option<Vec<Item>>> {
 fn cost_sync(force: bool) -> R<Dict> {
     let cfg = presence_load()?.1;
     let st = Some(cost_json("sync.json")).filter(|s| !s.is_empty()).unwrap_or_else(|| dict! { "v" => 1 });
-    let res = |state: &str, msg: Option<V>| -> Dict { dict! { "state" => state, "message" => msg, "checked_epoch" => st.get("ok_at").filter(is_num) } };
+    let res = |state: &str, msg: Option<V>| -> Dict {
+        dict! { "state" => state, "message" => msg, "checked_epoch" => st.get("ok_at").filter(is_num) }
+    };
     let Some(cfg) = cfg else { return Ok(res("skipped", None)) };
     let now = time();
     let num_ = |k: &str| st.get(k).filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
     // 在未来的（时钟快过）不当真
-    if !force && ((0.0..COST_SYNC_EVERY).contains(&(now - num_("at"))) || (0.0 < num_("retry") - now && num_("retry") - now <= COST_RETRY)) {
+    if !force
+        && ((0.0..COST_SYNC_EVERY).contains(&(now - num_("at")))
+            || (0.0 < num_("retry") - now && num_("retry") - now <= COST_RETRY))
+    {
         let bad = st.get("state").is_some_and(|s| matches!(s.as_str(), Some("error") | Some("old_server")));
         let state = if bad {
             "waiting"
@@ -1554,7 +1621,16 @@ fn cost_sync(force: bool) -> R<Dict> {
     let old_rem = V::Dict(rem.clone()).deepcopy();
     st.set("at", now);
     let err = cost_round(&cfg, &items, &cost_json("local.json"), &st, &rem, now)?;
-    st.set("state", if err == COST_OLD { "old_server" } else if !err.is_empty() { "error" } else { "ok" });
+    st.set(
+        "state",
+        if err == COST_OLD {
+            "old_server"
+        } else if !err.is_empty() {
+            "error"
+        } else {
+            "ok"
+        },
+    );
     st.set("error", if err.is_empty() { V::None } else { V::from(err.as_str()) });
     if err == COST_OLD {
         st.set("retry", now + COST_RETRY);
@@ -1590,7 +1666,11 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
         return Ok(COST_OLD.to_string());
     }
     let Some(cost) = r.dict("cost").filter(|_| code == 200) else {
-        return Ok(if code != 200 { presence_why(cfg, code, &r)? } else { "设备统计的服务器回的内容看不懂".to_string() });
+        return Ok(if code != 200 {
+            presence_why(cfg, code, &r)?
+        } else {
+            "设备统计的服务器回的内容看不懂".to_string()
+        });
     };
     if let Some(me) = r.str("me_name").filter(|n| text::isprintable(n)) {
         st.set("me", text::head(&me, 64));
@@ -1628,7 +1708,9 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
             (Some(m), Some(t)) => m.py_eq(&t),
             (Some(v), None) | (None, Some(v)) => v.is_none(),
         };
-        let unchanged = mine.as_ref().is_some_and(same_tag) && a.get("sum").is_some_and(|x| x.as_str() == Some(s.as_str())) && (0.0..COST_BEAT).contains(&(now - up));
+        let unchanged = mine.as_ref().is_some_and(same_tag)
+            && a.get("sum").is_some_and(|x| x.as_str() == Some(s.as_str()))
+            && (0.0..COST_BEAT).contains(&(now - up));
         if !unchanged {
             let blob = cost_seal_fit(&x.keys, &x.aid, &fp, &doc, now)?;
             sent.push((x.slot.clone(), blob.at("t"), s));
@@ -1713,7 +1795,11 @@ fn cost_missing_view(ms: Option<V>, now: f64) -> V {
     let mut out = Vec::new();
     for m in ms.and_then(|m| m.as_list()).map(|m| m.items()).unwrap_or_default() {
         let Some(m) = m.as_dict() else { continue };
-        let (Some(name), Some(age)) = (m.str("name").filter(|n| text::isprintable(n)), m.get("used_age").filter(is_num).and_then(|a| a.as_num())) else { continue };
+        let (Some(name), Some(age)) =
+            (m.str("name").filter(|n| text::isprintable(n)), m.get("used_age").filter(is_num).and_then(|a| a.as_num()))
+        else {
+            continue;
+        };
         out.push(V::Dict(dict! { "name" => text::head(&name, 64), "used_epoch" => num::round(now - age) }));
         if out.len() == 32 {
             break;
@@ -2139,7 +2225,11 @@ impl CostView {
                 }
             };
             let short = node.split('.').next().unwrap_or("").to_string();
-            if short.is_empty() { "Mac".to_string() } else { short }
+            if short.is_empty() {
+                "Mac".to_string()
+            } else {
+                short
+            }
         };
         let cfg = cfg.filter(|c| !c.is_empty()).cloned();
         let me_name = match sync.str("me").filter(|_| cfg.is_some()) {
@@ -2222,7 +2312,9 @@ impl CostView {
         if state != "off" && state != "local_only" {
             for m in a.list("missing").map(|m| m.items()).unwrap_or_default() {
                 let Some(m) = m.as_dict() else { continue };
-                let (Some(name), Some(used)) = (m.get("name").filter(|n| n.is_str()), m.get("used_epoch").filter(is_num)) else { continue };
+                let (Some(name), Some(used)) = (m.get("name").filter(|n| n.is_str()), m.get("used_epoch").filter(is_num)) else {
+                    continue;
+                };
                 if used.as_num().is_some_and(|u| u > self.now - (COST_DAYS * 86400) as f64) {
                     missing.push(V::Dict(dict! { "name" => name, "used_epoch" => used }));
                 }
@@ -2239,7 +2331,15 @@ impl CostView {
             Some(cfg) => cfg.at("fp"),
             None => V::from("local"),
         };
-        let mut devs = vec![Device { id: me_id, name: self.me_name.clone(), me: true, revoked: false, synced_epoch: V::from(self.updated), stale: false, h: hours_of(&h) }];
+        let mut devs = vec![Device {
+            id: me_id,
+            name: self.me_name.clone(),
+            me: true,
+            revoked: false,
+            synced_epoch: V::from(self.updated),
+            stale: false,
+            h: hours_of(&h),
+        }];
         if share {
             // ((self.remote.get('acc') or {}).get(slot) or {}).items()
             let acc = match self.remote.get("acc").filter(|a| a.truthy()) {
@@ -2254,7 +2354,11 @@ impl CostView {
             };
             for (fp, e) in entries {
                 let Some(e) = e.as_dict() else { continue };
-                let (Some(rows), Some(at), Some(name)) = (e.get("h").filter(|h| cost_rows_ok(Some(h))), e.get("at").filter(is_num), e.str("name")) else { continue };
+                let (Some(rows), Some(at), Some(name)) =
+                    (e.get("h").filter(|h| cost_rows_ok(Some(h))), e.get("at").filter(is_num), e.str("name"))
+                else {
+                    continue;
+                };
                 devs.push(Device {
                     id: V::from(fp),
                     name: name.to_string(),
@@ -2289,7 +2393,8 @@ impl CostView {
             let Some(a) = active_of(&devs, &devs[i].name) else { continue };
             merged[i] = true;
             let first = devs[a].h.keys().next().copied();
-            let extra: Vec<(i64, Counts)> = devs[i].h.iter().filter(|(k, _)| first.is_none_or(|f| **k < f)).map(|(k, r)| (*k, *r)).collect();
+            let extra: Vec<(i64, Counts)> =
+                devs[i].h.iter().filter(|(k, _)| first.is_none_or(|f| **k < f)).map(|(k, r)| (*k, *r)).collect();
             for (k, r) in extra {
                 let b = devs[a].h.entry(k).or_insert([0; 7]);
                 for x in 0..7 {
@@ -2329,8 +2434,14 @@ impl CostView {
         }
         // keep 里的设备都有数据
         let since = keep.iter().filter_map(|i| devs[*i].h.keys().next()).min().copied().expect("keep 里的设备都有数据") as f64;
-        let good: Vec<usize> = weeks.iter().enumerate().filter(|(_, p)| p.e() <= self.now && since <= p.s() && p.e() - p.s() >= 6.0 * 86400.0).map(|(n, _)| n).collect();
-        let good_days: Vec<usize> = self.days.iter().enumerate().filter(|(_, p)| p.e() <= self.now && since <= p.s()).map(|(n, _)| n).collect();
+        let good: Vec<usize> = weeks
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.e() <= self.now && since <= p.s() && p.e() - p.s() >= 6.0 * 86400.0)
+            .map(|(n, _)| n)
+            .collect();
+        let good_days: Vec<usize> =
+            self.days.iter().enumerate().filter(|(_, p)| p.e() <= self.now && since <= p.s()).map(|(n, _)| n).collect();
         let total = |rows: &[Vec<Counts>], count: usize| -> Vec<Counts> {
             (0..count)
                 .map(|n| {
@@ -2379,7 +2490,9 @@ impl CostView {
         devices.sort_by(|a, b| {
             let key = |d: &Dict| (!d.truthy("me"), -d.dict("summary").expect("刚建的").at("days_usd").as_num().unwrap_or(0.0));
             let (ka, kb) = (key(a), key(b));
-            ka.0.cmp(&kb.0).then(ka.1.partial_cmp(&kb.1).unwrap_or(std::cmp::Ordering::Equal)).then_with(|| a.at("name").py_str().cmp(&b.at("name").py_str()))
+            ka.0.cmp(&kb.0)
+                .then(ka.1.partial_cmp(&kb.1).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.at("name").py_str().cmp(&b.at("name").py_str()))
         });
         let weeks_out: Vec<V> = weeks
             .iter()
@@ -2461,8 +2574,10 @@ impl CostView {
             orphan_micro += r.at(0).as_int().unwrap_or(0) as i128;
             orphan_requests += r.at(1).as_int().unwrap_or(0) as i128;
         }
-        let whole: Vec<(&'static str, &Money)> = self.accounts.iter().filter_map(|(t_, m, _)| m.as_ref().map(|m| (*t_, m))).collect();
-        let mine: Vec<(&'static str, &Money)> = self.accounts.iter().filter_map(|(t_, _, m)| m.as_ref().map(|m| (*t_, m))).collect();
+        let whole: Vec<(&'static str, &Money)> =
+            self.accounts.iter().filter_map(|(t_, m, _)| m.as_ref().map(|m| (*t_, m))).collect();
+        let mine: Vec<(&'static str, &Money)> =
+            self.accounts.iter().filter_map(|(t_, _, m)| m.as_ref().map(|m| (*t_, m))).collect();
         let out = part(&whole);
         out.set("currency", "USD");
         out.set("prices_date", COST_PRICES_DATE);
@@ -2482,8 +2597,16 @@ pub fn cmd_cost_periods(args: &[String]) -> R<()> {
         Some(q) => Some(json::loads(q)?),
         None => None,
     };
-    let rows = |ps: Vec<Period>| -> Vec<V> { ps.into_iter().map(|p| V::List(List::from_vec(vec![p.start, p.end, V::from(p.tag)]))).collect() };
-    out!("{}", json::dumps(&V::Dict(dict! { "days" => rows(cost_days(now)), "weeks" => rows(cost_weeks(quota.as_ref(), now)) }), json::LINE));
+    let rows = |ps: Vec<Period>| -> Vec<V> {
+        ps.into_iter().map(|p| V::List(List::from_vec(vec![p.start, p.end, V::from(p.tag)]))).collect()
+    };
+    out!(
+        "{}",
+        json::dumps(
+            &V::Dict(dict! { "days" => rows(cost_days(now)), "weeks" => rows(cost_weeks(quota.as_ref(), now)) }),
+            json::LINE
+        )
+    );
     Ok(())
 }
 
@@ -2507,7 +2630,10 @@ pub fn cmd_cost_view(args: &[String]) -> R<()> {
     let rows = |k: &str| spec.list(k).map(|l| l.items()).unwrap_or_default();
     let mut accounts = Vec::new();
     for a in rows("accounts") {
-        let a = a.as_list().filter(|a| a.len() == 5).ok_or_else(|| bad("账号要写成 [工具, 键, usage_weeks, 在不在映射里, 登录着没有]"))?;
+        let a = a
+            .as_list()
+            .filter(|a| a.len() == 5)
+            .ok_or_else(|| bad("账号要写成 [工具, 键, usage_weeks, 在不在映射里, 登录着没有]"))?;
         let name = a.at(0).py_str();
         let tool = crate::core::tool::tools().iter().find(|t| t.name == name).ok_or_else(|| bad("没有这个工具"))?;
         let _using = Using::tool(tool);
@@ -2520,7 +2646,13 @@ pub fn cmd_cost_view(args: &[String]) -> R<()> {
     }
     let names: Vec<String> = rows("tools").iter().map(|n| n.py_str()).collect();
     let tools: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
-    out!("{}", json::dumps(&V::Dict(dict! { "accounts" => accounts, "sync" => sync, "total" => cv.total(&tools), "scan" => cv.scan_state() }), json::LINE));
+    out!(
+        "{}",
+        json::dumps(
+            &V::Dict(dict! { "accounts" => accounts, "sync" => sync, "total" => cv.total(&tools), "scan" => cv.scan_state() }),
+            json::LINE
+        )
+    );
     Ok(())
 }
 
@@ -2562,18 +2694,50 @@ mod tests {
     fn claude_prices_like_python_test() {
         // tests/cost_view.py 的 Prices.test_claude
         let f = |model: &str, u: &str| cost_claude(model, &d(u));
-        let with = |more: &str| format!(r#"{{"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 10000, "cache_creation": {{"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 500}}{more}}}"#);
+        let with = |more: &str| {
+            format!(
+                r#"{{"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 10000, "cache_creation": {{"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 500}}{more}}}"#
+            )
+        };
         let u = with("");
         let (usd, tok) = f("claude-opus-5-5", &u);
         near(usd, 1000.0 * 4.0 + 2000.0 * 5.0 + 500.0 * 8.0 + 10000.0 * 0.2 + 100.0 * 20.0, "opus 5.5");
         assert_eq!(tok, [1000, 100, 10000, 2500], "(输入, 输出, 缓存读, 缓存写)");
-        near(f("claude-opus-5-5", &with(r#", "speed": "fast""#)).0, 1000.0 * 8.0 + 2000.0 * 10.0 + 500.0 * 16.0 + 10000.0 * 0.4 + 100.0 * 40.0, "快速模式：输入、输出按快速模式的标价，缓存跟着输入翻倍");
-        near(f("claude-sonnet-5-5", &with(r#", "speed": "fast""#)).0, f("claude-sonnet-5-5", &u).0.unwrap(), "没有快速模式标价的模型照常");
-        near(f("claude-opus-5-5", &with(r#", "inference_geo": "us""#)).0, f("claude-opus-5-5", &u).0.unwrap() * 1.1, "只在美国推理：加 10%");
-        near(f("claude-sonnet-4-5", &with(r#", "inference_geo": "us""#)).0, 1000.0 * 3.0 + 2000.0 * 3.75 + 500.0 * 6.0 + 10000.0 * 0.3 + 100.0 * 15.0, "4.6 以前的模型不加价");
-        near(f("claude-opus-5-5", r#"{"cache_creation_input_tokens": 1000}"#).0, 1000.0 * 5.0, "没有分 5 分钟、1 小时的：按 5 分钟算");
-        near(f("claude-opus-5-5", r#"{"output_tokens": 10, "server_tool_use": {"web_search_requests": 3}}"#).0, 10.0 * 20.0 + 3.0 * 10000.0, "网页搜索一次 0.01 美元");
-        near(f("claude-haiku-5-5", r#"{"input_tokens": 50000, "output_tokens": 1000}"#).0, 50000.0 * 0.1 + 1000.0 * 0.5, "haiku 5.5");
+        near(
+            f("claude-opus-5-5", &with(r#", "speed": "fast""#)).0,
+            1000.0 * 8.0 + 2000.0 * 10.0 + 500.0 * 16.0 + 10000.0 * 0.4 + 100.0 * 40.0,
+            "快速模式：输入、输出按快速模式的标价，缓存跟着输入翻倍",
+        );
+        near(
+            f("claude-sonnet-5-5", &with(r#", "speed": "fast""#)).0,
+            f("claude-sonnet-5-5", &u).0.unwrap(),
+            "没有快速模式标价的模型照常",
+        );
+        near(
+            f("claude-opus-5-5", &with(r#", "inference_geo": "us""#)).0,
+            f("claude-opus-5-5", &u).0.unwrap() * 1.1,
+            "只在美国推理：加 10%",
+        );
+        near(
+            f("claude-sonnet-4-5", &with(r#", "inference_geo": "us""#)).0,
+            1000.0 * 3.0 + 2000.0 * 3.75 + 500.0 * 6.0 + 10000.0 * 0.3 + 100.0 * 15.0,
+            "4.6 以前的模型不加价",
+        );
+        near(
+            f("claude-opus-5-5", r#"{"cache_creation_input_tokens": 1000}"#).0,
+            1000.0 * 5.0,
+            "没有分 5 分钟、1 小时的：按 5 分钟算",
+        );
+        near(
+            f("claude-opus-5-5", r#"{"output_tokens": 10, "server_tool_use": {"web_search_requests": 3}}"#).0,
+            10.0 * 20.0 + 3.0 * 10000.0,
+            "网页搜索一次 0.01 美元",
+        );
+        near(
+            f("claude-haiku-5-5", r#"{"input_tokens": 50000, "output_tokens": 1000}"#).0,
+            50000.0 * 0.1 + 1000.0 * 0.5,
+            "haiku 5.5",
+        );
         near(
             f("claude-haiku-5-5", r#"{"input_tokens": 90000, "cache_read_input_tokens": 20000, "output_tokens": 1000}"#).0,
             90000.0 * 0.5 + 20000.0 * 0.05 + 1000.0 * 2.5,
@@ -2581,7 +2745,11 @@ mod tests {
         );
         assert_eq!(f("claude-unknown-9", &u), (None, [1000, 100, 10000, 2500]), "没有公开价格的：只数 token");
         for junk in ["true", "-5", "1.5", r#""100""#, "10000000000000", "null"] {
-            assert_eq!(f("claude-opus-5-5", &format!(r#"{{"input_tokens": {junk}, "output_tokens": 1}}"#)).1, [0, 1, 0, 0], "{junk}");
+            assert_eq!(
+                f("claude-opus-5-5", &format!(r#"{{"input_tokens": {junk}, "output_tokens": 1}}"#)).1,
+                [0, 1, 0, 0],
+                "{junk}"
+            );
         }
     }
 
@@ -2592,16 +2760,25 @@ mod tests {
         let u = r#"{"input_tokens": 10000, "cached_input_tokens": 8000, "cache_write_input_tokens": 0, "output_tokens": 500, "reasoning_output_tokens": 300}"#;
         let base = 2000.0 * 10.0 + 8000.0 * 1.0 + 500.0 * 50.0;
         assert_eq!(f("gpt-6-astra", Some("default"), u), (Some(base), [2000, 500, 8000, 0]), "输入含缓存读；推理算在输出里");
-        for (tier, k) in [(None, 1.0), (Some("priority"), 2.0), (Some("fast"), 2.0), (Some("flex"), 0.5), (Some("ultrafast"), 6.0)] {
+        for (tier, k) in [(None, 1.0), (Some("priority"), 2.0), (Some("fast"), 2.0), (Some("flex"), 0.5), (Some("ultrafast"), 6.0)]
+        {
             near(f("gpt-6-astra", tier, u).0, base * k, &format!("{tier:?}"));
         }
-        near(f("gpt-6-sol", Some("ultrafast"), u).0, (2000.0 * 2.0 + 8000.0 * 0.2 + 500.0 * 10.0) * 2.0, "没有 Ultrafast 标价的模型按 Fast 算");
+        near(
+            f("gpt-6-sol", Some("ultrafast"), u).0,
+            (2000.0 * 2.0 + 8000.0 * 0.2 + 500.0 * 10.0) * 2.0,
+            "没有 Ultrafast 标价的模型按 Fast 算",
+        );
         near(f("gpt-6-astra", None, r#"{"input_tokens": 300000}"#).0, 300000.0 * 20.0, "输入超过 272K：长上下文的标价");
         let write = r#"{"input_tokens": 5000, "cached_input_tokens": 1000, "cache_write_input_tokens": 2000}"#;
         near(f("gpt-6-astra", None, write).0, 2000.0 * 10.0 + 1000.0 * 1.0 + 2000.0 * 12.5, "缓存写");
         near(f("gpt-5.3-codex", None, write).0, 2000.0 * 1.75 + 1000.0 * 0.175 + 2000.0 * 1.75, "没有缓存写标价的按输入算");
         near(f("gpt-5.3-codex", None, r#"{"input_tokens": 300000}"#).0, 300000.0 * 1.75, "没有长上下文标价的照常");
-        assert_eq!(f("gpt-6-astra", None, r#"{"input_tokens": 100, "cached_input_tokens": 500}"#).1, [0, 0, 100, 0], "缓存不超过输入");
+        assert_eq!(
+            f("gpt-6-astra", None, r#"{"input_tokens": 100, "cached_input_tokens": 500}"#).1,
+            [0, 0, 100, 0],
+            "缓存不超过输入"
+        );
         assert_eq!(f("codex-auto-review", None, u), (None, [2000, 500, 8000, 0]));
     }
 
@@ -2610,7 +2787,10 @@ mod tests {
         // tests/cost_view.py 的 Periods.test_bin_by_midpoint：跨过边界的小时按中点算；时段以外的不算
         let period = |s: i64, e: i64, tag: &str| Period { start: V::Int(s), end: V::Int(e), tag: tag.to_string() };
         let periods = [period(1000 * 3600, 1000 * 3600 + 5400, "x"), period(1000 * 3600 + 5400, 1003 * 3600, "y")];
-        let h: Hours = [(1000, 1), (1001, 2), (1002, 4), (999, 8), (1003, 16)].into_iter().map(|(hour, usd)| (hour * 3600, [usd, 1, 0, 0, 0, 0, 0])).collect();
+        let h: Hours = [(1000, 1), (1001, 2), (1002, 4), (999, 8), (1003, 16)]
+            .into_iter()
+            .map(|(hour, usd)| (hour * 3600, [usd, 1, 0, 0, 0, 0, 0]))
+            .collect();
         assert_eq!(cost_bin(&periods, &h).iter().map(|r| r[0]).collect::<Vec<_>>(), [1, 6]);
     }
 
@@ -2661,7 +2841,9 @@ mod tests {
 
     #[test]
     fn compact_seen_reads_only_well_formed_entries() {
-        let s = CompactSeen::parse(r#"{"c0123456789abcdef":1794024000, "x00000000000000ff" : 0 ,"cffffffffffffffff":15461882254800}"#).unwrap();
+        let s =
+            CompactSeen::parse(r#"{"c0123456789abcdef":1794024000, "x00000000000000ff" : 0 ,"cffffffffffffffff":15461882254800}"#)
+                .unwrap();
         assert_eq!(s.entries.len(), 3);
         assert_eq!((s.entries[0].kind, s.entries[0].id, s.entries[0].hour), (b'c', 0x0123456789abcdef, 498340));
         assert_eq!((s.entries[1].kind, s.entries[1].id, s.entries[1].hour), (b'x', 0xff, 0));
@@ -2704,7 +2886,10 @@ mod tests {
         let doc = r#" {"v":1,"files":{"/a\"b}":{"seen":{"x":1}}},"seen" : {"c0123456789abcdef":3600} ,"h":{"seen":[1,{"}":"]"}]},"s":"a\\","n":-1.5e3} "#;
         let (rest, seen) = split_seen(doc).unwrap();
         assert_eq!(seen, r#"{"c0123456789abcdef":3600}"#);
-        assert_eq!(rest, r#" {"v":1,"files":{"/a\"b}":{"seen":{"x":1}}},"seen" : {} ,"h":{"seen":[1,{"}":"]"}]},"s":"a\\","n":-1.5e3} "#);
+        assert_eq!(
+            rest,
+            r#" {"v":1,"files":{"/a\"b}":{"seen":{"x":1}}},"seen" : {} ,"h":{"seen":[1,{"}":"]"}]},"s":"a\\","n":-1.5e3} "#
+        );
         assert!(json::loads(&rest).is_ok());
         assert_eq!(split_seen(r#"{"seen":{}}"#).unwrap(), (r#"{"seen":{}}"#.to_string(), "{}"));
         // 键里有转义（反斜杠 u0065 就是 e）：不认，交给通用的读法
@@ -2746,7 +2931,10 @@ mod tests {
             assert!(!s.has(b'c', 2) && s.has(b'c', 3));
         }
         assert_eq!(dump(&compact), dump(&generic));
-        assert_eq!(dump(&compact), r#"{"c0000000000000000":1794024000,"c0000000000000001":1794027600,"c0000000000000003":1794024000}"#);
+        assert_eq!(
+            dump(&compact),
+            r#"{"c0000000000000000":1794024000,"c0000000000000001":1794027600,"c0000000000000003":1794024000}"#
+        );
         // 放不进紧凑的表的值：整张表换成通用的，内容不变
         compact.add(b'x', 9, 1794024001);
         assert!(matches!(compact, Seen::Generic(_)) && compact.has(b'c', 0) && compact.has(b'x', 9) && compact.len() == 4);

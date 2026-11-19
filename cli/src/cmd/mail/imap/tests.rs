@@ -147,7 +147,15 @@ fn reset(s: &TcpStream) {
     use std::os::fd::AsRawFd;
     let l = libc::linger { l_onoff: 1, l_linger: 0 };
     // SAFETY: s 开着；l 是有效的内存，长度如实给出
-    unsafe { libc::setsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER, (&raw const l).cast(), std::mem::size_of::<libc::linger>() as libc::socklen_t) };
+    unsafe {
+        libc::setsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&raw const l).cast(),
+            std::mem::size_of::<libc::linger>() as libc::socklen_t,
+        )
+    };
 }
 
 fn play(conn: TcpStream, scene: &Scene, sent: &Mutex<Vec<String>>) {
@@ -226,7 +234,9 @@ fn outcome(r: R<V>) -> Dict {
         Ok(v) => dict! { "ok" => v },
         Err(e) => match mail_error(&e) {
             // 说明里带着这次随机的 tag 的（服务器原样回了它）：和对照数据一样换成 TAG
-            Some((code, text)) if e.is("MailRetry") => dict! { "retry" => list![code, re!(r"\b[A-P]{4}(\d+ )").sub(r"TAG\1", text)] },
+            Some((code, text)) if e.is("MailRetry") => {
+                dict! { "retry" => list![code, re!(r"\b[A-P]{4}(\d+ )").sub(r"TAG\1", text)] }
+            }
             Some((code, text)) => dict! { if e.is("MailFatal") { "fatal" } else { "retry" } => list![code, text] },
             None => dict! { "py" => match &e { Fail::Value(_) => "ValueError", Fail::Other(class, _) => class, _ => "?" } },
         },
@@ -274,8 +284,14 @@ fn sessions_like_imaplib() {
                 }
                 "folders" => bx.folders().map(|f| V::from(f.into_iter().map(|(l, n)| V::from(list![l, n])).collect::<Vec<_>>())),
                 "examine" => bx.examine(&args[0].py_str()).map(|(v, n)| V::from(list![v.map(|x| x as i64), n.map(|x| x as i64)])),
-                "search" => bx.search(&mail_crit(&[rule()], 1794708000.0)).map(|u| V::from(u.into_iter().map(|x| V::Int(x as i64)).collect::<Vec<_>>())),
-                "headers" => hdrs(bx.headers(&Uids::List(args[0].as_list().unwrap().items().iter().map(|u| u.as_int().unwrap() as u64).collect()))),
+                "search" => bx
+                    .search(&mail_crit(&[rule()], 1794708000.0))
+                    .map(|u| V::from(u.into_iter().map(|x| V::Int(x as i64)).collect::<Vec<_>>())),
+                "headers" => {
+                    hdrs(bx.headers(&Uids::List(
+                        args[0].as_list().unwrap().items().iter().map(|u| u.as_int().unwrap() as u64).collect(),
+                    )))
+                }
                 "range" => hdrs(bx.headers(&Uids::Range(uid(0), uid(1)))),
                 "message" => bx.message(uid(0)).map(|m| V::from(latin1(&m))),
                 "logout" => {

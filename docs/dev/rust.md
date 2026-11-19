@@ -37,8 +37,9 @@
 cd cli
 cargo build --release --locked        # cca（仓库里的）用的就是这一份
 cargo test --locked                   # 单元测试（回归的 unit 一节也跑）
+cargo fmt                             # 照 rustfmt.toml 排版（回归里有 cargo fmt --check；生成的数据表标着 #[rustfmt::skip]，不参与）
 cargo clippy --all-targets -- -D warnings
-cargo clippy --target x86_64-unknown-linux-musl -- -D warnings      # Linux 那一半的代码也要干净
+cargo clippy --all-targets --target x86_64-unknown-linux-musl -- -D warnings   # Linux 那一半的代码（连测试）也要干净
 cargo build --release --locked --target x86_64-unknown-linux-musl   # 交叉编译；四个目标先 rustup target add
 python3 -I pydiff/run.py [-k 名字] [-v] [-s] [-t]                    # 对拍，见「测试」
 ```

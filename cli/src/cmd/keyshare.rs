@@ -3,8 +3,12 @@
 //! 记下、删掉 key 时用的（secrets 模块调）：`keyshare_on`、`keyshare_edit`（keys.json 的读改写）、`keyshare_kick`；
 //! 密文的格式（`blob_*`，折合金额也用）；同步本身（`keyshare_sync`、`keyshare_round`：cca _key-sync 和上报进程顺带做）。
 
-use super::presence::{presence_aid, presence_load, presence_mapped, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
-use super::secrets::{kc_del, kc_hints, kc_put, kc_read, kc_svc, kc_unbook, keyfile_store, keystore_name, py_set, security, SECRETS_DIR};
+use super::presence::{
+    presence_aid, presence_load, presence_mapped, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR,
+};
+use super::secrets::{
+    kc_del, kc_hints, kc_put, kc_read, kc_svc, kc_unbook, keyfile_store, keystore_name, py_set, security, SECRETS_DIR,
+};
 use super::{arg, arity, Cmd};
 use crate::core::base::CFG;
 use crate::core::model::{acct_id, cdir, cfg_load, is_api, parse_key, REF_ACCT};
@@ -38,7 +42,10 @@ pub fn is_num(v: &V) -> bool {
 
 /// 这个账号（当前工具的）记下备查的 key 会不会同步：映射里的 Claude、Codex 官方账号，这台设备开着设备统计
 pub fn keyshare_on(key: &str, v: &V) -> R<bool> {
-    Ok(matches!(t().kind, Kind::Claude | Kind::Codex) && !is_api(v) && presence_mapped(&policy_raw(t()), key, v) && presence_load()?.1.is_some())
+    Ok(matches!(t().kind, Kind::Claude | Kind::Codex)
+        && !is_api(v)
+        && presence_mapped(&policy_raw(t()), key, v)
+        && presence_load()?.1.is_some())
 }
 
 /// key 的摘要（没有 key、删掉了是 None）
@@ -122,7 +129,9 @@ impl KeyshareEdit {
     /// `ed.mark(s)`
     pub fn mark(&mut self, s: Option<&str>) {
         if let Some(f) = &self.f {
-            f.j.dict("acc").expect("enter 保证了 acc 是字典").set(keyshare_slot(&self.key), dict! { "at" => self.at, "sum" => keyshare_sum(s) });
+            f.j.dict("acc")
+                .expect("enter 保证了 acc 是字典")
+                .set(keyshare_slot(&self.key), dict! { "at" => self.at, "sum" => keyshare_sum(s) });
         }
     }
 
@@ -176,7 +185,8 @@ pub type Keys = ([u8; 32], [u8; 32]);
 /// `bytes.fromhex(s)`：字节之间的空白不算；不是十六进制是 ValueError
 fn bytes_fromhex(s: &str) -> R<Vec<u8>> {
     let compact: String = s.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    crate::py::hash::from_hex(&compact).ok_or_else(|| crate::py::Fail::Value("non-hexadecimal number found in fromhex() arg".into()))
+    crate::py::hash::from_hex(&compact)
+        .ok_or_else(|| crate::py::Fail::Value("non-hexadecimal number found in fromhex() arg".into()))
 }
 
 /// 这个账号的两把密钥（加密、认证）：盐、工具、邮箱、登录身份一起派生；label 分开用途（折合金额的是 COST_LABEL）
@@ -195,7 +205,13 @@ pub fn blob_ad(parts: &[&str]) -> R<Vec<u8>> {
         let end = start + chars[start..].iter().take_while(|c| !c.is_ascii()).count();
         let what = if end - start == 1 {
             let c = chars[start] as u32;
-            let esc = if c < 0x100 { format!("\\x{c:02x}") } else if c < 0x10000 { format!("\\u{c:04x}") } else { format!("\\U{c:08x}") };
+            let esc = if c < 0x100 {
+                format!("\\x{c:02x}")
+            } else if c < 0x10000 {
+                format!("\\u{c:04x}")
+            } else {
+                format!("\\U{c:08x}")
+            };
             format!("character '{esc}' in position {start}")
         } else {
             format!("characters in position {}-{}", start, end - 1)
@@ -256,7 +272,9 @@ fn keyshare_plain(s: Option<&str>, at: &V) -> Vec<u8> {
 /// 服务器上的那一份解开：{"key": key | None, "at": 时间}；认证不过、格式不对（伪造的、别的账号的、坏了）是 None
 pub fn keyshare_open(keys: &Keys, aid: &str, blob: &V) -> R<Option<Dict>> {
     let Some(pt) = blob_open(keys, &blob_ad(&[KEYSHARE_LABEL, aid])?, blob) else { return Ok(None) };
-    let Some(j) = std::str::from_utf8(&pt).ok().and_then(|text| json::loads(text).ok()).and_then(|j| j.as_dict()) else { return Ok(None) };
+    let Some(j) = std::str::from_utf8(&pt).ok().and_then(|text| json::loads(text).ok()).and_then(|j| j.as_dict()) else {
+        return Ok(None);
+    };
     let at = j.get("at").filter(is_num).and_then(|at| at.as_num());
     let key_ok = j.get("key").is_none_or(|k| k.is_none() || crate::core::model::secret_ok(&k));
     if !(j.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) && at.is_some_and(|at| at > 0.0) && key_ok) {
@@ -327,7 +345,8 @@ pub fn keyshare_local(key: &str, e: Option<&V>, booked: bool, hint: Option<&V>) 
     let e = e.and_then(|e| e.as_dict()).filter(|e| e.get("at").is_some_and(|at| is_num(&at)));
     let e_at = e.as_ref().map(|e| e.at("at").as_num().unwrap_or(0.0));
     let e_sum = e.as_ref().and_then(|e| e.get("sum")).unwrap_or(V::None);
-    let h_at = hint.and_then(|h| h.as_dict()).and_then(|h| h.get("at")).filter(is_num).and_then(|at| at.as_num()).filter(|at| *at > 0.0);
+    let h_at =
+        hint.and_then(|h| h.as_dict()).and_then(|h| h.get("at")).filter(is_num).and_then(|at| at.as_num()).filter(|at| *at > 0.0);
     if booked && (e.is_none() || !e_sum.truthy() || h_at.is_some_and(|h| h > e_at.unwrap_or(0.0))) {
         let at = h_at.or_else(|| keystore_mtime(&acct_id(key, t())).filter(|m| *m != 0.0)).unwrap_or(1.0);
         return (at, V::from("?"));
@@ -602,9 +621,27 @@ mod tests {
         let ad = blob_ad(&[KEYSHARE_LABEL, "aid-1"]).unwrap();
         let long = "k".repeat(300);
         for (s, at, len, c_sha, t) in [
-            (Some("sk-ant-api03-REFtest0123456789abcdWXYZ"), V::Float(1794024000.5), 256, "a6bee9f921d43b9308e981b6bce9f884e24cf8a340220d213ad0977c586c97b6", "VS5977i4HFuFYk+4BKwHQHEI4J9jECiVXRncLUscfx0="),
-            (None, V::Int(1794024000), 256, "91c0321fe754e28dd380e794737d910f5cd2c9051502fc96b9ceadd714a307d6", "VWt1VFY3ERfSKhyDnCNmIumImPzca1BYm8WHyTBkZZE="),
-            (Some(long.as_str()), V::Float(1.25), 512, "42256c6a402f01a38694a90d38f1b25ae7801189a0a8563cdd75fa664084a201", "UvvAP6nztA+iqCq98rhItM7UoYFGlvHnaGH3lQs06i4="),
+            (
+                Some("sk-ant-api03-REFtest0123456789abcdWXYZ"),
+                V::Float(1794024000.5),
+                256,
+                "a6bee9f921d43b9308e981b6bce9f884e24cf8a340220d213ad0977c586c97b6",
+                "VS5977i4HFuFYk+4BKwHQHEI4J9jECiVXRncLUscfx0=",
+            ),
+            (
+                None,
+                V::Int(1794024000),
+                256,
+                "91c0321fe754e28dd380e794737d910f5cd2c9051502fc96b9ceadd714a307d6",
+                "VWt1VFY3ERfSKhyDnCNmIumImPzca1BYm8WHyTBkZZE=",
+            ),
+            (
+                Some(long.as_str()),
+                V::Float(1.25),
+                512,
+                "42256c6a402f01a38694a90d38f1b25ae7801189a0a8563cdd75fa664084a201",
+                "UvvAP6nztA+iqCq98rhItM7UoYFGlvHnaGH3lQs06i4=",
+            ),
         ] {
             let pt = keyshare_plain(s, &at);
             assert_eq!(pt.len(), len);
@@ -621,9 +658,19 @@ mod tests {
             assert!(blob_open(&keys, &ad, &V::Dict(tampered)).is_none());
             assert!(blob_open(&cost, &ad, &V::Dict(blob)).is_none());
         }
-        assert_eq!(to_hex(&blob_xor(&keys.0, &nonce, &[b'x'; 33])), "7276d4c21e054103513f4f20e5c7496535e15e7980d0b916abc7f6c0f8057b2f48");
+        assert_eq!(
+            to_hex(&blob_xor(&keys.0, &nonce, &[b'x'; 33])),
+            "7276d4c21e054103513f4f20e5c7496535e15e7980d0b916abc7f6c0f8057b2f48"
+        );
         assert!(blob_xor(&keys.0, &nonce, b"").is_empty());
-        for bad in [V::None, V::from("text"), V::from(5), V::Dict(dict! { "n" => "AA==", "c" => "AA==" }), V::Dict(dict! { "n" => 5, "c" => "", "t" => "" }), V::Dict(dict! { "n" => "!!", "c" => "", "t" => "" })] {
+        for bad in [
+            V::None,
+            V::from("text"),
+            V::from(5),
+            V::Dict(dict! { "n" => "AA==", "c" => "AA==" }),
+            V::Dict(dict! { "n" => 5, "c" => "", "t" => "" }),
+            V::Dict(dict! { "n" => "!!", "c" => "", "t" => "" }),
+        ] {
             assert!(blob_open(&keys, &ad, &bad).is_none(), "{bad:?}");
         }
     }
@@ -633,14 +680,18 @@ mod tests {
     #[test]
     fn open_refuses_junk_like_python_test() {
         let (salt, aid, key) = ("00".repeat(16), "a".repeat(32), format!("sk-ant-api03-{}", "x".repeat(60)));
-        let keys_of = |salt: &str, tool: &str, email: &str, ident: &str| keyshare_keys(salt, tool, email, ident, KEYSHARE_LABEL).unwrap();
+        let keys_of =
+            |salt: &str, tool: &str, email: &str, ident: &str| keyshare_keys(salt, tool, email, ident, KEYSHARE_LABEL).unwrap();
         let k = keys_of(&salt, "claude", "Alice@Example.com", "u-1234-5678");
         assert_eq!(k, keys_of(&salt, "claude", "alice@example.com", "u-1234-5678"), "邮箱不分大小写");
         let b = keyshare_seal(&k, &aid, Some(&key), &V::Float(1794041280.5)).unwrap();
         let opened = keyshare_open(&k, &aid, &V::Dict(b.clone())).unwrap().unwrap();
         assert_eq!(json::dumps(&V::Dict(opened), json::Fmt::new()), format!(r#"{{"key": "{key}", "at": 1794041280.5}}"#));
         let gone = keyshare_seal(&k, &aid, None, &V::Float(1794041281.0)).unwrap();
-        assert_eq!(json::dumps(&V::Dict(keyshare_open(&k, &aid, &V::Dict(gone.clone())).unwrap().unwrap()), json::Fmt::new()), r#"{"key": null, "at": 1794041281.0}"#);
+        assert_eq!(
+            json::dumps(&V::Dict(keyshare_open(&k, &aid, &V::Dict(gone.clone())).unwrap().unwrap()), json::Fmt::new()),
+            r#"{"key": null, "at": 1794041281.0}"#
+        );
         assert_eq!(gone.at("c").py_str().len(), b.at("c").py_str().len(), "删除和 key 一样长：服务器分不出来");
         for other in [
             keys_of(&salt, "claude", "alice@example.com", "u-other-0000"), // 没登录这个账号（身份不对）
@@ -658,7 +709,14 @@ mod tests {
         let mut c = b64decode(&b.at("c").py_str(), true).unwrap();
         c[5] ^= 1;
         assert!(keyshare_open(&k, &aid, &with("c", V::from(b64encode(&c)))).unwrap().is_none(), "改过的");
-        for junk in [V::None, V::Dict(Dict::new()), V::from("x"), V::Dict(dict! { "n" => "x", "c" => "y", "t" => "z" }), with("n", V::Int(12)), with("n", b.at("t"))] {
+        for junk in [
+            V::None,
+            V::Dict(Dict::new()),
+            V::from("x"),
+            V::Dict(dict! { "n" => "x", "c" => "y", "t" => "z" }),
+            with("n", V::Int(12)),
+            with("n", b.at("t")),
+        ] {
             assert!(keyshare_open(&k, &aid, &junk).unwrap().is_none(), "{junk:?}");
         }
         // 照文档封好的（明文是 JSON，空格补齐到 256 字节的整数倍）、认证得过，内容不对的也不认
@@ -693,7 +751,10 @@ mod tests {
     #[test]
     fn seal_then_open_round_trips_with_a_random_nonce() {
         let keys = keyshare_keys(&"cd".repeat(16), "codex", "erin@example.com", "acct-1", KEYSHARE_LABEL).unwrap();
-        let (a, b) = (keyshare_seal(&keys, "aid", Some("sk-test-AAAA1111"), &V::Float(5.5)).unwrap(), keyshare_seal(&keys, "aid", Some("sk-test-AAAA1111"), &V::Float(5.5)).unwrap());
+        let (a, b) = (
+            keyshare_seal(&keys, "aid", Some("sk-test-AAAA1111"), &V::Float(5.5)).unwrap(),
+            keyshare_seal(&keys, "aid", Some("sk-test-AAAA1111"), &V::Float(5.5)).unwrap(),
+        );
         assert_ne!(a.at("n").py_str(), b.at("n").py_str(), "每次的 nonce 都不一样");
         let opened = keyshare_open(&keys, "aid", &V::Dict(a)).unwrap().unwrap();
         assert_eq!((opened.at("key").py_str(), opened.at("at").as_num()), ("sk-test-AAAA1111".to_string(), Some(5.5)));

@@ -43,6 +43,7 @@ cargo build                          # 调试版，对拍用它
 cargo test                           # 单元测试
 python3 -I pydiff/run.py -k 模块名    # 对拍：同一份沙箱上分别跑 Python 和 cca-core，逐字节比
 python3 -I pydiff/run.py -v -k 用例名  # 失败时看两边的原样输出
+cargo fmt                            # 交回前排一遍版（回归里查 cargo fmt --check）
 cargo clippy -- -D warnings          # 交回前要干净
 ```
 

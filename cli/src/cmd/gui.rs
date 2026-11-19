@@ -17,7 +17,9 @@ use super::{arg, arity, Cmd};
 use crate::cmd::secrets::{kc_hints, kc_list, kc_slot, py_in};
 use crate::core::base::{sh, CCA_HOME, CFG, FIRST_PORT, HINT_RE, NOTICES, RO_BAD};
 use crate::core::ctx::{cfg_save, ctx, pool_size, reconcile_all};
-use crate::core::model::{acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok};
+use crate::core::model::{
+    acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok,
+};
 use crate::core::policy::policy_map;
 use crate::core::sync::sync_digest;
 use crate::core::tool::{t, tools, Kind, Using};
@@ -158,7 +160,11 @@ pub fn gui_api_key(c: &Dict, k: &str, v: &V, share: bool, share_err: &V) -> R<Di
     // h.get("host", host) == host：没记域名的（旧版本存的）算对得上
     let host_ok = h.get("host").is_none_or(|x| x.as_str() == Some(host.as_str()));
     let saved = py_in(&aid, st.get(kc_list(is_ref)))? && host_ok;
-    let hint = if saved && h.get("host").is_some_and(|x| x.as_str() == Some(host.as_str())) { h.str("hint").map_or(String::new(), |s| s.to_string()) } else { String::new() };
+    let hint = if saved && h.get("host").is_some_and(|x| x.as_str() == Some(host.as_str())) {
+        h.str("hint").map_or(String::new(), |s| s.to_string())
+    } else {
+        String::new()
+    };
     out.set("saved", saved);
     out.set("hint", if HINT_RE.matches(&hint) { hint } else { String::new() });
     out.set("source", if saved { "keychain" } else { "" });
@@ -173,7 +179,10 @@ pub fn gui_api_key(c: &Dict, k: &str, v: &V, share: bool, share_err: &V) -> R<Di
 
 /// App 下次该拉映射的时间：上次拉（$POLICY_DIR/checked）之后过 POLICY_POLL_INTERVAL 秒；没拉过是 None
 pub fn policy_next_check() -> Option<f64> {
-    Some(crate::py::shutil::getmtime(&path::join_all(&[&CCA_HOME, "policy", "checked"])).ok()? + crate::core::policy::POLICY_POLL_INTERVAL as f64)
+    Some(
+        crate::py::shutil::getmtime(&path::join_all(&[&CCA_HOME, "policy", "checked"])).ok()?
+            + crate::core::policy::POLICY_POLL_INTERVAL as f64,
+    )
 }
 
 /// 配置向导还要不要出现：显式标记过（cmd_onboard 做完写的），或者这台机器已经有账号 / 配过路由器 / 配过本机客户端
@@ -182,7 +191,9 @@ pub fn onboarded(c: &Dict) -> bool {
     if c.truthy("onboarded") {
         return true;
     }
-    let set = |section: &str, field: &str| c.get(section).filter(|s| s.truthy()).and_then(|s| s.as_dict()).is_some_and(|s| s.truthy(field));
+    let set = |section: &str, field: &str| {
+        c.get(section).filter(|s| s.truthy()).and_then(|s| s.as_dict()).is_some_and(|s| s.truthy(field))
+    };
     if set("router", "host") || set("local", "client") {
         return true;
     }
@@ -193,13 +204,16 @@ pub fn onboarded(c: &Dict) -> bool {
 pub fn cmd_health_save(args: &[String]) -> R<()> {
     arity("cmd_health_save", args, 8, 13)?;
     let r = coffee_parse(&args[5], &args[6], &args[7])?;
-    let (line, dns_msg, webrtc_msg, dns, webrtc) = (arg(args, 8, ""), arg(args, 9, ""), arg(args, 10, ""), arg(args, 11, ""), arg(args, 12, ""));
+    let (line, dns_msg, webrtc_msg, dns, webrtc) =
+        (arg(args, 8, ""), arg(args, 9, ""), arg(args, 10, ""), arg(args, 11, ""), arg(args, 12, ""));
     let or_none = |s: &str| if s.is_empty() { V::None } else { V::from(s) };
     // 有横幅那一句才有 S 行（leak-verdict）
     let leak = if line.is_empty() {
         V::None
     } else {
-        V::Dict(dict! { "dns" => or_none(dns), "webrtc" => or_none(webrtc), "line" => line, "dns_message" => dns_msg, "webrtc_message" => webrtc_msg })
+        V::Dict(
+            dict! { "dns" => or_none(dns), "webrtc" => or_none(webrtc), "line" => line, "dns_message" => dns_msg, "webrtc_message" => webrtc_msg },
+        )
     };
     let rc = r.at("rc").as_int().unwrap_or_else(|| panic!("KeyError: {}", r.at("rc").py_repr()));
     let mut fields = vec![("result", V::from(health_result(rc))), ("message", r.at("line")), ("leak", leak)];
@@ -309,7 +323,11 @@ pub fn cmd_update_check(args: &[String]) -> R<()> {
     let (current, mode, fallback, repo) = (args[0].as_str(), arg(args, 1, ""), arg(args, 2, ""), arg(args, 3, ""));
     let beta = current.contains("-beta.");
     let input = io::read_stdin_text();
-    let rels = json::loads(if input.is_empty() { "null" } else { &input }).ok().and_then(|r| r.as_list()).map(|l| l.items()).unwrap_or_default();
+    let rels = json::loads(if input.is_empty() { "null" } else { &input })
+        .ok()
+        .and_then(|r| r.as_list())
+        .map(|l| l.items())
+        .unwrap_or_default();
     // (版本, 更新说明, 网址, 发布时间)
     let mut found: Vec<(String, V, String, V)> = Vec::new();
     for x in &rels {
@@ -383,7 +401,17 @@ struct GuiEnv<'a> {
 }
 
 /// _gui state 里的一个账号（当前工具是它的工具）；cli 是 cli_view 的结果
-fn gui_account(c: &Dict, k: &str, v: &V, procs: &[(i64, String)], badges: &[(Rc<str>, (String, &'static str))], pm: &Dict, env: &mut GuiEnv, now: f64, cli: Dict) -> R<Dict> {
+fn gui_account(
+    c: &Dict,
+    k: &str,
+    v: &V,
+    procs: &[(i64, String)],
+    badges: &[(Rc<str>, (String, &'static str))],
+    pm: &Dict,
+    env: &mut GuiEnv,
+    now: f64,
+    cli: Dict,
+) -> R<Dict> {
     let tool = t();
     let (a, e) = parse_key(k);
     let api = is_api(v);
@@ -444,7 +472,10 @@ fn gui_account(c: &Dict, k: &str, v: &V, procs: &[(i64, String)], badges: &[(Rc<
     if !has_bin {
         why.set("cli", "tool_missing"); // 第三方 API 账号也是经 claude / codex 命令用的
     }
-    let badge = badges.iter().find(|(key, _)| &**key == k).map(|(_, (label, color))| dict! { "label" => label.as_str(), "color" => *color });
+    let badge = badges
+        .iter()
+        .find(|(key, _)| &**key == k)
+        .map(|(_, (label, color))| dict! { "label" => label.as_str(), "color" => *color });
     let weeks = if api || !tool.has_usage { None } else { usage_weeks_view(k, now, cached.as_ref())? };
     let can_cost = env.cost.on && tool.has_cost && !api; // 折合金额（PROTOCOL 2.2 的 cost）
     let lower = e.to_lowercase();
@@ -501,7 +532,9 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     let raw = match load_quiet(&CFG) {
         Some(V::Dict(raw)) => raw,
         _ => {
-            errors.push(V::Dict(dict! { "code" => "config_unreadable", "tool" => V::None, "message" => format!("{} 读不了或格式不对", *CFG) }));
+            errors.push(V::Dict(
+                dict! { "code" => "config_unreadable", "tool" => V::None, "message" => format!("{} 读不了或格式不对", *CFG) },
+            ));
             Dict::new()
         }
     };
@@ -613,7 +646,14 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     for tool in tools() {
         let name = tool.name.to_uppercase();
         let var = |suffix: &str| getenv(&format!("CCA_GUI_{name}_{suffix}")).filter(|s| !s.is_empty());
-        let mut env = GuiEnv { bin: var("BIN"), app: var("APP"), chrome: getenv("CCA_GUI_CHROME").as_deref() == Some("1"), presence, key_error: key_error.clone(), cost: &mut cv };
+        let mut env = GuiEnv {
+            bin: var("BIN"),
+            app: var("APP"),
+            chrome: getenv("CCA_GUI_CHROME").as_deref() == Some("1"),
+            presence,
+            key_error: key_error.clone(),
+            cost: &mut cv,
+        };
         let enabled = tool.kind == Kind::Claude || path::exists(&tool.table);
         let entry = dict! {
             "id" => tool.name, "label" => tool.label, "app_label" => tool.app_label,
@@ -633,7 +673,10 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             }
             let badges = launcher_badges(&c, &official, &launcher_names(&official));
             let pm = policy_map(tool, Some(&c));
-            entry.set("errors", tool.errs().into_iter().map(|m| V::Dict(dict! { "code" => "table_invalid", "message" => m })).collect::<Vec<V>>());
+            entry.set(
+                "errors",
+                tool.errs().into_iter().map(|m| V::Dict(dict! { "code" => "table_invalid", "message" => m })).collect::<Vec<V>>(),
+            );
             entry.set("last", or_none(tool.state(&c, false).get("last")));
             let marks: Vec<(Rc<str>, Vec<Dict>)> = table.keys().into_iter().map(|k| (k.clone(), cli_marks(&k))).collect();
             // 没有登记时不跑 ps
@@ -673,7 +716,11 @@ fn gui_reach(host: &str, ports: &[i64]) -> HashMap<i64, bool> {
             let (host, port) = (host.to_string(), p.to_string());
             let handle = std::thread::spawn(move || {
                 let wait = if cfg!(target_os = "macos") { "-G" } else { "-w" };
-                let cmd = Proc::new(["nc", "-z", wait, "1", host.as_str(), port.as_str()]).stdin(In::Null).stdout(Out::Null).stderr(Out::Null).timeout(5.0);
+                let cmd = Proc::new(["nc", "-z", wait, "1", host.as_str(), port.as_str()])
+                    .stdin(In::Null)
+                    .stdout(Out::Null)
+                    .stderr(Out::Null)
+                    .timeout(5.0);
                 cmd.run().is_ok_and(|done| done.rc == 0)
             });
             (*p, handle)
@@ -709,7 +756,8 @@ pub fn cmd_gui_live(args: &[String]) -> R<()> {
     local.set("error", V::None);
     let lines: Vec<&str> = text::splitlines(&input).into_iter().filter(|l| !text::strip(l).is_empty()).collect();
     // 各组：选中的节点（没有是 None）、内核里有没有、在不在监听
-    let (mut sel, mut inkernel, mut listening): (HashMap<String, Option<String>>, HashMap<String, bool>, HashMap<String, bool>) = Default::default();
+    let (mut sel, mut inkernel, mut listening): (HashMap<String, Option<String>>, HashMap<String, bool>, HashMap<String, bool>) =
+        Default::default();
     if route == "router" {
         if rhost.is_none() {
             router.set("error", dict! { "code" => "not_configured", "message" => "还没配置路由器（cca router setup）" });
@@ -735,7 +783,10 @@ pub fn cmd_gui_live(args: &[String]) -> R<()> {
                 }
             }
             if matches!(router.get("running"), Some(V::Bool(false))) {
-                router.set("error", dict! { "code" => "not_running", "message" => format!("{} 没在运行", router.at("backend").py_str()) });
+                router.set(
+                    "error",
+                    dict! { "code" => "not_running", "message" => format!("{} 没在运行", router.at("backend").py_str()) },
+                );
             }
         }
     } else if route == "local" {
@@ -764,7 +815,11 @@ pub fn cmd_gui_live(args: &[String]) -> R<()> {
     }
     let plan = slot_orders(&c, route == "local");
     let probe = !host.is_empty() && route != "none";
-    let reach = if probe { gui_reach(host, &plan.iter().map(|(_, p, _)| *p).filter(|p| who.contains_key(p)).collect::<Vec<_>>()) } else { HashMap::new() };
+    let reach = if probe {
+        gui_reach(host, &plan.iter().map(|(_, p, _)| *p).filter(|p| who.contains_key(p)).collect::<Vec<_>>())
+    } else {
+        HashMap::new()
+    };
     let mut slots: Vec<V> = Vec::new();
     let summary = dict! { "ok" => 0, "drift" => 0, "closed" => 0, "unknown" => 0, "empty" => 0 };
     for (i, (g, p, order)) in plan.iter().enumerate() {
@@ -814,7 +869,9 @@ mod tests {
         let key = "alice(alice@example.com)";
         let aid = acct_id(key, t());
         let node = V::from("US-A");
-        let dump = |c: &Dict, share: bool, err: &V| json::dumps(&V::Dict(gui_api_key(c, key, &node, share, err).unwrap()), json::Fmt::new().utf8());
+        let dump = |c: &Dict, share: bool, err: &V| {
+            json::dumps(&V::Dict(gui_api_key(c, key, &node, share, err).unwrap()), json::Fmt::new().utf8())
+        };
         let hint = key_hint(&format!("sk-ant-api03-{}", "a".repeat(40)));
         assert_eq!(hint, "sk-ant-…aaaa");
         let booked = |extra: Dict| {
@@ -851,7 +908,9 @@ mod tests {
         assert!(k("3.4.1") > k("3.4.1-beta.9") && k("3.4.1-beta.10") > k("3.4.1-beta.9") && k("3.10.0") > k("3.9.9"));
         assert!(k("3.4.1-beta.1") > k("3.4.0") && k("10.0.0") > k("9.99.99") && k("03.4.1") == k("3.04.1"));
         assert!(k("99999999999999999999999.0.0") > k("9999999999999999999999.0.0"));
-        assert!(ver_key("3.4").is_none() && ver_key("v3.4.1").is_none() && ver_key("3.4.1-rc.1").is_none() && ver_key("").is_none());
+        assert!(
+            ver_key("3.4").is_none() && ver_key("v3.4.1").is_none() && ver_key("3.4.1-rc.1").is_none() && ver_key("").is_none()
+        );
         assert!(ver_key("3.4.1\n").is_some()); // `$` 在结尾的换行前也算（Python 就是这样）
     }
 }

@@ -1,6 +1,7 @@
 // 由 cli/tools/gen_clients_tables.py 生成，不要手改。CPython 3.14 的 cp437 编码。
 
 /// cp437 的 0x80–0xFF 依次是这些字符（0x00–0x7F 和 ASCII 一样）
+#[rustfmt::skip]
 pub const CP437_HIGH: [char; 128] = [
     '\u{c7}', '\u{fc}', '\u{e9}', '\u{e2}', '\u{e4}', '\u{e0}', '\u{e5}', '\u{e7}', '\u{ea}', '\u{eb}', '\u{e8}', '\u{ef}', '\u{ee}', '\u{ec}', '\u{c4}', '\u{c5}',
     '\u{c9}', '\u{e6}', '\u{c6}', '\u{f4}', '\u{f6}', '\u{f2}', '\u{fb}', '\u{f9}', '\u{ff}', '\u{d6}', '\u{dc}', '\u{a2}', '\u{a3}', '\u{a5}', '\u{20a7}', '\u{192}',

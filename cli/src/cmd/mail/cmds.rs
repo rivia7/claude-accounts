@@ -7,8 +7,9 @@ use super::judge::{mail_ar, mail_digest, mail_from_alias, mail_fwd_ok, mail_judg
 use super::message::{mail_parse, Message};
 use super::route::{mail_route, mail_route_note};
 use super::{
-    catch_sigint, mail_all_addrs, mail_cfg, mail_clean, mail_error, mail_fatal, mail_last, mail_one, mail_pw_problem, mail_ready, mail_rules, mail_why, py_int,
-    MailRule, MAIL_ADDR_RE, MAIL_DIR, MAIL_DOMAIN_RE, MAIL_HOST, MAIL_PROXY_HINT, MAIL_RECENT, MAIL_SVC, MAIL_WATCH_MAX,
+    catch_sigint, mail_all_addrs, mail_cfg, mail_clean, mail_error, mail_fatal, mail_last, mail_one, mail_pw_problem, mail_ready,
+    mail_rules, mail_why, py_int, MailRule, MAIL_ADDR_RE, MAIL_DIR, MAIL_DOMAIN_RE, MAIL_HOST, MAIL_PROXY_HINT, MAIL_RECENT,
+    MAIL_SVC, MAIL_WATCH_MAX,
 };
 use crate::cmd::secrets::{keyfile_store, keystore_name, ks_del, ks_read, ks_write};
 use crate::cmd::{arg, arity};
@@ -149,7 +150,9 @@ pub fn cmd_mail_setup(args: &[String]) -> R<()> {
         Ok(places) => places,
         Err(e) => match mail_err(&e) {
             Some((code, text)) if e.is("MailFatal") => return stop(if code == "auth" { 3 } else { 4 }, &text),
-            Some((code, text)) if matches!(code.as_str(), "net" | "proxy") => return stop(4, &format!("{text}。{MAIL_PROXY_HINT}")),
+            Some((code, text)) if matches!(code.as_str(), "net" | "proxy") => {
+                return stop(4, &format!("{text}。{MAIL_PROXY_HINT}"))
+            }
             Some((_, text)) => return stop(4, &text),
             None => return Err(e),
         },
@@ -228,13 +231,17 @@ fn last_time(at: &V) -> R<String> {
         _ => return Err(Fail::Other("OverflowError", vec!["timestamp out of range for platform time_t".into()])),
     };
     time::localtime(0.0); // 先让 C 库读好时区（py::time 里只做一次）
-    // SAFETY: tm 是纯数据，全 0 是合法的值；两个指针都指向有效的内存
+                          // SAFETY: tm 是纯数据，全 0 是合法的值；两个指针都指向有效的内存
     let tm = unsafe {
         let mut out: libc::tm = std::mem::zeroed();
         if libc::localtime_r(&(secs as _), &mut out).is_null() {
             // 年份放不进 C 的 int：time.localtime 是 OSError
             let e = std::io::Error::last_os_error();
-            return Err(Fail::Os(if e.raw_os_error().unwrap_or(0) == 0 { std::io::Error::from_raw_os_error(libc::EINVAL) } else { e }));
+            return Err(Fail::Os(if e.raw_os_error().unwrap_or(0) == 0 {
+                std::io::Error::from_raw_os_error(libc::EINVAL)
+            } else {
+                e
+            }));
         }
         out
     };
@@ -414,7 +421,11 @@ pub fn cmd_mail_trust_forwarder(args: &[String]) -> R<()> {
 /// 一封邮件是哪个账号的：收件人是账号表里的邮箱（严格），或者 From 的显示名是开了 trust-forwarder 的账号的邮箱、From 的域名是
 /// 它登记的中转（信任中转路由）。返回 (To, From, 账号的键, 这个账号登记的中转)
 #[allow(clippy::type_complexity)]
-fn whose(msg: &Message, names: &HashMap<String, String>, c: &Dict) -> R<(Vec<String>, Vec<String>, Option<String>, Option<String>)> {
+fn whose(
+    msg: &Message,
+    names: &HashMap<String, String>,
+    c: &Dict,
+) -> R<(Vec<String>, Vec<String>, Option<String>, Option<String>)> {
     let to = mail_addrs(msg, "To")?;
     let frm = mail_addrs(msg, "From")?;
     let forwarder_of = |key: &str| mail_cfg(c, Some(key)).and_then(|m| m.str("forwarder")).map(|f| f.to_string());
@@ -508,7 +519,12 @@ pub fn cmd_mail_test(args: &[String]) -> R<()> {
             let ar = mail_ar(&msg);
             let subject = mail_text(msg.get("Subject"));
             let subject = text::head(&subject, 80);
-            show(format!("  {}  {}  {}", time::strftime_local("%m-%d %H:%M", got), label, if subject.is_empty() { "（没有标题）" } else { subject }));
+            show(format!(
+                "  {}  {}  {}",
+                time::strftime_local("%m-%d %H:%M", got),
+                label,
+                if subject.is_empty() { "（没有标题）" } else { subject }
+            ));
             let join = |v: &[String]| Some(v.join("、")).filter(|j| !j.is_empty()).unwrap_or_else(|| "？".to_string());
             let who = match &acctkey {
                 Some(k) => format!("（账号 {}{}）", name_of(k), if via { "，经可信中转" } else { "" }),
@@ -518,7 +534,11 @@ pub fn cmd_mail_test(args: &[String]) -> R<()> {
             let checked = match &ar {
                 None => "不是 Gmail 写的验证结果".to_string(),
                 Some(ar) if ar.is_empty() => "没有 DKIM 签名".to_string(),
-                Some(ar) => ar.iter().map(|(r, d, _)| format!("dkim={} {}", r, if d.is_empty() { "？" } else { d })).collect::<Vec<_>>().join("、"),
+                Some(ar) => ar
+                    .iter()
+                    .map(|(r, d, _)| format!("dkim={} {}", r, if d.is_empty() { "？" } else { d }))
+                    .collect::<Vec<_>>()
+                    .join("、"),
             };
             show(format!("      Gmail 的验证：{checked}"));
             if let Some(why) = why {
@@ -533,10 +553,18 @@ pub fn cmd_mail_test(args: &[String]) -> R<()> {
             } else if let Some(why) = why {
                 out!("      ✗ 没通过：{}", mail_why(why).unwrap_or(why));
             } else {
-                let mut hosts: Vec<String> = mail_links(&full)?.iter().map(|l| urlsplit_host(l)).map(|h| if h.is_empty() { "？".to_string() } else { h }).collect();
+                let mut hosts: Vec<String> = mail_links(&full)?
+                    .iter()
+                    .map(|l| urlsplit_host(l))
+                    .map(|h| if h.is_empty() { "？".to_string() } else { h })
+                    .collect();
                 hosts.sort();
                 hosts.dedup();
-                let found = if hosts.is_empty() { String::new() } else { format!("（里面的链接在这些主机上：{}）", hosts.join("、")) };
+                let found = if hosts.is_empty() {
+                    String::new()
+                } else {
+                    format!("（里面的链接在这些主机上：{}）", hosts.join("、"))
+                };
                 show(format!("      ✗ 没通过：邮件里没有{}{}", rule.what, found));
             }
         }
@@ -617,7 +645,19 @@ pub fn cmd_mail_open(args: &[String]) -> R<()> {
     let say = |s: &str| err!("{s}");
     let (now, sleep) = (|| time::time(), |s: f64| sleep_interruptible(s));
     let (poll, base) = Hunt::knobs();
-    let h = Hunt { dir: &MAIL_DIR, rules: &rules, acct: &acct, forwarder: fwd.as_deref(), again, once: true, now: &now, sleep: &sleep, pid: std::process::id(), poll, base };
+    let h = Hunt {
+        dir: &MAIL_DIR,
+        rules: &rules,
+        acct: &acct,
+        forwarder: fwd.as_deref(),
+        again,
+        once: true,
+        now: &now,
+        sleep: &sleep,
+        pid: std::process::id(),
+        poll,
+        base,
+    };
     let mut deliver = mail_deliver(key);
     let opened = || mail_last(&name_of(key), "打开了登录邮件里的链接（cca mail open）");
     if !msg.is_empty() {
@@ -760,7 +800,10 @@ pub fn cmd_gui_mail_list(args: &[String]) -> R<()> {
                         row.set("link_shape", mail_shape(&link));
                         row.set("openable", acctkey.is_some());
                         row.set("via", via); // 经可信中转认的（不安全）：App 标注；严格 Anthropic 的是 null
-                        row.set("msg", dict! { "folder" => name.as_str(), "uid" => uint(*u), "uidvalidity" => valid.map_or(V::Int(0), uint) });
+                        row.set(
+                            "msg",
+                            dict! { "folder" => name.as_str(), "uid" => uint(*u), "uidvalidity" => valid.map_or(V::Int(0), uint) },
+                        );
                     }
                     None => {
                         let w = why2.unwrap_or("nolink");
@@ -832,11 +875,25 @@ fn mail_watch(key: &str, alive: &dyn Fn() -> bool, limit: f64) -> R<()> {
     let (name, start) = (name_of(key), time::time());
     let mut src = MailSource::new(MailBox::new(&user, &pw, &route), &rules);
     let say = |s: &str| err!("{s}");
-    let hello = || say(&format!("• 邮箱助手：已连上 {}（{}），{} 的登录邮件一到就在它专属的浏览器里打开", user, mail_route_note(&route), name));
+    let hello = || {
+        say(&format!("• 邮箱助手：已连上 {}（{}），{} 的登录邮件一到就在它专属的浏览器里打开", user, mail_route_note(&route), name))
+    };
     let fwd = m.str("forwarder");
     let (now, sleep) = (|| time::time(), |s: f64| sleep_interruptible(s));
     let (poll, base) = Hunt::knobs();
-    let h = Hunt { dir: &MAIL_DIR, rules: &rules, acct: &acct, forwarder: fwd.as_deref(), again: false, once: false, now: &now, sleep: &sleep, pid: std::process::id(), poll, base };
+    let h = Hunt {
+        dir: &MAIL_DIR,
+        rules: &rules,
+        acct: &acct,
+        forwarder: fwd.as_deref(),
+        again: false,
+        once: false,
+        now: &now,
+        sleep: &sleep,
+        pid: std::process::id(),
+        poll,
+        base,
+    };
     let mut deliver = mail_deliver(key);
     let res = mail_hunt(&h, &mut src, start, start + limit, &mut deliver, alive, &say, Some(&hello), None);
     src.close();
@@ -844,7 +901,14 @@ fn mail_watch(key: &str, alive: &dyn Fn() -> bool, limit: f64) -> R<()> {
 }
 
 /// 盯完以后：记下上次的结果（last：`mail_last(name, 说明)`），没等到、连不上的说一句
-fn watch_report(res: &Found, name: &str, alive: &dyn Fn() -> bool, limit: f64, say: &dyn Fn(&str), last: &dyn Fn(&str) -> R<()>) -> R<()> {
+fn watch_report(
+    res: &Found,
+    name: &str,
+    alive: &dyn Fn() -> bool,
+    limit: f64,
+    say: &dyn Fn(&str),
+    last: &dyn Fn(&str) -> R<()>,
+) -> R<()> {
     let minutes = ((limit / 60.0).floor() as i64).max(1);
     if res.code == "opened" {
         last("打开了登录邮件里的链接")?;
@@ -904,7 +968,19 @@ mod tests {
         assert_eq!((h.folder.as_str(), h.uid.text.as_str(), h.valid.text.as_str()), ("a:b", "7", "0"));
         let h = mail_handle("INBOX:99999999999999999999999:1").unwrap();
         assert_eq!((h.uid.n, h.uid.text.as_str()), (None, "99999999999999999999999"), "放不进 64 位的照样是个数");
-        for bad in ["", "INBOX", "INBOX:1", ":1:2", "INBOX:x:2", "INBOX:1:", "INBOX::2", "INBOX:-1:2", "INBOX:1:+2", "INBOX:1 :2", "INBOX:\u{b2}:2"] {
+        for bad in [
+            "",
+            "INBOX",
+            "INBOX:1",
+            ":1:2",
+            "INBOX:x:2",
+            "INBOX:1:",
+            "INBOX::2",
+            "INBOX:-1:2",
+            "INBOX:1:+2",
+            "INBOX:1 :2",
+            "INBOX:\u{b2}:2",
+        ] {
             assert!(mail_handle(bad).is_none(), "{bad:?}");
         }
     }
@@ -955,10 +1031,13 @@ mod tests {
         let run = |code: &str, text: &str, alive: bool, limit: f64| -> (Vec<String>, Vec<String>) {
             let (said, kept) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
             let found = Found { code: code.into(), text: text.into(), ..Found::default() };
-            let (say, last) = (|s: &str| said.borrow_mut().push(s.to_string()), |s: &str| -> R<()> {
-                kept.borrow_mut().push(s.to_string());
-                Ok(())
-            });
+            let (say, last) = (
+                |s: &str| said.borrow_mut().push(s.to_string()),
+                |s: &str| -> R<()> {
+                    kept.borrow_mut().push(s.to_string());
+                    Ok(())
+                },
+            );
             watch_report(&found, "主号", &|| alive, limit, &say, &last).unwrap();
             (said.into_inner(), kept.into_inner())
         };
@@ -975,7 +1054,10 @@ mod tests {
         for code in ["none", "fail"] {
             assert_eq!(
                 run(code, "", true, 900.0),
-                (vec!["• 邮箱助手：15 分钟里没等到 主号 的登录邮件，不再看了".to_string()], vec!["15 分钟里没等到登录邮件".to_string()])
+                (
+                    vec!["• 邮箱助手：15 分钟里没等到 主号 的登录邮件，不再看了".to_string()],
+                    vec!["15 分钟里没等到登录邮件".to_string()]
+                )
             );
             // 登录结束了（cca 不在了）：什么都不记、不说
             assert_eq!(run(code, "", false, 900.0), (none.clone(), none.clone()));

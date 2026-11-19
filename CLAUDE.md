@@ -6,7 +6,7 @@
 
 ## 命令
 - `bash -n cca && bash -n install.sh` — 快速语法检查
-- `cd cli && cargo build --release --locked` — 编辅助程序：仓库里的 `cca` 用的是 `cli/target/release/cca-core`，改了 `cli/src` 要重新编才生效（回归开头会编）。`cargo test --locked`、`cargo clippy --all-targets -- -D warnings`（Linux 那一半的代码再加 `--target x86_64-unknown-linux-musl` 查一遍）；对拍 `python3 -I cli/pydiff/run.py`。见 docs/dev/rust.md
+- `cd cli && cargo build --release --locked` — 编辅助程序：仓库里的 `cca` 用的是 `cli/target/release/cca-core`，改了 `cli/src` 要重新编才生效（回归开头会编）。`cargo test --locked`、`cargo fmt`（回归里查 `cargo fmt --check`）、`cargo clippy --all-targets -- -D warnings`（Linux 那一半的代码再加 `--target x86_64-unknown-linux-musl` 查一遍）；对拍 `python3 -I cli/pydiff/run.py`。见 docs/dev/rust.md
 - `bash tests/regress.sh` — 全流程回归，约 12 分钟，超过 Bash 工具前台 10 分钟的上限，放到后台跑。只能在 macOS 上跑；全用假的路由器 / claude / curl / ssh / GitHub，不联网、不碰真实 `~/.cca`。`KEEP=1`、`DEBUG_OUT=1`、`TIMING=文件` 和分节续跑（`CKPT` / `FROM` / `ONLY`）见 tests/CLAUDE.md
 - `bash tests/linux.sh [--docker [镜像…]]` — Linux 上的测试，要联网；见 tests/CLAUDE.md
 - `bash macos/build.sh`、`bash macos/test.sh` — 编界面 App、跑 App 的契约测试，只要苹果的命令行工具、不用 Xcode；见 macos/CLAUDE.md

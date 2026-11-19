@@ -138,7 +138,9 @@ mod tests {
         match (got, want.get("ok"), want.get("err")) {
             (Ok(g), Some(ok), _) => assert_eq!(to_hex(&g), ok.py_str(), "{what} {input:?}"),
             (Err(Fail::Value(e)), _, Some(err)) => assert_eq!(e, err.py_str(), "{what} {input:?}"),
-            (got, ok, err) => panic!("{what} {input:?}：得到 {:?}，应该是 ok={ok:?} err={err:?}", got.map(|g| to_hex(&g)).map_err(|_| "别的错")),
+            (got, ok, err) => {
+                panic!("{what} {input:?}：得到 {:?}，应该是 ok={ok:?} err={err:?}", got.map(|g| to_hex(&g)).map_err(|_| "别的错"))
+            }
         }
     }
 

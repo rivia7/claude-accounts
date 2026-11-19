@@ -63,7 +63,11 @@ mod tests {
                 continue;
             }
             let (raw, tail) = got.unwrap_or_else(|| panic!("{name}：CPython 解得出来"));
-            assert_eq!((raw.len() as i64, sha256_hex(&raw), tail), (c.at("len").as_int().unwrap(), c.at("sha256").py_str(), c.truthy("tail")), "{name}");
+            assert_eq!(
+                (raw.len() as i64, sha256_hex(&raw), tail),
+                (c.at("len").as_int().unwrap(), c.at("sha256").py_str(), c.truthy("tail")),
+                "{name}"
+            );
         }
     }
 

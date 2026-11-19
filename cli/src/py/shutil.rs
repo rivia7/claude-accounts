@@ -272,7 +272,9 @@ fn copystat(src: &str, dst: &str, follow_symlinks: bool) -> io::Result<()> {
         libc::timespec { tv_sec: st.mtime() as _, tv_nsec: st.mtime_nsec() as _ },
     ];
     // SAFETY: c 以 0 结尾，times 是两项的数组
-    if unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), if follow { 0 } else { libc::AT_SYMLINK_NOFOLLOW }) } != 0 {
+    if unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), if follow { 0 } else { libc::AT_SYMLINK_NOFOLLOW }) }
+        != 0
+    {
         return Err(io::Error::last_os_error());
     }
     // 扩展属性要先拷：权限改成只读以后就写不进去了
@@ -348,7 +350,9 @@ fn copytree_at(src: &str, dst: &str) -> Result<(), Vec<String>> {
         let item = |e: io::Error| vec![format!("{s} -> {d}: {e}")];
         let done = match e.file_type() {
             Err(e) => Err(item(e)),
-            Ok(t) if t.is_symlink() => fs::read_link(&s).and_then(|to| symlink(to, &d)).and_then(|()| copystat(&s, &d, false)).map_err(item),
+            Ok(t) if t.is_symlink() => {
+                fs::read_link(&s).and_then(|to| symlink(to, &d)).and_then(|()| copystat(&s, &d, false)).map_err(item)
+            }
             Ok(t) if t.is_dir() => copytree_at(&s, &d),
             Ok(_) => copy2(&s, &d).map(drop).map_err(item),
         };
@@ -427,7 +431,11 @@ fn move_by_copy(src: &str, dst: &str, real_dst: &str) -> io::Result<()> {
     } else if path::isdir(src) {
         let slashed = |p: &str| {
             let p = path::abspath(p);
-            if p.ends_with('/') { p } else { p + "/" }
+            if p.ends_with('/') {
+                p
+            } else {
+                p + "/"
+            }
         };
         if slashed(dst).starts_with(&slashed(src)) {
             return Err(io::Error::other(format!("Cannot move a directory '{src}' into itself '{dst}'.")));
@@ -769,7 +777,8 @@ mod tests {
 
     #[test]
     fn bytes_splitlines_like_python() {
-        let lines = |d: &'static [u8]| splitlines_bytes(d).into_iter().map(|l| String::from_utf8_lossy(l).into_owned()).collect::<Vec<_>>();
+        let lines =
+            |d: &'static [u8]| splitlines_bytes(d).into_iter().map(|l| String::from_utf8_lossy(l).into_owned()).collect::<Vec<_>>();
         // \v、\f、\x1c、\x85 在 bytes 里不断行（str 才断）
         assert_eq!(lines(b"a\nb\r\nc\rd\x0be\x0cf\x1cg\x85h\n\ni\n"), ["a", "b", "c", "d\u{b}e\u{c}f\u{1c}g\u{fffd}h", "", "i"]);
         assert!(lines(b"").is_empty());
@@ -787,7 +796,7 @@ mod tests {
         assert_eq!((mode("a") & 0o700, mode("a/b") & 0o700, mode("a/b/c")), (0o700, 0o700, 0o700));
         assert_eq!(mode("a"), mode("a/b"));
         assert_eq!(mode("a"), fs::metadata(&d).unwrap().mode() & 0o777); // 和普通建的目录一样（过了 umask 的 777）
-        // 已经有：不动它的权限；是个文件：报错
+                                                                         // 已经有：不动它的权限；是个文件：报错
         fs::set_permissions(format!("{d}/a/b/c"), fs::Permissions::from_mode(0o755)).unwrap();
         makedirs_leaf_mode(&format!("{d}/a/b/c"), 0o700).unwrap();
         assert_eq!(mode("a/b/c"), 0o755);
@@ -842,7 +851,11 @@ mod tests {
         fs::create_dir(f("dir")).unwrap();
         symlink("a", &f("link")).unwrap();
         assert!(filecmp(&f("a"), &f("b")).unwrap() && filecmp(&f("a"), &f("link")).unwrap());
-        assert!(!filecmp(&f("a"), &f("c")).unwrap() && !filecmp(&f("a"), &f("longer")).unwrap() && !filecmp(&f("a"), &f("dir")).unwrap());
+        assert!(
+            !filecmp(&f("a"), &f("c")).unwrap()
+                && !filecmp(&f("a"), &f("longer")).unwrap()
+                && !filecmp(&f("a"), &f("dir")).unwrap()
+        );
         assert!(filecmp(&f("a"), &f("none")).is_err());
         // 比一块大的文件：只差最后一个字节也比得出
         let mut big = vec![7u8; 200_000];
@@ -879,7 +892,10 @@ mod tests {
         }
         symlink("f", &format!("{d}/link")).unwrap();
         stamp(&format!("{d}/link"), (7, 0));
-        assert_eq!((lstat_mtime(&format!("{d}/link")).unwrap(), getmtime(&format!("{d}/link")).unwrap()), (7.0, 1795058400.0000005));
+        assert_eq!(
+            (lstat_mtime(&format!("{d}/link")).unwrap(), getmtime(&format!("{d}/link")).unwrap()),
+            (7.0, 1795058400.0000005)
+        );
         fs::remove_dir_all(&d).unwrap();
     }
 
@@ -1013,7 +1029,13 @@ mod tests {
         fs::write(format!("{d}/g.txt"), "g2").unwrap();
         let e = shutil_move(&format!("{d}/g.txt"), &format!("{d}/into")).unwrap_err();
         assert_eq!(e.to_string(), format!("Destination path '{d}/into/g.txt' already exists"));
-        assert_eq!((fs::read_to_string(format!("{d}/g.txt")).unwrap().as_str(), fs::read_to_string(format!("{d}/into/g.txt")).unwrap().as_str()), ("g2", "g"));
+        assert_eq!(
+            (
+                fs::read_to_string(format!("{d}/g.txt")).unwrap().as_str(),
+                fs::read_to_string(format!("{d}/into/g.txt")).unwrap().as_str()
+            ),
+            ("g2", "g")
+        );
         // 目的地是已有的文件：改名盖掉；链接搬的是链接本身；没有的搬不了
         fs::write(format!("{d}/old.txt"), "old").unwrap();
         shutil_move(&format!("{d}/g.txt"), &format!("{d}/old.txt")).unwrap();
@@ -1043,7 +1065,10 @@ mod tests {
         fs::set_permissions(format!("{d}/from/full"), fs::Permissions::from_mode(0o555)).unwrap();
         let e = shutil_move(&format!("{d}/from/full"), &format!("{d}/to/full")).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(e.to_string(), format!("Cannot move the non-empty directory '{d}/from/full': Lacking write permission to '{d}/from/full'."));
+        assert_eq!(
+            e.to_string(),
+            format!("Cannot move the non-empty directory '{d}/from/full': Lacking write permission to '{d}/from/full'.")
+        );
         assert!(path::isfile(&format!("{d}/from/full/x")) && !path::lexists(&format!("{d}/to/full")));
         rmtree_reset(&d).unwrap();
     }

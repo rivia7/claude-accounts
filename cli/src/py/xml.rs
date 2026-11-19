@@ -110,7 +110,17 @@ fn is_ws(c: char) -> bool {
 
 fn in_table(table: &[(u32, u32)], c: char) -> bool {
     let x = c as u32;
-    table.binary_search_by(|&(a, b)| if x < a { std::cmp::Ordering::Greater } else if x > b { std::cmp::Ordering::Less } else { std::cmp::Ordering::Equal }).is_ok()
+    table
+        .binary_search_by(|&(a, b)| {
+            if x < a {
+                std::cmp::Ordering::Greater
+            } else if x > b {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
 }
 
 /// `<?xml … ?>` 里的三样（expat 的 doParseXmlDecl）：decl 是 `<?xml` 和 `?>` 之间的那一段。写得不对是 None
@@ -396,7 +406,11 @@ impl Parser<'_> {
             }
             self.i += 1;
             // expat 的 checkCharRefNumber：代理项、U+FFFE / U+FFFF、制表符换行回车以外的控制字符不行
-            let ok = !too_big && !(0xd800..=0xdfff).contains(&n) && n != 0xfffe && n != 0xffff && !(n < 0x20 && !matches!(n, 9 | 10 | 13));
+            let ok = !too_big
+                && !(0xd800..=0xdfff).contains(&n)
+                && n != 0xfffe
+                && n != 0xffff
+                && !(n < 0x20 && !matches!(n, 9 | 10 | 13));
             return match char::from_u32(n).filter(|_| ok) {
                 Some(c) => Ok(c),
                 None => bad("字符引用指的不是合法的字符"),
@@ -752,7 +766,9 @@ impl Parser<'_> {
             if let Some(name) = encoding {
                 // UTF-16 的文档：声明里要么是 UTF-16，要么是和实际一样的那一种；单字节的在 decode 里看过了
                 let fits = match (self.enc, known_encoding(&name)) {
-                    (Enc::Utf16 { big }, Some(Enc::Utf16 { big: declared })) => name.eq_ignore_ascii_case("UTF-16") || big == declared,
+                    (Enc::Utf16 { big }, Some(Enc::Utf16 { big: declared })) => {
+                        name.eq_ignore_ascii_case("UTF-16") || big == declared
+                    }
                     (Enc::Utf16 { .. }, _) => false,
                     (_, Some(Enc::Utf16 { .. })) | (_, None) => false,
                     _ => true,
@@ -819,8 +835,14 @@ mod tests {
 
     /// 这份文档是不是落在「有意和 Python 不一样」的那两类里：带 DOCTYPE、声明了 expat 自己不会的编码
     fn excused(data: &[u8]) -> bool {
-        let wide = data.starts_with(&[0xfe, 0xff]) || data.starts_with(&[0xff, 0xfe]) || (data.len() >= 2 && (data[0] == 0 || data[1] == 0));
-        let text: String = if wide { data.iter().filter(|b| **b != 0).map(|b| *b as char).collect() } else { data.iter().map(|b| *b as char).collect() };
+        let wide = data.starts_with(&[0xfe, 0xff])
+            || data.starts_with(&[0xff, 0xfe])
+            || (data.len() >= 2 && (data[0] == 0 || data[1] == 0));
+        let text: String = if wide {
+            data.iter().filter(|b| **b != 0).map(|b| *b as char).collect()
+        } else {
+            data.iter().map(|b| *b as char).collect()
+        };
         let lower = text.to_ascii_lowercase();
         if lower.contains("<!doctype") {
             return true;
@@ -860,7 +882,12 @@ mod tests {
                 skipped += 1;
                 continue;
             }
-            wrong.push(format!("{:?}\n   python: {:?}\n   rust:   {:?}", String::from_utf8_lossy(&data), want, got.as_ref().map(|t| dump(t.root())).map_err(|e| e.0.clone())));
+            wrong.push(format!(
+                "{:?}\n   python: {:?}\n   rust:   {:?}",
+                String::from_utf8_lossy(&data),
+                want,
+                got.as_ref().map(|t| dump(t.root())).map_err(|e| e.0.clone())
+            ));
         }
         assert!(wrong.is_empty(), "{} 份文档和 Python 不一样：\n{}", wrong.len(), wrong[..wrong.len().min(25)].join("\n"));
         assert!(skipped < rows.len() / 10, "有意不一样的太多了：{skipped}");
@@ -884,7 +911,10 @@ mod tests {
         assert_eq!(items[0].findtext(&format!("{ns}shortVersionString")), None);
         assert_eq!(items[0].text(), "");
         let e = items[0].find("enclosure").unwrap();
-        assert_eq!((e.get("url"), e.get(&format!("{ns}edSignature")), e.get("sparkle:edSignature")), (Some("https://a.example.com/x.zip"), Some("QQ=="), None));
+        assert_eq!(
+            (e.get("url"), e.get(&format!("{ns}edSignature")), e.get("sparkle:edSignature")),
+            (Some("https://a.example.com/x.zip"), Some("QQ=="), None)
+        );
         assert!(items[1].children().is_empty() && items[1].find("enclosure").is_none());
     }
 

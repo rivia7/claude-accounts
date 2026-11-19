@@ -76,7 +76,9 @@ fn check_bracketed_netloc(netloc: &str) -> Result<(), String> {
     };
     if let Some(rest) = host.strip_prefix('v') {
         // \Av[a-fA-F0-9]+\..+\z
-        let ok = rest.split_once('.').is_some_and(|(hex, tail)| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) && !tail.is_empty() && !tail.contains('\n'));
+        let ok = rest.split_once('.').is_some_and(|(hex, tail)| {
+            !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) && !tail.is_empty() && !tail.contains('\n')
+        });
         return if ok { Ok(()) } else { Err("IPvFuture address is invalid".into()) };
     }
     match ipaddr::ip_address(host)?.ip {
@@ -166,7 +168,9 @@ fn unquote_bytes(s: &str) -> Vec<u8> {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
-            if let (Some(h), Some(l)) = (b.get(i + 1).and_then(|c| (*c as char).to_digit(16)), b.get(i + 2).and_then(|c| (*c as char).to_digit(16))) {
+            if let (Some(h), Some(l)) =
+                (b.get(i + 1).and_then(|c| (*c as char).to_digit(16)), b.get(i + 2).and_then(|c| (*c as char).to_digit(16)))
+            {
                 out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
@@ -239,7 +243,13 @@ mod tests {
             let out = c.dict("out").unwrap();
             match (urlsplit(&input), out.dict("ok"), out.str("err")) {
                 (Ok(u), Some(want), _) => {
-                    for (got, k) in [(&u.scheme, "scheme"), (&u.netloc, "netloc"), (&u.path, "path"), (&u.query, "query"), (&u.fragment, "fragment")] {
+                    for (got, k) in [
+                        (&u.scheme, "scheme"),
+                        (&u.netloc, "netloc"),
+                        (&u.path, "path"),
+                        (&u.query, "query"),
+                        (&u.fragment, "fragment"),
+                    ] {
                         assert_eq!(got.as_str(), &*want.str(k).unwrap(), "{input:?} {k}");
                     }
                     assert_eq!(u.username().map(String::from), opt(&want, "username"), "{input:?} username");
@@ -264,10 +274,15 @@ mod tests {
         let doc = json::loads(include_str!("../../tests/vectors/urlquery.json")).unwrap();
         let cases = doc.as_dict().unwrap().dict("cases").unwrap();
         let pairs = |v: V| -> Vec<(String, String)> {
-            v.as_list().unwrap().items().iter().map(|p| {
-                let p = p.as_list().unwrap();
-                (p.at(0).py_str(), p.at(1).py_str())
-            }).collect()
+            v.as_list()
+                .unwrap()
+                .items()
+                .iter()
+                .map(|p| {
+                    let p = p.as_list().unwrap();
+                    (p.at(0).py_str(), p.at(1).py_str())
+                })
+                .collect()
         };
         for c in cases.list("parse_qsl").unwrap().items() {
             let c = c.as_dict().unwrap();

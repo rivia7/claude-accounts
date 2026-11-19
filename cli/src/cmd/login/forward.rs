@@ -7,6 +7,7 @@
 use super::sys::{NetErr, PySock};
 use super::{ascii_encode_error, ascii_only, login_code_re, login_target, q_get};
 use crate::cmd::arity;
+use crate::err;
 use crate::py::fail::os_error_text;
 use crate::py::fs;
 use crate::py::io;
@@ -14,7 +15,6 @@ use crate::py::obj::repr_str;
 use crate::py::text;
 use crate::py::url::{parse_qsl, quote, urlsplit};
 use crate::py::{die, exit, Fail, R};
-use crate::err;
 use std::ffi::{CStr, CString};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream};
 use std::os::fd::OwnedFd;
@@ -170,10 +170,18 @@ fn getaddrinfo(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
             let len = ai.ai_addrlen as usize;
             if ai.ai_family == libc::AF_INET && !ai.ai_addr.is_null() && len >= std::mem::size_of::<libc::sockaddr_in>() {
                 let a = &*ai.ai_addr.cast::<libc::sockaddr_in>();
-                out.push(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr)), u16::from_be(a.sin_port))));
+                out.push(SocketAddr::V4(SocketAddrV4::new(
+                    Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr)),
+                    u16::from_be(a.sin_port),
+                )));
             } else if ai.ai_family == libc::AF_INET6 && !ai.ai_addr.is_null() && len >= std::mem::size_of::<libc::sockaddr_in6>() {
                 let a = &*ai.ai_addr.cast::<libc::sockaddr_in6>();
-                out.push(SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(a.sin6_addr.s6_addr), u16::from_be(a.sin6_port), a.sin6_flowinfo, a.sin6_scope_id)));
+                out.push(SocketAddr::V6(SocketAddrV6::new(
+                    Ipv6Addr::from(a.sin6_addr.s6_addr),
+                    u16::from_be(a.sin6_port),
+                    a.sin6_flowinfo,
+                    a.sin6_scope_id,
+                )));
             }
             p = ai.ai_next;
         }
@@ -415,7 +423,9 @@ impl Response {
                 loop {
                     let line = self.fp.readline(MAXLINE + 1)?;
                     if line.len() > MAXLINE {
-                        return Err(ChunkErr::Other(HttpErr::Said(format!("got more than {MAXLINE} bytes when reading trailer line"))));
+                        return Err(ChunkErr::Other(HttpErr::Said(format!(
+                            "got more than {MAXLINE} bytes when reading trailer line"
+                        ))));
                     }
                     if matches!(line.as_slice(), b"\r\n" | b"\n" | b"") {
                         break;
@@ -522,7 +532,8 @@ fn parse_headers(block: &[u8]) -> Vec<(String, String)> {
     }
     // 像头的各行（headerRE：`From `、「可见的 ASCII 里除了冒号的若干个字符 + 冒号」、空格或制表符开头）
     let name_len = |l: &[u8]| l.iter().take_while(|b| matches!(**b, 0x21..=0x39 | 0x3b..=0x7e)).count();
-    let like_header = |l: &[u8]| l.starts_with(b"From ") || l.get(name_len(l)) == Some(&b':') || matches!(l.first(), Some(b' ' | b'\t'));
+    let like_header =
+        |l: &[u8]| l.starts_with(b"From ") || l.get(name_len(l)) == Some(&b':') || matches!(l.first(), Some(b' ' | b'\t'));
     let lines: Vec<&[u8]> = lines.into_iter().take_while(|l| like_header(l)).collect();
     /// 攒着的那个头（冒号在哪、它的各行）记成 (名字, 值)
     fn flush(last: &mut Option<(usize, Vec<&[u8]>)>, out: &mut Vec<(String, String)>) {
@@ -587,11 +598,45 @@ mod tests {
     fn hex_sizes_like_python_int() {
         // 右边是 Python 的 int(b, 16)（ValueError 是 None）
         for (raw, want) in [
-            (&b"5\r\n"[..], Some(5)), (b"1a\r\n", Some(26)), (b" 1A \r\n", Some(26)), (b"", None), (b"\r\n", None), (b"0x1f", Some(31)), (b"0X1F", Some(31)), (b"0x", None),
-            (b"1_0", Some(16)), (b"_10", None), (b"1__0", None), (b"10_", None), (b"+a", Some(10)), (b"-5", Some(-5)), (b"- 5", None), (b"--5", None), (b"0", Some(0)),
-            (b"00", Some(0)), (b"-0", Some(0)), (b"g", None), (b"5 5", None), (b"\t5\x0b\x0c", Some(5)), (b"5\x00", None), (b"\xa05", None), (b"0x_1f", Some(31)),
-            (b"0_x1f", None), (b"5\n", Some(5)), (b"-1", Some(-1)), (b"7fffffffffffffff", Some(i64::MAX)), (b"0b1", Some(177)), (b"0o7", None), (b"x5", None),
-            (b"0x-5", None), (b"+0x5", Some(5)), (b"-0x5", Some(-5)), (b"0x 5", None), (b"1\x1c", None), (b"\x1c1", None), (b"\x855", None),
+            (&b"5\r\n"[..], Some(5)),
+            (b"1a\r\n", Some(26)),
+            (b" 1A \r\n", Some(26)),
+            (b"", None),
+            (b"\r\n", None),
+            (b"0x1f", Some(31)),
+            (b"0X1F", Some(31)),
+            (b"0x", None),
+            (b"1_0", Some(16)),
+            (b"_10", None),
+            (b"1__0", None),
+            (b"10_", None),
+            (b"+a", Some(10)),
+            (b"-5", Some(-5)),
+            (b"- 5", None),
+            (b"--5", None),
+            (b"0", Some(0)),
+            (b"00", Some(0)),
+            (b"-0", Some(0)),
+            (b"g", None),
+            (b"5 5", None),
+            (b"\t5\x0b\x0c", Some(5)),
+            (b"5\x00", None),
+            (b"\xa05", None),
+            (b"0x_1f", Some(31)),
+            (b"0_x1f", None),
+            (b"5\n", Some(5)),
+            (b"-1", Some(-1)),
+            (b"7fffffffffffffff", Some(i64::MAX)),
+            (b"0b1", Some(177)),
+            (b"0o7", None),
+            (b"x5", None),
+            (b"0x-5", None),
+            (b"+0x5", Some(5)),
+            (b"-0x5", Some(-5)),
+            (b"0x 5", None),
+            (b"1\x1c", None),
+            (b"\x1c1", None),
+            (b"\x855", None),
         ] {
             assert_eq!(int16(raw), want, "{raw:?}");
         }
@@ -664,12 +709,24 @@ mod tests {
     fn requests_are_what_http_client_sends() {
         // 右边是 Python 的 http.client 交给 sendall 的字节（套接字换成只记内容的假的，没有真的连出去）
         let req = |host: &str, port: u16, target: &str| request_bytes(host, port, target).unwrap();
-        assert_eq!(req("localhost", 80, "/cb?code=x&state=y"), "GET /cb?code=x&state=y HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: identity\r\n\r\n");
+        assert_eq!(
+            req("localhost", 80, "/cb?code=x&state=y"),
+            "GET /cb?code=x&state=y HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: identity\r\n\r\n"
+        );
         assert_eq!(req("127.0.0.1", 80, "/"), "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept-Encoding: identity\r\n\r\n");
-        assert_eq!(req("localhost", 1455, "/auth/callback?code=a%2Fb&state=s"), "GET /auth/callback?code=a%2Fb&state=s HTTP/1.1\r\nHost: localhost:1455\r\nAccept-Encoding: identity\r\n\r\n");
-        assert_eq!(req("127.0.0.1", 8, "/?code=x&state=y"), "GET /?code=x&state=y HTTP/1.1\r\nHost: 127.0.0.1:8\r\nAccept-Encoding: identity\r\n\r\n");
+        assert_eq!(
+            req("localhost", 1455, "/auth/callback?code=a%2Fb&state=s"),
+            "GET /auth/callback?code=a%2Fb&state=s HTTP/1.1\r\nHost: localhost:1455\r\nAccept-Encoding: identity\r\n\r\n"
+        );
+        assert_eq!(
+            req("127.0.0.1", 8, "/?code=x&state=y"),
+            "GET /?code=x&state=y HTTP/1.1\r\nHost: 127.0.0.1:8\r\nAccept-Encoding: identity\r\n\r\n"
+        );
         assert_eq!(req("localhost", 443, "/x"), "GET /x HTTP/1.1\r\nHost: localhost:443\r\nAccept-Encoding: identity\r\n\r\n");
-        assert_eq!(req("localhost", 65535, "/it's~ok!*()?code=x"), "GET /it's~ok!*()?code=x HTTP/1.1\r\nHost: localhost:65535\r\nAccept-Encoding: identity\r\n\r\n");
+        assert_eq!(
+            req("localhost", 65535, "/it's~ok!*()?code=x"),
+            "GET /it's~ok!*()?code=x HTTP/1.1\r\nHost: localhost:65535\r\nAccept-Encoding: identity\r\n\r\n"
+        );
     }
 
     #[test]
@@ -677,7 +734,9 @@ mod tests {
         // 发出去的字节是 http.client 实际发的那些（对着 Python 抓的）
         let (port, t) = serve(b"HTTP/1.1 302 Found\r\nLocation: https://x.example.com/ok\r\nContent-Length: 0\r\n\r\n");
         assert_eq!(http_get("127.0.0.1", port, "/callback?code=c%20o%2Bd%2Fe&state=st%231", 5.0).unwrap(), 302);
-        let want = format!("GET /callback?code=c%20o%2Bd%2Fe&state=st%231 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept-Encoding: identity\r\n\r\n");
+        let want = format!(
+            "GET /callback?code=c%20o%2Bd%2Fe&state=st%231 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept-Encoding: identity\r\n\r\n"
+        );
         assert_eq!(String::from_utf8(t.join().unwrap()).unwrap(), want);
         let (port, t) = serve(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
         assert_eq!(http_get("localhost", port, "/", 5.0).unwrap(), 200);
@@ -713,11 +772,22 @@ mod tests {
         let dead = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         assert_eq!(said(http_get("127.0.0.1", dead, "/cb", 5.0)), format!("[Errno {}] Connection refused", libc::ECONNREFUSED));
         // 网址里有空格、控制字符：连接之前就不干了
-        assert_eq!(said(http_get("127.0.0.1", dead, "/a b?code=x&state=y", 5.0)), "URL can't contain control characters. '/a b?code=x&state=y' (found at least ' ')");
-        assert_eq!(said(http_get("127.0.0.1", dead, "/a\u{7f}b?code=x", 5.0)), "URL can't contain control characters. '/a\\x7fb?code=x' (found at least '\\x7f')");
-        assert_eq!(said(http_get("127.0.0.1", dead, "/q'\"x y", 5.0)), "URL can't contain control characters. '/q\\'\"x y' (found at least ' ')");
+        assert_eq!(
+            said(http_get("127.0.0.1", dead, "/a b?code=x&state=y", 5.0)),
+            "URL can't contain control characters. '/a b?code=x&state=y' (found at least ' ')"
+        );
+        assert_eq!(
+            said(http_get("127.0.0.1", dead, "/a\u{7f}b?code=x", 5.0)),
+            "URL can't contain control characters. '/a\\x7fb?code=x' (found at least '\\x7f')"
+        );
+        assert_eq!(
+            said(http_get("127.0.0.1", dead, "/q'\"x y", 5.0)),
+            "URL can't contain control characters. '/q\\'\"x y' (found at least ' ')"
+        );
         match http_get("127.0.0.1", dead, "/中?code=x", 5.0) {
-            Err(HttpErr::Fail(Fail::Value(m))) => assert_eq!(m, "'ascii' codec can't encode character '\\u4e2d' in position 5: ordinal not in range(128)"),
+            Err(HttpErr::Fail(Fail::Value(m))) => {
+                assert_eq!(m, "'ascii' codec can't encode character '\\u4e2d' in position 5: ordinal not in range(128)")
+            }
             other => panic!("{other:?}"),
         }
     }

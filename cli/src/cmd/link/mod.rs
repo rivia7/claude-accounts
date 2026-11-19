@@ -137,8 +137,4 @@ pub fn cmd_link(args: &[String]) -> R<()> {
 }
 
 /// 这个模块移植好的子命令
-pub const CMDS: &[Cmd] = &[
-    Cmd::all("link", cmd_link),
-    Cmd::all("sync", cmd_sync),
-    Cmd::all("device", cmd_device),
-];
+pub const CMDS: &[Cmd] = &[Cmd::all("link", cmd_link), Cmd::all("sync", cmd_sync), Cmd::all("device", cmd_device)];

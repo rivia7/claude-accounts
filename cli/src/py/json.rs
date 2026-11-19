@@ -537,9 +537,14 @@ mod tests {
 
     #[test]
     fn numbers_roundtrip_like_python() {
-        assert_eq!(rt("[1e3, 1.50, -0, 0.1, 1E-7, 12345678901234567890, 1e999, -1e999, 10000000000000000.0]", Fmt::new()),
-                   "[1000.0, 1.5, 0, 0.1, 1e-07, 12345678901234567890, Infinity, -Infinity, 1e+16]");
-        assert_eq!(rt("[NaN, Infinity, -Infinity, -0.0, 1731999999123]", Fmt::new()), "[NaN, Infinity, -Infinity, -0.0, 1731999999123]");
+        assert_eq!(
+            rt("[1e3, 1.50, -0, 0.1, 1E-7, 12345678901234567890, 1e999, -1e999, 10000000000000000.0]", Fmt::new()),
+            "[1000.0, 1.5, 0, 0.1, 1e-07, 12345678901234567890, Infinity, -Infinity, 1e+16]"
+        );
+        assert_eq!(
+            rt("[NaN, Infinity, -Infinity, -0.0, 1731999999123]", Fmt::new()),
+            "[NaN, Infinity, -Infinity, -0.0, 1731999999123]"
+        );
     }
 
     #[test]
@@ -608,12 +613,30 @@ mod tests {
 
     #[test]
     fn file_bytes() {
-        assert_eq!(loads_file_bytes(b"\xff").unwrap_err().0, "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte");
-        assert_eq!(loads_file_bytes(b"\"\xe4\xb8\"").unwrap_err().0, "'utf-8' codec can't decode bytes in position 1-2: invalid continuation byte");
-        assert_eq!(loads_file_bytes(b"\"\xe4\xb8").unwrap_err().0, "'utf-8' codec can't decode bytes in position 1-2: unexpected end of data");
-        assert_eq!(loads_file_bytes(b"\xe4").unwrap_err().0, "'utf-8' codec can't decode byte 0xe4 in position 0: unexpected end of data");
-        assert_eq!(loads_file_bytes(b"\xc0\x80").unwrap_err().0, "'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte");
-        assert_eq!(loads_file_bytes(b"\xed\xa0\x80").unwrap_err().0, "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte");
+        assert_eq!(
+            loads_file_bytes(b"\xff").unwrap_err().0,
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        );
+        assert_eq!(
+            loads_file_bytes(b"\"\xe4\xb8\"").unwrap_err().0,
+            "'utf-8' codec can't decode bytes in position 1-2: invalid continuation byte"
+        );
+        assert_eq!(
+            loads_file_bytes(b"\"\xe4\xb8").unwrap_err().0,
+            "'utf-8' codec can't decode bytes in position 1-2: unexpected end of data"
+        );
+        assert_eq!(
+            loads_file_bytes(b"\xe4").unwrap_err().0,
+            "'utf-8' codec can't decode byte 0xe4 in position 0: unexpected end of data"
+        );
+        assert_eq!(
+            loads_file_bytes(b"\xc0\x80").unwrap_err().0,
+            "'utf-8' codec can't decode byte 0xc0 in position 0: invalid start byte"
+        );
+        assert_eq!(
+            loads_file_bytes(b"\xed\xa0\x80").unwrap_err().0,
+            "'utf-8' codec can't decode byte 0xed in position 0: invalid continuation byte"
+        );
         assert_eq!(dumps(&loads_file_bytes(b"{\r\n\"a\":\r1}").unwrap(), Fmt::new()), r#"{"a": 1}"#);
         assert_eq!(loads_file_bytes(b"[\r\n x").unwrap_err().0, "Expecting value: line 2 column 2 (char 3)");
     }

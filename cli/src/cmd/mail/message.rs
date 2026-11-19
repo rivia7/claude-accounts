@@ -710,7 +710,15 @@ pub fn mail_parse(raw: &[u8]) -> R<Message> {
     // MAX_DEPTH 是隔着一层（mail_verdict）调的时候的数
     let max_depth = (MAX_DEPTH + 1).saturating_sub(super::py_depth());
     let parse = || {
-        let mut p = Parser { lines: split_keep_ends(raw), eofstack: Vec::new(), nodes: Vec::new(), msgstack: Vec::new(), cur: None, last: 0, max_depth };
+        let mut p = Parser {
+            lines: split_keep_ends(raw),
+            eofstack: Vec::new(),
+            nodes: Vec::new(),
+            msgstack: Vec::new(),
+            cur: None,
+            last: 0,
+            max_depth,
+        };
         p.parsegen(0)?;
         Ok(p.build(0))
     };
@@ -775,7 +783,9 @@ mod tests {
                 (Ok(m), None) => {
                     let got = V::from(describe(&m).unwrap());
                     assert!(got.py_eq(&c.at("parts")), "{what}\n  这里：{got:?}\n  Python：{:?}", c.at("parts"));
-                    let headers = V::from(m.headers.iter().map(|(k, v)| V::from(crate::list![codec::latin1(k), hstr(v)])).collect::<Vec<_>>());
+                    let headers = V::from(
+                        m.headers.iter().map(|(k, v)| V::from(crate::list![codec::latin1(k), hstr(v)])).collect::<Vec<_>>(),
+                    );
                     assert!(headers.py_eq(&c.at("headers")), "{what}\n  这里：{headers:?}\n  Python：{:?}", c.at("headers"));
                 }
             }
@@ -826,10 +836,16 @@ mod tests {
         let paths: Vec<_> = vectors("limit_paths").into_iter().filter(|c| c.at("what").py_str() == "message").collect();
         assert!(paths.len() >= 8);
         for c in paths {
-            let (kind, max, depth) = (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize, c.at("depth").as_int().unwrap());
+            let (kind, max, depth) =
+                (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize, c.at("depth").as_int().unwrap());
             let _held: Vec<_> = (0..depth).map(|_| crate::cmd::mail::py_frame()).collect();
             assert!(ok(&kind, max).is_ok(), "{}：{kind} 套 {max} 层", c.at("path").py_str());
-            assert!(matches!(ok(&kind, max + 1), Err(Fail::Other("RecursionError", _))), "{}：{kind} 套 {} 层", c.at("path").py_str(), max + 1);
+            assert!(
+                matches!(ok(&kind, max + 1), Err(Fail::Other("RecursionError", _))),
+                "{}：{kind} 套 {} 层",
+                c.at("path").py_str(),
+                max + 1
+            );
         }
         assert_eq!(crate::cmd::mail::py_depth(), 0);
     }

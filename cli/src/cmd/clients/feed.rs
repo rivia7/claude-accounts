@@ -31,7 +31,8 @@ pub fn cu_parse_feed(data: &[u8], arch: &str, system: &str) -> R<Dict> {
     for item in root.findall("channel").into_iter().flat_map(|channel| channel.findall("item")) {
         // item.findtext(…) or ''
         let field = |name: &str| item.findtext(&ns(name)).unwrap_or("").to_string();
-        let (version, build, minimum, hardware) = (field("shortVersionString"), field("version"), field("minimumSystemVersion"), field("hardwareRequirements"));
+        let (version, build, minimum, hardware) =
+            (field("shortVersionString"), field("version"), field("minimumSystemVersion"), field("hardwareRequirements"));
         if hardware != arch || item.find(&ns("channel")).is_some() {
             continue;
         }
@@ -55,7 +56,10 @@ pub fn cu_parse_feed(data: &[u8], arch: &str, system: &str) -> R<Dict> {
         }
         // int(enclosure.get('length', ''))：认不出、不在 (0, CU_MAX_PACKAGE] 里、签名解出来不是 64 个字节，都是「缺少有效长度或签名」
         let signature = enclosure.get(&ns("edSignature")).unwrap_or("");
-        let length = PyInt::parse(enclosure.get("length").unwrap_or("")).ok().and_then(|n| n.to_i64()).filter(|n| 0 < *n && *n as u64 <= CU_MAX_PACKAGE);
+        let length = PyInt::parse(enclosure.get("length").unwrap_or(""))
+            .ok()
+            .and_then(|n| n.to_i64())
+            .filter(|n| 0 < *n && *n as u64 <= CU_MAX_PACKAGE);
         let (Some(length), Ok(64)) = (length, b64decode(signature, true).map(|raw| raw.len())) else {
             return cu_error("blocked", "官方包缺少有效长度或签名");
         };
@@ -96,7 +100,13 @@ pub fn cu_parse_squirrel(data: &[u8], arch: &str) -> R<Dict> {
     }
     let version_v = V::Str(version.clone());
     // rows = [r.get('updateTo') for r in releases if isinstance(r, dict) and r.get('version') == version]
-    let rows: Vec<Option<V>> = releases.items().iter().filter_map(|r| r.as_dict()).filter(|r| r.get("version").is_some_and(|v| v.eq_py(&version_v))).map(|r| r.get("updateTo")).collect();
+    let rows: Vec<Option<V>> = releases
+        .items()
+        .iter()
+        .filter_map(|r| r.as_dict())
+        .filter(|r| r.get("version").is_some_and(|v| v.eq_py(&version_v)))
+        .map(|r| r.get("updateTo"))
+        .collect();
     let row = match rows.as_slice() {
         [Some(V::Dict(row))] if row.get("version").is_some_and(|v| v.eq_py(&version_v)) => row.clone(),
         _ => return cu_error("blocked", "官方版本列表格式无法识别"),
@@ -107,12 +117,15 @@ pub fn cu_parse_squirrel(data: &[u8], arch: &str) -> R<Dict> {
         return cu_error("blocked", "官方包地址和版本元数据不一致");
     }
     // type(size) is int：布尔值不算
-    let digest_ok = matches!(&digest, Some(V::Str(d)) if d.len() == 64 && d.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    let digest_ok =
+        matches!(&digest, Some(V::Str(d)) if d.len() == 64 && d.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
     let size_ok = matches!(&size, Some(V::Int(n)) if 0 < *n && *n as u64 <= CU_MAX_PACKAGE);
     if !digest_ok || !size_ok {
         return cu_error("blocked", "官方包缺少有效长度或校验值");
     }
-    Ok(dict! { "version" => version_v.clone(), "build" => version_v, "minimum_system" => "", "arch" => arch, "url" => url, "length" => size, "sha256" => digest })
+    Ok(
+        dict! { "version" => version_v.clone(), "build" => version_v, "minimum_system" => "", "arch" => arch, "url" => url, "length" => size, "sha256" => digest },
+    )
 }
 
 /// 官方最新版本的元数据；None 表示更新源说没有新版本
@@ -126,7 +139,14 @@ pub fn cu_metadata(target: &Dict, folder: &str) -> R<Option<Dict>> {
     // device_id 是必填的：每次现生成一个，不用也不存任何账号实例的标识（Claude 的 ant-did 在各账号的资料目录里）
     for a in [arch.as_str(), "universal"] {
         let query = format!("device_id={}&version={}&os_version={}", uuid4(), target.at("version").py_str(), system);
-        let code = cu_download(&format!("https://api.anthropic.com/api/desktop/darwin/{a}/squirrel/update?{query}"), &feed, folder, false, None, &["204", "404"])?;
+        let code = cu_download(
+            &format!("https://api.anthropic.com/api/desktop/darwin/{a}/squirrel/update?{query}"),
+            &feed,
+            folder,
+            false,
+            None,
+            &["204", "404"],
+        )?;
         match code.as_deref() {
             Some("204") => return Ok(None),
             None => return Ok(Some(cu_parse_squirrel(&std::fs::read(&feed)?, a)?)),
@@ -146,7 +166,11 @@ pub fn cu_cli_latest(data: &[u8]) -> R<String> {
         };
         // str(j.get('version') or j.get('tag_name') or '')
         text = match j.as_dict() {
-            Some(j) => j.get("version").filter(|v| v.truthy()).or_else(|| j.get("tag_name").filter(|v| v.truthy())).map_or(String::new(), |v| v.py_str()),
+            Some(j) => j
+                .get("version")
+                .filter(|v| v.truthy())
+                .or_else(|| j.get("tag_name").filter(|v| v.truthy()))
+                .map_or(String::new(), |v| v.py_str()),
             None => String::new(),
         };
     }

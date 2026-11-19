@@ -147,10 +147,14 @@ pub fn utime_now(p: &str) -> io::Result<()> {
 
 /// `tempfile.gettempdir()`：TMPDIR、TEMP、TMP 里第一个能用的目录，再是 /tmp、/var/tmp、/usr/tmp，都不行就用当前目录
 pub fn gettempdir() -> String {
-    let usable = |d: &String| !d.is_empty() && path::isdir(d) && std::ffi::CString::new(d.as_str()).is_ok_and(|c| {
-        // SAFETY: c 是以 0 结尾的路径
-        unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
-    });
+    let usable = |d: &String| {
+        !d.is_empty()
+            && path::isdir(d)
+            && std::ffi::CString::new(d.as_str()).is_ok_and(|c| {
+                // SAFETY: c 是以 0 结尾的路径
+                unsafe { libc::access(c.as_ptr(), libc::W_OK | libc::X_OK) == 0 }
+            })
+    };
     let from_env = ["TMPDIR", "TEMP", "TMP"].iter().filter_map(|k| crate::py::proc::getenv(k));
     let fixed = ["/tmp", "/var/tmp", "/usr/tmp"].iter().map(|d| d.to_string());
     from_env.chain(fixed).find(usable).map_or_else(|| path::abspath("."), |d| path::abspath(&d))
@@ -248,7 +252,10 @@ mod tests {
         fs::write(&f, "{oops").unwrap();
         match load_json(&f) {
             Err(Fail::Die(m)) => {
-                assert_eq!(m, format!("JSON 格式错误 {f}：Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"))
+                assert_eq!(
+                    m,
+                    format!("JSON 格式错误 {f}：Expecting property name enclosed in double quotes: line 1 column 2 (char 1)")
+                )
             }
             other => panic!("{other:?}"),
         }

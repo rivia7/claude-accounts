@@ -1,7 +1,6 @@
 //! cca-core：cca 的辅助程序，原来内嵌在 cca 里的 Python（PY_SRC）的 Rust 版。
 //! bash 照旧 `py 子命令 参数…` 地调它：子命令的名字、参数、标准输入、输出和退出码都和原来一样。
 
-
 mod cmd;
 mod core;
 mod py;

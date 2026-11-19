@@ -19,6 +19,7 @@ print('// html._invalid_codepoints。')
 print()
 names = sorted(html.entities.html5)   # 按码位排：Rust 那边二分查找
 print('/// `html.entities.html5`：名字（有的带分号、有的不带，都是原样的键）→ 字符（%d 项）' % len(names))
+print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
 print('pub const HTML5: &[(&str, &str)] = &[')
 line = '   '
 for n in names:
@@ -32,6 +33,7 @@ if line.strip():
 print('];')
 print()
 print('/// `html._invalid_charrefs`：这些数字的字符引用换成另一个字符（Windows-1252 的那一段、0、回车）')
+print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
 print('pub const INVALID_CHARREFS: &[(u32, u32)] = &[')
 line = '   '
 for k, v in sorted(html._invalid_charrefs.items()):
@@ -45,6 +47,7 @@ if line.strip():
 print('];')
 print()
 print('/// `html._invalid_codepoints`：这些数字的字符引用整个去掉（控制字符、非字符），从小到大')
+print('#[rustfmt::skip]')   # 生成的表不让 rustfmt 重排（它会一项一行地拆开）
 print('pub const INVALID_CODEPOINTS: &[u32] = &[')
 line = '   '
 for k in sorted(html._invalid_codepoints):

@@ -129,7 +129,8 @@ pub fn policy_missing(c: &Dict, table: &Dict, tool: &Tool) -> Vec<(String, Strin
             if router_host {
                 "这台机器还没有可选节点（运行 cca router setup）".to_string()
             } else {
-                "这台机器还没有可选节点（运行 cca router setup；连不上路由器的服务器上运行 cca install，导入维护者提供的节点）".to_string()
+                "这台机器还没有可选节点（运行 cca router setup；连不上路由器的服务器上运行 cca install，导入维护者提供的节点）"
+                    .to_string()
             }
         } else if !nodes.as_list().is_some_and(|l| l.has_str(&n)) {
             format!("节点 {n} 不在这台机器的可选节点里（运行 cca router setup 选上它）")
@@ -232,7 +233,9 @@ pub fn policy_alias_fill(table: &Dict, tool: &Tool) -> Vec<(String, String)> {
 /// 加了新东西，旧版本的 cca 就整个不认、拉不到新的节点
 pub fn policy_problems(j: &V, strict: bool) -> Vec<String> {
     let Some(j) = j.as_dict() else {
-        return vec!["应该是 JSON 对象，例如 {\"version\": 1, \"claude\": {\"name@example.com\": \"节点\"}, \"codex\": {}}".to_string()];
+        return vec![
+            "应该是 JSON 对象，例如 {\"version\": 1, \"claude\": {\"name@example.com\": \"节点\"}, \"codex\": {}}".to_string()
+        ];
     };
     let names: Vec<&str> = tools().iter().map(|x| x.name).collect();
     let mut errs = Vec::new();
@@ -301,7 +304,11 @@ pub fn alias_problems(j: &Dict, names: &[&str]) -> Vec<String> {
         }
         low.setdefault(&el, &a);
         if !alias_ok(&a) {
-            errs.push(format!("aliases：{} 的别名「{}」不行：不能是空的，不能有空格、引号、括号、反斜杠或 @，最多 12 个汉字或 24 个字母", e, a.py_str()));
+            errs.push(format!(
+                "aliases：{} 的别名「{}」不行：不能是空的，不能有空格、引号、括号、反斜杠或 @，最多 12 个汉字或 24 个字母",
+                e,
+                a.py_str()
+            ));
         }
     }
     for n in names {
@@ -327,7 +334,11 @@ pub fn alias_problems(j: &Dict, names: &[&str]) -> Vec<String> {
 pub fn fill_name_ok(n: &V) -> bool {
     n.as_str().is_some_and(|s| {
         let len = text::len(s);
-        0 < len && len <= 128 && s == text::strip(s) && !s.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}') && !s.starts_with("CCA-")
+        0 < len
+            && len <= 128
+            && s == text::strip(s)
+            && !s.chars().any(|c| (c as u32) < 0x20 || c == '\u{7f}')
+            && !s.starts_with("CCA-")
     })
 }
 
@@ -451,8 +462,10 @@ pub fn fill_plan(have: &[(String, String)], names: &[String], f: Option<&Dict>) 
     let px: HashSet<&str> = have.iter().map(|(n, _)| n.as_str()).collect();
     // 摘要 → 用户配置里第一个这个摘要的节点名
     let by = |g: &str| have.iter().find(|(_, x)| !x.is_empty() && x == g).map(|(n, _)| n.clone());
-    let taken: HashSet<&str> = names.iter().map(|s| s.as_str()).chain(px.iter().copied()).chain(FILL_BUILTIN.iter().copied()).collect();
-    let ok: HashSet<String> = proxies.iter().filter(|p| !taken.contains(name_of(p).as_str()) && by(&fill_fp(p)).is_none()).map(name_of).collect();
+    let taken: HashSet<&str> =
+        names.iter().map(|s| s.as_str()).chain(px.iter().copied()).chain(FILL_BUILTIN.iter().copied()).collect();
+    let ok: HashSet<String> =
+        proxies.iter().filter(|p| !taken.contains(name_of(p).as_str()) && by(&fill_fp(p)).is_none()).map(name_of).collect();
     let (mut add, mut members) = (Vec::new(), Vec::new());
     for p in &proxies {
         let (n, g) = (name_of(p), fill_fp(p));
@@ -492,7 +505,10 @@ mod tests {
     #[test]
     fn node_fingerprint() {
         // 右边是 Python 的 node_fp()
-        assert_eq!(node_fp(Some("VLESS".into()), Some(" Example.COM. ".into()), Some(443.into()), Some("SNI.example.com.".into())), "8f6083da5882fd49");
+        assert_eq!(
+            node_fp(Some("VLESS".into()), Some(" Example.COM. ".into()), Some(443.into()), Some("SNI.example.com.".into())),
+            "8f6083da5882fd49"
+        );
         assert_eq!(node_fp(Some("ss".into()), Some("192.0.2.10".into()), Some("8388".into()), None), "60a7807f1456989d");
         assert_eq!(node_fp(Some("ss".into()), None, Some(1.into()), None), "");
     }
@@ -505,7 +521,10 @@ mod tests {
         assert_eq!(alias_problem(&table, "主号"), "别名「主号」已经用在 主号（a@example.com） 上了");
         assert_eq!(alias_problem(&table, "a@b"), "别名里不能有空格、引号、括号、反斜杠或 @");
         assert_eq!(alias_problem(&table, "别的"), "");
-        assert_eq!(node_alias(Some(&dict! { "nodes" => list!["新"], "node_renames" => dict! { "旧" => "中", "中" => "新" } }), "旧"), "新");
+        assert_eq!(
+            node_alias(Some(&dict! { "nodes" => list!["新"], "node_renames" => dict! { "旧" => "中", "中" => "新" } }), "旧"),
+            "新"
+        );
         assert_eq!(node_alias(Some(&dict! { "nodes" => list!["旧"], "node_renames" => dict! { "旧" => "新" } }), "旧"), "旧");
         assert_eq!(node_alias(Some(&dict! { "node_renames" => dict! { "a" => "b", "b" => "a" } }), "a"), "a");
         assert_eq!(node_alias(None, "x"), "x");
@@ -514,7 +533,9 @@ mod tests {
     #[test]
     fn problems() {
         assert_eq!(policy_problems(&V::Int(1), false).len(), 1);
-        let j = V::Dict(dict! { "version" => 1, "claude" => dict! { "A@example.com" => "US-A", "a@example.com" => "", "bad" => 1 }, "codex" => list![] });
+        let j = V::Dict(
+            dict! { "version" => 1, "claude" => dict! { "A@example.com" => "US-A", "a@example.com" => "", "bad" => 1 }, "codex" => list![] },
+        );
         assert_eq!(
             policy_problems(&j, false),
             [

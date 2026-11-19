@@ -12,7 +12,8 @@ use std::cell::RefCell;
 
 /// 虚拟网卡：VPN、ZeroTier、Tailscale、WireGuard、Clash 客户端的 TUN 这类隧道和虚拟局域网。bash 的 VIRTUAL_IFACE_RE 是同一份名单
 /// （只经它们连得到的路由器不算在家），要一起改（回归里核对）
-pub const VIRTUAL_IFACE_RE: &str = r"^(utun|ipsec|ppp|tun|tap|gif|stf|feth|zt|wg|tailscale|nebula|vti|gre|ipip|ip6|sit|Meta|Mihomo|singbox)";
+pub const VIRTUAL_IFACE_RE: &str =
+    r"^(utun|ipsec|ppp|tun|tap|gif|stf|feth|zt|wg|tailscale|nebula|vti|gre|ipip|ip6|sit|Meta|Mihomo|singbox)";
 /// 节点的服务器都写成域名时，拿这个公网地址看公网的流量走哪块网卡（只查路由表，不发包）
 pub const CORE_ROUTE_PROBE: &str = "1.1.1.1";
 
@@ -108,12 +109,7 @@ fn usable(a: &str, via: &dyn Fn(&str) -> String) -> bool {
 /// resolv.conf 里的 nameserver（照文本模式读：不是 UTF-8 的字节换掉，`\r\n`、单独的 `\r` 也算换行）
 fn resolv_nameservers(raw: &[u8]) -> Vec<String> {
     let content = String::from_utf8_lossy(raw).replace("\r\n", "\n").replace('\r', "\n");
-    content
-        .split('\n')
-        .map(text::split_ws)
-        .filter(|w| w.len() > 1 && w[0] == "nameserver")
-        .map(|w| w[1].to_string())
-        .collect()
+    content.split('\n').map(text::split_ws).filter(|w| w.len() > 1 && w[0] == "nameserver").map(|w| w[1].to_string()).collect()
 }
 
 /// `ipconfig getpacket 网卡` 的输出里 DHCP 给的 DNS（`domain_name_server (ip_mult): {a, b}`），原样的几段
@@ -191,11 +187,39 @@ mod tests {
     fn virtual_interfaces() {
         // 右边是 Python 的 virtual_iface
         for (name, want) in [
-            ("utun4", true), ("en0", false), ("", false), ("ipsec0", true), ("ppp0", true), ("tun0", true), ("tap1", true), ("gif0", true),
-            ("stf0", true), ("feth123", true), ("zt7nnig26", true), ("wg0", true), ("tailscale0", true), ("nebula1", true), ("vti0", true),
-            ("gre0", true), ("ipip0", true), ("ip6tnl0", true), ("sit0", true), ("Meta", true), ("Mihomo", true), ("singbox_tun", true),
-            ("meta", false), ("mihomo", false), ("bridge0", false), ("lo0", false), ("awdl0", false), ("eth0", false), ("xutun0", false),
-            ("UTUN0", false), ("en0utun", false), (" utun0", false), ("utun0\n", true),
+            ("utun4", true),
+            ("en0", false),
+            ("", false),
+            ("ipsec0", true),
+            ("ppp0", true),
+            ("tun0", true),
+            ("tap1", true),
+            ("gif0", true),
+            ("stf0", true),
+            ("feth123", true),
+            ("zt7nnig26", true),
+            ("wg0", true),
+            ("tailscale0", true),
+            ("nebula1", true),
+            ("vti0", true),
+            ("gre0", true),
+            ("ipip0", true),
+            ("ip6tnl0", true),
+            ("sit0", true),
+            ("Meta", true),
+            ("Mihomo", true),
+            ("singbox_tun", true),
+            ("meta", false),
+            ("mihomo", false),
+            ("bridge0", false),
+            ("lo0", false),
+            ("awdl0", false),
+            ("eth0", false),
+            ("xutun0", false),
+            ("UTUN0", false),
+            ("en0utun", false),
+            (" utun0", false),
+            ("utun0\n", true),
         ] {
             assert_eq!(virtual_iface(name), want, "{name:?}");
         }
@@ -221,13 +245,25 @@ mod tests {
 
     #[test]
     fn resolv_conf_and_dhcp() {
-        assert_eq!(resolv_nameservers(b"# comment\nnameserver 198.18.0.2\nnameserver\t192.0.2.53  # x\nsearch example.com\nnameserver\n"), ["198.18.0.2", "192.0.2.53"]);
-        assert_eq!(resolv_nameservers(b"nameserver 192.0.2.1\r\nnameserver 192.0.2.2\rnameserver fe80::1%en0"), ["192.0.2.1", "192.0.2.2", "fe80::1%en0"]);
+        assert_eq!(
+            resolv_nameservers(b"# comment\nnameserver 198.18.0.2\nnameserver\t192.0.2.53  # x\nsearch example.com\nnameserver\n"),
+            ["198.18.0.2", "192.0.2.53"]
+        );
+        assert_eq!(
+            resolv_nameservers(b"nameserver 192.0.2.1\r\nnameserver 192.0.2.2\rnameserver fe80::1%en0"),
+            ["192.0.2.1", "192.0.2.2", "fe80::1%en0"]
+        );
         assert_eq!(resolv_nameservers(b" nameserver 192.0.2.3\nNameserver 192.0.2.4\nnameserver\xff 192.0.2.5\n"), ["192.0.2.3"]);
         assert!(resolv_nameservers(b"").is_empty());
-        assert_eq!(dhcp_dns("op = BOOTREPLY\ndomain_name_server (ip_mult): {192.0.2.53, 192.0.2.54}\nend (none):\n"), ["192.0.2.53", "192.0.2.54"]);
+        assert_eq!(
+            dhcp_dns("op = BOOTREPLY\ndomain_name_server (ip_mult): {192.0.2.53, 192.0.2.54}\nend (none):\n"),
+            ["192.0.2.53", "192.0.2.54"]
+        );
         assert_eq!(dhcp_dns("domain_name_server (ip_mult): {}\n"), [""]);
-        assert_eq!(dhcp_dns("domain_name_server (ip_mult): { 192.0.2.53 ,\n\t198.18.0.2,, }"), ["192.0.2.53", "198.18.0.2", "", ""]);
+        assert_eq!(
+            dhcp_dns("domain_name_server (ip_mult): { 192.0.2.53 ,\n\t198.18.0.2,, }"),
+            ["192.0.2.53", "198.18.0.2", "", ""]
+        );
         assert!(dhcp_dns("domain_name_server (ip): 192.0.2.53\n").is_empty() && dhcp_dns("").is_empty());
         // 两处都有时用前一处
         assert_eq!(dhcp_dns("domain_name_server (ip_mult): {192.0.2.1} domain_name_server (ip_mult): {192.0.2.2}"), ["192.0.2.1"]);
@@ -236,12 +272,32 @@ mod tests {
     #[test]
     fn which_dns_is_reachable() {
         // 右边是原来的 core_dns 实跑出来的（系统没配 DNS、DHCP 只给这一个地址时结果空不空；route_iface 换成：198.18.x、fd00: 走 utun4，别的走 en0）
-        let via = |a: &str| if a.starts_with("198.18.") || a.starts_with("fd00:") { "utun4".to_string() } else { "en0".to_string() };
+        let via =
+            |a: &str| if a.starts_with("198.18.") || a.starts_with("fd00:") { "utun4".to_string() } else { "en0".to_string() };
         for (a, want) in [
-            ("8.8.8.8", true), ("192.0.2.53", true), ("198.18.0.2", false), ("127.0.0.1", false), ("0.0.0.0", false), ("::1", false), ("::", false),
-            ("::ffff:127.0.0.1", false), ("::ffff:0.0.0.0", false), ("2606:4700:4700::1111", true), ("fd00::53", false), ("fe80::1%en0", true),
-            ("fe80::1%utun4", false), ("fe80::1", true), ("10.1.2.3", true), ("10.0.0.1%utun4", false), ("8.8.8.8%utun4", true), ("not-an-ip", false),
-            ("", false), ("198.18.0.2%en0", true), ("10.1.2.3%", true), ("fe80::1%en0%x", true), ("1.2.3", false),
+            ("8.8.8.8", true),
+            ("192.0.2.53", true),
+            ("198.18.0.2", false),
+            ("127.0.0.1", false),
+            ("0.0.0.0", false),
+            ("::1", false),
+            ("::", false),
+            ("::ffff:127.0.0.1", false),
+            ("::ffff:0.0.0.0", false),
+            ("2606:4700:4700::1111", true),
+            ("fd00::53", false),
+            ("fe80::1%en0", true),
+            ("fe80::1%utun4", false),
+            ("fe80::1", true),
+            ("10.1.2.3", true),
+            ("10.0.0.1%utun4", false),
+            ("8.8.8.8%utun4", true),
+            ("not-an-ip", false),
+            ("", false),
+            ("198.18.0.2%en0", true),
+            ("10.1.2.3%", true),
+            ("fe80::1%en0%x", true),
+            ("1.2.3", false),
         ] {
             assert_eq!(usable(a, &via), want, "{a:?}");
         }

@@ -284,7 +284,9 @@ fn cu_url_codex(p: &Url, package: bool) -> bool {
     }
     if package {
         // /codex-app-prod/ChatGPT-darwin-(arm64|x64)-\d+(?:\.\d+){1,5}\.zip
-        return ["arm64", "x64"].iter().any(|a| between(&p.path, &format!("/codex-app-prod/ChatGPT-darwin-{a}-"), ".zip").is_some_and(|v| dotted(v, 1, 5)));
+        return ["arm64", "x64"]
+            .iter()
+            .any(|a| between(&p.path, &format!("/codex-app-prod/ChatGPT-darwin-{a}-"), ".zip").is_some_and(|v| dotted(v, 1, 5)));
     }
     p.path == "/codex-app-prod/appcast.xml"
 }
@@ -300,7 +302,9 @@ fn cu_url_claude(p: &Url, package: bool) -> bool {
             && seg[..3] == ["", "releases", "darwin"]
             && ARCHES.contains(&seg[3])
             && dotted(seg[4], 1, 5)
-            && between(seg[5], "Claude-", ".zip").is_some_and(|h| (7..=64).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+            && between(seg[5], "Claude-", ".zip").is_some_and(|h| {
+                (7..=64).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            });
     }
     p.hostname().as_deref() == Some("api.anthropic.com")
         && ARCHES.iter().any(|a| p.path == format!("/api/desktop/darwin/{a}/squirrel/update"))
@@ -311,18 +315,27 @@ fn cu_url_claude(p: &Url, package: bool) -> bool {
 const CU_CLI_SOURCES: [(&str, &[&str]); 4] = [
     ("downloads.claude.ai", &["/claude-code-releases/latest", "/claude-code-releases/stable"]),
     ("api.github.com", &["/repos/openai/codex/releases/latest"]),
-    ("registry.npmjs.org", &["/@anthropic-ai%2Fclaude-code/latest", "/@anthropic-ai%2Fclaude-code/stable", "/@openai%2Fcodex/latest"]),
+    (
+        "registry.npmjs.org",
+        &["/@anthropic-ai%2Fclaude-code/latest", "/@anthropic-ai%2Fclaude-code/stable", "/@openai%2Fcodex/latest"],
+    ),
     ("formulae.brew.sh", &["/api/cask/claude-code.json", "/api/cask/claude-code@latest.json", "/api/cask/codex.json"]),
 ];
 
 fn cu_url_cli(p: &Url, package: bool) -> bool {
     let host = p.hostname();
-    !package && p.query.is_empty() && CU_CLI_SOURCES.iter().any(|(h, paths)| host.as_deref() == Some(*h) && paths.contains(&p.path.as_str()))
+    !package
+        && p.query.is_empty()
+        && CU_CLI_SOURCES.iter().any(|(h, paths)| host.as_deref() == Some(*h) && paths.contains(&p.path.as_str()))
 }
 
 /// Claude Code 跟哪个发布通道（用户在共享的 settings.json 里设的，默认 latest）
 pub fn cu_claude_channel() -> &'static str {
-    match load_quiet(&path::join_all(&[&home(), ".claude", "settings.json"])).and_then(|s| s.as_dict()).and_then(|s| s.str("autoUpdatesChannel")).as_deref() {
+    match load_quiet(&path::join_all(&[&home(), ".claude", "settings.json"]))
+        .and_then(|s| s.as_dict())
+        .and_then(|s| s.str("autoUpdatesChannel"))
+        .as_deref()
+    {
         Some("stable") => "stable",
         _ => "latest",
     }
@@ -333,9 +346,18 @@ pub fn cu_claude_env(folder: &str) -> R<Vec<(String, String)>> {
     let conf = path::join(folder, "claude");
     fs::makedirs(&conf)?;
     if cu_claude_channel() != "latest" {
-        save_json(&path::join(&conf, "settings.json"), &V::Dict(dict! { "autoUpdatesChannel" => cu_claude_channel() }), Some(0o600), true)?;
+        save_json(
+            &path::join(&conf, "settings.json"),
+            &V::Dict(dict! { "autoUpdatesChannel" => cu_claude_channel() }),
+            Some(0o600),
+            true,
+        )?;
     }
-    Ok(vec![("CLAUDE_CONFIG_DIR".into(), conf), ("DISABLE_TELEMETRY".into(), "1".into()), ("DISABLE_ERROR_REPORTING".into(), "1".into())])
+    Ok(vec![
+        ("CLAUDE_CONFIG_DIR".into(), conf),
+        ("DISABLE_TELEMETRY".into(), "1".into()),
+        ("DISABLE_ERROR_REPORTING".into(), "1".into()),
+    ])
 }
 
 // --- 更新器自己的目录、锁、状态 --------------------------------------------------------------------------------------------
@@ -451,7 +473,9 @@ fn cu_mode() -> &'static str {
 
 /// 允许自动更新（config.json 的 client_auto_install，默认不允许）：自动检查开着时才算数（不检查也就查不到要装的）
 fn cu_auto_install() -> bool {
-    let on = load_quiet(&cfg_path()).and_then(|c| c.as_dict()).is_some_and(|c| matches!(c.get("client_auto_install"), Some(V::Bool(true))));
+    let on = load_quiet(&cfg_path())
+        .and_then(|c| c.as_dict())
+        .is_some_and(|c| matches!(c.get("client_auto_install"), Some(V::Bool(true))));
     on && cu_mode() == "auto"
 }
 
@@ -502,7 +526,13 @@ fn cu_target() -> R<String> {
 
 /// `(st_dev, st_ino, st_size, st_mtime_ns, st_ctime_ns)`
 fn stat_fields(s: &std::fs::Metadata) -> [i64; 5] {
-    [s.dev() as i64, s.ino() as i64, s.size() as i64, s.mtime() * 1_000_000_000 + s.mtime_nsec(), s.ctime() * 1_000_000_000 + s.ctime_nsec()]
+    [
+        s.dev() as i64,
+        s.ino() as i64,
+        s.size() as i64,
+        s.mtime() * 1_000_000_000 + s.mtime_nsec(),
+        s.ctime() * 1_000_000_000 + s.ctime_nsec(),
+    ]
 }
 
 fn cu_hash(path: &str) -> R<String> {
@@ -558,7 +588,8 @@ fn cu_snapshot(path: &str, full: bool) -> R<Dict> {
     let plist_identity = cu_file_id(&plist_path)?;
     let info = load_info(&plist_path)?;
     let text_of = |k: &str| info_get(&info, k).and_then(|v| v.as_str());
-    let (executable, version, build) = (text_of("CFBundleExecutable"), text_of("CFBundleShortVersionString"), text_of("CFBundleVersion"));
+    let (executable, version, build) =
+        (text_of("CFBundleExecutable"), text_of("CFBundleShortVersionString"), text_of("CFBundleVersion"));
     let identified = text_of("CFBundleIdentifier") == Some(cu.bundle);
     let (executable, version, build) = match (executable, version, build) {
         (Some(e), Some(v), Some(b))
@@ -574,7 +605,12 @@ fn cu_snapshot(path: &str, full: bool) -> R<Dict> {
         }
         _ => return cu_error("blocked", "客户端标识、版本或程序布局无法识别"),
     };
-    let names = ["Contents/Info.plist".to_string(), format!("Contents/MacOS/{executable}"), "Contents/Resources/app.asar".to_string(), "Contents/_CodeSignature/CodeResources".to_string()];
+    let names = [
+        "Contents/Info.plist".to_string(),
+        format!("Contents/MacOS/{executable}"),
+        "Contents/Resources/app.asar".to_string(),
+        "Contents/_CodeSignature/CodeResources".to_string(),
+    ];
     let (hashes, identities) = (Dict::new(), Dict::new());
     for name in &names {
         let full_path = path::join(&path, name);
@@ -624,10 +660,17 @@ fn interrupted() -> R<()> {
 
 /// 从空环境构建：不携带账号 ID、代理、Cookie、证书覆盖或 shell 注入配置。
 fn cu_environment(folder: &str) -> Vec<(String, String)> {
-    [("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"), ("HOME", folder), ("CURL_HOME", folder), ("TMPDIR", folder), ("LANG", "C"), ("LC_ALL", "C")]
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+    [
+        ("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+        ("HOME", folder),
+        ("CURL_HOME", folder),
+        ("TMPDIR", folder),
+        ("LANG", "C"),
+        ("LC_ALL", "C"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 fn cu_run(args: &[String], folder: &str, timeout: f64, env: Option<Vec<(String, String)>>) -> R<Done> {
@@ -726,7 +769,14 @@ fn header_locations(raw: &[u8]) -> Vec<String> {
 }
 
 /// curl 不自动跳转；每一跳先验证，三次重试不复用半包或持久 Cookie。empty 里的状态码（没有更新）原样返回
-fn cu_download(url: &str, destination: &str, folder: &str, package: bool, expected_size: Option<&V>, empty: &[&str]) -> R<Option<String>> {
+fn cu_download(
+    url: &str,
+    destination: &str,
+    folder: &str,
+    package: bool,
+    expected_size: Option<&V>,
+    empty: &[&str],
+) -> R<Option<String>> {
     #[cfg(test)]
     if let Some(r) = tests::on_download(url, destination, folder, package, expected_size, empty) {
         return r;
@@ -739,9 +789,37 @@ fn cu_download(url: &str, destination: &str, folder: &str, package: bool, expect
         for _hop in 0..6 {
             let seconds = cu_time(if package { 300 } else { 30 })?;
             let args = [
-                "/usr/bin/curl", "-q", "--silent", "--show-error", "--proto", "=https", "--proto-redir", "=https", "--proxy", "", "--noproxy", "*", "--no-netrc",
-                "--no-netrc-optional", "--netrc-file", "/dev/null", "--connect-timeout", "15", "--max-time", &seconds.to_string(), "--max-filesize", &limit.to_string(),
-                "--max-redirs", "0", "--dump-header", &header, "--output", destination, "--write-out", "%{http_code}", &current,
+                "/usr/bin/curl",
+                "-q",
+                "--silent",
+                "--show-error",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--proxy",
+                "",
+                "--noproxy",
+                "*",
+                "--no-netrc",
+                "--no-netrc-optional",
+                "--netrc-file",
+                "/dev/null",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                &seconds.to_string(),
+                "--max-filesize",
+                &limit.to_string(),
+                "--max-redirs",
+                "0",
+                "--dump-header",
+                &header,
+                "--output",
+                destination,
+                "--write-out",
+                "%{http_code}",
+                &current,
             ];
             let result = match cu_run(&strs(&args), folder, (seconds + 10) as f64, None) {
                 Ok(result) => result,
@@ -872,7 +950,9 @@ fn cu_build(value: &V) -> R<Vec<PyInt>> {
     }
     match value {
         V::Str(s) => Ok(vec![PyInt::parse(s)?]),
-        other => type_error(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", type_name(other))),
+        other => {
+            type_error(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", type_name(other)))
+        }
     }
 }
 
@@ -932,14 +1012,19 @@ fn has_line(text: &str, line: &str) -> bool {
 fn cu_bundle(path: &str, folder: &str, metadata: Option<&V>) -> R<Dict> {
     let cu = cu();
     let snapshot = cu_snapshot(path, true)?;
-    for command in [["/usr/bin/codesign", "--verify", "--deep", "--strict", path], ["/usr/sbin/spctl", "--assess", "--type", "execute", path]] {
+    for command in
+        [["/usr/bin/codesign", "--verify", "--deep", "--strict", path], ["/usr/sbin/spctl", "--assess", "--type", "execute", path]]
+    {
         if cu_run(&strs(&command), folder, 120.0, None)?.rc != 0 {
             return cu_error("blocked", "客户端代码签名或系统安全评估未通过");
         }
     }
     let identity = cu_run(&strs(&["/usr/bin/codesign", "--display", "--verbose=4", path]), folder, 30.0, None)?;
     let said = String::from_utf8_lossy(&[identity.stdout.as_slice(), identity.stderr.as_slice()].concat()).into_owned();
-    if identity.rc != 0 || !has_line(&said, &format!("TeamIdentifier={}", cu.team)) || !has_line(&said, &format!("Identifier={}", cu.bundle)) {
+    if identity.rc != 0
+        || !has_line(&said, &format!("TeamIdentifier={}", cu.team))
+        || !has_line(&said, &format!("Identifier={}", cu.bundle))
+    {
         return cu_error("blocked", "客户端签名团队或产品标识与官方程序不符");
     }
     let info = load_info(&path::join_all(&[path, "Contents", "Info.plist"]))?;
@@ -965,13 +1050,16 @@ fn cu_bundle(path: &str, folder: &str, metadata: Option<&V>) -> R<Dict> {
     }
     if let Some(metadata) = metadata.filter(|m| m.truthy()) {
         let differs = |k: &str| -> R<bool> { Ok(!snapshot.at(k).eq_py(&sub(metadata, k)?)) };
-        let mismatch = differs("version")? || differs("build")? || {
-            let a = sub(metadata, "arch")?;
-            !(a.eq_py(&V::from(arch.as_str())) || a.eq_py(&V::from("universal")))
-        } || {
-            let m = sub(metadata, "minimum_system")?;
-            m.truthy() && minimum()? != cu_version(&m)?
-        };
+        let mismatch = differs("version")?
+            || differs("build")?
+            || {
+                let a = sub(metadata, "arch")?;
+                !(a.eq_py(&V::from(arch.as_str())) || a.eq_py(&V::from("universal")))
+            }
+            || {
+                let m = sub(metadata, "minimum_system")?;
+                m.truthy() && minimum()? != cu_version(&m)?
+            };
         if mismatch {
             return cu_error("blocked", "安装包内的产品版本或系统要求与官方列表不符");
         }
@@ -1086,7 +1174,9 @@ fn cu_view(state: &Dict, problem: Option<&(String, String)>) -> R<Dict> {
             if moved {
                 row.set("status", "needs_recheck");
                 row.set("message", "客户端版本或程序内容已变化，请重新检查更新");
-            } else if matches!(state.get("status"), Some(V::Str(s)) if matches!(&*s, "staged" | "running")) && cu_build(&build)? > cu_build(&snapshot.at("build"))? {
+            } else if matches!(state.get("status"), Some(V::Str(s)) if matches!(&*s, "staged" | "running"))
+                && cu_build(&build)? > cu_build(&snapshot.at("build"))?
+            {
                 row.set("install_token", at(&stage, "token")?);
                 row.set("can_install", true);
                 // 允许自动更新、上次要装时客户端开着（cu_auto）：等它退出
@@ -1211,7 +1301,9 @@ fn cu_check(state: &Dict, force: bool) -> R<()> {
     let root = cu_root(true)?;
     if !force {
         // time.time() - state.get('checked_epoch', 0) < CU_CHECK_INTERVAL
-        if cu_mode() == "off" || time() - Num::of(&state.get("checked_epoch").unwrap_or(V::Int(0)), "-")?.f()? < CU_CHECK_INTERVAL as f64 {
+        if cu_mode() == "off"
+            || time() - Num::of(&state.get("checked_epoch").unwrap_or(V::Int(0)), "-")?.f()? < CU_CHECK_INTERVAL as f64
+        {
             return Ok(());
         }
     }
@@ -1350,7 +1442,14 @@ fn cu_auto(state: &Dict) -> R<()> {
         Err(e) => return Err(e),
     }
     state.pop("auto_wait");
-    state.set("message", if cu.cli { format!("已自动更新到 {}，下次启动时用新版本", version.py_str()) } else { format!("已自动安装官方更新 {}", version.py_str()) });
+    state.set(
+        "message",
+        if cu.cli {
+            format!("已自动更新到 {}，下次启动时用新版本", version.py_str())
+        } else {
+            format!("已自动安装官方更新 {}", version.py_str())
+        },
+    );
     cu_save_state(state)
 }
 
@@ -1513,7 +1612,13 @@ fn client_updates(action: &str, arg: &str, printed: &mut String) -> R<()> {
                     None => Dict::new(),
                     Some(V::Dict(c)) => c,
                     Some(V::List(_)) if arg == "off" => return type_error("pop expected at most 1 argument, got 2"),
-                    Some(other) => return attr_error(format!("'{}' object has no attribute '{}'", type_name(&other), if arg == "on" { "update" } else { "pop" })),
+                    Some(other) => {
+                        return attr_error(format!(
+                            "'{}' object has no attribute '{}'",
+                            type_name(&other),
+                            if arg == "on" { "update" } else { "pop" }
+                        ))
+                    }
                 };
                 if arg == "on" {
                     c.set("client_auto_install", true); // 自动安装要先自动检查
@@ -1527,7 +1632,11 @@ fn client_updates(action: &str, arg: &str, printed: &mut String) -> R<()> {
                 cu_token_client(arg)?;
                 let stage = cu_validate_plan(&cu_read_state()?, &V::from(arg))?;
                 let cu = cu();
-                let note = if cu.cli { format!("用 {} update 更新（它自己校验和替换）。开着的会话不受影响，下次启动时用新版本。", cu.command) } else { String::new() };
+                let note = if cu.cli {
+                    format!("用 {} update 更新（它自己校验和替换）。开着的会话不受影响，下次启动时用新版本。", cu.command)
+                } else {
+                    String::new()
+                };
                 let fields = [
                     ("CU_VERSION", sub2(&stage, "metadata", "version")?),
                     ("CU_INSTALLED", sub2(&stage, "target", "version")?),

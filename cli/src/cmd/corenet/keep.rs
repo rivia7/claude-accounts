@@ -83,7 +83,12 @@ fn core_wanted() -> R<bool> {
     };
     let client = match c.get("local") {
         Some(V::Dict(local)) => local.get("client"),
-        Some(v) if v.truthy() => return Err(Fail::Other("AttributeError", vec![format!("AttributeError: '{}' object has no attribute 'get'", type_name(&v))])),
+        Some(v) if v.truthy() => {
+            return Err(Fail::Other(
+                "AttributeError",
+                vec![format!("AttributeError: '{}' object has no attribute 'get'", type_name(&v))],
+            ))
+        }
         _ => None,
     };
     Ok(matches!(client, Some(V::Str(s)) if &*s == "builtin") && path::isfile(&CORE_CONFIG))

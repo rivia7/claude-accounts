@@ -167,7 +167,15 @@ pub fn codex_probe(bin_: &str) -> Dict {
     let _ = fs::makedirs(master);
     let run = |args: &[&str]| -> (i32, String) {
         let argv: Vec<&str> = std::iter::once(bin_).chain(args.iter().copied()).collect();
-        match Proc::new(argv).stdin(In::Null).stdout(Out::Capture).stderr(Out::Null).env(env.clone()).cwd(master.clone()).timeout(30.0).run() {
+        match Proc::new(argv)
+            .stdin(In::Null)
+            .stdout(Out::Capture)
+            .stderr(Out::Null)
+            .env(env.clone())
+            .cwd(master.clone())
+            .timeout(30.0)
+            .run()
+        {
             Ok(d) => (d.rc, d.out()),
             Err(_) => (1, String::new()),
         }
@@ -176,7 +184,8 @@ pub fn codex_probe(bin_: &str) -> Dict {
     if rc != 0 || text::strip(&out).is_empty() {
         return full;
     }
-    let known: Vec<&str> = text::splitlines(&out).into_iter().filter(|l| !text::strip(l).is_empty()).map(|l| text::split_ws(l)[0]).collect();
+    let known: Vec<&str> =
+        text::splitlines(&out).into_iter().filter(|l| !text::strip(l).is_empty()).map(|l| text::split_ws(l)[0]).collect();
     let mut flags = Vec::new();
     for f in CODEX_FLAGS.iter().skip(1).step_by(2) {
         if known.contains(f) {
@@ -261,7 +270,10 @@ fn popen_error(e: &std::io::Error, program: &str, cwd: &str) -> Fail {
         return Fail::Other("OSError", vec![fs::open_error_text(e, cwd)]);
     }
     if program.is_empty() {
-        return Fail::Other("OSError", vec![fs::open_error_text(&std::io::Error::from_raw_os_error(empty_program_errno(cwd)), program)]);
+        return Fail::Other(
+            "OSError",
+            vec![fs::open_error_text(&std::io::Error::from_raw_os_error(empty_program_errno(cwd)), program)],
+        );
     }
     Fail::Other("OSError", vec![fs::open_error_text(e, program)])
 }
@@ -449,7 +461,8 @@ mod interrupt {
         // SAFETY: sigaction 的参数都是这里的局部变量；处理函数只写一个原子变量
         unsafe {
             let mut old: libc::sigaction = std::mem::zeroed();
-            let int_is_default = libc::sigaction(libc::SIGINT, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_DFL;
+            let int_is_default =
+                libc::sigaction(libc::SIGINT, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_DFL;
             let mut sa: libc::sigaction = std::mem::zeroed();
             sa.sa_sigaction = note as extern "C" fn(libc::c_int) as libc::sighandler_t;
             libc::sigemptyset(&mut sa.sa_mask);
@@ -480,7 +493,15 @@ pub(super) fn json_loads_bytes(b: &[u8]) -> Option<V> {
         if !b.len().is_multiple_of(4) {
             return None;
         }
-        b.chunks(4).map(|c| char::from_u32(if big { u32::from_be_bytes([c[0], c[1], c[2], c[3]]) } else { u32::from_le_bytes([c[0], c[1], c[2], c[3]]) })).collect()
+        b.chunks(4)
+            .map(|c| {
+                char::from_u32(if big {
+                    u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+                } else {
+                    u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+                })
+            })
+            .collect()
     };
     let utf8 = |b: &[u8]| std::str::from_utf8(b).ok().map(str::to_string);
     let text = if b.starts_with(&[0, 0, 0xfe, 0xff]) {
@@ -599,7 +620,9 @@ impl Rpc {
             if m.get("id").is_some_and(|id| id.py_eq(&V::Int(self.n))) && (m.has("result") || m.has("error")) {
                 let e = m.get("error").unwrap_or(V::None);
                 let err = match &e {
-                    V::Dict(d) => d.get("message").filter(|x| x.truthy()).unwrap_or_else(|| V::from(json::dumps(&e, json::Fmt::new()))),
+                    V::Dict(d) => {
+                        d.get("message").filter(|x| x.truthy()).unwrap_or_else(|| V::from(json::dumps(&e, json::Fmt::new())))
+                    }
                     _ if e.truthy() => V::from(e.py_str()),
                     _ => e.clone(),
                 };
@@ -942,7 +965,9 @@ pub fn cmd_login_flow(args: &[String]) -> R<()> {
         }
         Err(e) if e.is("KeyboardInterrupt") => {
             if let Some(r) = r.as_mut().filter(|_| login.truthy()) {
-                r.send(&V::Dict(dict! { "id" => 0, "method" => "account/login/cancel", "params" => dict! { "loginId" => &login } }));
+                r.send(&V::Dict(
+                    dict! { "id" => 0, "method" => "account/login/cancel", "params" => dict! { "loginId" => &login } },
+                ));
             }
             die("已取消登录")
         }
@@ -1016,7 +1041,13 @@ fn sql_quote(s: &str) -> String {
 
 /// 给 sqlite3 一段命令（从 stdin），拿它的 stdout；起不来、出错（库被占着、不是数据库、没有这张表……）是 None
 fn sqlite3(db: &str, script: &str) -> Option<String> {
-    let done = Proc::new(["sqlite3", "-batch", "-bail", db]).input(script.as_bytes()).stdout(Out::Capture).stderr(Out::Null).timeout(30.0).run().ok()?;
+    let done = Proc::new(["sqlite3", "-batch", "-bail", db])
+        .input(script.as_bytes())
+        .stdout(Out::Capture)
+        .stderr(Out::Null)
+        .timeout(30.0)
+        .run()
+        .ok()?;
     (done.rc == 0).then(|| done.out())
 }
 
@@ -1036,7 +1067,9 @@ fn rollout_in_master(old: &str, pre: &str, sub: &str, master: &str) -> String {
         if account.is_empty() {
             return None;
         }
-        ["sessions", "archived_sessions"].iter().find_map(|kind| Some(format!("{}/{}", path::join(master, kind), rest.strip_prefix(kind)?.strip_prefix('/')?)))
+        ["sessions", "archived_sessions"]
+            .iter()
+            .find_map(|kind| Some(format!("{}/{}", path::join(master, kind), rest.strip_prefix(kind)?.strip_prefix('/')?)))
     };
     moved().unwrap_or_else(|| old.to_string())
 }
@@ -1070,7 +1103,11 @@ pub fn codex_fix_rollouts() -> R<()> {
     for name in names.iter().filter(|n| n.starts_with("state_") && n.ends_with(".sqlite") && n.len() >= "state_.sqlite".len()) {
         let db = path::join(&home, name);
         // 一次问出要看的行；没有 threads 表、没有 rollout_path 这一列、库被占着超过 2 秒都是出错：跳过这个库
-        let query = format!(".timeout 2000\n.mode quote\nSELECT id, rollout_path FROM threads WHERE substr(rollout_path, 1, {}) = {};\n", text::len(&pre), sql_quote(&pre));
+        let query = format!(
+            ".timeout 2000\n.mode quote\nSELECT id, rollout_path FROM threads WHERE substr(rollout_path, 1, {}) = {};\n",
+            text::len(&pre),
+            sql_quote(&pre)
+        );
         let Some(rows) = sqlite3(&db, &query).and_then(|out| sql_rows(&out)) else { continue };
         let mut script = String::from(".timeout 2000\nBEGIN;\n");
         let mut fixes = 0;
@@ -1078,7 +1115,12 @@ pub fn codex_fix_rollouts() -> R<()> {
             let Some(old) = sql_text(&row[1]) else { continue };
             let new = rollout_in_master(&old, &pre, tool.sub, &tool.master);
             if new != old && !new.contains('\0') && any_with_prefix(&new) {
-                script.push_str(&format!("UPDATE threads SET rollout_path = {} WHERE id = {} AND rollout_path = {};\n", sql_quote(&new), row[0], row[1]));
+                script.push_str(&format!(
+                    "UPDATE threads SET rollout_path = {} WHERE id = {} AND rollout_path = {};\n",
+                    sql_quote(&new),
+                    row[0],
+                    row[1]
+                ));
                 fixes += 1;
             }
         }
@@ -1129,13 +1171,26 @@ mod tests {
     fn rate_limits_to_windows() {
         let w = |text: &str| json::dumps(&V::Dict(codex_windows(&json::loads(text).unwrap().as_dict().unwrap())), json::Fmt::new());
         assert_eq!(
-            w(r#"{"primary": {"usedPercent": 13, "windowDurationMins": 300, "resetsAt": 5}, "secondary": {"usedPercent": 41.5, "windowDurationMins": 10080}}"#),
+            w(
+                r#"{"primary": {"usedPercent": 13, "windowDurationMins": 300, "resetsAt": 5}, "secondary": {"usedPercent": 41.5, "windowDurationMins": 10080}}"#
+            ),
             r#"{"five_hour": {"utilization": 13, "resets_at": 5}, "seven_day": {"utilization": 41.5, "resets_at": null}}"#
         );
         // 没写窗口多长的按位置认；都是短的只留第一个
-        assert_eq!(w(r#"{"primary": {"usedPercent": 1}, "secondary": {"usedPercent": 2}}"#), r#"{"five_hour": {"utilization": 1, "resets_at": null}, "seven_day": {"utilization": 2, "resets_at": null}}"#);
-        assert_eq!(w(r#"{"primary": {"usedPercent": 1, "windowDurationMins": 1440}, "secondary": {"usedPercent": 2, "windowDurationMins": true}}"#), r#"{"five_hour": {"utilization": 1, "resets_at": null}}"#);
-        assert_eq!(w(r#"{"primary": {"usedPercent": true}, "secondary": {"usedPercent": 2, "windowDurationMins": NaN}}"#), r#"{"seven_day": {"utilization": 2, "resets_at": null}}"#);
+        assert_eq!(
+            w(r#"{"primary": {"usedPercent": 1}, "secondary": {"usedPercent": 2}}"#),
+            r#"{"five_hour": {"utilization": 1, "resets_at": null}, "seven_day": {"utilization": 2, "resets_at": null}}"#
+        );
+        assert_eq!(
+            w(
+                r#"{"primary": {"usedPercent": 1, "windowDurationMins": 1440}, "secondary": {"usedPercent": 2, "windowDurationMins": true}}"#
+            ),
+            r#"{"five_hour": {"utilization": 1, "resets_at": null}}"#
+        );
+        assert_eq!(
+            w(r#"{"primary": {"usedPercent": true}, "secondary": {"usedPercent": 2, "windowDurationMins": NaN}}"#),
+            r#"{"seven_day": {"utilization": 2, "resets_at": null}}"#
+        );
         assert_eq!(reset_outcome("alreadyRedeemed"), Some("already_redeemed"));
         assert_eq!(reset_outcome("already_redeemed"), None);
     }
@@ -1168,7 +1223,10 @@ mod rollout_tests {
     fn rollout_paths_move_to_master() {
         let (pre, master) = ("/h/.cca/codex/accounts/", "/h/.codex");
         let fix = |old: &str| rollout_in_master(old, pre, "codex", master);
-        assert_eq!(fix("/h/.cca/codex/accounts/erin-1a2b3c/codex/sessions/2026/11/03/rollout-x.jsonl"), "/h/.codex/sessions/2026/11/03/rollout-x.jsonl");
+        assert_eq!(
+            fix("/h/.cca/codex/accounts/erin-1a2b3c/codex/sessions/2026/11/03/rollout-x.jsonl"),
+            "/h/.codex/sessions/2026/11/03/rollout-x.jsonl"
+        );
         assert_eq!(fix("/h/.cca/codex/accounts/a/codex/archived_sessions/r.jsonl"), "/h/.codex/archived_sessions/r.jsonl");
         assert_eq!(fix("/h/.cca/codex/accounts/a/codex/sessions/"), "/h/.codex/sessions/");
         for same in [

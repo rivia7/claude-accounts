@@ -85,7 +85,10 @@ impl Y {
     fn py_repr(&self) -> String {
         match self {
             Y::V(v) => v.py_repr(),
-            Y::Map(items) => format!("{{{}}}", items.iter().map(|(k, v)| format!("{}: {}", k.py_repr(), v.py_repr())).collect::<Vec<_>>().join(", ")),
+            Y::Map(items) => format!(
+                "{{{}}}",
+                items.iter().map(|(k, v)| format!("{}: {}", k.py_repr(), v.py_repr())).collect::<Vec<_>>().join(", ")
+            ),
             Y::Seq(items) => format!("[{}]", items.iter().map(|v| v.py_repr()).collect::<Vec<_>>().join(", ")),
         }
     }
@@ -271,7 +274,9 @@ fn int_of(v: &V) -> R<V> {
         V::Int(_) | V::Big(_) => Ok(v.clone()),
         V::Bool(b) => Ok(V::Int(*b as i64)),
         V::Float(f) if f.is_nan() => Err(Fail::Value("cannot convert float NaN to integer".into())),
-        V::Float(f) if f.is_infinite() => Err(Fail::Other("OverflowError", vec!["cannot convert float infinity to integer".into()])),
+        V::Float(f) if f.is_infinite() => {
+            Err(Fail::Other("OverflowError", vec!["cannot convert float infinity to integer".into()]))
+        }
         // 朝 0 截断；放不进 64 位的小数照它真正的值写成整数
         V::Float(f) if f.abs() < 9.2e18 => Ok(V::Int(f.trunc() as i64)),
         V::Float(f) => Ok(V::Big(Rc::from(format!("{:.0}", f.trunc())))),
@@ -774,7 +779,9 @@ fn link_parse(url: &str, scheme: &str) -> R<Node> {
 /// 手写，不用兼容层的正则：Python 不分大小写时还把 ſ（U+017F）当 s、İ（U+0130）和 ı（U+0131）当 i，`regex` 库后两个不认
 fn link_scheme(t: &str) -> Option<&str> {
     const SCHEMES: [&str; 8] = ["vmess", "vless", "ss", "ssr", "trojan", "hysteria2", "hy2", "tuic"];
-    let same = |c: char, want: char| c.to_ascii_lowercase() == want || (want == 's' && c == 'ſ') || (want == 'i' && matches!(c, 'İ' | 'ı'));
+    let same = |c: char, want: char| {
+        c.to_ascii_lowercase() == want || (want == 's' && c == 'ſ') || (want == 'i' && matches!(c, 'İ' | 'ı'))
+    };
     'next: for sch in SCHEMES {
         let (mut chars, mut end) = (t.char_indices(), 0);
         for want in sch.chars() {
@@ -863,7 +870,9 @@ mod tests {
                 // 原来没人接的异常：是同一类
                 (Err(Fail::Value(_)), _, _, Some(class)) if &*class == "ValueError" => raised += 1,
                 (Err(Fail::Other(class, _)), _, _, Some(want)) if class == &*want => raised += 1,
-                (got, ok, err, raise) => panic!("{name}（{input:?}）：Rust 给的是 {got:?}，Python 给的是 ok={ok:?} err={err:?} raise={raise:?}"),
+                (got, ok, err, raise) => {
+                    panic!("{name}（{input:?}）：Rust 给的是 {got:?}，Python 给的是 ok={ok:?} err={err:?} raise={raise:?}")
+                }
             }
         }
         assert!(ok > 300 && refused > 600 && raised > 30, "{ok} {refused} {raised}");

@@ -35,8 +35,17 @@ pub const UDP_HELPER: i64 = 1;
 pub static UDP_FLAG: LazyLock<String> = LazyLock::new(|| path::join_all(&[&CCA_HOME, "udp", "on"]));
 /// 不进 TUN：局域网、组播、链路本地、CGNAT（Tailscale）
 const UDP_EXCLUDE: &[&str] = &[
-    "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
-    "224.0.0.0/4", "240.0.0.0/4", "fc00::/7", "fe80::/10", "ff00::/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+    "fc00::/7",
+    "fe80::/10",
+    "ff00::/8",
 ];
 /// 这些进程的 UDP 照旧直连：虚拟局域网打洞、别的代理内核（cca 自己的内核开着 TUN 时本来就绑定物理网卡，这里再保一次）
 const UDP_DIRECT_PROCS: &str = "^(zerotier-one|tailscaled|mihomo.*|verge-mihomo.*)$";
@@ -262,7 +271,14 @@ pub fn cmd_udp_build(args: &[String]) -> R<()> {
     let old = udp_info().unwrap_or_default();
     let same = info.items().iter().filter(|(k, _)| &**k != "saved_at").all(|(k, v)| old.get(k).is_some_and(|o| o.py_eq(v)));
     let s_info = put("info.json", (json::dumps(&V::Dict(info), json::Fmt::new().utf8().indent(1)) + "\n").as_bytes(), 0o644)?;
-    sh(&[("B_CFG", &s_cfg), ("B_PLIST", &s_plist), ("B_RUN", &s_run), ("B_BIN", &s_bin), ("B_INFO", &s_info), ("B_SAME", if same { "1" } else { "" })]);
+    sh(&[
+        ("B_CFG", &s_cfg),
+        ("B_PLIST", &s_plist),
+        ("B_RUN", &s_run),
+        ("B_BIN", &s_bin),
+        ("B_INFO", &s_info),
+        ("B_SAME", if same { "1" } else { "" }),
+    ]);
     Ok(())
 }
 
@@ -302,15 +318,43 @@ mod tests {
     #[test]
     fn names_and_capability() {
         // tests/local_udp.py 的节点：vless 写了 udp: true、trojan 没写、hysteria2 本来就转发
-        assert!(udp_name_ok("US-A") && udp_name_ok("节点 1") && !udp_name_ok("") && !udp_name_ok("US-A,DIRECT") && !udp_name_ok("a\tb") && !udp_name_ok("a\u{7f}"));
+        assert!(
+            udp_name_ok("US-A")
+                && udp_name_ok("节点 1")
+                && !udp_name_ok("")
+                && !udp_name_ok("US-A,DIRECT")
+                && !udp_name_ok("a\tb")
+                && !udp_name_ok("a\u{7f}")
+        );
         assert!(!udp_name_ok("a\n") && udp_name_ok("a\u{80}"));
         let cap = |p: Dict| udp_capable(Some(&p));
-        assert!(cap(dict! { "type" => "vless", "udp" => true }) && !cap(dict! { "type" => "trojan" }) && cap(dict! { "type" => "hysteria2" }));
-        assert!(cap(dict! { "type" => "hysteria" }) && cap(dict! { "type" => "tuic" }) && cap(dict! { "type" => "wireguard", "udp" => false }));
-        assert!(!cap(dict! { "type" => "http", "udp" => true }) && !cap(dict! { "type" => "ssh", "udp" => true }) && cap(dict! { "type" => "socks5", "udp" => true }));
+        assert!(
+            cap(dict! { "type" => "vless", "udp" => true })
+                && !cap(dict! { "type" => "trojan" })
+                && cap(dict! { "type" => "hysteria2" })
+        );
+        assert!(
+            cap(dict! { "type" => "hysteria" })
+                && cap(dict! { "type" => "tuic" })
+                && cap(dict! { "type" => "wireguard", "udp" => false })
+        );
+        assert!(
+            !cap(dict! { "type" => "http", "udp" => true })
+                && !cap(dict! { "type" => "ssh", "udp" => true })
+                && cap(dict! { "type" => "socks5", "udp" => true })
+        );
         // udp 要正好是 true：1、"true" 都不算；没有 type 的只看 udp
-        assert!(!cap(dict! { "type" => "ss", "udp" => 1 }) && !cap(dict! { "type" => "ss", "udp" => "true" }) && cap(dict! { "udp" => true }));
-        assert!(cap(dict! { "type" => 5, "udp" => true }) && !cap(dict! { "type" => list!["tuic"] }) && !cap(Dict::new()) && !udp_capable(None));
+        assert!(
+            !cap(dict! { "type" => "ss", "udp" => 1 })
+                && !cap(dict! { "type" => "ss", "udp" => "true" })
+                && cap(dict! { "udp" => true })
+        );
+        assert!(
+            cap(dict! { "type" => 5, "udp" => true })
+                && !cap(dict! { "type" => list!["tuic"] })
+                && !cap(Dict::new())
+                && !udp_capable(None)
+        );
     }
 
     #[test]
@@ -344,7 +388,11 @@ mod tests {
         let view = udp_view(&dict! { "local" => dict! { "client" => "builtin" } }, Some(&rows));
         if cfg!(target_os = "macos") {
             let view = view.as_dict().unwrap();
-            assert!(view.at("node").is_none() && view.at("state").as_str() == Some("off") && view.at("running").as_bool() == Some(false));
+            assert!(
+                view.at("node").is_none()
+                    && view.at("state").as_str() == Some("off")
+                    && view.at("running").as_bool() == Some(false)
+            );
             assert!(view.at("installed").is_bool());
             assert_eq!(view.keys().iter().map(|k| k.to_string()).collect::<Vec<_>>(), ["node", "state", "installed", "running"]);
         } else {

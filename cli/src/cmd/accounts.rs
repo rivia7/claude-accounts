@@ -65,7 +65,10 @@ pub fn cmd_env(args: &[String]) -> R<()> {
     need(&table, &key)?;
     let v = table.at(&key);
     let api = v.as_dict();
-    let host = c.get("proxy_host").filter(|h| h.truthy()).unwrap_or_else(|| c.dict("router").and_then(|r| r.get("host")).unwrap_or_else(|| "".into()));
+    let host = c
+        .get("proxy_host")
+        .filter(|h| h.truthy())
+        .unwrap_or_else(|| c.dict("router").and_then(|r| r.get("host")).unwrap_or_else(|| "".into()));
     // 直连的第三方 API 账号没有端口
     let port = t().state(&c, false).at("ports").as_dict().and_then(|p| p.get(&key)).filter(|p| p.truthy());
     let port_num = port.as_ref().map(|p| p.as_int().unwrap_or_else(|| panic!("TypeError: 端口不是整数（{}）", p.py_repr())));
@@ -87,10 +90,13 @@ pub fn cmd_env(args: &[String]) -> R<()> {
         // 路由器端口池里这个账号的名字（route_router 回读校验槽位用）
         ("ACC_POOLNAME", V::from(format!("{}{}", t().pool_prefix, id))),
         ("ACC_SLOT", port_num.map_or_else(empty, |p| V::Int(p - FIRST_PORT + 1))),
-        ("ACC_PROXY", match port_num {
-            Some(p) if host.truthy() => V::from(format!("http://{}:{}", host.py_str(), p)),
-            _ => empty(),
-        }),
+        (
+            "ACC_PROXY",
+            match port_num {
+                Some(p) if host.truthy() => V::from(format!("http://{}:{}", host.py_str(), p)),
+                _ => empty(),
+            },
+        ),
         ("ACC_BASE_URL", api.as_ref().map_or_else(empty, |d| V::from(api_url(d)))),
         ("ACC_MODEL", api.as_ref().and_then(|d| d.get("model")).filter(|m| m.truthy()).unwrap_or_else(empty)),
         ("ACC_DIR", V::from(&dir)),
@@ -99,7 +105,12 @@ pub fn cmd_env(args: &[String]) -> R<()> {
         ("ACC_CHROME_DIR", V::from(path::join(&dir, "chrome"))),
         ("ACC_DESKTOP_DIR", V::from(path::join(&dir, "desktop"))),
         ("CCA_NO_PROXY", no_proxy.clone()),
-        ("CCA_PROXY_BYPASS", V::from(bypass_list(no_proxy.as_str().unwrap_or_else(|| panic!("AttributeError: no_proxy 不是字符串（{}）", no_proxy.py_repr()))))),
+        (
+            "CCA_PROXY_BYPASS",
+            V::from(bypass_list(
+                no_proxy.as_str().unwrap_or_else(|| panic!("AttributeError: no_proxy 不是字符串（{}）", no_proxy.py_repr())),
+            )),
+        ),
         ("CCA_MIN_TRUST", c.at("min_trust")),
     ]);
     sh_array("ACC_ARGS", &t().run_args(&key, &v));
@@ -112,7 +123,9 @@ pub fn cmd_env(args: &[String]) -> R<()> {
 pub fn api_env(v: &Dict) -> Dict {
     let env = dict! { "ANTHROPIC_BASE_URL" => api_url(v), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" => "1" };
     if let Some(m) = v.get("model").filter(model_ok) {
-        for n in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"] {
+        for n in
+            ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"]
+        {
             env.set(n, &m);
         }
     }
@@ -160,7 +173,10 @@ pub const CCA_DIR_PRIVATE: &[&str] = &[
 /// 这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
 /// 路径里有空格、逗号、括号、引号时规则写不准，就整个不加。config.json 的 claude_add_dir 设成 false 不加
 pub fn cca_dir_args(key: &str) -> Vec<String> {
-    let off = load_quiet(&CFG).and_then(|c| c.as_dict()).and_then(|c| c.get("claude_add_dir")).is_some_and(|x| x.as_bool() == Some(false));
+    let off = load_quiet(&CFG)
+        .and_then(|c| c.as_dict())
+        .and_then(|c| c.get("claude_add_dir"))
+        .is_some_and(|x| x.as_bool() == Some(false));
     let root = path::realpath(&CCA_HOME);
     if off || re!(r"[\s,()\x22\x27\\]").found(&root) {
         return Vec::new();
@@ -185,7 +201,13 @@ pub fn codex_api_args(key: &str, v: &Dict) -> Vec<String> {
     let id = acct_id(key, t());
     let args: Vec<String> = ["_api-key", "codex", id.as_str()].iter().map(|x| toml_str(x)).collect();
     let auth = format!("{{command = {}, args = [{}]}}", toml_str(&SELF_PATH), args.join(", "));
-    let prov = format!("{{name = {}, base_url = {}, wire_api = {}, auth = {}}}", toml_str(&name_of(key)), toml_str(&api_url(v)), toml_str("responses"), auth);
+    let prov = format!(
+        "{{name = {}, base_url = {}, wire_api = {}, auth = {}}}",
+        toml_str(&name_of(key)),
+        toml_str(&api_url(v)),
+        toml_str("responses"),
+        auth
+    );
     let mut out = vec![
         "-c".to_string(),
         format!("model_provider={}", toml_str(CODEX_PROVIDER)),
@@ -245,7 +267,9 @@ pub fn cmd_prompt_emit(args: &[String]) -> R<()> {
                 opts.push(dict! { "value" => value, "label" => label, "note" => note });
             }
             "min" => {
-                let n = text::to_int(v).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(v))))?;
+                let n = text::to_int(v).ok_or_else(|| {
+                    Fail::Value(format!("invalid literal for int() with base 10: {}", crate::py::obj::repr_str(v)))
+                })?;
                 cur.set(k, n);
             }
             // 多行文字（kind 是 code 的字段）：一行一条
@@ -254,7 +278,9 @@ pub fn cmd_prompt_emit(args: &[String]) -> R<()> {
                 cur.set("value", if old.is_empty() { v.to_string() } else { format!("{old}\n{v}") });
             }
             // 空的 label 不盖掉已有的（prompt 那一行可能已经给过名字）
-            "kind" | "label" | "default" | "value" | "error" | "hint" | "detail" | "severity" | "skip" | "section" | "style" if !v.is_empty() || k != "label" => {
+            "kind" | "label" | "default" | "value" | "error" | "hint" | "detail" | "severity" | "skip" | "section" | "style"
+                if !v.is_empty() || k != "label" =>
+            {
                 cur.set(k, v)
             }
             _ => {}
@@ -306,7 +332,10 @@ pub fn cmd_check(args: &[String]) -> R<()> {
     } else {
         match field {
             // Gmail 地址（小写；也是钥匙串的账户名，交给 security -i）
-            "gmail" => problem(re!(r"^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$").matches(&value), "这不像邮箱地址（只认字母、数字和 . _ % + - 组成的地址）"),
+            "gmail" => problem(
+                re!(r"^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$").matches(&value),
+                "这不像邮箱地址（只认字母、数字和 . _ % + - 组成的地址）",
+            ),
             "url" => url_problem(&value, t()),
             "model" => problem(MODEL_RE.matches(&value), MODEL_MSG),
             "host" => problem(HOST_RE.matches(&value), "地址写成 192.168.1.2 或者主机名（不带 http://、端口和空格）"),
@@ -315,7 +344,9 @@ pub fn cmd_check(args: &[String]) -> R<()> {
                 let ok = re!(r"^[0-9]{1,5}$").matches(&value) && text::to_int(&value).is_some_and(|n| (1..=65535).contains(&n));
                 problem(ok, "端口是 1–65535 之间的数字")
             }
-            "controller" => problem(CONTROLLER_RE.matches(&value), "写成 127.0.0.1:9090、http://地址:端口，Unix socket 写 unix:/路径"),
+            "controller" => {
+                problem(CONTROLLER_RE.matches(&value), "写成 127.0.0.1:9090、http://地址:端口，Unix socket 写 unix:/路径")
+            }
             "email" => email_problem(&table_load(t())?, &value),
             _ => alias_problem(&table_load(t())?, &value),
         }
@@ -340,7 +371,11 @@ pub fn cmd_add(args: &[String]) -> R<()> {
     let node = want.clone().unwrap_or_else(|| args[2].clone());
     let nodes = c.at("nodes");
     if nodes.truthy() && !nodes.as_list().is_some_and(|l| l.has_str(&node)) {
-        let why = if want.is_some() { "（维护者的映射要求这个账号走它：运行 cca router setup 重新选可选节点）" } else { "" };
+        let why = if want.is_some() {
+            "（维护者的映射要求这个账号走它：运行 cca router setup 重新选可选节点）"
+        } else {
+            ""
+        };
         return die(format!("节点「{node}」不在可选列表{why}"));
     }
     let key = if alias.is_empty() { email.clone() } else { format!("{alias}({email})") };
@@ -440,7 +475,8 @@ pub fn cmd_rename(args: &[String]) -> R<()> {
         }
     };
     if new != key {
-        let renamed = Dict::from_pairs(table.items().into_iter().map(|(k, v)| (if &*k == key { new.clone() } else { k.to_string() }, v)));
+        let renamed =
+            Dict::from_pairs(table.items().into_iter().map(|(k, v)| (if &*k == key { new.clone() } else { k.to_string() }, v)));
         save_json(&t().table, &V::Dict(renamed.clone()), Some(0o600), true)?;
         t().set_ids(&renamed); // 第三方 API 账号：新键 → id，对账时端口、“上次使用”按 id 跟着走
         ctx()?;
@@ -529,7 +565,9 @@ pub fn cmd_rows(args: &[String]) -> R<()> {
             rows.push((k, a, e, st.to_string(), node_of(&v).to_string(), used));
         }
     }
-    let widest = |col: fn(&(Rc<str>, String, String, String, String, String)) -> &String| rows.iter().map(|r| uni::width(col(r))).max().unwrap_or(0);
+    let widest = |col: fn(&(Rc<str>, String, String, String, String, String)) -> &String| {
+        rows.iter().map(|r| uni::width(col(r))).max().unwrap_or(0)
+    };
     let (aw, ew, nw) = (widest(|r| &r.1).min(16), widest(|r| &r.2).min(32), widest(|r| &r.4));
     let last = t().state(&c, false).get("last");
     for (k, a, e, state, node, used) in &rows {
@@ -794,7 +832,12 @@ fn edit_unfixable(c: &Dict, table: &Dict, pm: &Dict) -> Vec<String> {
 /// stdin 里「字段<TAB>值」的各行（没有 TAB 的行不算；同一个字段后写的算数）
 fn read_fields() -> Vec<(String, String)> {
     let input = io::read_stdin_text();
-    input.split('\n').map(|line| text::partition(line, "\t")).filter(|(_, sep, _)| !sep.is_empty()).map(|(k, _, v)| (k.to_string(), v.to_string())).collect()
+    input
+        .split('\n')
+        .map(|line| text::partition(line, "\t"))
+        .filter(|(_, sep, _)| !sep.is_empty())
+        .map(|(k, _, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 /// 表单的一个字段（给 prompt-emit 的 k=v 各行；空着的不写，field 和 value 总是写）
@@ -862,7 +905,16 @@ pub fn cmd_edit_form(args: &[String]) -> R<()> {
     let mut out: Vec<String> = vec![edit_sum(&table), "q=edit.form".into(), "submit=保存".into(), format!("message={message}")];
     let put = |out: &mut Vec<String>, f: Field| {
         let error = if f.error.is_empty() { ferr.get(f.id).cloned().unwrap_or_default() } else { f.error };
-        let rows = [("field", f.id), ("kind", f.kind), ("label", f.label), ("value", f.value), ("section", f.section), ("hint", f.hint), ("style", f.style), ("error", &error)];
+        let rows = [
+            ("field", f.id),
+            ("kind", f.kind),
+            ("label", f.label),
+            ("value", f.value),
+            ("section", f.section),
+            ("hint", f.hint),
+            ("style", f.style),
+            ("error", &error),
+        ];
         out.extend(rows.iter().filter(|(k, v)| !v.is_empty() || matches!(*k, "field" | "value")).map(|(k, v)| format!("{k}={v}")));
         if f.optional {
             out.push("optional=1".into());
@@ -886,32 +938,103 @@ pub fn cmd_edit_form(args: &[String]) -> R<()> {
             let label = label_of(&k);
             if let Some(want) = want {
                 let want = want.py_str();
-                let error = if in_nodes(&want) { String::new() } else { format!("维护者的映射要求它走「{want}」，这个节点不在可选列表：先在“配置路由器”里选上它") };
+                let error = if in_nodes(&want) {
+                    String::new()
+                } else {
+                    format!("维护者的映射要求它走「{want}」，这个节点不在可选列表：先在“配置路由器”里选上它")
+                };
                 let (hint, style) = ("维护者固定了这个账号的节点", "menu");
-                put(&mut out, Field { id: &nid, kind: "choice", label: &label, value: &want, section, hint, style, error, ..Default::default() });
+                put(
+                    &mut out,
+                    Field {
+                        id: &nid,
+                        kind: "choice",
+                        label: &label,
+                        value: &want,
+                        section,
+                        hint,
+                        style,
+                        error,
+                        ..Default::default()
+                    },
+                );
                 out.push(format!("opt={want}\t{want}\t"));
                 continue;
             }
             let cur = prev.get(&nid).cloned().unwrap_or_else(|| v.as_str().unwrap_or("").to_string());
             let ok = in_nodes(&cur);
             let error = if ok { String::new() } else { format!("节点「{cur}」不在可选列表，换一个") };
-            put(&mut out, Field { id: &nid, kind: "choice", label: &label, value: if ok { &cur } else { "" }, section, style: "menu", error, ..Default::default() });
+            put(
+                &mut out,
+                Field {
+                    id: &nid,
+                    kind: "choice",
+                    label: &label,
+                    value: if ok { &cur } else { "" },
+                    section,
+                    style: "menu",
+                    error,
+                    ..Default::default()
+                },
+            );
             node_opts(&mut out, &k);
             continue;
         };
         let section = &format!("第三方 API：{}", name_of(&k));
         let fid = format!("u{i}");
         let url = prev.get(&fid).cloned().unwrap_or_else(|| api_url(&d));
-        put(&mut out, Field { id: &fid, kind: "text", label: "接口地址", value: &url, section, hint: "换了服务商（域名变了）要重新输入 key", ..Default::default() });
+        put(
+            &mut out,
+            Field {
+                id: &fid,
+                kind: "text",
+                label: "接口地址",
+                value: &url,
+                section,
+                hint: "换了服务商（域名变了）要重新输入 key",
+                ..Default::default()
+            },
+        );
         let fid = format!("m{i}");
-        let model = prev.get(&fid).cloned().unwrap_or_else(|| d.get("model").filter(|m| m.truthy()).map_or(String::new(), |m| m.py_str()));
-        let hint = if has_env { "填了会同时用作 opus / sonnet / haiku" } else { "服务商不认 codex 默认的模型名时请填上" };
-        put(&mut out, Field { id: &fid, kind: "text", label: "模型（可选）", value: &model, section, hint, optional: true, ..Default::default() });
+        let model =
+            prev.get(&fid).cloned().unwrap_or_else(|| d.get("model").filter(|m| m.truthy()).map_or(String::new(), |m| m.py_str()));
+        let hint = if has_env {
+            "填了会同时用作 opus / sonnet / haiku"
+        } else {
+            "服务商不认 codex 默认的模型名时请填上"
+        };
+        put(
+            &mut out,
+            Field {
+                id: &fid,
+                kind: "text",
+                label: "模型（可选）",
+                value: &model,
+                section,
+                hint,
+                optional: true,
+                ..Default::default()
+            },
+        );
         if !nodes.is_empty() {
             let cur = prev.get(&nid).cloned().unwrap_or_else(|| node_of(&v).to_string());
             let ok = in_nodes(&cur);
-            let error = if cur.is_empty() || ok { String::new() } else { format!("节点「{cur}」不在可选列表，换一个") };
-            put(&mut out, Field { id: &nid, kind: "choice", label: "出口", value: if ok { &cur } else { "" }, section, optional: true, style: "menu", error, ..Default::default() });
+            let error =
+                if cur.is_empty() || ok { String::new() } else { format!("节点「{cur}」不在可选列表，换一个") };
+            put(
+                &mut out,
+                Field {
+                    id: &nid,
+                    kind: "choice",
+                    label: "出口",
+                    value: if ok { &cur } else { "" },
+                    section,
+                    optional: true,
+                    style: "menu",
+                    error,
+                    ..Default::default()
+                },
+            );
             node_opts(&mut out, &k);
             out.push("skip=直连（不经代理）".into());
         }
@@ -919,7 +1042,19 @@ pub fn cmd_edit_form(args: &[String]) -> R<()> {
             let fid = format!("e{i}");
             let env = prev.get(&fid).cloned().unwrap_or_else(|| env_text(d.get("env").as_ref()));
             let hint = "写成 名字=值，多个用空格隔开；密钥不要写在这里";
-            put(&mut out, Field { id: &fid, kind: "text", label: "环境变量（可选）", value: &env, section, hint, optional: true, ..Default::default() });
+            put(
+                &mut out,
+                Field {
+                    id: &fid,
+                    kind: "text",
+                    label: "环境变量（可选）",
+                    value: &env,
+                    section,
+                    hint,
+                    optional: true,
+                    ..Default::default()
+                },
+            );
         }
     }
     out!("{}", out.iter().map(|x| x.replace('\n', " ")).collect::<Vec<_>>().join("\n"));

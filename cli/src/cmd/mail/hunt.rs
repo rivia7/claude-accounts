@@ -89,7 +89,9 @@ pub fn mail_pid_alive(pid: Option<&V>) -> R<bool> {
         Some(V::Int(i)) => *i,
         Some(V::Big(_)) => return Err(overflow()),
         Some(V::Float(f)) if f.is_nan() => return Ok(false),
-        Some(V::Float(f)) if f.is_infinite() => return Err(Fail::Other("OverflowError", vec!["cannot convert float infinity to integer".into()])),
+        Some(V::Float(f)) if f.is_infinite() => {
+            return Err(Fail::Other("OverflowError", vec!["cannot convert float infinity to integer".into()]))
+        }
         Some(V::Float(f)) if f.abs() < 9.0e18 => f.trunc() as i64,
         Some(V::Float(_)) => return Err(overflow()),
         Some(V::Str(s)) => match py_int(s) {
@@ -217,7 +219,14 @@ pub fn mail_nap(secs: f64, end: f64, alive: &dyn Fn() -> bool, now: &dyn Fn() ->
 }
 
 /// 取来的全文照样再核对一遍、取出链接：(没通过的原因或 None, 链接或 None, 解析好的邮件)
-pub fn mail_verdict(rule: &MailRule, raw: &[u8], got: f64, acct: &str, since: f64, forwarder: Option<&str>) -> R<(Option<&'static str>, Option<String>, Message)> {
+pub fn mail_verdict(
+    rule: &MailRule,
+    raw: &[u8],
+    got: f64,
+    acct: &str,
+    since: f64,
+    forwarder: Option<&str>,
+) -> R<(Option<&'static str>, Option<String>, Message)> {
     let _frame = super::py_frame();
     let msg = mail_parse(raw)?;
     let why = mail_judge(rule, &msg, got, acct, since, forwarder)?;
@@ -562,7 +571,14 @@ mod tests {
                 let m = m.as_list().unwrap();
                 let (uid, name) = (m.at(0).as_int().unwrap() as u64, m.at(1).py_str());
                 let full = m.get(3).map_or_else(|| name.clone(), |f| f.py_str());
-                out.push(Cand { folder: ALL.into(), label: full, uid, got: T0 - m.at(2).as_num().unwrap(), hdr: self.emails[&name].clone(), valid: Some(1) });
+                out.push(Cand {
+                    folder: ALL.into(),
+                    label: full,
+                    uid,
+                    got: T0 - m.at(2).as_num().unwrap(),
+                    hdr: self.emails[&name].clone(),
+                    valid: Some(1),
+                });
             }
             Ok(out)
         }
@@ -582,7 +598,8 @@ mod tests {
     /// 盯邮箱的整个过程——看几次邮箱、隔多久、开哪一封、试几次、说什么、最后记下什么——和 Python 的 mail_hunt 一样
     #[test]
     fn hunts_like_python() {
-        let emails: HashMap<String, Vec<u8>> = vectors("judge").iter().map(|c| (c.at("name").py_str(), bytes_of(&c.at("raw")))).collect();
+        let emails: HashMap<String, Vec<u8>> =
+            vectors("judge").iter().map(|c| (c.at("name").py_str(), bytes_of(&c.at("raw")))).collect();
         let cases = vectors("hunt");
         assert!(cases.len() > 55);
         for c in cases {
@@ -642,16 +659,28 @@ mod tests {
             let mut src = Scripted { rounds: c.list("rounds").unwrap().items(), emails: emails.clone(), polls: 0 };
             let say = |s: &str| said.borrow_mut().push(s.to_string());
             let (since, end) = (T0 - c.at("since_ago").as_num().unwrap(), T0 + c.at("secs").as_num().unwrap());
-            let res = mail_hunt(&h, &mut src, since, end, &mut deliver, &alive, &say, Some(&|| hello.set(hello.get() + 1)), Some(&|| idle.set(idle.get() + 1)));
+            let res = mail_hunt(
+                &h,
+                &mut src,
+                since,
+                end,
+                &mut deliver,
+                &alive,
+                &say,
+                Some(&|| hello.set(hello.get() + 1)),
+                Some(&|| idle.set(idle.get() + 1)),
+            );
             let res = match res {
                 Ok(f) => {
-                    let rejected = V::from(f.rejected.iter().map(|(w, n)| V::from(crate::list![w.as_str(), *n])).collect::<Vec<_>>());
+                    let rejected =
+                        V::from(f.rejected.iter().map(|(w, n)| V::from(crate::list![w.as_str(), *n])).collect::<Vec<_>>());
                     dict! { "code" => f.code, "text" => f.text, "opened" => f.opened, "used" => f.used, "rejected" => rejected }
                 }
                 Err(Fail::Other(class, _)) => dict! { "error" => class },
                 Err(e) => panic!("{name}：{e:?}"),
             };
-            let mut after: Vec<(String, String)> = used(&dir).items().iter().map(|(k, v)| (k.to_string(), v.as_dict().unwrap().at("st").py_str())).collect();
+            let mut after: Vec<(String, String)> =
+                used(&dir).items().iter().map(|(k, v)| (k.to_string(), v.as_dict().unwrap().at("st").py_str())).collect();
             after.sort();
             let got = dict! {
                 "res" => res, "said" => crate::py::obj::str_list(said.borrow().iter()), "opened" => V::from(opened.borrow().clone()), "polls" => src.polls,
@@ -701,7 +730,8 @@ mod tests {
 
     /// 对照数据里 tests/mail_fake.py 做的登录邮件（judge 一节里的 good、to bob……）
     fn eml(name: &str) -> Vec<u8> {
-        let c = vectors("judge").into_iter().find(|c| c.at("name").py_str() == name).unwrap_or_else(|| panic!("对照数据里没有 {name}"));
+        let c =
+            vectors("judge").into_iter().find(|c| c.at("name").py_str() == name).unwrap_or_else(|| panic!("对照数据里没有 {name}"));
         bytes_of(&c.at("raw"))
     }
 
@@ -723,10 +753,31 @@ mod tests {
             Cand { folder: ALL.into(), label: "所有邮件".into(), uid, got: T0 - ago, hdr: raw.to_vec(), valid: Some(1) }
         }
 
-        fn hunt(&self, src: &mut FakeSource, results: &[&str], secs: f64, once: bool, again: bool, alive: &dyn Fn() -> bool, idle: Option<&dyn Fn()>) -> Found {
+        fn hunt(
+            &self,
+            src: &mut FakeSource,
+            results: &[&str],
+            secs: f64,
+            once: bool,
+            again: bool,
+            alive: &dyn Fn() -> bool,
+            idle: Option<&dyn Fn()>,
+        ) -> Found {
             let rules = [&MAIL_RULES[0]];
             let (now, sleep) = (|| self.clock.get(), |s: f64| self.clock.set(self.clock.get() + s));
-            let h = Hunt { dir: &self.dir, rules: &rules, acct: "alice@example.com", forwarder: None, again, once, now: &now, sleep: &sleep, pid: std::process::id(), poll: 3.0, base: 2.0 };
+            let h = Hunt {
+                dir: &self.dir,
+                rules: &rules,
+                acct: "alice@example.com",
+                forwarder: None,
+                again,
+                once,
+                now: &now,
+                sleep: &sleep,
+                pid: std::process::id(),
+                poll: 3.0,
+                base: 2.0,
+            };
             let mut results: Vec<String> = results.iter().map(|s| s.to_string()).collect();
             let mut deliver = |link: &str| -> R<String> {
                 self.opened.borrow_mut().push((((self.clock.get() - T0) * 10.0).round() / 10.0, link.to_string()));
@@ -772,13 +823,15 @@ mod tests {
     fn browser_failure_retries_three_times_then_says_so() {
         let w = World::new("retry3");
         let a = eml("good");
-        let res = w.run(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &["fail", "fail", "ok"], 30.0, false);
+        let res =
+            w.run(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &["fail", "fail", "ok"], 30.0, false);
         assert_eq!(w.opened.borrow().iter().map(|(t, _)| *t).collect::<Vec<_>>(), [0.0, 2.0, 4.0]);
         assert_eq!(res.code, "opened");
         w.opened.borrow_mut().clear();
         w.said.borrow_mut().clear();
         let b = eml("hunt second good");
-        let res = w.run(&mut source(vec![Round::Mails(vec![w.cand(2, &b, 0.0)])], &[(2, &b)]), &["fail", "fail", "fail"], 30.0, false);
+        let res =
+            w.run(&mut source(vec![Round::Mails(vec![w.cand(2, &b, 0.0)])], &[(2, &b)]), &["fail", "fail", "fail"], 30.0, false);
         assert_eq!((w.opened.borrow().len(), res.code.as_str()), (3, "fail"));
         assert_eq!(w.said.borrow().iter().filter(|s| s.contains("没能打开浏览器")).count(), 1);
         assert_eq!(
@@ -799,7 +852,8 @@ mod tests {
     fn once_stops_on_browser_failure() {
         let w = World::new("oncefail");
         let a = eml("good");
-        let res = w.run(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &["fail", "fail", "fail"], 600.0, true);
+        let res =
+            w.run(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &["fail", "fail", "fail"], 600.0, true);
         assert_eq!((res.code.as_str(), w.opened.borrow().len()), ("fail", 3));
         assert!(w.clock.get() - T0 < 10.0);
         assert!(w.said.borrow().is_empty(), "cca mail open 自己说结果");
@@ -842,8 +896,24 @@ mod tests {
         let w = World::new("idle");
         let seen = RefCell::new(Vec::new());
         let a = eml("good");
-        w.hunt(&mut source(vec![Round::Mails(vec![])], &[]), &[], 10.0, true, false, &|| true, Some(&|| seen.borrow_mut().push("idle")));
-        w.hunt(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &[], 10.0, true, false, &|| true, Some(&|| seen.borrow_mut().push("bad")));
+        w.hunt(
+            &mut source(vec![Round::Mails(vec![])], &[]),
+            &[],
+            10.0,
+            true,
+            false,
+            &|| true,
+            Some(&|| seen.borrow_mut().push("idle")),
+        );
+        w.hunt(
+            &mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]),
+            &[],
+            10.0,
+            true,
+            false,
+            &|| true,
+            Some(&|| seen.borrow_mut().push("bad")),
+        );
         assert_eq!(*seen.borrow(), ["idle"]);
     }
 
@@ -866,7 +936,10 @@ mod tests {
         let cands = mails.iter().map(|(u, r)| w.cand(*u, r, 0.0)).collect();
         let res = w.run(&mut source(vec![Round::Mails(cands)], &[]), &[], 5.0, false);
         let count = |why: &str| res.rejected.iter().find(|(w, _)| w == why).map(|(_, n)| *n);
-        assert_eq!((count("to"), count("subject"), count("from"), count("dkim"), res.rejected.len()), (Some(1), Some(1), Some(1), Some(1), 4));
+        assert_eq!(
+            (count("to"), count("subject"), count("from"), count("dkim"), res.rejected.len()),
+            (Some(1), Some(1), Some(1), Some(1), 4)
+        );
         assert_eq!(w.said.borrow().len(), 2, "别的账号的、标题不像的不说；发件人、签名不对的说");
         assert_eq!(
             w.said.borrow()[0],
@@ -906,7 +979,11 @@ mod tests {
         let a = eml("hunt help link only");
         for _ in 0..2 {
             let res = w.run(&mut source(vec![Round::Mails(vec![w.cand(1, &a, 0.0)])], &[(1, &a)]), &[], 5.0, true);
-            assert_eq!((res.rejected.clone(), res.used), (vec![("nolink".to_string(), 1)], 0), "没打开的不记下：下次照样核对、照实说原因");
+            assert_eq!(
+                (res.rejected.clone(), res.used),
+                (vec![("nolink".to_string(), 1)], 0),
+                "没打开的不记下：下次照样核对、照实说原因"
+            );
         }
     }
 
@@ -923,10 +1000,13 @@ mod tests {
     fn nap_sleeps_in_half_second_steps() {
         let clock = Cell::new(100.0);
         let steps = RefCell::new(Vec::new());
-        let (now, sleep) = (|| clock.get(), |s: f64| {
-            steps.borrow_mut().push(s);
-            clock.set(clock.get() + s);
-        });
+        let (now, sleep) = (
+            || clock.get(),
+            |s: f64| {
+                steps.borrow_mut().push(s);
+                clock.set(clock.get() + s);
+            },
+        );
         mail_nap(1.2, 1000.0, &|| true, &now, &sleep).unwrap();
         assert_eq!(steps.borrow().len(), 3);
         assert!((clock.get() - 101.2).abs() < 1e-9);

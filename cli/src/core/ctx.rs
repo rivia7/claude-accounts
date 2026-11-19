@@ -112,7 +112,9 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
         let lid = match last.as_str() {
             Some(s) if !s.is_empty() => known_id(s),
             // 不是文字又不是空的（数字、true）：原来 acct_id 拿它当文字用，是没人接的 TypeError
-            None if last.truthy() => panic!("TypeError: expected string or bytes-like object（config.json 里的 last 是 {}）", last.py_repr()),
+            None if last.truthy() => {
+                panic!("TypeError: expected string or bytes-like object（config.json 里的 last 是 {}）", last.py_repr())
+            }
             _ => String::new(),
         };
         let found = table.keys().into_iter().find(|k| acct_id(k, tool) == lid);
@@ -240,7 +242,11 @@ pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
         if !server {
             notice(
                 "nodes_filled",
-                &format!("• 维护者的映射要 {} 走节点 {}：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点", who.join("、"), n),
+                &format!(
+                    "• 维护者的映射要 {} 走节点 {}：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点",
+                    who.join("、"),
+                    n
+                ),
                 dict! { "node" => n },
             );
         }
@@ -372,9 +378,12 @@ pub fn pool_size(c: &Dict) -> i64 {
 
 /// 每个槽位应选中的节点：分给账号的用账号的节点，空槽位用 REJECT
 pub fn slot_nodes(c: &Dict) -> Vec<String> {
-    let taken: Vec<(i64, Rc<str>)> = pool(c).iter().filter_map(|(_, _, v, p)| Some((int_value(p)? - FIRST_PORT + 1, node_of(v)))).collect();
+    let taken: Vec<(i64, Rc<str>)> =
+        pool(c).iter().filter_map(|(_, _, v, p)| Some((int_value(p)? - FIRST_PORT + 1, node_of(v)))).collect();
     // 字典：同一个槽位后写的盖掉先写的
-    (1..=pool_size(c)).map(|s| taken.iter().rev().find(|(n, _)| *n == s).map_or("REJECT".to_string(), |(_, node)| node.to_string())).collect()
+    (1..=pool_size(c))
+        .map(|s| taken.iter().rev().find(|(n, _)| *n == s).map_or("REJECT".to_string(), |(_, node)| node.to_string()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -393,13 +402,16 @@ mod tests {
         c.set("ports", dict! { "gone@example.com" => 7901, "b@example.com" => 7903 });
         c.set("last", "gone@example.com");
         let table = dict! { "a@example.com" => "US-A", "b@example.com" => "US-B", "直连" => dict! { "base_url" => "https://x.example.com" },
-                            "走节点" => dict! { "base_url" => "https://y.example.com", "node" => "US-A" } };
+        "走节点" => dict! { "base_url" => "https://y.example.com", "node" => "US-A" } };
         let errs = reconcile(&c, &table, claude(), &HashSet::from([7902])).unwrap();
         assert!(errs.is_empty(), "{errs:?}");
         // 原有端口的先进字典，新分配的排在后面；7902 被别的工具占着
         assert_eq!(V::Dict(c.dict("ports").unwrap()).py_repr(), "{'b@example.com': 7903, 'a@example.com': 7901, '走节点': 7904}");
         assert_eq!(c.str("last").as_deref(), Some(""));
-        assert_eq!(V::Dict(c.dict("api_ids").unwrap()).py_repr(), format!("{{'直连': '{}', '走节点': '{}'}}", ident("直连"), ident("走节点")));
+        assert_eq!(
+            V::Dict(c.dict("api_ids").unwrap()).py_repr(),
+            format!("{{'直连': '{}', '走节点': '{}'}}", ident("直连"), ident("走节点"))
+        );
     }
 
     #[test]
@@ -434,7 +446,8 @@ mod tests {
             ["config.json 里还没有可选节点（nodes）：运行 cca router setup 从路由器的节点里选"]
         );
         let pinned = dict! { "a@example.com" => "ZZ" };
-        assert!(table_problems(&c, &dict! { "a@example.com" => "ZZ" }, claude(), &pinned)[0].starts_with("a@example.com：维护者的映射要求它走「ZZ」"));
+        assert!(table_problems(&c, &dict! { "a@example.com" => "ZZ" }, claude(), &pinned)[0]
+            .starts_with("a@example.com：维护者的映射要求它走「ZZ」"));
     }
 
     #[test]

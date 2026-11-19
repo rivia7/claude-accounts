@@ -402,7 +402,12 @@ mod tests {
         assert!(caught(&sub(&d, "x").unwrap_err()) && !caught(&get(&V::None, "a").unwrap_err()));
         let e = cu_fail("blocked", "说明");
         assert_eq!((cu_parts(&e), e.to_string().as_str()), (Some(("blocked", "说明")), "说明"));
-        assert!(caught(&e) && is_exception(&e) && !is_exception(&Fail::Die("x".into())) && !is_exception(&Fail::Other("KeyboardInterrupt", vec![])));
+        assert!(
+            caught(&e)
+                && is_exception(&e)
+                && !is_exception(&Fail::Die("x".into()))
+                && !is_exception(&Fail::Other("KeyboardInterrupt", vec![]))
+        );
     }
 
     #[test]
@@ -423,8 +428,19 @@ mod tests {
         assert!(dotted("1.2", 1, 5) && dotted("1.2.3.4.5.6", 1, 5) && !dotted("1", 1, 5) && !dotted("1.2.3.4.5.6.7", 1, 5));
         assert!(dotted("1", 0, 5) && !dotted("", 0, 5) && !dotted("1.", 0, 5) && !dotted(".1", 0, 5) && !dotted("1..2", 0, 5));
         assert!(dotted("١.٢", 1, 5) && !dotted("1.2\n", 1, 5) && !dotted("1.a", 1, 5) && !dotted("²", 0, 5));
-        assert!(digits_1_12("1") && digits_1_12("123456789012") && !digits_1_12("1234567890123") && !digits_1_12("") && !digits_1_12("1a"));
-        assert!(hex64(&"a".repeat(64)) && !hex64(&"A".repeat(64)) && !hex64(&"a".repeat(63)) && !hex64(&format!("{}\n", "a".repeat(64))));
+        assert!(
+            digits_1_12("1")
+                && digits_1_12("123456789012")
+                && !digits_1_12("1234567890123")
+                && !digits_1_12("")
+                && !digits_1_12("1a")
+        );
+        assert!(
+            hex64(&"a".repeat(64))
+                && !hex64(&"A".repeat(64))
+                && !hex64(&"a".repeat(63))
+                && !hex64(&format!("{}\n", "a".repeat(64)))
+        );
     }
 
     #[test]
@@ -441,11 +457,21 @@ mod tests {
         assert_eq!(n(big("9223372036854775808")).add_int(-1), Num::Int(i64::MAX));
         assert_eq!(n(big("-10000000000000000000000")).add_int(1).to_v().py_repr(), "-9999999999999999999999");
         assert_eq!(n(big("10000000000000000000000")).add_int(-1).to_v().py_repr(), "9999999999999999999999");
-        assert!(Num::Int(1).lt(&Num::Float(1.5)) && !Num::Float(2.0).lt(&Num::Int(2)) && Num::Float(-1e300).lt(&n(big("-99999999999999999999"))));
-        assert!(n(big("99999999999999999999")).lt(&Num::Float(1e30)) && !n(big("99999999999999999999")).lt(&Num::Int(5)) && Num::Int(5).lt(&n(big("99999999999999999999"))));
+        assert!(
+            Num::Int(1).lt(&Num::Float(1.5))
+                && !Num::Float(2.0).lt(&Num::Int(2))
+                && Num::Float(-1e300).lt(&n(big("-99999999999999999999")))
+        );
+        assert!(
+            n(big("99999999999999999999")).lt(&Num::Float(1e30))
+                && !n(big("99999999999999999999")).lt(&Num::Int(5))
+                && Num::Int(5).lt(&n(big("99999999999999999999")))
+        );
         assert!(!Num::Float(f64::NAN).lt(&Num::Int(1)) && !Num::Int(1).lt(&Num::Float(f64::NAN)));
         assert!(Num::of(&V::from("1"), "-").unwrap_err().is("TypeError") && Num::of(&V::None, "-").unwrap_err().is("TypeError"));
-        assert!(n(big(&"9".repeat(400))).f().unwrap_err().is("OverflowError") && n(big("100000000000000000000")).f().unwrap() == 1e20);
+        assert!(
+            n(big(&"9".repeat(400))).f().unwrap_err().is("OverflowError") && n(big("100000000000000000000")).f().unwrap() == 1e20
+        );
     }
 
     #[test]
@@ -453,11 +479,26 @@ mod tests {
         // 1795078097521852400 == 1.7950780975218524e+18 在 Python 里是 False（那个小数其实是 …852416）
         assert!(!eq(&V::Int(1795078097521852400), &V::Float(1.7950780975218524e18)));
         assert!(eq(&V::Int(1795078097521852416), &V::Float(1.7950780975218524e18)));
-        assert!(eq(&V::Int(1454), &V::Float(1454.0)) && eq(&V::Bool(true), &V::Float(1.0)) && eq(&V::Bool(true), &V::Int(1)) && !eq(&V::Int(1), &V::Float(1.5)));
-        assert!(eq(&V::Big("1000000000000000019884624838656".into()), &V::Float(1e30)) && !eq(&V::Big("1000000000000000000000000000000".into()), &V::Float(1e30)));
-        assert!(!eq(&V::Float(f64::NAN), &V::Float(f64::NAN)) && !eq(&V::Int(1), &V::from("1")) && eq(&V::None, &V::None) && !eq(&V::None, &V::Int(0)));
+        assert!(
+            eq(&V::Int(1454), &V::Float(1454.0))
+                && eq(&V::Bool(true), &V::Float(1.0))
+                && eq(&V::Bool(true), &V::Int(1))
+                && !eq(&V::Int(1), &V::Float(1.5))
+        );
+        assert!(
+            eq(&V::Big("1000000000000000019884624838656".into()), &V::Float(1e30))
+                && !eq(&V::Big("1000000000000000000000000000000".into()), &V::Float(1e30))
+        );
+        assert!(
+            !eq(&V::Float(f64::NAN), &V::Float(f64::NAN))
+                && !eq(&V::Int(1), &V::from("1"))
+                && eq(&V::None, &V::None)
+                && !eq(&V::None, &V::Int(0))
+        );
         let (a, b) = (dict! { "x" => crate::list![1, 2.0], "y" => "s" }, dict! { "y" => "s", "x" => crate::list![1.0, 2] });
-        assert!(eq(&V::Dict(a.clone()), &V::Dict(b)) && !eq(&V::Dict(a), &V::Dict(dict! { "x" => crate::list![1, 2.5], "y" => "s" })));
+        assert!(
+            eq(&V::Dict(a.clone()), &V::Dict(b)) && !eq(&V::Dict(a), &V::Dict(dict! { "x" => crate::list![1, 2.5], "y" => "s" }))
+        );
         assert!(eq_opt(&V::None, None) && !eq_opt(&V::Int(0), None) && eq_opt(&V::Int(0), Some(V::Bool(false))));
     }
 }

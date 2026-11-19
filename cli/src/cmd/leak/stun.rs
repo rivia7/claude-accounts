@@ -30,7 +30,7 @@ extern "C" {
 fn ntop(a: &[u8]) -> String {
     let af = if a.len() == 4 { libc::AF_INET } else { libc::AF_INET6 };
     let mut buf = [0 as libc::c_char; 64]; // 最长的 IPv6 写法是 45 个字符
-    // SAFETY: a 的长度和 af 对得上（调用方只给 4 或 16 个字节）；buf 够长，写进去的是以 0 结尾的字符串
+                                           // SAFETY: a 的长度和 af 对得上（调用方只给 4 或 16 个字节）；buf 够长，写进去的是以 0 结尾的字符串
     unsafe {
         if inet_ntop(af, a.as_ptr().cast(), buf.as_mut_ptr(), buf.len() as libc::socklen_t).is_null() {
             return String::new();
@@ -224,15 +224,50 @@ mod tests {
 
     // 每条：说明、数据包、事务号（都是十六进制）、Python 的 stun_parse 给的结果（在 macOS 上跑原来的函数得到的）
     const VECTORS: &[(&str, &str, &str, &str)] = &[
-        ("xor-mapped v4", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
-        ("xor-mapped v6", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212340113a9fa2502a2a3a4a52c89abd9d99f", "a0a1a2a3a4a5a6a7a8a9aaab", "2001:db8:85a3::8a2e:370:7334"),
+        (
+            "xor-mapped v4",
+            "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
+        (
+            "xor-mapped v6",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212340113a9fa2502a2a3a4a52c89abd9d99f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "2001:db8:85a3::8a2e:370:7334",
+        ),
         ("mapped v4", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c0000201", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.1"),
-        ("mapped v6", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab000100140002123420010db8000000000000000000000001", "a0a1a2a3a4a5a6a7a8a9aaab", "2001:db8::1"),
+        (
+            "mapped v6",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab000100140002123420010db8000000000000000000000001",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "2001:db8::1",
+        ),
         ("8020 v4", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab8020000800011234ea12d54b", "a0a1a2a3a4a5a6a7a8a9aaab", "203.0.113.9"),
-        ("8020 v6", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab8020001400021234df92a442a0a1a2a3a4a5a6a7a8a9aaaa", "a0a1a2a3a4a5a6a7a8a9aaab", "fe80::1"),
-        ("all three: 0020 wins", "010100242112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002018020000800011234e112a6400020000800011234e112a641", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.3"),
-        ("8020 beats 0001", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002018020000800011234e112a640", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.2"),
-        ("duplicate 0020: last wins", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e112a6410020000800011234e112a646", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.4"),
+        (
+            "8020 v6",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab8020001400021234df92a442a0a1a2a3a4a5a6a7a8a9aaaa",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "fe80::1",
+        ),
+        (
+            "all three: 0020 wins",
+            "010100242112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002018020000800011234e112a6400020000800011234e112a641",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "192.0.2.3",
+        ),
+        (
+            "8020 beats 0001",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002018020000800011234e112a640",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "192.0.2.2",
+        ),
+        (
+            "duplicate 0020: last wins",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e112a6410020000800011234e112a646",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "192.0.2.4",
+        ),
         ("wrong tid", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "000000000000000000000000", ""),
         ("error response type", "0111000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
         ("request type", "0001000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
@@ -240,39 +275,154 @@ mod tests {
         ("short", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aa", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
         ("header only", "010100002112a442a0a1a2a3a4a5a6a7a8a9aaab", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
         ("empty", "", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("length field 0 hides attr", "010100002112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("length field 3: header not inside", "010100032112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("length field 4: value past end still read", "010100042112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
-        ("length field too big", "010101f42112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
-        ("second attr past end ignored", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002010020000800011234e112a641", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.1"),
+        (
+            "length field 0 hides attr",
+            "010100002112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "",
+        ),
+        (
+            "length field 3: header not inside",
+            "010100032112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "",
+        ),
+        (
+            "length field 4: value past end still read",
+            "010100042112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
+        (
+            "length field too big",
+            "010101f42112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
+        (
+            "second attr past end ignored",
+            "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002010020000800011234e112a641",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "192.0.2.1",
+        ),
         ("value truncated", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c0", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("v6 value truncated", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212340113a9fa2502a2a3a4a52c89abd9d9", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
+        (
+            "v6 value truncated",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212340113a9fa2502a2a3a4a52c89abd9d9",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "",
+        ),
         ("family 3", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800031234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
         ("family 0", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800001234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("family 2 with 4-byte address", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800021234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("family 1 with 16-byte address", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000112340113a9fa2502a2a3a4a52c89abd9d99f", "a0a1a2a3a4a5a6a7a8a9aaab", "32.1.13.184"),
-        ("odd-sized attr before, padded", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab8022000561626364650000000020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
-        ("odd-sized attr before, not padded", "010100152112a442a0a1a2a3a4a5a6a7a8a9aaab8022000561626364650020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("unknown attrs around", "0101001c2112a442a0a1a2a3a4a5a6a7a8a9aaab00080004010203040020000800011234e721c00f8028000400000000", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
-        ("v4 attr with extra bytes", "010100102112a442a0a1a2a3a4a5a6a7a8a9aaab0020000a00010001e721c00f7a7a0000", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
+        (
+            "family 2 with 4-byte address",
+            "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800021234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "",
+        ),
+        (
+            "family 1 with 16-byte address",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000112340113a9fa2502a2a3a4a52c89abd9d99f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "32.1.13.184",
+        ),
+        (
+            "odd-sized attr before, padded",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab8022000561626364650000000020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
+        (
+            "odd-sized attr before, not padded",
+            "010100152112a442a0a1a2a3a4a5a6a7a8a9aaab8022000561626364650020000800011234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "",
+        ),
+        (
+            "unknown attrs around",
+            "0101001c2112a442a0a1a2a3a4a5a6a7a8a9aaab00080004010203040020000800011234e721c00f8028000400000000",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
+        (
+            "v4 attr with extra bytes",
+            "010100102112a442a0a1a2a3a4a5a6a7a8a9aaab0020000a00010001e721c00f7a7a0000",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
         ("size 7", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000700010001e721c000", "a0a1a2a3a4a5a6a7a8a9aaab", ""),
-        ("zero-size attr then addr", "010100102112a442a0a1a2a3a4a5a6a7a8a9aaab002000000001000800011234c0000201", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.1"),
-        ("trailing bytes after message", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f6a756e6b", "a0a1a2a3a4a5a6a7a8a9aaab", "198.51.100.77"),
-        ("mapped then bad xor: mapped used", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002010020000800091234e721c00f", "a0a1a2a3a4a5a6a7a8a9aaab", "192.0.2.1"),
-        ("xor v6 all zero tid", "010100182112a44200000000000000000000000000200014000212340113a9fa000000000000000000000002", "000000000000000000000000", "2001:db8::2"),
+        (
+            "zero-size attr then addr",
+            "010100102112a442a0a1a2a3a4a5a6a7a8a9aaab002000000001000800011234c0000201",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "192.0.2.1",
+        ),
+        (
+            "trailing bytes after message",
+            "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f6a756e6b",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "198.51.100.77",
+        ),
+        (
+            "mapped then bad xor: mapped used",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0001000800011234c00002010020000800091234e721c00f",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "192.0.2.1",
+        ),
+        (
+            "xor v6 all zero tid",
+            "010100182112a44200000000000000000000000000200014000212340113a9fa000000000000000000000002",
+            "000000000000000000000000",
+            "2001:db8::2",
+        ),
         ("tid shorter than 12", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234e721c00f", "a0a1a2a3a4a5a6a7a8a9aa", ""),
         ("0.0.0.0", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab000100080001123400000000", "a0a1a2a3a4a5a6a7a8a9aaab", "0.0.0.0"),
-        ("255.255.255.255", "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234deed5bbd", "a0a1a2a3a4a5a6a7a8a9aaab", "255.255.255.255"),
-        ("v6 zero run rules", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212340113a442a0a1a2a2a4a5a6a7a8a9aaaa", "a0a1a2a3a4a5a6a7a8a9aaab", "2001:0:0:1::1"),
-        ("v6 single zero group", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab000100140002123400010000000200000003000000040000", "a0a1a2a3a4a5a6a7a8a9aaab", "1:0:2:0:3:0:4:0"),
-        ("v6 loopback", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212342112a442a0a1a2a3a4a5a6a7a8a9aaaa", "a0a1a2a3a4a5a6a7a8a9aaab", "::1"),
-        ("v4-mapped v6", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212342112a442a0a1a2a3a4a5595868a9a8ac", "a0a1a2a3a4a5a6a7a8a9aaab", "::ffff:192.0.2.7"),
+        (
+            "255.255.255.255",
+            "0101000c2112a442a0a1a2a3a4a5a6a7a8a9aaab0020000800011234deed5bbd",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "255.255.255.255",
+        ),
+        (
+            "v6 zero run rules",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212340113a442a0a1a2a2a4a5a6a7a8a9aaaa",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "2001:0:0:1::1",
+        ),
+        (
+            "v6 single zero group",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab000100140002123400010000000200000003000000040000",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "1:0:2:0:3:0:4:0",
+        ),
+        (
+            "v6 loopback",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212342112a442a0a1a2a3a4a5a6a7a8a9aaaa",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "::1",
+        ),
+        (
+            "v4-mapped v6",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212342112a442a0a1a2a3a4a5595868a9a8ac",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "::ffff:192.0.2.7",
+        ),
     ];
     // 这两条的写法是 macOS 的 inet_ntop 的（别的 C 库不这么写）
     #[cfg(target_os = "macos")]
     const VECTORS_MACOS: &[(&str, &str, &str, &str)] = &[
-        ("v4-compatible v6 (inet_ntop of this C library)", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212342112a442a0a1a2a3a4a5a6a7a9aba9af", "a0a1a2a3a4a5a6a7a8a9aaab", "::1.2.3.4"),
-        ("::ffff:1", "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0001001400021234000000000000000000000000ffff0001", "a0a1a2a3a4a5a6a7a8a9aaab", "::255.255.0.1"),
+        (
+            "v4-compatible v6 (inet_ntop of this C library)",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab00200014000212342112a442a0a1a2a3a4a5a6a7a9aba9af",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "::1.2.3.4",
+        ),
+        (
+            "::ffff:1",
+            "010100182112a442a0a1a2a3a4a5a6a7a8a9aaab0001001400021234000000000000000000000000ffff0001",
+            "a0a1a2a3a4a5a6a7a8a9aaab",
+            "::255.255.0.1",
+        ),
     ];
 
     fn check(vectors: &[(&str, &str, &str, &str)]) {

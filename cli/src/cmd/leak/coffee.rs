@@ -181,8 +181,8 @@ pub fn coffee_parse(min_trust: &str, trace: &str, risk: &str) -> R<Dict> {
         r.set("note", format!("出口在{}：{} 不可用地区，会被严格风控", region, t().region_name));
     } else if let Some(s) = &score {
         // 走到这里才看 min_trust：受限地区、没有评分时写错了也不报
-        let min =
-            py_int(min_trust).ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", repr_str(min_trust))))?;
+        let min = py_int(min_trust)
+            .ok_or_else(|| Fail::Value(format!("invalid literal for int() with base 10: {}", repr_str(min_trust))))?;
         if cmp_score(s, &min) == Some(Ordering::Less) {
             r.set("rc", 1);
             r.set("note", format!("纯净度低于设定的 {min_trust}"));
@@ -227,7 +227,11 @@ mod tests {
             r#"{"rc": 3, "ip": null, "country": null, "org": null, "trust": null, "trust_label": null, "tags": [], "restricted_region": null, "line": "拿不到 claude.ai 看到的出口 IP（端口或节点不通）", "note": ""}"#
         );
         assert_eq!(
-            parse("50", TRACE, r#"{"isResidential": true, "is_vpn": true, "asOrganization": "Example Networks", "countryCode": "us", "trust_score": 97}"#),
+            parse(
+                "50",
+                TRACE,
+                r#"{"isResidential": true, "is_vpn": true, "asOrganization": "Example Networks", "countryCode": "us", "trust_score": 97}"#
+            ),
             r#"{"rc": 0, "ip": "203.0.113.1", "country": "US", "org": "Example Networks", "trust": 97, "trust_label": "极度纯净", "tags": ["住宅IP", "VPN"], "restricted_region": null, "line": "203.0.113.1 · US · Example Networks · 纯净度 97（极度纯净） · 住宅IP · VPN", "note": ""}"#
         );
         assert_eq!(
@@ -267,10 +271,16 @@ mod tests {
         assert!(lt(V::Bool(true), "2") && !lt(V::Bool(true), "1") && lt(V::Bool(false), "1"));
         assert!(lt(V::Int(-5), "-4") && !lt(V::Int(-4), "-4") && lt(V::Float(-4.5), "-4") && !lt(V::Float(-3.5), "-4"));
         assert!(!lt(V::Float(-0.0), "0") && lt(V::Float(-0.1), "0"));
-        assert!(!lt(V::Float(f64::NAN), "50") && !lt(V::Float(f64::INFINITY), "50") && lt(V::Float(f64::NEG_INFINITY), "-99999999999999999999"));
+        assert!(
+            !lt(V::Float(f64::NAN), "50")
+                && !lt(V::Float(f64::INFINITY), "50")
+                && lt(V::Float(f64::NEG_INFINITY), "-99999999999999999999")
+        );
         // 放不进 i64 的也照比
         assert!(lt(V::Int(i64::MAX), "9223372036854775808") && !lt(V::Big("9223372036854775808".into()), "9223372036854775808"));
-        assert!(lt(V::Big("-9223372036854775809".into()), "-9223372036854775808") && !lt(V::Big("12345678901234567890".into()), "50"));
+        assert!(
+            lt(V::Big("-9223372036854775809".into()), "-9223372036854775808") && !lt(V::Big("12345678901234567890".into()), "50")
+        );
         assert!(lt(V::Float(1e30), "1000000000000000019884624838657") && !lt(V::Float(1e30), "1000000000000000019884624838656"));
         assert!(score_ge(&V::Float(95.0), 95) && !score_ge(&V::Float(94.99), 95) && !score_ge(&V::Float(f64::NAN), 0));
         assert!(score_ge(&V::Big("12345678901234567890".into()), 95) && !score_ge(&V::Big("-12345678901234567890".into()), 25));

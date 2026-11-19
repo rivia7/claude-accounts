@@ -1,6 +1,7 @@
 // 由 cli/tools/gen_clients_tables.py 生成，不要手改。Unicode 16.0.0（CPython 3.14 的 str.casefold）。
 
 /// `c.casefold()` 和 c 不一样的字符：(字符, 变成什么)，按字符排好（1557 项）
+#[rustfmt::skip]
 pub const CASEFOLD: &[(u32, &str)] = &[
     (0x41, "\u{61}"), (0x42, "\u{62}"), (0x43, "\u{63}"), (0x44, "\u{64}"), (0x45, "\u{65}"), (0x46, "\u{66}"),
     (0x47, "\u{67}"), (0x48, "\u{68}"), (0x49, "\u{69}"), (0x4a, "\u{6a}"), (0x4b, "\u{6b}"), (0x4c, "\u{6c}"),
