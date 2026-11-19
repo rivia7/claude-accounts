@@ -140,6 +140,8 @@ _ckpt_restore() {   # 恢复某节开始时的沙箱和变量；计数（pass/fa
 _BASE=" $(compgen -v 2>/dev/null | tr '\n' ' ')"   # 分节续跑的变量基线：前置阶段已有的变量名（建快照时只存这之后各节新设的）
 _BASEF=" $(compgen -A function 2>/dev/null | tr '\n' ' ')"   # 函数基线：前置阶段已有的函数（ok/run/sect…；只存各节新定义的）
 if sect unit; then
+# 辅助程序内部的检查（原来这一节里各份 Python 测试直接调内嵌 Python 的函数查的那些：解析、规则、价格表、时段、客户端更新的每一步……）
+# 都在 cargo test 里；下面各份 Python 测试把辅助程序当黑盒跑（tests/helper_bin.py），或者切出 cca 里的 bash 函数来测
 ok "辅助程序（cli/）自己的单元测试：cargo test" '( cd "$D/../cli" && cargo test --locked --offline ) > "$T/cargo-test.log" 2>&1'
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
@@ -152,11 +154,11 @@ ok "凭证隔离：固定钥匙串目录，屏蔽继承凭证描述符" 'python3
 ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'python3 "$D/isolation_network.py"'
 ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$D/isolation_runtime.py"'
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
-ok "客户端更新：签名、安装确认、目标漂移与中断恢复" 'python3 "$D/client_updates.py"'
+ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'python3 "$D/client_updates.py"'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端的扫描、闲置判定、经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：价格表、读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
-ok "邮箱助手：认登录邮件的规则、连 Gmail 的路（照系统代理、不经账号的出口）、只读的 IMAP（真的 TLS）、只信 Gmail 的验证结果和签过名的头、盯邮箱（最新的一封、重试、断线不漏）、打开过的不再打开" 'python3 "$D/mail_view.py" 2>/dev/null'
+ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
 
 fi
 if sect 1; then

@@ -633,8 +633,9 @@ case " $* " in *"/cca-dock.app "*)
 		[ "$previous" != -a ] || app="$a"
 		previous="$a"
 	done
-	# 跑完（等到了、整理完，或者已经有一个在等这个进程号）记一笔 DOCK-APP-DONE 进程号：用例等它，不用干等
-	( "$app/Contents/MacOS/cca-dock" "${args[@]}" </dev/null >/dev/null 2>&1; echo "DOCK-APP-DONE ${args[2]:-}" >> "$CCA_T/open.log" ) </dev/null >/dev/null 2>&1 &
+	# 跑完（等到了、整理完，或者已经有一个在等这个进程号）记一笔 DOCK-APP-DONE 进程号：用例等它，不用干等。
+	# --args 后面是 cca 的路径、进程号、App（原来中间还有一个 python3 的路径）
+	( "$app/Contents/MacOS/cca-dock" "${args[@]}" </dev/null >/dev/null 2>&1; echo "DOCK-APP-DONE ${args[1]:-}" >> "$CCA_T/open.log" ) </dev/null >/dev/null 2>&1 &
 	exit 0 ;;
 esac
 # 在后台打开界面 App（--args --core：内置代理要内核）：像 App 那样在后台运行 cca _core run（App 托管内核）；core/app_dead 时 App 起不来内核
