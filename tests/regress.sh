@@ -14,7 +14,7 @@ cd "$T" || exit 1
 # TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次 python<TAB>sleep 了几秒<TAB>说明”；
 # python 的次数靠 CCA_PYTHON 指向的一个记数的小脚本（只在 TIMING 时用，平时 cca 照常找 python3），sleep 靠 $T/bin 里的 sleep
 #（cca、假命令、经假 ssh 跑的路由器端都从 PATH 找它；后台进程的也算在内）
-PYWRAP=""
+PYWRAP="${CCA_PYWRAP:-}"   # CCA_PYWRAP：换掉 cca 用的 python3（移植 Rust 时的混合版：指到转给 cca-core 的小脚本，见 cli/mixed.sh）
 if [ -n "${TIMING:-}" ]; then
 	: > "$TIMING"; : > "$T/py.count"; TIMING_PY=0
 	PYWRAP="$T/pycount"

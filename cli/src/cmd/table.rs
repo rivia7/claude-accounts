@@ -1,7 +1,7 @@
 //! 账号表和 config.json 上的那些小命令：init、keys、resolve、validate、get / set、ports、digest、router-env……
 //! 以及映射的几个查询。对应 PY_SRC「命令」一节开头和 `cmd_get` 那一段。
 
-use super::{arg, arity};
+use super::{arg, arity, Cmd};
 use crate::core::base::*;
 use crate::core::ctx::*;
 use crate::core::model::*;
@@ -380,3 +380,30 @@ pub fn cmd_policy_forget(args: &[String]) -> R<()> {
     }
     Ok(())
 }
+
+/// 这个模块移植好的子命令
+pub const CMDS: &[Cmd] = &[
+    Cmd::all("init", cmd_init),
+    Cmd::all("router-env", cmd_router_env),
+    Cmd::all("router-set", cmd_router_set),
+    Cmd::all("keys", cmd_keys),
+    Cmd::all("resolve", cmd_resolve),
+    Cmd::all("validate", cmd_validate),
+    Cmd::claude_only("email", cmd_email),
+    Cmd::all("name", cmd_name),
+    Cmd::all("get", cmd_get),
+    Cmd::all("set", cmd_set),
+    Cmd::all("nodes-import", cmd_nodes_import),
+    Cmd::all("restricted", cmd_restricted),
+    Cmd::all("ports", cmd_ports),
+    Cmd::all("digest", cmd_digest),
+    Cmd::all("policy-node", cmd_policy_node),
+    Cmd::all("policy-summary", cmd_policy_summary),
+    Cmd::all("policy-rows", cmd_policy_rows),
+    Cmd::all("policy-repo", cmd_policy_repo),
+    Cmd::all("policy-ask", cmd_policy_ask),
+    Cmd::all("policy-decline", cmd_policy_decline),
+    Cmd::all("policy-set", cmd_policy_set),
+    Cmd::all("policy-have", cmd_policy_have),
+    Cmd::all("policy-forget", cmd_policy_forget),
+];

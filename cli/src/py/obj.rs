@@ -188,7 +188,7 @@ impl Dict {
 
     /// `d.get(k) or 别的`里的那个判断：有这个键、值算真
     pub fn truthy(&self, k: &str) -> bool {
-        self.get(k).map_or(false, |v| v.truthy())
+        self.get(k).is_some_and(|v| v.truthy())
     }
 }
 
@@ -422,7 +422,7 @@ impl V {
                 if a.same(b) {
                     return true;
                 }
-                a.len() == b.len() && a.items().iter().all(|(k, v)| b.get(k).map_or(false, |w| v.py_eq(&w)))
+                a.len() == b.len() && a.items().iter().all(|(k, v)| b.get(k).is_some_and(|w| v.py_eq(&w)))
             }
             _ => match (self.num_key(), o.num_key()) {
                 (Some(Num::I(a)), Some(Num::I(b))) => a == b,

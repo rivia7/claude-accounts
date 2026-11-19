@@ -210,7 +210,7 @@ pub fn to_float(s: &str) -> Option<f64> {
     let mut t = String::with_capacity(s.len());
     for (i, &c) in b.iter().enumerate() {
         if c == b'_' {
-            let ok = i > 0 && b[i - 1].is_ascii_digit() && b.get(i + 1).map_or(false, |x| x.is_ascii_digit());
+            let ok = i > 0 && b[i - 1].is_ascii_digit() && b.get(i + 1).is_some_and(|x| x.is_ascii_digit());
             if !ok {
                 return None;
             }

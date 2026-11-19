@@ -1,7 +1,28 @@
-//! 各个子命令，按原来 PY_SRC 里的分节一节一个模块；`TABLE` 是原来的 `CMDS`（名字和先后都照它）。
+//! 各个子命令，按原来 PY_SRC 里的分节一节一个模块。
+//!
+//! `NAMES` 是原来的 `CMDS` 里的全部名字（先后照它）；每个模块自己有一张 `CMDS`，列着它移植好的子命令。
+//! 移植一个子命令：在它所属的模块里写 `pub fn cmd_xxx(args: &[String]) -> R<()>`，加进那个模块的 `CMDS`，别的文件不用动。
 
+pub mod accounts;
+pub mod clients;
+pub mod codex;
+pub mod corenet;
+pub mod cost;
+pub mod dock;
+pub mod gui;
+pub mod keyshare;
+pub mod launchers;
+pub mod leak;
+pub mod link;
+pub mod login;
+pub mod mail;
 pub mod presence;
+pub mod router;
+pub mod secrets;
+pub mod session;
+pub mod settings;
 pub mod table;
+pub mod usage;
 
 use crate::py::{Fail, R};
 
@@ -9,29 +30,60 @@ pub type Run = fn(&[String]) -> R<()>;
 
 pub struct Cmd {
     pub name: &'static str,
-    /// 还没移植的是 None
-    pub run: Option<Run>,
+    pub run: Run,
     /// 对哪几个工具移植好了（开发时的混合版按它决定要不要交给 Python）
     pub tools: &'static [&'static str],
 }
 
-const ALL: &[&str] = &["claude", "codex", "agy"];
-const CLAUDE: &[&str] = &["claude"];
+impl Cmd {
+    /// 三种工具都移植好了
+    pub const fn all(name: &'static str, run: Run) -> Cmd {
+        Cmd { name, run, tools: &["claude", "codex", "agy"] }
+    }
 
-const fn done(name: &'static str, run: Run) -> Cmd {
-    Cmd { name, run: Some(run), tools: ALL }
+    /// 先只移植了 Claude 的（别的工具在混合版里照旧交给 Python）
+    pub const fn claude_only(name: &'static str, run: Run) -> Cmd {
+        Cmd { name, run, tools: &["claude"] }
+    }
+
+    /// 只移植了这几个工具的
+    pub const fn only(name: &'static str, run: Run, tools: &'static [&'static str]) -> Cmd {
+        Cmd { name, run, tools }
+    }
 }
 
-const fn only(name: &'static str, run: Run, tools: &'static [&'static str]) -> Cmd {
-    Cmd { name, run: Some(run), tools }
-}
+/// 各模块的 CMDS
+const MODULES: &[&[Cmd]] = &[
+    table::CMDS,
+    accounts::CMDS,
+    router::CMDS,
+    link::CMDS,
+    secrets::CMDS,
+    login::CMDS,
+    mail::CMDS,
+    corenet::CMDS,
+    launchers::CMDS,
+    settings::CMDS,
+    leak::CMDS,
+    usage::CMDS,
+    codex::CMDS,
+    gui::CMDS,
+    session::CMDS,
+    presence::CMDS,
+    keyshare::CMDS,
+    cost::CMDS,
+    dock::CMDS,
+    clients::CMDS,
+];
 
-const fn todo(name: &'static str) -> Cmd {
-    Cmd { name, run: None, tools: &[] }
-}
-
+/// 移植好的子命令
 pub fn find(name: &str) -> Option<&'static Cmd> {
-    TABLE.iter().find(|c| c.name == name)
+    MODULES.iter().flat_map(|m| m.iter()).find(|c| c.name == name)
+}
+
+/// 原来有这个子命令（移植了没有另说）
+pub fn known(name: &str) -> bool {
+    NAMES.contains(&name)
 }
 
 /// 参数个数不对：Python 里是没人接的 TypeError（打印调用栈，退出码 1）
@@ -47,156 +99,27 @@ pub fn arg<'a>(args: &'a [String], i: usize, default: &'a str) -> &'a str {
     args.get(i).map_or(default, |s| s.as_str())
 }
 
-pub const TABLE: &[Cmd] = &[
-    done("init", table::cmd_init),
-    todo("env"),
-    done("router-env", table::cmd_router_env),
-    done("router-set", table::cmd_router_set),
-    done("keys", table::cmd_keys),
-    done("resolve", table::cmd_resolve),
-    done("validate", table::cmd_validate),
-    only("email", table::cmd_email, CLAUDE),
-    todo("check"),
-    todo("add"),
-    todo("rm"),
-    todo("rename"),
-    todo("reorder"),
-    todo("set-last"),
-    todo("session-open"),
-    done("name", table::cmd_name),
-    todo("login-url"),
-    todo("private-profile"),
-    todo("runtime-record"),
-    todo("browser-profile"),
-    done("get", table::cmd_get),
-    done("set", table::cmd_set),
-    todo("nodes-allowed"),
-    todo("set-nodes"),
-    done("nodes-import", table::cmd_nodes_import),
-    done("restricted", table::cmd_restricted),
-    todo("nodes-follow"),
-    todo("nodes-rename"),
-    todo("accounts-json"),
-    todo("router-merge"),
-    todo("router-evict"),
-    todo("slot-name"),
-    done("ports", table::cmd_ports),
-    todo("select-lines"),
-    done("digest", table::cmd_digest),
-    todo("sync-state"),
-    todo("keychain"),
-    todo("settings-check"),
-    todo("launch-check"),
-    todo("settings-explain"),
-    todo("settings-fix"),
-    todo("coffee"),
-    todo("rows"),
-    todo("node-rows"),
-    todo("node-default"),
-    todo("link"),
-    todo("sync"),
-    todo("device"),
-    todo("launchers"),
-    todo("local-env"),
-    todo("local-set"),
-    todo("udp-env"),
-    todo("udp-node"),
-    todo("udp-build"),
-    todo("udp-probe"),
-    todo("local-node"),
-    todo("core-config"),
-    todo("core-nodes-save"),
-    todo("core-missing"),
-    todo("core-summary"),
-    todo("node-check"),
-    todo("node-testconfig"),
-    todo("node-save"),
-    todo("node-ls"),
-    todo("node-rm"),
-    todo("core-stale"),
-    todo("core-keep"),
-    todo("install-env"),
-    todo("install-node"),
-    todo("file-replace"),
-    todo("slot-rows"),
-    todo("add-api"),
-    todo("api-key-out"),
-    todo("secret-check"),
-    todo("secret-set"),
-    todo("secret-del"),
-    todo("secret-status"),
-    todo("secrets-missing"),
-    todo("secrets-forget"),
-    todo("key-show"),
-    todo("key-forget"),
-    todo("key-share"),
-    todo("key-sync"),
-    todo("usage-query"),
-    todo("usage-render"),
-    todo("login-plan-forget"),
-    todo("reset-consume"),
-    todo("reset-plan"),
-    todo("reset-done"),
-    todo("tool-env"),
-    todo("login-flow"),
-    todo("login-check"),
-    todo("login-forward"),
-    todo("login-catch"),
-    todo("codex-fallback-off"),
-    todo("agy-login"),
-    todo("agy-probe"),
-    todo("node-fp"),
-    todo("login-page-acct"),
-    todo("update-check"),
-    todo("client-updates"),
-    todo("policy-check"),
-    done("policy-node", table::cmd_policy_node),
-    done("policy-summary", table::cmd_policy_summary),
-    todo("nodes-preselect"),
-    todo("nodes-lost"),
-    todo("edit-form"),
-    todo("edit-apply"),
-    todo("policy-request"),
-    todo("policy-lock"),
-    done("policy-rows", table::cmd_policy_rows),
-    done("policy-repo", table::cmd_policy_repo),
-    done("policy-ask", table::cmd_policy_ask),
-    done("policy-decline", table::cmd_policy_decline),
-    done("policy-set", table::cmd_policy_set),
-    done("policy-have", table::cmd_policy_have),
-    done("policy-forget", table::cmd_policy_forget),
-    todo("fill-check"),
-    todo("fill-summary"),
-    todo("nodes-fill"),
-    todo("leak-probe"),
-    todo("leak-verdict"),
-    todo("gui-state"),
-    todo("gui-live"),
-    todo("onboard-done"),
-    todo("health-save"),
-    todo("health-note"),
-    todo("presence-agent"),
-    todo("presence-wake"),
-    todo("presence-stop"),
-    todo("presence-note"),
-    todo("presence-view"),
-    todo("dock-tidy"),
-    todo("cost-worker"),
-    todo("cost-sync"),
-    todo("cost-stop"),
-    todo("prompt-emit"),
-    todo("check-render"),
-    todo("mail-setup"),
-    todo("mail-status"),
-    todo("mail-ready"),
-    todo("mail-forget"),
-    todo("mail-trust-forwarder"),
-    todo("mail-test"),
-    todo("mail-open"),
-    todo("mail-watch"),
-    todo("mail-link-check"),
-    todo("mail-get-user"),
-    todo("gui-mail-list"),
+/// 原来的 `CMDS` 里的名字，先后照它（主干增删子命令时跟着改）
+pub const NAMES: &[&str] = &[
+    "init", "env", "router-env", "router-set", "keys", "resolve", "validate", "email", "check", "add", "rm", "rename",
+    "reorder", "set-last", "session-open", "name", "login-url", "private-profile", "runtime-record", "browser-profile",
+    "get", "set", "nodes-allowed", "set-nodes", "nodes-import", "restricted", "nodes-follow", "nodes-rename",
+    "accounts-json", "router-merge", "router-evict", "slot-name", "ports", "select-lines", "digest", "sync-state",
+    "keychain", "settings-check", "launch-check", "settings-explain", "settings-fix", "coffee", "rows", "node-rows",
+    "node-default", "link", "sync", "device", "launchers", "local-env", "local-set", "udp-env", "udp-node", "udp-build",
+    "udp-probe", "local-node", "core-config", "core-nodes-save", "core-missing", "core-summary", "node-check",
+    "node-testconfig", "node-save", "node-ls", "node-rm", "core-stale", "core-keep", "install-env", "install-node",
+    "file-replace", "slot-rows", "add-api", "api-key-out", "secret-check", "secret-set", "secret-del", "secret-status",
+    "secrets-missing", "secrets-forget", "key-show", "key-forget", "key-share", "key-sync", "usage-query", "usage-render",
+    "login-plan-forget", "reset-consume", "reset-plan", "reset-done", "tool-env", "login-flow", "login-check",
+    "login-forward", "login-catch", "codex-fallback-off", "agy-login", "agy-probe", "node-fp", "login-page-acct",
+    "update-check", "client-updates", "policy-check", "policy-node", "policy-summary", "nodes-preselect", "nodes-lost",
+    "edit-form", "edit-apply", "policy-request", "policy-lock", "policy-rows", "policy-repo", "policy-ask",
+    "policy-decline", "policy-set", "policy-have", "policy-forget", "fill-check", "fill-summary", "nodes-fill",
+    "leak-probe", "leak-verdict", "gui-state", "gui-live", "onboard-done", "health-save", "health-note", "presence-agent",
+    "presence-wake", "presence-stop", "presence-note", "presence-view", "dock-tidy", "cost-worker", "cost-sync",
+    "cost-stop", "prompt-emit", "check-render", "mail-setup", "mail-status", "mail-ready", "mail-forget",
+    "mail-trust-forwarder", "mail-test", "mail-open", "mail-watch", "mail-link-check", "mail-get-user", "gui-mail-list",
 ];
 
 #[cfg(test)]
@@ -204,13 +127,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn table_is_the_original_cmds() {
-        // 名字和先后照 PY_SRC 的 CMDS（切换前随主干增删子命令一起改）
-        assert_eq!(TABLE.len(), 149);
-        let mut names: Vec<&str> = TABLE.iter().map(|c| c.name).collect();
+    fn names_are_the_original_cmds() {
+        assert_eq!(NAMES.len(), 149);
+        let mut names = NAMES.to_vec();
         names.sort();
         names.dedup();
         assert_eq!(names.len(), 149);
-        assert_eq!((TABLE[0].name, TABLE[148].name), ("init", "gui-mail-list"));
+        assert_eq!((NAMES[0], NAMES[148]), ("init", "gui-mail-list"));
+    }
+
+    #[test]
+    fn every_ported_command_is_known_and_listed_once() {
+        let mut seen = Vec::new();
+        for c in MODULES.iter().flat_map(|m| m.iter()) {
+            assert!(known(c.name), "{} 不在 NAMES 里", c.name);
+            assert!(!seen.contains(&c.name), "{} 登记了两次", c.name);
+            assert!(!c.tools.is_empty());
+            seen.push(c.name);
+        }
     }
 }

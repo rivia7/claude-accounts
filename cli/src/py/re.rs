@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(Re::new(r"(\w)=").findall("a=1 b=2"), ["a", "b"]);
         assert_eq!(Re::new(r",\s*").split("a, b,c"), [Some("a"), Some("b"), Some("c")]);
         assert_eq!(Re::new(r"(,)").split("a,b"), [Some("a"), Some(","), Some("b")]);
-        assert_eq!(re!(r"^\d+$").matches("123"), true);
+        assert!(re!(r"^\d+$").matches("123"));
     }
 
     #[test]

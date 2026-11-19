@@ -19,4 +19,5 @@ pub mod uni;
 pub mod url;
 
 pub use fail::{die, exit, Fail, R};
+#[allow(unused_imports)]
 pub use obj::{Dict, List, V};

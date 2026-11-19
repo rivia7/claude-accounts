@@ -21,7 +21,7 @@ pub fn to_hex(bytes: &[u8]) -> String {
 /// `bytes.fromhex(s)`：不是成对的十六进制数字是 ValueError（这里是 None）；中间的空白不认
 pub fn from_hex(s: &str) -> Option<Vec<u8>> {
     let b = s.as_bytes();
-    if b.len() % 2 != 0 {
+    if !b.len().is_multiple_of(2) {
         return None;
     }
     b.chunks(2).map(|p| Some(((p[0] as char).to_digit(16)? * 16 + (p[1] as char).to_digit(16)?) as u8)).collect()
