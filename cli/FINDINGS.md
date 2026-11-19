@@ -27,6 +27,15 @@
   （3.9 是 992 层起，3.12 以后一万多层）。现在读配置的地方当作读不了，读会话记录的地方跳过这一行。
 - **信号只在会阻塞的地方起作用**（上报进程被 SIGTERM 停掉）：原来处理函数里抛的异常能从任何两步之间冒出来，现在等到下一次
   睡眠、等子进程、等 kqueue 时才看（正在跑的子进程照样马上杀掉）。上报进程几乎一直睡着，实际没有差别。
+- **Codex 登录（`login-flow`）时 Ctrl-C 正好落在探测 codex 参数的那一两秒里**（`codex_probe`，只有换了 codex 版本后的第一次才探测）：
+  原来当场取消，app-server 还没起；现在等探测完、起了 app-server 才看到这次取消，随即杀掉它。说的话（「已取消登录」）和退出码一样。
+- **查用量、登录的超时写成 `nan`**：原来是空转着一直等（见下面 usage / codex 一节），现在也一直等，但不空转。
+- **没有 `#!` 开头的脚本当命令起**（macOS）：原来 Python 的 subprocess 起不来（`[Errno 8] Exec format error`）；Rust 的标准库起命令走
+  execvp，macOS 的 execvp 遇到内核不认的文件会改交给 `/bin/sh` 当脚本跑。凡是起外部命令的地方都一样（`py::proc::Cmd`，和 usage / codex
+  里自己起子进程的 `Piped`）：`claude`、`codex` 是一个没写 `#!` 的包装脚本时，原来 `cca usage` 说「查询失败：[Errno 8] Exec format
+  error…」，现在这个脚本跑得起来（bash 启动账号本来就跑得了这种脚本）。不是有意改的，是 C 库的做法；要照原样得在 `py::proc` 里起命令
+  之前先看文件头。macOS 上两边实跑核对过，没放进对拍（结果不一样）。Linux 的发布版用 musl，它的 execvp 没有改交给 sh 这一步
+  （读它的源码），应该和原来一样报错，没在 Linux 上实跑。
 
 ## PY_SRC
 
@@ -230,3 +239,49 @@
 - **`_gui state` 里接 `SystemExit` 的那一句是死代码。** `cmd_gui_state` 调 `T.settings_problems()` 时写着
   `except SystemExit:   # 共享的设置文件格式不对（load_json 报错退出）`，现在三种工具的 `settings_problems` 都不经 `load_json`、不会退出，
   `'%s:unreadable' % T.settings_disp` 这个结果出不来了。Rust 这边 `Tool::settings_problems` 直接返回列表。（读代码看出来的）
+
+## usage / codex
+
+查用量、用量表格和 JSON、每周用量、重置额度、Codex 的 app-server 和登录（`cmd_usage_query` 到 `cmd_login_flow`）。都照原样移植了，
+这一段里没有死代码。带着用例名字的是对拍时实跑出来的（`pydiff/cases/usage.py`、`cases/codex.py`，括号里是用例名里的一段）。
+
+- **一个账号的用量里有一个离谱的数，整张表都出不来。** `cca usage` 的表格是全算完了才打印的，中途一个没人接的异常就是调用栈、
+  退出码 1，别的账号也跟着看不到（`--json` 多半没事）。会这样的数：
+  - 重置时间是个数字，而且按秒算过了公元 9999 年：本周那一列算「今天 / 明天 / 周几」时 `date.fromtimestamp` 装不下（ValueError）。
+    `parse_ts` 把大于 1e11 的数当毫秒，所以要到微秒那么大（`1795075200000000`）才会这样——接口哪天把单位从秒换成微秒、纳秒就是它
+    （window-resets-microseconds、window-resets-year-10000-as-ms）；
+  - ISO 写法的月份是 00、13：`calendar.timegm` 报 ValueError，这个连 `--json`、`reset-plan`、菜单里的那一格（`usage_cell`）也过不去
+    （window-resets-month-13、reset-plan/bad-date）；
+  - 百分比、重置时间、还能重置几次是 `NaN` / `Infinity`（Python 的 json 认这种写法）：`round()`、`int()`、`time.localtime()` 报错
+    （window-…-nan、notes-…-percent-nan、codex-reset-count-nan）。
+  这些数进了缓存（usage.json、Claude Code 自己的 cachedUsageUtilization）以后，每次 `cca usage` 都出不来，直到查到新的把它盖掉。
+- **重置时间写成秒、又大于 1e11（公元 5138 年以后）时被当成毫秒**，落在 1970 年代，显示「已重置」
+  （window-resets-seconds-past-year-5138-read-as-ms）。只是 `parse_ts` 按大小猜单位的边界，现在碰不到。
+- **账号目录里的 `.claude.json` 读不了时，`cca usage` 整个退出。** `T.plan` → `acct_json` → `load_json` 报「JSON 格式错误」退出：
+  一个账号的文件写坏了（或者正好读在 Claude Code 写到一半的时候），所有账号的用量都不显示（cache-claude-json-broken）。
+- **claude 关了 stdout、进程却没退出时，说的是「没有回应就退出了（退出码 None）」。** 等它 3 秒没等到，`p.returncode` 还是 None，
+  原样写进了那句话（usage-query/claude-closes-stdout-but-lingers）。
+- **stderr 的最后 800 个字节是按字节截的**（`err.read()[-800:]`），截在一个汉字中间时说明的开头是 `��`
+  （usage-query/claude-stderr-tail-cuts-a-character；Codex 那边 `Rpc.tail` 一样）。
+- **超时写成 `nan` 时空转着一直等。** `float('nan')` 是合法的；`Queue.get(timeout=nan)` 里「还剩多久」和 0 比不出大小，
+  `Condition.wait(nan)` 又当成不等，于是占满一个核、没有回答就永远不超时（`CCA_USAGE_TIMEOUT=nan cca usage`）。写成 `inf`、大于
+  9223372036 秒是没人接的 OverflowError，这时已经起来的 claude / app-server 没人收尾，等它自己发现 stdin 断了才退出
+  （usage-query/claude-nan-timeout、…-inf-timeout、usage-query/codex-inf-timeout）。
+- **app-server 的出错说明正好是 `timeout` / `exit` 时，被当成 cca 自己等超时了 / 它退出了。** `Rpc.failure` 拿 `err in ('timeout', 'exit')`
+  认是不是自己这边的两种情况：服务器回 `{"error": {"message": "timeout"}}` 时原因成了 `timeout`，说明换成了 stderr 的最后一段
+  （可能是空的）（usage-query/codex-error-error-says-timeout、…-says-exit）。
+- **`reset-consume`：codex 回的 `outcome` 是列表、对象时是调用栈，app-server 没人收尾。** `RESET_OUTCOMES.get(列表)` 是 TypeError，
+  `codex_rpc_once` 后面的 `r.close()` 走不到（reset-consume/outcome-list）。`usage-render`、`reset-plan`、`reset-done` 拿结果文件里的
+  `why`、`outcome` 查表时同理（result-json-why-list、reset-done/outcome-list）；这些文件是 cca 自己写的，正常不会是列表。
+- **`login-flow`：登录完成的通知里 `params` 不是对象时是调用栈**（`x.get` / `p.get` 的 AttributeError；login-flow/params-not-an-object）。
+  登录网址不是文字时同理（login-flow/url-not-text）。这两种 app-server 都会先被杀掉（在 `finally` 里）。
+- **`planDisplayName` 结尾带一个换行也算合格的名字。** `PLAN_NAME_RE` 用 `match`，`$` 在结尾的换行之前也匹配（和 secrets 一节的
+  `SECRET_RE` 是同一种写法）：表格里那个账号的一行从套餐那一列断成两行，JSON 里的 `plan` 也带着换行
+  （plan-display-name-trailing-newline）。
+- **结果文件 `N.skip` 不是 UTF-8 时是调用栈。** `usage_result` 读它时只接 OSError；`N.json` 的同样情况是当作没拿到结果
+  （result-skip-not-utf8）。skip 文件是 bash 写的，里面可能带着登录的邮箱、出口检测的说明。
+- **没给账号时表格那一支是调用栈**（`max()` 的参数是空的；no-keys-table），`--json` 没事。bash 不会不带账号调 `usage-render`。
+- **同一个账号在一次 `usage-render` 里出现两次、两次都查到了**（`cca usage 账号 账号`）：第二次记不记进每周用量，看两次存盘是不是
+  落在同一毫秒里（`weeks_add` 拿「不比上次新」认同一次查询）。不碍事，只是这一种情况结果不固定，对拍里避开了。
+- **缓存是很久很久以前的、重置时间在很久很久以后时，表格里是几十上百位的数。** `span`、`ago` 对多大的秒数都照算
+  （「缓存（11574074074074074625547 天前）」、`fetchedAtMs` 写成 `-1e30`；cache-ours-fetched-at-hugely-negative）。只是说明没有上限的检查。

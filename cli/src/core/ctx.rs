@@ -342,9 +342,12 @@ impl Tool {
     /// `T.email(key)`：登录的邮箱（只读账号目录里的状态，不联网）
     pub fn email(&self, key: &str) -> R<String> {
         use super::tool::Kind;
+        use crate::cmd::codex::{agy_claims, codex_claims};
+        let or_empty = |v: Option<V>| v.filter(|v| v.truthy()).map_or(String::new(), |v| v.py_str());
         match self.kind {
-            Kind::Claude => Ok(oauth_of(key)?.get("emailAddress").filter(|v| v.truthy()).map_or(String::new(), |v| v.py_str())),
-            Kind::Codex | Kind::Agy => unimplemented!("{} 的登录身份还没移植（codex_claims / agy_claims）", self.name),
+            Kind::Claude => Ok(or_empty(oauth_of(key)?.get("emailAddress"))),
+            Kind::Codex => Ok(or_empty(codex_claims(key, None).get("email"))),
+            Kind::Agy => Ok(or_empty(agy_claims(key).get("email"))),
         }
     }
 }
