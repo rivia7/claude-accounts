@@ -27,6 +27,11 @@ pub fn from_hex(s: &str) -> Option<Vec<u8>> {
     b.chunks(2).map(|p| Some(((p[0] as char).to_digit(16)? * 16 + (p[1] as char).to_digit(16)?) as u8)).collect()
 }
 
+/// `hashlib.sha1(data).digest()`
+pub fn sha1(data: impl AsRef<[u8]>) -> [u8; 20] {
+    Sha1::digest(data.as_ref()).into()
+}
+
 /// `hashlib.sha1(data).hexdigest()`
 pub fn sha1_hex(data: impl AsRef<[u8]>) -> String {
     hex(&Sha1::digest(data.as_ref()))

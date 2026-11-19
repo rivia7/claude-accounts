@@ -401,6 +401,369 @@ fn cost_keep_old(j: &Dict, s: &CostScan) {
     }
 }
 
+// --- 去重的记录（scan.json 的 seen：{消息的摘要: 那一小时}）-------------------------------------------------------------
+// 35 天里每条回复一项，用得多的人有几十万项。原来是一个普通的字典（Python 里每项一百多字节；照搬成通用的 Dict 也是，10 万项
+// 约 30 MB）。键都是 c / x 加 16 位十六进制（摘要的前 8 个字节），值都是整点的时间戳：存成 16 个字节一项的表，从文件里
+// 直接读出来、直接写回去，不经通用的 JSON 值。先后照旧（写出来的文件和原来逐字节一样）。文件里有不是这个样子的项（手改过）
+// 时退回通用的字典，行为和原来一样。
+
+/// 一项：键是 kind（c：Claude 的回复，x：Codex 的请求）加 id 的十六进制，值是 hour × 3600
+#[derive(Clone, Copy)]
+struct SeenEntry {
+    id: u64,
+    hour: u32,
+    kind: u8,
+}
+
+/// 摘要本身就是均匀的：拿它的低 64 位当哈希
+#[derive(Default, Clone, Copy)]
+struct IdHasher(u64);
+
+impl std::hash::Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = self.0.rotate_left(8) ^ *b as u64;
+        }
+    }
+
+    fn write_u128(&mut self, n: u128) {
+        self.0 = (n as u64) ^ ((n >> 64) as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    }
+}
+
+type IdSet = std::collections::HashSet<u128, std::hash::BuildHasherDefault<IdHasher>>;
+
+#[derive(Default)]
+struct CompactSeen {
+    entries: Vec<SeenEntry>,
+    index: IdSet,
+}
+
+fn seen_id(kind: u8, id: u64) -> u128 {
+    ((kind as u128) << 64) | id as u128
+}
+
+impl CompactSeen {
+    /// `{"c0123456789abcdef":1794024000,…}` 这样的一段 JSON：每一项都是规矩的样子才读得出来（不是的由调用方退回通用的读法）
+    fn parse(text: &str) -> Option<CompactSeen> {
+        let b = text.as_bytes();
+        let ws = |mut i: usize| {
+            while matches!(b.get(i), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+                i += 1;
+            }
+            i
+        };
+        let mut seen = CompactSeen::default();
+        let mut i = ws(0);
+        if b.get(i) != Some(&b'{') {
+            return None;
+        }
+        i = ws(i + 1);
+        if b.get(i) == Some(&b'}') {
+            return (ws(i + 1) == b.len()).then_some(seen);
+        }
+        loop {
+            // "c0123456789abcdef"
+            let key = b.get(i..i + 19)?;
+            if key[0] != b'"' || key[18] != b'"' || !matches!(key[1], b'c' | b'x') {
+                return None;
+            }
+            let mut id = 0u64;
+            for h in &key[2..18] {
+                let d = match h {
+                    b'0'..=b'9' => h - b'0',
+                    b'a'..=b'f' => h - b'a' + 10,
+                    _ => return None,
+                };
+                id = (id << 4) | d as u64;
+            }
+            i = ws(i + 19);
+            if b.get(i) != Some(&b':') {
+                return None;
+            }
+            i = ws(i + 1);
+            // 整点的时间戳：不带正负号、不以 0 开头的十进制数（单独一个 0 可以）
+            let start = i;
+            let mut value = 0u64;
+            while let Some(d) = b.get(i).filter(|d| d.is_ascii_digit()) {
+                value = value.checked_mul(10)?.checked_add((d - b'0') as u64)?;
+                i += 1;
+            }
+            if i == start || (b[start] == b'0' && i - start > 1) || !value.is_multiple_of(3600) {
+                return None;
+            }
+            let hour = u32::try_from(value / 3600).ok()?;
+            if !seen.index.insert(seen_id(key[1], id)) {
+                return None; // 同一个键写了两次
+            }
+            seen.entries.push(SeenEntry { id, hour, kind: key[1] });
+            i = ws(i);
+            match b.get(i) {
+                Some(b',') => i = ws(i + 1),
+                Some(b'}') => return (ws(i + 1) == b.len()).then_some(seen),
+                _ => return None,
+            }
+        }
+    }
+}
+
+/// scan.json 的 seen
+enum Seen {
+    Compact(CompactSeen),
+    /// 文件里有不规矩的项：照原来的样子用通用的字典
+    Generic(Dict),
+}
+
+impl Seen {
+    fn new() -> Seen {
+        Seen::Compact(CompactSeen::default())
+    }
+
+    fn key_text(kind: u8, id: u64) -> String {
+        format!("{}{:016x}", kind as char, id)
+    }
+
+    /// `key in seen`
+    fn has(&self, kind: u8, id: u64) -> bool {
+        match self {
+            Seen::Compact(s) => s.index.contains(&seen_id(kind, id)),
+            Seen::Generic(d) => d.has(&Seen::key_text(kind, id)),
+        }
+    }
+
+    /// `seen[key] = hour`（key 还不在里面；hour 是整点的时间戳）
+    fn add(&mut self, kind: u8, id: u64, hour: i64) {
+        if let Seen::Compact(s) = self {
+            match u32::try_from(hour / 3600) {
+                Ok(h) if hour % 3600 == 0 && hour >= 0 => {
+                    s.index.insert(seen_id(kind, id));
+                    s.entries.push(SeenEntry { id, hour: h, kind });
+                    return;
+                }
+                // 放不进紧凑的表（不会有：小时是从 10 亿到后天之间的时间戳算的）：换成通用的
+                _ => *self = Seen::Generic(self.to_dict()),
+            }
+        }
+        if let Seen::Generic(d) = self {
+            d.set(Seen::key_text(kind, id), hour);
+        }
+    }
+
+    /// `{k: v for k, v in seen.items() if v >= lo}`
+    fn retain(&mut self, lo: f64) {
+        match self {
+            Seen::Compact(s) => {
+                let before = s.entries.len();
+                s.entries.retain(|e| (e.hour as u64 * 3600) as f64 >= lo);
+                if s.entries.len() != before {
+                    s.index = s.entries.iter().map(|e| seen_id(e.kind, e.id)).collect();
+                }
+            }
+            Seen::Generic(d) => {
+                let kept = Dict::new();
+                for (k, v) in d.items() {
+                    if v.as_num().is_some_and(|v| v >= lo) {
+                        kept.set(k, v);
+                    }
+                }
+                *d = kept;
+            }
+        }
+    }
+
+    fn to_dict(&self) -> Dict {
+        match self {
+            Seen::Compact(s) => {
+                let d = Dict::new();
+                for e in &s.entries {
+                    d.set(Seen::key_text(e.kind, e.id), e.hour as i64 * 3600);
+                }
+                d
+            }
+            Seen::Generic(d) => d.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        match self {
+            Seen::Compact(s) => s.entries.len(),
+            Seen::Generic(d) => d.len(),
+        }
+    }
+}
+
+/// scan.json 的文字拆成两段：把顶层 "seen" 的值换成 {} 的那一份，和 seen 的值原来的那一段。只按引号、括号配对着找；
+/// 找不到正好一个值是对象的 "seen"、顶层不是一个对象、键里有转义，都是 None（调用方照通用的读法读整份）
+fn split_seen(text: &str) -> Option<(String, &str)> {
+    let b = text.as_bytes();
+    let ws = |mut i: usize| {
+        while matches!(b.get(i), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            i += 1;
+        }
+        i
+    };
+    // 从开头的引号后面起，找到字符串结尾的引号后面
+    let string_end = |mut i: usize| -> Option<usize> {
+        loop {
+            match b.get(i)? {
+                b'"' => return Some(i + 1),
+                b'\\' => i += 2,
+                _ => i += 1,
+            }
+        }
+    };
+    let value_end = |i: usize| -> Option<usize> {
+        match b.get(i)? {
+            b'"' => string_end(i + 1),
+            b'{' | b'[' => {
+                let (mut depth, mut j) = (0usize, i);
+                loop {
+                    match b.get(j)? {
+                        b'"' => {
+                            j = string_end(j + 1)?;
+                            continue;
+                        }
+                        b'{' | b'[' => depth += 1,
+                        b'}' | b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(j + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+            }
+            _ => {
+                let mut j = i;
+                while !matches!(b.get(j), None | Some(b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')) {
+                    j += 1;
+                }
+                (j > i).then_some(j)
+            }
+        }
+    };
+    let mut i = ws(0);
+    if b.get(i) != Some(&b'{') {
+        return None;
+    }
+    i = ws(i + 1);
+    let mut found: Option<(usize, usize)> = None;
+    if b.get(i) != Some(&b'}') {
+        loop {
+            if b.get(i) != Some(&b'"') {
+                return None;
+            }
+            let key_end = string_end(i + 1)?;
+            let key = &b[i + 1..key_end - 1];
+            if key.contains(&b'\\') {
+                return None;
+            }
+            i = ws(key_end);
+            if b.get(i) != Some(&b':') {
+                return None;
+            }
+            i = ws(i + 1);
+            let end = value_end(i)?;
+            if key == b"seen" {
+                if found.is_some() || b[i] != b'{' {
+                    return None;
+                }
+                found = Some((i, end));
+            }
+            i = ws(end);
+            match b.get(i)? {
+                b',' => i = ws(i + 1),
+                b'}' => break,
+                _ => return None,
+            }
+        }
+    }
+    if ws(i + 1) != b.len() {
+        return None;
+    }
+    let (start, end) = found?;
+    Some((format!("{}{{}}{}", &text[..start], &text[end..]), &text[start..end]))
+}
+
+/// 读 scan.json：(内容, seen)。内容里 seen 那一项是空的占位（位置照旧），真的在第二个返回值里。
+/// 没有、读不了、不是 v 为 1 的对象：({}, None)（和 cost_json 一样）；seen 不是对象：(内容, None)
+fn scan_load() -> (Dict, Option<Seen>) {
+    let none = || (Dict::new(), None);
+    let Ok(raw) = std::fs::read(path::join(&COST_DIR, "scan.json")) else { return none() };
+    let v1 = |j: &Dict| j.get("v").is_some_and(|v| v.py_eq(&V::Int(1)));
+    if let Ok(text) = std::str::from_utf8(&raw) {
+        if let Some((rest, seen_text)) = split_seen(text) {
+            if let (Ok(V::Dict(j)), Some(seen)) = (json::loads(&rest), CompactSeen::parse(seen_text)) {
+                return if v1(&j) { (j, Some(Seen::Compact(seen))) } else { none() };
+            }
+        }
+    }
+    // 通用的读法（文件里有不规矩的地方；写坏了的也在这里认出来）
+    match json::loads_file_bytes(&raw) {
+        Ok(V::Dict(j)) if v1(&j) => {
+            let seen = j.dict("seen").map(Seen::Generic);
+            (j, seen)
+        }
+        _ => none(),
+    }
+}
+
+/// 写 scan.json：和 `cost_save("scan.json", j)` 写出来的逐字节一样，只是 seen 直接从紧凑的表写，不先拼成一个大字典
+fn scan_save(j: &Dict, seen: &Seen) -> R<()> {
+    use std::io::Write;
+    let s = match seen {
+        Seen::Generic(d) => {
+            j.set("seen", d);
+            return cost_save("scan.json", &V::Dict(j.clone()));
+        }
+        Seen::Compact(s) => s,
+    };
+    if !path::isfile(&CFG) {
+        return Err(Fail::Os(std::io::Error::other(format!("{} 不在了", *CFG))));
+    }
+    // seen 的位置上先放一个记号，写的时候在那里换成表里的内容
+    let marker = format!("cca-seen-{}", crate::py::rand::token_hex(16));
+    j.set("seen", marker.as_str());
+    let body = json::dumps(&V::Dict(j.clone()), json::Fmt::new().utf8().compact());
+    j.set("seen", Dict::new());
+    let quoted = format!("\"{marker}\"");
+    let at = body.find(&quoted).expect("刚放进去的记号");
+    let dest = path::join(&COST_DIR, "scan.json");
+    let tmp = format!("{}.cca-{}.tmp", dest, std::process::id());
+    let write = || -> R<()> {
+        let f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| at_path(e, &tmp))?;
+        let mut w = std::io::BufWriter::with_capacity(256 * 1024, f);
+        w.write_all(&body.as_bytes()[..at])?;
+        w.write_all(b"{")?;
+        for (n, e) in s.entries.iter().enumerate() {
+            if n > 0 {
+                w.write_all(b",")?;
+            }
+            write!(w, "\"{}{:016x}\":{}", e.kind as char, e.id, e.hour as u64 * 3600)?;
+        }
+        w.write_all(b"}")?;
+        w.write_all(&body.as_bytes()[at + quoted.len()..])?;
+        w.flush()?;
+        drop(w);
+        std::fs::rename(&tmp, &dest).map_err(|e| {
+            let text = format!("{} -> {}", crate::py::fs::open_error_text(&e, &tmp), crate::py::obj::repr_str(&dest));
+            Fail::Os(std::io::Error::new(e.kind(), text))
+        })
+    };
+    let done = write();
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
+}
+
 /// `type(x) is int`
 fn is_int(x: &V) -> bool {
     matches!(x, V::Int(_) | V::Big(_))
@@ -408,30 +771,35 @@ fn is_int(x: &V) -> bool {
 
 /// scan.json（读到哪、去重、小时数据）；没有、价格表或规则变了、格式不对：从头来。从头来时以前记下的身份 → 邮箱照样留着
 /// （scan.json、local.json 里的：退出登录了的账号，重算出来的用量照样认得出是谁的；restore 的备份不带 scan.json，带着 local.json）
-fn cost_load_scan() -> Dict {
-    let j = cost_json("scan.json");
+fn cost_load_scan() -> (Dict, Seen) {
+    let (j, seen) = scan_load();
     let base = cost_fresh();
-    let dicts = ["files", "seen", "owners", "h", "orphan", "um", "who"];
+    let dicts = ["files", "owners", "h", "orphan", "um", "who"];
     let shape = j.get("build").is_some_and(|b| b.as_str() == Some(COST_BUILD))
         && j.get("v").is_some_and(|v| v.isinstance_int())
         && j.get("done").is_some_and(|d| d.is_bool())
         && dicts.iter().all(|k| j.dict(k).is_some());
     let all = |k: &str, ok: &dyn Fn(&V) -> bool| j.dict(k).is_some_and(|d| d.values().iter().all(ok));
-    if shape
+    // seen 是对象、值都是整数（紧凑的表读得出来就是）
+    let seen = seen.filter(|s| match s {
+        Seen::Compact(_) => true,
+        Seen::Generic(d) => d.values().iter().all(is_int),
+    });
+    if let Some(seen) = seen.filter(|_| {
+        shape
         && all("files", &|x| x.is_dict())
-        && all("seen", &is_int)
         && all("owners", &|x| x.is_list())
         && cost_rows_ok(j.get("orphan").as_ref())
         && all("h", &|r| cost_rows_ok(Some(r)))
         && all("um", &|m| m.as_dict().is_some_and(|m| m.values().iter().all(is_int)))
-    {
+    }) {
         j.set("who", cost_who_kept(&[&j]));
-        return j;
+        return (j, seen);
     }
     let loc = cost_json("local.json");
     base.set("who", cost_who_kept(&[&loc, &j]));
     base.set("old", cost_rows_kept(&j, &loc));
-    base
+    (base, Seen::new())
 }
 
 /// 会话记录的种类：Claude 的主会话、子代理，Codex 的
@@ -446,6 +814,8 @@ enum FileKind {
 /// 不管多早；之后比 COST_SEEN 更早的回复不算（去重的记录已经清掉了：多半是改了名、复制出来的文件里读过的）
 struct CostScan {
     j: Dict,
+    /// 去重的记录（scan.json 的 seen）
+    seen: Seen,
     now: f64,
     first: bool,
     cut: f64,
@@ -472,7 +842,14 @@ fn line_doc(raw: &[u8]) -> R<Dict> {
     }
 }
 
-/// 字节串里有没有这一段
+/// `hashlib.sha1(data).hexdigest()[:16]` 那 16 位十六进制代表的数（摘要的前 8 个字节）
+fn sha1_head(data: &[u8]) -> u64 {
+    let d = crate::py::hash::sha1(data);
+    u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
+}
+
+/// 字节串里有没有这一段（`needle in raw`）。实测过换成“先找少见的字节”的找法，第一次全读的 CPU 没有变化（0.71 → 0.69 秒 /
+/// 416 MB）：时间在解析那些要算的行上，不在这里
 fn has(raw: &[u8], needle: &[u8]) -> bool {
     raw.windows(needle.len()).any(|w| w == needle)
 }
@@ -483,19 +860,19 @@ fn ident_str(u: Option<V>) -> Option<V> {
 }
 
 impl CostScan {
-    fn new(j: &Dict, now: f64) -> CostScan {
+    fn new(j: &Dict, seen: Seen, now: f64) -> CostScan {
         let first = !j.at("done").truthy();
-        CostScan { j: j.clone(), now, first, cut: now - COST_SEEN, records: 0, bytes: 0, files: 0, mains: Default::default(), oldest: Vec::new() }
+        CostScan { j: j.clone(), seen, now, first, cut: now - COST_SEEN, records: 0, bytes: 0, files: 0, mains: Default::default(), oldest: Vec::new() }
     }
 
-    fn add(&mut self, tool: &str, who: &V, ts: Option<f64>, key: &str, micro: Option<f64>, tok: [i64; 4], model: &str) {
-        let seen = self.j.dict("seen").expect("scan.json 核对过");
+    /// key 是 (c 或 x, 摘要的前 8 个字节)：原来写成一个字符加 16 位十六进制的字符串
+    fn add(&mut self, tool: &str, who: &V, ts: Option<f64>, key: (u8, u64), micro: Option<f64>, tok: [i64; 4], model: &str) {
         let Some(ts) = ts else { return };
-        if !(1e9..=self.now + 2.0 * 86400.0).contains(&ts) || (!self.first && ts < self.cut) || seen.has(key) {
+        if !(1e9..=self.now + 2.0 * 86400.0).contains(&ts) || (!self.first && ts < self.cut) || self.seen.has(key.0, key.1) {
             return;
         }
         let hour = ((ts / 3600.0).floor() * 3600.0) as i64;
-        seen.set(key, hour);
+        self.seen.add(key.0, key.1, hour);
         let ident = if who.truthy() { format!("{}:{}", tool, who.py_str()) } else { String::new() };
         let rows = if ident.is_empty() {
             self.j.dict("orphan").expect("scan.json 核对过")
@@ -640,9 +1017,10 @@ impl CostScan {
             return Ok(()); // <synthetic>：Claude Code 自己写的（出错提示之类），没有请求
         }
         let Some(ts) = cost_ts(d.get("timestamp").as_ref())? else { return Ok(()) };
+        // 'c' + sha1(…).hexdigest()[:16]
         let key = match m.get("id") {
-            Some(V::Str(mid)) => format!("c{}", &sha1_hex(format!("{}\0{}", mid, d.get("requestId").unwrap_or(V::None).py_str()))[..16]),
-            _ => format!("c{}", &sha1_hex(raw)[..16]),
+            Some(V::Str(mid)) => (b'c', sha1_head(format!("{}\0{}", mid, d.get("requestId").unwrap_or(V::None).py_str()).as_bytes())),
+            _ => (b'c', sha1_head(raw)),
         };
         let mut who = cur.get("own").unwrap_or(V::None);
         if kind == FileKind::Main {
@@ -664,7 +1042,7 @@ impl CostScan {
         }
         let model = cost_model(m.get("model").as_ref());
         let (micro, tok) = cost_claude(&model, &u);
-        self.add("claude", &who, Some(ts), &key, micro, tok, &model);
+        self.add("claude", &who, Some(ts), key, micro, tok, &model);
         Ok(())
     }
 
@@ -686,11 +1064,11 @@ impl CostScan {
             let stamp = d.get("timestamp");
             let (last, ts) = (info.dict("last_token_usage"), cost_ts(stamp.as_ref())?);
             let (Some(last), Some(ts)) = (last, ts) else { return Ok(()) };
-            let key = format!("x{}", &sha1_hex(format!("{}\0{}", stamp.unwrap_or(V::None).py_str(), tot))[..16]);
+            let key = (b'x', sha1_head(format!("{}\0{}", stamp.unwrap_or(V::None).py_str(), tot).as_bytes()));
             let model = cur.get("model").filter(|m| m.truthy()).map_or(String::new(), |m| m.py_str());
             let tier = cur.get("tier");
             let (micro, tok) = cost_codex(&model, tier.as_ref().and_then(|t| t.as_str()), &last);
-            self.add("codex", &cur.get("who").unwrap_or(V::None), Some(ts), &key, micro, tok, &model);
+            self.add("codex", &cur.get("who").unwrap_or(V::None), Some(ts), key, micro, tok, &model);
         } else if has(head, b"\"session_meta\"") {
             if cur.has("meta") {
                 return Ok(()); // 后面的 session_meta 是复制进来的历史（续接、分叉）
@@ -818,13 +1196,13 @@ fn cost_files() -> Vec<(FileKind, String, String)> {
 }
 
 /// 读新增的会话记录、并进 j；checkpoint 隔一会儿调一次（第一次全读可能要好一会儿：先存一次，被打断了下次接着读）
-fn cost_scan(j: &Dict, now: f64, checkpoint: &mut dyn FnMut() -> R<()>) -> R<CostScan> {
-    let mut s = CostScan::new(j, now);
+fn cost_scan(j: &Dict, seen: Seen, now: f64, checkpoint: &mut dyn FnMut(&Seen) -> R<()>) -> R<CostScan> {
+    let mut s = CostScan::new(j, seen, now);
     let mut live = std::collections::HashSet::new();
     for (kind, p, sid) in cost_files() {
         s.file(kind, &p, &sid)?;
         live.insert(p);
-        checkpoint()?;
+        checkpoint(&s.seen)?;
     }
     let files = j.dict("files").expect("scan.json 核对过");
     for p in files.keys() {
@@ -844,7 +1222,7 @@ fn cost_scan(j: &Dict, now: f64, checkpoint: &mut dyn FnMut() -> R<()>) -> R<Cos
 }
 
 /// scan.json 只留 COST_KEEP 的小时数据、COST_SEEN 的去重记录
-fn cost_prune(j: &Dict, now: f64) {
+fn cost_prune(j: &Dict, seen: &mut Seen, now: f64) {
     let lo = now - COST_KEEP;
     let h = j.dict("h").expect("scan.json 核对过");
     let mut tables: Vec<Dict> = h.values().iter().filter_map(|r| r.as_dict()).collect();
@@ -863,14 +1241,7 @@ fn cost_prune(j: &Dict, now: f64) {
         }
     }
     j.set("h", kept);
-    let lo_seen = now - COST_SEEN - 3600.0;
-    let seen = Dict::new();
-    for (k, v) in j.dict("seen").expect("scan.json 核对过").items() {
-        if v.as_num().is_some_and(|v| v >= lo_seen) {
-            seen.set(k, v);
-        }
-    }
-    j.set("seen", seen);
+    seen.retain(now - COST_SEEN - 3600.0);
     let um = Dict::new();
     for (i, ms) in j.dict("um").expect("scan.json 核对过").items() {
         let recent = Dict::new();
@@ -1000,20 +1371,20 @@ fn cost_run(sync_now: bool, wait: f64) -> R<(Dict, Dict)> {
     cost_save("worker.json", &V::Dict(dict! { "v" => 1, "pid" => me, "started" => proc_starts(&[me]).get(&me).copied().unwrap_or(0) }))?;
     let run = || -> R<(Dict, Dict)> {
         let now = time();
-        let j = cost_load_scan();
+        let (j, seen) = cost_load_scan();
         let first = !j.at("done").truthy();
         let mut last = monotonic();
-        let mut checkpoint = || -> R<()> {
+        let mut checkpoint = |seen: &Seen| -> R<()> {
             if monotonic() - last >= 20.0 {
-                cost_save("scan.json", &V::Dict(j.clone()))?;
+                scan_save(&j, seen)?;
                 last = monotonic();
             }
             Ok(())
         };
-        let s = cost_scan(&j, now, &mut checkpoint)?;
+        let mut s = cost_scan(&j, seen, now, &mut checkpoint)?;
         cost_who(&j);
-        cost_prune(&j, now);
-        cost_save("scan.json", &V::Dict(j.clone()))?;
+        cost_prune(&j, &mut s.seen, now);
+        scan_save(&j, &s.seen)?;
         cost_publish(&j, now)?;
         let scanned = path::join(&COST_DIR, "scanned");
         cost_touch("scanned").map_err(|e| at_path(e, &scanned))?;
@@ -2103,4 +2474,104 @@ pub fn cmd_cost_periods(args: &[String]) -> R<()> {
     let rows = |ps: Vec<Period>| -> Vec<V> { ps.into_iter().map(|p| V::List(List::from_vec(vec![p.start, p.end, V::from(p.tag)]))).collect() };
     out!("{}", json::dumps(&V::Dict(dict! { "days" => rows(cost_days(now)), "weeks" => rows(cost_weeks(quota.as_ref(), now)) }), json::LINE));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_seen_reads_only_well_formed_entries() {
+        let s = CompactSeen::parse(r#"{"c0123456789abcdef":1794024000, "x00000000000000ff" : 0 ,"cffffffffffffffff":15461882254800}"#).unwrap();
+        assert_eq!(s.entries.len(), 3);
+        assert_eq!((s.entries[0].kind, s.entries[0].id, s.entries[0].hour), (b'c', 0x0123456789abcdef, 498340));
+        assert_eq!((s.entries[1].kind, s.entries[1].id, s.entries[1].hour), (b'x', 0xff, 0));
+        assert_eq!(s.entries[2].hour, u32::MAX - 2); // 15461882254800 / 3600
+        assert!(CompactSeen::parse("{}").unwrap().entries.is_empty());
+        assert!(CompactSeen::parse(" { } ").unwrap().entries.is_empty());
+        for bad in [
+            "",
+            "[]",
+            "{",
+            r#"{"c0123456789abcdef":1794024000"#,
+            r#"{"c0123456789abcdef":1794024000,}"#,
+            r#"{"c0123456789abcdef":1794024000} x"#,
+            r#"{"c0123456789abcdef":1794024001}"#,  // 不是整点
+            r#"{"c0123456789abcdef":01794024000}"#, // JSON 里数不能以 0 开头
+            r#"{"c0123456789abcdef":-3600}"#,
+            r#"{"c0123456789abcdef":3600.0}"#,
+            r#"{"c0123456789abcdef":"3600"}"#,
+            r#"{"c0123456789abcdef":true}"#,
+            r#"{"c0123456789abcdef":1e30}"#,
+            r#"{"c0123456789abcdef":15461882265600}"#, // 小时数放不进 32 位
+            r#"{"c0123456789abcdef":99999999999999999999999999999999993600}"#,
+            r#"{"C0123456789abcdef":3600}"#,
+            r#"{"c0123456789ABCDEF":3600}"#,
+            r#"{"c0123456789abcde":3600}"#,
+            r#"{"c0123456789abcdef0":3600}"#,
+            r#"{"y0123456789abcdef":3600}"#,
+            r#"{"odd key":3600}"#,
+            r#"{"c0123456789abcdef":3600,"c0123456789abcdef":7200}"#, // 同一个键两次：Python 留后一个的值、位置是前一个的
+        ] {
+            assert!(CompactSeen::parse(bad).is_none(), "{bad}");
+        }
+        // 键里有转义（反斜杠 u0036 就是 6）：不认
+        let escaped = r#"{"c012345BSu0036789abcdef":3600}"#.replace("BS", "\\");
+        assert!(CompactSeen::parse(&escaped).is_none());
+    }
+
+    #[test]
+    fn split_seen_finds_the_top_level_member() {
+        let doc = r#" {"v":1,"files":{"/a\"b}":{"seen":{"x":1}}},"seen" : {"c0123456789abcdef":3600} ,"h":{"seen":[1,{"}":"]"}]},"s":"a\\","n":-1.5e3} "#;
+        let (rest, seen) = split_seen(doc).unwrap();
+        assert_eq!(seen, r#"{"c0123456789abcdef":3600}"#);
+        assert_eq!(rest, r#" {"v":1,"files":{"/a\"b}":{"seen":{"x":1}}},"seen" : {} ,"h":{"seen":[1,{"}":"]"}]},"s":"a\\","n":-1.5e3} "#);
+        assert!(json::loads(&rest).is_ok());
+        assert_eq!(split_seen(r#"{"seen":{}}"#).unwrap(), (r#"{"seen":{}}"#.to_string(), "{}"));
+        // 键里有转义（反斜杠 u0065 就是 e）：不认，交给通用的读法
+        let escaped = r#"{"seBSu0065n":{}}"#.replace("BS", "\\");
+        assert!(escaped.contains('\\') && json::loads(&escaped).is_ok() && split_seen(&escaped).is_none());
+        for none in [
+            "",
+            "[]",
+            r#"{"v":1}"#,               // 没有 seen
+            r#"{"seen":[1]}"#,          // 不是对象
+            r#"{"seen":{},"seen":{}}"#, // 两个
+            r#"{"seen":{}} x"#,
+            r#"{"seen":{}"#,
+            r#"{"seen":{"a":"unterminated}}"#,
+            r#"{"seen":{},}"#,
+            r#"{"seen" {}}"#,
+            r#"{seen:{}}"#,
+        ] {
+            assert!(split_seen(none).is_none(), "{none}");
+        }
+    }
+
+    #[test]
+    fn seen_behaves_like_the_dict() {
+        let mut compact = Seen::new();
+        let mut generic = Seen::Generic(Dict::new());
+        for (i, hour) in [1794024000i64, 1794027600, 1790000000 / 3600 * 3600, 1794024000].into_iter().enumerate() {
+            for s in [&mut compact, &mut generic] {
+                assert!(!s.has(b'c', i as u64));
+                s.add(b'c', i as u64, hour);
+                assert!(s.has(b'c', i as u64) && !s.has(b'x', i as u64));
+            }
+        }
+        let dump = |s: &Seen| json::dumps(&V::Dict(s.to_dict()), json::Fmt::new().compact());
+        assert_eq!(dump(&compact), dump(&generic));
+        for s in [&mut compact, &mut generic] {
+            s.retain(1794024000.0);
+            assert_eq!(s.len(), 3);
+            assert!(!s.has(b'c', 2) && s.has(b'c', 3));
+        }
+        assert_eq!(dump(&compact), dump(&generic));
+        assert_eq!(dump(&compact), r#"{"c0000000000000000":1794024000,"c0000000000000001":1794027600,"c0000000000000003":1794024000}"#);
+        // 放不进紧凑的表的值：整张表换成通用的，内容不变
+        compact.add(b'x', 9, 1794024001);
+        assert!(matches!(compact, Seen::Generic(_)) && compact.has(b'c', 0) && compact.has(b'x', 9) && compact.len() == 4);
+        // hashlib.sha1(b"abc").hexdigest()[:16] == "a9993e364706816a"
+        assert_eq!(sha1_head(b"abc"), 0xa9993e364706816a);
+    }
 }
