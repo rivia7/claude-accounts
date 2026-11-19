@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLI = os.path.dirname(HERE)
@@ -76,12 +77,13 @@ class Box:
         return self.write('bin/' + name, '#!/bin/sh\n' + script, 0o755)
 
 
-def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True):
+def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0):
     """登记一个用例。被装饰的函数拿到 Box，往沙箱里放夹具。
-    mask：[(正则, 替换成什么)…]，比之前两边都先换掉（时间戳、随机数这些每次不一样的东西）"""
+    mask：[(正则, 替换成什么)…]，比之前两边都先换掉（时间戳、随机数这些每次不一样的东西）
+    settle：命令退出以后再等几秒才看沙箱（它起了后台进程，等后台进程把该写的写完）"""
     def reg(setup):
         CASES.append(dict(name=name, argv=argv, stdin=stdin if isinstance(stdin, bytes) else stdin.encode('utf-8'),
-                          env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree, setup=setup))
+                          env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree, settle=settle, setup=setup))
         return setup
     return reg
 
@@ -110,6 +112,27 @@ def tree_digest(root, masks):
     return out
 
 
+def clone_tree(src, dst):
+    """整棵树拷一份：链接照旧是链接，硬链接照旧连在一起（shutil.copytree 会把它们拆成两个文件），权限和时间不变"""
+    seen = {}
+
+    def copy(s, d):
+        st = os.lstat(s)
+        if stat.S_ISLNK(st.st_mode):
+            os.symlink(os.readlink(s), d)
+        elif stat.S_ISDIR(st.st_mode):
+            os.mkdir(d)
+            for n in os.listdir(s):
+                copy(os.path.join(s, n), os.path.join(d, n))
+            shutil.copystat(s, d)
+        elif st.st_nlink > 1 and (st.st_dev, st.st_ino) in seen:
+            os.link(seen[(st.st_dev, st.st_ino)], d)
+        else:
+            shutil.copy2(s, d)
+            seen[(st.st_dev, st.st_ino)] = d
+    copy(src, dst)
+
+
 def apply_masks(text, masks):
     for pat, rep in masks:
         text = re.sub(pat, rep, text)
@@ -129,6 +152,8 @@ def run_one(cmd, c, home, tmp):
         out, err, rc = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
         out, err, rc = e.stdout or b'', (e.stderr or b'') + b'\n[pydiff: timeout]', -999
+    if c['settle']:
+        time.sleep(c['settle'])
     dec = lambda b: apply_masks(b.decode('utf-8', 'replace'), c['mask'])
     return {'stdout': dec(out), 'stderr': dec(err), 'rc': rc, 'tree': tree_digest(home, c['mask']) if c['tree'] else {}}
 
@@ -192,10 +217,10 @@ def main():
                 shutil.rmtree(d, ignore_errors=True)
             os.makedirs(home)
             c['setup'](Box(home))
-            shutil.copytree(home, pre, symlinks=True)
+            clone_tree(home, pre)
             py = run_one(oracle, c, home, tmp)
             shutil.rmtree(home)
-            shutil.copytree(pre, home, symlinks=True)
+            clone_tree(pre, home)
             rs = run_one([CORE], c, home, tmp)
             diffs = compare(py, rs)
             if diffs:

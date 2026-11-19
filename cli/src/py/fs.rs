@@ -55,10 +55,18 @@ pub fn makedirs(p: &str) -> io::Result<()> {
     fs::create_dir_all(p)
 }
 
-/// `os.makedirs(p, mode, exist_ok=True)`：新建的每一层都是这个权限（还要过 umask）
+/// `os.makedirs(p, mode, exist_ok=True)`：只有最里面那一层用这个权限（还要过 umask），上面缺的各层是默认的权限
+/// （Python 3.7 起就是这样）；已经有了的不改它的权限
 pub fn makedirs_mode(p: &str, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
-    fs::DirBuilder::new().recursive(true).mode(mode).create(p)
+    let parent = path::dirname(p.trim_end_matches('/'));
+    if !parent.is_empty() && !path::exists(&parent) {
+        makedirs(&parent)?;
+    }
+    match fs::DirBuilder::new().mode(mode).create(p) {
+        Err(e) if !path::isdir(p) => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// `os.chmod(p, mode)`

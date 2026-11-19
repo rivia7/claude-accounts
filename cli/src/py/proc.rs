@@ -7,6 +7,14 @@ use std::io;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
 
+/// 这个进程现在开着的文件描述符里不小于 from 的那些（/dev/fd 里列的；读不了就当 from 到 255 都开着）
+fn open_fds_from(from: i32) -> Vec<i32> {
+    match std::fs::read_dir("/dev/fd") {
+        Ok(dir) => dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok()).filter(|fd| *fd >= from).collect(),
+        Err(_) => (from..256).collect(),
+    }
+}
+
 /// 子进程的标准输入
 #[derive(Clone, Default)]
 pub enum In {
@@ -162,19 +170,24 @@ impl Cmd {
         c.stdout(io_of(self.stdout));
         c.stderr(io_of(self.stderr));
         let (merge, session) = (self.stderr == Out::ToStdout, self.new_session);
-        if merge || session {
-            // SAFETY: fork 之后、exec 之前只调 dup2 和 setsid，都是可以在这里调的系统调用
-            unsafe {
-                c.pre_exec(move || {
-                    if merge && libc::dup2(1, 2) < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    if session && libc::setsid() < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
+        // Python 的 subprocess 默认 close_fds=True：子进程只带着 0、1、2。bash 那边开着的 3（提问的终端 / 答案）、9（启动锁）
+        // 不能漏给子进程，后台的上报进程带着 9 号会一直占着锁。先在这里记下开着哪些，fork 以后只做 fcntl（exec 成功才关：
+        // 标准库报告 exec 失败用的管道也在里面，不能直接关）
+        let inherited = open_fds_from(3);
+        // SAFETY: fork 之后、exec 之前只调 fcntl、dup2 和 setsid，都是可以在这里调的系统调用；inherited 是之前就分配好的
+        unsafe {
+            c.pre_exec(move || {
+                for fd in &inherited {
+                    libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+                if merge && libc::dup2(1, 2) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if session && libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
         }
         c
     }
