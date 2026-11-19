@@ -285,3 +285,136 @@
   落在同一毫秒里（`weeks_add` 拿「不比上次新」认同一次查询）。不碍事，只是这一种情况结果不固定，对拍里避开了。
 - **缓存是很久很久以前的、重置时间在很久很久以后时，表格里是几十上百位的数。** `span`、`ago` 对多大的秒数都照算
   （「缓存（11574074074074074625547 天前）」、`fetchedAtMs` 写成 `-1e30`；cache-ours-fetched-at-hugely-negative）。只是说明没有上限的检查。
+
+## corenet
+
+内置代理这一块（`slot_orders` 到 `write_text`，加上 `cmd_select_lines`、`cmd_slot_rows`）。带着对拍用例名字的是拿原版 Python 实跑核实过的
+（`cli/pydiff/cases/corenet.py`；解析的那几条另有 `cli/tests/vectors/corenet.json` 里的对照），Rust 这边照原样移植，行为一样。
+
+对拍和对照数据用的是这台机器的 `python3`（3.14）。用户机器上跑 PY_SRC 的是 PATH 上的 `python3`，没另装 Python 的 Mac 上就是自带的
+3.9.6：拿它当原版把这一块的 807 个用例又跑了一遍，799 个一样，不一样的 8 个都是标准库随版本变了的地方（整数的位数上限 6 个、
+方括号里的 IPv4 1 个、映射的 IPv4 地址 1 个），下面各条里分别说了；对照数据 1126 条里两个版本有 12 条不一样（多出来的也是网址的
+宽严）。Rust 这边都照 3.14。
+
+自定义节点（`cca node add`）：
+
+- **有几种写错的链接给的是调用栈，不是一句「这段配置认不出来」。** `cmd_node_check` 只接 `NodeParseError`，下面这些是别的异常
+  （调用栈、退出码 1；终端里直接看到，App 的表单 `node_custom_form` 把 `2>&1` 的全文当成出错的原因显示）：
+  `ss://` 后面整段是 base64、又解不开（`_link_ss` 里没有 `@` 的那一支，`_b64` 在 `try` 外面）；解得开、但冒号只在主机那一半
+  （`ss://` + base64 的 `abc@host:8388`，`method, password = …` 拆不出两项）；vmess 的 `aid` 不是数字的写法（`int(j.get('aid') or 0)`
+  没经 `_node_int`：`"abc"`、`[1]`、`Infinity`）；vless / trojan / hysteria2 / tuic 网址的端口写错、方括号不成对
+  （`urlsplit` 和 `u.port` 自己抛 ValueError，轮不到 `_node_int` 说「端口 不是数字」）。
+  （node-check/parse/ss-bad-base64、ss-whole-colon-only-in-host、vmess-aid-text、vmess-aid-list、vmess-aid-infinity、vless-port-word、
+  vless-port-too-big、vless-bad-bracket）
+- **网址写得不规矩的链接读不读得了，取决于 Python 的版本。** `urlsplit` 和 `.port` 这些年收紧过：自带的 3.9.6 上
+  `vless://uuid@[1.2.3.4]:443`（方括号里是 IPv4）读成服务器 `1.2.3.4`，`vless://uuid@[200vl1:db8::1]:443`（方括号里不是地址）照收，
+  `vless://uuid@v.example.com:٤٤٣`（端口是别的文字的数字）读成 443，`vless://u@h: 1`（端口前有空格）读成 1；3.14 上这四种都是没人接的
+  ValueError（调用栈）。Rust 这边照 3.14（`py::url`）。
+  （node-check/parse/vless-ipv4-in-brackets；对照数据里的 vless/025、mutated/113、vless/020、vless/056。两个版本各生成了一遍对照数据比的）
+- **`proxies:` 下面的列表不缩进就读不了，报的是「缩进对不齐（第 3 行）」。** 手写的 YAML（`_yaml_mini`）只在下一行缩得更深时才当它是
+  这个键的值：`proxies:` 换行顶格写 `- name: …`（Go 的 yaml 库写出来就是这样，合法的 YAML）时，`proxies` 成了空的，`- name` 被当成
+  一个键，再往下的 `  type: …` 对不上缩进。只贴节点那一段（不带 `proxies:`）、或者列表缩进两格都读得了。
+  （node-check/parse/yaml-list-not-indented-under-key）
+- **不分大小写认链接开头时 ſ、İ、ı 也算，认出来以后报错说的是端口。** `(?i)^(vmess|…|tuic)://` 配 Python 的 `re`：`ſs://`、`tuıc://`、
+  `hysterİa2://` 都匹配；`.lower()` 以后不是那几个名字里的任何一个，走到最后通用的那一支，`urlsplit` 切不出主机和端口，于是
+  「端口 不是数字：None」。`link_parse` 最后那句「不支持的链接」因此走不到（1126 条对照里没有一条出这句）。
+  （node-check/parse/scheme-long-s、scheme-dotless-i、scheme-dotted-capital-i）
+- **YAML 里的键不是文字时，写出来的 JSON 有重复的键。** `_y_scalar` 把键也当标量认：`1: a` 和 `"1": b` 是两个键（整数和文字），
+  `json.dumps` 都写成 `"1"`；`true: x` 和 `1: y` 则是同一个键。node-check 的输出里就有两个一样的键（node-save 读回来只留后一个）。
+  mihomo 的字段没有这样的键，实际碰不到。（node-check/parse/flow-odd-keys、yaml-odd-keys）
+- **整数超过 4300 位在哪里算读不了，取决于 Python 的版本。** `int()` 的位数上限是 3.9.14 / 3.10.7 以后才有的（macOS 自带的 3.9.6 没有，
+  和 settings 一节说的是同一件事）：有上限时 `{…, n: 999…}`（4301 位）在 `_y_scalar` 里是没人接的 ValueError，JSON 里的在 `json.loads`
+  里算格式不对。Rust 这边固定成有上限（节点解析里自己数位数；`py::json::loads` 现在没有这条上限，粘贴进来的、stdin 读的 JSON 在
+  corenet 里另外补了，见下面）。（node-check/parse/flow-huge-int、yaml-huge-int、vmess-huge-int-is-not-json、node-testconfig/huge-int、
+  node-save/stdin-huge-int、core-nodes-save/huge-int：拿 3.9.6 当原版跑时不一样的就是这 6 个，那边都读得进）
+- **套得很深的也是调用栈。** 块写法的 YAML 是一层层递归着读的（`parse_block`），套到一千层上下是没人接的 RecursionError：实测 3.14 下
+  最里面一行是 `k: 1` 时套 990 层还行，是 `k:` 时 991 层，是 `- a` 时 989 层；系统自带的 3.9 是 988、988、987。JSON 写的（整段、
+  一行写完的值、vmess 链接里的）套得深时，3.9 在 `json.loads` 里 992 层起出错，3.14 读得进一万多层、到写出来（`json.dumps`）时
+  才出错（列表 24981 层、对象 14695 层起）。正常的节点定义只有两三层。Rust 这边的层数见下面。
+  （node-check/parse/yaml-nested-deep、yaml-nested-too-deep、yaml-nested-too-deep-list-inside；JSON 的层数是手动跑的，没放进对拍）
+- **起名字时，节点缓存里有一项不像节点定义就是调用栈。** `node_name_free` 里 `{p['name'] for p in core_cache().get('proxies', [])}` 不像
+  `core_defs` 那样先筛：`core/nodes.json` 的 proxies 里有不是对象的、对象里没有 name 的，TypeError / KeyError。同一份缓存别的子命令都读得了。
+  `core-summary` 的 `names` 那一句同理（没有 name 的对象）。`core-nodes-save` 写之前筛过，所以要手改的文件才会这样。
+  （node-check/name/cache-entry-is-text、cache-entry-has-no-name、cache-name-is-a-list，core-summary/object-without-name）
+- **node-save 不看 name 是不是文字。** 名字是数字、null、true 也照存：可选节点里多出一个 `5`，`node_ids` 多一个键；而存进
+  custom-nodes.json 的那一项，`core_custom` 读的时候又筛掉（名字不是文字），于是 `node ls` 看不到、`node rm` 说没有这个节点，可选节点里
+  那个 `5` 没人清。它每次还把 custom-nodes.json 整份重写成 `{version, proxies}`：里面不像样的项、顶层别的字段都丢掉。bash 只把
+  node-check 的输出交给它（名字一定是文字），现在碰不到。（node-save/name-number、name-null、name-true、drops-junk-entries、
+  custom-extra-fields-dropped）
+
+内置代理的状态和配置：
+
+- **`cca local status` 把自定义节点也算成「补上维护者参考节点」。** `cmd_core_summary` 的 `extra` 是“用到的节点里不在路由器拷来的那些”，
+  `cca node add` 加的也在里面：没有参考节点、只有自定义节点的机器上也会说「补上维护者参考节点 N 个」。
+  （core-summary/custom-nodes-are-counted-as-fill、no-cache-but-fill-and-custom）
+- **手改坏的 config.json、节点缓存：这一块的子命令多半是调用栈，其中 `local-env` 每次启动都跑。** `cfg_load` 对 JSON 写错有一句说明，对类型
+  不对没有：`local`、`router` 写成文字（`.get` 不存在）；`nodes` 里混进列表（当不了键）、数字（`local-env` 的 `sorted` 比不了、
+  `core-missing` / `core-summary` 的 `'、'.join` 拼不了）；`core/nodes.json` 的 `saved_at` 是文字、是三百多位的整数（减的时候
+  OverflowError）（`core-stale` 出错：bash 的 `core_nodes_hook` 每次在家启动都调它，拿到的是空的，于是再也不会去重新拷节点定义）。
+  （local-env/local-is-text、nodes-mixed-types、nodes-with-a-list，slot-rows/nodes-with-a-list，core-stale/time-is-text、
+  time-is-too-big-for-a-float、router-is-text，core-missing/nodes-with-a-number，core-summary/time-is-text、time-is-minus-infinity；
+  bash 那一半是读代码看出来的）
+- **dialer-proxy 连成一千层上下的一串，用到它的子命令都是调用栈。** `core_pick` 里的 `need` 顺着 dialer-proxy 一层层递归，到 Python 的
+  递归上限是没人接的 RecursionError。第几层随子命令（调用栈有多深）和 Python 的版本差一两层：实测 3.14 下 core-missing、
+  core-summary、install-node proxy、udp-build 到 996 层还行，local-env、core-config、udp-env 到 995 层；系统自带的 3.9 各少一层。
+  `core-nodes-save` 也经它，这样的节点定义存不下来（只建了 core 目录），所以正常拷来的缓存里不会有。Rust 这边固定成 996 层，见下面。
+  （core-missing/dialer-chain-long、dialer-chain-too-long，local-env、core-config、core-summary、udp-env、install-node、
+  core-nodes-save 各有同名的两条）
+- **哪些地址算公网、算本机，取决于 Python 的版本，出站绑定跟着变。** `core_bind` 拿节点服务器里第一个 `is_global` 的 IPv4 去问路由，
+  `core_dns` 用 `is_loopback` / `is_unspecified` / `is_global` 看系统的 DNS 到不到得了。macOS 自带的 3.9.6 和 3.14 的 `ipaddress`
+  对这几种地址答得不一样（两个版本各问了一遍）：`192.0.0.8`、`2002::1`（3.9.6 算公网，3.14 不算），`::ffff:8.8.8.8`（3.9.6 不算公网，
+  3.14 算），`::ffff:127.0.0.1`（3.14 才算本机），`::ffff:0.0.0.0`（3.14 才算没指定）。Rust 这边固定成 3.14 的（`py::ipaddr`；
+  `is_unspecified` 兼容层没有，`corenet/bind.rs` 里照 3.14 写了一份）。实际的节点服务器、DNS 不会是这些地址。
+  （local-env/tun-resolv-ipv6-on-tun 里有 `::ffff:127.0.0.1`、`::ffff:0.0.0.0`：3.14 下直接算到不了，拿 3.9.6 当原版跑时它多问了
+  两次路由，这一条就不一样）
+- **写到一半留下的临时文件带着节点密钥，备份时会被打包。** `cmd_core_config` 先写 `core/config.yaml.<进程号>.tmp`（600）再
+  `os.replace`；`save_json` 写的是 `nodes.json.cca-<进程号>.tmp`、`custom-nodes.json.cca-<进程号>.tmp`。换不上去（`config.yaml` 成了
+  目录：调用栈、退出码 1）或者正好在两步之间被杀掉时，临时文件留在 core 目录里，以后没有谁清（进程号每次不同，一次留一个）。
+  `cca restore` 备份时排除的是 `core/nodes.json`、`core/custom-nodes.json`、`core/config.yaml` 这几个具体的名字，带后缀的临时文件
+  不在其中，会进备份包——那里的注释说节点密钥不打包（policy 那边写的是 `policy/nodes.json*`，带着通配）。
+  `save_json` 的临时文件还是先照默认权限建出来（644）、写完才改成 600：写到一半出错时留下的那半份是 644 的（core 目录是 700，
+  别的用户进不来）。
+  （`config.yaml` 是目录时两边都留下临时文件、退出码 1：手动两边各跑一遍比过，文件名带进程号，没放进对拍；排除规则拿这台机器的
+  bsdtar 3.5.3 试过，`core/config.yaml.12345.tmp`、`core/nodes.json.tmp` 都进了包；`save_json` 写到一半出错的那种拿 node-save 实跑过
+  ——名字里有落单的代理项，留下 644 的 `custom-nodes.json.cca-<进程号>.tmp`；“两步之间被杀掉”是读代码看出来的）
+- **install-env 先打印一行再建目录，中途出错时 bash 拿到的是半份。** `cmd_install_env` 先 `sh(INSTALL_SHELL=…)`，再 `T.install_env(folder)`
+  （建一次性的配置目录、写 settings.json），最后才打印 `INSTALL_ENV`。后一步出错（磁盘满、目录建不了）时 stdout 里只有
+  `INSTALL_SHELL=bash`；bash 的 `eval "$(py install-env "$tmp")" || exit 5` 不会触发（见上面 bash 一节），接着就用没有
+  `CLAUDE_CONFIG_DIR` 的环境（或者这个 shell 里上一次留下的 `INSTALL_ENV`）去跑官方安装脚本。
+  （install-env/claude-folder-is-a-file 核实了“先打印一行再出错”；bash 那一半是读代码看出来的）
+
+守着内核的进程（`cca _core-keep`）：
+
+- **停内核的那几秒里再收到一次信号，内核就没人停了。** SIGTERM / SIGINT 的处理函数抛 `Stop`，主循环外面接住、在 `finally` 里
+  `core_halt`（SIGTERM，等 3 秒，SIGKILL）。`finally` 里没有再挡信号：这时来的第二个信号又抛一次 `Stop`，没人接——调用栈、退出码 1，
+  不等内核退出、也不补 SIGKILL。内核退得慢（或者不理 SIGTERM）时它就留在后台（在自己的会话里），占着端口池的端口。
+  配置撤了以后正在停内核的那一次（`try` 里面的 `core_halt`）被打断倒是接得住，会从头再停一遍。
+  （core-keep/second-sigterm-while-stopping-the-kernel、sigterm-while-stopping-an-unwanted-kernel；什么时候会连着来两个信号——
+  连着 `kill` 两次、关机时和 `core_retire` 赶在一起——是读代码推想的）
+- **信号正好落在起内核的那一瞬间，起来的内核也没人停。** `subprocess.Popen(…)` 里面已经 fork、还没返回时来的信号，`Stop` 从 `Popen`
+  里抛出来，`child` 还没赋值，`finally` 看到的是 `None`。窗口很小。Rust 这边只在等待的地方看信号，起来的内核一定记下了——这一种
+  没有照原样（照不出来）。（读代码看出来的）
+- **起不了内核时直接出错退出，不重试。** `Popen` 的 OSError（`CCA_SELF` 指的 cca 不在了、没有执行权限）没人接：调用栈、退出码 1，
+  留下一个空的 core.log。说明里写的是“退出了就隔一会儿重启”，起不来不在其中；crontab 里 `@reboot` 起的那一个就此不再守着，
+  要等下次在外面启动账号时 bash 再起。（core-keep/kernel-missing、kernel-not-executable、kernel-is-a-directory）
+
+这一块里和原实现不一样的地方（都是正常使用碰不到的）：
+
+- **stdin 里不是 UTF-8 的字节**（node-check、node-save、node-testconfig、core-nodes-save）原来原样带着走（surrogateescape；node-check
+  原样打印出来，node-save 写文件时是没人接的 UnicodeEncodeError），Rust 这边读进来就换成 U+FFFD。没放进对拍。
+- **粘贴的、stdin 读的 JSON 里落单的代理项**（`"\ud83d"`，不成对的半个表情；vmess 链接里的、块写法里一行写完的值也经 `json.loads`）：
+  原来读得进，往外写的时候是没人接的 UnicodeEncodeError——node-check、node-testconfig 在打印时，node-save 在写 custom-nodes.json 时
+  （什么都没存下，留下半份临时文件）。Rust 这边 `py::json` 把它读成 U+FFFD（最上面说的兼容层那一条），照常往下走：node-check 打印出
+  带 U+FFFD 的节点，node-save 存得下来。手动两边各跑过，没放进对拍；对照数据里结果带落单代理项的也没收（写不成 UTF-8 的文件）。
+- **node-save 的名字是数字、而 `node_ids` 里已经有同样写法的键**（名字 `5`、原来有 `"5"`）：原来一份文件里写出两个 `"5"`，Rust 的字典
+  放不下，只有一个。没放进对拍。
+- **`core/nodes.json`、`custom-nodes.json`、root 那边的 `info.json` 里超过 4300 位的整数**：原来整份算读不了（`load_quiet` 当作没有），
+  Rust 这边读得进来（`py::json::loads` 没有这条上限）。粘贴的、stdin 读的 JSON 已经在 corenet 里补上了上限；文件这一半等兼容层。
+- **dialer-proxy 连成的串正好在递归上限边上**（994 到 997 层）：原来第几层出错随子命令和 Python 的版本不一样（见上面），Rust 这边
+  一律 996 层还行、997 层出错（`PICK_DEPTH`）。对拍只比离界线远的（980 层、1010 层）。
+- **块写法的 YAML 正好套在递归上限边上**（987 到 992 层）：同上，Rust 这边一律套 990 层还行、991 层出错（`BLOCK_DEPTH`，和 3.14 下
+  最里面是 `k: 1` 的一样）。对拍只比离界线远的（960 层、1020 层）。
+- **套了上千层的 JSON**（粘贴的、stdin 读的、文件里的）：原来 3.9 是 992 层起 RecursionError，3.14 一万多层才出错（见上面）；
+  `py::json` 没有层数的上限，开发版实测读得进 5000 层（对象）、8000 层（列表），再深（8000 / 12000 层）是栈溢出（进程被
+  SIGABRT 结束，不是退出码 1）。这是兼容层的事，corenet 里没另外补。
+- **core-keep 起内核那一瞬间的信号**：见上面。
