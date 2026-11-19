@@ -71,6 +71,7 @@
 - `RELEASE_KEY`：`cca` ↔ `install.sh` ↔ `~/.ssh/cca_release_ed25519.pub`（release.sh 会检查）
 - 辅助程序的四个目标：`cca` 的 `helper_find` ↔ `cli/pack.py` 的 `TARGETS` ↔ `release.sh` 的 `TARGETS` ↔ `install.sh` 查的机器种类；`cca` 里 `HELPER_SUMS=""` 那一行 ↔ `cli/pack.py` 认的那一行
 - bash 里 `py 子命令` 的参数和输出 ↔ `cli/src/cmd/` 里那个子命令（`CMDS` 表）
+- 辅助程序里的常量 ↔ tests/ 下把它当黑盒测的那几份里写死的同一个值：`UDP_HELPER`（`cli/src/cmd/corenet/udp.rs`）↔ `tests/local_udp.py`，`LEAK_FAIL_TTL`（`cli/src/cmd/leak.rs`）↔ `tests/isolation_leaks.py`
 - App 的接口：PROTOCOL.md ↔ Swift 模型 ↔ regress 的 10g；`router_sh` 的 `status` 输出 ↔ `cmd_gui_live` 的 `GUI_SLOT_RE`（regress 守着）
 - `VERSION` ↔ `WhatsNew.swift` 最前面的 `ReleaseNote`（`macos/test.sh` 查用词和版本先后）
 

@@ -146,6 +146,7 @@ ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配�
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
 ok "泄露检测：失败结果不误报通过，区分宿主探针与浏览器" 'python3 "$D/isolation_leaks.py"'
 ok "本机 UDP 走节点：TUN 配置只把 UDP 交给节点，状态、选节点、要装到 root 那边的文件和摘要" 'python3 "$D/local_udp.py"'
+ok "多设备共用路由器：只有这台设备时账号表逐字节不变，合并时保留别的设备的槽位、共用账号不重复、本机端口写回并集槽位" 'python3 "$D/router_merge.py"'
 ok "配置隔离：完整 TOML、项目配置与启动参数检查" 'python3 "$D/isolation_settings.py"'
 ok "凭证隔离：固定钥匙串目录，屏蔽继承凭证描述符" 'python3 "$D/isolation_credentials.py"'
 ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'python3 "$D/isolation_network.py"'
