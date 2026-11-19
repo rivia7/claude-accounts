@@ -36,6 +36,18 @@
   error…」，现在这个脚本跑得起来（bash 启动账号本来就跑得了这种脚本）。不是有意改的，是 C 库的做法；要照原样得在 `py::proc` 里起命令
   之前先看文件头。macOS 上两边实跑核对过，没放进对拍（结果不一样）。Linux 的发布版用 musl，它的 execvp 没有改交给 sh 这一步
   （读它的源码），应该和原来一样报错，没在 Linux 上实跑。
+- **agy 登录时授权码写不进 agy 的 stdin（它已经不读了）以后，新的 Python 退出时会在 stderr 上多说两行**
+  （3.14 上是 `Exception ignored while finalizing file <_io.BufferedWriter name=5>:`、`BrokenPipeError: [Errno 32] Broken pipe`；
+  照 Python 的更新说明是 3.13 起，实测 3.12 和 macOS 自带的 3.9.6 不说）。那是解释器收尾时的话，cca-core 不说。
+  （`agy-login/agy-closes-stdin`，比之前把这两行去掉）
+- **agy 探测读日志那一步没有照搬 `glob` 的全部规则。** 临时目录的路径里有成对的方括号时，原来读不到日志（见 login 一节），
+  cca-core 也当作读不到；方括号那一截碰巧通配得上它自己（目录就叫 `[[]*` 这种）、原来其实读得到的情形不认。
+- **原实现的结果随 Python 版本变的地方，cca-core 照 3.14 的**（对拍拿来对的是 3.14；macOS 上 cca 实际跑在系统自带的 3.9.6 上）。
+  login 这一块拿 3.9.6 当基准另跑过一遍，566 个用例里 3 个不一样，都是平时碰不到的输入：登录网址开头有空格时，3.9.6 的
+  `urlsplit` 不去掉它、认不出协议，`login-url` 原样打回、不补 `login_hint`（3.12、3.14 去掉）；`login-forward` 遇到分块的回应里
+  块的大小是负数时，3.9.6 都是「连不上…IncompleteRead(0 bytes read)」，3.12、3.14 里 `-1` 是 `IncompleteRead(12 bytes read)`、
+  别的负数是没人接的 ValueError。拿 3.12 当基准时 566 个都一样。（`login-url/leading-space-tabs-newline`、
+  `login-forward/reply/chunked-negative-size`、`chunked-size-minus-one`）
 
 ## PY_SRC
 
@@ -418,3 +430,45 @@
   `py::json` 没有层数的上限，开发版实测读得进 5000 层（对象）、8000 层（列表），再深（8000 / 12000 层）是栈溢出（进程被
   SIGABRT 结束，不是退出码 1）。这是兼容层的事，corenet 里没另外补。
 - **core-keep 起内核那一瞬间的信号**：见上面。
+
+## login
+
+登录的辅助（`login_hint_url` 到 `cmd_login_catch`）。带着用例名的都是对拍时拿原版 Python 实跑出来的（`cli/pydiff/cases/login.py`），
+Rust 这边照原样移植，行为一样。
+
+- **login-forward 转不出去时把验证码打到了 stderr。** 回调的路径（登录网址里 `redirect_uri` 的路径，解码以后的）里有空格或控制字符时，
+  `http.client` 不肯发（InvalidURL），它的说法里带着整个请求网址，`die('连不上…：%s' % e)` 原样打出来：
+  `URL can't contain control characters. '/a b?code=…&state=…' (found at least ' ')`。验证码和 state 是一次性的凭证，别处都不打印。
+  路径里有非 ASCII 字符时是没人接的 UnicodeEncodeError。claude / codex 给的回调路径是 `/callback`、`/auth/callback`，平时碰不到。
+  （`login-forward/path-with-space`、`path-with-control-character`、`path-not-ascii`）
+- **login-catch 拿到的 code 里有非 ASCII 字符时是没人接的异常，浏览器那边连回应都没有。** 交给 pbcopy 之前的 `text.encode('ascii')`
+  抛 UnicodeEncodeError，外面只接 OSError / SubprocessError：终端上是调用栈、退出码 1，浏览器的连接直接被关掉（不是「没有登录成功」
+  那一页）。（`login-catch/code-not-ascii`、`code-raw-bytes-not-ascii`）
+- **login-catch 一次只管一个连接，一个不发请求的连接能让它停 10 秒。** 接下来的连接 `settimeout(10)` 以后才读，循环是单线的：
+  浏览器先开了一个不发东西的连接（预连接）的话，带着验证码的那一个要在后面排 10 秒。（`login-catch/slow-request-is-dropped` 走的就是
+  这条路；浏览器实际会不会这样是读代码看出来的）
+- **login-catch 到点时说的分钟数是 `秒数 // 60`，超时的参数是开了浏览器以后才看的。** 不到一分钟的说「等了 0 分钟还没登录完」
+  （回归里的 `CCA_LOGIN_WAIT=20` 就是），负数是向下取整（`-90` 是 -2 分钟）。参数写错了（`abc`、`nan`、`-inf`）时浏览器已经打开，
+  然后才是调用栈；端口被占着（退出码 4）时根本不看它。（`login-catch/timeout/…`、`port-busy-not-a-number-timeout-never-read`）
+- **login-forward：回调的回答既没说正文多长、也不关连接时，要等满 120 秒再报「连不上」——其实验证码已经送到了。** `r.read(65536)`
+  在没有 `Content-Length`、也不是分块时一直读到对方关连接。Claude Code、Codex 现在的回答都带长度。
+  （`login-forward/slow/headers-then-silence`：要等两分钟，`CCA_PYDIFF_SLOW=1` 时才跑）
+- **agy 第二次打出登录网址时，网址原样到了 stderr。** `show` 只接第一个网址（`st['opened']`），之后带着网址的行落到最后一个分支，
+  照“别的输出”转出去；docs/dev/accounts.md 说的是 agy 的输出由 cca 转述、不原样打出来。agy 换不到 token、重新给一个网址时会走到。
+  （`agy-login/url-twice`）
+- **agy 探测：临时目录的路径里有成对的方括号时认成“不支持”。** `glob.glob(os.path.join(g, 'antigravity-cli', 'log', '*.log'))`
+  把整个路径当通配符看，`TMPDIR=/x/t[x]mp` 这样的目录对不上它自己，日志读不到，`agy_probe` 记下 `files: false`，bash 的 `agy_guard`
+  就用「这个版本的 agy 不再把登录存进账号自己的目录」把登录和每次启动都挡住（缓存着，换了 TMPDIR 也不重测，要等 agy 的程序文件变了）。
+  该先 `glob.escape`。另外各份日志是接成一串再找那一句的：前一份的结尾和后一份的开头凑成那一句也算数。
+  （`agy-probe/tmpdir-with-brackets`、`said-across-two-files`）
+- **以 `$` 结尾的几个正则，结尾多一个换行也算**（同 secrets 一节的第二条）。`NODE_ID_RE`：`--node-id` 后面带着换行时格式算对，
+  比的时候又不等，于是说「不是同一个节点」。`LOGIN_CODE_RE`：以换行结尾的 state、验证码也收，`login-forward` 把那个换行编成 `%0A`
+  转过去。（`login-page-acct/id-with-trailing-newline`、`login-forward/ok-code-ends-with-newline`、`login-check/…/state-trailing-newline`）
+- **`re.I` 把 İ、ı 当成 i**（同 settings 一节的那一条）：`AGY_CODE_PROMPT`、`agy_probe` 里筛环境变量的 `drop` 也是。照样移植了
+  （这两个正则里写明了）。（`agy-login/prompt-other-case-and-own-line`，筛环境变量的在 `login/agy.rs` 的单元测试里）
+- **`node_ids` 里记的不是字符串时原样往外给。** `node_fp_here` 拿到什么返回什么：config.json 里被改成数字时 `node-fp` 打出 `123`，
+  服务器上给出的那一行就是 `--node-id 123`（到了 Mac 上 `login-page-acct` 说它格式不对）。
+  （`node-fp/recorded-number`、`agy-login/remote-node-id-not-a-string`）
+- **`login-page-acct` 把 config.json 的 `nodes` 直接当列表用。** 被手改成字符串时按字符遍历、按“是不是它的一段”判断
+  （`"nodes": "US-A,HK-A"`、服务器上的节点叫 `A`，结果是 `LP_NODE=A`）；是 `null`、数字时是调用栈。
+  （`login-page-acct/nodes-string/A`、`nodes-null/…`、`nodes-number/…`）
