@@ -124,7 +124,7 @@ def tree_digest(root, masks):
 
 # 会动到这台机器、会联网的命令：对拍的沙箱里一律是假的。用例自己放了假命令就用它的，没放的调到就报错（两边都一样报，
 # 用例会因为多出 unexpected-commands.log 被看出来）。写了绝对路径的命令（lsregister、taskpolicy）挡不住，用例要自己绕开
-GUARDED = ['security', 'osascript', 'open', 'launchctl', 'ssh', 'scp', 'curl', 'git', 'nc', 'crontab', 'defaults', 'killall', 'pkill', 'sudo',
+GUARDED = ['security', 'osascript', 'open', 'launchctl', 'ssh', 'scp', 'curl', 'git', 'nc', 'crontab', 'defaults', 'killall', 'pkill', 'sudo', 'lsappinfo',
            'networksetup', 'scutil', 'codesign', 'spctl', 'hdiutil', 'ditto', 'claude', 'codex', 'agy', 'mihomo']
 GUARD = '''echo "pydiff：这个用例没有给 %s 准备假命令" >&2
 printf '%%s\\n' "$0 $*" >> "$HOME/unexpected-commands.log"
