@@ -105,6 +105,14 @@ pub fn presence_load() -> R<(String, Option<Dict>)> {
     Ok((String::new(), Some(cfg)))
 }
 
+/// 上报用的账号摘要：服务器只看到它，看不到邮箱（盐在签名的映射里，各台 Mac 算出来的一样）
+pub fn presence_aid(salt: &str, tool: &str, email: &str) -> R<String> {
+    let compact: String = salt.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let key = crate::py::hash::from_hex(&compact).ok_or_else(|| crate::py::Fail::Value("non-hexadecimal number found in fromhex() arg".into()))?;
+    let digest = crate::py::hash::hmac_sha256(&key, format!("{}\0{}", tool, email.to_lowercase()).as_bytes());
+    Ok(crate::py::hash::to_hex(&digest)[..32].to_string())
+}
+
 /// 这个账号是映射里的官方账号吗（pm 是这个工具的 policy_raw）：只有它们上报、看得到设备
 pub fn presence_mapped(pm: &Dict, key: &str, v: &V) -> bool {
     let e = parse_key(key).1.to_lowercase();
