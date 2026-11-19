@@ -418,9 +418,11 @@ ask() {
 	IFS= read -r code || { printf '\nlogin cancelled\n'; echo 'stdin closed' >> "$HOME/agy.log"; exit 1; }
 	printf 'code=[%s]\n' "$code" >> "$HOME/agy.log"
 }
-hold() {   # 等着被停掉：收到 SIGTERM 记一笔就退出。没人来停也不留话（那时沙箱早就是别的用例的了）
+hold() {   # hold [命令…]：等着被停掉，收到 SIGTERM 记一笔就退出。没人来停也不留话（那时沙箱早就是别的用例的了）。
+	# 给了命令（给 cca 发信号）就在装好 trap 以后才跑它：cca-core 收到信号马上就来停 agy，trap 还没装上的话这一笔就记不上了
 	trap 'kill $s 2>/dev/null; echo got-TERM >> "$HOME/agy.log"; exit 0' TERM
 	sleep 10 & s=$!
+	"$@"
 	wait $s
 }
 . "$HOME/agy-plan"
@@ -517,9 +519,9 @@ agy_login('mapped-account-added-on-the-way', mode='remote',
 agy_login('login-file-cannot-be-saved', plan=DONE + 'sleep 0.3\n', setup=lambda b: b.write('.cca/agy/accounts/%s' % ident('alice@example.com'), 'in the way'))
 # 被信号停下：agy 打出网址、等 cca 开完浏览器回来接着读它的输出（等一秒），再给 cca 发信号（原来是 KeyboardInterrupt：
 # 停掉 agy，说一句，退出码 130）。信号和网址同时到的话，浏览器开没开要看谁先，两边都说不准
-agy_login('sigterm', plan=SAY_URL + 'sleep 1\nkill -TERM $PPID\nhold\n')
-agy_login('sigint', plan=SAY_URL + 'sleep 1\nkill -INT $PPID\nhold\n')
-agy_login('sigterm-before-the-url', plan='kill -TERM $PPID\nhold\n')
+agy_login('sigterm', plan=SAY_URL + 'sleep 1\nhold kill -TERM $PPID\n')
+agy_login('sigint', plan=SAY_URL + 'sleep 1\nhold kill -INT $PPID\n')
+agy_login('sigterm-before-the-url', plan='hold kill -TERM $PPID\n')
 agy_login('sigterm-while-browser-runs', plan=SAY_URL + 'hold\n', settle=1.4,
           browser='printf \'%s\\n\' "cca $1" >> "$HOME/calls.log"\nkill -TERM $PPID\nsleep 1\necho "not killed" >> "$HOME/calls.log"\n')
 # agy 不理 SIGTERM：等 5 秒，杀掉
