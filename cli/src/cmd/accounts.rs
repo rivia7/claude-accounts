@@ -1,8 +1,7 @@
 //! env、rows / node-rows / node-default、check、add / add-api / rename / reorder / rm、set-last、edit-form / edit-apply、prompt-emit、
 //! nodes-allowed / set-nodes / nodes-preselect / nodes-lost / select-lines、sync-state、slot-rows、accounts-json、file-replace（PY_SRC 的 `cmd_env` 到 `cmd_rm`、
 //! `cmd_nodes_allowed` 到 `cmd_set_nodes`、`cmd_slot_rows`）。
-//!
-//! 还没移植的：rows、set-last（要用量那一块）、select-lines、slot-rows（要内置代理那一块）。
+//! （select-lines、slot-rows、file-replace 登记在 corenet 里，accounts-json 在 table 里。）
 
 use super::codex::codex_probe;
 use super::table::{account_named, need};

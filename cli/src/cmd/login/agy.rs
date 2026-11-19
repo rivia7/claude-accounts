@@ -38,11 +38,9 @@ const AGY_FILE_TOKENS: &str = "Using file-based token storage because SSH sessio
 static AGY_PROBE_DROP: LazyLock<Re> =
     LazyLock::new(|| Re::with_flags(r"^(AGY_|ANT[Iİı]GRAV[Iİı]TY_|GEM[Iİı]N[Iİı]_|GOOGLE_|SSH_|(HTTPS?|ALL|NO)_PROXY$)", re::I));
 
-/// `int(st.st_mtime)`：st_mtime 是小数（CPython 里是 `(double)秒 + 1e-9 * 纳秒`），纳秒差一点满一秒时小数放不下、进位成
-/// 下一秒。arm64 上编译器把那个式子合成一次乘加（见 link/pylib.rs 的 st_mtime）：取整以后两种算法没有差别，照样分开写
+/// `int(st.st_mtime)`：st_mtime 是小数（纳秒差一点满一秒时小数放不下、进位成下一秒，见 `py::shutil::stat_time`），再往 0 取整
 fn mtime_int(sec: i64, nsec: i64) -> i64 {
-    let (sec, nsec) = (sec as f64, nsec as f64);
-    (if cfg!(target_arch = "aarch64") { 1e-9f64.mul_add(nsec, sec) } else { sec + 1e-9 * nsec }) as i64
+    crate::py::shutil::stat_time(sec, nsec) as i64
 }
 
 /// `tempfile.TemporaryDirectory(prefix=…)`：只有自己能进的临时目录（前缀加 8 个随机字符），离开作用域时整个删掉

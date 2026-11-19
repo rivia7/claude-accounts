@@ -141,8 +141,8 @@ pub fn codex_probe(bin_: &str) -> Dict {
     let Ok(st) = std::fs::metadata(&real) else {
         return full;
     };
-    // int(st.st_mtime)：往 0 取整（1970 年以前、带小数的时间戳和往下取整的秒数差 1）
-    let mtime = if st.mtime() < 0 && st.mtime_nsec() > 0 { st.mtime() + 1 } else { st.mtime() };
+    // int(st.st_mtime)：st_mtime 是小数（纳秒差一点满一秒时进位成下一秒），再往 0 取整
+    let mtime = crate::py::shutil::stat_time(st.mtime(), st.mtime_nsec()) as i64;
     let mut sig = format!("{}|{}|{}", real, st.size(), mtime);
     if real.ends_with(".js") {
         // npm 装的：启动脚本的大小、时间不随版本变，版本号在包里的 package.json

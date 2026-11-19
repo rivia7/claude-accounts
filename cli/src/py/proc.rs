@@ -15,6 +15,24 @@ fn open_fds_from(from: i32) -> Vec<i32> {
     }
 }
 
+/// 起了以后不等的子进程（`subprocess._active`）。Python 的 Popen 对象没人管了以后，下一次起子进程时 `_cleanup()` 把已经退出的
+/// 收走，不留僵尸；Rust 的 `Child` 丢掉就没人收了——常驻的上报进程每隔几分钟在后台起一次统计，一天下来就是上百个僵尸，
+/// 占着这个用户的进程数。交给 `forget` 的子进程由 `reap` 收：每次 `spawn` 之前收一遍（上报进程每分钟都要起 ps、curl）
+static ACTIVE: std::sync::Mutex<Vec<Child>> = std::sync::Mutex::new(Vec::new());
+
+/// 这个子进程不等了：记下来，退出以后由 `reap` 收走
+pub fn forget(child: Child) {
+    reap();
+    ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).push(child);
+}
+
+/// 把记着的、已经退出的子进程收走（`subprocess._cleanup()`）
+pub fn reap() {
+    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    // 还在跑的留着；退出了的（try_wait 收走了它）和问不了的不留
+    active.retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+}
+
 /// 子进程的标准输入
 #[derive(Clone, Default)]
 pub enum In {
@@ -205,6 +223,7 @@ impl Cmd {
 
     /// `subprocess.Popen(…)`：起来就返回，不等它
     pub fn spawn(&self) -> Result<Child, ProcError> {
+        reap();
         // Python 的 subprocess 起子进程前不替你 flush；这里也不 flush，先后顺序才一样
         self.command().spawn().map_err(ProcError::Os)
     }
@@ -400,6 +419,32 @@ pub fn env_or_empty(k: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 不等的子进程退出以后不留僵尸：下一次起子进程（或者直接 `reap`）时收走
+    #[test]
+    fn forgotten_children_are_reaped() {
+        let child = Cmd::new(["/bin/sh", "-c", "exit 0"]).stdin(In::Null).spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        forget(child);
+        // 等它退出（这时它是僵尸，进程号还占着；别的测试起子进程时也可能先把它收了，所以不在这里查“还占着”）
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Cmd::new(["/bin/sh", "-c", "exit 0"]).stdin(In::Null).run().unwrap(); // 起下一个子进程时顺手收走
+        // SAFETY: 只是问这个进程号在不在
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "收走以后这个进程号应该不在了");
+        // 还在跑的不动
+        let child = Cmd::new(["/bin/sleep", "2"]).stdin(In::Null).spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        forget(child);
+        reap();
+        // SAFETY: 同上
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        // SAFETY: 测试自己起的进程，停掉它
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        reap();
+        // SAFETY: 同上
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
 
     #[test]
     fn captures_output_and_exit_code() {

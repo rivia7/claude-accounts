@@ -28,7 +28,7 @@
 | `cli/FINDINGS.md` | 原实现里发现的问题 |
 
 移植一个子命令：在所属模块里写 `pub fn cmd_xxx(args: &[String]) -> R<()>`，加进那个模块的 `CMDS`
-（三种工具都对了用 `Cmd::all`，先只对了 Claude 用 `Cmd::claude_only`）。函数名、辅助函数名和 Python 里的一样，方便对着找。
+（`Cmd::all(名字, 函数)`：三种工具走同一个函数，差别在 `core::tool::t()`）。函数名、辅助函数名和 Python 里的一样，方便对着找。
 注释像原来那样用中文、说明“为什么”，原来有用的注释搬过来。
 
 **只改自己模块的文件**（`cli/src/cmd/<模块>…`、`cli/pydiff/cases/<模块>.py`）和 `cli/FINDINGS.md`。要改别处（兼容层缺东西、

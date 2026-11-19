@@ -61,16 +61,16 @@ HELPER_BOOT = r'''# ------------------------------------------------------------
 # 原来是内嵌的 Python（每次起一个 Python 进程）；子命令、参数、输出都没变（py 子命令 参数…）。
 # 发布的 cca 把四种机器的辅助程序（gzip + base64）接在文件最后、exit 的后面：bash 读到 exit 就不往下读了。第一次用时把这台
 # 机器的那一份解到 CACHE_DIR/cca-helper（只有自己能读写），文件名就是它的 SHA-256：换了版本就是另一个文件；校验对了、
-# 试着运行过才改名换上。以后每次只看一眼“文件在不在、是不是我的”，不起任何进程。
-# 仓库里的 cca 没接辅助程序（HELPER_SUMS 空着）：用 cli/ 里编出来的那一份（cd cli && cargo build --release）。
-# CCA_HELPER：指定用哪一份（测试用）。
+# 试着运行过才改名换上。以后每次只看一眼“文件在不在、是不是我的”，不起任何进程。解好的那一份中途没了（系统清临时目录）时
+# py 自己再解一次；这一份 cca 已经被新版本换掉的（还开着的旧会话），从更新留下的上一个版本（update/cca.prev）里解。
+# 仓库里的 cca 没接辅助程序（HELPER_SUMS 空着）：用 cli/ 里编出来的那一份（cd cli && cargo build --release），
+# 或者 CCA_HELPER 指的那一份（测试用；发布的 cca 不认这个变量：环境变量不能让它去运行别的程序）。
 # ---------------------------------------------------------------------------
 HELPER_SUMS=""   # 发布时由 cli/pack.py 填上：「目标=SHA-256」，空格隔开
 helper_find() {
 	local t sum d
-	if [ -n "${CCA_HELPER:-}" ]; then HELPER="$CCA_HELPER"; return 0; fi
 	if [ -z "$HELPER_SUMS" ]; then
-		HELPER="${SELF%/*}/cli/target/release/cca-core"
+		HELPER="${CCA_HELPER:-${SELF%/*}/cli/target/release/cca-core}"
 		[ -x "$HELPER" ] && return 0
 		printf '%s\n' "cca: 这一份 cca 是仓库里的源码，没带辅助程序：先编出来（cd ${SELF%/*}/cli && cargo build --release）" >&2
 		return 1
@@ -87,23 +87,31 @@ helper_find() {
 	fi
 	d="$CACHE_DIR/cca-helper"
 	HELPER="$d/$sum"
-	[ -x "$HELPER" ] && [ -O "$HELPER" ] && [ -O "$d" ] && [ ! -L "$d" ] && return 0
+	[ -x "$HELPER" ] && [ -s "$HELPER" ] && [ -O "$HELPER" ] && [ -O "$d" ] && [ ! -L "$d" ] && return 0
 	helper_unpack "$t" "$sum" "$d"
 }
 helper_unpack() {   # helper_unpack 目标 SHA-256 目录：第一次用（或者缓存目录被清过）时解出来。目录不是自己的、是链接就不用
-	local t="$1" sum="$2" d="$3" tmp got c miss=""
-	for c in sed base64 gunzip; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"; done
+	local t="$1" sum="$2" d="$3" tmp got c src b64=base64 sha=sha256sum hint="（可以设 XDG_CACHE_HOME 换一个放缓存的目录）" miss=""
+	# macOS 上用系统自带的那几个：PATH 里排在前面的可能是 Homebrew 装的 GNU base64，它不认 -D（macOS 12 以前自带的只认 -D）
+	case "$OSTYPE" in darwin*) b64=/usr/bin/base64 sha="/usr/bin/shasum -a 256" hint="" ;; esac
+	for c in sed "$b64" gunzip; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }${c##*/}"; done
 	[ -z "$miss" ] || { printf '%s\n' "cca: 缺少命令 ${miss// /、}（解出辅助程序要用），先装上" >&2; return 1; }
 	{ [ -d "$d" ] || mkdir -p -m 700 "$d"; } 2>/dev/null
 	if [ ! -d "$d" ] || [ -L "$d" ] || [ ! -O "$d" ] || ! chmod 700 "$d" 2>/dev/null; then
-		printf '%s\n' "cca: 缓存目录 ${d} 用不了（建不出来、不是自己的，或者是个链接）" >&2
+		printf '%s\n' "cca: 缓存目录 ${d} 用不了（建不出来、不是自己的，或者是个链接）${hint}" >&2
 		return 1
 	fi
 	tmp="$d/$sum.$$"
-	case "$OSTYPE" in darwin*) c=-D ;; *) c=-d ;; esac   # macOS 12 以前的 base64 只认 -D
-	sed -n "/^#CCA-HELPER ${t}\$/,/^CCA-HELPER-END\$/p" "$SELF" | sed '1,2d;$d' | base64 "$c" 2>/dev/null | gunzip -c > "$tmp" 2>/dev/null
-	case "$OSTYPE" in darwin*) got=$(shasum -a 256 "$tmp" 2>/dev/null) ;; *) got=$(sha256sum "$tmp" 2>/dev/null) ;; esac
-	if [ "${got%% *}" != "$sum" ]; then
+	case "$b64" in /*) c=-D ;; *) c=-d ;; esac
+	# 从这一份 cca 里解；它已经被新版本换掉的（这个进程是更新之前起的）从更新留下的上一个版本里解
+	for src in "$SELF" "$CCA_HOME/update/cca.prev"; do
+		[ -f "$src" ] || continue
+		sed -n "/^#CCA-HELPER ${t}\$/,/^CCA-HELPER-END\$/p" "$src" | sed '1,2d;$d' | "$b64" "$c" 2>/dev/null | gunzip -c > "$tmp" 2>/dev/null
+		got=$($sha "$tmp" 2>/dev/null)
+		[ "${got%% *}" != "$sum" ] || break
+		got=""
+	done
+	if [ -z "$got" ]; then
 		rm -f "$tmp"
 		printf '%s\n' "cca: 解不出辅助程序（${SELF} 不完整，或者 ${d} 写不进去）：重新安装 cca，见 ${UPDATE_REPO}" >&2
 		return 1
@@ -111,12 +119,12 @@ helper_unpack() {   # helper_unpack 目标 SHA-256 目录：第一次用（或�
 	# 试着运行一次：目录所在的盘不许执行程序（noexec）、系统太旧时，在这里说清楚，不等到后面每一步都出错
 	if ! chmod 700 "$tmp" || [ "$("$tmp" sh-re-escape ok 2>/dev/null)" != ok ]; then
 		rm -f "$tmp"
-		printf '%s\n' "cca: 辅助程序在这台机器上运行不了（${d} 所在的盘不许执行程序？系统太旧？）" >&2
+		printf '%s\n' "cca: 辅助程序在这台机器上运行不了（${d} 所在的盘不许执行程序？系统太旧？）${hint}" >&2
 		return 1
 	fi
 	mv -f "$tmp" "$HELPER" || { rm -f "$tmp"; return 1; }
-	# 顺手删掉 7 天前解出来的（旧版本的，还有没解完的临时文件）
-	find "$d" -type f ! -name "$sum" -mtime +7 -exec rm -f {} + 2>/dev/null
+	# 顺手删掉 30 天前解出来的（旧版本的，还有没解完的临时文件）。还开着的旧会话要用的那一份被删了，它自己会再解（见上）
+	find "$d" -type f ! -name "$sum" -mtime +30 -exec rm -f {} + 2>/dev/null
 	return 0
 }
 helper_find || exit 1
@@ -128,6 +136,11 @@ n = s.count('"${PYRUN[@]}"')
 must(n >= 10, '"${PYRUN[@]}" 只出现了 %d 次' % n)
 s = s.replace('"${PYRUN[@]}"', '"$HELPER"')
 must('PYRUN' not in s, '还有别的写法的 PYRUN')
+sub('py() { CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }',
+    '# 解好的那一份辅助程序中途没了（系统清了临时目录）：再解一次（看在不在是内建的判断，不起进程）\n'
+    'py() { [ -x "$HELPER" ] || helper_find || return 127; CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }', 'py')
+sub('pyenv() { env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }',
+    'pyenv() { [ -x "$HELPER" ] || helper_find || return 127; env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }', 'pyenv')
 DONE.append('PYRUN（%d 处）' % n)
 # 注释里提到 PY_SRC 的地方（“PY_SRC 的 xxx 是同一份”）：改口叫辅助程序
 mentions = s.count('PY_SRC')
@@ -191,6 +204,11 @@ sub('用 tool 步骤名 调用；Python 那边按 CCA_TOOL 选同一个工具', 
 sub('（同一个文件、大小和修改时间都没变）就不再起 python', '（同一个文件、大小和修改时间都没变）就不再起辅助程序', '注释：load_router')
 sub('# flock 锁留在当前 shell 的 fd 9；Python 退出后仍持有，', '# flock 锁留在当前 shell 的 fd 9；辅助程序退出后仍持有，', '注释：启动锁')
 sub('（连同它们起的 python、curl；', '（连同它们起的辅助程序、curl；', '注释：停掉后台的查询')
+
+sub('见 PY 的 core_bind', '见辅助程序的 core_bind', '注释：core_bind')
+sub('PY 的同名一节', '辅助程序的同名一节', '注释：UDP')
+sub('改了要把 PY 的 UDP_HELPER 加 1', '改了要把辅助程序的 UDP_HELPER（cli/src/cmd/corenet/udp.rs）加 1', '注释：UDP_HELPER')
+sub('和 辅助程序里的 CRED_ENV', '和辅助程序里的 CRED_ENV', '注释：CRED_ENV')
 
 left = [m.group(0) for m in re.finditer(r'.*(\$PYTHON|\bCCA_PYTHON\b|\bPYC_DIR\b|[Pp]ython).*', s)]
 left = [x for x in left if '原来是内嵌的 Python' not in x]

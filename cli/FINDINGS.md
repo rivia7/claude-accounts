@@ -13,7 +13,8 @@
   另外 `sqlite_home` 里的 `*`、`?`、`[` 原来会被当成通配符，现在按字面。
 - **属性列表（plist）的值是一棵树。** 二进制文件里几处引用同一个数组 / 字典时读成各自一份，再写出去也各写一份；自己套自己的
   读不了；字典的键只认字符串；XML 只认 UTF-8、带 BOM 的 UTF-16、ISO-8859-1（见 `cli/src/py/plist.rs` 开头）。
-- **TLS 出错原因的文字**（邮箱助手）是 rustls 的，原来是 OpenSSL 的；分类（证书校验没通过 / 别的握手失败）一样。
+- **TLS 出错原因的文字**（邮箱助手）是 rustls 的，原来是 OpenSSL 的；分类（证书校验没通过 / 别的握手失败）一样。证书校验没通过时
+  那句话的后半句原来是“或者这个 Python 缺根证书”，现在没有 Python 了，改成“或者系统的根证书（/etc/ssl/cert.pem）不全”。
 - **邮箱助手的邮件解析、IMAP 照 CPython 3.14.0 的行为手写**（email、email.header、email.utils、html.parser、imaplib、fnmatch；
   对照数据 `cli/tests/vectors/mail.json`）。这几个库各版本在边角上本来就不一样（macOS 自带的 3.9 和 3.14 就不同），Rust 这边固定成
   3.14.0 的。在这之上有几处做不到照样：
@@ -154,6 +155,9 @@
 - **`eval "$(py env "$key")" || die …` 这类检查不生效。** `py` 失败时 `$(…)` 是空的，`eval ""` 返回 0，`|| die` 不会触发，
   bash 带着空的（或上一个账号的）`ACC_*` 接着往下跑；`py` 的报错还是会出现在 stderr。`local-env`、`router-env`、`tool-env`
   的 `eval` 同理。（读代码看出来的）
+- **退出登录时去掉 `.claude.json` 里的 oauthAccount（`claude_wipe`，现在是 `sh-oauth-drop`）是原地改写的**：先清空再写，正好这时进程
+  被结束、磁盘满了，文件就是空的或者半截的。原来 bash 里内嵌的那一小段 Python 就是这样（`json.dump(j, open(p, "w"))`），照样移植了。
+  一个读不了的 `.claude.json` 会让 `cca usage` 对所有账号都出错（见 usage 一节）。改成写临时文件再改名就行。（代码审查时看出来的）
 
 ## 测试
 

@@ -154,7 +154,7 @@ mod tests {
         // 睡着的时候来：马上醒
         let killer = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
-            // SAFETY: 同上
+            // SAFETY: me 是还活着的测试线程（下面 join 这条线程以后它才往下走）
             unsafe { libc::pthread_kill(me, libc::SIGUSR2) };
         });
         let t0 = crate::py::time::monotonic();
@@ -178,6 +178,7 @@ mod tests {
         assert!(sleep(0.01).is_ok());
 
         // 发给这条线程的，别的线程（别的测试）看不到、接不走
+        // SAFETY: 给自己的线程发一个装了处理函数的信号
         unsafe { libc::pthread_kill(me, libc::SIGUSR2) };
         let other = std::thread::spawn(|| (pending(), check().is_ok()));
         assert_eq!(other.join().unwrap(), (false, true));

@@ -10,7 +10,7 @@
 - `bash tests/regress.sh` — 全流程回归，约 12 分钟，超过 Bash 工具前台 10 分钟的上限，放到后台跑。只能在 macOS 上跑；全用假的路由器 / claude / curl / ssh / GitHub，不联网、不碰真实 `~/.cca`。`KEEP=1`、`DEBUG_OUT=1`、`TIMING=文件` 和分节续跑（`CKPT` / `FROM` / `ONLY`）见 tests/CLAUDE.md
 - `bash tests/linux.sh [--docker [镜像…]]` — Linux 上的测试，要联网；见 tests/CLAUDE.md
 - `bash macos/build.sh`、`bash macos/test.sh` — 编界面 App、跑 App 的契约测试，只要苹果的命令行工具、不用 Xcode；见 macos/CLAUDE.md
-- `./release.sh "更新说明"` — 发布，约 25 分钟，同样放到后台跑（要装 Rust 和四个目标：先编四种机器的辅助程序，签名前接到 `cca` 后面）；见下面「发布」和 docs/dev/release.md
+- `./release.sh "更新说明"` — 发布，约 25 分钟（大半是回归，另有四种机器的辅助程序各编一遍），同样放到后台跑（要装 Rust 和四个目标：先编四种机器的辅助程序，签名前接到 `cca` 后面）；见下面「发布」和 docs/dev/release.md
 - `./policy.sh …` — 维护者发布账号 → 节点映射和参考节点、管理各台机器的 deploy key、部署设备统计的服务器；见 docs/dev/policy.md、docs/dev/presence.md
 
 ## 发布
@@ -26,7 +26,7 @@
 - macOS 的 bash 3.2 里 `read -t` 超时的退出码是 1，和读到头一样（bash 4 起大于 128）：要分开超时和读到头时看等了多久（`policy_wait`：读到头是马上返回的）。回归跑在 bash 3.2 上，答案文件只测得到读到头，超时要用一直开着、没有内容的管道当 `CCA_TTY`（11b6）
 - bash 3.2 另外两处：`$(…)` 里解析不了 `case` 的右括号，要放进函数；函数调用前的赋值只在这次调用里有效（`FAIL_CODE=代码 die …` 就靠它）
 - 每次 `py` 都是一个新进程（辅助程序，一次约 4 毫秒、不到 4 MB；一条命令起十几二十次，回归里几千次），别让它变慢：启动的路上不加东西——系统框架用到时才 `dlopen`（写成 `#[link]` 的话每条子命令都要先载入它），正则用 `re!`（用到才编译），只有一条子命令用的东西别在 `main` 里做。bash 里能少起就少起：同一条命令里反复要的记下来（`load_router` 按 config.json 的 inode、大小、修改时间认没变；`stat` 在 macOS 上是 `-f`，GNU / busybox 上是 `-c`，GNU 的 `-f` 是文件系统的信息、缓存永远不失效），一起要的几样合成一个子命令（`sync-state`：校验账号表、清掉多余的 key、摘要）
-- 辅助程序在哪（`helper_find`）：发布的 `cca` 第一次运行时把接在文件最后的那一份解到缓存目录的 `cca-helper/<SHA-256>`（校验过才换上），以后每次只看文件在不在，不为它起进程；仓库里的 `cca`（`HELPER_SUMS` 空着）用 `cli/target/release/cca-core`。`cca` 的最后一行是 `exit`：它后面的不是脚本，别往后面加东西。见 docs/dev/rust.md
+- 辅助程序在哪（`helper_find`）：发布的 `cca` 第一次运行时把接在文件最后的那一份解到缓存目录的 `cca-helper/<SHA-256>`（校验过才换上），以后每次只看文件在不在，不为它起进程（中途被清掉了 `py` 自己再解）；仓库里的 `cca`（`HELPER_SUMS` 空着）用 `cli/target/release/cca-core`，或者 `CCA_HELPER` 指的（发布的不认这个变量）。`cca` 的最后一行是 `exit`：它后面的不是脚本，别往后面加东西。见 docs/dev/rust.md
 - bash 和辅助程序之间的约定（子命令的参数、stdout 的格式、退出码）两边一起改；辅助程序里起外部命令照旧按名字起（回归把它们换成 PATH 上的假命令、核对参数）；辅助程序的依赖是白名单，加新的之前先问维护者
 - 替换已安装的脚本只能用 `mv`：bash 边读边执行，原地覆盖会让正在运行的 cca 读到半截代码
 - 联网下载一律用 `retry3`（有些网络会丢新连接；两次之间等 `CCA_RETRY_WAIT` 秒，默认 2，回归里是 0）

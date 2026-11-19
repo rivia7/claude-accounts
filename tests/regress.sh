@@ -14,7 +14,8 @@ trap '[ -z "$HC" ] || rm -rf "$HC"; [ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ 
 cd "$T" || exit 1
 # 辅助程序（cli/ 的 Rust 程序）：仓库里的 cca 用 cli/target/release 里编出来的那一份，这里先编（没改过就是零点几秒；--locked --offline：
 # 照 Cargo.lock、不联网，依赖没下过的先在 cli/ 里 cargo fetch 一次）。CCA_HELPER=路径：不编，整套回归用这一份（release.sh 用它
-# 指到要发布的那一份；没装 Rust 的机器上也可以这样跑）。HOST_TARGET：这台机器的目标（mkver 给假的发布版接辅助程序用，见 cli/pack.py）
+# 指到要发布的那一份）：仓库里的 cca 认这个变量，mkver 做的假发布版接的也是这一份（发布的 cca 不认这个变量，总是用自己接着的）。
+# HOST_TARGET：这台机器的目标（见 cli/pack.py）
 HELPER_BIN="${CCA_HELPER:-}"
 if [ -z "$HELPER_BIN" ]; then
 	HELPER_BIN="$(dirname "$CCA")/cli/target/release/cca-core"
@@ -24,7 +25,7 @@ fi
 [ -x "$HELPER_BIN" ] || { echo "辅助程序不在：$HELPER_BIN" >&2; exit 1; }
 case "$(uname -m)" in arm64) HOST_TARGET=aarch64-apple-darwin ;; *) HOST_TARGET=x86_64-apple-darwin ;; esac
 # TIMING=文件：找慢在哪。每个 ok 记一行“距上一个 ok 几秒<TAB>调用 ok 的行号<TAB>这段时间 cca 起了几次辅助程序<TAB>sleep 了几秒<TAB>说明”；
-# 次数靠 CCA_HELPER 指向的一个记数的小脚本（只在 TIMING 时用），sleep 靠 $T/bin 里的 sleep
+# 次数靠 CCA_HELPER 指向的一个记数的小脚本（只在 TIMING 时用；11b 以后装着的是假发布版，它不认 CCA_HELPER，那以后的次数不记），sleep 靠 $T/bin 里的 sleep
 #（cca、假命令、经假 ssh 跑的路由器端都从 PATH 找它；后台进程的也算在内）
 HELPERWRAP="${CCA_HELPER:-}"
 if [ -n "${TIMING:-}" ]; then
@@ -1584,27 +1585,29 @@ ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存）�
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
 # 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cli/pack.py），第一次用时解到
 # 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
-# 这几个用例不带 CCA_HELPER（TIMING、release.sh 跑回归时带着它，那样就不解了）；缓存目录单独建一个（HC，退出时删），不碰真的
+# 缓存目录单独建一个（HC，退出时删），不碰真的。CCA_HELPER（TIMING、release.sh 跑回归时带着）只对仓库里的 cca 管用，发布的不认
 HC=$(mktemp -d "$(getconf DARWIN_USER_TEMP_DIR)cca-test-helper.XXXXXX"); HC=$(cd "$HC" && pwd -P); HCL=${HC#/private}
-hrun() { run CCA_HELPER= TMPDIR="$HCL/" "$@"; }   # hrun 命令…：不指定辅助程序，缓存目录是 $HC
+hrun() { run CCA_HELPER= TMPDIR="$HCL/" "$@"; }   # hrun 命令…：缓存目录是 $HC，不指定辅助程序
 HSUM=$(shasum -a 256 "$HELPER_BIN" | cut -d' ' -f1)
 mkdir -p "$T/hc/dev"; cp "$CCA" "$T/hc/dev/cca"; : > "$T/hc/dev/.git"
 out=$(hrun "$T/hc/dev/cca" version 2>&1); rc=$?
 ok "辅助程序：仓库里的 cca（没接辅助程序）还没编出来时说清楚怎么编，不往下走" '[ $rc -eq 1 ] && [ "$out" = "cca: 这一份 cca 是仓库里的源码，没带辅助程序：先编出来（cd $T/hc/dev/cli && cargo build --release）" ]'
 out=$(run CCA_HELPER="$HELPER_BIN" "$T/hc/dev/cca" version 2>&1); rc=$?
-ok "辅助程序：CCA_HELPER 指定用哪一份（测试用）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ]'
+ok "辅助程序：仓库里的 cca 认 CCA_HELPER（指定用哪一份，测试用）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ]'
 python3 -I "$D/../cli/pack.py" "$CCA" "$T/hc/cca" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null
 ok "辅助程序：接上以后（cli/pack.py）还是一个语法正确的 bash 文件，校验值写在 HELPER_SUMS 里" 'bash -n "$T/hc/cca" && grep -qx "HELPER_SUMS=\"$HOST_TARGET=$HSUM\"" "$T/hc/cca" && [ "$(tail -n 1 "$T/hc/cca")" = CCA-HELPER-END ]'
 out=$(hrun "$T/hc/cca" version 2>&1); rc=$?
 ok "辅助程序：发布的 cca 第一次运行时解到缓存目录的 cca-helper 里（文件名是 SHA-256，校验过，只有自己能读写执行）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ] && [ "$(ls "$HC/cca-helper")" = "$HSUM" ] && [ "$(stat -f %Lp "$HC/cca-helper/$HSUM")" = 700 ] && [ "$(stat -f %Lp "$HC/cca-helper")" = 700 ] && [ "$(shasum -a 256 "$HC/cca-helper/$HSUM" | cut -d" " -f1)" = "$HSUM" ]'
+out=$(run CCA_HELPER=/nonexistent/cca-core TMPDIR="$HCL/" "$T/hc/cca" _gui hello 2>&1); rc=$?
+ok "辅助程序：发布的 cca 不认 CCA_HELPER（环境变量不能让它去运行别的程序），照旧用自己解出来的那一份" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"hello\" and d[\"cca_version\"] == \"$VER\""'
 i1=$(stat -f '%i %m' "$HC/cca-helper/$HSUM")
 tr=$(hrun bash -x "$T/hc/cca" version 2>&1 >/dev/null)
 ok "辅助程序：以后每次直接用解好的那一份，不再解，也不为它起任何进程" '[ "$(stat -f "%i %m" "$HC/cca-helper/$HSUM")" = "$i1" ] && ! printf "%s" "$tr" | grep -qE "^\++ (sed|base64|gunzip|shasum|mkdir|chmod|find|mv) "'
 rm -rf "$HC/cca-helper"; mkdir -m 700 "$HC/cca-helper"
 for n in aaaa1 aaaa2.4242 bbbb1; do echo x > "$HC/cca-helper/$n"; done
-touch -t "$(date -v-8d +%Y%m%d%H%M)" "$HC/cca-helper/aaaa1"; touch -t "$(date -v-30d +%Y%m%d%H%M)" "$HC/cca-helper/aaaa2.4242"; touch -t "$(date -v-6d +%Y%m%d%H%M)" "$HC/cca-helper/bbbb1"
+touch -t "$(date -v-32d +%Y%m%d%H%M)" "$HC/cca-helper/aaaa1"; touch -t "$(date -v-90d +%Y%m%d%H%M)" "$HC/cca-helper/aaaa2.4242"; touch -t "$(date -v-28d +%Y%m%d%H%M)" "$HC/cca-helper/bbbb1"
 hrun "$T/hc/cca" version >/dev/null 2>&1
-ok "辅助程序：解新的一份时顺手删掉 7 天前解出来的（旧版本的、没解完的临时文件），7 天内的留着" '[ "$(ls "$HC/cca-helper" | LC_ALL=C sort | tr "\n" " ")" = "$(printf "%s\n" "$HSUM" bbbb1 | LC_ALL=C sort | tr "\n" " ")" ]'
+ok "辅助程序：解新的一份时顺手删掉 30 天前解出来的（旧版本的、没解完的临时文件），30 天内的留着" '[ "$(ls "$HC/cca-helper" | LC_ALL=C sort | tr "\n" " ")" = "$(printf "%s\n" "$HSUM" bbbb1 | LC_ALL=C sort | tr "\n" " ")" ]'
 rm -rf "$HC/cca-helper"
 head -c $(( $(wc -c < "$T/hc/cca") - 20000 )) "$T/hc/cca" > "$T/hc/cut"; chmod 755 "$T/hc/cut"
 out=$(hrun "$T/hc/cut" version 2>&1); rc=$?
@@ -1621,9 +1624,31 @@ out2=$(hrun OSTYPE=linux-gnu "$T/hc/cca" version 2>&1); rc2=$?   # bash 认环�
 out3=$(hrun HOSTTYPE=armv7l "$T/hc/cca" version 2>&1)   # 32 位的 bash 跑在 64 位的系统上：HOSTTYPE 认不出来时问 uname -m
 ok "辅助程序：没有这种机器用的（别的芯片；这一份没接 Linux 的）时说清楚；bash 的 HOSTTYPE 认不出来时照 uname -m" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "没有这种机器用的辅助程序（riscv64 " && [ $rc2 -eq 1 ] && printf "%s" "$out2" | grep -q "没有这种机器用的辅助程序" && [ "$out3" = "$VER" ]'
 rm -rf "$HC/cca-helper"
-mkdir -p "$T/hc/nob64"; for n in bash sed gunzip shasum getconf mkdir chmod mv rm find cat locale grep dirname basename readlink; do ln -sf "$(PATH=/usr/bin:/bin command -v "$n")" "$T/hc/nob64/$n"; done
-out=$(hrun PATH="$T/hc/nob64" /bin/bash "$T/hc/cca" version 2>&1); rc=$?
-ok "辅助程序：解的时候缺命令（base64）说缺什么" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "缺少命令 base64（解出辅助程序要用）"'
+mkdir -p "$T/hc/nogz"; for n in bash sed base64 shasum getconf mkdir chmod mv rm find cat locale grep dirname basename readlink; do ln -sf "$(PATH=/usr/bin:/bin command -v "$n")" "$T/hc/nogz/$n"; done
+out=$(hrun PATH="$T/hc/nogz" /bin/bash "$T/hc/cca" version 2>&1); rc=$?
+ok "辅助程序：解的时候缺命令（gunzip）说缺什么" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "缺少命令 gunzip（解出辅助程序要用）"'
+# PATH 里排在前面的是 GNU 的 base64（Homebrew 的 coreutils：不认 -D）、别的 shasum：macOS 上解的时候用系统自带的那两个
+mkdir -p "$T/hc/gnu"; printf '#!/bin/sh\necho "base64: invalid option -- D" >&2\nexit 1\n' > "$T/hc/gnu/base64"; printf '#!/bin/sh\nexit 1\n' > "$T/hc/gnu/shasum"; chmod +x "$T/hc/gnu/base64" "$T/hc/gnu/shasum"
+out=$(hrun PATH="$T/hc/gnu:$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/hc/cca" version 2>&1); rc=$?
+ok "辅助程序：PATH 里排在前面的 base64 不认 -D（GNU 的）也解得出来：用系统自带的" '[ $rc -eq 0 ] && [ "$out" = "$VER" ] && [ -x "$HC/cca-helper/$HSUM" ]'
+# 解好的那一份中途没了：py 自己再解一次。把发布的 cca 里找辅助程序的那一段和 py 取出来单独跑（就像一个开了很久的会话收尾时那样）：
+# ① 系统清了临时目录；② 这一份 cca 已经被新版本换掉了（新版本的辅助程序是另一份），上一个版本在 update/cca.prev；③ 哪里都没有了
+printf '#!/bin/sh\n[ "$1" = sh-re-escape ] && echo "$2"\n' > "$T/hc/other-helper"; chmod +x "$T/hc/other-helper"
+python3 -I "$D/../cli/pack.py" "$CCA" "$T/hc/newer" --only "$HOST_TARGET=$T/hc/other-helper" >/dev/null
+mkdir -p "$T/hc/heal/home/.cca/update"; cp "$T/hc/cca" "$T/hc/heal/cca"; cp "$T/hc/cca" "$T/hc/heal/home/.cca/update/cca.prev"
+cat > "$T/hc/heal.sh" <<'S'
+SELF="$1"; CCA_HOME="$2"; UPDATE_REPO=x; TOOL=claude; TOOL_BIN=""; CACHE_DIR="${TMPDIR%/}"
+eval "$(sed -n '/^HELPER_SUMS=/,/^helper_find || exit 1$/p' "$SELF")"
+eval "$(grep '^py() ' "$SELF")"
+py sh-re-escape one || exit 11
+rm -f "$HELPER"; py sh-re-escape two || exit 12
+rm -f "$HELPER"; cp "$3" "$SELF.tmp" && mv -f "$SELF.tmp" "$SELF"; py sh-re-escape three || exit 13
+[ -x "$HELPER" ] || exit 14
+rm -f "$HELPER" "$CCA_HOME/update/cca.prev"; py sh-re-escape four 2>/dev/null; echo "rc=$?"
+S
+rm -rf "$HC/cca-helper"
+out=$(hrun /bin/bash "$T/hc/heal.sh" "$T/hc/heal/cca" "$T/hc/heal/home/.cca" "$T/hc/newer" 2>&1); rc=$?
+ok "辅助程序：解好的那一份中途没了（系统清了临时目录）自己再解；这一份 cca 已经被新版本换掉时从 update/cca.prev 里解；都没有了才失败（127）" '[ $rc -eq 0 ] && [ "$out" = "$(printf "%s\n" one two three rc=127)" ]'
 rm -rf "$HC/cca-helper"
 ( hrun "$T/hc/cca" version > "$T/hc/p1" 2>&1 & hrun "$T/hc/cca" version > "$T/hc/p2" 2>&1 & wait )
 ok "辅助程序：两个 cca 同时第一次运行，都成功，只留下一份" '[ "$(cat "$T/hc/p1")" = "$VER" ] && [ "$(cat "$T/hc/p2")" = "$VER" ] && [ "$(ls "$HC/cca-helper")" = "$HSUM" ]'
@@ -3781,17 +3806,15 @@ mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
 # 装着的是接着辅助程序的那一份（11b 的 mkver）：它解出来的辅助程序在这个用户的临时目录的 cca-helper 里（run 不带 TMPDIR），还原时
-# 也要删掉。带着 CCA_HELPER 跑回归（TIMING、release.sh）时用的不是解出来的那一份，这一条不查
+# 也要删掉
 rh=""; rh0=""
-if [ -z "$HELPERWRAP" ]; then
-	hs=$(sed -n 's/^HELPER_SUMS="[^=]*=\([0-9a-f]*\)"$/\1/p' "$H/.cca/bin/cca" 2>/dev/null)
-	[ -z "$hs" ] || rh="$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
-	[ -n "$rh" ] && [ -x "$rh" ] && rh0=1
-fi
+hs=$(sed -n 's/^HELPER_SUMS="[^=]*=\([0-9a-f]*\)"$/\1/p' "$H/.cca/bin/cca" 2>/dev/null)
+[ -z "$hs" ] || rh="$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
+[ -n "$rh" ] && [ -x "$rh" ] && rh0=1
 out=$(run CCA_GUI_OS=15 CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
-ok "restore：解出来的辅助程序（缓存目录里这个版本的那一份）也删掉" '[ -z "$rh" ] || { [ "$rh0" = 1 ] && [ ! -e "$rh" ]; }'
+ok "restore：解出来的辅助程序（缓存目录里这个版本的那一份）也删掉" '[ "$rh0" = 1 ] && [ ! -e "$rh" ]'
 ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 ok "restore：macOS 26 以下（内核由 cca 在后台托管）也删掉 crontab 里开机起内核的那一行，别的行留着" '! grep -qF "# cca-core" "$T/crontab" && grep -qx "0 3 \* \* \* echo user-job" "$T/crontab"'

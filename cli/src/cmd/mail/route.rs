@@ -612,7 +612,8 @@ pub fn mail_tls(s: TcpStream, timeout: f64) -> R<TlsStream> {
                 TlsError::Cert(why) => mail_fatal(
                     "tls",
                     format!(
-                        "Gmail 的证书校验没通过（{}）：网络里有东西在拦截 TLS，或者这个 Python 缺根证书。cca 不会跳过校验",
+                        // 原来这里说的是“或者这个 Python 缺根证书”：现在没有 Python 了，根证书照系统的那一份（py::tls）
+                        "Gmail 的证书校验没通过（{}）：网络里有东西在拦截 TLS，或者系统的根证书（/etc/ssl/cert.pem）不全。cca 不会跳过校验",
                         mail_oserr(&why, "SSLCertVerificationError")
                     ),
                 ),

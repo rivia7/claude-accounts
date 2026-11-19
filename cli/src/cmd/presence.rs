@@ -144,7 +144,9 @@ pub fn spawn_background(args: &[&str]) {
     argv.push(&SELF_PATH);
     argv.extend(args);
     let env: Vec<(String, String)> = environ().into_iter().filter(|(k, _)| !BG_ENV_DROP.contains(&k.as_str())).collect();
-    let _ = Proc::new(argv).stdin(In::Null).stdout(Out::Null).stderr(Out::Null).env(env).new_session().spawn();
+    if let Ok(child) = Proc::new(argv).stdin(In::Null).stdout(Out::Null).stderr(Out::Null).env(env).new_session().spawn() {
+        crate::py::proc::forget(child); // 不等它；它退出以后要有人收（常驻的上报进程隔几分钟就起一次统计）
+    }
 }
 
 /// key（当前工具的）是映射里的官方账号、正在用：确保这台 Mac 的上报进程在跑（在跑的会经 kqueue 自己看到新的登记），
@@ -585,6 +587,10 @@ pub fn presence_wait(pids: &[i64], dirs: &[&str], timeout: f64, seen: &[Option<(
             libc::kevent(kq.as_raw_fd(), &ev, 1, std::ptr::null_mut(), 0, &none) >= 0
         }
     };
+    // 让它停下的信号（SIGTERM）也交给 kqueue 盯着，登记完再看一眼标志：登记之前到的由这一眼接住，之后到的把 kevent 叫醒。
+    // 不这样的话，信号正好落在“刚看过标志、还没开始等”那一下就没人知道了，要等到下一次心跳才停（cca restore 只等它 5 秒）
+    add(libc::SIGTERM as usize, libc::EVFILT_SIGNAL, libc::EV_ADD, 0);
+    signal::check()?;
     let mut gone = false;
     for pid in pids {
         // 已经退出了（或者是还没回收的僵尸进程）：睡一秒就回去再看，不空转

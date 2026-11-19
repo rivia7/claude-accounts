@@ -404,7 +404,7 @@ mod tests {
         for (u, want) in [
             ("https://api.example.com/anthropic", ""),
             ("http://127.0.0.1:8080/v1", ""),
-            ("http://192.168.2.9/v1", ""),
+            ("http://192.168.1.9/v1", ""),
             ("http://box.local/v1", ""),
             ("http://localhost:1234", ""),
             ("", "base_url 不能为空，也不能有空格或引号"),

@@ -414,9 +414,10 @@ ENV = {'CCA_MAIL_CAFILE': CA_FILE, 'CCA_MAIL_POLL': '0.3', 'CCA_MAIL_RETRY': '0.
 FILE = {'CCA_KEYSTORE': 'file'}
 
 # 每次不一样的：记下的时间、进程号、界面要的生成时间；TLS 握手出错时括号里那一小段是各自的 TLS 库的说法（原来是 OpenSSL 的，
-# cca-core 是 rustls 的），只比前后的字
+# cca-core 是 rustls 的），只比前后的字。证书校验没通过那一句后半句原来说“这个 Python 缺根证书”，cca-core 改口说系统的根证书
 MASK = [(r'"at": [\d.]+', '"at": <时间>'), (r'"pid": \d+', '"pid": <进程号>'), (r'"generated_at": \d+', '"generated_at": <时间>'),
-        (r'(Gmail 的证书校验没通过|和 Gmail 的 TLS 握手没成)（[^）]*）', r'\1（<TLS 库的说法>）')]
+        (r'(Gmail 的证书校验没通过|和 Gmail 的 TLS 握手没成)（[^）]*）', r'\1（<TLS 库的说法>）'),
+        (r'或者(这个 Python 缺根证书|系统的根证书（/etc/ssl/cert.pem）不全)。', '或者<缺根证书>。')]
 
 A, B = '主号(alice@example.com)', 'bob@example.com'
 ALICE, BOB = ident('alice@example.com'), ident('bob@example.com')

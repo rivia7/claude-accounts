@@ -35,6 +35,14 @@ for t in $TARGETS; do
 	( cd cli && RUSTFLAGS="--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=." cargo build --release --locked --target "$t" ) >/dev/null 2>&1 ||
 		fail "辅助程序编不出来：cd cli && cargo build --release --locked --target ${t}（没装这个目标就先 rustup target add ${t}）"
 	! LC_ALL=C grep -qaF "$HOME/" "cli/target/$t/release/cca-core" || fail "辅助程序（${t}）里带着这台机器的路径"
+	# 编出来的确实是这种机器的程序（Linux 的两份在这台 Mac 上运行不了，至少看文件头：64 位、静态链接）
+	case "$t" in
+		aarch64-apple-darwin) want='Mach-O 64-bit executable arm64' ;;
+		x86_64-apple-darwin) want='Mach-O 64-bit executable x86_64' ;;
+		x86_64-unknown-linux-musl) want='ELF 64-bit LSB .*x86-64.*static' ;;
+		aarch64-unknown-linux-musl) want='ELF 64-bit LSB .*ARM aarch64.*static' ;;
+	esac
+	file -b "cli/target/$t/release/cca-core" | grep -q "$want" || fail "辅助程序（${t}）不是这种机器的程序：$(file -b "cli/target/$t/release/cca-core")"
 done
 case "$(uname -m)" in arm64) host=aarch64-apple-darwin ;; *) host=x86_64-apple-darwin ;; esac
 
@@ -54,13 +62,27 @@ res=$(CCA_HELPER="$PWD/cli/target/$host/release/cca-core" bash tests/regress.sh 
 case "$res" in *", 0 failed") echo "  $res" ;; *) fail "回归测试没通过：${res}" ;; esac
 
 out=$(mktemp -d)
-trap 'rm -rf "$out"' EXIT
-# 发布的 cca：仓库里的 cca 后面接上四种机器的辅助程序。接好以后在一个空的 HOME 里真的运行一次（解出这台机器的那一份、校验，
-# 经它报出版本号：cca _gui hello 只读，不联网）
+# 自检用的缓存目录：放在这个用户的临时目录里（cca 只认 /var/folders/ 下的 TMPDIR），每次都是空的——不然走的是这台机器上早就
+# 解好的那一份，接在文件里的那一份根本没解
+chk=$(mktemp -d "$(getconf DARWIN_USER_TEMP_DIR)cca-release-check.XXXXXX")
+trap 'rm -rf "$out" "$chk"' EXIT
+# 发布的 cca：仓库里的 cca 后面接上四种机器的辅助程序。接好以后在一个空的 HOME、空的缓存目录里真的运行一次（解出这台机器的那一份、
+# 校验，经它报出版本号：cca _gui hello 只读，不联网），解出来的要和编出来的一字节不差。这台 Mac 能经 Rosetta 跑 Intel 的程序时，
+# 另一种芯片的那一份也这样跑一次
 python3 -I cli/pack.py cca "$out/cca" >/dev/null || fail "辅助程序没接上（cli/pack.py）"
 bash -n "$out/cca" || fail "接上辅助程序的 cca 语法不对"
-mkdir "$out/home"
-env -i HOME="$out/home" PATH=/usr/bin:/bin:/usr/sbin:/sbin "$out/cca" _gui hello 2>/dev/null | grep -q "\"cca_version\": *\"$v\"" || fail "接上辅助程序的 cca 运行不了"
+selfcheck() {   # selfcheck 目标 [arch 的参数]：按这种芯片运行一次接好的 cca
+	local t="$1" d="$chk/$1" sum; shift
+	mkdir -p "$d/home" "$d/tmp"
+	env -i HOME="$d/home" TMPDIR="${d#/private}/tmp/" PATH=/usr/bin:/bin:/usr/sbin:/sbin "$@" /bin/bash "$out/cca" _gui hello 2>/dev/null |
+		grep -q "\"cca_version\": *\"$v\"" || fail "接上辅助程序的 cca 运行不了（${t}）"
+	sum=$(shasum -a 256 "cli/target/$t/release/cca-core" | cut -d' ' -f1)
+	[ "$(shasum -a 256 "$d/tmp/cca-helper/$sum" 2>/dev/null | cut -d' ' -f1)" = "$sum" ] || fail "接上辅助程序的 cca 解出来的和编出来的不一样（${t}）"
+}
+selfcheck "$host"
+case "$host" in
+	aarch64-apple-darwin) ! arch -x86_64 /usr/bin/true 2>/dev/null || selfcheck x86_64-apple-darwin arch -x86_64 ;;
+esac
 echo "  发布的 cca：$(( $(wc -c < "$out/cca") / 1024 )) KB"
 cp install.sh "$out/install.sh"
 ssh-keygen -Y sign -q -n cca-release -f "$KEY" "$out/cca"

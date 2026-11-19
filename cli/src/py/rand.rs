@@ -10,7 +10,12 @@ pub fn urandom(n: usize) -> Vec<u8> {
         #[cfg(not(target_os = "linux"))]
         let ok = unsafe { libc::getentropy(chunk.as_mut_ptr().cast(), chunk.len()) } == 0;
         if !ok {
-            panic!("取不到系统的随机数：{}", std::io::Error::last_os_error());
+            // 系统调用用不了（很旧的 Linux 内核没有 getrandom、被 seccomp 挡住、被信号打断……）：和 CPython 一样退回去读 /dev/urandom
+            let err = std::io::Error::last_os_error();
+            let read = std::fs::File::open("/dev/urandom").and_then(|mut f| std::io::Read::read_exact(&mut f, chunk));
+            if let Err(e) = read {
+                panic!("取不到系统的随机数：{err}；/dev/urandom 也读不了：{e}");
+            }
         }
     }
     buf

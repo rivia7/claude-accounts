@@ -8,7 +8,7 @@
 //! - `corenet/udp.rs`：本机 UDP 走节点（udp-env / udp-node / udp-build / udp-probe，`udp_view`、`udp_leak_hint`）
 //! - `corenet/keep.rs`：守着内核的常驻进程（core-keep）
 //!
-//! 这一块的子命令都移植了。没移植的：`cmd_file_replace`（file-replace 没有调用方）、`flow_get` / `fill_members`（死代码），见 FINDINGS.md。
+//! 没移植的只有原来就走不到的 `flow_get` / `fill_members`（死代码），见 FINDINGS.md；`file-replace` 没有调用方，照原样留着。
 //!
 //! 节点定义里有节点的密钥（密码、uuid）：只存在文件里（`core/nodes.json`、`core/custom-nodes.json`、`core/config.yaml`，都是 600），
 //! 不进任何进程的命令行和环境变量。

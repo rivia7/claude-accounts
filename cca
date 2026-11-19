@@ -451,16 +451,16 @@ AGY_ALIAS=aga     # aga …：等于 cca agy …（同上，~/.local/bin/aga）
 # 原来是内嵌的 Python（每次起一个 Python 进程）；子命令、参数、输出都没变（py 子命令 参数…）。
 # 发布的 cca 把四种机器的辅助程序（gzip + base64）接在文件最后、exit 的后面：bash 读到 exit 就不往下读了。第一次用时把这台
 # 机器的那一份解到 CACHE_DIR/cca-helper（只有自己能读写），文件名就是它的 SHA-256：换了版本就是另一个文件；校验对了、
-# 试着运行过才改名换上。以后每次只看一眼“文件在不在、是不是我的”，不起任何进程。
-# 仓库里的 cca 没接辅助程序（HELPER_SUMS 空着）：用 cli/ 里编出来的那一份（cd cli && cargo build --release）。
-# CCA_HELPER：指定用哪一份（测试用）。
+# 试着运行过才改名换上。以后每次只看一眼“文件在不在、是不是我的”，不起任何进程。解好的那一份中途没了（系统清临时目录）时
+# py 自己再解一次；这一份 cca 已经被新版本换掉的（还开着的旧会话），从更新留下的上一个版本（update/cca.prev）里解。
+# 仓库里的 cca 没接辅助程序（HELPER_SUMS 空着）：用 cli/ 里编出来的那一份（cd cli && cargo build --release），
+# 或者 CCA_HELPER 指的那一份（测试用；发布的 cca 不认这个变量：环境变量不能让它去运行别的程序）。
 # ---------------------------------------------------------------------------
 HELPER_SUMS=""   # 发布时由 cli/pack.py 填上：「目标=SHA-256」，空格隔开
 helper_find() {
 	local t sum d
-	if [ -n "${CCA_HELPER:-}" ]; then HELPER="$CCA_HELPER"; return 0; fi
 	if [ -z "$HELPER_SUMS" ]; then
-		HELPER="${SELF%/*}/cli/target/release/cca-core"
+		HELPER="${CCA_HELPER:-${SELF%/*}/cli/target/release/cca-core}"
 		[ -x "$HELPER" ] && return 0
 		printf '%s\n' "cca: 这一份 cca 是仓库里的源码，没带辅助程序：先编出来（cd ${SELF%/*}/cli && cargo build --release）" >&2
 		return 1
@@ -477,23 +477,31 @@ helper_find() {
 	fi
 	d="$CACHE_DIR/cca-helper"
 	HELPER="$d/$sum"
-	[ -x "$HELPER" ] && [ -O "$HELPER" ] && [ -O "$d" ] && [ ! -L "$d" ] && return 0
+	[ -x "$HELPER" ] && [ -s "$HELPER" ] && [ -O "$HELPER" ] && [ -O "$d" ] && [ ! -L "$d" ] && return 0
 	helper_unpack "$t" "$sum" "$d"
 }
 helper_unpack() {   # helper_unpack 目标 SHA-256 目录：第一次用（或者缓存目录被清过）时解出来。目录不是自己的、是链接就不用
-	local t="$1" sum="$2" d="$3" tmp got c miss=""
-	for c in sed base64 gunzip; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"; done
+	local t="$1" sum="$2" d="$3" tmp got c src b64=base64 sha=sha256sum hint="（可以设 XDG_CACHE_HOME 换一个放缓存的目录）" miss=""
+	# macOS 上用系统自带的那几个：PATH 里排在前面的可能是 Homebrew 装的 GNU base64，它不认 -D（macOS 12 以前自带的只认 -D）
+	case "$OSTYPE" in darwin*) b64=/usr/bin/base64 sha="/usr/bin/shasum -a 256" hint="" ;; esac
+	for c in sed "$b64" gunzip; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }${c##*/}"; done
 	[ -z "$miss" ] || { printf '%s\n' "cca: 缺少命令 ${miss// /、}（解出辅助程序要用），先装上" >&2; return 1; }
 	{ [ -d "$d" ] || mkdir -p -m 700 "$d"; } 2>/dev/null
 	if [ ! -d "$d" ] || [ -L "$d" ] || [ ! -O "$d" ] || ! chmod 700 "$d" 2>/dev/null; then
-		printf '%s\n' "cca: 缓存目录 ${d} 用不了（建不出来、不是自己的，或者是个链接）" >&2
+		printf '%s\n' "cca: 缓存目录 ${d} 用不了（建不出来、不是自己的，或者是个链接）${hint}" >&2
 		return 1
 	fi
 	tmp="$d/$sum.$$"
-	case "$OSTYPE" in darwin*) c=-D ;; *) c=-d ;; esac   # macOS 12 以前的 base64 只认 -D
-	sed -n "/^#CCA-HELPER ${t}\$/,/^CCA-HELPER-END\$/p" "$SELF" | sed '1,2d;$d' | base64 "$c" 2>/dev/null | gunzip -c > "$tmp" 2>/dev/null
-	case "$OSTYPE" in darwin*) got=$(shasum -a 256 "$tmp" 2>/dev/null) ;; *) got=$(sha256sum "$tmp" 2>/dev/null) ;; esac
-	if [ "${got%% *}" != "$sum" ]; then
+	case "$b64" in /*) c=-D ;; *) c=-d ;; esac
+	# 从这一份 cca 里解；它已经被新版本换掉的（这个进程是更新之前起的）从更新留下的上一个版本里解
+	for src in "$SELF" "$CCA_HOME/update/cca.prev"; do
+		[ -f "$src" ] || continue
+		sed -n "/^#CCA-HELPER ${t}\$/,/^CCA-HELPER-END\$/p" "$src" | sed '1,2d;$d' | "$b64" "$c" 2>/dev/null | gunzip -c > "$tmp" 2>/dev/null
+		got=$($sha "$tmp" 2>/dev/null)
+		[ "${got%% *}" != "$sum" ] || break
+		got=""
+	done
+	if [ -z "$got" ]; then
 		rm -f "$tmp"
 		printf '%s\n' "cca: 解不出辅助程序（${SELF} 不完整，或者 ${d} 写不进去）：重新安装 cca，见 ${UPDATE_REPO}" >&2
 		return 1
@@ -501,16 +509,17 @@ helper_unpack() {   # helper_unpack 目标 SHA-256 目录：第一次用（或�
 	# 试着运行一次：目录所在的盘不许执行程序（noexec）、系统太旧时，在这里说清楚，不等到后面每一步都出错
 	if ! chmod 700 "$tmp" || [ "$("$tmp" sh-re-escape ok 2>/dev/null)" != ok ]; then
 		rm -f "$tmp"
-		printf '%s\n' "cca: 辅助程序在这台机器上运行不了（${d} 所在的盘不许执行程序？系统太旧？）" >&2
+		printf '%s\n' "cca: 辅助程序在这台机器上运行不了（${d} 所在的盘不许执行程序？系统太旧？）${hint}" >&2
 		return 1
 	fi
 	mv -f "$tmp" "$HELPER" || { rm -f "$tmp"; return 1; }
-	# 顺手删掉 7 天前解出来的（旧版本的，还有没解完的临时文件）
-	find "$d" -type f ! -name "$sum" -mtime +7 -exec rm -f {} + 2>/dev/null
+	# 顺手删掉 30 天前解出来的（旧版本的，还有没解完的临时文件）。还开着的旧会话要用的那一份被删了，它自己会再解（见上）
+	find "$d" -type f ! -name "$sum" -mtime +30 -exec rm -f {} + 2>/dev/null
 	return 0
 }
 helper_find || exit 1
-py() { CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }
+# 解好的那一份辅助程序中途没了（系统清了临时目录）：再解一次（看在不在是内建的判断，不起进程）
+py() { [ -x "$HELPER" ] || helper_find || return 127; CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }
 
 use_tool() {   # use_tool codex|agy：这次命令管 Codex（账号表 codex.json、CODEX_HOME、codex 命令）或 agy 的账号；账号表、命令前缀、文案由 py 给
 	TOOL="$1"
@@ -2584,7 +2593,7 @@ cmd_reorder() {   # cca [codex] reorder <账号>…：按这个顺序排账号�
 	py reorder "$@"
 }
 
-# 继承来的、会盖掉账号自己的登录/接口/模型，或者把请求转去别的服务商的变量（和 辅助程序里的 CRED_ENV 对应）
+# 继承来的、会盖掉账号自己的登录/接口/模型，或者把请求转去别的服务商的变量（和辅助程序里的 CRED_ENV 对应）
 INHERITED_RE='^(ANTHROPIC_.*|CLAUDE_(CONFIG_DIR|SECURESTORAGE_CONFIG_DIR)|CLAUDE_CODE_(OAUTH_TOKEN|[A-Z_]*_FILE_DESCRIPTOR)|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY|GATEWAY|MANTLE|ANTHROPIC_AWS|ANTHROPIC_GOOGLE_CLOUD)|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST)$'
 CLAUDE_INHERITED_RE="$INHERITED_RE"
 # Codex：CODEX_ACCESS_TOKEN / CODEX_API_KEY 会直接顶替账号的登录，*_URL_OVERRIDE 会把 token 发到别处，OPENAI_* 会带上
@@ -2625,7 +2634,7 @@ agy_env() {   # 数据目录经参数（--gemini_dir，见 AgyTool.run_args）�
 	SETS=(SSH_CONNECTION="127.0.0.1 22 127.0.0.1 22" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
 	[ -n "$ACC_PROXY" ] || SETS+=(no_proxy='*' NO_PROXY='*')
 }
-pyenv() { env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }   # 在账号的环境里跑 py（先 child_env）
+pyenv() { [ -x "$HELPER" ] || helper_find || return 127; env "${UNSETS[@]}" "${SETS[@]}" CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }   # 在账号的环境里跑 py（先 child_env）
 
 logout_account() {   # 需要先 eval "$(py env 名称)"；官方账号退出登录；钥匙串里 cca 存的 key（第三方 API 账号的、官方账号记下备查的）都删掉
 	[ "$ACC_KIND" = api ] || tool logout
@@ -4375,7 +4384,7 @@ core_ensure() {   # 内置代理可用：内核文件在、配置最新、界面
 	[ $rc -eq 2 ] || return 1
 	core_reload && local_select_all
 }
-bind_note() {   # 内置代理的出站绑定了物理网卡（别的程序开着 TUN，见 PY 的 core_bind）时的说明
+bind_note() {   # 内置代理的出站绑定了物理网卡（别的程序开着 TUN，见辅助程序的 core_bind）时的说明
 	printf '别的程序开着虚拟网卡 %s（Clash 客户端的 TUN、VPN 这类）：内置代理连节点时绑定物理网卡 %s，绕开它%s' "$LOCAL_BIND_VIA" "$LOCAL_BIND" \
 		"${LOCAL_BIND_DNS:+；节点的域名经 ${LOCAL_BIND_DNS} 解析（系统的 DNS 经物理网卡到不了）}"
 }
@@ -4543,7 +4552,7 @@ cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器�
 }
 
 # ---------------------------------------------------------------------------
-# 本机 UDP 走节点（cca local udp，只在 macOS 上、只给内置代理；PY 的同名一节）：内置代理只在 127.0.0.1 上开账号的端口，这台 Mac 自己的
+# 本机 UDP 走节点（cca local udp，只在 macOS 上、只给内置代理；辅助程序的同名一节）：内置代理只在 127.0.0.1 上开账号的端口，这台 Mac 自己的
 # UDP（浏览器的 WebRTC、QUIC 这些）照旧直连，STUN 看到的是本地网络的出口。macOS 上开 TUN 要 root：输一次管理员密码，装一个 root 的
 # 系统服务（LaunchDaemon local.cca.udp）。~/.cca/udp/on 在时 launchd 起它（开机后也是）：一个只开 TUN 的 mihomo，UDP 交给选定的节点，
 # TCP、DNS、局域网、ZeroTier / Tailscale、代理内核自己的流量照旧直连；开关文件没了它自己停下、退出（不留 root 进程）。开、关不用密码；
@@ -4556,7 +4565,7 @@ udp_loaded() { launchctl print "system/$UDP_LABEL" >/dev/null 2>&1; }
 udp_present() { [ -e "$UDP_PLIST" ] || [ -e "$UDP_ROOT" ] || udp_loaded; }
 udp_flag_on() { ( umask 077; mkdir -p "${UDP_FLAG%/*}" ) && touch "$UDP_FLAG"; }
 udp_run_sh() {   # root 那边的启动脚本 cca-udp（launchd 在开关文件在时起它）：开关文件没了就停内核、退出；内核自己退出了以退出码 1 结束，
-	              # launchd 过 ThrottleInterval 再起。日志超过 1MB 先清空。改了要把 PY 的 UDP_HELPER 加 1（装着的旧版会显示要重新装）
+	              # launchd 过 ThrottleInterval 再起。日志超过 1MB 先清空。改了要把辅助程序的 UDP_HELPER（cli/src/cmd/corenet/udp.rs）加 1（装着的旧版会显示要重新装）
 	printf '#!/bin/sh\n# cca local udp：这台 Mac 的 UDP 经节点出去（cca 生成；删掉它运行 cca local udp uninstall）\nD=%s\nFLAG=%s\nLOG=%s\n' \
 		"$(shq "$UDP_ROOT")" "$(shq "$UDP_FLAG")" "$(shq "$UDP_LOG")"
 	cat <<'EOF'

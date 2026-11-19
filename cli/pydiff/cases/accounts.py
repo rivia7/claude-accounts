@@ -130,7 +130,7 @@ CHECKS = [
     ('model', 'm-1'), ('model', 'a b'), ('host', '192.0.2.10'), ('host', '-oX'), ('host', 'router.lan'), ('host', 'http://x'),
     ('sshuser', 'root'), ('sshuser', 'a b'), ('port', '22'), ('port', '0'), ('port', '65536'), ('port', '2x'), ('port', '00022'),
     ('controller', '127.0.0.1:9090'), ('controller', 'unix:/tmp/a.sock'), ('controller', 'nope'), ('controller', 'https://h:1/'),
-    ('gmail', ' Me.X+1@Gmail.com '), ('gmail', 'me@gmail'), ('gmail', 'mé@gmail.com'),
+    ('gmail', ' Me.X+1@Example.com '), ('gmail', 'me@example'), ('gmail', 'mé@example.com'),
 ]
 for i, (f, v) in enumerate(CHECKS):
     @case('check/%02d-%s' % (i, f), ['check', f, v])
