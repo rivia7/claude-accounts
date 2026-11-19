@@ -27,6 +27,7 @@ pub use keep::cmd_core_keep;
 #[allow(unused_imports)] // udp_view：_gui state；udp_leak_hint：leak-verdict；udp_running、udp_paths：bash 那一半对应的几处
 pub use udp::{cmd_udp_build, cmd_udp_env, cmd_udp_node, cmd_udp_probe, udp_leak_hint, udp_paths, udp_running, udp_state, udp_view, UDP_FLAG, UDP_HELPER, UDP_LABEL};
 
+use super::clients::cu_claude_env;
 use super::router::{node_match, node_users_all};
 use super::secrets::{py_set, py_sorted};
 use super::{arg, arity, Cmd};
@@ -886,26 +887,6 @@ fn install_proxy_config(name: &str, port: u16) -> Option<Dict> {
         "rules" => list!["MATCH,REJECT"],
     };
     Some(core_bind_apply(cfg, &c, &defs))
-}
-
-/// Claude Code 跟哪个发布通道（用户在共享的 settings.json 里设的，默认 latest）。
-/// 原来在客户端更新那一节（`cu_claude_channel`，`cmd/clients.rs` 还没移植），先放一份在这里
-fn cu_claude_channel() -> &'static str {
-    match load_quiet(&path::join_all(&[&HOME, ".claude", "settings.json"])).and_then(|s| s.as_dict()).and_then(|s| s.str("autoUpdatesChannel")).as_deref() {
-        Some("stable") => "stable",
-        _ => "latest",
-    }
-}
-
-/// claude 用一次性的配置目录运行：不碰账号和 ~/.claude，不带设备标识（官方的更新命令不要登录）；更新通道和用户设的一样。
-/// 原来在客户端更新那一节（`cu_claude_env`），同上
-fn cu_claude_env(folder: &str) -> R<Vec<(String, String)>> {
-    let conf = path::join(folder, "claude");
-    fs::makedirs(&conf)?;
-    if cu_claude_channel() != "latest" {
-        save_json(&path::join(&conf, "settings.json"), &V::Dict(dict! { "autoUpdatesChannel" => cu_claude_channel() }), Some(0o600), true)?;
-    }
-    Ok(vec![("CLAUDE_CONFIG_DIR".into(), conf), ("DISABLE_TELEMETRY".into(), "1".into()), ("DISABLE_ERROR_REPORTING".into(), "1".into())])
 }
 
 /// `T.install_env(folder)`：官方安装脚本在空环境里运行时另加的变量。claude install 用一次性的配置目录（不往账号和 ~/.claude 的

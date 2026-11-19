@@ -87,6 +87,24 @@
   块的大小是负数时，3.9.6 都是「连不上…IncompleteRead(0 bytes read)」，3.12、3.14 里 `-1` 是 `IncompleteRead(12 bytes read)`、
   别的负数是没人接的 ValueError。拿 3.12 当基准时 566 个都一样。（`login-url/leading-space-tabs-newline`、
   `login-forward/reply/chunked-negative-size`、`chunked-size-minus-one`）
+- **ChatGPT 的版本列表（Sparkle 的 appcast）由自己写的 XML 解析器读**（`cli/src/py/xml.rs`；原来是 ElementTree 加 expat）。接受什么、
+  拒绝什么拿真的 CPython 3.14 核对过（仓库里 972 份文档，另外随机改出来的 6 万份里有 56 份不一样，都是下面头两种），出入只在官方
+  不会用的写法上：带 `<!DOCTYPE …>` 的一律不收（原来在解析前按字节找 `<!DOCTYPE`、`<!ENTITY` 挡掉，UTF-16 写的找不出来、expat
+  照收，现在是「无法读取官方版本列表」）；编码只认 UTF-8、UTF-16、ISO-8859-1、US-ASCII（声明成 `windows-1252`、`gbk` 这些的，
+  原来有的读得了、有的是没人接的异常，现在都是「无法读取官方版本列表」）；UTF-16 里落单的代理项算写错了。
+- **官方安装包由自己写的 zip 读取读**（`cli/src/py/zip.rs`，照 CPython 3.14 的 zipfile 逐段移植，239 个压缩包核对过）。只有不压缩
+  和 deflate 两种：bzip2、lzma、zstd 压缩的条目是「无法安全解压官方安装包」（原来装了对应模块就解得了；官方的包用的是 deflate）。
+  压缩数据坏了时，个别情形两边发现的地方不一样：一边在解压时发现（`zlib.error`，原来没人接，见 clients 一节），另一边解到最后
+  才在 CRC 上发现（「无法安全解压官方安装包」）——随机改坏的 1.5 万个压缩包里有 7 个。zipfile 的两种警告不往 stderr 打。
+- **客户端更新时按 Ctrl-C**：`check`、`install` 和原来一样先收尾（下到一半的安装包、解压到一半的程序删掉，检查时间存好）再结束，
+  只是要等到下一个会阻塞的地方才看到这次 Ctrl-C（同上面「信号只在会阻塞的地方起作用」），正在跑的外部命令马上杀掉（原来先等它
+  0.25 秒）。`status`、`plan`、`mode`、`auto-install` 没装处理函数（它们等 `sync.lock` 是不限时的，装了反而 Ctrl-C 不掉），直接结束，
+  不打印调用栈；`status`、`plan` 正在问终端工具的版本号时按 Ctrl-C，系统临时目录里那个 `cca-cli-…` 会留下（原来会删掉）。
+  （`install/cli/slow/interrupted`）
+- **名字查重用的 Unicode 规范化照 CPython 3.14 的 Unicode 16.0。** 安装包里「不分大小写、不分写法是同一个名字」的条目算重复
+  （`unicodedata.normalize('NFD', 名字).casefold()`）。Rust 这边的库（unicode-normalization）是 Unicode 18.0：16.0 以后新收的 68 个
+  组合符号照 Python 的当普通字符（`cli/src/cmd/clients/casefold.rs` 的 `NEWER`，单元测试拿 CPython 的整张分解表、组合类表核对）。
+  macOS 上 PY_SRC 实际跑在系统自带的 3.9.6 上（Unicode 13.0），13.0 到 16.0 之间新收的字符在那上面本来就和 3.14 不一样。
 
 ## PY_SRC
 
@@ -150,6 +168,12 @@
   一次，配额够用；换成辅助程序以后问一次不到 0.2 秒，十几秒就把配额问光了，上报进程报不上去（「请求太频繁」，然后按退避等），
   「再启动一次：报 2 个」「会话都关了：马上报没在用」连着三轮不过。切换时把歇的时间改成 0.8 秒（`tests/linux.sh` 那两处同样）。
   平时用不会碰到：没有谁一秒问服务器好几次。
+- **`cli/` 的单元测试里有一个和同时跑几个测试有关的失败。** `cmd::login::sys::tests::socket_waits_like_settimeout` 用的
+  `socketpair` 没设 `FD_CLOEXEC`：别的测试（`cmd::shell`、`py::proc`、`py::signal`）这时起的子进程把另一头也带走了，这边 `drop`
+  了对方，`recv` 还是等不到 EOF（超时，`sys.rs:321` 的 `unwrap`）。12 核的机器上原来碰不到：所有测试几乎同时开始，那些子进程起得
+  早、走得也早。`cargo test -- --test-threads=8` 时每次都坏（不带 clients 的测试，8 次里 8 次；4 条线程 8 次里 7 次），也就是在
+  8 核的机器上 `cargo test` 本来就过不了；12 核上只要多出几个要跑一两秒的测试、把名额占掉，也是一半的时候坏。clients 的对照测试
+  因此合成了一个（`cmd::clients::tests::like_python`，只占一个名额）。修法：`pair()` 里给两个描述符设上 `FD_CLOEXEC`。
 
 ## secrets
 
@@ -583,3 +607,68 @@ Rust 这边照原样移植，行为一样。
   一封被删掉的候选邮件会让这次 `cca mail open` 以「Gmail 没给出这封邮件」收场，而不是去开第二新的那封。对照数据 hunt 一节的
   「mail that cannot be fetched backs off」。
 
+## clients
+
+客户端统一更新这一块（`CU_FEED` 到 `cmd_client_updates`）。带着对拍用例名字的是拿原版 Python 实跑核实过的
+（`cli/pydiff/cases/clients.py`）。写着「场景」「对照数据」的记在 `cli/tests/vectors/src_clients.json` 里：检查、下载、暂存、安装这几条路
+对拍够不着（`/usr/bin/curl` 是写死的绝对路径，假的 App 过不了 `codesign`），是原版 Python 把 `cu_run`、`cu_download` 换成假的以后跑
+出来的（`cli/tools/gen_clients_scenarios.py`，做法和 `tests/client_updates.py` 一样），Rust 这边的单元测试逐步重放。都照原样移植了，
+行为一样。
+
+对拍和对照数据用的是这台机器的 `python3`（3.14）。用户机器上跑 PY_SRC 的是 PATH 上的 `python3`，没另装 Python 的 Mac 上就是自带的
+3.9.6：拿它当原版把这一块的 578 个用例又跑了一遍，575 个一样，不一样的 3 个都是标准库随版本变了的地方，输入都是写坏了的状态文件：
+state.json 套了一千多层（3.9.6 是没人接的 RecursionError，3.14 读得出来、说「更新缓存格式无法识别」）；记下的最新版本有几千位数字
+（3.9.6 的 `int()` 没有位数上限，照常比大小；3.14 是 ValueError，这一行成了「读不出这个命令的状态」）；事务记录里的路径带 `\0`
+（3.9.6 的 `os.path.realpath` 不出错，往下走到「未找到可核验的客户端或备份」；3.14 是 ValueError，「无法安全处理客户端更新状态」）。
+Rust 这边都照 3.14。（`status/state-file/nested-too-deep`、`status/cli/state/latest-huge`、`recover/journal/target-path-with-nul`）
+
+- **客户端装在带非 ASCII 字符的路径下、正开着的时候认不出来，照样往下装。** `cu_no_processes` 靠 `ps` 打出来的命令行里有没有这个
+  路径判断客户端开没开着；`cu_run` 起 `ps` 用的环境是 `LANG=C`，这时 `ps` 把非 ASCII 的字节打成 `M-…` 这样的写法（macOS 27.2 上
+  实测），`…/应用/ChatGPT.app` 这种路径一个也对不上。同一个 App、同样开着，路径不带中文时停在「请先退出所有 ChatGPT 窗口及后台
+  进程」，带中文时一路走到替换（对拍里的假 App 没有签名，停在验签名）。`/Applications`、`~/Applications` 平时没有这种字符；App 被
+  挪到别处、经 `CCA_CLIENT_CODEX_APP` / `CCA_CLIENT_CLAUDE_APP` 指过去时会碰到。认更新器进程的那一半（`comm` 里的 bundle id）不受影响。
+  （`install/desktop/client-is-open-under-non-ascii-path` 对 `…-under-ascii-path`；原版另外配真的 `ps` 实跑过）
+- **`Info.plist` 是写坏了的 XML 时，连 `status` 都是调用栈。** `plistlib` 对写坏的 XML 抛的是 `xml.parsers.expat.ExpatError`，不是
+  ValueError：`cu_snapshot`（`status`、`check` 都要经过它）没接，`cmd_client_updates` 也不接，App 拿不到状态文档。属性列表最外面
+  不是字典（数组、字符串）时是 AttributeError，一样没人接。`cu_target` 自己翻 `/Applications` 的那一支（没给环境变量时）接了
+  AttributeError、没接 ExpatError（读代码看出来的；bash 平时都给了环境变量）。
+  （`status/desktop/plist/xml-malformed`、`root-is-array`、`root-is-string`、`check/force/desktop-malformed-plist`）
+- **状态文件里类型不对的值，有的是调用栈，有的原样放了出去。** `state.json` 是 cca 自己写的，手改过或者写坏了才会这样：
+  `checked_epoch` 是字符串、列表、字典时，`cu_next_check` 里 `min(times) + CU_CHECK_INTERVAL` 的 TypeError 没人接，`status` 在内的
+  每个操作都是调用栈（`true` 当 1 用，下次检查的时间是 21601）；`stage.target` 是 null、数字、列表时是 `cu_light` 的 AttributeError；
+  `stage.token` 是 null、数字时 `status` 照样给 `can_install: true`，`install_token` 就是那个 null / 数字（`plan`、`install` 拿它
+  对不上，说「安装确认已失效」）；`status` 是 null、数字、列表时原样放进状态文档。
+  （`status/state/checked-string`、`checked-list`、`checked-dict`、`checked-true`、`check/due/checked-epoch-string`、
+  `status/staged/target-null`、`target-number`、`target-list`、`token-null`、`token-number`、`status/state/status-null`、`status-odd-types`）
+- **`config.json` 不是字典时，`auto-install` 是调用栈，`mode` 不是。** `mode` 的 `c['client_updates'] = …` 抛 TypeError，接住了
+  （「无法安全处理客户端更新状态」）；`auto-install on` 的 `c.update(…)`、`auto-install off` 的 `c.pop(…)` 抛 AttributeError，
+  没接（列表有 `pop`，参数个数不对是 TypeError，又接住了）。
+  （`auto-install/on/config-list`、`config-null`、`config-string`、`config-number`、`config-true`、`auto-install/off/config-null`、
+  `config-string`；对照 `mode/auto/config-list`、`auto-install/off/config-list`）
+- **和哪个客户端都无关的错，记在 ChatGPT 或者 Claude 那一行。** 出错时记的是 `problems[CU.id]`，`CU` 这时是默认的 ChatGPT：
+  参数写错（`mode on`、`check FORCE`）、别的更新正在进行（`manager.lock` 被占着）、`~/.cca` 的权限不对，状态文档里都是 ChatGPT
+  那一行变成 `blocked` / `busy`——没装 ChatGPT、本来是 `missing` 的时候也变，`next_check_epoch` 也因此从 null 变成 21600。安装凭据
+  哪个客户端的都对不上时（`cu_token_client` 停在第一个）记在 Claude 那一行。状态文档没有不属于哪个客户端的出错位置，App 只能把这句
+  话显示在那一行上。（`mode/bad-argument/on`、`check/bad-argument`、`check/due/manager-lock-held`、`check/due/cca-home-group-writable`、
+  `install/bad-token/not-hex`、`install/no-token-argument`）
+- **检查到一半进程被结束，临时目录留着，以后也没有谁删。** `check-…`（下载、解压、验签名都在里面：正在下几百 MB 的安装包时，
+  下到一半的包也在）、`update-…` 靠 `with tempfile.TemporaryDirectory(…)` 收尾，只有异常（包括 Ctrl-C）走得到；SIGTERM、SIGKILL
+  （App 退出、关机、被强制结束）时来不及，目录留在 `~/.cca/client-updates/<客户端>/` 下面，后面的检查不认识它、也不清理。
+  （`check/cli/slow/terminated`，要 `CCA_PYDIFF_SLOW=1`）
+- **终端工具的状态目录里有 `transaction.json` 时走到 `CU.app`。** `cu_check_all` 对每种客户端都先 `cu_recover`；终端工具
+  （`CuCli`）没有 `app` 这个属性，记录的内容过了前面几道检查以后，`os.path.join(work, CU.app)` 是没人接的 AttributeError。
+  正常不会有这个文件（终端工具的更新不写事务记录）。（`recover/cli-journal-reaches-missing-attribute`）
+- **压缩数据坏了的安装包是调用栈。** `cu_extract` 接 `BadZipFile`、`OSError`、`RuntimeError`、`ValueError`、`UnicodeError`，
+  解压途中的 `zlib.error` 不在里面，`cmd_client_updates` 也不接。要走到这里，安装包得先过了签名 / 摘要的校验（也就是官方发的包
+  本身是坏的），实际碰不到。（对照数据 `extract` 里的 `deflate-invalid-block`、`deflate-invalid-block-in-link`）
+- **自动更新以后那句话，写的是检查时查到的版本。** `cu_auto` 最后的「已自动更新到 X，下次启动时用新版本」用的是暂存里记的版本；
+  官方的 `update` 装上的比它还新时（检查以后又出了一版），`installed_version` 是新的，这句话里是旧的。用户点了确认再装的那条路
+  （`cu_cli_install`）写的是装上的版本。（场景 `cli/auto-install-says-the-version-it-found-not-the-one-installed`）
+- **版本号、构建号也认别的文字的数字。** 正则里的 `\d` 和 `int()` 都认全角数字、阿拉伯文数字：`Info.plist` 的版本写成 `１.０`、
+  构建号写成 `٢٠٠` 照收；`cu_build` 对不带点的构建号直接 `int()`，状态文件里写成 `2_00`、两头带空格的也算数。官方的数据都是
+  ASCII 数字，只是校验比看上去的松。（`status/desktop/plist/version-fullwidth-digits`、`build-arabic-digits`、
+  `status/staged/build-underscore`；对照数据的 `version`、`build`）
+
+核实过、不是问题的一处：`cu_no_processes` 用 `str.splitlines()` 拆 `ps` 的输出，命令行里的换页、U+2028 这些也算换行，拆出来的
+半行认不出来就是「客户端进程列表无法完整解析，未替换程序」（对照数据 `processes` 里有这种输入，Rust 照样拆）。真的 `ps` 在 `LANG=C` 下
+把换行、换页打成 `\012`、`^L`，把非 ASCII 的字节打成 `M-…`，到不了这里（macOS 27.2 上实测）。
