@@ -21,6 +21,7 @@ pub mod router;
 pub mod secrets;
 pub mod session;
 pub mod settings;
+pub mod shell;
 pub mod table;
 pub mod usage;
 
@@ -74,6 +75,7 @@ const MODULES: &[&[Cmd]] = &[
     cost::CMDS,
     dock::CMDS,
     clients::CMDS,
+    shell::CMDS,
 ];
 
 /// 移植好的子命令
@@ -81,9 +83,9 @@ pub fn find(name: &str) -> Option<&'static Cmd> {
     MODULES.iter().flat_map(|m| m.iter()).find(|c| c.name == name)
 }
 
-/// 原来有这个子命令（移植了没有另说）
+/// 原来有这个子命令（移植了没有另说），或者是后来加的（`shell` 模块的 `sh-…`：bash 里原来内嵌的小段 Python）
 pub fn known(name: &str) -> bool {
-    NAMES.contains(&name)
+    NAMES.contains(&name) || find(name).is_some()
 }
 
 /// 参数个数不对：Python 里是没人接的 TypeError（打印调用栈，退出码 1）

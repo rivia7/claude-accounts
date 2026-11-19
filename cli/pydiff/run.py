@@ -78,17 +78,19 @@ class Box:
         return self.write('bin/' + name, '#!/bin/sh\n' + script, 0o755)
 
 
-def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0, fd3=None, during=None, timeout=60):
+def case(name, argv, stdin=b'', env=None, tool='claude', mask=None, cwd=None, tree=True, settle=0, fd3=None, during=None, timeout=60, oracle=None):
     """登记一个用例。被装饰的函数拿到 Box，往沙箱里放夹具。
     mask：[(正则, 替换成什么)…]，比之前两边都先换掉（时间戳、随机数这些每次不一样的东西）
     settle：命令退出以后再等几秒才看沙箱（它起了后台进程，等后台进程把该写的写完）
     fd3：交互输入（cca 的提问从 3 号描述符读答案）：给了就把这些内容接在子进程的 fd 3 上，读完就是到头
     during：命令运行期间并行做的事，during(box)：在另一条线程里跑（比如等它监听了端口以后发一个请求）；两边各跑一遍
-    timeout：最多等几秒（到时间杀掉，算失败）"""
+    timeout：最多等几秒（到时间杀掉，算失败）
+    oracle：对照的一边换成这条命令（列表；后面接上 argv 里子命令名之后的参数），不跑 PY_SRC。给 bash 里原来内嵌的那几小段
+    Python 用：`oracle=[sys.executable, '-I', '-c', 那一小段]`，cca-core 这边照常跑 argv"""
     def reg(setup):
         raw = lambda x: x if x is None or isinstance(x, bytes) else x.encode('utf-8')
         CASES.append(dict(name=name, argv=argv, stdin=raw(stdin), env=env or {}, tool=tool, mask=mask or [], cwd=cwd, tree=tree,
-                          settle=settle, fd3=raw(fd3), during=during, timeout=timeout, setup=setup))
+                          settle=settle, fd3=raw(fd3), during=during, timeout=timeout, oracle=oracle, setup=setup))
         return setup
     return reg
 
@@ -265,7 +267,7 @@ def main():
                 if not os.path.lexists(box.path('bin/' + name)):
                     box.fake(name, GUARD % name)
             clone_tree(home, pre)
-            py = run_one(oracle, c, home, tmp)
+            py = run_one(oracle, c, home, tmp) if not c['oracle'] else run_one(c['oracle'], dict(c, argv=c['argv'][1:]), home, tmp)
             shutil.rmtree(home)
             clone_tree(pre, home)
             rs = run_one([CORE], c, home, tmp)
