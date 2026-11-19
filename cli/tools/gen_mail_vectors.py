@@ -7,9 +7,12 @@ cargo test 照着核对（不用装 Python）。
     python3 -I cli/tools/gen_mail_vectors.py --fuzz 20 --seed 7 /tmp/extra.json     另外一批随机输入（量是平时的 20 倍，不提交）：
     CCA_MAIL_VECTORS_EXTRA=/tmp/extra.json cargo test mail                          单元测试把它接在 mail.json 后面一起核对
 
-「参照实现」一节是从 cca 的 PY_SRC 里原样抄来的函数（邮箱助手里不碰网络、不碰文件的那些，加上 MailBox）：cca 里还有 PY_SRC
-的时候，每次运行都核对抄的和原文一字不差（主干改了原文，这里要跟着改）。切换到只有 Rust 以后它们就是规格的存档。
-以后并进 gen_vectors.py。
+「参照实现」一节是从 cca 的 PY_SRC 里原样抄来的函数（邮箱助手里不碰网络的那些，加上 MailBox、盯邮箱的 mail_hunt 和它记
+打开过哪些邮件的那几个——那几个写的是临时目录）：cca 里还有 PY_SRC 的时候，每次运行都核对抄的和原文一字不差（主干改了原文，
+这里要跟着改）。切换到只有 Rust 以后它们就是规格的存档。以后并进 gen_vectors.py。
+
+不碰真东西：只连本机上自己起的假 IMAP 服务器（imap 一节），写的文件都在临时目录里；limit_paths 一节把 PY_SRC 拷到临时目录、
+在假的 HOME 里起它（cca 里没有 PY_SRC 了就沿用上一次量的）。整份跑一遍一分钟左右。
 
 字节在 JSON 里写成 Latin-1 的文字（一个字符一个字节）。结果随 Python 的版本变（html.parser、email 各版本改过）：
 Rust 这边固定成生成这份文件的那个版本。"""
@@ -25,8 +28,10 @@ import os
 import pkgutil
 import random
 import re
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 
@@ -59,6 +64,19 @@ MAIL_Q = '\x22'       # IMAP 里的双引号
 MAIL_MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
 MAIL_ORDER = ('old', 'subject', 'dup', 'from', 'dkim', 'unsigned', 'to', 'nolink')
 MAIL_LIST_RE = lazy_re(r'^\(([^)]*)\) (?:\x22(?:[^\x22\\]|\\.)*\x22|NIL) (\x22(?:[^\x22\\]|\\.)*\x22|[^\s\x22()]+)$')
+MAIL_WHY = {   # 没通过核对的原因（按核对的先后）
+    'old': '是这次登录开始以前收到的',
+    'subject': '标题不像登录邮件',
+    'dup': '发件人、收件人或标题的邮件头有好几个（邮件被加过东西）',
+    'from': '发件人不是 Anthropic',
+    'dkim': 'Gmail 的验证结果里没有 Anthropic 的签名通过（转发时邮件被改过，或者不是 Anthropic 发的）',
+    'unsigned': '发件人、收件人、标题不全在 Anthropic 的签名里，认不出是不是发给这个账号的',
+    'to': '收件人不是这个账号的邮箱',
+    'nolink': '邮件里没找到登录链接（邮件的格式变了？）',
+    'refused': '打开之前再核对一遍链接时没通过',   # cca _mail-open 不肯打开（不是 mail_judge 的结果，不进 MAIL_ORDER）
+}
+EMAIL_RE = lazy_re(r'^[^@\s"\\()（）]+@[^@\s"\\()（）]+\.[^@\s"\\()（）]+$')
+PAIR_RE = lazy_re(r'^(.*?)[(（]([^()（）]*)[)）]$')
 
 
 class MailRule:
@@ -563,6 +581,279 @@ class MailBox:
             pass
 
 
+def mail_knob(name, default):
+    """测试用的时间开关（CCA_MAIL_POLL 几秒看一次邮箱、CCA_MAIL_RETRY 连不上 Gmail、浏览器没打开时先等多久）：不是正数时用默认值"""
+    try:
+        v = float(os.environ.get(name) or default)
+    except ValueError:
+        v = default
+    return v if v > 0 else default
+
+
+def mail_used(fn):
+    os.makedirs(MAIL_DIR, mode=0o700, exist_ok=True)
+    with open(os.path.join(MAIL_DIR, 'used.lock'), 'a') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        p = os.path.join(MAIL_DIR, 'used.json')
+        d = load_quiet(p)
+        now = time.time()
+        d = {k: v for k, v in (d if isinstance(d, dict) else {}).items()
+             if isinstance(v, dict) and isinstance(v.get('at'), (int, float)) and now - v['at'] < 2 * 86400}
+        before = json.dumps(d, sort_keys=True)
+        r = fn(d, now)
+        if json.dumps(d, sort_keys=True) != before:
+            save_json(p, d, 0o600)
+        return r
+
+
+def mail_claim(dg, again=False):
+    """认领这封邮件：返回 False 是不该再打开（打开过、别的 cca 正在打开它），否则是原来的状态（没打开时照它还原）"""
+    def f(d, now):
+        v = d.get(dg) or {}
+        st = v.get('st')
+        if st == 'done' and not again:
+            return False
+        if st == 'claim' and now - v['at'] < 120 and v.get('pid') != os.getpid() and mail_pid_alive(v.get('pid')):
+            return False
+        d[dg] = {'at': now, 'st': 'claim', 'pid': os.getpid()}
+        return st if st == 'done' else None
+    return mail_used(f)
+
+
+def mail_mark(dg, st):
+    def f(d, now):
+        if st:
+            d[dg] = {'at': now, 'st': st}
+        else:
+            d.pop(dg, None)
+    mail_used(f)
+
+
+def mail_pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def mail_nap(secs, end, alive, now, sleep):
+    """睡 secs 秒（到 end 为止），每半秒看一次 alive()"""
+    until = min(now() + secs, end)
+    while now() < until and alive():
+        sleep(max(0.01, min(0.5, until - now())))
+
+
+def mail_verdict(rule, raw, got, acct, since, forwarder=None):
+    """取来的全文照样再核对一遍、取出链接：(没通过的原因或 None, 链接或 None, 解析好的邮件)"""
+    msg = mail_parse(raw)
+    why = mail_judge(rule, msg, got, acct, since, forwarder)
+    return why, None if why else mail_extract(rule, msg), msg
+
+
+def mail_take(src, p, acct, since, deliver, again, forwarder=None):
+    """认领、取全文、照全文再核对一遍、取出链接、打开：返回 ok、used（打开过了）、fail（浏览器没打开，链接还没用掉）、refused，
+    或者没通过核对的原因。只有打开了才记下（别的照原来的状态还原：下次照样核对、照实说原因）；Gmail 那边出错时往外抛（下一轮再来）"""
+    prev = mail_claim(p['dg'], again)
+    if prev is False:
+        return 'used'
+    st = 'fail'
+    try:
+        why, link, _ = mail_verdict(p['rule'], src.full(p), p['got'], acct, since, forwarder)
+        st = why or ('nolink' if not link else deliver(link))
+        return st
+    finally:
+        mail_mark(p['dg'], 'done' if st == 'ok' else prev)
+
+
+def mail_hunt(src, rules, acct, since, end, deliver, once=False, again=False, alive=None, say=None, hello=None, idle=None,
+              now=time.time, sleep=time.sleep, forwarder=None):
+    """找 acct 的登录邮件，找到就交给 deliver(链接)（返回 ok、refused、fail）。once：手动（cca mail open），打开了、浏览器打不开就停，
+    第一次就连不上马上停；否则一直盯到 end、alive() 为假（登录结束了）。来了好几封只开最新的一封（之前的多半已经失效）；浏览器
+    没打开的过一会儿（CCA_MAIL_RETRY，默认 2 秒）再试，一共三次（到了 end 也试完）；这一轮从取头到打开都成了才算连上了（取不到全文的
+    那封照连不上退避）。hello：第一次连上时调；idle：第一轮看完还没有能打开的时调（cca mail open
+    说要等）。返回 {code: opened | none | fail | 最后连不上时 MailError 的 code, text, opened, used, rejected: {原因: 封数}}"""
+    alive = alive or (lambda: True)
+    say = say or (lambda s: None)
+    poll, base = mail_knob('CCA_MAIL_POLL', 3), mail_knob('CCA_MAIL_RETRY', 2)
+    res = {'code': 'none', 'text': '', 'opened': 0, 'used': 0, 'rejected': {}}
+    wait, fails, pend, polled = base, 0, None, False
+
+    def reject(why):
+        res['rejected'][why] = res['rejected'].get(why, 0) + 1
+        if not once and why not in ('old', 'subject', 'to'):   # 别的账号的登录邮件（同时在登录几个账号）不说
+            say('! 邮箱助手：收到一封像是登录邮件的邮件，没通过核对（%s），没有打开：要用的话自己点里面的链接' % MAIL_WHY[why])
+
+    while alive():
+        try:
+            new = src.poll(since)
+            polled = True
+            if hello:
+                hello()
+                hello = None
+            for c in new:
+                msg = mail_parse(c['hdr'])
+                rule, why = mail_judge_any(rules, msg, c['got'], acct, since, forwarder)
+                if why:
+                    reject(why)
+                elif pend is None or (c['got'], c['uid']) > (pend['got'], pend['uid']):
+                    pend = dict(c, rule=rule, dg=mail_digest(msg, c), tries=0, at=0.0)
+            if pend is not None and now() >= pend['at']:
+                st = mail_take(src, pend, acct, since, deliver, again, forwarder)
+                if st == 'ok':
+                    res['opened'] += 1
+                    res['code'], pend = 'opened', None
+                    if once:
+                        return res
+                elif st == 'fail' and pend['tries'] < 2:
+                    pend['tries'] += 1
+                    pend['at'] = now() + base
+                else:
+                    pend = None
+                    if st == 'used':
+                        res['used'] += 1
+                    elif st == 'fail':
+                        res['code'] = 'fail'
+                        if once:
+                            return res
+                        say('! 邮箱助手：收到登录邮件了，但没能打开浏览器（原因见上面）：链接没有用掉，处理好后运行 cca mail open %s' % acct)
+                    elif st in MAIL_WHY:
+                        reject(st)
+            if idle and pend is None:
+                idle()
+            idle = None
+            fails, wait = 0, base
+        except MailFatal as e:
+            res.update(code=e.code, text=e.text)
+            return res
+        except MailRetry as e:
+            if once and not polled:
+                res.update(code=e.code, text=e.text)
+                return res
+            fails += 1
+            if fails == 3 and not once:
+                say('! 邮箱助手：连不上 Gmail（%s），还在重试；登录照常进行，邮件到了也可以自己点里面的链接' % e.text)
+            if now() >= end:
+                res.update(code=e.code, text=e.text)
+                break
+            mail_nap(min(wait, 30), end, alive, now, sleep)
+            wait = min(wait * 2, 30)
+            continue
+        if pend is not None:   # 浏览器没打开的那一封：到点再试
+            mail_nap(pend['at'] - now(), pend['at'], alive, now, sleep)
+        elif now() >= end:
+            break
+        else:
+            mail_nap(poll, end, alive, now, sleep)
+    return res
+
+
+def mail_one(m, auto_default=True, proxy_default='system'):
+    """config.json 的 mail 或 mail.accounts[*] 一项 → {user, auto, proxy}；地址不对是 None。
+    没写 auto / proxy 的按给的默认值（账号覆盖没写时继承默认那一项的）"""
+    if not isinstance(m, dict) or not isinstance(m.get('user'), str) or not MAIL_ADDR_RE.match(m['user'].lower()):
+        return None
+    p = m.get('proxy')
+    return {'user': m['user'].lower(),
+            'auto': (m.get('auto') is not False) if 'auto' in m else auto_default,
+            'proxy': p if isinstance(p, str) and p else proxy_default}
+
+
+def mail_cfg(c, key=None):
+    """默认的邮箱助手设置（key 是 None），或某账号解析后的设置（覆盖 config.json 的 mail.accounts[acct_id] → 默认 mail）。
+    返回 {user, auto, proxy, source: 'account'|'default', forwarder} 或 None（没有可连的 Gmail）。
+    forwarder 是这个账号单独登记的「信任转发中转」域名（不安全、默认不登记；不继承默认；只在 key 给定时有意义），没有是 None"""
+    m = c.get('mail')
+    if not isinstance(m, dict):
+        return None
+    default = mail_one(m)
+    ov = None
+    if key is not None:
+        accts = m.get('accounts')
+        ov = accts.get(acct_id(key)) if isinstance(accts, dict) else None
+    one = mail_one(ov, default['auto'] if default else True, default['proxy'] if default else 'system') if isinstance(ov, dict) else None
+    if one:
+        one['source'] = 'account'
+    elif default:
+        one = dict(default, source='default')
+    if one is None:
+        return None
+    fwd = ov.get('forwarder') if isinstance(ov, dict) else None
+    one['forwarder'] = fwd.lower() if isinstance(fwd, str) and MAIL_DOMAIN_RE.match(fwd.lower()) else None
+    return one
+
+
+def mail_all_addrs(c):
+    """config.json 里引用到的所有 Gmail 地址（默认 + 各账号覆盖），小写：换地址、移除时据此清钥匙串"""
+    m = c.get('mail')
+    out = set()
+    if isinstance(m, dict):
+        one = mail_one(m)
+        if one:
+            out.add(one['user'])
+        accts = m.get('accounts')
+        if isinstance(accts, dict):
+            for ov in accts.values():
+                o = mail_one(ov)
+                if o:
+                    out.add(o['user'])
+    return out
+
+
+def mail_view(c, key):
+    """账号页的邮箱助手状态（_gui state；只读 config.json，不碰钥匙串）：{configured, user, source, auto, forwarder}。
+    source：account（这个账号单独配的 Gmail）| default（用默认那个）| None（没配置）。
+    forwarder：这个账号登记的「信任转发中转」域名（不安全开关，默认 null）"""
+    m = mail_cfg(c, key)
+    return {'configured': bool(m), 'user': m['user'] if m else None,
+            'source': m.get('source') if m else None, 'auto': m['auto'] if m else True,
+            'forwarder': m.get('forwarder') if m else None}
+
+
+def load_quiet(path):
+    """读不了、格式不对都当作没有（缓存之类，不值得为它报错退出）"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def save_json(path, data, mode=None, follow_symlinks=True):
+    path = os.path.realpath(path) if follow_symlinks else os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if mode is None:
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except FileNotFoundError:
+            mode = 0o600
+    tmp = '%s.cca-%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write('\n')
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def parse_key(key):
+    """账号表的键 → (别名, 邮箱)。键可以是「别名(邮箱)」、只写邮箱，或只写别名（登录页不预填邮箱）"""
+    m = PAIR_RE.match(key)
+    if m and EMAIL_RE.match(m.group(2)):
+        return m.group(1), m.group(2)
+    return ('', key) if EMAIL_RE.match(key) else (key, '')
+
+
+def ident(k):
+    s = re.sub(r'[^a-z0-9]+', '-', k.lower()).strip('-')[:20].strip('-') or 'acct'
+    return '%s-%s' % (s, hashlib.sha1(k.encode('utf-8')).hexdigest()[:6])
+
+
+def acct_id(key, tool=None):
+    # 有邮箱就按邮箱认账号：改别名不换账号目录，登录和浏览器资料都还在；第三方 API 账号按 id 认。
+    # 各工具的账号目录在不同的地方（sroot），同一个邮箱的 Claude 账号和 Codex 账号不会撞
+    return ident(parse_key(key)[1] or (tool or T).ids.get(key) or key)
+
+
 MAIL_RULES = {
     # claude.ai 用邮箱登录时发的登录邮件。真邮件（2026-11-16 核对）标题是 Your secure link to Claude is here，发件人
     # no-reply-<随机>@mail.anthropic.com，Gmail 验 dkim=pass mail.anthropic.com。帮助中心写的是 Secure link to log in to
@@ -576,7 +867,8 @@ MAIL_RULES = {
 REFERENCE = (MailRule, MailError, MailRetry, MailFatal, mail_clean, mail_oserr, mail_proxy_parse, mail_bypass, mail_route_note, mail_epoch,
              mail_since, mail_crit, mail_fetch_parse, mail_parse, mail_text, mail_addrs, mail_tags, mail_ar_items, mail_ar, mail_fwd_ok,
              mail_from_alias, mail_signed_for, mail_signed, mail_judge, mail_judge_fwd, mail_judge_any, mail_links, mail_extract, mail_shape,
-             mail_digest, mail_handle, mail_imap, MailBox)
+             mail_digest, mail_handle, mail_imap, MailBox, mail_knob, mail_used, mail_claim, mail_mark, mail_pid_alive, mail_nap, mail_verdict, mail_take,
+             mail_hunt, mail_one, mail_cfg, mail_all_addrs, mail_view, load_quiet, save_json, parse_key, ident, acct_id)
 RULE = MAIL_RULES['claude-login']
 
 
@@ -597,10 +889,11 @@ def check_reference():
             bad.append(obj.__name__)
     with open(os.path.abspath(__file__), encoding='utf-8') as f:
         me = f.read()
-    consts = [l for l in me.split('# --- 参照实现', 1)[1].split('\n\n\n', 1)[0].splitlines() if l.startswith('MAIL_')]
+    consts = [l for l in me.split('# --- 参照实现', 1)[1].split('\n\n\n', 1)[0].splitlines() if l.startswith(('MAIL_', 'EMAIL_RE', 'PAIR_RE'))]
     bad += [l.split(' ', 1)[0] for l in consts if l not in py.splitlines()]
-    if '\nMAIL_RULES = {' + me.split('\nMAIL_RULES = {', 1)[1].split('\n}\n', 1)[0] + '\n}\n' not in py:
-        bad.append('MAIL_RULES')
+    for table in ('MAIL_RULES', 'MAIL_WHY'):
+        if '\n%s = {' % table + me.split('\n%s = {' % table, 1)[1].split('\n}\n', 1)[0] + '\n}\n' not in py:
+            bad.append(table)
     if bad:
         sys.exit('参照实现和 cca 里的原文对不上了（主干改过？照原文重抄）：%s' % '、'.join(bad))
 
@@ -1847,6 +2140,385 @@ def imap_cases():
     return [imap_case(name, conns, ops) for name, conns, ops in imap_scripts()]
 
 
+# --- 设置：config.json 的 mail 一节 ------------------------------------------------------------------------------------
+class T:
+    """参照实现里的 acct_id 要的「当前工具」：只用到 ids（第三方 API 账号的键 → id；这里没有）"""
+    ids = {}
+
+
+MAIL_DIR = None   # 参照实现里 mail_used 用的目录：hunt_case 每个用例换一个临时目录
+
+
+def cfg_inputs():
+    a, b = ident('alice@example.com'), ident('bob@example.com')   # mail.accounts 的键是账号目录名
+    base = {'user': 'Inbox@Example.com', 'proxy': 'socks5://127.0.0.1:7897'}
+    mails = [
+        None, 'x', [], {}, {'user': 'inbox@example.com'}, base, dict(base, auto=False), dict(base, auto=0), dict(base, auto=None), dict(base, auto='false'), dict(base, proxy=''),
+        dict(base, proxy=5), {'user': 'not an address'}, {'user': 5}, {'user': 'inbox@example.com\n'}, {'user': 'İnbox@example.com'},
+        {'accounts': {a: {'user': 'Alice-Box@example.com'}}}, {'accounts': 'x'}, {'accounts': {a: 'x'}},
+        dict(base, accounts={a: {'user': 'alice-box@example.com'}, b: {'forwarder': 'Relay.Example.com'}}),
+        dict(base, auto=False, accounts={a: {'user': 'alice-box@example.com'}}),
+        dict(base, auto=False, accounts={a: {'user': 'alice-box@example.com', 'auto': True, 'proxy': 'direct'}}),
+        dict(base, accounts={a: {'user': 'bad address', 'forwarder': 'relay.example.com'}}),
+        dict(base, accounts={a: {'forwarder': 'relay.example.com\n'}}), dict(base, accounts={a: {'forwarder': 'no-dot'}}), dict(base, accounts={a: {'forwarder': 5}}),
+        dict(base, accounts={a: {'forwarder': ''}}), dict(base, accounts={a: {'user': 'x@example.com', 'forwarder': 'a.b', 'auto': False}}),
+        {'accounts': {a: {'forwarder': 'relay.example.com'}}}, {'user': 'bad', 'accounts': {a: {'user': 'alice-box@example.com', 'proxy': ''}}},
+        dict(base, accounts={a: {'user': 'inbox@example.com'}, b: {'user': 'INBOX@example.com'}, 'zz': {'user': 'other@example.com'}, 'yy': 5}),
+        dict(base, accounts={ident('只有别名'): {'user': 'alias-box@example.com'}, ident(''): {'user': 'empty-key@example.com'}}),
+    ]
+    return [{'version': 2} if m is None else {'version': 2, 'mail': m} for m in mails]
+
+
+CFG_KEYS = [None, 'alice@example.com', '主号(alice@example.com)', '主号（Alice@Example.com）', 'bob@example.com', '只有别名', '', 'nobody@example.com']
+
+
+def cfg_case(c):
+    """一份 config.json：各个账号（keys 的每一项是 [键, mail_cfg, mail_view]；键是 None 的是默认那一项）、引用到的地址"""
+    return {'c': c, 'keys': [[k, mail_cfg(c, k), mail_view(c, k)] for k in CFG_KEYS], 'addrs': sorted(mail_all_addrs(c)), 'one': mail_one(c.get('mail')),
+            'one_off': mail_one(c.get('mail'), False, 'direct')}
+
+
+# --- cca mail open 的 --msg、--wait 和小时数 -----------------------------------------------------------------------------
+HANDLES = ['INBOX:5:11', '"[Gmail]/All Mail":42:11', 'a:b:007:0', ':5:11', 'INBOX:5', 'INBOX', '', 'INBOX:x:11', 'INBOX:5:', 'INBOX::11', 'INBOX:-5:11', 'INBOX:5:+11', 'INBOX:5 :11',
+           'INBOX:²:11', 'INBOX:٥:١١', 'INBOX:５:１１', 'INBOX:' + '9' * 30 + ':1', 'INBOX:1:' + '9' * 4300, 'INBOX:1:' + '9' * 4301, 'INBOX:' + '0' * 4301 + ':1',
+           'INBOX:1_0:2', 'INBOX: 5:11', '::', ':::', 'x:0:0', '收件箱:5:11', 'INBOX:5:11\n', 'INBOX:①:11', 'INBOX:٣٤:٥٦', 'INBOX:1٣:2', 'INBOX:5:1 1']
+INTS = ['24', '0', '-1', '+5', ' 7 ', '1_0', '_1', '1_', '1__0', '', ' ', 'x', '1.5', '1e3', '0x10', '336', '337', '900', '901', '99999999999999999999999999', '-99999999999999999999999999',
+        '٣', '３３', '²', '1 2', '- 1', '--1', '+-1', '0' * 50 + '9', '9' * 4300, '9' * 4301, '0' * 4301, '-' + '9' * 4301, '\t12\n', '　1　', '1\x00', 'ⅷ', '1٣',
+        '-0', '+0', '00', '1_000', '\x1c5\x1f', '\x855\xa0']
+
+
+def handle_case(s):
+    try:
+        folder, uid, valid = mail_handle(s)
+    except ValueError:
+        return {'in': s, 'out': None}
+    return {'in': s, 'out': [folder, str(uid), str(valid)]}
+
+
+def int_case(s):
+    try:
+        n = int(s)
+    except ValueError:
+        return {'in': s, 'hours': None, 'secs': None}
+    return {'in': s, 'hours': max(1, min(n, 336)), 'secs': max(0, min(n, 900))}
+
+
+# --- 盯邮箱：mail_hunt 配假的邮件来源、假的时钟、假的「打开」 --------------------------------------------------------------
+T0 = 1794708000
+BOX = '\x22[Gmail]/All Mail\x22'
+
+
+class HuntSource:
+    """rounds：每看一次邮箱给什么（{'mails': [[uid, 邮件, 几秒前收到的, 取全文时给哪一封（gone 是取不到）]…]}、{'retry': [code, text]}、
+    {'fatal': [code, text]}），用完了以后每次都是没有新邮件"""
+
+    def __init__(self, rounds, emails):
+        self.rounds, self.emails, self.polls = [dict(r) for r in rounds], emails, 0
+
+    def poll(self, since):
+        self.polls += 1
+        r = self.rounds.pop(0) if self.rounds else {'mails': []}
+        if 'retry' in r:
+            raise MailRetry(*r['retry'])
+        if 'fatal' in r:
+            raise MailFatal(*r['fatal'])
+        return [{'folder': BOX, 'label': '所有邮件', 'uid': m[0], 'got': T0 - m[2], 'hdr': self.emails[m[1]], 'seen': (BOX, 1, m[0]),
+                 'full': m[3] if len(m) > 3 else m[1]} for m in r['mails']]
+
+    def full(self, cand):
+        if cand['full'] == 'gone':
+            raise MailRetry('proto', 'Gmail 没给出这封邮件')
+        return self.emails[cand['full']]
+
+
+def hunt_case(emails, name, rounds, deliver=(), secs=30, once=False, again=False, alive=None, since_ago=10, forwarder=None, rules=1, used=()):
+    """used：事先记在 used.json 里的 [[邮件, uid, 几秒前收到的], 状态, 记下是几秒前, 谁认领的（me / parent / dead）]"""
+    global MAIL_DIR
+    MAIL_DIR = tempfile.mkdtemp(prefix='cca-mail-vectors.')
+    try:
+        if used:
+            pids = {'me': os.getpid(), 'parent': os.getppid(), 'dead': 2147483600}
+            d = {}
+            for (mail, uid, ago), st, age, who in used:
+                dg = mail_digest(mail_parse(emails[mail]), {'folder': BOX, 'uid': uid, 'got': T0 - ago})
+                d[dg] = dict({'at': time.time() - age, 'st': st}, **({'pid': pids[who]} if who else {}))
+            save_json(os.path.join(MAIL_DIR, 'used.json'), d, 0o600)
+        clock, said, opened, calls, results = [float(T0)], [], [], {'hello': 0, 'idle': 0, 'alive': 0}, list(deliver)
+
+        def open_it(link):
+            opened.append([round(clock[0] - T0, 3), link])
+            return results.pop(0) if results else 'ok'
+
+        def is_alive():
+            calls['alive'] += 1
+            return alive is None or calls['alive'] <= alive
+
+        def count(what):
+            calls[what] += 1
+        src = HuntSource(rounds, emails)
+        try:
+            res = mail_hunt(src, [RULE] * rules, 'alice@example.com', T0 - since_ago, T0 + secs, open_it, once=once, again=again, alive=is_alive, say=said.append,
+                            hello=lambda: count('hello'), idle=lambda: count('idle'), now=lambda: clock[0], sleep=lambda x: clock.__setitem__(0, clock[0] + x), forwarder=forwarder)
+            res = dict(res, rejected=[list(kv) for kv in res['rejected'].items()])
+        except Exception as e:   # 原来没有人接的异常
+            res = {'error': cls(e)}
+        after = load_quiet(os.path.join(MAIL_DIR, 'used.json')) or {}
+        return {'name': name, 'rounds': rounds, 'deliver': list(deliver), 'secs': secs, 'once': once, 'again': again, 'alive': alive, 'since_ago': since_ago, 'forwarder': forwarder,
+                'rules': rules, 'used': [list(u) for u in used], 'res': res, 'said': said, 'opened': opened, 'polls': src.polls, 'clock': round(clock[0] - T0, 3),
+                'hello': calls['hello'], 'idle': calls['idle'], 'alive_calls': calls['alive'], 'used_after': sorted([k, v.get('st')] for k, v in after.items())}
+    finally:
+        shutil.rmtree(MAIL_DIR, True)
+        MAIL_DIR = None
+
+
+def hunt_cases():
+    emails = {name: raw for name, raw, _ in judge_emails()}
+    M = lambda *mails: {'mails': [list(m) for m in mails]}
+    net = lambda t: {'retry': ['net', t]}
+    A, H, T = 'good', 'body html only', 'body text only'
+    S = [
+        # tests/mail_view.py 的 Hunt 里那些
+        ('newest of two, keeps watching', [M((1, H, 5), (2, T, 1))], {}),
+        ('browser fails twice then works', [M((1, A, 0))], dict(deliver=['fail', 'fail', 'ok'])),
+        ('browser fails three times', [M((2, 'subject encoded', 0))], dict(deliver=['fail', 'fail', 'fail'])),
+        ('retries finish past the end', [M((1, A, 0))], dict(deliver=['fail', 'fail', 'ok'], secs=1)),
+        ('once stops on browser failure', [M((1, A, 0))], dict(deliver=['fail', 'fail', 'fail'], secs=600, once=True)),
+        ('trouble four times then fine', [net('x1'), net('x2'), net('x3'), net('x4'), M()], dict(secs=60)),
+        ('down all the time', [net('down')] * 50, dict(secs=20)),
+        ('once fails fast before the first poll', [{'retry': ['proxy', '代理断开了连接']}], dict(once=True)),
+        ('once keeps waiting after a blip', [M(), net('blip'), M((3, A, 0))], dict(secs=60, once=True)),
+        ('fatal stops at once', [{'fatal': ['auth', 'Gmail 不认这个密码']}], {}),
+        ('once idle when nothing', [M()], dict(secs=10, once=True)),
+        ('once no idle when opening', [M((1, A, 0))], dict(secs=10, once=True)),
+        ('used is not opened again', [M((1, A, 0))], dict(secs=5, once=True, used=[[[A, 1, 0], 'done', 30, None]])),
+        ('used is opened with again', [M((1, A, 0))], dict(once=True, again=True, used=[[[A, 1, 0], 'done', 30, None]])),
+        ('rejections quiet or said', [M((1, 'to bob', 0), (2, 'subject receipt', 0), (3, 'from evil', 0), (4, 'ar fail', 0))], dict(secs=5)),
+        ('rejections never said when once', [M((1, 'to bob', 0), (2, 'subject receipt', 0), (3, 'from evil', 0), (4, 'ar fail', 0))], dict(secs=5, once=True)),
+        ('stops when login is over', [], dict(secs=600, alive=3)),
+        ('mail that cannot be fetched backs off', [M((1, A, 0, 'gone'))], dict(secs=120)),
+        ('no link is checked again next time', [M((1, 'body tracking link', 0))], dict(secs=5, once=True)),
+        ('refused counts as rejected', [M((1, A, 0))], dict(deliver=['refused'], secs=5)),
+        # 别的路
+        ('refused when once', [M((1, A, 0))], dict(deliver=['refused'], secs=5, once=True)),
+        ('newer mail replaces the one being retried', [M((1, A, 5)), M((2, T, 0))], dict(deliver=['fail', 'ok'])),
+        ('older mail does not replace it', [M((2, T, 0)), M((1, A, 5))], dict(deliver=['fail', 'ok'])),
+        ('same second, higher uid wins', [M((7, A, 3), (9, T, 3), (8, H, 3))], dict(once=True)),
+        ('same second, later round lower uid loses', [M((9, T, 3)), M((8, H, 3))], dict(deliver=['fail', 'ok'])),
+        ('old mail is ignored quietly', [M((1, A, 200))], dict(secs=5)),
+        ('just inside the clock skew', [M((1, A, 70))], dict(secs=5, once=True)),
+        ('just outside the clock skew', [M((1, A, 70.5))], dict(secs=5, once=True)),
+        ('forwarded mail with a trusted forwarder', [M((1, 'fwd good', 0))], dict(once=True, forwarder='relay.example.com')),
+        ('forwarded mail without one', [M((1, 'fwd good', 0))], dict(secs=5)),
+        ('forwarded mail for another alias', [M((1, 'fwd alias bob', 0))], dict(secs=5, forwarder='relay.example.com')),
+        ('full message is for someone else', [M((1, A, 0, 'to bob'))], dict(secs=5)),
+        ('full message fails dkim', [M((1, A, 0, 'ar fail'))], dict(secs=5)),
+        ('full message has no link', [M((1, A, 0, 'body no parts'))], dict(secs=5)),
+        ('full message is empty', [M((1, A, 0, 'empty'))], dict(secs=5)),
+        ('blip after polling, once, time is up', [M(), net('blip')], dict(secs=2, once=True)),
+        ('fatal after something was opened', [M((1, A, 0)), {'fatal': ['auth', 'Gmail 不认这个密码']}], {}),
+        ('second mail fails after the first opened', [M((1, A, 5)), M((2, T, 0))], dict(deliver=['ok', 'fail', 'fail', 'fail'])),
+        ('second mail opens too', [M((1, A, 5)), M(), M((2, T, 0))], {}),
+        ('claimed by a live process', [M((1, A, 0))], dict(secs=5, used=[[[A, 1, 0], 'claim', 10, 'parent']])),
+        ('claimed by a dead process', [M((1, A, 0))], dict(secs=5, once=True, used=[[[A, 1, 0], 'claim', 10, 'dead']])),
+        ('claimed long ago by a live process', [M((1, A, 0))], dict(secs=5, once=True, used=[[[A, 1, 0], 'claim', 300, 'parent']])),
+        ('claimed by this process', [M((1, A, 0))], dict(secs=5, once=True, used=[[[A, 1, 0], 'claim', 10, 'me']])),
+        ('again but the browser fails: stays done', [M((1, A, 0))], dict(deliver=['fail', 'fail', 'fail'], once=True, again=True, used=[[[A, 1, 0], 'done', 30, None]])),
+        ('no time at all', [M((1, A, 0))], dict(secs=0)),
+        ('no time at all, nothing there', [M()], dict(secs=0)),
+        ('trouble exactly at the end', [net('late')], dict(secs=0)),
+        ('backoff doubles up to 30 seconds', [net('n%d' % i) for i in range(12)], dict(secs=200)),
+        ('no rules at all', [M((1, A, 0))], dict(secs=5, rules=0)),
+        ('two identical rules', [M((1, A, 0), (2, 'to bob', 0))], dict(secs=5, once=True, rules=2)),
+        ('opener answers something odd', [M((1, A, 0))], dict(deliver=['weird'], secs=5)),
+        ('opener answers a reason', [M((1, A, 0))], dict(deliver=['dkim'], secs=5)),
+        ('login already over', [M((1, A, 0))], dict(alive=0)),
+        ('login ends while retrying the browser', [M((1, A, 0))], dict(deliver=['fail', 'fail', 'fail'], alive=4)),
+        ('login ends while backing off', [net('x')] * 9, dict(secs=600, alive=6)),
+        ('several rejected then one good', [M((1, 'ar fail', 9), (2, 'from evil', 8)), M((3, 'dup to', 7), (4, T, 6))], {}),
+        ('same reason twice is counted', [M((1, 'ar fail', 9), (2, 'ar fail', 8), (3, 'to bob', 7), (4, 'to bob', 6))], dict(secs=5, once=True)),
+        ('hostile address is an uncaught error', [M((1, 'from deep comment', 0))], dict(secs=5)),
+        ('hostile full message is an uncaught error', [M((1, A, 0, 'from deep comment'))], dict(secs=5)),
+        ('fetch trouble three times then it works', [M((1, A, 0, 'gone')), M(), M(), M((1, A, 0))], dict(secs=120)),
+        ('cannot fetch, once', [M((1, A, 0, 'gone'))], dict(secs=30, once=True)),
+    ]
+    return [hunt_case(emails, name, rounds, **kw) for name, rounds, kw in S]
+
+
+# --- 各条路上的上限：真的 PY_SRC 后面接上几个量层数用的子命令，一个数起一个进程量 ------------------------------------------------
+# 一层套一层到 Python 调用栈的一千层为止，落在第几层看解析的那个函数自己在第几层（depth：它和子命令的函数之间隔着几层函数），
+# 还看是不是这个进程里头一次解析地址（first：见 cli/src/cmd/mail/header.rs 的 first_use）。上面 measure_limits 在一个进程里
+# 反复试，量到的是「不是头一次」的数
+PROBES = r"""
+def probe_nested(kind, n, header):
+    v = {'comment': '(' * n + ')' * n + ' no-reply@mail.anthropic.com', 'group': 'a:' * n}[kind]
+    return ('%s: %s\r\nSubject: Your secure link to Claude is here\r\n\r\n' % (header, v)).encode()
+
+
+def probe_warm(addrs, aliases):
+    plain = mail_parse(b'From: \x22x@example.com\x22 <a@example.com>\r\nTo: a@example.com\r\n\r\n')
+    for _ in range(int(addrs)):
+        mail_addrs(plain, 'To')
+    for _ in range(int(aliases)):
+        mail_from_alias(plain)
+
+
+def cmd_probe_addr(kind, n, addrs='0', aliases='0'):
+    # 子命令里直接调 mail_addrs（cmd_mail_test 取收件人那一处）；addrs / aliases：先解析过几次（getaddresses / parseaddr 各算各的）
+    probe_warm(addrs, aliases)
+    msg = mail_parse(probe_nested(kind, int(n), 'To'))
+    try:
+        mail_addrs(msg, 'To')
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+def cmd_probe_alias(kind, n, addrs='0', aliases='0'):
+    # 子命令里直接调 mail_from_alias（parseaddr 那条路）
+    probe_warm(addrs, aliases)
+    msg = mail_parse(probe_nested(kind, int(n), 'From'))
+    try:
+        mail_from_alias(msg)
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+def cmd_probe_judge(kind, n):
+    # 子命令 → mail_judge_any → mail_judge → mail_addrs
+    msg = mail_parse(probe_nested(kind, int(n), 'From'))
+    try:
+        mail_judge_any(mail_rules(), msg, time.time(), 'a@example.com', 0)
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+class ProbeSource:
+    def __init__(self, hdr):
+        self.hdr = hdr
+
+    def poll(self, since):
+        return [{'folder': 'a', 'label': 'a', 'uid': 1, 'got': time.time(), 'hdr': self.hdr, 'seen': 1}]
+
+
+def cmd_probe_open(kind, n):
+    # cca mail open：子命令 → mail_hunt → mail_judge_any → mail_judge → mail_addrs
+    src = ProbeSource(probe_nested(kind, int(n), 'From'))
+    try:
+        mail_hunt(src, mail_rules(), 'a@example.com', 0, 0, lambda link: 'ok', once=True)
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+def cmd_probe_watch(kind, n):
+    # 登录时：子命令 → mail_watch 那一层 → mail_hunt → mail_judge_any → mail_judge → mail_addrs
+    src = ProbeSource(probe_nested(kind, int(n), 'From'))
+
+    def like_mail_watch():
+        return mail_hunt(src, mail_rules(), 'a@example.com', 0, 0, lambda link: 'ok', alive=lambda: True)
+    try:
+        like_mail_watch()
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+def probe_message(kind, n):
+    unit, leaf = {'rfc822': ('Content-Type: message/rfc822\r\n\r\n', 'Subject: x\r\n\r\nhi\r\n'),
+                  'multipart': ('Content-Type: multipart/mixed; boundary=b%d\r\n\r\n--b%d\r\n', '\r\nhi\r\n')}[kind]
+    return (''.join(unit % ((i, i) if '%d' in unit else ()) for i in range(n)) + leaf).encode()
+
+
+def cmd_probe_parse(kind, n):
+    # 子命令里直接调 mail_parse
+    raw = probe_message(kind, int(n))
+    try:
+        mail_parse(raw)
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+def cmd_probe_verdict(kind, n, extra='0'):
+    # 子命令 → mail_verdict → mail_parse（cmd_mail_test 取全文那一处）；extra：中间再隔几层（3 层相当于登录时 mail_watch → mail_hunt → mail_take）
+    raw = probe_message(kind, int(n))
+
+    def deeper(k):
+        return deeper(k - 1) if k > 1 else mail_verdict(mail_rules()[0], raw, time.time(), 'a@example.com', 0)
+    try:
+        deeper(int(extra)) if int(extra) else mail_verdict(mail_rules()[0], raw, time.time(), 'a@example.com', 0)
+        print('ok')
+    except RecursionError:
+        print('RecursionError')
+
+
+CMDS.update({'probe-addr': cmd_probe_addr, 'probe-alias': cmd_probe_alias, 'probe-judge': cmd_probe_judge, 'probe-open': cmd_probe_open, 'probe-watch': cmd_probe_watch,
+             'probe-parse': cmd_probe_parse, 'probe-verdict': cmd_probe_verdict})
+"""
+# (这一处是什么, 起哪个量层数的子命令和它后面的参数, 记进对照数据的：解析的是地址还是邮件、经 getaddresses 还是 parseaddr、隔着几层、是不是头一次)
+PATHS = (
+    ('cmd_mail_test 里头一次解析地址', ['probe-addr'], dict(what='address', via='getaddresses', depth=0, first=True)),
+    ('同一处，第二次起', ['probe-addr', '1', '0'], dict(what='address', via='getaddresses', depth=0, first=False)),
+    ('同一处，先用过 parseaddr 不算', ['probe-addr', '0', '3'], dict(what='address', via='getaddresses', depth=0, first=True)),
+    ('子命令里头一次 mail_from_alias', ['probe-alias', '3', '0'], dict(what='address', via='parseaddr', depth=0, first=True)),
+    ('同一处，第二次起', ['probe-alias', '0', '1'], dict(what='address', via='parseaddr', depth=0, first=False)),
+    ('经 mail_judge_any → mail_judge', ['probe-judge'], dict(what='address', via='getaddresses', depth=2, first=True)),
+    ('cca mail open（经 mail_hunt）', ['probe-open'], dict(what='address', via='getaddresses', depth=3, first=True)),
+    ('登录时（mail_watch → mail_hunt）', ['probe-watch'], dict(what='address', via='getaddresses', depth=4, first=True)),
+    ('子命令里直接 mail_parse', ['probe-parse'], dict(what='message', depth=0)),
+    ('cmd_mail_test 取全文（经 mail_verdict）', ['probe-verdict'], dict(what='message', depth=1)),
+    ('cca mail open 取全文', ['probe-verdict', '2'], dict(what='message', depth=3)),
+    ('登录时取全文', ['probe-verdict', '3'], dict(what='message', depth=4)),
+)
+
+
+def path_limits(old):
+    """各条路上最多套几层。cca 里已经没有 PY_SRC 时沿用 old（上一次生成的那一节）"""
+    import subprocess
+    try:
+        with open(os.path.join(REPO, 'cca'), encoding='utf-8') as f:
+            src = f.read()
+    except OSError:
+        return old
+    if "PY_SRC=$(cat <<'PY'\n" not in src:
+        return old
+    py = src.split("PY_SRC=$(cat <<'PY'\n", 1)[1].split('\nPY\n)', 1)[0]
+    check = 'if len(sys.argv) < 2 or sys.argv[1] not in CMDS:\n'
+    if py.count(check) != 1:
+        sys.exit('PY_SRC 最后分派子命令的写法变了：path_limits 要跟着改')
+    d = tempfile.mkdtemp(prefix='cca-mail-limits.')
+    try:
+        probe = os.path.join(d, 'py_src.py')
+        with open(probe, 'w', encoding='utf-8') as f:
+            f.write(py.replace(check, PROBES + check) + '\n')
+        env = {'HOME': os.path.join(d, 'home'), 'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}   # 沙箱里的 HOME：不碰真的 ~/.cca
+        os.makedirs(env['HOME'])
+
+        def fits(argv, kind, n):
+            r = subprocess.run([sys.executable, '-I', '-X', 'utf8', probe, argv[0], kind, str(n)] + argv[1:], capture_output=True, text=True, env=env, timeout=120)
+            last = (r.stdout.strip().splitlines() or [''])[-1]
+            if last not in ('ok', 'RecursionError'):
+                sys.exit('量层数的子命令没跑成：%s %s %d\n%s' % (argv, kind, n, r.stderr[-800:]))
+            return last == 'ok'
+        out = []
+        for name, argv, meta in PATHS:
+            for kind in (('comment', 'group') if meta['what'] == 'address' else ('rfc822', 'multipart')):
+                lo, hi = 400, 1100
+                assert fits(argv, kind, lo) and not fits(argv, kind, hi)
+                while hi - lo > 1:
+                    mid = (lo + hi) // 2
+                    if fits(argv, kind, mid):
+                        lo = mid
+                    else:
+                        hi = mid
+                out.append(dict(meta, path=name, kind=kind, max=lo))
+        return out
+    finally:
+        shutil.rmtree(d, True)
+
+
 ADDR_NESTS = (('comment', '', '(', ')', ' a@example.com'), ('domain comment', 'a@', '(', ')', 'b.example.com'), ('phrase comment', 'x ', '(', ')', ' <a@example.com>'),
               ('route comment', '<', '(', ')', 'a@example.com>'), ('group comment', 'g: ', '(', ')', 'a@example.com;'), ('group', '', 'a:', '', ''))
 MSG_NESTS = (('rfc822', 'Content-Type: message/rfc822\r\n\r\n', 'Subject: x\r\n\r\nhi\r\n'), ('multipart', 'Content-Type: multipart/mixed; boundary=b%d\r\n\r\n--b%d\r\n', '\r\nhi\r\n'))
@@ -1869,7 +2541,8 @@ def parse_at_3(raw):
 
 def measure_limits():
     """Python 的调用栈上限（一千层）落在哪。要在和 cca 一样深的调用栈上量：这个函数从模块的最外层调（第 2 层，相当于
-    cmd_mail_test），下面直接调 mail_addrs（第 3 层）和 parse_at_3（第 3 层），中间不能再隔着别的函数"""
+    cmd_mail_test），下面直接调 mail_addrs（第 3 层）和 parse_at_3（第 3 层），中间不能再隔着别的函数。
+    地址的各种写法都在这里量；在一个进程里反复试，量到的是「不是头一次解析地址」的数（头一次多一层，别的调用深度见 path_limits）"""
     out = []
     for kind in [x[0] for x in ADDR_NESTS]:
         lo, hi = 1, 3000
@@ -1896,7 +2569,7 @@ def measure_limits():
     return out
 
 
-def vectors(seed, extra):
+def vectors(seed, extra, old_paths):
     rng = random.Random(seed)
     from urllib.parse import urlsplit
 
@@ -1923,6 +2596,7 @@ def vectors(seed, extra):
         'oserr': [oserr_case(t, k) for t, k in OSERR],
         'judge': [judge_case(*j) for j in judge_emails()],
         'limits': LIMITS,
+        'limit_paths': old_paths if extra != 1 else path_limits(old_paths),
         'proxy_parse': [(lambda r: {'in': x, 'kv': r[0], 'exc': r[1]})(mail_proxy_parse(x)) for x in SCUTILS],
         'fnmatch': fnmatch_cases(rng, extra),
         'epoch': [epoch_case(x) for x in EPOCHS],
@@ -1930,6 +2604,10 @@ def vectors(seed, extra):
         'fetch_parse': [fetch_case(x) for x in FETCHES],
         'list_row': [list_row_case(x) for x in LIST_ROWS],
         'imap': imap_cases(),
+        'cfg': [cfg_case(c) for c in cfg_inputs()],
+        'handle': [handle_case(x) for x in HANDLES],
+        'int': [int_case(x) for x in INTS],
+        'hunt': hunt_cases(),
     }
     return cases
 
@@ -1948,7 +2626,12 @@ def main():
     if not out.endswith('.json'):
         os.makedirs(out, exist_ok=True)
         out = os.path.join(out, 'mail.json')
-    cases = vectors(seed, extra)
+    try:   # 上一次量的各条路的上限：cca 里没有 PY_SRC 了、或者只是多跑一批随机输入时沿用
+        with open(out, encoding='utf-8') as f:
+            old_paths = json.load(f)['cases'].get('limit_paths') or []
+    except (OSError, ValueError, KeyError):
+        old_paths = []
+    cases = vectors(seed, extra, old_paths)
     with open(out, 'w', encoding='utf-8') as f:   # 一个用例一行：文件小一些，改了哪个用例 git diff 里也看得清
         f.write('{\n"python": "%d.%d",\n"cases": {\n' % sys.version_info[:2])
         for i, (name, items) in enumerate(cases.items()):

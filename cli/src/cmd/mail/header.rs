@@ -10,6 +10,7 @@ use crate::py::base64::a2b_base64;
 use crate::py::{text, uni};
 use crate::py::{Fail, R};
 use crate::re;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // --- 编码词 --------------------------------------------------------------------------------------------------------
 
@@ -233,9 +234,27 @@ pub fn mail_text(value: Option<&[u8]>) -> String {
 
 // --- 地址 ----------------------------------------------------------------------------------------------------------
 
-/// 地址里的注释、组套得太深时 Python 是 RecursionError（调用栈一千层）：这里数的是原来那几个函数各占的一层，
-/// 上限取 cca 里实际走到的那条路上量出来的数（`cca mail test` 里取收件人的那一处）
+/// 地址里的注释、组套得太深时 Python 是 RecursionError（调用栈一千层）：这里数的是原来那几个函数各占的一层。
+/// 这个数是子命令的函数里直接调 `mail_addrs` / `mail_from_alias` 时解析器能用的层数（注释 495 层、组 991 层）；
+/// 隔着几层函数调的少几层（`py_depth`），这个进程里头一次调的多一层（见 `first_use`）。CPython 3.14.0 上实测的各条路：
+/// cmd_mail_test 直接调（头一次）注释 496 / 组 992；经 mail_judge_any → mail_judge 495 / 990；cca mail open 经 mail_hunt 494 / 989；
+/// 登录时 mail_watch → mail_hunt 494 / 988
 pub const ADDR_FRAMES: usize = 994;
+
+/// `getaddresses`、`parseaddr` 里各有一处 `_AddressList(…)`：CPython 3.11 起的解释器把执行过的调用换成专门的指令，
+/// 「建对象、进 `__init__`」的那一种多占一层调用栈——所以进程里头一次走到这一处时能多套一层，第二次起就是平时的数
+static SITE_GETADDRESSES: AtomicBool = AtomicBool::new(false);
+static SITE_PARSEADDR: AtomicBool = AtomicBool::new(false);
+
+/// 这个进程里是不是头一次走到这一处。单元测试里各个测试共用一个进程、先后不定，一律当作不是头一次
+fn first_use(site: &AtomicBool) -> bool {
+    !site.swap(true, Ordering::Relaxed) && !cfg!(test)
+}
+
+/// 这一次解析能用几层
+fn addr_limit(site: &AtomicBool) -> usize {
+    (ADDR_FRAMES + usize::from(first_use(site))).saturating_sub(super::py_depth())
+}
 
 const SPECIALS: &str = "()<>@,:;.\"[]";
 
@@ -262,6 +281,8 @@ struct AddrParser {
     commentlist: Vec<String>,
     /// 现在在原来的第几层调用里
     frames: usize,
+    /// 最多到第几层
+    limit: usize,
 }
 
 impl AddrParser {
@@ -271,7 +292,7 @@ impl AddrParser {
 
     fn enter(&mut self) -> R<()> {
         self.frames += 1;
-        if self.frames > ADDR_FRAMES {
+        if self.frames > self.limit {
             return Err(Fail::Other("RecursionError", vec!["maximum recursion depth exceeded".into()]));
         }
         Ok(())
@@ -574,12 +595,12 @@ impl AddrParser {
     }
 }
 
-/// `_AddressList(field).addresslist`
-fn address_list(field: &str) -> R<Vec<(String, String)>> {
+/// `_AddressList(field).addresslist`；limit 是解析器最多能用几层（`addr_limit`）
+fn address_list(field: &str, limit: usize) -> R<Vec<(String, String)>> {
     if field.is_empty() {
         return Ok(Vec::new());
     }
-    let parse = || AddrParser { field: field.chars().collect(), pos: 0, commentlist: Vec::new(), frames: 0 }.getaddrlist();
+    let parse = || AddrParser { field: field.chars().collect(), pos: 0, commentlist: Vec::new(), frames: 0, limit }.getaddrlist();
     // 套一层要一个左括号（注释）或者冒号（组）：多得出奇的才可能套得很深，放到栈够大的线程里解析
     if field.chars().filter(|c| matches!(c, '(' | ':')).count() > 40 {
         super::with_deep_stack(parse)
@@ -674,7 +695,7 @@ fn post_parse(list: Vec<(String, String)>) -> Vec<(String, String)> {
 /// 只给一个空的（`alice@example.com <bob@example.com>` 这种写法想冒充两个地址）
 pub fn getaddresses(fieldvalues: &[String]) -> R<Vec<(String, String)>> {
     let fieldvalues: Vec<String> = fieldvalues.iter().map(|v| pre_parse(v)).collect();
-    let result = post_parse(address_list(&fieldvalues.join(", "))?);
+    let result = post_parse(address_list(&fieldvalues.join(", "), addr_limit(&SITE_GETADDRESSES))?);
     let n: usize = fieldvalues.iter().map(|v| 1 + strip_quoted_realnames(v).matches(',').count()).sum();
     if result.len() != n {
         return Ok(vec![(String::new(), String::new())]);
@@ -684,7 +705,7 @@ pub fn getaddresses(fieldvalues: &[String]) -> R<Vec<(String, String)>> {
 
 /// `email.utils.parseaddr(addr)`（严格）：(显示名, 地址)；不是正好一个地址时是两个空串
 pub fn parseaddr(addr: &str) -> R<(String, String)> {
-    let mut addrs = post_parse(address_list(&pre_parse(addr))?);
+    let mut addrs = post_parse(address_list(&pre_parse(addr), addr_limit(&SITE_PARSEADDR))?);
     if addrs.len() != 1 {
         return Ok((String::new(), String::new()));
     }
@@ -735,7 +756,7 @@ mod tests {
                     let got = pairs(got.unwrap());
                     assert!(got.py_eq(&c.at("pairs")), "{values:?}\n  这里：{got:?}\n  Python：{:?}", c.at("pairs"));
                     // 严格的检查之前，解析器自己切出来的
-                    let loose = pairs(address_list(&values.join(", ")).unwrap());
+                    let loose = pairs(address_list(&values.join(", "), ADDR_FRAMES).unwrap());
                     assert!(loose.py_eq(&c.at("loose")), "{values:?}（不严格）\n  这里：{loose:?}\n  Python：{:?}", c.at("loose"));
                 }
             }
@@ -769,6 +790,21 @@ mod tests {
             assert!(getaddresses(&[nest(&kind, max)]).is_ok(), "{kind} 套 {max} 层");
             assert!(matches!(getaddresses(&[nest(&kind, max + 1)]), Err(Fail::Other("RecursionError", _))), "{kind} 套 {} 层", max + 1);
         }
+        // 各条路上实测的（对照数据的 limit_paths 一节：真的 PY_SRC、真的调用深度，一个数起一个进程量）：隔着几层函数调的
+        // 少几层，这个进程里头一次经 getaddresses / parseaddr 的多一层
+        let ok = |kind: &str, n: usize, limit: usize| address_list(&nest(kind, n), limit).is_ok();
+        let paths: Vec<_> = vectors("limit_paths").into_iter().filter(|c| c.at("what").py_str() == "address").collect();
+        assert!(paths.len() >= 16);
+        for c in paths {
+            let (kind, max, depth) = (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize, c.at("depth").as_int().unwrap() as usize);
+            let limit = ADDR_FRAMES + usize::from(c.at("first").truthy()) - depth;
+            assert!(ok(&kind, max, limit) && !ok(&kind, max + 1, limit), "{}：{kind} 最多 {max} 层", c.at("path").py_str());
+        }
+        // 隔着几层就是 py_depth；单元测试里一律不算头一次
+        let _held: Vec<_> = (0..3).map(|_| crate::cmd::mail::py_frame()).collect();
+        assert_eq!(addr_limit(&SITE_GETADDRESSES), ADDR_FRAMES - 3);
+        assert!(getaddresses(&[nest("group", 988)]).is_ok() && getaddresses(&[nest("group", 989)]).is_err());
+        assert!(parseaddr(&nest("comment", 494)).is_ok() && parseaddr(&nest("comment", 495)).is_err());
     }
 
     #[test]

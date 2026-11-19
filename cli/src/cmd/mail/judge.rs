@@ -181,6 +181,7 @@ fn domain_of(addr: &str) -> &str {
 /// 这封邮件是不是 acct（小写的邮箱）这一次登录的登录邮件：是返回 None，不是返回原因（MAIL_WHY 的键）。got 是 Gmail 收到它的时间。
 /// forwarder 给定时（这个账号开了「信任转发中转」，默认不开）：From 是 Anthropic 时照严格路走，From 是这个中转时走 mail_judge_fwd
 pub fn mail_judge(rule: &MailRule, msg: &Message, got: f64, acct: &str, since: f64, forwarder: Option<&str>) -> R<Option<&'static str>> {
+    let _frame = super::py_frame();
     if got < since - MAIL_SKEW {
         return Ok(Some("old"));
     }
@@ -218,6 +219,7 @@ pub fn mail_judge(rule: &MailRule, msg: &Message, got: f64, acct: &str, since: f
 /// Anthropic 地址（中转标注原件来自 Anthropic）」。安全边界只到「信任这个中转 + 别名不泄露」：别名泄露，知道的人可经中转注入登录链接。
 /// 返回 None 放行，否则原因（MAIL_WHY 的键）
 pub fn mail_judge_fwd(rule: &MailRule, msg: &Message, acct: &str, forwarder: &str) -> R<Option<&'static str>> {
+    let _frame = super::py_frame();
     let signed = mail_signed_for(msg, &|d| mail_fwd_ok(d, forwarder));
     let covered = signed.is_some_and(|s| ["from", "to", "subject", "reply-to"].iter().all(|h| s.iter().any(|x| x == h)));
     if !covered {
@@ -242,6 +244,7 @@ pub fn mail_judge_any(
     since: f64,
     forwarder: Option<&str>,
 ) -> R<(Option<&'static MailRule>, Option<&'static str>)> {
+    let _frame = super::py_frame();
     let order = |why: &str| MAIL_ORDER.iter().position(|w| *w == why).unwrap_or(0);
     let mut best: (Option<&'static MailRule>, &'static str) = (rules.first().copied(), "subject");
     for &r in rules {
@@ -460,5 +463,90 @@ mod tests {
             Fail::Other(name, _) => name,
             _ => "?",
         }
+    }
+
+    /// tests/mail_view.py 的 Judge、Links、Clean 里的每一条检查，结论照那边写的（邮件是对照数据 judge 一节里同名的那一封：
+    /// 生成对照数据时就是照那些测试里的写法做的）。上面是和真的 Python 逐项比，这里是把「该是什么」再钉一遍
+    #[test]
+    fn every_check_in_mail_view() {
+        let mails = vectors("judge");
+        let msg = |name: &str| {
+            let c = mails.iter().find(|c| c.at("name").py_str() == name).unwrap_or_else(|| panic!("对照数据里没有 {name}"));
+            mail_parse(&bytes_of(&c.at("raw"))).unwrap()
+        };
+        let now = 1794708000.0;
+        let alice = "alice@example.com";
+        let judge = |name: &str, acct: &str, got: f64, fwd: Option<&str>| mail_judge(rule(), &msg(name), got, acct, now - 60.0, fwd).unwrap();
+        // Judge.test_good_and_each_failure
+        assert_eq!(judge("good", alice, now, None), None);
+        assert_eq!(judge("good", alice, now - 200.0, None), Some("old"));
+        assert_eq!(judge("good", alice, now - 100.0, None), None, "登录开始前一分钟内收到的也算");
+        for (name, why) in [
+            ("subject receipt", "subject"),
+            ("dup from", "dup"),
+            ("dup to", "dup"),
+            ("from evil", "from"),
+            ("from two", "from"),
+            ("ar fail", "dkim"),
+            ("ar none", "dkim"),
+            ("ar missing", "dkim"),
+            ("dkim other domain", "dkim"),
+            ("unsigned to", "unsigned"),
+            ("to bob", "to"),
+        ] {
+            assert_eq!(judge(name, alice, now, None), Some(why), "{name}");
+        }
+        assert_eq!(judge("good", "", now, None), Some("to"));
+        // Judge.test_only_trusts_the_topmost_gmail_result：最上面那条说没过、不是 mx.google.com 写的、pass 只在注释里
+        for name in ["forged below", "other server on top", "comment pass"] {
+            assert_eq!(judge(name, alice, now, None), Some("dkim"), "{name}");
+        }
+        // Judge.test_only_what_gmail_itself_wrote_counts
+        assert_eq!(judge("ar control", alice, now, None), None, "对照");
+        assert_eq!(judge("ar nested comment", alice, now, None), None, "注释可以嵌套、带转义");
+        for i in 0..8 {
+            assert_eq!(judge(&format!("ar not gmail-written {i}"), alice, now, None), Some("dkim"), "第 {i} 种");
+        }
+        // Judge.test_trusted_forwarder
+        let relay = Some("relay.example.com");
+        assert_eq!(judge("fwd good", alice, now, relay), None, "正常转发 + 登记了中转 → 放行");
+        assert_eq!(judge("fwd sub relay", alice, now, relay), None, "中转按标签认后缀");
+        assert_eq!(judge("fwd good", alice, now, None), Some("from"), "默认不开 → 拒");
+        assert_eq!(judge("fwd good", alice, now, Some("evil.com")), Some("from"), "登记的是别的域名 → 拒");
+        for (name, why) in [
+            ("fwd reply-to evil", "from"),
+            ("fwd reply-to missing", "from"),
+            ("fwd alias bob", "to"),
+            ("fwd no alias", "to"),
+            ("fwd unsigned reply-to", "dkim"),
+            ("fwd ar fail", "dkim"),
+            ("fwd signed by evil", "dkim"),
+            ("fwd subject portal", "subject"),
+        ] {
+            assert_eq!(judge(name, alice, now, relay), Some(why), "{name}");
+        }
+        assert_eq!(judge("good", alice, now, relay), None, "严格直签 + 开了中转 → 仍放行");
+        assert_eq!(judge("fwd good", "bob@example.com", now, relay), Some("to"), "发给 alice 的转发邮件对 bob 不算");
+        // Judge.test_signature_matched_by_header_b
+        assert_eq!(judge("twin signature", alice, now, None), Some("dkim"), "两个签名的 b 开头一样：分不清，不认");
+        assert_eq!(judge("other signature", alice, now, None), None, "b 开头不一样的另一个签名不影响");
+        // Judge.test_judge_any_reports_the_furthest_reason
+        let (r, why) = mail_judge_any(&[rule()], &msg("to bob"), now, alice, 0.0, None).unwrap();
+        assert!(r.is_some_and(|r| std::ptr::eq(r, rule())) && why == Some("to"));
+        // Links
+        assert_eq!(mail_extract(rule(), &msg("body two links")).unwrap().as_deref(), Some("https://claude.ai/magic-link#tok-X"));
+        assert_eq!(mail_extract(rule(), &msg("body text only")).unwrap().as_deref(), Some("https://claude.ai/magic-link#tok-T"));
+        assert_eq!(mail_extract(rule(), &msg("body tracking link")).unwrap(), None);
+        assert_eq!(mail_extract(rule(), &msg("attachment ignored")).unwrap(), None, "附件里的不算");
+        let shape = mail_shape("https://claude.ai/magic-link?a=1#tok-secret");
+        assert!(!shape.contains("secret") && shape.contains("https://claude.ai/magic-link"), "{shape}");
+        // Clean：别人写的文字不能带着转义序列打到终端上
+        let hostile = "\u{1b}[2K\u{1b}[1A✓ 通过核对\u{9b}31m\u{202e}\u{7}";
+        let encoded = format!("=?utf-8?b?{}?=", crate::py::base64::b64encode(hostile.as_bytes()));
+        let shown = super::super::header::mail_text_str(&encoded);
+        assert!(shown.contains("通过核对"), "{shown:?}");
+        let control = |s: &str| s.chars().any(|c| matches!(c as u32, 0x00..=0x1f | 0x7f..=0x9f | 0x202e));
+        assert!(!control(&shown), "{shown:?}");
+        assert!(!control(&crate::cmd::mail::mail_oserr("a\u{1b}]52;c;ZXZpbA==\u{7}b\u{9d}", "Exception")));
     }
 }

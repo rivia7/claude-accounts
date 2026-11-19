@@ -493,7 +493,12 @@ fn mail_recv(s: &mut TcpStream, n: usize) -> Result<Vec<u8>, Tunnel> {
         match s.read(&mut buf[got..]) {
             Ok(0) => return Err(proxy_retry("代理断开了连接")),
             Ok(k) => got += k,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            // 被信号打断：按了 Ctrl-C 就不等了，别的接着读
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                if super::interrupted() {
+                    return Err(Tunnel::Mail(super::keyboard_interrupt()));
+                }
+            }
             Err(e) => return Err(e.into()),
         }
     }

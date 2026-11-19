@@ -6,7 +6,8 @@
 //! 分层（各在 mail/ 下的一份文件里）：路（route：照 macOS 的系统代理，不读环境变量——cca 起的进程里 https_proxy 是账号的出口）→
 //! 隧道和 TLS（route：照常校验证书）→ 只读的 IMAP（imap：EXAMINE、UID SEARCH、BODY.PEEK，没有通用的命令入口）→ 核对
 //! （judge：只信 Gmail 自己写的验证结果和 Anthropic 签过名的邮件头）→ 取链接（`MailRule::link_ok`）→ 盯邮箱（hunt）→ 打开
-//! （cca _mail-open，链接经 stdin）。各站点的认法只在 `MAIL_RULES` 里，`Tool::mail_rules` 指过去。
+//! （cca _mail-open，链接经 stdin）。各站点的认法只在 `MAIL_RULES` 里，`Tool::mail_rules` 指过去。子命令在 cmds 里，
+//! 这一份放常量、设置（config.json 的 mail 一节：`mail_cfg`、`mail_view`、`mail_ready`、`mail_last`）和各层共用的小东西。
 //!
 //! 链接是一次性的登录凭证：不打印、不记日志、不存盘、不进环境变量，只交给这个账号的 Chrome。应用专用密码只从钥匙串读、
 //! 只在进程里经 TLS 交给 Gmail 的 LOGIN，不进任何进程的命令行、环境变量、文件和出错信息。
@@ -14,36 +15,52 @@
 //! 原来靠 Python 标准库的 imaplib、email、html.parser、ssl；这里是照 CPython 3.14 的行为手写的（codec、message、header、
 //! html、imap 各一份），对照数据在 tests/vectors/mail.json（tools/gen_mail_vectors.py 生成）。
 
+mod cmds;
 pub mod codec;
 pub mod header;
 pub mod html;
 mod html5;
+pub mod hunt;
 pub mod imap;
 pub mod judge;
 pub mod message;
 pub mod route;
 
-use super::secrets::ks_del;
+use super::secrets::{keystore_name, ks_del, ks_read};
 use super::Cmd;
 use crate::core::base::CCA_HOME;
 use crate::core::ctx::cfg_save;
 use crate::core::model::{acct_id, cfg_load};
-use crate::core::tool::claude;
+use crate::core::tool::{claude, t};
 use crate::dict;
-use crate::py::fs::load_json;
+use crate::py::fs::{self, load_json};
 use crate::py::obj::{Dict, V};
 use crate::py::path;
 use crate::py::proc::getenv;
 use crate::py::re::Re;
 use crate::py::text;
+use crate::py::time;
 use crate::py::uni;
 use crate::py::url::urlsplit;
-use crate::py::{Fail, R};
+use crate::py::{die, Fail, R};
 use crate::re;
+use route::{mail_route, Route};
 use std::sync::LazyLock;
 
-/// 这个模块移植好的子命令
-pub const CMDS: &[Cmd] = &[];
+/// 这个模块移植好的子命令（各工具的差别只在 `Tool::mail_rules`、账号表和账号目录名上，三种工具走的是同一份代码）
+pub const CMDS: &[Cmd] = &[
+    Cmd::all("mail-setup", cmds::cmd_mail_setup),
+    Cmd::all("mail-status", cmds::cmd_mail_status),
+    Cmd::all("mail-ready", cmds::cmd_mail_ready),
+    Cmd::all("mail-forget", cmds::cmd_mail_forget),
+    Cmd::all("mail-trust-forwarder", cmds::cmd_mail_trust_forwarder),
+    Cmd::all("mail-test", cmds::cmd_mail_test),
+    Cmd::all("mail-open", cmds::cmd_mail_open),
+    Cmd::all("mail-watch", cmds::cmd_mail_watch),
+    Cmd::all("mail-link-check", cmds::cmd_mail_link_check),
+    Cmd::all("mail-get-user", cmds::cmd_mail_get_user),
+    Cmd::all("gui-mail-list", cmds::cmd_gui_mail_list),
+];
 
 pub const MAIL_HOST: &str = "imap.gmail.com";
 pub const MAIL_PORT: u16 = 993;
@@ -99,6 +116,37 @@ pub fn mail_knob(name: &str, default: f64) -> f64 {
     } else {
         default
     }
+}
+
+/// `int(s)` 对一段文字：前后的空白、正负号、数字之间的下划线、各种文字的十进制数字都认。返回 (是不是负的, 十进制的写法：
+/// ASCII 数字、没有前导 0)；认不出、位数超过 4300（Python 给 int() 定的上限，前导 0 也算）是 None（原来的 ValueError）。
+/// 两头的空白只认 ASCII 的空格、\t \n \v \f \r 和别的文字里的空白：\x1c–\x1f 在 `str.strip()` 里算空白，int() 不认
+/// （`py::text::to_int` 是照 strip 写的，这一点和 Python 不一样；它也不管位数的上限、放不进 64 位的当认不出）
+pub(crate) fn py_int(s: &str) -> Option<(bool, String)> {
+    let blank = |c: char| matches!(c, ' ' | '\t'..='\r') || (!c.is_ascii() && uni::is_space(c));
+    let s = s.trim_matches(blank);
+    let (neg, body) = match s.strip_prefix('-') {
+        Some(b) => (true, b),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let mut digits = String::new();
+    let mut prev_digit = false;
+    for c in body.chars() {
+        if c == '_' {
+            if !prev_digit {
+                return None;
+            }
+            prev_digit = false;
+            continue;
+        }
+        digits.push(char::from_digit(uni::decimal_value(c)?, 10)?);
+        prev_digit = true;
+    }
+    if digits.is_empty() || !prev_digit || digits.len() > codec::INT_MAX_STR_DIGITS {
+        return None;
+    }
+    let trimmed = digits.trim_start_matches('0');
+    Some(if trimmed.is_empty() { (false, "0".to_string()) } else { (neg, trimmed.to_string()) })
 }
 
 /// 一类登录邮件的认法：MAIL_RULES 里一条一项（以后加 Console 的登录链接也是加一条规则；只认链接，邮件里的验证码装不下）
@@ -261,10 +309,15 @@ extern "C" fn on_sigint(_: libc::c_int) {
     INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// 从现在起 Ctrl-C 不直接结束进程，而是记下来（不带 SA_RESTART：正卡着的读写、睡眠会被打断，回来就看得到）
+/// 从现在起 Ctrl-C 不直接结束进程，而是记下来（不带 SA_RESTART：正卡着的读写、睡眠会被打断，回来就看得到）。
+/// 进程起来时 SIGINT 就是被忽略的（放在后台跑的）照旧忽略：Python 也只在它不是被忽略的时候才装自己的处理函数
 pub(crate) fn catch_sigint() {
     // SAFETY: sigaction 是纯数据，全 0 是合法的值；处理函数只存一个原子变量
     unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        if libc::sigaction(libc::SIGINT, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN {
+            return;
+        }
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_sigaction = on_sigint as *const () as usize;
         libc::sigemptyset(&mut sa.sa_mask);
@@ -287,6 +340,33 @@ pub(crate) fn check_interrupt() -> R<()> {
         return Err(keyboard_interrupt());
     }
     Ok(())
+}
+
+thread_local! {
+    /// 原来的 Python 里，现在在子命令的那个函数（cmd_mail_test……）下面第几层函数调用里
+    static PY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 原来这里是一层 Python 的函数调用（见 `py_frame`）；离开作用域时退出这一层
+pub(crate) struct PyFrame(());
+
+/// 进一层原来的 Python 函数。地址里的注释、邮件的结构一层套一层时，原来是到 Python 调用栈的一千层为止（RecursionError），
+/// 能套几层就看解析它的那个函数自己在第几层：`cmd_mail_test` 里直接解析收件人，和登录时
+/// `cmd_mail_watch → mail_watch → mail_hunt → mail_judge_any → mail_judge` 里解析发件人，差四层。从子命令到解析之间的
+/// 每个函数开头调一下这个，上限就跟着对上（CPython 3.14.0 上各条路实测过，见 header.rs 的 `ADDR_FRAMES`、message.rs 的 `MAX_DEPTH`）
+pub(crate) fn py_frame() -> PyFrame {
+    PY_DEPTH.with(|d| d.set(d.get() + 1));
+    PyFrame(())
+}
+
+impl Drop for PyFrame {
+    fn drop(&mut self) {
+        PY_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+pub(crate) fn py_depth() -> usize {
+    PY_DEPTH.with(|d| d.get())
 }
 
 /// 邮件的结构、地址里的注释原来是一层一层递归着解析的，这里照样（层数到了 Python 的上限报 RecursionError）。
@@ -312,6 +392,93 @@ pub fn mail_one(m: &V, auto_default: bool, proxy_default: &str) -> Option<Dict> 
     };
     let proxy = m.str("proxy").filter(|p| !p.is_empty()).map_or_else(|| proxy_default.to_string(), |p| p.to_string());
     Some(dict! { "user" => user, "auto" => auto, "proxy" => proxy })
+}
+
+/// 默认的邮箱助手设置（key 是 None），或某账号解析后的设置（覆盖 config.json 的 mail.accounts[acct_id] → 默认 mail）。
+/// 返回 {user, auto, proxy, source: 'account'|'default', forwarder} 或 None（没有可连的 Gmail）。
+/// forwarder 是这个账号单独登记的「信任转发中转」域名（不安全、默认不登记；不继承默认；只在 key 给定时有意义），没有是 None
+pub fn mail_cfg(c: &Dict, key: Option<&str>) -> Option<Dict> {
+    let m = c.dict("mail")?;
+    let default = mail_one(&V::Dict(m.clone()), true, "system");
+    let ov = key.and_then(|k| m.dict("accounts")?.dict(&acct_id(k, t())));
+    let one = ov.as_ref().and_then(|ov| match &default {
+        Some(d) => mail_one(&V::Dict(ov.clone()), d.at("auto").truthy(), &d.at("proxy").py_str()),
+        None => mail_one(&V::Dict(ov.clone()), true, "system"),
+    });
+    let one = match (one, default) {
+        (Some(one), _) => {
+            one.set("source", "account");
+            one
+        }
+        (None, Some(default)) => {
+            default.set("source", "default");
+            default
+        }
+        (None, None) => return None,
+    };
+    let fwd = ov.and_then(|ov| ov.str("forwarder")).map(|f| f.to_lowercase()).filter(|f| MAIL_DOMAIN_RE.matches(f));
+    one.set("forwarder", fwd);
+    Some(one)
+}
+
+/// 账号页的邮箱助手状态（_gui state；只读 config.json，不碰钥匙串）：{configured, user, source, auto, forwarder}。
+/// source：account（这个账号单独配的 Gmail）| default（用默认那个）| None（没配置）。
+/// forwarder：这个账号登记的「信任转发中转」域名（不安全开关，默认 null）
+pub fn mail_view(c: &Dict, key: &str) -> Dict {
+    match mail_cfg(c, Some(key)) {
+        Some(m) => dict! { "configured" => true, "user" => m.at("user"), "source" => m.at("source"), "auto" => m.at("auto"), "forwarder" => m.at("forwarder") },
+        None => dict! { "configured" => false, "user" => V::None, "source" => V::None, "auto" => true, "forwarder" => V::None },
+    }
+}
+
+pub fn mail_pw_problem(rc: i32) -> String {
+    if rc == 44 {
+        format!("{}里没有应用专用密码：运行 cca mail setup", keystore_name())
+    } else {
+        format!("{}读不了应用专用密码（锁着？）：解锁后再试", keystore_name())
+    }
+}
+
+/// (设置, 密码, 路)：没配置、密码取不到、连接方式写错了就说清楚、退出。key 给定时按这个账号解析（覆盖→默认）
+pub fn mail_ready(c: Option<&Dict>, key: Option<&str>) -> R<(Dict, String, Route)> {
+    let loaded;
+    let c = match c.filter(|c| !c.is_empty()) {
+        Some(c) => c,
+        None => {
+            loaded = cfg_load()?;
+            &loaded
+        }
+    };
+    let Some(m) = mail_cfg(c, key) else {
+        return die("还没配置邮箱助手：运行 cca mail setup");
+    };
+    let (rc, pw) = ks_read(MAIL_SVC, &m.at("user").py_str());
+    if pw.is_empty() {
+        return die(format!("邮箱助手：{}", mail_pw_problem(rc)));
+    }
+    match mail_route(Some(&m.at("proxy").py_str()), c, None) {
+        Ok(route) => Ok((m, pw, route)),
+        Err(e) if e.is("MailFatal") => die(mail_error(&e).map_or("", |x| x.1)),
+        Err(e) => Err(e),
+    }
+}
+
+/// 上次的结果（cca mail status 看）
+pub fn mail_last(name: &str, text: &str) -> R<()> {
+    let save = || -> R<()> {
+        fs::makedirs_mode(&MAIL_DIR, 0o700)?;
+        let last = dict! { "at" => time::time().trunc() as i64, "name" => name, "text" => text };
+        fs::save_json(&path::join(&MAIL_DIR, "last.json"), &V::Dict(last), Some(0o600), true)
+    };
+    match save() {
+        Err(e) if e.is_os() => Ok(()),
+        done => done,
+    }
+}
+
+/// 这个工具认哪几种登录邮件（`[MAIL_RULES[n] for n in T.mail_rules]`）
+pub fn mail_rules() -> Vec<&'static MailRule> {
+    t().mail_rules.iter().filter_map(|n| mail_rule(n)).collect()
 }
 
 /// config.json 里引用到的所有 Gmail 地址（默认 + 各账号覆盖），小写：换地址、移除时据此清钥匙串。
@@ -478,6 +645,34 @@ mod tests {
         // 应用名不是 Claude 的不认：Verification Portal 是真从 mail.anthropic.com 发出、dkim 也过的（见过），只靠签名挡不住
         assert!(!s("Your secure link to Verification Portal is here"));
         assert!(!s("Your receipt from Anthropic") && !s("Secure link to log in to Claude-ai") && !s("Your secure link to Claudexyz is here"));
+    }
+
+    /// config.json 的 mail 一节怎么读：默认的那一项、各账号的覆盖、信任的中转、引用到的地址
+    #[test]
+    fn settings_like_python() {
+        let cases = vectors("cfg");
+        assert!(cases.len() > 25);
+        // 照 repr 比：键的先后、True 和 1 的差别都算
+        let same = |got: Option<Dict>, want: V, what: &str| assert_eq!(got.map_or(V::None, V::Dict).py_repr(), want.py_repr(), "{what}");
+        for c in cases {
+            let cfg = c.dict("c").unwrap();
+            let what = V::Dict(cfg.clone()).py_repr();
+            for row in c.list("keys").unwrap().items() {
+                let row = row.as_list().unwrap();
+                let key = row.at(0);
+                same(mail_cfg(&cfg, key.as_str()), row.at(1), &format!("mail_cfg({what}, {key:?})"));
+                if let Some(k) = key.as_str() {
+                    same(Some(mail_view(&cfg, k)), row.at(2), &format!("mail_view({what}, {k:?})"));
+                }
+            }
+            let mut addrs = mail_all_addrs(&cfg);
+            addrs.sort();
+            let want: Vec<String> = c.list("addrs").unwrap().strs().iter().map(|s| s.to_string()).collect();
+            assert_eq!(addrs, want, "{what}");
+            let mail = cfg.get("mail").unwrap_or(V::None);
+            same(mail_one(&mail, true, "system"), c.at("one"), &what);
+            same(mail_one(&mail, false, "direct"), c.at("one_off"), &what);
+        }
     }
 
     #[test]

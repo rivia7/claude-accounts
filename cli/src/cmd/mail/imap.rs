@@ -680,6 +680,8 @@ fn list_row(item: &str) -> Option<(String, String)> {
 pub enum Uids {
     List(Vec<u64>),
     Range(u64, u64),
+    /// 一个 UID 的十进制写法（cca mail open --msg 里手写的：放不进 64 位的也照样发给 Gmail，原来就这样）
+    Text(String),
 }
 
 /// 怎么连上去：测试里换成本机的假服务器
@@ -709,7 +711,9 @@ impl MailBox {
     }
 
     pub fn open(&mut self) -> R<()> {
+        check_interrupt()?;
         let wire = (self.connector)()?;
+        check_interrupt()?;
         let mut im = match Imap::connect(wire) {
             Ok(im) => im,
             Err(ImapErr::Py(e)) => return Err(e),
@@ -751,6 +755,7 @@ impl MailBox {
         let Some(im) = self.im.as_mut() else {
             return Err(mail_retry("net", "和 Gmail 的连接断了"));
         };
+        check_interrupt()?;
         let (typ, data) = match run(im) {
             Ok(r) => r,
             Err(ImapErr::Py(e)) => return Err(e),
@@ -855,6 +860,7 @@ impl MailBox {
             Uids::Range(a, b) => format!("{a}:{b}"),
             Uids::List(list) if !list.is_empty() => list.iter().map(u64::to_string).collect::<Vec<_>>().join(","),
             Uids::List(_) => return Ok(BTreeMap::new()),
+            Uids::Text(uid) => uid.clone(),
         };
         self.bound("uid")?;
         let what = format!("(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS ({})])", MAIL_HDRS.join(" "));

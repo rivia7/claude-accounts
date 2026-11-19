@@ -362,6 +362,10 @@ impl Session for FakeBox {
                 self.calls.push(format!("headers {} {l:?}", self.cur));
                 l.clone()
             }
+            Uids::Text(u) => {
+                self.calls.push(format!("headers {} {u}", self.cur));
+                u.parse().ok().into_iter().collect()
+            }
         };
         Ok(wanted.into_iter().filter_map(|u| self.msgs[&self.cur].get(&u).map(|m| (u, m.clone()))).collect())
     }

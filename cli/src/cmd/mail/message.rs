@@ -6,15 +6,16 @@
 //! 一直是字节。`hstr` 是 `str(msg.get(…))`：非 ASCII 的字节各成一个 U+FFFD（compat32 把带这种字节的头包成
 //! unknown-8bit 的 Header，`str()` 就是这个结果）。
 //!
-//! 原来靠 Python 的调用栈上限（一千层）挡住套得太深的邮件，那时是没人接的 RecursionError；这里固定一个层数（`MAX_DEPTH`）。
+//! 原来靠 Python 的调用栈上限（一千层）挡住套得太深的邮件，那时是没人接的 RecursionError；这里照量出来的层数（`MAX_DEPTH`）。
 
 use super::codec::{self, int_too_long, raw_unicode_escape, Codec, Lookup, INT_MAX_STR_DIGITS};
 use crate::py::text;
 use crate::py::{Fail, R};
 use std::collections::VecDeque;
 
-/// multipart / message 最多套这么多层：再深 Python 那边是 RecursionError。原来的层数随调用的路径差几层，
-/// 这里取 `cca mail test` 取全文那条路上量出来的数（对照数据的 limits 一节）
+/// multipart / message 最多套这么多层：再深 Python 那边是 RecursionError。这个数是 `cca mail test` 取全文那条路上的
+/// （cmd_mail_test → mail_verdict → mail_parse，对照数据的 limits 一节）；原来每多隔一层函数就少一层（CPython 3.14.0 上实测：
+/// 子命令里直接调 mail_parse 984 层，隔着四层 980 层），照 `py_depth` 算
 pub const MAX_DEPTH: usize = 983;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -325,6 +326,8 @@ struct Parser {
     msgstack: Vec<usize>,
     cur: Option<usize>,
     last: usize,
+    /// 最多套几层
+    max_depth: usize,
 }
 
 impl Parser {
@@ -420,7 +423,7 @@ impl Parser {
 
     /// `_parsegen()`：解析一封邮件（新建一封、接到当前那封下面）
     fn parsegen(&mut self, depth: usize) -> R<()> {
-        if depth > MAX_DEPTH {
+        if depth > self.max_depth {
             return recursion_error();
         }
         self.new_message();
@@ -704,8 +707,10 @@ impl Message {
 /// `mail_parse(raw)`：`email.message_from_bytes(raw or b'')`。Python 那边会出没人接的异常的几种情况照样出错：
 /// 套得太深（RecursionError）、参数续行的编号太长、字符集的名字里有 NUL（ValueError）
 pub fn mail_parse(raw: &[u8]) -> R<Message> {
+    // MAX_DEPTH 是隔着一层（mail_verdict）调的时候的数
+    let max_depth = (MAX_DEPTH + 1).saturating_sub(super::py_depth());
     let parse = || {
-        let mut p = Parser { lines: split_keep_ends(raw), eofstack: Vec::new(), nodes: Vec::new(), msgstack: Vec::new(), cur: None, last: 0 };
+        let mut p = Parser { lines: split_keep_ends(raw), eofstack: Vec::new(), nodes: Vec::new(), msgstack: Vec::new(), cur: None, last: 0, max_depth };
         p.parsegen(0)?;
         Ok(p.build(0))
     };
@@ -817,11 +822,24 @@ mod tests {
         };
         let cases: Vec<_> = vectors("limits").into_iter().filter(|c| c.at("what").py_str() == "message").collect();
         assert!(cases.len() >= 2);
+        // 对照数据是隔着一层函数量的（相当于 cmd_mail_test → mail_verdict → mail_parse）
+        let ok = |kind: &str, n: usize| mail_parse(nest(kind, n).as_bytes());
         for c in cases {
             let (kind, max) = (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize);
-            assert_eq!(mail_parse(nest(&kind, max).as_bytes()).unwrap().walk().len(), max + 1, "{kind} 套 {max} 层");
-            assert!(matches!(mail_parse(nest(&kind, max + 1).as_bytes()), Err(Fail::Other("RecursionError", _))), "{kind} 套 {} 层", max + 1);
+            let _one = crate::cmd::mail::py_frame();
+            assert_eq!(ok(&kind, max).unwrap().walk().len(), max + 1, "{kind} 套 {max} 层");
+            assert!(matches!(ok(&kind, max + 1), Err(Fail::Other("RecursionError", _))), "{kind} 套 {} 层", max + 1);
         }
+        // 各条路上实测的（对照数据的 limit_paths 一节）：每多隔一层函数少一层
+        let paths: Vec<_> = vectors("limit_paths").into_iter().filter(|c| c.at("what").py_str() == "message").collect();
+        assert!(paths.len() >= 8);
+        for c in paths {
+            let (kind, max, depth) = (c.at("kind").py_str(), c.at("max").as_int().unwrap() as usize, c.at("depth").as_int().unwrap());
+            let _held: Vec<_> = (0..depth).map(|_| crate::cmd::mail::py_frame()).collect();
+            assert!(ok(&kind, max).is_ok(), "{}：{kind} 套 {max} 层", c.at("path").py_str());
+            assert!(matches!(ok(&kind, max + 1), Err(Fail::Other("RecursionError", _))), "{}：{kind} 套 {} 层", c.at("path").py_str(), max + 1);
+        }
+        assert_eq!(crate::cmd::mail::py_depth(), 0);
     }
 
     #[test]
