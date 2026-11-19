@@ -1,8 +1,9 @@
 # 把 PY_SRC 移植成 Rust：怎么做
 
-`cca` 里内嵌的 Python（`PY_SRC`，约 1.36 万行，149 个子命令）正在逐个模块移植成 `cli/` 下的 Rust 程序 `cca-core`。
-这一步 bash 编排不动：bash 照旧 `py 子命令 参数…`，只是做事的换成 cca-core。移植完、整套回归通过后才切换；
-切换之前这个分支不改 `cca` 本身（它同时是对照用的原版）。这份文件是移植期间的工作守则，切换后改写成 `docs/dev/` 里的一份。
+`cca` 里原来内嵌的 Python（`PY_SRC`，约 1.36 万行，149 个子命令）已经移植成 `cli/` 下的 Rust 程序 `cca-core`，这个分支上的
+`cca` 也已经切换成用它（bash 编排没动：照旧 `py 子命令 参数…`）。辅助程序平时怎么开发、怎么测，看 `docs/dev/rust.md`。
+这份文件是移植时的工作守则，留着给“跟着主干移植”用：主干的 `cca` 还带着 Python 的时候，那边改了 Python，照这里的规矩搬过来
+（步骤见 `docs/dev/rust.md` 的「主干还带着 Python 的时候」）。原来的 Python 在 `git show $(cat cli/PORTED_FROM):cca` 里。
 
 ## 最要紧的三条
 
@@ -19,7 +20,7 @@
 
 | | |
 |---|---|
-| `cca` 第 468 行起到 `PY` 结束符 | 原版 Python。行号会随主干变，找函数用名字：`grep -n '^def cmd_env' cca` |
+| `git show $(cat cli/PORTED_FROM):cca` 里 `PY_SRC=$(cat <<'PY'` 到 `PY` 结束符 | 原版 Python（切换以后仓库里的 `cca` 不带它了）。找函数用名字：`grep -n '^def cmd_env'` |
 | `cli/src/py/` | Python 兼容层：下面那张对照表。移植出来的代码只经它做这些事 |
 | `cli/src/core/` | 已经移植的地基：目录和常量（`base`）、三种工具（`tool`）、账号表（`model`）、映射（`policy`）、对账（`ctx`）、同步摘要（`sync`） |
 | `cli/src/cmd/<模块>.rs` | 子命令，一个模块一份；每份末尾有自己的 `CMDS` 表 |

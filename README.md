@@ -75,7 +75,7 @@ App 里还有一套图文新手教程（第一次配好后自动弹出，或点�
 
 ## Linux 服务器
 
-Linux 上也能装，用上面「一键安装」的同一行命令（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要 python3（3.8 或更新）、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、find：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。Claude Code 没装也行：安装时会问要不要用官方安装脚本装上（服务器直连不通时经内置代理装，节点由维护者提供，见下面的「直连不通的服务器」）。
+Linux 上也能装，用上面「一键安装」的同一行命令（Ubuntu 20.04 起、Debian 12 起、Rocky / AlmaLinux 9 起、Fedora、Amazon Linux 2023、Alpine、Arch、openSUSE 都测过）。要 x86_64 或 arm64 的机器、OpenSSH 8.1 或更新（校验发布签名用）、curl、nc、perl、gzip、base64、find（不用装 Python）：缺什么安装时会说，并给出这台机器上装它的那一行命令（例如 `apt install netcat-openbsd`）。RHEL / Rocky 8 的 OpenSSH 是 8.0，装不了。Claude Code 没装也行：安装时会问要不要用官方安装脚本装上（服务器直连不通时经内置代理装，节点由维护者提供，见下面的「直连不通的服务器」）。
 
 Linux 上能用的是命令行：
 
@@ -575,7 +575,7 @@ CLI 启动和正常退出时会合并配置并修复被客户端原子保存替�
 - **分开设备标识**：各账号的 `device.json` 固定保存客户端标识，初始化和旧配置迁移使用文件锁；Claude 的标识不参加共享设置合并，Codex 的 `installation_id` 不在共享白名单里。旧的设备文件若是软链接或硬链接，会原子替换为该账号自己的文件，避免写到共享源。
 - **分开出口**：cca 在路由器上开一组端口（从 7901 开始，8 个一组），每个端口绑定一个出口节点，每个账号用自己的端口上网。换节点通过 OpenClash / ShellCrash 内核的接口直接切换，不用重启。
 - **网页版**：每个账号使用独立的 Chrome 资料目录和账号代理。未安装 Chrome、打开失败或 Codex 不支持独立登录流程时会停止，不会退回默认浏览器。浏览器中手工切换的登录账号不由 cca 自动核验；显示的账号名称表示资料目录归属，不是网页当前登录身份的证明。
-- **泄露检测**：DNS 那项经账号的端口访问 `<随机串>-1.d.ip.net.coffee`，ip.net.coffee 的权威 DNS 记下来查的解析器，再经同一个端口问它要结果、查归属地（按网段记 7 天）；WebRTC 那项是 Python 直接发 STUN Binding 请求（IPv4、IPv6 都试），对方看到的 IP 不经账号的出口查归属地。结果在 `~/.cca/leak.json`。
+- **泄露检测**：DNS 那项经账号的端口访问 `<随机串>-1.d.ip.net.coffee`，ip.net.coffee 的权威 DNS 记下来查的解析器，再经同一个端口问它要结果、查归属地（按网段记 7 天）；WebRTC 那项是 cca 直接发 STUN Binding 请求（IPv4、IPv6 都试），对方看到的 IP 不经账号的出口查归属地。结果在 `~/.cca/leak.json`。
 - **用量**：cca 以账号的配置目录、经账号的端口无界面地启动 Claude Code（`--safe-mode`，不加载插件、hooks、MCP），发一个 `get_usage` 控制请求，拿到和 `/usage` 一样的数据；登录 token 的读取和刷新都由 Claude Code 自己完成。
 - **第三方 API 账号**：接口地址、模型经 `claude --settings` 传入（优先级高于共享的 settings.json），key 由 `apiKeyHelper` 回调 cca 从钥匙串取，不进环境变量。
 - **Codex**：每个账号一个 `CODEX_HOME`，`~/.codex` 里白名单上的条目链接进去（白名单以外的默认各账号一份，新版本 Codex 加了文件也不会误共享）；数据库经 `CODEX_SQLITE_HOME` 共用。登录和查用量都经 codex 自己的 app-server（`account/login/start`、`account/rateLimits/read`），报的客户端名和 `codex login` 一样。
@@ -601,6 +601,7 @@ bash /tmp/cca install
 
 - 跑测试：`bash tests/regress.sh`。全部使用假的路由器、claude 和 GitHub，不联网，也不碰你真实的配置。
 - 在 Linux 上测：`bash tests/linux.sh`（临时 HOME、假的 claude / codex，不碰你的 crontab；要联网下载内核、测真实的出口）。覆盖一键安装和自动更新、内置代理（含重启后自己起来）、服务器上的登录、密钥文件、维护者的映射、设备统计、Codex、出口和泄露检测。装了 Docker 的话 `bash tests/linux.sh --docker` 在 Ubuntu、Debian、Rocky、AlmaLinux、Fedora、Amazon Linux、Alpine、Arch、openSUSE 的容器里各跑一遍，容器里还测在家走路由器（假路由器上跑真的路由器端脚本和 mihomo 内核）。
+- 下面这几份直接测 cca 的辅助程序（`cli/` 下的 Rust 程序），单独跑之前先编出来：`cd cli && cargo build --release`（辅助程序自己的单元测试：`cargo test`）。
 - 只测设备标识的隔离、迁移和并发：`python3 tests/device_identity.py`（完整回归也会跑）。
 - 隔离防护专项：`python3 -m unittest discover -s tests -p 'isolation_*.py'`，覆盖配置解析、危险覆盖、App 环境与资料目录验证、浏览器失败路径及泄露检测状态；使用临时目录和测试替身，不登录真实账号。
 - 原生客户端兼容性测试（可选）：`CCA_TEST_CLAUDE_BIN=/绝对路径/claude python3 tests/isolation_credentials.py`，使用临时 HOME、假钥匙串和假凭证，验证实际客户端的凭证来源；`CCA_TEST_CHROME_BIN='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' python3 tests/isolation_chrome_native.py` 使用空 profile 和本机测试页/STUN 验证 WebRTC。需要 macOS 允许启动测试进程和本机监听；默认不执行这些原生测试。
