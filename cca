@@ -2703,6 +2703,9 @@ child_env() {   # 需要先 eval "$(py env 名称)"；结果在 UNSETS / SETS �
 claude_env() {
 	# 新版凭证库可单独指定目录；固定为原 CLAUDE_CONFIG_DIR，保留已有钥匙串服务名。
 	SETS=(CLAUDE_CONFIG_DIR="$ACC_HOME" CLAUDE_SECURESTORAGE_CONFIG_DIR="$ACC_HOME" CCA_ACCOUNT="$ACC_KEY" CCA_PROXY="$ACC_PROXY")
+	# 记忆目录换成 ~/.claude 的真实路径（账号的 projects 链到它时，见辅助程序的 memory_dir）：不然 Claude Code 解析链接以后
+	# 认不出是自己的记忆，读写都要确认
+	[ -z "$ACC_MEMORY_DIR" ] || SETS+=(CLAUDE_CODE_REMOTE_MEMORY_DIR="$ACC_MEMORY_DIR")
 	[ "$ACC_KIND" = api ] || SETS+=(BROWSER="$CCA_HOME/bin/open-url")
 }
 codex_env() {   # 会话、记忆等数据库不靠链接共享：CODEX_SQLITE_HOME 指向 ~/.codex
@@ -3550,7 +3553,7 @@ coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出�
 	               # 别的时候同时在后台测 DNS / WebRTC 泄露（给了开始时间时 DNS 不用那之前的缓存：cca check），结果在 LEAK_*
 	local trace ip loc risk="" out rc min="$CCA_MIN_TRUST"
 	LEAK_LINE="" LEAK_DNS="" LEAK_WEBRTC="" LEAK_WEBRTC_NOTE="" LEAK_DNS_STATE="" LEAK_WEBRTC_STATE="" HEALTH_JSON=""
-	[ "${1:-}" = region ] || leak_start "${1:-}"
+	[ "${1:-}" = region ] || { leak_start "${1:-}"; udp_home_start; }
 	trace=$(curl -q --noproxy '' -s -m 8 -x "$ACC_PROXY" "https://${TRACE_HOST}/cdn-cgi/trace" 2>/dev/null)
 	ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
 	loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p')
@@ -3562,6 +3565,7 @@ coffee_check() {   # coffee_check [region | 开始时间]：region 时只看出�
 	COFFEE_LINE=$(printf '%s\n' "$out" | head -n 1)
 	COFFEE_NOTE=$(printf '%s\n' "$out" | sed -n '2,$p')
 	case $rc in 0|1|4) leak_finish "$ip" "$loc" "${1:-}" ;; *) leak_finish ;; esac   # 出口本身就不对（受限地区、拿不到 IP）时不用等它
+	[ "${1:-}" = region ] || udp_home_finish
 	# 记进账号目录的 health.json（图形界面不联网也能显示上次的出口）；cca check --json 用 HEALTH_JSON
 	[ "${1:-}" = region ] || HEALTH_JSON=$(py health-save "$ACC_KEY" "${HEALTH_SOURCE:-launch}" "${ROUTE:-}" "$ACC_NODE" "$ACC_PORT" "$min" \
 		"$trace" "$risk" "$LEAK_LINE" "$LEAK_DNS" "${LEAK_WEBRTC:-$LEAK_WEBRTC_NOTE}" "$LEAK_DNS_STATE" "$LEAK_WEBRTC_STATE" 2>/dev/null)
@@ -4606,6 +4610,7 @@ core_retire() {   # 不再用内置代理（cca local off；先改好 config.jso
 		rm -f "$UDP_FLAG"
 		info "本机 UDP 走节点也关掉了（系统服务还装着、不在运行；删掉它运行 cca local udp uninstall）"
 	fi
+	rm -f "$UDP_HOME"
 	core_headless && { core_boot off || warn "没能从 crontab 里删掉开机起内核的那一行（带 ${CORE_BOOT_TAG}）：自己删一下（crontab -e）"; }
 	if on_linux || gui_running; then
 		LOCAL_CTL="unix:$(core_sock)"
@@ -4675,9 +4680,14 @@ cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器�
 # root 那边的文件只在输密码的那一步从私有的临时目录拷过去，按摘要逐个核对、内核校验过配置才换上：普通用户的进程改不了它跑什么
 # ---------------------------------------------------------------------------
 UDP_FLAG="$CCA_HOME/udp/on"
+UDP_HOME="$CCA_HOME/udp/home"   # 在家暂停的记号（udp_home_finish）：开关文件不在、它在时，是在家时路由器管着这台 Mac 的 UDP，本机的先停着
 udp_env() { eval "$(py udp-env)"; }   # UDP_ROOT、UDP_PLIST、UDP_LOG、UDP_OWNER、UDP_LABEL、UDP_FLAG、TUN 的网卡名 UDP_TUN；设的节点 UDP_NODE、
                                       # 状态 UDP_STATE、装着的 UDP_INSTALLED；启动脚本给哪块网卡上的 VPN 让开了 UDP_OTHER（没让开是空的）
-udp_running() { ps -axww -o command= 2>/dev/null | grep -qF -- "$UDP_ROOT/mihomo -d "; }   # root 的内核在跑（普通用户的 ps 也看得到它的命令行）
+udp_running() {   # root 的内核在跑（普通用户的 ps 也看得到它的命令行）。先取下 ps 的输出再比：经管道交给 grep 时 grep 自己的命令行就带着
+	               # 这一段，ps 总会列出它（以前一直当成在跑：停着也说在运行，udp_wait down 总要白等 6 秒）
+	case "$(ps -axww -o command= 2>/dev/null)" in *"$UDP_ROOT/mihomo -d "*) return 0 ;; esac
+	return 1
+}
 udp_yielded() {   # 启动脚本给别的 VPN 让开了：other-vpn 在、启动脚本在跑（和辅助程序的 udp_other 一样认；ps 的输出先取下来再比，不经 grep：
 	              # 管道里 grep 自己的命令行也带着这个路径）
 	local p
@@ -4692,7 +4702,7 @@ udp_yield_note() {   # udp_yield_note 节点：给别的 VPN 让开了时的说�
 }
 udp_loaded() { launchctl print "system/$UDP_LABEL" >/dev/null 2>&1; }
 udp_present() { [ -e "$UDP_PLIST" ] || [ -e "$UDP_ROOT" ] || udp_loaded; }
-udp_flag_on() { ( umask 077; mkdir -p "${UDP_FLAG%/*}" ) && touch "$UDP_FLAG"; }
+udp_flag_on() { ( umask 077; mkdir -p "${UDP_FLAG%/*}" ) && touch "$UDP_FLAG" && rm -f "$UDP_HOME"; }
 udp_run_sh() {   # root 那边的启动脚本 cca-udp（launchd 在开关文件在时起它）：开关文件没了就停内核、退出；内核自己退出了以退出码 1 结束，
 	              # launchd 过 ThrottleInterval 再起。别的 VPN、代理客户端的 TUN 接管了这台 Mac 的流量时（路由表里经别的虚拟网卡、不限定网卡的
 	              # 默认路由或者 1.0.0.0/8 … 128.0.0.0/1 这几大段：Shadowrocket、Clash 的 TUN 模式、系统设置里全局的 VPN……）停下内核让开，
@@ -4917,7 +4927,7 @@ udp_on() {   # cca local udp on [节点] / pick：这台 Mac 的 UDP 经这个�
 }
 udp_off() {   # cca local udp off：关掉（删开关文件，root 的内核自己停下；系统服务留着，再开同一个节点不用密码）
 	udp_env
-	rm -f "$UDP_FLAG"
+	rm -f "$UDP_FLAG" "$UDP_HOME"
 	py local-set udp '' || return 1
 	udp_wait down || warn "系统服务 ${UDP_LABEL} 还没停下"
 	if [ -n "$UDP_INSTALLED" ]; then okay "已关掉：这台 Mac 的 UDP 照旧直连（系统服务还装着、不在运行，再开同一个节点不用输密码；删掉它运行 cca local udp uninstall）"
@@ -4928,7 +4938,7 @@ udp_off() {   # cca local udp off：关掉（删开关文件，root 的内核自
 udp_uninstall() {   # cca local udp uninstall：关掉，并删掉 root 的系统服务（要管理员密码）
 	local rc
 	udp_env
-	rm -f "$UDP_FLAG"
+	rm -f "$UDP_FLAG" "$UDP_HOME"
 	[ -z "$UDP_NODE" ] || py local-set udp ''
 	if ! udp_present; then
 		info "本机 UDP 走节点的系统服务没装"
@@ -4957,6 +4967,8 @@ udp_status() {   # cca local udp：设的节点、系统服务在不在跑、STU
 			off) info "没开：这台 Mac 的 UDP（浏览器的 WebRTC、QUIC 这些）直连出去。cca local udp on [节点] 让它经节点出去（要输一次管理员密码）" ;;
 			ok) if [ -n "$UDP_OTHER" ]; then warn "$(udp_yield_note "$UDP_NODE")"
 				elif udp_running; then okay "这台 Mac 的 UDP 经节点 ${UDP_NODE} 出去（系统服务 ${UDP_LABEL} 在运行；TCP 照旧直连）"
+				elif [ ! -e "$UDP_FLAG" ] && [ -e "$UDP_HOME" ]; then
+					info "在家暂停着：路由器已经让这台 Mac 的 UDP 经节点出去，本机 UDP 走节点（${UDP_NODE}）先停着；出门在外启动账号、检测出口时自动再打开（现在就要打开：cca local udp on）"
 				else warn "设了经节点 ${UDP_NODE}，系统服务 ${UDP_LABEL} 却没在运行$(udp_why)"; fi ;;
 			stale) warn "设了经节点 ${UDP_NODE}，装着的配置是旧的（节点的定义变了，或者 cca 更新了）：运行 cca local udp on 重新装（要输管理员密码）" ;;
 			missing) warn "设了经节点 ${UDP_NODE}，系统服务却不在了：运行 cca local udp on 重新装（要输管理员密码）" ;;
@@ -4966,13 +4978,52 @@ udp_status() {   # cca local udp：设的节点、系统服务在不在跑、STU
 	udp_report
 	say ""
 }
-udp_launch_check() {   # 在外面启动账号时（设了本机 UDP 走节点，LOCAL_UDP、LOCAL_UDP_STATE 来自 local-env）：开关文件不在就补上；
-	                    # 装着的旧了只提醒（要输密码，启动时不问）
+udp_launch_check() {   # 在外面启动账号、检测出口时（设了本机 UDP 走节点，LOCAL_UDP、LOCAL_UDP_STATE 来自 local-env）：开关文件不在就补上
+	                    # （在家暂停过的说一声）；装着的旧了只提醒（要输密码，启动时不问）
 	case "$LOCAL_UDP_STATE" in
-		ok) [ -e "$UDP_FLAG" ] || udp_flag_on ;;
+		ok) if [ ! -e "$UDP_FLAG" ]; then
+				[ ! -e "$UDP_HOME" ] || info "出门在外：本机 UDP 重新经节点 ${LOCAL_UDP} 出去（在家时路由器管着，先停着的）"
+				udp_flag_on
+			fi ;;
 		stale|missing) warn "本机 UDP 走节点（${LOCAL_UDP}）要重新装一次：运行 cca local udp on（要输管理员密码）" ;;
 		undefined) warn "本机 UDP 走节点：内置代理里已经没有节点「${LOCAL_UDP}」转发 UDP 的定义（cca local udp 查看）" ;;
 	esac
+	return 0
+}
+udp_home_start() {   # 在家（经路由器）测出口时（coffee_check）：开着本机 UDP 走节点的话，后台绑定物理网卡（绕开它的 TUN）问一次 STUN
+	                  # （py udp-probe phys），看路由器自己能不能把这台 Mac 的 UDP 送出大陆。一条命令只测一次；开关文件只在 macOS 上有
+	UDP_HOME_PID="" UDP_HOME_OUT=""
+	[ "${ROUTE:-}" = router ] && [ -e "$UDP_FLAG" ] && [ -z "${UDP_HOME_DONE:-}" ] || return 0
+	UDP_HOME_DONE=1
+	UDP_HOME_OUT=$(mktemp "${TMPDIR:-/tmp}/cca-udp.XXXXXX" 2>/dev/null) || return 0
+	py udp-probe phys > "$UDP_HOME_OUT" 2>/dev/null &
+	UDP_HOME_PID=$!
+}
+udp_home_finish() {   # 测完出口以后（coffee_check）。udp_home_start 测到的都是大陆以外的地址（归属地都认得出）：路由器已经管着这台 Mac 的
+	                   # UDP，删掉开关文件（root 的内核自己停下）、留下在家暂停的记号；设的节点留着，出门在外启动账号、检测出口时
+	                   # （udp_launch_check）自动再打开。没测到、有大陆的地址、归属地认不出时不动（测不出来不能当作没问题）。
+	                   # 在家暂停着、WebRTC 检测却看到大陆的地址（路由器不再让 UDP 经节点出去）时重新打开
+	local ip cc where seen="" bad=""
+	if [ -n "${UDP_HOME_PID:-}" ]; then
+		wait "$UDP_HOME_PID" 2>/dev/null
+		while IFS=$'\t' read -r ip cc where; do
+			[ -n "$ip" ] || continue
+			[ "$where" != - ] || where=""
+			case "$cc" in cn|-|'') bad=1 ;; esac
+			seen="${seen:+${seen}、}${ip}${where:+（${where}）}"
+		done < "$UDP_HOME_OUT"
+		rm -f "$UDP_HOME_OUT"
+		UDP_HOME_PID="" UDP_HOME_OUT=""
+		[ -n "$seen" ] && [ -z "$bad" ] || return 0
+		rm -f "$UDP_FLAG"
+		( umask 077; : > "$UDP_HOME" )
+		info "在家：路由器已经让这台 Mac 的 UDP 从 ${seen} 出去，本机 UDP 走节点先停着（出门在外时自动再打开）"
+	elif [ "${ROUTE:-}" = router ] && [ "${LEAK_WEBRTC_STATE:-}" = leak ] && [ -e "$UDP_HOME" ] && [ ! -e "$UDP_FLAG" ]; then
+		udp_env
+		[ "$UDP_STATE" = ok ] || return 0
+		udp_flag_on
+		warn "在家：WebRTC 检测看到中国大陆的地址，路由器没让这台 Mac 的 UDP 经节点出去：本机 UDP 走节点（${UDP_NODE}）重新打开"
+	fi
 	return 0
 }
 cmd_local_udp() {   # cca local udp [on [节点] | 节点 | pick | off | uninstall]
@@ -5147,6 +5198,7 @@ cmd_check() {   # cca check [账号…] [--json]：各账号的出口、纯净�
 				load_local
 				local_ready || FAIL_CODE=local_unavailable die "$(away_what)，内置代理也还没配置：运行 cca local setup"
 				local_ensure || return 1
+				[ -z "${LOCAL_UDP:-}" ] || udp_launch_check   # 和启动时一样：设了本机 UDP 走节点就让它开着（在家暂停过的再打开）
 				host=127.0.0.1 route=local
 			else
 				router_ensure || return 1   # 和启动前一样：必须核实各槽位当前节点，不能只看端口开放
@@ -7037,7 +7089,8 @@ EOF
   cca node use 账号 [链接]   给这个账号换上一个自定义代理（加好节点、改走它、同步路由器；维护者固定了节点的不行）
   cca local udp [on [节点]]  这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）也经节点出去：内置代理只管账号的端口，
                              这些照旧直连。开着时一个 root 的系统服务只接 UDP（TCP 照旧直连），装的时候要输一次
-                             管理员密码；不带参数看现在从哪出去，pick 换节点，off 关掉，uninstall 删掉系统服务
+                             管理员密码；不带参数看现在从哪出去，pick 换节点，off 关掉，uninstall 删掉系统服务。
+                             在家时路由器已经让这些 UDP 出了大陆就自动停着，出门在外启动账号时自动再打开
   cca local off              停掉内置代理的内核、删掉它的配置和拷来的节点
                              平时自动判断：连得上路由器走路由器，连不上走内置代理（只经 VPN、ZeroTier 这类
                              虚拟网卡连得到路由器的不算在家）；想固定一种，把 ${CFG} 的 route 改成 router 或 local。
@@ -7099,7 +7152,8 @@ EOF
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
   cca restore                一键还原 cca 的全部改动
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
-                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写账号自己在 ~/.cca/accounts 里的目录）、
+                             claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写账号自己在 ~/.cca/accounts 里的目录，
+                             和它链到 ~/.claude 里共享的目录）、
                              leak_check（设成 false：启动前不测 ${leaks}）、
                              cost（设成 false：不统计按 API 标价折算的金额，App 里也不显示）、
                              presence（设成 false：${host}不向维护者的服务器报告、也不查设备统计）${mac:+、}

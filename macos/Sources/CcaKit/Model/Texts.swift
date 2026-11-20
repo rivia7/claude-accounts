@@ -396,7 +396,8 @@ enum Texts {
         case .off: return "本机 UDP：直连（浏览器的 WebRTC、QUIC 这些不经节点）"
         case .ok:
             if let other = nonEmpty(u.otherVPN) { return "本机 UDP：让给了另一个 VPN（\(other)），它关掉后自动经 \(node) 出去" }
-            return u.running ? "本机 UDP：经 \(node) 出去（TCP 照旧直连）" : "本机 UDP：设了经 \(node)，系统服务没在运行"
+            if u.running { return "本机 UDP：经 \(node) 出去（TCP 照旧直连）" }
+            return u.paused ? "本机 UDP：在家时路由器管着，先停着（出门在外自动经 \(node) 出去）" : "本机 UDP：设了经 \(node)，系统服务没在运行"
         case .stale: return "本机 UDP：经 \(node)，装着的配置旧了，要重新装一次"
         case .missing: return "本机 UDP：设了经 \(node)，系统服务却不在了，要重新装"
         case .undefined: return "本机 UDP：内置代理里已经没有 \(node) 转发 UDP 的定义"

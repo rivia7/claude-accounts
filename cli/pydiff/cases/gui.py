@@ -235,6 +235,8 @@ STATE_MASK += [(r',\n\s*"diag": (?:null|\{(?:[^{}]|\{[^{}]*\})*\})', ''),
 STATE_MASK += [(r',\n\s*"custom_proxy": (?:true|false)', '')]
 # 本机 UDP 走节点给别的 VPN 让开了（config.local.udp.other_vpn）也是切换以后新加的（cargo test、tests/local_udp.py、回归 11b4u 里测）
 STATE_MASK += [(r',\n\s*"other_vpn": (?:null|"[^"]*")', '')]
+# 本机 UDP 走节点在家暂停着没有（config.local.udp.paused）也是切换以后新加的：去掉再比（回归 11b4u 测）
+STATE_MASK += [(r',\s*"paused": (?:true|false)', '')]
 GUI_ENV = {'CCA_RO': '1', 'CCA_VERSION': '9.9.9', 'CCA_GUI_CLAUDE_BIN': '/usr/local/bin/claude', 'CCA_GUI_CLAUDE_APP': '/Applications/Claude.app',
            'CCA_GUI_CODEX_BIN': '/usr/local/bin/codex', 'CCA_GUI_CODEX_APP': '', 'CCA_GUI_AGY_BIN': '', 'CCA_GUI_CHROME': '1', 'CCA_COST': 'off'}
 ROUTER_CODE = 'router code\nline 2\n'

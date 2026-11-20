@@ -11,9 +11,10 @@
 //! root 那边的 other-vpn（`udp_other`），它关掉后接着起：两个 TUN 一起开会抢路由，cca 的 TUN 和它们都用 198.18.0.x，经 cca 的 TUN 的
 //! TCP 回包被别的 TUN 截走、全断（直接连 IP 的程序，比如微信，打不开）
 
+use super::bind::phys_iface;
 use super::{client_builtin, core_defs, core_pick, def_name, install_names, install_resolve, sect, type_name};
 use crate::cmd::dock::home_swapped;
-use crate::cmd::leak::{geo_fresh, ip_prefix, leak_cache, leak_geo, leak_where, stun_ips};
+use crate::cmd::leak::{geo_fresh, ip_prefix, leak_cache, leak_geo, leak_where, stun_ips_on};
 use crate::cmd::session::gui_procs;
 use crate::cmd::{arg, arity};
 use crate::core::base::{sh, CCA_HOME, CFG};
@@ -39,6 +40,9 @@ pub const UDP_HELPER: i64 = 2;
 /// root 那边的 TUN 的网卡名（tun.device）：固定下来，启动脚本才分得清路由表里哪些是自己的、哪些是别的 VPN 的
 pub const UDP_TUN: &str = "utun233";
 pub static UDP_FLAG: LazyLock<String> = LazyLock::new(|| path::join_all(&[&CCA_HOME, "udp", "on"]));
+/// 在家暂停的记号（bash 的 udp_home_finish 留下）：在家时路由器已经把这台 Mac 的 UDP 送出大陆，开关文件先删掉；出门在外启动账号时
+/// （udp_launch_check）重新打开、删掉它
+pub static UDP_HOME: LazyLock<String> = LazyLock::new(|| path::join_all(&[&CCA_HOME, "udp", "home"]));
 /// 不进 TUN 的 IPv4（算 route-address 时去掉）：0.0.0.0/8、局域网、组播、链路本地、CGNAT（Tailscale）、198.18.0.0/15（基准测试的保留
 /// 地址：各家代理客户端的 TUN 地址和 fake-ip 都在这一段，一起开着的那一会儿别抢它们的）
 const UDP_EXCLUDE4: &[&str] = &[
@@ -234,6 +238,11 @@ fn other_vpn_at(root: &str, procs: Option<&[(i64, String)]>) -> Option<String> {
     alive.then(|| name.to_string())
 }
 
+/// 在家暂停着吗：设了、装着的就是这一份（ok），开关文件不在、留着在家暂停的记号
+pub fn udp_paused(state: &str) -> bool {
+    state == "ok" && !path::lexists(&UDP_FLAG) && path::lexists(&UDP_HOME)
+}
+
 /// _gui state 的 config.local.udp（PROTOCOL 2.2）：只在 macOS 上，别的系统是 None
 pub fn udp_view(c: &Dict, procs: Option<&[(i64, String)]>) -> V {
     if !cfg!(target_os = "macos") {
@@ -243,9 +252,12 @@ pub fn udp_view(c: &Dict, procs: Option<&[(i64, String)]>) -> V {
     let installed = udp_info().is_some();
     let running = !node.is_empty() && udp_running(procs);
     let other = if node.is_empty() { None } else { udp_other(procs) };
+    let paused = udp_paused(state);
     let node = if node.is_empty() { V::None } else { V::from(node) };
     let other = other.map(V::from).unwrap_or(V::None);
-    V::Dict(dict! { "node" => node, "state" => state, "installed" => installed, "running" => running, "other_vpn" => other })
+    V::Dict(
+        dict! { "node" => node, "state" => state, "installed" => installed, "running" => running, "other_vpn" => other, "paused" => paused },
+    )
 }
 
 /// WebRTC 直连风险的补充：这台 Mac 用内置代理时，怎么让它自己的 UDP 也经节点出去（cca local udp）
@@ -374,10 +386,18 @@ pub fn cmd_udp_build(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 这台 Mac 的 UDP 现在从哪出去：STUN 看到的地址、国家代码、归属地（直连查），一行一个，没有的项写 -；一个都没测到时退出码 1
+/// 这台 Mac 的 UDP 现在从哪出去：STUN 看到的地址、国家代码、归属地（直连查），一行一个，没有的项写 -；一个都没测到时退出码 1。
+/// phys：绑定物理网卡问（绕开本机 UDP 走节点的 TUN，看路由器、本地网络那条路；找不到物理网卡也是退出码 1）
 pub fn cmd_udp_probe(args: &[String]) -> R<()> {
-    arity("cmd_udp_probe", args, 0, 0)?;
-    let ips = stun_ips(1.5);
+    let phys = args.len() == 1 && args[0] == "phys";
+    if !phys {
+        arity("cmd_udp_probe", args, 0, 0)?;
+    }
+    let iface = if phys { Some(phys_iface()).filter(|p| !p.is_empty()) } else { None };
+    if phys && iface.is_none() {
+        return exit(1);
+    }
+    let ips = stun_ips_on(1.5, iface.as_deref());
     if ips.is_empty() {
         return exit(1);
     }
@@ -484,11 +504,12 @@ mod tests {
                 view.at("node").is_none()
                     && view.at("state").as_str() == Some("off")
                     && view.at("running").as_bool() == Some(false)
+                    && view.at("paused").as_bool() == Some(false)
             );
             assert!(view.at("installed").is_bool() && view.at("other_vpn").is_none());
             assert_eq!(
                 view.keys().iter().map(|k| k.to_string()).collect::<Vec<_>>(),
-                ["node", "state", "installed", "running", "other_vpn"]
+                ["node", "state", "installed", "running", "other_vpn", "paused"]
             );
         } else {
             assert!(view.is_none());

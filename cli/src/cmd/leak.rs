@@ -1,7 +1,7 @@
 //! 出口检测的解析和 DNS / WebRTC 泄露检测（`coffee_parse` 到 `cmd_leak_verdict`）：coffee、leak-probe、leak-verdict。
 //!
 //! - `leak/coffee.rs`：`coffee_parse`、`cmd_coffee`（出口检测的一行结论和退出码）
-//! - `leak/stun.rs`：`stun_parse`、`stun_probe`、`stun_ips`（本机 UDP 直连问 STUN）
+//! - `leak/stun.rs`：`stun_parse`、`stun_probe`、`stun_ips`、`stun_ips_on`（本机 UDP 直连问 STUN，可以绑定网卡）
 //! - 这一份：`LEAK_*`、`leak_curl`、缓存和归属地（`leak_cache`、`ip_prefix`、`leak_geo`、`geo_fresh`、`leak_where`）、
 //!   `leak_dns`、`cmd_leak_probe`、`cmd_leak_verdict`
 //!
@@ -19,7 +19,7 @@ mod stun;
 
 #[allow(unused_imports)] // coffee_parse：health-save 也用它，那个模块移植时从这里拿
 pub use coffee::{cmd_coffee, coffee_parse};
-pub use stun::stun_ips;
+pub use stun::{stun_ips, stun_ips_on};
 
 use super::{arg, arity, Cmd};
 use crate::core::base::{str_or_empty, CCA_HOME, CFG};

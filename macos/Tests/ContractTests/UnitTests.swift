@@ -65,6 +65,11 @@ func textTests() {
     let away = local(#"{"configured":true,"client":"builtin","udp":{"node":"US-A","state":"ok","installed":true,"running":false,"other_vpn":"utun5"}}"#).udp
     check("本机 UDP：给别的 VPN 让开了（不算在用；旧版 cca 没有 other_vpn）", away?.otherVPN == "utun5" && away?.yielded == true && away?.active == false
           && Texts.localUDP(away!).contains("让给了另一个 VPN（utun5）") && lu?.otherVPN == nil && lu?.yielded == false)
+    let paused = local(#"{"configured":true,"client":"builtin","udp":{"node":"US-A","state":"ok","installed":true,"running":false,"paused":true}}"#).udp
+    check("本机 UDP：在家暂停着（路由器管着）不算没在运行的问题，说出门在外自动打开；旧版 cca 没有 paused 当作 false",
+          paused == LocalUDP(node: "US-A", state: .ok, installed: true, running: false, paused: true) && paused?.active == false
+          && Texts.localUDP(paused!).contains("在家时路由器管着") && !Texts.localUDP(paused!).contains("没在运行")
+          && lu?.paused == false)
 
     section("补救")
     check("port_closed → 同步路由器", Remedy.forCode(.portClosed, tool: .claude, key: "k") == .routerSync)

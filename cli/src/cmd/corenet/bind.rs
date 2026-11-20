@@ -78,7 +78,7 @@ fn phys_iface_in(output: &str) -> String {
 }
 
 /// 物理网卡：默认路由（netstat 里也列着各网卡自己的默认路由）里第一块不是虚拟网卡的；没有是空的
-fn phys_iface() -> String {
+pub(super) fn phys_iface() -> String {
     phys_iface_in(&sys_cmd_out(&["netstat", "-rn", "-f", "inet"]))
 }
 

@@ -10,7 +10,7 @@ use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, policy_skip_add, table_problems};
 use crate::core::model::*;
 use crate::core::policy::{alias_problem, policy_in_use, policy_map, policy_raw};
-use crate::core::tool::{t, tools, Kind, Tool, CODEX_PROVIDER};
+use crate::core::tool::{t, tools, Kind, Tool, CLAUDE_SHARED, CODEX_PROVIDER};
 use crate::py::fs::{load_quiet, save_json};
 use crate::py::hash::sha1_hex;
 use crate::py::io;
@@ -105,6 +105,8 @@ pub fn cmd_env(args: &[String]) -> R<()> {
         ("ACC_MASTER", V::from(&t().master)),
         ("ACC_CHROME_DIR", V::from(path::join(&dir, "chrome"))),
         ("ACC_DESKTOP_DIR", V::from(path::join(&dir, "desktop"))),
+        // 交给 Claude Code 的记忆目录（claude_env 设成 CLAUDE_CODE_REMOTE_MEMORY_DIR）；别的工具、算不出时是空的
+        ("ACC_MEMORY_DIR", V::from(if t().kind == Kind::Claude { memory_dir(&cdir(&key), &t().master) } else { String::new() })),
         ("CCA_NO_PROXY", no_proxy.clone()),
         (
             "CCA_PROXY_BYPASS",
@@ -188,7 +190,8 @@ pub const CCA_DIR_PRIVATE: &[&str] = &[
 ];
 
 /// Claude Code 默认只对这个账号自己的目录（adir：~/.cca/accounts/<账号目录名>）放开权限：加成工作目录（--add-dir），
-/// 它的用量、出口检测、Claude Code 自己的配置读起来不用确认，改动照权限模式走。整个 ~/.cca 不加：账号表、config.json、映射、
+/// 它的用量、出口检测、Claude Code 自己的配置读起来不用确认，改动照权限模式走。账号目录里共享的目录是链到 ~/.claude 的符号链接，
+/// Claude Code 判断权限时先解析链接，所以它们的真实路径也加上（shared_real_dirs）。整个 ~/.cca 不加：账号表、config.json、映射、
 /// 别的账号的目录都不在工作目录里，读之前照权限模式确认。登录凭证和浏览器资料用 --disallowedTools 挡住整个 ~/.cca 的
 /// （CCA_DIR_PRIVATE，包括这个账号自己的 Chrome、桌面 App 资料目录；规则里 // 开头是绝对路径，Read 规则也管 cat、head
 /// 这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
@@ -208,7 +211,50 @@ pub fn cca_dir_args(key: &str) -> Vec<String> {
             rules.push(format!("{tool}(/{root}/{p})"));
         }
     }
-    vec![format!("--add-dir={}", adir(key)), format!("--disallowedTools={}", rules.join(","))]
+    let mut out = vec![format!("--add-dir={}", adir(key))];
+    out.extend(shared_real_dirs(&cdir(key), &path::realpath(&HOME), &root).iter().map(|d| format!("--add-dir={d}")));
+    out.push(format!("--disallowedTools={}", rules.join(",")));
+    out
+}
+
+/// 账号的配置目录（cd）里共享的目录（CLAUDE_SHARED 里链到 ~/.claude 的：会话记录和记忆、skills、plans……）的真实路径，照
+/// CLAUDE_SHARED 的顺序、去重。只加账号目录的话，Claude Code 解析链接以后这些都在工作目录外面：读记忆、会话记录、skills 要确认，
+/// Bash 里的 cat、ls、grep 被挡。ide 不加（锁文件里是 IDE 插件的认证 token）；不是链接的（就在账号目录里）、指向的不是目录的、
+/// 路径里有规则写不准的字符的、是家目录或 ~/.cca（或它们的上层）的、在 ~/.cca 里面的也不加。home、root：家目录、~/.cca 的真实路径
+fn shared_real_dirs(cd: &str, home: &str, root: &str) -> Vec<String> {
+    let within = |p: &str, dir: &str| p == dir || p.starts_with(&format!("{}/", dir.trim_end_matches('/')));
+    let mut out: Vec<String> = Vec::new();
+    for n in CLAUDE_SHARED.iter().filter(|n| **n != "ide") {
+        let link = path::join(cd, n);
+        if !path::islink(&link) {
+            continue;
+        }
+        let real = path::realpath(&link);
+        if path::isdir(&real)
+            && !re!(r"[\s,()\x22\x27\\]").found(&real)
+            && !within(home, &real)
+            && !within(root, &real)
+            && !within(&real, root)
+            && !out.contains(&real)
+        {
+            out.push(real);
+        }
+    }
+    out
+}
+
+/// 交给 Claude Code 的 CLAUDE_CODE_REMOTE_MEMORY_DIR（claude_env 里设）：账号的 projects 链到主目录 ~/.claude 的 projects 时是主目录的
+/// 真实路径，别的是空的（不设）。不设时 Claude Code 把自己的记忆目录算成 CLAUDE_CONFIG_DIR 下的 projects/<项目>/memory，判断权限时
+/// 却先解析链接，对不上：读写自己的记忆都要确认（在 .claude 下面，算敏感路径）。设成主目录的真实路径以后和不用 cca 时一样。
+/// 它只换记忆的上一层（projects/<项目>/memory、用户级的 agent-memory，项目的目录名照旧），这两样本来就经链接放在主目录里，位置不变
+fn memory_dir(cd: &str, master: &str) -> String {
+    let projects = path::join(cd, "projects");
+    let real_master = path::realpath(master);
+    if path::islink(&projects) && path::realpath(&projects) == path::join(&real_master, "projects") {
+        real_master
+    } else {
+        String::new()
+    }
 }
 
 /// TOML 的基本字符串（JSON 的字符串写法正好是它的子集）
@@ -1301,6 +1347,53 @@ fn probe_flags(x: &Dict) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn shared_dirs_and_memory_dir_follow_links_into_master() {
+        // 账号目录里链到主目录的共享目录加它们的真实路径（照 CLAUDE_SHARED 的顺序、去重；~/.claude 本身也是链接）。ide、不是链接的、
+        // 指向文件的、链断了的、链到家目录、~/.cca 里面的、路径里有规则写不准的字符的都不加
+        let b = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("cca-shared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&b);
+        let b = b.to_str().unwrap().to_string();
+        let (home, root) = (format!("{b}/home"), format!("{b}/home/.cca"));
+        let (master, real) = (format!("{home}/.claude"), format!("{b}/dotfiles/claude"));
+        let cd = format!("{root}/accounts/a/claude");
+        let mkdir = |p: &str| std::fs::create_dir_all(p).unwrap();
+        let link = |to: &str, name: &str| symlink(to, format!("{cd}/{name}")).unwrap();
+        mkdir(&cd);
+        mkdir(&real);
+        symlink(&real, &master).unwrap();
+        for n in ["projects", "skills", "ide", "plans", "memory"] {
+            mkdir(&format!("{real}/{n}"));
+            link(&format!("{master}/{n}"), n);
+        }
+        link(&format!("{master}/memory"), "memories");
+        std::fs::write(format!("{real}/settings.json"), "{}").unwrap();
+        link(&format!("{master}/settings.json"), "settings.json");
+        mkdir(&format!("{cd}/commands"));
+        mkdir(&format!("{root}/accounts/b/claude/agents"));
+        link(&format!("{root}/accounts/b/claude/agents"), "agents");
+        link(&home, "hooks");
+        link("/", "prompts");
+        mkdir(&format!("{b}/with space/rules"));
+        link(&format!("{b}/with space/rules"), "rules");
+        link(&format!("{b}/nope"), "todos");
+        let want: Vec<String> = ["projects", "skills", "plans", "memory"].iter().map(|n| format!("{real}/{n}")).collect();
+        assert_eq!(shared_real_dirs(&cd, &home, &root), want);
+        // 记忆目录：projects 链到主目录的 projects 时是主目录的真实路径；不是链接、链到别处时是空的
+        assert_eq!(memory_dir(&cd, &master), real);
+        let cd2 = format!("{root}/accounts/c/claude");
+        mkdir(&format!("{cd2}/projects"));
+        assert_eq!(memory_dir(&cd2, &master), "");
+        let cd3 = format!("{root}/accounts/d/claude");
+        mkdir(&cd3);
+        mkdir(&format!("{b}/elsewhere/projects"));
+        symlink(format!("{b}/elsewhere/projects"), format!("{cd3}/projects")).unwrap();
+        assert_eq!(memory_dir(&cd3, &master), "");
+        assert_eq!(shared_real_dirs(&cd3, &home, &root), vec![format!("{b}/elsewhere/projects")]);
+        std::fs::remove_dir_all(&b).unwrap();
+    }
 
     #[test]
     fn node_free_only_blocks_accounts_the_mapping_pins() {

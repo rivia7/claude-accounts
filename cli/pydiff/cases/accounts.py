@@ -6,6 +6,9 @@ PORTS = {'主号(alice@example.com)': 7901, 'bob@example.com': 7902, '走节点'
 # 切换以后 Claude 启动时多带一个记下会话的 hook（--settings；accounts.rs 的 session_hook），原来的 Python 没有：env 的用例关掉折合金额
 # （config.json 的 cost: false，就不带 hook），别的照旧比；带 hook 的样子在回归里测
 NO_HOOK = {'cost': False}
+# 切换以后 env 多输出一个 ACC_MEMORY_DIR（交给 Claude Code 的记忆目录，accounts.rs 的 memory_dir），原来的 Python 没有：比之前去掉这一行；
+# 它的值在 cargo test、回归里测
+ENV_MASK = [(r'(?m)^ACC_MEMORY_DIR=.*\n', '')]
 
 # 假的 codex：认 features list / --help / --version，把每次收到的参数和要紧的环境记进沙箱里的 codex.log
 FAKE_CODEX = r'''
@@ -20,43 +23,43 @@ esac
 '''
 
 for key in ['主号(alice@example.com)', 'bob@example.com', '直连', '走节点', '旧名(alice@example.com)', '没有这个', '']:
-    @case('env/claude/%s' % (key or 'empty'), ['env', key])
+    @case('env/claude/%s' % (key or 'empty'), ['env', key], mask=ENV_MASK)
     def _(b):
         world(b, cfg=dict(NO_HOOK, ports=PORTS, no_proxy='localhost, .local,::1,10.0.0.0/8,,'))
 
 
-@case('env/claude/full-api', ['env', '全'])
+@case('env/claude/full-api', ['env', '全'], mask=ENV_MASK)
 def _(b):
     world(b, table={'全': {'base_url': 'https://api.example.com/v1//', 'model': 'big-model', 'node': 'US-A', 'id': 'quan',
                           'env': {'A': 1, 'B': 'x y', 'HTTPS_PROXY': 'no', '1bad': 'no', 'C': 1.5, 'D': True}}}, cfg=NO_HOOK)
 
 
-@case('env/claude/no-add-dir', ['env', 'bob@example.com'])
+@case('env/claude/no-add-dir', ['env', 'bob@example.com'], mask=ENV_MASK)
 def _(b):
     world(b, cfg=dict(NO_HOOK, claude_add_dir=False))
 
 
-@case('env/claude/no-proxy-host', ['env', 'bob@example.com'])
+@case('env/claude/no-proxy-host', ['env', 'bob@example.com'], mask=ENV_MASK)
 def _(b):
     world(b, cfg=dict(NO_HOOK, proxy_host='', router={}))
 
 
-@case('env/claude/router-host-only', ['env', 'bob@example.com'])
+@case('env/claude/router-host-only', ['env', 'bob@example.com'], mask=ENV_MASK)
 def _(b):
     world(b, cfg=dict(NO_HOOK, proxy_host='', router={'host': '192.0.2.77'}))
 
 
-@case('env/claude/self-path', ['env', '直连'], env={'CCA_SELF': "/opt/my tools/cca"})
+@case('env/claude/self-path', ['env', '直连'], env={'CCA_SELF': "/opt/my tools/cca"}, mask=ENV_MASK)
 def _(b):
     world(b, cfg=NO_HOOK)
 
 
-@case('env/claude/ro', ['env', 'bob@example.com'], env={'CCA_RO': '1'})
+@case('env/claude/ro', ['env', 'bob@example.com'], env={'CCA_RO': '1'}, mask=ENV_MASK)
 def _(b):
     world(b, cfg=NO_HOOK)
 
 
-@case('env/claude/bad-table', ['env', 'bob@example.com'])
+@case('env/claude/bad-table', ['env', 'bob@example.com'], mask=ENV_MASK)
 def _(b):
     world(b, table={'bob@example.com': 'ZZ'}, cfg=NO_HOOK)
 
@@ -73,32 +76,32 @@ def codex_world(b, **marks):
 
 
 for key in ['工作(erin@example.com)', '接口', '直连接口']:
-    @case('env/codex/%s' % key, ['env', key], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex', 'OPENAI_API_KEY': 'sk-leak', 'CODEX_HOME': '/elsewhere'})
+    @case('env/codex/%s' % key, ['env', key], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex', 'OPENAI_API_KEY': 'sk-leak', 'CODEX_HOME': '/elsewhere'}, mask=ENV_MASK)
     def _(b):
         codex_world(b)
 
 
-@case('env/codex/no-bin', ['env', '接口'], tool='codex')
+@case('env/codex/no-bin', ['env', '接口'], tool='codex', mask=ENV_MASK)
 def _(b):
     codex_world(b)
 
 
-@case('env/codex/missing-bin', ['env', '接口'], tool='codex', env={'CCA_BIN': '%HOME%/bin/nope'})
+@case('env/codex/missing-bin', ['env', '接口'], tool='codex', env={'CCA_BIN': '%HOME%/bin/nope'}, mask=ENV_MASK)
 def _(b):
     codex_world(b)
 
 
-@case('env/codex/no-flags', ['env', '接口'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'})
+@case('env/codex/no-flags', ['env', '接口'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'}, mask=ENV_MASK)
 def _(b):
     codex_world(b, codex_noflags=1, codex_nodaemon=1)
 
 
-@case('env/codex/features-fail', ['env', '接口'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'})
+@case('env/codex/features-fail', ['env', '接口'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'}, mask=ENV_MASK)
 def _(b):
     codex_world(b, codex_fail=1)
 
 
-@case('env/codex/cached-probe', ['env', '工作(erin@example.com)'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'})
+@case('env/codex/cached-probe', ['env', '工作(erin@example.com)'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'}, mask=ENV_MASK)
 def _(b):
     codex_world(b)
     import os
@@ -107,20 +110,20 @@ def _(b):
                                     'flags': ['--disable', 'only_this'], 'no_daemon': False, 'version': '9.9'})
 
 
-@case('env/codex/stale-probe', ['env', '工作(erin@example.com)'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'})
+@case('env/codex/stale-probe', ['env', '工作(erin@example.com)'], tool='codex', env={'CCA_BIN': '%HOME%/bin/codex'}, mask=ENV_MASK)
 def _(b):
     codex_world(b)
     b.json('.cca/codex/probe.json', {'sig': 'old', 'flags': [], 'no_daemon': False, 'version': '0.1'})
 
 
-@case('env/codex/npm-js', ['env', '工作(erin@example.com)'], tool='codex', env={'CCA_BIN': '%HOME%/pkg/bin/codex.js'})
+@case('env/codex/npm-js', ['env', '工作(erin@example.com)'], tool='codex', env={'CCA_BIN': '%HOME%/pkg/bin/codex.js'}, mask=ENV_MASK)
 def _(b):
     codex_world(b)
     b.write('pkg/bin/codex.js', '#!/bin/sh\n' + FAKE_CODEX, 0o755)
     b.json('pkg/package.json', {'version': '0.200.1'})
 
 
-@case('env/agy', ['env', 'gina@example.com'], tool='agy')
+@case('env/agy', ['env', 'gina@example.com'], tool='agy', mask=ENV_MASK)
 def _(b):
     world(b, agy={'gina@example.com': 'US-B'})
 

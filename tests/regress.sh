@@ -878,18 +878,22 @@ ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则�
 # Claude 默认只把这个账号自己的目录（~/.cca/accounts 下）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料不管在不在工作目录里都挡住
 P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
 AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accounts/kimi-*)
+# 账号目录里链到 ~/.claude 的共享目录（这时主目录里有的：预建的九个，和假 claude 上次会话里写的 output-styles）也加上，写真实路径
+# （Claude Code 判断权限时先解析链接）；照 CLAUDE_SHARED 的顺序，ide 不加
+SD="--add-dir=$H/.claude/projects --add-dir=$H/.claude/skills --add-dir=$H/.claude/commands --add-dir=$H/.claude/agents --add-dir=$H/.claude/plugins --add-dir=$H/.claude/todos --add-dir=$H/.claude/tasks --add-dir=$H/.claude/plans --add-dir=$H/.claude/file-history --add-dir=$H/.claude/output-styles"
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
-ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录；再带着记下会话的 hook（--settings，都在用户的参数前面）" '[ $rc -eq 3 ] && [ "$(hookless "$(lastline ARGS)" "$AAD")" = "ARGS: --add-dir=${AAD} $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
+ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）和它链到的共享目录（ide 除外）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录；再带着记下会话的 hook（--settings，都在用户的参数前面）" '[ $rc -eq 3 ] && [ "$(hookless "$(lastline ARGS)" "$AAD")" = "ARGS: --add-dir=${AAD} $SD $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
+ok "记忆目录交给 Claude Code 的是 ~/.claude 的真实路径（CLAUDE_CODE_REMOTE_MEMORY_DIR：账号的 projects 链到它；不然解析链接以后它认不出自己的记忆，读写都要确认）" '[ "$(lastenv | sed -n "s/.* CLAUDE_CODE_REMOTE_MEMORY_DIR=//p")" = "$H/.claude" ] && [ "$(readlink "$AAD/claude/projects")" = "$H/.claude/projects" ]'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['claude_add_dir'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a2=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('claude_add_dir'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-ok "第三方 API 账号同样只放开它自己的目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $P1 --settings {" && [ "$(hookless "$a2" "$AAD")" = "ARGS: --version" ]'
+ok "第三方 API 账号同样只放开它自己的目录和共享目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $SD $P1 --settings {" && [ "$(hookless "$a2" "$AAD")" = "ARGS: --version" ]'
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['cost'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a3=$(lastline ARGS)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; s3=$(lastline SETTINGS); a4=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('cost'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号没有 --settings，第三方 API 账号的 --settings 里没有 hooks）" '[ "$a3" = "ARGS: --add-dir=${AAD} $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
+ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号没有 --settings，第三方 API 账号的 --settings 里没有 hooks）" '[ "$a3" = "ARGS: --add-dir=${AAD} $SD $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
 out=$(run CCA_TTY="$(ans)" cca @alice -p hi 2>&1); rc=$?; h1=$(lastline HOOK)
 out2=$(run CCA_TTY="$(ans)" cca @kimi -p hi 2>&1); rc2=$?; h2=$(lastline HOOK)
 ok "Claude Code 开始会话时跑 --settings 里的 SessionStart hook：回调 cca _session-start，会话 id 记进这个账号目录的 sessions.jsonl（600）；hook 什么都不打印（stdout 会进 Claude 的上下文）、退出码 0；第三方 API 账号也记（统计时它的会话不算）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && printf "%s" "$h1" | grep -q " rc=0 stdout=0 stderr=0 " && printf "%s" "$h2" | grep -q " rc=0 stdout=0 stderr=0 " && grep -qF "\"sid\":\"${h1##*sid=}\"" "$AAD/sessions.jsonl" && grep -qF "\"sid\":\"${h2##*sid=}\"" "$KAD/sessions.jsonl" && [ "$(stat -f %Lp "$AAD/sessions.jsonl")" = 600 ] && ! grep -qF "${h1##*sid=}" "$KAD/sessions.jsonl"'
@@ -3651,7 +3655,7 @@ rm -f "$CD/reject_text"
 run cca @alice --version >/dev/null 2>&1
 ok "内核收下了：端口池缩回 8 个" '! grep -qx 7909 "$CD/listening" && grep -qx 7908 "$CD/listening"'
 out=$(gj state)
-ok "_gui state：本机客户端是内置代理（名字由 cca 给），已经同步" 'printf "%s" "$out" | jok "d[\"config\"][\"local\"] == {\"configured\": True, \"client\": \"builtin\", \"name\": \"内置代理\", \"udp\": {\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False, \"other_vpn\": None}} and d[\"routing\"][\"local_sync\"] == \"ok\""'
+ok "_gui state：本机客户端是内置代理（名字由 cca 给），已经同步" 'printf "%s" "$out" | jok "d[\"config\"][\"local\"] == {\"configured\": True, \"client\": \"builtin\", \"name\": \"内置代理\", \"udp\": {\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False, \"other_vpn\": None, \"paused\": False}} and d[\"routing\"][\"local_sync\"] == \"ok\""'
 out=$(gj live)
 ok "_gui live：在外面看内置代理：在运行，alice 的槽位正常" 'printf "%s" "$out" | jok "d[\"route\"] == \"local\" and d[\"local\"][\"name\"] == \"内置代理\" and d[\"local\"][\"running\"] is True and d[\"slots\"][0][\"state\"] == \"ok\""'
 # 内核文件校验不对、界面 App 没装
@@ -3759,7 +3763,7 @@ ok "cca local udp on：还没用内置代理时不装（只给内置代理用）
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {'client': 'builtin'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 out=$(ru cca local udp 2>&1 </dev/null)
 ok "cca local udp：没开时说这台 Mac 的 UDP 直连、怎么打开；STUN 没测到也照实说" 'printf "%s" "$out" | grep -q "没开：这台 Mac 的 UDP" && printf "%s" "$out" | grep -q "cca local udp on \[节点\]" && printf "%s" "$out" | grep -q "STUN 没测到"'
-ok "_gui state：config.local.udp 是没开、没装" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False, \"other_vpn\": None}"'
+ok "_gui state：config.local.udp 是没开、没装" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": False, \"running\": False, \"other_vpn\": None, \"paused\": False}"'
 out=$(ru cca local udp on US-B 2>&1 </dev/null); rc=$?
 ok "cca local udp on 不转发 UDP 的节点：说清楚；非交互时不现选、不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "节点「US-B」不转发 UDP" && printf "%s" "$out" | grep -q "运行 cca local udp on 节点" && [ "$(admins)" = 0 ] && cfgok "not c[\"local\"].get(\"udp\")"'
 out=$(ru cca local udp on NOPE 2>&1 </dev/null); rc=$?
@@ -3773,7 +3777,7 @@ ok "cca local udp on（终端里现选，只列转发 UDP 的节点）：弹一�
 ok "装到 root 那边的：内核（和内置代理的同一份）、配置（600，只有这个节点，只把 UDP 交给它）、启动脚本（755）、info.json（644，没有密钥）、日志；launchd 配置照开关文件起停" '[ -x "$UR/cca-udp/mihomo" ] && cmp -s "$UR/cca-udp/mihomo" "$CN/mihomo-v1.19.33" && [ "$(stat -f %Lp "$UR/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/config.yaml")" = 600 ] && [ "$(stat -f %Lp "$UR/cca-udp/cca-udp")" = 755 ] && [ "$(stat -f %Lp "$UR/cca-udp/info.json")" = 644 ] && [ -f "$UR/cca-udp.log" ] && ucfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\"] and c[\"rules\"][0] == \"NETWORK,TCP,DIRECT\" and c[\"rules\"][-2:] == [\"NETWORK,UDP,US-A\", \"MATCH,DIRECT\"] and c[\"tun\"][\"enable\"] and \"external-controller\" not in c" && ! grep -q udp-secret "$UR/cca-udp/info.json" "$UR/local.cca.udp.plist" && python3 -c "import plistlib,sys; p=plistlib.load(open(sys.argv[1],\"rb\")); sys.exit(0 if p[\"KeepAlive\"] == {\"PathState\": {sys.argv[2]: True}} and p[\"ProgramArguments\"] == [sys.argv[3] + \"/cca-udp\"] else 1)" "$UR/local.cca.udp.plist" "$UF" "$UR/cca-udp"'
 ok "节点密钥不进命令行和日志（管理员脚本是 osascript 的参数，launchctl、env 的命令行）；临时目录用完删掉" '! grep -q udp-secret "$T/osascript.log" "$T/launchctl.log" env.log && tmpd=$(utmp) && [ -n "$tmpd" ] && [ ! -e "$tmpd" ] && grep -q "^SUMS=.*mihomo:[0-9a-f]\{64\} config.yaml:[0-9a-f]\{64\}" "$T/osascript.log"'
 ok "launchd：bootstrap 装上，开关文件在就起 cca-udp" 'grep -q "^LAUNCHCTL bootstrap system $UR/local.cca.udp.plist$" "$T/launchctl.log" && grep -q "^START local.cca.udp$" "$T/launchctl.log"'
-ok "_gui state：config.local.udp 是开着、装好了、在运行" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None}"'
+ok "_gui state：config.local.udp 是开着、装好了、在运行" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
 out=$(ru cca local udp 2>&1 </dev/null)
 ok "cca local udp：说经哪个节点出去、系统服务在运行，和 STUN 看到的出口" 'printf "%s" "$out" | grep -q "经节点 US-A 出去（系统服务 local.cca.udp 在运行" && printf "%s" "$out" | grep -q "从 198.51.100.21"'
 # 别的 VPN 的 TUN 接管了流量（像 Shadowrocket：经 utun5 的默认路由、几大段、198.18/15）：root 那边的启动脚本停下内核让开，网卡名写进
@@ -3789,29 +3793,29 @@ printf '%s\n' 'Routing tables' '' 'Internet:' 'Destination        Gateway       
 	'198.18/15          link#27            UCS                 utun5       ' > "$T/netstat.txt"
 uaway() { local i; for i in $(seq 1 60); do [ -s "$UR/cca-udp/other-vpn" ] && return 0; sleep 0.1; done; return 1; }
 ok "别的 VPN 接管了流量（经 utun5 的默认路由）：root 那边停下内核让开、记下网卡（自己的 TUN、限定网卡的、ZeroTier 的路由不算），日志里说了" 'uaway && udown && [ "$(cat "$UR/cca-udp/other-vpn")" = utun5 ] && grep -q "另一个 VPN（utun5）接管了这台 Mac 的流量" "$UR/cca-udp.log"'
-ok "_gui state：让开时 running 是 false、other_vpn 是那块网卡" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": False, \"other_vpn\": \"utun5\"}"'
+ok "_gui state：让开时 running 是 false、other_vpn 是那块网卡" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": False, \"other_vpn\": \"utun5\", \"paused\": False}"'
 out=$(ru cca local udp 2>&1 </dev/null)
 ok "cca local udp：说让给了另一个 VPN、它关掉后自动接回（不说系统服务没在运行）" 'printf "%s" "$out" | grep -q "虚拟网卡（utun5；" && printf "%s" "$out" | grep -q "它关掉后自动接回节点 US-A" && ! printf "%s" "$out" | grep -q "却没在运行"'
 out=$(ru cca local udp on US-A 2>&1 </dev/null); rc=$?
 ok "让开时再 cca local udp on：不弹授权框、不算失败，说先让给了另一个 VPN" '[ $rc -eq 0 ] && [ "$(admins)" = 1 ] && printf "%s" "$out" | grep -q "先让给它" && ! printf "%s" "$out" | grep -q "却没起来"'
 rm -f "$T/netstat.txt"
-ok "别的 VPN 关掉了（路由没了）：root 那边接着起内核、删掉 other-vpn，_gui state 回到在运行" 'uup && [ ! -e "$UR/cca-udp/other-vpn" ] && grep -q "另一个 VPN 关掉了" "$UR/cca-udp.log" && ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None}"'
+ok "别的 VPN 关掉了（路由没了）：root 那边接着起内核、删掉 other-vpn，_gui state 回到在运行" 'uup && [ ! -e "$UR/cca-udp/other-vpn" ] && grep -q "另一个 VPN 关掉了" "$UR/cca-udp.log" && ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
 out=$(ru cca local udp on US-A 2>&1 </dev/null); rc=$?
 ok "再开同一个节点（装着的就是这一份）：不再弹授权框" '[ $rc -eq 0 ] && [ "$(admins)" = 1 ] && [ -f "$CU/up" ]'
 out=$(ru cca local udp off 2>&1 </dev/null); rc=$?
-ok "cca local udp off：删掉开关文件，root 的内核自己停下；系统服务留着（不用密码）" '[ $rc -eq 0 ] && udown && [ ! -e "$UF" ] && cfgok "\"udp\" not in c[\"local\"]" && [ "$(admins)" = 1 ] && [ -f "$UR/local.cca.udp.plist" ] && printf "%s" "$out" | grep -q "系统服务还装着"'
-ok "_gui state：关掉以后是 off（装着、没在运行）" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": True, \"running\": False, \"other_vpn\": None}"'
+ok "cca local udp off：删掉开关文件，root 的内核自己停下（等到它停下，不白等、不说没停下）；系统服务留着（不用密码）" '[ $rc -eq 0 ] && udown && [ ! -e "$UF" ] && cfgok "\"udp\" not in c[\"local\"]" && [ "$(admins)" = 1 ] && [ -f "$UR/local.cca.udp.plist" ] && printf "%s" "$out" | grep -q "系统服务还装着" && ! printf "%s" "$out" | grep -q "还没停下"'
+ok "_gui state：关掉以后是 off（装着、没在运行）" 'ustate "{\"node\": None, \"state\": \"off\", \"installed\": True, \"running\": False, \"other_vpn\": None, \"paused\": False}"'
 out=$(ru cca local udp on 2>&1 </dev/null); rc=$?
 ok "cca local udp on 不写节点：用装着的那个（不弹授权框），又起来了" '[ $rc -eq 0 ] && uup && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && [ "$(admins)" = 1 ]'
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(server='192.0.2.31') for x in j['proxies'] if x['name'] == 'US-A']; json.dump(j, open(p, 'w'))" "$CN/nodes.json"
-ok "节点定义变了：_gui state 说装着的配置旧了（还在运行）" 'ustate "{\"node\": \"US-A\", \"state\": \"stale\", \"installed\": True, \"running\": True, \"other_vpn\": None}"'
+ok "节点定义变了：_gui state 说装着的配置旧了（还在运行）" 'ustate "{\"node\": \"US-A\", \"state\": \"stale\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
 mkdir -p "$GA/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$GA/Contents/Info.plist"
 touch "$T/away"
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "在外面启动账号：装着的旧了只提醒（启动时不弹授权框），照常经内置代理启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "本机 UDP 走节点（US-A）要重新装一次" && [ "$(admins)" = 1 ] && [ "$(cat "$CD/sel/CCA-1" 2>/dev/null)" = US-A ]'
 out=$(ru cca local udp on 2>&1 </dev/null); rc=$?
-ok "cca local udp on：照新的节点定义重新装（再弹一次授权框），root 的内核换上新的配置" '[ $rc -eq 0 ] && [ "$(admins)" = 2 ] && ucfg "c[\"proxies\"][0][\"server\"] == \"192.0.2.31\"" && uup && ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None}"'
+ok "cca local udp on：照新的节点定义重新装（再弹一次授权框），root 的内核换上新的配置" '[ $rc -eq 0 ] && [ "$(admins)" = 2 ] && ucfg "c[\"proxies\"][0][\"server\"] == \"192.0.2.31\"" && uup && ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
 touch "$T/osa_cancel"
 out=$(ru cca local udp on US-C 2>&1 </dev/null); rc=$?
 rm -f "$T/osa_cancel"
@@ -3827,6 +3831,31 @@ out=$(run cca @alice --version 2>&1); rc=$?
 ok "在外面启动账号：设了本机 UDP 走节点、开关文件却不在：补上，root 的内核又起来" '[ $rc -eq 3 ] && [ -f "$UF" ] && uup'
 out=$(sess '{"local.udp":[{"v":"1"}]}' -- cca local udp pick 2>&1); rc=$?
 ok "提问会话：换节点（cca local udp pick 总是问；App 里现选，不列不转发 UDP 的），选好照常装上、打开，有结果事件" '[ $rc -eq 0 ] && [ "$(asks)" = local.udp ] && evq "e.get(\"q\") == \"local.udp\" and e[\"fields\"][0][\"options\"][0][\"label\"] == \"US-A\" and not any(o[\"label\"] == \"US-B\" for o in e[\"fields\"][0][\"options\"])" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_udp\"" && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && uup'
+# 在家自动暂停：假 netstat 说物理网卡是 lo0（绑定它也问得到本机回环上的假 STUN），STUN 看到的地址归属地默认是美国
+printf 'Routing tables\n\nInternet:\nDestination        Gateway            Flags               Netif Expire\ndefault            127.0.0.1          UGScg                 lo0       \n' > "$T/netstat.txt"
+rm -f "$T/away"
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在家（经路由器）启动账号：开着本机 UDP 走节点时绕开它的 TUN、绑定物理网卡问 STUN，路由器已经让 UDP 出了大陆：删掉开关文件（root 的内核停下），设的节点留着，说一声" '[ $rc -eq 3 ] && udown && [ ! -e "$UF" ] && [ -e "$H/.cca/udp/home" ] && cfgok "c[\"local\"][\"udp\"] == \"US-A\"" && printf "%s" "$out" | grep -q "在家：路由器已经让这台 Mac 的 UDP 从 198.51.100.21（United States" && printf "%s" "$out" | grep -q "本机 UDP 走节点先停着（出门在外时自动再打开）"'
+ok "_gui state：在家暂停着（ok、没在运行、paused）" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": False, \"other_vpn\": None, \"paused\": True}"'
+out=$(ru cca local udp 2>&1 </dev/null)
+ok "cca local udp：在家暂停着照实说（出门在外自动再打开），不说系统服务没在运行" 'printf "%s" "$out" | grep -q "在家暂停着：路由器已经让这台 Mac 的 UDP 经节点出去，本机 UDP 走节点（US-A）先停着" && ! printf "%s" "$out" | grep -q "却没在运行"'
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在家暂停着再启动（WebRTC 正常）：不打开、不再说" '[ $rc -eq 3 ] && [ ! -e "$UF" ] && [ -e "$H/.cca/udp/home" ] && ! printf "%s" "$out" | grep -q "本机 UDP"'
+mkdir -p "$T/geo"
+printf '{"country": "China", "region": "", "city": "", "isp": "Example CN", "country_code": "cn"}' > "$T/geo/198.51.100.21.json"
+rm -f "$H/.cca/leak.json"   # 归属地按网段缓存 7 天（leak.json）：换了假的归属地要清掉，不然还是上次查到的美国
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在家暂停着、WebRTC 检测却看到中国大陆的地址（路由器不再让 UDP 出大陆）：本机 UDP 走节点重新打开" '[ $rc -eq 3 ] && [ -f "$UF" ] && [ ! -e "$H/.cca/udp/home" ] && uup && printf "%s" "$out" | grep -q "本机 UDP 走节点（US-A）重新打开"'
+out=$(run cca @alice --version 2>&1); rc=$?
+ok "在家、绑定物理网卡看到的是中国大陆的地址（路由器不管 UDP）：开着的不关" '[ $rc -eq 3 ] && [ -f "$UF" ] && [ ! -e "$H/.cca/udp/home" ] && ! printf "%s" "$out" | grep -q "先停着"'
+rm -f "$T/geo/198.51.100.21.json" "$H/.cca/leak.json"
+out=$(run cca check alice 2>&1)
+ok "在家 cca check（App 定时检测出口）同样暂停" '[ ! -e "$UF" ] && [ -e "$H/.cca/udp/home" ] && udown && printf "%s" "$out" | grep -q "本机 UDP 走节点先停着"'
+touch "$T/away"
+out=$(run cca check alice 2>&1)
+ok "出门在外检测出口（cca check）：在家暂停过的自动再打开，说一声" '[ -f "$UF" ] && [ ! -e "$H/.cca/udp/home" ] && uup && printf "%s" "$out" | grep -q "出门在外：本机 UDP 重新经节点 US-A 出去"'
+ok "_gui state：又开着、在运行（paused 是 false）" 'ustate "{\"node\": \"US-A\", \"state\": \"ok\", \"installed\": True, \"running\": True, \"other_vpn\": None, \"paused\": False}"'
+rm -f "$T/netstat.txt"; rmdir "$T/geo" 2>/dev/null
 out=$(ru cca local off 2>&1 </dev/null); rc=$?
 ok "cca local off（不再用内置代理）：本机 UDP 走节点一起关掉（开关文件删掉，root 的内核停下），系统服务留着" '[ $rc -eq 0 ] && udown && [ ! -e "$UF" ] && printf "%s" "$out" | grep -q "本机 UDP 走节点也关掉了" && cfgok "\"udp\" not in c.get(\"local\", {})" && [ -f "$UR/local.cca.udp.plist" ]'
 n=$(admins)

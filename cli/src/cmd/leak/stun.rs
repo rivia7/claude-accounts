@@ -117,9 +117,10 @@ fn first_addr(host: &str, port: i64, family: libc::c_int) -> Option<(libc::c_int
     }
 }
 
-/// 本机直连发 STUN Binding 请求；错误、超时、没有这种地址都返回空，不能当成确认没有泄露。
+/// 本机直连发 STUN Binding 请求；错误、超时、没有这种地址都返回空，不能当成确认没有泄露。iface：绑定这块网卡发（macOS 的
+/// IP_BOUND_IF / IPV6_BOUND_IF：照这块网卡自己的路由走，绕开 TUN 的路由；别的系统、认不出的网卡都是空的）。
 /// Err：原来这个线程会结束在没人接的异常上（主机名编不了码、建不了套接字）——结果一样是没有，只是 stderr 上多一段话
-fn stun_probe(host: &str, port: Option<i64>, family: libc::c_int, timeout: f64) -> Result<String, String> {
+fn stun_probe(host: &str, port: Option<i64>, family: libc::c_int, timeout: f64, iface: Option<&str>) -> Result<String, String> {
     if let Some(why) = idna_problem(host) {
         return Err(format!("UnicodeEncodeError: 'idna' codec can't encode {host:?}: {why}"));
     }
@@ -153,6 +154,11 @@ fn stun_probe(host: &str, port: Option<i64>, family: libc::c_int, timeout: f64) 
         libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         UdpSocket::from_raw_fd(fd)
     };
+    if let Some(name) = iface {
+        if !bind_iface(fd, af, name) {
+            return Ok(String::new());
+        }
+    }
     // connect 过的 UDP 套接字：端口不通时马上报错，不用干等
     // SAFETY: addr 里是 getaddrinfo 给的地址，addr_len 是它的长度
     if unsafe { libc::connect(fd, (&raw const addr).cast::<libc::sockaddr>(), addr_len) } != 0 {
@@ -184,8 +190,37 @@ fn stun_probe(host: &str, port: Option<i64>, family: libc::c_int, timeout: f64) 
     Ok(String::new())
 }
 
+/// 套接字只从这块网卡发（connect 之前设）：macOS 的 IP_BOUND_IF / IPV6_BOUND_IF。网卡认不出、设不上、别的系统是 false
+fn bind_iface(fd: libc::c_int, af: libc::c_int, name: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(c) = CString::new(name) else {
+            return false;
+        };
+        // SAFETY: c 是以 0 结尾的网卡名；if_nametoindex 只是查一下
+        let idx = unsafe { libc::if_nametoindex(c.as_ptr()) } as libc::c_int;
+        let (level, opt) =
+            if af == libc::AF_INET6 { (libc::IPPROTO_IPV6, libc::IPV6_BOUND_IF) } else { (libc::IPPROTO_IP, libc::IP_BOUND_IF) };
+        // SAFETY: fd 是调用方刚建的套接字，选项的值是一个 int（网卡的编号）
+        idx != 0
+            && unsafe {
+                libc::setsockopt(fd, level, opt, (&raw const idx).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t)
+            } == 0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (fd, af, name);
+        false
+    }
+}
+
 /// 本机 UDP 的出口（非浏览器实测）：同时问几个 STUN 服务器，IPv4、IPv6 都试；空结果表示没测成。CCA_STUN 换服务器（测试用）
 pub fn stun_ips(timeout: f64) -> Vec<String> {
+    stun_ips_on(timeout, None)
+}
+
+/// `stun_ips`，iface 给了时套接字绑定这块网卡（见 `stun_probe`）
+pub fn stun_ips_on(timeout: f64, iface: Option<&str>) -> Vec<String> {
     let env = env_or_empty("CCA_STUN");
     // 端口放不进 C 的 long 时，原来是线程里没人接的 OverflowError：留成 None 带进线程
     let servers: Vec<(String, Option<i64>)> = if env.is_empty() {
@@ -200,8 +235,8 @@ pub fn stun_ips(timeout: f64) -> Vec<String> {
     let (tx, rx) = mpsc::channel::<String>();
     for (host, port) in &servers {
         for family in [libc::AF_INET, libc::AF_INET6] {
-            let (host, port, tx) = (host.clone(), *port, tx.clone());
-            std::thread::spawn(move || match stun_probe(&host, port, family, timeout) {
+            let (host, port, tx, iface) = (host.clone(), *port, tx.clone(), iface.map(str::to_string));
+            std::thread::spawn(move || match stun_probe(&host, port, family, timeout, iface.as_deref()) {
                 Ok(ip) => {
                     let _ = tx.send(ip);
                 }
@@ -447,8 +482,8 @@ mod tests {
         assert_eq!(idna_problem(".a"), Some("label empty"));
         assert_eq!(idna_problem(&"x".repeat(63)), None);
         assert_eq!(idna_problem(&format!("a.{}", "x".repeat(64))), Some("label too long"));
-        assert!(stun_probe("a..b", Some(9), libc::AF_INET, 0.05).is_err());
-        assert!(stun_probe("127.0.0.1", None, libc::AF_INET, 0.05).is_err());
+        assert!(stun_probe("a..b", Some(9), libc::AF_INET, 0.05, None).is_err());
+        assert!(stun_probe("127.0.0.1", None, libc::AF_INET, 0.05, None).is_err());
     }
 
     /// 只在本机回环上的假 STUN 服务器：收到一个请求就把 replies 里的几个回答依次发回去。返回它的端口和收到的请求；
@@ -486,11 +521,11 @@ mod tests {
     fn probe_over_loopback() {
         // 请求的样子：Binding 请求、长度 0、魔数、12 个字节的事务号
         let (port, seen) = responder("127.0.0.1:0", |q| vec![answer(q, &SEEN)]).unwrap();
-        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0).unwrap(), "198.51.100.77");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0, None).unwrap(), "198.51.100.77");
         let q = seen.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!((q.len(), &q[..8]), (20, &from_hex("000100002112a442").unwrap()[..]));
         // 每次的事务号都不一样
-        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0).unwrap(), "198.51.100.77");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0, None).unwrap(), "198.51.100.77");
         assert_ne!(seen.recv_timeout(Duration::from_secs(2)).unwrap()[8..], q[8..]);
         // 先来几个不算数的（事务号对不上、不是 STUN、出错的响应），接着等，等到对的那个
         let (port, _seen) = responder("127.0.0.1:0", |q| {
@@ -499,7 +534,21 @@ mod tests {
             vec![answer(&[0u8; 20], &[192, 0, 2, 9]), b"junk".to_vec(), error, answer(q, &SEEN)]
         })
         .unwrap();
-        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0).unwrap(), "198.51.100.77");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0, None).unwrap(), "198.51.100.77");
+    }
+
+    #[test]
+    fn probe_bound_to_an_interface() {
+        // 绑定网卡发（在家时绕开本机 UDP 走节点的 TUN，看路由器那条路）：绑在 lo0 上照样问得到本机的服务器；认不出的网卡、
+        // 网卡名里有 0 字节时一个都不发（结果是空的，不退回不绑定的套接字）
+        let (port, seen) = responder("127.0.0.1:0", |q| vec![answer(q, &SEEN)]).unwrap();
+        if cfg!(target_os = "macos") {
+            assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 1.0, Some("lo0")).unwrap(), "198.51.100.77");
+            assert!(seen.recv_timeout(Duration::from_secs(2)).is_ok());
+        }
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 0.2, Some("cca-no-such0")).unwrap(), "");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 0.2, Some("lo\0")).unwrap(), "");
+        assert!(seen.recv_timeout(Duration::from_millis(300)).is_err());
     }
 
     #[test]
@@ -510,16 +559,16 @@ mod tests {
         let Some((port, seen)) = responder("[::1]:0", move |q| vec![answer(q, &v6.octets())]) else {
             return;
         };
-        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET6, 1.0).unwrap(), "2001:db8:85a3::8a2e:370:7334");
+        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET6, 1.0, None).unwrap(), "2001:db8:85a3::8a2e:370:7334");
         let q = seen.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!((q.len(), &q[..8]), (20, &from_hex("000100002112a442").unwrap()[..]));
         // IPv6 的服务器看到的也可能是个 IPv4 地址（照回答里写的）
         let (port, _seen) = responder("[::1]:0", |q| vec![answer(q, &SEEN)]).unwrap();
-        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET6, 1.0).unwrap(), "198.51.100.77");
+        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET6, 1.0, None).unwrap(), "198.51.100.77");
         // 没人回答、按 IPv4 解析一个 IPv6 地址：空的
         let (port, _seen) = responder("[::1]:0", |_| Vec::new()).unwrap();
-        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET6, 0.2).unwrap(), "");
-        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET, 0.2).unwrap(), "");
+        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET6, 0.2, None).unwrap(), "");
+        assert_eq!(stun_probe("::1", Some(port), libc::AF_INET, 0.2, None).unwrap(), "");
     }
 
     #[test]
@@ -527,7 +576,7 @@ mod tests {
         // 没人回答：等到超时，空的（不能当成没有泄露）
         let (port, _seen) = responder("127.0.0.1:0", |_| Vec::new()).unwrap();
         let t0 = time();
-        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 0.2).unwrap(), "");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 0.2, None).unwrap(), "");
         assert!((0.15..1.5).contains(&(time() - t0)));
         // 只回一个出错的响应：也是等到超时
         let (port, _seen) = responder("127.0.0.1:0", |q| {
@@ -536,15 +585,15 @@ mod tests {
             vec![r]
         })
         .unwrap();
-        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 0.2).unwrap(), "");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET, 0.2, None).unwrap(), "");
         // IPv4 地址按 IPv6 解析：macOS 给的是 ::ffff: 映射的地址（不算真的 IPv6），别的系统直接解析不了，都是空的，也不去问
-        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET6, 0.2).unwrap(), "");
+        assert_eq!(stun_probe("127.0.0.1", Some(port), libc::AF_INET6, 0.2, None).unwrap(), "");
         // 端口没人听：connect 过的套接字马上知道，不用等到超时
         let t0 = time();
-        assert_eq!(stun_probe("127.0.0.1", Some(9), libc::AF_INET, 3.0).unwrap(), "");
+        assert_eq!(stun_probe("127.0.0.1", Some(9), libc::AF_INET, 3.0, None).unwrap(), "");
         assert!(time() - t0 < 2.5);
         // 解析不出这种地址（IPv6 的地址按 IPv4 解析：不用查 DNS 就知道不行）、端口不像话
-        assert_eq!(stun_probe("::1", Some(9), libc::AF_INET, 0.2).unwrap(), "");
-        assert_eq!(stun_probe("127.0.0.1", Some(-1), libc::AF_INET, 0.2).unwrap(), "");
+        assert_eq!(stun_probe("::1", Some(9), libc::AF_INET, 0.2, None).unwrap(), "");
+        assert_eq!(stun_probe("127.0.0.1", Some(-1), libc::AF_INET, 0.2, None).unwrap(), "");
     }
 }

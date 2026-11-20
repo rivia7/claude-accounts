@@ -265,22 +265,31 @@ class LocalUdp(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == 'darwin', '本机 UDP 走节点只在 macOS 上有')
     def test_view_and_running(self):
-        self.assertEqual(self.udp_view([]), {'node': None, 'state': 'off', 'installed': False, 'running': False, 'other_vpn': None})
+        self.assertEqual(self.udp_view([]), {'node': None, 'state': 'off', 'installed': False, 'running': False, 'other_vpn': None, 'paused': False})
         self.run_cmd('local-set', 'udp', 'US-A')
         self.install('US-A')
         root = self.udp_root()
         procs = [(10, '%s/mihomo -d %s -f %s/config.yaml' % (root, root, root))]
-        self.assertEqual(self.udp_view(procs), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': True, 'other_vpn': None})
+        self.assertEqual(self.udp_view(procs), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': True, 'other_vpn': None, 'paused': False})
         # 在不在跑只认命令行里「root 那边的目录/mihomo -d 」这一段
         self.assertTrue(self.udp_view([(11, '/bin/bash %s/mihomo -d x' % root)])['running'])
         self.assertFalse(self.udp_view([(12, '/usr/bin/vi %s/mihomo' % root)])['running'])
         # 启动脚本给别的 VPN 让开了：other-vpn 里的网卡名，启动脚本在跑时才算；只认网卡名
         (Path(root) / 'other-vpn').write_text('utun5\n')
         script = [(13, '/bin/sh %s/cca-udp' % root)]
-        self.assertEqual(self.udp_view(script), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': False, 'other_vpn': 'utun5'})
+        self.assertEqual(self.udp_view(script), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': False, 'other_vpn': 'utun5', 'paused': False})
         self.assertIsNone(self.udp_view(procs)['other_vpn'])
         (Path(root) / 'other-vpn').write_text('utun5; rm -rf /\n')
         self.assertIsNone(self.udp_view(script)['other_vpn'])
+        # 在家暂停着：开关文件不在、留着在家暂停的记号（~/.cca/udp/home），而且装着的就是设的这一份；开关文件在、没设、旧了都不算
+        (self.cca / 'udp').mkdir(exist_ok=True)
+        (self.cca / 'udp' / 'home').write_text('')
+        self.assertEqual(self.udp_view([]), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': False, 'other_vpn': None, 'paused': True})
+        (self.cca / 'udp' / 'on').write_text('')
+        self.assertFalse(self.udp_view([])['paused'])
+        (self.cca / 'udp' / 'on').unlink()
+        self.run_cmd('local-set', 'udp', '')
+        self.assertEqual(self.udp_view([]), {'node': None, 'state': 'off', 'installed': True, 'running': False, 'other_vpn': None, 'paused': False})
 
     @unittest.skipUnless(sys.platform == 'darwin', '本机 UDP 走节点只在 macOS 上有')
     def test_env_and_leak_hint(self):
