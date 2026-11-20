@@ -325,7 +325,8 @@ struct OffScan {
 }
 
 fn policy_off_scan(c: &Dict) -> OffScan {
-    use super::presence::{app_proc_re, presence_mapped};
+    use super::hub::mapped;
+    use super::presence::app_proc_re;
     use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
     let (mut park, mut busy, mut lost) = (Vec::new(), Vec::new(), Vec::new());
     let fill_only = super::corenet::fill_only_nodes(c);
@@ -336,7 +337,7 @@ fn policy_off_scan(c: &Dict) -> OffScan {
         let _using = crate::core::tool::Using::tool(tool);
         let pm = policy_raw(tool);
         for (k, v) in table.items() {
-            if !presence_mapped(&pm, &k, &v) {
+            if !mapped(&pm, &k, &v) {
                 let n = node_of(&v);
                 if fill_only.iter().any(|f| **f == *n) {
                     lost.push((tool.label, format!("{}：{}", label_of(&k), n)));

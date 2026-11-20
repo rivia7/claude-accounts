@@ -74,6 +74,7 @@
 - 辅助程序里的常量 ↔ tests/ 下把它当黑盒测的那几份里写死的同一个值：`UDP_HELPER`（`cli/src/cmd/corenet/udp.rs`）↔ `tests/local_udp.py`，`LEAK_FAIL_TTL`（`cli/src/cmd/leak.rs`）↔ `tests/isolation_leaks.py`
 - App 的接口：PROTOCOL.md ↔ Swift 模型 ↔ regress 的 10g；`router_sh` 的 `status` 输出 ↔ `cmd_gui_live` 的 `GUI_SLOT_RE`（regress 守着）
 - `VERSION` ↔ `WhatsNew.swift` 最前面的 `ReleaseNote`（`macos/test.sh` 查用词和版本先后）
+- 自己的同步服务器的加入链接、`check`、入伙口令的哈希：`server/README.md`「自己的同步服务器」↔ `server/cca-presence.py`（`--mode own`）↔ `cli/src/cmd/hub.rs`（`link_encode` / `link_decode`、`hub_check`）↔ `tests/spec_wire.py`（照文档独立实现的）；自己的那台的状态文件名（`HubKind::file` 加 `own.`）↔ App 的 `CcaWatcher` 盯的文件 ↔ `cca restore` 的 `--exclude`（`cost/own.remote.json`）
 - 远程会话的中转（线上的格式）：`server/README.md`「远程会话的中转」↔ `server/cca-presence.py` ↔ `cli/src/cmd/remote/crypto.rs`、`relay.rs` ↔ `tests/spec_wire.py`（照文档独立实现的；`crypto.rs` 测试里的向量是它算的，改了格式先改它再重新生成）；`relay.rs` 的 `RELAY_OLD` ↔ `tests/remote_relay.py` 里写死的同一句；同意项 `remote_pair`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`
 - 远程会话：`run_account` 的 `HOSTCMD`（`remote_prepare`）↔ 辅助程序 `remote-host` 的参数；`local.rs` 新加的接入方 → 宿主的帧 ↔ `link.rs` 的 `bridge` 放不放行（只该这台机器上做的事不放行，像 `END`）↔ `tests/remote_relay.py` 里发这一种帧的那一句；同意项 `remote_end`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`；客户端新加的终端查询序列 ↔ `cli/src/cmd/remote/vt.rs` 的 `csi_class` / `osc_class` / `str_class`（漏了的话几个终端同时接着时回答会变成按键）；`cca remote attach` 的退出码、断开的按键 ↔ docs/dev/remote.md ↔ PROTOCOL 9.3 ↔ App 的 `Texts.remoteEnded`；`remote-list --json`（`manage.rs` 的 `list_doc`）↔ PROTOCOL 9.1 ↔ Swift 的 `Protocol/Remote.swift` ↔ `macos/Tests/Fixtures/remote_list.json`
 - SwiftTerm（`macos/Vendor/SwiftTerm/`）：换版本时源码、`SHA256SUMS`、README 里的版本和提交号一起换；App 里只有 `TerminalSurface.swift` 用它；不要的功能（图形协议）：`macos/build.sh` 换掉的那两行（`ST_KITTY`、`ST_SIXEL`）↔ `macos/tools/swiftterm-check` ↔ `TerminalSurface.swift` ↔ PROTOCOL 9.3
@@ -90,6 +91,7 @@
 - `usage.md` — 查用量和用量表格、5 小时 / 按模型 / 每周的额度、周结算提醒、Codex 重置额度、登录失效、套餐档位、命令行会话登记、API 额度的入口
 - `cost.md` — 折合金额的统计和同步
 - `presence.md` — 设备统计的服务器（`./policy.sh presence`）、共享记下的 API key
+- `hub.md` — 自己的同步服务器（`cca hub`，服务器的 `--mode own`）：账号走哪台服务器（`route`）、加入链接、设备标识（`device_id`、折合金额的 `dv`）、两台服务器分开的状态文件（`own.` 开头）、移除和退出；一键部署、App 的卡片这些后面几个阶段的计划
 - `policy.md` — 维护者的映射：共享的开关（默认关着，`cca policy on|off`、「共享与同步」页）、拉取、合并进账号表、锁定请求、deploy key（`./policy.sh`）
 - `fill.md` — 维护者的参考节点，写进路由器的配置文件
 - `router.md` — 路由器端：OpenClash / ShellCrash、几台设备共用一个路由器、节点改名

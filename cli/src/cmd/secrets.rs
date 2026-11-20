@@ -419,7 +419,7 @@ pub fn cmd_secret_set(args: &[String]) -> R<()> {
     let v = table.at(key);
     let (host, is_ref) = kc_slot(&v);
     let at = time::time();
-    let mut ed = keyshare_edit(key, at);
+    let mut ed = keyshare_edit(key, &v, at);
     let put = (|| -> R<bool> {
         let extra = is_ref.then(|| dict! { "at" => at });
         let ok = kc_put(&acct_id(key, t()), &host, s, is_ref, extra.as_ref())?;
@@ -457,7 +457,7 @@ pub fn cmd_key_forget(args: &[String]) -> R<()> {
     let key = args[0].as_str();
     let table = table_load(t())?;
     need(&table, key)?;
-    let mut ed = keyshare_edit(key, time::time());
+    let mut ed = keyshare_edit(key, &table.at(key), time::time());
     let del = kc_del(&acct_id(key, t()), true);
     if del.is_ok() {
         ed.mark(None);

@@ -2,10 +2,10 @@
 //!
 //! 记下、删掉 key 时用的（secrets 模块调）：`keyshare_on`、`keyshare_edit`（keys.json 的读改写）、`keyshare_kick`；
 //! 密文的格式（`blob_*`，折合金额也用）；同步本身（`keyshare_sync`、`keyshare_round`：cca _key-sync 和上报进程顺带做）。
+//! 每个账号经它走的那台同步服务器（hub.rs 的 `route`）同步；两台的 keys.json、锁、盐各是各的（`HubKind::file`）。
 
-use super::presence::{
-    presence_aid, presence_load, presence_mapped, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR,
-};
+use super::hub::{hub_of, hubs, Hub, HubKind};
+use super::presence::{is_own, presence_aid, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
 use super::secrets::{
     kc_del, kc_hints, kc_put, kc_read, kc_svc, kc_unbook, keyfile_store, keystore_name, py_set, security, SECRETS_DIR,
 };
@@ -29,7 +29,7 @@ use std::os::unix::io::AsRawFd;
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[Cmd::all("key-sync", cmd_key_sync)];
 
-/// PRESENCE_DIR 里：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
+/// PRESENCE_DIR 里（自己的服务器的是 own.keys.json）：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
 /// "synced": 上次同步, "retry": 旧的服务器什么时候再试, "error": 没同步成的原因}
 pub const KEYSHARE_FILE: &str = "keys.json";
 /// 后台最多隔这么久同步一次（在这台设备上记下、删掉时马上）
@@ -40,12 +40,9 @@ pub fn is_num(v: &V) -> bool {
     matches!(v, V::Int(_) | V::Big(_) | V::Float(_))
 }
 
-/// 这个账号（当前工具的）记下备查的 key 会不会同步：映射里的 Claude、Codex 官方账号，这台设备开着设备统计
+/// 这个账号（当前工具的）记下备查的 key 会不会同步：Claude、Codex 的官方账号，它走的那台同步服务器（hub.rs 的 route）这台设备用得了
 pub fn keyshare_on(key: &str, v: &V) -> R<bool> {
-    Ok(matches!(t().kind, Kind::Claude | Kind::Codex)
-        && !is_api(v)
-        && presence_mapped(&policy_raw(t()), key, v)
-        && presence_load()?.1.is_some())
+    Ok(matches!(t().kind, Kind::Claude | Kind::Codex) && !is_api(v) && hub_of(&hubs()?, &policy_raw(t()), key, v).is_some())
 }
 
 /// key 的摘要（没有 key、删掉了是 None）
@@ -72,50 +69,56 @@ pub fn presence_dir() -> std::io::Result<()> {
     Ok(())
 }
 
-/// keys.json 的读改写（keys.lock：在这台设备上记下、删掉 key 和同步时照服务器上的改 key 互斥，拿着的时间很短）。
+/// 一台服务器的 keys.json 的读改写（keys.lock：在这台设备上记下、删掉 key 和同步时照服务器上的改 key 互斥，拿着的时间很短）。
 /// `enter` 拿锁、读出来；改完 `exit(true)` 写回去（出了错的 `exit(false)` 不写）；锁在这个值没了的时候放开
 pub struct KeyshareFile {
     _lock: std::fs::File,
+    kind: HubKind,
     pub j: Dict,
 }
 
 impl KeyshareFile {
-    pub fn enter() -> R<KeyshareFile> {
+    pub fn enter(kind: HubKind) -> R<KeyshareFile> {
         presence_dir()?;
-        let lock = std::fs::OpenOptions::new().append(true).create(true).open(path::join(&PRESENCE_DIR, "keys.lock"))?;
+        let lock =
+            std::fs::OpenOptions::new().append(true).create(true).open(path::join(&PRESENCE_DIR, &kind.file("keys.lock")))?;
         // SAFETY: lock 开着，fd 有效
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(std::io::Error::last_os_error().into());
         }
-        let j = load_quiet(&path::join(&PRESENCE_DIR, KEYSHARE_FILE)).and_then(|j| j.as_dict());
+        let j = load_quiet(&path::join(&PRESENCE_DIR, &kind.file(KEYSHARE_FILE))).and_then(|j| j.as_dict());
         let j = j.filter(|j| j.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) && j.dict("acc").is_some());
-        Ok(KeyshareFile { _lock: lock, j: j.unwrap_or_else(|| dict! { "v" => 1, "acc" => Dict::new() }) })
+        Ok(KeyshareFile { _lock: lock, kind, j: j.unwrap_or_else(|| dict! { "v" => 1, "acc" => Dict::new() }) })
     }
 
     pub fn exit(self, ok: bool) -> R<()> {
         if ok {
-            save_json(&path::join(&PRESENCE_DIR, KEYSHARE_FILE), &V::Dict(self.j.clone()), Some(0o600), true)?;
+            save_json(&path::join(&PRESENCE_DIR, &self.kind.file(KEYSHARE_FILE)), &V::Dict(self.j.clone()), Some(0o600), true)?;
         }
         Ok(())
     }
 }
 
-/// `with keyshare_edit(键, 时间) as ed`：在这台设备上记下（换掉）、删掉这个账号（当前工具的）记下备查的 key，改完
-/// `ed.mark(key 或 None)` 记下时间（同步时按它比新旧）。拿着 keys.lock：同步不会在这中间拿服务器上旧的盖掉刚记下的。
-/// 没开设备统计时不记（以后开了，记下的按 key_hints 里的时间算，删掉的不同步）；出错不影响记下、删掉本身
+/// `with keyshare_edit(键, 值, 时间) as ed`：在这台设备上记下（换掉）、删掉这个账号（当前工具的）记下备查的 key，改完
+/// `ed.mark(key 或 None)` 记下时间（同步时按它比新旧），记在它走的那台服务器的 keys.json 里。哪台都不走（不在映射里、这台设备
+/// 没加入自己的同步服务器，第三方 API 账号）时照旧记进维护者的（这台设备用得了它时，和以前一样）：以后这个账号进了映射，
+/// 同步时按记下的时间比新旧，删掉的也同步。拿着 keys.lock：同步不会在这中间拿服务器上旧的盖掉刚记下的。一台都用不了时不记
+/// （以后用得了了，记下的按 key_hints 里的时间算，删掉的不同步）；出错不影响记下、删掉本身
 pub struct KeyshareEdit {
     key: String,
     at: f64,
     f: Option<KeyshareFile>,
 }
 
-/// `keyshare_edit(key, at).__enter__()`
-pub fn keyshare_edit(key: &str, at: f64) -> KeyshareEdit {
+/// `keyshare_edit(key, v, at).__enter__()`
+pub fn keyshare_edit(key: &str, v: &V, at: f64) -> KeyshareEdit {
     let open = || -> R<Option<KeyshareFile>> {
-        if presence_load()?.1.is_some() {
-            return Ok(Some(KeyshareFile::enter()?));
+        let hs = hubs()?;
+        let hub = hub_of(&hs, &policy_raw(t()), key, v).or_else(|| hs.iter().find(|h| h.kind == HubKind::Maintainer));
+        match hub {
+            Some(h) => Ok(Some(KeyshareFile::enter(h.kind)?)),
+            None => Ok(None),
         }
-        Ok(None)
     };
     let f = match open() {
         Ok(f) => f,
@@ -146,15 +149,16 @@ impl KeyshareEdit {
     }
 }
 
-/// 在后台跑一次 cca _key-sync（同步记下备查的 API key）；force 以外还不到时候就不起进程。静默
+/// 在后台跑一次 cca _key-sync（同步记下备查的 API key）；force 以外哪台服务器都还不到时候就不起进程。静默
 pub fn keyshare_kick(force: bool) {
     let kick = || -> R<()> {
-        if presence_load()?.1.is_none() {
-            return Ok(());
-        }
-        let j = load_quiet(&path::join(&PRESENCE_DIR, KEYSHARE_FILE)).and_then(|j| j.as_dict()).unwrap_or_default();
-        let last = |k: &str| j.get(k).filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
-        if !force && (time() - last("synced") < KEYSHARE_EVERY || time() < last("retry")) {
+        let hubs = hubs()?;
+        let due = |h: &Hub| {
+            let j = load_quiet(&path::join(&PRESENCE_DIR, &h.file(KEYSHARE_FILE))).and_then(|j| j.as_dict()).unwrap_or_default();
+            let last = |k: &str| j.get(k).filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
+            !(time() - last("synced") < KEYSHARE_EVERY || time() < last("retry"))
+        };
+        if hubs.is_empty() || !(force || hubs.iter().any(due)) {
             return Ok(());
         }
         if force {
@@ -359,7 +363,7 @@ pub fn keyshare_local(key: &str, e: Option<&V>, booked: bool, hint: Option<&V>) 
 }
 
 fn keyshare_note(code: i64, cfg: &Dict, j: &Dict) -> R<String> {
-    Ok(if code == 404 {
+    Ok(if code == 404 && !is_own(cfg) {
         KEYSHARE_OLD.to_string()
     } else if code != 200 {
         presence_why(cfg, code, j)?
@@ -368,13 +372,26 @@ fn keyshare_note(code: i64, cfg: &Dict, j: &Dict) -> R<String> {
     })
 }
 
-/// 同步这台设备上映射里账号记下备查的 API key（见上面这一节的说明）。同时只有一个（keys-sync.lock）：别的正在同步时，force 的
-/// （记下、删掉之后，--show 现取）等它跑完再同步（不然这次的改动要等到下一轮），别的就走；force 以外最多 KEYSHARE_EVERY 一次；
-/// timeout 是每个请求最多等多久。返回没同步成的原因：成了是空的，没开设备统计、还不到时候、等不到是 None
+/// 同步这台设备上记下备查的 API key：用得了的每一台同步服务器各一轮（见 keyshare_hub）。返回没同步成的原因：都成了是空的，
+/// 有一台没成是它的原因，一台都没同步（没有服务器、还不到时候、等不到）是 None
 pub fn keyshare_sync(force: bool, timeout: i64) -> R<Option<String>> {
-    let Some(cfg) = presence_load()?.1 else { return Ok(None) };
+    let mut out: Option<String> = None;
+    for hub in hubs()? {
+        if let Some(err) = keyshare_hub(&hub, force, timeout)? {
+            if out.as_ref().is_none_or(|o| o.is_empty()) {
+                out = Some(err);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 和一台服务器同步走它的那些账号记下备查的 API key（见上面这一节的说明）。同时只有一个（这台的 keys-sync.lock）：别的正在同步时，
+/// force 的（记下、删掉之后，--show 现取）等它跑完再同步（不然这次的改动要等到下一轮），别的就走；force 以外最多 KEYSHARE_EVERY
+/// 一次；timeout 是每个请求最多等多久。返回没同步成的原因：成了是空的，还不到时候、等不到是 None
+fn keyshare_hub(hub: &Hub, force: bool, timeout: i64) -> R<Option<String>> {
     presence_dir()?;
-    let run = std::fs::OpenOptions::new().append(true).create(true).open(path::join(&PRESENCE_DIR, "keys-sync.lock"))?;
+    let run = std::fs::OpenOptions::new().append(true).create(true).open(path::join(&PRESENCE_DIR, &hub.file("keys-sync.lock")))?;
     // 正在跑的那一轮最多两个请求
     let until = monotonic() + if force { (2 * timeout + 5) as f64 } else { 0.0 };
     // SAFETY: run 开着，fd 有效
@@ -384,7 +401,7 @@ pub fn keyshare_sync(force: bool, timeout: i64) -> R<Option<String>> {
         }
         signal::sleep(0.2)?;
     }
-    let f = KeyshareFile::enter()?;
+    let f = KeyshareFile::enter(hub.kind)?;
     let now = time();
     let num = |j: &Dict, k: &str| j.get(k).filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
     if !force && (now - num(&f.j, "synced") < KEYSHARE_EVERY || now < num(&f.j, "retry")) {
@@ -400,8 +417,8 @@ pub fn keyshare_sync(force: bool, timeout: i64) -> R<Option<String>> {
         }
     }
     f.exit(true)?;
-    let err = keyshare_round(&cfg, &acc, timeout)?;
-    let f = KeyshareFile::enter()?;
+    let err = keyshare_round(hub, &acc, timeout)?;
+    let f = KeyshareFile::enter(hub.kind)?;
     if err.is_empty() {
         f.j.pop("error");
     } else {
@@ -429,9 +446,9 @@ struct Item {
     booked: bool,
 }
 
-/// `with KeyshareFile() as j:`——body 正常做完（包括里面的 continue）就写回 keys.json，出了错的不写
-fn with_keys<T>(body: impl FnOnce(&Dict) -> R<T>) -> R<T> {
-    let f = KeyshareFile::enter()?;
+/// `with KeyshareFile() as j:`——body 正常做完（包括里面的 continue）就写回这台服务器的 keys.json，出了错的不写
+fn with_keys<T>(kind: HubKind, body: impl FnOnce(&Dict) -> R<T>) -> R<T> {
+    let f = KeyshareFile::enter(kind)?;
     let r = body(&f.j);
     f.exit(r.is_ok())?;
     r
@@ -448,11 +465,11 @@ fn slot_is(j: &Dict, slot: &str, raw: &Option<V>) -> bool {
     }
 }
 
-/// 同步一轮：问服务器这些账号现在的，比新旧，取回来新的、传上去新的。acc 是开始时 keys.json 里记的：照服务器上的改、
-/// 传上去以后，只有这期间这台设备上没再记下、删掉（keys.json 里这一项没变）才算数，不然下一轮再比。返回没成的原因
-pub fn keyshare_round(cfg: &Dict, acc: &Dict, timeout: i64) -> R<String> {
-    let Some(targets) = presence_targets() else { return Ok("读不了账号表".into()) };
-    let salt = cfg.at("salt").py_str();
+/// 和一台服务器同步一轮：问它走它的那些账号现在的，比新旧，取回来新的、传上去新的。acc 是开始时这台的 keys.json 里记的：照服务器上
+/// 的改、传上去以后，只有这期间这台设备上没再记下、删掉（keys.json 里这一项没变）才算数，不然下一轮再比。返回没成的原因
+pub fn keyshare_round(hub: &Hub, acc: &Dict, timeout: i64) -> R<String> {
+    let Some(targets) = presence_targets(hub.kind) else { return Ok("读不了账号表".into()) };
+    let (cfg, salt) = (&hub.cfg, hub.salt());
     let mut items: Vec<Item> = Vec::new();
     // 各工具 config.json 里记着的：(有 key 的账号目录名, key_hints)
     let mut books: Vec<(&'static str, Vec<V>, Dict)> = Vec::new();
@@ -506,7 +523,7 @@ pub fn keyshare_round(cfg: &Dict, acc: &Dict, timeout: i64) -> R<String> {
             let remote_key = remote.at("key");
             let new = dict! { "at" => remote.at("at"), "sum" => keyshare_sum(remote_key.as_str()) };
             let from = rec.str("name").filter(|n| !n.is_empty() && !matches!(rec.get("me"), Some(V::Bool(true))));
-            let said = with_keys(|j| -> R<Option<String>> {
+            let said = with_keys(hub.kind, |j| -> R<Option<String>> {
                 if !slot_is(j, &x.slot, &x.raw) || !path::isfile(&CFG) {
                     // 这期间在这台设备上又记下、删掉了：下一轮再比（config.json 没了：cca restore 刚删掉 ~/.cca，什么都不写）
                     return Ok(None);
@@ -566,7 +583,7 @@ pub fn keyshare_round(cfg: &Dict, acc: &Dict, timeout: i64) -> R<String> {
         if code != 200 {
             return keyshare_note(code, cfg, &r);
         }
-        with_keys(|j| {
+        with_keys(hub.kind, |j| {
             for (slot, raw, new) in &sent {
                 if slot_is(j, slot, raw) {
                     j.dict("acc").expect("enter 保证了 acc 是字典").set(slot.as_str(), new.clone());
@@ -578,9 +595,9 @@ pub fn keyshare_round(cfg: &Dict, acc: &Dict, timeout: i64) -> R<String> {
     Ok(err)
 }
 
-/// 最近一次没同步成的原因（cca devices、_gui state 显示）；成了、没同步过是 None
-pub fn keyshare_error() -> Option<String> {
-    let e = load_quiet(&path::join(&PRESENCE_DIR, KEYSHARE_FILE))?.as_dict()?.str("error")?;
+/// 最近一次和这台服务器没同步成的原因（cca devices、_gui state 显示）；成了、没同步过是 None
+pub fn keyshare_error(kind: HubKind) -> Option<String> {
+    let e = load_quiet(&path::join(&PRESENCE_DIR, &kind.file(KEYSHARE_FILE)))?.as_dict()?.str("error")?;
     (!e.is_empty()).then(|| e.to_string())
 }
 

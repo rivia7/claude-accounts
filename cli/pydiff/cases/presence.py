@@ -649,6 +649,9 @@ for name, during in [('real-session-exits', exits), ('real-session-stopped', kil
 # 夹具里的“多久以前”在放夹具的那一刻现算：让换出来的时间落在某一分钟的第 30 秒、时长离整分钟差 30 秒，两边先后跑差的那一两秒
 # 不会跨过去（跨零点的那一分钟里跑会差一天，碰上了重跑）
 VIEW_MASK = MASK + [(r'"(generated_epoch|since_epoch|last_active_epoch|last_used_epoch|seen_epoch)": \d+(\.\d+)?', r'"\1": <T>')]
+# 自己的同步服务器（docs/dev/hub.md）以后多的：账号问的是哪台（hub）、各台的名字和设置（hubs）。原来的 Python 没有，去掉再比
+HUB_MASK = [(r',\s*"hub": (?:null|"(?:maintainer|own)")', ''), (r', "hubs": \[(?:\{[^{}]*\}(?:, )?)*\]', '')]
+VIEW_MASK += HUB_MASK
 
 
 def ago_to(secs_back):

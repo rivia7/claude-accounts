@@ -35,6 +35,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
   `cost sync` 全局一次一个。`remote list --json`、`remote allow`、`remote unpair` 40 秒（要问一次维护者的服务器；取消配对被限流时 cca 自己再试两次），
   `remote on|off` 30 秒，`remote end` 40 秒（会话里的程序不理会时 cca 等宿主强行结束它，约 5 秒，再等它收场）。
+  `hub status --json` 15 秒（不联网），`hub devices --json`、`hub remove`、`hub leave` 40 秒（要问一次自己的同步服务器）；`hub join` 是提问会话，不限时（4.13）。
+  `hub join|remove|leave` 全局一次一个（都改这台设备的加入信息）；`hub status --json`、`hub devices --json` 随时可以跑。
 - `app`、`web`、`billing`、`limit-resets`、`mail open`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -44,8 +46,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - App 侧的刷新提示（不读内容，只当作“该重新跑一次 `_gui state`”的信号）：cca 保证这些文件的位置不变——`~/.cca` 下的 `accounts.json`、
   `codex.json`、`agy.json`、`config.json`、`policy/policy.json`、各账号目录里的 `usage.json`、`health.json`、`cli-<数字>.json`（命令行会话的登记，见 2.2 的
   `cli`：出现、消失都要重新读 `state`；只认这个文件名，`*.tmp` 不算），`core/config.yaml`（内置代理的配置，见 7：
-  App 看不见时也要马上重新读 `state`），`cost/local.json`、`cost/remote.json`、`cost/sync.json`（折合金额：这台设备的统计、
-  别的设备同步来的、同步的状态，见 2.2 的 `cost`；`cost/` 里别的文件不算），以及 `bin/cca`（换了就重新 `hello`）；
+  App 看不见时也要马上重新读 `state`），`cost/local.json`、`cost/remote.json`、`cost/sync.json`、`cost/own.remote.json`、`cost/own.sync.json`
+  （折合金额：这台设备的统计、别的设备经维护者的服务器 / 自己的同步服务器同步来的、同步的状态，见 2.2 的 `cost`；`cost/` 里别的文件不算），
+  `hub/hub.json`、`hub/members.json`（加入、退出了自己的同步服务器，上面有几台设备，见 2.2 的 `config.hubs`）、`presence/status.json`、
+  `presence/own.status.json`（设备统计报没报上去，同上），以及 `bin/cca`（换了就重新 `hello`）；
   桌面 App 的 bundle id：Claude App `com.anthropic.claudefordesktop`、ChatGPT App `com.openai.codex`（它们启动、退出时刷新 `app.running`）。
 
 ## 2. 只读的查询：`cca _gui hello | state | live`
@@ -85,6 +89,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `remote`：有远程会话的 App 入口（「远程会话」一页，见 9：`cca remote list --json`、配对、`cca remote attach`）。现在是 1。没有这个字段（旧版 cca）
   或者版本不认识时 App 不显示这一页、不调这些命令（旧版 cca 会把 `remote` 当成启动账号的参数）。
 - `remote_end`：有 `cca remote end <会话的 id>`（结束这台 Mac 上的一个会话，9.2）。没有这个字段（3.5.2-beta.2 及更早）时 App 不给「结束…」。
+- `hub`：有自己的同步服务器（`cca hub …`，4.13；`_gui state` 的 `config.hubs`、账号的 `hub`、折合金额的 `sync.hub`）。现在是 1。
+  没有这个字段（旧版 cca）或者版本不认识时 App 不显示「自己的同步服务器」、不调 `cca hub`（旧版 cca 会把 `hub` 当成启动账号的参数）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
   （旧版 cca 没有 `tools.agy`，当作没启用）。`bin` 是找到的 `claude` / `codex` / `agy`，没装为 null。App 只认识的工具才显示，`tools` 里别的键忽略。
@@ -105,7 +111,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
               "udp": {"node": null, "state": "off", "installed": false, "running": false, "other_vpn": null, "paused": false}},
     "nodes": ["US-A", "US-B", "US-C", "US-D"],
     "min_trust": 50, "leak_check": true, "update": "auto",
-    "policy": {"configured": true, "repo": "example/cca-policy", "next_check_epoch": 1794045600.0, "state": "on", "accounts": 2, "parked": 0}
+    "policy": {"configured": true, "repo": "example/cca-policy", "next_check_epoch": 1794045600.0, "state": "on", "accounts": 2, "parked": 0},
+    "hubs": [
+      {"kind": "maintainer", "url": "https://presence.example.com:18443", "host": "presence.example.com:18443", "state": "ok", "error": null,
+       "checked_epoch": 1794041000.0, "accounts": 2, "name": "studio-mac", "members": null, "joined_epoch": null, "can_invite": false},
+      {"kind": "own", "url": "https://hub.example.com:18443", "host": "hub.example.com:18443", "state": "ok", "error": null,
+       "checked_epoch": 1794041500.0, "accounts": 1, "name": "studio-mac", "members": 3, "joined_epoch": 1793900000.0, "can_invite": true}
+    ]
   },
   "routing": {
     "first_port": 7901, "pool_size": 8,
@@ -150,7 +162,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "kind": "oauth",
   "login": "logged_in", "login_email": "bob@example.com", "plan": "Max", "plan_tier": "advanced",
   "node": "US-B", "port": 7902, "slot": 2, "group": "CCA-2",
-  "pinned": true, "pinned_node": "US-B", "is_last": false,
+  "pinned": true, "pinned_node": "US-B", "is_last": false, "hub": "maintainer",
   "api": null,
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
@@ -178,6 +190,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   第三方 API 账号、认不出的新套餐（这时 `plan` 可能仍有值）。没有这个字段（旧版 cca）当作 `""`。
 - `pinned`：维护者的映射锁定了这个账号的节点（`pinned_node` 是映射要的节点，已按改名换算）；App 里不提供改节点。
 - `is_last`：上次在命令行里用的账号。
+- `hub`：这个账号的设备统计、记下的 API key、折合金额经哪台服务器和别的设备同步（`config.hubs[].kind`）：`maintainer`（维护者的服务器：
+  映射里的官方账号）| `own`（自己的同步服务器：别的官方账号，这台设备加入了时，4.13）| null（不同步：第三方 API 账号、账号表里没写邮箱的，
+  或者该走的那一台这台设备用不了——共享关着、映射里没配置服务器、没加入自己的同步服务器、关掉了设备统计）。App 不认识的值当 null。
+  旧版 cca 没有这个字段：当作 `can.devices` 为真时是 `maintainer`，否则 null。
 - `badge`：和 `~/Applications` 里启动器图标右下角一样的标识（文字 + 颜色），App 用它当头像；API 账号为 null。
 - `app.running` / `app.pid`：这个账号的桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）在不在运行。
 - `cli`：经 cca 启动（`cca @账号`、`cxa @账号`、`aga @账号`、菜单里选的）、还在运行的命令行会话：`sessions` 几个，`running` 等于 `sessions > 0`，
@@ -193,8 +209,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   所以 App 只给入口、不显示数字）：条件和 `web` 一样（Antigravity 没有账单页，总是 false），也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
   `result` 的说明里会讲；`limit-resets` 也一样，网页版（`web`）不动剪贴板。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
   `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
-  `devices` 是账号页有没有「设备」一节（3.4）：共享开着（`config.policy.state` 是 `on`）、映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
-  config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
+  `devices` 是账号页有没有「设备」一节（3.4）：账号经某台服务器同步（`hub` 不是 null）。映射里的官方账号要共享开着（`config.policy.state` 是 `on`）、
+  维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key；别的官方账号要这台设备加入了自己的同步服务器（4.13）；都要 config.json 里
+  没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
   `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
   `cost` 是账号页有没有「折合金额」一节、折合金额页里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
   config.json 里没写 `"cost": false`。没登录的也是 true（照样显示以前记下的）。同样没有对应的 `can_why`；旧版 cca 没有这一项，当作没有。
@@ -207,9 +224,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `hint`：掩码，存的时候 cca 算好的（开头 8 个字符里最后一个 `-` 以前的前缀 + `…` + 最后 4 个字符，例如 `sk-ant-…x7Qa`；短于 24 个字符的 key
   没有掩码，是 `""`，App 画圆点）；`source`：`keychain`（钥匙串里）| `table`（账号表的 `key` 字段里，明文；只有第三方 API 账号有）| `""`（没存）。
   `state` 不读钥匙串，掩码照 config.json 里记的说；**明文只在用户点「显示」「复制」时经 `key --show` 要**。旧版 cca 没有这个字段，当作 null。
-  官方账号记下的那一把会同步给登录了这个账号的其他设备时（4.10），还有：`shared`：会不会同步（映射里的 Claude、ChatGPT 官方账号、这台 Mac 开着
-  设备统计，和 `can.devices` 是同一批账号，Antigravity 除外；不同步的是 false）；`saved_epoch`：什么时候记下的（这台 Mac 记下的，或者别的设备
-  记下、同步来的；不知道是 null）；`from_device`：从哪台设备同步来的（设备统计里的名字；这台 Mac 自己记下的是 null）；`sync_error`：最近一次
+  官方账号记下的那一把会同步给登录了这个账号的其他设备时（4.10），还有：`shared`：会不会同步（经某台服务器同步的 Claude、ChatGPT 官方账号：
+  和 `can.devices` 是同一批账号，Antigravity 除外；不同步的是 false）；`saved_epoch`：什么时候记下的（这台 Mac 记下的，或者别的设备
+  记下、同步来的；不知道是 null）；`from_device`：从哪台设备同步来的（那台服务器上它的名字；这台 Mac 自己记下的是 null）；`sync_error`：最近一次
   没同步成的原因（给人看的话；成了、不同步的是 null）。旧版 cca 没有这几项：当作不同步。
 - `mail`：这个账号的邮箱助手状态（账号页的「邮箱」一节，4.11；只在 `can.mail` 为 true 的账号上有，否则为 null）。只读 config.json、**不碰钥匙串**：
   `configured`：解析得到收登录邮件的 Gmail 了没有（这个账号单独配的覆盖，或默认那个）；`user`：那个 Gmail 地址（没配置为 null）；
@@ -246,8 +263,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   App 只排版、不重算：条的高低、哪一周填灰色、统计的数字都照这里的。
 - `cost`：折合金额（账号页的「折合金额」、侧栏的「折合金额」页）：这个账号用 Claude Code / Codex 干的活，按官方 API 的标价折成美元，
   **不是实际花费**（订阅不按这个收费），只给 `can.cost` 为真的账号。cca 在后台读共享的会话记录（`~/.claude/projects`、`~/.codex/sessions`，
-  只取用量数字），按登录的账号身份、按小时累计，价格表写在 cca 里（`prices_date` 是核实价格的日期）。映射里的官方账号、开着设备统计时，
-  各台设备算的加密后经设备统计的服务器交换（`sync`），这里是所有设备加起来的。还没有任何记录（还没统计过、这个账号没用过）为 null。
+  只取用量数字），按登录的账号身份、按小时累计，价格表写在 cca 里（`prices_date` 是核实价格的日期）。经某台服务器同步的账号（`hub`），
+  各台设备算的加密后经那台服务器交换（`sync`），这里是所有设备加起来的。还没有任何记录（还没统计过、这个账号没用过）为 null。
   `state` 只读：读 cca 已经统计好的，不现读会话记录；要更新就运行 `cca cost sync --json`（3.5）。
 
   ```json
@@ -274,7 +291,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
                 "why": [{"code": "old_claude_code", "last_epoch": 1793923200.0, "claude_code": "2.1.316"}]}}
     ],
     "unpriced_models": ["codex-auto-review"],
-    "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "missing": [{"name": "carol-air", "used_epoch": 1794000000.0}]}
+    "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "hub": "maintainer",
+             "missing": [{"name": "carol-air", "used_epoch": 1794000000.0}]}
   }
   ```
 
@@ -293,9 +311,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     旧版 cca 没有这两项，App 当作没有平均每天、不写），`requests` / `unpriced_requests` 列出的周期加起来。
   - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列（例外：别的设备最近有回复
     认不出账号时，没有这个账号的记录也列出来，数字都是 0，`diag.why` 不空）；只有这台设备时只有一项。
-    `id`：设备统计里的设备指纹，这台设备没开设备统计时是 `"local"`；`name`：设备统计里的名字（维护者给 deploy key 起的别名），
-    这台设备没开时是主机名。`me`：这台设备。`revoked`：维护者撤销了这台设备的 key（数字是撤销前同步来的，照样算进合计；
-    和现在某台设备同名的当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
+    `id`：认同一台机器用的。传了机器标识的设备（加入过自己的同步服务器的：config.json 里的 `device_id`，16 个小写十六进制字符，
+    同一台机器经维护者的服务器、自己的同步服务器传的都带着它）是这个标识，别的（旧版 cca、没加入过的）是它在那台服务器上的设备指纹
+    （`SHA256:…`）；这台设备是自己的 `device_id`，没有时是 `"local"`。App 只拿它在各账号、设备菜单之间认同一台设备，不解释。
+    `name`：那台服务器上的名字（维护者给 deploy key 起的别名、加入自己的同步服务器时起的名字），这台设备没开设备统计时是主机名。
+    `me`：这台设备。`revoked`：这台设备的 key 作废了（维护者撤销了、从自己的同步服务器上移除了；数字是那以前同步来的，照样算进合计；
+    和现在某台设备是同一台机器、或者同名的，当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
     这台设备是最后一次统计的时间），`stale`：超过 36 小时没同步上来（那台设备没开、断网、cca 太旧），之后用的可能还没算进来。
     `used`：那台设备用过这个账号（列出的周期里有请求）；只为诊断列出来的那种是 false（App 的设备菜单看那台设备时不列这个账号）。
     旧版 cca 没有这一项，当作 true。
@@ -310,8 +331,10 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     Code 会话，从来不带账号信息）| `unknown`（别的：登录的不是 cca 里的账号、不是经 cca 启动的……；不认识的值也当它说）；`last_epoch`：最近一次
     （别的设备传来的只到 UTC 的天）；`claude_code`：那时的 Claude Code 版本（没有为 null）。认不出的用量不知道是哪个账号的，所以那台设备用的
     每个账号都带着同一份；App 在那台设备那一行、提示里说“有用量没算进来”和原因（撤销了的设备不说）。
-  - `sync`：设备间同步的状态。`state`：`ok`（同步过，`checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
-    `local_only`（只有这台设备：账号不在维护者的映射里，或者这台设备没配置设备统计）| `off`（config.json 里写了 `"presence": false`）|
+  - `sync`：设备间同步的状态。`hub`：经哪台服务器同步（和账号的 `hub` 一样：`maintainer` | `own`；`local_only`、`off` 时是 null。
+    旧版 cca 没有：当作 `maintainer`）。`state`：`ok`（同步过，`checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
+    `local_only`（只有这台设备：账号不经哪台服务器同步——不在维护者的映射里、这台设备也没加入自己的同步服务器，或者该走的那一台
+    这台设备用不了）| `off`（config.json 里写了 `"presence": false`）|
     `not_logged_in`（这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的）| `old_server`（维护者的服务器还不支持，
     要维护者重新部署；显示上次同步来的，一般只有这台设备的）| `error`（最近一次没同步成，`message` 是给人看的原因，显示上次同步来的）。不认识的值当 `error` 显示。
     `missing`：30 天内用过这个账号、却没同步过金额的设备（多半是 cca 太旧），`used_epoch` 是它最近一次用这个账号的时间；没有为 `[]`。
@@ -342,6 +365,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   还没拉到映射：在等维护者加上这台机器的公钥，或者还没拉过）| `on`（拉到了映射）；`accounts`：账号表里属于映射的账号（各工具加起来）；
   `parked`：关掉共享时移出账号表的账号（登录都留着，打开共享时原样加回来）。共享关着时映射里的账号不在账号表里：总览、用量、折合金额、
   设备统计都看不到它们。旧版 cca 没有 `state`、`accounts`、`parked`：`configured` 是 true 当作 `on`、false 当作 `off`，两个数当作 0。
+- `hubs`：这台设备经哪几台服务器和自己的其他设备同步（设备统计、记下的 API key、折合金额；「共享与同步」页）：维护者的服务器（共享开着、
+  映射里配置了、这台 Mac 用得了时）在前，加入了的自己的同步服务器（4.13）在后；都没有是 `[]`。旧版 cca 没有这个字段：当作 `[]`。每一项：
+  `kind`：`maintainer` | `own`（App 不认识的跳过）；`url`、`host`（地址，`host` 是显示用的主机和端口）；`state`：`ok`（最近一次成了）|
+  `pending`（还没同步过）| `error`（最近一次没成，`error` 是给人看的原因）| `off`（这台设备关掉了设备统计：config.json 里写了
+  `"presence": false`，`error` 说怎么打开；只有 `own` 会是它），不认识的当 `error`；`checked_epoch`：最近一次成功的时间（没有为 null）；
+  `accounts`：经它同步的账号数（各工具加起来；用不了时 0）；`name`：这台设备在它上面的名字（自己的：加入时起的；维护者的：上次同步
+  折合金额时服务器说的，没同步过是 null）；`members`：自己的同步服务器上有几台设备（上次问到的：加入、`hub devices` 时记下；维护者的是 null）；
+  `joined_epoch`：什么时候加入的（只有 `own`）；`can_invite`：能给出加入链接（`cca hub invite`，只有 `own`）。
 
 `routing`：
 
@@ -583,24 +614,29 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 ### 3.4 `cca [codex] devices KEY --json`：账号连着的设备
 
 `can.devices` 为真的账号，账号页看得见时 App 马上运行一次，之后每分钟一次（低优先级；用户 15 分钟没碰电脑时不查），点「刷新」时不降优先级。
-cca 问维护者的设备统计服务器（直连，钉住映射里的证书公钥，用这台 Mac 的 deploy key 签名），把服务器给的相对秒数换成这台 Mac 的时钟：
+cca 问这个账号走的那台服务器（账号的 `hub`：维护者的设备统计服务器——钉住映射里的证书公钥，用这台 Mac 的 deploy key 签名；自己的同步服务器——
+钉住加入链接里的证书公钥，用这台设备加入时生成的密钥签名；都是直连），把服务器给的相对秒数换成这台 Mac 的时钟：
 
 ```json
 {
   "version": 1, "kind": "devices", "generated_epoch": 1794042000.0, "tool": "claude", "me": "studio-mac",
   "idle_after": 600, "offline_after": 150, "reporting_error": null,
-  "accounts": [{"key": "工作(bob@example.com)", "id": "bob-example-com-1a2b3c", "devices": [
+  "hubs": [{"kind": "maintainer", "me": "studio-mac", "idle_after": 600, "offline_after": 150, "reporting_error": null}],
+  "accounts": [{"key": "工作(bob@example.com)", "id": "bob-example-com-1a2b3c", "hub": "maintainer", "devices": [
     {"id": "SHA256:…", "name": "studio-mac", "me": true, "state": "in_use", "cli": 2, "app": false,
      "since_epoch": 1794034800.0, "last_active_epoch": 1794041940.0, "last_used_epoch": 1794041940.0, "seen_epoch": 1794041985.0}
   ]}]
 }
 ```
 
-- `me`：这台 Mac 在服务器上的名字（维护者给它的 deploy key 起的别名），服务器还不认它时为 null。`idle_after`、`offline_after`：服务器的设置（秒），
-  旧的服务器没给时为 null。
-  `reporting_error`：这台 Mac 最近一次没报成的原因（给人看的话），报成了是 null。
-- `accounts`：问的账号（不写账号时是这个工具里映射里的全部官方账号），`devices` 是 30 天内经 cca 用过它的设备，这台 Mac 排第一，
-  其余按 `in_use`、`idle`、`offline`、`none`，同一种里最近用过的在前（cca 排好的，App 不重排）。
+- `hubs[]`：这台设备用得了的每台服务器一项（`kind` 和 `config.hubs` 的一样、先后也一样）：`me`：这台 Mac 在它上面的名字（维护者给 deploy key
+  起的别名、加入自己的同步服务器时起的名字），它还不认这台 Mac 时为 null；`idle_after`、`offline_after`：它的设置（秒），旧的服务器没给时为 null；
+  这一次没问它（要问的账号都不走它）时这三项都是 null。`reporting_error`：这台 Mac 最近一次没报到它的原因（给人看的话），报成了是 null（问没问都有）。
+  顶层的 `me`、`idle_after`、`offline_after`、`reporting_error` 是问了的第一台的（一台都没问时 `me` 这三项是 null）；旧版 cca 只有这几项、
+  没有 `hubs`：只有维护者的服务器。问的服务器有一台没成就是退出码 1（App 每次只问一个账号）。
+- `accounts`：问的账号（不写账号时是这个工具里经服务器同步的全部官方账号），`hub` 是问的哪一台（App 用 `hubs` 里这一台的设置和名字），
+  `devices` 是 30 天内经 cca 用过它的设备，这台 Mac 排第一，其余按 `in_use`、`idle`、`offline`、`none`，同一种里最近用过的在前（cca 排好的，
+  App 不重排）。设备的 `id` 是它在那台服务器上的设备指纹。
 - `state`：`in_use`（开着会话或桌面 App，`idle_after` 秒内有动静）| `idle`（开着，很久没动静）| `none`（都关了）|
   `offline`（开着会话却超过 `offline_after` 秒没回报：可能休眠、断网、被强行结束，不知道现在还用不用）。不认识的值当 `none` 显示。
   动静：命令行会话看它终端的最后输入、输出时间，桌面 App 看它进程树用的 CPU（cca 和服务器算，App 不重算）。
@@ -608,39 +644,43 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
 - 时间（都是这台 Mac 的时钟，可能是 null）：`since_epoch` 开着的会话里最早那个从什么时候开始；`last_active_epoch` 开着的会话最后一次有动静
   （闲置从这时算起）；`last_used_epoch` 上次使用（会话都关了也留着）；`seen_epoch` 最后一次收到它的回报。
 - 失败：退出码 1，没有 stdout，`fail` 事件的 `code` 是 `devices_unavailable`，`message` 是原因（连不上服务器、服务器还不认这台 Mac、
-  证书指纹对不上、时钟差太多……）：App 留着上次查到的，旁边显示原因。用不了（这台 Mac 没配置映射、关掉了、账号不在映射里）时是 `devices_off`，
-  `can.devices` 为假时 App 本来就不会调用。
-- 这台 Mac 自己的上报不经 App：经 cca 启动映射里的账号（命令行会话、`cca app`）时 cca 在后台起一个上报进程，会话都关了它自己退出。
+  证书指纹对不上、时钟差太多……）：App 留着上次查到的，旁边显示原因。用不了（这台 Mac 没配置映射、没加入自己的同步服务器、关掉了、
+  账号不经服务器同步）时是 `devices_off`，`can.devices` 为假时 App 本来就不会调用。
+- 这台 Mac 自己的上报不经 App：经 cca 启动经服务器同步的账号（命令行会话、`cca app`）时 cca 在后台起一个上报进程（各台服务器各报各的账号），
+  会话都关了它自己退出。
 
 ### 3.5 `cca cost sync [--now] --json`：统计折合金额
 
 不带 `codex` 前缀（一次统计 Claude 和 Codex 两个工具）。先在前台把共享的会话记录里新增的部分读进来（第一次要全读一遍，可能要几十秒；
-之后一般不到一秒），再和别的设备同步（映射里的账号、开着设备统计时；没开就跳过）。结果在 `_gui state` 的 `cost`、`cost_total` 里，
+之后一般不到一秒），再和别的设备同步（经服务器同步的账号：各台服务器各一轮；一台都用不了就跳过）。结果在 `_gui state` 的 `cost`、`cost_total` 里，
 这里只说统计和同步得怎么样：
 
 ```json
 {
   "version": 1, "kind": "cost_sync", "generated_epoch": 1794042000.0,
   "scan": {"state": "ready", "updated_epoch": 1794042000.0, "files": 190, "read_bytes": 123456, "records": 120, "first": false},
-  "sync": {"state": "ok", "message": null, "checked_epoch": 1794042000.0}
+  "sync": {"state": "ok", "message": null, "checked_epoch": 1794042000.0,
+           "hubs": [{"kind": "own", "state": "ok", "message": null, "checked_epoch": 1794042000.0}]}
 }
 ```
 
 - `scan`：`files` 看了几个会话记录文件，`read_bytes` 这次读了多少字节，`records` 这次新算进来几条用量，`first` 这次是不是第一次全读。
-- `sync.state`：`ok` | `skipped`（不用同步：没有映射里的账号、没开设备统计）| `old_server` | `error`（`message` 是原因）| `waiting`（上次失败了，
-  还没到重试的时候；`--now` 不等）。每个账号的同步状态在 `_gui state` 的 `cost.sync`。
+- `sync.state`：`ok` | `skipped`（不用同步：没有经服务器同步的账号、这台设备用不了哪台服务器）| `old_server`（维护者的服务器太旧）|
+  `error`（`message` 是原因）| `waiting`（上次失败了，还没到重试的时候；`--now` 不等）。`sync.hubs[]` 是各台服务器的（多一项 `kind`），
+  顶层的 `state`、`message`、`checked_epoch` 是其中最要紧的那一台的（`error`、`old_server`、`waiting`、`ok`、`skipped` 依次）；
+  旧版 cca 没有 `hubs`。每个账号的同步状态在 `_gui state` 的 `cost.sync`。
 - 退出码：0 统计好了（同步失败也是 0，看 `sync`）；1 没统计成（`fail` 事件的 `code` 是 `cost_unavailable`，`message` 是原因，比如读不了、
   另一个统计一直没结束）；2 用不了（`cost_off`：config.json 里写了 `"cost": false`，或者没有 Claude / Codex 的官方账号）。
 - App 何时运行：`hello.cost` 有、`cost_total` 不是 null 时，看得见金额（折合金额页、账号页的「折合金额」）时每 5 分钟一次，
   看不见时每 30 分钟一次（低优先级；用户 15 分钟没碰电脑、过热时不跑）；`scan.state` 是 `never` 时马上跑一次。用户点「刷新」时带 `--now`，不降优先级。
-  会话结束、`cca usage`、`cca devices` 时 cca 自己也会在后台统计（最多 5 分钟一次），App 看 `cost/local.json`、`remote.json`、`sync.json` 变了就重读 `state`（见 1）。
+  会话结束、`cca usage`、`cca devices` 时 cca 自己也会在后台统计（最多 5 分钟一次），App 看 `cost/` 里那几个文件变了就重读 `state`（见 1）。
 
 ## 4. 事件和同意（`CCA_EVENTS`、`CCA_GRANT`）
 
 ### 4.1 事件文件
 
 运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
-`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`、`policy off`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`、`policy off`、`hub remove`、`hub leave`）、检查更新（`update --check --json`）、查设备（`devices --json`、`hub devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -653,7 +693,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉）| `policy_on`（`policy on`：打开了维护者的共享——拉到了映射，或者先跳过、这次没拉到，`message` 说清楚是哪种）| `policy_off`（`policy on` 里选了「不打开共享」，或者 `policy off` 关掉了共享；本来就关着也是它），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉）| `policy_on`（`policy on`：打开了维护者的共享——拉到了映射，或者先跳过、这次没拉到，`message` 说清楚是哪种）| `policy_off`（`policy on` 里选了「不打开共享」，或者 `policy off` 关掉了共享；本来就关着也是它），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；自己的同步服务器（4.13）是 `hub_joined`（`hub join`：加入了）| `hub_removed`（`hub remove`：移除了别的设备）| `hub_left`（`hub leave`，或者 `hub remove` 移除的是这台设备自己：退出了），`message` 是给人看的那句话。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；Claude 的 `message` 说清楚是哪份文件、哪几项、怎么办，共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -666,7 +706,10 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
   `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
   `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
-  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `node_pinned`（`node use`：维护者的映射固定了这个账号的节点）。
+  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `node_pinned`（`node use`：维护者的映射固定了这个账号的节点）|
+  `hub_…`（自己的同步服务器的命令没成，4.13：`hub_link`、`hub_other`、`hub_denied`、`hub_salt`、`hub_full`、`hub_old`、`hub_pin`、
+  `hub_unreachable`、`hub_clock`、`hub_busy`、`hub_sign`、`hub_server`、`hub_name`、`hub_not_joined`、`hub_no_device`、`hub_unavailable`；
+  不认识的 `hub_` 开头的当 `error`，照 `message` 说）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
@@ -689,6 +732,8 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
 | `remote_pair` | 空 | `cca remote pair`：这台机器显示一个配对码；在另一台机器上输入它以后，那台机器可以经维护者的服务器看和操作这台机器上开着远程会话的会话（两头之间加密；之后能改成只看、不让，或者取消配对）。App 里是提问会话（「远程会话」页的「显示配对码…」，9.2），当场问；终端里问之前先把这段说明打出来 | yes |
 | `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
+| `hub_remove` | 设备指纹（`hub devices --json` 的 `devices[].id`，`SHA256:…`） | `cca hub remove`：从自己的同步服务器上移除一台设备，它现在的密钥作废（它传过的折合金额照样算）。加入链接不变：那台设备上还留着链接的话能重新加入，设备丢了要换加入链接重新部署服务器；是这台设备自己时等于退出（同 `hub_leave`）。`detail` 说清楚是哪种 | no |
+| `hub_leave` | `all` | `cca hub leave`：退出自己的同步服务器：服务器上移除这台设备，这台设备上记着的加入链接、别的设备同步来的折合金额都删掉，记下的 API key 留着；以后要再加入要有加入链接 | no |
 | `policy_off` | `all` | `cca policy off`：关掉维护者的共享。映射里的账号移出账号表（登录、钥匙串里的都留着，打开共享时原样加回来），不再拉映射、不再上报设备统计，拉到过的映射、没有账号用的参考节点、别的设备同步来的折合金额都删掉；`detail` 列出会移出的账号，和用着维护者参考节点、关掉以后要换节点的自己的账号（4.12） | no |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
@@ -831,6 +876,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 |---|---|---|---|
 | `onboard.share` | `_onboard`（配置向导第 1 步） | `confirm`（默认否） | 有没有维护者共享给你的账号。答有接着 `onboard.policy`；答没有（默认）不生成 deploy key、不拉映射，直接到下一步。共享已经开着时不问（直接 `onboard.policy`，拉一次就拉到了时也不问）；不知道映射仓库（没有维护者的默认仓库、也没关掉过共享）时整个第 1 步都没有 |
 | `onboard.policy` | `_onboard`（配置向导第 1 步）/ `policy on` | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不打开共享：去掉仓库和 deploy key）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答 |
+| `hub.join` | `hub join` | `secret` | 自己的同步服务器的加入链接（`cca-hub1.` 开头的一行：部署服务器时给的，或者已经加入的设备上 `cca hub invite` 给的）。空着是 `fail` 的 `hub_link`，链接不对、服务器不认见 4.13 |
 | `policy.repo` | `policy on` | `text` | 维护者的映射仓库（GitHub 上的「用户/仓库」，向维护者要）：不知道仓库时才问（没有维护者的默认仓库、也没关掉过共享）；空着是取消，写得不对是 `fail` |
 | `install.share` | `install`（终端，服务器上直连不通时） | `confirm`（默认否） | 有没有维护者共享给你的账号：有就等维护者确认这台机器、导入维护者提供的节点；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问 |
 | `onboard.net` | `_onboard`（配置向导第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。没配置路由器时，映射里账号的参考节点在这一步之后导入（映射里的账号随即加进来） |
@@ -879,6 +925,10 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy on` | 「共享与同步」页的「维护者共享的账号」开关（打开） | 提问会话（`policy.repo`、`onboard.policy`，4.12）；做完 `result` 的 `policy_on` / `policy_off` |
 | `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
+| `hub join` | 「共享与同步」页「自己的同步服务器」的「加入…」（要 `hello.hub`） | 提问会话（`hub.join`，4.13）；做完 `result` 的 `hub_joined` |
+| `hub status --json`、`hub devices --json` | 「共享与同步」页「自己的同步服务器」一块（看得见时、「刷新」） | 无交互命令（4.13） |
+| `hub remove <设备>`、`hub leave` | 那一块里每台设备的「移除…」、「退出…」 | 无交互命令 + 同意重跑（`consent.hub_remove`、`consent.hub_leave`，4.13） |
+| `hub invite` | 那一块的「复制加入链接」 | 无交互命令（stdout 只经内存里的管道读，4.13） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -937,6 +987,45 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   开着）时不关：退出码非 0，`fail` 的 `policy_off_busy`，`message` 说是哪些。关好了 `result` 的 `policy_off`（本来就关着也是它）。映射的账号
   移出账号表、记在 `config.policy.parked` 里，登录和钥匙串里的都不动；deploy key 留着（以后打开不用再找维护者，`cca policy off --forget-key`
   连它一起删，App 不提供）。账号表变了，App 照常收到 config.json、账号表变了的刷新提示后重新读 `state`。
+
+### 4.13 自己的同步服务器：`cca hub`
+
+维护者共享以外的官方账号（自己的账号）默认只在这台设备上统计。用户在自己的服务器上部署一个同步服务器（`server/cca-presence.py --mode own`，
+docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设备统计、记下的 API key、折合金额经它和自己的其他设备同步（和维护者的服务器一样
+端到端加密：服务器上没有邮箱、登录身份、key、金额）。维护者共享的账号照旧只走维护者的服务器。要 `hello.hub`；`state.config.hubs` 里
+`kind` 是 `own` 的那一项说现在的样子（2.2），账号的 `hub` 说它走哪一台。
+
+- **加入**（`cca hub join`）：提问会话（`hub.join`：一个密文输入框，贴加入链接）。加入链接是凭证（谁拿到它都能加入），只经提问会话的管道交给
+  cca，不进命令行、环境变量、事件文件和日志。成了 `result` 的 `hub_joined`，之后 cca 在后台上报、同步一次。没成 `fail`（`message` 是给人看的原因）：
+  `hub_link`（没贴、链接不对：少了一截、多了字）| `hub_other`（已经加入了另一台：先退出）| `hub_denied`（服务器不认这个链接：旧的、别的服务器的）|
+  `hub_salt`（服务器上的设备用的是另一份链接：服务器重新部署过，向已经加入的设备要它的）| `hub_full`（服务器上满了，64 台）|
+  `hub_old`（那不是自己的同步服务器，或者版本太旧）| `hub_pin`（证书和链接里钉住的对不上）| `hub_unreachable`（连不上）|
+  `hub_clock`（这台设备的时钟差太多）| `hub_busy`（请求太频繁）| `hub_sign`（生成、用不了这台设备的密钥）| `hub_server`（服务器出错）。
+  加入了同一台时再加入是重新加入（服务器丢了这台的记录时用；名字照旧）。终端里另有 `--stdin`（链接从标准输入读）、`--name 名字`
+  （默认是主机名；服务器上已经有同名的加 `-2`、`-3`……，`hub_name`：名字不对），App 不用。
+- **状态**（`cca hub status --json`，只读、不联网）：`{"version": 1, "kind": "hub_status", "joined": true, "reason": null, "hub": {…}}`。`joined`：加入了没有；
+  `reason`：这台设备现在用不了它的原因（没加入、关掉了设备统计、密钥不见了；给人看的话），用得了是 null；`hub`：和 `config.hubs` 里 `own` 的那一项一样，
+  没加入是 null。
+- **设备**（`cca hub devices --json`，问一次服务器）：
+
+  ```json
+  {"version": 1, "kind": "hub_devices", "generated_epoch": 1794042000.0,
+   "devices": [{"id": "SHA256:…", "name": "studio-mac", "me": true, "joined_epoch": 1793900000, "seen_epoch": 1794041990},
+               {"id": "SHA256:…", "name": "carol-air", "me": false, "joined_epoch": 1793950000, "seen_epoch": null}]}
+  ```
+
+  加入了的全部设备，这台在前，别的按名字（cca 排好的）。`id`：设备在服务器上的指纹（移除时用它）；`joined_epoch`：什么时候加入的；`seen_epoch`：
+  服务器最后一次收到它的请求（服务器重启以后还没来过的是 null）。不在列表里的设备不能再经它同步，除非拿加入链接重新加入。这台设备关掉了设备统计
+  （`"presence": false`）时照样能看、能移除（管设备不是同步）。没加入：退出码 1，`fail` 的 `hub_not_joined`；
+  服务器那边没成：退出码 1，`fail` 的 `hub_unavailable`（`message` 是原因，比如这台设备已经被别的设备移除了）。
+- **移除一台设备**（`cca hub remove <设备>`，设备是 `devices[].id`；终端里也可以是名字、指纹的开头）：要同意（`hub_remove`，范围是设备指纹，默认否），
+  同意后带 `CCA_GRANT=hub_remove:<指纹>` 重跑（4.3）。成了 `result` 的 `hub_removed`；移除的是这台设备自己时等于退出，是 `hub_left`。
+  没有这台设备：`fail` 的 `hub_no_device`；问不到服务器：`hub_unavailable`；没加入：`hub_not_joined`。
+- **退出**（`cca hub leave`）：要同意（`hub_leave`，范围 `all`，默认否）。服务器上移除这台设备，这台设备上记着的加入信息、密钥、别的设备同步来的
+  折合金额都删掉（记下的 API key 留着）；服务器连不上时本机照样退出，`result` 的 `message` 里说怎么在别的设备上移除它。成了 `result` 的 `hub_left`；
+  没加入：`fail` 的 `hub_not_joined`。
+- **加入链接**（`cca hub invite`）：stdout 一行加入链接，给自己的别的设备加入用（App 的「复制加入链接」：经内存里的管道读，放进剪贴板，过一会儿清掉）。
+  没加入：退出码非 0，`fail` 的 `hub_not_joined`。在 Claude Code 的会话里（有 `CLAUDECODE`、没有 `CCA_EVENTS`）不给：会进对话记录。
 
 ## 5. `cca gui`
 

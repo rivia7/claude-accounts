@@ -608,6 +608,7 @@ class CostView:
 class View(Base):
     TZ = 'UTC'
     NOW = 1794571200.0   # 2026-11-13（周五）12:00 UTC
+    DV = 'abcdef0123456789'   # 这台机器的 device_id（config.json）
 
     def at(self, y, mo, d, hh):
         return str(int(time.mktime((y, mo, d, hh, 0, 0, 0, 0, -1))))
@@ -646,7 +647,7 @@ class View(Base):
             (self.cca / 'cost' / name).write_text(json.dumps(doc))
 
     def view(self, c=None, cfg='default'):
-        return CostView(self.dev, c or {}, self.NOW, self.cfg if cfg == 'default' else cfg)
+        return CostView(self.dev, c or {'device_id': self.DV}, self.NOW, self.cfg if cfg == 'default' else cfg)
 
     def test_account(self):
         cv = self.view()
@@ -669,15 +670,15 @@ class View(Base):
         self.assertEqual([(d['name'], d['me'], d['revoked'], d['stale']) for d in devs],
                          [('alice-mbp', True, False, False), ('bob-mini', False, False, False), ('carol-air', False, False, True)],
                          '这台设备在最前，别的按最近 30 天的多少排；两天没同步的标出来')
-        self.assertEqual(devs[0]['id'], 'SHA256:me')
+        self.assertEqual(devs[0]['id'], self.DV, '这台设备的 id 是这台机器的 device_id（不是哪台服务器上的指纹）')
         self.assertEqual({k: devs[0]['summary'][k] for k in ('average_usd', 'average_weeks', 'average_day_usd', 'average_days')},
                          {'average_usd': 1.4, 'average_weeks': 5, 'average_day_usd': 0.3448, 'average_days': 29},
                          '一台设备的平均按整个账号的那几周、那几天算（各台设备的平均加起来是整个账号的）')
         self.assertEqual(devs[1]['summary']['weeks_usd'], 3.0, 'bob-mini：现在的 2 + 撤销以前的 1（撤销以后的 9 不重复计）')
         self.assertEqual(sum(devs[0]['days_usd']), 15.0)
         self.assertEqual(len(devs[0]['weeks_usd']), 13)
-        self.assertEqual(a['sync'], {'state': 'ok', 'message': None, 'checked_epoch': self.NOW - 100,
-                                     'missing': [{'name': 'dan-air', 'used_epoch': self.NOW - 3600}]}, '30 天以前用过的不提')
+        self.assertEqual(a['sync'], {'state': 'ok', 'message': None, 'checked_epoch': self.NOW - 100, 'hub': 'maintainer',
+                                     'missing': [{'name': 'dan-air', 'used_epoch': self.NOW - 3600}]}, '30 天以前用过的不提；经维护者的服务器')
         x = cv.account('codex', 'alice@example.com', None, True, True)
         self.assertEqual((x['summary']['weeks_usd'], [d['name'] for d in x['devices']]), (4.0, ['alice-mbp']), '工具分开')
         self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '没有记录：None')
@@ -718,7 +719,7 @@ class View(Base):
         t = cv.total(['claude', 'codex'])
         devs = t['devices']
         self.assertEqual([(d['id'], d['name'], d['me'], d['revoked'], d['stale']) for d in devs],
-                         [('SHA256:me', 'alice-mbp', True, False, False), ('SHA256:bob', 'bob-mini', False, False, False),
+                         [(self.DV, 'alice-mbp', True, False, False), ('SHA256:bob', 'bob-mini', False, False, False),
                           ('SHA256:carol', 'carol-air', False, False, True)],
                          '这台设备在最前，别的按 30 天的多少排；两天没同步的标出来')
         self.assertEqual(set(devs[0]) - {'id', 'name', 'me', 'revoked', 'stale'}, set(t['me']), '每台多的就是这几项，别的和 me 一样')
@@ -744,10 +745,47 @@ class View(Base):
         devs = cv.total(['claude'])['devices']
         self.assertEqual([(d['name'], d['revoked'], d['stale'], d['days_usd']) for d in devs],
                          [('alice-mbp', False, False, 15.0), ('dave-mini', True, True, 6.0), ('bob-mini', False, False, 3.0), ('carol-air', False, True, 1.0)])
-        # 没开设备统计：只有这台设备（id 是 local）
-        lo = self.view(cfg=None)
+        # 没开设备统计：只有这台设备；没有 device_id（没加入过自己的同步服务器）时 id 是 local
+        lo = self.view(c={'cost': True}, cfg=None)
         lo.account('claude', 'alice(alice@example.com)', None, True, True)
         self.assertEqual([(d['id'], d['me'], d['days_usd']) for d in lo.total(['claude'])['devices']], [('local', True, 15.0)])
+
+    def test_machine_id(self):
+        """别的设备传来的 dv（那台机器的 device_id）：id 用它，同一台机器的几份（换过 key、改过名字）按它并成一台；这台机器自己以前传的
+        （退出又加入过）并进这台，只用这台有数据以前的小时；dv 不对的不认（id 照旧是指纹）"""
+        slot = self.remote['acc']['claude:alice@example.com']
+        for fp in ('SHA256:bob', 'SHA256:bob-old'):
+            slot[fp]['dv'] = 'b0b0b0b0b0b0b0b0'
+        slot['SHA256:bob-old']['name'] = 'bob-renamed'   # 名字改过：按机器认，不靠名字
+        slot['SHA256:me-old'] = {'h': {self.at(2026, 9, 20, 10): self.row(4), self.at(2026, 11, 13, 9): self.row(5, 2)}, 'um': [],
+                                 'at': self.NOW - 50 * 86400, 'name': 'old-name', 'revoked': True, 'tag': 't5', 'dv': self.DV}
+        slot['SHA256:carol']['dv'] = 'NOT-HEX'
+        self.write()
+        a = self.view().account('claude', 'alice(alice@example.com)', None, True, True)
+        devs = a['devices']
+        self.assertEqual([(d['id'], d['name'], d['revoked']) for d in devs],
+                         [(self.DV, 'alice-mbp', False), ('b0b0b0b0b0b0b0b0', 'bob-mini', False), ('SHA256:carol', 'carol-air', False)])
+        self.assertEqual((devs[0]['summary']['weeks_usd'], devs[1]['summary']['weeks_usd'], a['summary']['weeks_usd']), (20.0, 3.0, 24.0),
+                         '这台机器以前传的：只用这台有数据（10 月 1 日）以前的 4（11 月 13 日的 5 不重复计）；bob-mini 照旧是 2 + 撤销以前的 1')
+
+    def test_machine_across_hubs(self):
+        """同一台机器在两台服务器上（alice 经维护者的、bob 经自己的）：指纹不一样，dv 一样，设备菜单里是一台、两个账号的加在一起"""
+        self.remote['acc']['claude:alice@example.com']['SHA256:bob']['dv'] = 'b0b0b0b0b0b0b0b0'
+        own = {'v': 1, 'acc': {'claude:bob@example.com': {'SHA256:bob-own': {
+            'h': {self.at(2026, 11, 12, 12): self.row(6)}, 'um': [], 'at': self.NOW - 600, 'name': 'bob-mini', 'revoked': False, 'tag': 't9',
+            'dv': 'b0b0b0b0b0b0b0b0'}}}}
+        (self.cca / 'cost' / 'own.remote.json').write_text(json.dumps(own))
+        self.write()
+        cv = self.view()
+        cv.spec['own'] = True
+        mine = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        theirs = cv.account('claude', 'bob(bob@example.com)', None, False, True)
+        usd = lambda a, dv: [d['summary']['days_usd'] for d in a['devices'] if d['id'] == dv]
+        self.assertEqual((usd(mine, 'b0b0b0b0b0b0b0b0'), usd(theirs, 'b0b0b0b0b0b0b0b0')), ([3.0], [6.0]), '各账号里是那台机器经各自的服务器传的（alice 的还带着撤销了的旧 key 以前的 1）')
+        t = cv.total(['claude'])
+        self.assertEqual([(d['id'], d['name']) for d in t['devices']],
+                         [(self.DV, 'alice-mbp'), ('b0b0b0b0b0b0b0b0', 'bob-mini'), ('SHA256:carol', 'carol-air')], '按机器归成一台')
+        self.assertEqual(t['devices'][1]['days_usd'], 9.0, '两个账号加起来')
 
     def test_me_without_records(self):
         self.local['acc']['claude:' + U1] = {}
@@ -822,8 +860,8 @@ class View(Base):
         self.assertEqual(st(self.view({'presence': False}))['state'], 'off')
         lo = self.view(cfg=None)
         a = lo.account(C, k, None, True, True)
-        self.assertEqual((a['sync']['state'], [d['name'] for d in a['devices']], a['devices'][0]['id']), ('local_only', [os.uname().nodename.split('.')[0]], 'local'),
-                         '没有设备统计：只有这台设备的')
+        self.assertEqual((a['sync']['state'], a['sync']['hub'], [d['name'] for d in a['devices']], a['devices'][0]['id']),
+                         ('local_only', None, [os.uname().nodename.split('.')[0]], self.DV), '没有设备统计：只有这台设备的（不经哪台服务器）')
         self.assertEqual(st(self.view(), mapped=False)['state'], 'local_only', '不在映射里的账号')
         self.assertEqual(st(self.view(), logged=False)['state'], 'not_logged_in')
         self.sync['state'] = 'old_server'

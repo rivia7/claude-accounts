@@ -140,6 +140,19 @@ ORACLE_PATCHES = [
      "        return ('这台 Mac 没打开维护者的共享（cca policy on）' if off else '这台 Mac 还没拉到维护者的映射（cca policy pull）'), None\n"),
     ("'这台 Mac 没有映射的 deploy key（cca policy setup）'", "'这台 Mac 没有映射的 deploy key（cca policy on）'"),
     ("'这台机器还没配置维护者的映射：先运行 cca policy setup'", "'这台机器没打开维护者的共享：先运行 cca policy on'"),
+    # 自己的同步服务器（docs/dev/hub.md）：加入信息和这台设备在它上面的私钥也不给 Claude 读写
+    ("CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', ",
+     "CCA_DIR_PRIVATE = ('policy/id_ed25519', 'policy/nodes.json', 'hub/hub.json', 'hub/id_ed25519', "),
+    # cca devices：维护者的服务器用不了时还可以经自己的同步服务器（对拍的沙箱都没加入），说的原因带上它；不经服务器的账号说清楚是哪一种
+    # （第三方 API 账号、没有邮箱、不在映射里：要经自己的同步服务器）。JSON 里多的 hub、hubs 在 cases/presence.py 的 VIEW_MASK 去掉
+    ("        print(reason)\n        sys.exit(2)\n    t, pm = ctx()[1], policy_raw(T)\n",
+     "        _c = load_quiet(CFG)\n"
+     "        print(reason if isinstance(_c, dict) and _c.get('presence') is False else reason + '，也没加入自己的同步服务器（cca hub join）')\n"
+     "        sys.exit(2)\n    t, pm = ctx()[1], policy_raw(T)\n"),
+    ("            print('%s 不在维护者的映射里：只统计映射里的官方账号' % name_of(k))\n",
+     "            print('%s 是第三方 API 账号：只统计官方账号' % name_of(k) if is_api(t[k]) else '%s 没有邮箱：只统计官方账号' % name_of(k)\n"
+     "                  if not parse_key(k)[1] else '%s 不在维护者的映射里，要经自己的同步服务器统计：还没加入自己的同步服务器（有加入链接时运行 cca hub join）'\n"
+     "                  % name_of(k))\n"),
 ]
 
 

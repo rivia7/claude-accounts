@@ -25,7 +25,7 @@ struct CostSyncState: KnownValues {
     static let ok = CostSyncState(rawValue: "ok")
     /// 会同步，还没同步过
     static let pending = CostSyncState(rawValue: "pending")
-    /// 只有这台设备：账号不在维护者的映射里，或者这台设备没配置设备统计
+    /// 只有这台设备：账号不经哪台服务器同步（不在维护者的映射里、这台设备也没加入自己的同步服务器），或者该走的那一台这台设备用不了
     static let localOnly = CostSyncState(rawValue: "local_only")
     /// config.json 里写了 `"presence": false`
     static let off = CostSyncState(rawValue: "off")
@@ -137,7 +137,7 @@ struct CostSyncRunState: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
     static let ok = CostSyncRunState(rawValue: "ok")
-    /// 不用同步：没有映射里的账号、没开设备统计
+    /// 不用同步：没有经服务器同步的账号、这台设备用不了哪台服务器
     static let skipped = CostSyncRunState(rawValue: "skipped")
     static let oldServer = CostSyncRunState(rawValue: "old_server")
     static let error = CostSyncRunState(rawValue: "error")
@@ -441,10 +441,12 @@ struct CostSync: Decodable, Sendable, Equatable {
     var message: String?
     /// 最后一次同步成功的时间
     var checkedEpoch: Double?
+    /// 经哪台服务器同步（和账号的 `hub` 一样；`local_only`、`off` 时是 nil）。旧版 cca 没有这个字段：当作维护者的
+    var hub: HubKind?
     var missing: [CostMissingDevice]
 
     enum CodingKeys: String, CodingKey {
-        case state, message, missing
+        case state, message, missing, hub
         case checkedEpoch = "checked_epoch"
     }
 
@@ -453,6 +455,11 @@ struct CostSync: Decodable, Sendable, Equatable {
         state = c.lossy(CostSyncState.self, .state) ?? CostSyncState(rawValue: "")
         message = nonEmpty(c.string(.message))
         checkedEpoch = c.double(.checkedEpoch)
+        if c.contains(.hub) {
+            hub = c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil }
+        } else {
+            hub = state == .localOnly || state == .off ? nil : .maintainer
+        }
         missing = c.lossyArray(CostMissingDevice.self, .missing) ?? []
     }
 }
@@ -748,14 +755,18 @@ struct CostSyncScan: Decodable, Sendable, Equatable {
     }
 }
 
-/// `cost sync` 的 `sync`：这一次和别的设备同步得怎么样（每个账号的在 `_gui state` 的 `cost.sync`）。
+/// `cost sync` 的 `sync`：这一次和别的设备同步得怎么样（每个账号的在 `_gui state` 的 `cost.sync`）。顶层是各台服务器里最要紧的那一台的，
+/// `hubs` 是各台的（每项多一个 `kind`；旧版 cca 没有，是空的）
 struct CostSyncRun: Decodable, Sendable, Equatable {
     var state: CostSyncRunState
     var message: String?
     var checkedEpoch: Double?
+    /// `hubs` 里的那一项是哪台服务器的；顶层是 nil
+    var kind: HubKind?
+    var hubs: [CostSyncRun]
 
     enum CodingKeys: String, CodingKey {
-        case state, message
+        case state, message, kind, hubs
         case checkedEpoch = "checked_epoch"
     }
 
@@ -764,5 +775,7 @@ struct CostSyncRun: Decodable, Sendable, Equatable {
         state = c.lossy(CostSyncRunState.self, .state) ?? CostSyncRunState(rawValue: "")
         message = nonEmpty(c.string(.message))
         checkedEpoch = c.double(.checkedEpoch)
+        kind = c.lossy(HubKind.self, .kind)
+        hubs = c.lossyArray(CostSyncRun.self, .hubs) ?? []
     }
 }

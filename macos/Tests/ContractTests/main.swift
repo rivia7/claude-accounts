@@ -18,6 +18,7 @@ if fullMode {
     useFirstTests()
     await weeklyUsageTests()
     costFixtureTests()
+    hubFixtureTests()
     costUnitTests()
     await costModelTests()
     await apiKeyTests()

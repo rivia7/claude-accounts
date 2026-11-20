@@ -876,7 +876,7 @@ ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不�
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
 ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址）；--settings 里只有记下会话的 hook（没有 env、apiKeyHelper）" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && [ "$(lastline SETTINGS)" = "SETTINGS: env=null" ] && [ "$(hookless "$(lastline ARGS)" "$(ls -d "$H"/.cca/accounts/alice-example-com-*)")" != BAD ] && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
 # Claude 默认只把这个账号自己的目录（~/.cca/accounts 下）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料不管在不在工作目录里都挡住
-P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
+P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/hub/hub.json),Edit(/$H/.cca/hub/hub.json),Read(/$H/.cca/hub/id_ed25519),Edit(/$H/.cca/hub/id_ed25519),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
 AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accounts/kimi-*)
 # 账号目录里链到 ~/.claude 的共享目录（这时主目录里有的：预建的九个，和假 claude 上次会话里写的 output-styles）也加上，写真实路径
 # （Claude Code 判断权限时先解析链接）；照 CLAUDE_SHARED 的顺序，ide 不加
@@ -1703,6 +1703,7 @@ out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state.json"
 ok "_gui state：Claude、Codex 的账号和账号表一样（顺序也一样），端口和 config.json 一样，账号目录名是 cca 算的" '[ $rc -eq 0 ] && jok "[a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]] == list(tab(\"accounts.json\")) and [a[\"key\"] for a in d[\"tools\"][1][\"accounts\"]] == list(tab(\"codex.json\")) and all(a[\"port\"] == cfg[\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][0][\"accounts\"]) and all(a[\"port\"] == cfg[\"codex\"][\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][1][\"accounts\"]) and acct(0, \"alice@example.com\")[\"id\"] == \"${AD##*/}\"" < "$GF/state.json"'
 ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存），槽位 1；Codex 的 dave 在槽位 3；路由器已同步" 'jok "(lambda a, x: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Max\" and a[\"slot\"] == 1 and a[\"group\"] == \"CCA-1\" and a[\"usage\"][\"source\"] == \"cache\" and a[\"usage\"][\"five_hour\"][\"utilization\"] >= 0 and isinstance(a[\"usage\"][\"five_hour\"][\"resets_epoch\"], float) and a[\"badge\"][\"label\"] == \"A\" and a[\"app\"] == {\"running\": False, \"pid\": None} and x[\"login\"] == \"logged_in\" and x[\"slot\"] == 3)(acct(0, \"alice@example.com\"), acct(1, \"dave@example.com\")) and d[\"routing\"][\"sync\"] == \"ok\" and d[\"routing\"][\"slots\"][2][\"tool\"] == \"codex\" and d[\"routing\"][\"pool_size\"] % 8 == 0" < "$GF/state.json"'
 ok "_gui state：共享默认关着（config.policy 的 state 是 off，账号表里没有共享的账号，没有收起来的）" 'jok "d[\"config\"][\"policy\"] == {\"configured\": False, \"repo\": None, \"next_check_epoch\": None, \"state\": \"off\", \"accounts\": 0, \"parked\": 0}" < "$GF/state.json"'
+ok "_gui hello 说有自己的同步服务器（hub 是 1）；_gui state：共享关着、没加入时 config.hubs 是空的，账号都不经服务器同步（hub 是 null，没有「设备」）" 'jok "d[\"hub\"] == 1" < "$GF/hello.json" && jok "d[\"config\"][\"hubs\"] == [] and all(a[\"hub\"] is None and not a[\"can\"][\"devices\"] for t in d[\"tools\"] for a in t[\"accounts\"])" < "$GF/state.json"'
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
 # 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cli/pack.py），第一次用时解到
 # 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
@@ -2090,13 +2091,13 @@ out=$(gj state)
 ok "_gui state：还没统计过：账号的 cost 是 null，cost_total 说还没统计；Claude、Codex 有这个功能（features.cost），官方账号 can.cost，第三方 API 账号没有" 'printf "%s" "$out" | jok "d[\"cost_total\"][\"scan\"] == {\"state\": \"never\", \"updated_epoch\": None} and d[\"tools\"][0][\"features\"][\"cost\"] is True and d[\"tools\"][1][\"features\"][\"cost\"] is True and all(a[\"cost\"] is None and a[\"can\"][\"cost\"] == (a[\"kind\"] == \"oauth\") for t in d[\"tools\"] for a in t[\"accounts\"])" && [ ! -e "$H/.cca/cost" ]'
 ok "_gui hello：cost 是 1（App 据此定时运行 cca cost sync，读 state 里的 cost、cost_total）" 'gj hello | jok "d[\"cost\"] == 1"'
 out=$(run cca cost sync --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$GF/cost_sync.json"
-ok "cost sync --json：第一次全读会话记录，算进来 5 次请求（同一条回复写了两行的只算一次）；没开设备统计时不同步" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"version\"] == 1 and d[\"kind\"] == \"cost_sync\" and d[\"scan\"][\"state\"] == \"ready\" and d[\"scan\"][\"first\"] is True and d[\"scan\"][\"records\"] == 5 and isinstance(d[\"scan\"][\"updated_epoch\"], float) and d[\"sync\"] == {\"state\": \"skipped\", \"message\": None, \"checked_epoch\": None}"'
+ok "cost sync --json：第一次全读会话记录，算进来 5 次请求（同一条回复写了两行的只算一次）；没开设备统计时不同步" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"version\"] == 1 and d[\"kind\"] == \"cost_sync\" and d[\"scan\"][\"state\"] == \"ready\" and d[\"scan\"][\"first\"] is True and d[\"scan\"][\"records\"] == 5 and isinstance(d[\"scan\"][\"updated_epoch\"], float) and d[\"sync\"] == {\"state\": \"skipped\", \"message\": None, \"checked_epoch\": None, \"hubs\": []}"'
 ok "统计好的只给自己读（cost/ 700，里面的文件 600），只有用量的数字，没有会话的内容" '[ "$(stat -f %Lp "$H/.cca/cost")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/cost/local.json")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/cost/scan.json")" = 600 ] && ! grep -rq SECRET-PROMPT-TEXT "$H/.cca/cost"'
 s2=$(snap); out=$(gj state); printf '%s' "$out" > "$GF/state_cost.json"
-ok "_gui state：alice 三次请求（一次没有标价）折合 0.02 美元、dave 0.053；只有这台设备（没开设备统计），按周 13 项、按天 30 项；读 state 不写文件" '[ "$(snap)" = "$s2" ] && printf "%s" "$out" | jok "(lambda a, x: a[\"summary\"][\"days_usd\"] == 0.02 and a[\"summary\"][\"requests\"] == 3 and a[\"summary\"][\"unpriced_requests\"] == 1 and a[\"unpriced_models\"] == [\"claude-new-9\"] and [(v[\"id\"], v[\"me\"]) for v in a[\"devices\"]] == [(\"local\", True)] and a[\"sync\"][\"state\"] == \"local_only\" and len(a[\"weeks\"]) == 13 and len(a[\"days\"]) == 30 and a[\"currency\"] == \"USD\" and x[\"summary\"][\"days_usd\"] == 0.053)(acct(0, \"alice@example.com\")[\"cost\"], acct(1, \"dave@example.com\")[\"cost\"])"'
+ok "_gui state：alice 三次请求（一次没有标价）折合 0.02 美元、dave 0.053；只有这台设备（没开设备统计），按周 13 项、按天 30 项；读 state 不写文件" '[ "$(snap)" = "$s2" ] && printf "%s" "$out" | jok "(lambda a, x: a[\"summary\"][\"days_usd\"] == 0.02 and a[\"summary\"][\"requests\"] == 3 and a[\"summary\"][\"unpriced_requests\"] == 1 and a[\"unpriced_models\"] == [\"claude-new-9\"] and [(v[\"id\"], v[\"me\"]) for v in a[\"devices\"]] == [(cfg.get(\"device_id\") or \"local\", True)] and a[\"sync\"][\"state\"] == \"local_only\" and len(a[\"weeks\"]) == 13 and len(a[\"days\"]) == 30 and a[\"currency\"] == \"USD\" and x[\"summary\"][\"days_usd\"] == 0.053)(acct(0, \"alice@example.com\")[\"cost\"], acct(1, \"dave@example.com\")[\"cost\"])"'
 ok "_gui state：cost_total 把各账号加起来、按工具分开；认不出是谁的（没有 session-owner 的旧会话）另算" 'printf "%s" "$out" | jok "(lambda t: t[\"days_usd\"] == 0.073 and t[\"by_tool\"][\"claude\"][\"days_usd\"] == 0.02 and t[\"by_tool\"][\"codex\"][\"days_usd\"] == 0.053 and dict(t[\"unattributed\"], why=[w[\"code\"] for w in t[\"unattributed\"][\"why\"]]) == {\"days_usd\": 0.006, \"requests\": 1, \"why\": [\"unknown\"], \"claude_code\": None, \"claude_code_old\": False} and t[\"scan\"][\"state\"] == \"ready\" and len(t[\"days\"]) == 30)(d[\"cost_total\"])"'
 ok "_gui state：按天也有平均（average_day_usd、average_days；账号、设备都有，设备的平均按整个账号的那几周、那几天算）；cost_total.me 是各账号里这台设备的那一份（只有这台设备时和顶层一样）" 'printf "%s" "$out" | jok "(lambda t, a: set(t[\"me\"]) == {\"current_usd\", \"weeks_usd\", \"average_usd\", \"average_day_usd\", \"days_usd\", \"today_usd\", \"days\", \"by_tool\"} and all(t[\"me\"][k] == t[k] for k in t[\"me\"]) and \"average_day_usd\" in t and all(k in a[\"summary\"] for k in (\"average_day_usd\", \"average_days\")) and all(v[\"summary\"][k] == a[\"summary\"][k] for v in a[\"devices\"] for k in (\"average_weeks\", \"average_days\", \"average_day_usd\")))(d[\"cost_total\"], acct(0, \"alice@example.com\")[\"cost\"])"'
-ok "_gui state：cost_total.devices（App 的设备菜单）只有这台设备（没开设备统计：id 是 local），数字和 me 一样；账号里的设备都标着用过（used）" 'printf "%s" "$out" | jok "(lambda t: [(x[\"id\"], x[\"me\"], x[\"revoked\"], x[\"stale\"]) for x in t[\"devices\"]] == [(\"local\", True, False, False)] and all(t[\"devices\"][0][k] == t[\"me\"][k] for k in t[\"me\"]))(d[\"cost_total\"]) and all(x[\"used\"] is True for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"cost\"] for x in a[\"cost\"][\"devices\"])"'
+ok "_gui state：cost_total.devices（App 的设备菜单）只有这台设备（没开设备统计；id 是 config.json 的 device_id，没有时是 local），数字和 me 一样；账号里的设备都标着用过（used）" 'printf "%s" "$out" | jok "(lambda t: [(x[\"id\"], x[\"me\"], x[\"revoked\"], x[\"stale\"]) for x in t[\"devices\"]] == [(cfg.get(\"device_id\") or \"local\", True, False, False)] and all(t[\"devices\"][0][k] == t[\"me\"][k] for k in t[\"me\"]))(d[\"cost_total\"]) and all(x[\"used\"] is True for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"cost\"] for x in a[\"cost\"][\"devices\"])"'
 ok "_gui state：设备的诊断（PROTOCOL 2.2 的 devices[].diag）：这台设备的 cca 版本、命令行里最近用的 Claude Code（会话记录里没写版本：null）、认不出账号的原因（没有 session-owner、也没有会话开始的记录：unknown，没有条数）" 'printf "%s" "$out" | jok "(lambda g: set(g) == {\"cca\", \"claude_code\", \"claude_code_old\", \"why\"} and g[\"cca\"] == \"$VER\" and g[\"claude_code\"] is None and g[\"claude_code_old\"] is False and [sorted(w) for w in g[\"why\"]] == [[\"claude_code\", \"code\", \"last_epoch\"]] and g[\"why\"][0][\"code\"] == \"unknown\" and isinstance(g[\"why\"][0][\"last_epoch\"], float))(acct(0, \"alice@example.com\")[\"cost\"][\"devices\"][0][\"diag\"])"'
 costlog "$H" more
 run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
@@ -3364,7 +3365,7 @@ ok "会话都关了：马上报“没在用”（留着上次使用），上报�
 ok "上报不经账号的出口：直连（钉住证书公钥），不经路由器和本机 Clash" '! grep -q "127.0.0.1:$SVPORT" curl.log 2>/dev/null'
 AK=$(python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$H/.cca/accounts.json")
 out=$(runev cca devices "$AK" --json); rc=$?
-ok "不在映射里的账号（第三方 API 账号）：不统计，fail 事件 devices_off" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"不在维护者的映射里\" in e[\"message\"]"'
+ok "第三方 API 账号：不统计（说只统计官方账号），fail 事件 devices_off" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"是第三方 API 账号：只统计官方账号\" in e[\"message\"]"'
 python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["presence"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
 out=$(runev cca devices alice@example.com --json); rc=$?
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS4=$!
@@ -3567,8 +3568,86 @@ rm -f "$H/.cca/remote/peers.json"; rmdir "$H/.cca/remote" 2>/dev/null
 runcmd "$(ans y)" "$P ./policy.sh key rm dan-air"
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
 ok "维护者撤销了 dan-air：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
+# 自己的同步服务器（docs/dev/hub.md）：另起一台真的 server/cca-presence.py --mode own（另一张证书，不用发布密钥），这台 Mac 经 cca hub join
+# 加入：维护者共享以外的官方账号（这里加一个 own@example.com）经它同步，alice 照旧只走维护者的。dan-air 照 server/README.md 的格式自己加入
+# 维护者的服务器按设备限流（每秒 0.5 个、最多攒 30 个）：上面配对的那些把这台 Mac 的配额用得差不多了，下面还要经它同步一轮，
+# 先重启它（状态文件留着），配额从头算
+kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; srv_start "$SVPORT"
+HV="$T/hub-srv"; mkdir -p "$HV"
+openssl ecparam -name prime256v1 -genkey -noout -out "$HV/key.pem" 2>/dev/null
+openssl req -new -x509 -key "$HV/key.pem" -subj /CN=cca-hub -days 2 -out "$HV/cert.pem" 2>/dev/null
+HADMIT=$(printf '5a%.0s' $(seq 1 16)); HSALT=$(printf 'c3%.0s' $(seq 1 16))
+python3 -I "$D/../server/cca-presence.py" --mode own --admit-hash "$(printf '%s' "$HADMIT" | shasum -a 256 | cut -d' ' -f1)" --listen 127.0.0.1:0 \
+	--port-file "$HV/port" --cert "$HV/cert.pem" --key "$HV/key.pem" --state "$HV/state.json" --ttl "$STTL" >>"$HV/log" 2>&1 & HVP=$!
+for i in $(seq 1 50); do [ -s "$HV/port" ] && break; sleep 0.1; done; HVPORT=$(cat "$HV/port")
+HPIN="sha256//$(openssl x509 -in "$HV/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"
+hlink() { python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.link_encode("https://127.0.0.1:%s" % sys.argv[2], [sys.argv[3]], sys.argv[4], sys.argv[5]))' "$D" "$HVPORT" "$HPIN" "${1:-$HADMIT}" "$HSALT"; }   # hlink [入伙口令]：照文档拼的加入链接
+HLINK=$(hlink); HCHUNK=${HLINK:$((${#HLINK} - 34)):24}   # 链接末尾盐的那一截（base64 的）：查链接有没有漏出去时查它和口令本身
+hdec() { python3 -I -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(json.dumps(sw.link_decode(sys.argv[2]), sort_keys=True))' "$D" "$1" 2>/dev/null; }   # 照文档解开的加入链接
+dhub() {   # dhub join | members：dan-air 照 server/README.md 的格式加入 / 列设备（打印 状态码 和 error）
+	python3 -B - "$D" "$T/dan" "$HVPORT" "$HADMIT" "$HSALT" "$1" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
+key, port, admit, salt, op = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
+extra = {}
+if op == 'join':
+    with open(key + '.pub') as f:
+        extra = {'pub': ' '.join(f.read().split()[:2]), 'name': 'dan-air', 'admit': admit, 'check': sw.hub_check(salt)}
+status, j = sw.post(key, port, op, extra)
+print(status, j.get('error') or '')
+PY
+}
+edit_table 'any(k == "own@example.com" or k.endswith("(own@example.com)") for k in j) or j.__setitem__("own@example.com", "US-A")'   # 11b2 的合并那里加过就不再加
+OWNQ='next(a for a in d["tools"][0]["accounts"] if a["key"] == "own@example.com" or a["key"].endswith("(own@example.com)"))'   # jok 里：这个账号
+out=$(run cca hub 2>&1); rc=$?
+ok "cca hub：还没加入时说怎么加入" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还没加入自己的同步服务器（有加入链接时运行 cca hub join）"'
+out=$(runev cca devices own@example.com --json 2>&1); rc=$?
+ok "还没加入：不在维护者映射里的官方账号，cca devices 说要经自己的同步服务器（fail 事件 devices_off）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"不在维护者的映射里，要经自己的同步服务器统计：还没加入自己的同步服务器\" in e[\"message\"]"'
+out=$(runev cca hub leave 2>&1); rc=$?
+ok "还没加入：cca hub leave 说没加入（fail 事件 hub_not_joined）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_not_joined\""'
+out=$(runev CCA_TTY="$(ans '')" cca hub join 2>&1); rc=$?
+ok "cca hub join：没输入加入链接：fail 事件 hub_link" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_link\""'
+out=$(runev CCA_TTY="$(ans "${HLINK%???}")" cca hub join 2>&1); rc=$?
+ok "cca hub join：链接少了一截（校验对不上）：fail 事件 hub_link，不联网" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_link\"" && [ ! -e "$H/.cca/hub/hub.json" ]'
+out=$(runev CCA_TTY="$(ans "$(hlink "$(printf '9%.0s' $(seq 1 32))")")" cca hub join 2>&1); rc=$?
+ok "cca hub join：入伙口令不对：服务器不认（fail 事件 hub_denied，说向已经加入的设备要），什么都不记下" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_denied\" and \"向已经加入的设备要\" in e[\"message\"]" && [ ! -e "$H/.cca/hub/hub.json" ]'
+: > "$T/curl.argv"; : > "$T/env.log"
+out=$(run CCA_TTY="$(ans "$HLINK")" cca hub join --name 书房的Mac 2>&1); rc=$?
+ok "cca hub join：问加入链接（输入不显示），加入了：说服务器、这台设备叫什么；加入信息、密钥只给自己读，有了设备标识；链接、口令不在输出里，也不在子进程的命令行（curl、env、ssh）里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已加入 127.0.0.1:$HVPORT 上自己的同步服务器：这台设备叫 书房的Mac，服务器上现在有 1 台设备" && [ "$(stat -f %Lp "$H/.cca/hub/hub.json")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/hub/id_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/hub")" = 700 ] && cfgok "len(c[\"device_id\"]) == 16" && ! printf "%s" "$out" | grep -qF -e "$HCHUNK" -e "$HADMIT" && grep -q "127.0.0.1:$HVPORT" "$T/curl.argv" && ! grep -qsF -e "$HCHUNK" -e "$HADMIT" "$T/curl.argv" "$T/env.log" "$T/ssh.log"'
+out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_hub.json"
+ok "_gui state：config.hubs 是维护者的和自己的两台；alice 走维护者的，own@example.com 走自己的（有「设备」一节）；第三方 API 账号哪都不走" 'printf "%s" "$out" | jok "[h[\"kind\"] for h in d[\"config\"][\"hubs\"]] == [\"maintainer\", \"own\"] and (lambda h: h[\"host\"] == \"127.0.0.1:$HVPORT\" and h[\"name\"] == \"书房的Mac\" and h[\"members\"] == 1 and h[\"accounts\"] == sum(a[\"hub\"] == \"own\" for t in d[\"tools\"] for a in t[\"accounts\"]) and h[\"can_invite\"] is True and h[\"state\"] in (\"pending\", \"ok\"))(d[\"config\"][\"hubs\"][1]) and acct(0, \"alice@example.com\")[\"hub\"] == \"maintainer\" and $OWNQ[\"hub\"] == \"own\" and $OWNQ[\"can\"][\"devices\"] is True and all(a[\"hub\"] is None for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
+HACC=$(printf '%s' "$out" | python3 -c 'import json,sys; print(sum(a["hub"] == "own" for t in json.load(sys.stdin)["tools"] for a in t["accounts"]))')
+out=$(run cca hub status --json 2>/dev/null); printf '%s' "$out" > "$T/guifx3/hub_status.json"
+out2=$(run cca hub 2>&1)
+ok "cca hub status --json（不联网）：加入了、用得了，经它同步的账号数和 state 里的一样；cca hub 说服务器、这台设备叫什么、几个账号" '[ "$HACC" -ge 1 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"hub_status\" and d[\"joined\"] is True and d[\"reason\"] is None and d[\"hub\"][\"kind\"] == \"own\" and d[\"hub\"][\"accounts\"] == $HACC" && printf "%s" "$out2" | grep -q "自己的同步服务器：127.0.0.1:${HVPORT}（这台设备叫 书房的Mac，服务器上 1 台设备）" && printf "%s" "$out2" | grep -q "经它同步的账号：${HACC} 个"'
+v=$(dhub join)
+out=$(run cca hub devices --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/hub_devices.json"
+DHFP=$(printf '%s' "$out" | python3 -c 'import json,sys; print(next(x["id"] for x in json.load(sys.stdin)["devices"] if x["name"] == "dan-air"))' 2>/dev/null)
+ok "dan-air 照文档加入了；cca hub devices --json：这台在前，两台设备（id 是设备指纹）" '[ "$v" = "200 " ] && [ $rc -eq 0 ] && printf "%s" "$out" | jok "[(x[\"name\"], x[\"me\"]) for x in d[\"devices\"]] == [(\"书房的Mac\", True), (\"dan-air\", False)]" && [ -n "$DHFP" ]'
+HINV=$(run cca hub invite 2>/dev/null)
+ok "cca hub invite：给出加入时的那一份（照文档解开一样）；在 Claude Code 里不给（会进对话记录）" '[ -n "$(hdec "$HLINK")" ] && [ "$(hdec "$HINV")" = "$(hdec "$HLINK")" ] && ! run CLAUDECODE=1 cca hub invite >/dev/null 2>&1 && run CLAUDECODE=1 cca hub invite 2>&1 | grep -q "在 Claude Code 里不显示加入链接"'
+out=$(runev cca hub remove dan-air 2>&1); rc=$?
+ok "界面 App 移除一台设备：先不移除，发一条同意事件（范围是它的设备指纹，默认不同意，说明里说它的密钥作废）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_remove\" and e[\"scope\"] == \"$DHFP\" and e[\"default\"] == \"no\" and \"现在的密钥作废\" in e[\"detail\"] and \"加入链接不变\" in e[\"detail\"]" && [ "$(dhub members)" = "200 " ]'
+out=$(runev CCA_GRANT="hub_remove:$DHFP" cca hub remove "$DHFP" 2>&1); rc=$?
+ok "同意后（按设备指纹）移除：result 事件 hub_removed；dan-air 再来服务器不认它（unknown_device）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_removed\" and \"dan-air\" in e[\"message\"]" && [ "$(dhub members)" = "403 unknown_device" ] && run cca hub devices --json 2>/dev/null | jok "[x[\"name\"] for x in d[\"devices\"]] == [\"书房的Mac\"]"'
+out=$(runev cca hub remove nobody 2>&1); rc=$?
+ok "没有这台设备：fail 事件 hub_no_device" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_no_device\""'
+out=$(run cca devices own@example.com --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/devices_hub.json"
+ok "cca devices own@example.com --json：问的是自己的同步服务器（账号的 hub 是 own，hubs 里有它）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"hub\"] == \"own\" and \"own\" in [h[\"kind\"] for h in d[\"hubs\"]] and d[\"me\"] == \"书房的Mac\""'
+out=$(run cca cost sync --now --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/cost_sync_hubs.json"
+ok "cost sync --now --json：两台服务器各同步一轮（sync.hubs 是维护者的、自己的）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "[h[\"kind\"] for h in d[\"sync\"][\"hubs\"]] == [\"maintainer\", \"own\"] and d[\"sync\"][\"hubs\"][0][\"state\"] == \"ok\""'
+out=$(runev cca hub leave 2>&1); rc=$?
+ok "界面 App 退出：先发同意事件（范围 all，默认不同意，说明里说同步来的折合金额会删、记下的 API key 留着），不退出" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_leave\" and e[\"scope\"] == \"all\" and e[\"default\"] == \"no\" and \"记下的 API key 留在这台设备上\" in e[\"detail\"]" && [ -e "$H/.cca/hub/hub.json" ]'
+printf '{"v": 1, "acc": {}}' > "$H/.cca/cost/own.remote.json"   # 经它同步来的（这里没有经它同步的会话，放一份看删不删）
+out=$(runev CCA_GRANT=hub_leave:all cca hub leave 2>&1); rc=$?
+ok "同意后退出：result 事件 hub_left；服务器上移除了这台设备，加入信息、密钥、经它同步来的都删掉；state 里没有它了" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_left\"" && [ ! -e "$H/.cca/hub" ] && [ ! -e "$H/.cca/cost/own.remote.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"machines\"] == {} else 1)" "$HV/state.json" && gj state | jok "[h[\"kind\"] for h in d[\"config\"][\"hubs\"]] == [\"maintainer\"] and $OWNQ[\"hub\"] is None"'
+out=$(sess "{\"hub.join\":[{\"v\":\"$HLINK\"}]}" -- cca hub join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_hub_join.jsonl"
+ok "界面 App 里加入（提问会话）：一个密文输入框，贴加入链接；result 事件 hub_joined；事件文件里没有加入链接" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.join" ] && evq "e.get(\"q\") == \"hub.join\" and [f[\"kind\"] for f in e[\"fields\"]] == [\"secret\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_joined\"" && ! grep -qF -e "$HCHUNK" -e "$HADMIT" "$T/ev.jsonl" && [ -e "$H/.cca/hub/hub.json" ] && ! grep -qsF -e "$HCHUNK" -e "$HADMIT" "$T/curl.argv" "$T/env.log" "$T/ssh.log"'
+rm -rf "$H/.cca/hub" "$H/.cca/presence"/own.* "$H/.cca/cost"/own.*
+kill "$HVP" 2>/dev/null; wait "$HVP" 2>/dev/null; HVP=""
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
-	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json 和配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
+	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json、自己的同步服务器和配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
 fi
 kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; SVP=""
 cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"; cp -p "$T/pres.keys.json" "$T/deploy_keys.json"
@@ -4264,6 +4343,13 @@ mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail
 RSP=$(printf 'ab%.0s' $(seq 1 16)); mkdir -p "$H/.cca/remote" "$T/keychain/cca-remote-$RSP"; chmod 700 "$H/.cca/remote"
 printf '%064d' 7 > "$T/keychain/cca-remote-$RSP/pair"
 printf '{"v":1,"peers":{"%s":{"fp":"SHA256:%s","name":"dan-air","incoming":"control","shown":true,"at":1794000000}}}\n' "$RSP" "$(printf 'A%.0s' $(seq 1 43))" > "$H/.cca/remote/peers.json"
+# 加入过自己的同步服务器（docs/dev/hub.md），服务器这时连不上（127.0.0.1:9）：restore 先在清单里说要退出，照样退出、说怎么在别的设备上
+# 移除这台；加入信息（链接里的入伙口令、盐）、这台设备在它上面的私钥、经它同步来的折合金额都删掉，不进备份
+RHA=$(printf 'e7%.0s' $(seq 1 16)); RHS=$(printf '9d%.0s' $(seq 1 16))
+mkdir -p "$H/.cca/hub" "$H/.cca/cost"; chmod 700 "$H/.cca/hub"; ssh-keygen -q -t ed25519 -N '' -C hub -f "$H/.cca/hub/id_ed25519"
+printf '{"v":1,"url":"https://127.0.0.1:9","pins":["sha256//%s="],"admit":"%s","salt":"%s","name":"studio","joined_at":1794000000}\n' \
+	"$(printf 'A%.0s' $(seq 1 43))" "$RHA" "$RHS" > "$H/.cca/hub/hub.json"
+printf '{"acc":{"x":"HUB-REMOTE-SECRET"}}\n' > "$H/.cca/cost/own.remote.json"
 # macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
@@ -4284,6 +4370,7 @@ BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
 ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
 ok "restore：备份里没有折合金额的缓存、别的设备同步来的（cost/scan.json、remote.json 这些），这台设备统计好的（cost/local.json）在" '! tar -tzf "$BK" | grep -qE "cost/(scan|remote|worker)\.json|cost/(last|scanned)$" && tar -tzf "$BK" | grep -q "cost/local\.json"'
+ok "restore：清单里说要退出自己的同步服务器；服务器连不上照样退出，说怎么在别的设备上移除这台；加入信息、私钥、经它同步来的折合金额都不进备份" 'printf "%s" "$out" | grep -q "自己的同步服务器（127.0.0.1:9）：退出" && printf "%s" "$out" | grep -q "服务器上没能移除这台设备.*cca hub remove" && ! tar -tzf "$BK" | grep -qE "(^|/)hub/|cost/own\." && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "$RHA|$RHS|HUB-REMOTE-SECRET"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'

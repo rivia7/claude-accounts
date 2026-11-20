@@ -2527,7 +2527,7 @@ key_set() {   # cca key 账号（需要先 eval "$(py env 名称)"）
 	if [ "$ACC_KIND" != api ]; then
 		note="只记在${KEYSTORE_AT}里备查（比如在控制台里建的 key）：cca 不会拿它登录或启动这个账号"
 		[ "$(py key-share "$ACC_KEY")" != 1 ] ||
-			note="记在${KEYSTORE_AT}里备查（比如在控制台里建的 key），并加密同步给登录了这个账号的其他设备（维护者的服务器看不到 key）：cca 不会拿它登录或启动这个账号"
+			note="记在${KEYSTORE_AT}里备查（比如在控制台里建的 key），并加密同步给登录了这个账号的其他设备（同步服务器上只有密文，看不到 key）：cca 不会拿它登录或启动这个账号"
 		[ -n "$PROMPT_GUI" ] || info "$note"
 	elif [ "$(py secret-status "$ACC_KEY")" = table ]; then
 		note="账号表里写了 ${ACC_NAME} 的 key 字段，会优先用它；要换那个请用 ${CMD} edit"
@@ -5952,7 +5952,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/agy.json" ] && ag=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"hub":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s},"agy":{"enabled":%s,"bin":%s}},' \
 		"$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")" "$ag" "$(jopt "$AGY_BIN")"
@@ -6438,9 +6438,10 @@ policy_off() {   # cca policy off [--forget-key]：关掉维护者的共享。�
 			1) say "已取消"; return 0 ;;
 			*) die "要先同意：在终端里运行 cca policy off（会先问你）" ;;   # App 问过以后带着 CCA_GRANT 重新运行
 		esac
-		py presence-stop 2>/dev/null   # 设备统计的上报进程、正在统计折合金额的后台进程：先停掉（它们用的是维护者的服务器）
+		py presence-stop 2>/dev/null   # 设备统计的上报进程（停的时候告诉维护者的服务器这些会话停了）、正在统计折合金额的后台进程：先停掉
 		py cost-stop 2>/dev/null
 		out=$(py policy-off apply $forget); rc=$?
+		py presence-wake >/dev/null 2>&1   # 再起上报进程：还用得了的服务器（自己的同步服务器，没关成时还有维护者的）接着报，没有要报的它马上退出
 	fi
 	case $rc in
 		0) ;;
@@ -6529,7 +6530,7 @@ cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增
 	esac
 }
 
-cmd_devices() {   # cca [codex] devices [账号…] [--json]：映射里的账号连着哪些设备（维护者的服务器上看；--json 给 App，PROTOCOL 3.4）
+cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪些设备（问它走的那台同步服务器：维护者共享的问维护者的，自己的问自己的；--json 给 App，PROTOCOL 3.4）
 	local a json="" out rc
 	for a in "$@"; do [ "$a" = --json ] && json=1; done
 	out=$(py presence-view "$@"); rc=$?
@@ -6538,6 +6539,141 @@ cmd_devices() {   # cca [codex] devices [账号…] [--json]：映射里的账�
 		2) FAIL_CODE=devices_off die "$out" ;;
 		*) [ -z "$out" ] || fail_warn devices_unavailable "$out"; return 1 ;;   # 账号写错了时 py 自己说过了
 	esac
+}
+
+# ---------------------------------------------------------------------------
+# 自己的同步服务器（cca hub；docs/dev/hub.md，PROTOCOL 4.13）：用户自己部署的服务器，维护者共享以外的官方账号的设备统计、
+# 记下的 API key、折合金额经它和自己的其他设备同步。加入链接是凭证：只经 stdin、提问会话传，不进命令行和环境变量
+# ---------------------------------------------------------------------------
+HUB_USAGE="用法: cca hub [status [--json] | join [--stdin] [--name 名字] | devices [--json] | remove 设备 | leave | invite]"
+cmd_hub() {
+	[ -f "$CFG" ] || die "还没安装：请先运行 $SELF install"
+	local out
+	case "${1:-status}" in
+		status)   # 只看本机记着的，不联网；--json 给 App
+			shift
+			out=$(py hub-status "$@") || exit 1
+			case " $* " in *" --json "*) printf '%s\n' "$out" ;; *) say "$out" ;; esac ;;
+		join) shift; hub_join "$@" ;;
+		devices) shift; hub_devices "$@" ;;
+		remove) shift; hub_remove "$@" ;;
+		leave) shift; hub_leave "$@" ;;
+		invite) shift; hub_invite "$@" ;;
+		*) die "$HUB_USAGE" ;;
+	esac
+}
+
+hub_join() {   # cca hub join [--stdin] [--name 名字]：问加入链接（输入不显示；App 里是提问会话的 hub.join），或者 --stdin 从标准输入读。
+	             # 已经加入了同一台是重新加入（服务器丢了这台的记录、换名字）
+	local stdin="" name="" link out rc members host off
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--stdin) stdin=1 ;;
+			--name) [ $# -ge 2 ] || die "$HUB_USAGE"; name=$2; shift ;;
+			*) die "用法: cca hub join [--stdin] [--name 名字]（加入链接不写在命令行上：会问你，或者用 --stdin 从标准输入读）" ;;
+		esac
+		shift
+	done
+	if [ -n "$stdin" ]; then
+		link=$(cat)
+	else
+		need_tty
+		link=$(ask_secret "加入链接（cca-hub1. 开头，输入不显示）: " q=hub.join "title=加入自己的同步服务器" "label=加入链接" \
+			"hint=部署服务器时给的那一行，或者在已经加入的设备上运行 cca hub invite 得到的")
+	fi
+	[ -n "${link//[[:space:]]/}" ] || FAIL_CODE=hub_link die "没有输入加入链接"
+	out=$(printf '%s' "$link" | py hub-join ${name:+--name "$name"}); rc=$?
+	link=""
+	if [ $rc -ne 0 ]; then
+		case "$out" in
+			*$'\t'*) FAIL_CODE="hub_${out%%$'\t'*}" die "${out#*$'\t'}" ;;
+			*) die "${out:-没有加入成}" ;;
+		esac
+	fi
+	{ IFS= read -r name; IFS= read -r host; IFS= read -r members; IFS= read -r off; } <<< "$out"   # 一行一项（可以是空的）
+	okay "已加入 ${host} 上自己的同步服务器：这台设备叫 ${name}${members:+，服务器上现在有 ${members} 台设备}"
+	if [ -n "$off" ]; then
+		warn "${off}：现在不经它同步，把这一项改成 true（或者删掉）以后才同步"
+	else
+		say "  维护者共享以外的官方账号：设备统计、记下的 API key、折合金额从现在起经它和自己的其他设备同步"
+	fi
+	say "  别的设备上运行 cca hub join，贴同一个加入链接（忘了的话 cca hub invite 再显示一次）"
+	gui_done hub_joined "已加入自己的同步服务器（${host}），这台设备叫 ${name}"
+}
+
+hub_devices() {   # cca hub devices [--json]：自己的同步服务器上有哪些设备（问服务器；--json 给 App）
+	local a json="" out rc
+	for a in "$@"; do [ "$a" = --json ] && json=1; done
+	out=$(py hub-devices "$@"); rc=$?
+	case $rc in
+		0) if [ -n "$json" ]; then printf '%s\n' "$out"; else say "$out"; fi ;;
+		2) FAIL_CODE=hub_not_joined die "$out" ;;
+		*) [ -z "$out" ] || fail_warn hub_unavailable "$out"; return 1 ;;
+	esac
+}
+
+hub_remove() {   # cca hub remove 设备（名字，或者指纹的开头）：从服务器上移除，它现在的密钥作废（加入链接还认：留着链接的设备能重新加入）。
+	              # 是这台设备自己就是退出（同 cca hub leave）。先问
+	[ $# -eq 1 ] && [ -n "$1" ] || die "用法: cca hub remove 设备（名字，或者指纹的开头；cca hub devices 看有哪些）"
+	local out rc fp name me why
+	out=$(py hub-remove plan "$1"); rc=$?
+	case $rc in
+		0) ;;
+		2) FAIL_CODE=hub_not_joined die "$out" ;;
+		3) FAIL_CODE=hub_no_device die "$out" ;;
+		*) FAIL_CODE=hub_unavailable die "${out:-没问到服务器上有哪些设备}" ;;
+	esac
+	IFS=$'\t' read -r fp name me <<< "$out"
+	if [ "$me" = 1 ]; then
+		why="这就是这台设备：移除它等于退出自己的同步服务器，这台设备上记着的加入链接、别的设备同步来的折合金额跟着删掉（记下的 API key 留着）"
+	else
+		why="移除以后「${name}」现在的密钥作废，它传过的折合金额照样算在账号里。加入链接不变：它上面还留着链接，拿着链接照样能重新加入。设备丢了、被人拿走了的话，要换一个加入链接重新部署服务器（别的设备都要重新加入），它上面登录着的账号也要处理"
+	fi
+	[ -n "$PROMPT_GUI" ] || say "  ${why}"
+	consent hub_remove "$fp" "移除设备" "从自己的同步服务器上移除「${name}」吗？" "$why" n
+	case $? in
+		0) ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca hub remove ${name}（会先问你）" ;;
+	esac
+	out=$(py hub-remove apply "$fp") || FAIL_CODE=hub_unavailable die "${out:-没有移除成}"
+	if [ "$me" = 1 ]; then
+		okay "已退出自己的同步服务器"; gui_done hub_left "已退出自己的同步服务器"
+	else
+		okay "已从自己的同步服务器上移除「${name}」"; gui_done hub_removed "已移除「${name}」"
+	fi
+}
+
+hub_leave() {   # cca hub leave：退出自己的同步服务器：服务器上移除这台设备，本机记着的加入链接、密钥、别的设备同步来的折合金额都删掉。先问
+	[ $# -eq 0 ] || die "用法: cca hub leave"
+	local out rc host name why
+	out=$(py hub-leave plan); rc=$?
+	[ $rc -eq 0 ] || FAIL_CODE=hub_not_joined die "$out"
+	IFS=$'\t' read -r host name <<< "$out"
+	why="服务器上移除这台设备（${name}，它的密钥作废）；这台设备上记着的加入链接、别的设备同步来的折合金额都删掉，记下的 API key 留在这台设备上。以后要再加入，要有加入链接"
+	[ -n "$PROMPT_GUI" ] || say "  ${why}"
+	consent hub_leave all "退出自己的同步服务器" "退出 ${host} 上自己的同步服务器吗？" "$why" n
+	case $? in
+		0) ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca hub leave（会先问你）" ;;
+	esac
+	out=$(py hub-leave apply) || die "${out:-没有退出成}"
+	[ -z "$out" ] || warn "$out"   # 服务器那边没移除成（连不上）：本机照样退出了，说一声怎么在别的设备上移除它
+	okay "已退出自己的同步服务器"
+	gui_done hub_left "已退出自己的同步服务器${out:+。${out}}"
+}
+
+hub_invite() {   # cca hub invite：加入链接打到 stdout（别的设备 cca hub join 时贴进去；App 的「复制加入链接」经管道读）。它是凭证：
+	               # 在 Claude Code 的会话里不给（会进对话记录）
+	[ $# -eq 0 ] || die "用法: cca hub invite"
+	if [ -n "${CLAUDECODE:-}" ] && [ -z "${CCA_EVENTS:-}" ]; then
+		die "在 Claude Code 里不显示加入链接（会进对话记录）：请在终端或 cca App 里看"
+	fi
+	local out
+	out=$(py hub-invite) || FAIL_CODE=hub_not_joined die "$out"
+	printf '%s\n' "$out"
+	[ ! -t 1 ] || say "  在别的设备上运行 cca hub join，贴这一行。谁拿到它都能加入：只发给自己的设备"
 }
 
 cmd_policy() {   # cca [codex] policy [on | setup [仓库] | off [--forget-key] | pull [--json] | request 账号]
@@ -7023,6 +7159,7 @@ cmd_restore() {
 	mail_user=$(py mail-get-user 2>/dev/null)
 	[ -z "$mail_user" ] || say "  · 邮箱助手：删掉${KEYSTORE}里 ${mail_user} 的应用专用密码（Google 账号里的那个应用专用密码要你自己去撤销）"
 	[ -z "$(py remote-peers 2>/dev/null)" ] || say "  · 远程会话：取消和别的机器的配对（那些机器不能再接入这台机器，这台也接不了它们），配对的密钥从${KEYSTORE}里删掉"
+	out=$(py hub-leave plan 2>/dev/null) && say "  · 自己的同步服务器（${out%%$'\t'*}）：退出，服务器上移除这台设备；加入链接、这台设备的密钥跟着删掉（别的设备照旧）"
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 内置代理（用过的话）：停掉它的内核，删掉配置和拷来的节点"
 	if ! on_linux; then udp_env; udp_present && say "  · 本机 UDP 走节点：删掉 root 的系统服务 ${UDP_LABEL}（要输管理员密码）"; fi
@@ -7047,6 +7184,7 @@ cmd_restore() {
 	use_tool claude
 	py mail-forget 2>/dev/null   # 邮箱助手：钥匙串里的应用专用密码（没配置过也照样跑：什么都不删）
 	py remote-forget 2>/dev/null   # 远程会话：和别的机器的配对都取消（告诉服务器），配对的密钥从钥匙串里删掉
+	out=$(py hub-leave apply 2>/dev/null) && [ -n "$out" ] && warn "$out"   # 自己的同步服务器：退出（连不上时说怎么在别的设备上移除这台）
 	if router_ready; then
 		out=$(router_uninstall 2>&1); rc=$?
 		[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  │ /' >&2
@@ -7069,10 +7207,11 @@ cmd_restore() {
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点、维护者的参考节点，
 	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
 	# policy 的目录）；备份目录（backup/）是用户自己的配置文件，照样打包。登录凭证（Codex 的 auth.json、Linux 上
-	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）不打包
+	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）、
+	# 自己的同步服务器的加入信息（hub/hub.json：加入链接是凭证）和经它同步来的不打包
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/custom-nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
-		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' \
-		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
+		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' \
+		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
 		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null )
@@ -7257,9 +7396,16 @@ EOF
                              （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
   cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex、Antigravity 账号：cca codex|agy policy request）
   cca devices [账号…] [--json]
-                             映射里的账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
-                             （维护者在映射里配置了设备统计的服务器时才有；Codex 账号：cca codex devices）。
-                             映射里的账号经 cca 用的时候（命令行会话${mac:+、cca app 打开的 App}），${host}也会报告给那台服务器
+                             账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
+                             （维护者共享的账号问维护者的服务器，别的官方账号问自己的同步服务器；Codex 账号：cca codex devices）。
+                             这些账号经 cca 用的时候（命令行会话${mac:+、cca app 打开的 App}），${host}也会报告给它走的那台服务器
+  cca hub [status] [--json]  自己的同步服务器：维护者共享以外的官方账号，设备统计、记下的 API key、折合金额经它和
+                             自己的其他设备同步（服务器只存密文）。status 只看本机记着的，不联网
+  cca hub join [--stdin] [--name 名字]
+                             加入：问加入链接（部署服务器时给的那一行，或者已经加入的设备上 cca hub invite 给的；输入不显示），
+                             --stdin 从标准输入读；名字默认是主机名
+  cca hub devices [--json]   服务器上有哪些设备；remove 设备（名字或者指纹的开头）移除一台（先问）
+  cca hub invite             再显示一次加入链接（给自己的别的设备；谁拿到都能加入）；leave 退出（先问）
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa、等于 cca agy 的 aga）
@@ -7293,7 +7439,7 @@ EOF
                              和它链到 ~/.claude 里共享的目录）、
                              leak_check（设成 false：启动前不测 ${leaks}）、
                              cost（设成 false：不统计按 API 标价折算的金额，App 里也不显示）、
-                             presence（设成 false：${host}不向维护者的服务器报告、也不查设备统计）${mac:+、}
+                             presence（设成 false：${host}不向同步服务器（维护者的、自己的）报告、也不查设备统计、不同步）${mac:+、}
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
                              dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）、
@@ -7342,6 +7488,7 @@ main() {
 		clients) shift; cmd_clients "$@" ;;
 		cost) shift; cmd_cost "$@" ;;   # 统计折合金额（App 定时运行，PROTOCOL 3.5；不经过自动更新、映射拉取）
 		remote) shift; cmd_remote "$@" ;;   # 远程会话：开关、这台机器上可以接入的会话、接入（和工具无关；不经过自动更新、映射拉取）
+		hub) shift; cmd_hub "$@" ;;   # 自己的同步服务器（和工具无关；不经过自动更新、映射拉取）
 		update) shift; cmd_update "$@" ;;
 		restore) cmd_restore ;;
 		*)

@@ -19,7 +19,7 @@ import time
 
 import run
 from run import case
-from cases.presence import CURL, KEYGEN, MASK, aid_of, reply as server, src
+from cases.presence import CURL, HUB_MASK, KEYGEN, MASK, aid_of, reply as server, src
 from cases.secrets import ALICE, BOB, PRESENCE, PUB, SHARING, world
 from cases.session import PS, T0_EPOCH
 
@@ -56,6 +56,10 @@ CMASK = MASK + [
     (r'"used_epoch":\d+', '"used_epoch":<T>'),                               # 现在减去服务器说的“多久以前用过”
     (r'"n": "[^"]+", "c": "[^"]+", "t": "[^"]+"', '<BLOB>'),      # 夹具里别的设备的密文（before 里现算的，两边各算一遍）
 ] + DIAG_MASK + DEVICES_MASK
+# 自己的同步服务器（docs/dev/hub.md）以后：账号的折合金额经哪台同步（sync.hub）、cost sync --json 各台的（sync.hubs）原来没有，去掉再比；
+# 这台设备的 id 换成 config.json 的 device_id（没有时 local），原来开着设备统计时是这台设备的指纹
+ME_ID_MASK = [(r'"id": "(?:SHA256:[^"]*|local)"(,\s*"name": "[^"]*",\s*"me": true)', r'"id": "<ME>"\1')]
+CMASK += HUB_MASK + ME_ID_MASK
 
 
 

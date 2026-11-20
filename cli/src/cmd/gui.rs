@@ -7,10 +7,11 @@
 
 use super::corenet::{local_info, local_names, local_want, slot_orders, udp_view};
 use super::cost::CostView;
+use super::hub::{hub_entries, hub_of, hubs, mapped, Hub, HubKind};
 use super::keyshare::keyshare_error;
 use super::launchers::{launcher_badges, launcher_names};
 use super::leak::coffee_parse;
-use super::presence::{app_proc_re, presence_load, presence_mapped};
+use super::presence::app_proc_re;
 use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
 use super::usage::{parse_ts, usage_cached, usage_entry, usage_row, usage_weeks_view};
 use super::{arg, arity, Cmd};
@@ -390,13 +391,17 @@ fn or_none(x: Option<V>) -> V {
     x.filter(|v| v.truthy()).unwrap_or(V::None)
 }
 
-/// bash 才知道的（找到的命令、App、Chrome）经 CCA_GUI_* 环境变量传进来，加上这一次读好的设备统计、折合金额
+/// bash 才知道的（找到的命令、App、Chrome）经 CCA_GUI_* 环境变量传进来，加上这一次读好的同步服务器、折合金额
 struct GuiEnv<'a> {
     bin: Option<String>,
     app: Option<String>,
     chrome: bool,
-    presence: bool,
-    key_error: Option<String>,
+    /// 这台设备用得了的同步服务器（hub.rs 的 hubs()）
+    hubs: &'a [Hub],
+    /// 记下备查的 API key 最近一次和各台服务器没同步成的原因
+    key_errors: &'a [(HubKind, Option<String>)],
+    /// 经各台服务器同步的账号数（config.hubs[] 的 accounts）
+    counts: &'a mut Vec<HubKind>,
     cost: &'a mut CostView,
 }
 
@@ -479,7 +484,13 @@ fn gui_account(
     let weeks = if api || !tool.has_usage { None } else { usage_weeks_view(k, now, cached.as_ref())? };
     let can_cost = env.cost.on && tool.has_cost && !api; // 折合金额（PROTOCOL 2.2 的 cost）
     let lower = e.to_lowercase();
-    let mapped = !e.is_empty() && pm.has(&lower);
+    // 维护者映射里的官方账号
+    let pinned = mapped(pm, k, v);
+    // 设备统计、记下的 API key、折合金额经哪台服务器同步（这台设备用不了它走的那台时是 None）
+    let hub = hub_of(env.hubs, pm, k, v).map(|h| h.kind);
+    if let Some(kind) = hub {
+        env.counts.push(kind);
+    }
     let plan_shown = plan.as_deref().filter(|p| !p.is_empty() && *p != "—");
     let can = Dict::new();
     for x in ["app", "web", "usage", "check", "cli"] {
@@ -488,16 +499,17 @@ fn gui_account(
     can.set("billing", !why.has("web") && !tool.billing_url.is_empty()); // 控制台的账单页和网页版走同一条路（cmd_web）；agy 没有
     can.set("limit_resets", tool.kind == Kind::Claude && !why.has("web")); // claude.ai 的用量页，只有 Claude 账号有
     can.set("policy_lock", !api && !e.is_empty() && c.truthy("policy") && !pm.has(&lower));
-    can.set("devices", env.presence && !api && mapped); // 账号页的「设备」（PROTOCOL 3.4）
+    can.set("devices", hub.is_some()); // 账号页的「设备」（PROTOCOL 3.4）
     can.set("api_key", true); // 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
     let with_mail = tool.kind == Kind::Claude && !api && !e.is_empty();
     can.set("mail", with_mail); // 邮箱助手：账号页的「邮箱」一节（PROTOCOL 4.11），只有 Claude 官方账号有
     can.set("cost", can_cost);
     // 自定义代理（cca [codex|agy] node use，PROTOCOL 4.6 的 node.custom）：维护者的映射固定了节点的官方账号不能换
     can.set("custom_proxy", super::accounts::node_free(k, v, pm));
-    let share = env.presence && !api && mapped && matches!(tool.kind, Kind::Claude | Kind::Codex);
-    let share_err = env.key_error.as_deref().map_or(V::None, V::from);
-    let cost = if can_cost { env.cost.account(tool, k, weeks.as_ref(), mapped, login == "logged_in") } else { V::None };
+    let share = hub.is_some() && matches!(tool.kind, Kind::Claude | Kind::Codex);
+    let share_err =
+        env.key_errors.iter().find(|(kind, _)| Some(*kind) == hub).and_then(|(_, e)| e.as_deref()).map_or(V::None, V::from);
+    let cost = if can_cost { env.cost.account(tool, k, weeks.as_ref(), hub, login == "logged_in") } else { V::None };
     let node = node_of(v);
     Ok(dict! {
         "key" => k, "id" => acct_id(k, tool), "alias" => a, "email" => e.as_str(), "name" => name_of(k), "label" => label_of(k),
@@ -505,7 +517,7 @@ fn gui_account(
         "plan" => plan_shown.unwrap_or(""), "plan_tier" => if plan_shown.is_some() { tier } else { "" },
         "node" => if node.is_empty() { V::None } else { V::from(&*node) }, "port" => &port, "slot" => slot,
         "group" => slot.map(|s| format!("CCA-{s}")),
-        "pinned" => !api && mapped, "pinned_node" => if !api && !e.is_empty() { pm.get(&lower).unwrap_or(V::None) } else { V::None },
+        "pinned" => pinned, "pinned_node" => if !api && !e.is_empty() { pm.get(&lower).unwrap_or(V::None) } else { V::None },
         "is_last" => tool.state(c, false).get("last").is_some_and(|l| l.as_str() == Some(k)),
         "api" => if api {
             let d = v.as_dict().expect("is_api 说它是字典");
@@ -521,6 +533,7 @@ fn gui_account(
         "usage" => usage, "usage_weeks" => weeks,
         "cost" => cost,
         "health" => health_view(k, v, now),
+        "hub" => hub.map(|h| h.name()),
     })
 }
 
@@ -643,15 +656,16 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     };
     let procs = gui_procs();
     local.set("udp", udp_view(&c, Some(&procs))); // 本机 UDP 走节点（只在 macOS 上，别的系统是 null）
-    let pcfg = presence_load()?.1;
-    let presence = pcfg.is_some();
-    // 记下备查的 API key 最近一次没同步成的原因（api_key 的 sync_error）
-    let key_error = if presence { keyshare_error() } else { None };
+    let hubs = hubs()?;
+    let kinds: Vec<HubKind> = hubs.iter().map(|h| h.kind).collect();
+    // 记下备查的 API key 最近一次和各台服务器没同步成的原因（api_key 的 sync_error）
+    let key_errors: Vec<(HubKind, Option<String>)> = kinds.iter().map(|k| (*k, keyshare_error(*k))).collect();
     // 折合金额：读一次统计好的（cost/ 里的），各账号按时段切
-    let mut cv = CostView::new(&c, now, pcfg.as_ref());
+    let mut cv = CostView::new(&c, now, &kinds);
     let entries = out.list("tools").expect("刚建的");
     let mut enabled_ids: Vec<&'static str> = Vec::new();
     let mut shared = 0;
+    let mut counts: Vec<HubKind> = Vec::new();
     for tool in tools() {
         let name = tool.name.to_uppercase();
         let var = |suffix: &str| getenv(&format!("CCA_GUI_{name}_{suffix}")).filter(|s| !s.is_empty());
@@ -659,8 +673,9 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             bin: var("BIN"),
             app: var("APP"),
             chrome: getenv("CCA_GUI_CHROME").as_deref() == Some("1"),
-            presence,
-            key_error: key_error.clone(),
+            hubs: &hubs,
+            key_errors: &key_errors,
+            counts: &mut counts,
             cost: &mut cv,
         };
         let enabled = tool.kind == Kind::Claude || path::exists(&tool.table);
@@ -682,7 +697,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             }
             let badges = launcher_badges(&c, &official, &launcher_names(&official));
             let pm = policy_map(tool, Some(&c));
-            shared += table.items().iter().filter(|(k, v)| presence_mapped(&pm, k, v)).count();
+            shared += table.items().iter().filter(|(k, v)| mapped(&pm, k, v)).count();
             entry.set(
                 "errors",
                 tool.errs().into_iter().map(|m| V::Dict(dict! { "code" => "table_invalid", "message" => m })).collect::<Vec<V>>(),
@@ -704,6 +719,9 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         entries.push(entry);
     }
     policy.set("accounts", shared);
+    // 同步服务器（PROTOCOL 2.2 的 config.hubs）：经它同步的账号数是上面数的
+    let hub_list = hub_entries(|kind| counts.iter().filter(|k| **k == kind).count())?;
+    out.dict("config").expect("刚建的").set("hubs", hub_list);
     // dict.fromkeys(RO_BAD)：重复的只留先来的
     let mut seen: Vec<(String, String)> = Vec::new();
     for bad in RO_BAD.with(|b| b.borrow().clone()) {

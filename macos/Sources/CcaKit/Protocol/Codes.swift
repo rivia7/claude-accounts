@@ -322,9 +322,13 @@ struct ResultCode: KnownValues {
     static let policyOn = ResultCode(rawValue: "policy_on")
     /// 共享关着：`cca policy off` 关掉了（本来就关着也是它），或者 `policy on` 里选了「不打开共享」。
     static let policyOff = ResultCode(rawValue: "policy_off")
+    /// 自己的同步服务器（PROTOCOL 4.13）：加入了（`cca hub join`）/ 移除了别的设备（`hub remove`）/ 退出了（`hub leave`，或者移除的是这台设备自己）
+    static let hubJoined = ResultCode(rawValue: "hub_joined")
+    static let hubRemoved = ResultCode(rawValue: "hub_removed")
+    static let hubLeft = ResultCode(rawValue: "hub_left")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .policyOn, .policyOff]
+                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft]
 }
 
 struct FailCode: KnownValues {
@@ -384,13 +388,37 @@ struct FailCode: KnownValues {
     static let nodePinned = FailCode(rawValue: "node_pinned")
     /// 关掉共享（`cca policy off`）：共享的账号正在用（命令行会话、桌面 App 开着），什么都没改；message 说是哪些。
     static let policyOffBusy = FailCode(rawValue: "policy_off_busy")
+    /// 自己的同步服务器（`cca hub …`，PROTOCOL 4.13）没成：`hub_` 开头，后面是原因（`hub_link`、`hub_denied`……，message 是给人看的原因）。
+    /// 这几个 App 要分开处理：还没加入 / 没有这台设备 / 问不到服务器
+    static let hubNotJoined = FailCode(rawValue: "hub_not_joined")
+    static let hubNoDevice = FailCode(rawValue: "hub_no_device")
+    static let hubUnavailable = FailCode(rawValue: "hub_unavailable")
+    /// 加入时链接不对、服务器不认（App 让用户重新贴一个）
+    static let hubLink = FailCode(rawValue: "hub_link")
+    static let hubDenied = FailCode(rawValue: "hub_denied")
+    static let hubSalt = FailCode(rawValue: "hub_salt")
+    /// 加入时的别的原因（App 照 message 说）：已经加入了另一台、满了、不是自己的同步服务器、证书对不上、连不上、时钟、太频繁、密钥、服务器出错、名字
+    static let hubOther = FailCode(rawValue: "hub_other")
+    static let hubFull = FailCode(rawValue: "hub_full")
+    static let hubOld = FailCode(rawValue: "hub_old")
+    static let hubPin = FailCode(rawValue: "hub_pin")
+    static let hubUnreachable = FailCode(rawValue: "hub_unreachable")
+    static let hubClock = FailCode(rawValue: "hub_clock")
+    static let hubBusy = FailCode(rawValue: "hub_busy")
+    static let hubSign = FailCode(rawValue: "hub_sign")
+    static let hubServer = FailCode(rawValue: "hub_server")
+    static let hubName = FailCode(rawValue: "hub_name")
+    /// 自己的同步服务器的失败原因（`hub_` 开头的都是，认不认识都算：App 照 message 说）
+    var isHub: Bool { rawValue.hasPrefix("hub_") }
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy]
+                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy,
+                                       .hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt, .hubOther, .hubFull,
+                                       .hubOld, .hubPin, .hubUnreachable, .hubClock, .hubBusy, .hubSign, .hubServer, .hubName]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -430,8 +458,13 @@ struct ConsentItem: KnownValues {
     static let remoteEnd = ConsentItem(rawValue: "remote_end")
     /// `cca policy off`：关掉维护者的共享，映射里的账号移出账号表（范围 `all`，默认不同意；PROTOCOL 4.12）。
     static let policyOff = ConsentItem(rawValue: "policy_off")
+    /// `cca hub remove`：从自己的同步服务器上移除一台设备（范围是设备指纹，默认不同意；PROTOCOL 4.13）。
+    static let hubRemove = ConsentItem(rawValue: "hub_remove")
+    /// `cca hub leave`：退出自己的同步服务器（范围 `all`，默认不同意）。
+    static let hubLeave = ConsentItem(rawValue: "hub_leave")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff]
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff,
+                                          .hubRemove, .hubLeave]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

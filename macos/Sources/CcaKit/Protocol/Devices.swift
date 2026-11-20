@@ -1,7 +1,7 @@
 import Foundation
 
-/// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：维护者的服务器上的记录，时间 cca 已经换成这台 Mac 的时钟。
-/// 只有映射里的官方账号、这台 Mac 配置了映射和设备统计的服务器时才有（`can.devices`）。
+/// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号走的那台服务器（维护者的、自己的同步服务器）上的记录，
+/// 时间 cca 已经换成这台 Mac 的时钟。只有经服务器同步的官方账号才有（`can.devices`）。
 struct DevicesDoc: CcaDocument, Equatable {
     static let expectedKind: String? = "devices"
 
@@ -16,10 +16,12 @@ struct DevicesDoc: CcaDocument, Equatable {
     var offlineAfter: Double?
     /// 这台 Mac 最近一次没报成的原因（报成了是 nil）
     var reportingError: String?
+    /// 这台设备用得了的每台服务器（这一次没问的那台 me、idleAfter、offlineAfter 是 nil；顶层的是问了的第一台的）；旧版 cca 没有，是空的
+    var hubs: [DevicesHub]
     var accounts: [DevicesAccount]
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, tool, me, accounts
+        case version, kind, tool, me, accounts, hubs
         case generatedEpoch = "generated_epoch"
         case idleAfter = "idle_after"
         case offlineAfter = "offline_after"
@@ -36,18 +38,62 @@ struct DevicesDoc: CcaDocument, Equatable {
         idleAfter = c.double(.idleAfter)
         offlineAfter = c.double(.offlineAfter)
         reportingError = c.string(.reportingError)
+        hubs = c.lossyArray(DevicesHub.self, .hubs) ?? []
         accounts = c.lossyArray(DevicesAccount.self, .accounts) ?? []
     }
 
     func account(_ key: String) -> DevicesAccount? { accounts.first { $0.key == key } }
+
+    /// 这个账号问的那台服务器的设置和名字（旧版 cca 没有 `hubs`：用顶层的几项）
+    func hub(for account: DevicesAccount) -> DevicesHub {
+        if let h = hubs.first(where: { $0.kind == account.hub }) { return h }
+        return DevicesHub(kind: account.hub ?? .maintainer, me: me, idleAfter: idleAfter, offlineAfter: offlineAfter, reportingError: reportingError)
+    }
+}
+
+/// `devices --json` 的 `hubs[]`：这台设备用得了的一台服务器
+struct DevicesHub: Decodable, Sendable, Equatable {
+    var kind: HubKind
+    /// 这台 Mac 在它上面的名字；它还不认这台 Mac 时是 nil
+    var me: String?
+    var idleAfter: Double?
+    var offlineAfter: Double?
+    /// 这台 Mac 最近一次没报到它的原因（报成了是 nil）
+    var reportingError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, me
+        case idleAfter = "idle_after"
+        case offlineAfter = "offline_after"
+        case reportingError = "reporting_error"
+    }
+
+    init(kind: HubKind, me: String?, idleAfter: Double?, offlineAfter: Double?, reportingError: String?) {
+        self.kind = kind
+        self.me = me
+        self.idleAfter = idleAfter
+        self.offlineAfter = offlineAfter
+        self.reportingError = reportingError
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = c.lossy(HubKind.self, .kind) ?? HubKind(rawValue: "")
+        me = c.string(.me)
+        idleAfter = c.double(.idleAfter)
+        offlineAfter = c.double(.offlineAfter)
+        reportingError = c.string(.reportingError)
+    }
 }
 
 struct DevicesAccount: Decodable, Sendable, Equatable {
     var key: String
+    /// 问的哪台服务器（旧版 cca 没有：nil，当作维护者的）
+    var hub: HubKind?
     /// 这台 Mac 排第一，其余按 在用、闲置、离线、没在用，同一种里最近用过的在前（cca 排好的）
     var devices: [DeviceRow]
 
-    enum CodingKeys: String, CodingKey { case key, devices }
+    enum CodingKeys: String, CodingKey { case key, hub, devices }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -55,13 +101,14 @@ struct DevicesAccount: Decodable, Sendable, Equatable {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "devices account without key"))
         }
         self.key = key
+        hub = c.lossy(HubKind.self, .hub)
         devices = c.lossyArray(DeviceRow.self, .devices) ?? []
     }
 }
 
 /// 一台设备在这个账号上的状态。
 struct DeviceRow: Decodable, Sendable, Equatable, Identifiable {
-    /// deploy key 的指纹（SHA256:…）
+    /// 设备在那台服务器上的指纹（SHA256:…）
     var deviceID: String?
     var name: String
     /// 是这台 Mac

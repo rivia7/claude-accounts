@@ -121,6 +121,9 @@ struct StateConfig: Decodable, Sendable, Equatable {
     var leakCheck: Bool?
     var update: String?
     var policy: PolicyConfig?
+    /// 经哪几台服务器和自己的其他设备同步（PROTOCOL 2.2 的 `config.hubs`）：维护者的在前，自己的同步服务器在后；
+    /// 不认识的 `kind` 已经去掉；旧版 cca 没有这个字段，是空的
+    var hubs: [HubEntry]
     /// 这台机器走过配置向导、或者已经有账号/路由器/本机客户端（老版 cca 没有这个字段 → 当作已配置，不弹向导）。
     var onboarded: Bool?
 
@@ -129,7 +132,7 @@ struct StateConfig: Decodable, Sendable, Equatable {
         case router, local, nodes
         case minTrust = "min_trust"
         case leakCheck = "leak_check"
-        case update, policy, onboarded
+        case update, policy, hubs, onboarded
     }
 
     init(from decoder: Decoder) throws {
@@ -142,11 +145,14 @@ struct StateConfig: Decodable, Sendable, Equatable {
         leakCheck = c.bool(.leakCheck)
         update = c.stringish(.update)
         policy = c.lossy(PolicyConfig.self, .policy)
+        hubs = (c.lossyArray(HubEntry.self, .hubs) ?? []).filter { $0.kind.isKnown }
         onboarded = c.bool(.onboarded)
     }
 
     var routerConfigured: Bool { router?.configured ?? false }
     var localConfigured: Bool { local?.configured ?? false }
+    /// 加入了的自己的同步服务器（没加入是 nil）
+    var ownHub: HubEntry? { hubs.first { $0.kind == .own } }
     /// 配置向导还要不要出现：只有 cca 明确说 false 时才要（字段缺省、或 true 都不弹）。
     var needsOnboarding: Bool { onboarded == false }
 }
@@ -485,6 +491,9 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var pinned: Bool
     var pinnedNode: String?
     var isLast: Bool
+    /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：维护者的、自己的同步服务器，不同步（和不认识的值）是 nil。
+    /// 旧版 cca 没有这个字段：有「设备」一节的当作维护者的（那时只有它）
+    var hub: HubKind?
     var api: APIInfo?
     var badge: Badge?
     var app: AppRun?
@@ -516,6 +525,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case node, port, slot, group, pinned
         case pinnedNode = "pinned_node"
         case isLast = "is_last"
+        case hub
         case api, badge, app, cli, can, mail
         case canWhy = "can_why"
         case apiKey = "api_key"
@@ -553,6 +563,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         app = c.lossy(AppRun.self, .app)
         cli = c.lossy(CLIRun.self, .cli)
         can = c.lossy(Can.self, .can) ?? Can()
+        hub = c.contains(.hub) ? c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil } : (can.devices ? .maintainer : nil)
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
         mail = c.lossy(MailConfig.self, .mail)
         apiKey = c.lossy(APIKeyInfo.self, .apiKey)

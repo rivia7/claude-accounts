@@ -2,8 +2,10 @@
 //! presence-stop、presence-view、presence-note。
 //!
 //! 都移植了；别处要用的：`presence_problems`、`presence_load`、`presence_post`、`presence_targets`、`app_proc_re`、`spawn_background`。
+//! 上报、cca devices 对着这台设备用得了的每一台同步服务器（维护者的、自己的，见 hub.rs）各走一路：账号只报给它走的那一台。
 
 use super::cost::cost_kick;
+use super::hub::{hub_of, hubs, own_load, route, Hub, HubKind, HUB_DIR};
 use super::keyshare::{is_num, keyshare_error, keyshare_kick, keyshare_sync, KEYSHARE_EVERY};
 use super::session::{cli_alive, cli_marks_at, lstart_epoch, proc_scan, proc_starts, ps_lstart, ps_rows, ProcInfo};
 use super::table::account_named;
@@ -48,6 +50,13 @@ pub static PRESENCE_URL_RE: LazyLock<Re> = LazyLock::new(|| {
 });
 pub static PRESENCE_PIN_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^sha256//[A-Za-z0-9+/]{43}=$"));
 pub static PRESENCE_SALT_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^([0-9a-f]{2}){16,64}$"));
+/// 设备指纹（和 ssh-keygen -l 的写法一样）
+pub static FP_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^SHA256:[A-Za-z0-9+/]{43}$"));
+
+/// https://地址:端口（端口 1～65535）
+pub fn url_ok(u: &str) -> bool {
+    PRESENCE_URL_RE.match_(u).and_then(|m| m.name("port")).and_then(text::to_int).is_some_and(|n| (1..=65535).contains(&n))
+}
 
 /// 映射里 presence 一节的问题：{"url": "https://地址:端口", "pins": ["sha256//…"], "salt": "十六进制"}。维护者发布前
 /// 严格检查；客户端只在完全合格时启用（不合格就当没有，映射的其余部分照用）
@@ -58,14 +67,7 @@ pub fn presence_problems(p: &V) -> Vec<String> {
         ];
     };
     let mut errs = Vec::new();
-    let url = p.get("url");
-    let port = url
-        .as_ref()
-        .and_then(|u| u.as_str())
-        .and_then(|u| PRESENCE_URL_RE.match_(u))
-        .and_then(|m| m.name("port"))
-        .and_then(text::to_int);
-    if !port.is_some_and(|n| (1..=65535).contains(&n)) {
+    if !p.get("url").as_ref().and_then(|u| u.as_str()).is_some_and(url_ok) {
         errs.push("presence.url 应该是 https://地址:端口（例如 https://203.0.113.10:18443）".to_string());
     }
     let pins_ok = p.list("pins").is_some_and(|pins| {
@@ -89,7 +91,12 @@ pub fn ssh_fp(b64: &str) -> Option<String> {
 
 /// 这台 Mac 拉映射用的 deploy key：(私钥路径, 指纹)；没有、不是 ed25519 是 None。公钥文件不是 UTF-8 是 ValueError（调用方接）
 pub fn presence_key() -> R<Option<(String, String)>> {
-    let key = path::join_all(&[&CCA_HOME, "policy", "id_ed25519"]);
+    key_at(&path::join_all(&[&CCA_HOME, "policy", "id_ed25519"]))
+}
+
+/// 一把 ed25519 私钥（旁边有 .pub）：(私钥路径, 指纹)；没有、不是 ed25519 是 None。公钥文件不是 UTF-8 是 ValueError（调用方接）
+pub fn key_at(key: &str) -> R<Option<(String, String)>> {
+    let key = key.to_string();
     let content = match read_text(&format!("{key}.pub")) {
         Ok(content) => content,
         Err(e) if e.is_os() => return Ok(None),
@@ -100,11 +107,16 @@ pub fn presence_key() -> R<Option<(String, String)>> {
     Ok(fp.map(|fp| (key, fp)))
 }
 
-/// (用不了的原因, 配置)：能用时原因是空的，配置是 {url, pins, salt, key, fp}
-pub fn presence_load() -> R<(String, Option<Dict>)> {
+/// 这台设备关掉了设备统计和同步（config.json 里写着 "presence": false：两种服务器都不用）时是原因
+pub fn presence_off_reason() -> Option<String> {
     let off = load_quiet(&CFG).and_then(|c| c.as_dict()).is_some_and(|c| matches!(c.get("presence"), Some(V::Bool(false))));
-    if off {
-        return Ok(("这台 Mac 关掉了设备统计（config.json 里写着 \"presence\": false）".into(), None));
+    off.then(|| "这台 Mac 关掉了设备统计（config.json 里写着 \"presence\": false）".to_string())
+}
+
+/// 维护者的服务器（映射里的那一台）：(用不了的原因, 配置)。能用时原因是空的，配置是 {url, pins, salt, key, fp}
+pub fn presence_load() -> R<(String, Option<Dict>)> {
+    if let Some(why) = presence_off_reason() {
+        return Ok((why, None));
     }
     presence_server()
 }
@@ -144,12 +156,6 @@ pub fn presence_aid(salt: &str, tool: &str, email: &str) -> R<String> {
     Ok(crate::py::hash::to_hex(&digest)[..32].to_string())
 }
 
-/// 这个账号是映射里的官方账号吗（pm 是这个工具的 policy_raw）：只有它们上报、看得到设备
-pub fn presence_mapped(pm: &Dict, key: &str, v: &V) -> bool {
-    let e = parse_key(key).1.to_lowercase();
-    !e.is_empty() && !is_api(v) && pm.has(&e)
-}
-
 /// 后台进程不带的：App 的提问会话、事件这些
 pub const BG_ENV_DROP: [&str; 7] = ["CCA_EVENTS", "CCA_GRANT", "CCA_RO", "CCA_PROMPT", "CCA_TTY", "CCA_YES", "CCA_TOOL"];
 
@@ -168,13 +174,26 @@ pub fn spawn_background(args: &[&str]) {
     }
 }
 
-/// key（当前工具的）是映射里的官方账号、正在用：确保这台 Mac 的上报进程在跑（在跑的会经 kqueue 自己看到新的登记），
-/// 不在就在后台起一个。静默：出什么错都不影响启动
+/// key（当前工具的）正在用、经同步服务器上报（route 给的那一台这台设备用得了）：确保这台 Mac 的上报进程在跑。静默：出什么错都
+/// 不影响启动
 pub fn presence_wake(key: &str) {
     let wake = || -> R<()> {
-        if !presence_mapped(&policy_raw(t()), key, &V::None) || presence_load()?.1.is_none() {
+        let v = load_quiet(&t().table).and_then(|j| j.as_dict()).and_then(|j| j.get(key)).unwrap_or(V::None);
+        if hub_of(&hubs()?, &policy_raw(t()), key, &v).is_none() {
             return Ok(());
         }
+        agent_kick();
+        Ok(())
+    };
+    match wake() {
+        Err(e) if !e.is_os_or_value() => panic!("presence_wake：{e}"),
+        _ => {}
+    }
+}
+
+/// 上报进程不在跑就在后台起一个（在跑的会经 kqueue 自己看到新的登记；没有要报的会马上退出）。静默
+pub fn agent_kick() {
+    let kick = || -> R<()> {
         fs::makedirs_mode(&PRESENCE_DIR, 0o700)?;
         {
             use std::os::unix::io::AsRawFd;
@@ -189,15 +208,20 @@ pub fn presence_wake(key: &str) {
         spawn_background(&["_presence-agent"]);
         Ok(())
     };
-    match wake() {
-        Err(e) if !e.is_os_or_value() => panic!("presence_wake：{e}"),
+    match kick() {
+        Err(e) if !e.is_os_or_value() => panic!("agent_kick：{e}"),
         _ => {}
     }
 }
 
+/// py presence-wake [账号]：带账号时同 presence_wake；不带时只是 agent_kick（cca policy off 停掉上报进程以后：
+/// 还用得了的服务器接着报，没有要报的它马上退出）
 pub fn cmd_presence_wake(args: &[String]) -> R<()> {
-    arity("cmd_presence_wake", args, 1, 1)?;
-    presence_wake(&args[0]);
+    arity("cmd_presence_wake", args, 0, 1)?;
+    match args.first() {
+        Some(key) => presence_wake(key),
+        None => agent_kick(),
+    }
     Ok(())
 }
 
@@ -271,8 +295,9 @@ pub static TTY_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^(ttys[0-9]+|pts/[0
 /// 上报的对象：(工具, 账号表的键, 账号目录)
 pub type Target = (&'static Tool, String, String);
 
-/// 这台 Mac 上映射里的官方账号。账号表读不了是 None（这一轮不报：不能当成什么都没开）
-pub fn presence_targets() -> Option<Vec<Target>> {
+/// 这台 Mac 上经这一类服务器同步的账号（route 给的是它：维护者的是映射里的官方账号，自己的是别的官方账号）。账号表读不了是 None
+/// （这一轮不报：不能当成什么都没开）
+pub fn presence_targets(kind: HubKind) -> Option<Vec<Target>> {
     let mut out = Vec::new();
     for tool in tools() {
         if !path::exists(&tool.table) {
@@ -282,7 +307,7 @@ pub fn presence_targets() -> Option<Vec<Target>> {
         let pm = policy_raw(tool);
         let _using = Using::tool(tool);
         for (k, v) in table.items() {
-            if presence_mapped(&pm, &k, &v) {
+            if route(&pm, &k, &v) == Some(kind) {
                 out.push((tool, k.to_string(), adir(&k)));
             }
         }
@@ -593,16 +618,33 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     Ok((code, j))
 }
 
-/// 请求没成的原因（给人看的）
+/// 这份配置是自己的同步服务器的吗（hub.rs 的 own_load 给的带着 "hub": "own"）
+pub fn is_own(cfg: &Dict) -> bool {
+    cfg.str("hub").as_deref() == Some("own")
+}
+
+/// 请求没成的原因（给人看的）；cfg 里有 "hub": "own" 的是自己的同步服务器
 pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
     let err = j.get("error");
     let err = err.as_ref().and_then(|e| e.as_str());
-    Ok(if err == Some("pin") {
+    let own = is_own(cfg);
+    Ok(if err == Some("pin") && own {
+        "服务器的证书和加入链接里钉住的指纹对不上（可能有人冒充服务器，也可能服务器换了证书：要一个新的加入链接）".into()
+    } else if err == Some("pin") {
         "服务器的证书和映射里钉住的指纹对不上（可能有人冒充服务器，也可能维护者换了证书、映射还没更新）".into()
+    } else if err == Some("sign") && own {
+        "没法用这台设备在自己的同步服务器上的密钥签名（~/.cca/hub/id_ed25519）".into()
     } else if err == Some("sign") {
         "没法用这台 Mac 的 deploy key 签名（~/.cca/policy/id_ed25519）".into()
+    } else if code == 0 && own {
+        format!("连不上自己的同步服务器（{}）", cfg.at("url").py_str())
     } else if code == 0 {
         format!("连不上设备统计的服务器（{}）", cfg.at("url").py_str())
+    } else if code == 403 && own && err == Some("unknown_device") {
+        "自己的同步服务器不认这台设备了（被别的设备移除了，或者服务器上的记录清掉了）：重新加入（cca hub join，贴同一个加入链接）"
+            .into()
+    } else if code == 403 && own {
+        "自己的同步服务器不认这台设备的签名：重新加入（cca hub join）".into()
     } else if code == 403 {
         "服务器还不认这台 Mac：维护者要把它的 deploy key 同步到服务器的设备清单（./policy.sh presence sync）".into()
     } else if let Some(now) = j.get("now").filter(|n| err == Some("clock") && is_num(n)).and_then(|n| n.as_num()) {
@@ -614,14 +656,18 @@ pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
         format!("这台 Mac 的时间和服务器差了 {:.0} 秒：打开“系统设置 › 通用 › 日期与时间”里的自动设置", gap.trunc())
     } else if code == 429 {
         "请求太频繁，稍后再试".into()
+    } else if own && matches!(code, 404 | 413) {
+        "这台服务器不是自己的同步服务器（没有用 --mode own 运行），或者它的版本太旧：重新部署它".into()
+    } else if own {
+        format!("自己的同步服务器出错了（HTTP {code}）")
     } else {
         format!("设备统计的服务器出错了（HTTP {code}）")
     })
 }
 
-/// 上报进程最近一次没报成的原因（cca devices 显示）；报成了是空的。只在变了的时候写
-pub fn presence_status(text_: &str) -> R<()> {
-    let p = path::join(&PRESENCE_DIR, "status.json");
+/// 上报进程最近一次没报到这台服务器的原因（cca devices 显示）；报成了是空的。只在变了的时候写
+pub fn presence_status(kind: HubKind, text_: &str) -> R<()> {
+    let p = path::join(&PRESENCE_DIR, &kind.file("status.json"));
     let was = match load_quiet(&p).filter(|j| j.truthy()) {
         None => V::from(""),
         Some(V::Dict(j)) => j.get("error").unwrap_or_else(|| V::from("")),
@@ -757,18 +803,51 @@ fn retry_after(code: i64, fails: u32) -> f64 {
     }
 }
 
-/// 上报进程一路带着的状态（被停掉时要拿最后一次的 units 去报 end=down）
-struct Agent {
-    cfg: Option<Dict>,
+/// 上报进程里一台服务器的那一路：各自的配置、上次报成的样子、退避（一台报不出去不耽误另一台）
+struct Lane {
+    kind: HubKind,
+    cfg: Dict,
     /// 上次报成的样子：[(账号摘要, 命令行会话数, 桌面 App 开没开)]，排好序的；还没报成过是 None
     shape: Option<Vec<(String, usize, bool)>>,
     units: Dict,
+    /// 这一路的账号的桌面 App 的 CPU 采样（presence_scan 只留它看的那些账号的）
+    apps: AppSamples,
+    /// 下一次该报的时刻：报成了是下一次心跳，没报成是退避结束（心跳到期、会话变了都等它）
+    due: f64,
+    /// 连着没报成几次
+    fails: u32,
+}
+
+impl Lane {
+    fn new(h: Hub) -> Lane {
+        Lane { kind: h.kind, cfg: h.cfg, shape: None, units: Dict::new(), apps: AppSamples::new(), due: 0.0, fails: 0 }
+    }
+
+    /// 还是不是同一台：种类、地址、这台设备在它上面的指纹都一样，也还是同一次加入（自己的服务器的 "rev"：重新加入以后
+    /// 从头报，不接着被移除那会儿的退避）
+    fn same(&self, h: &Hub) -> bool {
+        let eq = |k: &str| match (self.cfg.get(k), h.cfg.get(k)) {
+            (Some(a), Some(b)) => a.py_eq(&b),
+            (a, b) => a.is_none() && b.is_none(), // 维护者的没有 rev
+        };
+        self.kind == h.kind && ["url", "fp", "rev"].into_iter().all(eq)
+    }
+
+    /// 什么都没开了：报过了，或者一直报不出去
+    fn idle(&self) -> bool {
+        self.units.is_empty() && (self.shape.as_ref().is_some_and(|s| s.is_empty()) || self.fails >= 3)
+    }
+}
+
+/// 上报进程一路带着的状态（被停掉时要拿各路最后一次的 units 去报 end=down）
+struct Agent {
+    lanes: Vec<Lane>,
 }
 
 /// cca _presence-agent：这台 Mac 的上报进程（见上面这一节的说明）。同时只有一个（agent.lock）；用不了、没在用时马上退出
 pub fn cmd_presence_agent(args: &[String]) -> R<()> {
     arity("cmd_presence_agent", args, 0, 0)?;
-    if presence_load()?.1.is_none() {
+    if hubs()?.is_empty() {
         return Ok(());
     }
     fs::makedirs_mode(&PRESENCE_DIR, 0o700)?;
@@ -781,13 +860,13 @@ pub fn cmd_presence_agent(args: &[String]) -> R<()> {
     save_json(&path::join(&PRESENCE_DIR, "agent.json"), &V::Dict(dict! { "pid" => me, "started" => started }), Some(0o600), true)?;
     signal::raise_on(libc::SIGTERM, "Stop");
     signal::ignore(libc::SIGHUP);
-    let mut agent = Agent { cfg: None, shape: None, units: Dict::new() };
+    let mut agent = Agent { lanes: Vec::new() };
     match agent_loop(lock, &mut agent) {
         Err(e) if e.is("Stop") => {
-            // 被停掉（关机、注销、cca restore）：告诉服务器，马上算离线，不用等心跳超时
-            if let (Some(cfg), Some(shape)) = (&agent.cfg, &agent.shape) {
-                if !cfg.is_empty() && !shape.is_empty() {
-                    presence_post(cfg, "report", &dict! { "units" => &agent.units, "end" => "down" }, 3)?;
+            // 被停掉（关机、注销、cca restore）：告诉各台服务器，马上算离线，不用等心跳超时
+            for lane in &agent.lanes {
+                if lane.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+                    presence_post(&lane.cfg, "report", &dict! { "units" => &lane.units, "end" => "down" }, 3)?;
                 }
             }
             Ok(())
@@ -798,24 +877,42 @@ pub fn cmd_presence_agent(args: &[String]) -> R<()> {
 
 fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
     let stamp = presence_stamp();
-    let mut apps = AppSamples::new();
-    // 下一次该报的时刻：报成了是下一次心跳，没报成是退避结束（心跳到期、会话变了都等它）
-    let (mut due, mut fails) = (0.0, 0u32);
     // 下一次同步记下备查的 API key（醒来时到了就同步，不为它多醒；keyshare_sync 自己也看上次同步的时间）
     let mut key_due = 0.0;
     loop {
-        agent.cfg = presence_load()?.1;
-        let Some(cfg) = agent.cfg.clone() else {
-            return Ok(()); // 映射里去掉了、这台 Mac 关掉了、cca restore 了：不再报
-        };
-        let targets = presence_targets();
+        let hubs = hubs()?;
+        if hubs.is_empty() {
+            return Ok(()); // 映射里去掉了、退出了自己的服务器、这台 Mac 关掉了、cca restore 了：不再报
+        }
+        // 各路跟着现在用得了的服务器走：还是同一台的接着用（配置换成刚读的），新加的从头报，没了的不再报
+        let mut old = std::mem::take(&mut agent.lanes);
+        for h in hubs {
+            let lane = match old.iter().position(|l| l.same(&h)) {
+                Some(i) => {
+                    let mut l = old.swap_remove(i);
+                    l.cfg = h.cfg;
+                    l
+                }
+                None => Lane::new(h),
+            };
+            agent.lanes.push(lane);
+        }
+        let targets: Vec<Option<Vec<Target>>> = agent.lanes.iter().map(|l| presence_targets(l.kind)).collect();
         // 账号目录在看之前的样子（在问进程、读登记之前记下）：等的时候拿它比，看的这段时间里变了的不会漏
-        let seen = dir_stamps(&targets.iter().flatten().map(|(_, _, d)| d.as_str()).collect::<Vec<_>>());
-        let procs = match &targets {
-            Some(t) if !t.is_empty() => presence_procs(),
-            _ => Some(Procs::default()),
+        let mut dirs: Vec<String> = targets.iter().flatten().flatten().map(|(_, _, d)| d.clone()).collect();
+        if agent.lanes.iter().any(|l| l.kind == HubKind::Own) {
+            dirs.push(HUB_DIR.clone()); // 重新加入、退出（hub.json 换了、没了）：马上醒来换这一路
+        }
+        let dirs: Vec<&str> = dirs.iter().map(|d| d.as_str()).collect();
+        let seen = dir_stamps(&dirs);
+        let procs = if targets.iter().any(|t| t.is_none()) {
+            None
+        } else if targets.iter().flatten().any(|t| !t.is_empty()) {
+            presence_procs()
+        } else {
+            Some(Procs::default())
         };
-        let (Some(targets), Some(procs)) = (targets, procs) else {
+        let Some(procs) = procs else {
             presence_wait(&[], &[], 5.0, &[])?;
             continue;
         };
@@ -832,40 +929,62 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
             cost_kick(); // 折合金额：在后台统计、和别的设备同步（最多 COST_EVERY 一次）
             key_due = monotonic() + KEYSHARE_EVERY;
         }
-        let salt = cfg.at("salt").py_str();
-        let (units, pids) = presence_scan(&salt, &targets, &procs, &mut apps, time(), mono)?;
-        agent.units = units;
-        let mut cur: Vec<(String, usize, bool)> = agent
-            .units
-            .items()
-            .iter()
-            .map(|(a, u)| {
-                let u = u.as_dict().expect("presence_scan 给的都是字典");
-                (a.to_string(), u.list("cli").map_or(0, |c| c.len()), u.at("app").truthy())
-            })
-            .collect();
-        cur.sort();
-        if mono >= due || (agent.shape.as_ref() != Some(&cur) && fails == 0) {
-            let end = if agent.units.is_empty() { V::from("none") } else { V::None };
-            let (code, j) = presence_post(&cfg, "report", &dict! { "units" => &agent.units, "end" => end }, 8)?;
-            if code == 200 {
-                agent.shape = Some(cur);
-                fails = 0;
-                due = mono + PRESENCE_BEAT * uniform(0.9, 1.1);
-                presence_status("")?;
-            } else {
-                fails += 1;
-                due = mono + retry_after(code, fails);
-                presence_status(&presence_why(&cfg, code, &j)?)?;
+        let mut pids: Vec<i64> = Vec::new();
+        for (lane, targets) in agent.lanes.iter_mut().zip(&targets) {
+            let targets = targets.as_deref().unwrap_or_default();
+            let salt = lane.cfg.at("salt").py_str();
+            let (units, p) = presence_scan(&salt, targets, &procs, &mut lane.apps, time(), mono)?;
+            for pid in p {
+                if !pids.contains(&pid) {
+                    pids.push(pid);
+                }
+            }
+            lane.units = units;
+            let mut cur: Vec<(String, usize, bool)> = lane
+                .units
+                .items()
+                .iter()
+                .map(|(a, u)| {
+                    let u = u.as_dict().expect("presence_scan 给的都是字典");
+                    (a.to_string(), u.list("cli").map_or(0, |c| c.len()), u.at("app").truthy())
+                })
+                .collect();
+            cur.sort();
+            if mono >= lane.due || (lane.shape.as_ref() != Some(&cur) && lane.fails == 0) {
+                let end = if lane.units.is_empty() { V::from("none") } else { V::None };
+                let (code, j) = presence_post(&lane.cfg, "report", &dict! { "units" => &lane.units, "end" => end }, 8)?;
+                if code == 200 {
+                    lane.shape = Some(cur);
+                    lane.fails = 0;
+                    lane.due = mono + PRESENCE_BEAT * uniform(0.9, 1.1);
+                    presence_status(lane.kind, "")?;
+                } else {
+                    lane.fails += 1;
+                    lane.due = mono + retry_after(code, lane.fails);
+                    presence_status(lane.kind, &presence_why(&lane.cfg, code, &j)?)?;
+                }
             }
         }
-        if agent.units.is_empty() && (agent.shape.as_ref().is_some_and(|s| s.is_empty()) || fails >= 3) {
-            // 什么都没开了（报过了，或者一直报不出去）：先放锁再看一眼，刚好有新会话时接着报
+        if agent.lanes.iter().all(Lane::idle) {
+            // 各路都什么都没开了：先放锁再看一眼，刚好有新会话时接着报
             flock(&lock, libc::LOCK_UN);
-            let again = presence_targets().filter(|t| !t.is_empty());
-            let Some(again) = again else { return Ok(()) };
+            let again: Vec<(String, Vec<Target>)> = agent
+                .lanes
+                .iter()
+                .filter_map(|l| presence_targets(l.kind).filter(|t| !t.is_empty()).map(|t| (l.cfg.at("salt").py_str(), t)))
+                .collect();
+            if again.is_empty() {
+                return Ok(());
+            }
             let procs = presence_procs().unwrap_or_default();
-            if presence_scan(&salt, &again, &procs, &mut AppSamples::new(), time(), monotonic())?.0.is_empty() {
+            let mut busy = false;
+            for (salt, t) in &again {
+                if !presence_scan(salt, t, &procs, &mut AppSamples::new(), time(), monotonic())?.0.is_empty() {
+                    busy = true;
+                    break;
+                }
+            }
+            if !busy {
                 return Ok(());
             }
             if !flock(&lock, libc::LOCK_EX | libc::LOCK_NB) {
@@ -879,7 +998,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
             let _ = execv(&SELF_PATH, &[&SELF_PATH, "_presence-agent"]);
             return Ok(());
         }
-        let dirs: Vec<&str> = targets.iter().map(|(_, _, d)| d.as_str()).collect();
+        let due = agent.lanes.iter().map(|l| l.due).fold(f64::INFINITY, f64::min);
         presence_wait(&pids, &dirs, due - monotonic(), &seen)?;
     }
 }
@@ -954,45 +1073,87 @@ fn presence_line(d: &Dict, now: f64) -> R<String> {
     })
 }
 
-/// cca [codex] devices [账号…] [--json]：映射里的账号现在连着哪些设备（问维护者的服务器）。--json 是给 App 的（PROTOCOL 3.4）。
-/// 退出码：0 成功；1 服务器那边没成；2 用不了（这台 Mac 没配置、关掉了，账号不在映射里）。没成时 stdout 是原因
+/// 一台服务器都用不了时，cca devices 说的原因
+fn no_hub_reason() -> R<String> {
+    if let Some(why) = presence_off_reason() {
+        return Ok(why);
+    }
+    Ok(format!("{}，也没加入自己的同步服务器（cca hub join）", presence_load()?.0))
+}
+
+/// 这个账号不经哪台服务器（或者它走的那台这台设备用不了）：cca devices 说的原因
+fn unrouted_reason(k: &str, v: &V, pm: &Dict) -> R<String> {
+    let name = name_of(k);
+    Ok(match route(pm, k, v) {
+        None if is_api(v) => format!("{name} 是第三方 API 账号：只统计官方账号"),
+        None => format!("{name} 没有邮箱：只统计官方账号"),
+        Some(HubKind::Maintainer) => format!("{name} 是维护者共享的账号：{}", presence_load()?.0),
+        Some(HubKind::Own) => format!("{name} 不在维护者的映射里，要经自己的同步服务器统计：{}", own_load()?.0),
+    })
+}
+
+/// cca [codex] devices [账号…] [--json]：账号现在连着哪些设备（问它走的那台同步服务器：维护者共享的问维护者的，自己的问自己的）。
+/// --json 是给 App 的（PROTOCOL 3.4）。退出码：0 成功；1 服务器那边没成；2 用不了（这台 Mac 没有用得了的服务器，账号不经服务器同步）。
+/// 没成时 stdout 是原因
 pub fn cmd_presence_view(args: &[String]) -> R<()> {
     let as_json = args.iter().any(|a| a == "--json");
     let names: Vec<&String> = args.iter().filter(|a| *a != "--json").collect();
-    let (reason, cfg) = presence_load()?;
-    let Some(cfg) = cfg else {
-        out!("{reason}");
+    let hubs = hubs()?;
+    if hubs.is_empty() {
+        out!("{}", no_hub_reason()?);
         return exit(2);
-    };
+    }
     let (table, pm) = (ctx()?.1, policy_raw(t()));
     let keys: Vec<String> = if names.is_empty() {
-        table.items().iter().filter(|(k, v)| presence_mapped(&pm, k, v)).map(|(k, _)| k.to_string()).collect()
+        table.items().iter().filter(|(k, v)| hub_of(&hubs, &pm, k, v).is_some()).map(|(k, _)| k.to_string()).collect()
     } else {
         names.iter().map(|n| account_named(&table, n)).collect::<R<_>>()?
     };
+    let mut routed: Vec<(String, HubKind)> = Vec::new();
     for k in &keys {
-        if !presence_mapped(&pm, k, &table.at(k)) {
-            out!("{} 不在维护者的映射里：只统计映射里的官方账号", name_of(k));
+        let v = table.at(k);
+        let Some(h) = hub_of(&hubs, &pm, k, &v) else {
+            out!("{}", unrouted_reason(k, &v, &pm)?);
             return exit(2);
+        };
+        routed.push((k.clone(), h.kind));
+    }
+    // 各台服务器各问一次（维护者的在前）：{账号摘要: 键}，摘要一样的（同一个邮箱写了两次）后来的顶掉，位置不变
+    struct Asked<'a> {
+        hub: &'a Hub,
+        aids: Dict,
+        reply: Dict,
+    }
+    let mut asked: Vec<Asked> = Vec::new();
+    let mut failed: Vec<(HubKind, String)> = Vec::new();
+    for hub in &hubs {
+        let salt = hub.salt();
+        let aids = Dict::new();
+        for (k, _) in routed.iter().filter(|(_, kind)| *kind == hub.kind) {
+            aids.set(presence_aid(&salt, t().name, &parse_key(k).1)?, k.as_str());
         }
-    }
-    let salt = cfg.at("salt").py_str();
-    // {账号摘要: 键}：摘要一样的（同一个邮箱写了两次）后来的顶掉，位置不变
-    let aids = Dict::new();
-    for k in &keys {
-        aids.set(presence_aid(&salt, t().name, &parse_key(k).1)?, k.as_str());
-    }
-    let (code, j) = if aids.is_empty() {
-        (200, dict! { "accounts" => Dict::new() })
-    } else {
+        if aids.is_empty() {
+            continue;
+        }
         let wanted: Vec<V> = aids.keys().into_iter().map(V::from).collect();
-        presence_post(&cfg, "view", &dict! { "accounts" => wanted }, 8)?
-    };
-    let recv = time();
-    let Some(by_account) = j.dict("accounts").filter(|_| code == 200) else {
-        out!("{}", if code != 200 { presence_why(&cfg, code, &j)? } else { "设备统计的服务器回的内容看不懂".to_string() });
+        let (code, j) = presence_post(&hub.cfg, "view", &dict! { "accounts" => wanted }, 8)?;
+        if code != 200 || j.dict("accounts").is_none() {
+            let why = if code != 200 {
+                presence_why(&hub.cfg, code, &j)?
+            } else {
+                "设备统计的服务器回的内容看不懂".to_string()
+            };
+            failed.push((hub.kind, why));
+            continue;
+        }
+        asked.push(Asked { hub, aids, reply: j });
+    }
+    // 没问成：--json（App 每次只问一个账号，也就只问一台）、要问的都没成时退出码 1，stdout 是原因；终端里另一台问成了的照样显示
+    if let Some((_, why)) = failed.first().filter(|_| as_json || asked.is_empty()) {
+        out!("{why}");
         return exit(1);
-    };
+    }
+    let recv = time();
     let ep = |age: Option<V>| -> V {
         match age.filter(is_num).and_then(|a| a.as_num()) {
             Some(age) => V::from(num::round_to(recv - age, 3)),
@@ -1000,94 +1161,142 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         }
     };
     let order = |state: &str| ["in_use", "idle", "offline", "none"].iter().position(|s| *s == state);
-    let accounts = List::new();
-    for (aid, k) in aids.items() {
-        let k = k.py_str();
-        // j['accounts'].get(aid) or []
-        let raw = match by_account.get(&aid).filter(|r| r.truthy()) {
-            None => Vec::new(),
-            Some(V::List(rows)) => rows.items(),
-            Some(V::Dict(_)) | Some(V::Str(_)) => Vec::new(), // 逐项看到的是键 / 字符，都不是字典
-            Some(other) => panic!("TypeError: '{}' object is not iterable", if other.is_bool() { "bool" } else { "number" }),
-        };
-        let mut rows: Vec<Dict> = Vec::new();
-        for r in raw {
-            let Some(r) = r.as_dict() else { continue };
-            let Some(name) = r.str("name") else { continue };
-            let state = r.get("state").unwrap_or(V::None);
-            if state.is_list() || state.is_dict() {
-                panic!("TypeError: unhashable type（服务器回的 state 是 {}）", state.py_repr());
-            }
-            let Some(state) = state.as_str().filter(|s| order(s).is_some()) else { continue };
-            let fp = r.get("fp");
-            rows.push(dict! {
-                "id" => fp.clone(), "name" => name, "me" => fp.is_some_and(|f| f.py_eq(&cfg.at("fp"))), "state" => state,
-                "cli" => r.get("cli").filter(|c| c.isinstance_int()).unwrap_or(V::Int(0)), "app" => matches!(r.get("app"), Some(V::Bool(true))),
-                "since_epoch" => ep(r.get("since_age")), "last_active_epoch" => ep(r.get("idle_age")),
-                "last_used_epoch" => ep(r.get("used_age")), "seen_epoch" => ep(r.get("seen_age")),
-            });
-        }
-        // 这台设备在前，再按状态、最近用过的在前、名字
-        rows.sort_by(|a, b| {
-            let key = |r: &Dict| {
-                (
-                    !r.truthy("me"),
-                    order(&r.at("state").py_str()),
-                    -r.get("last_used_epoch").filter(|x| x.truthy()).and_then(|x| x.as_num()).unwrap_or(0.0),
-                )
+    // [(哪一台, 账号)]：照这几台问的先后，各自照摘要的先后
+    let mut accounts: Vec<(HubKind, Dict)> = Vec::new();
+    for a in &asked {
+        let by_account = a.reply.dict("accounts").expect("上面看过");
+        let my_fp = a.hub.cfg.at("fp");
+        for (aid, k) in a.aids.items() {
+            let k = k.py_str();
+            // j['accounts'].get(aid) or []
+            let raw = match by_account.get(&aid).filter(|r| r.truthy()) {
+                None => Vec::new(),
+                Some(V::List(rows)) => rows.items(),
+                Some(V::Dict(_)) | Some(V::Str(_)) => Vec::new(), // 逐项看到的是键 / 字符，都不是字典
+                Some(other) => panic!("TypeError: '{}' object is not iterable", if other.is_bool() { "bool" } else { "number" }),
             };
-            let (ka, kb) = (key(a), key(b));
-            ka.0.cmp(&kb.0)
-                .then(ka.1.cmp(&kb.1))
-                .then(ka.2.partial_cmp(&kb.2).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| a.at("name").py_str().cmp(&b.at("name").py_str()))
-        });
-        let devices: Vec<V> = rows.into_iter().map(V::Dict).collect();
-        accounts.push(dict! { "key" => k.as_str(), "id" => acct_id(&k, t()), "devices" => devices });
+            let mut rows: Vec<Dict> = Vec::new();
+            for r in raw {
+                let Some(r) = r.as_dict() else { continue };
+                let Some(name) = r.str("name") else { continue };
+                let state = r.get("state").unwrap_or(V::None);
+                if state.is_list() || state.is_dict() {
+                    panic!("TypeError: unhashable type（服务器回的 state 是 {}）", state.py_repr());
+                }
+                let Some(state) = state.as_str().filter(|s| order(s).is_some()) else { continue };
+                let fp = r.get("fp");
+                rows.push(dict! {
+                    "id" => fp.clone(), "name" => name, "me" => fp.is_some_and(|f| f.py_eq(&my_fp)), "state" => state,
+                    "cli" => r.get("cli").filter(|c| c.isinstance_int()).unwrap_or(V::Int(0)), "app" => matches!(r.get("app"), Some(V::Bool(true))),
+                    "since_epoch" => ep(r.get("since_age")), "last_active_epoch" => ep(r.get("idle_age")),
+                    "last_used_epoch" => ep(r.get("used_age")), "seen_epoch" => ep(r.get("seen_age")),
+                });
+            }
+            // 这台设备在前，再按状态、最近用过的在前、名字
+            rows.sort_by(|a, b| {
+                let key = |r: &Dict| {
+                    (
+                        !r.truthy("me"),
+                        order(&r.at("state").py_str()),
+                        -r.get("last_used_epoch").filter(|x| x.truthy()).and_then(|x| x.as_num()).unwrap_or(0.0),
+                    )
+                };
+                let (ka, kb) = (key(a), key(b));
+                ka.0.cmp(&kb.0)
+                    .then(ka.1.cmp(&kb.1))
+                    .then(ka.2.partial_cmp(&kb.2).unwrap_or(std::cmp::Ordering::Equal))
+                    .then_with(|| a.at("name").py_str().cmp(&b.at("name").py_str()))
+            });
+            let devices: Vec<V> = rows.into_iter().map(V::Dict).collect();
+            let doc = dict! { "key" => k.as_str(), "id" => acct_id(&k, t()), "devices" => devices };
+            doc.set("hub", a.hub.kind.name());
+            accounts.push((a.hub.kind, doc));
+        }
     }
-    // (load_quiet(status.json) or {}).get('error') or None
-    let failing = match load_quiet(&path::join(&PRESENCE_DIR, "status.json")).filter(|s| s.truthy()) {
+    // (load_quiet(status.json) or {}).get('error') or None：上报进程最近一次没报到这台的原因
+    let failing = |kind: HubKind| match load_quiet(&path::join(&PRESENCE_DIR, &kind.file("status.json"))).filter(|s| s.truthy()) {
         None => None,
         Some(V::Dict(s)) => s.get("error").filter(|e| e.truthy()),
         Some(other) => panic!("AttributeError: status.json 里是 {}，不是对象", other.py_repr()),
     };
-    keyshare_kick(false); // 顺带：记下备查的 API key 和登录了同一个账号的其他设备同步（最多 KEYSHARE_EVERY 一次）
-    cost_kick(); // 折合金额也统计一次、和别的设备同步（最多 COST_EVERY 一次）
+    // 顺带：记下备查的 API key 和登录了同一个账号的其他设备同步（最多 KEYSHARE_EVERY 一次），折合金额也统计一次、
+    // 和别的设备同步（最多 COST_EVERY 一次）
+    keyshare_kick(false);
+    cost_kick();
+    // 顶层的 me、idle_after、offline_after、reporting_error 是先问的那一台的（没有要问的账号时是维护者的、没问）；hubs 是各台的
+    let first = asked.first();
+    let head_kind = first.map_or(hubs[0].kind, |a| a.hub.kind);
+    let reply_of = |a: Option<&Asked>, k: &str| a.and_then(|a| a.reply.get(k)).unwrap_or(V::None);
     if as_json {
+        let per_hub: Vec<V> = hubs
+            .iter()
+            .map(|h| {
+                let a = asked.iter().find(|a| a.hub.kind == h.kind);
+                V::Dict(dict! {
+                    "kind" => h.kind.name(), "me" => reply_of(a, "me_name"), "idle_after" => reply_of(a, "idle"),
+                    "offline_after" => reply_of(a, "ttl"), "reporting_error" => failing(h.kind),
+                })
+            })
+            .collect();
         let doc = dict! {
-            "version" => 1, "kind" => "devices", "generated_epoch" => recv, "tool" => t().name, "me" => j.get("me_name"),
-            "idle_after" => j.get("idle"), "offline_after" => j.get("ttl"), "reporting_error" => failing, "accounts" => accounts,
+            "version" => 1, "kind" => "devices", "generated_epoch" => recv, "tool" => t().name, "me" => reply_of(first, "me_name"),
+            "idle_after" => reply_of(first, "idle"), "offline_after" => reply_of(first, "ttl"), "reporting_error" => failing(head_kind),
+            "accounts" => accounts.into_iter().map(|(_, a)| V::Dict(a)).collect::<Vec<V>>(),
         };
+        doc.set("hubs", per_hub);
         out!("{}", json::dumps(&V::Dict(doc), json::LINE));
         return Ok(());
     }
-    let me = match j.get("me_name").filter(|m| m.truthy()) {
-        Some(m) => format!("，这台 Mac 叫 {}", m.py_str()),
-        None => String::new(),
-    };
-    let mut lines = vec![format!("{} 账号连着的设备（维护者的服务器上的记录{}）：", t().label, me)];
-    for a in accounts.items() {
-        let a = a.as_dict().expect("刚建的");
-        lines.push(format!("  {}", label_of(&a.at("key").py_str())));
-        let devices = a.list("devices").expect("刚建的");
-        for d in devices.items() {
-            let d = d.as_dict().expect("刚建的");
-            lines.push(format!(
-                "    · {}{}  {}",
-                d.at("name").py_str(),
-                if d.truthy("me") { "（这台 Mac）" } else { "" },
-                presence_line(&d, recv)?
-            ));
-        }
-        if devices.is_empty() {
-            lines.push("    30 天内没有设备经 cca 用过".to_string());
+    let mut lines: Vec<String> = Vec::new();
+    // 各台服务器一段（没有要问的账号时只有维护者的那一段的标题）
+    let shown: Vec<HubKind> = if asked.is_empty() { vec![head_kind] } else { asked.iter().map(|a| a.hub.kind).collect() };
+    for kind in &shown {
+        // 服务器给的不是字符串也照样打出来（原来的 '%s'）
+        let me = reply_of(asked.iter().find(|a| a.hub.kind == *kind), "me_name");
+        let me = match (me.truthy(), *kind) {
+            (false, _) => String::new(),
+            (true, HubKind::Own) => format!("，这台设备叫 {}", me.py_str()),
+            (true, HubKind::Maintainer) => format!("，这台 Mac 叫 {}", me.py_str()),
+        };
+        let whose = if *kind == HubKind::Own { "自己的同步服务器" } else { "维护者的服务器" };
+        lines.push(format!("{} 账号连着的设备（{whose}上的记录{me}）：", t().label));
+        for (_, a) in accounts.iter().filter(|(k, _)| k == kind) {
+            lines.push(format!("  {}", label_of(&a.at("key").py_str())));
+            let devices = a.list("devices").expect("刚建的");
+            for d in devices.items() {
+                let d = d.as_dict().expect("刚建的");
+                lines.push(format!(
+                    "    · {}{}  {}",
+                    d.at("name").py_str(),
+                    if d.truthy("me") { "（这台 Mac）" } else { "" },
+                    presence_line(&d, recv)?
+                ));
+            }
+            if devices.is_empty() {
+                lines.push("    30 天内没有设备经 cca 用过".to_string());
+            }
         }
     }
-    if let Some(failing) = failing {
-        lines.push(format!("  这台 Mac 最近一次没报成：{}", failing.py_str()));
+    for (kind, why) in &failed {
+        let whose = if *kind == HubKind::Own { "自己的同步服务器" } else { "维护者的服务器" };
+        lines.push(format!("{} 账号连着的设备（{whose}上的记录）：没问到：{why}", t().label));
     }
-    if let Some(key_err) = keyshare_error() {
-        lines.push(format!("  记下的 API key 最近一次没同步成：{key_err}"));
+    for kind in &shown {
+        let own = *kind == HubKind::Own;
+        if let Some(f) = failing(*kind) {
+            lines.push(if own {
+                format!("  这台设备最近一次没报到自己的同步服务器：{}", f.py_str())
+            } else {
+                format!("  这台 Mac 最近一次没报成：{}", f.py_str())
+            });
+        }
+        if let Some(key_err) = keyshare_error(*kind) {
+            lines.push(if own {
+                format!("  记下的 API key 最近一次没经自己的同步服务器同步成：{key_err}")
+            } else {
+                format!("  记下的 API key 最近一次没同步成：{key_err}")
+            });
+        }
     }
     out!("{}", lines.join("\n"));
     Ok(())
@@ -1100,6 +1309,26 @@ mod tests {
 
     fn vectors() -> Dict {
         json::loads(include_str!("../../tests/vectors/src_presence.json")).unwrap().as_dict().unwrap()
+    }
+
+    /// 上报进程的一路还是不是同一台：维护者的没有 rev（不能当缺了键）；自己的重新加入以后（rev 变了）从头报
+    #[test]
+    fn lane_same_hub_and_rejoin() {
+        let hub = |kind, rev: Option<f64>| {
+            let cfg = dict! { "url" => "https://192.0.2.10:18443", "fp" => "SHA256:x" };
+            if let Some(r) = rev {
+                cfg.set("rev", r);
+            }
+            Hub { kind, cfg }
+        };
+        let m = Lane::new(hub(HubKind::Maintainer, None));
+        assert!(m.same(&hub(HubKind::Maintainer, None)) && !m.same(&hub(HubKind::Own, None)));
+        let o = Lane::new(hub(HubKind::Own, Some(1.5)));
+        assert!(o.same(&hub(HubKind::Own, Some(1.5))), "同一次加入");
+        assert!(!o.same(&hub(HubKind::Own, Some(2.5))) && !o.same(&hub(HubKind::Own, None)), "重新加入了、hub.json 读不出时间");
+        let moved = hub(HubKind::Own, Some(1.5));
+        moved.cfg.set("url", "https://192.0.2.11:18443");
+        assert!(!o.same(&moved), "换了地址");
     }
 
     /// 去看账号目录和开始盯着它之间又变了（登记出现、消失）：不睡到下一次心跳，马上回去再看

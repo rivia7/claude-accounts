@@ -23,6 +23,12 @@
 - 连接：同一个 IP 最多同时 8 个，每个连接从接进来起最多 15 秒（TLS 握手 5 秒），慢吞吞、不说话的连接占不满服务器；
   POST 按 IP 限流，验签通过之后再按设备限流（别的设备拿你的指纹乱发请求，扣不到你的配额）。
 - 证书公钥的指纹（映射里的 presence.pins）在服务器上用 openssl 算：./policy.sh presence deploy 打印、写进映射。
+
+自己的同步服务器（--mode own，用户自己部署：cca hub）：上面这些照旧，只是设备不来自维护者签名的设备清单（没有 /v1/machines），
+而是拿着加入链接自己加入（op join：链接里的入伙口令，服务器只存它的 SHA-256；盐的校验值，第一台设备加入时登记，拿着另一份盐的
+加入不了），最多 MAX_MEMBERS 台；成员能列出（members）、移除（remove）设备，移除自己就是退出。设备不在名单里回
+403 unknown_device（被移除了、服务器的记录清掉了：设备拿着链接重新加入），签名不对回 403 denied。启动时配置的入伙口令的哈希
+和上次的不一样（用新的加入链接重新部署了）就从头开始：以前的设备、记录、密文都不要了。格式见 README.md「自己的同步服务器」。
 """
 import argparse
 import base64
@@ -70,6 +76,11 @@ KEY_RE = re.compile(r'^ssh-ed25519 (AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43})$
 NAME_BAD = re.compile(r'[\x00-\x1f\x7f]')
 B64_RE = re.compile(r'^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$')
 TAG_RE = re.compile(r'^[A-Za-z0-9+/]{43}=$')   # 认证码（32 字节的 base64）
+HASH_RE = re.compile(r'^[0-9a-f]{64}$')      # 入伙口令的 SHA-256（--admit-hash）
+ADMIT_RE = re.compile(r'^[0-9a-f]{32}$')     # 入伙口令
+CHECK_RE = re.compile(r'^[0-9a-f]{32}$')     # 盐的校验值：HMAC(盐, "cca-hub-check-v1") 的前 16 个字节
+MAX_MEMBERS = 64           # 自己的服务器最多几台设备
+OWN_OPS = ('join', 'members', 'remove')     # 只有自己的服务器有的 op
 
 VERIFY_SLOTS = threading.BoundedSemaphore(4)   # 同时验几个签名（一个十几毫秒 CPU）
 
@@ -200,6 +211,11 @@ def num_ok(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x <= MAX_AGE
 
 
+def is_time(x):
+    """服务器记的时间（时间戳）"""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
+
+
 def pair(p):
     """[开了多久, 闲置多久]（秒）；不合格是 None"""
     if isinstance(p, list) and len(p) == 2 and num_ok(p[0]) and num_ok(p[1]):
@@ -327,11 +343,14 @@ def save_doc(path, data):
 class Store:
     """state.json：{"seq": 设备清单的序号, "machines": {指纹: {"name", "key"}}, "beats": {指纹: {"seen", "end"}},
     "units": {指纹: {账号摘要: {"cli": [[开始, 最后动静]…], "app": [开始, 最后动静] | null, "used": 上次使用}}}}，时间都是服务器的。
+    自己的服务器（mode own）：machines 的每一台多一项 "joined"（什么时候加入的），另有 "own": {"seed": 启动时配置的入伙口令的哈希,
+    "admit": 现在认的入伙口令的哈希, "check": 登记的盐的校验值 | null}。
     keys.json（另一个文件：心跳不用跟着重写它）：{"acc": {账号摘要: {"blob": 密文, "fp": 传的设备, "name": 它那时的名字,
     "at": 什么时候传的}}}（撤销设备不删：是账号的）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob", "name", "at"}}}}
     （撤销设备不删，cost_keep 秒没再传的才删）"""
-    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400):
-        self.path, self.ttl, self.idle, self.retain, self.cost_keep = path, ttl, idle, retain, cost_keep
+    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, mode='maintainer', admit_hash=None):
+        self.path, self.ttl, self.idle, self.retain, self.cost_keep, self.mode = path, ttl, idle, retain, cost_keep, mode
+        self.seen = {}   # 自己的服务器：各台设备最近一次验过签的请求（只在内存里：不为它每个请求都重写状态文件）
         self.keys_path = keys_path or os.path.join(os.path.dirname(path) or '.', 'keys.json')
         self.cost_path = cost_path or os.path.join(os.path.dirname(path) or '.', 'cost-slots.json')
         self.lock = threading.Lock()
@@ -343,7 +362,29 @@ class Store:
         self.cost.update(load_doc(self.cost_path, ('acc',)) or {})
         self.cost['acc'] = {aid: {f: e for f, e in slots.items() if isinstance(e, dict) and parse_blob(e.get('blob'), MAX_COST_BLOB)}
                             for aid, slots in self.cost['acc'].items() if isinstance(aid, str) and isinstance(slots, dict)}
+        if mode == 'own':
+            self.own_setup(admit_hash)
+        elif 'own' in self.data:   # 以前是自己的服务器：那时加入的设备不是维护者清单里的，不认
+            sys.stderr.write('cca-presence: 状态文件是自己的服务器（--mode own）的：%d 台设备不要了，等维护者同步设备清单\n' % len(self.data['machines']))
+            self.data.pop('own')
+            self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {}})
+            self.save()
 
+    def own_setup(self, admit_hash):
+        """自己的服务器：配置的入伙口令的哈希（seed）和上次的不一样（第一次启动、用新的加入链接重新部署了、以前是维护者的服务器）就从头
+        开始：以前的设备、记录、密文都不要了（新的盐算出来的账号摘要和密钥都不一样，旧的谁也用不上）"""
+        own = self.data.get('own')
+        check = own.get('check') if isinstance(own, dict) else None
+        if (isinstance(own, dict) and own.get('seed') == admit_hash and HASH_RE.match(own.get('admit') or '')
+                and (check is None or (isinstance(check, str) and CHECK_RE.match(check)))):
+            return
+        if self.data['machines'] or self.keys['acc'] or self.cost['acc']:
+            sys.stderr.write('cca-presence: 入伙口令换了（用新的加入链接重新部署了）：以前的 %d 台设备和存的密文都不要了\n' % len(self.data['machines']))
+        self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {}, 'own': {'seed': admit_hash, 'admit': admit_hash, 'check': None}})
+        self.keys, self.cost = {'v': 1, 'acc': {}}, {'v': 1, 'acc': {}}
+        self.save()
+        save_doc(self.keys_path, self.keys)
+        save_doc(self.cost_path, self.cost)
     def save(self):
         save_doc(self.path, self.data)
 
@@ -362,8 +403,8 @@ class Store:
 
     def health(self, sig_ok, relay=None):
         with self.lock:
-            out = {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'],
-                   'ops': ['report', 'view'] + list(SYNC_OPS) + (list(RELAY_OPS) if relay else [])}
+            out = {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'], 'mode': self.mode,
+                   'ops': ['report', 'view'] + list(SYNC_OPS) + (list(OWN_OPS) if self.mode == 'own' else []) + (list(RELAY_OPS) if relay else [])}
             if relay:
                 out['relay'] = {'port': relay}
             return out
@@ -511,6 +552,68 @@ class Store:
                 del acc[aid][f]
             if not acc[aid]:
                 del acc[aid]
+
+    def admit_ok(self, admit):
+        """自己的服务器：入伙口令对不对（只比哈希，用不随内容变的时间比）"""
+        if not (isinstance(admit, str) and ADMIT_RE.match(admit)):
+            return False
+        with self.lock:
+            want = self.data['own']['admit']
+        return hmac.compare_digest(hashlib.sha256(admit.encode('ascii')).hexdigest(), want)
+
+    def free_name(self, name, fp):
+        """名字被别的设备用了就在后面加 -2、-3……（最长 64 个字符）。拿着锁调"""
+        taken = {m['name'] for f, m in self.data['machines'].items() if f != fp}
+        for i in range(1, MAX_MEMBERS + 2):
+            tail = '' if i == 1 else '-%d' % i
+            cand = name[:64 - len(tail)] + tail
+            if cand not in taken:
+                return cand
+        return name
+
+    def join(self, fp, key, name, check, now):
+        """自己的服务器：加入（入伙口令、签名在 Handler 里验过）。盐的校验值第一台设备登记，以后的要一样；同一把密钥再加入是改名字"""
+        with self.lock:
+            own, ms = self.data['own'], self.data['machines']
+            if own['check'] is not None and not hmac.compare_digest(own['check'], check):
+                return 409, {'error': 'salt_mismatch'}
+            if fp not in ms and len(ms) >= MAX_MEMBERS:
+                return 507, {'error': 'full'}
+            own['check'] = own['check'] or check
+            old = ms.get(fp) or {}
+            name = self.free_name(name, fp)
+            ms[fp] = {'name': name, 'key': key, 'joined': old['joined'] if is_time(old.get('joined')) else now}
+            self.seen[fp] = now
+            self.save()
+            if not old:
+                sys.stderr.write('cca-presence: 加入了一台设备，现在 %d 台\n' % len(ms))
+            return 200, {'v': API, 'ok': True, 'name': name, 'members': len(ms)}
+
+    def members(self, me, now):
+        """自己的服务器：现在有哪些设备（最近一次请求：内存里记的、上报的心跳，取新的）"""
+        with self.lock:
+            rows = []
+            for f, m in self.data['machines'].items():
+                seen = max(self.seen.get(f) or 0, (self.data['beats'].get(f) or {}).get('seen') or 0)
+                rows.append({'fp': f, 'name': m['name'], 'me': f == me, 'joined_age': ago(now, m['joined']) if is_time(m.get('joined')) else None,
+                             'seen_age': ago(now, seen) if seen else None})
+            return 200, {'v': API, 'ok': True, 'me_name': self.data['machines'][me]['name'] if me in self.data['machines'] else None,
+                         'members': rows}
+
+    def remove(self, target):
+        """自己的服务器：移除一台设备（它的密钥就此不认；是发请求的设备自己就是退出）。它的上报记录跟着删掉，传过的密文是账号的，
+        不删（折合金额里标成撤销了）"""
+        with self.lock:
+            if target not in self.data['machines']:
+                return 404, {'error': 'no_device'}
+            del self.data['machines'][target]
+            self.data['beats'].pop(target, None)
+            self.data['units'].pop(target, None)
+            self.seen.pop(target, None)
+            self.save()
+            n = len(self.data['machines'])
+        sys.stderr.write('cca-presence: 移除了一台设备，现在 %d 台\n' % n)
+        return 200, {'v': API, 'ok': True, 'members': n}
 
     def row(self, fp, e, now):
         beat = self.data['beats'].get(fp) or {}
@@ -1141,13 +1244,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if len(body) != n or not sig or len(sig) > MAX_SIG:
             return self.send(400, {'error': 'bad'})
         now = time.time()
-        if op == 'machines':
+        own = srv.store.mode == 'own'
+        if op == 'machines' and not own:   # 自己的服务器没有维护者的设备清单：设备经 join 加入（404）
             code, reply = srv.store.set_machines(body, sig, srv.release_key)
             if code == 200 and srv.remote:
                 srv.remote.keep_only(srv.store.fps())
             return self.send(code, reply)
         relay = op in RELAY_OPS and srv.remote is not None   # 没开中转时和旧版服务器一样：不认这几个 op（404）
-        if op not in ('report', 'view') and op not in SYNC_OPS and not relay:
+        if op not in ('report', 'view') and op not in SYNC_OPS and not relay and not (own and op in OWN_OPS):
             return self.send(404, {'error': 'not_found'})
         try:
             j = json.loads(body.decode('utf-8'))
@@ -1158,9 +1262,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         fp = j.get('key')
         if not (isinstance(fp, str) and FP_RE.match(fp)):
             return self.send(400, {'error': 'bad'})
-        m = srv.store.machine(fp)
-        if not m or not ssh_verify(m['key'], NS_REPORT, body, sig):   # 不在设备清单里（维护者还没同步、撤销了）、签名不对
-            return self.send(403, {'error': 'denied'})
+        if op == 'join':
+            # 加入：拿要加入的这把密钥签名。入伙口令不对和签名不对回一样的 403（不留判断口）；口令先比（便宜），对了才验签
+            pub = j.get('pub')
+            k = KEY_RE.match(pub) if isinstance(pub, str) else None
+            if not (k and key_fp(k.group(1)) == fp and srv.store.admit_ok(j.get('admit'))
+                    and ssh_verify('ssh-ed25519 ' + k.group(1), NS_REPORT, body, sig)):
+                return self.send(403, {'error': 'denied'})
+        else:
+            m = srv.store.machine(fp)
+            if not m:   # 不在设备清单里（维护者还没同步、撤销了；自己的服务器上是被移除了、记录清掉了：设备重新加入）
+                return self.send(403, {'error': 'unknown_device' if own else 'denied'})
+            if not ssh_verify(m['key'], NS_REPORT, body, sig):
+                return self.send(403, {'error': 'denied'})
         if not srv.fp_bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
             return self.send(429, {'error': 'rate'})
         ts = j.get('ts')
@@ -1171,6 +1285,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, {'error': 'bad'})
         if not srv.nonces.add(nonce, now):
             return self.send(409, {'error': 'replay'})
+        if own and op != 'join':   # 加入的那一次在 join 里记（没加入成的不记）
+            srv.store.seen[fp] = now
+        if op == 'join':
+            name, check = j.get('name'), j.get('check')
+            if not (isinstance(name, str) and 0 < len(name) <= 64 and name.strip() == name and not NAME_BAD.search(name)
+                    and isinstance(check, str) and CHECK_RE.match(check)):
+                return self.send(400, {'error': 'bad'})
+            return self.send(*srv.store.join(fp, 'ssh-ed25519 ' + k.group(1), name, check, now))
+        if op == 'members':
+            return self.send(*srv.store.members(fp, now))
+        if op == 'remove':
+            target = j.get('target')
+            if not (isinstance(target, str) and FP_RE.match(target)):
+                return self.send(400, {'error': 'bad'})
+            code, reply = srv.store.remove(target)
+            if code == 200 and srv.remote:
+                srv.remote.keep_only(srv.store.fps())
+            return self.send(code, reply)
         if relay:
             return self.send(*srv.remote.op(op, fp, j, now, srv.store.name))
         if op == 'report':
@@ -1276,7 +1408,11 @@ def main():
     ap.add_argument('--listen', default='0.0.0.0:18443', help='监听的地址:端口（端口 0：随便挑一个，写进 --port-file）')
     ap.add_argument('--cert', required=True, help='TLS 证书（自签的 P-256；macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住）')
     ap.add_argument('--key', required=True, help='TLS 私钥')
-    ap.add_argument('--release-key', required=True, help='发布公钥（ssh-ed25519 …）：只认它签的设备清单')
+    ap.add_argument('--mode', choices=('maintainer', 'own'), default='maintainer',
+                    help='maintainer：维护者的服务器（设备来自签名的设备清单）；own：自己的同步服务器（设备拿加入链接加入）')
+    ap.add_argument('--release-key', help='发布公钥（ssh-ed25519 …）：只认它签的设备清单（维护者的服务器必须给）')
+    ap.add_argument('--admit-hash', default=os.environ.get('CCA_HUB_ADMIT_HASH'),
+                    help='自己的同步服务器：入伙口令的 SHA-256（64 位十六进制；也可以用环境变量 CCA_HUB_ADMIT_HASH）')
     ap.add_argument('--state', required=True, help='状态文件')
     ap.add_argument('--ttl', type=float, default=150, help='开着会话却这么多秒没心跳就算离线')
     ap.add_argument('--idle', type=float, default=600, help='这么多秒没动静算闲置')
@@ -1290,16 +1426,24 @@ def main():
     ap.add_argument('--relay-port-file', help='数据端口实际监听的端口写到这里（测试用）')
     ap.add_argument('--remote', help='配对的记录（默认在状态文件旁边的 remote.json）')
     a = ap.parse_args()
-    with open(a.release_key) as f:
-        k = KEY_RE.match(' '.join(f.read().split()[:2]))
-    if not k:
-        ap.error('%s 不是 ssh-ed25519 公钥' % a.release_key)
+    release = None
+    if a.mode == 'own':
+        if not HASH_RE.match(a.admit_hash or ''):
+            ap.error('自己的同步服务器要给入伙口令的哈希（--admit-hash 或者环境变量 CCA_HUB_ADMIT_HASH，64 位小写十六进制）')
+    else:
+        if not a.release_key:
+            ap.error('维护者的服务器要给 --release-key')
+        with open(a.release_key) as f:
+            k = KEY_RE.match(' '.join(f.read().split()[:2]))
+        if not k:
+            ap.error('%s 不是 ssh-ed25519 公钥' % a.release_key)
+        release = 'ssh-ed25519 ' + k.group(1)
     host, _, port = a.listen.rpartition(':')
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(a.cert, a.key)
     sig_ok = self_test()
-    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400)
+    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, a.mode, a.admit_hash)
     remote = None
     if a.relay_listen:
         rhost, _, rport = a.relay_listen.rpartition(':')
@@ -1315,13 +1459,14 @@ def main():
             with open(a.relay_port_file + '.tmp', 'w') as f:
                 f.write('%d\n' % rsock.getsockname()[1])
             os.replace(a.relay_port_file + '.tmp', a.relay_port_file)
-    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, 'ssh-ed25519 ' + k.group(1), sig_ok, remote)
+    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, release, sig_ok, remote)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:
             f.write('%d\n' % srv.server_address[1])
         os.replace(a.port_file + '.tmp', a.port_file)
-    sys.stderr.write('cca-presence: 监听 %s:%d，设备 %d 台，签名自检%s%s\n' % (
-        srv.server_address[0], srv.server_address[1], len(store.data['machines']), '通过' if sig_ok else '没通过',
+    sys.stderr.write('cca-presence: %s监听 %s:%d，设备 %d 台，签名自检%s%s\n' % (
+        '自己的同步服务器，' if a.mode == 'own' else '', srv.server_address[0], srv.server_address[1], len(store.data['machines']),
+        '通过' if sig_ok else '没通过',
         '，中转的数据端口 %d（%d 个配对）' % (rsock.getsockname()[1], len(remote.edges)) if remote else ''))
     sys.stderr.flush()
     try:

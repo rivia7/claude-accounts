@@ -319,6 +319,7 @@ for a in "$@"; do
 	case "$prev" in -x) proxy="$a" ;; -o) out="$a" ;; --unix-socket) sock="$a" ;; -X) method="$a" ;; --data|--data-binary) data="$a" ;; esac
 	case "$a" in http*) url="$a";; esac; prev="$a"
 done
+printf '%s\n' "$*" >> "$CCA_T/curl.argv"   # 每次的命令行（查凭证从不出现在命令行里：自己的同步服务器的加入链接）
 # 假的内置代理内核的控制接口（socket 名是 cca-core-*.sock）：状态在 $CCA_T/core（假 mihomo 起来时建 up；core_load 读配置，
 # 写 listening、groups/、sel/，控制接口的 socket 记在 sock）；PUT /configs 只认主目录（home）里的配置文件
 if [ -n "$sock" ]; then

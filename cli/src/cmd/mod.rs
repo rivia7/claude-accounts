@@ -10,6 +10,7 @@ pub mod corenet;
 pub mod cost;
 pub mod dock;
 pub mod gui;
+pub mod hub;
 pub mod keyshare;
 pub mod launchers;
 pub mod leak;
@@ -66,6 +67,7 @@ const MODULES: &[&[Cmd]] = &[
     clients::CMDS,
     shell::CMDS,
     remote::CMDS,
+    hub::CMDS,
 ];
 
 /// 按名字找子命令
@@ -264,13 +266,16 @@ mod tests {
     const REMOVED: &[&str] = &["policy-ask"];
 
     /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
-    /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）和 ADDED；没有登记两次的
+    /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）、`hub-…`（自己的同步服务器，见 hub.rs）和 ADDED；没有登记两次的
     #[test]
     fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();
         for c in MODULES.iter().flat_map(|m| m.iter()) {
-            let added =
-                c.name.starts_with("sh-") || c.name.starts_with('_') || c.name.starts_with("remote-") || ADDED.contains(&c.name);
+            let added = c.name.starts_with("sh-")
+                || c.name.starts_with('_')
+                || c.name.starts_with("remote-")
+                || c.name.starts_with("hub-")
+                || ADDED.contains(&c.name);
             assert!(NAMES.contains(&c.name) || added, "{} 不是原来的子命令", c.name);
             assert!(!REMOVED.contains(&c.name), "{} 已经去掉了", c.name);
             assert!(!seen.contains(&c.name), "{} 登记了两次", c.name);

@@ -1,0 +1,3 @@
+{"version": 1, "kind": "hub_status", "joined": true, "reason": null,
+ "hub": {"kind": "own", "url": "https://hub.example.com:18443", "host": "hub.example.com:18443", "state": "pending", "error": null,
+         "checked_epoch": null, "accounts": 2, "name": "studio-mac", "members": 1, "joined_epoch": 1794040000, "can_invite": true}}

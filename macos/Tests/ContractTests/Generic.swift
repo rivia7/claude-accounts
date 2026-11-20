@@ -402,10 +402,72 @@ func genericCostSync(_ name: String, _ d: Data) -> CostSyncDoc? {
         if doc.sync?.state == .error { check("\(name) 没同步成（error）就有原因", doc.sync?.message != nil) }
         if doc.sync?.state == .ok { check("\(name) 同步成了（ok）就有 checked_epoch", doc.sync?.checkedEpoch != nil) }
     }
+    if let rawHubs = sync?["hubs"] {
+        let rh = rawHubs as? [[String: Any]] ?? []
+        check("\(name) sync.hubs 都解码了、各有 kind", rh.count == doc.sync?.hubs.count && doc.sync?.hubs.allSatisfy { $0.kind != nil } == true)
+        if let s = doc.sync, !s.hubs.isEmpty {
+            check("\(name) 顶层的 sync 是 hubs 里的一台的", s.hubs.contains { $0.state == s.state && $0.message == s.message })
+        }
+    }
     let a = EnumAudit()
     a.add("scan.state", doc.scan?.state)
     a.add("sync.state", doc.sync?.state)
+    for (i, h) in (doc.sync?.hubs ?? []).enumerated() {
+        a.add("sync.hubs[\(i)].kind", h.kind)
+        a.add("sync.hubs[\(i)].state", h.state)
+    }
     knownEnums(name, a.unknown)
+    return doc
+}
+
+/// `config.hubs[]`、`hub status --json` 的 `hub`（PROTOCOL 2.2、4.13）
+func hubEntryInvariants(_ n: String, _ h: HubEntry, _ raw: [String: Any]) {
+    check("\(n) 字段类型", raw["kind"] is String && raw["url"] is String && raw["host"] is String && raw["state"] is String
+          && (raw["error"] is String || isNull(raw["error"])) && (isNumber(raw["checked_epoch"]) || isNull(raw["checked_epoch"]))
+          && wholeCount(raw["accounts"]) && (raw["name"] is String || isNull(raw["name"])) && (wholeCount(raw["members"]) || isNull(raw["members"]))
+          && (isNumber(raw["joined_epoch"]) || isNull(raw["joined_epoch"])) && isBool(raw["can_invite"]))
+    check("\(n) 地址是 https，host 是它的主机和端口", h.url.hasPrefix("https://") && h.url.hasSuffix(h.host) && !h.host.isEmpty)
+    check("\(n) 没成、用不了的有原因，成了的没有", (h.state == .error || h.state == .off) == (h.error != nil))
+    check("\(n) 成了就有时间", h.state != .ok || h.checkedEpoch != nil)
+    check("\(n) 只有自己的同步服务器有设备数、加入时间、加入链接", h.kind == .own ? h.canInvite && h.joinedEpoch != nil
+          : !h.canInvite && h.members == nil && h.joinedEpoch == nil && h.state != .off)
+}
+
+/// `cca hub status --json`（PROTOCOL 4.13）
+@discardableResult
+func genericHubStatus(_ name: String, _ d: Data) -> HubStatusDoc? {
+    guard let doc = decodeOrFail(HubStatusDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) 字段类型", isBool(raw["joined"]) && (raw["reason"] is String || isNull(raw["reason"]))
+          && (raw["hub"] is [String: Any] || isNull(raw["hub"])))
+    check("\(name) 加入了才有 hub", doc.joined == (doc.hub != nil))
+    check("\(name) 没加入时有原因；有原因时 hub 的 state 是 off / error", doc.joined
+          ? (doc.reason == nil || doc.hub?.state == .off || doc.hub?.state == .error) : doc.reason != nil)
+    if let h = doc.hub {
+        check("\(name) hub 是自己的同步服务器", h.kind == .own)
+        hubEntryInvariants(name + " hub", h, raw["hub"] as? [String: Any] ?? [:])
+    }
+    let a = EnumAudit()
+    a.add("hub.kind", doc.hub?.kind)
+    a.add("hub.state", doc.hub?.state)
+    knownEnums(name, a.unknown)
+    return doc
+}
+
+/// `cca hub devices --json`（PROTOCOL 4.13）
+@discardableResult
+func genericHubDevices(_ name: String, _ d: Data) -> HubDevicesDoc? {
+    guard let doc = decodeOrFail(HubDevicesDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) generated_epoch 是数字", isNumber(raw["generated_epoch"]))
+    let rd = raw["devices"] as? [[String: Any]] ?? []
+    check("\(name) 设备都解码了", rd.count == doc.devices.count)
+    check("\(name) 这台设备有、只有一台、排第一", doc.devices.filter(\.me).count == 1 && doc.devices.first?.me == true)
+    check("\(name) id 是设备指纹、不重复", doc.devices.allSatisfy { $0.id.hasPrefix("SHA256:") } && Set(doc.devices.map(\.id)).count == doc.devices.count)
+    check("\(name) 名字不为空、不重复", doc.devices.allSatisfy { !$0.name.isEmpty } && Set(doc.devices.map(\.name)).count == doc.devices.count)
+    check("\(name) 时间是数字或 null", rd.allSatisfy { r in ["joined_epoch", "seen_epoch"].allSatisfy { isNumber(r[$0]) || isNull(r[$0]) } })
     return doc
 }
 
@@ -635,6 +697,29 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
     } else {
         check("\(name) 有 routing", false)
     }
+    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话维护者的在前、每类最多一台，账号走的那一台在里面
+    let rawConfig = raw["config"] as? [String: Any] ?? [:]
+    if let rh = rawConfig["hubs"] {
+        let rawHubs = rh as? [[String: Any]] ?? []
+        let rawKnown = rawHubs.filter { HubKind(rawValue: $0["kind"] as? String ?? "").isKnown }
+        check("\(name) config.hubs 是对象数组，认识的都解码了（不认识的 kind 去掉）", rh is [Any] && rawKnown.count == doc.config?.hubs.count)
+        let hubs = doc.config?.hubs ?? []
+        check("\(name) config.hubs 每类最多一台，维护者的在前", Set(hubs.map(\.kind)).count == hubs.count
+              && hubs.map(\.kind) == hubs.map(\.kind).sorted { $0 == .maintainer && $1 != .maintainer })
+        for (i, h) in hubs.enumerated() {
+            hubEntryInvariants("\(name) config.hubs[\(i)]", h, i < rawKnown.count ? rawKnown[i] : [:])
+        }
+        for t in doc.tools {
+            for a in t.accounts {
+                check("\(name) \(t.id.rawValue)/\(a.key) 走的那台服务器在 config.hubs 里，有「设备」一节的才走",
+                      a.hub == nil ? !a.can.devices : hubs.contains { $0.kind == a.hub } && a.can.devices)
+                check("\(name) \(t.id.rawValue)/\(a.key) 第三方 API 账号不经服务器同步", !a.isAPI || a.hub == nil)
+                if let s = a.cost?.sync, s.state == .localOnly || s.state == .off {
+                    check("\(name) \(t.id.rawValue)/\(a.key) 只在这台设备上的折合金额不说经哪台服务器", s.hub == nil)
+                }
+            }
+        }
+    }
     // cost_total（PROTOCOL 2.2）：旧版 cca 没有；关掉了、没有能算的账号时为 null（不是 null 时一定有 can.cost 的账号）
     if let rt = raw["cost_total"], !isNull(rt) {
         check("\(name) cost_total 不是 null 时有能算折合金额的账号", doc.tools.contains { $0.accounts.contains { $0.can.cost } })
@@ -776,12 +861,18 @@ func genericDevices(_ name: String, _ d: Data) -> DevicesDoc? {
         let rd = (i < rawAccounts.count ? rawAccounts[i]["devices"] as? [[String: Any]] : nil) ?? []
         check("\(name) \(a.key) 的设备都解码了", rd.count == a.devices.count)
         check("\(name) \(a.key) 这台 Mac 排第一", a.devices.dropFirst().allSatisfy { !$0.isMe })
+        if raw["hubs"] != nil {
+            check("\(name) \(a.key) 问的那台服务器在 hubs 里", a.hub == nil || doc.hubs.contains { $0.kind == a.hub })
+        }
         for (j, dev) in a.devices.enumerated() {
             let r = j < rd.count ? rd[j] : [:]
             check("\(name) \(dev.name) 的时间是数字或 null", ["since_epoch", "last_active_epoch", "last_used_epoch", "seen_epoch"]
                 .allSatisfy { isNull(r[$0]) || isNumber(r[$0]) })
             check("\(name) \(dev.name) 开着会话的才有开始时间", dev.state == .none || dev.state == .offline || dev.sinceEpoch != nil)
         }
+    }
+    if let rh = raw["hubs"] {
+        check("\(name) hubs 都解码了，每类最多一台", (rh as? [Any])?.count == doc.hubs.count && Set(doc.hubs.map(\.kind)).count == doc.hubs.count)
     }
     knownEnums(name, auditDevices(doc))
     return doc
@@ -1148,6 +1239,12 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "cost_sync":
             genericCostSync(f, d)
             tolerance(CostSyncDoc.self, f, d) { [$0.scan == nil ? 0 : 1, $0.sync == nil ? 0 : 1] }
+        case "hub_status":
+            genericHubStatus(f, d)
+            tolerance(HubStatusDoc.self, f, d) { [$0.joined ? 1 : 0, $0.hub == nil ? 0 : 1] }
+        case "hub_devices":
+            genericHubDevices(f, d)
+            tolerance(HubDevicesDoc.self, f, d) { [$0.devices.count] }
         case "client_updates":
             if let doc = decodeOrFail(ClientUpdatesDoc.self, f, d) {
                 check("\(f) version 1", doc.version == 1)
@@ -1221,6 +1318,10 @@ func auditState(_ s: StateDoc) -> [String] {
     a.add("config.local.client", s.config?.local?.client)
     a.add("config.local.udp.state", s.config?.local?.udp?.state)
     a.add("config.policy.state", s.config?.policy?.reported)
+    // config.hubs[].kind、账号的 hub、cost.sync.hub 不认识的在解码时就去掉了（PROTOCOL：当作没有 / null），这里看不到
+    for (i, h) in (s.config?.hubs ?? []).enumerated() {
+        a.add("config.hubs[\(i)].state", h.state)
+    }
     if let r = s.routing {
         a.add("routing.sync", r.sync)
         a.add("routing.local_sync", r.localSync)
@@ -1276,7 +1377,11 @@ func auditUsage(_ u: UsageDoc) -> [String] {
 func auditDevices(_ doc: DevicesDoc) -> [String] {
     let a = EnumAudit()
     a.add("tool", doc.tool)
-    for acc in doc.accounts { for dev in acc.devices { a.add("[\(acc.key)].\(dev.name).state", dev.state) } }
+    for (i, h) in doc.hubs.enumerated() { a.add("hubs[\(i)].kind", h.kind) }
+    for acc in doc.accounts {
+        a.add("[\(acc.key)].hub", acc.hub)
+        for dev in acc.devices { a.add("[\(acc.key)].\(dev.name).state", dev.state) }
+    }
     return a.unknown
 }
 
