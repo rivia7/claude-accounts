@@ -555,6 +555,26 @@ rm -f "$T/hold"; wait "$rs_bg"
 ok "会话结束：退出码透传，列表里没有了" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -z "$(run cca remote list 2>/dev/null)" ] && [ -z "$(ls "$H/.cca/remote")" ]'
 out=$(run cca remote attach 2>&1); rc=$?
 ok "cca remote attach 没有会话：说明先 cca remote on，退出码 65" '[ $rc -eq 65 ] && printf "%s" "$out" | grep -q "现在没有可以接入的会话（先 cca remote on"'
+# cca remote end：结束这台机器上的一个会话（等于关掉它的终端）。终端里先说是哪个再问；界面 App 那样运行时发一条同意事件，
+# 同意是对着这一个会话的完整编号给的（PROTOCOL 4.2 的 remote_end）
+out=$(run cca remote end 2>&1); rc=$?
+ok "cca remote end 没有会话：退出码 65" '[ $rc -eq 65 ] && printf "%s" "$out" | grep -q "这台机器上现在没有在会话宿主里运行的会话"'
+touch "$T/hold"
+rs_pty CCA_REMOTE=1 &
+rs_bg=$!
+rs_sid=""; for rs_i in $(seq 1 150); do rs_sid=$(run cca remote list --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; s=json.load(sys.stdin)["sessions"]; print(s[0]["id"] if s else "")' 2>/dev/null); [ -n "$rs_sid" ] && break; sleep 0.1; done
+out=$(run CCA_TTY="$(ans n)" cca remote end 2>&1); rc=$?
+ok "cca remote end：只有一个会话时不用写编号；先说是哪个会话再问，答否不结束" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "^  ${rs_sid:0:8}  claude  alice@example.com" && printf "%s" "$out" | grep -q "没有结束" && [ -n "$(run cca remote list 2>/dev/null)" ]'
+out=$(runev cca remote end ffff0000 2>&1); rc=$?
+ok "cca remote end 没有这个编号的会话：退出码 65，fail 事件说原因" '[ $rc -eq 65 ] && printf "%s" "$out" | grep -q "没有编号以 ffff0000 开头的会话" && evq "e[\"ev\"] == \"fail\" and \"ffff0000\" in e[\"message\"]"'
+out=$(runev cca remote end "${rs_sid:0:8}" 2>&1); rc=$?
+ok "界面 App 结束会话：先不结束，发一条同意事件（对着这个会话的完整编号，默认不同意，说明里是哪个会话、结束意味着什么）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"remote_end\" and e[\"scope\"] == \"$rs_sid\" and e[\"grant\"] == \"remote_end:$rs_sid\" and e[\"default\"] == \"no\" and \"${rs_sid:0:8}  claude\" in e[\"detail\"] and \"关掉它的终端\" in e[\"detail\"]" && [ -n "$(run cca remote list 2>/dev/null)" ]'
+out=$(runev CCA_GRANT="remote_end:${rs_sid%????}0000" cca remote end "$rs_sid" 2>&1); rc=$?
+ok "别的会话的同意不算数" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"grant\"] == \"remote_end:$rs_sid\"" && [ -n "$(run cca remote list 2>/dev/null)" ]'
+out=$(runev CCA_GRANT="remote_end:$rs_sid" cca remote end "$rs_sid" 2>&1); rc=$?
+rm -f "$T/hold"; wait "$rs_bg"   # 先撤掉 hold：万一没结束成，会话自己退出（下面的退出码对不上），不会卡在这里
+ok "同意以后（CCA_GRANT）：会话结束了才回来，result 事件 remote_updated；里面的程序是被 SIGHUP 结束的（退出码 129），登记、socket 和说明都清掉" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and e[\"message\"] == \"会话已经结束\"" && [ "$(cat "$T/rs.rc")" = 129 ] && [ -z "$(run cca remote list 2>/dev/null)" ] && [ -z "$(ls "$H/.cca/remote")" ] && ! ls "$AD"/cli-*.json >/dev/null 2>&1'
+ok "界面 App 的 hello 说能结束会话（没有这个字段的旧版 cca，App 不给「结束」）" 'gj hello | jok "d[\"remote_end\"] == 1"'
 out=$(run cca remote on 2>&1); rc=$?
 ok "cca remote on：记进 config.json，说明怎么接回去、怎么关" '[ $rc -eq 0 ] && cfgok "c[\"remote\"] is True" && printf "%s" "$out" | grep -q "已打开：之后在终端里启动的会话放进会话宿主里运行" && printf "%s" "$out" | grep -q "cca remote attach"'
 ok "cca remote：开着" 'run cca remote 2>&1 | grep -q "远程会话：开着"'

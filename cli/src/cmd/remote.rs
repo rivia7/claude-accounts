@@ -2,7 +2,7 @@
 //!
 //! - `remote/host.rs`：会话宿主（remote-host）：客户端跑在它开的 pty 里，启动它的终端没了会话照样运行，别的终端能接进来
 //! - `remote/attach.rs`：接入端（remote-attach）：把一个终端接到宿主上；`remote/keys.rs`：从按键里认出“断开”
-//! - `remote/manage.rs`：开关和列表（remote-set、remote-list）
+//! - `remote/manage.rs`：开关、列表、结束一个会话（remote-set、remote-list、remote-end）
 //! - `remote/local.rs`：这台机器上的会话目录、socket、帧的格式
 //! - `remote/vt.rs`：终端输出的识别（查询、模式、回放）
 //! - `remote/pty.rs`：伪终端和终端模式；`remote/sig.rs`：等信号
@@ -35,6 +35,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("remote-attach", attach::cmd_remote_attach),
     Cmd::all("remote-list", manage::cmd_remote_list),
     Cmd::all("remote-set", manage::cmd_remote_set),
+    Cmd::all("remote-end", manage::cmd_remote_end),
     Cmd::all("remote-link", link::cmd_remote_link),
     Cmd::all("remote-pair-show", pair::cmd_remote_pair_show),
     Cmd::all("remote-pair-join", pair::cmd_remote_pair_join),

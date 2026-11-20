@@ -206,6 +206,7 @@ private struct RemoteSessionList: View {
 }
 
 /// 一个会话：状态点、名字、在哪个文件夹、开了多久；右边是「接入」（那台机器只让看时是「只看」），接不上时说原因。
+/// 这台 Mac 上的会话还能「结束…」（等于关掉它的终端；cca 先问一句）。
 private struct RemoteSessionLine: View {
     @Environment(AppModel.self) private var model
     let session: RemoteSession
@@ -213,6 +214,7 @@ private struct RemoteSessionLine: View {
 
     var body: some View {
         let detail = Texts.remoteDetail(session, now: now)
+        let canEnd = session.isLocal && model.remoteEndAvailable
         HStack(spacing: 10) {
             Group {
                 switch session.state {
@@ -234,6 +236,12 @@ private struct RemoteSessionLine: View {
             }
             .help(detail)
             Spacer(minLength: 8)
+            // 「结束…」放在左边：各行最右边那一列都是「接入」/「只看」，上下对得齐
+            if canEnd {
+                RowAction("结束…", systemImage: "stop.circle") { model.endRemote(session) }
+                    .disabled(model.remoteBusy)
+                    .help("结束这个会话：等于关掉它的终端，里面的程序会退出（先问一句）")
+            }
             if let note = Texts.remoteStateNote(session) {
                 Text(note).foregroundStyle(.secondary)
             } else if session.access == .view {

@@ -34,7 +34,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒、
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
   `cost sync` 全局一次一个。`remote list --json`、`remote allow`、`remote unpair` 40 秒（要问一次维护者的服务器；取消配对被限流时 cca 自己再试两次），
-  `remote on|off` 30 秒。
+  `remote on|off` 30 秒，`remote end` 40 秒（会话里的程序不理会时 cca 等宿主强行结束它，约 5 秒，再等它收场）。
 - `app`、`web`、`billing`、`limit-resets`、`mail open`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -84,6 +84,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   见 2.2 的 `can.mail` / `account.mail`、2.4）。没有这个字段（旧版 cca）时 App 不显示「邮箱」一节、不调这些命令（旧版 cca 没有 `mail list`，`cca mail setup` 会被当成启动账号）。
 - `remote`：有远程会话的 App 入口（「远程会话」一页，见 9：`cca remote list --json`、配对、`cca remote attach`）。现在是 1。没有这个字段（旧版 cca）
   或者版本不认识时 App 不显示这一页、不调这些命令（旧版 cca 会把 `remote` 当成启动账号的参数）。
+- `remote_end`：有 `cca remote end <会话的 id>`（结束这台 Mac 上的一个会话，9.2）。没有这个字段（3.5.2-beta.2 及更早）时 App 不给「结束…」。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
   （旧版 cca 没有 `tools.agy`，当作没启用）。`bin` 是找到的 `claude` / `codex` / `agy`，没装为 null。App 只认识的工具才显示，`tools` 里别的键忽略。
@@ -659,6 +660,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；会同步的账号，登录了它的其他设备上的也删；见 4.10） | no |
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
 | `remote_pair` | 空 | `cca remote pair`：这台机器显示一个配对码；在另一台机器上输入它以后，那台机器可以经维护者的服务器看和操作这台机器上开着远程会话的会话（两头之间加密；之后能改成只看、不让，或者取消配对）。App 里是提问会话（「远程会话」页的「显示配对码…」，9.2），当场问；终端里问之前先把这段说明打出来 | yes |
+| `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
@@ -853,6 +855,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `remote pair`、`remote join` | 「远程会话」页「配对过的机器」的「显示配对码…」「输入配对码…」 | 提问会话（`consent.remote_pair` + `remote.pair` / `remote.code`，9.2） |
 | `remote on\|off`、`remote allow`、`remote unpair` | 「远程会话」页的开关、每台机器那一行的菜单和「取消配对」 | 无交互命令（9.2） |
 | `remote attach [-r] <会话的 id>` | 「远程会话」页每个会话的「接入」「只看」 | 界面里的终端（App 开的伪终端，9.3） |
+| `remote end <会话的 id>` | 「远程会话」页这台 Mac 上的会话那一行的「结束…」（要 `hello.remote_end`） | 无交互命令，先 `consent.remote_end`（4.2、9.2） |
 | `remote`（`status`、`peers`、不带 `--json` 的 `list`） | 没有入口 | 终端里自己运行 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
@@ -1102,6 +1105,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 | `cca remote on` / `off` | 开关 | 无交互命令；`result` 的 `remote_updated` |
 | `cca remote allow <配对的 id> control\|view\|none` | 改 `incoming`。改成只看、不让时，正接着的那一处几秒钟内断开 | 无交互命令；`result` 的 `remote_updated` |
 | `cca remote unpair <配对的 id>` | 取消配对：两边都不能再接入对方，正接着的断开。App 先自己问一句（cca 不发 `consent`） | 无交互命令；`result` 的 `remote_updated` |
+| `cca remote end <会话的 id>` | 结束这台 Mac 上的一个会话（`where` 是 `local` 的）：等于关掉它的终端，里面的程序收到通知后退出，约 5 秒还不退出就被强行结束。会话真的结束了命令才返回。要 `hello.remote_end` | 无交互命令：第一次运行发 `consent.remote_end`（范围是会话的 id，4.2），App 弹框，同意后带 `CCA_GRANT` 重跑（4.3）；`result` 的 `remote_updated` |
 
 - 配对是有方向的：显示配对码的那台机器上的会话，可以被输入配对码的那台接入。要双向，再 `allow … control`，不用配第二次。
 - `allow`、`unpair` 的第一个参数也认名字（终端里用的），App 一律给 `peers[].id`：名字可能重。
@@ -1109,6 +1113,9 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   App 不把它写进日志、设置，放在被观察的状态里只是为了显示，这一页关掉就没有了；点「复制」会进剪贴板。配对码是一次性的（用过、取消了、
   过了 10 分钟、试错几次都作废），不是长期的密钥；长期的密钥（配对后两头各自存进钥匙串）不经过 App。
 - 失败都是 `fail` 事件（`code` 是 `error`，`message` 说原因：用不了中转、连不上服务器、配对码不对或过期、没有这个配对），取消是 `cancelled`。
+- `remote end` 只管这台 Mac 上的会话：别的机器上的会话没有这一条（到那台机器上结束，或者接进去让里面的程序自己退出），App 只在 `where` 是 `local`
+  的那几行给「结束…」。退出码：没有这个会话 65、id 对上了好几个 64（都带 `fail` 事件），说了以后会话没结束（宿主没有回应）是 1。
+  界面里的终端正接着这个会话时不用另外处理：会话结束了接入端自己退出（9.3）。
 
 ### 9.3 界面里的终端：`cca remote attach [-r] <会话的 id>`
 
@@ -1121,12 +1128,16 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 - 参数：`remote attach <sessions[].id>`；只看不操作（用户选的，或者 `access` 是 `view`）在 id 前面加 `-r`。一律给完整的 id，不给前缀。
 - 进出：伪终端上读到的字节原样交给终端视图；按键、鼠标、终端对查询的回答原样写回去；视图的大小变了改伪终端的窗口大小（`TIOCSWINSZ`）。
   cca 这一头说的话（接不上的原因、“会话已经结束”）也是写在这个终端上的，App 不另外解析。
+- 连接断了：接着别的机器上的会话时网络断了（这台 Mac 睡了一觉、服务器重启、那台机器掉线又回来），接入端**自己重新接上**，App 不用管、
+  也不要自己再起一个：它先把会话在终端上打开的模式关掉，在终端上说一句“连接断了，正在重新接上…”，隔 1～15 秒试一次（一共最多 5 分钟；
+  服务器说那台机器上没有这个会话了，45 秒后就不再等），接上以后那边照新接入的补上模式、回放最近的输出、重画。等的这一阵敲的键不送过去
+  （不攒着），断开的键（Ctrl-\ 再按 d）和 SIGTERM 照样管用。那边这期间改成只让看了，接上以后在终端上说一句、按键不再送。没接上才退出（68）。
 - 断开：给进程组发 SIGTERM（接入端收到就断开、退出码 0，会话在那边照常运行），3 秒后还在就 SIGKILL。用户在终端里按断开的键
   （先 Ctrl-\，再 d）也一样是进程自己退出。App 在这些时候断开：点「断开」、接入另一个会话（一次接一个）、主窗口关了（被挡住、最小化、
   换到别的页不算）、退出 App。
 - 退出码：自己断开是 0；会话结束了是会话里那个程序的退出码（所以 0 也可能是会话正常结束了：App 看之后查到的列表里还有没有这个会话）；
   64 用法不对；65 没有这个会话；66 经服务器接入别的机器上的会话没成（连不上、那台机器不在线、对不上密钥）；68 宿主没了（没说会话结束
-  连接就断了，或者这边太慢被它断开）；69 不在终端里。被信号杀掉是 128 + 信号。会话里的程序自己也可能正好用这几个数退出，分不出来：
+  连接就断了，或者这边太慢被它断开；别的机器上的会话是试了一阵没重新接上）；69 不在终端里。被信号杀掉是 128 + 信号。会话里的程序自己也可能正好用这几个数退出，分不出来：
   App 照这张表说的那一句只是提示，准话是接入端写在终端上的那一行。
 - 终端里的内容（可能有密钥、源码）只在 App 的内存里：不写文件、不进日志、不进事件文件；终端关掉（返回列表）就丢掉。
 - 内容来自另一台机器，App 不让它动这台 Mac：

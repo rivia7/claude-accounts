@@ -72,6 +72,12 @@ func remoteProtocolTests() {
     check("配对是提问会话（App 里问完）", Handoff.remotePair.arguments == ["remote", "pair"] && Handoff.remoteJoin.arguments == ["remote", "join"]
           && Handoff.remotePair.inApp && Handoff.remoteJoin.inApp && !Handoff.remotePair.needsForms)
     check("结果码认识", ResultCode.remotePaired.isKnown && ResultCode.remoteUpdated.isKnown && ConsentItem.remotePair.isKnown)
+    let sid = String(repeating: "3a", count: 16)
+    check("结束会话：按会话的 id，和改配对表的几条一个接一个；同意项认识", CcaCommand.remoteEnd(session: sid).arguments == ["remote", "end", sid]
+          && CcaCommand.remoteEnd(session: sid).gate == CcaCommand.remoteUnpair(peer: pid).gate && !CcaCommand.remoteEnd(session: sid).runsToCompletion
+          && CcaCommand.remoteEnd(session: sid).tool == nil && ConsentItem.remoteEnd.isKnown && ConsentItem.remoteEnd.rawValue == "remote_end")
+    check("hello 的 remote_end；旧版 cca 没有", (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1,"remote_end":1}"#.utf8)))?.remoteEnd == 1
+          && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1}"#.utf8)))?.remoteEnd == nil)
     check("hello 的 remote", (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1}"#.utf8)))?.remote == 1)
     check("旧版 cca 的 hello 没有 remote", (try? DocumentDecoder.decode(HelloDoc.self, from: Data(tinyHello.utf8)))?.remote == nil)
 
@@ -188,6 +194,26 @@ func remoteProtocolTests() {
         m.shutdown()
     }
 
+    // 有这一页、还不能结束会话的 cca（3.5.2-beta.2）：不给「结束」，也不调那条命令
+    do {
+        let old = hello.replacingOccurrences(of: #""remote_end": 1,"#, with: "")
+        let t = ScriptedTransport { request, _ in
+            if request.arguments == ["_gui", "hello"] { return response(0, stdout: old) }
+            if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
+            if request.arguments.prefix(2) == ["remote", "list"] { return response(0, stdout: list) }
+            return response(0, stdout: SampleDocs.clientUpdates)
+        }
+        let m = makeModel(t)
+        await m.start()
+        m.refreshRemote(manual: true)
+        let got = await waitUntil { m.remote.doc != nil }
+        if let near = m.remote.doc?.sessions.first(where: { $0.isLocal }) { m.endRemote(near) }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        check("hello 没有 remote_end：有这一页，不能结束会话", got && m.remoteAvailable && !m.remoteEndAvailable
+              && !t.requests.contains { $0.arguments.prefix(2) == ["remote", "end"] })
+        m.shutdown()
+    }
+
     let sw = RemoteSwitch()
     let t = ScriptedTransport { request, _ in
         if request.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
@@ -237,6 +263,20 @@ func remoteProtocolTests() {
     check("取消配对", await waitUntil { asked().contains(["remote", "unpair", peer.id]) && !m.remoteBusy })
     m.setRemoteEnabled(false)
     check("关掉开关", await waitUntil { asked().contains(["remote", "off"]) && !m.remoteBusy })
+
+    // 结束会话：只管这台 Mac 上的
+    if let near = m.remote.doc?.sessions.first(where: { $0.isLocal }), let away = m.remote.doc?.sessions.first(where: { !$0.isLocal }) {
+        check("cca 能结束会话（hello.remote_end）", m.remoteEndAvailable)
+        let k = asked().count
+        m.endRemote(away)
+        check("别的机器上的会话不归这里结束", asked().count == k && !m.remoteBusy)
+        m.endRemote(near)
+        check("结束这台 Mac 上的会话：cca remote end <会话的 id>，做完再查一次",
+              await waitUntil { asked().count >= k + 2 && !m.remoteBusy } && asked()[k] == ["remote", "end", near.id]
+              && asked().last == ["remote", "list", "--json"], "\(asked().suffix(3))")
+    } else {
+        check("夹具里有这台 Mac 上的和别的机器上的会话", false)
+    }
 
     // 配对：提问会话
     let session = ScriptedSession()

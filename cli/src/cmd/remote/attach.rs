@@ -7,9 +7,12 @@
 //! 断开（会话在那边接着运行）：先按 Ctrl-\，再按 d 或者 .；要给会话本身发一个 Ctrl-\ 就连按两次。这个终端被关掉、
 //! 这个进程收到 SIGTERM / SIGHUP 也是断开。退出前把会话在这个终端上打开的模式（备用屏幕、括号粘贴、鼠标上报……）关掉。
 //!
+//! 别的机器上的会话，连接断了（网络断了、这台机器睡了一觉、服务器重启）自己重新接上（`reconnect`）：在终端上说一句，
+//! 隔一阵试一次，一共试 `RETRY_FOR` 那么久；接上以后那边照新接入的补上模式和回放。等的时候断开的键照样管用。
+//!
 //! 退出码：会话结束了是客户端的退出码；自己断开的是 0；64 用法不对或者前缀对上了好几个，65 没有这个会话，
 //! 66 经服务器接入没成（连不上服务器、那台机器不在线、对不上配对的密钥），68 宿主没了或者连接断了（没说会话结束
-//! 就断了），69 不在终端里。
+//! 就断了；别的机器上的是试了一阵没重新接上），69 不在终端里。
 
 use super::far::{self, Far};
 use super::keys::Keys;
@@ -29,6 +32,16 @@ use std::os::fd::{AsRawFd, RawFd};
 
 /// 这个终端还没写出去的超过这么多就先不从宿主那边读（宿主那边攒多了会断开这个接入）
 const OUT_HIGH: usize = 1024 * 1024;
+/// 别的机器上的会话，连接断了以后一共试这么久（秒）。`CCA_REMOTE_RETRY` 能改，0 是不试
+const RETRY_FOR: f64 = 300.0;
+/// 两次之间最多隔这么久（从 1 秒起一次比一次久）。服务器给每台设备限了流（每 2 秒 1 次），一次试最多两个请求
+const RETRY_GAP: f64 = 15.0;
+/// 服务器答了、却一直说没有这个会话，这么久以后算它不在了。多半是真的结束了（这台机器睡了一觉，那边早做完了），不让人
+/// 干等；留这一阵是因为服务器重启、宿主那头的转接断了一下以后，会话要等那头连上来才又有（头几次是隔 4、10、20 秒试）。
+/// 那台机器断网久了（服务器一分钟后就不再留着它的会话）等不到：过后再 `cca remote attach`
+const MISSING_FOR: f64 = 45.0;
+/// 接上不到 10 秒又断，连着这么多次就不再试
+const FLAPS: u32 = 5;
 
 pub const EXIT_USAGE: i32 = 64;
 pub const EXIT_NOT_FOUND: i32 = 65;
@@ -98,6 +111,13 @@ impl Wire {
             Wire::Far(t) => t.drain(secs),
         }
     }
+
+    /// 断了的那一条不用了（要另连一条）
+    fn close(&mut self) {
+        if let Wire::Far(t) = self {
+            t.close();
+        }
+    }
 }
 
 /// 别的机器上的会话（配对过才有）。没问到的原因写到 stderr、当作一个都没有
@@ -161,37 +181,36 @@ fn pick(prefix: Option<&str>, all: &[Peer]) -> R<Result<(Target, Option<Server>)
     }))
 }
 
-/// 经服务器接到另一台机器上的会话。Err(退出码)：说明已经写到 stderr
-fn dial_far(f: &Far, all: &[Peer], srv: &Server) -> R<Result<Tunnel, i32>> {
-    let (Some(peer), Some(secret)) = (all.iter().find(|p| p.pid == f.pid), peers::secret(&f.pid)) else {
-        crate::err!("和「{}」配对的密钥读不到了：两边重新配对（cca remote pair / cca remote join）", f.peer);
-        return Ok(Err(EXIT_RELAY));
-    };
-    crate::err!("正在接入「{}」上的会话 {}…", f.peer, &f.sid[..8]);
+/// 没接上别的机器上的会话：退出码和原因
+struct Miss {
+    code: i32,
+    why: String,
+    /// 服务器给了票据，是后面连数据端口、握手没成
+    dialed: bool,
+}
+
+/// 经服务器接到另一台机器上的会话：换票据、连数据端口、握手。什么都不往终端上说（重连时终端在原始模式里）
+fn dial_far(f: &Far, peer: &Peer, secret: &[u8], srv: &Server) -> R<Result<Tunnel, Miss>> {
     let t = match srv.ticket("relay_attach", &dict! { "sid" => f.sid.as_str(), "pid" => f.pid.as_str() })? {
         Ok(t) => t,
         Err(e) => {
-            crate::err!("{}", e.text);
-            return Ok(Err(if e.error == "no_session" { EXIT_NOT_FOUND } else { EXIT_RELAY }));
+            let code = if e.error == "no_session" { EXIT_NOT_FOUND } else { EXIT_RELAY };
+            return Ok(Err(Miss { code, why: e.text, dialed: false }));
         }
     };
     // 服务器要等那台机器另连一条上来才回话
     let made = srv
         .dial(t.port, "view", &t.tid, &t.key, 16.0)
-        .and_then(|mut s| Ok((relay::handshake_viewer(&mut s, peer, &secret, &f.sid, &srv.fp)?, s)))
+        .and_then(|mut s| Ok((relay::handshake_viewer(&mut s, peer, secret, &f.sid, &srv.fp)?, s)))
         .and_then(|(chan, s)| Tunnel::new(s, chan));
-    Ok(match made {
-        Ok(t) => Ok(t),
-        Err(e) => {
-            let why = if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) {
-                "等了一阵那台机器没有回应（它不在线，或者网络不通）".to_string()
-            } else {
-                e.to_string()
-            };
-            crate::err!("没接上：{why}");
-            Err(EXIT_RELAY)
-        }
-    })
+    Ok(made.map_err(|e| {
+        let why = if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) {
+            "等了一阵那台机器没有回应（它不在线，或者网络不通）".to_string()
+        } else {
+            e.to_string()
+        };
+        Miss { code: EXIT_RELAY, why, dialed: true }
+    }))
 }
 
 enum End {
@@ -200,6 +219,164 @@ enum End {
     /// 自己断开的；true：终端还在，可以说一句
     Detached(bool),
     HostGone,
+    /// 别的机器上的会话，连接断了以后没重新接上（原因）
+    Lost(String),
+}
+
+/// 这个终端这一头
+struct Side {
+    tty: RawFd,
+    /// 信号来了会有东西可读的那根管道
+    wake: RawFd,
+    raw: Raw,
+    keys: Keys,
+    dec: Decoder,
+    /// 认出会话在这个终端上打开了哪些模式：退出、重连前关掉
+    scan: Scanner,
+    modes: Modes,
+    /// 还没写到终端上的
+    to_tty: VecDeque<u8>,
+    read_only: bool,
+}
+
+/// 连接断了以后一共试多久（秒）；0 是不试
+fn retry_for() -> f64 {
+    let set = std::env::var("CCA_REMOTE_RETRY").ok().and_then(|v| v.trim().parse::<f64>().ok());
+    set.filter(|v| v.is_finite() && *v >= 0.0).map_or(RETRY_FOR, |v| v.min(86400.0))
+}
+
+/// 把攒着的写到终端上，最多等 secs 秒；false：终端没了
+fn write_out(tty: RawFd, q: &mut VecDeque<u8>, secs: f64) -> bool {
+    let deadline = monotonic() + secs;
+    while !q.is_empty() && monotonic() < deadline {
+        let mut p = libc::pollfd { fd: tty, events: libc::POLLOUT, revents: 0 };
+        // SAFETY: p 是有效的一项
+        unsafe { libc::poll(&mut p, 1, 100) };
+        match pty::write_some(tty, q.as_slices().0) {
+            Ok(n) => {
+                q.drain(..n);
+            }
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// 终端在原始模式里时说一行（回车要自己写）；false：终端没了。排在还没写出去的后面（前面那一句、关模式的那几个字节
+/// 还没写完时不能插到它们中间）；一秒钟写不完的留着，下一次、接上以后接着写
+fn say_raw(side: &mut Side, text: &str) -> bool {
+    side.to_tty.extend(format!("{text}\r\n").bytes());
+    write_out(side.tty, &mut side.to_tty, 1.0)
+}
+
+/// 重连的那一阵等 secs 秒（0：只看一眼）。这期间按了断开的键、终端没了、进程被叫停：Some(怎么完的)；别的按键不要
+/// （会话那头收不到，攒着等接上了再送会变成一串迟到的按键）
+fn idle(side: &mut Side, secs: f64) -> Option<End> {
+    let until = monotonic() + secs;
+    let mut buf = [0u8; 1024];
+    loop {
+        let left = until - monotonic();
+        let mut fds = [
+            libc::pollfd { fd: side.wake, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: side.tty, events: libc::POLLIN, revents: 0 },
+        ];
+        // SAFETY: fds 是有效的数组；被信号打断就是要它马上回来
+        unsafe { libc::poll(fds.as_mut_ptr(), 2, (left.max(0.0) * 1000.0).ceil().min(1000.0) as i32) };
+        if fds[0].revents != 0 || sig::pending() {
+            let got = sig::take(side.wake);
+            if got.has(libc::SIGHUP) {
+                return Some(End::Detached(false));
+            }
+            if got.has(libc::SIGTERM) || got.has(libc::SIGINT) || got.has(libc::SIGQUIT) {
+                return Some(End::Detached(true));
+            }
+            if got.has(libc::SIGCONT) {
+                side.raw.resume();
+            }
+        }
+        if fds[1].revents != 0 {
+            // 读到没有为止：问服务器、连的那一阵（阻塞着，可以有半分钟）粘贴进来的一大段也都读掉，不留到接上以后
+            loop {
+                match pty::read_some(side.tty, &mut buf) {
+                    Some(Ok(0)) | Some(Err(_)) => return Some(End::Detached(false)), // 终端没了
+                    Some(Ok(n)) if side.keys.feed(&buf[..n], &mut Vec::new()) => return Some(End::Detached(true)),
+                    Some(Ok(_)) => {}
+                    None => break,
+                }
+            }
+        }
+        if left <= 0.0 {
+            return None;
+        }
+    }
+}
+
+/// 别的机器上的会话，连接断了：隔一阵试一次，接上了给新的通道（第二项：那边现在是不是只让看）。
+/// Err(怎么完的)：用户不等了，或者没接上（`End::Lost`）。
+///
+/// 每次先问一遍服务器这个会话还在不在：不在了、那台机器没连着服务器时不去换票据；那边改成只让看了也是从这里知道的
+/// （转接那头会把按键扔掉，这边得告诉用户）。问、连、握手都是阻塞着做的（合起来最多半分钟），做完马上看一眼
+/// 有没有按断开的键、有没有被叫停（SIGTERM、终端关了）：这一步做到一半时收到的，最迟等它做完才看到
+fn reconnect(f: &Far, srv: &Server, side: &mut Side, window: f64, flaps: u32) -> Result<(Tunnel, bool), End> {
+    let start = monotonic();
+    let mut missing: Option<f64> = None;
+    let mut said = String::new();
+    let mut gap = f64::from(1u32 << flaps.min(4)).min(RETRY_GAP);
+    loop {
+        if let Some(end) = idle(side, gap) {
+            return Err(end);
+        }
+        gap = (gap * 2.0).min(RETRY_GAP);
+        let all = peers::load();
+        let (Some(peer), Some(secret)) = (all.iter().find(|p| p.pid == f.pid), peers::secret(&f.pid)) else {
+            return Err(End::Lost(format!("这台机器上已经没有和「{}」的配对了", f.peer)));
+        };
+        let now = monotonic();
+        // 这里出的错（连请求都没发成的那一种）不往外抛：终端还在原始模式里、会话打开的模式还没关。当成这一次没问到，下次再试
+        let unasked = |_| Err(relay::Fault { code: 0, error: String::new(), text: "这一次没问成服务器".into() });
+        let why = match far::fetch(srv, std::slice::from_ref(peer), 8).unwrap_or_else(unasked) {
+            Err(fault) => fault.text,
+            Ok(l) if !l.known.contains(&f.pid) => {
+                return Err(End::Lost(format!("「{}」取消了和这台机器的配对（或者太久没用被服务器清掉了）", f.peer)));
+            }
+            Ok(l) => match l.sessions.into_iter().find(|x| x.sid == f.sid) {
+                None => {
+                    if now - *missing.get_or_insert(now) >= MISSING_FOR.min(window) {
+                        let why = "那台机器上已经没有这个会话了（它结束了、那边不让这台机器接入了，或者那台机器不在线）";
+                        return Err(End::Lost(why.into()));
+                    }
+                    "那台机器上现在没有这个会话（它可能结束了，也可能那边还没连上服务器）".to_string()
+                }
+                Some(x) if !x.online => {
+                    missing = None;
+                    "那台机器暂时没连着服务器".to_string()
+                }
+                Some(x) => {
+                    missing = None;
+                    let undialed = |_| Err(Miss { code: EXIT_RELAY, why: "这一次没问成服务器".into(), dialed: false });
+                    match dial_far(&x, peer, &secret, srv).unwrap_or_else(undialed) {
+                        Ok(t) => {
+                            // 问、连的这一阵敲的键也不要（不然接上以后才送到）；按的是断开的键就不接了
+                            return idle(side, 0.0).map_or(Ok((t, x.view_only)), Err);
+                        }
+                        Err(m) => m.why,
+                    }
+                }
+            },
+        };
+        if let Some(end) = idle(side, 0.0) {
+            return Err(end);
+        }
+        if monotonic() - start >= window {
+            return Err(End::Lost(why));
+        }
+        if why != said {
+            if !say_raw(side, &format!("还没接上：{why}。接着试…")) {
+                return Err(End::Detached(false));
+            }
+            said = why;
+        }
+    }
 }
 
 pub fn cmd_remote_attach(args: &[String]) -> R<()> {
@@ -215,6 +392,7 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
             }
         }
     }
+    let asked_ro = read_only; // 用户要的只看（下面那边只让看时也会改成只看：那一种重连以后照那边现在的来）
     let all = peers::load();
     let (target, srv) = match pick(prefix, &all)? {
         Ok(t) => t,
@@ -238,14 +416,22 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
             Wire::Near(conn)
         }
         Target::Far(f) => {
-            let srv = srv.expect("别的机器上的会话是问服务器问来的");
+            let srv = srv.as_ref().expect("别的机器上的会话是问服务器问来的");
             if f.view_only && !read_only {
                 crate::err!("「{}」只让这台机器看这个会话，不能操作", f.peer);
                 read_only = true;
             }
-            match dial_far(f, &all, &srv)? {
+            let (Some(peer), Some(secret)) = (all.iter().find(|p| p.pid == f.pid), peers::secret(&f.pid)) else {
+                crate::err!("和「{}」配对的密钥读不到了：两边重新配对（cca remote pair / cca remote join）", f.peer);
+                return exit(EXIT_RELAY);
+            };
+            crate::err!("正在接入「{}」上的会话 {}…", f.peer, &f.sid[..8]);
+            match dial_far(f, peer, &secret, srv)? {
                 Ok(t) => Wire::Far(Box::new(t)),
-                Err(code) => return exit(code),
+                Err(m) => {
+                    crate::err!("{}{}", if m.dialed { "没接上：" } else { "" }, m.why);
+                    return exit(m.code);
+                }
             }
         }
     };
@@ -254,15 +440,109 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
     let wake = sig::install()?;
     let Some(size) = pty::get_size(tty.as_raw_fd()) else { return die("问不到这个终端的大小") };
     wire.send(&local::hello(size, read_only));
-    let mut raw = Raw::enter(tty.as_raw_fd())?;
+    let raw = Raw::enter(tty.as_raw_fd())?;
 
     let tty_fd = tty.as_raw_fd();
-    let mut dec = Decoder::default();
-    let mut keys = Keys::default();
-    let (mut scan, mut modes) = (Scanner::default(), Modes::default());
-    let mut to_tty: VecDeque<u8> = VecDeque::new();
+    let mut side = Side {
+        tty: tty_fd,
+        wake,
+        raw,
+        keys: Keys::default(),
+        dec: Decoder::default(),
+        scan: Scanner::default(),
+        modes: Modes::default(),
+        to_tty: VecDeque::new(),
+        read_only,
+    };
+    let mut flaps = 0u32;
+    let end = loop {
+        let up = monotonic();
+        let end = attached(&mut side, &mut wire);
+        // 别的机器上的会话，连接断了：试着重新接上
+        let (End::HostGone, Target::Far(f), Some(srv)) = (&end, &target, srv.as_ref()) else { break end };
+        let window = retry_for();
+        if window <= 0.0 {
+            break end;
+        }
+        flaps = if monotonic() - up < 10.0 { flaps + 1 } else { 0 };
+        if flaps >= FLAPS {
+            break End::Lost("连着几次都是一接上就断".into());
+        }
+        wire.close();
+        // 会话那边还没写到终端上的不要了（接上以后有回放）。断的时候可能正写到一条序列的半中间：先让终端回到平常的状态
+        // （CAN），把会话打开的模式关掉（鼠标上报还开着的话，等的这一阵动一下鼠标就是一串乱码），再说话。终端一时收不下
+        // 的留在 to_tty 里，之后说的话排在它后面（`say_raw`），接上以后也是先把它写完
+        side.to_tty.clear();
+        side.to_tty.push_back(0x18);
+        side.to_tty.extend(side.modes.undo());
+        if !say_raw(&mut side, "\r\n连接断了，正在重新接上…（不等了：先按 Ctrl-\\，再按 d）") {
+            break End::Detached(false);
+        }
+        // 那边会照新接入的来（补模式、回放、重画）：这边认序列、记模式的也从头来
+        (side.dec, side.scan, side.modes) = (Decoder::default(), Scanner::default(), Modes::default());
+        match reconnect(f, srv, &mut side, window, flaps) {
+            Ok((t, view_only)) => {
+                let note = format!("「{}」现在只让这台机器看这个会话，不能操作", f.peer);
+                if view_only && !side.read_only && !say_raw(&mut side, &note) {
+                    break End::Detached(false);
+                }
+                side.read_only = asked_ro || view_only;
+                wire = Wire::Far(Box::new(t));
+                wire.send(&local::hello(pty::get_size(tty_fd).unwrap_or(size), side.read_only));
+            }
+            Err(end) => break end,
+        }
+    };
+
+    // 收场：告诉宿主断开了、把这个终端还原
+    if matches!(end, End::Detached(_)) {
+        wire.send(&local::frame(local::DETACH, b""));
+        wire.drain(1.0);
+    }
+    let tty_alive = !matches!(end, End::Detached(false));
+    if tty_alive {
+        side.to_tty.extend(side.modes.undo());
+        side.to_tty.extend(b"\r\n".iter().copied());
+        write_out(tty_fd, &mut side.to_tty, 1.0);
+    }
+    drop(side); // 终端的设置还原了再说话
+    let short = &sid[..8];
+    match end {
+        End::Exited(code) => {
+            if code == 0 {
+                crate::err!("会话已经结束");
+            } else {
+                crate::err!("会话已经结束（退出码 {code}）");
+            }
+            exit(code)
+        }
+        End::Detached(say) => {
+            if say {
+                crate::err!("已断开，会话还在运行（再接入：cca remote attach {short}）");
+            }
+            Ok(())
+        }
+        End::Lost(why) => {
+            crate::err!("没重新接上：{why}（cca remote list 看它还在不在，再接入：cca remote attach {short}）");
+            exit(EXIT_HOST_GONE)
+        }
+        End::HostGone if is_far => {
+            crate::err!("连接断了：网络断了、那台机器上的会话不在了，或者这边太慢被断开了（cca remote list 看它还在不在，再接入：cca remote attach {short}）");
+            exit(EXIT_HOST_GONE)
+        }
+        End::HostGone => {
+            crate::err!("连接断了：这个会话的宿主不在了，或者这边太慢被它断开了（cca remote list 看它还在不在）");
+            exit(EXIT_HOST_GONE)
+        }
+    }
+}
+
+/// 接着的那一段：按键送过去、那边的输出写到终端上，到会话结束、自己断开、连接断了为止
+fn attached(side: &mut Side, wire: &mut Wire) -> End {
+    let Side { tty: tty_fd, wake, raw, keys, dec, scan, modes, to_tty, read_only } = side;
+    let (tty_fd, wake, read_only) = (*tty_fd, *wake, *read_only);
     let mut buf = vec![0u8; 4096];
-    let end = 'run: loop {
+    'run: loop {
         let mut fds = [
             libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 },
             libc::pollfd { fd: tty_fd, events: libc::POLLIN | if to_tty.is_empty() { 0 } else { libc::POLLOUT }, revents: 0 },
@@ -352,55 +632,6 @@ pub fn cmd_remote_attach(args: &[String]) -> R<()> {
                 }
                 Err(_) => break 'run End::Detached(false),
             }
-        }
-    };
-
-    // 收场：告诉宿主断开了、把这个终端还原
-    if matches!(end, End::Detached(_)) {
-        wire.send(&local::frame(local::DETACH, b""));
-        wire.drain(1.0);
-    }
-    let tty_alive = !matches!(end, End::Detached(false));
-    if tty_alive {
-        to_tty.extend(modes.undo());
-        to_tty.extend(b"\r\n".iter().copied());
-        let deadline = monotonic() + 1.0;
-        while !to_tty.is_empty() && monotonic() < deadline {
-            let mut p = libc::pollfd { fd: tty_fd, events: libc::POLLOUT, revents: 0 };
-            // SAFETY: p 是有效的一项
-            unsafe { libc::poll(&mut p, 1, 100) };
-            match pty::write_some(tty_fd, to_tty.as_slices().0) {
-                Ok(n) => {
-                    to_tty.drain(..n);
-                }
-                Err(_) => break,
-            }
-        }
-    }
-    drop(raw);
-    let short = &sid[..8];
-    match end {
-        End::Exited(code) => {
-            if code == 0 {
-                crate::err!("会话已经结束");
-            } else {
-                crate::err!("会话已经结束（退出码 {code}）");
-            }
-            exit(code)
-        }
-        End::Detached(say) => {
-            if say {
-                crate::err!("已断开，会话还在运行（再接入：cca remote attach {short}）");
-            }
-            Ok(())
-        }
-        End::HostGone if is_far => {
-            crate::err!("连接断了：网络断了、那台机器上的会话不在了，或者这边太慢被断开了（cca remote list 看它还在不在，再接入：cca remote attach {short}）");
-            exit(EXIT_HOST_GONE)
-        }
-        End::HostGone => {
-            crate::err!("连接断了：这个会话的宿主不在了，或者这边太慢被它断开了（cca remote list 看它还在不在）");
-            exit(EXIT_HOST_GONE)
         }
     }
 }

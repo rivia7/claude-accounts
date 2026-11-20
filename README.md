@@ -88,8 +88,8 @@ Linux 上能用的是命令行：
 - **登录**：服务器上没有账号专属的浏览器。`cca login 工作` 给出一行在 Mac 上运行的命令，登录页在 Mac 上用这个账号专属的 Chrome 打开，再把拿到的验证码贴回服务器（见「常见问题」）。Mac 上还没有这个账号的话，会问要不要用同一个节点加上它。
 - **泄露检测**：只测 DNS。WebRTC 只和浏览器、桌面 App 有关，服务器上没有它们。
 - **API key**：存成 `~/.cca/secrets` 下只有你能读的文件。
-- **SSH 断了会话不丢**（macOS 上也能用）：`cca remote on` 之后，在终端里启动的会话跑在 cca 的会话宿主里，终端关了、SSH 断了它照样运行。再登上去 `cca remote attach` 接回去（有好几个时 `cca remote list` 看编号，`cca remote attach 编号`；`-r` 只看不操作）；要离开时先按 Ctrl-\ 再按 d 断开，会话接着跑。同一个会话可以几个终端同时接着，窗口大小按最小的那个算。只想这一次用：`CCA_REMOTE=1 cca @工作`；`cca remote off` 关掉。会话里按 Ctrl-Z 挂起可能不管用；终端里的内容只在内存里转，不落盘。
-- **在另一台机器上接着用这个会话**（两台都配置了维护者的映射、维护者的服务器开着中转时）：先配对一次——在跑会话的那台上 `cca remote pair`，它问过以后显示一个配对码；在另一台上 `cca remote join` 输入。之后另一台上 `cca remote list` 就列得出这台上开着远程会话的会话，`cca remote attach 编号` 接进去，用法和上面一样。内容经维护者的服务器转发，是两台机器之间加密的，服务器看不到。默认只有输入配对码的那台能接入显示配对码的那台，反过来不行；`cca remote peers` 看配对过哪些机器，`cca remote allow 名字 view` 只让它看、`none` 不让它接入，`cca remote unpair 名字` 取消。Mac 上这些在 cca App 的「远程会话」页里都能做：配对、列表、点「接入」在 App 里开终端。
+- **SSH 断了会话不丢**（macOS 上也能用）：`cca remote on` 之后，在终端里启动的会话跑在 cca 的会话宿主里，终端关了、SSH 断了它照样运行。再登上去 `cca remote attach` 接回去（有好几个时 `cca remote list` 看编号，`cca remote attach 编号`；`-r` 只看不操作）；要离开时先按 Ctrl-\ 再按 d 断开，会话接着跑。同一个会话可以几个终端同时接着，窗口大小按最小的那个算。不要这个会话了：`cca remote end 编号`（等于关掉它的终端，会先问一句）。只想这一次用：`CCA_REMOTE=1 cca @工作`；`cca remote off` 关掉。会话里按 Ctrl-Z 挂起可能不管用；终端里的内容只在内存里转，不落盘。
+- **在另一台机器上接着用这个会话**（两台都配置了维护者的映射、维护者的服务器开着中转时）：先配对一次——在跑会话的那台上 `cca remote pair`，它问过以后显示一个配对码；在另一台上 `cca remote join` 输入。之后另一台上 `cca remote list` 就列得出这台上开着远程会话的会话，`cca remote attach 编号` 接进去，用法和上面一样；网络断了、电脑睡了一觉，它会自己重新接上（试几分钟，接不上才退出）。内容经维护者的服务器转发，是两台机器之间加密的，服务器看不到。默认只有输入配对码的那台能接入显示配对码的那台，反过来不行；`cca remote peers` 看配对过哪些机器，`cca remote allow 名字 view` 只让它看、`none` 不让它接入，`cca remote unpair 名字` 取消。Mac 上这些在 cca App 的「远程会话」页里都能做：配对、列表、点「接入」在 App 里开终端。
 - 网页版、桌面 App、图形界面、邮箱助手（`cca web`、`billing`、`limit-resets`、`app`、`gui`、`mail`）只在 macOS 上。
 
 ## 日常使用

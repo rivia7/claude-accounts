@@ -77,12 +77,15 @@ enum CcaCommand: Sendable, Hashable {
     case remoteAllow(peer: String, access: RemoteAccess)
     /// 取消配对（`cca remote unpair <配对的 id>`）。
     case remoteUnpair(peer: String)
+    /// 结束这台 Mac 上的一个会话（`cca remote end <会话的 id>`，PROTOCOL 9.2）：等于关掉它的终端。cca 先发 `consent.remote_end`
+    /// （范围是这个会话的 id），同意了重跑才结束；等会话真的结束了才返回。要 `hello.remote_end`。
+    case remoteEnd(session: String)
 
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
-             .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair: return nil
+             .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return nil
         }
     }
 
@@ -92,7 +95,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _), .mailTrustForwarderOff(_, let k): return k
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall,
-             .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair: return nil
+             .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return nil
         }
     }
 
@@ -150,6 +153,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteSwitch(let on): return ["remote", on ? "on" : "off"]
         case .remoteAllow(let peer, let access): return ["remote", "allow", peer, access.rawValue]
         case .remoteUnpair(let peer): return ["remote", "unpair", peer]
+        case .remoteEnd(let session): return ["remote", "end", session]
         }
     }
 
@@ -171,6 +175,7 @@ enum CcaCommand: Sendable, Hashable {
         case .costSync: return 300   // 第一次要把会话记录全读一遍
         case .remoteList, .remoteAllow, .remoteUnpair: return 40   // 问一次服务器（签名、直连），取消配对被限流时还要再试两次
         case .remoteSwitch: return 30
+        case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
         }
     }
 
@@ -182,7 +187,7 @@ enum CcaCommand: Sendable, Hashable {
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
-             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair: return false
+             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return false
         }
     }
 
@@ -202,7 +207,7 @@ enum CcaCommand: Sendable, Hashable {
         case .keyShow(let t, let k), .keyForget(let t, let k): return "key:\(t.rawValue):\(k)"
         case .costSync: return "cost-sync"   // 定时的和手动的一个接一个
         case .remoteList: return nil   // AppModel 保证一次一个
-        case .remoteSwitch, .remoteAllow, .remoteUnpair: return "remote"   // 改配对表、开关：一个接一个
+        case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
         }
     }
 }

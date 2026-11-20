@@ -5265,7 +5265,7 @@ cmd_remote() {
 			rows=$(py remote-list --local) || exit 1
 			if [ -n "$rows" ]; then
 				n=$(printf '%s\n' "$rows" | grep -c .)
-				say "  这台机器上有 ${n} 个可以接入的会话（接入：cca remote attach 编号）："
+				say "  这台机器上有 ${n} 个可以接入的会话（接入：cca remote attach 编号；结束：cca remote end 编号）："
 				printf '%s\n' "$rows" | sed 's/^/    /' >&2
 			fi
 			rows=$(py remote-peers) || exit 1
@@ -5318,7 +5318,22 @@ cmd_remote() {
 			shift
 			[ -x "$HELPER" ] || helper_find || exit 127
 			CCA_SELF="$SELF" exec "$HELPER" remote-attach "$@" 3<&- ;;
-		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|pair|join|peers|allow 名字 control|view|none|unpair 名字]" ;;
+		end)   # 结束这台机器上的一个会话：等于关掉它的终端（里面的程序收到 SIGHUP，几秒钟还不退出就被强行结束），没保存的会丢，所以先问。
+			     # 先让辅助程序找出是哪一个（只有一个时不用写编号；退出码 64 / 65 照 attach 的），同意是对着这一个会话的完整编号给的
+			[ $# -le 2 ] || die "用法：cca remote end [会话编号]"
+			out=$(py remote-end --show ${2:+"$2"} 2>/dev/null); rc=$?   # stdout 只有那一行数据；没找到时再问一遍要它说的原因（stderr）
+			[ $rc -eq 0 ] || { out=$(py remote-end --show ${2:+"$2"} 2>&1 >/dev/null); gui_fail error "${out%%$'\n'*}"; printf '%s\n' "$out" >&2; exit $rc; }
+			code=${out%%$'\t'*}; rows=${out#*$'\t'}
+			[ -n "$PROMPT_GUI" ] || say "  ${rows}"
+			consent remote_end "$code" "结束会话" "结束这个会话吗？" "${rows}。结束等于关掉它的终端：里面的程序收到通知后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。" n
+			case $? in
+				0) ;;
+				1) info "没有结束"; gui_cancelled; return 1 ;;
+				*) die "要先同意：在终端里运行 cca remote end ${code:0:8}（会先问你）" ;;
+			esac
+			out=$(py remote-end "$code" 2>&1) || die "${out:-没有结束成}"
+			okay "会话 ${code:0:8} 已经结束"; gui_done remote_updated "会话已经结束" ;;
+		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|pair|join|peers|allow 名字 control|view|none|unpair 名字]" ;;
 	esac
 }
 
@@ -5881,7 +5896,7 @@ gui_hello() {
 	[ -f "$CCA_HOME/agy.json" ] && ag=true
 	gui_ours "$GUI_APP" && av=$(gui_ver "$GUI_APP")
 	sv=$(gui_ver "$GUI_DIR/next/cca.app")
-	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
+	printf '{"version":1,"kind":"hello","api":%s,"prompt":%s,"reorder":1,"forms":1,"dock":1,"install_cli":1,"cost":1,"mail":1,"remote":1,"remote_end":1,"cca_version":%s,"dev_mode":%s,"installed":%s,"self":%s,"home":%s,' \
 		"$GUI_API" "$GUI_PROMPT" "$(jstr "$VERSION")" "$dev" "$inst" "$(jstr "$SELF")" "$(jstr "$CCA_HOME")"
 	printf '"tools":{"claude":{"enabled":true,"bin":%s},"codex":{"enabled":%s,"bin":%s},"agy":{"enabled":%s,"bin":%s}},' \
 		"$(jopt "$CLAUDE_BIN")" "$cx" "$(jopt "$CODEX_BIN")" "$ag" "$(jopt "$AGY_BIN")"
@@ -6815,7 +6830,7 @@ cmd_restore() {
 	[ -z "$running" ] || die "这些账号的桌面 App 还开着：${running}。先退出它们再还原"
 	# 会话宿主里还开着的会话（docs/dev/remote.md）：删掉 ~/.cca 以后它们照样在跑，却再也接不上、列不出来
 	out=$(py remote-list --local 2>/dev/null)
-	[ -z "$out" ] || die "还有开着的远程会话，先把它们结束再还原（cca remote list 看是哪些，cca remote attach 接进去退出）"
+	[ -z "$out" ] || die "还有开着的远程会话，先把它们结束再还原（cca remote list 看是哪些，cca remote end 编号 结束，或者 cca remote attach 接进去退出）"
 	# 删 ~/.cca 之前要先打包备份（下面答应了的）：没有 tar 就什么都别动（有的 Linux 最小安装没有它）
 	command -v tar >/dev/null 2>&1 || die "这台机器上没有 tar，没法先打包备份配置，什么都没改：装上 tar 再还原$(pkg_hint tar)"
 	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
@@ -7076,8 +7091,10 @@ EOF
                              会话照样运行（只这一次：CCA_REMOTE=1 cca …，这一次不用：CCA_REMOTE=0 cca …）
   cca remote [list]          开关开没开、这台机器上（和配对过的机器上）现在有哪些可以接入的会话
   cca remote attach [-r] [编号]
-                             把这个终端接到会话上（只有一个时不用写编号；-r 只看不操作）。断开：先按 Ctrl-\\ 再按 d
-  cca remote pair | join     两台机器配对：要被接入的那台 pair（显示配对码），另一台 join（输入）。之后 join 的那台能经
+                             把这个终端接到会话上（只有一个时不用写编号；-r 只看不操作）。断开：先按 Ctrl-\\ 再按 d。
+                             接着别的机器上的会话时网络断了会自己重新接上
+  cca remote end [编号]      结束这台机器上的一个会话（等于关掉它的终端；先问）
+  cca remote pair | join    两台机器配对：要被接入的那台 pair（显示配对码），另一台 join（输入）。之后 join 的那台能经
                              维护者的服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
   cca restore                一键还原 cca 的全部改动

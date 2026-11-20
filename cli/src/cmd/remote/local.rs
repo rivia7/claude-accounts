@@ -24,6 +24,8 @@ pub const INPUT: u8 = 0x02;
 pub const RESIZE: u8 = 0x03;
 pub const DETACH: u8 = 0x04;
 pub const STATUS_REQ: u8 = 0x06;
+/// 结束这个会话（`cca remote end`）：只有这台机器上的 socket 上说得了，转接那头不替别的机器转
+pub const END: u8 = 0x07;
 /// 宿主 → 接入方
 pub const WELCOME: u8 = 0x11;
 pub const OUTPUT: u8 = 0x12;
@@ -37,6 +39,8 @@ pub const FLAG_READ_ONLY: u8 = 1;
 /// HELLO 的标志：不算进窗口大小。别的机器上只让看的接入方带着它（转接那头加的）：它的窗口多小都不该让会话跟着变，
 /// 比会话小的话它那边画不全，是它的事
 pub const FLAG_PASSIVE: u8 = 2;
+/// 结束会话（`END`）：里面的程序收到 SIGHUP 以后这么久（秒）还没退出就强行结束
+pub const END_GRACE: f64 = 5.0;
 /// 一帧最多这么大（多了就是对面乱了，断开）
 pub const MAX_FRAME: usize = 1 << 20;
 

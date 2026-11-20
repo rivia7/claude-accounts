@@ -302,6 +302,11 @@ impl Tunnel {
         now - self.heard < DEAD_AFTER
     }
 
+    /// 这条连接不用了（断了以后要另连一条）：两个方向都关掉，服务器和对面马上知道，不用等它们自己发现
+    pub fn close(&mut self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+
     /// 收场：把还没写出去的写完（最多等 secs 秒）
     pub fn drain(&mut self, secs: f64) {
         let end = monotonic() + secs;

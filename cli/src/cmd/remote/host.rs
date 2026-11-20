@@ -127,6 +127,8 @@ struct Host {
     restore_at: Option<f64>,
     /// 客户端退出了：(退出码, 什么时候)
     ended: Option<(i32, f64)>,
+    /// 有人要结束这个会话，已经发过 SIGHUP：到这个时候还没退出就强行结束
+    kill_at: Option<f64>,
     master_eof: bool,
     last_output: f64,
     touched: f64,
@@ -212,6 +214,7 @@ impl Host {
             primary: Who::Local,
             restore_at: None,
             ended: None,
+            kill_at: None,
             master_eof: false,
             last_output: now,
             touched: now,
@@ -368,6 +371,32 @@ impl Host {
         }
     }
 
+    /// 给客户端那个会话发一个信号：pty 上的前台进程组，加上带头的那个进程（客户端自己；它不在前台进程组里时——
+    /// 它起了个前台的子进程——单独给它）
+    fn signal_session(&self, sig: libc::c_int) {
+        // SAFETY: 只是问进程组、发信号；对方已经没了时出错，不管
+        unsafe {
+            let pg = libc::tcgetpgrp(self.master.as_raw_fd());
+            if pg > 1 {
+                libc::killpg(pg, sig);
+            }
+            if pg <= 1 || libc::getpgid(self.child) != pg {
+                libc::kill(self.child, sig);
+            }
+        }
+    }
+
+    /// 这台机器上有人要结束这个会话（`cca remote end`）：照终端被关掉那样给里面的程序发 SIGHUP（停着的让它接着跑，
+    /// 不然收不到），`END_GRACE` 秒以后还没退出就强行结束（`run` 里看 `kill_at`）。之后和客户端自己退出一样收场
+    fn end(&mut self) {
+        if self.ended.is_some() || self.kill_at.is_some() {
+            return;
+        }
+        self.signal_session(libc::SIGHUP);
+        self.signal_session(libc::SIGCONT);
+        self.kill_at = Some(monotonic() + local::END_GRACE);
+    }
+
     /// 客户端退出了没有、是不是把自己停了
     fn reap(&mut self) {
         if self.ended.is_some() {
@@ -500,6 +529,8 @@ impl Host {
                     let st = local::frame(local::STATUS, self.status().to_json().as_bytes());
                     push(&mut self.viewers[i].out, &st);
                 }
+                // 这条 socket 上都是这台机器上的同一个用户（别的机器经转接进程来，它不转这一种）
+                local::END => self.end(),
                 _ => {} // 不认识的帧（以后加的）：不理
             }
         }
@@ -541,6 +572,10 @@ impl Host {
         loop {
             self.reap();
             let now = monotonic();
+            if self.ended.is_none() && self.kill_at.is_some_and(|t| now >= t) {
+                self.kill_at = Some(now + local::END_GRACE); // 万一这一下没结束掉（换了前台进程组），过一阵再来一次
+                self.signal_session(libc::SIGKILL);
+            }
             self.link_tick(now);
             if self.restore_at.is_some_and(|t| now >= t) {
                 self.restore_at = None;

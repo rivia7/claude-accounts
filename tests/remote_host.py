@@ -492,6 +492,48 @@ class RemoteHost(unittest.TestCase):
         self.assertEqual(len(self.run_helper('remote-list').stdout.splitlines()), 1)
         self.assertEqual(len(self.files()), 2)
 
+    def test_end_a_session(self):
+        """remote-end：等于关掉会话的终端。里面的程序收到 SIGHUP；不理的过几秒被强行结束"""
+        r = self.run_helper('remote-end')
+        self.assertEqual((r.returncode, r.stdout), (65, ''))
+        self.assertIn('没有在会话宿主里运行的会话', r.stderr)
+        self.assertEqual(self.run_helper('remote-end', 'not-hex').returncode, 64)
+        h1 = self.host()
+        h1.expect('<ready')
+        # 不理 SIGHUP 的客户端（忽略是连它起的进程一起的）
+        h2 = self.term([HELPER, 'remote-host', 'codex', 'k', '倔', '--', '/bin/sh', '-c',
+                        'trap "" HUP; echo stubborn; while :; do sleep 1; done'])
+        h2.expect('stubborn')
+        # 两个会话：要说结束哪个；--show 只找出是哪一个，不动它
+        r = self.run_helper('remote-end')
+        self.assertEqual((r.returncode, r.stdout), (64, ''))
+        self.assertIn('有 2 个会话', r.stderr)
+        self.assertEqual(self.run_helper('remote-end', 'ffffffffffff0000').returncode, 65)
+        (m1,), (m2,) = self.metas(h1.pid), self.metas(h2.pid)
+        r = self.run_helper('remote-end', '--show', m1['sid'][:6].upper())
+        self.assertEqual((r.returncode, r.stderr), (0, ''))
+        sid, row = r.stdout.rstrip('\n').split('\t')
+        self.assertEqual(sid, m1['sid'])
+        self.assertRegex(row, r'^%s  claude  工作  ~/项目 one  .* 开始  启动它的终端开着$' % sid[:8])
+        self.assertTrue(alive(h1.pid))
+        # 接着的各处都收到“会话结束了”；客户端是被 SIGHUP 结束的（128 + 1），文件都清掉
+        h1.hangup()
+        a = self.attach(sid[:8])
+        a.expect('<ready')
+        r = self.run_helper('remote-end', sid)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
+        self.assertEqual((a.wait(), h1.wait()), (129, 129))
+        self.assertIn('会话已经结束（退出码 129）', a.out.decode())
+        self.assertEqual(self.metas(h1.pid), [])
+        # 不理 SIGHUP 的：过几秒被强行结束（128 + 9），命令等到它真的结束才回来
+        start = time.monotonic()
+        r = self.run_helper('remote-end', m2['sid'][:8])
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
+        self.assertGreater(time.monotonic() - start, 4)
+        self.assertEqual(h2.wait(), 137)
+        self.assertEqual(self.files(), [])
+        self.assertEqual(self.run_helper('remote-end', sid).returncode, 65, '已经结束的：没有这个会话')
+
     def test_a_host_that_does_not_answer_is_not_cleaned_up(self):
         h = self.host()
         h.expect('<ready')

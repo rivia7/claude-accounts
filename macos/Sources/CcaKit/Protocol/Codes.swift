@@ -406,8 +406,10 @@ struct ConsentItem: KnownValues {
     /// `cca remote pair`：这台机器显示配对码，输入它的那台机器之后能看和操作这台机器上开着远程会话的会话
     /// （范围为空，默认同意；现在只在终端里问，App 里的入口和远程会话的终端一起做）。
     static let remotePair = ConsentItem(rawValue: "remote_pair")
+    /// `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端（范围是会话的 id，默认不同意）。
+    static let remoteEnd = ConsentItem(rawValue: "remote_end")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair]
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

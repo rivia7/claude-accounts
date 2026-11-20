@@ -12,7 +12,9 @@ use crate::dict;
 use crate::py::json;
 use crate::py::obj::{Dict, List, V};
 use crate::py::time::{strftime_local, time};
-use crate::py::{die, R};
+use crate::py::{die, exit, R};
+use std::io::{self, Read, Write};
+use std::time::Duration;
 
 /// config.json 的 `remote` 是 true：之后启动的会话放进宿主里运行（`py env` 的 CFG_REMOTE 告诉 bash）
 pub fn remote_on(c: &Dict) -> bool {
@@ -53,6 +55,84 @@ pub fn row(s: &Status) -> String {
         strftime_local("%m-%d %H:%M", s.meta.since),
         who
     )
+}
+
+/// `remote-end [--show] [会话编号的前几位]`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到 SIGHUP，
+/// `END_GRACE` 秒还不退出就被强行结束（宿主做的；这里只是告诉它，等它收场）。只管这台机器上的：别的机器上的会话
+/// 要到那台机器上结束（接进去让里面的程序自己退出也行）。只有一个会话时不用写编号。
+/// `--show`：只找出是哪一个，打印“编号<TAB>列表里的那一行”（bash 拿去问用户要不要结束）。
+/// 退出码照 `remote-attach` 的：64 用法不对或者前缀对上了好几个，65 没有这个会话；1 说了以后它没结束
+pub fn cmd_remote_end(args: &[String]) -> R<()> {
+    let (mut show, mut prefix) = (false, None);
+    for a in args {
+        match a.as_str() {
+            "--show" if !show => show = true,
+            p if prefix.is_none() && !p.is_empty() && p.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                prefix = Some(p.to_ascii_lowercase())
+            }
+            _ => {
+                crate::err!("用法：cca remote end [会话编号的前几位]");
+                return exit(64);
+            }
+        }
+    }
+    let all = local::sessions(!*RO);
+    let hit: Vec<&Status> = all.iter().filter(|s| prefix.as_deref().is_none_or(|p| s.meta.sid.starts_with(p))).collect();
+    let one = match (hit.as_slice(), &prefix) {
+        ([one], _) => *one,
+        ([], None) => {
+            crate::err!("这台机器上现在没有在会话宿主里运行的会话");
+            return exit(65);
+        }
+        ([], Some(p)) => {
+            crate::err!(
+                "这台机器上没有编号以 {p} 开头的会话（cca remote list --local 看有哪些；别的机器上的会话要到那台机器上结束）"
+            );
+            return exit(65);
+        }
+        (many, _) => {
+            crate::err!("有 {} 个会话，说一下结束哪个：cca remote end 编号", many.len());
+            for s in many {
+                crate::err!("  {}", row(s));
+            }
+            return exit(64);
+        }
+    };
+    if show {
+        crate::out!("{}\t{}", one.meta.sid, row(one));
+        return Ok(());
+    }
+    let (dir, sock) = (local::dir(), format!("{}.sock", local::short(&one.meta.sid)));
+    let gone = || local::ask_status(&dir, &sock) == local::Asked::Gone;
+    let Ok(mut s) = local::connect(&dir, &sock) else {
+        return if gone() { Ok(()) } else { die("连不上这个会话的宿主") }; // 刚好自己结束了也算结束了
+    };
+    // 说完等宿主收场：它退出时这条连接就关了。里面的程序不理 SIGHUP 的话宿主过 END_GRACE 秒强行结束它，再留几秒收场
+    let wait = Duration::from_secs_f64(local::END_GRACE + 5.0);
+    let told = s.set_write_timeout(Some(Duration::from_secs(2))).and_then(|()| s.write_all(&local::frame(local::END, b"")));
+    if told.is_ok() && s.set_read_timeout(Some(Duration::from_millis(200))).is_ok() {
+        let (start, mut buf) = (std::time::Instant::now(), [0u8; 4096]);
+        while start.elapsed() < wait {
+            match s.read(&mut buf) {
+                Ok(0) => break, // 连接关了：宿主收场了，也可能是它没收这条连接（接着的已经够多了）
+                Ok(_) => {}
+                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted) => {}
+                Err(_) => break, // 连接被重置
+            }
+        }
+    }
+    // 连接关了不等于会话结束了：看宿主的 socket 还有没有人听（它收场时先删 socket，再关各条连接）
+    let checked = std::time::Instant::now();
+    loop {
+        if gone() {
+            return Ok(());
+        }
+        if checked.elapsed() >= Duration::from_secs(2) {
+            break;
+        }
+        crate::py::time::sleep(0.1);
+    }
+    die("这个会话还没结束：宿主没有回应（被挂起了、机器正忙、接着的太多），或者里面的程序结束不掉（cca remote list --local 看它还在不在）")
 }
 
 /// 没问到服务器的原因归成这几种（给界面 App：PROTOCOL 9.1 的 `errors[].code`）

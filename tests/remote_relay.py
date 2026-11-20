@@ -105,12 +105,13 @@ class Sniffer:
 
 
 class RelayServer:
-    """一个真的服务器进程。relay=False：没开中转（和旧版服务器一样）。sniff：告诉客户端连转发器的端口"""
-    def __init__(self, d, relay=True, sniff=None):
+    """一个真的服务器进程。relay=False：没开中转（和旧版服务器一样）。sniff：告诉客户端连转发器的端口。
+    port：重启时用回原来的端口（设备的映射里写着它；数据端口换了没关系，转发器每次现读）"""
+    def __init__(self, d, relay=True, sniff=None, port=0):
         self.d = d
         for name in ('port', 'rport'):
             (d / name).unlink(missing_ok=True)
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'),
+        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port'),
                 '--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem'), '--release-key', str(d / 'release.pub'),
                 '--state', str(d / 'state.json'), '--ttl', '60', '--idle', '600']
         if relay:
@@ -848,25 +849,38 @@ class ClientTest(Base):
         v.send('say before\n')
         h.expect('<before>')
 
-        # 改成只让看：正操作着的那一处被断开；再接入就是只看，按键到不了会话
+        # 改成只让看：正操作着的那一处被断开。它自己重新接上，这回是只看（说一句），按键到不了会话
         self.assertEqual(a.ok('remote-allow', 'laptop', 'view'), 'laptop\n')
-        self.assertEqual(v.wait(20), 68)
-        v.expect('连接断了')
+        mark = len(v.out)
+        v.expect('连接断了，正在重新接上', timeout=20, since=mark)
+        v.expect('「box」现在只让这台机器看这个会话，不能操作', timeout=40, since=mark)
+        v.expect('<before>', since=mark)   # 接上以后的回放
         row = wait_for('列表里说只能看', lambda: [r for r in self.far(b) if '只能看' in r], secs=30)[0]
-        self.assertTrue(row.endswith('在「box」上，只能看'), row)
-        v = self.term(b, 'remote-attach', sid)
-        v.expect('「box」只让这台机器看这个会话，不能操作')
-        v.expect('<before>')
+        self.assertIn('在「box」上，只能看', row)
         mark = len(h.out)
         v.send('say sneaky\n')
         h.send('say from-the-box\n')
         v.expect('<from-the-box>')
         self.assertNotIn(b'sneaky', h.out[mark:])
         self.assertIn('对方只能看这台机器的会话', a.run('remote-peers').stdout)
+        v.send(b'\x1cd')
+        self.assertEqual(v.wait(), 0)
+        # 新接入的一开始就说
+        v = self.term(b, 'remote-attach', sid)
+        v.expect('「box」只让这台机器看这个会话，不能操作')
+        v.expect('<from-the-box>')
+        v.send(b'\x1cd')
+        self.assertEqual(v.wait(), 0)
 
-        # 不让接入了：断开，对方的列表里没有这个会话了，也接不上
+        # 不让接入了：断开，对方的列表里没有这个会话了，也接不上。正接着的那一处试一阵（这里调成 3 秒）以后说没接上
+        b.env['CCA_REMOTE_RETRY'] = '3'
+        v = self.term(b, 'remote-attach', '-r', sid)
+        v.expect('<from-the-box>')
+        del b.env['CCA_REMOTE_RETRY']
         self.assertEqual(a.ok('remote-allow', pid[:6], 'none'), 'laptop\n')
-        self.assertEqual(v.wait(20), 68)
+        self.assertEqual(v.wait(30), 68)
+        v.expect('连接断了，正在重新接上')
+        v.expect('没重新接上：那台机器上(现在|已经)没有这个会话')
         wait_for('会话从 laptop 的列表里消失', lambda: self.far(b) == [], secs=30)
         self.assertEqual(b.run('remote-attach', sid).returncode, 65)
         # 再让：又看得到、能操作
@@ -928,8 +942,10 @@ class ClientTest(Base):
         h.expect('<size 20 70>')
         sock.sendall(ch.seal(frame(RESIZE, bytes([0, 80, 0, 24]))))
         h.expect('<size 24 80>')
-        # 宿主的状态（里面有账号的邮箱、完整的路径、进程号）：问了不替它转，宿主自己发的欢迎帧也不转——到接入方的只有输出
+        # 宿主的状态（里面有账号的邮箱、完整的路径、进程号）：问了不替它转，宿主自己发的欢迎帧也不转——到接入方的只有输出。
+        # “结束这个会话”（0x07，cca remote end）只有那台机器上说得了：能操作的接入方发了也不转，会话照常
         sock.sendall(ch.seal(frame(0x06)))
+        sock.sendall(ch.seal(frame(0x07)))
         sock.sendall(ch.seal(frame(HELLO, bytes([1, 0, 0, 80, 0, 24]))))   # 再说一遍 HELLO 也不转
         sock.sendall(ch.seal(frame(INPUT, b'say after-status\n')))
         r.until(lambda out: b'<after-status>' in out)
@@ -991,26 +1007,76 @@ class ClientTest(Base):
         link = min(links, key=lambda p: subprocess.run(['ps', '-o', 'ppid=', '-p', p], capture_output=True, text=True).stdout.strip()
                    in links)   # 父进程不在这两个里的那个
         os.kill(int(link), 9)
-        # 没人管着的那个子进程自己走（不然配对表变了它也照转）：接入方那头断开；会话不受影响
-        self.assertEqual(v.wait(20), 68)
+        # 没人管着的那个子进程自己走（不然配对表变了它也照转）：接入方那头断开，说一句、自己接着试；会话不受影响
+        mark = len(v.out)
+        v.expect('连接断了，正在重新接上', timeout=20, since=mark)
         wait_for('子进程都走了', lambda: not subprocess.run(['pgrep', '-f', 'remote-link %s' % sid], capture_output=True).stdout
                  or len(subprocess.run(['pgrep', '-f', 'remote-link %s' % sid], capture_output=True).stdout.split()) == 1, secs=20)
         h.send('say link-was-killed\n')
         h.expect('<link-was-killed>')
-        # 宿主过一会儿再起一个：又列得出、接得上
+        v.send('say typed-while-cut-off\n')   # 断着的时候敲的不攒着：接上以后不会迟到
+        # 宿主过一会儿再起一个转接进程：接入方自己接上了，断着的时候那边的输出在回放里，又能操作
+        v.expect('还没接上：那台机器暂时没连着服务器。接着试…', timeout=30, since=mark)
+        v.expect('<link-was-killed>', timeout=90, since=mark)
+        v.send('say back-again\n')
+        h.expect('<back-again>')
+        self.assertNotIn(b'typed-while-cut-off', h.out)
+        v.send('exit 0\n')
+        self.assertEqual((h.wait(), v.wait()), (0, 0))
+
+    def test_the_server_restarts_and_the_session_ends_meanwhile(self):
+        a, b = self.a, self.b
+        self.pair(a, b)
+        h = self.session(a)
+        sid = wait_for('列出会话', lambda: self.far(b), secs=30)[0][:8]
+        v = self.term(b, 'remote-attach', sid)
+        v.expect('<ready 24 80')
+        v.send('alt\n')   # 会话打开了备用屏幕、藏了光标、开了括号粘贴
+        v.expect('<alt>')
+        # 服务器重启（两头的连接都断了）：等的时候先把会话在这个终端上打开的模式关掉再说话；两头各自连回来，自己接上，
+        # 模式由那边照新接入的补上
+        port = self.srv.port
+        mark = len(v.out)
+        self.srv.stop()
+        v.expect('连接断了，正在重新接上', timeout=20, since=mark)
+        cut = v.out[mark:]
+        self.assertLess(cut.index(b'\x1b[?1049l'), cut.index('连接断了'.encode()))
+        self.assertIn(b'\x1b[?2004l', cut)
+        self.srv = RelayServer(self.d, sniff=self.sniff, port=port)
+        again = v.expect(r'\x1b\[\?1049h', timeout=90, since=mark + len(cut))
+        v.send('say after-the-restart\n')
+        h.expect('<after-the-restart>')
+        v.expect('<after-the-restart>', since=again)
+
+        # 等的时候断开的键照样管用
+        self.srv.stop()
+        v.expect('连接断了，正在重新接上', timeout=20, since=again)
+        v.send(b'\x1cd')
+        self.assertEqual(v.wait(), 0)
+        v.expect('已断开，会话还在运行')
+        # 断着的时候会话结束了：服务器回来以后说没有这个会话了，试一阵（这里调成 10 秒：第 1、3、7、15 秒各试一次，
+        # 机器慢的时候服务器晚几秒回来也赶得上最后那一次）说没接上，退出码 68
+        self.srv = RelayServer(self.d, sniff=self.sniff, port=port)
+        b.env['CCA_REMOTE_RETRY'] = '10'
         v = None
-        for _ in range(60):
+        for _ in range(60):   # 宿主那头的转接要过一阵才连回来
             t = self.term(b, 'remote-attach', sid)
             try:
-                t.expect('<link-was-killed>', timeout=3)
+                t.expect('<after-the-restart>', timeout=3)
                 v = t
                 break
             except AssertionError:
                 t.close()
                 time.sleep(1)
-        self.assertIsNotNone(v, '转接进程没有再起来')
-        v.send('exit 0\n')
-        self.assertEqual((h.wait(), v.wait()), (0, 0))
+        self.assertIsNotNone(v, '服务器重启以后会话没有再登记上')
+        self.srv.stop()
+        v.expect('连接断了，正在重新接上', timeout=20)
+        h.send('exit 0\n')
+        self.assertEqual(h.wait(), 0)
+        self.srv = RelayServer(self.d, sniff=self.sniff, port=port)   # 马上回来：最后那一次问得到它，原因是“没有这个会话”
+        self.assertEqual(v.wait(60), 68)
+        v.expect('没重新接上：那台机器上(现在|已经)没有这个会话')
+        self.assertIn('cca remote attach %s' % sid, v.out.decode(errors='replace'))
 
     def test_local_sessions_never_touch_the_network(self):
         a, b = self.a, self.b

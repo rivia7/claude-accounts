@@ -1576,7 +1576,17 @@ final class AppModel {
         runRemote(.remoteUnpair(peer: peer.id), failureTitle: "没能取消和「\(peer.name)」的配对")
     }
 
-    /// 不用问的那几条（开关、对方能做什么、取消配对）：做完显示 cca 说的那句话，再查一次
+    /// cca 能结束会话（`hello.remote_end`；旧版 cca 没有：不给「结束」）
+    var remoteEndAvailable: Bool { remoteAvailable && hello?.remoteEnd == 1 }
+
+    /// 结束这台 Mac 上的一个会话：等于关掉它的终端，里面的程序会退出。cca 先要同意（`consent.remote_end`，对话框里说的是哪个会话、
+    /// 意味着什么都是 cca 给的），同意了才结束。别的机器上的会话不归这里管（到那台机器上结束，或者接进去让里面的程序自己退出）
+    func endRemote(_ session: RemoteSession) {
+        guard remoteEndAvailable, session.isLocal else { return }
+        runRemote(.remoteEnd(session: session.id), failureTitle: "没能结束这个会话")
+    }
+
+    /// 开关、对方能做什么、取消配对、结束会话（只有它 cca 要先问同意，走平时的重跑流程）：做完显示 cca 说的那句话，再查一次
     private func runRemote(_ command: CcaCommand, failureTitle: String) {
         guard phase == .ready, remoteAvailable, let client, !remoteBusy else { return }
         remoteBusy = true

@@ -205,7 +205,7 @@ struct FixtureTransport: Transport {
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
         case ("remote", "list"):
             return json("remote_list.json")
-        case ("remote", "on"), ("remote", "off"), ("remote", "allow"), ("remote", "unpair"):
+        case ("remote", "on"), ("remote", "off"), ("remote", "allow"), ("remote", "unpair"), ("remote", "end"):
             let e = CcaEvent.result(ResultEvent(code: .remoteUpdated, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: .claude, key: nil))
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
         default:

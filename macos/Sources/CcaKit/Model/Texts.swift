@@ -309,7 +309,7 @@ enum Texts {
         switch code {
         case 65: return "没有这个会话了（可能已经结束）"
         case 66: return "没能经服务器接上那台机器"
-        case 68: return "连接断了：会话宿主没有回应"
+        case 68: return "连接断了，没有再接上（原因在终端的最后一行）"
         case 64, 69: return "没接上（退出码 \(code)）"
         default: return listed ? "已断开，会话在那边照常运行" : (code == 0 ? "会话已经结束" : "会话已经结束（退出码 \(code)）")
         }
