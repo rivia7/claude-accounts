@@ -5,7 +5,11 @@
 //! /Library/Application Support/cca-udp 里一份 root 自己的 mihomo 和配置，只开 TUN，UDP 交给选定的节点，TCP 照旧直连，DNS（53 端口）、
 //! 局域网、ZeroTier / Tailscale、代理内核自己的流量不经过它。launchd 在 ~/.cca/udp/on 存在时起它（KeepAlive 的 PathState，开机后也是），
 //! 开关文件没了它自己停下、退出：开关不用管理员密码；装、换节点、节点定义变了、卸载要输一次。root 那边的文件只在输管理员密码的那一步
-//! 从私有的临时目录拷过去、按摘要逐个核对后才换上：普通用户的进程改不了它跑什么，只能开关
+//! 从私有的临时目录拷过去、按摘要逐个核对后才换上：普通用户的进程改不了它跑什么，只能开关。
+//!
+//! 别的 VPN、代理客户端的 TUN（Shadowrocket、Clash 的虚拟网卡模式……）接管了这台 Mac 的流量时，启动脚本停下内核让开，网卡名记在
+//! root 那边的 other-vpn（`udp_other`），它关掉后接着起：两个 TUN 一起开会抢路由，cca 的 TUN 和它们都用 198.18.0.x，经 cca 的 TUN 的
+//! TCP 回包被别的 TUN 截走、全断（直接连 IP 的程序，比如微信，打不开）
 
 use super::{client_builtin, core_defs, core_pick, def_name, install_names, install_resolve, sect, type_name};
 use crate::cmd::dock::home_swapped;
@@ -31,22 +35,29 @@ use std::sync::LazyLock;
 
 pub const UDP_LABEL: &str = "local.cca.udp";
 /// root 那边的启动脚本（bash 的 udp_run_sh）、launchd 的配置、规则的版本：改了要加 1（装着的旧版显示要重新装）
-pub const UDP_HELPER: i64 = 1;
+pub const UDP_HELPER: i64 = 2;
+/// root 那边的 TUN 的网卡名（tun.device）：固定下来，启动脚本才分得清路由表里哪些是自己的、哪些是别的 VPN 的
+pub const UDP_TUN: &str = "utun233";
 pub static UDP_FLAG: LazyLock<String> = LazyLock::new(|| path::join_all(&[&CCA_HOME, "udp", "on"]));
-/// 不进 TUN：局域网、组播、链路本地、CGNAT（Tailscale）
-const UDP_EXCLUDE: &[&str] = &[
+/// 不进 TUN 的 IPv4（算 route-address 时去掉）：0.0.0.0/8、局域网、组播、链路本地、CGNAT（Tailscale）、198.18.0.0/15（基准测试的保留
+/// 地址：各家代理客户端的 TUN 地址和 fake-ip 都在这一段，一起开着的那一会儿别抢它们的）
+const UDP_EXCLUDE4: &[&str] = &[
+    "0.0.0.0/8",
     "10.0.0.0/8",
     "100.64.0.0/10",
     "127.0.0.0/8",
     "169.254.0.0/16",
     "172.16.0.0/12",
     "192.168.0.0/16",
+    "198.18.0.0/15",
     "224.0.0.0/4",
     "240.0.0.0/4",
-    "fc00::/7",
-    "fe80::/10",
-    "ff00::/8",
 ];
+/// 不进 TUN 的 IPv6：::/8（回环、映射的 IPv4 地址……）、ULA、链路本地、组播
+const UDP_EXCLUDE6: &[&str] = &["::/8", "fc00::/7", "fe80::/10", "ff00::/8"];
+/// TUN 自己的地址（mihomo 取 dns.fake-ip-range 的地址、配成 /30；系统栈的回包发给它的下一个地址）。别的代理客户端默认都用 198.18.0.1，
+/// 一起开着的那一会儿两边的 198.18.0.x 互相截走（Shadowrocket 的 DNS 就是 198.18.0.2）：换一个它们不用的
+const UDP_TUN_ADDR: &str = "198.19.233.233/30";
 /// 这些进程的 UDP 照旧直连：虚拟局域网打洞、别的代理内核（cca 自己的内核开着 TUN 时本来就绑定物理网卡，这里再保一次）
 const UDP_DIRECT_PROCS: &str = "^(zerotier-one|tailscaled|mihomo.*|verge-mihomo.*)$";
 /// 不写 udp: true 也转发 UDP 的节点类型
@@ -89,9 +100,60 @@ fn udp_capable(p: Option<&Dict>) -> bool {
     kind_in(UDP_ALWAYS) || (matches!(p.get("udp"), Some(V::Bool(true))) && !kind_in(&["http", "ssh"]))
 }
 
+/// TUN 接管的网段（tun.route-address）：UDP_EXCLUDE4 / UDP_EXCLUDE6 以外的全部 IPv4、IPv6，每一段再劈成两半。别的 VPN、代理客户端的
+/// TUN 加的是 1.0.0.0/8 … 128.0.0.0/1 这几大段（或者去掉局域网以后剩下的那几段），路由表里同样大小的一段只能有一条：和它们的一样大
+/// 时，后开的那个加路由失败（File exists），整个 TUN 起不来。劈细一层就撞不上（它们去掉的比这里少时一定撞不上），启动脚本认别人的
+/// 大段时也不会认成自己的。只给 route-address、不给 route-exclude-address 时 sing-tun 照原样加这些（macOS 上另外加 TUN 自己的那个
+/// /30：系统栈的回包靠它回到这块网卡）
+fn udp_routes() -> Vec<String> {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    // 地址放在 u128 的低 bits 位（IPv4 是 32，IPv6 是 128）；a/al 在 b/bl 里面
+    fn within(bits: u32, a: u128, al: u32, b: u128, bl: u32) -> bool {
+        al >= bl && (bl == 0 || a >> (bits - bl) == b >> (bits - bl))
+    }
+    // 整段都排掉的不要；和排掉的不沾边的劈成两半收下；沾边的分成两半接着看（排掉的都是短的一段，到不了单个地址）
+    fn walk(bits: u32, n: u128, len: u32, ex: &[(u128, u32)], out: &mut Vec<(u128, u32)>) {
+        if ex.iter().any(|&(e, el)| within(bits, n, len, e, el)) {
+            return;
+        }
+        let half = 1u128 << (bits - 1 - len);
+        if ex.iter().any(|&(e, el)| within(bits, e, el, n, len)) {
+            walk(bits, n, len + 1, ex, out);
+            walk(bits, n + half, len + 1, ex, out);
+        } else {
+            out.extend([(n, len + 1), (n + half, len + 1)]);
+        }
+    }
+    fn routes(bits: u32, exclude: &[&str], addr: impl Fn(&str) -> u128, show: impl Fn(u128) -> String) -> Vec<String> {
+        let ex: Vec<(u128, u32)> = exclude
+            .iter()
+            .map(|s| {
+                let (a, len) = s.split_once('/').expect("UDP_EXCLUDE4/6 写的是 地址/长度");
+                (addr(a), len.parse().expect("UDP_EXCLUDE4/6 的长度"))
+            })
+            .collect();
+        let mut out = Vec::new();
+        walk(bits, 0, 0, &ex, &mut out);
+        out.into_iter().map(|(n, len)| format!("{}/{len}", show(n))).collect()
+    }
+    let mut out = routes(
+        32,
+        UDP_EXCLUDE4,
+        |a| u128::from(u32::from(a.parse::<Ipv4Addr>().expect("UDP_EXCLUDE4 的地址"))),
+        |n| Ipv4Addr::from(n as u32).to_string(),
+    );
+    out.extend(routes(
+        128,
+        UDP_EXCLUDE6,
+        |a| u128::from(a.parse::<Ipv6Addr>().expect("UDP_EXCLUDE6 的地址")),
+        |n| Ipv6Addr::from(n).to_string(),
+    ));
+    out
+}
+
 /// root 那边的 TUN 内核的配置（JSON 写的，mihomo 照 YAML 读），节点没有定义、不转发 UDP 时是 None。只放这个节点（和它经
-/// dialer-proxy 用到的）：别的节点变了不用重新装。没有入站、控制接口，不劫持 DNS（照系统的走）。规则：TCP 直连；DNS 直连；
-/// 虚拟局域网、别的代理内核的 UDP 直连；其余 UDP 交给节点
+/// dialer-proxy 用到的）：别的节点变了不用重新装。没有入站、控制接口，不劫持 DNS（照系统的走，dns 一节只给 TUN 的地址）；网卡名
+/// 固定（UDP_TUN），路由照 udp_routes。规则：TCP 直连；DNS 直连；虚拟局域网、别的代理内核的 UDP 直连；其余 UDP 交给节点
 fn udp_config(name: &str) -> Option<String> {
     let defs = core_pick(&core_defs(), &[V::from(name)]);
     if !udp_name_ok(name) || !udp_capable(defs.iter().find(|p| &*def_name(p) == name)) {
@@ -100,8 +162,9 @@ fn udp_config(name: &str) -> Option<String> {
     let cfg = dict! {
         "mode" => "rule", "log-level" => "warning", "ipv6" => true, "allow-lan" => false, "find-process-mode" => "strict",
         "geo-auto-update" => false, "profile" => dict! { "store-selected" => false, "store-fake-ip" => false },
-        "tun" => dict! { "enable" => true, "stack" => "mixed", "auto-route" => true, "auto-detect-interface" => true, "strict-route" => false,
-                         "dns-hijack" => List::new(), "route-exclude-address" => str_list(UDP_EXCLUDE) },
+        "dns" => dict! { "fake-ip-range" => UDP_TUN_ADDR },
+        "tun" => dict! { "enable" => true, "stack" => "mixed", "device" => UDP_TUN, "auto-route" => true, "auto-detect-interface" => true,
+                         "strict-route" => false, "dns-hijack" => List::new(), "route-address" => str_list(udp_routes()) },
         "proxies" => List::from_vec(defs.into_iter().map(V::Dict).collect()),
         "rules" => list!["NETWORK,TCP,DIRECT", "DST-PORT,53,DIRECT", format!("PROCESS-NAME-REGEX,{UDP_DIRECT_PROCS},DIRECT"),
                          format!("NETWORK,UDP,{name}"), "MATCH,DIRECT"],
@@ -149,6 +212,28 @@ pub fn udp_running(procs: Option<&[(i64, String)]>) -> bool {
     }
 }
 
+/// 启动脚本给别的 VPN 让开了：它看到的那块网卡（root 那边的 other-vpn：让开时写，接回节点、退出时删）。只认网卡名；启动脚本
+/// 自己不在跑时留下的不算（被强行停掉的）。没有这个文件时不看进程。procs 同 udp_running
+pub fn udp_other(procs: Option<&[(i64, String)]>) -> Option<String> {
+    other_vpn_at(&udp_paths().0, procs)
+}
+
+/// udp_other 看的是 root 那边的这个目录（单元测试换成临时目录）
+fn other_vpn_at(root: &str, procs: Option<&[(i64, String)]>) -> Option<String> {
+    let text = std::fs::read_to_string(path::join(root, "other-vpn")).ok()?;
+    let name = text.trim();
+    if name.is_empty() || name.len() > 32 || !name.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let mark = format!("{root}/cca-udp");
+    let alive = |rows: &[(i64, String)]| rows.iter().any(|(_, cmd)| cmd.contains(&mark));
+    let alive = match procs {
+        Some(rows) => alive(rows),
+        None => alive(&gui_procs()),
+    };
+    alive.then(|| name.to_string())
+}
+
 /// _gui state 的 config.local.udp（PROTOCOL 2.2）：只在 macOS 上，别的系统是 None
 pub fn udp_view(c: &Dict, procs: Option<&[(i64, String)]>) -> V {
     if !cfg!(target_os = "macos") {
@@ -157,8 +242,10 @@ pub fn udp_view(c: &Dict, procs: Option<&[(i64, String)]>) -> V {
     let (node, state) = udp_state(c);
     let installed = udp_info().is_some();
     let running = !node.is_empty() && udp_running(procs);
+    let other = if node.is_empty() { None } else { udp_other(procs) };
     let node = if node.is_empty() { V::None } else { V::from(node) };
-    V::Dict(dict! { "node" => node, "state" => state, "installed" => installed, "running" => running })
+    let other = other.map(V::from).unwrap_or(V::None);
+    V::Dict(dict! { "node" => node, "state" => state, "installed" => installed, "running" => running, "other_vpn" => other })
 }
 
 /// WebRTC 直连风险的补充：这台 Mac 用内置代理时，怎么让它自己的 UDP 也经节点出去（cca local udp）
@@ -176,10 +263,13 @@ pub fn udp_leak_hint() -> String {
     if state == "off" {
         return "。用内置代理时，cca local udp on 节点 能让这台 Mac 的 UDP 也经节点出去（要输一次管理员密码）".to_string();
     }
+    if let Some(other) = udp_other(None).filter(|_| state == "ok") {
+        return format!("。另一个 VPN（{other}）接管了这台 Mac 的流量，本机 UDP 走节点（{node}）先让给了它：UDP 照它的规则出去");
+    }
     format!("。设了本机 UDP 走节点（{node}），现在没起作用：cca local udp 查看")
 }
 
-/// bash 的 udp_env：root 那边的位置、设的节点和状态、装着的是哪个节点
+/// bash 的 udp_env：root 那边的位置、TUN 的网卡名、设的节点和状态、装着的是哪个节点、给哪块网卡上的 VPN 让开了
 pub fn cmd_udp_env(args: &[String]) -> R<()> {
     arity("cmd_udp_env", args, 0, 0)?;
     let c = cfg_load()?;
@@ -196,6 +286,8 @@ pub fn cmd_udp_env(args: &[String]) -> R<()> {
         ("UDP_NODE", &node),
         ("UDP_STATE", state),
         ("UDP_INSTALLED", &installed),
+        ("UDP_TUN", UDP_TUN),
+        ("UDP_OTHER", &udp_other(None).unwrap_or_default()),
     ]);
     Ok(())
 }
@@ -393,10 +485,91 @@ mod tests {
                     && view.at("state").as_str() == Some("off")
                     && view.at("running").as_bool() == Some(false)
             );
-            assert!(view.at("installed").is_bool());
-            assert_eq!(view.keys().iter().map(|k| k.to_string()).collect::<Vec<_>>(), ["node", "state", "installed", "running"]);
+            assert!(view.at("installed").is_bool() && view.at("other_vpn").is_none());
+            assert_eq!(
+                view.keys().iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+                ["node", "state", "installed", "running", "other_vpn"]
+            );
         } else {
             assert!(view.is_none());
         }
+    }
+
+    #[test]
+    fn routes_tile_the_rest_finer_than_full_tunnels() {
+        // tests/local_udp.py 的 test_config_only_udp_goes_to_node 经 udp-build 看同一份（公网地址在里面、局域网不在）
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        let parse = |s: &str| -> (u32, u128, u32) {
+            let (a, len) = s.split_once('/').unwrap();
+            let len = len.parse().unwrap();
+            match a.parse::<Ipv4Addr>() {
+                Ok(v4) => (32, u128::from(u32::from(v4)), len),
+                Err(_) => (128, u128::from(a.parse::<Ipv6Addr>().unwrap()), len),
+            }
+        };
+        let routes: Vec<String> = udp_routes();
+        let parsed: Vec<(u32, u128, u32)> = routes.iter().map(|s| parse(s)).collect();
+        assert_eq!(routes[..2], ["1.0.0.0/9", "1.128.0.0/9"]);
+        assert_eq!(parsed.iter().filter(|r| r.0 == 32).count(), 118);
+        assert_eq!(parsed.iter().filter(|r| r.0 == 128).count(), 28);
+        assert!(routes.contains(&"198.20.0.0/15".to_string()) && routes.contains(&"100::/9".to_string()));
+        for (bits, exclude) in [(32, UDP_EXCLUDE4), (128, UDP_EXCLUDE6)] {
+            let span = |n: u128, len: u32| (n, n + ((1u128 << (bits - len)) - 1));
+            // 收下的和排掉的拼起来正好铺满整个地址空间：不重叠、不留缝（排掉的一个地址都不进 TUN，别的都进）
+            let mut spans: Vec<(u128, u128)> = parsed.iter().filter(|r| r.0 == bits).map(|&(_, n, len)| span(n, len)).collect();
+            spans.extend(exclude.iter().map(|s| parse(s)).map(|(_, n, len)| span(n, len)));
+            spans.sort();
+            let mut next = 0u128;
+            for &(lo, hi) in &spans {
+                assert_eq!(lo, next, "/{bits} {lo:x}");
+                next = hi.wrapping_add(1);
+            }
+            assert_eq!(next, if bits == 32 { 1u128 << 32 } else { 0 });
+        }
+        // 每一段的另一半也在：没有一段是最大的那种，和去掉的比这里少的那些 TUN（sing-tun 的 1.0.0.0/8 … 128.0.0.0/1、0/1、
+        // 默认路由）加的一样大的一条都没有
+        for &(bits, n, len) in &parsed {
+            let sibling = n ^ (1u128 << (bits - len));
+            assert!(parsed.contains(&(bits, sibling, len)), "{n:x}/{len}");
+        }
+        for big in [
+            "0.0.0.0/1",
+            "128.0.0.0/1",
+            "1.0.0.0/8",
+            "2.0.0.0/7",
+            "4.0.0.0/6",
+            "8.0.0.0/5",
+            "16.0.0.0/4",
+            "32.0.0.0/3",
+            "64.0.0.0/2",
+        ] {
+            assert!(!routes.iter().any(|r| r == big), "{big}");
+        }
+        for big in ["::/1", "8000::/1", "100::/8", "200::/7", "400::/6", "800::/5", "1000::/4", "2000::/3", "4000::/2"] {
+            assert!(!routes.iter().any(|r| r == big), "{big}");
+        }
+        // TUN 自己的地址（sing-tun 另外加它的 /30）在排掉的 198.18.0.0/15 里
+        assert!(UDP_TUN_ADDR.starts_with("198.19.") && UDP_EXCLUDE4.contains(&"198.18.0.0/15"));
+    }
+
+    #[test]
+    fn other_vpn_counts_only_while_the_launch_script_runs() {
+        // tests/local_udp.py 的 test_view_and_running 后半：other-vpn 里的网卡名，启动脚本（root 那边的 cca-udp）在跑时才算
+        let dir = std::env::temp_dir().join(format!("cca-udp-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_str().unwrap();
+        let script = vec![(13, format!("/bin/sh {root}/cca-udp"))];
+        let core = vec![(14, format!("{root}/mihomo -d {root} -f {root}/config.yaml"))];
+        assert_eq!(other_vpn_at(root, Some(&script)), None); // 没有这个文件
+        std::fs::write(dir.join("other-vpn"), "utun5\n").unwrap();
+        assert_eq!(other_vpn_at(root, Some(&script)).as_deref(), Some("utun5"));
+        assert_eq!(other_vpn_at(root, Some(&core)), None); // 启动脚本没在跑：留下的不算
+        assert_eq!(other_vpn_at(root, Some(&[])), None);
+        for bad in ["", "\n", "utun5; rm -rf /", "utun 5", &"u".repeat(33)] {
+            std::fs::write(dir.join("other-vpn"), bad).unwrap();
+            assert_eq!(other_vpn_at(root, Some(&script)), None, "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

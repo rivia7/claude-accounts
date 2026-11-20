@@ -4675,27 +4675,66 @@ cmd_core_nodes() {   # cca _core-nodes [nodes] [bin]（后台）：从路由器�
 # root 那边的文件只在输密码的那一步从私有的临时目录拷过去，按摘要逐个核对、内核校验过配置才换上：普通用户的进程改不了它跑什么
 # ---------------------------------------------------------------------------
 UDP_FLAG="$CCA_HOME/udp/on"
-udp_env() { eval "$(py udp-env)"; }   # UDP_ROOT、UDP_PLIST、UDP_LOG、UDP_OWNER、UDP_LABEL、UDP_FLAG；设的节点 UDP_NODE、状态 UDP_STATE、装着的 UDP_INSTALLED
+udp_env() { eval "$(py udp-env)"; }   # UDP_ROOT、UDP_PLIST、UDP_LOG、UDP_OWNER、UDP_LABEL、UDP_FLAG、TUN 的网卡名 UDP_TUN；设的节点 UDP_NODE、
+                                      # 状态 UDP_STATE、装着的 UDP_INSTALLED；启动脚本给哪块网卡上的 VPN 让开了 UDP_OTHER（没让开是空的）
 udp_running() { ps -axww -o command= 2>/dev/null | grep -qF -- "$UDP_ROOT/mihomo -d "; }   # root 的内核在跑（普通用户的 ps 也看得到它的命令行）
+udp_yielded() {   # 启动脚本给别的 VPN 让开了：other-vpn 在、启动脚本在跑（和辅助程序的 udp_other 一样认；ps 的输出先取下来再比，不经 grep：
+	              # 管道里 grep 自己的命令行也带着这个路径）
+	local p
+	[ -s "$UDP_ROOT/other-vpn" ] || return 1
+	p=$(ps -axww -o command= 2>/dev/null)
+	case "$p" in *"$UDP_ROOT/cca-udp"*) return 0 ;; esac
+	return 1
+}
+udp_yield_note() {   # udp_yield_note 节点：给别的 VPN 让开了时的说明（UDP_OTHER：那块网卡）
+	printf '另一个 VPN 或代理客户端的虚拟网卡（%s；比如 Shadowrocket、Clash 的 TUN 模式）接管了这台 Mac 的流量：本机 UDP 走节点先让给它，UDP 照它的规则出去；它关掉后自动接回节点 %s' \
+		"$UDP_OTHER" "$1"
+}
 udp_loaded() { launchctl print "system/$UDP_LABEL" >/dev/null 2>&1; }
 udp_present() { [ -e "$UDP_PLIST" ] || [ -e "$UDP_ROOT" ] || udp_loaded; }
 udp_flag_on() { ( umask 077; mkdir -p "${UDP_FLAG%/*}" ) && touch "$UDP_FLAG"; }
 udp_run_sh() {   # root 那边的启动脚本 cca-udp（launchd 在开关文件在时起它）：开关文件没了就停内核、退出；内核自己退出了以退出码 1 结束，
-	              # launchd 过 ThrottleInterval 再起。日志超过 1MB 先清空。改了要把辅助程序的 UDP_HELPER（cli/src/cmd/corenet/udp.rs）加 1（装着的旧版会显示要重新装）
-	printf '#!/bin/sh\n# cca local udp：这台 Mac 的 UDP 经节点出去（cca 生成；删掉它运行 cca local udp uninstall）\nD=%s\nFLAG=%s\nLOG=%s\n' \
-		"$(shq "$UDP_ROOT")" "$(shq "$UDP_FLAG")" "$(shq "$UDP_LOG")"
+	              # launchd 过 ThrottleInterval 再起。别的 VPN、代理客户端的 TUN 接管了这台 Mac 的流量时（路由表里经别的虚拟网卡、不限定网卡的
+	              # 默认路由或者 1.0.0.0/8 … 128.0.0.0/1 这几大段：Shadowrocket、Clash 的 TUN 模式、系统设置里全局的 VPN……）停下内核让开，
+	              # 网卡名写进 other-vpn（辅助程序的 udp_other 读它），那些路由没了再起：两个 TUN 一起开会抢路由，经 cca 的 TUN 的连接回包被
+	              # 别的 TUN 截走、全断。每 2 秒看一次。日志超过 1MB 先清空。改了要把辅助程序的 UDP_HELPER（cli/src/cmd/corenet/udp.rs）加 1
+	              # （装着的旧版会显示要重新装）
+	printf '#!/bin/sh\n# cca local udp：这台 Mac 的 UDP 经节点出去（cca 生成；删掉它运行 cca local udp uninstall）\nD=%s\nFLAG=%s\nLOG=%s\nTUN=%s\n' \
+		"$(shq "$UDP_ROOT")" "$(shq "$UDP_FLAG")" "$(shq "$UDP_LOG")" "$(shq "$UDP_TUN")"
 	cat <<'EOF'
 [ -e "$FLAG" ] || exit 0
 [ -z "$(find "$LOG" -size +1024k 2>/dev/null)" ] || : > "$LOG"
-"$D/mihomo" -d "$D" -f "$D/config.yaml" >> "$LOG" 2>&1 &
-pid=$!
-trap 'kill $pid 2>/dev/null; wait $pid 2>/dev/null; exit 0' TERM INT HUP
-while kill -0 $pid 2>/dev/null; do
-	if [ ! -e "$FLAG" ]; then kill $pid 2>/dev/null; wait $pid 2>/dev/null; exit 0; fi
+AWAY="$D/other-vpn"
+other() {
+	netstat -rn -f inet 2>/dev/null | awk -v me="$TUN" '$4 != me && $3 !~ /I/ && $4 ~ /^(utun|ipsec|ppp|tun|tap)[0-9]/ &&
+		$1 ~ /^(default|0\/1|128\.0\/1|1|2\/7|4\/6|8\/5|16\/4|32\/3|64\/2)$/ { print $4; exit }'
+}
+note() { echo "$(date '+%Y-%m-%d %H:%M:%S') cca-udp: $1" >> "$LOG"; }
+pid=
+stop() { [ -z "$pid" ] || { kill $pid 2>/dev/null; wait $pid 2>/dev/null; }; pid=; }
+quit() { stop; rm -f "$AWAY"; exit $1; }
+trap 'quit 0' TERM INT HUP
+rm -f "$AWAY"
+while [ -e "$FLAG" ]; do
+	vpn=$(other)
+	if [ -n "$vpn" ]; then
+		if [ "$vpn" != "$(cat "$AWAY" 2>/dev/null)" ]; then
+			stop
+			echo "$vpn" > "$AWAY"
+			note "另一个 VPN（${vpn}）接管了这台 Mac 的流量：先停下，等它关掉"
+		fi
+	elif [ -z "$pid" ]; then
+		[ ! -e "$AWAY" ] || { rm -f "$AWAY"; note "另一个 VPN 关掉了：接着起"; }
+		"$D/mihomo" -d "$D" -f "$D/config.yaml" >> "$LOG" 2>&1 &
+		pid=$!
+	elif ! kill -0 $pid 2>/dev/null; then
+		pid=
+		quit 1
+	fi
 	sleep 2 &
 	wait $!
 done
-exit 1
+quit 0
 EOF
 }
 udp_root_script() {   # udp_root_script install 临时目录 | uninstall：用管理员权限运行的脚本（经 osascript 的参数传过去：里面没有密钥，只有路径和摘要）。
@@ -4793,10 +4832,14 @@ udp_install() {   # udp_install 节点：装上 root 那边的系统服务（装
 	rm -rf "$tmp"
 	return $rc
 }
-udp_wait() {   # udp_wait up|down：等 root 的内核起来（最多 15 秒；起来后再等一会儿，TUN 配好路由）/ 停下（最多 6 秒）
+udp_wait() {   # udp_wait up|down：等 root 的内核起来（最多 15 秒；起来后再等一会儿，TUN 配好路由；启动脚本给别的 VPN 让开了也算）/ 停下（最多 6 秒）
 	local i
 	if [ "$1" = up ]; then
-		for i in $(seq 1 60); do udp_running && { sleep "${CCA_UDP_SETTLE:-1}"; return 0; }; sleep 0.25; done
+		for i in $(seq 1 60); do
+			udp_running && { sleep "${CCA_UDP_SETTLE:-1}"; return 0; }
+			udp_yielded && return 0
+			sleep 0.25
+		done
 		return 1
 	fi
 	for i in $(seq 1 24); do udp_running || return 0; sleep 0.25; done
@@ -4814,7 +4857,9 @@ udp_report() {   # 这台 Mac 的 UDP 现在从哪出去：STUN 看到的地址�
 		info "STUN 看到这台 Mac 的 UDP 从 ${at}出去"
 	done < <(py udp-probe)
 	[ -n "$any" ] || warn "STUN 没测到这台 Mac 的 UDP 从哪出去（网络不通，或者节点不转发 UDP）"
-	[ -z "$cn" ] || fail_warn error "STUN 看到的是中国大陆的地址 ${cn}：这台 Mac 的 UDP 还在直连"
+	if [ -z "$cn" ]; then :
+	elif [ -n "${UDP_OTHER:-}" ]; then warn "STUN 看到的是中国大陆的地址 ${cn}：UDP 现在照另一个 VPN（${UDP_OTHER}）的规则出去"
+	else fail_warn error "STUN 看到的是中国大陆的地址 ${cn}：这台 Mac 的 UDP 还在直连"; fi
 	return 0
 }
 udp_why() {   # 系统服务没在运行的原因（接在提示后面）
@@ -4835,7 +4880,7 @@ udp_core_follow() {   # 开关 TUN 之后：内置代理的内核在跑的话照
 	return 0
 }
 udp_on() {   # cca local udp on [节点] / pick：这台 Mac 的 UDP 经这个节点出去（不给时用设过的、装着的那个，都没有就问；pick 总是问）
-	local want="${1:-}" pick="${2:-}" node rc
+	local want="${1:-}" pick="${2:-}" node rc msg
 	load_local
 	[ "$LOCAL_CLIENT" = builtin ] || FAIL_CODE=local_unavailable die "本机 UDP 走节点只给内置代理用：先配置内置代理（cca local setup）"
 	udp_env
@@ -4854,14 +4899,21 @@ udp_on() {   # cca local udp on [节点] / pick：这台 Mac 的 UDP 经这个�
 	[ $rc = 0 ] || die "没装上本机 UDP 走节点的系统服务：${UDP_ERR}"
 	py local-set udp "$node" || return 1
 	udp_flag_on || die "建不了开关文件 ${UDP_FLAG}"
+	msg="这台 Mac 的 UDP 经节点 ${node} 出去"
 	if udp_wait up; then
-		okay "这台 Mac 的 UDP 现在经节点 ${node} 出去（TCP 照旧直连；关掉：cca local udp off）"
+		udp_env
+		if [ -n "$UDP_OTHER" ]; then
+			msg=$(udp_yield_note "$node")
+			warn "$msg"
+		else
+			okay "这台 Mac 的 UDP 现在经节点 ${node} 出去（TCP 照旧直连；关掉：cca local udp off）"
+		fi
 	else
 		fail_warn error "开关打开了，系统服务 ${UDP_LABEL} 却没起来$(udp_why)"
 	fi
 	udp_report
 	udp_core_follow
-	gui_done local_udp "这台 Mac 的 UDP 经节点 ${node} 出去"
+	gui_done local_udp "$msg"
 }
 udp_off() {   # cca local udp off：关掉（删开关文件，root 的内核自己停下；系统服务留着，再开同一个节点不用密码）
 	udp_env
@@ -4903,7 +4955,8 @@ udp_status() {   # cca local udp：设的节点、系统服务在不在跑、STU
 	else
 		case "$UDP_STATE" in
 			off) info "没开：这台 Mac 的 UDP（浏览器的 WebRTC、QUIC 这些）直连出去。cca local udp on [节点] 让它经节点出去（要输一次管理员密码）" ;;
-			ok) if udp_running; then okay "这台 Mac 的 UDP 经节点 ${UDP_NODE} 出去（系统服务 ${UDP_LABEL} 在运行；TCP 照旧直连）"
+			ok) if [ -n "$UDP_OTHER" ]; then warn "$(udp_yield_note "$UDP_NODE")"
+				elif udp_running; then okay "这台 Mac 的 UDP 经节点 ${UDP_NODE} 出去（系统服务 ${UDP_LABEL} 在运行；TCP 照旧直连）"
 				else warn "设了经节点 ${UDP_NODE}，系统服务 ${UDP_LABEL} 却没在运行$(udp_why)"; fi ;;
 			stale) warn "设了经节点 ${UDP_NODE}，装着的配置是旧的（节点的定义变了，或者 cca 更新了）：运行 cca local udp on 重新装（要输管理员密码）" ;;
 			missing) warn "设了经节点 ${UDP_NODE}，系统服务却不在了：运行 cca local udp on 重新装（要输管理员密码）" ;;

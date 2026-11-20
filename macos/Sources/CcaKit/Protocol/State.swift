@@ -200,14 +200,17 @@ struct LocalUDP: Decodable, Sendable, Equatable {
     var installed: Bool
     /// root 的内核在跑
     var running: Bool
+    /// 别的 VPN、代理客户端的 TUN 接管了这台 Mac 的流量，root 那边先让给了它：那块虚拟网卡的名字（如 `utun5`）。没让开、旧版 cca 是 nil
+    var otherVPN: String?
 
-    enum CodingKeys: String, CodingKey { case node, state, installed, running }
+    enum CodingKeys: String, CodingKey { case node, state, installed, running, otherVPN = "other_vpn" }
 
-    init(node: String?, state: LocalUDPState, installed: Bool, running: Bool) {
+    init(node: String?, state: LocalUDPState, installed: Bool, running: Bool, otherVPN: String? = nil) {
         self.node = node
         self.state = state
         self.installed = installed
         self.running = running
+        self.otherVPN = otherVPN
     }
 
     init(from decoder: Decoder) throws {
@@ -216,10 +219,13 @@ struct LocalUDP: Decodable, Sendable, Equatable {
         state = c.lossy(LocalUDPState.self, .state) ?? LocalUDPState(rawValue: "")
         installed = c.bool(.installed) ?? false
         running = c.bool(.running) ?? false
+        otherVPN = c.string(.otherVPN)
     }
 
     /// 开着、root 的内核在跑：UDP 正经节点出去
     var active: Bool { state == .ok && running }
+    /// 开着、给别的 VPN 让开了：UDP 照它的规则出去，它关掉后 cca 自动接回节点（不用做什么）
+    var yielded: Bool { state == .ok && otherVPN != nil }
 }
 
 struct PolicyConfig: Decodable, Sendable, Equatable {

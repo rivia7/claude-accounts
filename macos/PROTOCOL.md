@@ -97,7 +97,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     "route_pref": "auto",
     "router": {"configured": true, "host": "192.0.2.10", "ssh_port": 22, "proxy_host": "192.0.2.10"},
     "local": {"configured": true, "client": "builtin", "name": "内置代理",
-              "udp": {"node": null, "state": "off", "installed": false, "running": false}},
+              "udp": {"node": null, "state": "off", "installed": false, "running": false, "other_vpn": null}},
     "nodes": ["US-A", "US-B", "US-C", "US-D"],
     "min_trust": 50, "leak_check": true, "update": "auto",
     "policy": {"configured": true, "repo": "example/cca-policy", "next_check_epoch": 1794045600.0}
@@ -319,11 +319,12 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `local.configured` / `client`：本机 Clash（`builtin` | `""`）。3.3.0-beta.8 起本机出口只有内置代理（`builtin`，App 要托管它的内核，
   见 7）；以前配的 `clash-verge` / `manual` 当作没配置，报 `""`。`name` 是给人看的名字（现在总是 `内置代理`），App 照着显示。
 - `local.udp`：本机 UDP 走节点（`cca local udp`，见 7.1）。只在 macOS 上（Linux 上是 null；旧版 cca 没有这一项，当作 null）：
-  `{"node": "US-A" | null, "state": "off" | "ok" | "stale" | "missing" | "undefined", "installed": bool, "running": bool}`。`node` 是设的节点（没开是 null）；
+  `{"node": "US-A" | null, "state": "off" | "ok" | "stale" | "missing" | "undefined", "installed": bool, "running": bool, "other_vpn": "utun5" | null}`。`node` 是设的节点（没开是 null）；
   `state`：`off` 没开（本机客户端不是内置代理时也是 `off`）| `ok` 装着的就是设的这一份 | `stale` 装着的配置旧了（节点的定义变了、cca 更新了：
   再打开一次，要输管理员密码）| `missing` 设了，系统服务却不在了 | `undefined` 内置代理里已经没有这个节点转发 UDP 的定义；`installed`：root 的系统服务
   装着（不管开没开）；`running`：root 的内核在跑（`ok` 却没在跑：刚开机还没起来，或者系统设置里没允许它在后台运行）。认不出的 `state` 当作有问题，
-  提示在终端里运行 `cca local udp` 看。
+  提示在终端里运行 `cca local udp` 看。`other_vpn`：别的 VPN、代理客户端的 TUN 接管了这台 Mac 的流量，root 那边先让给了它（内核停着，`running`
+  是 false）时那块虚拟网卡的名字，它关掉后自动接回节点（见 7.1），App 不提示重新打开；没让开是 null（旧版 cca 没有这个字段，当作 null）。
 - `onboarded`：这台机器走过配置向导、或者已经有账号/配过路由器/配过本机客户端。`false` 时 App 首页给个「开始配置」的欢迎（`WelcomeBanner`），
   点了走配置向导（`cca _onboard` 提问会话，要 `hello.forms`）。旧版 cca 没有这个字段：当作已配置，不弹向导。
 
@@ -960,6 +961,9 @@ ZeroTier / Tailscale、代理内核自己的流量照旧直连。
   `cancelled`（什么都没改）；没用内置代理时 `fail` 是 `local_unavailable`。
 - 开着 TUN 时内置代理的内核要绑定物理网卡连节点：开、关之后 cca 当场重新加载在跑的内置代理（`routing.local_sync` 可能先是 `pending`，
   下次在外面启动账号时也会重新加载）。
+- 别的 VPN、代理客户端的 TUN（Shadowrocket、Clash 的 TUN 模式、系统设置里全局的 VPN……）接管了这台 Mac 的流量时（路由表里经别的虚拟网卡、
+  不限定网卡的默认路由或者 1.0.0.0/8 … 128.0.0.0/1 这几大段），root 那边停下内核让开，它的路由没了再接回（每 2 秒看一次）：两个 TUN 一起开会抢
+  路由，经 cca 的 TUN 的连接回包被别的 TUN 截走、全断。让开时 `config.local.udp.other_vpn` 是那块网卡，UDP 照那个 VPN 的规则出去。
 
 ## 8. 客户端更新（桌面客户端和终端工具）
 

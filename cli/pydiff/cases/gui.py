@@ -233,6 +233,8 @@ STATE_MASK += [(r',\n\s*"diag": (?:null|\{(?:[^{}]|\{[^{}]*\})*\})', ''),
                (r',\n\s*"why": \[(?:[^\[\]{}]|\{[^{}]*\})*\],\n\s*"claude_code": (?:null|"[^"]*"),\n\s*"claude_code_old": (?:true|false)', '')]
 # 能不能换自定义代理（can.custom_proxy，cca node use）也是切换以后新加的：同样去掉再比（规则 node_free 在 cargo test、回归 11b2c 里测）
 STATE_MASK += [(r',\n\s*"custom_proxy": (?:true|false)', '')]
+# 本机 UDP 走节点给别的 VPN 让开了（config.local.udp.other_vpn）也是切换以后新加的（cargo test、tests/local_udp.py、回归 11b4u 里测）
+STATE_MASK += [(r',\n\s*"other_vpn": (?:null|"[^"]*")', '')]
 GUI_ENV = {'CCA_RO': '1', 'CCA_VERSION': '9.9.9', 'CCA_GUI_CLAUDE_BIN': '/usr/local/bin/claude', 'CCA_GUI_CLAUDE_APP': '/Applications/Claude.app',
            'CCA_GUI_CODEX_BIN': '/usr/local/bin/codex', 'CCA_GUI_CODEX_APP': '', 'CCA_GUI_AGY_BIN': '', 'CCA_GUI_CHROME': '1', 'CCA_COST': 'off'}
 ROUTER_CODE = 'router code\nline 2\n'

@@ -706,7 +706,7 @@ struct LocalUDPRow: View {
                 if let a = LocalUDPAction.primary(u) {
                     RowAction(a.title, systemImage: a.systemImage) { model.run(a.handoff) }
                 }
-                if u.active {
+                if u.active || u.yielded {
                     RowAction("换节点…", systemImage: "arrow.left.arrow.right") { model.run(.localUDPPick) }
                 }
                 if u.state != .off {
@@ -721,7 +721,7 @@ struct LocalUDPRow: View {
     }
 
     private func tint(_ u: LocalUDP) -> Color? {
-        if u.state == .off { return nil }
+        if u.state == .off || u.yielded { return nil }   // 让给了别的 VPN：照它的规则走，不算毛病
         return u.active ? .green : .orange
     }
 }
@@ -735,7 +735,7 @@ struct LocalUDPAction {
     static func primary(_ u: LocalUDP) -> LocalUDPAction? {
         switch u.state {
         case .off: return LocalUDPAction(title: "经节点出去…", systemImage: "antenna.radiowaves.left.and.right", handoff: .localUDPOn)
-        case .ok: return u.running ? nil : LocalUDPAction(title: "重新打开", systemImage: "arrow.clockwise", handoff: .localUDPOn)
+        case .ok: return u.running || u.yielded ? nil : LocalUDPAction(title: "重新打开", systemImage: "arrow.clockwise", handoff: .localUDPOn)
         case .stale, .missing: return LocalUDPAction(title: "重新装…", systemImage: "arrow.clockwise", handoff: .localUDPOn)
         default: return LocalUDPAction(title: "换节点…", systemImage: "arrow.left.arrow.right", handoff: .localUDPPick)
         }

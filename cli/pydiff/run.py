@@ -43,6 +43,28 @@ ORACLE_PATCHES = [
     # node-check 后面可以跟要避开的名字（在家时路由器上全部节点和策略组的名字）
     ('def cmd_node_check():', 'def cmd_node_check(*extra):'),
     ('    while not node_name_free(c, name):', '    while name in extra or not node_name_free(c, name):'),
+    # 本机 UDP 走节点：root 那边的 TUN 网卡名固定、自己的地址换开 198.18.0.1、只给 route-address（排掉的以外每一段劈成两半，不再和别的
+    # TUN 的大段一样大；这里用 ipaddress 另算一遍），启动脚本给别的 VPN 让开：UDP_HELPER 加 1。udp-env 多的两行、gui-state 多的
+    # other_vpn 用屏蔽规则去掉（cases/corenet.py 的 UDP_ENV_MASK、cases/gui.py 的 STATE_MASK）
+    ('UDP_HELPER = 1   #', 'UDP_HELPER = 2   #'),
+    ("UDP_EXCLUDE = ['10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16',\n"
+     "               '224.0.0.0/4', '240.0.0.0/4', 'fc00::/7', 'fe80::/10', 'ff00::/8']   # 不进 TUN：局域网、组播、链路本地、CGNAT（Tailscale）\n",
+     "UDP_EXCLUDE = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16',\n"
+     "               '198.18.0.0/15', '224.0.0.0/4', '240.0.0.0/4', '::/8', 'fc00::/7', 'fe80::/10', 'ff00::/8']\n\n\n"
+     "def udp_routes():\n"
+     "    import ipaddress\n"
+     "    out = []\n"
+     "    for top in map(ipaddress.ip_network, ('0.0.0.0/0', '::/0')):\n"
+     "        nets = [top]\n"
+     "        for e in (n for n in map(ipaddress.ip_network, UDP_EXCLUDE) if n.version == top.version):\n"
+     "            nets = [m for n in nets for m in (n.address_exclude(e) if e.subnet_of(n) else [] if n.subnet_of(e) else [n])]\n"
+     "        out += [str(h) for n in ipaddress.collapse_addresses(nets) for h in n.subnets(1)]\n"
+     "    return out\n"),
+    ("           'tun': {'enable': True, 'stack': 'mixed', 'auto-route': True, 'auto-detect-interface': True, 'strict-route': False,\n"
+     "                   'dns-hijack': [], 'route-exclude-address': UDP_EXCLUDE},",
+     "           'dns': {'fake-ip-range': '198.19.233.233/30'},\n"
+     "           'tun': {'enable': True, 'stack': 'mixed', 'device': 'utun233', 'auto-route': True, 'auto-detect-interface': True,\n"
+     "                   'strict-route': False, 'dns-hijack': [], 'route-address': udp_routes()},"),
 ]
 
 

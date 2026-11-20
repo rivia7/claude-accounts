@@ -440,7 +440,7 @@ def _(b):
 # 本机 UDP 走节点的状态（只在 macOS 上看）
 def info_for(node, **change):
     """照 udp-build 会写出的样子的 info.json（sum 是占位的：对不上就是 stale）"""
-    return dict({'v': 1, 'helper': 1, 'node': node, 'sum': 'x' * 64, 'core': '1.19.33', 'bin': 'b' * 64, 'run': 'r' * 64, 'plist': 'p' * 64,
+    return dict({'v': 1, 'helper': 2, 'node': node, 'sum': 'x' * 64, 'core': '1.19.33', 'bin': 'b' * 64, 'run': 'r' * 64, 'plist': 'p' * 64,
                  'flag': '/nowhere/.cca/udp/on', 'saved_at': 1795000000}, **change)
 
 
@@ -1229,10 +1229,13 @@ def chain(n):
     return [dict(B, name='n%d' % i, server='s%d.example.com' % i, **({'dialer-proxy': 'n%d' % (i + 1)} if i + 1 < n else {})) for i in range(n)]
 
 
+# 切换以后 udp-env 多给的两行（TUN 的网卡名、给哪块网卡上的 VPN 让开了）原来的 Python 没有：去掉了再比（规则在 cargo test、tests/local_udp.py、回归 11b4u 里测）
+UDP_ENV_MASK = [(r'UDP_TUN=[^\n]*\nUDP_OTHER=[^\n]*\n', '')]
+
 for cmd, argv, kw in [('core-missing', [], {}), ('local-env', [], {'local': BUILTIN}), ('core-config', ['/tmp/core.sock'], {'local': BUILTIN}),
                       ('core-summary', [], {}), ('udp-env', [], {'local': dict(BUILTIN, udp='n0')}), ('install-node', ['proxy', 'n0', '%HOME%/proxy.json'], {})]:
     for name, n in [('dialer-chain-long', 980), ('dialer-chain-too-long', 1010)]:
-        @case('%s/%s' % (cmd, name), [cmd] + argv, env=ENV, mask=PORT if cmd == 'install-node' else None)
+        @case('%s/%s' % (cmd, name), [cmd] + argv, env=ENV, mask={'install-node': PORT, 'udp-env': UDP_ENV_MASK}.get(cmd))
         def _(b, n=n, kw=kw):
             home(b, defs=chain(n), cfg={'nodes': ['n0']}, table={}, **kw)
 
@@ -1275,7 +1278,7 @@ def install_udp(b, node, version='1.19.33', env=None):
 
 
 def udp_env(name, argv=(), env=None, tool='claude', installed=None, info=None, **kw):
-    @case('udp-env/' + name, ['udp-env'] + list(argv), env=dict(ENV, **(env or {})), tool=tool)
+    @case('udp-env/' + name, ['udp-env'] + list(argv), env=dict(ENV, **(env or {})), tool=tool, mask=UDP_ENV_MASK)
     def _(b):
         udp_home(b, **kw)
         if installed:
@@ -1293,7 +1296,7 @@ udp_env('missing', udp='US-A')
 udp_env('ok', udp='US-A', installed='US-A')
 udp_env('ok-chain', udp='US-C', installed='US-C')
 udp_env('stale-other-node-installed', udp='US-A', installed='HK-A')
-udp_env('stale-helper-version', udp='US-A', info=info_for('US-A', helper=2))
+udp_env('stale-helper-version', udp='US-A', info=info_for('US-A', helper=1))
 udp_env('undefined-no-udp', udp='US-B', installed='US-A')
 udp_env('undefined-gone', udp='ZZ')
 udp_env('undefined-bad-name', udp='a,b', defs=[dict(U_VLESS, name='a,b')], cfg={'nodes': ['a,b']})
@@ -1311,13 +1314,13 @@ udp_env('paths-from-env', udp='US-A', env={'CCA_UDP_ROOT': '%HOME%/elsewhere/roo
 udp_env('paths-from-env-empty', udp='US-A', env={'CCA_UDP_ROOT': '', 'CCA_UDP_PLIST': '', 'CCA_UDP_LOG': ''}, installed='US-A')
 
 
-@case('udp-env/paths-from-env-installed-there', ['udp-env'], env=dict(ENV, CCA_UDP_ROOT='%HOME%/elsewhere/root'))
+@case('udp-env/paths-from-env-installed-there', ['udp-env'], env=dict(ENV, CCA_UDP_ROOT='%HOME%/elsewhere/root'), mask=UDP_ENV_MASK)
 def _(b):
     udp_home(b, udp='US-A')
     install_udp(b, 'US-A', env={'CCA_UDP_ROOT': b.path('elsewhere/root')})
 
 
-@case('udp-env/stale-node-changed', ['udp-env'], env=ENV)
+@case('udp-env/stale-node-changed', ['udp-env'], env=ENV, mask=UDP_ENV_MASK)
 def _(b):
     # 装好以后路由器上改了这个节点：装着的配置旧了
     udp_home(b, udp='US-A')
@@ -1325,19 +1328,19 @@ def _(b):
     cache(b, [dict(U_VLESS, server='192.0.2.99')] + U_DEFS[1:], nodes=U_NODES)
 
 
-@case('udp-env/real-home', ['udp-env'], env=dict(ENV, HOME=os.path.realpath(os.path.expanduser('~')), CCA_HOME='%HOME%/.cca'))
+@case('udp-env/real-home', ['udp-env'], env=dict(ENV, HOME=os.path.realpath(os.path.expanduser('~')), CCA_HOME='%HOME%/.cca'), mask=UDP_ENV_MASK)
 def _(b):
     # HOME 是这个用户真正的主目录时用的是 /Library 下的位置（只读：看一眼那边装没装）；config.json 这些照 CCA_HOME 在沙箱里
     udp_home(b)
 
 
-@case('udp-env/bad-config', ['udp-env'], env=ENV)
+@case('udp-env/bad-config', ['udp-env'], env=ENV, mask=UDP_ENV_MASK)
 def _(b):
     udp_home(b)
     b.write('.cca/config.json', '{"nodes": [')
 
 
-@case('udp-env/empty-home', ['udp-env'], env=ENV)
+@case('udp-env/empty-home', ['udp-env'], env=ENV, mask=UDP_ENV_MASK)
 def _(b):
     net(b)
 

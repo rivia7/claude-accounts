@@ -5,7 +5,9 @@ WebRTC 警告后面的补充经 leak-verdict），不碰 /Library、不联网。
 
 原来直接调内部函数的地方这里都经子命令测；辅助程序自己的单元测试（cargo test，cli/src/cmd/corenet/udp.rs）里另有直接调的：
 节点名和转发 UDP 的判断（names_and_capability）、从命令行认 root 那边的内核在不在跑（running_is_read_from_the_command_line）、
-没设节点时的状态和界面看的那一份（off_without_a_node、view_without_a_node）。"""
+没设节点时的状态和界面看的那一份（off_without_a_node、view_without_a_node）、TUN 接管的网段怎么切（routes_tile_the_rest_finer_than_full_tunnels）、
+给别的 VPN 让开的记录什么时候算数（other_vpn_counts_only_while_the_launch_script_runs）。"""
+import ipaddress
 import hashlib
 import json
 import os
@@ -21,7 +23,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helper_bin import HELPER
 
-UDP_HELPER = 1   # root 那边的启动脚本、launchd 配置、规则的版本（cli/src/cmd/corenet/udp.rs 的同名常量）
+UDP_HELPER = 2   # root 那边的启动脚本、launchd 配置、规则的版本（cli/src/cmd/corenet/udp.rs 的同名常量）
 VLESS = {'name': 'US-A', 'type': 'vless', 'server': '192.0.2.10', 'port': 443, 'uuid': '00000000-0000-4000-8000-000000000000',
          'udp': True, 'tls': True, 'servername': 'example.com', 'flow': 'xtls-rprx-vision',
          'reality-opts': {'public-key': 'secret-public-key', 'short-id': 'abcd'}}
@@ -157,12 +159,22 @@ class LocalUdp(unittest.TestCase):
         self.assertEqual(c['rules'][1], 'DST-PORT,53,DIRECT')
         self.assertIn('PROCESS-NAME-REGEX', c['rules'][2])
         self.assertEqual(c['rules'][-2:], ['NETWORK,UDP,US-A', 'MATCH,DIRECT'])
-        self.assertTrue(c['tun']['enable'] and c['tun']['auto-route'] and c['tun']['auto-detect-interface'])
-        self.assertEqual(c['tun']['dns-hijack'], [])
-        for net in ('192.168.0.0/16', '10.0.0.0/8', '172.16.0.0/12', '100.64.0.0/10', 'fe80::/10'):
-            self.assertIn(net, c['tun']['route-exclude-address'])
+        tun = c['tun']
+        self.assertTrue(tun['enable'] and tun['auto-route'] and tun['auto-detect-interface'])
+        self.assertEqual(tun['dns-hijack'], [])
+        self.assertEqual(tun['device'], 'utun233')   # 网卡名固定：root 那边的启动脚本靠它分清路由表里哪些是自己的
+        self.assertNotIn('route-exclude-address', tun)   # 只给 route-address：sing-tun 照原样加，不再合并成和别的 TUN 一样大的段
+        routes = [ipaddress.ip_network(r) for r in tun['route-address']]
+        for net in ('192.168.0.0/16', '10.0.0.0/8', '172.16.0.0/12', '100.64.0.0/10', '127.0.0.0/8', '198.18.0.0/15', '224.0.0.0/4',
+                    'fe80::/10', 'fc00::/7', 'ff00::/8', '::1/128'):
+            self.assertFalse(any(r.overlaps(ipaddress.ip_network(net)) for r in routes), net)   # 局域网、保留地址不进 TUN
+        for ip in ('1.1.1.1', '8.8.8.8', '203.0.113.10', '223.5.5.5', '198.20.0.1', '2001:4860:4860::8888', '2001:db8::1'):
+            self.assertEqual(sum(ipaddress.ip_address(ip) in r for r in routes), 1, ip)   # 公网地址正好在一段里
+        for big in ('0.0.0.0/1', '128.0.0.0/1', '1.0.0.0/8', '64.0.0.0/2', '::/1', '8000::/1', '2000::/3'):
+            self.assertNotIn(ipaddress.ip_network(big), routes)   # 和别的 TUN 加的大段一样大的一条都没有
+        self.assertEqual(c['dns'], {'fake-ip-range': '198.19.233.233/30'})   # 只给 TUN 的地址（不开 DNS）
         self.assertEqual([p['name'] for p in c['proxies']], ['US-A'])
-        for k in ('external-controller', 'external-controller-unix', 'port', 'mixed-port', 'socks-port', 'listeners', 'dns'):
+        for k in ('external-controller', 'external-controller-unix', 'port', 'mixed-port', 'socks-port', 'listeners'):
             self.assertNotIn(k, c)
         self.assertFalse(c['allow-lan'])
 
@@ -253,23 +265,39 @@ class LocalUdp(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == 'darwin', '本机 UDP 走节点只在 macOS 上有')
     def test_view_and_running(self):
-        self.assertEqual(self.udp_view([]), {'node': None, 'state': 'off', 'installed': False, 'running': False})
+        self.assertEqual(self.udp_view([]), {'node': None, 'state': 'off', 'installed': False, 'running': False, 'other_vpn': None})
         self.run_cmd('local-set', 'udp', 'US-A')
         self.install('US-A')
         root = self.udp_root()
         procs = [(10, '%s/mihomo -d %s -f %s/config.yaml' % (root, root, root))]
-        self.assertEqual(self.udp_view(procs), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': True})
+        self.assertEqual(self.udp_view(procs), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': True, 'other_vpn': None})
         # 在不在跑只认命令行里「root 那边的目录/mihomo -d 」这一段
         self.assertTrue(self.udp_view([(11, '/bin/bash %s/mihomo -d x' % root)])['running'])
         self.assertFalse(self.udp_view([(12, '/usr/bin/vi %s/mihomo' % root)])['running'])
+        # 启动脚本给别的 VPN 让开了：other-vpn 里的网卡名，启动脚本在跑时才算；只认网卡名
+        (Path(root) / 'other-vpn').write_text('utun5\n')
+        script = [(13, '/bin/sh %s/cca-udp' % root)]
+        self.assertEqual(self.udp_view(script), {'node': 'US-A', 'state': 'ok', 'installed': True, 'running': False, 'other_vpn': 'utun5'})
+        self.assertIsNone(self.udp_view(procs)['other_vpn'])
+        (Path(root) / 'other-vpn').write_text('utun5; rm -rf /\n')
+        self.assertIsNone(self.udp_view(script)['other_vpn'])
 
     @unittest.skipUnless(sys.platform == 'darwin', '本机 UDP 走节点只在 macOS 上有')
     def test_env_and_leak_hint(self):
         out, _, code = self.run_cmd('udp-env')
         v = self.shvars(out)
         self.assertEqual((code, v['UDP_STATE'], v['UDP_NODE'], v['UDP_INSTALLED']), (0, 'off', '', ''))
+        self.assertEqual((v['UDP_TUN'], v['UDP_OTHER']), ('utun233', ''))
         self.assertIn('cca local udp on', self.udp_leak_hint())
         self.run_cmd('local-set', 'udp', 'US-A')
+        self.assertIn('cca local udp 查看', self.udp_leak_hint())
+        self.install('US-A')   # 装好了、启动脚本给别的 VPN 让开了：说 UDP 照它的规则出去
+        root = Path(self.udp_root())
+        (root / 'other-vpn').write_text('utun5\n')
+        (self.home / 'ps-command').write_text('   13 /bin/sh %s/cca-udp\n' % root)
+        self.assertEqual(self.udp_env()['UDP_OTHER'], 'utun5')
+        self.assertIn('另一个 VPN（utun5）接管了这台 Mac 的流量', self.udp_leak_hint())
+        (self.home / 'ps-command').write_text('')
         self.assertIn('cca local udp 查看', self.udp_leak_hint())
         self.config({})
         self.assertEqual(self.udp_leak_hint(), '')
