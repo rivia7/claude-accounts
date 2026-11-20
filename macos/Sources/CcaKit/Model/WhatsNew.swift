@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.5", title: "测试版：启动时不再一个个问要不要信任共享目录", points: [
+            .init(symbol: "checkmark.shield",
+                  text: "Claude Code 2.1.329 起，启动时给它的每个附加目录（账号目录，和 ~/.claude 里共享的 projects、skills、commands 这些）都要问一遍“Adding a new directory”，回答只管这一次。现在 cca 启动前就把这些目录记成信任过，和你在那里点过一次信任一样，不再弹出。"),
+            .init(symbol: "scope",
+                  text: "只记 cca 交给 Claude Code 的这几个目录，不碰别的；在 config.json 里把 claude_add_dir 设成 false 时不加附加目录，也不记。"),
+        ]),
         ReleaseNote(version: "3.5.2-beta.4", title: "测试版：账号的记忆不再反复要确认，在家时本机 UDP 自动停着", points: [
             .init(symbol: "lock.open",
                   text: "cca 启动的 Claude Code 读写记忆、看会话记录、用 skills 时不再一次次弹出确认。这些放在 ~/.claude 里几个账号共用，以前只把账号自己的目录算作信任目录，Claude Code 认的却是它们真实的位置。"),
