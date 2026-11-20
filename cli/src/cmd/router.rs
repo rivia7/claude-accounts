@@ -8,7 +8,9 @@ use super::{arg, arity, Cmd};
 use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, POOL_STEP};
 use crate::core::model::*;
-use crate::core::policy::{fill_name_ok, fill_plan, fill_problems, node_fp, node_ids, policy_fill, policy_map, policy_problems};
+use crate::core::policy::{
+    fill_fp, fill_name_ok, fill_plan, fill_problems, node_fp, node_ids, policy_fill, policy_map, policy_problems,
+};
 use crate::core::sync::router_accounts;
 use crate::core::tool::{t, tools, Tool};
 use crate::py::fs::{self, load_quiet, save_json};
@@ -27,6 +29,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("router-merge", cmd_router_merge),
     Cmd::all("slot-name", cmd_slot_name),
     Cmd::all("router-evict", cmd_router_evict),
+    Cmd::all("custom-clashes", cmd_custom_clashes),
     Cmd::all("policy-check", cmd_policy_check),
     Cmd::all("fill-check", cmd_fill_check),
     Cmd::all("fill-summary", cmd_fill_summary),
@@ -88,7 +91,8 @@ fn slots_for(top: i64) -> i64 {
     POOL_STEP.max(ceil_to(top, POOL_STEP))
 }
 
-/// 多设备共用一个路由器：把本机账号合并进路由器现有的并集。remote 是回读来的 {'accounts': [...], 'owners': {槽位: 设备标识}}。
+/// 多设备共用一个路由器：把本机账号合并进路由器现有的并集。remote 是回读来的 {'accounts': [...], 'owners': {槽位: 设备标识},
+/// 'custom': 账号表里的自定义节点}。
 /// owners 认出哪些槽位是别的设备的（原样保留）、哪些是我自己的（不在账号表里的就是我删掉的，去掉）。owners 读不到（旧版 cca、
 /// 全新路由器、升级前的备份还原）时当作全是我的 → 直接覆盖（和以前一样）。会写回 c：本机账号的端口改成并集里的槽位。
 /// 返回 (accounts 载荷, owners)；单设备时 accounts 载荷和 router_accounts(c) 逐字节一样
@@ -123,15 +127,17 @@ pub fn router_merge(c: &Dict, remote: &Dict) -> (Dict, Dict) {
             }
         }
     }
+    let custom = super::corenet::custom_fill(c);
+    let cks = super::corenet::custom_cks(custom.as_ref()); // 槽位的 ck 照这台的定义算：路由器上的对不上就断开
     let mut used: Vec<i64> = Vec::new();
     let mut union: Vec<Dict> = Vec::new();
     let owners = Dict::new();
     for a in &others {
-        // 别的设备的槽位：原样保留，owner 不动
+        // 别的设备的槽位：原样保留（用它那台的自定义节点时带着的 ck 也是），owner 不动
         let s = py_int(&a.at("slot"));
         if s > 0 && !used.contains(&s) {
             used.push(s);
-            union.push(dict! { "slot" => s, "name" => a.at("name"), "node" => a.get("node").unwrap_or(V::None) });
+            union.push(keep_ck(dict! { "slot" => s, "name" => a.at("name"), "node" => a.get("node").unwrap_or(V::None) }, a));
             owners.set(s.to_string(), owner_of(&V::Int(s)).unwrap_or(V::None));
         }
     }
@@ -160,7 +166,9 @@ pub fn router_merge(c: &Dict, remote: &Dict) -> (Dict, Dict) {
             }
         }
         used.push(s);
-        union.push(dict! { "slot" => s, "name" => name, "node" => node });
+        let e = dict! { "slot" => s, "name" => name, "node" => node };
+        super::corenet::slot_ck(&e, &cks);
+        union.push(e);
         owners.set(s.to_string(), &did);
         mine_slot.push((tool.name, k.clone(), s));
     }
@@ -176,6 +184,9 @@ pub fn router_merge(c: &Dict, remote: &Dict) -> (Dict, Dict) {
     let payload = dict! { "base" => FIRST_PORT - 1, "slots" => slots, "nodes" => nodes, "accounts" => List::from_vec(union.into_iter().map(V::Dict).collect()) };
     if let Some(f) = policy_fill() {
         payload.set("fill", f);
+    }
+    if let Some(f) = merged_custom(custom, others_custom(remote.get("custom"), &others)) {
+        payload.set("custom", f);
     }
     for tool in tools() {
         // 本机账号的端口改成并集里的槽位（启动、内置代理用的端口 = 并集槽位）
@@ -230,6 +241,7 @@ pub fn cmd_router_merge(args: &[String]) -> R<()> {
     let remote = Dict::new();
     if let Some(V::Dict(a)) = (!acc_txt.is_empty()).then(|| json::loads(&acc_txt).ok()).flatten() {
         remote.set("accounts", a.get("accounts").unwrap_or(V::None));
+        remote.set("custom", a.get("custom").unwrap_or(V::None)); // 别的设备在用的自定义节点照样带着（others_custom）
     }
     if let Some(V::Dict(o)) = (!own_txt.is_empty()).then(|| json::loads(&own_txt).ok()).flatten() {
         remote.set("owners", o);
@@ -259,6 +271,91 @@ pub fn cmd_slot_name(args: &[String]) -> R<()> {
     }
     out!();
     Ok(())
+}
+
+/// 别的设备在用的自定义节点：回读的 accounts.yaml 的 custom 里，名字是别的设备的槽位在用的、槽位的 ck 就是它（或者槽位没带 ck：
+/// 旧版 cca 同步时丢了，它用的就是路由器上的那个）。同步时照样带上：订阅更新把配置文件整个换掉以后，OpenClash 启动时的钩子
+/// 照账号表把别的设备的也写回去（不然要等那台再同步一次，期间它的账号断开）
+fn others_custom(rcustom: Option<V>, others: &[Dict]) -> Vec<Dict> {
+    let px = rcustom.as_ref().and_then(|f| f.as_dict()).and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
+    let mut out: Vec<Dict> = Vec::new();
+    for p in px.iter().filter_map(|p| p.as_dict()) {
+        let Some(name) = p.get("name").filter(|n| n.as_str().is_some_and(|s| !s.is_empty())) else { continue };
+        if out.iter().any(|q| q.at("name").py_eq(&name)) {
+            continue;
+        }
+        let ck = super::corenet::custom_ck(&p);
+        let used = others.iter().any(|o| {
+            o.get("node").is_some_and(|n| n.py_eq(&name))
+                && match o.get("ck") {
+                    Some(V::Str(s)) => ck.as_deref() == Some(&*s),
+                    _ => true,
+                }
+        });
+        if used {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// 多设备时账号表的 custom：这台的自定义节点（mine，custom_fill 的结果）加上别的设备在用的（theirs）。同名的：一样（ck 相同）
+/// 的只留一个；不一样的留别的设备的（它的账号正用着路由器上的那个），这台的不写、提示换个名字——这台用它的槽位带着这台的 ck，
+/// 路由器上对不上就断开，不换出口
+fn merged_custom(mine: Option<Dict>, theirs: Vec<Dict>) -> Option<Dict> {
+    use super::corenet::{custom_ck, custom_payload};
+    let mine = mine.and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
+    let mut px: Vec<Dict> = Vec::new();
+    for p in mine.iter().filter_map(|p| p.as_dict()) {
+        let name = p.at("name");
+        match theirs.iter().find(|q| q.at("name").py_eq(&name)) {
+            Some(q) if custom_ck(q) != custom_ck(&p) => {
+                if !*RO {
+                    err!(
+                        "! 自定义节点「{}」和别的设备写进路由器、还在用的同名节点不是同一个，没有写：这台用它的账号经路由器会断开（不换出口）。换个名字重新加（cca node add），再让账号改走它",
+                        name.py_str()
+                    );
+                }
+            }
+            _ => px.push(p),
+        }
+    }
+    for q in theirs {
+        if !px.iter().any(|p| p.at("name").py_eq(&q.at("name"))) {
+            px.push(q);
+        }
+    }
+    custom_payload(px)
+}
+
+/// 同步前（stdin 是回读的「accounts.yaml\n---CCA-OWN---\nowners」）：这台的自定义节点里，和别的设备在路由器上正用着的同名节点
+/// 不是同一个的（ck 不一样），一行一个名字。bash 先给它们换个名字（node-rename）再合并：不然 merged_custom 只能不写这台的，
+/// 这台用它的槽位断开，`select_all` 切不过去，经路由器启动时别的账号也会停下
+pub fn cmd_custom_clashes(args: &[String]) -> R<()> {
+    arity("cmd_custom_clashes", args, 0, 0)?;
+    let c = cfg_load()?;
+    let (acc_txt, own_txt) = read_two_parts();
+    let parse = |t: &str| if t.is_empty() { None } else { json::loads(t).ok() };
+    let acc = parse(&acc_txt).and_then(|a| a.as_dict());
+    let racc = acc.as_ref().and_then(|a| a.list("accounts")).map(|l| l.items()).unwrap_or_default();
+    let rown = parse(&own_txt).and_then(|o| o.as_dict()).unwrap_or_default();
+    let theirs = others_custom(acc.as_ref().and_then(|a| a.get("custom")), &others_of(&racc, &rown, &device_id(&c)));
+    let mine = super::corenet::custom_fill(&c).and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
+    for p in mine.iter().filter_map(|p| p.as_dict()) {
+        let name = p.at("name");
+        if theirs.iter().any(|q| q.at("name").py_eq(&name) && super::corenet::custom_ck(q) != super::corenet::custom_ck(&p)) {
+            out!("{}", name.py_str());
+        }
+    }
+    Ok(())
+}
+
+/// 别的设备的槽位 e（从回读的那一项 a 照抄的）：a 带着自定义节点的 ck 时照样带上（路由器按它核对，见 `custom_ck`）
+fn keep_ck(e: Dict, a: &Dict) -> Dict {
+    if let Some(ck) = a.get("ck").filter(|v| v.as_str().is_some()) {
+        e.set("ck", ck);
+    }
+    e
 }
 
 /// 卸载时：路由器回读的 accounts.yaml + owners（stdin，用 ---CCA-OWN--- 隔开）里去掉我这台的槽位，保留别的设备的。
@@ -296,12 +393,21 @@ pub fn cmd_router_evict(args: &[String]) -> R<()> {
     others.sort_by_key(|x| py_int(&x.at("slot")));
     let accounts: Vec<V> = others
         .iter()
-        .map(|x| V::Dict(dict! { "slot" => x.at("slot"), "name" => x.at("name"), "node" => x.get("node").unwrap_or(V::None) }))
+        .map(|x| {
+            V::Dict(keep_ck(
+                dict! { "slot" => x.at("slot"), "name" => x.at("name"), "node" => x.get("node").unwrap_or(V::None) },
+                x,
+            ))
+        })
         .collect();
     if !*RO {
         cfg_save(&c)?;
     }
     let payload = dict! { "base" => FIRST_PORT - 1, "slots" => slots, "nodes" => nodes, "accounts" => List::from_vec(accounts) };
+    let rcustom = parse(&acc_txt).and_then(|a| a.as_dict()).and_then(|a| a.get("custom"));
+    if let Some(f) = super::corenet::custom_payload(others_custom(rcustom, &others)) {
+        payload.set("custom", f); // 留下的设备在用的自定义节点照样带着（钩子照它写回配置文件）
+    }
     print_sections(&payload, FIRST_PORT - 1, slots, &owners);
     Ok(())
 }
@@ -350,8 +456,8 @@ pub fn cmd_fill_summary(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// stdin 是路由器上的节点列表（cca-router.sh nodes 的输出），原样输出，后面接上参考节点里路由器上还没有的：
-/// 同步时路由器会补上它们，可选节点里先就选得到，改名跟随也不会把它们当成丢了。没读到节点时只原样输出
+/// stdin 是路由器上的节点列表（cca-router.sh nodes 的输出），原样输出，后面接上参考节点、可选节点里的自定义节点里路由器上
+/// 还没有的：同步时路由器会补上它们，可选节点里先就选得到，改名跟随也不会把它们当成丢了。没读到节点时只原样输出
 pub fn cmd_nodes_fill(args: &[String]) -> R<()> {
     arity("cmd_nodes_fill", args, 0, 0)?;
     let input = io::read_stdin_text();
@@ -373,7 +479,15 @@ pub fn cmd_nodes_fill(args: &[String]) -> R<()> {
         None | Some(V::None) => String::new(),
         Some(v) => v.py_str().replace(['\t', '\n'], " "),
     };
-    for p in fill_plan(&have, &names, policy_fill().as_ref()).0 {
+    let mut more = fill_plan(&have, &names, policy_fill().as_ref()).0;
+    let custom = super::corenet::custom_fill(&cfg_load()?).and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
+    for p in custom.iter().filter_map(|p| p.as_dict()) {
+        let n = p.at("name").py_str();
+        if !names.contains(&n) && !more.iter().any(|q| q.at("name").py_str() == n) {
+            more.push(p);
+        }
+    }
+    for p in more {
         let sni = p.get("servername").filter(|v| v.truthy()).or_else(|| p.get("sni"));
         let cols = [col(p.get("name")), col(p.get("type")), col(p.get("server")), col(p.get("port")), col(sni)];
         out!("P\t{}", cols.join("\t"));
@@ -475,8 +589,11 @@ pub fn nodes_record(c: &Dict, have: &[(String, String)]) {
     let fp = |n: &str| have.iter().rev().find(|(m, f)| m == n && !f.is_empty()).map(|(_, f)| V::from(f));
     let old = node_ids(c);
     let ids = Dict::new();
+    // 自定义节点记它自己的摘要（路由器上同名的可能是别的节点：写不进去，账号的端口宁可断开）
+    let own = super::corenet::core_custom();
+    let own_fp = |n: &str| own.iter().find(|p| p.str("name").is_some_and(|m| &*m == n)).map(|p| V::from(fill_fp(p)));
     for n in c.at("nodes").as_list().map(|l| l.strs()).unwrap_or_default() {
-        if let Some(f) = fp(&n).or_else(|| old.get(&n).filter(|v| v.truthy())) {
+        if let Some(f) = own_fp(&n).or_else(|| fp(&n)).or_else(|| old.get(&n).filter(|v| v.truthy())) {
             ids.set(n, f);
         }
     }
@@ -518,7 +635,13 @@ pub fn cmd_nodes_follow(args: &[String]) -> R<()> {
     let sorted = json::Fmt::new().sort_keys();
     let before = json::dumps(&V::Dict(c.clone()), sorted);
     // 可选节点里不是字符串的项（手改坏的配置）在 Python 里只会进 lost、后面又查不到用它的账号：等于跳过
-    let nodes: Vec<String> = c.at("nodes").as_list().map(|l| l.strs().iter().map(|n| n.to_string()).collect()).unwrap_or_default();
+    // 自定义节点归 cca 自己管（同步时写进路由器）：不跟着路由器上的改名走，路由器上暂时没有也不算丢了
+    let own = super::corenet::custom_names();
+    let nodes: Vec<String> = c
+        .at("nodes")
+        .as_list()
+        .map(|l| l.strs().iter().map(|n| n.to_string()).filter(|n| !own.contains(n)).collect())
+        .unwrap_or_default();
     let mut ren: Vec<(String, String)> = Vec::new(); // 字典：同一个旧名字只有一条
     let mut lost: Vec<String> = Vec::new();
     for n in &nodes {
@@ -677,4 +800,57 @@ pub fn cmd_policy_lock(args: &[String]) -> R<()> {
         out!("按请求锁定账号的节点：{key} → {node}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmd::corenet::custom_ck;
+
+    fn px(name: &str, user: &str) -> Dict {
+        dict! { "name" => name, "type" => "socks5", "server" => "gw.example.com", "port" => 1080, "username" => user, "password" => "x" }
+    }
+
+    fn names(f: &Option<Dict>) -> Vec<String> {
+        f.as_ref()
+            .and_then(|f| f.list("proxies"))
+            .map(|l| l.items())
+            .unwrap_or_default()
+            .iter()
+            .map(|p| p.as_dict().unwrap().at("name").py_str())
+            .collect()
+    }
+
+    /// 别的设备在用的自定义节点照样带着：槽位的 ck 是它、或者没带 ck（旧版 cca 丢了）；ck 不是它的、没人用的不带
+    #[test]
+    fn others_custom_keeps_what_other_devices_use() {
+        let (home, spare) = (px("Home IP", "b"), px("Spare", "b"));
+        let rcustom = V::Dict(dict! { "id" => "x", "proxies" => vec![V::Dict(home.clone()), V::Dict(spare)] });
+        let slot = |ck: Option<String>| {
+            let o = dict! { "slot" => 3, "name" => "dev2", "node" => "Home IP" };
+            if let Some(ck) = ck {
+                o.set("ck", ck);
+            }
+            o
+        };
+        let got = |o: Dict| others_custom(Some(rcustom.clone()), &[o]).iter().map(|p| p.at("name").py_str()).collect::<Vec<_>>();
+        assert_eq!(got(slot(custom_ck(&home))), ["Home IP"]);
+        assert_eq!(got(slot(None)), ["Home IP"]);
+        assert!(got(slot(Some("0000000000000000".into()))).is_empty());
+        assert!(others_custom(None, &[slot(None)]).is_empty());
+    }
+
+    /// 同名的：一样的只留一个；不一样的留别的设备在用的，这台的不写
+    #[test]
+    fn merged_custom_prefers_what_other_devices_use() {
+        let mine = |ps: Vec<Dict>| crate::cmd::corenet::custom_payload(ps);
+        let theirs = vec![px("Home IP", "b")];
+        let got = merged_custom(mine(vec![px("Home IP", "a"), px("Office", "a")]), theirs.clone());
+        assert_eq!(names(&got), ["Office", "Home IP"]);
+        let home = got.as_ref().unwrap().list("proxies").unwrap().items()[1].as_dict().unwrap();
+        assert_eq!(home.at("username").py_str(), "b");
+        assert_eq!(names(&merged_custom(mine(vec![px("Home IP", "b")]), theirs.clone())), ["Home IP"]);
+        assert_eq!(names(&merged_custom(None, theirs)), ["Home IP"]);
+        assert!(merged_custom(None, Vec::new()).is_none());
+    }
 }

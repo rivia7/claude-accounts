@@ -358,13 +358,15 @@ struct FailCode: KnownValues {
     static let costOff = FailCode(rawValue: "cost_off")
     /// 邮箱助手：连不上 Gmail（网络 / 代理 / 证书 / 认证，`cca mail setup`，PROTOCOL 4.11）。
     static let mailConnect = FailCode(rawValue: "mail_connect")
+    /// 换自定义代理（`cca [codex|agy] node use`）：维护者的映射固定了这个账号的节点。
+    static let nodePinned = FailCode(rawValue: "node_pinned")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect]
+                                       .costUnavailable, .costOff, .mailConnect, .nodePinned]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

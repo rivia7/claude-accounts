@@ -78,10 +78,10 @@ def fake_pub(seed):
     return 'ssh-ed25519 %s cca-policy@test\n' % base64.b64encode(blob).decode()
 
 
-def reply(ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100):
-    """Claude Code 的会话记录里的一条回复"""
-    return {'type': 'assistant', 'timestamp': iso(ts), 'requestId': 'req_' + mid, 'sessionId': sid,
-            'message': {'id': mid, 'model': model, 'role': 'assistant', 'usage': {'input_tokens': inp, 'output_tokens': out}}}
+def reply(ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100, **more):
+    """Claude Code 的会话记录里的一条回复（more：version、entrypoint 这些）"""
+    return dict({'type': 'assistant', 'timestamp': iso(ts), 'requestId': 'req_' + mid, 'sessionId': sid,
+                 'message': {'id': mid, 'model': model, 'role': 'assistant', 'usage': {'input_tokens': inp, 'output_tokens': out}}}, **more)
 
 
 def owner(uuid, sid='s1'):
@@ -182,8 +182,8 @@ class Scan(Base):
         self.rollouts = self.home / '.codex' / 'sessions' / '2026' / '11' / '10'
         self.rollouts.mkdir(parents=True)
 
-    def reply(self, ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100):
-        return reply(ts, mid, sid, model, inp, out)
+    def reply(self, ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100, **more):
+        return reply(ts, mid, sid, model, inp, out, **more)
 
     owner = staticmethod(owner)
 
@@ -386,6 +386,99 @@ class Scan(Base):
         scan.write_text(json.dumps(j))
         self.run_cost()
         self.assertEqual(json.loads(scan.read_text())['h'][who].get(real), want, '会话记录一个都没了：以前算的全留着')
+
+    def hook(self, name, data):
+        """cca _session-start 账号目录名（Claude Code 的 SessionStart hook）：data 经 stdin 给。什么都不说、总是成功"""
+        r = subprocess.run([HELPER, 'session-start', name], input=data, env=self.dev.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''), 'hook 的 stdout 会进 Claude 的上下文：什么都不说')
+
+    def test_session_start(self):
+        """会话开始（cca 启动 Claude Code 时经 --settings 带的 hook）：会话 id 记进这个账号目录的 sessions.jsonl（600，追加）"""
+        adir = self.dev.cdir('bob(bob@example.com)').parent
+        adir.mkdir(parents=True)
+        log = adir / 'sessions.jsonl'
+        sid = 'aaaa1111-2222-4333-8444-555566667777'
+        ev = lambda sid, source='startup': json.dumps({'session_id': sid, 'transcript_path': '/w/x.jsonl', 'cwd': '/w',
+                                                        'hook_event_name': 'SessionStart', 'source': source})
+        t = time.time()
+        self.hook(adir.name, ev(sid))
+        self.hook(adir.name, ev(sid, 'resume'))
+        rows = [json.loads(x) for x in log.read_text().splitlines()]
+        self.assertEqual([(r['sid'], r['source']) for r in rows], [(sid, 'startup'), (sid, 'resume')])
+        self.assertTrue(all(t - 1 <= r['at'] <= time.time() + 1 and sorted(r) == ['at', 'sid', 'source'] for r in rows))
+        self.assertEqual(oct(log.stat().st_mode & 0o777), '0o600')
+        before = log.read_bytes()
+        for name, data in ((adir.name, 'not json'), (adir.name, json.dumps({'source': 'startup'})), (adir.name, ev('short')),
+                           (adir.name, ev('../../etc/passwd-0000')), (adir.name, json.dumps([1])), ('../' + adir.name, ev(sid)),
+                           ('Bob', ev(sid)), ('nobody-000000', ev(sid)), ('', ev(sid))):
+            self.hook(name, data)
+        self.assertEqual(log.read_bytes(), before, '不是会话的、账号目录不对的、不存在的：不记')
+        self.assertFalse((self.cca / 'accounts' / 'nobody-000000').exists(), '不建账号目录')
+        line = jl({'sid': 'b' * 36, 'at': 1.5, 'source': 'startup'})
+        log.write_text(line * (1100 * 1024 // len(line)))   # 超过 1 MB：先只留最后 512 KB（从整行开始），再接上
+        self.hook(adir.name, ev(sid, 'clear'))
+        rows = log.read_text().splitlines()
+        self.assertLessEqual(len(log.read_bytes()), 512 * 1024 + 200)
+        self.assertEqual([json.loads(x)['sid'] for x in rows[:-1]], ['b' * 36] * (len(rows) - 1), '留下的都是整行')
+        self.assertEqual((json.loads(rows[-1])['sid'], json.loads(rows[-1])['source']), (sid, 'clear'))
+
+    def marks(self, adir, *rows):
+        """账号目录里会话开始的记录（sessions.jsonl）：rows 是 (会话 id, 时间)"""
+        adir.mkdir(parents=True, exist_ok=True)
+        with open(adir / 'sessions.jsonl', 'a') as f:
+            f.write(jl(*({'sid': s, 'at': at, 'source': 'startup'} for s, at in rows)))
+
+    def test_marks(self):
+        """没有 session-owner 的回复（Claude Code 2.1.316 及以前）：按会话开始的记录认是哪个账号的。续接到别的账号下的以后算那个
+        账号的；有 session-owner 的照它；第三方 API 账号下开始的不算；还是认不出的记下为什么（诊断，不记条数）"""
+        t0, A, B = self.t0, 'alice(alice@example.com)', 'bob(bob@example.com)'
+        self.dev.write(self.cca / 'accounts.json', {A: 'US-A', B: 'US-B', 'kimi': {'id': 'kimi1', 'base_url': 'https://api.example.com/anthropic'}})
+        for key, u in ((A, U1), (B, U2)):
+            self.dev.write(self.dev.cdir(key) / '.claude.json', {'oauthAccount': {'accountUuid': u, 'emailAddress': key.split('(')[1][:-1]}})
+        old, new = {'version': '2.1.300', 'entrypoint': 'cli'}, {'version': '2.1.330', 'entrypoint': 'cli'}
+        self.marks(self.dev.cdir(A).parent, ('sess-aaa0', t0 - 60))
+        self.marks(self.dev.cdir(B).parent, ('sess-own0', t0 - 60), ('sess-aaa0', t0 + 3000))   # sess-aaa0 在 t0+3000 续接到 bob 下
+        self.marks(self.cca / 'accounts' / ident('kimi1'), ('sess-api0', t0 - 60))
+        with open(self.dev.cdir(A).parent / 'sessions.jsonl', 'a') as f:
+            f.write('{"broken\n[1]\n{"sid": "x", "at": 1}\n')   # 坏的行跳过
+        (self.proj / 'sess-aaa0.jsonl').write_text(jl(self.reply(t0, 'a1', sid='sess-aaa0', **old), self.reply(t0 + 3600, 'a2', sid='sess-aaa0', **old)))
+        sub = self.proj / 'sess-aaa0' / 'subagents'
+        sub.mkdir(parents=True)
+        (sub / 'agent-1.jsonl').write_text(jl(self.reply(t0 + 600, 'a3', sid='sess-aaa0')))
+        (self.proj / 'sess-own0.jsonl').write_text(jl(self.owner(U1, 'sess-own0'), self.reply(t0, 'o1', sid='sess-own0', **new)))
+        (self.proj / 'sess-api0.jsonl').write_text(jl(self.reply(t0, 'k1', sid='sess-api0', model='kimi-k2', **old)))
+        (self.proj / 'sess-app0.jsonl').write_text(jl(self.reply(t0 + 60, 'p1', sid='sess-app0', version='2.1.331', entrypoint='claude-desktop')))
+        (self.proj / 'sess-old0.jsonl').write_text(jl(self.reply(t0 + 120, 'q1', sid='sess-old0', version='2.1.316', entrypoint='cli')))
+        (self.proj / 'sess-new0.jsonl').write_text(jl(self.reply(t0 + 180, 'n1', sid='sess-new0', **new)))
+        s = self.scan()
+        one = [6000, 1, 1000, 100, 0, 0, 0]
+        self.assertEqual(self.total('claude:' + U1), [x * 3 for x in one], 'alice：sess-aaa0 续接以前的 a1、子代理的 a3（按会话认），有 session-owner 的 o1')
+        self.assertEqual(self.total('claude:' + U2), one, 'bob：sess-aaa0 续接到 bob 下以后的 a2')
+        self.assertEqual(self.total(None), [x * 3 for x in one], '认不出的：桌面 App 的、旧版和新版里没有记录的')
+        self.assertEqual(s.records, 7, '第三方 API 账号下开始的 k1 不算（也不算认不出的）')
+        d = self.j['diag']
+        self.assertEqual({k: v for k, v in d.items() if k != 'cc'}, {'claude_app': [t0 + 60, '2.1.331'], 'old_claude_code': [t0 + 120, '2.1.316'],
+                                                                     'unknown': [t0 + 180, '2.1.330']})
+        self.assertEqual(d['cc'], [t0 + 3600, '2.1.300'], '命令行最近用的 Claude Code 版本（桌面 App 的不算）')
+        local = self.dev.cost('local.json')
+        self.assertEqual(local['diag'], {'claude_code': '2.1.300', 'why': [
+            {'code': 'claude_app', 'last_epoch': t0 + 60, 'claude_code': '2.1.331'},
+            {'code': 'old_claude_code', 'last_epoch': t0 + 120, 'claude_code': '2.1.316'},
+            {'code': 'unknown', 'last_epoch': t0 + 180, 'claude_code': '2.1.330'}]}, '只有原因和最近一次，不记条数')
+        with open(self.proj / 'sess-old0.jsonl', 'a') as f:
+            f.write(jl(self.reply(t0 + 7200, 'q2', sid='sess-old0', version='2.1.316', entrypoint='cli')))
+        self.marks(self.dev.cdir(B).parent, ('sess-new0', t0 + 3600))
+        with open(self.proj / 'sess-new0.jsonl', 'a') as f:
+            f.write(jl(self.reply(t0 + 3700, 'n2', sid='sess-new0', **new)))
+        self.assertEqual(self.scan().records, 2)
+        self.assertEqual(self.total('claude:' + U2)[1], 2, '后来才有记录的会话：以后的回复认得出（以前算过的不改）')
+        self.assertEqual(self.j['diag']['old_claude_code'], [t0 + 7200, '2.1.316'])
+        self.assertEqual(self.j['diag']['unknown'], [t0 + 180, '2.1.330'])
+        j = self.dev.cost('scan.json')
+        j['diag'] = {'cc': 'x'}
+        (self.cca / 'cost' / 'scan.json').write_text(json.dumps(j))
+        self.assertEqual(self.scan().records, 0, '诊断不对：不要它，不为它从头重算')
+        self.assertNotIn('diag', self.j)
 
     def test_sync_command(self):
         r = self.dev.run('cost-sync', '--json')
@@ -604,7 +697,10 @@ class View(Base):
         self.assertEqual((len(me['days']), me['days'][-2]['usd'], me['days'][-1]['usd'], me['days'][-1]['date']), (30, 4.0, 5.0, '2026-11-13'),
                          '11 月 12 日只有 Codex 的 4（bob-mini 的不算）')
         self.assertEqual([d['start_epoch'] for d in me['days']], [d['start_epoch'] for d in t['days']])
-        self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1}, '认不出是谁的：最近 30 天的')
+        self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1, 'why': [], 'claude_code': None, 'claude_code_old': False},
+                         '认不出是谁的：最近 30 天的')
+        self.assertEqual((devs[0]['diag'], devs[1]['diag']), ({'cca': None, 'claude_code': None, 'claude_code_old': False, 'why': []}, None),
+                         '这台设备总有诊断（没有 local.json 的 diag 时是空的）；旧版 cca 的设备没有')
         self.assertEqual(t['scan']['state'], 'ready')
         quota = {'weeks': [{'start_epoch': self.NOW - 2 * 86400, 'end_epoch': self.NOW + 5 * 86400}]}
         q = self.view().account('claude', 'alice@example.com', quota, True, True)
@@ -622,6 +718,50 @@ class View(Base):
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['days_usd'], t['me']['days_usd'], t['me']['by_tool']['claude']['days_usd'], t['me']['by_tool']['claude']['average_usd']),
                          (8.0, 4.0, 0.0, None), 'me 里没有这个账号（金额是 0、没有平均），只有 Codex 的 4')
+
+    def test_diag(self):
+        """诊断：这台设备的（local.json 的 diag、cca 的版本）、别的设备传来的（dg）。最近 30 天有回复认不出账号的设备即使这个账号
+        没有数据也列出来（金额是 0）；这台设备没有数据时不列（它认不出的用量不一定是这个账号的）"""
+        day = lambda t: t // 86400 * 86400
+        self.local['diag'] = {'claude_code': '2.1.330', 'why': [{'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'},
+                                                                 {'code': 'claude_app', 'last_epoch': self.NOW - 40 * 86400}]}
+        slot = self.remote['acc']['claude:alice@example.com']
+        why = lambda age, code='old_claude_code': {'code': code, 'last_epoch': day(self.NOW - age), 'claude_code': '2.1.316'}
+        slot['SHA256:bob']['dg'] = {'cca': '3.6.0', 'claude_code': '2.1.316', 'why': [why(2 * 86400)]}
+        slot['SHA256:erin'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'erin-mini', 'revoked': False, 'tag': 't5',
+                               'dg': {'cca': '3.6.0', 'why': [why(86400, 'claude_app')]}}
+        slot['SHA256:fred'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'fred-mini', 'revoked': False, 'tag': 't6',
+                               'dg': {'why': [why(40 * 86400)]}}   # 30 天以前的：不提
+        slot['SHA256:gus'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'gus-mini', 'revoked': False, 'tag': 't7'}
+        slot['SHA256:hal'] = {'h': {}, 'um': [], 'at': self.NOW - 600, 'name': 'hal-mini', 'revoked': False, 'tag': 't8',
+                              'dg': {'cca': 'bad version!', 'why': [{'code': 'Bad Code', 'last_epoch': self.NOW}, {'code': 'x', 'last_epoch': 'y'}]}}
+        self.write()
+        self.dev.env['CCA_VERSION'] = '3.6.0'
+        cv = self.view()
+        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        devs = {d['name']: d for d in a['devices']}
+        self.assertEqual(list(devs), ['alice-mbp', 'bob-mini', 'carol-air', 'erin-mini'], '没有数据的只列最近有回复认不出账号的')
+        self.assertEqual(devs['alice-mbp']['diag'], {'cca': '3.6.0', 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
+            {'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'}]}, '30 天以前的不提')
+        self.assertEqual(devs['bob-mini']['diag'], {'cca': '3.6.0', 'claude_code': '2.1.316', 'claude_code_old': True, 'why': [why(2 * 86400)]},
+                         '命令行里还在用旧版的 Claude Code：cca 标出来（App 据此提醒更新）')
+        self.assertEqual(devs['carol-air']['diag'], None)
+        e = devs['erin-mini']
+        self.assertEqual((e['summary']['days_usd'], sum(e['days_usd']), e['diag']['why'][0]['code']), (0.0, 0.0, 'claude_app'))
+        self.assertEqual((a['summary']['days_usd'], a['since_epoch']), (19.0, float(self.at(2026, 10, 1, 10))), '合计、从哪天有数据照旧')
+        t = cv.total(['claude'])
+        self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1, 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
+            {'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'}]})
+        self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '整个账号都没有数据：照旧是 None')
+        self.local['acc']['claude:' + U1] = {}
+        self.write()
+        a = self.view().account('claude', 'alice(alice@example.com)', None, True, True)
+        self.assertNotIn('alice-mbp', [d['name'] for d in a['devices']], '这台设备没有这个账号的数据：有诊断也不列')
+        self.local['diag'] = {'why': 'x'}
+        self.write()
+        cv = self.view()
+        cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        self.assertEqual(cv.total(['claude'])['unattributed']['why'], [], 'diag 不对：当没有')
 
     def test_sync_states(self):
         C, k = 'claude', 'alice(alice@example.com)'
@@ -715,7 +855,7 @@ class Crypto(Base):
         b = self.upload(a)
         now = time.time()
         doc = sw.cost_open(k, aid, a.fp, b)   # 和文档写的一样的密钥、认证里带的东西：照文档能解开
-        self.assertEqual(doc, {'v': 1, 'at': doc['at'], 'h': {str(hour): [6000, 2, 2000, 200, 0, 0, 1]}, 'um': ['claude-x']})
+        self.assertEqual(doc, {'v': 1, 'at': doc['at'], 'h': {str(hour): [6000, 2, 2000, 200, 0, 0, 1]}, 'um': ['claude-x'], 'dg': {'why': []}})
         self.assertTrue(now - 600 < doc['at'] <= now)   # 传的时候的时间
         self.assertEqual((doc['h'], doc['um']), content(a.cost('local.json'), 'claude', 'alice@example.com'), '传的是这台设备统计好的那一份')
         self.assertIsNone(sw.unseal(sw.COST, sw.derive(sw.KEYSHARE, salt, 'claude', 'alice@example.com', U1), [aid, a.fp], b), '和共享 API key 的密钥不通')
@@ -735,7 +875,7 @@ class Crypto(Base):
             if accept is not None:
                 want[f] = dict(accept, tag='t-' + label, name=label, revoked=False)
 
-        row('alice-mbp', b, a.fp, {'at': doc['at'], 'h': doc['h'], 'um': ['claude-x']})
+        row('alice-mbp', b, a.fp, {'at': doc['at'], 'h': doc['h'], 'um': ['claude-x'], 'dg': {'why': []}})
         seal = lambda label, d, keys=k, aid_=aid, fp_=None, **kw: sw.cost_seal(keys, aid_, fp_ or fp(label), d, **kw)
         spec = {'v': 1, 'at': now, 'h': {'1794567600': [1, 2, 3, 4, 5, 6, 0]}, 'um': ['claude-x']}
         row('spec', seal('spec', spec), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 照文档封的 cca 也认
@@ -761,13 +901,19 @@ class Crypto(Base):
         um = ['ok-model', 5, 'x' * 65, 'bad\nname'] + ['m%d' % i for i in range(40)]
         row('models', seal('models', {'v': 1, 'at': now, 'h': {}, 'um': um}),
             accept={'at': now, 'h': {}, 'um': ['ok-model'] + ['m%d' % i for i in range(31)]})   # 没有标价的模型名：只收能显示的、最多 32 个
+        dg = {'cca': '3.6.0', 'claude_code': 'x' * 33, 'more': 1, 'why': [{'code': 'old_claude_code', 'last_epoch': 1794528000, 'claude_code': '2.1.316'},
+                                                                            {'code': 'claude_app', 'last_epoch': now + 3 * 86400}, {'code': 'Bad'}, 'x'] +
+              [{'code': 'unknown', 'last_epoch': 1794528000}] * 10}
+        row('diag', seal('diag', dict(spec, dg=dg)), accept={'at': now, 'h': spec['h'], 'um': ['claude-x'], 'dg': {'cca': '3.6.0', 'why': [
+            {'code': 'old_claude_code', 'last_epoch': 1794528000, 'claude_code': '2.1.316'}] + [{'code': 'unknown', 'last_epoch': 1794528000}] * 4}})
+        row('bad-diag', seal('bad-diag', dict(spec, dg='x')), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 诊断不对：只是不要它
         row('bomb', seal('bomb', None, raw=zlib.compress(b'{"v":1,"um":["' + b'x' * (5 << 20) + b'"]}')))   # 解压出来太大的不要
         row('lie', sw.seal(sw.COST, k, [aid, fp('lie')], (5000).to_bytes(4, 'big') + bytes(1020)))   # 长度比内容长
         bob = self.device('bob-mini', 32)
         self.serve(bob, rows)
         self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
         got = bob.cost('remote.json')['acc']['claude:alice@example.com']
-        self.assertEqual(sorted(e['name'] for e in got.values()), ['alice-mbp', 'models', 'spec'], '别的都不认')
+        self.assertEqual(sorted(e['name'] for e in got.values()), ['alice-mbp', 'bad-diag', 'diag', 'models', 'spec'], '别的都不认')
         self.assertEqual(got, want)
 
         # 小时很多的：14 周每个小时都有记录也放得下；压缩不了的放不下，去掉最早的直到放得下

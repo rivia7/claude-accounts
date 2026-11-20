@@ -1288,6 +1288,12 @@ final class AppModel {
         }
     }
 
+    /// 换上自定义代理：App 里的提问会话（粘贴代理链接；配置了路由器的接着同步，要重启 OpenClash / ShellCrash 时 cca 在会话里先问）。
+    func useCustomProxy(_ a: Account) {
+        guard a.can.customProxy else { return }
+        run(.customProxy(prefix: prefix(a.tool), key: a.key, name: a.displayName))
+    }
+
     /// 记下 / 更换 API key：App 里的提问会话（密文框），cca 存进钥匙串。官方账号的只是备查，cca 不拿它启动。
     func recordAPIKey(_ a: Account) {
         run(.apiKey(prefix: prefix(a.tool), key: a.key, name: a.displayName, record: !a.isAPI))

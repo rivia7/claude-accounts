@@ -37,13 +37,22 @@ def near_now(m):
     return '"%s":<NOW>' % m.group(1) if any(abs(v - (time.time() + off)) < 900 for off in (0, 6 * 3600)) else m.group(0)
 
 
+# 切换以后新加的诊断（PROTOCOL 2.2 的 devices[].diag、cost_total.unattributed 的 why、claude_code、claude_code_old，scan.json、local.json
+# 的 diag）原来的 Python 没有：去掉了再比。传给别的设备的那份带着诊断（dg），它的摘要（sync.json 的 sum）也不一样。新的行为在
+# tests/cost_view.py、回归里测
+DIAG_MASK = [
+    (r',"diag":\{(?:[^{}]|\{[^{}]*\})*\}', ''), (r', "diag": (?:null|\{(?:[^{}]|\{[^{}]*\})*\})', ''),
+    (r', "why": \[(?:[^\[\]{}]|\{[^{}]*\})*\], "claude_code": (?:null|"[^"]*"), "claude_code_old": (?:true|false)', ''),
+    (r'"sum":"[0-9a-f]{16}"', '"sum":"<SUM>"'),
+]
 CMASK = MASK + [
     (r'"ino":\d+', '"ino":<I>'), (r'"(updated_epoch|generated_epoch)": \d+\.\d+', r'"\1": <T>'),
     (r'"(at|ok_at|up_at|checked|retry)":(\d+\.\d+)', near_now), (r'"(checked_epoch)": (\d+\.\d+)', near_now),
     (r':"[A-Za-z0-9+/]{43}="', ':"<TAG>"'),                                   # 这台设备自己传上去的那份的认证码（每次不一样）
     (r'"used_epoch":\d+', '"used_epoch":<T>'),                               # 现在减去服务器说的“多久以前用过”
     (r'"n": "[^"]+", "c": "[^"]+", "t": "[^"]+"', '<BLOB>'),      # 夹具里别的设备的密文（before 里现算的，两边各算一遍）
-]
+] + DIAG_MASK
+
 
 
 def iso(t, frac='.123'):
@@ -591,7 +600,7 @@ def _(b):
 
 
 def scan_json(b, **over):
-    j = {'v': 1, 'build': '2026-11-13/1', 'done': True, 'files': {}, 'seen': {}, 'owners': {}, 'h': {}, 'orphan': {}, 'um': {}, 'who': {}}
+    j = {'v': 1, 'build': '2026-11-13/2', 'done': True, 'files': {}, 'seen': {}, 'owners': {}, 'h': {}, 'orphan': {}, 'um': {}, 'who': {}}
     j.update(over)
     for k in [k for k, v in j.items() if v is Ellipsis]:
         del j[k]
@@ -906,7 +915,7 @@ def _(b):
     rnd = random.Random(7)
     for i in range(14 * 7 * 24 - 30):
         rows[str(int((NOW - 14 * W) // 3600 * 3600) + (i + 30) * 3600)] = [rnd.randrange(10 ** 12), rnd.randrange(10 ** 6), rnd.randrange(10 ** 9), rnd.randrange(10 ** 9), rnd.randrange(10 ** 9), rnd.randrange(10 ** 9), 0]
-    b.write('.cca/cost/scan.json', dumps({'v': 1, 'build': '2026-11-13/1', 'done': True, 'files': {}, 'seen': {}, 'owners': {}, 'h': {'claude:' + U1: rows}, 'orphan': {}, 'um': {}, 'who': {}}))
+    b.write('.cca/cost/scan.json', dumps({'v': 1, 'build': '2026-11-13/2', 'done': True, 'files': {}, 'seen': {}, 'owners': {}, 'h': {'claude:' + U1: rows}, 'orphan': {}, 'um': {}, 'who': {}}))
     os.chmod(b.path('.cca/cost'), 0o700)
     ledger(b)
     ledger(b, nth=2)

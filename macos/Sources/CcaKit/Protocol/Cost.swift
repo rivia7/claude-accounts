@@ -52,6 +52,86 @@ struct CostScanState: KnownValues {
     static let allKnown: [CostScanState] = [.ready, .scanning, .never]
 }
 
+/// `devices[].diag.why[].code`、`cost_total.unattributed.why[].code`：为什么有 Claude 的回复认不出是哪个账号的。
+/// 不认识的值当 `unknown` 说（`shown`）。
+struct CostWhyCode: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    /// Claude Code 2.1.317 以前的版本：会话不带账号信息，又不是经 cca 启动的（经 cca 启动的，cca 记下了是哪个账号）
+    static let oldClaudeCode = CostWhyCode(rawValue: "old_claude_code")
+    /// Claude App 里的 Code 会话：从来不带账号信息
+    static let claudeApp = CostWhyCode(rawValue: "claude_app")
+    /// 别的：新版 Claude Code 也没带账号信息（登录的不是 cca 里的账号、不是经 cca 启动的……）
+    static let unknown = CostWhyCode(rawValue: "unknown")
+    static let allKnown: [CostWhyCode] = [.oldClaudeCode, .claudeApp, .unknown]
+
+    /// 界面按哪种说：不认识的值当 unknown
+    var shown: CostWhyCode { isKnown ? self : .unknown }
+}
+
+/// 有回复认不出是哪个账号的一个原因（`devices[].diag.why[]`、`cost_total.unattributed.why[]`）：最近一次是什么时候、那时的
+/// Claude Code 版本。没有条数（别的设备传来的时间只到天）
+struct CostWhy: Decodable, Sendable, Equatable {
+    var code: CostWhyCode
+    var lastEpoch: Double
+    var claudeCode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case lastEpoch = "last_epoch"
+        case claudeCode = "claude_code"
+    }
+
+    init(code: CostWhyCode, lastEpoch: Double, claudeCode: String? = nil) {
+        self.code = code
+        self.lastEpoch = lastEpoch
+        self.claudeCode = claudeCode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let code = nonEmpty(c.string(.code)), let at = c.double(.lastEpoch) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "cost why without code/last_epoch"))
+        }
+        self.code = CostWhyCode(rawValue: code)
+        lastEpoch = at
+        claudeCode = nonEmpty(c.string(.claudeCode))
+    }
+}
+
+/// `devices[].diag`：一台设备的诊断（别的设备传来的；这台设备的是本机统计的）。旧版 cca 的设备没有（null）
+struct CostDiag: Decodable, Sendable, Equatable {
+    /// 那台设备的 cca 版本
+    var cca: String?
+    /// 那台设备命令行里最近用的 Claude Code 版本
+    var claudeCode: String?
+    /// claudeCode 还是不带账号信息的旧版本：要更新（cca 比的版本，App 不比）
+    var claudeCodeOld: Bool
+    /// 最近 30 天里有回复认不出账号的原因（空的：都认得出）
+    var why: [CostWhy]
+
+    enum CodingKeys: String, CodingKey {
+        case cca, why
+        case claudeCode = "claude_code"
+        case claudeCodeOld = "claude_code_old"
+    }
+
+    init(cca: String? = nil, claudeCode: String? = nil, claudeCodeOld: Bool = false, why: [CostWhy] = []) {
+        self.cca = cca
+        self.claudeCode = claudeCode
+        self.claudeCodeOld = claudeCodeOld
+        self.why = why
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cca = nonEmpty(c.string(.cca))
+        claudeCode = nonEmpty(c.string(.claudeCode))
+        claudeCodeOld = c.bool(.claudeCodeOld) ?? false
+        why = c.lossyArray(CostWhy.self, .why) ?? []
+    }
+}
+
 /// `cost sync --json` 的 `sync.state`：这一次和别的设备同步得怎么样。
 struct CostSyncRunState: KnownValues {
     let rawValue: String
@@ -238,6 +318,8 @@ struct CostDevice: Sendable, Equatable, Identifiable {
     var weeksUSD: [Double]
     var daysUSD: [Double]
     var summary: CostSummary
+    /// 那台设备的诊断：有没有回复认不出账号、为什么（旧版 cca 的设备没有）。最近有认不出的设备没有这个账号的记录也列出来（数字都是 0）
+    var diag: CostDiag? = nil
 }
 
 /// `devices[]` 原样解码（数组按位置留着，交给 AccountCost 和 weeks、days 对齐）。
@@ -251,9 +333,10 @@ private struct RawCostDevice: Decodable {
     var weeks: [Double?]
     var days: [Double?]
     var summary: CostSummary
+    var diag: CostDiag?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, me, revoked, stale, summary
+        case id, name, me, revoked, stale, summary, diag
         case syncedEpoch = "synced_epoch"
         case weeksUSD = "weeks_usd"
         case daysUSD = "days_usd"
@@ -274,6 +357,7 @@ private struct RawCostDevice: Decodable {
         weeks = (c.positional(CostNumber.self, .weeksUSD) ?? []).map { $0?.value }
         days = (c.positional(CostNumber.self, .daysUSD) ?? []).map { $0?.value }
         summary = c.lossy(CostSummary.self, .summary) ?? CostSummary()
+        diag = c.lossy(CostDiag.self, .diag)
     }
 
     /// 按账号的 weeks、days 解码后留下的下标取值（缺的、坏的是 0）
@@ -282,7 +366,7 @@ private struct RawCostDevice: Decodable {
             order.map { i in i < raw.count ? max(raw[i] ?? 0, 0) : 0 }
         }
         return CostDevice(id: id, name: name, isMe: isMe, revoked: revoked, syncedEpoch: syncedEpoch, stale: stale,
-                          weeksUSD: pick(weeks, w), daysUSD: pick(days, d), summary: summary)
+                          weeksUSD: pick(weeks, w), daysUSD: pick(days, d), summary: summary, diag: diag)
     }
 }
 
@@ -469,20 +553,29 @@ struct CostScan: Decodable, Sendable, Equatable {
     }
 }
 
-/// `cost_total.unattributed`：最近 30 天里认不出是哪个账号的用量（旧版 Claude Code、桌面 App 里的会话），没算进合计。
+/// `cost_total.unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（旧版 Claude Code、桌面 App 里的会话），没算进合计；
+/// 为什么认不出、命令行里最近用的 Claude Code 是不是太旧（旧版 cca 没有：why 空的、claudeCodeOld 是 false）。
 struct CostUnattributed: Decodable, Sendable, Equatable {
     var daysUSD: Double
     var requests: Int
+    var why: [CostWhy]
+    var claudeCode: String?
+    var claudeCodeOld: Bool
 
     enum CodingKeys: String, CodingKey {
         case daysUSD = "days_usd"
-        case requests
+        case requests, why
+        case claudeCode = "claude_code"
+        case claudeCodeOld = "claude_code_old"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         daysUSD = max(c.double(.daysUSD) ?? 0, 0)
         requests = max(c.int(.requests) ?? 0, 0)
+        why = c.lossyArray(CostWhy.self, .why) ?? []
+        claudeCode = nonEmpty(c.string(.claudeCode))
+        claudeCodeOld = c.bool(.claudeCodeOld) ?? false
     }
 }
 

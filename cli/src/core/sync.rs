@@ -12,9 +12,13 @@ use crate::py::hash::sha1_hex;
 use crate::py::json;
 use crate::py::obj::{Dict, List, V};
 
-/// 路由器端口池的内容：各工具走节点的账号（直连的第三方 API 账号不占槽位）。有维护者的参考节点时带上 fill：
-/// 路由器生成运行配置时把缺的补上（没有参考节点时和以前逐字节一样）
+/// 路由器端口池的内容：各工具走节点的账号（直连的第三方 API 账号不占槽位）。有维护者的参考节点时带上 fill、
+/// 可选节点里有自定义节点时带上 custom（路由器把缺的写进配置文件），用自定义节点的槽位带上它的 ck（`custom_ck`）；
+/// 都没有时和以前逐字节一样
 pub fn router_accounts(c: &Dict) -> Dict {
+    use crate::cmd::corenet::{custom_cks, custom_fill, slot_ck};
+    let custom = custom_fill(c);
+    let cks = custom_cks(custom.as_ref());
     let accounts: Vec<V> = pool(c)
         .into_iter()
         .map(|(tool, k, v, p)| {
@@ -22,12 +26,17 @@ pub fn router_accounts(c: &Dict) -> Dict {
                 Some(n) => V::Int(n - FIRST_PORT + 1),
                 None => panic!("TypeError: 端口不是整数（{}）", p.py_repr()),
             };
-            V::Dict(dict! { "slot" => slot, "name" => format!("{}{}", tool.pool_prefix, acct_id(&k, tool)), "node" => node_of(&v) })
+            let e = dict! { "slot" => slot, "name" => format!("{}{}", tool.pool_prefix, acct_id(&k, tool)), "node" => node_of(&v) };
+            slot_ck(&e, &cks);
+            V::Dict(e)
         })
         .collect();
     let out = dict! { "base" => FIRST_PORT - 1, "slots" => pool_size(c), "nodes" => c.at("nodes"), "accounts" => List::from_vec(accounts) };
     if let Some(f) = policy_fill() {
         out.set("fill", f);
+    }
+    if let Some(f) = custom {
+        out.set("custom", f);
     }
     out
 }

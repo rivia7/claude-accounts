@@ -183,6 +183,7 @@ struct TutorialCard {
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
             ("checkmark.shield", "第一次用某个账号，先点「检测出口」：看看出口在哪、纯净度怎么样、DNS / WebRTC 有没有泄露风险。之后会在后台定时重测。"),
             ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
+            ("link.badge.plus", "维护者没固定节点的账号，可以点「自定义代理…」改走你自己的代理：粘贴 socks5://、http:// 地址或分享链接。"),
         ], art: .route),
         TutorialCard(title: "节点分流", points: [
             ("wifi.router", "「节点分流」页画出每个账号经路由器连到哪个节点。"),

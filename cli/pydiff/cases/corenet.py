@@ -488,7 +488,7 @@ def check(name, text, tool='claude', env=None, argv=(), **kw):
 
 # 每种链接、每种写法各一两个，每句报错至少一个（解析的全部对照在 cli/tests/vectors/corenet.json）
 PARSE = [
-    ('empty', ''), ('blank', ' \n\t\n'), ('ssr', 'ssr://abcdef'), ('ssr-upper', 'SSR://abcdef'), ('not-a-link', 'http://example.com/'),
+    ('empty', ''), ('blank', ' \n\t\n'), ('ssr', 'ssr://abcdef'), ('ssr-upper', 'SSR://abcdef'), ('not-a-link', 'ftp://example.com/'),
     ('vmess', vm()), ('vmess-grpc', vm(net='grpc', path='svc')), ('vmess-tcp-no-tls', vm(net='tcp', tls='', sni='')), ('vmess-int-fields', vm(port=8443, aid=2)),
     ('vmess-urlsafe-no-padding', 'vmess://' + b64(dict(VM, ps='？？？>>>'), urlsafe=True, pad=False)), ('vmess-upper-scheme', 'VMESS://' + b64(VM)),
     ('vmess-wrapped', 'vmess://' + b64(VM)[:30] + '\n' + b64(VM)[30:] + '\n'), ('vmess-not-base64', 'vmess://!!!'), ('vmess-one-char', 'vmess://a'),
@@ -590,7 +590,7 @@ check('name/from-yaml-number', 'name: 5\ntype: ss\nserver: s\nport: 1')
 check('name/appended-last-when-missing', 'type: ss\nserver: s\nport: 1\ncipher: none')
 check('codex', vm(), tool='codex', codex={'erin@example.com': 'HK-A'})
 check('readonly', vm(), env={'CCA_RO': '1'})
-check('args', vm(), argv=['x'])
+check('args', vm(), argv=['JP-X', 'JP-X-2'])   # 要避开的名字（在家时路由器上的）：起成 JP-X-3
 
 
 @case('node-check/cache-proxies-not-a-list', ['node-check'], stdin=NAMED + 'US-C', env=ENV)

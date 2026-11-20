@@ -84,7 +84,7 @@ pub fn arg<'a>(args: &'a [String], i: usize, default: &'a str) -> &'a str {
     args.get(i).map_or(default, |s| s.as_str())
 }
 
-/// 原来的 `CMDS` 里的名字，先后照它（主干增删子命令时跟着改）
+/// 原来的 `CMDS` 里的名字，先后照它（主干增删子命令时跟着改）；切换以后新加的接在相关的后面（session-start）
 #[cfg(test)]
 pub const NAMES: &[&str] = &[
     "init",
@@ -118,6 +118,7 @@ pub const NAMES: &[&str] = &[
     "accounts-json",
     "router-merge",
     "router-evict",
+    "custom-clashes",
     "slot-name",
     "ports",
     "select-lines",
@@ -152,6 +153,7 @@ pub const NAMES: &[&str] = &[
     "node-save",
     "node-ls",
     "node-rm",
+    "node-rename",
     "core-stale",
     "core-keep",
     "install-env",
@@ -195,6 +197,7 @@ pub const NAMES: &[&str] = &[
     "nodes-lost",
     "edit-form",
     "edit-apply",
+    "node-assign",
     "policy-request",
     "policy-lock",
     "policy-rows",
@@ -223,6 +226,7 @@ pub const NAMES: &[&str] = &[
     "cost-worker",
     "cost-sync",
     "cost-stop",
+    "session-start",
     "prompt-emit",
     "check-render",
     "mail-setup",
@@ -244,15 +248,15 @@ mod tests {
 
     #[test]
     fn names_are_the_original_cmds() {
-        assert_eq!(NAMES.len(), 149);
+        assert_eq!(NAMES.len(), 153);
         let mut names = NAMES.to_vec();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 149);
-        assert_eq!((NAMES[0], NAMES[148]), ("init", "gui-mail-list"));
+        assert_eq!(names.len(), 153);
+        assert_eq!((NAMES[0], NAMES[152]), ("init", "gui-mail-list"));
     }
 
-    /// 原来的 149 个子命令一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）；没有登记两次的
+    /// 原来的 149 个子命令（加上切换以后新加的）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）；没有登记两次的
     #[test]
     fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();

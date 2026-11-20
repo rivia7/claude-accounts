@@ -32,6 +32,18 @@ CASES = []
 
 _ORACLE = {}
 PY_HEAD = "PY_SRC=$(cat <<'PY'\n"
+# 对照的 Python 上打的补丁：切换以后有意改了的常量（docs/dev/rust.md「测试」：改了行为的子命令，用例删掉或改掉）。每一处都核对原文，
+# 对不上（取的提交换了）就报错。改了的行为本身在 cargo test、tests/*.py、回归里测
+ORACLE_PATCHES = [
+    # 折合金额读会话记录的规则变了（按会话开始的记录认账号、记下诊断），scan.json 要从头重算一遍：两边用同一个 build，别的照旧比
+    ("COST_BUILD = COST_PRICES_DATE + '/1'", "COST_BUILD = COST_PRICES_DATE + '/2'"),
+    # 内置代理的节点定义：同名时以本机的自定义节点为准（排在拷来的前面；自定义节点写进路由器以后，拷来的里面也有它）
+    ("    px = [p for p in core_cache().get('proxies', []) if isinstance(p, dict) and isinstance(p.get('name'), str)] + core_custom()",
+     "    px = core_custom() + [p for p in core_cache().get('proxies', []) if isinstance(p, dict) and isinstance(p.get('name'), str)]"),
+    # node-check 后面可以跟要避开的名字（在家时路由器上全部节点和策略组的名字）
+    ('def cmd_node_check():', 'def cmd_node_check(*extra):'),
+    ('    while not node_name_free(c, name):', '    while name in extra or not node_name_free(c, name):'),
+]
 
 
 def oracle_cca():
@@ -48,6 +60,10 @@ def oracle_cca():
             if got.returncode != 0:
                 sys.exit('对照用的 cca 取不出来（git show %s:cca）：%s' % (rev, got.stderr.decode('utf-8', 'replace').strip()))
             text = got.stdout.decode('utf-8')
+            for old, new in ORACLE_PATCHES:
+                if text.count(old) != 1:
+                    sys.exit('对照用的 cca 里找不到要打补丁的地方（%d 处）：%s' % (text.count(old), old))
+                text = text.replace(old, new)
             d = tempfile.mkdtemp(prefix='cca-oracle.')
             import atexit
             atexit.register(shutil.rmtree, d, True)

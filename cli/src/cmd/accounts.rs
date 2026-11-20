@@ -46,6 +46,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("edit-form", cmd_edit_form),
     Cmd::all("edit-apply", cmd_edit_apply),
     Cmd::all("sync-state", cmd_sync_state),
+    Cmd::all("node-assign", cmd_node_assign),
 ];
 
 /// 每个账号都输出全部变量（不适用的为空）：bash 里循环 eval 时不会留着上一个账号的值。
@@ -140,10 +141,28 @@ pub fn api_env(v: &Dict) -> Dict {
 }
 
 /// 第三方 API 账号的 claude --settings：key 由 apiKeyHelper 现取（回调 cca _api-key，不进环境变量），
-/// 地址、模型写在 env 里。--settings 的优先级高于共享的 settings.json 和进程环境，谁也盖不掉它们
+/// 地址、模型写在 env 里。--settings 的优先级高于共享的 settings.json 和进程环境，谁也盖不掉它们。另带着 session_hook
 pub fn api_settings(key: &str, v: &Dict) -> String {
     let helper = format!("{} _api-key {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, t())));
-    json::dumps(&V::Dict(dict! { "apiKeyHelper" => helper, "env" => api_env(v) }), json::LINE)
+    let settings = dict! { "apiKeyHelper" => helper, "env" => api_env(v) };
+    if let Some(h) = session_hook(key) {
+        settings.set("hooks", h);
+    }
+    json::dumps(&V::Dict(settings), json::LINE)
+}
+
+/// 经 --settings 交给 Claude Code 的 hooks：SessionStart（会话开始、续接、/clear、压缩以后）回调 cca _session-start 账号目录名，
+/// 把会话 id 记进这个账号目录的 sessions.jsonl（cost.rs 的 cmd_session_start）。折合金额靠它认出没有 session-owner 的会话
+/// 是哪个账号的（Claude Code 2.1.316 及以前不写 session-owner），第三方 API 账号的会话靠它不算进来。
+/// 和用户自己的 settings.json 里的 hook 一起跑（--settings 不顶掉它们，实测 2.1.328），/hooks 里看得到这一条；
+/// 用户自己再写 --settings 时 Claude Code 只认后写的那个，这一条就没了（那些会话照旧按 session-owner 认）。折合金额关掉了不加
+pub fn session_hook(key: &str) -> Option<Dict> {
+    if !super::cost::cost_on() {
+        return None;
+    }
+    let command = format!("{} _session-start {}", sh_quote(&SELF_PATH), sh_quote(&acct_id(key, t())));
+    let hook = dict! { "type" => "command", "command" => command, "timeout" => 10 };
+    Some(dict! { "SessionStart" => crate::list![dict! { "hooks" => crate::list![hook] }] })
 }
 
 /// ~/.cca 里绝不给 Claude 读写的（在不在工作目录里都挡，用户同意了、bypassPermissions 时也一样）：登录凭证和浏览器资料（映射 deploy key
@@ -1162,6 +1181,54 @@ pub fn cmd_edit_apply(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// 账号能不能自己换出口（cca [codex|agy] node use）：维护者的映射固定了节点的官方账号不能
+pub fn node_free(key: &str, v: &V, pm: &Dict) -> bool {
+    let email = parse_key(key).1;
+    is_api(v) || email.is_empty() || !pm.has(&email.to_lowercase())
+}
+
+/// cca [codex|agy] node use 账号 的一头一尾：只给账号（key 是 bash 经 resolve 找好的）时只查能不能换（维护者固定了节点的
+/// 退出码 3，stdout 是原因）；再给节点时把这个账号改走它（第三方 API 账号改 node），打印 changed / same。节点要在可选节点里
+pub fn cmd_node_assign(args: &[String]) -> R<()> {
+    arity("cmd_node_assign", args, 1, 2)?;
+    let tool = t();
+    let (c, table, _) = ctx()?;
+    let key = args[0].as_str();
+    let Some(v) = table.get(key) else {
+        return die(format!("没找到账号：{key}"));
+    };
+    if !node_free(key, &v, &policy_map(tool, Some(&c))) {
+        out!("维护者的映射固定了 {} 的出口节点，不能换成自定义代理", name_of(key));
+        return exit(3);
+    }
+    let Some(node) = args.get(1) else {
+        return Ok(());
+    };
+    if !c.at("nodes").as_list().is_some_and(|l| l.items().iter().any(|n| n.as_str() == Some(node))) {
+        return die(format!("节点「{node}」不在可选列表"));
+    }
+    let new = Dict::new();
+    for (k, w) in table.items() {
+        if &*k != key {
+            new.set(k, w);
+        } else if let Some(d) = w.as_dict().filter(|_| is_api(&w)) {
+            let d = d.copy();
+            d.set("node", node.as_str());
+            new.set(k, d);
+        } else {
+            new.set(k, node.as_str());
+        }
+    }
+    if V::Dict(new.clone()).py_eq(&V::Dict(table)) {
+        out!("same");
+        return Ok(());
+    }
+    save_json(&tool.table, &V::Dict(new), Some(0o600), true)?;
+    ctx()?; // 重新对账（直连改走节点时分配端口）
+    out!("changed");
+    Ok(())
+}
+
 /// NO_PROXY 写法 → Chromium --proxy-bypass-list 写法（和 Claude App 自己的转换一致）
 pub fn bypass_list(no_proxy: &str) -> String {
     let mut out = Vec::new();
@@ -1191,12 +1258,17 @@ impl Tool {
     /// `T.run_args(key, v)`：启动账号时加在用户参数前面的
     pub fn run_args(&self, key: &str, v: &V) -> Vec<String> {
         match self.kind {
-            // 这个账号自己的目录加成工作目录（cca_dir_args）；第三方 API 账号再加 --settings（地址、模型和 apiKeyHelper）
+            // 这个账号自己的目录加成工作目录（cca_dir_args）；再加 --settings：记下会话是哪个账号的 hook（session_hook），
+            // 第三方 API 账号的还有地址、模型和 apiKeyHelper
             Kind::Claude => {
                 let mut out = cca_dir_args(key);
-                if let Some(d) = v.as_dict() {
+                let settings = match v.as_dict() {
+                    Some(d) => Some(api_settings(key, &d)),
+                    None => session_hook(key).map(|h| json::dumps(&V::Dict(dict! { "hooks" => h }), json::LINE)),
+                };
+                if let Some(s) = settings {
                     out.push("--settings".to_string());
-                    out.push(api_settings(key, &d));
+                    out.push(s);
                 }
                 out
             }
@@ -1227,6 +1299,20 @@ fn probe_flags(x: &Dict) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_free_only_blocks_accounts_the_mapping_pins() {
+        // cca node use、can.custom_proxy：维护者的映射固定了节点的官方账号不能换（邮箱不分大小写）；映射里没有的、键里没有邮箱的、
+        // 第三方 API 账号（映射只管官方账号）都能换
+        let pm = json::loads(r#"{"alice@example.com": "US-A"}"#).unwrap().as_dict().unwrap();
+        let official = V::from("US-B");
+        let api = json::loads(r#"{"base_url": "https://api.example.com", "node": "US-A"}"#).unwrap();
+        assert!(!node_free("alice@example.com", &official, &pm));
+        assert!(!node_free("工作(Alice@Example.com)", &official, &pm));
+        assert!(node_free("bob@example.com", &official, &pm));
+        assert!(node_free("工作", &official, &pm));
+        assert!(node_free("接口(alice@example.com)", &api, &pm));
+    }
 
     #[test]
     fn api_env_never_carries_reserved_names() {

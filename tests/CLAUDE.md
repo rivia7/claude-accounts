@@ -16,3 +16,4 @@
 - 不经 `run`、自己拼 `env -i` 运行 cca 的地方（真终端的那种、另一个 HOME 的 `r3` / `r4` / `rs`）要带上 `CCA_HELPER="$HELPERWRAP"`：不带的话那一处用的是仓库里 `cli/target/release` 下的那一份，`release.sh` 跑回归时（`CCA_HELPER` 指着要发布的那一份）测的就不是同一份了。有 lint 守着；想自己验证就照 `release.sh` 的方式在一份不带 `cli/target` 的仓库拷贝里跑
 - 测试辅助脚本只用沙箱里的路径，不能靠 `$HOME`：在 `run` 外面直接调用时 `$HOME` 是真实的主目录（会碰到真的 `~/.cca`、`~/.claude` 等）
 - 菜单行很宽：要看行尾的内容时用 `run COLUMNS=160 …`（`tput cols` 认 `COLUMNS`）
+- 断言（`ok` 的第二个参数是 `eval` 的）里别写 `"$(函数 "{\"…\"}")"`：bash 3.2 解析双引号里命令替换中的转义引号会把参数拆碎（JSON 按空格断成几段，`[` 报 too many arguments，断言失败却看不出为什么）。期望值先在断言外面算好放进变量（11b2c 的 `ckw`）；`"$(函数 "$变量")"` 没问题

@@ -19,6 +19,11 @@ struct RouteSection: View {
                 }
                 GlassRow {
                     DetailsToggle(help: "端口、纯净度和泄露检测的明细")
+                    if a.can.customProxy, model.formsSupported {
+                        SectionAction("自定义代理…", systemImage: "link.badge.plus") { model.useCustomProxy(a) }
+                            .disabled(model.activity(a.ref) != nil)
+                            .help("粘贴一条代理链接（socks5://、http://、分享链接），让这个账号改走它；配置了路由器的会写进路由器的配置（要重启一次 OpenClash / ShellCrash，先问你）")
+                    }
                     SectionAction(a.isAPI ? "检测连接" : "检测出口", systemImage: "checkmark.shield") { model.checkExit(a.ref) }
                         .disabled(!a.can.check || model.activity(a.ref) != nil)
                         .help(a.isAPI ? "检测接口连不连得上" : "检测出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险（会访问检测网站）")

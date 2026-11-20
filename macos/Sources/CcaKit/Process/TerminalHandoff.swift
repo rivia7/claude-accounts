@@ -139,6 +139,14 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                 message: "在终端里输入 key，存进钥匙串。", inApp: true)
     }
 
+    /// 给账号换上自定义代理（`cca [codex|agy] node use KEY`，`can.custom_proxy`）：粘贴代理链接（`node.custom`），cca 校验、存成自定义节点、
+    /// 账号改走它；配置了路由器的接着同步（写进路由器的配置文件，要重启一次 OpenClash / ShellCrash 时在会话里先问）。
+    static func customProxy(prefix: [String], key: String, name: String) -> Handoff {
+        Handoff(arguments: prefix + ["node", "use", key], title: "给 \(name) 换上自定义代理",
+                message: "粘贴一条代理链接（socks5://、http://、vmess:// 这类分享链接），cca 校验后让这个账号改走它。",
+                inApp: true, needsForms: true)
+    }
+
     static func remove(prefix: [String], key: String, name: String) -> Handoff {
         Handoff(arguments: prefix + ["rm", key], title: "删除 \(name)", message: "在终端里确认后删除这个账号。", inApp: true)
     }

@@ -66,7 +66,7 @@ python3 -I pydiff/run.py [-k 名字] [-v] [-s] [-t]                    # 对拍�
 - `cargo test`：兼容层对着 CPython 的对照数据（`tests/vectors/`）、各模块的内部函数。原来 Python 单元测试里只能调内部函数的检查搬到了这里
 - `tests/*.py`（回归的 unit 一节）：把辅助程序当黑盒跑（`tests/helper_bin.py` 给出它在哪：`CCA_HELPER`，没有就是 `cli/target/release/cca-core`）。临时 HOME、PATH 上放假命令；单独跑之前先 `cargo build --release`
 - `tests/regress.sh`：整条 `cca` 命令的行为。开头先编辅助程序；10g 里测“怎么找到辅助程序”（没编出来、`CCA_HELPER`、第一次解出来、不再解、清旧的、文件不完整、校验值不对、缓存目录是链接、没有这种机器的、缺 `base64`、两个同时第一次运行）；`mkver` 做的假发布版像真的一样接着辅助程序
-- 对拍（`python3 -I cli/pydiff/run.py`，6000 多个用例，全量约二十分钟，不在回归里）：同一份沙箱（假 HOME、假命令）上分别跑原来的 Python 和 cca-core，比 stdout、stderr、退出码和跑完以后沙箱里的每个文件。原来的 Python 从 `cli/PORTED_FROM` 记的那个主干提交的 `cca` 里取（`git show 提交:cca`）。**它证明的是“和那个提交的 Python 一样”**：发布切换后的第一个版本之前全量跑一遍；之后有意改了行为的子命令，把对应的用例删掉或改掉（新行为用 `cargo test`、回归来测），别为了让它过去改代码
+- 对拍（`python3 -I cli/pydiff/run.py`，7600 多个用例，全量约四十分钟（机器忙时更久，别套短的 `timeout`），不在回归里；只打印没对上的，最后一行是「对拍：N 通过，M 失败」）：同一份沙箱（假 HOME、假命令）上分别跑原来的 Python 和 cca-core，比 stdout、stderr、退出码和跑完以后沙箱里的每个文件。原来的 Python 从 `cli/PORTED_FROM` 记的那个主干提交的 `cca` 里取（`git show 提交:cca`）。跑的途中别重编 `cli/target/release/cca-core`：后半截的用例用的就是新编的那份，跑完把动过的几组用 `-k` 再跑一遍。**它证明的是“和那个提交的 Python 一样”**：发布切换后的第一个版本之前全量跑一遍；之后有意改了行为的子命令——几行就能在原来的 Python 上照样改的，加进 `run.py` 的 `ORACLE_PATCHES`（对取出来的 `cca` 原文做替换，每条必须正好出现一次），用例照常对拍；只是多了输出字段的，用那个用例文件里的屏蔽规则（如 `cases/gui.py` 的 `STATE_MASK`）去掉；别的把对应的用例删掉或改掉（新行为用 `cargo test`、回归来测）。别为了让它过去改代码
 - Linux：`tests/linux.sh` 用 musl 的那一份（`--docker` 时在宿主机上先交叉编译；见 `docs/dev/linux.md`）
 
 ## 主干还带着 Python 的时候

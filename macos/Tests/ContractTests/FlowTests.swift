@@ -40,6 +40,18 @@ func flowProtocolTests() async {
           && fe?.fields.last?.value == "listeners:\n  - x" && fe?.isDisplayable == true)
     check("删除账号、换 key 的命令", Handoff.remove(prefix: ["codex"], key: "k", name: "n").arguments == ["codex", "rm", "k"]
           && Handoff.apiKey(prefix: [], key: "k", name: "n").arguments == ["key", "k"])
+    let proxy = Handoff.customProxy(prefix: ["agy"], key: "k", name: "工作")
+    check("换自定义代理：cca [codex|agy] node use 账号，在 App 里问完（要 hello.forms）",
+          proxy.arguments == ["agy", "node", "use", "k"] && proxy.inApp && proxy.needsForms && proxy.title == "给 工作 换上自定义代理")
+    if let s = loadFixture(StateDoc.self, "state.json") {
+        let all = s.tools.flatMap(\.accounts)
+        check("can.custom_proxy：维护者固定了节点的官方账号不能换，别的（第三方 API 账号也算）能",
+              all.contains { $0.pinned && !$0.can.customProxy } && all.filter { !($0.kind == .oauth && $0.pinned) }.allSatisfy(\.can.customProxy)
+              && all.contains { $0.kind == .api && $0.can.customProxy })
+    }
+    check("旧版 cca 没有 can.custom_proxy：当作不能",
+          !Account.sample(["key": "a@example.com", "kind": "oauth", "can": ["check": true]], tool: .claude).can.customProxy)
+    check("node_pinned 是认得的失败原因", FailCode.allKnown.contains(.nodePinned))
 }
 
 @MainActor func flowModelTests() async {

@@ -67,6 +67,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("node-save", cmd_node_save),
     Cmd::all("node-ls", cmd_node_ls),
     Cmd::all("node-rm", cmd_node_rm),
+    Cmd::all("node-rename", cmd_node_rename),
     Cmd::all("core-config", cmd_core_config),
     Cmd::all("core-nodes-save", cmd_core_nodes_save),
     Cmd::all("core-stale", cmd_core_stale),
@@ -89,7 +90,8 @@ pub static CORE_NODES: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR,
 /// 内核的配置（用 JSON 写，YAML 也认；带密钥，600）
 pub static CORE_CONFIG: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR, "config.yaml"));
 pub const CORE_STALE_AFTER: f64 = 12.0 * 3600.0;
-/// 用户自己填/粘贴的节点（分享链接或 Clash 节点块，只给内置代理，绝不推路由器；带密钥，600）
+/// 用户自己填/粘贴的节点（分享链接或 Clash 节点块；带密钥，600）。在可选节点里的给内置代理，也经账号表的 custom 写进路由器的配置文件
+/// （和维护者的参考节点同一套：`custom_fill`、路由器端的 fill_source）
 pub static CORE_CUSTOM: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR, "custom-nodes.json"));
 /// Linux 上内核的输出（macOS 上在界面 App 的缓存目录里）
 pub static CORE_LOG: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR, "core.log"));
@@ -441,8 +443,11 @@ pub fn core_custom() -> Vec<Dict> {
     }
 }
 
-/// 这个名字没被可选节点、路由器/参考节点、内置出站占用
-fn node_name_free(c: &Dict, name: &str) -> R<bool> {
+/// 这个名字没被可选节点、路由器/参考节点、内置出站占用；extra 是另外要避开的（在家时路由器上全部节点和策略组的名字）
+fn node_name_free(c: &Dict, name: &str, extra: &[String]) -> R<bool> {
+    if extra.iter().any(|n| n == name) {
+        return Ok(false);
+    }
     let mut taken = py_set(c.get("nodes"))?;
     // {p['name'] for p in core_cache().get('proxies', [])}：缓存里有不像节点定义的项时是没人接的 TypeError / KeyError
     for p in cached_proxies(&core_cache()) {
@@ -458,10 +463,11 @@ fn node_name_free(c: &Dict, name: &str) -> R<bool> {
     Ok(!name.is_empty() && !taken.iter().any(|have| have.as_str() == Some(name)) && !FILL_BUILTIN.contains(&name))
 }
 
-/// stdin：用户粘贴的分享链接或 Clash 节点块。解析成一个节点、起个不冲突的名字，打印节点 JSON。
+/// stdin：用户粘贴的分享链接或 Clash 节点块。解析成一个节点、起个不冲突的名字，打印节点 JSON。参数是另外要避开的名字
+/// （在家时路由器上的节点和策略组：同名的写不进路由器的配置）。
 /// 解析不了时 stderr 说原因、退出码 1。还不写盘：bash 先拿内核 -t 校验过再 node-save
 pub fn cmd_node_check(args: &[String]) -> R<()> {
-    arity("cmd_node_check", args, 0, 0)?;
+    arity("cmd_node_check", args, 0, usize::MAX)?;
     let mut p = match node_parse(&io::read_stdin_text()) {
         Ok(p) => p,
         Err(e) if e.is("NodeParseError") => return die(format!("这段配置认不出来：{e}")),
@@ -475,7 +481,7 @@ pub fn cmd_node_check(args: &[String]) -> R<()> {
         cleaned
     };
     let (mut name, mut i) = (base.clone(), 2);
-    while !node_name_free(&c, &name)? {
+    while !node_name_free(&c, &name, args)? {
         name = format!("{base}-{i}");
         i += 1;
     }
@@ -532,6 +538,87 @@ pub fn cmd_node_save(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// 要写进路由器的自定义节点（账号表的 custom）：在可选节点里的那些，{'id': 摘要, 'proxies': [节点定义…]}；没有时是 None
+/// （账号表和以前逐字节一样）。路由器端照维护者的参考节点那一套写进配置文件（行尾带 # cca、先拿内核校验、写了要重启才用上），
+/// 只是不进任何策略组：账号的端口组 CCA-n 本来就列着全部可选节点
+pub fn custom_fill(c: &Dict) -> Option<Dict> {
+    let nodes = c.get("nodes").and_then(|n| n.as_list()).map(|l| l.items()).unwrap_or_default();
+    let px: Vec<Dict> = core_custom()
+        .into_iter()
+        .filter(|p| p.get("name").is_some_and(|n| n.as_str().is_some() && nodes.iter().any(|x| x.py_eq(&n))))
+        .collect();
+    custom_payload(px)
+}
+
+/// 账号表里 custom 的样子：{'id': 节点定义的摘要（路由器记它校验过没有）, 'proxies': [...]}；没有节点时是 None
+pub fn custom_payload(px: Vec<Dict>) -> Option<Dict> {
+    if px.is_empty() {
+        return None;
+    }
+    let px = V::from(px.into_iter().map(V::Dict).collect::<Vec<_>>());
+    let id = crate::py::hash::sha256_hex(json::dumps(&px, json::Fmt::new().utf8().sort_keys()));
+    Some(dict! { "id" => &id[..16], "proxies" => px })
+}
+
+/// 自定义节点的身份摘要：账号表里用它的槽位带着（`ck`），路由器生成端口池时逐个槽位核对——配置里叫这个名字的不是同一个
+/// （用户自己的、别的设备写进去的同名节点）就只断开这个槽位，不悄悄换出口。身份是类型、服务器、端口、TLS 域名，再加用户名、
+/// 密码、uuid（住宅代理常常是同一个网关、不同的用户名就是不同的出口）。路由器端 apply.rb 的 `ckey` / `fnv` 照同一个写法算：
+/// 各项按 Ruby 的 `to_s` 拼起来，取 64 位 FNV-1a 的十六进制（路由器上的 ruby 不一定带 digest）。没有服务器的是 None
+pub fn custom_ck(p: &Dict) -> Option<String> {
+    fn to_s(v: Option<V>) -> String {
+        match v {
+            None | Some(V::None) => String::new(),
+            Some(V::Bool(b)) => b.to_string(),
+            Some(v) => v.py_str(),
+        }
+    }
+    fn host(v: Option<V>) -> String {
+        to_s(v).trim().to_lowercase().trim_end_matches('.').to_string()
+    }
+    let server = host(p.get("server"));
+    if server.is_empty() {
+        return None;
+    }
+    let sni = match p.get("servername") {
+        Some(v) if !matches!(v, V::None | V::Bool(false)) => Some(v),
+        _ => p.get("sni"),
+    };
+    let key = [
+        to_s(p.get("type")).trim().to_lowercase(),
+        server,
+        to_s(p.get("port")).trim().to_string(),
+        host(sni),
+        to_s(p.get("username")),
+        to_s(p.get("password")),
+        to_s(p.get("uuid")),
+    ]
+    .join("|");
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in key.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    Some(format!("{h:016x}"))
+}
+
+/// 用这份 custom（`custom_fill` 的结果）里的节点的槽位要带的 ck：节点名 → 摘要
+pub fn custom_cks(custom: Option<&Dict>) -> Vec<(String, String)> {
+    let px = custom.and_then(|f| f.list("proxies")).map(|l| l.items()).unwrap_or_default();
+    px.iter().filter_map(|p| p.as_dict()).filter_map(|p| Some((p.at("name").py_str(), custom_ck(&p)?))).collect()
+}
+
+/// 槽位 e 用的是自定义节点时带上它的 ck（键排在最后：没有自定义节点时账号表和以前逐字节一样）
+pub fn slot_ck(e: &Dict, cks: &[(String, String)]) {
+    let node = e.at("node").py_str();
+    if let Some((_, ck)) = cks.iter().find(|(n, _)| *n == node) {
+        e.set("ck", ck.as_str());
+    }
+}
+
+/// 自定义节点的名字（可选节点里的这些归 cca 自己管：不跟着路由器上的改名走，也不会因为路由器上没有就算丢了）
+pub fn custom_names() -> Vec<String> {
+    core_custom().iter().filter_map(|p| p.str("name")).map(|n| n.to_string()).collect()
+}
+
 /// 自定义节点：名字<TAB>类型<TAB>服务器:端口<TAB>用它的账号（跨工具）
 pub fn cmd_node_ls(args: &[String]) -> R<()> {
     arity("cmd_node_ls", args, 0, 0)?;
@@ -570,6 +657,45 @@ pub fn cmd_node_rm(args: &[String]) -> R<()> {
         cfg_save(&c)?;
     }
     out!("{name}");
+    Ok(())
+}
+
+/// 自定义节点换个名字：node-rename 旧名 [要避开的名字…]，stdout 是新名字。同步前用（`custom-clashes`）：这台的和别的设备在
+/// 路由器上正用着的同名节点不是同一个，这台的换个叫法（出口不变）。新名字照 node-check 的起法（旧名-2、-3…：可选节点、拷来的、
+/// 参考节点、内置出站、别的自定义节点和给的名字都不撞），custom-nodes.json、可选节点、节点摘要、各工具的账号表都跟着改
+pub fn cmd_node_rename(args: &[String]) -> R<()> {
+    arity("cmd_node_rename", args, 1, usize::MAX)?;
+    let old = args[0].as_str();
+    let mut new = String::new();
+    {
+        let _lock = Lock::acquire()?;
+        let px = core_custom();
+        let Some(p) = px.iter().find(|p| &*def_name(p) == old) else {
+            return die(format!("没有这个自定义节点：{old}"));
+        };
+        let c = cfg_load()?;
+        for i in 2.. {
+            new = format!("{old}-{i}");
+            if node_name_free(&c, &new, &args[1..])? && !px.iter().any(|q| *def_name(q) == *new) {
+                break;
+            }
+        }
+        p.set("name", new.as_str());
+        save_json(
+            &CORE_CUSTOM,
+            &V::Dict(dict! { "version" => 1, "proxies" => px.into_iter().map(V::Dict).collect::<Vec<_>>() }),
+            Some(0o600),
+            false,
+        )?;
+        super::router::nodes_rename(&c, &[(old.to_string(), new.clone())], false)?;
+        let ids = node_ids(&c).copy();
+        if let Some(fp) = ids.pop(old) {
+            ids.set(json_key(&V::from(new.as_str())), fp);
+        }
+        c.set("node_ids", ids);
+        cfg_save(&c)?;
+    }
+    out!("{new}");
     Ok(())
 }
 
@@ -615,11 +741,12 @@ pub fn core_stale(c: &Dict) -> bool {
     j.is_empty() || cache_age(&j) > CORE_STALE_AFTER || !j.get("nodes").unwrap_or(V::None).py_eq(&c.at("nodes"))
 }
 
-/// 内置代理能用的节点定义（还没按可选节点挑）：路由器上拷来的，加上维护者参考节点里要补的（和往路由器里补的
-/// 同一套规则 fill_plan：同名的、服务器一样的以路由器的为准）
+/// 内置代理能用的节点定义（还没按可选节点挑）：自定义节点，路由器上拷来的（自定义节点写进路由器以后也在里面：同名的以
+/// 本机的为准，core_pick 留第一个），加上维护者参考节点里要补的（和往路由器里补的同一套规则 fill_plan：同名的、服务器一样的
+/// 以路由器的为准）
 pub fn core_defs() -> Vec<Dict> {
-    let mut px: Vec<Dict> = cached_proxies(&core_cache()).iter().filter_map(named).collect();
-    px.extend(core_custom());
+    let mut px: Vec<Dict> = core_custom();
+    px.extend(cached_proxies(&core_cache()).iter().filter_map(named));
     let have = fps_of(&px);
     let names: Vec<String> = have.iter().map(|(n, _)| n.clone()).collect();
     px.extend(fill_plan(&have, &names, policy_fill().as_ref()).0);
@@ -1016,6 +1143,41 @@ mod tests {
 
     fn picked(px: &[Dict], names: &[&str]) -> Vec<String> {
         core_pick(px, &names.iter().map(|n| V::from(*n)).collect::<Vec<_>>()).iter().map(|p| def_name(p).to_string()).collect()
+    }
+
+    /// custom_ck 和路由器端 apply.rb 的 fnv(ckey(…)) 是同一个值：右边是拿 apply.rb 里的那几行 ruby 对同一份 JSON 算的
+    /// （服务器、TLS 域名去空白、转小写、去掉末尾的点；servername 是空字符串时照 Ruby 的 `||` 不换成 sni；数字、true 照 to_s）
+    #[test]
+    fn custom_ck_matches_the_router_side() {
+        let px = json::loads(
+            r#"[{"name":"住宅","type":"socks5","server":" Res.Example.com. ","port":1080,"username":"user-1","password":"p@ss:wörd"},
+ {"name":"v","type":"VLESS","server":"192.0.2.10","port":443,"uuid":"11111111-2222-3333-4444-555555555555","servername":"Example.COM.","sni":"other.example.com"},
+ {"name":"h","type":"http","server":"example.com","port":"8080","tls":true,"servername":"","sni":"example.com","username":7,"password":true},
+ {"name":"x","type":"socks5","server":"  ","port":1080}]"#,
+        )
+        .unwrap();
+        let got: Vec<Option<String>> = px.as_list().unwrap().items().iter().map(|p| custom_ck(&p.as_dict().unwrap())).collect();
+        let want = [Some("f268869eba95b596"), Some("666a86f697311a13"), Some("5e0bd633bd6d5441"), None];
+        assert_eq!(got, want.map(|w| w.map(String::from)));
+        // 用户名、密码、uuid 不一样就是不同的出口（住宅代理常常是同一个网关）
+        let a = dict! { "type" => "socks5", "server" => "gw.example.com", "port" => 1080, "username" => "a", "password" => "x" };
+        let b = dict! { "type" => "socks5", "server" => "gw.example.com", "port" => 1080, "username" => "b", "password" => "x" };
+        assert_ne!(custom_ck(&a), custom_ck(&b));
+        assert_eq!(fill_fp(&a), fill_fp(&b)); // 认节点的摘要不看账号：所以槽位核对另用 ck
+    }
+
+    /// 用自定义节点的槽位带 ck，别的不带（只有官方节点时账号表和以前一样）
+    #[test]
+    fn slot_ck_only_on_custom_slots() {
+        let custom = dict! { "id" => "x", "proxies" => vec![V::Dict(dict! { "name" => "住宅", "type" => "socks5", "server" => "gw.example.com", "port" => 1080 })] };
+        let cks = custom_cks(Some(&custom));
+        let (mine, other) =
+            (dict! { "slot" => 1, "name" => "a", "node" => "住宅" }, dict! { "slot" => 2, "name" => "b", "node" => "US-A" });
+        slot_ck(&mine, &cks);
+        slot_ck(&other, &cks);
+        assert_eq!(mine.get("ck").map(|v| v.py_str()), custom_ck(&custom.list("proxies").unwrap().items()[0].as_dict().unwrap()));
+        assert!(other.get("ck").is_none());
+        assert!(custom_cks(None).is_empty());
     }
 
     #[test]

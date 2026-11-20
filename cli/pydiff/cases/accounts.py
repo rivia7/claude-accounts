@@ -3,6 +3,9 @@ from run import case
 from cases.table import world, TABLE, NODES
 
 PORTS = {'主号(alice@example.com)': 7901, 'bob@example.com': 7902, '走节点': 7904}
+# 切换以后 Claude 启动时多带一个记下会话的 hook（--settings；accounts.rs 的 session_hook），原来的 Python 没有：env 的用例关掉折合金额
+# （config.json 的 cost: false，就不带 hook），别的照旧比；带 hook 的样子在回归里测
+NO_HOOK = {'cost': False}
 
 # 假的 codex：认 features list / --help / --version，把每次收到的参数和要紧的环境记进沙箱里的 codex.log
 FAKE_CODEX = r'''
@@ -19,43 +22,43 @@ esac
 for key in ['主号(alice@example.com)', 'bob@example.com', '直连', '走节点', '旧名(alice@example.com)', '没有这个', '']:
     @case('env/claude/%s' % (key or 'empty'), ['env', key])
     def _(b):
-        world(b, cfg={'ports': PORTS, 'no_proxy': 'localhost, .local,::1,10.0.0.0/8,,'})
+        world(b, cfg=dict(NO_HOOK, ports=PORTS, no_proxy='localhost, .local,::1,10.0.0.0/8,,'))
 
 
 @case('env/claude/full-api', ['env', '全'])
 def _(b):
     world(b, table={'全': {'base_url': 'https://api.example.com/v1//', 'model': 'big-model', 'node': 'US-A', 'id': 'quan',
-                          'env': {'A': 1, 'B': 'x y', 'HTTPS_PROXY': 'no', '1bad': 'no', 'C': 1.5, 'D': True}}})
+                          'env': {'A': 1, 'B': 'x y', 'HTTPS_PROXY': 'no', '1bad': 'no', 'C': 1.5, 'D': True}}}, cfg=NO_HOOK)
 
 
 @case('env/claude/no-add-dir', ['env', 'bob@example.com'])
 def _(b):
-    world(b, cfg={'claude_add_dir': False})
+    world(b, cfg=dict(NO_HOOK, claude_add_dir=False))
 
 
 @case('env/claude/no-proxy-host', ['env', 'bob@example.com'])
 def _(b):
-    world(b, cfg={'proxy_host': '', 'router': {}})
+    world(b, cfg=dict(NO_HOOK, proxy_host='', router={}))
 
 
 @case('env/claude/router-host-only', ['env', 'bob@example.com'])
 def _(b):
-    world(b, cfg={'proxy_host': '', 'router': {'host': '192.0.2.77'}})
+    world(b, cfg=dict(NO_HOOK, proxy_host='', router={'host': '192.0.2.77'}))
 
 
 @case('env/claude/self-path', ['env', '直连'], env={'CCA_SELF': "/opt/my tools/cca"})
 def _(b):
-    world(b)
+    world(b, cfg=NO_HOOK)
 
 
 @case('env/claude/ro', ['env', 'bob@example.com'], env={'CCA_RO': '1'})
 def _(b):
-    world(b)
+    world(b, cfg=NO_HOOK)
 
 
 @case('env/claude/bad-table', ['env', 'bob@example.com'])
 def _(b):
-    world(b, table={'bob@example.com': 'ZZ'})
+    world(b, table={'bob@example.com': 'ZZ'}, cfg=NO_HOOK)
 
 
 CODEX_TABLE = {'工作(erin@example.com)': 'US-A', '接口': {'base_url': 'https://api.example.com/v1', 'model': 'gpt-x', 'node': 'HK-A'},

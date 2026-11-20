@@ -692,12 +692,16 @@ struct Can: Decodable, Sendable, Equatable {
     /// 账号页有没有「邮箱」一节（邮箱助手，PROTOCOL 4.11；只有 Claude 官方账号、账号表里写了邮箱）。
     /// 旧版 cca 没有这一项，当作没有
     var mail: Bool = false
+    /// 能不能给这个账号换上自定义代理（`cca [codex|agy] node use`，PROTOCOL 4.6 的 `node.custom`；维护者的映射固定了节点的官方账号不能）。
+    /// 旧版 cca 没有这一项，当作不能
+    var customProxy: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case app, web, billing, usage, check, cli, devices, cost, mail
         case limitResets = "limit_resets"
         case policyLock = "policy_lock"
         case apiKey = "api_key"
+        case customProxy = "custom_proxy"
     }
 
     init() {}
@@ -716,6 +720,7 @@ struct Can: Decodable, Sendable, Equatable {
         apiKey = c.bool(.apiKey) ?? false
         cost = c.bool(.cost) ?? false
         mail = c.bool(.mail) ?? false
+        customProxy = c.bool(.customProxy) ?? false
     }
 }
 

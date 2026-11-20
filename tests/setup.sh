@@ -954,18 +954,25 @@ LOG="$CCA_T/claude.log"
 echo "ARGS: $*" >> "$LOG"
 echo "ENV: CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR https_proxy=${https_proxy-unset} BROWSER=${BROWSER-unset} CCA_ACCOUNT=${CCA_ACCOUNT-unset} ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY-unset} ALL_PROXY=${ALL_PROXY-unset} fd3=$( { true <&3; } 2>/dev/null && echo open || echo closed) CCA_PROXY=${CCA_PROXY-unset} ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL-unset} ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN-unset} ANTHROPIC_MODEL=${ANTHROPIC_MODEL-unset} CLAUDE_CODE_USE_BEDROCK=${CLAUDE_CODE_USE_BEDROCK-unset} HTTPS_PROXY=${HTTPS_PROXY-unset} CLAUDECODE=${CLAUDECODE-unset} CLAUDE_CODE_USE_MANTLE=${CLAUDE_CODE_USE_MANTLE-unset} CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=${CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST-unset}" >> "$LOG"
 # 第三方 API 账号：cca 经 --settings 传地址、模型和 apiKeyHelper。记下 env；像 Claude Code 一样执行 apiKeyHelper 取 key
-# （取到的 key 写进 claude.key，不进日志）
-prev=""; settings=""
-for a in "$@"; do [ "$prev" = --settings ] && settings="$a"; prev="$a"; done
+# （取到的 key 写进 claude.key，不进日志）。-p（开始一次会话）时像 Claude Code 一样跑 SessionStart 的 hook（cca 带的记下会话的那个）：
+# stdin 是 hook 的输入，记下退出码、打印了多少、会话 id
+prev=""; settings=""; session=0
+for a in "$@"; do [ "$prev" = --settings ] && settings="$a"; [ "$a" = -p ] && session=1; prev="$a"; done
 if [ -n "$settings" ]; then
-	python3 - "$settings" "$CCA_T" >> "$LOG" <<'PY'
-import json, subprocess, sys
-s, t = json.loads(sys.argv[1]), sys.argv[2]
+	python3 - "$settings" "$CCA_T" "$session" >> "$LOG" <<'PY'
+import json, os, subprocess, sys, uuid
+s, t, session = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3] == '1'
 print('SETTINGS: env=%s' % json.dumps(s.get('env'), sort_keys=True))
 if s.get('apiKeyHelper'):
     r = subprocess.run(['/bin/sh', '-c', s['apiKeyHelper']], stdin=subprocess.DEVNULL, capture_output=True, text=True)
     open(t + '/claude.key', 'w').write(r.stdout)
     print('HELPER: rc=%d' % r.returncode)
+for m in ((s.get('hooks') or {}).get('SessionStart') or []) if session else []:
+    for h in m.get('hooks') or []:
+        sid = str(uuid.uuid4())
+        ev = json.dumps({'session_id': sid, 'transcript_path': '/w/%s.jsonl' % sid, 'cwd': os.getcwd(), 'hook_event_name': 'SessionStart', 'source': 'startup'})
+        r = subprocess.run(['/bin/sh', '-c', h['command']], input=ev, capture_output=True, text=True, timeout=h.get('timeout', 60))
+        print('HOOK: SessionStart rc=%d stdout=%d stderr=%d sid=%s' % (r.returncode, len(r.stdout), len(r.stderr), sid))
 PY
 fi
 case " $* " in *" --input-format stream-json "*) exec python3 "$CCA_T/fake_usage.py" ;; esac

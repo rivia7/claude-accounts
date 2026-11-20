@@ -227,6 +227,12 @@ def _(b):   # 没有 nc：都算连不上
 # bash 是带着 CCA_RO=1 跑它的（不写文件）；这里两种都跑。ps 是假的（cases/session.py 的）。Claude 官方账号要经邮箱助手的 mail_view
 STATE_MASK = NOW + [(r'"(generated_at|fetched_epoch)": [0-9.]+', r'"\1": <现在>'), (r'"age_seconds": -?[0-9]+', '"age_seconds": <多久以前>'),
                     (r'"fetched_at": "[^"]*"', '"fetched_at": "<查到的时间>"')]
+# 切换以后折合金额新加的诊断（devices[].diag、cost_total.unattributed 的 why 这几项）原来的 Python 没有：去掉了再比（cases/cost.py 的 DIAG_MASK，
+# 这里是缩进排版的）
+STATE_MASK += [(r',\n\s*"diag": (?:null|\{(?:[^{}]|\{[^{}]*\})*\})', ''),
+               (r',\n\s*"why": \[(?:[^\[\]{}]|\{[^{}]*\})*\],\n\s*"claude_code": (?:null|"[^"]*"),\n\s*"claude_code_old": (?:true|false)', '')]
+# 能不能换自定义代理（can.custom_proxy，cca node use）也是切换以后新加的：同样去掉再比（规则 node_free 在 cargo test、回归 11b2c 里测）
+STATE_MASK += [(r',\n\s*"custom_proxy": (?:true|false)', '')]
 GUI_ENV = {'CCA_RO': '1', 'CCA_VERSION': '9.9.9', 'CCA_GUI_CLAUDE_BIN': '/usr/local/bin/claude', 'CCA_GUI_CLAUDE_APP': '/Applications/Claude.app',
            'CCA_GUI_CODEX_BIN': '/usr/local/bin/codex', 'CCA_GUI_CODEX_APP': '', 'CCA_GUI_AGY_BIN': '', 'CCA_GUI_CHROME': '1', 'CCA_COST': 'off'}
 ROUTER_CODE = 'router code\nline 2\n'
@@ -340,7 +346,7 @@ def codex_rich(b):
     os.makedirs(b.path(erin + '/desktop'))
     b.write('ps-command.txt', '    1 /sbin/launchd\n 5151 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --user-data-dir=%s --x\n 5152 /usr/bin/other\n' % b.path(erin + '/desktop'))
     # 折合金额：这台设备统计的、别的设备同步来的
-    cost = {'v': 1, 'build': '2026-11-13/1', 'who': {'codex:user-AbCdEfGhIjKlMnOp': 'erin@example.com', 'claude:' + U1: 'alice@example.com'},
+    cost = {'v': 1, 'build': '2026-11-13/2', 'who': {'codex:user-AbCdEfGhIjKlMnOp': 'erin@example.com', 'claude:' + U1: 'alice@example.com'},
             'acc': {'codex:user-AbCdEfGhIjKlMnOp': {hour(now - 2 * 3600): ROW, hour(now - 26 * 3600): [2500000, 4, 10, 20, 30, 40, 1], hour(now - 9 * 86400): ROW,
                                                     hour(now - 40 * 86400): [9000000, 9, 1, 1, 1, 1, 0], hour(now - 100 * 86400): ROW},
                     'claude:' + U1: {hour(now - 3 * 3600): ROW}},

@@ -493,6 +493,8 @@ fn gui_account(
     let with_mail = tool.kind == Kind::Claude && !api && !e.is_empty();
     can.set("mail", with_mail); // 邮箱助手：账号页的「邮箱」一节（PROTOCOL 4.11），只有 Claude 官方账号有
     can.set("cost", can_cost);
+    // 自定义代理（cca [codex|agy] node use，PROTOCOL 4.6 的 node.custom）：维护者的映射固定了节点的官方账号不能换
+    can.set("custom_proxy", super::accounts::node_free(k, v, pm));
     let share = env.presence && !api && mapped && matches!(tool.kind, Kind::Claude | Kind::Codex);
     let share_err = env.key_error.as_deref().map_or(V::None, V::from);
     let cost = if can_cost { env.cost.account(tool, k, weeks.as_ref(), mapped, login == "logged_in") } else { V::None };

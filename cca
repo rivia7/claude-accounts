@@ -519,7 +519,7 @@ helper_unpack() {   # helper_unpack 目标 SHA-256 目录：第一次用（或�
 }
 helper_find || exit 1
 # 解好的那一份辅助程序中途没了（系统清了临时目录）：再解一次（看在不在是内建的判断，不起进程）
-py() { [ -x "$HELPER" ] || helper_find || return 127; CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" "$@"; }
+py() { [ -x "$HELPER" ] || helper_find || return 127; CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" CCA_VERSION="$VERSION" "$HELPER" "$@"; }
 
 use_tool() {   # use_tool codex|agy：这次命令管 Codex（账号表 codex.json、CODEX_HOME、codex 命令）或 agy 的账号；账号表、命令前缀、文案由 py 给
 	TOOL="$1"
@@ -558,7 +558,7 @@ D="$R/etc/cca"
 ACC="$D/accounts.yaml"
 PORTS="$D/ports"
 SEL="$D/select"
-# 维护者参考配置里的节点（accounts.yaml 的 fill）直接写进 OpenClash / ShellCrash 的配置文件（见 fill_source）
+# 维护者参考配置里的节点（accounts.yaml 的 fill）、Mac 上的自定义节点（custom）直接写进 OpenClash / ShellCrash 的配置文件（见 fill_source）
 FILLOK="$D/fill.ok"       # 这一版在这台路由器的内核上校验通过了，记着它的 id
 FILLPEND="$D/fill.pending"   # 刚写进配置文件，在跑的 OpenClash / ShellCrash 还是按之前的配置生成的：重启后才用得上
 FILLSEEN="$D/fill.seen"   # 上次核对时账号表、配置文件和内核的校验和：都没变就不用再读一遍配置文件（每次在家启动 cca 都核对）
@@ -662,11 +662,22 @@ core_test() {   # core_test 配置：内核自己的 -t 校验（主目录和启
 	else out=$(SAFE_PATHS="$(safe_paths)" "$c" -t -d "$R/etc/openclash" -f "$1" 2>&1); fi
 }
 
-# 维护者参考配置里的节点：直接写进生成运行配置的那份配置文件（OpenClash 选用的配置、ShellCrash 的订阅配置），
+# 维护者参考配置里的节点、Mac 上的自定义节点：直接写进生成运行配置的那份配置文件（OpenClash 选用的配置、ShellCrash 的订阅配置），
 # OpenClash / ShellCrash 下次启动（重启）时就和用户自己的节点一样用上。每一版先在这台路由器的内核上校验（别处的节点这里的
 # 内核不一定认，认不出的话 OpenClash / ShellCrash 整个起不来），通过了才写，记下 id 以后不再校验
-fill_has() { grep -qs '"fill": {' "$ACC"; }   # 账号表（JSON）里有参考节点
-fill_id() { ruby -E UTF-8 -ryaml -e "$YL"'; f = (yl(ARGV[0]) || {})["fill"]; print f["id"] if f.is_a?(Hash)' "$ACC" 2>/dev/null; }
+fill_has() { grep -qs '"fill": {' "$ACC" || grep -qs '"custom": {' "$ACC"; }   # 账号表（JSON）里有参考节点或自定义节点
+fill_id() { ruby -E UTF-8 -ryaml -e "$YL"'; a = yl(ARGV[0]) || {}; f = a["fill"]; c = a["custom"]
+	print [(f["id"] if f.is_a?(Hash)), ("custom:#{c["id"]}" if c.is_a?(Hash))].compact.join(" ")' "$ACC" 2>/dev/null; }
+fill_who() {   # 要写的是什么（说明里用）
+	if ! grep -qs '"custom": {' "$ACC"; then echo "维护者参考配置里的节点"
+	elif grep -qs '"fill": {' "$ACC"; then echo "维护者参考配置里的节点和自定义节点"
+	else echo "自定义节点"; fi
+}
+fill_label() {   # cca router status 里那一行的开头
+	if ! grep -qs '"custom": {' "$ACC"; then echo "参考节点"
+	elif grep -qs '"fill": {' "$ACC"; then echo "参考节点、自定义节点"
+	else echo "自定义节点"; fi
+}
 fill_waiting() { [ -f "$FILLPEND" ] && running; }   # 配置文件里新写了参考节点，在跑的还没用上
 sum_in() {   # stdin 的摘要（只用来认有没有变）：OpenWrt 默认的 busybox 不带 cksum（真实路由器上遇到过），md5sum、sha256sum 一般都有
 	if command -v md5sum >/dev/null 2>&1; then md5sum
@@ -680,10 +691,11 @@ fill_sig() {   # fill_sig 配置文件：账号表 + 配置文件 + 内核（大
 }
 fmsg() { log "$*"; [ -n "${FQUIET:-}" ] || echo "$*"; }   # 钩子里只记日志（ShellCrash 的钩子靠 stdout 拿配置的路径）
 fill_fail() { echo "$*" > "$FILLWHY"; fmsg "$*"; }
-fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置文件、cca 写过的跟着参考配置更新，写了时 FILLWROTE=1。
-	               # 说明写到 stdout（Mac 上能看到）。配置文件、参考节点、内核都没变时不再读一遍（${FILLSEEN}；同步时 FILLFORCE 照读）
+fill_source() {   # fill_source [配置文件]：参考节点、自定义节点缺的写进配置文件、cca 写过的跟着更新，写了时 FILLWROTE=1。
+	               # 说明写到 stdout（Mac 上能看到）。配置文件、这些节点、内核都没变时不再读一遍（${FILLSEEN}；同步时 FILLFORCE 照读）
 	FILLWROTE=""
 	if ! fill_has; then rm -f "$FILLPEND" "$FILLSEEN" "$FILLWHY"; return 0; fi
+	fs_who=$(fill_who)
 	fs_src="${1:-$(source_config)}"
 	[ -n "$fs_src" ] && [ -f "$fs_src" ] || return 0
 	fs_sig=$(fill_sig "$fs_src")
@@ -694,7 +706,7 @@ fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置�
 	[ "$BK" = sc ] && set -- "$@" --custom "$SC/yamls/proxies.yaml"   # 不占用 ShellCrash 自定义节点的名字
 	fs_what=$(ruby -E UTF-8 "$D/apply.rb" "$@" "$fs_src" "$ACC" 2>"$fs_o.err"); fs_rc=$?
 	fs_why=$(sed -n 's/^cca: 参考节点没能写进配置文件（\(.*\)）$/\1/p; s/^cca: 读取配置失败：//p' "$fs_o.err" | tail -n 1)
-	[ -n "${FQUIET:-}" ] || sed -n 's/^cca: \(参考节点「.*没有写\)$/\1/p' "$fs_o.err"   # 哪些没写、为什么
+	[ -n "${FQUIET:-}" ] || sed -n 's/^cca: \(参考节点「.*没有写\)$/\1/p; s/^cca: \(自定义节点「.*没有写\)$/\1/p' "$fs_o.err"   # 哪些没写、为什么
 	cat "$fs_o.err" >> "$LOG"; rm -f "$fs_o.err"
 	if [ $fs_rc -eq 2 ]; then rm -f "$fs_o" "$fs_v" "$FILLWHY"; echo "$fs_sig" > "$FILLSEEN"; return 0; fi
 	if [ $fs_rc -eq 3 ]; then   # 只是把 cca 以前写成一行的节点改成块写法：内容没变，不用校验，也不用重启
@@ -705,19 +717,19 @@ fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置�
 	fi
 	if [ $fs_rc -ne 0 ]; then   # 配置文件改了（或参考节点换了）再试
 		rm -f "$fs_o" "$fs_v"; echo "$fs_sig" > "$FILLSEEN"
-		fill_fail "维护者参考配置里的节点没能写进 ${NAME} 的配置文件 ${fs_src}${fs_why:+（${fs_why}）}"
+		fill_fail "${fs_who}没能写进 ${NAME} 的配置文件 ${fs_src}${fs_why:+（${fs_why}）}"
 		return 1
 	fi
 	fs_id=$(fill_id)
 	if [ "$(cat "$FILLOK" 2>/dev/null)" != "$fs_id" ]; then
 		if ! core_bin >/dev/null; then   # 内核找到了再试
 			rm -f "$fs_o" "$fs_v"
-			fill_fail "找不到 ${NAME} 的内核，没法先校验维护者参考配置里的节点，没有写进配置文件"
+			fill_fail "找不到 ${NAME} 的内核，没法先校验${fs_who}，没有写进配置文件"
 			return 1
 		fi
 		if ! core_test "$fs_v"; then   # 内核升级了（或参考节点换了）再试
 			rm -f "$fs_o" "$fs_v"; echo "$fs_sig" > "$FILLSEEN"
-			fill_fail "维护者参考配置里的节点没通过 ${NAME} 内核的校验，没有写进配置文件：$(printf '%s\n' "$out" | tail -n 1)"
+			fill_fail "${fs_who}没通过 ${NAME} 内核的校验，没有写进配置文件：$(printf '%s\n' "$out" | tail -n 1)"
 			return 1
 		fi
 		echo "$fs_id" > "$FILLOK"
@@ -726,12 +738,12 @@ fill_source() {   # fill_source [配置文件]：参考节点缺的写进配置�
 	cp -f "$fs_src" "$SRCBAK"
 	if ! rewrite "$fs_src" "$fs_o" 2>/dev/null; then   # 原地覆盖：属主、权限不变。写不了的同步时再试
 		rm -f "$fs_o"; echo "$fs_sig" > "$FILLSEEN"
-		fill_fail "写不了 ${NAME} 的配置文件 ${fs_src}，维护者参考配置里的节点没有写进去"
+		fill_fail "写不了 ${NAME} 的配置文件 ${fs_src}，${fs_who}没有写进去"
 		return 1
 	fi
 	fill_sig "$fs_src" > "$FILLSEEN"
 	FILLWROTE=1
-	fmsg "已把维护者参考配置里的节点写进 ${NAME} 的配置文件 ${fs_src}：${fs_what}（行尾带 # cca；改之前的在 ${SRCBAK}）"
+	fmsg "已把${fs_who}写进 ${NAME} 的配置文件 ${fs_src}：${fs_what}（行尾带 # cca；改之前的在 ${SRCBAK}）"
 }
 listening() { netstat -lnt 2>/dev/null | awk '{print $4}' | grep -q "[:.]$1\$"; }
 missing_ports() {
@@ -892,14 +904,14 @@ remove_keep() {
 # OpenClash 生成配置时调用（启动时本来就会加载配置，不额外重载）。任何失败都保留原配置
 hook() {
 	f="$1"; FQUIET=1
-	# 参考节点：OpenClash 自己的配置（订阅更新会整个换掉）里缺了就写回去。这次的运行配置已经按写之前的那份生成好了，
+	# 参考节点、自定义节点：OpenClash 自己的配置（订阅更新会整个换掉）里缺了就写回去。这次的运行配置已经按写之前的那份生成好了，
 	# 生成端口池时照配置文件把这些节点也写进它（--mirror，和下次按配置文件生成的一样），不用为这个再重启一次
 	fill_source
 	rm -f "$FILLPEND"   # 这次的运行配置是按写好的配置文件生成的
 	mir=""
 	if [ -n "$FILLWROTE" ]; then
 		mir=$(source_config)
-		echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已把维护者参考配置里的节点写进配置文件 ${mir}" >> "$R/tmp/openclash.log"
+		echo "$(date '+%Y-%m-%d %H:%M:%S') 【cca】已把$(fill_who)写进配置文件 ${mir}" >> "$R/tmp/openclash.log"
 	fi
 	[ -f "$f" ] && { [ -s "$PORTS" ] || [ -n "$mir" ]; } || return 0   # 没有账号端口（也不用写参考节点）就完全不碰配置
 	cp -f "$f" "$f.cca.bak"
@@ -921,7 +933,7 @@ hook() {
 sc_hook() {
 	f="$1"; o="$R/tmp/cca.shellcrash.yaml"; FQUIET=1
 	if [ -n "$SC" ] && [ -f "$f" ] && sc_meta; then
-		fill_source "$f"   # 参考节点：在 ShellCrash 读订阅配置之前写进去（订阅更新会整个换掉），这次启动就用上
+		fill_source "$f"   # 参考节点、自定义节点：在 ShellCrash 读订阅配置之前写进去（订阅更新会整个换掉），这次启动就用上
 		rm -f "$FILLPEND"
 	fi
 	if [ -n "$SC" ] && [ -s "$PORTS" ] && [ -f "$f" ]; then
@@ -1013,7 +1025,7 @@ restart_now() {   # restart_now 为什么要重启：重启 OpenClash / ShellCra
 }
 
 # 把 accounts.yaml 落到正在运行的 OpenClash / ShellCrash：结构没变只切节点；结构变了且获准才重载（运行配置不见了时是重启）。
-# 有参考节点时先写进配置文件，新写了的要重启一次才用上（获准才重启）。返回 0 成功；3 需要重载（重启）但没获准；1 失败
+# 有参考节点、自定义节点时先写进配置文件，新写了的要重启一次才用上（获准才重启）。返回 0 成功；3 需要重载（重启）但没获准；1 失败
 apply_now() {
 	if [ "$BK" = sc ] && ! sc_meta; then
 		echo "ShellCrash 现在用的不是 mihomo（Meta）内核：cca 的端口池只支持 Meta 内核（ShellCrash 的菜单里可以换内核）"
@@ -1044,7 +1056,7 @@ apply_now() {
 		return 0
 	fi
 	if fill_waiting; then   # 重启时按写好的配置文件重新生成运行配置，钩子照常注入端口池：端口池要调整也一起了
-		restart_now "${NAME} 的配置文件里新写了维护者参考配置里的节点，要用上"
+		restart_now "${NAME} 的配置文件里新写了$(fill_who)，要用上"
 		return $?
 	fi
 	t="$R/tmp/cca.apply.$$.yaml"
@@ -1137,19 +1149,19 @@ ensure_now() {   # Mac 启动前调用：端口池在就只纠正选中节点（
 hook_ok() {   # 在用的那套装着 cca 的钩子
 	if [ "$BK" = sc ]; then grep -qF "$SCHOOK" "$(sc_task)" 2>/dev/null; else grep -qxF "$MB" "$OW" 2>/dev/null; fi
 }
-fill_status() {   # 参考节点在配置文件里齐不齐，写进去的用上了没有
+fill_status() {   # 参考节点、自定义节点在配置文件里齐不齐，写进去的用上了没有
 	fill_has || return 0
 	fst_src=$(source_config)
-	if [ -z "$fst_src" ] || [ ! -f "$fst_src" ]; then echo "参考节点：找不到 ${NAME} 的配置文件，没地方写"; return 0; fi
+	if [ -z "$fst_src" ] || [ ! -f "$fst_src" ]; then echo "$(fill_label)：找不到 ${NAME} 的配置文件，没地方写"; return 0; fi
 	set -- --fill-source -
 	[ "$BK" = sc ] && set -- "$@" --custom "$SC/yamls/proxies.yaml"
 	fst_r=$(ruby -E UTF-8 "$D/apply.rb" "$@" "$fst_src" "$ACC" 2>/dev/null); fst_rc=$?
-	fst_line="参考节点：维护者参考配置里$(printf '%s\n' "$fst_r" | sed -n 1p)，"
+	fst_line="$(printf '%s\n' "$fst_r" | sed -n 1p)，"
 	case $fst_rc in
 		2) fst_line="${fst_line}${NAME} 的配置文件里都有$(printf '%s\n' "$fst_r" | sed -n 3p)" ;;
 		0) fst_line="${fst_line}${NAME} 的配置文件里还要$(printf '%s\n' "$fst_r" | sed -n 2p)"
 		   [ "$(cat "$FILLOK" 2>/dev/null)" = "$(fill_id)" ] || fst_line="${fst_line}（这一版还没在这台路由器的内核上校验过）" ;;
-		*) echo "参考节点：读不了 ${NAME} 的配置文件 ${fst_src}"; return 0 ;;
+		*) echo "$(fill_label)：读不了 ${NAME} 的配置文件 ${fst_src}"; return 0 ;;
 	esac
 	[ -f "$FILLPEND" ] && fst_line="${fst_line}（新写进去的要等 ${NAME} 重启后才用上）"
 	echo "$fst_line"
@@ -1285,7 +1297,7 @@ router_rb() {
 #     ShellCrash 启动前用：订阅配置原样复制到输出，只插入端口池的几行。ShellCrash 按文本把订阅配置拆成几段、
 #     再和它自己的设置拼起来，整份重排的话它自己追加的入站缩进会对不上；--ports 是它自己要占的端口
 #   ruby apply.rb --fill-source 输出 [--custom 自定义节点] [--test 配置 --test-out 输出] 配置文件 账号表
-#     把账号表里维护者参考配置的节点（fill）直接写进用户的配置文件（见下面「参考节点」）：写好的新内容放到输出（输出是 -
+#     把账号表里维护者参考配置的节点（fill）、Mac 上的自定义节点（custom）直接写进用户的配置文件（见下面「参考节点」）：写好的新内容放到输出（输出是 -
 #     时只看不写：第一行是参考节点的概况，第二行是还要做什么，第三行是改不了的），做了什么打印到 stdout；退出码 0 有改动，
 #     3 只是把 cca 以前写成一行的节点改成了块写法（内容没变），2 不用改，1 改不了。
 #     --custom：ShellCrash 的自定义节点（yamls/proxies.yaml，它随后才接进来），参考节点不占用它们的名字；
@@ -1427,16 +1439,36 @@ add_members = lambda do |text, gname, items, suffix|   # 策略组 gname 的 pro
   lines.join
 end
 
+nkey = lambda do |p|   # 认节点（和 Mac 上的 cca 一样）：类型、服务器、端口、TLS 域名
+  s = p['server'].to_s.strip.downcase.sub(/\.+\z/, '')
+  s.empty? ? nil : [p['type'].to_s.strip.downcase, s, p['port'].to_s.strip, (p['servername'] || p['sni']).to_s.strip.downcase.sub(/\.+\z/, '')].join('|')
+end
+ckey = lambda do |p|   # 自定义节点认得更严：再加上用户名、密码、uuid（住宅代理常常是同一个网关、不同的用户名就是不同的出口）
+  k = nkey.call(p)
+  k && ([k] + %w[username password uuid].map { |f| p[f].to_s }).join('|')
+end
+fnv = lambda do |s|   # 64 位 FNV-1a 的十六进制（路由器上的 ruby 不一定带 digest）：账号表里槽位的 ck 是 Mac 上的 cca 照同一个写法算的
+  h = 14695981039346656037
+  s.each_byte { |b| h = ((h ^ b) * 1099511628211) & 0xffffffffffffffff }
+  format('%016x', h)
+end
+own = (acc['custom'].is_a?(Hash) ? list.call(acc['custom']['proxies']) : []).select { |p| p.is_a?(Hash) && !p['name'].to_s.empty? }
+
 # --- 参考节点：账号表的 fill（Mac 上的 cca 从维护者的映射仓库拉下来、验过签的）= 维护者配置里的一个策略组和它引用的节点。
 # 直接写进用户的配置文件（OpenClash 选用的那份、ShellCrash 的订阅配置）：缺的节点按块写法（和手写的
 # 节点一样一键一行）插在 proxies 开头，name 那一行行尾带「# cca」；名字接在同名策略组的 proxies 后面（照组里原有的引号写法），
 # 行尾也带「# cca」。维护者改了节点，带记号的那一项整个换掉；以前写成一行的（2.8.0-beta.5～7）改成块写法。这些不写：
 # 同名的是用户自己的节点（只补进组）；名字被策略组、内置的出站、ShellCrash 的自定义节点占了；用户已经有同一个节点（类型、
 # 服务器、端口和 TLS 域名一样）、只是叫法不同（补进组的是他的名字）；要经别的节点连接（dialer-proxy）而那个节点没有。
-# 和 Mac 上 cca 的 fill_plan 是同一套规则。原文的其余部分一个字节不动，写好的读一遍核对
+# 和 Mac 上 cca 的 fill_plan 是同一套规则。原文的其余部分一个字节不动，写好的读一遍核对。
+# 账号表的 custom（Mac 上用户自己加的节点，多设备时也有别的设备在用的）照同一套写法写，只是不进任何策略组（账号的端口组
+# 本来就列着全部可选节点）。同名的节点不是同一个（ckey：类型、服务器、端口、TLS 域名、用户名、密码、uuid 有不一样的）时：
+# 用户自己的不写不改；cca 写进来的，还有账号要用它（槽位的 ck 是它的，或者没带 ck）也不改，没人用了才换成新的（用户在外面
+# 改了这个节点）。没写成的，用它的槽位在下面的端口池里按 ck 断开
 if opt.key?('--fill-source')
   fill = acc['fill'].is_a?(Hash) ? acc['fill'] : nil
-  exit 2 unless fill
+  exit 2 unless fill || !own.empty?
+  fill ||= {}
   text = File.read(cfg_file, mode: 'rb').force_encoding('UTF-8')
   mark = ' # cca'
   custom = []   # ShellCrash 的自定义节点：一行一个 "- {name: 节点, …} #策略组"
@@ -1478,10 +1510,7 @@ if opt.key?('--fill-source')
     sub[0] = "#{ind}- #{sub[0].lstrip}#{mark}"
     sub.map { |l| l + nl }
   end
-  key = lambda do |p|   # 和 Mac 上的 cca 认节点一样：类型、服务器、端口、TLS 域名
-    s = p['server'].to_s.strip.downcase.sub(/\.+\z/, '')
-    s.empty? ? nil : [p['type'].to_s.strip.downcase, s, p['port'].to_s.strip, (p['servername'] || p['sni']).to_s.strip.downcase.sub(/\.+\z/, '')].join('|')
-  end
+  key = nkey
   mine = list.call(cfg['proxies']).select { |p| p.is_a?(Hash) }
   have = {}
   mine.each { |p| have[p['name'].to_s] ||= p }
@@ -1490,32 +1519,49 @@ if opt.key?('--fill-source')
   by = {}   # 用户自己的节点按摘要认（cca 写进来的不算：维护者给节点改了名时按新名字写）
   mine.each { |p| k = key.call(p); by[k] ||= p['name'].to_s if k && !marked[p['name'].to_s] }
   cand = list.call(fill['proxies']).select { |p| p.is_a?(Hash) && !p['name'].to_s.empty? }
+  grouped = {}   # 维护者的参考节点（名字补进策略组）；后面接上的是自定义节点
+  cand.each { |p| grouped[p['name'].to_s] = true }
+  cand += own.reject { |p| grouped[p['name'].to_s] }   # Mac 上起名时避开了参考节点的名字
   okn = {}
-  cand.each { |p| okn[p['name'].to_s] = true unless taken[p['name'].to_s] || by[key.call(p)] }
+  cand.each { |p| okn[p['name'].to_s] = true unless taken[p['name'].to_s] || (grouped[p['name'].to_s] && by[key.call(p)]) }
   add = []   # 要插进去的节点
-  upd = []   # cca 以前写进来、参考配置又改过的节点
+  upd = []   # cca 以前写进来、参考配置（自定义节点）又改过的节点
   fmt = []   # cca 以前写成一行的（内容没变）
   mem = []   # 要在策略组里的名字
+  cnote = []   # 没写的自定义节点（cca router status 里也说）
   cand.each do |p|
     n = p['name'].to_s
     k = key.call(p)
     dp = p['dialer-proxy']
+    gp = grouped[n]
+    what = gp ? '参考节点' : '自定义节点'
     if have[n]
+      hk = ckey.call(have[n])
+      if !gp && hk != ckey.call(p)   # 同名的不是同一个自定义节点
+        dep = hk && list.call(acc['accounts']).any? { |a| a.is_a?(Hash) && a['node'].to_s == n && (a['ck'].nil? || a['ck'].to_s == fnv.call(hk)) }
+        unless marked[n] && !dep
+          cnote << (marked[n] ? "自定义节点「#{n}」和这里的同名节点不是同一个、那个还有账号在用（可能是别的设备的），没有写" : "自定义节点「#{n}」和这里的同名节点不是同一个，没有写")
+          $stderr.puts "cca: #{cnote.last}"
+          next
+        end
+      end
       upd << p if marked[n] && have[n] != p
       fmt << p if marked[n] && marked[n][1] && have[n] == p   # 以前写成一行的：改成和别的节点一样的块写法
-      mem << n
+      mem << n if gp
     elsif taken[n]
-      $stderr.puts "cca: 参考节点「#{n}」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写"
-    elsif k && by[k]
+      $stderr.puts "cca: #{what}「#{n}」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写"
+      cnote << "自定义节点「#{n}」和这里的策略组重名，没有写" unless gp
+    elsif gp && k && by[k]
       mem << by[k]
     elsif dp && (!dp.is_a?(String) || (!taken[dp] && !okn[dp]))
-      $stderr.puts "cca: 参考节点「#{n}」要经「#{dp}」连接，这里没有它，没有写"
+      $stderr.puts "cca: #{what}「#{n}」要经「#{dp}」连接，这里没有它，没有写"
+      cnote << "自定义节点「#{n}」要经「#{dp}」连接，这里没有它，没有写" unless gp
     else
       add << p
-      mem << n
+      mem << n if gp
     end
   end
-  g = list.call(cfg['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == fill['group'].to_s }
+  g = fill['group'] && list.call(cfg['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == fill['group'].to_s }
   g = nil if g && (g['type'].to_s == 'relay' || g['include-all'] == true || g['include-all-proxies'] == true)   # 这样的组不动
   gname = g ? g['name'].to_s : ''
   more = g ? mem.uniq - list.call(g['proxies']).map(&:to_s) : []
@@ -1531,15 +1577,21 @@ if opt.key?('--fill-source')
   end
   said = lambda do |m|
     d = []
-    d << "补上节点 #{add.map { |p| p['name'] }.join('、')}" unless add.empty?
-    d << "按参考配置更新了节点 #{upd.map { |p| p['name'] }.join('、')}" unless upd.empty?
+    fa, ca = add.partition { |p| grouped[p['name'].to_s] }
+    fu, cu = upd.partition { |p| grouped[p['name'].to_s] }
+    d << "补上节点 #{fa.map { |p| p['name'] }.join('、')}" unless fa.empty?
+    d << "补上自定义节点 #{ca.map { |p| p['name'] }.join('、')}" unless ca.empty?
+    d << "按参考配置更新了节点 #{fu.map { |p| p['name'] }.join('、')}" unless fu.empty?
+    d << "更新了自定义节点 #{cu.map { |p| p['name'] }.join('、')}" unless cu.empty?
     d << "策略组 #{gname} 里加上 #{m.join('、')}" unless m.empty?
     d.join('；')
   end
-  if opt['--fill-source'] == '-'
-    puts "策略组 #{fill['group']} 的 #{cand.size} 个节点"
+  if opt['--fill-source'] == '-'   # cca router status：第一行是这一行的开头
+    nf = cand.count { |p| grouped[p['name'].to_s] }
+    fl = "参考节点：维护者参考配置里策略组 #{fill['group']} 的 #{nf} 个节点"
+    puts(acc['fill'].is_a?(Hash) ? (own.empty? ? fl : "#{fl}、#{cand.size - nf} 个自定义节点") : "自定义节点：#{cand.size} 个")
     puts said.call(more)
-    puts gnote.to_s
+    puts gnote.to_s + cnote.map { |m| "（#{m}）" }.join
     exit(add.empty? && upd.empty? && more.empty? ? 2 : 0)
   end
   exit 2 if add.empty? && upd.empty? && more.empty? && fmt.empty?
@@ -1602,11 +1654,12 @@ end
 # 那份生成的：参考节点照配置文件里的定义换上（或加上），策略组里配置文件有、这里还没有的名字接上，和下次按配置文件生成的一样。
 # 读不了配置文件时照常生成端口池，退出码 3（钩子记下要重启才用上）
 mirror_failed = false
-if opt['--mirror'] && acc['fill'].is_a?(Hash)
+if opt['--mirror'] && (acc['fill'].is_a?(Hash) || !own.empty?)
   begin
     src = yload.call(opt['--mirror'])
     raise '顶层不是映射' unless src.is_a?(Hash)
-    fn = list.call(acc['fill']['proxies']).select { |p| p.is_a?(Hash) }.map { |p| p['name'].to_s }
+    fn = (acc['fill'].is_a?(Hash) ? list.call(acc['fill']['proxies']) : []).select { |p| p.is_a?(Hash) }.map { |p| p['name'].to_s } +
+         own.map { |p| p['name'].to_s }
     px = list.call(cfg['proxies']).dup
     list.call(src['proxies']).each do |p|
       next unless p.is_a?(Hash) && fn.include?(p['name'].to_s)
@@ -1614,9 +1667,9 @@ if opt['--mirror'] && acc['fill'].is_a?(Hash)
       if i then px[i] = p else px << p end
     end
     cfg['proxies'] = px
-    gn = acc['fill']['group'].to_s
-    sg = list.call(src['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gn }
-    rg = list.call(cfg['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gn }
+    gn = acc['fill'].is_a?(Hash) ? acc['fill']['group'].to_s : nil
+    sg = gn && list.call(src['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gn }
+    rg = gn && list.call(cfg['proxy-groups']).find { |x| x.is_a?(Hash) && x['name'].to_s == gn }
     if sg && rg
       more = list.call(sg['proxies']).map(&:to_s) - list.call(rg['proxies']).map(&:to_s)
       rg['proxies'] = list.call(rg['proxies']) + more unless more.empty?
@@ -1641,7 +1694,11 @@ wanted = list.call(acc['nodes']).map(&:to_s)
 members = wanted.select { |n| known[n] }
 (wanted - members).each { |n| $stderr.puts "cca: 路由器上没有节点「#{n}」，已从可选列表里跳过" }
 assign = {}
-list.call(acc['accounts']).each { |a| assign[a['slot'].to_i] = a['node'].to_s }
+ckof = {}   # 用自定义节点的槽位：那台设备上这个节点的身份摘要（Mac 上的 cca 算的，见上面的 ckey / fnv）
+list.call(acc['accounts']).each do |a|
+  assign[a['slot'].to_i] = a['node'].to_s
+  ckof[a['slot'].to_i] = a['ck'].to_s if a['ck']
+end
 port_of = lambda { |v| v.to_s.split(':').last.to_i }
 if opt['--insert']   # ShellCrash 不用订阅配置里的 port 这些设置，用它自己的（--ports）
   used = opt['--ports'].to_s.split.map(&:to_i)
@@ -1662,8 +1719,18 @@ slots = []
     $stderr.puts "cca: 槽位 #{k} 的节点「#{node}」不可用，该端口改为 REJECT（宁可断开也不换出口）"
     node = nil
   end
+  bad = nil
+  if node && ckof[k]   # 自定义节点：这里叫这个名字的得是同一个，不然只断开这个槽位（组里也不放它，切不过去），别的槽位不受影响
+    d = list.call(cfg['proxies']).find { |x| x.is_a?(Hash) && x['name'].to_s == node }
+    dk = d && ckey.call(d)
+    unless dk && fnv.call(dk) == ckof[k]
+      $stderr.puts "cca: 槽位 #{k} 的「#{node}」和账号要的自定义节点不是同一个（同名，服务器或账号不一样），该端口改为 REJECT（宁可断开也不换出口）"
+      bad = node
+      node = nil
+    end
+  end
   first = node || 'REJECT'
-  slots << [k, port, [first] + (members - [first]) + (first == 'REJECT' ? [] : ['REJECT'])]
+  slots << [k, port, [first] + (members - [first, bad]) + (first == 'REJECT' ? [] : ['REJECT'])]
   used << port
 end
 new_groups = slots.map { |k, _, order| { 'name' => "CCA-#{k}", 'type' => 'select', 'proxies' => order } }
@@ -2082,12 +2149,26 @@ cat "$R/accounts.yaml" 2>/dev/null; echo; echo ---CCA-OWN---; cat "$R/owners" 2>
 }
 router_unlock() { rsh "rm -rf $RDIR/push.lock" </dev/null >/dev/null 2>&1 || :; }   # 放掉推送锁
 
+custom_clash_rename() {   # custom_clash_rename 回读的账号表：这台的自定义节点和别的设备在路由器上正用着的同名节点不是同一个时，
+	                        # 这台的换个名字（出口不变）再合并。不然只能不写这台的：这台用它的账号断开，切不过去的槽位还让经路由器的启动都停下
+	local clashes old new n
+	local -a taken=()
+	clashes=$(printf '%s' "$1" | py custom-clashes 2>/dev/null) || return 0
+	[ -n "$clashes" ] || return 0
+	while IFS= read -r n; do [ -n "$n" ] && taken[${#taken[@]}]="$n"; done < <(node_taken)
+	while IFS= read -r old; do
+		[ -n "$old" ] || continue
+		new=$(py node-rename "$old" "${taken[@]}") || continue
+		warn "自定义节点「${old}」和别的设备在路由器上正用着的同名节点不是同一个：这台的改名为「${new}」（出口不变）"
+	done <<< "$clashes"
+}
 router_push() {   # 把账号表和路由器端脚本部署到路由器（返回值同 router_sync）
 	local out rc bundle remote
 	router_ready || { warn "还没配置路由器（cca router setup）"; return 1; }
 	py validate all || { warn "账号表有错误，先修正（$(edit_hint)）"; return 1; }
 	# 并发锁 + 回读：抢到锁（别的设备没在同时推）才推，回读 accounts.yaml + owners 合并时保留别的设备的槽位（读不到就当全新/单设备覆盖）
 	remote=$(router_lock_read) || { info "路由器端口池正被别的设备更新，这次先不同步（下次会自动补；启动前会回读校验，不会走错出口）"; return 0; }
+	custom_clash_rename "$remote"
 	bundle=$(printf '%s' "$remote" | router_bundle) || { warn "生成路由器部署内容失败"; router_unlock; return 1; }
 	info "正在同步账号到路由器 ${ROUTER_HOST} …"
 	out=$(printf '%s\n' "$bundle" | rsh 'sh -s' 2>&1); rc=$?
@@ -2187,7 +2268,7 @@ cmd_router() {
 # 账号
 # ---------------------------------------------------------------------------
 pick_node() {   # pick_node [direct] [给图形界面的 k=v…]：从可选节点里选一个，打印节点名；标出已被当前工具的哪些账号使用、路由器上是否存在。
-	                # direct 时第一项（默认）是"直连"，选它打印空字符串。能用内置代理、没路由器时末尾加一项「自定义代理…」（粘贴分享链接 / Clash 节点）
+	                # direct 时第一项（默认）是"直连"，选它打印空字符串。能用内置代理时末尾加一项「自定义代理…」（粘贴代理链接 / Clash 节点）
 	local onrouter="" def n=0 i node sel off=0 cols note custom=0 picked=-1
 	local -a nodes rows opts
 	if [ "${1:-}" = direct ]; then nodes[0]=""; rows[0]="直连（不经代理）"; n=1; off=1; shift; fi
@@ -2197,7 +2278,7 @@ pick_node() {   # pick_node [direct] [给图形界面的 k=v…]：从可选节�
 	i=$off
 	cols=$(term_cols); [ -z "$PROMPT_GUI" ] || cols=400   # 图形界面要完整的注记，不按终端宽度截断
 	while IFS= read -r node; do rows[i]="$node"; i=$((i + 1)); done < <(py node-rows "$onrouter" "$cols")
-	if [ "$custom" = 1 ]; then nodes[n]=$'\x01custom'; rows[n]="自定义代理…（粘贴分享链接或 Clash 节点配置）"; n=$((n + 1)); fi
+	if [ "$custom" = 1 ]; then nodes[n]=$'\x01custom'; rows[n]="自定义代理…（粘贴代理链接或 Clash 节点配置）"; n=$((n + 1)); fi
 	[ $n -gt 0 ] || { warn "config.json 里没有可选节点（nodes）"; return 1; }
 	if [ $off = 1 ]; then def=0; else def=$(py node-default); fi
 	if [ -n "$PROMPT_GUI" ]; then
@@ -4142,11 +4223,16 @@ cmd_local_status() {
 }
 
 # ===== cca Phase B bash: custom nodes for the builtin proxy =====
-# 自定义节点（只给内置代理用）：粘贴分享链接或 Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json，
-# 名字加进可选节点（py node-save）。路由器的节点在 cca router setup 里选，所以只在没有路由器、能用内置代理时开放。
-node_custom_ok() {   # 这台机器能加自定义节点吗：能用内置代理、还没配置路由器
-	core_possible && ! router_ready
+# 自定义节点：粘贴代理链接（分享链接、socks5://、http(s)://）或 Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json，
+# 名字加进可选节点（py node-save）。内置代理直接用；配置了路由器的，同步时照维护者参考节点那一套写进路由器的配置文件（fill_source）。
+node_custom_ok() {   # 这台机器能加自定义节点吗：能用内置代理（拿它的内核先校验）。配置了路由器的，同步时也写进路由器的配置文件
+	core_possible
 }
+node_taken() {   # 在家时路由器上全部节点和策略组的名字（一行一个）：自定义节点起名时避开（同名的写不进路由器的配置）
+	router_ready && at_home || return 0
+	router_sh | rsh 'sh -s nodes' 2>/dev/null | awk -F '\t' 'NF > 1 && ($1 == "P" || $1 == "G" || $1 == "C") { print $2 }'
+}
+CUSTOM_FORMATS="vmess:// vless:// ss:// trojan:// hysteria2:// tuic://、socks5://用户:密码@主机:端口、http(s)://用户:密码@主机:端口"
 
 node_validate() {   # node_validate <节点 JSON>：拿一份只含它的最小配置让内核 -t 校验（不起内核、不联网）。认不出返回 1
 	core_fetch || { warn "下载内置代理的内核失败，没法校验这个节点：${FETCH_ERR}"; return 1; }
@@ -4174,36 +4260,41 @@ node_read_block() {   # 终端：读一段多行粘贴（分享链接或 Clash �
 node_add() {   # node_add [分享链接]：解析 → 校验 → 存。成功后 ADDED_NODE 是节点名
 	ADDED_NODE=""
 	if ! node_custom_ok; then
-		if ! core_possible; then warn "自定义节点要用内置代理，这台机器用不了（内置代理的内核没有 $(uname -m) 这个架构）"
-		else warn "这台机器配置了路由器：出口节点在 ${CMD} router setup 里选；自定义节点只给没有路由器、用内置代理的机器"; fi
+		warn "自定义节点要用内置代理的内核校验，这台机器用不了（内置代理的内核没有 $(uname -m) 这个架构）"
 		return 1
 	fi
-	local text proxy name
+	local text proxy name n
+	local -a taken=()
 	if [ -n "${1:-}" ]; then
 		text="$1"
 	else
-		say "  粘贴一条分享链接（vmess:// vless:// ss:// trojan:// hysteria2:// tuic://），或一段 Clash 节点配置。"
+		say "  粘贴一条代理链接（${CUSTOM_FORMATS}），或一段 Clash 节点配置。"
 		say "  贴完单独一行写一个点（.）回车结束："
 		text=$(node_read_block) || { warn "没有输入"; return 1; }
 	fi
-	proxy=$(printf '%s' "$text" | py node-check) || return 1
+	while IFS= read -r n; do [ -n "$n" ] && taken[${#taken[@]}]="$n"; done < <(node_taken)
+	proxy=$(printf '%s' "$text" | py node-check "${taken[@]}") || return 1
 	info "正在用内核校验这个节点…"
 	node_validate "$proxy" || return 1
 	name=$(printf '%s' "$proxy" | py node-save) || return 1
 	ADDED_NODE="$name"
 }
 
-node_custom_form() {   # GUI：粘贴分享链接的表单（多行 Clash 配置请用终端 cca node add）。校验没过带着原因重问。成功后 ADDED_NODE 是节点名
+node_custom_form() {   # GUI：粘贴代理链接的表单（多行 Clash 配置请用终端 cca node add）。校验没过带着原因重问。成功后 ADDED_NODE 是节点名
 	ADDED_NODE=""
-	local link="" proxy err=""
+	local link="" proxy err="" n msg
+	local -a taken=()
+	msg="粘贴一条代理链接（${CUSTOM_FORMATS}）；多行的 Clash 节点配置请在终端运行 ${CMD} node add。"
+	router_ready && msg="${msg}配置了路由器：同步时写进路由器的配置文件（要重启一次 OpenClash / ShellCrash，先问你）。"
+	while IFS= read -r n; do [ -n "$n" ] && taken[${#taken[@]}]="$n"; done < <(node_taken)
 	while :; do
-		ask_fields node.custom "自定义代理" "粘贴一条分享链接（vmess:// vless:// ss:// trojan:// hysteria2:// tuic://）；多行的 Clash 节点配置请在终端运行 ${CMD} node add。" \
-			"link|text|||分享链接|vmess:// 或 vless:// …|${link}|${err}" || return 1
+		ask_fields node.custom "自定义代理" "$msg" \
+			"link|text|||代理链接|socks5://用户:密码@主机:端口 …|${link}|${err}" || return 1
 		link="$F_link"
-		[ -n "$link" ] || { err="粘贴一条分享链接"; continue; }
-		if ! proxy=$(printf '%s' "$link" | py node-check 2>&1); then err="$proxy"; continue; fi
+		[ -n "$link" ] || { err="粘贴一条代理链接"; continue; }
+		if ! proxy=$(printf '%s' "$link" | py node-check "${taken[@]}" 2>&1); then err="$proxy"; continue; fi
 		info "正在用内核校验这个节点…"
-		if ! node_validate "$proxy"; then err="这个节点内核校验没通过，检查一下分享链接对不对"; continue; fi
+		if ! node_validate "$proxy"; then err="这个节点内核校验没通过，检查一下链接对不对"; continue; fi
 		ADDED_NODE=$(printf '%s' "$proxy" | py node-save) || return 1
 		return 0
 	done
@@ -4214,8 +4305,8 @@ node_ls() {
 	while IFS=$'\t' read -r name type addr users; do
 		any=1; say "    ${name}（${type} ${addr}）${users:+  ——  ${users} 在用}"
 	done < <(py node-ls)
-	if [ -n "$any" ]; then say ""; info "加账号时在选节点那步选它们（${CMD} add）；删一个用 ${CMD} node rm 节点名"
-	else info "还没有自定义节点。${CMD} node add 粘贴一条分享链接或一段 Clash 节点配置就能加（只给没有路由器、用内置代理时）"; fi
+	if [ -n "$any" ]; then say ""; info "加账号时在选节点那步选它们（${CMD} add），已有的账号用 ${CMD} node use 账号 换过去；删一个用 ${CMD} node rm 节点名"
+	else info "还没有自定义节点。${CMD} node add 粘贴一条代理链接（分享链接、socks5://、http://）或一段 Clash 节点配置就能加"; fi
 }
 
 node_rm() {
@@ -4229,12 +4320,37 @@ node_rm() {
 	esac
 }
 
-cmd_node() {   # cca [codex] node [ls | add [分享链接] | rm 节点]：管理只给内置代理用的自定义节点
+node_use() {   # node_use 账号 [链接]：给这个账号配自定义代理：粘贴（图形界面里是 node.custom 表单）→ 校验 → 存成自定义节点 →
+	            # 账号改走它 → 同步路由器（配置文件里写进节点，要重启一次 OpenClash / ShellCrash，先问）。维护者固定了节点的账号不能换
+	local key out rc name
+	[ -n "${1:-}" ] || die "用法: ${CMD} node use <账号> [代理链接]"
+	need_tty
+	key=$(py resolve "$1") || FAIL_CODE=account_missing die "没找到账号：$1"
+	out=$(py node-assign "$key") && rc=0 || rc=$?
+	case $rc in
+		0) ;;
+		3) FAIL_CODE=node_pinned die "$out" ;;
+		*) return 1 ;;
+	esac
+	if [ -n "$PROMPT_GUI" ] && [ -z "${2:-}" ]; then node_custom_form || return 1
+	else node_add "${2:-}" || return 1; fi
+	out=$(py node-assign "$key" "$ADDED_NODE") || return 1
+	name=$(py name "$key")
+	okay "${name} 改走自定义代理「${ADDED_NODE}」"
+	if router_needed; then router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"; fi
+	gui_done saved "${name} 改走自定义代理「${ADDED_NODE}」" "$key"
+}
+
+cmd_node() {   # cca [codex|agy] node [ls | add [链接] | use 账号 [链接] | rm 节点]：管理自定义节点（内置代理用；配置了路由器的同步时也写进路由器）
 	case "${1:-ls}" in
 		ls|list) node_ls ;;
-		add) shift; if node_add "$@"; then okay "加好了自定义节点「${ADDED_NODE}」：加账号时在选节点那步选它（${CMD} add），或 ${CMD} node ls 查看"; else return 1; fi ;;
+		add) shift
+			node_add "$@" || return 1
+			okay "加好了自定义节点「${ADDED_NODE}」：加账号时在选节点那步选它（${CMD} add），已有的账号用 ${CMD} node use 账号 换过去，或 ${CMD} node ls 查看"
+			if router_needed; then router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"; fi ;;
+		use) shift; node_use "$@" ;;
 		rm|remove|del) shift; node_rm "$@" ;;
-		*) die "用法: ${CMD} node [ls | add [分享链接] | rm 节点]" ;;
+		*) die "用法: ${CMD} node [ls | add [代理链接] | use 账号 [代理链接] | rm 节点]" ;;
 	esac
 }
 
@@ -6708,7 +6824,9 @@ EOF
   cca local setup            配置内置代理：每个账号在本机开一个端口走它自己的节点（macOS 26 以上内核在界面 App 里
                              运行，以下由 cca 在后台运行）。节点在家时从路由器拷一份；不在维护者映射里的账号，
                              用 cca node add 填一个。在外面第一次启动时也会问
-  cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接或 Clash 节点配置，只给没有路由器的机器）
+  cca node add|ls|rm         加 / 看 / 删自定义节点（粘贴分享链接、socks5:// http:// 代理或 Clash 节点配置）：内置代理用，
+                             配置了路由器的同步时也写进路由器的配置文件（要重启一次 OpenClash / ShellCrash，先问你）
+  cca node use 账号 [链接]   给这个账号换上一个自定义代理（加好节点、改走它、同步路由器；维护者固定了节点的不行）
   cca local udp [on [节点]]  这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）也经节点出去：内置代理只管账号的端口，
                              这些照旧直连。开着时一个 root 的系统服务只接 UDP（TCP 照旧直连），装的时候要输一次
                              管理员密码；不带参数看现在从哪出去，pick 换节点，off 关掉，uninstall 删掉系统服务
@@ -6723,7 +6841,8 @@ EOF
   cca local setup            配置内置代理（mihomo 内核，由 cca 在后台运行，不用 root；节点在家时从路由器拷一份，
                              连不到路由器的服务器上用维护者的参考节点）；不在映射里的账号用 cca node add 填一个。
                              在外面第一次启动时也会问
-  cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接或 Clash 节点配置）
+  cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接、socks5:// http:// 代理或 Clash 节点配置）
+  cca node use 账号 [链接]   给这个账号换上一个自定义代理（维护者固定了节点的不行）
   cca local off              停掉内置代理的内核、删掉它的配置和拷来的节点
                              平时自动判断：连得上路由器走路由器，连不上走内置代理（只经 VPN、ZeroTier 这类
                              虚拟网卡连得到路由器的不算）；想固定一种，把 ${CFG} 的 route 改成 router 或 local
@@ -6777,7 +6896,7 @@ main() {
 	# 用 cxa、aga 调用：换成 cca codex …、cca agy …。参数里带着工具，自动更新后用新版本重新执行（exec "$SELF" "$@"）才不会变成 cca …
 	case "${0##*/}" in "$CODEX_ALIAS") set -- codex "$@" ;; "$AGY_ALIAS") set -- agy "$@" ;; esac
 	# 后台任务不往图形界面的事件文件里写（它们是从带着 CCA_EVENTS 的命令里分出来的，跑完时那个命令早就结束了）
-	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
+	case "${1:-}" in _update-fetch|_policy-fetch|_gui-fetch|_core|_core-keep|_core-nodes|_presence-agent|_key-sync|_cost-sync|_session-start|_dock-tidy|_dock-wait|_mail-open) unset CCA_EVENTS CCA_GRANT CCA_RO CCA_PROMPT; PROMPT_GUI="" ;; esac
 	[ "${1:-}" = _browser ] || unset CCA_LOGIN_URL_FILE   # 只给服务器上登录时 claude / codex 回调的 cca _browser
 	case "${1:-}" in
 		install) shift; cmd_install "$@" ;;
@@ -6792,6 +6911,9 @@ main() {
 			shift
 			if [ "${1:-}" = codex ]; then shift; use_tool codex; fi
 			py api-key-out "${1:-}" ;;
+		_session-start)   # Claude Code 的 SessionStart hook（启动时经 --settings 带上的）：会话 id 记进账号目录，折合金额按它认账号。stdout 会进 Claude 的上下文：什么都不说，总是成功
+			shift
+			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) cmd_policy_fetch ;;
 		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
@@ -6804,7 +6926,7 @@ main() {
 		_core-keep) CCA_SELF="$SELF" exec "$HELPER" core-keep ;;   # 后台（Linux）：没有界面 App 时托管内置代理的内核（见 py 的 cmd_core_keep）
 		_presence-agent) CCA_SELF="$SELF" exec "$HELPER" presence-agent ;;   # 后台：这台 Mac 的设备统计上报进程（见 py 的 presence 一节）
 		_key-sync) shift; CCA_SELF="$SELF" exec "$HELPER" key-sync "$@" ;;   # 后台：记下备查的 API key 经设备统计的服务器加密同步（见 py 的 keyshare 一节）
-		_cost-sync) shift; CCA_SELF="$SELF" exec "$HELPER" cost-worker "$@" ;;   # 后台：统计折合金额、和别的设备同步（见 py 的折合金额一节）
+		_cost-sync) shift; CCA_SELF="$SELF" CCA_VERSION="$VERSION" exec "$HELPER" cost-worker "$@" ;;   # 后台：统计折合金额、和别的设备同步（见 py 的折合金额一节）
 		_dock-tidy) shift; cmd_dock_tidy "$@" ;;   # 后台：cca 打开的 App 实例退出后整理程序坞（见 py 的程序坞一节；终端交接的脚本也调，PROTOCOL 6）
 		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
 		gui) shift; cmd_gui "$@" ;;

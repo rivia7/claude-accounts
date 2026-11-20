@@ -21,7 +21,7 @@ use super::session::{cli_alive, proc_starts};
 use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
 use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, EMAIL_RE, MASTER_JSON};
-use crate::core::model::{cdir, is_api, parse_key};
+use crate::core::model::{adir, cdir, is_api, parse_key};
 use crate::core::tool::{claude, codex, Kind, Tool, Using};
 use crate::py::fs::{load_quiet, utime_now};
 use crate::py::hash::{sha1_hex, sha256_hex};
@@ -30,7 +30,7 @@ use crate::py::proc::getenv;
 use crate::py::re::Re;
 use crate::py::time::{localtime, mktime, monotonic, sleep, strftime_local, time, timegm};
 use crate::py::{exit, json, num, path, shutil, text, zlib, Fail, R};
-use crate::{dict, list, out};
+use crate::{dict, list, out, re};
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
@@ -43,13 +43,15 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("cost-stop", cmd_cost_stop),
     Cmd::all("_cost-periods", cmd_cost_periods),
     Cmd::all("_cost-view", cmd_cost_view),
+    Cmd::all("session-start", cmd_session_start),
 ];
 
 pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "cost"));
 /// 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing）
 pub const COST_PRICES_DATE: &str = "2026-11-13";
-/// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/1"）
-pub const COST_BUILD: &str = "2026-11-13/1";
+/// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/第几版"；/2：按会话开始的记录认账号、
+/// 记下诊断，从头重算一遍，最近 30 天认不出账号的原因才全）
+pub const COST_BUILD: &str = "2026-11-13/2";
 /// 后台统计最多隔这么久起一次
 pub const COST_EVERY: f64 = 300.0;
 /// 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
@@ -79,6 +81,15 @@ pub const COST_PUT_MAX: usize = 256 * 1024;
 /// cca cost sync 最多等正在跑的统计这么久
 pub const COST_WAIT: i64 = 240;
 pub const COST_OLD: &str = "维护者的设备统计服务器还不支持同步折合金额（维护者要更新服务器：./policy.sh presence deploy）";
+/// 账号目录里记会话开始的文件（cmd_session_start 写，Marks 读）
+pub const SESSIONS_FILE: &str = "sessions.jsonl";
+/// sessions.jsonl 超过这么大时只留最后 SESSIONS_KEEP 字节（一行六七十字节：一天开两百次会话也留得下一个多月）
+const SESSIONS_MAX: u64 = 1 << 20;
+const SESSIONS_KEEP: usize = 512 << 10;
+/// 会话开始的记录晚于回复这么多秒以内也算（回复的时间只到秒）
+const MARK_SLACK: f64 = 2.0;
+/// 从这个版本起 Claude Code 在会话里写 session-owner
+const CLAUDE_OWNER_SINCE: &str = "2.1.317";
 pub static COST_HOUR_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[0-9]{9,11}$"));
 static COST_DATE_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"-(20[0-9]{6}|20[0-9]{2}-[0-9]{2}-[0-9]{2})$"));
 
@@ -820,12 +831,243 @@ fn cost_load_scan() -> (Dict, Seen) {
             && all("um", &|m| m.as_dict().is_some_and(|m| m.values().iter().all(is_int)))
     }) {
         j.set("who", cost_who_kept(&[&j]));
+        // 诊断（以前的版本没有）不对就不要了，不为它从头重算
+        if j.get("diag").is_some_and(|d| !diag_ok(&d)) {
+            j.pop("diag");
+        }
         return (j, seen);
     }
     let loc = cost_json("local.json");
     base.set("who", cost_who_kept(&[&loc, &j]));
     base.set("old", cost_rows_kept(&j, &loc));
     (base, Seen::new())
+}
+
+// --- 会话开始的记录（账号目录的 sessions.jsonl）--------------------------------------------------------------------------
+// Claude Code 2.1.316 及以前不在会话里写 session-owner，Claude 桌面 App 里的会话也不写：这些回复认不出是哪个账号的。cca 启动
+// Claude Code 时经 --settings 带一个 SessionStart hook（accounts.rs 的 session_hook），会话开始、续接、/clear、压缩以后回调
+// cca _session-start 账号目录名，在这个账号目录的 sessions.jsonl 末尾记一行 {"sid": 会话 id, "at": 时间, "source": 怎么开始的}。
+// 统计时没有 session-owner 的回复按它认：这个会话在回复以前最后一次是在哪个账号下开始的（续接到别的账号下也认得出）；
+// 第三方 API 账号下开始的不算（不是订阅的用量）。不经 cca 启动的（直接运行 claude、桌面 App、IDE）没有记录，照旧认不出。
+
+/// cca _session-start 账号目录名（Claude Code 的 SessionStart hook）：stdin 是 hook 的输入（JSON：session_id、source……），
+/// 会话 id 记进 ~/.cca/accounts/<账号目录名>/sessions.jsonl（600，追加，flock 排队；超过 SESSIONS_MAX 先只留最后 SESSIONS_KEEP）。
+/// 出什么错都不说（bash 把 stdout、stderr 都丢掉、总是成功：hook 的 stdout 会进 Claude 的上下文）
+pub fn cmd_session_start(args: &[String]) -> R<()> {
+    arity("cmd_session_start", args, 1, 1)?;
+    let id = args[0].as_str();
+    let dir = path::join_all(&[&claude().sroot, "accounts", id]);
+    // SAFETY: 只是问 fd 0 是不是终端（手动运行时不等输入）
+    if !re!(r"^[a-z0-9][a-z0-9-]{0,63}$").matches(id) || !path::isdir(&dir) || unsafe { libc::isatty(0) } == 1 {
+        return Ok(());
+    }
+    let mut raw = Vec::new();
+    if std::io::stdin().lock().take(64 << 10).read_to_end(&mut raw).is_err() {
+        return Ok(());
+    }
+    let Ok(d) = line_doc(&raw) else { return Ok(()) };
+    let Some(sid) = d.str("session_id").filter(|s| re!(r"^[0-9A-Za-z][0-9A-Za-z_-]{7,63}$").matches(s)) else { return Ok(()) };
+    let source = d.str("source").filter(|s| re!(r"^[a-z_]{1,16}$").matches(s)).map_or(String::new(), |s| s.to_string());
+    let line = json::dumps(&V::Dict(dict! { "sid" => &*sid, "at" => time(), "source" => source }), json::Fmt::new().compact());
+    let _ = sessions_append(&path::join(&dir, SESSIONS_FILE), format!("{line}\n").as_bytes());
+    Ok(())
+}
+
+/// 在 sessions.jsonl 末尾加一行（拿着 flock：和别的会话开始、统计时读它的排队）；太大了先只留最后 SESSIONS_KEEP 字节（从整行开始）
+fn sessions_append(p: &str, line: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().read(true).append(true).create(true).mode(0o600).open(p)?;
+    // SAFETY: f 开着，fd 有效；锁在 f 关上时放开
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if f.metadata()?.len() > SESSIONS_MAX {
+        let mut all = Vec::new();
+        f.seek(SeekFrom::Start(0))?;
+        f.read_to_end(&mut all)?;
+        let cut = all.len().saturating_sub(SESSIONS_KEEP);
+        let start = all[cut..].iter().position(|b| *b == b'\n').map_or(all.len(), |i| cut + i + 1);
+        f.set_len(0)?; // 追加着写：截短以后从头写
+        f.write_all(&all[start..])?;
+    }
+    f.write_all(line)
+}
+
+/// 一次会话开始是在谁下面
+enum MarkWho {
+    /// 官方账号：它现在登录的 accountUuid（读不出是 None：认不出）
+    Official(Option<V>),
+    /// 第三方 API 账号：它的会话不算
+    Api,
+}
+
+/// Claude 各账号目录的 sessions.jsonl：会话 id → [(时间, 是谁)]（按时间排好）
+struct Marks {
+    /// (路径, 是谁, 上次读时的大小和修改时间)
+    files: Vec<(String, std::rc::Rc<MarkWho>, Option<(u64, i64, i64)>)>,
+    by_sid: std::collections::HashMap<String, Vec<(f64, std::rc::Rc<MarkWho>)>>,
+}
+
+impl Marks {
+    /// 账号表里各 Claude 账号的（官方账号的身份读它配置目录的 .claude.json；读不了账号表是空的）
+    fn load() -> Marks {
+        let tool = claude();
+        let table = if path::exists(&tool.table) { load_quiet(&tool.table).and_then(|t| t.as_dict()) } else { None };
+        if let Some(t) = &table {
+            tool.set_ids(t); // 第三方 API 账号的目录按它的 id 起名
+        }
+        let _using = Using::tool(tool);
+        let mut files = Vec::new();
+        for (k, v) in table.map(|t| t.items()).unwrap_or_default() {
+            let who = if is_api(&v) {
+                MarkWho::Api
+            } else {
+                MarkWho::Official(ident_str(oauth_ident(&path::join(&cdir(&k), ".claude.json")).0))
+            };
+            files.push((path::join(&adir(&k), SESSIONS_FILE), std::rc::Rc::new(who), None));
+        }
+        let mut m = Marks { files, by_sid: Default::default() };
+        m.refresh();
+        m
+    }
+
+    /// 有文件变了（大小、修改时间）就全部重读；返回有没有变
+    fn refresh(&mut self) -> bool {
+        let mut changed = false;
+        for (p, _, stamp) in &mut self.files {
+            let now = std::fs::metadata(&*p).ok().map(|st| (st.size(), st.mtime(), st.mtime_nsec()));
+            if now != *stamp {
+                *stamp = now;
+                changed = true;
+            }
+        }
+        if !changed {
+            return false;
+        }
+        self.by_sid.clear();
+        for (p, who, _) in &self.files {
+            let Ok(mut f) = std::fs::File::open(p) else { continue };
+            // SAFETY: f 开着，fd 有效；锁在 f 关上时放开（等正在写、正在截短的写完）
+            unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH) };
+            let mut raw = Vec::new();
+            if (&mut f).take(4 << 20).read_to_end(&mut raw).is_err() {
+                continue;
+            }
+            drop(f);
+            for line in raw.split(|b| *b == b'\n') {
+                let Ok(d) = line_doc(line) else { continue };
+                let (Some(sid), Some(at)) =
+                    (d.str("sid").filter(|s| (8..=64).contains(&s.len())), d.get("at").and_then(|a| a.as_num()))
+                else {
+                    continue;
+                };
+                self.by_sid.entry(sid.to_string()).or_default().push((at, who.clone()));
+            }
+        }
+        for v in self.by_sid.values_mut() {
+            v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        true
+    }
+
+    /// 会话 sid 在 ts（回复的时间）以前最后一次是在谁下面开始的
+    fn at(&self, sid: &str, ts: f64) -> Option<std::rc::Rc<MarkWho>> {
+        self.by_sid.get(sid)?.iter().rev().find(|(at, _)| *at <= ts + MARK_SLACK).map(|(_, w)| w.clone())
+    }
+}
+
+/// 版本号的样子（cca 的、Claude Code 的）：最多 32 个字母、数字和 . _ + -
+fn version_ok(v: &str) -> bool {
+    (1..=32).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+}
+
+/// scan.json 的 diag（CostScan::note 记的）：{"cc" 或认不出的原因: [时间, 版本]}
+fn diag_ok(d: &V) -> bool {
+    d.as_dict().is_some_and(|d| {
+        d.items().iter().all(|(k, x)| {
+            matches!(&**k, "cc" | "old_claude_code" | "claude_app" | "unknown")
+                && x.as_list().is_some_and(|l| l.len() == 2 && is_num(&l.at(0)) && l.at(1).is_str())
+        })
+    })
+}
+
+/// 诊断（local.json 的 diag、别的设备传来的 dg）核对过、只留认得的样子：{"cca": 版本（只有传来的有）, "claude_code": 命令行
+/// 最近用的 Claude Code 版本, "why": [{"code": 为什么有回复认不出账号, "last_epoch": 最近一次, "claude_code": 那时的版本}…]}。
+/// 没有、不是对象是 None
+fn cost_diag_ok(x: Option<V>, now: f64) -> Option<Dict> {
+    let x = x?.as_dict()?;
+    let out = Dict::new();
+    for k in ["cca", "claude_code"] {
+        if let Some(v) = x.str(k).filter(|v| version_ok(v)) {
+            out.set(k, &*v);
+        }
+    }
+    let mut why = Vec::new();
+    for e in x.list("why").map(|l| l.items()).unwrap_or_default().into_iter().take(8) {
+        let Some(e) = e.as_dict() else { continue };
+        let code = e.str("code").filter(|c| re!(r"^[a-z][a-z_]{0,31}$").matches(c));
+        let at = e.get("last_epoch").filter(is_num).and_then(|a| a.as_num()).filter(|a| 0.0 < *a && *a <= now + 86400.0);
+        let (Some(code), Some(at)) = (code, at) else { continue };
+        let w = dict! { "code" => &*code, "last_epoch" => at };
+        if let Some(v) = e.str("claude_code").filter(|v| version_ok(v)) {
+            w.set("claude_code", &*v);
+        }
+        why.push(V::Dict(w));
+    }
+    out.set("why", why);
+    Some(out)
+}
+
+/// scan.json 的 diag → local.json 的 diag（cost_diag_ok 的样子，没有 cca）：最近 COST_DAYS+1 天的，原因按名字排；什么都没有是 None
+fn cost_diag_view(j: &Dict, now: f64) -> Option<Dict> {
+    let lo = now - (COST_DAYS + 1) as f64 * 86400.0;
+    let mut items = j.dict("diag")?.items();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    let out = Dict::new();
+    let mut why = Vec::new();
+    for (code, x) in items {
+        let l = x.as_list().expect("cost_load_scan 核对过");
+        let (at, v) = (l.at(0).as_num().unwrap_or(0.0), l.at(1).py_str());
+        if at < lo {
+            continue;
+        }
+        if &*code == "cc" {
+            out.set("claude_code", v);
+            continue;
+        }
+        let w = dict! { "code" => &*code, "last_epoch" => at };
+        if !v.is_empty() {
+            w.set("claude_code", v);
+        }
+        why.push(V::Dict(w));
+    }
+    if out.is_empty() && why.is_empty() {
+        return None;
+    }
+    out.set("why", why);
+    Some(out)
+}
+
+/// 传给别的设备的诊断（这台设备一份，传的每个账号都带着；见 cost_diag_ok）：cca 的版本，local.json 的 diag，最近一次只到天（UTC）。
+/// 不传条数
+fn cost_dg(local: &Dict, now: f64) -> Dict {
+    let dg = cost_diag_ok(local.get("diag"), now).unwrap_or_else(|| dict! { "why" => List::new() });
+    if let Some(v) = getenv("CCA_VERSION").filter(|v| version_ok(v)) {
+        dg.set("cca", v);
+    }
+    for w in dg.list("why").expect("刚放进去的").items() {
+        let w = w.as_dict().expect("cost_diag_ok 给的");
+        w.set("last_epoch", (w.at("last_epoch").as_num().unwrap_or(0.0) / 86400.0).floor() * 86400.0);
+    }
+    dg
+}
+
+/// Claude Code 的这个版本还不写 session-owner
+fn claude_code_old(v: &str) -> bool {
+    match (super::gui::ver_key(v), super::gui::ver_key(CLAUDE_OWNER_SINCE)) {
+        (Some(a), Some(b)) => a < b,
+        _ => false,
+    }
 }
 
 /// 会话记录的种类：Claude 的主会话、子代理，Codex 的
@@ -851,6 +1093,10 @@ struct CostScan {
     mains: std::collections::HashSet<String>,
     /// 这一遍看到的会话记录里，各工具（claude、codex）最早的修改时间（cost_keep_old 用）
     oldest: Vec<(&'static str, f64)>,
+    /// 会话开始的记录：碰到第一条没有 session-owner 的回复时才读（多数回复用不着它）
+    marks: Option<Marks>,
+    /// 读这个文件时已经重读过会话开始的记录（新开的会话可能是读完记录以后才开始的：每个文件最多重读一次）
+    marks_fresh: bool,
 }
 
 /// 一行里的东西对不上（原来是 TypeError / AttributeError / KeyError / IndexError，和 ValueError 一起被接住）：跳过这一行
@@ -899,14 +1145,75 @@ impl CostScan {
             files: 0,
             mains: Default::default(),
             oldest: Vec::new(),
+            marks: None,
+            marks_fresh: false,
         }
     }
 
-    /// key 是 (c 或 x, 摘要的前 8 个字节)：原来写成一个字符加 16 位十六进制的字符串
-    fn add(&mut self, tool: &str, who: &V, ts: Option<f64>, key: (u8, u64), micro: Option<f64>, tok: [i64; 4], model: &str) {
-        let Some(ts) = ts else { return };
+    /// 会话 sid 在 ts 以前最后一次是在谁下面开始的（会话开始的记录）；这个文件里还没重读过记录时，找不到就重读一次再找
+    fn mark_who(&mut self, sid: &str, ts: f64) -> Option<std::rc::Rc<MarkWho>> {
+        if self.marks.is_none() {
+            self.marks = Some(Marks::load());
+            self.marks_fresh = true;
+        }
+        let marks = self.marks.as_mut().expect("刚读的");
+        if let Some(w) = marks.at(sid, ts) {
+            return Some(w);
+        }
+        if self.marks_fresh {
+            return None;
+        }
+        self.marks_fresh = true;
+        if marks.refresh() {
+            marks.at(sid, ts)
+        } else {
+            None
+        }
+    }
+
+    /// 算进来的一条 Claude 回复：记下这台设备命令行里最近用的 Claude Code 版本（scan.json 的 diag 里的 cc），认不出账号的
+    /// 再记下为什么认不出（diag 里的 old_claude_code、claude_app、unknown）。都是 [最近一次的时间, Claude Code 的版本]，不记条数；
+    /// 同一个版本隔 10 分钟以上才改（每条回复都写一遍太费）
+    fn note(&self, d: &Dict, ts: f64, orphan: bool) {
+        let version = d.str("version").filter(|v| version_ok(v));
+        let desktop = d.get("entrypoint").is_some_and(|e| e.as_str() == Some("claude-desktop"));
+        let why = if !orphan {
+            None
+        } else if desktop {
+            Some("claude_app")
+        } else if version.as_ref().is_some_and(|v| claude_code_old(v)) {
+            Some("old_claude_code")
+        } else {
+            Some("unknown")
+        };
+        let cc = if desktop || version.is_none() { None } else { Some("cc") };
+        let v = version.as_deref().unwrap_or("");
+        for code in [cc, why].into_iter().flatten() {
+            let diag = sub_dict(&self.j, "diag");
+            let (last, last_v) = match diag.list(code) {
+                Some(l) => (l.at(0).as_num().unwrap_or(0.0), l.at(1).py_str()),
+                None => (0.0, String::new()),
+            };
+            if ts > last && (ts - last >= 600.0 || last_v != v) {
+                diag.set(code, list![ts, v]);
+            }
+        }
+    }
+
+    /// key 是 (c 或 x, 摘要的前 8 个字节)：原来写成一个字符加 16 位十六进制的字符串。算进来了返回 true
+    fn add(
+        &mut self,
+        tool: &str,
+        who: &V,
+        ts: Option<f64>,
+        key: (u8, u64),
+        micro: Option<f64>,
+        tok: [i64; 4],
+        model: &str,
+    ) -> bool {
+        let Some(ts) = ts else { return false };
         if !(1e9..=self.now + 2.0 * 86400.0).contains(&ts) || (!self.first && ts < self.cut) || self.seen.has(key.0, key.1) {
-            return;
+            return false;
         }
         let hour = ((ts / 3600.0).floor() * 3600.0) as i64;
         self.seen.add(key.0, key.1, hour);
@@ -941,6 +1248,7 @@ impl CostScan {
             bump(2 + i, *n);
         }
         self.records += 1;
+        true
     }
 
     /// 一个文件新增的完整的行
@@ -999,6 +1307,7 @@ impl CostScan {
         if start == size {
             return Ok(());
         }
+        self.marks_fresh = false;
         f.seek(SeekFrom::Start(start as u64))?;
         let mut pos = start;
         let mut reader = std::io::BufReader::with_capacity(256 * 1024, &mut *f);
@@ -1087,9 +1396,19 @@ impl CostScan {
                 }
             }
         }
+        if !who.truthy() {
+            // 没有 session-owner：按会话开始的记录认（见 Marks）
+            match self.mark_who(sid, ts).as_deref() {
+                Some(MarkWho::Api) => return Ok(()), // 第三方 API 账号的会话：不是订阅的用量，不算
+                Some(MarkWho::Official(Some(u))) => who = u.clone(),
+                _ => {}
+            }
+        }
         let model = cost_model(m.get("model").as_ref());
         let (micro, tok) = cost_claude(&model, &u);
-        self.add("claude", &who, Some(ts), key, micro, tok, &model);
+        if self.add("claude", &who, Some(ts), key, micro, tok, &model) {
+            self.note(&d, ts, !who.truthy());
+        }
         Ok(())
     }
 
@@ -1385,6 +1704,9 @@ fn cost_publish(j: &Dict, now: f64) -> R<()> {
         "v" => 1, "build" => COST_BUILD, "who" => j.at("who"), "acc" => acc, "um" => um,
         "orphan" => recent(&j.at("orphan"), now - (COST_DAYS + 1) as f64 * 86400.0),
     };
+    if let Some(diag) = cost_diag_view(j, now) {
+        doc.set("diag", diag);
+    }
     if !V::Dict(cost_json("local.json")).py_eq(&V::Dict(doc.clone())) {
         cost_save("local.json", &V::Dict(doc))?;
     }
@@ -1473,7 +1795,8 @@ fn cost_seal(keys: &Keys, aid: &str, fp: &str, doc: &Dict) -> R<Dict> {
     Ok(blob_seal(keys, &blob_ad(&[COST_LABEL, aid, fp])?, &pt))
 }
 
-/// 别的设备传来的明文：{"v": 1, "at": 时间, "h": {小时: [7 个计数]}, "um": [没有标价的模型…]}；格式不对是 None
+/// 别的设备传来的明文：{"v": 1, "at": 时间, "h": {小时: [7 个计数]}, "um": [没有标价的模型…], "dg": 诊断（cost_dg；以前的版本没有）}；
+/// 格式不对是 None（dg 不对只是不要它）
 fn cost_doc(d: &V, now: f64) -> Option<Dict> {
     let d = d.as_dict()?;
     let at = d.get("at").filter(is_num)?.as_num()?;
@@ -1490,7 +1813,11 @@ fn cost_doc(d: &V, now: f64) -> Option<Dict> {
         .filter(|m| m.as_str().is_some_and(|m| text::isprintable(m) && text::len(m) <= 64))
         .take(32)
         .collect();
-    Some(dict! { "at" => at, "h" => h, "um" => models })
+    let out = dict! { "at" => at, "h" => h, "um" => models };
+    if let Some(dg) = cost_diag_ok(d.get("dg"), now) {
+        out.set("dg", dg);
+    }
+    Some(out)
 }
 
 /// 服务器上别的设备的那一份解开；认证不过、格式不对（伪造的、别的账号的、坏了）是 None
@@ -1700,7 +2027,9 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
                 recent.set(k, v);
             }
         }
-        let doc = dict! { "h" => recent, "um" => V::List(List::from_vec(um.iter().map(|m| V::from(m.as_str())).collect())) };
+        let doc = dict! {
+            "h" => recent, "um" => V::List(List::from_vec(um.iter().map(|m| V::from(m.as_str())).collect())), "dg" => cost_dg(local, now),
+        };
         let s = sha256_hex(json::dumps(&V::Dict(doc.clone()), json::Fmt::new().compact().sort_keys()))[..16].to_string();
         let up = a.get("up_at").filter(is_num).and_then(|u| u.as_num()).unwrap_or(0.0);
         let same_tag = |mine: &Dict| match (mine.get("tag"), a.get("tag")) {
@@ -2191,6 +2520,8 @@ struct Device {
     synced_epoch: V,
     stale: bool,
     h: Hours,
+    /// 它的诊断（cost_diag_ok 的样子；这台设备的是 local.json 的 diag 加上 cca 的版本）
+    diag: Option<Dict>,
 }
 
 /// _gui state 里折合金额要的（一次读好）：这台设备统计的、别的设备同步来的、同步的状态，按天的时段
@@ -2249,6 +2580,31 @@ impl CostView {
             cfg,
             accounts: Vec::new(),
         }
+    }
+
+    /// 给 App 的诊断（PROTOCOL 2.2 的 devices[].diag）：{"cca", "claude_code", "claude_code_old": claude_code 还是不写账号信息的
+    /// 旧版本（App 据此提醒更新，不自己比版本）, "why": 按天看的这一段里（往前多一天：传来的只到天）有回复认不出账号的原因}；
+    /// 没有诊断（旧版 cca 的设备）是 None
+    fn diag_view(&self, d: &Option<Dict>) -> Option<Dict> {
+        let d = d.as_ref()?;
+        let lo = self.days[0].s() - 86400.0;
+        let mut why = Vec::new();
+        for w in d.list("why").map(|l| l.items()).unwrap_or_default() {
+            let w = w.as_dict().expect("cost_diag_ok 给的");
+            if w.at("last_epoch").as_num().is_some_and(|a| a >= lo) {
+                why.push(V::Dict(dict! {
+                    "code" => w.at("code"), "last_epoch" => w.at("last_epoch"), "claude_code" => w.get("claude_code").unwrap_or(V::None),
+                }));
+            }
+        }
+        let opt = |k: &str| d.get(k).unwrap_or(V::None);
+        let old = d.str("claude_code").is_some_and(|v| claude_code_old(&v));
+        Some(dict! { "cca" => opt("cca"), "claude_code" => opt("claude_code"), "claude_code_old" => old, "why" => why })
+    }
+
+    /// 这台设备最近有回复认不出账号（要提醒）
+    fn warns(&self, d: &Option<Dict>) -> bool {
+        self.diag_view(d).is_some_and(|v| v.list("why").is_some_and(|l| !l.is_empty()))
     }
 
     fn scan_state(&self) -> &'static str {
@@ -2331,6 +2687,10 @@ impl CostView {
             Some(cfg) => cfg.at("fp"),
             None => V::from("local"),
         };
+        let me_diag = cost_diag_ok(self.local.get("diag"), self.now).unwrap_or_else(|| dict! { "why" => List::new() });
+        if let Some(v) = getenv("CCA_VERSION").filter(|v| version_ok(v)) {
+            me_diag.set("cca", v);
+        }
         let mut devs = vec![Device {
             id: me_id,
             name: self.me_name.clone(),
@@ -2339,6 +2699,7 @@ impl CostView {
             synced_epoch: V::from(self.updated),
             stale: false,
             h: hours_of(&h),
+            diag: Some(me_diag),
         }];
         if share {
             // ((self.remote.get('acc') or {}).get(slot) or {}).items()
@@ -2367,6 +2728,7 @@ impl CostView {
                     stale: self.now - at.as_num().unwrap_or(0.0) > COST_STALE,
                     synced_epoch: at,
                     h: hours_of(&rows.as_dict().expect("cost_rows_ok 核对过")),
+                    diag: cost_diag_ok(e.get("dg"), self.now),
                 });
                 // e.get('um') or []
                 let models = match e.get("um").filter(|u| u.truthy()) {
@@ -2427,13 +2789,16 @@ impl CostView {
         let wk: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&weeks, &d.h)).collect();
         let dy: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&self.days, &d.h)).collect();
         let requests = |rows: &[Counts]| rows.iter().map(|r| r[1]).sum::<i128>();
-        let keep: Vec<usize> = (0..devs.len()).filter(|i| requests(&wk[*i]) != 0 || requests(&dy[*i]) != 0).collect();
-        if keep.is_empty() {
+        let data: Vec<usize> = (0..devs.len()).filter(|i| requests(&wk[*i]) != 0 || requests(&dy[*i]) != 0).collect();
+        if data.is_empty() {
             self.accounts.push((tool.name, None, None));
             return V::None;
         }
-        // keep 里的设备都有数据
-        let since = keep.iter().filter_map(|i| devs[*i].h.keys().next()).min().copied().expect("keep 里的设备都有数据") as f64;
+        // 这个账号没有数据、最近却有回复认不出账号的别的设备也列出来（金额是 0，带着诊断：它用这个账号的可能漏了）
+        let keep: Vec<usize> =
+            (0..devs.len()).filter(|i| data.contains(i) || (!devs[*i].me && self.warns(&devs[*i].diag))).collect();
+        // data 里的设备都有数据
+        let since = data.iter().filter_map(|i| devs[*i].h.keys().next()).min().copied().expect("data 里的设备都有数据") as f64;
         let good: Vec<usize> = weeks
             .iter()
             .enumerate()
@@ -2482,7 +2847,7 @@ impl CostView {
                     "id" => &d.id, "name" => d.name.as_str(), "me" => d.me, "revoked" => d.revoked, "synced_epoch" => &d.synced_epoch, "stale" => d.stale,
                     "weeks_usd" => wk[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "days_usd" => dy[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
-                    "summary" => ps,
+                    "summary" => ps, "diag" => self.diag_view(&d.diag),
                 }
             })
             .collect();
@@ -2583,7 +2948,16 @@ impl CostView {
         out.set("prices_date", COST_PRICES_DATE);
         out.set("me", part(&mine));
         out.set("scan", dict! { "state" => self.scan_state(), "updated_epoch" => self.updated });
-        out.set("unattributed", dict! { "days_usd" => usd(orphan_micro), "requests" => count_v(orphan_requests) });
+        // 为什么认不出（这台设备的诊断）、这台设备命令行里最近用的 Claude Code 版本
+        let diag = self.diag_view(&cost_diag_ok(self.local.get("diag"), self.now)).unwrap_or_default();
+        out.set(
+            "unattributed",
+            dict! {
+                "days_usd" => usd(orphan_micro), "requests" => count_v(orphan_requests),
+                "why" => diag.get("why").unwrap_or_else(|| V::List(List::new())), "claude_code" => diag.get("claude_code").unwrap_or(V::None),
+                "claude_code_old" => diag.get("claude_code_old").unwrap_or(V::Bool(false)),
+            },
+        );
         V::Dict(out)
     }
 }

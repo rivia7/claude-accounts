@@ -150,7 +150,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
   "cli": {"running": true, "sessions": 1, "since_epoch": 1794041000.5},
-  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true, "api_key": true, "mail": true},
+  "can": {"app": true, "web": true, "billing": true, "limit_resets": true, "usage": true, "check": true, "cli": true, "api_key": true, "mail": true, "custom_proxy": true},
   "can_why": {},
   "api_key": {"saved": true, "hint": "sk-ant-…x7Qa", "source": "keychain", "shared": true, "saved_epoch": 1794020000.0,
               "from_device": "dan-air", "sync_error": null},
@@ -195,6 +195,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   config.json 里没写 `"cost": false`。没登录的也是 true（照样显示以前记下的）。同样没有对应的 `can_why`；旧版 cca 没有这一项，当作没有。
   `mail` 是账号页有没有「邮箱」一节（4.11，邮箱助手）：只有 Claude 的官方账号、账号表里写了邮箱时为 true（和 `hello.mail` 一起把关）。
   同样没有对应的 `can_why`：不能就不显示这一节、不调 `mail` 的命令；旧版 cca 没有这一项，当作没有。
+  `custom_proxy` 是能不能给这个账号换上自定义代理（`cca [codex|agy] node use 账号`，提问会话，4.6 的 `node.custom`）：维护者的映射固定了节点的官方账号是 false，
+  别的（包括第三方 API 账号）都是 true。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
 - `api_key`：存没存 API key（4.10）。官方账号的是**记下备查**的（比如控制台里建的 key：只存进这台 Mac 的钥匙串，cca 绝不拿它登录或启动账号，
   那样会变成按量计费）；第三方 API 账号的是启动要用的那把。`saved`：存了没有（第三方 API 账号换了服务商、和存的时候域名不一样的算没存）；
   `hint`：掩码，存的时候 cca 算好的（开头 8 个字符里最后一个 `-` 以前的前缀 + `…` + 最后 4 个字符，例如 `sk-ant-…x7Qa`；短于 24 个字符的 key
@@ -262,7 +264,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
       {"id": "SHA256:…", "name": "studio-mac", "me": true, "revoked": false, "synced_epoch": 1794041000.0, "stale": false,
        "weeks_usd": [182.41], "days_usd": [31.2],
        "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
-                   "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30}}
+                   "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30},
+       "diag": {"cca": "3.6.0", "claude_code": "2.1.316", "claude_code_old": true,
+                "why": [{"code": "old_claude_code", "last_epoch": 1793923200.0, "claude_code": "2.1.316"}]}}
     ],
     "unpriced_models": ["codex-auto-review"],
     "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "missing": [{"name": "carol-air", "used_epoch": 1794000000.0}]}
@@ -282,7 +286,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     （`average_weeks` 是算了几项：一项都没有时 `average_usd` 是 null、`average_weeks` 是 0），`days_usd` 30 天加起来，`today_usd` 今天，
     `average_day_usd` 过完的、不是 `partial` 的那几天的平均（今天不算；`average_days` 是算了几天，一天都没有时 null 和 0；
     旧版 cca 没有这两项，App 当作没有平均每天、不写），`requests` / `unpriced_requests` 列出的周期加起来。
-  - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列；只有这台设备时只有一项。
+  - `devices[]`：有记录的设备（这台设备在最前，别的按 30 天的金额从多到少，cca 排好的），没有记录的不列（例外：别的设备最近有回复
+    认不出账号时，没有这个账号的记录也列出来，数字都是 0，`diag.why` 不空）；只有这台设备时只有一项。
     `id`：设备统计里的设备指纹，这台设备没开设备统计时是 `"local"`；`name`：设备统计里的名字（维护者给 deploy key 起的别名），
     这台设备没开时是主机名。`me`：这台设备。`revoked`：维护者撤销了这台设备的 key（数字是撤销前同步来的，照样算进合计；
     和现在某台设备同名的当作同一台换了 key，并进那一项，不重复计）。`synced_epoch`：这些数字是什么时候的（别的设备最后一次同步上来的时间；
@@ -290,6 +295,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     `weeks_usd`、`days_usd` 和 `weeks`、`days` 一一对应；`summary` 同上（没有 `requests`、`unpriced_requests`）。平均按整个账号的那几周、那几天算
     （`average_weeks`、`average_days` 和账号的一样），所以各台设备的平均加起来就是整个账号的（旧版 cca 的设备 `summary` 没有
     `average_weeks`、`average_days`、`average_day_usd`）。App 看「本机」时用 `me` 为真的那一台（这台设备没有这个账号的记录时没有，App 当作都是 0）。
+    `diag`：那台设备的诊断（这台设备的是本机统计的，别的设备的是它同步上来的；旧版 cca 的设备、旧版 cca 输出里没有，为 null）。
+    `cca`：那台设备的 cca 版本；`claude_code`：它命令行里最近用的 Claude Code 版本（没有为 null）；`claude_code_old`：这个版本还不在会话里
+    写账号信息（2.1.317 以前），App 据此提醒更新 Claude Code、不自己比版本；`why[]`：最近 30 天里那台设备上有 Claude 的回复认不出是哪个账号的，
+    为什么（每个原因一项，没有条数）。`code`：`old_claude_code`（Claude Code 太旧，又不是经 cca 启动的）| `claude_app`（Claude App 里的
+    Code 会话，从来不带账号信息）| `unknown`（别的：登录的不是 cca 里的账号、不是经 cca 启动的……；不认识的值也当它说）；`last_epoch`：最近一次
+    （别的设备传来的只到 UTC 的天）；`claude_code`：那时的 Claude Code 版本（没有为 null）。认不出的用量不知道是哪个账号的，所以那台设备用的
+    每个账号都带着同一份；App 在那台设备那一行、提示里说“有用量没算进来”和原因（撤销了的设备不说）。
   - `sync`：设备间同步的状态。`state`：`ok`（同步过，`checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
     `local_only`（只有这台设备：账号不在维护者的映射里，或者这台设备没配置设备统计）| `off`（config.json 里写了 `"presence": false`）|
     `not_logged_in`（这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的）| `old_server`（维护者的服务器还不支持，
@@ -349,7 +361,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
                 "codex": {"current_usd": 0.0, "weeks_usd": 0.0, "average_usd": null, "average_day_usd": null, "days_usd": 0.0, "today_usd": 0.0}}
   },
   "scan": {"state": "ready", "updated_epoch": 1794041000.0},
-  "unattributed": {"days_usd": 12.3, "requests": 40}
+  "unattributed": {"days_usd": 12.3, "requests": 40, "claude_code": "2.1.330", "claude_code_old": false,
+                   "why": [{"code": "claude_app", "last_epoch": 1794031200.0, "claude_code": null}]}
 }
 ```
 
@@ -361,7 +374,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   这台设备没有记录的账号不算（App 的「本机」）。顶层的几项是所有设备的。旧版 cca 没有这一项，App 的本机合计写「—」。
 - `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
   `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
-- `unattributed`：最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”这一句用。
+- `unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”
+  这一句用。`why`、`claude_code`、`claude_code_old` 和这台设备的 `devices[].diag` 一样（旧版 cca 没有：App 当作 `[]`、null、false，笼统地说原因）；
+  `claude_code_old` 为真时 App 提醒这台设备更新 Claude Code（和有没有认不出的用量无关）。
 
 `can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）| `unsupported`（Antigravity）；
 `web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
@@ -611,13 +626,13 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
   `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
-  `account_missing`（改别名：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
+  `account_missing`（改别名、`node use`：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
   `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
   `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
-  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）。
+  `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `node_pinned`（`node use`：维护者的映射固定了这个账号的节点）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
@@ -780,8 +795,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `onboard.net` | `_onboard`（配置向导第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。没配置路由器时，映射里账号的参考节点在这一步之后导入（映射里的账号随即加进来） |
 | `onboard.add` | `_onboard`（配置向导第 3 步） | `confirm` | 还没有账号：现在添加第一个账号吗（默认是）；映射里的账号这次加进来了：还要再添加一个吗（默认否，`message` 说加了谁）。接着走 `add.basic` / `add.node`，不要求配置了路由器 |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
-| `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问。没有路由器、还没有可选节点时只有「自定义代理…」一项（`message` 说明），选它接着问 `node.custom` |
-| `node.custom` | `[codex] add` / `node add`（选节点时「自定义代理…」） | `text` | 粘贴一条分享链接（vmess/vless/ss/trojan/hysteria2/tuic）当出口节点；多行 Clash 配置在终端 `cca node add` |
+| `add.node` | `[codex] add` | `choice` | 出口节点。映射固定了这个邮箱的节点时不问。能用内置代理时末尾有一项「自定义代理…」，选它接着问 `node.custom`；没有路由器、还没有可选节点时只有这一项（`message` 说明） |
+| `node.custom` | `[codex] add`（选节点时「自定义代理…」）/ `[codex\|agy] node use 账号` | `text` | 粘贴一条代理链接当出口节点：分享链接（vmess/vless/ss/trojan/hysteria2/tuic）、`socks5://用户:密码@主机:端口`、`http(s)://用户:密码@主机:端口`；cca 拿内置代理的内核校验，不合格带着原因重问；多行 Clash 配置在终端 `cca node add`。配置了路由器的，节点随后写进路由器的配置文件（要重启时接着问 `consent.router_restart`） |
 | `local.builtin` | `local setup` / 在外面首次启动 | `confirm` | 用内置代理吗（cca 跑一个 mihomo 内核，每个账号一个本机端口走各自节点） |
 | `local.udp` | `local udp on [节点]` | `choice` | 这台 Mac 自己的 UDP（WebRTC、QUIC）经哪个节点出去：只列转发 UDP 的节点。不写节点、设过的和装着的都没有（或者认不出、不转发 UDP）时才问；接着系统会弹授权框（管理员密码，不经 App，见 2.2 的 `config.local.udp`） |
 | `api.basic` | `[codex] add api` | `text`、`text`、`secret`、`text` | 别名、接口地址（校验 url）、API key、模型（可选，校验 model） |
@@ -811,6 +826,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`）。三步：维护者的映射（`onboard.policy`）→ 网络出口（`onboard.net`）→ 添加账号（`onboard.add`），页标题写着第几步、共几步（只数这次要问的；只有一步时不写）；做完 `result` 的 `onboarded` |
 | `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
 | `[codex] key` | 账号页「…」、右键菜单、API key 那一行的「记录…」「输入…」 | 提问会话 |
+| `[codex\|agy] node use 账号` | 账号页「网络出口」一节的「自定义代理…」（`can.custom_proxy`，要 `hello.forms`） | 提问会话（`node.custom`，配置了路由器的接着同步：要重启时问 `consent.router_restart`）；做完 `result` 的 `saved`，带 `key` |
 | `[codex] key KEY --show`、`--forget` | API key 那一行的眼睛、「复制」；「…」、右键菜单里的「删除记下的 API key…」 | 无交互命令（4.10；`--show` 只经内存里的管道读，`--forget` 要同意） |
 | `[codex] rm` | 账号页「…」、右键菜单 | 提问会话 |
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |

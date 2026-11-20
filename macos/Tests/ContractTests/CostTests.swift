@@ -54,6 +54,11 @@ func costFixtureTests() {
         weeksUSD: 2172.79, currentUSD: 172.76, averageUSD: 266.16, averageWeeks: 7, daysUSD: 1302.43, todayUSD: 14.36, averageDayUSD: 44.42, averageDays: 29),
           "\(String(describing: bob?.device(aliceMini)?.summary))")
     check("bob：这台设备", bob?.me?.id == me && bob?.me?.name == "studio-mac" && bob?.me?.summary.averageDayUSD == 74.03)
+    check("bob：设备的诊断（这台都认得出；alice-mini 命令行里还在用旧版 Claude Code，有回复认不出；旧版 cca 的设备没有）",
+          bob?.me?.diag == CostDiag(cca: "2.9.0", claudeCode: "2.1.330", why: [])
+          && bob?.device(aliceMini)?.diag == CostDiag(cca: "2.9.0", claudeCode: "2.1.316", claudeCodeOld: true,
+                                                     why: [CostWhy(code: .oldClaudeCode, lastEpoch: 1793923200, claudeCode: "2.1.316")])
+          && bob?.devices.dropFirst(2).allSatisfy { $0.diag == nil } == true, "\(String(describing: bob?.devices.map(\.diag)))")
     check("bob：没有公开价格的模型、同步过、还有一台没同步过金额", bob?.unpricedModels == ["claude-research-preview"] && bob?.syncState == .ok
           && bob?.sync?.checkedEpoch == 1794041700 && bob?.sync?.missing.map(\.name) == ["carol-air"])
     let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))
@@ -82,7 +87,8 @@ func costFixtureTests() {
         check("cost_total.me：按工具、30 天", t.me?.byTool[.claude]?.currentUSD == 555.81 && t.me?.byTool[.codex]?.daysUSD == 3320.53
               && t.me?.days.count == 30 && t.me?.today?.usd == 82.47 && t.me?.days.first?.usd == 253.01)
         check("看哪一方：所有设备是顶层的，本机是 me", t.part(.all) == t.all && t.part(.me) == t.me)
-        check("cost_total：认不出是哪个账号的", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40)
+        check("cost_total：认不出是哪个账号的（旧版 cca 留下的，没有原因）", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40
+              && t.unattributed?.why == [] && t.unattributed?.claudeCode == "2.1.330" && t.unattributed?.claudeCodeOld == false)
         check("cost_total：价格表的日期", t.pricesDate == "2026-11-01" && t.currency == "USD")
     } else {
         check("state.json 有 cost_total", false)
@@ -102,12 +108,29 @@ func costFixtureTests() {
               && alice?.weeks.first?.usd == 0 && alice?.weeks.count == 13)
         check("state_cost：Codex 账号还没有记录，Codex 的平均是 null", x.account(AccountRef(tool: .codex, key: "dave@example.com"))?.cost == nil
               && x.costTotal?.all.byTool[.codex]?.averageUSD == nil && x.costTotal?.all.byTool[.codex]?.currentUSD == 0)
+        let u = x.costTotal?.unattributed
+        check("state_cost：认不出的原因（Claude App、旧版 Claude Code），命令行里还在用旧版；这台设备的诊断是同一份",
+              u?.why.map(\.code) == [.claudeApp, .oldClaudeCode] && u?.why.first?.claudeCode == nil && u?.claudeCode == "2.1.316" && u?.claudeCodeOld == true
+              && alice?.me?.diag?.why == u?.why && alice?.me?.diag?.claudeCodeOld == true)
+        check("state_cost：合计下面说为什么、提醒更新；只看本机时也说这台设备有用量没算进来",
+              Texts.costUnattributed(u, currency: "USD") == "近 30 天另有 $1.25 认不出是哪个账号的（Claude App 里的 Code 会话、Claude Code 2.1.316 太旧），没算进来。"
+              && Texts.costUpdateClaudeCode(u) == "这台设备命令行里用的 Claude Code 2.1.316 太旧，会话不带账号信息：不经 cca 启动的用量算不进来。更新 Claude Code 就好了。"
+              && alice.map { Texts.costNotes($0, scope: .me, now: 1794042000) } == [
+                CostNote(text: "这台设备有用量没算进来：Claude App 里的 Code 会话、Claude Code 2.1.316 太旧，要更新 Claude Code", warning: true)],
+              "\(String(describing: alice.map { Texts.costNotes($0, scope: .me, now: 1794042000) }))")
     }
     if let x = loadFixture(StateDoc.self, "state_cost_sync.json") {
         let alice = x.account(AccountRef(tool: .claude, key: "alice@example.com"))?.cost
         check("state_cost_sync：三台设备（这台、dan-air、撤销了的 old-air），还有一台没同步过金额",
               alice?.devices.map(\.name) == ["test-mac", "dan-air", "old-air"] && alice?.devices.last?.revoked == true
               && alice?.sync?.missing.map(\.name) == ["eve-mini"] && alice?.syncState == .ok)
+        check("state_cost_sync：dan-air 有用量没算进来（设备那一行、提示），撤销了的、都认得出的不说；这台设备都认得出时不提醒更新",
+              alice?.devices.map(Texts.costDeviceWhy) == [nil, "有用量没算进来：Claude Code 2.1.316 太旧", nil]
+              && alice.map { Texts.costNotes($0, now: 1794042000).filter { $0.text.contains("算进来") } } == [
+                CostNote(text: "还有 1 台设备没有算进来（eve-mini，可能 cca 太旧）", warning: true),
+                CostNote(text: "dan-air 有用量没算进来：Claude Code 2.1.316 太旧，那台设备要更新 Claude Code", warning: true)]
+              && Texts.costUpdateClaudeCode(x.costTotal?.unattributed) == nil,
+              "\(String(describing: alice.map { Texts.costNotes($0, now: 1794042000) }))")
     }
     if let d = fixture("cost_sync.json"), let doc = try? DocumentDecoder.decode(CostSyncDoc.self, from: d) {
         check("cost_sync.json", doc.kind == "cost_sync" && doc.scan?.state == .ready && doc.scan?.files == 190 && doc.scan?.records == 120
@@ -294,9 +317,10 @@ func costUnitTests() {
           Texts.costFootnote([], pricesDate: nil))
 
     let notes = { (c: AccountCost) in Texts.costNotes(c, now: now, calendar: sh) }
-    check("同步过：还有没同步过金额的设备、很久没同步上来的设备（撤销了的不说）", notes(bob) == [
+    check("同步过：还有没同步过金额的设备、很久没同步上来的设备（撤销了的不说）、有用量没算进来的设备", notes(bob) == [
         CostNote(text: "还有 1 台设备没有算进来（carol-air，可能 cca 太旧）", warning: true),
         CostNote(text: "office-imac 周四 15:00 以后的还没同步上来", warning: true),
+        CostNote(text: "alice-mini 有用量没算进来：Claude Code 2.1.316 太旧，那台设备要更新 Claude Code", warning: true),
     ], "\(notes(bob))")
     let meNotes = { (c: AccountCost) in Texts.costNotes(c, scope: .me, now: now, calendar: sh) }
     check("只看本机：什么都不说（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它）",
@@ -340,6 +364,14 @@ func costUnitTests() {
     check("认不出是哪个账号的", Texts.costUnattributed(s.costTotal?.unattributed, currency: "USD")
           == "近 30 天另有 $12.30 认不出是哪个账号的（旧版 Claude Code、桌面 App 里的会话），没算进来。"
           && Texts.costUnattributed(nil, currency: "USD") == nil)
+    let whyText = { (code: String, v: String?) in Texts.costWhy(CostWhy(code: CostWhyCode(rawValue: code), lastEpoch: 1, claudeCode: v)) }
+    check("认不出的原因：旧版 Claude Code（带版本）、Claude App、别的；不认识的当别的说",
+          whyText("old_claude_code", "2.1.300") == "Claude Code 2.1.300 太旧" && whyText("old_claude_code", nil) == "Claude Code 太旧"
+          && whyText("claude_app", "2.1.330") == "Claude App 里的 Code 会话" && whyText("unknown", "2.1.330") == "会话没带账号信息"
+          && whyText("vscode", nil) == "会话没带账号信息")
+    let revokedWhy = CostDevice(id: "x", name: "x", isMe: false, revoked: true, syncedEpoch: nil, stale: false, weeksUSD: [], daysUSD: [],
+                                summary: CostSummary(), diag: CostDiag(claudeCodeOld: true, why: [CostWhy(code: .unknown, lastEpoch: 1)]))
+    check("撤销了的设备有用量没算进来也不说", Texts.costDeviceWhy(revokedWhy) == nil && Texts.costDeviceNote(revokedWhy) == nil)
     let onlyRequests = try? JSONDecoder().decode(CostUnattributed.self, from: Data(#"{"days_usd":0,"requests":5}"#.utf8))
     let nothing = try? JSONDecoder().decode(CostUnattributed.self, from: Data(#"{"days_usd":0,"requests":0}"#.utf8))
     check("认不出的只有请求数时说请求数，都没有时不说", Texts.costUnattributed(onlyRequests, currency: "USD")?.hasPrefix("近 30 天另有 5 次请求认不出") == true
@@ -360,6 +392,13 @@ func costUnitTests() {
      "unpriced_models":["", "m", 3],
      "sync":{"state":7,"missing":[{"name":"a"},{"used_epoch":5}]}}
     """#)
+    let diags = decodeCost(#"""
+    {"weeks":[],"days":[],
+     "devices":[{"id":"a","diag":{"cca":"","claude_code":3,"claude_code_old":"yes",
+                                  "why":[{"code":"old_claude_code","last_epoch":"1793923200","claude_code":"2.1.316"},{"code":"","last_epoch":1},
+                                         {"code":"x"},{"code":"vscode","last_epoch":2,"claude_code":""},"junk",null]}},
+                {"id":"b","diag":"x"},{"id":"c","diag":null},{"id":"d","diag":{}}]}
+    """#)
     check("坏掉的周期不要，剩下的按时间排好", messy?.weeks.map(\.startEpoch) == [0, 200] && messy?.weeks.last?.current == true)
     check("金额写成字符串也认，负数当 0", messy?.weeks.map(\.usd) == [0, 2.5] && messy?.weeks.first?.requests == 3 && messy?.weeks.first?.unpricedRequests == 1)
     check("不认识的 basis 原样留着", messy?.weeks.first?.basis?.rawValue == "lunar" && messy?.weeks.first?.basis?.isKnown == false)
@@ -375,6 +414,11 @@ func costUnitTests() {
     check("since_epoch 坏了当没有", messy?.sinceEpoch == nil)
     check("没有公开价格的模型：只要非空字符串", messy?.unpricedModels == ["m"])
     check("同步状态不是字符串：当没同步成；没名字的设备不算", messy?.syncState == .error && messy?.sync?.missing.map(\.name) == ["a"])
+    check("设备的诊断宽容：坏掉的原因跳过（没有 code、last_epoch 的），不认识的原因留着当别的说；不是对象的当没有",
+          diags?.devices.map(\.diag) == [CostDiag(why: [CostWhy(code: .oldClaudeCode, lastEpoch: 1793923200, claudeCode: "2.1.316"),
+                                                           CostWhy(code: CostWhyCode(rawValue: "vscode"), lastEpoch: 2)]),
+                                          nil, nil, CostDiag()]
+          && diags?.devices.first?.diag?.why.last?.code.shown == .unknown, "\(String(describing: diags?.devices.map(\.diag)))")
     check("没有数组的周期：空的", decodeCost(#"{}"#).map { $0.weeks.isEmpty && $0.days.isEmpty && $0.devices.isEmpty && $0.currency == "USD" } == true)
     let total = try? JSONDecoder().decode(CostTotal.self, from: Data(#"""
     {"current_usd":"2","average_usd":null,"days":[{"start_epoch":86400,"end_epoch":172800,"usd":1,"current":true},{"start_epoch":0,"end_epoch":86400,"usd":2}],

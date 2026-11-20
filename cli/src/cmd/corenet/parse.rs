@@ -662,6 +662,50 @@ fn link_ss(url: &str) -> R<Node> {
     Ok(p)
 }
 
+/// socks5:// socks:// http:// https://：`协议://用户:密码@主机:端口#名字`（静态住宅 IP 这类常给的写法；用户、密码可以没有，
+/// 有特殊字符的照网址的规矩 % 编码）。v2rayN 导出的 socks:// 把「用户:密码」整个 base64 了：解得开、里面有冒号就照它。
+/// 端口没写时用这一类的默认端口。原版（Python）不认这几种，是后来加的
+fn link_plain(url: &str, scheme: &str) -> R<Node> {
+    let (url, name) = match url.split_once('#') {
+        Some((before, frag)) => (before, unquote(frag)),
+        None => (url, String::new()),
+    };
+    let u = urlsplit(url).map_err(Fail::Value)?;
+    let port = match u.port().map_err(Fail::Value)? {
+        Some(n) => i64::from(n),
+        None if scheme == "http" => 80,
+        None if scheme == "https" => 443,
+        None => 1080,
+    };
+    let mut user = unquote(u.username().unwrap_or(""));
+    let mut pw = u.password().map(unquote);
+    if scheme == "socks" && pw.is_none() && !user.is_empty() {
+        let decoded = match b64(&user) {
+            Ok(raw) => Some(String::from_utf8_lossy(&raw).into_owned()),
+            Err(e) if e.is_value() => None,
+            Err(e) => return Err(e),
+        };
+        if let Some((a, b)) = decoded.as_deref().and_then(|d| d.split_once(':')) {
+            (user, pw) = (a.to_string(), Some(b.to_string()));
+        }
+    }
+    let mut p = Node::new();
+    p.set("name", name);
+    p.set("type", if scheme.starts_with("socks") { "socks5" } else { "http" });
+    p.set("server", u.hostname().unwrap_or_default());
+    p.set("port", port);
+    if !user.is_empty() {
+        p.set("username", user);
+    }
+    if let Some(pw) = pw.filter(|pw| !pw.is_empty()) {
+        p.set("password", pw);
+    }
+    if scheme == "https" {
+        p.set("tls", true);
+    }
+    Ok(p)
+}
+
 /// `link_parse`：一条分享链接 → 节点定义
 fn link_parse(url: &str, scheme: &str) -> R<Node> {
     if scheme == "vmess" {
@@ -669,6 +713,9 @@ fn link_parse(url: &str, scheme: &str) -> R<Node> {
     }
     if scheme == "ss" {
         return link_ss(url);
+    }
+    if matches!(scheme, "socks5" | "socks5h" | "socks" | "http" | "https") {
+        return link_plain(url, scheme);
     }
     let (url, name) = match url.split_once('#') {
         Some((before, frag)) => (before, unquote(frag)),
@@ -775,10 +822,12 @@ fn link_parse(url: &str, scheme: &str) -> R<Node> {
     Ok(p)
 }
 
-/// `re.match(r'(?i)^(vmess|vless|ss|ssr|trojan|hysteria2|hy2|tuic)://', text)` 的第 1 组（原样的大小写）。
+/// `re.match(r'(?i)^(vmess|vless|ss|ssr|trojan|hysteria2|hy2|tuic)://', text)` 的第 1 组（原样的大小写），后来又加了
+/// socks5 / socks5h / socks / http / https（`link_plain`）。
 /// 手写，不用兼容层的正则：Python 不分大小写时还把 ſ（U+017F）当 s、İ（U+0130）和 ı（U+0131）当 i，`regex` 库后两个不认
 fn link_scheme(t: &str) -> Option<&str> {
-    const SCHEMES: [&str; 8] = ["vmess", "vless", "ss", "ssr", "trojan", "hysteria2", "hy2", "tuic"];
+    const SCHEMES: [&str; 13] =
+        ["vmess", "vless", "ss", "ssr", "trojan", "hysteria2", "hy2", "tuic", "socks5", "socks5h", "socks", "http", "https"];
     let same = |c: char, want: char| {
         c.to_ascii_lowercase() == want || (want == 's' && c == 'ſ') || (want == 'i' && matches!(c, 'İ' | 'ı'))
     };
@@ -848,6 +897,9 @@ mod tests {
         json::loads(include_str!("../../../tests/vectors/corenet.json")).unwrap().as_dict().unwrap()
     }
 
+    /// 后来有意改了的：原版不认 http:// 的链接（当成 YAML 读，读不懂），现在是 http 代理（link_plain）
+    const CHANGED: [&str; 1] = ["scheme/005"];
+
     #[test]
     fn node_parse_matches_python_vectors() {
         let cases = vectors().list("node_parse").unwrap().items();
@@ -856,6 +908,9 @@ mod tests {
         for c in cases {
             let c = c.as_dict().unwrap();
             let (name, input) = (c.str("name").unwrap(), c.str("in").unwrap());
+            if CHANGED.contains(&&*name) {
+                continue;
+            }
             match (node_parse(&input), c.str("ok"), c.str("err"), c.str("raise")) {
                 // 解析成了：写成 JSON 逐字节一样（键的先后、不是字符串的键、数字的写法都在里面）
                 (Ok(p), Some(want), _, _) => {
@@ -888,6 +943,36 @@ mod tests {
             assert_eq!(node_clean_name(Some(&Y::V(input.clone()))), &*c.str("out").unwrap(), "{input:?}");
         }
         assert_eq!(node_clean_name(None), "");
+    }
+
+    #[test]
+    fn socks_and_http_links() {
+        let ok = |s: &str| node_parse(s).unwrap().dumps();
+        assert_eq!(
+            ok("socks5://u%40x:p%3Aw@198.51.100.7:1080#Home%20IP"),
+            r#"{"name": "Home IP", "type": "socks5", "server": "198.51.100.7", "port": 1080, "username": "u@x", "password": "p:w"}"#
+        );
+        assert_eq!(ok("SOCKS5H://h.example.com"), r#"{"name": "", "type": "socks5", "server": "h.example.com", "port": 1080}"#);
+        // v2rayN 的 socks://：base64(用户:密码)
+        assert_eq!(
+            ok("socks://dXNlcjpwYXNz@[2001:db8::1]:7890#v6"),
+            r#"{"name": "v6", "type": "socks5", "server": "2001:db8::1", "port": 7890, "username": "user", "password": "pass"}"#
+        );
+        assert_eq!(
+            ok("socks://plain@h.example.com:1"),
+            r#"{"name": "", "type": "socks5", "server": "h.example.com", "port": 1, "username": "plain"}"#
+        );
+        assert_eq!(ok("http://h.example.com"), r#"{"name": "", "type": "http", "server": "h.example.com", "port": 80}"#);
+        assert_eq!(
+            ok("https://a:b@H.Example.com:8443"),
+            r#"{"name": "", "type": "http", "server": "h.example.com", "port": 8443, "username": "a", "password": "b", "tls": true}"#
+        );
+        assert_eq!(ok("http://x"), r#"{"name": "", "type": "http", "server": "x", "port": 80}"#);
+        // 没有主机、端口不对：报错，不回显密码
+        for bad in ["socks5://u:secret-pw@:1080", "http://u:secret-pw@h.example.com:99999", "http://u:secret-pw@h.example.com:x"] {
+            let e = format!("{:?}", node_parse(bad).err().unwrap());
+            assert!(!e.contains("secret-pw"), "{bad}: {e}");
+        }
     }
 
     #[test]

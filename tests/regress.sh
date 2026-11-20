@@ -751,6 +751,24 @@ kc() { local d; d=$(kcd "$1" "${2:-}"); [ -n "$d" ] && cat "$d"/* 2>/dev/null; }
 kch() { local d; d=$(kcd "$1"); [ -n "$d" ] && ls "$d"; }   # 存它的服务商（接口的域名）
 lastline() { grep "^$1: " "${2:-claude.log}" | tail -n 1; }   # [日志]
 lastenv() { grep "^ENV: " claude.log | tail -n 1; }   # 最后一次启动 claude 的环境变量那一行
+hookless() {   # hookless "ARGS 那一行" 账号目录：--settings 是记下会话的 hook（只有 SessionStart 回调 cca _session-start 这个账号目录名）时打印去掉它的那一行，别的打印 BAD
+	python3 - "$1" "$(basename "$2")" <<'PY'
+import json, re, shlex, sys
+line, name = sys.argv[1], sys.argv[2]
+m = re.match(r'^(.*?) --settings (\{"hooks": .*?\}\]\}\]\}\})( .*)?$', line)
+ok = False
+if m:
+    try:
+        h = json.loads(m.group(2))
+        c = h['hooks']['SessionStart'][0]['hooks'][0]
+        ok = (list(h) == ['hooks'] and list(h['hooks']) == ['SessionStart'] and len(h['hooks']['SessionStart']) == 1 and
+              sorted(c) == ['command', 'timeout', 'type'] and c['type'] == 'command' and c['timeout'] == 10 and
+              shlex.split(c['command'])[1:] == ['_session-start', name])   # 目录名没有要引的字符时不带引号（和 shlex.quote 一样）
+    except (ValueError, KeyError, IndexError, TypeError):
+        pass
+print(m.group(1) + (m.group(3) or '') if ok else 'BAD')
+PY
+}
 S1=sk-test-AAAA1111; S2=sk-test-BBBB2222; S3=sk-test-CCCC3333
 : > ssh.log; : > "$T/env.log"; rm -f "$T/security.stdin"
 out=$(run CCA_TTY="$(ans kimi https://api.example.com/anthropic/ "$S1" kimi-k2 '')" cca add api 2>&1); rc=$?
@@ -776,17 +794,25 @@ ok "API 账号启动：继承来的接口地址、凭证、模型、云厂商开
 ok "API 账号启动：地址、模型、关遥测经 --settings 的 env 传；apiKeyHelper 回调 cca 取到钥匙串里的 key" 'lastline SETTINGS | grep -qF "\"ANTHROPIC_BASE_URL\": \"https://api.example.com/anthropic\"" && lastline SETTINGS | grep -qF "\"ANTHROPIC_MODEL\": \"kimi-k2\"" && lastline SETTINGS | grep -qF "\"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"kimi-k2\"" && lastline SETTINGS | grep -qF "\"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"1\"" && [ "$(lastline HELPER)" = "HELPER: rc=0" ] && [ "$(cat "$T/claude.key")" = "$S1" ]'
 ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不走官方登录、不同步路由器；key 不出现在任何日志和命令行里" '! grep -q "sh -s" ssh.log && grep -q "CURL api direct https://api.example.com/anthropic" curl.log && [ "$(grep -c "cdn-cgi/trace" curl.log)" = "$n_trace" ] && [ "$(grep -c "ARGS: auth login" claude.log)" = "$n_login" ] && ! grep -q "$S1" claude.log "$T/env.log" security.log ssh.log curl.log open.log'
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
-ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址），也不加 --settings" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && ! lastline ARGS | grep -q -- --settings && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
+ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址）；--settings 里只有记下会话的 hook（没有 env、apiKeyHelper）" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && [ "$(lastline SETTINGS)" = "SETTINGS: env=null" ] && [ "$(hookless "$(lastline ARGS)" "$(ls -d "$H"/.cca/accounts/alice-example-com-*)")" != BAD ] && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
 # Claude 默认只把这个账号自己的目录（~/.cca/accounts 下）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料不管在不在工作目录里都挡住
 P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
 AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accounts/kimi-*)
 out=$(run CCA_TTY="$(ans)" cca @alice "看看 ~/.cca 里的配置" 2>&1); rc=$?
-ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录" '[ $rc -eq 3 ] && [ "$(lastline ARGS)" = "ARGS: --add-dir=${AAD} $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
+ok "Claude 默认只把这个账号自己的目录（CLAUDE_CONFIG_DIR 的上一层）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料用 --disallowedTools 挡住（整个 ~/.cca 的）；都写成 --x=值，后面的提示词不会被当成目录；再带着记下会话的 hook（--settings，都在用户的参数前面）" '[ $rc -eq 3 ] && [ "$(hookless "$(lastline ARGS)" "$AAD")" = "ARGS: --add-dir=${AAD} $P1 看看 ~/.cca 里的配置" ] && lastenv | grep -qF "CLAUDE_CONFIG_DIR=${AAD}/claude "'
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; a1=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['claude_add_dir'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a2=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('claude_add_dir'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-ok "第三方 API 账号同样只放开它自己的目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $P1 --settings {" && [ "$a2" = "ARGS: --version" ]'
+ok "第三方 API 账号同样只放开它自己的目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $P1 --settings {" && [ "$(hookless "$a2" "$AAD")" = "ARGS: --version" ]'
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['cost'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a3=$(lastline ARGS)
+run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; s3=$(lastline SETTINGS); a4=$(lastline ARGS)
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('cost'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+ok "折合金额关掉了（config.json 的 cost 是 false）：不带记下会话的 hook（官方账号没有 --settings，第三方 API 账号的 --settings 里没有 hooks）" '[ "$a3" = "ARGS: --add-dir=${AAD} $P1 --version" ] && printf "%s" "$s3" | grep -q "ANTHROPIC_BASE_URL" && ! printf "%s" "$a4" | grep -q "SessionStart"'
+out=$(run CCA_TTY="$(ans)" cca @alice -p hi 2>&1); rc=$?; h1=$(lastline HOOK)
+out2=$(run CCA_TTY="$(ans)" cca @kimi -p hi 2>&1); rc2=$?; h2=$(lastline HOOK)
+ok "Claude Code 开始会话时跑 --settings 里的 SessionStart hook：回调 cca _session-start，会话 id 记进这个账号目录的 sessions.jsonl（600）；hook 什么都不打印（stdout 会进 Claude 的上下文）、退出码 0；第三方 API 账号也记（统计时它的会话不算）" '[ $rc -eq 3 ] && [ $rc2 -eq 3 ] && printf "%s" "$h1" | grep -q " rc=0 stdout=0 stderr=0 " && printf "%s" "$h2" | grep -q " rc=0 stdout=0 stderr=0 " && grep -qF "\"sid\":\"${h1##*sid=}\"" "$AAD/sessions.jsonl" && grep -qF "\"sid\":\"${h2##*sid=}\"" "$KAD/sessions.jsonl" && [ "$(stat -f %Lp "$AAD/sessions.jsonl")" = 600 ] && ! grep -qF "${h1##*sid=}" "$KAD/sessions.jsonl"'
 cp "$H/.claude/settings.json" "$T/settings.bak"; n_args=$(grep -c "^ARGS: " claude.log)
 python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j.setdefault(\"env\", {})[\"ANTHROPIC_BASE_URL\"]=\"http://evil.invalid\"; json.dump(j, open(p, \"w\"))" "$H/.claude/settings.json"
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
@@ -962,7 +988,7 @@ out=$(run CCA_TTY="$(ans "$R1")" cca key alice 2>&1); rc=$?
 ok "cca key 官方账号：记一把 API key 备查，存进钥匙串单独的条目（cca-ref-，账户名 reference），config.json 记下掩码和记下的时间；key 不进命令行和日志；没配置设备统计时不说同步" '[ $rc -eq 0 ] && [ "$(cat "$T/keychain/cca-ref-$AAID/reference")" = "$R1" ] && [ -z "$(kcd alice)" ] && cfgok "c[\"ref_keys\"] == [\"$AAID\"] and dict(c[\"key_hints\"][\"$AAID\"], at=0) == {\"host\": \"reference\", \"hint\": \"sk-ant-…WXYZ\", \"at\": 0} and c[\"key_hints\"][\"$AAID\"][\"at\"] > 1.7e9" && ! grep -qF "$R1" security.log "$T/security.stdin" "$T/env.log" && printf "%s" "$out" | grep -q "cca 不会拿它登录或启动" && ! printf "%s" "$out" | grep -q "其他设备" && [ ! -e "$H/.cca/presence/keys.json" ]'
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; rc=$?
 out=$(run cca _api-key "$AAID" 2>/dev/null); rc2=$?
-ok "官方账号记的 key 绝不拿来启动：不加 --settings，apiKeyHelper 的回调也不给它" '[ $rc -eq 3 ] && ! lastline ARGS | grep -q -- --settings && [ ! -e "$T/claude.key" ] && [ $rc2 -ne 0 ] && [ -z "$out" ]'
+ok "官方账号记的 key 绝不拿来启动：--settings 里只有记下会话的 hook（没有 apiKeyHelper、env），apiKeyHelper 的回调也不给它" '[ $rc -eq 3 ] && [ "$(lastline SETTINGS)" = "SETTINGS: env=null" ] && [ "$(hookless "$(lastline ARGS)" "$H/.cca/accounts/$AAID")" != BAD ] && [ ! -e "$T/claude.key" ] && [ $rc2 -ne 0 ] && [ -z "$out" ]'
 v=$(run cca key alice --show 2>/dev/null); rc=$?
 ok "cca key 账号 --show：stdout 原样是 key，不换行" '[ $rc -eq 0 ] && [ "$v" = "$R1" ] && [ "$(run cca key alice --show 2>/dev/null | wc -c | tr -d " ")" = "${#R1}" ]'
 out=$(run CLAUDECODE=1 cca key alice --show 2>&1); rc=$?
@@ -1665,7 +1691,7 @@ ok "_gui state / hello：没有 codex.json 时 Codex 算没启用，也不会把
 mv "$T/codex.gui" "$H/.cca/codex.json"
 edit_table 'j["kimi2"] = {"base_url": "https://api.example.com/anthropic", "model": "m1", "node": "", "key": "sk-GUI-SECRET-1234", "id": "kimi2"}'
 out=$(gj state)
-ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量、邮箱助手" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True, \"mail\": False, \"cost\": False} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"mail\"] is None and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
+ok "_gui state：第三方 API 账号只给接口的域名和模型，绝不带 key；没有 App、网页版、用量、邮箱助手" '! printf "%s" "$out" | grep -q sk-GUI-SECRET && printf "%s" "$out" | jok "(lambda a: a[\"kind\"] == \"api\" and a[\"login\"] == \"api\" and a[\"api\"] == {\"host\": \"api.example.com\", \"model\": \"m1\"} and a[\"port\"] is None and a[\"usage\"] is None and a[\"can\"] == {\"app\": False, \"web\": False, \"billing\": False, \"limit_resets\": False, \"usage\": False, \"check\": True, \"cli\": True, \"policy_lock\": False, \"devices\": False, \"api_key\": True, \"mail\": False, \"cost\": False, \"custom_proxy\": True} and a[\"can_why\"][\"app\"] == \"api_account\" and a[\"mail\"] is None and a[\"api_key\"] == {\"saved\": True, \"hint\": \"\", \"source\": \"table\", \"shared\": False, \"saved_epoch\": None, \"from_device\": None, \"sync_error\": None})(acct(0, \"kimi2\"))"'
 ok "_gui state：能不能打开账单页，条件和网页版一样（入口的显示由 cca 说了算）" 'printf "%s" "$out" | jok "all(a[\"can\"][\"billing\"] == a[\"can\"][\"web\"] for t in d[\"tools\"] for a in t[\"accounts\"])"'
 ok "_gui state：用量页入口只给 Claude 账号，其余条件和网页版一样" 'printf "%s" "$out" | jok "all(a[\"can\"][\"limit_resets\"] == (i == 0 and a[\"can\"][\"web\"]) for i, t in enumerate(d[\"tools\"]) for a in t[\"accounts\"])"'
 # 账号页的「邮箱」一节（PROTOCOL 4.11）：配了默认 Gmail（直接写 config.json，不用连 Gmail），state 只读 config.json、不碰钥匙串
@@ -1976,8 +2002,9 @@ ok "cost sync --json：第一次全读会话记录，算进来 5 次请求（同
 ok "统计好的只给自己读（cost/ 700，里面的文件 600），只有用量的数字，没有会话的内容" '[ "$(stat -f %Lp "$H/.cca/cost")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/cost/local.json")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/cost/scan.json")" = 600 ] && ! grep -rq SECRET-PROMPT-TEXT "$H/.cca/cost"'
 s2=$(snap); out=$(gj state); printf '%s' "$out" > "$GF/state_cost.json"
 ok "_gui state：alice 三次请求（一次没有标价）折合 0.02 美元、dave 0.053；只有这台设备（没开设备统计），按周 13 项、按天 30 项；读 state 不写文件" '[ "$(snap)" = "$s2" ] && printf "%s" "$out" | jok "(lambda a, x: a[\"summary\"][\"days_usd\"] == 0.02 and a[\"summary\"][\"requests\"] == 3 and a[\"summary\"][\"unpriced_requests\"] == 1 and a[\"unpriced_models\"] == [\"claude-new-9\"] and [(v[\"id\"], v[\"me\"]) for v in a[\"devices\"]] == [(\"local\", True)] and a[\"sync\"][\"state\"] == \"local_only\" and len(a[\"weeks\"]) == 13 and len(a[\"days\"]) == 30 and a[\"currency\"] == \"USD\" and x[\"summary\"][\"days_usd\"] == 0.053)(acct(0, \"alice@example.com\")[\"cost\"], acct(1, \"dave@example.com\")[\"cost\"])"'
-ok "_gui state：cost_total 把各账号加起来、按工具分开；认不出是谁的（没有 session-owner 的旧会话）另算" 'printf "%s" "$out" | jok "(lambda t: t[\"days_usd\"] == 0.073 and t[\"by_tool\"][\"claude\"][\"days_usd\"] == 0.02 and t[\"by_tool\"][\"codex\"][\"days_usd\"] == 0.053 and t[\"unattributed\"] == {\"days_usd\": 0.006, \"requests\": 1} and t[\"scan\"][\"state\"] == \"ready\" and len(t[\"days\"]) == 30)(d[\"cost_total\"])"'
+ok "_gui state：cost_total 把各账号加起来、按工具分开；认不出是谁的（没有 session-owner 的旧会话）另算" 'printf "%s" "$out" | jok "(lambda t: t[\"days_usd\"] == 0.073 and t[\"by_tool\"][\"claude\"][\"days_usd\"] == 0.02 and t[\"by_tool\"][\"codex\"][\"days_usd\"] == 0.053 and dict(t[\"unattributed\"], why=[w[\"code\"] for w in t[\"unattributed\"][\"why\"]]) == {\"days_usd\": 0.006, \"requests\": 1, \"why\": [\"unknown\"], \"claude_code\": None, \"claude_code_old\": False} and t[\"scan\"][\"state\"] == \"ready\" and len(t[\"days\"]) == 30)(d[\"cost_total\"])"'
 ok "_gui state：按天也有平均（average_day_usd、average_days；账号、设备都有，设备的平均按整个账号的那几周、那几天算）；cost_total.me 是各账号里这台设备的那一份（只有这台设备时和顶层一样）" 'printf "%s" "$out" | jok "(lambda t, a: set(t[\"me\"]) == {\"current_usd\", \"weeks_usd\", \"average_usd\", \"average_day_usd\", \"days_usd\", \"today_usd\", \"days\", \"by_tool\"} and all(t[\"me\"][k] == t[k] for k in t[\"me\"]) and \"average_day_usd\" in t and all(k in a[\"summary\"] for k in (\"average_day_usd\", \"average_days\")) and all(v[\"summary\"][k] == a[\"summary\"][k] for v in a[\"devices\"] for k in (\"average_weeks\", \"average_days\", \"average_day_usd\")))(d[\"cost_total\"], acct(0, \"alice@example.com\")[\"cost\"])"'
+ok "_gui state：设备的诊断（PROTOCOL 2.2 的 devices[].diag）：这台设备的 cca 版本、命令行里最近用的 Claude Code（会话记录里没写版本：null）、认不出账号的原因（没有 session-owner、也没有会话开始的记录：unknown，没有条数）" 'printf "%s" "$out" | jok "(lambda g: set(g) == {\"cca\", \"claude_code\", \"claude_code_old\", \"why\"} and g[\"cca\"] == \"$VER\" and g[\"claude_code\"] is None and g[\"claude_code_old\"] is False and [sorted(w) for w in g[\"why\"]] == [[\"claude_code\", \"code\", \"last_epoch\"]] and g[\"why\"][0][\"code\"] == \"unknown\" and isinstance(g[\"why\"][0][\"last_epoch\"], float))(acct(0, \"alice@example.com\")[\"cost\"][\"devices\"][0][\"diag\"])"'
 costlog "$H" more
 run CCA_COST= CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 100); do costreq 4 && break; sleep 0.1; done
@@ -2822,6 +2849,107 @@ ok "映射仓库里没有 nodes.json 了：这台机器上的参考节点也删�
 cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
 
 fi
+if sect 11b2c; then
+# 11b2c. 自定义节点写进路由器（cca node add / node use，App 账号页的「自定义代理…」）：和参考节点同一套写法（行尾带 # cca、先拿内核
+#        校验、写了要重启才用上，问过才重启），只是不进任何策略组；分享链接以外也认 socks5:// 和 http(s)://。维护者的映射固定了节点的
+#        账号不能换。这一节结束时路由器、config.json、账号表、自定义节点都还原
+rm -rf "$T/router.snap2" "$T/core.snap2"; cp -R "$R" "$T/router.snap2"; cp "$H/.cca/config.json" "$T/config.snap2"; cp "$H/.cca/accounts.json" "$T/accounts.snap2"
+[ ! -d "$H/.cca/core" ] || cp -Rp "$H/.cca/core" "$T/core.snap2"   # 校验节点要下载内置代理的内核：这一节结束时还原（11b4 测第一次下载）
+CNF="$H/.cca/core/custom-nodes.json"
+ckof() {   # ckof '节点 JSON'：自定义节点的身份摘要 ck（辅助程序的 custom_ck、路由器端 apply.rb 的 fnv(ckey(…)) 是同一个算法，这里另写一份核对）
+	python3 -c '
+import json, sys
+p = json.loads(sys.argv[1])
+s = lambda v: "" if v is None else ("true" if v is True else "false" if v is False else str(v))
+h = lambda v: s(v).strip().lower().rstrip(".")
+sni = p.get("servername")
+if sni is None or sni is False: sni = p.get("sni")
+k = "|".join([s(p.get("type")).strip().lower(), h(p.get("server")), s(p.get("port")).strip(), h(sni)] + [s(p.get(f)) for f in ("username", "password", "uuid")])
+x = 0xcbf29ce484222325
+for b in k.encode(): x = ((x ^ b) * 0x100000001b3) & 0xffffffffffffffff
+print("%016x" % x)' "$1"
+}
+out=$(run CCA_TTY="$(ans 'socks5://u:p@198.51.100.7:1080' .)" cca node use alice 2>&1); rc=$?
+ok "cca node use：维护者的映射固定了节点的账号不能换（不问链接，什么都不存）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的映射固定了 alice@example.com 的出口节点" && ! printf "%s" "$out" | grep -q "粘贴" && [ ! -e "$CNF" ]'
+edit_table 'j["cu@example.com"] = "US-B"'; run cca router sync -y >/dev/null 2>&1
+cs=$(( $(cfgv 'c["ports"]["cu@example.com"]') - 7900 )); cp "$SRC" "$T/src.cu"; n0=$(reloads); r0=$(restarts); : > ssh.log
+out=$(run CCA_TTY="$(ans y)" cca node use cu 'socks5://u%40x:p%3Aw@198.51.100.7:1080#Home%20IP' 2>&1); rc=$?
+ok "cca node use 账号 socks5 链接（配置了路由器、在家）：解析、本机内核校验、存成自定义节点（600），账号改走它；同步时写进 OpenClash 选用的配置文件（行尾带 # cca，不进任何策略组），问过后重启一次（不热加载），账号的端口切到它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "cu@example.com 改走自定义代理「Home IP」" && printf "%s" "$out" | grep -qF "已把自定义节点写进 OpenClash 的配置文件 ${SRC}：补上自定义节点 Home IP（行尾带 # cca" && printf "%s" "$out" | grep -q "OpenClash 的配置文件里新写了自定义节点，要用上只能重启一次 OpenClash" && printf "%s" "$out" | grep -q "现在重启 OpenClash 吗" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ] && [ "$(stat -f %Lp "$CNF")" = 600 ] && [ "$(added "$T/src.cu" "$SRC")" = 1 ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"Home IP\" } == {\"name\" => \"Home IP\", \"type\" => \"socks5\", \"server\" => \"198.51.100.7\", \"port\" => 1080, \"username\" => \"u@x\", \"password\" => \"p:w\"} && c[\"proxy-groups\"].none? { |x| x[\"proxies\"].to_a.include?(\"Home IP\") }" && tblok "t[\"cu@example.com\"] == \"Home IP\"" && [ "$(sel "CCA-$cs")" = "Home IP" ] && rget "$RC" "px.include?(\"Home IP\")"'
+ok "节点的用户名、密码只经 ssh 的 stdin 交给路由器（不进命令行）；它进了可选节点，记下了节点指纹" '! grep -q "p:w\|p%3Aw\|u@x" ssh.log && grep -q "\"custom\": {\"id\": " "$R/etc/cca/accounts.yaml" && cfgok "\"Home IP\" in c[\"nodes\"] and c[\"node_ids\"].get(\"Home IP\")"'
+ckh=$(python3 -c 'import json,sys; print(next((a.get("ck", "") for a in json.load(open(sys.argv[1]))["accounts"] if a["slot"] == int(sys.argv[2])), ""))' "$R/etc/cca/accounts.yaml" "$cs")
+ckw=$(ckof '{"type": "socks5", "server": "198.51.100.7", "port": 1080, "username": "u@x", "password": "p:w"}')   # 期望值在断言外面算：bash 3.2 解析双引号里的 $(… "{\"…\"}") 会把参数拆碎
+ok "用自定义节点的槽位带着节点的身份摘要 ck（连用户名、密码一起算），别的槽位不带" '[ -n "$ckh" ] && [ "$ckh" = "$ckw" ] && python3 -c "import json,sys; sys.exit(0 if all(\"ck\" not in a for a in json.load(open(sys.argv[1]))[\"accounts\"] if a[\"slot\"] != int(sys.argv[2])) else 1)" "$R/etc/cca/accounts.yaml" "$cs"'
+out=$(run cca router status 2>&1); out2=$(run cca router nodes 2>&1); c0=$(grep -c '^CORE' router.log); r0=$(restarts); n0=$(reloads); cp "$SRC" "$T/src.cu2"
+out3=$(run cca router sync 2>&1); rc=$?
+ok "cca router status 说明自定义节点，cca router nodes 列得出它；再同步：配置文件里有了，不再写、不重启也不重载、不再拿内核校验" 'printf "%s\n" "$out" | grep -qx "自定义节点：1 个，OpenClash 的配置文件里都有" && printf "%s" "$out2" | grep -qx "Home IP" && [ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.cu2" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && [ "$(sel "CCA-$cs")" = "Home IP" ]'
+cp "$T/src.cu" "$SRC"; r0=$(restarts); oc_restart
+ok "订阅更新把配置文件整个换掉了：OpenClash 启动时钩子写回去，这次的运行配置里也照样带上（不用再重启），账号的端口照常走它" '[ "$(added "$T/src.cu" "$SRC")" = 1 ] && rget "$RC" "px.include?(\"Home IP\")" && [ "$(sel "CCA-$cs")" = "Home IP" ] && [ "$(restarts)" = $((r0 + 1)) ] && [ ! -e "$R/etc/cca/fill.pending" ] && grep -q "【cca】已把自定义节点写进配置文件 $SRC" "$R/tmp/openclash.log"'
+r0=$(restarts)
+out=$(sess '{"node.custom":[{"link":"这不是链接"},{"link":"http://a:b@198.51.100.10:3128#Office"}],"consent.router_restart":[{"v":"y"}]}' -- cca node use cu 2>&1); rc=$?
+ok "App 的「自定义代理…」（提问会话 cca node use）：粘贴代理链接，认不出的带着原因重问；同步时要重启 OpenClash 在会话里问（consent.router_restart），同意后重启；做完 result 是 saved、带账号" '[ $rc -eq 0 ] && [ "$(asks)" = "node.custom node.custom consent.router_restart" ] && evq "e.get(\"q\") == \"node.custom\" and \"认不出\" in (e[\"fields\"][0].get(\"error\") or \"\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"saved\" and e[\"key\"] == \"cu@example.com\" and \"Office\" in e[\"message\"]" && [ "$(restarts)" = $((r0 + 1)) ] && tblok "t[\"cu@example.com\"] == \"Office\"" && [ "$(sel "CCA-$cs")" = Office ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"Office\" } == {\"name\" => \"Office\", \"type\" => \"http\", \"server\" => \"198.51.100.10\", \"port\" => 3128, \"username\" => \"a\", \"password\" => \"b\"}"'
+out=$(run cca _gui state 2>/dev/null)
+ok "_gui state：can.custom_proxy——维护者固定了节点的账号是 false，别的是 true" 'printf "%s" "$out" | jok "[a[\"can\"][\"custom_proxy\"] for a in d[\"tools\"][0][\"accounts\"] if a[\"key\"] in (\"alice@example.com\", \"cu@example.com\")] == [False, True]"'
+# 多设备共用一个路由器：扮演另一台设备（owner bbbb…，直接写路由器的 accounts.yaml + owners，见 11a2），它的账号 dave-dev2
+# 用它那台的节点。路由器按槽位带着的 ck 核对自定义节点，同名却不是同一个的宁可断开。这几个用例结束时还原到这里
+rm -rf "$T/router.md"; cp -R "$R" "$T/router.md"; cp "$H/.cca/config.json" "$T/config.md"; cp "$H/.cca/accounts.json" "$T/acct.md"; cp -p "$CNF" "$T/cnf.md"
+mdslot() {   # mdslot 节点 ck [custom]：另一台设备的账号占第一个空槽位（输出槽位号）；ck 空着就不带。custom 是节点 JSON 时
+	          # 账号表的 custom 换成只有它（像那台最后同步过），是 - 时去掉（像旧版 cca 最后同步过）
+	python3 - "$R/etc/cca/accounts.yaml" "$R/etc/cca/owners" "$@" <<'PY'
+import json, sys
+acc = json.load(open(sys.argv[1])); own = json.load(open(sys.argv[2]))
+acc['accounts'] = [a for a in acc['accounts'] if a['name'] != 'dave-dev2']
+used = {a['slot'] for a in acc['accounts']}
+s = next(i for i in range(1, 99) if i not in used)
+a = {'slot': s, 'name': 'dave-dev2', 'node': sys.argv[3]}
+if sys.argv[4]: a['ck'] = sys.argv[4]
+acc['accounts'].append(a); acc['slots'] = max(acc.get('slots', 0), s)
+if len(sys.argv) > 5:
+    if sys.argv[5] == '-': acc.pop('custom', None)
+    else: acc['custom'] = {'id': 'other', 'proxies': [json.loads(sys.argv[5])]}
+own = {k: v for k, v in own.items() if v != 'bbbb1111bbbb1111'}; own[str(s)] = 'bbbb1111bbbb1111'
+json.dump(acc, open(sys.argv[1], 'w'), ensure_ascii=False); json.dump(own, open(sys.argv[2], 'w'))
+print(s)
+PY
+}
+s2=$(mdslot 'Home IP' 0123456789abcdef)
+out=$(run cca router sync -y 2>&1)
+ok "多设备：另一台的账号用它自己的「Home IP」（同名，ck 不一样）：它的槽位宁可断开（REJECT），不走这台写进去的；这台的账号照常；它的槽位和 ck 原样保留" '[ "$(sel "CCA-$s2")" = REJECT ] && [ "$(sel "CCA-$cs")" = Office ] && printf "%s" "$out" | grep -q "槽位 $s2 的「Home IP」和账号要的自定义节点不是同一个" && grep -q "\"name\": \"dave-dev2\", \"node\": \"Home IP\", \"ck\": \"0123456789abcdef\"" "$R/etc/cca/accounts.yaml"'
+s2=$(mdslot 'Home IP' "$ckh")
+out=$(run cca router sync -y 2>&1)
+ok "多设备：另一台的「Home IP」和这台写进去的是同一个（ck 一样）：它的槽位照常走它" '[ "$(sel "CCA-$s2")" = "Home IP" ] && [ "$(sel "CCA-$cs")" = Office ] && grep -q "\"name\": \"dave-dev2\", \"node\": \"Home IP\", \"ck\": \"$ckh\"" "$R/etc/cca/accounts.yaml"'
+SB='{"name": "Spare B", "type": "http", "server": "198.51.100.20", "port": 8080, "username": "dave", "password": "pw"}'
+s2=$(mdslot 'Spare B' "$(ckof "$SB")" "$SB")
+out=$(run cca router sync -y 2>&1)
+ok "多设备：另一台在用的自定义节点（账号表的 custom 里有、它的槽位的 ck 是它）这台同步时照样带着：写进配置文件，它的槽位走它" '[ "$(sel "CCA-$s2")" = "Spare B" ] && [ "$(sel "CCA-$cs")" = Office ] && rget "$SRC" "c[\"proxies\"].any? { |p| p[\"name\"] == \"Spare B\" && p[\"username\"] == \"dave\" }" && python3 -c "import json,sys; sys.exit(0 if [p[\"name\"] for p in json.load(open(sys.argv[1]))[\"custom\"][\"proxies\"]] == [\"Home IP\", \"Office\", \"Spare B\"] else 1)" "$R/etc/cca/accounts.yaml"'
+cp "$T/src.cu" "$SRC"; oc_restart
+ok "订阅更新把配置文件整个换掉了：钩子照账号表把另一台在用的自定义节点也写回去，它的槽位照常（不用等那台再同步）" '[ "$(added "$T/src.cu" "$SRC")" = 3 ] && [ "$(sel "CCA-$s2")" = "Spare B" ] && [ "$(sel "CCA-$cs")" = Office ]'
+# 这台在外面改了「Office」（密码换了，名字没变；直接改 custom-nodes.json）
+ofc_b2() { python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [q.update(password='b2') for q in j['proxies'] if q['name'] == 'Office']; json.dump(j, open(p, 'w'), ensure_ascii=False)" "$CNF"; }
+ofc_b2; cp "$SRC" "$T/src.md"
+OFC='{"name": "Office", "type": "http", "server": "198.51.100.10", "port": 3128, "username": "a", "password": "b"}'
+s2=$(mdslot Office '' -)
+out=$(run cca router sync -y 2>&1)
+ok "多设备：另一台的槽位没带 ck（旧版 cca 同步过，账号表里也没有 custom）：当它用着路由器上的「Office」，路由器端不换成这台改过的、说为什么；这台用它的槽位断开，另一台的照常" 'cmp -s "$SRC" "$T/src.md" && printf "%s" "$out" | grep -q "自定义节点「Office」和这里的同名节点不是同一个、那个还有账号在用（可能是别的设备的），没有写" && [ "$(sel "CCA-$cs")" = REJECT ] && [ "$(sel "CCA-$s2")" = Office ]'
+s2=$(mdslot Office "$(ckof "$OFC")" "$OFC"); r0=$(restarts)
+out=$(run cca router sync -y 2>&1)
+ok "多设备：路由器上的「Office」另一台正用着（账号表的 custom 里有、它的槽位的 ck 是原来的那个）：这台改过的那个改名为「Office-2」（出口不变）再同步，两台都照常" 'printf "%s" "$out" | grep -q "自定义节点「Office」和别的设备在路由器上正用着的同名节点不是同一个：这台的改名为「Office-2」" && tblok "t[\"cu@example.com\"] == \"Office-2\"" && cfgok "\"Office-2\" in c[\"nodes\"] and \"Office\" not in c[\"nodes\"] and c[\"node_ids\"].get(\"Office-2\")" && [ "$(sel "CCA-$cs")" = Office-2 ] && [ "$(sel "CCA-$s2")" = Office ] && [ "$(restarts)" = $((r0 + 1)) ] && rget "$SRC" "c[\"proxies\"].any? { |p| p[\"name\"] == \"Office-2\" && p[\"password\"] == \"b2\" } && c[\"proxies\"].any? { |p| p[\"name\"] == \"Office\" && p[\"password\"] == \"b\" }"'
+# 只有这台：路由器、config.json、账号表回到上面那几个用例之前，这台的「Office」照样是改过的
+rm -rf "$R"; cp -R "$T/router.md" "$R"; cp "$T/config.md" "$H/.cca/config.json"; cp "$T/acct.md" "$H/.cca/accounts.json"; cp -p "$T/cnf.md" "$CNF"; ofc_b2; r0=$(restarts)
+out=$(run cca router sync -y 2>&1)
+ok "只有这台在用：改过的「Office」照新的更新进配置文件（问过后重启一次），账号的端口走它" 'rget "$SRC" "c[\"proxies\"].any? { |p| p[\"name\"] == \"Office\" && p[\"password\"] == \"b2\" }" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(sel "CCA-$cs")" = Office ] && printf "%s" "$out" | grep -q "更新了自定义节点 Office"'
+rm -rf "$R"; cp -R "$T/router.md" "$R"; cp "$T/config.md" "$H/.cca/config.json"; cp "$T/acct.md" "$H/.cca/accounts.json"; cp -p "$T/cnf.md" "$CNF"
+# 用户在 OpenClash 的配置里把 cca 写的「Office」换成了自己的（去掉记号、换了服务器）：同名不同的节点不写，用它的端口断开（不换出口）
+python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); a='  - name: Office # cca\n'; assert s.count(a) == 1; s=s.replace(a, '  - name: Office\n').replace('server: 198.51.100.10', 'server: 192.0.2.77'); open(p, 'w').write(s)" "$SRC"
+oc_restart; cp "$SRC" "$T/src.cu3"
+out=$(run cca router sync -y 2>&1); rc=$?; out2=$(run cca router status 2>&1)
+ok "配置文件里有同名、却不是同一个节点（用户自己的）：不写、不改用户的，用它的端口宁可断开（REJECT）；cca router status 说为什么" 'cmp -s "$SRC" "$T/src.cu3" && [ "$(sel "CCA-$cs")" = REJECT ] && grep -q "槽位 $cs 的「Office」和账号要的自定义节点不是同一个" "$R/tmp/cca-router.log" && printf "%s" "$out2" | grep -q "自定义节点「Office」和这里的同名节点不是同一个，没有写"'
+out=$(run cca node rm Office 2>&1); rc=$?
+ok "cca node rm：还有账号在用时不删" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "还有账号在用「Office」"'
+# 还原：路由器、config.json、账号表、内置代理的目录（自定义节点、下载的内核）回到这一节开头
+rm -rf "$R" "$H/.cca/core"; cp -R "$T/router.snap2" "$R"; cp "$T/config.snap2" "$H/.cca/config.json"; cp "$T/accounts.snap2" "$H/.cca/accounts.json"
+[ ! -d "$T/core.snap2" ] || cp -Rp "$T/core.snap2" "$H/.cca/core"
+
+fi
 if sect 11b3; then
 # 11b3. 维护者管理各台机器的 deploy key（policy.sh key）：假 gh 模拟 GitHub 的 deploy key 接口（存在 $T/deploy_keys.json），
 # 有 $T/policy_keys 时假 git 按它认 deploy key（没加上就拒绝，认出来了记下最近使用）
@@ -3364,7 +3492,7 @@ ok "在家开着 TUN、去路由器的路由走 utun9：绑定物理网卡探得
 rm -rf "$T/route_if"
 out=$(run CCA_TTY="$(ans y)" cca local setup 2>&1)
 ok "cca local setup：用内置代理（问一句），在家先从路由器拷节点定义，然后让内核就绪" 'printf "%s" "$out" | grep -q "用内置代理吗" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && [ "$(cnames "$CN/nodes.json")" = US-A,US-B,US-C,US-D,HK-A2 ] && [ -f "$CD/up" ]'
-# 自定义节点（只给没有路由器、用内置代理的机器）：分享链接 / Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json（600），名字加进可选节点
+# 自定义节点：分享链接 / Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json（600），名字加进可选节点（配置了路由器的同步时也写进路由器，见 11b2c）
 cp "$H/.cca/config.json" "$T/cfg.cn.bak"
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('router',None); json.dump(c,open(p,'w'),indent=2,ensure_ascii=False)" "$H/.cca/config.json"
 out=$(sess '{"add.basic":[{"email":"cn@example.com","alias":""}]}' --eof-at add.node -- cca add 2>&1); rc=$?
@@ -3385,10 +3513,10 @@ ok "cca node rm：还有账号在用时不删（说哪个账号在用）" '[ $rc
 python3 -c "import json,sys; p=sys.argv[1]; t=json.load(open(p)); t.pop(\"甲(z@example.com)\",None); json.dump(t,open(p,'w'),ensure_ascii=False)" "$H/.cca/accounts.json"
 out=$(run cca node rm "My Node" 2>&1); rc=$?
 ok "cca node rm：从 custom-nodes.json 和可选节点里去掉" '[ $rc -eq 0 ] && ! cfgok "\"My Node\" in c[\"nodes\"]" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if not j[\"proxies\"] else 1)" "$CN/custom-nodes.json"'
-cp "$T/cfg.cn.bak" "$H/.cca/config.json"
+cp "$T/cfg.cn.bak" "$H/.cca/config.json"; touch "$T/away"; : > ssh.log
 out=$(run cca node add "$VMLINK" 2>&1); rc=$?
-ok "配置了路由器的机器：cca node add 拒绝（出口节点在 cca router setup 里选）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "配置了路由器"'
-rm -f "$CN/custom-nodes.json"
+ok "配置了路由器的机器也能加自定义节点（同步时写进路由器的配置文件，见 11b2c）；在外面时不碰路由器，说回家后下次启动时同步" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加好了自定义节点「My Node」" && printf "%s" "$out" | grep -q "回到家里的网络后，下次启动 cca 时会自动同步" && ! grep -q "^SSH " ssh.log'
+cp "$T/cfg.cn.bak" "$H/.cca/config.json"; rm -f "$CN/custom-nodes.json" "$T/away"
 rm -f "$CN"/mihomo-v*; : > gh.log
 run cca @alice --version >/dev/null 2>&1
 for i in $(seq 1 50); do [ -x "$CN/mihomo-v1.19.33" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && break; sleep 0.1; done

@@ -115,6 +115,17 @@ struct CostStatsContent: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if let u = Texts.costUpdateClaudeCode(total.unattributed) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Label(u, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            RowAction("客户端更新", systemImage: "arrow.down.circle") { model.selection = .clientUpdates }
+                                .help("到「客户端更新」更新 Claude Code")
+                        }
+                    }
                     Text(Texts.costFootnote(tools, pricesDate: total.pricesDate))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -480,7 +491,7 @@ private struct CostAccountRow: View {
 }
 
 /// 账号下面的一台设备（看所有设备时；cca 排好的：这台设备在前，别的按 30 天的金额从多到少）：缩进、灰字，小图和数字是这台设备的。
-/// 很久没同步上来的名字后面一个橙色的钟。点了和点账号那一行一样，进账号页
+/// 很久没同步上来的名字后面一个橙色的钟，有用量没算进来（cca 给的 diag.why）的一个橙色的三角。点了和点账号那一行一样，进账号页
 private struct CostDeviceRow: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -494,13 +505,17 @@ private struct CostDeviceRow: View {
     var body: some View {
         let d = device
         let stale = Texts.costStale(d, now: now)
-        let lines = [Texts.costCaption(d.summary, granularity: scale.granularity, currency: cost.currency)] + (stale.map { [$0] } ?? [])
+        let why = Texts.costDeviceWhy(d)
+        let lines = [Texts.costCaption(d.summary, granularity: scale.granularity, currency: cost.currency)] + [stale, why].compactMap { $0 }
         Button { model.showCost(account.ref) } label: {
             HStack(spacing: CostStatsColumns.spacing) {
                 HStack(spacing: 5) {
                     Text(Texts.costDeviceName(d)).lineLimit(1).truncationMode(.middle)
                     if stale != nil {
                         Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
+                    }
+                    if why != nil {
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                     }
                 }
                 .font(.callout)
