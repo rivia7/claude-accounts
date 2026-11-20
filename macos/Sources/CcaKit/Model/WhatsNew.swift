@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.1", title: "账号可以改走你自己的代理", points: [
+            .init(symbol: "link.badge.plus",
+                  text: "维护者没固定节点的账号，在账号页「网络出口」点「自定义代理…」，粘贴 socks5://、http:// 地址（比如买的静态住宅 IP）或分享链接，就能改走这个代理。配置了路由器的会写进路由器的配置（要重启一次 OpenClash / ShellCrash 时先问你），在外面时内置代理照样用它。"),
+            .init(symbol: "checkmark.shield",
+                  text: "几台 Mac 共用一个路由器时，各自加的自定义代理互不覆盖：同名却不是同一个的，这台的自动改个名字（出口不变）；对不上的端口宁可断开，也不换成别的出口。"),
+            .init(symbol: "dollarsign.circle",
+                  text: "折合金额：以后经 cca 启动的旧版 Claude Code（2.1.316 及以前）的会话也算得进来。还有用量认不出是哪个账号的，折合金额页标出是哪台设备、为什么；命令行里的 Claude Code 太旧时提醒更新。"),
+        ], art: "route"),
         ReleaseNote(version: "3.5.0", title: "cca 3.5 正式版：内嵌的 Python 换成了原生程序，更快、更省", points: [
             .init(symbol: "bolt",
                   text: "cca 里原来内嵌的 Python 换成了原生程序：一条命令里 cca 自己占的时间降到原来的几分之一（比如 cca ls 从约 0.5 秒到约 0.1 秒），后台的上报进程内存从约 31 MB 降到约 6 MB。用法、配置和文件都没变。"),
