@@ -22,6 +22,7 @@ use super::{arg, arity, Cmd};
 use crate::core::base::{secret_re_match, CCA_HOME, SECRET_MSG};
 use crate::core::ctx::{cfg_save, ctx};
 use crate::core::model::{acct_id, api_host, cfg_load, is_api, key_hint, secret_ok, table_load, REF_ACCT};
+use crate::core::policy::parked;
 use crate::core::tool::{claude, t};
 use crate::py::fs;
 use crate::py::hash::to_hex;
@@ -533,7 +534,13 @@ pub fn cmd_secrets_forget(args: &[String]) -> R<()> {
         let keep: HashSet<String> = if scope == "all" {
             HashSet::new()
         } else {
-            table.items().iter().filter(|(_, v)| is_api(v) != is_ref).map(|(k, _)| acct_id(k, t())).collect()
+            let mut keep: HashSet<String> =
+                table.items().iter().filter(|(_, v)| is_api(v) != is_ref).map(|(k, _)| acct_id(k, t())).collect();
+            if is_ref {
+                // 关掉共享时收起来的官方账号：不在账号表里，记下备查的 key 照样留着（重新打开共享时加回来）
+                keep.extend(parked(&c, t()).keys().iter().map(|a| a.to_string()));
+            }
+            keep
         };
         let gone = py_set(st.get(kc_list(is_ref)))?.into_iter().filter(|v| !v.as_str().is_some_and(|a| keep.contains(a))).collect();
         for aid in py_sorted(gone)? {

@@ -115,16 +115,11 @@ private typealias ResponseOverride = @Sendable () -> CcaResponse
           autoPull.arguments == ["policy", "pull", "--json"] && manualPull.arguments == autoPull.arguments && autoPull.isBackground && !manualPull.isBackground
           && autoPull.gate == CcaCommand.routerSync.gate && manualPull.gate == CcaCommand.routerSync.gate)
     let pullDoc = #"{"version":1,"kind":"policy_pull","generated_epoch":1794042000,"changed":true,"summary":"Claude 1 个账号"}"#
-    let helloForms = tinyHello.replacingOccurrences(of: #""api":1"#, with: #""api":1,"prompt":1,"forms":1"#)
     func policyModel(configured: Bool, next: Double?, doc: String = pullDoc, temp: Bool = false, hello: String? = nil,
                      pull: ResponseOverride? = nil) -> (ScriptedTransport, AppModel, HookLog) {
-        var root = (try? JSONSerialization.jsonObject(with: fixture("state_nocodex.json") ?? Data())) as? [String: Any] ?? [:]
-        var config = root["config"] as? [String: Any] ?? [:]
-        config["policy"] = ["configured": configured, "repo": "example/cca-policy", "next_check_epoch": next as Any? ?? NSNull()] as [String: Any]
-        root["config"] = config
-        let st = String(decoding: (try? JSONSerialization.data(withJSONObject: root)) ?? Data(), as: UTF8.self)
+        let st = stateWithPolicy(["configured": configured, "repo": "example/cca-policy", "next_check_epoch": next as Any? ?? NSNull()])
         let t = ScriptedTransport { r, _ in
-            if r.arguments == ["_gui", "hello"] { return response(0, stdout: hello ?? helloForms) }
+            if r.arguments == ["_gui", "hello"] { return response(0, stdout: hello ?? tinyHelloForms) }
             if r.arguments == ["_gui", "state"] { return response(0, stdout: st) }
             if r.arguments == ["policy", "pull", "--json"] { return pull?() ?? response(0, stdout: doc) }
             return response(0)

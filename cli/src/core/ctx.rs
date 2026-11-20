@@ -41,6 +41,18 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
             dict! { "tool" => tool.name, "key" => k, "node" => node },
         );
     }
+    // 关掉共享时收起来的账号又在账号表里了（重新打开共享时按映射加回来了，或者用户自己加回来了）：不再算收起来的
+    if let Some(p) = st.dict("parked") {
+        let ids: HashSet<String> = table.keys().iter().map(|k| acct_id(k, tool)).collect();
+        for aid in p.keys() {
+            if ids.contains(&*aid) {
+                p.pop(&aid);
+            }
+        }
+        if p.is_empty() {
+            st.pop("parked");
+        }
+    }
     let renamed = policy_alias_fill(table, tool);
     for (k, new) in &renamed {
         notice(
@@ -293,7 +305,9 @@ pub fn cfg_clean(c: &Dict) {
     for tool in tools() {
         let Some(key) = tool.state_key else { continue };
         if let Some(s) = c.dict(key) {
-            let keep = ["ports", "last", "api_ids", "api_keys", "ref_keys", "key_hints", "policy_skip"].iter().any(|k| s.truthy(k));
+            let keep = ["ports", "last", "api_ids", "api_keys", "ref_keys", "key_hints", "policy_skip", "parked"]
+                .iter()
+                .any(|k| s.truthy(k));
             if !keep {
                 c.pop(key);
             }

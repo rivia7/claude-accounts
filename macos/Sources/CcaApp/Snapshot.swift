@@ -171,6 +171,10 @@ enum Snapshot {
                 m.closeRemoteTerminal()
                 m.selection = .office
             },
+            // 共享与同步：维护者共享的账号的开关（演示数据里开着、拉到了映射）
+            Scene(name: "sharing") { m in
+                m.selection = .sharing
+            },
             // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
             Scene(name: "pinned") { m in
                 m.tool = .claude
@@ -245,7 +249,8 @@ enum Snapshot {
                 ("flow-key", .apiKey(prefix: [], key: "kimi", name: "kimi"), 0),
                 ("flow-router", .routerSetup, 0), ("flow-router-password", .routerSetup, 1), ("flow-router-nodes", .routerSetup, 2),
                 ("flow-local", .localSetup, 0),
-                ("flow-onboard", .onboard, 0), ("flow-onboard-net", .onboard, 1), ("flow-onboard-add", .onboard, 2),
+                ("flow-onboard-share", .onboard, 0), ("flow-onboard", .onboard, 1), ("flow-onboard-net", .onboard, 2),
+                ("flow-onboard-add", .onboard, 3),
                 ("flow-edit", .edit(prefix: []), 0),
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
                 ("flow-remote-pair", .remotePair, 0), ("flow-remote-pair-code", .remotePair, 1), ("flow-remote-join", .remoteJoin, 0),

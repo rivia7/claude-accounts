@@ -24,10 +24,49 @@ pub const POLICY_POLL_INTERVAL: i64 = 3600;
 pub static FILL_FILE: LazyLock<String> = LazyLock::new(|| path::join_all(&[&CCA_HOME, "policy", "nodes.json"]));
 pub const FILL_BUILTIN: &[&str] = &["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"];
 
-/// 维护者的映射里这个工具的官方账号：{邮箱（小写）: 映射里写的节点}。没配置、读不了、格式不对都当作没有
+thread_local! {
+    /// policy_on 的结果，按 config.json 的 (设备号, inode, 大小, 修改时间) 记着：一条命令里要问几十次（每张账号表对账都问），
+    /// 不每次都解析 config.json；cfg_save 原子替换（换了 inode）、内容变了都会重新读
+    static POLICY_ON: std::cell::Cell<Option<((u64, u64, u64, i64, i64), bool)>> = const { std::cell::Cell::new(None) };
+}
+
+/// 共享（维护者的映射）开着吗：config.json 里配置了映射仓库（`policy`）。`cca policy off` 去掉这一项（仓库记进 `policy_was`），
+/// 这时磁盘上留着的 policy.json、nodes.json 一律不生效：关掉时正好在后台拉的那一次（`policy_hook` 另起的进程）可能在之后才写回来。
+/// 没有 config.json 是关着；有、但读不出对象（手改坏了）时照旧看磁盘上的映射：关掉共享是原子地重写 config.json，不会把它写坏，
+/// 坏了也不该让设备统计的上报进程停下来
+pub fn policy_on() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let st = match std::fs::metadata(&*CFG) {
+        Ok(st) => st,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    let sig = (st.dev(), st.ino(), st.size(), st.mtime(), st.mtime_nsec());
+    if let Some((s, on)) = POLICY_ON.get() {
+        if s == sig {
+            return on;
+        }
+    }
+    let on = match load_quiet(&CFG) {
+        Some(V::Dict(c)) => c.truthy("policy"),
+        _ => true,
+    };
+    POLICY_ON.set(Some((sig, on)));
+    on
+}
+
+/// 生效的映射（policy.json）：共享开着、读得出 JSON 对象；否则 None
+pub fn policy_doc() -> Option<Dict> {
+    if !policy_on() {
+        return None;
+    }
+    load_quiet(&POLICY_FILE).and_then(|j| j.as_dict())
+}
+
+/// 维护者的映射里这个工具的官方账号：{邮箱（小写）: 映射里写的节点}。没配置、共享关着、读不了、格式不对都当作没有
 pub fn policy_raw(tool: &Tool) -> Dict {
     let out = Dict::new();
-    if let Some(s) = load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()).and_then(|j| j.dict(tool.name)) {
+    if let Some(s) = policy_doc().and_then(|j| j.dict(tool.name)) {
         for (e, n) in s.items() {
             if let V::Str(n) = n {
                 if !n.is_empty() {
@@ -85,7 +124,7 @@ pub fn alias_ok(a: &V) -> bool {
 /// 旧版本的 cca 不认识这一节、照样忽略它：加了别名，旧版本也照常拉得到映射
 pub fn policy_names() -> Dict {
     let out = Dict::new();
-    if let Some(s) = load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()).and_then(|j| j.dict("aliases")) {
+    if let Some(s) = policy_doc().and_then(|j| j.dict("aliases")) {
         for (e, a) in s.items() {
             if alias_ok(&a) {
                 out.set(e.to_lowercase(), a);
@@ -172,9 +211,25 @@ pub fn alias_problem(table: &Dict, alias: &str) -> String {
     String::new()
 }
 
+/// 关掉共享时收起来的账号（工具状态里的 `parked`：{账号目录名: {"key": 原来账号表里的键, "node": 节点}}）。它们已经不在
+/// 账号表里，登录目录、钥匙串里的东西原样留着（secrets-forget、邮箱设置的清理都跳过它们），重新打开共享时按映射加回来
+/// （policy_merge 照原来的键加：账号目录由键里邮箱的写法推出来，不用重新登录），加回来了就从这里去掉（reconcile）
+pub fn parked(c: &Dict, tool: &Tool) -> Dict {
+    tool.state(c, false).dict("parked").unwrap_or_default()
+}
+
+/// 收起来的账号里这个邮箱（小写）原来的键
+fn parked_key(c: &Dict, tool: &Tool, e: &str) -> Option<String> {
+    parked(c, tool)
+        .values()
+        .iter()
+        .filter_map(|v| v.as_dict().and_then(|d| d.str("key")).map(|k| k.to_string()))
+        .find(|k| parse_key(k).1.to_lowercase() == e)
+}
+
 /// 维护者的映射和这台机器的账号表合并：映射里有、这台机器上还没有的官方账号加进账号表，返回加进来的键。
-/// 别名用映射里 aliases 写的（和这台机器上别的账号重名时只写邮箱）。这台机器自己的账号（映射里没有的）、
-/// 这台机器上改过的别名都不动；不加的见 policy_missing 的原因（cca policy 里列出来）
+/// 别名用映射里 aliases 写的（和这台机器上别的账号重名时只写邮箱）；关掉共享时收起来的照原来的键加回来。
+/// 这台机器自己的账号（映射里没有的）、这台机器上改过的别名都不动；不加的见 policy_missing 的原因（cca policy 里列出来）
 pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
     let names = policy_names();
     let mut added = Vec::new();
@@ -182,11 +237,23 @@ pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
         if !why.is_empty() {
             continue;
         }
-        let a = names.str(&e).unwrap_or_else(|| Rc::from(""));
-        let mut k = if a.is_empty() { e.clone() } else { format!("{a}({e})") };
-        if !a.is_empty() && (!alias_problem(table, &a).is_empty() || !KEY_RE.matches(&k)) {
-            k = e.clone();
-        }
+        let k = if let Some(old) = parked_key(c, tool, &e) {
+            // 收起来的：原来的键（邮箱的大小写也照原来的：账号目录由它推出来）；别名撞上了这台机器上别的账号就只写邮箱
+            let (a, em) = parse_key(&old);
+            if a.is_empty() || alias_problem(table, &a).is_empty() {
+                old
+            } else {
+                em
+            }
+        } else {
+            let a = names.str(&e).unwrap_or_else(|| Rc::from(""));
+            let k = if a.is_empty() { e.clone() } else { format!("{a}({e})") };
+            if !a.is_empty() && (!alias_problem(table, &a).is_empty() || !KEY_RE.matches(&k)) {
+                e.clone()
+            } else {
+                k
+            }
+        };
         table.set(k.as_str(), n);
         added.push(k);
     }
@@ -400,9 +467,12 @@ pub fn fill_problems(j: &V) -> Vec<String> {
     errs
 }
 
-/// 维护者的参考节点：{'id': 摘要, 'group': 策略组, 'proxies': [节点定义…]}；没有、读不了、格式不对都是 None。
+/// 维护者的参考节点：{'id': 摘要, 'group': 策略组, 'proxies': [节点定义…]}；没有、共享关着、读不了、格式不对都是 None。
 /// id 随内容变：路由器按它认这一版有没有在自己的内核上校验过
 pub fn policy_fill() -> Option<Dict> {
+    if !policy_on() {
+        return None;
+    }
     let j = load_quiet(&FILL_FILE).unwrap_or(V::None);
     if !fill_problems(&j).is_empty() {
         return None;
@@ -442,7 +512,7 @@ pub fn fill_fp(p: &Dict) -> String {
 
 /// 维护者映射里指定的安装节点（install_node）；没有、不合规都是空的。旧版本的 cca 不认识这一项，照样忽略它
 pub fn policy_install_node() -> String {
-    let n = load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()).and_then(|j| j.get("install_node")).unwrap_or(V::None);
+    let n = policy_doc().and_then(|j| j.get("install_node")).unwrap_or(V::None);
     match n.as_str() {
         Some(s) if fill_name_ok(&n) && !FILL_BUILTIN.contains(&s) => s.to_string(),
         _ => String::new(),

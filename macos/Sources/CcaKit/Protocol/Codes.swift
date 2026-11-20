@@ -157,6 +157,19 @@ struct LocalUDPState: KnownValues {
     static let allKnown: [LocalUDPState] = [.off, .ok, .stale, .missing, .undefined]
 }
 
+/// `config.policy.state`：维护者的共享（PROTOCOL 2.2、4.12）。不认识的值当作开着、还没拉到（`pending`）显示
+struct PolicyState: KnownValues {
+    let rawValue: String
+    init(rawValue: String) { self.rawValue = rawValue }
+    /// 关着：从没打开过、说过不用、`cca policy off` 关掉了
+    static let off = PolicyState(rawValue: "off")
+    /// 打开了，还没拉到映射（在等维护者加上这台 Mac 的公钥，或者还没拉过）
+    static let pending = PolicyState(rawValue: "pending")
+    /// 拉到了映射
+    static let on = PolicyState(rawValue: "on")
+    static let allKnown: [PolicyState] = [.off, .pending, .on]
+}
+
 struct Backend: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
@@ -305,8 +318,13 @@ struct ResultCode: KnownValues {
     static let remotePaired = ResultCode(rawValue: "remote_paired")
     /// 远程会话：开关、对方能做什么、取消配对改好了（`cca remote on|off|allow|unpair`）。
     static let remoteUpdated = ResultCode(rawValue: "remote_updated")
+    /// 打开了维护者的共享（`cca policy on`，PROTOCOL 4.12）：拉到了映射，或者先跳过、这次没拉到（message 说是哪种）。
+    static let policyOn = ResultCode(rawValue: "policy_on")
+    /// 共享关着：`cca policy off` 关掉了（本来就关着也是它），或者 `policy on` 里选了「不打开共享」。
+    static let policyOff = ResultCode(rawValue: "policy_off")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
-                                         .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated]
+                                         .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
+                                         .policyOn, .policyOff]
 }
 
 struct FailCode: KnownValues {
@@ -364,13 +382,15 @@ struct FailCode: KnownValues {
     static let mailConnect = FailCode(rawValue: "mail_connect")
     /// 换自定义代理（`cca [codex|agy] node use`）：维护者的映射固定了这个账号的节点。
     static let nodePinned = FailCode(rawValue: "node_pinned")
+    /// 关掉共享（`cca policy off`）：共享的账号正在用（命令行会话、桌面 App 开着），什么都没改；message 说是哪些。
+    static let policyOffBusy = FailCode(rawValue: "policy_off_busy")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect, .nodePinned]
+                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -408,8 +428,10 @@ struct ConsentItem: KnownValues {
     static let remotePair = ConsentItem(rawValue: "remote_pair")
     /// `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端（范围是会话的 id，默认不同意）。
     static let remoteEnd = ConsentItem(rawValue: "remote_end")
+    /// `cca policy off`：关掉维护者的共享，映射里的账号移出账号表（范围 `all`，默认不同意；PROTOCOL 4.12）。
+    static let policyOff = ConsentItem(rawValue: "policy_off")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd]
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

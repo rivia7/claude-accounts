@@ -123,6 +123,17 @@ func response(_ code: Int32, _ events: [CcaEvent] = [], stdout: String = "", std
 
 let tinyUsage = #"{"version":1,"kind":"usage","generated_at":"2026-11-07T09:00:00Z","generated_epoch":1794042000.0,"accounts":[{"account":"a","key":"a@example.com","source":"none","error":"x","error_code":"port"}],"skipped_api_accounts":[]}"#
 let tinyHello = #"{"version":1,"kind":"hello","api":1,"cca_version":"9.9.9","installed":true,"home":"/nonexistent/.cca","tools":{"claude":{"enabled":true,"bin":null},"codex":{"enabled":false,"bin":null}},"gui":{"app":"/Users/me/Applications/cca.app","app_version":null,"staged_version":null}}"#
+/// tinyHello 加上提问会话和表单（流程能在 App 里问）
+let tinyHelloForms = tinyHello.replacingOccurrences(of: #""api":1"#, with: #""api":1,"prompt":1,"forms":1"#)
+
+/// state_nocodex.json 换上这一份 `config.policy`（nil 写成 null）
+func stateWithPolicy(_ policy: [String: Any]?) -> String {
+    var root = (try? JSONSerialization.jsonObject(with: fixture("state_nocodex.json") ?? Data())) as? [String: Any] ?? [:]
+    var config = root["config"] as? [String: Any] ?? [:]
+    config["policy"] = policy ?? NSNull()
+    root["config"] = config
+    return String(decoding: (try? JSONSerialization.data(withJSONObject: root)) ?? Data(), as: UTF8.self)
+}
 
 final class TriggerSink: @unchecked Sendable {
     private let lock = NSLock()

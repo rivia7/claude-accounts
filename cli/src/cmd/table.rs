@@ -262,38 +262,216 @@ pub fn cmd_digest(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 配置的映射仓库。只读 config.json，不经过 ctx()：后台拉取时不碰账号表，免得和前台的命令抢着写
+/// 配置的映射仓库（共享开着时才有）；`--known` 时共享关着就给关掉时记着的（`policy_was`：deploy key 加在它上面）。都没有就打印空行。
+/// 只读 config.json，不经过 ctx()：后台拉取时不碰账号表，免得和前台的命令抢着写
 pub fn cmd_policy_repo(args: &[String]) -> R<()> {
-    arity("cmd_policy_repo", args, 0, 0)?;
-    let repo = load_quiet(&CFG).and_then(|c| c.as_dict()).and_then(|c| c.get("policy")).filter(|p| p.truthy());
+    arity("cmd_policy_repo", args, 0, 1)?;
+    let known = match arg(args, 0, "") {
+        "" => false,
+        "--known" => true,
+        _ => return die("用法: policy-repo [--known]"),
+    };
+    let c = load_quiet(&CFG).and_then(|c| c.as_dict());
+    let repo = c.as_ref().and_then(|c| c.get("policy")).filter(|p| p.truthy());
+    let repo =
+        if known && repo.is_none() { c.and_then(|c| c.get("policy_was")).filter(|p| p.is_str() && p.truthy()) } else { repo };
     out!("{}", repo.map_or(String::new(), |p| p.py_str()));
     Ok(())
 }
 
-/// 终端里启动账号时要不要引导配置映射：还没配置映射仓库、也没选过「不用映射」（退出码 0 = 要问）。不经过 ctx
-pub fn cmd_policy_ask(args: &[String]) -> R<()> {
-    arity("cmd_policy_ask", args, 0, 0)?;
-    let c = load_quiet(&CFG).and_then(|c| c.as_dict()).unwrap_or_default();
-    exit(if !c.truthy("policy") && !c.truthy("policy_declined") { 0 } else { 1 })
-}
-
-/// 引导里选了「不用映射」：以后启动不再问（cca policy setup 会清掉这个标记）。配置向导里先记下了仓库再选的不用：仓库也去掉
-/// （deploy key、拉到过的映射由 bash 删掉），App 不再定时拉
+/// 配置向导里说了没有维护者、不用映射（先记下了仓库、生成了 deploy key 之后才说的：仓库也去掉；deploy key、拉到过的映射由
+/// bash 删掉），App 不再定时拉。`policy_declined` 只是给旧版本看的（它们在终端里启动时会引导配置映射，有这一项就不问）
 pub fn cmd_policy_decline(args: &[String]) -> R<()> {
     arity("cmd_policy_decline", args, 0, 0)?;
     let c = cfg_load()?;
     c.set("policy_declined", true);
     c.pop("policy");
+    c.pop("policy_was");
     cfg_save(&c)
 }
 
-/// 配置映射仓库（清掉「不用映射」的标记）
+/// 配置映射仓库，打开共享（清掉「不用映射」「关掉了共享」的标记）
 pub fn cmd_policy_set(args: &[String]) -> R<()> {
     arity("cmd_policy_set", args, 1, 1)?;
     let c = cfg_load()?;
     c.set("policy", &args[0]);
     c.pop("policy_declined");
+    c.pop("policy_was");
     cfg_save(&c)
+}
+
+/// 按工具分组写成一句：Claude 的 甲、乙；Codex 的 丙
+fn by_tool(rows: &[(&'static str, String)]) -> String {
+    let mut parts: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (label, what) in rows {
+        match parts.iter_mut().find(|(l, _)| l == label) {
+            Some((_, list)) => list.push(what),
+            None => parts.push((label, vec![what.as_str()])),
+        }
+    }
+    parts.iter().map(|(l, list)| format!("{} 的 {}", l, list.join("、"))).collect::<Vec<_>>().join("；")
+}
+
+/// 关掉共享要动的（`policy_off_scan`）
+struct OffScan {
+    /// 要收起的共享账号：(工具, 键, 节点)
+    park: Vec<(&'static crate::core::tool::Tool, String, V)>,
+    /// 正在用的共享账号：(工具名, 说明)
+    busy: Vec<(&'static str, String)>,
+    /// 自己的账号里用着只有参考节点才有定义的节点的：(工具名, 说明)
+    lost: Vec<(&'static str, String)>,
+    /// 只有参考节点才有定义、关掉以后也没有账号用的可选节点
+    unused: Vec<String>,
+}
+
+fn policy_off_scan(c: &Dict) -> OffScan {
+    use super::presence::{app_proc_re, presence_mapped};
+    use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
+    let (mut park, mut busy, mut lost) = (Vec::new(), Vec::new(), Vec::new());
+    let fill_only = super::corenet::fill_only_nodes(c);
+    let mut used: HashSet<String> = HashSet::new();
+    let mut procs: Option<Vec<(i64, String)>> = None;
+    for tool in tools() {
+        let Some(table) = tool.tab() else { continue };
+        let _using = crate::core::tool::Using::tool(tool);
+        let pm = policy_raw(tool);
+        for (k, v) in table.items() {
+            if !presence_mapped(&pm, &k, &v) {
+                let n = node_of(&v);
+                if fill_only.iter().any(|f| **f == *n) {
+                    lost.push((tool.label, format!("{}：{}", label_of(&k), n)));
+                }
+                used.insert(n.to_string());
+                continue;
+            }
+            let marks = cli_marks(&k);
+            let pids: Vec<i64> = marks.iter().map(|m| m.at("pid").as_int().unwrap_or(0)).collect();
+            if !marks.is_empty() && cli_view(&marks, &proc_starts(&pids)).truthy("running") {
+                busy.push((tool.label, format!("{}（命令行会话）", label_of(&k))));
+            }
+            if let Some(re) = app_proc_re(tool, &path::join(&adir(&k), "desktop")) {
+                if procs.get_or_insert_with(gui_procs).iter().any(|(_, cmd)| re.found(cmd)) {
+                    busy.push((tool.label, format!("{}（{}）", label_of(&k), tool.app_label)));
+                }
+            }
+            park.push((tool, k.to_string(), v));
+        }
+    }
+    let unused = fill_only.into_iter().filter(|n| !used.contains(n)).collect();
+    OffScan { park, busy, lost, unused }
+}
+
+/// cca policy off 的两步。`plan`（只读）：说明会动什么——要收起的共享账号、自己的账号里用着只有维护者参考节点才有定义的节点的
+/// （关掉以后用不了，要换节点）。退出码 0 能关，stdout 是给用户看的说明（一行一条）；3 有共享账号正在用（命令行会话、桌面 App
+/// 开着：收起来以后会话收尾时找不到账号），stdout 说是哪些；2 共享本来就关着。
+/// `apply [--forget]`（拿着 sync.lock，再查一遍正在用的）：共享账号收起来（记进各工具的 parked、从账号表里去掉；登录目录、钥匙串
+/// 都不动），只有参考节点才有定义、又没有账号在用的节点从可选节点里去掉，config.json 的 policy 换成 policy_was（记着仓库，
+/// --forget 时不记）。stdout 是收起了哪些（一行）。policy.json、nodes.json、deploy key、缓存这些文件由 bash 删
+pub fn cmd_policy_off(args: &[String]) -> R<()> {
+    arity("cmd_policy_off", args, 1, 2)?;
+    let (apply, forget) = match (args[0].as_str(), arg(args, 1, "")) {
+        ("plan", "") => (false, false),
+        ("apply", "") => (true, false),
+        ("apply", "--forget") => (true, true),
+        _ => return die("用法: policy-off plan | apply [--forget]"),
+    };
+    let _lock = if apply { Some(Lock::acquire()?) } else { None };
+    if !policy_on() {
+        out!("共享本来就是关着的");
+        exit(2)?;
+    }
+    let c = ctx()?.0;
+    let OffScan { park, busy, lost, unused } = policy_off_scan(&c);
+    if !busy.is_empty() {
+        out!("这些共享账号正在用：{}。先结束会话、退出 App，再关掉共享", by_tool(&busy));
+        exit(3)?;
+    }
+    let names: Vec<(&'static str, String)> = park.iter().map(|(tool, k, _)| (tool.label, label_of(k))).collect();
+    if !apply {
+        if names.is_empty() {
+            out!("账号表里没有共享账号");
+        } else {
+            out!("移出账号表的共享账号（登录留着，重新打开共享时加回来，不用重新登录）：{}", by_tool(&names));
+        }
+        if !lost.is_empty() {
+            out!("这些账号用着维护者的参考节点，关掉以后用不了，要换一个节点：{}", by_tool(&lost));
+        }
+        return Ok(());
+    }
+    // 账号表里只有共享账号、没走过配置向导的机器：收起来以后账号表空了，App 别当它是新装的、又弹配置向导
+    if !park.is_empty() && super::gui::onboarded(&c) {
+        c.set("onboarded", true);
+    }
+    // 先改账号表、再改 config.json：中途断了的话共享还开着，下一条命令照映射把账号加回来，不会变成"共享关了、账号却还在表里"
+    for tool in tools() {
+        let mine: Vec<&(&crate::core::tool::Tool, String, V)> = park.iter().filter(|(t, _, _)| t.kind == tool.kind).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let table = tool.tab().expect("park 里的账号来自这张表");
+        let st = tool.state(&c, true);
+        let p = st.dict("parked").unwrap_or_default();
+        for (_, k, v) in &mine {
+            p.set(acct_id(k, tool), dict! { "key" => k.as_str(), "node" => v });
+            table.pop(k);
+        }
+        st.set("parked", p);
+        save_json(&tool.table, &V::Dict(table), Some(0o600), true)?;
+    }
+    if !unused.is_empty() {
+        if let Some(V::List(nodes)) = c.get("nodes") {
+            c.set(
+                "nodes",
+                nodes
+                    .items()
+                    .into_iter()
+                    .filter(|n| !n.as_str().is_some_and(|s| unused.iter().any(|d| d == s)))
+                    .collect::<Vec<V>>(),
+            );
+        }
+        let ids = node_ids(&c);
+        for n in &unused {
+            ids.pop(n);
+        }
+    }
+    let repo = c.pop("policy").unwrap_or(V::None);
+    if !forget {
+        c.set("policy_was", repo);
+    }
+    cfg_save(&c)?;
+    if !names.is_empty() {
+        out!("{}", by_tool(&names));
+    }
+    Ok(())
+}
+
+/// cca restore 退出登录之前：关掉共享时收起来的账号放回账号表（只在这时用：还原接着就删掉整个 ~/.cca），好让它们也退出登录、
+/// 删掉登录凭证
+pub fn cmd_unpark(args: &[String]) -> R<()> {
+    arity("cmd_unpark", args, 0, 0)?;
+    let _lock = Lock::acquire()?;
+    let c = cfg_load()?;
+    for tool in tools() {
+        let p = parked(&c, tool);
+        if p.is_empty() {
+            continue;
+        }
+        let table = match load_quiet(&tool.table) {
+            Some(V::Dict(t)) => t,
+            None if !path::exists(&tool.table) => Dict::new(),
+            _ => continue, // 读不了、格式不对的表不碰（还原时这个工具的账号照样按表退出登录）
+        };
+        let ids: HashSet<String> = table.keys().iter().map(|k| acct_id(k, tool)).collect();
+        for (aid, v) in p.items() {
+            let Some(d) = v.as_dict() else { continue };
+            let Some(k) = d.str("key").filter(|k| !k.is_empty()) else { continue };
+            if !ids.contains(&*aid) && !table.has(&k) {
+                table.set(k, d.get("node").unwrap_or_else(|| V::from("")));
+            }
+        }
+        save_json(&tool.table, &V::Dict(table), Some(0o600), true)?;
+    }
+    Ok(())
 }
 
 /// 维护者的映射给这个邮箱（当前工具）定的节点；没有就打印空行
@@ -424,7 +602,8 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("policy-summary", cmd_policy_summary),
     Cmd::all("policy-rows", cmd_policy_rows),
     Cmd::all("policy-repo", cmd_policy_repo),
-    Cmd::all("policy-ask", cmd_policy_ask),
+    Cmd::all("policy-off", cmd_policy_off),
+    Cmd::all("unpark", cmd_unpark),
     Cmd::all("policy-decline", cmd_policy_decline),
     Cmd::all("policy-set", cmd_policy_set),
     Cmd::all("policy-have", cmd_policy_have),

@@ -151,9 +151,14 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         Handoff(arguments: prefix + ["rm", key], title: "删除 \(name)", message: "在终端里确认后删除这个账号。", inApp: true)
     }
 
-    /// 配置向导（`cca _onboard`，App 首次运行时引导：维护者的映射 → 网络出口 → 添加账号）。要 `hello.forms`；旧版 cca 没有，退回终端的 `cca install`。
+    /// 配置向导（`cca _onboard`，App 首次运行时引导：维护者共享的账号 → 网络出口 → 添加账号）。要 `hello.forms`；旧版 cca 没有，退回终端的 `cca install`。
     static let onboard = Handoff(arguments: ["_onboard"], title: "配置向导",
-                                 message: "一步步连上维护者的映射、选好网络出口、添加账号。", inApp: true, needsForms: true)
+                                 message: "一步步来：有没有维护者共享的账号、选好网络出口、添加账号。", inApp: true, needsForms: true)
+    /// 打开维护者的共享（`cca policy on`，PROTOCOL 4.12；「共享与同步」页的开关）：不知道映射仓库时先问仓库，要维护者加公钥时显示给维护者的
+    /// 那一行、边等边拉（和配置向导第 1 步同一页）。只在 cca 有这个开关时用（`config.policy.switchable`），所以总能在 App 里问
+    static let policyOn = Handoff(arguments: ["policy", "on"], title: "打开维护者的共享",
+                                  message: "连上维护者的映射：把这台 Mac 的一把只读公钥发给维护者，加好后映射里的账号自动加进来。",
+                                  inApp: true, needsForms: true)
     static let routerSetup = Handoff(arguments: ["router", "setup"], title: "配置路由器", message: "在终端里按提示配置路由器。", inApp: true, needsForms: true)
     static let localSetup = Handoff(arguments: ["local", "setup"], title: "配置本机 Clash", message: "在终端里按提示配置本机的 Clash。", inApp: true, needsForms: true)
     /// 本机 UDP 走节点（`cca local udp …`，PROTOCOL 7.1）：装、换节点、删掉系统服务时系统自己弹授权框问管理员密码（不经 App）。

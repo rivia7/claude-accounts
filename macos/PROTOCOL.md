@@ -105,7 +105,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
               "udp": {"node": null, "state": "off", "installed": false, "running": false, "other_vpn": null, "paused": false}},
     "nodes": ["US-A", "US-B", "US-C", "US-D"],
     "min_trust": 50, "leak_check": true, "update": "auto",
-    "policy": {"configured": true, "repo": "example/cca-policy", "next_check_epoch": 1794045600.0}
+    "policy": {"configured": true, "repo": "example/cca-policy", "next_check_epoch": 1794045600.0, "state": "on", "accounts": 2, "parked": 0}
   },
   "routing": {
     "first_port": 7901, "pool_size": 8,
@@ -193,7 +193,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   所以 App 只给入口、不显示数字）：条件和 `web` 一样（Antigravity 没有账单页，总是 false），也走同样的步骤、事件和同意。打开后 cca 把账号的邮箱放进剪贴板（这些登录页不认网址里的邮箱参数），
   `result` 的说明里会讲；`limit-resets` 也一样，网页版（`web`）不动剪贴板。同样没有对应的 `can_why`：不能就不显示这个入口；旧版 cca 没有这一项，当作不能。
   `limit_resets` 是能不能打开 claude.ai 的用量页（`cca limit-resets 账号`，Claude 账号的重置次数和到期日只在那里显示）：只有 Claude 的账号有，其余条件和 `web` 一样，也没有对应的 `can_why`；旧版 cca 没有这一项，当作不能。
-  `devices` 是账号页有没有「设备」一节（3.4）：映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
+  `devices` 是账号页有没有「设备」一节（3.4）：共享开着（`config.policy.state` 是 `on`）、映射里的官方账号、维护者在映射里配置了设备统计的服务器、这台 Mac 有映射的 deploy key、
   config.json 里没写 `"presence": false`。同样没有对应的 `can_why`：没有就不显示这一节、不调 `devices`；旧版 cca 没有这一项，当作没有。
   `api_key` 是能不能记下 / 显示 / 复制 API key（4.10）：新版 cca 的所有账号都是 true；旧版 cca 没有这一项，当作不能，不显示入口。
   `cost` 是账号页有没有「折合金额」一节、折合金额页里有没有这一行：Claude、Codex 的官方账号（工具的 `features.cost`），
@@ -334,6 +334,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   旧版 cca 没有这个字段，当作 false）。
 - `onboarded`：这台机器走过配置向导、或者已经有账号/配过路由器/配过本机客户端。`false` 时 App 首页给个「开始配置」的欢迎（`WelcomeBanner`），
   点了走配置向导（`cca _onboard` 提问会话，要 `hello.forms`）。旧版 cca 没有这个字段：当作已配置，不弹向导。
+- `policy`：维护者共享的账号（维护者的映射，默认关着，4.12）。`configured`：共享开着（记着映射仓库）；`repo`：映射仓库（关着时 null）；
+  `next_check_epoch`：下次定时拉取的时间（4.9）。`state`：`off`（关着：从没打开过、说过不用、`cca policy off` 关掉了）| `pending`（打开了，
+  还没拉到映射：在等维护者加上这台机器的公钥，或者还没拉过）| `on`（拉到了映射）；`accounts`：账号表里属于映射的账号（各工具加起来）；
+  `parked`：关掉共享时移出账号表的账号（登录都留着，打开共享时原样加回来）。共享关着时映射里的账号不在账号表里：总览、用量、折合金额、
+  设备统计都看不到它们。旧版 cca 没有 `state`、`accounts`、`parked`：`configured` 是 true 当作 `on`、false 当作 `off`，两个数当作 0。
 
 `routing`：
 
@@ -615,7 +620,7 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
 ### 4.1 事件文件
 
 运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
-`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`、`policy off`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -628,7 +633,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉）| `policy_on`（`policy on`：打开了维护者的共享——拉到了映射，或者先跳过、这次没拉到，`message` 说清楚是哪种）| `policy_off`（`policy on` 里选了「不打开共享」，或者 `policy off` 关掉了共享；本来就关着也是它），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；Claude 的 `message` 说清楚是哪份文件、哪几项、怎么办，共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -636,6 +641,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
   `account_missing`（改别名、`node use`：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
+  `policy_off_busy`（`policy off`：共享的账号正在用——命令行会话、桌面 App 开着，`message` 说是哪些；什么都没改）|
   `devices_unavailable`（`devices --json`：设备统计的服务器那边没成，见 3.4）| `devices_off`（`devices --json`：这台 Mac 用不了设备统计）|
   `key_missing`（`key --show`：这个账号还没存 API key）| `keychain_unavailable`（`key --show` 读不了钥匙串、`key` 存不进去，比如锁着、超时）|
   `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
@@ -663,6 +669,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
 | `remote_pair` | 空 | `cca remote pair`：这台机器显示一个配对码；在另一台机器上输入它以后，那台机器可以经维护者的服务器看和操作这台机器上开着远程会话的会话（两头之间加密；之后能改成只看、不让，或者取消配对）。App 里是提问会话（「远程会话」页的「显示配对码…」，9.2），当场问；终端里问之前先把这段说明打出来 | yes |
 | `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
+| `policy_off` | `all` | `cca policy off`：关掉维护者的共享。映射里的账号移出账号表（登录、钥匙串里的都留着，打开共享时原样加回来），不再拉映射、不再上报设备统计，拉到过的映射、没有账号用的参考节点、别的设备同步来的折合金额都删掉；`detail` 列出会移出的账号，和用着维护者参考节点、关掉以后要换节点的自己的账号（4.12） | no |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
@@ -802,7 +809,10 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 
 | 题号 | 命令 | 控件 | 问什么 |
 |---|---|---|---|
-| `onboard.policy` | `_onboard`（配置向导第 1 步） | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不用映射，去掉仓库和 deploy key，以后不再问）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答。选过不用映射、没有映射仓库（也没有维护者的默认仓库）时没有这一步，拉一次就拉到了时也不问 |
+| `onboard.share` | `_onboard`（配置向导第 1 步） | `confirm`（默认否） | 有没有维护者共享给你的账号。答有接着 `onboard.policy`；答没有（默认）不生成 deploy key、不拉映射，直接到下一步。共享已经开着时不问（直接 `onboard.policy`，拉一次就拉到了时也不问）；不知道映射仓库（没有维护者的默认仓库、也没关掉过共享）时整个第 1 步都没有 |
+| `onboard.policy` | `_onboard`（配置向导第 1 步）/ `policy on` | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不打开共享：去掉仓库和 deploy key）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答 |
+| `policy.repo` | `policy on` | `text` | 维护者的映射仓库（GitHub 上的「用户/仓库」，向维护者要）：不知道仓库时才问（没有维护者的默认仓库、也没关掉过共享）；空着是取消，写得不对是 `fail` |
+| `install.share` | `install`（终端，服务器上直连不通时） | `confirm`（默认否） | 有没有维护者共享给你的账号：有就等维护者确认这台机器、导入维护者提供的节点；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问 |
 | `onboard.net` | `_onboard`（配置向导第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。没配置路由器时，映射里账号的参考节点在这一步之后导入（映射里的账号随即加进来） |
 | `onboard.add` | `_onboard`（配置向导第 3 步） | `confirm` | 还没有账号：现在添加第一个账号吗（默认是）；映射里的账号这次加进来了：还要再添加一个吗（默认否，`message` 说加了谁）。接着走 `add.basic` / `add.node`，不要求配置了路由器 |
 | `add.basic` | `[codex] add` | `text` ×2 | 登录邮箱（校验 email）、别名（可选，校验 alias） |
@@ -836,7 +846,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 
 | 命令 | App 里 | 方式 |
 |---|---|---|
-| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`）。三步：维护者的映射（`onboard.policy`）→ 网络出口（`onboard.net`）→ 添加账号（`onboard.add`），页标题写着第几步、共几步（只数这次要问的；只有一步时不写）；做完 `result` 的 `onboarded` |
+| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`）。三步：维护者共享的账号（`onboard.share` → `onboard.policy`）→ 网络出口（`onboard.net`）→ 添加账号（`onboard.add`），页标题写着第几步、共几步（只数这次要问的；只有一步时不写）；做完 `result` 的 `onboarded` |
 | `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
 | `[codex] key` | 账号页「…」、右键菜单、API key 那一行的「记录…」「输入…」 | 提问会话 |
 | `[codex\|agy] node use 账号` | 账号页「网络出口」一节的「自定义代理…」（`can.custom_proxy`，要 `hello.forms`） | 提问会话（`node.custom`，配置了路由器的接着同步：要重启时问 `consent.router_restart`）；做完 `result` 的 `saved`，带 `key` |
@@ -846,6 +856,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
 | `[codex] policy request` | 账号页「…」、右键菜单 | 无交互命令（4.8） |
 | `policy pull --json` | 定时（App 开着时一小时一次）、节点分流页「拉取映射」、账号的「现在拉取映射」 | 无交互命令（4.9） |
+| `policy on` | 「共享与同步」页的「维护者共享的账号」开关（打开） | 提问会话（`policy.repo`、`onboard.policy`，4.12）；做完 `result` 的 `policy_on` / `policy_off` |
+| `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
@@ -863,7 +875,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
 | `local udp on`、`pick`、`off`、`uninstall` | 节点分流页的「本机 UDP」一行（内置代理时才有）、账号页 WebRTC 泄露旁边的按钮 | 提问会话（`local.udp`；装、删系统服务时系统自己弹授权框，不经 App，7.1） |
-| `router uninstall`、`local off`、`local udp`（查看）、`policy`（查看、配置） | 没有入口 | 终端里自己运行 |
+| `router uninstall`、`local off`、`local udp`（查看）、`policy`（查看）、`policy setup 仓库`、`policy off --forget-key` | 没有入口 | 终端里自己运行 |
 | `mail`（`setup`、`open`、`forget`） | 账号页的「邮箱」一节（4.11；要 `hello.mail`，旧版 cca 没有入口） | 提问会话（`setup`）/ 无交互命令 |
 | `mail`（`status`、`test`） | 没有入口 | 终端里自己运行（诊断用） |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
@@ -890,6 +902,21 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   **这是安全降级**：信任从「只信 Anthropic 直签」降到「信这个中转 + 你的别名不泄露」——别名一旦泄露，知道的人可经 F 给你发伪造的登录邮件，打开后你会登进攻击者的账号。
   所以 App 的开关默认关、打开前弹**明确的不安全警告**（cca 先在 `mail.forwarder` 的页面 `message` 里说明、再发 `consent.mail_trust_forwarder` 确认；两处都讲清风险）。
   状态在 `account.mail.forwarder`（2.2，null = 没开）；经这个中转认的列表行带 `via: "forwarder"`（2.4），App 上标明「经可信中转（不安全）」。关闭是 `… off`。成功发 `result` 的 `mail_ready`。
+
+### 4.12 维护者的共享：`cca policy on` / `cca policy off`
+
+维护者共享的账号（映射）默认关着：没打开时账号表里只有这台机器自己的账号，不生成 deploy key、不拉映射、不上报设备统计，也不用维护者确认这台机器。
+`state.config.policy` 说现在的样子（2.2）。App 的「共享与同步」页放一个开关：
+
+- 打开：`cca policy on`，提问会话（要 `hello.forms`）。不知道映射仓库时先问 `policy.repo`。关掉共享时留着 deploy key 的直接拉一次：维护者没撤销
+  这台机器的公钥就拉到了，映射里的账号原样加回来（同一个账号目录，不用重新登录），`result` 的 `policy_on`；连不上 GitHub 之类时也是 `policy_on`
+  （`message` 说之后自动再拉）。要维护者加公钥时是 `onboard.policy` 那一页（和配置向导第 1 步一样：边等边拉，拉到了 `policy_on`；选「先跳过」也是
+  `policy_on`，之后 App 定时拉；选「不打开共享」是 `policy_off`）。
+- 关掉：`cca policy off`，无交互，要同意（`policy_off`，范围 `all`，默认否）：App 用 `consent` 事件的 `detail` 问用户（会移出账号表的账号，
+  用着维护者参考节点、关掉以后要换节点的自己的账号），同意后带 `CCA_GRANT=policy_off:all` 重跑（4.3）。共享的账号正在用（命令行会话、桌面 App
+  开着）时不关：退出码非 0，`fail` 的 `policy_off_busy`，`message` 说是哪些。关好了 `result` 的 `policy_off`（本来就关着也是它）。映射的账号
+  移出账号表、记在 `config.policy.parked` 里，登录和钥匙串里的都不动；deploy key 留着（以后打开不用再找维护者，`cca policy off --forget-key`
+  连它一起删，App 不提供）。账号表变了，App 照常收到 config.json、账号表变了的刷新提示后重新读 `state`。
 
 ## 5. `cca gui`
 
@@ -1053,7 +1080,8 @@ SHA-256 和大小：cca 下载后比对，解压后同样检查代码签名、Te
 终端里启动的会话可以放进“会话宿主”里运行：终端关了会话照样运行，之后在这台 Mac 上、在配对过的另一台机器上重新接入（看和操作同一个
 Claude Code / Codex / Antigravity 的界面）。两台机器之间经维护者的服务器中转，内容端到端加密（细节、线上的格式见 docs/dev/remote.md、
 server/README.md）。App 的「远程会话」一页列出可以接入的会话和配对过的机器，接入时在页里开一块终端。都要 `hello.remote` 是 App 认识的
-版本（现在是 1）；和工具无关，命令没有 `codex` / `agy` 前缀；不经过自动更新和映射拉取。
+版本（现在是 1）；和工具无关，命令没有 `codex` / `agy` 前缀；不经过自动更新和映射拉取。中转用的是维护者的服务器，所以只在维护者的
+共享开着（`config.policy.state` 是 `on`、映射里配置了服务器）时能用：关着时和没配置映射一样（`remote list` 只列这台机器的会话，配对、接入别的机器时 `fail` 说用不了的原因）。
 
 ### 9.1 `cca remote list [--local] --json`（只读；配对过别的机器时要联网：问维护者的服务器）
 

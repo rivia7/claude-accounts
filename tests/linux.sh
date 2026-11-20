@@ -788,7 +788,7 @@ elif [ $rc -eq 0 ] && [ -n "$bk" ] && [ "$(stat -c %a "$bk")" = 600 ] && printf 
 else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
 
 # 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理，
-# 节点由维护者提供。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
+# 先问有没有维护者共享给你的账号（答有：节点由维护者提供）。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
 # 拉到映射，导入映射指定的节点（install_node、映射里账号的节点，只要维护者参考节点里有），照映射加上账号，内置代理由 cca _core-keep
 # 托管（问过后在 crontab 里加开机那一行），经账号的端口出去。内核文件用前面下好的那份（不再下载一次）
 SH="$D/shome"; mkdir -p "$SH/.local/bin"
@@ -798,7 +798,7 @@ pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@exam
 printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-S", "type": "socks5", "server": "127.0.0.1", "port": 18080}, {"name": "US-X", "type": "ss", "server": "192.0.2.83", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$PR/nodes.json"
 rm -f "$PR/nodes.json.sig"; ssh-keygen -q -Y sign -n cca-nodes -f "$I/relkey" "$PR/nodes.json" </dev/null
 touch "$D/direct_down" "$D/policy_denied"; : > "$D/curl.log"
-out=$(sr env CCA_TTY="$(ans s)" "$C" install 2>&1); rc=$?
+out=$(sr env CCA_TTY="$(ans y s)" "$C" install 2>&1); rc=$?
 pk="$SH/.cca/policy/id_ed25519.pub"
 line=$(printf '%s\n' "$out" | sed -n 's/^    \(\.\/policy\.sh key add .*\)$/\1/p' | head -n 1)
 if [ $rc -eq 0 ] && grep -q '^CURL direct https://claude.ai/cdn-cgi/trace' "$D/curl.log" && [ -s "$pk" ] && [ "$(stat -c %a "${pk%.pub}")" = 600 ] &&
@@ -837,6 +837,19 @@ if [ $rc -eq 0 ] && [ "$n_wait" -ge 3 ] && [ "$(printf '%s' "$out" | grep -c '�
 else no "等维护者确认的 cca install（退出码 $rc，加上之前拉了 ${n_wait} 次）：$(printf '%s' "$out" | tail -n 4)；crontab 是「$(tr '\n' '|' < "$D/crontab" 2>/dev/null)」"; fi
 sr "$C" local off >/dev/null 2>&1
 for i in $(seq 1 40); do [ -z "$(keeper "$SH")" ] && ! listen 7901 && break; sleep 0.25; done
+# 没有维护者共享的账号（默认）：直连不通时粘贴一条自己的代理（本机测试节点的 socks5），真的内核校验过当可选节点，配置好内置代理；
+# 不生成 deploy key、不拉映射
+SH2="$D/shome2"; mkdir -p "$SH2/.local/bin"
+if [ -x "$D/mihomo" ]; then mkdir -p -m 700 "$SH2/.cca" "$SH2/.cca/core" && cp "$D/mihomo" "$SH2/.cca/core/mihomo-v$(sed -n 's/^CORE_VERSION="\(.*\)"$/\1/p' "$C")"; fi
+: > "$D/git.log"
+out=$(HOME="$SH2" PATH="$SH2/.local/bin:$PATH" CCA_POLICY_DEFAULT=example/cca-policy CCA_TTY="$(ans n 'socks5://127.0.0.1:18080' . n n n)" "$C" install 2>&1); rc=$?
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '有没有维护者共享给你的账号？' && printf '%s' "$out" | grep -q '已加上你的代理：' &&
+	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if len(c["nodes"]) == 1 and c["local"]["client"] == "builtin" and not c.get("policy") else 1)' "$SH2/.cca/config.json" 2>/dev/null &&
+	[ ! -e "$SH2/.cca/policy/id_ed25519" ] && ! grep -q '^GIT clone' "$D/git.log" && ! printf '%s' "$out" | grep -q 'policy.sh key add'; then
+	ok "服务器上直连不通、没有维护者共享的账号：粘贴一条自己的代理（内核校验过）当可选节点，配置好内置代理；不生成 deploy key、不拉映射"
+else no "服务器上直连不通、贴自己的代理（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
+HOME="$SH2" PATH="$SH2/.local/bin:$PATH" "$C" local off >/dev/null 2>&1
+for i in $(seq 1 40); do [ -z "$(keeper "$SH2")" ] && ! listen 7901 && break; sleep 0.25; done
 rm -f "$D/direct_down" "$PR/nodes.json" "$PR/nodes.json.sig"
 
 # 在家走路由器：假路由器（127.0.0.2）上跑真的 cca-router.sh / apply.rb（sh 是这个发行版的 /bin/sh），内核是真的 mihomo（当作 OpenClash

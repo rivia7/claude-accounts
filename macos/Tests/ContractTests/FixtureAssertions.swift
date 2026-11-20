@@ -72,7 +72,8 @@ func fixtureAssertions() {
         check("state：notices", s.notices.count == 2 && s.notices[0].code == .policyPinned && s.notices[0].oldNode == "US-A"
               && s.notices[1].code == .nodesFilled && s.notices[1].tool == nil && s.notices[1].node == "HK-A")
         check("state：config", s.config?.routerConfigured == true && s.config?.localConfigured == false && s.config?.minTrust == 50
-              && s.config?.policy?.repo == "example/cca-policy")
+              && s.config?.policy?.repo == "example/cca-policy" && s.config?.policy?.state == .on && s.config?.policy?.switchable == true
+              && s.config?.policy?.accounts == 2 && s.config?.policy?.parked == 0)
         check("state：bob 的 Claude Code 还记着 Pro（账号现在是 Ultra），别的账号没有（null、Codex 没这个字段）",
               bob?.usage?.outdatedLoginPlan == "Pro" && s.account(AccountRef(tool: .claude, key: "erin@example.com"))?.usage?.outdatedLoginPlan == nil
               && frank?.usage?.outdatedLoginPlan == nil)

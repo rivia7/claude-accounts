@@ -1702,6 +1702,7 @@ ok "_gui hello：接口版本 1、cca 的版本、开发模式、装好了、Cod
 out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state.json"
 ok "_gui state：Claude、Codex 的账号和账号表一样（顺序也一样），端口和 config.json 一样，账号目录名是 cca 算的" '[ $rc -eq 0 ] && jok "[a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]] == list(tab(\"accounts.json\")) and [a[\"key\"] for a in d[\"tools\"][1][\"accounts\"]] == list(tab(\"codex.json\")) and all(a[\"port\"] == cfg[\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][0][\"accounts\"]) and all(a[\"port\"] == cfg[\"codex\"][\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][1][\"accounts\"]) and acct(0, \"alice@example.com\")[\"id\"] == \"${AD##*/}\"" < "$GF/state.json"'
 ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存），槽位 1；Codex 的 dave 在槽位 3；路由器已同步" 'jok "(lambda a, x: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Max\" and a[\"slot\"] == 1 and a[\"group\"] == \"CCA-1\" and a[\"usage\"][\"source\"] == \"cache\" and a[\"usage\"][\"five_hour\"][\"utilization\"] >= 0 and isinstance(a[\"usage\"][\"five_hour\"][\"resets_epoch\"], float) and a[\"badge\"][\"label\"] == \"A\" and a[\"app\"] == {\"running\": False, \"pid\": None} and x[\"login\"] == \"logged_in\" and x[\"slot\"] == 3)(acct(0, \"alice@example.com\"), acct(1, \"dave@example.com\")) and d[\"routing\"][\"sync\"] == \"ok\" and d[\"routing\"][\"slots\"][2][\"tool\"] == \"codex\" and d[\"routing\"][\"pool_size\"] % 8 == 0" < "$GF/state.json"'
+ok "_gui state：共享默认关着（config.policy 的 state 是 off，账号表里没有共享的账号，没有收起来的）" 'jok "d[\"config\"][\"policy\"] == {\"configured\": False, \"repo\": None, \"next_check_epoch\": None, \"state\": \"off\", \"accounts\": 0, \"parked\": 0}" < "$GF/state.json"'
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
 # 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cli/pack.py），第一次用时解到
 # 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
@@ -2204,18 +2205,20 @@ printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}
 rm -rf "$H/.cca/policy"
 out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
 ok "没有路由器、没有可选节点、没有映射：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
-# 第 1 步：维护者的映射（有默认仓库时才有这一步）。维护者还没加上这台机器的公钥（假 git 一直拒绝）
+# 第 1 步：维护者共享的账号（有默认仓库时才有这一步）：先问有没有（默认没有，答没有就不生成 deploy key、不拉）
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("policy", None); c.pop("policy_declined", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
 rm -rf "$H/.cca/policy"; touch "$T/policy_denied"; : > git.log; rm -f "$T/clipboard"
-out=$(sess '{"onboard.policy":[{"next":"skip"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
-ok "配置向导第 1 步（有维护者的默认仓库）：给维护者运行的那一行（只显示，已复制到剪贴板）、正在等的说明，和「先跳过 / 不用映射」；标题写着第 1 步（共 3 步）" '[ "$(asks)" = "onboard.policy onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"].startswith(\"第 1 步（共 3 步）\") and e[\"fields\"][0][\"kind\"] == \"code\" and e[\"fields\"][0][\"value\"].startswith(\"./policy.sh key add \") and \"正在等维护者加上\" in e[\"fields\"][0][\"hint\"] and e[\"fields\"][1][\"kind\"] == \"choice\" and e[\"fields\"][1][\"default\"] == \"skip\" and [o[\"value\"] for o in e[\"fields\"][1][\"options\"]] == [\"skip\", \"decline\"] and \"已复制到剪贴板\" in e[\"message\"]" && grep -q "^\./policy\.sh key add " "$T/clipboard"'
-ok "配置向导第 1 步先跳过：记下仓库、留着 deploy key（App 之后自动拉），接着问网络出口（第 2 步）、加账号（第 3 步），做完记下 onboarded" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 2 步（共 3 步）\")" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"].startswith(\"第 3 步（共 3 步）\") and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "c.get(\"policy\") == \"example/cca-policy\" and c.get(\"onboarded\") is True" && [ -f "$H/.cca/policy/id_ed25519" ] && grep -q "^GIT clone" git.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+out=$(sess '{"onboard.share":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
+ok "配置向导第 1 步（有维护者的默认仓库）：先问有没有维护者共享给你的账号（默认没有）；答没有：不生成 deploy key、不拉、不记仓库，接着第 2 步（共 3 步）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.share onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.share\" and e[\"title\"].startswith(\"第 1 步（共 3 步）\") and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"n\"" && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 2 步（共 3 步）\")" && cfgok "not c.get(\"policy\") and c.get(\"onboarded\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log'
+out=$(sess '{"onboard.share":[{"v":"y"}],"onboard.policy":[{"next":"skip"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
+ok "答有：同一步接着给维护者运行的那一行（只显示，已复制到剪贴板）、正在等的说明，和「先跳过 / 不打开共享」；标题还是第 1 步（共 3 步）" '[ "$(asks)" = "onboard.share onboard.policy onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"].startswith(\"第 1 步（共 3 步）\") and e[\"fields\"][0][\"kind\"] == \"code\" and e[\"fields\"][0][\"value\"].startswith(\"./policy.sh key add \") and \"正在等维护者加上\" in e[\"fields\"][0][\"hint\"] and e[\"fields\"][1][\"kind\"] == \"choice\" and e[\"fields\"][1][\"default\"] == \"skip\" and [o[\"value\"] for o in e[\"fields\"][1][\"options\"]] == [\"skip\", \"decline\"] and \"已复制到剪贴板\" in e[\"message\"]" && grep -q "^\./policy\.sh key add " "$T/clipboard"'
+ok "配置向导第 1 步先跳过：记下仓库（共享开着）、留着 deploy key（App 之后自动拉），接着问网络出口（第 2 步）、加账号（第 3 步），做完记下 onboarded" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 2 步（共 3 步）\")" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"].startswith(\"第 3 步（共 3 步）\") and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "c.get(\"policy\") == \"example/cca-policy\" and c.get(\"onboarded\") is True" && [ -f "$H/.cca/policy/id_ed25519" ] && grep -q "^GIT clone" git.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
 out=$(sess '{"onboard.policy":[{"next":"decline"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
-ok "配置向导第 1 步选「不用维护者的映射」：去掉仓库、删掉 deploy key（还是同一把：没加上），记下不用，接着到第 2 步" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy onboard.net onboard.add" ] && cfgok "not c.get(\"policy\") and c.get(\"policy_declined\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && [ "$(grep -c "^GIT clone" git.log)" -ge 2 ]'
-out=$(sess '{"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy cca _onboard 2>&1); rc=$?
-ok "选过不用映射，再走一遍向导：没有映射那一步（不问也不拉），网络出口是第 1 步（共 2 步）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 1 步（共 2 步）\")" && [ ! -e "$H/.cca/policy/id_ed25519" ]'
+ok "共享开着、还没拉到：不再问有没有，直接是那一页；选「不打开共享」：去掉仓库、删掉 deploy key（还是同一把：没加上），接着到第 2 步" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy onboard.net onboard.add" ] && cfgok "not c.get(\"policy\") and c.get(\"policy_declined\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && [ "$(grep -c "^GIT clone" git.log)" -ge 2 ]'
+out=$(sess '{"onboard.share":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT= cca _onboard 2>&1); rc=$?
+ok "不知道维护者的仓库（没有默认仓库、也没关掉过共享）：没有第 1 步（不问也不拉），网络出口是第 1 步（共 2 步）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 1 步（共 2 步）\")" && [ ! -e "$H/.cca/policy/id_ed25519" ]'
 rm -f "$T/policy_denied"
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
 rm -rf "$H/.cca/policy"; [ "$b2_had_policy" = 1 ] && cp -R "$T/policy.b2" "$H/.cca/policy"
@@ -2660,25 +2663,17 @@ nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签�
 	rm -f "$PR/nodes.json.sig"; ssh-keygen -Y sign -q -n cca-nodes -f "${1:-$T/relkey}" "$PR/nodes.json" 2>/dev/null
 }
 pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
-# 终端里启动账号时，还没配置映射就引导（默认仓库用 CCA_POLICY_DEFAULT 换成假的；平时的用例里它是空的，不引导）
+# 共享默认关着：终端里启动账号不引导配置映射（以前会问）。默认仓库用 CCA_POLICY_DEFAULT 换成假的（平时的用例里它是空的）
 P=CCA_POLICY_DEFAULT=example/cca-policy
 kl() { printf "'%s' %s" "$(cat "$PK.pub")" "$(cut -d@ -f2 "$PK.pub")"; }   # 给维护者的那一行里 key add 后面的部分：这台机器现在的公钥（单引号）和别名（机器名）
-out=$(run $P cca @alice --version 2>&1); rc=$?
-ok "还没配置映射、非交互启动（启动器、脚本）：不引导，照常启动" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "还没配置维护者的账号"'
-out=$(run $P CCA_TTY="$(ans 2)" cca @alice --version 2>&1); rc=$?
-ok "还没配置映射、终端里启动：先引导（选「这次先跳过」），照常启动，什么都不改" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "这台机器还没配置维护者的账号 → 节点映射（example/cca-policy）" && printf "%s" "$out" | grep -q "这次先跳过，下次启动再问" && [ ! -f "$PK" ] && [ "$(cfgv "c.get(\"policy\", \"\")")" = "" ]'
-out=$(run $P CCA_TTY="$(ans 3)" cca @alice --version 2>&1); rc=$?
-out2=$(run $P CCA_TTY="$(ans)" cca @alice --version 2>&1); out3=$(run $P cca policy 2>&1)
-ok "选「不用映射」：记下来，以后启动不再问；cca policy 里说明" '[ $rc -eq 3 ] && [ "$(cfgv "c.get(\"policy_declined\")")" = True ] && ! printf "%s" "$out2" | grep -q "还没配置维护者的账号" && printf "%s" "$out3" | grep -q "选过不用，启动时不再问"'
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_declined'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-printf 2 > "$T/policy_denied_n"; : > git.log; rm -f "$T/clipboard"
-out=$(run $P CCA_TTY="$(ans 1 '' '')" cca @alice --version 2>&1); rc=$?
-ok "选「现在配置」：生成 deploy key，显示维护者要运行的那一行（公钥和别名写在里面，复制到剪贴板）；每 5 秒自动重试（回车马上重试），拉到后照常启动" '[ $rc -eq 3 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "    ./policy.sh key add $(kl)" && [ "$(cat "$T/clipboard")" = "./policy.sh key add $(kl)" ] && printf "%s" "$out" | grep -q "这一行已复制到剪贴板" && [ "$(printf "%s" "$out" | grep -c "等维护者运行上面那一行：每 5 秒自动重试（回车马上重试，输入 s 先跳过）")" = 1 ] && ! printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "拉到了维护者的映射（Claude 1 个账号" && [ "$(grep -c "^GIT clone" git.log)" = 3 ] && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/accounts.json" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
-printf 1 > "$T/policy_denied_n"
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-rm -rf "$H/.cca/policy"
-out=$(run $P CCA_TTY="$(ans 1 s)" cca @alice --version 2>&1); rc=$?
-ok "引导里输入 s 先跳过：照常启动，说明之后每天自动拉" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "先跳过：维护者加上公钥之后，cca 每天会自动拉一次映射" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ] && [ ! -f "$H/.cca/policy/policy.json" ]'
+: > git.log
+out=$(run $P CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?; out2=$(run $P cca policy 2>&1)
+ok "共享默认关着：终端里启动账号不引导、不生成 deploy key、不拉；cca policy 说共享关着、怎么打开" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "映射" && [ ! -f "$PK" ] && [ "$(cfgv "c.get(\"policy\", \"\")")" = "" ] && [ ! -s git.log ] && printf "%s" "$out2" | grep -q "维护者的共享关着：有维护者共享给你的账号时，运行 cca policy on 打开"'
+printf 2 > "$T/policy_denied_n"; rm -f "$T/clipboard"
+out=$(run $P CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
+ok "cca policy on（维护者的默认仓库）：生成 deploy key，显示维护者要运行的那一行（公钥和别名写在里面，复制到剪贴板）；还没加上时说明之后每天自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "    ./policy.sh key add $(kl)" && [ "$(cat "$T/clipboard")" = "./policy.sh key add $(kl)" ] && printf "%s" "$out" | grep -q "这一行已复制到剪贴板" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ] && [ ! -f "$H/.cca/policy/policy.json" ]'
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "共享开着、还没拉到映射：照常启动，不提问" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "policy.sh key add"'
 # 配置向导（App）第 1 步：等维护者时这一页不用点，每隔几秒自动拉，拉到映射自己进第 2 步；没有路由器时导入映射里账号的参考节点，映射里的账号
 # 自动加进来，第 3 步只问还要不要再加。这一段结束时配置、账号表、映射仓库都还原
 cp "$H/.cca/config.json" "$T/cfg.ow.bak"; cp "$H/.cca/accounts.json" "$T/tbl.ow.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.ow.bak"
@@ -2701,6 +2696,27 @@ python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=
 printf '{}' > "$H/.cca/accounts.json"
 out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>"$T/pull.err" </dev/null); rc=$?
 ok "没有路由器：App 的定时拉取（cca policy pull --json）拉到映射后导入映射里账号的参考节点，映射里的账号随即加进来；stdout 只有 JSON，不提同步路由器" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"policy_pull\"" && grep -q "已导入维护者提供的节点：US-S" "$T/pull.err" && ! grep -q "同步" "$T/pull.err" && cfgok "c[\"nodes\"] == [\"US-S\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
+# 没有路由器的机器关掉共享（cca policy off）：映射里的账号移出账号表（记进 parked），只有维护者参考节点才有定义的可选节点：自己的账号
+# 用着的留着（说清楚关掉以后用不了、要换节点），没人用的去掉；cca policy on（deploy key 留着）直接拉到，原样加回来
+edit_table 'j["mine(mine@example.com)"] = "US-S"'
+out=$(run CCA_TTY="$(ans n)" cca policy off 2>&1); rc=$?
+ok "cca policy off：先说会动什么（移出账号表的共享账号、登录留着；自己的账号用着只有参考节点才有的节点，关掉以后要换），问过才关（默认否），答否什么都不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "移出账号表的共享账号（登录留着，重新打开共享时加回来，不用重新登录）：Claude 的 sam（sam@example.com）" && printf "%s" "$out" | grep -q "这些账号用着维护者的参考节点，关掉以后用不了，要换一个节点：Claude 的 mine（mine@example.com）：US-S" && printf "%s" "$out" | grep -q "关掉维护者共享的账号？ \[y/N\]" && printf "%s" "$out" | grep -q "已取消" && tblok "\"sam(sam@example.com)\" in t" && cfgok "c.get(\"policy\") == \"example/cca-policy\""'
+: > git.log
+out=$(run CCA_TTY="$(ans y)" cca policy off 2>&1); rc=$?
+ok "答是：sam 移出账号表（记进 parked），US-S 还有 mine 在用、留着；共享关掉（仓库记进 policy_was），拉到的映射、参考节点删掉，deploy key 留着" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已关掉共享：Claude 的 sam（sam@example.com） 移出了账号表" && tblok "t == {\"mine(mine@example.com)\": \"US-S\"}" && cfgok "\"policy\" not in c and c.get(\"policy_was\") == \"example/cca-policy\" and list(c[\"parked\"].values()) == [{\"key\": \"sam(sam@example.com)\", \"node\": \"US-S\"}] and c[\"nodes\"] == [\"US-S\"]" && [ ! -e "$H/.cca/policy/policy.json" ] && [ ! -e "$H/.cca/policy/nodes.json" ] && [ -f "$PK" ] && [ ! -s git.log ]'
+out=$(run CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
+ok "cca policy on：关掉时留着的 deploy key 直接拉到（不再显示给维护者的那一行），sam 原样加回来，parked 清掉" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && ! printf "%s" "$out" | grep -q "policy.sh key add" && printf "%s" "$out" | grep -q "已更新映射" && tblok "t == {\"mine(mine@example.com)\": \"US-S\", \"sam(sam@example.com)\": \"US-S\"}" && cfgok "c.get(\"policy\") == \"example/cca-policy\" and \"policy_was\" not in c and \"parked\" not in c"'
+edit_table 'j.pop("mine(mine@example.com)")'
+run CCA_TTY="$(ans y)" cca policy off >/dev/null 2>&1
+ok "再关一次（没有自己的账号用 US-S 了）：只有参考节点才有定义的 US-S 从可选节点里去掉" 'tblok "t == {}" && cfgok "c[\"nodes\"] == [] and \"US-S\" not in c.get(\"node_ids\", {}) and list(c[\"parked\"]) != []"'
+printf '{"version": 1, "claude": {"sam@example.com": "US-S"}}\n' > "$H/.cca/policy/policy.json"
+out=$(run cca ls 2>&1); out2=$(gj state)
+ok "关掉时后台正在拉的那一次之后才写回来（policy.json 又在了）：共享关着就不认它，sam 不会被加回来；_gui state 说共享关着、收起了 1 个" '! grep -q sam "$H/.cca/accounts.json" && printf "%s" "$out2" | jok "d[\"config\"][\"policy\"][\"state\"] == \"off\" and d[\"config\"][\"policy\"][\"parked\"] == 1 and d[\"config\"][\"policy\"][\"configured\"] is False and d[\"config\"][\"policy\"][\"accounts\"] == 0"'
+rm -f "$H/.cca/policy/policy.json"
+out=$(run cca policy pull 2>&1); rc=$?
+ok "共享关着时 cca policy pull 不拉，说怎么打开" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的共享关着（有维护者共享给你的账号时，运行 cca policy on 打开）"'
+out=$(runev cca policy on 2>&1); rc=$?
+ok "App 里打开共享（提问会话外、deploy key 还在）：导入映射里账号的参考节点，sam 加回来；result 是 policy_on" '[ $rc -eq 0 ] && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}" && cfgok "c[\"nodes\"] == [\"US-S\"] and \"parked\" not in c" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_on\"" && gj state | jok "d[\"config\"][\"policy\"][\"state\"] == \"on\" and d[\"config\"][\"policy\"][\"accounts\"] == 1 and d[\"config\"][\"policy\"][\"parked\"] == 0"'
 cp "$T/cfg.ow.bak" "$H/.cca/config.json"; cp "$T/tbl.ow.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.ow.bak" ] && cp "$T/cdx.ow.bak" "$H/.cca/codex.json"
 cp "$T/pr.ow" "$PR/policy.json"; cp "$T/pr.ow.sig" "$PR/policy.json.sig"; rm -f "$PR/nodes.json" "$PR/nodes.json.sig"
 # 还原成没配置映射（账号表改回 US-A），接着测 cca policy setup
@@ -2811,6 +2827,38 @@ run cca update auto >/dev/null 2>&1
 ok "每天在后台自动拉一次映射（关了自动更新也拉）" 'grep -q "\"alice@example.com\": \"US-A\"" "$H/.cca/policy/policy.json" && [ -f "$H/.cca/policy/checked" ] && tail -n 1 "$H/.cca/policy/log" | grep -q "拉取成功"'
 out=$(run cca policy 2>&1)
 ok "cca policy：映射仓库、deploy key、映射摘要、最近一次拉取，以及这台机器上按映射固定出口的账号（Claude、Codex 都列）" 'printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "映射：Claude 1 个账号、Codex 1 个账号" && printf "%s" "$out" | grep -q "最近一次拉取：.*拉取成功" && printf "%s" "$out" | grep -q "Claude  alice@example.com → US-A" && printf "%s" "$out" | grep -q "Codex  dave@example.com → US-D" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json"'
+# 关掉共享（配置过路由器的机器）：共享账号正在用（Claude App 开着）时不关；App 里关先要同意；关掉以后 alice、dave 移出账号表（登录目录
+# 还在），路由器同步、启动器删掉，不再拉映射（deploy key 留着）；cca policy on 原样加回来（同一个账号目录，不用重新登录）
+mkdir -p "$T/fakeapp2/Contents/MacOS"; printf '#!/bin/bash\nsleep 30\n' > "$T/fakeapp2/Contents/MacOS/Claude"; chmod 755 "$T/fakeapp2/Contents/MacOS/Claude"
+"$T/fakeapp2/Contents/MacOS/Claude" --user-data-dir="$AD/desktop" & FAKEPID=$!
+sleep 0.3
+out=$(run CCA_TTY="$(ans y)" cca policy off 2>&1); rc=$?
+runev cca policy off >/dev/null 2>&1; rc2=$?
+kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
+ok "cca policy off：共享账号的 Claude App 还开着：不关，说是哪个；App 里是 fail 事件 policy_off_busy（不先问同意）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这些共享账号正在用：Claude 的 alice@example.com（Claude App）" && [ $rc2 -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"policy_off_busy\" and \"Claude App\" in e[\"message\"]" && ! evq "e[\"ev\"] == \"consent\"" && tblok "\"alice@example.com\" in t" && cfgok "c.get(\"policy\") == \"example/cca-policy\""'
+out=$(runev cca policy off 2>&1); rc=$?
+ok "App 里关（不在终端）：先要同意（consent policy_off，范围 all，默认否），什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "要先同意：在终端里运行 cca policy off" && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"policy_off\" and e[\"scope\"] == \"all\" and e[\"default\"] == \"no\"" && tblok "\"alice@example.com\" in t"'
+: > ssh.log; : > git.log
+out=$(runev CCA_GRANT=policy_off:all cca policy off 2>&1); rc=$?
+ok "同意以后：alice、dave 移出账号表（登录目录还在，记进各自工具的 parked），路由器同步，启动器删掉，deploy key 留着，result 是 policy_off" '[ $rc -eq 0 ] && ! grep -q alice "$H/.cca/accounts.json" && ! grep -q dave "$H/.cca/codex.json" && [ -d "$AD" ] && cfgok "\"policy\" not in c and c[\"parked\"][\"$(basename "$AD")\"] == {\"key\": \"alice@example.com\", \"node\": \"US-A\"} and [v[\"key\"] for v in c[\"codex\"][\"parked\"].values()] == [\"dave@example.com\"]" && grep -q "sh -s" ssh.log && printf "%s" "$out" | grep -q "已删除启动器「" && [ -f "$PK" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_off\"" && [ ! -s git.log ]'
+out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
+ok "关掉以后 alice 不在账号表里：启动不了它（登录还留着，打开共享时加回来）" '[ $rc -ne 0 ] && ! grep -q alice "$H/.cca/accounts.json"'
+out=$(run CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
+ok "cca policy on：deploy key 还在，直接拉到；alice、dave 原样加回来（同一个账号目录），parked 清掉，启动器加回来" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && ! printf "%s" "$out" | grep -q "policy.sh key add" && tblok "t.get(\"alice@example.com\") == \"US-A\"" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json" && cfgok "\"parked\" not in c and \"parked\" not in c.get(\"codex\", {})" && [ "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" = "$AD" ] && printf "%s" "$out" | grep -q "已生成启动器「"'
+out=$(run CCA_TTY="$(ans y)" cca policy off --forget-key 2>&1); rc=$?; out2=$(run cca policy 2>&1)
+ok "cca policy off --forget-key：deploy key 一起删，不再记着仓库；cca policy 说共享关着、怎么打开" '[ $rc -eq 0 ] && [ ! -e "$PK" ] && [ ! -e "$PK.pub" ] && cfgok "\"policy\" not in c and \"policy_was\" not in c" && printf "%s" "$out2" | grep -q "维护者的共享关着：有维护者共享给你的账号时，运行 cca policy on 打开"'
+out=$(run CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
+ok "不记着仓库、也没有维护者的默认仓库：cca policy on 问映射仓库，回车取消（什么都不生成）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的映射仓库（像 someone/cca-policy；回车取消）" && printf "%s" "$out" | grep -q "已取消：知道维护者的映射仓库以后，运行 cca policy setup 仓库" && [ ! -e "$PK" ] && cfgok "not c.get(\"policy\")"'
+out=$(sess '{"policy.repo":[{"v":"bad name"}]}' -- cca policy on 2>&1); rc=$?
+ok "App 里打开共享、不知道仓库：问映射仓库（policy.repo）；填得不对：报错，什么都不生成" '[ $rc -ne 0 ] && [ "$(asks)" = "policy.repo" ] && evq "e.get(\"q\") == \"policy.repo\" and e[\"fields\"][0][\"kind\"] == \"text\"" && [ ! -e "$PK" ]'
+touch "$T/policy_denied"
+out=$(sess '{"policy.repo":[{"v":"example/cca-policy"}],"onboard.policy":[{"next":"skip"}]}' -- env CCA_POLICY_POLL=1 cca policy on 2>&1); rc=$?
+ok "App 里打开共享、维护者还没加上：给维护者那一行的那一页（标题是打开维护者的共享，选项说「先跳过」，页上说加好后会自动打开共享）；先跳过：共享开着、在等维护者，result 是 policy_on" '[ $rc -eq 0 ] && [ "$(asks)" = "policy.repo onboard.policy" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"] == \"打开维护者的共享\" and \"加好后这里会自动打开共享\" in e[\"message\"] and e[\"fields\"][1][\"options\"][0][\"label\"] == \"先跳过\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_on\"" && [ -f "$PK" ] && cfgok "c.get(\"policy\") == \"example/cca-policy\"" && gj state | jok "d[\"config\"][\"policy\"][\"state\"] == \"pending\""'
+out=$(sess '{"onboard.policy":[{"next":"decline"}]}' -- env CCA_POLICY_POLL=1 cca policy on 2>&1); rc=$?
+ok "再打开一次（仓库就是开着的那个，维护者还没加上）：直接是那一页；选「不打开共享」：去掉仓库、删掉 deploy key，result 是 policy_off" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_off\"" && [ ! -e "$PK" ] && cfgok "not c.get(\"policy\") and \"policy_was\" not in c"'
+rm -f "$T/policy_denied"
+out=$(run CCA_TTY="$(ans)" cca policy setup example/cca-policy 2>&1); rc=$?
+ok "cca policy setup 仓库：新生成一把 deploy key（给维护者的那一行），拉到以后 alice、dave 照原样加回来" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -q "policy.sh key add" && tblok "t.get(\"alice@example.com\") == \"US-A\"" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json"'
 # 映射要的节点不在这台机器的可选节点里（路由器上有 HK-A，装的时候只选了 US-A…US-D）
 pol '{"version": 1, "claude": {"alice@example.com": "HK-A"}}'; run cca policy pull >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
@@ -3158,7 +3206,7 @@ ok "_gui state：can.policy_lock：没被映射固定的官方账号能请求，
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("policy", None); json.dump(d, open(sys.argv[1], "w"))' "$H/.cca/config.json"
 out=$(run cca policy request "$LK" 2>&1); rc=$?
 out2=$(run cca _gui state 2>/dev/null </dev/null)
-ok "这台机器没配置映射：不能请求（先 cca policy setup），App 里也没有这个入口" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "还没配置维护者的映射" && printf "%s" "$out2" | jok "not any(x[\"can\"][\"policy_lock\"] for t in d[\"tools\"] for x in t[\"accounts\"])"'
+ok "这台机器没打开共享：不能请求（先 cca policy on），App 里也没有这个入口" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没打开维护者的共享：先运行 cca policy on" && printf "%s" "$out2" | jok "not any(x[\"can\"][\"policy_lock\"] for t in d[\"tools\"] for x in t[\"accounts\"])"'
 cp -p "$T/lock.config.json" "$H/.cca/config.json"
 out=$(run cca codex policy request dave@example.com 2>/dev/null); rc=$?
 ok "cca codex policy request：命令里写着是 Codex 的账号" '[ $rc -eq 0 ] && [ "$out" = "./policy.sh lock codex dave@example.com US-D" ]'
@@ -3643,11 +3691,12 @@ out=$(run cca @alice --version 2>&1); rc=$?
 ok "账号的节点内置代理里没有定义：重新加载（组里 REJECT 排第一），不启动，说明怎么补" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「US-D」的定义" && [ "$(csel CCA-1)" = REJECT ] && [ "$(creloads)" = $((n0 + 1)) ]'
 out=$(run cca local 2>&1)
 ok "cca local：内置代理的端口和选中的节点；节点定义从哪来、缺哪个" 'printf "%s" "$out" | grep -q "内置代理（控制接口 unix:" && printf "%s" "$out" | grep -q "CCA-1  127.0.0.1:7901  监听中  → REJECT" && printf "%s" "$out" | grep -q "节点定义：从路由器拷的 4 个" && printf "%s" "$out" | grep -q "没有定义的节点：US-D"'
-# 维护者的参考节点补上路由器那份里没有的（和往路由器里补的同一套规则：同名的以路由器的为准）
+# 维护者的参考节点补上路由器那份里没有的（和往路由器里补的同一套规则：同名的以路由器的为准）；共享开着才认参考节点
+cfgset 'c["policy"] = "example/cca-policy"'
 printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-D", "type": "ss", "server": "192.0.2.4", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}, {"name": "US-A", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "y"}, {"name": "AI-Z", "type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$H/.cca/policy/nodes.json"
 out=$(run cca @alice --version 2>&1); rc=$?
 ok "维护者的参考节点补上缺的 US-D：重新加载一次，照常启动；同名的 US-A 以路由器的为准，不是可选节点的 AI-Z 不放" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = US-D ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"HK-A2\", \"US-D\"] and c[\"proxies\"][0][\"server\"] == \"192.0.2.1\""'
-rm -f "$H/.cca/policy/nodes.json"; edit_table 'j["alice@example.com"] = "US-A"'
+rm -f "$H/.cca/policy/nodes.json"; cfgset 'c.pop("policy")'; edit_table 'j["alice@example.com"] = "US-A"'
 cp "$T/nodes.core.complete" "$CN/nodes.json"   # 缺节点负例结束：恢复 dave 所需的 US-D，后续功能测试仍要求全池核验通过
 run cca @alice --version >/dev/null 2>&1
 edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(3, 11)})'
@@ -3991,9 +4040,10 @@ ok "辅助安装用完不留东西：没建 agy 的账号表，~/.local/bin 里�
 fi
 if sect 11b6; then
 # 11b6. 服务器上安装（CCA_REMOTE_LOGIN=1：Mac 上走服务器的流程）：从没配置过路由器、直连不通（假 curl：direct_down 连不上，direct_loc 是
-#       直连的出口地区）时，cca install、cca add 不问路由器，给出维护者运行的一行命令（公钥和别名写在里面），之后每隔几秒自动拉映射（回车
-#       马上拉，s 先跳过）；维护者加上以后导入映射指定的安装节点和映射里账号的节点（参考节点），配置内置代理（假内核、假的界面 App），
-#       经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。直连通的照旧问路由器。这一节结束时映射仓库、假命令都还原
+#       直连的出口地区）时，cca install、cca add 不问路由器，先问有没有维护者共享给你的账号（默认没有）。有：给出维护者运行的一行命令
+#       （公钥和别名写在里面），之后每隔几秒自动拉映射（回车马上拉，s 先跳过）；维护者加上以后导入映射指定的安装节点和映射里账号的节点
+#       （参考节点），配置内置代理（假内核、假的界面 App），经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。没有：
+#       粘贴一条自己的代理当可选节点，配置内置代理。直连通的照旧问路由器。这一节结束时映射仓库、假命令都还原
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
 rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
@@ -4003,8 +4053,8 @@ cp "$PR/policy.json" "$T/pr.srv"; rm -f "$T/pr.srv.sig"; [ ! -f "$PR/policy.json
 pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-I"}'
 python3 -c 'import json,sys; json.dump({"version": 1, "group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (81 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-I", "US-S", "US-X"])]}, open(sys.argv[1], "w"))' "$PR/nodes.json"; nodes_pub
 toff claude; touch "$T/policy_denied"; echo HK > "$T/direct_loc"; : > "$IL"; : > git.log; : > curl.log
-out=$(rs CCA_TTY="$(ans s)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上直连的出口在受限地区：不问路由器，给出维护者运行的那一行（公钥和别名写在里面）、等着拉映射；输入 s 先跳过，不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && printf "%s" "$out" | grep -qF "    ./policy.sh key add '\''$(spub)'\'' $(cut -d@ -f2 "$SH/.cca/policy/id_ed25519.pub")" && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号" && scfg "c.get(\"policy\") == \"example/cca-policy\" and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -f "$SH/.cca/policy/policy.json" ]'
+out=$(rs CCA_TTY="$(ans y s)" "$H/.cca/bin/cca" install 2>&1); rc=$?
+ok "服务器上直连的出口在受限地区：不问路由器，先问有没有维护者共享的账号（默认没有）；答有：给出维护者运行的那一行（公钥和别名写在里面）、等着拉映射；输入 s 先跳过，不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && printf "%s" "$out" | grep -q "有没有维护者共享给你的账号？ \[y/N\]" && printf "%s" "$out" | grep -qF "    ./policy.sh key add '\''$(spub)'\'' $(cut -d@ -f2 "$SH/.cca/policy/id_ed25519.pub")" && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号" && scfg "c.get(\"policy\") == \"example/cca-policy\" and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -f "$SH/.cca/policy/policy.json" ]'
 rm -f "$T/direct_loc"; touch "$T/direct_down"; k0=$(spub)
 out=$(rs CCA_TTY="$(ans s)" cca add 2>&1); rc=$?
 ok "cca add（还没有可选节点）：直连不通时同样不先要求配置路由器，接着等维护者（还是这把公钥）；先跳过时说明再运行 cca add" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连 claude.ai 不通：这台机器不用配置路由器" && printf "%s" "$out" | grep -qF "$k0" && [ "$(spub)" = "$k0" ] && printf "%s" "$out" | grep -q "再运行 cca add 接着配置" && ! printf "%s" "$out" | grep -q "先配置路由器"'
@@ -4022,7 +4072,7 @@ core_stop; rm -f "$SH/.local/bin/claude"; tback claude
 # 不按回车也行：每隔几秒自动拉（CCA_POLICY_POLL=1 秒；答案是一直开着、没有内容的管道）
 SH="$T/homes2"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
 rm -f "$T/policy_keys"; printf 1 > "$T/policy_denied_n"; : > git.log
-mkfifo "$T/tty.fifo"; exec 8<>"$T/tty.fifo"
+mkfifo "$T/tty.fifo"; exec 8<>"$T/tty.fifo"; printf 'y\n' >&8   # 有维护者共享的账号；之后等维护者时管道里没有内容
 out=$(rs CCA_TTY="$T/tty.fifo" CCA_POLICY_POLL=1 "$H/.cca/bin/cca" install 2>&1); rc=$?
 exec 8<&-; rm -f "$T/tty.fifo"
 ok "等维护者时不用按回车：每隔几秒自动重试，拉到了就接着导入节点、配置内置代理（装好了 Claude Code、有账号时不再问）" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 2 ] && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "拉到了维护者的映射" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and c[\"local\"][\"client\"] == \"builtin\"" && [ -f "$CD/up" ] && ! printf "%s" "$out" | grep -qE "没找到 Claude Code|新增第一个账号"'
@@ -4030,6 +4080,14 @@ core_stop
 SH="$T/homes3"; rm -f "$T/direct_down" "$T/policy_denied_n"; : > curl.log
 out=$(rs CCA_TTY="$(ans n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
 ok "服务器上能直连：照旧问要不要配置路由器，不等维护者、不导入节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "这台机器能直连 claude.ai" && printf "%s" "$out" | grep -q "现在配置路由器" && ! printf "%s" "$out" | grep -q "policy.sh key add" && [ ! -e "$SH/.cca/policy/id_ed25519" ]'
+# 没有维护者共享的账号（默认）：粘贴一条自己的代理当可选节点，配置好内置代理；不生成 deploy key、不拉映射
+SH="$T/homes4"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
+touch "$T/direct_down"; : > git.log
+out=$(rs CCA_TTY="$(ans n 'socks5://u:p@198.51.100.7:1080' . n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
+ok "服务器上直连不通、没有维护者共享的账号：粘贴一条自己的代理当可选节点（内核校验过），配置好内置代理；不生成 deploy key、不拉映射" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "有没有维护者共享给你的账号？ \[y/N\]" && printf "%s" "$out" | grep -q "节点用你自己的代理" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\" and not c.get(\"policy\")" && [ ! -e "$SH/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log && ! printf "%s" "$out" | grep -q "policy.sh key add"'
+out=$(rs CCA_TTY="$(ans n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
+ok "再运行 cca install：已经有可选节点了，不再问有没有维护者、不再要代理" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -qE "有没有维护者共享给你的账号|节点用你自己的代理"'
+core_stop; rm -f "$T/direct_down"
 # 还原：映射仓库、假 GitHub 上的 deploy key
 cp "$T/pr.srv" "$PR/policy.json"; rm -f "$PR/policy.json.sig" "$PR/nodes.json" "$PR/nodes.json.sig"; [ ! -f "$T/pr.srv.sig" ] || cp "$T/pr.srv.sig" "$PR/policy.json.sig"
 pks "$(ans)" rm -y "$salias" >/dev/null 2>&1

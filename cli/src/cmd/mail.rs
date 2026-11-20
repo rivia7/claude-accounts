@@ -512,11 +512,13 @@ pub fn mail_forget_orphans() -> R<()> {
     let c = cfg_load()?;
     let Some(m) = c.dict("mail") else { return Ok(()) };
     let Some(accts) = m.dict("accounts").filter(|a| !a.is_empty()) else { return Ok(()) };
-    let live: Vec<String> = match load_json(&claude().table)? {
+    let mut live: Vec<String> = match load_json(&claude().table)? {
         None => Vec::new(),
         Some(V::Dict(table)) => table.keys().iter().map(|k| acct_id(k, claude())).collect(),
         Some(_) => Vec::new(),
     };
+    // 关掉共享时收起来的账号：不在账号表里，单独配的邮箱照样留着（重新打开共享时加回来）
+    live.extend(crate::core::policy::parked(&c, claude()).keys().iter().map(|a| a.to_string()));
     let orphan: Vec<_> = accts.keys().into_iter().filter(|aid| !live.iter().any(|l| **l == **aid)).collect();
     if orphan.is_empty() {
         return Ok(());

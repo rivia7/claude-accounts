@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 侧栏：最上面是几种工具共用的几页：总览（首页，所有账号一眼看全）、用量统计、折合金额（cca 有它时）、节点分流、
-/// 远程会话（cca 有它时）、客户端更新；
+/// 远程会话（cca 有它时）、共享与同步（cca 有它时）、客户端更新；
 /// 下面是工具切换（Claude / ChatGPT / Antigravity，只管它下面列哪个工具的账号）和这个工具的账号（花名册）。
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
@@ -23,6 +23,10 @@ struct Sidebar: View {
                 if model.remoteAvailable {
                     RemoteSessionsRow()
                         .tag(SidebarItem.remoteSessions)
+                }
+                if model.sharingAvailable {
+                    SharingRow()
+                        .tag(SidebarItem.sharing)
                 }
                 ClientUpdatesRow()
                     .tag(SidebarItem.clientUpdates)

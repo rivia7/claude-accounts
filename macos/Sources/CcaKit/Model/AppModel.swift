@@ -12,6 +12,8 @@ enum SidebarItem: Hashable, Sendable {
     case routing
     /// 远程会话：可以接入的会话（这台 Mac 上的、配对过的机器上的）、配对、内嵌的终端（cca 有远程会话时才有这一项）
     case remoteSessions
+    /// 共享与同步：维护者共享的账号的开关（cca 有这个开关时才有这一项）
+    case sharing
     case clientUpdates
 
     var account: AccountRef? { if case .account(let r) = self { return r }; return nil }
@@ -1512,6 +1514,35 @@ final class AppModel {
         }
     }
 
+    // MARK: 维护者的共享（PROTOCOL 4.12）
+
+    /// cca 有「共享与同步」的开关（新版 cca 的 `config.policy` 带 `state`；旧版没有：不显示这一页、不调 `policy on` / `off`）
+    var sharingAvailable: Bool { state?.config?.policy?.switchable == true }
+    /// 正在关掉共享（`cca policy off`：问过同意以后要改账号表，配置了路由器的还要同步），开关先停用
+    private(set) var sharingBusy = false
+
+    /// 「共享与同步」页的开关。打开：提问会话（`cca policy on`：不知道仓库时问仓库，要维护者加公钥时显示给维护者的那一行、边等边拉）；
+    /// 关掉：`cca policy off`，先问同意（共享的账号会移出账号表，登录留着），共享的账号正在用时 cca 不关、说是哪些
+    func setSharing(_ on: Bool) {
+        guard !isFixtureMode else { showToast(on ? "演示模式：不会打开共享" : "演示模式：不会关掉共享", .info); return }
+        guard phase == .ready, sharingAvailable, !sharingBusy, flow == nil else { return }
+        guard on != (state?.config?.policy?.isOn ?? false) else { return }
+        if on {
+            run(.policyOn)
+            return
+        }
+        guard let client else { return }
+        sharingBusy = true
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(.policyOff, prompter: prompter)
+            guard let self else { return }
+            self.finish(r, failureTitle: "没能关掉共享", success: nonEmpty(r.resultEvent?.message) ?? "已关掉共享")
+            await self.afterAction()
+            self.sharingBusy = false
+        }
+    }
+
     // MARK: 远程会话（PROTOCOL 9）
 
     /// cca 有远程会话（`hello.remote` 是 App 认识的版本；旧版 cca 没有：不显示这一页、不调这些命令）
@@ -2302,6 +2333,8 @@ final class AppModel {
             if !costAvailable { selection = .office }
         case .remoteSessions?:
             if !remoteAvailable { selection = .office }
+        case .sharing?:
+            if !sharingAvailable { selection = .office }
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }
             // 正在改名：旧键没了是改名的结果，改名完成后会换成新键（rename）

@@ -258,18 +258,25 @@ mod tests {
         assert_eq!((NAMES[0], NAMES[152]), ("init", "gui-mail-list"));
     }
 
-    /// 原来的 149 个子命令（加上切换以后新加的）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）和 `remote-…`
-    /// （远程会话，辅助程序里新写的，见 remote.rs）；没有登记两次的
+    /// 切换以后新加的子命令（`sh-…`、`remote-…` 之外的）
+    const ADDED: &[&str] = &["policy-off", "unpark"];
+    /// 切换以后去掉的：共享默认关以后终端里启动时不再引导配置映射（policy-ask 是问不问）
+    const REMOVED: &[&str] = &["policy-ask"];
+
+    /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
+    /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）和 ADDED；没有登记两次的
     #[test]
     fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();
         for c in MODULES.iter().flat_map(|m| m.iter()) {
-            let added = c.name.starts_with("sh-") || c.name.starts_with('_') || c.name.starts_with("remote-");
+            let added =
+                c.name.starts_with("sh-") || c.name.starts_with('_') || c.name.starts_with("remote-") || ADDED.contains(&c.name);
             assert!(NAMES.contains(&c.name) || added, "{} 不是原来的子命令", c.name);
+            assert!(!REMOVED.contains(&c.name), "{} 已经去掉了", c.name);
             assert!(!seen.contains(&c.name), "{} 登记了两次", c.name);
             seen.push(c.name);
         }
-        for name in NAMES {
+        for name in NAMES.iter().filter(|n| !REMOVED.contains(n)) {
             assert!(find(name).is_some(), "{name} 没有移植");
         }
     }

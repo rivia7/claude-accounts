@@ -513,6 +513,9 @@ def wait_for(what, cond, secs=60):
         time.sleep(0.05)
 
 
+SHARED_REPO = 'example/cca-policy'
+
+
 class Device:
     """一台设备：自己的 HOME（~/.cca）和 deploy key；cca 的辅助程序在它里面跑。命令都在它自己的 bin/ 里（见上面几段）"""
     KEY = 'alice(alice@example.com)'
@@ -527,7 +530,8 @@ class Device:
         self.fp = sw.fp_of(str(self.keyfile) + '.pub')
         for cmd, script in (('curl', CURL), ('ps', PS), ('cca', SELF), ('security', NO_KEYCHAIN)):
             self.fake(cmd, script)
-        (self.cca / 'config.json').write_text('{}')
+        # 打开着维护者的共享（映射仓库；辅助程序的 policy_on：没有它时 policy.json 不生效）
+        (self.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO}))
         (self.cca / 'accounts.json').write_text(json.dumps(table))
         self.env = {'HOME': str(home), 'CCA_HOME': str(self.cca), 'CCA_TOOL': 'claude', 'PATH': '%s:/usr/bin:/bin' % (home / 'bin'),
                     'CCA_SELF': str(home / 'bin' / 'cca'), 'CCA_KEYSTORE': 'file', 'CCA_COST': 'off'}
@@ -784,9 +788,9 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(y, sw.aid_of('11' * 16, 'claude', 'alice@example.com'))
         # 用不了的几种（cca devices 说原因，退出码 2）
         dev.policy(self.presence())
-        (dev.cca / 'config.json').write_text('{"presence": false}')
+        (dev.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO, 'presence': False}))
         self.assertIn('关掉了', self.view(dev, rc=2)[0])
-        (dev.cca / 'config.json').write_text('{}')
+        dev.config(lambda c: c.pop('presence'))
         dev.policy(None)
         self.assertIn('还没有设备统计', self.view(dev, rc=2)[0])
         dev.policy({'url': 'bad'})
@@ -1083,13 +1087,13 @@ class ClientTest(unittest.TestCase):
         self.machines(a, b)
         a.login('u-alice-0002')
         aid, acct = self.aid, Device.ACCT
-        (a.cca / 'config.json').write_text('{"presence": false}')
+        (a.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO, 'presence': False}))
         self.assertEqual(a.keyset(K1), '', '关掉了设备统计：不说会同步')
         self.assertFalse((a.cca / 'presence').exists(), '也不建 presence 目录')
         self.assertIsNone(a.sync())
         a.config(lambda c: c.pop('presence'))
         # bob-mini 的是旧版本记下的：key_hints 里没有时间，按密钥文件的修改时间算（比 alice-mbp 记下的早）
-        (b.cca / 'config.json').write_text('{"presence": false}')   # 记的时候不经设备统计（keys.json 里没有它）
+        (b.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO, 'presence': False}))   # 记的时候不经设备统计（keys.json 里没有它）
         b.keyset(K2)
         b.config(lambda c: (c.pop('presence'), c['key_hints'][acct].pop('at')))
         self.assertFalse((b.cca / 'presence').exists())

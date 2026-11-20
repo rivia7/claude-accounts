@@ -810,6 +810,7 @@ class Crypto(Base):
         """映射里的账号 alice、开着设备统计、登录着（身份 U1）的一台设备；deploy key 是编的（seed 不同指纹就不同），服务器是假的 curl"""
         d = Home(self.root / name, self.TZ)
         d.write(d.cca / 'accounts.json', {self.KEY: 'US-A'})
+        d.write(d.cca / 'config.json', {'policy': 'example/cca-policy'})   # 打开着维护者的共享：没有它时 policy.json 不生效
         d.write(d.cca / 'policy' / 'policy.json', {'version': 1, 'claude': {'alice@example.com': 'US-A'}, 'presence': {
             'url': 'https://192.0.2.10:18443', 'pins': ['sha256//' + 'A' * 43 + '='], 'salt': self.SALT}})
         d.write(d.cca / 'policy' / 'id_ed25519.pub', fake_pub(seed))

@@ -90,7 +90,7 @@
 - `usage.md` — 查用量和用量表格、5 小时 / 按模型 / 每周的额度、周结算提醒、Codex 重置额度、登录失效、套餐档位、命令行会话登记、API 额度的入口
 - `cost.md` — 折合金额的统计和同步
 - `presence.md` — 设备统计的服务器（`./policy.sh presence`）、共享记下的 API key
-- `policy.md` — 维护者的映射：拉取、合并进账号表、启动时的引导、锁定请求、deploy key（`./policy.sh`）
+- `policy.md` — 维护者的映射：共享的开关（默认关着，`cca policy on|off`、「共享与同步」页）、拉取、合并进账号表、锁定请求、deploy key（`./policy.sh`）
 - `fill.md` — 维护者的参考节点，写进路由器的配置文件
 - `router.md` — 路由器端：OpenClash / ShellCrash、几台设备共用一个路由器、节点改名
 - `local-proxy.md` — 内置代理：mihomo 内核、拷节点、自定义节点（`cca node`）、本机 UDP 走节点

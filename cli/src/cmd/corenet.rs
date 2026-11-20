@@ -745,12 +745,28 @@ pub fn core_stale(c: &Dict) -> bool {
 /// 本机的为准，core_pick 留第一个），加上维护者参考节点里要补的（和往路由器里补的同一套规则 fill_plan：同名的、服务器一样的
 /// 以路由器的为准）
 pub fn core_defs() -> Vec<Dict> {
-    let mut px: Vec<Dict> = core_custom();
-    px.extend(cached_proxies(&core_cache()).iter().filter_map(named));
+    let mut px = core_own_defs();
     let have = fps_of(&px);
     let names: Vec<String> = have.iter().map(|(n, _)| n.clone()).collect();
     px.extend(fill_plan(&have, &names, policy_fill().as_ref()).0);
     px
+}
+
+/// 这台机器自己有的节点定义：自定义节点，路由器上拷来的（不算维护者的参考节点）
+fn core_own_defs() -> Vec<Dict> {
+    let mut px: Vec<Dict> = core_custom();
+    px.extend(cached_proxies(&core_cache()).iter().filter_map(named));
+    px
+}
+
+/// 可选节点里只有维护者的参考节点才有定义的（自定义节点、从路由器拷来的都没有它）：关掉共享（cca policy off）以后内置代理里
+/// 就没有它了。配置过路由器的机器不算：参考节点已经写进路由器的配置文件，不会删（fill.md）。要在关掉之前算（关掉以后 policy_fill 是 None）
+pub fn fill_only_nodes(c: &Dict) -> Vec<String> {
+    if router_host(c) || policy_fill().is_none() {
+        return Vec::new();
+    }
+    let own = names_in(c, &fps_of(&core_own_defs()));
+    names_in(c, &fps_of(&core_defs())).keys().iter().filter(|n| !own.has(n)).map(|n| n.to_string()).collect()
 }
 
 /// 可选节点在内置代理的节点定义里叫什么（按服务器地址认：路由器上改了名、还没同步时也认得出）

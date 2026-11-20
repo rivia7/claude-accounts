@@ -32,7 +32,7 @@ bash macos/test.sh 目录           # 真实的 cca 输出（tests/regress.sh 10
 ```
 
 - `Tests/ContractTests/` 是不用测试框架的小程序（`main.swift` 是入口，其它文件按节分：Harness、Generic、FixtureAssertions、Doubles、
-  ProtocolTests、UnitTests、ModelTests、OfficeTests、FeatureTests、TerminalTests、PollingTests、ClientUpdateTests、FlowTests、AccountListTests、DevicesTests、APIKeyTests、WeeklyUsageTests、CostTests）：`check(名字, 条件)` 打印 PASS / FAIL，有失败就非 0 退出。只和 CcaKit 一起编（本机架构）。
+  ProtocolTests、UnitTests、ModelTests、OfficeTests、FeatureTests、TerminalTests、PollingTests、SharingTests、ClientUpdateTests、FlowTests、AccountListTests、DevicesTests、APIKeyTests、WeeklyUsageTests、CostTests）：`check(名字, 条件)` 打印 PASS / FAIL，有失败就非 0 退出。只和 CcaKit 一起编（本机架构）。
 - `test.sh` 还检查 CcaKit 没有 `import SwiftUI / AppKit`。临时文件都在 `macos/build/tmp`。
 - 通用不变量（两种模式都跑）：每个文件都能解码、`version`/`kind` 对、槽位的端口 = 7900 + 槽位、空槽位是 REJECT、每个工具的账号键不重复、
   第三方 API 账号的 `api` 对象不带 key、`usage` 只给登录着的官方账号、`usage_weeks` 自洽（按时间排好、还没过完的最多一周且是最后一项、统计的是过完的那几周）、折合金额 `cost` 自洽（周期按时间排好、首尾相接、最多 13 项、`current` 只有最后一项，`days` 正好 30 天，每台设备的 `weeks_usd` / `days_usd` 和周期一一对应，数字不是负的，同步状态和扫描状态的值认识或者能降级显示）、`summary` 和槽位一致、事件逐行解析、consent 的 grant 是 `item:scope`……；
@@ -73,7 +73,7 @@ bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
 CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
 ```
 
-只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、cost / cost-wide / cost-day / cost-me（折合金额页：所有设备按周、宽窗口 1680×1000、按日、本机）、account-cost / account-cost-day / account-cost-me / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、还没有记录、ChatGPT 账号）、pinned（有置顶账号的总览和侧栏），
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、cost / cost-wide / cost-day / cost-me（折合金额页：所有设备按周、宽窗口 1680×1000、按日、本机）、account-cost / account-cost-day / account-cost-me / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、还没有记录、ChatGPT 账号）、remote / remote-terminal / remote-terminal-view / remote-off（远程会话页）、sharing（共享与同步页）、pinned（有置顶账号的总览和侧栏），
 再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details（账号页、分流页、折合金额）、直接改别名的 rename、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
@@ -90,7 +90,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   `Brand` 的颜色都取它；“总览”的图标是同一套颜色的 2×2 圆角方块 `OverviewMark`；“客户端更新”的图标 `UpdatesMark` 是一支箭头落进敞口的盒子，
   同样粗圆的线（边长的 0.15），蓝渐变到青绿（整条 Logo 渐变只给最高档的套餐）；“用量统计”的 `StatsMark` 是三根高低不同的柱子，蓝渐变到紫；
   “折合金额”的 `CostMark` 是美元符号（一笔 S，上下露出一小截竖线），琥珀渐变到玫红（Logo 末端的暖色）；“远程会话”的 `RemoteMark` 是终端的
-  提示符（一个尖括号、一道下划线），紫渐变到玫红。
+  提示符（一个尖括号、一道下划线），紫渐变到玫红；“共享与同步”的 `SharingMark` 是扣在一起的两个环，青绿渐变到紫。
 - 以信息简洁易懂为主，不为装饰上色、画框。颜色只表达三件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，
   比如“已登录”不显示；提示、建议用系统的强调色），套餐的档位。档位要低调（`PlanBadge.swift`）：徽章和 `Tag` 一样是中性的胶囊、secondary 的字，颜色只在前面的小徽记上，
   一档比一档足——入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵（Ultra、Pro 500）Logo 渐变（`Brand.spectrum`：蓝 → 紫 → 玫红 → 琥珀）的四角星。
@@ -120,7 +120,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 账号页的设备（`DevicesSection.swift`，只有 cca 说 `can.devices` 的账号有，PROTOCOL 3.4）：在两栏下面占一整行，这台 Mac 排第一；状态点只表达状态
   （在用实心绿点、闲置绿圈、离线灰圈、没在用浅灰点），文字照实说（在用、开着，闲置 N 分钟、离线、没在用 · 上次使用）；离线的原因（可能休眠、断网）
   放在悬停说明里，怎么判断在用、闲置放在「显示细节」里。账号页看得见时一分钟查一次，看不见、换到别的页就停。
-- 侧栏（`Sidebar.swift`）：最上面是几种工具共用的几页——总览、用量统计、折合金额（cca 有它时）、节点分流、远程会话（cca 有它时）、客户端更新，切工具时不变；
+- 侧栏（`Sidebar.swift`）：最上面是几种工具共用的几页——总览、用量统计、折合金额（cca 有它时）、节点分流、远程会话（cca 有它时）、共享与同步（cca 有它时）、客户端更新，切工具时不变；
   下面是工具切换（Claude / ChatGPT / Antigravity，启用了两种以上才有，`ToolPickerRow`，选不中的一行）和这个工具的账号。切换只管它下面列哪个工具的账号，
   所以放在账号列表正上方，不放在侧栏顶上（放在顶上像是连上面那几页也跟着换）。几段一样宽、在列表行里不往窄里压，所以挑放得下的样子：
   标准大小，放不下换小一号，还放不下（三种工具、侧栏拖到最窄）换成下拉菜单（`ViewThatFits`）；两种工具时总是标准大小。一页只放一种图：额度用量（有底槽、填满就是用完）和折合金额
@@ -240,6 +240,10 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   上面一行说是哪个会话、右边「断开」；一次接一个，换到别的页还接着，主窗口关了、退出 App 断开。连接断了时接入端自己重新接上
   （终端里说一句，App 不用管）。会话自己结束、没重新接上时终端留着，
   上面说一句怎么了，可以「重新接入」「返回列表」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
+- **共享与同步**（`SharingPage`，PROTOCOL 4.12；`config.policy` 带 `state` 时侧栏才有这一页）：维护者共享的账号的开关，默认关着。开关、那句说明和下面几行明细
+  （映射仓库、账号表里共享的账号几个、关掉时收起来几个）都照 cca 给的 `state`、`accounts`、`parked`，不在界面里重算；在等维护者加公钥时侧栏这一行挂「等维护者」。
+  打开是提问会话（`cca policy on`：问仓库、给维护者的那一行，和配置向导第 1 步同一页），关掉先问同意（`consent` 的 `detail` 说会移出哪些账号），
+  共享的账号正在用时 cca 不关、弹框说是哪些。做法在 docs/dev/policy.md。
 - **API key**（PROTOCOL 4.10）：官方账号在“用量”一节、第三方 API 账号在自己的「API key」一节；「…」和右键菜单里有记录 / 更换、复制、删除记下的 API key。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；系统自带的“终端”进程结束后默认留着窗口，按键后脚本用 AppleScript 关掉这个窗口；
   文件一开始就挪走再删掉，中途关窗口也不留下），App 发起的命令（登录、添加账号、配置路由器……）用系统自带的“终端”打开，账号的会话用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux，

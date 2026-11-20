@@ -95,6 +95,8 @@ struct DetailColumn: View {
                 RoutingPage()
             case .remoteSessions?:
                 RemoteSessionsPage()
+            case .sharing?:
+                SharingPage()
             case .clientUpdates?:
                 ClientUpdatesPage()
             case nil:

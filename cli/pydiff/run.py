@@ -118,6 +118,28 @@ ORACLE_PATCHES = [
      "def claude_sync(key):\n"),
     ('            conflict |= collided\n            if v is MISSING:\n',
      "            conflict |= collided\n            if k == 'projects':\n                v = trust_dirs(v, key)\n            if v is MISSING:\n"),
+    # 维护者的共享默认关着：config.json 里没有 policy（映射仓库）时，磁盘上留着的映射、参考节点一律不生效（辅助程序的 policy_on；
+    # cca policy off 时后台正在拉的那一次可能之后才写回来）；没有 config.json 也是关着，读不出对象时照旧看磁盘上的映射。
+    # Box.policy / Box.fill 放了映射的沙箱，config.json 里自动带上 policy
+    ("    \"\"\"读不了、格式不对都当作没有（缓存之类，不值得为它报错退出）\"\"\"\n    try:\n",
+     "    \"\"\"读不了、格式不对都当作没有（缓存之类，不值得为它报错退出）\"\"\"\n"
+     "    if path in (POLICY_FILE, FILL_FILE):\n"
+     "        try:\n"
+     "            with open(CFG, encoding='utf-8') as f:\n"
+     "                c = json.load(f)\n"
+     "        except FileNotFoundError:\n"
+     "            return None\n"
+     "        except (OSError, ValueError):\n"
+     "            c = None\n"
+     "        if isinstance(c, dict) and not c.get('policy'):\n"
+     "            return None\n"
+     "    try:\n"),
+    # 共享关着时设备统计、锁定请求说的是「没打开维护者的共享（cca policy on）」；开着、还没拉到映射时说还没拉到
+    ("        return '这台 Mac 没有配置维护者的映射（cca policy setup）', None\n",
+     "        off = c is None and not os.path.exists(CFG) or isinstance(c, dict) and not c.get('policy')\n"
+     "        return ('这台 Mac 没打开维护者的共享（cca policy on）' if off else '这台 Mac 还没拉到维护者的映射（cca policy pull）'), None\n"),
+    ("'这台 Mac 没有映射的 deploy key（cca policy setup）'", "'这台 Mac 没有映射的 deploy key（cca policy on）'"),
+    ("'这台机器还没配置维护者的映射：先运行 cca policy setup'", "'这台机器没打开维护者的共享：先运行 cca policy on'"),
 ]
 
 
@@ -155,6 +177,9 @@ def py_src():
     return _ORACLE['text'].split(PY_HEAD, 1)[1].split('\nPY\n)', 1)[0]
 
 
+SHARED_REPO = 'example/cca-policy'   # 放了映射的沙箱 config.json 里的映射仓库（打开着共享）
+
+
 class Box:
     """一个用例的沙箱：home 是假的 HOME，下面的方法往里放夹具"""
 
@@ -181,16 +206,41 @@ class Box:
         return self.write(rel, json.dumps(data, **kw) + '\n', mode)
 
     def cfg(self, data):
+        if isinstance(data, dict) and 'policy' not in data and self._shared():
+            data = dict(data, policy=SHARED_REPO)
         return self.json('.cca/config.json', data)
 
     def table(self, data, tool='claude'):
         return self.json('.cca/%s.json' % {'claude': 'accounts'}.get(tool, tool), data)
 
     def policy(self, data):
-        return self.json('.cca/policy/policy.json', data)
+        p = self.json('.cca/policy/policy.json', data)
+        self._share()
+        return p
 
     def fill(self, data):
-        return self.json('.cca/policy/nodes.json', data)
+        p = self.json('.cca/policy/nodes.json', data)
+        self._share()
+        return p
+
+    def _shared(self):
+        return any(os.path.exists(self.path('.cca/policy/' + f)) for f in ('policy.json', 'nodes.json'))
+
+    def _share(self):
+        """放了映射、参考节点的沙箱打开共享（config.json 里写上 policy，见 ORACLE_PATCHES 的共享开关）：已经写了 config.json 的
+        补上这一项（写坏了的、不是对象的、自己写了 policy 的不动），还没写的写一份只有它的"""
+        import json
+        p = self.path('.cca/config.json')
+        try:
+            with open(p, encoding='utf-8') as f:
+                c = json.load(f)
+        except FileNotFoundError:
+            c = {}
+        except ValueError:
+            return
+        if isinstance(c, dict) and 'policy' not in c:
+            c['policy'] = SHARED_REPO
+            self.json('.cca/config.json', c)
 
     def fake(self, name, script):
         """沙箱里的假命令（/bin/sh 脚本）"""

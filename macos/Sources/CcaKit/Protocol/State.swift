@@ -232,14 +232,23 @@ struct LocalUDP: Decodable, Sendable, Equatable {
     var yielded: Bool { state == .ok && otherVPN != nil }
 }
 
+/// 维护者共享的账号（维护者的映射，默认关着；PROTOCOL 2.2 的 `config.policy`、4.12）
 struct PolicyConfig: Decodable, Sendable, Equatable {
+    /// 共享开着（记着映射仓库）
     var configured: Bool
     var repo: String?
     /// App 下次该拉映射的时间（cca 算的，App 不重算）；没拉过是 nil。
     var nextCheckEpoch: Double?
+    /// cca 报的状态（`state`）；旧版 cca 没有这一项
+    var reported: PolicyState?
+    /// 账号表里属于映射的账号（各工具加起来）；旧版 cca 是 0
+    var accounts: Int
+    /// 关掉共享时移出账号表的账号（登录都留着，打开时原样加回来）；旧版 cca 是 0
+    var parked: Int
 
     enum CodingKeys: String, CodingKey {
-        case configured, repo
+        case configured, repo, accounts, parked
+        case reported = "state"
         case nextCheckEpoch = "next_check_epoch"
     }
 
@@ -248,7 +257,17 @@ struct PolicyConfig: Decodable, Sendable, Equatable {
         configured = c.bool(.configured) ?? false
         repo = c.string(.repo)
         nextCheckEpoch = c.double(.nextCheckEpoch)
+        reported = c.lossy(PolicyState.self, .reported)
+        accounts = c.int(.accounts) ?? 0
+        parked = c.int(.parked) ?? 0
     }
+
+    /// 关着 / 打开了还没拉到映射 / 拉到了。旧版 cca 没有 `state`：照 `configured` 当作开着（`on`）或关着（`off`）
+    var state: PolicyState { reported ?? (configured ? .on : .off) }
+    /// cca 有「共享与同步」的开关（`cca policy on` / `off`）：新版 cca 的这一项带 `state`，旧版没有
+    var switchable: Bool { reported != nil }
+    /// 共享开着（拉到了映射，或者在等维护者）：开关画成打开的
+    var isOn: Bool { state != .off }
 }
 
 struct Routing: Decodable, Sendable, Equatable {

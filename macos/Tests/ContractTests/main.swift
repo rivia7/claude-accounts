@@ -42,6 +42,7 @@ if fullMode {
     await clientUpdateModelTests()
     await clientAutoInstallModelTests()
     await pollingTests()
+    await sharingTests()
     await devicesTests()
     remoteProtocolTests()
     await remoteFlowTests()

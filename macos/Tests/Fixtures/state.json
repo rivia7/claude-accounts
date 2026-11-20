@@ -43,7 +43,10 @@
     "policy": {
       "configured": true,
       "repo": "example/cca-policy",
-      "next_check_epoch": 1794045600.0
+      "next_check_epoch": 1794045600.0,
+      "state": "on",
+      "accounts": 2,
+      "parked": 0
     }
   },
   "routing": {

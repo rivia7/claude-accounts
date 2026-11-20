@@ -610,11 +610,15 @@ class OldServerTest(Base):
         r = a.run('remote-pair-show')
         self.assertEqual((r.returncode, r.stdout), (1, ''), '服务器不支持时不给配对码')
         self.assertIn(RELAY_OLD, r.stderr)
-        # 没配置映射的机器：说清楚原因，会话照常能在这台机器上用
+        # 还没拉到映射的机器、关着共享的机器：说清楚原因，会话照常能在这台机器上用
         (a.cca / 'policy' / 'policy.json').unlink()
         r = a.run('remote-pair-join', stdin='0000-0000-0000-0000\n')
         self.assertEqual(r.returncode, 1)
-        self.assertIn('没有配置维护者的映射', r.stderr)
+        self.assertIn('还没拉到维护者的映射', r.stderr)
+        a.config(lambda c: c.pop('policy'))
+        r = a.run('remote-pair-join', stdin='0000-0000-0000-0000\n')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('没打开维护者的共享', r.stderr)
 
 
 class PyPeer:

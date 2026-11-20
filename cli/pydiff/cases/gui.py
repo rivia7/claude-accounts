@@ -237,6 +237,8 @@ STATE_MASK += [(r',\n\s*"custom_proxy": (?:true|false)', '')]
 STATE_MASK += [(r',\n\s*"other_vpn": (?:null|"[^"]*")', '')]
 # 本机 UDP 走节点在家暂停着没有（config.local.udp.paused）也是切换以后新加的：去掉再比（回归 11b4u 测）
 STATE_MASK += [(r',\s*"paused": (?:true|false)', '')]
+# 维护者的共享开没开、映射的账号有几个、收起来几个（config.policy 的 state、accounts、parked）也是切换以后新加的（回归 10g、11b2 里测）
+STATE_MASK += [(r',\n\s*"state": "(?:off|pending|on)",\n\s*"accounts": [0-9]+,\n\s*"parked": [0-9]+', '')]
 GUI_ENV = {'CCA_RO': '1', 'CCA_VERSION': '9.9.9', 'CCA_GUI_CLAUDE_BIN': '/usr/local/bin/claude', 'CCA_GUI_CLAUDE_APP': '/Applications/Claude.app',
            'CCA_GUI_CODEX_BIN': '/usr/local/bin/codex', 'CCA_GUI_CODEX_APP': '', 'CCA_GUI_AGY_BIN': '', 'CCA_GUI_CHROME': '1', 'CCA_COST': 'off'}
 ROUTER_CODE = 'router code\nline 2\n'

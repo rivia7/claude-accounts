@@ -12,7 +12,7 @@ use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, SELF_PATH};
 use crate::core::ctx::ctx;
 use crate::core::model::{acct_id, adir, is_api, label_of, name_of, parse_key};
-use crate::core::policy::{policy_raw, POLICY_FILE};
+use crate::core::policy::{policy_doc, policy_on, policy_raw};
 use crate::core::tool::{t, tools, Tool, Using};
 use crate::py::base64::{b64decode, b64encode};
 use crate::py::fs::{self, load_quiet, read_text, save_json};
@@ -112,8 +112,13 @@ pub fn presence_load() -> R<(String, Option<Dict>)> {
 /// 维护者的服务器的配置，不看这台 Mac 关没关设备统计：远程会话的中转（docs/dev/remote.md）也经这台服务器，
 /// 那是用户自己配对了才用的，和上报不上报是两回事
 pub fn presence_server() -> R<(String, Option<Dict>)> {
-    let Some(j) = load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()) else {
-        return Ok(("这台 Mac 没有配置维护者的映射（cca policy setup）".into(), None));
+    let Some(j) = policy_doc() else {
+        let why = if policy_on() {
+            "这台 Mac 还没拉到维护者的映射（cca policy pull）"
+        } else {
+            "这台 Mac 没打开维护者的共享（cca policy on）"
+        };
+        return Ok((why.into(), None));
     };
     let Some(p) = j.get("presence").filter(|p| !p.is_none()) else {
         return Ok(("维护者的映射里还没有设备统计的服务器".into(), None));
@@ -123,7 +128,7 @@ pub fn presence_server() -> R<(String, Option<Dict>)> {
         return Ok((format!("维护者的映射里设备统计那一节不对：{}", errs.join("；")), None));
     }
     let Some((key, fp)) = presence_key()? else {
-        return Ok(("这台 Mac 没有映射的 deploy key（cca policy setup）".into(), None));
+        return Ok(("这台 Mac 没有映射的 deploy key（cca policy on）".into(), None));
     };
     let p = p.as_dict().expect("presence_problems 核对过是字典");
     let cfg = dict! { "url" => p.at("url").py_str().trim_end_matches('/'), "pins" => p.at("pins"), "salt" => p.at("salt"), "key" => key, "fp" => fp };
@@ -199,7 +204,7 @@ pub fn cmd_presence_wake(args: &[String]) -> R<()> {
 /// cca policy 里的一句：这台 Mac 会不会把映射里账号的使用情况报告给维护者的服务器
 pub fn cmd_presence_note(args: &[String]) -> R<()> {
     arity("cmd_presence_note", args, 0, 0)?;
-    if !load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()).is_some_and(|j| j.has("presence")) {
+    if !policy_doc().is_some_and(|j| j.has("presence")) {
         return Ok(());
     }
     match presence_load()? {

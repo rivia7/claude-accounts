@@ -718,7 +718,7 @@ pub fn cmd_policy_request(args: &[String]) -> R<()> {
     let why = if is_api(&v) || e.is_empty() {
         Some(format!("{} 是第三方 API 账号：映射只管官方账号", label_of(key)))
     } else if !c.truthy("policy") {
-        Some("这台机器还没配置维护者的映射：先运行 cca policy setup".to_string())
+        Some("这台机器没打开维护者的共享：先运行 cca policy on".to_string())
     } else {
         pinned.map(|p| format!("{} 已经按维护者的映射固定在 {} 上了", label_of(key), p.py_str()))
     };

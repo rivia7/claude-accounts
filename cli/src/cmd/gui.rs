@@ -10,7 +10,7 @@ use super::cost::CostView;
 use super::keyshare::keyshare_error;
 use super::launchers::{launcher_badges, launcher_names};
 use super::leak::coffee_parse;
-use super::presence::{app_proc_re, presence_load};
+use super::presence::{app_proc_re, presence_load, presence_mapped};
 use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
 use super::usage::{parse_ts, usage_cached, usage_entry, usage_row, usage_weeks_view};
 use super::{arg, arity, Cmd};
@@ -20,7 +20,7 @@ use crate::core::ctx::{cfg_save, ctx, pool_size, reconcile_all};
 use crate::core::model::{
     acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok,
 };
-use crate::core::policy::policy_map;
+use crate::core::policy::{parked, policy_doc, policy_map};
 use crate::core::sync::sync_digest;
 use crate::core::tool::{t, tools, Kind, Using};
 use crate::py::fs::{load_quiet, save_json};
@@ -608,6 +608,15 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         "pending"
     };
     let local = local_info(&c);
+    let policy = dict! {
+        "configured" => pol.truthy(), "repo" => if pol.is_str() { pol.clone() } else { V::None },
+        "next_check_epoch" => if pol.truthy() { policy_next_check() } else { None },
+        // 维护者的共享：off 关着（没打开过、说过不用、cca policy off 关掉了）；pending 打开了、还没拉到映射（等维护者加上这台
+        // 机器的公钥）；on 拉到了映射。accounts 是账号表里映射的账号（下面数完了再填），parked 是关掉共享时收起来的（打开时加回来）
+        "state" => if !pol.truthy() { "off" } else if policy_doc().is_some() { "on" } else { "pending" },
+        "accounts" => 0,
+        "parked" => tools().iter().map(|tool| parked(&c, tool).len()).sum::<usize>(),
+    };
     let out = dict! {
         "version" => 1, "kind" => "state", "generated_at" => now, "cca_version" => getenv("CCA_VERSION").unwrap_or_default(),
         "errors" => V::None, "notices" => V::None,
@@ -620,10 +629,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             "local" => &local,
             "nodes" => &nodes, "min_trust" => c.at("min_trust"), "leak_check" => !matches!(c.get("leak_check"), Some(V::Bool(false))),
             "update" => c.at("update"),
-            "policy" => dict! {
-                "configured" => pol.truthy(), "repo" => if pol.is_str() { pol.clone() } else { V::None },
-                "next_check_epoch" => if pol.truthy() { policy_next_check() } else { None },
-            },
+            "policy" => &policy,
             "onboarded" => onboarded(&c),
         },
         "routing" => dict! {
@@ -645,6 +651,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     let mut cv = CostView::new(&c, now, pcfg.as_ref());
     let entries = out.list("tools").expect("刚建的");
     let mut enabled_ids: Vec<&'static str> = Vec::new();
+    let mut shared = 0;
     for tool in tools() {
         let name = tool.name.to_uppercase();
         let var = |suffix: &str| getenv(&format!("CCA_GUI_{name}_{suffix}")).filter(|s| !s.is_empty());
@@ -675,6 +682,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             }
             let badges = launcher_badges(&c, &official, &launcher_names(&official));
             let pm = policy_map(tool, Some(&c));
+            shared += table.items().iter().filter(|(k, v)| presence_mapped(&pm, k, v)).count();
             entry.set(
                 "errors",
                 tool.errs().into_iter().map(|m| V::Dict(dict! { "code" => "table_invalid", "message" => m })).collect::<Vec<V>>(),
@@ -695,6 +703,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         }
         entries.push(entry);
     }
+    policy.set("accounts", shared);
     // dict.fromkeys(RO_BAD)：重复的只留先来的
     let mut seen: Vec<(String, String)> = Vec::new();
     for bad in RO_BAD.with(|b| b.borrow().clone()) {

@@ -329,21 +329,6 @@ def _(b):
     pass
 
 
-@case('policy/ask-yes', ['policy-ask'])
-def _(b):
-    world(b)
-
-
-@case('policy/ask-configured', ['policy-ask'])
-def _(b):
-    world(b, cfg={'policy': 'example/cca-policy'})
-
-
-@case('policy/ask-declined', ['policy-ask'])
-def _(b):
-    world(b, cfg={'policy_declined': True})
-
-
 @case('policy/decline', ['policy-decline'])
 def _(b):
     world(b, cfg={'policy': 'example/cca-policy'})
