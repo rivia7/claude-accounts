@@ -889,6 +889,13 @@ python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['claude_add_
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a2=$(lastline ARGS)
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('claude_add_dir'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 ok "第三方 API 账号同样只放开它自己的目录和共享目录（在 --settings 前面）；config.json 的 claude_add_dir 设成 false 就不加" 'printf "%s" "$a1" | grep -qF "ARGS: --add-dir=${KAD} $SD $P1 --settings {" && [ "$(hookless "$a2" "$AAD")" = "ARGS: --version" ]'
+# Claude Code 2.1.329 起，没信任过的 --add-dir 目录每次启动都要问一遍（Adding a new directory，回答只管这一次会话）：启动前的
+# py sync 在 projects 里给交给它的每个目录记上 hasTrustDialogAccepted，账号的 .claude.json（Claude Code 读的那份）和主目录的都有
+trust_ok() {   # trust_ok .claude.json 目录…：每个目录在 projects 里都是 {"hasTrustDialogAccepted": true, …}
+	python3 -c 'import json,sys; p=json.load(open(sys.argv[1])).get("projects", {}); sys.exit(0 if all(isinstance(p.get(d), dict) and p[d].get("hasTrustDialogAccepted") is True for d in sys.argv[2:]) else 1)' "$@"
+}
+tdirs=${SD//--add-dir=/}
+ok "启动前给交给 Claude Code 的每个 --add-dir 记上信任过（不然每次启动都要一个个确认）：官方账号、第三方 API 账号各自的 .claude.json 和主目录的 ~/.claude.json 里都有；claude_add_dir 关掉那一次不删" 'trust_ok "$AAD/claude/.claude.json" "$AAD" $tdirs && trust_ok "$KAD/claude/.claude.json" "$KAD" $tdirs && trust_ok "$H/.claude.json" "$AAD" "$KAD" $tdirs && ! trust_ok "$H/.claude.json" "$H/.claude"'
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['cost'] = False; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1; a3=$(lastline ARGS)
 run CCA_TTY="$(ans)" cca @kimi --version >/dev/null 2>&1; s3=$(lastline SETTINGS); a4=$(lastline ARGS)

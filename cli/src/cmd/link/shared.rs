@@ -54,8 +54,11 @@ pub fn claude_sync(key: &str) -> R<()> {
     let base = Dict::new();
     let (mut ch_a, mut ch_m, mut conflict) = (false, false, false);
     for k in SHARED_KEYS {
-        let (v, collided) = merge_config_json(b.get(k), a.get(k), m.get(k));
+        let (mut v, collided) = merge_config_json(b.get(k), a.get(k), m.get(k));
         conflict |= collided;
+        if *k == "projects" {
+            v = trust_dirs(v, &trusted_dirs(key));
+        }
         let Some(v) = v else {
             ch_a |= a.pop(k).is_some();
             ch_m |= m.pop(k).is_some();
@@ -81,6 +84,45 @@ pub fn claude_sync(key: &str) -> R<()> {
         save_json(&MASTER_JSON, &V::Dict(m), None, true)?;
     }
     save_json(&bj, &V::Dict(base), Some(0o600), true)
+}
+
+/// 要在 projects 里记上信任过的目录：交给 Claude Code 的每个 --add-dir（accounts::add_dirs），和它的真实路径（不一样时），去重
+fn trusted_dirs(key: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in crate::cmd::accounts::add_dirs(key) {
+        let real = path::realpath(&d);
+        for p in [d, real] {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// projects（合并好的）里给 dirs 的每一个记上 hasTrustDialogAccepted。Claude Code（2.1.329 起）对没信任过的 --add-dir 目录每次
+/// 启动都问一遍「Adding a new directory」，回答只管这一次会话；记在 projects 里的信任（和在那个目录里启动、点过信任一样）才一直
+/// 管用，它自己的 runner 起会话前也是这样写的。合并完再加：哪一边删掉了，下次启动又记上。返回新的对象，不改 v（它可能就是账号
+/// 或主目录那份里的同一个对象，改了就比不出要不要保存）；projects 不是对象（坏了）时原样不动
+fn trust_dirs(v: Option<V>, dirs: &[String]) -> Option<V> {
+    if dirs.is_empty() {
+        return v;
+    }
+    let projects = match &v {
+        None => Dict::new(),
+        Some(V::Dict(d)) => d.copy(),
+        Some(_) => return v,
+    };
+    for d in dirs {
+        let entry = match projects.get(d) {
+            Some(V::Dict(e)) if matches!(e.get("hasTrustDialogAccepted"), Some(V::Bool(true))) => continue,
+            Some(V::Dict(e)) => e.copy(),
+            _ => Dict::new(),
+        };
+        entry.set("hasTrustDialogAccepted", true);
+        projects.set(d.as_str(), V::Dict(entry));
+    }
+    Some(V::Dict(projects))
 }
 
 /// 账号目录和共享主目录里的同名条目类型对不上（一个是目录一个是文件；任务列表里还有一边是链接的）：
@@ -487,6 +529,35 @@ mod tests {
             let shown = format!("{base:?} {ours:?} {theirs:?}");
             assert_eq!(merged(base, ours, theirs), (want.to_string(), conflict), "{shown}");
         }
+    }
+
+    #[test]
+    fn trust_dirs_marks_each_dir_and_leaves_the_input_alone() {
+        let dump = |v: &Option<V>| v.as_ref().map_or("MISSING".to_string(), |v| json::dumps(v, json::LINE));
+        let dirs = vec!["/a".to_string(), "/b".to_string()];
+        let t = r#"{"hasTrustDialogAccepted": true}"#;
+        // 没有要加的目录（claude_add_dir 关了）：原样，没有的也不建
+        assert_eq!(dump(&trust_dirs(None, &[])), "MISSING");
+        assert_eq!(dump(&trust_dirs(j("{}"), &[])), "{}");
+        // 还没有 projects：建一个
+        assert_eq!(dump(&trust_dirs(None, &dirs)), format!(r#"{{"/a": {t}, "/b": {t}}}"#));
+        // 已有的条目：别的字段留着、只补上信任；不是对象的换掉；1 不算 true（原版比的是 is True）
+        let before = j(r#"{"/x": {"allowedTools": []}, "/a": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": 1}, "/b": 7}"#);
+        let shown = dump(&before);
+        let after = trust_dirs(before.clone(), &dirs);
+        assert_eq!(
+            dump(&after),
+            format!(
+                r#"{{"/x": {{"allowedTools": []}}, "/a": {{"allowedTools": ["Bash"], "hasTrustDialogAccepted": true}}, "/b": {t}}}"#
+            )
+        );
+        // 传进来的对象没被改（它可能就是账号或主目录那份里的同一个，改了就比不出要不要保存）
+        assert_eq!(dump(&before), shown);
+        // 都信任过了：内容不变（照样是一份拷贝）
+        let again = trust_dirs(after.clone(), &dirs);
+        assert_eq!(dump(&again), dump(&after));
+        // projects 不是对象（坏了）：原样不动
+        assert_eq!(dump(&trust_dirs(j("[1]"), &dirs)), "[1]");
     }
 
     #[test]

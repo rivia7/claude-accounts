@@ -197,6 +197,25 @@ pub const CCA_DIR_PRIVATE: &[&str] = &[
 /// 这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
 /// 路径里有空格、逗号、括号、引号时规则写不准，就整个不加。config.json 的 claude_add_dir 设成 false 不加
 pub fn cca_dir_args(key: &str) -> Vec<String> {
+    let dirs = add_dirs(key);
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let root = path::realpath(&CCA_HOME);
+    let mut rules = Vec::new();
+    for p in CCA_DIR_PRIVATE {
+        for tool in ["Read", "Edit"] {
+            rules.push(format!("{tool}(/{root}/{p})"));
+        }
+    }
+    let mut out: Vec<String> = dirs.iter().map(|d| format!("--add-dir={d}")).collect();
+    out.push(format!("--disallowedTools={}", rules.join(",")));
+    out
+}
+
+/// cca_dir_args 交给 Claude Code 的工作目录（--add-dir）：账号目录、共享目录的真实路径（shared_real_dirs）。claude_add_dir 设成
+/// false、~/.cca 的真实路径里有规则写不准的字符时是空的。claude_sync 照这一份在 projects 里记上信任过，两边总是同一份
+pub fn add_dirs(key: &str) -> Vec<String> {
     let off = load_quiet(&CFG)
         .and_then(|c| c.as_dict())
         .and_then(|c| c.get("claude_add_dir"))
@@ -205,15 +224,8 @@ pub fn cca_dir_args(key: &str) -> Vec<String> {
     if off || re!(r"[\s,()\x22\x27\\]").found(&root) {
         return Vec::new();
     }
-    let mut rules = Vec::new();
-    for p in CCA_DIR_PRIVATE {
-        for tool in ["Read", "Edit"] {
-            rules.push(format!("{tool}(/{root}/{p})"));
-        }
-    }
-    let mut out = vec![format!("--add-dir={}", adir(key))];
-    out.extend(shared_real_dirs(&cdir(key), &path::realpath(&HOME), &root).iter().map(|d| format!("--add-dir={d}")));
-    out.push(format!("--disallowedTools={}", rules.join(",")));
+    let mut out = vec![adir(key)];
+    out.extend(shared_real_dirs(&cdir(key), &path::realpath(&HOME), &root));
     out
 }
 

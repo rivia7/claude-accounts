@@ -481,6 +481,17 @@ class SharedState(unittest.TestCase):
             self.assertEqual(data['cachedUsageUtilization']['account'], key)
         current_master = json.loads(master_path.read_text())
         self.assertEqual(current_master['theme'], 'light')
+        # projects 里多出来的只有给交给 Claude Code 的工作目录（--add-dir）记的信任：每个账号的目录（原写法和真实路径）、链到的
+        # 共享目录，值只有 hasTrustDialogAccepted，不带账号的身份；原来有的条目不变
+        before = master_identity.pop('projects', {})
+        projects = current_master.pop('projects', {})
+        self.assertEqual({k: v for k, v in projects.items() if k in before}, before)
+        added = {k: v for k, v in projects.items() if k not in before}
+        self.assertTrue(added and all(v == {'hasTrustDialogAccepted': True} for v in added.values()), added)
+        for key in ACCOUNTS:
+            self.assertIn(str(self.directory('claude', key)), added)
+            self.assertIn(os.path.realpath(self.directory('claude', key)), added)
+        self.assertIn(os.path.realpath(self.master('claude') / 'projects'), added)
         self.assertEqual({k: v for k, v in current_master.items() if k != 'theme'}, master_identity)
         self.assertEqual(self.identities('claude'), original_ids)
 

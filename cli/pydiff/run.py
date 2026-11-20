@@ -68,6 +68,56 @@ ORACLE_PATCHES = [
      "           'dns': {'fake-ip-range': '198.19.233.233/30'},\n"
      "           'tun': {'enable': True, 'stack': 'mixed', 'device': 'utun233', 'auto-route': True, 'auto-detect-interface': True,\n"
      "                   'strict-route': False, 'dns-hijack': [], 'route-address': udp_routes()},"),
+    # .claude.json 的三方合并（sync）：合并好的 projects 里给交给 Claude Code 的每个 --add-dir（账号目录、共享目录的真实路径）记上
+    # hasTrustDialogAccepted（Claude Code 2.1.329 起，没信任过的 --add-dir 每次启动都要问一遍）。照 Rust 的 add_dirs、trusted_dirs、
+    # trust_dirs 另写一遍；这里的 CLAUDE_SHARED 是集合，顺序照 Rust 的列表写死
+    ('def claude_sync(key):\n',
+     "CCA_SHARED_ORDER = ['projects', 'skills', 'commands', 'agents', 'plugins', 'todos', 'tasks', 'plans', 'file-history', 'ide',\n"
+     "                    'settings.json', 'settings.local.json', 'history.jsonl', 'CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md',\n"
+     "                    'AGENTS.override.md', 'keybindings.json', 'rules', 'output-styles', 'themes', 'workflows', 'agent-memory',\n"
+     "                    'agent-memory-local', 'memory', 'memories', 'prompts', 'hooks']\n\n\n"
+     "def cca_add_dirs(key):\n"
+     "    c = load_quiet(CFG)\n"
+     "    root = os.path.realpath(CCA_HOME)\n"
+     "    if (isinstance(c, dict) and c.get('claude_add_dir') is False) or re.search(r'[\\s,()\\x22\\x27\\\\]', root):\n"
+     "        return []\n"
+     "    home = os.path.realpath(HOME)\n"
+     "    within = lambda p, d: p == d or p.startswith(d.rstrip('/') + '/')\n"
+     "    out = []\n"
+     "    for n in CCA_SHARED_ORDER:\n"
+     "        link = os.path.join(cdir(key), n)\n"
+     "        if n == 'ide' or not os.path.islink(link):\n"
+     "            continue\n"
+     "        real = os.path.realpath(link)\n"
+     "        if (os.path.isdir(real) and not re.search(r'[\\s,()\\x22\\x27\\\\]', real) and not within(home, real)\n"
+     "                and not within(root, real) and not within(real, root) and real not in out):\n"
+     "            out.append(real)\n"
+     "    return [adir(key)] + out\n\n\n"
+     "def trust_dirs(v, key):\n"
+     "    dirs = []\n"
+     "    for d in cca_add_dirs(key):\n"
+     "        for p in (d, os.path.realpath(d)):\n"
+     "            if p not in dirs:\n"
+     "                dirs.append(p)\n"
+     "    if not dirs:\n"
+     "        return v\n"
+     "    if v is MISSING:\n"
+     "        projects = {}\n"
+     "    elif isinstance(v, dict):\n"
+     "        projects = dict(v)\n"
+     "    else:\n"
+     "        return v\n"
+     "    for d in dirs:\n"
+     "        e = projects.get(d)\n"
+     "        if isinstance(e, dict) and e.get('hasTrustDialogAccepted') is True:\n"
+     "            continue\n"
+     "        e = dict(e) if isinstance(e, dict) else {}\n"
+     "        e['hasTrustDialogAccepted'] = True\n"
+     "        projects[d] = e\n"
+     "    return projects\n\n\n"
+     "def claude_sync(key):\n"),
+    ('            conflict |= collided\n            if v is MISSING:\n',
+     "            conflict |= collided\n            if k == 'projects':\n                v = trust_dirs(v, key)\n            if v is MISSING:\n"),
 ]
 
 
