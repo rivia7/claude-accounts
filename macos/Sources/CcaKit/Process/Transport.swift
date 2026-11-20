@@ -49,6 +49,9 @@ protocol Transport: Sendable {
     func startCore(logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> CoreHandle
     /// 提问会话（PROTOCOL 4.6）：一个边问边答的 cca 进程，不限时。
     func startSession(_ arguments: [String]) throws -> CcaSession
+    /// 界面里的终端（PROTOCOL 9.3）：在 App 开的伪终端上运行 cca（`remote attach …`），不限时。读到的字节、退出码经 onEvent
+    /// （后台线程上，一个接一个）交出。
+    func startTerminal(_ arguments: [String], cols: Int, rows: Int, onEvent: @escaping @Sendable (PtyEvent) -> Void) throws -> TerminalHandle
 }
 
 /// 一个在跑的内置代理内核：停掉它（wait：等它退出再返回，App 退出前用）。
@@ -69,6 +72,11 @@ extension Transport {
     /// 测试替身：没有提问会话时流程走终端。
     func startSession(_ arguments: [String]) throws -> CcaSession {
         throw SessionUnsupported()
+    }
+
+    /// 测试替身：不开终端。
+    func startTerminal(_ arguments: [String], cols: Int, rows: Int, onEvent: @escaping @Sendable (PtyEvent) -> Void) throws -> TerminalHandle {
+        throw TerminalUnsupported()
     }
 }
 
@@ -163,6 +171,15 @@ struct ProcessTransport: Transport {
         let env = CcaEnvironment.make(base: baseEnvironment, home: home, eventsPath: events.path, prompt: true)
         let spec = ProcessSpec(executable: ccaPath, arguments: arguments, environment: env, timeout: nil)
         return try ProcessSession(spec: spec, events: events, stdout: out, stderr: err)
+    }
+
+    /// 界面里的终端（PROTOCOL 9.3）：环境和平时一样，只是这是个终端程序——给 TERM，不要 NO_COLOR；不设 CCA_EVENTS。
+    func startTerminal(_ arguments: [String], cols: Int, rows: Int, onEvent: @escaping @Sendable (PtyEvent) -> Void) throws -> TerminalHandle {
+        var env = CcaEnvironment.make(base: baseEnvironment, home: home)
+        env.removeValue(forKey: "NO_COLOR")
+        env["TERM"] = "xterm-256color"
+        let spec = ProcessSpec(executable: ccaPath, arguments: arguments, environment: env, timeout: nil)
+        return try PtyProcess(spec: spec, cols: cols, rows: rows, onEvent: onEvent)
     }
 
     /// 不设 CCA_EVENTS、不限时，输出接到 runs 目录里的一个文件（PROTOCOL 5）。

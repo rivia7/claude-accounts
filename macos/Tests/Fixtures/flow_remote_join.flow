@@ -1,0 +1,2 @@
+{"v":1,"ev":"ask","seq":1,"q":"remote.code","title":"输入配对码","message":"配对码在另一台机器上：那边运行 cca remote pair，或者在 cca App 的「远程会话」里点「显示配对码…」。配好以后这台机器可以接入那台机器上的会话。","fields":[{"id":"v","kind":"text","label":"配对码","default":"","value":"","error":"","hint":"16 个字母和数字，大小写、横线随意","optional":false}]}
+{"v":1,"ev":"result","code":"remote_paired","tool":"claude","key":null,"message":"已经和「office-linux」配对：这台机器可以接入它上面的会话"}

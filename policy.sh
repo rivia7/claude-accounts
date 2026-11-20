@@ -30,12 +30,15 @@
 #   经 gh 调 GitHub 的接口（先 gh auth login）；交互输入从终端读，CCA_TTY=答案文件 时按行读（测试用）。
 #   映射里配置了设备统计的服务器时，add / rm / mv 之后顺带把设备清单同步过去（见下面的 presence sync）。
 #
-#   ./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--dir 服务器上的目录] [-C 映射仓库的目录]
+#   ./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay] [--dir 服务器上的目录] [-C 映射仓库的目录]
 #     经 SSH 把设备统计的服务器（server/ 下的 compose.yaml 和 cca-presence.py：官方 python 镜像，只用标准库，不用构建）
 #     装到一台有 docker compose 的 Linux 上的一个目录里（默认 /root/projects/cca-presence，要 root），第一次生成自签的
 #     P-256 证书（私钥不出服务器），docker compose up -d，默认端口 18443（不用 80、443）。再从这台 Mac 钉住证书公钥连一次，
 #     把 presence 一节（地址、证书公钥的指纹、账号摘要用的盐）写进映射目录的 policy.json，推送设备清单。重复运行就是
-#     更新服务端（证书和盐不变）；迁移是把整个目录拷到新服务器后对它运行一次。之后照常 ./policy.sh 目录 发布映射
+#     更新服务端（证书和盐不变）；迁移是把整个目录拷到新服务器后对它运行一次。之后照常 ./policy.sh 目录 发布映射。
+#     同一个服务端也给远程会话做中转（cca remote pair / attach，见 docs/dev/remote.md）：另开一个数据端口，默认 18444
+#     （--relay-port 换一个，--no-relay 不开；选的记在服务器上那个目录的 .env 里，以后重新部署照旧）。数据端口是普通的 TCP：
+#     上面跑的是两台机器之间端到端加密的内容，服务器只转字节。云服务商的安全组里要另外放行这个端口
 #   ./policy.sh presence sync [-C 目录] [-R 仓库]
 #     把仓库上各台机器的 deploy key（只读、启用的 ed25519）作为设备清单，用发布密钥签名（命名空间 cca-devices）推给服务器：
 #     服务器只认这份清单里的机器，名字就是 key 的别名
@@ -57,7 +60,7 @@ usage() {
   ./policy.sh key rm 别名 [-y]                 删掉一把
   ./policy.sh key mv 别名 [新别名]             改别名
 key 默认管 cca 里写的默认映射仓库，别的仓库加 -R 维护者/仓库
-  ./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--dir 服务器上的目录] [-C 映射仓库的目录]
+  ./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay] [--dir 服务器上的目录] [-C 映射仓库的目录]
                                                经 SSH 用 docker compose 部署设备统计的服务器，把它写进映射（之后照常发布映射）
   ./policy.sh presence sync | status           把各台机器的 deploy key 同步成服务器的设备清单 / 看服务器的状态
 U
@@ -387,7 +390,7 @@ nodes_extract() {   # nodes_extract 参考配置 策略组：打印 nodes.json �
 # 设备统计的服务器（presence）：各台机器经 cca 用映射里的账号时报告给它，App 的账号页显示这个账号连着哪些设备。
 # 服务端是 server/cca-presence.py；各台机器用自己的 deploy key 签名，服务器只认发布密钥签的设备清单（命名空间 cca-devices）
 # ---------------------------------------------------------------------------
-PRESENCE_USAGE="用法：./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--dir 服务器上的目录] [-C 映射仓库的目录]
+PRESENCE_USAGE="用法：./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay] [--dir 服务器上的目录] [-C 映射仓库的目录]
       ./policy.sh presence sync | status [-C 映射仓库的目录] [-R 仓库]"
 policy_dir() { printf '%s' "${PDIR:-${CCA_POLICY_DIR:-$HERE/../cca-policy}}"; }
 mapping_repo() {   # mapping_repo 目录：映射目录推送到的 GitHub 仓库（维护者/仓库）；不是 git 仓库、没有 origin 时是空的
@@ -495,7 +498,8 @@ presence_after() {   # key add / rm / mv 之后：映射里配置了设备统计
 	if presence_sync; then echo "✓ 设备统计的服务器认得的设备跟着更新了（${P_N} 台）"
 	else echo "! 设备清单没同步到服务器：${P_ERR}（修好后运行 ./policy.sh presence sync）"; fi
 }
-presence_remote() {   # presence_remote 服务器上的目录 端口 发布公钥：在服务器上运行的安装脚本（root；文件以 base64 带过去）
+presence_remote() {   # presence_remote 服务器上的目录 端口 发布公钥 中转：在服务器上运行的安装脚本（root；文件以 base64 带过去）。
+	# 中转：数据端口；off 不开；空的照服务器上 .env 里上次选的（没选过就是 18444）
 	local f
 	cat <<SH
 set -eu
@@ -511,7 +515,7 @@ SH
 	for f in compose.yaml README.md; do printf "put %s '%s'\n" "$f" "$(base64 < "$HERE/server/$f" | tr -d '\n')"; done
 	printf "put app/cca-presence.py '%s'\n" "$(base64 < "$HERE/server/cca-presence.py" | tr -d '\n')"
 	printf "put config/release.pub '%s'\n" "$(printf '%s\n' "$3" | base64 | tr -d '\n')"
-	printf "PORT='%s'\n" "$2"
+	printf "PORT='%s'\nRELAY='%s'\n" "$2" "$4"
 	cat <<'SH'
 if [ ! -f "$D/certs/cert.pem" ]; then   # 第一次：自签的 P-256 证书（macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住），私钥不出服务器
 	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj /CN=cca-presence \
@@ -528,7 +532,13 @@ for i in $(sed -n 's/^CCA_PRESENCE_IMAGE=//p' .env 2>/dev/null) public.ecr.aws/d
 	if timeout 300 docker pull -q "$i" >/dev/null 2>&1 || docker image inspect "$i" >/dev/null 2>&1; then img="$i"; break; fi
 done
 [ -n "$img" ] || fail "拉不到 python:3.13-slim 镜像（Docker Hub 和几个同步源都连不上）：给 Docker 配上镜像加速，或者在别处 docker save 一份再 docker load 进来"
-printf 'CCA_PRESENCE_PORT=%s\nCCA_PRESENCE_IMAGE=%s\n' "$PORT" "$img" > .env.new && mv -f .env.new .env
+# 远程会话的中转：数据端口对外开在 RELAY 上；不开时容器里不监听，compose 里那一行端口只绑在本机回环上
+[ -n "$RELAY" ] || RELAY=$(sed -n 's/^CCA_RELAY=//p' .env 2>/dev/null || true)   # 第一次还没有 .env：set -e 下不能让它把脚本带走
+case "${RELAY:-18444}" in
+	off) relay="CCA_RELAY=off\nCCA_RELAY_LISTEN=\nCCA_RELAY_PORT=18444\nCCA_RELAY_BIND=127.0.0.1\n" ;;
+	*) relay="CCA_RELAY=${RELAY:-18444}\nCCA_RELAY_LISTEN=0.0.0.0:18444\nCCA_RELAY_PORT=${RELAY:-18444}\nCCA_RELAY_BIND=0.0.0.0\n" ;;
+esac
+{ printf 'CCA_PRESENCE_PORT=%s\nCCA_PRESENCE_IMAGE=%s\n' "$PORT" "$img"; printf "$relay"; } > .env.new && mv -f .env.new .env
 docker compose up -d --remove-orphans --force-recreate >/dev/null 2>&1 || { docker compose up -d --force-recreate; fail "docker compose up 失败"; }
 sleep 3
 [ "$(docker inspect -f '{{.State.Running}}' cca-presence 2>/dev/null)" = true ] || { echo "✗ 容器没起来："; docker compose logs --tail 20; exit 1; }
@@ -552,13 +562,30 @@ with open(path + ".tmp", "w", encoding="utf-8") as f:
 os.replace(path + ".tmp", path)
 PY
 }
-presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口]
-	local target="" sshport="" ident="" port=18443 rdir=/root/projects/cca-presence dir host hp pub out rc=0 pin ssh_args
+presence_relay() {   # 服务器（P_HEALTH）开没开中转、数据端口从这台 Mac 连不连得上：说一句
+	local rport host
+	rport=$(printf '%s' "$P_HEALTH" | python3 -I -c 'import json, sys
+try:
+    print(int((json.load(sys.stdin).get("relay") or {}).get("port") or 0) or "")
+except Exception:
+    pass' 2>/dev/null || true)
+	[ -n "$rport" ] || { echo "• 远程会话的中转没开（要开：./policy.sh presence deploy 主机 --relay-port 18444）"; return 0; }
+	host=$(printf '%s' "$P_URL" | sed -E 's#^https://##; s#:[0-9]+$##; s#^\[(.*)\]$#\1#')
+	if python3 -I -c 'import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 6).close()' "$host" "$rport" 2>/dev/null; then
+		echo "✓ 远程会话的中转开着，数据端口 ${rport} 从这台 Mac 连得上"
+	else
+		echo "! 远程会话的中转开着，但数据端口 ${rport} 从这台 Mac 连不上：云服务商的安全组（或轻量应用服务器的防火墙）里要放行 TCP ${rport}"
+	fi
+}
+presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay]
+	local target="" sshport="" ident="" port=18443 relay="" rdir=/root/projects/cca-presence dir host hp pub out rc=0 pin ssh_args
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			-p) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; sshport="$2"; shift ;;
 			-i) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; ident="$2"; shift ;;
 			--port) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; port="$2"; shift ;;
+			--relay-port) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; relay="$2"; shift ;;
+			--no-relay) relay=off ;;
 			--dir) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; rdir="$2"; shift ;;
 			-*) fail "$PRESENCE_USAGE" ;;
 			*) [ -z "$target" ] || fail "$PRESENCE_USAGE"; target="$1" ;;
@@ -568,6 +595,8 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 	[ -n "$target" ] || fail "$PRESENCE_USAGE"
 	[[ "$port" =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] && [ "$port" != 80 ] && [ "$port" != 443 ] ||
 		fail "--port 要是 1～65535 的端口，不用 80、443（国内没备案的服务器这两个端口会被拦）"
+	[ -z "$relay" ] || [ "$relay" = off ] || { [[ "$relay" =~ ^[0-9]{1,5}$ ]] && [ "$relay" -ge 1 ] && [ "$relay" -le 65535 ] && [ "$relay" != 80 ] && [ "$relay" != 443 ] && [ "$relay" != "$port" ]; } ||
+		fail "--relay-port 要是 1～65535 的端口，不用 80、443，也不能和 --port 一样"
 	host=${target#*@}
 	[[ "$host" =~ ^[A-Za-z0-9.:-]+$ ]] || fail "主机写错了：${host}"
 	[[ "$rdir" =~ ^/[A-Za-z0-9._/-]+$ ]] && [[ "$rdir" != *..* ]] || fail "--dir 要是服务器上的绝对路径（只用字母、数字和 . _ - /）"
@@ -580,7 +609,7 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 	[ -z "$ident" ] || ssh_args+=(-i "$ident" -o IdentitiesOnly=yes)
 	[ -z "$sshport" ] || ssh_args+=(-p "$sshport")
 	echo "• 部署设备统计的服务器到 ${target}:${rdir}（docker compose，端口 ${port}）…"
-	out=$(presence_remote "$rdir" "$port" "$pub" | ssh "${ssh_args[@]}" "$target" 'sh -s' 2>&1) || rc=$?
+	out=$(presence_remote "$rdir" "$port" "$pub" "$relay" | ssh "${ssh_args[@]}" "$target" 'sh -s' 2>&1) || rc=$?
 	printf '%s\n' "$out" | grep -v '^PIN ' | sed 's/^/  /' || true
 	pin=$(printf '%s\n' "$out" | sed -n 's/^PIN //p' | tail -n 1)
 	[ "$rc" = 0 ] && [[ "$pin" =~ ^sha256//[A-Za-z0-9+/]{43}=$ ]] || fail "部署没完成（上面是服务器那边的输出）"
@@ -590,6 +619,7 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 	if presence_health; then
 		printf '%s' "$P_HEALTH" | grep -q '"sig_ok":true' || echo "! 服务器上的验签自检没通过：各台机器的上报会被拒绝（在服务器上 docker compose logs 看看）"
 		echo "✓ 从这台 Mac 连得上（证书和指纹对得上）"
+		presence_relay
 		if presence_sync; then echo "✓ 设备清单已推给服务器（${P_N} 台）"
 		else echo "! 设备清单没推上去：${P_ERR}（修好后运行 ./policy.sh presence sync）"; fi
 	else
@@ -605,6 +635,7 @@ presence_status() {
 j = json.load(sys.stdin)
 print("✓ 设备统计的服务器在（%s）：认得 %d 台设备（设备清单 #%s），签名自检%s" % (sys.argv[1], j.get("machines") or 0, j.get("seq"),
       "通过" if j.get("sig_ok") else "没通过：各台机器的上报都会被拒绝"))' "$P_URL"
+	presence_relay
 }
 presence_cmd() {
 	local sub="${1:-}" args=()

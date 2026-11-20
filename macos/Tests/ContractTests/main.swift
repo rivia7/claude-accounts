@@ -3,6 +3,7 @@ import Foundation
 // MARK: - 运行
 
 if cli.first == "--session-smoke" { exit(await sessionSmoke(Array(cli.dropFirst()))) }
+if cli.first == "--terminal-smoke" { exit(await terminalSmoke(Array(cli.dropFirst()))) }
 
 print("cca App 契约测试：\(fullMode ? "完整（手写数据 + 单元测试）" : "通用（只解码 + 不变量）")，目录 \(fixtureDir.path)")
 _ = runGeneric()
@@ -42,6 +43,10 @@ if fullMode {
     await clientAutoInstallModelTests()
     await pollingTests()
     await devicesTests()
+    remoteProtocolTests()
+    await remoteFlowTests()
+    await remoteModelTests()
+    await ptyProcessTests()
     await mailTests()
     arrangementTests()
     await accountListModelTests()

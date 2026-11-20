@@ -203,6 +203,11 @@ struct FixtureTransport: Transport {
             return CcaResponse(exitCode: 0, stdout: Data(("sk-demo-" + String(repeating: "0", count: 24) + "Demo").utf8), stderr: Data(), events: [])
         case ("key", _) where args.contains("--forget"):
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [])
+        case ("remote", "list"):
+            return json("remote_list.json")
+        case ("remote", "on"), ("remote", "off"), ("remote", "allow"), ("remote", "unpair"):
+            let e = CcaEvent.result(ResultEvent(code: .remoteUpdated, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: .claude, key: nil))
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
         default:
             let cmd = (["cca"] + request.arguments).joined(separator: " ")
             return CcaResponse(exitCode: 2, stdout: Data(), stderr: Data("演示模式不支持：\(cmd)\n".utf8), events: [])
@@ -230,6 +235,38 @@ struct FixtureTransport: Transport {
         let name = "flow_" + args.joined(separator: "_") + ".flow"
         guard let d = read(name) else { throw SessionUnsupported() }
         return DemoSession(data: d)
+    }
+
+    /// 界面里的终端的演示：显示 `remote_terminal.txt` 里的那一屏（没有这个文件就和不支持一样），按键不管，断开就结束。
+    func startTerminal(_ arguments: [String], cols: Int, rows: Int, onEvent: @escaping @Sendable (PtyEvent) -> Void) throws -> TerminalHandle {
+        guard let d = read("remote_terminal.txt") else { throw TerminalUnsupported() }
+        // 文件里是普通的换行（git 会把 CR LF 换掉），终端要的是 CR LF
+        let text = String(decoding: d, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
+        return DemoTerminal(screen: Data(text.utf8), onEvent: onEvent)
+    }
+}
+
+/// 演示用的终端：给一屏固定的内容。
+final class DemoTerminal: TerminalHandle, @unchecked Sendable {
+    private let lock = NSLock()
+    private var ended = false
+    private let onEvent: @Sendable (PtyEvent) -> Void
+
+    init(screen: Data, onEvent: @escaping @Sendable (PtyEvent) -> Void) {
+        self.onEvent = onEvent
+        DispatchQueue.global().async { onEvent(.output(screen)) }
+    }
+
+    func write(_ data: Data) {}
+
+    func resize(cols: Int, rows: Int) {}
+
+    func close() {
+        let first = lock.withLock { () -> Bool in
+            defer { ended = true }
+            return !ended
+        }
+        if first { DispatchQueue.global().async { [onEvent] in onEvent(.exited(0)) } }
     }
 }
 

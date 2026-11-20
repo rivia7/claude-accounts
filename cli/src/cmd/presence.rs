@@ -106,6 +106,12 @@ pub fn presence_load() -> R<(String, Option<Dict>)> {
     if off {
         return Ok(("这台 Mac 关掉了设备统计（config.json 里写着 \"presence\": false）".into(), None));
     }
+    presence_server()
+}
+
+/// 维护者的服务器的配置，不看这台 Mac 关没关设备统计：远程会话的中转（docs/dev/remote.md）也经这台服务器，
+/// 那是用户自己配对了才用的，和上报不上报是两回事
+pub fn presence_server() -> R<(String, Option<Dict>)> {
     let Some(j) = load_quiet(&POLICY_FILE).and_then(|j| j.as_dict()) else {
         return Ok(("这台 Mac 没有配置维护者的映射（cca policy setup）".into(), None));
     };
@@ -402,7 +408,21 @@ pub fn presence_scan(
     now: f64,
     mono: f64,
 ) -> R<(Dict, Vec<i64>)> {
+    presence_scan_with(salt, targets, procs, apps, now, mono, &super::remote::hosted_activity)
+}
+
+/// `presence_scan`，宿主里的会话最后一次有动静的时间由调用方给（宿主的进程号 → 时间；用到才取，一轮最多取一次）
+pub fn presence_scan_with(
+    salt: &str,
+    targets: &[Target],
+    procs: &Procs,
+    apps: &mut AppSamples,
+    now: f64,
+    mono: f64,
+    hosted: &dyn Fn() -> HashMap<i64, f64>,
+) -> R<(Dict, Vec<i64>)> {
     let units = Dict::new();
+    let mut hosts: Option<HashMap<i64, f64>> = None;
     let mut pids: Vec<i64> = Vec::new();
     let mut live: HashSet<(i64, i64)> = HashSet::new();
     let mut kids: HashMap<i64, Vec<i64>> = HashMap::new();
@@ -429,14 +449,23 @@ pub fn presence_scan(
             }
             watch(pid);
             let since = m.at("since").as_pynum().unwrap_or(0.0);
-            let mut last = now; // 没有终端（脚本里的 claude -p 之类）：在跑就是在干活
+            // 最后一次有动静：终端的最后一次输入、输出；会话在宿主里的（远程会话：启动它的终端没了也照样运行，别的机器上的输入
+            // 也不经过那个终端）再看宿主记的那一次。宿主是 cca 的子进程
+            let mut seen: Option<f64> = None;
             let tty = &procs.get(pid).expect("cli_alive 说它在 procs 里").tty;
             if TTY_RE.matches(tty) {
                 if let Ok(st) = std::fs::metadata(format!("/dev/{tty}")) {
-                    // 最后一次输入、输出
-                    last = since.max(shutil::stat_time(st.atime(), st.atime_nsec())).max(shutil::st_mtime(&st));
+                    seen = Some(shutil::stat_time(st.atime(), st.atime_nsec()).max(shutil::st_mtime(&st)));
                 }
             }
+            if let Some(children) = kids.get(&pid) {
+                let hosts = hosts.get_or_insert_with(hosted);
+                if let Some(at) = children.iter().filter_map(|c| hosts.get(c)).copied().reduce(f64::max) {
+                    seen = Some(seen.map_or(at, |s| s.max(at)));
+                }
+            }
+            // 都没有（脚本里的 claude -p 之类，没有终端）：在跑就是在干活
+            let last = seen.map_or(now, |s| since.max(s));
             cli.push(list![num::round((now - since).max(0.0)), num::round((now - last).max(0.0))]);
         }
         let mut app = V::None;
@@ -1291,6 +1320,38 @@ mod tests {
             scan("??", 1000, true).0,
             format!("{{\"{aid}\": {{\"cli\": [[300, 0]], \"app\": null}}}}"),
             "没有终端：在跑就算在干活"
+        );
+        // 会话在宿主里（远程会话）：宿主（4300）是 cca（4242）的子进程，它记着最后一次动静
+        let hosted = |tty_: &str, act: f64| {
+            let rows = vec![
+                (4242, ProcInfo { ppid: 1, tty: tty_.to_string(), cpu: 1.0, start: 1000, cmd: "bash cca".into() }),
+                (4300, ProcInfo { ppid: 4242, tty: "??".into(), cpu: 1.0, start: 1001, cmd: "cca-core remote-host".into() }),
+                (4400, ProcInfo { ppid: 1, tty: "??".into(), cpu: 1.0, start: 1001, cmd: "cca-core remote-host".into() }),
+            ];
+            let acts = move || HashMap::from([(4300, act), (4400, now)]);
+            let (units, _) =
+                presence_scan_with(salt, &targets, &Procs::from_rows(rows), &mut AppSamples::new(), now, 1000.0, &acts).unwrap();
+            json::dumps(&V::Dict(units), json::LINE)
+        };
+        assert_eq!(
+            hosted("??", now - 200.0),
+            format!("{{\"{aid}\": {{\"cli\": [[300, 200]], \"app\": null}}}}"),
+            "启动它的终端没了：闲置按宿主记的最后一次动静算（别的 cca 的宿主不算）"
+        );
+        assert_eq!(
+            hosted(&short, now - 30.0),
+            format!("{{\"{aid}\": {{\"cli\": [[300, 30]], \"app\": null}}}}"),
+            "终端还在：取终端和宿主里晚的那个（别的机器上的输入不经过这个终端）"
+        );
+        assert_eq!(
+            hosted(&short, now - 250.0),
+            format!("{{\"{aid}\": {{\"cli\": [[300, 120]], \"app\": null}}}}"),
+            "终端更晚有动静就按终端的"
+        );
+        assert_eq!(
+            hosted("??", now - 900.0),
+            format!("{{\"{aid}\": {{\"cli\": [[300, 300]], \"app\": null}}}}"),
+            "不早于会话开始的时候"
         );
     }
 

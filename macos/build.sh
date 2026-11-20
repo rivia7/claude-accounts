@@ -8,7 +8,8 @@
 #   --arch A      universal（默认，arm64 + x86_64）| arm64 | native（本机）
 #   --debug       不优化（-Onone -g），只编本机架构；带上 DEBUG 才有的截图模式（Snapshot.swift）
 #
-# 步骤：编译 CcaKit + CcaApp → 画图标（有缓存）→ 写 Info.plist → 组装 → ad-hoc 签名 → 校验签名 → 运行 --self-check。
+# 步骤：编译 SwiftTerm（Vendor/SwiftTerm，单独一个模块，有缓存）→ 编译 CcaKit + CcaApp → 画图标（有缓存）→ 写 Info.plist →
+# 组装 → ad-hoc 签名 → 校验签名 → 运行 --self-check。
 # stdout 只输出 .app 的路径，进度写 stderr。
 set -euo pipefail
 
@@ -87,13 +88,79 @@ else
 	OPT=(-O)
 fi
 
+# ---------------------------------------------------------------- SwiftTerm（放进仓库的第三方源码，见 Vendor/SwiftTerm/README.md）
+# 「远程会话」里的终端用它显示。单独一个模块（它导出 Color、Terminal 这些常见的名字，不和 App 编在一起），每个架构一份
+# 目标文件和 .swiftmodule；源码、编译器都没变时用上次编好的（编一次约半分钟）。总是优化、不带 DEBUG：调试版的 App 也用这一份
+ST_SRC=()
+while IFS= read -r f; do ST_SRC+=("$f"); done < <(find "$HERE/Vendor/SwiftTerm" -name '*.swift' | LC_ALL=C sort)
+[ ${#ST_SRC[@]} -gt 0 ] || die "没找到 SwiftTerm 的源码（macos/Vendor/SwiftTerm）"
+ST="$BUILD/swiftterm"
+ST_FLAGS=(-parse-as-library -O -whole-module-optimization -swift-version 5 -suppress-warnings -module-name SwiftTerm)
+# 图形协议整个不要：终端里的内容来自别的机器（docs/dev/remote.md「界面 App」），Kitty 的那一套能让终端里的内容叫它打开这台 Mac 上的
+# 文件、把成不成告诉对方，sixel 是又一个解码别人给的图的入口。上游没有开关，源码又要原样留着（SHA256SUMS）：编的时候用改过分派
+# 那两行的一份 EscapeSequenceParser.swift。两处都得正好各有一处、都换上了才往下走——上游改了写法就停在这里，不能悄悄带着它编出去；
+# 编好以后再喂它几条试一遍（tools/swiftterm-check）
+ST_PARSER="$HERE/Vendor/SwiftTerm/Sources/SwiftTerm/EscapeSequenceParser.swift"
+ST_KITTY='case 0x47: terminal.handleKittyGraphics(content)'
+ST_SIXEL='return SixelDcsHandler(terminal: terminal)'
+ST_CHECK="$HERE/tools/swiftterm-check/main.swift"
+[ -f "$ST_PARSER" ] && [ -f "$ST_CHECK" ] || die "没找到 $ST_PARSER 或者 $ST_CHECK"
+[ "$(grep -cF "$ST_KITTY" "$ST_PARSER" || true)" = 1 ] && [ "$(grep -cF "$ST_SIXEL" "$ST_PARSER" || true)" = 1 ] ||
+	die "SwiftTerm 的 EscapeSequenceParser.swift 里分派图形协议的那两行对不上（上游改了写法？）：见 Vendor/SwiftTerm/README.md「不要的功能」"
+mkdir -p "$ST/src"
+sed -e "s|$ST_KITTY|case 0x47: break|" -e "s|$ST_SIXEL|return nil|" "$ST_PARSER" >"$ST/src/EscapeSequenceParser.swift"
+if grep -qF -e "$ST_KITTY" -e "$ST_SIXEL" "$ST/src/EscapeSequenceParser.swift" || ! grep -qF 'case 0x47: break' "$ST/src/EscapeSequenceParser.swift"; then
+	die "没能把 SwiftTerm 分派图形协议的那两行换掉"
+fi
+ST_BUILD=()
+for f in "${ST_SRC[@]}"; do
+	if [ "$f" = "$ST_PARSER" ]; then ST_BUILD+=("$ST/src/EscapeSequenceParser.swift"); else ST_BUILD+=("$f"); fi
+done
+# 源码（换过那两行的）、自检、编译器、SDK、编译选项有一样变了就重编（按架构各一份：目标写在目录名里）
+ST_SUM=$( { swiftc --version 2>&1; xcrun --show-sdk-version 2>&1; printf '%s\n' "${ST_FLAGS[@]}" macos26.0 "${ST_SRC[@]#"$HERE"/}"; cat "${ST_BUILD[@]}" "$ST_CHECK"; } | shasum -a 256 | cut -d' ' -f1)
+pids=""
+for a in $ARCHS; do
+	mkdir -p "$ST/$a"
+	if [ "$(cat "$ST/$a/sum" 2>/dev/null || true)" = "$ST_SUM" ] && [ -s "$ST/$a/SwiftTerm.o" ] && [ -s "$ST/$a/SwiftTerm.swiftmodule" ]; then
+		continue
+	fi
+	[ -n "$pids" ] || info "编译 SwiftTerm（终端的显示；源码没变时只编这一次，约半分钟）…"
+	(
+		rm -f "$ST/$a/sum"
+		swiftc "${ST_FLAGS[@]}" \
+			-target "$a-apple-macos26.0" -emit-module -emit-module-path "$ST/$a/SwiftTerm.swiftmodule" \
+			-emit-object -o "$ST/$a/SwiftTerm.o" "${ST_BUILD[@]}" >"$ST/build-$a.log" 2>&1 || exit 1
+		# 自检：这台机器跑得了的架构都跑（Apple 芯片的 Mac 上 Intel 的那一份经 Rosetta；跑不了的那一份和跑了的是同一份源码编的）
+		if [ "$a" = "$HOST" ] || arch "-$a" /usr/bin/true 2>/dev/null; then
+			swiftc -O -swift-version 5 -suppress-warnings -target "$a-apple-macos26.0" -I "$ST/$a" "$ST_CHECK" "$ST/$a/SwiftTerm.o" \
+				-o "$ST/$a/check" >>"$ST/build-$a.log" 2>&1 || exit 1
+			"$ST/$a/check" >>"$ST/build-$a.log" 2>&1 || exit 1
+		fi
+		printf '%s\n' "$ST_SUM" >"$ST/$a/sum"
+	) &
+	pids="$pids $!"
+done
+failed=0
+for p in $pids; do
+	wait "$p" || failed=1
+done
+if [ "$failed" = 1 ]; then
+	for a in $ARCHS; do
+		if grep -q 'error:' "$ST/build-$a.log" 2>/dev/null; then
+			printf '\n----- SwiftTerm %s -----\n' "$a" >&2
+			grep -E 'error:' -A3 "$ST/build-$a.log" | head -n 60 >&2
+		fi
+	done
+	die "编译 SwiftTerm 失败，或者它的自检没过（完整日志在 $ST/build-*.log）"
+fi
+
 # ---------------------------------------------------------------- 编译（几个架构同时编）
 info "编译 cca ${VERSION}（$ARCHS$( [ "$DEBUG" = 1 ] && printf '，调试版' )）…"
 pids=""
 for a in $ARCHS; do
 	(
 		swiftc -parse-as-library "${OPT[@]}" -swift-version 5 -module-name cca -target "$a-apple-macos26.0" \
-			"${SOURCES[@]}" -o "$OBJ/cca-$a" >"$OBJ/build-$a.log" 2>&1
+			-I "$ST/$a" "${SOURCES[@]}" "$ST/$a/SwiftTerm.o" -o "$OBJ/cca-$a" >"$OBJ/build-$a.log" 2>&1
 	) &
 	pids="$pids $!"
 done
@@ -150,6 +217,9 @@ mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources/zh-Hans.lproj"
 cp "$BIN" "$STAGE/Contents/MacOS/cca"
 chmod 755 "$STAGE/Contents/MacOS/cca"
 cp "$ICNS" "$STAGE/Contents/Resources/AppIcon.icns"
+# 编进来的第三方源码的许可证随 App 一起带（MIT 要求连同版权声明一起分发）
+mkdir -p "$STAGE/Contents/Resources/Licenses"
+cp "$HERE/Vendor/SwiftTerm/LICENSE" "$STAGE/Contents/Resources/Licenses/SwiftTerm.txt"
 printf 'APPL????' >"$STAGE/Contents/PkgInfo"
 # 只有中文：系统提供的菜单（退出、隐藏……）也显示中文
 printf '"CFBundleDisplayName" = "cca";\n"CFBundleName" = "cca";\n' >"$STAGE/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"

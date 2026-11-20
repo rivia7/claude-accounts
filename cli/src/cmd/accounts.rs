@@ -113,6 +113,8 @@ pub fn cmd_env(args: &[String]) -> R<()> {
             )),
         ),
         ("CCA_MIN_TRUST", c.at("min_trust")),
+        // 远程会话的开关（cca remote on）：开着时 run_account 把客户端放进会话宿主里运行
+        ("CFG_REMOTE", V::from(if super::remote::remote_on(&c) { "1" } else { "" })),
     ]);
     sh_array("ACC_ARGS", &t().run_args(&key, &v));
     sh_array("ACC_FLAGS", &t().flags());

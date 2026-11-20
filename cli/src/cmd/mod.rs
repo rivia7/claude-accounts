@@ -17,6 +17,7 @@ pub mod link;
 pub mod login;
 pub mod mail;
 pub mod presence;
+pub mod remote;
 pub mod router;
 pub mod secrets;
 pub mod session;
@@ -64,6 +65,7 @@ const MODULES: &[&[Cmd]] = &[
     dock::CMDS,
     clients::CMDS,
     shell::CMDS,
+    remote::CMDS,
 ];
 
 /// 按名字找子命令
@@ -256,12 +258,14 @@ mod tests {
         assert_eq!((NAMES[0], NAMES[152]), ("init", "gui-mail-list"));
     }
 
-    /// 原来的 149 个子命令（加上切换以后新加的）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）；没有登记两次的
+    /// 原来的 149 个子命令（加上切换以后新加的）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）和 `remote-…`
+    /// （远程会话，辅助程序里新写的，见 remote.rs）；没有登记两次的
     #[test]
     fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();
         for c in MODULES.iter().flat_map(|m| m.iter()) {
-            assert!(NAMES.contains(&c.name) || c.name.starts_with("sh-") || c.name.starts_with('_'), "{} 不是原来的子命令", c.name);
+            let added = c.name.starts_with("sh-") || c.name.starts_with('_') || c.name.starts_with("remote-");
+            assert!(NAMES.contains(&c.name) || added, "{} 不是原来的子命令", c.name);
             assert!(!seen.contains(&c.name), "{} 登记了两次", c.name);
             seen.push(c.name);
         }

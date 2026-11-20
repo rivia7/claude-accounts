@@ -27,10 +27,12 @@
 import argparse
 import base64
 import hashlib
+import hmac
 import http.server
 import json
 import os
 import re
+import selectors
 import socket
 import ssl
 import sys
@@ -349,10 +351,22 @@ class Store:
         with self.lock:
             return self.data['machines'].get(fp) if isinstance(fp, str) else None
 
-    def health(self, sig_ok):
+    def name(self, fp):
+        """设备清单里这台设备的名字（没有是 None）"""
+        m = self.machine(fp)
+        return m['name'] if m else None
+
+    def fps(self):
         with self.lock:
-            return {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'],
-                    'ops': ['report', 'view'] + list(SYNC_OPS)}
+            return set(self.data['machines'])
+
+    def health(self, sig_ok, relay=None):
+        with self.lock:
+            out = {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'],
+                   'ops': ['report', 'view'] + list(SYNC_OPS) + (list(RELAY_OPS) if relay else [])}
+            if relay:
+                out['relay'] = {'port': relay}
+            return out
 
     def set_machines(self, body, sig, release_key):
         if not ssh_verify(release_key, NS_MACHINES, body, sig):
@@ -525,6 +539,566 @@ class Store:
                     'ttl': self.ttl, 'idle': self.idle, 'accounts': out}
 
 
+# ---------------------------------------------------------------- 远程会话的中转（--relay-listen 才开；格式见 README.md）
+RELAY_OPS = ('pair_open', 'pair_put', 'pair_get', 'pair_commit', 'pair_close', 'pair_drop', 'relay_host', 'relay_attach', 'relay_list')
+PAIR_TTL = 600             # 配对码多久过期
+PAIR_SLOTS = 4             # 一台设备同时开着几个配对
+PAIR_WAIT = 10             # pair_get 最多等对方多久（要比 CONN_DEADLINE 短）
+PAIR_WAITERS = threading.BoundedSemaphore(16)   # 同时等着的 pair_get（多了的不等、马上回）
+PAIR_MSG = 2048            # 配对时交换的一份密文（base64）最长多少个字符
+EDGES_DEV = 16             # 一台设备最多和几台配对
+EDGES_MAX = 4096
+EDGE_IDLE = 180 * 86400    # 这么久没用过的配对删掉
+TICKET_TTL = 30            # 票据多久过期（只能用一次）
+TICKETS_DEV = 16           # 一台设备手里没用掉的票据
+SESSIONS_DEV = 8           # 一台设备同时开着几个可以接入的会话
+VIEWERS = 4                # 一个会话同时几处接入
+DIR_BLOB = 4096            # 会话的说明（密文，base64）最长多少个字符
+RELAY_CONN = 256           # 数据端口同时几个连接
+RELAY_CONN_IP = 32
+RELAY_QUEUE = 256 * 1024   # 一头还没转出去的超过这么多，就先不从另一头读
+RELAY_IDLE = 90            # 这么久一个字节都没有的连接断开（两头各自每 20 秒会说一声）
+RELAY_GRACE = 60           # 会话的控制连接断了以后，会话留这么久等它重连
+PREAMBLE_WAIT = 5          # 连上以后这么久还没说完开场白就断开
+JOIN_WAIT = 10             # 接入方等宿主那一头连上来最多这么久
+CTL_FRAME = 32 * 1024      # 控制连接上一帧最长
+F_JOIN, F_PING, F_PONG, F_ANNOUNCE, F_BYE = 0x02, 0x06, 0x07, 0x08, 0x09
+RELAY_LINE = re.compile(rb'^CCA-RELAY/1 (host|view|join) ([0-9a-f]{32}) ([0-9a-f]{16}) ([A-Za-z0-9_-]{43})$')
+
+
+def b64u(b):
+    return base64.urlsafe_b64encode(b).rstrip(b'=')
+
+
+def hmac256(key, msg):
+    return hmac.new(key, msg, hashlib.sha256).digest()
+
+
+class Remote:
+    """远程会话的中转记着的：
+    - edges（remote.json，撤销设备、180 天没用过才删）：{配对编号: {"a": 显示配对码的设备, "b": 输入配对码的设备, "at", "used"}}。
+      配对编号是两台设备从配对出来的密钥算的，服务器只知道是哪两台设备配了对
+    - 下面的只在内存里：slots（正在进行的配对：两边各放一份密文、各报一次配对编号）、tickets（进数据端口的票据）、
+      sessions（开着的会话：哪台设备的、给哪几个配对看、每个配对一份说明的密文、控制连接）"""
+    def __init__(self, path, port):
+        self.path, self.port = path, port
+        self.lock = threading.RLock()
+        self.cond = threading.Condition(self.lock)
+        self.doc = {'v': 1, 'edges': {}}
+        self.doc.update(load_doc(path, ('edges',)) or {})
+        self.doc['edges'] = {p: e for p, e in self.doc['edges'].items()
+                             if isinstance(p, str) and AID_RE.match(p) and isinstance(e, dict)
+                             and all(isinstance(e.get(k), str) and FP_RE.match(e[k]) for k in ('a', 'b'))}
+        self.slots, self.tickets, self.sessions = {}, {}, {}
+
+    @property
+    def edges(self):
+        return self.doc['edges']
+
+    def save(self):
+        save_doc(self.path, self.doc)
+
+    def member(self, pid, fp):
+        e = self.edges.get(pid) if isinstance(pid, str) else None
+        return bool(e) and fp in (e['a'], e['b'])
+
+    def other(self, pid, fp):
+        e = self.edges[pid]
+        return e['b'] if e['a'] == fp else e['a']
+
+    def keep_only(self, fps):
+        """设备清单换了：撤销的设备的配对、票据、会话都删掉（它的控制连接由数据端口那边发现会话没了时断开）"""
+        with self.lock:
+            gone = [p for p, e in self.edges.items() if e['a'] not in fps or e['b'] not in fps]
+            for p in gone:
+                self.drop_edge(p)
+            self.tickets = {t: k for t, k in self.tickets.items() if k['fp'] in fps}
+            for sid in [s for s, x in self.sessions.items() if x['fp'] not in fps]:
+                self.sessions.pop(sid)
+            if gone:
+                self.save()
+
+    def drop_edge(self, pid):
+        self.edges.pop(pid, None)
+        for sid in list(self.sessions):
+            x = self.sessions[sid]
+            if pid in x['pids']:
+                x['pids'] = [p for p in x['pids'] if p != pid]
+                x['blobs'].pop(pid, None)
+
+    def sweep(self, now):
+        """过期的配对、票据，很久没用的配对"""
+        for rid in [r for r, s in self.slots.items() if s['exp'] < now]:
+            self.slots.pop(rid)
+        for tid in [t for t, k in self.tickets.items() if k['exp'] < now]:
+            self.tickets.pop(tid)
+        old = [p for p, e in self.edges.items() if max(e.get('used') or 0, e.get('at') or 0) < now - EDGE_IDLE]
+        for p in old:
+            self.drop_edge(p)
+        if old:
+            self.save()
+
+    def ticket(self, now, **what):
+        if sum(1 for k in self.tickets.values() if k['fp'] == what['fp']) >= TICKETS_DEV:
+            return 429, {'error': 'rate'}
+        tid, key = os.urandom(16).hex(), os.urandom(32)
+        self.tickets[tid] = dict(what, key=key, exp=now + TICKET_TTL)
+        return 200, {'v': API, 'ok': True, 'tid': tid, 'tkey': base64.b64encode(key).decode(), 'port': self.port, 'ttl': TICKET_TTL}
+
+    def take_ticket(self, tid, role, now, proof):
+        """用掉一张票据。proof(票据的密钥) 核对来的人确实有这把密钥：对不上的不算用掉（光知道编号的人废不了别人的票据）"""
+        with self.lock:
+            k = self.tickets.get(tid)
+            if not k or k['role'] != role or k['exp'] < now or not proof(k['key']):
+                return None
+            return self.tickets.pop(tid)
+
+    def op(self, op, fp, j, now, name_of):
+        """签名、时间、nonce 都验过了的请求。返回 (状态码, 回的内容)"""
+        hex32 = lambda x: isinstance(x, str) and bool(AID_RE.match(x))
+        with self.lock:
+            self.sweep(now)
+            if op.startswith('pair_') and op != 'pair_drop':
+                rid = j.get('rid')
+                if not hex32(rid):
+                    return 400, {'error': 'bad'}
+                s = self.slots.get(rid)
+                if op == 'pair_open':
+                    if s is not None:
+                        return 409, {'error': 'taken'}
+                    if sum(1 for x in self.slots.values() if x['owner'] == fp) >= PAIR_SLOTS:
+                        return 429, {'error': 'rate'}
+                    self.slots[rid] = {'owner': fp, 'joiner': None, 'msgs': {}, 'commit': {}, 'done': False, 'exp': now + PAIR_TTL}
+                    return 200, {'v': API, 'ok': True, 'ttl': PAIR_TTL}
+                if s is None:
+                    return 404, {'error': 'no_pairing'}
+                if fp != s['owner'] and s['joiner'] is None and op == 'pair_put':
+                    s['joiner'] = fp   # 头一个放密文进来的别的设备
+                if fp not in (s['owner'], s['joiner']):
+                    return 409, {'error': 'taken'}
+                peer = s['joiner'] if fp == s['owner'] else s['owner']
+                if op == 'pair_close':   # 这一边中途不做了：这次配对作废（已经记下的配对不受影响），等着的那一边马上知道
+                    self.slots.pop(rid)
+                    self.cond.notify_all()
+                    return 200, {'v': API, 'ok': True}
+                if op == 'pair_put':
+                    m = parse_blob(j.get('m'), PAIR_MSG)
+                    if m is None or fp in s['msgs']:
+                        return 400, {'error': 'bad'}
+                    s['msgs'][fp] = m
+                    self.cond.notify_all()
+                    return 200, {'v': API, 'ok': True}
+                if op == 'pair_get':
+                    # 等对方放密文进来（until 是 "done" 时等两边都报了配对编号），最多 wait 秒；等不到照现在的回
+                    wait = j.get('wait')
+                    wait = min(float(wait), PAIR_WAIT) if num_ok(wait) else 0
+                    done_only = j.get('until') == 'done'
+
+                    def theirs():
+                        p = s['joiner'] if fp == s['owner'] else s['owner']
+                        return p, (s['msgs'].get(p) if p else None)
+                    ready = lambda: s['done'] or (not done_only and theirs()[1] is not None) or self.slots.get(rid) is not s
+                    if wait > 0 and not ready() and PAIR_WAITERS.acquire(blocking=False):
+                        try:
+                            end = time.monotonic() + wait
+                            while not ready() and end - time.monotonic() > 0:
+                                self.cond.wait(end - time.monotonic())
+                        finally:
+                            PAIR_WAITERS.release()
+                    peer, m = theirs()
+                    return 200, {'v': API, 'ok': True, 'm': m, 'fp': peer if m else None, 'name': name_of(peer) if m else None,
+                                 'done': s['done']}
+                if op == 'pair_commit':
+                    pid = j.get('pid')
+                    if not hex32(pid) or s['joiner'] is None:
+                        return 400, {'error': 'bad'}
+                    s['commit'][fp] = pid
+                    both = [s['commit'].get(s['owner']), s['commit'].get(s['joiner'])]
+                    if None not in both and not s['done']:
+                        if both[0] != both[1] or pid in self.edges:
+                            self.slots.pop(rid)
+                            self.cond.notify_all()
+                            return 409, {'error': 'mismatch'}
+                        for who in (s['owner'], s['joiner']):
+                            if sum(1 for e in self.edges.values() if who in (e['a'], e['b'])) >= EDGES_DEV:
+                                self.slots.pop(rid)
+                                self.cond.notify_all()
+                                return 429, {'error': 'edges'}
+                        if len(self.edges) >= EDGES_MAX:
+                            return 507, {'error': 'full'}
+                        # 同两台设备以前配过的换掉（重新配对）
+                        for old in [p for p, e in self.edges.items() if {e['a'], e['b']} == {s['owner'], s['joiner']}]:
+                            self.drop_edge(old)
+                        self.edges[pid] = {'a': s['owner'], 'b': s['joiner'], 'at': now, 'used': now}
+                        s['done'] = True
+                        s['exp'] = min(s['exp'], now + 60)   # 留一会儿，先报的那一边还要来问一次
+                        self.save()
+                        self.cond.notify_all()
+                    return 200, {'v': API, 'ok': True, 'done': s['done']}
+            if op == 'pair_drop':
+                pid = j.get('pid')
+                if not hex32(pid):
+                    return 400, {'error': 'bad'}
+                if self.member(pid, fp):
+                    self.drop_edge(pid)
+                    self.save()
+                return 200, {'v': API, 'ok': True}
+            if op == 'relay_host':
+                sid, pids = j.get('sid'), j.get('pids')
+                if not (hex32(sid) and isinstance(pids, list) and 0 < len(pids) <= EDGES_DEV and all(hex32(p) for p in pids)):
+                    return 400, {'error': 'bad'}
+                pids = [p for p in dict.fromkeys(pids) if self.member(p, fp)]
+                if not pids:
+                    return 404, {'error': 'no_pairing'}
+                cur = self.sessions.get(sid)
+                if cur and cur['fp'] != fp:
+                    return 409, {'error': 'taken'}
+                if not cur and sum(1 for x in self.sessions.values() if x['fp'] == fp) >= SESSIONS_DEV:
+                    return 429, {'error': 'sessions'}
+                return self.ticket(now, role='host', fp=fp, sid=sid, pids=pids)
+            if op == 'relay_attach':
+                sid, pid = j.get('sid'), j.get('pid')
+                if not (hex32(sid) and hex32(pid)):
+                    return 400, {'error': 'bad'}
+                x = self.sessions.get(sid)
+                if not self.member(pid, fp) or not x or pid not in x['pids'] or x['fp'] != self.other(pid, fp):
+                    return 404, {'error': 'no_session'}
+                if x['viewers'] >= VIEWERS:
+                    return 429, {'error': 'busy'}
+                if now - (self.edges[pid].get('used') or 0) > 86400:   # 最近用过：一天最多记一次、写一次盘（180 天没用过的配对会删掉）
+                    self.edges[pid]['used'] = now
+                    self.save()
+                return self.ticket(now, role='view', fp=fp, sid=sid, pid=pid)
+            if op == 'relay_list':
+                pids = j.get('pids')
+                if not (isinstance(pids, list) and len(pids) <= EDGES_DEV and all(hex32(p) for p in pids)):
+                    return 400, {'error': 'bad'}
+                out, peers = {}, {}
+                for pid in dict.fromkeys(pids):
+                    if not self.member(pid, fp):
+                        continue   # 对方取消了配对（或者从来没有）：不在回的里面
+                    peer = self.other(pid, fp)
+                    peers[pid] = {'fp': peer, 'name': name_of(peer)}
+                    out[pid] = [{'sid': sid, 'blob': x['blobs'][pid], 'age': ago(now, x['since']), 'viewers': x['viewers'],
+                                 'online': x['conn'] is not None}
+                                for sid, x in self.sessions.items() if x['fp'] == peer and pid in x['blobs']]
+                return 200, {'v': API, 'ok': True, 'peers': peers, 'sessions': out}
+        return 404, {'error': 'not_found'}
+
+
+class RelayConn:
+    __slots__ = ('sock', 'ip', 'state', 'inb', 'out', 'peer', 'born', 'seen', 'sid', 'pid', 'key', 'reply', 'paused', 'events')
+
+    def __init__(self, sock, ip, now):
+        self.sock, self.ip, self.state, self.inb, self.out = sock, ip, 'pre', bytearray(), bytearray()
+        self.peer, self.born, self.seen, self.sid, self.key, self.reply, self.paused, self.events = None, now, now, None, None, None, False, 0
+        self.pid = None   # 接入方的连接、和它对接的那一条：是哪个配对的（配对没了就断开）
+
+
+class Relay(threading.Thread):
+    """数据端口：一条线程用 selectors 管所有连接。连上来先说一行开场白（可见的 ASCII），凭票据进来：
+    - host：会话的控制连接（一个会话一条）。之后是帧：类型(1) 长度(2) 内容——宿主说 ANNOUNCE（各个配对的说明密文）、PING、BYE，
+      服务器说 JOIN（有接入方来了：带一个令牌）、PONG
+    - view：接入方。服务器给宿主的控制连接发 JOIN，等宿主拿着令牌另连一条（join）上来，再回 OK
+    - join：宿主为这个接入方连上来的那一条。对上以后两条连接原样对接：服务器只转字节，里面是两头之间端到端加密的内容"""
+    daemon = True
+
+    def __init__(self, sock, remote):
+        super().__init__(name='relay')
+        self.lsock, self.remote = sock, remote
+        self.sel = selectors.DefaultSelector()
+        self.conns, self.per_ip, self.waiting = set(), {}, {}   # waiting：令牌 → (接入方的连接, 宿主控制连接的票据密钥, 什么时候)
+
+    def want(self, c):
+        ev = (0 if c.paused or c.state == 'wait' else selectors.EVENT_READ) | (selectors.EVENT_WRITE if c.out else 0)
+        if ev == c.events:
+            return
+        if c.events and ev:
+            self.sel.modify(c.sock, ev, c)
+        elif ev:
+            self.sel.register(c.sock, ev, c)
+        else:
+            self.sel.unregister(c.sock)
+        c.events = ev
+
+    def send(self, c, data):
+        c.out += data
+        if c.state == 'ctl' and len(c.out) > RELAY_QUEUE:   # 控制连接上只发不收（一个 PING 换一个 PONG）：不替它攒着
+            return self.close(c)
+        self.want(c)
+
+    def close(self, c, why=None):
+        if c not in self.conns:
+            return
+        self.conns.discard(c)
+        if why and c.state in ('pre', 'wait'):
+            try:
+                c.sock.send(b'CCA-RELAY/1 ERR %s\n' % why)
+            except OSError:
+                pass
+        if c.events:
+            self.sel.unregister(c.sock)
+            c.events = 0
+        try:
+            c.sock.close()
+        except OSError:
+            pass
+        n = self.per_ip.get(c.ip, 1) - 1
+        if n > 0:
+            self.per_ip[c.ip] = n
+        else:
+            self.per_ip.pop(c.ip, None)
+        with self.remote.lock:
+            x = self.remote.sessions.get(c.sid) if c.sid else None
+            if c.state == 'ctl' and x and x['conn'] is c:
+                x['conn'], x['lost'] = None, time.monotonic()
+            elif c.state == 'pipe' and x:   # 对接着的一对断了一头：这一处接入算结束（另一头下面改成 drain，不会再算一次）
+                x['viewers'] = max(x['viewers'] - 1, 0)
+        for tok in [t for t, w in self.waiting.items() if w[0] is c]:
+            self.waiting.pop(tok)
+        peer, c.peer = c.peer, None
+        if peer is not None:
+            # 另一头：还没转给它的先写完再关（会话结束时宿主最后说的那一句“结束了”不能丢），最多再等 5 秒
+            peer.peer, peer.state, peer.paused, peer.born = None, 'drain', True, time.monotonic()
+            if peer.out and peer in self.conns:
+                self.want(peer)
+            else:
+                self.close(peer)
+
+    def frame(self, kind, payload=b''):
+        return bytes([kind]) + len(payload).to_bytes(2, 'big') + payload
+
+    def preamble(self, c, line, now):
+        m = RELAY_LINE.match(line)
+        if not m:
+            return self.close(c, b'bad')
+        role, ident, cn, mac = m.group(1).decode(), m.group(2).decode(), m.group(3), m.group(4)
+        if role == 'join':
+            w = self.waiting.get(ident)
+            if not w or not hmac.compare_digest(mac, b64u(hmac256(w[1], b'j' + ident.encode() + cn))):
+                return self.close(c, b'ticket')
+            v = w[0]
+            self.waiting.pop(ident)
+            c.peer, v.peer, c.state, v.state, c.sid, c.pid, c.reply = v, c, 'pipe', 'pipe', v.sid, v.pid, 'join'
+            with self.remote.lock:
+                x = self.remote.sessions.get(v.sid)
+                if x:
+                    x['viewers'] += 1
+            self.send(c, b'CCA-RELAY/1 OK %s\n' % b64u(hmac256(w[1], b's' + ident.encode() + cn)))
+            self.send(v, v.key)   # 接入方那句 OK 是早先备好的
+            v.key = None
+            self.want(v)
+            return None
+        k = self.remote.take_ticket(ident, role, time.time(),
+                                    lambda key: hmac.compare_digest(mac, b64u(hmac256(key, b'c' + role.encode() + ident.encode() + cn))))
+        if not k:
+            return self.close(c, b'ticket')
+        ok = b'CCA-RELAY/1 OK %s\n' % b64u(hmac256(k['key'], b's' + ident.encode() + cn))
+        c.sid = k['sid']
+        with self.remote.lock:
+            x = self.remote.sessions.get(k['sid'])
+            if role == 'host':
+                if x and x['fp'] != k['fp']:
+                    return self.close(c, b'taken')
+                old = x['conn'] if x else None
+                if x:
+                    x['conn'], x['pids'], x['lost'] = c, k['pids'], None
+                    x['blobs'] = {p: b for p, b in x['blobs'].items() if p in k['pids']}
+                elif sum(1 for s in self.remote.sessions.values() if s['fp'] == k['fp']) >= SESSIONS_DEV:
+                    return self.close(c, b'sessions')   # 换票据时数过一次；攒着票据一起连上来的在这里拦住
+                else:
+                    self.remote.sessions[k['sid']] = {'fp': k['fp'], 'pids': k['pids'], 'blobs': {}, 'conn': c, 'lost': None,
+                                                      'viewers': 0, 'since': time.time()}
+                c.state, c.key = 'ctl', k['key']
+                self.send(c, ok)
+                if old is not None and old is not c:
+                    old.state = 'gone'   # 被新的控制连接顶掉了：关它的时候不动会话
+                    self.close(old)
+                return None
+            host = x['conn'] if x else None
+            if not x or host is None or k['pid'] not in x['pids']:
+                return self.close(c, b'nohost')
+            token = os.urandom(16).hex()
+            self.waiting[token] = (c, host.key, now)
+            c.state, c.key, c.reply, c.pid = 'wait', ok, 'view', k['pid']
+            self.want(c)
+            self.send(host, self.frame(F_JOIN, json.dumps({'token': token, 'pid': k['pid']}, separators=(',', ':')).encode()))
+        return None
+
+    def control(self, c):
+        """宿主的控制连接上的帧：读到的这一块里有几帧就处理几帧，处理过的最后一起从缓冲区里拿掉（一块里全是 3 个字节的
+        小帧时，每帧挪一次缓冲区是平方级的，而这条线程管着所有连接）"""
+        buf, i = c.inb, 0
+        while c in self.conns and len(buf) - i >= 3:
+            n = int.from_bytes(buf[i + 1:i + 3], 'big')
+            if n > CTL_FRAME:
+                self.close(c)
+                break
+            if len(buf) - i < 3 + n:
+                break
+            kind, payload = buf[i], bytes(buf[i + 3:i + 3 + n])
+            i += 3 + n
+            self.control_frame(c, kind, payload)
+        del buf[:i]
+
+    def control_frame(self, c, kind, payload):
+        """控制连接上的一帧。不对的就把这条连接关掉（control 看到它不在了就停）"""
+        if kind == F_PING:
+            self.send(c, self.frame(F_PONG, payload[:16]))
+        elif kind == F_BYE:
+            with self.remote.lock:
+                self.remote.sessions.pop(c.sid, None)
+            c.state = 'gone'
+            self.close(c)
+        elif kind == F_ANNOUNCE:
+            try:
+                blobs = json.loads(payload.decode('utf-8'))
+            except (ValueError, RecursionError):   # 嵌套几万层的 JSON 是 RecursionError，不是 ValueError
+                return self.close(c)
+            with self.remote.lock:
+                x = self.remote.sessions.get(c.sid)
+                if not x or x['conn'] is not c or not isinstance(blobs, dict):
+                    return self.close(c)
+                good = {p: parse_blob(b, DIR_BLOB) for p, b in blobs.items() if p in x['pids']}
+                if None in good.values():
+                    return self.close(c)
+                x['blobs'] = good
+        return None
+
+    def readable(self, c, now):
+        try:
+            data = c.sock.recv(65536)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            return self.close(c)
+        if not data:
+            return self.close(c)
+        c.seen = now
+        if c.state == 'pipe':
+            p = c.peer
+            if p is None:
+                return self.close(c)
+            p.seen = now
+            self.send(p, data)
+            if len(p.out) > RELAY_QUEUE:   # 对面写不动：先不读这一头（让发的那一头自己慢下来）
+                c.paused = True
+                self.want(c)
+            return None
+        c.inb += data
+        if c.state == 'pre':
+            i = c.inb.find(b'\n')
+            if i < 0:
+                return self.close(c, b'bad') if len(c.inb) > 256 else None
+            line = bytes(c.inb[:i])
+            del c.inb[:i + 1]
+            self.preamble(c, line, now)
+            if c not in self.conns:
+                return None
+        if c.state == 'ctl':
+            self.control(c)
+        elif c.state in ('wait', 'pipe') and c.inb:
+            return self.close(c)   # 回 OK 之前不该有别的话
+        return None
+
+    def writable(self, c):
+        try:
+            n = c.sock.send(c.out)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            return self.close(c)
+        del c.out[:n]
+        if c.state == 'drain' and not c.out:
+            return self.close(c)
+        p = c.peer
+        if p is not None and p.paused and len(c.out) < RELAY_QUEUE // 2:
+            p.paused = False
+            self.want(p)
+        self.want(c)
+        return None
+
+    def sweep(self, now):
+        for c in list(self.conns):
+            if c.state == 'pre' and now - c.born > PREAMBLE_WAIT:
+                self.close(c, b'slow')
+            elif c.state == 'wait' and now - c.born > PREAMBLE_WAIT + JOIN_WAIT:
+                self.close(c, b'nohost')
+            elif c.state == 'drain' and now - c.born > 5:
+                self.close(c)
+            elif c.state in ('ctl', 'pipe') and now - c.seen > RELAY_IDLE:
+                self.close(c)
+        with self.remote.lock:
+            for sid in [s for s, x in self.remote.sessions.items() if x['conn'] is None and now - (x['lost'] or now) > RELAY_GRACE]:
+                self.remote.sessions.pop(sid)
+            # 配对取消了、设备撤销了：会话不在了的控制连接断开，那个配对正接着的（和等着接的）也断开
+            for c in [c for c in self.conns if c.state == 'ctl' and self.remote.sessions.get(c.sid, {}).get('conn') is not c]:
+                c.state = 'gone'
+                self.close(c)
+            for c in [c for c in self.conns if c.state in ('pipe', 'wait') and c.pid not in self.remote.edges]:
+                self.close(c)
+
+    def accept(self, now):
+        try:
+            sock, addr = self.lsock.accept()
+        except OSError:
+            return
+        ip = addr[0]
+        if len(self.conns) >= RELAY_CONN or self.per_ip.get(ip, 0) >= RELAY_CONN_IP:
+            sock.close()
+            return
+        sock.setblocking(False)
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        c = RelayConn(sock, ip, now)
+        self.conns.add(c)
+        self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+        self.want(c)
+
+    def oops(self, what, c=None):
+        """这条线程管着所有连接：哪一步出了没料到的错，都只断开那一条、记一行（只记是哪种错，不记内容），接着转别的"""
+        sys.stderr.write('cca-presence: 中转%s出错（%s），接着运行\n' % (what, type(sys.exc_info()[1]).__name__))
+        sys.stderr.flush()
+        if c is not None:
+            try:
+                self.close(c)
+            except Exception:
+                self.conns.discard(c)
+
+    def run(self):
+        self.sel.register(self.lsock, selectors.EVENT_READ, None)
+        swept = 0
+        while True:
+            try:
+                events = self.sel.select(1.0)
+            except Exception:
+                self.oops('等连接的动静时')
+                time.sleep(0.2)
+                continue
+            for key, ev in events:
+                now = time.monotonic()
+                c = key.data
+                try:
+                    if c is None:
+                        self.accept(now)
+                        continue
+                    if ev & selectors.EVENT_WRITE and c in self.conns:
+                        self.writable(c)
+                    if ev & selectors.EVENT_READ and c in self.conns:
+                        self.readable(c, now)
+                except Exception:
+                    self.oops('的一条连接', c)
+            now = time.monotonic()
+            if now - swept >= 1:
+                swept = now
+                try:
+                    self.sweep(now)
+                except Exception:
+                    self.oops('清理过期的连接时')
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.0'
     server_version = 'cca-presence/1'
@@ -545,7 +1119,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/v1/health':
-            return self.send(200, self.server.store.health(self.server.sig_ok))
+            return self.send(200, self.server.store.health(self.server.sig_ok, self.server.remote and self.server.remote.port))
         return self.send(404, {'error': 'not_found'})
 
     def do_POST(self):
@@ -568,8 +1142,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, {'error': 'bad'})
         now = time.time()
         if op == 'machines':
-            return self.send(*srv.store.set_machines(body, sig, srv.release_key))
-        if op not in ('report', 'view') and op not in SYNC_OPS:
+            code, reply = srv.store.set_machines(body, sig, srv.release_key)
+            if code == 200 and srv.remote:
+                srv.remote.keep_only(srv.store.fps())
+            return self.send(code, reply)
+        relay = op in RELAY_OPS and srv.remote is not None   # 没开中转时和旧版服务器一样：不认这几个 op（404）
+        if op not in ('report', 'view') and op not in SYNC_OPS and not relay:
             return self.send(404, {'error': 'not_found'})
         try:
             j = json.loads(body.decode('utf-8'))
@@ -593,6 +1171,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, {'error': 'bad'})
         if not srv.nonces.add(nonce, now):
             return self.send(409, {'error': 'replay'})
+        if relay:
+            return self.send(*srv.remote.op(op, fp, j, now, srv.store.name))
         if op == 'report':
             units, end = parse_units(j.get('units')), j.get('end')
             if units is None or end not in (None, 'none', 'down') or (end == 'none' and units):
@@ -618,8 +1198,8 @@ class Server(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     request_queue_size = 64
 
-    def __init__(self, addr, ctx, store, release_key, sig_ok):
-        self.ctx, self.store, self.release_key, self.sig_ok = ctx, store, release_key, sig_ok
+    def __init__(self, addr, ctx, store, release_key, sig_ok, remote=None):
+        self.ctx, self.store, self.release_key, self.sig_ok, self.remote = ctx, store, release_key, sig_ok, remote
         self.ip_bucket, self.fp_bucket, self.nonces = Buckets(2, 120), Buckets(0.5, 30), Nonces()
         self.slots = threading.BoundedSemaphore(MAX_CONN)
         self.per_ip, self.per_ip_lock = {}, threading.Lock()
@@ -705,6 +1285,10 @@ def main():
     ap.add_argument('--cost', help='折合金额的密文（默认在状态文件旁边的 cost-slots.json）')
     ap.add_argument('--cost-days', type=float, default=100, help='折合金额的密文这么多天没再传就删掉')
     ap.add_argument('--port-file', help='实际监听的端口写到这里（测试用）')
+    ap.add_argument('--relay-listen', help='远程会话的中转：数据端口监听的地址:端口（不给就不开中转）')
+    ap.add_argument('--relay-port', type=int, help='客户端连数据端口用的端口（容器里外端口不一样时给；默认就是监听的那个）')
+    ap.add_argument('--relay-port-file', help='数据端口实际监听的端口写到这里（测试用）')
+    ap.add_argument('--remote', help='配对的记录（默认在状态文件旁边的 remote.json）')
     a = ap.parse_args()
     with open(a.release_key) as f:
         k = KEY_RE.match(' '.join(f.read().split()[:2]))
@@ -716,13 +1300,29 @@ def main():
     ctx.load_cert_chain(a.cert, a.key)
     sig_ok = self_test()
     store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400)
-    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, 'ssh-ed25519 ' + k.group(1), sig_ok)
+    remote = None
+    if a.relay_listen:
+        rhost, _, rport = a.relay_listen.rpartition(':')
+        rsock = socket.socket(socket.AF_INET6 if ':' in rhost else socket.AF_INET)
+        rsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        rsock.bind((rhost.strip('[]') or '0.0.0.0', int(rport)))
+        rsock.listen(64)
+        rsock.setblocking(False)
+        remote = Remote(a.remote or os.path.join(os.path.dirname(a.state) or '.', 'remote.json'), a.relay_port or rsock.getsockname()[1])
+        remote.keep_only(store.fps())
+        Relay(rsock, remote).start()
+        if a.relay_port_file:
+            with open(a.relay_port_file + '.tmp', 'w') as f:
+                f.write('%d\n' % rsock.getsockname()[1])
+            os.replace(a.relay_port_file + '.tmp', a.relay_port_file)
+    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, 'ssh-ed25519 ' + k.group(1), sig_ok, remote)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:
             f.write('%d\n' % srv.server_address[1])
         os.replace(a.port_file + '.tmp', a.port_file)
-    sys.stderr.write('cca-presence: 监听 %s:%d，设备 %d 台，签名自检%s\n' % (
-        srv.server_address[0], srv.server_address[1], len(store.data['machines']), '通过' if sig_ok else '没通过'))
+    sys.stderr.write('cca-presence: 监听 %s:%d，设备 %d 台，签名自检%s%s\n' % (
+        srv.server_address[0], srv.server_address[1], len(store.data['machines']), '通过' if sig_ok else '没通过',
+        '，中转的数据端口 %d（%d 个配对）' % (rsock.getsockname()[1], len(remote.edges)) if remote else ''))
     sys.stderr.flush()
     try:
         srv.serve_forever()

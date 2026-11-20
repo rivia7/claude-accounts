@@ -122,6 +122,12 @@ struct AskEvent: Sendable, Equatable {
         fields.count == 1 && fields[0].kind == .confirm ? fields[0] : nil
     }
 
+    /// 这一页没有要回答的（字段都是只显示的 `code`）：cca 边等边干活，做完了自己收场或者换下一页。App 只给「取消」，不交答案
+    /// （交了 cca 对不上字段，会当成出错停下）。
+    var displayOnly: Bool {
+        !fields.isEmpty && fields.allSatisfy { $0.kind == .code }
+    }
+
     /// App 能不能显示这一页：字段类型都认识、选择题有选项。不能显示的不能丢，要退回终端。
     var isDisplayable: Bool {
         !fields.isEmpty && fields.allSatisfy { f in

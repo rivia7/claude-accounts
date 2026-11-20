@@ -74,6 +74,10 @@
 - 辅助程序里的常量 ↔ tests/ 下把它当黑盒测的那几份里写死的同一个值：`UDP_HELPER`（`cli/src/cmd/corenet/udp.rs`）↔ `tests/local_udp.py`，`LEAK_FAIL_TTL`（`cli/src/cmd/leak.rs`）↔ `tests/isolation_leaks.py`
 - App 的接口：PROTOCOL.md ↔ Swift 模型 ↔ regress 的 10g；`router_sh` 的 `status` 输出 ↔ `cmd_gui_live` 的 `GUI_SLOT_RE`（regress 守着）
 - `VERSION` ↔ `WhatsNew.swift` 最前面的 `ReleaseNote`（`macos/test.sh` 查用词和版本先后）
+- 远程会话的中转（线上的格式）：`server/README.md`「远程会话的中转」↔ `server/cca-presence.py` ↔ `cli/src/cmd/remote/crypto.rs`、`relay.rs` ↔ `tests/spec_wire.py`（照文档独立实现的；`crypto.rs` 测试里的向量是它算的，改了格式先改它再重新生成）；`relay.rs` 的 `RELAY_OLD` ↔ `tests/remote_relay.py` 里写死的同一句；同意项 `remote_pair`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`
+- 远程会话：`run_account` 的 `HOSTCMD`（`remote_prepare`）↔ 辅助程序 `remote-host` 的参数；客户端新加的终端查询序列 ↔ `cli/src/cmd/remote/vt.rs` 的 `csi_class` / `osc_class` / `str_class`（漏了的话几个终端同时接着时回答会变成按键）；`cca remote attach` 的退出码、断开的按键 ↔ docs/dev/remote.md ↔ PROTOCOL 9.3 ↔ App 的 `Texts.remoteEnded`；`remote-list --json`（`manage.rs` 的 `list_doc`）↔ PROTOCOL 9.1 ↔ Swift 的 `Protocol/Remote.swift` ↔ `macos/Tests/Fixtures/remote_list.json`
+- SwiftTerm（`macos/Vendor/SwiftTerm/`）：换版本时源码、`SHA256SUMS`、README 里的版本和提交号一起换；App 里只有 `TerminalSurface.swift` 用它；不要的功能（图形协议）：`macos/build.sh` 换掉的那两行（`ST_KITTY`、`ST_SIXEL`）↔ `macos/tools/swiftterm-check` ↔ `TerminalSurface.swift` ↔ PROTOCOL 9.3
+- 「远程会话」页多久查一次（`Scheduler.remoteInterval`）↔ PROTOCOL 9.1 ↔ docs/dev/remote.md ↔ macos/README.md（服务器给每台设备限了流：`server/cca-presence.py`）
 
 ## 细节在哪
 动到哪一块，先读 `docs/dev/` 下对应的那一份（这一块怎么测也写在里面）：
@@ -95,4 +99,5 @@
 - `clients.md` — 辅助安装 claude / codex / agy、客户端统一更新
 - `release.md` — release.sh 的步骤、测试版先发后验、自动更新、检查更新、`cca gui`
 - `mail.md` — 邮箱助手（`cca mail`）
+- `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面
 - `desktop.md` — 程序坞整理、Claude App 多开、启动器图标

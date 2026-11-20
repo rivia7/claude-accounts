@@ -163,6 +163,8 @@ ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清�
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
+ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
+ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
 
 fi
 if sect 1; then
@@ -469,6 +471,9 @@ printf '%s\n' 223.5.5.5 203.0.113.53 > "$T/dns/7902"
 printf '{"country": "China", "region": "Zhejiang", "city": "Hangzhou", "isp": "Alibaba", "country_code": "cn"}' > "$T/geo/223.5.5.5.json"
 out=$(run CCA_TTY="$(ans)" cca @副号 --version 2>&1); rc=$?
 ok "DNS 泄露（账号出口那边用了中国大陆的解析器）：说明是哪个解析器、该查哪个节点，横幅里标出来，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口访问网站时，域名是中国大陆的 DNS 服务器解析的（223.5.5.5 China · Alibaba）" && printf "%s" "$out" | grep -q "上的节点 US-B：" && printf "%s" "$out" | grep -q "泄露  DNS 泄露（1 个解析器在中国大陆） · WebRTC 没测成"'
+# cca check 的开始时间是整秒（date +%s），在它之前测的才重测：紧跟着上面那次启动、同一秒里刚测过的还算新的（少两个请求）。
+# 辅助程序快了以后常常落在同一秒里：等过了这一秒再跑
+ls_now=$(date +%s); while [ "$(date +%s)" = "$ls_now" ]; do sleep 0.1; done
 n0=$(grep -c "pixel.gif" curl.log)
 out=$(run cca check 2>&1)
 ok "cca check：DNS 重新测（不用启动时缓存的），注明解析器在哪；有泄露的那个账号另外说明" '[ "$(grep -c "pixel.gif" curl.log)" = $((n0 + 4)) ] && printf "%s" "$out" | grep -q "DNS 未发现地区异常（1 个解析器：United States；非浏览器实测） · WebRTC 没测成" && printf "%s" "$out" | grep -q "DNS 泄露（1 个解析器在中国大陆）" && printf "%s" "$out" | grep -q "DNS 泄露：经这个账号的端口"'
@@ -512,6 +517,61 @@ out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 rm -f "$T/dns_down"
 ok "ip.net.coffee 的 DNS 检测接口连不上：注明没测成，照常启动" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "泄露  DNS 没测成.* · WebRTC 没测成"'
 rm -rf "$T/dns" "$T/geo" "$T/stun_ip" "$H/.cca/leak.json"
+
+fi
+if sect 3e; then
+# 3e. 远程会话（docs/dev/remote.md）：开关没开、不在终端里时照原样直接运行；开着、又在终端里时客户端跑在会话宿主里
+#     （环境、参数、退出码都和直接运行一样）。宿主和接入端自己的行为在 tests/remote_host.py（unit 一节）
+rs_pty() {   # rs_pty 一项环境：在真的终端里（script，不设 CCA_TTY）运行 cca @alice --version，退出码写进 $T/rs.rc，完了建 $T/rs.done
+	rm -f "$T/rs.done" "$T/rs.rc"
+	{ for i in $(seq 1 300); do [ -f "$T/rs.done" ] && break; sleep 0.1; done; } |
+		script -q "$T/rs.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_POLICY_DEFAULT= CCA_STUN=127.0.0.1:9 CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_RETRY_WAIT=0 "$1" \
+		PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; echo $? > "$CCA_T/rs.rc"; touch "$CCA_T/rs.done"' >/dev/null 2>&1
+}
+rs_last() { grep "^$1:" claude.log | tail -n 1; }   # 假 claude 最近一次记下的参数（ARGS）、环境（ENV）
+rs_pty CCA_REMOTE=
+rs_args=$(rs_last ARGS); rs_env=$(rs_last ENV)
+ok "开关没开、在终端里：照原样直接运行（没有会话目录），退出码透传" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -n "$rs_env" ] && [ ! -e "$H/.cca/remote" ]'
+: > claude.log
+run CCA_REMOTE=1 cca @alice --version >/dev/null 2>&1; rc=$?
+ok "CCA_REMOTE=1、不在终端里（界面 App、脚本）：照原样直接运行" '[ $rc -eq 3 ] && [ "$(rs_last ARGS)" = "$rs_args" ] && [ ! -e "$H/.cca/remote" ]'
+: > claude.log
+rs_pty CCA_REMOTE=1
+ok "CCA_REMOTE=1、在终端里：客户端跑在会话宿主里，它看到的参数、环境（代理、配置目录、fd 3 关着……）和直接运行时一样，退出码透传" '[ "$(cat "$T/rs.rc")" = 3 ] && [ "$(rs_last ARGS)" = "$rs_args" ] && [ "$(rs_last ENV)" = "$rs_env" ] && [ "$(stat -f %Lp "$H/.cca/remote")" = 700 ]'
+ok "会话结束：登记、socket 和说明都删掉" '! ls "$AD"/cli-*.json >/dev/null 2>&1 && [ -z "$(ls "$H/.cca/remote")" ]'
+touch "$T/hold"
+rs_pty CCA_REMOTE=1 &
+rs_bg=$!
+rs_rows=""; for rs_i in $(seq 1 150); do rs_rows=$(run cca remote list 2>/dev/null); [ -n "$rs_rows" ] && break; sleep 0.1; done
+ok "会话开着时 cca remote list 列出它：编号、工具、账号、文件夹、几点开始的、启动它的终端开着；登记也在" 'printf "%s\n" "$rs_rows" | grep -Eq "^[0-9a-f]{8}  claude  alice@example.com  /.*  [0-9-]+ [0-9:]+ 开始  启动它的终端开着$" && [ "$(printf "%s\n" "$rs_rows" | wc -l | tr -d " ")" = 1 ] && ls "$AD"/cli-*.json >/dev/null 2>&1'
+out=$(run cca remote 2>&1)
+ok "cca remote：说开关没开（这一次是 CCA_REMOTE=1），列出可以接入的会话" 'printf "%s" "$out" | grep -q "远程会话：没开（打开：cca remote on" && printf "%s" "$out" | grep -q "这台机器上有 1 个可以接入的会话" && printf "%s" "$out" | grep -q "    ${rs_rows%% *}  claude  alice@example.com"'
+out=$(run cca remote list --json 2>/dev/null </dev/null); rc=$?; mkdir -p "$T/guifx"; printf '%s' "$out" > "$T/guifx/remote_local.json"
+ok "cca remote list --json（给界面 App，PROTOCOL 9.1）：开关、这台机器上的会话（完整的编号、工具、账号、启动它的终端开着、接得上、能操作），没有配对过的机器" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"version\"] == 1 and d[\"kind\"] == \"remote\" and d[\"enabled\"] is False and isinstance(d[\"relay\"][\"available\"], bool) and d[\"peers\"] == [] and d[\"errors\"] == [] and len(d[\"sessions\"]) == 1 and (lambda s: len(s[\"id\"]) == 32 and s[\"id\"].startswith(\"${rs_rows%% *}\") and s[\"short\"] == \"${rs_rows%% *}\" and s[\"where\"] == \"local\" and s[\"peer\"] is None and s[\"tool\"] == \"claude\" and s[\"name\"] == \"alice@example.com\" and s[\"local_terminal\"] is True and s[\"state\"] == \"ok\" and s[\"access\"] == \"control\" and s[\"viewers\"] == 0 and isinstance(s[\"since_epoch\"], (int, float)))(d[\"sessions\"][0])"'
+ok "界面 App 的 hello 说有远程会话（没有这个字段的旧版 cca，App 不显示那一页）" 'gj hello | jok "d[\"remote\"] == 1"'
+out=$(run cca remote attach 2>&1 </dev/null); rc=$?
+ok "cca remote attach 不在终端里：不接入，退出码 69" '[ $rc -eq 69 ] && printf "%s" "$out" | grep -q "要在终端里运行"'
+rm -f "$T/hold"; wait "$rs_bg"
+ok "会话结束：退出码透传，列表里没有了" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -z "$(run cca remote list 2>/dev/null)" ] && [ -z "$(ls "$H/.cca/remote")" ]'
+out=$(run cca remote attach 2>&1); rc=$?
+ok "cca remote attach 没有会话：说明先 cca remote on，退出码 65" '[ $rc -eq 65 ] && printf "%s" "$out" | grep -q "现在没有可以接入的会话（先 cca remote on"'
+out=$(run cca remote on 2>&1); rc=$?
+ok "cca remote on：记进 config.json，说明怎么接回去、怎么关" '[ $rc -eq 0 ] && cfgok "c[\"remote\"] is True" && printf "%s" "$out" | grep -q "已打开：之后在终端里启动的会话放进会话宿主里运行" && printf "%s" "$out" | grep -q "cca remote attach"'
+ok "cca remote：开着" 'run cca remote 2>&1 | grep -q "远程会话：开着"'
+rm -rf "$H/.cca/remote"
+rs_pty CCA_REMOTE=0
+ok "开关开着、这一次 CCA_REMOTE=0：直接运行" '[ "$(cat "$T/rs.rc")" = 3 ] && [ ! -e "$H/.cca/remote" ]'
+run cca @alice --version >/dev/null 2>&1; rc=$?
+ok "开关开着、不在终端里：直接运行" '[ $rc -eq 3 ] && [ ! -e "$H/.cca/remote" ]'
+: > claude.log
+rs_pty CCA_REMOTE=
+ok "开关开着、在终端里：客户端跑在会话宿主里，参数、环境照旧" '[ "$(cat "$T/rs.rc")" = 3 ] && [ -d "$H/.cca/remote" ] && [ "$(rs_last ARGS)" = "$rs_args" ] && [ "$(rs_last ENV)" = "$rs_env" ]'
+out=$(run cca remote off 2>&1); rc=$?
+ok "cca remote off：config.json 里不留这一项" '[ $rc -eq 0 ] && cfgok "\"remote\" not in c" && printf "%s" "$out" | grep -q "已关闭" && run cca remote 2>&1 | grep -q "远程会话：没开"'
+out=$(run cca remote bogus 2>&1); rc=$?
+ok "cca remote 不认识的子命令：说用法，不当成给 claude 的参数" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "用法：cca remote \[status|on|off|list|attach" && ! grep -q "ARGS: .*bogus" claude.log'
+ok "cca help 里有远程会话的说明" 'run cca help 2>&1 | grep -q "cca remote attach \[-r\] \[编号\]"'
+rm -rf "$H/.cca/remote" "$T"/rs.*
 
 fi
 if sect 4; then
@@ -2254,6 +2314,26 @@ if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "提问会话：App 真正的答案管道（ProcessTransport）对真的 cca：添加第三方 API 账号，key 进了钥匙串，不进命令行" '[ $rc -eq 0 ] && [ "$(cat "$KC3/api.example.com")" = "$S3" ] && ! grep -qF "$S3" env.log security.log && ! printf "%s" "$out" | grep -qF "$S3"'
 	run "$D/../macos/build/contract-tests" --session-smoke "$H/.local/bin/cca" "$T/sess.answers" rm gui3 >/dev/null 2>&1 </dev/null
 	ok "提问会话：真的答案管道：删除账号" 'tblok "\"gui3\" not in t"'
+	# 界面里的终端（PROTOCOL 9.3）：App 真正的伪终端（ProcessTransport.startTerminal）对真的 cca remote attach。会话是直接起在宿主里的
+	# 一个小脚本（先说一句、之后收到一行回一行），启动它的终端是 script 开的。rt.end 出现了脚本自己退出、会话结束（不能指望 script
+	# 读到头时送的 ^D：宿主把这个终端设成了原始模式，script 只在行模式下送）
+	rm -rf "$H/.cca/remote" "$T"/rt.*   # 会话目录先清空：下面取到的一定是这一个会话
+	{ for i in $(seq 1 600); do [ -f "$T/rt.end" ] && break; sleep 0.1; done; } |
+		script -q "$T/rt.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_HELPER="$HELPERWRAP" PATH="/usr/bin:/bin" TERM=dumb "$HELPER_BIN" remote-host claude alice@example.com alice@example.com -- \
+		/bin/bash -c 'echo SMOKE-READY; while [ ! -e "$CCA_T/rt.end" ]; do IFS= read -r -t 1 l && echo "got:$l"; done; exit 0' >/dev/null 2>&1 &
+	rt_bg=$!
+	rt_id=""; for i in $(seq 1 150); do rt_id=$(run cca remote list --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; s=json.load(sys.stdin)["sessions"]; print(s[0]["id"] if s else "")' 2>/dev/null); [ -n "$rt_id" ] && break; sleep 0.1; done
+	run "$D/../macos/build/contract-tests" --terminal-smoke "$H/.local/bin/cca" "$rt_id" "$T/rt.stop" SMOKE-READY ping-from-app got:ping-from-app > "$T/rt.out" 2>&1 </dev/null & rt_sm=$!
+	for i in $(seq 1 200); do run cca remote list --json 2>/dev/null </dev/null | jok 'd["sessions"][0]["viewers"] == 1' && break; kill -0 "$rt_sm" 2>/dev/null || break; sleep 0.1; done
+	ok "界面里的终端：App 的伪终端上运行 cca remote attach，接上了：会话多了一处接入（启动它的终端也还在）" 'run cca remote list --json 2>/dev/null </dev/null | jok "len(d[\"sessions\"]) == 1 and d[\"sessions\"][0][\"id\"] == \"$rt_id\" and d[\"sessions\"][0][\"viewers\"] == 1 and d[\"sessions\"][0][\"local_terminal\"] is True"'
+	touch "$T/rt.stop"; wait "$rt_sm"; rc=$?
+	# 冒烟程序退出码 0：先看到了接入之前的输出（SMOKE-READY），App 里敲的那一行会话收到并回了（got:…，只有会话里的脚本会这样回），断开后接入端退出码 0
+	ok "界面里的终端：先看到之前的输出，App 里敲的字会话收到、回的字 App 看得到；App 断开（给进程组发 SIGTERM）：接入端退出码 0，会话照常运行，没有人接着了" '[ $rc -eq 0 ] && grep -q "^exit=0 bytes=[1-9]" "$T/rt.out" && run cca remote list --json 2>/dev/null </dev/null | jok "len(d[\"sessions\"]) == 1 and d[\"sessions\"][0][\"viewers\"] == 0"'
+	touch "$T/rt.end"
+	for i in $(seq 1 100); do kill -0 "$rt_bg" 2>/dev/null || break; sleep 0.1; done
+	kill "$rt_bg" 2>/dev/null; wait "$rt_bg" 2>/dev/null   # 10 秒还没走的不等了（下面那条会挂，后面的章节照常）
+	ok "会话结束：列表里没有了" 'run cca remote list --json 2>/dev/null </dev/null | jok "d[\"sessions\"] == []"'
+	rm -rf "$H/.cca/remote" "$T"/rt.*
 else
 	echo "SKIP  App 的契约测试（没有 swiftc 或 macos/test.sh）"
 fi
@@ -3125,7 +3205,7 @@ cp "$T/relkey.pub" "$SV/release.pub"
 srv_start() {   # srv_start [端口]：起服务器（状态文件留着，重启后接着用）
 	rm -f "$SV/port"
 	python3 -I "$D/../server/cca-presence.py" --listen "127.0.0.1:${1:-0}" --port-file "$SV/port" --cert "$SV/cert.pem" --key "$SV/key.pem" \
-		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl "$STTL" >>"$SV/log" 2>&1 &
+		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl "$STTL" --relay-listen 127.0.0.1:0 >>"$SV/log" 2>&1 &
 	SVP=$!
 	local i; for i in $(seq 1 50); do [ -s "$SV/port" ] && return 0; sleep 0.1; done; return 1
 }
@@ -3311,11 +3391,103 @@ dcost put "$(python3 -c 'import time; print(time.time() - 86400)')" 2.5; rc=$?
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_cost_sync.json"
 ok "dan-air 传了自己的那一份（2.5 美元）：同步后 alice 有两台设备（这台在前），合计 2.526 美元（全部账号 2.579：还有 dave 的 Codex），同步好了" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"me\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", True, False), (\"dan-air\", False, False)] and a[\"summary\"][\"days_usd\"] == 2.526 and a[\"sync\"][\"state\"] == \"ok\" and isinstance(a[\"sync\"][\"checked_epoch\"], float))(acct(0, \"alice@example.com\")[\"cost\"]) and d[\"cost_total\"][\"by_tool\"][\"claude\"][\"days_usd\"] == 2.526 and d[\"cost_total\"][\"days_usd\"] == 2.579"'
 ok "cost_total.me 只算这台设备的那一份：全部账号 2.579 减去 dan-air 的 2.5 是 0.079（alice 0.026，dave 0.053）" 'printf "%s" "$out" | jok "(lambda m: m[\"days_usd\"] == 0.079 and m[\"by_tool\"][\"claude\"][\"days_usd\"] == 0.026 and m[\"by_tool\"][\"codex\"][\"days_usd\"] == 0.053 and len(m[\"days\"]) == 30)(d[\"cost_total\"][\"me\"])"'
+# 远程会话的配对（docs/dev/remote.md；服务器开着中转）：这里只测 cca remote pair / join / peers / allow / unpair 这几条命令怎么问、怎么说，
+# 配对、列表、接入、加密本身在 tests/remote_relay.py（unit 一节）。另一台机器还是 dan-air，照 server/README.md 的格式自己说话
+dpair() {   # dpair join 配对码 | show 文件：dan-air 输入这台 Mac 显示的配对码 / 自己显示一个（写进文件），等对方输入。配好打印“配对编号 密钥”
+	python3 -B - "$D" "$T/dan" "$SVPORT" "$@" <<'PY'
+import secrets, sys
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
+key, port, op = sys.argv[2], int(sys.argv[3]), sys.argv[4]
+me = sw.fp_of(key + '.pub')
+
+
+def call(op, **extra):
+    status, j = sw.post(key, port, op, extra)
+    if status != 200:
+        sys.exit('%s：%s %s' % (op, status, j))
+    return j
+
+
+n = secrets.token_bytes(32)
+if op == 'join':
+    kc, keys, rid = sw.pair_keys(sw.code_bytes(sys.argv[5]))
+    call('pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'b', me, n, 'dan'))
+    theirs = sw.pair_open(keys, rid, 'a', call('pair_get', rid=rid)['m'])
+    p, pid = sw.pair_secret(kc, bytes.fromhex(theirs['n']), n, theirs['fp'], me)
+else:
+    c = secrets.token_bytes(10)
+    kc, keys, rid = sw.pair_keys(c)
+    call('pair_open', rid=rid)
+    call('pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'a', me, n, 'dan'))
+    with open(sys.argv[5] + '.tmp', 'w') as f:
+        f.write(sw.code_text(c) + '\n')
+    __import__('os').replace(sys.argv[5] + '.tmp', sys.argv[5])
+    for _ in range(30):
+        j = call('pair_get', rid=rid, wait=2)
+        if j['m']:
+            break
+    else:
+        sys.exit('没等到对方输入')
+    theirs = sw.pair_open(keys, rid, 'b', j['m'])
+    p, pid = sw.pair_secret(kc, n, bytes.fromhex(theirs['n']), me, theirs['fp'])
+call('pair_commit', rid=rid, pid=pid)
+print(pid, p.hex())
+PY
+}
+out=$(runev cca remote pair 2>&1); rc=$?
+out2=$(run CCA_TTY="$(ans n)" cca remote pair 2>&1); rc2=$?
+ok "cca remote pair：要在终端里；先问（说清楚输入配对码的那台机器能做什么），不同意就不显示配对码" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "需要在终端里交互运行" && [ $rc2 -eq 1 ] && printf "%s" "$out2" | grep -q "那台机器可以看和操作这台机器上开着远程会话的会话" && printf "%s" "$out2" | grep -q "已取消" && ! printf "%s%s" "$out" "$out2" | grep -q "配对码：" && [ ! -e "$H/.cca/remote/peers.json" ]'
+run CCA_TTY="$(ans y)" cca remote pair > "$T/rp.out" 2>&1 & RPP=$!
+for i in $(seq 1 100); do grep -q "配对码：" "$T/rp.out" 2>/dev/null && break; sleep 0.1; done
+RCODE=$(sed -n 's/.*配对码：\([0-9A-Z-]*\).*/\1/p' "$T/rp.out" | head -n 1)
+dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
+RPID=${dj%% *}; RKEY=${dj#* }
+out=$(run cca remote peers 2>&1); out2=$(run cca remote 2>&1)
+ok "cca remote pair：显示配对码，dan-air 输入后配好：两边算出同一把密钥，存进钥匙串（经 security -i 的十六进制，不进命令行）；配对表里是维护者设备清单里它的名字，让它看和操作" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q "已经和「dan-air」配对" "$T/rp.out" && grep -q "cca remote allow dan-air view" "$T/rp.out" && [ "$(cat "$T/keychain/cca-remote-$RPID/pair")" = "$RKEY" ] && ! grep -qF "$RKEY" security.log "$T/env.log" && [ "$(stat -f %Lp "$H/.cca/remote/peers.json")" = 600 ] && ! grep -qF "$RKEY" "$H/.cca/remote/peers.json" && printf "%s" "$out" | grep -q "^${RPID:0:8}  dan-air  对方可以看和操作这台机器的会话" && printf "%s" "$out2" | grep -q "配对过 1 台机器"'
+ok "配对码、密钥都没有发给服务器（它只记着是哪两台设备配了对，600）" '[ "$(stat -f %Lp "$SV/remote.json")" = 600 ] && grep -q "\"$RPID\"" "$SV/remote.json" && ! grep -qF "$RKEY" "$SV"/*.json && ! grep -qF "${RCODE//-/}" "$SV"/*.json'
+out=$(run cca remote list --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/remote_list.json"
+ok "cca remote list --json：中转用得了，配对过的机器（配对的编号、名字、它能做什么、配对码是这台显示的、服务器上还在）；它上面没有会话" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"relay\"] == {\"available\": True, \"message\": None} and d[\"errors\"] == [] and d[\"sessions\"] == [] and len(d[\"peers\"]) == 1 and (lambda p: p[\"id\"] == \"$RPID\" and p[\"short\"] == \"${RPID:0:8}\" and p[\"name\"] == \"dan-air\" and p[\"incoming\"] == \"control\" and p[\"shown\"] is True and p[\"state\"] == \"ok\" and isinstance(p[\"paired_epoch\"], (int, float)))(d[\"peers\"][0])"'
+ok "cca remote list --local --json：不问服务器，配对的状态是 unknown" 'run cca remote list --local --json 2>/dev/null </dev/null | jok "d[\"peers\"][0][\"state\"] == \"unknown\" and d[\"errors\"] == []"'
+out=$(runev cca remote allow "$RPID" none 2>&1); rc=$?
+ok "界面 App 改对方能做什么（按配对的编号，不问）：result 事件 remote_updated 带着那句话" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"不能接入这台机器了\" in e[\"message\"]" && run cca remote list --local --json 2>/dev/null </dev/null | jok "d[\"peers\"][0][\"incoming\"] == \"none\""'
+out=$(runev cca remote allow "${RPID%????}0000" view 2>&1); rc=$?
+ok "没有这个配对：fail 事件说原因，配对表不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and \"没有\" in e[\"message\"]" && run cca remote list --local --json 2>/dev/null </dev/null | jok "d[\"peers\"][0][\"incoming\"] == \"none\""'
+out=$(run cca remote allow dan-air view 2>&1); rc=$?
+out2=$(run cca remote allow dan-air sideways 2>&1); rc2=$?
+ok "cca remote allow：改成只让看（说清楚正操作着的会被断开）；写错了给用法" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「dan-air」只能看这台机器上的会话" && run cca remote peers 2>/dev/null | grep -q "dan-air  对方只能看这台机器的会话" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "用法：cca remote allow 名字 control|view|none"'
+rm -f "$T/dan.code"; dpair show "$T/dan.code" > "$T/dan.pair" 2>&1 & DPP=$!
+for i in $(seq 1 100); do [ -s "$T/dan.code" ] && break; sleep 0.1; done
+out=$(run CCA_TTY="$(ans "$(tr 'A-Z' 'a-z' < "$T/dan.code")")" cca remote join 2>&1); rc=$?; wait "$DPP"; rc2=$?
+RPID2=$(cut -d' ' -f1 "$T/dan.pair")
+ok "cca remote join：输入 dan-air 显示的配对码（小写也行；从 stdin 交给辅助程序）；同两台机器再配一次换成新的一把密钥，以前让它做的照旧" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "已经和「dan-air」配对：这台机器可以接入它上面的会话" && [ -n "$RPID2" ] && [ "$RPID2" != "$RPID" ] && [ ! -e "$T/keychain/cca-remote-$RPID" ] && [ "$(cat "$T/keychain/cca-remote-$RPID2/pair")" = "$(cut -d" " -f2 "$T/dan.pair")" ] && run cca remote peers 2>/dev/null | grep -q "^${RPID2:0:8}  dan-air  对方只能看这台机器的会话" && ! grep -q "\"$RPID\"" "$SV/remote.json" && grep -q "\"$RPID2\"" "$SV/remote.json"'
+out=$(run cca remote list 2>&1); rc=$?
+ok "cca remote list：配对过的机器上没有会话时什么都不列（问过服务器了，没报错）" '[ $rc -eq 0 ] && [ -z "$out" ]'
+out=$(run CCA_TTY="$(ans 0000-0000-0000-0000)" cca remote join 2>&1); rc=$?
+ok "cca remote join：配对码不对时说清楚，配对表不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有这个配对码：输错了，或者过期了" && [ -e "$T/keychain/cca-remote-$RPID2" ]'
+out=$(run cca remote unpair dan-air 2>&1); rc=$?
+out2=$(run cca remote peers 2>&1)
+ok "cca remote unpair：配对表、钥匙串里的密钥、服务器上的记录都删掉" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经取消和「dan-air」的配对" && [ ! -e "$T/keychain/cca-remote-$RPID2" ] && ! grep -q "\"$RPID2\"" "$SV/remote.json" && printf "%s" "$out2" | grep -q "还没有配对过的机器"'
+# 界面 App 里配对（提问会话，PROTOCOL 9.2）：先问，再一页只显示配对码（不用回答），dan-air 输入后 cca 自己收场
+sess '{"consent.remote_pair":[{"v":"y"}],"remote.pair":[null]}' -- cca remote pair > "$T/rp.out" 2>&1 & RPP=$!
+RCODE=""; for i in $(seq 1 150); do RCODE=$(python3 -I -c 'import json,sys
+for l in open(sys.argv[1]):
+    e = json.loads(l) if l.strip() else {}
+    if e.get("q") == "remote.pair":
+        print(e["fields"][0]["value"])' "$T/ev.jsonl" 2>/dev/null); [ -n "$RCODE" ] && break; sleep 0.1; done
+dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
+cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair.jsonl"
+ok "界面 App 里显示配对码：同意当场问，配对码在一页只显示的字段里（不用回答），对方输入后 result 事件 remote_paired" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(asks)" = "consent.remote_pair remote.pair" ] && printf "%s" "$RCODE" | grep -Eq "^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$" && evq "e.get(\"q\") == \"remote.pair\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"code\", \"code\")]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「dan-air」\" in e[\"message\"]" && ! grep -qF "$RCODE" "$T/rp.out" && [ -e "$T/keychain/cca-remote-${dj%% *}" ]'
+out=$(runev cca remote unpair "${dj%% *}" 2>&1); rc=$?
+ok "界面 App 取消配对（按配对的编号）：result 事件 remote_updated，钥匙串里的密钥删掉" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"已经取消和「dan-air」的配对\" in e[\"message\"]" && [ ! -e "$T/keychain/cca-remote-${dj%% *}" ]'
+out=$(sess '{"remote.code":[{"v":"0000-0000-0000-0000"}]}' -- cca remote join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_join.jsonl"
+ok "界面 App 里输入配对码：一个输入框；配对码不对是 fail 事件，说原因" '[ $rc -ne 0 ] && [ "$(asks)" = "remote.code" ] && evq "e[\"ev\"] == \"fail\" and \"没有这个配对码\" in e[\"message\"]"'
+rm -f "$H/.cca/remote/peers.json"; rmdir "$H/.cca/remote" 2>/dev/null
 runcmd "$(ans y)" "$P ./policy.sh key rm dan-air"
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
 ok "维护者撤销了 dan-air：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
-	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
+	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json 和配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
 fi
 kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; SVP=""
 cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"; cp -p "$T/pres.keys.json" "$T/deploy_keys.json"
@@ -3942,6 +4114,15 @@ cp -R "$T/appsrc/9.9.16/cca.app" "$GA"; "$GA/Contents/MacOS/cca" & GUIPID=$!; sl
 out=$(run CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
 kill $GUIPID 2>/dev/null; wait $GUIPID 2>/dev/null
 ok "restore：图形界面 App 开着时不还原（先退出它）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca 的界面 App" && [ -d "$GA" ] && [ -d "$H/.cca" ]'
+# 会话宿主里还开着一个会话（直接起辅助程序的 remote-host，客户端是 sleep）：删掉 ~/.cca 以后它就再也接不上了，先不还原
+run script -q /dev/null "$HELPER_BIN" remote-host claude k 测试 -- /bin/sleep 60 </dev/null >/dev/null 2>&1 &
+rs_host=$!
+for rs_i in $(seq 1 100); do [ -n "$(ls "$H/.cca/remote" 2>/dev/null)" ] && break; sleep 0.1; done
+out=$(run CCA_TTY="$(ans no)" cca restore 2>&1); rc=$?
+ok "restore：还有开着的远程会话时不还原（先结束它们）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "还有开着的远程会话，先把它们结束再还原" && [ -d "$H/.cca" ] && [ "$(ls "$H/.cca/remote" | wc -l | tr -d " ")" = 2 ]'
+pkill -f "remote-host claude k 测试 -- /bin/sleep 60" 2>/dev/null; kill "$rs_host" 2>/dev/null; wait "$rs_host" 2>/dev/null
+for rs_i in $(seq 1 50); do pgrep -f "remote-host claude k 测试" >/dev/null 2>&1 || break; sleep 0.1; done
+ok "（前提）会话结束了：会话目录里什么都不剩" '[ -z "$(ls "$H/.cca/remote" 2>/dev/null)" ]'
 run CCA_TTY="$(ans "$R1")" cca key alice >/dev/null 2>&1; run CCA_TTY="$(ans "$R2")" cca codex key dave >/dev/null 2>&1
 refs=$(ls "$T/keychain" | grep -cE "^cca-(codex-)?ref-")
 K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_keys"
@@ -3963,6 +4144,10 @@ ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
 # 邮箱助手配置过：应用专用密码在钥匙串里
 python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mail"]={"user": "inbox@example.com"}; json.dump(c, open(p, "w"))' "$H/.cca/config.json"
 mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail/inbox@example.com"
+# 远程会话配对过一台机器（docs/dev/remote.md）：配对表在 ~/.cca/remote，密钥在钥匙串里
+RSP=$(printf 'ab%.0s' $(seq 1 16)); mkdir -p "$H/.cca/remote" "$T/keychain/cca-remote-$RSP"; chmod 700 "$H/.cca/remote"
+printf '%064d' 7 > "$T/keychain/cca-remote-$RSP/pair"
+printf '{"v":1,"peers":{"%s":{"fp":"SHA256:%s","name":"dan-air","incoming":"control","shown":true,"at":1794000000}}}\n' "$RSP" "$(printf 'A%.0s' $(seq 1 43))" > "$H/.cca/remote/peers.json"
 # macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
@@ -3986,6 +4171,7 @@ ok "restore：备份里没有折合金额的缓存、别的设备同步来的（
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'
+ok "restore：远程会话的配对也取消，配对的密钥从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-remote-$RSP" ] && printf "%s" "$out" | grep -q "远程会话：取消和别的机器的配对"'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 fi
 echo "---- $pass passed, $fail failed"

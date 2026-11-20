@@ -6,18 +6,22 @@ import SwiftUI
 struct WindowObserver: NSViewRepresentable {
     /// 所在的窗口换了（菜单栏面板要记下自己的窗口，好在主窗口出来时收起）。
     var onWindow: ((NSWindow?) -> Void)?
+    /// 窗口关了（不是被挡住、最小化）：主窗口用它断开没人看着的终端。
+    var onClose: (() -> Void)?
     let onChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> ObserverView {
         let v = ObserverView()
         v.onChange = onChange
         v.onWindow = onWindow
+        v.onClose = onClose
         return v
     }
 
     func updateNSView(_ v: ObserverView, context: Context) {
         v.onChange = onChange
         v.onWindow = onWindow
+        v.onClose = onClose
     }
 
     static func dismantleNSView(_ v: ObserverView, coordinator: ()) {
@@ -28,6 +32,7 @@ struct WindowObserver: NSViewRepresentable {
 final class ObserverView: NSView {
     var onChange: ((Bool) -> Void)?
     var onWindow: ((NSWindow?) -> Void)?
+    var onClose: (() -> Void)?
     private var tokens: [NSObjectProtocol] = []
     private var last: Bool?
 
@@ -47,7 +52,10 @@ final class ObserverView: NSView {
         for name in names {
             tokens.append(nc.addObserver(forName: name, object: w, queue: .main) { [weak self] note in
                 let closing = note.name == NSWindow.willCloseNotification
-                MainActor.assumeIsolated { self?.evaluate(closing: closing) }
+                MainActor.assumeIsolated {
+                    self?.evaluate(closing: closing)
+                    if closing { self?.onClose?() }
+                }
             })
         }
         evaluate(closing: false)

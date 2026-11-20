@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "kind": "remote",
+  "generated_epoch": 1794042000,
+  "enabled": true,
+  "relay": {
+    "available": true,
+    "message": null
+  },
+  "sessions": [
+    {
+      "id": "3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a",
+      "short": "3a3a3a3a",
+      "where": "local",
+      "peer": null,
+      "machine": null,
+      "tool": "claude",
+      "name": "工作",
+      "cwd": "~/projects/site",
+      "since_epoch": 1794040500,
+      "viewers": 0,
+      "local_terminal": true,
+      "state": "ok",
+      "access": "control"
+    },
+    {
+      "id": "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+      "short": "5c5c5c5c",
+      "where": "peer",
+      "peer": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "machine": "office-linux",
+      "tool": "claude",
+      "name": "工作",
+      "cwd": "~/srv/api",
+      "since_epoch": 1794034020,
+      "viewers": 1,
+      "local_terminal": null,
+      "state": "ok",
+      "access": "control"
+    },
+    {
+      "id": "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e",
+      "short": "7e7e7e7e",
+      "where": "peer",
+      "peer": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "machine": "office-linux",
+      "tool": "codex",
+      "name": "dave",
+      "cwd": "~/srv/jobs",
+      "since_epoch": 1793948400,
+      "viewers": 0,
+      "local_terminal": null,
+      "state": "ok",
+      "access": "view"
+    },
+    {
+      "id": "91919191919191919191919191919191",
+      "short": "91919191",
+      "where": "peer",
+      "peer": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+      "machine": "home-mini",
+      "tool": "claude",
+      "name": "个人",
+      "cwd": "~/notes",
+      "since_epoch": 1794039600,
+      "viewers": 0,
+      "local_terminal": null,
+      "state": "offline",
+      "access": "control"
+    }
+  ],
+  "peers": [
+    {
+      "id": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+      "short": "b1b1b1b1",
+      "name": "office-linux",
+      "incoming": "none",
+      "shown": false,
+      "paired_epoch": 1792314000,
+      "state": "ok"
+    },
+    {
+      "id": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+      "short": "c2c2c2c2",
+      "name": "home-mini",
+      "incoming": "control",
+      "shown": true,
+      "paired_epoch": 1793782800,
+      "state": "ok"
+    },
+    {
+      "id": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+      "short": "d3d3d3d3",
+      "name": "old-laptop",
+      "incoming": "view",
+      "shown": true,
+      "paired_epoch": 1786266000,
+      "state": "gone"
+    }
+  ],
+  "errors": []
+}

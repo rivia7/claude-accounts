@@ -301,8 +301,12 @@ struct ResultCode: KnownValues {
     static let localUDP = ResultCode(rawValue: "local_udp")
     /// 配置向导走完了（`cca _onboard`，PROTOCOL 4.6）：中途的 `added`、`router_ready` 等被它盖掉。
     static let onboarded = ResultCode(rawValue: "onboarded")
+    /// 远程会话（PROTOCOL 9.2）：和另一台机器配好了（`cca remote pair` / `join`）。
+    static let remotePaired = ResultCode(rawValue: "remote_paired")
+    /// 远程会话：开关、对方能做什么、取消配对改好了（`cca remote on|off|allow|unpair`）。
+    static let remoteUpdated = ResultCode(rawValue: "remote_updated")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
-                                         .mailReady, .mailForgotten, .localUDP, .onboarded]
+                                         .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated]
 }
 
 struct FailCode: KnownValues {
@@ -399,8 +403,11 @@ struct ConsentItem: KnownValues {
     static let installProxy = ConsentItem(rawValue: "install_proxy")
     /// `cca settings fix`：先备份共享的 ~/.claude/settings.json，再去掉会盖掉各账号设置的几项（范围是这次要改的摘要，默认同意；App 不运行这条命令）。
     static let settingsFix = ConsentItem(rawValue: "settings_fix")
+    /// `cca remote pair`：这台机器显示配对码，输入它的那台机器之后能看和操作这台机器上开着远程会话的会话
+    /// （范围为空，默认同意；现在只在终端里问，App 里的入口和远程会话的终端一起做）。
+    static let remotePair = ConsentItem(rawValue: "remote_pair")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy, .settingsFix]
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

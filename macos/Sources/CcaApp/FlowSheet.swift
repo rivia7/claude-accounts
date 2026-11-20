@@ -86,13 +86,18 @@ private struct FlowPage: View {
                 fields
             }
             HStack {
+                if ask.displayOnly {   // 没有要回答的：cca 在等别处的事（另一台机器输入配对码），等到了自己换页、收场
+                    ProgressView().controlSize(.small)
+                }
                 Spacer()
                 Button("取消") { flow.cancel() }
                     .keyboardShortcut(.cancelAction)
-                Button(nonEmpty(ask.submit) ?? "继续") { flow.submit() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.glassProminent)
-                    .disabled(!flow.canSubmit)
+                if !ask.displayOnly {
+                    Button(nonEmpty(ask.submit) ?? "继续") { flow.submit() }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.glassProminent)
+                        .disabled(!flow.canSubmit)
+                }
             }
         }
         .onAppear {
@@ -247,17 +252,29 @@ private struct FlowCode: View {
     @Environment(AppModel.self) private var model
     let text: String
 
+    /// 短的一行（配对码）：照着念、照着敲的，放大、居中；长的（一段配置、一行命令）是拿去粘贴的，小字、能滚动
+    private var isShort: Bool { text.count <= 40 && !text.contains("\n") }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            ScrollView {
+            if isShort {
                 Text(text)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(size: 24, weight: .semibold, design: .monospaced))
                     .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 18)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.6)))
+            } else {
+                ScrollView {
+                    Text(text)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(height: 130)
+                .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.6)))
             }
-            .frame(height: 130)
-            .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.6)))
             Button("复制") { model.copy(text) }
                 .controlSize(.small)
         }

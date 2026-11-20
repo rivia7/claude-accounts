@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// 侧栏选中的东西：办公室（首页，所有账号一眼看全）、某个账号、用量统计、折合金额、节点分流、客户端更新。
+/// 侧栏选中的东西：办公室（首页，所有账号一眼看全）、某个账号、用量统计、折合金额、节点分流、远程会话、客户端更新。
 enum SidebarItem: Hashable, Sendable {
     case office
     case account(AccountRef)
@@ -10,6 +10,8 @@ enum SidebarItem: Hashable, Sendable {
     /// 折合金额：所有官方账号用掉的 token 按官方 API 的价格折成美元，放在一起比（cca 有折合金额时才有这一项）
     case costStats
     case routing
+    /// 远程会话：可以接入的会话（这台 Mac 上的、配对过的机器上的）、配对、内嵌的终端（cca 有远程会话时才有这一项）
+    case remoteSessions
     case clientUpdates
 
     var account: AccountRef? { if case .account(let r) = self { return r }; return nil }
@@ -235,6 +237,7 @@ final class AppModel {
             if let e = aliasEditing, selection != .account(e) { cancelRename() }
             visibilityChanged(wasVisible: isVisible, wasRouting: oldValue == .routing && mainVisible)
             reconcileDevicesPolling(restart: true)
+            reconcileRemotePolling()
             if selection == .office { refreshLiveIfStale() }
             if selection == .clientUpdates { refreshClientUpdates() }
         }
@@ -377,6 +380,7 @@ final class AppModel {
         self.scheduler.policyDelay = { [weak self] in self?.policyDelay() ?? PolicyPolling.fallback }
         self.scheduler.onPolicyTick = { [weak self] in self?.pollPolicy() }
         self.scheduler.onDevicesTick = { [weak self] in self?.pollDevices() }
+        self.scheduler.onRemoteTick = { [weak self] in self?.pollRemote() }
     }
 
     // MARK: 启动和连接
@@ -633,6 +637,7 @@ final class AppModel {
             await loadState()
             refreshUsage(manual: true)
             if selection == .routing || selection == .office { refreshLive() }
+            if selection == .remoteSessions { refreshRemote(manual: true) }
         }
     }
 
@@ -1080,6 +1085,7 @@ final class AppModel {
         sheet = queuedSheet
         queuedSheet = nil
         if sheet != nil { hooks.showMainWindow() }
+        if result?.code == .remotePaired { refreshRemote(manual: true) }   // 配好了：马上列出那台机器和它上面的会话
         Task { [weak self] in
             guard let self else { return }
             // 重新跑 hello：第一次添加 ChatGPT 账号时 Codex 才启用
@@ -1506,6 +1512,118 @@ final class AppModel {
         }
     }
 
+    // MARK: 远程会话（PROTOCOL 9）
+
+    /// cca 有远程会话（`hello.remote` 是 App 认识的版本；旧版 cca 没有：不显示这一页、不调这些命令）
+    var remoteAvailable: Bool { hello?.remote == RemoteAPI.version }
+    /// 最近一次查到的：开关、可以接入的会话、配对过的机器（只在内存里）
+    private(set) var remote = RemoteSnapshot()
+    private(set) var remoteLoading = false
+    /// 正在改开关、改某台机器能做什么、取消配对（按钮先停用）
+    private(set) var remoteBusy = false
+    /// 界面里开着的终端（一次接一个会话）；断开、会话结束以后还留着（看得到最后的输出），关掉才没有
+    private(set) var remoteTerminal: RemoteTerminal?
+    @ObservationIgnored private var remoteAgain = false
+
+    var remoteVisible: Bool { mainVisible && selection == .remoteSessions }
+
+    /// 这一页看得见时才定时查（马上查一次）；看不见、cca 没有就停
+    private func reconcileRemotePolling() {
+        scheduler.updateRemotePolling(enabled: phase == .ready && remoteAvailable && remoteVisible)
+    }
+
+    private func pollRemote() {
+        guard remoteVisible, hooks.systemConditions().idleSeconds < UsagePolling.awayAfter else { return }   // 走开了：没人看
+        refreshRemote(manual: false)
+    }
+
+    /// 查一次可以接入的会话和配对过的机器。查不成时上次查到的照样显示，旁边说原因。正在查时又要查：查完再查一次（刚改过东西）
+    func refreshRemote(manual: Bool) {
+        guard phase == .ready, remoteAvailable, let client else { return }
+        if remoteLoading {
+            remoteAgain = remoteAgain || manual
+            return
+        }
+        remoteLoading = true
+        track { [weak self] in
+            let (doc, r) = await client.document(.remoteList(local: false, auto: !manual), as: RemoteDoc.self, prompter: nil)
+            guard let self else { return }
+            self.remoteLoading = false
+            if let doc {
+                self.remote = RemoteSnapshot(doc: doc, error: nil, fetchedEpoch: doc.generatedEpoch ?? Date().timeIntervalSince1970)
+            } else if r.failure?.reason != .cancelled {
+                self.remote.error = nonEmpty(r.failure?.message) ?? "没能查到可以接入的会话"
+            }
+            if self.remoteAgain {
+                self.remoteAgain = false
+                self.refreshRemote(manual: true)
+            }
+        }
+    }
+
+    /// 开关：之后在终端里启动的会话放不放进会话宿主里运行（放进去的才接得上）
+    func setRemoteEnabled(_ on: Bool) {
+        runRemote(.remoteSwitch(on: on), failureTitle: on ? "没能打开远程会话" : "没能关闭远程会话")
+    }
+
+    /// 配对过的那台机器能对这台 Mac 的会话做什么
+    func setRemoteAccess(_ peer: RemotePeer, _ access: RemoteAccess) {
+        guard peer.incoming != access else { return }
+        runRemote(.remoteAllow(peer: peer.id, access: access), failureTitle: "没能改「\(peer.name)」能做什么")
+    }
+
+    func unpairRemote(_ peer: RemotePeer) {
+        runRemote(.remoteUnpair(peer: peer.id), failureTitle: "没能取消和「\(peer.name)」的配对")
+    }
+
+    /// 不用问的那几条（开关、对方能做什么、取消配对）：做完显示 cca 说的那句话，再查一次
+    private func runRemote(_ command: CcaCommand, failureTitle: String) {
+        guard phase == .ready, remoteAvailable, let client, !remoteBusy else { return }
+        remoteBusy = true
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(command, prompter: prompter)
+            guard let self else { return }
+            self.remoteBusy = false
+            self.finish(r, failureTitle: failureTitle, success: nonEmpty(r.resultEvent?.message) ?? "改好了")
+            self.refreshRemote(manual: true)
+        }
+    }
+
+    /// 配对：这台 Mac 显示配对码（输入它的那台机器之后能接入这台 Mac 的会话）/ 输入另一台机器显示的配对码。都是提问会话
+    func pairRemote(show: Bool) {
+        guard phase == .ready, remoteAvailable else { return }
+        run(show ? .remotePair : .remoteJoin)
+    }
+
+    /// 接入一个会话：在这一页里开一个终端。已经开着一个时先断开它（一次接一个）。cca 说接不上的（`state` 不是 ok）不接
+    func attachRemote(_ session: RemoteSession, readOnly: Bool) {
+        guard phase == .ready, remoteAvailable, session.attachable, let client else { return }
+        remoteTerminal?.close()
+        let t = RemoteTerminal(session: session, readOnly: readOnly || session.access == .view) { arguments, cols, rows, onEvent in
+            try client.startTerminal(arguments, cols: cols, rows: rows, onEvent: onEvent)
+        }
+        t.onEnd = { [weak self] _ in self?.refreshRemote(manual: true) }
+        remoteTerminal = t
+        selection = .remoteSessions
+        hooks.showMainWindow()
+    }
+
+    /// 主窗口关了（不是被挡住、最小化）：没人看着的终端断开，免得它一直占着一处接入（会话的窗口大小还得照顾它）
+    func mainWindowClosed() {
+        remoteTerminal?.close()
+    }
+
+    /// 关掉终端这一块，回到列表（还接着的话先断开）。列表只查一次：还接着的等进程真的退出时查（`onEnd`：那时这一处接入才算走了），
+    /// 早就结束了的现在查
+    func closeRemoteTerminal() {
+        guard let t = remoteTerminal else { return }
+        let ended = t.hasEnded
+        t.close()
+        remoteTerminal = nil
+        if ended { refreshRemote(manual: true) }
+    }
+
     // MARK: 折合金额（PROTOCOL 2.2、3.5）
 
     /// cca 有折合金额（`hello.cost` 是 App 认识的版本；旧版 cca 没有）
@@ -1899,6 +2017,7 @@ final class AppModel {
     private func visibilityChanged(wasVisible: Bool, wasRouting: Bool) {
         scheduler.update(visible: isVisible, routingVisible: routingVisible)
         reconcileDevicesPolling()
+        reconcileRemotePolling()
         guard phase == .ready else { return }
         startDueCostSync()   // 刚看到金额（打开折合金额页、账号页）：上次统计过了 5 分钟就再统计一次
         if isVisible && !wasVisible {
@@ -1967,6 +2086,7 @@ final class AppModel {
     /// 退出前：取消 usage / check / live / 检查更新 / 更新的子进程（SIGTERM 进程组）。app、web、router sync、重置额度不杀：
     /// 它们的输出接文件，App 退出后照样跑完。内置代理的内核停掉并等它退出（App 托管它，App 退出它就停）。
     func shutdown() {
+        remoteTerminal?.close()   // 界面里的终端：断开（会话在那边照常运行）
         coreHost?.shutdown()
         scheduler.stop()
         watcher?.stop()
@@ -2159,12 +2279,19 @@ final class AppModel {
     /// state 变了之后：选中的账号不在了就回办公室；第一次加载时打开办公室（首页）。
     private func fixSelection() {
         if !visibleTools.contains(tool) { tool = .claude }
+        // 换成了没有远程会话的旧版 cca：那一页没了，开着的终端也断开（不然没有入口能断开它）
+        if !remoteAvailable, let t = remoteTerminal {
+            t.close()
+            remoteTerminal = nil
+        }
         switch selection {
         case .office?, .usageStats?, .routing?, .clientUpdates?:
             return
         case .costStats?:
             // 侧栏只在 cca 有折合金额时列这一页：换成了没有它的旧版 cca 就回总览
             if !costAvailable { selection = .office }
+        case .remoteSessions?:
+            if !remoteAvailable { selection = .office }
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }
             // 正在改名：旧键没了是改名的结果，改名完成后会换成新键（rename）

@@ -1,0 +1,14 @@
+[2J[H[1;32m工作[0m [2m~/srv/api[0m
+
+[1m$ [0mgit status --short
+ [33mM[0m src/handlers/orders.py
+ [33mM[0m tests/test_orders.py
+[32m??[0m docs/orders.md
+
+[1m$ [0mpytest -q tests/test_orders.py
+[32m........................[0m                                                 [100%]
+[32m24 passed[0m in 1.87s
+
+[2m# 这是演示数据：真的会话里，这里是另一台机器上的 Claude Code、Codex 的界面[0m
+
+[1m$ [0m

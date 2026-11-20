@@ -166,6 +166,11 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     static let localUDPUninstall = Handoff(arguments: ["local", "udp", "uninstall"], title: "删掉本机 UDP 走节点的系统服务",
                                            message: "系统会弹出授权框问管理员密码。", inApp: true)
     static let install = Handoff(arguments: ["install"], title: "安装 cca", message: "在终端里完成 cca 的安装。")
+    /// 远程会话的配对（PROTOCOL 9.2）：这台 Mac 显示配对码 / 输入另一台机器显示的配对码。
+    static let remotePair = Handoff(arguments: ["remote", "pair"], title: "显示配对码",
+                                    message: "在终端里显示一个配对码，在另一台机器上输入它。", inApp: true)
+    static let remoteJoin = Handoff(arguments: ["remote", "join"], title: "输入配对码",
+                                    message: "在终端里输入另一台机器显示的配对码。", inApp: true)
 
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {

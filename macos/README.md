@@ -89,7 +89,8 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
   App 图标（白底上的这个字形，`tools/make-icon/main.swift`，build.sh 把 LogoGlyph.swift 一起编进去）、App 里不带底的 `BrandMark`、
   `Brand` 的颜色都取它；“总览”的图标是同一套颜色的 2×2 圆角方块 `OverviewMark`；“客户端更新”的图标 `UpdatesMark` 是一支箭头落进敞口的盒子，
   同样粗圆的线（边长的 0.15），蓝渐变到青绿（整条 Logo 渐变只给最高档的套餐）；“用量统计”的 `StatsMark` 是三根高低不同的柱子，蓝渐变到紫；
-  “折合金额”的 `CostMark` 是美元符号（一笔 S，上下露出一小截竖线），琥珀渐变到玫红（Logo 末端的暖色）。
+  “折合金额”的 `CostMark` 是美元符号（一笔 S，上下露出一小截竖线），琥珀渐变到玫红（Logo 末端的暖色）；“远程会话”的 `RemoteMark` 是终端的
+  提示符（一个尖括号、一道下划线），紫渐变到玫红。
 - 以信息简洁易懂为主，不为装饰上色、画框。颜色只表达三件事：哪个账号（账号色），什么状态（系统的绿 / 橙 / 红，正常时尽量不出现，
   比如“已登录”不显示；提示、建议用系统的强调色），套餐的档位。档位要低调（`PlanBadge.swift`）：徽章和 `Tag` 一样是中性的胶囊、secondary 的字，颜色只在前面的小徽记上，
   一档比一档足——入门灰色圆圈、标准蓝色圆点、进阶紫色菱形、尊贵（Ultra、Pro 500）Logo 渐变（`Brand.spectrum`：蓝 → 紫 → 玫红 → 琥珀）的四角星。
@@ -119,7 +120,7 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 - 账号页的设备（`DevicesSection.swift`，只有 cca 说 `can.devices` 的账号有，PROTOCOL 3.4）：在两栏下面占一整行，这台 Mac 排第一；状态点只表达状态
   （在用实心绿点、闲置绿圈、离线灰圈、没在用浅灰点），文字照实说（在用、开着，闲置 N 分钟、离线、没在用 · 上次使用）；离线的原因（可能休眠、断网）
   放在悬停说明里，怎么判断在用、闲置放在「显示细节」里。账号页看得见时一分钟查一次，看不见、换到别的页就停。
-- 侧栏（`Sidebar.swift`）：最上面是几种工具共用的几页——总览、用量统计、折合金额（cca 有它时）、节点分流、客户端更新，切工具时不变；
+- 侧栏（`Sidebar.swift`）：最上面是几种工具共用的几页——总览、用量统计、折合金额（cca 有它时）、节点分流、远程会话（cca 有它时）、客户端更新，切工具时不变；
   下面是工具切换（Claude / ChatGPT / Antigravity，启用了两种以上才有，`ToolPickerRow`，选不中的一行）和这个工具的账号。切换只管它下面列哪个工具的账号，
   所以放在账号列表正上方，不放在侧栏顶上（放在顶上像是连上面那几页也跟着换）。几段一样宽、在列表行里不往窄里压，所以挑放得下的样子：
   标准大小，放不下换小一号，还放不下（三种工具、侧栏拖到最窄）换成下拉菜单（`ViewThatFits`）；两种工具时总是标准大小。一页只放一种图：额度用量（有底槽、填满就是用完）和折合金额
@@ -173,18 +174,22 @@ CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/b
 
 ```
 Sources/CcaKit/        只用 Foundation / Observation / CoreServices（可测试）
-  Protocol/            PROTOCOL 的模型：hello / state / live / usage / check / health / 重置额度（Reset）/ 检查更新（Update）/ 设备（Devices）/ 折合金额（Cost）/ 事件；
+  Protocol/            PROTOCOL 的模型：hello / state / live / usage / check / health / 重置额度（Reset）/ 检查更新（Update）/ 设备（Devices）/ 折合金额（Cost）/
+                       远程会话（Remote）/ 事件；
                        容错解码（Decoding.swift）；样例（Sample.swift）
   Process/             CcaProcess（posix_spawn）、CcaLocator、CcaEnvironment、Transport（进程 / 演示数据）、CcaClient（重跑流程、闸门）、
-                       TerminalHandoff（.command 文件、shellQuote）
+                       TerminalHandoff（.command 文件、shellQuote）、PtyProcess（界面里的终端：伪终端上的 cca remote attach）
   Model/               AppModel（整个 App 的状态）、Scheduler（看得见才跑的定时器）、CcaWatcher（FSEvents）、CoreHost（内置代理的内核）、
                        Texts（文字、颜色档、补救、标记）、Diagnosis（一个账号的问题，按要紧程度排好）、Employee（总览里一个账号的状态、点名）、
                        WhatsNew（每个版本更新了什么、版本号的先后）、APIKey（API key 的明文只在这里：KeyReveal、机密剪贴板）、
-                       CostView / CostTexts（折合金额的图怎么排：纵轴的刻度、横轴的范围、写哪些日期；金额、token 数和提示的文字）
+                       CostView / CostTexts（折合金额的图怎么排：纵轴的刻度、横轴的范围、写哪些日期；金额、token 数和提示的文字）、
+                       RemoteTerminal（界面里开着的一个终端：什么时候起进程、字节进出、断开）
 Sources/CcaApp/        SwiftUI + AppKit：入口和生命周期（CcaApp）、主窗口和提示条（MainWindow）、侧栏（Sidebar）、总览（OfficePage；插画 DeskArt）、
                        套餐徽章（PlanBadge）、账号页（AccountDetail：页头；
                        UsageCard：用量；WeeklyUsage：每周用量的图（一排竖着的用量条）；CostSection：折合金额的一节和柱状图（CostBarChart）；SlotChart：按时间排的柱状图的骨架（每周用量、折合金额共用）和纵轴那一栏（AxisColumn）；APIKeySection：API key 那一行和第三方 API 账号的一节；RouteSection：线路与出口检测；DevicesSection：连着哪些设备）、用量统计（UsageStatsPage）、折合金额（CostStats）、分流页和分流图（RoutingPage）、菜单栏（MenuBarContent）、对话框和弹层（Prompter）、
-                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）
+                       可见性（Visibility）、颜色和小部件（Format）、玻璃和内容层的组件、版心和两栏（Glass）、新手引导（Guide）、外观和设置窗口（Appearance）、调试版的截图模式（Snapshot）、
+                       远程会话（RemoteSessionsPage：列表、配对过的机器、接着会话时的终端；TerminalSurface：SwiftTerm 的视图，App 里只有它 import SwiftTerm）
+Vendor/SwiftTerm/      终端的显示（MIT，上游的源码原样放着，单独编成一个模块；来历和更新的办法见里面的 README.md）
 Tests/ContractTests/   契约测试
 Tests/Fixtures/        手写的样例（假数据：US-A…US-D、HK-A、192.0.2.10、203.0.113.x、example.com）
 tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
@@ -227,6 +232,12 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
 - **提问会话**（PROTOCOL 4.6）：添加账号、换 key、删除账号、编辑账号表、配置路由器、配置本机 Clash 这些流程在 App 里问完：`ProcessSession` 开一个 cca 进程，fd 3 是答案管道（`CCA_PROMPT=1`），`FlowModel` 把 `ask` 事件变成页面，`FlowSheet` 显示。cca 不支持（`hello.prompt`）时走下面的终端交接。
 - **客户端更新**（`ClientUpdatesPage`，PROTOCOL 8）：桌面 App 和终端里的 Claude Code、Codex 一页管，每行一张卡片，图标中性灰、固定宽度（桌面 App 是窗口，
   `kind=cli` 是终端），能装的才有「安装更新…」、要重新检查的才有「重新检查」。版本、能不能更新、为什么都是 cca 给的。侧栏这一行有新版本时右边写「N 个可更新」。
+- **远程会话**（`RemoteSessionsPage`，PROTOCOL 9；cca 有 `hello.remote` 时侧栏才有这一页）：上面是开关（之后启动的会话可以重新接入）；
+  「可以接入的会话」按机器分组（这台 Mac 在前），一行一个：状态点、哪个工具哪个账号、文件夹、开了多久，右边「接入」（右键可以只看；那台机器
+  只让看时是「只看」），接不上的说原因；「配对过的机器」每行能改它对这台 Mac 的会话能做什么（看和操作 / 只看 / 不让接入）、取消配对（先问一句），
+  标题上「显示配对码…」「输入配对码…」是提问会话。接入以后整页换成一块终端（`cca remote attach` 跑在 App 开的伪终端上，SwiftTerm 画），
+  上面一行说是哪个会话、右边「断开」；一次接一个，换到别的页还接着，主窗口关了、退出 App 断开。会话自己结束、连接断了时终端留着，
+  上面说一句怎么了，可以「重新接入」「返回列表」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
 - **API key**（PROTOCOL 4.10）：官方账号在“用量”一节、第三方 API 账号在自己的「API key」一节；「…」和右键菜单里有记录 / 更换、复制、删除记下的 API key。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；系统自带的“终端”进程结束后默认留着窗口，按键后脚本用 AppleScript 关掉这个窗口；
   文件一开始就挪走再删掉，中途关窗口也不留下），App 发起的命令（登录、添加账号、配置路由器……）用系统自带的“终端”打开，账号的会话用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux，

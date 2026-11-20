@@ -235,6 +235,86 @@ enum Texts {
         "Claude Code 里记的套餐还是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
     }
 
+    // MARK: 远程会话（PROTOCOL 9）
+
+    /// 别的机器上的程序写的一行字（终端的标题）显示之前：控制字符、看不见的排版字符（改文字方向的、零宽的、标签字符）去掉，
+    /// 换行换段当空格，截短。cca 给的会话说明（机器名、文件夹）它自己过滤过了，这个是 App 直接从终端里拿到的
+    static func plainLine(_ s: String, max: Int) -> String {
+        var out = String.UnicodeScalarView()
+        for u in s.unicodeScalars {
+            switch u.properties.generalCategory {
+            case .control, .format, .surrogate, .privateUse, .unassigned: continue
+            case .lineSeparator, .paragraphSeparator: out.append(" ")
+            default: out.append(u)
+            }
+        }
+        return String(String(out).trimmingCharacters(in: .whitespaces).prefix(max))
+    }
+
+    /// 一个会话的名字：「Claude · 工作」（工具不认识、没给时只有账号的名字）
+    static func remoteTitle(_ s: RemoteSession) -> String {
+        [s.tool.map { cliProduct($0) }, nonEmpty(s.name)].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// 会话里跑的是哪个命令行工具（这里说的是终端里的工具，不是账号的品牌）
+    static func cliProduct(_ tool: ToolID) -> String {
+        switch tool {
+        case .claude: return "Claude Code"
+        case .codex: return "Codex"
+        case .agy: return "Antigravity"
+        default: return tool.rawValue
+        }
+    }
+
+    /// 会话的第二行：「~/srv/api · 开了 2 小时 · 另有 1 处接着」
+    static func remoteDetail(_ s: RemoteSession, now: Double) -> String {
+        var parts: [String] = []
+        if let d = nonEmpty(s.cwd) { parts.append(d) }
+        if let t = s.sinceEpoch { parts.append("开了 " + span(now - t)) }
+        if let open = s.localTerminal { parts.append(open ? "启动它的终端还开着" : "启动它的终端已经关了") }
+        if s.viewers > 0 { parts.append("另有 \(s.viewers) 处接着") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 接不上的会话为什么接不上；接得上的是 nil
+    static func remoteStateNote(_ s: RemoteSession) -> String? {
+        switch s.state {
+        case .ok: return nil
+        case .busy: return "没有回应"
+        case .offline: return "那台机器不在线"
+        default: return "暂时接不上"
+        }
+    }
+
+    static func remoteAccess(_ a: RemoteAccess) -> String {
+        switch a {
+        case .control: return "看和操作"
+        case .view: return "只看"
+        case .none: return "不让接入"
+        default: return a.rawValue
+        }
+    }
+
+    /// 配对过的机器的第二行：「11 月 3 日配对 · 配对码是这台 Mac 显示的」
+    static func remotePeerDetail(_ p: RemotePeer, now: Double, calendar: Calendar = .current) -> String {
+        var parts: [String] = []
+        if let t = p.pairedEpoch { parts.append(pastTime(t, now: now, calendar: calendar) + " 配对") }
+        parts.append(p.shown ? "配对码是这台 Mac 显示的" : "配对码是它显示的")
+        return parts.joined(separator: " · ")
+    }
+
+    /// 界面里的终端结束以后的那句话（`cca remote attach` 的退出码，PROTOCOL 9.3）。listed：会话还在最近一次查到的列表里
+    static func remoteEnded(code: Int32, closedByUser: Bool, listed: Bool) -> String {
+        if closedByUser { return "已断开，会话在那边照常运行" }
+        switch code {
+        case 65: return "没有这个会话了（可能已经结束）"
+        case 66: return "没能经服务器接上那台机器"
+        case 68: return "连接断了：会话宿主没有回应"
+        case 64, 69: return "没接上（退出码 \(code)）"
+        default: return listed ? "已断开，会话在那边照常运行" : (code == 0 ? "会话已经结束" : "会话已经结束（退出码 \(code)）")
+        }
+    }
+
     static func product(_ tool: ToolID) -> String {
         switch tool {
         case .claude: return "Claude"

@@ -28,6 +28,9 @@ CLI = os.path.dirname(HERE)
 REPO = os.path.dirname(CLI)
 CORE = os.path.abspath(os.environ.get('CCA_CORE') or os.path.join(CLI, 'target', 'debug', 'cca-core'))
 CASES = []
+# 切换成 Rust 以后有意加的输出（子命令 → Rust 的 stdout 里多出来的那几行）：比之前先去掉，别的照旧要逐字节一样。
+# env 的 CFG_REMOTE：远程会话的开关（docs/dev/remote.md），原来的 Python 没有
+ADDED = {'env': re.compile(r'^CFG_REMOTE=.*\n', re.M)}
 
 
 _ORACLE = {}
@@ -349,6 +352,9 @@ def main():
             shutil.rmtree(home)
             clone_tree(pre, home)
             rs = run_one([CORE], c, home, tmp)
+            added = ADDED.get(c['argv'][0]) if c['argv'] else None
+            if added:   # 切换以后有意加的输出：去掉以后别的仍然要和原来一样
+                rs['stdout'] = added.sub('', rs['stdout'])
             diffs = compare(py, rs)
             stray = rs['tree'].get('unexpected-commands.log') or py['tree'].get('unexpected-commands.log')
             if stray:   # 两边一样也要说：这个用例调到了没准备假命令的东西，测的多半不是想测的

@@ -20,7 +20,6 @@ pub fn b64encode(data: &[u8]) -> String {
 }
 
 /// `base64.urlsafe_b64encode(data).decode('ascii')`
-#[cfg(test)]
 pub fn urlsafe_b64encode(data: &[u8]) -> String {
     b64encode(data).replace('+', "-").replace('/', "_")
 }

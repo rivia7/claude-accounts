@@ -68,12 +68,21 @@ enum CcaCommand: Sendable, Hashable {
     /// 关掉一个账号的「信任转发中转」（`cca mail trust-forwarder KEY off`，PROTOCOL 4.11）：快速改 config.json，emit `mail_ready`。
     /// 开启是不安全操作，走 `Handoff.mailTrustForwarder`（要问域名、要同意）；关闭没有风险，直接跑。
     case mailTrustForwarderOff(ToolID, key: String)
+    /// 可以接入的会话和配对过的机器（`cca remote list [--local] --json`，PROTOCOL 9.1）：只读。local：只要这台 Mac 上的（不联网）；
+    /// auto 是这一页开着时的定时刷新（低优先级）。和工具无关，没有前缀。
+    case remoteList(local: Bool, auto: Bool)
+    /// 远程会话的开关（`cca remote on|off`）。
+    case remoteSwitch(on: Bool)
+    /// 配对的那台机器能对这台 Mac 的会话做什么（`cca remote allow <配对的 id> control|view|none`）。
+    case remoteAllow(peer: String, access: RemoteAccess)
+    /// 取消配对（`cca remote unpair <配对的 id>`）。
+    case remoteUnpair(peer: String)
 
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
-             .costSync: return nil
+             .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair: return nil
         }
     }
 
@@ -83,7 +92,7 @@ enum CcaCommand: Sendable, Hashable {
         case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _), .mailTrustForwarderOff(_, let k): return k
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall,
-             .clientInstall, .costSync: return nil
+             .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair: return nil
         }
     }
 
@@ -91,7 +100,7 @@ enum CcaCommand: Sendable, Hashable {
     var isBackground: Bool {
         switch self {
         case .usagePoll, .checkPoll, .policyPull(manual: false), .clientCheck(force: false, install: _), .devices(_, _, auto: true),
-             .costSync(manual: false): return true
+             .costSync(manual: false), .remoteList(local: _, auto: true): return true
         default: return false
         }
     }
@@ -137,6 +146,10 @@ enum CcaCommand: Sendable, Hashable {
             case .default: return prefix + ["mail", "forget", "--default"]
             }
         case .mailTrustForwarderOff(_, let k): return prefix + ["mail", "trust-forwarder", k, "off"]
+        case .remoteList(let local, _): return ["remote", "list"] + (local ? ["--local"] : []) + ["--json"]
+        case .remoteSwitch(let on): return ["remote", on ? "on" : "off"]
+        case .remoteAllow(let peer, let access): return ["remote", "allow", peer, access.rawValue]
+        case .remoteUnpair(let peer): return ["remote", "unpair", peer]
         }
     }
 
@@ -156,6 +169,8 @@ enum CcaCommand: Sendable, Hashable {
         case .clientMode, .clientAutoInstall, .devices: return 30
         case .keyShow, .keyForget: return 40   // cca 读钥匙串最多等 30 秒
         case .costSync: return 300   // 第一次要把会话记录全读一遍
+        case .remoteList, .remoteAllow, .remoteUnpair: return 40   // 问一次服务器（签名、直连），取消配对被限流时还要再试两次
+        case .remoteSwitch: return 30
         }
     }
 
@@ -166,7 +181,8 @@ enum CcaCommand: Sendable, Hashable {
         case .app, .web, .billing, .limitResets, .mailOpen, .routerSync, .reset, .clientInstall: return true
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
-             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff: return false
+             .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
+             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair: return false
         }
     }
 
@@ -185,6 +201,8 @@ enum CcaCommand: Sendable, Hashable {
         case .check, .checkPoll, .updateCheck, .policyRequest, .devices: return nil   // devices：AppModel 已保证同一个账号一次一个
         case .keyShow(let t, let k), .keyForget(let t, let k): return "key:\(t.rawValue):\(k)"
         case .costSync: return "cost-sync"   // 定时的和手动的一个接一个
+        case .remoteList: return nil   // AppModel 保证一次一个
+        case .remoteSwitch, .remoteAllow, .remoteUnpair: return "remote"   // 改配对表、开关：一个接一个
         }
     }
 }
@@ -363,6 +381,12 @@ actor CcaClient {
     /// App 同一时间只开一个流程，不用闸门；不限时（用户答题要多久就多久）。
     nonisolated func startSession(_ arguments: [String]) throws -> CcaSession {
         try transport.startSession(arguments)
+    }
+
+    /// 界面里的终端（PROTOCOL 9.3）：`cca remote attach [-r] <会话的 id>` 跑在 App 开的伪终端上，不限时。
+    nonisolated func startTerminal(_ arguments: [String], cols: Int, rows: Int,
+                                   onEvent: @escaping @Sendable (PtyEvent) -> Void) throws -> TerminalHandle {
+        try transport.startTerminal(arguments, cols: cols, rows: rows, onEvent: onEvent)
     }
 
     // MARK: 会改东西的命令（PROTOCOL 4）

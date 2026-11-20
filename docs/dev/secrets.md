@@ -2,6 +2,11 @@
 
 共享记下的 API key（keyshare）经设备统计的服务器同步，见 presence.md。
 
+- 远程会话配对的密钥（remote.md）：两台机器配对时各存一把（32 个字节，存成 64 个十六进制字符），服务名 `cca-remote-<配对编号>`、账户名 `pair`，
+  同样经 `ks_read` / `ks_write` / `ks_del`（没有钥匙串的系统是 `~/.cca/secrets/cca-remote-<配对编号>`）。只有辅助程序用（握手、给会话的说明加密），
+  不交给任何客户端、不进命令行和环境变量；配对码也一样（`cca remote join` 从 stdin 交给辅助程序）。取消配对、`cca restore`（`py remote-forget`）时删掉。
+  配对表 `~/.cca/remote/peers.json` 里没有密钥
+
 - 密钥绝不进任何进程的命令行和环境变量：存钥匙串用 `security -i` 从 stdin 读命令、`-X` 十六进制（`-i` 里的命令失败也返回 0，必须读回来比对；只收可见 ASCII，否则 `-w` 输出十六进制）；交给 Claude Code 用 `--settings` 里的 `apiKeyHelper`（回调 `cca _api-key <账号目录名>`，只给账号表里现有的账号），地址和模型也放在这份 `--settings` 的 env 里（优先级高于共享 settings.json 和进程环境；第二个 `--settings` 会把它整个顶掉）。env 会出现在命令行上，所以像密钥的变量名（`ENV_SECRETISH`）不收
 - 钥匙串里第三方 API 的 key：服务名 `cca-api-<账号目录名>`，账户名是接口的域名（换服务商就取不到旧 key）。代码里叫 secret（`secret-*` 子命令），免得和账号表的"键"混了。cca 存过的记在 config.json 的 `api_keys`，`secrets-forget` 据此清掉已经不在账号表里的（`cca edit` 之后、每次启动、`cca restore` 时全部清）
 - Linux 上没有钥匙串（`keyfile_store`：不是 macOS，或者 `CCA_KEYSTORE=file`，只给测试）：key 存成 `~/.cca/secrets/<服务名>`（目录 700、文件 600，内容 `{"v":1,"host":域名,"key":…}`，域名对不上算没有，和钥匙串的账户名一个意思；`O_EXCL|O_NOFOLLOW` 建临时文件、fsync 后原子替换）。服务名、`api_keys` / `ref_keys` / `key_hints` 的记账和钥匙串一样，只在 `kc_read` / `kc_put` / `kc_del` 里分开，退出码照 `security` 的（没有 44、读不了 1）。文案用 bash 的 `${KEYSTORE}`（钥匙串 / 密钥文件）、`${KEYSTORE_AT}`、`${KEYSTORE_CRED}` 和 辅助程序的 `keystore_name()`，失败的说明按 `keyfile_store` 分开（文件的说权限和磁盘空间）。Claude Code 在 Linux 上把自己的登录凭证写在 `CLAUDE_CONFIG_DIR/.credentials.json`：`claude_logout` 删它（macOS 上删钥匙串条目）。它和 `secrets/**` 都在 `CCA_DIR_PRIVATE` 里

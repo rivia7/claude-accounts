@@ -755,6 +755,48 @@ func genericDevices(_ name: String, _ d: Data) -> DevicesDoc? {
     return doc
 }
 
+/// `remote list --json`（PROTOCOL 9.1）：可以接入的会话、配对过的机器；没问到服务器的原因在 errors 里。
+@discardableResult
+func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
+    guard let doc = decodeOrFail(RemoteDoc.self, name, d) else { return nil }
+    let raw = jsonObject(d) as? [String: Any] ?? [:]
+    check("\(name) version 1", doc.version == 1)
+    check("\(name) kind remote", doc.kind == "remote")
+    check("\(name) generated_epoch 是数字", isNumber(raw["generated_epoch"]))
+    check("\(name) enabled 是布尔", raw["enabled"] is Bool)
+    let relay = raw["relay"] as? [String: Any]
+    check("\(name) relay.available 是布尔，用不了时有原因", relay?["available"] is Bool && (doc.relayAvailable || nonEmpty(doc.relayMessage) != nil))
+    let rawSessions = raw["sessions"] as? [[String: Any]] ?? [], rawPeers = raw["peers"] as? [[String: Any]] ?? []
+    check("\(name) 会话、配对过的机器、原因都解码了", rawSessions.count == doc.sessions.count && rawPeers.count == doc.peers.count
+          && (raw["errors"] as? [[String: Any]])?.count == doc.errors.count)
+    check("\(name) 会话的 id 是 32 个十六进制字符、不重复，short 是它的前 8 位",
+          doc.sessions.allSatisfy { $0.id.count == 32 && $0.id.allSatisfy(\.isHexDigit) && $0.short == String($0.id.prefix(8)) }
+          && Set(doc.sessions.map(\.id)).count == doc.sessions.count)
+    check("\(name) 配对的 id 是 32 个十六进制字符、不重复", doc.peers.allSatisfy { $0.id.count == 32 && $0.id.allSatisfy(\.isHexDigit) }
+          && Set(doc.peers.map(\.id)).count == doc.peers.count)
+    for (i, s) in doc.sessions.enumerated() {
+        let r = i < rawSessions.count ? rawSessions[i] : [:]
+        check("\(name) \(s.short) 的 since_epoch 是数字或 null、viewers 是数字", (isNull(r["since_epoch"]) || isNumber(r["since_epoch"])) && isNumber(r["viewers"]))
+        if s.isLocal {
+            check("\(name) \(s.short) 这台 Mac 上的：没有 peer、machine，知道启动它的终端在不在，能看和操作",
+                  isNull(r["peer"]) && isNull(r["machine"]) && r["local_terminal"] is Bool && s.access == .control && s.state != .offline)
+        } else {
+            check("\(name) \(s.short) 别的机器上的：peer 是配对过的机器，有机器名，不知道那边的终端，账号只有短名字（没有邮箱）",
+                  doc.peers.contains { $0.id == s.peer } && nonEmpty(s.machine) != nil && isNull(r["local_terminal"]) && s.state != .busy
+                  && !s.name.contains("@"))
+        }
+        check("\(name) \(s.short) 的 access 是 control 或 view", s.access == .control || s.access == .view)
+    }
+    for (i, p) in doc.peers.enumerated() {
+        let r = i < rawPeers.count ? rawPeers[i] : [:]
+        check("\(name) \(p.short) 有名字，shown 是布尔，paired_epoch 是数字或 null",
+              !p.name.isEmpty && r["shown"] is Bool && (isNull(r["paired_epoch"]) || isNumber(r["paired_epoch"])))
+    }
+    check("\(name) 用不了中转时不列别的机器上的会话", doc.relayAvailable || doc.sessions.allSatisfy(\.isLocal))
+    knownEnums(name, auditRemote(doc))
+    return doc
+}
+
 @discardableResult
 func genericMailList(_ name: String, _ d: Data) -> MailListDoc? {
     guard let doc = decodeOrFail(MailListDoc.self, name, d) else { return nil }
@@ -910,7 +952,7 @@ func wrongTypes(_ x: Any) -> Any {
                              "currency", "prices_date", "date"]
     if var d = x as? [String: Any] {
         for (k, v) in d {
-            if v is [String: Any] {   // 同一个名字的对象（cost_total 的 me，设备的 me 是布尔）不是这里说的字段
+            if v is [String: Any] || v is [Any] {   // 同一个名字的对象、数组（cost_total 的 me，设备的 me 是布尔；远程会话的 sessions 是数组，cli 的是个数）不是这里说的字段
                 d[k] = wrongTypes(v)
             } else if numeric.contains(k) {
                 d[k] = "abc"
@@ -1062,6 +1104,9 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "devices":
             genericDevices(f, d)
             tolerance(DevicesDoc.self, f, d) { [$0.accounts.count, $0.accounts.reduce(0) { $0 + $1.devices.count }] }
+        case "remote":
+            genericRemote(f, d)
+            tolerance(RemoteDoc.self, f, d) { [$0.sessions.count, $0.peers.count, $0.errors.count] }
         case "mail-list":
             genericMailList(f, d)
             tolerance(MailListDoc.self, f, d) { [$0.rows.count, $0.folders.count] }
@@ -1199,6 +1244,22 @@ func auditDevices(_ doc: DevicesDoc) -> [String] {
     let a = EnumAudit()
     a.add("tool", doc.tool)
     for acc in doc.accounts { for dev in acc.devices { a.add("[\(acc.key)].\(dev.name).state", dev.state) } }
+    return a.unknown
+}
+
+func auditRemote(_ doc: RemoteDoc) -> [String] {
+    let a = EnumAudit()
+    for s in doc.sessions {
+        a.add("sessions[\(s.short)].where", s.place)
+        a.add("sessions[\(s.short)].tool", s.tool)
+        a.add("sessions[\(s.short)].state", s.state)
+        a.add("sessions[\(s.short)].access", s.access)
+    }
+    for p in doc.peers {
+        a.add("peers[\(p.short)].incoming", p.incoming)
+        a.add("peers[\(p.short)].state", p.state)
+    }
+    for (i, e) in doc.errors.enumerated() { a.add("errors[\(i)].code", e.code) }
     return a.unknown
 }
 

@@ -35,7 +35,7 @@ struct MainWindow: View {
         .sheet(item: $model.sheet) { s in
             SheetView(sheet: s).environment(model)
         }
-        .background(WindowObserver { visible in model.setMainVisible(visible) })
+        .background(WindowObserver(onClose: { model.mainWindowClosed() }) { visible in model.setMainVisible(visible) })
         .motionScope(\.mainVisible)
         .onAppear {
             WindowOpener.shared.open = { openWindow(id: "main") }
@@ -93,6 +93,8 @@ struct DetailColumn: View {
                 AccountDetail(ref: ref)
             case .routing?:
                 RoutingPage()
+            case .remoteSessions?:
+                RemoteSessionsPage()
             case .clientUpdates?:
                 ClientUpdatesPage()
             case nil:

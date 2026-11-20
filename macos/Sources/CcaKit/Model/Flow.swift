@@ -153,7 +153,7 @@ final class FlowModel: Identifiable {
 
     /// 只拦空着的必填项，别的判断都交给 cca。
     var canSubmit: Bool {
-        guard case .asking(let e) = phase else { return false }
+        guard case .asking(let e) = phase, !e.displayOnly else { return false }
         return e.fields.allSatisfy { f in
             switch f.kind {
             case .secret: return f.optional || filledSecrets.contains(f.id)

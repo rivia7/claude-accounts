@@ -10,6 +10,7 @@ use py::{Fail, R};
 fn main() {
     // 没人接的 panic 相当于 Python 里没人接的异常：说一句，退出码 1
     std::panic::set_hook(Box::new(|info| {
+        cmd::remote::restore_on_panic(); // 会话宿主、接入端把终端切到了原始模式的话：先还原，下面那句才看得清
         py::io::finish();
         eprintln!("cca-core: 内部错误：{info}");
         std::process::exit(1);

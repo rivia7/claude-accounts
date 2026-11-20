@@ -149,6 +149,28 @@ enum Snapshot {
                 m.costGranularity = .week
                 if let r = first(.codex, { $0.cost != nil }) { m.showCost(r) }
             },
+            // 远程会话：列表（这台 Mac 上的、配对过的机器上的、配对过的机器），接着一个会话时的终端（演示数据是一屏示意）
+            Scene(name: "remote") { m in
+                m.closeRemoteTerminal()
+                m.selection = .remoteSessions
+                m.refreshRemote(manual: true)   // 窗口在后面，不算看得见：自己查一次
+            },
+            Scene(name: "remote-terminal") { m in
+                m.selection = .remoteSessions
+                if let s = m.remote.doc?.sessions.first(where: { !$0.isLocal && $0.attachable && $0.access == .control }) {
+                    m.attachRemote(s, readOnly: false)
+                }
+            },
+            Scene(name: "remote-terminal-view") { m in
+                m.selection = .remoteSessions
+                if let s = m.remote.doc?.sessions.first(where: { $0.attachable && $0.access == .view }) {
+                    m.attachRemote(s, readOnly: true)
+                }
+            },
+            Scene(name: "remote-off") { m in
+                m.closeRemoteTerminal()
+                m.selection = .office
+            },
             // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
             Scene(name: "pinned") { m in
                 m.tool = .claude
@@ -226,6 +248,7 @@ enum Snapshot {
                 ("flow-onboard", .onboard, 0), ("flow-onboard-net", .onboard, 1), ("flow-onboard-add", .onboard, 2),
                 ("flow-edit", .edit(prefix: []), 0),
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
+                ("flow-remote-pair", .remotePair, 0), ("flow-remote-pair-code", .remotePair, 1), ("flow-remote-join", .remoteJoin, 0),
                 ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),
                 ("flow-warned", demo("demo-warned", "添加 Claude 账号"), 0),
                 ("flow-failed", demo("demo-failed", "添加第三方 API 账号"), 0),

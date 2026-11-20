@@ -87,6 +87,160 @@ def fp_of(pubfile):
     return 'SHA256:' + base64.b64encode(hashlib.sha256(base64.b64decode(pub)).digest()).decode().rstrip('=')
 
 
+# ---------------------------------------------------------------- 远程会话（server/README.md「远程会话的中转」）
+B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'   # Crockford base32
+
+
+def H(key, msg):
+    return hmac.new(key, msg, hashlib.sha256).digest()
+
+
+def code_text(c):
+    """配对码：10 个字节写成 16 个字符，四个一组"""
+    n = int.from_bytes(c, 'big')
+    s = ''.join(B32[(n >> (5 * i)) & 31] for i in range(15, -1, -1))
+    return '-'.join(s[i:i + 4] for i in range(0, 16, 4))
+
+
+def code_bytes(text):
+    """输入的配对码（大小写、横线、空格随意；I L 当 1、O 当 0）；不对是 None"""
+    s = text.upper().replace('-', '').replace(' ', '').replace('I', '1').replace('L', '1').replace('O', '0')
+    if len(s) != 16 or any(ch not in B32 for ch in s):
+        return None
+    n = 0
+    for ch in s:
+        n = n * 32 + B32.index(ch)
+    return n.to_bytes(10, 'big')
+
+
+def pair_keys(c):
+    """配对码 → (配对消息的两把密钥, 服务器上认这次配对的编号)。配对码只有 80 位，所以这一步故意算得慢"""
+    kc = hashlib.pbkdf2_hmac('sha256', c, b'cca-remote/v1/pair', 65536)
+    return kc, (H(kc, b'enc'), H(kc, b'mac')), H(kc, b'rid').hex()[:32]
+
+
+def pair_msg(keys, rid, role, fp, nonce, name):
+    """配对时放到服务器上的那一份：role 是 "a"（显示配对码的）/ "b"（输入的）"""
+    pt = json.dumps({'v': 1, 'fp': fp, 'n': nonce.hex(), 'name': name}, ensure_ascii=False, separators=(',', ':')).encode()
+    return seal('cca-remote-pair', keys, [rid, role], pt + b' ' * (-len(pt) % 256))
+
+
+def pair_open(keys, rid, role, blob):
+    pt = unseal('cca-remote-pair', keys, [rid, role], blob)
+    return None if pt is None else json.loads(pt)
+
+
+def pair_secret(kc, na, nb, fpa, fpb):
+    """两台机器之间的密钥，和它的编号（服务器只知道编号）"""
+    p = H(kc, b'secret\0' + na + nb + fpa.encode() + b'\0' + fpb.encode() + b'\0')
+    return p, H(p, b'cca-remote/v1/pid').hex()[:32]
+
+
+def dir_keys(p):
+    k = H(p, b'cca-remote/v1/dir')
+    return H(k, b'enc'), H(k, b'mac')
+
+
+def dir_seal(p, pid, sid, doc):
+    pt = json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode()
+    return seal('cca-remote-dir', dir_keys(p), [pid, sid], pt + b' ' * (-len(pt) % 256))
+
+
+def dir_open(p, pid, sid, blob):
+    pt = unseal('cca-remote-dir', dir_keys(p), [pid, sid], blob)
+    return None if pt is None else json.loads(pt)
+
+
+class Channel:
+    """两头之间的加密通道。握手：接入方发 hello()，宿主回 reply()，接入方再发 confirm()；之后两个方向各用各的密钥、
+    各从 0 数序号。role 是 "host" / "viewer"；fph、fpv 是各自记着的宿主、接入方的指纹"""
+    VER = 1
+
+    def __init__(self, role, p, pid, sid, fph, fpv):
+        self.role, self.ka, self.pid, self.sid, self.fph, self.fpv = role, H(p, b'cca-remote/v1/auth'), pid, sid, fph, fpv
+        self.send_seq = self.recv_seq = 0
+
+    def ctx(self):
+        return bytes([self.VER]) + bytes.fromhex(self.pid) + bytes.fromhex(self.sid) + self.nv + self.nh \
+            + self.fph.encode() + b'\0' + self.fpv.encode() + b'\0'
+
+    def keys(self):
+        ks = H(self.ka, b'session\0' + self.ctx() + self.tagh + self.tagv)
+        k = {n: H(ks, n.encode()) for n in ('h2v-enc', 'h2v-mac', 'v2h-enc', 'v2h-mac')}
+        mine, theirs = ('h2v', 'v2h') if self.role == 'host' else ('v2h', 'h2v')
+        self.out, self.inn = (k[mine + '-enc'], k[mine + '-mac']), (k[theirs + '-enc'], k[theirs + '-mac'])
+
+    def hello(self, nv=None):   # 接入方 → 宿主（52 字节）
+        self.nv = nv or secrets.token_bytes(32)
+        return b'CR\x01' + bytes([self.VER]) + self.nv + bytes.fromhex(self.pid)
+
+    def reply(self, hello, nh=None):   # 宿主 → 接入方（68 字节）；hello 不对是 None
+        if len(hello) != 52 or hello[:4] != b'CR\x01' + bytes([self.VER]) or hello[36:] != bytes.fromhex(self.pid):
+            return None
+        self.nv, self.nh = hello[4:36], nh or secrets.token_bytes(32)
+        self.tagh = H(self.ka, b'host\0' + self.ctx())
+        return b'CR\x02' + bytes([self.VER]) + self.nh + self.tagh
+
+    def confirm(self, reply):   # 接入方 → 宿主（35 字节）；宿主的证明不对是 None
+        if len(reply) != 68 or reply[:4] != b'CR\x02' + bytes([self.VER]):
+            return None
+        self.nh, self.tagh = reply[4:36], reply[36:]
+        if not hmac.compare_digest(self.tagh, H(self.ka, b'host\0' + self.ctx())):
+            return None
+        self.tagv = H(self.ka, b'viewer\0' + self.ctx() + self.tagh)
+        self.keys()
+        return b'CR\x03' + self.tagv
+
+    def accept(self, confirm):   # 宿主收到接入方的证明：对不对
+        if len(confirm) != 35 or confirm[:3] != b'CR\x03':
+            return False
+        self.tagv = confirm[3:]
+        if not hmac.compare_digest(self.tagv, H(self.ka, b'viewer\0' + self.ctx() + self.tagh)):
+            return False
+        self.keys()
+        return True
+
+    def seal(self, data):
+        """一条记录：序号(8) 密文长度(2) 密文 认证(16)。明文是 长度(2) 内容 零补齐到 32 的整数倍"""
+        assert len(data) <= 16384
+        pt = len(data).to_bytes(2, 'big') + data
+        pt += b'\0' * (-len(pt) % 32)
+        seq = self.send_seq.to_bytes(8, 'big')
+        self.send_seq += 1
+        ct = bytes(x ^ y for x, y in zip(pt, stream(self.out[0], seq, len(pt))))
+        head = seq + len(ct).to_bytes(2, 'big')
+        return head + ct + H(self.out[1], head + ct)[:16]
+
+    def open(self, buf):
+        """buf（bytearray）开头的一条记录：内容；还不够一条是 None；序号、认证不对抛 ValueError"""
+        if len(buf) < 10:
+            return None
+        n = int.from_bytes(buf[8:10], 'big')
+        if n > 16384 + 2 + 31 or n % 32 or n == 0:
+            raise ValueError('len')
+        if len(buf) < 10 + n + 16:
+            return None
+        head, ct, tag_ = bytes(buf[:10]), bytes(buf[10:10 + n]), bytes(buf[10 + n:26 + n])
+        if head[:8] != self.recv_seq.to_bytes(8, 'big') or not hmac.compare_digest(tag_, H(self.inn[1], head + ct)[:16]):
+            raise ValueError('auth')
+        self.recv_seq += 1
+        del buf[:26 + n]
+        pt = bytes(x ^ y for x, y in zip(ct, stream(self.inn[0], head[:8], n)))
+        size = int.from_bytes(pt[:2], 'big')
+        if size > n - 2 or any(pt[2 + size:]):
+            raise ValueError('pad')
+        return pt[2:2 + size]
+
+
+def relay_line(role, ident, key, cn=None):
+    """连数据端口时说的那一行（role：host / view 用票据的编号和密钥，join 用令牌和控制连接那张票据的密钥），和该回的那一行"""
+    cn = cn or secrets.token_hex(8)
+    b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+    lead = 'j' if role == 'join' else 'c' + role
+    line = 'CCA-RELAY/1 %s %s %s %s\n' % (role, ident, cn, b64u(H(key, (lead + ident + cn).encode())))
+    return line.encode(), ('CCA-RELAY/1 OK %s\n' % b64u(H(key, ('s' + ident + cn).encode()))).encode()
+
+
 def post(keyfile, port, op, extra):
     """用 deploy key（keyfile）签名，向 127.0.0.1:port 的测试服务器发 op 请求（extra 是 put / get 这些）；限流（429）时等一会儿再试。
     回 (状态码, JSON)"""

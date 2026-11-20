@@ -53,6 +53,16 @@ final class ScriptedTransport: Transport, @unchecked Sendable {
         return h
     }
 
+    /// 界面里的终端：记下每次启动，给一个假的句柄（测试自己喂输出、报退出）
+    private var _terminals: [FakeTerminal] = []
+    var terminals: [FakeTerminal] { lock.withLock { _terminals } }
+
+    func startTerminal(_ arguments: [String], cols: Int, rows: Int, onEvent: @escaping @Sendable (PtyEvent) -> Void) throws -> TerminalHandle {
+        let h = FakeTerminal(arguments: arguments, cols: cols, rows: rows, onEvent: onEvent)
+        lock.withLock { _terminals.append(h) }
+        return h
+    }
+
     /// 提问会话：按顺序给出准备好的会话，没有了就和不支持一样
     var sessions: [ScriptedSession] = []
     private var _started: [[String]] = []

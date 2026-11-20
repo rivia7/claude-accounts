@@ -170,7 +170,9 @@ enum CcaProcess {
     }
 
     /// posix_spawn：自己一个会话、信号恢复默认、只继承 0/1/2；stdin 一律 /dev/null。
-    private static func spawn(_ spec: ProcessSpec, stdout: Output, stderr: Output, answers: Int32? = nil) throws -> pid_t {
+    /// terminal：给了伪终端从的那头的路径时（界面里的终端，PROTOCOL 9.3），0/1/2 都接它，stdout / stderr 两个参数不看。
+    private static func spawn(_ spec: ProcessSpec, stdout: Output, stderr: Output, answers: Int32? = nil,
+                              terminal: String? = nil) throws -> pid_t {
         var attr: posix_spawnattr_t? = nil
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
@@ -187,8 +189,15 @@ enum CcaProcess {
         var fa: posix_spawn_file_actions_t? = nil
         posix_spawn_file_actions_init(&fa)
         defer { posix_spawn_file_actions_destroy(&fa) }
-        posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0)
-        for (fd, out) in [(Int32(1), stdout), (Int32(2), stderr)] {
+        if let terminal {
+            posix_spawn_file_actions_addopen(&fa, 0, terminal, O_RDWR, 0)
+            posix_spawn_file_actions_adddup2(&fa, 0, 1)
+            posix_spawn_file_actions_adddup2(&fa, 0, 2)
+        } else {
+            posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0)
+        }
+        let outputs: [(Int32, Output)] = terminal == nil ? [(Int32(1), stdout), (Int32(2), stderr)] : []
+        for (fd, out) in outputs {
             switch out {
             case .pipe(let w): posix_spawn_file_actions_adddup2(&fa, w, fd)
             case .file(let path): posix_spawn_file_actions_addopen(&fa, fd, path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
@@ -328,6 +337,11 @@ enum CcaProcess {
             t.name = "cca-run-\(pid)"
             t.start()
         }
+    }
+
+    /// 界面里的终端（PROTOCOL 9.3）：标准输入、输出、错误都是伪终端从的那头（PtyProcess 开的）。
+    static func spawnOnTerminal(_ spec: ProcessSpec, slavePath: String) throws -> pid_t {
+        try spawn(spec, stdout: .null, stderr: .null, terminal: slavePath)
     }
 
     /// 提问会话（PROTOCOL 4.6）：输出接文件（App 退出时 cca 不会被 SIGPIPE 杀掉），fd 3 是答案管道的读端。返回进程号和写端。

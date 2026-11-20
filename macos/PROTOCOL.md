@@ -16,7 +16,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 
 - 可执行文件：`~/.local/bin/cca`，没有就 `~/.cca/bin/cca`；开发模式下 `cca gui` 会用 `open --env CCA_GUI_CCA=<路径>` 告诉 App。
 - 每次调用都是一个新进程：stdin 接 `/dev/null`，自己一个会话（`POSIX_SPAWN_SETSID`），取消时给整个进程组发 SIGTERM，3 秒后 SIGKILL。
-  这样 cca 永远打不开 `/dev/tty`，所有需要回答的地方都按“非交互”处理（例外是提问会话，见 4.6）。
+  这样 cca 永远打不开 `/dev/tty`，所有需要回答的地方都按“非交互”处理（例外是提问会话，见 4.6；界面里的终端另有一套，见 9.3）。
 - 环境：继承 App 的环境，去掉 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`、`CCA_GRANT`、`CCA_EVENTS`、`CCA_RO`、`CCA_PROMPT`；`PATH` 后面补上
   `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin`；设 `CCA_GUI=1`、`NO_COLOR=1`；按需设 `CCA_EVENTS`、`CCA_GRANT`（见 4）、`CCA_PROMPT`（见 4.6）。
 - **绝不**设 `CCA_TTY`、`CCA_YES`、`CCA_SKIP_CHECK`，绝不调用 `cca _api-key`。读 API key 只用 `cca [codex] key 账号 --show`（4.10），
@@ -28,11 +28,13 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   App 不调（调了 cca 也只回 `fail` 的 `unsupported`）。
 - 同一个账号（工具 + 键）的 `app` / `web` / `billing` / `limit-resets` / `mail open` / `rename` 一次只跑一个（同一个资料目录绝不能开两份），`devices`、`key --show` / `key --forget` 也是同一个账号一次一个；`usage` 每个工具一次一个；同一个账号的 `reset`
   一次一个；`router sync` 全局一次一个；`update 版本号`、`gui update` 全局一次一个（一个接着一个）。`_gui hello|state|live|mail-list`、`update --check --json`
-  随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。
+  随时可以跑。`clients check|mode|auto-install|install` 共用一个客户端更新闸门，不能重叠执行（见 8）。`remote on|off|allow|unpair`
+  全局一次一个（都改配对表和开关）；`remote list --json` 随时可以跑，App 自己保证一次一个（服务器给每台设备限了流，见 9.1）。
 - 建议的超时：`hello` 5 秒、`state` 15 秒、`live` 30 秒、`_gui mail-list` 45 秒（连 Gmail）、`usage` 150 秒、`check` 180 秒（App 定时检测几个账号时 300 秒）、`app` / `web` / `billing` / `limit-resets` / `mail open` 120 秒、`router sync` 180 秒、`gui update` 300 秒、
   `policy pull --json` 180 秒、`rename`、`reorder`、`policy request` 60 秒、`update --check --json` 150 秒、`update 版本号` 300 秒、`devices --json` 30 秒、
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
-  `cost sync` 全局一次一个。
+  `cost sync` 全局一次一个。`remote list --json`、`remote allow`、`remote unpair` 40 秒（要问一次维护者的服务器；取消配对被限流时 cca 自己再试两次），
+  `remote on|off` 30 秒。
 - `app`、`web`、`billing`、`limit-resets`、`mail open`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -80,6 +82,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   App 不显示折合金额、不调 `cost sync`。
 - `mail`：有邮箱助手的 App 入口（账号页的「邮箱」一节，4.11：`cca mail setup [--account]`、`cca _gui mail-list`、`cca mail open --msg`、`cca mail forget`，
   见 2.2 的 `can.mail` / `account.mail`、2.4）。没有这个字段（旧版 cca）时 App 不显示「邮箱」一节、不调这些命令（旧版 cca 没有 `mail list`，`cca mail setup` 会被当成启动账号）。
+- `remote`：有远程会话的 App 入口（「远程会话」一页，见 9：`cca remote list --json`、配对、`cca remote attach`）。现在是 1。没有这个字段（旧版 cca）
+  或者版本不认识时 App 不显示这一页、不调这些命令（旧版 cca 会把 `remote` 当成启动账号的参数）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
   （旧版 cca 没有 `tools.agy`，当作没启用）。`bin` 是找到的 `claude` / `codex` / `agy`，没装为 null。App 只认识的工具才显示，`tools` 里别的键忽略。
@@ -608,7 +612,7 @@ cca 问维护者的设备统计服务器（直连，钉住映射里的证书公�
 ### 4.1 事件文件
 
 运行会改东西的命令（`app`、`web`、`billing`、`limit-resets`、`check`、`usage`、`router sync`、`gui update`、`rename`、`reorder`、`reset`、`update 版本号`、
-`key --forget`、`mail open`、`mail forget`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
+`key --forget`、`mail open`、`mail forget`、`remote on|off|allow|unpair`）、检查更新（`update --check --json`）、查设备（`devices --json`）、统计折合金额（`cost sync --json`）和读 API key（`key --show`）时（查不了的原因看 `fail` 事件），App 给一个新的空文件路径 `CCA_EVENTS=<文件>`，
 cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；写不了也不影响命令本身。cca 的退出码、stderr 和不设时完全一样。
 提问会话另有 `ask` 事件（见 4.6）。
 
@@ -621,7 +625,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；Claude 的 `message` 说清楚是哪份文件、哪几项、怎么办，共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -654,6 +658,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `reset_credit` | 账号目录名（`state` 里账号的 `id`） | 重置额度会用掉一次重置机会（见 4.5） | no |
 | `key_forget` | 账号目录名 | 删掉官方账号记下的 API key（只删 cca 在钥匙串里记的这一份，控制台里的 key 不受影响；会同步的账号，登录了它的其他设备上的也删；见 4.10） | no |
 | `install_proxy` | 节点名 | 辅助安装（`install-cli`）直连拿不到安装脚本、或者直连没装成：经内置代理的这个节点装（本机临时起一个只走它的代理端口，装完就停）。App 平时把 `install-cli` 交给终端，在终端里问 | yes |
+| `remote_pair` | 空 | `cca remote pair`：这台机器显示一个配对码；在另一台机器上输入它以后，那台机器可以经维护者的服务器看和操作这台机器上开着远程会话的会话（两头之间加密；之后能改成只看、不让，或者取消配对）。App 里是提问会话（「远程会话」页的「显示配对码…」，9.2），当场问；终端里问之前先把这段说明打出来 | yes |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
 - `grant` 是 `item:scope`（scope 为空时就是 `item`），App 原样回传，不要自己拼。范围对不上的授权不算（同意了重载 OpenClash，不等于同意重载 ShellCrash；
@@ -770,11 +775,12 @@ ChatGPT 账号（Codex 的官方账号）有重置机会时（`usage` 里 `reset
 | `choice` | 单选 | 选中项的 `value`；`optional` 时可以空着（“不选”的说法在 `skip`） | `options: [{value, label, note}]`，`default` 是预选项的 `value` |
 | `multi` | 多选 | 选中项的 `value`，空格隔开 | `options`、`min`（至少选几个） |
 | `confirm` | 是 / 否两个按钮（一页只有它） | `y` / `n` | `detail`、`severity`；`default` 是回车时的答案 |
-| `code` | 只显示的一段多行文字（`value`），带“复制” | 不用回答（不写答案） | |
+| `code` | 只显示的一段文字（`value`），带“复制”。一行的短文字（配对码）App 放大居中，多行的小字、能滚动 | 不用回答（不写答案） | |
 
 字段还可以带：`section`（分组的小标题，相邻的同一组放在一起）、`style`（`choice` 写 `menu` 时是一行里的弹出菜单，字段多的表单用；选中只有一个选项时只显示它）。页面还可以带 `submit`（提交按钮的说法，空的是“继续”）。这几个都是新加的，旧版 App 忽略它们照样能显示。
 
-答案：每个字段一行 `<seq> <字段 id> <值>\n`（只有一个字段的页，字段 id 就是 `v`），按 `fields` 的顺序写进 fd 3；值里不能有换行。一页的字段对不上（id 不对）时 cca 按取消处理，免得把值放错地方。
+答案：每个字段一行 `<seq> <字段 id> <值>\n`（只有一个字段的页，字段 id 就是 `v`），按 `fields` 的顺序写进 fd 3；值里不能有换行。字段都是 `code` 的一页没有要回答的
+（`remote.pair`：cca 在等另一台机器输入配对码，等到了自己收场）：App 只给「取消」（关掉答案管道），不给「继续」、什么都不写。一页的字段对不上（id 不对）时 cca 按取消处理，免得把值放错地方。
 App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同一个 `q` 带着 `error` 和已填的值再发一条 `ask`。
 
 - 一页还没回答时，cca 也可能自己发新的一页（边等边干活的页，比如配置向导第 1 步等维护者加公钥：状态变了带着新的说明再发一页，等到了直接发下一页）：
@@ -814,6 +820,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `mail.address` | `mail setup`（终端） | `text` | 邮箱助手的终端流程：收登录邮件的 Gmail 地址（预填上次的；地址不对、要换地址时重问）。App 里用 `mail.setup` 一页问完 |
 | `mail.password` | `mail setup`（终端） | `secret` | 邮箱助手的终端流程：这个 Gmail 的应用专用密码（cca 登录一次核对过才存进钥匙串；不对时重问）。只经答案管道 |
 | `mail.forwarder` | `mail trust-forwarder` | `text` | 「信任转发中转」要信任的中转域名（像 relay.example.com）。问之前 / 之后都有不安全的警告（页面 `message` + 随后的 `consent.mail_trust_forwarder`，4.11）。只给 Claude 账号 |
+| `remote.pair` | `remote pair` | `code` | 显示配对码的那一页（字段 id 是 `code`，`value` 是配对码 `XXXX-XXXX-XXXX-XXXX`，10 分钟内有效、只能用一次）。**没有要回答的**：另一台机器输入了，cca 自己发 `result` 的 `remote_paired` 退出；过期、服务器那边没成是 `fail`。App 取消（关掉答案管道）时 cca 把后台的配对停掉、告诉服务器作废这个配对码。前面先问 `consent.remote_pair`（4.2） |
+| `remote.code` | `remote join` | `text` | 另一台机器上显示的配对码（16 个字母和数字，大小写、横线随意；空着是取消）。不对、过期、服务器那边没成都是 `fail`（配对码错了不重问：那一头试错几次就作废，要重新显示一个） |
 | `consent.<item>` | 流程里需要同意时 | `confirm` | 4.2 的同意，默认值和 `severity` 不变 |
 
 账号表的表单（`edit.form`）：字段 id 是 `n<编号>`（节点）、`u<编号>`（接口地址）、`m<编号>`（模型）、`e<编号>`（环境变量），编号是账号在表里的位置，App 不解释。不合格时同一个 `q` 带着 `error` 和已填的值再发一条，都合格才写账号表；
@@ -841,6 +849,11 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `mail setup [--account]` | 账号页「邮箱」一节的「配置 / 更换」 | 提问会话（`mail.setup`；要 `hello.mail`，4.11） |
 | `mail trust-forwarder <账号>` | 「邮箱」一节的「信任转发中转（不安全）」开关 | 提问会话（`mail.forwarder` + `consent.mail_trust_forwarder`，4.11）；关闭是 `cca mail trust-forwarder <账号> off` |
 | `_gui mail-list`、`mail open --msg`、`mail forget` | 「邮箱」一节的列表 / 刷新、每封的「在浏览器打开」、「移除」 | 无交互命令（4.11、2.4；`mail open` 进 `launch:` 闸门） |
+| `remote list --json` | 「远程会话」页（看得见时每 15 秒一次、「刷新」；要 `hello.remote`，9.1） | 无交互命令 |
+| `remote pair`、`remote join` | 「远程会话」页「配对过的机器」的「显示配对码…」「输入配对码…」 | 提问会话（`consent.remote_pair` + `remote.pair` / `remote.code`，9.2） |
+| `remote on\|off`、`remote allow`、`remote unpair` | 「远程会话」页的开关、每台机器那一行的菜单和「取消配对」 | 无交互命令（9.2） |
+| `remote attach [-r] <会话的 id>` | 「远程会话」页每个会话的「接入」「只看」 | 界面里的终端（App 开的伪终端，9.3） |
+| `remote`（`status`、`peers`、不带 `--json` 的 `list`） | 没有入口 | 终端里自己运行 |
 | `[codex] login` | 账号页「登录…」 | 终端 |
 | `install` | 引导页 | 终端 |
 | `[codex\|agy] install-cli` | 账号页“没装 X 命令”旁边的「安装 X 命令…」、`tool_missing` 失败的补救按钮（要 `hello.install_cli`） | 终端 |
@@ -1025,3 +1038,101 @@ cca.app/Contents/MacOS/cca --verify-client-update /absolute/package.zip BASE64_S
 Claude 的更新源（`https://api.anthropic.com/api/desktop/darwin/<架构>/squirrel/update`，Squirrel 的 json 格式，204 是没有更新）没有 Ed25519 签名，给的是
 SHA-256 和大小：cca 下载后比对，解压后同样检查代码签名、Team ID、产品标识、版本和 Gatekeeper，不需要 cca.app 验签。这个接口要求带 `device_id`：每次现生成一个，
 不用也不存账号实例里的标识。下载地址只认 `downloads.claude.ai`，增量包不用。
+
+## 9. 远程会话
+
+终端里启动的会话可以放进“会话宿主”里运行：终端关了会话照样运行，之后在这台 Mac 上、在配对过的另一台机器上重新接入（看和操作同一个
+Claude Code / Codex / Antigravity 的界面）。两台机器之间经维护者的服务器中转，内容端到端加密（细节、线上的格式见 docs/dev/remote.md、
+server/README.md）。App 的「远程会话」一页列出可以接入的会话和配对过的机器，接入时在页里开一块终端。都要 `hello.remote` 是 App 认识的
+版本（现在是 1）；和工具无关，命令没有 `codex` / `agy` 前缀；不经过自动更新和映射拉取。
+
+### 9.1 `cca remote list [--local] --json`（只读；配对过别的机器时要联网：问维护者的服务器）
+
+```json
+{
+  "version": 1, "kind": "remote", "generated_epoch": 1794042000.0,
+  "enabled": true,
+  "relay": {"available": true, "message": null},
+  "sessions": [
+    {"id": "3a3a…（32 个十六进制字符）", "short": "3a3a3a3a", "where": "local", "peer": null, "machine": null,
+     "tool": "claude", "name": "工作", "cwd": "~/projects/site", "since_epoch": 1794040500.0, "viewers": 0,
+     "local_terminal": true, "state": "ok", "access": "control"},
+    {"id": "5c5c…", "short": "5c5c5c5c", "where": "peer", "peer": "b1b1…（32 个十六进制字符）", "machine": "office-linux",
+     "tool": "claude", "name": "工作", "cwd": "~/srv/api", "since_epoch": 1794034020.0, "viewers": 1,
+     "local_terminal": null, "state": "ok", "access": "view"}
+  ],
+  "peers": [
+    {"id": "b1b1…", "short": "b1b1b1b1", "name": "office-linux", "incoming": "none", "shown": false,
+     "paired_epoch": 1792314000.0, "state": "ok"}
+  ],
+  "errors": []
+}
+```
+
+- 退出 0 就有文档。没问到服务器不算失败：原因在 `errors` 里，这台 Mac 上的会话照给。`--local` 只列这台 Mac 上的（不联网，`peers[].state` 都是 `unknown`）。
+- `enabled`：开关（`cca remote on`）。开着时，**之后**在终端里启动的会话才放进宿主里运行、才接得上；已经开着的不受影响。App 启动的桌面 App、
+  网页版和它无关；App 发起的终端交接（账号页的「终端」）是普通的终端启动，照这个开关。
+- `relay.available`：这台 Mac 用不用得了中转（配置了维护者的映射、映射里有服务器、有 deploy key）。为 false 时 `message` 说原因，
+  不能配对、列不出别的机器上的会话（`sessions` 里只有 `where: "local"` 的）；以前配对过别的机器时 `errors` 里另有一条 `relay_off`。
+- `sessions[]`：一个可以接入的会话。`id` 是 `cca remote attach` 的参数，`short` 是给人看的前 8 位。
+  - `where`：`local`（这台 Mac 上的）| `peer`（配对过的机器上的：`peer` 是 `peers[].id`，`machine` 是那台机器的名字）。
+  - `tool`：`claude` | `codex` | `agy`；`name`：账号的名字（这台 Mac 上的：别名，没起别名的是邮箱；别的机器上的只有短名字：别名，
+    没起别名的是邮箱 @ 前面那一截）；`cwd`：启动时的文件夹（主目录写成 `~`）；`since_epoch`：什么时候启动的（那台机器没说、说的不像
+    个时间时是 null）；`viewers`：现在有几处接着（不算启动它的那个终端）。别的机器上的这几样是那台机器说的，cca 去掉了控制字符和
+    看不见的排版字符、截短了、数字核对过，App 当普通文字显示。
+  - `local_terminal`：启动它的那个终端还开着吗（只有这台 Mac 上的知道；别的机器上的是 null）。
+  - `state`：`ok`（接得上）| `busy`（这台 Mac 上的宿主没有回应：被挂起了、机器正忙）| `offline`（那台机器暂时没连着服务器）。不是 `ok` 的 App 不给「接入」。
+  - `access`：这台 Mac 接进去能做什么。`control`（看和操作）| `view`（那台机器只让看：App 只给「只看」，起 `attach` 时带 `-r`）。
+    不让接入的机器上的会话不在列表里。
+- `peers[]`：配对过的机器。`id` 是 `cca remote allow|unpair` 的参数；`name` 是维护者给那台设备起的名字（没有时是它自己报的机器名）；
+  `incoming`：它能对**这台 Mac** 的会话做什么，`control` | `view` | `none`（接不进来；这台 Mac 照样可以接入它的会话，看它那边怎么设）；
+  `shown`：配对码是这台 Mac 显示的（是的话配对时 `incoming` 默认 `control`，否则默认 `none`）；`paired_epoch`；
+  `state`：`ok` | `gone`（对方取消了配对，或者太久没用被服务器清掉了：App 标出来，让用户「取消配对」清掉这一头）| `unknown`（这次没问服务器、没问到）。
+- `errors[]`：`{code, message}`，没问到别的机器上的会话的原因。`code`：`relay_off`（这台 Mac 用不了中转）| `relay_old`（服务器还不支持中转）|
+  `relay_unreachable`（连不上）| `relay_denied`（服务器不认这台 Mac）| `relay_error`（别的）。`message` 是给人看的，App 原样显示。
+- 刷新：这一页看得见时马上查一次，之后每 15 秒一次（低优先级），用户 15 分钟没碰键盘鼠标时不查；点「刷新」、做完 9.2 的命令、
+  界面里的终端结束时各查一次。同一时间只跑一个：服务器给每台设备限了流（每 2 秒 1 次、最多攒 30 次），查得太勤会让后面的配对、取消配对被拒。
+
+### 9.2 配对、开关、对方能做什么
+
+| 命令 | 做什么 | 方式 |
+|---|---|---|
+| `cca remote pair` | 这台 Mac 显示一个配对码；另一台机器输入以后，那台机器可以接入这台 Mac 上的会话（`incoming` 默认 `control`） | 提问会话（4.6）：先 `consent.remote_pair`，再 `remote.pair`（只显示配对码的一页，没有要回答的，App 只给「取消」）；配好了 `result` 的 `remote_paired` |
+| `cca remote join` | 输入另一台机器显示的配对码；之后这台 Mac 可以接入那台机器上的会话（那台机器接不进这台 Mac，除非再 `allow`） | 提问会话：`remote.code`；配好了 `result` 的 `remote_paired` |
+| `cca remote on` / `off` | 开关 | 无交互命令；`result` 的 `remote_updated` |
+| `cca remote allow <配对的 id> control\|view\|none` | 改 `incoming`。改成只看、不让时，正接着的那一处几秒钟内断开 | 无交互命令；`result` 的 `remote_updated` |
+| `cca remote unpair <配对的 id>` | 取消配对：两边都不能再接入对方，正接着的断开。App 先自己问一句（cca 不发 `consent`） | 无交互命令；`result` 的 `remote_updated` |
+
+- 配对是有方向的：显示配对码的那台机器上的会话，可以被输入配对码的那台接入。要双向，再 `allow … control`，不用配第二次。
+- `allow`、`unpair` 的第一个参数也认名字（终端里用的），App 一律给 `peers[].id`：名字可能重。
+- 配对码经过 App 的地方：`remote.pair` 那一页的 `value`（所以也在这次的事件文件里，App 用完照常删掉）、`remote.code` 的答案（只经答案管道）；
+  App 不把它写进日志、设置，放在被观察的状态里只是为了显示，这一页关掉就没有了；点「复制」会进剪贴板。配对码是一次性的（用过、取消了、
+  过了 10 分钟、试错几次都作废），不是长期的密钥；长期的密钥（配对后两头各自存进钥匙串）不经过 App。
+- 失败都是 `fail` 事件（`code` 是 `error`，`message` 说原因：用不了中转、连不上服务器、配对码不对或过期、没有这个配对），取消是 `cancelled`。
+
+### 9.3 界面里的终端：`cca remote attach [-r] <会话的 id>`
+
+接入一个会话就是运行这条命令。它是个普通的终端程序，所以 App 给它一个伪终端，自己画（SwiftTerm，见 macos/Vendor/SwiftTerm/README.md）：
+
+- 怎么运行：App 开一对伪终端（`posix_openpt`），窗口大小先设成终端视图现在的列数、行数；进程的标准输入、输出、错误都是从的那一头，
+  别的和平时一样（自己一个会话、信号恢复默认、只继承 0/1/2）。这样起来的进程一开始没有控制终端（macOS 上 `posix_spawn` 打开终端不会让它
+  成为控制终端），cca 的接入端自己把标准输入认作控制终端（之后窗口大小变了才收得到 SIGWINCH）。不设 `CCA_EVENTS`，不限时。
+- 环境：和平时一样（1），只是不设 `NO_COLOR`，设 `TERM=xterm-256color`。
+- 参数：`remote attach <sessions[].id>`；只看不操作（用户选的，或者 `access` 是 `view`）在 id 前面加 `-r`。一律给完整的 id，不给前缀。
+- 进出：伪终端上读到的字节原样交给终端视图；按键、鼠标、终端对查询的回答原样写回去；视图的大小变了改伪终端的窗口大小（`TIOCSWINSZ`）。
+  cca 这一头说的话（接不上的原因、“会话已经结束”）也是写在这个终端上的，App 不另外解析。
+- 断开：给进程组发 SIGTERM（接入端收到就断开、退出码 0，会话在那边照常运行），3 秒后还在就 SIGKILL。用户在终端里按断开的键
+  （先 Ctrl-\，再 d）也一样是进程自己退出。App 在这些时候断开：点「断开」、接入另一个会话（一次接一个）、主窗口关了（被挡住、最小化、
+  换到别的页不算）、退出 App。
+- 退出码：自己断开是 0；会话结束了是会话里那个程序的退出码（所以 0 也可能是会话正常结束了：App 看之后查到的列表里还有没有这个会话）；
+  64 用法不对；65 没有这个会话；66 经服务器接入别的机器上的会话没成（连不上、那台机器不在线、对不上密钥）；68 宿主没了（没说会话结束
+  连接就断了，或者这边太慢被它断开）；69 不在终端里。被信号杀掉是 128 + 信号。会话里的程序自己也可能正好用这几个数退出，分不出来：
+  App 照这张表说的那一句只是提示，准话是接入端写在终端上的那一行。
+- 终端里的内容（可能有密钥、源码）只在 App 的内存里：不写文件、不进日志、不进事件文件；终端关掉（返回列表）就丢掉。
+- 内容来自另一台机器，App 不让它动这台 Mac：
+  - 图形一概不画：Kitty 图形协议（它能让终端里的内容叫终端打开本机的文件，再把成不成回给对方）、sixel、iTerm2 的内联图片和传文件
+    （OSC 1337）都不处理、不回话，问“是什么终端”时也不说支持 sixel。
+  - 终端里的链接只开 `http` / `https`（别的协议、看着像本机路径的都不开）。
+  - 会话里的程序往剪贴板放东西（OSC 52）：只在用户正看着这块终端时照办（主窗口在最前面、键盘焦点在终端上；几处接着时宿主只给主的
+    那一处），别的时候丢掉；读剪贴板不给。
+  - 终端的标题显示之前去掉控制字符和看不见的排版字符；不响铃；改窗口大小、位置这类请求不理；不发通知。

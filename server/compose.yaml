@@ -7,7 +7,11 @@
 #   data/state.json       各台设备最近一次的报告、上次使用的时间（保留 30 天）
 #   data/keys.json        各个账号记下的 API key 的密文
 #   data/cost-slots.json  各个账号在各台设备上的折合金额的密文（100 天没再传的删掉）
-#   .env                  CCA_PRESENCE_PORT：对外的端口（默认 18443）；CCA_PRESENCE_IMAGE：用的 python 镜像
+#   data/remote.json      远程会话：哪两台设备配了对（没有密钥；会话的内容不经过磁盘）
+#   .env                  CCA_PRESENCE_PORT：对外的端口（默认 18443）；CCA_PRESENCE_IMAGE：用的 python 镜像；
+#                         远程会话的中转（deploy 的 --relay-port / --no-relay 写的）：CCA_RELAY_PORT 是数据端口对外的端口
+#                         （默认 18444，普通的 TCP：上面是两台机器之间端到端加密的内容），CCA_RELAY_LISTEN 空着就是不开
+#                         （这时 CCA_RELAY_BIND 是 127.0.0.1：下面那一行端口只绑在本机上）
 services:
   cca-presence:
     image: ${CCA_PRESENCE_IMAGE:-python:3.13-slim}   # .env 里是部署时拉得到的那个（官方镜像或它的同步源）
@@ -16,9 +20,11 @@ services:
     user: "10001:10001"
     command: ["python3", "-I", "/app/cca-presence.py", "--listen", "0.0.0.0:18443",
               "--cert", "/certs/cert.pem", "--key", "/certs/key.pem",
-              "--release-key", "/config/release.pub", "--state", "/data/state.json"]
+              "--release-key", "/config/release.pub", "--state", "/data/state.json",
+              "--relay-listen", "${CCA_RELAY_LISTEN-0.0.0.0:18444}", "--relay-port", "${CCA_RELAY_PORT:-18444}"]
     ports:
       - "${CCA_PRESENCE_PORT:-18443}:18443"
+      - "${CCA_RELAY_BIND:-0.0.0.0}:${CCA_RELAY_PORT:-18444}:18444"
     volumes:
       - ./app:/app:ro
       - ./config:/config:ro
