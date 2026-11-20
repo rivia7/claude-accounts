@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.2", title: "测试版：终端关了会话照样运行，在另一台机器、在这里接着用", points: [
+            .init(symbol: "terminal",
+                  text: "运行 cca remote on 以后，在终端里启动的会话，终端关了、SSH 断了也照样运行。cca remote attach 重新接入，先按 Ctrl-\\ 再按 d 断开。"),
+            .init(symbol: "rectangle.connected.to.line.below",
+                  text: "侧栏多了「远程会话」：列出这台 Mac 上和配对过的机器上开着的会话，点「接入」就在 App 里开一块终端看和操作它；「断开」以后会话照常运行。"),
+            .init(symbol: "lock.shield",
+                  text: "和另一台机器配对：一台点「显示配对码…」（或者 cca remote pair），另一台输入。两台机器之间的内容是加密的，中转的服务器看不到；每台机器能看和操作、只看还是不让接入，在它那一行改。"),
+            .init(symbol: "exclamationmark.bubble",
+                  text: "这是测试版：跨机器要等维护者的服务器开了中转才用得上；Claude Code 的界面在 App 的终端里显示得对不对，还请多留意。"),
+        ]),
         ReleaseNote(version: "3.5.2-beta.1", title: "测试版：本机 UDP 走节点遇到别的 VPN 会先让开", points: [
             .init(symbol: "arrow.triangle.branch",
                   text: "开着本机 UDP 走节点时又开了 Shadowrocket、Clash 的 TUN 模式这类 VPN，以前两个虚拟网卡抢路由，经 cca 的连接全断（微信这类直接连 IP 的程序打不开）。现在 cca 发现别的 VPN 接管了这台 Mac 的流量就先让开，UDP 照它的规则出去；它关掉后自动接回节点。"),
