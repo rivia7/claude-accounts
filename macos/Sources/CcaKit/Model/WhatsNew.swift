@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.1", title: "测试版：本机 UDP 走节点遇到别的 VPN 会先让开", points: [
+            .init(symbol: "arrow.triangle.branch",
+                  text: "开着本机 UDP 走节点时又开了 Shadowrocket、Clash 的 TUN 模式这类 VPN，以前两个虚拟网卡抢路由，经 cca 的连接全断（微信这类直接连 IP 的程序打不开）。现在 cca 发现别的 VPN 接管了这台 Mac 的流量就先让开，UDP 照它的规则出去；它关掉后自动接回节点。"),
+            .init(symbol: "arrow.clockwise",
+                  text: "升级以后在节点分流页的「本机 UDP」点「重新装…」（或者运行 cca local udp on），输一次管理员密码，换上新的系统服务。"),
+        ], art: "route"),
         ReleaseNote(version: "3.5.1", title: "账号可以改走你自己的代理", points: [
             .init(symbol: "link.badge.plus",
                   text: "维护者没固定节点的账号，在账号页「网络出口」点「自定义代理…」，粘贴 socks5://、http:// 地址（比如买的静态住宅 IP）或分享链接，就能改走这个代理。配置了路由器的会写进路由器的配置（要重启一次 OpenClash / ShellCrash 时先问你），在外面时内置代理照样用它。"),
