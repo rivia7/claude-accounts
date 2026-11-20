@@ -602,6 +602,23 @@ else
 	echo "  （跳过设备统计：没有 openssl，生成不了服务器的证书）"
 fi
 
+# 远程会话（docs/dev/remote.md）：会话宿主和接入端、两台机器配对、经服务器中转接入。两份 Python 测试把辅助程序当黑盒跑
+# （真的伪终端、真的服务器进程、每台设备一个临时 HOME 和自己的 deploy key），不碰上面的沙箱。只在宿主机上跑：容器里各发行版的
+# ps、pgrep 不一样（busybox 的 ps 没有 -p），还没在那一套上试过
+if [ -n "${CCA_LINUX_CONTAINER:-}" ]; then
+	echo "  （容器里不跑远程会话的测试）"
+elif command -v openssl >/dev/null 2>&1 && command -v ssh-keygen >/dev/null 2>&1 && command -v pgrep >/dev/null 2>&1; then
+	for rt in remote_host remote_relay; do
+		if out=$(CCA_HELPER="$HB" python3 "$R/tests/$rt.py" 2>&1); then
+			ok "远程会话：tests/$rt.py（$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p') 个用例）"
+		else
+			no "远程会话：tests/$rt.py：$(printf '%s\n' "$out" | grep -E '^(FAIL|ERROR):|^(FAILED|OK)' | head -n 4 | tr '\n' ' ')"
+		fi
+	done
+else
+	echo "  （跳过远程会话的测试：要 openssl、ssh-keygen、pgrep）"
+fi
+
 # 折合金额：共享的会话记录里的用量按官方 API 的标价折算，按登录的身份认是谁的（Linux 上没有 st_birthtime：按修改时间排；
 # 进程的启动时间从 /proc 读）。会话结束后在后台统计一次（CCA_COST 在这一步清掉：别处是 off）；cca cost sync --json 是 App 用的那一条
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)

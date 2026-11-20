@@ -444,13 +444,15 @@ class ServerTest(Base):
             host, key = self.host(a, sid, [pid])
             host.sendall(ctl(F_ANNOUNCE, bad))
             self.assertEqual(host.recv(1), b'', bad[:20])
-        # 只发 PING、不收 PONG：服务器不替它攒着，攒到上限就断开
+        # 只发 PING、不收 PONG：服务器不替它攒着，攒到上限就断开。要先把内核的缓冲区填满，服务器那头才攒得起来——回环上
+        # macOS 只有几百 KB，Linux 能到十几兆（一次 7.5 MB 的 PONG 它全收得下，服务器那头一点没攒）：一直发到它断开为止
         host, key = self.host(a, sid, [pid])
+        host.settimeout(20)
         try:
-            host.sendall(ctl(F_PING) * 1500000)
+            for _ in range(40):
+                host.sendall(ctl(F_PING) * 1500000)
         except OSError:
             pass
-        host.settimeout(20)
         try:
             while host.recv(65536):
                 pass
