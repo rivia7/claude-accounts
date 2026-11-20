@@ -119,7 +119,7 @@ extension Texts {
     // MARK: 句子
 
     /// 鼠标指着一根柱子时（和读屏）：「11 月 4 日–11 日：$1,021.40 · 2,210 次请求」，还没过完的「本周到现在（11 月 4 日–11 日）：…」
-    /// 「今天到现在：…」；只看本机时没有请求数（cca 只给整个账号的）。这一项开始时还没有记录、有没有公开价格的模型时补一句
+    /// 「今天到现在：…」；只看一台设备（本机、另一台）时没有请求数（cca 只给整个账号的）。这一项开始时还没有记录、有没有公开价格的模型时补一句
     static func costBarDetail(_ bar: CostBar, granularity g: CostGranularity, scope: CostScope, currency: String,
                               now: Double, calendar: Calendar = .current) -> String {
         let p = bar.period
@@ -175,10 +175,12 @@ extension Texts {
     /// 同步的状态、还没算进来的设备（看所有设备时，只在要说的时候有）：
     /// old_server、not_logged_in、pending、local_only、off 说一句（灰字）；error、30 天内用过却没同步过金额的设备（missing）、
     /// 很久没同步上来的设备、有用量没算进来的设备（cca 给的 diag.why）说一句（橙色）。ok 不说。撤销了的设备不提醒（数字本来就是撤销前同步来的）。
-    /// 只看本机时只说这台设备有用量没算进来：这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它
+    /// 只看一台设备时只说那一台的：本机只说有用量没算进来（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它），
+    /// 另一台设备再说它很久没同步上来
     static func costNotes(_ c: AccountCost, scope: CostScope = .all, now: Double, calendar: Calendar = .current) -> [CostNote] {
         guard scope == .all else {
-            return c.me.flatMap(costDeviceNote).map { [CostNote(text: $0, warning: true)] } ?? []
+            guard let d = CostChart.device(c, scope: scope) else { return [] }
+            return [costStale(d, now: now, calendar: calendar), costDeviceNote(d)].compactMap { $0 }.map { CostNote(text: $0, warning: true) }
         }
         var out: [CostNote] = []
         // cca 没给 sync 时（syncState 当作 local_only）不知道为什么只有这台设备，不说
@@ -273,6 +275,40 @@ extension Texts {
     /// 设备的叫法（折合金额页各台设备那一行）：这台设备「studio-mac（这台）」，撤销了的「old-mini（已撤销）」
     static func costDeviceName(_ d: CostDevice) -> String {
         d.name + (d.isMe ? "（这台）" : d.revoked ? "（已撤销）" : "")
+    }
+
+    /// 设备菜单里的一台（cost_total.devices 里别的设备）：撤销了的「old-mini（已撤销）」，很久没同步上来的「office-imac（很久没同步）」
+    /// （折合金额页那一行是名字后面一个橙色的钟，菜单里只能写字）
+    static func costMenuName(_ d: CostTotalDevice) -> String {
+        d.name + (d.revoked ? "（已撤销）" : d.stale ? "（很久没同步）" : "")
+    }
+
+    /// 账号页「折合金额」一根柱子也没有时：「最近 12 周没有用量。」「这台设备最近 30 天没有用量。」「bob-mini 最近 12 周没有用量。」
+    /// （设备名和后面的中文之间空一格；cca 没列那台设备时不说是谁）
+    static func costNoUsage(_ scope: CostScope, total: CostTotal?, granularity g: CostGranularity) -> String {
+        let what = g == .week ? "最近 12 周没有用量。" : "最近 30 天没有用量。"
+        switch scope {
+        case .all: return what
+        case .me: return "这台设备" + what
+        case .device(let id): return total?.device(id).map { spaced($0.name, what) } ?? what
+        }
+    }
+
+    /// 折合金额页一个账号都不列时：看另一台设备时说它最近没用过这里的账号（启用的工具里没有它用过的），别的时候是还没有官方账号
+    static func costNoAccounts(_ scope: CostScope, total: CostTotal?) -> String {
+        if case .device(let id) = scope {
+            return (total?.device(id).map { $0.name + " " } ?? "那台设备") + "最近没有用过这里的账号。"
+        }
+        return "还没有 Claude、ChatGPT 账号。第三方 API 账号按实际用量付费，不在这里折算。"
+    }
+
+    /// 折合金额页合计那一块的读屏标签
+    static func costTotalLabel(_ scope: CostScope, total: CostTotal?) -> String {
+        switch scope {
+        case .all: return "所有账号的折合金额"
+        case .me: return "所有账号在这台设备上的折合金额"
+        case .device(let id): return "所有账号在 " + (total?.device(id)?.name ?? "另一台设备") + " 上的折合金额"
+        }
     }
 
     /// 多久以前统计的（标题右边）：cca 正在做第一次统计时「正在统计…」，还没统计过、也没在统计时「还没统计」

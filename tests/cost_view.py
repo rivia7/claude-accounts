@@ -707,6 +707,48 @@ class View(Base):
         self.assertEqual((q['weeks'][-1]['basis'], q['weeks'][-1]['start_epoch'], q['summary']['current_usd']),
                          ('quota', self.NOW - 2 * 86400, 7.0), '有额度窗口时，这一周按额度窗口算（周三 12:00 起：carol-air 周三 10 点的不算）')
 
+    def test_by_device(self):
+        """cost_total.devices：按设备分开加起来（App 的设备菜单）。这台设备在最前，别的设备按 id 归到一起、在哪个账号里用过才算，
+        按最近 30 天的多少排；每台的几项和 me 一样（30 天每天、按工具分开），各台加起来是顶层的"""
+        cv = self.view()
+        a = cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        self.assertEqual([(d['name'], d['used']) for d in a['devices']], [('alice-mbp', True), ('bob-mini', True), ('carol-air', True)],
+                         '账号里的设备：用过这个账号')
+        cv.account('codex', 'alice@example.com', None, True, True)
+        t = cv.total(['claude', 'codex'])
+        devs = t['devices']
+        self.assertEqual([(d['id'], d['name'], d['me'], d['revoked'], d['stale']) for d in devs],
+                         [('SHA256:me', 'alice-mbp', True, False, False), ('SHA256:bob', 'bob-mini', False, False, False),
+                          ('SHA256:carol', 'carol-air', False, False, True)],
+                         '这台设备在最前，别的按 30 天的多少排；两天没同步的标出来')
+        self.assertEqual(set(devs[0]) - {'id', 'name', 'me', 'revoked', 'stale'}, set(t['me']), '每台多的就是这几项，别的和 me 一样')
+        keys = ('current_usd', 'weeks_usd', 'average_usd', 'average_day_usd', 'days_usd', 'today_usd', 'days', 'by_tool')
+        self.assertEqual({k: devs[0][k] for k in keys}, {k: t['me'][k] for k in keys}, '这台设备的就是 me')
+        b = devs[1]
+        self.assertEqual((b['weeks_usd'], b['days_usd'], b['current_usd'], b['average_usd'], b['by_tool']['claude']['days_usd']),
+                         (3.0, 3.0, 2.0, 0.2, 3.0), 'bob-mini：现在的 key 的 2 + 撤销以前的 1（撤销以后的 9 不重复计）；平均按账号的那 5 周')
+        self.assertEqual(b['by_tool']['codex'], {'current_usd': 0.0, 'weeks_usd': 0.0, 'average_usd': None, 'average_day_usd': None,
+                                                 'days_usd': 0.0, 'today_usd': 0.0}, '没用过 Codex：都是 0、没有平均')
+        self.assertEqual((len(b['days']), b['days'][-2]['usd'], [d['start_epoch'] for d in b['days']]), (30, 2.0, [d['start_epoch'] for d in t['days']]))
+        for k in ('weeks_usd', 'days_usd', 'current_usd', 'today_usd', 'average_usd'):
+            self.assertAlmostEqual(sum(d[k] or 0 for d in devs), t[k], places=4, msg='各台设备的 %s 加起来是顶层的' % k)
+        for n in range(30):
+            self.assertAlmostEqual(sum(d['days'][n]['usd'] for d in devs), t['days'][n]['usd'], places=4)
+        # 撤销了、又没有同名的设备接着用（只剩撤销前同步来的）：单独一台，标着撤销了
+        slot = self.remote['acc']['claude:alice@example.com']
+        slot['SHA256:dave-old'] = {'h': {self.at(2026, 11, 2, 10): self.row(6)}, 'um': [], 'at': self.NOW - 20 * 86400, 'name': 'dave-mini',
+                                   'revoked': True, 'tag': 't9'}
+        self.write()
+        cv = self.view()
+        cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        devs = cv.total(['claude'])['devices']
+        self.assertEqual([(d['name'], d['revoked'], d['stale'], d['days_usd']) for d in devs],
+                         [('alice-mbp', False, False, 15.0), ('dave-mini', True, True, 6.0), ('bob-mini', False, False, 3.0), ('carol-air', False, True, 1.0)])
+        # 没开设备统计：只有这台设备（id 是 local）
+        lo = self.view(cfg=None)
+        lo.account('claude', 'alice(alice@example.com)', None, True, True)
+        self.assertEqual([(d['id'], d['me'], d['days_usd']) for d in lo.total(['claude'])['devices']], [('local', True, 15.0)])
+
     def test_me_without_records(self):
         self.local['acc']['claude:' + U1] = {}
         self.write()
@@ -718,6 +760,16 @@ class View(Base):
         t = cv.total(['claude', 'codex'])
         self.assertEqual((t['days_usd'], t['me']['days_usd'], t['me']['by_tool']['claude']['days_usd'], t['me']['by_tool']['claude']['average_usd']),
                          (8.0, 4.0, 0.0, None), 'me 里没有这个账号（金额是 0、没有平均），只有 Codex 的 4')
+        self.assertEqual([(d['name'], d['days_usd'], d['by_tool']['claude']['days_usd']) for d in t['devices']],
+                         [('alice-mbp', 4.0, 0.0), ('bob-mini', 3.0, 3.0), ('carol-air', 1.0, 1.0)], '设备菜单：这台设备只在 Codex 里用过')
+        self.local['acc']['codex:' + U3] = {}
+        self.write()
+        cv = self.view()
+        cv.account('claude', 'alice(alice@example.com)', None, True, True)
+        cv.account('codex', 'alice@example.com', None, True, True)
+        me = cv.total(['claude', 'codex'])['devices'][0]
+        self.assertEqual((me['name'], me['me'], me['days_usd'], me['average_usd'], len(me['days'])), ('alice-mbp', True, 0.0, None, 30),
+                         '这台设备哪个账号都没用过：照样列在最前（数字是 0）')
 
     def test_diag(self):
         """诊断：这台设备的（local.json 的 diag、cca 的版本）、别的设备传来的（dg）。最近 30 天有回复认不出账号的设备即使这个账号
@@ -747,9 +799,10 @@ class View(Base):
                          '命令行里还在用旧版的 Claude Code：cca 标出来（App 据此提醒更新）')
         self.assertEqual(devs['carol-air']['diag'], None)
         e = devs['erin-mini']
-        self.assertEqual((e['summary']['days_usd'], sum(e['days_usd']), e['diag']['why'][0]['code']), (0.0, 0.0, 'claude_app'))
+        self.assertEqual((e['summary']['days_usd'], sum(e['days_usd']), e['diag']['why'][0]['code'], e['used']), (0.0, 0.0, 'claude_app', False))
         self.assertEqual((a['summary']['days_usd'], a['since_epoch']), (19.0, float(self.at(2026, 10, 1, 10))), '合计、从哪天有数据照旧')
         t = cv.total(['claude'])
+        self.assertEqual([d['name'] for d in t['devices']], ['alice-mbp', 'bob-mini', 'carol-air'], '只为诊断列出来的设备没用过这个账号：设备菜单里没有它')
         self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1, 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
             {'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'}]})
         self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '整个账号都没有数据：照旧是 None')

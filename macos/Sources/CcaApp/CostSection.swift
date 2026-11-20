@@ -148,19 +148,27 @@ struct CostPartialLegend: View {
     }
 }
 
-/// 看本机还是所有设备：账号页「折合金额」的标题、折合金额页的标题上各一个，两页共用一个设置（AppModel.costScope）
+/// 看哪台设备：账号页「折合金额」的标题、折合金额页的标题上各一个，两页共用一个设置（AppModel.costScope）。
+/// 菜单里是所有设备、本机，下面是 cca 列的别的设备（`cost_total.devices`：在哪个账号里用过的，按 30 天的金额从多到少）
 struct CostScopePicker: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Picker("看哪些设备", selection: Binding(get: { model.costScope }, set: { model.costScope = $0 })) {
-            Text("本机").tag(CostScope.me)
+        let others = model.state?.costTotal?.otherDevices ?? []
+        Picker("看哪台设备", selection: Binding(get: { model.costScopeShown }, set: { model.costScope = $0 })) {
             Text("所有设备").tag(CostScope.all)
+            Text("本机").tag(CostScope.me)
+            if !others.isEmpty {
+                Divider()
+                ForEach(others) { d in
+                    Text(Texts.costMenuName(d)).tag(CostScope.device(d.id))
+                }
+            }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.menu)
         .labelsHidden()
         .fixedSize()
-        .help("本机：只算这台设备上用的；所有设备：整个账号，各台设备加起来")
+        .help("所有设备：整个账号，各台设备加起来；本机：只算这台设备上用的；别的设备：只算那一台上用的")
     }
 }
 
@@ -193,8 +201,8 @@ struct CostNoteLine: View {
 }
 
 /// 账号页的「折合金额」（在「每周用量」下面；cca 说这个账号有（`can.cost`）、cca 也有折合金额时才显示）：
-/// 这个账号（所有设备加起来，或者只算这台设备）最近 12 周每周、最近 30 天每天按官方 API 的价格折成多少美元。不是实际花费：订阅不按这个收费。
-/// 标题右边是多久以前统计的、本机 / 所有设备、按周 / 按日（这两个和折合金额页共用）和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
+/// 这个账号（所有设备加起来，或者只算设备菜单里选的那一台）最近 12 周每周、最近 30 天每天按官方 API 的价格折成多少美元。不是实际花费：订阅不按这个收费。
+/// 标题右边是多久以前统计的、看哪台设备、按周 / 按日（这两个和折合金额页共用）和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
 /// 再下面是同步的提示，显示细节时多几行（token、没有公开价格的模型、从什么时候开始有记录、上次同步）；最下面一直有一行小字：
 /// 按谁的价格折算、价格表是哪天的。数字都是 cca 给的（PROTOCOL 2.2 的 `cost`），App 只排版。
 struct CostSection: View {
@@ -270,7 +278,7 @@ struct CostSection: View {
 
     private func tile(_ c: AccountCost, now: Double) -> some View {
         let g = model.costGranularity
-        let scope = model.costScope
+        let scope = model.costScopeShown
         let bars = CostChart.bars(c, granularity: g, scope: scope)
         let hovered = bars.first { $0.id == hover.wrappedValue }
         return VStack(alignment: .leading, spacing: 10) {
@@ -289,7 +297,7 @@ struct CostSection: View {
                 // 图例：鼠标指着一项时也留着，这一块不变高矮
                 if bars.contains(where: { $0.period.partial && $0.usd > 0 }) { CostPartialLegend() }
             } else {
-                Text((scope == .me ? "这台设备" : "") + (g == .week ? "最近 12 周没有用量。" : "最近 30 天没有用量。"))
+                Text(Texts.costNoUsage(scope, total: model.state?.costTotal, granularity: g))
                     .foregroundStyle(.secondary)
             }
             ForEach(Array(Texts.costNotes(c, scope: scope, now: now).enumerated()), id: \.offset) { _, n in

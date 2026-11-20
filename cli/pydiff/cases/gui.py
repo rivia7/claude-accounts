@@ -239,6 +239,9 @@ STATE_MASK += [(r',\n\s*"other_vpn": (?:null|"[^"]*")', '')]
 STATE_MASK += [(r',\s*"paused": (?:true|false)', '')]
 # 维护者的共享开没开、映射的账号有几个、收起来几个（config.policy 的 state、accounts、parked）也是切换以后新加的（回归 10g、11b2 里测）
 STATE_MASK += [(r',\n\s*"state": "(?:off|pending|on)",\n\s*"accounts": [0-9]+,\n\s*"parked": [0-9]+', '')]
+# 折合金额的设备菜单（cost_total.devices、账号里各台设备的 used）也是：去掉再比，和折合金额的用例同一份规则
+from cases.cost import DEVICES_MASK   # noqa: E402
+STATE_MASK += DEVICES_MASK
 GUI_ENV = {'CCA_RO': '1', 'CCA_VERSION': '9.9.9', 'CCA_GUI_CLAUDE_BIN': '/usr/local/bin/claude', 'CCA_GUI_CLAUDE_APP': '/Applications/Claude.app',
            'CCA_GUI_CODEX_BIN': '/usr/local/bin/codex', 'CCA_GUI_CODEX_APP': '', 'CCA_GUI_AGY_BIN': '', 'CCA_GUI_CHROME': '1', 'CCA_COST': 'off'}
 ROUTER_CODE = 'router code\nline 2\n'

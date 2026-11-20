@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 折合金额（侧栏的「折合金额」）：按官方 API 的价格，把每个账号用掉的 token 折成美元放在一起比。不是实际花费：订阅不按这个收费。
 /// 和用量统计分开两页：钱没有额度、没有“填满”，图不一样（不画底槽，按纵轴的刻度比高低）。
-/// 标题右边是本机 / 所有设备、按周 / 按日（和账号页的「折合金额」共用一个设置）和「刷新」：一行放不下时（窗口窄）这三个挪到标题下面一行，右对齐。
+/// 标题右边是看哪台设备、按周 / 按日（和账号页的「折合金额」共用一个设置）和「刷新」：一行放不下时（窗口窄）这三个挪到标题下面一行，右对齐。
 struct CostStatsPage: View {
     @Environment(AppModel.self) private var model
 
@@ -59,16 +59,19 @@ struct CostStatsPage: View {
     }
 }
 
-/// 折合金额页的内容：顶上是所有账号加起来的（cca 给的 `cost_total`，本机时是它的 `me`：按周是本周、平均每周、近 12 周合计；
-/// 按日是今天、平均每天、近 30 天合计和最近 30 天每天一根柱子；启用了两种工具时分开列），下面每个账号一行，和用量统计一样按 Claude、
-/// ChatGPT 分组、按用户排的顺序：名字、小柱子（最近 12 周每周一根或者最近 30 天每天一根，所有行同一个时间范围、同一个纵轴，高低才能比）、
-/// 平均、本周（今天）、合计；看所有设备时，有两台以上设备的账号下面缩进列出各台设备。点一行打开账号页的「折合金额」。
-/// 数字都是 cca 给的，App 只排版。
+/// 折合金额页的内容：顶上是所有账号加起来的（cca 给的 `cost_total`，本机时是它的 `me`，另一台设备时是 `devices` 里那一台的：
+/// 按周是本周、平均每周、近 12 周合计；按日是今天、平均每天、近 30 天合计和最近 30 天每天一根柱子；启用了两种工具时分开列），
+/// 下面每个账号一行，和用量统计一样按 Claude、ChatGPT 分组、按用户排的顺序：名字、小柱子（最近 12 周每周一根或者最近 30 天每天一根，
+/// 所有行同一个时间范围、同一个纵轴，高低才能比）、平均、本周（今天）、合计；看所有设备时，有两台以上设备的账号下面缩进列出各台设备，
+/// 看另一台设备时只列它用过的账号（cca 给的 `used`）。点一行打开账号页的「折合金额」。数字都是 cca 给的，App 只排版。
 struct CostStatsContent: View {
     @Environment(AppModel.self) private var model
     let now: Double
     /// 表有多宽（命令行工具编不了 @State 宏：State 类型直接用）：窗口窄、小图放不下时不画（CostStatsColumns.minChart）
     private let tableWidth = State<CGFloat?>(initialValue: nil)
+
+    /// 看哪台设备（选的那台 cca 这次没列出来时是所有设备）
+    private var scope: CostScope { model.costScopeShown }
 
     /// 标题下面那一句：数字是什么、多久以前统计的（scanning：第一次统计还没做完，AppModel.costScanning）
     static func subtitle(_ total: CostTotal?, scanning: Bool, now: Double) -> String {
@@ -82,7 +85,7 @@ struct CostStatsContent: View {
         VStack(alignment: .leading, spacing: 26) {
             TipCard(id: "cost-stats-page", title: "这一页怎么看",
                     message: "按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
-                        + "右上角切换只看这台设备（本机）还是各台设备加起来（所有设备），按周还是按天看。"
+                        + "右上角选看哪台设备（所有设备、本机，或者另一台）、按周还是按天看。"
                         + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"
                         + "点一行看这个账号的柱状图。")
             if model.state == nil {
@@ -101,7 +104,7 @@ struct CostStatsContent: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     }
-                    CostTotalTile(total: total, tools: tools.filter { total.all.byTool[$0] != nil }, scope: model.costScope,
+                    CostTotalTile(total: total, tools: tools.filter { total.all.byTool[$0] != nil }, scope: scope,
                                   granularity: model.costGranularity, now: now)
                     if let f = model.costFailure {
                         Label(f, systemImage: "exclamationmark.triangle")
@@ -109,13 +112,14 @@ struct CostStatsContent: View {
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if let u = Texts.costUnattributed(total.unattributed, currency: total.currency) {
+                    // 认不出是哪个账号的、Claude Code 太旧：都是这台设备的，看另一台设备时不说
+                    if !scope.isOtherDevice, let u = Texts.costUnattributed(total.unattributed, currency: total.currency) {
                         Label(u, systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if let u = Texts.costUpdateClaudeCode(total.unattributed) {
+                    if !scope.isOtherDevice, let u = Texts.costUpdateClaudeCode(total.unattributed) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Label(u, systemImage: "exclamationmark.triangle")
                                 .font(.caption)
@@ -144,10 +148,10 @@ struct CostStatsContent: View {
     private var table: some View {
         let groups = model.costGroups()
         if groups.isEmpty {
-            Text("还没有 Claude、ChatGPT 账号。第三方 API 账号按实际用量付费，不在这里折算。")
+            Text(Texts.costNoAccounts(scope, total: model.state?.costTotal))
                 .foregroundStyle(.secondary)
         } else {
-            let scale = CostStatsScale.make(groups.flatMap(\.accounts), scope: model.costScope, granularity: model.costGranularity, now: now)
+            let scale = CostStatsScale.make(groups.flatMap(\.accounts), scope: scope, granularity: model.costGranularity, now: now)
             let charts = tableWidth.wrappedValue.map { CostStatsColumns.fitsChart(tableWidth: $0) } ?? true
             VStack(alignment: .leading, spacing: 8) {
                 CostStatsHeader(scale: scale, now: now, charts: charts)
@@ -213,7 +217,7 @@ private enum CostStatsColumns {
 
 /// 顶上的合计：三个数（按周：本周、平均每周、近 12 周合计；按日：今天、平均每天、近 30 天合计；启用了两种工具时下面按工具分开列），
 /// 按日时再下面是最近 30 天每天的柱子（cca 给的 `days`，各账号加起来；各账号的周期不一样，所以按周时没有加起来的柱子）。
-/// 鼠标指着一天时下面那一行换成那一天的。看本机时都是 cca 给的 `me` 里的（旧版 cca 没有，写「—」）
+/// 鼠标指着一天时下面那一行换成那一天的。看本机时都是 cca 给的 `me` 里的（旧版 cca 没有，写「—」），看另一台设备时是 `devices` 里那一台的
 private struct CostTotalTile: View {
     let total: CostTotal
     /// 分开列的工具（`by_tool` 里有的、启用了的）；只有一种时不分开列
@@ -258,7 +262,7 @@ private struct CostTotalTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(scope == .all ? "所有账号的折合金额" : "所有账号在这台设备上的折合金额")
+        .accessibilityLabel(Texts.costTotalLabel(scope, total: total))
     }
 
     private func money(_ v: Double?) -> String {
@@ -336,7 +340,8 @@ private struct CostStatsHeader: View {
     }
 }
 
-/// 一组（Claude / ChatGPT）：组名和一块底色上的几行；看所有设备时，有两台以上设备的账号下面紧跟着各台设备
+/// 一组（Claude / ChatGPT）：组名和一块底色上的几行（看另一台设备时只有它用过的账号，AppModel.costGroups）；
+/// 看所有设备时，有两台以上设备的账号下面紧跟着各台设备
 private struct CostStatsGroup: View {
     let group: AccountGroup
     let scale: CostStatsScale
@@ -427,7 +432,8 @@ private struct CostStatsFigures: View {
 }
 
 /// 一个账号一行：点了进账号页的「折合金额」。看所有设备、数字没算全（同步出错、有设备没算进来、很久没同步上来）时名字后面一个橙色的三角，
-/// 原因在悬停提示和读屏里。看本机时是这台设备的数字（它没有这个账号的记录时是 0）
+/// 原因在悬停提示和读屏里。看本机时是这台设备的数字（它没有这个账号的记录时是 0），看另一台设备时是那一台的（很久没同步上来、
+/// 有用量没算进来时也是一个三角）
 private struct CostAccountRow: View {
     @Environment(AppModel.self) private var model
     let account: Account

@@ -332,14 +332,46 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
         check("\(n) 有 me", false)
         return
     }
-    part(n + " me", rawMe, me, accounts.compactMap { a in
-        a.cost.flatMap { c in c.me.map { d in (a.tool, d.summary, c.days.enumerated().map { i, p in
+    /// 一个账号里一台设备的 30 天（日期是账号的，金额是那台设备的 days_usd）
+    func deviceDays(_ c: AccountCost, _ d: CostDevice) -> [CostPeriod] {
+        c.days.enumerated().map { i, p in
             CostPeriod(startEpoch: p.startEpoch, endEpoch: p.endEpoch, date: p.date, current: p.current, usd: i < d.daysUSD.count ? d.daysUSD[i] : 0)
-        }) } }
-    })
+        }
+    }
+    part(n + " me", rawMe, me, accounts.compactMap { a in a.cost.flatMap { c in c.me.map { d in (a.tool, d.summary, deviceDays(c, d)) } } })
     check("\(n) me 和顶层的工具一样、天一样", Set(me.byTool.keys) == Set(t.all.byTool.keys) && me.days.map(\.startEpoch) == t.all.days.map(\.startEpoch))
     check("\(n) 这台设备的不比所有设备的多", me.summary.weeksUSD <= t.all.summary.weeksUSD + 0.01 && me.summary.daysUSD <= t.all.summary.daysUSD + 0.01
           && zip(me.days, t.all.days).allSatisfy { $0.usd <= $1.usd + 0.01 })
+    // devices：按设备分开加起来（旧版 cca 没有，是空的）。这台设备在第一项、和 me 一样；别的设备按 id 归到一起（只算账号里 used 的那一份），
+    // 按 30 天的金额从多到少；用过账号的设备都在里面，各台加起来是顶层的
+    if raw["devices"] != nil {
+        let rawDevices = raw["devices"] as? [[String: Any]]
+        check("\(n) devices 是对象数组，每一台都解码了", rawDevices?.count == t.devices.count, "\(rawDevices?.count ?? -1) vs \(t.devices.count)")
+        check("\(n) devices 的 id 不重复，这台设备在第一项、只有它是 me", Set(t.devices.map(\.id)).count == t.devices.count
+              && t.devices.first?.isMe == true && t.devices.filter(\.isMe).count == 1, t.devices.map(\.name).joined(separator: ","))
+        if let first = t.devices.first {
+            let mine = accounts.compactMap { $0.cost?.me }
+            check("\(n) devices 的这台设备：和 me 一样，id 和账号里的一样", first.part == me
+                  && mine.allSatisfy { $0.id == first.id } && !first.revoked && !first.stale, first.id)
+        }
+        let others = Array(t.devices.dropFirst())
+        check("\(n) 别的设备按 30 天的金额从多到少", zip(others, others.dropFirst()).allSatisfy { $0.part.summary.daysUSD >= $1.part.summary.daysUSD - 0.001 })
+        for (i, d) in t.devices.enumerated() where !d.isMe {
+            let shares = accounts.compactMap { a in a.cost.flatMap { c in c.device(d.id).flatMap { x in x.used ? (a.tool, c, x) : nil } } }
+            part("\(n) devices[\(i)]", rawDevices?[i] ?? [:], d.part, shares.map { ($0.0, $0.2.summary, deviceDays($0.1, $0.2)) })
+            check("\(n) devices[\(i)] 用过账号，撤销了（哪个账号里说了就算）、很久没同步（每个账号里都是）", !shares.isEmpty
+                  && d.revoked == shares.contains { $0.2.revoked } && d.stale == shares.allSatisfy { $0.2.stale }, d.name)
+            check("\(n) devices[\(i)] 和顶层的工具一样、天一样", Set(d.part.byTool.keys) == Set(t.all.byTool.keys)
+                  && d.part.days.map(\.startEpoch) == t.all.days.map(\.startEpoch))
+        }
+        let listed = Set(t.devices.map(\.id))
+        check("\(n) 在账号里用过（used）的设备都在 devices 里", accounts.allSatisfy { a in a.cost?.devices.allSatisfy { !$0.used || listed.contains($0.id) } ?? true })
+        let parts = t.devices.map(\.part.summary)
+        check("\(n) 各台设备加起来是顶层的", near(t.all.summary.currentUSD, parts.map(\.currentUSD).reduce(0, +), terms: parts.count)
+              && near(t.all.summary.weeksUSD, parts.map(\.weeksUSD).reduce(0, +), terms: parts.count)
+              && near(t.all.summary.daysUSD, parts.map(\.daysUSD).reduce(0, +), terms: parts.count)
+              && near(t.all.summary.todayUSD, parts.map(\.todayUSD).reduce(0, +), terms: parts.count), "\(parts.map(\.weeksUSD))")
+    }
     let scan = raw["scan"] as? [String: Any]
     check("\(n) scan 的字段类型", scan?["state"] is String && (isNumber(scan?["updated_epoch"]) || isNull(scan?["updated_epoch"])))
     if t.scan.state == .ready { check("\(n) 统计过（ready）就有 updated_epoch", t.scan.updatedEpoch != nil) }

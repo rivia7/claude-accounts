@@ -101,8 +101,8 @@ enum Snapshot {
             Scene(name: "stats") { m in
                 m.selection = .usageStats
             },
-            // 折合金额：侧栏的「折合金额」页（所有设备按周、宽窗口、按日、本机），账号页的「折合金额」（按周、按日、本机、还没有记录、ChatGPT 账号）。
-            // 本机 / 所有设备、按周 / 按日是两页共用的设置，每个场景都自己设好
+            // 折合金额：侧栏的「折合金额」页（所有设备按周、宽窗口、按日、本机、另一台设备），账号页的「折合金额」（按周、按日、本机、
+            // 另一台设备、还没有记录、ChatGPT 账号）。看哪台设备、按周 / 按日是两页共用的设置，每个场景都自己设好
             Scene(name: "cost") { m in
                 m.costScope = .all
                 m.costGranularity = .week
@@ -124,6 +124,12 @@ enum Snapshot {
                 m.costGranularity = .week
                 m.selection = .costStats
             },
+            // 另一台设备：设备菜单里本机下面的第一台（演示数据里是 alice-mini，只用过一个账号）
+            Scene(name: "cost-device") { m in
+                m.costScope = m.state?.costTotal?.otherDevices.first.map { .device($0.id) } ?? .all
+                m.costGranularity = .day
+                m.selection = .costStats
+            },
             Scene(name: "account-cost") { m in
                 m.costScope = .all
                 m.costGranularity = .week
@@ -136,6 +142,12 @@ enum Snapshot {
             },
             Scene(name: "account-cost-me") { m in
                 m.costScope = .me
+                m.costGranularity = .week
+                if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
+            },
+            // 很久没同步上来的那台设备（演示数据里是 office-imac）：账号页说它哪天以后的还没同步上来
+            Scene(name: "account-cost-device") { m in
+                m.costScope = m.state?.costTotal?.otherDevices.first(where: { $0.stale && !$0.revoked }).map { .device($0.id) } ?? .all
                 m.costGranularity = .week
                 if let r = first(.claude, { ($0.cost?.devices.count ?? 0) >= 2 }) { m.showCost(r) }
             },

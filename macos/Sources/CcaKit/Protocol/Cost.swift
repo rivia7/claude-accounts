@@ -320,6 +320,8 @@ struct CostDevice: Sendable, Equatable, Identifiable {
     var summary: CostSummary
     /// 那台设备的诊断：有没有回复认不出账号、为什么（旧版 cca 的设备没有）。最近有认不出的设备没有这个账号的记录也列出来（数字都是 0）
     var diag: CostDiag? = nil
+    /// 那台设备用过这个账号（cca 给的 `used`）：只为诊断列出来的设备是 false；旧版 cca 没有这一项，当作用过
+    var used = true
 }
 
 /// `devices[]` 原样解码（数组按位置留着，交给 AccountCost 和 weeks、days 对齐）。
@@ -334,9 +336,10 @@ private struct RawCostDevice: Decodable {
     var days: [Double?]
     var summary: CostSummary
     var diag: CostDiag?
+    var used: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, name, me, revoked, stale, summary, diag
+        case id, name, me, revoked, stale, summary, diag, used
         case syncedEpoch = "synced_epoch"
         case weeksUSD = "weeks_usd"
         case daysUSD = "days_usd"
@@ -358,6 +361,7 @@ private struct RawCostDevice: Decodable {
         days = (c.positional(CostNumber.self, .daysUSD) ?? []).map { $0?.value }
         summary = c.lossy(CostSummary.self, .summary) ?? CostSummary()
         diag = c.lossy(CostDiag.self, .diag)
+        used = c.bool(.used) ?? true
     }
 
     /// 按账号的 weeks、days 解码后留下的下标取值（缺的、坏的是 0）
@@ -366,7 +370,7 @@ private struct RawCostDevice: Decodable {
             order.map { i in i < raw.count ? max(raw[i] ?? 0, 0) : 0 }
         }
         return CostDevice(id: id, name: name, isMe: isMe, revoked: revoked, syncedEpoch: syncedEpoch, stale: stale,
-                          weeksUSD: pick(weeks, w), daysUSD: pick(days, d), summary: summary, diag: diag)
+                          weeksUSD: pick(weeks, w), daysUSD: pick(days, d), summary: summary, diag: diag, used: used)
     }
 }
 
@@ -614,6 +618,37 @@ struct CostTotalPart: Decodable, Sendable, Equatable {
     var today: CostPeriod? { days.last(where: \.current) }
 }
 
+/// `cost_total.devices[]` 的一项：一台设备在各个账号里的那一份加起来（App 的设备菜单；这台设备在最前，别的按 30 天的金额从多到少，cca 排好的）。
+struct CostTotalDevice: Decodable, Sendable, Equatable, Identifiable {
+    /// 和账号里 `devices[].id` 一样（设备统计里的设备指纹；这台设备没开设备统计时是 `local`）
+    var id: String
+    var name: String
+    var isMe: Bool
+    /// 维护者撤销了它的 key（数字是撤销前同步来的）
+    var revoked: Bool
+    /// 每个账号里都超过 36 小时没同步上来：之后用的可能还没算进来（设备菜单里标出来）
+    var stale: Bool
+    /// 几项统计、最近 30 天每天、按工具分开（和 `me` 一样）
+    var part: CostTotalPart
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, me, revoked, stale
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "cost_total device without id"))
+        }
+        self.id = id
+        name = nonEmpty(c.string(.name)) ?? id
+        isMe = c.bool(.me) ?? false
+        revoked = c.bool(.revoked) ?? false
+        stale = c.bool(.stale) ?? false
+        part = (try? CostTotalPart(from: decoder)) ?? CostTotalPart()
+    }
+}
+
 /// `cost_total`（顶层，折合金额页的页头）：所有账号加起来。各账号的周期不一样，没有按周加起来的柱子。
 /// config.json 里关掉了折合金额、没有 Claude / Codex 的官方账号时为 null（旧版 cca 没有这个字段，同样当作 null）。
 struct CostTotal: Decodable, Sendable, Equatable {
@@ -623,11 +658,13 @@ struct CostTotal: Decodable, Sendable, Equatable {
     var all: CostTotalPart
     /// 只算这台设备的（`me`：各账号里这台设备的那一份加起来）；旧版 cca 没有
     var me: CostTotalPart?
+    /// 按设备分开的（设备菜单）；旧版 cca 没有，是空的（菜单里只有所有设备、本机）
+    var devices: [CostTotalDevice]
     var scan: CostScan
     var unattributed: CostUnattributed?
 
     enum CodingKeys: String, CodingKey {
-        case currency, me, scan, unattributed
+        case currency, me, devices, scan, unattributed
         case pricesDate = "prices_date"
     }
 
@@ -637,14 +674,27 @@ struct CostTotal: Decodable, Sendable, Equatable {
         pricesDate = nonEmpty(c.string(.pricesDate))
         all = (try? CostTotalPart(from: decoder)) ?? CostTotalPart()
         me = c.lossy(CostTotalPart.self, .me)
+        devices = c.lossyArray(CostTotalDevice.self, .devices) ?? []
         scan = c.lossy(CostScan.self, .scan) ?? CostScan()
         unattributed = c.lossy(CostUnattributed.self, .unattributed)
     }
 
-    /// 看的那一方：所有设备的，或者这台设备的（旧版 cca 没给时没有）
+    /// 看的那一方：所有设备的、这台设备的（旧版 cca 没给时没有），或者另一台设备的（cca 没列这台设备时没有）
     func part(_ scope: CostScope) -> CostTotalPart? {
-        scope == .all ? all : me
+        switch scope {
+        case .all: return all
+        case .me: return me
+        case .device(let id): return device(id)?.part
+        }
     }
+
+    /// 一台设备（按 id）
+    func device(_ id: String) -> CostTotalDevice? {
+        devices.first { $0.id == id }
+    }
+
+    /// 设备菜单里分隔线下面的那几台：别的设备（这台设备在上面单独一项「本机」）
+    var otherDevices: [CostTotalDevice] { devices.filter { !$0.isMe } }
 }
 
 /// `cca cost sync [--now] --json`（PROTOCOL 3.5）：统计和同步得怎么样（金额本身在 `_gui state` 里）。

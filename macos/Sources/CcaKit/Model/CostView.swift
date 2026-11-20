@@ -8,9 +8,35 @@ enum CostGranularity: String, Sendable, CaseIterable {
     case week, day
 }
 
-/// 折合金额看谁的（账号页、折合金额页共用）：这台设备（本机），或者所有设备加起来（整个账号）。记在 App 的设置里。
-enum CostScope: String, Sendable, CaseIterable {
-    case me, all
+/// 折合金额看谁的（账号页、折合金额页共用）：所有设备加起来（整个账号）、这台设备（本机），或者另一台设备（cca 给的设备 id，
+/// `cost_total.devices`）。记在 App 的设置里：`all`、`me`、`d:设备 id`（旧版 App 读到不认识的当作所有设备）。
+enum CostScope: Hashable, Sendable {
+    case all, me
+    case device(String)
+
+    var rawValue: String {
+        switch self {
+        case .all: return "all"
+        case .me: return "me"
+        case .device(let id): return "d:" + id
+        }
+    }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "all": self = .all
+        case "me": self = .me
+        default:
+            guard rawValue.hasPrefix("d:"), rawValue.count > 2 else { return nil }
+            self = .device(String(rawValue.dropFirst(2)))
+        }
+    }
+
+    /// 看的是另一台设备（不是所有设备、不是本机）
+    var isOtherDevice: Bool {
+        if case .device = self { return true }
+        return false
+    }
 }
 
 /// 一根柱子：一个周期（或者一天），和看的那一方在这一项里折了多少钱。
@@ -89,9 +115,18 @@ enum CostChart {
         g == .week ? c.weeks : c.days
     }
 
-    /// 柱子：所有设备用 weeks / days 的 usd，本机用这台设备的（这台设备没有这个账号的记录时都是 0）
+    /// 看的那一台设备在这个账号里的那一份：本机是 `me` 为真的那一台，别的按 id；看所有设备、那台设备没有这个账号的记录时是 nil
+    static func device(_ c: AccountCost, scope: CostScope) -> CostDevice? {
+        switch scope {
+        case .all: return nil
+        case .me: return c.me
+        case .device(let id): return c.device(id)
+        }
+    }
+
+    /// 柱子：所有设备用 weeks / days 的 usd，本机、某一台设备用那台设备的（它没有这个账号的记录时都是 0）
     static func bars(_ c: AccountCost, granularity g: CostGranularity, scope: CostScope) -> [CostBar] {
-        scope == .all ? periods(c, g).map { CostBar(period: $0, usd: $0.usd) } : bars(c, granularity: g, device: c.me)
+        scope == .all ? periods(c, g).map { CostBar(period: $0, usd: $0.usd) } : bars(c, granularity: g, device: device(c, scope: scope))
     }
 
     /// 一台设备的柱子（本机，折合金额页各台设备那一行）：它的 weeks_usd / days_usd（和 weeks / days 一一对应，cca 给的），
@@ -101,9 +136,15 @@ enum CostChart {
         return periods(c, g).enumerated().map { i, p in CostBar(period: p, usd: i < values.count ? values[i] : 0) }
     }
 
-    /// 统计：整个账号的 summary，或者这台设备的（没有记录时都是 0、没有平均）
+    /// 统计：整个账号的 summary，或者看的那一台设备的（没有记录时都是 0、没有平均）
     static func summary(_ c: AccountCost, scope: CostScope) -> CostSummary {
-        scope == .all ? c.summary : c.me?.summary ?? CostSummary()
+        scope == .all ? c.summary : device(c, scope: scope)?.summary ?? CostSummary()
+    }
+
+    /// 折合金额页看另一台设备时列不列这个账号：那台设备用过它（cca 给的 `used`）。看所有设备、本机时都列（和以前一样）
+    static func listed(_ c: AccountCost?, scope: CostScope) -> Bool {
+        guard case .device(let id) = scope else { return true }
+        return c?.device(id)?.used == true
     }
 
     /// 横轴的范围：最右边是最晚结束的那一项（这一周、今天的结束时间）和现在里晚的那个，往左 13 周 / 30 天。

@@ -45,13 +45,17 @@ DIAG_MASK = [
     (r', "why": \[(?:[^\[\]{}]|\{[^{}]*\})*\], "claude_code": (?:null|"[^"]*"), "claude_code_old": (?:true|false)', ''),
     (r'"sum":"[0-9a-f]{16}"', '"sum":"<SUM>"'),
 ]
+# 设备菜单（cost_total.devices：按设备分开加起来；账号里各台设备的 used）也是切换以后新加的：同样去掉再比（tests/cost_view.py 的
+# test_by_device、回归 10g 里测）。合计里是 prices_date、me、devices、scan 这样排的（账号的 cost 里 prices_date 后面不是 me）：
+# 照这个认出合计的 devices，账号的 devices 不动。_gui state 照样用它（cases/gui.py 导入；那边是缩进排版的，\s* 都认）
+DEVICES_MASK = [(r'(?s)("prices_date": "[^"]*",\s*"me": \{.*?\}),\s*"devices": \[.*?\](,\s*"scan": )', r'\1\2'), (r',\s*"used": (?:true|false)', '')]
 CMASK = MASK + [
     (r'"ino":\d+', '"ino":<I>'), (r'"(updated_epoch|generated_epoch)": \d+\.\d+', r'"\1": <T>'),
     (r'"(at|ok_at|up_at|checked|retry)":(\d+\.\d+)', near_now), (r'"(checked_epoch)": (\d+\.\d+)', near_now),
     (r':"[A-Za-z0-9+/]{43}="', ':"<TAG>"'),                                   # 这台设备自己传上去的那份的认证码（每次不一样）
     (r'"used_epoch":\d+', '"used_epoch":<T>'),                               # 现在减去服务器说的“多久以前用过”
     (r'"n": "[^"]+", "c": "[^"]+", "t": "[^"]+"', '<BLOB>'),      # 夹具里别的设备的密文（before 里现算的，两边各算一遍）
-] + DIAG_MASK
+] + DIAG_MASK + DEVICES_MASK
 
 
 

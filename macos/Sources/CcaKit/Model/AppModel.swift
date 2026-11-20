@@ -253,12 +253,20 @@ final class AppModel {
         }
     }
 
-    /// 折合金额看本机还是所有设备（同上，两页共用）
+    /// 折合金额看哪台设备：所有设备、本机或者另一台（同上，两页共用）。界面上用 costScopeShown
     var costScope: CostScope = .all {
         didSet {
             guard costScope != oldValue else { return }
             defaults.set(costScope.rawValue, forKey: Prefs.costScope)
         }
+    }
+
+    /// 实际显示的：选的那台设备这次 cca 没列出来（不再同步了、旧版 cca）时看所有设备，设置里的不改（那台设备回来了接着看它）；
+    /// 选的是这台设备自己（cca 列的 me）时就是本机
+    var costScopeShown: CostScope {
+        guard case .device(let id) = costScope else { return costScope }
+        guard let d = state?.costTotal?.device(id) else { return .all }
+        return d.isMe ? .me : costScope
     }
 
     /// 分流页看哪一边：nil 按 route_pref，否则用 CCA_ROUTE 指定。
@@ -333,7 +341,7 @@ final class AppModel {
         static let terminalDirectories = "terminal.directories"
         /// 账号在各组里的排序和置顶（AccountArrangement 的 JSON）
         static let arrangement = "accounts.arrangement"
-        /// 折合金额按周还是按天（CostGranularity）、看本机还是所有设备（CostScope）：账号页、折合金额页共用
+        /// 折合金额按周还是按天（CostGranularity）、看哪台设备（CostScope：all、me、d:设备 id）：账号页、折合金额页共用
         static let costGranularity = "cost.period"
         static let costScope = "cost.scope"
         /// 各工具上次看的账号（侧栏换工具时选中它）
@@ -1693,17 +1701,18 @@ final class AppModel {
         return s == .scanning || (s == .never && costSyncing)
     }
 
-    /// 折合金额页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」（按周还是按天、本机还是所有设备两页共用，不用另设）
+    /// 折合金额页点了一行（或者其中一台设备）：打开这个账号的页面，滚到「折合金额」（按周还是按天、看哪台设备两页共用，不用另设）
     func showCost(_ ref: AccountRef) {
         costFocus = ref
         show(ref)
     }
 
     /// 折合金额页的分组：有折合金额的工具（`features.cost`）里 `can.cost` 的官方账号，和总览一样按用户排的顺序；
-    /// 一个都没有的组不列
+    /// 看另一台设备时只列它用过的账号（cca 给的 `used`，CostChart.listed）。一个都没有的组不列
     func costGroups() -> [AccountGroup] {
-        visibleTools.filter { features($0).cost }.map { Employee.Department.official($0) }
-            .map { d in AccountGroup(department: d, accounts: arranged(d).filter(\.can.cost)) }
+        let scope = costScopeShown
+        return visibleTools.filter { features($0).cost }.map { Employee.Department.official($0) }
+            .map { d in AccountGroup(department: d, accounts: arranged(d).filter { $0.can.cost && CostChart.listed($0.cost, scope: scope) }) }
             .filter { !$0.accounts.isEmpty }
     }
 

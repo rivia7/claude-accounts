@@ -2471,7 +2471,7 @@ fn cost_summary(wr: &[Counts], dr: &[Counts], good: &[usize], good_days: &[usize
         today: dr.last().expect("至少有今天")[0],
         average: avg(wr, good),
         average_day: avg(dr, good_days),
-        day_list: Vec::new(),
+        day_list: dr.iter().map(|r| r[0]).collect(),
     };
     let summary = dict! {
         "weeks_usd" => usd(m.weeks), "current_usd" => usd(m.current), "average_usd" => usd_opt(m.average), "average_weeks" => good.len(),
@@ -2524,6 +2524,16 @@ struct Device {
     diag: Option<Dict>,
 }
 
+/// 一个账号里一台用过它的设备的那一份（百万分之一美元）：cost_total 的 me、devices 按设备加起来
+struct DevMoney {
+    id: String,
+    name: String,
+    me: bool,
+    revoked: bool,
+    stale: bool,
+    money: Money,
+}
+
 /// _gui state 里折合金额要的（一次读好）：这台设备统计的、别的设备同步来的、同步的状态，按天的时段
 pub struct CostView {
     pub on: bool,
@@ -2536,8 +2546,8 @@ pub struct CostView {
     days: Vec<Period>,
     updated: Option<f64>,
     me_name: String,
-    /// [(工具名, 整个账号的各项, 这台设备的各项)]（百万分之一美元）：cost_total 加起来
-    accounts: Vec<(&'static str, Option<Money>, Option<Money>)>,
+    /// [(工具名, 整个账号的各项, 用过它的各台设备的那一份)]（百万分之一美元）：cost_total 加起来
+    accounts: Vec<(&'static str, Option<Money>, Vec<DevMoney>)>,
 }
 
 impl CostView {
@@ -2679,14 +2689,19 @@ impl CostView {
         dict! { "state" => state, "message" => msg, "checked_epoch" => checked, "missing" => missing }
     }
 
+    /// 这台设备的 id：设备统计里的设备指纹，没开设备统计时是 local
+    fn me_id(&self) -> V {
+        match &self.cfg {
+            Some(cfg) => cfg.at("fp"),
+            None => V::from("local"),
+        }
+    }
+
     /// 有数据的设备，这台设备在最前。维护者撤销了 key、又有一台同名的（同一台换了 key）：并进那一台，它有数据以前的小时
     /// 才用撤销的那份（不重复计）。第二个返回值：没有标价的模型（排好序）
     fn devices(&self, tool: &Tool, email: &str, slot: &str, share: bool) -> (Vec<Device>, Vec<String>) {
         let (h, mut ums) = cost_content(&self.local, tool, email);
-        let me_id = match &self.cfg {
-            Some(cfg) => cfg.at("fp"),
-            None => V::from("local"),
-        };
+        let me_id = self.me_id();
         let me_diag = cost_diag_ok(self.local.get("diag"), self.now).unwrap_or_else(|| dict! { "why" => List::new() });
         if let Some(v) = getenv("CCA_VERSION").filter(|v| version_ok(v)) {
             me_diag.set("cca", v);
@@ -2791,7 +2806,7 @@ impl CostView {
         let requests = |rows: &[Counts]| rows.iter().map(|r| r[1]).sum::<i128>();
         let data: Vec<usize> = (0..devs.len()).filter(|i| requests(&wk[*i]) != 0 || requests(&dy[*i]) != 0).collect();
         if data.is_empty() {
-            self.accounts.push((tool.name, None, None));
+            self.accounts.push((tool.name, None, Vec::new()));
             return V::None;
         }
         // 这个账号没有数据、最近却有回复认不出账号的别的设备也列出来（金额是 0，带着诊断：它用这个账号的可能漏了）
@@ -2821,10 +2836,9 @@ impl CostView {
                 .collect()
         };
         let (wsum, dsum) = (total(&wk, weeks.len()), total(&dy, self.days.len()));
-        let (mut m, summary) = cost_summary(&wsum, &dsum, &good, &good_days);
+        let (m, summary) = cost_summary(&wsum, &dsum, &good, &good_days);
         summary.set("requests", count_v(wsum.iter().map(|r| r[1]).sum()));
         summary.set("unpriced_requests", count_v(wsum.iter().map(|r| r[6]).sum()));
-        m.day_list = dsum.iter().map(|r| r[0]).collect();
         let parts: Vec<(usize, Money, Dict)> = keep
             .iter()
             .map(|i| {
@@ -2832,19 +2846,31 @@ impl CostView {
                 (*i, pm, ps)
             })
             .collect();
-        // 这台设备的那一份（cost_total 的 me 加起来）；这台设备没有这个账号的记录时没有
-        let mine = parts.iter().find(|(i, _, _)| devs[*i].me).map(|(i, pm, _)| {
-            let mut pm = pm.clone();
-            pm.day_list = dy[*i].iter().map(|r| r[0]).collect();
-            pm
-        });
-        self.accounts.push((tool.name, Some(m), mine));
+        // 用过这个账号的各台设备的那一份（cost_total 的 me、devices 按设备加起来；只为诊断列出来的不算）。
+        // 这台设备没有这个账号的记录时没有它的
+        let shares: Vec<DevMoney> = parts
+            .iter()
+            .filter(|(i, _, _)| data.contains(i))
+            .map(|(i, pm, _)| {
+                let d = &devs[*i];
+                DevMoney {
+                    id: d.id.py_str(),
+                    name: d.name.clone(),
+                    me: d.me,
+                    revoked: d.revoked,
+                    stale: d.stale,
+                    money: pm.clone(),
+                }
+            })
+            .collect();
+        self.accounts.push((tool.name, Some(m), shares));
         let mut devices: Vec<Dict> = parts
             .iter()
             .map(|(i, _, ps)| {
                 let d = &devs[*i];
                 dict! {
                     "id" => &d.id, "name" => d.name.as_str(), "me" => d.me, "revoked" => d.revoked, "synced_epoch" => &d.synced_epoch, "stale" => d.stale,
+                    "used" => data.contains(i),
                     "weeks_usd" => wk[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "days_usd" => dy[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "summary" => ps, "diag" => self.diag_view(&d.diag),
@@ -2886,7 +2912,7 @@ impl CostView {
     }
 
     /// 顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None。
-    /// 顶层是各账号（所有设备）加起来的，me 是各账号里这台设备的那一份加起来的
+    /// 顶层是各账号（所有设备）加起来的，me 是各账号里这台设备的那一份加起来的，devices 是按设备分开加起来的（App 的设备菜单）
     pub fn total(&self, tools: &[&str]) -> V {
         if !self.on || self.accounts.is_empty() {
             return V::None;
@@ -2942,11 +2968,40 @@ impl CostView {
         let whole: Vec<(&'static str, &Money)> =
             self.accounts.iter().filter_map(|(t_, m, _)| m.as_ref().map(|m| (*t_, m))).collect();
         let mine: Vec<(&'static str, &Money)> =
-            self.accounts.iter().filter_map(|(t_, _, m)| m.as_ref().map(|m| (*t_, m))).collect();
+            self.accounts.iter().flat_map(|(t_, _, ds)| ds.iter().filter(|d| d.me).map(move |d| (*t_, &d.money))).collect();
+        // 别的设备按 id 归到一起（同一台在几个账号里的那几份），按 30 天的金额从多到少（一样多按名字，再按 id）
+        let mut by_id: std::collections::BTreeMap<&str, Vec<(&'static str, &DevMoney)>> = Default::default();
+        for (t_, _, ds) in &self.accounts {
+            for d in ds.iter().filter(|d| !d.me) {
+                by_id.entry(d.id.as_str()).or_default().push((*t_, d));
+            }
+        }
+        let mut others: Vec<Vec<(&'static str, &DevMoney)>> = by_id.into_values().collect();
+        let days_of = |g: &[(&'static str, &DevMoney)]| g.iter().map(|(_, d)| d.money.days).sum::<i128>();
+        others.sort_by(|a, b| days_of(b).cmp(&days_of(a)).then_with(|| a[0].1.name.cmp(&b[0].1.name)));
+        // 一台设备：是哪台（head），再加上几项统计、30 天每天、按工具分开（和 me 一样）
+        let device = |head: Dict, ms: &[(&'static str, &Money)]| -> V {
+            head.update(&part(ms));
+            V::Dict(head)
+        };
+        let me_head =
+            dict! { "id" => self.me_id(), "name" => self.me_name.as_str(), "me" => true, "revoked" => false, "stale" => false };
+        let mut devices = vec![device(me_head, &mine)];
+        for g in &others {
+            let first = g[0].1;
+            let ms: Vec<(&'static str, &Money)> = g.iter().map(|(t_, d)| (*t_, &d.money)).collect();
+            // 撤销了：哪个账号里同步来的说撤销了就算；很久没同步：每个账号里都很久没同步上来
+            let head = dict! {
+                "id" => first.id.as_str(), "name" => first.name.as_str(), "me" => false,
+                "revoked" => g.iter().any(|(_, d)| d.revoked), "stale" => g.iter().all(|(_, d)| d.stale),
+            };
+            devices.push(device(head, &ms));
+        }
         let out = part(&whole);
         out.set("currency", "USD");
         out.set("prices_date", COST_PRICES_DATE);
         out.set("me", part(&mine));
+        out.set("devices", devices);
         out.set("scan", dict! { "state" => self.scan_state(), "updated_epoch" => self.updated });
         // 为什么认不出（这台设备的诊断）、这台设备命令行里最近用的 Claude Code 版本
         let diag = self.diag_view(&cost_diag_ok(self.local.get("diag"), self.now)).unwrap_or_default();

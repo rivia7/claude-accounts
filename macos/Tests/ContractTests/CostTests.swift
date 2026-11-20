@@ -7,6 +7,7 @@ private let bobRef = AccountRef(tool: .claude, key: "工作(bob@example.com)")
 private let generatedAt = 1794042000.0   // 夹具的 generated_at：2026-11-07 周六 17:00（+08）
 private let me = "SHA256:" + String(repeating: "a", count: 43)
 private let aliceMini = "SHA256:" + String(repeating: "b", count: 43)
+private let officeImac = "SHA256:" + String(repeating: "c", count: 43)
 
 /// 夹具是按 +08 生成的（和 WeeklyUsageTests 一样用上海时间，测试不依赖这台 Mac 的时区）
 private var shanghai: Calendar {
@@ -45,7 +46,7 @@ func costFixtureTests() {
     check("bob：本周的 token", bob?.currentWeek?.tokens == CostTokens(input: 146741, output: 1128071, cacheRead: 199181482, cacheWrite: 5216937))
     check("bob：四台设备，这台在最前，撤销了的排最后", bob?.devices.map(\.name) == ["studio-mac", "alice-mini", "office-imac", "old-mini"]
           && bob?.devices.first?.isMe == true && bob?.devices.first?.id == me)
-    check("bob：office-imac 很久没同步上来，old-mini 撤销了", bob?.device("SHA256:" + String(repeating: "c", count: 43))?.stale == true
+    check("bob：office-imac 很久没同步上来，old-mini 撤销了", bob?.device(officeImac)?.stale == true
           && bob?.devices.last?.revoked == true && bob?.devices.last?.stale == true)
     check("bob：每台设备的数组和 weeks、days 一样长", bob?.devices.allSatisfy { $0.weeksUSD.count == 13 && $0.daysUSD.count == 30 } == true)
     check("bob：alice-mini 本周、今天", bob?.device(aliceMini)?.weeksUSD.last == 172.76 && bob?.device(aliceMini)?.daysUSD.last == 14.36
@@ -87,6 +88,18 @@ func costFixtureTests() {
         check("cost_total.me：按工具、30 天", t.me?.byTool[.claude]?.currentUSD == 555.81 && t.me?.byTool[.codex]?.daysUSD == 3320.53
               && t.me?.days.count == 30 && t.me?.today?.usd == 82.47 && t.me?.days.first?.usd == 253.01)
         check("看哪一方：所有设备是顶层的，本机是 me", t.part(.all) == t.all && t.part(.me) == t.me)
+        check("cost_total.devices：这台设备在最前（数字和 me 一样），别的按 30 天的金额从多到少",
+              t.devices.map(\.name) == ["studio-mac", "alice-mini", "office-imac", "old-mini"] && t.devices.first?.isMe == true
+              && t.devices.first?.id == me && t.devices.first?.part == t.me, t.devices.map(\.name).joined(separator: ","))
+        let mini = t.device(aliceMini)
+        check("cost_total.devices：alice-mini 只用过 bob（数字是它在 bob 里的那一份；Codex 都是 0、没有平均）",
+              mini?.part.summary.daysUSD == 1302.43 && mini?.part.summary.averageUSD == 266.16 && mini?.part.days.last?.usd == 14.36
+              && mini?.part.byTool[.claude]?.weeksUSD == 2172.79 && mini?.part.byTool[.codex]?.daysUSD == 0 && mini?.part.byTool[.codex]?.averageUSD == nil,
+              "\(String(describing: mini?.part.summary))")
+        check("cost_total.devices：很久没同步、撤销了", t.devices.map(\.stale) == [false, false, true, true] && t.devices.map(\.revoked) == [false, false, false, true])
+        check("看哪一方：另一台设备是 devices 里那一台的，cca 没列的设备没有", t.part(.device(aliceMini)) == mini?.part && t.part(.device("SHA256:x")) == nil)
+        check("设备菜单里分隔线下面的：别的设备", t.otherDevices.map(\.name) == ["alice-mini", "office-imac", "old-mini"])
+        check("账号里的设备：都用过这个账号（used）", s.tools.flatMap(\.accounts).allSatisfy { $0.cost?.devices.allSatisfy(\.used) ?? true })
         check("cost_total：认不出是哪个账号的（旧版 cca 留下的，没有原因）", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40
               && t.unattributed?.why == [] && t.unattributed?.claudeCode == "2.1.330" && t.unattributed?.claudeCodeOld == false)
         check("cost_total：价格表的日期", t.pricesDate == "2026-11-01" && t.currency == "USD")
@@ -104,6 +117,8 @@ func costFixtureTests() {
         let alice = x.account(AccountRef(tool: .claude, key: "alice@example.com"))?.cost
         check("state_cost：只有这台设备，没开设备统计时 id 是 local、名字是主机名", alice?.devices.count == 1 && alice?.devices.first?.id == "local"
               && alice?.devices.first?.name == "test-mac" && alice?.syncState == .localOnly)
+        check("state_cost：设备菜单只有这台设备（id 是 local）", x.costTotal?.devices.map(\.id) == ["local"]
+              && x.costTotal?.otherDevices.isEmpty == true && x.costTotal?.devices.first?.part == x.costTotal?.me)
         check("state_cost：开始时还没有记录的两项是 partial、第一项是 0", alice?.weeks.prefix(2).allSatisfy(\.partial) == true
               && alice?.weeks.first?.usd == 0 && alice?.weeks.count == 13)
         check("state_cost：Codex 账号还没有记录，Codex 的平均是 null", x.account(AccountRef(tool: .codex, key: "dave@example.com"))?.cost == nil
@@ -124,6 +139,9 @@ func costFixtureTests() {
         check("state_cost_sync：三台设备（这台、dan-air、撤销了的 old-air），还有一台没同步过金额",
               alice?.devices.map(\.name) == ["test-mac", "dan-air", "old-air"] && alice?.devices.last?.revoked == true
               && alice?.sync?.missing.map(\.name) == ["eve-mini"] && alice?.syncState == .ok)
+        check("state_cost_sync：设备菜单：这台、dan-air、撤销了的 old-air", x.costTotal?.devices.map(\.name) == ["test-mac", "dan-air", "old-air"]
+              && x.costTotal?.devices.map(\.revoked) == [false, false, true]
+              && x.costTotal?.otherDevices.map(Texts.costMenuName) == ["dan-air", "old-air（已撤销）"])
         check("state_cost_sync：dan-air 有用量没算进来（设备那一行、提示），撤销了的、都认得出的不说；这台设备都认得出时不提醒更新",
               alice?.devices.map(Texts.costDeviceWhy) == [nil, "有用量没算进来：Claude Code 2.1.316 太旧", nil]
               && alice.map { Texts.costNotes($0, now: 1794042000).filter { $0.text.contains("算进来") } } == [
@@ -194,7 +212,10 @@ func costUnitTests() {
           CostChart.statsTicks(domain: dom13, now: now, width: 60).map(\.epoch) == [now]
           && CostChart.statsTicks(domain: dom13, now: now, width: 30).isEmpty && CostChart.statsTicks(domain: 5...5, now: 5, width: 600).isEmpty)
 
-    // 看谁的：所有设备加起来（整个账号）或者只看这台设备（本机）；折合金额页各台设备那一行看那一台
+    // 看谁的：所有设备加起来（整个账号）、只看这台设备（本机），或者另一台设备；折合金额页各台设备那一行看那一台
+    check("看谁的记在设置里：all、me、d:设备 id；认不出的不认", [CostScope.all, .me, .device(aliceMini)].map(\.rawValue) == ["all", "me", "d:" + aliceMini]
+          && ["all", "me", "d:" + aliceMini, "d:", "", "device", "ALL"].map(CostScope.init(rawValue:)) == [.all, .me, .device(aliceMini), nil, nil, nil, nil]
+          && CostScope.device("x").isOtherDevice && !CostScope.me.isOtherDevice && !CostScope.all.isOtherDevice)
     if let bob = loadFixture(StateDoc.self, "state.json")?.account(bobRef)?.cost {
         check("所有设备：柱子是 weeks、days 的 usd", CostChart.bars(bob, granularity: .week, scope: .all).map(\.usd) == bob.weeks.map(\.usd)
               && CostChart.bars(bob, granularity: .day, scope: .all).map(\.usd) == bob.days.map(\.usd))
@@ -212,6 +233,18 @@ func costUnitTests() {
               && CostChart.summary(others, scope: .me) == CostSummary() && CostChart.bars(others, granularity: .day, device: nil).allSatisfy { $0.usd == 0 })
         check("一台以上有记录的设备才列出来", CostChart.listsDevices(bob) && !CostChart.listsDevices(nil)
               && !CostChart.listsDevices(AccountCost(devices: Array(bob.devices.prefix(1)))))
+        check("另一台设备：柱子、统计是那一台的（和折合金额页那一行一样）", CostChart.bars(bob, granularity: .week, scope: .device(aliceMini)).map(\.usd)
+              == bob.device(aliceMini)?.weeksUSD && CostChart.summary(bob, scope: .device(aliceMini)) == bob.device(aliceMini)?.summary
+              && CostChart.device(bob, scope: .device(aliceMini))?.name == "alice-mini" && CostChart.device(bob, scope: .all) == nil
+              && CostChart.device(bob, scope: .me)?.isMe == true)
+        check("另一台设备没用过这个账号：柱子都是 0、统计都是 0", CostChart.bars(bob, granularity: .day, scope: .device("SHA256:x")).allSatisfy { $0.usd == 0 }
+              && CostChart.bars(bob, granularity: .day, scope: .device("SHA256:x")).count == 30 && CostChart.summary(bob, scope: .device("SHA256:x")) == CostSummary())
+        var diagOnly = bob
+        diagOnly.devices[1].used = false
+        check("折合金额页看另一台设备时列不列这个账号：那台设备用过它（只为诊断列出来的不算）；所有设备、本机都列",
+              CostChart.listed(bob, scope: .device(aliceMini)) && !CostChart.listed(diagOnly, scope: .device(aliceMini))
+              && !CostChart.listed(bob, scope: .device("SHA256:x")) && !CostChart.listed(nil, scope: .device(aliceMini))
+              && CostChart.listed(nil, scope: .all) && CostChart.listed(nil, scope: .me) && CostChart.listed(diagOnly, scope: .me))
 
         // 账号页「每周用量」的图右边留出和「折合金额」的大图的纵轴一样宽的一栏（同样的刻度撑开）：两张图的绘图区一样宽
         let gutter = CostChart.gutterLabels(bob, granularity: .week, scope: .all)
@@ -325,6 +358,26 @@ func costUnitTests() {
     let meNotes = { (c: AccountCost) in Texts.costNotes(c, scope: .me, now: now, calendar: sh) }
     check("只看本机：什么都不说（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它）",
           meNotes(bob).isEmpty && meNotes(grace).isEmpty && meNotes(frank).isEmpty && meNotes(carol).isEmpty && meNotes(erin).isEmpty)
+    let deviceNotes = { (c: AccountCost, id: String) in Texts.costNotes(c, scope: .device(id), now: now, calendar: sh) }
+    check("只看另一台设备：只说那一台很久没同步上来、有用量没算进来（同步的状态、别的设备不说）",
+          deviceNotes(bob, officeImac) == [CostNote(text: "office-imac 周四 15:00 以后的还没同步上来", warning: true)]
+          && deviceNotes(bob, aliceMini) == [CostNote(text: "alice-mini 有用量没算进来：Claude Code 2.1.316 太旧，那台设备要更新 Claude Code", warning: true)]
+          && deviceNotes(bob, "SHA256:" + String(repeating: "e", count: 43)).isEmpty && deviceNotes(bob, "SHA256:x").isEmpty && deviceNotes(grace, aliceMini).isEmpty,
+          "\(deviceNotes(bob, aliceMini))")
+    if let t = s.costTotal {
+        check("一根柱子也没有时说的：所有设备不说是谁，本机「这台设备」，另一台设备是它的名字（cca 没列的不说）",
+              Texts.costNoUsage(.all, total: t, granularity: .week) == "最近 12 周没有用量。"
+              && Texts.costNoUsage(.me, total: t, granularity: .day) == "这台设备最近 30 天没有用量。"
+              && Texts.costNoUsage(.device(aliceMini), total: t, granularity: .week) == "alice-mini 最近 12 周没有用量。"
+              && Texts.costNoUsage(.device("SHA256:x"), total: t, granularity: .day) == "最近 30 天没有用量。")
+        check("折合金额页一个账号都不列时", Texts.costNoAccounts(.device(aliceMini), total: t) == "alice-mini 最近没有用过这里的账号。"
+              && Texts.costNoAccounts(.device("SHA256:x"), total: t) == "那台设备最近没有用过这里的账号。"
+              && Texts.costNoAccounts(.all, total: t).hasPrefix("还没有 Claude、ChatGPT 账号。") && Texts.costNoAccounts(.me, total: nil) == Texts.costNoAccounts(.all, total: t))
+        check("合计那一块的读屏标签", Texts.costTotalLabel(.all, total: t) == "所有账号的折合金额"
+              && Texts.costTotalLabel(.me, total: t) == "所有账号在这台设备上的折合金额"
+              && Texts.costTotalLabel(.device(aliceMini), total: t) == "所有账号在 alice-mini 上的折合金额")
+        check("设备菜单里的叫法：撤销了的、很久没同步上来的标出来", t.otherDevices.map(Texts.costMenuName) == ["alice-mini", "office-imac（很久没同步）", "old-mini（已撤销）"])
+    }
     let syncFailed = decodeCost(#"{"weeks":[],"days":[],"devices":[{"id":"m","name":"m","me":true},{"id":"o","name":"o"}],"#
                                 + #""sync":{"state":"error","message":"x","missing":[{"name":"z"}]}}"#)
     check("同步没成功、还有设备没算进来：看所有设备时说，只看本机时不说",
@@ -436,6 +489,23 @@ func costUnitTests() {
     check("cost_total.me：和顶层一样解码（几项、天、按工具）", withMe?.all.summary.averageDayUSD == 1.5 && withMe?.me?.summary.currentUSD == 1
           && withMe?.me?.summary.averageDayUSD == 0.5 && withMe?.me?.today?.usd == 1 && withMe?.me?.byTool[.codex]?.todayUSD == 1
           && withMe?.part(.me) == withMe?.me)
+    check("cost_total：旧版 cca 没有 devices：空的（菜单里只有所有设备、本机），另一台设备看不了", total?.devices.isEmpty == true
+          && total?.otherDevices.isEmpty == true && total?.part(.device("x")) == nil)
+    let withDevices = try? JSONDecoder().decode(CostTotal.self, from: Data(#"""
+    {"current_usd":3,"devices":[{"id":"m","name":"mac","me":true,"current_usd":1,"days":[]},
+                                {"id":"o","revoked":true,"stale":1,"current_usd":"2","by_tool":{"claude":{"current_usd":2}}},
+                                {"name":"no-id"},{"id":""},"junk",
+                                {"id":"n","name":"new","stale":true}]}
+    """#.utf8))
+    check("cost_total.devices：和 me 一样解码几项，加上 id、名字（缺了用 id）；没有 id 的不要，坏掉的标记当 false",
+          withDevices?.devices.map(\.id) == ["m", "o", "n"] && withDevices?.devices.map(\.name) == ["mac", "o", "new"]
+          && withDevices?.devices.map(\.isMe) == [true, false, false] && withDevices?.devices.map(\.stale) == [false, false, true]
+          && withDevices?.devices[1].revoked == true
+          && withDevices?.devices[1].part.summary.currentUSD == 2 && withDevices?.devices[1].part.byTool[.claude]?.currentUSD == 2
+          && withDevices?.part(.device("o")) == withDevices?.devices[1].part && withDevices?.otherDevices.map(\.id) == ["o", "n"],
+          "\(String(describing: withDevices?.devices))")
+    let used = decodeCost(#"{"weeks":[],"days":[],"devices":[{"id":"a"},{"id":"b","used":false},{"id":"c","used":"no"}]}"#)
+    check("账号里的设备：used 缺了、坏了当用过（旧版 cca）", used?.devices.map(\.used) == [true, false, true])
     let badMe = try? JSONDecoder().decode(CostTotal.self, from: Data(#"{"current_usd":3,"me":"x"}"#.utf8))
     check("cost_total.me 坏了：当没有（顶层照用）", badMe?.me == nil && badMe?.all.summary.currentUSD == 3)
     check("cost_total：不认识的统计状态原样留着（App 当统计过）", total?.scan.state.rawValue == "warming"
@@ -673,7 +743,7 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     check("关掉了（cost_off）：不当作出错", await waitUntil { m.costFailure == nil && !m.costRefreshing })
     reply.mode = .ok
 
-    // 看谁的（本机 / 所有设备）、按周还是按天：账号页和折合金额页共用一个设置；折合金额页点一行：打开账号页、滚到「折合金额」
+    // 看谁的（所有设备、本机、另一台设备）、按周还是按天：账号页和折合金额页共用一个设置；折合金额页点一行：打开账号页、滚到「折合金额」
     check("默认看所有设备、按周", m.costScope == .all && m.costGranularity == .week)
     m.costScope = .me
     check("换成本机：记在设置里", m.costScope == .me && prefs.string(forKey: "cost.scope") == "me")
@@ -698,6 +768,26 @@ private func costState(_ edit: (inout [String: Any]) -> Void) -> String {
     prefs.set("everyone", forKey: "cost.scope")
     let (_, odd) = model(prefs: prefs)
     check("设置里的值不认识：看所有设备", odd.costScope == .all)
+
+    // 另一台设备：设置里记 d:设备 id；折合金额页只列它用过的账号；这次 cca 没列它时看所有设备（设置不改）
+    let (tDev, dev) = model(prefs: prefs)
+    await dev.start()
+    _ = await waitUntil { dev.state != nil }
+    dev.costScope = .device(aliceMini)
+    check("选另一台设备：记在设置里", prefs.string(forKey: "cost.scope") == "d:" + aliceMini && dev.costScopeShown == .device(aliceMini))
+    let devGroups = dev.costGroups()
+    check("看另一台设备：折合金额页只列它用过的账号（alice-mini 只用过 bob），没有账号的组不列",
+          devGroups.map(\.department) == [.claude] && devGroups.first?.accounts.map(\.key) == ["工作(bob@example.com)"], "\(devGroups.map { $0.accounts.map(\.key) })")
+    dev.costScope = .device("SHA256:gone")
+    check("选的设备这次 cca 没列出来：看所有设备，设置不改", dev.costScopeShown == .all && prefs.string(forKey: "cost.scope") == "d:SHA256:gone"
+          && dev.costGroups().flatMap(\.accounts).count == groups.flatMap(\.accounts).count)
+    dev.costScope = .device(me)
+    check("选的设备 id 是这台设备的：就是本机", dev.costScopeShown == .me)
+    dev.shutdown()
+    _ = tDev
+    let (_, again2) = model(prefs: prefs)
+    check("下次打开还是那台设备（d:设备 id）", again2.costScope == .device(me))
+    prefs.set("all", forKey: "cost.scope")
 
     // 用户走开了、过热：不统计
     do {
