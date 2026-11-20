@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.4", title: "测试版：账号的记忆不再反复要确认，在家时本机 UDP 自动停着", points: [
+            .init(symbol: "lock.open",
+                  text: "cca 启动的 Claude Code 读写记忆、看会话记录、用 skills 时不再一次次弹出确认。这些放在 ~/.claude 里几个账号共用，以前只把账号自己的目录算作信任目录，Claude Code 认的却是它们真实的位置。"),
+            .init(symbol: "house",
+                  text: "开着本机 UDP 走节点时，在家经路由器启动账号或检测出口，cca 先查一次：路由器已经让这台 Mac 的 UDP 从大陆以外出去，就把本机的先停着（设的节点留着）；出门在外启动账号、检测出口时自动再打开。节点分流页的「本机 UDP」会照实显示。"),
+            .init(symbol: "wrench.and.screwdriver",
+                  text: "修好「本机 UDP」的系统服务停着也显示“在运行”的问题，关掉它时不用再白等几秒。"),
+        ], art: "route"),
         ReleaseNote(version: "3.5.2-beta.3", title: "测试版：远程会话断了自己重新接上，不要的会话可以直接结束", points: [
             .init(symbol: "arrow.triangle.2.circlepath",
                   text: "接着另一台机器上的会话时网络断了、电脑睡了一觉，现在自己重新接上：终端里说一句“连接断了，正在重新接上…”，最多试 5 分钟，接上以后画面自动恢复。不想等就先按 Ctrl-\\ 再按 d。"),
