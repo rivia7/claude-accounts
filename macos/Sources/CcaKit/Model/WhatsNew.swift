@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.3", title: "测试版：远程会话断了自己重新接上，不要的会话可以直接结束", points: [
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "接着另一台机器上的会话时网络断了、电脑睡了一觉，现在自己重新接上：终端里说一句“连接断了，正在重新接上…”，最多试 5 分钟，接上以后画面自动恢复。不想等就先按 Ctrl-\\ 再按 d。"),
+            .init(symbol: "stop.circle",
+                  text: "「远程会话」页里这台 Mac 上的会话多了「结束…」（终端里是 cca remote end）：等于关掉它的终端，里面的程序会退出。会先问一句。"),
+            .init(symbol: "antenna.radiowaves.left.and.right",
+                  text: "维护者的服务器已经开了中转：两台机器都装上这个版本、配对以后，就能在一台上接入另一台的会话。"),
+        ]),
         ReleaseNote(version: "3.5.2-beta.2", title: "测试版：终端关了会话照样运行，在另一台机器、在这里接着用", points: [
             .init(symbol: "terminal",
                   text: "运行 cca remote on 以后，在终端里启动的会话，终端关了、SSH 断了也照样运行。cca remote attach 重新接入，先按 Ctrl-\\ 再按 d 断开。"),
