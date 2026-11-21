@@ -38,6 +38,11 @@ PY_HEAD = "PY_SRC=$(cat <<'PY'\n"
 # 对照的 Python 上打的补丁：切换以后有意改了的常量（docs/dev/rust.md「测试」：改了行为的子命令，用例删掉或改掉）。每一处都核对原文，
 # 对不上（取的提交换了）就报错。改了的行为本身在 cargo test、tests/*.py、回归里测
 ORACLE_PATCHES = [
+    # 映射里多了 team 一节（给各台机器的 Team 邀请，./policy.sh team 写的）：发布前的检查认得它，提示里列的字段多一个
+    ("        errs += ['不认识的字段 %s（只能有 version、%s、aliases、presence、install_node）' % (k, '、'.join(names))\n"
+     "                 for k in j if k not in ('version', 'aliases', 'presence', 'install_node') and k not in names]",
+     "        errs += ['不认识的字段 %s（只能有 version、%s、aliases、presence、install_node、team）' % (k, '、'.join(names))\n"
+     "                 for k in j if k not in ('version', 'aliases', 'presence', 'install_node', 'team') and k not in names]"),
     # 折合金额读会话记录的规则变了（按会话开始的记录认账号、记下诊断），scan.json 要从头重算一遍：两边用同一个 build，别的照旧比
     ("COST_BUILD = COST_PRICES_DATE + '/1'", "COST_BUILD = COST_PRICES_DATE + '/2'"),
     # 内置代理的节点定义：同名时以本机的自定义节点为准（排在拷来的前面；自定义节点写进路由器以后，拷来的里面也有它）

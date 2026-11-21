@@ -6269,6 +6269,7 @@ policy_pull() {   # policy_pull [--json]：现在就拉一次，说明结果；�
 		[ "$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)" = "$before" ] || changed=true
 		if [ "$changed" = true ]; then okay "已更新映射（${summary}）"; else okay "映射没有变化（${summary}）"; fi
 		policy_settle
+		team_adopt
 		[ -z "$json" ] || printf '{"version":1,"kind":"policy_pull","generated_epoch":%s,"changed":%s,"summary":%s}\n' "$(date +%s)" "$changed" "$(jstr "$summary")"
 		return 0
 	fi
@@ -6495,6 +6496,16 @@ policy_status() {   # cca policy：共享开没开、映射仓库、这台机器
 	policy_rows
 }
 
+team_adopt() {   # 维护者把各台机器迁到 Team 时（./policy.sh team）邀请写在映射里：有给这台设备的就自己加入，说一声，马上照它的配置对一遍
+	local out name host device n
+	out=$(py team-adopt 2>/dev/null) || return 0
+	[ -n "$out" ] || return 0
+	IFS=$'\t' read -r name host device n <<< "$out"
+	if [ "$n" = - ]; then okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}；配置还没取到（cca team sync）"
+	else okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}，管理员给了它 ${n} 个账号"; fi
+	team_settle
+}
+
 team_hook() {   # 启动时：这台设备在 Team 里、距上次取配置超过一个小时，就在后台取一次（只换本机存的那一份：账号表在下一条命令读它时照新的改）
 	[ -f "$CCA_HOME/teams/index.json" ] || return 0
 	[ -z "$(find "$CCA_HOME/teams/checked" -mmin -60 2>/dev/null)" ] || return 0
@@ -6514,7 +6525,10 @@ cmd_policy_fetch() {   # 后台任务：拉一次映射，结果记在 $POLICY_D
 	[ -n "$(find "$POLICY_DIR/lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$POLICY_DIR/lock"   # 上次异常退出留下的锁
 	mkdir "$POLICY_DIR/lock" 2>/dev/null || return 0
 	trap 'rmdir "$POLICY_DIR/lock" 2>/dev/null' EXIT
-	if policy_fetch; then policy_log "拉取成功"; else policy_log "$POLICY_ERR"; fi
+	if policy_fetch; then
+		policy_log "拉取成功"
+		py team-adopt >/dev/null 2>&1   # 映射里有给这台设备的 Team 邀请就加入（账号表在下一条命令读它时照新的改）
+	else policy_log "$POLICY_ERR"; fi
 }
 
 policy_request() {   # cca [codex] policy request 账号：一行给维护者直接运行的命令（stdout，App 自己复制），把这个账号现在的节点锁进映射
@@ -6565,11 +6579,12 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
     管理员：
       cca team new 名字 [--device 这台设备的名字]   建一个 Team（给出部署服务器要的根公钥）
       cca team attach Team https://服务器:端口 [证书公钥的指纹…]   接上（换一台）同步服务器
-      cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒]   给一台设备发邀请
+      cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']   给一台设备发邀请（--key：只认这把公钥）
       cca team devices Team [--json]               有哪些设备
       cca team revoke Team 设备                    移除一台设备、撤回邀请
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
       cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
+      cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
       cca team publish Team                        和服务器对一遍、发布配置"
 
@@ -8287,6 +8302,7 @@ main() {
 		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
 		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
 		_policy-lock) shift; py policy-lock "$@" ;;   # 维护者把账号锁到节点（policy.sh lock 调用）
+		_team-handoff) shift; py team-handoff "$@" ;;   # 维护者把各台机器迁到 Team（policy.sh team 调用；stdin 是各台机器的 deploy key）
 		_gui) shift; cmd_gui_api "$@" ;;   # 图形界面的只读接口（macos/PROTOCOL.md）
 		_gui-fetch) cmd_gui_fetch ;;
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）

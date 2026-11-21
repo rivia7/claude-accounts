@@ -54,6 +54,8 @@ usage() {
   ./policy.sh nodes 参考配置 [策略组]          只看不发布：打印会写进 nodes.json 的参考节点（策略组默认 OpenAi）
   ./policy.sh lock claude|codex|agy 邮箱 节点 [-C 映射仓库的目录] [-y]
                                                把账号锁到节点，确认后发布（目录默认是 CCA_POLICY_DIR，没有就是 cca 仓库旁边的 cca-policy）
+  ./policy.sh team Team [-C 映射仓库的目录] [-y]
+                                               把各台机器迁到 Team（cca team）：给仓库上每把 deploy key 发一个邀请、写进映射发布，各台机器拉到后自己加入
   ./policy.sh key [ls]                         列出各台机器的 deploy key：添加时间、最近一次拉取、别名
   ./policy.sh key add [公钥文件 | - | '公钥'] [别名]
                                                加一把只读 deploy key：不写文件也不写公钥就用剪贴板里的，不写别名就提示起一个
@@ -702,8 +704,78 @@ lock_account() {   # lock_account 工具 邮箱 节点 [-C 目录] [-y]：写好
 	LOCK_DIR="$dir"
 }
 
+TEAM_USAGE="用法：./policy.sh team Team [-C 映射仓库的目录] [-R 仓库] [-y]"
+team_handoff() {   # team_handoff Team [-C 目录] [-R 仓库] [-y]：给仓库上每台机器（只读、启用的 ed25519 deploy key）发一个 Team 的邀请，写进
+                   # policy.json 的 team 一节；发布要用的 LOCK_DIR、LOCK_MSG 留给后面。各台机器拉到映射后自己加入（cca 的 team_adopt）
+	local dir sel="" yes="" mrepo out n
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-y) yes=1 ;;
+			-C) [ $# -ge 2 ] || fail "$TEAM_USAGE"; PDIR="$2"; shift ;;
+			-R|--repo) [ $# -ge 2 ] || fail "$TEAM_USAGE"; REPO="$2"; shift ;;
+			*) [ -z "$sel" ] || fail "$TEAM_USAGE"; sel="$1" ;;
+		esac
+		shift
+	done
+	[ -n "$sel" ] || fail "$TEAM_USAGE"
+	dir=$(policy_dir)
+	[ -f "$dir/policy.json" ] || fail "${dir} 里没有 policy.json：用 -C 指定映射仓库的目录，或者设环境变量 CCA_POLICY_DIR（默认是 cca 仓库旁边的 cca-policy）"
+	dir=$(cd "$dir" && pwd)
+	mrepo=$(mapping_repo "$dir")
+	[ -n "$REPO" ] || REPO="$mrepo"   # 不写 -R 就是映射目录推送到的那个仓库：各台机器的 deploy key 加在它上面
+	repo_pick
+	[ -z "$mrepo" ] || [ "$mrepo" = "$REPO" ] || fail "映射目录 ${dir} 推送到的是 ${mrepo}，不是 ${REPO}：邀请是写进 ${mrepo} 的映射、发给它上面的机器的（去掉 -R）"
+	TMPD=$(mktemp -d)
+	trap 'rm -rf "$TMPD"' EXIT
+	open_tty
+	keys_load || fail "读不到 ${REPO} 上的 deploy key：${GH_ERR}"
+	printf '%s\n' "$KEYS" | awk -F'\t' '$6 == "ro" && $7 == "on" && $3 ~ /^ssh-ed25519 / { print $3 "\t" $2 }' > "$TMPD/machines.tsv"
+	n=$(grep -c . "$TMPD/machines.tsv" || true)
+	[ "${n:-0}" -gt 0 ] || fail "${REPO} 上没有可以迁的机器（只读、启用的 ed25519 deploy key）"
+	if [ -z "$yes" ]; then
+		[ "$TTY_OK" = 1 ] || fail "要先确认：在终端里运行，或者加 -y"
+		echo "• ${REPO} 上有 ${n} 台机器。给还没加入「${sel}」的每台发一个邀请，写进 ${dir}/policy.json、签名并推送；"
+		echo "  各台机器（要装着支持 Team 的 cca）拉到映射后自己加入，账号和节点照这个 Team 的配置。"
+		echo "  邀请写在映射仓库里，能读这个仓库的机器都看得到：所以每个邀请只认它那台机器的 deploy key，别的机器拿去用会被认出来。"
+		case "$(ask "  发吗？[y/N]：" n)" in
+			y|Y|yes) ;;
+			*) echo "• 没有改"; exit 0 ;;
+		esac
+	fi
+	out=$(bash "$HERE/cca" _team-handoff "$sel" < "$TMPD/machines.tsv") || fail "没发成：$(printf '%s' "$out" | cut -f2-)"
+	printf '%s' "$out" > "$TMPD/handoff.json"
+	LOCK_MSG=$(python3 -I - "$TMPD/handoff.json" "$dir/policy.json" <<'PY'
+import json, os, sys
+h = json.load(open(sys.argv[1], encoding="utf-8"))
+path = sys.argv[2]
+j = json.load(open(path, encoding="utf-8"))
+names = lambda k: "、".join(h.get(k) or [])
+for k, what in (("new", "新发了邀请"), ("kept", "邀请还没用、照原来的"), ("joined", "已经加入了"),
+                ("left", "自己退出了、不再发（要它回来：cca team invite Team 名字 --key '它的公钥'，对方再 cca team join）"),
+                ("revoked", "你移除了、不再发（要它回来：cca team invite Team 名字 --key '它的公钥'）")):
+    if h.get(k):
+        print("• %s（%d 台）：%s" % (what, len(h[k]), names(k)), file=sys.stderr)
+for p in h.get("problems") or []:
+    print("✗ " + p, file=sys.stderr)
+invites = (h.get("section") or {}).get("invites") or {}
+if invites:
+    j["team"] = {"v": 1, "invites": invites}
+else:   # 都加入了：映射里不用再留邀请
+    j.pop("team", None)
+    print("• 没有还要加入的机器了：映射里的 team 一节去掉", file=sys.stderr)
+with open(path + ".tmp", "w", encoding="utf-8") as f:
+    json.dump(j, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.replace(path + ".tmp", path)
+print("Team「%s」的邀请：新发 %d 台、沿用 %d 台、已经加入 %d 台" % (h.get("name") or "", len(h.get("new") or []), len(h.get("kept") or []), len(h.get("joined") or [])))
+PY
+	) || fail "没能写进 ${dir}/policy.json"
+	LOCK_DIR="$dir"
+}
+
 case "${1:-}" in
 	key|keys) shift; key_cmd "$@"; exit 0 ;;
+	team) shift; team_handoff "$@"; set -- "$LOCK_DIR" "$LOCK_MSG" ;;
 	presence) shift; presence_cmd "$@"; exit 0 ;;
 	lock) shift; lock_account "$@"; set -- "$LOCK_DIR" "$LOCK_MSG" ;;
 	nodes)
@@ -747,7 +819,7 @@ vis=$(gh repo view "$repo" --json visibility -q .visibility 2>/dev/null) || fail
 rm -f "$dir/policy.json.sig"
 ssh-keygen -Y sign -q -n cca-policy -f "$KEY" "$dir/policy.json"
 allowed=$(mktemp)
-trap 'rm -f "$allowed"' EXIT
+trap 'rm -f "$allowed"; [ -z "$TMPD" ] || rm -rf "$TMPD"' EXIT   # TMPD：policy.sh team 留下的（它的 trap 被这一个换掉了）
 printf 'cca-release %s\n' "$pub" > "$allowed"
 ssh-keygen -Y verify -f "$allowed" -I cca-release -n cca-policy -s "$dir/policy.json.sig" < "$dir/policy.json" >/dev/null ||
 	fail "签名自检失败"

@@ -3943,6 +3943,45 @@ out=$(runev cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "cca team leave（成员）：App 里先发同意事件（team_leave，范围是 Team 的编号）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_leave\" and e[\"scope\"] == \"$TMBID\"" && [ -d "$H/.cca/teams/$TMBID" ]'
 out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "同意以后退出了（result 的 team_left）：本机记着的删掉，另一个 Team 还在" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMBID" ] && [ -d "$H/.cca/teams/$TMID" ]'
+# --- 把用着维护者映射的机器迁到 Team（docs/dev/team.md「迁移」）。维护者那一头：policy.sh team 给映射仓库上每把 deploy key 发一个邀请，
+#     写进映射的 team 一节、照常检查签名推送（假的维护者目录 $T/maint、映射仓库 $T/cca-policy 是 11b3b 搭的；假 gh 列 deploy key）
+MT="$T/maint"; MR="$T/cca-policy"; mkdir -p "$MT"; cp -p "$D/../policy.sh" "$MT/policy.sh"; cp "$H/.cca/bin/cca" "$MT/cca"
+tmh_run() { out=$(run CCA_RELEASE_KEY="$T/relkey" CCA_TTY="$1" bash -c "cd '$MT' && $2" 2>&1); rc=$?; }   # tmh_run 答案文件 命令：像维护者那样在 cca 的仓库里运行
+cp -p "$T/deploy_keys.json" "$T/tmh.keys"; cp -p "$MR/policy.json" "$T/tmh.mr"; cp -p "$PR/policy.json" "$T/tmh.pr"; cp -p "$PR/policy.json.sig" "$T/tmh.pr.sig"
+cp -p "$H/.cca/policy/policy.json" "$T/tmh.local"
+for n in 1 2; do rm -f "$T/tmh-k$n" "$T/tmh-k$n.pub"; ssh-keygen -q -t ed25519 -N '' -C "cca-policy@m$n" -f "$T/tmh-k$n"; done
+python3 - "$T/deploy_keys.json" "$T/tmh-k1.pub" "$T/tmh-k2.pub" "$H/.cca/policy/id_ed25519.pub" <<'PY'
+import json, sys
+pub = lambda p: " ".join(open(p).read().split()[:2])
+keys = [{"id": i + 1, "title": t, "key": pub(p), "read_only": True, "verified": True, "created_at": "2026-11-01T00:00:00Z", "last_used": None}
+        for i, (t, p) in enumerate(zip(["客厅的Mac", "dan-air", "书房的Mac"], sys.argv[2:5]))]
+json.dump({"next": 9, "repos": {"example/cca-policy": keys}}, open(sys.argv[1], "w"), ensure_ascii=False)
+PY
+TMHFP=$(ssh-keygen -lf "$T/tmh-k1.pub" | awk '{print $2}'); : > git.log
+tmh_run "$(ans n)" "./policy.sh team 书房组"
+ok "policy.sh team：先说会怎样（几台机器、邀请写在映射仓库里意味着什么）、问过才发；回答 n 什么都不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上有 3 台机器" && printf "%s" "$out" | grep -q "只认它那台机器的 deploy key" && printf "%s" "$out" | grep -q "没有改" && ! grep -q cca-team1 "$MR/policy.json"'
+tmh_run "$(ans y)" "./policy.sh team 书房组"
+ok "policy.sh team：给还没加入的每台机器发邀请（管理员自己这台不用），照 deploy key 的指纹写进映射的 team 一节，检查、签名、推送" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "新发了邀请（2 台）：客厅的Mac、dan-air" && printf "%s" "$out" | grep -q "已经加入了（1 台）：书房的Mac" && python3 -c "import json,sys; t=json.load(open(sys.argv[1]))[\"team\"]; sys.exit(0 if t[\"v\"] == 1 and len(t[\"invites\"]) == 2 and t[\"invites\"][sys.argv[2]].startswith(\"cca-team1.\") else 1)" "$MR/policy.json" "$TMHFP" && [ -s "$MR/policy.json.sig" ] && grep -q "GIT push" git.log && printf "%s" "$out" | grep -q "已发布到 example/cca-policy"'
+TMHLINK=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["team"]["invites"][sys.argv[2]])' "$MR/policy.json" "$TMHFP")
+out=$(tm_spec join "$TMHLINK" "$T/tmh-k1" "$TMAPORT" 2>&1)
+ok "那台机器（照文档独立实现的那一头）拿映射里给它的邀请、自己的 deploy key 加入，取到了配置" 'printf "%s" "$out" | grep -q "\"accounts\"" && printf "%s" "$out" | grep -q "\"seq\""'
+tmh_run "$(ans)" "./policy.sh team 书房组 -y"
+ok "再运行一次（-y 不问）：加入了的不再发，还没用的照原来的那个；映射里只剩还没加入的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经加入了（2 台）：客厅的Mac、书房的Mac" && printf "%s" "$out" | grep -q "邀请还没用、照原来的（1 台）：dan-air" && python3 -c "import json,sys; t=json.load(open(sys.argv[1]))[\"team\"]; sys.exit(0 if len(t[\"invites\"]) == 1 else 1)" "$MR/policy.json"'
+# 机器那一头：映射里有给这台 Mac 的邀请（照它 deploy key 的指纹），拉到映射后自己加入，拿原来的 deploy key 当设备密钥；管理员由 spec_wire 扮演
+TMS2=$(printf '5c%.0s' $(seq 1 16)); TMMYFP=$(ssh-keygen -lf "$H/.cca/policy/id_ed25519.pub" | awk '{print $2}')
+rm -f "$H/.cca/teams/adopt.json"   # 前面刚自己退出过这个 Team：记着退出过的不再自己加入（下面另测），这里先当没退出过
+touch "$H/.cca/teams/checked"   # 这条命令启动时不另起后台的取配置（team_hook）：它也会顺带加入，抢在前头的话前台这一句就不说了（加入照样成）
+TMB2LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS2" 1 维护者的组 "$TMNODE" 2>&1)
+pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["team"]={"v": 1, "invites": {sys.argv[2]: sys.argv[3]}}; print(json.dumps(j, ensure_ascii=False))' "$T/tmh.pr" "$TMMYFP" "$TMB2LINK")"
+out=$(run cca policy pull 2>&1); rc=$?
+ok "cca policy pull：映射里有给这台设备的邀请：自己加入（说一声），设备密钥就是原来的 deploy key，账号表马上照 Team 的配置改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "照维护者的映射加入了「维护者的组」（127.0.0.1:${TMBPORT}）" && [ -d "$H/.cca/teams/$TMBID" ] && [ "$(cat "$H/.cca/teams/$TMBID/id_ed25519.pub")" = "$(cat "$H/.cca/policy/id_ed25519.pub")" ] && [ "$(tm_alice)" = "$TMNODE" ]'
+out=$(run cca policy pull 2>&1); rc=$?
+ok "再拉一次：已经在里面了，不再加入" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "照维护者的映射加入了"'
+runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" >/dev/null 2>&1
+out=$(run cca policy pull 2>&1); rc=$?
+ok "自己退出以后再拉映射：不再照同一个邀请加入" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "照维护者的映射加入了" && [ ! -e "$H/.cca/teams/$TMBID" ]'
+cp -p "$T/tmh.keys" "$T/deploy_keys.json"; cp -p "$T/tmh.mr" "$MR/policy.json"; cp -p "$T/tmh.pr" "$PR/policy.json"; cp -p "$T/tmh.pr.sig" "$PR/policy.json.sig"
+cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$MR/policy.json.sig" "$H/.cca/teams/adopt.json"
 out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
 ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
 kill "$TMAPID" "$TMBPID" 2>/dev/null; wait "$TMAPID" "$TMBPID" 2>/dev/null

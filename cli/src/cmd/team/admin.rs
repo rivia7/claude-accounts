@@ -18,9 +18,11 @@ use super::doc::{
 };
 use super::{cfg_of, fail, fault, find_team, index_add, now, pub_line, save_team, sync_locked, team_lock};
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
-use crate::cmd::presence::{key_at, presence_post, url_ok, PRESENCE_PIN_RE};
+use crate::cmd::hub::{route, HubKind};
+use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
-use crate::core::policy::{fill_problems, policy_problems};
+use crate::core::model::{node_of, parse_key};
+use crate::core::policy::{fill_problems, policy_problems, policy_sources};
 use crate::core::team::{load_team, team_dir, team_path, Role, Team, TEAMS_DIR};
 use crate::core::tool::tools;
 use crate::py::fs::{self, load_quiet, save_json};
@@ -173,7 +175,9 @@ fn needed_nodes(nodes: Option<Dict>, used: &BTreeSet<String>) -> V {
 /// 给一台设备的配置的明文（格式见 doc.rs 的 doc_problems）
 fn build_doc(t: &Team, a: &Dict, dev: &Dict) -> Dict {
     let config = a.dict("config").unwrap_or_default();
-    let accounts = granted(&config, &dev.at("grants"));
+    // 拿别的密钥用了这个邀请的（reconcile 记的 mismatch）：一个账号都不给
+    let grants = if dev.get("mismatch").is_some_and(|m| m.truthy()) { V::Dict(Dict::new()) } else { dev.at("grants") };
+    let accounts = granted(&config, &grants);
     let mut emails: BTreeSet<String> = BTreeSet::new();
     let mut used: BTreeSet<String> = BTreeSet::new();
     for m in accounts.values().iter().filter_map(|m| m.as_dict()) {
@@ -472,7 +476,23 @@ fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
                 }
                 Some(_) => {}
                 None if *dev == *t.dev => {} // 管理员自己这台：公钥是本机的（接上服务器时记下）
+                // 这个邀请是给某一把公钥的（照映射迁过来的机器：它的 deploy key），服务器报的却是别的：邀请被别的机器用了。它已经
+                // 取走的那一份收不回来，以后不给它账号（build_doc 看 mismatch）。服务器没报公钥不算；后来报的对上了就不再这样记
+                // （服务器一时说错，不该把一台好好的设备的账号永久拿掉）
+                None if d.str("expect").is_some_and(|e| reported.as_deref().is_some_and(|p| p != &*e)) => {
+                    d.set("mismatch", true);
+                    problems.set(
+                        &*dev,
+                        format!(
+                            "拿这个邀请加入的不是指定的那把密钥（邀请被别的机器用了）：不给它账号；移除它（cca team revoke {} {}），\
+                             再运行一次 ./policy.sh team 给那台机器重发",
+                            &t.id[..8],
+                            &dev[..8.min(dev.len())]
+                        ),
+                    );
+                }
                 None => {
+                    d.pop("mismatch");
                     let secret = device_secret(&master, d.get("n").and_then(|n| n.as_int()).unwrap_or(0));
                     let proved = reported
                         .as_ref()
@@ -725,10 +745,11 @@ fn grants_spec(spec: &str) -> Option<V> {
 /// 它是凭证）、设备编号、配置没存上时的原因（存上了是空行）。原因码：no_team、not_admin、usage、name、full（没用掉的邀请太多）、
 /// 以及请求没成的那些
 pub fn cmd_team_invite(args: &[String]) -> R<()> {
+    const USAGE: &str = "用法: cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']";
     let [sel, label, rest @ ..] = args else {
-        return Err(Fail::Die("用法: py team-invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒]".into()));
+        return Err(Fail::Die("用法: py team-invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key 公钥]".into()));
     };
-    let (mut grants, mut ttl) = (V::from("all"), INVITE_TTL);
+    let (mut grants, mut ttl, mut expect) = (V::from("all"), INVITE_TTL, None);
     let mut it = rest.iter();
     while let Some(flag) = it.next() {
         match (flag.as_str(), it.next()) {
@@ -740,7 +761,11 @@ pub fn cmd_team_invite(args: &[String]) -> R<()> {
                 Ok(n) if (60..=30 * 86400).contains(&n) => ttl = n,
                 _ => return fail("usage", "--ttl 是多少秒以后过期：60 秒到 30 天"),
             },
-            _ => return fail("usage", "用法: cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒]"),
+            ("--key", Some(s)) => match root_line(s) {
+                Some(k) => expect = Some(k),
+                None => return fail("usage", "--key 后面是那台设备要拿来加入的公钥（ssh-ed25519 AAAA…）"),
+            },
+            _ => return fail("usage", USAGE),
         }
     }
     let label = label.trim().to_string();
@@ -752,37 +777,171 @@ pub fn cmd_team_invite(args: &[String]) -> R<()> {
         Ok(c) => c,
         Err(why) => return fail("not_attached", &why),
     };
+    let (link, dev) = match issue(&t, &a, &cfg, &label, grants, ttl, expect.as_deref())? {
+        Ok(x) => x,
+        Err((c, why)) => return fail(&c, &why),
+    };
+    let problem = match publish(&t, &a, Some(&dev))? {
+        Ok(p) => p.problems.join("；"),
+        Err(why) => why,
+    };
+    out!("{link}\n{dev}\n{problem}");
+    Ok(())
+}
+
+/// 发一个邀请：在服务器上登记、记进 admin.json（还没发布这台设备的配置）。expect：这个邀请是给这把公钥的（对账时核对拿它加入的
+/// 是不是这把：reconcile）。返回（邀请链接, 设备编号），没成是（原因码, 原因）
+fn issue(
+    t: &Team,
+    a: &Dict,
+    cfg: &Dict,
+    label: &str,
+    grants: V,
+    ttl: i64,
+    expect: Option<&str>,
+) -> R<Result<(String, String), (String, String)>> {
     let n = a.get("next").and_then(|n| n.as_int()).filter(|n| *n > 0).unwrap_or(1);
     let secret = device_secret(&a.at("master").py_str(), n);
     let parts = invite_parts(&secret).expect("刚算出来的是 32 个十六进制字符");
     a.set("next", n + 1);
-    admin_save(&t.id, &a)?; // 序数先记下：这一次没成也不再用它
+    admin_save(&t.id, a)?; // 序数先记下：这一次没成也不再用它
     let payload = dict! { "token" => token_hash(&parts.token), "dev" => parts.dev.as_str(), "ttl" => ttl };
-    let (code, j) = presence_post(&cfg, "team_invite", &payload, 15)?;
+    let (code, j) = presence_post(cfg, "team_invite", &payload, 15)?;
     if code != 200 {
         let (c, why) = match code {
             507 => ("full", "还没用掉的邀请太多了（最多 64 个）：等它们用掉、过期，或者移除几个（cca team revoke）".to_string()),
-            _ => admin_fault(&t, code, &j),
+            _ => admin_fault(t, code, &j),
         };
-        return fail(c, &why);
+        return Ok(Err((c.to_string(), why)));
     }
     let exp = now() + ttl;
-    let dev = dict! { "n" => n, "label" => label.as_str(), "state" => "invited", "grants" => grants, "seq" => 0, "exp" => exp };
+    let dev = dict! { "n" => n, "label" => label, "state" => "invited", "grants" => grants, "seq" => 0, "exp" => exp };
+    if let Some(k) = expect {
+        dev.set("expect", k);
+    }
     a.dict("devices").unwrap_or_default().set(parts.dev.as_str(), dev);
-    admin_save(&t.id, &a)?;
-    let problem = match publish(&t, &a, Some(&parts.dev))? {
-        Ok(p) => p.problems.join("；"),
-        Err(why) => why,
-    };
-    let link = invite_encode(&Invite {
+    admin_save(&t.id, a)?;
+    Ok(Ok((invite_link(t, &secret, exp), parts.dev)))
+}
+
+/// 邀请链接（那串随机数是照主密钥和序数算的，所以发过的链接能原样再算出来）
+fn invite_link(t: &Team, secret: &str, exp: i64) -> String {
+    invite_encode(&Invite {
         url: t.url.clone(),
         pins: t.pins.clone(),
         root: t.root.clone(),
-        secret,
+        secret: secret.to_string(),
         name: t.name.clone(),
         exp: Some(exp),
-    });
-    out!("{link}\n{}\n{problem}", parts.dev);
+    })
+}
+
+/// py team-handoff Team：把用着维护者映射的各台机器迁到这个 Team（./policy.sh team 调的）。stdin 一行一台：「公钥（ssh-ed25519 AAAA…）
+/// \t别名」——映射仓库上各台机器的 deploy key。每台机器一个邀请，指定要拿这把公钥加入（expect）、账号全给：拿这把公钥加入了的不用
+/// 再发；发过、还没用、离过期还有三天以上的照原来的那个；自己退出了的、管理员移除了的不再发（要它回来：手工 cca team invite … --key，
+/// 退出过的那台还要自己 cca team join）；别的（没发过、过期了、被别的密钥用掉了）新发一个，30 天过期，同一把公钥以前没用上的那几项
+/// 去掉。最后和服务器对一遍、发布。stdout 一行 JSON：{"version": 1, "kind": "team_handoff", "team": 编号, "name": 名字,
+/// "section": {"v": 1, "invites": {deploy key 的指纹: 邀请链接}}（写进 policy.json 的 team 一节）, "joined": [别名…], "kept": [别名…],
+/// "new": [别名…], "left": [别名…], "revoked": [别名…], "problems": [没发成的原因…]}。原因码：no_team、not_admin、not_attached、
+/// usage（stdin 里没有一把合格的公钥）、server、publish
+pub fn cmd_team_handoff(args: &[String]) -> R<()> {
+    arity("team-handoff", args, 1, 1)?;
+    let mut machines: Vec<(String, String, String)> = Vec::new(); // (公钥, 指纹, 别名)
+    for line in crate::py::io::read_stdin_text().lines() {
+        let (key, alias) = line.split_once('\t').unwrap_or((line, ""));
+        let Some(key) = root_line(key) else { continue };
+        let Some(fp) = key.split(' ').nth(1).and_then(ssh_fp) else { continue };
+        if machines.iter().any(|m| m.0 == key) {
+            continue;
+        }
+        let alias =
+            Some(alias.trim().to_string()).filter(|n| name_ok(n)).unwrap_or_else(|| format!("device-{}", machines.len() + 1));
+        machines.push((key, fp, alias));
+    }
+    if machines.is_empty() {
+        return fail("usage", "没有要迁的机器：stdin 一行一台「公钥\\t别名」");
+    }
+    let (t, a, _lk) = admin_of(&args[0])?;
+    let cfg = match root_cfg(&t)? {
+        Ok(c) => c,
+        Err(why) => return fail("not_attached", &why),
+    };
+    if let Err(why) = reconcile(&t, &a)? {
+        return fail("server", &why);
+    }
+    let master = a.at("master").py_str();
+    let devs = a.dict("devices").unwrap_or_default();
+    // 管理员自己这台（它的 deploy key 多半也在仓库上）本来就在 Team 里：不用给它发
+    let own = presence_key()?.map(|(_, fp)| fp);
+    let invites = Dict::new();
+    let (mut joined, mut kept, mut fresh, mut problems): (Vec<V>, Vec<V>, Vec<V>, Vec<V>) = Default::default();
+    let (mut left, mut revoked): (Vec<V>, Vec<V>) = Default::default();
+    let mut full = false;
+    for (key, fp, alias) in &machines {
+        let mine: Vec<(String, Dict)> = devs
+            .items()
+            .iter()
+            .filter_map(|(dev, d)| Some((dev.to_string(), d.as_dict()?)))
+            .filter(|(_, d)| d.str("expect").as_deref() == Some(key.as_str()))
+            .collect();
+        let state = |d: &Dict| d.str("state").map(|s| s.to_string()).unwrap_or_default();
+        if own.as_deref() == Some(fp.as_str())
+            || mine.iter().any(|(_, d)| state(d) == "joined" && !d.get("mismatch").is_some_and(|m| m.truthy()))
+        {
+            joined.push(V::from(alias.as_str()));
+            continue;
+        }
+        let live = mine
+            .iter()
+            .find(|(_, d)| state(d) == "invited" && d.get("exp").and_then(|e| e.as_int()).is_some_and(|e| e - now() > 3 * 86400));
+        if let Some((_, d)) = live {
+            let secret = device_secret(&master, d.get("n").and_then(|n| n.as_int()).unwrap_or(0));
+            let exp = d.get("exp").and_then(|e| e.as_int()).unwrap_or(0);
+            invites.set(fp.as_str(), invite_link(&t, &secret, exp));
+            kept.push(V::from(alias.as_str()));
+            continue;
+        }
+        // 这台机器自己退出了、被管理员移除了（拿别的密钥用了邀请、后来被移除的那一项不算：那不是它）：不再自己把它请回来
+        let wrong = |d: &Dict| d.get("mismatch").is_some_and(|m| m.truthy());
+        if let Some(gone) = mine.iter().map(|(_, d)| d).find(|d| matches!(state(d).as_str(), "left" | "revoked") && !wrong(d)) {
+            let list = if state(gone) == "left" { &mut left } else { &mut revoked };
+            list.push(V::from(alias.as_str()));
+            continue;
+        }
+        // 以前给这把公钥的、没用上的那几项不要了（服务器上还没用掉的邀请一起撤回，免得占着名额）
+        for (dev, d) in &mine {
+            if state(d) == "invited" {
+                presence_post(&cfg, "team_revoke", &dict! { "dev" => dev.as_str() }, 15)?;
+            }
+            if state(d) != "joined" {
+                devs.pop(dev);
+            }
+        }
+        if full {
+            continue;
+        }
+        match issue(&t, &a, &cfg, alias, V::from("all"), 30 * 86400, Some(key))? {
+            Ok((link, _)) => {
+                invites.set(fp.as_str(), link);
+                fresh.push(V::from(alias.as_str()));
+            }
+            Err((c, why)) => {
+                full = c == "full"; // 名额满了：后面的也发不了，等前面的机器加入了再运行一次
+                problems.push(V::from(format!("{alias}：{why}")));
+            }
+        }
+    }
+    admin_save(&t.id, &a)?;
+    match publish(&t, &a, None)? {
+        Ok(p) => problems.extend(p.problems.into_iter().map(V::from)),
+        Err(why) => return fail("publish", &why),
+    }
+    let doc = dict! {
+        "version" => 1, "kind" => "team_handoff", "team" => t.id.as_str(), "name" => t.name.as_str(),
+        "section" => dict! { "v" => 1, "invites" => invites },
+        "joined" => joined, "kept" => kept, "new" => fresh, "left" => left, "revoked" => revoked, "problems" => problems,
+    };
+    out!("{}", json::dumps(&V::Dict(doc), json::Fmt::new().utf8()));
     Ok(())
 }
 
@@ -931,9 +1090,51 @@ pub fn cmd_team_grant(args: &[String]) -> R<()> {
 /// py team-import Team policy.json [nodes.json]：把现有的映射（账号 → 节点、别名、安装客户端用的节点）和参考节点导进这个 Team 的
 /// 配置（整个换掉原来的），再发布。文件就是维护者映射仓库里的那两份（格式照旧查）。stdout：几个账号、几个节点、存上了几台的配置。
 /// 原因码：no_team、not_admin、file（读不了、格式不对）、publish
+///
+/// py team-import Team --mine：把这台设备上**自己的**官方账号（不是维护者共享的、也不是哪个 Team 给的；第三方 API 账号不算）连同现在
+/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换），再发布——把自己的几台设备并成一个 Team 时用
+/// （代替自己的同步服务器）。stdout 同上（节点数是 0：节点各台设备自己有）
 pub fn cmd_team_import(args: &[String]) -> R<()> {
     arity("team-import", args, 2, 3)?;
     let (t, a, _lk) = admin_of(&args[0])?;
+    if args[1] == "--mine" {
+        if args.len() != 2 {
+            return fail("usage", "用法: cca team import Team --mine");
+        }
+        let config = a.dict("config").unwrap_or_default();
+        let accounts = config.dict("accounts").unwrap_or_default();
+        let aliases = config.dict("aliases").unwrap_or_default();
+        let mut count = 0;
+        for tool in tools().iter() {
+            let Some(table) = load_quiet(&tool.table).and_then(|j| j.as_dict()) else { continue };
+            let src = policy_sources(tool);
+            let m = accounts.dict(tool.name).unwrap_or_default();
+            for (k, v) in table.items() {
+                let node = node_of(&v);
+                if route(&src, &k, &v) != Some(HubKind::Own) || node.is_empty() {
+                    continue;
+                }
+                let (alias, email) = parse_key(&k);
+                let email = email.to_lowercase();
+                m.set(email.as_str(), &*node);
+                if !alias.is_empty() && !aliases.has(&email) {
+                    aliases.set(email.as_str(), alias.as_str());
+                }
+                count += 1;
+            }
+            accounts.set(tool.name, m);
+        }
+        if count == 0 {
+            return fail("file", "这台设备上没有自己的官方账号可加（维护者共享的、别的 Team 给的、第三方 API 账号都不算）");
+        }
+        config.set("accounts", accounts);
+        config.set("aliases", aliases);
+        a.set("config", config);
+        admin_save(&t.id, &a)?;
+        let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
+        out!("{count}\n0\n{stored}");
+        return Ok(());
+    }
     let read = |p: &str| load_quiet(p).filter(|j| j.is_dict());
     let Some(policy) = read(&args[1]) else { return fail("file", &format!("{} 读不了，或者不是 JSON 对象", args[1])) };
     if let Some(why) = policy_problems(&policy, false).into_iter().next() {

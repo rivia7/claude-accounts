@@ -8,19 +8,21 @@
 use super::cost::COST_DIR;
 use super::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
 use super::keyshare::is_num;
-use super::presence::{flock, key_at, presence_post, PRESENCE_DIR};
+use super::presence::{flock, key_at, presence_key, presence_post, PRESENCE_DIR};
 use super::{arity, Cmd};
 use crate::core::base::Lock;
+use crate::core::policy::policy_doc;
 use crate::core::team::{
     forget_grants, grants, index_order, index_path, load_team, team_dir, team_doc, team_path, teams, Role, Team, TEAMS_DIR,
 };
 use crate::py::fs::{self, load_quiet, save_json};
+use crate::py::hash::{sha256, to_hex};
 use crate::py::io::read_stdin_text;
 use crate::py::obj::{str_list, Dict, V};
 use crate::py::time::time;
 use crate::py::{exit, json, path, text, Fail, R};
 use crate::{dict, out};
-use doc::{envelope_open, invite_decode, invite_parts, pub_proof, team_id};
+use doc::{envelope_open, invite_decode, invite_parts, pub_proof, team_id, Invite};
 
 mod admin;
 pub mod doc;
@@ -32,9 +34,11 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-leave", cmd_team_leave),
     Cmd::all("team-list", cmd_team_list),
     Cmd::all("team-apply", cmd_team_apply),
+    Cmd::all("team-adopt", cmd_team_adopt),
     Cmd::all("team-new", admin::cmd_team_new),
     Cmd::all("team-attach", admin::cmd_team_attach),
     Cmd::all("team-invite", admin::cmd_team_invite),
+    Cmd::all("team-handoff", admin::cmd_team_handoff),
     Cmd::all("team-devices", admin::cmd_team_devices),
     Cmd::all("team-revoke", admin::cmd_team_revoke),
     Cmd::all("team-grant", admin::cmd_team_grant),
@@ -384,26 +388,25 @@ fn doc_accounts(doc: &Dict) -> usize {
 
 // --- 子命令 ----------------------------------------------------------------------------------------------------------------
 
-/// py team-join [--name 名字]：拿邀请加入一个 Team。邀请链接从 stdin 读（它是凭证：不进命令行）。成了：stdout 一行一项：Team 的名字、
-/// 服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空行）、Team 的编号、取配置的结果（ok | error…）、
-/// 没取成时的原因（取成了是给了这台设备几个账号），退出码 0。没成见 fail（原因码：link 链接不对、name 名字不对、joined 已经在这个
-/// Team 里、sign、denied 服务器不认这个邀请、expired 过期了、used 用过了、taken 这把密钥已经是一台设备、full、pin、cert、
-/// unreachable、old、clock、busy、server）。没成时什么都不留
-pub fn cmd_team_join(args: &[String]) -> R<()> {
-    let name = match args {
-        [] => host_name(),
-        [flag, n] if flag == "--name" => n.trim().to_string(),
-        _ => return Err(Fail::Die("用法: py team-join [--name 名字]（邀请链接从 stdin 读）".into())),
-    };
-    if !name_ok(&name) {
-        return fail("name", NAME_BAD);
-    }
-    let inv = match invite_decode(&read_stdin_text()) {
-        Ok(i) => i,
-        Err(why) => return fail("link", &why),
-    };
+/// 加入成了以后要说的：Team 的名字、服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空的）、Team 的编号、
+/// 取配置的结果（ok | error…）、没取成时的原因（取成了是给了这台设备几个账号）
+pub struct Joined {
+    pub tid: String,
+    pub name: String,
+    pub host: String,
+    pub device: String,
+    pub members: String,
+    pub state: &'static str,
+    pub detail: String,
+}
+
+/// 拿邀请加入：成了是 Joined，没成是（原因码, 原因），没成时什么都不留。key_src：不新生成密钥，拷这把现成的（私钥的路径，旁边有
+/// .pub）——照维护者的映射自己迁过来的机器拿拉映射用的 deploy key 当设备密钥，管理员据此认得是哪台；via：这个邀请是映射里来的
+/// （它的摘要，记进 team.json 的 adopted：退出以后不再照同一个邀请自己加入）
+fn join(inv: &Invite, name: &str, key_src: Option<&str>, via: Option<&str>) -> R<Result<Joined, (String, String)>> {
+    let bad = |c: &str, why: &str| Ok(Err((c.to_string(), why.to_string())));
     let (Some(tid), Some(parts)) = (team_id(&inv.root), invite_parts(&inv.secret)) else {
-        return fail("link", "邀请链接里根公钥不对：向 Team 的管理员要一个新的");
+        return bad("link", "邀请链接里根公钥不对：向 Team 的管理员要一个新的");
     };
     fs::makedirs_mode(&TEAMS_DIR, 0o700)?;
     match load_team(&tid) {
@@ -411,7 +414,7 @@ pub fn cmd_team_join(args: &[String]) -> R<()> {
             // 被移除了的再拿新的邀请加入：以前记着的不要了。别的情况不换（免得一条旧链接把正用着的换掉）
             let removed = sync_state(&tid).is_some_and(|(s, _)| s == "removed");
             if t.role == Role::Admin || !removed {
-                return fail(
+                return bad(
                     "joined",
                     &format!("这台设备已经在「{}」这个 Team 里了：要换成这个邀请，先运行 cca team leave", t.name),
                 );
@@ -419,10 +422,7 @@ pub fn cmd_team_join(args: &[String]) -> R<()> {
         }
         // team.json 坏了、管理员的密钥还在：不能当成没有（删掉的话根密钥就没了）
         None if path::exists(&team_path(&tid, "root_ed25519")) || path::exists(&team_path(&tid, "admin.json")) => {
-            return fail(
-                "joined",
-                &format!("这台设备上有这个 Team 的管理员密钥，但 ~/.cca/teams/{tid}/team.json 读不了：先修好它"),
-            );
+            return bad("joined", &format!("这台设备上有这个 Team 的管理员密钥，但 ~/.cca/teams/{tid}/team.json 读不了：先修好它"));
         }
         None => {}
     }
@@ -430,18 +430,39 @@ pub fn cmd_team_join(args: &[String]) -> R<()> {
     fs::makedirs_mode(&team_dir(&tid), 0o700)?;
     let _lk = team_lock(&tid)?;
     let kp = team_path(&tid, "id_ed25519");
-    keygen(&kp, "cca-team")?;
+    match key_src {
+        Some(src) => {
+            let pair = std::fs::read(src).and_then(|k| std::fs::read(format!("{src}.pub")).map(|p| (k, p)));
+            if let Ok((k, p)) = pair {
+                fs::put(&kp, &k, 0o600)?;
+                fs::put(&format!("{kp}.pub"), &p, 0o644)?;
+            }
+        }
+        None => keygen(&kp, "cca-team")?,
+    }
     let Some((key, fp)) = key_at(&kp)? else {
         forget(&tid)?;
-        return fail("sign", "生成不了这台设备的密钥（ssh-keygen）");
+        return bad("sign", "生成不了这台设备的密钥（ssh-keygen）");
     };
     let cfg = cfg_of(&inv.url, &inv.pins, key, fp);
     let pubkey = pub_line(&kp)?;
-    let payload = dict! { "pub" => pubkey.as_str(), "name" => name.as_str(), "token" => parts.token.as_str() };
+    let payload = dict! { "pub" => pubkey.as_str(), "name" => name, "token" => parts.token.as_str() };
     if let Some(proof) = pub_proof(&inv.secret, &pubkey) {
         payload.set("proof", proof); // 管理员据此知道这把公钥真是拿着邀请的这台设备的
     }
-    let (code, j) = presence_post(&cfg, "team_join", &payload, 15)?;
+    let (mut code, mut j) = presence_post(&cfg, "team_join", &payload, 15)?;
+    // 说用过了、拿的又是现成的密钥（照映射迁过来的）：可能就是这台设备上一次用掉的——请求到了服务器、回话没收到。服务器认这把密钥是
+    // 这个邀请的那台设备（取配置时回的编号对得上）就是已经加入了：把本机这一头补上
+    if key_src.is_some() && code == 403 && j.str("error").as_deref() == Some("used") {
+        let (c2, j2) = presence_post(&cfg, "team_get", &dict! {}, 15)?;
+        if c2 == 200 && j2.str("dev").as_deref() == Some(parts.dev.as_str()) {
+            code = 200;
+            j = dict! { "dev" => parts.dev.as_str() };
+            if let Some(g) = j2.get("gen") {
+                j.set("gen", g);
+            }
+        }
+    }
     let why: Option<(&str, String)> = match (code, j.str("error").as_deref()) {
         (200, _) if j.str("dev").as_deref() != Some(parts.dev.as_str()) => {
             Some(("server", "服务器回的设备编号和邀请里的对不上".into()))
@@ -464,9 +485,9 @@ pub fn cmd_team_join(args: &[String]) -> R<()> {
     };
     if let Some((c, why)) = why {
         forget(&tid)?;
-        return fail(c, &why);
+        return bad(c, &why);
     }
-    let device = j.str("name").filter(|n| name_ok(n)).map_or(name, |n| n.to_string());
+    let device = j.str("name").filter(|n| name_ok(n)).map_or(name.to_string(), |n| n.to_string());
     fs::put(&team_path(&tid, "secret"), format!("{}\n", inv.secret).as_bytes(), 0o600)?;
     let team = dict! {
         "v" => 1, "id" => tid.as_str(), "name" => inv.name.as_str(), "url" => inv.url.as_str(), "pins" => str_list(&inv.pins),
@@ -476,6 +497,9 @@ pub fn cmd_team_join(args: &[String]) -> R<()> {
     if let Some(g) = j.str("gen").filter(|g| hex32(g)) {
         team.set("gen", &*g);
     }
+    if let Some(v) = via {
+        team.set("adopted", v);
+    }
     save_team(&tid, &team)?;
     index_add(&tid)?;
     let t = load_team(&tid).ok_or_else(|| Fail::Die("刚写好的 team.json 读不回来".into()))?;
@@ -483,7 +507,151 @@ pub fn cmd_team_join(args: &[String]) -> R<()> {
     let t = load_team(&tid).unwrap_or(t);
     let members = j.get("members").and_then(|m| m.as_int()).filter(|m| *m > 0).map_or(String::new(), |m| m.to_string());
     let detail = if s.state == "ok" { team_doc(&tid).map_or(0, |d| doc_accounts(&d.1)).to_string() } else { s.why };
-    out!("{}\n{}\n{device}\n{members}\n{tid}\n{}\n{detail}", t.name, host_of(&t.url), s.state);
+    Ok(Ok(Joined { tid, name: t.name.clone(), host: host_of(&t.url), device, members, state: s.state, detail }))
+}
+
+/// py team-join [--name 名字]：拿邀请加入一个 Team。邀请链接从 stdin 读（它是凭证：不进命令行）。成了：stdout 一行一项：Team 的名字、
+/// 服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空行）、Team 的编号、取配置的结果（ok | error…）、
+/// 没取成时的原因（取成了是给了这台设备几个账号），退出码 0。没成见 fail（原因码：link 链接不对、name 名字不对、joined 已经在这个
+/// Team 里、sign、denied 服务器不认这个邀请、expired 过期了、used 用过了、taken 这把密钥已经是一台设备、full、pin、cert、
+/// unreachable、old、clock、busy、server）。没成时什么都不留
+pub fn cmd_team_join(args: &[String]) -> R<()> {
+    let name = match args {
+        [] => host_name(),
+        [flag, n] if flag == "--name" => n.trim().to_string(),
+        _ => return Err(Fail::Die("用法: py team-join [--name 名字]（邀请链接从 stdin 读）".into())),
+    };
+    if !name_ok(&name) {
+        return fail("name", NAME_BAD);
+    }
+    let inv = match invite_decode(&read_stdin_text()) {
+        Ok(i) => i,
+        Err(why) => return fail("link", &why),
+    };
+    match join(&inv, &name, None, None)? {
+        Ok(j) => {
+            adopt_left(&j.tid, false)?;
+            out!("{}\n{}\n{}\n{}\n{}\n{}\n{}", j.name, j.host, j.device, j.members, j.tid, j.state, j.detail);
+            Ok(())
+        }
+        Err((c, why)) => fail(&c, &why),
+    }
+}
+
+// --- 照维护者的映射自己迁过来（M4）-----------------------------------------------------------------------------------------------
+
+/// 邀请链接的摘要（记「这个邀请试过了、退出过了」用：不存链接本身）
+fn link_hash(link: &str) -> String {
+    to_hex(&sha256(link.trim().as_bytes()))[..32].to_string()
+}
+
+fn adopt_path() -> String {
+    path::join(&TEAMS_DIR, "adopt.json")
+}
+
+/// teams/adopt.json：{"v": 1, "links": {邀请的摘要: {"code": done（加入了）| 没成的原因码, "at": 什么时候}}（最多留 32 个）,
+/// "left": {Team 的编号: 什么时候退出的}}
+fn adopt_note(hash: &str, code: &str) -> R<()> {
+    fs::makedirs_mode(&TEAMS_DIR, 0o700)?;
+    let j = load_quiet(&adopt_path()).and_then(|j| j.as_dict()).unwrap_or_default();
+    let links = j.dict("links").unwrap_or_default();
+    links.set(hash, dict! { "code" => code, "at" => now() });
+    let mut rows: Vec<(String, i64)> = links
+        .items()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.as_dict().and_then(|d| d.get("at")).and_then(|a| a.as_int()).unwrap_or(0)))
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+    for (k, _) in rows.iter().skip(32) {
+        links.pop(k);
+    }
+    j.set("v", 1);
+    j.set("links", links);
+    save_json(&adopt_path(), &V::Dict(j), Some(0o600), true)
+}
+
+/// 记下（on）/ 去掉（off）「这台设备自己退出过这个 Team」：退出过的不再照映射里的邀请自己加入（管理员再发新的也不：要回来就自己
+/// cca team join，那时去掉这个记号）。没有 adopt.json、没有这一项时去掉是什么都不做
+fn adopt_left(tid: &str, on: bool) -> R<()> {
+    let j = load_quiet(&adopt_path()).and_then(|j| j.as_dict());
+    if !on && !j.as_ref().and_then(|j| j.dict("left")).is_some_and(|l| l.has(tid)) {
+        return Ok(());
+    }
+    fs::makedirs_mode(&TEAMS_DIR, 0o700)?;
+    let j = j.unwrap_or_default();
+    let left = j.dict("left").unwrap_or_default();
+    if on {
+        left.set(tid, now());
+    } else {
+        left.pop(tid);
+    }
+    j.set("v", 1);
+    j.set("left", left);
+    save_json(&adopt_path(), &V::Dict(j), Some(0o600), true)
+}
+
+/// 维护者的映射里给这台设备的邀请：policy.json 的 "team": {"v": 1, "invites": {deploy key 的指纹: 邀请链接}}（维护者把各台机器迁到
+/// Team 时 ./policy.sh team 写的）。映射验过发布密钥的签名才换上，所以这里的链接和映射一样可信。共享关着、没有这一节、没有这台设备
+/// 的那一项是 None。返回（链接, 这台设备的 deploy key）
+fn policy_invite() -> R<Option<(String, String)>> {
+    let Some(j) = policy_doc() else { return Ok(None) };
+    let Some(sec) = j.dict("team").filter(|s| s.get("v").is_some_and(|v| v.py_eq(&V::Int(1)))) else { return Ok(None) };
+    let Some((key, fp)) = presence_key()? else { return Ok(None) };
+    Ok(sec.dict("invites").and_then(|m| m.str(&fp)).map(|l| (l.to_string(), key)))
+}
+
+/// 照映射里的邀请加入（policy_invite）：这台设备还不在那个 Team 里（或者被移除了、映射里换了一个新的邀请），这个邀请没试过（上次是
+/// 连不上、服务器出错、名额满了之类一时的原因、过了一个小时的再试）才加入，拿拉映射用的 deploy key 当设备密钥。自己退出过这个 Team 的
+/// 不再自己加入。没成不出声，原因记在 teams/adopt.json（拉映射、取配置时在后台做的：下一次再试）。同时只做一个（后台拉映射、取配置
+/// 可能撞上：另一个在做就算了）。加入了返回要说的那几项
+pub fn adopt() -> R<Option<Joined>> {
+    let Some((link, key)) = policy_invite()? else { return Ok(None) };
+    let Ok(inv) = invite_decode(&link) else { return Ok(None) };
+    let Some(tid) = team_id(&inv.root) else { return Ok(None) };
+    let hash = link_hash(&link);
+    fs::makedirs_mode(&TEAMS_DIR, 0o700)?;
+    let lock = std::fs::OpenOptions::new().append(true).create(true).open(path::join(&TEAMS_DIR, "adopt.lock"))?;
+    if !flock(&lock, libc::LOCK_EX | libc::LOCK_NB) {
+        return Ok(None);
+    }
+    let state = load_quiet(&adopt_path()).and_then(|j| j.as_dict()).unwrap_or_default();
+    if state.dict("left").is_some_and(|l| l.has(&tid)) {
+        return Ok(None);
+    }
+    match load_team(&tid) {
+        Some(t) => {
+            let removed = sync_state(&tid).is_some_and(|(s, _)| s == "removed");
+            if !(removed && t.role == Role::Member && t.raw.str("adopted").as_deref() != Some(&*hash)) {
+                return Ok(None);
+            }
+        }
+        None if path::exists(&team_dir(&tid)) => return Ok(None), // 建到一半、管理员的密钥还在：不碰
+        None => {}
+    }
+    if let Some(e) = state.dict("links").and_then(|l| l.dict(&hash)) {
+        let passing = matches!(
+            e.str("code").as_deref(),
+            Some("unreachable" | "pin" | "cert" | "busy" | "clock" | "old" | "sign" | "server" | "full")
+        );
+        let at = e.get("at").and_then(|a| a.as_int()).unwrap_or(0);
+        if !passing || now() - at < 3600 {
+            return Ok(None);
+        }
+    }
+    let name = Some(host_name()).filter(|n| name_ok(n)).unwrap_or_else(|| "device".to_string());
+    let r = join(&inv, &name, Some(&key), Some(&hash))?;
+    adopt_note(&hash, r.as_ref().map_or_else(|(c, _)| c.as_str(), |_| "done"))?;
+    Ok(r.ok())
+}
+
+/// py team-adopt：照维护者的映射里给这台设备的邀请加入（adopt）。加入了：stdout 一行「Team 的名字\t服务器的地址:端口\t这台设备在服务器
+/// 上的名字\t给了它几个账号（没取到配置是 -）」；没有要加入的、没成：什么都不输出。退出码都是 0
+pub fn cmd_team_adopt(args: &[String]) -> R<()> {
+    arity("team-adopt", args, 0, 0)?;
+    if let Some(j) = adopt()? {
+        let n = if j.state == "ok" { j.detail.clone() } else { "-".to_string() };
+        out!("{}\t{}\t{}\t{n}", j.name, j.host, j.device);
+    }
     Ok(())
 }
 
@@ -496,7 +664,13 @@ pub fn cmd_team_sync(args: &[String]) -> R<()> {
             Ok(t) => vec![t],
             Err(why) => return fail("no_team", &why),
         },
-        None => teams(),
+        None => {
+            // 映射里有给这台设备的邀请就先加入（没成不出声；它出了错也不耽误取各个 Team 的配置）
+            if let Err(e) = adopt() {
+                e.swallowed();
+            }
+            teams()
+        }
     };
     for t in list.iter().filter(|t| t.attached()) {
         let s = sync_one(t)?;
@@ -542,6 +716,9 @@ pub fn cmd_team_leave(args: &[String]) -> R<()> {
             }
             Err(why) => note = why,
         }
+    }
+    if t.role == Role::Member {
+        adopt_left(&t.id, true)?; // 自己退出的：以后不照映射里的邀请自己加入这个 Team
     }
     forget(&t.id)?;
     out!("{}\n{host}\n{note}", t.name);

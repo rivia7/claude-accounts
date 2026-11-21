@@ -567,6 +567,120 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(len(reports(fp)), n, '被移除的那一路不再报')
         self.assertEqual([x['code'] for x in reports(fp2)], [200] * len(reports(fp2)))
 
+    def test_handoff(self):
+        """把用着维护者映射的机器迁到 Team：管理员照各台机器的 deploy key 发邀请（写进映射的 team 一节），机器拉到映射后拿原来的
+        deploy key 自己加入；邀请只认它那台机器的密钥；用过了的不再试、退出过的不再自己加入"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        self.load(admin, tid)
+        m1, m2, m3 = (Device(self.d / n, n, {}) for n in ('m1', 'm2', 'm3'))
+        for m in (m1, m2, m3):
+            m.config(lambda c: c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D']))
+
+        def handoff(*machines):
+            r = admin.run('team-handoff', tid, stdin=''.join('%s\t%s\n' % (m.pub, m.name) for m in machines))
+            self.assertEqual((r.returncode, r.stderr), (0, ''), r.stdout)
+            return json.loads(r.stdout)
+
+        self.assertEqual(self.code(admin, 'team-handoff', tid, stdin='不是公钥\tx\n'), 'usage')
+        h = handoff(m1, m2)
+        self.assertEqual((h['kind'], h['team'], h['name'], h['new'], h['kept'], h['joined'], h['left'], h['revoked'], h['problems']),
+                         ('team_handoff', tid, '测试组', ['m1', 'm2'], [], [], [], [], []))
+        links = h['section']['invites']
+        self.assertEqual(sorted(links), sorted([m1.fp, m2.fp]), '照 deploy key 的指纹')
+        # 维护者发布前的格式检查认得这一节；写坏了的不认
+        m1.policy(None, team=h['section'])
+        check = lambda: m1.run('policy-check', str(m1.cca / 'policy' / 'policy.json'), 'strict')
+        self.assertEqual((check().returncode, check().stdout), (0, ''))
+        m1.policy(None, team={'v': 1, 'invites': {m1.fp: links[m1.fp][:-3]}, 'x': 1})
+        self.assertEqual(check().returncode, 1)
+        self.assertEqual(m1.ok('team-adopt'), '', '链接不对：不加入')
+        # m1 拉到了映射：自己加入，拿的是原来的 deploy key；给它的是全部账号
+        m1.policy(None, team=h['section'])
+        name, host, device, n = m1.ok('team-adopt').rstrip('\n').split('\t')
+        self.assertEqual((name, host, n), ('测试组', '127.0.0.1:%d' % srv.port, '3'))
+        self.assertEqual((self.tdir(m1, tid) / 'id_ed25519.pub').read_text(), (m1.cca / 'policy' / 'id_ed25519.pub').read_text())
+        self.assertEqual(oct(stat.S_IMODE(os.stat(self.tdir(m1, tid) / 'id_ed25519').st_mode)), '0o600')
+        self.assertEqual(m1.ok('team-adopt'), '', '已经在里面了')
+        self.assertEqual(m1.run('team-apply').returncode, 0)
+        self.assertEqual(json.loads((m1.cca / 'accounts.json').read_text()), {'alice(alice@example.com)': 'US-A', 'bob@example.com': 'US-B'})
+        # 再运行一次（比如仓库上又加了机器）：m1 加入了，m2 的邀请照原来的那个
+        h2 = handoff(m1, m2)
+        self.assertEqual((h2['joined'], h2['kept'], h2['new'], h2['section']['invites']), (['m1'], ['m2'], [], {m2.fp: links[m2.fp]}))
+        # m3 拿了给 m2 的邀请（映射仓库里的机器都读得到）：加入得了，管理员对账时认出来不是那把密钥，不再给它账号
+        m3.policy(None, team={'v': 1, 'invites': {m3.fp: links[m2.fp]}})
+        self.assertNotEqual(m3.ok('team-adopt'), '')
+        bad = [r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices'] if r['label'] == 'm2']
+        self.assertEqual(len(bad), 1)
+        self.assertIn('不是指定的那把密钥', bad[0]['problem'])
+        self.assertIn('cca team revoke %s %s）' % (tid[:8], bad[0]['dev'][:8]), bad[0]['problem'], '同名的不止一项：说编号')
+        self.assertEqual(bad[0]['grants'], 'all', '授权没动（服务器一时说错，后来对上了就照旧）：只是这段时间一个账号都不给')
+        self.lines(admin, 'team-publish', tid)
+        m3.ok('team-sync')
+        self.assertEqual(sum(len(v) for v in self.doc(m3, tid)[1]['accounts'].values()), 0, '它手里的换成了一个账号都没有的')
+        # m2 自己来：邀请已经被用掉了，记下不再试
+        m2.policy(None, team=h['section'])
+        self.assertEqual(m2.ok('team-adopt'), '')
+        n = len(m2.sent())
+        self.assertEqual((m2.ok('team-adopt'), len(m2.sent())), ('', n), '用过了的邀请不再试')
+        self.assertFalse(self.tdir(m2, tid).exists())
+        # 管理员再运行一次：给 m2 新发一个；m2 取配置时顺带加入
+        h3 = handoff(m1, m2)
+        self.assertEqual((h3['joined'], h3['kept'], h3['new']), (['m1'], [], ['m2']))
+        self.assertNotEqual(h3['section']['invites'][m2.fp], links[m2.fp])
+        m2.policy(None, team=h3['section'])
+        self.assertEqual(self.lines(m2, 'team-sync')[0].split('\t')[2], 'ok')
+        h4 = handoff(m1, m2)
+        self.assertEqual((h4['joined'], h4['kept'], h4['new'], h4['section']['invites']), (['m1', 'm2'], [], [], {}))
+        # 自己退出过的：管理员不再给它发，它也不再自己加入（要回来就自己 cca team join）
+        self.lines(m1, 'team-leave', 'apply', tid)
+        self.assertEqual((m1.ok('team-adopt'), self.tdir(m1, tid).exists()), ('', False))
+        m4 = Device(self.d / 'm4', 'm4', {})
+        h5 = handoff(m1, m2, m4)
+        self.assertEqual((h5['new'], h5['left'], h5['joined'], sorted(h5['section']['invites'])), (['m4'], ['m1'], ['m2'], [m4.fp]))
+        # 管理员手工再请它回来：它那边记着退出过，不自己加入；自己 cca team join 以后那个记号去掉
+        back, _ = self.invite(admin, tid, 'm1', '--key', m1.pub)
+        m1.policy(None, team={'v': 1, 'invites': {m1.fp: back}})
+        self.assertEqual((m1.ok('team-adopt'), self.tdir(m1, tid).exists()), ('', False))
+        self.assertEqual(self.lines(m1, 'team-join', stdin=back)[5], 'ok')
+        self.assertNotIn(tid, json.loads((m1.cca / 'teams' / 'adopt.json').read_text()).get('left', {}))
+        # 邀请是这台设备自己上一次用掉的（请求到了服务器、回话没收到）：下一次认出来，把本机这一头补上
+        inv = sw.invite_decode(h5['section']['invites'][m4.fp])
+        token = sw.invite_parts(inv['k'])[0]
+        pub = ' '.join(m4.pub.split()[:2])
+        st, _ = sw.post(str(m4.keyfile), srv.port, 'team_join', {'pub': pub, 'name': 'm4', 'token': token, 'proof': sw.team_pub_proof(inv['k'], pub)})
+        self.assertEqual((st, self.tdir(m4, tid).exists()), (200, False))
+        m4.config(lambda c: c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D']))
+        m4.policy(None, team=h5['section'])
+        self.assertNotEqual(m4.ok('team-adopt'), '')
+        self.assertEqual(self.lines(m4, 'team-sync')[0].split('\t')[2], 'ok')
+        # 管理员移除了的：不再自己把它请回来
+        self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'm4'), ['m4'])
+        h6 = handoff(m2, m4)
+        self.assertEqual((h6['revoked'], h6['new'], h6['section']['invites']), (['m4'], [], {}))
+        # 共享关着的机器：映射不算数，不加入
+        m5 = Device(self.d / 'm5', 'm5', {})
+        h7 = handoff(m2, m5)
+        self.assertEqual(h7['new'], ['m5'])
+        m5.policy(None, team=h7['section'])
+        m5.config(lambda c: c.pop('policy'))
+        self.assertEqual((m5.ok('team-adopt'), (m5.cca / 'teams').exists()), ('', False))
+
+    def test_import_mine(self):
+        """把这台设备上自己的官方账号加进 Team：维护者共享的、第三方 API 账号不算；节点、别名照这台设备上的"""
+        admin = Device(self.d / 'admin', 'admin', {'me(me@example.com)': 'US-C', 'alice(alice@example.com)': 'US-A', 'plain@example.com': 'US-D',
+                                                   'api(k@example.com)': {'node': 'US-B', 'base_url': 'https://api.example.com'}})
+        admin.policy(None)   # 维护者的映射里有 alice
+        tid, root = self.lines(admin, 'team-new', '我的设备', '--device', 'studio')
+        self.assertEqual(self.lines(admin, 'team-import', tid, '--mine'), ['2', '0', '0'])
+        a = json.loads((self.tdir(admin, tid) / 'admin.json').read_text())
+        self.assertEqual((a['config']['accounts']['claude'], a['config']['aliases']),
+                         ({'me@example.com': 'US-C', 'plain@example.com': 'US-D'}, {'me@example.com': 'me'}))
+        # 接上服务器以后发布：管理员自己这台拿到的就是这两个账号
+        srv, url, pin = self.server(root)
+        self.lines(admin, 'team-attach', tid, url, pin)
+        self.assertEqual(sorted(self.doc(admin, tid)[1]['accounts']['claude']), ['me@example.com', 'plain@example.com'])
+        self.assertEqual(self.code(admin, 'team-import', tid, '--mine', 'x'), 'usage')
+
     def test_server_lies(self):
         """服务器说的没有签名，管理员只拿它当线索：换了的公钥不照它的；它那边的配置丢了、旧了就重新发布；它乱说序号不信"""
         admin, tid, root, srv, url, pin = self.new_team()

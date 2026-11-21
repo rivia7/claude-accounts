@@ -407,10 +407,46 @@ pub fn policy_problems(j: &V, strict: bool) -> Vec<String> {
                 errs.push("install_node 应该是节点的名字（辅助安装直连不通时经内置代理走的节点）".to_string());
             }
         }
+        if let Some(t) = j.get("team") {
+            errs.extend(team_section_problems(&t));
+        }
         for k in j.keys() {
-            if !matches!(&*k, "version" | "aliases" | "presence" | "install_node") && !names.contains(&&*k) {
-                errs.push(format!("不认识的字段 {}（只能有 version、{}、aliases、presence、install_node）", k, names.join("、")));
+            if !matches!(&*k, "version" | "aliases" | "presence" | "install_node" | "team") && !names.contains(&&*k) {
+                errs.push(format!(
+                    "不认识的字段 {}（只能有 version、{}、aliases、presence、install_node、team）",
+                    k,
+                    names.join("、")
+                ));
             }
+        }
+    }
+    errs
+}
+
+/// 映射里 team 一节的问题（维护者发布前查；./policy.sh team 写的：给各台机器的 Team 邀请，见 docs/dev/team.md「迁移」）：
+/// {"v": 1, "invites": {deploy key 的指纹（SHA256:…）: 邀请链接}}。客户端只认完全合格的那一项（cmd/team.rs 的 policy_invite）
+pub fn team_section_problems(t: &V) -> Vec<String> {
+    let Some(t) = t.as_dict() else { return vec!["team 应该是 {\"v\": 1, \"invites\": {…}} 形式的对象".to_string()] };
+    let mut errs = Vec::new();
+    if !t.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) {
+        errs.push("team：v 应该是 1".to_string());
+    }
+    match t.get("invites") {
+        Some(V::Dict(m)) => {
+            for (fp, link) in m.items() {
+                if !(fp.starts_with("SHA256:") && fp.len() == 50) {
+                    errs.push(format!("team：「{fp}」不像 deploy key 的指纹（SHA256:…）"));
+                }
+                if !link.as_str().is_some_and(|l| crate::cmd::team::doc::invite_decode(l).is_ok()) {
+                    errs.push(format!("team：{fp} 的邀请链接不对"));
+                }
+            }
+        }
+        _ => errs.push("team：invites 应该是 {\"指纹\": \"邀请链接\"} 形式的对象".to_string()),
+    }
+    for k in t.keys() {
+        if !matches!(&*k, "v" | "invites") {
+            errs.push(format!("team：不认识的字段 {k}"));
         }
     }
     errs
