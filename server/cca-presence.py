@@ -32,6 +32,13 @@
 已经加入的设备照旧）。启动时配置的入伙口令的哈希和上次的不一样（用新的加入链接重新部署了）就从头开始：以前的设备、记录、密文都不要了。
 格式见 README.md「自己的同步服务器」。
 
+Team 的同步服务器（--mode team --team-root 根公钥：cca team）：设备统计、API key、折合金额照旧，另外存着管理员给每台设备的配置
+（账号走哪个节点、节点的定义：管理员的设备加密、拿 Team 的根密钥签名，服务器解不开也改不了）。管理员的请求拿根密钥签名（key 是
+根公钥的指纹）：直接登记设备的公钥（team_enroll）、发只能用一次的邀请（team_invite：服务器只存令牌的 SHA-256）、存各台设备的
+配置（team_put：每台一份，序号只增不减）、列出设备（team_members）、移除设备（team_revoke）。设备拿邀请里的令牌加入
+（team_join）、取自己的那一份配置（team_get）、退出（team_leave）；不在名单里回 403 unknown_device（带着 gen，和自己的同步
+服务器一样）。配置的根公钥和上次的不一样就从头开始。格式见 README.md「Team 的同步服务器」。
+
 在托管平台、反向代理后面（--behind-proxy）：只说 HTTP，HTTPS 由平台做（设备照证书机构验它的证书，加入链接里没有指纹）；
 每个 IP 的限额按 X-Forwarded-For 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
 环境变量 CCA_HUB_HOSTED=1（cca hub hosted 生成的部署设置）等于 --mode own --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json，
@@ -93,6 +100,18 @@ GEN_RE = re.compile(r'^[0-9a-f]{32}$')       # 这一份记录的编号（从头
 MAX_MEMBERS = 64           # 自己的服务器最多几台设备
 MAX_LINK_BLOB = 512        # 换入伙口令时成员存的那份密文（base64）最长多少个字符（里面是两个口令，不到 100 个字节）
 OWN_OPS = ('join', 'members', 'remove', 'relink')     # 只有自己的服务器有的 op
+DEV_RE = re.compile(r'^[0-9a-f]{16}$')       # 设备在 Team 里的编号（管理员发邀请时定的）
+MAX_TEAM_MEMBERS = 256     # 一个 Team 最多几台设备
+MAX_INVITES = 64           # 还没用掉的邀请最多几个
+INVITE_TTL = (60, 30 * 86400)   # 邀请多久过期：最短、最长（秒）
+INVITE_KEEP = 30 * 86400   # 过期的、用掉的邀请记多久（这段时间里拿它来加入，说得出是过期了还是用过了）
+SEQ_MAX = 2 ** 53          # 配置的序号比它小（各种语言的 JSON 都读得准的整数）
+MAX_TEAM_DOC = 131072      # 一台设备的配置（密文，base64）最长多少个字符
+MAX_TEAM_SIG = 1024        # 配置的签名（armored 签名的 base64）最长多少个字符
+MAX_TEAM_BATCH = 64        # team_enroll、team_put 一次最多几台设备
+TEAM_DOCS_BYTES = 16 << 20     # 所有设备的配置（密文，base64）加起来最多这么多个字符
+TEAM_ADMIN_OPS = ('team_enroll', 'team_invite', 'team_put', 'team_members', 'team_revoke')   # 要 Team 的根密钥签名
+TEAM_OPS = TEAM_ADMIN_OPS + ('team_join', 'team_get', 'team_leave')     # 只有 Team 的服务器有的 op
 
 VERIFY_SLOTS = threading.BoundedSemaphore(4)   # 同时验几个签名（一个十几毫秒 CPU）
 
@@ -100,6 +119,11 @@ VERIFY_SLOTS = threading.BoundedSemaphore(4)   # 同时验几个签名（一个�
 def key_fp(b64):
     """公钥（base64 那一段）的指纹，和 ssh-keygen -l 的写法一样"""
     return 'SHA256:' + base64.b64encode(hashlib.sha256(base64.b64decode(b64)).digest()).decode('ascii').rstrip('=')
+
+
+def team_id(pubkey):
+    """Team 的编号：根公钥（'ssh-ed25519 AAAA…' 里 base64 那一段解出来的字节）的 SHA-256 的前 32 个十六进制字符"""
+    return hashlib.sha256(base64.b64decode(pubkey.split()[1])).hexdigest()[:32]
 
 
 # --- Ed25519 验签（RFC 8032 第 5.1.7 节，照第 6 节的参考实现；只验不签，不碰私钥）-----------------------------
@@ -286,6 +310,50 @@ def parse_sync(j, limit):
     return blobs, list(dict.fromkeys(get)), have
 
 
+def name_ok(name):
+    """设备的名字：1～64 个字符，没有控制字符，前后没有空白"""
+    return isinstance(name, str) and 0 < len(name) <= 64 and name.strip() == name and not NAME_BAD.search(name)
+
+
+def dev_ok(dev):
+    """设备在 Team 里的编号"""
+    return isinstance(dev, str) and bool(DEV_RE.match(dev))
+
+
+def seq_ok(seq):
+    """配置的序号：从 1 起，比 SEQ_MAX 小"""
+    return is_count(seq) and seq < SEQ_MAX
+
+
+def parse_enroll(devs):
+    """team_enroll 的 devices：{设备编号: {"pub": 'ssh-ed25519 …', "name": 名字}}，一把公钥只能是一台设备；
+    回 {设备编号: (指纹, 公钥, 名字)}，不合格是 None"""
+    if not (isinstance(devs, dict) and 0 < len(devs) <= MAX_TEAM_BATCH):
+        return None
+    out = {}
+    for dev, x in devs.items():
+        k = KEY_RE.match(x['pub']) if isinstance(x, dict) and isinstance(x.get('pub'), str) else None
+        if not (dev_ok(dev) and k and name_ok(x.get('name'))):
+            return None
+        out[dev] = (key_fp(k.group(1)), 'ssh-ed25519 ' + k.group(1), x['name'])
+    return out if len({v[0] for v in out.values()}) == len(out) else None
+
+
+def parse_team_docs(docs):
+    """team_put 的 docs：{设备编号: {"seq": 序号, "ct": 密文, "sig": 签名}}（服务器不懂里面是什么，只查形状和长度）；不合格是 None"""
+    if not (isinstance(docs, dict) and 0 < len(docs) <= MAX_TEAM_BATCH):
+        return None
+    out = {}
+    for dev, x in docs.items():
+        if not (dev_ok(dev) and isinstance(x, dict) and set(x) == {'seq', 'ct', 'sig'} and seq_ok(x['seq'])):
+            return None
+        ct, sig = parse_blob(x['ct'], MAX_TEAM_DOC), x['sig']
+        if not (ct and isinstance(sig, str) and 0 < len(sig) <= MAX_TEAM_SIG and B64_RE.match(sig)):
+            return None
+        out[dev] = {'seq': x['seq'], 'ct': ct, 'sig': sig}
+    return out
+
+
 class Buckets:
     """令牌桶限流：每个键每秒 rate 个，最多攒 burst 个"""
     def __init__(self, rate, burst):
@@ -365,10 +433,16 @@ class Store:
     "blob": 换的那台设备存的密文} | 没有}。
     keys.json（另一个文件：心跳不用跟着重写它）：{"acc": {账号摘要: {"blob": 密文, "fp": 传的设备, "name": 它那时的名字,
     "at": 什么时候传的}}}（撤销设备不删：是账号的）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob", "name", "at"}}}}
-    （撤销设备不删，cost_keep 秒没再传的才删）"""
-    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, mode='maintainer', admit_hash=None):
+    （撤销设备不删，cost_keep 秒没再传的才删）。
+    Team 的服务器（mode team）：machines 的每一台多 "joined" 和 "dev"（它在 Team 里的编号），另有 "team": {"root": 配置的根公钥,
+    "gen": 这一份记录的编号, "invites": {令牌的 SHA-256: {"dev", "exp": 什么时候过期, "at"}}, "spent": {用掉的令牌的 SHA-256: 什么时候}}。
+    team-docs.json：{"docs": {设备编号: {"seq", "ct": 密文, "sig": 签名, "at"}}}（管理员给各台设备的配置）"""
+    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, mode='maintainer', admit_hash=None,
+                 team_root=None):
         self.path, self.ttl, self.idle, self.retain, self.cost_keep, self.mode = path, ttl, idle, retain, cost_keep, mode
-        self.seen = {}   # 自己的服务器：各台设备最近一次验过签的请求（只在内存里：不为它每个请求都重写状态文件）
+        self.seen = {}   # 自己的、Team 的服务器：各台设备最近一次验过签的请求（只在内存里：不为它每个请求都重写状态文件）
+        self.have = {}   # Team 的服务器：各台设备取配置时说的手里那一份的序号（只在内存里）
+        self.docs_path = os.path.join(os.path.dirname(path) or '.', 'team-docs.json')
         self.keys_path = keys_path or os.path.join(os.path.dirname(path) or '.', 'keys.json')
         self.cost_path = cost_path or os.path.join(os.path.dirname(path) or '.', 'cost-slots.json')
         self.lock = threading.Lock()
@@ -380,13 +454,33 @@ class Store:
         self.cost.update(load_doc(self.cost_path, ('acc',)) or {})
         self.cost['acc'] = {aid: {f: e for f, e in slots.items() if isinstance(e, dict) and parse_blob(e.get('blob'), MAX_COST_BLOB)}
                             for aid, slots in self.cost['acc'].items() if isinstance(aid, str) and isinstance(slots, dict)}
+        self.docs = {'v': 1, 'docs': {}}
+        self.docs.update(load_doc(self.docs_path, ('docs',)) or {})
+        self.docs['docs'] = {dev: e for dev, e in self.docs['docs'].items() if isinstance(e, dict) and is_count(e.get('seq'))
+                             and parse_blob(e.get('ct'), MAX_TEAM_DOC) and isinstance(e.get('sig'), str)}
         if mode == 'own':
             self.own_setup(admit_hash)
-        elif 'own' in self.data:   # 以前是自己的服务器：那时加入的设备不是维护者清单里的，不认
-            sys.stderr.write('cca-presence: 状态文件是自己的服务器（--mode own）的：%d 台设备不要了，等维护者同步设备清单\n' % len(self.data['machines']))
-            self.data.pop('own')
-            self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {}})
-            self.save()
+        elif mode == 'team':
+            self.team_setup(team_root)
+        elif 'own' in self.data or 'team' in self.data:   # 以前是自己的、Team 的服务器：那时加入的设备不是维护者清单里的，不认
+            sys.stderr.write('cca-presence: 状态文件是自己的、Team 的服务器的：%d 台设备不要了，等维护者同步设备清单\n' % len(self.data['machines']))
+            self.reset()
+
+    def reset(self, kind=None, entry=None):
+        """从头开始：以前的设备、上报的记录、各台设备的配置都不要了。kind（'own' | 'team'）是这种服务器在状态文件里的那一项，
+        entry 是它的内容，这时存的密文（API key、折合金额）也不要了；维护者的服务器（不带 kind）不动它们"""
+        self.data.pop('own', None)
+        self.data.pop('team', None)
+        self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {}})
+        if kind:
+            self.data[kind] = entry
+            self.keys, self.cost = {'v': 1, 'acc': {}}, {'v': 1, 'acc': {}}
+            save_doc(self.keys_path, self.keys)
+            save_doc(self.cost_path, self.cost)
+        self.save()
+        if self.docs['docs'] or os.path.exists(self.docs_path):   # 没有就不写：别的模式的服务器旁边不留一个空的 team-docs.json
+            self.docs = {'v': 1, 'docs': {}}
+            save_doc(self.docs_path, self.docs)
 
     def own_setup(self, admit_hash):
         """自己的服务器：配置的入伙口令的哈希（seed）和上次的不一样（第一次启动、用新的加入链接重新部署了、以前是维护者的服务器）就从头
@@ -405,14 +499,31 @@ class Store:
             if changed:
                 self.save()
             return
-        if self.data['machines'] or self.keys['acc'] or self.cost['acc']:
-            sys.stderr.write('cca-presence: 入伙口令换了（用新的加入链接重新部署了）：以前的 %d 台设备和存的密文都不要了\n' % len(self.data['machines']))
-        self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {},
-                          'own': {'seed': admit_hash, 'admit': admit_hash, 'check': None, 'gen': secrets.token_hex(16)}})
-        self.keys, self.cost = {'v': 1, 'acc': {}}, {'v': 1, 'acc': {}}
-        self.save()
-        save_doc(self.keys_path, self.keys)
-        save_doc(self.cost_path, self.cost)
+        if self.data['machines'] or self.keys['acc'] or self.cost['acc'] or self.docs['docs']:
+            why = '以前是 Team 的服务器' if 'team' in self.data else '入伙口令换了（用新的加入链接重新部署了）'
+            sys.stderr.write('cca-presence: %s：以前的 %d 台设备和存的密文都不要了\n' % (why, len(self.data['machines'])))
+        self.reset('own', {'seed': admit_hash, 'admit': admit_hash, 'check': None, 'gen': secrets.token_hex(16)})
+
+    def team_setup(self, root):
+        """Team 的服务器：配置的根公钥和上次的不一样（第一次启动、换了一个 Team、以前是别的模式）就从头开始：以前的设备、邀请、
+        记录、密文都不要了（另一个 Team 的盐算出来的账号摘要和密钥都不一样，旧的谁也用不上）。接着用时，状态文件里样子不对的
+        邀请、设备不要（手改坏了的：留着的话以后每个请求都出错）"""
+        team = self.data.get('team')
+        if isinstance(team, dict) and team.get('root') == root and GEN_RE.match(str(team.get('gen') or '')):
+            entries = lambda k: team[k].items() if isinstance(team.get(k), dict) else ()
+            before = json.dumps([team.get('invites'), team.get('spent'), self.data['machines']], sort_keys=True)
+            team['invites'] = {h: i for h, i in entries('invites') if isinstance(i, dict) and is_time(i.get('exp')) and dev_ok(i.get('dev'))}
+            team['spent'] = {h: t for h, t in entries('spent') if is_time(t)}
+            self.data['machines'] = {f: m for f, m in self.data['machines'].items() if isinstance(m, dict) and dev_ok(m.get('dev'))
+                                     and name_ok(m.get('name')) and isinstance(m.get('key'), str) and KEY_RE.match(m['key'])}
+            if json.dumps([team['invites'], team['spent'], self.data['machines']], sort_keys=True) != before:
+                self.save()
+            self.docs_prune()
+            return
+        if self.data['machines'] or self.keys['acc'] or self.cost['acc'] or self.docs['docs']:
+            sys.stderr.write('cca-presence: 换了一个 Team（根公钥不一样）：以前的 %d 台设备和存的密文都不要了\n' % len(self.data['machines']))
+        self.reset('team', {'root': root, 'gen': secrets.token_hex(16), 'invites': {}, 'spent': {}})
+
     def save(self):
         save_doc(self.path, self.data)
 
@@ -421,9 +532,17 @@ class Store:
             return self.data['machines'].get(fp) if isinstance(fp, str) else None
 
     def gen(self):
-        """自己的服务器：这一份记录的编号"""
+        """自己的、Team 的服务器：这一份记录的编号"""
         with self.lock:
-            return self.data['own']['gen']
+            return self.data['team' if self.mode == 'team' else 'own']['gen']
+
+    def team_root(self):
+        """Team 的服务器：配置的根公钥"""
+        return self.data['team']['root']
+
+    def root_fp(self):
+        """Team 的服务器：根公钥的指纹（管理员的请求的 key；它不是设备，登记、加入都不收）"""
+        return key_fp(self.team_root().split()[1])
 
     def name(self, fp):
         """设备清单里这台设备的名字（没有是 None）"""
@@ -436,8 +555,11 @@ class Store:
 
     def health(self, sig_ok, relay=None):
         with self.lock:
+            extra = {'own': OWN_OPS, 'team': TEAM_OPS}.get(self.mode, ())
             out = {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'], 'mode': self.mode,
-                   'ops': ['report', 'view'] + list(SYNC_OPS) + (list(OWN_OPS) if self.mode == 'own' else []) + (list(RELAY_OPS) if relay else [])}
+                   'ops': ['report', 'view'] + list(SYNC_OPS) + list(extra) + (list(RELAY_OPS) if relay else [])}
+            if self.mode == 'team':
+                out['team'] = team_id(self.data['team']['root'])
             if relay:
                 out['relay'] = {'port': relay}
             return out
@@ -597,7 +719,7 @@ class Store:
     def free_name(self, name, fp):
         """名字被别的设备用了就在后面加 -2、-3……（最长 64 个字符）。拿着锁调"""
         taken = {m['name'] for f, m in self.data['machines'].items() if f != fp}
-        for i in range(1, MAX_MEMBERS + 2):
+        for i in range(1, len(taken) + 2):
             tail = '' if i == 1 else '-%d' % i
             cand = name[:64 - len(tail)] + tail
             if cand not in taken:
@@ -625,14 +747,16 @@ class Store:
             seed = hmac.compare_digest(hashlib.sha256(admit.encode('ascii')).hexdigest(), own['seed'])
             return 200, {'v': API, 'ok': True, 'name': name, 'members': len(ms), 'gen': own['gen'], 'seed': seed}
 
+    def member_row(self, f, m, now):
+        """名单里的一台设备：什么时候加入的、最近一次请求（内存里记的、上报的心跳，取新的）。拿着锁调"""
+        seen = max(self.seen.get(f) or 0, (self.data['beats'].get(f) or {}).get('seen') or 0)
+        return {'fp': f, 'name': m['name'], 'joined_age': ago(now, m['joined']) if is_time(m.get('joined')) else None,
+                'seen_age': ago(now, seen) if seen else None}
+
     def members(self, me, now):
         """自己的服务器：现在有哪些设备（最近一次请求：内存里记的、上报的心跳，取新的）"""
         with self.lock:
-            rows = []
-            for f, m in self.data['machines'].items():
-                seen = max(self.seen.get(f) or 0, (self.data['beats'].get(f) or {}).get('seen') or 0)
-                rows.append({'fp': f, 'name': m['name'], 'me': f == me, 'joined_age': ago(now, m['joined']) if is_time(m.get('joined')) else None,
-                             'seen_age': ago(now, seen) if seen else None})
+            rows = [dict(self.member_row(f, m, now), me=f == me) for f, m in self.data['machines'].items()]
             own = self.data['own']
             return 200, {'v': API, 'ok': True, 'me_name': self.data['machines'][me]['name'] if me in self.data['machines'] else None,
                          'members': rows, 'gen': own['gen'], 'link': own.get('link')}
@@ -654,14 +778,194 @@ class Store:
         with self.lock:
             if target not in self.data['machines']:
                 return 404, {'error': 'no_device'}
-            del self.data['machines'][target]
-            self.data['beats'].pop(target, None)
-            self.data['units'].pop(target, None)
-            self.seen.pop(target, None)
+            self.drop_machine(target)
             self.save()
             n = len(self.data['machines'])
         sys.stderr.write('cca-presence: 移除了一台设备，现在 %d 台\n' % n)
         return 200, {'v': API, 'ok': True, 'members': n}
+
+    def drop_machine(self, fp):
+        """一台设备的密钥就此不认，它上报的记录跟着删掉（传过的 API key、折合金额的密文是账号的，不删）。拿着锁调"""
+        self.data['machines'].pop(fp, None)
+        self.data['beats'].pop(fp, None)
+        self.data['units'].pop(fp, None)
+        self.seen.pop(fp, None)
+        self.have.pop(fp, None)
+
+    # ---- Team 的服务器（mode team；格式见 README.md「Team 的同步服务器」）。管理员的请求（根密钥签的）、设备加入时的签名都在 Handler 里验过
+
+    def team_devs(self):
+        """认得的设备编号：加入了的、有邀请的（过期了、还没清掉的也算）。拿着锁调"""
+        return {m.get('dev') for m in self.data['machines'].values()} | {i['dev'] for i in self.data['team']['invites'].values()}
+
+    def docs_prune(self):
+        """不认得的编号的配置不要了（邀请过期很久被清掉了；移除设备时写了状态文件、还没写这一份就停了）。拿着锁调（启动时不用）"""
+        known = self.team_devs()
+        gone = [dev for dev in self.docs['docs'] if dev not in known]
+        for dev in gone:
+            del self.docs['docs'][dev]
+        if gone:
+            save_doc(self.docs_path, self.docs)
+
+    def invite_prune(self, now):
+        """过期了、用掉了很久的邀请不记了，给它们存的配置跟着删掉。拿着锁调"""
+        team = self.data['team']
+        inv = {h: i for h, i in team['invites'].items() if now - i['exp'] < INVITE_KEEP}
+        spent = {h: t for h, t in team['spent'].items() if now - t < INVITE_KEEP}
+        if len(inv) != len(team['invites']) or len(spent) != len(team['spent']):
+            team['invites'], team['spent'] = inv, spent
+            self.save()
+            self.docs_prune()
+
+    def invite_state(self, token, now):
+        """邀请里的令牌：'ok' | 'expired' | 'used'；没有这个邀请（或者不是令牌的样子）是 None"""
+        if not (isinstance(token, str) and ADMIT_RE.match(token)):
+            return None
+        h = hashlib.sha256(token.encode('ascii')).hexdigest()
+        with self.lock:
+            team = self.data['team']
+            inv = team['invites'].get(h)
+            if inv:
+                return 'ok' if now < inv['exp'] else 'expired'
+            return 'used' if h in team['spent'] else None
+
+    def team_enroll(self, devs, now):
+        """管理员直接登记设备的公钥（它自己的那台；服务器的记录没了以后把各台加回去）：devs 是 parse_enroll 的结果。这个编号原来的
+        那把密钥就此不认（换了密钥），还没用掉的邀请作废；公钥已经是别的编号的设备是 409"""
+        root = self.root_fp()
+        if any(fp == root for fp, _, _ in devs.values()):   # 根密钥不是设备
+            return 400, {'error': 'bad'}
+        with self.lock:
+            ms, team = self.data['machines'], self.data['team']
+            if any(fp in ms and ms[fp].get('dev') != dev for dev, (fp, _, _) in devs.items()):
+                return 409, {'error': 'taken'}
+            if len({m.get('dev') for m in ms.values()} | set(devs)) > MAX_TEAM_MEMBERS:
+                return 507, {'error': 'full'}
+            names = {}
+            for dev, (fp, key, name) in devs.items():
+                for f in [f for f, m in ms.items() if m.get('dev') == dev and f != fp]:
+                    self.drop_machine(f)
+                old = ms.get(fp) or {}
+                names[dev] = self.free_name(name, fp)
+                ms[fp] = {'name': names[dev], 'key': key, 'joined': old['joined'] if is_time(old.get('joined')) else now, 'dev': dev}
+            team['invites'] = {h: i for h, i in team['invites'].items() if i['dev'] not in devs}
+            self.save()
+            return 200, {'v': API, 'ok': True, 'names': names, 'members': len(ms), 'gen': team['gen']}
+
+    def team_invite(self, token_hash, dev, ttl, now):
+        """管理员发一个邀请：服务器只存令牌的 SHA-256，ttl 秒后过期，只能用一次。同一个编号再发，前一个作废；这个编号的设备已经
+        加入了是 409（先移除它）"""
+        with self.lock:
+            ms, team = self.data['machines'], self.data['team']
+            self.invite_prune(now)
+            if any(m.get('dev') == dev for m in ms.values()):
+                return 409, {'error': 'taken'}
+            if token_hash in team['spent']:   # 用过的令牌不能再发一次
+                return 409, {'error': 'used'}
+            inv = {h: i for h, i in team['invites'].items() if i['dev'] != dev}
+            if sum(1 for i in inv.values() if now < i['exp']) >= MAX_INVITES:
+                return 507, {'error': 'full'}
+            inv[token_hash] = {'dev': dev, 'exp': now + ttl, 'at': now}
+            team['invites'] = inv
+            self.save()
+            return 200, {'v': API, 'ok': True, 'invites': sum(1 for i in inv.values() if now < i['exp']), 'gen': team['gen']}
+
+    def team_join(self, fp, key, name, token, now):
+        """设备拿邀请里的令牌加入：令牌就此用掉，这把密钥记成邀请里的那个编号"""
+        h = hashlib.sha256(token.encode('ascii')).hexdigest()
+        with self.lock:
+            ms, team = self.data['machines'], self.data['team']
+            inv = team['invites'].get(h)
+            if not inv or now >= inv['exp']:   # 验签之后、拿到锁之前被别的设备用掉了、过期了
+                return 403, {'error': 'expired' if inv else 'used'}
+            if fp in ms:   # 这把密钥已经是一台设备了（管理员登记的、用过别的邀请）：先让管理员移除它
+                return 409, {'error': 'taken'}
+            if len(ms) >= MAX_TEAM_MEMBERS:
+                return 507, {'error': 'full'}
+            name = self.free_name(name, fp)
+            ms[fp] = {'name': name, 'key': key, 'joined': now, 'dev': inv['dev']}
+            del team['invites'][h]
+            team['spent'][h] = now
+            self.seen[fp] = now
+            self.save()
+            sys.stderr.write('cca-presence: 加入了一台设备，现在 %d 台\n' % len(ms))
+            return 200, {'v': API, 'ok': True, 'name': name, 'dev': inv['dev'], 'members': len(ms), 'gen': team['gen']}
+
+    def team_put(self, docs, now):
+        """管理员存各台设备的配置（parse_team_docs 的结果）：序号要比存着的大（一样、认证码也一样的算存过了：没收到回复再发一次）；
+        不认得的编号（被移除了、邀请过期很久了）、序号不比存着的大的不存，回给管理员"""
+        with self.lock:
+            self.invite_prune(now)
+            cur, known = self.docs['docs'], self.team_devs()
+            stored, stale, unknown = [], {}, []
+            for dev, d in docs.items():
+                have = cur.get(dev)
+                if dev not in known:
+                    unknown.append(dev)
+                elif have and (d['seq'] < have['seq'] or (d['seq'] == have['seq'] and d['ct']['t'] != have['ct']['t'])):
+                    stale[dev] = have['seq']
+                else:
+                    stored.append(dev)
+            size = lambda e: len(e['ct']['c'])
+            if sum(size(e) for dev, e in cur.items() if dev not in stored) + sum(size(docs[dev]) for dev in stored) > TEAM_DOCS_BYTES:
+                return 507, {'error': 'full'}
+            for dev in stored:
+                cur[dev] = dict(docs[dev], at=now)
+            if stored:
+                save_doc(self.docs_path, self.docs)
+            return 200, {'v': API, 'ok': True, 'stored': stored, 'stale': stale, 'unknown': unknown, 'gen': self.data['team']['gen']}
+
+    def team_get(self, fp, have):
+        """设备取自己的那一份配置：have 是它手里那一份的序号（记下来，管理员看名单时看得到各台用上了没有），一样就不带（doc 是 null）；
+        seq 是存着的序号（还没有是 0）"""
+        with self.lock:
+            m = self.data['machines'].get(fp)
+            if not m:   # 验签之后、拿到锁之前被移除了
+                return 403, {'error': 'unknown_device', 'gen': self.data['team']['gen']}
+            self.have[fp] = have
+            e = self.docs['docs'].get(m.get('dev'))
+            doc = {k: e[k] for k in ('seq', 'ct', 'sig')} if e and e['seq'] != have else None
+            return 200, {'v': API, 'ok': True, 'dev': m.get('dev'), 'me_name': m['name'], 'seq': e['seq'] if e else 0, 'doc': doc,
+                         'gen': self.data['team']['gen']}
+
+    def team_members(self, now):
+        """管理员看现在有哪些设备（公钥也带着：服务器的记录没了以后照它登记回去）、它们各自存着的配置的序号（seq）和设备取配置时
+        说的手里那一份的序号（have：重启以后、还没取过是 null）、还没用掉的邀请"""
+        with self.lock:
+            self.invite_prune(now)
+            team, docs = self.data['team'], self.docs['docs']
+            seq = lambda dev: (docs.get(dev) or {}).get('seq', 0)
+            rows = [dict(self.member_row(f, m, now), dev=m.get('dev'), pub=m['key'], seq=seq(m.get('dev')), have=self.have.get(f))
+                    for f, m in self.data['machines'].items()]
+            invites = [{'dev': i['dev'], 'expires_in': round(i['exp'] - now), 'seq': seq(i['dev'])} for i in team['invites'].values() if now < i['exp']]
+            return 200, {'v': API, 'ok': True, 'members': rows, 'invites': invites, 'gen': team['gen']}
+
+    def team_revoke(self, dev):
+        """管理员移除一台设备：它的密钥就此不认，给它的配置、还没用掉的邀请一起删掉"""
+        with self.lock:
+            team = self.data['team']
+            fps = [f for f, m in self.data['machines'].items() if m.get('dev') == dev]
+            pending = [h for h, i in team['invites'].items() if i['dev'] == dev]
+            if not fps and not pending and dev not in self.docs['docs']:
+                return 404, {'error': 'no_device'}
+            for f in fps:
+                self.drop_machine(f)
+            for h in pending:
+                del team['invites'][h]
+            self.save()
+            self.docs_prune()
+            n = len(self.data['machines'])
+        if fps:
+            sys.stderr.write('cca-presence: 移除了一台设备，现在 %d 台\n' % n)
+        return 200, {'v': API, 'ok': True, 'members': n}
+
+    def team_leave(self, fp):
+        """设备自己退出：和被管理员移除一样"""
+        with self.lock:
+            dev = (self.data['machines'].get(fp) or {}).get('dev')
+        if not dev:   # 验签之后、拿到锁之前被移除了
+            return 403, {'error': 'unknown_device', 'gen': self.gen()}
+        return self.team_revoke(dev)
 
     def row(self, fp, e, now):
         beat = self.data['beats'].get(fp) or {}
@@ -1293,7 +1597,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             return self.send(411, {'error': 'bad'})
         op = self.path[len('/v1/'):] if self.path.startswith('/v1/') else ''
-        if n < 0 or n > (MAX_SYNC_BODY if op in SYNC_OPS else MAX_BODY):
+        big = op in SYNC_OPS or (op == 'team_put' and srv.store.mode == 'team')   # 交换密文的、管理员存各台设备的配置的
+        if n < 0 or n > (MAX_SYNC_BODY if big else MAX_BODY):
             return self.send(413, {'error': 'bad'})
         body = self.rfile.read(n)
         try:
@@ -1303,14 +1608,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if len(body) != n or not sig or len(sig) > MAX_SIG:
             return self.send(400, {'error': 'bad'})
         now = time.time()
-        own = srv.store.mode == 'own'
-        if op == 'machines' and not own:   # 自己的服务器没有维护者的设备清单：设备经 join 加入（404）
+        own, team = srv.store.mode == 'own', srv.store.mode == 'team'
+        if op == 'machines' and not (own or team):   # 自己的、Team 的服务器没有维护者的设备清单：设备自己加入（404）
             code, reply = srv.store.set_machines(body, sig, srv.release_key)
             if code == 200 and srv.remote:
                 srv.remote.keep_only(srv.store.fps())
             return self.send(code, reply)
         relay = op in RELAY_OPS and srv.remote is not None   # 没开中转时和旧版服务器一样：不认这几个 op（404）
-        if op not in ('report', 'view') and op not in SYNC_OPS and not relay and not (own and op in OWN_OPS):
+        if op not in ('report', 'view') and op not in SYNC_OPS and not relay and not (own and op in OWN_OPS) and not (team and op in TEAM_OPS):
             return self.send(404, {'error': 'not_found'})
         try:
             j = json.loads(body.decode('utf-8'))
@@ -1328,10 +1633,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not (k and key_fp(k.group(1)) == fp and srv.store.admit_ok(j.get('admit'))
                     and ssh_verify('ssh-ed25519 ' + k.group(1), NS_REPORT, body, sig)):
                 return self.send(403, {'error': 'denied'})
+        elif op == 'team_join':
+            # 拿邀请加入：和 join 一样拿要加入的这把密钥签名；没有这个邀请和签名不对回一样的 403。签名对了、邀请过期了或者用过了才说
+            # 是哪一种（拿着真的邀请的人才问得出来）
+            pub = j.get('pub')
+            k = KEY_RE.match(pub) if isinstance(pub, str) else None
+            state = srv.store.invite_state(j.get('token'), now) if k and key_fp(k.group(1)) == fp != srv.store.root_fp() else None
+            if not (state and ssh_verify('ssh-ed25519 ' + k.group(1), NS_REPORT, body, sig)):
+                return self.send(403, {'error': 'denied'})
+            if state != 'ok':
+                return self.send(403, {'error': state})
+        elif op in TEAM_ADMIN_OPS:   # 管理员的：拿 Team 的根密钥签名（key 是根公钥的指纹）
+            if fp != srv.store.root_fp() or not ssh_verify(srv.store.team_root(), NS_REPORT, body, sig):
+                return self.send(403, {'error': 'denied'})
         else:
             m = srv.store.machine(fp)
-            if not m:   # 不在设备清单里（维护者还没同步、撤销了；自己的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）
-                return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()} if own else {'error': 'denied'})
+            if not m:   # 不在设备清单里（维护者还没同步、撤销了；自己的、Team 的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）
+                return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()} if own or team else {'error': 'denied'})
             if not ssh_verify(m['key'], NS_REPORT, body, sig):
                 return self.send(403, {'error': 'denied'})
         if not srv.fp_bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
@@ -1344,14 +1662,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, {'error': 'bad'})
         if not srv.nonces.add(nonce, now):
             return self.send(409, {'error': 'replay'})
-        if own and op != 'join':   # 加入的那一次在 join 里记（没加入成的不记）
+        if (own or team) and op not in ('join', 'team_join') + TEAM_ADMIN_OPS:   # 设备的请求。加入的那一次在加入时记（没加入成的不记）
             srv.store.seen[fp] = now
         if op == 'join':
             name, check = j.get('name'), j.get('check')
-            if not (isinstance(name, str) and 0 < len(name) <= 64 and name.strip() == name and not NAME_BAD.search(name)
-                    and isinstance(check, str) and CHECK_RE.match(check)):
+            if not (name_ok(name) and isinstance(check, str) and CHECK_RE.match(check)):
                 return self.send(400, {'error': 'bad'})
             return self.send(*srv.store.join(fp, 'ssh-ed25519 ' + k.group(1), name, check, j['admit'], now))
+        if op == 'team_join':
+            if not name_ok(j.get('name')):
+                return self.send(400, {'error': 'bad'})
+            return self.send(*srv.store.team_join(fp, 'ssh-ed25519 ' + k.group(1), j['name'], j['token'], now))
+        if op in TEAM_OPS:
+            return self.team_op(op, fp, j, now)
         if op == 'members':
             return self.send(*srv.store.members(fp, now))
         if op == 'relink':
@@ -1387,6 +1710,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not (isinstance(aids, list) and len(aids) <= MAX_ACCOUNTS and all(isinstance(a, str) and AID_RE.match(a) for a in aids)):
             return self.send(400, {'error': 'bad'})
         return self.send(200, srv.store.view(fp, list(dict.fromkeys(aids)), now))
+
+    def team_op(self, op, fp, j, now):
+        """Team 的服务器上除了加入以外的 op（谁发的、签名在 do_POST 里验过）"""
+        srv, st = self.server, self.server.store
+        code, reply = 400, {'error': 'bad'}
+        if op == 'team_members':
+            code, reply = st.team_members(now)
+        elif op == 'team_get':
+            have = j.get('have')
+            if have is None or seq_ok(have):
+                code, reply = st.team_get(fp, have)
+        elif op == 'team_invite':
+            token, dev, ttl = j.get('token'), j.get('dev'), j.get('ttl')
+            if (isinstance(token, str) and HASH_RE.match(token) and dev_ok(dev) and isinstance(ttl, int) and not isinstance(ttl, bool)
+                    and INVITE_TTL[0] <= ttl <= INVITE_TTL[1]):
+                code, reply = st.team_invite(token, dev, ttl, now)
+        elif op == 'team_put':
+            docs = parse_team_docs(j.get('docs'))
+            if docs:
+                code, reply = st.team_put(docs, now)
+        elif op == 'team_enroll':
+            devs = parse_enroll(j.get('devices'))
+            if devs:
+                code, reply = st.team_enroll(devs, now)
+        elif op == 'team_revoke':
+            if dev_ok(j.get('dev')):
+                code, reply = st.team_revoke(j['dev'])
+        elif op == 'team_leave':
+            code, reply = st.team_leave(fp)
+        if code == 200 and srv.remote and op in ('team_enroll', 'team_revoke', 'team_leave'):   # 有设备的密钥不再认了：它的配对、会话跟着清掉
+            srv.remote.keep_only(st.fps())
+        return self.send(code, reply)
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.7 起的 http.server.ThreadingHTTPServer（3.6 上没有）
@@ -1487,11 +1842,14 @@ def main():
     ap.add_argument('--key', help='TLS 私钥')
     ap.add_argument('--behind-proxy', action='store_true', default=hosted,
                     help='在托管平台、反向代理后面：只说 HTTP（HTTPS 由平台做，不用 --cert、--key），按 X-Forwarded-For 的最后一项限流')
-    ap.add_argument('--mode', choices=('maintainer', 'own'), default='own' if hosted else 'maintainer',
-                    help='maintainer：维护者的服务器（设备来自签名的设备清单）；own：自己的同步服务器（设备拿加入链接加入）')
+    ap.add_argument('--mode', choices=('maintainer', 'own', 'team'), default='own' if hosted else 'maintainer',
+                    help='maintainer：维护者的服务器（设备来自签名的设备清单）；own：自己的同步服务器（设备拿加入链接加入）；'
+                    'team：Team 的同步服务器（管理员拿根密钥登记、邀请设备，存着给各台设备的配置）')
     ap.add_argument('--release-key', help='发布公钥（ssh-ed25519 …）：只认它签的设备清单（维护者的服务器必须给）')
     ap.add_argument('--admit-hash', default=os.environ.get('CCA_HUB_ADMIT_HASH'),
                     help='自己的同步服务器：入伙口令的 SHA-256（64 位十六进制；也可以用环境变量 CCA_HUB_ADMIT_HASH）')
+    ap.add_argument('--team-root', default=os.environ.get('CCA_TEAM_ROOT'),
+                    help='Team 的同步服务器：Team 的根公钥（ssh-ed25519 AAAA…，是公开的；也可以用环境变量 CCA_TEAM_ROOT）')
     ap.add_argument('--state', default=HOSTED_STATE if hosted else None, help='状态文件（CCA_HUB_HOSTED=1 时默认是 /data/state.json）')
     ap.add_argument('--ttl', type=float, default=150, help='开着会话却这么多秒没心跳就算离线')
     ap.add_argument('--idle', type=float, default=600, help='这么多秒没动静算闲置')
@@ -1514,10 +1872,15 @@ def main():
         ap.error('--behind-proxy 时 HTTPS 由平台做：不用 --cert、--key')
     if not a.behind_proxy and not (a.cert and a.key):
         ap.error('要给 --cert 和 --key（在托管平台、反向代理后面运行时用 --behind-proxy）')
-    release = None
+    release = root = None
     if a.mode == 'own':
         if not HASH_RE.match(a.admit_hash or ''):
             ap.error('自己的同步服务器要给入伙口令的哈希（--admit-hash 或者环境变量 CCA_HUB_ADMIT_HASH，64 位小写十六进制）')
+    elif a.mode == 'team':
+        k = KEY_RE.match(' '.join((a.team_root or '').split()[:2]))
+        if not k:
+            ap.error('Team 的同步服务器要给根公钥（--team-root 或者环境变量 CCA_TEAM_ROOT：ssh-ed25519 AAAA…）')
+        root = 'ssh-ed25519 ' + k.group(1)
     else:
         if not a.release_key:
             ap.error('维护者的服务器要给 --release-key')
@@ -1536,7 +1899,7 @@ def main():
             ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
         ctx.load_cert_chain(a.cert, a.key)
     sig_ok = self_test()
-    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, a.mode, a.admit_hash)
+    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, a.mode, a.admit_hash, root)
     remote = None
     if a.relay_listen:
         rhost, _, rport = a.relay_listen.rpartition(':')
@@ -1558,7 +1921,7 @@ def main():
             f.write('%d\n' % srv.server_address[1])
         os.replace(a.port_file + '.tmp', a.port_file)
     sys.stderr.write('cca-presence: %s监听 %s:%d%s，设备 %d 台，签名自检%s%s\n' % (
-        '自己的同步服务器，' if a.mode == 'own' else '', srv.server_address[0], srv.server_address[1],
+        {'own': '自己的同步服务器，', 'team': 'Team 的同步服务器，'}.get(a.mode, ''), srv.server_address[0], srv.server_address[1],
         '（HTTP，HTTPS 由前面的代理做）' if a.behind_proxy else '', len(store.data['machines']),
         '通过' if sig_ok else '没通过',
         '，中转的数据端口 %d（%d 个配对）' % (rsock.getsockname()[1], len(remote.edges)) if remote else ''))

@@ -8,6 +8,7 @@ import json
 import secrets
 import ssl
 import subprocess
+import tempfile
 import time
 import zlib
 
@@ -289,6 +290,82 @@ def link_open(salt, blob):
 
 def link_seal(salt, admit, seed):
     return seal(LINK, link_keys(salt), [], json.dumps({'a': admit, 's': seed}, separators=(',', ':')).encode())
+
+
+# ---- Team（README「Team 的同步服务器」）----
+TEAM_LINK = 'cca-team1.'
+TEAM_DOC = 'cca-team-doc-v1'
+
+
+def team_id(root_pub):
+    """Team 的编号：根公钥（'ssh-ed25519 AAAA…' 里 base64 那一段解出来的字节）的 SHA-256 的前 32 个十六进制字符"""
+    return hashlib.sha256(base64.b64decode(root_pub.split()[1])).hexdigest()[:32]
+
+
+def invite_parts(secret):
+    """邀请里的那串随机数（32 个小写十六进制字符，解出来的 16 个字节当 HMAC 的密钥）派生出来的三样：加入时交给服务器的令牌、
+    这台设备在 Team 里的编号、它那份配置的两把密钥（加密、认证）"""
+    if len(secret) != 32 or set(secret) - set('0123456789abcdef'):
+        raise ValueError('那串随机数要是 32 个小写十六进制字符')
+    k = bytes.fromhex(secret)
+    root = H(k, b'cca-team-key-v1')
+    return H(k, b'cca-team-token-v1')[:16].hex(), H(k, b'cca-team-dev-v1')[:8].hex(), (H(root, b'enc'), H(root, b'mac'))
+
+
+def invite_encode(url, pins, root_pub, secret, name, exp=None):
+    """邀请链接：cca-team1.<base64url(紧凑的 JSON)，不带 =>.<前面这一段的 SHA-256 的前 4 个十六进制字符>"""
+    doc = {'u': url, 'p': pins, 'r': root_pub.split()[1], 'k': secret, 'n': name}
+    if exp is not None:
+        doc['e'] = exp
+    raw = json.dumps(doc, separators=(',', ':'), ensure_ascii=False).encode()
+    head = TEAM_LINK + base64.urlsafe_b64encode(raw).decode().rstrip('=')
+    return head + '.' + hashlib.sha256(head.encode()).hexdigest()[:4]
+
+
+def invite_decode(link):
+    """读邀请链接（中间的空白不算）：{"u", "p", "r", "k", "n"[, "e"]}；不对是 ValueError"""
+    s = ''.join(link.split())
+    head, _, check = s.rpartition('.')
+    if not head.startswith(TEAM_LINK) or hashlib.sha256(head.encode()).hexdigest()[:4] != check:
+        raise ValueError('不是邀请链接，或者抄错了')
+    body = head[len(TEAM_LINK):]
+    return json.loads(base64.urlsafe_b64decode(body + '=' * (-len(body) % 4)))
+
+
+def team_doc_seal(keys, tid, dev, seq, doc):
+    """一台设备的配置：明文是紧凑的 JSON（UTF-8），空格补齐到 1024 字节的整数倍；认证带着 Team 的编号、设备的编号、序号"""
+    pt = json.dumps(doc, separators=(',', ':'), ensure_ascii=False).encode()
+    return seal(TEAM_DOC, keys, [tid, dev, str(seq)], pt + b' ' * (-len(pt) % 1024))
+
+
+def team_doc_open(keys, tid, dev, seq, ct):
+    """认证过的配置；认证不过（别的设备的、别的序号的、改过的）是 None"""
+    pt = unseal(TEAM_DOC, keys, [tid, dev, str(seq)], ct)
+    return None if pt is None else json.loads(pt)
+
+
+def team_doc_signed(tid, dev, seq, ct):
+    """根密钥签的那一段字节：标签、Team 的编号、设备的编号、序号各跟一个 \0，接着 nonce、密文、认证码（解出来的字节）"""
+    return ''.join(x + '\0' for x in (TEAM_DOC, tid, dev, str(seq))).encode() + b''.join(base64.b64decode(ct[k]) for k in 'nct')
+
+
+def team_doc_sign(rootkey, tid, dev, seq, ct):
+    """根密钥（私钥文件）签名，命名空间 cca-team；传的是 armored 签名的 base64"""
+    sig = subprocess.run(['ssh-keygen', '-Y', 'sign', '-q', '-n', 'cca-team', '-f', rootkey], input=team_doc_signed(tid, dev, seq, ct),
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True).stdout
+    return base64.b64encode(sig).decode()
+
+
+def team_doc_verify(root_pub, tid, dev, seq, ct, sig):
+    """是不是这把根公钥签的（ssh-keygen -Y verify；allowed_signers 里只有它）"""
+    with tempfile.TemporaryDirectory() as d:
+        with open(d + '/signers', 'w') as f:
+            f.write('cca-team %s\n' % ' '.join(root_pub.split()[:2]))
+        with open(d + '/sig', 'wb') as f:
+            f.write(base64.b64decode(sig))
+        r = subprocess.run(['ssh-keygen', '-Y', 'verify', '-f', d + '/signers', '-I', 'cca-team', '-n', 'cca-team', '-s', d + '/sig'],
+                           input=team_doc_signed(tid, dev, seq, ct), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
 
 
 def post(keyfile, port, op, extra):

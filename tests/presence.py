@@ -80,10 +80,13 @@ def openssl_pin(cert):
 
 class Server:
     """跑一个真的服务器进程（ttl 2 秒、闲置 3 秒，测试不用干等）。admit_hash：自己的同步服务器（--mode own）；
-    proxied：--behind-proxy（只说 HTTP，不用证书）；port：监听这个端口（重启后设备照旧连得上），0 是随便挑一个"""
-    def __init__(self, d, ttl='2', idle='3', admit_hash=None, proxied=False, port=0):
+    team_root：Team 的同步服务器（--mode team，根公钥）；proxied：--behind-proxy（只说 HTTP，不用证书）；
+    port：监听这个端口（重启后设备照旧连得上），0 是随便挑一个"""
+    def __init__(self, d, ttl='2', idle='3', admit_hash=None, proxied=False, port=0, team_root=None):
         self.d, self.proxied = d, proxied
         who = ['--mode', 'own', '--admit-hash', admit_hash] if admit_hash else ['--release-key', str(d / 'release.pub')]
+        if team_root:
+            who = ['--mode', 'team', '--team-root', team_root]
         tls = ['--behind-proxy'] if proxied else ['--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem')]
         args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port')] + tls + who + [
                 '--state', str(d / 'state.json'), '--ttl', ttl, '--idle', idle]
@@ -452,24 +455,8 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(sorted(store.cost['acc']), [y], 'cost_keep 秒没再传的删掉')
 
 
-class OwnServerTest(unittest.TestCase):
-    """自己的同步服务器（--mode own）：拿加入链接里的入伙口令加入、列出设备、移除；不在名单里的设备、口令不对、盐对不上；
-    别的 op 照旧。格式见 server/README.md「自己的同步服务器」"""
-    ADMIT, SALT = 'ab' * 16, 'cd' * 16
-
-    @classmethod
-    def setUpClass(cls):
-        cls.tmp = tempfile.TemporaryDirectory(prefix='cca-hub-test-')
-        d = cls.d = Path(cls.tmp.name)
-        make_cert(d)
-        cls.pubs = {n: keygen(d / n) for n in ('a', 'b', 'c', 'evil')}
-        cls.srv = Server(d, admit_hash=sw.admit_hash(cls.ADMIT))
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.stop()
-        cls.tmp.cleanup()
-
+class SignedCalls:
+    """自己的、Team 的服务器的测试共用：self.pubs 是 {名字: 公钥}（私钥是 self.d 下同名的文件），self.srv 是服务器"""
     def fp(self, who):
         return srvmod.key_fp(self.pubs[who].split()[1])
 
@@ -486,6 +473,25 @@ class OwnServerTest(unittest.TestCase):
         st, j = reply
         ok = st == 403 and set(j) == {'error', 'gen'} and j['error'] == 'unknown_device' and re.match(r'^[0-9a-f]{32}$', j['gen'])
         return j['gen'] if ok else None
+
+
+class OwnServerTest(SignedCalls, unittest.TestCase):
+    """自己的同步服务器（--mode own）：拿加入链接里的入伙口令加入、列出设备、移除；不在名单里的设备、口令不对、盐对不上；
+    别的 op 照旧。格式见 server/README.md「自己的同步服务器」"""
+    ADMIT, SALT = 'ab' * 16, 'cd' * 16
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='cca-hub-test-')
+        d = cls.d = Path(cls.tmp.name)
+        make_cert(d)
+        cls.pubs = {n: keygen(d / n) for n in ('a', 'b', 'c', 'evil')}
+        cls.srv = Server(d, admit_hash=sw.admit_hash(cls.ADMIT))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.stop()
+        cls.tmp.cleanup()
 
     def join(self, who='a', name=None, admit=None, check=None, pub=None, **kw):
         return self.call('join', who, pub=pub or self.pubs[who], name=name or who + '-mac', admit=admit or self.ADMIT,
@@ -537,6 +543,9 @@ class OwnServerTest(unittest.TestCase):
         self.assertEqual(self.unknown(self.call('members', 'b')), gen, '被移除的设备：密钥就此不认（编号照旧：是被移除了）')
         st, j = self.call('ledger', get=[aid])
         self.assertEqual([(r['name'], r['revoked']) for r in j['cost'][aid]], [('bob-mini', True)], '它传过的折合金额是账号的：留着，标成撤销了')
+        self.assertIn(self.srv.req('POST', '/v1/team_put', b'x' * (srvmod.MAX_BODY + 1), b'sig')[0], (413, None),
+                      'Team 的服务器才有的 op 在这里不放宽请求的大小')
+        self.assertEqual(self.srv.req('POST', '/v1/team_put', b'{}', b'sig')[0], 404)
         st, j = self.call('view', accounts=[aid])
         self.assertEqual([r['name'] for r in j['accounts'][aid]], ['studio-mac'])
         # 退出：移除自己
@@ -756,6 +765,351 @@ if [ "${1:-}" = -i ]; then
 fi
 one "$@"
 '''
+
+
+class TeamServerTest(SignedCalls, unittest.TestCase):
+    """Team 的同步服务器（--mode team）：管理员拿根密钥登记、邀请、移除设备，存各台设备的配置；设备拿邀请加入、取自己的那一份。
+    邀请链接、配置的密文和签名照 server/README.md「Team 的同步服务器」在 spec_wire 里独立实现"""
+    SALT = 'cd' * 16
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(prefix='cca-team-test-')
+        d = cls.d = Path(cls.tmp.name)
+        make_cert(d)
+        cls.pubs = {n: keygen(d / n) for n in ('root', 'root2', 'a', 'b', 'c', 'evil')}
+        cls.tid = sw.team_id(cls.pubs['root'])
+        cls.srv = Server(d, team_root=cls.pubs['root'])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.stop()
+        cls.tmp.cleanup()
+
+    def admin(self, op, **kw):
+        """管理员的请求：拿根密钥签名（都算在根密钥这一个指纹上：每 2 秒一个、攒得下 30 个，用完了等一会儿再试）"""
+        who = kw.pop('who', 'root')
+        for _ in range(5):
+            st, j = self.call(op, who, **kw)
+            if st != 429:
+                break
+            time.sleep(2.1)
+        return st, j
+
+    def invite(self, **kw):
+        """发一个邀请：(那串随机数, 令牌, 设备编号, 配置的密钥)"""
+        secret = secrets.token_hex(16)
+        token, dev, keys = sw.invite_parts(secret)
+        st, j = self.admin('team_invite', token=hashlib.sha256(token.encode()).hexdigest(), dev=dev, ttl=3600, **kw)
+        self.assertEqual(st, 200, j)
+        return secret, token, dev, keys
+
+    def join(self, who, token, name=None, pub=None, **kw):
+        return self.call('team_join', who, pub=pub or self.pubs[who], name=name or who + '-mac', token=token, **kw)
+
+    def doc(self, keys, dev, seq, content, root='root'):
+        ct = sw.team_doc_seal(keys, self.tid, dev, seq, content)
+        return {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(str(self.d / root), self.tid, dev, seq, ct)}
+
+    def test_flow(self):
+        st, j = self.srv.req('GET', '/v1/health')
+        self.assertEqual((st, j['mode'], j['team']), (200, 'team', self.tid))
+        self.assertRegex(self.tid, r'^[0-9a-f]{32}$')
+        self.assertTrue(set(srvmod.TEAM_OPS) | {'report', 'view', 'keys', 'ledger'} <= set(j['ops']), j['ops'])
+        self.assertFalse(set(srvmod.OWN_OPS) & set(j['ops']), '自己的同步服务器的那几个 op 这里没有')
+        self.assertEqual(self.call('join', pub=self.pubs['a'], name='a', admit='ab' * 16, check='cd' * 16)[0], 404)
+        doc = json.dumps({'version': 1, 'seq': 1, 'machines': [{'key': self.pubs['evil'], 'name': 'evil'}]}).encode()
+        self.assertEqual(self.srv.req('POST', '/v1/machines', doc, sign(self.d / 'evil', 'cca-devices', doc))[0], 404)
+        gen = self.unknown(self.call('team_get'))
+        self.assertTrue(gen, '不在名单里：回这一份记录的编号')
+        # 管理员的 op 只认根密钥：设备的密钥、冒用根公钥指纹的别的密钥、改过的请求都是 403
+        da, db = '0a' * 8, None
+        enroll = dict(devices={da: {'pub': self.pubs['a'], 'name': 'studio'}})
+        for bad in (dict(who='a'), dict(signer='evil'), dict(tamper=True)):
+            self.assertEqual(self.admin('team_enroll', **dict(enroll, **bad)), (403, {'error': 'denied'}), bad)
+        self.assertEqual(self.admin('team_members', who='evil'), (403, {'error': 'denied'}))
+        self.assertEqual(self.unknown(self.call('report', 'root', units={}, end=None)), gen, '根密钥不是设备：别的 op 不认它')
+        # 登记（管理员自己的那台）
+        for bad in ({}, {'xyz': {'pub': self.pubs['a'], 'name': 'x'}}, {da: {'pub': 'ssh-rsa AAAA', 'name': 'x'}}, {da: 'x'}, [da],
+                    {da: {'pub': self.pubs['a'], 'name': ' x'}}, {da: {'pub': self.pubs['a'], 'name': 'x'}, '0b' * 8: {'pub': self.pubs['a'], 'name': 'y'}}):
+            self.assertIsNone(srvmod.parse_enroll(bad), bad)
+        self.assertEqual(self.admin('team_enroll', devices={})[0], 400)
+        self.assertEqual(self.admin('team_enroll', devices={da: {'pub': self.pubs['root'], 'name': 'root'}})[0], 400, '根密钥不是设备：登记不了')
+        st, j = self.admin('team_enroll', **enroll)
+        self.assertEqual((st, j['names'], j['members'], j['gen']), (200, {da: 'studio'}, 1, gen), j)
+        st, j = self.call('team_get')
+        self.assertEqual((st, j['dev'], j['me_name'], j['seq'], j['doc'], j['gen']), (200, da, 'studio', 0, None, gen), j)
+        self.assertEqual(self.admin('team_enroll', devices={'0c' * 8: {'pub': self.pubs['a'], 'name': 'again'}}), (409, {'error': 'taken'}),
+                         '这把公钥已经是别的编号的设备')
+        # 邀请：服务器只存令牌的哈希
+        for bad in (dict(token='zz', dev=da, ttl=3600), dict(token='0' * 64, dev='nope', ttl=3600), dict(token='0' * 64, dev='0b' * 8, ttl=5),
+                    dict(token='0' * 64, dev='0b' * 8, ttl=40 * 86400)):
+            self.assertEqual(self.admin('team_invite', **bad)[0], 400, bad)
+        self.assertEqual(self.admin('team_invite', token='0' * 64, dev=da, ttl=3600), (409, {'error': 'taken'}), '这个编号的设备已经加入了')
+        secret, token, db, kb = self.invite()
+        state = (self.d / 'state.json').read_text()
+        self.assertTrue(token not in state and secret not in state, '令牌、那串随机数不落在服务器上')
+        self.assertIn(hashlib.sha256(token.encode()).hexdigest(), state)
+        # 加入：没有这个邀请、签名不对、pub 和 key 对不上：一样的 403
+        for bad in (dict(token='00' * 16), dict(token='nope'), dict(tamper=True), dict(pub=self.pubs['c']), dict(signer='evil')):
+            self.assertEqual(self.join('b', **dict(dict(token=token), **bad)), (403, {'error': 'denied'}), bad)
+        self.assertEqual(self.join('b', token, name='x' * 65)[0], 400)
+        self.assertEqual(self.join('root', token), (403, {'error': 'denied'}), '根密钥不是设备：拿着邀请也加入不了')
+        self.assertEqual(self.join('a', token), (409, {'error': 'taken'}), '这把密钥已经是一台设备了')
+        st, j = self.join('b', token, name='studio')
+        self.assertEqual((st, j['name'], j['dev'], j['members'], j['gen']), (200, 'studio-2', db, 2, gen), j)
+        self.assertEqual(self.join('c', token), (403, {'error': 'used'}), '邀请只能用一次（签名对的才问得出来是用过了）')
+        self.assertEqual(self.join('c', token, signer='evil'), (403, {'error': 'denied'}))
+        self.assertEqual(self.admin('team_invite', token=hashlib.sha256(token.encode()).hexdigest(), dev='0d' * 8, ttl=3600),
+                         (409, {'error': 'used'}), '用过的令牌不能再发一次')
+        # 同一个编号再发一个邀请：前一个作废
+        old = self.invite()
+        st, j = self.admin('team_invite', token='1' * 64, dev=old[2], ttl=3600)
+        self.assertEqual((st, j['invites']), (200, 1), j)
+        self.assertEqual(self.join('c', old[1]), (403, {'error': 'denied'}))
+        self.assertEqual(self.admin('team_revoke', dev=old[2])[0], 200, '还没用掉的邀请也能撤回')
+        # 配置：每台设备一份，序号只增不减；别的设备的取不到
+        content = {'v': 1, 'name': '测试组', 'accounts': {'claude': {'alice@example.com': 'US-A'}}}
+        d1 = self.doc(kb, db, 1, content)
+        st, j = self.admin('team_put', docs={db: d1, 'ee' * 8: d1})
+        self.assertEqual((st, j['stored'], j['stale'], j['unknown']), (200, [db], {}, ['ee' * 8]), j)
+        st, j = self.call('team_get', 'b')
+        self.assertEqual((st, j['dev'], j['seq'], j['doc']), (200, db, 1, d1), j)
+        self.assertTrue(sw.team_doc_verify(self.pubs['root'], self.tid, db, 1, d1['ct'], d1['sig']), '根密钥签的')
+        self.assertFalse(sw.team_doc_verify(self.pubs['evil'], self.tid, db, 1, d1['ct'], d1['sig']))
+        self.assertFalse(sw.team_doc_verify(self.pubs['root'], self.tid, db, 2, d1['ct'], d1['sig']), '换个序号签名就不对')
+        self.assertEqual(sw.team_doc_open(kb, self.tid, db, 1, d1['ct']), content)
+        self.assertIsNone(sw.team_doc_open(kb, self.tid, da, 1, d1['ct']), '挪到别的设备上认证不过')
+        self.assertIsNone(sw.team_doc_open(kb, self.tid, db, 2, d1['ct']), '换个序号认证不过')
+        self.assertEqual(len(base64.b64decode(d1['ct']['c'])) % 1024, 0, '补齐到 1024 的整数倍')
+        self.assertEqual(self.call('team_get', 'b', have=1)[1]['doc'], None, '手里的就是这一份：不带')
+        self.assertEqual(self.call('team_get', 'b', have=0)[0], 400)
+        self.assertEqual(self.call('team_get')[1]['doc'], None, '别的设备取不到它的')
+        self.assertEqual(self.admin('team_put', docs={db: d1})[1]['stored'], [db], '同一份再存一次（没收到回复时）')
+        self.assertEqual(self.admin('team_put', docs={db: self.doc(kb, db, 1, {'v': 1})})[1]['stale'], {db: 1}, '同一个序号、不同的内容')
+        d3 = self.doc(kb, db, 3, dict(content, name='新的'))
+        self.assertEqual(self.admin('team_put', docs={db: d3})[1]['stored'], [db])
+        self.assertEqual(self.admin('team_put', docs={db: self.doc(kb, db, 2, content)})[1]['stale'], {db: 3}, '序号往回走的不存')
+        self.assertEqual(self.call('team_get', 'b', have=1)[1]['doc'], d3)
+        self.assertEqual(self.call('team_get', 'b', have=7)[1]['doc'], d3, '设备手里的比存着的新（服务器的那一份被换成旧的了）：照样给，设备自己看序号')
+        self.assertEqual(self.call('team_get', 'b', have=2 ** 53)[0], 400)
+        for bad in ({}, {db: dict(d1, seq=0)}, {db: dict(d1, seq=True)}, {db: dict(d1, sig='')}, {db: dict(d1, sig='!!!!')}, {db: dict(d1, extra=1)},
+                    {'x': d1}, {db: dict(d1, ct={'n': 'x'})}, {db: dict(d1, ct=dict(d1['ct'], c='A' * (srvmod.MAX_TEAM_DOC + 4)))},
+                    {db: dict(d1, sig='A' * (srvmod.MAX_TEAM_SIG + 4))}, {'%016x' % i: d1 for i in range(srvmod.MAX_TEAM_BATCH + 1)}):
+            self.assertIsNone(srvmod.parse_team_docs(bad), str(bad)[:80])
+        self.assertEqual(srvmod.parse_team_docs({db: d1}), {db: d1})
+        self.assertEqual(self.admin('team_put', docs={db: dict(d1, seq=0)})[0], 400)
+        self.assertEqual(self.call('team_put', 'b', docs={db: d1}), (403, {'error': 'denied'}), '设备存不了配置')
+        # 还没加入的设备的配置可以先存着：加入以后马上取得到
+        _, tc, dc, kc = self.invite()
+        d0 = self.doc(kc, dc, 1, content)
+        self.assertEqual(self.admin('team_put', docs={dc: d0})[1]['stored'], [dc])
+        st, j = self.admin('team_members')
+        rows = {r['name']: r for r in j['members']}
+        self.assertEqual((st, sorted(rows), j['gen']), (200, ['studio', 'studio-2'], gen), j)
+        self.assertEqual((rows['studio']['dev'], rows['studio']['pub'], rows['studio']['fp'], rows['studio']['seq']),
+                         (da, self.pubs['a'], self.fp('a'), 0))
+        self.assertEqual((rows['studio-2']['dev'], rows['studio-2']['seq'], rows['studio-2']['have'], rows['studio']['have']), (db, 3, 7, None),
+                         '各台设备取配置时说的手里那一份的序号')
+        self.assertTrue(all(0 <= r['joined_age'] <= 120 and 0 <= r['seen_age'] <= 120 for r in rows.values()), rows)
+        self.assertEqual([(i['dev'], i['seq'], 3500 < i['expires_in'] <= 3600) for i in j['invites']], [(dc, 1, True)], j['invites'])
+        self.assertEqual(self.call('team_members', 'b'), (403, {'error': 'denied'}), '设备看不了名单')
+        self.assertEqual(self.join('c', tc)[0], 200)
+        self.assertEqual(self.call('team_get', 'c')[1]['doc'], d0)
+        # 别的 op 照旧
+        aid = sw.aid_of(self.SALT, 'claude', 'alice@example.com')
+        self.assertEqual(self.call('report', 'b', units={aid: {'cli': [[10, 1]], 'app': None}}, end=None)[0], 200)
+        st, j = self.call('view', accounts=[aid])
+        self.assertEqual([(r['name'], r['state']) for r in j['accounts'][aid]], [('studio-2', 'in_use')])
+        blob = {'n': base64.b64encode(secrets.token_bytes(16)).decode(), 'c': base64.b64encode(secrets.token_bytes(1024)).decode(),
+                't': base64.b64encode(secrets.token_bytes(32)).decode()}
+        self.assertEqual(self.call('keys', 'b', put={aid: blob})[0], 200)
+        self.assertEqual(self.call('ledger', 'b', put={aid: blob})[0], 200)
+        self.assertEqual(self.call('keys', get=[aid])[1]['keys'][aid]['name'], 'studio-2')
+        # 请求的大小：管理员存配置的最多 1 MB，别的 64 KB
+        big = b'x' * (srvmod.MAX_BODY + 1)
+        self.assertEqual(self.srv.req('POST', '/v1/team_put', big, b'sig')[0], 400, '过了大小这一关（内容不是 JSON）')
+        self.assertIn(self.srv.req('POST', '/v1/team_enroll', big, b'sig')[0], (413, None))
+        self.assertIn(self.srv.req('POST', '/v1/team_put', b'x' * (srvmod.MAX_SYNC_BODY + 1), b'sig')[0], (413, None))
+        # 移除：密钥就此不认，给它的配置一起删掉
+        self.assertEqual(self.admin('team_revoke', dev='nope')[0], 400)
+        self.assertEqual(self.admin('team_revoke', dev='ee' * 8), (404, {'error': 'no_device'}))
+        self.assertEqual(self.call('team_revoke', 'c', dev=db), (403, {'error': 'denied'}), '设备移除不了别的设备')
+        st, j = self.admin('team_revoke', dev=db)
+        self.assertEqual((st, j['members']), (200, 2))
+        self.assertEqual(self.unknown(self.call('team_get', 'b')), gen, '被移除的设备：编号照旧（是被移除了）')
+        self.assertEqual(self.admin('team_put', docs={db: self.doc(kb, db, 9, content)})[1]['unknown'], [db])
+        self.assertEqual(self.call('view', accounts=[aid])[1]['accounts'][aid], [], '它上报的记录跟着删掉')
+        # 退出
+        st, j = self.call('team_leave', 'c')
+        self.assertEqual((st, j['members']), (200, 1))
+        self.assertEqual(self.unknown(self.call('team_get', 'c')), gen)
+        self.assertNotIn(dc, json.loads((self.d / 'team-docs.json').read_text())['docs'])
+        # 换了密钥的设备：管理员照编号重新登记，原来那把就此不认
+        st, j = self.admin('team_enroll', devices={da: {'pub': self.pubs['c'], 'name': 'studio'}})
+        self.assertEqual((st, j['names'], j['members']), (200, {da: 'studio'}, 1), j)
+        self.assertEqual(self.unknown(self.call('team_get')), gen)
+        self.assertEqual(self.call('team_get', 'c')[1]['dev'], da)
+        _, tv, dv, _ = self.invite()
+        self.assertEqual(self.admin('team_enroll', devices={dv: {'pub': self.pubs['b'], 'name': 'direct'}})[0], 200)
+        self.assertEqual(self.join('evil', tv), (403, {'error': 'denied'}), '这个编号直接登记了：还没用掉的邀请作废')
+        self.assertEqual(self.admin('team_revoke', dev=dv)[1]['members'], 1)
+        # 重启：同一个根公钥接着用；换一个就从头开始
+        da_doc = self.doc(sw.invite_parts('ab' * 16)[2], da, 1, content)
+        self.assertEqual(self.admin('team_put', docs={da: da_doc})[1]['stored'], [da])
+        self.srv.stop()
+        TeamServerTest.srv = Server(self.d, team_root=self.pubs['root'])
+        st, j = self.call('team_get', 'c')
+        self.assertEqual((st, j['gen'], j['doc']), (200, gen, da_doc), '重启后照样认得设备、配置还在，编号不变')
+        self.assertEqual(oct(os.stat(self.d / 'team-docs.json').st_mode & 0o777), '0o600')
+        self.srv.stop()
+        TeamServerTest.srv = Server(self.d, team_root=self.pubs['root2'])
+        self.assertEqual(self.srv.req('GET', '/v1/health')[1]['team'], sw.team_id(self.pubs['root2']))
+        gen2 = self.unknown(self.call('team_get', 'c'))
+        self.assertTrue(gen2 and gen2 != gen, '换了一个 Team：以前的设备不认了，记录换了编号')
+        self.assertEqual(self.admin('team_members'), (403, {'error': 'denied'}), '原来的根密钥不认了')
+        st, j = self.admin('team_members', who='root2')
+        self.assertEqual((st, j['members'], j['invites']), (200, [], []))
+        self.assertEqual(json.loads((self.d / 'team-docs.json').read_text())['docs'], {}, '以前存的配置都删掉')
+
+    def test_records_lost(self):
+        """服务器的记录没了（状态文件丢了，配置的根公钥照旧）：设备自己加不回来（邀请只能用一次），管理员照 team_members 回过的
+        公钥登记回去、再存一次配置"""
+        d = self.d / 'lost'
+        d.mkdir()
+        srv = Server(d, team_root=self.pubs['root'], proxied=True)
+        self.addCleanup(lambda: srv.stop())
+        self.assertEqual(self.admin('team_enroll', srv=srv, devices={'0a' * 8: {'pub': self.pubs['a'], 'name': 'studio'}})[0], 200)
+        _, token, db, kb = self.invite(srv=srv)
+        self.assertEqual(self.join('b', token, srv=srv)[0], 200)
+        doc = self.doc(kb, db, 4, {'v': 1})
+        self.assertEqual(self.admin('team_put', srv=srv, docs={db: doc})[1]['stored'], [db])
+        st, j = self.admin('team_members', srv=srv)
+        gen, saved = j['gen'], {r['dev']: {'pub': r['pub'], 'name': r['name']} for r in j['members']}
+        srv.stop()
+        for f in ('state.json', 'team-docs.json'):
+            (d / f).unlink()
+        srv = Server(d, team_root=self.pubs['root'], proxied=True)
+        gen2 = self.unknown(self.call('team_get', 'b', srv=srv))
+        self.assertTrue(gen2 and gen2 != gen, '记录换了编号：设备据此知道不是被移除了')
+        self.assertEqual(self.join('b', token, srv=srv), (403, {'error': 'denied'}), '用过的邀请加不回来')
+        st, j = self.admin('team_enroll', srv=srv, devices=saved)
+        self.assertEqual((st, j['names'], j['members'], j['gen']), (200, {'0a' * 8: 'studio', db: 'b-mac'}, 2, gen2), j)
+        st, j = self.call('team_get', 'b', have=4, srv=srv)
+        self.assertEqual((st, j['dev'], j['seq'], j['doc']), (200, db, 0, None), '还没有配置：设备接着用手里的那一份')
+        self.assertEqual(self.admin('team_put', srv=srv, docs={db: doc})[1]['stored'], [db], '同一个序号再存一次')
+        self.assertEqual(self.call('team_get', 'b', have=4, srv=srv)[1]['doc'], None)
+        self.assertEqual(self.call('team_get', 'b', srv=srv)[1]['doc'], doc)
+
+    def store(self, name, **kw):
+        d = self.d / name
+        d.mkdir(exist_ok=True)
+        return srvmod.Store(str(d / 'state.json'), 150, 600, 30 * 86400, **kw)
+
+    def test_store(self):
+        """过期、清理、上限、换模式：直接调 Store（不用真的等）"""
+        log = mock.patch.object(sys, 'stderr', io.StringIO())   # Store 往 stderr 记的那几句不混进测试的输出
+        err = log.start()
+        self.addCleanup(log.stop)
+        root, H = self.pubs['root'], lambda t: hashlib.sha256(t.encode()).hexdigest()
+        b64 = lambda n: base64.b64encode(b'\0' * n).decode()
+        blob = lambda size=1024: {'n': b64(16), 'c': 'A' * size, 't': b64(32)}
+        st = self.store('s1', mode='team', team_root=root)
+        t1, t2 = 'aa' * 16, 'bb' * 16
+        self.assertEqual(st.team_invite(H(t1), '01' * 8, 60, 1000)[0], 200)
+        self.assertEqual((st.invite_state(t1, 1059), st.invite_state(t1, 1060), st.invite_state(t2, 1000), st.invite_state('zz', 1000)),
+                         ('ok', 'expired', None, None))
+        self.assertEqual(st.team_join('SHA256:x', self.pubs['a'], 'late', t1, 1100), (403, {'error': 'expired'}))
+        self.assertEqual(st.team_put({'01' * 8: {'seq': 1, 'ct': blob(), 'sig': 'AAAA'}}, 1100)[1]['stored'], ['01' * 8],
+                         '过期不久的邀请：配置照存（管理员多半会再发一个）')
+        self.assertEqual(st.team_members(1100)[1]['invites'], [], '过期的邀请不列出来')
+        self.assertEqual(st.team_invite(H(t2), '01' * 8, 60, 1100)[0], 200, '同一个编号再发')
+        self.assertEqual(st.team_join('SHA256:x', self.pubs['a'], 'mac', t2, 1101)[0], 200)
+        self.assertEqual(st.invite_state(t2, 1102), 'used')
+        later = 1101 + srvmod.INVITE_KEEP + 1
+        self.assertEqual(st.team_members(later)[0], 200)   # 看名单、存配置、发邀请时顺带清
+        self.assertEqual(st.invite_state(t2, later), None, '用掉很久的不记了')
+        # 给邀请存的配置：邀请过期很久被清掉时跟着删；只剩配置的编号也移除得掉
+        self.assertEqual(st.team_invite(H('cc' * 16), '02' * 8, 60, later)[0], 200)
+        self.assertEqual(st.team_put({'02' * 8: {'seq': 1, 'ct': blob(), 'sig': 'AAAA'}}, later)[1]['stored'], ['02' * 8])
+        self.assertEqual(st.team_put({'01' * 8: {'seq': 2, 'ct': blob(), 'sig': 'AAAA'}}, later + 60 + srvmod.INVITE_KEEP)[1]['stored'], ['01' * 8])
+        self.assertEqual(sorted(json.loads((self.d / 's1' / 'team-docs.json').read_text())['docs']), ['01' * 8], '02 的邀请清掉了，配置跟着删')
+        st.docs['docs']['03' * 8] = {'seq': 1, 'ct': blob(), 'sig': 'AAAA', 'at': 1}   # 移除设备时写了一半留下的
+        self.assertEqual(st.team_revoke('03' * 8), (200, {'v': 1, 'ok': True, 'members': 1}))
+        self.assertEqual(st.team_revoke('03' * 8), (404, {'error': 'no_device'}))
+        # 满了
+        with mock.patch.object(srvmod, 'MAX_TEAM_MEMBERS', 1):
+            self.assertEqual(st.team_enroll({'04' * 8: ('SHA256:y', self.pubs['b'], 'two')}, later), (507, {'error': 'full'}))
+            self.assertEqual(st.team_invite(H('dd' * 16), '05' * 8, 60, later)[0], 200)
+            self.assertEqual(st.team_join('SHA256:y', self.pubs['b'], 'two', 'dd' * 16, later), (507, {'error': 'full'}))
+            self.assertEqual(st.team_enroll({'01' * 8: ('SHA256:x', self.pubs['a'], 'renamed')}, later)[1]['names'], {'01' * 8: 'renamed'},
+                             '已经在的设备改名字不算多')
+        self.assertEqual(st.team_revoke('05' * 8)[0], 200)
+        # 状态文件手改坏了：样子不对的邀请、设备不要，照常启动、照常回话
+        raw = json.loads((self.d / 's1' / 'state.json').read_text())
+        raw['team']['invites'].update({'x': 1, 'y': {'dev': '06' * 8}, 'z': {'dev': 'nope', 'exp': 9}})
+        raw['team']['spent'] = {'x': 'soon'}
+        raw['machines'].update({'SHA256:bad': {'name': 'no-dev', 'key': self.pubs['c']}, 'SHA256:worse': 7})
+        (self.d / 's1' / 'state.json').write_text(json.dumps(raw))
+        st = self.store('s1', mode='team', team_root=root)
+        self.assertEqual((st.data['team']['invites'], st.data['team']['spent'], sorted(st.data['machines'])), ({}, {}, ['SHA256:x']))
+        self.assertEqual((st.team_members(later)[0], st.invite_state('aa' * 16, later)), (200, None))
+        # 没用掉的邀请最多 MAX_INVITES 个（过期的不算）
+        st = self.store('s2', mode='team', team_root=root)
+        self.assertEqual(st.team_invite(H('00' * 16), 'ff' * 8, 60, 0)[0], 200)
+        for i in range(srvmod.MAX_INVITES):
+            self.assertEqual(st.team_invite(H('%032x' % i), '%016x' % i, 3600, 100)[0], 200, i)
+        self.assertEqual(st.team_invite(H('ee' * 16), 'ee' * 8, 3600, 100), (507, {'error': 'full'}))
+        # 配置加起来的上限
+        big = {'seq': 1, 'ct': blob(srvmod.MAX_TEAM_DOC), 'sig': 'AAAA'}
+        n = srvmod.TEAM_DOCS_BYTES // srvmod.MAX_TEAM_DOC
+        with mock.patch.object(srvmod, 'MAX_INVITES', 10 ** 6):
+            st = self.store('s3', mode='team', team_root=root)
+            for i in range(n + 1):
+                st.team_invite(H('%032x' % i), '%016x' % i, 3600, 100)
+            for i in range(0, n, 32):
+                self.assertEqual(st.team_put({'%016x' % k: big for k in range(i, min(i + 32, n))}, 100)[0], 200, i)
+            self.assertEqual(st.team_put({'%016x' % n: big}, 100), (507, {'error': 'full'}))
+            self.assertEqual(st.team_put({'%016x' % 0: dict(big, seq=2)}, 100)[0], 200, '换掉已有的一份不算多')
+        # 换模式：状态文件是别的模式的就从头开始，各台设备的配置也删掉
+        st = self.store('s1', mode='team', team_root=root)
+        self.assertEqual((len(st.data['machines']), len(st.docs['docs'])), (1, 1), '同一个根公钥：接着用')
+        gen = st.gen()
+        own = self.store('s1', mode='own', admit_hash='0' * 64)
+        self.assertEqual((own.data['machines'], own.docs['docs'], 'team' in own.data), ({}, {}, False))
+        self.assertIn('以前是 Team 的服务器：以前的 1 台设备', err.getvalue())
+        self.assertEqual(json.loads((self.d / 's1' / 'team-docs.json').read_text())['docs'], {})
+        st = self.store('s1', mode='team', team_root=root)
+        self.assertTrue('own' not in st.data and st.gen() != gen and st.gen() != own.data.get('own', {}).get('gen'))
+        self.assertEqual(st.team_enroll({'01' * 8: ('SHA256:x', self.pubs['a'], 'mac')}, 5)[0], 200)
+        m = self.store('s1', mode='maintainer')
+        self.assertEqual((m.data['machines'], 'team' in m.data), ({}, False), '维护者的服务器不认 Team 里加入的设备')
+        self.assertFalse((self.d / 'none').exists())
+        self.store('none', mode='maintainer')
+        self.assertFalse((self.d / 'none' / 'team-docs.json').exists(), '别的模式的服务器旁边不留一个空的 team-docs.json')
+
+    def test_cli(self):
+        """启动参数：根公钥从 --team-root 或者环境变量 CCA_TEAM_ROOT 来，不是 ssh-ed25519 公钥就不启动"""
+        d = self.d / 'cli'
+        d.mkdir()
+        base = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--behind-proxy', '--state', str(d / 'state.json'), '--mode', 'team']
+        for extra, env in (([], {}), (['--team-root', 'nope'], {}), (['--team-root', 'ssh-rsa AAAA'], {}), ([], {'CCA_TEAM_ROOT': 'x'})):
+            r = subprocess.run(base + extra, env=dict(os.environ, **env), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, timeout=20)
+            self.assertEqual(r.returncode, 2, (extra, env))
+            self.assertIn('根公钥', r.stderr.decode())
+        p = subprocess.Popen(base + ['--port-file', str(d / 'port')], env=dict(os.environ, CCA_TEAM_ROOT=self.pubs['root'] + ' 备注'),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            wait_for('服务器起来', lambda: (d / 'port').exists(), 20)
+            c = http.client.HTTPConnection('127.0.0.1', int((d / 'port').read_text()), timeout=10)
+            c.request('GET', '/v1/health')
+            self.assertEqual(json.loads(c.getresponse().read())['team'], self.tid)
+        finally:
+            p.terminate()
+            p.wait(5)
+            self.assertIn('Team 的同步服务器', p.stderr.read().decode())
+            p.stderr.close()
 
 
 def ident(email):
