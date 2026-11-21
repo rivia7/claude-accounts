@@ -3768,6 +3768,19 @@ HBA=$(hbj admit)
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.password":[{"v":"x1"},{"v":"x2"},{"v":"x3"}]}' -- cca hub deploy 2>&1); rc=$?
 rm -f "$T/hubbox/password"
 ok "密码错了三次：不再问（错得太多服务器会封这个地址），fail 事件 hub_ssh，说可能是不让 root 用密码登录；服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy hub.password hub.password hub.password" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_ssh\" and \"试了 3 次\" in e[\"message\"] and \"不让 root 用密码登录\" in e[\"message\"]" && ! evq "e[\"ev\"] == \"result\"" && [ "$(hbj admit)" = "$HBA" ]'
+# 服务器只认密钥、不认这台 Mac 的（ssh_keyonly）：一页（hub.pubkey）给出在服务器上运行的那一行，加好了再查；没有密钥的先生成一把；
+# 私钥有密码的选在终端里部署（terminal 事件带上服务器）
+[ ! -e "$H/.ssh" ] || mv "$H/.ssh" "$T/home.ssh"
+echo always > "$T/hubbox/ssh_denied"
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"keygen"},{"next":"retry"},{"next":"terminal"}]}' -- cca hub deploy 2>&1); rc=$?
+HKP=$(cat "$H/.ssh/id_ed25519.pub" 2>/dev/null)
+ok "App 里部署、服务器只认密钥、这台 Mac 还没有密钥：先问要不要生成一把（默认生成），生成了 ~/.ssh/id_ed25519（600）；下一页给出把公钥加进 authorized_keys 的那一行；加好了再试还不认：带着原因重问；选在终端里部署：terminal 事件带上服务器和端口，退出码非 0；服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey hub.pubkey hub.pubkey" ] && evq "e.get(\"seq\") == 2 and [f[\"id\"] for f in e[\"fields\"]] == [\"next\"] and e[\"fields\"][0][\"default\"] == \"keygen\"" && [ -n "$HKP" ] && [ "$(stat -f %Lp "$H/.ssh/id_ed25519")" = 600 ] && evq "e.get(\"seq\") == 3 and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"] and e[\"fields\"][0][\"value\"] == \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo \x27$HKP\x27 >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\" and e[\"fields\"][0][\"error\"] == \"\"" && evq "e.get(\"seq\") == 4 and e[\"fields\"][0][\"error\"].startswith(\"还是登录不了\")" && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"hub_deploy\" and e[\"argv\"] == [\"hub\", \"deploy\", \"root@hubbox\", \"-p\", \"22\"] and e[\"display\"] == \"cca hub deploy root@hubbox -p 22\"" && ! evq "e[\"ev\"] == \"result\"" && [ "$(hbj admit)" = "$HBA" ]'
+echo once > "$T/hubbox/ssh_denied"
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"retry"}]}' -- cca hub deploy 2>&1); rc=$?
+ok "加好了公钥再试：登录上了，接着部署（只更新，result 事件 hub_deployed）；已经有密钥的不再问要不要生成" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey" ] && evq "e.get(\"q\") == \"hub.pubkey\" and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"]" && [ "$(lastres)" = hub_deployed ] && [ ! -e "$T/hubbox/ssh_denied" ] && [ "$(hbj admit)" = "$HBA" ]'
+rm -rf "$H/.ssh"; [ ! -e "$T/home.ssh" ] || mv "$T/home.ssh" "$H/.ssh"
+out=$(run CCA_TTY="$(ans hubbox '' '')" cca hub deploy 2>&1); rc=$?
+ok "终端里不写服务器（App 里「改在终端里完成」）：问地址（加入着的预填它的）、SSH 用户（root）、端口（22），再部署" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上自己的同步服务器" && [ "$(hbj admit)" = "$HBA" ]'
 run CCA_GRANT=hub_leave:all cca hub leave >/dev/null 2>&1 </dev/null
 HBH=$(sed -n 's/^CCA_HUB_ADMIT_HASH=//p' "$HB/.env")
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"consent.hub_reset":[{"v":"n"}]}' -- cca hub deploy 2>&1); rc=$?

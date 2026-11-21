@@ -3,7 +3,7 @@
 目录下的 root/ 当作 /（安装脚本的 CCA_HUB_ROOT），bin/ 里是假的系统命令：id、useradd、userdel、chown、ip、journalctl、sudo，
 Python 写的 systemctl、docker（照 unit 的 ExecStart、compose.yaml 的 command 和挂载起真的 server/cca-presence.py，监听 127.0.0.1），
 sh 是 /bin/dash（没有时 /bin/sh）。没有的 docker、systemctl 也放一个会失败的：不然会找到这台机器上真的。
-enter 是假 ssh 的服务器那一头：在这台假服务器上运行一条命令（stdin 照样给它；目录下有 ssh_denied 时登录不了）。
+enter 是假 ssh 的服务器那一头：在这台假服务器上运行一条命令（stdin 照样给它；目录下有 ssh_denied 时登录不了，它的内容是 once 时只拒这一次）。
 目录下这些文件在时：uid（id -u 说的；root 是 0）、sudo_ok（免密码的 sudo）、ip（默认路由出去的源地址）、listening（ss 说这些端口有人监听）、
 no_pull（docker pull 拉不到）、docker_down（docker info 不通）、no_compose（没有 compose 插件，只有老的 docker-compose 1.x）、
 compose_fail（docker compose up 起不来）、start_fail（systemctl restart 起不来）、start_hang（systemctl restart 一直不回来）。"""
@@ -185,8 +185,11 @@ class Box:
         env = ' '.join("%s='%s'" % kv for kv in self.env.items())   # 都是这个目录下的路径：没有单引号
         self.enter = d / 'enter'
         self.enter.write_text('#!/bin/sh\n'
-                              '[ ! -f "%s/ssh_denied" ] || { echo "Permission denied (publickey)." >&2; exit 255; }\n'
-                              'exec env -i %s /bin/sh -c "$1"\n' % (d, env))
+                              'if [ -f "%s/ssh_denied" ]; then\n'
+                              '  [ "$(cat "%s/ssh_denied")" != once ] || rm -f "%s/ssh_denied"\n'
+                              '  echo "Permission denied (publickey)." >&2; exit 255\n'
+                              'fi\n'
+                              'exec env -i %s /bin/sh -c "$1"\n' % (d, d, d, env))
         self.enter.chmod(0o755)
 
     def fake(self, name, text):

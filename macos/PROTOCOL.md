@@ -722,7 +722,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
-  `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key` | `edit`（账号表有表单改不了的问题：不是 JSON、键写错了）。App 能在表单里做的（`router_setup`、`local_setup`，要 `hello.forms`）直接开表单，别的走终端交接。
+  `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key` | `edit`（账号表有表单改不了的问题：不是 JSON、键写错了）| `hub_deploy`（部署自己的同步服务器：服务器只认密钥，这台 Mac 的私钥有密码、或者要用别的私钥，`argv` 是 `hub deploy 目标 -p 端口`）。App 能在表单里做的（`router_setup`、`local_setup`，要 `hello.forms`）直接开表单，别的走终端交接。
 
 ### 4.2 同意
 
@@ -888,8 +888,9 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `onboard.share` | `_onboard`（配置向导第 1 步） | `confirm`（默认否） | 有没有维护者共享给你的账号。答有接着 `onboard.policy`；答没有（默认）不生成 deploy key、不拉映射，直接到下一步。共享已经开着时不问（直接 `onboard.policy`，拉一次就拉到了时也不问）；不知道映射仓库（没有维护者的默认仓库、也没关掉过共享）时整个第 1 步都没有 |
 | `onboard.policy` | `_onboard`（配置向导第 1 步）/ `policy on` | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不打开共享：去掉仓库和 deploy key）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答 |
 | `hub.join` | `hub join` / `_onboard`（配置向导第 4 步答有） | `secret` | 自己的同步服务器的加入链接（`cca-hub1.` 开头的一行：部署服务器时给的，或者已经加入的设备上 `cca hub invite` 给的）。空着、链接不对（少了一截、旧的）、服务器不认（`hub_link`、`hub_denied`、`hub_salt`、`hub_pin` 的那些原因）时带着原因（`error`）重问，不是 `fail`；别的原因（连不上……）是 `fail`，见 4.13。配置向导里这一页是可选的（`optional`）：留空交上来是先不加入，向导接着做完 |
-| `hub.deploy` | `hub deploy`（App 里，不写服务器） | `text` ×3 | 自己的同步服务器部署到哪：服务器地址（校验 host；加入着时预填它的地址，`message` 说是更新）、SSH 用户（校验 sshuser，预填 root）、SSH 端口（校验 port，预填 22）。填完 cca 先查登录得上不（什么都不装）：连不上（地址、端口不对……）带着 ssh 说的原因重问；这台设备的密钥登录不了、服务器认密码时接着问 `hub.password`；主机密钥和记下的不一样、不认密钥又不让用密码时是 `fail` 的 `hub_ssh` |
+| `hub.deploy` | `hub deploy`（App 里，不写服务器） | `text` ×3 | 自己的同步服务器部署到哪：服务器地址（校验 host；加入着时预填它的地址，`message` 说是更新）、SSH 用户（校验 sshuser，预填 root）、SSH 端口（校验 port，预填 22）。填完 cca 先查登录得上不（什么都不装）：连不上（地址、端口不对……）带着 ssh 说的原因重问；这台设备的密钥登录不了、服务器认密码时接着问 `hub.password`；不认这台设备的密钥又不让用密码时接着 `hub.pubkey`；主机密钥和记下的不一样是 `fail` 的 `hub_ssh` |
 | `hub.password` | `hub deploy`（App 里） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对是 `fail` 的 `hub_ssh`：错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
+| `hub.pubkey` | `hub deploy`（App 里） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署）；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0 |
 | `hub.platform` | `hub hosted`（没写平台、没有记着的） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署 |
 | `hub.hosted` | `hub hosted` | `code`、`text` / `choice` | 部署到托管平台的那一页：`steps`（`code`：Railway 是要一行一行运行的命令，Sealos 是表单里填什么）；Sealos 另有 `server`（`code`：配置文件 `/app/cca-presence.py` 的内容，就是服务端程序，七八万字节）；第一次部署是 `url`（`text`：平台给的公网地址；不对、证书验证不过、还连不上、服务器不认这一份口令时带着原因和填过的地址重问；取消是以后再加入，记着的口令留着），加入着托管平台上的那一台时是更新，最后是 `next`（`choice`，只有 `done`：更新好了） |
 | `onboard.hub` | `_onboard`（配置向导第 4 步） | `confirm`（默认否） | 有没有自己的同步服务器的加入链接。答有接着 `hub.join`（可以留空：先不加入；加入没成不耽误向导做完：原因是 `fail` 事件，最后的 `result` 还是 `onboarded`）；已经加入了时不问 |
@@ -1017,9 +1018,10 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
 - **部署**（`cca hub deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--docker | --systemd] [--dir 目录] [--name 名字] [--reset]`）：
   经 SSH 在用户自己的 Linux 服务器上装好服务端（再运行是更新：数据、证书、加入链接都不变），这台设备跟着加入。入伙口令和盐在这台设备上
   生成，服务器只拿到口令的 SHA-256；加入链接不打出来（别的设备要的在这台设备上 `cca hub invite`）。登录的是 root，或者能免密码 sudo。终端里 ssh
-  自己问密码、问要不要认这台主机；没有终端时带 `BatchMode`（要不问密码就能登录，没见过的主机不连）。**App 里**（提问会话，不写服务器）：先问服务器地址、SSH 用户
+  自己问密码、问要不要认这台主机（不写服务器时先问地址、SSH 用户和端口：App 里「改在终端里完成」就是这样）；没有终端时带 `BatchMode`（要不问密码就能登录，没见过的主机不连）。**App 里**（提问会话，不写服务器）：先问服务器地址、SSH 用户
   和端口（`hub.deploy`），查登录得上不（只运行 `true`，什么都不装）：连不上带着原因重问；这台设备的密钥登录不了、服务器认密码时问密码
-  （`hub.password`，不对重问，最多三次），部署时经 `SSH_ASKPASS` 交给 ssh（不用密钥、只问一次）；第一次连的主机不问、记下它的主机密钥
+  （`hub.password`，不对重问，最多三次），部署时经 `SSH_ASKPASS` 交给 ssh（不用密钥、只问一次）；只认密钥、不认这台设备的时给出把公钥加到服务器上的那一行（`hub.pubkey`：
+  加好了再查；还没有密钥的先生成一把；私钥有密码的交给终端：`terminal` 事件 `hub_deploy`）；第一次连的主机不问、记下它的主机密钥
   （`StrictHostKeyChecking=accept-new`），和记下的不一样时停下（`hub_ssh`）；服务器上已经有别的设备加入过、这台设备没加入它（`hub_taken`）时
   问要不要从头部署（`consent.hub_reset`）。成了 `result` 的 `hub_deployed`（`message` 说部署了还是更新了）；要人做点什么时 `result` 前面还有
   `fail`（退出码照样是 0）：`hub_newpin`（服务器的证书是新生成的：别的设备连不上了，要用新的加入链接重新加入）| `hub_lan`（服务器的地址只在内网连得上）|

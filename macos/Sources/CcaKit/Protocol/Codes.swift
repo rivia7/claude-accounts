@@ -467,7 +467,9 @@ struct TerminalCode: KnownValues {
     static let apiKey = TerminalCode(rawValue: "api_key")
     /// 账号表有表单改不了的问题（不是 JSON、键写错了）：在终端里编辑。
     static let edit = TerminalCode(rawValue: "edit")
-    static let allKnown: [TerminalCode] = [.login, .routerSync, .routerSetup, .localSetup, .apiKey, .edit]
+    /// 部署自己的同步服务器：服务器只认密钥，这台 Mac 的私钥有密码、或者要用别的私钥（`argv` 带上服务器和端口）。
+    static let hubDeploy = TerminalCode(rawValue: "hub_deploy")
+    static let allKnown: [TerminalCode] = [.login, .routerSync, .routerSetup, .localSetup, .apiKey, .edit, .hubDeploy]
 }
 
 struct ConsentItem: KnownValues {

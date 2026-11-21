@@ -6658,7 +6658,8 @@ hub_deploy_ask() {   # App 里 cca hub deploy 不写服务器（提问会话）�
 		case "${out%%$'\t'*}" in
 			ssh) err=${out#*$'\t'} ;;   # 连不上：地址、端口写错了？带着原因重问
 			ssh_auth) break ;;
-			ssh_*) FAIL_CODE=hub_ssh die "${out#*$'\t'}" ;;   # 主机密钥和记下的不一样、只认密钥（不认这台设备的）
+			ssh_keyonly) hub_pubkey_ask && return 0; break ;;   # 只认密钥、不认这台设备的：说怎么把公钥加到服务器上，加好了再查（这回认密码了：问密码）
+			ssh_*) FAIL_CODE=hub_ssh die "${out#*$'\t'}" ;;   # 主机密钥和记下的不一样
 			*) hub_fail "$out" "没登录上 ${F_host}" ;;
 		esac
 	done
@@ -6674,6 +6675,91 @@ hub_deploy_ask() {   # App 里 cca hub deploy 不写服务器（提问会话）�
 				tries=$((tries + 1))
 				[ "$tries" -lt 3 ] || FAIL_CODE=hub_ssh die "试了 3 次都没用密码登录上 ${F_user}@${F_host}${hint:+：密码没错的话，${hint}}"
 				perr="密码不对，再试一次${hint:+（密码没错也这样的话：${hint}）}" ;;
+			ssh*) FAIL_CODE=hub_ssh die "${out#*$'\t'}" ;;
+			*) hub_fail "$out" "没登录上 ${F_host}" ;;
+		esac
+	done
+}
+
+hub_deploy_where() {   # 终端里 cca hub deploy 不写服务器：问地址（加入着的预填它的地址）、SSH 用户（root）、端口（22），结果在 F_host F_user F_port；
+	                     # 地址留空是取消。登录交给 ssh 自己问（密码、私钥的密码、要不要认这台主机）
+	local def v out
+	def=$(hub_joined_at) || def=""
+	say "部署自己的同步服务器：经 SSH 装到你自己的 Linux 服务器上（要用 root 登录，或者能免密码 sudo 的用户；云服务商的安全组里要放行 TCP 18445）"
+	while :; do
+		v=$(ask "服务器地址（IP 或者域名）${def:+ [${def}]}: " "$def")
+		[ -n "$v" ] || { say "  已取消"; return 1; }
+		out=$(py check host "$v") && { F_host=$out; break; }
+		warn "$out"
+	done
+	while :; do
+		v=$(ask "SSH 用户 [root]: " root)
+		out=$(py check sshuser "$v") && { F_user=$out; break; }
+		warn "$out"
+	done
+	while :; do
+		v=$(ask "SSH 端口 [22]: " 22)
+		out=$(py check port "$v") && { F_port=$out; break; }
+		warn "$out"
+	done
+}
+
+hub_key_file() {   # 这台设备给 ssh 用的密钥（ssh 默认会试的那几把里第一把有公钥文件的，ed25519 优先）：打出私钥的路径；没有返回 1
+	local f
+	for f in id_ed25519 id_ecdsa id_rsa; do
+		[ -f "$HOME/.ssh/$f" ] && [ -f "$HOME/.ssh/$f.pub" ] && { printf '%s' "$HOME/.ssh/$f"; return 0; }
+	done
+	return 1
+}
+
+hub_pubkey_spec() {   # hub_pubkey_ask 的那一页（hub.pubkey，给 py prompt-emit；变量是 hub_pubkey_ask 的）。单独一个函数：bash 3.2 在 $(…) 里解析不了 case 的右括号
+	local t="${F_user}@${F_host}" pass="选「在终端里部署」：在那里输私钥的密码"
+	if [ -n "$key" ]; then
+		gui_kv "q=hub.pubkey" "title=把这台 Mac 的公钥加到服务器上" \
+			"message=${F_host} 不认这台 Mac 的 SSH 密钥，也不让用密码登录。用云服务商网页上的远程登录（控制台里的「登录」「VNC」这类）登进服务器，以 ${F_user} 运行下面这一行（把这台 Mac 的公钥 ~/.ssh/${key##*/}.pub 加进 ~/.ssh/authorized_keys），再回来选「加好了，再试」"
+		gui_kv field=cmd kind=code "label=在服务器上运行" "hint=点复制，粘贴进服务器的终端" "error=$err"
+		printf 'code=%s\n' "$line"
+		gui_kv field=next kind=choice "label=加好了以后" default=retry \
+			"opt=retry"$'\t'"加好了，再试"$'\t'"再查一次登录得上不，登录上了接着部署" \
+			"opt=terminal"$'\t'"在终端里部署"$'\t'"这把私钥有密码、App 里用不了时：在终端里运行 cca hub deploy ${t}，在那里输私钥的密码"
+	else
+		gui_kv "q=hub.pubkey" "title=这台 Mac 还没有 SSH 密钥" \
+			"message=${F_host} 只认 SSH 密钥、不让用密码登录，这台 Mac 上还没有密钥（~/.ssh/id_ed25519 这类）。生成一把以后，下一页给出把它加到服务器上的那一行。别的地方有能登录这台服务器的私钥的话，${pass}（ssh 的配置里写好 IdentityFile，或者 cca hub deploy ${t} -i 私钥）"
+		gui_kv field=next kind=choice "label=怎么办" default=keygen "error=$err" \
+			"opt=keygen"$'\t'"生成一把密钥"$'\t'"~/.ssh/id_ed25519（ed25519，没有密码），只在这台 Mac 上" \
+			"opt=terminal"$'\t'"在终端里部署"$'\t'"用别的私钥：在终端里运行 cca hub deploy ${t}"
+	fi
+}
+
+hub_pubkey_ask() {   # App 里部署时服务器只认密钥、不认这台设备的（ssh_keyonly）：一页（hub.pubkey）给出在服务器上运行的那一行（把这台设备的公钥加进
+	                   # authorized_keys），选「加好了，再试」再查登录得上不，还不行带着原因重问；这台设备还没有密钥的先问要不要生成一把（ed25519，没有
+	                   # 密码）；私钥有密码（App 里没法输）、要用别的私钥的选「在终端里部署」：terminal 事件带上服务器（cca hub deploy 目标 -p 端口），
+	                   # 退出码非 0，App 交给终端。登录得上返回 0；服务器这回认密码了返回 1（接着问密码）。变量是 hub_deploy_ask 的（F_host F_user F_port、out）
+	local key line seq err=""
+	while :; do
+		key=$(hub_key_file) || key=""
+		line=""
+		[ -z "$key" ] || line="mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo $(shq "$(head -n 1 "$key.pub")") >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+		seq=$(hub_pubkey_spec | py prompt-emit) || gui_abort
+		gui_answer "$seq" next
+		case "$ANSWER" in
+			terminal)
+				gui_terminal hub_deploy "${F_host} 只认 SSH 密钥：在终端里部署（私钥有密码的话在那里输）" hub deploy "${F_user}@${F_host}" -p "$F_port"
+				FAIL_CODE=hub_ssh die "在终端里运行 cca hub deploy ${F_user}@${F_host} -p ${F_port}" ;;
+			keygen)
+				err=""
+				if [ -e "$HOME/.ssh/id_ed25519" ]; then err="~/.ssh/id_ed25519 已经有了，但旁边没有它的公钥文件（id_ed25519.pub）：在终端里运行 ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub 补上"; continue; fi
+				mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" \
+					&& ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519" </dev/null >/dev/null 2>&1 \
+					|| err="没生成成密钥（ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 没成）"
+				continue ;;
+			retry) ;;
+			*) gui_abort ;;
+		esac
+		out=$(py hub-deploy "${F_user}@${F_host}" --ssh-port "$F_port" --batch --check) && return 0
+		case "${out%%$'\t'*}" in
+			ssh_keyonly) err="还是登录不了：服务器还不认这把公钥（加给了 ${F_user} 吗？authorized_keys 和 ~/.ssh 的权限对吗？）" ;;
+			ssh_auth) return 1 ;;   # 这回认密码了（服务器改了设置）：回去问密码
 			ssh*) FAIL_CODE=hub_ssh die "${out#*$'\t'}" ;;
 			*) hub_fail "$out" "没登录上 ${F_host}" ;;
 		esac
@@ -6717,10 +6803,14 @@ hub_deploy() {   # cca hub deploy [用户@]主机 [选项]：经 SSH 把自己�
 		esac
 		shift
 	done
-	if [ -z "$target" ]; then
-		[ -n "$PROMPT_GUI" ] || FAIL_CODE=hub_usage die "$HUB_DEPLOY_USAGE"
+	if [ -z "$target" ] && [ -n "$PROMPT_GUI" ]; then
 		hub_deploy_ask || return 1
 		target="${F_user}@${F_host}" asked=1
+		args+=(--ssh-port "$F_port")
+	elif [ -z "$target" ]; then
+		interactive || FAIL_CODE=hub_usage die "$HUB_DEPLOY_USAGE"
+		hub_deploy_where || return 1   # 终端里没写服务器（App 里「改在终端里完成」也是这样来的）：问一遍
+		target="${F_user}@${F_host}"
 		args+=(--ssh-port "$F_port")
 	fi
 	# ssh 问密码、问要不要认这台主机都经终端：没有终端（App 里）时不让它问（App 里要密码的上面问过了）
