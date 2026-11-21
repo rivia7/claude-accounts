@@ -1,14 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// 「远程会话」一页（PROTOCOL 9）：这台 Mac 上和配对过的机器上可以接入的会话、配对过的机器；接入一个会话时整页换成一块终端
+/// 「远程会话」一页（PROTOCOL 9）：这台 Mac 上和配对过的机器上可以接入的会话、配对过的机器；接入一个会话就是在这一页里开一块终端
 /// （`cca remote attach` 跑在 App 开的伪终端上，SwiftTerm 画）。有哪些会话、接不接得上、对方让做什么都是 cca 给的，这里不重算。
-/// 一次接一个：终端开着时这一页就是它，「断开」回到列表。只有 cca 有远程会话（`hello.remote`）时侧栏才列这一页。
+/// 可以同时接着几个：开着终端时页顶多出一排（`RemoteTabStrip`：会话列表、每个终端各一格），点哪个显示哪个，别的照样接着。
+/// 只有 cca 有远程会话（`hello.remote`）时侧栏才列这一页。
 struct RemoteSessionsPage: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if !model.remoteTerminals.isEmpty { RemoteTabStrip() }
             if let t = model.remoteTerminal {
                 RemoteTerminalPane(terminal: t).id(t.id)
             } else {
@@ -16,6 +18,106 @@ struct RemoteSessionsPage: View {
             }
         }
         .navigationTitle("远程会话")
+    }
+}
+
+// MARK: 切换
+
+/// 页顶的一排：最左边是「会话列表」，后面是开着的每个终端（按接入的先后）。点一格显示它；终端那几格右边的 × 是断开并关掉。
+/// 放不下时横着滚。显示菜单里另有「下一个 / 上一个远程会话」（⇧⌘] / ⇧⌘[，`AppModel.cycleRemote`）。
+private struct RemoteTabStrip: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                RemoteTab(selected: model.remoteTerminal == nil, help: "可以接入的会话、配对过的机器；开着的终端照样接着") {
+                    model.showRemoteList()
+                } label: {
+                    Label("会话列表", systemImage: "list.bullet")
+                }
+                ForEach(model.remoteTerminals) { t in
+                    RemoteTab(selected: model.remoteShown == t.id, help: place(t),
+                              close: { model.closeRemoteTerminal(t) },
+                              closeHelp: t.hasEnded ? "关掉这个终端" : "断开并关掉这个终端；会话在那边照常运行") {
+                        model.showRemoteTerminal(t)
+                    } label: {
+                        HStack(spacing: 7) {
+                            RemoteTerminalDot(status: t.status)
+                            Text(Texts.remoteTab(t.session)).truncationMode(.middle).frame(maxWidth: 230)
+                            if t.readOnly { Image(systemName: "eye").font(.caption).accessibilityLabel("只看") }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.top, 12)
+        .accessibilityLabel("开着的终端")
+    }
+
+    private func place(_ t: RemoteTerminal) -> String {
+        let s = t.session
+        return [s.isLocal ? "这台 Mac" : nonEmpty(s.machine) ?? "另一台机器", nonEmpty(s.cwd), t.hasEnded ? "已经断开" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// 那一排里的一格：选中的那格底色深一点、字是正文色，别的是灰字。右边可以带一个关掉的 ×（单独的按钮，不套在大的里面）。
+private struct RemoteTab<Content: View>: View {
+    let selected: Bool
+    let help: String
+    var close: (() -> Void)?
+    var closeHelp = ""
+    let action: () -> Void
+    @ViewBuilder let label: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: action) {
+                label
+                    .lineLimit(1)
+                    .padding(.leading, 11).padding(.trailing, close == nil ? 11 : 5)
+                    .frame(height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(help)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            if let close {
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                        .frame(width: 20, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 4)
+                .help(closeHelp)
+                .accessibilityLabel(closeHelp)
+            }
+        }
+        .font(.callout.weight(selected ? .semibold : .regular))
+        .foregroundStyle(selected ? Color.primary : Color.secondary)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary.opacity(selected ? 1 : 0.35)))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// 一个终端的状态点：接着是绿的，还没起是淡的，断开、结束了是空心的。
+private struct RemoteTerminalDot: View {
+    let status: RemoteTerminal.Status
+
+    var body: some View {
+        Group {
+            switch status {
+            case .running: Circle().fill(.green)
+            case .waiting: Circle().fill(.quaternary)
+            default: Circle().strokeBorder(.secondary, lineWidth: 1.5)
+            }
+        }
+        .frame(width: 8, height: 8)
+        .accessibilityHidden(true)
     }
 }
 
@@ -215,6 +317,8 @@ private struct RemoteSessionLine: View {
     var body: some View {
         let detail = Texts.remoteDetail(session, now: now)
         let canEnd = session.isLocal && model.remoteEndAvailable
+        // 这个会话在这里已经接着（开着它的终端、还没断开）：右边是「切换」，不再接一次
+        let open = model.remoteTerminal(for: session).flatMap { $0.hasEnded ? nil : $0 }
         HStack(spacing: 10) {
             Group {
                 switch session.state {
@@ -229,6 +333,7 @@ private struct RemoteSessionLine: View {
                 HStack(spacing: 8) {
                     Text(nonEmpty(Texts.remoteTitle(session)) ?? session.short).fontWeight(.medium).lineLimit(1)
                     if session.access == .view { Tag(text: "只看", systemImage: "eye") }
+                    if open?.isRunning == true { Tag(text: "已接入", color: .green) }
                 }
                 if !detail.isEmpty {
                     Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).monospacedDigit()
@@ -242,7 +347,19 @@ private struct RemoteSessionLine: View {
                     .disabled(model.remoteBusy)
                     .help("结束这个会话：等于关掉它的终端，里面的程序会退出（先问一句）")
             }
-            if let note = Texts.remoteStateNote(session) {
+            if let open {
+                // 换一种接法（只看 / 操作）是断开原来的再接一次：放在右键里，那台机器只让看的没有这一项
+                RowAction("切换", systemImage: "arrow.right.circle") { model.showRemoteTerminal(open) }
+                    .help(session.access == .view ? "已经接入了：换到它的终端" : "已经接入了：换到它的终端（右键可以改成\(open.readOnly ? "操作" : "只看")）")
+                    .contextMenu {
+                        Button("切换到它的终端") { model.showRemoteTerminal(open) }
+                        if session.access != .view {
+                            Button(open.readOnly ? "改成可以操作（重新接入）" : "改成只看（重新接入）") {
+                                model.attachRemote(session, readOnly: !open.readOnly)
+                            }
+                        }
+                    }
+            } else if let note = Texts.remoteStateNote(session) {
                 Text(note).foregroundStyle(.secondary)
             } else if session.access == .view {
                 RowAction("只看", systemImage: "eye") { model.attachRemote(session, readOnly: true) }
@@ -294,8 +411,8 @@ private struct RemotePeerLine: View {
 
 // MARK: 终端
 
-/// 接着一个会话时的这一页：上面一行是哪个会话、在哪台机器，右边「断开」；下面整块是终端。会话自己结束、连接断了时终端留着
-/// （看得到最后的输出），上面说一句怎么了，可以重新接入或者回到列表。
+/// 显示一个终端时的这一页：上面一行是哪个会话、在哪台机器，右边「断开」（断开并关掉这一个，别的照样接着）；下面整块是终端。
+/// 会话自己结束、连接断了时终端留着（看得到最后的输出），上面说一句怎么了，可以重新接入或者关掉它。
 private struct RemoteTerminalPane: View {
     @Environment(AppModel.self) private var model
     let terminal: RemoteTerminal
@@ -322,15 +439,7 @@ private struct RemoteTerminalPane: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            Group {
-                switch terminal.status {
-                case .running: Circle().fill(.green)
-                case .waiting: Circle().fill(.quaternary)
-                default: Circle().strokeBorder(.secondary, lineWidth: 1.5)
-                }
-            }
-            .frame(width: 8, height: 8)
-            .accessibilityHidden(true)
+            RemoteTerminalDot(status: terminal.status)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(nonEmpty(Texts.remoteTitle(terminal.session)) ?? terminal.session.short).font(.title3.weight(.semibold)).lineLimit(1)
@@ -344,10 +453,11 @@ private struct RemoteTerminalPane: View {
                 if let s = model.remote.doc?.session(terminal.session.id), s.attachable {
                     SectionAction("重新接入", systemImage: "arrow.clockwise") { model.attachRemote(s, readOnly: terminal.readOnly) }
                 }
-                SectionAction("返回列表", systemImage: "list.bullet") { model.closeRemoteTerminal() }
+                SectionAction("关闭", systemImage: "xmark.circle") { model.closeRemoteTerminal(terminal) }
+                    .help("关掉这个终端（最后的输出不留）")
             } else {
-                SectionAction("断开", systemImage: "xmark.circle") { model.closeRemoteTerminal() }
-                    .help("断开这个终端、回到列表；会话在那边照常运行")
+                SectionAction("断开", systemImage: "xmark.circle") { model.closeRemoteTerminal(terminal) }
+                    .help("断开并关掉这个终端；会话在那边照常运行，别的终端照样接着")
             }
         }
         .frame(minHeight: 36)
@@ -396,8 +506,9 @@ struct RemoteSessionsRow: View {
                 Text("接入别处运行的会话").font(.caption).foregroundStyle(.plainSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)
-            if model.remoteTerminal?.isRunning == true {
-                Tag(text: "已接入", color: .green)
+            let n = model.remoteAttachedCount
+            if n > 0 {
+                Tag(text: n == 1 ? "已接入" : "已接入 \(n) 个", color: .green)
             }
         }
         .sidebarRowPadding()

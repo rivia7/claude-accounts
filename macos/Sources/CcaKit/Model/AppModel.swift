@@ -1706,8 +1706,21 @@ final class AppModel {
     private(set) var remoteLoading = false
     /// 正在改开关、改某台机器能做什么、取消配对（按钮先停用）
     private(set) var remoteBusy = false
-    /// 界面里开着的终端（一次接一个会话）；断开、会话结束以后还留着（看得到最后的输出），关掉才没有
-    private(set) var remoteTerminal: RemoteTerminal?
+    /// 界面里开着的终端：可以同时接着几个会话，各是各的 `cca remote attach`，按接入的先后排（一个会话在这里只开一个）。
+    /// 断开、会话结束以后还留着（看得到最后的输出），关掉才没有
+    private(set) var remoteTerminals: [RemoteTerminal] = []
+    /// 这一页现在显示哪一个终端；nil 是会话列表（开着的终端照样接着）
+    private(set) var remoteShown: RemoteTerminal.ID?
+    /// 现在显示的那个终端
+    var remoteTerminal: RemoteTerminal? {
+        guard let id = remoteShown else { return nil }
+        return remoteTerminals.first { $0.id == id }
+    }
+    /// 还接着的有几个（侧栏那一行说一声）
+    var remoteAttachedCount: Int { remoteTerminals.filter { $0.isRunning }.count }
+    /// 最多同时开几个终端：每个都是一个进程、在会话那边占一处接入（窗口大小要照顾它）；接着别的机器的那些断线时各自重试，
+    /// 都要问维护者的服务器，而服务器给每台设备限了流
+    static let remoteTerminalLimit = 8
     @ObservationIgnored private var remoteAgain = false
 
     var remoteVisible: Bool { mainVisible && selection == .remoteSessions }
@@ -1791,32 +1804,91 @@ final class AppModel {
         run(show ? .remotePair : .remoteJoin)
     }
 
-    /// 接入一个会话：在这一页里开一个终端。已经开着一个时先断开它（一次接一个）。cca 说接不上的（`state` 不是 ok）不接
+    /// 这个会话在这里开着的终端（没有就是 nil；断开了、结束了但还没关掉的也算）
+    func remoteTerminal(for session: RemoteSession) -> RemoteTerminal? {
+        remoteTerminals.first { $0.session.id == session.id }
+    }
+
+    /// 接入一个会话：在这一页里开一个终端、显示它，别的终端照样接着。这个会话已经有一个还接着的终端、要的又是同一种接法
+    /// （操作 / 只看）：换过去就行，不再接一次。它的终端已经断开、结束了，或者要换一种接法：原地换成新的（原来的断开）。
+    /// 开满了（`remoteTerminalLimit`）说一声、不接。cca 说接不上的（`state` 不是 ok）不接
     func attachRemote(_ session: RemoteSession, readOnly: Bool) {
         guard phase == .ready, remoteAvailable, session.attachable, let client else { return }
-        remoteTerminal?.close()
-        let t = RemoteTerminal(session: session, readOnly: readOnly || session.access == .view) { arguments, cols, rows, onEvent in
+        let viewing = readOnly || session.access == .view
+        let old = remoteTerminal(for: session)
+        if let old, !old.hasEnded, old.readOnly == viewing {
+            showRemoteTerminal(old)
+            return
+        }
+        if old == nil, remoteTerminals.count >= AppModel.remoteTerminalLimit {
+            showToast("最多同时开 \(AppModel.remoteTerminalLimit) 个终端：先关掉一个再接入", .warning)
+            return
+        }
+        let t = RemoteTerminal(session: session, readOnly: viewing) { arguments, cols, rows, onEvent in
             try client.startTerminal(arguments, cols: cols, rows: rows, onEvent: onEvent)
         }
         t.onEnd = { [weak self] _ in self?.refreshRemote(manual: true) }
-        remoteTerminal = t
+        if let old, let i = remoteTerminals.firstIndex(where: { $0 === old }) {
+            old.close()
+            remoteTerminals[i] = t
+        } else {
+            remoteTerminals.append(t)
+        }
+        showRemoteTerminal(t)
+    }
+
+    /// 换到一个开着的终端（别的照样接着）
+    func showRemoteTerminal(_ terminal: RemoteTerminal) {
+        guard remoteTerminals.contains(where: { $0 === terminal }) else { return }
+        remoteShown = terminal.id
         selection = .remoteSessions
         hooks.showMainWindow()
     }
 
-    /// 主窗口关了（不是被挡住、最小化）：没人看着的终端断开，免得它一直占着一处接入（会话的窗口大小还得照顾它）
-    func mainWindowClosed() {
-        remoteTerminal?.close()
+    /// 回到会话列表：开着的终端照样接着
+    func showRemoteList() {
+        remoteShown = nil
+        selection = .remoteSessions
     }
 
-    /// 关掉终端这一块，回到列表（还接着的话先断开）。列表只查一次：还接着的等进程真的退出时查（`onEnd`：那时这一处接入才算走了），
-    /// 早就结束了的现在查
-    func closeRemoteTerminal() {
-        guard let t = remoteTerminal else { return }
+    /// 在「会话列表、各个终端」这一排里往后（+1）、往前（-1）换一个，到头了转回来。没有开着的终端时什么都不做。
+    /// 在别的页时只是先到这一页（显示的还是上次那个）：不然等于跳过了一个没看见的
+    func cycleRemote(by step: Int) {
+        guard !remoteTerminals.isEmpty else { return }
+        guard selection == .remoteSessions else {
+            selection = .remoteSessions
+            hooks.showMainWindow()
+            return
+        }
+        let n = remoteTerminals.count + 1   // 第 0 个是会话列表
+        let now = remoteTerminals.firstIndex { $0.id == remoteShown }.map { $0 + 1 } ?? 0
+        let next = ((now + step) % n + n) % n
+        if next == 0 { showRemoteList() } else { showRemoteTerminal(remoteTerminals[next - 1]) }
+    }
+
+    /// 主窗口关了（不是被挡住、最小化）：没人看着的终端都断开，免得它们一直各占着一处接入（会话的窗口大小还得照顾它们）
+    func mainWindowClosed() {
+        for t in remoteTerminals { t.close() }
+    }
+
+    /// 关掉一个终端（不说是哪个就是正显示的那个；还接着的话先断开）。关的是正显示的：换到它旁边的那个，一个都不剩就回到列表。
+    /// 列表只查一次：还接着的等进程真的退出时查（`onEnd`：那时这一处接入才算走了），早就结束了的现在查
+    func closeRemoteTerminal(_ terminal: RemoteTerminal? = nil) {
+        guard let t = terminal ?? remoteTerminal, let i = remoteTerminals.firstIndex(where: { $0 === t }) else { return }
         let ended = t.hasEnded
         t.close()
-        remoteTerminal = nil
+        remoteTerminals.remove(at: i)
+        if remoteShown == t.id {
+            remoteShown = remoteTerminals.isEmpty ? nil : remoteTerminals[min(i, remoteTerminals.count - 1)].id
+        }
         if ended { refreshRemote(manual: true) }
+    }
+
+    /// 都断开、都关掉（cca 换成了没有远程会话的旧版；截图场景收场）
+    func closeAllRemoteTerminals() {
+        for t in remoteTerminals { t.close() }
+        remoteTerminals = []
+        remoteShown = nil
     }
 
     // MARK: 折合金额（PROTOCOL 2.2、3.5）
@@ -2283,7 +2355,7 @@ final class AppModel {
     /// 退出前：取消 usage / check / live / 检查更新 / 更新的子进程（SIGTERM 进程组）。app、web、router sync、重置额度不杀：
     /// 它们的输出接文件，App 退出后照样跑完。内置代理的内核停掉并等它退出（App 托管它，App 退出它就停）。
     func shutdown() {
-        remoteTerminal?.close()   // 界面里的终端：断开（会话在那边照常运行）
+        for t in remoteTerminals { t.close() }   // 界面里的终端：都断开（会话在那边照常运行）
         coreHost?.shutdown()
         scheduler.stop()
         watcher?.stop()
@@ -2477,10 +2549,7 @@ final class AppModel {
     private func fixSelection() {
         if !visibleTools.contains(tool) { tool = .claude }
         // 换成了没有远程会话的旧版 cca：那一页没了，开着的终端也断开（不然没有入口能断开它）
-        if !remoteAvailable, let t = remoteTerminal {
-            t.close()
-            remoteTerminal = nil
-        }
+        if !remoteAvailable, !remoteTerminals.isEmpty { closeAllRemoteTerminals() }
         switch selection {
         case .office?, .usageStats?, .routing?, .clientUpdates?:
             return

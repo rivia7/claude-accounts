@@ -73,7 +73,7 @@ bash macos/build.sh --debug --out "$PWD/macos/build/debug/cca.app"
 CCA_GUI_FIXTURES="$PWD/macos/Tests/Fixtures" CCA_GUI_SNAPSHOT=/tmp/shots macos/build/debug/cca.app/Contents/MacOS/cca
 ```
 
-只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、cost / cost-wide / cost-day / cost-me / cost-device（折合金额页：所有设备按周、宽窗口 1680×1000、按日、本机、另一台设备按日）、account-cost / account-cost-day / account-cost-me / account-cost-device / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、很久没同步上来的另一台设备、还没有记录、ChatGPT 账号）、remote / remote-terminal / remote-terminal-view / remote-off（远程会话页）、sharing（共享与同步页）、pinned（有置顶账号的总览和侧栏），
+只有调试版（`-D DEBUG`，`Snapshot.swift`）有：演示模式下依次切到几个场景（claude、claude-loggedout、claude-api、routing、codex、agy（要带 `CCA_GUI_FIXTURE_HELLO=hello_agy.json CCA_GUI_FIXTURE_STATE=state_agy.json`）、empty、office、client-updates、stats（用量统计页）、cost / cost-wide / cost-day / cost-me / cost-device（折合金额页：所有设备按周、宽窗口 1680×1000、按日、本机、另一台设备按日）、account-cost / account-cost-day / account-cost-me / account-cost-device / account-cost-empty / account-cost-codex（账号页的「折合金额」：按周、按日、本机、很久没同步上来的另一台设备、还没有记录、ChatGPT 账号）、remote / remote-terminal / remote-terminal-view / remote-tabs-list / remote-off（远程会话页：列表、接入一个、再接入一个只看的、两个接着时回到列表）、sharing（共享与同步页）、pinned（有置顶账号的总览和侧栏），
 再加上提问会话每一页的 flow-*、菜单栏面板 menubar、显示细节时的 details（账号页、分流页、折合金额）、直接改别名的 rename、卡片教程每一步的 tutorial、每个版本“更新了什么”的 whatsnew、
 检查更新找到新版本时顶上的提示条 update、插画画廊 gallery：每种状态 × 几种档位，不依赖演示数据，调插画用；office 是总览页），每个截浅色、深色两张 PNG 后退出。截图时窗口不在前台，插画是静止的那一帧。`CCA_GUI_SNAPSHOT_SCENES=claude,routing` 只截这几个，
 `CCA_GUI_SNAPSHOT_SIZE=1080x1240` 换窗口大小（看整页、看最小的 860 宽、`1900x1080` 看全屏时的两栏）。只截自己的窗口（`SCShareableContent.currentProcess`），
@@ -237,9 +237,11 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   只让看时是「只看」），接不上的说原因；这台 Mac 上的会话那几行另有「结束…」（等于关掉它的终端；cca 先发同意事件，照它给的话问一句；
   要 `hello.remote_end`）；「配对过的机器」每行能改它对这台 Mac 的会话能做什么（看和操作 / 只看 / 不让接入）、取消配对（先问一句），
   标题上「显示配对码…」「输入配对码…」是提问会话。接入以后整页换成一块终端（`cca remote attach` 跑在 App 开的伪终端上，SwiftTerm 画；底色始终是黑的，不跟浅色、深色），
-  上面一行说是哪个会话、右边「断开」；一次接一个，换到别的页还接着，主窗口关了、退出 App 断开。连接断了时接入端自己重新接上
+  上面一行说是哪个会话、右边「断开」（断开并关掉这一个）。可以同时接着几个会话（最多 8 个）：开着终端时页顶多出一排，「会话列表」和每个终端
+  各一格，点哪个显示哪个（显示菜单里「下一个 / 上一个远程会话」，⇧⌘] / ⇧⌘[），别的照样接着；列表里已经接着的会话那一行是「已接入」「切换」，
+  侧栏那一行说接着几个。换到别的页还接着，主窗口关了、退出 App 都断开。连接断了时接入端自己重新接上
   （终端里说一句，App 不用管）。会话自己结束、没重新接上时终端留着，
-  上面说一句怎么了，可以「重新接入」「返回列表」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
+  上面说一句怎么了，可以「重新接入」「关闭」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
 - **共享与同步**（`SharingPage`，PROTOCOL 4.12、4.13；`config.policy` 带 `state` 时侧栏才有这一页）：维护者共享的账号的开关，默认关着。开关、那句说明和下面几行明细
   （映射仓库、账号表里共享的账号几个、关掉时收起来几个）都照 cca 给的 `state`、`accounts`、`parked`，不在界面里重算；在等维护者加公钥时侧栏这一行挂「等维护者」。
   打开是提问会话（`cca policy on`：问仓库、给维护者的那一行，和配置向导第 1 步同一页），关掉先问同意（`consent` 的 `detail` 说会移出哪些账号），

@@ -335,29 +335,117 @@ func remoteProtocolTests() {
     check("那台机器只让看：带 -r", m.remoteTerminal?.readOnly == true && t.terminals.last?.arguments == ["remote", "attach", "-r", viewOnly.id])
     t.terminals.last?.emit(.exited(3))
     check("会话自己结束：记下退出码，不算这边断开的", m.remoteTerminal?.status == .ended(3) && m.remoteTerminal?.closedByUser == false)
-    // 已经开着一个时再接入另一个：先断开原来的
+    // 同时接着几个：再接入另一个会话，原来的终端留着
     m.attachRemote(far, readOnly: true)
     m.remoteTerminal?.resize(cols: 80, rows: 24)
     let first = t.terminals.last!
+    check("再接入别的会话：原来那个终端留着，新的排在后面、显示的是它",
+          m.remoteTerminals.map { $0.session.id } == [viewOnly.id, far.id] && m.remoteTerminal?.session.id == far.id
+          && first.arguments == ["remote", "attach", "-r", far.id])
+    m.attachRemote(viewOnly, readOnly: true)
+    m.remoteTerminal?.resize(cols: 80, rows: 24)
+    let second = t.terminals.last!
+    check("已经结束的那个会话再接入：原地换成新的终端，别的照样接着",
+          m.remoteTerminals.map { $0.session.id } == [viewOnly.id, far.id] && m.remoteTerminals.first?.status == .running
+          && m.remoteTerminal?.session.id == viewOnly.id && first.closed == 0 && t.terminals.count == 4 && m.remoteAttachedCount == 2)
+    m.attachRemote(far, readOnly: true)
+    check("已经接着的会话再接入（同一种接法）：换过去，不再接一次", m.remoteTerminal?.session.id == far.id && t.terminals.count == 4 && m.remoteTerminals.count == 2)
     _ = await waitUntil { !m.remoteLoading }
     let swapped = asked().count
-    m.attachRemote(viewOnly, readOnly: true)
-    check("一次接一个：再接入别的，原来的先断开", first.closed == 1 && m.remoteTerminal?.session.id == viewOnly.id && first.arguments == ["remote", "attach", "-r", far.id])
+    m.attachRemote(far, readOnly: false)
+    m.remoteTerminal?.resize(cols: 80, rows: 24)
+    check("换一种接法（只看换成操作）：原地换成新的，原来的断开",
+          first.closed == 1 && m.remoteTerminals.map { $0.session.id } == [viewOnly.id, far.id] && m.remoteTerminals.last?.readOnly == false
+          && t.terminals.last?.arguments == ["remote", "attach", far.id] && second.closed == 0)
+    let third = t.terminals.last!
     check("断开的那一刻不查列表：等它的进程真的退出", asked().count == swapped)
     first.emit(.exited(0))
     let after = await waitUntil { asked().count == swapped + 1 && !m.remoteLoading }
     check("原来那个进程退出了：查一次", after)
+
+    // 切换：会话列表和各个终端排成一排
+    m.showRemoteList()
+    check("回到会话列表：终端照样接着", m.remoteTerminal == nil && m.remoteTerminals.count == 2 && m.remoteAttachedCount == 2 && second.closed == 0)
+    m.cycleRemote(by: 1)
+    let hop1 = m.remoteTerminal?.session.id
+    m.cycleRemote(by: 1)
+    let hop2 = m.remoteTerminal?.session.id
+    m.cycleRemote(by: 1)
+    check("往后换：列表 → 第一个 → 第二个 → 转回列表", hop1 == viewOnly.id && hop2 == far.id && m.remoteTerminal == nil)
+    m.cycleRemote(by: -1)
+    check("往前换：从列表转到最后一个", m.remoteTerminal?.session.id == far.id)
+    m.cycleRemote(by: -1)
+    check("往前换：从最后一个到它前面那个", m.remoteTerminal?.session.id == viewOnly.id)
+    m.selection = .office
+    m.cycleRemote(by: 1)
+    check("在别的页时换：先到这一页，显示的还是上次那个（不跳过没看见的）", m.selection == .remoteSessions && m.remoteTerminal?.session.id == viewOnly.id)
+    m.selection = .office
+    m.showRemoteList()
+    check("回到会话列表：人也到这一页", m.selection == .remoteSessions && m.remoteTerminal == nil)
+    m.selection = .office
+    m.showRemoteTerminal(m.remoteTerminals[0])
+    check("换到一个终端：回到这一页、显示它", m.selection == .remoteSessions && m.remoteTerminal?.session.id == viewOnly.id)
+    check("开着的终端那一排里的名字：带上文件夹的最后一段", Texts.remoteTab(far) == "Claude Code · 工作 · api" && Texts.remoteTab(viewOnly) == "Codex · dave · jobs",
+          Texts.remoteTab(far) + " / " + Texts.remoteTab(viewOnly))
     let offline = m.remote.doc!.sessions.first { !$0.attachable }!
     m.attachRemote(offline, readOnly: false)
-    check("cca 说接不上的会话不接", m.remoteTerminal?.session.id == viewOnly.id)
-    // 没量好大小就关掉
-    let pending = m.remoteTerminal!
+    check("cca 说接不上的会话不接", m.remoteTerminals.count == 2 && m.remoteTerminal?.session.id == viewOnly.id)
+
+    // 关掉一个：别的照样接着
     m.closeRemoteTerminal()
-    check("还没起进程就关掉：不起了", pending.status == .ended(0) && t.terminals.count == 3)
+    check("关掉正显示的那个：断开它，换到旁边的一个，别的照样接着",
+          second.closed == 1 && m.remoteTerminals.map { $0.session.id } == [far.id] && m.remoteTerminal?.session.id == far.id && third.closed == 0)
+    // 没量好大小就关掉
+    m.attachRemote(viewOnly, readOnly: true)
+    let pending = m.remoteTerminal!
+    let started = t.terminals.count
+    m.showRemoteList()
+    m.closeRemoteTerminal(pending)
+    check("还没起进程就关掉：不起了；关的不是正显示的：显示的不变",
+          pending.status == .ended(0) && t.terminals.count == started && m.remoteTerminal == nil && m.remoteTerminals.count == 1)
+
+    // 开满了不再接
+    var extra: [RemoteSession] = []
+    for i in 0..<AppModel.remoteTerminalLimit {
+        var s = far
+        s.id = String(format: "%032lx", 0xabc000 + i)
+        extra.append(s)
+        m.attachRemote(s, readOnly: false)
+    }
+    check("最多同时开 \(AppModel.remoteTerminalLimit) 个终端：再多的不接，说一声",
+          m.remoteTerminals.count == AppModel.remoteTerminalLimit && m.remoteTerminal(for: extra.last!) == nil && m.toast?.text.contains("最多同时开") == true
+          && m.remoteTerminal?.session.id == extra[extra.count - 2].id && third.closed == 0,
+          "\(m.remoteTerminals.count) \(String(describing: m.toast))")
+    // 关掉排在最后的那个（正显示着）：换到它前面的；关到一个不剩：回到列表
+    m.closeRemoteTerminal()
+    check("关掉正显示的、排在最后的那个：换到它前面的一个",
+          m.remoteTerminals.count == AppModel.remoteTerminalLimit - 1 && m.remoteTerminal?.session.id == extra[extra.count - 3].id)
+    for s in extra { if let x = m.remoteTerminal(for: s) { m.closeRemoteTerminal(x) } }
+    check("一个个关掉：剩下原来那一个，显示的换成它", m.remoteTerminals.map { $0.session.id } == [far.id] && m.remoteTerminal?.session.id == far.id)
+    let lone = m.remoteTerminals[0]
+    m.closeRemoteTerminal()
+    check("关掉最后一个：回到会话列表，它的进程断开", m.remoteTerminals.isEmpty && m.remoteTerminal == nil && m.remoteShown == nil && third.closed == 1 && lone.closedByUser)
+    third.emit(.exited(0))
     m.attachRemote(far, readOnly: false)
     m.remoteTerminal?.resize(cols: 80, rows: 24)
+    let fifth = t.terminals.last!
+
+    // 主窗口关了、退出 App：开着的都断开
+    m.attachRemote(viewOnly, readOnly: true)
+    m.remoteTerminal?.resize(cols: 80, rows: 24)
+    let fourth = t.terminals.last!
+    m.mainWindowClosed()
+    check("主窗口关了：开着的终端都断开（终端留着，看得到最后的输出）",
+          fifth.closed == 1 && fourth.closed == 1 && fourth.arguments == ["remote", "attach", "-r", viewOnly.id] && m.remoteTerminals.count == 2)
+    fifth.emit(.exited(0)); fourth.emit(.exited(0))
+    m.closeAllRemoteTerminals()
+    m.attachRemote(far, readOnly: false)
+    m.remoteTerminal?.resize(cols: 80, rows: 24)
+    m.attachRemote(viewOnly, readOnly: true)
+    m.remoteTerminal?.resize(cols: 80, rows: 24)
+    let last2 = t.terminals.suffix(2)
     m.shutdown()
-    check("退出 App：断开终端", t.terminals.last?.closed == 1)
+    check("退出 App：开着的终端都断开", last2.count == 2 && last2.allSatisfy { $0.closed == 1 })
 
     // 还没接上视图时输出太多：只留最近的
     let big = RemoteTerminal(session: far, readOnly: false) { args, cols, rows, onEvent in FakeTerminal(arguments: args, cols: cols, rows: rows, onEvent: onEvent) }

@@ -64,7 +64,9 @@ final class TerminalSurface {
         guard view.window != nil, view.frame.width > 1, view.frame.height > 1 else { return }
         sizing?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, let t = self.terminal, self.view.window != nil else { return }
+            guard let self, let t = self.terminal else { return }
+            // 头一次（进程还没起）视图已经不在窗口里了也照量好的大小起：刚接入就换到了别的终端时，不然它一直等着、没接上
+            guard self.view.window != nil || self.reported == nil else { return }
             let term = self.view.getTerminal()
             let cols = term.cols, rows = term.rows
             guard cols >= 2, rows >= 1 else { return }

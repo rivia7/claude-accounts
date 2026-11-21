@@ -288,6 +288,13 @@ enum Texts {
         [s.tool.map { cliProduct($0) }, nonEmpty(s.name)].compactMap { $0 }.joined(separator: " · ")
     }
 
+    /// 开着的终端那一排里，一个会话的名字：标题后面带上文件夹的最后一段（同一个账号开着几个会话时分得开）：「Claude Code · 工作 · api」
+    static func remoteTab(_ s: RemoteSession) -> String {
+        let title = nonEmpty(remoteTitle(s)) ?? s.short
+        guard let last = nonEmpty(s.cwd)?.split(separator: "/").last.map(String.init), last != "~" else { return title }
+        return title + " · " + last
+    }
+
     /// 会话里跑的是哪个命令行工具（这里说的是终端里的工具，不是账号的品牌）
     static func cliProduct(_ tool: ToolID) -> String {
         switch tool {

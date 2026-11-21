@@ -161,9 +161,10 @@ enum Snapshot {
                 m.costGranularity = .week
                 if let r = first(.codex, { $0.cost != nil }) { m.showCost(r) }
             },
-            // 远程会话：列表（这台 Mac 上的、配对过的机器上的、配对过的机器），接着一个会话时的终端（演示数据是一屏示意）
+            // 远程会话：列表（这台 Mac 上的、配对过的机器上的、配对过的机器）；接入一个会话（页顶多出一排：会话列表、这个终端）；
+            // 再接入一个只看的（两个终端都接着，显示的是新的）；回到会话列表（两个照样接着：那两行是「已接入」「切换」）。演示数据是一屏示意
             Scene(name: "remote") { m in
-                m.closeRemoteTerminal()
+                m.closeAllRemoteTerminals()
                 m.selection = .remoteSessions
                 m.refreshRemote(manual: true)   // 窗口在后面，不算看得见：自己查一次
             },
@@ -179,8 +180,12 @@ enum Snapshot {
                     m.attachRemote(s, readOnly: true)
                 }
             },
+            Scene(name: "remote-tabs-list") { m in
+                m.selection = .remoteSessions
+                m.showRemoteList()
+            },
             Scene(name: "remote-off") { m in
-                m.closeRemoteTerminal()
+                m.closeAllRemoteTerminals()
                 m.selection = .office
             },
             // 共享与同步：维护者共享的账号的开关（演示数据里开着、拉到了映射）、自己的同步服务器（加入着，最近一次没同步成）和上面的设备

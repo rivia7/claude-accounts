@@ -80,6 +80,14 @@ struct CcaApp: App {
                         Text(m.title).tag(m)
                     }
                 }
+                // 「远程会话」页里开着几个终端时在它们之间换（连同会话列表那一格，到头了转回来）；在别的页时先换到那一页
+                Divider()
+                Button("下一个远程会话") { delegate.model.cycleRemote(by: 1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled(delegate.model.remoteTerminals.isEmpty)
+                Button("上一个远程会话") { delegate.model.cycleRemote(by: -1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled(delegate.model.remoteTerminals.isEmpty)
             }
             CommandGroup(replacing: .help) {
                 Button("新手教程") {
