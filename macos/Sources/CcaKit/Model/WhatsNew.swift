@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.7", title: "测试版：同时接入几个远程会话，终端始终黑底，完全卸载", points: [
+            .init(symbol: "rectangle.stack",
+                  text: "「远程会话」页可以同时接着几个会话（最多 8 个）：页顶多出一排，会话列表和每个终端各一格，点哪个看哪个，别的照样接着。显示菜单里的「下一个 / 上一个远程会话」（⇧⌘] / ⇧⌘[）也能换。"),
+            .init(symbol: "circle.lefthalf.filled",
+                  text: "远程会话里的终端始终是黑底，不再跟着浅色、深色变：会话多半是在深色的终端里启动的，接到白底上有的字看不清。"),
+            .init(symbol: "trash",
+                  text: "终端里运行 cca uninstall 完全卸载（cca restore 是同一条命令）：除了原来还原的那些，还清掉解出来的辅助程序和缓存、这个 App 留在资源库里的缓存和设置、安装时写进 shell 启动文件的那两行。卸载前先关掉账号专属的浏览器窗口。"),
+        ]),
         ReleaseNote(version: "3.5.2-beta.6", title: "测试版：自己的同步服务器，几台设备的用量合起来看", points: [
             .init(symbol: "server.rack",
                   text: "「共享与同步」页多了「自己的同步服务器」：几台设备之间同步设备统计、折合金额和记下的 API key，数据不经过维护者。有 Linux 服务器的点「部署…」一键装上，没有的可以部署到 Railway 或 Sealos；别的设备粘贴加入链接加入。"),
