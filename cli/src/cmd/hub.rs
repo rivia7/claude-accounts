@@ -6,17 +6,23 @@
 //! 账号走哪台只看 `route`（第三方 API 账号哪都不去）；`hub_of` 再看这台设备用不用得了那台。两台的状态文件分开（`HubKind::file`：
 //! 自己的前面加 own.），盐、设备指纹也各是各的；服务器只看到账号摘要和密文。
 //!
-//! 加入链接：`cca-hub1.<base64url(JSON)>.<校验>`（格式见 server/README.md「自己的同步服务器」），里面有服务器的地址、证书公钥的指纹、
-//! 入伙口令（admit）和盐。它是凭证：只经 stdin、提问会话传，不进命令行和环境变量。服务器只存口令的 SHA-256 和盐的校验值（`hub_check`，
-//! 第一台设备加入时登记：拿着另一份盐的设备加入不了，免得同一台服务器上的设备互相解不开）。
+//! 加入链接：`cca-hub1.<base64url(JSON)>.<校验>`（格式见 server/README.md「自己的同步服务器」），里面有服务器的地址、证书公钥的指纹
+//! （没有的是托管平台、反向代理后面的：照证书机构验证书）、入伙口令（admit）和盐。它是凭证：只经 stdin、提问会话传，不进命令行和
+//! 环境变量。服务器只存口令的 SHA-256 和盐的校验值（`hub_check`，第一台设备加入时登记：拿着另一份盐的设备加入不了，免得同一台
+//! 服务器上的设备互相解不开）。
+//!
+//! 换加入链接（`relink`：移除别的设备以后、`cca hub invite --new`）：新的口令在这台设备上生成，服务器只拿到它的哈希和一份拿盐加密的
+//! 新口令（`link_seal`），别的成员问设备时（`members`）拿到、解开、换上。已经加入的设备照旧，旧的链接不能再用来加入。
+//! 服务器不认这台设备（403 unknown_device）时看它带的这一份记录的编号（gen）：和加入时记下的一样是被移除了（本机记着的删掉），
+//! 不一样是服务器的记录没了，拿记着的口令自己重新加入（`own_recover`）。
 //!
 //! 子命令：hub-join（链接从 stdin 读）、hub-status、hub-devices、hub-remove、hub-leave、hub-invite，一键部署的 hub-installer、hub-deploy
-//! 在 hub/deploy.rs（bash 的 `cca hub` 调它们）。
+//! 在 hub/deploy.rs，部署到托管平台的 hub-hosted 在 hub/hosted.rs（bash 的 `cca hub` 调它们）。
 
 use super::cost::{cost_json, cost_kick_now, COST_DIR};
-use super::keyshare::{is_num, keyshare_kick};
+use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_kick, Keys};
 use super::presence::{
-    agent_kick, key_at, presence_load, presence_off_reason, presence_post, presence_targets, presence_why, url_ok, FP_RE,
+    agent_kick, flock, key_at, presence_load, presence_off_reason, presence_post, presence_targets, presence_why, url_ok, FP_RE,
     PRESENCE_DIR, PRESENCE_PIN_RE, PRESENCE_SALT_RE,
 };
 use super::router::device_id;
@@ -30,6 +36,7 @@ use crate::py::hash::{from_hex, hmac_sha256, sha256_hex, to_hex};
 use crate::py::io::read_stdin_text;
 use crate::py::obj::{Dict, List, V};
 use crate::py::proc::{Cmd as Proc, In, Out};
+use crate::py::rand::token_hex;
 use crate::py::time::time;
 use crate::py::{exit, json, path, text, Fail, R};
 use crate::{dict, out};
@@ -37,11 +44,13 @@ use std::os::unix::fs::MetadataExt;
 use std::sync::LazyLock;
 
 mod deploy;
+mod hosted;
 
 /// 这个模块的子命令
 pub const CMDS: &[Cmd] = &[
     Cmd::all("hub-installer", deploy::cmd_hub_installer),
     Cmd::all("hub-deploy", deploy::cmd_hub_deploy),
+    Cmd::all("hub-hosted", hosted::cmd_hub_hosted),
     Cmd::all("hub-join", cmd_hub_join),
     Cmd::all("hub-status", cmd_hub_status),
     Cmd::all("hub-devices", cmd_hub_devices),
@@ -50,7 +59,9 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("hub-invite", cmd_hub_invite),
 ];
 
-/// ~/.cca/hub：hub.json（加入的是哪台、入伙口令、盐；600）、id_ed25519（这台设备在它上面的密钥）、members.json（上次问到几台设备）
+/// ~/.cca/hub：hub.json（加入的是哪台、入伙口令、盐；600）、id_ed25519（这台设备在它上面的密钥）、members.json（上次问到几台设备）、
+/// recover.lock。退出、被移除、加入没成时整个目录会删掉，所以要留下来的不放这里：被移除了的说明（~/.cca/hub-removed.json）、
+/// 部署到托管平台还没加入时的口令和盐（~/.cca/hub-hosted.json，hosted.rs）
 pub static HUB_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "hub"));
 
 fn hub_path(name: &str) -> String {
@@ -138,7 +149,8 @@ pub fn hub_of<'a>(hubs: &'a [Hub], pm: &Dict, key: &str, v: &V) -> Option<&'a Hu
 /// 加入链接的开头（格式不兼容时升到 cca-hub2.；只加字段不用升）
 pub const LINK_PREFIX: &str = "cca-hub1.";
 
-/// 加入链接里的：服务器的地址（https://地址:端口）、证书公钥的指纹（sha256//…，1～4 个）、入伙口令、盐（都是小写十六进制）
+/// 加入链接里的：服务器的地址（https://地址:端口）、证书公钥的指纹（sha256//…，最多 4 个；没有是照证书机构验证书）、入伙口令、
+/// 盐（都是小写十六进制）
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {
     pub url: String,
@@ -147,14 +159,18 @@ pub struct Link {
     pub salt: String,
 }
 
-/// 入伙口令：128 位的小写十六进制（服务器只存它的 SHA-256）
+/// 入伙口令：128 位的小写十六进制（服务器只存它的 SHA-256）；服务器的这一份记录的编号（gen）也是这个样子
 static ADMIT_RE: LazyLock<crate::py::re::Re> = LazyLock::new(|| crate::py::re::Re::new(r"^[0-9a-f]{32}$"));
+
+fn hex32(s: &str) -> bool {
+    ADMIT_RE.fullmatch(s).is_some()
+}
 
 /// 这几项合不合格；不合格是给人看的原因
 fn link_problem(url: &str, pins: &[String], admit: &str, salt: &str) -> Option<&'static str> {
     if !url_ok(url) {
         Some("服务器的地址不对（应该是 https://地址:端口）")
-    } else if !(1..=4).contains(&pins.len()) || !pins.iter().all(|p| PRESENCE_PIN_RE.fullmatch(p).is_some()) {
+    } else if pins.len() > 4 || !pins.iter().all(|p| PRESENCE_PIN_RE.fullmatch(p).is_some()) {
         Some("服务器证书的指纹不对")
     } else if ADMIT_RE.fullmatch(admit).is_none() {
         Some("入伙口令不对")
@@ -224,14 +240,26 @@ pub fn hub_check(salt: &str) -> String {
 
 // --- 本机记着的（~/.cca/hub/）------------------------------------------------------------------------------------------------
 
-/// hub.json：{"v": 1, "url", "pins", "admit", "salt", "name": 服务器上这台设备的名字, "joined_at": 第一次加入的时间}；
-/// 没有、读不了、哪一项不合格都当作没加入
+/// hub.json：{"v": 1, "url", "pins", "admit": 现在的入伙口令, "salt", "name": 服务器上这台设备的名字, "joined_at": 第一次加入的时间,
+/// "gen": 服务器上这一份记录的编号, "seed": 部署时配置的那个口令（服务器的记录没了以后认的是它；不知道时没有）,
+/// "link": 服务器上换过几次口令（问设备时比，大了就换上新的）, "stale": 拿记着的口令重新加入、服务器不认的那一份记录的编号,
+/// "hosted": 托管平台（railway | sealos：这台设备部署到托管平台的那一台；重新加入同一台时照旧）}；
+/// 没有、读不了、前面几项哪一项不合格都当作没加入（后面几项不合格的当作没有）
 fn hub_doc() -> Option<Dict> {
     let j = load_quiet(&hub_path("hub.json"))?.as_dict()?;
     let s = |k: &str| j.str(k).map(|v| v.to_string()).unwrap_or_default();
     let pins: Vec<String> = j.list("pins")?.items().iter().map(|p| p.as_str().map(String::from)).collect::<Option<_>>()?;
     let ok = j.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) && link_problem(&s("url"), &pins, &s("admit"), &s("salt")).is_none();
     ok.then_some(j)
+}
+
+/// hub.json 里的一项十六进制（gen、seed、stale）：不合格的当作没有
+fn doc_hex(j: &Dict, k: &str) -> Option<String> {
+    j.str(k).filter(|v| hex32(v)).map(|v| v.to_string())
+}
+
+fn save_doc(j: &Dict) -> R<()> {
+    save_json(&hub_path("hub.json"), &V::Dict(j.copy()), Some(0o600), true)
 }
 
 fn link_of(j: &Dict) -> Link {
@@ -253,16 +281,21 @@ fn own_cfg_of(link: &Link, key: String, fp: String) -> Dict {
 /// "rev" 是 hub.json 的修改时间：重新加入（换名字、被移除后再加入）以后上报进程据此认出是新的一次加入，从头报、不接着退避
 pub fn own_cfg() -> R<(String, Option<Dict>)> {
     let Some(j) = hub_doc() else {
-        return Ok(("还没加入自己的同步服务器（有加入链接时运行 cca hub join）".into(), None));
+        return Ok((removed_note().unwrap_or_else(|| "还没加入自己的同步服务器（有加入链接时运行 cca hub join）".into()), None));
     };
     let Some((key, fp)) = key_at(&hub_path("id_ed25519"))? else {
         return Ok(("这台设备在自己的同步服务器上的密钥不见了（~/.cca/hub/id_ed25519）：重新运行 cca hub join".into(), None));
     };
     let cfg = own_cfg_of(&link_of(&j), key, fp);
-    if let Ok(st) = std::fs::metadata(hub_path("hub.json")) {
-        cfg.set("rev", st.mtime() as f64 + st.mtime_nsec() as f64 / 1e9);
+    if let Some(rev) = hub_rev() {
+        cfg.set("rev", rev);
     }
     Ok((String::new(), Some(cfg)))
+}
+
+/// hub.json 的修改时间（own_cfg 的 "rev"）
+fn hub_rev() -> Option<f64> {
+    std::fs::metadata(hub_path("hub.json")).ok().map(|st| st.mtime() as f64 + st.mtime_nsec() as f64 / 1e9)
 }
 
 /// (用不了的原因, 配置)：能用时原因是空的，配置的样子和 presence_load 的一样（多一项 "hub": "own"）
@@ -360,6 +393,165 @@ fn own_forget() -> R<()> {
     Ok(())
 }
 
+/// 被移除了的说明：~/.cca/hub-removed.json（{"v": 1, "url", "name": 移除前的名字, "at"}，600），再加入成了删掉
+fn removed_path() -> String {
+    path::join(&CCA_HOME, "hub-removed.json")
+}
+
+/// 被别的设备移除了（own_recover 发现的）：本机记着的和退出时一样删掉，留下哪台服务器、什么时候发现的给人看
+fn own_removed(doc: &Dict) -> R<()> {
+    own_forget()?;
+    let note = dict! { "v" => 1, "url" => doc.at("url"), "name" => doc.at("name"), "at" => time().trunc() as i64 };
+    save_json(&removed_path(), &V::Dict(note), Some(0o600), true)
+}
+
+/// 被移除了的说明（没有是 None）
+pub fn removed_note() -> Option<String> {
+    let j = load_quiet(&removed_path())?.as_dict()?;
+    let host = host_of(&j.str("url")?);
+    Some(format!(
+        "这台设备被别的设备从 {host} 上的自己的同步服务器移除了：要再加入，向已经加入的设备要加入链接（cca hub invite），在这台设备上运行 cca hub join"
+    ))
+}
+
+// --- 换加入链接（relink）、服务器的记录没了时重新加入 -------------------------------------------------------------------------------
+
+/// 换口令时存在服务器上的那份密文的标签（认证里也带着它）
+const LINK_LABEL: &str = "cca-hub-link-v1";
+
+/// 那份密文的两把密钥（加密、认证）：HMAC(盐, 标签) 再分别 HMAC "enc"、"mac"。只有拿着加入链接的设备算得出来，服务器解不开
+fn link_keys(salt: &str) -> Keys {
+    let root = hmac_sha256(&from_hex(salt).unwrap_or_default(), LINK_LABEL.as_bytes());
+    (hmac_sha256(&root, b"enc"), hmac_sha256(&root, b"mac"))
+}
+
+/// 新的口令（和部署时配置的那个，知道的话）→ 服务器存的密文（blob_seal）：明文是 {"a": 口令, "s": 部署时的口令 | null} 的紧凑 JSON
+fn link_seal(salt: &str, admit: &str, seed: Option<&str>) -> R<Dict> {
+    let pt = json::dumps(&V::Dict(dict! { "a" => admit, "s" => seed.map_or(V::None, V::from) }), json::Fmt::new().compact());
+    Ok(blob_seal(&link_keys(salt), &blob_ad(&[LINK_LABEL])?, pt.as_bytes()))
+}
+
+/// link_seal 反过来：(口令, 部署时的口令)；认证不过、格式不对是 None
+fn link_open(salt: &str, blob: &V) -> Option<(String, Option<String>)> {
+    let pt = blob_open(&link_keys(salt), &blob_ad(&[LINK_LABEL]).ok()?, blob)?;
+    let j = json::loads(std::str::from_utf8(&pt).ok()?).ok()?.as_dict()?;
+    let admit = j.str("a").filter(|a| hex32(a))?.to_string();
+    Some((admit, doc_hex(&j, "s")))
+}
+
+/// 问设备时服务器回的这一份记录的编号、换过的口令（换的那台设备拿盐加密的）：比本机记着的新就换上，这台设备的加入链接跟着换。只在变了时写
+fn link_refresh(j: &Dict) -> R<()> {
+    let Some(doc) = hub_doc() else { return Ok(()) };
+    let mut changed = false;
+    if let Some(gen) = doc_hex(j, "gen").filter(|g| doc_hex(&doc, "gen").as_ref() != Some(g)) {
+        doc.set("gen", gen);
+        doc.pop("link"); // 另一份记录：换过几次从头数
+        changed = true;
+    }
+    let had = doc.get("link").and_then(|n| n.as_int()).unwrap_or(0);
+    let link = j.get("link").and_then(|l| l.as_dict());
+    if let Some((n, l)) = link.as_ref().and_then(|l| Some((l.get("n")?.as_int().filter(|n| *n > had)?, l))) {
+        if let Some((admit, seed)) = link_open(&doc.at("salt").py_str(), &l.at("blob")) {
+            doc.set("admit", admit);
+            if let Some(s) = seed {
+                doc.set("seed", s);
+            }
+            doc.set("link", n);
+            changed = true;
+        }
+    }
+    if changed {
+        save_doc(&doc)?;
+    }
+    Ok(())
+}
+
+/// 服务器上配置的那个入伙口令（部署时的：seed；更新服务器时照它，不然服务器会从头开始）。没记下的先问一次服务器（换过加入链接的话，
+/// 换的那台设备在密文里放了它：link_refresh 换上；和 devices、remove 一样不看关没关设备统计），还是不知道是 None
+pub fn configured_admit(doc: &Dict) -> R<Option<String>> {
+    if let Some(s) = doc_hex(doc, "seed") {
+        return Ok(Some(s));
+    }
+    if let (_, Some(cfg)) = own_cfg()? {
+        let _ = members(&cfg)?; // 连不上就算了
+    }
+    Ok(hub_doc().and_then(|j| doc_hex(&j, "seed")))
+}
+
+/// 一键部署更新了服务器以后、再加入之前：拿 pins（证书换了的话是新的指纹）问一次设备（members 不要口令）。别的设备换过加入链接的话，
+/// 记着的口令已经加入不了：顺带换上服务器存的（link_refresh）；服务器的记录没了的话 own_recover 先重新加入。返回问过以后记着的口令
+/// （没加入是 None；问不到照旧是记着的）
+pub fn refresh_admit(pins: &[String]) -> R<Option<String>> {
+    let (_, Some(cfg)) = own_cfg()? else { return Ok(None) };
+    cfg.set("pins", List::from_vec(pins.iter().map(|p| V::from(p.as_str())).collect()));
+    let _ = members(&cfg)?;
+    Ok(hub_doc().map(|d| d.at("admit").py_str()))
+}
+
+/// 不知道部署时的口令（configured_admit 是 None）时说的
+pub const SEED_UNKNOWN: &str =
+    "这台设备不知道部署服务器时配置的入伙口令（它拿换过的加入链接加入，换链接的设备也不知道）：在部署服务器的那台设备上更新";
+
+/// 换加入链接：新的口令在这台设备上生成，服务器只拿到它的哈希和一份拿盐加密的新口令（别的成员问设备时换上）。以后只认新的
+/// （旧的链接不能再用来加入），已经加入的设备照旧。成了写进 hub.json（cca hub invite 给的就是新的）；没成是给人看的原因
+fn relink(cfg: &Dict) -> R<Result<(), String>> {
+    let Some(doc) = hub_doc() else { return Ok(Err("还没加入自己的同步服务器".into())) };
+    let admit = token_hex(16);
+    let blob = link_seal(&doc.at("salt").py_str(), &admit, doc_hex(&doc, "seed").as_deref())?;
+    let (code, j) = presence_post(cfg, "relink", &dict! { "admit" => sha256_hex(&admit), "blob" => blob }, 10)?;
+    if code != 200 {
+        return Ok(Err(fault(cfg, code, &j)?.1));
+    }
+    // 发请求时别的进程可能写过（问设备时换上了别的设备更早的那一次）；这时退出了的不再写回去（别的设备问设备时照样换上）
+    let Some(doc) = hub_doc() else { return Ok(Err("换链接的时候这台设备退出了自己的同步服务器".into())) };
+    doc.set("admit", admit);
+    if let Some(n) = j.get("n").and_then(|n| n.as_int()).filter(|n| *n > 0) {
+        doc.set("link", n);
+    }
+    save_doc(&doc)?;
+    Ok(Ok(()))
+}
+
+/// 自己的服务器不认这台设备了（403 unknown_device，j 是它回的；presence_post 调）：看它带的这一份记录的编号（gen）——
+/// - 和加入时记下的一样：被别的设备移除了。本机记着的和退出时一样删掉（own_removed），不再自己加回去
+/// - 不一样：服务器的记录没了（托管平台上没挂存储、数据目录删了……）。拿记着的口令重新加入：现在的那个，不认再试部署时配置的那个
+///   （记录没了的服务器认的是它）。成了返回 true，调用方再发一次。都不认（从头部署过、换了加入链接）在 hub.json 里记下这个编号
+///   （stale），不再为它试；连不上、别的错下次再试
+/// - 加入时没记下编号（以前的版本）、服务器没说：什么都不做
+///
+/// 上报、同步 key、折合金额几个进程可能同时碰到：拿着 hub/recover.lock 一个个来；轮到时 hub.json 已经变了（别的进程处理过）就返回 true
+pub fn own_recover(cfg: &Dict, j: &Dict) -> R<bool> {
+    let Some(gen) = doc_hex(j, "gen") else { return Ok(false) };
+    let Ok(lock) = std::fs::OpenOptions::new().append(true).create(true).open(hub_path("recover.lock")) else { return Ok(false) };
+    if !flock(&lock, libc::LOCK_EX) {
+        return Ok(false);
+    }
+    let Some(doc) = hub_doc() else { return Ok(false) };
+    if hub_rev() != cfg.get("rev").and_then(|r| r.as_num()) {
+        return Ok(true);
+    }
+    let Some(known) = doc_hex(&doc, "gen") else { return Ok(false) };
+    if known == gen {
+        own_removed(&doc)?;
+        return Ok(false);
+    }
+    if doc_hex(&doc, "stale").as_deref() == Some(gen.as_str()) {
+        return Ok(false);
+    }
+    let now = doc.at("admit").py_str();
+    let seed = doc_hex(&doc, "seed").filter(|s| *s != now);
+    for admit in std::iter::once(now).chain(seed) {
+        match join_core(&Link { admit, ..link_of(&doc) }, None)? {
+            Ok(_) => return Ok(true),
+            Err(("denied", _)) => {}
+            Err(_) => return Ok(false),
+        }
+    }
+    doc.set("stale", gen);
+    save_doc(&doc)?;
+    Ok(false)
+}
+
 // --- 一台服务器的样子（_gui state 的 config.hubs[]、cca hub status）-----------------------------------------------------------------
 
 /// 只读本机记着的（三条管线最近一次的结果），不联网：state 是 ok（最近都成了）| error（最近有一条没成，error 是原因）|
@@ -414,6 +606,8 @@ pub fn hub_view(kind: HubKind, url: &str, accounts: usize) -> Dict {
         "members" => if kind == HubKind::Own { members_known().map_or(V::None, V::Int) } else { V::None },
         "joined_epoch" => own.as_ref().and_then(|j| j.get("joined_at")).filter(is_num).unwrap_or(V::None),
         "can_invite" => kind == HubKind::Own,
+        // 自己的：加入链接里钉着证书的指纹（自己部署的，cca hub deploy 更新）；false 是照证书机构验（托管平台上的，cca hub hosted 更新）
+        "pinned" => own.as_ref().map_or(V::None, |j| V::Bool(!link_of(j).pins.is_empty())),
     }
 }
 
@@ -453,6 +647,7 @@ fn fault(cfg: &Dict, code: i64, j: &Dict) -> R<(&'static str, String)> {
     let err = j.str("error").map(|e| e.to_string()).unwrap_or_default();
     let c = match (code, err.as_str()) {
         (0, "pin") => "pin",
+        (0, "cert") => "cert",
         (0, "sign") => "sign",
         (0, _) => "unreachable",
         (403, _) => "denied",
@@ -475,6 +670,14 @@ struct Joined {
     host: String,
     members: Option<i64>,
     off: String,
+}
+
+impl Joined {
+    /// hub-join、hub-hosted join 的 stdout：一行一项（见 cmd_hub_join）
+    fn print(&self) {
+        let members = self.members.map_or(String::new(), |m| m.to_string());
+        out!("{}\n{}\n{members}\n{}", self.name, self.host, self.off);
+    }
 }
 
 /// 没成：(原因码, 给人看的原因)；原因码见 cmd_hub_join
@@ -500,16 +703,28 @@ pub fn cmd_hub_join(args: &[String]) -> R<()> {
     };
     match join_with(&link, name)? {
         Ok(j) => {
-            let members = j.members.map_or(String::new(), |m| m.to_string());
-            out!("{}\n{}\n{members}\n{}", j.name, j.host, j.off);
+            j.print();
             Ok(())
         }
         Err((code, why)) => fail(code, &why),
     }
 }
 
-/// 拿着加入链接加入（cmd_hub_join、一键部署共用）：成了写 hub.json、members.json、device_id，在后台上报、同步一次
+/// 拿着加入链接加入（cmd_hub_join、一键部署、部署到托管平台共用）：成了写 hub.json、members.json、device_id，在后台上报、同步一次
 fn join_with(link: &Link, name: Option<String>) -> R<Result<Joined, JoinFail>> {
+    let r = join_core(link, name)?;
+    if r.is_ok() {
+        ensure_device_id()?;
+        // 马上上报、同步一次：用着的账号的会话报给它，记下的 key、折合金额和别的设备交换
+        agent_kick();
+        keyshare_kick(true);
+        cost_kick_now();
+    }
+    Ok(r)
+}
+
+/// 加入，成了写 hub.json、members.json（不碰 device_id、不在后台起什么：own_recover 在上报、同步的进程里调它）
+fn join_core(link: &Link, name: Option<String>) -> R<Result<Joined, JoinFail>> {
     let check = hub_check(&link.salt);
     let old = hub_doc();
     if let Some(o) = &old {
@@ -518,13 +733,16 @@ fn join_with(link: &Link, name: Option<String>) -> R<Result<Joined, JoinFail>> {
             return Ok(Err(("other", format!("这台设备已经加入了 {host} 上的同步服务器：要换一台，先运行 cca hub leave"))));
         }
     }
+    // 名字：没写时照上次的（被移除了的照移除前的）
+    let was = old.clone().or_else(|| load_quiet(&removed_path()).and_then(|j| j.as_dict()));
+    let name =
+        name.or_else(|| was.and_then(|o| o.str("name").filter(|n| name_ok(n)).map(|n| n.to_string()))).unwrap_or_else(host_name);
     if old.is_none() {
         own_forget()?; // 以前加入过、退出时没删干净的（密钥、同步来的）不带到这一台上
     }
-    let name = name.or_else(|| old.as_ref().and_then(|o| o.str("name")).map(|n| n.to_string())).unwrap_or_else(host_name);
     let posted = join_post(link, &name, &check);
     if old.is_none() && !matches!(posted, Ok(Ok((200, _, _)))) {
-        own_forget()?; // 第一次加入没成：刚生成的密钥也不留
+        own_forget()?; // 第一次加入没成：刚生成的密钥也不留（被移除了的说明照旧留着）
     }
     let (code, j, cfg) = match posted? {
         Ok(p) => p,
@@ -551,13 +769,27 @@ fn join_with(link: &Link, name: Option<String>) -> R<Result<Joined, JoinFail>> {
         "v" => 1, "url" => link.url.as_str(), "pins" => cfg.at("pins"), "admit" => link.admit.as_str(), "salt" => link.salt.as_str(),
         "name" => got.as_str(), "joined_at" => joined,
     };
-    save_json(&hub_path("hub.json"), &V::Dict(doc), Some(0o600), true)?;
-    ensure_device_id()?;
+    let gen = doc_hex(&j, "gen");
+    let old_gen = old.as_ref().and_then(|o| doc_hex(o, "gen"));
+    if let Some(g) = &gen {
+        doc.set("gen", g.as_str());
+    }
+    // 部署时配置的那个口令：服务器说这次用的就是它，或者以前记下的（同一台服务器）
+    let seed = if j.truthy("seed") { Some(link.admit.clone()) } else { old.as_ref().and_then(|o| doc_hex(o, "seed")) };
+    if let Some(s) = seed {
+        doc.set("seed", s);
+    }
+    // 换过几次口令：同一份记录才接着数（服务器的记录没了以后从头数）
+    if let Some(n) = old.as_ref().filter(|_| gen.is_some() && gen == old_gen).and_then(|o| o.get("link")).and_then(|n| n.as_int()) {
+        doc.set("link", n);
+    }
+    // 部署到托管平台的那一台：重新加入（服务器的记录没了、再贴一次链接）时照旧记着是哪个平台（cca hub hosted 更新时用）
+    if let Some(p) = old.as_ref().and_then(|o| o.str("hosted")).filter(|p| matches!(&**p, "railway" | "sealos")) {
+        doc.set("hosted", &*p);
+    }
+    save_doc(&doc)?;
+    let _ = std::fs::remove_file(removed_path());
     members_note(members);
-    // 马上上报、同步一次：用着的账号的会话报给它，记下的 key、折合金额和别的设备交换
-    agent_kick();
-    keyshare_kick(true);
-    cost_kick_now();
     Ok(Ok(Joined { name: got, host: host_of(&link.url), members, off: presence_off_reason().unwrap_or_default() }))
 }
 
@@ -619,11 +851,11 @@ pub fn cmd_hub_status(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 问服务器现在有哪些设备：[{"fp", "name", "me", "joined_age", "seen_age"}…]；没成是原因
-fn members(cfg: &Dict) -> R<Result<Vec<Dict>, String>> {
+/// 问服务器现在有哪些设备：[{"fp", "name", "me", "joined_age", "seen_age"}…]；没成是 (原因码, 原因)（fault 的：服务器不认这台设备是 denied）
+fn members(cfg: &Dict) -> R<Result<Vec<Dict>, JoinFail>> {
     let (code, j) = presence_post(cfg, "members", &Dict::new(), 10)?;
     let Some(rows) = j.list("members").filter(|_| code == 200) else {
-        return Ok(Err(if code == 200 { "服务器回的内容看不懂".to_string() } else { fault(cfg, code, &j)?.1 }));
+        return Ok(Err(if code == 200 { ("server", "服务器回的内容看不懂".to_string()) } else { fault(cfg, code, &j)? }));
     };
     let out: Vec<Dict> = rows
         .items()
@@ -632,6 +864,7 @@ fn members(cfg: &Dict) -> R<Result<Vec<Dict>, String>> {
         .filter(|r| r.str("fp").is_some_and(|f| FP_RE.fullmatch(&f).is_some()) && r.str("name").is_some_and(|n| name_ok(&n)))
         .collect();
     members_note(Some(out.len() as i64));
+    link_refresh(&j)?;
     Ok(Ok(out))
 }
 
@@ -651,7 +884,7 @@ pub fn cmd_hub_devices(args: &[String]) -> R<()> {
     };
     let rows = match members(&cfg)? {
         Ok(rows) => rows,
-        Err(why) => {
+        Err((_, why)) => {
             out!("{why}");
             return exit(1);
         }
@@ -708,8 +941,9 @@ fn device_matches(r: &Dict, want: &str) -> bool {
 }
 
 /// py hub-remove plan 设备：问服务器现在有哪些设备，按名字或者指纹的开头认出要移除的那一台：stdout 是 "指纹\t名字\t1（是这台设备）| 0"；
-/// py hub-remove apply 指纹：从服务器上移除它（它现在的密钥作废，加入链接照旧；是这台设备自己就是退出，本机记着的也删掉），
-/// stdout 是空的。退出码：0；1 服务器那边没成；2 没加入；3 认不出是哪一台（没成时 stdout 是原因）。关掉了同步也照样能移除
+/// py hub-remove apply 指纹：从服务器上移除它（它现在的密钥作废；是这台设备自己就是退出，本机记着的也删掉），移除的是别的设备时
+/// 接着换一个加入链接（relink：它手里的链接不能再用来加入），stdout 是空的；链接没换成时 stdout 是原因（退出码照样是 0）。
+/// 退出码：0；1 服务器那边没成；2 没加入；3 认不出是哪一台（没成时 stdout 是原因）。关掉了同步也照样能移除
 pub fn cmd_hub_remove(args: &[String]) -> R<()> {
     arity("cmd_hub_remove", args, 2, 2)?;
     let (why, cfg) = own_cfg()?;
@@ -723,7 +957,7 @@ pub fn cmd_hub_remove(args: &[String]) -> R<()> {
             let want = args[1].trim();
             let rows = match members(&cfg)? {
                 Ok(rows) => rows,
-                Err(why) => {
+                Err((_, why)) => {
                     out!("{why}");
                     return exit(1);
                 }
@@ -758,6 +992,9 @@ pub fn cmd_hub_remove(args: &[String]) -> R<()> {
                 own_forget()?;
             } else {
                 members_note(j.get("members").and_then(|m| m.as_int()));
+                if let Err(why) = relink(&cfg)? {
+                    out!("{why}");
+                }
             }
             Ok(())
         }
@@ -767,7 +1004,7 @@ pub fn cmd_hub_remove(args: &[String]) -> R<()> {
 
 /// py hub-leave plan：stdout 是 "地址:端口\t服务器上这台设备的名字"（没加入：退出码 2，stdout 是原因）；
 /// py hub-leave apply：退出自己的同步服务器：先告诉服务器移除这台（连不上、它已经不认这台了也接着退），再删掉本机记着的
-/// （~/.cca/hub/、presence/ 和 cost/ 里 own. 开头的；别的设备同步来的折合金额跟着没了，记下的 API key 留在这台设备上）。
+/// （~/.cca/hub/、被移除了的说明、presence/ 和 cost/ 里 own. 开头的；别的设备同步来的折合金额跟着没了，记下的 API key 留在这台设备上）。
 /// stdout：服务器那边没移除成时是原因（本机照样删了）。退出码 0；没加入是 2
 pub fn cmd_hub_leave(args: &[String]) -> R<()> {
     arity("cmd_hub_leave", args, 1, 1)?;
@@ -799,6 +1036,8 @@ pub fn cmd_hub_leave(args: &[String]) -> R<()> {
                 }
             }
             own_forget()?;
+            // 自己退出的：没有要说明的。后台上报恰好在服务器移除了这台、本机还没删的时候碰到 403，会当成被移除了写下说明
+            let _ = std::fs::remove_file(removed_path());
             if !said.is_empty() {
                 out!("{said}");
             }
@@ -808,11 +1047,34 @@ pub fn cmd_hub_leave(args: &[String]) -> R<()> {
     }
 }
 
-/// py hub-invite：打印加入链接（别的设备运行 cca hub join 时贴进去）。没加入：退出码 2，stdout 是原因
+/// py hub-invite [--new]：打印加入链接（别的设备运行 cca hub join 时贴进去）。先问一次服务器（members）：别的设备换过链接的话换上
+/// 新的（连不上照本机记着的打）。--new：先换一个（relink：旧的不能再用来加入，已经加入的设备照旧；没成：退出码 1，stdout 是原因）。
+/// 没加入：退出码 2，stdout 是原因
 pub fn cmd_hub_invite(args: &[String]) -> R<()> {
-    arity("cmd_hub_invite", args, 0, 0)?;
+    let new = match args {
+        [] => false,
+        [a] if a == "--new" => true,
+        _ => return Err(Fail::Die("用法: py hub-invite [--new]".into())),
+    };
+    let (why, cfg) = own_cfg()?;
+    match (&cfg, new) {
+        (Some(cfg), true) => {
+            if let Err(why) = relink(cfg)? {
+                out!("{why}");
+                return exit(1);
+            }
+        }
+        (Some(cfg), false) => {
+            let _ = members(cfg)?; // 被移除了的话 own_recover 删掉了本机记着的：下面说没加入
+        }
+        (None, true) => {
+            out!("{why}");
+            return exit(if hub_doc().is_some() { 1 } else { 2 });
+        }
+        (None, false) => {}
+    }
     let Some(j) = hub_doc() else {
-        out!("还没加入自己的同步服务器（有加入链接时运行 cca hub join）");
+        out!("{}", own_cfg()?.0);
         return exit(2);
     };
     out!("{}", link_encode(&link_of(&j)));
@@ -894,7 +1156,7 @@ mod tests {
         for bad in [
             Link { url: "http://203.0.113.5:18443".into(), ..link() },
             Link { url: "https://203.0.113.5".into(), ..link() },
-            Link { pins: vec![], ..link() },
+            Link { pins: vec![link().pins[0].clone(); 5], ..link() },
             Link { pins: vec!["sha1//x".into()], ..link() },
             Link { admit: "short".into(), ..link() },
             Link { admit: "0123456789ABCDEF0123456789ABCDEF".into(), ..link() },
@@ -902,6 +1164,26 @@ mod tests {
         ] {
             assert!(broken(&link_encode(&bad)).contains("加入链接里"), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn link_without_pins_is_ca_mode() {
+        // 托管平台、反向代理后面：没有指纹（照证书机构验证书），地址照样要写端口
+        let l = Link { url: "https://hub.example.com:443".into(), pins: vec![], ..link() };
+        assert_eq!(link_decode(&link_encode(&l)), Ok(l));
+    }
+
+    #[test]
+    fn link_blob_round_trips_and_needs_the_salt() {
+        let salt = "ab".repeat(16);
+        let blob = V::Dict(link_seal(&salt, &"1".repeat(32), Some(&"2".repeat(32))).unwrap());
+        assert_eq!(link_open(&salt, &blob), Some(("1".repeat(32), Some("2".repeat(32)))));
+        assert_eq!(link_open(&"cd".repeat(16), &blob), None, "别的盐解不开");
+        let no_seed = V::Dict(link_seal(&salt, &"1".repeat(32), None).unwrap());
+        assert_eq!(link_open(&salt, &no_seed), Some(("1".repeat(32), None)), "不知道部署时的口令");
+        let d = blob.as_dict().unwrap();
+        d.set("c", d.at("t").py_str());
+        assert_eq!(link_open(&salt, &blob), None, "改过的认证不过");
     }
 
     #[test]

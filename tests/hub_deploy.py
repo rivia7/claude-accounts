@@ -469,6 +469,23 @@ class DeployTest(Base):
         self.assertNotEqual(self.secrets_of(c), old_c)
         self.assertEqual(json.loads((c.cca / 'hub' / 'hub.json').read_text())['url'], 'https://127.0.0.1:%d' % (port + 2))
 
+    def test_update_after_relink(self):
+        """别的设备换过加入链接、这台还没换上时再部署：只更新（服务器上配置的照旧是部署时的口令），再加入之前先问一次设备换上新的口令，
+        不会报加入不了"""
+        b = self.box(docker=True)
+        a = self.device('alice-mbp')
+        self.deploy(a, b, '--port', str(free_port()))
+        admit = self.secrets_of(a)[0]
+        c = self.device('carol-air')
+        self.join(c, a.ok('hub-invite').strip())
+        new = sw.link_decode(c.ok('hub-invite', '--new').strip())['a']
+        self.assertEqual(self.secrets_of(a)[0], admit, 'a 还没换上')
+        r = self.deploy(a, b)
+        self.assertEqual([kv(r.stdout)[k] for k in ('state', 'members')], ['update', '2'])
+        self.assertEqual(b.envfile()['CCA_HUB_ADMIT_HASH'], sw.admit_hash(admit), '配置的照旧是部署时的口令')
+        self.assertEqual(self.secrets_of(a)[0], new, '换上了 carol 换的口令')
+        self.assertEqual(json.loads((a.cca / 'hub' / 'hub.json').read_text())['seed'], admit)
+
     def test_reset_keeps_the_name(self):
         """加入了的设备 --reset：名字照旧（--name 给过的）；起不来时本机照旧加入着原来的那一份、服务器的 .env 换回原来的，
         再部署（不带 --reset）是更新"""

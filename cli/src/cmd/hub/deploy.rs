@@ -5,7 +5,10 @@
 //! - hub-deploy：经 SSH 在服务器上运行同一个脚本（从 stdin 给过去），入伙口令和盐在这台设备上生成，服务器只拿到口令的 SHA-256；
 //!   装好以后这台设备跟着加入（`join_with`）。加入链接不出这个进程：不进命令行、环境变量，也不打出来（别的设备要的用 cca hub invite 看）
 
-use super::{fail, host_of, hub_doc, join_with, link_of, link_problem, name_ok, own_forget, Link, NAME_BAD};
+use super::{
+    configured_admit, fail, host_of, hub_doc, join_with, link_of, link_problem, name_ok, own_forget, refresh_admit, Link, NAME_BAD,
+    SEED_UNKNOWN,
+};
 use crate::cmd::cost::version_ok;
 use crate::cmd::presence::{PRESENCE_PIN_RE, PRESENCE_URL_RE};
 use crate::core::base::{sh, HOST_RE};
@@ -18,7 +21,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 const TEMPLATE: &str = include_str!("../../../../server/hub-install.sh");
-const SERVER: &str = include_str!("../../../../server/cca-presence.py");
+pub(super) const SERVER: &str = include_str!("../../../../server/cca-presence.py");
 /// 模板里换成版本、服务端程序的那一行
 const EMBED: &str = "# @CCA-HUB-EMBED@\n";
 /// 服务端程序放在 here-document 里，这是它的结束行（服务端程序里不能有这一行：测试查；release.sh、regress 照它取出服务端程序核对）
@@ -156,15 +159,24 @@ fn dir_of(d: &str) -> Result<String, &'static str> {
 /// --reset 换一个新的加入链接重新加入（名字照旧）。服务器那边的进度直接打到 stderr（ssh 转过来的）。
 /// 成了：stdout 是 `sh` 的 键=值（mode、state、port、dir、lan 地址只在内网、name 服务器上这台设备的名字、host 地址:端口、
 /// members 几台设备、off 关掉了同步时的原因、newpin 证书换了；是的是 1，不是的是空的），bash eval 它；没成见 fail（原因码：usage、name、
-/// ssh、root、deps、image、port、taken、not_this、moved、host、install、start，以及加入的那些）
+/// ssh、root、deps、image、port、taken、not_this、moved、host、install、start；platform 加入着的是托管平台上的（--reset、--check 也不碰它）、
+/// seed 不知道部署时配置的口令，以及加入的那些）
 pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
     let o = opts(args)?;
+    let joined = hub_doc();
+    if let Some(l) = joined.as_ref().map(link_of).filter(|l| l.pins.is_empty()) {
+        return fail(
+            "platform",
+            &format!(
+                "这台设备加入的是 {} 上托管平台的同步服务器（更新它用 cca hub hosted）：要部署到自己的服务器，先退出（cca hub leave）",
+                host_of(&l.url)
+            ),
+        );
+    }
     if o.check {
         return ssh_check(&o);
     }
-    let joined = hub_doc();
-    let old = joined.as_ref().map(link_of);
-    if let Some(l) = old.as_ref().filter(|_| !o.reset) {
+    if let Some(l) = joined.as_ref().map(link_of).filter(|_| !o.reset) {
         let (host, port) = url_parts(&l.url);
         if o.host.as_deref().is_some_and(|h| h != host) || o.port.is_some_and(|p| p != port) {
             let at = host_of(&l.url);
@@ -174,12 +186,22 @@ pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
             );
         }
     }
-    // 入伙口令和盐：加入着（不 --reset）就是那一份，只更新；别的在这台设备上生成新的
-    let (admit, salt) = match &old {
-        Some(l) if !o.reset => (l.admit.clone(), l.salt.clone()),
+    // 入伙口令和盐：加入着（不 --reset）就是那一份，只更新。服务器上配置的是部署时的那个口令（seed：换过加入链接的话服务器现在认的是
+    // 另一个，配置照旧；安装脚本拿它核对是不是这一台：not_this），不知道就不部署；别的在这台设备上生成新的
+    let seed = match &joined {
+        Some(j) => match configured_admit(j)? {
+            Some(s) => Some(s),
+            None => return fail("seed", &format!("{SEED_UNKNOWN}；要从头部署，先退出（cca hub leave），再加 --reset 部署")),
+        },
+        None => None,
+    };
+    let joined = joined.and_then(|_| hub_doc()); // 问服务器时可能换上了别的设备换的口令
+    let old = joined.as_ref().map(link_of);
+    let (admit, salt) = match (&old, &seed) {
+        (Some(l), Some(s)) if !o.reset => (s.clone(), l.salt.clone()),
         _ => (token_hex(16), token_hex(16)),
     };
-    let r = run_installer(&o, &preamble(&o, &admit, old.as_ref()))?;
+    let r = run_installer(&o, &preamble(&o, &admit, seed.as_deref()))?;
 
     // 加入：加入着的照原来的链接重新加入（证书换了时换上新的指纹）；别的用新的链接
     let mut newpin = false;
@@ -188,6 +210,10 @@ pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
             if !l.pins.contains(&r.pin) {
                 l.pins = vec![r.pin.clone()];
                 newpin = true;
+            }
+            // 别的设备换过加入链接的话，记着的口令已经加入不了：先问一次设备，照换上的那个加入
+            if let Some(a) = refresh_admit(&l.pins)? {
+                l.admit = a;
             }
             l
         }
@@ -198,7 +224,14 @@ pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
         own_forget()?; // --reset：服务器已经忘掉了这台设备，本机记着的旧的也不要了（名字照旧用）
     }
     let lan = lan_only(&url_parts(&link.url).0);
-    let j = match join_with(&link, name)? {
+    let mut joined = join_with(&link, name.clone())?;
+    if let (Err(("denied", _)), Some(s), false) = (&joined, &seed, o.reset) {
+        if *s != link.admit {
+            // 服务器上的记录没了（数据目录删了……）：认的又是部署时的那个口令
+            joined = join_with(&Link { admit: s.clone(), ..link.clone() }, name)?;
+        }
+    }
+    let j = match joined {
         Ok(j) => j,
         Err((code, why)) => {
             let fw = if code == "unreachable" {
@@ -229,11 +262,12 @@ pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 安装脚本前面放进的几项（经 ssh 的 stdin 给过去，不进命令行）：这一次的口令的哈希（WANT）、加入着的那一份的哈希（EXPECT）和参数
-fn preamble(o: &Opts, admit: &str, old: Option<&Link>) -> String {
+/// 安装脚本前面放进的几项（经 ssh 的 stdin 给过去，不进命令行）：这一次的口令的哈希（WANT）、加入着的那一份部署时配置的口令的
+/// 哈希（EXPECT：服务器的 .env 里的就是它）和参数
+fn preamble(o: &Opts, admit: &str, seed: Option<&str>) -> String {
     let mut s = format!("CCA_HUB_MANAGED=1\nCCA_HUB_WANT={}\n", sq(&sha256_hex(admit)));
-    if let Some(l) = old {
-        s.push_str(&format!("CCA_HUB_EXPECT={}\n", sq(&sha256_hex(&l.admit))));
+    if let Some(seed) = seed {
+        s.push_str(&format!("CCA_HUB_EXPECT={}\n", sq(&sha256_hex(seed))));
     }
     s.push_str(&format!("set -- --dir {}", sq(&o.dir)));
     if let Some(p) = o.port {
@@ -633,8 +667,8 @@ mod tests {
     #[test]
     fn preamble_has_the_hashes_not_the_secrets() {
         let o = Opts { dir: "/srv/hub".into(), port: Some(20000), mode: Some("docker".into()), reset: true, ..Default::default() };
-        let old = Link { url: "https://192.0.2.10:18445".into(), pins: vec![], admit: "a".repeat(32), salt: "b".repeat(32) };
-        let p = preamble(&o, &"c".repeat(32), Some(&old));
+        let seed = "a".repeat(32);
+        let p = preamble(&o, &"c".repeat(32), Some(&seed));
         assert_eq!(
             p,
             format!(

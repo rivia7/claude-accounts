@@ -1565,7 +1565,7 @@ final class AppModel {
     private(set) var hub = HubSnapshot()
     private(set) var hubLoading = false
     @ObservationIgnored private var hubAgain = false
-    /// 正在移除设备、退出、读加入链接（按钮先停用）
+    /// 正在移除设备、退出、读加入链接、换加入链接（按钮先停用）
     private(set) var hubBusy = false
 
     /// 加入着的那一台最近一次问到的：还没问过、最近一次问的是别的服务器（退出了又加入别的）时是 nil
@@ -1623,6 +1623,21 @@ final class AppModel {
         run(.hubDeploy(reset: reset))
     }
 
+    /// 「部署到托管平台…」：提问会话（`cca hub hosted`：选平台，一页是部署的步骤和平台给的公网地址）
+    func deployHosted() {
+        guard phase == .ready, hubAvailable else { return }
+        run(.hubHosted)
+    }
+
+    /// 「更新服务器…」：自己部署的（加入链接钉着证书的指纹）经 SSH 更新；托管平台上的照 `cca hub hosted` 给的步骤
+    func updateHub() {
+        if ownHub?.onPlatform == true {
+            deployHosted()
+        } else {
+            deployHub()
+        }
+    }
+
     /// 从服务器上移除另一台设备（cca 先问同意：`consent.hub_remove`，对话框里说移除意味着什么）
     func removeHubDevice(_ d: HubDevice) {
         runHub(.hubRemove(device: d.id), failureTitle: "没能移除「\(nonEmpty(d.name) ?? "这台设备")」")
@@ -1647,26 +1662,38 @@ final class AppModel {
         }
     }
 
-    /// 「复制加入链接」：`cca hub invite` 经内存里的管道读，放进剪贴板（标成机密，60 秒后还是它就清掉）。链接是凭证：
-    /// 不进被观察的状态、不进提示和读屏
+    /// 「复制加入链接」：`cca hub invite` 的那一行放进剪贴板（`copyHubLink`）
     func copyHubInvite() {
+        copyHubLink(.hubInvite, prompter: nil, failureTitle: "没能读到加入链接", missing: "cca 没有给出加入链接",
+                    copied: "已复制加入链接（60 秒后从剪贴板清掉）：只发给自己的设备，谁拿到它都能加入")
+    }
+
+    /// 「换一个加入链接」：`cca hub invite --new`（cca 先问同意：`consent.hub_relink`），新的链接和「复制加入链接」一样放进剪贴板
+    func relinkHub() {
+        copyHubLink(.hubRelink, prompter: hooks.prompter, failureTitle: "没换成加入链接", missing: "cca 没有给出新的加入链接",
+                    copied: "换好了，新的加入链接已复制（60 秒后从剪贴板清掉）：旧的不能再用来加入")
+    }
+
+    /// 跑一条打出加入链接的命令：stdout 只经内存里的管道读，一行的才认，放进剪贴板（`copySecret`：标成机密，60 秒后还是它就清掉）。
+    /// 链接是凭证：不进被观察的状态、不进提示和读屏
+    private func copyHubLink(_ command: CcaCommand, prompter: Prompter?, failureTitle: String, missing: String, copied: String) {
         guard phase == .ready, ownHub?.canInvite == true, let client, !hubBusy else { return }
         hubBusy = true
         Task { [weak self] in
-            let r = await client.execute(.hubInvite, prompter: nil)
+            let r = await client.execute(command, prompter: prompter)
             guard let self else { return }
             self.hubBusy = false
             guard r.isSuccess else {
-                self.finish(r, failureTitle: "没能读到加入链接", success: nil)
+                self.finish(r, failureTitle: failureTitle, success: nil)
                 return
             }
             let line = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty, !line.contains("\n") else {
-                self.showToast("cca 没有给出加入链接", .warning)
+                self.showToast(missing, .warning)
                 return
             }
             self.hooks.copySecret(line)
-            self.showToast("已复制加入链接（60 秒后从剪贴板清掉）：只发给自己的设备，谁拿到它都能加入", .success)
+            self.showToast(copied, .success)
         }
     }
 

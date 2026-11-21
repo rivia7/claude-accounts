@@ -328,9 +328,11 @@ struct ResultCode: KnownValues {
     static let hubRemoved = ResultCode(rawValue: "hub_removed")
     static let hubLeft = ResultCode(rawValue: "hub_left")
     static let hubDeployed = ResultCode(rawValue: "hub_deployed")
+    /// 托管平台上的那一台：生成了新版的部署文件，照着换上了（`cca hub hosted`，加入着时）
+    static let hubHosted = ResultCode(rawValue: "hub_hosted")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed]
+                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed, .hubHosted]
 }
 
 struct FailCode: KnownValues {
@@ -427,6 +429,17 @@ struct FailCode: KnownValues {
     static let hubNewpin = FailCode(rawValue: "hub_newpin")
     static let hubLan = FailCode(rawValue: "hub_lan")
     static let hubOff = FailCode(rawValue: "hub_off")
+    /// 部署到托管平台（`cca hub hosted`）没成：地址不对、证书验证不过、没有记着的口令、加入的不是托管平台上的（自己部署的）、
+    /// 不知道部署时的口令、放部署文件的目录里有别的；加入的是托管平台上的（`cca hub deploy` 不碰它）
+    static let hubURL = FailCode(rawValue: "hub_url")
+    static let hubCert = FailCode(rawValue: "hub_cert")
+    static let hubPending = FailCode(rawValue: "hub_pending")
+    static let hubNotHosted = FailCode(rawValue: "hub_not_hosted")
+    static let hubSeed = FailCode(rawValue: "hub_seed")
+    static let hubDir = FailCode(rawValue: "hub_dir")
+    static let hubPlatform = FailCode(rawValue: "hub_platform")
+    /// 没换成加入链接（`cca hub invite --new`；移除了别的设备、换链接没成时是做完了带着的提醒）
+    static let hubRelink = FailCode(rawValue: "hub_relink")
     /// 自己的同步服务器的失败原因（`hub_` 开头的都是，认不认识都算：App 照 message 说）
     var isHub: Bool { rawValue.hasPrefix("hub_") }
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
@@ -439,7 +452,8 @@ struct FailCode: KnownValues {
                                        .hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt, .hubOther, .hubFull,
                                        .hubOld, .hubPin, .hubUnreachable, .hubClock, .hubBusy, .hubSign, .hubServer, .hubName,
                                        .hubUsage, .hubSSH, .hubRoot, .hubDeps, .hubImage, .hubPort, .hubTaken, .hubNotThis, .hubMoved,
-                                       .hubHost, .hubInstall, .hubStart, .hubNewpin, .hubLan, .hubOff]
+                                       .hubHost, .hubInstall, .hubStart, .hubNewpin, .hubLan, .hubOff,
+                                       .hubURL, .hubCert, .hubPending, .hubNotHosted, .hubSeed, .hubDir, .hubPlatform, .hubRelink]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -485,9 +499,11 @@ struct ConsentItem: KnownValues {
     static let hubLeave = ConsentItem(rawValue: "hub_leave")
     /// `cca hub deploy <目标> --reset`：从头部署自己的同步服务器，换一个新的加入链接（范围是 SSH 的目标，原样，默认不同意）。
     static let hubReset = ConsentItem(rawValue: "hub_reset")
+    /// `cca hub invite --new`：换一个加入链接，旧的不能再用来加入（范围 `all`，默认不同意）。
+    static let hubRelink = ConsentItem(rawValue: "hub_relink")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff,
-                                          .hubRemove, .hubLeave, .hubReset]
+                                          .hubRemove, .hubLeave, .hubReset, .hubRelink]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

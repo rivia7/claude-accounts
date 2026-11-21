@@ -13,6 +13,7 @@ from pathlib import Path
 import pty
 import re
 import secrets
+import shlex
 import socket
 import ssl
 import subprocess
@@ -56,6 +57,19 @@ def make_cert(d):
                     '-out', str(d / 'cert.pem')], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def make_ca_cert(d):
+    """证书机构签的证书（SAN 是 127.0.0.1）：照证书机构验的加入链接（托管平台的那种）用；设备的 curl 经 CURL_CA_BUNDLE=ca.pem 认这个机构"""
+    def run(*a):
+        subprocess.run(['openssl'] + [str(x) for x in a], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    run('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', d / 'ca.key')
+    run('req', '-new', '-x509', '-key', d / 'ca.key', '-subj', '/CN=cca-test-ca', '-days', '2', '-out', d / 'ca.pem')
+    run('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', d / 'key.pem')
+    run('req', '-new', '-key', d / 'key.pem', '-subj', '/CN=127.0.0.1', '-out', d / 'csr.pem')
+    (d / 'ext.cnf').write_text('subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n')
+    run('x509', '-req', '-in', d / 'csr.pem', '-CA', d / 'ca.pem', '-CAkey', d / 'ca.key', '-CAcreateserial', '-days', '2',
+        '-extfile', d / 'ext.cnf', '-out', d / 'cert.pem')
+
+
 def openssl_pin(cert):
     """维护者那边（部署脚本、文档）算公钥指纹的办法：和服务器的 --print-pin 必须一样"""
     pub = subprocess.run(['openssl', 'x509', '-in', str(cert), '-pubkey', '-noout'], stdout=subprocess.PIPE, check=True).stdout
@@ -65,12 +79,13 @@ def openssl_pin(cert):
 
 
 class Server:
-    """跑一个真的服务器进程（ttl 2 秒、闲置 3 秒，测试不用干等）。admit_hash：自己的同步服务器（--mode own）"""
-    def __init__(self, d, ttl='2', idle='3', admit_hash=None):
-        self.d = d
+    """跑一个真的服务器进程（ttl 2 秒、闲置 3 秒，测试不用干等）。admit_hash：自己的同步服务器（--mode own）；
+    proxied：--behind-proxy（只说 HTTP，不用证书）；port：监听这个端口（重启后设备照旧连得上），0 是随便挑一个"""
+    def __init__(self, d, ttl='2', idle='3', admit_hash=None, proxied=False, port=0):
+        self.d, self.proxied = d, proxied
         who = ['--mode', 'own', '--admit-hash', admit_hash] if admit_hash else ['--release-key', str(d / 'release.pub')]
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'),
-                '--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem')] + who + [
+        tls = ['--behind-proxy'] if proxied else ['--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem')]
+        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port')] + tls + who + [
                 '--state', str(d / 'state.json'), '--ttl', ttl, '--idle', idle]
         (d / 'port').unlink() if (d / 'port').exists() else None
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -81,17 +96,23 @@ class Server:
         self.port = int((d / 'port').read_text())
 
     def stop(self):
+        """停掉，返回它写的日志（停过了再停是空的：addCleanup 里的那一次）"""
+        if self.proc.stderr.closed:
+            return ''
         self.proc.terminate()
         self.proc.wait(5)
         with self.proc.stderr:
             return self.proc.stderr.read().decode()
 
-    def req(self, method, path, body=b'', sig=None):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE   # 测试里不验 CA：客户端靠的是公钥钉住（这里另外核对）
-        c = http.client.HTTPSConnection('127.0.0.1', self.port, context=ctx, timeout=10)
-        headers = {'Content-Type': 'application/json'}
+    def req(self, method, path, body=b'', sig=None, headers=None):
+        if self.proxied:
+            c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
+        else:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE   # 测试里不验 CA：客户端靠的是公钥钉住（这里另外核对）
+            c = http.client.HTTPSConnection('127.0.0.1', self.port, context=ctx, timeout=10)
+        headers = dict({'Content-Type': 'application/json'}, **(headers or {}))
         if sig is not None:
             headers['X-Cca-Sig'] = base64.b64encode(sig).decode()
         try:
@@ -452,13 +473,19 @@ class OwnServerTest(unittest.TestCase):
     def fp(self, who):
         return srvmod.key_fp(self.pubs[who].split()[1])
 
-    def call(self, op, who='a', signer=None, tamper=False, **extra):
+    def call(self, op, who='a', signer=None, tamper=False, srv=None, **extra):
         body = dict({'v': 1, 'op': op, 'key': self.fp(who), 'ts': time.time(), 'nonce': secrets.token_hex(16)}, **extra)
         raw = json.dumps(body, separators=(',', ':')).encode()
         sig = sign(self.d / (signer or who), 'cca-presence', raw)
         if tamper:
             raw = raw.replace(b'"v":1', b'"v":1 ')
-        return self.srv.req('POST', '/v1/' + op, raw, sig)
+        return (srv or self.srv).req('POST', '/v1/' + op, raw, sig)
+
+    def unknown(self, reply):
+        """403 unknown_device 带着的 gen（不是这样的回复是 None）"""
+        st, j = reply
+        ok = st == 403 and set(j) == {'error', 'gen'} and j['error'] == 'unknown_device' and re.match(r'^[0-9a-f]{32}$', j['gen'])
+        return j['gen'] if ok else None
 
     def join(self, who='a', name=None, admit=None, check=None, pub=None, **kw):
         return self.call('join', who, pub=pub or self.pubs[who], name=name or who + '-mac', admit=admit or self.ADMIT,
@@ -472,7 +499,8 @@ class OwnServerTest(unittest.TestCase):
         doc = json.dumps({'version': 1, 'seq': 1, 'machines': [{'key': self.pubs['evil'], 'name': 'evil'}]}).encode()
         self.assertEqual(self.srv.req('POST', '/v1/machines', doc, sign(self.d / 'evil', 'cca-devices', doc))[0], 404,
                          '没有维护者的设备清单')
-        self.assertEqual(self.call('members'), (403, {'error': 'unknown_device'}), '不在名单里：设备拿链接重新加入')
+        gen = self.unknown(self.call('members'))
+        self.assertTrue(gen, '不在名单里：回这一份记录的编号（设备据此分清被移除了还是服务器的记录没了）')
         # 口令不对、签名不对、pub 和 key 对不上、拿别的密钥签：一样的 403（不留判断口）
         for bad in (dict(admit='00' * 16), dict(tamper=True), dict(pub=self.pubs['b']), dict(signer='evil'), dict(admit='AB' * 16)):
             self.assertEqual(self.join('a', **bad), (403, {'error': 'denied'}), bad)
@@ -480,14 +508,14 @@ class OwnServerTest(unittest.TestCase):
         self.assertEqual(self.join('a', name='x' * 65)[0], 400)
         self.assertEqual(self.join('a', check='zz')[0], 400)
         st, j = self.join('a', name='studio-mac')
-        self.assertEqual((st, j['name'], j['members']), (200, 'studio-mac', 1), j)
+        self.assertEqual((st, j['name'], j['members'], j['gen'], j['seed']), (200, 'studio-mac', 1, gen, True), j)
         self.assertEqual(self.join('b', check=sw.hub_check('ef' * 16)), (409, {'error': 'salt_mismatch'}), '拿着另一份盐的加入不了')
         st, j = self.join('b', name='studio-mac')
         self.assertEqual((st, j['name'], j['members']), (200, 'studio-mac-2', 2), '名字被别的设备用了：后面加 -2')
         st, j = self.join('b', name='bob-mini')
         self.assertEqual((st, j['name'], j['members']), (200, 'bob-mini', 2), '同一把密钥再加入：改名字')
         st, j = self.call('members')
-        self.assertEqual((st, j['me_name']), (200, 'studio-mac'))
+        self.assertEqual((st, j['me_name'], j['gen'], j['link']), (200, 'studio-mac', gen, None), '还没换过入伙口令')
         rows = {r['name']: r for r in j['members']}
         self.assertEqual(sorted(rows), ['bob-mini', 'studio-mac'])
         self.assertEqual((rows['studio-mac']['fp'], rows['studio-mac']['me'], rows['bob-mini']['me']), (fa, True, False))
@@ -506,7 +534,7 @@ class OwnServerTest(unittest.TestCase):
         self.assertEqual(self.call('remove', target=self.fp('c')), (404, {'error': 'no_device'}))
         st, j = self.call('remove', target=fb)
         self.assertEqual((st, j['members']), (200, 1))
-        self.assertEqual(self.call('members', 'b'), (403, {'error': 'unknown_device'}), '被移除的设备：密钥就此不认')
+        self.assertEqual(self.unknown(self.call('members', 'b')), gen, '被移除的设备：密钥就此不认（编号照旧：是被移除了）')
         st, j = self.call('ledger', get=[aid])
         self.assertEqual([(r['name'], r['revoked']) for r in j['cost'][aid]], [('bob-mini', True)], '它传过的折合金额是账号的：留着，标成撤销了')
         st, j = self.call('view', accounts=[aid])
@@ -514,22 +542,127 @@ class OwnServerTest(unittest.TestCase):
         # 退出：移除自己
         st, j = self.call('remove', target=fa)
         self.assertEqual((st, j['members']), (200, 0))
-        self.assertEqual(self.call('members'), (403, {'error': 'unknown_device'}))
+        self.assertEqual(self.unknown(self.call('members')), gen)
         # 重启：同一个入伙口令接着用（盐的校验值还在：另一份盐照样加入不了）；换一个就从头开始
         self.assertEqual(self.join('a')[0], 200)
         self.srv.stop()
         OwnServerTest.srv = Server(self.d, admit_hash=sw.admit_hash(self.ADMIT))
-        self.assertEqual(self.call('members')[0], 200, '重启后照样认得加入的设备')
+        st, j = self.call('members')
+        self.assertEqual((st, j['gen']), (200, gen), '重启后照样认得加入的设备，编号不变')
         self.assertEqual(self.join('b', check=sw.hub_check('ef' * 16)), (409, {'error': 'salt_mismatch'}))
         self.srv.stop()
         new = 'ef' * 16
         OwnServerTest.srv = Server(self.d, admit_hash=sw.admit_hash(new))
-        self.assertEqual(self.call('members'), (403, {'error': 'unknown_device'}), '换了加入链接：以前的设备不认了')
+        gen2 = self.unknown(self.call('members'))
+        self.assertTrue(gen2 and gen2 != gen, '换了加入链接：以前的设备不认了，记录换了编号')
         self.assertEqual(self.join('a', admit=self.ADMIT), (403, {'error': 'denied'}), '旧的口令不认')
         st, j = self.join('b', admit=new, check=sw.hub_check('ef' * 16))
         self.assertEqual((st, j['members']), (200, 1), '盐的校验值也从头登记')
         self.assertEqual(json.loads((self.d / 'cost-slots.json').read_text())['acc'], {}, '以前存的密文都删掉')
         self.assertEqual(oct(os.stat(self.d / 'state.json').st_mode & 0o777), '0o600')
+
+    def fresh(self, name, **kw):
+        """另起一台自己的服务器（自己的目录，用完停掉）：默认 --behind-proxy（不用证书）"""
+        d = self.d / name
+        d.mkdir()
+        srv = Server(d, admit_hash=sw.admit_hash(kw.pop('admit', self.ADMIT)), proxied=kw.pop('proxied', True))
+        self.addCleanup(srv.stop)
+        return srv
+
+    def test_relink(self):
+        """换入伙口令（relink）：旧链接不能再用来加入，已经加入的照旧；成员问设备时拿到换的那台存的密文；重启后照旧，
+        配置的口令换了才从头开始"""
+        srv = self.fresh('relink')
+        self.assertEqual(self.join('a', srv=srv)[0], 200)
+        self.assertEqual(self.join('b', srv=srv)[0], 200)
+        blob = {'n': base64.b64encode(secrets.token_bytes(16)).decode(), 'c': base64.b64encode(secrets.token_bytes(64)).decode(),
+                't': base64.b64encode(secrets.token_bytes(32)).decode()}
+        new = 'ef' * 16
+        for bad in (dict(admit=new, blob=blob), dict(admit=sw.admit_hash(new)), dict(admit=sw.admit_hash(new), blob={'n': 'x'}),
+                    dict(admit=sw.admit_hash(new), blob=dict(blob, c='A' * (srvmod.MAX_LINK_BLOB + 4)))):
+            self.assertEqual(self.call('relink', srv=srv, **bad)[0], 400, '口令要给哈希、密文的形状和长度要对')
+        self.assertTrue(self.unknown(self.call('relink', 'c', srv=srv, admit=sw.admit_hash(new), blob=blob)), '不是成员不能换')
+        st, j = self.call('relink', srv=srv, admit=sw.admit_hash(new), blob=blob)
+        self.assertEqual((st, j['n']), (200, 1), j)
+        self.assertEqual(self.call('members', 'b', srv=srv)[0], 200, '已经加入的设备照旧')
+        self.assertEqual(self.join('c', srv=srv), (403, {'error': 'denied'}), '旧的加入链接不能再用来加入')
+        st, j = self.join('c', srv=srv, admit=new)
+        self.assertEqual((st, j['seed']), (200, False), '新的能用：不是部署时配置的那个口令')
+        st, j = self.call('members', 'b', srv=srv)
+        self.assertEqual((j['link']['n'], j['link']['blob']), (1, blob), '成员拿到换的那台存的密文')
+        st, j = self.call('relink', 'b', srv=srv, admit=sw.admit_hash('12' * 16), blob=blob)
+        self.assertEqual(j['n'], 2, '每换一次加一')
+        gen = self.call('members', srv=srv)[1]['gen']
+        srv.stop()
+        again = Server(srv.d, admit_hash=sw.admit_hash(self.ADMIT), proxied=True)
+        self.addCleanup(again.stop)
+        st, j = self.call('members', srv=again)
+        self.assertEqual((st, j['gen'], j['link']['n']), (200, gen, 2), '重启后照旧：配置的还是部署时的口令')
+        self.assertEqual(self.join('c', srv=again, admit=new), (403, {'error': 'denied'}), '认的是最后换的那个')
+        self.assertEqual(self.join('c', srv=again, admit='12' * 16)[0], 200)
+
+    def test_old_state(self):
+        """以前的版本写的状态文件：没有 gen 的补上一个、设备照旧；坏了的 link 不要"""
+        d = self.d / 'oldstate'
+        d.mkdir()
+        h = sw.admit_hash(self.ADMIT)
+        doc = {'v': 1, 'seq': 0, 'machines': {self.fp('a'): {'name': 'a-mac', 'key': self.pubs['a'], 'joined': time.time()}},
+               'beats': {}, 'units': {}, 'own': {'seed': h, 'admit': h, 'check': sw.hub_check(self.SALT), 'link': {'n': 0, 'blob': {}}}}
+        (d / 'state.json').write_text(json.dumps(doc))
+        srv = Server(d, admit_hash=h, proxied=True)
+        self.addCleanup(srv.stop)
+        st, j = self.call('members', srv=srv)
+        self.assertEqual((st, [r['name'] for r in j['members']], j['link']), (200, ['a-mac'], None), j)
+        self.assertRegex(j['gen'], r'^[0-9a-f]{32}$')
+        saved = json.loads((d / 'state.json').read_text())['own']
+        self.assertEqual((saved['gen'], 'link' in saved), (j['gen'], False), '补上的编号写回去（重启后还是它）')
+
+    def test_behind_proxy(self):
+        """--behind-proxy：只说 HTTP；按 X-Forwarded-For 的最后一项限流（前面的是客户端自己写的，不算）；同一个 IP 的连接数不限"""
+        srv = self.fresh('proxied')
+        st, j = srv.req('GET', '/v1/health')
+        self.assertEqual((st, j['mode']), (200, 'own'))
+        burst = 120   # Server 的 ip_bucket：Buckets(2, 120)
+
+        def flood(xff):
+            got = [srv.req('POST', '/v1/members', b'{}', headers={'X-Forwarded-For': xff(i)})[0] for i in range(burst + 5)]
+            return got.count(429)
+        self.assertEqual(flood(lambda i: '198.51.100.%d' % (i % 250)), 0, '各是各的 IP：不限')
+        self.assertGreater(flood(lambda i: '203.0.113.%d, 192.0.2.7' % (i % 250)), 0, '最后一项一样：同一个 IP（前面的随便写也没用）')
+        socks = [socket.create_connection(('127.0.0.1', srv.port), timeout=5) for _ in range(srvmod.MAX_CONN_IP + 2)]
+        try:
+            time.sleep(0.3)
+            self.assertEqual(srv.req('GET', '/v1/health')[0], 200, '连过来的都是代理：不按同一个 IP 的连接数断开')
+        finally:
+            for x in socks:
+                x.close()
+        bad = subprocess.run([sys.executable, '-I', str(SERVER), '--behind-proxy', '--cert', 'x', '--key', 'y', '--mode', 'own',
+                              '--admit-hash', sw.admit_hash(self.ADMIT), '--state', str(self.d / 'x.json')],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
+        self.assertEqual(bad.returncode, 2, '--behind-proxy 不用证书')
+        self.assertIn('不用 --cert', bad.stderr.decode())
+
+    def test_hosted_preset(self):
+        """CCA_HUB_HOSTED=1（托管平台的部署文件只设环境变量、只写 python3 -I /app/cca-presence.py）：等于 --mode own --behind-proxy
+        --listen 0.0.0.0:8080 --state /data/state.json；没有 /data（没挂存储）不启动"""
+        env = dict(os.environ, CCA_HUB_HOSTED='1', CCA_HUB_ADMIT_HASH=sw.admit_hash(self.ADMIT))
+        if not os.path.isdir('/data'):
+            r = subprocess.run([sys.executable, '-I', str(SERVER)], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn('没有 /data', r.stderr)
+        d = self.d / 'hosted'
+        d.mkdir()
+        proc = subprocess.Popen([sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'),
+                                 '--state', str(d / 'state.json')], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE)
+        self.addCleanup(lambda: (proc.poll() is not None or (proc.kill(), proc.wait()), proc.stderr.close()))
+        port = int(wait_for('服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
+        c = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+        c.request('GET', '/v1/health')
+        j = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual((j['mode'], 'join' in j['ops']), ('own', True), '只说 HTTP、是自己的同步服务器')
+        self.assertTrue(json.loads((d / 'state.json').read_text())['own']['seed'] == sw.admit_hash(self.ADMIT))
 
     def test_store(self):
         """满了、维护者的服务器接着自己的服务器的状态文件（在进程里直接调 Store，不起服务器）"""
@@ -543,12 +676,12 @@ class OwnServerTest(unittest.TestCase):
         check, now = sw.hub_check(self.SALT), time.time()
         fps = ['SHA256:' + base64.b64encode(hashlib.sha256(b'%d' % i).digest()).decode()[:43] for i in range(srvmod.MAX_MEMBERS + 1)]
         for i, f in enumerate(fps[:-1]):
-            self.assertEqual(store.join(f, self.pubs['a'], 'mac', check, now)[0], 200)
+            self.assertEqual(store.join(f, self.pubs['a'], 'mac', check, self.ADMIT, now)[0], 200)
         self.assertEqual(len({m['name'] for m in store.data['machines'].values()}), srvmod.MAX_MEMBERS, '名字都不一样（mac、mac-2……）')
-        self.assertEqual(store.join(fps[-1], self.pubs['a'], 'x', check, now), (507, {'error': 'full'}))
-        self.assertEqual(store.join(fps[0], self.pubs['a'], 'renamed', check, now)[0], 200, '已经在里面的照样能改名字')
+        self.assertEqual(store.join(fps[-1], self.pubs['a'], 'x', check, self.ADMIT, now), (507, {'error': 'full'}))
+        self.assertEqual(store.join(fps[0], self.pubs['a'], 'renamed', check, self.ADMIT, now)[0], 200, '已经在里面的照样能改名字')
         self.assertEqual(store.remove(fps[1])[0], 200)
-        self.assertEqual(store.join(fps[-1], self.pubs['a'], 'x', check, now)[0], 200, '移除一台以后又能加入了')
+        self.assertEqual(store.join(fps[-1], self.pubs['a'], 'x', check, self.ADMIT, now)[0], 200, '移除一台以后又能加入了')
         again = srvmod.Store(str(d / 'state.json'), 60, 600, 86400, mode='own', admit_hash=h)
         self.assertEqual(len(again.data['machines']), srvmod.MAX_MEMBERS, '同一个口令：接着用')
         maint = srvmod.Store(str(d / 'state.json'), 60, 600, 86400)
@@ -793,10 +926,10 @@ class Device:
 
 class FreshServer(Server):
     """ClientTest 每个用例重起一次的服务器：5 秒还没起来（机器忙）接着等；起不来、停不下来也不留下进程"""
-    def __init__(self, d, admit_hash=None):
+    def __init__(self, d, admit_hash=None, port=0):
         try:
             try:
-                super().__init__(d, ttl='60', idle='600', admit_hash=admit_hash)
+                super().__init__(d, ttl='60', idle='600', admit_hash=admit_hash, port=port)
             except FileNotFoundError:   # 端口文件还没有
                 self.port = int(wait_for('服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
         except BaseException:
@@ -1521,19 +1654,36 @@ class HubClientTest(Sessions, unittest.TestCase):
         self.assertEqual(a.ok('hub-remove', 'plan', 'bob-mini').strip(), '%s\tbob-mini\t0' % fb)
         self.assertEqual(a.ok('hub-remove', 'plan', fb[7:15]).strip(), '%s\tbob-mini\t0' % fb, '指纹的开头也认（不带 SHA256: 也行）')
         self.assertEqual(a.ok('hub-remove', 'plan', 'alice-mbp').strip().split('\t')[1:], ['alice-mbp', '1'], '是这台设备自己')
-        self.assertEqual(a.ok('hub-remove', 'apply', fb), '')
+        self.assertEqual(a.ok('hub-remove', 'apply', fb), '', '移除以后换了加入链接（stdout 是空的）')
         self.assertEqual(json.loads(a.ok('hub-status', '--json'))['hub']['members'], 1)
+        inv2 = a.ok('hub-invite').strip()
+        new = sw.link_decode(inv2)
+        self.assertEqual((new['u'], new['p'], new['s']), (sw.link_decode(inv)['u'], [self.own_pin], self.SALT), '地址、指纹、盐不变')
+        self.assertNotEqual(new['a'], self.ADMIT, '移除以后换了入伙口令')
+        blob = json.loads((self.own.d / 'state.json').read_text())['own']['link']['blob']
+        self.assertEqual(sw.link_open(self.SALT, blob), {'a': new['a'], 's': self.ADMIT}, '服务器上存的照 README 解得开：新的口令、部署时的口令')
+        self.assertNotIn(new['a'], (self.own.d / 'state.json').read_text(), '服务器上只有新口令的哈希')
         r = b.run('hub-devices')
         self.assertEqual(r.returncode, 1)
-        self.assertIn('不认这台设备', r.stdout)
-        self.assertEqual(self.join(b, inv), self.joined('bob-mini', 2), '被移除以后拿着加入链接照样能重新加入（链接不随移除作废）')
-        a.ok('hub-remove', 'apply', fb)
+        self.assertIn('被别的设备从 %s 上的自己的同步服务器移除了' % host, r.stdout, '记录的编号没变：是被移除了')
+        self.assertFalse((b.cca / 'hub').exists(), '本机记着的删掉（和退出一样）')
+        self.assertEqual(json.loads((b.cca / 'hub-removed.json').read_text())['name'], 'bob-mini', '留下说明（在 hub/ 外面：再加入没成时也在）')
+        self.assertEqual(oct((b.cca / 'hub-removed.json').stat().st_mode & 0o777), '0o600')
+        st = json.loads(b.ok('hub-status', '--json'))
+        self.assertEqual((st['joined'], st['hub']), (False, None))
+        self.assertIn('要再加入', st['reason'])
+        self.assertEqual(why(self.join(b, inv)), (1, 'denied'), '被移除以后拿着原来的链接加入不了')
+        self.assertTrue((b.cca / 'hub-removed.json').exists(), '加入没成：说明照旧留着')
+        self.assertEqual(self.join(b, inv2), self.joined('bob-mini', 2), '拿新的链接能加入：名字照移除前的')
+        self.assertFalse((b.cca / 'hub-removed.json').exists(), '加入成了删掉说明')
+        a.ok('hub-remove', 'apply', self.own_fp(b))
+        inv = a.ok('hub-invite').strip()
         self.assertEqual(b.ok('hub-leave', 'plan').strip(), host + '\tbob-mini')
         self.assertEqual(b.ok('hub-leave', 'apply'), '', '服务器已经不认它了：照样退出，不用说什么')
         self.assertFalse((b.cca / 'hub').exists())
         self.assertEqual((b.run('hub-leave', 'plan').returncode, b.run('hub-invite').returncode), (2, 2))
         self.assertEqual(json.loads(b.ok('hub-status', '--json'))['hub'], None)
-        # 移除这台设备自己：等于退出
+        # 移除这台设备自己：等于退出（不换链接）
         self.assertEqual(self.join(c, inv, '--name', 'carol-air'), self.joined('carol-air', 2))
         self.assertEqual(a.ok('hub-remove', 'apply', fa), '')
         self.assertFalse((a.cca / 'hub').exists(), '移除的是自己：本机记着的也删掉')
@@ -1623,9 +1773,194 @@ class HubClientTest(Sessions, unittest.TestCase):
         self.session(a, self.BOB, SESSION_PID - 1)   # 会话变了：报上去，服务器已经不认它
         wait_for('被移除以后的那一次上报', lambda: codes() == [200, 403])
         self.assertIn('cca hub join', wait_for('没报成的原因', lambda: self.status(a, own=True)))
-        self.assertEqual(self.join(a)[0], 0)
-        wait_for('重新加入以后马上报', lambda: codes() == [200, 403, 200], secs=30)
-        wait_for('没报成的原因清掉了', lambda: self.status(a, own=True) == '')
+        self.assertFalse((a.cca / 'hub' / 'hub.json').exists(), '发现被移除了：本机记着的删掉')
+        self.assertEqual(self.join(a, b.ok('hub-invite').strip())[0], 0, '拿新的链接重新加入（新的密钥）')
+        fa2 = self.own_fp(a)
+        wait_for('重新加入以后马上报', lambda: [r['code'] for r in a.sent('report') if r['key'] == fa2] == [200], secs=30)
+        self.assertIn(self.status(a, own=True), (None, ''), '没报成的原因清掉了')
+
+    def doc(self, dev):
+        return json.loads((dev.cca / 'hub' / 'hub.json').read_text())
+
+    def test_relink(self):
+        """换加入链接（hub-invite --new）：旧的不能再用来加入，已经加入的照旧；别的设备问设备、要链接时换上新的"""
+        a, b, c = (self.device(n, {self.BOB: 'US-B'}) for n in ('alice-mbp', 'bob-mini', 'carol-air'))
+        for d in (a, b):
+            self.assertEqual(self.join(d, None, '--name', d.name)[0], 0)
+        self.assertEqual((self.doc(a)['seed'], self.doc(b)['seed']), (self.ADMIT, self.ADMIT), '加入时记下部署时的口令')
+        gen = self.doc(a)['gen']
+        self.assertRegex(gen, '^[0-9a-f]{32}$')
+        inv = a.ok('hub-invite', '--new').strip()
+        new = sw.link_decode(inv)['a']
+        self.assertNotEqual(new, self.ADMIT)
+        self.assertEqual((self.doc(a)['admit'], self.doc(a)['link'], self.doc(a)['seed']), (new, 1, self.ADMIT))
+        self.assertEqual(self.doc(b)['admit'], self.ADMIT, 'b 还没问过服务器')
+        self.assertEqual(b.ok('hub-invite').strip(), inv, 'b 要链接时先问服务器：换上新的')
+        self.assertEqual((self.doc(b)['admit'], self.doc(b)['link'], self.doc(b)['gen']), (new, 1, gen))
+        self.assertEqual(self.join(c, self.link())[0], 1, '旧的链接不能再用来加入')
+        self.assertFalse((c.cca / 'hub').exists())
+        self.assertEqual(self.join(c, inv, '--name', 'carol-air'), self.joined('carol-air', 3))
+        self.assertEqual((self.doc(c)['admit'], 'seed' in self.doc(c)), (new, False), '拿换过的链接加入：不知道部署时的口令')
+        c.ok('hub-devices')
+        self.assertEqual(self.doc(c)['seed'], self.ADMIT, '问设备时从服务器存的密文里拿到')
+        # 服务器不认这个请求（旧版服务器）：说清楚，本机不动
+        self.own.stop()
+        r = a.run('hub-invite', '--new')
+        self.assertEqual((r.returncode, self.doc(a)['admit']), (1, new))
+        self.assertIn('连不上', r.stdout)
+        self.assertEqual(a.ok('hub-invite').strip(), inv, '连不上时照本机记着的打')
+
+    def restart_own(self, admit=None, wipe=True):
+        """自己的服务器重启：wipe 时数据目录清空（托管平台上没挂存储、数据目录删了）；admit：换成另一个配置的口令（从头部署）"""
+        d = self.own.d
+        self.own.stop()
+        if wipe:
+            for f in ('state.json', 'keys.json', 'cost-slots.json'):
+                (d / f).unlink(missing_ok=True)
+        self.own = FreshServer(d, admit_hash=sw.admit_hash(admit or self.ADMIT), port=self.own.port)
+
+    def test_records_lost(self):
+        """服务器的记录没了（数据目录清空、配置照旧）：设备下次找它时自己重新加入（gen 变了）。换过链接的拿现在的口令加入不了，
+        再拿部署时的那个；发现了自己被移除的设备已经删掉了记着的，加不回来"""
+        a, b, c = (self.device(n, {self.BOB: 'US-B'}) for n in ('alice-mbp', 'bob-mini', 'carol-air'))
+        for d in (a, b, c):
+            self.assertEqual(self.join(d, None, '--name', d.name)[0], 0)
+        a.ok('hub-remove', 'apply', self.own_fp(c))   # 移除 c（换了链接）
+        self.assertEqual(c.run('hub-devices').returncode, 1, 'c 发现被移除了')
+        b.ok('hub-devices')   # b 换上新的链接
+        gen = self.doc(a)['gen']
+        self.restart_own()
+        names = lambda d: [x['name'] for x in json.loads(d.ok('hub-devices', '--json'))['devices']]
+        self.assertEqual(names(b), ['bob-mini'], '记录没了：b 自己重新加入，再问一次')
+        doc = self.doc(b)
+        self.assertTrue(doc['gen'] != gen and doc['admit'] == self.ADMIT and 'link' not in doc, '现在的口令不认，拿部署时的那个加入的')
+        self.assertEqual([r['op'] for r in b.sent()[-3:]], ['join', 'join', 'members'], '先试现在的口令，再试部署时的那个')
+        self.assertEqual(names(a), ['alice-mbp', 'bob-mini'], 'a 也自己重新加入')
+        self.assertFalse((c.cca / 'hub' / 'hub.json').exists(), 'c 被移除时已经删掉了记着的：加不回来')
+        self.assertEqual(len(json.loads((self.own.d / 'state.json').read_text())['machines']), 2)
+        # 服务器从头部署过（配置了另一个口令）：拿记着的都加入不了，记下这一份，不再为它试
+        self.restart_own(admit='99' * 16)
+        r = a.run('hub-devices')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('拿记着的加入链接也加入不了', r.stdout)
+        stale = self.doc(a)['stale']
+        self.assertRegex(stale, '^[0-9a-f]{32}$')
+        joins = len(a.sent('join'))
+        self.assertEqual(a.run('hub-devices').returncode, 1)
+        self.assertEqual(len(a.sent('join')), joins, '同一份记录不再试')
+        # 重启但数据还在：照旧（不重新加入）
+        self.restart_own(admit='99' * 16, wipe=False)
+        self.assertEqual(json.loads((self.own.d / 'state.json').read_text())['own']['gen'], stale)
+
+    def hosted(self, dev, *args, ok=True):
+        """hub-hosted files …：成了是 {platform, dir, hash, update, steps}（照 bash 那样拆 sh 的几行），没成是 (原因码, 原因)"""
+        r = dev.run('hub-hosted', 'files', *args)
+        self.assertEqual(r.stderr, '')
+        if not ok:
+            self.assertEqual(r.returncode, 1, r.stdout)
+            return tuple(r.stdout.strip().split('\t', 1))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        return dict(x.split('=', 1) for x in shlex.split(r.stdout))
+
+    def test_hosted(self):
+        """部署到托管平台：生成部署文件（只有口令的哈希），还没用上的口令和盐记在 hub-hosted.json；拿平台给的地址加入（照证书机构验：
+        链接里没有指纹）；加入着再生成是更新（哈希照部署时的口令，换过链接也不变）；自己部署的那种、不知道部署时的口令时不生成"""
+        a = self.device('alice-mbp', {self.BOB: 'US-B'})
+        self.assertEqual(a.ok('hub-hosted', 'platform'), '\n', '什么都没记着')
+        f = self.hosted(a, 'railway')
+        d = Path(f['dir'])
+        self.assertEqual((d, f['platform'], f['update']), (a.home / 'cca-hub-railway', 'railway', ''))
+        pend = a.cca / 'hub-hosted.json'
+        doc = json.loads(pend.read_text())
+        self.assertEqual((oct(pend.stat().st_mode & 0o777), doc['platform'], f['hash']), ('0o600', 'railway', sw.admit_hash(doc['admit'])))
+        self.assertEqual(sorted(p.name for p in d.iterdir()), ['Dockerfile', 'README.md', 'cca-presence.py'])
+        self.assertEqual((d / 'cca-presence.py').read_text(), SERVER.read_text(), '服务端程序就是这一版')
+        docker = (d / 'Dockerfile').read_text()
+        self.assertIn('ENV CCA_HUB_HOSTED=1 CCA_HUB_ADMIT_HASH=' + f['hash'], docker)
+        self.assertIn('CMD ["python3", "-I", "/app/cca-presence.py"]', docker)
+        for p in d.iterdir():
+            self.assertNotIn(doc['admit'], p.read_text(), '口令、盐不进部署文件（只有哈希）')
+            self.assertNotIn(doc['salt'], p.read_text())
+        self.assertEqual(f['steps'].split('\n')[-1], 'railway domain --port 8080')
+        self.assertIn(f['steps'], (d / 'README.md').read_text())
+        self.assertEqual(a.ok('hub-hosted', 'platform').strip(), 'railway')
+        self.assertEqual(self.hosted(a, 'railway')['hash'], f['hash'], '再运行一次：照旧用记着的那一份（已经部署了的照样认）')
+        busy = a.home / 'busy'
+        busy.mkdir()
+        (busy / 'notes.txt').write_text('x')
+        (busy / '.DS_Store').write_text('x')
+        self.assertEqual(self.hosted(a, 'sealos', '--dir', str(busy), ok=False)[0], 'dir', '目录里有别的文件：不碰')
+        s = self.hosted(a, 'sealos', '--dir', '~/sealos')
+        self.assertEqual((s['dir'], s['hash']), (str(a.home / 'sealos'), f['hash']), '换个平台也是同一份口令')
+        self.assertEqual(sorted(p.name for p in Path(s['dir']).iterdir()), ['README.md', 'cca-presence.py'])
+        self.assertIn('环境变量：CCA_HUB_ADMIT_HASH=' + f['hash'], s['steps'])
+        self.assertEqual(a.ok('hub-hosted', 'platform').strip(), 'sealos', '记着的是最近一次的平台')
+
+        # 平台上部署好了：证书机构签的证书（平台的），地址是平台给的
+        o = self.d / ('hosted-' + secrets.token_hex(4))
+        o.mkdir()
+        make_ca_cert(o)
+        srv = FreshServer(o, admit_hash=f['hash'])
+        self.addCleanup(lambda: srv.proc.poll() is not None or srv.stop())
+        url = 'https://127.0.0.1:%d' % srv.port
+        why = lambda r: (r.returncode, r.stdout.split('\t')[0])
+        self.assertEqual(why(a.run('hub-hosted', 'join', 'http://127.0.0.1:%d' % srv.port)), (1, 'url'), '要 https')
+        self.assertEqual(why(a.run('hub-hosted', 'join', url + '/v1/health')), (1, 'url'), '不带路径')
+        self.assertEqual(why(a.run('hub-hosted', 'join', url)), (1, 'cert'), '系统的证书机构不认这个证书')
+        self.assertFalse((a.cca / 'hub').exists())
+        self.assertTrue(pend.exists(), '没加入成：记着的那一份留着')
+        a.env['CURL_CA_BUNDLE'] = str(o / 'ca.pem')
+        r = a.run('hub-hosted', 'join', ' %s/ ' % url, '--name', 'alice-mbp')
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, 'alice-mbp\n127.0.0.1:%d\n1' % srv.port), r.stdout)
+        self.assertFalse(pend.exists(), '加入成了：记着的那一份删掉')
+        hub = self.doc(a)
+        self.assertEqual((hub['pins'], hub['hosted'], hub['seed'], hub['admit']), ([], 'sealos', doc['admit'], doc['admit']))
+        argv = (a.home / 'curl.argv').read_text().strip().split('\n')[-1]
+        self.assertTrue('--pinnedpubkey' not in argv and ' -k ' not in argv and argv.endswith('/v1/join'), argv)
+        h = json.loads(a.ok('hub-status', '--json'))['hub']
+        self.assertEqual((h['pinned'], h['members']), (False, 1))
+        self.assertEqual(why(a.run('hub-deploy', 'root@example.com')), (1, 'platform'), '托管平台上的不经 SSH 部署、更新')
+        self.assertEqual(why(a.run('hub-hosted', 'join', url)), (1, 'pending'), '没有还没用上的口令了')
+
+        # 更新：哈希照部署时的口令（换过链接也不变）
+        inv = a.ok('hub-invite', '--new').strip()
+        u = self.hosted(a, 'railway')
+        self.assertEqual((u['update'], u['hash'], u['steps'].split('\n')[-1]), ('1', f['hash'], 'railway up --detach'))
+        self.assertFalse((a.cca / 'hub-hosted.json').exists(), '更新不记口令')
+        b = self.device('bob-mini', {self.BOB: 'US-B'})
+        b.env['CURL_CA_BUNDLE'] = str(o / 'ca.pem')
+        self.assertEqual(self.join(b, inv, '--name', 'bob-mini')[0], 0)
+        self.assertNotIn('seed', self.doc(b), '拿换过的链接加入：还不知道部署时的口令')
+        self.assertEqual(self.hosted(b, 'sealos')['hash'], f['hash'], '生成前先问一次服务器：换链接的设备存的密文里有')
+        self.assertEqual(self.doc(b)['seed'], doc['admit'])
+        # 别处拿新的口令重新部署过（平台上配置的哈希换了，服务器从头开始）：记着原来那一份的设备不生成更新——照它记着的口令生成的
+        # 部署文件会让服务器又从头开始
+        srv.stop()
+        srv = FreshServer(o, admit_hash=sw.admit_hash(secrets.token_hex(16)), port=srv.port)
+        code, out = self.hosted(a, 'railway', ok=False)
+        self.assertEqual(code, 'denied', out)
+        self.assertIn('先不生成', out)
+        self.assertIn('stale', self.doc(a), '拿记着的口令重新加入也不认：记下这一份')
+        srv.stop()
+        hb = self.doc(b)
+        hb.pop('seed')
+        (b.cca / 'hub' / 'hub.json').write_text(json.dumps(hb))
+        self.assertEqual(self.hosted(b, 'railway', ok=False)[0], 'seed', '不知道部署时的口令：不生成（哈希不对的话服务器会丢掉所有设备）')
+        c = self.device('carol-air', {self.BOB: 'US-B'})
+        self.assertEqual(self.join(c, None, '--name', 'carol-air')[0], 0)
+        self.assertEqual(self.hosted(c, 'railway', ok=False)[0], 'not_hosted', '加入的是自己部署的那种：先退出')
+
+    def test_ca_mode(self):
+        """加入链接里没有指纹（托管平台、反向代理后面）：照系统的证书机构验证书（不带 -k、--pinnedpubkey）；测试服务器的证书是自签的，
+        验不过：原因码 cert，什么都不留"""
+        a = self.device('alice-mbp', {self.BOB: 'US-B'})
+        link = sw.link_encode('https://127.0.0.1:%d' % self.own.port, [], self.ADMIT, self.SALT)
+        code, out = self.join(a, link)
+        self.assertEqual((code, out.split('\t')[0]), (1, 'cert'), out)
+        self.assertIn('证书验证不过', out)
+        argv = (a.home / 'curl.argv').read_text()
+        self.assertTrue('--pinnedpubkey' not in argv and ' -k ' not in argv, argv)
+        self.assertFalse((a.cca / 'hub').exists())
 
     def test_routing(self):
         """一台设备两台服务器：映射里的 alice 只到维护者的，自己的 bob 只到自己的（设备统计、记下的 API key、折合金额都是）"""

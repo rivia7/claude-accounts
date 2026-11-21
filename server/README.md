@@ -75,10 +75,13 @@ get 回各台设备的 `{fp, name, me, revoked, tag, age, blob}`（have 里认�
 `--mode own --admit-hash <入伙口令的 SHA-256>`（64 个小写十六进制字符；也可以用环境变量 `CCA_HUB_ADMIT_HASH`，托管平台好配）：不用
 `--release-key`，没有设备清单（`/v1/machines` 回 404），设备拿加入链接自己加入，最多 64 台。别的照上面：上报、查看、API key、折合金额的
 请求和格式都一样，签名的命名空间也是 `cca-presence`，只是每台设备用自己在这台服务器上的 ed25519 密钥（cca 放在 `~/.cca/hub/id_ed25519`）。
-不在名单里的设备（被移除了、服务器的记录清掉了）回 403 `unknown_device`，签名不对回 403 `denied`。`GET /v1/health` 的 `mode` 是 `own`。
+不在名单里的设备（被移除了、服务器的记录清掉了）回 403 `unknown_device`，带着 `gen`（这一份记录的编号：没有状态文件、从头开始时生成，
+32 个小写十六进制字符。和设备加入时记下的一样是被移除了；不一样是服务器的记录没了，cca 拿记着的口令自己重新加入），签名不对回 403 `denied`。
+`GET /v1/health` 的 `mode` 是 `own`。
 
 加入链接：`cca-hub1.<base64url(JSON)>.<校验>`。JSON 是紧凑的 `{"u":地址,"p":[证书公钥的指纹…],"a":入伙口令,"s":盐}`：地址是
-`https://主机:端口`（不带结尾的 `/`），指纹是 curl `--pinnedpubkey` 的写法 `sha256//…`（1～4 个），入伙口令和盐都是 16 个随机字节写成的
+`https://主机:端口`（不带结尾的 `/`），指纹是 curl `--pinnedpubkey` 的写法 `sha256//…`（0～4 个：没有时设备照系统的证书机构验服务器的证书，
+托管平台上的是这样，见下面「托管平台」），入伙口令和盐都是 16 个随机字节写成的
 32 个小写十六进制字符（读的时候盐和映射里设备统计的盐一样认 32～128 个）。base64url 不带 `=`；校验是前面 `cca-hub1.<base64url>` 这一段的 SHA-256 的前 4 个十六进制字符（看出复制时
 少了一截、抄错了）。读的时候不管中间的空白（聊天软件里贴过来可能折了行）。只加字段不升版本，格式不兼容时换成 `cca-hub2.`。
 链接是凭证：谁拿到都能加入。cca 只经 stdin、提问会话传它，不进命令行和环境变量。
@@ -89,13 +92,20 @@ get 回各台设备的 `{fp, name, me, revoked, tag, age, blob}`（have 里认�
 
 | op | 请求 | 回 |
 |---|---|---|
-| `join` | `pub`（`ssh-ed25519 …`，要加入的这一把：`key` 是它的指纹，签名也用它）、`name`（1～64 个字符，没有控制字符、前后没有空白）、`admit`（入伙口令）、`check` | `{name, members}`：服务器上这台设备的名字（被别的设备用了时后面加 `-2`、`-3`……）、现在几台。入伙口令不对和签名不对一样回 403 `denied`；`check` 和登记的不一样 409 `salt_mismatch`；满了 507 `full`。同一把密钥再加入是改名字（加入的时间不变） |
-| `members` | （没有别的） | `{me_name, members: [{fp, name, me, joined_age, seen_age}]}`：`seen_age` 是服务器最近一次收到它签过名的请求（重启以后只算上报） |
+| `join` | `pub`（`ssh-ed25519 …`，要加入的这一把：`key` 是它的指纹，签名也用它）、`name`（1～64 个字符，没有控制字符、前后没有空白）、`admit`（入伙口令）、`check` | `{name, members, gen, seed}`：服务器上这台设备的名字（被别的设备用了时后面加 `-2`、`-3`……）、现在几台、这一份记录的编号、`admit` 是不是启动时配置的那个（是的话设备记下它：换过口令以后，记录没了的服务器认的还是它）。入伙口令不对和签名不对一样回 403 `denied`；`check` 和登记的不一样 409 `salt_mismatch`；满了 507 `full`。同一把密钥再加入是改名字（加入的时间不变） |
+| `members` | （没有别的） | `{me_name, members: [{fp, name, me, joined_age, seen_age}], gen, link}`：`seen_age` 是服务器最近一次收到它签过名的请求（重启以后只算上报）；`link` 是最近一次换的口令 `{n: 第几次, blob: 换的那台设备存的密文, at: 什么时候}`，没换过是 null（`n` 比设备记着的大就解开、换上新的加入链接） |
 | `remove` | `target`（设备指纹） | `{members}`；没有这一台 404 `no_device`。是发请求的设备自己就是退出。被移除的设备上报的记录跟着删掉；传过的 API key、折合金额的密文是账号的，不删（折合金额里它标成撤销了） |
+| `relink` | `admit`（新的入伙口令的 SHA-256）、`blob`（新的口令拿盐加密的密文，最长 512 个字符） | `{n}`：换过几次。以后只认新的口令（旧的加入链接不能再用来加入），已经加入的设备照旧，下次 `members` 时拿到 `link`、换上新的链接。cca 移除了别的设备以后跟着换一次（`cca hub invite --new` 也是它） |
 
-成员之间是平的：谁都能列出、移除别的设备。启动时给的入伙口令的哈希和上次不一样（用新的加入链接重新部署了；以前是维护者的服务器）就从头开始：
-以前的设备、上报的记录、存的密文都删掉（新的盐算出来的摘要和密钥都不一样，旧的谁也用不上）。状态文件里多一项
-`"own": {"seed": 启动时给的哈希, "admit": 现在认的哈希, "check": 登记的校验值 | null}`，`machines` 的每一台多一项 `joined`（加入的时间）。
+成员之间是平的：谁都能列出、移除别的设备、换口令。启动时给的入伙口令的哈希和上次不一样（用新的加入链接重新部署了；以前是维护者的服务器）就从头开始：
+以前的设备、上报的记录、存的密文都删掉（新的盐算出来的摘要和密钥都不一样，旧的谁也用不上）；换过口令（`relink`）不算，那是 `admit`，
+启动时比的是 `seed`。状态文件里多一项 `"own": {"seed": 启动时给的哈希, "admit": 现在认的哈希, "check": 登记的校验值 | null, "gen": 这一份记录的编号,
+"link": {"n", "blob", "at"}（换过口令时）}`，`machines` 的每一台多一项 `joined`（加入的时间）。
+
+换口令的密文（`relink` 的 `blob`、`members` 的 `link.blob`）：和 API key 的一样是 `{"n", "c", "t"}`，密钥是 `root = HMAC(盐的字节, "cca-hub-link-v1")`，
+加密用 `HMAC(root, "enc")`、认证用 `HMAC(root, "mac")`，认证是 `HMAC(mac, "cca-hub-link-v1\0" nonce 密文)`（只带标签）；明文是紧凑的
+`{"a": 新的口令, "s": 启动时配置的口令 | null}`（换的那台设备知道的话：记录没了的服务器认的是它），不补齐。服务器没有盐，解不开。
+`tests/spec_wire.py` 的 `link_open`、`link_seal` 照这一段独立实现。
 
 ### 部署
 
@@ -120,6 +130,26 @@ get 回各台设备的 `{fp, name, me, revoked, tag, age, blob}`（have 里认�
 改了以后再运行一次安装脚本；没装完时换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。Docker 的另有 `compose.yaml`（容器 `cca-hub`，
 `python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的同步源、Docker Hub；只读、去掉所有权限），systemd 的是
 `/etc/systemd/system/cca-hub.service`（系统用户 `cca-hub`）。日志：`docker logs cca-hub` 或者 `journalctl -u cca-hub`。
+
+### 托管平台
+
+没有服务器时部署到托管平台（Railway、Sealos）：在装了 cca 的电脑上 `cca hub hosted [railway | sealos]`（App 里是「部署到托管平台…」），生成
+部署文件（默认 `~/cca-hub-<平台>`，里面只有入伙口令的 SHA-256），照着打出来的步骤部署（目录里的 README.md 也写着），再填平台给的公网地址，
+这台电脑跟着加入。入伙口令和盐在电脑上生成，加入之前记在 `~/.cca/hub-hosted.json`（只给自己读，加入了就删掉）：中途关掉了，再运行一次照旧用它。
+
+- 程序照样是这一个，只是 `--behind-proxy`：只说 HTTP，HTTPS 由平台做（设备照系统的证书机构验平台的证书，加入链接里没有指纹）；
+  每个 IP 的限额按 `X-Forwarded-For` 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
+- 平台的表单里只填得了环境变量和一条命令：环境变量 `CCA_HUB_HOSTED=1` 等于 `--mode own --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`
+  （命令行里写了的照命令行的），`CCA_HUB_ADMIT_HASH` 是入伙口令的哈希，命令是 `python3 -I /app/cca-presence.py`。端口固定是 8080（平台的
+  公网地址转到它）。`/data` 要挂一块存储：没有时不启动（不然重启一次记录就没了）。记录还是没了（换了存储……）时，设备找它时服务器回的 `gen` 变了，
+  cca 拿记着的口令自己重新加入。
+- Railway：生成的是 `Dockerfile`（`python:3.13-slim`，`ENV CCA_HUB_HOSTED=1 CCA_HUB_ADMIT_HASH=…`）和程序，用它的命令行工具
+  `railway init`、`railway add`、`railway volume add --mount-path /data`、`railway up`、`railway domain --port 8080`。按用量计费（见它的价格页）；
+  国内不一定连得上 `*.up.railway.app`。
+- Sealos（国内，要实名）：在它的「应用管理」里新建应用，镜像 `python:3.13-slim`、1 个实例、端口 8080 打开公网访问、启动命令、两个环境变量、
+  一块挂在 `/data` 的存储卷，再加一个配置文件 `/app/cca-presence.py`（内容就是这个程序）。
+- 更新：再运行一次 `cca hub hosted`（加入着时就是更新），照打出来的步骤换上新的程序；入伙口令的哈希照部署时的（换过口令也不变：启动时比的是 `seed`）。
+  平台的界面会变，步骤以平台现在的为准。
 
 ## 远程会话的中转
 

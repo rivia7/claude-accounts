@@ -54,12 +54,18 @@ struct HubEntry: Decodable, Sendable, Equatable {
     var joinedEpoch: Double?
     /// 能给出加入链接（`cca hub invite`，只有自己的同步服务器）
     var canInvite: Bool
+    /// 自己的同步服务器：加入链接里钉着证书的指纹（自己部署的，更新经 SSH：`cca hub deploy`）；false 是照证书机构验（托管平台上的，
+    /// 更新照 `cca hub hosted` 的步骤）。维护者的是 nil
+    var pinned: Bool?
+    /// 托管平台上的那一台（`pinned` 是 false）：更新照 `cca hub hosted`，没有经 SSH 的从头部署
+    var onPlatform: Bool { pinned == false }
 
     enum CodingKeys: String, CodingKey {
         case kind, url, host, state, error, accounts, name, members
         case checkedEpoch = "checked_epoch"
         case joinedEpoch = "joined_epoch"
         case canInvite = "can_invite"
+        case pinned
     }
 
     init(from decoder: Decoder) throws {
@@ -75,6 +81,7 @@ struct HubEntry: Decodable, Sendable, Equatable {
         members = c.int(.members)
         joinedEpoch = c.double(.joinedEpoch)
         canInvite = c.bool(.canInvite) ?? false
+        pinned = c.bool(.pinned)
     }
 }
 

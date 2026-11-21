@@ -50,10 +50,11 @@
     },
     "hubs": [
       {"kind": "maintainer", "url": "https://presence.example.com:18443", "host": "presence.example.com:18443", "state": "ok", "error": null,
-       "checked_epoch": 1794041700.0, "accounts": 1, "name": "studio-mac", "members": null, "joined_epoch": null, "can_invite": false},
+       "checked_epoch": 1794041700.0, "accounts": 1, "name": "studio-mac", "members": null, "joined_epoch": null, "can_invite": false,
+       "pinned": null},
       {"kind": "own", "url": "https://hub.example.com:18443", "host": "hub.example.com:18443", "state": "error",
        "error": "连不上 https://hub.example.com:18443（超时）", "checked_epoch": 1794030000.0, "accounts": 0, "name": "studio-mac",
-       "members": 3, "joined_epoch": 1793900000.0, "can_invite": true},
+       "members": 3, "joined_epoch": 1793900000.0, "can_invite": true, "pinned": true},
       {"kind": "later-kind", "url": "https://x.example.com:1", "host": "x.example.com:1", "state": "ok", "error": null,
        "checked_epoch": null, "accounts": 0, "name": null, "members": null, "joined_epoch": null, "can_invite": false}
     ]

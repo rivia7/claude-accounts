@@ -272,6 +272,25 @@ def link_decode(link):
     return json.loads(base64.urlsafe_b64decode(body + '=' * (-len(body) % 4)))
 
 
+LINK = 'cca-hub-link-v1'
+
+
+def link_keys(salt):
+    """换入伙口令时存在服务器上的密文的两把密钥：HMAC(盐的字节, "cca-hub-link-v1")，再分别 HMAC 上 "enc"、"mac" """
+    root = hmac.new(bytes.fromhex(salt), LINK.encode(), hashlib.sha256).digest()
+    return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
+
+
+def link_open(salt, blob):
+    """那份密文的明文：{"a": 新的口令, "s": 部署时配置的口令或者 null}（认证只带标签）；认证不过是 None"""
+    pt = unseal(LINK, link_keys(salt), [], blob)
+    return None if pt is None else json.loads(pt)
+
+
+def link_seal(salt, admit, seed):
+    return seal(LINK, link_keys(salt), [], json.dumps({'a': admit, 's': seed}, separators=(',', ':')).encode())
+
+
 def post(keyfile, port, op, extra):
     """用 deploy key（keyfile）签名，向 127.0.0.1:port 的测试服务器发 op 请求（extra 是 put / get 这些）；限流（429）时等一会儿再试。
     回 (状态码, JSON)"""

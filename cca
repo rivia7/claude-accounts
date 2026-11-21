@@ -6551,7 +6551,8 @@ cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪�
 # 自己的同步服务器（cca hub；docs/dev/hub.md，PROTOCOL 4.13）：用户自己部署的服务器，维护者共享以外的官方账号的设备统计、
 # 记下的 API key、折合金额经它和自己的其他设备同步。加入链接是凭证：只经 stdin、提问会话传，不进命令行和环境变量
 # ---------------------------------------------------------------------------
-HUB_USAGE="用法: cca hub [status [--json] | deploy [用户@]主机 [选项] | join [--stdin] [--name 名字] | devices [--json] | remove 设备 | leave | invite]"
+HUB_USAGE="用法: cca hub [status [--json] | deploy [用户@]主机 [选项] | hosted [railway | sealos] [选项] | join [--stdin] [--name 名字] | devices [--json] | remove 设备 | leave | invite [--new]]"
+HUB_HOSTED_USAGE="用法: cca hub hosted [railway | sealos] [--dir 目录] [--name 名字]"
 HUB_DEPLOY_USAGE="用法: cca hub deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--docker | --systemd] [--dir 目录] [--name 名字] [--reset]
       cca hub deploy --script > cca-hub-install.sh   （安装脚本：拷到服务器上用 root 运行，sudo sh cca-hub-install.sh）"
 cmd_hub() {
@@ -6564,6 +6565,7 @@ cmd_hub() {
 			case " $* " in *" --json "*) printf '%s\n' "$out" ;; *) say "$out" ;; esac ;;
 		join) shift; hub_join "$@" ;;
 		deploy) shift; hub_deploy "$@" ;;
+		hosted) shift; hub_hosted "$@" ;;
 		devices) shift; hub_devices "$@" ;;
 		remove) shift; hub_remove "$@" ;;
 		leave) shift; hub_leave "$@" ;;
@@ -6612,14 +6614,20 @@ hub_join() {   # cca hub join [--stdin] [--name 名字]：问加入链接（输�
 		esac
 		hub_fail "$out" "没有加入成"
 	done
-	{ IFS= read -r name; IFS= read -r host; IFS= read -r members; IFS= read -r off; } <<< "$out"   # 一行一项（可以是空的）
+	hub_joined_say "$out" "别的设备上运行 cca hub join，贴同一个加入链接（忘了的话 cca hub invite 再显示一次）"
+}
+
+hub_joined_say() {   # hub_joined_say 辅助程序的输出 别的设备怎么加入：加入成了（hub-join、hub-hosted join 的 stdout，一行一项、可以是空的：
+	                   # 这台设备的名字、地址:端口、服务器上几台设备、关掉了同步的原因）。说一声，给 result
+	local name host members off
+	{ IFS= read -r name; IFS= read -r host; IFS= read -r members; IFS= read -r off; } <<< "$1"
 	okay "已加入 ${host} 上自己的同步服务器：这台设备叫 ${name}${members:+，服务器上现在有 ${members} 台设备}"
 	if [ -n "$off" ]; then
 		hub_off_warn "$off"
 	else
 		say "  维护者共享以外的官方账号：设备统计、记下的 API key、折合金额从现在起经它和自己的其他设备同步"
 	fi
-	say "  别的设备上运行 cca hub join，贴同一个加入链接（忘了的话 cca hub invite 再显示一次）"
+	say "  $2"
 	gui_done hub_joined "已加入自己的同步服务器（${host}），这台设备叫 ${name}"
 }
 
@@ -6749,6 +6757,133 @@ hub_deploy_done() {   # hub_deploy_done 目标 辅助程序的输出：部署好
 	else gui_done hub_deployed "已部署自己的同步服务器（${host}），这台设备叫 ${name}"; fi
 }
 
+hub_platform_ask() {   # 部署到哪个托管平台：打出 railway 或者 sealos（App 里是 hub.platform）；取消返回 1
+	local a
+	if [ -n "$PROMPT_GUI" ]; then
+		gui_ask choice "部署到哪个托管平台？" railway q=hub.platform "title=部署到托管平台" label=平台 \
+			"hint=不用买服务器：平台给一个 https 的公网地址，服务端程序在它上面运行，数据存在它的存储里" \
+			"opt=railway"$'\t'"Railway"$'\t'"海外的平台：要 Railway 的账号和它的命令行工具（railway）。国内直连不一定稳" \
+			"opt=sealos"$'\t'"Sealos"$'\t'"国内的平台（要实名）：在它的网页上照着填表单"
+		return
+	fi
+	say "部署到哪个托管平台？"
+	say "  1) Railway：海外的平台，要 Railway 的账号和它的命令行工具（railway）。国内直连不一定稳"
+	say "  2) Sealos：国内的平台（要实名），在它的网页上照着填表单"
+	a=$(ask "选一个 [1/2]: " "")
+	case "$a" in
+		1|railway|Railway) printf railway ;;
+		2|sealos|Sealos) printf sealos ;;
+		*) say "  已取消"; return 1 ;;
+	esac
+}
+hub_hosted_spec() {   # App 里 cca hub hosted 的那一页（hub.hosted，给 py prompt-emit）：这一次要做的（steps）、Sealos 的配置文件内容（就是部署文件里的
+	                    # 服务端程序），第一次部署时问公网地址（url，带着上次的错误、填过的），更新时只有「更新好了」。变量是 hub_hosted 的
+	local p=Railway lab="在终端里一行一行地运行" hint="有的会打开浏览器、问问题；最后一行给出公网地址" msg
+	local where="部署好以后最后一行（railway domain）给的 https 地址，像 https://….up.railway.app"
+	[ "$platform" = sealos ] && p=Sealos lab="表单里填的" hint="在 Sealos 的「应用管理」里「创建应用」；界面以 Sealos 现在的为准" \
+		where="部署好以后 Sealos 在应用详情里给的公网地址（https:// 开头）"
+	if [ -n "$update" ]; then
+		msg="新版的部署文件生成在 ${dir}（入伙口令的哈希照旧）：照下面换上新版的服务端程序。数据在 /data 的存储里，设备不用重新加入"
+		[ "$platform" = railway ] && hint="不是在部署它的那台 Mac 上的话，先运行 railway link，选部署时的项目和 cca-hub 服务"
+		[ "$platform" = sealos ] && lab="步骤" hint=""
+		gui_kv "q=hub.hosted" "title=更新 ${p} 上的服务器" "message=$msg"
+	else
+		msg="部署文件生成在 ${dir}（里面只有入伙口令的哈希，加入链接只在这台 Mac 上）。照下面部署，部署好以后把平台给的公网地址填在最下面"
+		[ "$platform" = railway ] && msg="${msg}。要 Railway 的账号和命令行工具（brew install railway，或者 npm i -g @railway/cli）"
+		gui_kv "q=hub.hosted" "title=部署到 ${p}" "message=$msg"
+	fi
+	gui_kv field=steps kind=code "label=$lab" "hint=$hint"
+	sed 's/^/code=/' <<< "$steps"
+	if [ "$platform" = sealos ]; then
+		gui_kv field=server kind=code "label=配置文件 /app/cca-presence.py 的内容" "hint=点复制，粘贴进配置文件的内容里（就是 ${dir}/cca-presence.py）"
+		sed 's/^/code=/' "$dir/cca-presence.py"
+	fi
+	if [ -n "$update" ]; then
+		gui_kv field=next kind=choice "label=做完了以后" default=done "opt=done"$'\t'"更新好了"$'\t'""
+	else
+		gui_kv field=url kind=text "label=公网地址" "hint=${where}" \
+			"value=$url" "error=$err"
+	fi
+}
+hub_hosted() {   # cca hub hosted [railway|sealos] [--dir 目录] [--name 名字]：部署到托管平台（不用买服务器）。生成部署文件（默认 ~/cca-hub-<平台>，
+	               # 里面只有入伙口令的哈希），说怎么部署，再问平台给的公网地址、跟着加入（地址不对、还连不上带着原因重问；留空、取消是以后再加入：
+	               # 再运行一次照旧用同一份口令）。加入着托管平台上的那一台时是更新：生成新版的部署文件，说怎么换上。没写平台时用记着的，
+	               # 没有就问。App 里是提问会话：hub.platform 选平台，hub.hosted 一页（步骤、配置文件的内容、公网地址）
+	local platform="" dir="" name="" out url="" err="" update="" steps="" hash="" seq
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			railway|sealos) platform=$1 ;;
+			--dir) [ $# -ge 2 ] && [ -n "$2" ] || die "$HUB_HOSTED_USAGE"; dir=$2; shift ;;
+			--name) [ $# -ge 2 ] || die "$HUB_HOSTED_USAGE"; name=$2; shift ;;
+			*) die "$HUB_HOSTED_USAGE" ;;
+		esac
+		shift
+	done
+	[ -n "$platform" ] || platform=$(py hub-hosted platform)
+	if [ -z "$platform" ]; then
+		[ -n "$PROMPT_GUI" ] || need_tty
+		platform=$(hub_platform_ask) || return 1
+	fi
+	out=$(py hub-hosted files "$platform" ${dir:+--dir "$dir"}) || hub_fail "$out" "没有生成部署文件"
+	eval "$out"   # platform dir hash update steps
+	if [ -n "$update" ]; then   # 加入着托管平台上的那一台：说怎么换上新版的服务端程序
+		if [ -n "$PROMPT_GUI" ]; then
+			seq=$(hub_hosted_spec | py prompt-emit) || gui_abort
+			gui_answer "$seq" next
+		else
+			okay "新版的部署文件在 ${dir}（入伙口令的哈希照旧）"
+			say "  照下面换上新版的服务端程序（详细的在 ${dir}/README.md；数据在 /data 的存储里，设备不用重新加入）："
+			sed 's/^/    /' <<< "$steps" >&2
+		fi
+		gui_done hub_hosted "新版的部署文件在 ${dir}：换上以后服务器照旧，设备不用重新加入"
+		return 0
+	fi
+	if [ -n "$PROMPT_GUI" ]; then
+		while :; do
+			seq=$(hub_hosted_spec | py prompt-emit) || gui_abort
+			gui_answer "$seq" url
+			url=$ANSWER
+			if hub_is_link "$url"; then url="" err="$HUB_NOT_URL"; continue; fi
+			out=$(py hub-hosted join "$url" ${name:+--name "$name"}) && break
+			err=$(hub_hosted_why "$out") || hub_fail "$out" "没有加入成"
+		done
+	else
+		okay "部署文件在 ${dir}（里面只有入伙口令的哈希，加入链接只在这台设备上）"
+		say "  照下面部署（详细的在 ${dir}/README.md）："
+		sed 's/^/    /' <<< "$steps" >&2
+		if ! interactive; then
+			say "  部署好以后在终端里再运行一次 cca hub hosted ${platform}，填平台给的公网地址（它记得这一份口令）"
+			return 0
+		fi
+		while :; do
+			url=$(ask "部署好以后平台给的公网地址（https://…；留空是以后再加入）: " "")
+			if [ -z "${url//[[:space:]]/}" ]; then
+				say "  以后再加入：部署好以后再运行一次 cca hub hosted ${platform}（它记得这一份口令）"
+				return 0
+			fi
+			if hub_is_link "$url"; then warn "$HUB_NOT_URL"; continue; fi
+			out=$(py hub-hosted join "$url" ${name:+--name "$name"}) && break
+			err=$(hub_hosted_why "$out") || hub_fail "$out" "没有加入成"
+			warn "$err"
+		done
+	fi
+	hub_joined_say "$out" "别的设备上运行 cca hub join，贴加入链接（在这台设备上运行 cca hub invite 显示）"
+}
+HUB_NOT_URL="这是加入链接，不是平台给的公网地址：填平台给的 https 地址（加入链接是凭证，别贴到别处）"
+hub_is_link() { case "$1" in *cca-hub1.*) return 0 ;; esac; return 1; }   # 贴的是加入链接：它是凭证，不进命令行、不回显
+hub_hosted_why() {   # hub_hosted_why 辅助程序的输出：加入托管平台上的那一台没成、改了地址或者等一会儿再试就行的原因（打到 stdout）；
+	                   # 别的原因返回 1（hub_hosted 照旧停下）。变量是 hub_hosted 的
+	local why=${1#*$'\t'} again=试
+	[ -z "$PROMPT_GUI" ] || again=点继续
+	case "${1%%$'\t'*}" in
+		url) ;;
+		denied) why="这个地址上的服务器不认这一份口令：部署的不是 ${dir} 里的这一份部署文件？照它重新部署（环境变量 CCA_HUB_ADMIT_HASH 是 ${hash}）" ;;
+		cert|unreachable|server|busy|old) why="${why}（刚部署的话，等一两分钟再${again}）" ;;
+		*) return 1 ;;
+	esac
+	printf '%s' "$why"
+}
+
 hub_devices() {   # cca hub devices [--json]：自己的同步服务器上有哪些设备（问服务器；--json 给 App）
 	local a json="" out rc
 	for a in "$@"; do [ "$a" = --json ] && json=1; done
@@ -6760,8 +6895,8 @@ hub_devices() {   # cca hub devices [--json]：自己的同步服务器上有哪
 	esac
 }
 
-hub_remove() {   # cca hub remove 设备（名字，或者指纹的开头）：从服务器上移除，它现在的密钥作废（加入链接还认：留着链接的设备能重新加入）。
-	              # 是这台设备自己就是退出（同 cca hub leave）。先问
+hub_remove() {   # cca hub remove 设备（名字，或者指纹的开头）：从服务器上移除，它现在的密钥作废，加入链接跟着换一个（它留着的旧链接不能再用来
+	              # 加入；换没成时 fail_warn hub_relink）。是这台设备自己就是退出（同 cca hub leave，不换链接）。先问
 	[ $# -eq 1 ] && [ -n "$1" ] || die "用法: cca hub remove 设备（名字，或者指纹的开头；cca hub devices 看有哪些）"
 	local out rc fp name me why
 	out=$(py hub-remove plan "$1"); rc=$?
@@ -6775,7 +6910,7 @@ hub_remove() {   # cca hub remove 设备（名字，或者指纹的开头）：�
 	if [ "$me" = 1 ]; then
 		why="这就是这台设备：移除它等于退出自己的同步服务器，这台设备上记着的加入链接、别的设备同步来的折合金额跟着删掉（记下的 API key 留着）"
 	else
-		why="移除以后「${name}」现在的密钥作废，它传过的折合金额照样算在账号里。加入链接不变：它上面还留着链接，拿着链接照样能重新加入。设备丢了、被人拿走了的话，要换一个加入链接（cca hub deploy 服务器 --reset，别的设备都要重新加入），它上面登录着的账号也要处理"
+		why="移除以后「${name}」现在的密钥作废，它传过的折合金额照样算在账号里。加入链接跟着换一个：它上面留着的旧链接不能再用来加入，已经加入的设备照旧（下次问服务器时换上新的）。设备丢了、被人拿走了的话，它上面登录着的账号也要处理"
 	fi
 	[ -n "$PROMPT_GUI" ] || say "  ${why}"
 	consent hub_remove "$fp" "移除设备" "从自己的同步服务器上移除「${name}」吗？" "$why" n
@@ -6788,7 +6923,10 @@ hub_remove() {   # cca hub remove 设备（名字，或者指纹的开头）：�
 	if [ "$me" = 1 ]; then
 		okay "已退出自己的同步服务器"; gui_done hub_left "已退出自己的同步服务器"
 	else
-		okay "已从自己的同步服务器上移除「${name}」"; gui_done hub_removed "已移除「${name}」"
+		okay "已从自己的同步服务器上移除「${name}」"
+		# 移除成了，换链接没成（stdout 是原因）：它留着的旧链接还能用来加入
+		[ -z "$out" ] || fail_warn hub_relink "没换成加入链接（${out}）：「${name}」上留着的旧链接还能用来加入，再换一次：App 的「共享与同步」→「更多」→「换一个加入链接」，或者 cca hub invite --new"
+		gui_done hub_removed "已移除「${name}」"
 	fi
 }
 
@@ -6812,14 +6950,34 @@ hub_leave() {   # cca hub leave：退出自己的同步服务器：服务器上�
 	gui_done hub_left "已退出自己的同步服务器${out:+。${out}}"
 }
 
-hub_invite() {   # cca hub invite：加入链接打到 stdout（别的设备 cca hub join 时贴进去；App 的「复制加入链接」经管道读）。它是凭证：
-	               # 在 Claude Code 的会话里不给（会进对话记录）
-	[ $# -eq 0 ] || die "用法: cca hub invite"
+hub_invite() {   # cca hub invite [--new]：加入链接打到 stdout（别的设备 cca hub join 时贴进去；App 的「复制加入链接」「换一个加入链接」经管道读）。
+	               # 它是凭证：在 Claude Code 的会话里不给（会进对话记录）。--new：先换一个（consent hub_relink），旧的不能再用来加入
+	local new="" out rc
+	case "$*" in
+		'') ;;
+		--new) new=1 ;;
+		*) die "用法: cca hub invite [--new]" ;;
+	esac
 	if [ -n "${CLAUDECODE:-}" ] && [ -z "${CCA_EVENTS:-}" ]; then
 		die "在 Claude Code 里不显示加入链接（会进对话记录）：请在终端或 cca App 里看"
 	fi
-	local out
-	out=$(py hub-invite) || FAIL_CODE=hub_not_joined die "$out"
+	if [ -n "$new" ]; then
+		local why="换了以后旧的加入链接不能再用来加入（发出去了、没用上的那些跟着作废），已经加入的设备照旧，下次问服务器时换上新的"
+		[ -n "$PROMPT_GUI" ] || say "  ${why}"
+		consent hub_relink all "换加入链接" "换一个加入链接吗？" "$why" n
+		case $? in
+			0) ;;
+			1) say "已取消"; gui_cancelled; return 1 ;;
+			*) die "要先同意：在终端里运行 cca hub invite --new（会先问你）" ;;
+		esac
+	fi
+	out=$(py hub-invite ${new:+--new}); rc=$?
+	case $rc in
+		0) ;;
+		2) FAIL_CODE=hub_not_joined die "$out" ;;
+		*) [ -n "$new" ] || die "${out:-没有读到加入链接}"
+		   FAIL_CODE=hub_relink die "没换成加入链接：${out}" ;;
+	esac
 	printf '%s\n' "$out"
 	[ ! -t 1 ] || say "  在别的设备上运行 cca hub join，贴这一行。谁拿到它都能加入：只发给自己的设备"
 }
@@ -7371,9 +7529,9 @@ cmd_restore() {
 	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
 	# policy 的目录）；备份目录（backup/）是用户自己的配置文件，照样打包。登录凭证（Codex 的 auth.json、Linux 上
 	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）、
-	# 自己的同步服务器的加入信息（hub/hub.json：加入链接是凭证）和经它同步来的不打包
+	# 自己的同步服务器的加入信息（hub/hub.json：加入链接是凭证；hub-hosted.json：部署到托管平台时还没用上的口令和盐）和经它同步来的不打包
 	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/custom-nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
-		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' \
+		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' --exclude 'hub-hosted.json' \
 		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
@@ -7568,11 +7726,15 @@ EOF
                              经 SSH 把它装到自己的服务器上（Docker compose 或者 systemd + python3，默认端口 18445），这台设备跟着加入；
                              再运行是更新服务端程序。--reset 从头来（服务器忘掉所有设备，换一个加入链接）；
                              --script 只打出安装脚本（拷到服务器上 sudo sh 运行，它自己打出加入链接）
+  cca hub hosted [railway | sealos] [--dir 目录] [--name 名字]
+                             不用买服务器：部署到托管平台（Railway、Sealos）。生成部署文件（默认 ~/cca-hub-平台），说怎么部署，
+                             再问平台给的公网地址、这台设备跟着加入；加入着的再运行是更新
   cca hub join [--stdin] [--name 名字]
                              加入：问加入链接（部署服务器时给的那一行，或者已经加入的设备上 cca hub invite 给的；输入不显示），
                              --stdin 从标准输入读；名字默认是主机名
   cca hub devices [--json]   服务器上有哪些设备；remove 设备（名字或者指纹的开头）移除一台（先问）
-  cca hub invite             再显示一次加入链接（给自己的别的设备；谁拿到都能加入）；leave 退出（先问）
+  cca hub invite [--new]     再显示一次加入链接（给自己的别的设备；谁拿到都能加入）；--new 先换一个（旧的不能再用来加入，先问）；
+                             leave 退出（先问）。移除别的设备时加入链接跟着换
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa、等于 cca agy 的 aga）

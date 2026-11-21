@@ -431,6 +431,7 @@ func hubEntryInvariants(_ n: String, _ h: HubEntry, _ raw: [String: Any]) {
     check("\(n) 成了就有时间", h.state != .ok || h.checkedEpoch != nil)
     check("\(n) 只有自己的同步服务器有设备数、加入时间、加入链接", h.kind == .own ? h.canInvite && h.joinedEpoch != nil
           : !h.canInvite && h.members == nil && h.joinedEpoch == nil && h.state != .off)
+    check("\(n) 自己的同步服务器的 pinned 是 true / false（加入链接里有没有指纹），别的是 null", h.kind == .own ? isBool(raw["pinned"]) : isNull(raw["pinned"]))
 }
 
 /// `cca hub status --json`（PROTOCOL 4.13）

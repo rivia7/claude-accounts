@@ -94,8 +94,9 @@ struct SharingPage: View {
     }
 }
 
-/// 「自己的同步服务器」（PROTOCOL 4.13）。没加入：部署、加入两个入口。加入了：这台服务器同步得怎么样、加入了的设备（别的能移除）、
-/// 复制加入链接、更新服务器，「更多」里是从头部署、退出。移除、退出、从头部署都由 cca 先问同意（对话框里的话是 cca 给的）
+/// 「自己的同步服务器」（PROTOCOL 4.13）。没加入：部署到自己的服务器、部署到托管平台、粘贴加入链接。加入了：这台服务器同步得怎么样、
+/// 加入了的设备（别的能移除）、复制加入链接、更新服务器，「更多」里是换加入链接、从头部署（托管平台上的没有）、退出。移除、退出、
+/// 换链接、从头部署都由 cca 先问同意（对话框里的话是 cca 给的）
 private struct HubCard: View {
     @Environment(AppModel.self) private var model
 
@@ -119,6 +120,8 @@ private struct HubCard: View {
             GlassRow {
                 SectionAction("部署到我的服务器…", systemImage: "server.rack", prominent: true) { model.deployHub() }
                     .help("经 SSH 装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd + python3），这台 Mac 跟着加入")
+                SectionAction("部署到托管平台…", systemImage: "cloud") { model.deployHosted() }
+                    .help("没有服务器：部署到 Railway 或者 Sealos（照着生成的步骤做），填上平台给的公网地址，这台 Mac 跟着加入")
                 SectionAction("粘贴加入链接…", systemImage: "link") { model.joinHub() }
                     .help("已经部署好了：在加入了的设备上复制加入链接，贴到这里")
             }
@@ -146,6 +149,14 @@ private struct HubCard: View {
                 actions(own)
             }
         }
+    }
+
+    /// 「更多」的提示：菜单里有哪几项就说哪几项
+    static func moreHelp(reset: Bool) -> String {
+        var parts = ["换加入链接：旧的不能再用来加入，已经加入的设备照旧"]
+        if reset { parts.append("从头部署：服务器忘掉所有设备，换一个新的加入链接（每台设备都要重新加入）") }
+        parts.append("退出：这台 Mac 不再经它同步")
+        return parts.joined(separator: "；")
     }
 
     static func symbol(_ s: HubState) -> String {
@@ -193,7 +204,7 @@ private struct HubCard: View {
             } else if !model.hubLoading, model.hubError == nil {
                 Text("还没问过服务器").font(.callout).foregroundStyle(.secondary)
             }
-            Text("移除的设备现在的密钥作废；它要是还留着加入链接，照样能重新加入。设备丢了、被人拿走了的话，先移除它，再「从头部署」换一个加入链接。")
+            Text("移除的设备现在的密钥作废，加入链接跟着换一个：它留着的旧链接不能再用来加入，别的设备照旧。设备丢了、被人拿走了的话，它上面登录着的账号也要处理。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -205,12 +216,17 @@ private struct HubCard: View {
                 SectionAction("复制加入链接", systemImage: "doc.on.doc") { model.copyHubInvite() }
                     .disabled(!own.canInvite || model.hubBusy)
                     .help("给自己的别的设备加入用：在那台设备上「粘贴加入链接…」。谁拿到它都能加入：只发给自己的设备")
-                SectionAction("更新服务器…", systemImage: "arrow.triangle.2.circlepath") { model.deployHub() }
-                    .help("经 SSH 把服务器上的程序换成这一版 cca 带的：加入链接、数据都不变")
+                SectionAction("更新服务器…", systemImage: "arrow.triangle.2.circlepath") { model.updateHub() }
+                    .help(own.onPlatform ? "照着步骤把托管平台上的程序换成这一版 cca 带的：加入链接、数据都不变"
+                          : "经 SSH 把服务器上的程序换成这一版 cca 带的：加入链接、数据都不变")
             }
             Spacer(minLength: 8)
             Menu {
-                Button("从头部署（换一个加入链接）…") { model.deployHub(reset: true) }
+                Button("换一个加入链接") { model.relinkHub() }
+                    .disabled(!own.canInvite || model.hubBusy)
+                if !own.onPlatform {
+                    Button("从头部署（换一个加入链接）…") { model.deployHub(reset: true) }
+                }
                 Divider()
                 Button("退出自己的同步服务器…", role: .destructive) { model.leaveHub() }
             } label: {
@@ -219,7 +235,7 @@ private struct HubCard: View {
             .menuStyle(.button)
             .buttonStyle(.glass)
             .fixedSize()
-            .help("从头部署：服务器忘掉所有设备，换一个新的加入链接（每台设备都要重新加入）；退出：这台 Mac 不再经它同步")
+            .help(Self.moreHelp(reset: !own.onPlatform))
         }
         .disabled(model.flow != nil)
     }

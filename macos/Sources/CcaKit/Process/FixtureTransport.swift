@@ -21,8 +21,8 @@ import Foundation
 /// | `_onboard`（配置向导，提问会话） | flow__onboard.flow | — |
 /// | `hub devices --json` | hub_devices.json | — |
 /// | `hub remove 指纹` / `hub leave` | 直接成功（没有真的改） | — |
-/// | `hub invite` | 演示用的加入链接（运行时拼出来） | — |
-/// | `hub join` / `hub deploy [--reset]`（提问会话） | flow_hub_join.flow / flow_hub_deploy.flow | — |
+/// | `hub invite [--new]` | 演示用的加入链接（运行时拼出来） | — |
+/// | `hub join` / `hub deploy [--reset]` / `hub hosted`（提问会话） | flow_hub_join.flow / flow_hub_deploy.flow / flow_hub_hosted.flow | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。

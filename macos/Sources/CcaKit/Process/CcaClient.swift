@@ -92,12 +92,16 @@ enum CcaCommand: Sendable, Hashable {
     /// 加入链接（`cca hub invite`）：stdout 一行，是凭证（谁拿到都能加入）。**输出只经内存里的管道**（不能是 runsToCompletion），
     /// 用完马上丢，不进被观察的状态、不进提示、不进读屏
     case hubInvite
+    /// 换一个加入链接（`cca hub invite --new`）：先问同意（hub_relink，范围 all，默认不同意），stdout 一行是新的
+    /// 加入链接。和 hubInvite 一样**输出只经内存里的管道**
+    case hubRelink
 
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
-             .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .hubDevices, .hubRemove, .hubLeave, .hubInvite: return nil
+             .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .hubDevices, .hubRemove, .hubLeave, .hubInvite,
+             .hubRelink: return nil
         }
     }
 
@@ -108,7 +112,7 @@ enum CcaCommand: Sendable, Hashable {
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
              .clientAutoInstall, .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .hubDevices, .hubRemove, .hubLeave, .hubInvite: return nil
+             .hubDevices, .hubRemove, .hubLeave, .hubInvite, .hubRelink: return nil
         }
     }
 
@@ -172,6 +176,7 @@ enum CcaCommand: Sendable, Hashable {
         case .hubRemove(let device): return ["hub", "remove", device]
         case .hubLeave: return ["hub", "leave"]
         case .hubInvite: return ["hub", "invite"]
+        case .hubRelink: return ["hub", "invite", "--new"]
         }
     }
 
@@ -195,7 +200,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteSwitch: return 30
         case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
         case .hubDevices, .hubRemove, .hubLeave: return 40   // 问一次自己的同步服务器
-        case .hubInvite: return 15   // 不联网
+        case .hubInvite, .hubRelink: return 40   // 也先问一次服务器（invite：别的设备换过链接的话换上新的，连不上照本机记着的打）
         }
     }
 
@@ -208,7 +213,8 @@ enum CcaCommand: Sendable, Hashable {
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
-             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .hubDevices, .hubRemove, .hubLeave, .hubInvite: return false
+             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .hubDevices, .hubRemove, .hubLeave, .hubInvite,
+             .hubRelink: return false
         }
     }
 
@@ -229,8 +235,8 @@ enum CcaCommand: Sendable, Hashable {
         case .costSync: return "cost-sync"   // 定时的和手动的一个接一个
         case .remoteList: return nil   // AppModel 保证一次一个
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
-        case .hubDevices, .hubInvite: return nil   // 只读：AppModel 保证一次一个
-        case .hubRemove, .hubLeave: return "hub"   // 都改这台设备的加入信息：一个接一个
+        case .hubDevices, .hubInvite: return nil   // 不改加入信息（问服务器时顺带换上别的设备换过的链接）：AppModel 保证一次一个
+        case .hubRemove, .hubLeave, .hubRelink: return "hub"   // 都改这台设备的加入信息：一个接一个
         }
     }
 }

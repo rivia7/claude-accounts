@@ -5,7 +5,7 @@
 //! 上报、cca devices 对着这台设备用得了的每一台同步服务器（维护者的、自己的，见 hub.rs）各走一路：账号只报给它走的那一台。
 
 use super::cost::cost_kick;
-use super::hub::{hub_of, hubs, own_load, route, Hub, HubKind, HUB_DIR};
+use super::hub::{host_of, hub_of, hubs, own_load, own_recover, removed_note, route, Hub, HubKind, HUB_DIR};
 use super::keyshare::{is_num, keyshare_error, keyshare_kick, keyshare_sync, KEYSHARE_EVERY};
 use super::session::{cli_alive, cli_marks_at, lstart_epoch, proc_scan, proc_starts, ps_lstart, ps_rows, ProcInfo};
 use super::table::account_named;
@@ -542,9 +542,19 @@ pub fn presence_scan_with(
     Ok((units, pids))
 }
 
-/// 经 HTTPS 发一个签过名的请求：直连（不经账号的出口），钉住服务器证书的公钥。返回 (HTTP 状态码, JSON)；
-/// 没发出去是 (0, {"error": "sign" | "unreachable" | "pin"})。timeout 是秒
+/// 经 HTTPS 发一个签过名的请求：直连（不经账号的出口），钉住服务器证书的公钥（配置里没有指纹的——托管平台、反向代理后面的
+/// 自己的同步服务器——照系统的证书机构验证书）。返回 (HTTP 状态码, JSON)；没发出去是 (0, {"error": "sign" | "unreachable" |
+/// "pin" | "cert"})。timeout 是秒。自己的服务器不认这台设备（403 unknown_device）时先看要不要自己重新加入（`hub::own_recover`：
+/// 服务器的记录没了），重新加入了就再发一次
 pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i64, Dict)> {
+    let (code, j) = post_once(cfg, op, payload, timeout)?;
+    if code == 403 && op != "join" && is_own(cfg) && j.str("error").as_deref() == Some("unknown_device") && own_recover(cfg, &j)? {
+        return post_once(cfg, op, payload, timeout);
+    }
+    Ok((code, j))
+}
+
+fn post_once(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i64, Dict)> {
     let doc = payload.copy();
     doc.set("v", 1);
     doc.set("op", op);
@@ -564,40 +574,29 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
         return Ok((0, dict! { "error" => "sign" }));
     }
     let pins: Vec<String> = cfg.list("pins").map(|p| p.items().iter().map(|x| x.py_str()).collect()).unwrap_or_default();
-    let args: Vec<String> = [
-        "curl",
-        "-q",
-        "-sS",
-        "-k",
-        "--proxy",
-        "",
-        "--noproxy",
-        "*",
-        "--proto",
-        "=https",
-        "--max-redirs",
-        "0",
-        "--connect-timeout",
-        "5",
-        "-m",
-        &timeout.to_string(),
-        "--pinnedpubkey",
-        &pins.join(";"),
-        "-H",
-        "Content-Type: application/json",
-        "-H",
-        &format!("X-Cca-Sig: {}", b64encode(&sig)),
-        "-H",
-        "Expect:", // 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
-        "--data-binary",
-        "@-",
-        "-w",
-        "\n%{http_code}",
-        &format!("{}/v1/{}", cfg.at("url").py_str(), op),
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    // 钉住公钥时不看证书机构（自签的证书）；没有指纹时照系统的证书机构验（-k、--pinnedpubkey 都不带，别的参数先后照旧）
+    let pinned = !pins.is_empty();
+    let mut args: Vec<String> = ["curl", "-q", "-sS"].map(String::from).to_vec();
+    if pinned {
+        args.push("-k".into());
+    }
+    args.extend(
+        ["--proxy", "", "--noproxy", "*", "--proto", "=https", "--max-redirs", "0", "--connect-timeout", "5", "-m"]
+            .map(String::from),
+    );
+    args.push(timeout.to_string());
+    if pinned {
+        args.extend(["--pinnedpubkey".to_string(), pins.join(";")]);
+    }
+    args.extend([
+        "-H".to_string(),
+        "Content-Type: application/json".into(),
+        "-H".into(),
+        format!("X-Cca-Sig: {}", b64encode(&sig)),
+    ]);
+    // Expect: 不等 100 Continue（服务器是 HTTP/1.0 的，大一点的请求 curl 会白等一秒）
+    args.extend(["-H", "Expect:", "--data-binary", "@-", "-w", "\n%{http_code}"].map(String::from));
+    args.push(format!("{}/v1/{}", cfg.at("url").py_str(), op));
     let sent = Proc::new(args).input(body.as_bytes()).stdout(Out::Capture).stderr(Out::Null).timeout((timeout + 5) as f64).run();
     signal::check()?;
     let Ok(r) = sent else {
@@ -606,6 +605,10 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     if r.rc == 90 {
         // CURLE_SSL_PINNEDPUBKEYNOTMATCH：证书不是映射里钉住的那张
         return Ok((0, dict! { "error" => "pin" }));
+    }
+    if pins.is_empty() && matches!(r.rc, 51 | 60) {
+        // CURLE_PEER_FAILED_VERIFICATION（老版本是 51）：证书不是受信任的机构签的，或者和地址对不上
+        return Ok((0, dict! { "error" => "cert" }));
     }
     let text_ = r.out();
     let (out, _, code) = text::rpartition(&text_, "\n");
@@ -628,7 +631,12 @@ pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
     let err = j.get("error");
     let err = err.as_ref().and_then(|e| e.as_str());
     let own = is_own(cfg);
-    Ok(if err == Some("pin") && own {
+    Ok(if err == Some("cert") {
+        format!(
+            "自己的同步服务器（{}）的证书验证不过：不是受信任的机构签的，或者和地址对不上（地址抄错了？）",
+            host_of(&cfg.at("url").py_str())
+        )
+    } else if err == Some("pin") && own {
         "服务器的证书和加入链接里钉住的指纹对不上（可能有人冒充服务器，也可能服务器换了证书：要一个新的加入链接）".into()
     } else if err == Some("pin") {
         "服务器的证书和映射里钉住的指纹对不上（可能有人冒充服务器，也可能维护者换了证书、映射还没更新）".into()
@@ -641,8 +649,11 @@ pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
     } else if code == 0 {
         format!("连不上设备统计的服务器（{}）", cfg.at("url").py_str())
     } else if code == 403 && own && err == Some("unknown_device") {
-        "自己的同步服务器不认这台设备了（被别的设备移除了，或者服务器上的记录清掉了）：重新加入（cca hub join，贴同一个加入链接）"
-            .into()
+        // 刚发现被移除了（own_recover 删掉本机记着的，留下了 ~/.cca/hub-removed.json），或者拿记着的口令重新加入也不认
+        removed_note().unwrap_or_else(|| {
+            "自己的同步服务器不认这台设备了，拿记着的加入链接也加入不了（服务器从头部署过？）：向已经加入的设备要加入链接（cca hub invite），在这台设备上重新加入（cca hub join）"
+                .into()
+        })
     } else if code == 403 && own {
         "自己的同步服务器不认这台设备的签名：重新加入（cca hub join）".into()
     } else if code == 403 {
@@ -787,7 +798,7 @@ fn uniform(a: f64, b: f64) -> f64 {
     a + (b - a) * (bits as f64 / (1u64 << 53) as f64)
 }
 
-fn flock(f: &std::fs::File, op: libc::c_int) -> bool {
+pub fn flock(f: &std::fs::File, op: libc::c_int) -> bool {
     use std::os::unix::io::AsRawFd;
     // SAFETY: f 开着，fd 有效
     unsafe { libc::flock(f.as_raw_fd(), op) == 0 }

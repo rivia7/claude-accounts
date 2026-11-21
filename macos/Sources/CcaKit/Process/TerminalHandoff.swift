@@ -189,6 +189,11 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                 message: "在终端里运行 cca hub deploy root@服务器地址\(reset ? " --reset" : "")。", inApp: true, needsForms: true)
     }
 
+    /// 部署到托管平台（`cca hub hosted`，PROTOCOL 4.13）：选平台（`hub.platform`），一页是部署的步骤和公网地址
+    /// （`hub.hosted`；地址不对、还连不上时带着原因重问）。加入着托管平台上的那一台时是更新：一页是换上新版的步骤
+    static let hubHosted = Handoff(arguments: ["hub", "hosted"], title: "部署到托管平台",
+                                   message: "在终端里运行 cca hub hosted：照着生成的步骤部署，再填平台给的公网地址。", inApp: true, needsForms: true)
+
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {
         Handoff(arguments: prefix + ["install-cli"], title: "安装 \(Texts.cliCommand(tool)) 命令",

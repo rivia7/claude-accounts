@@ -15,9 +15,10 @@ func hubFixtureTests() {
         let own = s.config?.ownHub
         check("state：自己的同步服务器没同步成，有原因、上次成功的时间、设备数、加入时间，能给加入链接",
               own?.state == .error && own?.state.failing == true && own?.error?.contains("连不上") == true && own?.checkedEpoch == 1794030000
-              && own?.members == 3 && own?.joinedEpoch == 1793900000 && own?.canInvite == true && own?.host == "hub.example.com:18443")
-        check("state：维护者的服务器没有设备数、加入时间、加入链接", hubs.first?.members == nil && hubs.first?.joinedEpoch == nil
-              && hubs.first?.canInvite == false && hubs.first?.name == "studio-mac" && hubs.first?.accounts == 1)
+              && own?.members == 3 && own?.joinedEpoch == 1793900000 && own?.canInvite == true && own?.host == "hub.example.com:18443"
+              && own?.pinned == true && own?.onPlatform == false)
+        check("state：维护者的服务器没有设备数、加入时间、加入链接，不说钉没钉指纹", hubs.first?.members == nil && hubs.first?.joinedEpoch == nil
+              && hubs.first?.canInvite == false && hubs.first?.name == "studio-mac" && hubs.first?.accounts == 1 && hubs.first?.pinned == nil)
         let bob = s.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))
         let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))
         let erin = s.account(AccountRef(tool: .claude, key: "erin@example.com"))
@@ -76,6 +77,8 @@ func hubFixtureTests() {
         """#.utf8))
     check("cost sync --json 两台服务器：顶层是最要紧的那一台，hubs 各是各的", sync?.sync?.state == .error && sync?.sync?.hubs.map(\.kind) == [.maintainer, .own]
           && sync?.sync?.hubs.first?.checkedEpoch == 5 && sync?.sync?.hubs.last?.message == "连不上")
+    check("托管平台、换加入链接的代码", ResultCode.hubHosted.isKnown && ConsentItem.hubRelink.isKnown
+          && [FailCode.hubURL, .hubCert, .hubPending, .hubNotHosted, .hubSeed, .hubDir, .hubPlatform, .hubRelink].allSatisfy { $0.isKnown && $0.isHub })
     check("结果、失败、同意的代码", [ResultCode.hubJoined, .hubRemoved, .hubLeft, .hubDeployed].allSatisfy(\.isKnown)
           && [FailCode.hubSSH, .hubTaken, .hubNotThis, .hubMoved, .hubStart].allSatisfy { $0.isKnown && $0.isHub } && ConsentItem.hubReset.isKnown
           && [FailCode.hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt].allSatisfy(\.isKnown)
@@ -106,6 +109,10 @@ func hubProtocolTests() {
     let inv = CcaCommand.hubInvite
     check("加入链接：cca hub invite，输出只经内存里的管道（不写文件）", inv.arguments == ["hub", "invite"] && !inv.runsToCompletion
           && !inv.isBackground && inv.gate == nil && inv.tool == nil)
+    let rl = CcaCommand.hubRelink
+    check("换加入链接：cca hub invite --new，和加入链接一样输出只经内存里的管道；改加入信息，和移除、退出一个接一个",
+          rl.arguments == ["hub", "invite", "--new"] && !rl.runsToCompletion && !rl.isBackground && rl.gate == CcaCommand.hubLeave.gate && rl.tool == nil)
+    check("部署到托管平台是提问会话（要表单）", Handoff.hubHosted.arguments == ["hub", "hosted"] && Handoff.hubHosted.inApp && Handoff.hubHosted.needsForms)
     let d = Handoff.hubDeploy(reset: false), r = Handoff.hubDeploy(reset: true)
     check("部署、加入是提问会话（App 里问完）；部署要表单，从头部署带 --reset",
           d.arguments == ["hub", "deploy"] && r.arguments == ["hub", "deploy", "--reset"] && d.inApp && r.inApp && d.needsForms && r.needsForms
@@ -149,6 +156,7 @@ func hubProtocolTests() {
         return
     }
     let link = "cca-hub1." + String(repeating: "Zq", count: 24)   // 运行时拼出来：仓库里不放长得像凭证的字符串
+    let relinked = "cca-hub1." + String(repeating: "Wx", count: 24)
     let removed = "已移除「carol-air」"
     let mode = TextBox("ok")
     func transport(_ hello: String) -> ScriptedTransport {
@@ -163,6 +171,9 @@ func hubProtocolTests() {
                 return response(0, stdout: devices)
             }
             if a == ["hub", "invite"] { return response(0, stdout: link + "\n") }
+            if a == ["hub", "invite", "--new"] {
+                return r.grants.isEmpty ? response(3, [consentEvent("hub_relink", "all", yes: false)]) : response(0, stdout: relinked + "\n")
+            }
             if a.prefix(2) == ["hub", "remove"], a.count == 3 {
                 return r.grants.isEmpty ? response(3, [consentEvent("hub_remove", a[2], yes: false)])
                     : response(0, [.result(ResultEvent(code: .hubRemoved, route: nil, node: nil, port: nil, message: removed))])
@@ -184,6 +195,8 @@ func hubProtocolTests() {
         m.copyHubInvite()
         m.joinHub()
         m.deployHub()
+        m.deployHosted()
+        m.relinkHub()
         try? await Task.sleep(nanoseconds: 100_000_000)
         check("旧版 cca（hello 没有 hub）：没有自己的同步服务器（state 里有也不认），不调 cca hub、不开会话", !m.hubAvailable && m.ownHub == nil
               && hubRuns(t).isEmpty && t.started.isEmpty)
@@ -192,7 +205,7 @@ func hubProtocolTests() {
 
     let t = transport(hello)
     let log = HookLog()
-    let p = ScriptedPrompter([true, false])   // 移除：同意；退出：不同意
+    let p = ScriptedPrompter([true, false, true])   // 移除：同意；退出：不同意；换加入链接：同意
     let m = makeModel(t, log: log, prompter: p)
     await m.start()
     check("cca 有自己的同步服务器：这一页有它（有它的 cca 都有共享的开关），加入着 hub.example.com", m.hubAvailable && m.sharingAvailable
@@ -249,11 +262,20 @@ func hubProtocolTests() {
     check("退出：先问同意；不同意不重跑，什么都没改", t.requests.filter { $0.arguments == ["hub", "leave"] }.count == 1 && m.ownHub != nil
           && m.toast?.text == "没有同意，没有做任何改动")
     check("问同意的是 cca 给的（移除、退出各一次）", p.asked.map(\.item.rawValue) == ["hub_remove", "hub_leave"])
+    m.relinkHub()
+    _ = await waitUntil { log.copiedSecrets.count == 2 && !m.hubBusy && m.toast != nil }
+    let rl = t.requests.filter { $0.arguments == ["hub", "invite", "--new"] }
+    check("换加入链接：先问同意（hub_relink，范围 all），同意后重跑；新的链接只经 copySecret，提示里没有它",
+          rl.count == 2 && rl[0].grants.isEmpty && rl[1].grants == ["hub_relink:all"] && log.copiedSecrets.last == relinked
+          && m.toast?.text.contains(relinked) == false && m.toast?.text.contains("旧的不能再用来加入") == true && p.asked.last?.item == .hubRelink,
+          "\(rl.map(\.grants)) \(m.toast?.text ?? "nil")")
     m.shutdown()
 
     // 部署、从头部署、加入：都是提问会话（这里的替身不支持会话：只看开的是哪一个）
     let opens: [(String, @MainActor (AppModel) -> Void, [String])] = [
         ("部署", { $0.deployHub() }, ["hub", "deploy"]),
+        ("更新（钉着指纹的：经 SSH）", { $0.updateHub() }, ["hub", "deploy"]),
+        ("部署到托管平台", { $0.deployHosted() }, ["hub", "hosted"]),
         ("从头部署", { $0.deployHub(reset: true) }, ["hub", "deploy", "--reset"]),
         ("加入", { $0.joinHub() }, ["hub", "join"]),
     ]
@@ -264,5 +286,22 @@ func hubProtocolTests() {
         act(m)
         check("\(label)：开提问会话 cca \(want.joined(separator: " "))", await waitUntil { !t.started.isEmpty } && t.started == [want], "\(t.started)")
         m.shutdown()
+    }
+    // 托管平台上的那一台（pinned 是 false）：「更新服务器…」开 cca hub hosted
+    let onPlatform = state.replacingOccurrences(of: #""can_invite": true, "pinned": true"#, with: #""can_invite": true, "pinned": false"#)
+    if onPlatform != state {
+        let t = ScriptedTransport { r, _ in
+            if r.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
+            if r.arguments == ["_gui", "state"] { return response(0, stdout: onPlatform) }
+            return response(0, stdout: SampleDocs.clientUpdates)
+        }
+        let m = makeModel(t)
+        await m.start()
+        m.updateHub()
+        check("托管平台上的那一台：「更新服务器…」开 cca hub hosted", await waitUntil { !t.started.isEmpty } && m.ownHub?.onPlatform == true
+              && t.started == [["hub", "hosted"]], "\(t.started)")
+        m.shutdown()
+    } else {
+        check("演示数据里自己的同步服务器钉着指纹", false)
     }
 }

@@ -267,6 +267,7 @@ enum Snapshot {
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
                 ("flow-remote-pair", .remotePair, 0), ("flow-remote-pair-code", .remotePair, 1), ("flow-remote-join", .remoteJoin, 0),
                 ("flow-hub-deploy", .hubDeploy(reset: false), 0), ("flow-hub-password", .hubDeploy(reset: false), 1), ("flow-hub-join", .hubJoin, 0),
+                ("flow-hub-platform", .hubHosted, 0), ("flow-hub-hosted", .hubHosted, 1),
                 ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),
                 ("flow-warned", demo("demo-warned", "添加 Claude 账号"), 0),
                 ("flow-failed", demo("demo-failed", "添加第三方 API 账号"), 0),
