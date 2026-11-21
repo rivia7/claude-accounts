@@ -61,4 +61,6 @@
   - **缓存目录在 macOS 上是这个用户真的临时目录**（`run` 不带 `TMPDIR`）：整条卸载的那两次带 `TMPDIR=<临时目录下单独的一个>`
     （`TMPDIR` 在 `/var/folders` 下时 cca 就拿它当缓存目录；`$T` 是 `/private/var/…` 开头的，不认），不然删掉的是真的 cca、
     同时在跑的别的回归解出来的辅助程序。
-- Linux：`tests/linux.sh` 的 `cca restore` 那一条（缓存在沙箱 HOME 的 `~/.cache` 里）。
+- Linux：`tests/linux.sh` 里整条 `cca uninstall`（原来 `cca restore` 那一条：备份、凭证不进包、crontab 那一行；加上缓存目录里的 `cca-helper`、`cca-py`
+  删掉，`~/.bashrc` 里那两行去掉或者留着）；没有 `tar` 的发行版上先停下，再用 `--no-backup` 卸载。`tests/path_unhint.sh` 在 Linux 上也能直接跑
+  （bash 5、GNU coreutils；取权限按 `OSTYPE` 分 `stat -f` / `stat -c`）。

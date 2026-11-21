@@ -17,7 +17,7 @@ grep -qF "printf '\\n%s\\n%s\\n' \"\$PATH_MARK\" \"\$PATH_LINE\"" "$CCA" || { ec
 t() { env -i LANG=en_US.UTF-8 HOME="$1" PATH=/usr/bin:/bin /bin/bash -c '. "$1"; path_unhint' _ "$W/fn.sh" 2>&1; }
 fail=0
 ck() { eval "$2" || { fail=$((fail + 1)); echo "FAIL $1"; }; }
-mode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+mode() { case "$OSTYPE" in darwin*) stat -f %Lp "$1" ;; *) stat -c %a "$1" ;; esac; }   # GNU 的 stat -f 是文件系统的信息，不是文件的
 
 # 1. 典型：文件末尾是 cca 追加的三行，~/.local/bin 空了 → 去掉，文件逐字节回到原来，权限不变，空目录删掉
 H="$W/h1"; mkdir -p "$H/.local/bin"; printf 'export FOO=1\nalias ll="ls -l"\n' > "$H/orig"; cp "$H/orig" "$H/.zshrc"; chmod 640 "$H/.zshrc"

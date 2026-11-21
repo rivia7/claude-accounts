@@ -773,7 +773,11 @@ mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; [ -f "$H/.cca/policy/policy.json" ] |
 for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do
 	printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}' > "$H/.cca/policy/$f"
 done
-out=$(CCA_TTY=$(ans restore) "$C" restore 2>&1); rc=$?
+# 完全卸载（cca uninstall，cca restore 是同一条命令）：~/.cca 以外的也清掉——缓存目录里解出来的辅助程序（整个 cca-helper）、3.5.0 以前
+# 留下的 cca-py，安装时写进 ~/.bashrc 的那两行（~/.local/bin 里还有别的命令时留着；怎么去掉的各种情况在 tests/path_unhint.sh）
+mkdir -p "$H/.cache/cca-py"; : > "$H/.cache/cca-py/old.pyc"
+printf 'export FOO=1\n\n# cca（Claude Code 多账号）\nexport PATH="$HOME/.local/bin:$PATH"\n' > "$H/.bashrc"; cp "$H/.bashrc" "$D/bashrc.before"
+out=$(CCA_TTY=$(ans uninstall) "$C" uninstall 2>&1); rc=$?
 bk=$(ls "$H"/cca-backup-*.tar.gz 2>/dev/null | head -n 1)
 if ! command -v tar >/dev/null 2>&1; then
 	if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q '这台机器上没有 tar，没法先打包备份配置，什么都没改' && [ -f "$H/.cca/config.json" ] && [ -z "$bk" ]; then
@@ -787,6 +791,24 @@ elif [ $rc -eq 0 ] && [ -n "$bk" ] && [ "$(stat -c %a "$bk")" = 600 ] && printf 
 	! grep -qF '# cca-core' "$D/crontab" && grep -qx '0 3 \* \* \* echo user-job' "$D/crontab"; then
 	ok "cca restore：先打包备份（600，登录凭证、密钥文件、参考节点不在里面），再删掉 ~/.cca、cca、cxa、aga 和 crontab 里开机起内核的那一行（别的行留着）"
 else no "cca restore（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；备份：${bk:-没有} $(tar -tzf "$bk" 2>/dev/null | grep -E 'credentials|secrets|id_ed25519|policy/' | head -n 3 | tr '\n' ' ')"; fi
+if ! command -v tar >/dev/null 2>&1; then   # 没有 tar：不留备份就能卸载
+	out=$(CCA_TTY=$(ans uninstall) "$C" uninstall --no-backup 2>&1); rc=$?
+	if [ $rc -eq 0 ] && [ ! -e "$H/.cca" ] && [ -z "$(ls "$H"/cca-backup-*.tar.gz 2>/dev/null)" ] && printf '%s' "$out" | grep -qF '没有留配置备份（--no-backup）'; then
+		ok "cca uninstall --no-backup：没有 tar 也能卸载，不留备份"
+	else no "cca uninstall --no-backup（退出码 ${rc}）：$(printf '%s' "$out" | tail -n 2)"; fi
+fi
+if [ -e "$H/.cca" ]; then no "卸载以后 ~/.cca 还在：缓存目录、~/.bashrc 那两条没法看"
+else
+	if [ ! -e "$H/.cache/cca-helper" ] && [ ! -e "$H/.cache/cca-py" ]; then ok "cca uninstall：缓存目录里解出来的辅助程序（整个 cca-helper）、以前留下的 cca-py 都删掉"
+	else no "卸载以后缓存目录里还有：$(ls -A "$H/.cache" 2>&1 | tr '\n' ' ')"; fi
+	if [ -e "$H/.local/bin" ]; then   # 里面还有别的命令：那两行留着
+		if [ "$(cat "$H/.bashrc")" = "$(cat "$D/bashrc.before")" ] && printf '%s' "$out" | grep -qF '那两行留着'; then
+			ok "cca uninstall：~/.local/bin 里还有别的命令，~/.bashrc 里 cca 加的那两行留着、说一声"
+		else no "卸载以后 ~/.bashrc（~/.local/bin 里还有：$(ls -A "$H/.local/bin" | tr '\n' ' ')）：$(tr '\n' '|' < "$H/.bashrc")"; fi
+	elif [ "$(cat "$H/.bashrc")" = "export FOO=1" ]; then
+		ok "cca uninstall：~/.local/bin 空了，目录删掉，~/.bashrc 里 cca 加的那两行（连同前面的空行）去掉"
+	else no "卸载以后 ~/.bashrc：$(tr '\n' '|' < "$H/.bashrc")"; fi
+fi
 
 # 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理，
 # 先问有没有维护者共享给你的账号（答有：节点由维护者提供）。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
