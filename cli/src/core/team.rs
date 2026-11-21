@@ -15,6 +15,8 @@ use crate::core::base::CCA_HOME;
 use crate::py::fs::load_quiet;
 use crate::py::obj::{Dict, V};
 use crate::py::path;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 pub static TEAMS_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "teams"));
@@ -137,6 +139,50 @@ pub fn teams() -> Vec<Team> {
 pub fn team_doc(tid: &str) -> Option<(i64, Dict)> {
     let j = load_quiet(&team_path(tid, "doc.json"))?.as_dict()?;
     Some((j.get("seq")?.as_int().filter(|n| *n > 0)?, j.dict("doc")?))
+}
+
+/// 一个 Team 给这台设备的配置（验过签名、解开的那一份：账号 → 节点、别名、节点的定义……样子见 cmd/team/doc.rs 的 doc_problems）
+pub struct Grant {
+    pub id: String,
+    pub name: String,
+    pub doc: Dict,
+}
+
+thread_local! {
+    static GRANTS: RefCell<Option<Rc<Vec<Grant>>>> = const { RefCell::new(None) };
+}
+
+/// 各个 Team 给这台设备的配置，照加入的先后（同一个账号出现在两个 Team 里，先加入的算数）。还没取到配置的不在里面；被管理员移除了的
+/// （sync.json 是 removed）也不在：手里那一份不再算数，它给的账号收起来。一个进程里只读一次（对账时每张账号表都要问）
+pub fn grants() -> Rc<Vec<Grant>> {
+    if let Some(g) = GRANTS.with(|g| g.borrow().clone()) {
+        return g;
+    }
+    let mut out = Vec::new();
+    for t in teams() {
+        if let Some((_, doc)) = team_doc(&t.id).filter(|_| !removed(&t.id)) {
+            out.push(Grant { id: t.id, name: t.name, doc });
+        }
+    }
+    let out = Rc::new(out);
+    GRANTS.with(|g| *g.borrow_mut() = Some(out.clone()));
+    out
+}
+
+/// 被管理员移除了（最近一次取配置时服务器说的）
+fn removed(tid: &str) -> bool {
+    load_quiet(&team_path(tid, "sync.json")).and_then(|j| j.as_dict()).is_some_and(|j| j.str("state").as_deref() == Some("removed"))
+}
+
+/// 这个 Team 现在给不给账号说得准吗：它的目录没了（退出了）、被管理员移除了，或者它的配置读得出来（那就照配置的）。目录还在、配置却
+/// 读不出来（文件坏了、一时读不了）是说不准：这时不因为映射里没有，就把它加的账号收起来
+pub fn grant_settled(tid: &str) -> bool {
+    !path::isdir(&team_dir(tid)) || removed(tid) || grants().iter().any(|g| g.id == tid)
+}
+
+/// 这个 Team 叫什么（给人看的；不在了、没取到配置时是 None）
+pub fn grant_name(tid: &str) -> Option<String> {
+    grants().iter().find(|g| g.id == tid).map(|g| g.name.clone())
 }
 
 #[cfg(test)]

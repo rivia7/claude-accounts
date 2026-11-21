@@ -55,16 +55,29 @@ pub fn policy_on() -> bool {
     on
 }
 
+thread_local! {
+    /// policy.json 解析好的样子，按文件的 (设备号, inode, 大小, 修改时间) 记着：对账时每张账号表要问好几次
+    static POLICY_DOC: std::cell::RefCell<Option<((u64, u64, u64, i64, i64), Option<Dict>)>> = const { std::cell::RefCell::new(None) };
+}
+
 /// 生效的映射（policy.json）：共享开着、读得出 JSON 对象；否则 None
 pub fn policy_doc() -> Option<Dict> {
+    use std::os::unix::fs::MetadataExt;
     if !policy_on() {
         return None;
     }
-    load_quiet(&POLICY_FILE).and_then(|j| j.as_dict())
+    let st = std::fs::metadata(&*POLICY_FILE).ok()?;
+    let sig = (st.dev(), st.ino(), st.size(), st.mtime(), st.mtime_nsec());
+    if let Some(doc) = POLICY_DOC.with(|c| c.borrow().as_ref().filter(|(s, _)| *s == sig).map(|(_, d)| d.clone())) {
+        return doc;
+    }
+    let doc = load_quiet(&POLICY_FILE).and_then(|j| j.as_dict());
+    POLICY_DOC.with(|c| *c.borrow_mut() = Some((sig, doc.clone())));
+    doc
 }
 
-/// 维护者的映射里这个工具的官方账号：{邮箱（小写）: 映射里写的节点}。没配置、共享关着、读不了、格式不对都当作没有
-pub fn policy_raw(tool: &Tool) -> Dict {
+/// 维护者的映射（旧的通道：policy.json）里这个工具的官方账号：{邮箱（小写）: 映射里写的节点}。没配置、共享关着、读不了、格式不对都当作没有
+pub fn legacy_raw(tool: &Tool) -> Dict {
     let out = Dict::new();
     if let Some(s) = policy_doc().and_then(|j| j.dict(tool.name)) {
         for (e, n) in s.items() {
@@ -76,6 +89,54 @@ pub fn policy_raw(tool: &Tool) -> Dict {
         }
     }
     out
+}
+
+/// 这个工具的官方账号各由谁定节点：[(邮箱（小写）, 节点, 谁：Team 的编号，维护者的映射是空的)]。各个 Team 的配置在前（照加入的先后），
+/// 维护者的映射在后；同一个账号先出现的算数。只有维护者的映射时，先后和它里面写的一样
+fn mapping(tool: &Tool) -> Vec<(Rc<str>, V, Rc<str>)> {
+    let mut out: Vec<(Rc<str>, V, Rc<str>)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for g in super::team::grants().iter() {
+        let accounts = g.doc.dict("accounts").and_then(|a| a.dict(tool.name)).unwrap_or_default();
+        for (e, n) in accounts.items() {
+            let e = e.to_lowercase();
+            if n.as_str().is_some_and(|n| !n.is_empty()) && seen.insert(e.clone()) {
+                out.push((Rc::from(e), n, Rc::from(g.id.as_str())));
+            }
+        }
+    }
+    for (e, n) in legacy_raw(tool).items() {
+        if seen.insert(e.to_string()) {
+            out.push((e, n, Rc::from("")));
+        }
+    }
+    out
+}
+
+/// 映射里这个工具的官方账号：{邮箱（小写）: 节点}——各个 Team 给这台设备的配置加上维护者的映射（见 mapping）
+pub fn policy_raw(tool: &Tool) -> Dict {
+    let out = Dict::new();
+    for (e, n, _) in mapping(tool) {
+        out.set(e, n);
+    }
+    out
+}
+
+/// 映射里这个工具的官方账号是谁定的：{邮箱（小写）: Team 的编号}，维护者的映射定的是空的
+pub fn policy_sources(tool: &Tool) -> Dict {
+    let out = Dict::new();
+    for (e, _, who) in mapping(tool) {
+        out.set(e, &*who);
+    }
+    out
+}
+
+/// 这个账号的节点是谁定的，写进给人看的话里：「维护者的映射」，或者「「Team 的名字」的配置」
+pub fn by_whom(tool: &Tool, email: &str) -> String {
+    match policy_sources(tool).str(&email.to_lowercase()).filter(|t| !t.is_empty()) {
+        Some(tid) => format!("「{}」的配置", super::team::grant_name(&tid).unwrap_or_else(|| "Team".to_string())),
+        None => "维护者的映射".to_string(),
+    }
 }
 
 /// policy_raw，节点换成现在的名字：映射里写的是路由器上改名前的旧名字（cca 跟着改过名，维护者还没更新映射）时
@@ -120,14 +181,18 @@ pub fn alias_ok(a: &V) -> bool {
     a.as_str().is_some_and(|s| !s.is_empty() && !ALIAS_BAD.found(s) && uni::width(s) <= 24)
 }
 
-/// 映射里给账号起的别名（可选的 aliases 一节，{"邮箱": "别名"}，各工具通用）：{邮箱（小写）: 别名}。不合规的不用。
+/// 映射里给账号起的别名（可选的 aliases 一节，{"邮箱": "别名"}，各工具通用）：{邮箱（小写）: 别名}。不合规的不用。各个 Team 的配置里的在前
+/// （先出现的算数），维护者的映射里的在后。
 /// 旧版本的 cca 不认识这一节、照样忽略它：加了别名，旧版本也照常拉得到映射
 pub fn policy_names() -> Dict {
     let out = Dict::new();
-    if let Some(s) = policy_doc().and_then(|j| j.dict("aliases")) {
+    let teams = super::team::grants();
+    let docs = teams.iter().filter_map(|g| g.doc.dict("aliases")).chain(policy_doc().and_then(|j| j.dict("aliases")));
+    for s in docs {
         for (e, a) in s.items() {
-            if alias_ok(&a) {
-                out.set(e.to_lowercase(), a);
+            let e = e.to_lowercase();
+            if alias_ok(&a) && !out.has(&e) {
+                out.set(e, a);
             }
         }
     }
@@ -467,9 +532,8 @@ pub fn fill_problems(j: &V) -> Vec<String> {
     errs
 }
 
-/// 维护者的参考节点：{'id': 摘要, 'group': 策略组, 'proxies': [节点定义…]}；没有、共享关着、读不了、格式不对都是 None。
-/// id 随内容变：路由器按它认这一版有没有在自己的内核上校验过
-pub fn policy_fill() -> Option<Dict> {
+/// 维护者的参考节点（旧的通道：nodes.json）：(策略组, 节点定义)；没有、共享关着、读不了、格式不对都是 None
+fn legacy_fill() -> Option<(V, V)> {
     if !policy_on() {
         return None;
     }
@@ -478,7 +542,31 @@ pub fn policy_fill() -> Option<Dict> {
         return None;
     }
     let j = j.as_dict()?;
-    let (group, proxies) = (j.at("group"), j.at("proxies"));
+    Some((j.at("group"), j.at("proxies")))
+}
+
+/// 参考节点：{'id': 摘要, 'group': 策略组, 'proxies': [节点定义…]}——各个 Team 的配置里带的节点在前（照加入的先后），维护者的参考节点
+/// 在后；同名的先出现的算数，策略组照第一份有节点的。都没有是 None。只有维护者的参考节点时和它原样一样（id 也一样）。
+/// id 随内容变：路由器按它认这一版有没有在自己的内核上校验过
+pub fn policy_fill() -> Option<Dict> {
+    let teams = super::team::grants();
+    let mut parts: Vec<(V, V)> =
+        teams.iter().filter_map(|g| g.doc.dict("nodes")).map(|n| (n.at("group"), n.at("proxies"))).collect();
+    let alone = parts.is_empty();
+    parts.extend(legacy_fill());
+    let group = parts.first()?.0.clone();
+    let proxies = if alone {
+        parts[0].1.clone()
+    } else {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut all: Vec<V> = Vec::new();
+        for p in parts.iter().filter_map(|(_, p)| p.as_list()).flat_map(|l| l.items()) {
+            if p.as_dict().and_then(|d| d.str("name")).is_some_and(|n| seen.insert(n.to_string())) {
+                all.push(p);
+            }
+        }
+        V::from(all)
+    };
     let s = json::dumps(&V::from(vec![group.clone(), proxies.clone()]), json::Fmt::new().utf8().sort_keys());
     let out = Dict::new();
     out.set("id", &sha256_hex(s)[..16]);
@@ -510,13 +598,17 @@ pub fn fill_fp(p: &Dict) -> String {
     node_fp(p.get("type"), p.get("server"), p.get("port"), sni)
 }
 
-/// 维护者映射里指定的安装节点（install_node）；没有、不合规都是空的。旧版本的 cca 不认识这一项，照样忽略它
+/// 映射里指定的安装节点（install_node）：各个 Team 的配置里第一个写了的，都没写时是维护者的映射里的；没有、不合规都是空的。
+/// 旧版本的 cca 不认识这一项，照样忽略它
 pub fn policy_install_node() -> String {
-    let n = policy_doc().and_then(|j| j.get("install_node")).unwrap_or(V::None);
-    match n.as_str() {
-        Some(s) if fill_name_ok(&n) && !FILL_BUILTIN.contains(&s) => s.to_string(),
-        _ => String::new(),
+    let teams = super::team::grants();
+    let all = teams.iter().filter_map(|g| g.doc.get("install_node")).chain(policy_doc().and_then(|j| j.get("install_node")));
+    for n in all {
+        if let Some(s) = n.as_str().filter(|s| !s.is_empty() && fill_name_ok(&n) && !FILL_BUILTIN.contains(s)) {
+            return s.to_string();
+        }
     }
+    String::new()
 }
 
 /// 参考节点怎么补进一份配置：have 是配置里的节点 [(名字, 摘要)]，names 是节点和策略组的全部名字，f 是参考节点

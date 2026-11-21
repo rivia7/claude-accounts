@@ -12,7 +12,7 @@ use super::secrets::{
 use super::{arg, arity, Cmd};
 use crate::core::base::CFG;
 use crate::core::model::{acct_id, cdir, cfg_load, is_api, parse_key, REF_ACCT};
-use crate::core::policy::policy_raw;
+use crate::core::policy::policy_sources;
 use crate::core::tool::{t, Kind, Tool, Using};
 use crate::py::base64::{b64decode, b64encode};
 use crate::py::fs::{load_quiet, save_json};
@@ -42,7 +42,7 @@ pub fn is_num(v: &V) -> bool {
 
 /// 这个账号（当前工具的）记下备查的 key 会不会同步：Claude、Codex 的官方账号，它走的那台同步服务器（hub.rs 的 route）这台设备用得了
 pub fn keyshare_on(key: &str, v: &V) -> R<bool> {
-    Ok(matches!(t().kind, Kind::Claude | Kind::Codex) && !is_api(v) && hub_of(&hubs()?, &policy_raw(t()), key, v).is_some())
+    Ok(matches!(t().kind, Kind::Claude | Kind::Codex) && !is_api(v) && hub_of(&hubs()?, &policy_sources(t()), key, v).is_some())
 }
 
 /// key 的摘要（没有 key、删掉了是 None）
@@ -114,7 +114,7 @@ pub struct KeyshareEdit {
 pub fn keyshare_edit(key: &str, v: &V, at: f64) -> KeyshareEdit {
     let open = || -> R<Option<KeyshareFile>> {
         let hs = hubs()?;
-        let hub = hub_of(&hs, &policy_raw(t()), key, v).or_else(|| hs.iter().find(|h| h.kind == HubKind::Maintainer));
+        let hub = hub_of(&hs, &policy_sources(t()), key, v).or_else(|| hs.iter().find(|h| h.kind == HubKind::Maintainer));
         match hub {
             Some(h) => Ok(Some(KeyshareFile::enter(h.kind)?)),
             None => Ok(None),

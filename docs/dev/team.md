@@ -6,8 +6,8 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M1 | 线上格式和服务端：服务器的 `--mode team`、管理员和设备的 op、邀请链接、每台设备的配置（加密、签名），照文档独立实现一遍来测 | 做完了 |
-| M2 | 辅助程序和命令：Team 在本机的状态（`~/.cca/teams/<编号>/`）、`cca team` 的建立、邀请、加入、取配置、看设备、移除、退出；管理员这边的账号、节点、每台设备的授权 | 做完了：配置能发布、能取到本机，**账号表还不照它改**（M3）；服务器要自己起（安装脚本是 M6）；配置只在运行 `cca team sync` 时取（后台定时取是 M3） |
-| M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；现在的维护者映射、自己的同步服务器当作旧式的 Team 接进来 | 没做 |
+| M2 | 辅助程序和命令：Team 在本机的状态（`~/.cca/teams/<编号>/`）、`cca team` 的建立、邀请、加入、取配置、看设备、移除、退出；管理员这边的账号、节点、每台设备的授权 | 做完了；服务器要自己起（安装脚本是 M6） |
+| M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；现在的维护者映射、自己的同步服务器当作旧式的 Team 接进来 | 做了第一步：账号表照 Team 的配置改（见「账号表照配置改」）。三条同步管线按 Team 走还没做：Team 给的账号现在不经哪台服务器同步设备统计、API key、折合金额 |
 | M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 没做 |
 | M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 没做 |
 | M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 没做 |
@@ -99,6 +99,37 @@
 它们在认证和签名里。管理员发布前、设备用之前都照 `doc_problems`（`cli/src/cmd/team/doc.rs`）查一遍：邮箱小写、节点的定义照 `fill_problems`，
 不认得的项不管（以后加的旧版本照样用）。`name`、`server` 变了设备跟着改 team.json：管理员改名字、搬服务器、换证书都不用重新发邀请。
 
+## 账号表照配置改（M3 的第一步）
+
+映射原来只有一个来源（维护者的 `policy.json`、`nodes.json`），对账、补节点、固定节点都经 `core/policy.rs` 的那几个读取函数。现在它们给的是
+**合起来的**：各个 Team 给这台设备的配置在前（照加入的先后），维护者的映射（旧的通道）在后，同一个账号先出现的算数。所以对账（`reconcile`）、
+`policy_merge`、`fill_plan`、路由器端的 `--fill-source` 都没动，Team 给的账号和维护者映射里的账号走的是同一条路：
+
+- `core/team.rs` 的 `grants()`：各个 Team 手里验过的那一份配置（一个进程只读一次）。还没取到的不算；被管理员移除了的（`sync.json` 是 `removed`）
+  也不算——手里那一份不再算数。`lost`、`error` 的照旧用手里的。
+- `core/policy.rs`：`mapping(tool)` 是合起来的 [(邮箱, 节点, 谁定的)]，`policy_raw` / `policy_map`（节点）、`policy_sources`（谁定的：Team 的编号，
+  维护者的映射是空的）、`policy_names`（别名）、`policy_fill`（节点的定义：同名的先出现的算数，策略组照第一份有节点的）、`policy_install_node`
+  都从它来。只有维护者的映射时和以前逐字节一样（`policy_fill` 的 `id` 也一样：路由器不会因此重新校验）。`legacy_raw` 是只看维护者的那一份：
+  `cca policy off` 收起哪些账号、`_gui state` 的 `config.policy.accounts` 用它（Team 给的账号不归那个开关管）。
+- 对账时说的话照是谁定的说（`by_whom`）：「按维护者的映射…」或者「按「Team 的名字」的配置…」。事件的代码不变（`policy_added`、`policy_alias`、
+  `policy_pinned`、`nodes_filled`）。
+- **Team 加进来的账号记着是它加的**（工具状态里的 `team_added`：{账号目录名: Team 的编号}，`policy_merge` 照 Team 的配置加的才记）。映射里没有它了
+  ——管理员不再给这台设备、退出了那个 Team、被移除了——就收起来（`team_park`：记进 `parked`（带着 `team`：`_gui state` 的 `config.policy.parked`
+  只数关掉共享时收起来的）、从账号表去掉，登录目录和钥匙串不动；事件 `team_parked`），再给回来时照原来的键加回去，不用重新登录。正开着命令行
+  会话的先不收（`team_busy`），下一条命令再看。那个 Team 的目录还在、配置却读不出来时说不准还给不给（`grant_settled`）：不收。这台机器**本来就有**的账号
+  Team 只管节点、不记成它加的：不再给了账号还在，只是节点不再被固定。
+- 账号走哪一类同步服务器（`cmd/hub.rs` 的 `route`）看是谁定的：Team 给的是 `HubKind::Team(编号)`，维护者映射里的是 `Maintainer`，别的官方账号是
+  `Own`。`hubs()` 里还没有 Team 的服务器，所以 Team 给的账号现在哪台都不走（M3 的第二步）——维护者的映射里也有的账号，加入一个也给它的 Team
+  以后同样不再经维护者的服务器同步：这只是两步之间的样子，别在这个状态上发版。
+- 配置什么时候取：`cca team join`、`cca team sync`；启动时 `team_hook`（在 Team 里、距上次超过一个小时就在后台 `cca _team-sync`，只换本机存的那一份）。
+  账号表在下一条读它的命令里照新的改；`cca team join / sync / leave`、管理员的 `import / map / publish / attach` 之后马上做完（`team_settle`：
+  没配置过路由器的把配置带的节点导入可选节点，`py team-apply` 对一遍，同步路由器，改启动器）。
+- 管理员自己这台设备默认拿全部账号（`grants` 是 `all`）：导入映射以后那些账号都会加进它的账号表。不要的话 `cca team grant Team 自己这台 none`
+  （或者只留几个）。
+
+还没改、要知道的：`cca policy` 列出来的受约束的账号里也有 Team 给的，说法还是「维护者的映射」；别处说「被维护者的映射固定」的提示（改节点、
+`cca edit` 时）对 Team 给的账号也是这句话。等维护者的映射迁成 Team（M4）一起改。
+
 ## 本机的状态和命令（M2）
 
 `~/.cca/teams/`（目录 700，密钥、配置、状态文件 600，`ssh-keygen` 生成的 `.pub` 是 644；整个在 `CCA_DIR_PRIVATE` 里；布局在 `cli/src/core/team.rs` 开头）：`index.json` 是加入的先后，每个 Team 一个目录
@@ -158,7 +189,7 @@
 
 还没做的、要知道的：
 
-- 配置取到了本机，账号表不照它改；`_gui state` 里没有 Team；没有后台定时取（M3、M5）。
+- `_gui state` 里没有 Team（M5）；Team 给的账号还不经 Team 的服务器同步设备统计、API key、折合金额（M3 的第二步）。
 - 根密钥和主密钥的导出、第二个管理员（现在换一台管理员的设备只能手工拷 `~/.cca/teams/<编号>/`）。
 - `cca help` 里还没列 `cca team`（还用不上：账号表不照配置改）；失败的原因码在 Swift 的 `FailCode` 里还没登记（App 的页面是 M5）。
 - 设备加入以后、管理员对一遍之前服务器的记录就没了：那台设备的公钥没记下，登记不回去，要重新邀请。
@@ -199,3 +230,8 @@
   （`team_joined`）、两个 Team 照先后列出、`sync` 取到新的一版并跟着改名、被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后。这一节结束时
   停掉两台服务器、删掉 `~/.cca/teams`。
 - 对拍：`CCA_DIR_PRIVATE` 多了 `teams/**`，经 `ORACLE_PATCHES` 给对照的 Python 也加上（`-k env` 那一组受它影响）。
+- 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：这台设备上维护者的共享也开着、映射里 alice 走另一个节点——加入以后 alice 照 Team 的
+  （说「按「测试组」的配置固定」）、补上别名，本来就有的账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了
+  收起来（`parked`），再给回来照原来的键；不再给本来就有的那个，账号留着；被移除以后 Team 加的收起来、alice 轮到维护者的映射。
+  regress 11b3d：管理员自己这台 `grant … none`（导入的映射不进这台 Mac 的账号表），成员加入以后 alice 的节点由 Team 定、说一声；这一节结束时
+  账号表和配置照开头的还原。`cmd/hub.rs` 的单元测试 `route_table`：账号走哪一类服务器看是谁定的。

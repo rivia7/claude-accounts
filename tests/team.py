@@ -14,7 +14,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from presence import Device, Server, keygen, make_cert, openssl_pin   # noqa: E402
+from presence import Device, Server, ident, keygen, make_cert, openssl_pin   # noqa: E402
 import spec_wire as sw   # noqa: E402
 
 POLICY = {'version': 1, 'claude': {'alice@example.com': 'US-A', 'Bob@Example.com': 'US-B'}, 'codex': {'carol@example.com': 'US-A'},
@@ -386,6 +386,74 @@ class TeamTest(unittest.TestCase):
         self.assertEqual(got[:4], ['127.0.0.1:%d' % srv3.port, 'studio', '2', '2'])
         self.assertIn('连不上', got[4])
 
+
+    def test_accounts_follow(self):
+        """账号表照 Team 的配置改：给了的账号加进来、节点由它定，这台机器本来就有的只改节点；不再给了的收起来（登录留着）、再给回来照原样；
+        同一个账号维护者的映射里也有时 Team 的算数，退出以后轮到维护者的映射"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        self.load(admin, tid)
+        link, dev_b = self.invite(admin, tid, 'bob-mini', '--accounts', 'claude:alice@example.com,claude:bob@example.com')
+        bob = Device(self.d / 'bob', 'bob', {'mine(bob@example.com)': 'US-D'})
+        # 这台设备上维护者的共享也开着，映射里 alice 走 US-C
+        bob.config(lambda c: c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D']))
+        (bob.cca / 'policy' / 'policy.json').write_text(json.dumps({'version': 1, 'claude': {'alice@example.com': 'US-C'}}))
+        table = lambda: json.loads((bob.cca / 'accounts.json').read_text())
+
+        def apply():
+            r = bob.run('team-apply')
+            self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
+            return r.stderr
+
+        self.assertIn('按维护者的映射添加了 Claude 账号 alice@example.com，出口 US-C', apply())
+        self.assertEqual(table(), {'mine(bob@example.com)': 'US-D', 'alice@example.com': 'US-C'})
+        # 加入：Team 给了 alice（US-A，别名 alice）和 bob（US-B）
+        self.assertEqual(self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link)[5:], ['ok', '2'])
+        said = apply()
+        self.assertIn('alice（alice@example.com） 的出口按「测试组」的配置固定为 US-A（账号表里写的是 US-C，已改回）', said)
+        self.assertIn('mine（bob@example.com） 的出口按「测试组」的配置固定为 US-B（账号表里写的是 US-D，已改回）', said)
+        self.assertIn('按「测试组」的配置给 Claude 账号 alice@example.com 起了别名 alice', said)
+        self.assertEqual(table(), {'mine(bob@example.com)': 'US-B', 'alice(alice@example.com)': 'US-A'})
+        self.assertEqual(apply(), '', '再对一遍没有要改的')
+        cfg = lambda: json.loads((bob.cca / 'config.json').read_text())
+        self.assertNotIn('team_added', json.dumps(cfg()), '这两个账号都是这台机器本来就有的：Team 只管节点，不记成它加的')
+        # 管理员多给一个 erin：这台机器上没有，加进来（记成 Team 加的）
+        self.assertEqual(self.lines(admin, 'team-map', tid, 'claude', 'erin@example.com', 'US-D'), ['1'])
+        self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '+claude:erin@example.com'), ['3 个账号'])
+        self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'ok')
+        self.assertIn('按「测试组」的配置添加了 Claude 账号 erin@example.com，出口 US-D', apply())
+        self.assertEqual(table()['erin@example.com'], 'US-D')
+        self.assertEqual(cfg()['team_added'], {ident('erin@example.com'): tid})
+        # 手里那一份配置一时读不出来（文件坏了）：说不准还给不给，不把 Team 加的账号收起来
+        good = (self.tdir(bob, tid) / 'doc.json').read_text()
+        (self.tdir(bob, tid) / 'doc.json').write_text('{')
+        self.assertNotIn('收起来', apply())
+        self.assertIn('erin@example.com', table())
+        (self.tdir(bob, tid) / 'doc.json').write_text(good)
+        apply()
+        self.assertEqual((table()['erin@example.com'], table()['alice(alice@example.com)']), ('US-D', 'US-A'))
+        # 不再给 erin：收起来（登录留着），再给回来照原来的键
+        self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '-claude:erin@example.com'), ['2 个账号'])
+        bob.ok('team-sync')
+        self.assertIn('Team 不再给这台设备 Claude 账号 erin@example.com：收起来了', apply())
+        self.assertNotIn('erin@example.com', table())
+        self.assertEqual((cfg()['parked'], 'team_added' in cfg()),
+                         ({ident('erin@example.com'): {'key': 'erin@example.com', 'node': 'US-D', 'team': tid}}, False))
+        self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '+claude:erin@example.com'), ['3 个账号'])
+        bob.ok('team-sync')
+        self.assertIn('添加了 Claude 账号 erin@example.com', apply())
+        self.assertEqual(('erin@example.com' in table(), 'parked' in cfg()), (True, False))
+        # 不再给 bob@example.com：它是这台机器自己的账号，留着（节点不再被固定）
+        self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '-claude:bob@example.com'), ['2 个账号'])
+        bob.ok('team-sync')
+        self.assertEqual(apply(), '')
+        self.assertEqual(table()['mine(bob@example.com)'], 'US-B')
+        # 被管理员移除了：手里那一份不再算数。Team 加的 erin 收起来；alice 轮到维护者的映射（US-C）
+        self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
+        self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'removed')
+        said = apply()
+        self.assertIn('Team 不再给这台设备 Claude 账号 erin@example.com：收起来了', said)
+        self.assertIn('alice（alice@example.com） 的出口按维护者的映射固定为 US-C（账号表里写的是 US-A，已改回）', said)
+        self.assertEqual(table(), {'mine(bob@example.com)': 'US-B', 'alice(alice@example.com)': 'US-C'})
 
     def test_server_lies(self):
         """服务器说的没有签名，管理员只拿它当线索：换了的公钥不照它的；它那边的配置丢了、旧了就重新发布；它乱说序号不信"""

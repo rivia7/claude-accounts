@@ -21,7 +21,7 @@ use crate::core::ctx::{cfg_save, ctx, pool_size, reconcile_all};
 use crate::core::model::{
     acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok,
 };
-use crate::core::policy::{parked, policy_doc, policy_map};
+use crate::core::policy::{legacy_raw, parked, policy_doc, policy_map, policy_sources};
 use crate::core::sync::sync_digest;
 use crate::core::tool::{t, tools, Kind, Using};
 use crate::py::fs::{load_quiet, save_json};
@@ -413,6 +413,7 @@ fn gui_account(
     procs: &[(i64, String)],
     badges: &[(Rc<str>, (String, &'static str))],
     pm: &Dict,
+    src: &Dict,
     env: &mut GuiEnv,
     now: f64,
     cli: Dict,
@@ -484,10 +485,10 @@ fn gui_account(
     let weeks = if api || !tool.has_usage { None } else { usage_weeks_view(k, now, cached.as_ref())? };
     let can_cost = env.cost.on && tool.has_cost && !api; // 折合金额（PROTOCOL 2.2 的 cost）
     let lower = e.to_lowercase();
-    // 维护者映射里的官方账号
+    // 映射里的官方账号（维护者的映射、Team 的配置）：节点被它固定
     let pinned = mapped(pm, k, v);
     // 设备统计、记下的 API key、折合金额经哪台服务器同步（这台设备用不了它走的那台时是 None）
-    let hub = hub_of(env.hubs, pm, k, v).map(|h| h.kind);
+    let hub = hub_of(env.hubs, src, k, v).map(|h| h.kind);
     if let Some(kind) = hub {
         env.counts.push(kind);
     }
@@ -628,7 +629,11 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         // 机器的公钥）；on 拉到了映射。accounts 是账号表里映射的账号（下面数完了再填），parked 是关掉共享时收起来的（打开时加回来）
         "state" => if !pol.truthy() { "off" } else if policy_doc().is_some() { "on" } else { "pending" },
         "accounts" => 0,
-        "parked" => tools().iter().map(|tool| parked(&c, tool).len()).sum::<usize>(),
+        // 关掉共享时收起来的；Team 不再给而收起来的（带着 team）不归这个开关管，不算
+        "parked" => tools()
+            .iter()
+            .map(|tool| parked(&c, tool).values().iter().filter(|p| !p.as_dict().is_some_and(|p| p.has("team"))).count())
+            .sum::<usize>(),
     };
     let out = dict! {
         "version" => 1, "kind" => "state", "generated_at" => now, "cca_version" => getenv("CCA_VERSION").unwrap_or_default(),
@@ -696,8 +701,8 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
                 }
             }
             let badges = launcher_badges(&c, &official, &launcher_names(&official));
-            let pm = policy_map(tool, Some(&c));
-            shared += table.items().iter().filter(|(k, v)| mapped(&pm, k, v)).count();
+            let (pm, src, legacy) = (policy_map(tool, Some(&c)), policy_sources(tool), legacy_raw(tool));
+            shared += table.items().iter().filter(|(k, v)| mapped(&legacy, k, v)).count();
             entry.set(
                 "errors",
                 tool.errs().into_iter().map(|m| V::Dict(dict! { "code" => "table_invalid", "message" => m })).collect::<Vec<V>>(),
@@ -709,7 +714,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             let starts = proc_starts(&pids);
             let accounts = List::new();
             for ((k, v), (_, ms)) in table.items().into_iter().zip(marks.iter()) {
-                accounts.push(gui_account(&c, &k, &v, &procs, &badges, &pm, &mut env, now, cli_view(ms, &starts))?);
+                accounts.push(gui_account(&c, &k, &v, &procs, &badges, &pm, &src, &mut env, now, cli_view(ms, &starts))?);
             }
             entry.set("accounts", accounts);
         }

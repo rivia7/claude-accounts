@@ -68,11 +68,27 @@ fn hub_path(name: &str) -> String {
     path::join(&HUB_DIR, name)
 }
 
-/// 同步服务器的两种
+/// Team 的编号（32 个十六进制字符）压成 16 个字节：HubKind 要能随手拷
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TeamTag([u8; 16]);
+
+impl TeamTag {
+    pub fn new(tid: &str) -> Option<TeamTag> {
+        from_hex(tid).and_then(|b| <[u8; 16]>::try_from(b).ok()).map(TeamTag)
+    }
+
+    /// 编号
+    pub fn id(self) -> String {
+        to_hex(&self.0)
+    }
+}
+
+/// 同步服务器的几种：维护者的（旧的通道：映射里的 presence 一节）、自己的（cca hub）、某个 Team 的（cca team）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubKind {
     Maintainer,
     Own,
+    Team(TeamTag),
 }
 
 impl HubKind {
@@ -81,14 +97,16 @@ impl HubKind {
         match self {
             HubKind::Maintainer => "maintainer",
             HubKind::Own => "own",
+            HubKind::Team(_) => "team",
         }
     }
 
-    /// 这台服务器的状态文件叫什么：维护者的照旧，自己的前面加 own.（presence/、cost/ 里各一份，不用迁移）
+    /// 这台服务器的状态文件叫什么：维护者的照旧，自己的前面加 own.，Team 的前面加 team.<编号>.（presence/、cost/ 里各一份）
     pub fn file(self, base: &str) -> String {
         match self {
             HubKind::Maintainer => base.to_string(),
             HubKind::Own => format!("own.{base}"),
+            HubKind::Team(t) => format!("team.{}.{base}", t.id()),
         }
     }
 }
@@ -123,24 +141,31 @@ pub fn hubs() -> R<Vec<Hub>> {
     Ok(out)
 }
 
-/// 这个账号（pm 是它那个工具的 policy_raw）的设备统计、记下的 key、折合金额该走哪一类服务器，不看那台配置了没有：第三方 API 账号、
-/// 没有邮箱的哪都不去；维护者映射里的官方账号走维护者的（它的数据是共享这个账号的各台设备的，不上自己的服务器）；别的官方账号走自己的
-pub fn route(pm: &Dict, key: &str, v: &V) -> Option<HubKind> {
+/// 这个账号（src 是它那个工具的 policy_sources：映射里的账号各是谁定的）的设备统计、记下的 key、折合金额该走哪一类服务器，不看那台
+/// 配置了没有：第三方 API 账号、没有邮箱的哪都不去；某个 Team 给的走那个 Team 的；维护者映射里的走维护者的（它的数据是共享这个账号的
+/// 各台设备的，不上自己的服务器）；别的官方账号走自己的
+pub fn route(src: &Dict, key: &str, v: &V) -> Option<HubKind> {
     let e = parse_key(key).1.to_lowercase();
     if e.is_empty() || is_api(v) {
         return None;
     }
-    Some(if pm.has(&e) { HubKind::Maintainer } else { HubKind::Own })
+    Some(match src.str(&e) {
+        None => HubKind::Own,
+        Some(who) if who.is_empty() => HubKind::Maintainer,
+        Some(tid) => HubKind::Team(TeamTag::new(&tid)?),
+    })
 }
 
-/// 这个账号是维护者映射里的官方账号吗（锁定的节点、关掉共享时收起来的就是它们）
+/// 这个账号是映射 pm（{邮箱: 节点}）里的官方账号吗：节点被它固定的就是它们（pm 是 policy_map 时）；关掉共享时收起来的是维护者
+/// 映射里的那些（pm 是 legacy_raw 时）
 pub fn mapped(pm: &Dict, key: &str, v: &V) -> bool {
-    route(pm, key, v) == Some(HubKind::Maintainer)
+    let e = parse_key(key).1.to_lowercase();
+    !e.is_empty() && !is_api(v) && pm.has(&e)
 }
 
 /// 这个账号现在经哪台服务器同步：route 给的那一类，而且这台设备用得了它（hubs 是 hubs() 的结果）
-pub fn hub_of<'a>(hubs: &'a [Hub], pm: &Dict, key: &str, v: &V) -> Option<&'a Hub> {
-    let kind = route(pm, key, v)?;
+pub fn hub_of<'a>(hubs: &'a [Hub], src: &Dict, key: &str, v: &V) -> Option<&'a Hub> {
+    let kind = route(src, key, v)?;
     hubs.iter().find(|h| h.kind == kind)
 }
 
@@ -1097,18 +1122,24 @@ mod tests {
 
     #[test]
     fn route_table() {
-        let pm = dict! { "alice@example.com" => "US-A" };
+        let tid = "0a".repeat(16);
+        let src = dict! { "alice@example.com" => "", "carol@example.com" => tid.as_str() };
         let api = V::Dict(dict! { "base_url" => "https://api.example.com", "model" => "x" });
         assert_eq!(
-            route(&pm, "alice(Alice@Example.com)", &V::from("US-A")),
+            route(&src, "alice(Alice@Example.com)", &V::from("US-A")),
             Some(HubKind::Maintainer),
-            "映射里的（邮箱不分大小写）"
+            "维护者映射里的（邮箱不分大小写）"
         );
-        assert_eq!(route(&pm, "bob(bob@example.com)", &V::from("US-B")), Some(HubKind::Own), "自己的");
+        assert_eq!(route(&src, "bob(bob@example.com)", &V::from("US-B")), Some(HubKind::Own), "自己的");
+        let team = route(&src, "carol@example.com", &V::from("US-A"));
+        assert_eq!(team, Some(HubKind::Team(TeamTag::new(&tid).expect("32 个十六进制字符"))), "Team 给的");
+        assert_eq!(team.map(|k| (k.name(), k.file("keys.json"))), Some(("team", format!("team.{tid}.keys.json"))));
         assert_eq!(route(&Dict::new(), "alice(alice@example.com)", &V::from("US-A")), Some(HubKind::Own), "共享关着：都是自己的");
-        assert_eq!(route(&pm, "relay(alice@example.com)", &api), None, "第三方 API 账号");
-        assert_eq!(route(&pm, "noemail", &V::from("US-A")), None, "没有邮箱");
+        assert_eq!(route(&src, "relay(alice@example.com)", &api), None, "第三方 API 账号");
+        assert_eq!(route(&src, "noemail", &V::from("US-A")), None, "没有邮箱");
+        let pm = dict! { "alice@example.com" => "US-A" };
         assert!(mapped(&pm, "alice(alice@example.com)", &V::from("US-A")) && !mapped(&pm, "alice(alice@example.com)", &api));
+        assert!(!mapped(&pm, "bob@example.com", &V::from("US-A")) && !mapped(&pm, "noemail", &V::from("US-A")));
     }
 
     #[test]

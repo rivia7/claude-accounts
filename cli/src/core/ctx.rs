@@ -27,20 +27,22 @@ fn int_value(v: &V) -> Option<i64> {
 /// 校验一个工具的账号表；给走节点的账号分配固定端口（直连的第三方 API 账号不占端口），回收已删除账号的端口。
 /// reserved 是别的工具占着的端口（大家共用一个端口池），不分给这张表。返回错误列表。
 /// 只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。
-/// 维护者的映射里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，说一声）；映射里有、这台机器上还没有的
-/// 加进来（policy_merge，这台机器自己的账号不动），还没有别名的按映射补上别名（policy_alias_fill）：每条命令都经过
-/// 这里，添加、cca edit、启动、同步前都管得到
+/// 映射（各个 Team 给这台设备的配置、维护者的映射：policy_raw）里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，
+/// 说一声）；映射里有、这台机器上还没有的加进来（policy_merge，这台机器自己的账号不动），还没有别名的按映射补上别名
+/// （policy_alias_fill）；Team 加进来的账号，Team 不再给了就收起来（team_park）：每条命令都经过这里，添加、cca edit、启动、同步前都管得到
 pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -> R<Vec<String>> {
     let st = tool.state(c, true);
     let added = policy_merge(c, table, tool);
+    let who = |k: &str| by_whom(tool, &parse_key(k).1);
     for k in &added {
         let node = table.at(k);
         notice(
             "policy_added",
-            &format!("• 按维护者的映射添加了 {} 账号 {}，出口 {}", tool.label, label_of(k), node.py_str()),
+            &format!("• 按{}添加了 {} 账号 {}，出口 {}", who(k), tool.label, label_of(k), node.py_str()),
             dict! { "tool" => tool.name, "key" => k, "node" => node },
         );
     }
+    let parked_now = team_park(table, tool, &st, &added);
     // 关掉共享时收起来的账号又在账号表里了（重新打开共享时按映射加回来了，或者用户自己加回来了）：不再算收起来的
     if let Some(p) = st.dict("parked") {
         let ids: HashSet<String> = table.keys().iter().map(|k| acct_id(k, tool)).collect();
@@ -57,7 +59,7 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
     for (k, new) in &renamed {
         notice(
             "policy_alias",
-            &format!("• 按维护者的映射给 {} 账号 {} 起了别名 {}", tool.label, k, parse_key(new).0),
+            &format!("• 按{}给 {} 账号 {} 起了别名 {}", who(new), tool.label, k, parse_key(new).0),
             dict! { "tool" => tool.name, "key" => new, "old_key" => k },
         );
     }
@@ -74,12 +76,12 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
         let old = table.at(k);
         notice(
             "policy_pinned",
-            &format!("! {} 的出口按维护者的映射固定为 {}（账号表里写的是 {}，已改回）", label_of(k), want.py_str(), old.py_str()),
+            &format!("! {} 的出口按{}固定为 {}（账号表里写的是 {}，已改回）", label_of(k), who(k), want.py_str(), old.py_str()),
             dict! { "tool" => tool.name, "key" => k, "node" => &want, "old_node" => old },
         );
         table.set(k.clone(), want);
     }
-    if (!fixed.is_empty() || !added.is_empty() || !renamed.is_empty()) && !*RO {
+    if (!fixed.is_empty() || !added.is_empty() || !renamed.is_empty() || parked_now) && !*RO {
         save_json(&tool.table, &V::Dict(table.clone()), Some(0o600), true)?;
     }
     let errs = table_problems(c, table, tool, &pm);
@@ -144,6 +146,65 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
     Ok(errs)
 }
 
+/// Team 加进来的账号（工具状态里的 `team_added`：{账号目录名: Team 的编号}，policy_merge 照 Team 的配置加的才记；这台机器本来就有的
+/// 账号不记，Team 只管它的节点）：映射里没有它了——管理员不再给这台设备、退出了那个 Team、被移除了——就收起来（记进 `parked`、
+/// 从账号表去掉；登录目录、钥匙串不动，再给回来时 policy_merge 照原来的键加回来，不用重新登录）。正开着命令行会话的先不收
+/// （会话收尾时要找得到账号），下一条命令再看。返回账号表改了没有
+fn team_park(table: &Dict, tool: &Tool, st: &Dict, added: &[String]) -> bool {
+    let by = st.dict("team_added").unwrap_or_default();
+    if added.is_empty() && by.is_empty() {
+        return false; // 没有 Team 加的账号（没用 Team 的机器都是这样）：什么都不用读
+    }
+    let src = policy_sources(tool);
+    for k in added {
+        if let Some(tid) = src.str(&parse_key(k).1.to_lowercase()).filter(|t| !t.is_empty()) {
+            by.set(acct_id(k, tool), &*tid);
+        }
+    }
+    let mut changed = false;
+    for (aid, tid) in by.items() {
+        let Some(k) = table.keys().into_iter().find(|k| acct_id(k, tool) == *aid) else {
+            by.pop(&aid); // 用户自己删掉了
+            continue;
+        };
+        // 映射里还有它；或者那个 Team 的配置一时读不出来（说不准还给不给）：不动
+        if src.has(&parse_key(&k).1.to_lowercase()) || !super::team::grant_settled(&tid.py_str()) {
+            continue;
+        }
+        let running = {
+            let _using = super::tool::Using::tool(tool); // 会话的登记按当前的工具找：对账时是一个个工具轮着来的
+            let marks = crate::cmd::session::cli_marks(&k);
+            let pids: Vec<i64> = marks.iter().map(|m| m.at("pid").as_int().unwrap_or(0)).collect();
+            !marks.is_empty() && crate::cmd::session::cli_view(&marks, &crate::cmd::session::proc_starts(&pids)).truthy("running")
+        };
+        if running {
+            notice(
+                "team_busy",
+                &format!("! Team 不再给这台设备 {} 账号 {}：它还开着命令行会话，等会话结束再收起来", tool.label, label_of(&k)),
+                dict! { "tool" => tool.name, "key" => &*k },
+            );
+            continue;
+        }
+        let parked = st.dict("parked").unwrap_or_default();
+        parked.set(&*aid, dict! { "key" => &*k, "node" => table.at(&k), "team" => tid }); // team：哪个 Team 加的（和关掉共享时收起来的分开数）
+        st.set("parked", parked);
+        table.pop(&k);
+        by.pop(&aid);
+        changed = true;
+        notice(
+            "team_parked",
+            &format!("• Team 不再给这台设备 {} 账号 {}：收起来了（登录还留着，再给回来时不用重新登录）", tool.label, label_of(&k)),
+            dict! { "tool" => tool.name, "key" => &*k },
+        );
+    }
+    if by.is_empty() {
+        st.pop("team_added");
+    } else {
+        st.set("team_added", by);
+    }
+    changed
+}
+
 /// 账号表的问题（只看，不改）：reconcile、表单都用它
 pub fn table_problems(c: &Dict, table: &Dict, tool: &Tool, pm: &Dict) -> Vec<String> {
     let mut errs = Vec::new();
@@ -181,8 +242,9 @@ pub fn table_problems(c: &Dict, table: &Dict, tool: &Tool, pm: &Dict) -> Vec<Str
                     let all = join_names(&nodes);
                     errs.push(if !e.is_empty() && pm.has(&e.to_lowercase()) {
                         format!(
-                            "{k}：维护者的映射要求它走「{s}」，可这个节点不在可选列表（{all}）。cca edit 改不了它：\
-                             运行 cca router setup 重新选可选节点（路由器上也没有这个节点的话，请联系维护者）"
+                            "{k}：{}要求它走「{s}」，可这个节点不在可选列表（{all}）。cca edit 改不了它：\
+                             运行 cca router setup 重新选可选节点（路由器上也没有这个节点的话，请联系维护者）",
+                            by_whom(tool, &e)
                         )
                     } else {
                         format!("{k}：节点「{s}」不在可选列表（{all}）")
@@ -254,16 +316,44 @@ pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
         if !server {
             notice(
                 "nodes_filled",
-                &format!(
-                    "• 维护者的映射要 {} 走节点 {}：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点",
-                    who.join("、"),
-                    n
-                ),
+                &format!("• {}：它在{}（同步时写进路由器的配置），已加进可选节点", filled_who(who, n), filled_where(n)),
                 dict! { "node" => n },
             );
         }
     }
     want.into_iter().map(|(n, _)| n).collect()
+}
+
+/// nodes_filled 那句话的前半：谁要这些账号走这个节点（都是维护者的映射要的时和以前一字不差）
+fn filled_who(who: &[String], n: &str) -> String {
+    let teams: HashSet<String> = tools()
+        .iter()
+        .flat_map(|t| policy_sources(t).items())
+        .filter(|(e, tid)| who.iter().any(|w| **w == **e) && tid.truthy())
+        .filter_map(|(_, tid)| super::team::grant_name(&tid.py_str()))
+        .collect();
+    if teams.is_empty() {
+        format!("维护者的映射要 {} 走节点 {n}", who.join("、"))
+    } else {
+        let mut names: Vec<String> = teams.into_iter().collect();
+        names.sort();
+        format!("「{}」的配置要 {} 走节点 {n}", names.join("」「"), who.join("、"))
+    }
+}
+
+/// nodes_filled 那句话里节点的定义在哪：某个 Team 的配置带着它就是 Team 的，不然是维护者的参考配置
+fn filled_where(n: &str) -> &'static str {
+    let in_team = super::team::grants().iter().any(|g| {
+        g.doc
+            .dict("nodes")
+            .and_then(|x| x.list("proxies"))
+            .is_some_and(|l| l.items().iter().any(|p| p.as_dict().is_some_and(|p| p.str("name").as_deref() == Some(n))))
+    });
+    if in_team {
+        "Team 的配置带的节点里"
+    } else {
+        "维护者的参考配置里"
+    }
 }
 
 /// 各工具的账号表一起对账（大家共用一个端口池）：各自已有的端口不动，新端口避开别的工具占着的。

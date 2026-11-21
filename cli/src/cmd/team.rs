@@ -28,6 +28,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-sync", cmd_team_sync),
     Cmd::all("team-leave", cmd_team_leave),
     Cmd::all("team-list", cmd_team_list),
+    Cmd::all("team-apply", cmd_team_apply),
     Cmd::all("team-new", admin::cmd_team_new),
     Cmd::all("team-attach", admin::cmd_team_attach),
     Cmd::all("team-invite", admin::cmd_team_invite),
@@ -471,6 +472,14 @@ pub fn cmd_team_leave(args: &[String]) -> R<()> {
     }
     forget(&t.id)?;
     out!("{}\n{host}\n{note}", t.name);
+    Ok(())
+}
+
+/// py team-apply：照各个 Team 现在给的配置对一遍账号表（每条读账号表的命令本来都会做：这里只做这一件）。加了、固定了、收起了哪些
+/// 账号写在 stderr（对账时的那几句），stdout 没有东西。bash 在加入、取到新配置、退出以后马上调它，再同步路由器、改启动器
+pub fn cmd_team_apply(args: &[String]) -> R<()> {
+    arity("team-apply", args, 0, 0)?;
+    crate::core::ctx::ctx()?;
     Ok(())
 }
 

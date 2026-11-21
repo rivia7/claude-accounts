@@ -335,7 +335,7 @@ fn policy_off_scan(c: &Dict) -> OffScan {
     for tool in tools() {
         let Some(table) = tool.tab() else { continue };
         let _using = crate::core::tool::Using::tool(tool);
-        let pm = policy_raw(tool);
+        let pm = legacy_raw(tool); // 关掉的是维护者的共享：Team 给的账号不动
         for (k, v) in table.items() {
             if !mapped(&pm, &k, &v) {
                 let n = node_of(&v);

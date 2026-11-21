@@ -14,7 +14,7 @@ use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, SELF_PATH};
 use crate::core::ctx::ctx;
 use crate::core::model::{acct_id, adir, is_api, label_of, name_of, parse_key};
-use crate::core::policy::{policy_doc, policy_on, policy_raw};
+use crate::core::policy::{policy_doc, policy_on, policy_sources};
 use crate::core::tool::{t, tools, Tool, Using};
 use crate::py::base64::{b64decode, b64encode};
 use crate::py::fs::{self, load_quiet, read_text, save_json};
@@ -179,7 +179,7 @@ pub fn spawn_background(args: &[&str]) {
 pub fn presence_wake(key: &str) {
     let wake = || -> R<()> {
         let v = load_quiet(&t().table).and_then(|j| j.as_dict()).and_then(|j| j.get(key)).unwrap_or(V::None);
-        if hub_of(&hubs()?, &policy_raw(t()), key, &v).is_none() {
+        if hub_of(&hubs()?, &policy_sources(t()), key, &v).is_none() {
             return Ok(());
         }
         agent_kick();
@@ -304,10 +304,10 @@ pub fn presence_targets(kind: HubKind) -> Option<Vec<Target>> {
             continue;
         }
         let table = load_quiet(&tool.table)?.as_dict()?;
-        let pm = policy_raw(tool);
+        let src = policy_sources(tool);
         let _using = Using::tool(tool);
         for (k, v) in table.items() {
-            if route(&pm, &k, &v) == Some(kind) {
+            if route(&src, &k, &v) == Some(kind) {
                 out.push((tool, k.to_string(), adir(&k)));
             }
         }
@@ -1100,6 +1100,7 @@ fn unrouted_reason(k: &str, v: &V, pm: &Dict) -> R<String> {
         None => format!("{name} 没有邮箱：只统计官方账号"),
         Some(HubKind::Maintainer) => format!("{name} 是维护者共享的账号：{}", presence_load()?.0),
         Some(HubKind::Own) => format!("{name} 不在维护者的映射里，要经自己的同步服务器统计：{}", own_load()?.0),
+        Some(HubKind::Team(_)) => format!("{name} 是 Team 给的账号：经 Team 的同步服务器统计，这台设备现在用不了它"),
     })
 }
 
@@ -1114,7 +1115,7 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         out!("{}", no_hub_reason()?);
         return exit(2);
     }
-    let (table, pm) = (ctx()?.1, policy_raw(t()));
+    let (table, pm) = (ctx()?.1, policy_sources(t()));
     let keys: Vec<String> = if names.is_empty() {
         table.items().iter().filter(|(k, v)| hub_of(&hubs, &pm, k, v).is_some()).map(|(k, _)| k.to_string()).collect()
     } else {
@@ -1266,10 +1267,14 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         let me = reply_of(asked.iter().find(|a| a.hub.kind == *kind), "me_name");
         let me = match (me.truthy(), *kind) {
             (false, _) => String::new(),
-            (true, HubKind::Own) => format!("，这台设备叫 {}", me.py_str()),
             (true, HubKind::Maintainer) => format!("，这台 Mac 叫 {}", me.py_str()),
+            (true, _) => format!("，这台设备叫 {}", me.py_str()),
         };
-        let whose = if *kind == HubKind::Own { "自己的同步服务器" } else { "维护者的服务器" };
+        let whose = match kind {
+            HubKind::Own => "自己的同步服务器",
+            HubKind::Maintainer => "维护者的服务器",
+            HubKind::Team(_) => "Team 的同步服务器",
+        };
         lines.push(format!("{} 账号连着的设备（{whose}上的记录{me}）：", t().label));
         for (_, a) in accounts.iter().filter(|(k, _)| k == kind) {
             lines.push(format!("  {}", label_of(&a.at("key").py_str())));
