@@ -312,6 +312,12 @@ def invite_parts(secret):
     return H(k, b'cca-team-token-v1')[:16].hex(), H(k, b'cca-team-dev-v1')[:8].hex(), (H(root, b'enc'), H(root, b'mac'))
 
 
+def team_pub_proof(secret, pub):
+    """设备加入时给自己的公钥（'ssh-ed25519 AAAA…' 那一行的前两段）算的认证码：HMAC(HMAC(k, "cca-team-pub-v1"), 那一行)，base64"""
+    key = H(bytes.fromhex(secret), b'cca-team-pub-v1')
+    return base64.b64encode(H(key, ' '.join(pub.split()[:2]).encode())).decode()
+
+
 def invite_encode(url, pins, root_pub, secret, name, exp=None):
     """邀请链接：cca-team1.<base64url(紧凑的 JSON)，不带 =>.<前面这一段的 SHA-256 的前 4 个十六进制字符>"""
     doc = {'u': url, 'p': pins, 'r': root_pub.split()[1], 'k': secret, 'n': name}

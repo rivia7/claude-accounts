@@ -6548,6 +6548,273 @@ cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪�
 }
 
 # ---------------------------------------------------------------------------
+# Team（cca team；docs/dev/team.md）：一组设备加一份配置（哪些账号、各走哪个节点、节点的定义），配置由管理员的设备维护、存在这个 Team 的
+# 同步服务器上（server/cca-presence.py --mode team）。这里只管问和说，事情在辅助程序的 team-*（cli/src/cmd/team.rs）。
+# 这一阶段配置只是取到本机（~/.cca/teams/），账号表还不跟着变。
+TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪些 Team 里
+      cca team join [--stdin] [--name 名字]        拿管理员给的邀请链接加入（链接不写在命令行上）
+      cca team sync [Team]                         取一次配置
+      cca team leave [Team]                        退出
+    管理员：
+      cca team new 名字 [--device 这台设备的名字]   建一个 Team（给出部署服务器要的根公钥）
+      cca team attach Team https://服务器:端口 [证书公钥的指纹…]   接上（换一台）同步服务器
+      cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒]   给一台设备发邀请
+      cca team devices Team [--json]               有哪些设备
+      cca team revoke Team 设备                    移除一台设备、撤回邀请
+      cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
+      cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
+      cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
+      cca team publish Team                        和服务器对一遍、发布配置"
+
+restore_teams() {   # restore_teams plan | apply：卸载时的 Team。plan 说会怎样（成员：退出；管理员：根密钥跟着删掉），apply 各个都退出
+	local rows id name role rest out
+	rows=$(py team-list 2>/dev/null) || return 0
+	[ -n "$rows" ] || return 0
+	while IFS=$'\t' read -r id name role rest; do
+		if [ "$1" = plan ]; then
+			if [ "$role" = admin ]; then
+				say "  · Team「${name}」：这台设备是它的管理员，根密钥跟着删掉（备份里不带它：没有另存的话，这个 Team 再没有谁管得了）"
+			else
+				say "  · Team「${name}」：退出，服务器上移除这台设备"
+			fi
+		else
+			out=$(py team-leave apply "$id" 2>/dev/null) || continue
+			out=$(printf '%s\n' "$out" | sed -n 3p)
+			[ -z "$out" ] || warn "Team「${name}」：${out}"
+		fi
+	done <<< "$rows"
+}
+
+team_fail() {   # team_fail 辅助程序的输出 默认的说法：py team-… 没成时 stdout 是 "原因码\t原因"，FAIL_CODE 是 team_ 加上原因码
+	case "$1" in
+		*$'\t'*) FAIL_CODE="team_${1%%$'\t'*}" die "${1#*$'\t'}" ;;
+		*) die "${1:-$2}" ;;
+	esac
+}
+
+cmd_team() {
+	[ -f "$CFG" ] || die "还没安装：请先运行 $SELF install"
+	local sub="${1:-ls}" out
+	[ $# -eq 0 ] || shift
+	case "$sub" in
+		ls|list) team_ls "$@" ;;
+		join) team_join "$@" ;;
+		sync) team_sync "$@" ;;
+		leave) team_leave "$@" ;;
+		new) team_new "$@" ;;
+		attach) team_attach "$@" ;;
+		invite) team_invite "$@" ;;
+		devices) team_devices "$@" ;;
+		revoke) team_revoke "$@" ;;
+		grant)
+			out=$(py team-grant "$@") || team_fail "$out" "没改成"
+			okay "改好了：现在给这台设备的是${out}" ;;
+		import)
+			out=$(py team-import "$@") || team_fail "$out" "没导入成"
+			{ local n nodes stored; IFS= read -r n; IFS= read -r nodes; IFS= read -r stored; } <<< "$out"
+			okay "导入了 ${n} 个账号、${nodes} 个节点；$(team_stored "$stored")" ;;
+		map)
+			out=$(py team-map "$@") || team_fail "$out" "没改成"
+			okay "改好了；$(team_stored "$out")" ;;
+		publish)
+			out=$(py team-publish "$@") || team_fail "$out" "没发布成"
+			okay "$(team_stored "$(printf '%s\n' "$out" | sed -n 1p)")"
+			out=$(printf '%s\n' "$out" | sed -n 2p)
+			[ -z "$out" ] || team_forward_warn "$out" ;;
+		*) die "$TEAM_USAGE" ;;
+	esac
+}
+
+team_stored() {   # team_stored 存上了几台的配置：说成一句话
+	case "$1" in
+		0) printf '各台设备的配置没有变' ;;
+		*) printf '%s 台设备的配置发布了新的一版' "$1" ;;
+	esac
+}
+
+team_state_say() {   # team_state_say 状态：给人看的说法
+	case "$1" in
+		ok) printf '已同步' ;;
+		pending) printf '还没取过配置' ;;
+		local) printf '还没接上服务器' ;;
+		removed) printf '被管理员移除了' ;;
+		lost) printf '等管理员登记回去' ;;
+		*) printf '没取成' ;;
+	esac
+}
+
+team_ls() {   # cca team [ls] [--json]：这台设备在哪些 Team 里（只看本机记着的，不联网）
+	local out id name role host state seq n why
+	case "$*" in
+		'') ;;
+		--json) py team-list --json; return ;;
+		*) die "用法: cca team ls [--json]" ;;
+	esac
+	out=$(py team-list) || exit 1
+	if [ -z "$out" ]; then
+		say "这台设备还不在任何 Team 里。有管理员给的邀请链接时运行 cca team join；自己建一个是 cca team new 名字"
+		return 0
+	fi
+	while IFS=$'\t' read -r id name role host state seq n why; do   # 没有的栏是 -（空的栏按制表符读会被并掉）
+		[ "$host" != - ] || host=没有服务器
+		[ "$seq" != - ] || seq=""
+		[ "$n" != - ] || n=0
+		[ "$why" != - ] || why=""
+		say "${name}（${id:0:8}）：$([ "$role" = admin ] && printf '管理员' || printf '成员')，${host}，$(team_state_say "$state")${seq:+，第 ${seq} 版配置、${n} 个账号}${why:+
+    ${why}}"
+	done <<< "$out"
+}
+
+team_join() {   # cca team join [--stdin] [--name 名字]：问邀请链接（输入不显示；App 里是提问会话的 team.join，链接不对、过期了、用过了时带着原因重问），
+	              # 或者 --stdin 从标准输入读。邀请是凭证、只能用一次：不写在命令行上
+	local stdin="" name="" link out rc err="" tname host device members tid state detail
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--stdin) stdin=1 ;;
+			--name) [ $# -ge 2 ] || die "$TEAM_USAGE"; name=$2; shift ;;
+			*) die "用法: cca team join [--stdin] [--name 名字]（邀请链接不写在命令行上：会问你，或者用 --stdin 从标准输入读）" ;;
+		esac
+		shift
+	done
+	[ -n "$stdin" ] || need_tty
+	while :; do
+		if [ -n "$stdin" ]; then
+			link=$(cat)
+		else
+			link=$(ask_secret "邀请链接（cca-team1. 开头，输入不显示）: " q=team.join "title=加入 Team" "label=邀请链接" \
+				"hint=Team 的管理员发给这台设备的那一行（一个邀请只能加入一台设备）" "error=$err")
+		fi
+		out=$(printf '%s' "$link" | py team-join ${name:+--name "$name"}); rc=$?
+		link=""
+		[ $rc -ne 0 ] || break
+		case "${out%%$'\t'*}" in   # App 里链接本身不对、服务器不认它：带着原因重问；别的原因（连不上……）照旧停下
+			link|denied|expired|used) if [ -n "$PROMPT_GUI" ] && [ -z "$stdin" ]; then err="${out#*$'\t'}"; continue; fi ;;   # --stdin 读过一次就没了：不重问
+		esac
+		team_fail "$out" "没有加入成"
+	done
+	{ IFS= read -r tname; IFS= read -r host; IFS= read -r device; IFS= read -r members; IFS= read -r tid; IFS= read -r state; IFS= read -r detail; } <<< "$out"
+	okay "已加入「${tname}」（${host}）：这台设备叫 ${device}${members:+，现在有 ${members} 台设备}"
+	if [ "$state" = ok ]; then
+		say "  管理员给了这台设备 ${detail} 个账号的配置（账号表照它改是下一个版本的事：现在只是取到了本机）"
+	else
+		fail_warn team_sync "加入了，配置还没取到：${detail}（稍后 cca team sync 再取）"
+	fi
+	gui_done team_joined "已加入「${tname}」"
+}
+
+team_sync() {   # cca team sync [Team]：取一次配置，说每个 Team 的结果
+	[ $# -le 1 ] || die "用法: cca team sync [Team]"
+	local out id name state seq why bad=0
+	out=$(py team-sync "$@") || team_fail "$out" "没取成"
+	[ -n "$out" ] || { say "没有要取配置的 Team"; return 0; }
+	while IFS=$'\t' read -r id name state seq why; do
+		if [ "$state" = ok ]; then
+			okay "${name}：手里的是第 ${seq} 版配置"
+		else
+			warn "${name}：${why}"; bad=1
+		fi
+	done <<< "$out"
+	return $bad
+}
+
+team_leave() {   # cca team leave [Team]：退出。成员：服务器上移除这台设备；管理员：这台设备上的根密钥跟着没了。先问
+	[ $# -le 1 ] || die "用法: cca team leave [Team]"
+	local out tid name role host why item note
+	out=$(py team-leave plan "$@") || team_fail "$out" "没有这个 Team"
+	IFS=$'\t' read -r tid name role host <<< "$out"
+	if [ "$role" = admin ]; then
+		item=team_delete
+		why="这台设备是「${name}」的管理员：退出以后这台设备上就没有它的根密钥了，这个 Team 再没有谁能邀请设备、移除设备、改配置。别的设备照旧用着手里的配置"
+	else
+		item=team_leave
+		why="${host:+${host} 上的}服务器移除这台设备，这台设备上「${name}」的配置都删掉。以后要再加入，要管理员重新发邀请"
+	fi
+	[ -n "$PROMPT_GUI" ] || say "  ${why}"
+	consent "$item" "$tid" "退出 Team" "退出「${name}」吗？" "$why" n
+	case $? in
+		0) ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca team leave（会先问你）" ;;
+	esac
+	out=$(py team-leave apply "$tid") || team_fail "$out" "没有退出成"
+	note=$(printf '%s\n' "$out" | sed -n 3p)
+	[ -z "$note" ] || warn "$note"   # 服务器那边没移除成（连不上）：本机照样退出了
+	okay "已退出「${name}」"
+	gui_done team_left "已退出「${name}」${note:+。${note}}"
+}
+
+team_new() {   # cca team new 名字 [--device 这台设备的名字]：建一个 Team（只在这台设备上：还没有服务器），说下一步
+	local out tid root
+	[ $# -ge 1 ] || die "用法: cca team new 名字 [--device 这台设备的名字]"
+	out=$(py team-new "$@") || team_fail "$out" "没建成"
+	{ IFS= read -r tid; IFS= read -r root; } <<< "$out"
+	okay "建好了「${1}」（${tid:0:8}）：这台设备是它的管理员"
+	say "  下一步：在服务器上用这把根公钥运行 Team 的同步服务器（它是公开的，服务器上不放别的密钥）："
+	say "    python3 -I cca-presence.py --mode team --team-root '${root}' --cert … --key … --state …"
+	say "  然后 cca team attach ${tid:0:8} https://服务器:端口 [证书公钥的指纹]"
+	warn "根密钥只在这台设备上（~/.cca/teams/${tid}/）：它丢了这个 Team 就得重建。cca restore 的备份不带它，要自己留一份"
+}
+
+team_attach() {   # cca team attach Team https://服务器:端口 [证书公钥的指纹…]
+	local out host device members stored note
+	[ $# -ge 2 ] || die "用法: cca team attach Team https://服务器:端口 [证书公钥的指纹…]"
+	out=$(py team-attach "$@") || team_fail "$out" "没接上"
+	{ IFS= read -r host; IFS= read -r device; IFS= read -r members; IFS= read -r stored; IFS= read -r note; } <<< "$out"
+	okay "接上了 ${host}：这台设备叫 ${device}，现在有 ${members} 台设备；$(team_stored "$stored")"
+	[ -z "$note" ] || team_forward_warn "$note"
+}
+
+team_forward_warn() {   # 换了服务器，原来那台上没收尾成（$1 是辅助程序说的原因）
+	fail_warn team_forward "原来那台服务器上没收尾成（${1}）：还连着它的设备找不到新的服务器，要重新邀请；那台上还没用掉的邀请也没撤回"
+}
+
+team_invite() {   # cca team invite Team 名字 [--accounts …] [--ttl 秒]：邀请链接打到 stdout（只这一次）。它是凭证：在 Claude Code 的会话里不给
+	local out link dev problem
+	[ $# -ge 2 ] || die "用法: cca team invite Team 给这台设备起的名字 [--accounts all|工具:邮箱,…] [--ttl 秒]"
+	if [ -n "${CLAUDECODE:-}" ] && [ -z "${CCA_EVENTS:-}" ]; then
+		die "在 Claude Code 里不显示邀请链接（会进对话记录）：请在终端里运行"
+	fi
+	out=$(py team-invite "$@") || team_fail "$out" "没发成"
+	{ IFS= read -r link; IFS= read -r dev; IFS= read -r problem; } <<< "$out"
+	[ -z "$problem" ] || fail_warn team_publish "邀请发了，给它的配置还没存上（${problem}）：解决以后 cca team publish"
+	say "给「${2}」的邀请（只显示这一次；只能加入一台设备，默认 7 天过期。它就是那台设备的密钥：当密码传，别贴到群里）："
+	printf '%s\n' "$link"
+	say "对方运行 cca team join，贴上这一行。"
+}
+
+team_devices() {   # cca team devices Team [--json]：先和服务器对一遍，再列出来
+	local out dev label state grants seq have problem
+	case "$#:${2:-}" in
+		1:) ;;
+		2:--json) out=$(py team-devices "$1" --json) || team_fail "$out" "没问到"; printf '%s\n' "$out"; return ;;
+		*) die "用法: cca team devices Team [--json]" ;;
+	esac
+	out=$(py team-devices "$1") || team_fail "$out" "没问到"
+	while IFS=$'\t' read -r dev label state grants seq have problem; do   # 没有的栏是 -
+		[ "$have" != - ] || have=""
+		say "${label}（${dev:0:8}）：${state}，${grants}，发布到第 ${seq} 版${have:+、它手里是第 ${have} 版}"
+		[ "$problem" = - ] || warn "${label}：${problem}"
+	done <<< "$out"
+}
+
+team_revoke() {   # cca team revoke Team 设备：移除一台设备（或者撤回还没用掉的邀请）。先问
+	[ $# -eq 2 ] || die "用法: cca team revoke Team 设备"
+	local out tid dev label state why
+	out=$(py team-revoke plan "$1" "$2") || team_fail "$out" "没有这台设备"
+	IFS=$'\t' read -r tid dev label state <<< "$out"
+	why="服务器就此不认「${label}」的密钥，给它的配置删掉。它已经拿到的节点凭证收不回来：要紧的话换掉那些节点的凭证"
+	[ -n "$PROMPT_GUI" ] || say "  ${why}"
+	consent team_revoke "$dev" "移除设备" "从 Team 里移除「${label}」吗？" "$why" n
+	case $? in
+		0) ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca team revoke（会先问你）" ;;
+	esac
+	out=$(py team-revoke apply "$tid" "$dev") || team_fail "$out" "没移除成"
+	okay "已移除「${label}」"
+	gui_done team_revoked "已移除「${label}」"
+}
+
 # 自己的同步服务器（cca hub；docs/dev/hub.md，PROTOCOL 4.13）：用户自己部署的服务器，维护者共享以外的官方账号的设备统计、
 # 记下的 API key、折合金额经它和自己的其他设备同步。加入链接是凭证：只经 stdin、提问会话传，不进命令行和环境变量
 # ---------------------------------------------------------------------------
@@ -7629,6 +7896,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	[ -z "$mail_user" ] || say "  · 邮箱助手：删掉${KEYSTORE}里 ${mail_user} 的应用专用密码（Google 账号里的那个应用专用密码要你自己去撤销）"
 	[ -z "$(py remote-peers 2>/dev/null)" ] || say "  · 远程会话：取消和别的机器的配对（那些机器不能再接入这台机器，这台也接不了它们），配对的密钥从${KEYSTORE}里删掉"
 	out=$(py hub-leave plan 2>/dev/null) && say "  · 自己的同步服务器（${out%%$'\t'*}）：退出，服务器上移除这台设备；加入链接、这台设备的密钥跟着删掉（别的设备照旧）"
+	restore_teams plan
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 内置代理（用过的话）：停掉它的内核，删掉配置和拷来的节点"
 	if ! on_linux; then udp_env; udp_present && say "  · 本机 UDP 走节点：删掉 root 的系统服务 ${UDP_LABEL}（要输管理员密码）"; fi
@@ -7657,6 +7925,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	py mail-forget 2>/dev/null   # 邮箱助手：钥匙串里的应用专用密码（没配置过也照样跑：什么都不删）
 	py remote-forget 2>/dev/null   # 远程会话：和别的机器的配对都取消（告诉服务器），配对的密钥从钥匙串里删掉
 	out=$(py hub-leave apply 2>/dev/null) && [ -n "$out" ] && warn "$out"   # 自己的同步服务器：退出（连不上时说怎么在别的设备上移除这台）
+	restore_teams apply   # Team：各个都退出（管理员的那些，根密钥跟着 ~/.cca 一起删掉）
 	if router_ready; then
 		out=$(router_uninstall 2>&1); rc=$?
 		[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  │ /' >&2
@@ -7683,6 +7952,8 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	# 自己的同步服务器的加入信息（hub/hub.json：加入链接是凭证；hub-hosted.json：部署到托管平台时还没用上的口令和盐）和经它同步来的不打包
 	[ -z "$bk" ] || ( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/custom-nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
 		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' --exclude 'hub-hosted.json' \
+		--exclude 'teams/*/secret' --exclude 'teams/*/root_ed25519' --exclude 'teams/*/admin.json' --exclude 'teams/*/doc.json' \
+		--exclude 'teams/*/*.tmp' --exclude 'teams/.new.*' \
 		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
@@ -8000,6 +8271,7 @@ main() {
 		cost) shift; cmd_cost "$@" ;;   # 统计折合金额（App 定时运行，PROTOCOL 3.5；不经过自动更新、映射拉取）
 		remote) shift; cmd_remote "$@" ;;   # 远程会话：开关、这台机器上可以接入的会话、接入（和工具无关；不经过自动更新、映射拉取）
 		hub) shift; cmd_hub "$@" ;;   # 自己的同步服务器（和工具无关；不经过自动更新、映射拉取）
+		team) shift; cmd_team "$@" ;;   # Team（和工具无关；不经过自动更新、映射拉取）
 		update) shift; cmd_update "$@" ;;
 		restore|uninstall) cmd_restore "$@" ;;   # 同一条命令的两个名字
 		*)

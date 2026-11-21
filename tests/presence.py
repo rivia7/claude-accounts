@@ -787,7 +787,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         cls.tmp.cleanup()
 
     def admin(self, op, **kw):
-        """管理员的请求：拿根密钥签名（都算在根密钥这一个指纹上：每 2 秒一个、攒得下 30 个，用完了等一会儿再试）"""
+        """管理员的请求：拿根密钥签名（限额另算：每秒 2 个、攒得下 120 个；用完了等一会儿再试）"""
         who = kw.pop('who', 'root')
         for _ in range(5):
             st, j = self.call(op, who, **kw)
@@ -856,7 +856,9 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         self.assertEqual(self.join('b', token, name='x' * 65)[0], 400)
         self.assertEqual(self.join('root', token), (403, {'error': 'denied'}), '根密钥不是设备：拿着邀请也加入不了')
         self.assertEqual(self.join('a', token), (409, {'error': 'taken'}), '这把密钥已经是一台设备了')
-        st, j = self.join('b', token, name='studio')
+        self.assertEqual(self.join('b', token, proof='not-a-tag')[0], 400, '认证码的样子不对')
+        proof = sw.team_pub_proof(secret, self.pubs['b'])
+        st, j = self.join('b', token, name='studio', proof=proof)
         self.assertEqual((st, j['name'], j['dev'], j['members'], j['gen']), (200, 'studio-2', db, 2, gen), j)
         self.assertEqual(self.join('c', token), (403, {'error': 'used'}), '邀请只能用一次（签名对的才问得出来是用过了）')
         self.assertEqual(self.join('c', token, signer='evil'), (403, {'error': 'denied'}))
@@ -911,6 +913,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
                          (da, self.pubs['a'], self.fp('a'), 0))
         self.assertEqual((rows['studio-2']['dev'], rows['studio-2']['seq'], rows['studio-2']['have'], rows['studio']['have']), (db, 3, 7, None),
                          '各台设备取配置时说的手里那一份的序号')
+        self.assertEqual((rows['studio-2']['proof'], rows['studio']['proof']), (proof, None), '设备加入时带的认证码原样回给管理员；直接登记的没有')
         self.assertTrue(all(0 <= r['joined_age'] <= 120 and 0 <= r['seen_age'] <= 120 for r in rows.values()), rows)
         self.assertEqual([(i['dev'], i['seq'], 3500 < i['expires_in'] <= 3600) for i in j['invites']], [(dc, 1, True)], j['invites'])
         self.assertEqual(self.call('team_members', 'b'), (403, {'error': 'denied'}), '设备看不了名单')

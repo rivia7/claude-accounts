@@ -870,8 +870,9 @@ class Store:
             self.save()
             return 200, {'v': API, 'ok': True, 'invites': sum(1 for i in inv.values() if now < i['exp']), 'gen': team['gen']}
 
-    def team_join(self, fp, key, name, token, now):
-        """设备拿邀请里的令牌加入：令牌就此用掉，这把密钥记成邀请里的那个编号"""
+    def team_join(self, fp, key, name, token, now, proof=None):
+        """设备拿邀请里的令牌加入：令牌就此用掉，这把密钥记成邀请里的那个编号。proof 是设备拿邀请里那串随机数给自己的公钥算的认证码
+        （服务器不懂，原样存着、回给管理员：管理员据此知道这把公钥真是拿着邀请的那台设备的，不是服务器换的）"""
         h = hashlib.sha256(token.encode('ascii')).hexdigest()
         with self.lock:
             ms, team = self.data['machines'], self.data['team']
@@ -884,6 +885,8 @@ class Store:
                 return 507, {'error': 'full'}
             name = self.free_name(name, fp)
             ms[fp] = {'name': name, 'key': key, 'joined': now, 'dev': inv['dev']}
+            if proof:
+                ms[fp]['proof'] = proof
             del team['invites'][h]
             team['spent'][h] = now
             self.seen[fp] = now
@@ -935,7 +938,8 @@ class Store:
             self.invite_prune(now)
             team, docs = self.data['team'], self.docs['docs']
             seq = lambda dev: (docs.get(dev) or {}).get('seq', 0)
-            rows = [dict(self.member_row(f, m, now), dev=m.get('dev'), pub=m['key'], seq=seq(m.get('dev')), have=self.have.get(f))
+            rows = [dict(self.member_row(f, m, now), dev=m.get('dev'), pub=m['key'], proof=m.get('proof'), seq=seq(m.get('dev')),
+                         have=self.have.get(f))
                     for f, m in self.data['machines'].items()]
             invites = [{'dev': i['dev'], 'expires_in': round(i['exp'] - now), 'seq': seq(i['dev'])} for i in team['invites'].values() if now < i['exp']]
             return 200, {'v': API, 'ok': True, 'members': rows, 'invites': invites, 'gen': team['gen']}
@@ -1652,7 +1656,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()} if own or team else {'error': 'denied'})
             if not ssh_verify(m['key'], NS_REPORT, body, sig):
                 return self.send(403, {'error': 'denied'})
-        if not srv.fp_bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
+        bucket = srv.root_bucket if team and op in TEAM_ADMIN_OPS else srv.fp_bucket
+        if not bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
             return self.send(429, {'error': 'rate'})
         ts = j.get('ts')
         if not isinstance(ts, (int, float)) or isinstance(ts, bool) or abs(ts - now) > TS_WINDOW:
@@ -1670,9 +1675,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(400, {'error': 'bad'})
             return self.send(*srv.store.join(fp, 'ssh-ed25519 ' + k.group(1), name, check, j['admit'], now))
         if op == 'team_join':
-            if not name_ok(j.get('name')):
+            proof = j.get('proof')
+            if not (name_ok(j.get('name')) and (proof is None or (isinstance(proof, str) and TAG_RE.match(proof)))):
                 return self.send(400, {'error': 'bad'})
-            return self.send(*srv.store.team_join(fp, 'ssh-ed25519 ' + k.group(1), j['name'], j['token'], now))
+            return self.send(*srv.store.team_join(fp, 'ssh-ed25519 ' + k.group(1), j['name'], j['token'], now, proof))
         if op in TEAM_OPS:
             return self.team_op(op, fp, j, now)
         if op == 'members':
@@ -1754,6 +1760,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
         self.ctx, self.store, self.release_key, self.sig_ok, self.remote = ctx, store, release_key, sig_ok, remote
         self.proxied = ctx is None
         self.ip_bucket, self.fp_bucket, self.nonces = Buckets(2, 120), Buckets(0.5, 30), Nonces()
+        self.root_bucket = Buckets(2, 120)   # Team 的管理员（根密钥签的）：一条命令要问两三次，设备的那个限额不够用
         self.slots = threading.BoundedSemaphore(MAX_CONN)
         self.per_ip, self.per_ip_lock = {}, threading.Lock()
         super().__init__(addr, Handler)

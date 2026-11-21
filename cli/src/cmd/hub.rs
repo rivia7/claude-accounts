@@ -162,7 +162,7 @@ pub struct Link {
 /// 入伙口令：128 位的小写十六进制（服务器只存它的 SHA-256）；服务器的这一份记录的编号（gen）也是这个样子
 static ADMIT_RE: LazyLock<crate::py::re::Re> = LazyLock::new(|| crate::py::re::Re::new(r"^[0-9a-f]{32}$"));
 
-fn hex32(s: &str) -> bool {
+pub fn hex32(s: &str) -> bool {
     ADMIT_RE.fullmatch(s).is_some()
 }
 
@@ -182,7 +182,7 @@ fn link_problem(url: &str, pins: &[String], admit: &str, salt: &str) -> Option<&
 }
 
 /// 链接最后的校验：前面那一段的 SHA-256 的前 4 位十六进制（看出复制时少了一截、抄错了）
-fn link_sum(head: &str) -> String {
+pub fn link_sum(head: &str) -> String {
     sha256_hex(head)[..4].to_string()
 }
 
@@ -331,10 +331,10 @@ pub fn host_of(url: &str) -> String {
 }
 
 /// 设备的名字：1～64 个字符，没有控制字符，前后没有空白（服务器也这么查）；不合格时说 NAME_BAD
-fn name_ok(n: &str) -> bool {
+pub fn name_ok(n: &str) -> bool {
     !n.is_empty() && n.trim() == n && text::len(n) <= 64 && !n.chars().any(|c| c.is_control())
 }
-const NAME_BAD: &str = "设备的名字要 1～64 个字符，不能有控制字符";
+pub const NAME_BAD: &str = "设备的名字要 1～64 个字符，不能有控制字符";
 
 /// 这台机器的 device_id（config.json；折合金额的密文里写着它，同一台机器在两台服务器上算一台设备）：没有就生成、写回去（拿着 Lock）
 pub fn ensure_device_id() -> R<String> {
@@ -348,15 +348,16 @@ pub fn ensure_device_id() -> R<String> {
     Ok(id)
 }
 
-/// 生成这台设备在自己的服务器上的密钥（ed25519，没有口令）；旧的（坏了的）先删掉
-fn hub_keygen(p: &str) -> R<()> {
+/// 生成一把 ed25519 密钥（没有口令；comment 是公钥文件里的备注）；旧的（坏了的）先删掉。自己的同步服务器、Team 里设备的密钥和
+/// Team 的根密钥都是它生成的
+pub fn keygen(p: &str, comment: &str) -> R<()> {
     for f in [p.to_string(), format!("{p}.pub")] {
         match std::fs::remove_file(&f) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
             _ => {}
         }
     }
-    let _ = Proc::new(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "cca-hub", "-f", p])
+    let _ = Proc::new(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", p])
         .stdin(In::Null)
         .stdout(Out::Null)
         .stderr(Out::Null)
@@ -798,7 +799,7 @@ fn join_post(link: &Link, name: &str, check: &str) -> R<Result<(i64, Dict, Dict)
     fs::makedirs_mode(&HUB_DIR, 0o700)?;
     let kp = hub_path("id_ed25519");
     if key_at(&kp)?.is_none() {
-        hub_keygen(&kp)?;
+        keygen(&kp, "cca-hub")?;
     }
     let Some((key, fp)) = key_at(&kp)? else {
         return Ok(Err(("sign", "生成不了这台设备的密钥（ssh-keygen）".into())));

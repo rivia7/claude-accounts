@@ -330,9 +330,14 @@ struct ResultCode: KnownValues {
     static let hubDeployed = ResultCode(rawValue: "hub_deployed")
     /// 托管平台上的那一台：生成了新版的部署文件，照着换上了（`cca hub hosted`，加入着时）
     static let hubHosted = ResultCode(rawValue: "hub_hosted")
+    /// Team（`cca team join` / `leave` / `revoke`；PROTOCOL 4.14）
+    static let teamJoined = ResultCode(rawValue: "team_joined")
+    static let teamLeft = ResultCode(rawValue: "team_left")
+    static let teamRevoked = ResultCode(rawValue: "team_revoked")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed, .hubHosted]
+                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed, .hubHosted,
+                                         .teamJoined, .teamLeft, .teamRevoked]
 }
 
 struct FailCode: KnownValues {
@@ -503,9 +508,15 @@ struct ConsentItem: KnownValues {
     static let hubReset = ConsentItem(rawValue: "hub_reset")
     /// `cca hub invite --new`：换一个加入链接，旧的不能再用来加入（范围 `all`，默认不同意）。
     static let hubRelink = ConsentItem(rawValue: "hub_relink")
+    /// `cca team leave`（这台设备是成员）：退出一个 Team（范围是 Team 的编号，默认不同意；PROTOCOL 4.14）。
+    static let teamLeave = ConsentItem(rawValue: "team_leave")
+    /// `cca team leave`（这台设备是管理员）：这台设备上就没有这个 Team 的根密钥了（范围是 Team 的编号，默认不同意）。
+    static let teamDelete = ConsentItem(rawValue: "team_delete")
+    /// `cca team revoke`：管理员从 Team 里移除一台设备（范围是设备在 Team 里的编号，默认不同意）。
+    static let teamRevoke = ConsentItem(rawValue: "team_revoke")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff,
-                                          .hubRemove, .hubLeave, .hubReset, .hubRelink]
+                                          .hubRemove, .hubLeave, .hubReset, .hubRelink, .teamLeave, .teamDelete, .teamRevoke]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

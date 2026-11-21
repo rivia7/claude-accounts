@@ -171,7 +171,7 @@ pub fn session_hook(key: &str) -> Option<Dict> {
 
 /// ~/.cca 里绝不给 Claude 读写的（在不在工作目录里都挡，用户同意了、bypassPermissions 时也一样）：登录凭证和浏览器资料（映射 deploy key
 /// 的私钥、维护者参考节点和内置代理里的节点密钥、自己的同步服务器的加入信息、这台设备在它上面的私钥和部署到托管平台时还没用上的
-/// 口令（hub-hosted.json）、Codex 的登录 token、各账号的
+/// 口令（hub-hosted.json）、Team 的整个目录（根密钥、管理员的主密钥、这台设备的密钥和拿到的配置：里面有节点凭证）、Codex 的登录 token、各账号的
 /// Chrome 和桌面 App 资料目录里的 cookie，包括这个账号自己的；没有钥匙串的系统上 Claude Code 的登录凭证、cca 存的 API key）。
 /// ~/.cca 里新加了凭证类的文件要补进来
 pub const CCA_DIR_PRIVATE: &[&str] = &[
@@ -180,6 +180,7 @@ pub const CCA_DIR_PRIVATE: &[&str] = &[
     "hub/hub.json",
     "hub/id_ed25519",
     "hub-hosted.json",
+    "teams/**",
     "codex/accounts/*/codex/auth.json",
     "accounts/*/chrome/**",
     "accounts/*/desktop/**",

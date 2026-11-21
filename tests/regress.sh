@@ -161,6 +161,7 @@ ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "
 ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'python3 "$D/client_updates.py"'
 ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
+ok "Team：辅助程序建 Team、接上服务器、邀请、加入、取配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
 ok "自己的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd）、打出加入链接（口令、盐不落盘）、更新、换链接、卸载，没装完时 .env 换回原来的，别人的目录不碰；cca hub deploy 经 SSH 部署、加入、更新，有设备加入过的不动，加入了的设备不碰别的服务器，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
@@ -878,7 +879,7 @@ ok "API 账号启动：直连检测接口，不做 claude.ai 出口检测，不�
 out=$(run CCA_TTY="$(ans)" ANTHROPIC_BASE_URL=http://evil.invalid cca @alice --version 2>&1); rc=$?
 ok "官方账号：shell 里继承的 ANTHROPIC_BASE_URL 不带进去（否则登录 token 会发到别的地址）；--settings 里只有记下会话的 hook（没有 env、apiKeyHelper）" '[ $rc -eq 3 ] && lastenv | grep -q "ANTHROPIC_BASE_URL=unset" && lastenv | grep -q "BROWSER=$H/.cca/bin/open-url" && [ "$(lastline SETTINGS)" = "SETTINGS: env=null" ] && [ "$(hookless "$(lastline ARGS)" "$(ls -d "$H"/.cca/accounts/alice-example-com-*)")" != BAD ] && printf "%s" "$out" | grep -q "屏蔽环境里继承的 ANTHROPIC_BASE_URL"'
 # Claude 默认只把这个账号自己的目录（~/.cca/accounts 下）加成工作目录，不是整个 ~/.cca；登录凭证和浏览器资料不管在不在工作目录里都挡住
-P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/hub/hub.json),Edit(/$H/.cca/hub/hub.json),Read(/$H/.cca/hub/id_ed25519),Edit(/$H/.cca/hub/id_ed25519),Read(/$H/.cca/hub-hosted.json),Edit(/$H/.cca/hub-hosted.json),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
+P1="--disallowedTools=Read(/$H/.cca/policy/id_ed25519),Edit(/$H/.cca/policy/id_ed25519),Read(/$H/.cca/policy/nodes.json),Edit(/$H/.cca/policy/nodes.json),Read(/$H/.cca/hub/hub.json),Edit(/$H/.cca/hub/hub.json),Read(/$H/.cca/hub/id_ed25519),Edit(/$H/.cca/hub/id_ed25519),Read(/$H/.cca/hub-hosted.json),Edit(/$H/.cca/hub-hosted.json),Read(/$H/.cca/teams/**),Edit(/$H/.cca/teams/**),Read(/$H/.cca/codex/accounts/*/codex/auth.json),Edit(/$H/.cca/codex/accounts/*/codex/auth.json),Read(/$H/.cca/accounts/*/chrome/**),Edit(/$H/.cca/accounts/*/chrome/**),Read(/$H/.cca/accounts/*/desktop/**),Edit(/$H/.cca/accounts/*/desktop/**),Read(/$H/.cca/codex/accounts/*/chrome/**),Edit(/$H/.cca/codex/accounts/*/chrome/**),Read(/$H/.cca/codex/accounts/*/desktop/**),Edit(/$H/.cca/codex/accounts/*/desktop/**),Read(/$H/.cca/core/nodes.json),Edit(/$H/.cca/core/nodes.json),Read(/$H/.cca/core/custom-nodes.json),Edit(/$H/.cca/core/custom-nodes.json),Read(/$H/.cca/core/config.yaml),Edit(/$H/.cca/core/config.yaml),Read(/$H/.cca/accounts/*/claude/.credentials.json),Edit(/$H/.cca/accounts/*/claude/.credentials.json),Read(/$H/.cca/secrets/**),Edit(/$H/.cca/secrets/**),Read(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Edit(/$H/.cca/agy/accounts/*/gemini/antigravity-cli/antigravity-oauth-token),Read(/$H/.cca/agy/accounts/*/chrome/**),Edit(/$H/.cca/agy/accounts/*/chrome/**)"
 AAD=$(ls -d "$H"/.cca/accounts/alice-example-com-*); KAD=$(ls -d "$H"/.cca/accounts/kimi-*)
 # 账号目录里链到 ~/.claude 的共享目录（这时主目录里有的：预建的九个，和假 claude 上次会话里写的 output-styles）也加上，写真实路径
 # （Claude Code 判断权限时先解析链接）；照 CLAUDE_SHARED 的顺序，ide 不加
@@ -3799,6 +3800,143 @@ cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json"
 cp -p "$T/pres.pr.json" "$PR/policy.json"; cp -p "$T/pres.pr.sig" "$PR/policy.json.sig"; cp -p "$T/pres.local.json" "$H/.cca/policy/policy.json"
 cp -p "$T/pres.mr.json" "$MR/policy.json"; cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 
+fi
+if sect 11b3d; then
+# 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.py 细测）。真的 server/cca-presence.py --mode team。
+# 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的 spec_wire 扮演），再是它当成员（管理员由 spec_wire 扮演）
+tm_cert() { mkdir -p "$1"; openssl ecparam -name prime256v1 -genkey -noout -out "$1/key.pem" 2>/dev/null; openssl req -new -x509 -key "$1/key.pem" -subj /CN=cca-team -days 2 -out "$1/cert.pem" 2>/dev/null; }
+tm_srv() {   # tm_srv 目录 根公钥：起一台 Team 的服务器（端口写在 目录/port），进程号在 TMPID
+	rm -f "$1/port"
+	python3 -I "$D/../server/cca-presence.py" --mode team --team-root "$2" --listen 127.0.0.1:0 --port-file "$1/port" --cert "$1/cert.pem" --key "$1/key.pem" \
+		--state "$1/state.json" >>"$1/log" 2>&1 & TMPID=$!
+	for i in $(seq 1 50); do [ -s "$1/port" ] && break; sleep 0.1; done
+}
+tm_pin() { printf 'sha256//%s' "$(openssl x509 -in "$1/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"; }
+tm_spec() {   # tm_spec 操作 参数…：照文档独立实现的那一头（不用 cca 的代码）
+	python3 -B - "$D" "$@" <<'PY'
+import hashlib, json, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw
+op, a = sys.argv[2], sys.argv[3:]
+if op == 'join':   # join 邀请链接 密钥文件 端口：加入、取配置、验签、解开；打印 给了哪些账号 和 节点的名字
+    link, key, port = a[0], a[1], int(a[2])
+    inv = sw.invite_decode(link)
+    token, dev, keys = sw.invite_parts(inv['k'])
+    with open(key + '.pub') as f:
+        pub = ' '.join(f.read().split()[:2])
+    st, j = sw.post(key, port, 'team_join', {'pub': pub, 'name': 'dan-air', 'token': token, 'proof': sw.team_pub_proof(inv['k'], pub)})
+    if st != 200:
+        sys.exit('join %s %s' % (st, j))
+    st, j = sw.post(key, port, 'team_get', {})
+    env, tid = j['doc'], sw.team_id('ssh-ed25519 ' + inv['r'])
+    assert sw.team_doc_verify('ssh-ed25519 ' + inv['r'], tid, dev, env['seq'], env['ct'], env['sig']), '不是根密钥签的'
+    doc = sw.team_doc_open(keys, tid, dev, env['seq'], env['ct'])
+    print(json.dumps({'accounts': doc['accounts'], 'nodes': [p['name'] for p in (doc['nodes'] or {}).get('proxies', [])], 'seq': env['seq']}, sort_keys=True))
+elif op == 'get':   # get 邀请链接 密钥文件 端口：再取一次（状态码；被移除了是 403）
+    inv = sw.invite_decode(a[0])
+    st, j = sw.post(a[1], int(a[2]), 'team_get', {})
+    print(st, j.get('error') or '', (j.get('doc') or {}).get('seq') or j.get('seq') or '')
+elif op == 'admin':   # admin 根密钥 端口 地址 指纹 那串随机数 序号 名字：发邀请、存一份配置，打印邀请链接
+    root, port, url, pin, secret, seq, name = a[0], int(a[1]), a[2], a[3], a[4], int(a[5]), a[6]
+    with open(root + '.pub') as f:
+        pub = ' '.join(f.read().split()[:2])
+    token, dev, keys = sw.invite_parts(secret)
+    tid = sw.team_id(pub)
+    if seq == 1:
+        st, j = sw.post(root, port, 'team_invite', {'token': hashlib.sha256(token.encode()).hexdigest(), 'dev': dev, 'ttl': 600})
+        assert st == 200, (st, j)
+    doc = {'v': 1, 'at': 1790000000 + seq, 'name': name, 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
+           'accounts': {'claude': {'alice@example.com': 'US-A', 'erin@example.com': 'US-B'}}, 'aliases': {}, 'install_node': '', 'nodes': None}
+    ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
+    st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(root, tid, dev, seq, ct)}}})
+    assert (st, j.get('stored')) == (200, [dev]), (st, j)
+    print(sw.invite_encode(url, [pin], pub, secret, name))
+elif op == 'revoke':   # revoke 根密钥 端口 那串随机数
+    print(sw.post(a[0], int(a[1]), 'team_revoke', {'dev': sw.invite_parts(a[2])[1]})[0])
+PY
+}
+out=$(run cca team 2>&1); rc=$?
+TMLS=$(run cca team ls --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["teams"])')
+ok "cca team：还不在任何 Team 里时说怎么加入、怎么建" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还不在任何 Team 里" && printf "%s" "$out" | grep -q "cca team join" && [ "$TMLS" = "[]" ]'
+out=$(run cca team nope 2>&1); rc=$?
+ok "cca team：不认得的子命令说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca team invite Team"'
+# --- 这台 Mac 当管理员
+out=$(run cca team new 书房组 --device 书房的Mac 2>&1); rc=$?
+TMID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$'); TMROOT=$(cut -d' ' -f1,2 "$H/.cca/teams/$TMID/root_ed25519.pub")
+ok "cca team new：建好了，说下一步（服务器用这把根公钥运行、再 attach），提醒根密钥只在这台设备上；目录和密钥只给自己读" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "建好了「书房组」（${TMID:0:8}）：这台设备是它的管理员" && printf "%s" "$out" | grep -qF -- "--mode team --team-root '"'"'$TMROOT'"'"'" && printf "%s" "$out" | grep -q "cca team attach ${TMID:0:8}" && printf "%s" "$out" | grep -q "备份不带它" && [ "$(stat -f %Lp "$H/.cca/teams/$TMID")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/root_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/admin.json")" = 600 ]'
+out=$(run cca team 2>&1)
+ok "cca team：列出来，还没接上服务器" 'printf "%s" "$out" | grep -q "书房组（${TMID:0:8}）：管理员，没有服务器，还没接上服务器"'
+out=$(runev cca team invite 书房组 dan-air 2>&1); rc=$?
+ok "还没接上服务器：发不了邀请（fail 事件 team_not_attached）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_attached\""'
+TMA="$T/team-a"; tm_cert "$TMA"; tm_srv "$TMA" "$TMROOT"; TMAPID=$TMPID; TMAPORT=$(cat "$TMA/port"); TMAPIN=$(tm_pin "$TMA")
+out=$(runev cca team attach 书房组 "https://127.0.0.1:$TMAPORT" "sha256//$(printf 'A%.0s' $(seq 1 43))=" 2>&1); rc=$?
+ok "cca team attach：证书的指纹对不上：不接（fail 事件 team_pin）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_pin\""'
+out=$(run cca team attach "${TMID:0:8}" "https://127.0.0.1:$TMAPORT" "$TMAPIN" 2>&1); rc=$?
+ok "cca team attach：接上了，这台设备登记上去、取到了自己的配置" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "接上了 127.0.0.1:${TMAPORT}：这台设备叫 书房的Mac，现在有 1 台设备；1 台设备的配置发布了新的一版" && [ -s "$H/.cca/teams/$TMID/doc.json" ] && run cca team 2>&1 | grep -q "已同步，第 1 版配置、0 个账号"'
+printf '%s' '{"version": 1, "claude": {"alice@example.com": "US-A", "bob@example.com": "US-B"}, "codex": {"carol@example.com": "US-A"}}' > "$T/tm-policy.json"
+printf '%s' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-A", "type": "socks5", "server": "192.0.2.10", "port": 1080}, {"name": "US-B", "type": "socks5", "server": "192.0.2.10", "port": 1081}]}' > "$T/tm-nodes.json"
+out=$(run cca team import 书房组 "$T/tm-policy.json" "$T/tm-nodes.json" 2>&1); rc=$?
+ok "cca team import：导入现成的映射和参考节点，发布" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "导入了 3 个账号、2 个节点；1 台设备的配置发布了新的一版"'
+out=$(run CLAUDECODE=1 cca team invite 书房组 dan-air 2>&1); rc=$?
+ok "cca team invite：在 Claude Code 的会话里不给邀请链接（会进对话记录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 Claude Code 里不显示邀请链接" && ! printf "%s" "$out" | grep -q "cca-team1\."'
+: > "$T/curl.argv"; : > "$T/env.log"
+TMLINK=$(run cca team invite 书房组 dan-air --accounts claude:alice@example.com 2>"$T/tm-invite.err"); rc=$?
+TMK=$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.invite_decode(sys.argv[2])["k"])' "$D" "$TMLINK" 2>/dev/null)
+ok "cca team invite：邀请链接打到 stdout（只这一行），说明在 stderr；那串随机数不在子进程的命令行（curl、env）里，也不落在这台 Mac 和服务器上" '[ $rc -eq 0 ] && [ "$(printf "%s\n" "$TMLINK" | wc -l | tr -d " ")" = 1 ] && [ "${TMLINK#cca-team1.}" != "$TMLINK" ] && grep -q "只显示这一次" "$T/tm-invite.err" && ! grep -q "cca-team1" "$T/tm-invite.err" && [ -n "$TMK" ] && ! grep -qF "$TMK" "$T/curl.argv" "$T/env.log" && ! grep -rqF "$TMK" "$H/.cca/teams" "$TMA/state.json"'
+ssh-keygen -q -t ed25519 -N '' -C dan -f "$T/tm-dan" </dev/null >/dev/null 2>&1
+out=$(tm_spec join "$TMLINK" "$T/tm-dan" "$TMAPORT" 2>&1)
+ok "照文档独立实现的那一头拿这个邀请加入、验过根密钥的签名、解开：只有给它的账号和这个账号要的节点" '[ "$out" = "{\"accounts\": {\"claude\": {\"alice@example.com\": \"US-A\"}}, \"nodes\": [\"US-A\"], \"seq\": 1}" ]'
+out=$(run cca team devices 书房组 2>&1); rc=$?
+ok "cca team devices：和服务器对一遍，两台都加入了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "书房的Mac（.*）：joined，全部账号，发布到第 2 版" && printf "%s" "$out" | grep -q "dan-air（.*）：joined，1 个账号，发布到第 1 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
+out=$(run cca team grant 书房组 dan-air +claude:bob@example.com 2>&1); rc=$?
+ok "cca team grant：多给一个账号，发布；那一头取到新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是2 个账号" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  2" ]'
+out=$(run cca team map 书房组 claude alice@example.com US-B 2>&1); rc=$?
+ok "cca team map：改一个账号走的节点，两台的配置都发布新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了；2 台设备的配置发布了新的一版"'
+out=$(run cca team publish 书房组 2>&1); rc=$?
+ok "cca team publish：没变的不重新发布" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "各台设备的配置没有变"'
+out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
+TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
+ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
+out=$(runev CCA_GRANT="team_revoke:$TMDEV" cca team revoke 书房组 dan-air 2>&1); rc=$?
+ok "同意以后移除了（result 的 team_revoked）：服务器不认它了" '[ $rc -eq 0 ] && [ "$(lastres)" = team_revoked ] && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1,2)" = "403 unknown_device" ] && run cca team devices 书房组 2>&1 | grep -q "dan-air（.*）：revoked"'
+out=$(runev cca team leave 书房组 2>&1); rc=$?
+ok "cca team leave（管理员）：先发同意事件（team_delete，范围是 Team 的编号，说根密钥就没了），什么都不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_delete\" and e[\"scope\"] == \"$TMID\" and \"根密钥\" in e[\"detail\"]" && [ -f "$H/.cca/teams/$TMID/root_ed25519" ]'
+out=$(run CCA_TTY="$(ans n)" cca team leave 2>&1); rc=$?
+ok "终端里问（默认否）：答不就不退" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消" && [ -f "$H/.cca/teams/$TMID/root_ed25519" ]'
+# --- 这台 Mac 当成员：另一个 Team，管理员是独立实现的那一头
+ssh-keygen -q -t ed25519 -N '' -C root -f "$T/tm-root" </dev/null >/dev/null 2>&1
+TMB="$T/team-b"; tm_cert "$TMB"; tm_srv "$TMB" "$(cut -d' ' -f1,2 "$T/tm-root.pub")"; TMBPID=$TMPID; TMBPORT=$(cat "$TMB/port"); TMBPIN=$(tm_pin "$TMB")
+TMS=$(printf '7e%.0s' $(seq 1 16))
+TMBLINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 1 维护者的组 2>&1)
+out=$(runev CCA_TTY="$(ans "${TMBLINK%???}")" cca team join 2>&1); rc=$?
+ok "cca team join：链接少了一截（校验对不上）：fail 事件 team_link，不联网" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_link\"" && [ "$(ls "$H/.cca/teams" | grep -cE "^[0-9a-f]{32}$")" = 1 ]'
+: > "$T/curl.argv"; : > "$T/env.log"
+out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join --name 书房的Mac 2>&1); rc=$?
+TMBID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID")
+ok "cca team join：问邀请链接（输入不显示），加入了、取到了配置（result 的 team_joined）；邀请不在输出里，也不在子进程的命令行里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已加入「维护者的组」（127.0.0.1:${TMBPORT}）：这台设备叫 书房的Mac，现在有 1 台设备" && printf "%s" "$out" | grep -q "给了这台设备 2 个账号的配置" && [ "$(lastres)" = team_joined ] && ! printf "%s" "$out" | grep -qF "$TMS" && ! grep -qF "$TMS" "$T/curl.argv" "$T/env.log" && [ "$(stat -f %Lp "$H/.cca/teams/$TMBID/secret")" = 600 ]'
+out=$(run cca team 2>&1)
+ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，第 1 版配置、2 个账号"'
+out=$(runev cca team devices 维护者的组 --json 2>/dev/null); rc=$?
+ok "cca team devices --json：这台设备不是管理员：fail 事件 team_not_admin，stdout 没有东西（不是半截 JSON）" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
+out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join 2>&1); rc=$?
+ok "再拿同一个邀请加入：已经在这个 Team 里了（fail 事件 team_joined）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_joined\""'
+tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 2 改过名的组 >/dev/null 2>&1
+out=$(run cca team sync 维护者的组 2>&1); rc=$?
+ok "cca team sync：取到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：手里的是第 2 版配置" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
+out=$(run cca team leave 2>&1); rc=$?
+ok "cca team leave：不止一个 Team 时要写是哪一个" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "要写是哪一个"'
+out=$(tm_spec revoke "$T/tm-root" "$TMBPORT" "$TMS" 2>&1)
+ok "（管理员那一头移除这台 Mac）" '[ "$out" = 200 ]'
+out=$(run cca team sync 2>&1); rc=$?
+ok "被管理员移除了：cca team sync 说出来（别的 Team 照常），退出码不是 0" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "改过名的组：这台设备被「改过名的组」的管理员移除了" && printf "%s" "$out" | grep -q "书房组：手里的是第" && run cca team 2>&1 | grep -q "被管理员移除了"'
+out=$(runev cca team leave "${TMBID:0:8}" 2>&1); rc=$?
+ok "cca team leave（成员）：App 里先发同意事件（team_leave，范围是 Team 的编号）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_leave\" and e[\"scope\"] == \"$TMBID\"" && [ -d "$H/.cca/teams/$TMBID" ]'
+out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); rc=$?
+ok "同意以后退出了（result 的 team_left）：本机记着的删掉，另一个 Team 还在" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMBID" ] && [ -d "$H/.cca/teams/$TMID" ]'
+out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
+ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
+kill "$TMAPID" "$TMBPID" 2>/dev/null; wait "$TMAPID" "$TMBPID" 2>/dev/null
+rm -rf "$H/.cca/teams" "$TMA" "$TMB"
 fi
 if sect 11b4; then
 # 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开

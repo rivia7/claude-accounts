@@ -699,7 +699,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
 ```
 
 - `step.code`（打开 App 的进度）：`sync`（同步路由器）| `preflight`（检测出口）| `prepare`（准备账号目录）| `open`（打开 App）。
-- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉）| `policy_on`（`policy on`：打开了维护者的共享——拉到了映射，或者先跳过、这次没拉到，`message` 说清楚是哪种）| `policy_off`（`policy on` 里选了「不打开共享」，或者 `policy off` 关掉了共享；本来就关着也是它），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；自己的同步服务器（4.13）是 `hub_joined`（`hub join`：加入了）| `hub_removed`（`hub remove`：移除了别的设备）| `hub_left`（`hub leave`，或者 `hub remove` 移除的是这台设备自己：退出了）| `hub_deployed`（`hub deploy`：在自己的服务器上部署好或者更新了，这台设备跟着加入了）| `hub_hosted`（`hub hosted`：加入着托管平台上的那一台时，生成了新版的部署文件、照着换上了），`message` 是给人看的那句话。`result.route`：`router` | `local` | `direct` | null。
+- `result.code`：`opened`（打开了 App / 网页版 / 登录邮件里的链接）| `activated`（已经开着，切到了前面）| `key_forgotten`（`key --forget`：删掉了官方账号记下的 API key，本来就没有时也是它，带 `tool`、`key`）| `mail_forgotten`（`mail forget`：移除了邮箱助手的设置，带 `tool`、`key`，移默认时 `key` 是 null）；提问会话（4.6）做完时是 `added` | `key_saved` | `removed` | `saved`（账号表保存了）| `router_ready` | `local_ready` | `local_udp`（本机 UDP 走节点：打开、换节点、关掉、删掉系统服务，7.1）| `mail_ready`（邮箱助手配好了，带 `tool`、`key`，配默认时 `key` 是 null）| `onboarded`（配置向导 `_onboard` 走完了，中途各步的结果被它盖掉）| `policy_on`（`policy on`：打开了维护者的共享——拉到了映射，或者先跳过、这次没拉到，`message` 说清楚是哪种）| `policy_off`（`policy on` 里选了「不打开共享」，或者 `policy off` 关掉了共享；本来就关着也是它），带 `tool`、`key`（删除时 `key` 是 null），`added` 时 App 选中这个账号；远程会话（9.2）是 `remote_paired`（和另一台机器配好了，`remote pair` / `remote join`）| `remote_updated`（开关、对方能做什么、取消配对改好了），`message` 是给人看的那句话，App 原样显示、再查一次 `remote list --json`；自己的同步服务器（4.13）是 `hub_joined`（`hub join`：加入了）| `hub_removed`（`hub remove`：移除了别的设备）| `hub_left`（`hub leave`，或者 `hub remove` 移除的是这台设备自己：退出了）| `hub_deployed`（`hub deploy`：在自己的服务器上部署好或者更新了，这台设备跟着加入了）| `hub_hosted`（`hub hosted`：加入着托管平台上的那一台时，生成了新版的部署文件、照着换上了）| `team_joined` / `team_left` / `team_revoked`（`cca team join` / `leave` / `revoke`，4.14），`message` 是给人看的那句话。`result.route`：`router` | `local` | `direct` | null。
 - `fail.code`：`error`（其它）| `app_missing` | `api_account` | `tool_missing` | `table_invalid` | `sync_failed` | `no_router` | `port_closed` |
   `local_unavailable` | `node_missing`（在外面时本机 Clash 里没有这个节点）| `settings_conflict`（共享设置、项目设置或启动参数里有会盖掉账号自己设置的配置；Claude 的 `message` 说清楚是哪份文件、哪几项、怎么办，共享的那份可以 `cca settings fix`）| `region_restricted` | `no_exit_ip` |
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
@@ -745,6 +745,9 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `hub_leave` | `all` | `cca hub leave`：退出自己的同步服务器：服务器上移除这台设备，这台设备上记着的加入链接、别的设备同步来的折合金额都删掉，记下的 API key 留着；以后要再加入要有加入链接 | no |
 | `hub_relink` | `all` | `cca hub invite --new`：换一个加入链接：旧的（发出去了、没用上的）不能再用来加入，已经加入的设备照旧，下次问服务器时换上新的 | no |
 | `hub_reset` | SSH 的目标（`cca hub deploy` 的第一个参数，原样，比如 `root@192.0.2.10`） | `cca hub deploy <目标> --reset`：从头部署自己的同步服务器：服务器忘掉所有设备和经它同步的数据（各台设备上的照旧留着），换一个新的加入链接，每台设备都要重新加入（已经加入的先 `cca hub leave`） | no |
+| `team_leave` | Team 的编号（32 个十六进制字符） | `cca team leave`（这台设备是成员）：服务器上移除这台设备，这台设备上这个 Team 的配置都删掉；以后要再加入要管理员重新发邀请 | no |
+| `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置） | no |
+| `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置删掉；它已经拿到的节点凭证收不回来 | no |
 | `policy_off` | `all` | `cca policy off`：关掉维护者的共享。映射里的账号移出账号表（登录、钥匙串里的都留着，打开共享时原样加回来），不再拉映射、不再上报设备统计，拉到过的映射、没有账号用的参考节点、别的设备同步来的折合金额都删掉；`detail` 列出会移出的账号，和用着维护者参考节点、关掉以后要换节点的自己的账号（4.12） | no |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
@@ -894,6 +897,7 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `hub.platform` | `hub hosted`（没写平台、没有记着的） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署 |
 | `hub.hosted` | `hub hosted` | `code`、`text` / `choice` | 部署到托管平台的那一页：`steps`（`code`：Railway 是要一行一行运行的命令，Sealos 是表单里填什么）；Sealos 另有 `server`（`code`：配置文件 `/app/cca-presence.py` 的内容，就是服务端程序，七八万字节）；第一次部署是 `url`（`text`：平台给的公网地址；不对、证书验证不过、还连不上、服务器不认这一份口令时带着原因和填过的地址重问；取消是以后再加入，记着的口令留着），加入着托管平台上的那一台时是更新，最后是 `next`（`choice`，只有 `done`：更新好了） |
 | `onboard.hub` | `_onboard`（配置向导第 4 步） | `confirm`（默认否） | 有没有自己的同步服务器的加入链接。答有接着 `hub.join`（可以留空：先不加入；加入没成不耽误向导做完：原因是 `fail` 事件，最后的 `result` 还是 `onboarded`）；已经加入了时不问 |
+| `team.join` | `team join` | `secret` | Team 的邀请链接（`cca-team1.` 开头的一行：管理员发给这台设备的，一个邀请只能加入一台设备）。链接不对（少了一截、不是邀请链接）、服务器不认、过期了、用过了（`team_link`、`team_denied`、`team_expired`、`team_used`）时带着原因（`error`）重问 |
 | `policy.repo` | `policy on` | `text` | 维护者的映射仓库（GitHub 上的「用户/仓库」，向维护者要）：不知道仓库时才问（没有维护者的默认仓库、也没关掉过共享）；空着是取消，写得不对是 `fail` |
 | `install.share` | `install`（终端，服务器上直连不通时） | `confirm`（默认否） | 有没有维护者共享给你的账号：有就等维护者确认这台机器、导入维护者提供的节点；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问 |
 | `onboard.net` | `_onboard`（配置向导第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。没配置路由器时，映射里账号的参考节点在这一步之后导入（映射里的账号随即加进来） |
@@ -1088,6 +1092,27 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
 - **服务器的记录没了**（托管平台上没挂存储、数据目录删了，配置的口令照旧）：设备下次找它时服务器不认这台设备，带着这一份记录的编号；编号变了，
   cca 拿记着的口令自己重新加入（换过链接的再试部署时的那个），接着照常。编号没变是被别的设备移除了：这台设备上记着的加入信息删掉（和退出一样），
   `config.hubs` 里没有它了，`cca hub status --json` 的 `reason` 说被移除了、怎么再加入。
+
+### 4.14 Team：`cca team`
+
+把「维护者共享的账号」和「自己的同步服务器」合成一个概念的新机制（设计和分阶段的计划在 docs/dev/team.md）。这一版只有命令行：配置取到
+本机（`~/.cca/teams/`），账号表还不照它改，`_gui state` 里也还没有 Team；App 的页面在后面的阶段。这里先记下 App 以后会碰到的代码。
+
+- **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", url, host, device,
+  state: "local"（管理员还没接上服务器）| "pending"（还没取过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
+  error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
+  "team", "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
+  seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，没有是 null）。
+- **加入**（`cca team join`）：提问会话（`team.join`：一个密文输入框，贴邀请链接）。邀请是凭证、只能用一次，只经提问会话的管道交给 cca。
+  成了 `result` 的 `team_joined`；加入了、配置还没取到时前面有 `fail` 的 `team_sync`（退出码照样是 0）。
+- **退出**（`cca team leave [Team]`）：要同意（成员是 `team_leave`、管理员是 `team_delete`，范围都是 Team 的编号，默认否），成了 `result` 的 `team_left`。
+- **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
+- **邀请**（`cca team invite`）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的会话里（有 `CLAUDECODE`、没有 `CCA_EVENTS`）不给。
+- 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
+  `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
+  `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
+  `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
+  原来那台上没收尾成）。这些原因码在 Swift 的 `FailCode` 里还没登记：等 App 有了 Team 的页面一起加。
 
 ## 5. `cca gui`
 
