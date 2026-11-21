@@ -43,30 +43,21 @@ final class TerminalSurface {
         view.terminalDelegate = bridge
         bridge.surface = self
         view.onLayout = { [weak self] in self?.measure() }
-        view.onAppearance = { [weak self] in self?.recolor() }
-        recolor()
+        // 这块视图固定成深色外观：滚动条、光标这些跟着外观走的也照黑底来，App 是浅色时也一样
+        view.appearance = NSAppearance(named: .darkAqua)
+        view.nativeBackgroundColor = TerminalSurface.background
+        view.nativeForegroundColor = TerminalSurface.foreground
+        view.installColors(Color.terminalAppColors)   // 16 色用它默认的那一套，和系统终端一样
         terminal.sink = { [weak view] data in
             view?.feed(byteArray: [UInt8](data)[...])
         }
     }
 
-    /// 终端底色（视图外面那一圈留白用同一个颜色）
-    static func background(dark: Bool) -> NSColor {
-        dark ? NSColor(srgbRed: 0.118, green: 0.118, blue: 0.125, alpha: 1) : NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
-    }
+    /// 终端底色：始终是黑的，不跟 App 的浅色、深色（视图外面那一圈留白用同一个颜色）。会话多半是在深色的终端里启动的，
+    /// 里面的程序照那个底色选的颜色，接到白底上有的字认不出来
+    static let background = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
 
-    private static func foreground(dark: Bool) -> NSColor {
-        dark ? NSColor(srgbRed: 0.88, green: 0.88, blue: 0.9, alpha: 1) : NSColor(srgbRed: 0.118, green: 0.118, blue: 0.125, alpha: 1)
-    }
-
-    /// SwiftTerm 不跟系统的浅色、深色：外观变了自己换前景和背景（16 色用它默认的那一套，和系统终端一样）
-    private func recolor() {
-        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        view.nativeBackgroundColor = TerminalSurface.background(dark: dark)
-        view.nativeForegroundColor = TerminalSurface.foreground(dark: dark)
-        view.installColors(Color.terminalAppColors)   // 顺带让它丢掉按旧颜色缓存的属性
-        view.needsDisplay = true
-    }
+    private static let foreground = NSColor(srgbRed: 0.88, green: 0.88, blue: 0.9, alpha: 1)
 
     /// 视图的大小定了（在窗口里、不是零）：告诉 RemoteTerminal 现在是几列几行。头一次就是起进程；拖窗口时一路在变，等停一下再说
     private func measure() {
@@ -118,10 +109,9 @@ final class TerminalSurface {
     }
 }
 
-/// SwiftTerm 的终端视图，多报两件事：大小变了、外观（浅色 / 深色）变了。
+/// SwiftTerm 的终端视图，多报一件事：大小变了。
 final class SizedTerminalView: TerminalView {
     var onLayout: (() -> Void)?
-    var onAppearance: (() -> Void)?
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -131,11 +121,6 @@ final class SizedTerminalView: TerminalView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { onLayout?() }
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        onAppearance?()
     }
 }
 

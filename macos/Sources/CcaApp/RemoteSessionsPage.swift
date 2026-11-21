@@ -298,7 +298,6 @@ private struct RemotePeerLine: View {
 /// （看得到最后的输出），上面说一句怎么了，可以重新接入或者回到列表。
 private struct RemoteTerminalPane: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.colorScheme) private var scheme
     let terminal: RemoteTerminal
 
     var body: some View {
@@ -307,7 +306,7 @@ private struct RemoteTerminalPane: View {
             ended
             TerminalHost(terminal: terminal)
                 .padding(8)
-                .background(Color(nsColor: TerminalSurface.background(dark: scheme == .dark)))
+                .background(Color(nsColor: TerminalSurface.background))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.quaternary))
                 .accessibilityLabel("终端：" + Texts.remoteTitle(terminal.session))
