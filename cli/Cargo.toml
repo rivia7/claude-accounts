@@ -4,7 +4,7 @@ version = "0.0.0"          # 不单独发布：版本号跟着 cca 脚本里的 
 edition = "2021"
 rust-version = "1.100"
 publish = false
-description = "cca 的辅助程序：原来内嵌在 cca 里的 Python（PY_SRC）的 Rust 版，子命令、参数、输出逐字节一致"
+description = "cca 的辅助程序：bash 里的「py 子命令 参数…」运行的就是它"
 license = "MIT"
 
 [[bin]]

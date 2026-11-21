@@ -16,10 +16,9 @@
 | `cli/.cargo/config.toml` | 从 macOS 交叉编译 Linux（musl 静态链接，用 Rust 自带的 rust-lld）；`cargo test` 起的进程里 `CCA_HOME` 指到不存在的目录 |
 | `cli/pack.py` | 把四种机器的辅助程序接到 `cca` 后面（发布、回归的 `mkver`、`tests/linux.sh` 用） |
 | `cli/pydiff/` | 对拍：原来的 Python 和 cca-core 在同一份沙箱上各跑一遍，逐字节比（见「测试」） |
-| `cli/PORTING.md` | Python → Rust 的对照表和容易错的地方（跟着主干移植改动时照它写） |
+| `cli/PORTING.md` | Python → Rust 的对照表和容易错的地方（移植时的工作守则；`cli/src/py/` 的语义拿不准、对拍没对上时查它） |
 | `cli/FINDINGS.md` | 移植时在原实现里发现的问题（照原样留着的）和有意不一样的地方 |
-| `cli/PORTED_FROM` | Rust 对着的是主干的哪个提交（对拍从那个提交的 `cca` 里取原来的 Python） |
-| `cli/switch.py` | 把主干带着 Python 的 `cca` 改写成用辅助程序的（一次性的；主干的 `cca` 再变时拿来重跑、和分支上的比） |
+| `cli/PORTED_FROM` | 最后一个还内嵌着 Python 的提交：对拍从那个提交的 `cca` 里取原来的 Python，回归里「换代的更新」拿它当旧版本 |
 
 ## cca 怎么找到它
 
@@ -68,14 +67,6 @@ python3 -I pydiff/run.py [-k 名字] [-v] [-s] [-t]                    # 对拍�
 - `tests/regress.sh`：整条 `cca` 命令的行为。开头先编辅助程序；10g 里测“怎么找到辅助程序”（没编出来、`CCA_HELPER`、第一次解出来、不再解、清旧的、文件不完整、校验值不对、缓存目录是链接、没有这种机器的、缺 `base64`、两个同时第一次运行）；`mkver` 做的假发布版像真的一样接着辅助程序
 - 对拍（`python3 -I cli/pydiff/run.py`，7600 多个用例，全量约四十分钟（机器忙时更久，别套短的 `timeout`），不在回归里；只打印没对上的，最后一行是「对拍：N 通过，M 失败」）：同一份沙箱（假 HOME、假命令）上分别跑原来的 Python 和 cca-core，比 stdout、stderr、退出码和跑完以后沙箱里的每个文件。原来的 Python 从 `cli/PORTED_FROM` 记的那个主干提交的 `cca` 里取（`git show 提交:cca`）。跑的途中别重编 `cli/target/release/cca-core`：后半截的用例用的就是新编的那份，跑完把动过的几组用 `-k` 再跑一遍。**它证明的是“和那个提交的 Python 一样”**：发布切换后的第一个版本之前全量跑一遍；之后有意改了行为的子命令——几行就能在原来的 Python 上照样改的，加进 `run.py` 的 `ORACLE_PATCHES`（对取出来的 `cca` 原文做替换，每条必须正好出现一次），用例照常对拍；只是多了输出字段的，用那个用例文件里的屏蔽规则（如 `cases/gui.py` 的 `STATE_MASK`）去掉；别的把对应的用例删掉或改掉（新行为用 `cargo test`、回归来测）。别为了让它过去改代码
 - Linux：`tests/linux.sh` 用 musl 的那一份（`--docker` 时在宿主机上先交叉编译；见 `docs/dev/linux.md`）
-
-## 主干还带着 Python 的时候
-
-这个分支切换以后，主干的 `cca` 可能还在往 Python 里加功能。跟上的办法：
-
-1. `git diff $(cat cli/PORTED_FROM)..main -- cca` 看主干改了什么：Python 的改动照 `cli/PORTING.md` 移植进 `cli/src`（先写对拍用例，再改 Rust）；bash 的改动合进分支的 `cca`
-2. `python3 -I cli/switch.py <主干的 cca> /tmp/cca.new`：把主干最新的 `cca` 重新改写一遍，和分支上的 `cca` 比（`diff`），确认 bash 那一半没有漏合的。switch.py 每一处都核对原文，主干动了它要改的地方会报出来
-3. `cli/PORTED_FROM` 换成主干的新提交，全量对拍、回归
 
 ## 量过的
 

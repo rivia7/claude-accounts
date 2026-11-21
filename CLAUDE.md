@@ -84,7 +84,7 @@
 
 ## 细节在哪
 动到哪一块，先读 `docs/dev/` 下对应的那一份（这一块怎么测也写在里面）：
-- `rust.md` — 辅助程序（`cli/`）：cca 怎么找到它、怎么编和测、要守的规矩、依赖、对拍、主干还带着 Python 时怎么跟
+- `rust.md` — 辅助程序（`cli/`）：cca 怎么找到它、怎么编和测、要守的规矩、依赖、对拍
 - `gui-contract.md` — 给界面 App 的接口：`_gui hello|state|live`、事件、`consent`、提问会话和题号、`CCA_RO`
 - `onboarding.md` — 配置向导（`cca _onboard`、`cca install --gui`）、配置路由器和账号表的表单、不先配置路由器就加账号
 - `accounts.md` — 账号表的值、`base_order`、三种工具的差异：`Tool` 的子类、`cxa` / `aga`、CODEX_HOME、Codex 的 app-server、Antigravity
