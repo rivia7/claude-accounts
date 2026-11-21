@@ -1972,10 +1972,12 @@ router_key_install() {   # router_key_install 用户 地址 端口 密钥路径�
 	done
 }
 
-# 用 App 里输入的密码跑一次 ssh。密码不进命令行和环境变量：ssh 经 SSH_ASKPASS 取，取的是私有目录（700）里的一个 FIFO，
-# 写的一方是 bash 内建的 printf（子 shell，没有新的进程映像）。askpass 读完就删掉 FIFO，ssh 再问时读不到东西，不会卡住。stdout：ssh 的报错
-router_ssh_password() {
-	local user="$1" host="$2" port="$3" key="$4" pw="$5" d w out rc
+# askpass_run 密码 命令…：命令里的 ssh 经 SSH_ASKPASS 拿这个密码，只给一次（App 里输入的密码：路由器装公钥、部署自己的同步服务器）。
+# 密码不进命令行和环境变量：askpass 读的是私有目录（700）里的一个 FIFO，写的一方是 bash 内建的 printf（子 shell，没有新的进程映像）。
+# askpass 读完就删掉 FIFO，ssh 再问时读不到东西，不会卡住。命令的输出、退出码照旧
+askpass_run() {
+	local pw="$1" d w rc
+	shift
 	d=$(mktemp -d "${TMPDIR:-/tmp}/cca-askpass.XXXXXX") || return 1
 	if ! mkfifo -m 600 "$d/pw"; then rm -rf "$d"; return 1; fi
 	cat > "$d/ask" <<'ASK'
@@ -1989,14 +1991,18 @@ ASK
 	( printf '%s\n' "$pw" > "$d/pw" ) 2>/dev/null &
 	w=$!
 	pw=""
-	out=$(SSH_ASKPASS="$d/ask" SSH_ASKPASS_REQUIRE=force ssh -p "$port" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
-		-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
-		"$user@$host" "$REMOTE_ADD_KEY" < "$key.pub" 2>&1 >/dev/null); rc=$?
+	SSH_ASKPASS="$d/ask" SSH_ASKPASS_REQUIRE=force "$@"; rc=$?
 	kill "$w" 2>/dev/null
 	wait "$w" 2>/dev/null
 	rm -rf "$d"
-	printf '%s' "$out"
 	return $rc
+}
+
+router_ssh_password() {   # 用 App 里输入的密码跑一次 ssh，把 cca 的公钥装到路由器上（askpass_run）。stdout：ssh 的报错
+	local user="$1" host="$2" port="$3" key="$4"
+	askpass_run "$5" ssh -p "$port" "${SSH_COMMON[@]}" -o UserKnownHostsFile="$CCA_HOME/known_hosts" \
+		-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1 \
+		"$user@$host" "$REMOTE_ADD_KEY" < "$key.pub" 2>&1 >/dev/null
 }
 
 pick_allowed_nodes() {   # 从路由器的节点里选出账号可以用的出口，存进 config.json 的 nodes（同时记下各节点的服务器地址摘要）。
@@ -6572,9 +6578,12 @@ hub_fail() {   # hub_fail 辅助程序的输出 默认的说法：py hub-… 没
 	esac
 }
 
-hub_join() {   # cca hub join [--stdin] [--name 名字]：问加入链接（输入不显示；App 里是提问会话的 hub.join），或者 --stdin 从标准输入读。
-	             # 已经加入了同一台是重新加入（服务器丢了这台的记录、换名字）
-	local stdin="" name="" link out rc members host off
+hub_off_warn() { fail_warn hub_off "${1}：现在不经它同步，把这一项改成 true（或者删掉）以后才同步"; }   # 加入了，这台设备却关掉了设备统计（$1 是辅助程序说的）
+
+hub_join() {   # cca hub join [--stdin] [--name 名字]：问加入链接（输入不显示；App 里是提问会话的 hub.join，链接不对、服务器不认时带着原因重问），
+	             # 或者 --stdin 从标准输入读。已经加入了同一台是重新加入（服务器丢了这台的记录、换名字）。
+	             # HUB_JOIN_OPTIONAL=1 hub_join（配置向导）：这一页可以留空，留空是先不加入（返回 0，什么都不记）
+	local stdin="" name="" link out rc members host off err="" optional="${HUB_JOIN_OPTIONAL:-}"
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--stdin) stdin=1 ;;
@@ -6583,21 +6592,30 @@ hub_join() {   # cca hub join [--stdin] [--name 名字]：问加入链接（输�
 		esac
 		shift
 	done
-	if [ -n "$stdin" ]; then
-		link=$(cat)
-	else
-		need_tty
-		link=$(ask_secret "加入链接（cca-hub1. 开头，输入不显示）: " q=hub.join "title=加入自己的同步服务器" "label=加入链接" \
-			"hint=部署服务器时给的那一行，或者在已经加入的设备上运行 cca hub invite 得到的")
-	fi
-	[ -n "${link//[[:space:]]/}" ] || FAIL_CODE=hub_link die "没有输入加入链接"
-	out=$(printf '%s' "$link" | py hub-join ${name:+--name "$name"}); rc=$?
-	link=""
-	[ $rc -eq 0 ] || hub_fail "$out" "没有加入成"
+	[ -n "$stdin" ] || need_tty
+	while :; do
+		if [ -n "$stdin" ]; then
+			link=$(cat)
+		else
+			link=$(ask_secret "加入链接（cca-hub1. 开头，输入不显示${optional:+；留空是先不加入}）: " q=hub.join "title=加入自己的同步服务器" "label=加入链接" \
+				"hint=部署服务器时给的那一行，或者在已经加入的设备上复制的（cca hub invite）${optional:+。先不加入的话留空，点继续}" ${optional:+optional=1} "error=$err")
+		fi
+		if [ -n "$optional" ] && [ -z "${link//[[:space:]]/}" ]; then
+			say "  先不加入自己的同步服务器：以后在 App 的「共享与同步」里加入（终端里是 cca hub join）"
+			return 0
+		fi
+		out=$(printf '%s' "$link" | py hub-join ${name:+--name "$name"}); rc=$?   # 空的、全是空白的也是 link：没有输入加入链接
+		link=""
+		[ $rc -ne 0 ] || break
+		case "${out%%$'\t'*}" in   # App 里没贴、链接本身不对（少了一截、旧的、别的服务器的）：带着原因重问；别的原因（连不上……）照旧停下
+			link|denied|salt|pin) if [ -n "$PROMPT_GUI" ] && [ -z "$stdin" ]; then err="${out#*$'\t'}${optional:+（先不加入的话留空，点继续）}"; continue; fi ;;   # --stdin 读过一次就没了：不重问
+		esac
+		hub_fail "$out" "没有加入成"
+	done
 	{ IFS= read -r name; IFS= read -r host; IFS= read -r members; IFS= read -r off; } <<< "$out"   # 一行一项（可以是空的）
 	okay "已加入 ${host} 上自己的同步服务器：这台设备叫 ${name}${members:+，服务器上现在有 ${members} 台设备}"
 	if [ -n "$off" ]; then
-		warn "${off}：现在不经它同步，把这一项改成 true（或者删掉）以后才同步"
+		hub_off_warn "$off"
 	else
 		say "  维护者共享以外的官方账号：设备统计、记下的 API key、折合金额从现在起经它和自己的其他设备同步"
 	fi
@@ -6605,9 +6623,74 @@ hub_join() {   # cca hub join [--stdin] [--name 名字]：问加入链接（输�
 	gui_done hub_joined "已加入自己的同步服务器（${host}），这台设备叫 ${name}"
 }
 
-hub_deploy() {   # cca hub deploy [用户@]主机 [选项]：经 SSH 把自己的同步服务器装到自己的服务器上（再运行是更新），这台设备跟着加入；
-	               # --script 只把安装脚本打到 stdout（在服务器上自己运行）。入伙口令和盐在这台设备上生成，服务器只拿到口令的哈希（docs/dev/hub.md）
-	local target="" args=() reset="" why out how mode="" state="" port="" dir="" lan="" name="" host="" members="" off="" newpin=""
+hub_joined_at() {   # 加入着自己的同步服务器时打出它的地址（不带端口，IPv6 不带方括号）；没加入返回 1
+	local hp
+	hp=$(py hub-leave plan 2>/dev/null) || return 1   # 加入着：地址:端口<TAB>名字
+	hp=${hp%%$'\t'*}; hp=${hp%:*}; hp=${hp#\[}
+	printf '%s' "${hp%\]}"
+}
+
+hub_deploy_ask() {   # App 里 cca hub deploy 不写服务器（提问会话）：地址、SSH 用户、端口一页（hub.deploy；加入着的预填它的地址），结果在
+	                   # F_host F_user F_port。接着查登录得上不（辅助程序的 --check，什么都不动）：连不上的带着原因重问；这台设备的密钥登录不了、
+	                   # 服务器认密码时问密码（hub.password，错了重问，最多三次），放进 hub_deploy 的 pw（部署时经 SSH_ASKPASS 给 ssh，见 askpass_run）。
+	                   # 终端里不问：服务器写在命令行上，ssh 自己问密码、问要不要认这台主机
+	local err="" perr="" out msg tries=0 hint=""
+	F_host=$(hub_joined_at) F_user=root F_port=22
+	if [ -n "$F_host" ]; then
+		msg="这台设备加入着 ${F_host} 上自己的同步服务器：经 SSH 把服务器上的程序换成这一版 cca 带的，加入链接和数据都不变。要用 root 登录，或者能免密码 sudo 的用户。"
+	else
+		msg="经 SSH 在你自己的 Linux 服务器上装好自己的同步服务器（有 Docker 用 Docker，没有用 systemd + python3），这台设备跟着加入。要用 root 登录，或者能免密码 sudo 的用户；云服务商的安全组里要放行 TCP 18445。"
+	fi
+	while :; do
+		ask_fields hub.deploy "部署自己的同步服务器" "$msg" \
+			"host|text|host||服务器地址|IP 或者域名，例如 203.0.113.7|${F_host}|${err}" \
+			"user|text|sshuser||SSH 用户|root，或者能免密码 sudo 的用户|${F_user}" \
+			"port|text|port||SSH 端口||${F_port}" || return 1
+		out=$(py hub-deploy "${F_user}@${F_host}" --ssh-port "$F_port" --batch --check) && return 0
+		case "${out%%$'\t'*}" in
+			ssh) err=${out#*$'\t'} ;;   # 连不上：地址、端口写错了？带着原因重问
+			ssh_auth) break ;;
+			ssh_*) FAIL_CODE=hub_ssh die "${out#*$'\t'}" ;;   # 主机密钥和记下的不一样、只认密钥（不认这台设备的）
+			*) hub_fail "$out" "没登录上 ${F_host}" ;;
+		esac
+	done
+	# 很多系统默认不让 root 用密码登录（PermitRootLogin prohibit-password），服务器还是照样问密码：密码对了也说不对，从这边分不出来
+	[ "$F_user" != root ] || hint="服务器多半不让 root 用密码登录，SSH 用户换成能免密码 sudo 的那个再部署"
+	while :; do
+		pw=$(ask_secret "${F_user}@${F_host} 的密码" q=hub.password "title=登录服务器" \
+			"message=这台 Mac 的 SSH 密钥登录不了 ${F_host}，用密码登录：密码只用在这一次部署，不保存，也不在服务器上留下公钥。" \
+			label=密码 "error=$perr") || return 1
+		out=$(askpass_run "$pw" py hub-deploy "${F_user}@${F_host}" --ssh-port "$F_port" --askpass --check) && return 0
+		case "${out%%$'\t'*}" in
+			ssh_denied)   # 密码不对：重问，最多三次（错得太多，服务器上的 fail2ban 这类会封这个地址）
+				tries=$((tries + 1))
+				[ "$tries" -lt 3 ] || FAIL_CODE=hub_ssh die "试了 3 次都没用密码登录上 ${F_user}@${F_host}${hint:+：密码没错的话，${hint}}"
+				perr="密码不对，再试一次${hint:+（密码没错也这样的话：${hint}）}" ;;
+			ssh*) FAIL_CODE=hub_ssh die "${out#*$'\t'}" ;;
+			*) hub_fail "$out" "没登录上 ${F_host}" ;;
+		esac
+	done
+}
+
+hub_reset_ok() {   # hub_reset_ok 目标 说明：从头部署要同意（consent hub_reset，范围是 SSH 的目标，默认否）
+	[ -n "$PROMPT_GUI" ] || say "  $2"
+	consent hub_reset "$1" "从头部署自己的同步服务器" "在 ${1} 上从头部署自己的同步服务器吗？" "$2" n
+	case $? in
+		0) return 0 ;;
+		1) say "已取消"; gui_cancelled; return 1 ;;
+		*) die "要先同意：在终端里运行 cca hub deploy ${1} --reset（会先问你）" ;;
+	esac
+}
+
+hub_deploy_run() {   # hub_deploy_run 目标 参数…：部署一次，辅助程序的输出放进 out；App 里问过密码的（hub_deploy 的 pw）经 SSH_ASKPASS 给 ssh
+	if [ -n "$pw" ]; then out=$(askpass_run "$pw" py hub-deploy "$@" --askpass)
+	else out=$(py hub-deploy "$@"); fi
+}
+
+hub_deploy() {   # cca hub deploy [用户@]主机 [选项]：经 SSH 把自己的同步服务器装到自己的服务器上（再运行是更新），这台设备跟着加入。
+	               # App 里不写服务器，在提问会话里问（hub_deploy_ask）。--script 只把安装脚本打到 stdout（在服务器上自己运行）。
+	               # 入伙口令和盐在这台设备上生成，服务器只拿到口令的哈希（docs/dev/hub.md）
+	local target="" args=() reset="" asked="" pw="" why out rc
 	if [ "${1:-}" = --script ]; then
 		[ $# -eq 1 ] || FAIL_CODE=hub_usage die "$HUB_DEPLOY_USAGE"
 		py hub-installer
@@ -6626,22 +6709,31 @@ hub_deploy() {   # cca hub deploy [用户@]主机 [选项]：经 SSH 把自己�
 		esac
 		shift
 	done
-	[ -n "$target" ] || FAIL_CODE=hub_usage die "$HUB_DEPLOY_USAGE"
-	# ssh 问密码、问要不要认这台主机都经终端：没有终端（App 里）时不让它问，连不上就说
-	if [ -n "$PROMPT_GUI" ] || ! (: </dev/tty) 2>/dev/null; then args+=(--batch); fi
-	if [ -n "$reset" ]; then
-		why="服务器上忘掉所有设备和经它同步的数据（各台设备上的照旧留着），换一个新的加入链接：每台设备都要重新加入（已经加入的先 cca hub leave）"
-		[ -n "$PROMPT_GUI" ] || say "  ${why}"
-		consent hub_reset "$target" "从头部署自己的同步服务器" "在 ${target} 上从头部署自己的同步服务器吗？" "$why" n
-		case $? in
-			0) ;;
-			1) say "已取消"; gui_cancelled; return 1 ;;
-			*) die "要先同意：在终端里运行 cca hub deploy ${target} --reset（会先问你）" ;;
-		esac
+	if [ -z "$target" ]; then
+		[ -n "$PROMPT_GUI" ] || FAIL_CODE=hub_usage die "$HUB_DEPLOY_USAGE"
+		hub_deploy_ask || return 1
+		target="${F_user}@${F_host}" asked=1
+		args+=(--ssh-port "$F_port")
 	fi
+	# ssh 问密码、问要不要认这台主机都经终端：没有终端（App 里）时不让它问（App 里要密码的上面问过了）
+	if [ -n "$PROMPT_GUI" ] || ! (: </dev/tty) 2>/dev/null; then args+=(--batch); fi
+	why="服务器上忘掉所有设备和经它同步的数据（各台设备上的照旧留着），换一个新的加入链接：每台设备都要重新加入（已经加入的设备先退出，再用新的链接加入）"
+	if [ -n "$reset" ]; then hub_reset_ok "$target" "$why" || return 1; fi
 	info "部署自己的同步服务器到 ${target}（第一次用 Docker 时要先拉镜像，可能要几分钟）…"
-	out=$(py hub-deploy "$target" ${args[@]+"${args[@]}"}) || hub_fail "$out" "没有部署成"
-	eval "$out"   # mode state port dir lan name host members off newpin（辅助程序的 sh：键=值，值带着引号）
+	hub_deploy_run "$target" ${args[@]+"${args[@]}"}; rc=$?
+	if [ $rc -ne 0 ] && [ -n "$asked" ] && [ -z "$reset" ] && [ "${out%%$'\t'*}" = taken ]; then
+		# App 里问着来的：服务器上已经有别的设备加入过的一份，这台设备没加入它——问要不要从头部署
+		hub_reset_ok "$target" "这台服务器上已经有自己的同步服务器，也有设备加入过。要接着用那一份的话，在加入了的设备上复制加入链接，在这台设备上加入；从头部署的话，${why}" || return 1
+		args+=(--reset)
+		hub_deploy_run "$target" "${args[@]}"; rc=$?
+	fi
+	[ $rc -eq 0 ] || hub_fail "$out" "没有部署成"
+	hub_deploy_done "$target" "$out"
+}
+
+hub_deploy_done() {   # hub_deploy_done 目标 辅助程序的输出：部署好了。说部署了还是更新了，要人做点什么的提醒（App 里也看得到），给 result
+	local target="$1" how mode="" state="" port="" dir="" lan="" name="" host="" members="" off="" newpin=""
+	eval "$2"   # mode state port dir lan name host members off newpin（辅助程序的 sh：键=值，值带着引号）
 	case "$mode" in docker) how="Docker compose" ;; *) how="systemd + python3" ;; esac
 	if [ "$state" = update ]; then
 		okay "已更新 ${target} 上自己的同步服务器（${dir}，${how}，端口 ${port}）：加入链接和数据都没变，这台设备照旧加入着（${name}）"
@@ -6649,9 +6741,10 @@ hub_deploy() {   # cca hub deploy [用户@]主机 [选项]：经 SSH 把自己�
 		okay "已部署自己的同步服务器到 ${target}（${dir}，${how}，端口 ${port}），这台设备加入了：它叫 ${name}${members:+，服务器上现在有 ${members} 台设备}"
 		say "  别的设备上运行 cca hub join，贴加入链接（在这台设备上运行 cca hub invite 显示）"
 	fi
-	[ -z "$newpin" ] || warn "服务器的证书是新生成的（原来的不见了）：别的设备连不上了，要用新的加入链接重新加入（这台设备上 cca hub invite 显示，那台设备上 cca hub join）"
-	[ -z "$lan" ] || warn "${host%:*} 是内网地址：别的设备不在这个网络里时连不上（有公网地址的话 cca hub deploy ${target} --host 公网地址 --reset）"
-	[ -z "$off" ] || warn "${off}：现在不经它同步，把这一项改成 true（或者删掉）以后才同步"
+	# 要人去做点什么的：App 里也看得到（fail_warn：做完了，带着提醒）
+	[ -z "$newpin" ] || fail_warn hub_newpin "服务器的证书是新生成的（原来的不见了）：别的设备连不上了，要用新的加入链接重新加入（在这台设备上复制加入链接：App 的「共享与同步」，或者 cca hub invite）"
+	[ -z "$lan" ] || fail_warn hub_lan "${host%:*} 是内网地址：别的设备不在这个网络里时连不上（有公网地址的话，在终端里运行 cca hub deploy ${target} --host 公网地址 --reset）"
+	[ -z "$off" ] || hub_off_warn "$off"
 	if [ "$state" = update ]; then gui_done hub_deployed "已更新自己的同步服务器（${host}），这台设备叫 ${name}"
 	else gui_done hub_deployed "已部署自己的同步服务器（${host}），这台设备叫 ${name}"; fi
 }
@@ -7029,28 +7122,34 @@ onboard_builtin() {   # 向导第 2 步选了「没有路由器（内置代理�
 	return 0
 }
 
-onboard_title() {   # onboard_title 这一步的名字：向导的页标题 ONB_TITLE（第几步、共几步；只有一步时不写）。n、total 是 cmd_onboard 的
+onboard_title() {   # onboard_title 这一步的名字：向导的页标题 ONB_TITLE（第几步、共几步；只有一步时不写）。n 和要问哪几步（ask…）是 cmd_onboard 的
+	local total=0 s
 	n=$((n + 1))
+	for s in "$askshare$askpol" "$asknet" "$askadd" "$askhub"; do [ -z "$s" ] || total=$((total + 1)); done
 	if [ "$total" -gt 1 ]; then ONB_TITLE="第 ${n} 步（共 ${total} 步）：$1"; else ONB_TITLE="$1"; fi
 }
 
-cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App 启动的提问会话，PROMPT_GUI 下跑），三步：
+cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App 启动的提问会话，PROMPT_GUI 下跑），四步：
 	                # ① 维护者共享的账号（onboard.share：有没有，默认没有；答了有才走 onboard_policy：给维护者的那一行，等维护者加上这台机器的
 	                #   公钥，拉到了自己进下一步；可以先跳过、说不用。共享开着、拉一下就拉到了的不问）；
 	                # ② 网络出口（onboard.net：路由器 / 内置代理 / 先跳过；路由器、本机的客户端已经配好时不问）；
-	                # ③ 添加账号（不要求配置了路由器：没有可选节点时选节点那步可以粘贴自定义代理）。
+	                # ③ 添加账号（不要求配置了路由器：没有可选节点时选节点那步可以粘贴自定义代理）；
+	                # ④ 自己的同步服务器（onboard.hub：有没有加入链接，默认没有；答了有走 hub join，那一页可以留空：先不加入。已经加入了的不问）。
 	                # 做完记下 onboarded（以后 App 不再弹向导）。--skip：不配置、只记下。取消（答案管道关掉）走 gui_abort：不记 onboarded，下次还能再来
-	local mode pol="" askpol="" askshare="" asknet="" keys0 keys1 k added="" n=0 total=1 det net_default net_msg
+	local mode pol="" askpol="" askshare="" asknet="" askadd="" askhub="" keys0 keys1 k added="" n=0 det net_default net_msg
 	if [ "${1:-}" = --skip ]; then py onboard-done; return 0; fi
 	if [ -z "$PROMPT_GUI" ]; then info "配置向导在 cca App 里使用（或运行 ${SELF} install 在终端里配置）"; return 0; fi
 	keys0=$(py keys)
-	# 先数要问几步（页标题写第几步、共几步）：共享开着、拉一下就拉到了的不问；路由器、本机的客户端配好了的不问网络出口
+	# 先定下要问哪几步（页标题写第几步、共几步，onboard_title 照它们数）：共享开着、拉一下就拉到了的不问；路由器、本机的客户端配好了的不问网络出口
 	if sharing_on; then   # 共享开着（一键安装时带了 CCA_POLICY_REPO、在终端里打开过）
-		if onboard_policy_quick; then pol=1; else askpol=1; total=$((total + 1)); fi
+		if onboard_policy_quick; then pol=1; else askpol=1; fi
 	elif [ -n "$(policy_repo_hint)" ]; then   # 共享关着：知道映射仓库（关掉共享时记着的，或者维护者的默认仓库）才问有没有
-		askshare=1; total=$((total + 1))
+		askshare=1
 	fi
-	if ! router_ready && [ -z "$LOCAL_SET" ]; then asknet=1; total=$((total + 1)); fi
+	if ! router_ready && [ -z "$LOCAL_SET" ]; then asknet=1; fi
+	# 添加账号：还没有账号时问；有映射那一步时映射里的账号可能加进来（加进来了问还要不要再加）。到了那一步照实际问不问再定
+	if [ -z "$keys0" ] || [ -n "$pol$askpol$askshare" ]; then askadd=1; fi
+	hub_joined_at >/dev/null || askhub=1
 	if [ -n "$askshare$askpol" ]; then   # ① 维护者共享的账号
 		onboard_title "维护者共享的账号"
 		if [ -n "$askpol" ] || confirm "有没有维护者共享给你的账号？" n "q=onboard.share" "title=${ONB_TITLE}" \
@@ -7082,8 +7181,10 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 	elif ! router_ready; then
 		policy_import   # 本机的客户端（内置代理）已经配好：映射里的节点照样导入
 	fi
-	onboard_title "添加账号"   # ③ 添加账号
-	keys1=$(py keys)
+	keys1=$(py keys)   # ③ 添加账号（映射里没有新的账号时不问。前面的页已经说了共几步、算上了它：号照样占着，「共几步」前后一样；还没出过页：不算它）
+	if [ -z "$keys1" ] || [ "$keys1" != "$keys0" ]; then askadd=1; onboard_title "添加账号"
+	elif [ "$n" -gt 0 ] && [ -n "$askadd" ]; then n=$((n + 1))
+	else askadd=""; fi
 	if [ -z "$keys1" ]; then
 		if confirm "现在添加第一个账号？" y "q=onboard.add" "title=${ONB_TITLE}" \
 			"detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
@@ -7102,6 +7203,13 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 	if [ "$(py keys)" != "$keys0" ] && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
 		router_sync_soon
 		case $? in 0|3) ;; *) fail_warn sync_failed "账号还没同步到路由器：修好后在节点分流页点「同步」（或者运行 cca router sync）" ;; esac
+	fi
+	if [ -n "$askhub" ]; then   # ④ 自己的同步服务器
+		onboard_title "自己的同步服务器"
+		if confirm "有没有自己的同步服务器的加入链接？" n "q=onboard.hub" "title=${ONB_TITLE}" \
+			"detail=在几台设备上用自己的账号时，各台设备的设备统计、折合金额、记下的 API key 经你自己部署的服务器合在一起（服务器上只有密文）。在别的设备上部署、加入过的，选「是」贴加入链接；还没有就选「否」，以后在「共享与同步」里部署或者加入。"; then
+			( HUB_JOIN_OPTIONAL=1 hub_join ) || true   # 留空是先不加入；没加入成（链接不对以外的原因，失败已经报给 App）：向导照样做完，以后在「共享与同步」里再加入
+		fi
 	fi
 	py onboard-done
 	gui_done onboarded "配置完成！在总览里打开账号使用，或继续添加更多账号。"

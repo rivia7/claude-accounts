@@ -33,6 +33,27 @@ for a in "$@"; do [ "$a" = -G ] && { printf 'user root\nhostname 127.0.0.1\nport
 for a in "$@"; do cmd=$a; done
 exec "$HUB_ENTER" "$cmd"
 '''
+# 要密码的服务器（$HUB_PW 文件里是密码）：不认这台设备的密钥；用密码登录时像真的 ssh 一样经 SSH_ASKPASS 取密码（SSH_ASKPASS_REQUIRE=force），
+# 每次连接取一次（$HOME/askpass.n 记着取了几次）
+SSH_PW = r'''printf '%s\n' "$*" >> "$HOME/ssh.argv"
+for a in "$@"; do [ "$a" = -G ] && { printf 'user root\nhostname 127.0.0.1\nport 22\n'; exit 0; }; done
+case " $* " in
+	*" PubkeyAuthentication=no "*)
+		[ "${SSH_ASKPASS_REQUIRE:-}" = force ] && [ -n "${SSH_ASKPASS:-}" ] || { echo 'root@box: Permission denied (no askpass).' >&2; exit 255; }
+		pw=$("$SSH_ASKPASS") || exit 255
+		echo x >> "$HOME/askpass.n"
+		[ "$pw" = "$(cat "$HUB_PW")" ] || { echo 'root@box: Permission denied (publickey,password).' >&2; exit 255; } ;;
+	*) echo 'root@box: Permission denied (publickey,password).' >&2; exit 255 ;;
+esac
+for a in "$@"; do cmd=$a; done
+exec "$HUB_ENTER" "$cmd"
+'''
+# ssh 连不上、主机密钥不对……：stderr 是 $HUB_SSH_SAYS
+SSH_SAYS = r'''printf '%s\n' "$*" >> "$HOME/ssh.argv"
+for a in "$@"; do [ "$a" = -G ] && { printf 'user root\nhostname 127.0.0.1\nport 22\n'; exit 0; }; done
+printf '%s\n' "$HUB_SSH_SAYS" >&2
+exit 255
+'''
 
 
 def pin(box, d=None):
@@ -320,10 +341,11 @@ class InstallerTest(Base):
         b.flag('start_fail', False)
         # 被打断（Ctrl-C、SSH 断了）：在起服务的时候
         b.flag('start_hang')
+        restarts = b.log('systemctl.log').count('restart cca-hub')   # 上面起不来的那一次最后也是 restart：要等这一次的
         p = subprocess.Popen([SH, str(self.script), '--reset', '--host', '127.0.0.1'], env=b.env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
-            wait_for('起服务', lambda: b.log('systemctl.log').rstrip('\n').endswith('restart cca-hub') and (b.dir / '.env.prev').exists())
+            wait_for('起服务', lambda: b.log('systemctl.log').count('restart cca-hub') > restarts and (b.dir / '.env.prev').exists())
             self.assertNotEqual((b.dir / '.env').read_text(), before)
             os.killpg(p.pid, signal.SIGTERM)
             p.communicate(timeout=30)
@@ -558,6 +580,65 @@ class DeployTest(Base):
         self.assertEqual(kv(r.stdout)['state'], 'new')
         self.assertIn('-n sh -s', b.log('sudo.log'))
 
+    def test_login_check_and_password(self):
+        """App 里部署（bash 的 hub_deploy_ask）：--check 只看登录得上不（什么都不装、不起服务），ssh 说的分成几种原因（bash 照它重问、问密码、
+        停下）；--askpass 经 SSH_ASKPASS 给密码（不用密钥、只问一次，有 --batch 也一样）；没有终端时不问要不要认这台主机（accept-new）"""
+        b = self.box()
+        a = self.device('alice-mbp')
+        pw = 'pw-' + secrets.token_hex(8)
+        (a.home / 'server-pw').write_text(pw)
+        a.fake('ssh', SSH_PW)
+        a.fake('askpass', 'cat "%s"\n' % (a.home / 'given'))   # bash 的 askpass_run 那样：打出给它的密码
+        ask = dict(HUB_ENTER=str(b.enter), HUB_PW=str(a.home / 'server-pw'), SSH_ASKPASS=str(a.home / 'bin' / 'askpass'),
+                   SSH_ASKPASS_REQUIRE='force', CCA_VERSION='9.9.9')
+
+        def check(*args, given=None):
+            (a.home / 'given').write_text(given or '')
+            (a.home / 'ssh.argv').unlink(missing_ok=True)
+            r = a.run('hub-deploy', 'root@box', *args, **ask)
+            return r, (a.home / 'ssh.argv').read_text() if (a.home / 'ssh.argv').exists() else ''
+
+        r, argv = check('--batch', '--check')
+        self.assertEqual((r.returncode, r.stdout.split('\t')[0]), (1, 'ssh_auth'), '密钥登录不了、服务器认密码：bash 接着问密码')
+        self.assertIn('要用密码登录', r.stdout)
+        for o in ('BatchMode=yes', 'StrictHostKeyChecking=accept-new', 'LogLevel=ERROR', '-T root@box true'):
+            self.assertIn(o, argv)
+        r, argv = check('--batch', '--askpass', '--check', given='wrong-' + pw)
+        self.assertEqual(r.stdout, 'ssh_denied\t密码不对\n')
+        for o in ('PubkeyAuthentication=no', 'PreferredAuthentications=keyboard-interactive,password', 'NumberOfPasswordPrompts=1',
+                  'StrictHostKeyChecking=accept-new'):
+            self.assertIn(o, argv)
+        self.assertNotIn('BatchMode', argv, '用密码时不能是 BatchMode（ssh 就不问 SSH_ASKPASS 了）')
+        r, argv = check('--batch', '--askpass', '--check', given=pw)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''), '密码对了：什么都不打')
+        self.assertFalse(b.dir.exists(), '--check 不装')
+        (a.home / 'askpass.n').unlink()
+        r, argv = check('--batch', '--askpass', '--port', str(free_port()), given=pw)
+        self.assertEqual((r.returncode, kv(r.stdout)['state']), (0, 'new'), r.stdout + r.stderr)
+        self.assertEqual((a.home / 'askpass.n').read_text(), 'x\n', '部署只连一次（-G 不登录），只取一次密码')
+        self.assertNotIn(pw, argv + b.files_text(), '密码不在 ssh 的命令行和服务器上')
+        self.assertNotIn(pw, r.stdout + r.stderr)
+        a.fake('ssh', SSH)   # 服务器认这台设备的密钥了；不认、也不让用密码：说怎么办
+        b.flag('ssh_denied')
+        r, _ = check('--batch', '--check')
+        self.assertEqual(r.stdout.split('\t')[0], 'ssh_keyonly')
+        self.assertIn('authorized_keys', r.stdout)
+        b.flag('ssh_denied', False)
+        a.fake('ssh', SSH_SAYS)
+        for says, code, part in (('@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nHost key verification failed.', 'ssh_hostkey', 'ssh-keygen -R'),
+                                 ('ssh: Could not resolve hostname box: nodename nor servname provided, or not known', 'ssh',
+                                  'SSH 连不上 root@box：ssh: Could not resolve hostname box'),
+                                 ('', 'ssh', 'SSH 连不上 root@box'),
+                                 # ssh-agent 里的密钥太多：服务器只让试几把（MaxAuthTries），还没轮到密码就断了（LogLevel=ERROR 时最后一句就是这个）
+                                 ('Received disconnect from 192.0.2.10 port 22:2: Too many authentication failures', 'ssh_auth', '要用密码登录')):
+            r = a.run('hub-deploy', 'root@box', '--batch', '--check', HUB_SSH_SAYS=says, CCA_VERSION='9.9.9')
+            self.assertEqual((r.returncode, r.stdout.split('\t')[0]), (1, code), says)
+            self.assertIn(part, r.stdout)
+        r = a.run('hub-deploy', 'root@box', '--batch', '--askpass', '--check', HUB_SSH_SAYS='root@box: Permission denied (publickey).',
+                  CCA_VERSION='9.9.9')
+        self.assertEqual((r.returncode, r.stdout.split('\t')[0]), (1, 'ssh_keyonly'), '用密码时服务器不让用密码：不说密码不对')
+        self.assertIn('IdentitiesOnly', r.stdout)
+
     def test_ssh_and_cert(self):
         """ssh 连不上、登录不了；服务器上的证书没了（重新生成）：加入了的设备换上新的指纹，说别的设备要新链接"""
         b = self.box()
@@ -568,6 +649,7 @@ class DeployTest(Base):
         self.assertEqual(code, 'ssh')
         self.assertIn('在终端里运行 cca hub deploy', why)
         self.assertIn('BatchMode=yes', (a.home / 'ssh.argv').read_text())
+        self.assertNotIn('accept-new', (a.home / 'ssh.argv').read_text(), '命令行里没有终端：没见过的主机照旧不连（只有 App 里先查登录时认下）')
         b.flag('ssh_denied', False)
         port = free_port()
         self.deploy(a, b, '--port', str(port))

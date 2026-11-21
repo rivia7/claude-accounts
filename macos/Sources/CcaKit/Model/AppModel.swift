@@ -12,7 +12,7 @@ enum SidebarItem: Hashable, Sendable {
     case routing
     /// 远程会话：可以接入的会话（这台 Mac 上的、配对过的机器上的）、配对、内嵌的终端（cca 有远程会话时才有这一项）
     case remoteSessions
-    /// 共享与同步：维护者共享的账号的开关（cca 有这个开关时才有这一项）
+    /// 共享与同步：维护者共享的账号的开关、自己的同步服务器（cca 有其中一样时才有这一项）
     case sharing
     case clientUpdates
 
@@ -242,6 +242,7 @@ final class AppModel {
             reconcileRemotePolling()
             if selection == .office { refreshLiveIfStale() }
             if selection == .clientUpdates { refreshClientUpdates() }
+            if selection == .sharing { refreshHubDevices(manual: false) }
         }
     }
 
@@ -946,10 +947,11 @@ final class AppModel {
     }
 
     /// 按重跑流程的结果提示（PROTOCOL 4.3）。
-    private func finish(_ r: ExecResult, failureTitle: String, success: String) {
+    /// 跑完一条改东西的命令：成了照 success 提示（nil：成了由调用的一方自己说），没同意、要同意、要终端、失败各有各的说法
+    private func finish(_ r: ExecResult, failureTitle: String, success: String?) {
         switch r.status {
         case .success:
-            showToast(success, .success)
+            if let success { showToast(success, .success) }
         case .refused:
             showToast("没有同意，没有做任何改动", .info)
         case .needsConsent:
@@ -1100,6 +1102,8 @@ final class AppModel {
             guard let self else { return }
             // 重新跑 hello：第一次添加 ChatGPT 账号时 Codex 才启用
             await self.connect()
+            // 加入、部署好了（配置向导里加入的也是）：列出服务器上的设备
+            if result?.code == .hubJoined || result?.code == .hubDeployed || result?.code == .onboarded { self.refreshHubDevices(manual: true) }
             if let r = result, r.code == .added, let key = r.key {
                 let ref = AccountRef(tool: r.tool ?? .claude, key: key)
                 if self.account(ref) != nil { self.show(ref) }
@@ -1548,6 +1552,121 @@ final class AppModel {
             self.finish(r, failureTitle: "没能关掉共享", success: nonEmpty(r.resultEvent?.message) ?? "已关掉共享")
             await self.afterAction()
             self.sharingBusy = false
+        }
+    }
+
+    // MARK: 自己的同步服务器（PROTOCOL 4.13）
+
+    /// cca 有自己的同步服务器（`hello.hub` 是 App 认识的版本；旧版 cca 没有：不显示这一块、不调 `cca hub`）
+    var hubAvailable: Bool { hello?.hub == HubAPI.version }
+    /// 这台设备加入着的自己的同步服务器（`config.hubs` 里 `own` 的那一项）；没加入是 nil
+    var ownHub: HubEntry? { hubAvailable ? state?.config?.ownHub : nil }
+    /// 最近一次问到的设备（只在内存里，记着问的是哪一台）
+    private(set) var hub = HubSnapshot()
+    private(set) var hubLoading = false
+    @ObservationIgnored private var hubAgain = false
+    /// 正在移除设备、退出、读加入链接（按钮先停用）
+    private(set) var hubBusy = false
+
+    /// 加入着的那一台最近一次问到的：还没问过、最近一次问的是别的服务器（退出了又加入别的）时是 nil
+    var ownHubSnapshot: HubSnapshot? {
+        guard let own = ownHub, hub.url == own.url else { return nil }
+        return hub
+    }
+    /// 加入着的那一台上的设备（cca 排好的，这台在前）
+    var hubDevices: [HubDevice]? { ownHubSnapshot?.doc?.devices }
+    /// 最近一次没问到设备的原因（问到了是 nil）
+    var hubError: String? { ownHubSnapshot?.error }
+
+    /// 问一次服务器上有哪些设备（「共享与同步」页打开时、「刷新」、加入、移除、退出之后）。没加入时清掉；
+    /// 没问到时上次问到的照样显示，旁边说原因。正在问时又要问：问完再问一次（刚改过东西）
+    func refreshHubDevices(manual: Bool) {
+        guard phase == .ready, let client else { return }
+        guard let own = ownHub else {
+            hub = HubSnapshot()
+            return
+        }
+        if hubLoading {
+            hubAgain = hubAgain || manual
+            return
+        }
+        hubLoading = true
+        track { [weak self] in
+            let (doc, r) = await client.document(.hubDevices(auto: !manual), as: HubDevicesDoc.self, prompter: nil)
+            guard let self else { return }
+            self.hubLoading = false
+            if self.ownHub?.url == own.url {   // 问的时候退出了、换了一台：这次的不算
+                if let doc {
+                    self.hub = HubSnapshot(url: own.url, doc: doc, error: nil, fetchedEpoch: doc.generatedEpoch ?? Date().timeIntervalSince1970)
+                } else if r.failure?.reason != .cancelled {
+                    if self.hub.url != own.url { self.hub = HubSnapshot(url: own.url) }
+                    self.hub.error = nonEmpty(r.failure?.message) ?? "没能问到服务器上有哪些设备"
+                }
+            }
+            if self.hubAgain {
+                self.hubAgain = false
+                self.refreshHubDevices(manual: true)
+            }
+        }
+    }
+
+    /// 「粘贴加入链接…」：提问会话（`cca hub join`，`hub.join`；链接不对时 cca 带着原因重问）
+    func joinHub() {
+        guard phase == .ready, hubAvailable else { return }
+        run(.hubJoin)
+    }
+
+    /// 「部署到我的服务器…」「更新服务器…」「从头部署…」：提问会话（`cca hub deploy`：问服务器地址、SSH 用户和端口，这台 Mac 的密钥
+    /// 登录不了时问密码；reset 和服务器上已经有别的设备加入过时 cca 先问同意）
+    func deployHub(reset: Bool = false) {
+        guard phase == .ready, hubAvailable else { return }
+        run(.hubDeploy(reset: reset))
+    }
+
+    /// 从服务器上移除另一台设备（cca 先问同意：`consent.hub_remove`，对话框里说移除意味着什么）
+    func removeHubDevice(_ d: HubDevice) {
+        runHub(.hubRemove(device: d.id), failureTitle: "没能移除「\(nonEmpty(d.name) ?? "这台设备")」")
+    }
+
+    /// 退出自己的同步服务器（cca 先问同意：`consent.hub_leave`；服务器连不上时这台 Mac 照样退出）
+    func leaveHub() {
+        runHub(.hubLeave, failureTitle: "没能退出自己的同步服务器")
+    }
+
+    private func runHub(_ command: CcaCommand, failureTitle: String) {
+        guard phase == .ready, hubAvailable, let client, !hubBusy else { return }
+        hubBusy = true
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(command, prompter: prompter)
+            guard let self else { return }
+            self.hubBusy = false
+            self.finish(r, failureTitle: failureTitle, success: nonEmpty(r.resultEvent?.message) ?? "改好了")
+            await self.afterAction()
+            self.refreshHubDevices(manual: true)
+        }
+    }
+
+    /// 「复制加入链接」：`cca hub invite` 经内存里的管道读，放进剪贴板（标成机密，60 秒后还是它就清掉）。链接是凭证：
+    /// 不进被观察的状态、不进提示和读屏
+    func copyHubInvite() {
+        guard phase == .ready, ownHub?.canInvite == true, let client, !hubBusy else { return }
+        hubBusy = true
+        Task { [weak self] in
+            let r = await client.execute(.hubInvite, prompter: nil)
+            guard let self else { return }
+            self.hubBusy = false
+            guard r.isSuccess else {
+                self.finish(r, failureTitle: "没能读到加入链接", success: nil)
+                return
+            }
+            let line = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.contains("\n") else {
+                self.showToast("cca 没有给出加入链接", .warning)
+                return
+            }
+            self.hooks.copySecret(line)
+            self.showToast("已复制加入链接（60 秒后从剪贴板清掉）：只发给自己的设备，谁拿到它都能加入", .success)
         }
     }
 
@@ -2055,6 +2174,7 @@ final class AppModel {
         mainVisible = v
         visibilityChanged(wasVisible: was, wasRouting: wasRouting)
         if v, selection == .office { refreshLiveIfStale() }
+        if v, selection == .sharing { refreshHubDevices(manual: false) }
     }
 
     func setPanelVisible(_ v: Bool) {

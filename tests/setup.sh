@@ -241,11 +241,26 @@ done
 dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
 # 自己的同步服务器的一键部署（11b3c）：hubbox 是 tests/hub_box.py 建的假服务器（$CCA_T/hubbox：目录当根，假 systemctl
-# 起真的 server/cca-presence.py），命令交给它的 enter（stdin 是安装脚本；$CCA_T/hubbox/ssh_denied 时登录不了）。-G 说它在 127.0.0.1
+# 起真的 server/cca-presence.py），命令交给它的 enter（stdin 是安装脚本；$CCA_T/hubbox/ssh_denied 时登录不了）。-G 说它在 127.0.0.1。
+# $CCA_T/hubbox/password 在时不认这台 Mac 的密钥、只认这个密码：像真的 ssh 一样经 SSH_ASKPASS 取（每次连接一次，ASKPASS 和它在哪个目录记在 ssh.log）。
+# 每次的命令行和环境记在 ssh.env（查密码不在里面）。nohub 是解析不了的主机名
 case "$dest" in
 	hubbox|*@hubbox)
+		{ printf 'ARGV'; printf ' %s' "${args[@]}"; printf '\n'; env; } >> "$CCA_T/ssh.env"
 		case " ${args[*]} " in *" -G "*) printf 'user root\nhostname 127.0.0.1\nport 22\n'; exit 0 ;; esac
+		if [ -f "$CCA_T/hubbox/password" ]; then
+			case " ${args[*]} " in
+				*" PubkeyAuthentication=no "*)
+					if [ "${SSH_ASKPASS_REQUIRE:-}" != force ] || [ -z "${SSH_ASKPASS:-}" ]; then echo "$dest: Permission denied (no askpass)." >&2; exit 255; fi
+					pw=$("$SSH_ASKPASS"); echo "ASKPASS rc=$? dir=${SSH_ASKPASS%/*}" >> "$CCA_T/ssh.log"
+					[ "$pw" = "$(cat "$CCA_T/hubbox/password")" ] || { echo "$dest: Permission denied (publickey,password)." >&2; exit 255; } ;;
+				*) echo "$dest: Permission denied (publickey,password)." >&2; exit 255 ;;
+			esac
+		fi
 		exec "$CCA_T/hubbox/enter" "$cmd" ;;
+	nohub|*@nohub)
+		case " ${args[*]} " in *" -G "*) printf 'user root\nhostname nohub\nport 22\n'; exit 0 ;; esac
+		echo "ssh: Could not resolve hostname nohub: nodename nor servname provided, or not known" >&2; exit 255 ;;
 esac
 # 出门在外（$CCA_T/away）：连不上路由器（$CCA_T/vpn 时经 ZeroTier、VPN 连得上）
 [ -f "$CCA_T/away" ] && [ ! -f "$CCA_T/vpn" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }

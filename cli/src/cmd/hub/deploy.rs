@@ -28,7 +28,7 @@ const DEF_DIR: &str = "/opt/cca-hub";
 /// 外面再包一层 sh -c：登录 shell 不一定是 sh（fish、csh）
 const REMOTE: &str = r#"sh -c 'if [ "$(id -u)" = 0 ]; then exec sh -s; elif sudo -n true 2>/dev/null; then exec sudo -n sh -s; else echo "CCA-HUB fail sudo"; exit 1; fi'"#;
 const USAGE: &str = "用法: py hub-deploy [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
-                     [--mode docker|systemd] [--dir 目录] [--name 名字] [--reset] [--batch]";
+                     [--mode docker|systemd] [--dir 目录] [--name 名字] [--reset] [--batch | --askpass] [--check]";
 
 /// SSH 的目标（[用户@]主机；ssh 配置里的别名也行）：不能以 - 开头（会被当成 ssh 的选项）
 static TARGET_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[A-Za-z0-9_][A-Za-z0-9._@:%\[\]-]*$"));
@@ -62,7 +62,12 @@ struct Opts {
     dir: String,
     name: Option<String>,
     reset: bool,
+    /// 没有终端：ssh 不问密码、不问要不要认这台主机
     batch: bool,
+    /// 密码经 SSH_ASKPASS 给，只问一次（bash 的 askpass_run）
+    askpass: bool,
+    /// 只看登录得上不，不部署（ssh_check）
+    check: bool,
 }
 
 /// 读参数、核对：不对的都是 usage（bash 的 hub_usage；名字不对是 name），还没连服务器
@@ -74,6 +79,8 @@ fn opts(args: &[String]) -> R<Opts> {
         match a.as_str() {
             "--reset" => o.reset = true,
             "--batch" => o.batch = true,
+            "--askpass" => o.askpass = true,
+            "--check" => o.check = true,
             f @ ("--ssh-port" | "--identity" | "--port" | "--host" | "--mode" | "--dir" | "--name") => {
                 let Some(v) = it.next().cloned() else { return fail("usage", USAGE) };
                 match f {
@@ -152,6 +159,9 @@ fn dir_of(d: &str) -> Result<String, &'static str> {
 /// ssh、root、deps、image、port、taken、not_this、moved、host、install、start，以及加入的那些）
 pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
     let o = opts(args)?;
+    if o.check {
+        return ssh_check(&o);
+    }
     let joined = hub_doc();
     let old = joined.as_ref().map(link_of);
     if let Some(l) = old.as_ref().filter(|_| !o.reset) {
@@ -244,11 +254,24 @@ fn sq(v: &str) -> String {
     format!("'{v}'")
 }
 
-/// ssh 的那几个选项（-p、-i；终端外 BatchMode：不问密码、不问要不要认这台主机）
+/// ssh 的那几个选项（-p、-i）。没有终端（--batch）：BatchMode，不问密码；--askpass：只用密码，经 SSH_ASKPASS 问一次（bash 的 askpass_run
+/// 只给一次，问第二次读不到东西）。App 里（先 --check，再 --askpass）没人能答要不要认这台主机：第一次见的认下（accept-new，和在终端里
+/// 答 yes 一样；要 OpenSSH 7.6），和记下的不一样时照旧不连（ssh_check 说是 ssh_hostkey），ssh 自己的提醒（记下了新主机）不打出来。
+/// 命令行里没有终端（只有 --batch）的照旧：没见过的主机不连
 fn ssh_argv(o: &Opts) -> Vec<String> {
     let mut v: Vec<String> = vec!["ssh".into(), "-o".into(), "ConnectTimeout=15".into()];
-    if o.batch {
-        v.extend(["-o".into(), "BatchMode=yes".into()]);
+    let opt = |v: &mut Vec<String>, kv: &str| v.extend(["-o".into(), kv.into()]);
+    if o.askpass {
+        for kv in ["PubkeyAuthentication=no", "PreferredAuthentications=keyboard-interactive,password", "NumberOfPasswordPrompts=1"]
+        {
+            opt(&mut v, kv);
+        }
+    } else if o.batch {
+        opt(&mut v, "BatchMode=yes");
+    }
+    if o.askpass || o.check {
+        opt(&mut v, "StrictHostKeyChecking=accept-new");
+        opt(&mut v, "LogLevel=ERROR");
     }
     if let Some(p) = &o.ssh_port {
         v.extend(["-p".into(), p.clone()]);
@@ -279,8 +302,8 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
     }
     if !r.ok {
         if done.rc == 255 {
-            let hint = if o.batch {
-                "；第一次连这台服务器、要输密码的话，在终端里运行 cca hub deploy"
+            let hint = if o.batch && !o.askpass {
+                "；要输密码的话，在终端里运行 cca hub deploy（或者在 cca App 里部署）"
             } else {
                 ""
             };
@@ -373,6 +396,67 @@ fn new_link(o: &Opts, old: Option<&Link>, r: &Report, admit: String, salt: Strin
         return fail("host", &format!("服务器装好了，但认不出各台设备该连的地址（{host}）：加 --host 公网IP或域名，再运行一次"));
     }
     Ok(l)
+}
+
+/// --check：只看登录得上不（`ssh … true`，不运行安装脚本，什么都不动）。App 里部署前先查：成了退出码 0，没成见 ssh_trouble
+fn ssh_check(o: &Opts) -> R<()> {
+    let mut argv = ssh_argv(o);
+    argv.extend(["-T".into(), o.target.clone(), "true".into()]);
+    let ran = Proc::new(argv).stdin(In::Null).capture().stderr(Out::Capture).timeout(60.0).run();
+    crate::py::signal::check()?;
+    match ran {
+        Ok(d) if d.rc == 0 => Ok(()),
+        Ok(d) => {
+            let (code, why) = ssh_trouble(&d.err(), o);
+            fail(code, &why)
+        }
+        Err(ProcError::Timeout { .. }) => fail("ssh", &format!("SSH 一分钟还没登录上 {}", o.target)),
+        Err(_) => fail("ssh", "这台设备上没有 ssh"),
+    }
+}
+
+/// ssh 没登录上时说的（stderr）→ 原因码和给人看的原因：ssh_auth 这台设备的密钥登录不了、服务器认密码（bash 接着问密码）|
+/// ssh_denied 密码不对（--askpass；不让 root 用密码登录的服务器，密码对了也是这样）| ssh_keyonly 服务器不让用密码、只认密钥（不认
+/// 这台设备的）| ssh_hostkey 主机密钥和以前记下的不一样 | ssh 连不上（地址、端口不对，服务器没开机……：ssh 说的最后一句）。
+/// Too many authentication failures：服务器只让试几次（MaxAuthTries），ssh-agent 里的密钥太多、还没轮到密码就断了：当作密钥登录不了
+fn ssh_trouble(err: &str, o: &Opts) -> (&'static str, String) {
+    let t = &o.target;
+    if err.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") || err.contains("Host key verification failed") {
+        return (
+            "ssh_hostkey",
+            format!(
+                "{t} 的 SSH 主机密钥和这台设备以前记下的不一样（服务器重装过系统，或者有人在中间冒充它）：确认是重装过的话，\
+                 在终端里运行 ssh-keygen -R 服务器地址 删掉记下的那一把，再部署"
+            ),
+        );
+    }
+    let methods = err.split_once("Permission denied (").map(|(_, rest)| rest.split(')').next().unwrap_or(""));
+    let many = err.contains("Too many authentication failures");
+    if methods.is_some() || many {
+        let password = many || methods.is_some_and(|m| m.split(',').any(|m| m == "password" || m == "keyboard-interactive"));
+        return match (o.askpass, password) {
+            (true, true) => ("ssh_denied", "密码不对".into()),
+            (false, true) => ("ssh_auth", format!("这台设备的 SSH 密钥登录不了 {t}，要用密码登录")),
+            (true, false) => (
+                "ssh_keyonly",
+                format!(
+                    "{t} 不让用密码登录，只认 SSH 密钥：把这台设备的公钥加进服务器的 ~/.ssh/authorized_keys；加过了的话，可能是这台设备的\
+                     密钥太多、服务器只让试几把，在 ~/.ssh/config 里给它写上 IdentityFile 和 IdentitiesOnly yes"
+                ),
+            ),
+            (false, false) => (
+                "ssh_keyonly",
+                format!(
+                    "{t} 不认这台设备的 SSH 密钥，也不让用密码登录：把这台设备的公钥加进服务器的 ~/.ssh/authorized_keys，\
+                     或者私钥有密码的话，在终端里运行 cca hub deploy（在那里输私钥的密码）"
+                ),
+            ),
+        };
+    }
+    match err.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
+        Some(last) => ("ssh", format!("SSH 连不上 {t}：{last}")),
+        None => ("ssh", format!("SSH 连不上 {t}")),
+    }
 }
 
 /// 服务器的地址（IPv6 不带方括号）：ssh 照它的配置连的那台（`ssh -G` 的 hostname：目标是 ssh 配置里的别名时是真的地址）；
@@ -485,6 +569,53 @@ mod tests {
         ] {
             assert!(dir_of(d).is_err_and(|why| why.contains("systemd 方式的服务看不到")), "{d}");
         }
+    }
+
+    #[test]
+    fn ssh_options() {
+        let o = |batch, askpass| Opts {
+            target: "root@192.0.2.10".into(),
+            ssh_port: Some("2222".into()),
+            batch,
+            askpass,
+            ..Default::default()
+        };
+        let s = |o: &Opts| ssh_argv(o).join(" ");
+        assert_eq!(s(&o(false, false)), "ssh -o ConnectTimeout=15 -p 2222", "终端里：ssh 自己问密码、问要不要认这台主机");
+        assert_eq!(s(&o(true, false)), "ssh -o ConnectTimeout=15 -o BatchMode=yes -p 2222", "命令行里没有终端：没见过的主机不连");
+        assert_eq!(
+            s(&Opts { check: true, ..o(true, false) }),
+            "ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -p 2222",
+            "App 里先查登录：第一次见的主机认下"
+        );
+        let a = s(&o(true, true));
+        assert!(!a.contains("BatchMode"), "BatchMode 连 SSH_ASKPASS 也不问");
+        assert!(a.contains(
+            "-o PubkeyAuthentication=no -o PreferredAuthentications=keyboard-interactive,password -o NumberOfPasswordPrompts=1"
+        ));
+        assert!(a.contains("StrictHostKeyChecking=accept-new"));
+    }
+
+    #[test]
+    fn ssh_troubles() {
+        let o = |askpass| Opts { target: "root@192.0.2.10".into(), batch: true, askpass, ..Default::default() };
+        let code = |err: &str, askpass| ssh_trouble(err, &o(askpass)).0;
+        let pw = "root@192.0.2.10: Permission denied (publickey,gssapi-keyex,gssapi-with-mic,password).\n";
+        assert_eq!(code(pw, false), "ssh_auth");
+        assert_eq!(code("root@192.0.2.10: Permission denied (publickey,keyboard-interactive).\n", false), "ssh_auth");
+        assert_eq!(code("root@192.0.2.10: Permission denied (publickey).\n", false), "ssh_keyonly");
+        assert_eq!(code(pw, true), "ssh_denied", "用了密码还不让进：密码不对");
+        assert_eq!(code("root@192.0.2.10: Permission denied (publickey).\n", true), "ssh_keyonly", "没问密码：服务器不让用密码");
+        let many = "Received disconnect from 192.0.2.10 port 22:2: Too many authentication failures\n";
+        assert_eq!(code(many, false), "ssh_auth", "ssh-agent 里的密钥太多：还没轮到密码就断了，接着问密码（那时不用密钥）");
+        assert_eq!(code(many, true), "ssh_denied");
+        assert_eq!(code("Host key verification failed.\n", false), "ssh_hostkey");
+        let (c, why) = ssh_trouble("\nssh: connect to host 192.0.2.10 port 22: Connection refused\n\n", &o(false));
+        assert_eq!(
+            (c, why.as_str()),
+            ("ssh", "SSH 连不上 root@192.0.2.10：ssh: connect to host 192.0.2.10 port 22: Connection refused")
+        );
+        assert_eq!(ssh_trouble("", &o(false)), ("ssh", "SSH 连不上 root@192.0.2.10".into()));
     }
 
     #[test]

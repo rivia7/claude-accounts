@@ -1,0 +1,2 @@
+{"v":1,"ev":"ask","seq":1,"q":"hub.join","title":"加入自己的同步服务器","message":"","fields":[{"id":"v","kind":"secret","label":"加入链接","default":"","value":"","error":"","hint":"部署服务器时给的那一行，或者在已经加入的设备上复制的（cca hub invite）","optional":false}]}
+{"v":1,"ev":"result","code":"hub_joined","message":"已加入自己的同步服务器（hub.example.com:18443），这台设备叫 studio-mac"}

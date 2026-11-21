@@ -44,6 +44,8 @@ if fullMode {
     await clientAutoInstallModelTests()
     await pollingTests()
     await sharingTests()
+    hubProtocolTests()
+    await hubModelTests()
     await devicesTests()
     remoteProtocolTests()
     await remoteFlowTests()

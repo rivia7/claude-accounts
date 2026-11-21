@@ -270,17 +270,9 @@ private struct RemotePeerLine: View {
     let unpair: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "desktopcomputer").foregroundStyle(.secondary).frame(width: 20)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Text(nonEmpty(peer.name) ?? peer.short).fontWeight(.medium).lineLimit(1)
-                    if peer.state == .gone { Tag(text: "对方已经取消配对", color: .orange) }
-                }
-                Text(Texts.remotePeerDetail(peer, now: now)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 8)
+        MachineLine(name: nonEmpty(peer.name) ?? peer.short, detail: Texts.remotePeerDetail(peer, now: now)) {
+            if peer.state == .gone { Tag(text: "对方已经取消配对", color: .orange) }
+        } trailing: {
             Text("它接入这台 Mac 时").font(.caption).foregroundStyle(.secondary)
             Picker("它接入这台 Mac 时", selection: Binding(get: { peer.incoming }, set: { model.setRemoteAccess(peer, $0) })) {
                 ForEach([RemoteAccess.control, .view, .none], id: \.self) { a in
@@ -297,9 +289,6 @@ private struct RemotePeerLine: View {
                 .disabled(model.remoteBusy)
                 .help("取消和这台机器的配对：两边都不能再接入对方的会话")
         }
-        .font(.callout)
-        .frame(minHeight: 34)
-        .accessibilityElement(children: .contain)
     }
 }
 

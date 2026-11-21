@@ -183,9 +183,9 @@ enum Snapshot {
                 m.closeRemoteTerminal()
                 m.selection = .office
             },
-            // 共享与同步：维护者共享的账号的开关（演示数据里开着、拉到了映射）
+            // 共享与同步：维护者共享的账号的开关（演示数据里开着、拉到了映射）、自己的同步服务器（加入着，最近一次没同步成）和上面的设备
             Scene(name: "sharing") { m in
-                m.selection = .sharing
+                m.selection = .sharing   // 换到这一页时自己问一次设备（窗口在后面也问）
             },
             // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
             Scene(name: "pinned") { m in
@@ -262,10 +262,11 @@ enum Snapshot {
                 ("flow-router", .routerSetup, 0), ("flow-router-password", .routerSetup, 1), ("flow-router-nodes", .routerSetup, 2),
                 ("flow-local", .localSetup, 0),
                 ("flow-onboard-share", .onboard, 0), ("flow-onboard", .onboard, 1), ("flow-onboard-net", .onboard, 2),
-                ("flow-onboard-add", .onboard, 3),
+                ("flow-onboard-add", .onboard, 3), ("flow-onboard-hub", .onboard, 4),
                 ("flow-edit", .edit(prefix: []), 0),
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
                 ("flow-remote-pair", .remotePair, 0), ("flow-remote-pair-code", .remotePair, 1), ("flow-remote-join", .remoteJoin, 0),
+                ("flow-hub-deploy", .hubDeploy(reset: false), 0), ("flow-hub-password", .hubDeploy(reset: false), 1), ("flow-hub-join", .hubJoin, 0),
                 ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),
                 ("flow-warned", demo("demo-warned", "添加 Claude 账号"), 0),
                 ("flow-failed", demo("demo-failed", "添加第三方 API 账号"), 0),

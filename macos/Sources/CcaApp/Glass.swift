@@ -142,6 +142,40 @@ extension InfoRow where Value == EmptyView {
     }
 }
 
+/// 一台机器（远程会话配对过的、加入了自己的同步服务器的）：电脑图标、名字和它的标记、下面一行说明，右边是这一行的操作
+struct MachineLine<Badge: View, Trailing: View>: View {
+    let name: String
+    let detail: String
+    let badge: Badge
+    let trailing: Trailing
+
+    init(name: String, detail: String, @ViewBuilder badge: () -> Badge, @ViewBuilder trailing: () -> Trailing) {
+        self.name = name
+        self.detail = detail
+        self.badge = badge()
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "desktopcomputer").foregroundStyle(.secondary).frame(width: 20)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(name).fontWeight(.medium).lineLimit(1)
+                    badge
+                }
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).monospacedDigit()
+            }
+            Spacer(minLength: 8)
+            trailing
+        }
+        .font(.callout)
+        .frame(minHeight: 34)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// 图标占固定的宽度、文字左边对齐（SF Symbols 各个宽度不一样，上下几行的文字会对不齐）。
 struct FixedIconLabelStyle: LabelStyle {
     var iconWidth: CGFloat

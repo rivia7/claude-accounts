@@ -151,3 +151,12 @@ struct HubDevice: Decodable, Sendable, Equatable, Identifiable {
         seenEpoch = c.double(.seenEpoch)
     }
 }
+
+/// 最近一次问到的设备（`hub devices --json`，只在内存里）：问的是哪一台（`url`：退出、换了一台以后不再显示）、没问到的原因
+/// （问到了是 nil，上次问到的照样显示）、什么时候问到的
+struct HubSnapshot: Equatable, Sendable {
+    var url: String?
+    var doc: HubDevicesDoc?
+    var error: String?
+    var fetchedEpoch: Double?
+}

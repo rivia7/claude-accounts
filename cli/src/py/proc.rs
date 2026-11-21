@@ -89,7 +89,6 @@ impl Done {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
 
-    #[cfg(test)]
     pub fn err(&self) -> String {
         String::from_utf8_lossy(&self.stderr).into_owned()
     }

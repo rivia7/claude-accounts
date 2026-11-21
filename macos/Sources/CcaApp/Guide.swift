@@ -138,10 +138,10 @@ struct TutorialCard {
         ], art: .fan),
         // 配置步骤卡（setupStart…）：第一次装好、在 App 里一步步配置时照着走；配好后、点「新手教程」时也能当参考再看。
         TutorialCard(title: "先把这台 Mac 配置好", points: [
-            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 分三步带你走——有没有维护者共享给你的账号、选这台 Mac 怎么给账号联网、添加账号。"),
+            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 分四步带你走——有没有维护者共享给你的账号、选这台 Mac 怎么给账号联网、添加账号、有没有自己的同步服务器。"),
             ("person.badge.key", "维护者共享的账号：没有就选「否」，只用你自己的账号。有的话，向导给出一行命令，发给维护者运行，把这台 Mac 加进维护者的映射（映射里的账号自动加进来，出口节点由维护者固定）；维护者一时没空就先跳过，之后 App 会自动拉取。以后也能在「共享与同步」里打开、关掉。"),
             ("list.number", "每一步都有说明，照着填就行；中途点「以后再说」也行，随时能从总览的「开始配置」接着来。"),
-            ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」。"),
+            ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」，自己的同步服务器在「共享与同步」里部署、加入。"),
         ], art: .onboard),
         TutorialCard(title: "选这台 Mac 怎么联网", points: [
             ("wifi.router", "有路由器：家里/办公室有改好的旁路由（装了 OpenClash 或 ShellCrash），向导里填地址、输一次密码装免密登录、勾选允许用的节点，按端口给每个账号分流。"),
@@ -484,10 +484,10 @@ struct TutorialArt: View {
         }
     }
 
-    /// 配置向导的三步：维护者共享的账号 → 网络出口 → 添加账号（第一步高亮）。
+    /// 配置向导的四步：维护者共享的账号 → 网络出口 → 添加账号 → 自己的同步服务器（第一步高亮）。
     private var onboardArt: some View {
-        let steps: [(String, String)] = [("person.badge.key", "共享的账号"),
-                                         ("wifi.router", "选网络出口"), ("person.badge.plus", "添加账号")]
+        let steps: [(String, String)] = [("person.badge.key", "共享的账号"), ("wifi.router", "选网络出口"),
+                                         ("person.badge.plus", "添加账号"), ("server.rack", "同步服务器")]
         return HStack(spacing: 6) {
             ForEach(steps.indices, id: \.self) { i in
                 VStack(spacing: 8) {

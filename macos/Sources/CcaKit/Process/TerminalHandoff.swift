@@ -151,9 +151,9 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
         Handoff(arguments: prefix + ["rm", key], title: "删除 \(name)", message: "在终端里确认后删除这个账号。", inApp: true)
     }
 
-    /// 配置向导（`cca _onboard`，App 首次运行时引导：维护者共享的账号 → 网络出口 → 添加账号）。要 `hello.forms`；旧版 cca 没有，退回终端的 `cca install`。
+    /// 配置向导（`cca _onboard`，App 首次运行时引导：维护者共享的账号 → 网络出口 → 添加账号 → 自己的同步服务器）。要 `hello.forms`；旧版 cca 没有，退回终端的 `cca install`。
     static let onboard = Handoff(arguments: ["_onboard"], title: "配置向导",
-                                 message: "一步步来：有没有维护者共享的账号、选好网络出口、添加账号。", inApp: true, needsForms: true)
+                                 message: "一步步来：有没有维护者共享的账号、选好网络出口、添加账号、有没有自己的同步服务器。", inApp: true, needsForms: true)
     /// 打开维护者的共享（`cca policy on`，PROTOCOL 4.12；「共享与同步」页的开关）：不知道映射仓库时先问仓库，要维护者加公钥时显示给维护者的
     /// 那一行、边等边拉（和配置向导第 1 步同一页）。只在 cca 有这个开关时用（`config.policy.switchable`），所以总能在 App 里问
     static let policyOn = Handoff(arguments: ["policy", "on"], title: "打开维护者的共享",
@@ -176,6 +176,18 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                                     message: "在终端里显示一个配对码，在另一台机器上输入它。", inApp: true)
     static let remoteJoin = Handoff(arguments: ["remote", "join"], title: "输入配对码",
                                     message: "在终端里输入另一台机器显示的配对码。", inApp: true)
+
+    /// 加入自己的同步服务器（`cca hub join`，PROTOCOL 4.13）：贴加入链接（`hub.join`，链接不对时带着原因重问）
+    static let hubJoin = Handoff(arguments: ["hub", "join"], title: "加入自己的同步服务器",
+                                 message: "在终端里贴加入链接（输入不显示）。", inApp: true)
+
+    /// 部署自己的同步服务器（`cca hub deploy` 不写服务器，PROTOCOL 4.13）：问服务器地址、SSH 用户和端口（`hub.deploy`），这台 Mac 的密钥
+    /// 登录不了时问密码（`hub.password`）；reset：从头部署，换一个加入链接（先问同意）。只能在 App 里问（终端里要把服务器写在命令行上），
+    /// 要 `hello.hub`（有它的 cca 都有 `hello.forms`）
+    static func hubDeploy(reset: Bool) -> Handoff {
+        Handoff(arguments: ["hub", "deploy"] + (reset ? ["--reset"] : []), title: reset ? "从头部署自己的同步服务器" : "部署自己的同步服务器",
+                message: "在终端里运行 cca hub deploy root@服务器地址\(reset ? " --reset" : "")。", inApp: true, needsForms: true)
+    }
 
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {

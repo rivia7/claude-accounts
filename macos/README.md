@@ -240,10 +240,12 @@ tools/make-icon/       画图标（字形取 Sources/CcaApp/LogoGlyph.swift）
   上面一行说是哪个会话、右边「断开」；一次接一个，换到别的页还接着，主窗口关了、退出 App 断开。连接断了时接入端自己重新接上
   （终端里说一句，App 不用管）。会话自己结束、没重新接上时终端留着，
   上面说一句怎么了，可以「重新接入」「返回列表」。看得见时 15 秒查一次列表。做法和坑在 docs/dev/remote.md「界面 App」。
-- **共享与同步**（`SharingPage`，PROTOCOL 4.12；`config.policy` 带 `state` 时侧栏才有这一页）：维护者共享的账号的开关，默认关着。开关、那句说明和下面几行明细
+- **共享与同步**（`SharingPage`，PROTOCOL 4.12、4.13；`config.policy` 带 `state` 时侧栏才有这一页）：维护者共享的账号的开关，默认关着。开关、那句说明和下面几行明细
   （映射仓库、账号表里共享的账号几个、关掉时收起来几个）都照 cca 给的 `state`、`accounts`、`parked`，不在界面里重算；在等维护者加公钥时侧栏这一行挂「等维护者」。
   打开是提问会话（`cca policy on`：问仓库、给维护者的那一行，和配置向导第 1 步同一页），关掉先问同意（`consent` 的 `detail` 说会移出哪些账号），
-  共享的账号正在用时 cca 不关、弹框说是哪些。做法在 docs/dev/policy.md。
+  共享的账号正在用时 cca 不关、弹框说是哪些。做法在 docs/dev/policy.md。下面是「自己的同步服务器」（hello 有 `hub` 时）：没加入时「部署到我的服务器…」
+  「粘贴加入链接…」（都是提问会话：部署问服务器地址、SSH 用户和端口，密钥登录不了时问密码）；加入着时是同步的状态、加入了的设备（别的设备可以移除）、
+  「复制加入链接」（经剪贴板的机密标记、60 秒后清掉）、「更新服务器…」，「更多」里从头部署、退出。做法在 docs/dev/hub.md「界面 App」。
 - **API key**（PROTOCOL 4.10）：官方账号在“用量”一节、第三方 API 账号在自己的「API key」一节；「…」和右键菜单里有记录 / 更换、复制、删除记下的 API key。
 - **终端交接**：在 `~/Library/Caches/local.cca.app/handoff/` 写 `.command`（bash，补 PATH，逐个加单引号运行 cca，结束等按任意键；系统自带的“终端”进程结束后默认留着窗口，按键后脚本用 AppleScript 关掉这个窗口；
   文件一开始就挪走再删掉，中途关窗口也不留下），App 发起的命令（登录、添加账号、配置路由器……）用系统自带的“终端”打开，账号的会话用用户选的终端打开（`TerminalApp.known`：系统自带的、iTerm2、Ghostty、Warp、WezTerm、kitty、Alacritty、Tabby、Rio、Hyper、cmux，

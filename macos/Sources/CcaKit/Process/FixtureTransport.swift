@@ -19,6 +19,10 @@ import Foundation
 /// | `mail trust-forwarder KEY off` | 直接成功 | — |
 /// | `mail trust-forwarder KEY`（提问会话） | flow_mail_trust-forwarder.flow | — |
 /// | `_onboard`（配置向导，提问会话） | flow__onboard.flow | — |
+/// | `hub devices --json` | hub_devices.json | — |
+/// | `hub remove 指纹` / `hub leave` | 直接成功（没有真的改） | — |
+/// | `hub invite` | 演示用的加入链接（运行时拼出来） | — |
+/// | `hub join` / `hub deploy [--reset]`（提问会话） | flow_hub_join.flow / flow_hub_deploy.flow | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功
 /// （去掉 consent 和 fail）。`update 版本号` 什么都不做（`gui update` 演示模式下 App 不会调用）。
@@ -208,6 +212,16 @@ struct FixtureTransport: Transport {
         case ("remote", "on"), ("remote", "off"), ("remote", "allow"), ("remote", "unpair"), ("remote", "end"):
             let e = CcaEvent.result(ResultEvent(code: .remoteUpdated, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: .claude, key: nil))
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
+        case ("hub", "devices"):
+            await pause(2)
+            return json("hub_devices.json")
+        case ("hub", "remove"), ("hub", "leave"):
+            let e = CcaEvent.result(ResultEvent(code: sub == "leave" ? .hubLeft : .hubRemoved, route: nil, node: nil, port: nil,
+                                                message: "演示数据：没有真的改", tool: nil, key: nil))
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
+        case ("hub", "invite"):
+            // 演示用的加入链接：运行时拼出来（仓库里不放长得像真凭证的字符串）
+            return CcaResponse(exitCode: 0, stdout: Data(("cca-hub1." + String(repeating: "Demo", count: 12) + "\n").utf8), stderr: Data(), events: [])
         default:
             let cmd = (["cca"] + request.arguments).joined(separator: " ")
             return CcaResponse(exitCode: 2, stdout: Data(), stderr: Data("演示模式不支持：\(cmd)\n".utf8), events: [])
@@ -232,6 +246,7 @@ struct FixtureTransport: Transport {
         if args.first == "key" || args.first == "rm" { args = [args[0]] }
         if args.first == "mail", args.dropFirst().first == "setup" { args = ["mail", "setup"] }   // 默认 / --account 都用同一个演示流程
         if args.first == "mail", args.dropFirst().first == "trust-forwarder" { args = ["mail", "trust-forwarder"] }   // 不管哪个账号都用同一个演示流程
+        if args.first == "hub", args.dropFirst().first == "deploy" { args = ["hub", "deploy"] }   // 从头部署（--reset）也用同一个演示流程
         let name = "flow_" + args.joined(separator: "_") + ".flow"
         guard let d = read(name) else { throw SessionUnsupported() }
         return DemoSession(data: d)

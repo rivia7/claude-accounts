@@ -423,6 +423,10 @@ struct FailCode: KnownValues {
     static let hubHost = FailCode(rawValue: "hub_host")
     static let hubInstall = FailCode(rawValue: "hub_install")
     static let hubStart = FailCode(rawValue: "hub_start")
+    /// 部署、加入做完了，带着提醒（fail_warn：退出码 0）：证书是新生成的，别的设备要重新加入 / 服务器的地址只在内网 / 这台设备关掉了设备统计
+    static let hubNewpin = FailCode(rawValue: "hub_newpin")
+    static let hubLan = FailCode(rawValue: "hub_lan")
+    static let hubOff = FailCode(rawValue: "hub_off")
     /// 自己的同步服务器的失败原因（`hub_` 开头的都是，认不认识都算：App 照 message 说）
     var isHub: Bool { rawValue.hasPrefix("hub_") }
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
@@ -435,7 +439,7 @@ struct FailCode: KnownValues {
                                        .hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt, .hubOther, .hubFull,
                                        .hubOld, .hubPin, .hubUnreachable, .hubClock, .hubBusy, .hubSign, .hubServer, .hubName,
                                        .hubUsage, .hubSSH, .hubRoot, .hubDeps, .hubImage, .hubPort, .hubTaken, .hubNotThis, .hubMoved,
-                                       .hubHost, .hubInstall, .hubStart]
+                                       .hubHost, .hubInstall, .hubStart, .hubNewpin, .hubLan, .hubOff]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

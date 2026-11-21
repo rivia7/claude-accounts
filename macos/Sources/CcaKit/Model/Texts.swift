@@ -235,6 +235,38 @@ enum Texts {
         "Claude Code 里记的套餐还是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
     }
 
+    // MARK: 自己的同步服务器（PROTOCOL 4.13）
+
+    /// 「自己的同步服务器」卡片上的那一行状态：照 cca 给的 `config.hubs` 里 own 的那一项说
+    static func hubState(_ h: HubEntry, now: Double) -> String {
+        switch h.state {
+        case .ok:
+            return "同步正常" + (h.checkedEpoch.map { "（" + agoPhrase(now - $0) + "）" } ?? "")
+        case .pending:
+            return "还没同步过"
+        case .off:
+            return (nonEmpty(h.error) ?? "这台设备关掉了设备统计") + "：现在不经它同步"
+        default:
+            let last = h.checkedEpoch.map { "；" + agoPhrase(now - $0) + "同步成过" } ?? ""
+            return "最近一次没同步成：" + (nonEmpty(h.error) ?? "原因不明") + last
+        }
+    }
+
+    /// 经它同步几个账号、这台 Mac 在服务器上叫什么、什么时候加入的
+    static func hubSummary(_ h: HubEntry, now: Double, calendar: Calendar = .current) -> String {
+        var parts = [h.accounts > 0 ? "经它同步 \(h.accounts) 个账号" : "还没有经它同步的账号"]
+        if let n = nonEmpty(h.name) { parts.append("这台 Mac 在服务器上叫 \(n)") }
+        if let j = h.joinedEpoch { parts.append(pastTime(j, now: now, calendar: calendar) + " 加入") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 服务器上的一台设备：最近一次同步（服务器最后一次收到它的请求）、什么时候加入的
+    static func hubDeviceDetail(_ d: HubDevice, now: Double, calendar: Calendar = .current) -> String {
+        var parts = [d.seenEpoch.map { "最近一次同步：" + agoPhrase(now - $0) } ?? "服务器重启以后还没来过"]
+        if let j = d.joinedEpoch { parts.append(pastTime(j, now: now, calendar: calendar) + " 加入") }
+        return parts.joined(separator: " · ")
+    }
+
     // MARK: 远程会话（PROTOCOL 9）
 
     /// 别的机器上的程序写的一行字（终端的标题）显示之前：控制字符、看不见的排版字符（改文字方向的、零宽的、标签字符）去掉，

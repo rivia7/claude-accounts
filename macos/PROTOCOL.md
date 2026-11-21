@@ -35,8 +35,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `key --show` / `key --forget` 40 秒（cca 读钥匙串最多等 30 秒）、`cost sync --json` 300 秒（第一次要把会话记录全读一遍）。
   `cost sync` 全局一次一个。`remote list --json`、`remote allow`、`remote unpair` 40 秒（要问一次维护者的服务器；取消配对被限流时 cca 自己再试两次），
   `remote on|off` 30 秒，`remote end` 40 秒（会话里的程序不理会时 cca 等宿主强行结束它，约 5 秒，再等它收场）。
-  `hub status --json` 15 秒（不联网），`hub devices --json`、`hub remove`、`hub leave` 40 秒（要问一次自己的同步服务器）；`hub join` 是提问会话，不限时（4.13）。
-  `hub join|remove|leave` 全局一次一个（都改这台设备的加入信息）；`hub status --json`、`hub devices --json` 随时可以跑。
+  `hub invite` 15 秒（不联网；`hub status --json` 也不联网，给命令行和脚本用，App 读 `_gui state` 的 `config.hubs`），`hub devices --json`、`hub remove`、`hub leave` 40 秒（要问一次自己的同步服务器）；`hub join`、
+  `hub deploy` 是提问会话，不限时（4.13）。`hub join|remove|leave` 全局一次一个（都改这台设备的加入信息）；`hub status --json`、`hub devices --json`、
+  `hub invite` 随时可以跑（App 自己保证 `hub devices --json` 一次一个）。
 - `app`、`web`、`billing`、`limit-resets`、`mail open`、`router sync`、`reset` 一旦开始就要让它们跑完：App 退出（或崩溃）时它们不能跟着被杀（cca 往 stderr 写字时管道没人读会被 SIGPIPE 杀掉，
   可能 App 没打开、路由器同步了却没记下；重置额度用掉了一次却没记下重置后的用量）。所以这几条命令的 stdout / stderr 接到文件，跑完再读，不限时；
   进度和结果看事件文件。
@@ -710,7 +711,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `hub_…`（自己的同步服务器的命令没成，4.13：`hub_link`、`hub_other`、`hub_denied`、`hub_salt`、`hub_full`、`hub_old`、`hub_pin`、
   `hub_unreachable`、`hub_clock`、`hub_busy`、`hub_sign`、`hub_server`、`hub_name`、`hub_not_joined`、`hub_no_device`、`hub_unavailable`；
   部署的 `hub_usage`、`hub_ssh`、`hub_root`、`hub_deps`、`hub_image`、`hub_port`、`hub_taken`、`hub_not_this`、`hub_moved`、`hub_host`、`hub_install`、
-  `hub_start`；不认识的 `hub_` 开头的当 `error`，照 `message` 说）。
+  `hub_start`；部署、加入做完了、带着的提醒（退出码 0）：`hub_newpin`、`hub_lan`、`hub_off`；不认识的 `hub_` 开头的当 `error`，照 `message` 说）。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
@@ -878,7 +879,10 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 |---|---|---|---|
 | `onboard.share` | `_onboard`（配置向导第 1 步） | `confirm`（默认否） | 有没有维护者共享给你的账号。答有接着 `onboard.policy`；答没有（默认）不生成 deploy key、不拉映射，直接到下一步。共享已经开着时不问（直接 `onboard.policy`，拉一次就拉到了时也不问）；不知道映射仓库（没有维护者的默认仓库、也没关掉过共享）时整个第 1 步都没有 |
 | `onboard.policy` | `_onboard`（配置向导第 1 步）/ `policy on` | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不打开共享：去掉仓库和 deploy key）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答 |
-| `hub.join` | `hub join` | `secret` | 自己的同步服务器的加入链接（`cca-hub1.` 开头的一行：部署服务器时给的，或者已经加入的设备上 `cca hub invite` 给的）。空着是 `fail` 的 `hub_link`，链接不对、服务器不认见 4.13 |
+| `hub.join` | `hub join` / `_onboard`（配置向导第 4 步答有） | `secret` | 自己的同步服务器的加入链接（`cca-hub1.` 开头的一行：部署服务器时给的，或者已经加入的设备上 `cca hub invite` 给的）。空着、链接不对（少了一截、旧的）、服务器不认（`hub_link`、`hub_denied`、`hub_salt`、`hub_pin` 的那些原因）时带着原因（`error`）重问，不是 `fail`；别的原因（连不上……）是 `fail`，见 4.13。配置向导里这一页是可选的（`optional`）：留空交上来是先不加入，向导接着做完 |
+| `hub.deploy` | `hub deploy`（App 里，不写服务器） | `text` ×3 | 自己的同步服务器部署到哪：服务器地址（校验 host；加入着时预填它的地址，`message` 说是更新）、SSH 用户（校验 sshuser，预填 root）、SSH 端口（校验 port，预填 22）。填完 cca 先查登录得上不（什么都不装）：连不上（地址、端口不对……）带着 ssh 说的原因重问；这台设备的密钥登录不了、服务器认密码时接着问 `hub.password`；主机密钥和记下的不一样、不认密钥又不让用密码时是 `fail` 的 `hub_ssh` |
+| `hub.password` | `hub deploy`（App 里） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对是 `fail` 的 `hub_ssh`：错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
+| `onboard.hub` | `_onboard`（配置向导第 4 步） | `confirm`（默认否） | 有没有自己的同步服务器的加入链接。答有接着 `hub.join`（可以留空：先不加入；加入没成不耽误向导做完：原因是 `fail` 事件，最后的 `result` 还是 `onboarded`）；已经加入了时不问 |
 | `policy.repo` | `policy on` | `text` | 维护者的映射仓库（GitHub 上的「用户/仓库」，向维护者要）：不知道仓库时才问（没有维护者的默认仓库、也没关掉过共享）；空着是取消，写得不对是 `fail` |
 | `install.share` | `install`（终端，服务器上直连不通时） | `confirm`（默认否） | 有没有维护者共享给你的账号：有就等维护者确认这台机器、导入维护者提供的节点；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问 |
 | `onboard.net` | `_onboard`（配置向导第 2 步） | `choice` | 这台 Mac 怎么给账号联网：路由器 / 没有路由器（内置代理）/ 先跳过。路由器或本机的客户端已经配好时不问。没配置路由器时，映射里账号的参考节点在这一步之后导入（映射里的账号随即加进来） |
@@ -914,7 +918,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 
 | 命令 | App 里 | 方式 |
 |---|---|---|
-| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`）。三步：维护者共享的账号（`onboard.share` → `onboard.policy`）→ 网络出口（`onboard.net`）→ 添加账号（`onboard.add`），页标题写着第几步、共几步（只数这次要问的；只有一步时不写）；做完 `result` 的 `onboarded` |
+| `_onboard`（配置向导） | 首页欢迎卡片的「开始配置」（`state.config.onboarded == false` 时出现） | 提问会话（要 `hello.forms`；旧版 cca 退回终端 `cca install`）。四步：维护者共享的账号（`onboard.share` → `onboard.policy`）→ 网络出口（`onboard.net`）→ 添加账号（`onboard.add`）→ 自己的同步服务器（`onboard.hub` → `hub.join`；已经加入了时没有这一步），页标题写着第几步、共几步（只数这次要问的；只有一步时不写）；做完 `result` 的 `onboarded` |
 | `[codex] add`、`add api` | 工具栏「＋」、总览各组的「添加」、侧栏「启用 ChatGPT 账号」 | 提问会话 |
 | `[codex] key` | 账号页「…」、右键菜单、API key 那一行的「记录…」「输入…」 | 提问会话 |
 | `[codex\|agy] node use 账号` | 账号页「网络出口」一节的「自定义代理…」（`can.custom_proxy`，要 `hello.forms`） | 提问会话（`node.custom`，配置了路由器的接着同步：要重启时问 `consent.router_restart`）；做完 `result` 的 `saved`，带 `key` |
@@ -927,10 +931,11 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy on` | 「共享与同步」页的「维护者共享的账号」开关（打开） | 提问会话（`policy.repo`、`onboard.policy`，4.12）；做完 `result` 的 `policy_on` / `policy_off` |
 | `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
-| `hub join` | 「共享与同步」页「自己的同步服务器」的「加入…」（要 `hello.hub`） | 提问会话（`hub.join`，4.13）；做完 `result` 的 `hub_joined` |
-| `hub status --json`、`hub devices --json` | 「共享与同步」页「自己的同步服务器」一块（看得见时、「刷新」） | 无交互命令（4.13） |
-| `hub remove <设备>`、`hub leave` | 那一块里每台设备的「移除…」、「退出…」 | 无交互命令 + 同意重跑（`consent.hub_remove`、`consent.hub_leave`，4.13） |
-| `hub invite` | 那一块的「复制加入链接」 | 无交互命令（stdout 只经内存里的管道读，4.13） |
+| `hub join` | 「共享与同步」页「自己的同步服务器」没加入时的「粘贴加入链接…」（要 `hello.hub`） | 提问会话（`hub.join`，4.13）；做完 `result` 的 `hub_joined` |
+| `hub deploy`、`hub deploy --reset` | 那一块没加入时的「部署到我的服务器…」，加入着时的「更新服务器…」、「更多」里的「从头部署（换一个加入链接）…」（要 `hello.hub`；有它的 cca 都有 `hello.forms`） | 提问会话（`hub.deploy`、`hub.password`、`consent.hub_reset`，4.13）；做完 `result` 的 `hub_deployed`，要人做点什么时前面还有 `fail` 的 `hub_newpin`、`hub_lan`、`hub_off`（退出码 0） |
+| `hub devices --json` | 「共享与同步」页「自己的同步服务器」一块（打开这一页、主窗口出来、做完操作时问一次设备；「刷新」） | 无交互命令（4.13） |
+| `hub remove <设备>`、`hub leave` | 那一块里别的设备的「移除…」、「更多」里的「退出自己的同步服务器…」 | 无交互命令 + 同意重跑（`consent.hub_remove`、`consent.hub_leave`，4.13） |
+| `hub invite` | 那一块的「复制加入链接」 | 无交互命令（stdout 只经内存里的管道读，放进剪贴板时标成机密、60 秒后清掉，4.13） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -997,10 +1002,16 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
 端到端加密：服务器上没有邮箱、登录身份、key、金额）。维护者共享的账号照旧只走维护者的服务器。要 `hello.hub`；`state.config.hubs` 里
 `kind` 是 `own` 的那一项说现在的样子（2.2），账号的 `hub` 说它走哪一台。
 
-- **部署**（`cca hub deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--docker | --systemd] [--dir 目录] [--name 名字] [--reset]`，
-  App 现在不用）：经 SSH 在用户自己的 Linux 服务器上装好服务端（再运行是更新：数据、证书、加入链接都不变），这台设备跟着加入。入伙口令和盐在这台设备上
-  生成，服务器只拿到口令的 SHA-256；加入链接不打出来（别的设备要的在这台设备上 `cca hub invite`）。SSH 要不问密码就能登录（没有终端时带
-  `BatchMode`），登录的是 root，或者能免密码 sudo。成了 `result` 的 `hub_deployed`（`message` 说部署了还是更新了）。没成 `fail`：`hub_usage`（参数不对）|
+- **部署**（`cca hub deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--docker | --systemd] [--dir 目录] [--name 名字] [--reset]`）：
+  经 SSH 在用户自己的 Linux 服务器上装好服务端（再运行是更新：数据、证书、加入链接都不变），这台设备跟着加入。入伙口令和盐在这台设备上
+  生成，服务器只拿到口令的 SHA-256；加入链接不打出来（别的设备要的在这台设备上 `cca hub invite`）。登录的是 root，或者能免密码 sudo。终端里 ssh
+  自己问密码、问要不要认这台主机；没有终端时带 `BatchMode`（要不问密码就能登录，没见过的主机不连）。**App 里**（提问会话，不写服务器）：先问服务器地址、SSH 用户
+  和端口（`hub.deploy`），查登录得上不（只运行 `true`，什么都不装）：连不上带着原因重问；这台设备的密钥登录不了、服务器认密码时问密码
+  （`hub.password`，不对重问，最多三次），部署时经 `SSH_ASKPASS` 交给 ssh（不用密钥、只问一次）；第一次连的主机不问、记下它的主机密钥
+  （`StrictHostKeyChecking=accept-new`），和记下的不一样时停下（`hub_ssh`）；服务器上已经有别的设备加入过、这台设备没加入它（`hub_taken`）时
+  问要不要从头部署（`consent.hub_reset`）。成了 `result` 的 `hub_deployed`（`message` 说部署了还是更新了）；要人做点什么时 `result` 前面还有
+  `fail`（退出码照样是 0）：`hub_newpin`（服务器的证书是新生成的：别的设备连不上了，要用新的加入链接重新加入）| `hub_lan`（服务器的地址只在内网连得上）|
+  `hub_off`（这台设备关掉了设备统计：现在不经它同步）。没成 `fail`：`hub_usage`（参数不对）|
   `hub_ssh`（ssh 连不上、登录不了，或者中途断了）| `hub_root`（不是 root，sudo 又要密码）| `hub_deps`（服务器上没有 openssl，或者 Docker（带 compose 插件）、
   systemd + python3（3.6 起）两样都没有）| `hub_image`（指定了 `--docker` 却拉不到 python 镜像）| `hub_port`（端口被别的程序占着；已经有设备加入过时换端口）|
   `hub_taken`（服务器上已经有自己的同步服务器、也有设备加入过，这台设备却没加入它：拿加入链接 `hub join`，或者 `--reset`）| `hub_not_this`（这台设备
@@ -1010,14 +1021,16 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
   `CCA_GRANT=hub_reset:<目标>` 重跑（4.3）。`cca hub deploy --script` 只把安装脚本打到 stdout（在服务器上自己运行，自己打出加入链接；发布页上的
   `cca-hub-install.sh` 也是它）。
 - **加入**（`cca hub join`）：提问会话（`hub.join`：一个密文输入框，贴加入链接）。加入链接是凭证（谁拿到它都能加入），只经提问会话的管道交给
-  cca，不进命令行、环境变量、事件文件和日志。成了 `result` 的 `hub_joined`，之后 cca 在后台上报、同步一次。没成 `fail`（`message` 是给人看的原因）：
+  cca，不进命令行、环境变量、事件文件和日志。成了 `result` 的 `hub_joined`，之后 cca 在后台上报、同步一次（这台设备关掉了设备统计时前面还有
+  `fail` 的 `hub_off`，退出码 0）。App 里没贴、链接本身不对、服务器不认（下面的 `hub_link`、`hub_denied`、`hub_salt`、`hub_pin`）时不停下，带着原因重问（配置向导里那一页可以留空：先不加入）；
+  别的没成 `fail`（`message` 是给人看的原因）：
   `hub_link`（没贴、链接不对：少了一截、多了字）| `hub_other`（已经加入了另一台：先退出）| `hub_denied`（服务器不认这个链接：旧的、别的服务器的）|
   `hub_salt`（服务器上的设备用的是另一份链接：服务器重新部署过，向已经加入的设备要它的）| `hub_full`（服务器上满了，64 台）|
   `hub_old`（那不是自己的同步服务器，或者版本太旧）| `hub_pin`（证书和链接里钉住的对不上）| `hub_unreachable`（连不上）|
   `hub_clock`（这台设备的时钟差太多）| `hub_busy`（请求太频繁）| `hub_sign`（生成、用不了这台设备的密钥）| `hub_server`（服务器出错）。
   加入了同一台时再加入是重新加入（服务器丢了这台的记录时用；名字照旧）。终端里另有 `--stdin`（链接从标准输入读）、`--name 名字`
   （默认是主机名；服务器上已经有同名的加 `-2`、`-3`……，`hub_name`：名字不对），App 不用。
-- **状态**（`cca hub status --json`，只读、不联网）：`{"version": 1, "kind": "hub_status", "joined": true, "reason": null, "hub": {…}}`。`joined`：加入了没有；
+- **状态**（`cca hub status --json`，只读、不联网；App 不跑它，同样的内容在 `config.hubs` 里）：`{"version": 1, "kind": "hub_status", "joined": true, "reason": null, "hub": {…}}`。`joined`：加入了没有；
   `reason`：这台设备现在用不了它的原因（没加入、关掉了设备统计、密钥不见了；给人看的话），用得了是 null；`hub`：和 `config.hubs` 里 `own` 的那一项一样，
   没加入是 null。
 - **设备**（`cca hub devices --json`，问一次服务器）：
