@@ -177,6 +177,34 @@ rm() { touch "$AUDIT_ROOT/mutated"; }
                 self.assertFalse((self.root / 'prompted').exists())
                 self.assertFalse((self.root / 'mutated').exists())
 
+    def test_uninstall_stops_when_browser_process_query_fails(self):
+        # 账号的桌面 App 没开着，账号专属的 Chrome 查不了（不是“没开着”）：停下，不问、不动
+        stubs = '''need_tty() { :; }
+use_tool() { TOOL="$1"; }
+tool() { return 1; }
+chrome_pid() { return 3; }
+has_worktrees() { return 1; }
+die() { echo "$*" >&2; exit 1; }
+py() {
+ case "$1" in
+  keys) echo test@example.com ;;
+  env) echo 'ACC_NAME=test ACC_LABEL=test ACC_CHROME_DIR=/nonexistent/chrome' ;;
+  *) touch "$AUDIT_ROOT/mutated"; return 9 ;;
+ esac
+}
+confirm() { touch "$AUDIT_ROOT/prompted"; return 1; }
+ask() { touch "$AUDIT_ROOT/prompted"; }
+logout_account() { touch "$AUDIT_ROOT/mutated"; }
+rm() { touch "$AUDIT_ROOT/mutated"; }
+'''
+        for command in ('cmd_restore', 'cmd_restore uninstall', 'cmd_restore uninstall --no-backup'):
+            with self.subTest(command=command):
+                result = self.shell(stubs + RESTORE + '\n' + command + '\n', {'APP_LABEL': 'Dummy App'})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('无法查询 Chrome 进程', result.stderr)
+                self.assertFalse((self.root / 'prompted').exists())
+                self.assertFalse((self.root / 'mutated').exists())
+
     def test_browser_process_query_failure_never_prepares_or_opens_profile(self):
         self.executable('pgrep', 'exit 3\n')
         stubs = '''has_chrome() { return 0; }

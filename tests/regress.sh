@@ -159,6 +159,7 @@ ok "网络隔离：节点回读、失败阻断、探针不继承代理覆盖" 'p
 ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$D/isolation_runtime.py"'
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
 ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'python3 "$D/client_updates.py"'
+ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 ok "自己的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd）、打出加入链接（口令、盐不落盘）、更新、换链接、卸载，没装完时 .env 换回原来的，别人的目录不碰；cca hub deploy 经 SSH 部署、加入、更新，有设备加入过的不动，加入了的设备不碰别的服务器，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
@@ -2638,8 +2639,12 @@ rm -rf "$GA"; publish 9.9.16; publish_app 9.9.16
 run cca update >/dev/null 2>&1; run cca ls >/dev/null 2>&1; sleep 1
 ok "自己删掉了 App：cca 更新后不再装回来" '[ ! -e "$GA" ] && ! grep -q "v9.9.16/cca-app.zip" gh.log'
 run cca gui >/dev/null 2>&1
+# App 自己留在 ~/Library 里的（内核日志、窗口状态、设置）跟着删；设置先 defaults delete（假的：真的不看 HOME，见 setup.sh）
+mkdir -p "$H/Library/Caches/local.cca.app/runs" "$H/Library/Saved Application State/local.cca.app.savedState" "$H/Library/Preferences"
+: > "$H/Library/Caches/local.cca.app/core.log"; : > "$H/Library/Preferences/local.cca.app.plist"; : > "$H/Library/Preferences/com.example.other.plist"; : > "$T/defaults.log"
 out=$(run cca gui remove 2>&1); rc=$?
 ok "cca gui remove：删掉 App 和下载目录" '[ $rc -eq 0 ] && [ ! -e "$GA" ] && [ ! -e "$H/.cca/gui" ]'
+ok "cca gui remove：App 留在 ~/Library 里的缓存、窗口状态、设置也删掉，别的 App 的不动" '[ ! -e "$H/Library/Caches/local.cca.app" ] && [ ! -e "$H/Library/Saved Application State/local.cca.app.savedState" ] && [ ! -e "$H/Library/Preferences/local.cca.app.plist" ] && [ -f "$H/Library/Preferences/com.example.other.plist" ] && grep -qx "delete local.cca.app" "$T/defaults.log"'
 # cca install --gui（install.sh 在 macOS 上传的）：基础安装后装好并打开图形界面 App，剩下的配置在 App 的引导向导里走；
 # 老 macOS（26 以前）或 App 装不上时自动回退到终端引导。不带 --gui 的 cca install 仍是终端引导
 IGV=$(ver); publish_app "$IGV"
@@ -4445,6 +4450,17 @@ ok "restore：还有开着的远程会话时不还原（先结束它们）" '[ $
 pkill -f "remote-host claude k 测试 -- /bin/sleep 60" 2>/dev/null; kill "$rs_host" 2>/dev/null; wait "$rs_host" 2>/dev/null
 for rs_i in $(seq 1 50); do pgrep -f "remote-host claude k 测试" >/dev/null 2>&1 || break; sleep 0.1; done
 ok "（前提）会话结束了：会话目录里什么都不剩" '[ -z "$(ls "$H/.cca/remote" 2>/dev/null)" ]'
+# cca uninstall 和 cca restore 是同一条命令的两个名字：确认时输入的是用的那个名字
+out=$(run CCA_TTY="$(ans restore)" cca uninstall 2>&1); rc=$?
+ok "uninstall：确认时要输入 uninstall（输入 restore 是取消）；清单里说了放在别处的也清掉" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已取消" && printf "%s" "$out" | grep -q "卸载 cca" && printf "%s" "$out" | grep -q "cca 放在别处的也清掉：解出来的辅助程序和缓存、界面 App 的缓存和设置、shell 启动文件里 cca 加的那两行" && printf "%s" "$out" | grep -q "先打包备份配置" && [ -d "$H/.cca" ]'
+out=$(run CCA_TTY="$(ans no)" cca uninstall --no-backup 2>&1); rc=$?
+ok "uninstall --no-backup：清单里说不留备份；不认识的参数说用法，什么都不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不留备份（--no-backup" && ! printf "%s" "$out" | grep -q "先打包备份配置" && ! printf "%s" "$out" | grep -q "安装前的备份在打包里" && ! run CCA_TTY="$(ans uninstall)" cca uninstall --purge >/dev/null 2>&1 && [ -d "$H/.cca" ]'
+# 账号专属的 Chrome 还开着（假的 pgrep 认 $T/app-open 里的记录）：它的资料目录在 ~/.cca 里，删了它还接着往里写
+un_ad=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
+mkdir -p "$T/app-open"; printf '%s\n' "$$" "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=$un_ad/chrome --no-first-run" "$un_ad/chrome" 0 > "$T/app-open/900000777"
+out=$(run CCA_TTY="$(ans uninstall)" cca uninstall 2>&1); rc=$?
+rm -f "$T/app-open/900000777"
+ok "uninstall：账号专属的浏览器窗口还开着时不卸载（先关掉）" '[ -n "$un_ad" ] && [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "（浏览器窗口）。先退出它们再还原" && [ -d "$H/.cca" ]'
 run CCA_TTY="$(ans "$R1")" cca key alice >/dev/null 2>&1; run CCA_TTY="$(ans "$R2")" cca codex key dave >/dev/null 2>&1
 refs=$(ls "$T/keychain" | grep -cE "^cca-(codex-)?ref-")
 K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_keys"
@@ -4480,16 +4496,24 @@ printf '{"acc":{"x":"HUB-REMOTE-SECRET"}}\n' > "$H/.cca/cost/own.remote.json"
 # macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
-# 装着的是接着辅助程序的那一份（11b 的 mkver）：它解出来的辅助程序在这个用户的临时目录的 cca-helper 里（run 不带 TMPDIR），还原时
-# 也要删掉
-rh=""; rh0=""
+# 装着的是接着辅助程序的那一份（11b 的 mkver）：它解出来的辅助程序在缓存目录的 cca-helper 里，卸载时整个目录删掉（别的版本解出来的
+# 也在里面）。run 不带 TMPDIR 时缓存目录是这个用户真的临时目录：这一次换成它下面单独的一个（TMPDIR 在 /var/folders 下时 cca 就用它；
+# $T 是 /private/var/… 开头的，不认），不然删的是这台 Mac 上真的 cca、同时在跑的别的回归解出来的那些
 hs=$(sed -n 's/^HELPER_SUMS="[^=]*=\([0-9a-f]*\)"$/\1/p' "$H/.cca/bin/cca" 2>/dev/null)
-[ -z "$hs" ] || rh="$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
-[ -n "$rh" ] && [ -x "$rh" ] && rh0=1
-out=$(run CCA_GUI_OS=15 CCA_TTY="$(ans restore)" cca restore 2>&1); rc=$?
+un_cache="$(getconf DARWIN_USER_TEMP_DIR)cca-regress-cache.$$"
+mkdir -p "$un_cache/cca-helper" "$un_cache/cca-py" "$T/dock/cca-dock"; chmod 700 "$un_cache/cca-helper"
+: > "$un_cache/cca-helper/0000-another-version"; : > "$un_cache/cca-py/old.pyc"; : > "$T/dock/cca-dock/queued"
+# 界面 App 留在 ~/Library 里的（上面 cca gui remove 那一条删过一次，这里再放上）
+mkdir -p "$H/Library/Caches/local.cca.app/runs" "$H/Library/Saved Application State/local.cca.app.savedState" "$H/Library/HTTPStorages/local.cca.app" "$H/Library/Preferences"
+: > "$H/Library/Caches/local.cca.app/core.log"; : > "$H/Library/Preferences/local.cca.app.plist"; : > "$H/Library/Preferences/com.example.other.plist"; : > "$T/defaults.log"
+# shell 启动文件里 cca 加的那两行：~/.local/bin 里还有别的命令（keepme）时留着（去掉的各种情况在 tests/path_unhint.sh）
+: > "$H/.local/bin/keepme"; printf 'export FOO=1\n\n# cca（Claude Code 多账号）\nexport PATH="$HOME/.local/bin:$PATH"\n' > "$H/.zshrc"; cp "$H/.zshrc" "$T/zshrc.before"
+out=$(run TMPDIR="$un_cache" CCA_GUI_OS=15 CCA_TTY="$(ans uninstall)" cca uninstall 2>&1); rc=$?
 ok "restore：端口池、钩子、cron、文件、公钥全部清掉，覆写脚本逐字节一致" '[ $rc -eq 0 ] && [ "$(nl_)" = 0 ] && ! ls "$R"/sel/CCA-* >/dev/null 2>&1 && cmp -s pristine_overwrite.sh "$R/etc/openclash/custom/openclash_custom_overwrite.sh" && [ ! -e "$R/etc/cca" ] && ! grep -q cca "$R/etc/crontabs/root" && [ "$(cat "$R/etc/sysupgrade.conf")" = "/root/.ssh/" ] && ! grep -qF "$K" "$R/root/.ssh/authorized_keys"'
 ok "restore：启动器和图形界面 App 全部删掉（确认清单里说了会删 App）" '[ -z "$(ls "$H/Applications" 2>/dev/null)" ] && printf "%s" "$out" | grep -q "还有图形界面 $GA"'
-ok "restore：解出来的辅助程序（缓存目录里这个版本的那一份）也删掉" '[ "$rh0" = 1 ] && [ ! -e "$rh" ]'
+ok "uninstall：缓存目录里解出来的辅助程序（cca-helper 整个目录，别的版本的也在里面）、3.5.0 以前留下的字节码缓存、程序坞整理的排队记录都删掉" '[ -n "$hs" ] && [ ! -e "$un_cache/cca-helper" ] && [ ! -e "$un_cache/cca-py" ] && [ ! -e "$T/dock/cca-dock" ]'
+ok "uninstall：界面 App 留在 ~/Library 里的缓存、窗口状态、设置也删掉（设置先 defaults delete），别的 App 的不动" '[ ! -e "$H/Library/Caches/local.cca.app" ] && [ ! -e "$H/Library/Saved Application State/local.cca.app.savedState" ] && [ ! -e "$H/Library/HTTPStorages/local.cca.app" ] && [ ! -e "$H/Library/Preferences/local.cca.app.plist" ] && [ -f "$H/Library/Preferences/com.example.other.plist" ] && grep -qx "delete local.cca.app" "$T/defaults.log"'
+ok "uninstall：~/.local/bin 里还有别的命令时，shell 启动文件里 cca 加的那两行留着、说一声" 'cmp -s "$T/zshrc.before" "$H/.zshrc" && [ -f "$H/.local/bin/keepme" ] && printf "%s" "$out" | grep -q "/.zshrc 里把 ~/.local/bin 加进 PATH 的那两行留着"'
 ok "restore：本机还原（cca、cxa、aga 都删掉，确认清单里说了），共享主目录内容保留" '[ ! -e "$H/.cca" ] && [ ! -L "$H/.local/bin/cca" ] && [ ! -L "$H/.local/bin/cxa" ] && [ "$ag_pre" = cca ] && [ ! -L "$H/.local/bin/aga" ] && printf "%s" "$out" | grep -q "删除 ~/.local/bin 里的 cca、cxa、aga，" && [ -f "$H/.claude/projects/-p1/memory/alice.md" ]'
 ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Claude、Codex 各一把）都从钥匙串删掉；配置备份只有自己能读（账号表里可能写着 key）" '[ "$refs" = 2 ] && [ -z "$(ls "$T/keychain" | grep -E "^cca-(codex-)?(api|ref)-")" ] && [ "$(stat -f %Lp "$(ls "$H"/cca-backup-*.tar.gz | head -n 1)")" = 600 ]'
 ok "restore：macOS 26 以下（内核由 cca 在后台托管）也删掉 crontab 里开机起内核的那一行，别的行留着" '! grep -qF "# cca-core" "$T/crontab" && grep -qx "0 3 \* \* \* echo user-job" "$T/crontab"'
@@ -4503,5 +4527,15 @@ ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 ag
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'
 ok "restore：远程会话的配对也取消，配对的密钥从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-remote-$RSP" ] && printf "%s" "$out" | grep -q "远程会话：取消和别的机器的配对"'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
+# --no-backup：不打包、直接删。上面已经卸载干净了：放一份只有空配置和空账号表的 ~/.cca，用仓库里的 cca 再卸载一次；
+# ~/.local/bin 这回是空的（前面各节装进去的假命令、keepme 都拿走），启动文件里那两行跟着去掉
+mkdir -p "$H/.cca" "$un_cache"; echo '{}' > "$H/.cca/config.json"; echo '{}' > "$H/.cca/accounts.json"; rm -rf "$H/.local/bin"; mkdir -p "$H/.local/bin"
+un_bk0=$(ls "$H"/cca-backup-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+out=$(run TMPDIR="$un_cache" CCA_TTY="$(ans uninstall)" "$CCA" uninstall --no-backup 2>&1); rc=$?
+ok "uninstall --no-backup：不留备份，照样删掉 ~/.cca；~/.local/bin 空了：目录删掉，启动文件里 cca 加的那两行（连同前面的空行）去掉" '[ $rc -eq 0 ] && [ ! -e "$H/.cca" ] && [ "$(ls "$H"/cca-backup-*.tar.gz 2>/dev/null | wc -l | tr -d " ")" = "$un_bk0" ] && printf "%s" "$out" | grep -q "没有留配置备份（--no-backup）" && [ ! -e "$H/.local/bin" ] && [ "$(cat "$H/.zshrc")" = "export FOO=1" ]'
+[ -z "$un_cache" ] || rm -rf "$un_cache"
+# 11b 起各节（run 不带 TMPDIR）把装着的那一份的辅助程序解在了这个用户真的临时目录里：以前由上面那次还原删掉，现在缓存目录换成了
+# 单独的一个，这里照旧删掉这一份（只这个版本的，名字是它的 SHA-256）
+[ -z "$hs" ] || rm -f "$(getconf DARWIN_USER_TEMP_DIR)cca-helper/$hs"
 fi
 echo "---- $pass passed, $fail failed"

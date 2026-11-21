@@ -105,3 +105,4 @@
 - `mail.md` — 邮箱助手（`cca mail`）
 - `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面
 - `desktop.md` — 程序坞整理、Claude App 多开、启动器图标
+- `uninstall.md` — 卸载（`cca uninstall` / `cca restore`）：先后、`~/.cca` 以外要清掉的、不删的、测试里 `defaults` 和缓存目录的坑

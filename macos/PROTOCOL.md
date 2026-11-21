@@ -968,7 +968,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `mail`（`setup`、`open`、`forget`） | 账号页的「邮箱」一节（4.11；要 `hello.mail`，旧版 cca 没有入口） | 提问会话（`setup`）/ 无交互命令 |
 | `mail`（`status`、`test`） | 没有入口 | 终端里自己运行（诊断用） |
 | `@账号`、`router ssh` | 账号页「终端」 / 没有入口 | 终端（本身就是终端程序） |
-| `restore` | 没有入口 | 终端（要求 cca App 先退出） |
+| `uninstall`（`restore` 是同一条命令） | 没有入口 | 终端（要求 cca App 先退出） |
 
 ### 4.11 邮箱助手：账号页的「邮箱」一节
 
@@ -1095,7 +1095,7 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
 - `cca gui` 和重新打开时带 `--args --window`：App 平时在后台启动，只有这样启动才开主窗口。App 已经开着时 `open` 不传参数，App 收到“重新打开”，同样显示主窗口。
 - App 的「更新并重新打开」分两步：先照常运行 `cca gui update`（不带 `--relaunch`，等它结束，失败就显示原因、App 照常开着）；成功后
   （新版本已经下载好放着）再脱离 App 运行 `cca gui update --relaunch <自己的 pid>`（不设 CCA_EVENTS、不限时，输出接到文件），然后退出。
-- `cca gui remove`：删掉 App。
+- `cca gui remove`：删掉 App，连同它留在 `~/Library` 里的缓存、窗口状态和设置（`defaults delete` 之后把空的设置文件也删掉）。
 - 发布：每个版本的 GitHub Release 附带 `cca-app.zip` 和 `cca-app.zip.sig`（`ssh-keygen -Y sign`，命名空间 `cca-app`，和 cca 本身的签名
   `cca-release` 分开）；装在 `~/Applications/cca.app`（bundle id `local.cca.app`）。用 curl 下载、校验后解开，不经浏览器，所以没有隔离标记，
   Gatekeeper 不拦；自己用浏览器下载 zip 会被拦。

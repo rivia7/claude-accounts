@@ -6126,7 +6126,7 @@ cmd_gui() {   # cca gui [update [--relaunch PID] | remove]
 				okay "已删除 ${GUI_APP}"
 			fi
 			rm -rf "$GUI_DIR"
-			defaults delete "$GUI_ID" >/dev/null 2>&1
+			gui_leftovers   # App 的设置，连同它留在 ~/Library 里的缓存、窗口状态
 			return 0 ;;
 		-h|--help) say "用法: cca gui [update | remove]" ;;
 		*) die "用法: cca gui [update | remove]" ;;
@@ -7054,12 +7054,54 @@ path_hint() {   # ~/.local/bin 不在 PATH 里：征得同意后写进 shell 的
 	if grep -qs '\.local/bin' "$rc"; then
 		warn "${bin} 已经写在 ${rc} 里，只是当前终端还没生效：${again}再用 cca"
 	elif confirm "把 ${bin} 加进 PATH（写入 ${rc}），以后直接输入 cca 就能用？" y; then
-		printf '\n# cca（Claude Code 多账号）\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc" || return 1
+		printf '\n%s\n%s\n' "$PATH_MARK" "$PATH_LINE" >> "$rc" || return 1
 		info "已写入 ${rc}"
 		CCA_PATH_ADDED="$again"
 	else
 		warn "${bin} 不在 PATH 里：可以用 ${bin}/cca 运行，或者自己把它加进 PATH"
 	fi
+}
+# path_hint 写进启动文件的那两行（前面还有一个空行）。path_unhint 照这两行原样找：改了这里，以前写下的就认不出来了
+PATH_MARK='# cca（Claude Code 多账号）'
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+path_unhint() {   # 卸载时把 path_hint 写下的那两行（连同前面那个空行）去掉。只认一字不差、挨在一起的两行：用户改过的不动。
+	# ~/.local/bin 里还有别的命令时留着（claude、codex 的官方安装器也装在那：去掉了它们就不在 PATH 里了）；
+	# 启动文件是链接（dotfiles 管着的）时不改，说一声。四个文件都看：装的时候用的 shell 和现在的可能不一样
+	local bin="$HOME/.local/bin" rc tmp line n i hit from bad kept=""
+	local -a L
+	rmdir "$bin" 2>/dev/null   # 空了（只放过 cca、cxa、aga）就删掉；里面还有东西时删不掉，正好
+	[ -z "$(ls -A "$bin" 2>/dev/null)" ] || kept=1
+	for rc in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+		[ -f "$rc" ] || continue
+		L=(); n=0; hit=""
+		while IFS= read -r line || [ -n "$line" ]; do L[n]="$line"; n=$((n + 1)); done < "$rc"
+		i=0
+		while [ "$i" -lt $((n - 1)) ]; do
+			if [ "${L[i]}" = "$PATH_MARK" ] && [ "${L[i + 1]}" = "$PATH_LINE" ]; then hit=$i; break; fi
+			i=$((i + 1))
+		done
+		[ -n "$hit" ] || continue
+		if [ -n "$kept" ]; then info "${rc} 里把 ~/.local/bin 加进 PATH 的那两行留着：那个目录里还有别的命令。不要了自己删"; continue; fi
+		if [ -L "$rc" ]; then warn "${rc} 是个链接，没有改：里面 cca 加的那两行（「${PATH_MARK}」和它下面一行）自己删掉"; continue; fi
+		from=$hit
+		[ "$hit" -eq 0 ] || [ -n "${L[hit - 1]}" ] || from=$((hit - 1))
+		tmp="$rc.cca.$$"; bad=""   # 先拷一份（权限跟着），内容写好了再换上去：写到一半出错不会把原来的弄坏
+		cp -p "$rc" "$tmp" 2>/dev/null || bad=1
+		if [ -z "$bad" ]; then
+			i=0
+			while [ "$i" -lt "$n" ]; do
+				if [ "$i" -lt "$from" ] || [ "$i" -gt $((hit + 1)) ]; then printf '%s\n' "${L[i]}" || { bad=1; break; }; fi
+				i=$((i + 1))
+			done > "$tmp" || bad=1
+		fi
+		if [ -z "$bad" ] && mv -f "$tmp" "$rc"; then
+			info "已从 ${rc} 去掉 cca 加的那两行"
+		else
+			rm -f "$tmp"
+			warn "没能改 ${rc}：里面 cca 加的那两行（「${PATH_MARK}」和它下面一行）自己删掉"
+		fi
+	done
+	return 0
 }
 
 tool_alias_ensure() {   # tool_alias_ensure codex|agy [账号名] [quiet]：没有就建这个工具的简写 ~/.local/bin/cxa、aga（指向同目录 cca 的
@@ -7451,8 +7493,17 @@ cmd_install() {
 	else info "完成。以后输入 cca 启动 Claude Code（cca help 查看全部命令）"; fi
 }
 
-cmd_restore() {
-	local key bk out rc pid running="" wt="" t a mail_user
+cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的两个名字（确认时输入的就是用的那个名字）
+	local word="${1:-restore}" title="一键还原" backup=1 dkey="" key bk out rc pid running="" wt="" t a mail_user
+	[ $# -eq 0 ] || shift
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--no-backup) backup="" ;;
+			*) die "用法: cca uninstall [--no-backup]（cca restore 是同一条命令）" ;;
+		esac
+		shift
+	done
+	[ "$word" != uninstall ] || title="卸载 cca"
 	[ -d "$CCA_HOME" ] || { info "没有 ${CCA_HOME}，无需还原"; return 0; }
 	need_tty
 	for t in claude codex agy; do   # 账号的桌面 App 开着时删它的资料目录会出问题（agy 没有桌面 App）
@@ -7463,18 +7514,25 @@ cmd_restore() {
 			pid=$(tool app_pid "$ACC_DESKTOP_DIR"); rc=$?
 			[ "$rc" -le 1 ] || die "无法查询 ${APP_LABEL} 进程，已停止还原；请稍后重试"
 			[ -n "$pid" ] && running="${running:+${running}、}${ACC_NAME}（${APP_LABEL}）"
+			# 账号专属的 Chrome 也一样：它的资料目录在 ~/.cca 里，删掉以后它还接着往里写，~/.cca 又长出来
+			if [ -n "${ACC_CHROME_DIR:-}" ]; then
+				pid=$(chrome_pid); rc=$?
+				[ "$rc" -le 1 ] || die "无法查询 Chrome 进程，已停止还原；请稍后重试"
+				[ -z "$pid" ] || running="${running:+${running}、}${ACC_NAME}（浏览器窗口）"
+			fi
 			[ "$t" = codex ] && has_worktrees && wt="${wt:+${wt}、}${ACC_NAME}"
 		done < <(py keys)
 	done
 	use_tool claude
 	gui_ours "$GUI_APP" && gui_running && running="${running:+${running}、}cca 的界面 App"
-	[ -z "$running" ] || die "这些账号的桌面 App 还开着：${running}。先退出它们再还原"
+	[ -z "$running" ] || die "这些账号的桌面 App、浏览器窗口还开着：${running}。先退出它们再还原"
 	# 会话宿主里还开着的会话（docs/dev/remote.md）：删掉 ~/.cca 以后它们照样在跑，却再也接不上、列不出来
 	out=$(py remote-list --local 2>/dev/null)
 	[ -z "$out" ] || die "还有开着的远程会话，先把它们结束再还原（cca remote list 看是哪些，cca remote end 编号 结束，或者 cca remote attach 接进去退出）"
 	# 删 ~/.cca 之前要先打包备份（下面答应了的）：没有 tar 就什么都别动（有的 Linux 最小安装没有它）
-	command -v tar >/dev/null 2>&1 || die "这台机器上没有 tar，没法先打包备份配置，什么都没改：装上 tar 再还原$(pkg_hint tar)"
-	say "${C_B}一键还原${C_0}：撤销 cca 做过的全部改动"
+	[ -z "$backup" ] || command -v tar >/dev/null 2>&1 || die "这台机器上没有 tar，没法先打包备份配置，什么都没改：装上 tar 再还原$(pkg_hint tar)；不要备份的话用 cca uninstall --no-backup"
+	[ ! -f "$POLICY_DIR/id_ed25519" ] || dkey=1
+	say "${C_B}${title}${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude、Codex 和 Antigravity）：把会话里新产生的共享内容并回 ~/.claude、~/.codex、~/.gemini，然后退出登录、删除它的登录凭证"
 	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
 	mail_user=$(py mail-get-user 2>/dev/null)
@@ -7484,10 +7542,13 @@ cmd_restore() {
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 内置代理（用过的话）：停掉它的内核，删掉配置和拷来的节点"
 	if ! on_linux; then udp_env; udp_present && say "  · 本机 UDP 走节点：删掉 root 的系统服务 ${UDP_LABEL}（要输管理员密码）"; fi
-	say "  · 本机：先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除 ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
-	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据；安装前的备份在打包里）"
+	[ -z "$dkey" ] || say "  · 维护者共享用的 deploy key：本机这一把删掉（仓库上登记的那一把要请维护者撤掉）"
+	if [ -n "$backup" ]; then a="先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除"; else a="${C_Y}不留备份（--no-backup：账号表和配置删了找不回来）${C_0}，删除"; fi
+	say "  · 本机：${a} ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
+	say "  · cca 放在别处的也清掉：解出来的辅助程序和缓存$(on_linux || printf '、界面 App 的缓存和设置')、shell 启动文件里 cca 加的那两行（~/.local/bin 里还有别的命令时留着）"
+	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据${backup:+；安装前的备份在打包里}）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
-	[ "$(ask '确认请输入 restore: ' '')" = restore ] || { say "已取消"; return 0; }
+	[ "$(ask "确认请输入 ${word}: " '')" = "$word" ] || { say "已取消"; return 0; }
 	py unpark || warn "关掉共享时收起来的账号没能放回账号表：它们的登录凭证要自己删（cca policy on 打开共享加回来以后再还原）"
 	for t in claude codex agy; do
 		use_tool "$t"
@@ -7524,20 +7585,22 @@ cmd_restore() {
 	core_headless && core_boot off   # 开机起内核的那一行（Linux、macOS 26 以下才会加；上面关掉内置代理时已经删了，以前留下的也删）
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
 	py cost-stop 2>/dev/null       # 正在统计折合金额的后台进程也停掉
-	bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+	bk=""; [ -z "$backup" ] || bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"   # --no-backup：不打包，直接删
 	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点、维护者的参考节点，
 	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
 	# policy 的目录）；备份目录（backup/）是用户自己的配置文件，照样打包。登录凭证（Codex 的 auth.json、Linux 上
 	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）、
 	# 自己的同步服务器的加入信息（hub/hub.json：加入链接是凭证；hub-hosted.json：部署到托管平台时还没用上的口令和盐）和经它同步来的不打包
-	( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/custom-nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
+	[ -z "$bk" ] || ( umask 077; tar -czf "$bk" -C "$CCA_HOME" --exclude 'core/nodes.json' --exclude 'core/custom-nodes.json' --exclude 'core/config.yaml' --exclude 'core/mihomo-v*' --exclude 'core/dl.*' \
 		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' --exclude 'hub-hosted.json' \
 		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
 		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null )
 	# 看包能不能完整读出来，不看 tar 的退出码：GNU tar 遇到打包时正好被改了的文件也返回 1，包照样是好的；磁盘满了写到一半的包读不完
-	if [ -s "$bk" ] && tar -tzf "$bk" >/dev/null 2>&1; then
+	if [ -z "$bk" ]; then
+		info "没有留配置备份（--no-backup）"
+	elif [ -s "$bk" ] && tar -tzf "$bk" >/dev/null 2>&1; then
 		info "配置备份：$bk"
 	else   # 没打成：不删 ~/.cca，免得没备份就删了
 		rm -f "$bk"
@@ -7548,10 +7611,37 @@ cmd_restore() {
 		[ "$(readlink "$HOME/.local/bin/$a" 2>/dev/null)" = cca ] && rm -f "$HOME/.local/bin/$a"
 	done
 	case "$(readlink "$HOME/.local/bin/cca" 2>/dev/null)" in "$SELF"|"$CCA_HOME/bin/cca") rm -f "$HOME/.local/bin/cca" ;; esac
-	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; defaults delete "$GUI_ID" >/dev/null 2>&1; info "已删除界面 App ${GUI_APP}"; fi
+	if gui_ours "$GUI_APP"; then rm -rf "$GUI_APP"; info "已删除界面 App ${GUI_APP}"; fi
+	on_linux || gui_leftovers
 	rm -rf "${CCA_HOME:?}"
-	case "$HELPER" in "$CACHE_DIR/cca-helper/"*) rm -f "$HELPER"; rmdir "$CACHE_DIR/cca-helper" 2>/dev/null ;; esac   # 解出来的辅助程序（缓存目录里这个版本的那一份）
+	# 从这往下不能再调 py：解出来的辅助程序这就删掉，~/.cca 里的这一份 cca 也没有了（再解不出来）
+	cache_leftovers
+	path_unhint
+	[ -z "$dkey" ] || info "本机的 deploy key 删掉了：请维护者把仓库上登记的这一把也撤掉"
 	info "已还原。原来的 claude、codex、agy 命令和 ~/.claude、~/.codex、~/.gemini 不受影响"
+}
+
+gui_leftovers() {   # 界面 App 自己放在 ~/Library 和临时目录里的（内核日志、运行记录、窗口状态、设置）：按 bundle id 认，这些路径只有 cca App 用。
+	# App 删掉了它们还留着；cca restore、cca gui remove 都调。设置先 defaults delete（让系统的设置进程也忘掉），它会留下一个空文件，再删。
+	# 临时目录里 App 放事件文件的 cca-gui-events 不删：是个空目录，系统自己会清；还开着的另一份 App（开发时编的）正用着它
+	local p
+	for p in "Caches/$GUI_ID" "HTTPStorages/$GUI_ID" "HTTPStorages/$GUI_ID.binarycookies" "Saved Application State/$GUI_ID.savedState" "WebKit/$GUI_ID"; do
+		rm -rf "${HOME:?}/Library/$p"
+	done
+	defaults delete "$GUI_ID" >/dev/null 2>&1
+	rm -f "$HOME/Library/Preferences/$GUI_ID.plist"
+	return 0
+}
+
+cache_leftovers() {   # cca 放在缓存目录里的（不在 ~/.cca 里，删了 ~/.cca 它们还在）：解出来的辅助程序（各个版本的都在 cca-helper 里）、程序坞整理的
+	# 排队记录、内置代理控制接口的 socket，还有 3.5.0 以前的版本留下的 Python 字节码缓存（cca-py）。这几个名字只有 cca 用。
+	# 仓库里的 cca 用的辅助程序在 cli/target 下，不在缓存目录里：那时不动 cca-helper
+	local d
+	case "$HELPER" in "${CACHE_DIR:?}/cca-helper/"*) rm -rf "$CACHE_DIR/cca-helper" ;; esac
+	[ -z "$DOCK_DIR" ] || rm -rf "$DOCK_DIR"
+	for d in "$CACHE_DIR" "${XDG_RUNTIME_DIR:-}"; do [ -z "$d" ] || rm -rf "${d%/}/cca-py"; done
+	rm -f "$(core_sock)"
+	return 0
 }
 
 usage() {   # Linux（服务器）上不列只在 macOS 上的命令（网页版、桌面 App、图形界面），几处说法按平台换
@@ -7762,7 +7852,9 @@ EOF
   cca remote pair | join    两台机器配对：要被接入的那台 pair（显示配对码），另一台 join（输入）。之后 join 的那台能经
                              维护者的服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
-  cca restore                一键还原 cca 的全部改动
+  cca uninstall [--no-backup]
+                             完全卸载：撤销 cca 做过的全部改动（账号退出登录、路由器和内置代理还原），删掉 cca 自己和它放在
+                             别处的缓存、设置。先把配置打包备份到主目录（--no-backup 不留）。cca restore 是同一条命令
   配置 ${CFG}：nodes（可选节点）、min_trust（纯净度低于它要确认，默认 50）、
                              claude_add_dir（设成 false：cca 启动的 Claude Code 不再能直接读写账号自己在 ~/.cca/accounts 里的目录，
                              和它链到 ~/.claude 里共享的目录）、
@@ -7819,7 +7911,7 @@ main() {
 		remote) shift; cmd_remote "$@" ;;   # 远程会话：开关、这台机器上可以接入的会话、接入（和工具无关；不经过自动更新、映射拉取）
 		hub) shift; cmd_hub "$@" ;;   # 自己的同步服务器（和工具无关；不经过自动更新、映射拉取）
 		update) shift; cmd_update "$@" ;;
-		restore) cmd_restore ;;
+		restore|uninstall) cmd_restore "$@" ;;   # 同一条命令的两个名字
 		*)
 			if [ ! -f "$CFG" ]; then
 				interactive || die "还没安装：请在终端里运行 $SELF install"

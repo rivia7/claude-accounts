@@ -746,6 +746,14 @@ elif cmd == 'add':
     d.setdefault('recent-apps', []).append(tile(sys.argv[3], sys.argv[3] + '-back'))
     save(d)
 S
+# defaults：真的不看 HOME（经系统的设置进程读写这个用户真的 ~/Library/Preferences），cca gui remove、cca restore 里的
+# defaults delete local.cca.app 会把这台 Mac 上真的 cca App 的设置删掉。换成只记一笔的（$T/defaults.log），读什么都说没有
+cat > "$T/bin/defaults" <<'S'
+#!/bin/bash
+printf '%s\n' "$*" >> "$CCA_T/defaults.log"
+case "${1:-}" in read|read-type|export|find) exit 1 ;; esac
+exit 0
+S
 cat > "$T/bin/pgrep" <<'S'
 #!/bin/bash
 if [ "$#" -eq 2 ] && [ "$1" = -f ]; then
