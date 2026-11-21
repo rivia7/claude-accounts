@@ -525,7 +525,7 @@ fi
 chown -R 10001:10001 "$D/certs" "$D/data"   # 容器里用 10001 运行（compose.yaml 的 user）
 chmod 700 "$D/certs" "$D/data"; chmod 600 "$D/certs/key.pem"; chmod 644 "$D/certs/cert.pem"; chmod 755 "$D" "$D/app" "$D/config"
 cd "$D"
-# 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub）。不改 Docker 的全局配置
+# 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub；server/hub-install.sh 的 IMAGES 是同一份）。不改 Docker 的全局配置
 img=""
 for i in $(sed -n 's/^CCA_PRESENCE_IMAGE=//p' .env 2>/dev/null) public.ecr.aws/docker/library/python:3.13-slim \
 	mirror.ccs.tencentyun.com/library/python:3.13-slim docker.m.daocloud.io/library/python:3.13-slim python:3.13-slim; do

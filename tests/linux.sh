@@ -15,6 +15,7 @@
 #     维护者加上公钥后再运行：拉到映射、导入映射指定的节点、照映射加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
+#   自己的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py：这个发行版的 sh、openssl、python3，假的 systemctl、docker 起真的服务端）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
 # 辅助程序（cli/ 的 Rust 程序）用静态链接的那一份：cli/target/<x86_64|aarch64>-unknown-linux-musl/release/cca-core。--docker 时在宿主机上
 # 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
@@ -965,6 +966,15 @@ elif [ ! -x "$D/mihomo" ]; then
 	no "在家走路由器：没有内核文件（内置代理那一步没下载成？）"
 else
 	router_test
+fi
+# 自己的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py）：这个发行版的 sh、openssl、python3、coreutils / busybox，
+# 假的 systemctl、docker 起真的服务端（设备的密钥要 ssh-keygen）
+if ! command -v openssl >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
+	echo "  （跳过自己的同步服务器的安装脚本：要 openssl、ssh-keygen）"
+elif CCA_HELPER="$HB" python3 "$R/tests/hub_deploy.py" > "$D/hub_deploy.log" 2>&1; then
+	ok "自己的同步服务器的安装脚本：在这个发行版的 sh（$(readlink -f /bin/sh 2>/dev/null || echo /bin/sh)）上装好、更新、换链接、卸载，经 SSH 部署、设备加入"
+else
+	no "自己的同步服务器的安装脚本：$(grep -E '^(FAIL|ERROR|AssertionError|[A-Za-z]+Error)' "$D/hub_deploy.log" | head -n 6 | tr '\n' ' ')"
 fi
 echo "  结果：$pass 通过，$fail 失败"
 [ $fail -eq 0 ]

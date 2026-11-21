@@ -10,7 +10,8 @@
 //! 入伙口令（admit）和盐。它是凭证：只经 stdin、提问会话传，不进命令行和环境变量。服务器只存口令的 SHA-256 和盐的校验值（`hub_check`，
 //! 第一台设备加入时登记：拿着另一份盐的设备加入不了，免得同一台服务器上的设备互相解不开）。
 //!
-//! 子命令：hub-join（链接从 stdin 读）、hub-status、hub-devices、hub-remove、hub-leave、hub-invite（bash 的 `cca hub` 调它们）。
+//! 子命令：hub-join（链接从 stdin 读）、hub-status、hub-devices、hub-remove、hub-leave、hub-invite，一键部署的 hub-installer、hub-deploy
+//! 在 hub/deploy.rs（bash 的 `cca hub` 调它们）。
 
 use super::cost::{cost_json, cost_kick_now, COST_DIR};
 use super::keyshare::{is_num, keyshare_kick};
@@ -35,8 +36,12 @@ use crate::{dict, out};
 use std::os::unix::fs::MetadataExt;
 use std::sync::LazyLock;
 
+mod deploy;
+
 /// 这个模块的子命令
 pub const CMDS: &[Cmd] = &[
+    Cmd::all("hub-installer", deploy::cmd_hub_installer),
+    Cmd::all("hub-deploy", deploy::cmd_hub_deploy),
     Cmd::all("hub-join", cmd_hub_join),
     Cmd::all("hub-status", cmd_hub_status),
     Cmd::all("hub-devices", cmd_hub_devices),
@@ -292,10 +297,11 @@ pub fn host_of(url: &str) -> String {
     url.split_once("://").map_or(url, |x| x.1).trim_end_matches('/').to_string()
 }
 
-/// 设备的名字：1～64 个字符，没有控制字符，前后没有空白（服务器也这么查）
+/// 设备的名字：1～64 个字符，没有控制字符，前后没有空白（服务器也这么查）；不合格时说 NAME_BAD
 fn name_ok(n: &str) -> bool {
     !n.is_empty() && n.trim() == n && text::len(n) <= 64 && !n.chars().any(|c| c.is_control())
 }
+const NAME_BAD: &str = "设备的名字要 1～64 个字符，不能有控制字符";
 
 /// 这台机器的 device_id（config.json；折合金额的密文里写着它，同一台机器在两台服务器上算一台设备）：没有就生成、写回去（拿着 Lock）
 pub fn ensure_device_id() -> R<String> {
@@ -463,6 +469,17 @@ fn fault(cfg: &Dict, code: i64, j: &Dict) -> R<(&'static str, String)> {
     Ok((c, why))
 }
 
+/// 加入成了：服务器上这台设备的名字、地址:端口、现在几台设备（服务器没说是 None）、这台设备关掉了同步时的原因（没关是空的）
+struct Joined {
+    name: String,
+    host: String,
+    members: Option<i64>,
+    off: String,
+}
+
+/// 没成：(原因码, 给人看的原因)；原因码见 cmd_hub_join
+type JoinFail = (&'static str, String);
+
 /// py hub-join [--name 名字]：加入自己的同步服务器。加入链接从 stdin 读（它是凭证：不进命令行）；已经加入了同一台（同一个地址、
 /// 同一份盐）是重新加入（服务器丢了记录、换名字时用）。成了：stdout 一行一项：服务器上这台设备的名字、地址:端口、现在有几台设备
 /// （服务器没说是空行）、这台设备关掉了同步时的原因（没关是空行），退出码 0，接着在后台上报、同步一次；没成见 fail（原因码：link
@@ -475,43 +492,57 @@ pub fn cmd_hub_join(args: &[String]) -> R<()> {
         _ => return Err(Fail::Die("用法: py hub-join [--name 名字]（加入链接从 stdin 读）".into())),
     };
     if name.as_deref().is_some_and(|n| !name_ok(n)) {
-        return fail("name", "设备的名字要 1～64 个字符，不能有控制字符");
+        return fail("name", NAME_BAD);
     }
     let link = match link_decode(&read_stdin_text()) {
         Ok(l) => l,
         Err(why) => return fail("link", &why),
     };
+    match join_with(&link, name)? {
+        Ok(j) => {
+            let members = j.members.map_or(String::new(), |m| m.to_string());
+            out!("{}\n{}\n{members}\n{}", j.name, j.host, j.off);
+            Ok(())
+        }
+        Err((code, why)) => fail(code, &why),
+    }
+}
+
+/// 拿着加入链接加入（cmd_hub_join、一键部署共用）：成了写 hub.json、members.json、device_id，在后台上报、同步一次
+fn join_with(link: &Link, name: Option<String>) -> R<Result<Joined, JoinFail>> {
     let check = hub_check(&link.salt);
     let old = hub_doc();
     if let Some(o) = &old {
         if !(o.at("url").py_str() == link.url && hub_check(&o.at("salt").py_str()) == check) {
             let host = host_of(&o.at("url").py_str());
-            return fail("other", &format!("这台设备已经加入了 {host} 上的同步服务器：要换一台，先运行 cca hub leave"));
+            return Ok(Err(("other", format!("这台设备已经加入了 {host} 上的同步服务器：要换一台，先运行 cca hub leave"))));
         }
     }
     if old.is_none() {
         own_forget()?; // 以前加入过、退出时没删干净的（密钥、同步来的）不带到这一台上
     }
     let name = name.or_else(|| old.as_ref().and_then(|o| o.str("name")).map(|n| n.to_string())).unwrap_or_else(host_name);
-    let posted = join_post(&link, &name, &check);
-    if old.is_none() && !matches!(posted, Ok((200, _, _))) {
+    let posted = join_post(link, &name, &check);
+    if old.is_none() && !matches!(posted, Ok(Ok((200, _, _)))) {
         own_forget()?; // 第一次加入没成：刚生成的密钥也不留
     }
-    let (code, j, cfg) = posted?;
+    let (code, j, cfg) = match posted? {
+        Ok(p) => p,
+        Err(f) => return Ok(Err(f)),
+    };
     if code != 200 {
         let err = j.str("error").map(|e| e.to_string()).unwrap_or_default();
-        return match (code, err.as_str()) {
-            (403, _) => fail("denied", "服务器不认这个加入链接（入伙口令不对：链接是旧的，或者不是这台服务器的）：向已经加入的设备要一个新的"),
-            (409, "salt_mismatch") => fail(
+        let f: JoinFail = match (code, err.as_str()) {
+            (403, _) => ("denied", "服务器不认这个加入链接（入伙口令不对：链接是旧的，或者不是这台服务器的）：向已经加入的设备要一个新的".into()),
+            (409, "salt_mismatch") => (
                 "salt",
-                "这个加入链接和服务器上已经加入的设备用的不是同一份（服务器重新部署过？）：向已经加入的设备要它的加入链接（cca hub invite）",
+                "这个加入链接和服务器上已经加入的设备用的不是同一份（服务器重新部署过？）：向已经加入的设备要它的加入链接（cca hub invite）"
+                    .into(),
             ),
-            (507, _) => fail("full", "服务器上的设备已经满了（最多 64 台）：先在别的设备上移除不用的（cca hub remove）"),
-            _ => {
-                let (c, why) = fault(&cfg, code, &j)?;
-                fail(c, &why)
-            }
+            (507, _) => ("full", "服务器上的设备已经满了（最多 64 台）：先在别的设备上移除不用的（cca hub remove）".into()),
+            _ => fault(&cfg, code, &j)?,
         };
+        return Ok(Err(f));
     }
     let got = j.str("name").filter(|n| name_ok(n)).map(|n| n.to_string()).unwrap_or(name);
     let members = j.get("members").and_then(|m| m.as_int()).filter(|m| *m > 0);
@@ -527,26 +558,24 @@ pub fn cmd_hub_join(args: &[String]) -> R<()> {
     agent_kick();
     keyshare_kick(true);
     cost_kick_now();
-    let members = members.map_or(String::new(), |m| m.to_string());
-    out!("{got}\n{}\n{members}\n{}", host_of(&link.url), presence_off_reason().unwrap_or_default());
-    Ok(())
+    Ok(Ok(Joined { name: got, host: host_of(&link.url), members, off: presence_off_reason().unwrap_or_default() }))
 }
 
-/// 签好名去加入：(状态码, 服务器回的, 这台设备在它上面的配置)。没有密钥就先生成一把（目录 700）；生成不了是 fail 的 sign
-fn join_post(link: &Link, name: &str, check: &str) -> R<(i64, Dict, Dict)> {
+/// 签好名去加入：(状态码, 服务器回的, 这台设备在它上面的配置)。没有密钥就先生成一把（目录 700）；生成不了是 sign
+fn join_post(link: &Link, name: &str, check: &str) -> R<Result<(i64, Dict, Dict), JoinFail>> {
     fs::makedirs_mode(&HUB_DIR, 0o700)?;
     let kp = hub_path("id_ed25519");
     if key_at(&kp)?.is_none() {
         hub_keygen(&kp)?;
     }
     let Some((key, fp)) = key_at(&kp)? else {
-        return fail("sign", "生成不了这台设备的密钥（ssh-keygen）");
+        return Ok(Err(("sign", "生成不了这台设备的密钥（ssh-keygen）".into())));
     };
     let pubkey = text::split_ws(&crate::py::fs::read_text(&format!("{kp}.pub"))?).into_iter().take(2).collect::<Vec<_>>().join(" ");
     let cfg = own_cfg_of(link, key, fp);
     let payload = dict! { "pub" => pubkey, "name" => name, "admit" => link.admit.as_str(), "check" => check };
     let (code, j) = presence_post(&cfg, "join", &payload, 15)?;
-    Ok((code, j, cfg))
+    Ok(Ok((code, j, cfg)))
 }
 
 /// 经自己的服务器同步的账号有几个

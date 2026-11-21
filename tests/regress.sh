@@ -160,6 +160,7 @@ ok "运行记录：进程复用、代理漂移与目录链接检查" 'python3 "$
 ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "$D/isolation_apps.py"'
 ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'python3 "$D/client_updates.py"'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
+ok "自己的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd）、打出加入链接（口令、盐不落盘）、更新、换链接、卸载，没装完时 .env 换回原来的，别人的目录不碰；cca hub deploy 经 SSH 部署、加入、更新，有设备加入过的不动，加入了的设备不碰别的服务器，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
@@ -2380,8 +2381,9 @@ if sect 11; then
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
 lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
-	# 查发出去的 bash：cca、install.sh、release.sh、policy.sh、macos 下的脚本，还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
-	python3 -I - "$D/.." "$CCA" install.sh release.sh policy.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
+	# 查发出去的 bash：cca、install.sh、release.sh、policy.sh、自己的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
+	# 还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
+	python3 -I - "$D/.." "$CCA" install.sh release.sh policy.sh server/hub-install.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
 import glob, os, re, sys
 root, files = sys.argv[1], []
 for a in sys.argv[2:]:
@@ -2400,7 +2402,7 @@ print('ok' if not bad else '：' + '、'.join(bad))
 PY
 }
 ld=$(lint_dollar)
-ok "lint：cca、install.sh、release.sh、policy.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
+ok "lint：cca、install.sh、release.sh、policy.sh、server/hub-install.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
 lint_helper_env() {   # 回归里自己拼环境运行 cca 的地方（不经 run 的那几处）都要带着 CCA_HELPER="$HELPERWRAP"：不带的话那一处用的是
 	# 仓库里 cli/target/release 下的那一份，release.sh 跑回归时（CCA_HELPER 指着要发布的那一份）它可能是以前编的、甚至没有。
 	# 运行 policy.sh 的那一处不算（它不运行 cca）
@@ -3646,6 +3648,40 @@ out=$(sess "{\"hub.join\":[{\"v\":\"$HLINK\"}]}" -- cca hub join 2>&1); rc=$?; c
 ok "界面 App 里加入（提问会话）：一个密文输入框，贴加入链接；result 事件 hub_joined；事件文件里没有加入链接" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.join" ] && evq "e.get(\"q\") == \"hub.join\" and [f[\"kind\"] for f in e[\"fields\"]] == [\"secret\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_joined\"" && ! grep -qF -e "$HCHUNK" -e "$HADMIT" "$T/ev.jsonl" && [ -e "$H/.cca/hub/hub.json" ] && ! grep -qsF -e "$HCHUNK" -e "$HADMIT" "$T/curl.argv" "$T/env.log" "$T/ssh.log"'
 rm -rf "$H/.cca/hub" "$H/.cca/presence"/own.* "$H/.cca/cost"/own.*
 kill "$HVP" 2>/dev/null; wait "$HVP" 2>/dev/null; HVP=""
+# 一键部署（docs/dev/hub.md「部署」）：cca hub deploy 经假 ssh 装到 hubbox（tests/hub_box.py 建的假服务器：目录当根，假 systemctl
+# 起真的 server/cca-presence.py），这台 Mac 跟着加入。Docker、拉不到镜像、有设备加入过、连不上、证书换了这些细的在 tests/hub_deploy.py
+python3 "$D/hub_box.py" "$T/hubbox"
+HB="$T/hubbox/root/opt/cca-hub"; HBPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+hbj() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$H/.cca/hub/hub.json" "$1" 2>/dev/null; }   # 加入信息里的一项
+hbsum() { printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; }
+out=$(run cca hub deploy --script 2>/dev/null); rc=$?
+HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$(printf '%s\n' "$out" | head -n 1)
+HBSRV=$(printf '%s\n' "$out" | sed -n "/^	cat <<'CCA_HUB_SERVER_PY_EOF'\$/,/^CCA_HUB_SERVER_PY_EOF\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1)
+ok "cca hub deploy --script：打出安装脚本（带着这一版的版本号和原样的服务端程序，sh -n 过得去；不带 hub-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && printf "%s\n" "$out" | /bin/dash -n && [ "$HBSRV" = "$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d" " -f1)" ] && ! printf "%s" "$out" | grep -q "CCA_HUB_MANAGED=1"'
+out=$(runev cca hub deploy 2>&1); rc=$?
+ok "cca hub deploy 没写服务器：说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法: cca hub deploy \[用户@\]主机"'
+: > "$T/ssh.log"
+out=$(runev cca hub deploy root@hubbox --reset 2>&1); rc=$?
+ok "界面 App 里从头部署：先发同意事件（范围是 SSH 的目标，默认不同意，说明里说每台设备都要重新加入），不连服务器" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_reset\" and e[\"scope\"] == \"root@hubbox\" and e[\"default\"] == \"no\" and \"每台设备都要重新加入\" in e[\"detail\"]" && [ ! -e "$HB" ] && ! grep -q hubbox "$T/ssh.log"'
+: > "$T/curl.argv"; : > "$T/env.log"
+out=$(runev cca hub deploy root@hubbox --port "$HBPORT" --name 机房的服务器 2>&1); rc=$?
+HBADMIT=$(hbj admit); HBSALT=$(hbj salt)
+ok "cca hub deploy：经 SSH 装好（systemd + python3）、这台 Mac 跟着加入（result 事件 hub_deployed）；服务器上只有入伙口令的哈希；口令、盐不在 ssh、curl、子进程的命令行和环境里，也不在事件里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署自己的同步服务器到 root@hubbox（/opt/cca-hub，systemd + python3，端口 ${HBPORT}），这台设备加入了：它叫 机房的服务器，服务器上现在有 1 台设备" && printf "%s" "$out" | grep -q "127.0.0.1 是内网地址" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\" and \"127.0.0.1:$HBPORT\" in e[\"message\"]" && [ ${#HBADMIT} -eq 32 ] && [ ${#HBSALT} -eq 32 ] && grep -qx "CCA_HUB_ADMIT_HASH=$(hbsum "$HBADMIT")" "$HB/.env" && ! grep -rqsF -e "$HBADMIT" -e "$HBSALT" "$T/hubbox/root" "$T/ssh.log" "$T/curl.argv" "$T/env.log" "$T/ev.jsonl" && [ "$(stat -f %Lp "$H/.cca/hub/hub.json")" = 600 ]'
+out=$(runev cca hub deploy root@hubbox 2>&1); rc=$?
+ok "再部署（这台已经加入了）：只更新，加入链接、数据不变，照旧加入着（result 事件说已更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上自己的同步服务器（/opt/cca-hub，systemd + python3，端口 ${HBPORT}）" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\" and e[\"message\"].startswith(\"已更新\")" && [ "$(hbj admit)" = "$HBADMIT" ] && run cca hub devices --json 2>/dev/null | jok "[x[\"name\"] for x in d[\"devices\"]] == [\"机房的服务器\"]"'
+: > "$T/ssh.log"
+out=$(runev cca hub deploy root@hubbox --port abc 2>&1); rc=$?
+evq 'e["ev"] == "fail" and e["code"] == "hub_usage"'; e1=$?
+out2=$(runev cca hub deploy root@hubbox --bogus 2>&1); rc2=$?
+ok "参数不对（端口写错了辅助程序先查，不认得的选项 bash 自己查）：不连服务器，fail 事件 hub_usage" '[ $rc -ne 0 ] && [ $e1 -eq 0 ] && [ $rc2 -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_usage\"" && printf "%s" "$out" | grep -q -- "--port 要是 1024～65535" && printf "%s" "$out2" | grep -q "用法: cca hub deploy" && ! grep -q hubbox "$T/ssh.log"'
+touch "$T/hubbox/ssh_denied"; out=$(runev cca hub deploy root@hubbox 2>&1); rc=$?; rm -f "$T/hubbox/ssh_denied"
+ok "SSH 登录不了：fail 事件 hub_ssh" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_ssh\" and \"SSH 连不上 root@hubbox\" in e[\"message\"]"'
+out=$(runev CCA_GRANT=hub_reset:root@hubbox cca hub deploy root@hubbox --reset 2>&1); rc=$?
+ok "同意后从头部署：服务器换了入伙口令、忘掉了以前的设备，这台 Mac 用新的重新加入（服务器上 1 台设备）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\"" && [ "$(hbj admit)" != "$HBADMIT" ] && grep -qx "CCA_HUB_ADMIT_HASH=$(hbsum "$(hbj admit)")" "$HB/.env" && printf "%s" "$out" | grep -q "服务器上现在有 1 台设备"'
+run CCA_GRANT=hub_leave:all cca hub leave >/dev/null 2>&1 </dev/null
+out=$(run cca hub deploy --script 2>/dev/null | run ssh root@hubbox sh -s -- --uninstall 2>&1); rc=$?
+ok "照文档卸载（cca hub deploy --script | ssh 服务器 sh -s -- --uninstall）：停掉服务、删掉程序和数据" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "卸载了自己的同步服务器" && [ ! -e "$HB" ] && [ ! -e "$T/hubbox/server.pid" ] && [ ! -e "$H/.cca/hub" ]'
+rm -rf "$H/.cca/hub" "$H/.cca/presence"/own.* "$H/.cca/cost"/own.*
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json、自己的同步服务器和配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
 fi

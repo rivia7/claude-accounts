@@ -322,13 +322,15 @@ struct ResultCode: KnownValues {
     static let policyOn = ResultCode(rawValue: "policy_on")
     /// 共享关着：`cca policy off` 关掉了（本来就关着也是它），或者 `policy on` 里选了「不打开共享」。
     static let policyOff = ResultCode(rawValue: "policy_off")
-    /// 自己的同步服务器（PROTOCOL 4.13）：加入了（`cca hub join`）/ 移除了别的设备（`hub remove`）/ 退出了（`hub leave`，或者移除的是这台设备自己）
+    /// 自己的同步服务器（PROTOCOL 4.13）：加入了（`cca hub join`）/ 移除了别的设备（`hub remove`）/ 退出了（`hub leave`，或者移除的是这台设备自己）/
+    /// 在自己的服务器上部署好、更新了，这台设备跟着加入了（`hub deploy`）
     static let hubJoined = ResultCode(rawValue: "hub_joined")
     static let hubRemoved = ResultCode(rawValue: "hub_removed")
     static let hubLeft = ResultCode(rawValue: "hub_left")
+    static let hubDeployed = ResultCode(rawValue: "hub_deployed")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft]
+                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed]
 }
 
 struct FailCode: KnownValues {
@@ -408,6 +410,19 @@ struct FailCode: KnownValues {
     static let hubSign = FailCode(rawValue: "hub_sign")
     static let hubServer = FailCode(rawValue: "hub_server")
     static let hubName = FailCode(rawValue: "hub_name")
+    /// 部署（`cca hub deploy`）没成：参数、SSH、不是 root、缺东西、拉不到镜像、端口、服务器上已经有别的、不是这一台、换了地址、认不出地址、没装完、起不来
+    static let hubUsage = FailCode(rawValue: "hub_usage")
+    static let hubSSH = FailCode(rawValue: "hub_ssh")
+    static let hubRoot = FailCode(rawValue: "hub_root")
+    static let hubDeps = FailCode(rawValue: "hub_deps")
+    static let hubImage = FailCode(rawValue: "hub_image")
+    static let hubPort = FailCode(rawValue: "hub_port")
+    static let hubTaken = FailCode(rawValue: "hub_taken")
+    static let hubNotThis = FailCode(rawValue: "hub_not_this")
+    static let hubMoved = FailCode(rawValue: "hub_moved")
+    static let hubHost = FailCode(rawValue: "hub_host")
+    static let hubInstall = FailCode(rawValue: "hub_install")
+    static let hubStart = FailCode(rawValue: "hub_start")
     /// 自己的同步服务器的失败原因（`hub_` 开头的都是，认不认识都算：App 照 message 说）
     var isHub: Bool { rawValue.hasPrefix("hub_") }
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
@@ -418,7 +433,9 @@ struct FailCode: KnownValues {
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
                                        .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy,
                                        .hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt, .hubOther, .hubFull,
-                                       .hubOld, .hubPin, .hubUnreachable, .hubClock, .hubBusy, .hubSign, .hubServer, .hubName]
+                                       .hubOld, .hubPin, .hubUnreachable, .hubClock, .hubBusy, .hubSign, .hubServer, .hubName,
+                                       .hubUsage, .hubSSH, .hubRoot, .hubDeps, .hubImage, .hubPort, .hubTaken, .hubNotThis, .hubMoved,
+                                       .hubHost, .hubInstall, .hubStart]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -462,9 +479,11 @@ struct ConsentItem: KnownValues {
     static let hubRemove = ConsentItem(rawValue: "hub_remove")
     /// `cca hub leave`：退出自己的同步服务器（范围 `all`，默认不同意）。
     static let hubLeave = ConsentItem(rawValue: "hub_leave")
+    /// `cca hub deploy <目标> --reset`：从头部署自己的同步服务器，换一个新的加入链接（范围是 SSH 的目标，原样，默认不同意）。
+    static let hubReset = ConsentItem(rawValue: "hub_reset")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff,
-                                          .hubRemove, .hubLeave]
+                                          .hubRemove, .hubLeave, .hubReset]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

@@ -240,6 +240,13 @@ while [ $i -lt $n ]; do
 done
 dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
+# 自己的同步服务器的一键部署（11b3c）：hubbox 是 tests/hub_box.py 建的假服务器（$CCA_T/hubbox：目录当根，假 systemctl
+# 起真的 server/cca-presence.py），命令交给它的 enter（stdin 是安装脚本；$CCA_T/hubbox/ssh_denied 时登录不了）。-G 说它在 127.0.0.1
+case "$dest" in
+	hubbox|*@hubbox)
+		case " ${args[*]} " in *" -G "*) printf 'user root\nhostname 127.0.0.1\nport 22\n'; exit 0 ;; esac
+		exec "$CCA_T/hubbox/enter" "$cmd" ;;
+esac
 # 出门在外（$CCA_T/away）：连不上路由器（$CCA_T/vpn 时经 ZeroTier、VPN 连得上）
 [ -f "$CCA_T/away" ] && [ ! -f "$CCA_T/vpn" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }
 # 路由器上还没装公钥（$CCA_T/router_needs_password 里是密码）：密钥登录被拒；提问会话的密码登录像真的 ssh 一样经 SSH_ASKPASS 取密码，

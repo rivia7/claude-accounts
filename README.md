@@ -279,6 +279,15 @@ cca 先用内置代理的内核校验一下（不联网），存成自定义节�
 
 维护者这边：把你自己的 Clash 配置复制成映射仓库目录里的 `custom.yaml`，照常运行 `./policy.sh 映射仓库的目录`。它从里面抽出策略组 `OpenAi`（别的组名用 `CCA_FILL_GROUP=组名 ./policy.sh …`）引用的节点（组里的策略组、内置出站不算；规则、别的节点都不带），写成 `nodes.json`，签名后一起推上去。`custom.yaml` 本身不提交（里面有你全部的规则和局域网设备；已经提交过的会拒绝发布），也会加进这个仓库的 `.git/info/exclude`。想先看看会发布哪些：`./policy.sh nodes custom.yaml`。不再发布：删掉目录里的 `custom.yaml` 和 `nodes.json`，再运行一次。
 
+## 自己的同步服务器（可选）
+
+维护者共享以外的账号（你自己的官方账号）默认只在这台设备上统计。有一台自己的 Linux 服务器（小的云服务器就行）时，可以在上面部署一个同步服务器，你的几台设备加入它以后：账号页的「设备」一节列出这个账号在哪些设备上用着，记下的 API key 在你的设备之间同步，折合金额是各台设备加起来的（也能按设备看）。内容在设备上加密，服务器上没有邮箱、登录身份、key 和金额；维护者共享的账号照旧只走维护者的服务器。
+
+- **部署**：在装了 cca 的电脑上运行 `cca hub deploy root@服务器`。它经 SSH 装好（服务器上有 Docker（带 compose 插件）就用 Docker，没有、起不来就用 systemd 和系统的 python3），这台电脑跟着加入。SSH 要能用密钥登录，用户是 root 或者能免密码 sudo；云服务商的安全组里放行 TCP 18445（`--port` 换一个）。再运行一次是更新。不方便从电脑上部署时，在服务器上运行 `curl -fsSLO https://github.com/rivia7/claude-accounts/releases/latest/download/cca-hub-install.sh && sudo sh cca-hub-install.sh`，它最后打出一行加入链接（只显示这一次）。
+- **别的设备加入**：在已经加入的设备上 `cca hub invite` 显示加入链接，在要加入的设备上 `cca hub join`，贴进去。加入链接是凭证，谁拿到它都能加入：只发给自己的设备。
+- **管理**：`cca hub` 看现在的样子，`cca hub devices` 列出加入了的设备，`cca hub remove 设备` 移除一台（它现在的密钥作废），`cca hub leave` 让这台设备退出。设备丢了、链接泄露了：`cca hub deploy root@服务器 --reset` 换一个加入链接（服务器忘掉所有设备，每台都要重新加入）。卸载：`cca hub deploy --script | ssh root@服务器 sh -s -- --uninstall`。
+- 服务器上装了什么、请求的格式见 [server/README.md](server/README.md)「自己的同步服务器」。
+
 ## 查看用量
 
 ```sh

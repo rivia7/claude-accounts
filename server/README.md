@@ -97,6 +97,30 @@ get 回各台设备的 `{fp, name, me, revoked, tag, age, blob}`（have 里认�
 以前的设备、上报的记录、存的密文都删掉（新的盐算出来的摘要和密钥都不一样，旧的谁也用不上）。状态文件里多一项
 `"own": {"seed": 启动时给的哈希, "admit": 现在认的哈希, "check": 登记的校验值 | null}`，`machines` 的每一台多一项 `joined`（加入的时间）。
 
+### 部署
+
+一台 Linux 服务器（很小的就够：只用 Python 标准库，内存限在 256 MB）上，要 openssl，还要 Docker（带 compose 插件：`docker compose`；
+老的 `docker-compose` 1.x 不用）或者 systemd + python3（3.6 起）：
+
+- 从装了 cca 的电脑上：`cca hub deploy root@服务器`（`-p` SSH 端口、`-i` 私钥、`--port` 服务的端口（默认 18445）、`--host` 各台设备连的地址
+  （默认是 SSH 连的那台）、`--docker` / `--systemd`、`--dir` 装在哪、`--name` 这台电脑在服务器上叫什么）。经 SSH 装好，这台电脑跟着加入；入伙口令
+  和盐在电脑上生成，服务器只拿到口令的 SHA-256。别的设备上 `cca hub join`，贴这台电脑上 `cca hub invite` 显示的加入链接。SSH 要能用密钥登录，
+  用户是 root 或者能免密码 sudo。再运行是更新（数据、证书、加入链接都不变）；`--reset` 换一个加入链接：服务器忘掉所有设备，每台都要重新加入。
+- 直接在服务器上：`curl -fsSLO https://github.com/rivia7/claude-accounts/releases/latest/download/cca-hub-install.sh && sudo sh cca-hub-install.sh`
+  （或者在电脑上 `cca hub deploy --script > cca-hub-install.sh` 拷过去：那一份是本机验过签名的 cca 生成的）。最后打出加入链接，只显示这一次
+  （服务器上只存入伙口令的哈希，盐不落盘），在每台设备上 `cca hub join` 贴它；认不出公网地址时加 `--host 公网IP或域名`。再运行是更新，
+  还没有设备加入过时换一个新的加入链接；`--reset` 同上。
+- 云服务商的安全组（轻量应用服务器的防火墙）里放行这个 TCP 端口。systemd 方式下服务器上开着 ufw、firewalld 时脚本会说放行的那一行，
+  不替你改（Docker 发布的端口不经它们）。
+- 卸载：`cca hub deploy --script | ssh root@服务器 sh -s -- --uninstall`（或者在服务器上 `sudo sh cca-hub-install.sh --uninstall`），加入过的设备上
+  `cca hub leave`。
+
+装在 `/opt/cca-hub`（`--dir` 换：要是新的、空的目录，或者以前装过的，不能在 `/usr`、`/etc`、`/home`、`/root`、`/run`、`/tmp` 这些下面；一台服务器只装一个）：`app/cca-presence.py`（就是这个程序）、
+`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按加入链接里的公钥指纹认它）、`data/state.json`、`.env`（运行方式、端口、入伙口令的哈希；
+改了以后再运行一次安装脚本；没装完时换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。Docker 的另有 `compose.yaml`（容器 `cca-hub`，
+`python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的同步源、Docker Hub；只读、去掉所有权限），systemd 的是
+`/etc/systemd/system/cca-hub.service`（系统用户 `cca-hub`）。日志：`docker logs cca-hub` 或者 `journalctl -u cca-hub`。
+
 ## 远程会话的中转
 
 `--relay-listen 地址:端口` 才开（不给时那几个接口回 404，和旧版服务器一样）；`--relay-port` 是告诉客户端连哪个端口（容器里外不一样时给）。

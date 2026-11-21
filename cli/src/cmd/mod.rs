@@ -266,7 +266,7 @@ mod tests {
     const REMOVED: &[&str] = &["policy-ask"];
 
     /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
-    /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）、`hub-…`（自己的同步服务器，见 hub.rs）和 ADDED；没有登记两次的
+    /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）、`hub-…`（自己的同步服务器，见 hub.rs、hub/deploy.rs）和 ADDED；没有登记两次的
     #[test]
     fn every_original_command_is_there_and_listed_once() {
         let mut seen = Vec::new();

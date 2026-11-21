@@ -76,7 +76,8 @@ func hubFixtureTests() {
         """#.utf8))
     check("cost sync --json 两台服务器：顶层是最要紧的那一台，hubs 各是各的", sync?.sync?.state == .error && sync?.sync?.hubs.map(\.kind) == [.maintainer, .own]
           && sync?.sync?.hubs.first?.checkedEpoch == 5 && sync?.sync?.hubs.last?.message == "连不上")
-    check("结果、失败、同意的代码", [ResultCode.hubJoined, .hubRemoved, .hubLeft].allSatisfy(\.isKnown)
+    check("结果、失败、同意的代码", [ResultCode.hubJoined, .hubRemoved, .hubLeft, .hubDeployed].allSatisfy(\.isKnown)
+          && [FailCode.hubSSH, .hubTaken, .hubNotThis, .hubMoved, .hubStart].allSatisfy { $0.isKnown && $0.isHub } && ConsentItem.hubReset.isKnown
           && [FailCode.hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt].allSatisfy(\.isKnown)
           && FailCode(rawValue: "hub_later").isHub && !FailCode(rawValue: "hub_later").isKnown && FailCode.hubPin.isKnown && !FailCode.devicesOff.isHub && [ConsentItem.hubRemove, .hubLeave].allSatisfy(\.isKnown))
     let homes = ["/Users/me/.cca"]

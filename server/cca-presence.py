@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cca 的设备在线服务（presence）：各台 Mac 报告哪些映射里的账号正经 cca 在用，账号页据此显示连着哪些设备。
 
-只用标准库（Python 3.8 以上），不调外部命令：签名是 ssh-keygen -Y sign 的 SSHSIG 格式（Ed25519），这里照 RFC 8032
+只用标准库（Python 3.6 以上），不调外部命令：签名是 ssh-keygen -Y sign 的 SSHSIG 格式（Ed25519），这里照 RFC 8032
 直接验，所以容器用官方的 python 镜像就行，不用另装 OpenSSH。部署、更新：./policy.sh presence deploy（docker compose）。
 
 - 设备：每台 Mac 拉映射用的 deploy key（指纹 SHA256:…）。服务器只认维护者用发布密钥签过的设备清单（命名空间
@@ -40,6 +40,7 @@ import os
 import re
 import selectors
 import socket
+import socketserver
 import ssl
 import sys
 import threading
@@ -1325,7 +1326,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.send(200, srv.store.view(fp, list(dict.fromkeys(aids)), now))
 
 
-class Server(http.server.ThreadingHTTPServer):
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.7 起的 http.server.ThreadingHTTPServer（3.6 上没有）
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 64
@@ -1440,7 +1441,10 @@ def main():
         release = 'ssh-ed25519 ' + k.group(1)
     host, _, port = a.listen.rpartition(':')
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    if hasattr(ssl, 'TLSVersion'):
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    else:   # Python 3.6（CentOS 7、一些云厂商的系统镜像里的 python3）
+        ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
     ctx.load_cert_chain(a.cert, a.key)
     sig_ok = self_test()
     store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, a.mode, a.admit_hash)

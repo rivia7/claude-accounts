@@ -978,7 +978,7 @@ impl Marks {
 }
 
 /// 版本号的样子（cca 的、Claude Code 的）：最多 32 个字母、数字和 . _ + -
-fn version_ok(v: &str) -> bool {
+pub fn version_ok(v: &str) -> bool {
     (1..=32).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
 }
 
