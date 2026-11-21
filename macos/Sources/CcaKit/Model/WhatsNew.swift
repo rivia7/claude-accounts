@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.2-beta.6", title: "测试版：自己的同步服务器，几台设备的用量合起来看", points: [
+            .init(symbol: "server.rack",
+                  text: "「共享与同步」页多了「自己的同步服务器」：几台设备之间同步设备统计、折合金额和记下的 API key，数据不经过维护者。有 Linux 服务器的点「部署…」一键装上，没有的可以部署到 Railway 或 Sealos；别的设备粘贴加入链接加入。"),
+            .init(symbol: "dollarsign.circle",
+                  text: "折合金额可以只看某一台设备：设备菜单里除了所有设备、本机，还列出同步过的每一台。"),
+            .init(symbol: "person.2",
+                  text: "维护者共享的账号改成默认关着：新装的不再生成给维护者的公钥、不拉映射，只用你自己的账号。已经开着的照旧；在「共享与同步」页能关掉，账号移出账号表，登录留着。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "移除一台设备时加入链接跟着换，旧链接不能再用来加入；服务器的数据没了时，各台设备自己重新加入。部署到 Railway、Sealos 的步骤以平台现在的界面为准。"),
+        ]),
         ReleaseNote(version: "3.5.2-beta.5", title: "测试版：启动时不再一个个问要不要信任共享目录", points: [
             .init(symbol: "checkmark.shield",
                   text: "Claude Code 2.1.329 起，启动时给它的每个附加目录（账号目录，和 ~/.claude 里共享的 projects、skills、commands 这些）都要问一遍“Adding a new directory”，回答只管这一次。现在 cca 启动前就把这些目录记成信任过，和你在那里点过一次信任一样，不再弹出。"),
