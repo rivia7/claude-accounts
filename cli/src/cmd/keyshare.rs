@@ -5,7 +5,7 @@
 //! 每个账号经它走的那台同步服务器（hub.rs 的 `route`）同步；两台的 keys.json、锁、盐各是各的（`HubKind::file`）。
 
 use super::hub::{hub_of, hubs, Hub, HubKind};
-use super::presence::{is_own, presence_aid, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
+use super::presence::{is_maintainer, presence_aid, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
 use super::secrets::{
     kc_del, kc_hints, kc_put, kc_read, kc_svc, kc_unbook, keyfile_store, keystore_name, py_set, security, SECRETS_DIR,
 };
@@ -363,7 +363,7 @@ pub fn keyshare_local(key: &str, e: Option<&V>, booked: bool, hint: Option<&V>) 
 }
 
 fn keyshare_note(code: i64, cfg: &Dict, j: &Dict) -> R<String> {
-    Ok(if code == 404 && !is_own(cfg) {
+    Ok(if code == 404 && is_maintainer(cfg) {
         KEYSHARE_OLD.to_string()
     } else if code != 200 {
         presence_why(cfg, code, j)?

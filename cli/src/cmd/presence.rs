@@ -15,6 +15,7 @@ use crate::core::base::{CCA_HOME, CFG, SELF_PATH};
 use crate::core::ctx::ctx;
 use crate::core::model::{acct_id, adir, is_api, label_of, name_of, parse_key};
 use crate::core::policy::{policy_doc, policy_on, policy_sources};
+use crate::core::team::{forget_grants, team_dir, teams, TEAMS_DIR};
 use crate::core::tool::{t, tools, Tool, Using};
 use crate::py::base64::{b64decode, b64encode};
 use crate::py::fs::{self, load_quiet, read_text, save_json};
@@ -626,8 +627,16 @@ pub fn is_own(cfg: &Dict) -> bool {
     cfg.str("hub").as_deref() == Some("own")
 }
 
+/// 维护者的服务器（配置里没有 "hub"）：只有它可能是还不支持新接口的旧版（自己的、Team 的都是新的）
+pub fn is_maintainer(cfg: &Dict) -> bool {
+    cfg.get("hub").is_none()
+}
+
 /// 请求没成的原因（给人看的）；cfg 里有 "hub": "own" 的是自己的同步服务器
 pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
+    if cfg.str("hub").as_deref() == Some("team") {
+        return Ok(super::team::hub_why(cfg, code, j));
+    }
     let err = j.get("error");
     let err = err.as_ref().and_then(|e| e.as_str());
     let own = is_own(cfg);
@@ -831,7 +840,15 @@ struct Lane {
 
 impl Lane {
     fn new(h: Hub) -> Lane {
-        Lane { kind: h.kind, cfg: h.cfg, shape: None, units: Dict::new(), apps: AppSamples::new(), due: 0.0, fails: 0 }
+        // Team 的那一路从「报过什么都没开」起步：没有账号经它时一次都不报（见 quiet）
+        let shape = matches!(h.kind, HubKind::Team(_)).then(Vec::new);
+        Lane { kind: h.kind, cfg: h.cfg, shape, units: Dict::new(), apps: AppSamples::new(), due: 0.0, fails: 0 }
+    }
+
+    /// Team 的那一路没有东西可报、上次报的也是什么都没开：不发心跳。加入了一个 Team、它给的账号却没在用（没登录，或者这个账号是
+    /// 另一个 Team 先给的）时，不必每分钟告诉它的服务器这台设备开着
+    fn quiet(&self) -> bool {
+        matches!(self.kind, HubKind::Team(_)) && self.units.is_empty() && self.shape.as_ref().is_some_and(|s| s.is_empty())
     }
 
     /// 还是不是同一台：种类、地址、这台设备在它上面的指纹都一样，也还是同一次加入（自己的服务器的 "rev"：重新加入以后
@@ -891,6 +908,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
     // 下一次同步记下备查的 API key（醒来时到了就同步，不为它多醒；keyshare_sync 自己也看上次同步的时间）
     let mut key_due = 0.0;
     loop {
+        forget_grants(); // 这个进程一直开着：各个 Team 的配置每一圈重读（加入了、被移除了、换了盐）
         let hubs = hubs()?;
         if hubs.is_empty() {
             return Ok(()); // 映射里去掉了、退出了自己的服务器、这台 Mac 关掉了、cca restore 了：不再报
@@ -913,6 +931,12 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
         let mut dirs: Vec<String> = targets.iter().flatten().flatten().map(|(_, _, d)| d.clone()).collect();
         if agent.lanes.iter().any(|l| l.kind == HubKind::Own) {
             dirs.push(HUB_DIR.clone()); // 重新加入、退出（hub.json 换了、没了）：马上醒来换这一路
+        }
+        // Team：加入了、退出了（teams/ 里多了、少了一个目录），取到了新的配置、被移除了（那个 Team 的目录里换了文件）：马上醒来换各路。
+        // 不只盯现在有一路的：刚加入、配置还没取到的那个 Team 也盯着
+        if path::isdir(&TEAMS_DIR) {
+            dirs.push(TEAMS_DIR.clone());
+            dirs.extend(teams().iter().map(|t| team_dir(&t.id)));
         }
         let dirs: Vec<&str> = dirs.iter().map(|d| d.as_str()).collect();
         let seen = dir_stamps(&dirs);
@@ -961,7 +985,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
                 })
                 .collect();
             cur.sort();
-            if mono >= lane.due || (lane.shape.as_ref() != Some(&cur) && lane.fails == 0) {
+            if !lane.quiet() && (mono >= lane.due || (lane.shape.as_ref() != Some(&cur) && lane.fails == 0)) {
                 let end = if lane.units.is_empty() { V::from("none") } else { V::None };
                 let (code, j) = presence_post(&lane.cfg, "report", &dict! { "units" => &lane.units, "end" => end }, 8)?;
                 if code == 200 {
@@ -1009,7 +1033,8 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
             let _ = execv(&SELF_PATH, &[&SELF_PATH, "_presence-agent"]);
             return Ok(());
         }
-        let due = agent.lanes.iter().map(|l| l.due).fold(f64::INFINITY, f64::min);
+        // 不报的那几路（quiet）不算：它们的 due 没人动，算进去就成了每秒醒一次
+        let due = agent.lanes.iter().filter(|l| !l.quiet()).map(|l| l.due).fold(f64::INFINITY, f64::min);
         presence_wait(&pids, &dirs, due - monotonic(), &seen)?;
     }
 }
@@ -1100,7 +1125,9 @@ fn unrouted_reason(k: &str, v: &V, pm: &Dict) -> R<String> {
         None => format!("{name} 没有邮箱：只统计官方账号"),
         Some(HubKind::Maintainer) => format!("{name} 是维护者共享的账号：{}", presence_load()?.0),
         Some(HubKind::Own) => format!("{name} 不在维护者的映射里，要经自己的同步服务器统计：{}", own_load()?.0),
-        Some(HubKind::Team(_)) => format!("{name} 是 Team 给的账号：经 Team 的同步服务器统计，这台设备现在用不了它"),
+        Some(HubKind::Team(t)) => {
+            format!("{name} 是 Team 给的账号，经 Team 的同步服务器统计：{}", super::team::hub_missing_why(&t.id()))
+        }
     })
 }
 
@@ -1222,6 +1249,9 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
             let devices: Vec<V> = rows.into_iter().map(V::Dict).collect();
             let doc = dict! { "key" => k.as_str(), "id" => acct_id(&k, t()), "devices" => devices };
             doc.set("hub", a.hub.kind.name());
+            if let Some(tid) = a.hub.kind.team() {
+                doc.set("team", tid);
+            }
             accounts.push((a.hub.kind, doc));
         }
     }
@@ -1244,10 +1274,14 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
             .iter()
             .map(|h| {
                 let a = asked.iter().find(|a| a.hub.kind == h.kind);
-                V::Dict(dict! {
+                let d = dict! {
                     "kind" => h.kind.name(), "me" => reply_of(a, "me_name"), "idle_after" => reply_of(a, "idle"),
                     "offline_after" => reply_of(a, "ttl"), "reporting_error" => failing(h.kind),
-                })
+                };
+                if let Some(tid) = h.kind.team() {
+                    d.set("team", tid);
+                }
+                V::Dict(d)
             })
             .collect();
         let doc = dict! {
@@ -1294,7 +1328,11 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         }
     }
     for (kind, why) in &failed {
-        let whose = if *kind == HubKind::Own { "自己的同步服务器" } else { "维护者的服务器" };
+        let whose = match kind {
+            HubKind::Own => "自己的同步服务器",
+            HubKind::Maintainer => "维护者的服务器",
+            HubKind::Team(_) => "Team 的同步服务器",
+        };
         lines.push(format!("{} 账号连着的设备（{whose}上的记录）：没问到：{why}", t().label));
     }
     for kind in &shown {

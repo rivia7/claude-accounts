@@ -3924,6 +3924,8 @@ out=$(run cca team 2>&1)
 ok "加入以后账号表照 Team 的配置改：alice 的节点由它定（说一声）" '[ "$(tm_alice)" = "$TMNODE" ] && [ "$TMNODE" != "$TMWAS" ] && printf "%s" "$TMJOIN" | grep -q "的出口按「维护者的组」的配置固定为 ${TMNODE}（账号表里写的是 ${TMWAS}，已改回）"'
 out=$(run cca team 2>&1)
 ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，第 1 版配置、1 个账号"'
+out=$(gj state)
+ok "_gui state：alice 是「维护者的组」给的（账号的 team 是它的编号），经它的同步服务器同步（hub 是 team）；config.hubs 里有它（kind 是 team，带编号和名字）；别的账号没有 team" 'printf "%s" "$out" | jok "(lambda a: a[\"hub\"] == \"team\" and a[\"team\"] == \"$TMBID\")(next(a for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\")) and (\"$TMBID\", \"维护者的组\") in [(h.get(\"team\"), h.get(\"team_name\")) for h in d[\"config\"][\"hubs\"] if h[\"kind\"] == \"team\"] and all(\"team\" not in a for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
 out=$(runev cca team devices 维护者的组 --json 2>/dev/null); rc=$?
 ok "cca team devices --json：这台设备不是管理员：fail 事件 team_not_admin，stdout 没有东西（不是半截 JSON）" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
 out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join 2>&1); rc=$?
@@ -4655,6 +4657,8 @@ mkdir -p "$H/.cca/hub" "$H/.cca/cost"; chmod 700 "$H/.cca/hub"; ssh-keygen -q -t
 printf '{"v":1,"url":"https://127.0.0.1:9","pins":["sha256//%s="],"admit":"%s","salt":"%s","name":"studio","joined_at":1794000000}\n' \
 	"$(printf 'A%.0s' $(seq 1 43))" "$RHA" "$RHS" > "$H/.cca/hub/hub.json"
 printf '{"acc":{"x":"HUB-REMOTE-SECRET"}}\n' > "$H/.cca/cost/own.remote.json"
+# 经某个 Team 的服务器同步来的（那个 Team 的目录已经不在了，退出时删不到它：靠备份的排除清单）
+printf '{"acc":{"x":"TEAM-REMOTE-SECRET"}}\n' > "$H/.cca/cost/team.$(printf 'ab%.0s' $(seq 1 16)).remote.json"
 # macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
@@ -4683,7 +4687,7 @@ BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
 ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
 ok "restore：备份里没有折合金额的缓存、别的设备同步来的（cost/scan.json、remote.json 这些），这台设备统计好的（cost/local.json）在" '! tar -tzf "$BK" | grep -qE "cost/(scan|remote|worker)\.json|cost/(last|scanned)$" && tar -tzf "$BK" | grep -q "cost/local\.json"'
-ok "restore：清单里说要退出自己的同步服务器；服务器连不上照样退出，说怎么在别的设备上移除这台；加入信息、私钥、经它同步来的折合金额都不进备份" 'printf "%s" "$out" | grep -q "自己的同步服务器（127.0.0.1:9）：退出" && printf "%s" "$out" | grep -q "服务器上没能移除这台设备.*cca hub remove" && ! tar -tzf "$BK" | grep -qE "(^|/)hub/|cost/own\." && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "$RHA|$RHS|HUB-REMOTE-SECRET"'
+ok "restore：清单里说要退出自己的同步服务器；服务器连不上照样退出，说怎么在别的设备上移除这台；加入信息、私钥、经它同步来的折合金额都不进备份" 'printf "%s" "$out" | grep -q "自己的同步服务器（127.0.0.1:9）：退出" && printf "%s" "$out" | grep -q "服务器上没能移除这台设备.*cca hub remove" && ! tar -tzf "$BK" | grep -qE "(^|/)hub/|cost/own\.|cost/team\." && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "$RHA|$RHS|HUB-REMOTE-SECRET|TEAM-REMOTE-SECRET"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'

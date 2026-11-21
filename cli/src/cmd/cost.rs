@@ -17,7 +17,7 @@
 use super::codex::codex_claims;
 use super::hub::{host_name, hubs, Hub, HubKind};
 use super::keyshare::{blob_ad, blob_open, blob_seal, is_num, keyshare_keys, share_ident, Keys};
-use super::presence::{is_own, presence_aid, presence_post, presence_targets, presence_why, spawn_background};
+use super::presence::{is_maintainer, presence_aid, presence_post, presence_targets, presence_why, spawn_background};
 use super::session::{cli_alive, proc_starts};
 use super::usage::{parse_ts, WEEK, WEEKS_KEEP, WEEKS_SHOW};
 use super::{arity, Cmd};
@@ -1943,6 +1943,9 @@ fn cost_sync(force: bool) -> R<Dict> {
         .iter()
         .map(|(kind, r)| {
             let d = dict! { "kind" => kind.name() };
+            if let Some(tid) = kind.team() {
+                d.set("team", tid);
+            }
             d.update(r);
             V::Dict(d)
         })
@@ -2034,7 +2037,7 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
     let (accs, racc) = (sub_dict(st, "acc"), rem.dict("acc").expect("cost_sync 保证了是字典"));
     let get: Vec<V> = items.iter().map(|x| V::from(x.aid.as_str())).collect();
     let (code, r) = presence_post(cfg, "ledger", &dict! { "get" => get, "have" => cost_have(cfg, items, &accs, &racc) }, 20)?;
-    if (code == 404 || code == 413) && !is_own(cfg) {
+    if (code == 404 || code == 413) && is_maintainer(cfg) {
         // 维护者旧的服务器：没有 /v1/ledger（body 超过它的 64 KB 上限时先回 413；早先试过的 /v1/cost 是另一种格式，不用它）。
         // 自己的服务器都是新的：404 是没用 --mode own 运行（presence_why 说）
         return Ok(COST_OLD.to_string());
@@ -2233,7 +2236,7 @@ fn cost_put(cfg: &Dict, puts: &Dict) -> R<String> {
             continue;
         }
         let (code, r) = presence_post(cfg, "ledger", &dict! { "put" => batch }, 30)?;
-        if code == 404 && !is_own(cfg) {
+        if code == 404 && is_maintainer(cfg) {
             return Ok(COST_OLD.to_string());
         }
         if code != 200 {
@@ -2626,10 +2629,11 @@ impl CostView {
             .iter()
             .map(|k| HubCost { kind: *k, sync: cost_json(&k.file("sync.json")), remote: cost_json(&k.file("remote.json")) })
             .collect();
-        // 这台设备的名字：自己的服务器上叫什么，其次维护者的服务器上，都没有是主机名
+        // 这台设备的名字：自己的服务器上叫什么，其次维护者的服务器上，再是各个 Team 的，都没有是主机名
         let me_name = [HubKind::Own, HubKind::Maintainer]
             .iter()
             .find_map(|k| hubs.iter().find(|h| h.kind == *k).and_then(|h| h.sync.str("me")))
+            .or_else(|| hubs.iter().find_map(|h| h.sync.str("me")))
             .map_or_else(host_name, |m| m.to_string());
         let me_id =
             c.str("device_id").filter(|d| DV_RE.fullmatch(d).is_some()).map_or_else(|| "local".to_string(), |d| d.to_string());

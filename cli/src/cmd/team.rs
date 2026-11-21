@@ -5,12 +5,15 @@
 //! 取回来的配置先验根密钥的签名（照加入时钉住的根公钥）、再认证解密，序号不比手里那一份大的不要，验过了才写进 doc.json。
 //! 这一步还只是把配置取到本机：账号表照它对账是下一阶段的事（docs/dev/team.md 的阶段表）。
 
+use super::cost::COST_DIR;
 use super::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
 use super::keyshare::is_num;
-use super::presence::{flock, key_at, presence_post};
+use super::presence::{flock, key_at, presence_post, PRESENCE_DIR};
 use super::{arity, Cmd};
 use crate::core::base::Lock;
-use crate::core::team::{index_order, index_path, load_team, team_dir, team_doc, team_path, teams, Role, Team, TEAMS_DIR};
+use crate::core::team::{
+    forget_grants, grants, index_order, index_path, load_team, team_dir, team_doc, team_path, teams, Role, Team, TEAMS_DIR,
+};
 use crate::py::fs::{self, load_quiet, save_json};
 use crate::py::io::read_stdin_text;
 use crate::py::obj::{str_list, Dict, V};
@@ -139,7 +142,22 @@ fn forget(tid: &str) -> R<()> {
     if path::isdir(&d) {
         fs::rmtree(&d)?;
     }
+    drop_synced(tid);
+    forget_grants();
     index_remove(tid)
+}
+
+/// 经这个 Team 的服务器同步时留在这台设备上的状态文件（presence/、cost/ 里 team.<编号>. 开头的）删掉：退出了、被管理员移除了以后
+/// 不再读它们，而 cost 里那一份是解开了的别的设备的折合金额，不该留着
+fn drop_synced(tid: &str) {
+    let prefix = format!("team.{tid}.");
+    for dir in [&*PRESENCE_DIR, &*COST_DIR] {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
 }
 
 /// 命令里写的是哪个 Team：编号、编号的开头（至少 4 个字符）或者名字；没写时只有一个就是它。找不到、不止一个是给人看的原因
@@ -166,6 +184,56 @@ fn names(all: &[Team]) -> String {
     all.iter().map(|t| format!("{}（{}）", t.name, &t.id[..8])).collect::<Vec<_>>().join("、")
 }
 
+// --- Team 的同步服务器（设备统计、记下的 API key、折合金额经它和这个 Team 里别的设备同步：hub.rs 的 hubs()）-------------------------------
+
+/// 各个 Team 的同步服务器在这台设备上的配置：[(Team 的编号, presence_post 用的配置)]。配置比别的服务器的多 "hub": "team"、"team"（编号）、
+/// "name"（Team 的名字）、"rev"（team.json 的修改时间：重新加入以后上报进程算新的一路）。接上了服务器、这台设备的密钥在、手里有验过的
+/// 配置（盐在里面）、没被管理员移除的才有
+pub fn hub_cfgs() -> Vec<(String, Dict)> {
+    use std::os::unix::fs::MetadataExt;
+    let grants = grants();
+    let mut out = Vec::new();
+    if grants.is_empty() {
+        return out; // 没有 Team、都还没取到配置：不再读别的文件
+    }
+    for t in teams() {
+        let Some(salt) = grants.iter().find(|g| g.id == t.id).and_then(|g| g.doc.str("salt")) else { continue };
+        let cfg = match device_cfg(&t) {
+            Ok(Ok(cfg)) => cfg,
+            Ok(Err(_)) => continue,
+            Err(e) => {
+                e.swallowed(); // 这个 Team 的密钥文件读不了：只是它用不了，别的服务器照常
+                continue;
+            }
+        };
+        cfg.set("salt", &*salt);
+        cfg.set("hub", "team");
+        cfg.set("team", t.id.as_str());
+        cfg.set("name", t.name.as_str());
+        if let Ok(st) = std::fs::metadata(t.path("team.json")) {
+            cfg.set("rev", st.mtime() as f64 + st.mtime_nsec() as f64 / 1e9);
+        }
+        out.push((t.id.clone(), cfg));
+    }
+    out
+}
+
+/// Team 的同步服务器的请求没成的原因（presence_why 遇到 "hub": "team" 的配置时用）
+pub fn hub_why(cfg: &Dict, code: i64, j: &Dict) -> String {
+    format!("「{}」的同步服务器：{}", cfg.at("name").py_str(), fault(&cfg.at("url").py_str(), code, j).1)
+}
+
+/// 这个 Team 给的账号现在不经它的服务器同步的原因（这台设备用不了它的服务器）
+pub fn hub_missing_why(tid: &str) -> String {
+    let Some(t) = load_team(tid) else { return "这台设备已经不在那个 Team 里了".into() };
+    match sync_state(tid) {
+        _ if !t.attached() => format!("「{}」还没有接上同步服务器", t.name),
+        Some((s, why)) if s == "removed" => why,
+        _ if team_doc(tid).is_none() => format!("「{}」的配置还没取到（cca team sync）", t.name),
+        _ => format!("这台设备用不了「{}」的同步服务器（密钥不见了，或者关掉了设备统计）", t.name),
+    }
+}
+
 // --- 取配置 ----------------------------------------------------------------------------------------------------------------
 
 /// 这台设备那串随机数（邀请里的；管理员自己的那台是照主密钥算的）；没有、不合格是 None
@@ -184,6 +252,10 @@ fn sync_note(tid: &str, state: &str, error: &str) -> R<()> {
     if sync_state(tid).as_ref().map(|(s, e)| (s.as_str(), e.as_str())) != Some((state, error)) {
         let j = dict! { "v" => 1, "state" => state, "error" => error, "at" => now() };
         save_json(&team_path(tid, "sync.json"), &V::Dict(j), Some(0o600), true)?;
+        forget_grants();
+        if state == "removed" {
+            drop_synced(tid);
+        }
     }
     Ok(())
 }
@@ -271,6 +343,7 @@ fn sync_fetch(t: &Team, have: i64) -> R<Synced> {
     if let Some(doc) = newer {
         let saved = dict! { "v" => 1, "seq" => seq, "at" => now(), "doc" => doc };
         save_json(&t.path("doc.json"), &V::Dict(saved), Some(0o600), true)?;
+        forget_grants();
     }
     Ok(Synced { state: "ok", seq, why: String::new() })
 }

@@ -14,7 +14,7 @@ import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from presence import Device, Server, ident, keygen, make_cert, openssl_pin   # noqa: E402
+from presence import SESSION_PID, T0, Device, Server, Sessions, ident, keygen, make_cert, openssl_pin, wait_for   # noqa: E402
 import spec_wire as sw   # noqa: E402
 
 POLICY = {'version': 1, 'claude': {'alice@example.com': 'US-A', 'Bob@Example.com': 'US-B'}, 'codex': {'carol@example.com': 'US-A'},
@@ -23,7 +23,7 @@ NODE = lambda name, **more: dict({'name': name, 'type': 'socks5', 'server': '192
 NODES = {'version': 1, 'group': 'OpenAi', 'proxies': [NODE('US-A'), NODE('US-B', **{'dialer-proxy': 'US-C'}), NODE('US-C'), NODE('US-D'), NODE('US-E')]}
 
 
-class TeamTest(unittest.TestCase):
+class TeamTest(Sessions, unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='cca-team-cli-')
         self.addCleanup(self.tmp.cleanup)
@@ -454,6 +454,118 @@ class TeamTest(unittest.TestCase):
         self.assertIn('Team 不再给这台设备 Claude 账号 erin@example.com：收起来了', said)
         self.assertIn('alice（alice@example.com） 的出口按维护者的映射固定为 US-C（账号表里写的是 US-A，已改回）', said)
         self.assertEqual(table(), {'mine(bob@example.com)': 'US-B', 'alice(alice@example.com)': 'US-C'})
+
+    def test_pipelines(self):
+        """Team 给的账号：记下的 API key、折合金额、设备统计都经这个 Team 的同步服务器（盐是配置里的那一份、签名用这台设备在 Team 里的密钥），
+        不去别的服务器；被移除以后不再经它"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        self.load(admin, tid)
+        link, dev_b = self.invite(admin, tid, 'bob-mini', '--accounts', 'claude:alice@example.com')
+        bob = Device(self.d / 'bob', 'bob', {})
+        bob.config(lambda c: (c.pop('policy'), c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D'])))
+        self.assertEqual(self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link)[5:], ['ok', '1'])
+        self.assertEqual(bob.run('team-apply').returncode, 0)
+        key = 'alice(alice@example.com)'
+        self.assertEqual(json.loads((bob.cca / 'accounts.json').read_text()), {key: 'US-A'})
+        bob.login('u-alice-0001', key)
+        salt = self.doc(bob, tid)[1]['salt']
+        aid = sw.aid_of(salt, 'claude', 'alice@example.com')
+        fp = sw.fp_of(str(self.tdir(bob, tid) / 'id_ed25519.pub'))
+
+        def asked(op):
+            """这台设备向服务器发过的这种请求：[(签名的设备指纹, 涉及的账号摘要…)]"""
+            return [(r['key'], tuple(sorted(set(r.get('get') or []) | set(r.get('put') or {}) | set(r.get('accounts') or [])))) for r in bob.sent(op)]
+
+        # 记下的 API key
+        k1 = 'sk-ant-api03-' + 'a' * 40
+        self.assertEqual(bob.keyset(k1, key).strip(), 'shared')
+        bob.ok('key-sync', 'force')
+        state = json.loads((bob.cca / 'presence' / ('team.%s.keys.json' % tid)).read_text())
+        self.assertEqual((state.get('error'), state.get('synced', 0) > 0), (None, True), state)
+        self.assertEqual(set(asked('keys')), {(fp, (aid,))})
+        blob = json.loads((self.d / 'srv' / 'keys.json').read_text())['acc'][aid]['blob']
+        got = sw.keyshare_open(sw.derive(sw.KEYSHARE, salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, blob)
+        self.assertEqual(got['key'], k1, '服务器上存的照文档解得开：盐是 Team 的配置里的那一份')
+        self.assertFalse((bob.cca / 'presence' / 'keys.json').exists() or (bob.cca / 'presence' / 'own.keys.json').exists(), '别的服务器的状态文件没有')
+        # 折合金额
+        hour = int(time.time() // 3600 * 3600) - 3600
+        (bob.cca / 'cost').mkdir(exist_ok=True)
+        (bob.cca / 'cost' / 'local.json').write_text(json.dumps({'v': 1, 'build': 'x', 'who': {'claude:u-alice-0001': 'alice@example.com'},
+                                                                 'acc': {'claude:u-alice-0001': {str(hour): [1000000, 1, 1, 1, 0, 0, 0]}},
+                                                                 'um': {}, 'orphan': {}}))
+        r = bob.cost_sync()
+        self.assertEqual((r['state'], [(h['kind'], h.get('team'), h['state']) for h in r['hubs']]), ('ok', [('team', tid, 'ok')]), r)
+        self.assertEqual(set(asked('ledger')), {(fp, (aid,))})
+        slot = json.loads((self.d / 'srv' / 'cost-slots.json').read_text())['acc'][aid][fp]['blob']
+        doc = sw.cost_open(sw.derive(sw.COST, salt, 'claude', 'alice@example.com', 'u-alice-0001'), aid, fp, slot)
+        self.assertEqual(list(doc['h'].values()), [[1000000, 1, 1, 1, 0, 0, 0]])
+        self.assertTrue((bob.cca / 'cost' / ('team.%s.sync.json' % tid)).exists())
+        # 设备统计
+        v = json.loads(bob.ok('presence-view', '--json'))
+        self.assertEqual(([(x['key'], x['hub'], x['team']) for x in v['accounts']], [(h['kind'], h['team']) for h in v['hubs']]),
+                         ([(key, 'team', tid)], [('team', tid)]), '是哪个 Team 的写在旁边（可能同时在几个 Team 里）')
+        self.assertEqual(set(asked('view')), {(fp, (aid,))})
+        # 被管理员移除了：不再经它；经它同步时留下的状态文件删掉（里面有解开了的别的设备的折合金额）
+        left = lambda: sorted(f.name for d in ('presence', 'cost') for f in (bob.cca / d).glob('team.*'))
+        self.assertEqual([n for n in left() if n.endswith('.json')], ['team.%s.keys.json' % tid, 'team.%s.sync.json' % tid])
+        self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
+        self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'removed')
+        self.assertEqual(left(), [])
+        n = len(bob.sent())
+        bob.ok('key-sync', 'force')
+        self.assertEqual(len(bob.sent()), n, '没有用得了的服务器：不发请求')
+
+    def test_agent(self):
+        """上报进程里 Team 的那一路：没有会话开着时一次都不报；开着时拿这台设备在 Team 里的密钥报给它的服务器；进程开着时加入的另一个
+        Team 接着就有一路（各报各的账号）；被管理员移除以后那一路停了，另一路照旧"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        self.load(admin, tid)
+        link, _ = self.invite(admin, tid, 'bob-mini', '--accounts', 'claude:alice@example.com')
+        bob = Device(self.d / 'bob', 'bob', {})
+        bob.config(lambda c: (c.pop('policy'), c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D'])))
+        self.assertEqual(self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link)[5:], ['ok', '1'])
+        self.assertEqual(bob.run('team-apply').returncode, 0)
+        alice = 'alice(alice@example.com)'
+        bob.login('u-alice-0001', alice)
+        who = lambda t, email: (sw.fp_of(str(self.tdir(bob, t) / 'id_ed25519.pub')), sw.aid_of(self.doc(bob, t)[1]['salt'], 'claude', email))
+        fp, aid = who(tid, 'alice@example.com')
+        reports = lambda f: [r for r in bob.sent('report') if r['key'] == f]
+        # 没有会话开着：一次都不报（不必告诉那台服务器这台设备开着），进程自己退出
+        # 假 ps 的进程表里只有一个不相干的进程（一行都没有时上报进程当成没问到进程表，一直等）
+        (bob.home / 'ps.out').write_text('%5d %5d %-8s %9s %s %s\n' % (1, 0, '??', '0:00.50', T0, '/sbin/launchd'))
+        self.assertEqual(self.agent(bob).wait(30), 0)
+        self.assertEqual(bob.sent('report'), [])
+        # 开着一个会话
+        self.session(bob, alice)
+        self.agent(bob)
+        [r] = wait_for('报给 Team 的服务器', lambda: reports(fp))
+        self.assertEqual((r['code'], list(r['units'])), (200, [aid]))
+        # 进程开着时加入第二个 Team（另一台服务器），它给的是 bob@example.com
+        admin2 = self.device('admin2')
+        tid2, root2 = self.lines(admin2, 'team-new', '第二组', '--device', 'imac')
+        srv2, url2, pin2 = self.server(root2, name='srv2')
+        self.lines(admin2, 'team-attach', tid2, url2, pin2)
+        self.load(admin2, tid2)
+        link2, _ = self.invite(admin2, tid2, 'bob-mini', '--accounts', 'claude:bob@example.com')
+        self.assertEqual(self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link2)[5:], ['ok', '1'])
+        self.assertEqual(bob.run('team-apply').returncode, 0)
+        bob.login('u-bob-0001', 'bob@example.com')
+        self.session(bob, 'bob@example.com', SESSION_PID - 1)
+        fp2, aid2 = who(tid2, 'bob@example.com')
+        [r2] = wait_for('新加入的那个 Team 也有了一路', lambda: reports(fp2))
+        self.assertEqual((r2['code'], list(r2['units'])), (200, [aid2]))
+        self.assertTrue(all(list(x['units']) == [aid] for x in reports(fp)), '各报各的账号')
+        # 被第一个 Team 的管理员移除：取配置时知道了，那一路停了（alice 又开一个会话也不报）；第二个 Team 那一路照旧
+        self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
+        self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'removed')
+        self.more_rounds([bob], 2)
+        n = len(reports(fp))
+        self.session(bob, alice, SESSION_PID - 2)
+        self.session(bob, 'bob@example.com', SESSION_PID - 3)
+        wait_for('第二个 Team 那一路报了新开的会话', lambda: len(reports(fp2)) >= 2)
+        self.more_rounds([bob], 2)
+        self.assertEqual(len(reports(fp)), n, '被移除的那一路不再报')
+        self.assertEqual([x['code'] for x in reports(fp2)], [200] * len(reports(fp2)))
 
     def test_server_lies(self):
         """服务器说的没有签名，管理员只拿它当线索：换了的公钥不照它的；它那边的配置丢了、旧了就重新发布；它乱说序号不信"""

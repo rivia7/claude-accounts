@@ -7984,7 +7984,7 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 		--exclude 'policy/nodes.json*' --exclude 'policy/tmp.*' --exclude 'hub/hub.json' --exclude 'hub-hosted.json' \
 		--exclude 'teams/*/secret' --exclude 'teams/*/root_ed25519' --exclude 'teams/*/admin.json' --exclude 'teams/*/doc.json' \
 		--exclude 'teams/*/*.tmp' --exclude 'teams/.new.*' \
-		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
+		--exclude 'cost/scan.json' --exclude 'cost/remote.json' --exclude 'cost/own.remote.json' --exclude 'cost/team.*.remote.json' --exclude 'cost/worker.json' --exclude 'cost/last' --exclude 'cost/scanned' \
 		--exclude '*/chrome' --exclude '*/desktop' --exclude 'cm-*' --exclude 'router_ed25519' --exclude 'id_ed25519' --exclude '*.lock' \
 		--exclude 'auth.json' --exclude '.credentials.json' --exclude 'antigravity-oauth-token' --exclude 'secrets' \
 		--exclude '*/worktrees' --exclude '*/.tmp' --exclude '*/log' --exclude '*/cache' . 2>/dev/null )

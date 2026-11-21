@@ -512,7 +512,7 @@ fn gui_account(
         env.key_errors.iter().find(|(kind, _)| Some(*kind) == hub).and_then(|(_, e)| e.as_deref()).map_or(V::None, V::from);
     let cost = if can_cost { env.cost.account(tool, k, weeks.as_ref(), hub, login == "logged_in") } else { V::None };
     let node = node_of(v);
-    Ok(dict! {
+    let d = dict! {
         "key" => k, "id" => acct_id(k, tool), "alias" => a, "email" => e.as_str(), "name" => name_of(k), "label" => label_of(k),
         "kind" => if api { "api" } else { "oauth" }, "login" => login, "login_email" => if api { String::new() } else { tool.email(k)? },
         "plan" => plan_shown.unwrap_or(""), "plan_tier" => if plan_shown.is_some() { tier } else { "" },
@@ -535,7 +535,13 @@ fn gui_account(
         "cost" => cost,
         "health" => health_view(k, v, now),
         "hub" => hub.map(|h| h.name()),
-    })
+    };
+    // 这个账号是哪个 Team 给的（编号；不是 Team 给的没有这一项）：不看它的服务器这台设备用不用得了。第三方 API 账号不是谁给的
+    // （键里的邮箱碰巧和 Team 给的一样也不算：映射只管官方账号）
+    if let Some(tid) = src.str(&lower).filter(|t| !api && !t.is_empty()) {
+        d.set("team", &*tid);
+    }
+    Ok(d)
 }
 
 /// cca _gui state：图形界面的只读快照，三个工具一起。CCA_RO=1 下运行：对账只在内存里做，不写文件、不往 stderr 说

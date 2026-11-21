@@ -169,6 +169,11 @@ pub fn grants() -> Rc<Vec<Grant>> {
     out
 }
 
+/// 忘掉记着的那一份：下一次 grants() 重读。常驻的进程（上报进程）每一圈调一次；刚写了 doc.json、sync.json、删了 Team 的命令也调
+pub fn forget_grants() {
+    GRANTS.with(|g| *g.borrow_mut() = None);
+}
+
 /// 被管理员移除了（最近一次取配置时服务器说的）
 fn removed(tid: &str) -> bool {
     load_quiet(&team_path(tid, "sync.json")).and_then(|j| j.as_dict()).is_some_and(|j| j.str("state").as_deref() == Some("removed"))

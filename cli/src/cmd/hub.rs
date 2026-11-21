@@ -101,6 +101,14 @@ impl HubKind {
         }
     }
 
+    /// 是某个 Team 的服务器时：那个 Team 的编号
+    pub fn team(self) -> Option<String> {
+        match self {
+            HubKind::Team(t) => Some(t.id()),
+            _ => None,
+        }
+    }
+
     /// 这台服务器的状态文件叫什么：维护者的照旧，自己的前面加 own.，Team 的前面加 team.<编号>.（presence/、cost/ 里各一份）
     pub fn file(self, base: &str) -> String {
         match self {
@@ -129,7 +137,7 @@ impl Hub {
     }
 }
 
-/// 这台设备现在用得了的同步服务器，维护者的在前（config.json 里写着 "presence": false 时一台都没有）
+/// 这台设备现在用得了的同步服务器：维护者的、自己的，再是各个 Team 的（照加入的先后；config.json 里写着 "presence": false 时一台都没有）
 pub fn hubs() -> R<Vec<Hub>> {
     let mut out = Vec::new();
     if let Some(cfg) = presence_load()?.1 {
@@ -137,6 +145,14 @@ pub fn hubs() -> R<Vec<Hub>> {
     }
     if let Some(cfg) = own_load()?.1 {
         out.push(Hub { kind: HubKind::Own, cfg });
+    }
+    let teams = super::team::hub_cfgs();
+    if !teams.is_empty() && presence_off_reason().is_none() {
+        for (tid, cfg) in teams {
+            if let Some(tag) = TeamTag::new(&tid) {
+                out.push(Hub { kind: HubKind::Team(tag), cfg });
+            }
+        }
     }
     Ok(out)
 }
@@ -650,13 +666,24 @@ fn own_entry(count: usize) -> R<Option<Dict>> {
     Ok(Some(v))
 }
 
-/// _gui state 的 config.hubs（PROTOCOL 2.2）：这台设备用得了的维护者的服务器，加入了的自己的服务器（own_entry）
+/// _gui state 的 config.hubs（PROTOCOL 2.2）：这台设备用得了的维护者的服务器，加入了的自己的服务器（own_entry），各个 Team 的服务器
 pub fn hub_entries(count: impl Fn(HubKind) -> usize) -> R<Vec<V>> {
     let mut out = Vec::new();
     if let Some(cfg) = presence_load()?.1 {
         out.push(V::Dict(hub_view(HubKind::Maintainer, &cfg.at("url").py_str(), count(HubKind::Maintainer))));
     }
     out.extend(own_entry(count(HubKind::Own))?.map(V::Dict));
+    // 各个 Team 的：多 "team"（编号）、"team_name"（Team 的名字）
+    let teams = super::team::hub_cfgs();
+    if !teams.is_empty() && presence_off_reason().is_none() {
+        for (tid, cfg) in teams {
+            let Some(kind) = TeamTag::new(&tid).map(HubKind::Team) else { continue };
+            let v = hub_view(kind, &cfg.at("url").py_str(), count(kind));
+            v.set("team", tid.as_str());
+            v.set("team_name", cfg.at("name"));
+            out.push(V::Dict(v));
+        }
+    }
     Ok(out)
 }
 

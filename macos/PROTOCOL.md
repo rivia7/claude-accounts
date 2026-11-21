@@ -195,8 +195,11 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `pinned`：维护者的映射锁定了这个账号的节点（`pinned_node` 是映射要的节点，已按改名换算）；App 里不提供改节点。
 - `is_last`：上次在命令行里用的账号。
 - `hub`：这个账号的设备统计、记下的 API key、折合金额经哪台服务器和别的设备同步（`config.hubs[].kind`）：`maintainer`（维护者的服务器：
-  映射里的官方账号）| `own`（自己的同步服务器：别的官方账号，这台设备加入了时，4.13）| null（不同步：第三方 API 账号、账号表里没写邮箱的，
+  映射里的官方账号）| `own`（自己的同步服务器：别的官方账号，这台设备加入了时，4.13）| `team`（某个 Team 的同步服务器：这个 Team 给这台设备的
+  账号，4.14；是哪个 Team 看账号的 `team`；现在的 App 还不认识这个值，当 null）| null（不同步：第三方 API 账号、账号表里没写邮箱的，
   或者该走的那一台这台设备用不了——共享关着、映射里没配置服务器、没加入自己的同步服务器、关掉了设备统计）。App 不认识的值当 null。
+- `team`：这个账号是哪个 Team 给的（Team 的编号，4.14）；不是 Team 给的账号**没有这一项**。只说是谁给的，不看那个 Team 的服务器这台设备
+  用不用得了（用不了时 `hub` 是 null，`team` 照样有）。同一个账号几个 Team 都给了时是先加入的那个。
   旧版 cca 没有这个字段：当作 `can.devices` 为真时是 `maintainer`，否则 null。
 - `badge`：和 `~/Applications` 里启动器图标右下角一样的标识（文字 + 颜色），App 用它当头像；API 账号为 null。
 - `app.running` / `app.pid`：这个账号的桌面 App（Claude 账号是 Claude App，Codex 账号是 ChatGPT App）在不在运行。
@@ -370,8 +373,9 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `parked`：关掉共享时移出账号表的账号（登录都留着，打开共享时原样加回来）。共享关着时映射里的账号不在账号表里：总览、用量、折合金额、
   设备统计都看不到它们。旧版 cca 没有 `state`、`accounts`、`parked`：`configured` 是 true 当作 `on`、false 当作 `off`，两个数当作 0。
 - `hubs`：这台设备经哪几台服务器和自己的其他设备同步（设备统计、记下的 API key、折合金额；「共享与同步」页）：维护者的服务器（共享开着、
-  映射里配置了、这台 Mac 用得了时）在前，加入了的自己的同步服务器（4.13）在后；都没有是 `[]`。旧版 cca 没有这个字段：当作 `[]`。每一项：
-  `kind`：`maintainer` | `own`（App 不认识的跳过）；`url`、`host`（地址，`host` 是显示用的主机和端口）；`state`：`ok`（最近一次成了）|
+  映射里配置了、这台 Mac 用得了时）在前，加入了的自己的同步服务器（4.13）在后，再是各个 Team 的（4.14：这台设备加入了、取到了配置、用得了时；
+  照加入的先后）；都没有是 `[]`。旧版 cca 没有这个字段：当作 `[]`。每一项：
+  `kind`：`maintainer` | `own` | `team`（多两项：`team` 是 Team 的编号，`team_name` 是它的名字；App 不认识的 `kind` 跳过）；`url`、`host`（地址，`host` 是显示用的主机和端口）；`state`：`ok`（最近一次成了）|
   `pending`（还没同步过）| `error`（最近一次没成，`error` 是给人看的原因）| `off`（这台设备关掉了设备统计：config.json 里写了
   `"presence": false`，`error` 说怎么打开；只有 `own` 会是它），不认识的当 `error`；`checked_epoch`：最近一次成功的时间（没有为 null）；
   `accounts`：经它同步的账号数（各工具加起来；用不了时 0）；`name`：这台设备在它上面的名字（自己的：加入时起的；维护者的：上次同步
@@ -638,6 +642,7 @@ cca 问这个账号走的那台服务器（账号的 `hub`：维护者的设备�
 - `hubs[]`：这台设备用得了的每台服务器一项（`kind` 和 `config.hubs` 的一样、先后也一样）：`me`：这台 Mac 在它上面的名字（维护者给 deploy key
   起的别名、加入自己的同步服务器时起的名字），它还不认这台 Mac 时为 null；`idle_after`、`offline_after`：它的设置（秒），旧的服务器没给时为 null；
   这一次没问它（要问的账号都不走它）时这三项都是 null。`reporting_error`：这台 Mac 最近一次没报到它的原因（给人看的话），报成了是 null（问没问都有）。
+  `kind` 是 `team` 的那一项多一个 `team`（Team 的编号：可能同时在几个 Team 里，各一项）；经 Team 的服务器问的账号（`hub` 是 `team`）也多一个 `team`。
   顶层的 `me`、`idle_after`、`offline_after`、`reporting_error` 是问了的第一台的（一台都没问时 `me` 这三项是 null）；旧版 cca 只有这几项、
   没有 `hubs`：只有维护者的服务器。问的服务器有一台没成就是退出码 1（App 每次只问一个账号）。
 - `accounts`：问的账号（不写账号时是这个工具里经服务器同步的全部官方账号），`hub` 是问的哪一台（App 用 `hubs` 里这一台的设置和名字），
@@ -672,7 +677,7 @@ cca 问这个账号走的那台服务器（账号的 `hub`：维护者的设备�
 
 - `scan`：`files` 看了几个会话记录文件，`read_bytes` 这次读了多少字节，`records` 这次新算进来几条用量，`first` 这次是不是第一次全读。
 - `sync.state`：`ok` | `skipped`（不用同步：没有经服务器同步的账号、这台设备用不了哪台服务器）| `old_server`（维护者的服务器太旧）|
-  `error`（`message` 是原因）| `waiting`（上次失败了，还没到重试的时候；`--now` 不等）。`sync.hubs[]` 是各台服务器的（多一项 `kind`），
+  `error`（`message` 是原因）| `waiting`（上次失败了，还没到重试的时候；`--now` 不等）。`sync.hubs[]` 是各台服务器的（多一项 `kind`；`kind` 是 `team` 的再多一项 `team`：Team 的编号），
   顶层的 `state`、`message`、`checked_epoch` 是其中最要紧的那一台的（`error`、`old_server`、`waiting`、`ok`、`skipped` 依次）；
   旧版 cca 没有 `hubs`。每个账号的同步状态在 `_gui state` 的 `cost.sync`。
 - 退出码：0 统计好了（同步失败也是 0，看 `sync`）；1 没统计成（`fail` 事件的 `code` 是 `cost_unavailable`，`message` 是原因，比如读不了、
