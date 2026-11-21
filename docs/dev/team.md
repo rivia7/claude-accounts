@@ -9,7 +9,7 @@
 | M2 | 辅助程序和命令：Team 在本机的状态（`~/.cca/teams/<编号>/`）、`cca team` 的建立、邀请、加入、取配置、看设备、移除、退出；管理员这边的账号、节点、每台设备的授权 | 做完了；服务器要自己起（安装脚本是 M6） |
 | M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；现在的维护者映射、自己的同步服务器当作旧式的 Team 接进来 | 做完了：账号表照 Team 的配置改，设备统计、记下的 API key、折合金额经各个 Team 的服务器同步（见「账号表照配置改」「同步经 Team 的服务器」）。旧的两套（维护者的映射、自己的同步服务器）照旧并着用，迁成 Team 是 M4 |
 | M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 做完了（见「迁移」）：`cca team import`、`./policy.sh team` + 机器拉到映射后自己加入、`cca team import Team --mine`。自己的同步服务器是照步骤手动换，不自动 |
-| M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 没做 |
+| M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 做完了（见「界面」）。在 App 里新建 Team 的入口等一键部署（M6） |
 | M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 没做 |
 | M7 | 删掉旧通道：GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 没做 |
 
@@ -232,6 +232,36 @@
 换过去以后这些账号的节点由 Team 的配置固定（管理员的设备上 `cca team map` 改），不再是各台设备自己选。折合金额、记下的 API key 各台设备
 自己有一份，换了服务器会重新传上去，不丢。没换的设备还在旧的服务器上，两边各看各的，直到都换完。
 
+## 界面（M5）
+
+接口（PROTOCOL 2.1 的 `hello.team`，2.2 的 `config.teams`、账号的 `team`，4.14）：
+
+- `hello.team` 是 1：App 才显示 Team 的那一块、才筛选、才调 `cca team`（旧版 cca 的 state 里就算有也不认）。
+- `_gui state` 的 `config.teams`：这台设备在的 Team（照加入的先后，每项和 `cca team ls --json` 的一样：`team_rows`）。**一个都不在时没有
+  这个字段**，账号的 `team` 也只有 Team 给的官方账号才有：没有 Team 的机器输出和原来逐字节一样（对拍照旧过）。
+- `cca team devices <Team> --json` 多了 `name`、`accounts`（工具 → 邮箱 → 节点）、`aliases`、`nodes`：管理页一次要到的就是这一份。
+- 邀请链接是那台设备的密钥：`cca team invite` 的 stdout 只经内存里的管道读（`CcaCommand.teamInvite` 不是跑完为止的那种），放进剪贴板
+  （`copySecret`：标成机密、60 秒后清掉），不进被观察的状态、提示和读屏——和自己的同步服务器的加入链接一个做法。
+
+App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」一节、`CcaApp/TeamsCard.swift`）：
+
+- **按 Team 筛选**（`TeamFilter`：全部 / 某个 Team / 不在 Team 里的）：侧栏（工具切换下面一行）、总览（标题右边）、菜单栏面板（工具切换
+  下面）各放一个 `TeamFilterMenu`，改的是同一个选择（`AppModel.teamFilter`，记在 App 的设置里）。只在加入了 Team 时放出来。**只管显示**：
+  `shownGroups` / `shownAccounts` 和 `office(now:)` 筛，`arrangedAccounts`（写回账号表的顺序、默认选中哪个）照全部的；启动器、账号表都不变。
+  选的那个 Team 已经不在了（退出了）当作全部（`activeTeamFilter`）。筛选着的时候没有账号的组不摆「还没有账号、去添加」的空位。
+- **「共享与同步」页的 Team 卡片**（`TeamsCard`）：各个 Team 的状态（照 `config.teams[].state`，cca 给了原因的照说）、给了这台设备几个账号；
+  「粘贴邀请链接…」是提问会话（`Handoff.teamJoin` → `cca team join`，`team.join`），「取配置」是 `cca team sync`，「更多」里退出 / 删掉
+  （cca 先问同意：`team_leave` / `team_delete`）。有 Team 要处理（被移除、记录没了、没取成）时侧栏这一行挂「Team 要处理」。
+- **管理员的 Team 展开「设备和账号」**（展开时问一次 `team devices --json`，低优先级；改过东西以后再问一次）：设备（这台在前；状态、给了它
+  几个账号、它手里是第几版；有 `problem` 的挂「要处理」、下面一行说原因）、每台设备的「账号」菜单（全部 / 逐个勾：`cca team grant`；全部都给
+  的设备去掉一个 = `none` 加上剩下的）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
+  哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）。加账号、导入映射还在终端里（`cca team map`、`import`）。
+- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke` 排 `team`。
+- `HubKind` 认得 `team` 了；`config.hubs`、`devices --json` 的 `hubs[]` 里 Team 的服务器照 `team`（编号）分，账号问的是哪一台照
+  `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
+- 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
+  让窗口自己画进位图（没有玻璃效果，侧栏画不出来；版面和文字看得到）。
+
 ## 本机的状态和命令（M2）
 
 `~/.cca/teams/`（目录 700，密钥、配置、状态文件 600，`ssh-keygen` 生成的 `.pub` 是 644；整个在 `CCA_DIR_PRIVATE` 里；布局在 `cli/src/core/team.rs` 开头）：`index.json` 是加入的先后，每个 Team 一个目录
@@ -348,3 +378,8 @@
   一次是幂等的、别的机器拿了邀请被认出来（它手里的换成一个账号都没有的，授权本身没动）、用过了的邀请不再试、管理员重发以后加入、
   自己退出过的管理员不再发、它也不再自己加入（手动加入以后记号去掉）、回话没收到的下一次认出来补上、管理员移除了的不再发、共享关着的不看。`test_import_mine`：只加自己的官方账号。回归 11b3d：`./policy.sh team`（假 gh 的 deploy key、假的维护者目录）问过才发、
   写进映射、签名推送，独立实现的那一头拿映射里的邀请加入；`cca policy pull` 拉到给这台 Mac 的邀请后自己加入、退出后不再加入。
+- 界面（`macos/Tests/ContractTests/TeamTests.swift`，手写的夹具 `hello.json`、`state.json`、`team_devices.json`）：解码（旧版 cca 没有
+  这些字段、不认识的角色 / 状态）、筛选（三处用的列表、记进设置、Team 不在了当全部、旧版 cca 不筛）、展开时才问设备、邀请只经
+  `copySecret`、改授权和节点发的命令。通用检查（`Generic.swift`）：`config.teams` 和账号的 `team` 对得上、Team 的服务器照编号算、
+  `team_devices` / `team_list` 两种文档。回归 11b3d 把真实的 hello、带 Team 的 state、`team ls --json`、`team devices --json` 存进
+  `$T/guifx4` 交给 `macos/test.sh` 解码。

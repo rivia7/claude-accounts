@@ -31,12 +31,13 @@ struct Sidebar: View {
                 ClientUpdatesRow()
                     .tag(SidebarItem.clientUpdates)
             }
-            if model.visibleTools.count > 1 {
+            if model.visibleTools.count > 1 || model.teamFilterAvailable {
                 Section {
-                    ToolPickerRow()
+                    if model.visibleTools.count > 1 { ToolPickerRow() }
+                    if model.teamFilterAvailable { TeamFilterRow() }
                 }
             }
-            let groups = model.accountGroups(model.tool)
+            let groups = model.shownGroups(model.tool)
             ForEach(groups) { g in
                 AccountSection(group: g, showsAdd: g.id == groups.first?.id)
             }
@@ -66,6 +67,18 @@ private struct ToolPickerRow: View {
     }
 }
 
+/// 按 Team 筛选（加入了 Team 时才有）：只换下面列哪些账号，和工具切换一样放在账号列表的正上方。这一行不带 tag：选不中。
+private struct TeamFilterRow: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "person.3").font(.callout).foregroundStyle(.plainSecondary)
+            TeamFilterMenu()
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 /// 切换列哪个工具的账号（侧栏、菜单栏面板共用）。不带样子，用的地方自己加：pickerStyle 是里面的说了算，加在外面盖不掉。
 struct ToolPicker: View {
     @Environment(AppModel.self) private var model
@@ -88,7 +101,7 @@ private struct AccountSection: View {
     var body: some View {
         Section {
             if group.accounts.isEmpty, model.state != nil {
-                Text("还没有 \(Texts.product(model.tool)) 账号")
+                Text(model.activeTeamFilter == .all ? "还没有 \(Texts.product(model.tool)) 账号" : "这个筛选下没有 \(Texts.product(model.tool)) 账号")
                     .foregroundStyle(.plainSecondary)
                     .font(.callout)
             }
@@ -225,7 +238,7 @@ struct OfficeRow: View {
     var body: some View {
         // “休息到几点”到点就醒：跟着时间重算
         TimelineView(.periodic(from: .now, by: 30)) { ctx in
-            let census = model.office(now: ctx.date.timeIntervalSince1970).census
+            let census = model.office(now: ctx.date.timeIntervalSince1970, filtered: false).census   // 这一行说的是全部账号，不跟着筛选走
             HStack(spacing: 10) {
                 OverviewMark(size: 22).frame(width: 30, height: 30)
                 VStack(alignment: .leading, spacing: 2) {

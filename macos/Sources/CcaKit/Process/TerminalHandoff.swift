@@ -181,6 +181,10 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     static let hubJoin = Handoff(arguments: ["hub", "join"], title: "加入自己的同步服务器",
                                  message: "在终端里贴加入链接（输入不显示）。", inApp: true)
 
+    /// 加入一个 Team（`cca team join`，PROTOCOL 4.14）：贴管理员给的邀请链接（`team.join`，链接不对时带着原因重问）
+    static let teamJoin = Handoff(arguments: ["team", "join"], title: "加入 Team",
+                                  message: "在终端里贴管理员给的邀请链接（输入不显示）。", inApp: true)
+
     /// 部署自己的同步服务器（`cca hub deploy` 不写服务器，PROTOCOL 4.13）：问服务器地址、SSH 用户和端口（`hub.deploy`），这台 Mac 的密钥
     /// 登录不了时问密码（`hub.password`），只认密钥时给出把公钥加到服务器上的那一行（`hub.pubkey`）；reset：从头部署，换一个加入链接（先问同意）。
     /// 失败页的「改在终端里完成」也用它：终端里不写服务器时 cca 先问地址、SSH 用户和端口（旧版 cca 只说用法）。

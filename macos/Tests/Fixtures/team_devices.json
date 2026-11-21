@@ -1,0 +1,21 @@
+{
+  "version": 1, "kind": "team_devices", "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "name": "书房组",
+  "accounts": {"claude": {"carol@example.com": "US-C", "grace@example.com": "US-C"}, "codex": {"frank@example.com": "US-A"}},
+  "aliases": {"carol@example.com": "卡罗尔"},
+  "nodes": ["US-A", "US-C"],
+  "devices": [
+    {"dev": "0a1b2c3d4e5f6071", "label": "studio-mac", "name": "studio-mac", "state": "joined", "me": true, "grants": "all",
+     "seq": 4, "have": 4, "seen_age": 12.0, "expires_epoch": null, "problem": null},
+    {"dev": "1b2c3d4e5f607182", "label": "小王的 MacBook", "name": "wang-mbp", "state": "joined", "me": false,
+     "grants": {"claude": ["carol@example.com"]}, "seq": 4, "have": 3, "seen_age": 5400.0, "expires_epoch": null, "problem": null},
+    {"dev": "2c3d4e5f60718293", "label": "dan-air", "name": null, "state": "invited", "me": false, "grants": "all",
+     "seq": 1, "have": null, "seen_age": null, "expires_epoch": 1794600000.0, "problem": null},
+    {"dev": "3d4e5f6071829304", "label": "旧的 iMac", "name": "old-imac", "state": "joined", "me": false, "grants": "all",
+     "seq": 4, "have": 4, "seen_age": 86400.0, "expires_epoch": null,
+     "problem": "服务器报的公钥和这台设备加入时的不一样（服务器被人动过？）：不照它的；要紧的话移除这台设备、重新邀请"},
+    {"dev": "4e5f607182930415", "label": "前同事的电脑", "name": "ex-pc", "state": "revoked", "me": false, "grants": {},
+     "seq": 2, "have": null, "seen_age": null, "expires_epoch": null, "problem": null},
+    {"dev": "5f60718293041526", "label": "以后的状态", "name": null, "state": "later-state", "me": false, "grants": "all",
+     "seq": 0, "have": null, "seen_age": null, "expires_epoch": null, "problem": null}
+  ]
+}

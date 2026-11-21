@@ -24,9 +24,19 @@ struct OfficePage: View {
                             ProgressView().controlSize(.small)
                             Text("正在读取账号…").foregroundStyle(.secondary)
                         }
-                    } else {
+                    } else if model.activeTeamFilter == .all {
                         ForEach(office.rooms) { room in
                             RoomSection(room: room, now: now, animate: motionAllowed)
+                        }
+                    } else {
+                        // 按 Team 筛选着：没有账号的组不摆「还没有账号、去添加」的空位（那是说这台 Mac 上没有，不是这个筛选下没有）
+                        let rooms = office.rooms.filter { !$0.people.isEmpty }
+                        ForEach(rooms) { room in
+                            RoomSection(room: room, now: now, animate: motionAllowed)
+                        }
+                        if rooms.isEmpty {
+                            Text("「\(model.teamFilterTitle(model.activeTeamFilter))」这个筛选下没有账号。")
+                                .font(.callout).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -43,6 +53,8 @@ struct OfficePage: View {
             HStack(spacing: 10) {
                 Text("总览").font(.system(size: 24, weight: .semibold))
                 if model.stateLoading { ProgressView().controlSize(.small) }
+                Spacer(minLength: 8)
+                if model.teamFilterAvailable { TeamFilterMenu() }
             }
             Text(Texts.officeSummary(o.census))
                 .font(.callout)

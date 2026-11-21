@@ -984,7 +984,19 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
         list.push(V::Dict(row));
     }
     if as_json {
-        let doc = dict! { "version" => 1, "kind" => "team_devices", "team" => t.id.as_str(), "devices" => list };
+        // 管理页要的都在这一份里：Team 的名字、配置里的账号 → 节点（管理员定的）、别名、带着定义的节点的名字
+        let config = a.dict("config").unwrap_or_default();
+        let nodes: Vec<V> = config
+            .dict("nodes")
+            .and_then(|n| n.list("proxies"))
+            .map(|l| l.items().iter().filter_map(|p| p.as_dict()?.get("name")).collect())
+            .unwrap_or_default();
+        let doc = dict! {
+            "version" => 1, "kind" => "team_devices", "team" => t.id.as_str(), "name" => t.name.as_str(),
+            "accounts" => config.get("accounts").filter(|x| x.is_dict()).unwrap_or_else(|| V::Dict(Dict::new())),
+            "aliases" => config.get("aliases").filter(|x| x.is_dict()).unwrap_or_else(|| V::Dict(Dict::new())),
+            "nodes" => nodes, "devices" => list,
+        };
         out!("{}", json::dumps(&V::Dict(doc), json::Fmt::new().utf8().indent(2)));
         return Ok(());
     }

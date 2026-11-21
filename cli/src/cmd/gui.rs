@@ -733,6 +733,11 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     // 同步服务器（PROTOCOL 2.2 的 config.hubs）：经它同步的账号数是上面数的
     let hub_list = hub_entries(|kind| counts.iter().filter(|k| **k == kind).count())?;
     out.dict("config").expect("刚建的").set("hubs", hub_list);
+    // 这台设备在哪些 Team 里（PROTOCOL 2.2 的 config.teams，照加入的先后；一个都不在时没有这一项）
+    let team_list = super::team::team_rows();
+    if !team_list.is_empty() {
+        out.dict("config").expect("刚建的").set("teams", team_list);
+    }
     // dict.fromkeys(RO_BAD)：重复的只留先来的
     let mut seen: Vec<(String, String)> = Vec::new();
     for bad in RO_BAD.with(|b| b.borrow().clone()) {

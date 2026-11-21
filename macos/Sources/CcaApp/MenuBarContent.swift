@@ -90,6 +90,13 @@ struct MenuBarContent: View {
                 ToolPicker()
                     .pickerStyle(.segmented)
             }
+            if model.teamFilterAvailable {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.3").font(.callout).foregroundStyle(.secondary)
+                    TeamFilterMenu()
+                    Spacer(minLength: 0)
+                }
+            }
             content
             if let t = model.toast {
                 Text(t.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -133,9 +140,10 @@ struct MenuBarContent: View {
     private var content: some View {
         switch model.phase {
         case .ready:
-            let accounts = model.arrangedAccounts(model.tool)
+            let accounts = model.shownAccounts(model.tool)
             if accounts.isEmpty {
-                Text(model.state == nil ? "正在读取…" : "还没有账号").foregroundStyle(.secondary).font(.callout)
+                Text(model.state == nil ? "正在读取…" : model.activeTeamFilter == .all ? "还没有账号" : "这个筛选下没有账号")
+                    .foregroundStyle(.secondary).font(.callout)
             } else {
                 VStack(spacing: 10) {
                     ForEach(accounts) { a in MenuRow(account: a) }

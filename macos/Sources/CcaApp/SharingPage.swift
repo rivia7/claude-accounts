@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 共享与同步：维护者共享给你的账号（维护者的映射，默认关着）的开关，和自己的同步服务器（PROTOCOL 4.13）。状态、账号数、设备都照 cca 给的
+/// 共享与同步：维护者共享给你的账号（维护者的映射，默认关着）的开关，Team（PROTOCOL 4.14，`TeamsCard`），和自己的同步服务器（PROTOCOL 4.13）。状态、账号数、设备都照 cca 给的
 /// （`config.policy`、`config.hubs`、`hub devices --json`），不在界面里重算；打开共享、加入、部署是提问会话，关掉共享、移除设备、退出由 cca 先问同意。
 struct SharingPage: View {
     @Environment(AppModel.self) private var model
@@ -15,6 +15,7 @@ struct SharingPage: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if model.teamAvailable { TeamsCard() }
                 if model.hubAvailable { HubCard() }
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
@@ -30,7 +31,8 @@ struct SharingPage: View {
                 Text("共享与同步").font(.system(size: 24, weight: .semibold))
                 if model.sharingBusy || model.hubBusy { ProgressView().controlSize(.small) }
             }
-            Text(model.hubAvailable ? "维护者共享给你的账号；你自己的账号经你自己的服务器，在几台设备之间同步设备统计和折合金额。"
+            Text(model.teamAvailable ? "别人共享给你的账号（维护者的映射、Team），和你自己的几台设备之间的同步（设备统计、折合金额）。"
+                 : model.hubAvailable ? "维护者共享给你的账号；你自己的账号经你自己的服务器，在几台设备之间同步设备统计和折合金额。"
                  : "维护者共享给你的账号：打开后映射里的账号自动加进来，出口节点由维护者固定。")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -273,6 +275,8 @@ struct SharingRow: View {
             Spacer(minLength: 4)
             if model.state?.config?.policy?.state == .pending {
                 Tag(text: "等维护者", color: .orange)
+            } else if model.teams.contains(where: { $0.state.failing }) {
+                Tag(text: "Team 要处理", color: .orange)
             } else if model.ownHub?.state.failing == true {
                 Tag(text: "没同步成", color: .orange)
             }

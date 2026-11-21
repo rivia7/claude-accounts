@@ -13,7 +13,9 @@ struct HubKind: KnownValues {
     static let maintainer = HubKind(rawValue: "maintainer")
     /// 自己的同步服务器：别的官方账号（这台设备加入了时）
     static let own = HubKind(rawValue: "own")
-    static let allKnown: [HubKind] = [.maintainer, .own]
+    /// 某个 Team 的同步服务器：这个 Team 给这台设备的账号（PROTOCOL 4.14；是哪个 Team 看旁边的 `team`）
+    static let team = HubKind(rawValue: "team")
+    static let allKnown: [HubKind] = [.maintainer, .own, .team]
 }
 
 /// 一台服务器同步得怎么样（`config.hubs[].state`）。不认识的值当 `error`
@@ -57,11 +59,15 @@ struct HubEntry: Decodable, Sendable, Equatable {
     /// 自己的同步服务器：加入链接里钉着证书的指纹（自己部署的，更新经 SSH：`cca hub deploy`）；false 是照证书机构验（托管平台上的，
     /// 更新照 `cca hub hosted` 的步骤）。维护者的是 nil
     var pinned: Bool?
+    /// Team 的服务器（`kind` 是 `team`）：是哪个 Team 的（编号）、它的名字；别的是 nil
+    var team: String?
+    var teamName: String?
     /// 托管平台上的那一台（`pinned` 是 false）：更新照 `cca hub hosted`，没有经 SSH 的从头部署
     var onPlatform: Bool { pinned == false }
 
     enum CodingKeys: String, CodingKey {
-        case kind, url, host, state, error, accounts, name, members
+        case kind, url, host, state, error, accounts, name, members, team
+        case teamName = "team_name"
         case checkedEpoch = "checked_epoch"
         case joinedEpoch = "joined_epoch"
         case canInvite = "can_invite"
@@ -82,6 +88,8 @@ struct HubEntry: Decodable, Sendable, Equatable {
         joinedEpoch = c.double(.joinedEpoch)
         canInvite = c.bool(.canInvite) ?? false
         pinned = c.bool(.pinned)
+        team = c.string(.team)
+        teamName = c.string(.teamName)
     }
 }
 

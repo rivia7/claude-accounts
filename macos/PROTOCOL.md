@@ -92,6 +92,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   或者版本不认识时 App 不显示这一页、不调这些命令（旧版 cca 会把 `remote` 当成启动账号的参数）。
 - `remote_end`：有 `cca remote end <会话的 id>`（结束这台 Mac 上的一个会话，9.2）。没有这个字段（3.5.2-beta.2 及更早）时 App 不给「结束…」。
 - `hub`：有自己的同步服务器（`cca hub …`，4.13；`_gui state` 的 `config.hubs`、账号的 `hub`、折合金额的 `sync.hub`）。现在是 1。
+- `team`：有 Team（`cca team …`，4.14；`_gui state` 的 `config.teams`、账号的 `team`）。现在是 1。没有这个字段（旧版 cca）、不是 App 认识的
+  版本时：不显示 Team 的那一块、不按 Team 筛选账号、不调 `cca team`。
   没有这个字段（旧版 cca）或者版本不认识时 App 不显示「自己的同步服务器」、不调 `cca hub`（旧版 cca 会把 `hub` 当成启动账号的参数）。
 - `installed`：`~/.cca/config.json` 在不在。为 false 时 App 显示“先在终端里运行 cca install”（可以用终端交接，见 6）。
 - `tools.claude.enabled` 恒为 true；`tools.codex.enabled` = `~/.cca/codex.json` 存在，`tools.agy.enabled` = `~/.cca/agy.json` 存在
@@ -196,7 +198,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 - `is_last`：上次在命令行里用的账号。
 - `hub`：这个账号的设备统计、记下的 API key、折合金额经哪台服务器和别的设备同步（`config.hubs[].kind`）：`maintainer`（维护者的服务器：
   映射里的官方账号）| `own`（自己的同步服务器：别的官方账号，这台设备加入了时，4.13）| `team`（某个 Team 的同步服务器：这个 Team 给这台设备的
-  账号，4.14；是哪个 Team 看账号的 `team`；现在的 App 还不认识这个值，当 null）| null（不同步：第三方 API 账号、账号表里没写邮箱的，
+  账号，4.14；是哪个 Team 看账号的 `team`）| null（不同步：第三方 API 账号、账号表里没写邮箱的，
   或者该走的那一台这台设备用不了——共享关着、映射里没配置服务器、没加入自己的同步服务器、关掉了设备统计）。App 不认识的值当 null。
 - `team`：这个账号是哪个 Team 给的（Team 的编号，4.14）；不是 Team 给的账号**没有这一项**。只说是谁给的，不看那个 Team 的服务器这台设备
   用不用得了（用不了时 `hub` 是 null，`team` 照样有）。同一个账号几个 Team 都给了时是先加入的那个。
@@ -1100,24 +1102,35 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
 
 ### 4.14 Team：`cca team`
 
-把「维护者共享的账号」和「自己的同步服务器」合成一个概念的新机制（设计和分阶段的计划在 docs/dev/team.md）。这一版只有命令行：配置取到
-本机（`~/.cca/teams/`），账号表还不照它改，`_gui state` 里也还没有 Team；App 的页面在后面的阶段。这里先记下 App 以后会碰到的代码。
+把「维护者共享的账号」和「自己的同步服务器」合成一个概念的机制（设计和分阶段的计划在 docs/dev/team.md）：一个 Team 是一组设备加一份配置
+（哪些账号、各走哪个节点），管理员的设备维护、给每台设备发邀请。`hello.team` 是 1 时 App 才用下面这些。
+
+- **`_gui state`**：`config.teams`——这台设备在的 Team，照加入的先后，每一项和下面 `team ls --json` 的 `teams[]` 一样；**一个都不在时没有这个字段**
+  （当作 `[]`）。账号的 `team`（2.2）是哪个 Team 给的。App 按它筛选账号（侧栏、总览、菜单栏面板共用一个选择：全部 / 某个 Team / 不在 Team 里的；
+  只管显示，不影响账号表、启动器和排序），在「共享与同步」页列出各个 Team。
 
 - **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", url, host, device,
   state: "local"（管理员还没接上服务器）| "pending"（还没取过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
   error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
-  "team", "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
-  seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，没有是 null）。
+  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "nodes": [配置里带着定义的节点的名字…],
+  "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
+  seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
+  没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
+- **取配置**（`cca team sync`）：各个 Team 取一次，取到新的马上照它改账号表、同步路由器。跑完为止。
 - **加入**（`cca team join`）：提问会话（`team.join`：一个密文输入框，贴邀请链接）。邀请是凭证、只能用一次，只经提问会话的管道交给 cca。
   成了 `result` 的 `team_joined`；加入了、配置还没取到时前面有 `fail` 的 `team_sync`（退出码照样是 0）。
 - **退出**（`cca team leave [Team]`）：要同意（成员是 `team_leave`、管理员是 `team_delete`，范围都是 Team 的编号，默认否），成了 `result` 的 `team_left`。
 - **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
-- **邀请**（`cca team invite`）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的会话里（有 `CLAUDECODE`、没有 `CCA_EVENTS`）不给。
+- **邀请**（`cca team invite <Team> <名字> [--accounts all|none|工具:邮箱,…]`）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的
+  会话里（有 `CLAUDECODE`、没有 `CCA_EVENTS`）不给。它是那台设备的密钥：App **只经内存里的管道**读这一行，放进剪贴板（标成机密、60 秒后清掉），
+  不进被观察的状态、不显示在界面上。
+- **改授权**（`cca team grant <Team> <设备编号> all | none | +工具:邮箱 | -工具:邮箱 …`，几项照先后做）、**改节点**
+  （`cca team map <Team> <工具> <邮箱> <节点>`）：改完发布，管理员自己这台的账号表马上照它对一遍。跑完为止。
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
   `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
-  原来那台上没收尾成）。这些原因码在 Swift 的 `FailCode` 里还没登记：等 App 有了 Team 的页面一起加。
+  原来那台上没收尾成）。App 不按这些原因码分别处理：`fail` 事件的 `message` 照原样显示。
 
 ## 5. `cca gui`
 

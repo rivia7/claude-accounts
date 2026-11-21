@@ -32,6 +32,9 @@ struct HelloDoc: CcaDocument, Equatable {
     /// 有自己的同步服务器（`cca hub …`，PROTOCOL 4.13；state 的 `config.hubs`、账号的 `hub`）；旧版 cca 没有这个字段，
     /// App 不显示「自己的同步服务器」、不调 `cca hub`（版本不是 HubAPI.version 时也一样）
     var hub: Int?
+    /// 有 Team（`cca team …`，PROTOCOL 4.14；state 的 `config.teams`、账号的 `team`）；旧版 cca 没有这个字段，App 不显示 Team 的那一块、
+    /// 不按 Team 筛选、不调 `cca team`（版本不是 TeamAPI.version 时也一样）
+    var team: Int?
     var ccaVersion: String?
     var devMode: Bool
     /// 缺这个字段时当作已安装（不无故显示安装引导）。
@@ -42,7 +45,7 @@ struct HelloDoc: CcaDocument, Equatable {
     var gui: HelloGUI?
 
     enum CodingKeys: String, CodingKey {
-        case version, kind, api, prompt, reorder, forms, dock, cost, mail, remote, hub
+        case version, kind, api, prompt, reorder, forms, dock, cost, mail, remote, hub, team
         case installCLI = "install_cli"
         case remoteEnd = "remote_end"
         case ccaVersion = "cca_version"
@@ -67,6 +70,7 @@ struct HelloDoc: CcaDocument, Equatable {
         remote = c.int(.remote)
         remoteEnd = c.int(.remoteEnd)
         hub = c.int(.hub)
+        team = c.int(.team)
         ccaVersion = c.string(.ccaVersion)
         devMode = c.bool(.devMode) ?? false
         installed = c.bool(.installed) ?? true

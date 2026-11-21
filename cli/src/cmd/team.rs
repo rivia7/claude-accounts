@@ -733,6 +733,11 @@ pub fn cmd_team_apply(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// 这台设备在的各个 Team（照加入的先后），每个是 team_row 的样子：cca team ls --json 的 teams、_gui state 的 config.teams
+pub fn team_rows() -> Vec<V> {
+    teams().iter().map(|t| V::Dict(team_row(t))).collect()
+}
+
 /// 一个 Team 在列表里的样子：state 是 local（管理员还没接上服务器）| pending（还没取过配置）| ok | removed | lost | error
 fn team_row(t: &Team) -> Dict {
     let doc = team_doc(&t.id);

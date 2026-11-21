@@ -20,6 +20,7 @@ import Foundation
 /// | `mail trust-forwarder KEY`（提问会话） | flow_mail_trust-forwarder.flow | — |
 /// | `_onboard`（配置向导，提问会话） | flow__onboard.flow | — |
 /// | `hub devices --json` | hub_devices.json | — |
+/// | `team devices <Team> --json` | team_devices.json | — |
 /// | `hub remove 指纹` / `hub leave` | 直接成功（没有真的改） | — |
 /// | `hub invite [--new]` | 演示用的加入链接（运行时拼出来） | — |
 /// | `hub join` / `hub deploy [--reset]` / `hub hosted`（提问会话） | flow_hub_join.flow / flow_hub_deploy.flow / flow_hub_hosted.flow | — |
@@ -215,6 +216,16 @@ struct FixtureTransport: Transport {
         case ("hub", "devices"):
             await pause(2)
             return json("hub_devices.json")
+        case ("team", "devices"):
+            await pause(1)
+            return json("team_devices.json")
+        case ("team", "invite"):
+            // 演示用的假邀请：运行时拼出来（仓库里不放长得像真邀请的字符串）
+            return CcaResponse(exitCode: 0, stdout: Data(("cca-team1.demo-" + String(repeating: "0", count: 24) + ".0000").utf8), stderr: Data(), events: [])
+        case ("team", "sync"), ("team", "leave"), ("team", "revoke"), ("team", "grant"), ("team", "map"):
+            let code: ResultCode = sub == "leave" ? .teamLeft : sub == "revoke" ? .teamRevoked : .opened
+            let e = CcaEvent.result(ResultEvent(code: code, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: nil, key: nil))
+            return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])
         case ("hub", "remove"), ("hub", "leave"):
             let e = CcaEvent.result(ResultEvent(code: sub == "leave" ? .hubLeft : .hubRemoved, route: nil, node: nil, port: nil,
                                                 message: "演示数据：没有真的改", tool: nil, key: nil))

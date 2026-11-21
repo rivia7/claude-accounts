@@ -124,6 +124,8 @@ struct StateConfig: Decodable, Sendable, Equatable {
     /// 经哪几台服务器和自己的其他设备同步（PROTOCOL 2.2 的 `config.hubs`）：维护者的在前，自己的同步服务器在后；
     /// 不认识的 `kind` 已经去掉；旧版 cca 没有这个字段，是空的
     var hubs: [HubEntry]
+    /// 这台设备在哪些 Team 里（`cca team`，PROTOCOL 4.14），照加入的先后；一个都不在、旧版 cca 没有这个字段时是空的
+    var teams: [TeamEntry]
     /// 这台机器走过配置向导、或者已经有账号/路由器/本机客户端（老版 cca 没有这个字段 → 当作已配置，不弹向导）。
     var onboarded: Bool?
 
@@ -132,7 +134,7 @@ struct StateConfig: Decodable, Sendable, Equatable {
         case router, local, nodes
         case minTrust = "min_trust"
         case leakCheck = "leak_check"
-        case update, policy, hubs, onboarded
+        case update, policy, hubs, teams, onboarded
     }
 
     init(from decoder: Decoder) throws {
@@ -146,6 +148,7 @@ struct StateConfig: Decodable, Sendable, Equatable {
         update = c.stringish(.update)
         policy = c.lossy(PolicyConfig.self, .policy)
         hubs = (c.lossyArray(HubEntry.self, .hubs) ?? []).filter { $0.kind.isKnown }
+        teams = (c.lossyArray(TeamEntry.self, .teams) ?? []).filter { !$0.id.isEmpty }
         onboarded = c.bool(.onboarded)
     }
 
@@ -494,6 +497,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：维护者的、自己的同步服务器，不同步（和不认识的值）是 nil。
     /// 旧版 cca 没有这个字段：有「设备」一节的当作维护者的（那时只有它）
     var hub: HubKind?
+    /// 这个账号是哪个 Team 给的（Team 的编号，PROTOCOL 2.2）：只说是谁给的，它的服务器这台设备用不了时也有；不是 Team 给的是 nil
+    var team: String?
     var api: APIInfo?
     var badge: Badge?
     var app: AppRun?
@@ -525,7 +530,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case node, port, slot, group, pinned
         case pinnedNode = "pinned_node"
         case isLast = "is_last"
-        case hub
+        case hub, team
         case api, badge, app, cli, can, mail
         case canWhy = "can_why"
         case apiKey = "api_key"
@@ -564,6 +569,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         cli = c.lossy(CLIRun.self, .cli)
         can = c.lossy(Can.self, .can) ?? Can()
         hub = c.contains(.hub) ? c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil } : (can.devices ? .maintainer : nil)
+        team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
         mail = c.lossy(MailConfig.self, .mail)
         apiKey = c.lossy(APIKeyInfo.self, .apiKey)

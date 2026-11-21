@@ -57,6 +57,15 @@
        "members": 3, "joined_epoch": 1793900000.0, "can_invite": true, "pinned": true},
       {"kind": "later-kind", "url": "https://x.example.com:1", "host": "x.example.com:1", "state": "ok", "error": null,
        "checked_epoch": null, "accounts": 0, "name": null, "members": null, "joined_epoch": null, "can_invite": false}
+    ],
+    "teams": [
+      {"id": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "name": "书房组", "role": "admin", "url": "https://team.example.com:18445",
+       "host": "team.example.com:18445", "device": "studio-mac", "state": "ok", "error": null, "seq": 4, "accounts": 2,
+       "joined_epoch": 1793900000},
+      {"id": "c7e1a4b2d39f40718e5a6c7d8b9f0a1e", "name": "设计组", "role": "member", "url": "https://design.example.com",
+       "host": "design.example.com", "device": "studio-mac", "state": "removed",
+       "error": "这台设备被「设计组」的管理员移除了：要再加入，向管理员要一个新的邀请", "seq": 2, "accounts": 0, "joined_epoch": 1793000000},
+      {"id": "", "name": "编号是空的不算"}
     ]
   },
   "routing": {
@@ -2958,6 +2967,7 @@
           "id": "carol-example-com-4d5e6f",
           "alias": "",
           "email": "carol@example.com",
+          "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
           "name": "carol@example.com",
           "label": "carol@example.com",
           "kind": "oauth",
@@ -4913,6 +4923,7 @@
           "id": "grace-example-com-0d1e2f",
           "alias": "",
           "email": "grace@example.com",
+          "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
           "name": "grace@example.com",
           "label": "grace@example.com",
           "kind": "oauth",

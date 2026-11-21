@@ -3924,7 +3924,11 @@ out=$(run cca team 2>&1)
 ok "加入以后账号表照 Team 的配置改：alice 的节点由它定（说一声）" '[ "$(tm_alice)" = "$TMNODE" ] && [ "$TMNODE" != "$TMWAS" ] && printf "%s" "$TMJOIN" | grep -q "的出口按「维护者的组」的配置固定为 ${TMNODE}（账号表里写的是 ${TMWAS}，已改回）"'
 out=$(run cca team 2>&1)
 ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，第 1 版配置、1 个账号"'
-out=$(gj state)
+# App 的契约测试要的真实输出（这一节最后交给 macos/test.sh 解码）：hello、带着 Team 的 state、team ls、管理员的 team devices
+mkdir -p "$T/guifx4"; gj hello > "$T/guifx4/hello.json"; run cca team ls --json > "$T/guifx4/team_list.json" 2>/dev/null
+run cca team devices 书房组 --json > "$T/guifx4/team_devices.json" 2>/dev/null
+out=$(gj state); printf '%s' "$out" > "$T/guifx4/state_team.json"
+ok "_gui hello 说有 Team（team 是 1）；_gui state 的 config.teams 是这台设备在的两个 Team（照加入的先后：书房组是管理员，维护者的组是成员、配置同步着）；team devices --json 带着 Team 的名字和配置里的账号" 'jok "d[\"team\"] == 1" < "$T/guifx4/hello.json" && printf "%s" "$out" | jok "[(t[\"id\"], t[\"name\"], t[\"role\"], t[\"state\"]) for t in d[\"config\"][\"teams\"]] == [(\"$TMID\", \"书房组\", \"admin\", \"ok\"), (\"$TMBID\", \"维护者的组\", \"member\", \"ok\")]" && jok "d[\"kind\"] == \"team_devices\" and d[\"team\"] == \"$TMID\" and d[\"name\"] == \"书房组\" and \"alice@example.com\" in d[\"accounts\"][\"claude\"] and isinstance(d[\"nodes\"], list) and any(x[\"me\"] for x in d[\"devices\"])" < "$T/guifx4/team_devices.json"'
 ok "_gui state：alice 是「维护者的组」给的（账号的 team 是它的编号），经它的同步服务器同步（hub 是 team）；config.hubs 里有它（kind 是 team，带编号和名字）；别的账号没有 team" 'printf "%s" "$out" | jok "(lambda a: a[\"hub\"] == \"team\" and a[\"team\"] == \"$TMBID\")(next(a for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\")) and (\"$TMBID\", \"维护者的组\") in [(h.get(\"team\"), h.get(\"team_name\")) for h in d[\"config\"][\"hubs\"] if h[\"kind\"] == \"team\"] and all(\"team\" not in a for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
 out=$(runev cca team devices 维护者的组 --json 2>/dev/null); rc=$?
 ok "cca team devices --json：这台设备不是管理员：fail 事件 team_not_admin，stdout 没有东西（不是半截 JSON）" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
@@ -3984,6 +3988,9 @@ cp -p "$T/tmh.keys" "$T/deploy_keys.json"; cp -p "$T/tmh.mr" "$MR/policy.json"; 
 cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$MR/policy.json.sig" "$H/.cca/teams/adopt.json"
 out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
 ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
+if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
+	ok "App 的契约测试：Swift 模型解码真实的带着 Team 的 _gui state、cca team ls --json、cca team devices --json（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx4" > "$T/contract4.log" 2>&1'
+fi
 kill "$TMAPID" "$TMBPID" 2>/dev/null; wait "$TMAPID" "$TMBPID" 2>/dev/null
 rm -rf "$H/.cca/teams" "$TMA" "$TMB"
 cp "$T/tm-accounts.bak" "$H/.cca/accounts.json"; cp "$T/tm-config.bak" "$H/.cca/config.json"   # 账号表、配置照这一节开头的还原，路由器跟着同步回去

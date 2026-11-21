@@ -192,6 +192,18 @@ enum Snapshot {
             Scene(name: "sharing") { m in
                 m.selection = .sharing   // 换到这一页时自己问一次设备（窗口在后面也问）
             },
+            // Team：这台设备在两个 Team 里（一个是管理员：展开着设备和账号；一个被管理员移除了）
+            Scene(name: "teams") { m in
+                m.teamFilter = .all
+                m.selection = .sharing
+                if let t = m.teams.first(where: \.isAdmin), !m.teamExpanded.contains(t.id) { m.toggleTeam(t) }
+            },
+            // 按 Team 筛选：侧栏和总览只剩这个 Team 给的账号（截完改回全部，见下面）
+            Scene(name: "team-filter") { m in
+                m.tool = .claude
+                if let t = m.teams.first { m.teamFilter = .team(t.id) }
+                m.selection = .office
+            },
             // 置顶（演示模式不存进设置）：放在最后，别的场景不受影响
             Scene(name: "pinned") { m in
                 m.tool = .claude
@@ -211,6 +223,7 @@ enum Snapshot {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 await capture(window, to: dir.appendingPathComponent("\(scene.name)-\(label).png"))
             }
+            if scene.name == "team-filter" { model.teamFilter = .all }
         }
         // 显示细节时的账号页、分流页
         if only.isEmpty || only.contains("details") {
@@ -407,6 +420,15 @@ enum Snapshot {
             try rep.representation(using: .png, properties: [:])?.write(to: url)
             print(url.path)
         } catch {
+            // 屏幕睡着时系统不给截屏（SCStreamErrorDomain -3811）：退一步，让窗口自己把内容画进位图。玻璃、材质这些合成出来的效果
+            // 画不出来（发灰、发白），版面、文字、控件看得到——够查「放得下吗、说的是什么」，要看最终的样子还得屏幕醒着时截
+            if let view = window.contentView?.superview ?? window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                if let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: url)) != nil {
+                    print(url.path + "（截屏不成：窗口自己画的，没有玻璃效果）")
+                    return
+                }
+            }
             FileHandle.standardError.write(Data("snapshot: \(url.lastPathComponent) 截图失败：\(error)\n".utf8))
         }
     }

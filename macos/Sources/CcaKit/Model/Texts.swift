@@ -237,6 +237,66 @@ enum Texts {
 
     // MARK: 自己的同步服务器（PROTOCOL 4.13）
 
+    // MARK: Team（PROTOCOL 4.14）
+
+    /// 筛选菜单里一项的名字：全部账号、Team 的名字（不在了的写编号的开头）、不在 Team 里的
+    static func teamFilter(_ f: TeamFilter, teams: [TeamEntry]) -> String {
+        switch f {
+        case .all: return "全部账号"
+        case .team(let id): return teams.first { $0.id == id }.map { nonEmpty($0.name) ?? String(id.prefix(8)) } ?? String(id.prefix(8))
+        case .outside: return "不在 Team 里的"
+        }
+    }
+
+    /// Team 那一行状态：照 cca 给的 `config.teams[].state` 说（没取成、被移除、记录没了时 cca 给了原因）
+    static func teamState(_ t: TeamEntry) -> String {
+        switch t.state {
+        case .ok: return t.seq > 0 ? "配置已同步（第 \(t.seq) 版）" : "已同步"
+        case .pending: return "还没取到配置"
+        case .local: return "还没接上同步服务器"
+        case .removed: return nonEmpty(t.error) ?? "这台设备被管理员移除了"
+        case .lost: return nonEmpty(t.error) ?? "服务器的记录没了：等管理员把这台设备登记回去"
+        default: return nonEmpty(t.error).map { "没取到配置：\($0)" } ?? "没取到配置"
+        }
+    }
+
+    /// Team 的第二行：这台设备在里面叫什么、给了它几个账号、服务器
+    static func teamSummary(_ t: TeamEntry) -> String {
+        var parts: [String] = []
+        if let d = nonEmpty(t.device) { parts.append("这台设备叫 \(d)") }
+        parts.append(t.accounts > 0 ? "给了这台设备 \(t.accounts) 个账号" : "没有给这台设备账号")
+        if let h = nonEmpty(t.host) { parts.append(h) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 管理员看一台设备：状态、给了它几个账号、它手里是第几版
+    static func teamDeviceDetail(_ d: TeamDevice, accounts total: Int, now: Double) -> String {
+        var parts: [String] = []
+        switch d.state {
+        case .joined, .local:
+            if let age = d.seenAge { parts.append(agoPhrase(age) + "来过") } else { parts.append(d.state == .local ? "还没接上服务器" : "加入了") }
+        case .invited:
+            parts.append(d.expiresEpoch.map { $0 > now ? "邀请还没用（" + untilPhrase($0 - now) + "后过期）" : "邀请过期了" } ?? "邀请还没用")
+        case .expired: parts.append("邀请过期了，没用上")
+        case .left: parts.append("它自己退出了")
+        case .revoked: parts.append("移除了")
+        default: parts.append(d.state.rawValue)
+        }
+        if d.state.active {
+            parts.append(d.grantsAll ? "全部账号" : "\(d.grantCount(of: total)) 个账号")
+            if let have = d.have, d.seq > 0 { parts.append(have >= d.seq ? "配置是最新的" : "配置还是第 \(have) 版（最新第 \(d.seq) 版）") }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 还有多久（邀请多久以后过期）：几天、几小时、几分钟
+    static func untilPhrase(_ seconds: Double) -> String {
+        let s = max(0, seconds)
+        if s >= 2 * 86400 { return "\(Int(s / 86400)) 天" }
+        if s >= 2 * 3600 { return "\(Int(s / 3600)) 小时" }
+        return "\(max(1, Int(s / 60))) 分钟"
+    }
+
     /// 「自己的同步服务器」卡片上的那一行状态：照 cca 给的 `config.hubs` 里 own 的那一项说
     static func hubState(_ h: HubEntry, now: Double) -> String {
         switch h.state {

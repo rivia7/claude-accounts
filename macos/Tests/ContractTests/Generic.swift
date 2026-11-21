@@ -698,14 +698,30 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
     } else {
         check("\(name) 有 routing", false)
     }
-    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话维护者的在前、每类最多一台，账号走的那一台在里面
+    // config.teams（PROTOCOL 2.2、4.14）：一个 Team 都不在时没有这个字段。账号的 team 是其中一个；第三方 API 账号不是谁给的
+    let rawTeamConfig = raw["config"] as? [String: Any] ?? [:]
+    let teams = doc.config?.teams ?? []
+    if let rt = rawTeamConfig["teams"] {
+        let rawTeams = (rt as? [[String: Any]] ?? []).filter { ($0["id"] as? String)?.isEmpty == false }
+        check("\(name) config.teams 是对象数组，有编号的都解码了，编号不重复", rt is [Any] && rawTeams.count == teams.count
+              && Set(teams.map(\.id)).count == teams.count)
+    }
+    for t in doc.tools {
+        for a in t.accounts where a.team != nil {
+            check("\(name) \(t.id.rawValue)/\(a.key) 是哪个 Team 给的：那个 Team 在 config.teams 里；不是第三方 API 账号",
+                  teams.contains { $0.id == a.team } && !a.isAPI)
+        }
+    }
+    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话维护者的在前、维护者的和自己的各最多一台（Team 的可以有几台，照编号分），
+    // 账号走的那一台在里面
     let rawConfig = raw["config"] as? [String: Any] ?? [:]
     if let rh = rawConfig["hubs"] {
         let rawHubs = rh as? [[String: Any]] ?? []
         let rawKnown = rawHubs.filter { HubKind(rawValue: $0["kind"] as? String ?? "").isKnown }
         check("\(name) config.hubs 是对象数组，认识的都解码了（不认识的 kind 去掉）", rh is [Any] && rawKnown.count == doc.config?.hubs.count)
         let hubs = doc.config?.hubs ?? []
-        check("\(name) config.hubs 每类最多一台，维护者的在前", Set(hubs.map(\.kind)).count == hubs.count
+        check("\(name) config.hubs 每类最多一台（Team 的照编号算），维护者的在前", Set(hubs.map { $0.kind.rawValue + "/" + ($0.team ?? "") }).count == hubs.count
+              && hubs.allSatisfy { ($0.kind == .team) == ($0.team?.isEmpty == false) }
               && hubs.map(\.kind) == hubs.map(\.kind).sorted { $0 == .maintainer && $1 != .maintainer })
         for (i, h) in hubs.enumerated() {
             hubEntryInvariants("\(name) config.hubs[\(i)]", h, i < rawKnown.count ? rawKnown[i] : [:])
@@ -713,7 +729,7 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
         for t in doc.tools {
             for a in t.accounts {
                 check("\(name) \(t.id.rawValue)/\(a.key) 走的那台服务器在 config.hubs 里，有「设备」一节的才走",
-                      a.hub == nil ? !a.can.devices : hubs.contains { $0.kind == a.hub } && a.can.devices)
+                      a.hub == nil ? !a.can.devices : hubs.contains { $0.kind == a.hub && (a.hub != .team || $0.team == a.team) } && a.can.devices)
                 check("\(name) \(t.id.rawValue)/\(a.key) 第三方 API 账号不经服务器同步", !a.isAPI || a.hub == nil)
                 if let s = a.cost?.sync, s.state == .localOnly || s.state == .off {
                     check("\(name) \(t.id.rawValue)/\(a.key) 只在这台设备上的折合金额不说经哪台服务器", s.hub == nil)
@@ -873,7 +889,8 @@ func genericDevices(_ name: String, _ d: Data) -> DevicesDoc? {
         }
     }
     if let rh = raw["hubs"] {
-        check("\(name) hubs 都解码了，每类最多一台", (rh as? [Any])?.count == doc.hubs.count && Set(doc.hubs.map(\.kind)).count == doc.hubs.count)
+        check("\(name) hubs 都解码了，每类最多一台（Team 的照编号算）", (rh as? [Any])?.count == doc.hubs.count
+              && Set(doc.hubs.map { $0.kind.rawValue + "/" + ($0.team ?? "") }).count == doc.hubs.count)
     }
     knownEnums(name, auditDevices(doc))
     return doc
@@ -1033,16 +1050,19 @@ func genericEvents(_ name: String, _ d: Data) -> [CcaEvent] {
 // MARK: 容错（两种模式都跑：改动文档后照样解码）
 
 /// 给每个对象加不认识的字段（can_why、hello 的 tools 是字典：键就是数据，不往里加）。
-func injectUnknown(_ x: Any, parentKey: String? = nil) -> Any {
+/// 键是数据（邮箱、工具名）的那几个对象：往里塞一个键就成了一条数据，不塞（连它里面的也不塞）。只认值是对象的：别处同名的数组照塞
+private let dataKeyedObjects: Set<String> = ["accounts", "aliases", "grants"]
+
+func injectUnknown(_ x: Any, parentKey: String? = nil, inData: Bool = false) -> Any {
     if var d = x as? [String: Any] {
-        for (k, v) in d { d[k] = injectUnknown(v, parentKey: k) }
-        if parentKey != "can_why" && parentKey != "tools" {
+        for (k, v) in d { d[k] = injectUnknown(v, parentKey: k, inData: inData || (dataKeyedObjects.contains(k) && v is [String: Any])) }
+        if parentKey != "can_why" && parentKey != "tools" && !inData {
             d["zz_unknown_object"] = ["nested": [1, 2.5, "x", NSNull()] as [Any], "flag": true] as [String: Any]
             d["zz_unknown_text"] = "future"
         }
         return d
     }
-    if let a = x as? [Any] { return a.map { injectUnknown($0, parentKey: parentKey == "tools" ? "tool" : nil) } }
+    if let a = x as? [Any] { return a.map { injectUnknown($0, parentKey: parentKey == "tools" ? "tool" : nil, inData: inData) } }
     return x
 }
 
@@ -1246,6 +1266,29 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "hub_devices":
             genericHubDevices(f, d)
             tolerance(HubDevicesDoc.self, f, d) { [$0.devices.count] }
+        case "team_devices":
+            // cca team devices <Team> --json（PROTOCOL 4.14）：设备编号不空不重复，这台设备最多一台，授权里的账号都在这个 Team 的配置里
+            if let doc = decodeOrFail(TeamDevicesDoc.self, f, d) {
+                check("\(f) version 1，有 Team 的编号", doc.version == 1 && doc.team.count == 32)
+                check("\(f) 设备编号不为空且不重复，这台设备最多一台", doc.devices.allSatisfy { !$0.id.isEmpty }
+                      && Set(doc.devices.map(\.id)).count == doc.devices.count && doc.devices.filter(\.me).count <= 1)
+                let known = Set(doc.accountList.map(\.spec))
+                check("\(f) 只给几个账号的设备：这些账号都在配置里", doc.devices.allSatisfy { dev in
+                    dev.grantsAll || dev.grants.allSatisfy { tool, emails in emails.allSatisfy { known.contains("\(tool):\($0)") } }
+                })
+                check("\(f) 配置里的账号都有节点", doc.accountList.allSatisfy { !$0.node.isEmpty && !$0.email.isEmpty })
+            }
+            tolerance(TeamDevicesDoc.self, f, d) { [$0.devices.count, $0.accountList.count] }
+        case "team_list":
+            // cca team ls --json：teams[] 和 state 的 config.teams 一个样子
+            if let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any], let rows = obj["teams"] as? [[String: Any]] {
+                let teams = rows.compactMap { try? JSONDecoder().decode(TeamEntry.self, from: JSONSerialization.data(withJSONObject: $0)) }
+                check("\(f) teams 都解码了，编号不空不重复", teams.count == rows.count && teams.allSatisfy { $0.id.count == 32 }
+                      && Set(teams.map(\.id)).count == teams.count)
+                check("\(f) 角色、状态都是认识的", teams.allSatisfy { $0.role.isKnown && $0.state.isKnown })
+            } else {
+                check("\(f) 有 teams 数组", false)
+            }
         case "client_updates":
             if let doc = decodeOrFail(ClientUpdatesDoc.self, f, d) {
                 check("\(f) version 1", doc.version == 1)

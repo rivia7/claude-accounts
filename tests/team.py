@@ -609,7 +609,11 @@ class TeamTest(Sessions, unittest.TestCase):
         # m3 拿了给 m2 的邀请（映射仓库里的机器都读得到）：加入得了，管理员对账时认出来不是那把密钥，不再给它账号
         m3.policy(None, team={'v': 1, 'invites': {m3.fp: links[m2.fp]}})
         self.assertNotEqual(m3.ok('team-adopt'), '')
-        bad = [r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices'] if r['label'] == 'm2']
+        listing = json.loads(admin.ok('team-devices', tid, '--json'))
+        self.assertEqual((listing['name'], sorted(listing['accounts']['claude']), listing['aliases'], sorted(listing['nodes'])),
+                         ('测试组', ['alice@example.com', 'bob@example.com'], {'alice@example.com': 'alice'}, ['US-A', 'US-B', 'US-C', 'US-D', 'US-E']),
+                         '管理页要的：Team 的名字、配置里的账号 → 节点、别名、带着定义的节点')
+        bad = [r for r in listing['devices'] if r['label'] == 'm2']
         self.assertEqual(len(bad), 1)
         self.assertIn('不是指定的那把密钥', bad[0]['problem'])
         self.assertIn('cca team revoke %s %s）' % (tid[:8], bad[0]['dev'][:8]), bad[0]['problem'], '同名的不止一项：说编号')

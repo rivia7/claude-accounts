@@ -95,13 +95,29 @@ enum CcaCommand: Sendable, Hashable {
     /// 换一个加入链接（`cca hub invite --new`）：先问同意（hub_relink，范围 all，默认不同意），stdout 一行是新的
     /// 加入链接。和 hubInvite 一样**输出只经内存里的管道**
     case hubRelink
+    /// 一个 Team 的设备和配置（`cca team devices <Team> --json`，PROTOCOL 4.14；只有管理员的设备问得到）：和服务器对一遍，可能发布。
+    /// auto：这一页看得见时自己查的（低优先级）
+    case teamDevices(team: String, auto: Bool)
+    /// 各个 Team 取一次配置（`cca team sync`）：取到新的账号表马上照它改、同步路由器
+    case teamSync
+    /// 退出一个 Team（`cca team leave <编号>`）：要同意（成员是 team_leave，管理员是 team_delete，范围是 Team 的编号，默认不同意）
+    case teamLeave(team: String)
+    /// 给一台设备发邀请（`cca team invite <Team> <名字> --accounts …`）：stdout 一行是邀请链接，它是那台设备的密钥。
+    /// **输出只经内存里的管道**（不能是 runsToCompletion）
+    case teamInvite(team: String, label: String, accounts: String)
+    /// 移除一台设备、撤回邀请（`cca team revoke <Team> <设备编号>`）：要同意（team_revoke，范围是设备编号，默认不同意）
+    case teamRevoke(team: String, device: String)
+    /// 改一台设备能用哪些账号（`cca team grant <Team> <设备编号> all | none | +工具:邮箱 | -工具:邮箱 …`）
+    case teamGrant(team: String, device: String, changes: [String])
+    /// 定一个账号走哪个节点（`cca team map <Team> <工具> <邮箱> <节点>`；节点写 `-` 是从这个 Team 里去掉这个账号）
+    case teamMap(team: String, tool: ToolID, email: String, node: String)
 
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .hubDevices, .hubRemove, .hubLeave, .hubInvite,
-             .hubRelink: return nil
+             .hubRelink, .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamMap: return nil
         }
     }
 
@@ -112,7 +128,8 @@ enum CcaCommand: Sendable, Hashable {
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
              .clientAutoInstall, .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .hubDevices, .hubRemove, .hubLeave, .hubInvite, .hubRelink: return nil
+             .hubDevices, .hubRemove, .hubLeave, .hubInvite, .hubRelink,
+             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamMap: return nil
         }
     }
 
@@ -120,7 +137,7 @@ enum CcaCommand: Sendable, Hashable {
     var isBackground: Bool {
         switch self {
         case .usagePoll, .checkPoll, .policyPull(manual: false), .clientCheck(force: false, install: _), .devices(_, _, auto: true),
-             .costSync(manual: false), .remoteList(local: _, auto: true), .hubDevices(auto: true): return true
+             .costSync(manual: false), .remoteList(local: _, auto: true), .hubDevices(auto: true), .teamDevices(team: _, auto: true): return true
         default: return false
         }
     }
@@ -177,6 +194,13 @@ enum CcaCommand: Sendable, Hashable {
         case .hubLeave: return ["hub", "leave"]
         case .hubInvite: return ["hub", "invite"]
         case .hubRelink: return ["hub", "invite", "--new"]
+        case .teamDevices(let team, _): return ["team", "devices", team, "--json"]
+        case .teamSync: return ["team", "sync"]
+        case .teamLeave(let team): return ["team", "leave", team]
+        case .teamInvite(let team, let label, let accounts): return ["team", "invite", team, label, "--accounts", accounts]
+        case .teamRevoke(let team, let device): return ["team", "revoke", team, device]
+        case .teamGrant(let team, let device, let changes): return ["team", "grant", team, device] + changes
+        case .teamMap(let team, let tool, let email, let node): return ["team", "map", team, tool.rawValue, email, node]
         }
     }
 
@@ -201,6 +225,8 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
         case .hubDevices, .hubRemove, .hubLeave: return 40   // 问一次自己的同步服务器
         case .hubInvite, .hubRelink: return 40   // 也先问一次服务器（invite：别的设备换过链接的话换上新的，连不上照本机记着的打）
+        case .teamDevices, .teamInvite, .teamRevoke: return 60   // 问 Team 的服务器，发布配置（设备多时分几次存）
+        case .teamSync, .teamLeave, .teamGrant, .teamMap: return 180   // 改完账号表马上照它对一遍，可能同步路由器
         }
     }
 
@@ -214,7 +240,8 @@ enum CcaCommand: Sendable, Hashable {
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
              .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .hubDevices, .hubRemove, .hubLeave, .hubInvite,
-             .hubRelink: return false
+             .hubRelink, .teamDevices, .teamInvite, .teamRevoke: return false
+        case .teamSync, .teamLeave, .teamGrant, .teamMap: return true   // 改账号表、同步路由器：半路杀掉会留下一半
         }
     }
 
@@ -237,6 +264,9 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
         case .hubDevices, .hubInvite: return nil   // 不改加入信息（问服务器时顺带换上别的设备换过的链接）：AppModel 保证一次一个
         case .hubRemove, .hubLeave, .hubRelink: return "hub"   // 都改这台设备的加入信息：一个接一个
+        case .teamDevices: return nil   // AppModel 保证一次一个
+        case .teamInvite, .teamRevoke: return "team"   // 改管理员这边记着的设备：一个接一个
+        case .teamSync, .teamLeave, .teamGrant, .teamMap: return "router-sync"   // 账号表跟着变，可能同步路由器：和拉映射、同步路由器排队
         }
     }
 }

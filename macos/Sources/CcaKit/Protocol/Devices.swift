@@ -46,7 +46,8 @@ struct DevicesDoc: CcaDocument, Equatable {
 
     /// 这个账号问的那台服务器的设置和名字（旧版 cca 没有 `hubs`：用顶层的几项）
     func hub(for account: DevicesAccount) -> DevicesHub {
-        if let h = hubs.first(where: { $0.kind == account.hub }) { return h }
+        // 可能同时在几个 Team 里（kind 都是 team）：照编号认
+        if let h = hubs.first(where: { $0.kind == account.hub && $0.team == account.team }) { return h }
         return DevicesHub(kind: account.hub ?? .maintainer, me: me, idleAfter: idleAfter, offlineAfter: offlineAfter, reportingError: reportingError)
     }
 }
@@ -60,9 +61,11 @@ struct DevicesHub: Decodable, Sendable, Equatable {
     var offlineAfter: Double?
     /// 这台 Mac 最近一次没报到它的原因（报成了是 nil）
     var reportingError: String?
+    /// Team 的服务器（`kind` 是 `team`）：是哪个 Team 的；别的是 nil
+    var team: String?
 
     enum CodingKeys: String, CodingKey {
-        case kind, me
+        case kind, me, team
         case idleAfter = "idle_after"
         case offlineAfter = "offline_after"
         case reportingError = "reporting_error"
@@ -83,6 +86,7 @@ struct DevicesHub: Decodable, Sendable, Equatable {
         idleAfter = c.double(.idleAfter)
         offlineAfter = c.double(.offlineAfter)
         reportingError = c.string(.reportingError)
+        team = c.string(.team)
     }
 }
 
@@ -90,10 +94,12 @@ struct DevicesAccount: Decodable, Sendable, Equatable {
     var key: String
     /// 问的哪台服务器（旧版 cca 没有：nil，当作维护者的）
     var hub: HubKind?
+    /// 经 Team 的服务器问的（`hub` 是 `team`）：是哪个 Team 的
+    var team: String?
     /// 这台 Mac 排第一，其余按 在用、闲置、离线、没在用，同一种里最近用过的在前（cca 排好的）
     var devices: [DeviceRow]
 
-    enum CodingKeys: String, CodingKey { case key, hub, devices }
+    enum CodingKeys: String, CodingKey { case key, hub, team, devices }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -102,6 +108,7 @@ struct DevicesAccount: Decodable, Sendable, Equatable {
         }
         self.key = key
         hub = c.lossy(HubKind.self, .hub)
+        team = c.string(.team)
         devices = c.lossyArray(DeviceRow.self, .devices) ?? []
     }
 }

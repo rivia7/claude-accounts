@@ -345,6 +345,8 @@ final class AppModel {
         /// 折合金额按周还是按天（CostGranularity）、看哪台设备（CostScope：all、me、d:设备 id）：账号页、折合金额页共用
         static let costGranularity = "cost.period"
         static let costScope = "cost.scope"
+        /// 按 Team 筛选账号（TeamFilter.stored）：侧栏、总览、菜单栏面板共用
+        static let teamFilter = "team.filter"
         /// 各工具上次看的账号（侧栏换工具时选中它）
         static func selected(_ t: ToolID) -> String { "selection.\(t.rawValue)" }
     }
@@ -381,6 +383,7 @@ final class AppModel {
         }
         if let transport = self.transport { client = CcaClient(transport: transport) }
         if let t = defaults.string(forKey: Prefs.tool) { tool = ToolID(rawValue: t) }
+        teamFilter = TeamFilter(stored: defaults.string(forKey: Prefs.teamFilter))
         if let g = defaults.string(forKey: Prefs.costGranularity).flatMap(CostGranularity.init(rawValue:)) { costGranularity = g }
         if let v = defaults.string(forKey: Prefs.costScope).flatMap(CostScope.init(rawValue:)) { costScope = v }
         updateDismissed = defaults.string(forKey: Prefs.updateDismissed)
@@ -1697,6 +1700,182 @@ final class AppModel {
         }
     }
 
+    // MARK: Team（PROTOCOL 4.14）
+
+    /// cca 有 Team（`hello.team` 是 App 认识的版本；旧版 cca 没有：不显示 Team 的那一块、不按 Team 筛选、不调 `cca team`）
+    var teamAvailable: Bool { hello?.team == TeamAPI.version }
+    /// 这台设备在的 Team，照加入的先后
+    var teams: [TeamEntry] { teamAvailable ? state?.config?.teams ?? [] : [] }
+
+    /// 按 Team 筛选账号：侧栏、总览、菜单栏面板共用这一个选择（记在设置里）。只管显示：账号表、启动器、排序都照全部的
+    var teamFilter: TeamFilter = .all {
+        didSet {
+            guard teamFilter != oldValue else { return }
+            defaults.set(teamFilter.stored, forKey: Prefs.teamFilter)
+        }
+    }
+    /// 在至少一个 Team 里才有得筛
+    var teamFilterAvailable: Bool { !teams.isEmpty }
+    /// 现在生效的筛选：不在任何 Team 里、选的那个 Team 已经不在了（退出了）时是全部
+    var activeTeamFilter: TeamFilter {
+        guard teamFilterAvailable else { return .all }
+        if case .team(let id) = teamFilter, !teams.contains(where: { $0.id == id }) { return .all }
+        return teamFilter
+    }
+    /// 读到新的 state 以后：记着的筛选指着的 Team 已经不在了（退出了）就改回全部——不然以后再加入同一个 Team，筛选会自己变回去；
+    /// 不在了的 Team 留在内存里的（问到的设备、展开着、填了一半的邀请）也清掉。还没读到 state、cca 没有 Team 时不动
+    private func dropGoneTeams() {
+        guard teamAvailable, state != nil else { return }
+        let ids = Set(teams.map(\.id))
+        if case .team(let id) = teamFilter, !ids.contains(id) { teamFilter = .all }
+        if teams.isEmpty, teamFilter != .all { teamFilter = .all }
+        teamSnapshots = teamSnapshots.filter { ids.contains($0.key) }
+        teamExpanded = teamExpanded.filter { ids.contains($0) }
+        if let t = teamInvite.team, !ids.contains(t) { teamInvite = TeamInviteDraft() }
+    }
+
+    /// 筛选菜单里的几项：全部、各个 Team、不在 Team 里的
+    var teamFilterOptions: [TeamFilter] { [.all] + teams.map { .team($0.id) } + [.outside] }
+    func teamFilterTitle(_ f: TeamFilter) -> String { Texts.teamFilter(f, teams: teams) }
+
+    /// 侧栏显示的分组：accountGroups 里筛出选中的那个 Team 的（官方账号那一组空了也留着：标题上有添加按钮）
+    func shownGroups(_ t: ToolID) -> [AccountGroup] {
+        let f = activeTeamFilter
+        guard f != .all else { return accountGroups(t) }
+        return accountGroups(t).enumerated().compactMap { i, g in
+            let kept = g.accounts.filter(f.includes)
+            return i > 0 && kept.isEmpty ? nil : AccountGroup(department: g.department, accounts: kept)
+        }
+    }
+    /// 菜单栏面板显示的账号（同一个筛选）
+    func shownAccounts(_ t: ToolID) -> [Account] { shownGroups(t).flatMap(\.accounts) }
+
+    /// 最近一次问到的各个 Team 的设备和配置（只在内存里；只有管理员的设备问得到）
+    private(set) var teamSnapshots: [String: TeamSnapshot] = [:]
+    private(set) var teamLoading: Set<String> = []
+    /// 正在改（取配置、退出、发邀请、移除、改授权、改节点）：按钮先停用
+    private(set) var teamBusy = false
+    /// 展开着「设备和账号」的 Team（管理员的）
+    var teamExpanded: Set<String> = []
+    /// 正在填的邀请（哪个 Team、给设备起的名字、给哪些账号）
+    var teamInvite = TeamInviteDraft()
+
+    func teamSnapshot(_ t: TeamEntry) -> TeamSnapshot? { teamSnapshots[t.id] }
+
+    /// 问一次这个 Team 的设备和配置（展开时、「刷新」、改过东西之后）。没问到时上次问到的照样显示，旁边说原因
+    func refreshTeamDevices(_ t: TeamEntry, manual: Bool) {
+        guard phase == .ready, teamAvailable, t.isAdmin, t.state != .local, let client, !teamLoading.contains(t.id) else { return }
+        teamLoading.insert(t.id)
+        track { [weak self] in
+            let (doc, r) = await client.document(.teamDevices(team: t.id, auto: !manual), as: TeamDevicesDoc.self, prompter: nil)
+            guard let self else { return }
+            self.teamLoading.remove(t.id)
+            if let doc {
+                self.teamSnapshots[t.id] = TeamSnapshot(team: t.id, doc: doc, error: nil, fetchedEpoch: Date().timeIntervalSince1970)
+            } else if r.failure?.reason != .cancelled {
+                var s = self.teamSnapshots[t.id] ?? TeamSnapshot(team: t.id)
+                s.error = nonEmpty(r.failure?.message) ?? "没能问到这个 Team 的设备"
+                self.teamSnapshots[t.id] = s
+            }
+        }
+    }
+
+    /// 展开 / 收起一个 Team 的「设备和账号」；展开时问一次
+    func toggleTeam(_ t: TeamEntry) {
+        if teamExpanded.contains(t.id) {
+            teamExpanded.remove(t.id)
+        } else {
+            teamExpanded.insert(t.id)
+            refreshTeamDevices(t, manual: false)
+        }
+    }
+
+    /// 「粘贴邀请链接…」：提问会话（`cca team join`，`team.join`；链接不对时 cca 带着原因重问）
+    func joinTeam() {
+        guard phase == .ready, teamAvailable else { return }
+        run(.teamJoin)
+    }
+
+    /// 各个 Team 取一次配置：取到新的账号表马上照它改
+    func syncTeams() {
+        runTeam(.teamSync, failureTitle: "没能取到 Team 的配置", success: "取过了", refresh: nil)
+    }
+
+    /// 退出一个 Team（cca 先问同意：成员是 `consent.team_leave`，管理员是 `consent.team_delete`——这台设备上的根密钥跟着没了）
+    func leaveTeam(_ t: TeamEntry) {
+        runTeam(.teamLeave(team: t.id), failureTitle: "没能退出「\(t.name)」", success: "退出了", refresh: nil)
+    }
+
+    /// 移除一台设备、撤回还没用的邀请（cca 先问同意：`consent.team_revoke`）
+    func revokeTeamDevice(_ t: TeamEntry, _ d: TeamDevice) {
+        runTeam(.teamRevoke(team: t.id, device: d.id), failureTitle: "没能移除「\(d.label)」", success: "移除了", refresh: t)
+    }
+
+    /// 给 / 不给一台设备某个账号。全部都给的设备去掉一个：改成只给剩下的那些
+    func setTeamGrant(_ t: TeamEntry, _ d: TeamDevice, _ a: TeamAccount, on: Bool, all: [TeamAccount]) {
+        let changes: [String]
+        if !on, d.grantsAll {
+            changes = ["none"] + all.filter { $0.id != a.id }.map { "+" + $0.spec }
+        } else {
+            changes = [(on ? "+" : "-") + a.spec]
+        }
+        runTeam(.teamGrant(team: t.id, device: d.id, changes: changes), failureTitle: "没能改「\(d.label)」能用的账号", success: "改好了", refresh: t)
+    }
+
+    /// 全部账号都给这台设备（以后加进 Team 的也给）/ 一个都不给
+    func setTeamGrantAll(_ t: TeamEntry, _ d: TeamDevice, _ all: Bool) {
+        runTeam(.teamGrant(team: t.id, device: d.id, changes: [all ? "all" : "none"]), failureTitle: "没能改「\(d.label)」能用的账号",
+                success: "改好了", refresh: t)
+    }
+
+    /// 定一个账号走哪个节点（各台设备下次取配置时跟着换）
+    func mapTeamAccount(_ t: TeamEntry, _ a: TeamAccount, node: String) {
+        guard node != a.node, !node.isEmpty else { return }
+        runTeam(.teamMap(team: t.id, tool: a.tool, email: a.email, node: node), failureTitle: "没能改 \(a.email) 走的节点", success: "改好了",
+                refresh: t)
+    }
+
+    private func runTeam(_ command: CcaCommand, failureTitle: String, success: String, refresh: TeamEntry?) {
+        guard phase == .ready, teamAvailable, let client, !teamBusy else { return }
+        teamBusy = true
+        let prompter = hooks.prompter
+        Task { [weak self] in
+            let r = await client.execute(command, prompter: prompter)
+            guard let self else { return }
+            self.teamBusy = false
+            self.finish(r, failureTitle: failureTitle, success: nonEmpty(r.resultEvent?.message) ?? success)
+            await self.afterAction()
+            if let refresh { self.refreshTeamDevices(refresh, manual: true) }
+        }
+    }
+
+    /// 「发邀请」：`cca team invite` 的那一行（邀请链接）放进剪贴板。链接就是那台设备的密钥：stdout 只经内存里的管道读，
+    /// 不进被观察的状态、不进提示和读屏；剪贴板里标成机密，60 秒后还是它就清掉
+    func sendTeamInvite(_ t: TeamEntry) {
+        let label = teamInvite.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard phase == .ready, teamAvailable, t.isAdmin, teamInvite.team == t.id, !label.isEmpty, let client, !teamBusy else { return }
+        let accounts = teamInvite.all ? "all" : teamInvite.picked.sorted().joined(separator: ",")
+        teamBusy = true
+        Task { [weak self] in
+            let r = await client.execute(.teamInvite(team: t.id, label: label, accounts: accounts.isEmpty ? "none" : accounts), prompter: nil)
+            guard let self else { return }
+            self.teamBusy = false
+            guard r.isSuccess else {
+                self.finish(r, failureTitle: "没发成邀请", success: nil)
+                return
+            }
+            let line = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.contains("\n") else {
+                self.showToast("cca 没有给出邀请链接", .warning)
+                return
+            }
+            self.hooks.copySecret(line)
+            self.teamInvite = TeamInviteDraft()
+            self.showToast("给「\(label)」的邀请已复制（60 秒后从剪贴板清掉）：只发给那台设备的主人，它就是那台设备的密钥；对方「粘贴邀请链接…」加入", .success)
+            self.refreshTeamDevices(t, manual: true)
+        }
+    }
+
     // MARK: 远程会话（PROTOCOL 9）
 
     /// cca 有远程会话（`hello.remote` 是 App 认识的版本；旧版 cca 没有：不显示这一页、不调这些命令）
@@ -2432,8 +2611,17 @@ final class AppModel {
     }
 
     /// 办公室：按组排好的工位，每个账号此刻的样子（和账号页那句话用同一份用量、实况）。
-    func office(now: Double) -> Office {
-        Office.make(tools: state?.tools ?? [], enabled: visibleTools, usage: { self.usage(for: $0) },
+    /// filtered：照「按 Team 筛选」只留选中的那个 Team 的账号（总览那一页）；侧栏「总览」那一行的统计（几个要处理）不筛：
+    /// 筛选只管列哪些账号，别的账号出了问题照样要看得到
+    func office(now: Double, filtered: Bool = true) -> Office {
+        let filter = filtered ? activeTeamFilter : .all
+        let tools = (state?.tools ?? []).map { t -> ToolState in
+            guard filter != .all else { return t }
+            var t = t
+            t.accounts = t.accounts.filter(filter.includes)
+            return t
+        }
+        return Office.make(tools: tools, enabled: visibleTools, usage: { self.usage(for: $0) },
                     live: { self.liveSlot(for: $0) }, now: now,
                     arrange: { d, people in self.arrangement.arranged(people, group: d.key, id: \.account.stableID) })
     }
@@ -2548,6 +2736,7 @@ final class AppModel {
     /// state 变了之后：选中的账号不在了就回办公室；第一次加载时打开办公室（首页）。
     private func fixSelection() {
         if !visibleTools.contains(tool) { tool = .claude }
+        dropGoneTeams()
         // 换成了没有远程会话的旧版 cca：那一页没了，开着的终端也断开（不然没有入口能断开它）
         if !remoteAvailable, !remoteTerminals.isEmpty { closeAllRemoteTerminals() }
         switch selection {
