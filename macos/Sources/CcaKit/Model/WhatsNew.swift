@@ -20,6 +20,10 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.3-beta.4", title: "内部整理", points: [
+            .init(symbol: "wrench.and.screwdriver",
+                  text: "去掉了从 Python 换到 Rust 时用来逐条对照两边结果的那一套测试代码，以后直接在 Rust 上开发。用起来和 3.5.3-beta.3 一样。"),
+        ]),
         ReleaseNote(version: "3.5.3-beta.3", title: "自己的设备之间同步也用 Team", points: [
             .init(symbol: "person.3",
                   text: "「自己的同步服务器」去掉了：自己的几台设备之间同步也用 Team——建一个 Team、部署它的服务器、把自己的账号导进去。本机留下的旧文件自动清掉；服务器上以前装的那一份可以卸掉（README 的「Team」一节有那一行命令）。"),
