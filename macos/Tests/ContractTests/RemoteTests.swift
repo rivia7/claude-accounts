@@ -95,6 +95,15 @@ func remoteProtocolTests() {
     check("配对过的机器：它能做什么、谁显示的配对码、对方取消了的", doc.peers.map(\.incoming) == [.none, .control, .control, .view]
           && doc.peers.map(\.shown) == [false, true, true, true] && doc.peers.last?.state == .gone)
     check("配对过的机器里有一台是手机上的网页端", doc.peers.map(\.web) == [false, false, true, false] && doc.peers[2].name == "我的 iPhone")
+    check("用得了的中转服务器、配对记在哪个 Team 的服务器上", doc.relayHubs.map(\.id) == ["0123456789abcdef0123456789abcdef", "maintainer"]
+          && doc.relayHubs.map(\.name) == ["「研发组」的服务器", "维护者的服务器"]
+          && doc.peers.map(\.team) == [nil, nil, "0123456789abcdef0123456789abcdef", nil])
+    check("在哪台服务器上配对写进命令里；只用得了一台时不写",
+          Handoff.remotePair.on(doc.relayHubs[0]).arguments == ["remote", "pair", "--team", "0123456789abcdef0123456789abcdef"]
+          && Handoff.remotePairWeb.on(doc.relayHubs[1]).arguments == ["remote", "pair", "--web", "--maintainer"]
+          && Handoff.remotePair.on(nil) == Handoff.remotePair && Handoff.remotePair.on(doc.relayHubs[0]).inApp)
+    let old = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"{"version":1,"kind":"remote","relay":{"available":true,"message":null},"sessions":[],"peers":[{"id":"aa"}]}"#.utf8))
+    check("旧版 cca 没有这两项：不用选服务器，配对都算记在维护者那一台上", old?.relayHubs.isEmpty == true && old?.peers.first?.team == nil)
     check("按 id 找会话", doc.session(far[0].id)?.machine == "office-linux" && doc.session("nope") == nil)
 
     let problem = #"{"version":1,"kind":"remote","generated_epoch":1,"enabled":false,"relay":{"available":false,"message":"没有配置维护者的映射"},"sessions":[{"id":"aa","where":"zz_new","state":"zz","access":"zz"},{"short":"没有 id"}],"peers":[{"id":"bb","incoming":"zz"}],"errors":[{"code":"relay_off","message":"没有配置维护者的映射"},{"code":"zz_new","message":"别的"}]}"#

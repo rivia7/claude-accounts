@@ -5272,7 +5272,7 @@ remote_pair_spec() {   # remote_pair_spec 配对码 [网页端的地址]：提�
 	                     # App 把地址画成二维码，手机的相机扫了就打开那一页
 	if [ -n "${2:-}" ]; then
 		gui_kv "q=remote.pair_web" "title=和手机配对" "message=用手机的相机扫二维码打开网页端（iPhone 上先点分享、「添加到主屏幕」，从主屏幕打开），在那一页里输入配对码。10 分钟内有效，只能用一次。"
-		gui_kv field=url kind=qr "label=手机上打开" "hint=网页端是维护者的服务器给的那一页；之后要用，从主屏幕的图标打开就行" "value=$2"
+		gui_kv field=url kind=qr "label=手机上打开" "hint=网页端是中转服务器给的那一页；之后要用，从主屏幕的图标打开就行" "value=$2"
 		gui_kv field=code kind=code "label=配对码" "hint=正在等手机输入，配好以后这里自动完成"
 	else
 		gui_kv "q=remote.pair" "title=和另一台机器配对" "message=在另一台机器上输入这个配对码：cca App 的「远程会话」里点「输入配对码…」，或者在终端里运行 cca remote join。10 分钟内有效，只能用一次。"
@@ -5280,8 +5280,32 @@ remote_pair_spec() {   # remote_pair_spec 配对码 [网页端的地址]：提�
 	fi
 	printf 'code=%s\n' "$1"
 }
-remote_pair_run() {   # remote_pair_run [web]：出一个配对码、等另一台机器输入；配好了把对方的名字放进 REMOTE_PEER，没配成把原因放进 REMOTE_ERR。
-	                    # web：这次配对开给手机上的网页端（辅助程序多给一行网页端的地址，一起显示出来）。辅助程序在后台跑
+remote_hub_args() {   # remote_hub_args 参数…：cca remote pair|join 的参数。在哪台服务器上配对放进 REMOTE_HUB（给辅助程序 --hub 的值：Team 的名字或者编号，
+	                    # 维护者的那一台是 maintainer；没说是空的），有 --web 时 REMOTE_WEB 是 web。写错了回 1。
+	                    # 每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上，对方经它看得到的就是走那台服务器的会话
+	REMOTE_HUB=""; REMOTE_WEB=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--web) [ -z "$REMOTE_WEB" ] || return 1; REMOTE_WEB=web ;;
+			--team) [ $# -ge 2 ] && [ -n "$2" ] && [ -z "$REMOTE_HUB" ] || return 1; REMOTE_HUB="$2"; shift ;;
+			--maintainer) [ -z "$REMOTE_HUB" ] || return 1; REMOTE_HUB=maintainer ;;
+			*) return 1 ;;
+		esac
+		shift
+	done
+}
+remote_hub_label() {   # 给人看的：REMOTE_HUB 是谁的服务器（没说在哪台上时是空的）。写的是编号时问辅助程序它叫什么
+	local name
+	case "$REMOTE_HUB" in
+		"") return 0 ;;
+		maintainer) printf '维护者的服务器' ;;
+		*)
+			name=$(py remote-hubs 2>/dev/null | awk -F '\t' -v w="$REMOTE_HUB" '$1 == w { print $2; exit }')
+			printf '%s' "${name:-「${REMOTE_HUB}」的服务器}" ;;
+	esac
+}
+remote_pair_run() {   # remote_pair_run web|"" [--hub 服务器]：出一个配对码、等另一台机器输入；配好了把对方的名字放进 REMOTE_PEER，没配成把原因放进 REMOTE_ERR。
+	                    # web：这次配对开给手机上的网页端（辅助程序多给一行网页端的地址，一起显示出来）。后面的参数原样交给辅助程序。辅助程序在后台跑
 	                    # （直接起它、不经 py：要拿到它自己的进程号。它的 stdout 先是“code 配对码”、配好以后是“peer 名字”，接到临时目录里
 	                    # 只有自己能读的文件），这边先把配对码显示出来：终端里打印，提问会话里是一页（PROTOCOL 4.6 的 remote.pair）。
 	                    # 中途不做了（Ctrl-C、App 取消：读答案读到头）要把辅助程序停掉——不然它会在后台把配对做完
@@ -5289,7 +5313,7 @@ remote_pair_run() {   # remote_pair_run [web]：出一个配对码、等另一�
 	REMOTE_PEER=""; REMOTE_ERR=""
 	[ -x "$HELPER" ] || helper_find || { REMOTE_ERR="找不到 cca 的辅助程序"; return 1; }
 	dir=$(mktemp -d "${TMPDIR:-/tmp}/cca-pair.XXXXXX") || { REMOTE_ERR="建不了临时目录"; return 1; }
-	CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" remote-pair-show ${1:+--web} > "$dir/out" 2> "$dir/err" 3<&- & pid=$!
+	CCA_SELF="$SELF" CCA_TOOL="$TOOL" CCA_BIN="$TOOL_BIN" "$HELPER" remote-pair-show ${1:+--web} "${@:2}" > "$dir/out" 2> "$dir/err" 3<&- & pid=$!
 	trap "kill -TERM $pid 2>/dev/null; rm -rf $(printf %q "$dir")" EXIT   # 现在就展开：EXIT 时函数的局部变量已经不在了
 	trap 'exit 130' INT TERM HUP
 	for ((i = 0; i < 600; i++)); do   # 等它在服务器上开好这次配对、给出配对码（两次请求）
@@ -5327,7 +5351,7 @@ remote_pair_run() {   # remote_pair_run [web]：出一个配对码、等另一�
 	[ $rc -eq 0 ] && [ -n "$REMOTE_PEER" ]
 }
 cmd_remote() {
-	local rows n out code rc web=""
+	local rows n out code rc web="" via=""
 	[ -f "$CFG" ] || die "还没安装：请先运行 $SELF install"
 	case "${1:-status}" in
 		on)
@@ -5355,31 +5379,38 @@ cmd_remote() {
 			fi ;;
 		ls|list) shift; py remote-list "$@" ;;   # --json 是给界面 App 的（PROTOCOL 9.1）
 		pair)   # 这台机器显示配对码：输入它的那台机器之后能接入这台机器上的会话，所以先问。--web：输入配对码的是手机上的网页端
-			      # （手机没有 cca：在浏览器里打开维护者的服务器给的那一页；同意的范围是 web，和两台机器配对分开问）
-			case "${2:-}" in "") ;; --web) web=web ;; *) die "用法：cca remote pair [--web]（--web：和手机配对，在手机的浏览器里接入）" ;; esac
-			[ $# -le 2 ] || die "用法：cca remote pair [--web]"
+			      # （手机没有 cca：在浏览器里打开中转服务器给的那一页；同意的范围是 web，和两台机器配对分开问）。
+			      # --team 名字 / --maintainer：在哪台服务器上配对（这台机器只用得了一台时不用写）
+			shift
+			remote_hub_args "$@" || die "用法：cca remote pair [--web] [--team 名字 | --maintainer]（--web：和手机配对，在手机的浏览器里接入；--team：在哪个 Team 的服务器上配对，对方看得到的是这个 Team 的账号的会话）"
+			web=$REMOTE_WEB
 			need_tty
+			via=$(remote_hub_label)
+			[ -z "$via" ] || via="。这次配对记在${via}上：对方经它看得到的，是走这台服务器的会话（哪个 Team 的服务器，就是那个 Team 的账号的会话）"
 			if [ -n "$web" ]; then
-				out="在手机上输入配对码以后，那台手机可以在浏览器里看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）。手机上的那一页是维护者的服务器给的：终端的内容在手机和这台机器之间加密，服务器看不到，但管着服务器的人能换掉那一页的代码"
+				out="在手机上输入配对码以后，那台手机可以在浏览器里看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）。手机上的那一页是中转服务器给的：终端的内容在手机和这台机器之间加密，服务器看不到，但管着服务器的人能换掉那一页的代码${via}"
 				rows="和手机配对"
 			else
-				out="在另一台机器上输入配对码以后，那台机器可以看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）"
+				out="在另一台机器上输入配对码以后，那台机器可以看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）${via}"
 				rows="和另一台机器配对"
 			fi
 			[ -n "$PROMPT_GUI" ] || say "$out"   # 终端里的确认只有一句问话，先把后果说出来（图形界面的对话框里有这段说明）
 			consent remote_pair "$web" "$rows" "显示配对码吗？" "$out" y || { say "已取消"; gui_cancelled; return 1; }
-			remote_pair_run $web || die "${REMOTE_ERR:-没有配对成}"
+			remote_pair_run "$web" ${REMOTE_HUB:+--hub "$REMOTE_HUB"} || die "${REMOTE_ERR:-没有配对成}"
 			out=$REMOTE_PEER
 			okay "已经和「${out}」配对：它可以接入这台机器上开着远程会话的会话（cca remote on 之后启动的）"
 			say "  只让它看：cca remote allow $(shq "$out") view；取消配对：cca remote unpair $(shq "$out")"
 			gui_done remote_paired "已经和「${out}」配对：它可以接入这台机器上开着远程会话的会话" ;;
-		join)   # 输入另一台机器显示的配对码（从 stdin 交给辅助程序，不进命令行）
+		join)   # 输入另一台机器显示的配对码（从 stdin 交给辅助程序，不进命令行）。配对码是在哪台服务器上开的，辅助程序自己挨个试得出来；
+			      # --team 名字 / --maintainer 是只在那一台上找
+			shift
+			remote_hub_args "$@" && [ -z "$REMOTE_WEB" ] || die "用法：cca remote join [--team 名字 | --maintainer]"
 			need_tty
 			code=$(ask "另一台机器上显示的配对码: " "" q=remote.code "title=输入配对码" "label=配对码" \
 				"message=配对码在另一台机器上：那边运行 cca remote pair，或者在 cca App 的「远程会话」里点「显示配对码…」。配好以后这台机器可以接入那台机器上的会话。" \
 				"hint=16 个字母和数字，大小写、横线随意")
 			[ -n "$code" ] || { say "已取消"; gui_cancelled; return 1; }
-			out=$(printf '%s\n' "$code" | py remote-pair-join 2>&1) || die "${out:-没有配对成}"
+			out=$(printf '%s\n' "$code" | py remote-pair-join ${REMOTE_HUB:+--hub "$REMOTE_HUB"} 2>&1) || die "${out:-没有配对成}"
 			okay "已经和「${out}」配对：这台机器可以接入它上面的会话（cca remote list 看有哪些，cca remote attach 接入）"
 			say "  它接不进这台机器；要让它也能接入：cca remote allow $(shq "$out") control"
 			gui_done remote_paired "已经和「${out}」配对：这台机器可以接入它上面的会话" ;;
@@ -5422,7 +5453,7 @@ cmd_remote() {
 			esac
 			out=$(py remote-end "$code" 2>&1) || die "${out:-没有结束成}"
 			okay "会话 ${code:0:8} 已经结束"; gui_done remote_updated "会话已经结束" ;;
-		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|pair [--web]|join|peers|allow 名字 control|view|none|unpair 名字]" ;;
+		*) die "用法：cca remote [status|on|off|list|attach [-r] [会话编号]|end [会话编号]|pair [--web] [--team 名字]|join [--team 名字]|peers|allow 名字 control|view|none|unpair 名字]" ;;
 	esac
 }
 
@@ -8406,9 +8437,11 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              接着别的机器上的会话时网络断了会自己重新接上
   cca remote end [编号]      结束这台机器上的一个会话（等于关掉它的终端；先问）
   cca remote pair | join    两台机器配对：要被接入的那台 pair（显示配对码），另一台 join（输入）。之后 join 的那台能经
-                             维护者的服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）
+                             服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）。每个 Team 的账号的会话走
+                             这个 Team 自己的服务器中转，别的账号走维护者的：配对记在哪台服务器上，经它看得到的就是走那台的
+                             会话。用得了好几台时 pair 要说在哪台上配：--team 名字（维护者的那一台是 --maintainer）
   cca remote pair --web      和手机配对：手机上不装 cca，在浏览器里打开它给的地址（iPhone 上添加到主屏幕）、输入配对码，
-                             之后在手机上接入这台机器上的会话。要维护者的服务器开着网页端
+                             之后在手机上接入这台机器上的会话。要那台服务器开着网页端；每个 Team 的服务器各是各的一页
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
   cca uninstall [--no-backup]
                              完全卸载：撤销 cca 做过的全部改动（账号退出登录、路由器和内置代理还原），删掉 cca 自己和它放在

@@ -284,14 +284,15 @@ private struct RemoteSessionList: View {
         let usable = doc?.relayAvailable == true
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader("配对过的机器") {
-                SectionAction("显示配对码…", systemImage: "number.square") { model.pairRemote(show: true) }
+                PairAction(title: "显示配对码…", systemImage: "number.square", hubs: doc?.relayHubs ?? []) { model.pairRemote(show: true, hub: $0) }
                     .disabled(!usable)
-                    .help(usable ? "让另一台机器接入这台 Mac 上的会话：这里显示配对码，在那台机器上输入" : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
+                    .help(usable ? "让另一台机器接入这台 Mac 上的会话：这里显示配对码，在那台机器上输入。每个 Team 的账号的会话走这个 Team 自己的服务器：在哪台上配对，对方看得到的就是走那台的会话"
+                          : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
                 SectionAction("输入配对码…", systemImage: "keyboard") { model.pairRemote(show: false) }
                     .disabled(!usable)
                     .help(usable ? "接入另一台机器上的会话：在那台机器上显示配对码（cca remote pair），在这里输入" : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
                 if model.remoteWebAvailable {
-                    SectionAction("和手机配对…", systemImage: "iphone") { model.pairRemotePhone() }
+                    PairAction(title: "和手机配对…", systemImage: "iphone", hubs: doc?.relayHubs ?? []) { model.pairRemotePhone(hub: $0) }
                         .disabled(!usable)
                         .help(usable ? "在手机的浏览器里接入这台 Mac 上的会话：这里显示二维码和配对码，手机扫码打开网页端、输入配对码（手机上不用装东西）"
                               : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
@@ -386,6 +387,32 @@ private struct RemoteSessionLine: View {
 }
 
 /// 配对过的一台机器：名字、什么时候配的、它能对这台 Mac 的会话做什么（能改）、取消配对。
+/// 显示配对码的那两个按钮：只用得了一台中转服务器时就是一个按钮；有好几台（在几个 Team 里）时点开选在哪台上配对——
+/// 配对记在哪个 Team 的服务器上，对方经它看得到的就是那个 Team 的账号的会话。
+private struct PairAction: View {
+    let title: String
+    let systemImage: String
+    let hubs: [RemoteHub]
+    let action: (RemoteHub?) -> Void
+
+    var body: some View {
+        if hubs.count > 1 {
+            Menu {
+                ForEach(hubs) { hub in
+                    Button("在\(hub.name)上") { action(hub) }
+                }
+            } label: {
+                Label(title, systemImage: systemImage)
+            }
+            .glassButton(prominent: false)
+            .controlSize(.regular)
+            .fixedSize()
+        } else {
+            SectionAction(title, systemImage: systemImage) { action(nil) }
+        }
+    }
+}
+
 private struct RemotePeerLine: View {
     @Environment(AppModel.self) private var model
     let peer: RemotePeer
@@ -395,6 +422,7 @@ private struct RemotePeerLine: View {
     var body: some View {
         MachineLine(name: nonEmpty(peer.name) ?? peer.short, detail: Texts.remotePeerDetail(peer, now: now)) {
             if peer.web { Tag(text: "手机", color: .secondary) }
+            if let team = peer.team { Tag(text: model.teams.first { $0.id == team }?.name ?? "Team", color: .secondary) }
             if peer.state == .gone { Tag(text: "对方已经取消配对", color: .orange) }
         } trailing: {
             Text("它接入这台 Mac 时").font(.caption).foregroundStyle(.secondary)

@@ -1314,7 +1314,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 {
   "version": 1, "kind": "remote", "generated_epoch": 1794042000.0,
   "enabled": true,
-  "relay": {"available": true, "message": null},
+  "relay": {"available": true, "message": null, "hubs": [{"team": null, "name": "维护者的服务器"}]},
   "sessions": [
     {"id": "3a3a…（32 个十六进制字符）", "short": "3a3a3a3a", "where": "local", "peer": null, "machine": null,
      "tool": "claude", "name": "工作", "cwd": "~/projects/site", "since_epoch": 1794040500.0, "viewers": 0,
@@ -1325,7 +1325,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   ],
   "peers": [
     {"id": "b1b1…", "short": "b1b1b1b1", "name": "office-linux", "incoming": "none", "shown": false,
-     "paired_epoch": 1792314000.0, "state": "ok", "web": false}
+     "paired_epoch": 1792314000.0, "state": "ok", "web": false, "team": null}
   ],
   "errors": []
 }
@@ -1336,6 +1336,10 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   网页版和它无关；App 发起的终端交接（账号页的「终端」）是普通的终端启动，照这个开关。
 - `relay.available`：这台 Mac 用不用得了中转（配置了维护者的映射、映射里有服务器、有 deploy key）。为 false 时 `message` 说原因，
   不能配对、列不出别的机器上的会话（`sessions` 里只有 `where: "local"` 的）；以前配对过别的机器时 `errors` 里另有一条 `relay_off`。
+- `relay.hubs[]`（新加的，旧版 cca 没有）：用得了哪几台中转服务器，`{team, name}`——`team` 是 Team 的编号（维护者的那一台是 null），
+  `name` 是给人看的（「研发组」的服务器、维护者的服务器）。每个 Team 的账号的会话走这个 Team 自己的服务器中转，Team 以外的账号走维护者的；
+  配对记在哪台服务器上，对方经它看得到的就是走那台的会话。有好几项时，显示配对码（`remote pair`、`remote pair --web`）要先让用户选
+  在哪台上配，选的写进参数：`--team <编号>` 或者 `--maintainer`（9.2）；只有一项、没有这个字段时不写。输入配对码不用选（cca 自己找得到是哪台）
 - `sessions[]`：一个可以接入的会话。`id` 是 `cca remote attach` 的参数，`short` 是给人看的前 8 位。
   - `where`：`local`（这台 Mac 上的）| `peer`（配对过的机器上的：`peer` 是 `peers[].id`，`machine` 是那台机器的名字）。
   - `tool`：`claude` | `codex` | `agy`；`name`：账号的名字（这台 Mac 上的：别名，没起别名的是邮箱；别的机器上的只有短名字：别名，
@@ -1350,6 +1354,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
   `incoming`：它能对**这台 Mac** 的会话做什么，`control` | `view` | `none`（接不进来；这台 Mac 照样可以接入它的会话，看它那边怎么设）；
   `shown`：配对码是这台 Mac 显示的（是的话配对时 `incoming` 默认 `control`，否则默认 `none`）；`paired_epoch`；
   `web`：它是手机上的网页端（`remote pair --web` 配的；只是给人看的，它能做什么照旧看 `incoming`；旧版 cca 没有这个字段，当成 false）；
+  `team`：这个配对记在哪个 Team 的服务器上（Team 的编号；经它看得到的是这个 Team 的账号的会话），null 是维护者的那一台（旧版 cca 没有这个字段，当成 null）；
   `state`：`ok` | `gone`（对方取消了配对，或者太久没用被服务器清掉了：App 标出来，让用户「取消配对」清掉这一头）| `unknown`（这次没问服务器、没问到）。
 - `errors[]`：`{code, message}`，没问到别的机器上的会话的原因。`code`：`relay_off`（这台 Mac 用不了中转）| `relay_old`（服务器还不支持中转）|
   `relay_unreachable`（连不上）| `relay_denied`（服务器不认这台 Mac）| `relay_error`（别的）。`message` 是给人看的，App 原样显示。
@@ -1363,6 +1368,7 @@ server/README.md）。App 的「远程会话」一页列出可以接入的会话
 | `cca remote pair` | 这台 Mac 显示一个配对码；另一台机器输入以后，那台机器可以接入这台 Mac 上的会话（`incoming` 默认 `control`） | 提问会话（4.6）：先 `consent.remote_pair`，再 `remote.pair`（只显示配对码的一页，没有要回答的，App 只给「取消」）；配好了 `result` 的 `remote_paired` |
 | `cca remote pair --web` | 和手机配对（要 `hello.remote_web`）：这台 Mac 显示网页端的地址和一个配对码；手机在浏览器里打开那一页、输入配对码以后，可以在手机上接入这台 Mac 上的会话（`incoming` 默认 `control`，`peers[].web` 是 true）。服务器没开网页端时 `fail`（`message` 说明要维护者打开） | 提问会话：先 `consent.remote_pair`（范围 `web`），再 `remote.pair_web`（地址画成二维码、配对码，没有要回答的）；配好了 `result` 的 `remote_paired` |
 | `cca remote join` | 输入另一台机器显示的配对码；之后这台 Mac 可以接入那台机器上的会话（那台机器接不进这台 Mac，除非再 `allow`） | 提问会话：`remote.code`；配好了 `result` 的 `remote_paired` |
+| `cca remote pair [--web] --team <编号>`、`… --maintainer` | 同上面两条，说清楚在哪台中转服务器上配对（`relay.hubs` 有好几项时要写：不写的话 cca 不出配对码，`fail` 的 `message` 列出有哪几台）。同意的说明里多一句“这次配对记在哪台服务器上” | 同上 |
 | `cca remote on` / `off` | 开关 | 无交互命令；`result` 的 `remote_updated` |
 | `cca remote allow <配对的 id> control\|view\|none` | 改 `incoming`。改成只看、不让时，正接着的那一处几秒钟内断开 | 无交互命令；`result` 的 `remote_updated` |
 | `cca remote unpair <配对的 id>` | 取消配对：两边都不能再接入对方，正接着的断开。App 先自己问一句（cca 不发 `consent`） | 无交互命令；`result` 的 `remote_updated` |

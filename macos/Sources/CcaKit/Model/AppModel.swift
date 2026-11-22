@@ -1990,18 +1990,20 @@ final class AppModel {
     }
 
     /// 配对：这台 Mac 显示配对码（输入它的那台机器之后能接入这台 Mac 的会话）/ 输入另一台机器显示的配对码。都是提问会话
-    func pairRemote(show: Bool) {
+    /// hub：在哪台中转服务器上配对（用得了好几台时显示配对码要选：配对记在哪个 Team 的服务器上，对方看得到的就是那个 Team 的账号的会话）；
+    /// 输入配对码不用选，cca 自己找得到是哪台
+    func pairRemote(show: Bool, hub: RemoteHub? = nil) {
         guard phase == .ready, remoteAvailable else { return }
-        run(show ? .remotePair : .remoteJoin)
+        run(show ? Handoff.remotePair.on(hub) : .remoteJoin)
     }
 
     /// cca 有 `remote pair --web`（hello 的 `remote_web`）：才给「和手机配对…」
     var remoteWebAvailable: Bool { remoteAvailable && hello?.remoteWeb == 1 }
 
     /// 和手机配对：显示网页端的地址（二维码）和配对码，手机在浏览器里输入；之后手机能接入这台 Mac 的会话。提问会话
-    func pairRemotePhone() {
+    func pairRemotePhone(hub: RemoteHub? = nil) {
         guard phase == .ready, remoteWebAvailable else { return }
-        run(.remotePairWeb)
+        run(Handoff.remotePairWeb.on(hub))
     }
 
     /// 这个会话在这里开着的终端（没有就是 nil；断开了、结束了但还没关掉的也算）

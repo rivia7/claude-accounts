@@ -82,6 +82,15 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
 
     var id: String { arguments.joined(separator: "\u{1F}") }
 
+    /// 同一条命令，说清楚在哪台中转服务器上配对（`cca remote pair … --team 编号 | --maintainer`）。nil 是不说（只用得了一台时）。
+    func on(_ hub: RemoteHub?) -> Handoff {
+        guard let hub else { return self }
+        var h = self
+        h.arguments += hub.arguments
+        h.display = ""
+        return h
+    }
+
     /// 半自动的终端：粘贴进去运行的那一行（cca 用绝对路径，不依赖那个终端的 PATH）。
     func pasteCommand(ccaPath: String) -> String {
         let run = ([ccaPath] + arguments).map(shellQuoteIfNeeded).joined(separator: " ")

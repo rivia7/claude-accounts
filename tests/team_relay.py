@@ -170,6 +170,62 @@ class TeamRelayTest(rr.Base):
         self.assertEqual([(p['id'], p['team']) for p in doc['peers']], [(old_pid, None)])
 
 
+class ShellTest(TeamRelayTest):
+    """bash 这一层（真的 cca 脚本）：cca remote pair --team 名字 / --maintainer，cca remote join 自己找到是哪台服务器"""
+    env, answers, cca = rr.ShellTest.env, rr.ShellTest.answers, rr.ShellTest.cca
+    test_each_teams_sessions_go_through_its_own_server = None   # 上面那一类的用例不在这里再跑一遍
+
+    def shown(self, dev, *argv):
+        """dev 上 cca remote pair 参数…（同意）：返回 (进程, 配对码, 到配对码为止 stderr 上说的)"""
+        p = subprocess.Popen(['/bin/bash', str(rr.ROOT / 'cca'), 'remote', 'pair', *argv], env=self.env(dev, CCA_TTY=self.answers('y')),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.wait(), p.stdout.close(), p.stderr.close()))
+        code, seen = None, ''
+        while code is None:
+            line = p.stderr.readline()
+            self.assertTrue(line, '没等到配对码：' + seen)
+            seen += line
+            if '配对码：' in line:
+                code = line.strip().split('：')[1]
+        return p, code, seen
+
+    def test_terminal(self):
+        a, b, tid = self.a, self.b, self.tid
+        self.n = 0
+        # 用得了两台服务器、没说在哪台上：同意了也不出配对码，说清楚怎么写
+        rc, out, err = self.cca(a, 'remote', 'pair', answers=['y'])
+        self.assertEqual((rc, out), (1, ''))
+        self.assertIn('这台机器用得了好几台中转服务器（「研发组」的服务器、维护者的服务器）', err)
+        self.assertIn('--team 名字；维护者的那一台是 --maintainer', err)
+        self.assertNotIn('配对码：', err)
+        for bad in (('--team',), ('--team', '研发组', '--maintainer'), ('--nope',)):
+            rc, out, err = self.cca(a, 'remote', 'pair', *bad)
+            self.assertEqual((rc, out), (1, ''), bad)
+            self.assertIn('用法：cca remote pair [--web] [--team 名字 | --maintainer]', err)
+        self.assertEqual(self.cca(b, 'remote', 'join', '--web')[0], 1)
+        # 在 Team 的服务器上配：问之前说清楚记在哪台上、对方看得到的是哪些会话；另一台输入时不用说在哪台
+        p, code, seen = self.shown(a, '--team', '研发组')
+        self.assertIn('这次配对记在「研发组」的服务器上：对方经它看得到的，是走这台服务器的会话', seen)
+        rc, out, err = self.cca(b, 'remote', 'join', answers=[code])
+        self.assertEqual((rc, out), (0, ''), err)
+        self.assertIn('已经和「box」配对', err)
+        self.assertEqual(p.wait(60), 0, p.stderr.read())
+        (team_pid,) = self.team.edges()
+        self.assertEqual((rr.ClientTest.peers(b)[team_pid]['hub'], self.edges()), (tid, {}))
+        # 维护者的那一台：写编号以外的另一种说法；输入的那一头指定了 Team 的话，在 Team 的服务器上找不到这个配对码
+        p, code, seen = self.shown(a, '--maintainer')
+        self.assertIn('这次配对记在维护者的服务器上', seen)
+        rc, out, err = self.cca(b, 'remote', 'join', '--team', tid, answers=[code])
+        self.assertEqual((rc, out), (1, ''))
+        self.assertIn('没有这个配对码', err)
+        rc, out, err = self.cca(b, 'remote', 'join', '--maintainer', answers=[code])
+        self.assertEqual((rc, out), (0, ''), err)
+        self.assertEqual(p.wait(60), 0, p.stderr.read())
+        self.assertEqual((len(self.edges()), list(self.team.edges())), (1, [team_pid]))
+        rc, out, err = self.cca(b, 'remote', 'peers')
+        self.assertEqual(sorted('经「研发组」的服务器' in line for line in out.splitlines()), [False, True])
+
+
 class NoRelayTest(rr.Base):
     relay = True
 

@@ -18,6 +18,9 @@ struct RemoteDoc: CcaDocument, Equatable {
     /// 这台 Mac 用不用得了中转（配置了维护者的映射、映射里有服务器、有 deploy key）；用不了时 `relayMessage` 说原因
     var relayAvailable: Bool
     var relayMessage: String?
+    /// 用得了哪几台中转服务器（各个 Team 的，再是维护者的）：每个 Team 的账号的会话走这个 Team 自己的服务器，配对记在哪台上，
+    /// 对方经它看得到的就是走那台的会话。有好几台时，显示配对码要先选在哪台上配。旧版 cca 没有这一项（空的：不用选）
+    var relayHubs: [RemoteHub]
     var sessions: [RemoteSession]
     var peers: [RemotePeer]
     var errors: [RemoteProblem]
@@ -30,11 +33,13 @@ struct RemoteDoc: CcaDocument, Equatable {
     private struct Relay: Decodable {
         var available: Bool?
         var message: String?
-        enum CodingKeys: String, CodingKey { case available, message }
+        var hubs: [RemoteHub]
+        enum CodingKeys: String, CodingKey { case available, message, hubs }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             available = c.bool(.available)
             message = c.string(.message)
+            hubs = c.lossyArray(RemoteHub.self, .hubs) ?? []
         }
     }
 
@@ -47,6 +52,7 @@ struct RemoteDoc: CcaDocument, Equatable {
         let relay = c.lossy(Relay.self, .relay)
         relayAvailable = relay?.available ?? false
         relayMessage = relay?.message
+        relayHubs = relay?.hubs ?? []
         sessions = c.lossyArray(RemoteSession.self, .sessions) ?? []
         peers = c.lossyArray(RemotePeer.self, .peers) ?? []
         errors = c.lossyArray(RemoteProblem.self, .errors) ?? []
@@ -113,6 +119,31 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
 }
 
 /// 配对过的一台机器。
+/// 一台用得了的中转服务器（`relay.hubs[]`）：某个 Team 的同步服务器，或者维护者的那一台（`team` 是 nil）。
+struct RemoteHub: Decodable, Sendable, Equatable, Identifiable {
+    /// Team 的编号；nil 是维护者的那一台
+    var team: String?
+    /// 给人看的：「研发组」的服务器、维护者的服务器
+    var name: String
+
+    var id: String { team ?? "maintainer" }
+    /// `cca remote pair` 后面说在这台上配对的参数
+    var arguments: [String] { team.map { ["--team", $0] } ?? ["--maintainer"] }
+
+    enum CodingKeys: String, CodingKey { case team, name }
+
+    init(team: String?, name: String) {
+        self.team = team
+        self.name = name
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
+        name = c.string(.name) ?? ""
+    }
+}
+
 struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     /// 配对的编号（32 个十六进制字符）：`cca remote allow|unpair` 的参数
     var id: String
@@ -126,9 +157,11 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     var state: RemotePeerState
     /// 它是手机上的网页端（`cca remote pair --web` 配的）：只是给人看的，它能做什么照旧看 `incoming`。旧版 cca 没有这个字段
     var web: Bool
+    /// 这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）；nil 是维护者的那一台
+    var team: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, short, name, incoming, shown, state, web
+        case id, short, name, incoming, shown, state, web, team
         case pairedEpoch = "paired_epoch"
     }
 
@@ -145,6 +178,7 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
         pairedEpoch = c.double(.pairedEpoch)
         state = c.lossy(RemotePeerState.self, .state) ?? .unknown
         web = c.bool(.web) ?? false
+        team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 

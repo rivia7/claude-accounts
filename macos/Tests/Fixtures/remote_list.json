@@ -5,7 +5,17 @@
   "enabled": true,
   "relay": {
     "available": true,
-    "message": null
+    "message": null,
+    "hubs": [
+      {
+        "team": "0123456789abcdef0123456789abcdef",
+        "name": "「研发组」的服务器"
+      },
+      {
+        "team": null,
+        "name": "维护者的服务器"
+      }
+    ]
   },
   "sessions": [
     {
@@ -77,7 +87,9 @@
       "incoming": "none",
       "shown": false,
       "paired_epoch": 1792314000,
-      "state": "ok"
+      "state": "ok",
+      "team": null,
+      "web": false
     },
     {
       "id": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
@@ -86,7 +98,9 @@
       "incoming": "control",
       "shown": true,
       "paired_epoch": 1793782800,
-      "state": "ok"
+      "state": "ok",
+      "team": null,
+      "web": false
     },
     {
       "id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
@@ -96,7 +110,8 @@
       "shown": true,
       "paired_epoch": 1794000600,
       "state": "ok",
-      "web": true
+      "web": true,
+      "team": "0123456789abcdef0123456789abcdef"
     },
     {
       "id": "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
@@ -105,7 +120,9 @@
       "incoming": "view",
       "shown": true,
       "paired_epoch": 1786266000,
-      "state": "gone"
+      "state": "gone",
+      "team": null,
+      "web": false
     }
   ],
   "errors": []
