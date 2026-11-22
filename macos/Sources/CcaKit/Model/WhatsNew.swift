@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.3-beta.8", title: "Team：管理员在终端里管节点", points: [
+            .init(symbol: "network",
+                  text: "Team 的管理员能在终端里管节点：cca team node Team 列出来（不显示密钥），add 粘贴链接加一个，copy 照一个节点换端口复制，rm 去掉；没人用的节点不发给设备。"),
+            .init(symbol: "speedometer",
+                  text: "cca team node Team test 节点… 另起一个临时内核实测出口：账号要用的服务和服务器自己看到的 IP、地区，几个节点是不是同一个出口。不碰正在用的代理。"),
+            .init(symbol: "lock.open",
+                  text: "Team 给的账号不用再请求锁定节点：走哪个节点由那个 Team 的管理员定。"),
+        ]),
         ReleaseNote(version: "3.5.3-beta.7", title: "Team：设备只有一个名字、管理员能锁定别名", points: [
             .init(symbol: "laptopcomputer",
                   text: "Team 里的设备只用管理员起的名字：新发的邀请带着这个名字，设备加入时就用它；已经加入的设备，管理员这台更新后下次刷新设备列表时跟着改。"),
