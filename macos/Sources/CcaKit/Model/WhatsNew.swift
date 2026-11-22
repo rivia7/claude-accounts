@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.3-beta.3", title: "自己的设备之间同步也用 Team", points: [
+            .init(symbol: "person.3",
+                  text: "「自己的同步服务器」去掉了：自己的几台设备之间同步也用 Team——建一个 Team、部署它的服务器、把自己的账号导进去。本机留下的旧文件自动清掉；服务器上以前装的那一份可以卸掉（README 的「Team」一节有那一行命令）。"),
+            .init(symbol: "link",
+                  text: "配置向导第一步问有没有 Team 的邀请链接（维护者共享的账号也这样给）。"),
+            .init(symbol: "iphone",
+                  text: "一键部署 Team 的服务器时带上手机的网页端：证书自动向 Let's Encrypt 申请、到期前续上。"),
+            .init(symbol: "arrow.left.arrow.right",
+                  text: "自己的账号、第三方 API 账号的远程会话改经加入的第一个 Team 的服务器中转（没加入 Team 时照旧经维护者的）。"),
+        ]),
         ReleaseNote(version: "3.5.3-beta.2", title: "在 iPhone 上接入远程会话", points: [
             .init(symbol: "iphone",
                   text: "远程会话能在 iPhone 上接入：在「远程会话」页点「和手机配对…」（或终端里运行 cca remote pair --web），用 iPhone 的相机扫二维码、在 Safari 里输入配对码，再添加到主屏幕。要 iOS 17 以上。"),
