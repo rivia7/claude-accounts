@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.3-beta.6", title: "Team：别名按工具编号、Team 能改名", points: [
+            .init(symbol: "tag",
+                  text: "Team 里没起别名的账号按工具各自编号：Claude、Codex、Antigravity 的第一个账号都是 team-1，同一个邮箱在两个工具里各有各的号。以前几个工具接着编的号，管理员这台更新后下次发布时重新编，各台设备跟着换。"),
+            .init(symbol: "pencil",
+                  text: "「改别名…」只改这一行那个工具里的账号（cca team alias Team 工具:邮箱 新别名）。"),
+            .init(symbol: "textformat",
+                  text: "管理员能给 Team 改名字（cca team name Team 新名字），各台设备下次取配置时跟着改；手机网页端的标题下次部署时换。"),
+        ]),
         ReleaseNote(version: "3.5.3-beta.5", title: "Team：设备能改名、账号有默认别名", points: [
             .init(symbol: "server.rack",
                   text: "一台服务器上的几个 Team 都能开手机的网页端（共用一个证书助手），网页和主屏幕上显示的是 Team 的名字。已经部署的服务器再部署一次就换过来。"),
