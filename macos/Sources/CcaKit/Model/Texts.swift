@@ -398,7 +398,7 @@ enum Texts {
     static func remotePeerDetail(_ p: RemotePeer, now: Double, calendar: Calendar = .current) -> String {
         var parts: [String] = []
         if let t = p.pairedEpoch { parts.append(pastTime(t, now: now, calendar: calendar) + " 配对") }
-        parts.append(p.shown ? "配对码是这台 Mac 显示的" : "配对码是它显示的")
+        parts.append(p.web ? "手机在浏览器里接入" : p.shown ? "配对码是这台 Mac 显示的" : "配对码是它显示的")
         return parts.joined(separator: " · ")
     }
 

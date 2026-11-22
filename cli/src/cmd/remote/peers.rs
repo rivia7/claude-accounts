@@ -83,23 +83,26 @@ pub fn hex32(s: &str) -> bool {
     s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+/// 配对表里的一项；缺了该有的、样子不对是 None（这一项不算）
+fn row_of(pid: &str, d: &Dict) -> Option<Peer> {
+    Some(Peer {
+        pid: pid.to_string(),
+        fp: d.str("fp")?.to_string(),
+        name: d.str("name")?.to_string(),
+        incoming: Incoming::parse(&d.str("incoming")?)?,
+        shown: d.get("shown")?.as_bool()?,
+        at: d.get("at")?.as_num()?,
+        // 两台机器之间的配对、旧版写的配对表没有这一项（`at` 取不存在的键会崩：用 `get`）
+        web: d.get("web").and_then(|v| v.as_bool()) == Some(true),
+    })
+}
+
 pub fn load() -> Vec<Peer> {
     let Some(peers) = fs::load_quiet(&file()).and_then(|j| j.as_dict()).and_then(|j| j.dict("peers")) else { return Vec::new() };
     let mut out = Vec::new();
     for (pid, v) in peers.items() {
         let Some(d) = v.as_dict() else { continue };
-        let peer = (|| {
-            Some(Peer {
-                pid: pid.to_string(),
-                fp: d.str("fp")?.to_string(),
-                name: d.str("name")?.to_string(),
-                incoming: Incoming::parse(&d.str("incoming")?)?,
-                shown: d.at("shown").as_bool()?,
-                at: d.at("at").as_num()?,
-                web: d.at("web").as_bool() == Some(true),
-            })
-        })();
-        if let Some(p) = peer.filter(|p| hex32(&p.pid)) {
+        if let Some(p) = row_of(&pid, &d).filter(|p| hex32(&p.pid)) {
             out.push(p);
         }
     }
@@ -171,6 +174,37 @@ pub fn machine_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows() {
+        let pid = "ab".repeat(16);
+        let full = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0 };
+        let p = row_of(&pid, &full).unwrap();
+        assert_eq!(
+            (p.incoming, p.shown, p.at, p.web),
+            (Incoming::View, true, 5.0, false),
+            "没有 web 这一项：不是网页端（旧的配对表都这样）"
+        );
+        full.set("web", true);
+        assert!(row_of(&pid, &full).unwrap().web);
+        full.set("web", "yes");
+        assert!(!row_of(&pid, &full).unwrap().web, "不是 true 的都不算");
+        // 缺了该有的、样子不对：这一项不算，不崩
+        for (k, bad) in [("fp", V::None), ("incoming", "all".into()), ("shown", "x".into()), ("at", "x".into())] {
+            let d = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0 };
+            d.set(k, bad);
+            assert!(row_of(&pid, &d).is_none(), "{k}");
+        }
+        for k in ["fp", "name", "incoming", "shown", "at"] {
+            let d = Dict::new();
+            for (kk, v) in full.items() {
+                if &*kk != k {
+                    d.set(kk, v);
+                }
+            }
+            assert!(row_of(&pid, &d).is_none(), "少了 {k}");
+        }
+    }
 
     #[test]
     fn words_and_lookup() {

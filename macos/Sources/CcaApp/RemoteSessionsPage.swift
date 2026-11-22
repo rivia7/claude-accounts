@@ -290,6 +290,12 @@ private struct RemoteSessionList: View {
                 SectionAction("输入配对码…", systemImage: "keyboard") { model.pairRemote(show: false) }
                     .disabled(!usable)
                     .help(usable ? "接入另一台机器上的会话：在那台机器上显示配对码（cca remote pair），在这里输入" : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
+                if model.remoteWebAvailable {
+                    SectionAction("和手机配对…", systemImage: "iphone") { model.pairRemotePhone() }
+                        .disabled(!usable)
+                        .help(usable ? "在手机的浏览器里接入这台 Mac 上的会话：这里显示二维码和配对码，手机扫码打开网页端、输入配对码（手机上不用装东西）"
+                              : nonEmpty(doc?.relayMessage) ?? "这台 Mac 用不了中转")
+                }
             }
             VStack(alignment: .leading, spacing: 9) {
                 if let ps = doc?.peers, !ps.isEmpty {
@@ -388,6 +394,7 @@ private struct RemotePeerLine: View {
 
     var body: some View {
         MachineLine(name: nonEmpty(peer.name) ?? peer.short, detail: Texts.remotePeerDetail(peer, now: now)) {
+            if peer.web { Tag(text: "手机", color: .secondary) }
             if peer.state == .gone { Tag(text: "对方已经取消配对", color: .orange) }
         } trailing: {
             Text("它接入这台 Mac 时").font(.caption).foregroundStyle(.secondary)

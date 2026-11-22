@@ -1995,6 +1995,15 @@ final class AppModel {
         run(show ? .remotePair : .remoteJoin)
     }
 
+    /// cca 有 `remote pair --web`（hello 的 `remote_web`）：才给「和手机配对…」
+    var remoteWebAvailable: Bool { remoteAvailable && hello?.remoteWeb == 1 }
+
+    /// 和手机配对：显示网页端的地址（二维码）和配对码，手机在浏览器里输入；之后手机能接入这台 Mac 的会话。提问会话
+    func pairRemotePhone() {
+        guard phase == .ready, remoteWebAvailable else { return }
+        run(.remotePairWeb)
+    }
+
     /// 这个会话在这里开着的终端（没有就是 nil；断开了、结束了但还没关掉的也算）
     func remoteTerminal(for session: RemoteSession) -> RemoteTerminal? {
         remoteTerminals.first { $0.session.id == session.id }

@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 
 /// 在 App 里问完的流程（提问会话，PROTOCOL 4.6）：cca 问一页，这里显示一页。问题、默认值、错误都是 cca 给的。
@@ -156,6 +157,8 @@ private struct FlowField: View {
             FlowMulti(options: f.options, selected: flow.selected(f.id)) { flow.toggle(f.id, $0) }
         case .code:
             FlowCode(text: f.value)
+        case .qr:
+            FlowQR(text: f.value)
         default:
             TextField("", text: Binding(get: { flow.draft[f.id] ?? "" }, set: { flow.draft[f.id] = $0 }))
                 .textFieldStyle(.roundedBorder)
@@ -248,6 +251,47 @@ private struct FlowMenu: View {
 }
 
 /// 只显示、不用回答的一段配置（等宽字体，可以复制）。
+/// 只显示的一个网址（和手机配对那一页）：画成二维码，手机的相机扫了就打开；下面写着网址，照着输也行。
+/// 二维码是系统自带的生成器画的（CoreImage），App 不联网、不经别人的服务。
+private struct FlowQR: View {
+    @Environment(AppModel.self) private var model
+    let text: String
+
+    /// 生成器出的是一个点一个像素的图：先按整数倍放大成位图（取最近的点，不插值——不然边是糊的），再交给界面；
+    /// 容错选中等：屏幕上扫，不用为污损留余量
+    private var code: CGImage? {
+        guard !text.isEmpty, text.utf8.count <= 512, let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let out = filter.outputImage else { return nil }
+        let big = out.samplingNearest().transformed(by: CGAffineTransform(scaleX: 12, y: 12))
+        return CIContext(options: [.useSoftwareRenderer: true]).createCGImage(big, from: big.extent)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let code {
+                Image(decorative: code, scale: 1)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 168, height: 168)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(.white))   // 深色外观下也是白底黑点：相机认得出
+                    .accessibilityLabel("手机上打开的地址的二维码")
+            }
+            HStack(spacing: 8) {
+                Text(text)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                Button("复制") { model.copy(text) }
+                    .controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
 private struct FlowCode: View {
     @Environment(AppModel.self) private var model
     let text: String

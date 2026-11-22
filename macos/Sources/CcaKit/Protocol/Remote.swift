@@ -124,9 +124,11 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     var shown: Bool
     var pairedEpoch: Double?
     var state: RemotePeerState
+    /// 它是手机上的网页端（`cca remote pair --web` 配的）：只是给人看的，它能做什么照旧看 `incoming`。旧版 cca 没有这个字段
+    var web: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, short, name, incoming, shown, state
+        case id, short, name, incoming, shown, state, web
         case pairedEpoch = "paired_epoch"
     }
 
@@ -142,6 +144,7 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
         shown = c.bool(.shown) ?? false
         pairedEpoch = c.double(.pairedEpoch)
         state = c.lossy(RemotePeerState.self, .state) ?? .unknown
+        web = c.bool(.web) ?? false
     }
 }
 

@@ -29,6 +29,8 @@ struct HelloDoc: CcaDocument, Equatable {
     var remote: Int?
     /// 有 `cca remote end`（结束这台 Mac 上的一个会话，PROTOCOL 9.2）；旧版 cca 没有这个字段，App 不给「结束」
     var remoteEnd: Int?
+    /// 有 `cca remote pair --web`（和手机配对：手机在浏览器里接入，PROTOCOL 9.2）；旧版 cca 没有这个字段，App 不给「和手机配对…」
+    var remoteWeb: Int?
     /// 有自己的同步服务器（`cca hub …`，PROTOCOL 4.13；state 的 `config.hubs`、账号的 `hub`）；旧版 cca 没有这个字段，
     /// App 不显示「自己的同步服务器」、不调 `cca hub`（版本不是 HubAPI.version 时也一样）
     var hub: Int?
@@ -48,6 +50,7 @@ struct HelloDoc: CcaDocument, Equatable {
         case version, kind, api, prompt, reorder, forms, dock, cost, mail, remote, hub, team
         case installCLI = "install_cli"
         case remoteEnd = "remote_end"
+        case remoteWeb = "remote_web"
         case ccaVersion = "cca_version"
         case devMode = "dev_mode"
         case installed
@@ -69,6 +72,7 @@ struct HelloDoc: CcaDocument, Equatable {
         mail = c.int(.mail)
         remote = c.int(.remote)
         remoteEnd = c.int(.remoteEnd)
+        remoteWeb = c.int(.remoteWeb)
         hub = c.int(.hub)
         team = c.int(.team)
         ccaVersion = c.string(.ccaVersion)

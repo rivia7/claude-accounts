@@ -174,6 +174,9 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     /// 远程会话的配对（PROTOCOL 9.2）：这台 Mac 显示配对码 / 输入另一台机器显示的配对码。
     static let remotePair = Handoff(arguments: ["remote", "pair"], title: "显示配对码",
                                     message: "在终端里显示一个配对码，在另一台机器上输入它。", inApp: true)
+    /// 和手机配对（`cca remote pair --web`，要 `hello.remote_web`）：显示网页端的地址（二维码）和配对码，手机在浏览器里输入。
+    static let remotePairWeb = Handoff(arguments: ["remote", "pair", "--web"], title: "和手机配对",
+                                       message: "在终端里显示手机上打开的地址和一个配对码。", inApp: true)
     static let remoteJoin = Handoff(arguments: ["remote", "join"], title: "输入配对码",
                                     message: "在终端里输入另一台机器显示的配对码。", inApp: true)
 

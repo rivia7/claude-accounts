@@ -1,0 +1,20 @@
+# 远程会话的网页端（手机浏览器里的那一页，docs/dev/remote.md「网页端」）：在 compose.yaml 上面再加的几项。
+# ./policy.sh presence deploy … --web-url https://域名[:端口]/ 打开它：往 .env 里写 CCA_WEB_URL、CCA_WEB_PORT 和
+# COMPOSE_FILE=compose.yaml:compose.web.yaml（docker compose 自己会读，之后在这个目录里 docker compose up -d 照样带着它）；
+# --no-web 关掉（去掉那几行）。没开时这个文件不起作用，原来那一套一个字不变。
+#   webcert/fullchain.pem、privkey.pem   浏览器信得过的证书（证书机构签的，连同中间证书）和私钥；续上以后换掉这两个文件就行，
+#                                        服务端一分钟内自己重新读，不用重启。要让容器里的用户（10001）读得了
+#   app/web/                             页面的文件（仓库的 server/web/）
+# 网页端另开一个端口（容器里 18445，对外是 CCA_WEB_PORT）：原来那个端口上自签的证书照旧给 cca 的设备用
+services:
+  cca-presence:
+    environment:
+      CCA_WEB_URL: ${CCA_WEB_URL:?先用 ./policy.sh presence deploy --web-url 打开网页端}
+      CCA_WEB_LISTEN: 0.0.0.0:18445
+      CCA_WEB_CERT: /webcert/fullchain.pem
+      CCA_WEB_KEY: /webcert/privkey.pem
+    ports:
+      - "${CCA_WEB_PORT:-443}:18445"
+    volumes:
+      - ./webcert:/webcert:ro
+    pids_limit: 192   # 一条 WebSocket 一个线程（最多 64 条），加上处理请求的

@@ -85,15 +85,16 @@ func remoteProtocolTests() {
         check("夹具 remote_list.json", false)
         return
     }
-    check("列表：开关、中转、会话、配对过的机器", doc.enabled && doc.relayAvailable && doc.sessions.count == 4 && doc.peers.count == 3 && doc.errors.isEmpty)
+    check("列表：开关、中转、会话、配对过的机器", doc.enabled && doc.relayAvailable && doc.sessions.count == 4 && doc.peers.count == 4 && doc.errors.isEmpty)
     let local = doc.sessions.first { $0.isLocal }, far = doc.sessions.filter { !$0.isLocal }
     check("这台 Mac 上的会话：知道启动它的终端还开着", local?.localTerminal == true && local?.peer == nil && local?.access == .control && local?.attachable == true)
     check("别的机器上的：哪个配对的、机器名、只让看的、不在线的",
           far.count == 3 && far.allSatisfy { $0.peer != nil && $0.machine != nil && $0.localTerminal == nil }
           && far.contains { $0.access == .view && $0.tool == .codex } && far.contains { $0.state == .offline && !$0.attachable })
     check("会话的 peer 都是配对过的机器", far.allSatisfy { s in doc.peers.contains { $0.id == s.peer } })
-    check("配对过的机器：它能做什么、谁显示的配对码、对方取消了的", doc.peers.map(\.incoming) == [.none, .control, .view]
-          && doc.peers.map(\.shown) == [false, true, true] && doc.peers.last?.state == .gone)
+    check("配对过的机器：它能做什么、谁显示的配对码、对方取消了的", doc.peers.map(\.incoming) == [.none, .control, .control, .view]
+          && doc.peers.map(\.shown) == [false, true, true, true] && doc.peers.last?.state == .gone)
+    check("配对过的机器里有一台是手机上的网页端", doc.peers.map(\.web) == [false, false, true, false] && doc.peers[2].name == "我的 iPhone")
     check("按 id 找会话", doc.session(far[0].id)?.machine == "office-linux" && doc.session("nope") == nil)
 
     let problem = #"{"version":1,"kind":"remote","generated_epoch":1,"enabled":false,"relay":{"available":false,"message":"没有配置维护者的映射"},"sessions":[{"id":"aa","where":"zz_new","state":"zz","access":"zz"},{"short":"没有 id"}],"peers":[{"id":"bb","incoming":"zz"}],"errors":[{"code":"relay_off","message":"没有配置维护者的映射"},{"code":"zz_new","message":"别的"}]}"#
@@ -131,6 +132,23 @@ func remoteProtocolTests() {
     let mixed = AskEvent(seq: 1, q: "x", title: "", message: "", fields: [PromptField(id: "c", kind: .code), PromptField(id: "next", kind: .choice,
                                                                                                                       options: [PromptOption(value: "1", label: "a")])])
     check("带着选择题的代码页还是要回答的", !mixed.displayOnly && !AskEvent(seq: 1, q: "x", title: "", message: "", fields: []).displayOnly)
+
+    // 和手机配对（cca remote pair --web）：一页里是手机上打开的地址（画成二维码）和配对码，都不用回答
+    let webPage = #"{"v":1,"ev":"ask","seq":2,"q":"remote.pair_web","title":"和手机配对","message":"M","fields":[{"id":"url","kind":"qr","label":"手机上打开","value":"https://relay.example.com:18445/"},{"id":"code","kind":"code","label":"配对码","value":"7K2M-9QXD-4HTP-W3NB"}]}"#
+    let webAsk = EventLog.parseLine(Data(webPage.utf8))?.ask
+    check("和手机配对那一页：二维码的字段认识、能显示、没有要回答的", PromptKind.qr.isKnown && webAsk?.isDisplayable == true && webAsk?.displayOnly == true
+          && webAsk?.fields.map(\.kind) == [.qr, .code] && webAsk?.fields.first?.value == "https://relay.example.com:18445/")
+    check("和手机配对是提问会话，参数带 --web", Handoff.remotePairWeb.arguments == ["remote", "pair", "--web"] && Handoff.remotePairWeb.inApp
+          && !Handoff.remotePairWeb.needsForms)
+    check("hello 的 remote_web；旧版 cca 没有", (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1,"remote_web":1}"#
+        .utf8)))?.remoteWeb == 1
+          && (try? DocumentDecoder.decode(HelloDoc.self, from: Data(#"{"version":1,"kind":"hello","api":1,"remote":1}"#.utf8)))?.remoteWeb == nil)
+    let withPhone = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(
+        #"{"version":1,"kind":"remote","sessions":[],"peers":[{"id":"aa","name":"我的 iPhone","shown":true,"web":true},{"id":"bb","name":"box","shown":true}]}"#.utf8))
+    check("配对的是手机上的网页端：记着（旧版 cca 没有这个字段：不算）；那一行说它在浏览器里接入",
+          withPhone?.peers.map(\.web) == [true, false]
+          && Texts.remotePeerDetail(withPhone!.peers[0], now: 0).contains("手机在浏览器里接入")
+          && Texts.remotePeerDetail(withPhone!.peers[1], now: 0).contains("配对码是这台 Mac 显示的"))
 }
 
 @MainActor func remoteFlowTests() async {

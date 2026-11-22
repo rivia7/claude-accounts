@@ -2229,9 +2229,11 @@ def main():
                     help='网页端（手机浏览器接入远程会话的那一页）：手机上打开的地址，https://域名[:端口]/。给了才开网页端（要和 '
                     '--relay-listen 一起；也可以用环境变量 CCA_WEB_URL）。浏览器只认信得过的证书：用 --web-listen 另开一个端口，'
                     '或者放在做 HTTPS 的代理后面（--behind-proxy）')
-    ap.add_argument('--web-listen', help='网页端另开的监听 地址:端口，用 --web-cert、--web-key 的证书（原来那个端口上自签的证书照旧给 cca 的设备用）')
-    ap.add_argument('--web-cert', help='浏览器信得过的证书（连同中间证书；证书机构签的）。文件换了会自己重新读')
-    ap.add_argument('--web-key', help='--web-cert 的私钥')
+    ap.add_argument('--web-listen', default=os.environ.get('CCA_WEB_LISTEN'),
+                    help='网页端另开的监听 地址:端口，用 --web-cert、--web-key 的证书（原来那个端口上自签的证书照旧给 cca 的设备用）。'
+                    '这三项也可以用环境变量 CCA_WEB_LISTEN、CCA_WEB_CERT、CCA_WEB_KEY（compose.web.yaml 就是这么给的）')
+    ap.add_argument('--web-cert', default=os.environ.get('CCA_WEB_CERT'), help='浏览器信得过的证书（连同中间证书；证书机构签的）。文件换了会自己重新读')
+    ap.add_argument('--web-key', default=os.environ.get('CCA_WEB_KEY'), help='--web-cert 的私钥')
     ap.add_argument('--web-root', help='网页端的文件在哪（默认是这个程序旁边的 web/）')
     ap.add_argument('--web-port-file', help='网页端实际监听的端口写到这里（测试用）')
     a = ap.parse_args()

@@ -87,6 +87,10 @@
 - 远程会话：`run_account` 的 `HOSTCMD`（`remote_prepare`）↔ 辅助程序 `remote-host` 的参数；`local.rs` 新加的接入方 → 宿主的帧 ↔ `link.rs` 的 `bridge` 放不放行（只该这台机器上做的事不放行，像 `END`）↔ `tests/remote_relay.py` 里发这一种帧的那一句；同意项 `remote_end`：`cca` ↔ PROTOCOL 4.2 ↔ Swift 的 `ConsentItem`；客户端新加的终端查询序列 ↔ `cli/src/cmd/remote/vt.rs` 的 `csi_class` / `osc_class` / `str_class`（漏了的话几个终端同时接着时回答会变成按键）；`cca remote attach` 的退出码、断开的按键 ↔ docs/dev/remote.md ↔ PROTOCOL 9.3 ↔ App 的 `Texts.remoteEnded`；`remote-list --json`（`manage.rs` 的 `list_doc`）↔ PROTOCOL 9.1 ↔ Swift 的 `Protocol/Remote.swift` ↔ `macos/Tests/Fixtures/remote_list.json`
 - SwiftTerm（`macos/Vendor/SwiftTerm/`）：换版本时源码、`SHA256SUMS`、README 里的版本和提交号一起换；App 里只有 `TerminalSurface.swift` 用它；不要的功能（图形协议）：`macos/build.sh` 换掉的那两行（`ST_KITTY`、`ST_SIXEL`）↔ `macos/tools/swiftterm-check` ↔ `TerminalSurface.swift` ↔ PROTOCOL 9.3
 - 「远程会话」页多久查一次（`Scheduler.remoteInterval`）↔ PROTOCOL 9.1 ↔ docs/dev/remote.md ↔ macos/README.md（服务器给每台设备限了流：`server/cca-presence.py`）
+- 远程会话的网页端（手机在浏览器里接入，线上的格式）：`server/README.md`「网页端」↔ `server/cca-presence.py`（`GUEST_OPS`、`guest_key`、`ws_pump`、`Web`）↔ `server/web/core.js` ↔ `tests/web_relay.py` 的 `Guest`、`WsSock`（照文档独立写的）；配对、握手、记录、帧是三份实现：`cli/src/cmd/remote/crypto.rs` ↔ `tests/spec_wire.py` ↔ `server/web/core.js`（改了格式三处一起改，`CoreJsTest` 拿 `core.js` 和 `spec_wire.py` 对）；断了重新接上的间隔：`core.js` 的 `RETRY_GAP`、`RETRY_FOR`、`MISSING_FOR`、`FLAPS` ↔ `attach.rs` 的同名常量；辅助程序 `remote-pair-show --web` 的输出（`code` 后面紧跟一行 `web 地址`）↔ bash 的 `remote_pair_run`；`relay.rs` 的 `NO_WEB` ↔ `tests/web_relay.py` 里写死的同一句
+- 和手机配对在界面里：同意项 `remote_pair` 的范围 `web`、题号 `remote.pair_web`、字段的种类 `qr`、hello 的 `remote_web`、`peers[].web`：`cca` ↔ PROTOCOL（2.1、4.2、4.6、9.1、9.2）↔ Swift（`PromptKind.qr`、`Handoff.remotePairWeb`、`HelloDoc.remoteWeb`、`RemotePeer.web`）↔ `macos/Tests/Fixtures`（`flow_remote_pair_--web.flow`、`remote_list.json`、`hello.json`）
+- 网页端的页面（`server/web/`）：xterm.js 换版本时那四个文件和 `server/web/README.md` 里的版本、校验和一起换；目录里新加文件 ↔ `tests/web_relay.py` `FilesTest` 的名单 ↔ 服务器的 `WEB_TYPES`；`macos/Sources/CcaApp/LogoGlyph.swift` ↔ `server/web/logo.svg`（照它手写的同一个字形）、`icon-*.png`（`macos/tools/make-icon --flat` 画的）；页面里的类名别叫 `terminal`（xterm.js 给自己的根元素用了）
+- 网页端的部署：`server/compose.web.yaml` ↔ `policy.sh` 的 `presence_remote`（`.env` 的 `CCA_WEB_URL`、`CCA_WEB_PORT`、`COMPOSE_FILE`，`webcert/` 里的两个文件名）↔ 服务器的 `CCA_WEB_LISTEN` / `CCA_WEB_CERT` / `CCA_WEB_KEY`；`compose.yaml` 没开网页端时要和以前一个字不差
 
 ## 细节在哪
 动到哪一块，先读 `docs/dev/` 下对应的那一份（这一块怎么测也写在里面）：
@@ -110,6 +114,6 @@
 - `clients.md` — 辅助安装 claude / codex / agy、客户端统一更新
 - `release.md` — release.sh 的步骤、测试版先发后验、自动更新、检查更新、`cca gui`
 - `mail.md` — 邮箱助手（`cca mail`）
-- `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面
+- `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面；网页端（手机不装 cca，在浏览器里接入：访客设备、WebSocket 进中转、`server/web/` 的页面、`cca remote pair --web`、带证书的端口和部署；`python3 tests/web_demo.py` 在本机跑起来看）
 - `desktop.md` — 程序坞整理、Claude App 多开、启动器图标
 - `uninstall.md` — 卸载（`cca uninstall` / `cca restore`）：先后、`~/.cca` 以外要清掉的、不删的、测试里 `defaults` 和缓存目录的坑

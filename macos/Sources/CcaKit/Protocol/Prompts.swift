@@ -11,7 +11,10 @@ struct PromptKind: KnownValues {
     static let confirm = PromptKind(rawValue: "confirm")
     /// 只显示、不用回答的一段多行文字（`value`），带“复制”。
     static let code = PromptKind(rawValue: "code")
-    static let allKnown: [PromptKind] = [.text, .secret, .choice, .multi, .confirm, .code]
+    /// 只显示、不用回答的一个网址（`value`）：画成二维码（手机的相机扫了就打开），下面写着网址，带“复制”。
+    /// 和手机配对那一页（`remote.pair_web`）用。
+    static let qr = PromptKind(rawValue: "qr")
+    static let allKnown: [PromptKind] = [.text, .secret, .choice, .multi, .confirm, .code, .qr]
 }
 
 /// 选择题的一项。`value` 原样回传，App 不解释它。
@@ -122,10 +125,10 @@ struct AskEvent: Sendable, Equatable {
         fields.count == 1 && fields[0].kind == .confirm ? fields[0] : nil
     }
 
-    /// 这一页没有要回答的（字段都是只显示的 `code`）：cca 边等边干活，做完了自己收场或者换下一页。App 只给「取消」，不交答案
+    /// 这一页没有要回答的（字段都是只显示的 `code`、`qr`）：cca 边等边干活，做完了自己收场或者换下一页。App 只给「取消」，不交答案
     /// （交了 cca 对不上字段，会当成出错停下）。
     var displayOnly: Bool {
-        !fields.isEmpty && fields.allSatisfy { $0.kind == .code }
+        !fields.isEmpty && fields.allSatisfy { $0.kind == .code || $0.kind == .qr }
     }
 
     /// App 能不能显示这一页：字段类型都认识、选择题有选项。不能显示的不能丢，要退回终端。

@@ -745,6 +745,96 @@ class ClientTest(WebBase):
         self.assertIn('对方已经取消了配对', a.ok('remote-peers', '--check'))
 
 
+class ShellTest(WebBase):
+    """bash 这一层：cca remote pair --web（真的 cca 脚本），终端里和界面 App 的提问会话里；手机那一头照文档自己说话（Guest）"""
+    env, answers, cca, session, events = (rr.ShellTest.env, rr.ShellTest.answers, rr.ShellTest.cca, rr.ShellTest.session,
+                                          staticmethod(rr.ShellTest.events))
+
+    def setUp(self):
+        super().setUp()
+        self.n = 0
+
+    def test_terminal(self):
+        a = self.a
+        self.assertEqual(json.loads(self.cca(a, '_gui', 'hello')[1]).get('remote_web'), 1)
+        rc, out, err = self.cca(a, 'remote', 'pair', '--phone')
+        self.assertEqual((rc, out), (1, ''))
+        self.assertIn('用法：cca remote pair [--web]', err)
+        # 不同意就不出配对码；问之前说清楚：是手机、那一页是服务器给的
+        rc, out, err = self.cca(a, 'remote', 'pair', '--web', answers=['n'])
+        self.assertEqual((rc, out), (1, ''))
+        self.assertIn('那台手机可以在浏览器里看和操作这台机器上开着远程会话的会话', err)
+        self.assertIn('管着服务器的人能换掉那一页的代码', err)
+        self.assertNotIn('配对码：', err)
+        self.assertEqual(a.sent(), [], '没同意：什么都没发给服务器')
+        p = subprocess.Popen(['/bin/bash', str(ROOT / 'cca'), 'remote', 'pair', '--web'], env=self.env(a, CCA_TTY=self.answers('y')),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.stdout.close(), p.stderr.close()))
+        code, seen = None, ''
+        while code is None:
+            line = p.stderr.readline()
+            self.assertTrue(line, '没等到配对码：' + seen)
+            seen += line
+            if '配对码：' in line:
+                code = line.strip().split('：')[1]
+        self.assertIn('手机上打开：%s/' % self.origin, seen, '先说地址，再说配对码')
+        self.assertIn('添加到主屏幕', seen)
+        g = Guest(self, '我的 iPhone')
+        g.join(sw.code_bytes(code), a.fp)
+        out, err = p.communicate(timeout=60)
+        self.assertEqual((p.returncode, out), (0, ''), err)
+        self.assertIn('已经和「我的 iPhone」配对：它可以接入这台机器上开着远程会话的会话', err)
+        self.assertEqual(list(self.d.glob('**/cca-pair.*')), [])
+        rc, out, err = self.cca(a, 'remote', 'peers')
+        self.assertRegex(out, r'^[0-9a-f]{8}  我的 iPhone（手机上的网页端）  对方可以看和操作这台机器的会话  ')
+        rc, out, err = self.cca(a, 'remote', 'list', '--json')
+        self.assertEqual([(x['name'], x['web'], x['incoming'], x['state']) for x in json.loads(out)['peers']],
+                         [('我的 iPhone', True, 'control', 'ok')])
+        # 改成只看、取消配对照旧按名字；取消以后服务器上访客也没了
+        rc, out, err = self.cca(a, 'remote', 'allow', '我的 iPhone', 'view')
+        self.assertEqual(rc, 0, err)
+        rc, out, err = self.cca(a, 'remote', 'unpair', '我的 iPhone')
+        self.assertEqual(rc, 0, err)
+        doc = self.remote()
+        self.assertEqual((doc['edges'], doc['guests']), ({}, {}))
+
+    def test_in_the_app(self):
+        a = self.a
+        p, ev = self.session(a, {'consent.remote_pair': [{'v': 'n'}]}, 'remote', 'pair', '--web')
+        self.assertNotEqual(p.wait(60), 0)
+        (ask,) = [e for e in self.events(ev) if e['ev'] == 'ask']
+        self.assertEqual((ask['q'], ask.get('scope', 'web')), ('consent.remote_pair', 'web'))
+        # 显示的那一页：先是手机上打开的地址（App 画成二维码），再是配对码；都不用回答
+        p, ev = self.session(a, {'consent.remote_pair': [{'v': 'y'}], 'remote.pair_web': [None]}, 'remote', 'pair', '--web')
+        (page,) = wait_for('显示配对码的那一页', lambda: [e for e in self.events(ev) if e.get('q') == 'remote.pair_web'], secs=30)
+        self.assertEqual([(f['id'], f['kind']) for f in page['fields']], [('url', 'qr'), ('code', 'code')])
+        self.assertEqual((page['title'], page['fields'][0]['value']), ('和手机配对', self.origin + '/'))
+        code = page['fields'][1]['value']
+        self.assertRegex(code, '^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$')
+        Guest(self, 'iPad').join(sw.code_bytes(code), a.fp)
+        self.assertEqual(p.wait(60), 0, p.stderr.read())
+        (res,) = [e for e in self.events(ev) if e['ev'] == 'result']
+        self.assertEqual((res['code'], '「iPad」' in res['message']), ('remote_paired', True))
+
+
+class ShellOffTest(Base):
+    """服务器没开网页端（或者是旧版）：cca remote pair --web 说清楚，不留下一个手机输了也没用的配对码"""
+    env, answers, cca = rr.ShellTest.env, rr.ShellTest.answers, rr.ShellTest.cca
+
+    def test_no_web(self):
+        self.n = 0
+        a = self.device('box')
+        self.machines(a)
+        rc, out, err = self.cca(a, 'remote', 'pair', '--web', answers=['y'])
+        self.assertEqual((rc, out), (1, ''))
+        self.assertIn('维护者的服务器还没有开网页端，手机上接入不了', err)
+        self.assertNotIn('配对码：', err)
+        # 没开网页端的服务器照样配得了两台机器
+        r = a.run('remote-pair-show', '--web')
+        self.assertEqual((r.returncode, r.stdout), (1, ''))
+        self.assertEqual(self.call(a, 'pair_get', rid='0' * 32)[0], 404)
+
+
 class FilesTest(unittest.TestCase):
     """页面的文件（server/web/）：服务器读得进去、只发该发的；别人的代码（xterm.js）和说明里记的校验和一样；
     页面自己不引别处的东西、没有内联的脚本（内容安全策略不许，写了也不会跑）"""
