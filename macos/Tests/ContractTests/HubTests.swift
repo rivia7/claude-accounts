@@ -1,24 +1,17 @@
 import Foundation
 
-/// 自己的同步服务器（PROTOCOL 2.2 的 `config.hubs`、账号的 `hub`，3.4、3.5 的 `hubs`，4.13 的 `cca hub`）：只在 --full（手写的 Tests/Fixtures）里跑
+/// 同步服务器：维护者的、各个 Team 的（PROTOCOL 2.2 的 `config.hubs`、账号的 `hub`，3.4、3.5 的 `hubs`）。3.5.3 以前还有自己的同步服务器
+/// （`own`、`cca hub`）：旧版 cca 给的当作不认识。只在 --full（手写的 Tests/Fixtures）里跑
 func hubFixtureTests() {
-    section("自己的同步服务器")
+    section("同步服务器")
     if let h = loadFixture(HelloDoc.self, "hello.json") {
-        check("hello：hub（cca 有自己的同步服务器）", h.hub == 1 && h.hub == HubAPI.version)
-    }
-    if let h = loadFixture(HelloDoc.self, "hello_nocodex_notinstalled.json") {
-        check("hello：旧版 cca 没有 hub", h.hub == nil)
+        check("hello：有 Team（自己的同步服务器去掉了，没有 hub 这一项）", h.team == TeamAPI.version)
     }
     if let s = loadFixture(StateDoc.self, "state.json") {
         let hubs = s.config?.hubs ?? []
-        check("state：config.hubs 维护者的在前、自己的在后，不认识的 kind 去掉了", hubs.map(\.kind) == [.maintainer, .own])
-        let own = s.config?.ownHub
-        check("state：自己的同步服务器没同步成，有原因、上次成功的时间、设备数、加入时间，能给加入链接",
-              own?.state == .error && own?.state.failing == true && own?.error?.contains("连不上") == true && own?.checkedEpoch == 1794030000
-              && own?.members == 3 && own?.joinedEpoch == 1793900000 && own?.canInvite == true && own?.host == "hub.example.com:18443"
-              && own?.pinned == true && own?.onPlatform == false)
-        check("state：维护者的服务器没有设备数、加入时间、加入链接，不说钉没钉指纹", hubs.first?.members == nil && hubs.first?.joinedEpoch == nil
-              && hubs.first?.canInvite == false && hubs.first?.name == "studio-mac" && hubs.first?.accounts == 1 && hubs.first?.pinned == nil)
+        check("state：config.hubs 里维护者的那一台，不认识的 kind 去掉了", hubs.map(\.kind) == [.maintainer])
+        check("state：维护者的服务器经它同步 1 个账号，这台在它上面叫 studio-mac，同步正常", hubs.first?.name == "studio-mac"
+              && hubs.first?.accounts == 1 && hubs.first?.state == .ok && hubs.first?.state.failing == false && hubs.first?.team == nil)
         let bob = s.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))
         let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))
         let erin = s.account(AccountRef(tool: .claude, key: "erin@example.com"))
@@ -31,39 +24,44 @@ func hubFixtureTests() {
         check("旧版 cca 的 state（没有 hub、config.hubs）：有「设备」一节的账号当作经维护者的服务器，折合金额也是；config.hubs 是空的",
               alice?.hub == .maintainer && alice?.can.devices == true && alice?.cost?.sync?.hub == .maintainer && s.config?.hubs.isEmpty == true)
     }
-    // 以后的 cca 给了不认识的 hub：当作 null（不经服务器同步），有「设备」一节也不当作维护者的
     if let d = fixture("state.json"), let text = String(data: d, encoding: .utf8) {
+        // 以后的 cca 给了不认识的 hub：当作 null（不经服务器同步），有「设备」一节也不当作维护者的
         let later = Data(text.replacingOccurrences(of: #""hub": "maintainer""#, with: #""hub": "later-kind""#).utf8)
         let s = try? DocumentDecoder.decode(StateDoc.self, from: later)
         let bob = s?.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))
         check("state：不认识的 hub 当作 null（有「设备」一节也一样），折合金额也是", bob != nil && bob?.can.devices == true && bob?.hub == nil
               && bob?.cost?.sync?.hub == nil)
+        // 3.5.2 的 cca：config.hubs 里有自己的同步服务器、账号走它——App 不认识 own 了，当作没有
+        let own = Data(text.replacingOccurrences(of: #""kind": "later-kind""#, with: #""kind": "own""#)
+            .replacingOccurrences(of: #""hub": "maintainer""#, with: #""hub": "own""#).utf8)
+        let o = try? DocumentDecoder.decode(StateDoc.self, from: own)
+        let ob = o?.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))
+        check("旧版 cca 的自己的同步服务器（own）：config.hubs 里去掉，走它的账号当作不经服务器同步", o?.config?.hubs.map(\.kind) == [.maintainer]
+              && ob != nil && ob?.hub == nil && ob?.cost?.sync?.hub == nil)
     }
-    if let doc = loadFixture(HubStatusDoc.self, "hub_status.json") {
-        check("hub status：加入了、用得了、还没同步过", doc.joined && doc.reason == nil && doc.hub?.kind == .own && doc.hub?.state == .pending
-              && doc.hub?.accounts == 2 && doc.hub?.members == 1 && doc.hub?.checkedEpoch == nil)
-    }
-    let notJoined = try? DocumentDecoder.decode(HubStatusDoc.self, from: Data(#"{"version":1,"kind":"hub_status","joined":false,"reason":"还没加入","hub":null}"#.utf8))
-    check("hub status：没加入", notJoined?.joined == false && notJoined?.hub == nil && notJoined?.reason == "还没加入")
-    if let doc = loadFixture(HubDevicesDoc.self, "hub_devices.json") {
-        check("hub devices：这台在前；服务器重启以后没来过的没有 seen", doc.devices.map(\.name) == ["studio-mac", "carol-air"] && doc.devices[0].me
-              && !doc.devices[1].me && doc.devices[1].seenEpoch == nil && doc.devices[0].id.hasPrefix("SHA256:") && doc.devices[0].joinedEpoch == 1793900000)
-    }
+    let teamHub = try? JSONDecoder().decode(HubEntry.self, from: Data(#"""
+        {"kind":"team","url":"https://team.example.com:18445","host":"team.example.com:18445","state":"error","error":"连不上","checked_epoch":null,
+         "accounts":2,"name":"studio-mac","members":null,"joined_epoch":null,"can_invite":false,"pinned":null,
+         "team":"5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b","team_name":"书房组"}
+        """#.utf8))
+    check("config.hubs 里 Team 的服务器：是哪个 Team、叫什么", teamHub?.kind == .team && teamHub?.team == "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"
+          && teamHub?.teamName == "书房组" && teamHub?.state.failing == true && teamHub?.error == "连不上" && teamHub?.accounts == 2)
     if let doc = loadFixture(DevicesDoc.self, "devices.json"), let a = doc.accounts.first {
         let h = doc.hub(for: a)
         check("旧版 cca 的 devices --json（没有 hubs、账号的 hub）：当作维护者的服务器，设置和名字用顶层的",
               doc.hubs.isEmpty && a.hub == nil && h.kind == .maintainer && h.me == doc.me && h.idleAfter == doc.idleAfter && h.offlineAfter == doc.offlineAfter)
     }
+    let tid = "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"
     let two = try? DocumentDecoder.decode(DevicesDoc.self, from: Data(#"""
         {"version":1,"kind":"devices","generated_epoch":1,"tool":"claude","me":"m-a","idle_after":600,"offline_after":150,"reporting_error":null,
          "hubs":[{"kind":"maintainer","me":"m-a","idle_after":600,"offline_after":150,"reporting_error":null},
-                 {"kind":"own","me":"o-a","idle_after":300,"offline_after":90,"reporting_error":"连不上"}],
-         "accounts":[{"key":"a(a@example.com)","hub":"maintainer","devices":[]},{"key":"b(b@example.com)","hub":"own","devices":[]}]}
+                 {"kind":"team","team":"\#(tid)","me":"t-a","idle_after":300,"offline_after":90,"reporting_error":"连不上"}],
+         "accounts":[{"key":"a(a@example.com)","hub":"maintainer","devices":[]},{"key":"b(b@example.com)","hub":"team","team":"\#(tid)","devices":[]}]}
         """#.utf8))
     if let two, two.accounts.count == 2 {
-        let o = two.hub(for: two.accounts[1])
-        check("devices --json 两台服务器：各账号按自己的 hub 用那一台的名字和设置", two.hub(for: two.accounts[0]).me == "m-a" && o.kind == .own && o.me == "o-a"
-              && o.idleAfter == 300 && o.offlineAfter == 90 && o.reportingError == "连不上")
+        let t = two.hub(for: two.accounts[1])
+        check("devices --json 两台服务器：各账号按自己的 hub（Team 的照编号）用那一台的名字和设置", two.hub(for: two.accounts[0]).me == "m-a"
+              && t.kind == .team && t.me == "t-a" && t.idleAfter == 300 && t.offlineAfter == 90 && t.reportingError == "连不上")
     } else {
         check("devices --json 两台服务器：解码了", false)
     }
@@ -73,235 +71,70 @@ func hubFixtureTests() {
     let sync = try? DocumentDecoder.decode(CostSyncDoc.self, from: Data(#"""
         {"version":1,"kind":"cost_sync","generated_epoch":1,"scan":{"state":"ready","updated_epoch":1,"files":0,"read_bytes":0,"records":0,"first":false},
          "sync":{"state":"error","message":"连不上","checked_epoch":null,"hubs":[{"kind":"maintainer","state":"ok","message":null,"checked_epoch":5},
-                                                                          {"kind":"own","state":"error","message":"连不上","checked_epoch":null}]}}
+                                                                          {"kind":"team","team":"\#(tid)","state":"error","message":"连不上","checked_epoch":null}]}}
         """#.utf8))
-    check("cost sync --json 两台服务器：顶层是最要紧的那一台，hubs 各是各的", sync?.sync?.state == .error && sync?.sync?.hubs.map(\.kind) == [.maintainer, .own]
+    check("cost sync --json 两台服务器：顶层是最要紧的那一台，hubs 各是各的", sync?.sync?.state == .error && sync?.sync?.hubs.map(\.kind) == [.maintainer, .team]
           && sync?.sync?.hubs.first?.checkedEpoch == 5 && sync?.sync?.hubs.last?.message == "连不上")
-    check("托管平台、换加入链接的代码", ResultCode.hubHosted.isKnown && ConsentItem.hubRelink.isKnown
-          && [FailCode.hubURL, .hubCert, .hubPending, .hubNotHosted, .hubSeed, .hubDir, .hubPlatform, .hubRelink].allSatisfy { $0.isKnown && $0.isHub })
-    check("结果、失败、同意的代码", [ResultCode.hubJoined, .hubRemoved, .hubLeft, .hubDeployed].allSatisfy(\.isKnown)
-          && [FailCode.hubSSH, .hubTaken, .hubNotThis, .hubMoved, .hubStart].allSatisfy { $0.isKnown && $0.isHub } && ConsentItem.hubReset.isKnown
-          && [FailCode.hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt].allSatisfy(\.isKnown)
-          && FailCode(rawValue: "hub_later").isHub && !FailCode(rawValue: "hub_later").isKnown && FailCode.hubPin.isKnown && !FailCode.devicesOff.isHub && [ConsentItem.hubRemove, .hubLeave].allSatisfy(\.isKnown))
+    check("Team 部署时的代码认识：密码错了三次（hub_ssh）、交给终端（hub_deploy）", FailCode.hubSSH.isKnown && TerminalCode.hubDeploy.isKnown
+          && ResultCode.teamDeployed.isKnown)
+    check("自己的同步服务器的结果、失败、同意的代码不再认识（旧版 cca 给了照 message 说）",
+          [ResultCode(rawValue: "hub_joined"), ResultCode(rawValue: "hub_deployed"), ResultCode(rawValue: "hub_hosted")].allSatisfy { !$0.isKnown }
+          && [FailCode(rawValue: "hub_link"), FailCode(rawValue: "hub_unavailable")].allSatisfy { !$0.isKnown }
+          && [ConsentItem(rawValue: "hub_remove"), ConsentItem(rawValue: "hub_leave"), ConsentItem(rawValue: "hub_relink")].allSatisfy { !$0.isKnown })
+    let terminal = EventLog.parseLine(Data(#"{"v":1,"ev":"terminal","code":"hub_deploy","argv":["team","deploy","5d0c2a9b","root@203.0.113.7","-p","22"],"display":"cca team deploy 5d0c2a9b root@203.0.113.7 -p 22","message":"服务器只认密钥：在终端里部署"}"#.utf8))?.terminal
+    let h = terminal.map(Handoff.init(event:))
+    check("服务器只认密钥时交给终端：照 cca 给的整条命令（Team、服务器、端口）", terminal?.code == .hubDeploy
+          && h?.arguments == ["team", "deploy", "5d0c2a9b", "root@203.0.113.7", "-p", "22"])
     let homes = ["/Users/me/.cca"]
     let cases: [(String, CcaWatcher.Trigger?)] = [
-        ("/Users/me/.cca/cost/own.remote.json", .state), ("/Users/me/.cca/cost/own.sync.json", .state), ("/Users/me/.cca/cost/own.lock", nil),
-        ("/Users/me/.cca/hub/hub.json", .state), ("/Users/me/.cca/hub/members.json", .state), ("/Users/me/.cca/hub/id_ed25519", nil),
-        ("/Users/me/.cca/hub/hub.json.tmp", nil), ("/Users/me/.cca/presence/status.json", .state), ("/Users/me/.cca/presence/own.status.json", .state),
-        ("/Users/me/.cca/presence/keys.json", nil), ("/Users/me/.cca/presence/agent.json", nil), ("/Users/me/.cca/accounts/a/hub/hub.json", nil),
+        ("/Users/me/.cca/cost/team.\(tid).remote.json", .state), ("/Users/me/.cca/cost/team.\(tid).sync.json", .state),
+        ("/Users/me/.cca/cost/team.\(tid).lock", nil), ("/Users/me/.cca/cost/team.\(tid.uppercased()).remote.json", nil),
+        ("/Users/me/.cca/cost/team.0123.remote.json", nil), ("/Users/me/.cca/cost/team.\(tid).remote.json.tmp", nil),
+        ("/Users/me/.cca/presence/status.json", .state), ("/Users/me/.cca/presence/team.\(tid).status.json", .state),
+        ("/Users/me/.cca/presence/team.\(tid).keys.json", nil), ("/Users/me/.cca/presence/keys.json", nil), ("/Users/me/.cca/presence/agent.json", nil),
+        ("/Users/me/.cca/cost/own.remote.json", nil), ("/Users/me/.cca/hub/hub.json", nil), ("/Users/me/.cca/presence/own.status.json", nil),
     ]
     let wrong = cases.filter { CcaWatcher.classify(path: $0.0, homes: homes) != $0.1 }.map(\.0)
-    check("看着自己的同步服务器的加入信息、设备数、设备统计的状态、经它同步来的折合金额（别的不算）", wrong.isEmpty, wrong.joined(separator: " "))
+    check("看着设备统计报没报上去、经各台服务器同步来的折合金额（各个 Team 的照编号认；别的、自己的同步服务器留下的不算）", wrong.isEmpty,
+          wrong.joined(separator: " "))
 }
 
-/// 「共享与同步」页上的自己的同步服务器（PROTOCOL 4.13）：调的命令、页面上的几句话
-func hubProtocolTests() {
-    section("自己的同步服务器：命令和文字")
-    let auto = CcaCommand.hubDevices(auto: true), manual = CcaCommand.hubDevices(auto: false)
-    check("设备：cca hub devices --json；页面自己查的低优先级，点「刷新」的不降；只读，不占闸门",
-          auto.arguments == ["hub", "devices", "--json"] && auto.isBackground && !manual.isBackground && !auto.runsToCompletion
-          && auto.gate == nil && auto.tool == nil && auto.key == nil && auto.timeout == 40)
-    let fp = "SHA256:" + String(repeating: "B", count: 43)
-    let rm = CcaCommand.hubRemove(device: fp)
-    check("移除、退出：按设备指纹；都改这台设备的加入信息，一个接一个；不降优先级、不写文件",
-          rm.arguments == ["hub", "remove", fp] && CcaCommand.hubLeave.arguments == ["hub", "leave"] && rm.gate == CcaCommand.hubLeave.gate
-          && rm.gate != nil && !rm.isBackground && !rm.runsToCompletion && !CcaCommand.hubLeave.runsToCompletion && rm.tool == nil)
-    let inv = CcaCommand.hubInvite
-    check("加入链接：cca hub invite，输出只经内存里的管道（不写文件）", inv.arguments == ["hub", "invite"] && !inv.runsToCompletion
-          && !inv.isBackground && inv.gate == nil && inv.tool == nil)
-    let rl = CcaCommand.hubRelink
-    check("换加入链接：cca hub invite --new，和加入链接一样输出只经内存里的管道；改加入信息，和移除、退出一个接一个",
-          rl.arguments == ["hub", "invite", "--new"] && !rl.runsToCompletion && !rl.isBackground && rl.gate == CcaCommand.hubLeave.gate && rl.tool == nil)
-    check("部署到托管平台是提问会话（要表单）", Handoff.hubHosted.arguments == ["hub", "hosted"] && Handoff.hubHosted.inApp && Handoff.hubHosted.needsForms)
-    let d = Handoff.hubDeploy(reset: false), r = Handoff.hubDeploy(reset: true)
-    check("部署、加入是提问会话（App 里问完）；部署要表单，从头部署带 --reset",
-          d.arguments == ["hub", "deploy"] && r.arguments == ["hub", "deploy", "--reset"] && d.inApp && r.inApp && d.needsForms && r.needsForms
-          && Handoff.hubJoin.arguments == ["hub", "join"] && Handoff.hubJoin.inApp && d.title != r.title)
-    check("部署、加入做完了带着的提醒都认识", [FailCode.hubNewpin, .hubLan, .hubOff].allSatisfy { $0.isKnown && $0.isHub })
-
-    guard let own = loadFixture(StateDoc.self, "state.json")?.config?.ownHub else {
-        check("演示数据里有自己的同步服务器", false)
-        return
-    }
-    let now = 1794042000.0
-    check("没同步成：cca 给的原因，和多久前同步成过", Texts.hubState(own, now: now) == "最近一次没同步成：连不上 https://hub.example.com:18443（超时）；3 小时前同步成过",
-          Texts.hubState(own, now: now))
-    var ok = own
-    ok.state = .ok
-    ok.error = nil
-    var pending = own
-    pending.state = .pending
-    pending.checkedEpoch = nil
-    var off = own
-    off.state = .off
-    off.error = "config.json 里 presence 是 false"
-    check("正常、还没同步过、这台设备关掉了设备统计", Texts.hubState(ok, now: now) == "同步正常（3 小时前）"
-          && Texts.hubState(pending, now: now).hasPrefix("还没同步过") && Texts.hubState(off, now: now) == "config.json 里 presence 是 false：现在不经它同步")
-    let cal = Calendar(identifier: .gregorian)
-    check("经它同步几个账号、这台在服务器上叫什么、什么时候加入的", Texts.hubSummary(own, now: now, calendar: cal).hasPrefix("还没有经它同步的账号 · 这台 Mac 在服务器上叫 studio-mac · ")
-          && Texts.hubSummary(own, now: now, calendar: cal).hasSuffix(" 加入"), Texts.hubSummary(own, now: now, calendar: cal))
-    if let doc = loadFixture(HubDevicesDoc.self, "hub_devices.json"), doc.devices.count == 2 {
-        check("设备：最近一次同步；服务器重启以后没来过的照实说", Texts.hubDeviceDetail(doc.devices[0], now: now, calendar: cal).hasPrefix("最近一次同步：刚刚 · ")
-              && Texts.hubDeviceDetail(doc.devices[1], now: now, calendar: cal).hasPrefix("服务器重启以后还没来过 · "))
-    }
-}
-
-/// 「共享与同步」页的自己的同步服务器：什么时候问设备、问不到怎么显示、复制加入链接、移除、退出、部署、加入
-@MainActor func hubModelTests() async {
-    section("自己的同步服务器：「共享与同步」页")
-    guard let hello = fixture("hello.json").map({ String(decoding: $0, as: UTF8.self) }),
-          let state = fixture("state.json").map({ String(decoding: $0, as: UTF8.self) }),
-          let devices = fixture("hub_devices.json").map({ String(decoding: $0, as: UTF8.self) }) else {
+/// 「共享与同步」页：维护者共享的开关什么时候显示，侧栏那一行说什么（照 cca 给的 config.policy、config.teams）
+@MainActor func sharingPageTests() async {
+    section("共享与同步：Team 和维护者的共享")
+    guard let hello = fixture("hello.json").map({ String(decoding: $0, as: UTF8.self) }) else {
         check("夹具", false)
         return
     }
-    let link = "cca-hub1." + String(repeating: "Zq", count: 24)   // 运行时拼出来：仓库里不放长得像凭证的字符串
-    let relinked = "cca-hub1." + String(repeating: "Wx", count: 24)
-    let removed = "已移除「carol-air」"
-    let mode = TextBox("ok")
-    func transport(_ hello: String) -> ScriptedTransport {
-        ScriptedTransport { r, _ in
-            let a = r.arguments
-            if a == ["_gui", "hello"] { return response(0, stdout: hello) }
-            if a == ["_gui", "state"] { return response(0, stdout: state) }
-            if a == ["hub", "devices", "--json"] {
-                if mode.value == "fail" {
-                    return response(1, [.fail(FailEvent(code: .hubUnavailable, message: "连不上 https://hub.example.com:18443（超时）"))], stderr: "连不上\n")
-                }
-                return response(0, stdout: devices)
-            }
-            if a == ["hub", "invite"] { return response(0, stdout: link + "\n") }
-            if a == ["hub", "invite", "--new"] {
-                return r.grants.isEmpty ? response(3, [consentEvent("hub_relink", "all", yes: false)]) : response(0, stdout: relinked + "\n")
-            }
-            if a.prefix(2) == ["hub", "remove"], a.count == 3 {
-                return r.grants.isEmpty ? response(3, [consentEvent("hub_remove", a[2], yes: false)])
-                    : response(0, [.result(ResultEvent(code: .hubRemoved, route: nil, node: nil, port: nil, message: removed))])
-            }
-            if a == ["hub", "leave"] { return response(3, [consentEvent("hub_leave", "all", yes: false)]) }
-            return response(0, stdout: SampleDocs.clientUpdates)
-        }
-    }
-    func hubRuns(_ t: ScriptedTransport) -> [[String]] { t.requests.map(\.arguments).filter { $0.first == "hub" } }
-
-    // 旧版 cca（hello 没有 hub）：这一块没有，也不调 cca hub
-    do {
-        let t = transport(hello.replacingOccurrences(of: #""hub": 1,"#, with: ""))
-        let m = makeModel(t)
-        await m.start()
-        m.setMainVisible(true)
-        m.selection = .sharing
-        m.refreshHubDevices(manual: true)
-        m.copyHubInvite()
-        m.joinHub()
-        m.deployHub()
-        m.deployHosted()
-        m.relinkHub()
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        check("旧版 cca（hello 没有 hub）：没有自己的同步服务器（state 里有也不认），不调 cca hub、不开会话", !m.hubAvailable && m.ownHub == nil
-              && hubRuns(t).isEmpty && t.started.isEmpty)
-        m.shutdown()
-    }
-
-    let t = transport(hello)
-    let log = HookLog()
-    let p = ScriptedPrompter([true, false, true])   // 移除：同意；退出：不同意；换加入链接：同意
-    let m = makeModel(t, log: log, prompter: p)
-    await m.start()
-    check("cca 有自己的同步服务器：这一页有它（有它的 cca 都有共享的开关），加入着 hub.example.com", m.hubAvailable && m.sharingAvailable
-          && m.ownHub?.host == "hub.example.com:18443" && m.ownHub?.canInvite == true)
-    check("还没打开这一页：不问服务器", hubRuns(t).isEmpty && m.hubDevices == nil)
-    m.setMainVisible(true)
-    m.selection = .sharing
-    check("打开这一页：问一次服务器上有哪些设备（低优先级）", await waitUntil { m.hubDevices?.count == 2 }
-          && hubRuns(t) == [["hub", "devices", "--json"]] && t.requests.first { $0.arguments.first == "hub" }?.background == true, "\(hubRuns(t))")
-    check("这台在前；什么时候问到的照 cca 给的", m.hubDevices?.first?.me == true && m.hub.fetchedEpoch == 1794042000 && m.hubError == nil)
-
-    mode.set("fail")
-    m.refreshHubDevices(manual: true)
-    check("问不到：上次问到的照样显示，旁边说 cca 给的原因", await waitUntil { m.hubError != nil && !m.hubLoading } && m.hubDevices?.count == 2
-          && m.hubError?.contains("连不上") == true, m.hubError ?? "nil")
-    check("点「刷新」问的不降优先级", t.requests.last { $0.arguments.first == "hub" }?.background == false)
-    mode.set("ok")
-    m.refreshHubDevices(manual: true)
-    check("又问到了：原因去掉", await waitUntil { m.hubError == nil && !m.hubLoading })
-    let queried = hubRuns(t).count
-    m.refreshHubDevices(manual: false)
-    m.refreshHubDevices(manual: true)   // 正在问的时候又要问（刚移除了设备）：不丢，问完再问一次
-    check("正在问时又点了「刷新」：问完再问一次（第二次不降优先级）", await waitUntil { hubRuns(t).count == queried + 2 && !m.hubLoading }
-          && t.requests.last { $0.arguments.first == "hub" }?.background == false, "\(hubRuns(t).count - queried)")
-    m.refreshHubDevices(manual: false)
-    m.refreshHubDevices(manual: false)
-    _ = await waitUntil { hubRuns(t).count > queried + 2 && !m.hubLoading }
-    try? await Task.sleep(nanoseconds: 100_000_000)
-    check("后台的又碰上后台的：不再多问", hubRuns(t).count == queried + 3 && !m.hubLoading, "\(hubRuns(t).count - queried)")
-
-    m.copyHubInvite()
-    _ = await waitUntil { !log.copiedSecrets.isEmpty && !m.hubBusy && m.toast != nil }
-    check("复制加入链接：只经 copySecret（去掉换行）；提示、读屏、普通的复制里都没有链接", log.copiedSecrets == [link] && log.copied.isEmpty
-          && m.toast?.text.contains(link) == false && !log.announced.contains { $0.contains(link) }, m.toast?.text ?? "nil")
-    let inv = t.requests.last { $0.arguments == ["hub", "invite"] }
-    check("读加入链接：不是后台任务、不写文件", inv?.background == false && inv?.runsToCompletion == false)
-
-    guard let carol = m.hubDevices?.first(where: { !$0.me }) else {
-        check("演示数据里有另一台设备", false)
-        m.shutdown()
-        return
-    }
-    let asked = hubRuns(t).filter { $0 == ["hub", "devices", "--json"] }.count
-    m.removeHubDevice(carol)
-    check("移除时按钮先停用", m.hubBusy)
-    _ = await waitUntil { !m.hubBusy && m.toast?.text == removed }
-    let rm = t.requests.filter { $0.arguments.prefix(2) == ["hub", "remove"] }
-    check("移除：先问同意（范围是设备指纹），同意后带着授权重跑一次；做完提示 cca 说的那句话",
-          rm.count == 2 && rm[0].arguments == ["hub", "remove", carol.id] && rm[0].grants.isEmpty && rm[1].grants == ["hub_remove:\(carol.id)"]
-          && m.toast?.text == removed, "\(rm.map(\.grants)) \(m.toast?.text ?? "nil")")
-    check("移除以后再问一次服务器上有哪些设备", await waitUntil { hubRuns(t).filter { $0 == ["hub", "devices", "--json"] }.count > asked })
-    m.leaveHub()
-    _ = await waitUntil { !m.hubBusy && m.toast?.text == "没有同意，没有做任何改动" }
-    check("退出：先问同意；不同意不重跑，什么都没改", t.requests.filter { $0.arguments == ["hub", "leave"] }.count == 1 && m.ownHub != nil
-          && m.toast?.text == "没有同意，没有做任何改动")
-    check("问同意的是 cca 给的（移除、退出各一次）", p.asked.map(\.item.rawValue) == ["hub_remove", "hub_leave"])
-    m.relinkHub()
-    _ = await waitUntil { log.copiedSecrets.count == 2 && !m.hubBusy && m.toast != nil }
-    let rl = t.requests.filter { $0.arguments == ["hub", "invite", "--new"] }
-    check("换加入链接：先问同意（hub_relink，范围 all），同意后重跑；新的链接只经 copySecret，提示里没有它",
-          rl.count == 2 && rl[0].grants.isEmpty && rl[1].grants == ["hub_relink:all"] && log.copiedSecrets.last == relinked
-          && m.toast?.text.contains(relinked) == false && m.toast?.text.contains("旧的不能再用来加入") == true && p.asked.last?.item == .hubRelink,
-          "\(rl.map(\.grants)) \(m.toast?.text ?? "nil")")
-    m.shutdown()
-
-    // 部署、从头部署、加入：都是提问会话（这里的替身不支持会话：只看开的是哪一个）
-    let opens: [(String, @MainActor (AppModel) -> Void, [String])] = [
-        ("部署", { $0.deployHub() }, ["hub", "deploy"]),
-        ("更新（钉着指纹的：经 SSH）", { $0.updateHub() }, ["hub", "deploy"]),
-        ("部署到托管平台", { $0.deployHosted() }, ["hub", "hosted"]),
-        ("从头部署", { $0.deployHub(reset: true) }, ["hub", "deploy", "--reset"]),
-        ("加入", { $0.joinHub() }, ["hub", "join"]),
+    let noTeam = hello.replacingOccurrences(of: #" "team": 1,"#, with: "")
+    let cases: [(String, String, [String: Any], Bool)] = [
+        ("有 Team 的 cca、共享关着、没收起账号：不显示维护者的共享（经 Team 拿账号）", hello,
+         ["configured": false, "repo": NSNull(), "next_check_epoch": NSNull(), "state": "off", "accounts": 0, "parked": 0], false),
+        ("共享关着、关掉时收起了账号：显示（打开就原样加回来）", hello,
+         ["configured": false, "repo": NSNull(), "next_check_epoch": NSNull(), "state": "off", "accounts": 0, "parked": 2], true),
+        ("共享开着：显示", hello, ["configured": true, "repo": "example/cca-policy", "next_check_epoch": NSNull(), "state": "on", "accounts": 2, "parked": 0], true),
+        ("还在等维护者：显示", hello, ["configured": true, "repo": "example/cca-policy", "next_check_epoch": NSNull(), "state": "pending", "accounts": 0, "parked": 0], true),
+        ("没有 Team 的旧版 cca：照旧显示", noTeam,
+         ["configured": false, "repo": NSNull(), "next_check_epoch": NSNull(), "state": "off", "accounts": 0, "parked": 0], true),
     ]
-    for (label, act, want) in opens {
-        let t = transport(hello)
-        let m = makeModel(t)
-        await m.start()
-        act(m)
-        check("\(label)：开提问会话 cca \(want.joined(separator: " "))", await waitUntil { !t.started.isEmpty } && t.started == [want], "\(t.started)")
-        m.shutdown()
-    }
-    // 托管平台上的那一台（pinned 是 false）：「更新服务器…」开 cca hub hosted
-    let onPlatform = state.replacingOccurrences(of: #""can_invite": true, "pinned": true"#, with: #""can_invite": true, "pinned": false"#)
-    if onPlatform != state {
+    for (label, h, policy, want) in cases {
+        let state = stateWithPolicy(policy)
         let t = ScriptedTransport { r, _ in
-            if r.arguments == ["_gui", "hello"] { return response(0, stdout: hello) }
-            if r.arguments == ["_gui", "state"] { return response(0, stdout: onPlatform) }
+            if r.arguments == ["_gui", "hello"] { return response(0, stdout: h) }
+            if r.arguments == ["_gui", "state"] { return response(0, stdout: state) }
             return response(0, stdout: SampleDocs.clientUpdates)
         }
         let m = makeModel(t)
-        await m.start()
-        m.updateHub()
-        check("托管平台上的那一台：「更新服务器…」开 cca hub hosted", await waitUntil { !t.started.isEmpty } && m.ownHub?.onPlatform == true
-              && t.started == [["hub", "hosted"]], "\(t.started)")
+        await m.connect()
+        check(label, m.sharingAvailable && m.policyCardShown == want, "\(m.policyCardShown)")
         m.shutdown()
-    } else {
-        check("演示数据里自己的同步服务器钉着指纹", false)
     }
+    check("侧栏那一行：在一个 Team 里说名字，几个说几个，维护者的共享还开着时带一句",
+          Texts.sharingSubtitle(policyOn: false, teams: ["书房组"]) == "在「书房组」里"
+          && Texts.sharingSubtitle(policyOn: true, teams: ["书房组"]) == "「书房组」 · 共享开着"
+          && Texts.sharingSubtitle(policyOn: false, teams: ["书房组", "设计组"]) == "在 2 个 Team 里"
+          && Texts.sharingSubtitle(policyOn: false, teams: [""]) == "在「Team」里")
+    check("侧栏那一行：不在 Team 里时说维护者的共享开没开；没有 Team 的旧版 cca 照旧",
+          Texts.sharingSubtitle(policyOn: false, teams: []) == "还没加入 Team" && Texts.sharingSubtitle(policyOn: true, teams: []) == "维护者的共享开着"
+          && Texts.sharingSubtitle(policyOn: false, teams: nil) == "维护者的共享关着" && Texts.sharingSubtitle(policyOn: true, teams: nil) == "维护者的共享开着")
 }

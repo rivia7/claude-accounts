@@ -3,8 +3,8 @@ import Foundation
 
 /// 看着 `hello.home`（~/.cca）的变化，只当作“该重新跑一次 `_gui state` / `_gui hello`”的信号：从不读那些文件。
 /// 收：accounts.json、codex.json、agy.json、config.json、*/usage.json、*/health.json、accounts/*/cli-<数字>.json（命令行会话的登记）、
-/// policy/policy.json、cost/ 里的 local.json、remote.json、sync.json、own.remote.json、own.sync.json（折合金额，cost/ 里别的文件不算）、
-/// hub/hub.json、hub/members.json（自己的同步服务器）、presence/status.json、presence/own.status.json（设备统计报没报上去）（→ state），
+/// policy/policy.json、cost/ 里的 local.json、remote.json、sync.json 和各个 Team 的 team.<编号>.remote.json、team.<编号>.sync.json
+/// （折合金额，cost/ 里别的文件不算）、presence/status.json、presence/team.<编号>.status.json（设备统计报没报上去）（→ state），
 /// core/config.yaml（→ core：内置代理的配置，看不见时也要马上读 state，见 AppModel），bin/cca（→ hello）。
 /// 不收：chrome/、desktop/ 下面的一切（浏览器和桌面 App 的资料目录一直在写）。
 /// 500 毫秒内的多次变化合并成一次（hello > core > state）。看不见时只记下“脏了”（由 AppModel 处理）。
@@ -26,9 +26,9 @@ final class CcaWatcher: @unchecked Sendable {
     }
 
     private static let statePaths: Set<String> = ["accounts.json", "codex.json", "agy.json", "config.json", "policy/policy.json",
-                                                  "hub/hub.json", "hub/members.json", "presence/status.json", "presence/own.status.json"]
-    /// `cost/` 下面的：这台设备的统计、别的设备经维护者的服务器 / 自己的同步服务器同步来的、同步的状态
-    private static let costPaths: Set<String> = ["local.json", "remote.json", "sync.json", "own.remote.json", "own.sync.json"]
+                                                  "presence/status.json"]
+    /// `cost/` 下面的：这台设备的统计、别的设备经维护者的服务器同步来的、同步的状态（各个 Team 的见 `teamFile`）
+    private static let costPaths: Set<String> = ["local.json", "remote.json", "sync.json"]
 
     /// 一个变化的路径该触发什么（纯函数，测试用）。homes 是 ~/.cca 的几种写法（原样、解析过链接的）。
     static func classify(path: String, homes: [String]) -> Trigger? {
@@ -46,12 +46,21 @@ final class CcaWatcher: @unchecked Sendable {
         if clean == "bin/cca" { return .hello }
         if clean == "core/config.yaml" { return .core }
         if statePaths.contains(clean) { return .state }
+        // 设备统计报给各个 Team 的服务器的状态：presence/team.<编号>.status.json
+        if comps.count == 2, comps[0] == "presence" { return teamFile(comps[1], ["status.json"]) ? .state : nil }
         // 折合金额（PROTOCOL 1）：只认这几个文件，cost/ 里别的（统计用的中间文件、临时文件）不算
-        if comps[0] == "cost" { return comps.count == 2 && costPaths.contains(comps[1]) ? .state : nil }
+        if comps[0] == "cost" { return comps.count == 2 && (costPaths.contains(comps[1]) || teamFile(comps[1], ["remote.json", "sync.json"])) ? .state : nil }
         if comps.count >= 2, let last = comps.last, last == "usage.json" || last == "health.json" { return .state }
         // 命令行会话的登记：accounts/<账号目录>/cli-<进程号>.json（Codex、Antigravity 的在 codex/accounts/、agy/accounts/ 下）；临时文件不算
         if comps.count >= 3, comps[comps.count - 3] == "accounts", let last = comps.last, isSessionMark(last) { return .state }
         return nil
+    }
+
+    /// 经某个 Team 的服务器同步的那一份：`team.<32 位十六进制的编号>.<base>`（base 是其中之一；`team.<编号>.lock` 这类不算）
+    private static func teamFile(_ name: String, _ bases: [String]) -> Bool {
+        let parts = name.split(separator: ".", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0] == "team", parts[1].count == 32, parts[1].allSatisfy({ "0123456789abcdef".contains($0) }) else { return false }
+        return bases.contains(String(parts[2]))
     }
 
     /// `cli-<数字>.json`

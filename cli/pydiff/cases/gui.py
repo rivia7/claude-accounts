@@ -242,7 +242,7 @@ STATE_MASK += [(r',\n\s*"state": "(?:off|pending|on)",\n\s*"accounts": [0-9]+,\n
 # 折合金额的设备菜单（cost_total.devices、账号里各台设备的 used）也是：去掉再比，和折合金额的用例同一份规则
 from cases.cost import DEVICES_MASK, ME_ID_MASK   # noqa: E402
 STATE_MASK += DEVICES_MASK
-# 自己的同步服务器（docs/dev/hub.md）以后多的：config.hubs（这里是缩进排版的：空的一行，不空的到同样缩进的 ] 为止）、账号和折合金额的 hub；
+# 有了几台同步服务器（cli/src/cmd/hub.rs）以后多的：config.hubs（这里是缩进排版的：空的一行，不空的到同样缩进的 ] 为止）、账号和折合金额的 hub；
 # 折合金额里这台设备的 id 也换了（cases/cost.py 的 ME_ID_MASK）
 from cases.presence import HUB_MASK   # noqa: E402
 STATE_MASK += [(r',\n\s*"hubs": \[\]', ''), (r',\n( *)"hubs": \[\n(?:\1 .*\n)*?\1\]', '')] + HUB_MASK + ME_ID_MASK

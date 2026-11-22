@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 共享与同步：维护者共享给你的账号（维护者的映射，默认关着）的开关，Team（PROTOCOL 4.14，`TeamsCard`），和自己的同步服务器（PROTOCOL 4.13）。状态、账号数、设备都照 cca 给的
-/// （`config.policy`、`config.hubs`、`hub devices --json`），不在界面里重算；打开共享、加入、部署是提问会话，关掉共享、移除设备、退出由 cca 先问同意。
+/// 共享与同步：Team（PROTOCOL 4.14，`TeamsCard`）给这台设备的账号，和以前的维护者共享（维护者的映射）的开关。状态、账号数都照 cca 给的
+/// （`config.teams`、`config.policy`），不在界面里重算；加入、新建、部署、打开共享是提问会话，退出、关掉共享由 cca 先问同意。
 struct SharingPage: View {
     @Environment(AppModel.self) private var model
 
@@ -9,14 +9,17 @@ struct SharingPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 heading
-                VStack(alignment: .leading, spacing: 10) {
-                    policyCard
-                    Text("共享关着时，这台 Mac 只用你自己的账号：不生成给维护者的公钥、不拉维护者的映射、不往维护者的服务器上报。远程会话经维护者的服务器中转，要先打开共享。")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 if model.teamAvailable { TeamsCard() }
-                if model.hubAvailable { HubCard() }
+                if model.policyCardShown {
+                    VStack(alignment: .leading, spacing: 10) {
+                        policyCard
+                        Text(model.teamAvailable
+                             ? "维护者共享的账号改经 Team 给：维护者在映射里给这台 Mac 发了邀请的话，拉到映射以后它自己加入维护者的 Team。共享关着时，这台 Mac 不拉维护者的映射、不往维护者的服务器上报。"
+                             : "共享关着时，这台 Mac 只用你自己的账号：不生成给维护者的公钥、不拉维护者的映射、不往维护者的服务器上报。远程会话经维护者的服务器中转，要先打开共享。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             .padding(.top, 24).padding(.bottom, 36).pageColumn()
         }
@@ -29,10 +32,9 @@ struct SharingPage: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Text("共享与同步").font(.system(size: 24, weight: .semibold))
-                if model.sharingBusy || model.hubBusy { ProgressView().controlSize(.small) }
+                if model.sharingBusy || model.teamBusy { ProgressView().controlSize(.small) }
             }
-            Text(model.teamAvailable ? "别人共享给你的账号（维护者的映射、Team），和你自己的几台设备之间的同步（设备统计、折合金额）。"
-                 : model.hubAvailable ? "维护者共享给你的账号；你自己的账号经你自己的服务器，在几台设备之间同步设备统计和折合金额。"
+            Text(model.teamAvailable ? "Team 给这台 Mac 的账号：管理员定好每个账号走哪个节点、给哪些设备；设备统计、折合金额经这个 Team 的服务器在几台设备之间同步。自己的几台设备也可以建一个 Team，经它同步自己的账号。"
                  : "维护者共享给你的账号：打开后映射里的账号自动加进来，出口节点由维护者固定。")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -96,172 +98,6 @@ struct SharingPage: View {
     }
 }
 
-/// 「自己的同步服务器」（PROTOCOL 4.13）。没加入：部署到自己的服务器、部署到托管平台、粘贴加入链接。加入了：这台服务器同步得怎么样、
-/// 加入了的设备（别的能移除）、复制加入链接、更新服务器，「更多」里是换加入链接、从头部署（托管平台上的没有）、退出。移除、退出、
-/// 换链接、从头部署都由 cca 先问同意（对话框里的话是 cca 给的）
-private struct HubCard: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        Card("自己的同步服务器", systemImage: "server.rack") {
-            if let own = model.ownHub {
-                joined(own)
-            } else {
-                notJoined
-            }
-        }
-    }
-
-    // MARK: 没加入
-
-    private var notJoined: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("在几台设备上用自己的账号时，部署一个自己的同步服务器：维护者共享以外的官方账号，设备统计、记下的 API key、折合金额经它和你的其他设备同步。服务器上只有密文，看不到邮箱、登录身份、key 和金额。")
-                .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            GlassRow {
-                SectionAction("部署到我的服务器…", systemImage: "server.rack", prominent: true) { model.deployHub() }
-                    .help("经 SSH 装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd + python3），这台 Mac 跟着加入")
-                SectionAction("部署到托管平台…", systemImage: "cloud") { model.deployHosted() }
-                    .help("没有服务器：部署到 Railway 或者 Sealos（照着生成的步骤做），填上平台给的公网地址，这台 Mac 跟着加入")
-                SectionAction("粘贴加入链接…", systemImage: "link") { model.joinHub() }
-                    .help("已经部署好了：在加入了的设备上复制加入链接，贴到这里")
-            }
-            .disabled(model.flow != nil)
-            Text("已经在别的设备上部署过的，在那台设备上复制加入链接，在这里粘贴。也可以在服务器上运行发布页上的 cca-hub-install.sh（用 root），再粘贴它最后打出的加入链接。")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: 加入了
-
-    private func joined(_ own: HubEntry) -> some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let now = context.date.timeIntervalSince1970
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(own.host).font(.body.weight(.medium)).textSelection(.enabled)
-                    InfoRow(Text(Texts.hubState(own, now: now)), systemImage: Self.symbol(own.state), tint: Self.tint(own.state)) { EmptyView() }
-                    InfoRow(Text(Texts.hubSummary(own, now: now)), systemImage: "person.crop.circle") { EmptyView() }
-                }
-                Divider()
-                devices(now: now)
-                Divider()
-                actions(own)
-            }
-        }
-    }
-
-    /// 「更多」的提示：菜单里有哪几项就说哪几项
-    static func moreHelp(reset: Bool) -> String {
-        var parts = ["换加入链接：旧的不能再用来加入，已经加入的设备照旧"]
-        if reset { parts.append("从头部署：服务器忘掉所有设备，换一个新的加入链接（每台设备都要重新加入）") }
-        parts.append("退出：这台 Mac 不再经它同步")
-        return parts.joined(separator: "；")
-    }
-
-    static func symbol(_ s: HubState) -> String {
-        switch s {
-        case .ok: return "checkmark.circle"
-        case .pending: return "clock"
-        case .off: return "pause.circle"
-        default: return "exclamationmark.triangle"
-        }
-    }
-
-    static func tint(_ s: HubState) -> Color? {
-        switch s {
-        case .ok: return .green
-        case .pending, .off: return nil
-        default: return .orange
-        }
-    }
-
-    /// 标题右边是多久以前问的（没问到时下面的列表是那时候的）和「刷新」，和远程会话页、账号的「设备」一样
-    @ViewBuilder
-    private func devices(now: Double) -> some View {
-        let snap = model.ownHubSnapshot
-        let list = model.hubDevices
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 10) {
-                Text(list.map { "加入了的设备（\($0.count) 台）" } ?? "加入了的设备").font(.headline)
-                Spacer(minLength: 8)
-                if model.hubLoading, snap?.fetchedEpoch == nil {
-                    ProgressView().controlSize(.small)
-                } else if let at = snap?.fetchedEpoch {
-                    Text(Texts.agoPhrase(now - at) + "查询").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
-                SectionAction(model.hubLoading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshHubDevices(manual: true) }
-                    .disabled(model.hubLoading)
-                    .help("问一次服务器上有哪些设备")
-            }
-            if let e = model.hubError {
-                Label(e, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let list {
-                ForEach(list) { d in HubDeviceLine(device: d, now: now) }
-            } else if !model.hubLoading, model.hubError == nil {
-                Text("还没问过服务器").font(.callout).foregroundStyle(.secondary)
-            }
-            Text("移除的设备现在的密钥作废，加入链接跟着换一个：它留着的旧链接不能再用来加入，别的设备照旧。设备丢了、被人拿走了的话，它上面登录着的账号也要处理。")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func actions(_ own: HubEntry) -> some View {
-        HStack(spacing: 10) {
-            GlassRow {
-                SectionAction("复制加入链接", systemImage: "doc.on.doc") { model.copyHubInvite() }
-                    .disabled(!own.canInvite || model.hubBusy)
-                    .help("给自己的别的设备加入用：在那台设备上「粘贴加入链接…」。谁拿到它都能加入：只发给自己的设备")
-                SectionAction("更新服务器…", systemImage: "arrow.triangle.2.circlepath") { model.updateHub() }
-                    .help(own.onPlatform ? "照着步骤把托管平台上的程序换成这一版 cca 带的：加入链接、数据都不变"
-                          : "经 SSH 把服务器上的程序换成这一版 cca 带的：加入链接、数据都不变")
-            }
-            Spacer(minLength: 8)
-            Menu {
-                Button("换一个加入链接") { model.relinkHub() }
-                    .disabled(!own.canInvite || model.hubBusy)
-                if !own.onPlatform {
-                    Button("从头部署（换一个加入链接）…") { model.deployHub(reset: true) }
-                }
-                Divider()
-                Button("退出自己的同步服务器…", role: .destructive) { model.leaveHub() }
-            } label: {
-                Label("更多", systemImage: "ellipsis.circle")
-            }
-            .menuStyle(.button)
-            .buttonStyle(.glass)
-            .fixedSize()
-            .help(Self.moreHelp(reset: !own.onPlatform))
-        }
-        .disabled(model.flow != nil)
-    }
-}
-
-/// 服务器上的一台设备：名字（这台 Mac 带个标记）、最近一次同步、什么时候加入的；别的设备右边是「移除…」
-private struct HubDeviceLine: View {
-    @Environment(AppModel.self) private var model
-    let device: HubDevice
-    let now: Double
-
-    var body: some View {
-        MachineLine(name: nonEmpty(device.name) ?? String(device.id.prefix(19)), detail: Texts.hubDeviceDetail(device, now: now)) {
-            if device.me { Tag(text: "这台 Mac") }
-        } trailing: {
-            if !device.me {
-                RowAction("移除…", systemImage: "xmark.circle") { model.removeHubDevice(device) }
-                    .disabled(model.hubBusy)
-                    .help("从服务器上移除这台设备：它现在的密钥作废（先问一句）")
-            }
-        }
-    }
-}
-
 struct SharingRow: View {
     @Environment(AppModel.self) private var model
 
@@ -277,19 +113,15 @@ struct SharingRow: View {
                 Tag(text: "等维护者", color: .orange)
             } else if model.teams.contains(where: { $0.state.failing }) {
                 Tag(text: "Team 要处理", color: .orange)
-            } else if model.ownHub?.state.failing == true {
-                Tag(text: "没同步成", color: .orange)
             }
         }
         .sidebarRowPadding()
         .accessibilityElement(children: .combine)
     }
 
-    /// 侧栏一行放得下的那句：维护者的共享开没开，加入了自己的同步服务器时再说一句（短写，免得截断）
+    /// 侧栏一行放得下的那句（短写，免得截断）
     private var subtitle: String {
-        let on = model.state?.config?.policy?.isOn == true
-        guard model.ownHub != nil else { return on ? "维护者的共享开着" : "维护者的共享关着" }
-        return (on ? "共享开着" : "共享关着") + " · 已加入同步服务器"
+        Texts.sharingSubtitle(policyOn: model.state?.config?.policy?.isOn == true, teams: model.teamAvailable ? model.teams.map(\.name) : nil)
     }
 }
 

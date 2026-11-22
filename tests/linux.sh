@@ -15,7 +15,7 @@
 #     维护者加上公钥后再运行：拉到映射、导入映射指定的节点、照映射加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
-#   自己的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py：这个发行版的 sh、openssl、python3，假的 systemctl、docker 起真的服务端）
+#   Team 的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py：这个发行版的 sh、openssl、python3，假的 systemctl、docker 起真的服务端）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
 # 辅助程序（cli/ 的 Rust 程序）用静态链接的那一份：cli/target/<x86_64|aarch64>-unknown-linux-musl/release/cca-core。--docker 时在宿主机上
 # 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
@@ -810,8 +810,8 @@ else
 	else no "卸载以后 ~/.bashrc：$(tr '\n' '|' < "$H/.bashrc")"; fi
 fi
 
-# 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理，
-# 先问有没有维护者共享给你的账号（答有：节点由维护者提供）。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
+# 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理。
+# 一键安装时带了 CCA_POLICY_REPO（打开着维护者的共享）：节点由维护者提供，不问有没有 Team 的邀请链接。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
 # 拉到映射，导入映射指定的节点（install_node、映射里账号的节点，只要维护者参考节点里有），照映射加上账号，内置代理由 cca _core-keep
 # 托管（问过后在 crontab 里加开机那一行），经账号的端口出去。内核文件用前面下好的那份（不再下载一次）
 SH="$D/shome"; mkdir -p "$SH/.local/bin"
@@ -821,14 +821,14 @@ pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@exam
 printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-S", "type": "socks5", "server": "127.0.0.1", "port": 18080}, {"name": "US-X", "type": "ss", "server": "192.0.2.83", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$PR/nodes.json"
 rm -f "$PR/nodes.json.sig"; ssh-keygen -q -Y sign -n cca-nodes -f "$I/relkey" "$PR/nodes.json" </dev/null
 touch "$D/direct_down" "$D/policy_denied"; : > "$D/curl.log"
-out=$(sr env CCA_TTY="$(ans y s)" "$C" install 2>&1); rc=$?
+out=$(sr env CCA_TTY="$(ans s)" CCA_POLICY_REPO=example/cca-policy "$C" install 2>&1); rc=$?
 pk="$SH/.cca/policy/id_ed25519.pub"
 line=$(printf '%s\n' "$out" | sed -n 's/^    \(\.\/policy\.sh key add .*\)$/\1/p' | head -n 1)
 if [ $rc -eq 0 ] && grep -q '^CURL direct https://claude.ai/cdn-cgi/trace' "$D/curl.log" && [ -s "$pk" ] && [ "$(stat -c %a "${pk%.pub}")" = 600 ] &&
 	printf '%s' "$out" | grep -q '直连 claude.ai 不通：这台机器不用配置路由器，改用 cca 内置的代理' &&
 	[ "$line" = "./policy.sh key add '$(cat "$pk")' $(cut -d@ -f2 "$pk")" ] && printf '%s' "$out" | grep -q '等维护者运行上面那一行' &&
 	printf '%s' "$out" | grep -q '先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置' &&
-	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|GitHub 不认这台机器的 deploy key' && [ -z "$(keeper "$SH")" ]; then
+	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|有没有 Team 的邀请链接' && [ -z "$(keeper "$SH")" ]; then
 	ok "服务器上直连不通：不问路由器，给出维护者运行的那一行（这台机器的公钥、机器名）；维护者还没加上时先跳过，说清楚之后再运行什么"
 else no "服务器上直连不通（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
 # 再运行 cca install，这次一直等着（不按回车：每隔几秒自动拉，CCA_POLICY_POLL=1 秒；答案是一直开着的管道）：维护者中途运行了那一行
@@ -860,16 +860,16 @@ if [ $rc -eq 0 ] && [ "$n_wait" -ge 3 ] && [ "$(printf '%s' "$out" | grep -c '�
 else no "等维护者确认的 cca install（退出码 $rc，加上之前拉了 ${n_wait} 次）：$(printf '%s' "$out" | tail -n 4)；crontab 是「$(tr '\n' '|' < "$D/crontab" 2>/dev/null)」"; fi
 sr "$C" local off >/dev/null 2>&1
 for i in $(seq 1 40); do [ -z "$(keeper "$SH")" ] && ! listen 7901 && break; sleep 0.25; done
-# 没有维护者共享的账号（默认）：直连不通时粘贴一条自己的代理（本机测试节点的 socks5），真的内核校验过当可选节点，配置好内置代理；
+# 没有 Team 的邀请链接（默认）、没打开维护者的共享：直连不通时粘贴一条自己的代理（本机测试节点的 socks5），真的内核校验过当可选节点，配置好内置代理；
 # 不生成 deploy key、不拉映射
 SH2="$D/shome2"; mkdir -p "$SH2/.local/bin"
 if [ -x "$D/mihomo" ]; then mkdir -p -m 700 "$SH2/.cca" "$SH2/.cca/core" && cp "$D/mihomo" "$SH2/.cca/core/mihomo-v$(sed -n 's/^CORE_VERSION="\(.*\)"$/\1/p' "$C")"; fi
 : > "$D/git.log"
 out=$(HOME="$SH2" PATH="$SH2/.local/bin:$PATH" CCA_POLICY_DEFAULT=example/cca-policy CCA_TTY="$(ans n 'socks5://127.0.0.1:18080' . n n n)" "$C" install 2>&1); rc=$?
-if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '有没有维护者共享给你的账号？' && printf '%s' "$out" | grep -q '已加上你的代理：' &&
+if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '有没有 Team 的邀请链接？' && printf '%s' "$out" | grep -q '已加上你的代理：' &&
 	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if len(c["nodes"]) == 1 and c["local"]["client"] == "builtin" and not c.get("policy") else 1)' "$SH2/.cca/config.json" 2>/dev/null &&
 	[ ! -e "$SH2/.cca/policy/id_ed25519" ] && ! grep -q '^GIT clone' "$D/git.log" && ! printf '%s' "$out" | grep -q 'policy.sh key add'; then
-	ok "服务器上直连不通、没有维护者共享的账号：粘贴一条自己的代理（内核校验过）当可选节点，配置好内置代理；不生成 deploy key、不拉映射"
+	ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理（内核校验过）当可选节点，配置好内置代理；不生成 deploy key、不拉映射"
 else no "服务器上直连不通、贴自己的代理（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
 HOME="$SH2" PATH="$SH2/.local/bin:$PATH" "$C" local off >/dev/null 2>&1
 for i in $(seq 1 40); do [ -z "$(keeper "$SH2")" ] && ! listen 7901 && break; sleep 0.25; done
@@ -989,14 +989,14 @@ elif [ ! -x "$D/mihomo" ]; then
 else
 	router_test
 fi
-# 自己的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py）：这个发行版的 sh、openssl、python3、coreutils / busybox，
+# Team 的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py）：这个发行版的 sh、openssl、python3、coreutils / busybox，
 # 假的 systemctl、docker 起真的服务端（设备的密钥要 ssh-keygen）
 if ! command -v openssl >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
-	echo "  （跳过自己的同步服务器的安装脚本：要 openssl、ssh-keygen）"
+	echo "  （跳过 Team 的同步服务器的安装脚本：要 openssl、ssh-keygen）"
 elif CCA_HELPER="$HB" python3 "$R/tests/hub_deploy.py" > "$D/hub_deploy.log" 2>&1; then
-	ok "自己的同步服务器的安装脚本：在这个发行版的 sh（$(readlink -f /bin/sh 2>/dev/null || echo /bin/sh)）上装好、更新、换链接、卸载，经 SSH 部署、设备加入"
+	ok "Team 的同步服务器的安装脚本：在这个发行版的 sh（$(readlink -f /bin/sh 2>/dev/null || echo /bin/sh)）上装好、更新、卸载，网页端的证书助手，经 SSH 部署、接上"
 else
-	no "自己的同步服务器的安装脚本：$(grep -E '^(FAIL|ERROR|AssertionError|[A-Za-z]+Error)' "$D/hub_deploy.log" | head -n 6 | tr '\n' ' ')"
+	no "Team 的同步服务器的安装脚本：$(grep -E '^(FAIL|ERROR|AssertionError|[A-Za-z]+Error)' "$D/hub_deploy.log" | head -n 6 | tr '\n' ' ')"
 fi
 echo "  结果：$pass 通过，$fail 失败"
 [ $fail -eq 0 ]

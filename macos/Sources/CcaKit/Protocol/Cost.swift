@@ -25,7 +25,7 @@ struct CostSyncState: KnownValues {
     static let ok = CostSyncState(rawValue: "ok")
     /// 会同步，还没同步过
     static let pending = CostSyncState(rawValue: "pending")
-    /// 只有这台设备：账号不经哪台服务器同步（不在维护者的映射里、这台设备也没加入自己的同步服务器），或者该走的那一台这台设备用不了
+    /// 只有这台设备：账号不经哪台服务器同步（不在维护者的映射里、也不是 Team 给的），或者该走的那一台这台设备用不了
     static let localOnly = CostSyncState(rawValue: "local_only")
     /// config.json 里写了 `"presence": false`
     static let off = CostSyncState(rawValue: "off")

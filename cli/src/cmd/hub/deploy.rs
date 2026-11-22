@@ -1,20 +1,16 @@
-//! 一键部署自己的同步服务器（docs/dev/hub.md「部署」）：
-//! - hub-installer：安装脚本。模板 server/hub-install.sh 里标着 CCA-HUB-EMBED 的那一行换成版本和服务端程序 server/cca-presence.py
-//!   （两个都编进辅助程序里：改了要重新编）。`cca hub deploy --script` 打出来的、release.sh 放到发布页上的 cca-hub-install.sh 都是它：
-//!   在服务器上用 root 运行，自己生成入伙口令和盐、打出加入链接（盐只在服务器的内存里过一遍，不落盘）
-//! - hub-deploy：经 SSH 在服务器上运行同一个脚本（从 stdin 给过去），入伙口令和盐在这台设备上生成，服务器只拿到口令的 SHA-256；
-//!   装好以后这台设备跟着加入（`join_with`）。加入链接不出这个进程：不进命令行、环境变量，也不打出来（别的设备要的用 cca hub invite 看）
+//! Team 的同步服务器的一键部署（docs/dev/team.md「部署」）：
+//! - hub-installer：安装脚本。模板 server/hub-install.sh 里标着 CCA-HUB-EMBED 的那一行换成版本、服务端程序 server/cca-presence.py、
+//!   证书助手 server/cca-acme.py 和网页端的文件 server/web/（都编进辅助程序里：改了要重新编）。`cca team deploy --script` 打出来的、
+//!   release.sh 放到发布页上的 cca-hub-install.sh 都是它：在服务器上用 root 运行（加 --team-root 这个 Team 的根公钥）
+//! - `team_install`（cca team deploy 经 cmd/team/admin.rs 调）：经 SSH 在服务器上运行同一个脚本（从 stdin 给过去，前面放进根公钥和参数）
 
-use super::{
-    configured_admit, fail, host_of, hub_doc, join_with, link_of, link_problem, name_ok, own_forget, refresh_admit, Link, NAME_BAD,
-    SEED_UNKNOWN,
-};
+use super::fail;
 use crate::cmd::cost::version_ok;
 use crate::cmd::presence::{PRESENCE_PIN_RE, PRESENCE_URL_RE};
-use crate::core::base::{sh, HOST_RE};
+use crate::core::base::HOST_RE;
+use crate::py::base64::b64encode;
 use crate::py::hash::sha256_hex;
 use crate::py::proc::{getenv, Cmd as Proc, In, Out, ProcError};
-use crate::py::rand::token_hex;
 use crate::py::re::Re;
 use crate::py::{text, Fail, R};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -22,29 +18,72 @@ use std::sync::LazyLock;
 
 const TEMPLATE: &str = include_str!("../../../../server/hub-install.sh");
 pub(super) const SERVER: &str = include_str!("../../../../server/cca-presence.py");
-/// 模板里换成版本、服务端程序的那一行
+const ACME: &str = include_str!("../../../../server/cca-acme.py");
+/// 网页端的文件（server/web/ 里服务端给出去的那几种，和 xterm.js 的许可）：安装脚本里每个是一段 base64，写进 app/web/。
+/// 目录里新加了文件要加在这里（测试照目录核对）
+const WEB: [(&str, &[u8]); 14] = [
+    ("app.css", include_bytes!("../../../../server/web/app.css")),
+    ("app.js", include_bytes!("../../../../server/web/app.js")),
+    ("core.js", include_bytes!("../../../../server/web/core.js")),
+    ("icon-180.png", include_bytes!("../../../../server/web/icon-180.png")),
+    ("icon-192.png", include_bytes!("../../../../server/web/icon-192.png")),
+    ("icon-512.png", include_bytes!("../../../../server/web/icon-512.png")),
+    ("index.html", include_bytes!("../../../../server/web/index.html")),
+    ("logo.svg", include_bytes!("../../../../server/web/logo.svg")),
+    ("manifest.webmanifest", include_bytes!("../../../../server/web/manifest.webmanifest")),
+    ("xterm-addon-fit.js", include_bytes!("../../../../server/web/xterm-addon-fit.js")),
+    ("xterm-LICENSE.txt", include_bytes!("../../../../server/web/xterm-LICENSE.txt")),
+    ("xterm.css", include_bytes!("../../../../server/web/xterm.css")),
+    ("xterm.js", include_bytes!("../../../../server/web/xterm.js")),
+    ("README.md", include_bytes!("../../../../server/web/README.md")),
+];
+/// 模板里换成版本、服务端程序这些的那一行
 const EMBED: &str = "# @CCA-HUB-EMBED@\n";
-/// 服务端程序放在 here-document 里，这是它的结束行（服务端程序里不能有这一行：测试查；release.sh、regress 照它取出服务端程序核对）
+/// 服务端程序、证书助手、网页端的文件放在 here-document 里，这是它们的结束行（程序里不能有这一行：测试查；release.sh、regress 照它们
+/// 取出服务端程序、证书助手核对）
 const SERVER_EOF: &str = "CCA_HUB_SERVER_PY_EOF";
-const DEF_DIR: &str = "/opt/cca-hub";
+const ACME_EOF: &str = "CCA_HUB_ACME_PY_EOF";
+const WEB_EOF: &str = "CCA_HUB_WEB_EOF";
 /// 在服务器上运行脚本的命令：root 直接运行，别的用户经免密码的 sudo（要密码时不运行，说一声：没有终端可问）。
 /// 外面再包一层 sh -c：登录 shell 不一定是 sh（fish、csh）
 const REMOTE: &str = r#"sh -c 'if [ "$(id -u)" = 0 ]; then exec sh -s; elif sudo -n true 2>/dev/null; then exec sudo -n sh -s; else echo "CCA-HUB fail sudo"; exit 1; fi'"#;
-const USAGE: &str = "用法: py hub-deploy [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
-                     [--mode docker|systemd] [--dir 目录] [--name 名字] [--reset] [--batch | --askpass] [--check]";
+const USAGE: &str = "用法: py team-deploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
+                     [--web-port 端口 | --no-web] [--mode docker|systemd] [--dir 目录] [--batch] [--askpass] [--check]";
 
 /// SSH 的目标（[用户@]主机；ssh 配置里的别名也行）：不能以 - 开头（会被当成 ssh 的选项）
 static TARGET_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[A-Za-z0-9_][A-Za-z0-9._@:%\[\]-]*$"));
 
-/// 安装脚本：模板里 EMBED 那一行换成版本、给 hub-deploy 的几项（preamble；直接在服务器上运行的那一份是空的）和服务端程序
+/// 安装脚本：模板里 EMBED 那一行换成版本、给 team_install 的几项（preamble；直接在服务器上运行的那一份是空的）、服务端程序、证书助手
+/// 和网页端的文件
 pub fn installer(preamble: &str) -> String {
     let version = getenv("CCA_VERSION").filter(|v| version_ok(v)).unwrap_or_default();
-    let embed =
-        format!("CCA_HUB_VERSION='{version}'\n{preamble}hub_server_py() {{\n\tcat <<'{SERVER_EOF}'\n{SERVER}{SERVER_EOF}\n}}\n");
+    let embed = format!(
+        "CCA_HUB_VERSION='{version}'\n{preamble}hub_server_py() {{\n\tcat <<'{SERVER_EOF}'\n{SERVER}{SERVER_EOF}\n}}\n\
+         hub_acme_py() {{\n\tcat <<'{ACME_EOF}'\n{ACME}{ACME_EOF}\n}}\n{}",
+        web_files()
+    );
     TEMPLATE.replacen(EMBED, &embed, 1)
 }
 
-/// py hub-installer：把安装脚本打到 stdout（cca hub deploy --script；release.sh 的 cca-hub-install.sh）
+/// 安装脚本里的 hub_web_files：网页端的文件写进目录 $1，每个文件一段 base64（一行 64 个字符：openssl base64 -d 认的样子），
+/// 安装脚本的 web_file 解开、核对 SHA-256
+fn web_files() -> String {
+    let mut s = String::from("hub_web_files() {\n");
+    for (name, raw) in WEB {
+        s.push_str(&format!("\tweb_file \"$1\" {name} {} <<'{WEB_EOF}' || return 1\n", sha256_hex(raw)));
+        let b = b64encode(raw);
+        for line in b.as_bytes().chunks(64) {
+            s.push_str(std::str::from_utf8(line).unwrap_or_default());
+            s.push('\n');
+        }
+        s.push_str(WEB_EOF);
+        s.push('\n');
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// py hub-installer：把安装脚本打到 stdout（cca team deploy --script；release.sh 的 cca-hub-install.sh）
 pub fn cmd_hub_installer(args: &[String]) -> R<()> {
     if !args.is_empty() {
         return Err(Fail::Die("用法: py hub-installer".into()));
@@ -53,7 +92,7 @@ pub fn cmd_hub_installer(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// hub-deploy 的参数
+/// team_install 的参数
 #[derive(Default)]
 struct Opts {
     target: String,
@@ -61,52 +100,40 @@ struct Opts {
     identity: Option<String>,
     port: Option<i64>,
     host: Option<String>,
+    /// 手机的网页端：端口（--web-port）；Some(0) 是不开（--no-web）
+    web: Option<i64>,
     mode: Option<String>,
     dir: String,
-    name: Option<String>,
-    reset: bool,
     /// 没有终端：ssh 不问密码、不问要不要认这台主机
     batch: bool,
     /// 密码经 SSH_ASKPASS 给，只问一次（bash 的 askpass_run）
     askpass: bool,
     /// 只看登录得上不，不部署（ssh_check）
     check: bool,
-    /// 装的是 Team 的同步服务器（cca team deploy）：说话时的命令名、怎么办的建议照它
-    team: bool,
 }
 
-impl Opts {
-    /// 给人看的命令名
-    fn cmd(&self) -> &'static str {
-        if self.team {
-            "cca team deploy"
-        } else {
-            "cca hub deploy"
-        }
-    }
-}
-
-/// 读参数、核对：不对的都是 usage（bash 的 hub_usage；名字不对是 name），还没连服务器
-fn opts(args: &[String]) -> R<Opts> {
-    let mut o = Opts { dir: DEF_DIR.into(), ..Default::default() };
-    let mut port = None;
+/// 读参数、核对：不对的都是 usage，还没连服务器。def_dir：没写 --dir 时装在哪
+fn opts(args: &[String], def_dir: &str) -> R<Opts> {
+    let mut o = Opts { dir: def_dir.into(), ..Default::default() };
+    let (mut port, mut web) = (None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--reset" => o.reset = true,
             "--batch" => o.batch = true,
             "--askpass" => o.askpass = true,
             "--check" => o.check = true,
-            f @ ("--ssh-port" | "--identity" | "--port" | "--host" | "--mode" | "--dir" | "--name") => {
+            "--no-web" if web.is_none() => web = Some(String::new()),
+            f @ ("--ssh-port" | "--identity" | "--port" | "--host" | "--web-port" | "--mode" | "--dir") => {
                 let Some(v) = it.next().cloned() else { return fail("usage", USAGE) };
                 match f {
                     "--ssh-port" => o.ssh_port = Some(v),
                     "--identity" => o.identity = Some(v),
                     "--port" => port = Some(v),
+                    "--web-port" if web.is_none() => web = Some(v),
+                    "--web-port" => return fail("usage", "--web-port 和 --no-web 只能写一个"),
                     "--host" => o.host = Some(v),
                     "--mode" => o.mode = Some(v),
-                    "--dir" => o.dir = v,
-                    _ => o.name = Some(v.trim().to_string()),
+                    _ => o.dir = v,
                 }
             }
             t if o.target.is_empty() && !t.starts_with('-') => o.target = t.to_string(),
@@ -128,6 +155,14 @@ fn opts(args: &[String]) -> R<Opts> {
             _ => return fail("usage", "--port 要是 1024～65535 的端口"),
         }
     }
+    match web.as_deref() {
+        None => {}
+        Some("") => o.web = Some(0),
+        Some(p) => match p.parse::<i64>() {
+            Ok(n @ 1024..=65535) if p.bytes().all(|b| b.is_ascii_digit()) && o.port != Some(n) => o.web = Some(n),
+            _ => return fail("usage", "--web-port 要是 1024～65535 的端口（不能和 --port 一样）"),
+        },
+    }
     if o.mode.as_deref().is_some_and(|m| m != "docker" && m != "systemd") {
         return fail("usage", "--mode 是 docker 或者 systemd");
     }
@@ -137,9 +172,6 @@ fn opts(args: &[String]) -> R<Opts> {
     };
     if o.host.as_deref().is_some_and(|h| HOST_RE.fullmatch(h).is_none()) {
         return fail("usage", "--host 要是 IP 或者域名");
-    }
-    if o.name.as_deref().is_some_and(|n| !name_ok(n)) {
-        return fail("name", NAME_BAD);
     }
     Ok(o)
 }
@@ -164,136 +196,6 @@ fn dir_of(d: &str) -> Result<String, &'static str> {
         return Err("--dir 不能在 /usr、/etc、/home、/root、/run、/tmp 这些下面（systemd 方式的服务看不到、写不了那里）");
     }
     Ok(d.to_string())
-}
-
-/// py hub-deploy [用户@]主机 [选项]：经 SSH 把自己的同步服务器装到这台服务器上（或者更新），这台设备跟着加入。
-/// 没加入时：新的入伙口令和盐；服务器上已经装了、有设备加入过的不动（taken），--reset 从头来（服务器忘掉所有设备）。
-/// 已经加入了：只能是它加入的那一台（EXPECT：服务器上现在的是别的就 not_this），只更新，再重新加入一次（核对连得上）；
-/// --reset 换一个新的加入链接重新加入（名字照旧）。服务器那边的进度直接打到 stderr（ssh 转过来的）。
-/// 成了：stdout 是 `sh` 的 键=值（mode、state、port、dir、lan 地址只在内网、name 服务器上这台设备的名字、host 地址:端口、
-/// members 几台设备、off 关掉了同步时的原因、newpin 证书换了；是的是 1，不是的是空的），bash eval 它；没成见 fail（原因码：usage、name、
-/// ssh、root、deps、image、port、taken、not_this、moved、host、install、start；platform 加入着的是托管平台上的（--reset、--check 也不碰它）、
-/// seed 不知道部署时配置的口令，以及加入的那些）
-pub fn cmd_hub_deploy(args: &[String]) -> R<()> {
-    let o = opts(args)?;
-    let joined = hub_doc();
-    if let Some(l) = joined.as_ref().map(link_of).filter(|l| l.pins.is_empty()) {
-        return fail(
-            "platform",
-            &format!(
-                "这台设备加入的是 {} 上托管平台的同步服务器（更新它用 cca hub hosted）：要部署到自己的服务器，先退出（cca hub leave）",
-                host_of(&l.url)
-            ),
-        );
-    }
-    if o.check {
-        return ssh_check(&o);
-    }
-    if let Some(l) = joined.as_ref().map(link_of).filter(|_| !o.reset) {
-        let (host, port) = url_parts(&l.url);
-        if o.host.as_deref().is_some_and(|h| h != host) || o.port.is_some_and(|p| p != port) {
-            let at = host_of(&l.url);
-            return fail(
-                "moved",
-                &format!("这台设备加入的是 {at}：地址、端口照加入链接里的。要换地址、端口，加 --reset（每台设备都要重新加入）"),
-            );
-        }
-    }
-    // 入伙口令和盐：加入着（不 --reset）就是那一份，只更新。服务器上配置的是部署时的那个口令（seed：换过加入链接的话服务器现在认的是
-    // 另一个，配置照旧；安装脚本拿它核对是不是这一台：not_this），不知道就不部署；别的在这台设备上生成新的
-    let seed = match &joined {
-        Some(j) => match configured_admit(j)? {
-            Some(s) => Some(s),
-            None => return fail("seed", &format!("{SEED_UNKNOWN}；要从头部署，先退出（cca hub leave），再加 --reset 部署")),
-        },
-        None => None,
-    };
-    let joined = joined.and_then(|_| hub_doc()); // 问服务器时可能换上了别的设备换的口令
-    let old = joined.as_ref().map(link_of);
-    let (admit, salt) = match (&old, &seed) {
-        (Some(l), Some(s)) if !o.reset => (s.clone(), l.salt.clone()),
-        _ => (token_hex(16), token_hex(16)),
-    };
-    let r = run_installer(&o, &preamble(&o, &admit, seed.as_deref()))?;
-
-    // 加入：加入着的照原来的链接重新加入（证书换了时换上新的指纹）；别的用新的链接
-    let mut newpin = false;
-    let link = match old {
-        Some(mut l) if !o.reset => {
-            if !l.pins.contains(&r.pin) {
-                l.pins = vec![r.pin.clone()];
-                newpin = true;
-            }
-            // 别的设备换过加入链接的话，记着的口令已经加入不了：先问一次设备，照换上的那个加入
-            if let Some(a) = refresh_admit(&l.pins)? {
-                l.admit = a;
-            }
-            l
-        }
-        old => new_link(&o, old.as_ref(), &r, admit, salt)?,
-    };
-    let name = o.name.clone().or_else(|| joined.as_ref().and_then(|j| j.str("name")).map(|n| n.to_string()));
-    if o.reset && joined.is_some() {
-        own_forget()?; // --reset：服务器已经忘掉了这台设备，本机记着的旧的也不要了（名字照旧用）
-    }
-    let lan = lan_only(&url_parts(&link.url).0);
-    let mut joined = join_with(&link, name.clone())?;
-    if let (Err(("denied", _)), Some(s), false) = (&joined, &seed, o.reset) {
-        if *s != link.admit {
-            // 服务器上的记录没了（数据目录删了……）：认的又是部署时的那个口令
-            joined = join_with(&Link { admit: s.clone(), ..link.clone() }, name)?;
-        }
-    }
-    let j = match joined {
-        Ok(j) => j,
-        Err((code, why)) => {
-            let fw = if code == "unreachable" {
-                format!(
-                    "。云服务商的安全组（或者轻量应用服务器的防火墙）里要放行 TCP {}，放行以后再运行一次 cca hub deploy {}",
-                    r.port, o.target
-                )
-            } else {
-                String::new()
-            };
-            return fail(code, &format!("服务器上装好了（{}），但这台设备没加入成：{why}{fw}", host_of(&link.url)));
-        }
-    };
-    let flag = |b: bool| if b { "1" } else { "" };
-    let (port, members) = (r.port.to_string(), j.members.map_or(String::new(), |m| m.to_string()));
-    sh(&[
-        ("mode", r.mode.as_str()),
-        ("state", r.state.as_str()),
-        ("port", port.as_str()),
-        ("dir", o.dir.as_str()),
-        ("lan", flag(lan)),
-        ("name", j.name.as_str()),
-        ("host", j.host.as_str()),
-        ("members", members.as_str()),
-        ("off", j.off.as_str()),
-        ("newpin", flag(newpin)),
-    ]);
-    Ok(())
-}
-
-/// 安装脚本前面放进的几项（经 ssh 的 stdin 给过去，不进命令行）：这一次的口令的哈希（WANT）、加入着的那一份部署时配置的口令的
-/// 哈希（EXPECT：服务器的 .env 里的就是它）和参数
-fn preamble(o: &Opts, admit: &str, seed: Option<&str>) -> String {
-    let mut s = format!("CCA_HUB_MANAGED=1\nCCA_HUB_WANT={}\n", sq(&sha256_hex(admit)));
-    if let Some(seed) = seed {
-        s.push_str(&format!("CCA_HUB_EXPECT={}\n", sq(&sha256_hex(seed))));
-    }
-    s.push_str(&format!("set -- --dir {}", sq(&o.dir)));
-    if let Some(p) = o.port {
-        s.push_str(&format!(" --port {p}"));
-    }
-    if let Some(m) = &o.mode {
-        s.push_str(&format!(" --{m}"));
-    }
-    if o.reset {
-        s.push_str(" --reset");
-    }
-    s.push('\n');
-    s
 }
 
 /// 单引号包起来（只给已经核对过样子的值用：里面没有单引号）
@@ -350,7 +252,7 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
     if !r.ok {
         if done.rc == 255 {
             let hint = if o.batch && !o.askpass {
-                format!("；要输密码的话，在终端里运行 {}（或者在 cca App 里部署）", o.cmd())
+                "；要输密码的话，在终端里运行 cca team deploy（或者在 cca App 里部署）".to_string()
             } else {
                 String::new()
             };
@@ -372,6 +274,10 @@ struct Report {
     port: i64,
     /// Team 的服务器：远程会话的中转的数据端口（没开是 0；旧的安装脚本不说这一项）
     relay: i64,
+    /// 手机的网页端的地址（https://地址:端口/；没开是空的）、证书拿到了没有（ok | wait）、没开的原因（port80 | lan | host | web_port）
+    web: String,
+    web_cert: String,
+    web_off: String,
     pin: String,
     state: String,
     ok: bool,
@@ -387,6 +293,9 @@ fn report(stdout: &str) -> Report {
             "mode" => r.mode = v.to_string(),
             "port" => r.port = v.parse().unwrap_or(0),
             "relay" => r.relay = v.parse().unwrap_or(0),
+            "web" => r.web = v.to_string(),
+            "web_cert" => r.web_cert = v.to_string(),
+            "web_off" => r.web_off = v.to_string(),
             "pin" => r.pin = v.to_string(),
             "state" => r.state = v.to_string(),
             "ok" => r.ok = true,
@@ -407,8 +316,6 @@ fn fail_code(code: &str) -> &'static str {
         "deps" => "deps",
         "image" => "image",
         "port" => "port",
-        "taken" => "taken",
-        "not_this" | "none" => "not_this",
         "usage" => "usage",
         "start" => "start",
         "host" => "host",
@@ -416,22 +323,11 @@ fn fail_code(code: &str) -> &'static str {
     }
 }
 
-/// 给人看的原因：安装脚本说的，taken、not_this 再说怎么办（none：服务器上没装，这台设备加入的是别的）
+/// 给人看的原因：安装脚本说的就是全部（那个目录里装着别的：换 --dir）；sudo 要密码的再说怎么办
 fn fail_why(code: &str, why: &str, o: &Opts) -> String {
-    let why = if why.is_empty() { "服务器上没装成" } else { why };
-    let t = &o.target;
-    if o.team && code != "sudo" {
-        return why.to_string(); // Team 的：安装脚本说的就是全部（那个目录里装着别的：换 --dir）
-    }
     match code {
-        "taken" => format!(
-            "{why}：在加入了的设备上运行 cca hub invite 拿加入链接，在这台设备上 cca hub join；要从头来（服务器忘掉所有设备，每台都要重新加入）：cca hub deploy {t} --reset"
-        ),
-        "none" => format!("{why}，这台设备加入的是别的服务器：要部署到这一台，先 cca hub leave"),
-        "not_this" => format!(
-            "{why}（这是另一台服务器，或者它被别的设备、在服务器上用 --reset 从头部署过）：这台设备先 cca hub leave，再 cca hub join 贴它现在的加入链接，或者 cca hub deploy {t} --reset 从头来"
-        ),
-        "sudo" => format!("{t} 不是 root，sudo 又要密码：用 root 登录（root@服务器），或者给这个用户免密码的 sudo"),
+        "sudo" => format!("{} 不是 root，sudo 又要密码：用 root 登录（root@服务器），或者给这个用户免密码的 sudo", o.target),
+        _ if why.is_empty() => "服务器上没装成".to_string(),
         _ => why.to_string(),
     }
 }
@@ -445,29 +341,22 @@ pub struct TeamInstalled {
     pub port: i64,
     /// 远程会话的中转的数据端口（Team 的服务器给这个 Team 的会话做中转）；0 是没开
     pub relay: i64,
+    /// 手机的网页端（安装脚本的 report_managed）：地址（没开是空的）、证书（ok | wait）、没开的原因
+    pub web: String,
+    pub web_cert: String,
+    pub web_off: String,
     pub dir: String,
     /// 地址是内网的：别的网络里的设备连不上
     pub lan: bool,
 }
 
-const TEAM_USAGE: &str = "用法: py team-deploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
-                          [--mode docker|systemd] [--dir 目录] [--batch] [--askpass] [--check]";
-
-/// Team 的同步服务器的一键部署（cca team deploy：cmd/team/admin.rs 的 cmd_team_deploy 调）。args 是 hub-deploy 那一套参数（没有
-/// --reset、--name）；root 是 Team 的根公钥（ssh-ed25519 AAAA…），svc 是服务名（cca-team-<编号的前 8 位>：一台服务器上每个 Team
+/// Team 的同步服务器的一键部署（cca team deploy：cmd/team/admin.rs 的 cmd_team_deploy 调）。args 是 Opts 那一套参数；root 是 Team 的
+/// 根公钥（ssh-ed25519 AAAA…），svc 是服务名（cca-team-<编号的前 8 位>：一台服务器上每个 Team
 /// 一个服务，目录默认 /opt/<服务名>）；old 是这个 Team 现在接着的地址和证书公钥的指纹。--check 只看登录得上不（返回 None）。
 /// 装好了返回各台设备该连的地址：--host；没写时，装好的那台用的证书就是现在接着的那张（还是那台服务器：只是更新）就照原来的地址，
-/// 不然是 ssh -G 的 hostname
+/// 不然是 ssh -G 的 hostname。手机的网页端（证书机构要验证的地址）在装之前就要定：--host，没写时是 ssh -G 的 hostname
 pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &[String])>) -> R<Option<TeamInstalled>> {
-    let given_dir = args.iter().any(|a| a == "--dir");
-    let mut o = opts(args)?;
-    if o.reset || o.name.is_some() {
-        return fail("usage", TEAM_USAGE);
-    }
-    o.team = true;
-    if !given_dir {
-        o.dir = format!("/opt/{svc}");
-    }
+    let o = opts(args, &format!("/opt/{svc}"))?;
     if o.check {
         ssh_check(&o)?;
         return Ok(None);
@@ -479,6 +368,15 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
     let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\nset -- --dir {}", sq(key), sq(&o.dir));
     if let Some(p) = o.port {
         pre.push_str(&format!(" --port {p}"));
+    }
+    match o.web {
+        Some(0) => pre.push_str(" --no-web"),
+        Some(p) => pre.push_str(&format!(" --web-port {p}")),
+        None => {}
+    }
+    let web_host = o.host.clone().unwrap_or_else(|| ssh_host(&o));
+    if HOST_RE.fullmatch(&web_host).is_some() {
+        pre.push_str(&format!(" --host {}", sq(&web_host)));
     }
     if let Some(m) = &o.mode {
         pre.push_str(&format!(" --{m}"));
@@ -501,24 +399,12 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
         state: r.state,
         port: r.port,
         relay: r.relay,
+        web: r.web,
+        web_cert: r.web_cert,
+        web_off: r.web_off,
         dir: o.dir.clone(),
         lan: lan_only(&host),
     }))
-}
-
-/// 新的加入链接：地址是 --host，没写时 --reset 的照原来链接里的（安装脚本核对过就是那一台：EXPECT），再是 ssh -G 的 hostname
-fn new_link(o: &Opts, old: Option<&Link>, r: &Report, admit: String, salt: String) -> R<Link> {
-    let host = match (&o.host, old) {
-        (Some(h), _) => h.clone(),
-        (None, Some(l)) => url_parts(&l.url).0,
-        (None, None) => ssh_host(o),
-    };
-    let hp = if host.contains(':') { format!("[{host}]") } else { host.clone() };
-    let l = Link { url: format!("https://{hp}:{}", r.port), pins: vec![r.pin.clone()], admit, salt };
-    if link_problem(&l.url, &l.pins, &l.admit, &l.salt).is_some() {
-        return fail("host", &format!("服务器装好了，但认不出各台设备该连的地址（{host}）：加 --host 公网IP或域名，再运行一次"));
-    }
-    Ok(l)
 }
 
 /// --check：只看登录得上不（`ssh … true`，不运行安装脚本，什么都不动）。App 里部署前先查：成了退出码 0，没成见 ssh_trouble
@@ -571,7 +457,7 @@ fn ssh_trouble(err: &str, o: &Opts) -> (&'static str, String) {
                 "ssh_keyonly",
                 format!(
                     "{t} 不认这台设备的 SSH 密钥，也不让用密码登录：把这台设备的公钥加进服务器的 ~/.ssh/authorized_keys，\
-                     或者私钥有密码的话，在终端里运行 cca hub deploy（在那里输私钥的密码）"
+                     或者私钥有密码的话，在终端里运行 cca team deploy（在那里输私钥的密码）"
                 ),
             ),
         };
@@ -593,7 +479,7 @@ fn ssh_host(o: &Opts) -> String {
     host.trim_matches(['[', ']']).to_string()
 }
 
-/// 加入链接里的地址（IPv6 不带方括号）和端口（链接都核对过：认不出时是空的、0）
+/// 服务器的地址（https://主机:端口）里的主机（IPv6 不带方括号）和端口（认不出时是空的、0）
 fn url_parts(url: &str) -> (String, i64) {
     let m = PRESENCE_URL_RE.match_(url);
     let host = m.as_ref().and_then(|m| m.name("host")).unwrap_or("").trim_matches(['[', ']']).to_string();
@@ -620,25 +506,50 @@ mod tests {
     #[test]
     fn installer_embeds_server_once() {
         assert!(TEMPLATE.contains(EMBED), "模板里要有 {EMBED}");
-        assert!(SERVER.ends_with('\n'));
-        assert!(!SERVER.lines().any(|l| l == SERVER_EOF), "服务端程序里不能有 here-document 的结束行");
+        for (src, eof) in [(SERVER, SERVER_EOF), (ACME, ACME_EOF)] {
+            assert!(src.ends_with('\n'));
+            assert!(!src.lines().any(|l| l == eof || l == WEB_EOF), "程序里不能有 here-document 的结束行");
+        }
         let s = installer("CCA_HUB_MANAGED=1\n");
         assert!(!s.contains(EMBED));
-        assert_eq!(s.matches(SERVER).count(), 1);
+        assert_eq!((s.matches(SERVER).count(), s.matches(ACME).count()), (1, 1));
         assert!(s.starts_with("#!/bin/sh\n"));
         assert!(s.contains("\nCCA_HUB_MANAGED=1\nhub_server_py() {\n"));
         assert!(s.trim_end().ends_with("main \"$@\""));
+        // 网页端的文件：一个一段，base64 解开和原来的一字节不差
+        for (name, raw) in WEB {
+            let head = format!("\tweb_file \"$1\" {name} {} <<'{WEB_EOF}' || return 1\n", sha256_hex(raw));
+            let body =
+                s.split(&head).nth(1).and_then(|r| r.split(&format!("\n{WEB_EOF}\n")).next()).unwrap_or_else(|| panic!("{name}"));
+            assert!(body.lines().all(|l| l.len() <= 64), "{name}");
+            assert_eq!(crate::py::base64::b64decode(&body.replace('\n', ""), true).ok().as_deref(), Some(raw), "{name}");
+        }
+    }
+
+    #[test]
+    fn web_files_are_all_there() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../server/web");
+        let mut have: Vec<String> =
+            std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        have.sort();
+        let mut want: Vec<String> = WEB.iter().map(|(n, _)| n.to_string()).collect();
+        want.sort();
+        assert_eq!(have, want, "server/web/ 里新加、删掉了文件：WEB 跟着改");
+        assert!(WEB.iter().all(|(n, _)| n.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))));
     }
 
     #[test]
     fn reads_the_report() {
         let r = report("noise\nCCA-HUB mode docker\nCCA-HUB port 18445\nCCA-HUB pin sha256//abc=\nCCA-HUB state new\nCCA-HUB ok\n");
         assert_eq!(
-            (r.mode.as_str(), r.port, r.pin.as_str(), r.state.as_str(), r.ok),
-            ("docker", 18445, "sha256//abc=", "new", true)
+            (r.mode.as_str(), r.port, r.pin.as_str(), r.state.as_str(), r.ok, r.web.as_str()),
+            ("docker", 18445, "sha256//abc=", "new", true, "")
         );
-        let r = report("CCA-HUB fail taken 这台服务器上已经有 自己的\n");
-        assert_eq!(r.fail, Some(("taken".into(), "这台服务器上已经有 自己的".into())));
+        let r = report("CCA-HUB web https://192.0.2.10:18447/\nCCA-HUB web_cert wait\nCCA-HUB ok\n");
+        assert_eq!((r.web.as_str(), r.web_cert.as_str(), r.web_off.as_str()), ("https://192.0.2.10:18447/", "wait", ""));
+        assert_eq!(report("CCA-HUB web_off port80\n").web_off, "port80");
+        let r = report("CCA-HUB fail port 端口 18445 被别的程序占着\n");
+        assert_eq!(r.fail, Some(("port".into(), "端口 18445 被别的程序占着".into())));
         assert!(!r.ok);
     }
 
@@ -691,6 +602,23 @@ mod tests {
             "/var/run/x",
         ] {
             assert!(dir_of(d).is_err_and(|why| why.contains("systemd 方式的服务看不到")), "{d}");
+        }
+    }
+
+    #[test]
+    fn web_options() {
+        let o = |a: &[&str]| opts(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "/opt/cca-team-0123abcd").map(|o| o.web);
+        assert_eq!(o(&["root@192.0.2.10"]).ok(), Some(None), "没写：照安装脚本（上次的，第一次是开着）");
+        assert_eq!(o(&["root@192.0.2.10", "--no-web"]).ok(), Some(Some(0)));
+        assert_eq!(o(&["root@192.0.2.10", "--web-port", "18448"]).ok(), Some(Some(18448)));
+        for bad in [
+            &["root@192.0.2.10", "--web-port", "80"][..],
+            &["root@192.0.2.10", "--web-port", "x"],
+            &["root@192.0.2.10", "--port", "18448", "--web-port", "18448"],
+            &["root@192.0.2.10", "--no-web", "--web-port", "18448"],
+            &["root@192.0.2.10", "--web-port", "18448", "--no-web"],
+        ] {
+            assert!(o(bad).is_err(), "{bad:?}");
         }
     }
 
@@ -751,21 +679,5 @@ mod tests {
         }
         assert_eq!(url_parts("https://192.0.2.10:18445"), ("192.0.2.10".into(), 18445));
         assert_eq!(url_parts("https://[2001:db8::1]:20000"), ("2001:db8::1".into(), 20000));
-    }
-
-    #[test]
-    fn preamble_has_the_hashes_not_the_secrets() {
-        let o = Opts { dir: "/srv/hub".into(), port: Some(20000), mode: Some("docker".into()), reset: true, ..Default::default() };
-        let seed = "a".repeat(32);
-        let p = preamble(&o, &"c".repeat(32), Some(&seed));
-        assert_eq!(
-            p,
-            format!(
-                "CCA_HUB_MANAGED=1\nCCA_HUB_WANT='{}'\nCCA_HUB_EXPECT='{}'\nset -- --dir '/srv/hub' --port 20000 --docker --reset\n",
-                sha256_hex("c".repeat(32)),
-                sha256_hex("a".repeat(32))
-            )
-        );
-        assert!(!p.contains(&"a".repeat(32)) && !p.contains(&"c".repeat(32)));
     }
 }

@@ -1,6 +1,7 @@
 //! 和中转服务器打交道（格式见 server/README.md「远程会话的中转」）。中转服务器不止一台：每个 Team 的会话走这个 Team 自己的
-//! 同步服务器（开着中转的话），不在 Team 里的账号的会话走维护者的那一台（旧的通道）——`session_hub`。配对是在某一台服务器上
-//! 做的、记在它上面（`Peer::hub`），经它只看得到走这台服务器的会话。
+//! 同步服务器（开着中转的话），维护者映射里的账号的会话走维护者的那一台（旧的通道），别的（这台设备自己的、第三方 API 的）走
+//! 这台机器的「家」（`home_hub`：加入的第一个 Team，没有时是维护者的）——`session_hub`。配对是在某一台服务器上做的、记在它上面
+//! （`Peer::hub`），经它只看得到走这台服务器的会话。
 //! - 请求（配对、会话的列表、进数据端口的票据）走设备统计已有的那条路：deploy key 签名、curl 钉住证书公钥、直连
 //!   （`presence_post`），这里只是换了几个 op
 //! - 数据端口是普通的 TCP：连上先说一行（`crypto::relay_line`），凭票据进去。上面跑的是两头之间端到端加密的通道
@@ -11,7 +12,7 @@
 use super::crypto::{self, Channel, Role};
 use super::local;
 use super::peers::Peer;
-use crate::cmd::hub::{route, HubKind};
+use crate::cmd::hub::{route, HubKind, TeamTag};
 use crate::cmd::presence::{presence_post, presence_server, presence_why};
 use crate::core::policy::policy_sources;
 use crate::core::team::teams;
@@ -82,7 +83,7 @@ pub fn label(kind: HubKind) -> String {
 }
 
 /// 某一台中转服务器。用得了的话是 Ok；用不了是 Err(原因)：维护者的——没配置映射、映射里没有服务器、没有 deploy key；
-/// Team 的——退出了、还没取到它的配置、它没接上服务器。自己的同步服务器（cca hub）不做中转
+/// Team 的——退出了、还没取到它的配置、它没接上服务器
 pub fn server_of(kind: HubKind) -> R<Result<Server, String>> {
     match kind {
         HubKind::Team(tag) => {
@@ -94,7 +95,6 @@ pub fn server_of(kind: HubKind) -> R<Result<Server, String>> {
                 }
             })
         }
-        HubKind::Own => Ok(Err("自己的同步服务器不做远程会话的中转".into())),
         HubKind::Maintainer => {
             let (why, cfg) = presence_server()?;
             Ok(match cfg {
@@ -109,7 +109,7 @@ pub fn server_of(kind: HubKind) -> R<Result<Server, String>> {
 pub fn servers() -> R<Vec<Server>> {
     let mut out = Vec::new();
     for (tid, cfg) in crate::cmd::team::hub_cfgs() {
-        if let Some(tag) = crate::cmd::hub::TeamTag::new(&tid) {
+        if let Some(tag) = TeamTag::new(&tid) {
             if let Ok(s) = build(HubKind::Team(tag), cfg) {
                 out.push(s);
             }
@@ -121,8 +121,15 @@ pub fn servers() -> R<Vec<Server>> {
     Ok(out)
 }
 
-/// 这个账号的会话走哪台服务器中转：账号是哪个 Team 给的就走那个 Team 的；别的（维护者映射里的、自己的、第三方 API 的）
-/// 走维护者的那一台（旧的通道，和以前一样）
+/// 这台机器的「家」：不是哪个 Team 给的、也不在维护者映射里的账号（这台设备自己的、第三方 API 的）的会话走它，没说在哪台上配对时
+/// 也在它上面配。是加入的第一个 Team 的服务器（照加入的先后，这台机器用得了的：取到了配置、接上了服务器），一个都没有时是维护者的
+/// 那一台。开没开中转不看（要问了才知道）：家里的那一台没开中转时，这些会话就接不进去（cca remote list 说是哪一台）
+pub fn home_hub() -> HubKind {
+    crate::cmd::team::hub_cfgs().into_iter().find_map(|(tid, _)| TeamTag::new(&tid)).map_or(HubKind::Maintainer, HubKind::Team)
+}
+
+/// 这个账号的会话走哪台服务器中转：账号是哪个 Team 给的就走那个 Team 的；维护者映射里的走维护者的那一台（旧的通道）；别的（这台
+/// 设备自己的、第三方 API 的、账号表里没有的）走这台机器的家（home_hub）
 pub fn session_hub(tool: &str, key: &str) -> HubKind {
     for t in tools() {
         if t.name != tool {
@@ -130,12 +137,12 @@ pub fn session_hub(tool: &str, key: &str) -> HubKind {
         }
         let Some(v) = load_quiet(&t.table).and_then(|v| v.as_dict()).and_then(|d| d.get(key)) else { break };
         let _using = Using::tool(t);
-        if let Some(kind @ HubKind::Team(_)) = route(&policy_sources(t), key, &v) {
+        if let Some(kind) = route(&policy_sources(t), key, &v) {
             return kind;
         }
         break;
     }
-    HubKind::Maintainer
+    home_hub()
 }
 
 /// 进数据端口的票据（30 秒内、只能用一次）

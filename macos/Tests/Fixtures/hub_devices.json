@@ -1,3 +1,0 @@
-{"version": 1, "kind": "hub_devices", "generated_epoch": 1794042000.0,
- "devices": [{"id": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "name": "studio-mac", "me": true, "joined_epoch": 1793900000, "seen_epoch": 1794041990},
-             {"id": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "name": "carol-air", "me": false, "joined_epoch": 1793950000, "seen_epoch": null}]}

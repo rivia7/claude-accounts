@@ -86,7 +86,7 @@ pub fn invite_decode(raw: &str) -> Result<Invite, String> {
             return Err("这个邀请链接是更新版本的 cca 生成的：先更新 cca（cca update）再加入".into());
         }
         if s.starts_with("cca-hub") {
-            return Err("这是自己的同步服务器的加入链接，不是 Team 的邀请链接：用 cca hub join".into());
+            return Err("这是自己的同步服务器的加入链接（cca 3.5.3 起没有自己的同步服务器了），不是 Team 的邀请链接：向 Team 的管理员要邀请链接".into());
         }
         return Err("这不是邀请链接（邀请链接以 cca-team1. 开头）".into());
     };
@@ -370,7 +370,7 @@ mod tests {
             assert!(invite_decode(bad).is_err(), "{bad}");
         }
         assert!(invite_decode("cca-team2.abc.0000").unwrap_err().contains("更新"));
-        assert!(invite_decode("cca-hub1.abc.0000").unwrap_err().contains("cca hub join"));
+        assert!(invite_decode("cca-hub1.abc.0000").unwrap_err().contains("向 Team 的管理员要邀请链接"));
         for broken in [
             Invite { secret: "AB".repeat(16), ..invite() },
             Invite { url: "http://192.0.2.10:1".into(), ..invite() },

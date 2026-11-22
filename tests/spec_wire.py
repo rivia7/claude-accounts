@@ -242,56 +242,6 @@ def relay_line(role, ident, key, cn=None):
     return line.encode(), ('CCA-RELAY/1 OK %s\n' % b64u(H(key, ('s' + ident + cn).encode()))).encode()
 
 
-# ---- 自己的同步服务器（README「自己的同步服务器」）----
-LINK_PREFIX = 'cca-hub1.'
-
-
-def hub_check(salt):
-    """盐的校验值：HMAC(盐的字节, "cca-hub-check-v1") 的前 16 个字节，小写十六进制"""
-    return hmac.new(bytes.fromhex(salt), b'cca-hub-check-v1', hashlib.sha256).hexdigest()[:32]
-
-
-def admit_hash(admit):
-    """服务器存的（--admit-hash）：入伙口令的 SHA-256"""
-    return hashlib.sha256(admit.encode()).hexdigest()
-
-
-def link_encode(url, pins, admit, salt):
-    """加入链接：cca-hub1.<base64url(紧凑的 JSON)，不带 =>.<前面这一段的 SHA-256 的前 4 个十六进制字符>"""
-    raw = json.dumps({'u': url, 'p': pins, 'a': admit, 's': salt}, separators=(',', ':')).encode()
-    head = LINK_PREFIX + base64.urlsafe_b64encode(raw).decode().rstrip('=')
-    return head + '.' + hashlib.sha256(head.encode()).hexdigest()[:4]
-
-
-def link_decode(link):
-    """读加入链接（中间的空白不算）：{"u", "p", "a", "s"}；不对是 ValueError"""
-    s = ''.join(link.split())
-    head, _, check = s.rpartition('.')
-    if not head.startswith(LINK_PREFIX) or hashlib.sha256(head.encode()).hexdigest()[:4] != check:
-        raise ValueError('不是加入链接，或者抄错了')
-    body = head[len(LINK_PREFIX):]
-    return json.loads(base64.urlsafe_b64decode(body + '=' * (-len(body) % 4)))
-
-
-LINK = 'cca-hub-link-v1'
-
-
-def link_keys(salt):
-    """换入伙口令时存在服务器上的密文的两把密钥：HMAC(盐的字节, "cca-hub-link-v1")，再分别 HMAC 上 "enc"、"mac" """
-    root = hmac.new(bytes.fromhex(salt), LINK.encode(), hashlib.sha256).digest()
-    return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
-
-
-def link_open(salt, blob):
-    """那份密文的明文：{"a": 新的口令, "s": 部署时配置的口令或者 null}（认证只带标签）；认证不过是 None"""
-    pt = unseal(LINK, link_keys(salt), [], blob)
-    return None if pt is None else json.loads(pt)
-
-
-def link_seal(salt, admit, seed):
-    return seal(LINK, link_keys(salt), [], json.dumps({'a': admit, 's': seed}, separators=(',', ':')).encode())
-
-
 # ---- Team（README「Team 的同步服务器」）----
 TEAM_LINK = 'cca-team1.'
 TEAM_DOC = 'cca-team-doc-v1'

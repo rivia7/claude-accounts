@@ -189,10 +189,6 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     static let remoteJoin = Handoff(arguments: ["remote", "join"], title: "输入配对码",
                                     message: "在终端里输入另一台机器显示的配对码。", inApp: true)
 
-    /// 加入自己的同步服务器（`cca hub join`，PROTOCOL 4.13）：贴加入链接（`hub.join`，链接不对时带着原因重问）
-    static let hubJoin = Handoff(arguments: ["hub", "join"], title: "加入自己的同步服务器",
-                                 message: "在终端里贴加入链接（输入不显示）。", inApp: true)
-
     /// 加入一个 Team（`cca team join`，PROTOCOL 4.14）：贴管理员给的邀请链接（`team.join`，链接不对时带着原因重问）
     static let teamJoin = Handoff(arguments: ["team", "join"], title: "加入 Team",
                                   message: "在终端里贴管理员给的邀请链接（输入不显示）。", inApp: true)
@@ -201,26 +197,13 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
     static let teamNew = Handoff(arguments: ["team", "new"], title: "新建 Team",
                                  message: "在终端里运行 cca team new 名字。", inApp: true, needsForms: true)
 
-    /// 部署一个 Team 的同步服务器（`cca team deploy <Team>` 不写服务器）：和部署自己的同步服务器同一套表单（`hub.deploy`、`hub.password`、
-    /// `hub.pubkey`），装好了自动接上；已经接着的是更新，填别的服务器是搬过去
+    /// 部署一个 Team 的同步服务器（`cca team deploy <Team>` 不写服务器，PROTOCOL 4.14）：问服务器地址、SSH 用户和端口（`hub.deploy`），
+    /// 这台 Mac 的密钥登录不了时问密码（`hub.password`），只认密钥时给出把公钥加到服务器上的那一行（`hub.pubkey`）；装好了自动接上。
+    /// 已经接着的是更新，填别的服务器是搬过去。失败页的「改在终端里完成」也用它：终端里不写服务器时 cca 先问地址、SSH 用户和端口
     static func teamDeploy(team: String) -> Handoff {
         Handoff(arguments: ["team", "deploy", team], title: "部署 Team 的同步服务器",
                 message: "在终端里填服务器地址、SSH 用户和端口，接着部署（ssh 要的密码、私钥的密码也在那里输）。", inApp: true, needsForms: true)
     }
-
-    /// 部署自己的同步服务器（`cca hub deploy` 不写服务器，PROTOCOL 4.13）：问服务器地址、SSH 用户和端口（`hub.deploy`），这台 Mac 的密钥
-    /// 登录不了时问密码（`hub.password`），只认密钥时给出把公钥加到服务器上的那一行（`hub.pubkey`）；reset：从头部署，换一个加入链接（先问同意）。
-    /// 失败页的「改在终端里完成」也用它：终端里不写服务器时 cca 先问地址、SSH 用户和端口（旧版 cca 只说用法）。
-    /// 要 `hello.hub`（有它的 cca 都有 `hello.forms`）
-    static func hubDeploy(reset: Bool) -> Handoff {
-        Handoff(arguments: ["hub", "deploy"] + (reset ? ["--reset"] : []), title: reset ? "从头部署自己的同步服务器" : "部署自己的同步服务器",
-                message: "在终端里填服务器地址、SSH 用户和端口，接着部署（ssh 要的密码、私钥的密码也在那里输）。", inApp: true, needsForms: true)
-    }
-
-    /// 部署到托管平台（`cca hub hosted`，PROTOCOL 4.13）：选平台（`hub.platform`），一页是部署的步骤和公网地址
-    /// （`hub.hosted`；地址不对、还连不上时带着原因重问）。加入着托管平台上的那一台时是更新：一页是换上新版的步骤
-    static let hubHosted = Handoff(arguments: ["hub", "hosted"], title: "部署到托管平台",
-                                   message: "在终端里运行 cca hub hosted：照着生成的步骤部署，再填平台给的公网地址。", inApp: true, needsForms: true)
 
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {

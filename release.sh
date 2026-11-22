@@ -2,7 +2,7 @@
 # 发布当前提交（版本号取自 cca 里的 VERSION）：编辅助程序 → 跑 App 的单元测试 → 跑回归 → 把辅助程序接到 cca 后面 → 签名 → 编译界面 App
 # → 打 tag → 推送 → 创建 GitHub Release
 # （附件：cca（接着四种机器的辅助程序）、cca.sig、一键安装脚本 install.sh、界面 App cca-app.zip 和它的签名 cca-app.zip.sig、
-#  自己的同步服务器的一键安装脚本 cca-hub-install.sh）
+#  Team 的同步服务器的一键安装脚本 cca-hub-install.sh）
 # 要装 Rust（rustup）和四个目标：rustup target add aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 # 用法：./release.sh ["更新说明"]；签名私钥默认 ~/.ssh/cca_release_ed25519（可用 CCA_RELEASE_KEY 指定）
 # VERSION 是 X.Y.Z-beta.N 时发成测试版（GitHub 的 pre-release，不设为 Latest）：自动更新和一键安装都不会装它，
@@ -86,12 +86,13 @@ case "$host" in
 esac
 echo "  发布的 cca：$(( $(wc -c < "$out/cca") / 1024 )) KB"
 cp install.sh "$out/install.sh"
-# 自己的同步服务器的一键安装脚本（docs/dev/hub.md「部署」）：就是 cca hub deploy --script 打出来的那一份，用这台机器的辅助程序生成。
-# 核对带着这一版的版本号、服务端程序和 server/cca-presence.py 一字节不差、sh -n 过得去
-CCA_VERSION="$v" "cli/target/$host/release/cca-core" hub-installer > "$out/cca-hub-install.sh" || fail "生成不了自己的同步服务器的安装脚本"
-srv=$(sed -n "/^	cat <<'CCA_HUB_SERVER_PY_EOF'\$/,/^CCA_HUB_SERVER_PY_EOF\$/p" "$out/cca-hub-install.sh" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1)
+# Team 的同步服务器的一键安装脚本（docs/dev/team.md「部署」）：就是 cca team deploy --script 打出来的那一份，用这台机器的辅助程序生成。
+# 核对带着这一版的版本号，服务端程序、证书助手和 server/ 下的一字节不差，sh -n 过得去
+CCA_VERSION="$v" "cli/target/$host/release/cca-core" hub-installer > "$out/cca-hub-install.sh" || fail "生成不了 Team 的同步服务器的安装脚本"
+heredoc() { sed -n "/^	cat <<'$1'\$/,/^$1\$/p" "$out/cca-hub-install.sh" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # heredoc 结束行：安装脚本里那一段的 SHA-256
 grep -qxF "CCA_HUB_VERSION='$v'" "$out/cca-hub-install.sh" && /bin/dash -n "$out/cca-hub-install.sh" &&
-	[ "$srv" = "$(shasum -a 256 < server/cca-presence.py | cut -d' ' -f1)" ] || fail "自己的同步服务器的安装脚本不对（版本号、服务端程序、语法）"
+	[ "$(heredoc CCA_HUB_SERVER_PY_EOF)" = "$(shasum -a 256 < server/cca-presence.py | cut -d' ' -f1)" ] &&
+	[ "$(heredoc CCA_HUB_ACME_PY_EOF)" = "$(shasum -a 256 < server/cca-acme.py | cut -d' ' -f1)" ] || fail "Team 的同步服务器的安装脚本不对（版本号、服务端程序、证书助手、语法）"
 ssh-keygen -Y sign -q -n cca-release -f "$KEY" "$out/cca"
 printf 'cca-release %s\n' "$pub" > "$out/allowed"
 ssh-keygen -Y verify -f "$out/allowed" -I cca-release -n cca-release -s "$out/cca.sig" < "$out/cca" >/dev/null ||

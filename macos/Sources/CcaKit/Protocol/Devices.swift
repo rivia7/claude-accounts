@@ -1,6 +1,6 @@
 import Foundation
 
-/// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号走的那台服务器（维护者的、自己的同步服务器）上的记录，
+/// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号走的那台服务器（维护者的、某个 Team 的）上的记录，
 /// 时间 cca 已经换成这台 Mac 的时钟。只有经服务器同步的官方账号才有（`can.devices`）。
 struct DevicesDoc: CcaDocument, Equatable {
     static let expectedKind: String? = "devices"

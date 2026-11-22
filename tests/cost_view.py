@@ -745,7 +745,7 @@ class View(Base):
         devs = cv.total(['claude'])['devices']
         self.assertEqual([(d['name'], d['revoked'], d['stale'], d['days_usd']) for d in devs],
                          [('alice-mbp', False, False, 15.0), ('dave-mini', True, True, 6.0), ('bob-mini', False, False, 3.0), ('carol-air', False, True, 1.0)])
-        # 没开设备统计：只有这台设备；没有 device_id（没加入过自己的同步服务器）时 id 是 local
+        # 没开设备统计：只有这台设备；没有 device_id（还没同步过路由器、也没别处生成过）时 id 是 local
         lo = self.view(c={'cost': True}, cfg=None)
         lo.account('claude', 'alice(alice@example.com)', None, True, True)
         self.assertEqual([(d['id'], d['me'], d['days_usd']) for d in lo.total(['claude'])['devices']], [('local', True, 15.0)])
@@ -769,17 +769,18 @@ class View(Base):
                          '这台机器以前传的：只用这台有数据（10 月 1 日）以前的 4（11 月 13 日的 5 不重复计）；bob-mini 照旧是 2 + 撤销以前的 1')
 
     def test_machine_across_hubs(self):
-        """同一台机器在两台服务器上（alice 经维护者的、bob 经自己的）：指纹不一样，dv 一样，设备菜单里是一台、两个账号的加在一起"""
+        """同一台机器在两台服务器上（alice 经维护者的、bob 经一个 Team 的）：指纹不一样，dv 一样，设备菜单里是一台、两个账号的加在一起"""
+        tid = 'ab' * 16
         self.remote['acc']['claude:alice@example.com']['SHA256:bob']['dv'] = 'b0b0b0b0b0b0b0b0'
-        own = {'v': 1, 'acc': {'claude:bob@example.com': {'SHA256:bob-own': {
+        team = {'v': 1, 'acc': {'claude:bob@example.com': {'SHA256:bob-team': {
             'h': {self.at(2026, 11, 12, 12): self.row(6)}, 'um': [], 'at': self.NOW - 600, 'name': 'bob-mini', 'revoked': False, 'tag': 't9',
             'dv': 'b0b0b0b0b0b0b0b0'}}}}
-        (self.cca / 'cost' / 'own.remote.json').write_text(json.dumps(own))
+        (self.cca / 'cost' / ('team.%s.remote.json' % tid)).write_text(json.dumps(team))
         self.write()
         cv = self.view()
-        cv.spec['own'] = True
+        cv.spec['team'] = tid
         mine = cv.account('claude', 'alice(alice@example.com)', None, True, True)
-        theirs = cv.account('claude', 'bob(bob@example.com)', None, False, True)
+        theirs = cv.account('claude', 'bob(bob@example.com)', None, tid, True)
         usd = lambda a, dv: [d['summary']['days_usd'] for d in a['devices'] if d['id'] == dv]
         self.assertEqual((usd(mine, 'b0b0b0b0b0b0b0b0'), usd(theirs, 'b0b0b0b0b0b0b0b0')), ([3.0], [6.0]), '各账号里是那台机器经各自的服务器传的（alice 的还带着撤销了的旧 key 以前的 1）')
         t = cv.total(['claude'])

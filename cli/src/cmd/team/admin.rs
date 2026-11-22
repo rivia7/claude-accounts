@@ -19,8 +19,8 @@ use super::doc::{
 use super::{cfg_of, fail, fault, find_team, index_add, now, pub_line, save_team, sync_locked, team_lock};
 use crate::cmd::hub::deploy::team_install;
 use crate::cmd::hub::hosted::team_files;
+use crate::cmd::hub::own_account;
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
-use crate::cmd::hub::{route, HubKind};
 use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
@@ -747,9 +747,11 @@ fn attach(t: Team, a: &Dict, url: String, pins: &[String]) -> R<Result<Attached,
 
 /// py team-deploy Team [用户@]主机 [hub-deploy 那一套参数，没有 --reset、--name]：经 SSH 把这个 Team 的同步服务器装到一台 Linux
 /// 服务器上（一台服务器上每个 Team 一个服务：cca-team-<编号的前 8 位>，装在 /opt/<服务名>；再运行是更新），装好了接上（attach）。
-/// --check：只看登录得上不（什么都不装）。stdout 是 sh 的 键=值：mode、state（new | update）、port、dir、lan、host（地址:端口）、
-/// device、members、stored、note（换服务器时原来那台没存上的原因）、svc（服务名）。原因码：hub-deploy 的那些（ssh…、root、deps、
-/// image、port、taken、start、host、install、usage），加上 no_team、not_admin、key，装好了没接上的是 attach 的那些
+/// --check：只看登录得上不（什么都不装）。stdout 是 sh 的 键=值：mode、state（new | update）、port、relay（中转的数据端口，没开是空的）、
+/// dir、lan、host（地址:端口）、device、members、stored、note（换服务器时原来那台没存上的原因）、svc（服务名）、web（手机的网页端的网址，
+/// 没开是空的）、web_cert（ok | wait：证书拿到了没有）、web_off（这一次没开网页端的原因：port80 | lan | host | web_port；自己关的是空的）。
+/// 原因码：安装那一步的那些（ssh…、root、deps、image、port、taken、start、host、install、usage），加上 no_team、not_admin、key，
+/// 装好了没接上的是 attach 的那些
 pub fn cmd_team_deploy(args: &[String]) -> R<()> {
     let [sel, rest @ ..] = args else {
         return Err(Fail::Die("用法: py team-deploy Team [用户@]主机 [选项]".into()));
@@ -788,6 +790,9 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         ("stored", stored.as_str()),
         ("note", x.note.as_str()),
         ("svc", svc.as_str()),
+        ("web", inst.web.as_str()),
+        ("web_cert", inst.web_cert.as_str()),
+        ("web_off", inst.web_off.as_str()),
     ]);
     Ok(())
 }
@@ -1203,8 +1208,8 @@ pub fn cmd_team_grant(args: &[String]) -> R<()> {
 /// 原因码：no_team、not_admin、file（读不了、格式不对）、publish
 ///
 /// py team-import Team --mine：把这台设备上**自己的**官方账号（不是维护者共享的、也不是哪个 Team 给的；第三方 API 账号不算）连同现在
-/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换），再发布——把自己的几台设备并成一个 Team 时用
-/// （代替自己的同步服务器）。stdout 同上（节点数是 0：节点各台设备自己有）
+/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换），再发布——把自己的几台设备并成一个 Team 时用。
+/// stdout 同上（节点数是 0：节点各台设备自己有）
 pub fn cmd_team_import(args: &[String]) -> R<()> {
     arity("team-import", args, 2, 3)?;
     let (t, a, _lk) = admin_of(&args[0])?;
@@ -1222,7 +1227,7 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
             let m = accounts.dict(tool.name).unwrap_or_default();
             for (k, v) in table.items() {
                 let node = node_of(&v);
-                if route(&src, &k, &v) != Some(HubKind::Own) || node.is_empty() {
+                if !own_account(&src, &k, &v) || node.is_empty() {
                     continue;
                 }
                 let (alias, email) = parse_key(&k);

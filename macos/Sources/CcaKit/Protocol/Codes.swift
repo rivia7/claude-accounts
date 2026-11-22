@@ -322,14 +322,6 @@ struct ResultCode: KnownValues {
     static let policyOn = ResultCode(rawValue: "policy_on")
     /// 共享关着：`cca policy off` 关掉了（本来就关着也是它），或者 `policy on` 里选了「不打开共享」。
     static let policyOff = ResultCode(rawValue: "policy_off")
-    /// 自己的同步服务器（PROTOCOL 4.13）：加入了（`cca hub join`）/ 移除了别的设备（`hub remove`）/ 退出了（`hub leave`，或者移除的是这台设备自己）/
-    /// 在自己的服务器上部署好、更新了，这台设备跟着加入了（`hub deploy`）
-    static let hubJoined = ResultCode(rawValue: "hub_joined")
-    static let hubRemoved = ResultCode(rawValue: "hub_removed")
-    static let hubLeft = ResultCode(rawValue: "hub_left")
-    static let hubDeployed = ResultCode(rawValue: "hub_deployed")
-    /// 托管平台上的那一台：生成了新版的部署文件，照着换上了（`cca hub hosted`，加入着时）
-    static let hubHosted = ResultCode(rawValue: "hub_hosted")
     /// Team（`cca team join` / `leave` / `revoke`；PROTOCOL 4.14）
     static let teamJoined = ResultCode(rawValue: "team_joined")
     static let teamLeft = ResultCode(rawValue: "team_left")
@@ -339,7 +331,7 @@ struct ResultCode: KnownValues {
     static let teamDeployed = ResultCode(rawValue: "team_deployed")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed, .hubHosted,
+                                         .policyOn, .policyOff,
                                          .teamJoined, .teamLeft, .teamRevoked, .teamCreated, .teamDeployed]
 }
 
@@ -400,68 +392,16 @@ struct FailCode: KnownValues {
     static let nodePinned = FailCode(rawValue: "node_pinned")
     /// 关掉共享（`cca policy off`）：共享的账号正在用（命令行会话、桌面 App 开着），什么都没改；message 说是哪些。
     static let policyOffBusy = FailCode(rawValue: "policy_off_busy")
-    /// 自己的同步服务器（`cca hub …`，PROTOCOL 4.13）没成：`hub_` 开头，后面是原因（`hub_link`、`hub_denied`……，message 是给人看的原因）。
-    /// 这几个 App 要分开处理：还没加入 / 没有这台设备 / 问不到服务器
-    static let hubNotJoined = FailCode(rawValue: "hub_not_joined")
-    static let hubNoDevice = FailCode(rawValue: "hub_no_device")
-    static let hubUnavailable = FailCode(rawValue: "hub_unavailable")
-    /// 加入时链接不对、服务器不认（App 让用户重新贴一个）
-    static let hubLink = FailCode(rawValue: "hub_link")
-    static let hubDenied = FailCode(rawValue: "hub_denied")
-    static let hubSalt = FailCode(rawValue: "hub_salt")
-    /// 加入时的别的原因（App 照 message 说）：已经加入了另一台、满了、不是自己的同步服务器、证书对不上、连不上、时钟、太频繁、密钥、服务器出错、名字
-    static let hubOther = FailCode(rawValue: "hub_other")
-    static let hubFull = FailCode(rawValue: "hub_full")
-    static let hubOld = FailCode(rawValue: "hub_old")
-    static let hubPin = FailCode(rawValue: "hub_pin")
-    static let hubUnreachable = FailCode(rawValue: "hub_unreachable")
-    static let hubClock = FailCode(rawValue: "hub_clock")
-    static let hubBusy = FailCode(rawValue: "hub_busy")
-    static let hubSign = FailCode(rawValue: "hub_sign")
-    static let hubServer = FailCode(rawValue: "hub_server")
-    static let hubName = FailCode(rawValue: "hub_name")
-    /// 部署（`cca hub deploy`）没成：参数、SSH、不是 root、缺东西、拉不到镜像、端口、服务器上已经有别的、不是这一台、换了地址、认不出地址、没装完、起不来
-    static let hubUsage = FailCode(rawValue: "hub_usage")
+    /// Team 的部署（`cca team deploy`，PROTOCOL 4.14）：App 里问 SSH 密码，错了三次（3.5.3 以前自己的同步服务器的那些 `hub_` 开头的码都没有了；
+    /// Team 的命令没成是 `team_` 开头的，App 照 message 说）
     static let hubSSH = FailCode(rawValue: "hub_ssh")
-    static let hubRoot = FailCode(rawValue: "hub_root")
-    static let hubDeps = FailCode(rawValue: "hub_deps")
-    static let hubImage = FailCode(rawValue: "hub_image")
-    static let hubPort = FailCode(rawValue: "hub_port")
-    static let hubTaken = FailCode(rawValue: "hub_taken")
-    static let hubNotThis = FailCode(rawValue: "hub_not_this")
-    static let hubMoved = FailCode(rawValue: "hub_moved")
-    static let hubHost = FailCode(rawValue: "hub_host")
-    static let hubInstall = FailCode(rawValue: "hub_install")
-    static let hubStart = FailCode(rawValue: "hub_start")
-    /// 部署、加入做完了，带着提醒（fail_warn：退出码 0）：证书是新生成的，别的设备要重新加入 / 服务器的地址只在内网 / 这台设备关掉了设备统计
-    static let hubNewpin = FailCode(rawValue: "hub_newpin")
-    static let hubLan = FailCode(rawValue: "hub_lan")
-    static let hubOff = FailCode(rawValue: "hub_off")
-    /// 部署到托管平台（`cca hub hosted`）没成：地址不对、证书验证不过、没有记着的口令、加入的不是托管平台上的（自己部署的）、
-    /// 不知道部署时的口令、放部署文件的目录里有别的；加入的是托管平台上的（`cca hub deploy` 不碰它）
-    static let hubURL = FailCode(rawValue: "hub_url")
-    static let hubCert = FailCode(rawValue: "hub_cert")
-    static let hubPending = FailCode(rawValue: "hub_pending")
-    static let hubNotHosted = FailCode(rawValue: "hub_not_hosted")
-    static let hubSeed = FailCode(rawValue: "hub_seed")
-    static let hubDir = FailCode(rawValue: "hub_dir")
-    static let hubPlatform = FailCode(rawValue: "hub_platform")
-    /// 没换成加入链接（`cca hub invite --new`；移除了别的设备、换链接没成时是做完了带着的提醒）
-    static let hubRelink = FailCode(rawValue: "hub_relink")
-    /// 自己的同步服务器的失败原因（`hub_` 开头的都是，认不认识都算：App 照 message 说）
-    var isHub: Bool { rawValue.hasPrefix("hub_") }
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy,
-                                       .hubNotJoined, .hubNoDevice, .hubUnavailable, .hubLink, .hubDenied, .hubSalt, .hubOther, .hubFull,
-                                       .hubOld, .hubPin, .hubUnreachable, .hubClock, .hubBusy, .hubSign, .hubServer, .hubName,
-                                       .hubUsage, .hubSSH, .hubRoot, .hubDeps, .hubImage, .hubPort, .hubTaken, .hubNotThis, .hubMoved,
-                                       .hubHost, .hubInstall, .hubStart, .hubNewpin, .hubLan, .hubOff,
-                                       .hubURL, .hubCert, .hubPending, .hubNotHosted, .hubSeed, .hubDir, .hubPlatform, .hubRelink]
+                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy, .hubSSH]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -475,7 +415,7 @@ struct TerminalCode: KnownValues {
     static let apiKey = TerminalCode(rawValue: "api_key")
     /// 账号表有表单改不了的问题（不是 JSON、键写错了）：在终端里编辑。
     static let edit = TerminalCode(rawValue: "edit")
-    /// 部署自己的同步服务器：服务器只认密钥，这台 Mac 的私钥有密码、或者要用别的私钥（`argv` 带上服务器和端口）。
+    /// 部署 Team 的同步服务器（`cca team deploy`）：服务器只认密钥，这台 Mac 的私钥有密码、或者要用别的私钥（`argv` 是整条命令，带上 Team、服务器和端口）。
     static let hubDeploy = TerminalCode(rawValue: "hub_deploy")
     static let allKnown: [TerminalCode] = [.login, .routerSync, .routerSetup, .localSetup, .apiKey, .edit, .hubDeploy]
 }
@@ -503,14 +443,6 @@ struct ConsentItem: KnownValues {
     static let remoteEnd = ConsentItem(rawValue: "remote_end")
     /// `cca policy off`：关掉维护者的共享，映射里的账号移出账号表（范围 `all`，默认不同意；PROTOCOL 4.12）。
     static let policyOff = ConsentItem(rawValue: "policy_off")
-    /// `cca hub remove`：从自己的同步服务器上移除一台设备（范围是设备指纹，默认不同意；PROTOCOL 4.13）。
-    static let hubRemove = ConsentItem(rawValue: "hub_remove")
-    /// `cca hub leave`：退出自己的同步服务器（范围 `all`，默认不同意）。
-    static let hubLeave = ConsentItem(rawValue: "hub_leave")
-    /// `cca hub deploy <目标> --reset`：从头部署自己的同步服务器，换一个新的加入链接（范围是 SSH 的目标，原样，默认不同意）。
-    static let hubReset = ConsentItem(rawValue: "hub_reset")
-    /// `cca hub invite --new`：换一个加入链接，旧的不能再用来加入（范围 `all`，默认不同意）。
-    static let hubRelink = ConsentItem(rawValue: "hub_relink")
     /// `cca team leave`（这台设备是成员）：退出一个 Team（范围是 Team 的编号，默认不同意；PROTOCOL 4.14）。
     static let teamLeave = ConsentItem(rawValue: "team_leave")
     /// `cca team leave`（这台设备是管理员）：这台设备上就没有这个 Team 的根密钥了（范围是 Team 的编号，默认不同意）。
@@ -519,7 +451,7 @@ struct ConsentItem: KnownValues {
     static let teamRevoke = ConsentItem(rawValue: "team_revoke")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
                                           .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff,
-                                          .hubRemove, .hubLeave, .hubReset, .hubRelink, .teamLeave, .teamDelete, .teamRevoke]
+                                          .teamLeave, .teamDelete, .teamRevoke]
 }
 
 /// `api_key.source`：key 在哪——钥匙串里（`keychain`）、账号表的 key 字段里（`table`，明文），没存是空的。

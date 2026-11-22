@@ -240,7 +240,7 @@ while [ $i -lt $n ]; do
 done
 dest="${args[$i]}"; i=$((i+1)); cmd="${args[*]:$i}"
 echo "SSH $dest :: $cmd" >> "$CCA_T/ssh.log"
-# 自己的同步服务器的一键部署（11b3c）：hubbox 是 tests/hub_box.py 建的假服务器（$CCA_T/hubbox：目录当根，假 systemctl
+# Team 的同步服务器的一键部署（11b3d）：hubbox 是 tests/hub_box.py 建的假服务器（$CCA_T/hubbox：目录当根，假 systemctl
 # 起真的 server/cca-presence.py），命令交给它的 enter（stdin 是安装脚本；$CCA_T/hubbox/ssh_denied 时登录不了）。-G 说它在 127.0.0.1。
 # $CCA_T/hubbox/password 在时不认这台 Mac 的密钥、只认这个密码：像真的 ssh 一样经 SSH_ASKPASS 取（每次连接一次，ASKPASS 和它在哪个目录记在 ssh.log）。
 # 每次的命令行和环境记在 ssh.env（查密码不在里面）。nohub 是解析不了的主机名
@@ -341,7 +341,7 @@ for a in "$@"; do
 	case "$prev" in -x) proxy="$a" ;; -o) out="$a" ;; --unix-socket) sock="$a" ;; -X) method="$a" ;; --data|--data-binary) data="$a" ;; esac
 	case "$a" in http*) url="$a";; esac; prev="$a"
 done
-printf '%s\n' "$*" >> "$CCA_T/curl.argv"   # 每次的命令行（查凭证从不出现在命令行里：自己的同步服务器的加入链接）
+printf '%s\n' "$*" >> "$CCA_T/curl.argv"   # 每次的命令行（查凭证从不出现在命令行里：Team 的邀请链接）
 # 假的内置代理内核的控制接口（socket 名是 cca-core-*.sock）：状态在 $CCA_T/core（假 mihomo 起来时建 up；core_load 读配置，
 # 写 listening、groups/、sel/，控制接口的 socket 记在 sock）；PUT /configs 只认主目录（home）里的配置文件
 if [ -n "$sock" ]; then

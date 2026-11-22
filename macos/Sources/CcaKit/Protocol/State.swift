@@ -121,8 +121,8 @@ struct StateConfig: Decodable, Sendable, Equatable {
     var leakCheck: Bool?
     var update: String?
     var policy: PolicyConfig?
-    /// 经哪几台服务器和自己的其他设备同步（PROTOCOL 2.2 的 `config.hubs`）：维护者的在前，自己的同步服务器在后；
-    /// 不认识的 `kind` 已经去掉；旧版 cca 没有这个字段，是空的
+    /// 经哪几台服务器和自己的其他设备同步（PROTOCOL 2.2 的 `config.hubs`）：维护者的在前，各个 Team 的在后；
+    /// 不认识的 `kind`（旧版 cca 的 `own`：自己的同步服务器）已经去掉；旧版 cca 没有这个字段，是空的
     var hubs: [HubEntry]
     /// 这台设备在哪些 Team 里（`cca team`，PROTOCOL 4.14），照加入的先后；一个都不在、旧版 cca 没有这个字段时是空的
     var teams: [TeamEntry]
@@ -154,8 +154,6 @@ struct StateConfig: Decodable, Sendable, Equatable {
 
     var routerConfigured: Bool { router?.configured ?? false }
     var localConfigured: Bool { local?.configured ?? false }
-    /// 加入了的自己的同步服务器（没加入是 nil）
-    var ownHub: HubEntry? { hubs.first { $0.kind == .own } }
     /// 配置向导还要不要出现：只有 cca 明确说 false 时才要（字段缺省、或 true 都不弹）。
     var needsOnboarding: Bool { onboarded == false }
 }
@@ -494,7 +492,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var pinned: Bool
     var pinnedNode: String?
     var isLast: Bool
-    /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：维护者的、自己的同步服务器，不同步（和不认识的值）是 nil。
+    /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：维护者的、某个 Team 的，不同步（和不认识的值）是 nil。
     /// 旧版 cca 没有这个字段：有「设备」一节的当作维护者的（那时只有它）
     var hub: HubKind?
     /// 这个账号是哪个 Team 给的（Team 的编号，PROTOCOL 2.2）：只说是谁给的，它的服务器这台设备用不了时也有；不是 Team 给的是 nil

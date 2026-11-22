@@ -235,9 +235,17 @@ enum Texts {
         "Claude Code 里记的套餐还是 \(old)" + (nonEmpty(current).map { "，账号现在是 \($0)" } ?? "")
     }
 
-    // MARK: 自己的同步服务器（PROTOCOL 4.13）
-
     // MARK: Team（PROTOCOL 4.14）
+
+    /// 侧栏「共享与同步」下面那句（短写，免得截断）：在 Team 里时一个说名字、几个说几个（维护者的共享还开着时带一句「共享开着」）；
+    /// 不在 Team 里时说维护者的共享开没开。teams 是 nil：cca 没有 Team，照旧只说维护者的共享
+    static func sharingSubtitle(policyOn: Bool, teams: [String]?) -> String {
+        guard let teams else { return policyOn ? "维护者的共享开着" : "维护者的共享关着" }
+        if teams.isEmpty { return policyOn ? "维护者的共享开着" : "还没加入 Team" }
+        let one = teams.count == 1 ? "「\(nonEmpty(teams[0]) ?? "Team")」" : nil
+        if policyOn { return (one ?? "\(teams.count) 个 Team") + " · 共享开着" }
+        return one.map { "在\($0)里" } ?? "在 \(teams.count) 个 Team 里"
+    }
 
     /// 筛选菜单里一项的名字：全部账号、Team 的名字（不在了的写编号的开头）、不在 Team 里的
     static func teamFilter(_ f: TeamFilter, teams: [TeamEntry]) -> String {
@@ -295,36 +303,6 @@ enum Texts {
         if s >= 2 * 86400 { return "\(Int(s / 86400)) 天" }
         if s >= 2 * 3600 { return "\(Int(s / 3600)) 小时" }
         return "\(max(1, Int(s / 60))) 分钟"
-    }
-
-    /// 「自己的同步服务器」卡片上的那一行状态：照 cca 给的 `config.hubs` 里 own 的那一项说
-    static func hubState(_ h: HubEntry, now: Double) -> String {
-        switch h.state {
-        case .ok:
-            return "同步正常" + (h.checkedEpoch.map { "（" + agoPhrase(now - $0) + "）" } ?? "")
-        case .pending:
-            return "还没同步过"
-        case .off:
-            return (nonEmpty(h.error) ?? "这台设备关掉了设备统计") + "：现在不经它同步"
-        default:
-            let last = h.checkedEpoch.map { "；" + agoPhrase(now - $0) + "同步成过" } ?? ""
-            return "最近一次没同步成：" + (nonEmpty(h.error) ?? "原因不明") + last
-        }
-    }
-
-    /// 经它同步几个账号、这台 Mac 在服务器上叫什么、什么时候加入的
-    static func hubSummary(_ h: HubEntry, now: Double, calendar: Calendar = .current) -> String {
-        var parts = [h.accounts > 0 ? "经它同步 \(h.accounts) 个账号" : "还没有经它同步的账号"]
-        if let n = nonEmpty(h.name) { parts.append("这台 Mac 在服务器上叫 \(n)") }
-        if let j = h.joinedEpoch { parts.append(pastTime(j, now: now, calendar: calendar) + " 加入") }
-        return parts.joined(separator: " · ")
-    }
-
-    /// 服务器上的一台设备：最近一次同步（服务器最后一次收到它的请求）、什么时候加入的
-    static func hubDeviceDetail(_ d: HubDevice, now: Double, calendar: Calendar = .current) -> String {
-        var parts = [d.seenEpoch.map { "最近一次同步：" + agoPhrase(now - $0) } ?? "服务器重启以后还没来过"]
-        if let j = d.joinedEpoch { parts.append(pastTime(j, now: now, calendar: calendar) + " 加入") }
-        return parts.joined(separator: " · ")
     }
 
     // MARK: 远程会话（PROTOCOL 9）

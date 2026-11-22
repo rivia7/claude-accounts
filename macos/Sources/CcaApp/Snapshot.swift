@@ -188,9 +188,9 @@ enum Snapshot {
                 m.closeAllRemoteTerminals()
                 m.selection = .office
             },
-            // 共享与同步：维护者共享的账号的开关（演示数据里开着、拉到了映射）、自己的同步服务器（加入着，最近一次没同步成）和上面的设备
+            // 共享与同步：Team（书房组的管理员、被设计组移除了），维护者共享的开关（演示数据里开着、拉到了映射：还显示它）
             Scene(name: "sharing") { m in
-                m.selection = .sharing   // 换到这一页时自己问一次设备（窗口在后面也问）
+                m.selection = .sharing
             },
             // Team：这台设备在两个 Team 里（一个是管理员：展开着设备和账号；一个被管理员移除了）
             Scene(name: "teams") { m in
@@ -279,14 +279,14 @@ enum Snapshot {
                 ("flow-key", .apiKey(prefix: [], key: "kimi", name: "kimi"), 0),
                 ("flow-router", .routerSetup, 0), ("flow-router-password", .routerSetup, 1), ("flow-router-nodes", .routerSetup, 2),
                 ("flow-local", .localSetup, 0),
-                ("flow-onboard-share", .onboard, 0), ("flow-onboard", .onboard, 1), ("flow-onboard-net", .onboard, 2),
-                ("flow-onboard-add", .onboard, 3), ("flow-onboard-hub", .onboard, 4),
+                ("flow-onboard", .onboard, 0), ("flow-onboard-join", .onboard, 1), ("flow-onboard-net", .onboard, 2),
+                ("flow-onboard-add", .onboard, 3),
                 ("flow-edit", .edit(prefix: []), 0),
                 ("flow-rm", .remove(prefix: [], key: "bob", name: "工作"), 0),
                 ("flow-remote-pair", .remotePair, 0), ("flow-remote-pair-code", .remotePair, 1), ("flow-remote-join", .remoteJoin, 0),
                 ("flow-remote-pair-web", .remotePairWeb, 1),
-                ("flow-hub-deploy", .hubDeploy(reset: false), 0), ("flow-hub-password", .hubDeploy(reset: false), 1), ("flow-hub-join", .hubJoin, 0),
-                ("flow-hub-platform", .hubHosted, 0), ("flow-hub-hosted", .hubHosted, 1),
+                ("flow-team-deploy", .teamDeploy(team: "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"), 0),
+                ("flow-team-password", .teamDeploy(team: "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"), 1),
                 ("flow-working", demo("demo-working", "添加 Claude 账号"), 0),
                 ("flow-warned", demo("demo-warned", "添加 Claude 账号"), 0),
                 ("flow-failed", demo("demo-failed", "添加第三方 API 账号"), 0),

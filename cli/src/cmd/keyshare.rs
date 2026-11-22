@@ -2,7 +2,7 @@
 //!
 //! 记下、删掉 key 时用的（secrets 模块调）：`keyshare_on`、`keyshare_edit`（keys.json 的读改写）、`keyshare_kick`；
 //! 密文的格式（`blob_*`，折合金额也用）；同步本身（`keyshare_sync`、`keyshare_round`：cca _key-sync 和上报进程顺带做）。
-//! 每个账号经它走的那台同步服务器（hub.rs 的 `route`）同步；两台的 keys.json、锁、盐各是各的（`HubKind::file`）。
+//! 每个账号经它走的那台同步服务器（hub.rs 的 `route`）同步；各台的 keys.json、锁、盐各是各的（`HubKind::file`）。
 
 use super::hub::{hub_of, hubs, Hub, HubKind};
 use super::presence::{is_maintainer, presence_aid, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
@@ -29,7 +29,7 @@ use std::os::unix::io::AsRawFd;
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[Cmd::all("key-sync", cmd_key_sync)];
 
-/// PRESENCE_DIR 里（自己的服务器的是 own.keys.json）：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
+/// PRESENCE_DIR 里（Team 的服务器的是 team.<编号>.keys.json）：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
 /// "synced": 上次同步, "retry": 旧的服务器什么时候再试, "error": 没同步成的原因}
 pub const KEYSHARE_FILE: &str = "keys.json";
 /// 后台最多隔这么久同步一次（在这台设备上记下、删掉时马上）
@@ -100,8 +100,8 @@ impl KeyshareFile {
 }
 
 /// `with keyshare_edit(键, 值, 时间) as ed`：在这台设备上记下（换掉）、删掉这个账号（当前工具的）记下备查的 key，改完
-/// `ed.mark(key 或 None)` 记下时间（同步时按它比新旧），记在它走的那台服务器的 keys.json 里。哪台都不走（不在映射里、这台设备
-/// 没加入自己的同步服务器，第三方 API 账号）时照旧记进维护者的（这台设备用得了它时，和以前一样）：以后这个账号进了映射，
+/// `ed.mark(key 或 None)` 记下时间（同步时按它比新旧），记在它走的那台服务器的 keys.json 里。哪台都不走（这台设备自己的、第三方
+/// API 账号）时照旧记进维护者的（这台设备用得了它时，和以前一样）：以后这个账号进了映射，
 /// 同步时按记下的时间比新旧，删掉的也同步。拿着 keys.lock：同步不会在这中间拿服务器上旧的盖掉刚记下的。一台都用不了时不记
 /// （以后用得了了，记下的按 key_hints 里的时间算，删掉的不同步）；出错不影响记下、删掉本身
 pub struct KeyshareEdit {

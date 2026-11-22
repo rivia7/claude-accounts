@@ -44,30 +44,19 @@ fn hub_named(want: &str) -> R<HubKind> {
     }
 }
 
-/// 在哪台服务器上配对。说了（`--hub`）就是它；没说：这台机器只用得了一台时就是它，有好几台时要说清楚——
+/// 在哪台服务器上配对。说了（`--hub`）就是它；没说是这台机器的家（`relay::home_hub`：加入的第一个 Team 的，没有时是维护者的）——
 /// 配对记在哪台服务器上，经它看得到的就是走那台服务器的会话（哪个 Team 的账号）
 pub fn need_server(hub: Option<&str>) -> R<Server> {
-    let off = |why: String| die(format!("远程会话要经服务器中转，现在用不了：{why}"));
-    if let Some(want) = hub {
-        return match relay::server_of(hub_named(want)?)? {
-            Ok(s) => Ok(s),
-            Err(why) => off(why),
-        };
-    }
-    let mut all = relay::servers()?;
-    match all.len() {
-        0 => match relay::server_of(HubKind::Maintainer)? {
-            Ok(s) => Ok(s),
-            Err(why) => die(format!("远程会话要经维护者的服务器中转，现在用不了：{why}")),
-        },
-        1 => Ok(all.remove(0)),
-        _ => {
-            let names: Vec<String> = all.iter().map(|s| relay::label(s.kind)).collect();
-            die(format!(
-                "这台机器用得了好几台中转服务器（{}）：要说清楚在哪一台上配对——哪个 Team 的账号的会话，就在那个 Team 的服务器上配（--team 名字；维护者的那一台是 --maintainer）",
-                names.join("、")
-            ))
+    let kind = match hub {
+        Some(want) => hub_named(want)?,
+        None => relay::home_hub(),
+    };
+    match relay::server_of(kind)? {
+        Ok(s) => Ok(s),
+        Err(why) if hub.is_none() && kind == HubKind::Maintainer => {
+            die(format!("远程会话要经维护者的服务器中转，现在用不了：{why}"))
         }
+        Err(why) => die(format!("远程会话要经服务器中转，现在用不了：{why}")),
     }
 }
 
@@ -357,11 +346,13 @@ fn row(p: &Peer, note: &str) -> String {
 }
 
 /// `remote-hubs`：这台机器现在用得了的中转服务器，一行一台：`编号<TAB>给人看的名字`（编号是 Team 的编号，维护者的那一台是
-/// maintainer）。bash 拿它决定配对时要不要问在哪一台上
+/// maintainer），没说在哪台上配对时用的那一台（home_hub）后面再有 `<TAB>home`。bash 拿它给人看配对记在哪台服务器上
 pub fn cmd_remote_hubs(args: &[String]) -> R<()> {
     arity("cmd_remote_hubs", args, 0, 0)?;
+    let home = relay::home_hub();
     for s in relay::servers()? {
-        crate::out!("{}\t{}", s.kind.team().unwrap_or_else(|| "maintainer".into()), relay::label(s.kind));
+        let mark = if s.kind == home { "\thome" } else { "" };
+        crate::out!("{}\t{}{mark}", s.kind.team().unwrap_or_else(|| "maintainer".into()), relay::label(s.kind));
     }
     Ok(())
 }

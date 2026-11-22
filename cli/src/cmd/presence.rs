@@ -2,10 +2,10 @@
 //! presence-stop、presence-view、presence-note。
 //!
 //! 都移植了；别处要用的：`presence_problems`、`presence_load`、`presence_post`、`presence_targets`、`app_proc_re`、`spawn_background`。
-//! 上报、cca devices 对着这台设备用得了的每一台同步服务器（维护者的、自己的，见 hub.rs）各走一路：账号只报给它走的那一台。
+//! 上报、cca devices 对着这台设备用得了的每一台同步服务器（维护者的、各个 Team 的，见 hub.rs）各走一路：账号只报给它走的那一台。
 
 use super::cost::cost_kick;
-use super::hub::{host_of, hub_of, hubs, own_load, own_recover, removed_note, route, Hub, HubKind, HUB_DIR};
+use super::hub::{hub_of, hubs, route, Hub, HubKind};
 use super::keyshare::{is_num, keyshare_error, keyshare_kick, keyshare_sync, KEYSHARE_EVERY};
 use super::session::{cli_alive, cli_marks_at, lstart_epoch, proc_scan, proc_starts, ps_lstart, ps_rows, ProcInfo};
 use super::table::account_named;
@@ -51,8 +51,6 @@ pub static PRESENCE_URL_RE: LazyLock<Re> = LazyLock::new(|| {
 });
 pub static PRESENCE_PIN_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^sha256//[A-Za-z0-9+/]{43}=$"));
 pub static PRESENCE_SALT_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^([0-9a-f]{2}){16,64}$"));
-/// 设备指纹（和 ssh-keygen -l 的写法一样）
-pub static FP_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^SHA256:[A-Za-z0-9+/]{43}$"));
 
 /// https://地址:端口（端口 1～65535）
 pub fn url_ok(u: &str) -> bool {
@@ -296,7 +294,7 @@ pub static TTY_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^(ttys[0-9]+|pts/[0
 /// 上报的对象：(工具, 账号表的键, 账号目录)
 pub type Target = (&'static Tool, String, String);
 
-/// 这台 Mac 上经这一类服务器同步的账号（route 给的是它：维护者的是映射里的官方账号，自己的是别的官方账号）。账号表读不了是 None
+/// 这台 Mac 上经这一类服务器同步的账号（route 给的是它：维护者的是映射里的官方账号，Team 的是那个 Team 给的）。账号表读不了是 None
 /// （这一轮不报：不能当成什么都没开）
 pub fn presence_targets(kind: HubKind) -> Option<Vec<Target>> {
     let mut out = Vec::new();
@@ -544,18 +542,9 @@ pub fn presence_scan_with(
 }
 
 /// 经 HTTPS 发一个签过名的请求：直连（不经账号的出口），钉住服务器证书的公钥（配置里没有指纹的——托管平台、反向代理后面的
-/// 自己的同步服务器——照系统的证书机构验证书）。返回 (HTTP 状态码, JSON)；没发出去是 (0, {"error": "sign" | "unreachable" |
-/// "pin" | "cert"})。timeout 是秒。自己的服务器不认这台设备（403 unknown_device）时先看要不要自己重新加入（`hub::own_recover`：
-/// 服务器的记录没了），重新加入了就再发一次
+/// Team 的服务器——照系统的证书机构验证书）。返回 (HTTP 状态码, JSON)；没发出去是 (0, {"error": "sign" | "unreachable" |
+/// "pin" | "cert"})。timeout 是秒
 pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i64, Dict)> {
-    let (code, j) = post_once(cfg, op, payload, timeout)?;
-    if code == 403 && op != "join" && is_own(cfg) && j.str("error").as_deref() == Some("unknown_device") && own_recover(cfg, &j)? {
-        return post_once(cfg, op, payload, timeout);
-    }
-    Ok((code, j))
-}
-
-fn post_once(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i64, Dict)> {
     let doc = payload.copy();
     doc.set("v", 1);
     doc.set("op", op);
@@ -622,49 +611,24 @@ fn post_once(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i64, Dict
     Ok((code, j))
 }
 
-/// 这份配置是自己的同步服务器的吗（hub.rs 的 own_load 给的带着 "hub": "own"）
-pub fn is_own(cfg: &Dict) -> bool {
-    cfg.str("hub").as_deref() == Some("own")
-}
-
-/// 维护者的服务器（配置里没有 "hub"）：只有它可能是还不支持新接口的旧版（自己的、Team 的都是新的）
+/// 维护者的服务器（配置里没有 "hub"）：只有它可能是还不支持新接口的旧版（Team 的都是新的）
 pub fn is_maintainer(cfg: &Dict) -> bool {
     cfg.get("hub").is_none()
 }
 
-/// 请求没成的原因（给人看的）；cfg 里有 "hub": "own" 的是自己的同步服务器
+/// 请求没成的原因（给人看的）；cfg 里有 "hub": "team" 的是 Team 的同步服务器（team::hub_why），别的是维护者的
 pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
     if cfg.str("hub").as_deref() == Some("team") {
         return Ok(super::team::hub_why(cfg, code, j));
     }
     let err = j.get("error");
     let err = err.as_ref().and_then(|e| e.as_str());
-    let own = is_own(cfg);
-    Ok(if err == Some("cert") {
-        format!(
-            "自己的同步服务器（{}）的证书验证不过：不是受信任的机构签的，或者和地址对不上（地址抄错了？）",
-            host_of(&cfg.at("url").py_str())
-        )
-    } else if err == Some("pin") && own {
-        "服务器的证书和加入链接里钉住的指纹对不上（可能有人冒充服务器，也可能服务器换了证书：要一个新的加入链接）".into()
-    } else if err == Some("pin") {
+    Ok(if err == Some("pin") {
         "服务器的证书和映射里钉住的指纹对不上（可能有人冒充服务器，也可能维护者换了证书、映射还没更新）".into()
-    } else if err == Some("sign") && own {
-        "没法用这台设备在自己的同步服务器上的密钥签名（~/.cca/hub/id_ed25519）".into()
     } else if err == Some("sign") {
         "没法用这台 Mac 的 deploy key 签名（~/.cca/policy/id_ed25519）".into()
-    } else if code == 0 && own {
-        format!("连不上自己的同步服务器（{}）", cfg.at("url").py_str())
     } else if code == 0 {
         format!("连不上设备统计的服务器（{}）", cfg.at("url").py_str())
-    } else if code == 403 && own && err == Some("unknown_device") {
-        // 刚发现被移除了（own_recover 删掉本机记着的，留下了 ~/.cca/hub-removed.json），或者拿记着的口令重新加入也不认
-        removed_note().unwrap_or_else(|| {
-            "自己的同步服务器不认这台设备了，拿记着的加入链接也加入不了（服务器从头部署过？）：向已经加入的设备要加入链接（cca hub invite），在这台设备上重新加入（cca hub join）"
-                .into()
-        })
-    } else if code == 403 && own {
-        "自己的同步服务器不认这台设备的签名：重新加入（cca hub join）".into()
     } else if code == 403 {
         "服务器还不认这台 Mac：维护者要把它的 deploy key 同步到服务器的设备清单（./policy.sh presence sync）".into()
     } else if let Some(now) = j.get("now").filter(|n| err == Some("clock") && is_num(n)).and_then(|n| n.as_num()) {
@@ -676,10 +640,6 @@ pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
         format!("这台 Mac 的时间和服务器差了 {:.0} 秒：打开“系统设置 › 通用 › 日期与时间”里的自动设置", gap.trunc())
     } else if code == 429 {
         "请求太频繁，稍后再试".into()
-    } else if own && matches!(code, 404 | 413) {
-        "这台服务器不是自己的同步服务器（没有用 --mode own 运行），或者它的版本太旧：重新部署它".into()
-    } else if own {
-        format!("自己的同步服务器出错了（HTTP {code}）")
     } else {
         format!("设备统计的服务器出错了（HTTP {code}）")
     })
@@ -851,8 +811,8 @@ impl Lane {
         matches!(self.kind, HubKind::Team(_)) && self.units.is_empty() && self.shape.as_ref().is_some_and(|s| s.is_empty())
     }
 
-    /// 还是不是同一台：种类、地址、这台设备在它上面的指纹都一样，也还是同一次加入（自己的服务器的 "rev"：重新加入以后
-    /// 从头报，不接着被移除那会儿的退避）
+    /// 还是不是同一台：种类、地址、这台设备在它上面的指纹都一样，也还是同一次加入（Team 的 "rev"：重新加入以后从头报，
+    /// 不接着被移除那会儿的退避）
     fn same(&self, h: &Hub) -> bool {
         let eq = |k: &str| match (self.cfg.get(k), h.cfg.get(k)) {
             (Some(a), Some(b)) => a.py_eq(&b),
@@ -911,7 +871,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
         forget_grants(); // 这个进程一直开着：各个 Team 的配置每一圈重读（加入了、被移除了、换了盐）
         let hubs = hubs()?;
         if hubs.is_empty() {
-            return Ok(()); // 映射里去掉了、退出了自己的服务器、这台 Mac 关掉了、cca restore 了：不再报
+            return Ok(()); // 映射里去掉了、退出了 Team、这台 Mac 关掉了、cca restore 了：不再报
         }
         // 各路跟着现在用得了的服务器走：还是同一台的接着用（配置换成刚读的），新加的从头报，没了的不再报
         let mut old = std::mem::take(&mut agent.lanes);
@@ -929,9 +889,6 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
         let targets: Vec<Option<Vec<Target>>> = agent.lanes.iter().map(|l| presence_targets(l.kind)).collect();
         // 账号目录在看之前的样子（在问进程、读登记之前记下）：等的时候拿它比，看的这段时间里变了的不会漏
         let mut dirs: Vec<String> = targets.iter().flatten().flatten().map(|(_, _, d)| d.clone()).collect();
-        if agent.lanes.iter().any(|l| l.kind == HubKind::Own) {
-            dirs.push(HUB_DIR.clone()); // 重新加入、退出（hub.json 换了、没了）：马上醒来换这一路
-        }
         // Team：加入了、退出了（teams/ 里多了、少了一个目录），取到了新的配置、被移除了（那个 Team 的目录里换了文件）：马上醒来换各路。
         // 不只盯现在有一路的：刚加入、配置还没取到的那个 Team 也盯着
         if path::isdir(&TEAMS_DIR) {
@@ -1114,7 +1071,7 @@ fn no_hub_reason() -> R<String> {
     if let Some(why) = presence_off_reason() {
         return Ok(why);
     }
-    Ok(format!("{}，也没加入自己的同步服务器（cca hub join）", presence_load()?.0))
+    Ok(format!("{}，也没加入 Team（cca team join）", presence_load()?.0))
 }
 
 /// 这个账号不经哪台服务器（或者它走的那台这台设备用不了）：cca devices 说的原因
@@ -1122,16 +1079,16 @@ fn unrouted_reason(k: &str, v: &V, pm: &Dict) -> R<String> {
     let name = name_of(k);
     Ok(match route(pm, k, v) {
         None if is_api(v) => format!("{name} 是第三方 API 账号：只统计官方账号"),
-        None => format!("{name} 没有邮箱：只统计官方账号"),
+        None if parse_key(k).1.is_empty() => format!("{name} 没有邮箱：只统计官方账号"),
+        None => format!("{name} 是这台设备自己的账号：只统计 Team 给的、维护者共享的账号（要和自己的别的设备一起统计，建一个 Team，把它加进去）"),
         Some(HubKind::Maintainer) => format!("{name} 是维护者共享的账号：{}", presence_load()?.0),
-        Some(HubKind::Own) => format!("{name} 不在维护者的映射里，要经自己的同步服务器统计：{}", own_load()?.0),
         Some(HubKind::Team(t)) => {
             format!("{name} 是 Team 给的账号，经 Team 的同步服务器统计：{}", super::team::hub_missing_why(&t.id()))
         }
     })
 }
 
-/// cca [codex] devices [账号…] [--json]：账号现在连着哪些设备（问它走的那台同步服务器：维护者共享的问维护者的，自己的问自己的）。
+/// cca [codex] devices [账号…] [--json]：账号现在连着哪些设备（问它走的那台同步服务器：维护者共享的问维护者的，Team 给的问那个 Team 的）。
 /// --json 是给 App 的（PROTOCOL 3.4）。退出码：0 成功；1 服务器那边没成；2 用不了（这台 Mac 没有用得了的服务器，账号不经服务器同步）。
 /// 没成时 stdout 是原因
 pub fn cmd_presence_view(args: &[String]) -> R<()> {
@@ -1305,7 +1262,6 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
             (true, _) => format!("，这台设备叫 {}", me.py_str()),
         };
         let whose = match kind {
-            HubKind::Own => "自己的同步服务器",
             HubKind::Maintainer => "维护者的服务器",
             HubKind::Team(_) => "Team 的同步服务器",
         };
@@ -1329,27 +1285,17 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
     }
     for (kind, why) in &failed {
         let whose = match kind {
-            HubKind::Own => "自己的同步服务器",
             HubKind::Maintainer => "维护者的服务器",
             HubKind::Team(_) => "Team 的同步服务器",
         };
         lines.push(format!("{} 账号连着的设备（{whose}上的记录）：没问到：{why}", t().label));
     }
     for kind in &shown {
-        let own = *kind == HubKind::Own;
         if let Some(f) = failing(*kind) {
-            lines.push(if own {
-                format!("  这台设备最近一次没报到自己的同步服务器：{}", f.py_str())
-            } else {
-                format!("  这台 Mac 最近一次没报成：{}", f.py_str())
-            });
+            lines.push(format!("  这台 Mac 最近一次没报成：{}", f.py_str()));
         }
         if let Some(key_err) = keyshare_error(*kind) {
-            lines.push(if own {
-                format!("  记下的 API key 最近一次没经自己的同步服务器同步成：{key_err}")
-            } else {
-                format!("  记下的 API key 最近一次没同步成：{key_err}")
-            });
+            lines.push(format!("  记下的 API key 最近一次没同步成：{key_err}"));
         }
     }
     out!("{}", lines.join("\n"));
@@ -1365,9 +1311,10 @@ mod tests {
         json::loads(include_str!("../../tests/vectors/src_presence.json")).unwrap().as_dict().unwrap()
     }
 
-    /// 上报进程的一路还是不是同一台：维护者的没有 rev（不能当缺了键）；自己的重新加入以后（rev 变了）从头报
+    /// 上报进程的一路还是不是同一台：维护者的没有 rev（不能当缺了键）；Team 的重新加入以后（rev 变了）从头报
     #[test]
     fn lane_same_hub_and_rejoin() {
+        let team = HubKind::Team(crate::cmd::hub::TeamTag::new(&"0a".repeat(16)).unwrap());
         let hub = |kind, rev: Option<f64>| {
             let cfg = dict! { "url" => "https://192.0.2.10:18443", "fp" => "SHA256:x" };
             if let Some(r) = rev {
@@ -1376,11 +1323,11 @@ mod tests {
             Hub { kind, cfg }
         };
         let m = Lane::new(hub(HubKind::Maintainer, None));
-        assert!(m.same(&hub(HubKind::Maintainer, None)) && !m.same(&hub(HubKind::Own, None)));
-        let o = Lane::new(hub(HubKind::Own, Some(1.5)));
-        assert!(o.same(&hub(HubKind::Own, Some(1.5))), "同一次加入");
-        assert!(!o.same(&hub(HubKind::Own, Some(2.5))) && !o.same(&hub(HubKind::Own, None)), "重新加入了、hub.json 读不出时间");
-        let moved = hub(HubKind::Own, Some(1.5));
+        assert!(m.same(&hub(HubKind::Maintainer, None)) && !m.same(&hub(team, None)));
+        let o = Lane::new(hub(team, Some(1.5)));
+        assert!(o.same(&hub(team, Some(1.5))), "同一次加入");
+        assert!(!o.same(&hub(team, Some(2.5))) && !o.same(&hub(team, None)), "重新加入了、team.json 读不出时间");
+        let moved = hub(team, Some(1.5));
         moved.cfg.set("url", "https://192.0.2.11:18443");
         assert!(!o.same(&moved), "换了地址");
     }

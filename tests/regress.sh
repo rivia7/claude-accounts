@@ -162,13 +162,13 @@ ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的
 ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
 ok "Team：辅助程序建 Team、接上服务器、邀请、加入、取配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
-ok "自己的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd）、打出加入链接（口令、盐不落盘）、更新、换链接、卸载，没装完时 .env 换回原来的，别人的目录不碰；cca hub deploy 经 SSH 部署、加入、更新，有设备加入过的不动，加入了的设备不碰别的服务器，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
+ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
 ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
 ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
-ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，别的走维护者的），数据不经别的服务器；用得了好几台时要说清楚在哪台上配对；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
+ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，维护者映射里的走维护者的，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'python3 "$D/acme.py" 2>/dev/null'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
 ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'python3 "$D/web_relay.py" 2>/dev/null'
@@ -1710,7 +1710,7 @@ out=$(gj state); rc=$?; printf '%s' "$out" > "$GF/state.json"
 ok "_gui state：Claude、Codex 的账号和账号表一样（顺序也一样），端口和 config.json 一样，账号目录名是 cca 算的" '[ $rc -eq 0 ] && jok "[a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]] == list(tab(\"accounts.json\")) and [a[\"key\"] for a in d[\"tools\"][1][\"accounts\"]] == list(tab(\"codex.json\")) and all(a[\"port\"] == cfg[\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][0][\"accounts\"]) and all(a[\"port\"] == cfg[\"codex\"][\"ports\"].get(a[\"key\"]) for a in d[\"tools\"][1][\"accounts\"]) and acct(0, \"alice@example.com\")[\"id\"] == \"${AD##*/}\"" < "$GF/state.json"'
 ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存），槽位 1；Codex 的 dave 在槽位 3；路由器已同步" 'jok "(lambda a, x: a[\"login\"] == \"logged_in\" and a[\"plan\"] == \"Max\" and a[\"slot\"] == 1 and a[\"group\"] == \"CCA-1\" and a[\"usage\"][\"source\"] == \"cache\" and a[\"usage\"][\"five_hour\"][\"utilization\"] >= 0 and isinstance(a[\"usage\"][\"five_hour\"][\"resets_epoch\"], float) and a[\"badge\"][\"label\"] == \"A\" and a[\"app\"] == {\"running\": False, \"pid\": None} and x[\"login\"] == \"logged_in\" and x[\"slot\"] == 3)(acct(0, \"alice@example.com\"), acct(1, \"dave@example.com\")) and d[\"routing\"][\"sync\"] == \"ok\" and d[\"routing\"][\"slots\"][2][\"tool\"] == \"codex\" and d[\"routing\"][\"pool_size\"] % 8 == 0" < "$GF/state.json"'
 ok "_gui state：共享默认关着（config.policy 的 state 是 off，账号表里没有共享的账号，没有收起来的）" 'jok "d[\"config\"][\"policy\"] == {\"configured\": False, \"repo\": None, \"next_check_epoch\": None, \"state\": \"off\", \"accounts\": 0, \"parked\": 0}" < "$GF/state.json"'
-ok "_gui hello 说有自己的同步服务器（hub 是 1）；_gui state：共享关着、没加入时 config.hubs 是空的，账号都不经服务器同步（hub 是 null，没有「设备」）" 'jok "d[\"hub\"] == 1" < "$GF/hello.json" && jok "d[\"config\"][\"hubs\"] == [] and all(a[\"hub\"] is None and not a[\"can\"][\"devices\"] for t in d[\"tools\"] for a in t[\"accounts\"])" < "$GF/state.json"'
+ok "_gui hello 没有 hub 了（3.5.3 去掉了自己的同步服务器），说有 Team（team 是 1）；_gui state：共享关着、不在 Team 里时 config.hubs 是空的，账号都不经服务器同步（hub 是 null，没有「设备」）" 'jok "\"hub\" not in d and d[\"team\"] == 1" < "$GF/hello.json" && jok "d[\"config\"][\"hubs\"] == [] and all(a[\"hub\"] is None and not a[\"can\"][\"devices\"] for t in d[\"tools\"] for a in t[\"accounts\"])" < "$GF/state.json"'
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
 # 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cli/pack.py），第一次用时解到
 # 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
@@ -2170,77 +2170,69 @@ out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm gui2 2>&1); rc=$?; cp "$T/ev.j
 ok "提问会话：删除账号答是：账号和钥匙串里的 key 都删了" '[ $rc -eq 0 ] && tblok "\"gui2\" not in t" && [ ! -e "$KC2/api.example.com" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"removed\""'
 out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm 图一 2>&1); rc=$?
 ok "提问会话：删除官方账号" '[ $rc -eq 0 ] && tblok "not any(\"gui1@\" in k for k in t)"'
-# 配置向导（_onboard，App 首次运行引导：① 维护者的映射 → ② 网络出口 → ③ 添加账号 → ④ 自己的同步服务器；做完记下 onboarded，以后不再弹）。
-# 平时的用例里 CCA_POLICY_DEFAULT 是空的：没有映射那一步（下面单独测）；这里都没加入自己的同步服务器：都有第 4 步（答有、已经加入了的在 11b3c）
+# 配置向导（_onboard，App 首次运行引导：① 加入 Team → ② 网络出口 → ③ 添加账号；做完记下 onboarded，以后不再弹）。
+# 这里都不在 Team 里：都有第 1 步（加入了的在 11b3d）；已经有账号的不问第 3 步
 cp "$H/.cca/config.json" "$T/cfg.onb.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onb.bak"
 out=$(sess '{}' -- cca _onboard --skip 2>&1); rc=$?
 ok "配置向导：--skip（App「以后再说」）只记下 onboarded、不提问" '[ $rc -eq 0 ] && [ -z "$(asks)" ] && gj state | jok "cfg.get(\"onboarded\") is True and d[\"config\"][\"onboarded\"] is True"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 onb_before=$(tsum)
-out=$(sess '{"onboard.hub":[{"v":"n"}]}' -- cca _onboard 2>&1); rc=$?
-ok "配置向导：路由器已配好、已有账号 → 只问有没有自己的同步服务器的加入链接（只有这一步：标题不写第几步，默认没有）；答没有：记下 onboarded、给完成事件、不动账号表" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.hub ] && evq "e.get(\"q\") == \"onboard.hub\" and e[\"title\"] == \"自己的同步服务器\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"n\"" && [ "$(tsum)" = "$onb_before" ] && gj state | jok "cfg.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\"" && [ ! -e "$H/.cca/hub" ]'
+onb_teams() { ls "$H/.cca/teams" 2>/dev/null | grep -cE '^[0-9a-f]{32}$'; }   # 这台设备在几个 Team 里（本机记着的）
+out=$(sess '{"onboard.team":[{"v":"n"}]}' -- cca _onboard 2>&1); rc=$?
+ok "配置向导：路由器已配好、已有账号 → 只问有没有 Team 的邀请链接（只有这一步：标题不写第几步，默认没有）；答没有：记下 onboarded、给完成事件、不动账号表" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.team ] && evq "e.get(\"q\") == \"onboard.team\" and e[\"title\"] == \"加入 Team\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"n\"" && [ "$(tsum)" = "$onb_before" ] && gj state | jok "cfg.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\"" && [ "$(onb_teams)" = 0 ]'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-HL9=$(python3 -I -c 'import base64,sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.link_encode("https://127.0.0.1:9", ["sha256//" + base64.b64encode(bytes(32)).decode()], "5a" * 16, "c3" * 16))' "$D")
-out=$(sess "{\"onboard.hub\":[{\"v\":\"y\"}],\"hub.join\":[{\"v\":\"$HL9\"}]}" -- cca _onboard 2>&1); rc=$?
-ok "配置向导第 4 步答有、加入没成（服务器连不上）：不重问，向导照样做完、记下 onboarded；没加入成的原因留作提醒（fail 事件），最后的结果还是 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.hub hub.join" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_unreachable\"" && [ "$(lastres)" = onboarded ] && [ ! -e "$H/.cca/hub/hub.json" ] && gj state | jok "cfg.get(\"onboarded\") is True" && ! grep -qF "$HL9" "$T/ev.jsonl"'
+ssh-keygen -q -t ed25519 -N '' -C onb -f "$T/onb-root" </dev/null >/dev/null 2>&1
+TL9=$(python3 -I -c 'import base64,sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.invite_encode("https://127.0.0.1:9", ["sha256//" + base64.b64encode(bytes(32)).decode()], open(sys.argv[2]).read(), "7e" * 16, "向导组"))' "$D" "$T/onb-root.pub")   # 照文档拼的邀请：服务器连不上
+out=$(sess "{\"onboard.team\":[{\"v\":\"y\"}],\"team.join\":[{\"v\":\"$TL9\"}]}" -- cca _onboard 2>&1); rc=$?
+ok "配置向导第 1 步答有、加入没成（服务器连不上）：不重问，向导照样做完、记下 onboarded；没加入成的原因留作提醒（fail 事件 team_unreachable），最后的结果还是 onboarded；事件里没有邀请链接" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team team.join" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_unreachable\"" && [ "$(lastres)" = onboarded ] && [ "$(onb_teams)" = 0 ] && gj state | jok "cfg.get(\"onboarded\") is True" && ! grep -qF "$TL9" "$T/ev.jsonl"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-out=$(sess "{\"onboard.hub\":[{\"v\":\"y\"}],\"hub.join\":[{\"v\":\"${HL9%???}\"},{\"v\":\"\"}]}" -- cca _onboard 2>&1); rc=$?
-ok "配置向导第 4 步答有、贴的链接不对：带着原因重问（说留空是先不加入）；留空交上来：先不加入，向导照样做完，没有失败事件" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.hub hub.join hub.join" ] && evq "e.get(\"q\") == \"hub.join\" and e[\"fields\"][0][\"optional\"] is True and \"留空\" in e[\"fields\"][0][\"hint\"]" && evq "e.get(\"seq\") == 3 and e[\"fields\"][0][\"error\"].endswith(\"（先不加入的话留空，点继续）\")" && ! evq "e[\"ev\"] == \"fail\"" && [ "$(lastres)" = onboarded ] && [ ! -e "$H/.cca/hub/hub.json" ] && gj state | jok "cfg.get(\"onboarded\") is True"'
-cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-out=$(sess '{"onboard.share":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy cca _onboard 2>&1); rc=$?
-ok "配置向导：已有账号、答没有维护者共享的账号（账号表没变，不问第 3 步）：前后的页「共几步」一样，最后一页是第 3 步（共 3 步）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.share onboard.hub" ] && evq "e.get(\"q\") == \"onboard.share\" and e[\"title\"].startswith(\"第 1 步（共 3 步）\")" && evq "e.get(\"q\") == \"onboard.hub\" and e[\"title\"].startswith(\"第 3 步（共 3 步）\")"'
-cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-out=$(sess '{"onboard.net":[{"v":"skip"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_GUI_OS=26 cca _onboard 2>&1); rc=$?
-ok "配置向导：没配过路由器、探不到局域网里的路由器、能用内置代理 → 上网方式默认内置代理（自动模式：探不到就内置代理）；选项仍是路由器/内置代理/跳过；选跳过：记下 onboarded、不配置" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.hub" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][0][\"value\"] == \"router\" and e[\"fields\"][0][\"options\"][-1][\"value\"] == \"skip\" and e[\"fields\"][0][\"default\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+out=$(sess "{\"onboard.team\":[{\"v\":\"y\"}],\"team.join\":[{\"v\":\"${TL9%???}\"},{\"v\":\"\"}]}" -- cca _onboard 2>&1); rc=$?
+ok "配置向导第 1 步答有、贴的链接不对：带着原因重问（说留空是先不加入）；留空交上来：先不加入，向导照样做完，没有失败事件" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team team.join team.join" ] && evq "e.get(\"q\") == \"team.join\" and e[\"fields\"][0][\"optional\"] is True and \"留空\" in e[\"fields\"][0][\"hint\"]" && evq "e.get(\"seq\") == 3 and e[\"fields\"][0][\"error\"].endswith(\"（先不加入的话留空，点继续）\")" && ! evq "e[\"ev\"] == \"fail\"" && [ "$(lastres)" = onboarded ] && [ "$(onb_teams)" = 0 ] && gj state | jok "cfg.get(\"onboarded\") is True"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-out=$(sess '{"onboard.net":[{"v":"skip"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_GUI_OS=15 cca _onboard 2>&1); rc=$?
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}]}' -- env CCA_GUI_OS=26 cca _onboard 2>&1); rc=$?
+ok "配置向导：没配过路由器、探不到局域网里的路由器、能用内置代理 → 上网方式默认内置代理（自动模式：探不到就内置代理）；选项仍是路由器/内置代理/跳过；选跳过：记下 onboarded、不配置" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"kind\"] == \"choice\" and e[\"fields\"][0][\"options\"][0][\"value\"] == \"router\" and e[\"fields\"][0][\"options\"][-1][\"value\"] == \"skip\" and e[\"fields\"][0][\"default\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+cp "$T/cfg.onb.bak" "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}]}' -- env CCA_GUI_OS=15 cca _onboard 2>&1); rc=$?
 ok "配置向导：macOS 26 以下也能用内置代理（内核由 cca 在后台无头运行）→ 探不到路由器时默认也选内置代理" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"builtin\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 echo "192.168.9.1:9090" > "$T/clash_router"   # 假局域网：192.168.9.1:9090 上有个 Clash 控制口
-out=$(sess '{"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- env CCA_GATEWAY=192.168.9.1 cca _onboard 2>&1); rc=$?
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- env CCA_GATEWAY=192.168.9.1 cca _onboard 2>&1); rc=$?
 rm -f "$T/clash_router"
-ok "配置向导：自动探到局域网里装了 Clash 的路由器 → 上网方式默认「路由器」、页说明带探到的地址，选路由器后配置表单里地址已预填" '[ "$(asks)" = "onboard.net router.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"router\" and \"192.168.9.1\" in e.get(\"message\", \"\")" && evq "e.get(\"q\") == \"router.basic\" and e[\"fields\"][0][\"value\"] == \"192.168.9.1\""'
+ok "配置向导：自动探到局域网里装了 Clash 的路由器 → 上网方式默认「路由器」、页说明带探到的地址，选路由器后配置表单里地址已预填" '[ "$(asks)" = "onboard.team onboard.net router.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"default\"] == \"router\" and \"192.168.9.1\" in e.get(\"message\", \"\")" && evq "e.get(\"q\") == \"router.basic\" and e[\"fields\"][0][\"value\"] == \"192.168.9.1\""'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-out=$(sess '{"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- cca _onboard 2>&1); rc=$?
-ok "配置向导：选「路由器」→ 接着走配置路由器表单（router.basic）；在那页取消就不记 onboarded" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net router.basic" ] && gj state | jok "not cfg.get(\"onboarded\")"'
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"router"}]}' --eof-at router.basic -- cca _onboard 2>&1); rc=$?
+ok "配置向导：选「路由器」→ 接着走配置路由器表单（router.basic）；在那页取消就不记 onboarded" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net router.basic" ] && gj state | jok "not cfg.get(\"onboarded\")"'
 cp "$T/cfg.onb.bak" "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"
-out=$(sess '{"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config.json"
-ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
+ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
 # 没有路由器笔记本：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没有可选节点 → 加账号时粘贴自定义代理（下面）
 cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
 b2_had_policy=0; [ -d "$H/.cca/policy" ] && { b2_had_policy=1; rm -rf "$T/policy.b2"; cp -R "$H/.cca/policy" "$T/policy.b2"; }
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"   # 端口池清空(Claude+Codex)→ LOCAL_SLOTS=0,core_setup 早返回不下载/不起内核
-out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
-ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
+ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
 # 没有路由器、没有可选节点、没有映射：加账号不要求先配置路由器（以前会接着走配置路由器的表单），选节点那步可以粘贴自定义代理
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); c.pop("policy", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
 rm -rf "$H/.cca/policy"
-out=$(sess '{"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
-ok "没有路由器、没有可选节点、没有映射：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
-# 第 1 步：维护者共享的账号（有默认仓库时才有这一步）：先问有没有（默认没有，答没有就不生成 deploy key、不拉）
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
+ok "没有路由器、没有可选节点、没有映射：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+# 三步都问（还没有账号、没配过路由器、不在 Team 里）：各页标题写第几步（共 3 步）。知道维护者的默认仓库也不再问有没有维护者共享的账号
+# （那些账号也经 Team 的邀请给）：不生成 deploy key、不拉
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("policy", None); c.pop("policy_declined", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
-rm -rf "$H/.cca/policy"; touch "$T/policy_denied"; : > git.log; rm -f "$T/clipboard"
-out=$(sess '{"onboard.share":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
-ok "配置向导第 1 步（有维护者的默认仓库）：先问有没有维护者共享给你的账号（默认没有）；答没有：不生成 deploy key、不拉、不记仓库，接着第 2 步（共 4 步），最后是第 4 步自己的同步服务器" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.share onboard.net onboard.add onboard.hub" ] && evq "e.get(\"q\") == \"onboard.share\" and e[\"title\"].startswith(\"第 1 步（共 4 步）\") and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"n\"" && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 2 步（共 4 步）\")" && evq "e.get(\"q\") == \"onboard.hub\" and e[\"title\"] == \"第 4 步（共 4 步）：自己的同步服务器\"" && cfgok "not c.get(\"policy\") and c.get(\"onboarded\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log'
-out=$(sess '{"onboard.share":[{"v":"y"}],"onboard.policy":[{"next":"skip"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
-ok "答有：同一步接着给维护者运行的那一行（只显示，已复制到剪贴板）、正在等的说明，和「先跳过 / 不打开共享」；标题还是第 1 步（共 4 步）" '[ "$(asks)" = "onboard.share onboard.policy onboard.net onboard.add onboard.hub" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"].startswith(\"第 1 步（共 4 步）\") and e[\"fields\"][0][\"kind\"] == \"code\" and e[\"fields\"][0][\"value\"].startswith(\"./policy.sh key add \") and \"正在等维护者加上\" in e[\"fields\"][0][\"hint\"] and e[\"fields\"][1][\"kind\"] == \"choice\" and e[\"fields\"][1][\"default\"] == \"skip\" and [o[\"value\"] for o in e[\"fields\"][1][\"options\"]] == [\"skip\", \"decline\"] and \"已复制到剪贴板\" in e[\"message\"]" && grep -q "^\./policy\.sh key add " "$T/clipboard"'
-ok "配置向导第 1 步先跳过：记下仓库（共享开着）、留着 deploy key（App 之后自动拉），接着问网络出口（第 2 步）、加账号（第 3 步）、自己的同步服务器（第 4 步），做完记下 onboarded" '[ $rc -eq 0 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 2 步（共 4 步）\")" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"].startswith(\"第 3 步（共 4 步）\") and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "c.get(\"policy\") == \"example/cca-policy\" and c.get(\"onboarded\") is True" && [ -f "$H/.cca/policy/id_ed25519" ] && grep -q "^GIT clone" git.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
-out=$(sess '{"onboard.policy":[{"next":"decline"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
-ok "共享开着、还没拉到：不再问有没有，直接是那一页；选「不打开共享」：去掉仓库、删掉 deploy key（还是同一把：没加上），接着到第 2 步" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy onboard.net onboard.add onboard.hub" ] && cfgok "not c.get(\"policy\") and c.get(\"policy_declined\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && [ "$(grep -c "^GIT clone" git.log)" -ge 2 ]'
-out=$(sess '{"onboard.share":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT= cca _onboard 2>&1); rc=$?
-ok "不知道维护者的仓库（没有默认仓库、也没关掉过共享）：没有第 1 步（不问也不拉），网络出口是第 1 步（共 3 步）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.add onboard.hub" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"].startswith(\"第 1 步（共 3 步）\")" && [ ! -e "$H/.cca/policy/id_ed25519" ]'
-rm -f "$T/policy_denied"
+rm -rf "$H/.cca/policy"; : > git.log
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
+ok "配置向导：还没有账号、没配过路由器、不在 Team 里 → 三步（加入 Team、网络出口、添加账号：第 1～3 步（共 3 步））；有维护者的默认仓库也不问维护者共享的账号：不生成 deploy key、不拉；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.team\" and e[\"title\"] == \"第 1 步（共 3 步）：加入 Team\"" && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 2 步（共 3 步）：网络出口\"" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"] == \"第 3 步（共 3 步）：添加账号\" and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "not c.get(\"policy\") and c.get(\"onboarded\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
 rm -rf "$H/.cca/policy"; [ "$b2_had_policy" = 1 ] && cp -R "$T/policy.b2" "$H/.cca/policy"
 unlisten 7901; n=$(reloads)
@@ -2399,7 +2391,7 @@ if sect 11; then
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
 lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
-	# 查发出去的 bash：cca、install.sh、release.sh、policy.sh、自己的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
+	# 查发出去的 bash：cca、install.sh、release.sh、policy.sh、Team 的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
 	# 还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
 	python3 -I - "$D/.." "$CCA" install.sh release.sh policy.sh server/hub-install.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
 import glob, os, re, sys
@@ -2700,8 +2692,8 @@ out=$(run $P CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
 ok "cca policy on（维护者的默认仓库）：生成 deploy key，显示维护者要运行的那一行（公钥和别名写在里面，复制到剪贴板）；还没加上时说明之后每天自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "    ./policy.sh key add $(kl)" && [ "$(cat "$T/clipboard")" = "./policy.sh key add $(kl)" ] && printf "%s" "$out" | grep -q "这一行已复制到剪贴板" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ] && [ ! -f "$H/.cca/policy/policy.json" ]'
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
 ok "共享开着、还没拉到映射：照常启动，不提问" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "policy.sh key add"'
-# 配置向导（App）第 1 步：等维护者时这一页不用点，每隔几秒自动拉，拉到映射自己进第 2 步；没有路由器时导入映射里账号的参考节点，映射里的账号
-# 自动加进来，第 3 步只问还要不要再加。这一段结束时配置、账号表、映射仓库都还原
+# App 的「共享与同步」页打开共享（提问会话里的 cca policy on）：等维护者时这一页不用点，每隔几秒自动拉，拉到映射就打开了；没有路由器时导入
+# 映射里账号的参考节点，映射里的账号自动加进来。配置向导不再有这一页（维护者共享的账号也经 Team 的邀请给）。这一段结束时配置、账号表、映射仓库都还原
 cp "$H/.cca/config.json" "$T/cfg.ow.bak"; cp "$H/.cca/accounts.json" "$T/tbl.ow.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.ow.bak"
 cp "$PR/policy.json" "$T/pr.ow"; cp "$PR/policy.json.sig" "$T/pr.ow.sig"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); c.pop("local", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
@@ -2709,15 +2701,15 @@ printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}
 pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}}'
 python3 -c 'import json,sys; json.dump({"version": 1, "group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (91 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-S", "US-X"])]}, open(sys.argv[1], "w"))' "$PR/nodes.json"; nodes_pub
 printf 2 > "$T/policy_denied_n"; : > git.log
-out=$(sess '{"onboard.policy":[null,null,null],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env $P CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
-ok "配置向导第 1 步：等维护者时这一页不用点，每隔几秒自动拉，维护者加上公钥后拉到映射、自己进第 2 步（页上说拉到了）" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy onboard.net onboard.add onboard.hub" ] && [ "$(grep -c "^GIT clone" git.log)" = 3 ] && evq "e.get(\"q\") == \"onboard.net\" and \"拉到了维护者的映射（Claude 1 个账号\" in e[\"message\"]" && [ -f "$H/.cca/policy/policy.json" ]'
-ok "没有路由器：第 2 步先跳过也导入映射里账号的参考节点（别的参考节点不导入），映射里的账号自动加进来；第 3 步只问还要不要再加（默认不加），说明加了谁" 'cfgok "c[\"nodes\"] == [\"US-S\"] and c.get(\"onboarded\") is True" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}" && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"default\"] == \"n\" and \"sam\" in e.get(\"message\", \"\")"'
-# 映射已经配置好（比如一键安装时带了 CCA_POLICY_REPO，维护者也加好了公钥）：拉一下就拉到了，没有映射那一页，也不算一步
+out=$(sess '{"onboard.policy":[null,null,null]}' -- env $P CCA_POLICY_POLL=1 cca policy on 2>&1); rc=$?
+ok "App 里打开共享（提问会话、维护者还没加上公钥）：给维护者的那一页不用点，每隔几秒自动拉，维护者加上公钥后拉到映射（result 是 policy_on）" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.policy ] && [ "$(grep -c "^GIT clone" git.log)" = 3 ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"] == \"打开维护者的共享\" and e[\"fields\"][0][\"value\"].startswith(\"./policy.sh key add \")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_on\"" && [ -f "$H/.cca/policy/policy.json" ]'
+ok "没有路由器：拉到以后导入映射里账号的参考节点（别的参考节点不导入），映射里的账号自动加进来" 'cfgok "c[\"nodes\"] == [\"US-S\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
+# 共享开着、拉一下就拉到了（比如一键安装时带了 CCA_POLICY_REPO，维护者也加好了公钥）：配置向导先拉一次，映射里的账号加进来；第 1 步照旧问 Team
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; c.pop("node_ids", None); c.pop("onboarded", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; : > git.log
-out=$(sess '{"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}],"onboard.hub":[{"v":"n"}]}' -- env $P CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
-ok "配置向导：映射已经配置好、拉一下就拉到了 → 不问映射那一步，网络出口是第 1 步（共 3 步）、页上说拉到了映射" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.net onboard.add onboard.hub" ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 1 步（共 3 步）：网络出口\" and \"拉到了维护者的映射\" in e[\"message\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
-# 第 1 步先跳过的：维护者加好后靠 App 的定时拉取（cca policy pull --json，终端里的 cca policy pull 一样）补上节点和账号
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env $P CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
+ok "配置向导：映射已经配置好、拉一下就拉到了 → 第 2 步网络出口的页上说拉到了映射，映射里的账号自动加进来；第 3 步只问还要不要再加（默认不加），说明加了谁" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add" ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 2 步（共 3 步）：网络出口\" and \"拉到了维护者的映射\" in e[\"message\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}" && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"default\"] == \"n\" and \"sam\" in e.get(\"message\", \"\")" && cfgok "c.get(\"onboarded\") is True"'
+# 共享开着、这次没等到维护者的：维护者加好后靠 App 的定时拉取（cca policy pull --json，终端里的 cca policy pull 一样）补上节点和账号
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; c.pop("node_ids", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"
 out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>"$T/pull.err" </dev/null); rc=$?
@@ -3614,212 +3606,11 @@ rm -f "$H/.cca/remote/peers.json"; rmdir "$H/.cca/remote" 2>/dev/null
 runcmd "$(ans y)" "$P ./policy.sh key rm dan-air"
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
 ok "维护者撤销了 dan-air：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
-# 自己的同步服务器（docs/dev/hub.md）：另起一台真的 server/cca-presence.py --mode own（另一张证书，不用发布密钥），这台 Mac 经 cca hub join
-# 加入：维护者共享以外的官方账号（这里加一个 own@example.com）经它同步，alice 照旧只走维护者的。dan-air 照 server/README.md 的格式自己加入
-# 维护者的服务器按设备限流（每秒 0.5 个、最多攒 30 个）：上面配对的那些把这台 Mac 的配额用得差不多了，下面还要经它同步一轮，
+# 维护者的服务器按设备限流（每秒 0.5 个、最多攒 30 个）：上面配对的那些把这台 Mac 的配额用得差不多了，后面还要经它同步：
 # 先重启它（状态文件留着），配额从头算
 kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; srv_start "$SVPORT"
-HV="$T/hub-srv"; mkdir -p "$HV"
-openssl ecparam -name prime256v1 -genkey -noout -out "$HV/key.pem" 2>/dev/null
-openssl req -new -x509 -key "$HV/key.pem" -subj /CN=cca-hub -days 2 -out "$HV/cert.pem" 2>/dev/null
-HADMIT=$(printf '5a%.0s' $(seq 1 16)); HSALT=$(printf 'c3%.0s' $(seq 1 16))
-python3 -I "$D/../server/cca-presence.py" --mode own --admit-hash "$(printf '%s' "$HADMIT" | shasum -a 256 | cut -d' ' -f1)" --listen 127.0.0.1:0 \
-	--port-file "$HV/port" --cert "$HV/cert.pem" --key "$HV/key.pem" --state "$HV/state.json" --ttl "$STTL" >>"$HV/log" 2>&1 & HVP=$!
-for i in $(seq 1 50); do [ -s "$HV/port" ] && break; sleep 0.1; done; HVPORT=$(cat "$HV/port")
-HPIN="sha256//$(openssl x509 -in "$HV/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"
-hlink() { python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(sw.link_encode("https://127.0.0.1:%s" % sys.argv[2], [sys.argv[3]], sys.argv[4], sys.argv[5]))' "$D" "$HVPORT" "$HPIN" "${1:-$HADMIT}" "$HSALT"; }   # hlink [入伙口令]：照文档拼的加入链接
-HLINK=$(hlink); HCHUNK=${HLINK:$((${#HLINK} - 34)):24}   # 链接末尾盐的那一截（base64 的）：查链接有没有漏出去时查它和口令本身
-hdec() { python3 -I -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import spec_wire as sw; print(json.dumps(sw.link_decode(sys.argv[2]), sort_keys=True))' "$D" "$1" 2>/dev/null; }   # 照文档解开的加入链接
-dhub() {   # dhub join | members：dan-air 照 server/README.md 的格式加入 / 列设备（打印 状态码 和 error）
-	python3 -B - "$D" "$T/dan" "$HVPORT" "$HADMIT" "$HSALT" "$1" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
-key, port, admit, salt, op = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
-extra = {}
-if op == 'join':
-    with open(key + '.pub') as f:
-        extra = {'pub': ' '.join(f.read().split()[:2]), 'name': 'dan-air', 'admit': admit, 'check': sw.hub_check(salt)}
-status, j = sw.post(key, port, op, extra)
-print(status, j.get('error') or '')
-PY
-}
-edit_table 'any(k == "own@example.com" or k.endswith("(own@example.com)") for k in j) or j.__setitem__("own@example.com", "US-A")'   # 11b2 的合并那里加过就不再加
-OWNQ='next(a for a in d["tools"][0]["accounts"] if a["key"] == "own@example.com" or a["key"].endswith("(own@example.com)"))'   # jok 里：这个账号
-out=$(run cca hub 2>&1); rc=$?
-ok "cca hub：还没加入时说怎么加入" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还没加入自己的同步服务器（有加入链接时运行 cca hub join）"'
-out=$(runev cca devices own@example.com --json 2>&1); rc=$?
-ok "还没加入：不在维护者映射里的官方账号，cca devices 说要经自己的同步服务器（fail 事件 devices_off）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"不在维护者的映射里，要经自己的同步服务器统计：还没加入自己的同步服务器\" in e[\"message\"]"'
-out=$(runev cca hub leave 2>&1); rc=$?
-ok "还没加入：cca hub leave 说没加入（fail 事件 hub_not_joined）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_not_joined\""'
-out=$(runev CCA_TTY="$(ans '')" cca hub join 2>&1); rc=$?
-ok "cca hub join：没输入加入链接：fail 事件 hub_link" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_link\""'
-out=$(runev CCA_TTY="$(ans "${HLINK%???}")" cca hub join 2>&1); rc=$?
-ok "cca hub join：链接少了一截（校验对不上）：fail 事件 hub_link，不联网" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_link\"" && [ ! -e "$H/.cca/hub/hub.json" ]'
-out=$(runev CCA_TTY="$(ans "$(hlink "$(printf '9%.0s' $(seq 1 32))")")" cca hub join 2>&1); rc=$?
-ok "cca hub join：入伙口令不对：服务器不认（fail 事件 hub_denied，说向已经加入的设备要），什么都不记下" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_denied\" and \"向已经加入的设备要\" in e[\"message\"]" && [ ! -e "$H/.cca/hub/hub.json" ]'
-: > "$T/curl.argv"; : > "$T/env.log"
-out=$(run CCA_TTY="$(ans "$HLINK")" cca hub join --name 书房的Mac 2>&1); rc=$?
-ok "cca hub join：问加入链接（输入不显示），加入了：说服务器、这台设备叫什么；加入信息、密钥只给自己读，有了设备标识；链接、口令不在输出里，也不在子进程的命令行（curl、env、ssh）里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已加入 127.0.0.1:$HVPORT 上自己的同步服务器：这台设备叫 书房的Mac，服务器上现在有 1 台设备" && [ "$(stat -f %Lp "$H/.cca/hub/hub.json")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/hub/id_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/hub")" = 700 ] && cfgok "len(c[\"device_id\"]) == 16" && ! printf "%s" "$out" | grep -qF -e "$HCHUNK" -e "$HADMIT" && grep -q "127.0.0.1:$HVPORT" "$T/curl.argv" && ! grep -qsF -e "$HCHUNK" -e "$HADMIT" "$T/curl.argv" "$T/env.log" "$T/ssh.log"'
-out=$(gj state); printf '%s' "$out" > "$T/guifx3/state_hub.json"
-ok "_gui state：config.hubs 是维护者的和自己的两台；alice 走维护者的，own@example.com 走自己的（有「设备」一节）；第三方 API 账号哪都不走" 'printf "%s" "$out" | jok "[h[\"kind\"] for h in d[\"config\"][\"hubs\"]] == [\"maintainer\", \"own\"] and (lambda h: h[\"host\"] == \"127.0.0.1:$HVPORT\" and h[\"name\"] == \"书房的Mac\" and h[\"members\"] == 1 and h[\"accounts\"] == sum(a[\"hub\"] == \"own\" for t in d[\"tools\"] for a in t[\"accounts\"]) and h[\"can_invite\"] is True and h[\"pinned\"] is True and h[\"state\"] in (\"pending\", \"ok\"))(d[\"config\"][\"hubs\"][1]) and acct(0, \"alice@example.com\")[\"hub\"] == \"maintainer\" and $OWNQ[\"hub\"] == \"own\" and $OWNQ[\"can\"][\"devices\"] is True and all(a[\"hub\"] is None for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
-HACC=$(printf '%s' "$out" | python3 -c 'import json,sys; print(sum(a["hub"] == "own" for t in json.load(sys.stdin)["tools"] for a in t["accounts"]))')
-out=$(run cca hub status --json 2>/dev/null); printf '%s' "$out" > "$T/guifx3/hub_status.json"
-out2=$(run cca hub 2>&1)
-ok "cca hub status --json（不联网）：加入了、用得了，经它同步的账号数和 state 里的一样；cca hub 说服务器、这台设备叫什么、几个账号" '[ "$HACC" -ge 1 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"hub_status\" and d[\"joined\"] is True and d[\"reason\"] is None and d[\"hub\"][\"kind\"] == \"own\" and d[\"hub\"][\"accounts\"] == $HACC" && printf "%s" "$out2" | grep -q "自己的同步服务器：127.0.0.1:${HVPORT}（这台设备叫 书房的Mac，服务器上 1 台设备）" && printf "%s" "$out2" | grep -q "经它同步的账号：${HACC} 个"'
-v=$(dhub join)
-out=$(run cca hub devices --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/hub_devices.json"
-DHFP=$(printf '%s' "$out" | python3 -c 'import json,sys; print(next(x["id"] for x in json.load(sys.stdin)["devices"] if x["name"] == "dan-air"))' 2>/dev/null)
-ok "dan-air 照文档加入了；cca hub devices --json：这台在前，两台设备（id 是设备指纹）" '[ "$v" = "200 " ] && [ $rc -eq 0 ] && printf "%s" "$out" | jok "[(x[\"name\"], x[\"me\"]) for x in d[\"devices\"]] == [(\"书房的Mac\", True), (\"dan-air\", False)]" && [ -n "$DHFP" ]'
-HINV=$(run cca hub invite 2>/dev/null)
-ok "cca hub invite：给出加入时的那一份（照文档解开一样）；在 Claude Code 里不给（会进对话记录）" '[ -n "$(hdec "$HLINK")" ] && [ "$(hdec "$HINV")" = "$(hdec "$HLINK")" ] && ! run CLAUDECODE=1 cca hub invite >/dev/null 2>&1 && run CLAUDECODE=1 cca hub invite 2>&1 | grep -q "在 Claude Code 里不显示加入链接"'
-out=$(runev cca hub remove dan-air 2>&1); rc=$?
-ok "界面 App 移除一台设备：先不移除，发一条同意事件（范围是它的设备指纹，默认不同意，说明里说它的密钥作废）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_remove\" and e[\"scope\"] == \"$DHFP\" and e[\"default\"] == \"no\" and \"现在的密钥作废\" in e[\"detail\"] and \"加入链接跟着换一个\" in e[\"detail\"]" && [ "$(dhub members)" = "200 " ]'
-out=$(runev CCA_GRANT="hub_remove:$DHFP" cca hub remove "$DHFP" 2>&1); rc=$?
-HINV2=$(run cca hub invite 2>/dev/null)
-HUPS=$(hdec "$HLINK" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["u"], d["p"], d["s"])' 2>/dev/null)   # 加入链接里的地址、指纹、盐
-HUPS2=$(hdec "$HINV2" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["u"], d["p"], d["s"])' 2>/dev/null)
-ok "同意后（按设备指纹）移除：result 事件 hub_removed，没有提醒；dan-air 再来服务器不认它（unknown_device）；加入链接换了一个（地址、指纹、盐不变），dan-air 拿原来的加入不了" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_removed\" and \"dan-air\" in e[\"message\"]" && ! evq "e[\"ev\"] == \"fail\"" && [ "$(dhub members)" = "403 unknown_device" ] && run cca hub devices --json 2>/dev/null | jok "[x[\"name\"] for x in d[\"devices\"]] == [\"书房的Mac\"]" && [ -n "$HINV2" ] && [ "$(hdec "$HINV2")" != "$(hdec "$HLINK")" ] && [ -n "$HUPS" ] && [ "$HUPS2" = "$HUPS" ] && [ "$(dhub join)" = "403 denied" ]'
-out=$(runev cca hub invite --new 2>&1); rc=$?
-ok "界面 App 换加入链接（cca hub invite --new）：先不换，发一条同意事件（hub_relink，范围 all，默认不同意，说明里说旧的作废）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_relink\" and e[\"scope\"] == \"all\" and e[\"default\"] == \"no\" and \"不能再用来加入\" in e[\"detail\"]" && [ "$(run cca hub invite 2>/dev/null)" = "$HINV2" ]'
-out=$(runev CCA_GRANT=hub_relink:all cca hub invite --new 2>/dev/null); rc=$?
-ok "同意后换了：stdout 一行是新的加入链接（事件里没有它）；cca hub invite 给的也是它" '[ $rc -eq 0 ] && [ -n "$out" ] && [ "$out" != "$HINV2" ] && [ "$(run cca hub invite 2>/dev/null)" = "$out" ] && [ "$(hdec "$out")" != "" ] && ! grep -qF "$out" "$T/ev.jsonl"'
-HLINK=$out; HCHUNK=${HLINK:$((${#HLINK} - 34)):24}
-HADMIT=$(hdec "$HLINK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["a"])')   # 下面加入、查有没有漏出去都照现在的这一份
-out=$(runev cca hub remove nobody 2>&1); rc=$?
-ok "没有这台设备：fail 事件 hub_no_device" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_no_device\""'
-out=$(run cca devices own@example.com --json 2>/dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/devices_hub.json"
-ok "cca devices own@example.com --json：问的是自己的同步服务器（账号的 hub 是 own，hubs 里有它）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"accounts\"][0][\"hub\"] == \"own\" and \"own\" in [h[\"kind\"] for h in d[\"hubs\"]] and d[\"me\"] == \"书房的Mac\""'
-out=$(run cca cost sync --now --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/cost_sync_hubs.json"
-ok "cost sync --now --json：两台服务器各同步一轮（sync.hubs 是维护者的、自己的）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "[h[\"kind\"] for h in d[\"sync\"][\"hubs\"]] == [\"maintainer\", \"own\"] and d[\"sync\"][\"hubs\"][0][\"state\"] == \"ok\""'
-out=$(runev cca hub leave 2>&1); rc=$?
-ok "界面 App 退出：先发同意事件（范围 all，默认不同意，说明里说同步来的折合金额会删、记下的 API key 留着），不退出" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_leave\" and e[\"scope\"] == \"all\" and e[\"default\"] == \"no\" and \"记下的 API key 留在这台设备上\" in e[\"detail\"]" && [ -e "$H/.cca/hub/hub.json" ]'
-printf '{"v": 1, "acc": {}}' > "$H/.cca/cost/own.remote.json"   # 经它同步来的（这里没有经它同步的会话，放一份看删不删）
-out=$(runev CCA_GRANT=hub_leave:all cca hub leave 2>&1); rc=$?
-ok "同意后退出：result 事件 hub_left；服务器上移除了这台设备，加入信息、密钥、经它同步来的都删掉；state 里没有它了" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_left\"" && [ ! -e "$H/.cca/hub" ] && [ ! -e "$H/.cca/cost/own.remote.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))[\"machines\"] == {} else 1)" "$HV/state.json" && gj state | jok "[h[\"kind\"] for h in d[\"config\"][\"hubs\"]] == [\"maintainer\"] and $OWNQ[\"hub\"] is None"'
-# 配置向导第 4 步（自己的同步服务器）：答有就接着贴加入链接（hub.join），加入了，最后的结果还是 onboarded；已经加入了的不问。
-# 这一节开着维护者的共享、拉得到映射（第 1 步不问：拉一次就拉到了），路由器配好了、映射里没有新账号（第 2、3 步也不问）：只有这一步。
-# 向导记下 onboarded：跑完 config.json 原样放回去
-cp -p "$H/.cca/config.json" "$T/cfg.onbhub.bak"
-ONBA='"onboard.policy":[{"next":"skip"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]'   # 别的几步万一问到了：先跳过、答没有（照样做完，题号对不上）
-out=$(sess "{$ONBA,\"onboard.hub\":[{\"v\":\"y\"}],\"hub.join\":[{\"v\":\"$HLINK\"}]}" -- cca _onboard 2>&1); rc=$?
-ok "配置向导第 4 步答有加入链接：接着是贴加入链接那一页（hub.join），加入了；最后的结果还是 onboarded（加入的 hub_joined 被它盖掉）；事件里没有加入链接" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.hub hub.join" ] && evq "e.get(\"q\") == \"onboard.hub\" and e[\"title\"] == \"自己的同步服务器\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_joined\"" && [ "$(lastres)" = onboarded ] && [ -e "$H/.cca/hub/hub.json" ] && ! grep -qF -e "$HCHUNK" -e "$HADMIT" "$T/ev.jsonl"'
-out=$(sess "{$ONBA}" -- cca _onboard 2>&1); rc=$?
-ok "已经加入了自己的同步服务器：向导不问第 4 步" '[ $rc -eq 0 ] && ! asks | grep -q onboard.hub && [ "$(lastres)" = onboarded ]'
-cp -p "$T/cfg.onbhub.bak" "$H/.cca/config.json"
-run CCA_GRANT=hub_leave:all cca hub leave >/dev/null 2>&1 </dev/null
-out=$(sess "{\"hub.join\":[{\"v\":\" \"},{\"v\":\"${HLINK%???}\"},{\"v\":\"$HLINK\"}]}" -- cca hub join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_hub_join.jsonl"
-ok "界面 App 里加入（提问会话）：一个密文输入框，贴加入链接；没输入、链接不对（少了一截）时带着原因重问，不停下；result 事件 hub_joined；事件文件里没有加入链接" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.join hub.join hub.join" ] && evq "e.get(\"seq\") == 2 and e[\"fields\"][0][\"error\"] == \"没有输入加入链接\"" && evq "e.get(\"seq\") == 3 and e[\"fields\"][0][\"error\"] and not e[\"fields\"][0][\"value\"]" && ! evq "e[\"ev\"] == \"fail\"" && evq "e.get(\"q\") == \"hub.join\" and [f[\"kind\"] for f in e[\"fields\"]] == [\"secret\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_joined\"" && ! grep -qF -e "$HCHUNK" -e "$HADMIT" "$T/ev.jsonl" && [ -e "$H/.cca/hub/hub.json" ] && ! grep -qsF -e "$HCHUNK" -e "$HADMIT" "$T/curl.argv" "$T/env.log" "$T/ssh.log"'
-cp -p "$H/.cca/config.json" "$T/cfg.hoff.bak"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["presence"]=False; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-out=$(sess "{\"hub.join\":[{\"v\":\"$HLINK\"}]}" -- cca hub join 2>&1); rc=$?
-cp -p "$T/cfg.hoff.bak" "$H/.cca/config.json"
-ok "这台设备关掉了设备统计（\"presence\": false）时重新加入：照样加入，结果之前有提醒 hub_off（现在不经它同步，说怎么打开），退出码 0" '[ $rc -eq 0 ] && evbefore fail:hub_off result:hub_joined && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_off\" and \"现在不经它同步\" in e[\"message\"]"'
-rm -rf "$H/.cca/hub" "$H/.cca/presence"/own.* "$H/.cca/cost"/own.*
-kill "$HVP" 2>/dev/null; wait "$HVP" 2>/dev/null; HVP=""
-# 部署到托管平台（docs/dev/hub.md「托管平台」）：cca hub hosted 生成部署文件、记下还没用上的口令；平台那一头是另起的一台
-# server/cca-presence.py，证书是测试用的证书机构签的（设备的 curl 经 CURL_CA_BUNDLE 认它：照系统的证书机构验，链接里没有指纹）
-out=$(sess '{"hub.platform":[{"v":"sealos"}],"hub.hosted":[{"url":"https://127.0.0.1:1"}]}' -- cca hub hosted 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_hub_hosted_sealos.jsonl"
-HHP="$H/.cca/hub-hosted.json"
-HSRVSUM=$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d' ' -f1)
-ok "界面 App 里部署到托管平台：先选平台（hub.platform），Sealos 那一页有表单里填的、配置文件的内容（就是服务端程序）、公网地址；还连不上时带着原因重问，取消了口令照样记着（只给自己读）" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.platform hub.hosted hub.hosted" ] && evq "e.get(\"q\") == \"hub.hosted\" and [f[\"id\"] for f in e[\"fields\"]] == [\"steps\", \"server\", \"url\"] and [f[\"kind\"] for f in e[\"fields\"]] == [\"code\", \"code\", \"text\"]" && evq "e.get(\"q\") == \"hub.hosted\" and \"def main():\" in e[\"fields\"][1][\"value\"] and len(e[\"fields\"][1][\"value\"]) > 50000 and \"等一两分钟\" in e[\"fields\"][2][\"error\"]" && [ "$(stat -f %Lp "$HHP")" = 600 ] && [ "$(shasum -a 256 < "$H/cca-hub-sealos/cca-presence.py" | cut -d" " -f1)" = "$HSRVSUM" ] && [ ! -e "$H/.cca/hub" ]'
-HHADMIT=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["admit"])' "$HHP")
-HHSALT=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["salt"])' "$HHP")
-out=$(run CCA_TTY="$(ans '')" cca hub hosted railway 2>&1); rc=$?
-HHASH=$(sed -n 's/^ENV CCA_HUB_HOSTED=1 CCA_HUB_ADMIT_HASH=\([0-9a-f]*\)$/\1/p' "$H/cca-hub-railway/Dockerfile")
-ok "终端里 cca hub hosted railway：部署文件在 ~/cca-hub-railway（Dockerfile 里只有口令的哈希，还是那一份口令），打出要运行的命令；不填地址是以后再加入" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "部署文件在 $H/cca-hub-railway" && printf "%s" "$out" | grep -q "railway domain --port 8080" && printf "%s" "$out" | grep -q "以后再加入" && [ "$HHASH" = "$(printf "%s" "$HHADMIT" | shasum -a 256 | cut -d" " -f1)" ] && ! grep -rqsF -e "$HHADMIT" -e "$HHSALT" "$H/cca-hub-railway" "$H/cca-hub-sealos"'
-HC="$T/hosted-srv"; mkdir -p "$HC"
-openssl ecparam -name prime256v1 -genkey -noout -out "$HC/ca.key" 2>/dev/null
-openssl req -new -x509 -key "$HC/ca.key" -subj /CN=cca-test-ca -days 2 -out "$HC/ca.pem" 2>/dev/null
-openssl ecparam -name prime256v1 -genkey -noout -out "$HC/key.pem" 2>/dev/null
-openssl req -new -key "$HC/key.pem" -subj /CN=127.0.0.1 -out "$HC/csr.pem" 2>/dev/null
-printf 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' > "$HC/ext.cnf"
-openssl x509 -req -in "$HC/csr.pem" -CA "$HC/ca.pem" -CAkey "$HC/ca.key" -CAcreateserial -days 2 -extfile "$HC/ext.cnf" -out "$HC/cert.pem" 2>/dev/null
-python3 -I "$D/../server/cca-presence.py" --mode own --admit-hash "$HHASH" --listen 127.0.0.1:0 --port-file "$HC/port" --cert "$HC/cert.pem" \
-	--key "$HC/key.pem" --state "$HC/state.json" --ttl "$STTL" >>"$HC/log" 2>&1 & HCP=$!
-for i in $(seq 1 50); do [ -s "$HC/port" ] && break; sleep 0.1; done; HCPORT=$(cat "$HC/port")
-: > "$T/curl.argv"; : > "$T/env.log"
-out=$(sess "{\"hub.hosted\":[{\"url\":\"cca-hub1.eyJ1IjoiaHR0cHM6Ly9leGFtcGxlLmNvbSJ9.abcd\"},{\"url\":\"http://127.0.0.1:$HCPORT\"},{\"url\":\"https://127.0.0.1:$HCPORT\"}]}" -- env CURL_CA_BUNDLE="$HC/ca.pem" cca hub hosted 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_hub_hosted.jsonl"
-ok "App 里再部署一次（平台照记着的 railway，不再问）：Railway 那一页是要运行的命令和公网地址；贴成了加入链接（凭证：bash 先挡住，不交给辅助程序、不回显）、http 的地址带着原因重问；加入了（result 事件 hub_joined），链接里没有指纹、curl 不钉证书；记着的口令删掉；口令、盐不在事件、curl 的命令行和环境里" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.hosted hub.hosted hub.hosted" ] && evq "e.get(\"q\") == \"hub.hosted\" and [f[\"id\"] for f in e[\"fields\"]] == [\"steps\", \"url\"] and e[\"fields\"][0][\"value\"].split(\"\\n\")[-1] == \"railway domain --port 8080\"" && evq "e.get(\"seq\") == 2 and \"这是加入链接\" in e[\"fields\"][1][\"error\"] and e[\"fields\"][1][\"value\"] == \"\"" && ! grep -q eyJ1IjoiaHR0cHM6Ly9leGFtcGxlLmNvbSJ9 "$T/ev.jsonl" && evq "e.get(\"seq\") == 3 and \"https\" in e[\"fields\"][1][\"error\"] and e[\"fields\"][1][\"value\"] == \"http://127.0.0.1:$HCPORT\"" && [ "$(lastres)" = hub_joined ] && [ ! -e "$HHP" ] && python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"pins\"] == [] and d[\"hosted\"] == \"railway\" and d[\"url\"] == \"https://127.0.0.1:$HCPORT\" else 1)" "$H/.cca/hub/hub.json" && grep -q "127.0.0.1:$HCPORT/v1/join" "$T/curl.argv" && ! grep "127.0.0.1:$HCPORT" "$T/curl.argv" | grep -q -e pinnedpubkey -e " -k " && ! grep -qsF -e "$HHADMIT" -e "$HHSALT" "$T/ev.jsonl" "$T/curl.argv" "$T/env.log"'
-out=$(gj state)
-ok "_gui state：自己的那一台不钉指纹（pinned 是 false：更新用 cca hub hosted）" 'printf "%s" "$out" | jok "d[\"config\"][\"hubs\"][-1][\"kind\"] == \"own\" and d[\"config\"][\"hubs\"][-1][\"pinned\"] is False"'
-out=$(sess '{"hub.hosted":[{"next":"done"}]}' -- cca hub hosted 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_hub_hosted_update.jsonl"
-ok "加入着托管平台上的那一台时 cca hub hosted 是更新：一页说要运行的（railway up），点更新好了收场（result 事件 hub_hosted）；不记口令" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.hosted" ] && evq "e.get(\"q\") == \"hub.hosted\" and [f[\"id\"] for f in e[\"fields\"]] == [\"steps\", \"next\"] and e[\"fields\"][0][\"value\"].split(\"\\n\")[-1] == \"railway up --detach\"" && [ "$(lastres)" = hub_hosted ] && [ ! -e "$HHP" ]'
-out=$(runev cca hub deploy root@hubbox 2>&1); rc=$?
-ok "加入的是托管平台上的：cca hub deploy 不经 SSH 碰它（fail 事件 hub_platform，说更新用 cca hub hosted）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_platform\" and \"cca hub hosted\" in e[\"message\"]" && ! grep -q hubbox "$T/ssh.log"'
-run CCA_GRANT=hub_leave:all cca hub leave >/dev/null 2>&1 </dev/null
-kill "$HCP" 2>/dev/null; wait "$HCP" 2>/dev/null
-rm -rf "$H/.cca/hub" "$H/.cca/presence"/own.* "$H/.cca/cost"/own.* "$H/cca-hub-railway" "$H/cca-hub-sealos" "$HHP"
-# 一键部署（docs/dev/hub.md「部署」）：cca hub deploy 经假 ssh 装到 hubbox（tests/hub_box.py 建的假服务器：目录当根，假 systemctl
-# 起真的 server/cca-presence.py），这台 Mac 跟着加入。Docker、拉不到镜像、有设备加入过、连不上、证书换了这些细的在 tests/hub_deploy.py
-python3 "$D/hub_box.py" "$T/hubbox"
-HB="$T/hubbox/root/opt/cca-hub"; HBPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-hbj() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$H/.cca/hub/hub.json" "$1" 2>/dev/null; }   # 加入信息里的一项
-hbsum() { printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; }
-out=$(run cca hub deploy --script 2>/dev/null); rc=$?
-HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$(printf '%s\n' "$out" | head -n 1)
-HBSRV=$(printf '%s\n' "$out" | sed -n "/^	cat <<'CCA_HUB_SERVER_PY_EOF'\$/,/^CCA_HUB_SERVER_PY_EOF\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1)
-ok "cca hub deploy --script：打出安装脚本（带着这一版的版本号和原样的服务端程序，sh -n 过得去；不带 hub-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && printf "%s\n" "$out" | /bin/dash -n && [ "$HBSRV" = "$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d" " -f1)" ] && ! printf "%s" "$out" | grep -q "CCA_HUB_MANAGED=1"'
-out=$(runev cca hub deploy 2>&1); rc=$?
-ok "cca hub deploy 没写服务器：说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法: cca hub deploy \[用户@\]主机"'
-: > "$T/ssh.log"
-out=$(runev cca hub deploy root@hubbox --reset 2>&1); rc=$?
-ok "界面 App 里从头部署：先发同意事件（范围是 SSH 的目标，默认不同意，说明里说每台设备都要重新加入），不连服务器" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"hub_reset\" and e[\"scope\"] == \"root@hubbox\" and e[\"default\"] == \"no\" and \"每台设备都要重新加入\" in e[\"detail\"]" && [ ! -e "$HB" ] && ! grep -q hubbox "$T/ssh.log"'
-: > "$T/curl.argv"; : > "$T/env.log"
-out=$(runev cca hub deploy root@hubbox --port "$HBPORT" --name 机房的服务器 2>&1); rc=$?
-HBADMIT=$(hbj admit); HBSALT=$(hbj salt)
-ok "cca hub deploy：经 SSH 装好（systemd + python3）、这台 Mac 跟着加入（result 事件 hub_deployed）；服务器上只有入伙口令的哈希；口令、盐不在 ssh、curl、子进程的命令行和环境里，也不在事件里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署自己的同步服务器到 root@hubbox（/opt/cca-hub，systemd + python3，端口 ${HBPORT}），这台设备加入了：它叫 机房的服务器，服务器上现在有 1 台设备" && printf "%s" "$out" | grep -q "127.0.0.1 是内网地址" && evbefore fail:hub_lan result:hub_deployed && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\" and \"127.0.0.1:$HBPORT\" in e[\"message\"]" && [ ${#HBADMIT} -eq 32 ] && [ ${#HBSALT} -eq 32 ] && grep -qx "CCA_HUB_ADMIT_HASH=$(hbsum "$HBADMIT")" "$HB/.env" && ! grep -rqsF -e "$HBADMIT" -e "$HBSALT" "$T/hubbox/root" "$T/ssh.log" "$T/curl.argv" "$T/env.log" "$T/ev.jsonl" && [ "$(stat -f %Lp "$H/.cca/hub/hub.json")" = 600 ]'
-out=$(runev cca hub deploy root@hubbox 2>&1); rc=$?
-ok "再部署（这台已经加入了）：只更新，加入链接、数据不变，照旧加入着（result 事件说已更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上自己的同步服务器（/opt/cca-hub，systemd + python3，端口 ${HBPORT}）" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\" and e[\"message\"].startswith(\"已更新\")" && [ "$(hbj admit)" = "$HBADMIT" ] && run cca hub devices --json 2>/dev/null | jok "[x[\"name\"] for x in d[\"devices\"]] == [\"机房的服务器\"]"'
-: > "$T/ssh.log"
-out=$(runev cca hub deploy root@hubbox --port abc 2>&1); rc=$?
-evq 'e["ev"] == "fail" and e["code"] == "hub_usage"'; e1=$?
-out2=$(runev cca hub deploy root@hubbox --bogus 2>&1); rc2=$?
-ok "参数不对（端口写错了辅助程序先查，不认得的选项 bash 自己查）：不连服务器，fail 事件 hub_usage" '[ $rc -ne 0 ] && [ $e1 -eq 0 ] && [ $rc2 -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_usage\"" && printf "%s" "$out" | grep -q -- "--port 要是 1024～65535" && printf "%s" "$out2" | grep -q "用法: cca hub deploy" && ! grep -q hubbox "$T/ssh.log"'
-touch "$T/hubbox/ssh_denied"; out=$(runev cca hub deploy root@hubbox 2>&1); rc=$?; rm -f "$T/hubbox/ssh_denied"
-ok "SSH 登录不了：fail 事件 hub_ssh" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_ssh\" and \"SSH 连不上 root@hubbox\" in e[\"message\"]"'
-out=$(runev CCA_GRANT=hub_reset:root@hubbox cca hub deploy root@hubbox --reset 2>&1); rc=$?
-ok "同意后从头部署：服务器换了入伙口令、忘掉了以前的设备，这台 Mac 用新的重新加入（服务器上 1 台设备）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\"" && [ "$(hbj admit)" != "$HBADMIT" ] && grep -qx "CCA_HUB_ADMIT_HASH=$(hbsum "$(hbj admit)")" "$HB/.env" && printf "%s" "$out" | grep -q "服务器上现在有 1 台设备"'
-# 界面 App 里部署（不写服务器：提问会话 hub.deploy 问地址、SSH 用户、端口；先查登录得上不，密钥不行问密码 hub.password，经 SSH_ASKPASS
-# 给 ssh；服务器上别的设备加入过、这台没加入时问要不要从头部署）
-HBA=$(hbj admit); HBPINS=$(hbj pins); : > "$T/ssh.log"
-rm -f "$HB/certs/cert.pem" "$HB/certs/key.pem"   # 服务器上的证书没了：更新时重新生成，这台 Mac 换上新的指纹，提醒别的设备要新的加入链接
-out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca hub deploy 2>&1); rc=$?
-ok "界面 App 里部署（不写服务器，提问会话）：一页填地址、SSH 用户、端口（加入着的预填它的地址，说是更新）；先查登录得上不，再部署：只更新，result 事件 hub_deployed" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and [f[\"id\"] for f in e[\"fields\"]] == [\"host\", \"user\", \"port\"] and [f[\"value\"] for f in e[\"fields\"]] == [\"127.0.0.1\", \"root\", \"22\"] and \"加入链接和数据都不变\" in e[\"message\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\" and e[\"message\"].startswith(\"已更新\")" && grep -q "^SSH root@hubbox :: true$" "$T/ssh.log" && [ "$(hbj admit)" = "$HBA" ]'
-ok "更新时服务器的证书是新生成的：这台 Mac 换上新的指纹，结果之前有提醒 hub_newpin（别的设备要新的加入链接）、hub_lan（地址只在内网），退出码照样是 0" '[ $rc -eq 0 ] && [ -n "$HBPINS" ] && [ "$(hbj pins)" != "$HBPINS" ] && evbefore fail:hub_newpin result:hub_deployed && evbefore fail:hub_lan result:hub_deployed && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_newpin\" and \"新的加入链接\" in e[\"message\"]"'
-HBPW="pw-$RANDOM$RANDOM$RANDOM"; printf '%s' "$HBPW" > "$T/hubbox/password"; : > "$T/ssh.log"; : > "$T/env.log"; : > "$T/ssh.env"; mkdir -p "$T/askpass.tmp"
-a='{"hub.deploy":[{"host":"nohub","user":"root","port":"22"},{"host":"hubbox","user":"root","port":"22"}],"hub.password":[{"v":"wrong-pw"},{"v":"'$HBPW'"}]}'
-out=$(sess "$a" -- env TMPDIR="$T/askpass.tmp" cca hub deploy 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_hub_deploy.jsonl"
-ok "App 里部署：连不上（主机名解析不了）带着 ssh 说的原因重问；这台 Mac 的密钥登录不了时问密码（hub.password），错了重问；对了经 SSH_ASKPASS 给 ssh 部署（每次连接取一次）；密码不在事件、输出、ssh 和子进程的命令行里，临时文件都删了" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy hub.deploy hub.password hub.password" ] && evq "e.get(\"seq\") == 2 and \"Could not resolve hostname nohub\" in e[\"fields\"][0][\"error\"] and e[\"fields\"][0][\"value\"] == \"nohub\"" && evq "e.get(\"q\") == \"hub.password\" and [f[\"kind\"] for f in e[\"fields\"]] == [\"secret\"] and e[\"fields\"][0][\"error\"].startswith(\"密码不对，再试一次（密码没错也这样的话：服务器多半不让 root 用密码登录\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\"" && [ "$(grep -c "^ASKPASS rc=0 dir=$T/askpass.tmp/cca-askpass\." "$T/ssh.log")" = 3 ] && grep -q "^SSH_ASKPASS=$T/askpass.tmp/cca-askpass\." "$T/ssh.env" && ! grep -qF "$HBPW" "$T/ev.jsonl" "$T/ssh.log" "$T/env.log" "$T/ssh.env" && ! printf "%s" "$out" | grep -qF "$HBPW" && ! ls "$T/askpass.tmp" | grep -q "^cca-askpass"'
-HBA=$(hbj admit)
-out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.password":[{"v":"x1"},{"v":"x2"},{"v":"x3"}]}' -- cca hub deploy 2>&1); rc=$?
-rm -f "$T/hubbox/password"
-ok "密码错了三次：不再问（错得太多服务器会封这个地址），fail 事件 hub_ssh，说可能是不让 root 用密码登录；服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy hub.password hub.password hub.password" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_ssh\" and \"试了 3 次\" in e[\"message\"] and \"不让 root 用密码登录\" in e[\"message\"]" && ! evq "e[\"ev\"] == \"result\"" && [ "$(hbj admit)" = "$HBA" ]'
-# 服务器只认密钥、不认这台 Mac 的（ssh_keyonly）：一页（hub.pubkey）给出在服务器上运行的那一行，加好了再查；没有密钥的先生成一把；
-# 私钥有密码的选在终端里部署（terminal 事件带上服务器）
-[ ! -e "$H/.ssh" ] || mv "$H/.ssh" "$T/home.ssh"
-echo always > "$T/hubbox/ssh_denied"
-out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"keygen"},{"next":"retry"},{"next":"terminal"}]}' -- cca hub deploy 2>&1); rc=$?
-HKP=$(cat "$H/.ssh/id_ed25519.pub" 2>/dev/null)
-ok "App 里部署、服务器只认密钥、这台 Mac 还没有密钥：先问要不要生成一把（默认生成），生成了 ~/.ssh/id_ed25519（600）；下一页给出把公钥加进 authorized_keys 的那一行；加好了再试还不认：带着原因重问；选在终端里部署：terminal 事件带上服务器和端口，退出码非 0；服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey hub.pubkey hub.pubkey" ] && evq "e.get(\"seq\") == 2 and [f[\"id\"] for f in e[\"fields\"]] == [\"next\"] and e[\"fields\"][0][\"default\"] == \"keygen\"" && [ -n "$HKP" ] && [ "$(stat -f %Lp "$H/.ssh/id_ed25519")" = 600 ] && evq "e.get(\"seq\") == 3 and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"] and e[\"fields\"][0][\"value\"] == \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo \x27$HKP\x27 >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\" and e[\"fields\"][0][\"error\"] == \"\"" && evq "e.get(\"seq\") == 4 and e[\"fields\"][0][\"error\"].startswith(\"还是登录不了\")" && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"hub_deploy\" and e[\"argv\"] == [\"hub\", \"deploy\", \"root@hubbox\", \"-p\", \"22\"] and e[\"display\"] == \"cca hub deploy root@hubbox -p 22\"" && ! evq "e[\"ev\"] == \"result\"" && [ "$(hbj admit)" = "$HBA" ]'
-echo once > "$T/hubbox/ssh_denied"
-out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"retry"}]}' -- cca hub deploy 2>&1); rc=$?
-ok "加好了公钥再试：登录上了，接着部署（只更新，result 事件 hub_deployed）；已经有密钥的不再问要不要生成" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey" ] && evq "e.get(\"q\") == \"hub.pubkey\" and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"]" && [ "$(lastres)" = hub_deployed ] && [ ! -e "$T/hubbox/ssh_denied" ] && [ "$(hbj admit)" = "$HBA" ]'
-rm -rf "$H/.ssh"; [ ! -e "$T/home.ssh" ] || mv "$T/home.ssh" "$H/.ssh"
-out=$(run CCA_TTY="$(ans hubbox '' '')" cca hub deploy 2>&1); rc=$?
-ok "终端里不写服务器（App 里「改在终端里完成」）：问地址（加入着的预填它的）、SSH 用户（root）、端口（22），再部署" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上自己的同步服务器" && [ "$(hbj admit)" = "$HBA" ]'
-run CCA_GRANT=hub_leave:all cca hub leave >/dev/null 2>&1 </dev/null
-HBH=$(sed -n 's/^CCA_HUB_ADMIT_HASH=//p' "$HB/.env")
-out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"consent.hub_reset":[{"v":"n"}]}' -- cca hub deploy 2>&1); rc=$?
-ok "App 里部署到别的设备加入过的服务器（这台没加入）：问要不要从头部署（说可以在加入了的设备上复制加入链接）；不同意：取消，服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy consent.hub_reset" ] && evq "e.get(\"q\") == \"consent.hub_reset\" and e[\"fields\"][0][\"default\"] == \"n\" and \"复制加入链接\" in e[\"fields\"][0][\"detail\"]" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ "$(sed -n "s/^CCA_HUB_ADMIT_HASH=//p" "$HB/.env")" = "$HBH" ] && [ ! -e "$H/.cca/hub/hub.json" ]'
-out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"consent.hub_reset":[{"v":"y"}]}' -- cca hub deploy 2>&1); rc=$?
-ok "同意：从头部署（换了入伙口令），这台 Mac 加入了" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy consent.hub_reset" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"hub_deployed\"" && [ "$(sed -n "s/^CCA_HUB_ADMIT_HASH=//p" "$HB/.env")" != "$HBH" ] && [ -e "$H/.cca/hub/hub.json" ]'
-run CCA_GRANT=hub_leave:all cca hub leave >/dev/null 2>&1 </dev/null
-out=$(run cca hub deploy --script 2>/dev/null | run ssh root@hubbox sh -s -- --uninstall 2>&1); rc=$?
-ok "照文档卸载（cca hub deploy --script | ssh 服务器 sh -s -- --uninstall）：停掉服务、删掉程序和数据" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "卸载了自己的同步服务器" && [ ! -e "$HB" ] && [ ! -e "$T/hubbox/server.pid" ] && [ ! -e "$H/.cca/hub" ]'
-rm -rf "$H/.cca/hub" "$H/.cca/presence"/own.* "$H/.cca/cost"/own.*
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
-	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json、自己的同步服务器和配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
+	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json、配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
 fi
 kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; SVP=""
 cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"; cp -p "$T/pres.keys.json" "$T/deploy_keys.json"
@@ -4012,27 +3803,64 @@ out=$(run cca policy pull 2>&1); rc=$?
 ok "自己退出以后再拉映射：不再照同一个邀请加入" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "照维护者的映射加入了" && [ ! -e "$H/.cca/teams/$TMBID" ]'
 cp -p "$T/tmh.keys" "$T/deploy_keys.json"; cp -p "$T/tmh.mr" "$MR/policy.json"; cp -p "$T/tmh.pr" "$PR/policy.json"; cp -p "$T/tmh.pr.sig" "$PR/policy.json.sig"
 cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$MR/policy.json.sig" "$H/.cca/teams/adopt.json"
-# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（11b3c 那台假服务器；和自己的同步服务器是同一份安装脚本，
-#     每个 Team 一个服务），装好了自动接上。App 里新建问名字（team.new），部署问服务器（和自己的同步服务器同一页：hub.deploy）
+# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（tests/hub_box.py 建的假服务器：目录当根，假 systemctl 起真的
+#     server/cca-presence.py；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、拉不到镜像、网页端和证书助手、连不上、几个 Team 这些
+#     细的在 tests/hub_deploy.py。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
+python3 "$D/hub_box.py" "$T/hubbox"
+out=$(run cca team deploy --script 2>/dev/null); rc=$?
+HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$(printf '%s\n' "$out" | head -n 1)
+hbdoc() { printf '%s\n' "$out" | sed -n "/^	cat <<'$1'\$/,/^$1\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # hbdoc 结束行：安装脚本里那一段 here-document 的 SHA-256
+HBWEB=$(printf '%s\n' "$out" | sed -n 's/^	web_file "\$1" \([^ ]*\) \([0-9a-f]\{64\}\) .*/\1 \2/p' | while read -r n h; do [ "$h" = "$(shasum -a 256 < "$D/../server/web/$n" | cut -d' ' -f1)" ] && echo "$n"; done | wc -l | tr -d ' ')
+ok "cca team deploy --script：打出安装脚本（带着这一版的版本号，原样的服务端程序、证书助手，网页端的每个文件的校验和都对，sh -n 过得去；不带 team-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && printf "%s\n" "$out" | /bin/dash -n && [ "$(hbdoc CCA_HUB_SERVER_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d" " -f1)" ] && [ "$(hbdoc CCA_HUB_ACME_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-acme.py" | cut -d" " -f1)" ] && [ "$HBWEB" = "$(ls "$D/../server/web" | wc -l | tr -d " ")" ] && ! printf "%s\n" "$out" | grep -q "^CCA_HUB_MANAGED="'
 out=$(sess '{"team.new":[{"name":"机房组"}]}' -- cca team new 2>&1); rc=$?
 TMDID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID")
 ok "提问会话：cca team new 不写名字：问 Team 的名字，建好了（result 的 team_created），还没接上服务器" '[ $rc -eq 0 ] && [ "$(asks)" = team.new ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_created\"" && [ ${#TMDID} -eq 32 ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，没有服务器"'
-TMDPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); TMDD="$T/hubbox/root/opt/cca-team-${TMDID:0:8}"
-out=$(runev cca team deploy 机房组 root@hubbox --reset 2>&1); rc=$?
-ok "Team 的部署没有 --reset：fail 事件 team_usage，不连服务器" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && [ ! -e "$TMDD" ]'
+TMDPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); TMDSVC="cca-team-${TMDID:0:8}"; TMDD="$T/hubbox/root/opt/$TMDSVC"
+tmdpin() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pins"])' "$H/.cca/teams/$TMDID/team.json" 2>/dev/null; }   # 这台设备给这个 Team 的服务器钉着的指纹
+: > "$T/ssh.log"
+out=$(runev cca team deploy 机房组 2>&1); rc=$?
+out2=$(runev cca team deploy 机房组 root@hubbox --reset 2>&1); rc2=$?
+ok "cca team deploy：不在终端里、不在 App 里又没写服务器：说用法；Team 的部署没有 --reset（fail 事件 team_usage），不连服务器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法: cca team deploy Team \[用户@\]主机" && [ $rc2 -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && [ ! -e "$TMDD" ] && ! grep -q hubbox "$T/ssh.log"'
+out=$(runev cca team deploy 机房组 root@hubbox --port abc 2>&1); rc=$?
+ok "参数不对（端口写错了）：辅助程序先查，不连服务器，fail 事件 team_usage" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && printf "%s" "$out" | grep -q -- "--port 要是 1024～65535" && ! grep -q hubbox "$T/ssh.log"'
+touch "$T/hubbox/ssh_denied"; out=$(runev cca team deploy 机房组 root@hubbox 2>&1); rc=$?; rm -f "$T/hubbox/ssh_denied"
+ok "SSH 登录不了：fail 事件 team_ssh（说在终端里运行），服务器上什么都没装" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_ssh\" and \"SSH 连不上 root@hubbox\" in e[\"message\"]" && [ ! -e "$TMDD" ]'
+: > "$T/curl.argv"; : > "$T/env.log"
 out=$(runev cca team deploy "${TMDID:0:8}" root@hubbox --port "$TMDPORT" 2>&1); rc=$?
-ok "cca team deploy：经 SSH 装好（systemd + python3；服务名、目录是这个 Team 的）、自动接上（result 事件 team_deployed）；服务器上只有公开的根公钥" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署「机房组」的同步服务器到 root@hubbox（/opt/cca-team-${TMDID:0:8}，systemd + python3，端口 ${TMDPORT}，服务名 cca-team-${TMDID:0:8}），接上了" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && grep -q "^CCA_TEAM_ROOT=AAAA" "$TMDD/.env" && ! grep -q ADMIT "$TMDD/.env" && ! grep -rq "PRIVATE KEY" "$TMDD/.env" "$TMDD/app" && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
+ok "cca team deploy：经 SSH 装好（systemd + python3；服务名、目录是这个 Team 的）、自动接上（result 事件 team_deployed）；服务器上只有公开的根公钥；地址是内网的：说一声（team_lan），手机的网页端不开" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署「机房组」的同步服务器到 root@hubbox（/opt/${TMDSVC}，systemd + python3，端口 ${TMDPORT}，服务名 ${TMDSVC}），接上了" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && evbefore fail:team_lan result:team_deployed && printf "%s" "$out" | grep -q "手机的网页端没开：127.0.0.1 是内网地址" && grep -q "^CCA_TEAM_ROOT=AAAA" "$TMDD/.env" && ! grep -q ADMIT "$TMDD/.env" && ! grep -rq "PRIVATE KEY" "$TMDD/.env" "$TMDD/app" && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
+TMDPIN=$(tmdpin); rm -f "$TMDD/certs/cert.pem" "$TMDD/certs/key.pem"; : > "$T/ssh.log"   # 服务器上的证书没了：更新时重新生成，这台设备照新的指纹重新接上
 out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
-ok "App 里再部署（不写服务器）：问服务器（和自己的同步服务器同一页，标题说的是这个 Team、预填它现在接着的地址），先查登录得上不，只更新" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and \"机房组\" in e[\"title\"] and e[\"fields\"][0][\"value\"] == \"127.0.0.1\"" && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
+ok "App 里再部署（不写服务器）：一页填地址、SSH 用户、端口（标题说的是这个 Team，预填它现在接着的地址，说数据不变）；先查登录得上不，再部署：只更新（result 事件 team_deployed）；证书是新生成的：照新的指纹重新接上" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and \"机房组\" in e[\"title\"] and [f[\"id\"] for f in e[\"fields\"]] == [\"host\", \"user\", \"port\"] and [f[\"value\"] for f in e[\"fields\"]] == [\"127.0.0.1\", \"root\", \"22\"] and \"数据不变\" in e[\"message\"]" && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && grep -q "^SSH root@hubbox :: true$" "$T/ssh.log" && [ -n "$TMDPIN" ] && [ "$(tmdpin)" != "$TMDPIN" ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
+HBPW="pw-$RANDOM$RANDOM$RANDOM"; printf '%s' "$HBPW" > "$T/hubbox/password"; : > "$T/ssh.log"; : > "$T/env.log"; : > "$T/ssh.env"; mkdir -p "$T/askpass.tmp" "$T/guifx4"
+hbans='{"hub.deploy":[{"host":"nohub","user":"root","port":"22"},{"host":"hubbox","user":"root","port":"22"}],"hub.password":[{"v":"wrong-pw"},{"v":"'$HBPW'"}]}'
+out=$(sess "$hbans" -- env TMPDIR="$T/askpass.tmp" cca team deploy 机房组 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx4/prompts_hub_deploy.jsonl"
+ok "App 里部署：连不上（主机名解析不了）带着 ssh 说的原因重问；这台 Mac 的密钥登录不了时问密码（hub.password），错了重问；对了经 SSH_ASKPASS 给 ssh 部署（每次连接取一次）；密码不在事件、输出、ssh 和子进程的命令行里，临时文件都删了" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy hub.deploy hub.password hub.password" ] && evq "e.get(\"seq\") == 2 and \"Could not resolve hostname nohub\" in e[\"fields\"][0][\"error\"] and e[\"fields\"][0][\"value\"] == \"nohub\"" && evq "e.get(\"q\") == \"hub.password\" and [f[\"kind\"] for f in e[\"fields\"]] == [\"secret\"] and e[\"fields\"][0][\"error\"].startswith(\"密码不对，再试一次（密码没错也这样的话：服务器多半不让 root 用密码登录\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && [ "$(grep -c "^ASKPASS rc=0 dir=$T/askpass.tmp/cca-askpass\." "$T/ssh.log")" = 3 ] && grep -q "^SSH_ASKPASS=$T/askpass.tmp/cca-askpass\." "$T/ssh.env" && ! grep -qF "$HBPW" "$T/ev.jsonl" "$T/ssh.log" "$T/env.log" "$T/ssh.env" && ! printf "%s" "$out" | grep -qF "$HBPW" && ! ls "$T/askpass.tmp" | grep -q "^cca-askpass"'
+TMDENV=$(shasum < "$TMDD/.env")
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.password":[{"v":"x1"},{"v":"x2"},{"v":"x3"}]}' -- cca team deploy 机房组 2>&1); rc=$?
+rm -f "$T/hubbox/password"
+ok "密码错了三次：不再问（错得太多服务器会封这个地址），fail 事件 hub_ssh，说可能是不让 root 用密码登录；服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy hub.password hub.password hub.password" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"hub_ssh\" and \"试了 3 次\" in e[\"message\"] and \"不让 root 用密码登录\" in e[\"message\"]" && ! evq "e[\"ev\"] == \"result\"" && [ "$(shasum < "$TMDD/.env")" = "$TMDENV" ]'
+# 服务器只认密钥、不认这台 Mac 的（ssh_keyonly）：一页（hub.pubkey）给出在服务器上运行的那一行，加好了再查；没有密钥的先生成一把；
+# 私钥有密码的选在终端里部署（terminal 事件带上服务器）
+[ ! -e "$H/.ssh" ] || mv "$H/.ssh" "$T/home.ssh"
+echo always > "$T/hubbox/ssh_denied"
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"keygen"},{"next":"retry"},{"next":"terminal"}]}' -- cca team deploy 机房组 2>&1); rc=$?
+HKP=$(cat "$H/.ssh/id_ed25519.pub" 2>/dev/null)
+ok "App 里部署、服务器只认密钥、这台 Mac 还没有密钥：先问要不要生成一把（默认生成），生成了 ~/.ssh/id_ed25519（600）；下一页给出把公钥加进 authorized_keys 的那一行；加好了再试还不认：带着原因重问；选在终端里部署：terminal 事件带上 Team、服务器和端口，退出码非 0；服务器上什么都没动" '[ $rc -ne 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey hub.pubkey hub.pubkey" ] && evq "e.get(\"seq\") == 2 and [f[\"id\"] for f in e[\"fields\"]] == [\"next\"] and e[\"fields\"][0][\"default\"] == \"keygen\"" && [ -n "$HKP" ] && [ "$(stat -f %Lp "$H/.ssh/id_ed25519")" = 600 ] && evq "e.get(\"seq\") == 3 and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"] and e[\"fields\"][0][\"value\"] == \"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo \x27$HKP\x27 >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys\" and e[\"fields\"][0][\"error\"] == \"\"" && evq "e.get(\"seq\") == 4 and e[\"fields\"][0][\"error\"].startswith(\"还是登录不了\")" && evq "e[\"ev\"] == \"terminal\" and e[\"code\"] == \"hub_deploy\" and e[\"argv\"] == [\"team\", \"deploy\", \"${TMDID:0:8}\", \"root@hubbox\", \"-p\", \"22\"] and e[\"display\"] == \"cca team deploy ${TMDID:0:8} root@hubbox -p 22\"" && ! evq "e[\"ev\"] == \"result\"" && [ "$(shasum < "$TMDD/.env")" = "$TMDENV" ]'
+echo once > "$T/hubbox/ssh_denied"
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}],"hub.pubkey":[{"next":"retry"}]}' -- cca team deploy 机房组 2>&1); rc=$?
+ok "加好了公钥再试：登录上了，接着部署（只更新，result 事件 team_deployed）；已经有密钥的不再问要不要生成" '[ $rc -eq 0 ] && [ "$(asks)" = "hub.deploy hub.pubkey" ] && evq "e.get(\"q\") == \"hub.pubkey\" and [f[\"id\"] for f in e[\"fields\"]] == [\"cmd\", \"next\"]" && [ "$(lastres)" = team_deployed ] && [ ! -e "$T/hubbox/ssh_denied" ]'
+rm -rf "$H/.ssh"; [ ! -e "$T/home.ssh" ] || mv "$T/home.ssh" "$H/.ssh"
+out=$(run CCA_TTY="$(ans hubbox '' '')" cca team deploy 机房组 2>&1); rc=$?
+ok "终端里不写服务器（App 里「改在终端里完成」）：问地址（接着的预填它的）、SSH 用户（root）、端口（22），再部署（只更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
 out=$(run cca team hosted 机房组 sealos --dir "$T/tm-hosted" 2>&1); rc=$?
 ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && printf "%s" "$out" | grep -q "环境变量：CCA_TEAM_ROOT=AAAA" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
-run cca team deploy --script 2>/dev/null | run ssh root@hubbox sh -s -- --uninstall --dir "/opt/cca-team-${TMDID:0:8}" >/dev/null 2>&1
+out=$(run cca team deploy --script 2>/dev/null | run ssh root@hubbox sh -s -- --uninstall --dir "/opt/$TMDSVC" 2>&1); rc=$?
 runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" >/dev/null 2>&1
-ok "收尾：服务器上卸载了这个 Team 的服务，这台设备上删掉了这个 Team" '[ ! -e "$TMDD" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ]'
+ok "照文档卸载（cca team deploy --script | ssh 服务器 sh -s -- --uninstall --dir 目录）：停掉这个 Team 的服务、删掉程序和数据；这台设备上删掉了这个 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "卸载了 Team 的同步服务器" && [ ! -e "$TMDD" ] && [ ! -e "$T/hubbox/server.$TMDSVC.pid" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ]'
 out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
 ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
-	ok "App 的契约测试：Swift 模型解码真实的带着 Team 的 _gui state、cca team ls --json、cca team devices --json（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx4" > "$T/contract4.log" 2>&1'
+	ok "App 的契约测试：Swift 模型解码真实的带着 Team 的 _gui state、cca team ls --json、cca team devices --json、部署时的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx4" > "$T/contract4.log" 2>&1'
 fi
 kill "$TMAPID" "$TMBPID" 2>/dev/null; wait "$TMAPID" "$TMBPID" 2>/dev/null
 rm -rf "$H/.cca/teams" "$TMA" "$TMB"
@@ -4506,10 +4334,11 @@ ok "辅助安装用完不留东西：没建 agy 的账号表，~/.local/bin 里�
 fi
 if sect 11b6; then
 # 11b6. 服务器上安装（CCA_REMOTE_LOGIN=1：Mac 上走服务器的流程）：从没配置过路由器、直连不通（假 curl：direct_down 连不上，direct_loc 是
-#       直连的出口地区）时，cca install、cca add 不问路由器，先问有没有维护者共享给你的账号（默认没有）。有：给出维护者运行的一行命令
+#       直连的出口地区）时，cca install、cca add 不问路由器。打开着维护者的共享（一键安装时带了 CCA_POLICY_REPO）：给出维护者运行的一行命令
 #       （公钥和别名写在里面），之后每隔几秒自动拉映射（回车马上拉，s 先跳过）；维护者加上以后导入映射指定的安装节点和映射里账号的节点
-#       （参考节点），配置内置代理（假内核、假的界面 App），经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。没有：
-#       粘贴一条自己的代理当可选节点，配置内置代理。直连通的照旧问路由器。这一节结束时映射仓库、假命令都还原
+#       （参考节点），配置内置代理（假内核、假的界面 App），经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。别的先问
+#       有没有 Team 的邀请链接（默认没有；加入 Team 在 11b3d）。没有、到了那一步留空：粘贴一条自己的代理当可选节点，配置内置代理。直连通的
+#       照旧问路由器。这一节结束时映射仓库、假命令都还原
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
 rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
@@ -4519,8 +4348,8 @@ cp "$PR/policy.json" "$T/pr.srv"; rm -f "$T/pr.srv.sig"; [ ! -f "$PR/policy.json
 pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-I"}'
 python3 -c 'import json,sys; json.dump({"version": 1, "group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (81 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-I", "US-S", "US-X"])]}, open(sys.argv[1], "w"))' "$PR/nodes.json"; nodes_pub
 toff claude; touch "$T/policy_denied"; echo HK > "$T/direct_loc"; : > "$IL"; : > git.log; : > curl.log
-out=$(rs CCA_TTY="$(ans y s)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上直连的出口在受限地区：不问路由器，先问有没有维护者共享的账号（默认没有）；答有：给出维护者运行的那一行（公钥和别名写在里面）、等着拉映射；输入 s 先跳过，不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && printf "%s" "$out" | grep -q "有没有维护者共享给你的账号？ \[y/N\]" && printf "%s" "$out" | grep -qF "    ./policy.sh key add '\''$(spub)'\'' $(cut -d@ -f2 "$SH/.cca/policy/id_ed25519.pub")" && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号" && scfg "c.get(\"policy\") == \"example/cca-policy\" and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -f "$SH/.cca/policy/policy.json" ]'
+out=$(rs CCA_TTY="$(ans s)" CCA_POLICY_REPO=example/cca-policy "$H/.cca/bin/cca" install 2>&1); rc=$?
+ok "服务器上直连的出口在受限地区：不问路由器；打开着维护者的共享（一键安装时带了 CCA_POLICY_REPO）：不问有没有 Team 的邀请链接，给出维护者运行的那一行（公钥和别名写在里面）、等着拉映射；输入 s 先跳过，不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && ! printf "%s" "$out" | grep -q "有没有 Team 的邀请链接" && printf "%s" "$out" | grep -qF "    ./policy.sh key add '\''$(spub)'\'' $(cut -d@ -f2 "$SH/.cca/policy/id_ed25519.pub")" && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号" && scfg "c.get(\"policy\") == \"example/cca-policy\" and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -f "$SH/.cca/policy/policy.json" ]'
 rm -f "$T/direct_loc"; touch "$T/direct_down"; k0=$(spub)
 out=$(rs CCA_TTY="$(ans s)" cca add 2>&1); rc=$?
 ok "cca add（还没有可选节点）：直连不通时同样不先要求配置路由器，接着等维护者（还是这把公钥）；先跳过时说明再运行 cca add" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连 claude.ai 不通：这台机器不用配置路由器" && printf "%s" "$out" | grep -qF "$k0" && [ "$(spub)" = "$k0" ] && printf "%s" "$out" | grep -q "再运行 cca add 接着配置" && ! printf "%s" "$out" | grep -q "先配置路由器"'
@@ -4530,29 +4359,34 @@ rm -f "$T/policy_denied"; touch "$T/policy_keys"; salias=$(cut -d@ -f2 "$SH/.cca
 out=$(cd "$D/.." && run $P $NOPD CCA_TTY="$(ans)" bash -c "$line" 2>&1); rc=$?
 ok "维护者原样运行那一行：公钥加成只读 deploy key，别名是那台机器的名字，不提问" '[ -n "$line" ] && [ $rc -eq 0 ] && [ "$(dkk "$salias")" = "$(cut -d" " -f1,2 "$SH/.cca/policy/id_ed25519.pub")" ] && ! printf "%s" "$out" | grep -q "起个别名"'
 : > "$IL"; : > git.log
-out=$(rs CCA_TTY="$(ans y)" cca install 2>&1); rc=$?
+out=$(rs CCA_TTY="$(ans)" cca install 2>&1); rc=$?
 ok "维护者加上之后再运行 cca install：拉到映射，导入映射指定的安装节点和映射里账号的节点（参考节点里别的不导入），映射里的账号自动加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "拉到了维护者的映射（Claude 1 个账号" && printf "%s" "$out" | grep -q "已导入维护者提供的节点：US-I、US-S（这台机器的可选节点）" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and sorted(c[\"node_ids\"]) == [\"US-I\", \"US-S\"]" && grep -q "\"sam(sam@example.com)\": \"US-S\"" "$SH/.cca/accounts.json" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 sam"'
 ok "接着配置好内置代理（假的界面 App 托管内核），sam 的端口切到 US-S" 'scfg "c[\"local\"][\"client\"] == \"builtin\"" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && [ -f "$CD/up" ] && [ "$(csel CCA-1)" = US-S ]'
 ok "经内置代理的安装节点装 Claude Code：问一句（默认是），不再先直连、不另外征求同意；装完临时内核停掉、临时目录删掉；有账号了不再问新增账号" 'printf "%s" "$out" | grep -q "没找到 Claude Code（claude 命令）。现在经内置代理用官方安装脚本装上吗？" && grep -qx "INSTALL-GET claude via US-I" "$IL" && grep -qx "INSTALL-DONE claude via=US-I" "$IL" && ! grep -q "INSTALL-GET claude direct" "$IL" && ! printf "%s" "$out" | grep -q "安装 claude 吗" && printf "%s" "$out" | grep -qF "装好了 claude：$SH/.local/bin/claude" && istopped && [ "$(ileft)" = 0 ] && ! printf "%s" "$out" | grep -qE "新增第一个账号|现在配置路由器"'
 core_stop; rm -f "$SH/.local/bin/claude"; tback claude
 # 不按回车也行：每隔几秒自动拉（CCA_POLICY_POLL=1 秒；答案是一直开着、没有内容的管道）
 SH="$T/homes2"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
-rm -f "$T/policy_keys"; printf 1 > "$T/policy_denied_n"; : > git.log
-mkfifo "$T/tty.fifo"; exec 8<>"$T/tty.fifo"; printf 'y\n' >&8   # 有维护者共享的账号；之后等维护者时管道里没有内容
-out=$(rs CCA_TTY="$T/tty.fifo" CCA_POLICY_POLL=1 "$H/.cca/bin/cca" install 2>&1); rc=$?
+rm -f "$T/policy_keys"; printf 3 > "$T/policy_denied_n"; : > git.log   # 安装时打开共享拉一次、接着配置时再拉一次、开始等时又拉一次，都还没加上
+mkfifo "$T/tty.fifo"; exec 8<>"$T/tty.fifo"   # 等维护者时管道里没有内容
+out=$(rs CCA_TTY="$T/tty.fifo" CCA_POLICY_POLL=1 CCA_POLICY_REPO=example/cca-policy "$H/.cca/bin/cca" install 2>&1); rc=$?
 exec 8<&-; rm -f "$T/tty.fifo"
-ok "等维护者时不用按回车：每隔几秒自动重试，拉到了就接着导入节点、配置内置代理（装好了 Claude Code、有账号时不再问）" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 2 ] && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "拉到了维护者的映射" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and c[\"local\"][\"client\"] == \"builtin\"" && [ -f "$CD/up" ] && ! printf "%s" "$out" | grep -qE "没找到 Claude Code|新增第一个账号"'
+ok "等维护者时不用按回车：每隔几秒自动重试，拉到了就接着导入节点、配置内置代理（装好了 Claude Code、有账号时不再问）" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 4 ] && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "拉到了维护者的映射" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and c[\"local\"][\"client\"] == \"builtin\"" && [ -f "$CD/up" ] && ! printf "%s" "$out" | grep -qE "没找到 Claude Code|新增第一个账号"'
 core_stop
 SH="$T/homes3"; rm -f "$T/direct_down" "$T/policy_denied_n"; : > curl.log
 out=$(rs CCA_TTY="$(ans n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
 ok "服务器上能直连：照旧问要不要配置路由器，不等维护者、不导入节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "这台机器能直连 claude.ai" && printf "%s" "$out" | grep -q "现在配置路由器" && ! printf "%s" "$out" | grep -q "policy.sh key add" && [ ! -e "$SH/.cca/policy/id_ed25519" ]'
-# 没有维护者共享的账号（默认）：粘贴一条自己的代理当可选节点，配置好内置代理；不生成 deploy key、不拉映射
+# 没有 Team 的邀请链接（默认）、没打开维护者的共享：粘贴一条自己的代理当可选节点，配置好内置代理；不生成 deploy key、不拉映射
 SH="$T/homes4"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
 touch "$T/direct_down"; : > git.log
 out=$(rs CCA_TTY="$(ans n 'socks5://u:p@198.51.100.7:1080' . n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上直连不通、没有维护者共享的账号：粘贴一条自己的代理当可选节点（内核校验过），配置好内置代理；不生成 deploy key、不拉映射" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "有没有维护者共享给你的账号？ \[y/N\]" && printf "%s" "$out" | grep -q "节点用你自己的代理" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\" and not c.get(\"policy\")" && [ ! -e "$SH/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log && ! printf "%s" "$out" | grep -q "policy.sh key add"'
+ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理当可选节点（内核校验过），配置好内置代理；不生成 deploy key、不拉映射" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "有没有 Team 的邀请链接？ \[y/N\]" && printf "%s" "$out" | grep -q "节点用你自己的代理" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\" and not c.get(\"policy\")" && [ ! -e "$SH/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log && ! printf "%s" "$out" | grep -q "policy.sh key add"'
 out=$(rs CCA_TTY="$(ans n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "再运行 cca install：已经有可选节点了，不再问有没有维护者、不再要代理" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -qE "有没有维护者共享给你的账号|节点用你自己的代理"'
+ok "再运行 cca install：已经有可选节点了，不再问有没有 Team 的邀请链接、不再要代理" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -qE "有没有 Team 的邀请链接|节点用你自己的代理"'
+core_stop
+# 答了有邀请链接、到了那一步又留空（先不加入）：接着粘贴一条自己的代理
+SH="$T/homes5"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
+out=$(rs CCA_TTY="$(ans y '' 'socks5://u:p@198.51.100.8:1080' . n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
+ok "服务器上直连不通、答了有 Team 的邀请链接、到了那一步留空：先不加入（说之后运行 cca team join），接着粘贴一条自己的代理当可选节点，配置好内置代理；没加入 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "邀请链接（cca-team1. 开头，输入不显示；留空是先不加入）" && printf "%s" "$out" | grep -q "先不加入 Team：以后运行 cca team join 加入" && ! printf "%s" "$out" | grep -q "App 的「共享与同步」" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\" and not c.get(\"policy\")" && [ -z "$(ls "$SH/.cca/teams" 2>/dev/null)" ]'
 core_stop; rm -f "$T/direct_down"
 # 还原：映射仓库、假 GitHub 上的 deploy key
 cp "$T/pr.srv" "$PR/policy.json"; rm -f "$PR/policy.json.sig" "$PR/nodes.json" "$PR/nodes.json.sig"; [ ! -f "$T/pr.srv.sig" ] || cp "$T/pr.srv.sig" "$PR/policy.json.sig"
@@ -4739,8 +4573,8 @@ mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail
 RSP=$(printf 'ab%.0s' $(seq 1 16)); mkdir -p "$H/.cca/remote" "$T/keychain/cca-remote-$RSP"; chmod 700 "$H/.cca/remote"
 printf '%064d' 7 > "$T/keychain/cca-remote-$RSP/pair"
 printf '{"v":1,"peers":{"%s":{"fp":"SHA256:%s","name":"dan-air","incoming":"control","shown":true,"at":1794000000}}}\n' "$RSP" "$(printf 'A%.0s' $(seq 1 43))" > "$H/.cca/remote/peers.json"
-# 加入过自己的同步服务器（docs/dev/hub.md），服务器这时连不上（127.0.0.1:9）：restore 先在清单里说要退出，照样退出、说怎么在别的设备上
-# 移除这台；加入信息（链接里的入伙口令、盐）、这台设备在它上面的私钥、经它同步来的折合金额都删掉，不进备份
+# 3.5.3 以前加入过自己的同步服务器、升级以后还没运行过别的命令（第一条命令就删掉它们：hub_leftovers）：加入信息（入伙口令、盐）、
+# 这台设备在它上面的私钥、经它同步来的折合金额都不进备份
 RHA=$(printf 'e7%.0s' $(seq 1 16)); RHS=$(printf '9d%.0s' $(seq 1 16))
 mkdir -p "$H/.cca/hub" "$H/.cca/cost"; chmod 700 "$H/.cca/hub"; ssh-keygen -q -t ed25519 -N '' -C hub -f "$H/.cca/hub/id_ed25519"
 printf '{"v":1,"url":"https://127.0.0.1:9","pins":["sha256//%s="],"admit":"%s","salt":"%s","name":"studio","joined_at":1794000000}\n' \
@@ -4776,7 +4610,7 @@ BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
 ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
 ok "restore：备份里没有折合金额的缓存、别的设备同步来的（cost/scan.json、remote.json 这些），这台设备统计好的（cost/local.json）在" '! tar -tzf "$BK" | grep -qE "cost/(scan|remote|worker)\.json|cost/(last|scanned)$" && tar -tzf "$BK" | grep -q "cost/local\.json"'
-ok "restore：清单里说要退出自己的同步服务器；服务器连不上照样退出，说怎么在别的设备上移除这台；加入信息、私钥、经它同步来的折合金额都不进备份" 'printf "%s" "$out" | grep -q "自己的同步服务器（127.0.0.1:9）：退出" && printf "%s" "$out" | grep -q "服务器上没能移除这台设备.*cca hub remove" && ! tar -tzf "$BK" | grep -qE "(^|/)hub/|cost/own\.|cost/team\." && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "$RHA|$RHS|HUB-REMOTE-SECRET|TEAM-REMOTE-SECRET"'
+ok "restore：以前的自己的同步服务器留下的加入信息、私钥、经它同步来的折合金额，经 Team 同步来的，都不进备份；清单里不提它" '! printf "%s" "$out" | grep -q "自己的同步服务器" && ! tar -tzf "$BK" | grep -qE "hub/hub\.json|hub/id_ed25519$|cost/own\.|cost/team\." && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "$RHA|$RHS|HUB-REMOTE-SECRET|TEAM-REMOTE-SECRET"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'

@@ -420,56 +420,19 @@ func genericCostSync(_ name: String, _ d: Data) -> CostSyncDoc? {
     return doc
 }
 
-/// `config.hubs[]`、`hub status --json` 的 `hub`（PROTOCOL 2.2、4.13）
+/// `config.hubs[]`（PROTOCOL 2.2）
 func hubEntryInvariants(_ n: String, _ h: HubEntry, _ raw: [String: Any]) {
     check("\(n) 字段类型", raw["kind"] is String && raw["url"] is String && raw["host"] is String && raw["state"] is String
           && (raw["error"] is String || isNull(raw["error"])) && (isNumber(raw["checked_epoch"]) || isNull(raw["checked_epoch"]))
-          && wholeCount(raw["accounts"]) && (raw["name"] is String || isNull(raw["name"])) && (wholeCount(raw["members"]) || isNull(raw["members"]))
-          && (isNumber(raw["joined_epoch"]) || isNull(raw["joined_epoch"])) && isBool(raw["can_invite"]))
+          && wholeCount(raw["accounts"]) && (raw["name"] is String || isNull(raw["name"]))
+          && (raw["team"] is String || isNull(raw["team"])) && (raw["team_name"] is String || isNull(raw["team_name"])))
     check("\(n) 地址是 https，host 是它的主机和端口", h.url.hasPrefix("https://") && h.url.hasSuffix(h.host) && !h.host.isEmpty)
-    check("\(n) 没成、用不了的有原因，成了的没有", (h.state == .error || h.state == .off) == (h.error != nil))
+    check("\(n) 没同步成的有原因，别的没有", (h.state == .error) == (h.error != nil))
     check("\(n) 成了就有时间", h.state != .ok || h.checkedEpoch != nil)
-    check("\(n) 只有自己的同步服务器有设备数、加入时间、加入链接", h.kind == .own ? h.canInvite && h.joinedEpoch != nil
-          : !h.canInvite && h.members == nil && h.joinedEpoch == nil && h.state != .off)
-    check("\(n) 自己的同步服务器的 pinned 是 true / false（加入链接里有没有指纹），别的是 null", h.kind == .own ? isBool(raw["pinned"]) : isNull(raw["pinned"]))
-}
-
-/// `cca hub status --json`（PROTOCOL 4.13）
-@discardableResult
-func genericHubStatus(_ name: String, _ d: Data) -> HubStatusDoc? {
-    guard let doc = decodeOrFail(HubStatusDoc.self, name, d) else { return nil }
-    let raw = jsonObject(d) as? [String: Any] ?? [:]
-    check("\(name) version 1", doc.version == 1)
-    check("\(name) 字段类型", isBool(raw["joined"]) && (raw["reason"] is String || isNull(raw["reason"]))
-          && (raw["hub"] is [String: Any] || isNull(raw["hub"])))
-    check("\(name) 加入了才有 hub", doc.joined == (doc.hub != nil))
-    check("\(name) 没加入时有原因；有原因时 hub 的 state 是 off / error", doc.joined
-          ? (doc.reason == nil || doc.hub?.state == .off || doc.hub?.state == .error) : doc.reason != nil)
-    if let h = doc.hub {
-        check("\(name) hub 是自己的同步服务器", h.kind == .own)
-        hubEntryInvariants(name + " hub", h, raw["hub"] as? [String: Any] ?? [:])
-    }
-    let a = EnumAudit()
-    a.add("hub.kind", doc.hub?.kind)
-    a.add("hub.state", doc.hub?.state)
-    knownEnums(name, a.unknown)
-    return doc
-}
-
-/// `cca hub devices --json`（PROTOCOL 4.13）
-@discardableResult
-func genericHubDevices(_ name: String, _ d: Data) -> HubDevicesDoc? {
-    guard let doc = decodeOrFail(HubDevicesDoc.self, name, d) else { return nil }
-    let raw = jsonObject(d) as? [String: Any] ?? [:]
-    check("\(name) version 1", doc.version == 1)
-    check("\(name) generated_epoch 是数字", isNumber(raw["generated_epoch"]))
-    let rd = raw["devices"] as? [[String: Any]] ?? []
-    check("\(name) 设备都解码了", rd.count == doc.devices.count)
-    check("\(name) 这台设备有、只有一台、排第一", doc.devices.filter(\.me).count == 1 && doc.devices.first?.me == true)
-    check("\(name) id 是设备指纹、不重复", doc.devices.allSatisfy { $0.id.hasPrefix("SHA256:") } && Set(doc.devices.map(\.id)).count == doc.devices.count)
-    check("\(name) 名字不为空、不重复", doc.devices.allSatisfy { !$0.name.isEmpty } && Set(doc.devices.map(\.name)).count == doc.devices.count)
-    check("\(name) 时间是数字或 null", rd.allSatisfy { r in ["joined_epoch", "seen_epoch"].allSatisfy { isNumber(r[$0]) || isNull(r[$0]) } })
-    return doc
+    check("\(n) Team 的服务器有 Team 的编号和名字，维护者的没有", h.kind == .team ? h.team?.count == 32 && h.teamName != nil : h.team == nil && h.teamName == nil)
+    // 以前只有自己的同步服务器才有值的几项：接口只加不删，cca 照旧给空的（PROTOCOL 2.2）
+    check("\(n) members、joined_epoch、pinned 是 null，can_invite 是 false", isNull(raw["members"]) && isNull(raw["joined_epoch"])
+          && isNull(raw["pinned"]) && isBool(raw["can_invite"]) && raw["can_invite"] as? Bool == false)
 }
 
 func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [String: Any], now: Double? = nil) {
@@ -712,8 +675,7 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
                   teams.contains { $0.id == a.team } && !a.isAPI)
         }
     }
-    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话维护者的在前、维护者的和自己的各最多一台（Team 的可以有几台，照编号分），
-    // 账号走的那一台在里面
+    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话维护者的在前、最多一台，Team 的可以有几台（照编号分），账号走的那一台在里面
     let rawConfig = raw["config"] as? [String: Any] ?? [:]
     if let rh = rawConfig["hubs"] {
         let rawHubs = rh as? [[String: Any]] ?? []
@@ -1260,12 +1222,6 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "cost_sync":
             genericCostSync(f, d)
             tolerance(CostSyncDoc.self, f, d) { [$0.scan == nil ? 0 : 1, $0.sync == nil ? 0 : 1] }
-        case "hub_status":
-            genericHubStatus(f, d)
-            tolerance(HubStatusDoc.self, f, d) { [$0.joined ? 1 : 0, $0.hub == nil ? 0 : 1] }
-        case "hub_devices":
-            genericHubDevices(f, d)
-            tolerance(HubDevicesDoc.self, f, d) { [$0.devices.count] }
         case "team_devices":
             // cca team devices <Team> --json（PROTOCOL 4.14）：设备编号不空不重复，这台设备最多一台，授权里的账号都在这个 Team 的配置里
             if let doc = decodeOrFail(TeamDevicesDoc.self, f, d) {
