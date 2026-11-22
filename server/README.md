@@ -375,6 +375,7 @@ CCA-RELAY/1 <角色> <编号> <cn> <mac>\n
 
 **证书。** 浏览器只认证书机构签的证书。`--web-listen 地址:端口 --web-cert 证书 --web-key 私钥` 另开一个端口（同一个服务：同样的接口，
 限流、用过的 nonce 是同一份），原来那个端口上自签的证书照旧给 cca 的设备用；证书文件换了（续上了）服务器一分钟内自己重新读。
+启动时证书还没有、读不了（头一张要等证书助手去要）也照样起来，只是这个端口上一握手就断，几秒钟看一次，有了就用上；日志里说。
 `--behind-proxy` 时 HTTPS 是平台做的，网页端就在同一个端口上。`--web-url` 是 `http://localhost:端口/` 时（本机试）`--web-listen`
 只能听本机的地址、不用证书。这三项也可以用环境变量 `CCA_WEB_LISTEN`、`CCA_WEB_CERT`、`CCA_WEB_KEY`（`compose.web.yaml`）。
 

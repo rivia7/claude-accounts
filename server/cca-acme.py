@@ -6,7 +6,11 @@
 （cca-presence.py 的 --web-cert / --web-key）发现文件换了会自己重新读，不用重启。
 
 验证只用 http-01：证书机构从公网连这台机器的 **80 端口**，取 /.well-known/acme-challenge/<令牌>（给 IP 签的证书不能用 DNS 验证）。
-所以这个程序自己一直听着一个端口（--listen，部署时把 80 端口指到它），别的路径一律 404；80 端口要从公网连得上。
+80 端口要从公网连得上。两种办法应答：
+- 这个程序自己一直听着一个端口（--listen，部署时把 80 端口指到它），别的路径一律 404
+- 80 端口上已经有别的网站服务（nginx、caddy……）：--webroot 目录，验证的文件写到 目录/.well-known/acme-challenge/ 里，让那个服务
+  把这一段路径指到这个目录。nginx 的写法（^~ 让它排在别的按正则匹配的 location 前面，比如拦 “.” 开头的路径的那种）：
+      location ^~ /.well-known/acme-challenge/ { root 目录; default_type text/plain; }
 
 只用 Python 标准库和系统的 openssl 命令（生成密钥、签名、做证书请求）：标准库里没有签名。账户的私钥、证书的私钥都只在这台机器上，
 证书的私钥续证书时不换（服务端、别的东西认的公钥不变）。
@@ -36,7 +40,7 @@ import urllib.request
 
 LETSENCRYPT = 'https://acme-v02.api.letsencrypt.org/directory'
 AGENT = 'cca-acme/1'
-TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{1,256}$')
+TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{1,256}\Z')   # \Z：$ 会放过结尾的换行（令牌要当文件名用：--webroot）
 NAME_RE = re.compile(r'^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$')
 RETRY = (60, 600, 3600, 6 * 3600)     # 没成以后隔多久再试（最后一个一直用）
 POLL = 90                             # 等证书机构验证、签发最多多少秒
@@ -142,6 +146,33 @@ class Responder(socketserver.ThreadingMixIn, http.server.HTTPServer):
     def __init__(self, addr):
         self.tokens = {}
         super().__init__(addr, Challenge)
+
+    def put(self, token, body):
+        self.tokens[token] = body
+
+    def drop(self, token):
+        self.tokens.pop(token, None)
+
+
+class Webroot:
+    """http-01 的文件放进一个目录（80 端口上已经有别的网站服务时，由它把 /.well-known/acme-challenge/ 指到这里）。
+    文件只在验证的那一会儿在：验完就删"""
+    def __init__(self, root):
+        self.dir = os.path.join(root, '.well-known', 'acme-challenge')
+        os.makedirs(self.dir, mode=0o755, exist_ok=True)
+
+    def put(self, token, body):
+        tmp = os.path.join(self.dir, '.%s.%d.tmp' % (token[:16], os.getpid()))
+        with open(tmp, 'wb') as f:
+            f.write(body)
+        os.chmod(tmp, 0o644)   # 网站服务多半是另一个用户在跑：要它读得了
+        os.replace(tmp, os.path.join(self.dir, token))
+
+    def drop(self, token):
+        try:
+            os.unlink(os.path.join(self.dir, token))
+        except OSError:
+            pass
 
 
 class Challenge(http.server.BaseHTTPRequestHandler):
@@ -269,7 +300,7 @@ class Acme:
                 ch = next((c for c in a.get('challenges') or [] if isinstance(c, dict) and c.get('type') == 'http-01'), None)
                 if not ch or not TOKEN_RE.match(str(ch.get('token', ''))) or not isinstance(ch.get('url'), str):
                     raise Problem('证书机构没给 http-01 这种验证办法')
-                responder.tokens[ch['token']] = ('%s.%s' % (ch['token'], self.key.thumbprint())).encode()
+                responder.put(ch['token'], ('%s.%s' % (ch['token'], self.key.thumbprint())).encode())
                 added.append(ch['token'])
                 status, _, c = self.post(ch['url'], {})
                 if status != 200:
@@ -291,7 +322,7 @@ class Acme:
             return pem
         finally:
             for token in added:
-                responder.tokens.pop(token, None)
+                responder.drop(token)
 
 
 def cert_state(path, ids, key):
@@ -328,6 +359,7 @@ def main():
     ap.add_argument('--out', required=True, help='证书放在这个目录里：fullchain.pem、privkey.pem')
     ap.add_argument('--account', required=True, help='账户的私钥放在这个目录里（account.key；留着它，续证书时用的是同一个账户）')
     ap.add_argument('--listen', default='0.0.0.0:18080', help='应答证书机构验证的端口（公网的 80 端口要指到它；默认 0.0.0.0:18080）')
+    ap.add_argument('--webroot', help='不自己听端口：验证的文件写到 这个目录/.well-known/acme-challenge/ 里，由 80 端口上已有的网站服务给出去')
     ap.add_argument('--directory', default=LETSENCRYPT, help='证书机构的 ACME 目录（默认是 Let\'s Encrypt）')
     ap.add_argument('--profile', default='shortlived', help='要哪一种证书（默认 shortlived：约 6 天，给 IP 地址签的只有这一种）；空的是证书机构默认的')
     ap.add_argument('--once', action='store_true', help='该要、该续就做一次，然后退出')
@@ -343,16 +375,20 @@ def main():
         for d in (a.out, a.account):
             os.makedirs(d, mode=0o700, exist_ok=True)
         account_key, cert_key = Key(os.path.join(a.account, 'account.key')), Key(os.path.join(a.out, 'privkey.pem'))
-        host, _, port = a.listen.rpartition(':')
-        responder = Responder((host.strip('[]') or '0.0.0.0', int(port)))
+        if a.webroot:
+            responder = Webroot(a.webroot)
+        else:
+            host, _, port = a.listen.rpartition(':')
+            responder = Responder((host.strip('[]') or '0.0.0.0', int(port)))
     except (Problem, OSError, ValueError) as e:
         log('起不来：%s' % e)
         return 2
-    if a.port_file:
-        with open(a.port_file + '.tmp', 'w') as f:
-            f.write('%d\n' % responder.server_address[1])
-        os.replace(a.port_file + '.tmp', a.port_file)
-    threading.Thread(target=responder.serve_forever, name='http-01', daemon=True).start()
+    if not a.webroot:
+        if a.port_file:
+            with open(a.port_file + '.tmp', 'w') as f:
+                f.write('%d\n' % responder.server_address[1])
+            os.replace(a.port_file + '.tmp', a.port_file)
+        threading.Thread(target=responder.serve_forever, name='http-01', daemon=True).start()
     chain = os.path.join(a.out, 'fullchain.pem')
     names = '、'.join(i['value'] for i in ids)
     fails, acme = 0, None

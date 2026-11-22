@@ -158,6 +158,31 @@ class AcmeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([e['profile'] for e in self.log() if 'order' in e], [None])
 
+    def test_webroot(self):
+        """80 端口上已经有别的网站服务：不自己听端口，验证的文件写进一个目录，由那个服务给出去；验完就删"""
+        root = self.d / 'site'
+        root.mkdir()
+        (root / 'index.html').write_text('别的网站')
+        site = subprocess.Popen([sys.executable, '-I', '-m', 'http.server', str(self.http_port), '--bind', '127.0.0.1', '--directory', str(root)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (site.kill(), site.wait()))
+
+        def up():
+            try:
+                socket.create_connection(('127.0.0.1', self.http_port), 1).close()
+                return True
+            except OSError:
+                return False
+        wait_for('那个网站起来', up)
+        directory = self.authority()
+        r = self.acme(directory, '--webroot', str(root))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([(e['validated'], e['ok']) for e in self.log() if 'validated' in e], [('127.0.0.1', True)])
+        self.assertIn('IP Address:127.0.0.1', self.cert())
+        held = root / '.well-known' / 'acme-challenge'
+        self.assertEqual((held.is_dir(), list(held.iterdir())), (True, []), '验证的文件验完就删了')
+        self.assertEqual((root / 'index.html').read_text(), '别的网站')
+
     def test_the_responder_and_running_forever(self):
         """不带 --once：拿到证书以后接着运行（等着续）；应答的端口上别的路径都是 404"""
         directory = self.authority()

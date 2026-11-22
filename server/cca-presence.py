@@ -1748,31 +1748,40 @@ def tls_context(cert, key):
 
 class CertCtx:
     """浏览器信得过的那张证书（--web-cert）：证书机构签的会到期、会被续上（90 天一换，给 IP 地址签的 6 天一换），
-    所以文件变了就重新读（最多一分钟看一次），不用重启；新的读不了时接着用旧的、在日志里说一声"""
+    所以文件变了就重新读（最多一分钟看一次），不用重启；新的读不了时接着用旧的、在日志里说一声。
+    启动时证书还没有也照样起来（证书助手 cca-acme.py 和这个服务一起装上时，头一张证书要等它去要）：那之前这个端口上的连接
+    一握手就断，隔几秒看一次文件来了没有"""
     def __init__(self, cert, key):
         self.cert, self.key, self.lock = cert, key, threading.Lock()
-        self.checked, self.warned = time.monotonic(), None
-        self.seen = self.stamp()
-        self.ctx = tls_context(cert, key)
+        self.checked, self.warned, self.seen, self.ctx = float('-inf'), None, None, None
+        self.get()
 
     def stamp(self):
         return tuple((s.st_mtime, s.st_size) for s in (os.stat(self.cert), os.stat(self.key)))
 
     def get(self):
+        """现在用的那张；一张都还没有是 None"""
         with self.lock:
             now = time.monotonic()
-            if now - self.checked >= 60:
+            if now - self.checked >= (60 if self.ctx else 5):
                 self.checked = now
                 try:
                     stamp = self.stamp()
                     if stamp != self.seen:
+                        had = self.ctx is not None
                         self.ctx, self.seen, self.warned = tls_context(self.cert, self.key), stamp, None
-                        sys.stderr.write('cca-presence: 网页端的证书换了，已经重新读\n')
+                        sys.stderr.write('cca-presence: 网页端的证书%s\n' % ('换了，已经重新读' if had else '有了，这个端口开始用它'))
                         sys.stderr.flush()
                 except (OSError, ssl.SSLError, ValueError) as e:
-                    if self.warned != str(e):   # 续证书的程序正写到一半：下一分钟再看；同一个错只说一次
-                        self.warned = str(e)
-                        sys.stderr.write('cca-presence: 网页端的新证书读不了（%s），接着用原来的\n' % e)
+                    missing = isinstance(e, FileNotFoundError)
+                    why = ('没有 %s' % e.filename) if missing else str(e)
+                    if self.warned != why:   # 续证书的程序正写到一半：下一次再看；同一个错只说一次
+                        self.warned = why
+                        if self.ctx:
+                            say = '新证书读不了（%s），接着用原来的' % why
+                        else:
+                            say = '证书%s（%s），等它好了这个端口再开始用（这之前手机连不上）' % ('还没有' if missing else '读不了', why)
+                        sys.stderr.write('cca-presence: 网页端的%s\n' % say)
                         sys.stderr.flush()
             return self.ctx
 
@@ -2205,6 +2214,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
                 return
             try:
                 ctx = self.ctx.get() if isinstance(self.ctx, CertCtx) else self.ctx
+                if ctx is None:   # 网页端的证书还没有：不握手，直接断开
+                    return
                 tls = ctx.wrap_socket(request, server_side=True)
             except (OSError, ValueError):
                 return
@@ -2349,10 +2360,7 @@ def main():
     wsrv = None
     if a.web_listen:   # 网页端另开的端口：同一个服务（同样的接口、同一份限流），只是证书是浏览器信得过的那一张
         whost, _, wport = a.web_listen.rpartition(':')
-        try:
-            wctx = None if web_local else CertCtx(a.web_cert, a.web_key)
-        except (OSError, ssl.SSLError, ValueError) as e:
-            ap.error('网页端的证书读不了：%s' % e)
+        wctx = None if web_local else CertCtx(a.web_cert, a.web_key)   # 证书有问题也照样起来（只是这个端口握不了手），日志里说
         wsrv = Server((whost.strip('[]') or '0.0.0.0', int(wport)), wctx, store, release, sig_ok, remote, web, share=srv)
         threading.Thread(target=wsrv.serve_forever, name='web', daemon=True).start()
         if a.web_port_file:

@@ -489,6 +489,46 @@ class ServerTest(WebBase):
         self.assertEqual(list(g.good('relay_list', pids=[pid])['peers']), [pid])
 
 
+class LateCertTest(Base):
+    """网页端的证书启动时还没有（证书助手和服务端一起装上时，头一张要等它去要）：服务照样起来，那个端口上握不了手；
+    证书出现以后几秒钟内自己用上，不用重启"""
+    def server_extra(self, d):
+        self.tls = d / 'late-tls'
+        self.tls.mkdir()
+        root = d / 'web-root'
+        root.mkdir()
+        (root / 'index.html').write_bytes(b'<!doctype html><title>cca</title>')
+        return ['--web-url', 'https://relay.example.com:8443/', '--web-listen', '127.0.0.1:0', '--web-port-file', str(d / 'wport'),
+                '--web-cert', str(self.tls / 'cert.pem'), '--web-key', str(self.tls / 'key.pem'), '--web-root', str(root)]
+
+    def test_the_certificate_arrives_later(self):
+        wport = int(wait_for('网页端的端口起来', lambda: (self.d / 'wport').exists() and (self.d / 'wport').read_text()))
+        loose = ssl._create_unverified_context()
+
+        def page(ctx):
+            c = http.client.HTTPSConnection('127.0.0.1', wport, context=ctx, timeout=10)
+            try:
+                c.request('GET', '/')
+                return c.getresponse().status
+            finally:
+                c.close()
+        with self.assertRaises(OSError):   # 握手握不成（连接被断开）
+            page(loose)
+        # 给 cca 的设备用的那个端口不受影响
+        c = http.client.HTTPSConnection('127.0.0.1', self.srv.port, context=loose, timeout=10)
+        c.request('GET', '/v1/health')
+        self.assertEqual(json.loads(c.getresponse().read())['ok'], True)
+        c.close()
+        make_ca_cert(self.tls)   # 证书来了（先有私钥、后有证书：中间那一下读不全，下一次再看）
+
+        def ready():
+            try:
+                return page(ca_ctx(self.tls / 'ca.pem')) == 200
+            except OSError:
+                return False
+        wait_for('证书出现以后用上了', ready, 30)
+
+
 class OffTest(Base):
     """没开网页端的服务器（和以前一样）：没有那一页、没有 WebSocket，设备开不了给网页端的配对，不在清单里的一律不认"""
     def test_off(self):
