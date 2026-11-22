@@ -401,7 +401,7 @@ nodes_extract() {   # nodes_extract 参考配置 策略组：打印 nodes.json �
 # 服务端是 server/cca-presence.py；各台机器用自己的 deploy key 签名，服务器只认发布密钥签的设备清单（命名空间 cca-devices）
 # ---------------------------------------------------------------------------
 PRESENCE_USAGE="用法：./policy.sh presence deploy root@主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay] [--dir 服务器上的目录] [-C 映射仓库的目录]
-                                  [--web-url https://域名[:端口]/ [--web-cert 证书 --web-key 私钥] | --no-web]
+                                  [--web-url https://地址[:端口]/ [--web-acme | --web-cert 证书 --web-key 私钥] | --no-web]
       ./policy.sh presence sync | status [-C 映射仓库的目录] [-R 仓库]"
 policy_dir() { printf '%s' "${PDIR:-${CCA_POLICY_DIR:-$HERE/../cca-policy}}"; }
 mapping_repo() {   # mapping_repo 目录：映射目录推送到的 GitHub 仓库（维护者/仓库）；不是 git 仓库、没有 origin 时是空的
@@ -509,9 +509,10 @@ presence_after() {   # key add / rm / mv 之后：映射里配置了设备统计
 	if presence_sync; then echo "✓ 设备统计的服务器认得的设备跟着更新了（${P_N} 台）"
 	else echo "! 设备清单没同步到服务器：${P_ERR}（修好后运行 ./policy.sh presence sync）"; fi
 }
-presence_remote() {   # presence_remote 服务器上的目录 端口 发布公钥 中转 网页端 [证书 私钥]：在服务器上运行的安装脚本（root；文件以 base64 带过去）。
+presence_remote() {   # presence_remote 服务器上的目录 端口 发布公钥 中转 网页端 证书助手 [证书 私钥]：在服务器上运行的安装脚本（root；文件以 base64 带过去）。
 	# 中转：数据端口；off 不开；空的照服务器上 .env 里上次选的（没选过就是 18444）
-	# 网页端：https://域名[:端口]/；off 不开；空的照 .env 里上次选的（没选过就是不开）。证书、私钥：这台 Mac 上的两个文件，传到 webcert/
+	# 网页端：https://地址[:端口]/；off 不开；空的照 .env 里上次选的（没选过就是不开）。证书、私钥：这台 Mac 上的两个文件，传到 webcert/
+	# 证书助手（网页端的证书向 Let's Encrypt 要、到时候续上：容器 cca-acme，占着 80 端口应答验证）：on 开；off 不开；空的照上次选的
 	local f
 	cat <<SH
 set -eu
@@ -524,8 +525,9 @@ command -v openssl >/dev/null 2>&1 || fail "服务器上没有 openssl（第一�
 mkdir -p "\$D/app" "\$D/config" "\$D/certs" "\$D/data"
 put() { ( umask 077; printf '%s' "\$2" | base64 -d > "\$D/\$1.new.\$\$" ) && chmod "\${3:-644}" "\$D/\$1.new.\$\$" && mv -f "\$D/\$1.new.\$\$" "\$D/\$1"; }
 SH
-	for f in compose.yaml compose.web.yaml README.md; do printf "put %s '%s'\n" "$f" "$(base64 < "$HERE/server/$f" | tr -d '\n')"; done
+	for f in compose.yaml compose.web.yaml compose.acme.yaml README.md; do printf "put %s '%s'\n" "$f" "$(base64 < "$HERE/server/$f" | tr -d '\n')"; done
 	printf "put app/cca-presence.py '%s'\n" "$(base64 < "$HERE/server/cca-presence.py" | tr -d '\n')"
+	printf "put app/cca-acme.py '%s'\n" "$(base64 < "$HERE/server/cca-acme.py" | tr -d '\n')"
 	printf "put config/release.pub '%s'\n" "$(printf '%s\n' "$3" | base64 | tr -d '\n')"
 	# 网页端的页面：整个目录换成这一次的（先放进 app/web.new，放齐了再换上：旧的文件不留下）
 	printf 'rm -rf "$D/app/web.new" && mkdir -p "$D/app/web.new"\n'
@@ -534,14 +536,14 @@ SH
 		printf "put app/web.new/%s '%s'\n" "${f##*/}" "$(base64 < "$f" | tr -d '\n')"
 	done
 	printf 'rm -rf "$D/app/web.old"; [ ! -d "$D/app/web" ] || mv "$D/app/web" "$D/app/web.old"; mv "$D/app/web.new" "$D/app/web"; rm -rf "$D/app/web.old"\n'
-	if [ -n "${6:-}" ]; then   # 证书和私钥：私钥只经这条 SSH 连接过去；目录先建成只有自己进得去的，私钥落盘时就是 600，
+	if [ -n "${7:-}" ]; then   # 证书和私钥：私钥只经这条 SSH 连接过去；目录先建成只有自己进得去的，私钥落盘时就是 600，
 		                         # 放好马上交给容器里的用户（后面哪一步停下来，它都不会是别人读得了的）
 		printf '( umask 077; mkdir -p "$D/webcert" ); chmod 700 "$D/webcert"\n'
-		printf "put webcert/fullchain.pem '%s'\n" "$(base64 < "$6" | tr -d '\n')"
-		printf "put webcert/privkey.pem '%s' 600\n" "$(base64 < "$7" | tr -d '\n')"
+		printf "put webcert/fullchain.pem '%s'\n" "$(base64 < "$7" | tr -d '\n')"
+		printf "put webcert/privkey.pem '%s' 600\n" "$(base64 < "$8" | tr -d '\n')"
 		printf 'chown -R 10001:10001 "$D/webcert"\n'
 	fi
-	printf "PORT='%s'\nRELAY='%s'\nWEB='%s'\n" "$2" "$4" "$5"
+	printf "PORT='%s'\nRELAY='%s'\nWEB='%s'\nACME='%s'\n" "$2" "$4" "$5" "$6"
 	cat <<'SH'
 if [ ! -f "$D/certs/cert.pem" ]; then   # 第一次：自签的 P-256 证书（macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住），私钥不出服务器
 	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 -subj /CN=cca-presence \
@@ -564,8 +566,11 @@ case "${RELAY:-18444}" in
 	off) relay="CCA_RELAY=off\nCCA_RELAY_LISTEN=\nCCA_RELAY_PORT=18444\nCCA_RELAY_BIND=127.0.0.1\n" ;;
 	*) relay="CCA_RELAY=${RELAY:-18444}\nCCA_RELAY_LISTEN=0.0.0.0:18444\nCCA_RELAY_PORT=${RELAY:-18444}\nCCA_RELAY_BIND=0.0.0.0\n" ;;
 esac
-# 网页端：WEB 是它的地址，off 不开，空的照上次选的。开着就要有证书：浏览器只认证书机构签的
+# 网页端：WEB 是它的地址，off 不开，空的照上次选的。开着就要有证书：浏览器只认证书机构签的——自己传上来的（webcert/），
+# 或者证书助手要的（ACME=on：容器 cca-acme 向 Let's Encrypt 要、到时候续上，写进 webcert/；它占着 80 端口应答证书机构的验证）
 [ -n "$WEB" ] || WEB=$(sed -n 's/^CCA_WEB_URL=//p' .env 2>/dev/null || true)
+[ -n "$ACME" ] || ACME=$(sed -n 's/^CCA_ACME=//p' .env 2>/dev/null || true)
+[ "${WEB:-off}" != off ] || ACME=off
 web=""
 case "${WEB:-off}" in
 	off) ;;
@@ -575,11 +580,23 @@ case "${WEB:-off}" in
 		wport=$(printf '%s' "$WEB" | sed -n 's#^https://[^:/]*:\([0-9][0-9]*\)/*$#\1#p')
 		wport=${wport:-443}
 		[ "$wport" != "$PORT" ] && [ "$wport" != "${RELAY:-18444}" ] || fail "网页端的端口（${wport}，${WEB}）和设备统计、中转的端口撞了：换一个，或者用 --no-web 关掉网页端"
-		[ -s "$D/webcert/fullchain.pem" ] && [ -s "$D/webcert/privkey.pem" ] ||
-			fail "网页端要一张浏览器信得过的证书：把证书（连同中间证书）和私钥放到 ${D}/webcert/fullchain.pem、privkey.pem（或者部署时用 --web-cert、--web-key 传上来），再运行一次"
-		chown -R 10001:10001 "$D/webcert"; chmod 700 "$D/webcert"; chmod 600 "$D/webcert/privkey.pem"; chmod 644 "$D/webcert/fullchain.pem"
-		openssl x509 -in "$D/webcert/fullchain.pem" -noout -checkend 0 >/dev/null 2>&1 || fail "${D}/webcert/fullchain.pem 不是证书，或者已经过期了"
-		web="CCA_WEB_URL=${WEB}\nCCA_WEB_PORT=${wport}\nCOMPOSE_FILE=compose.yaml:compose.web.yaml\n" ;;
+		if [ "${ACME:-off}" = on ]; then
+			[ "$wport" != 80 ] || fail "网页端的端口不能是 80：证书助手要用它应答证书机构的验证"
+			# 80 端口：证书机构从公网连它来验证。被别的程序占着（不是上次起的 cca-acme）就停下，别让 docker 起到一半
+			if [ "$(docker inspect -f '{{.State.Running}}' cca-acme 2>/dev/null)" != true ] && command -v ss >/dev/null 2>&1 &&
+				ss -ltn 2>/dev/null | awk '{ print $4 }' | grep -Eq '[:.]80$'; then
+				fail "80 端口被别的程序占着：证书助手要用它应答 Let's Encrypt 的验证（证书机构从公网连这台服务器的 80 端口）。先把那个程序挪到别的端口，或者自己放证书（--web-cert、--web-key）"
+			fi
+			whost=$(printf '%s' "$WEB" | sed -n 's#^https://\([^:/]*\).*$#\1#p')
+			( umask 077; mkdir -p "$D/webcert" "$D/acme" ); chown -R 10001:10001 "$D/webcert" "$D/acme"; chmod 700 "$D/webcert" "$D/acme"
+			web="CCA_WEB_URL=${WEB}\nCCA_WEB_PORT=${wport}\nCCA_ACME=on\nCCA_ACME_ID=${whost}\nCOMPOSE_FILE=compose.yaml:compose.web.yaml:compose.acme.yaml\n"
+		else
+			[ -s "$D/webcert/fullchain.pem" ] && [ -s "$D/webcert/privkey.pem" ] ||
+				fail "网页端要一张浏览器信得过的证书：把证书（连同中间证书）和私钥放到 ${D}/webcert/fullchain.pem、privkey.pem（或者部署时用 --web-cert、--web-key 传上来；或者 --web-acme 让证书助手去要），再运行一次"
+			chown -R 10001:10001 "$D/webcert"; chmod 700 "$D/webcert"; chmod 600 "$D/webcert/privkey.pem"; chmod 644 "$D/webcert/fullchain.pem"
+			openssl x509 -in "$D/webcert/fullchain.pem" -noout -checkend 0 >/dev/null 2>&1 || fail "${D}/webcert/fullchain.pem 不是证书，或者已经过期了"
+			web="CCA_WEB_URL=${WEB}\nCCA_WEB_PORT=${wport}\nCOMPOSE_FILE=compose.yaml:compose.web.yaml\n"
+		fi ;;
 	*) fail ".env 里的 CCA_WEB_URL 不对：${WEB}（用 --web-url 重新给，或者 --no-web 关掉）" ;;
 esac
 { printf 'CCA_PRESENCE_PORT=%s\nCCA_PRESENCE_IMAGE=%s\n' "$PORT" "$img"; printf "$relay"; printf "$web"; } > .env.new && mv -f .env.new .env
@@ -588,6 +605,20 @@ sleep 3
 [ "$(docker inspect -f '{{.State.Running}}' cca-presence 2>/dev/null)" = true ] || { echo "✗ 容器没起来："; docker compose logs --tail 20; exit 1; }
 echo "容器 cca-presence 在跑（${D}，镜像 $(docker inspect -f '{{.Config.Image}}' cca-presence 2>/dev/null)）"
 docker compose logs --tail 1 2>/dev/null | sed 's/^[^|]*| *//'
+if [ "${ACME:-off}" = on ]; then   # 证书助手头一次要证书：等它拿到（最多 3 分钟；没拿到它自己接着试，这里不算部署失败）
+	i=0
+	until openssl x509 -in "$D/webcert/fullchain.pem" -noout -checkend 3600 >/dev/null 2>&1; do
+		i=$((i + 1))
+		if [ $i -gt 60 ]; then
+			echo "! 证书助手 3 分钟里还没拿到网页端的证书（它会接着试：隔 1 分钟、10 分钟、1 小时、6 小时）。它最近说的："
+			docker logs --tail 6 cca-acme 2>&1 | sed 's/^/    /'
+			break
+		fi
+		sleep 3
+	done
+	end=$(openssl x509 -in "$D/webcert/fullchain.pem" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+	[ -z "$end" ] || echo "网页端的证书（证书助手向 Let's Encrypt 要的）${end} 到期：过了一半有效期它就续，服务端自己换上"
+fi
 echo "PIN sha256//$(openssl x509 -in "$D/certs/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl base64 -A)"
 SH
 }
@@ -636,8 +667,8 @@ except Exception:
 		echo "! 网页端开着（${url}），但从这台 Mac 连不上，或者证书浏览器不认：看看域名指没指到这台服务器、安全组里放没放行这个端口、证书是不是给这个域名的"
 	fi
 }
-presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay] [--web-url 网址 [--web-cert 证书 --web-key 私钥] | --no-web]
-	local target="" sshport="" ident="" port=18443 relay="" web="" wcert="" wkey="" rdir=/root/projects/cca-presence dir host hp pub out rc=0 pin ssh_args
+presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--relay-port 端口 | --no-relay] [--web-url 网址 [--web-acme | --web-cert 证书 --web-key 私钥] | --no-web]
+	local target="" sshport="" ident="" port=18443 relay="" web="" acme="" wcert="" wkey="" rdir=/root/projects/cca-presence dir host hp pub out rc=0 pin ssh_args
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			-p) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; sshport="$2"; shift ;;
@@ -648,6 +679,7 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 			--web-url) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; web="$2"; shift ;;
 			--web-cert) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; wcert="$2"; shift ;;
 			--web-key) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; wkey="$2"; shift ;;
+			--web-acme) acme=on ;;
 			--no-web) web=off ;;
 			--dir) [ $# -ge 2 ] || fail "$PRESENCE_USAGE"; rdir="$2"; shift ;;
 			-*) fail "$PRESENCE_USAGE" ;;
@@ -670,6 +702,13 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 	fi
 	[ -z "$wcert$wkey" ] || { [ -n "$web" ] && [ "$web" != off ] && [ -s "$wcert" ] && [ -s "$wkey" ]; } ||
 		fail "--web-cert、--web-key 要一起给（证书连同中间证书、私钥，两个都要是这台 Mac 上的文件），还要有 --web-url"
+	if [ "$acme" = on ]; then   # 证书助手：证书向 Let's Encrypt 要（给网页端地址里的那个 IP 或者域名），占着服务器的 80 端口应答验证
+		[ -z "$wcert$wkey" ] || fail "--web-acme（证书助手去要证书）和 --web-cert、--web-key（自己放证书）只能选一种"
+		[ -n "$web" ] && [ "$web" != off ] || fail "--web-acme 要和 --web-url 一起给（证书是给网页端的地址要的）"
+		[ "${out:-443}" != 80 ] || fail "--web-acme 时网页端的端口不能是 80：证书助手要用它应答证书机构的验证"
+	elif [ -n "$wcert" ] || [ "$web" = off ]; then
+		acme=off   # 自己放了证书、关了网页端：不再要证书助手（上次起的 cca-acme 停掉）
+	fi
 	if [ -n "$wkey" ]; then   # 传上去之前在这台 Mac 上先看一遍：到了服务器上才发现不对，服务端起不来
 		grep -q 'BEGIN CERTIFICATE' "$wcert" || fail "--web-cert 不是证书文件：${wcert}"
 		grep -q 'PRIVATE KEY' "$wkey" || fail "--web-key 不是私钥文件：${wkey}"
@@ -689,7 +728,7 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 	[ -z "$ident" ] || ssh_args+=(-i "$ident" -o IdentitiesOnly=yes)
 	[ -z "$sshport" ] || ssh_args+=(-p "$sshport")
 	echo "• 部署设备统计的服务器到 ${target}:${rdir}（docker compose，端口 ${port}）…"
-	out=$(presence_remote "$rdir" "$port" "$pub" "$relay" "$web" "$wcert" "$wkey" | ssh "${ssh_args[@]}" "$target" 'sh -s' 2>&1) || rc=$?
+	out=$(presence_remote "$rdir" "$port" "$pub" "$relay" "$web" "$acme" "$wcert" "$wkey" | ssh "${ssh_args[@]}" "$target" 'sh -s' 2>&1) || rc=$?
 	printf '%s\n' "$out" | grep -v '^PIN ' | sed 's/^/  /' || true
 	pin=$(printf '%s\n' "$out" | sed -n 's/^PIN //p' | tail -n 1)
 	[ "$rc" = 0 ] && [[ "$pin" =~ ^sha256//[A-Za-z0-9+/]{43}=$ ]] || fail "部署没完成（上面是服务器那边的输出）"

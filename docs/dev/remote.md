@@ -301,7 +301,12 @@
   `--web-url` 写的那个）：终端里打印出来，App 里是一页（题号 `remote.pair_web`：地址画成二维码，`kind` 是 `qr`）。服务器没开网页端、
   是旧版（不认 `web` 这一项，照普通的配对开了）时辅助程序把那次配对作废、说清楚（`NO_WEB`）。配对表里这一项记着 `web`
   （只是给人看的：`cca remote peers` 里标「手机上的网页端」，App 里一个「手机」的标签），它能做什么照旧是 `incoming`
-- 部署：`./policy.sh presence deploy 主机 --web-url https://域名[:端口]/ [--web-cert 证书 --web-key 私钥]`。页面的文件传到
+- 部署：`./policy.sh presence deploy 主机 --web-url https://地址[:端口]/ [--web-acme | --web-cert 证书 --web-key 私钥]`。
+  `--web-acme`：证书由证书助手（下面「证书从哪来」）向 Let's Encrypt 要、到时候续上——另一个容器 `cca-acme`（`compose.acme.yaml`，
+  `.env` 的 `CCA_ACME=on`、`CCA_ACME_ID` 是网页端地址里的那个 IP 或者域名，`COMPOSE_FILE` 带上它），占着服务器的 80 端口应答验证
+  （80 被别的程序占着时部署停下、说清楚；网页端自己的端口不能是 80），证书写进 `webcert/`，账户在 `acme/`（都是 700、交给 10001）。
+  头一次部署等它拿到证书（最多 3 分钟；没拿到不算部署失败，它自己接着试），说什么时候到期。`--web-cert`、`--web-key`、`--no-web`
+  关掉它（下次 `docker compose up --remove-orphans` 把那个容器删掉）；什么都不写照上次的。页面的文件传到
   `app/web/`，证书在 `webcert/`（`fullchain.pem`、`privkey.pem`），多出来的几项在另一个文件 `compose.web.yaml` 里
   （`.env` 的 `COMPOSE_FILE` 把它带上）：没开网页端时原来那一套一个字不变。`--no-web` 关掉；部署完和 `presence status` 都从这台 Mac
   照证书机构验一次证书、说连不连得上。私钥传上去时落盘就是 600、目录 700，马上交给容器里的用户（后面哪一步停下它都不是别人读得了的）；
@@ -325,8 +330,8 @@
   - 国内没备案的服务器：按域名拦的 80、443 对“直接用 IP 访问”一般不拦，所以 http-01 走得通；tls-alpn-01 要的服务器名是
     `x.x.x.x.in-addr.arpa`，像域名，没用它。**这一条没实测过**
   - 也能给域名要（`--id 域名`）；有域名、想用 90 天证书的照旧可以自己放证书（`--web-cert`、`--web-key`）
-  - **还没接进部署**：现在要用得自己在服务器上把它跑起来（`python3 cca-acme.py --id 公网IP --out 证书目录 --account 账户目录
-    --listen 0.0.0.0:80`，或者 `--webroot 目录`），证书目录就是 `webcert/`。接进 `./policy.sh presence deploy` 和 Team 的安装脚本是下一步
+  - 接进了 `./policy.sh presence deploy`（`--web-acme`，上面「部署」）；Team 的安装脚本还没有（下面「还没做的」）。别处要用得自己
+    在服务器上把它跑起来（`python3 cca-acme.py --id 公网IP --out 证书目录 --account 账户目录 --listen 0.0.0.0:80`，或者 `--webroot 目录`）
 - 还没做的：
   - 真的 iPhone 上一样都没试过：键盘弹出时的版面、手指滚动回看、输入法、添加到主屏幕以后的样子、切到后台再回来、
     Safari 对不可导出的 Ed25519 密钥存进 IndexedDB 认不认。页面只在 Chrome 的引擎里走过
