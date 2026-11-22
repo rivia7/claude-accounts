@@ -3653,7 +3653,8 @@ elif op == 'get':   # get 邀请链接 密钥文件 端口：再取一次（状�
     inv = sw.invite_decode(a[0])
     st, j = sw.post(a[1], int(a[2]), 'team_get', {})
     print(st, j.get('error') or '', (j.get('doc') or {}).get('seq') or j.get('seq') or '')
-elif op == 'admin':   # admin 根密钥 端口 地址 指纹 那串随机数 序号 名字 节点：发邀请、存一份配置（alice 走这个节点），打印邀请链接
+elif op == 'admin':   # admin 根密钥 端口 地址 指纹 那串随机数 序号 名字 节点 [lock]：发邀请、存一份配置（alice 走这个节点；lock：alice 叫 team-1，
+    # 锁定别名），打印邀请链接
     root, port, url, pin, secret, seq, name, node = a[0], int(a[1]), a[2], a[3], a[4], int(a[5]), a[6], a[7]
     with open(root + '.pub') as f:
         pub = ' '.join(f.read().split()[:2])
@@ -3664,6 +3665,8 @@ elif op == 'admin':   # admin 根密钥 端口 地址 指纹 那串随机数 序
         assert st == 200, (st, j)
     doc = {'v': 1, 'at': 1790000000 + seq, 'name': name, 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
            'accounts': {'claude': {'alice@example.com': node}}, 'aliases': {}, 'install_node': '', 'nodes': None}
+    if a[8:] == ['lock']:
+        doc.update(aliases={'alice@example.com': 'team-1'}, tool_aliases={'claude': {'alice@example.com': 'team-1'}}, alias_lock=True)
     ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
     st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(root, tid, dev, seq, ct)}}})
     assert (st, j.get('stored')) == (200, [dev]), (st, j)
@@ -3690,7 +3693,7 @@ TMA="$T/team-a"; tm_cert "$TMA"; tm_srv "$TMA" "$TMROOT"; TMAPID=$TMPID; TMAPORT
 out=$(runev cca team attach 书房组 "https://127.0.0.1:$TMAPORT" "sha256//$(printf 'A%.0s' $(seq 1 43))=" 2>&1); rc=$?
 ok "cca team attach：证书的指纹对不上：不接（fail 事件 team_pin）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_pin\""'
 out=$(run cca team attach "${TMID:0:8}" "https://127.0.0.1:$TMAPORT" "$TMAPIN" 2>&1); rc=$?
-ok "cca team attach：接上了，这台设备登记上去、取到了自己的配置" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "接上了 127.0.0.1:${TMAPORT}：这台设备叫 书房的Mac，现在有 1 台设备；1 台设备的配置发布了新的一版" && [ -s "$H/.cca/teams/$TMID/doc.json" ] && run cca team 2>&1 | grep -q "已同步，第 1 版配置、0 个账号"'
+ok "cca team attach：接上了，这台设备登记上去、取到了自己的配置" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "接上了 127.0.0.1:${TMAPORT}：这台设备叫 书房的Mac，现在有 1 台设备；1 台设备的配置发布了新的一版" && [ -s "$H/.cca/teams/$TMID/doc.json" ] && run cca team 2>&1 | grep -q "已同步，这台设备能用 0 个账号"'
 out=$(run cca team grant 书房组 书房的Mac none 2>&1); rc=$?
 ok "cca team grant：管理员自己这台不要 Team 的账号（下面导入的映射不进这台 Mac 的账号表）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是0 个账号"'
 printf '%s' '{"version": 1, "claude": {"alice@example.com": "US-A", "bob@example.com": "US-B"}, "codex": {"carol@example.com": "US-A"}}' > "$T/tm-policy.json"
@@ -3707,7 +3710,7 @@ ssh-keygen -q -t ed25519 -N '' -C dan -f "$T/tm-dan" </dev/null >/dev/null 2>&1
 out=$(tm_spec join "$TMLINK" "$T/tm-dan" "$TMAPORT" 2>&1)
 ok "照文档独立实现的那一头拿这个邀请加入、验过根密钥的签名、解开：只有给它的账号和这个账号要的节点" '[ "$out" = "{\"accounts\": {\"claude\": {\"alice@example.com\": \"US-A\"}}, \"nodes\": [\"US-A\"], \"seq\": 1}" ]'
 out=$(run cca team devices 书房组 2>&1); rc=$?
-ok "cca team devices：和服务器对一遍，两台都加入了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "书房的Mac（.*）：joined，0 个账号，发布到第 1 版" && printf "%s" "$out" | grep -q "dan-air（.*）：joined，1 个账号，发布到第 1 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
+ok "cca team devices：和服务器对一遍，两台都加入了（不说第几版）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -Eq "书房的Mac（.*）：joined，0 个账号，配置(是最新的|发布了)$" && printf "%s" "$out" | grep -Eq "dan-air（.*）：joined，1 个账号，配置(是最新的|发布了)$" && ! printf "%s" "$out" | grep -q "第 [0-9]* 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
 out=$(run cca team grant 书房组 dan-air +claude:bob@example.com 2>&1); rc=$?
 ok "cca team grant：多给一个账号，发布；那一头取到新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是2 个账号" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  2" ]'
 out=$(run cca team map 书房组 claude alice@example.com US-B 2>&1); rc=$?
@@ -3724,6 +3727,10 @@ out=$(runev cca team name 书房 "" 2>&1); rc=$?
 ok "cca team name：名字是空的不行（fail 事件 team_name）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_name\""'
 out=$(run cca team name 书房 书房组 2>&1); rc=$?
 ok "cca team name：改回来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：「书房」现在叫「书房组」" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  6" ]'
+out=$(run cca team alias 书房组 --lock 2>&1); rc=$?
+ok "cca team alias --lock：锁定账号的别名，发布（那一头取到新的一版）；cca team devices 说锁定着，--json 的 alias_lock 是 true" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已锁定「书房组」里账号的别名；2 台设备的配置发布了新的一版" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  7" ] && run cca team devices 书房组 2>&1 | grep -q "账号的别名锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is True"'
+out=$(run cca team alias 书房组 --unlock 2>&1); rc=$?
+ok "cca team alias --unlock：解开（再发布一次）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已解开「书房组」里账号的别名" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ] && ! run cca team devices 书房组 2>&1 | grep -q "锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is False"'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
@@ -3750,7 +3757,7 @@ ok "cca team join：问邀请链接（输入不显示），加入了、取到了
 out=$(run cca team 2>&1)
 ok "加入以后账号表照 Team 的配置改：alice 的节点由它定（说一声）" '[ "$(tm_alice)" = "$TMNODE" ] && [ "$TMNODE" != "$TMWAS" ] && printf "%s" "$TMJOIN" | grep -q "的出口按「维护者的组」的配置固定为 ${TMNODE}（账号表里写的是 ${TMWAS}，已改回）"'
 out=$(run cca team 2>&1)
-ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，第 1 版配置、1 个账号"'
+ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，这台设备能用 1 个账号"'
 # App 的契约测试要的真实输出（这一节最后交给 macos/test.sh 解码）：hello、带着 Team 的 state、team ls、管理员的 team devices
 mkdir -p "$T/guifx4"; gj hello > "$T/guifx4/hello.json"; run cca team ls --json > "$T/guifx4/team_list.json" 2>/dev/null
 run cca team devices 书房组 --json > "$T/guifx4/team_devices.json" 2>/dev/null
@@ -3769,13 +3776,21 @@ out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join 2>&1); rc=$?
 ok "再拿同一个邀请加入：已经在这个 Team 里了（fail 事件 team_joined）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_joined\""'
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 2 改过名的组 "$TMNODE" >/dev/null 2>&1
 out=$(run cca team sync 维护者的组 2>&1); rc=$?
-ok "cca team sync：取到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：手里的是第 2 版配置" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
+ok "cca team sync：取到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：配置已同步" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
+tm_akey() { python3 -c 'import json,sys; print(next(k for k in json.load(open(sys.argv[1])) if k == "alice@example.com" or k.endswith("(alice@example.com)")))' "$H/.cca/accounts.json"; }   # alice 现在的键
+tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 3 改过名的组 "$TMNODE" lock >/dev/null 2>&1
+out=$(run cca team sync "${TMBID:0:8}" 2>&1); rc=$?
+ok "管理员锁定了别名：取到配置以后 alice 的别名换成 Team 给的（说一声）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组.*team-1" && [ "$(tm_akey)" = "team-1(alice@example.com)" ]'
+out=$(runev cca rename "team-1(alice@example.com)" 主号 2>&1); rc=$?
+ok "cca rename：别名被 Team 锁定了的改不了（fail 事件 alias_locked，说是哪个 Team），账号表不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"alias_locked\" and \"改过名的组\" in e[\"message\"]" && [ "$(tm_akey)" = "team-1(alice@example.com)" ]'
+out=$(gj state)
+ok "_gui state：alice 的 alias_locked 是 true，别的账号是 false" 'printf "%s" "$out" | jok "[a[\"alias_locked\"] for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\"] == [True] and not any(a[\"alias_locked\"] for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
 out=$(run cca team leave 2>&1); rc=$?
 ok "cca team leave：不止一个 Team 时要写是哪一个" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "要写是哪一个"'
 out=$(tm_spec revoke "$T/tm-root" "$TMBPORT" "$TMS" 2>&1)
 ok "（管理员那一头移除这台 Mac）" '[ "$out" = 200 ]'
 out=$(run cca team sync 2>&1); rc=$?
-ok "被管理员移除了：cca team sync 说出来（别的 Team 照常），退出码不是 0" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "改过名的组：这台设备被「改过名的组」的管理员移除了" && printf "%s" "$out" | grep -q "书房组：手里的是第" && run cca team 2>&1 | grep -q "被管理员移除了"'
+ok "被管理员移除了：cca team sync 说出来（别的 Team 照常），退出码不是 0" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "改过名的组：这台设备被「改过名的组」的管理员移除了" && printf "%s" "$out" | grep -q "书房组：配置已同步" && run cca team 2>&1 | grep -q "被管理员移除了"'
 out=$(runev cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "cca team leave（成员）：App 里先发同意事件（team_leave，范围是 Team 的编号）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_leave\" and e[\"scope\"] == \"$TMBID\"" && [ -d "$H/.cca/teams/$TMBID" ]'
 out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); rc=$?

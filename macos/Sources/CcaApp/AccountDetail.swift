@@ -309,6 +309,7 @@ struct SessionButton: View {
 }
 
 /// 账号页的名字：直接点一下就能改别名（就地变成输入框，回车保存、Esc 取消）。悬停时露出淡淡的底色和笔。
+/// 别名被 Team 的管理员锁定了的（`aliasLocked`）只显示名字和一把小锁，不能点
 struct AliasTitle: View {
     @Environment(AppModel.self) private var model
     let account: Account
@@ -318,6 +319,19 @@ struct AliasTitle: View {
         let a = account
         if model.aliasEditing == a.ref {
             InlineAliasEditor(account: a)
+        } else if a.aliasLocked {
+            HStack(spacing: 8) {
+                Text(a.displayName)
+                    .font(.system(size: 24, weight: .semibold))
+                    .lineLimit(1)
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .opacity(0.5)
+            }
+            .help("别名是 Team 给的，管理员锁定了：这台 Mac 上改不了")
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(a.displayName)，别名由 Team 锁定")
         } else {
             let on = hover.wrappedValue && model.activity(a.ref) == nil
             Button {

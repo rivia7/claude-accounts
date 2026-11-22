@@ -163,7 +163,8 @@ class TeamTest(Sessions, unittest.TestCase):
         link, dev_b = self.invite(admin, tid, 'bob-mini', '--accounts', 'claude:Alice@example.com')
         inv = sw.invite_decode(link)
         token, dev, keys = sw.invite_parts(inv['k'])
-        self.assertEqual((inv['u'], inv['p'], 'ssh-ed25519 ' + inv['r'], inv['n'], dev, 's' in inv), (url, [pin], root, '测试组', dev_b, False))
+        self.assertEqual((inv['u'], inv['p'], 'ssh-ed25519 ' + inv['r'], inv['n'], inv['d'], dev, 's' in inv),
+                         (url, [pin], root, '测试组', 'bob-mini', dev_b, False), '邀请里带着管理员给这台设备起的名字')
         self.assertLess(abs(inv['e'] - (time.time() + 7 * 86400)), 120, '默认 7 天过期')
         everything = ''.join(p.read_text(errors='replace') for p in admin.home.rglob('*') if p.is_file() and p.name != 'kicks.log')
         self.assertTrue(inv['k'] not in everything and token not in everything, '那串随机数、令牌不在管理员这台的任何文件里（请求、curl 的命令行）')
@@ -176,8 +177,8 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.code(bob, 'team-join', '--name', 'x' * 65, stdin=link), 'name')
         self.assertFalse((bob.cca / 'teams').exists() and list((bob.cca / 'teams').iterdir()), '没成：什么都不留')
         self.assertNotIn('device_id', json.loads((bob.cca / 'config.json').read_text()))
-        got = self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link)
-        self.assertEqual(got, ['测试组', '127.0.0.1:%d' % srv.port, 'bob-mini', '2', tid, 'ok', '1'])
+        got = self.lines(bob, 'team-join', stdin=link)
+        self.assertEqual(got, ['测试组', '127.0.0.1:%d' % srv.port, 'bob-mini', '2', tid, 'ok', '1'], '没写 --name：用邀请里的名字，不用主机名')
         self.assertRegex(json.loads((bob.cca / 'config.json').read_text()).get('device_id', ''), r'^[0-9a-f]{16}$',
                          '加入了才生成这台机器的标识（没有路由器的机器靠它：折合金额的 dv）')
         self.assertRegex(json.loads((admin.cca / 'config.json').read_text()).get('device_id', ''), r'^[0-9a-f]{16}$', '新建 Team 的那台也有')
@@ -237,7 +238,8 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(row['state'], 'joined')
         self.assertIn('认证码', row['problem'])
         self.assertNotIn('pub', json.loads((t / 'admin.json').read_text())['devices'][dev_n])
-        self.assertEqual(admin.ok('team-devices', tid).split('\n')[3].split('\t')[2:], ['joined', '0 个账号', '1', '-', row['problem']])
+        listing = admin.ok('team-devices', tid).split('\n')
+        self.assertEqual((listing[0], listing[4].split('\t')[2:]), ('0', ['joined', '0 个账号', '1', '-', row['problem']]), '第一行是别名锁定着没有')
         self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'no-proof'), ['no-proof'])
         # 改授权、改映射：发布以后设备取到新的一版
         self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '+claude:bob@example.com'), ['2 个账号'])
@@ -292,23 +294,32 @@ class TeamTest(Sessions, unittest.TestCase):
         link, dev_b = self.invite(admin, tid, 'bob-mini')
         bob = self.device('bob')
         self.lines(bob, 'team-join', '--name', 'bob-host', stdin=link)
-        rows = {r['dev']: r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
-        self.assertEqual((rows[dev_b]['label'], rows[dev_b]['name']), ('bob-mini', 'bob-host'))
         before = {f: m for f, m in state().items() if m['dev'] == dev_b}
-        self.assertEqual(len(before), 1)
+        self.assertEqual([m['name'] for m in before.values()], ['bob-host'], '加入时写了 --name：先照它报')
         self.assertTrue(list(before.values())[0].get('proof'))
+        device = lambda: json.loads(bob.ok('team-list', '--json'))['teams'][0]['device']
+        # 和服务器对一遍时名字以管理员起的为准：服务器上照它再登记（还是那把公钥，加入的时间、认证码照旧），设备下次取配置时跟着改
+        rows = {r['dev']: r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
+        self.assertEqual((rows[dev_b]['label'], rows[dev_b]['name'], rows[dev_b]['problem']), ('bob-mini', 'bob-mini', None))
+        aligned = {f: m for f, m in state().items() if m['dev'] == dev_b}
+        self.assertEqual(list(aligned), list(before), '同一把公钥：远程会话的配对按它认，照旧')
+        (f, m0), m1 = list(before.items())[0], list(aligned.values())[0]
+        self.assertEqual((m1['name'], m1['joined'], m1.get('proof')), ('bob-mini', m0['joined'], m0['proof']), f)
+        self.assertEqual(device(), 'bob-host')
+        self.assertEqual(self.lines(bob, 'team-sync'), ['%s\t测试组\tok\t1\t' % tid])
+        self.assertEqual(device(), 'bob-mini')
         # 改：这边记着的、服务器上的都是新名字；服务器上还是那把公钥，加入的时间、认证码照旧
-        self.assertEqual(self.lines(admin, 'team-rename', tid, 'bob-host', '小王的 MacBook'), ['bob-mini', '小王的 MacBook', ''])
+        self.assertEqual(self.lines(admin, 'team-rename', tid, 'bob-mini', '小王的 MacBook'), ['bob-mini', '小王的 MacBook', ''])
         d = json.loads((t / 'admin.json').read_text())['devices'][dev_b]
         self.assertEqual((d['label'], d['name'], d['state']), ('小王的 MacBook', '小王的 MacBook', 'joined'))
         after = {f: m for f, m in state().items() if m['dev'] == dev_b}
-        self.assertEqual(list(after), list(before), '同一把公钥：远程会话的配对按它认，照旧')
-        (f, m0), m1 = list(before.items())[0], list(after.values())[0]
-        self.assertEqual((m1['name'], m1['joined'], m1.get('proof')), ('小王的 MacBook', m0['joined'], m0['proof']), f)
+        self.assertEqual(list(after), list(before))
+        m2 = list(after.values())[0]
+        self.assertEqual((m2['name'], m2['joined'], m2.get('proof')), ('小王的 MacBook', m0['joined'], m0['proof']), f)
         # 设备下次取配置时跟着改（配置本身没变：序号照旧）
-        self.assertEqual(json.loads(bob.ok('team-list', '--json'))['teams'][0]['device'], 'bob-host')
+        self.assertEqual(device(), 'bob-mini')
         self.assertEqual(self.lines(bob, 'team-sync'), ['%s\t测试组\tok\t1\t' % tid])
-        self.assertEqual(json.loads(bob.ok('team-list', '--json'))['teams'][0]['device'], '小王的 MacBook')
+        self.assertEqual(device(), '小王的 MacBook')
         self.assertIsNone(next(r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices'] if r['dev'] == dev_b)['problem'],
                           '改过名字以后对一遍照样核对得了它的公钥')
         # 不行的：名字不对、找不到设备、还在的别的设备叫这个名字（管理员起的、服务器上的都算）
@@ -317,27 +328,39 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.code(admin, 'team-rename', tid, 'nobody', 'x'), 'no_device')
         self.assertEqual(self.code(admin, 'team-rename', tid, dev_b, 'studio'), 'name')
         self.assertEqual(self.code(bob, 'team-rename', tid, dev_b, 'x'), 'not_admin')
+        self.assertEqual(self.code(admin, 'team-invite', tid, '小王的 MacBook'), 'name', '发邀请也一样：还在的别的设备叫这个名字不行')
+        self.assertEqual(self.code(admin, 'team-invite', tid, 'studio'), 'name')
         # 服务器上有一台管理员这边没记着的叫这个名字：服务器在后面加 -2，这边记着的是管理员起的
         pub_x = keygen(self.d / 'x-key')
         self.assertEqual(sw.post(str(t / 'root_ed25519'), srv.port, 'team_enroll', {'devices': {'0d' * 8: {'pub': pub_x, 'name': 'mini'}}})[0], 200)
         self.assertEqual(self.lines(admin, 'team-rename', tid, dev_b, 'mini'), ['小王的 MacBook', 'mini-2', ''])
         d = json.loads((t / 'admin.json').read_text())['devices'][dev_b]
-        self.assertEqual((d['label'], d['name']), ('mini', 'mini-2'))
+        self.assertEqual((d['label'], d['name']), ('mini-2', 'mini-2'), '一台设备只有一个名字：这边也记成服务器的')
+        enrolls = lambda: (admin.home / 'curl.argv').read_text().count('team_enroll')
+        n = enrolls()
+        admin.ok('team-devices', tid)
+        self.assertEqual(enrolls(), n, '名字一样了：对一遍时不再登记')
         # 管理员自己这台：team.json 里的名字一起改
         self.assertEqual(self.lines(admin, 'team-rename', tid, 'studio', 'studio-2026'), ['studio', 'studio-2026', ''])
         self.assertEqual(json.loads((t / 'team.json').read_text())['device'], 'studio-2026')
         self.assertEqual(self.lines(admin, 'team-sync'), ['%s\t测试组\tok\t1\t' % tid])
         self.assertEqual(json.loads((t / 'team.json').read_text())['device'], 'studio-2026', '取配置时服务器说的也是它')
-        # 还没加入的：只改这边记着的；加入时它报自己的名字
+        # 还没加入的：只改这边记着的；它照邀请里的（改名之前的）名字加入，对一遍时服务器上换成改好的
         link_c, dev_c = self.invite(admin, tid, 'carol')
         got = self.lines(admin, 'team-rename', tid, 'carol', 'carol-mac')
         self.assertEqual(got[:2], ['carol', 'carol-mac'])
         self.assertIn('还没加入', got[2])
         self.assertEqual(json.loads((t / 'admin.json').read_text())['devices'][dev_c]['label'], 'carol-mac')
+        carol = self.device('carol')
+        self.assertEqual(self.lines(carol, 'team-join', stdin=link_c)[2], 'carol')
+        rows = {r['dev']: r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
+        self.assertEqual((rows[dev_c]['label'], rows[dev_c]['name']), ('carol-mac', 'carol-mac'))
+        carol.ok('team-sync')
+        self.assertEqual(json.loads(carol.ok('team-list', '--json'))['teams'][0]['device'], 'carol-mac')
         # 自己退出了的：不登记回去
         self.lines(bob, 'team-leave', 'apply', tid)
         got = self.lines(admin, 'team-rename', tid, dev_b, 'bob-old')
-        self.assertEqual(got[:2], ['mini', 'bob-old'])
+        self.assertEqual(got[:2], ['mini-2', 'bob-old'])
         self.assertIn('退出', got[2])
         self.assertFalse([m for m in state().values() if m['dev'] == dev_b], '退出了的没被改名字登记回去')
         self.assertEqual(json.loads((t / 'admin.json').read_text())['devices'][dev_b]['state'], 'left')
@@ -518,6 +541,70 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(admin, 'team-publish', '新组二'), ['2', ''])
         m.ok('team-sync')
         self.assertEqual(json.loads((self.tdir(m, tid) / 'team.json').read_text())['name'], '新组二')
+
+    def test_alias_lock(self):
+        """管理员锁定别名（cca team alias Team --lock）：配置里带 alias_lock，成员设备上照 Team 给的用（自己改过的换回来，cca rename
+        改不了：退出码 4），没别名的也补上；管理员这台的账号表不动；解开以后又能改，现在用着的不变"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        self.load(admin, tid)
+        m = Device(self.d / 'm', 'm', {'mine(alice@example.com)': 'US-A', 'bob@example.com': 'US-B'})
+        m.config(lambda c: c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D']))
+        table = lambda d: json.loads((d.cca / 'accounts.json').read_text())
+
+        def apply(d):
+            r = d.run('team-apply')
+            self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
+            return r.stderr
+        self.lines(m, 'team-join', stdin=self.invite(admin, tid, 'm-mini')[0])
+        apply(m)
+        self.assertEqual(table(m), {'mine(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B'}, '没锁定：自己起的不动')
+        self.assertNotIn('alias_lock', self.doc(m, tid)[1], '没锁定时配置里没有这一项（和以前一样）')
+        self.assertEqual(m.run('rename', 'team-1(bob@example.com)', 'b2').returncode, 0)
+        # 锁定：管理员自己这台和 m 的配置变了；名单里说锁定着
+        self.assertEqual(self.code(m, 'team-alias-lock', tid, 'on'), 'not_admin')
+        self.assertEqual(self.lines(admin, 'team-alias-lock', tid, 'on'), ['测试组', '2'])
+        self.assertEqual(self.lines(admin, 'team-alias-lock', tid, 'on'), ['测试组', '0'], '已经锁定着：配置没变')
+        self.assertIs(json.loads(admin.ok('team-devices', tid, '--json'))['alias_lock'], True)
+        self.assertEqual(admin.ok('team-devices', tid).split('\n')[0], '1')
+        m.ok('team-sync')
+        self.assertIs(self.doc(m, tid)[1]['alias_lock'], True)
+        said = apply(m)
+        self.assertIn('按「测试组」的配置把 Claude 账号 mine（alice@example.com） 的别名改成 alice', said)
+        self.assertEqual(table(m), {'alice(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B'}, '自己改过的换回 Team 给的')
+        self.assertEqual(apply(m), '', '再对一遍没有要改的')
+        r = m.run('rename', 'alice(alice@example.com)', 'x')
+        self.assertEqual(r.returncode, 4, r.stdout)
+        self.assertIn('Team「测试组」', r.stdout)
+        self.assertIn('锁定', r.stdout)
+        self.assertIn('alice(alice@example.com)', table(m))
+        # 手改账号表也换回来；去掉了别名的也补上
+        (m.cca / 'accounts.json').write_text(json.dumps({'own(alice@example.com)': 'US-A', 'bob@example.com': 'US-B'}))
+        apply(m)
+        self.assertEqual(table(m), {'alice(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B'})
+        # 不在 Team 里的账号照样能改
+        (m.cca / 'accounts.json').write_text(json.dumps(dict(table(m), **{'zed@example.com': 'US-C'})))
+        self.assertEqual(m.run('rename', 'zed@example.com', 'z').returncode, 0)
+        # 管理员这台的账号表不动
+        (admin.cca / 'accounts.json').write_text(json.dumps({'mybob(bob@example.com)': 'US-B'}))
+        admin.config(lambda c: c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D']))
+        admin.ok('team-sync')
+        apply(admin)
+        self.assertIn('mybob(bob@example.com)', table(admin))
+        self.assertEqual(admin.run('rename', 'mybob(bob@example.com)', 'b3').returncode, 0)
+        # 改别名照样能改，各台设备跟着换
+        self.lines(admin, 'team-alias', tid, 'bob@example.com', '小王')
+        m.ok('team-sync')
+        apply(m)
+        self.assertIn('小王(bob@example.com)', table(m))
+        # 解开：配置里没有这一项了；又能自己改，现在用着的不变
+        self.assertEqual(self.lines(admin, 'team-alias-lock', tid, 'off'), ['测试组', '2'])
+        self.assertIs(json.loads(admin.ok('team-devices', tid, '--json'))['alias_lock'], False)
+        m.ok('team-sync')
+        self.assertNotIn('alias_lock', self.doc(m, tid)[1])
+        apply(m)
+        self.assertIn('小王(bob@example.com)', table(m))
+        self.assertEqual(m.run('rename', '小王(bob@example.com)', 'mybob').returncode, 0)
+        self.assertIn('mybob(bob@example.com)', table(m))
 
     def test_spec_admin(self):
         """管理员由照文档独立实现的那一份扮演：它封的、签的辅助程序解得开、验得过；伪造的、调包的、旧的不要"""

@@ -973,8 +973,9 @@ final class AppModel {
     /// 改别名时 cca 说的原因（写在输入框下面）。
     private(set) var renameError: String?
 
-    /// 开始改别名：选中这个账号，它的名字变成输入框。
+    /// 开始改别名：选中这个账号，它的名字变成输入框。别名被 Team 锁定了的不改（cca 也不让改：`alias_locked`）
     func beginRename(_ ref: AccountRef) {
+        guard account(ref)?.aliasLocked != true else { return }
         renameError = nil
         show(ref)
         aliasEditing = ref
@@ -1743,6 +1744,12 @@ final class AppModel {
         runTeam(.teamAlias(team: t.id, account: a.spec, alias: alias), failureTitle: "没能改 \(a.email) 的别名", success: "改好了", refresh: t) { [weak self] ok in
             if ok, self?.teamAlias == draft { self?.teamAlias = nil }
         }
+    }
+
+    /// 锁定（解开）这个 Team 里账号的别名：锁定了，各台设备上照 Team 给的用，自己改过的换回来，在设备上改不了
+    func setTeamAliasLock(_ t: TeamEntry, _ on: Bool) {
+        runTeam(.teamAliasLock(team: t.id, on: on), failureTitle: on ? "没能锁定别名" : "没能解开别名", success: on ? "已锁定别名" : "已解开别名",
+                refresh: t)
     }
 
     /// 定一个账号走哪个节点（各台设备下次取配置时跟着换）

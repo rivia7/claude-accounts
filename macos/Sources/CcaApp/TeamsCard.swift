@@ -146,7 +146,7 @@ private struct TeamAdminSection: View {
                     }
                     SectionAction(loading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshTeamDevices(team, manual: true) }
                         .disabled(loading)
-                        .help("和服务器对一遍：谁加入了、各台设备手里是第几版配置")
+                        .help("和服务器对一遍：谁加入了、各台设备的配置是不是最新的")
                 }
                 if let e = snap?.error {
                     Label(e, systemImage: "exclamationmark.triangle")
@@ -166,9 +166,19 @@ private struct TeamAdminSection: View {
                     TeamInviteForm(team: team, accounts: accounts)
                     if !accounts.isEmpty {
                         Divider()
-                        Text("账号走哪个节点").font(.headline)
+                        HStack(spacing: 10) {
+                            Text("账号的别名和节点").font(.headline)
+                            Spacer(minLength: 8)
+                            if let locked = doc.aliasLock {
+                                Toggle("锁定别名", isOn: Binding(get: { locked }, set: { model.setTeamAliasLock(team, $0) }))
+                                    .toggleStyle(.switch).controlSize(.small)
+                                    .disabled(model.teamBusy || model.flow != nil)
+                                    .help("锁定了：各台设备上照这里的别名用，自己改过的换回来，在设备上改不了（这台 Mac 的账号表不动）")
+                            }
+                        }
                         ForEach(accounts) { a in
-                            TeamAccountLine(team: team, account: a, nodes: Self.nodes(doc, local: model.state?.config?.nodes ?? [], current: a.node))
+                            TeamAccountLine(team: team, account: a, nodes: Self.nodes(doc, local: model.state?.config?.nodes ?? [], current: a.node),
+                                            locked: doc.aliasLock == true)
                         }
                         Text("改了以后各台设备下次取配置时跟着换（每小时一次，或者在那台设备上点「取配置」）。加账号、导入现成的映射在终端里：cca team map、cca team import。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -190,8 +200,8 @@ private struct TeamAdminSection: View {
     }
 }
 
-/// 一台设备：名字（管理员起的；它自己报的不一样时带上）、状态、给了它几个账号；右边改它能用哪些账号、改名字、移除（管理员自己这台
-/// 不能移除）。「改名…」在这一行下面打开输入框（`AppModel.teamRename`）
+/// 一台设备：名字（管理员起的：一台设备只有这一个名字，服务器上的 cca 对一遍时照它改）、状态、给了它几个账号；右边改它能用哪些账号、
+/// 改名字、移除（管理员自己这台不能移除）。「改名…」在这一行下面打开输入框（`AppModel.teamRename`）
 private struct TeamDeviceLine: View {
     @Environment(AppModel.self) private var model
     let team: TeamEntry
@@ -199,14 +209,9 @@ private struct TeamDeviceLine: View {
     let accounts: [TeamAccount]
     let now: Double
 
-    private var name: String {
-        guard let n = nonEmpty(device.name), n != device.label else { return device.label }
-        return "\(device.label)（\(n)）"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            MachineLine(name: name, detail: Texts.teamDeviceDetail(device, accounts: accounts.count, now: now)) {
+            MachineLine(name: device.label, detail: Texts.teamDeviceDetail(device, accounts: accounts.count, now: now)) {
                 if device.me { Tag(text: "这台 Mac") }
                 if device.problem != nil { Tag(text: "要处理", color: .orange) }
             } trailing: {
@@ -322,12 +327,14 @@ private struct TeamInviteForm: View {
     }
 }
 
-/// Team 的配置里的一个账号：别名、走哪个节点（管理员定的）。「改别名…」在这一行下面打开输入框（`AppModel.teamAlias`）
+/// Team 的配置里的一个账号：别名、走哪个节点（管理员定的）。「改别名…」在这一行下面打开输入框（`AppModel.teamAlias`）。
+/// locked：别名锁定着（各台设备上都换成这里的）
 private struct TeamAccountLine: View {
     @Environment(AppModel.self) private var model
     let team: TeamEntry
     let account: TeamAccount
     let nodes: [String]
+    let locked: Bool
 
     private var editing: Bool { model.teamAlias.map { $0.team == team.id && $0.spec == account.spec } ?? false }
 
@@ -361,7 +368,8 @@ private struct TeamAccountLine: View {
                     SectionAction("取消", systemImage: "xmark") { model.teamAlias = nil }
                 }
                 .disabled(model.teamBusy || model.flow != nil)
-                Text("各台设备上照 Team 给的名字用着的，下次取配置时跟着改；自己改过名字的不动，这台 Mac 的账号表也不动。")
+                Text(locked ? "别名锁定着：各台设备下次取配置时都换成这个；这台 Mac 的账号表不动。"
+                            : "各台设备上照 Team 给的名字用着的，下次取配置时跟着改；自己改过名字的不动，这台 Mac 的账号表也不动。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

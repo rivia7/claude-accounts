@@ -51,6 +51,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-import", admin::cmd_team_import),
     Cmd::all("team-map", admin::cmd_team_map),
     Cmd::all("team-alias", admin::cmd_team_alias),
+    Cmd::all("team-alias-lock", admin::cmd_team_alias_lock),
     Cmd::all("team-name", admin::cmd_team_name),
     Cmd::all("team-publish", admin::cmd_team_publish),
 ];
@@ -349,7 +350,7 @@ fn sync_fetch(t: &Team, have: i64) -> R<Synced> {
             Err(why) => return bad("error", why),
         };
         if got < have {
-            return bad("error", format!("服务器给的配置（第 {got} 版）比手里的（第 {have} 版）旧：不用它"));
+            return bad("error", "服务器给的配置比这台设备手里的旧（服务器的记录回退了？）：不用它，接着用手里的".to_string());
         }
         // 一样的序号：手里的就是它，什么都不动（同一个序号的另一份内容——换服务器时原来那台上存的——也不照它改）
         if got > have {
@@ -530,24 +531,30 @@ fn join(inv: &Invite, name: &str, key_src: Option<&str>, via: Option<&str>) -> R
     Ok(Ok(Joined { tid, name: t.name.clone(), host: host_of(&t.url), device, members, state: s.state, detail }))
 }
 
-/// py team-join [--name 名字]：拿邀请加入一个 Team。邀请链接从 stdin 读（它是凭证：不进命令行）。成了：stdout 一行一项：Team 的名字、
+/// py team-join [--name 名字]：拿邀请加入一个 Team。邀请链接从 stdin 读（它是凭证：不进命令行）。没写名字时用管理员发邀请时给这台
+/// 设备起的（邀请里的 d；旧版本发的邀请里没有：用主机名）。成了：stdout 一行一项：Team 的名字、
 /// 服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空行）、Team 的编号、取配置的结果（ok | error…）、
 /// 没取成时的原因（取成了是给了这台设备几个账号），退出码 0。没成见 fail（原因码：link 链接不对、name 名字不对、joined 已经在这个
 /// Team 里、sign、denied 服务器不认这个邀请、expired 过期了、used 用过了、taken 这把密钥已经是一台设备、full、pin、cert、
 /// unreachable、old、clock、busy、server）。没成时什么都不留
 pub fn cmd_team_join(args: &[String]) -> R<()> {
-    let name = match args {
-        [] => host_name(),
-        [flag, n] if flag == "--name" => n.trim().to_string(),
+    let given = match args {
+        [] => None,
+        [flag, n] if flag == "--name" => Some(n.trim().to_string()),
         _ => return Err(Fail::Die("用法: py team-join [--name 名字]（邀请链接从 stdin 读）".into())),
     };
-    if !name_ok(&name) {
+    if given.as_ref().is_some_and(|n| !name_ok(n)) {
         return fail("name", NAME_BAD);
     }
     let inv = match invite_decode(&read_stdin_text()) {
         Ok(i) => i,
         Err(why) => return fail("link", &why),
     };
+    // 没写名字：用管理员发邀请时给它起的（邀请里的 d），没有（旧版本发的）才用主机名
+    let name = given.or_else(|| Some(inv.device.clone()).filter(|n| name_ok(n))).unwrap_or_else(host_name);
+    if !name_ok(&name) {
+        return fail("name", NAME_BAD);
+    }
     match join(&inv, &name, None, None)? {
         Ok(j) => {
             adopt_left(&j.tid, false)?;
@@ -658,7 +665,7 @@ pub fn adopt() -> R<Option<Joined>> {
             return Ok(None);
         }
     }
-    let name = Some(host_name()).filter(|n| name_ok(n)).unwrap_or_else(|| "device".to_string());
+    let name = [inv.device.clone(), host_name()].into_iter().find(|n| name_ok(n)).unwrap_or_else(|| "device".to_string());
     let r = join(&inv, &name, Some(&key), Some(&hash))?;
     adopt_note(&hash, r.as_ref().map_or_else(|(c, _)| c.as_str(), |_| "done"))?;
     Ok(r.ok())

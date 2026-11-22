@@ -190,6 +190,8 @@ pub struct AliasFrom {
     pub team: String,
     /// 这台设备是那个 Team 的管理员
     pub admin: bool,
+    /// 那个 Team 的管理员锁定了别名（配置里的 alias_lock）：这台设备上不能自己改，改过的换回来。管理员自己的设备上、维护者的映射给的都是 false
+    pub locked: bool,
 }
 
 /// 映射给这个工具的账号起的别名和是谁给的：[(邮箱（小写）, AliasFrom)]。不合规的不用。各个 Team 的配置里的在前（照加入的先后，同一个邮箱
@@ -199,11 +201,11 @@ pub struct AliasFrom {
 pub fn alias_sources(tool: &Tool) -> Vec<(String, AliasFrom)> {
     let mut out: Vec<(String, AliasFrom)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut add = |s: Dict, tid: &str, team: &str, admin: bool| {
+    let mut add = |s: Dict, tid: &str, team: &str, admin: bool, locked: bool| {
         for (e, a) in s.items() {
             let e = e.to_lowercase();
             if alias_ok(&a) && seen.insert(e.clone()) {
-                out.push((e, AliasFrom { alias: a.py_str(), tid: tid.to_string(), team: team.to_string(), admin }));
+                out.push((e, AliasFrom { alias: a.py_str(), tid: tid.to_string(), team: team.to_string(), admin, locked }));
             }
         }
     };
@@ -213,13 +215,19 @@ pub fn alias_sources(tool: &Tool) -> Vec<(String, AliasFrom)> {
             None => g.doc.dict("aliases"),
         };
         if let Some(s) = names {
-            add(s, &g.id, &g.name, g.admin);
+            let locked = !g.admin && matches!(g.doc.get("alias_lock"), Some(V::Bool(true)));
+            add(s, &g.id, &g.name, g.admin, locked);
         }
     }
     if let Some(s) = policy_doc().and_then(|j| j.dict("aliases")) {
-        add(s, "", "", false);
+        add(s, "", "", false, false);
     }
     out
+}
+
+/// 这个工具里别名被 Team 锁定了的账号：{邮箱（小写）: 锁定它的 Team 的名字}（cca rename 不让改、_gui state 的 alias_locked）
+pub fn alias_locks(tool: &Tool) -> HashMap<String, String> {
+    alias_sources(tool).into_iter().filter(|(_, f)| f.locked && !f.tid.is_empty()).map(|(e, f)| (e, f.team)).collect()
 }
 
 /// alias_sources 里这个工具的别名：{邮箱（小写）: 别名}
@@ -428,7 +436,8 @@ fn rekey(table: &Dict, ren: &[(String, String)]) {
 /// 「Team 的名字-N」）时记下；以后账号表里的还是记着的那个、Team 给的变了，才换成新的；账号表里的和记着的不一样了是这台设备上自己改过
 /// （cca rename），不再跟着。没有记录、账号表里是 team-N、Team 给的是另一个 team-N 的（3.5.3-beta.5 各工具一起编的号，旧版本补上时
 /// 不记）也跟着换。几个账号一起换（挨个挪一位、两个对调）时，要换走的账号原来的别名不算占着；新的别名被这台设备上别的账号占着：换成
-/// 「Team 的名字-N」，还撞就先不换、下次再看。这台设备是管理员的那个 Team 给的不记、不跟。
+/// 「Team 的名字-N」，还撞就先不换、下次再看。这台设备是管理员的那个 Team 给的不记、不跟。管理员锁定了别名的 Team（配置里的
+/// alias_lock）给的：账号表里的不是 Team 给的（或者撞了以后的那个）就换，自己改过的也换回来。
 /// 账号不在账号表里、也没收起来（parked）的，记着的那一项去掉
 pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<(String, String, String)> {
     let rec = st.dict("team_alias").unwrap_or_default();
@@ -443,7 +452,9 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
     let mut seen: HashSet<String> = HashSet::new();
     for (k, v) in table.items() {
         let (a, e) = parse_key(&k);
-        if is_api(&v) || a.is_empty() || e.is_empty() {
+        // 没有别名的不管（自己去掉的），锁定了的除外：也换成 Team 给的
+        let locked = names.get(&e.to_lowercase()).is_some_and(|f| f.locked);
+        if is_api(&v) || e.is_empty() || (a.is_empty() && !locked) {
             continue;
         }
         let aid = acct_id(&k, tool);
@@ -456,6 +467,14 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
             continue;
         };
         let given = |x: &str| x == f.alias || alias_fallback(&f.alias, &f.team).as_deref() == Some(x);
+        if f.locked {
+            if given(&a) {
+                rec.set(&*aid, dict! { "a" => a.as_str(), "t" => f.alias.as_str() });
+            } else {
+                todo.push((k.to_string(), e, aid, f));
+            }
+            continue;
+        }
         match r {
             None if given(&a) => rec.set(&*aid, dict! { "a" => a.as_str(), "t" => f.alias.as_str() }),
             None if team_n(&a) && team_n(&f.alias) => todo.push((k.to_string(), e, aid, f)),

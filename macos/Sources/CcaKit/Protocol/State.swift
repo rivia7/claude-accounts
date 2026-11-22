@@ -491,6 +491,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     var group: String?
     var pinned: Bool
     var pinnedNode: String?
+    /// 别名被 Team 的管理员锁定了（`cca rename` 改不了：`alias_locked`）；旧版 cca 没有这个字段是 false
+    var aliasLocked: Bool
     var isLast: Bool
     /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：维护者的、某个 Team 的，不同步（和不认识的值）是 nil。
     /// 旧版 cca 没有这个字段：有「设备」一节的当作维护者的（那时只有它）
@@ -527,6 +529,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         case planTier = "plan_tier"
         case node, port, slot, group, pinned
         case pinnedNode = "pinned_node"
+        case aliasLocked = "alias_locked"
         case isLast = "is_last"
         case hub, team
         case api, badge, app, cli, can, mail
@@ -560,6 +563,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         group = c.string(.group)
         pinned = c.bool(.pinned) ?? false
         pinnedNode = c.string(.pinnedNode)
+        aliasLocked = c.bool(.aliasLocked) ?? false
         isLast = c.bool(.isLast) ?? false
         api = c.lossy(APIInfo.self, .api)
         badge = c.lossy(Badge.self, .badge)

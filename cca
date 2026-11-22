@@ -2663,6 +2663,7 @@ cmd_rename() {   # cca [codex] rename <账号> <新别名>：改别名（新别�
 	case $rc in
 		0) ;;
 		3) FAIL_CODE=alias_invalid die "$new" ;;
+		4) FAIL_CODE=alias_locked die "$new" ;;
 		*) return 1 ;;
 	esac
 	if [ "$new" = "$key" ]; then
@@ -6658,6 +6659,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
       cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成 team-1、team-2……；
                                                    账号写 工具:邮箱 只改这个工具里的，只写邮箱改它在的每个工具里的）
+      cca team alias Team --lock | --unlock        锁定（解开）账号的别名：锁定了，各台设备上照 Team 给的用、不能自己改
       cca team publish Team                        和服务器对一遍、发布配置"
 
 restore_teams() {   # restore_teams plan | apply：卸载时的 Team。plan 说会怎样（成员：退出；管理员：根密钥跟着删掉），apply 各个都退出
@@ -6730,7 +6732,11 @@ cmd_team() {
 			okay "改好了；$(team_stored "$out")"
 			team_settle ;;
 		alias)
-			[ $# -eq 3 ] || die "用法: cca team alias Team 账号 新别名"
+			case "$#:${2:-}" in
+				2:--lock|2:--unlock) team_alias_lock "$@"; return ;;
+				3:*) ;;
+				*) die "用法: cca team alias Team 账号 新别名 | cca team alias Team --lock|--unlock" ;;
+			esac
 			out=$(py team-alias "$@") || team_fail "$out" "没改成"
 			{ local al_old al_stored al_was=""; IFS= read -r al_old; IFS= read -r al_stored; } <<< "$out"
 			[ -z "$al_old" ] || al_was="（原来是「${al_old}」）"
@@ -6761,6 +6767,21 @@ team_settle() {   # Team 的配置变了以后（加入、取到新的一版、�
 		router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
 	fi
 	launchers_all
+}
+
+team_alias_lock() {   # cca team alias Team --lock|--unlock：锁定（解开）这个 Team 里账号的别名，再发布
+	local on=on out name stored
+	[ "$2" = --lock ] || on=off
+	out=$(py team-alias-lock "$1" "$on") || team_fail "$out" "没改成"
+	{ IFS= read -r name; IFS= read -r stored; } <<< "$out"
+	if [ "$on" = on ]; then
+		okay "已锁定「${name}」里账号的别名；$(team_stored "$stored")"
+		say "  各台设备下次取配置时换成 Team 给的别名（自己改过的也换回来），之后在设备上改不了；这台设备的账号表不动"
+	else
+		okay "已解开「${name}」里账号的别名；$(team_stored "$stored")"
+		say "  各台设备上又能自己改别名了（现在用着的不变）"
+	fi
+	team_settle
 }
 
 team_stored() {   # team_stored 存上了几台的配置：说成一句话
@@ -6798,7 +6819,7 @@ team_ls() {   # cca team [ls] [--json]：这台设备在哪些 Team 里（只看
 		[ "$seq" != - ] || seq=""
 		[ "$n" != - ] || n=0
 		[ "$why" != - ] || why=""
-		say "${name}（${id:0:8}）：$([ "$role" = admin ] && printf '管理员' || printf '成员')，${host}，$(team_state_say "$state")${seq:+，第 ${seq} 版配置、${n} 个账号}${why:+
+		say "${name}（${id:0:8}）：$([ "$role" = admin ] && printf '管理员' || printf '成员')，${host}，$(team_state_say "$state")${seq:+，这台设备能用 ${n} 个账号}${why:+
     ${why}}"
 	done <<< "$out"
 }
@@ -6853,7 +6874,7 @@ team_sync() {   # cca team sync [Team]：取一次配置，说每个 Team 的结
 	[ -n "$out" ] || { say "没有要取配置的 Team"; return 0; }
 	while IFS=$'\t' read -r id name state seq why; do
 		if [ "$state" = ok ]; then
-			okay "${name}：手里的是第 ${seq} 版配置"
+			okay "${name}：配置已同步"
 		else
 			warn "${name}：${why}"; bad=1
 		fi
@@ -7052,18 +7073,30 @@ team_invite() {   # cca team invite Team 名字 [--accounts …] [--ttl 秒]：�
 }
 
 team_devices() {   # cca team devices Team [--json]：先和服务器对一遍，再列出来
-	local out dev label state grants seq have problem
+	local out lock dev label state grants seq have problem cfg
 	case "$#:${2:-}" in
 		1:) ;;
 		2:--json) out=$(py team-devices "$1" --json) || team_fail "$out" "没问到"; printf '%s\n' "$out"; return ;;
 		*) die "用法: cca team devices Team [--json]" ;;
 	esac
 	out=$(py team-devices "$1") || team_fail "$out" "没问到"
-	while IFS=$'\t' read -r dev label state grants seq have problem; do   # 没有的栏是 -
-		[ "$have" != - ] || have=""
-		say "${label}（${dev:0:8}）：${state}，${grants}，发布到第 ${seq} 版${have:+、它手里是第 ${have} 版}"
-		[ "$problem" = - ] || warn "${label}：${problem}"
-	done <<< "$out"
+	{
+		IFS= read -r lock   # 第一行：账号的别名锁定着没有（1 | 0）
+		while IFS=$'\t' read -r dev label state grants seq have problem; do   # 没有的栏是 -
+			cfg=""
+			case "$state" in   # 配置是不是最新的：只说还在的设备（不说第几版：序号只是用来比新旧的）
+				local|invited|joined)
+					case "$seq:$have" in
+						-:*|0:*) cfg="配置还没发布" ;;
+						*:-) cfg="配置发布了" ;;
+						*) if [ "$have" -ge "$seq" ] 2>/dev/null; then cfg="配置是最新的"; else cfg="还没取到最新的配置"; fi ;;
+					esac ;;
+			esac
+			say "${label}（${dev:0:8}）：${state}，${grants}${cfg:+，${cfg}}"
+			[ "$problem" = - ] || warn "${label}：${problem}"
+		done
+	} <<< "$out"
+	[ "$lock" != 1 ] || say "账号的别名锁定着：各台设备上不能自己改（cca team alias ${1} --unlock 解开）"
 }
 
 team_revoke() {   # cca team revoke Team 设备：移除一台设备（或者撤回还没用掉的邀请）。先问

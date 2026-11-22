@@ -166,7 +166,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "kind": "oauth",
   "login": "logged_in", "login_email": "bob@example.com", "plan": "Max", "plan_tier": "advanced",
   "node": "US-B", "port": 7902, "slot": 2, "group": "CCA-2",
-  "pinned": true, "pinned_node": "US-B", "is_last": false, "hub": "maintainer",
+  "pinned": true, "pinned_node": "US-B", "alias_locked": false, "is_last": false, "hub": "maintainer",
   "api": null,
   "badge": {"label": "工", "color": "#30A46C"},
   "app": {"running": false, "pid": null},
@@ -193,6 +193,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `advanced`（Max、Pro 100 / 200、Team Premium、Business Premium）| `premium`（Ultra、Pro 500）。不知道为 `""`：没登录、登录的不是这个账号、
   第三方 API 账号、认不出的新套餐（这时 `plan` 可能仍有值）。没有这个字段（旧版 cca）当作 `""`。
 - `pinned`：维护者的映射锁定了这个账号的节点（`pinned_node` 是映射要的节点，已按改名换算）；App 里不提供改节点。
+- `alias_locked`：这个账号的别名是 Team 给的，那个 Team 的管理员锁定了别名（3.5.3-beta.7 起，4.14）：`cca rename` 改不了（`alias_locked`），
+  App 里不提供改别名。没有这个字段（旧版 cca）当作 false。
 - `is_last`：上次在命令行里用的账号。
 - `hub`：这个账号的设备统计、记下的 API key、折合金额经哪台服务器和别的设备同步（`config.hubs[].kind`）：`maintainer`（维护者的服务器：
   映射里的官方账号）| `team`（某个 Team 的同步服务器：这个 Team 给这台设备的账号，4.14；是哪个 Team 看账号的 `team`）| null（不同步：
@@ -707,6 +709,7 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `low_purity` | `not_logged_in` | `login_mismatch` | `api_unreachable` | `open_failed` | `app_profile_unsupported` |
   `no_chrome`（无法使用独立浏览器）| `invalid_url`（不是 HTTP/HTTPS 地址）| `login_unsupported`（客户端不支持独立登录流程）|
   `alias_invalid`（改别名：新别名不合规、和别的账号重了、第三方 API 账号不能去掉别名、键里没有邮箱的官方账号不能改）|
+  `alias_locked`（改别名：别名是 Team 给的，管理员锁定了，4.14）|
   `account_missing`（改别名、`node use`：没有这个账号）| `no_reset_credit`（重置额度：没有能用的重置机会了）|
   `reset_unsupported`（重置额度：这个版本的 codex 不支持，升级后再试）| `cancelled`（提问会话被取消，或用户在确认页答了“不做”）| `app_running`（删除账号：它的桌面 App 还开着）| `policy_unavailable`（`policy pull --json` 拉不到映射，上次拉到的照用）|
   `policy_off_busy`（`policy off`：共享的账号正在用——命令行会话、桌面 App 开着，`message` 说是哪些；什么都没改）|
@@ -767,7 +770,8 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
   路由器的同步摘要也不变（不用同步）；`~/Applications` 里的启动器跟着改名。不交互、不联网。
 - 新别名写 `-` 去掉别名，只留邮箱（第三方 API 账号必须有别名）。别名的规则由 cca 判断（最多 12 个汉字或 24 个字母，不能有空格、引号、
   括号、反斜杠或 @，同一个工具里不能重名），App 不自己判断。
-- 成功：退出码 0，stdout 只有一行新的键（App 选中它）。不行：退出码非 0，`fail` 事件的 `code` 是 `alias_invalid` 或 `account_missing`，
+- 别名是 Team 给的、那个 Team 的管理员锁定了别名的（账号的 `alias_locked`）改不了：`alias_locked`。
+- 成功：退出码 0，stdout 只有一行新的键（App 选中它）。不行：退出码非 0，`fail` 事件的 `code` 是 `alias_invalid`、`alias_locked` 或 `account_missing`，
   `message` 是给人看的原因（App 显示在改名的弹层里，弹层不关）。
 
 ### 4.7 账号表的顺序：`cca [codex] reorder 账号…`
@@ -942,7 +946,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `team new`、`team join`、`team deploy <Team>` | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` |
-| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -1025,12 +1029,15 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 - **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", url, host, device,
   state: "local"（管理员还没接上服务器）| "pending"（还没取过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
   error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
-  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "nodes": [配置里带着定义的节点的名字…],
+  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有,
+  "nodes": [配置里带着定义的节点的名字…],
   "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
   seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
   别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
-  `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。
+  `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。`alias_lock`（3.5.3-beta.7 起；没有这一项时 App 不给锁定的开关）
+  见下面「锁定别名」。设备只有一个名字：`label`（管理员起的，界面上只用它）；`name` 是它在服务器上的名字，3.5.3-beta.7 起和服务器对一遍时照
+  `label` 改成一样的（以前的设备加入时报的是主机名），App 不显示。`seq`、`have` 只用来比新旧：App 只说「配置是最新的」「还没取到最新的配置」，不说第几版。
 - **新建**（`cca team new [名字]`）：App 里不写名字，提问会话里问（`team.new`）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
   `state` 是 `local`：还没接上服务器）。**部署**（`cca team deploy <Team> [用户@主机 …]`）：经 SSH 把这个 Team 的同步服务器装到自己的
   服务器上、接上；App 里不写服务器，在提问会话里问（`hub.deploy`、`hub.password`、`hub.pubkey`，登录不上时的原因码是 `hub_ssh`，4.6）；
@@ -1039,22 +1046,29 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   手机的网页端和给网页端要证书的证书助手），再运行是更新。没有服务器的：`cca team hosted <Team>`（终端里：生成部署到托管平台的文件和步骤）。
 - **取配置**（`cca team sync`）：各个 Team 取一次，取到新的马上照它改账号表、同步路由器。跑完为止。
 - **加入**（`cca team join`）：提问会话（`team.join`：一个密文输入框，贴邀请链接）。邀请是凭证、只能用一次，只经提问会话的管道交给 cca。
-  成了 `result` 的 `team_joined`；加入了、配置还没取到时前面有 `fail` 的 `team_sync`（退出码照样是 0）。
+  成了 `result` 的 `team_joined`；加入了、配置还没取到时前面有 `fail` 的 `team_sync`（退出码照样是 0）。这台设备在 Team 里的名字用管理员发邀请时
+  给它起的（邀请里带着；旧版本发的邀请里没有：用主机名，管理员那边对一遍时改成它起的）。
 - **退出**（`cca team leave [Team]`）：要同意（成员是 `team_leave`、管理员是 `team_delete`，范围都是 Team 的编号，默认否），成了 `result` 的 `team_left`。
 - **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
-- **邀请**（`cca team invite <Team> <名字> [--accounts all|none|工具:邮箱,…]`）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的
+- **邀请**（`cca team invite <Team> <名字> [--accounts all|none|工具:邮箱,…]`；还在这个 Team 里的别的设备已经叫这个名字时是 `team_name`，
+  3.5.3-beta.7 起）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的
   会话里（有 `CLAUDECODE`、没有 `CCA_EVENTS`）不给。它是那台设备的密钥：App **只经内存里的管道**读这一行，放进剪贴板（标成机密、60 秒后清掉），
   不进被观察的状态、不显示在界面上。
 - **改授权**（`cca team grant <Team> <设备编号> all | none | +工具:邮箱 | -工具:邮箱 …`，几项照先后做）、**改节点**
   （`cca team map <Team> <工具> <邮箱> <节点>`）：改完发布，管理员自己这台的账号表马上照它对一遍。跑完为止。
 - **改设备的名字**（`cca team rename <Team> <设备编号> <新名字>`，3.5.3-beta.5 起；名字 1～64 个字符、不能有控制字符，还在这个 Team 里的
   别的设备已经叫它时是 `team_name`）：`team devices --json` 里它的 `label` 换成新名字；加入了的设备在服务器上的名字（`name`）也跟着改
-  （被别的设备用了时服务器在后面加 `-2`），那台设备下次取配置时它的 `config.teams[].device` 跟着变。还没加入、已经不在的只改 `label`。
+  （被别的设备用了时服务器在后面加 `-2`：`label` 也记成它），那台设备下次取配置时它的 `config.teams[].device` 跟着变。还没加入的加入以后照它改，
+  已经不在的只改 `label`。
   没有交互，不发布配置（配置里没有设备的名字）。
 - **改别名**（`cca team alias <Team> <工具:邮箱> <新别名>`，3.5.3-beta.5 起；3.5.3-beta.6 起别名按工具记，写 `工具:邮箱` 只改这个工具里的，
   只写邮箱改它在的每个工具里的——App 写 `工具:邮箱`）：改完发布，跑完为止（和 `map` 一样）。别名不合规、同一个工具里别的账号已经叫它是
   `team_alias`，Team 里没有这个账号是 `team_no_account`。没起过别名的账号管理员这边默认编成 `team-1`、`team-2`……（各工具各编各的，
   各自的第一个账号都是 `team-1`）；各台设备上照 Team 给的用着的跟着改（`notices` 的 `policy_alias`），自己改过的、管理员自己这台的账号表不动。
+- **锁定别名**（`cca team alias <Team> --lock | --unlock`，3.5.3-beta.7 起）：改完发布，跑完为止（和 `alias` 一样）。锁定了：各台设备上这个 Team
+  给的账号照 Team 给的别名用，自己改过的换回来（`notices` 的 `policy_alias`），`cca rename` 改不了（账号的 `alias_locked`，失败的原因 `alias_locked`）；
+  管理员自己这台的账号表照旧不动。管理员照样能改别名（`cca team alias`），各台设备跟着换。解开以后又能自己改，现在用着的不变。
+  旧版本的 cca 不认得锁定：照没锁定的用，更新以后才换。
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、

@@ -3,6 +3,7 @@
   "accounts": {"claude": {"carol@example.com": "US-C", "grace@example.com": "US-C"}, "codex": {"frank@example.com": "US-A"}},
   "aliases": {"carol@example.com": "卡罗尔", "grace@example.com": "team-1", "frank@example.com": "team-1"},
   "tool_aliases": {"claude": {"carol@example.com": "卡罗尔", "grace@example.com": "team-1"}, "codex": {"frank@example.com": "team-1"}},
+  "alias_lock": true,
   "nodes": ["US-A", "US-C"],
   "devices": [
     {"dev": "0a1b2c3d4e5f6071", "label": "studio-mac", "name": "studio-mac", "state": "joined", "me": true, "grants": "all",

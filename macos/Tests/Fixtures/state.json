@@ -2978,6 +2978,7 @@
           "group": "CCA-2",
           "pinned": false,
           "pinned_node": null,
+          "alias_locked": true,
           "is_last": false,
           "api": null,
           "badge": {

@@ -9,7 +9,7 @@ use super::{arg, arity, Cmd};
 use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, policy_skip_add, table_problems};
 use crate::core::model::*;
-use crate::core::policy::{alias_problem, policy_in_use, policy_map, policy_raw};
+use crate::core::policy::{alias_locks, alias_problem, policy_in_use, policy_map, policy_raw};
 use crate::core::tool::{t, tools, Kind, Tool, CLAUDE_SHARED, CODEX_PROVIDER};
 use crate::py::fs::{load_quiet, save_json};
 use crate::py::hash::sha1_hex;
@@ -519,7 +519,8 @@ pub fn cmd_add_api(args: &[String]) -> R<()> {
 
 /// 改别名（cca rename，图形界面的“改别名…”也用它）：只换账号表里的键，值和顺序都不变。官方账号按邮箱认、
 /// 第三方 API 账号按 id 认，账号目录、端口、“上次使用”、路由器的摘要都跟着走（acct_id 不变）。新别名写 - 去掉别名、只留邮箱。
-/// 成功时打印新的键；不行时把原因打到 stdout、退出码 3（bash 把它报成 alias_invalid）
+/// 成功时打印新的键；不行时把原因打到 stdout、退出码 3（bash 把它报成 alias_invalid）。管理员锁定了别名的 Team 给的账号（alias_locks）
+/// 不让改：原因打到 stdout、退出码 4（alias_locked）
 pub fn cmd_rename(args: &[String]) -> R<()> {
     arity("cmd_rename", args, 2, 2)?;
     let (_, table, _) = ctx()?;
@@ -531,6 +532,10 @@ pub fn cmd_rename(args: &[String]) -> R<()> {
     }
     let email = parse_key(key).1;
     let api = is_api(&table.at(key));
+    if let Some(team) = alias_locks(t()).get(&email.to_lowercase()).filter(|_| !api && !email.is_empty()) {
+        out!("{key} 的别名是 Team「{team}」给的，管理员锁定了别名：这台设备上改不了（要改请 Team 的管理员改）");
+        return exit(4);
+    }
     let bad = |msg: String| -> R<()> {
         out!("{msg}");
         exit(3)

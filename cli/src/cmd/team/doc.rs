@@ -45,7 +45,8 @@ pub fn team_id(root: &str) -> Option<String> {
     Some(sha256_hex(raw)[..32].to_string())
 }
 
-/// 邀请链接里的：服务器的地址、证书公钥的指纹（没有是照证书机构验）、根公钥、那串随机数、Team 的名字、什么时候过期（给人看的）
+/// 邀请链接里的：服务器的地址、证书公钥的指纹（没有是照证书机构验）、根公钥、那串随机数、Team 的名字、什么时候过期（给人看的）、
+/// 管理员给这台设备起的名字（3.5.3-beta.7 起；没有是空的：加入时没写 --name 就用它，旧版本不认得也不要紧）
 #[derive(Clone, Debug, PartialEq)]
 pub struct Invite {
     pub url: String,
@@ -54,6 +55,7 @@ pub struct Invite {
     pub secret: String,
     pub name: String,
     pub exp: Option<i64>,
+    pub device: String,
 }
 
 /// Team 的名字：1～64 个字符，没有控制字符，前后没有空白
@@ -68,6 +70,9 @@ pub fn invite_encode(i: &Invite) -> String {
     };
     if let Some(e) = i.exp {
         doc.set("e", e);
+    }
+    if !i.device.is_empty() {
+        doc.set("d", i.device.as_str());
     }
     let raw = json::dumps(&V::Dict(doc), json::Fmt::new().utf8().compact());
     let head = format!("{LINK_PREFIX}{}", urlsafe_b64encode(raw.as_bytes()).trim_end_matches('='));
@@ -123,7 +128,8 @@ pub fn invite_decode(raw: &str) -> Result<Invite, String> {
     match (why, root) {
         ("", Some(root)) => {
             let exp = doc.get("e").and_then(|e| e.as_int()).filter(|e| *e > 0);
-            Ok(Invite { url, pins, root, secret: s("k"), name: s("n"), exp })
+            // 设备的名字不对不算链接不对：加入时不用它就是了（照主机名）
+            Ok(Invite { url, pins, root, secret: s("k"), name: s("n"), exp, device: s("d") })
         }
         (why, _) => {
             let why = if why.is_empty() { "根公钥不对" } else { why };
@@ -262,7 +268,8 @@ pub fn envelope_seal(root_key: &str, keys: &Keys, tid: &str, dev: &str, seq: i64
 
 /// 配置的明文哪里不对（管理员发布前、设备用之前都查；不认得的项不管：以后加的旧版本照样用）：
 /// {"v": 1, "at", "name", "salt", "server": {"u", "p"}, "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名},
-/// "tool_aliases": {工具: {邮箱: 别名}}（3.5.3-beta.6 起；设备有它时照它，aliases 给旧版本用）, "install_node", "nodes": {"group", "proxies"} | null}
+/// "tool_aliases": {工具: {邮箱: 别名}}（3.5.3-beta.6 起；设备有它时照它，aliases 给旧版本用）, "alias_lock": true（3.5.3-beta.7 起，
+/// 管理员锁定了别名：设备上不能自己改，改过的换回来；没锁定时没有这一项）, "install_node", "nodes": {"group", "proxies"} | null}
 pub fn doc_problems(doc: &Dict) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if !doc.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) {
@@ -308,6 +315,9 @@ pub fn doc_problems(doc: &Dict) -> Vec<String> {
     if doc.get("tool_aliases").is_some_and(|a| !a.as_dict().is_some_and(|a| a.values().iter().all(names_ok))) {
         out.push("tool_aliases 不对".into());
     }
+    if doc.get("alias_lock").is_some_and(|l| !matches!(l, V::Bool(_))) {
+        out.push("alias_lock 不对".into());
+    }
     if doc.get("install_node").is_some_and(|n| !n.is_str()) {
         out.push("install_node 不对".into());
     }
@@ -338,6 +348,8 @@ mod tests {
     const SECRET: &str = "abababababababababababababababab";
     const PROOF: &str = "B1rh0sV/O5Lm9pwKjFLyudL8kwNASfoJY+rd9ZBjYvY=";
     const LINK: &str = "cca-team1.eyJ1IjoiaHR0cHM6Ly8xOTIuMC4yLjEwOjE4NDQ1IiwicCI6WyJzaGEyNTYvL0FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9Il0sInIiOiJBQUFBQzNOemFDMWxaREkxTlRFNUFBQUFJUFVMN2hTRVZIWGZZRFd2RHgvb3pPZUxWemNMTVdZd044UnUyQ3FDZEc4ZCIsImsiOiJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLmtYvor5Xnu4QiLCJlIjoxODAwMDAwMDAwfQ.169a";
+    // 同上，加上 d（spec_wire.invite_encode(…, device="小王的 MacBook")）
+    const LINK_D: &str = "cca-team1.eyJ1IjoiaHR0cHM6Ly8xOTIuMC4yLjEwOjE4NDQ1IiwicCI6WyJzaGEyNTYvL0FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9Il0sInIiOiJBQUFBQzNOemFDMWxaREkxTlRFNUFBQUFJUFVMN2hTRVZIWGZZRFd2RHgvb3pPZUxWemNMTVdZd044UnUyQ3FDZEc4ZCIsImsiOiJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYmFiYWJhYiIsIm4iOiLmtYvor5Xnu4QiLCJlIjoxODAwMDAwMDAwLCJkIjoi5bCP546L55qEIE1hY0Jvb2sifQ.9710";
     const CT: &str = include_str!("../../../tests/vectors/team_doc_ct.json");
 
     fn invite() -> Invite {
@@ -348,6 +360,7 @@ mod tests {
             secret: SECRET.into(),
             name: "测试组".into(),
             exp: Some(1_800_000_000),
+            device: String::new(),
         }
     }
 
@@ -368,6 +381,10 @@ mod tests {
         assert_eq!(invite_decode(&folded), Ok(invite()), "中间的空白不算");
         let no_exp = Invite { exp: None, pins: vec![], ..invite() };
         assert_eq!(invite_decode(&invite_encode(&no_exp)), Ok(no_exp));
+        // 带着设备的名字（d）：没有时不写这一项，上面的链接照旧；旧版本只是不认得它
+        let named = Invite { device: "小王的 MacBook".into(), ..invite() };
+        assert_eq!(invite_encode(&named), LINK_D);
+        assert_eq!(invite_decode(LINK_D), Ok(named));
         for bad in ["", "cca-team1.", "cca-team1.abc", &LINK[..LINK.len() - 1], &LINK.replacen("eyJ1", "eyJ2", 1)] {
             assert!(invite_decode(bad).is_err(), "{bad}");
         }
@@ -460,6 +477,8 @@ mod tests {
         assert_eq!(with("tool_aliases", V::Dict(dict! { "later" => dict! { "alice@example.com" => "x" } })), 0, "不认得的工具不管");
         assert_eq!(with("tool_aliases", V::Dict(dict! { "claude" => "x" })), 1);
         assert_eq!(with("tool_aliases", V::from("x")), 1);
+        assert_eq!((with("alias_lock", V::Bool(true)), with("alias_lock", V::Bool(false))), (0, 0));
+        assert_eq!((with("alias_lock", V::from("yes")), with("alias_lock", V::Int(1))), (1, 1));
         assert_eq!(with("nodes", V::from("x")), 1);
         assert_eq!(with("later", V::from("旧版本不认得的项不管")), 0);
         let d = good_doc();

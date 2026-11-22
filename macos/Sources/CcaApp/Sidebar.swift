@@ -159,7 +159,8 @@ struct AccountMenu: View {
     var body: some View {
         let a = account
         let busy = model.activity(a.ref) != nil
-        Button("改别名…") { model.beginRename(a.ref) }
+        Button(a.aliasLocked ? "改别名…（Team 锁定了别名）" : "改别名…") { model.beginRename(a.ref) }
+            .disabled(a.aliasLocked)
         Divider()
         if !a.isAPI {
             if model.features(a.tool).app {

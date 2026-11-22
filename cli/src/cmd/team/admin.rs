@@ -6,9 +6,10 @@
 //! {"v": 1, "master": 主密钥（64 个十六进制字符）, "salt": 这个 Team 的盐, "next": 下一台设备的序数, "gen": 服务器上这一份记录的编号,
 //!  "alias_n": {工具: 默认的别名编到了 team-几}（各工具各编各的，用过的号不再用；3.5.3-beta.5 是一个数）,
 //!  "config": {"accounts": {工具: {邮箱: 节点}}, "tool_aliases": {工具: {邮箱: 别名}}, "aliases": {邮箱: 别名}（照 tool_aliases 算的，
-//!             给旧版本用：每个邮箱用它最前面那个工具里的）, "install_node": 节点, "nodes": {"group", "proxies"} | null},
-//!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字, "state": local | invited | joined | expired | revoked,
-//!              "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
+//!             给旧版本用：每个邮箱用它最前面那个工具里的）, "alias_lock": true（锁定了别名；没锁定时没有）, "install_node": 节点,
+//!             "nodes": {"group", "proxies"} | null},
+//!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字（设备的名字以它为准：align_names）, "state": local | invited | joined |
+//!              expired | revoked, "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
 //!              "sha": 那一版内容的摘要, "exp": 邀请什么时候过期}}}
 //! ```
 //! 每台设备那串随机数（邀请里的 k）不存：是 HMAC(主密钥, "cca-team-k-v1\0" 序数) 的前 16 个字节，随时重算。所以备份根密钥和主密钥
@@ -291,12 +292,22 @@ fn build_doc(t: &Team, a: &Dict, dev: &Dict) -> Dict {
     if !install.is_empty() {
         used.insert(install.clone());
     }
-    dict! {
+    let doc = dict! {
         "v" => 1, "at" => now(), "name" => t.name.as_str(), "salt" => a.at("salt"),
         "server" => dict! { "u" => t.url.as_str(), "p" => str_list(&t.pins) },
         "accounts" => accounts, "aliases" => aliases, "tool_aliases" => by_tool, "install_node" => install,
         "nodes" => needed_nodes(config.dict("nodes"), &used),
+    };
+    // 锁定了别名才有这一项（没锁定的 Team 的配置和以前一样，不用重新发布）
+    if alias_locked(a) {
+        doc.set("alias_lock", true);
     }
+    doc
+}
+
+/// 管理员锁定了这个 Team 里账号的别名（admin.json 的 config.alias_lock）：各台设备上不能自己改，改过的换回 Team 给的
+fn alias_locked(a: &Dict) -> bool {
+    a.dict("config").is_some_and(|c| matches!(c.get("alias_lock"), Some(V::Bool(true))))
 }
 
 /// 发布的结果：存上了几台、每台没存上的原因
@@ -621,9 +632,91 @@ fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
             d.pop("sha");
         }
     }
+    align_names(t, &cfg, &devs, &by_dev, &problems)?;
     admin_save(&t.id, a)?;
     rows.set("problems", problems);
     Ok(Ok(rows))
+}
+
+/// 这个 Team 里还在的别的设备（except 以外）已经叫这个名字（管理员起的，或者它在服务器上的）：发邀请、改名字时不行，不然按名字就分不清
+fn name_taken(a: &Dict, except: &str, name: &str) -> bool {
+    a.dict("devices").unwrap_or_default().items().iter().any(|(dev, d)| {
+        **dev != *except
+            && d.as_dict().is_some_and(|d| {
+                matches!(d.str("state").as_deref(), Some("local" | "invited" | "joined"))
+                    && (d.str("label").as_deref() == Some(name) || d.str("name").as_deref() == Some(name))
+            })
+    })
+}
+
+/// 设备只有一个名字：管理员起的（label）。加入了的设备在服务器上的名字（它加入时报的：旧版本发的邀请里没有名字，它报的是主机名；
+/// 或者加入时写了 --name）不一样时，照管理员起的再登记一次（同 cca team rename：同一把公钥、新名字），它下次取配置时跟着改。
+/// 管理员起的不合规、这个 Team 里还在的别的设备用着（管理员给它起的，或者不跟着改的那些在服务器上的名字）时反过来，这边记着的换成
+/// 服务器上的；服务器给改成了别的（服务器上有这边没记着的设备叫这个名字时加了 -2）也照服务器的记。公钥对不上的（problems 里有它的）不碰。
+/// 没登记成不耽误别的：原因记进 problems，下次对账再试。管理员自己这台不在这里管（它的名字照 team.json 的 device，接上服务器、改名时都登记）
+fn align_names(t: &Team, cfg: &Dict, devs: &Dict, by_dev: &Dict, problems: &Dict) -> R<()> {
+    let still = |d: &Dict| matches!(d.str("state").as_deref(), Some("local" | "invited" | "joined"));
+    let mut todo: Vec<(String, Dict, String)> = Vec::new(); // (设备编号, 那一项, 公钥)
+    for (dev, d) in devs.items() {
+        let Some(d) = d.as_dict() else { continue };
+        if *dev == *t.dev || d.str("state").as_deref() != Some("joined") || problems.has(&dev) {
+            continue;
+        }
+        if d.str("name").is_none() || d.str("name") == d.str("label") {
+            continue;
+        }
+        let reported = by_dev.dict(&dev).and_then(|r| r.str("pub")).and_then(|p| root_line(&p));
+        let key = match (d.str("pub").map(|p| p.to_string()), reported) {
+            (Some(k), Some(r)) if k == r => k,
+            (None, Some(r)) => r,
+            _ => continue,
+        };
+        todo.push((dev.to_string(), d, key));
+    }
+    let moving: HashSet<String> = todo.iter().map(|(dev, _, _)| dev.clone()).collect();
+    let held = |dev: &str, want: &str| {
+        devs.items().iter().any(|(o, x)| {
+            **o != *dev
+                && x.as_dict().is_some_and(|x| {
+                    still(&x)
+                        && (x.str("label").as_deref() == Some(want)
+                            || (!moving.contains(&**o) && x.str("name").as_deref() == Some(want)))
+                })
+        })
+    };
+    let mut keep: Vec<(String, Dict, String)> = Vec::new();
+    for (dev, d, key) in todo {
+        let label = d.str("label").map(|l| l.to_string()).unwrap_or_default();
+        if name_ok(&label) && !held(&dev, &label) {
+            keep.push((dev, d, key));
+        } else {
+            d.set("label", d.at("name"));
+        }
+    }
+    // 先登记要让出名字的（它现在的名字是别的设备要的）：服务器照先后查重名
+    let wanted: HashSet<String> = keep.iter().filter_map(|(_, d, _)| d.str("label").map(|l| l.to_string())).collect();
+    keep.sort_by_key(|(_, d, _)| !d.str("name").is_some_and(|n| wanted.contains(&*n)));
+    for chunk in keep.chunks(BATCH) {
+        let payload = Dict::new();
+        for (dev, d, key) in chunk {
+            payload.set(dev.as_str(), dict! { "pub" => key.as_str(), "name" => d.at("label") });
+        }
+        let (code, j) = presence_post(cfg, "team_enroll", &dict! { "devices" => payload }, 20)?;
+        if code != 200 {
+            let why = admin_fault(t, code, &j).1;
+            for (dev, d, _) in chunk {
+                problems.set(dev.as_str(), format!("服务器上的名字没改成「{}」（{why}）：下次对账再试", d.at("label").py_str()));
+            }
+            continue;
+        }
+        for (dev, d, _) in chunk {
+            if let Some(done) = j.dict("names").and_then(|n| n.str(dev)).filter(|n| name_ok(n)) {
+                d.set("name", &*done);
+                d.set("label", &*done);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// team_members 的回复整理成 {"gen", "by_dev": {设备编号: 那一行}, "pending": {设备编号: 邀请的那一行}}
@@ -944,9 +1037,9 @@ fn grants_spec(spec: &str) -> Option<V> {
     }
 }
 
-/// py team-invite Team 给这台设备起的名字 [--accounts all|工具:邮箱,…] [--ttl 秒]：给一台设备发邀请。stdout：邀请链接（只这一次，
-/// 它是凭证）、设备编号、配置没存上时的原因（存上了是空行）。原因码：no_team、not_admin、usage、name、full（没用掉的邀请太多）、
-/// 以及请求没成的那些
+/// py team-invite Team 给这台设备起的名字 [--accounts all|工具:邮箱,…] [--ttl 秒]：给一台设备发邀请（邀请里带着这个名字：它加入时用它）。
+/// stdout：邀请链接（只这一次，它是凭证）、设备编号、配置没存上时的原因（存上了是空行）。原因码：no_team、not_admin、usage、
+/// name（名字不合规、这个 Team 里还在的别的设备已经叫它）、full（没用掉的邀请太多）、以及请求没成的那些
 pub fn cmd_team_invite(args: &[String]) -> R<()> {
     const USAGE: &str = "用法: cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']";
     let [sel, label, rest @ ..] = args else {
@@ -976,6 +1069,9 @@ pub fn cmd_team_invite(args: &[String]) -> R<()> {
         return fail("name", NAME_BAD);
     }
     let (t, a, _lk) = admin_of(sel)?;
+    if name_taken(&a, "", &label) {
+        return fail("name", &format!("这个 Team 里已经有一台设备叫「{label}」：换一个名字"));
+    }
     let cfg = match root_cfg(&t)? {
         Ok(c) => c,
         Err(why) => return fail("not_attached", &why),
@@ -1024,11 +1120,11 @@ fn issue(
     }
     a.dict("devices").unwrap_or_default().set(parts.dev.as_str(), dev);
     admin_save(&t.id, a)?;
-    Ok(Ok((invite_link(t, &secret, exp), parts.dev)))
+    Ok(Ok((invite_link(t, &secret, exp, label), parts.dev)))
 }
 
-/// 邀请链接（那串随机数是照主密钥和序数算的，所以发过的链接能原样再算出来）
-fn invite_link(t: &Team, secret: &str, exp: i64) -> String {
+/// 邀请链接（那串随机数是照主密钥和序数算的，所以发过的链接能原样再算出来）。带着给这台设备起的名字：它加入时用这个名字
+fn invite_link(t: &Team, secret: &str, exp: i64, device: &str) -> String {
     invite_encode(&Invite {
         url: t.url.clone(),
         pins: t.pins.clone(),
@@ -1036,6 +1132,7 @@ fn invite_link(t: &Team, secret: &str, exp: i64) -> String {
         secret: secret.to_string(),
         name: t.name.clone(),
         exp: Some(exp),
+        device: device.to_string(),
     })
 }
 
@@ -1100,7 +1197,7 @@ pub fn cmd_team_handoff(args: &[String]) -> R<()> {
         if let Some((_, d)) = live {
             let secret = device_secret(&master, d.get("n").and_then(|n| n.as_int()).unwrap_or(0));
             let exp = d.get("exp").and_then(|e| e.as_int()).unwrap_or(0);
-            invites.set(fp.as_str(), invite_link(&t, &secret, exp));
+            invites.set(fp.as_str(), invite_link(&t, &secret, exp, &d.str("label").unwrap_or_default()));
             kept.push(V::from(alias.as_str()));
             continue;
         }
@@ -1157,9 +1254,9 @@ fn grants_text(g: &V) -> String {
 }
 
 /// py team-devices Team [--json]：这个 Team 的设备（先和服务器对一遍，见 reconcile）。--json：{"version": 1, "kind": "team_devices",
-/// "team": 编号, "devices": [{dev, label, name, state, me, grants, seq, have: 它手里是第几版（没说过是 null）, seen_age,
-/// expires_epoch: 邀请什么时候过期, problem: 对一遍时发现的、要告诉管理员的（没有是 null）}]}；不带时一台一行：
-/// 设备编号\t名字\t状态\t授权\t发布到第几版\t它手里第几版\t要告诉管理员的（没有的写 -）
+/// "team": 编号, "alias_lock": 别名锁定着没有, "devices": [{dev, label, name, state, me, grants, seq, have: 它手里是第几版（没说过是 null）,
+/// seen_age, expires_epoch: 邀请什么时候过期, problem: 对一遍时发现的、要告诉管理员的（没有是 null）}]}；不带时第一行是别名锁定着没有
+/// （1 | 0），后面一台一行：设备编号\t名字\t状态\t授权\t发布到第几版\t它手里第几版\t要告诉管理员的（没有的写 -）
 pub fn cmd_team_devices(args: &[String]) -> R<()> {
     let (sel, as_json) = match args {
         [s] => (s, false),
@@ -1199,11 +1296,13 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
         let doc = dict! {
             "version" => 1, "kind" => "team_devices", "team" => t.id.as_str(), "name" => t.name.as_str(),
             "accounts" => config.get("accounts").filter(|x| x.is_dict()).unwrap_or_else(|| V::Dict(Dict::new())),
-            "aliases" => plan.flat, "tool_aliases" => plan.by_tool, "nodes" => nodes, "devices" => list,
+            "aliases" => plan.flat, "tool_aliases" => plan.by_tool, "alias_lock" => alias_locked(&a), "nodes" => nodes,
+            "devices" => list,
         };
         out!("{}", json::dumps(&V::Dict(doc), json::Fmt::new().utf8().indent(2)));
         return Ok(());
     }
+    out!("{}", if alias_locked(&a) { 1 } else { 0 }); // 第一行：别名锁定着没有
     for r in list.iter().filter_map(|r| r.as_dict()) {
         // 没有的写 -：bash 按制表符读，空的栏会被并掉
         let s = |k: &str| r.get(k).filter(|v| !v.is_none()).map_or("-".to_string(), |v| v.py_str());
@@ -1304,9 +1403,10 @@ pub fn cmd_team_grant(args: &[String]) -> R<()> {
 }
 
 /// py team-rename Team 设备 新名字：给一台设备改名字。管理员这边记着的名字（label）改成它；加入了的设备在服务器上的名字也跟着改
-/// （同一把公钥照它的编号再登记一次：team_enroll，加入的时间、远程会话的配对都不变；名字被别的设备用了时服务器在后面加 -2），它自己
-/// 下次取配置时跟着改（team.json 的 device：follow）。登记之前先和服务器对一遍：自己退出了的不登记回去；服务器报的公钥和记下的对不上
-/// 时不登记（只改这边记着的）。管理员自己这台还没接上服务器时改的是接上时用的名字。还在这个 Team 里的别的设备已经叫这个名字的不行。
+/// （同一把公钥照它的编号再登记一次：team_enroll，加入的时间、远程会话的配对都不变；名字被别的设备用了时服务器在后面加 -2，这边也记成
+/// 服务器的：一台设备只有一个名字），它自己下次取配置时跟着改（team.json 的 device：follow）。还没加入的设备加入以后照这个名字改
+/// （align_names）。登记之前先和服务器对一遍：自己退出了的不登记回去；服务器报的公钥和记下的对不上时不登记（只改这边记着的）。
+/// 管理员自己这台还没接上服务器时改的是接上时用的名字。还在这个 Team 里的别的设备已经叫这个名字的不行（name_taken）。
 /// stdout：原来的名字、改好的名字、服务器上的名字没跟着改的原因（改了是空行）。原因码：no_team、not_admin、no_device、name、server、
 /// 以及请求没成的那些
 pub fn cmd_team_rename(args: &[String]) -> R<()> {
@@ -1324,13 +1424,7 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
     };
     let devs = a.dict("devices").unwrap_or_default();
     let still = |d: &Dict| matches!(d.str("state").as_deref(), Some("local" | "invited" | "joined"));
-    let taken = devs.items().iter().any(|(other, o)| {
-        **other != *dev
-            && o.as_dict().is_some_and(|o| {
-                still(&o) && (o.str("label").as_deref() == Some(name.as_str()) || o.str("name").as_deref() == Some(name.as_str()))
-            })
-    });
-    if taken {
+    if name_taken(&a, &dev, &name) {
         return fail("name", &format!("这个 Team 里已经有一台设备叫「{name}」：换一个名字"));
     }
     let d = devs.dict(&dev).unwrap_or_default();
@@ -1344,7 +1438,11 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
         }
     } else if d.str("state").as_deref() != Some("joined") {
         let gone = !still(&d);
-        format!("{}：只改了这边记着的名字", if gone { "它已经不在这个 Team 里了" } else { "它还没加入" })
+        if gone {
+            "它已经不在这个 Team 里了：只改了这边记着的名字".to_string()
+        } else {
+            "它还没加入：加入以后服务器上也用这个名字".to_string()
+        }
     } else {
         let rows = match reconcile(&t, &a)? {
             Ok(r) => r,
@@ -1378,7 +1476,7 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
             }
         }
     };
-    d.set("label", name.as_str());
+    d.set("label", done.as_str());
     admin_save(&t.id, &a)?;
     if me && (why.is_empty() || !t.attached()) {
         let raw = t.raw.copy();
@@ -1588,6 +1686,30 @@ pub fn cmd_team_alias(args: &[String]) -> R<()> {
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{}\n{stored}", old.join("、"));
+    Ok(())
+}
+
+/// py team-alias-lock Team on|off：锁定（解开）这个 Team 里账号的别名，再发布。锁定了：各台设备上照 Team 给的别名用，自己改过的
+/// 换回来（team_alias_follow），cca rename 改不了（alias_locked）；管理员这台设备的账号表照旧不管。改别名（cca team alias）照样能改，
+/// 各台设备跟着换。stdout 一行一项：Team 的名字、存上了几台的配置。原因码：no_team、not_admin、server、publish
+pub fn cmd_team_alias_lock(args: &[String]) -> R<()> {
+    arity("team-alias-lock", args, 2, 2)?;
+    let on = match args[1].as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return Err(Fail::Die("用法: py team-alias-lock Team on|off".into())),
+    };
+    let (t, a, _lk) = admin_of(&args[0])?;
+    let config = a.dict("config").unwrap_or_default();
+    if on {
+        config.set("alias_lock", true);
+    } else {
+        config.pop("alias_lock");
+    }
+    a.set("config", config);
+    admin_save(&t.id, &a)?;
+    let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
+    out!("{}\n{stored}", t.name);
     Ok(())
 }
 

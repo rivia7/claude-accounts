@@ -111,7 +111,8 @@
  "server": {"u": 地址, "p": [证书公钥的指纹…]},
  "accounts": {"claude": {邮箱: 节点}, "codex": {…}, "agy": {…}},
  "aliases": {邮箱: 别名（3.5.3-beta.5 起每个账号都有：没起过的是 team-N）},
- "tool_aliases": {"claude": {邮箱: 别名}, "codex": {…}, "agy": {…}}（3.5.3-beta.6 起）, "install_node": 节点,
+ "tool_aliases": {"claude": {邮箱: 别名}, "codex": {…}, "agy": {…}}（3.5.3-beta.6 起）,
+ "alias_lock": true（3.5.3-beta.7 起，管理员锁定了别名；没锁定时没有这一项）, "install_node": 节点,
  "nodes": {"group": 组名, "proxies": [节点定义…]} | null}
 ```
 
@@ -120,6 +121,7 @@
 不认得的项不管（以后加的旧版本照样用）。`name`、`server` 变了设备跟着改 team.json：管理员改名字（`cca team name`）、搬服务器、换证书都不用
 重新发邀请。别名按工具记在 `tool_aliases` 里（3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里是两个账号、可以叫得
 不一样），设备有它时照它；`aliases` 是照它算的按邮箱的那一份（每个邮箱用它最前面那个工具里的），给 3.5.3-beta.5 及以前的 cca。
+`alias_lock` 是 true 或者 false（`doc_problems` 查；管理员只在锁定时写 true），旧版本的 cca 不认得它：照没锁定的用。
 
 ## 账号表照配置改（M3 的第一步）
 
@@ -490,7 +492,9 @@
 - `_gui state` 的 `config.teams`：这台设备在的 Team（照加入的先后，每项和 `cca team ls --json` 的一样：`team_rows`）。**一个都不在时没有
   这个字段**，账号的 `team` 也只有 Team 给的官方账号才有：没有 Team 的机器输出和原来逐字节一样。
 - `cca team devices <Team> --json` 多了 `name`、`accounts`（工具 → 邮箱 → 节点）、`aliases`、`nodes`：管理页一次要到的就是这一份。3.5.3-beta.6 起
-  还有 `tool_aliases`（工具 → 邮箱 → 别名，照 `alias_plan` 算：还没发布过的旧 Team 也是按工具编好的样子），App 有它时照它（`TeamDevicesDoc.accountList`）。
+  还有 `tool_aliases`（工具 → 邮箱 → 别名，照 `alias_plan` 算：还没发布过的旧 Team 也是按工具编好的样子），App 有它时照它（`TeamDevicesDoc.accountList`）；
+  3.5.3-beta.7 起还有 `alias_lock`（App 有它才放「锁定别名」的开关）。
+- `_gui state` 的账号的 `alias_locked`（3.5.3-beta.7 起）：别名被 Team 锁定了，App 里账号页的名字不能点、侧栏菜单的「改别名…」灰着。
 - 邀请链接是那台设备的密钥：`cca team invite` 的 stdout 只经内存里的管道读（`CcaCommand.teamInvite` 不是跑完为止的那种），放进剪贴板
   （`copySecret`：标成机密、60 秒后清掉），不进被观察的状态、提示和读屏。
 
@@ -504,12 +508,14 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   「粘贴邀请链接…」是提问会话（`Handoff.teamJoin` → `cca team join`，`team.join`），「取配置」是 `cca team sync`，「更多」里退出 / 删掉
   （cca 先问同意：`team_leave` / `team_delete`）。有 Team 要处理（被移除、记录没了、没取成）时侧栏这一行挂「Team 要处理」。
 - **管理员的 Team 展开「设备和账号」**（展开时问一次 `team devices --json`，低优先级；改过东西以后再问一次）：设备（这台在前；状态、给了它
-  几个账号、它手里是第几版；有 `problem` 的挂「要处理」、下面一行说原因）、每台设备的「账号」菜单（全部 / 逐个勾：`cca team grant`；全部都给
+  几个账号、它手里的配置是不是最新的——不说第几版，序号只是用来比新旧的；名字只显示管理员起的 `label`；有 `problem` 的挂「要处理」、下面一行说原因）、
+  每台设备的「账号」菜单（全部 / 逐个勾：`cca team grant`；全部都给
   的设备去掉一个 = `none` 加上剩下的）、「改名…」（这一行下面开一个输入框，`AppModel.teamRename`；名字没变不发命令，没改成时输入框留着：
   `cca team rename`）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
   哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）、各个账号的「改别名…」（账号那一行下面开输入框，`AppModel.teamAlias`，
-  按 `工具:邮箱` 改：`cca team alias`，只改这个工具里的；别名没变不发命令）。加账号、导入映射还在终端里（`cca team map`、`import`）。
-- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`、`alias`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
+  按 `工具:邮箱` 改：`cca team alias`，只改这个工具里的；别名没变不发命令）、账号那一块标题右边的「锁定别名」开关（`cca team alias Team --lock`
+  / `--unlock`）。加账号、导入映射还在终端里（`cca team map`、`import`）。
+- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`、`alias`，连同锁定别名）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
 - `HubKind` 认得 `team` 了；`config.hubs`、`devices --json` 的 `hubs[]` 里 Team 的服务器照 `team`（编号）分，账号问的是哪一台照
   `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
 - 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
@@ -527,7 +533,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 
 设备这一头：
 
-- `cca team join [--stdin] [--name 名字]`（`py team-join`）：邀请链接经 `ask_secret`（`team.join`）或者 stdin 给，不进命令行。生成这台设备的密钥，
+- `cca team join [--stdin] [--name 名字]`（`py team-join`）：邀请链接经 `ask_secret`（`team.join`）或者 stdin 给，不进命令行。没写 `--name` 时这台设备
+  报给服务器的名字用管理员发邀请时给它起的（邀请里的 `d`，3.5.3-beta.7 起；旧版本发的邀请里没有、或者不合规时用主机名）。生成这台设备的密钥，
   拿邀请里的令牌加入，带上公钥的认证码；服务器回的设备编号要和自己照 `k` 算的一样。成了写 team.json、`secret`、记进 index.json，马上取一次配置。
   没成什么都不留——连不上时请求可能已经到了服务器（那样邀请就用掉了）：原因里说再试一次、说用过了就让管理员移除重发。已经在这个 Team 里的不换
   （免得一条旧链接把正用着的换掉），只有被移除了的（`sync.json` 是 `removed`）拿新的邀请直接换上；team.json 坏了、管理员的密钥还在的也不当成没有。
@@ -553,14 +560,21 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   换过去，到新的那台上发现手里的就是它存的那一版。中途没做完的（`moved_from` 还在）下次 `attach`、`publish` 接着收尾；原来那台连不上时说一声
   （`fail_warn team_forward`：那些设备找不到新的服务器，要重新邀请）。
 - `cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒]`：取下一个序数算出 `k`，`team_invite` 登记令牌的哈希，记进 admin.json，
-  马上把它的配置存上去（设备一加入就取得到）。邀请链接只打到 stdout 一行；在 Claude Code 的会话里不给。默认 7 天过期。
+  马上把它的配置存上去（设备一加入就取得到）。邀请链接只打到 stdout 一行；在 Claude Code 的会话里不给。默认 7 天过期。链接里带着这个名字（`d`，
+  3.5.3-beta.7 起）：设备加入时用它。还在这个 Team 里的别的设备已经叫这个名字（`label` 或者服务器上的 `name`）的不行（`name`，和 `rename` 一样：
+  `name_taken`）；`./policy.sh team`（`team-handoff`）照 deploy key 的标题起名字，不查。
 - **和服务器对一遍**（`reconcile`，`devices`、`grant`、`import`、`map`、`publish`、`attach` 都先做）：`team_members` 的名单和 admin.json 比——
-  - 加入了的设备 `invited` → `joined`，名字照服务器的（样子不对的不要）。公钥第一次见到时过了认证码才记下（没过的照样给它发布配置，名单里的
+  - 加入了的设备 `invited` → `joined`，`name` 照服务器的（样子不对的不要）。公钥第一次见到时过了认证码才记下（没过的照样给它发布配置，名单里的
     `problem` 说一声：服务器的记录没了以后它登记不回去）；记下以后服务器报的不一样就不照它的（`problem`）。管理员自己这台的公钥是本机的。
   - 邀请不在了、设备也没加入的记成 `expired`（管理员分不出是过期了，还是加入以后没等到对这一遍又退出了）。
   - `gen` 没变、服务器上却没有了的是自己退出了（`left`，不登记回去；它又出现了恢复成 `joined`）。
   - `gen` 变了（服务器的记录没了、换了一台）才照**记下的**公钥把 `joined` 的都登记回去、配置都重新发布。
   - 服务器上某台设备存着的那一版比发布过的旧（它的记录回滚了、丢了）：重新发布。
+  - **设备只有一个名字**（`align_names`，3.5.3-beta.7 起）：管理员起的 `label`。加入了的设备在服务器上的名字（`name`：旧版本发的邀请里没有名字，
+    它报的是主机名；或者加入时写了 `--name`）不一样时，照 `label` 再 `team_enroll` 一次（和 `cca team rename` 一样：同一把公钥），它下次取配置时
+    跟着改（`me_name`）。`label` 不合规、这个 Team 里还在的别的设备用着（它们的 `label`，或者不跟着改的那些的 `name`）时反过来，`label` 记成
+    服务器上的；服务器给改成了别的（服务器上有这边没记着的设备叫这个名字时加 `-2`）也照服务器的记。要让出名字的先登记（服务器照先后查重名）。
+    公钥对不上的、管理员自己这台不碰；没登记成的原因进 `problem`，下次对账再试。名字一样了就不再发请求。
 - **发布**（`publish`）：给每台 `invited` / `joined` 的设备照授权拼出明文，内容的摘要（发布时间不算）和上次发布的一样就不动；变了的序号加一、
   封好签好，一个请求最多 32 台、密文加起来不超过 600 KB（`put_docs`，换服务器的收尾也用它）。服务器说序号不比它存着的大（管理员的状态是从备份
   恢复的）：它说的数不比记着的小、没到上限才信，接着它的往上加再存一次（只追一次）；它明说不认得的编号记成 `expired`；回话里没提到的不动、说一声。
@@ -578,6 +592,12 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - `cca team alias Team 账号 新别名`（`py team-alias`）：账号写 `工具:邮箱` 只改这个工具里的，只写邮箱改它在的每个工具里的；别名不合规、
   同一个工具里别的账号已经叫它是 `alias`（别的工具里的可以），Team 的配置里没有这个账号是 `no_account`。改完发布（stdout：原来的别名——几个工具里
   不一样时用「、」连起来——、存上了几台），各台设备下次取配置时照上面的规矩跟着改；管理员这台设备的账号表不动。
+- `cca team alias Team --lock | --unlock`（`py team-alias-lock Team on|off`，3.5.3-beta.7 起）：admin.json 的 `config.alias_lock`，再对一遍、发布
+  （配置里带 `alias_lock: true`；解开时去掉这一项，没锁定过的 Team 的配置和以前一样）。stdout：Team 的名字、存上了几台。锁定了，成员设备上
+  （`AliasFrom.locked`：配置里有它、这台设备不是这个 Team 的管理员）：`team_alias_follow` 里账号表的别名不是 Team 给的（或者撞了以后的
+  「Team 的名字-N」）就换，有没有记录、自己改没改过都换，去掉了别名的也补上；`cca rename` 不让改（`alias_locks`：退出码 4，bash 报成
+  `alias_locked`），`cca edit` 手改的下一条命令换回来；`_gui state` 的账号带 `alias_locked`。管理员自己这台的账号表照旧不管；管理员照样能改别名，
+  各台设备跟着换。解开以后又能自己改，现在用着的不变。
 - `cca team name Team 新名字`（`py team-name`，3.5.3-beta.6 起）：改 team.json 的 `name`，再发布（配置里的 `name` 变了，各台设备都发布新的
   一版，取到时跟着改 team.json：`follow`，3.5.3-beta.1 起的设备都会）。名字照 `team new` 的规矩（1～64 个字符、不能有控制字符），这台设备上别的
   Team 已经叫这个的不行（`name`：按名字选 Team 就分不清了）。已经发出去的邀请里带着的还是原来的名字，拿它加入的设备第一次取到配置时换成新的；
@@ -588,12 +608,15 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - `cca team rename Team 设备 新名字`（`py team-rename`）：admin.json 里它的 `label` 换成新名字；`joined` 的先对一遍（自己退出了的不登记回去），
   再照它的编号把**同一把公钥**再 `team_enroll` 一次、带着新名字——服务器上加入的时间、认证码（`proof`）照旧（3.5.3-beta.5 起的服务器；以前的
   服务器丢掉认证码，管理员这边已经记下了公钥，不碍事），远程会话的配对按公钥的指纹认，也照旧；名字被别的设备用了时服务器在后面加 `-2`
-  （`name` 记服务器给的）。公钥用记下的（管理员自己这台是本机的）；没记下的用服务器报的（它本来就存着这一把，再登记一次不多给谁什么）；记下的
-  和服务器报的不一样时不登记。那台设备下次取配置时跟着改 team.json 的 `device`（`follow`）。还没加入、已经不在的只改 `label`；管理员自己这台还没
+  （`label`、`name` 都记服务器给的：一台设备只有一个名字）。公钥用记下的（管理员自己这台是本机的）；没记下的用服务器报的（它本来就存着这一把，再登记一次不多给谁什么）；记下的
+  和服务器报的不一样时不登记。那台设备下次取配置时跟着改 team.json 的 `device`（`follow`）。还没加入的只改 `label`（发出去的邀请里还是原来的名字：
+  它照那个名字加入，对一遍时 `align_names` 改成新的），已经不在的只改 `label`；管理员自己这台还没
   接上服务器时改的是接上时用的名字（team.json 的 `device`）。还在这个 Team 里的别的设备已经叫这个名字（`label` 或者 `name`）的不行（`name`），
   不然以后按名字就分不清。不发布：配置里没有设备的名字。**远程会话里已经配好的对不跟着改名**：配对表（各自的 `remote/peers.json`）记的是配对那一刻服务器的设备清单里
   对方的名字（没有时是它自己报的主机名，docs/dev/remote.md），只是给人看的、认设备靠指纹；改名以后再配对一次才换成新名字。
-- `cca team devices Team [--json]`：对一遍以后列出来（`seq` 发布到第几版、`have` 它手里第几版、`problem` 对这一遍时发现的要告诉管理员的）。
+- `cca team devices Team [--json]`：对一遍以后列出来（`seq` 发布到第几版、`have` 它手里第几版、`problem` 对这一遍时发现的要告诉管理员的；
+  `--json` 另有 `alias_lock`，给 bash 的那一份第一行是 1 / 0）。序号只用来比新旧：给人看的地方（`cca team`、`team sync`、`team devices`、App）
+  只说「配置已同步」「配置是最新的」「还没取到最新的配置」，不说第几版。
 - 给 bash 的一行一项、制表符分开的输出里，没有的栏写 `-`（`team-list`、`team-devices`）：bash 按制表符读，空的栏会被并掉、后面的往前挪。
 
 卸载（`cca restore`）：确认清单里一个 Team 一行（成员：退出；管理员：根密钥跟着删掉），真做时各个 `team-leave apply`（`restore_teams`）。备份不带

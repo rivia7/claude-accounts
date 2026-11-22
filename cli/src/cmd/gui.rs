@@ -21,7 +21,7 @@ use crate::core::ctx::{cfg_save, ctx, pool_size, reconcile_all};
 use crate::core::model::{
     acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok,
 };
-use crate::core::policy::{legacy_raw, parked, policy_doc, policy_map, policy_sources};
+use crate::core::policy::{alias_locks, legacy_raw, parked, policy_doc, policy_map, policy_sources};
 use crate::core::sync::sync_digest;
 use crate::core::tool::{t, tools, Kind, Using};
 use crate::py::fs::{load_quiet, save_json};
@@ -414,6 +414,7 @@ fn gui_account(
     badges: &[(Rc<str>, (String, &'static str))],
     pm: &Dict,
     src: &Dict,
+    locks: &HashMap<String, String>,
     env: &mut GuiEnv,
     now: f64,
     cli: Dict,
@@ -519,6 +520,8 @@ fn gui_account(
         "node" => if node.is_empty() { V::None } else { V::from(&*node) }, "port" => &port, "slot" => slot,
         "group" => slot.map(|s| format!("CCA-{s}")),
         "pinned" => pinned, "pinned_node" => if !api && !e.is_empty() { pm.get(&lower).unwrap_or(V::None) } else { V::None },
+        // 别名被 Team 的管理员锁定了（cca rename 不让改）
+        "alias_locked" => !api && !e.is_empty() && locks.contains_key(&lower),
         "is_last" => tool.state(c, false).get("last").is_some_and(|l| l.as_str() == Some(k)),
         "api" => if api {
             let d = v.as_dict().expect("is_api 说它是字典");
@@ -708,6 +711,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             }
             let badges = launcher_badges(&c, &official, &launcher_names(&official));
             let (pm, src, legacy) = (policy_map(tool, Some(&c)), policy_sources(tool), legacy_raw(tool));
+            let locks = alias_locks(tool);
             shared += table.items().iter().filter(|(k, v)| mapped(&legacy, k, v)).count();
             entry.set(
                 "errors",
@@ -720,7 +724,7 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
             let starts = proc_starts(&pids);
             let accounts = List::new();
             for ((k, v), (_, ms)) in table.items().into_iter().zip(marks.iter()) {
-                accounts.push(gui_account(&c, &k, &v, &procs, &badges, &pm, &src, &mut env, now, cli_view(ms, &starts))?);
+                accounts.push(gui_account(&c, &k, &v, &procs, &badges, &pm, &src, &locks, &mut env, now, cli_view(ms, &starts))?);
             }
             entry.set("accounts", accounts);
         }

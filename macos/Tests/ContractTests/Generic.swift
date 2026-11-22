@@ -1053,7 +1053,7 @@ func wrongTypes(_ x: Any) -> Any {
                                 "sessions", "since_epoch", "last_used_epoch", "seen_epoch", "left_percent", "from_epoch", "until_epoch",
                                 "usd", "requests", "unpriced_requests", "weeks_usd", "days_usd", "synced_epoch", "average_usd", "files"]
     let boolean: Set<String> = ["stale", "pinned", "is_last", "running", "applies", "reset", "reachable", "hook", "cron", "listening", "saved",
-                                "me", "revoked", "partial", "current", "first"]
+                                "me", "revoked", "partial", "current", "first", "alias_locked", "alias_lock"]
     let text: Set<String> = ["plan", "plan_tier", "label", "message", "org", "trust_label", "balance", "error", "local_node", "selected",
                              "currency", "prices_date", "date"]
     if var d = x as? [String: Any] {

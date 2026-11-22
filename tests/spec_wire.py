@@ -268,18 +268,20 @@ def team_pub_proof(secret, pub):
     return base64.b64encode(H(key, ' '.join(pub.split()[:2]).encode())).decode()
 
 
-def invite_encode(url, pins, root_pub, secret, name, exp=None):
-    """邀请链接：cca-team1.<base64url(紧凑的 JSON)，不带 =>.<前面这一段的 SHA-256 的前 4 个十六进制字符>"""
+def invite_encode(url, pins, root_pub, secret, name, exp=None, device=None):
+    """邀请链接：cca-team1.<base64url(紧凑的 JSON)，不带 =>.<前面这一段的 SHA-256 的前 4 个十六进制字符>；device 是管理员给这台设备起的名字（d）"""
     doc = {'u': url, 'p': pins, 'r': root_pub.split()[1], 'k': secret, 'n': name}
     if exp is not None:
         doc['e'] = exp
+    if device:
+        doc['d'] = device
     raw = json.dumps(doc, separators=(',', ':'), ensure_ascii=False).encode()
     head = TEAM_LINK + base64.urlsafe_b64encode(raw).decode().rstrip('=')
     return head + '.' + hashlib.sha256(head.encode()).hexdigest()[:4]
 
 
 def invite_decode(link):
-    """读邀请链接（中间的空白不算）：{"u", "p", "r", "k", "n"[, "e"]}；不对是 ValueError"""
+    """读邀请链接（中间的空白不算）：{"u", "p", "r", "k", "n"[, "e"][, "d"]}；不对是 ValueError"""
     s = ''.join(link.split())
     head, _, check = s.rpartition('.')
     if not head.startswith(TEAM_LINK) or hashlib.sha256(head.encode()).hexdigest()[:4] != check:

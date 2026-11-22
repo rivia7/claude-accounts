@@ -365,6 +365,8 @@ struct FailCode: KnownValues {
     static let aliasInvalid = FailCode(rawValue: "alias_invalid")
     /// 改别名时找不到这个账号。
     static let accountMissing = FailCode(rawValue: "account_missing")
+    /// 改别名（`cca rename`）：这个账号的别名是 Team 给的，管理员锁定了别名。
+    static let aliasLocked = FailCode(rawValue: "alias_locked")
     /// 重置额度：没有能用的重置机会了。
     static let noResetCredit = FailCode(rawValue: "no_reset_credit")
     /// 重置额度：这个版本的 codex 不支持（升级后再试）。
@@ -401,7 +403,7 @@ struct FailCode: KnownValues {
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
-                                       .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
+                                       .aliasInvalid, .accountMissing, .aliasLocked, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
                                        .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy, .hubSSH, .teamLan]
 }

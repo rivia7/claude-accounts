@@ -92,6 +92,8 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
     var aliases: [String: String]
     /// 工具 → 邮箱 → 别名（按工具记的，各工具各编各的 team-N；cca 3.5.3-beta.6 起，有它时照它）
     var toolAliases: [String: [String: String]]?
+    /// 管理员锁定了别名（各台设备上不能自己改；cca 3.5.3-beta.7 起，以前的 cca 没有这一项：nil，App 不给锁定的开关）
+    var aliasLock: Bool?
     /// 配置里带着定义的节点的名字
     var nodes: [String]
     var devices: [TeamDevice]
@@ -99,6 +101,7 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
     enum CodingKeys: String, CodingKey {
         case version, kind, team, name, accounts, aliases, nodes, devices
         case toolAliases = "tool_aliases"
+        case aliasLock = "alias_lock"
     }
 
     init(from decoder: Decoder) throws {
@@ -110,6 +113,7 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
         accounts = c.lossyDictionary([String: String].self, .accounts) ?? [:]
         aliases = c.lossyDictionary(String.self, .aliases) ?? [:]
         toolAliases = c.lossyDictionary([String: String].self, .toolAliases)
+        aliasLock = c.bool(.aliasLock)
         nodes = c.lossyArray(String.self, .nodes) ?? []
         devices = c.lossyArray(TeamDevice.self, .devices) ?? []
     }
@@ -159,9 +163,9 @@ struct TeamDeviceState: KnownValues {
 struct TeamDevice: Decodable, Sendable, Equatable, Identifiable {
     /// 设备编号（十六进制）：`cca team revoke` / `grant` 的参数、`team_revoke` 同意的范围
     var id: String
-    /// 管理员发邀请时起的名字
+    /// 设备的名字（管理员起的；界面上只用它）
     var label: String
-    /// 它加入时自己报的名字
+    /// 它在服务器上的名字：cca 3.5.3-beta.7 起对一遍时照 label 改成一样的（以前的设备加入时报的是主机名）；界面上不显示
     var name: String?
     var state: TeamDeviceState
     /// 管理员自己这台

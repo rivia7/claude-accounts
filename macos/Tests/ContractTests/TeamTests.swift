@@ -26,6 +26,9 @@ func teamFixtureTests() {
         let bob = s.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))
         check("state：carol 是书房组给的（它的服务器这台设备没在用：hub 是 nil，team 照样有）；bob 不是哪个 Team 给的",
               carol?.team == teamA && carol?.hub == nil && bob?.team == nil)
+        check("state：carol 的别名被书房组的管理员锁定了（不能改）；bob 的没有；旧版 cca 没有这一项是没锁定",
+              carol?.aliasLocked == true && bob?.aliasLocked == false
+              && loadFixture(StateDoc.self, "state_cost_sync.json")?.allAccounts.allSatisfy { !$0.aliasLocked } == true)
         let all = s.allAccounts
         check("按 Team 筛选：全部、某个 Team 的、不在 Team 里的",
               all.filter(TeamFilter.all.includes).count == all.count && all.filter(TeamFilter.team(teamA).includes).map(\.key) == ["carol@example.com", "grace@example.com"]
@@ -33,7 +36,7 @@ func teamFixtureTests() {
         check("筛选项的名字：Team 的名字；不在了的 Team 写编号的开头", Texts.teamFilter(.all, teams: teams) == "全部账号"
               && Texts.teamFilter(.team(teamA), teams: teams) == "书房组" && Texts.teamFilter(.team("0123456789abcdef"), teams: teams) == "01234567"
               && Texts.teamFilter(.outside, teams: teams) == "不在 Team 里的")
-        check("Team 的状态那一句照 cca 给的说", Texts.teamState(teams[0]) == "配置已同步（第 4 版）" && Texts.teamState(teams[1]).contains("被「设计组」的管理员移除了")
+        check("Team 的状态那一句照 cca 给的说（不说第几版）", Texts.teamState(teams[0]) == "配置已同步" && Texts.teamState(teams[1]).contains("被「设计组」的管理员移除了")
               && Texts.teamSummary(teams[0]) == "这台设备叫 studio-mac · 给了这台设备 2 个账号 · team.example.com:18445")
     }
     if let s = loadFixture(StateDoc.self, "state_cost_sync.json") {
@@ -45,6 +48,7 @@ func teamFixtureTests() {
     let twoTools = #"{"team":"ab","accounts":{"claude":{"x@example.com":"US-A"},"codex":{"x@example.com":"US-A"}},"aliases":{"x@example.com":"team-3"}"#
     let perTool = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + #","tool_aliases":{"claude":{"x@example.com":"team-3"},"codex":{"x@example.com":"team-1"}}}"#).utf8))
     let flatOnly = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + "}").utf8))
+    check("team devices：旧版 cca 没有 alias_lock 时是 nil（App 不给锁定的开关）", flatOnly != nil && flatOnly?.aliasLock == nil && perTool?.aliasLock == nil)
     check("team devices：别名按工具（同一个邮箱在 Claude、Codex 里叫得不一样）；旧版 cca 没有 tool_aliases 时用按邮箱的",
           perTool?.accountList.map(\.alias) == ["team-3", "team-1"] && flatOnly?.accountList.map(\.alias) == ["team-3", "team-3"])
     let unknown = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"later-role","state":"later-state"}"#.utf8))
@@ -55,14 +59,14 @@ func teamFixtureTests() {
               && doc.accountList.map(\.spec) == ["claude:carol@example.com", "claude:grace@example.com", "codex:frank@example.com"]
               && doc.accountList.map(\.alias) == ["卡罗尔", "team-1", "team-1"] && doc.accountList.first?.node == "US-C" && doc.nodes == ["US-A", "US-C"])
         let d = doc.devices
-        check("team devices：这台在前；设备编号、管理员起的名字、它自己报的名字", d.count == 6 && d[0].me && d[0].id == "0a1b2c3d4e5f6071" && d[1].label == "小王的 MacBook"
-              && d[1].name == "wang-mbp" && d[2].name == nil)
+        check("team devices：这台在前；设备编号、管理员起的名字、它在服务器上的名字；别名锁定着", d.count == 6 && d[0].me && d[0].id == "0a1b2c3d4e5f6071"
+              && d[1].label == "小王的 MacBook" && d[1].name == "wang-mbp" && d[2].name == nil && doc.aliasLock == true)
         check("team devices：授权：全部 / 只给几个 / 一个都不给", d[0].grantsAll && d[0].has(doc.accountList[2]) && !d[1].grantsAll && d[1].has(doc.accountList[0])
               && !d[1].has(doc.accountList[1]) && d[1].grantCount(of: 3) == 1 && d[0].grantCount(of: 3) == 3 && !d[4].grantsAll && d[4].grantCount(of: 3) == 0)
         check("team devices：状态；不认识的状态不算还在的", d[2].state == .invited && d[2].state.active && d[4].state == .revoked && !d[4].state.active
               && !d[5].state.isKnown && !d[5].state.active && d[2].expiresEpoch == 1794600000 && d[3].problem?.contains("公钥") == true)
         check("team devices：给人看的那一句", Texts.teamDeviceDetail(d[0], accounts: 3, now: now) == "刚刚来过 · 全部账号 · 配置是最新的"
-              && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 配置还是第 3 版（最新第 4 版）")
+              && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 还没取到最新的配置")
               && Texts.teamDeviceDetail(d[2], accounts: 3, now: now) == "邀请还没用（6 天后过期） · 全部账号"
               && Texts.teamDeviceDetail(d[4], accounts: 3, now: now) == "移除了", Texts.teamDeviceDetail(d[0], accounts: 3, now: now))
     }
@@ -80,7 +84,10 @@ func teamFixtureTests() {
           && CcaCommand.teamMap(team: teamA, tool: .codex, email: "f@example.com", node: "US-A").arguments == ["team", "map", teamA, "codex", "f@example.com", "US-A"]
           && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "设计-1").arguments == ["team", "alias", teamA, "codex:f@example.com", "设计-1"]
           && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "x").runsToCompletion
-          && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "x").gate == CcaCommand.routerSync.gate)
+          && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "x").gate == CcaCommand.routerSync.gate
+          && CcaCommand.teamAliasLock(team: teamA, on: true).arguments == ["team", "alias", teamA, "--lock"]
+          && CcaCommand.teamAliasLock(team: teamA, on: false).arguments == ["team", "alias", teamA, "--unlock"]
+          && CcaCommand.teamAliasLock(team: teamA, on: true).runsToCompletion && CcaCommand.teamAliasLock(team: teamA, on: true).gate == CcaCommand.routerSync.gate)
     check("命令：邀请的输出只经内存里的管道（不是跑完为止的那种）；改账号表的几条跑完为止、和同步路由器排队",
           !CcaCommand.teamInvite(team: teamA, label: "x", accounts: "all").runsToCompletion && CcaCommand.teamSync.runsToCompletion
           && CcaCommand.teamLeave(team: teamA).runsToCompletion && CcaCommand.teamSync.gate == CcaCommand.routerSync.gate
