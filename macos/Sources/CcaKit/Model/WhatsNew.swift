@@ -20,6 +20,16 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.3-beta.1", title: "Team：账号共享和设备同步合到一起", points: [
+            .init(symbol: "person.3",
+                  text: "「共享与同步」页多了 Team：一组设备加一份配置（哪些账号、各走哪个节点）。管理员给每台设备发一个邀请链接，对方粘贴就加入，账号自动加进来。"),
+            .init(symbol: "line.3.horizontal.decrease.circle",
+                  text: "加入了 Team 以后，侧栏、总览和菜单栏面板可以按 Team 筛选账号。"),
+            .init(symbol: "server.rack",
+                  text: "管理员在这一页新建 Team、把它的同步服务器一键部署到自己的服务器上（一台可以装几个 Team），管设备、每台设备能用哪些账号、账号走哪个节点。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "用着维护者映射的机器可以自动迁到 Team：维护者运行一次 ./policy.sh team，各台机器拉到映射后自己加入。原来加公钥的方式照常可用，以后会去掉。"),
+        ]),
         ReleaseNote(version: "3.5.2", title: "远程会话、自己的同步服务器、完全卸载", points: [
             .init(symbol: "terminal",
                   text: "远程会话：运行 cca remote on 以后，终端关了会话照样运行。侧栏的「远程会话」页能接入这台 Mac 和配对过的机器上的会话，可以同时接着几个。"),

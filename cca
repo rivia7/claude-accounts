@@ -57,7 +57,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-VERSION="3.5.2"
+VERSION="3.5.3-beta.1"
 UPDATE_REPO="https://github.com/rivia7/claude-accounts"
 # 发布签名公钥（ssh-keygen -Y verify）：自动更新只装用这把密钥签过名的脚本
 RELEASE_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICxClUySZa2aVx7s6HRzufgJ49ad44smTnmkzDI/Osex cca-release"
@@ -8312,6 +8312,17 @@ EOF
 EOF
 	fi
 	cat >&2 <<EOF
+
+Team（一组设备加一份配置：哪些账号、各走哪个节点，由管理员的设备维护，存在这个 Team 的同步服务器上；服务器上只有密文）
+  cca team [ls]              这台设备在哪些 Team 里
+  cca team join              拿管理员给的邀请链接加入（一个邀请只能加入一台设备；链接不写在命令行上，会问你）
+  cca team sync | leave [Team]
+                             现在取一次配置（平时每小时自动取）/ 退出
+  cca team new 名字          建一个 Team（这台设备是管理员），接着部署它的同步服务器：
+  cca team deploy Team [用户@]主机
+                             经 SSH 装到自己的 Linux 服务器上、接上（一台服务器上可以装几个 Team）；没有服务器：cca team hosted Team
+  cca team invite Team 名字 [--accounts all|工具:邮箱,…]
+                             给一台设备发邀请。管设备和账号：devices、grant、revoke、map、import（全部用法：cca team help）
 
 维护者共享的账号（维护者的账号 → 节点映射；默认关着，有维护者共享给你的账号时才打开）
   cca policy on              打开共享：映射放在维护者的私有 GitHub 仓库里，给这台机器生成只读的 deploy key，把公钥交给
