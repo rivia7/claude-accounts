@@ -4,7 +4,8 @@
 use super::crypto;
 use super::local::Meta;
 use super::peers::{self, Incoming, Peer};
-use super::relay::{Fault, Server};
+use super::relay::{self, Fault, Server};
+use crate::cmd::hub::HubKind;
 use crate::cmd::settings::home_tilde;
 use crate::dict;
 use crate::py::obj::{Dict, List};
@@ -131,6 +132,48 @@ pub fn fetch(srv: &Server, peers: &[Peer], timeout: i64) -> R<Result<Listing, Fa
     }
     sessions.sort_by(|a, b| a.since.total_cmp(&b.since));
     Ok(Ok(Listing { sessions, known }))
+}
+
+/// 各台服务器上问来的合在一起
+pub struct Seen {
+    pub sessions: Vec<Far>,
+    /// 问到了的那几台服务器上还在的配对
+    pub known: HashSet<String>,
+    /// 它的服务器这次问到了的配对（不在 known 里的：对方取消了；不在这里面的：这次不知道）
+    pub asked: HashSet<String>,
+    /// 没问到的服务器：是哪台、原因、服务器回的（没问出去的是 None）
+    pub errors: Vec<(HubKind, String, Option<Fault>)>,
+}
+
+/// 配对记在哪台服务器上就问哪台：每台只问它上面的那几个配对
+pub fn fetch_all(peers: &[Peer], timeout: i64) -> R<Seen> {
+    let mut seen = Seen { sessions: Vec::new(), known: HashSet::new(), asked: HashSet::new(), errors: Vec::new() };
+    let mut hubs: Vec<HubKind> = Vec::new();
+    for p in peers {
+        if !hubs.contains(&p.hub) {
+            hubs.push(p.hub);
+        }
+    }
+    for hub in hubs {
+        let group: Vec<Peer> = peers.iter().filter(|p| p.hub == hub).cloned().collect();
+        let srv = match relay::server_of(hub)? {
+            Ok(s) => s,
+            Err(why) => {
+                seen.errors.push((hub, why, None));
+                continue;
+            }
+        };
+        match fetch(&srv, &group, timeout)? {
+            Ok(l) => {
+                seen.sessions.extend(l.sessions);
+                seen.known.extend(l.known);
+                seen.asked.extend(group.iter().map(|p| p.pid.clone()));
+            }
+            Err(f) => seen.errors.push((hub, f.text.clone(), Some(f))),
+        }
+    }
+    seen.sessions.sort_by(|a, b| a.since.total_cmp(&b.since));
+    Ok(seen)
 }
 
 #[cfg(test)]

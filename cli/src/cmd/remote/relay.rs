@@ -1,4 +1,6 @@
-//! 和中转服务器打交道（维护者的设备统计服务器开着中转时；格式见 server/README.md「远程会话的中转」）：
+//! 和中转服务器打交道（格式见 server/README.md「远程会话的中转」）。中转服务器不止一台：每个 Team 的会话走这个 Team 自己的
+//! 同步服务器（开着中转的话），不在 Team 里的账号的会话走维护者的那一台（旧的通道）——`session_hub`。配对是在某一台服务器上
+//! 做的、记在它上面（`Peer::hub`），经它只看得到走这台服务器的会话。
 //! - 请求（配对、会话的列表、进数据端口的票据）走设备统计已有的那条路：deploy key 签名、curl 钉住证书公钥、直连
 //!   （`presence_post`），这里只是换了几个 op
 //! - 数据端口是普通的 TCP：连上先说一行（`crypto::relay_line`），凭票据进去。上面跑的是两头之间端到端加密的通道
@@ -9,8 +11,13 @@
 use super::crypto::{self, Channel, Role};
 use super::local;
 use super::peers::Peer;
+use crate::cmd::hub::{route, HubKind};
 use crate::cmd::presence::{presence_post, presence_server, presence_why};
+use crate::core::policy::policy_sources;
+use crate::core::team::teams;
+use crate::core::tool::{tools, Using};
 use crate::py::base64::b64decode;
+use crate::py::fs::load_quiet;
 use crate::py::obj::Dict;
 use crate::py::rand::token_hex;
 use crate::py::time::monotonic;
@@ -36,18 +43,17 @@ pub struct Fault {
     pub text: String,
 }
 
-/// 中转服务器（就是设备统计的那一台）：配置和它的主机名
+/// 一台中转服务器（维护者的设备统计服务器，或者某个 Team 的同步服务器）：配置和它的主机名
 pub struct Server {
     cfg: Dict,
     host: String,
-    /// 这台机器的设备指纹
+    /// 这台机器在这台服务器上的设备指纹
     pub fp: String,
+    /// 是哪一台：配对记在它上面（`Peer::hub`）
+    pub kind: HubKind,
 }
 
-/// 用得了的话是 Ok；用不了（没配置映射、映射里没有服务器、没有 deploy key）是 Err(原因)
-pub fn server() -> R<Result<Server, String>> {
-    let (why, cfg) = presence_server()?;
-    let Some(cfg) = cfg else { return Ok(Err(why)) };
+fn build(kind: HubKind, cfg: Dict) -> Result<Server, String> {
     let url = cfg.at("url").py_str();
     let rest = url.split_once("://").map_or(url.as_str(), |x| x.1);
     let hostport = rest.split('/').next().unwrap_or("");
@@ -57,10 +63,79 @@ pub fn server() -> R<Result<Server, String>> {
         None => hostport.rsplit_once(':').map_or(hostport, |x| x.0).to_string(),
     };
     if host.is_empty() {
-        return Ok(Err("维护者的映射里设备统计的地址不对".into()));
+        return Err(format!("{}的地址不对", label(kind)));
     }
     let fp = cfg.at("fp").py_str();
-    Ok(Ok(Server { cfg, host, fp }))
+    Ok(Server { cfg, host, fp, kind })
+}
+
+/// 给人看的：这是谁的服务器
+pub fn label(kind: HubKind) -> String {
+    match kind {
+        HubKind::Team(tag) => {
+            let tid = tag.id();
+            let name = teams().into_iter().find(|t| t.id == tid).map(|t| t.name).filter(|n| !n.is_empty());
+            format!("「{}」的服务器", name.unwrap_or_else(|| format!("Team {}", &tid[..8])))
+        }
+        _ => "维护者的服务器".into(),
+    }
+}
+
+/// 某一台中转服务器。用得了的话是 Ok；用不了是 Err(原因)：维护者的——没配置映射、映射里没有服务器、没有 deploy key；
+/// Team 的——退出了、还没取到它的配置、它没接上服务器。自己的同步服务器（cca hub）不做中转
+pub fn server_of(kind: HubKind) -> R<Result<Server, String>> {
+    match kind {
+        HubKind::Team(tag) => {
+            let tid = tag.id();
+            Ok(match crate::cmd::team::hub_cfgs().into_iter().find(|(t, _)| *t == tid) {
+                Some((_, cfg)) => build(kind, cfg),
+                None => {
+                    Err(format!("这台机器现在用不了{}（退出了这个 Team、还没取到它的配置，或者它还没接上服务器）", label(kind)))
+                }
+            })
+        }
+        HubKind::Own => Ok(Err("自己的同步服务器不做远程会话的中转".into())),
+        HubKind::Maintainer => {
+            let (why, cfg) = presence_server()?;
+            Ok(match cfg {
+                Some(cfg) => build(kind, cfg),
+                None => Err(why),
+            })
+        }
+    }
+}
+
+/// 这台机器现在用得了的中转服务器：各个 Team 的（照加入的先后），再是维护者的（旧的通道）。开没开中转要问了才知道
+pub fn servers() -> R<Vec<Server>> {
+    let mut out = Vec::new();
+    for (tid, cfg) in crate::cmd::team::hub_cfgs() {
+        if let Some(tag) = crate::cmd::hub::TeamTag::new(&tid) {
+            if let Ok(s) = build(HubKind::Team(tag), cfg) {
+                out.push(s);
+            }
+        }
+    }
+    if let Ok(s) = server_of(HubKind::Maintainer)? {
+        out.push(s);
+    }
+    Ok(out)
+}
+
+/// 这个账号的会话走哪台服务器中转：账号是哪个 Team 给的就走那个 Team 的；别的（维护者映射里的、自己的、第三方 API 的）
+/// 走维护者的那一台（旧的通道，和以前一样）
+pub fn session_hub(tool: &str, key: &str) -> HubKind {
+    for t in tools() {
+        if t.name != tool {
+            continue;
+        }
+        let Some(v) = load_quiet(&t.table).and_then(|v| v.as_dict()).and_then(|d| d.get(key)) else { break };
+        let _using = Using::tool(t);
+        if let Some(kind @ HubKind::Team(_)) = route(&policy_sources(t), key, &v) {
+            return kind;
+        }
+        break;
+    }
+    HubKind::Maintainer
 }
 
 /// 进数据端口的票据（30 秒内、只能用一次）
@@ -79,9 +154,9 @@ impl Server {
         }
         let error = j.str("error").map(|e| e.to_string()).unwrap_or_default();
         let text = match (code, error.as_str()) {
-            (404, "not_found") => RELAY_OLD.to_string(),
+            (404, "not_found") => self.old(),
             (404, "no_pairing") => "服务器上没有这个配对（配对码过期了，或者对方取消了配对）".into(),
-            (404, "no_web") => NO_WEB.into(),
+            (404, "no_web") => self.no_web(),
             (404, "no_session") => "那台机器上现在没有这个会话（它结束了，或者那边不让这台机器接入）".into(),
             (409, "taken") => "这个配对码已经有另一台机器在用了：重新显示一个".into(),
             (409, "mismatch") => "配对没对上（两边算出来的不一样）：重新来一次".into(),
@@ -91,6 +166,26 @@ impl Server {
             _ => presence_why(&self.cfg, code, &j)?,
         };
         Ok(Err(Fault { code, error, text }))
+    }
+
+    /// 这台服务器不认中转的那几个 op（旧版，或者没开中转）
+    pub fn old(&self) -> String {
+        match self.kind {
+            HubKind::Team(_) => {
+                format!("{}还没开远程会话的中转（管理员要重新部署、把中转打开：cca team deploy）", label(self.kind))
+            }
+            _ => RELAY_OLD.into(),
+        }
+    }
+
+    /// 这台服务器没开网页端
+    pub fn no_web(&self) -> String {
+        match self.kind {
+            HubKind::Team(_) => {
+                format!("{}还没有开网页端，手机上接入不了（管理员要重新部署、把网页端打开：cca team deploy）", label(self.kind))
+            }
+            _ => NO_WEB.into(),
+        }
     }
 
     pub fn ticket(&self, op: &str, payload: &Dict) -> R<Result<Ticket, Fault>> {
@@ -388,6 +483,7 @@ mod tests {
             shown: true,
             at: 0.0,
             web: false,
+            hub: HubKind::Maintainer,
         };
         let peer_of_viewer = Peer {
             pid: pid.clone(),
@@ -397,6 +493,7 @@ mod tests {
             shown: false,
             at: 0.0,
             web: false,
+            hub: HubKind::Maintainer,
         };
 
         let host = std::thread::spawn(move || {
@@ -462,6 +559,7 @@ mod tests {
             shown: true,
             at: 0.0,
             web: false,
+            hub: HubKind::Maintainer,
         };
         // 宿主那边没有这个配对：说一声“不认识”就关，接入方知道原因
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

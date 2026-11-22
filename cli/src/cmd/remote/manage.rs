@@ -161,43 +161,49 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
     }
     let all = peers::load();
     let errors = List::new();
-    let server = relay::server()?;
-    let mut known: Option<std::collections::HashSet<String>> = None;
+    let mut seen = None;
     if distant && !all.is_empty() {
-        match &server {
-            Ok(srv) => match far::fetch(srv, &all, 8)? {
-                Ok(l) => {
-                    for f in &l.sessions {
-                        sessions.push(dict! {
-                            "id" => f.sid.as_str(), "short" => &f.sid[..8], "where" => "peer", "peer" => f.pid.as_str(),
-                            "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "cwd" => f.cwd.as_str(),
-                            "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
-                            "local_terminal" => V::None,
-                            "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" }
-                        });
-                    }
-                    known = Some(l.known);
-                }
-                Err(f) => errors.push(dict! { "code" => relay_code(&f), "message" => f.text }),
-            },
-            Err(why) => errors.push(dict! { "code" => "relay_off", "message" => why.as_str() }),
+        // 配对记在哪台服务器上就问哪台；哪一台没问到，只是它上面的那几个配对这次不知道
+        let got = far::fetch_all(&all, 8)?;
+        for f in &got.sessions {
+            sessions.push(dict! {
+                "id" => f.sid.as_str(), "short" => &f.sid[..8], "where" => "peer", "peer" => f.pid.as_str(),
+                "machine" => f.peer.as_str(), "tool" => f.tool.as_str(), "name" => f.name.as_str(), "cwd" => f.cwd.as_str(),
+                "since_epoch" => if f.since > 0.0 { V::from(f.since) } else { V::None }, "viewers" => f.viewers,
+                "local_terminal" => V::None,
+                "state" => if f.online { "ok" } else { "offline" }, "access" => if f.view_only { "view" } else { "control" }
+            });
         }
+        for (_, why, asked) in &got.errors {
+            errors.push(dict! { "code" => asked.as_ref().map_or("relay_off", relay_code), "message" => why.as_str() });
+        }
+        seen = Some(got);
     }
     let paired = List::new();
     for p in &all {
-        let state = match &known {
-            Some(k) if k.contains(&p.pid) => "ok",
+        let state = match &seen {
+            Some(s) if !s.asked.contains(&p.pid) => "unknown",
+            Some(s) if s.known.contains(&p.pid) => "ok",
             Some(_) => "gone",
             None => "unknown",
         };
+        // team：这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）；null 是维护者的那一台
         paired.push(dict! {
             "id" => p.pid.as_str(), "short" => &p.pid[..8], "name" => p.name.as_str(), "incoming" => p.incoming.word(),
-            "shown" => p.shown, "paired_epoch" => p.at, "state" => state, "web" => p.web
+            "shown" => p.shown, "paired_epoch" => p.at, "state" => state, "web" => p.web,
+            "team" => p.hub.team().map_or(V::None, V::from)
         });
     }
-    let relay = match &server {
-        Ok(_) => dict! { "available" => true, "message" => V::None },
-        Err(why) => dict! { "available" => false, "message" => why.as_str() },
+    // 用得了哪几台中转服务器（配对时要选在哪一台上）：各个 Team 的，再是维护者的。一台都用不了时 message 是维护者那一台的原因
+    let hubs = List::new();
+    for s in relay::servers()? {
+        hubs.push(dict! { "team" => s.kind.team().map_or(V::None, V::from), "name" => relay::label(s.kind) });
+    }
+    let relay = if !hubs.is_empty() {
+        dict! { "available" => true, "message" => V::None, "hubs" => hubs }
+    } else {
+        let why = relay::server_of(crate::cmd::hub::HubKind::Maintainer)?.err().unwrap_or_default();
+        dict! { "available" => false, "message" => why, "hubs" => hubs }
     };
     Ok(dict! {
         "version" => 1, "kind" => "remote", "generated_epoch" => time(), "enabled" => remote_on(&cfg_load()?), "relay" => relay,
@@ -231,16 +237,12 @@ pub fn cmd_remote_list(args: &[String]) -> R<()> {
     if all.is_empty() {
         return Ok(());
     }
-    match relay::server()? {
-        Ok(srv) => match far::fetch(&srv, &all, 8)? {
-            Ok(l) => {
-                for f in &l.sessions {
-                    crate::out!("{}", far::row(f));
-                }
-            }
-            Err(f) => crate::err!("别的机器上的会话没查到：{}", f.text),
-        },
-        Err(why) => crate::err!("别的机器上的会话没查：{why}"),
+    let seen = far::fetch_all(&all, 8)?;
+    for f in &seen.sessions {
+        crate::out!("{}", far::row(f));
+    }
+    for (_, why, asked) in &seen.errors {
+        crate::err!("别的机器上的会话{}：{why}", if asked.is_some() { "没查到" } else { "没查" });
     }
     Ok(())
 }

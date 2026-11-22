@@ -120,25 +120,22 @@ impl Wire {
     }
 }
 
-/// 别的机器上的会话（配对过才有）。没问到的原因写到 stderr、当作一个都没有
-fn far_sessions(all: &[Peer]) -> R<(Option<Server>, Vec<Far>)> {
+/// 别的机器上的会话（配对过才有；配对记在哪台服务器上就问哪台）。没问到的原因写到 stderr、当作那一台上一个都没有
+fn far_sessions(all: &[Peer]) -> R<Vec<Far>> {
     if all.is_empty() {
-        return Ok((None, Vec::new()));
+        return Ok(Vec::new());
     }
-    let srv = match relay::server()? {
-        Ok(s) => s,
-        Err(why) => {
-            crate::err!("别的机器上的会话没查：{why}");
-            return Ok((None, Vec::new()));
-        }
-    };
-    match far::fetch(&srv, all, 8)? {
-        Ok(l) => Ok((Some(srv), l.sessions)),
-        Err(f) => {
-            crate::err!("别的机器上的会话没查到：{}", f.text);
-            Ok((Some(srv), Vec::new()))
-        }
+    let seen = far::fetch_all(all, 8)?;
+    for (_, why, asked) in &seen.errors {
+        crate::err!("别的机器上的会话{}：{why}", if asked.is_some() { "没查到" } else { "没查" });
     }
+    Ok(seen.sessions)
+}
+
+/// 这个会话走的那台服务器（它的配对记在哪台上）
+fn server_for(f: &Far, all: &[Peer]) -> R<Option<Server>> {
+    let Some(peer) = all.iter().find(|p| p.pid == f.pid) else { return Ok(None) };
+    Ok(relay::server_of(peer.hub)?.ok())
 }
 
 /// 给一个前缀，找出要接入的会话：这台机器上有对得上的就是它（不联网）；没有才看配对过的机器上的。
@@ -150,10 +147,10 @@ fn pick(prefix: Option<&str>, all: &[Peer]) -> R<Result<(Target, Option<Server>)
     if let [one] = near.as_slice() {
         return Ok(Ok((Target::Near(one.clone()), None)));
     }
-    let (srv, far) = if near.is_empty() { far_sessions(all)? } else { (None, Vec::new()) };
+    let far = if near.is_empty() { far_sessions(all)? } else { Vec::new() };
     let far: Vec<Far> = far.into_iter().filter(|f| hit(&f.sid)).collect();
     if let ([], [one]) = (near.as_slice(), far.as_slice()) {
-        return Ok(Ok((Target::Far(one.clone()), srv)));
+        return Ok(Ok((Target::Far(one.clone()), server_for(one, all)?)));
     }
     Ok(Err(match (near.len() + far.len(), prefix) {
         (0, None) if all.is_empty() => {

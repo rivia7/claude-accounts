@@ -791,7 +791,7 @@ class ClientTest(Base):
         # 给界面 App 的那一份（PROTOCOL 9.1）：laptop 上是 box 的会话和“对方接不进来”，box 上是自己的会话和“对方能操作”
         doc = json.loads(b.ok('remote-list', '--json'))
         self.assertEqual((doc['version'], doc['kind'], doc['enabled'], doc['relay'], doc['errors']),
-                         (1, 'remote', False, {'available': True, 'message': None}, []))
+                         (1, 'remote', False, {'available': True, 'message': None, 'hubs': [{'team': None, 'name': '维护者的服务器'}]}, []))
         (s,) = doc['sessions']
         self.assertEqual((s['short'], s['id'][:8], len(s['id']), s['where'], s['peer'], s['machine'], s['tool'], s['name'], s['cwd'],
                           s['state'], s['access'], s['local_terminal']),

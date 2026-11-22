@@ -3,6 +3,7 @@
 //! `~/.cca/secrets/` 下的文件），存的是 64 个十六进制字符。
 
 use super::local;
+use crate::cmd::hub::{HubKind, TeamTag};
 use crate::cmd::secrets::{ks_del, ks_read, ks_write};
 use crate::dict;
 use crate::py::fs;
@@ -63,6 +64,21 @@ pub struct Peer {
     pub at: f64,
     /// 对方是手机上的网页端（`cca remote pair --web` 配的、不在服务器的设备清单里）：只是给人看的，它能做什么照旧看 incoming
     pub web: bool,
+    /// 这个配对是在哪台服务器上做的（记在它上面）：经它只看得到走这台服务器的会话——某个 Team 的同步服务器，
+    /// 或者维护者的那一台（旧的通道；以前的配对都是它）
+    pub hub: HubKind,
+}
+
+/// 配对表里 hub 这一项的写法：维护者的不写（以前的配对表就没有这一项），Team 的写它的编号
+fn hub_word(kind: HubKind) -> Option<String> {
+    kind.team()
+}
+
+fn hub_of(word: Option<&str>) -> Option<HubKind> {
+    match word {
+        None => Some(HubKind::Maintainer),
+        Some(tid) => TeamTag::new(tid).map(HubKind::Team),
+    }
 }
 
 fn file() -> String {
@@ -94,6 +110,8 @@ fn row_of(pid: &str, d: &Dict) -> Option<Peer> {
         at: d.get("at")?.as_num()?,
         // 两台机器之间的配对、旧版写的配对表没有这一项（`at` 取不存在的键会崩：用 `get`）
         web: d.get("web").and_then(|v| v.as_bool()) == Some(true),
+        // 写了却看不懂的（以后的版本加的别的种类）：这一项不算，不当成维护者的那一台
+        hub: hub_of(d.get("hub").filter(|v| !v.is_none()).map(|v| v.py_str()).as_deref())?,
     })
 }
 
@@ -117,6 +135,9 @@ pub fn save(peers: &[Peer]) -> R<()> {
         let row = dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at };
         if p.web {
             row.set("web", true); // 只有网页端的才写这一项：别的机器的那几行和以前逐字节一样
+        }
+        if let Some(hub) = hub_word(p.hub) {
+            row.set("hub", hub); // 同上：记在维护者那一台上的不写
         }
         all.set(p.pid.as_str(), row);
     }
@@ -185,6 +206,13 @@ mod tests {
             (Incoming::View, true, 5.0, false),
             "没有 web 这一项：不是网页端（旧的配对表都这样）"
         );
+        assert_eq!(p.hub, HubKind::Maintainer, "没有 hub 这一项：记在维护者那一台上（旧的配对表都这样）");
+        let tid = "0123456789abcdef0123456789abcdef";
+        full.set("hub", tid);
+        assert_eq!(row_of(&pid, &full).unwrap().hub.team().as_deref(), Some(tid));
+        full.set("hub", "something-new");
+        assert!(row_of(&pid, &full).is_none(), "看不懂的 hub：这一项不算（不能当成维护者的）");
+        full.set("hub", V::None);
         full.set("web", true);
         assert!(row_of(&pid, &full).unwrap().web);
         full.set("web", "yes");
@@ -220,6 +248,7 @@ mod tests {
             shown: true,
             at: 1.0,
             web: false,
+            hub: HubKind::Maintainer,
         };
         let peers = vec![peer("ab", "服务器"), peer("cd", "服务器"), peer("ef", "笔记本")];
         assert_eq!(find(&peers, "笔记本").unwrap().pid, "ef".repeat(16));

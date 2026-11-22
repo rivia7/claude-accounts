@@ -11,10 +11,12 @@
 use super::crypto::{self, PairKeys};
 use super::far::{self, clean};
 use super::peers::{self, Incoming, Peer};
-use super::relay::{self, Server, NO_WEB};
+use super::relay::{self, Server};
 use crate::cmd::arity;
+use crate::cmd::hub::{HubKind, TeamTag};
 use crate::cmd::secrets::keystore_name;
 use crate::core::base::Lock;
+use crate::core::team::teams;
 use crate::dict;
 use crate::py::io::read_stdin_line;
 use crate::py::obj::{Dict, V};
@@ -25,11 +27,66 @@ use crate::py::{die, signal, R};
 /// 配对码多久过期（和服务器的 PAIR_TTL 一样）
 const CODE_TTL: f64 = 600.0;
 
-pub fn need_server() -> R<Server> {
-    match relay::server()? {
-        Ok(s) => Ok(s),
-        Err(why) => die(format!("远程会话要经维护者的服务器中转，现在用不了：{why}")),
+/// `--hub` 的值是哪台服务器：`maintainer` 是维护者的那一台，别的是 Team 的编号或者名字
+fn hub_named(want: &str) -> R<HubKind> {
+    if want == "maintainer" {
+        return Ok(HubKind::Maintainer);
     }
+    let all = teams();
+    let hit: Vec<_> = all.iter().filter(|t| t.id == want || t.name == want).collect();
+    match hit.as_slice() {
+        [t] => match TeamTag::new(&t.id) {
+            Some(tag) => Ok(HubKind::Team(tag)),
+            None => die(format!("「{want}」这个 Team 的编号不对")),
+        },
+        [] => die(format!("这台机器不在叫「{want}」的 Team 里（cca team 看在哪些 Team 里）")),
+        _ => die(format!("有好几个 Team 都叫「{want}」：写它的编号（cca team 看得到）")),
+    }
+}
+
+/// 在哪台服务器上配对。说了（`--hub`）就是它；没说：这台机器只用得了一台时就是它，有好几台时要说清楚——
+/// 配对记在哪台服务器上，经它看得到的就是走那台服务器的会话（哪个 Team 的账号）
+pub fn need_server(hub: Option<&str>) -> R<Server> {
+    let off = |why: String| die(format!("远程会话要经服务器中转，现在用不了：{why}"));
+    if let Some(want) = hub {
+        return match relay::server_of(hub_named(want)?)? {
+            Ok(s) => Ok(s),
+            Err(why) => off(why),
+        };
+    }
+    let mut all = relay::servers()?;
+    match all.len() {
+        0 => match relay::server_of(HubKind::Maintainer)? {
+            Ok(s) => Ok(s),
+            Err(why) => die(format!("远程会话要经维护者的服务器中转，现在用不了：{why}")),
+        },
+        1 => Ok(all.remove(0)),
+        _ => {
+            let names: Vec<String> = all.iter().map(|s| relay::label(s.kind)).collect();
+            die(format!(
+                "这台机器用得了好几台中转服务器（{}）：要说清楚在哪一台上配对——哪个 Team 的账号的会话，就在那个 Team 的服务器上配（--team 名字；维护者的那一台是 --maintainer）",
+                names.join("、")
+            ))
+        }
+    }
+}
+
+/// 参数里的 `--hub 服务器`（没有是 None），和剩下的参数
+fn hub_arg(args: &[String]) -> R<(Option<String>, Vec<String>)> {
+    let mut rest = Vec::new();
+    let mut hub = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--hub" {
+            match it.next() {
+                Some(v) if hub.is_none() && !v.is_empty() => hub = Some(v.clone()),
+                _ => return die("--hub 后面要跟一台服务器（maintainer，或者 Team 的名字、编号），只能写一次"),
+            }
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    Ok((hub, rest))
 }
 
 fn ask(srv: &Server, op: &str, payload: &Dict, timeout: i64) -> R<Dict> {
@@ -119,7 +176,7 @@ fn conclude(srv: &Server, k: &PairKeys, shown: bool, web: bool, mine: &[u8], the
     let written = (|| -> R<(Peer, Vec<String>)> {
         let _lock = Lock::acquire()?;
         let mut all = peers::load();
-        let (peer, old) = entry(&mut all, &pid, &fp, [listed, name], shown, web);
+        let (peer, old) = entry(&mut all, &pid, &fp, [listed, name], shown, web, srv.kind);
         peers::save(&all)?;
         Ok((peer, old))
     })();
@@ -138,11 +195,22 @@ fn conclude(srv: &Server, k: &PairKeys, shown: bool, web: bool, mine: &[u8], the
 }
 
 /// 配对表里换上这一次配对的那一项。返回它，和这台设备以前配过的那些配对编号（它们的密钥该删了；服务器上也是换掉）
-fn entry(all: &mut Vec<Peer>, pid: &str, fp: &str, names: [String; 2], shown: bool, web: bool) -> (Peer, Vec<String>) {
+///
+/// 同一台设备在不同的服务器上各配各的（各是一项、各有一把密钥）：换掉的只是同一台服务器上的那一个
+fn entry(
+    all: &mut Vec<Peer>,
+    pid: &str,
+    fp: &str,
+    names: [String; 2],
+    shown: bool,
+    web: bool,
+    hub: HubKind,
+) -> (Peer, Vec<String>) {
     // 输入配对码不改“让不让它接入”：以前让的照旧
-    let before = all.iter().find(|x| x.fp == fp).map(|x| x.incoming);
-    let old = all.iter().filter(|x| x.fp == fp && x.pid != pid).map(|x| x.pid.clone()).collect();
-    all.retain(|x| x.fp != fp && x.pid != pid);
+    let same = |x: &Peer| x.fp == fp && x.hub == hub;
+    let before = all.iter().find(|x| same(x)).map(|x| x.incoming);
+    let old = all.iter().filter(|x| same(x) && x.pid != pid).map(|x| x.pid.clone()).collect();
+    all.retain(|x| !same(x) && x.pid != pid);
     // 名字：维护者的设备清单里那台设备叫什么（cca devices 里看到的也是它）；清单里没写就用对方自己说的机器名。
     // 只是给人看的：认设备靠的是上面核对过的指纹
     let name = names
@@ -151,22 +219,24 @@ fn entry(all: &mut Vec<Peer>, pid: &str, fp: &str, names: [String; 2], shown: bo
         .find(|n| !n.is_empty())
         .unwrap_or_else(|| format!("{} {}", if web { "手机" } else { "机器" }, &pid[..6]));
     let incoming = if shown { Incoming::Control } else { before.unwrap_or(Incoming::None) };
-    let peer = Peer { pid: pid.to_string(), fp: fp.to_string(), name, incoming, shown, at: time(), web };
+    let peer = Peer { pid: pid.to_string(), fp: fp.to_string(), name, incoming, shown, at: time(), web, hub };
     all.push(peer.clone());
     (peer, old)
 }
 
-/// `remote-pair-show [--web]`：出一个配对码、等另一台机器输入。stdout：先是 `code 配对码`（马上写出去：调用方——bash——
+/// `remote-pair-show [--web] [--hub 服务器]`：出一个配对码、等另一台机器输入。在哪台服务器上配见 `need_server`。
+/// stdout：先是 `code 配对码`（马上写出去：调用方——bash——
 /// 把它显示给用户，终端里打印、界面 App 里是一页），配好以后 `peer 对方的名字`。
 /// --web：这次配对开给手机上的网页端（输入配对码的可以是不在设备清单里的设备）；`code` 那一行后面紧跟一行 `web 网页端的地址`
 /// （一起写出去：手机上打开它、在那一页里输入配对码）
 pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
-    let web = match args {
+    let (hub, rest) = hub_arg(args)?;
+    let web = match rest.as_slice() {
         [] => false,
         [a] if a == "--web" => true,
-        _ => return die("用法：remote-pair-show [--web]"),
+        _ => return die("用法：remote-pair-show [--web] [--hub 服务器]"),
     };
-    let srv = need_server()?;
+    let srv = need_server(hub.as_deref())?;
     let code = crypto::code_new();
     let k = crypto::pair_keys(&code);
     let open = dict! { "rid" => k.rid.as_str() };
@@ -178,7 +248,7 @@ pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
     let page = opened.str("web").map(|u| u.to_string()).filter(|u| web_url_ok(u));
     if web && page.is_none() {
         let _ = srv.post("pair_close", &dict! { "rid" => k.rid.as_str() }, 5);
-        return die(NO_WEB);
+        return die(srv.no_web());
     }
     let na = urandom(32);
     let m = crypto::pair_msg(&k.keys, &k.rid, "a", &srv.fp, &na, &peers::machine_name())?;
@@ -215,24 +285,50 @@ pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
     }
 }
 
-/// `remote-pair-join`：stdin 一行是另一台机器显示的配对码。配好以后 stdout 一行：对方的名字
+/// `remote-pair-join [--hub 服务器]`：stdin 一行是另一台机器显示的配对码。配好以后 stdout 一行：对方的名字。
+/// 没说在哪台服务器上：这台机器用得了的几台挨个试——配对码是在哪台上开的，哪台才认它（别的回“没有这个配对”，马上就回）
 pub fn cmd_remote_pair_join(args: &[String]) -> R<()> {
-    arity("cmd_remote_pair_join", args, 0, 0)?;
+    let (hub, rest) = hub_arg(args)?;
+    arity("cmd_remote_pair_join", &rest, 0, 0)?;
     let Some(code) = crypto::code_bytes(&read_stdin_line()) else {
         return die("配对码不对：是 16 个字母和数字，照另一台机器上显示的输入（大小写、横线随意）");
     };
-    let srv = need_server()?;
+    let candidates = match hub.as_deref() {
+        Some(_) => vec![need_server(hub.as_deref())?],
+        None => {
+            let all = relay::servers()?;
+            if all.is_empty() {
+                vec![need_server(None)?] // 一台都用不了：照它说原因
+            } else {
+                all
+            }
+        }
+    };
     let k = crypto::pair_keys(&code);
     let nb = urandom(32);
-    let m = crypto::pair_msg(&k.keys, &k.rid, "b", &srv.fp, &nb, &peers::machine_name())?;
-    match srv.post("pair_put", &dict! { "rid" => k.rid.as_str(), "m" => m }, 10)? {
-        Ok(_) => {}
-        Err(f) if f.code == 404 && f.error == "no_pairing" => return die("没有这个配对码：输错了，或者过期了（10 分钟内有效）"),
-        Err(f) if f.code == 400 => {
-            return die("这个配对码用不了：它是这台机器自己显示的（要在另一台机器上输入），或者已经输入过一次了")
+    let mut found = None;
+    let mut trouble: Option<String> = None;
+    for srv in candidates {
+        let m = crypto::pair_msg(&k.keys, &k.rid, "b", &srv.fp, &nb, &peers::machine_name())?;
+        match srv.post("pair_put", &dict! { "rid" => k.rid.as_str(), "m" => m }, 10)? {
+            Ok(_) => {
+                found = Some(srv);
+                break;
+            }
+            Err(f) if f.code == 404 && f.error == "no_pairing" => {}
+            Err(f) if f.code == 400 => {
+                return die("这个配对码用不了：它是这台机器自己显示的（要在另一台机器上输入），或者已经输入过一次了")
+            }
+            // 这一台问不了（连不上、没开中转）：别的照试，都没成再说它
+            Err(f) => trouble = trouble.or(Some(f.text)),
         }
-        Err(f) => return die(f.text),
     }
+    let Some(srv) = found else {
+        return die(match trouble {
+            Some(why) => format!("没找到这个配对码，而且有一台服务器没问到（{why}）：配对码要是在那台上开的，修好了再输一次"),
+            None => "没有这个配对码：输错了，或者过期了（10 分钟内有效）".into(),
+        });
+    };
     let Some(theirs) = wait_theirs(&srv, &k.rid, monotonic() + 30.0)? else {
         return die("没等到对方那一份：显示配对码的那台机器还开着 cca remote pair 吗？");
     };
@@ -243,7 +339,31 @@ pub fn cmd_remote_pair_join(args: &[String]) -> R<()> {
 
 fn row(p: &Peer, note: &str) -> String {
     let kind = if p.web { "（手机上的网页端）" } else { "" };
-    format!("{}  {}{}  对方{}  {} 配对{}", &p.pid[..8], p.name, kind, p.incoming.text(), strftime_local("%Y-%m-%d", p.at), note)
+    // 记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）；维护者的那一台不写，和以前一样
+    let via = match p.hub {
+        HubKind::Team(_) => format!("  经{}", relay::label(p.hub)),
+        _ => String::new(),
+    };
+    format!(
+        "{}  {}{}  对方{}  {} 配对{}{}",
+        &p.pid[..8],
+        p.name,
+        kind,
+        p.incoming.text(),
+        strftime_local("%Y-%m-%d", p.at),
+        via,
+        note
+    )
+}
+
+/// `remote-hubs`：这台机器现在用得了的中转服务器，一行一台：`编号<TAB>给人看的名字`（编号是 Team 的编号，维护者的那一台是
+/// maintainer）。bash 拿它决定配对时要不要问在哪一台上
+pub fn cmd_remote_hubs(args: &[String]) -> R<()> {
+    arity("cmd_remote_hubs", args, 0, 0)?;
+    for s in relay::servers()? {
+        crate::out!("{}\t{}", s.kind.team().unwrap_or_else(|| "maintainer".into()), relay::label(s.kind));
+    }
+    Ok(())
 }
 
 /// 服务器给的网页端地址：要拿去显示、做成二维码，所以只认 `https://主机[:端口]/` 这一种样子（本机试的时候是
@@ -277,12 +397,14 @@ pub fn cmd_remote_peers(args: &[String]) -> R<()> {
     let all = peers::load();
     let mut gone = std::collections::HashSet::new();
     if check && !all.is_empty() {
-        match relay::server()? {
-            Ok(srv) => match far::fetch(&srv, &all, 8)? {
-                Ok(l) => gone = all.iter().filter(|p| !l.known.contains(&p.pid)).map(|p| p.pid.clone()).collect(),
-                Err(f) => crate::err!("没问到服务器，对方那边取消了没有不知道：{}", f.text),
-            },
-            Err(why) => crate::err!("{why}"),
+        // 配对记在哪台服务器上就问哪台；没问到的那一台上的配对，这次不知道对方取消了没有
+        let seen = far::fetch_all(&all, 8)?;
+        gone = all.iter().filter(|p| seen.asked.contains(&p.pid) && !seen.known.contains(&p.pid)).map(|p| p.pid.clone()).collect();
+        for (_, why, asked) in &seen.errors {
+            match asked {
+                Some(_) => crate::err!("没问到服务器，对方那边取消了没有不知道：{why}"),
+                None => crate::err!("{why}"),
+            }
         }
     }
     for p in &all {
@@ -314,14 +436,17 @@ pub fn cmd_remote_allow(args: &[String]) -> R<()> {
 
 /// 从这台机器上删掉一个配对（密钥也删），再告诉服务器。服务器没告诉成也算取消了：这边没有密钥，对方已经接不进来
 fn drop_peer(pid: &str) -> R<Option<String>> {
+    let hub;
     {
         let _lock = Lock::acquire()?;
         let mut all = peers::load();
+        hub = all.iter().find(|p| p.pid == pid).map_or(HubKind::Maintainer, |p| p.hub);
         all.retain(|p| p.pid != pid);
         peers::save(&all)?;
         peers::del_secret(pid)?;
     }
-    let srv = match relay::server()? {
+    // 告诉记着这个配对的那台服务器
+    let srv = match relay::server_of(hub)? {
         Ok(srv) => srv,
         Err(why) => return Ok(Some(why)),
     };

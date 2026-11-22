@@ -43,4 +43,5 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("remote-allow", pair::cmd_remote_allow),
     Cmd::all("remote-unpair", pair::cmd_remote_unpair),
     Cmd::all("remote-forget", pair::cmd_remote_forget),
+    Cmd::all("remote-hubs", pair::cmd_remote_hubs),
 ];

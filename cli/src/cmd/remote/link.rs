@@ -22,6 +22,7 @@ use super::relay::{self, ctl_frame, ctl_next, Server, Tunnel, DEAD_AFTER, PING_E
 use super::sig;
 use super::{crypto, pty};
 use crate::cmd::arity;
+use crate::cmd::hub::HubKind;
 use crate::py::json;
 use crate::py::obj::{Dict, V};
 use crate::py::time::{monotonic, sleep};
@@ -74,10 +75,11 @@ struct Session {
     sock: String,
 }
 
-fn allowed_now() -> Vec<Allowed> {
+/// 这个会话走 hub 这台服务器：只有记在它上面的配对看得到这个会话
+fn allowed_now(hub: HubKind) -> Vec<Allowed> {
     peers::load()
         .into_iter()
-        .filter(|p| p.incoming != Incoming::None)
+        .filter(|p| p.hub == hub && p.incoming != Incoming::None)
         .filter_map(|peer| peers::secret(&peer.pid).map(|secret| Allowed { peer, secret }))
         .take(16)
         .collect()
@@ -266,7 +268,9 @@ fn find_session(sid: &str) -> Option<Session> {
 pub fn cmd_remote_link(args: &[String]) -> R<()> {
     arity("cmd_remote_link", args, 1, 1)?;
     let Some(at) = find_session(&args[0]) else { return exit(1) };
-    let Ok(srv) = relay::server()? else { return exit(EXIT_OFF) };
+    // 会话走哪台服务器照它的账号：是哪个 Team 给的账号就走那个 Team 的服务器，别的走维护者的那一台
+    let hub = relay::session_hub(&at.meta.tool, &at.meta.key);
+    let Ok(srv) = relay::server_of(hub)? else { return exit(EXIT_OFF) };
     let wake = sig::install()?;
 
     let mut allowed: Vec<Allowed> = Vec::new();
@@ -286,7 +290,7 @@ pub fn cmd_remote_link(args: &[String]) -> R<()> {
             let s = peers::stamp();
             if stamp != Some(s) {
                 stamp = Some(s);
-                let fresh = allowed_now();
+                let fresh = allowed_now(hub);
                 if shape(&fresh) != shape(&allowed) {
                     // 不该再接着的（不让了、改成只看了、取消配对了）结束掉；它们留在 kids 里等着收走
                     let keep = shape(&fresh);
