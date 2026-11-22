@@ -25,7 +25,8 @@ use std::time::Duration;
 pub const RELAY_OLD: &str = "维护者的服务器还不支持远程会话（要更新服务器、打开中转：./policy.sh presence deploy）";
 
 /// 服务器没开网页端（或者是旧版，不认 `pair_open` 的 web 这一项）：手机上接入不了
-pub const NO_WEB: &str = "维护者的服务器还没有开网页端，手机上接入不了（要更新服务器、打开网页端：./policy.sh presence deploy --web-url …）";
+pub const NO_WEB: &str =
+    "维护者的服务器还没有开网页端，手机上接入不了（要更新服务器、打开网页端：./policy.sh presence deploy --web-url …）";
 
 /// 请求没成：服务器回的状态码和 error，加上给人看的原因
 #[derive(Debug)]
@@ -379,10 +380,24 @@ mod tests {
         let pid = crypto::pid_of(&p);
         let sid = "00112233445566778899aabbccddeeff";
         let (fph, fpv) = ("SHA256:host", "SHA256:viewer");
-        let peer_of_host =
-            Peer { pid: pid.clone(), fp: fpv.into(), name: "v".into(), incoming: Incoming::Control, shown: true, at: 0.0, web: false };
-        let peer_of_viewer =
-            Peer { pid: pid.clone(), fp: fph.into(), name: "h".into(), incoming: Incoming::None, shown: false, at: 0.0, web: false };
+        let peer_of_host = Peer {
+            pid: pid.clone(),
+            fp: fpv.into(),
+            name: "v".into(),
+            incoming: Incoming::Control,
+            shown: true,
+            at: 0.0,
+            web: false,
+        };
+        let peer_of_viewer = Peer {
+            pid: pid.clone(),
+            fp: fph.into(),
+            name: "h".into(),
+            incoming: Incoming::None,
+            shown: false,
+            at: 0.0,
+            web: false,
+        };
 
         let host = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();

@@ -111,8 +111,7 @@ pub fn save(peers: &[Peer]) -> R<()> {
     let d = local::ensure_dir()?;
     let all = Dict::new();
     for p in peers {
-        let row =
-            dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at };
+        let row = dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at };
         if p.web {
             row.set("web", true); // 只有网页端的才写这一项：别的机器的那几行和以前逐字节一样
         }

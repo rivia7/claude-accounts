@@ -1,0 +1,618 @@
+/* cca 远程会话的网页端。界面的主意：Logo 是一根线分成几支，列表也这么画——一台电脑是主干，它上面的会话是分出去的支。
+   颜色只说状态和哪一支；终端那一屏永远是纯黑（和 cca App 里的终端一样）。字体用系统的：手机上不另下字体。 */
+:root {
+  --paper: #f3f4f6;
+  --card: #ffffff;
+  --ink: #15171c;
+  --soft: #646b78;
+  --line: #dfe2e8;
+  --stem: #3b7bff;
+  --teal: #14b8a6;
+  --rose: #ec4c8c;
+  --amber: #f5a524;
+  --warn: #b4540a;
+  --ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --top: env(safe-area-inset-top, 0px);
+  --bottom: env(safe-area-inset-bottom, 0px);
+  --left: env(safe-area-inset-left, 0px);
+  --right: env(safe-area-inset-right, 0px);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #000000;
+    --card: #17181c;
+    --ink: #f1f2f4;
+    --soft: #979dab;
+    --line: #2a2c33;
+    --warn: #f0a04b;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.5 var(--ui);
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+body.in-terminal {
+  background: #000;
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.boot {
+  padding: calc(var(--top) + 40px) 24px;
+  color: var(--soft);
+}
+
+/* ---------------------------------------------------------------- 首页、配对、设置：一栏，左对齐 */
+.page {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: calc(var(--top) + 14px) calc(var(--right) + 20px) calc(var(--bottom) + 32px) calc(var(--left) + 20px);
+  min-height: 100%;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin-bottom: 18px;
+}
+
+.bar img {
+  width: 34px;
+  height: 34px;
+  margin-left: -6px;
+}
+
+.bar h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.plain {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--stem);
+  font-size: 16px;
+}
+
+.plain:active {
+  background: var(--line);
+}
+
+.primary {
+  display: block;
+  width: 100%;
+  min-height: 50px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--stem);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.primary:disabled {
+  opacity: 0.45;
+}
+
+.note {
+  margin: 14px 0;
+  color: var(--soft);
+  font-size: 14px;
+}
+
+.problem {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--warn);
+  font-size: 15px;
+}
+
+code {
+  font: 0.92em var(--mono);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--line);
+  white-space: nowrap;
+}
+
+/* 一台电脑：名字在主干上，会话从主干分出去 */
+.machine {
+  margin: 0 0 30px;
+}
+
+.machine h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+  font-size: 17px;
+  font-weight: 650;
+  position: relative;
+}
+
+.machine h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.42em;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--stem);
+}
+
+.machine h2 small {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--soft);
+}
+
+.branches {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 4.5px;
+}
+
+.branch {
+  position: relative;
+  padding: 12px 0 0 34px;
+}
+
+/* 主干往下的一段，和拐出去的那一支（粗、圆头，和 Logo 的线一个脾气） */
+.branch::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--stem);
+}
+
+.branch:last-child::before {
+  bottom: auto;
+  height: 16px;
+}
+
+.branch::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  width: 24px;
+  height: 26px;
+  border: solid var(--hue, var(--teal));
+  border-width: 0 0 3px 3px;
+  border-bottom-left-radius: 16px;
+}
+
+.branch:nth-child(3n + 1) { --hue: var(--teal); }
+.branch:nth-child(3n + 2) { --hue: var(--rose); }
+.branch:nth-child(3n) { --hue: var(--amber); }
+
+.session {
+  display: block;
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--card);
+  text-align: left;
+  box-shadow: inset 3px 0 0 var(--hue);
+}
+
+.session:active {
+  transform: scale(0.985);
+}
+
+.session[disabled] {
+  opacity: 0.5;
+}
+
+.session strong {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.session span {
+  display: block;
+  color: var(--soft);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session .where {
+  font-family: var(--mono);
+  font-size: 13px;
+  direction: rtl;   /* 文件夹太长时留下结尾的那一截 */
+  text-align: left;
+}
+
+.idle {
+  padding: 12px 0 0 34px;
+  position: relative;
+  color: var(--soft);
+  font-size: 14px;
+}
+
+.steps {
+  margin: 0 0 22px;
+  padding: 0 0 0 1.3em;
+}
+
+.steps li {
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+
+/* ---------------------------------------------------------------- 配对：配对码是这一屏的主角 */
+.field {
+  display: block;
+  margin: 0 0 18px;
+}
+
+.field span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--soft);
+  font-size: 14px;
+}
+
+.field input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font: 17px var(--ui);
+  outline: none;
+}
+
+.field input:focus {
+  border-color: var(--stem);
+}
+
+.field input.code {
+  min-height: 64px;
+  font: 600 22px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rows {
+  list-style: none;
+  margin: 0 0 22px;
+  padding: 0;
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.rows li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 4px 6px 4px 16px;
+}
+
+.rows li + li {
+  border-top: 1px solid var(--line);
+}
+
+.rows li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.rows small {
+  display: block;
+  color: var(--soft);
+  font-size: 13px;
+}
+
+.danger {
+  color: var(--rose);
+}
+
+h3 {
+  margin: 26px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--soft);
+}
+
+/* ---------------------------------------------------------------- 终端：整屏纯黑，上面一条、下面一排键 */
+/* 这一屏的类名不能叫 terminal：xterm.js 给它自己的根元素加了这个类名，会连它一起套上 */
+.termview {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--vvh, 100%);
+  transform: translateY(var(--vvt, 0px));
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: #e8e9ec;
+}
+
+.termview .top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: var(--top) calc(var(--right) + 4px) 0 calc(var(--left) + 4px);
+  box-sizing: content-box;
+}
+
+.termview .top button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: #e8e9ec;
+  font-size: 22px;
+}
+
+.termview .top div {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.termview .top div small {
+  color: #8d93a1;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.screen {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  padding: 0 calc(var(--right) + 4px) 0 calc(var(--left) + 4px);
+}
+
+.screen .xterm {
+  height: 100%;
+}
+
+.screen .xterm-viewport {
+  overscroll-behavior: contain;
+}
+
+/* 连接的状态盖在终端上面：断着的时候下面的画面留着，但说清楚现在敲的键送不过去 */
+.veil {
+  position: absolute;
+  z-index: 10;   /* xterm 自己的几层也是定位的、在它后面进的页面：不垫高会被盖住 */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.88);
+  border-top: 2px solid var(--amber);
+  font-size: 15px;
+}
+
+.veil.over {
+  top: 0;
+  border-top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  font-size: 17px;
+}
+
+.veil .primary {
+  max-width: 320px;
+}
+
+.keys {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px calc(var(--right) + 6px) calc(var(--kb, var(--bottom)) + 6px) calc(var(--left) + 6px);
+  background: #101114;
+}
+
+.keys .scroll {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.keys .scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.keys button {
+  flex: none;
+  min-width: 46px;
+  height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: #26282e;
+  color: #f1f2f4;
+  font: 15px var(--ui);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.keys button.down,
+.keys button:active {
+  background: #4a4d57;
+}
+
+.keys button.armed {
+  background: var(--stem);
+}
+
+.compose {
+  display: flex;
+  gap: 8px;
+  padding: 8px calc(var(--right) + 8px) 2px calc(var(--left) + 8px);
+  background: #101114;
+}
+
+.compose textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: #26282e;
+  color: #f1f2f4;
+  font: 16px/1.4 var(--ui);
+  resize: none;
+  outline: none;
+}
+
+.compose button {
+  align-self: flex-end;
+  min-width: 64px;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--stem);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 菜单：从底下出来的一张 */
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px calc(var(--right) + 12px) calc(var(--bottom) + 12px) calc(var(--left) + 12px);
+  border-radius: 18px 18px 0 0;
+  background: #1c1d22;
+  z-index: 20;
+  animation: rise 0.18s ease-out;
+}
+
+.sheet button {
+  display: block;
+  width: 100%;
+  min-height: 50px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: #f1f2f4;
+  font-size: 17px;
+  text-align: left;
+  padding: 0 14px;
+}
+
+.sheet button:active {
+  background: #2c2e35;
+}
+
+.sheet .size {
+  display: flex;
+  align-items: center;
+  padding-left: 14px;
+  min-height: 50px;
+  font-size: 17px;
+}
+
+.sheet .size span {
+  flex: 1;
+}
+
+.sheet .size button {
+  width: 56px;
+  text-align: center;
+  font-size: 22px;
+  padding: 0;
+}
+
+.shade {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 19;
+}
+
+@keyframes rise {
+  from { transform: translateY(24px); opacity: 0; }
+}
+
+.pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet,
+  .pulse {
+    animation: none;
+  }
+
+  .session:active {
+    transform: none;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--stem);
+  outline-offset: 2px;
+}

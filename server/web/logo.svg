@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" stroke-width="15" stroke-linecap="round">
+  <!-- cca 的 Logo：一根粗圆的线分成三支（形状、颜色照 macos/Sources/CcaApp/LogoGlyph.swift） -->
+  <defs>
+    <linearGradient id="a" gradientUnits="userSpaceOnUse" x1="38" y1="50" x2="86" y2="50">
+      <stop offset="0.3" stop-color="#3B7BFF"/><stop offset="0.65" stop-color="#22A3E6"/><stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+    <linearGradient id="b" gradientUnits="userSpaceOnUse" x1="38" y1="50" x2="82" y2="17">
+      <stop offset="0.3" stop-color="#3B7BFF"/><stop offset="0.65" stop-color="#7C5CFF"/><stop offset="1" stop-color="#EC4C8C"/>
+    </linearGradient>
+    <linearGradient id="c" gradientUnits="userSpaceOnUse" x1="38" y1="50" x2="82" y2="83">
+      <stop offset="0.28" stop-color="#3B7BFF"/><stop offset="0.52" stop-color="#7C5CFF"/><stop offset="0.76" stop-color="#EC4C8C"/><stop offset="1" stop-color="#F5A524"/>
+    </linearGradient>
+  </defs>
+  <path d="M38 50C62 50 62 50.01 86 50.01" stroke="url(#a)"/>
+  <path d="M38 50C60 50 60 17 82 17" stroke="url(#b)"/>
+  <path d="M38 50C60 50 60 83 82 83" stroke="url(#c)"/>
+  <path d="M12 50H38" stroke="#3B7BFF"/>
+</svg>

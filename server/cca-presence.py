@@ -2094,11 +2094,12 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
     allow_reuse_address = True
     request_queue_size = 64
 
-    def __init__(self, addr, ctx, store, release_key, sig_ok, remote=None, web=None, share=None):
-        """ctx 是 None：--behind-proxy（只说 HTTP，HTTPS 由前面的代理做）；是 CertCtx：网页端的那个监听（证书会换）。
+    def __init__(self, addr, ctx, store, release_key, sig_ok, remote=None, web=None, share=None, proxied=False):
+        """ctx 是 None：只说 HTTP（--behind-proxy：HTTPS 由前面的代理做，proxied 是 True、限流照代理报的地址；
+        本机试网页端的那个监听也只说 HTTP，但它前面没有代理）；是 CertCtx：网页端的那个监听（证书会换）。
         share：另一个监听（网页端的监听和原来的是同一个服务：限流、用过的 nonce 是同一份，不然同一个请求能在两个端口上各用一次）"""
         self.ctx, self.store, self.release_key, self.sig_ok, self.remote, self.web = ctx, store, release_key, sig_ok, remote, web
-        self.proxied = ctx is None
+        self.proxied = proxied
         if share:
             self.ip_bucket, self.fp_bucket, self.nonces, self.root_bucket = share.ip_bucket, share.fp_bucket, share.nonces, share.root_bucket
         else:
@@ -2167,7 +2168,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
         timer.start()
         try:
             request.settimeout(HANDSHAKE_TIMEOUT)
-            if self.proxied:
+            if self.ctx is None:
                 self.RequestHandlerClass(request, client_address, self)
                 return
             try:
@@ -2247,11 +2248,17 @@ def main():
         ap.error('--web-url 要写成 https://域名[:端口]/（手机上打开的就是它；本机试的时候可以是 http://localhost:端口/）')
     if a.web_url and not a.relay_listen:
         ap.error('网页端是经中转接入会话的：--web-url 要和 --relay-listen 一起给')
+    web_local = bool(a.web_url) and a.web_url.startswith('http://')   # 本机试：http://localhost（浏览器把它当成安全的来源）
     if a.web_listen or a.web_cert or a.web_key:
-        if not (a.web_url and a.web_listen and a.web_cert and a.web_key):
-            ap.error('--web-listen、--web-cert、--web-key 要一起给，还要有 --web-url')
         if a.behind_proxy:
             ap.error('--behind-proxy 时 HTTPS 由平台做：网页端就在同一个端口上，不用 --web-listen')
+        if not (a.web_url and a.web_listen):
+            ap.error('--web-listen 要和 --web-url 一起给')
+        if web_local:
+            if a.web_cert or a.web_key or a.web_listen.rpartition(':')[0].strip('[]') not in ('127.0.0.1', 'localhost', '::1'):
+                ap.error('--web-url 是 http://localhost 时（本机试）：--web-listen 只能听本机的地址，不用证书')
+        elif not (a.web_cert and a.web_key):
+            ap.error('--web-listen 要带浏览器信得过的证书：--web-cert、--web-key')
     release = root = None
     if a.mode == 'own':
         if not HASH_RE.match(a.admit_hash or ''):
@@ -2298,7 +2305,7 @@ def main():
             with open(a.relay_port_file + '.tmp', 'w') as f:
                 f.write('%d\n' % rsock.getsockname()[1])
             os.replace(a.relay_port_file + '.tmp', a.relay_port_file)
-    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, release, sig_ok, remote, web)
+    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, release, sig_ok, remote, web, proxied=a.behind_proxy)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:
             f.write('%d\n' % srv.server_address[1])
@@ -2307,7 +2314,7 @@ def main():
     if a.web_listen:   # 网页端另开的端口：同一个服务（同样的接口、同一份限流），只是证书是浏览器信得过的那一张
         whost, _, wport = a.web_listen.rpartition(':')
         try:
-            wctx = CertCtx(a.web_cert, a.web_key)
+            wctx = None if web_local else CertCtx(a.web_cert, a.web_key)
         except (OSError, ssl.SSLError, ValueError) as e:
             ap.error('网页端的证书读不了：%s' % e)
         wsrv = Server((whost.strip('[]') or '0.0.0.0', int(wport)), wctx, store, release, sig_ok, remote, web, share=srv)

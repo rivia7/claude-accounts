@@ -10,8 +10,11 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
+// --flat：给远程会话的网页端（手机主屏幕上的图标，server/web/icon-*.png）：整张铺满、不裁圆角、不描边——圆角由手机的系统自己裁，
+// 透明的角在主屏幕上会变成黑的
+let flat = CommandLine.arguments.contains("--flat")
 let S: CGFloat = 1024
-let inset: CGFloat = 100
+let inset: CGFloat = flat ? 0 : 100
 let body = CGRect(x: inset, y: inset, width: S - 2 * inset, height: S - 2 * inset)
 let radius: CGFloat = 185.4
 
@@ -28,7 +31,7 @@ ctx.interpolationQuality = .high
 ctx.translateBy(x: 0, y: S)
 ctx.scaleBy(x: 1, y: -1)
 
-let squircle = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: body).cgPath
+let squircle = flat ? CGPath(rect: body, transform: nil) : RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: body).cgPath
 
 func gradient(_ stops: [(CGFloat, CGColor)]) -> CGGradient {
     CGGradient(colorsSpace: space, colors: stops.map { $0.1 } as CFArray, locations: stops.map { $0.0 })!
@@ -46,14 +49,16 @@ ctx.drawLinearGradient(gradient([(0, LogoGlyph.color(0xFFFFFF)), (1, LogoGlyph.c
 LogoGlyph.draw(in: ctx, rect: CGRect(x: 512 - 296, y: 512 - 296, width: 592, height: 592))
 
 // 内描边：浅色背景（Finder、白色的桌面）上也看得出边
-ctx.addPath(squircle)
-ctx.setStrokeColor(LogoGlyph.color(0x000000, alpha: 0.07))
-ctx.setLineWidth(5)
-ctx.strokePath()
+if !flat {
+    ctx.addPath(squircle)
+    ctx.setStrokeColor(LogoGlyph.color(0x000000, alpha: 0.07))
+    ctx.setLineWidth(5)
+    ctx.strokePath()
+}
 ctx.restoreGState()
 
 guard let image = ctx.makeImage() else { fatalError("no image") }
-let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "icon_1024.png")
+let out = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first { !$0.hasPrefix("--") } ?? "icon_1024.png")
 guard let dest = CGImageDestinationCreateWithURL(out as CFURL, UTType.png.identifier as CFString, 1, nil) else {
     fatalError("cannot write \(out.path)")
 }

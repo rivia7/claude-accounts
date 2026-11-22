@@ -10,6 +10,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import socket
@@ -742,6 +743,84 @@ class ClientTest(WebBase):
         doc = self.remote()
         self.assertEqual((doc['edges'], doc['guests']), ({}, {}))
         self.assertIn('对方已经取消了配对', a.ok('remote-peers', '--check'))
+
+
+class FilesTest(unittest.TestCase):
+    """页面的文件（server/web/）：服务器读得进去、只发该发的；别人的代码（xterm.js）和说明里记的校验和一样；
+    页面自己不引别处的东西、没有内联的脚本（内容安全策略不许，写了也不会跑）"""
+    def test_the_real_page(self):
+        web = srvmod.Web('https://relay.example.com/', str(WEB), None)
+        need = {'index.html', 'app.js', 'app.css', 'core.js', 'xterm.js', 'xterm.css', 'xterm-addon-fit.js', 'logo.svg',
+                'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'}
+        self.assertEqual(set(web.files), need, '多了、少了文件：页面目录里新加的东西要想清楚该不该发给浏览器')
+        self.assertLess(sum(len(f[2] or f[1]) for f in web.files.values()), 400 * 1024, '压缩以后整页不到 400 KB')
+        table = dict(re.findall(r'^\| `([^`]+)` \|[^|]+\|[^|]+\| `([0-9a-f]{64})` \|$', (WEB / 'README.md').read_text(), re.M))
+        self.assertEqual(set(table), {'xterm.js', 'xterm.css', 'xterm-addon-fit.js', 'xterm-LICENSE.txt'})
+        for name, want in table.items():
+            self.assertEqual(hashlib.sha256((WEB / name).read_bytes()).hexdigest(), want, name + '：和说明里记的不一样（被改过？）')
+        html = (WEB / 'index.html').read_text()
+        self.assertEqual(re.findall(r'(?:src|href)="(?![a-z0-9][a-z0-9._-]*")[^"]*"', html), [], '只引同一个目录里的文件')
+        self.assertNotRegex(html, r'<script(?![^>]*\bsrc=)|\son[a-z]+\s*=|javascript:|<style', '没有内联的脚本、样式、事件')
+        for name in ('app.js', 'core.js'):
+            src = (WEB / name).read_text()
+            self.assertNotRegex(src, r'\beval\(|new Function|innerHTML|outerHTML|insertAdjacentHTML|document\.write', name)
+            self.assertNotRegex(src, r'https?://(?!localhost)', name + '：不连别处')
+        m = json.loads((WEB / 'manifest.webmanifest').read_text())
+        self.assertEqual((m['display'], m['start_url'], [i['src'] for i in m['icons']]), ('standalone', './', ['icon-192.png', 'icon-512.png']))
+        for n in (180, 192, 512):
+            png = (WEB / ('icon-%d.png' % n)).read_bytes()
+            self.assertEqual((png[:8], struct.unpack('>II', png[16:24])), (b'\x89PNG\r\n\x1a\n', (n, n)))
+
+
+CHROME = os.environ.get('CCA_CHROME') or '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+
+
+@unittest.skipUnless(node_ok() and os.path.exists(CHROME), '没有 Node 22 以上或者没有 Chrome：页面这次没在浏览器里走')
+class PageTest(Base):
+    """真的那一页在真的浏览器里（无界面的 Chrome，照 iPhone 的屏幕、触摸；tests/web_page.mjs）：对面是真的服务器、真的 cca 会话。
+    网页端开在 http://localhost（浏览器把它当安全的来源，不用证书）。截图留在 CCA_WEB_SHOTS 指的目录里（没给就不留）"""
+    def server_extra(self, d):
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        self.wport = s.getsockname()[1]
+        s.close()
+        return ['--web-url', 'http://localhost:%d/' % self.wport, '--web-listen', '127.0.0.1:%d' % self.wport]
+
+    def test_the_page_in_a_browser(self):
+        box = self.device('box')
+        self.machines(box)
+        h = rr.Term([rr.HELPER, 'remote-host', 'claude', rr.Device.KEY, 'alice', '--', sys.executable, str(box.home / 'client.py')],
+                    box.env, str(box.work))
+        self.terms.append(h)
+        h.expect('<ready 24 80')
+        p = subprocess.Popen([rr.HELPER, 'remote-pair-show', '--web'], env=box.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (p.kill(), p.wait(), p.stdout.close(), p.stderr.close()))
+        code, web = p.stdout.readline().split()[1], p.stdout.readline()
+        url = 'http://localhost:%d/' % self.wport
+        self.assertEqual(web, 'web %s\n' % url)
+        shots = os.environ.get('CCA_WEB_SHOTS')
+        tmp = None if shots else tempfile.TemporaryDirectory(prefix='cca-shots-')
+        env = {k: v for k, v in os.environ.items() if k.lower() not in ('http_proxy', 'https_proxy', 'all_proxy')}
+        try:
+            r = subprocess.run([NODE, str(ROOT / 'tests' / 'web_page.mjs'), url, code, shots or tmp.name], env=dict(env, CCA_CHROME=CHROME),
+                               capture_output=True, text=True, timeout=240)
+        finally:
+            if tmp:
+                tmp.cleanup()
+        try:
+            j = json.loads(r.stdout)
+        except ValueError:
+            self.fail('浏览器那一头没给结果：%s %s' % (r.stdout[-500:], r.stderr[-1500:]))
+        self.assertTrue(j['ok'], '%s\n页面上：%s\n控制台：%s' % (j.get('error'), j.get('dom'), j.get('logs')))
+        self.assertEqual(j['steps'], ['welcome', 'paired', 'typed', 'keybar', 'compose', 'menu', 'reattach', 'ended', 'settings'])
+        self.assertEqual(j['logs'], [], '页面的控制台里不该有报错（被内容安全策略拦下的也算）')
+        self.assertEqual(j['codeShown'], code, '输入的配对码自动分成四个一组')
+        self.assertIn('alice', j['home'])
+        self.assertIn('会话结束了（退出码 3）', j['ended'])
+        self.assertLess(j['sizeAfterFont'], j['size'][0], '字调大以后行数变少（终端跟着重新算了大小）')
+        self.assertEqual(p.wait(30), 0)
+        self.assertEqual(p.stdout.read(), 'peer iPhone\n')
 
 
 if __name__ == '__main__':
