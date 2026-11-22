@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.3-beta.2", title: "在 iPhone 上接入远程会话", points: [
+            .init(symbol: "iphone",
+                  text: "远程会话能在 iPhone 上接入：在「远程会话」页点「和手机配对…」（或终端里运行 cca remote pair --web），用 iPhone 的相机扫二维码、在 Safari 里输入配对码，再添加到主屏幕。要 iOS 17 以上。"),
+            .init(symbol: "keyboard",
+                  text: "手机上的终端下面有一排常用键（Esc、Tab、Ctrl、方向键、^C）和一个输入框（打中文、听写），网络断了自己接回去。"),
+            .init(symbol: "server.rack",
+                  text: "Team 的账号开的会话经这个 Team 自己的服务器中转，一键部署 Team 的服务器时默认开着中转。手机这一页暂时只在维护者的服务器上有。"),
+        ]),
         ReleaseNote(version: "3.5.3-beta.1", title: "Team：账号共享和设备同步合到一起", points: [
             .init(symbol: "person.3",
                   text: "「共享与同步」页多了 Team：一组设备加一份配置（哪些账号、各走哪个节点）。管理员给每台设备发一个邀请链接，对方粘贴就加入，账号自动加进来。"),
