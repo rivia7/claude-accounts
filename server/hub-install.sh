@@ -13,6 +13,8 @@
 #       根公钥是 cca team new 给的那一行（公开的）。每个 Team 一个服务：服务名、系统用户、容器名是 cca-team-<Team 编号的前 8 位>，
 #       装在 /opt/<服务名>，端口没写时从 18445 起找一个空着的——所以一台服务器上能装几个 Team，互不相干。装好了打出管理员接上它的那一行
 #       （cca team attach …）。再运行（带 --team-root，或者 --dir 那个目录）是更新；--uninstall --dir 目录 删掉那一个
+#       Team 的服务器同时给这个 Team 的远程会话做中转（cca remote，docs/dev/remote.md）：另开一个数据端口（普通的 TCP，上面是两台设备之间
+#       端到端加密的内容），没写时从 HTTPS 那个端口的下一个起找一个空着的；--relay-port 端口 指定，--no-relay 不开。选的记在 .env 里，再运行照旧
 #
 # 也可以在自己的电脑上运行 cca hub deploy root@服务器：经 SSH 装上这一份，加入链接在电脑上生成，那台电脑跟着加入。
 # 装在 /opt/cca-hub（--dir 换：新的、空的目录，或者以前装过的；自己的同步服务器一台服务器只装一个）：app/cca-presence.py 服务端（只用 Python 标准库），
@@ -64,7 +66,8 @@ interrupted() {   # Ctrl-C、SSH 断了（之后再往断了的管道里写是 S
 usage() {
 	cat <<'EOF'
 用法: sudo sh cca-hub-install.sh [--host 公网地址] [--port 端口] [--docker | --systemd] [--dir 目录] [--reset]
-      sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--docker | --systemd] [--dir 目录]
+      sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--relay-port 端口 | --no-relay]
+                                 [--docker | --systemd] [--dir 目录]
       sudo sh cca-hub-install.sh --uninstall [--dir 目录]
 EOF
 }
@@ -113,7 +116,7 @@ port_busy() {   # 有程序在这个 TCP 端口上监听（ss、netstat 都没�
 port_taken() {   # 自动挑端口时：有程序在听，或者这台服务器上别的同步服务器（默认目录里的）记着用它（没有 ss、netstat 时只看得到这个）
 	port_busy "$1" && return 0
 	# 先接起来再找：有的文件不在时 grep 的退出码是 2（找到了也是），接起来就只看找没找到
-	cat "$ROOT"/opt/cca-team-*/.env "$ROOT/opt/cca-hub/.env" 2>/dev/null | grep -qx "CCA_HUB_PORT=$1"
+	cat "$ROOT"/opt/cca-team-*/.env "$ROOT/opt/cca-hub/.env" 2>/dev/null | grep -Eqx "CCA_HUB_(PORT|RELAY)=$1"
 }
 joined_ever() {   # 现在的入伙口令有设备加入过：服务器登记了盐的校验值（状态文件读不懂时也当作加入过：不能随手换掉口令）
 	[ -f "$ROOT$D/data/state.json" ] || return 1
@@ -135,15 +138,19 @@ put() {   # put 文件 权限 命令…：命令的输出先写到旁边、再�
 	die install "写不了 ${f}"
 }
 nologin() { for s in /usr/sbin/nologin /sbin/nologin; do [ -x "$s" ] && { printf '%s' "$s"; return; }; done; printf /bin/false; }
-fw_hint() {   # 这台服务器自己的防火墙没放行这个端口：说怎么放行（只看，不改）。Docker 发布的端口不经 ufw、firewalld 的规则，systemd 的要
+fw_hint() {   # 这台服务器自己的防火墙没放行这几个端口：说怎么放行（只看，不改）。Docker 发布的端口不经 ufw、firewalld 的规则，systemd 的要
 	[ "$MODE" = systemd ] || return 0
-	if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-		ufw status 2>/dev/null | grep -Eq "^${PORT}(/tcp)? .*ALLOW" || say "! 这台服务器开着 ufw：运行 ufw allow ${PORT}/tcp 放行"
-	elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-		firewall-cmd --query-port="${PORT}/tcp" >/dev/null 2>&1 ||
-			say "! 这台服务器开着 firewalld：运行 firewall-cmd --permanent --add-port=${PORT}/tcp && firewall-cmd --reload 放行"
-	fi
+	for fwp in "$PORT" $(relay_on && printf '%s' "$RELAY"); do
+		if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+			ufw status 2>/dev/null | grep -Eq "^${fwp}(/tcp)? .*ALLOW" || say "! 这台服务器开着 ufw：运行 ufw allow ${fwp}/tcp 放行"
+		elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+			firewall-cmd --query-port="${fwp}/tcp" >/dev/null 2>&1 ||
+				say "! 这台服务器开着 firewalld：运行 firewall-cmd --permanent --add-port=${fwp}/tcp && firewall-cmd --reload 放行"
+		fi
+	done
 }
+relay_on() { case "$RELAY" in ''|off) return 1 ;; esac; return 0; }   # 这一次开着中转（RELAY 是数据端口）
+ports_say() { if relay_on; then printf 'TCP %s 和 %s（远程会话的中转）' "$PORT" "$RELAY"; else printf 'TCP %s' "$PORT"; fi; }   # 要放行的端口
 
 # --- 装在哪 ----------------------------------------------------------------------------------------------------------------
 dir_check() {   # --dir：/ 下面的一个目录（不是 /，没有空的、.、.. 这样的一节），只用字母、数字和 . _ - /；末尾的 / 去掉。hub-deploy 的 dir_of 一样。
@@ -315,9 +322,25 @@ prepare() {   # 目录（.cca-hub 记着是这里装的）、服务端程序、�
 	case "$PIN" in *[!A-Za-z0-9+/=]*|'') die install "算不出证书公钥的指纹（openssl）" ;; esac
 	[ ${#PIN} -eq 44 ] || die install "算不出证书公钥的指纹（openssl）"
 }
+pick_relay() {   # RELAY：Team 的服务器给这个 Team 的远程会话做中转的数据端口；off 不开。--relay-port / --no-relay 照说的，没说时照上次的，
+	             # 第一次从 HTTPS 那个端口的下一个起找一个空着的。自己的同步服务器不做中转
+	OLDRELAY=$(env_get CCA_HUB_RELAY)
+	if [ -z "$TEAMROOT" ]; then RELAY=off; return 0; fi
+	[ -n "$RELAY" ] || RELAY=$OLDRELAY
+	if [ -z "$RELAY" ]; then
+		RELAY=$((PORT + 1))
+		i=0
+		while { [ "$RELAY" = "$PORT" ] || port_taken "$RELAY"; } && [ $i -lt 50 ]; do RELAY=$((RELAY + 1)); i=$((i + 1)); done
+	fi
+	relay_on || return 0
+	[ "$RELAY" != "$PORT" ] || die usage "--relay-port 不能和 --port 一样"
+	if port_busy "$RELAY" && ! { [ "$RELAY" = "$OLDRELAY" ] && svc_running; }; then
+		die port "中转的数据端口 ${RELAY} 被别的程序占着：换一个（--relay-port），或者不开中转（--no-relay）"
+	fi
+}
 env_file() {
 	printf '# %s的设置：安装脚本写的，改了以后再运行一次安装脚本\n' "$WHAT"
-	if [ -n "$TEAMROOT" ]; then printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_TEAM_ROOT=%s\n' "$MODE" "$PORT" "$TEAMROOT"
+	if [ -n "$TEAMROOT" ]; then printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_TEAM_ROOT=%s\nCCA_HUB_RELAY=%s\n' "$MODE" "$PORT" "$TEAMROOT" "$RELAY"
 	else printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_HUB_ADMIT_HASH=%s\n' "$MODE" "$PORT" "$H"; fi
 	[ -z "$IMG" ] || printf 'CCA_HUB_IMAGE=%s\n' "$IMG"
 	[ -z "$VERSION" ] || printf 'CCA_HUB_VERSION=%s\n' "$VERSION"
@@ -337,7 +360,9 @@ rollback() {
 }
 compose_yaml() {   # @SVC@、@SMODE@、@SECRET@ 换成这一种的：服务名（容器名）、--mode、交给服务端的那一项（口令的哈希 / Team 的根公钥）
 	if [ -n "$TEAMROOT" ]; then secret=CCA_TEAM_ROOT; else secret=CCA_HUB_ADMIT_HASH; fi
-	sed -e "s/@SVC@/$SVC/g" -e "s/@SMODE@/$SMODE/g" -e "s/@SECRET@/$secret/g" <<'EOF'
+	# 中转开着：容器里数据端口听 18446，对外是 .env 的 CCA_HUB_RELAY；没开：带着 @RELAY@ 的那几处整个去掉（不占端口）
+	if relay_on; then relay='s/@RELAY@\(.*\)@@/\1/'; else relay='/^@RELAY@.*@@$/d;s/@RELAY@.*@@//'; fi
+	sed -e "s/@SVC@/$SVC/g" -e "s/@SMODE@/$SMODE/g" -e "s/@SECRET@/$secret/g" -e "$relay" <<'EOF'
 # cca 的同步服务器（@SVC@）：安装脚本写的，再运行安装脚本时会换掉。设置在 .env 里
 services:
   @SVC@:
@@ -345,9 +370,10 @@ services:
     container_name: @SVC@
     restart: unless-stopped
     user: "10001:10001"
-    command: ["python3", "-I", "/app/cca-presence.py", "--mode", "@SMODE@", "--listen", "0.0.0.0:18445", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem", "--state", "/data/state.json"]
+    command: ["python3", "-I", "/app/cca-presence.py", "--mode", "@SMODE@", "--listen", "0.0.0.0:18445", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem", "--state", "/data/state.json"@RELAY@, "--relay-listen", "0.0.0.0:18446", "--relay-port", "${CCA_HUB_RELAY:?}"@@]
     ports:
       - "${CCA_HUB_PORT:-18445}:18445"
+@RELAY@      - "${CCA_HUB_RELAY:?}:18446"@@
     environment:
       @SECRET@: ${@SECRET@:?}
     volumes:
@@ -370,6 +396,8 @@ services:
 EOF
 }
 unit_file() {
+	relay=""
+	! relay_on || relay=" --relay-listen 0.0.0.0:${RELAY} --relay-port ${RELAY}"
 	cat <<EOF
 # cca 的同步服务器（${SVC}）：安装脚本写的，再运行安装脚本时会换掉。设置在 $D/.env 里
 [Unit]
@@ -380,7 +408,7 @@ Wants=network-online.target
 [Service]
 User=$SVC
 EnvironmentFile=$D/.env
-ExecStart=$PY -I $D/app/cca-presence.py --mode $SMODE --listen 0.0.0.0:\${CCA_HUB_PORT} --cert $D/certs/cert.pem --key $D/certs/key.pem --state $D/data/state.json
+ExecStart=$PY -I $D/app/cca-presence.py --mode $SMODE --listen 0.0.0.0:\${CCA_HUB_PORT} --cert $D/certs/cert.pem --key $D/certs/key.pem --state $D/data/state.json${relay}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
@@ -452,6 +480,7 @@ report_managed() {   # 给 hub-deploy：一行一项（deploy.rs 的 report 读�
 	fw_hint
 	note "mode $MODE"
 	note "port $PORT"
+	! relay_on || note "relay $RELAY"
 	note "pin sha256//$PIN"
 	note "state $STATE"
 	note ok
@@ -470,7 +499,7 @@ report_team() {   # 直接在服务器上运行的、Team 的：打出管理员�
 	say "  cca team attach Team https://${HP}:${PORT} sha256//${PIN}"
 	say ""
 	fw_hint
-	say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 TCP ${PORT}。"
+	say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 $(ports_say)。"
 }
 report() {   # 直接在服务器上运行的：新的加入链接打出来（只这一次）
 	if [ -n "$TEAMROOT" ]; then report_team; return; fi
@@ -493,7 +522,7 @@ report() {   # 直接在服务器上运行的：新的加入链接打出来（�
 		[ -t 1 ] || say "! 输出没接在终端上：加入链接可能被记进了日志，设备都加入以后删掉那份日志（或者用 --reset 换一个）"
 	fi
 	fw_hint
-	say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 TCP ${PORT}。"
+	say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 $(ports_say)。"
 }
 
 uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录：有 .cca-hub 或者 .env）和系统用户
@@ -511,14 +540,15 @@ uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录�
 }
 
 main() {
-	HOST="" PORT="" MODE="" RESET="" UNINSTALL="" AUTO="" IMG="" NEWCERT="" ADMIT="" SALT="" HP=""
+	HOST="" PORT="" MODE="" RESET="" UNINSTALL="" AUTO="" IMG="" NEWCERT="" ADMIT="" SALT="" HP="" RELAY=""
 	trap interrupted HUP INT TERM PIPE
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--host|--port|--dir|--team-root)
+			--host|--port|--dir|--team-root|--relay-port)
 				[ $# -ge 2 ] || { usage >&2; exit 2; }
-				case "$1" in --host) HOST=$2 ;; --port) PORT=$2 ;; --team-root) TEAMROOT=$2 ;; *) D=$2 DIRSET=1 ;; esac
+				case "$1" in --host) HOST=$2 ;; --port) PORT=$2 ;; --team-root) TEAMROOT=$2 ;; --relay-port) RELAY=$2 ;; *) D=$2 DIRSET=1 ;; esac
 				shift ;;
+			--no-relay) RELAY=off ;;
 			--docker) MODE=docker ;;
 			--systemd) MODE=systemd ;;
 			--reset) RESET=1 ;;
@@ -539,6 +569,10 @@ main() {
 		case "$PORT" in 0*|*[!0-9]*) die usage "--port 要是 1024～65535 的端口" ;; esac
 		[ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || die usage "--port 要是 1024～65535 的端口"
 	fi
+	if relay_on; then
+		case "$RELAY" in 0*|*[!0-9]*) die usage "--relay-port 要是 1024～65535 的端口" ;; esac
+		[ "$RELAY" -ge 1024 ] && [ "$RELAY" -le 65535 ] || die usage "--relay-port 要是 1024～65535 的端口"
+	fi
 	if [ "$(id -u 2>/dev/null)" != 0 ]; then
 		[ -n "$MANAGED" ] && die root "要用 root 登录服务器（或者能免密码 sudo 的用户）"
 		die root "要用 root 运行：sudo sh $0 …"
@@ -556,6 +590,7 @@ main() {
 	pick_mode
 	pick_state
 	pick_port
+	pick_relay
 	# 直接在服务器上运行、要打出地址的才问：第一次装；Team 的换了端口、证书重新生成时也要（那时要重新接上）
 	[ -n "$MANAGED" ] || [ "$STATE" = update ] || pick_host
 	if [ -z "$MANAGED" ] && [ -n "$TEAMROOT" ] && [ "$STATE" = update ] && [ "$PORT" != "$OLDPORT" ]; then pick_host; fi

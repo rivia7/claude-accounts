@@ -370,6 +370,8 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
 struct Report {
     mode: String,
     port: i64,
+    /// Team 的服务器：远程会话的中转的数据端口（没开是 0；旧的安装脚本不说这一项）
+    relay: i64,
     pin: String,
     state: String,
     ok: bool,
@@ -384,6 +386,7 @@ fn report(stdout: &str) -> Report {
         match k {
             "mode" => r.mode = v.to_string(),
             "port" => r.port = v.parse().unwrap_or(0),
+            "relay" => r.relay = v.parse().unwrap_or(0),
             "pin" => r.pin = v.to_string(),
             "state" => r.state = v.to_string(),
             "ok" => r.ok = true,
@@ -440,6 +443,8 @@ pub struct TeamInstalled {
     pub mode: String,
     pub state: String,
     pub port: i64,
+    /// 远程会话的中转的数据端口（Team 的服务器给这个 Team 的会话做中转）；0 是没开
+    pub relay: i64,
     pub dir: String,
     /// 地址是内网的：别的网络里的设备连不上
     pub lan: bool,
@@ -495,6 +500,7 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
         mode: r.mode,
         state: r.state,
         port: r.port,
+        relay: r.relay,
         dir: o.dir.clone(),
         lan: lan_only(&host),
     }))

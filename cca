@@ -6875,7 +6875,7 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	                # 再运行是更新），装好了接上。App 里不写服务器，在提问会话里问（和部署自己的同步服务器同一页：hub.deploy）。
 	                # 服务器上只有 Team 的根公钥（公开的）：docs/dev/team.md「部署」
 	local sel="" target="" args=() pw="" out rc tid name role at how
-	local mode="" state="" port="" dir="" lan="" host="" device="" members="" stored="" note="" svc=""
+	local mode="" state="" port="" relay="" dir="" lan="" host="" device="" members="" stored="" note="" svc=""
 	if [ "${1:-}" = --script ]; then
 		[ $# -eq 1 ] || FAIL_CODE=team_usage die "$TEAM_DEPLOY_USAGE"
 		py hub-installer
@@ -6920,11 +6920,13 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	info "部署「${name}」的同步服务器到 ${target}（第一次用 Docker 时要先拉镜像，可能要几分钟）…"
 	hub_deploy_run "$target" ${args[@]+"${args[@]}"}; rc=$?
 	[ $rc -eq 0 ] || team_fail "$out" "没有部署成"
-	eval "$out"   # mode state port dir lan host device members stored note svc（辅助程序的 sh：键=值）
+	eval "$out"   # mode state port relay dir lan host device members stored note svc（辅助程序的 sh：键=值）
 	case "$mode" in docker) how="Docker compose" ;; *) how="systemd + python3" ;; esac
 	if [ "$state" = update ]; then okay "已更新 ${target} 上「${name}」的同步服务器（${dir}，${how}，端口 ${port}，服务名 ${svc}）：数据没变，照旧接着"
 	else okay "已部署「${name}」的同步服务器到 ${target}（${dir}，${how}，端口 ${port}，服务名 ${svc}），接上了：这台设备叫 ${device}，现在有 ${members} 台设备；$(team_stored "$stored")"; fi
 	[ "$state" = update ] || say "  给别的设备发邀请：cca team invite ${tid:0:8} 名字（或者 App 的「共享与同步」里）"
+	# 这个 Team 的账号的远程会话（cca remote）经它中转：数据端口是另一个，云服务商的安全组里也要放行
+	[ -z "${relay:-}" ] || say "  「${name}」的账号的远程会话经这台服务器中转（数据端口 ${relay}）：云服务商的安全组里要放行 TCP ${port} 和 ${relay}"
 	[ -z "$note" ] || team_forward_warn "$note"
 	[ -z "$lan" ] || fail_warn team_lan "${host%:*} 是内网地址：别的设备不在这个网络里时连不上（有公网地址的话：cca team deploy ${tid:0:8} ${target} --host 公网地址）"
 	team_settle

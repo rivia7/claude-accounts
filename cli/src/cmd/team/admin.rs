@@ -774,10 +774,12 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         }
     };
     let (port, members, stored) = (inst.port.to_string(), x.members.to_string(), x.stored.to_string());
+    let relay = if inst.relay > 0 { inst.relay.to_string() } else { String::new() };
     sh(&[
         ("mode", inst.mode.as_str()),
         ("state", inst.state.as_str()),
         ("port", port.as_str()),
+        ("relay", relay.as_str()),
         ("dir", inst.dir.as_str()),
         ("lan", if inst.lan { "1" } else { "" }),
         ("host", x.host.as_str()),

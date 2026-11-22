@@ -91,6 +91,8 @@
 - 和手机配对在界面里：同意项 `remote_pair` 的范围 `web`、题号 `remote.pair_web`、字段的种类 `qr`、hello 的 `remote_web`、`peers[].web`：`cca` ↔ PROTOCOL（2.1、4.2、4.6、9.1、9.2）↔ Swift（`PromptKind.qr`、`Handoff.remotePairWeb`、`HelloDoc.remoteWeb`、`RemotePeer.web`）↔ `macos/Tests/Fixtures`（`flow_remote_pair_--web.flow`、`remote_list.json`、`hello.json`）
 - 网页端的页面（`server/web/`）：xterm.js 换版本时那四个文件和 `server/web/README.md` 里的版本、校验和一起换；目录里新加文件 ↔ `tests/web_relay.py` `FilesTest` 的名单 ↔ 服务器的 `WEB_TYPES`；`macos/Sources/CcaApp/LogoGlyph.swift` ↔ `server/web/logo.svg`（照它手写的同一个字形）、`icon-*.png`（`macos/tools/make-icon --flat` 画的）；页面里的类名别叫 `terminal`（xterm.js 给自己的根元素用了）
 - 网页端的部署：`server/compose.web.yaml` ↔ `policy.sh` 的 `presence_remote`（`.env` 的 `CCA_WEB_URL`、`CCA_WEB_PORT`、`COMPOSE_FILE`，`webcert/` 里的两个文件名）↔ 服务器的 `CCA_WEB_LISTEN` / `CCA_WEB_CERT` / `CCA_WEB_KEY`；`compose.yaml` 没开网页端时要和以前一个字不差
+- 每个 Team 各用各的中转服务器：`cli/src/cmd/remote/relay.rs` 的 `session_hub`（会话走哪台）↔ `cmd/hub.rs` 的 `route` / `core/policy.rs` 的 `policy_sources`（账号是谁给的）；配对表的 `hub`（`peers.rs`：Team 的编号，维护者的不写——以前的配对表要原样读得了、原样写回去）↔ `remote list --json` 的 `peers[].team`、`relay.hubs` ↔ PROTOCOL 9.1 ↔ Swift 的 `RemoteHub`、`RemotePeer.team` ↔ `macos/Tests/Fixtures/remote_list.json`；bash 的 `--team 名字 | --maintainer`（`remote_hub_args`）↔ 辅助程序的 `--hub`（`pair.rs` 的 `hub_named`）↔ App 的 `RemoteHub.arguments`；Team 服务器的数据端口：`server/hub-install.sh` 的 `pick_relay`、`.env` 的 `CCA_HUB_RELAY`、`compose_yaml` 里带 `@RELAY@` 的那几处 ↔ `tests/hub_box.py` 假的 docker 解释它的那几行 ↔ `deploy.rs` 的 `report`（`relay`）↔ bash `team_deploy` 说要放行的端口
+- 证书助手：`server/cca-acme.py` ↔ `tests/acme_fake.py`（照 RFC 8555 / 8738 和证书种类的草案核对它的请求；改了流程两边一起看）；它写的文件名（`fullchain.pem`、`privkey.pem`）↔ 服务端的 `--web-cert` / `--web-key`、`compose.web.yaml` 的 `webcert/`；Let's Encrypt 的规矩（短期证书那一种的名字 `shortlived`、续的时机、限额）变了要改它开头的说明和 `RETRY`、`cert_state.fraction`
 
 ## 细节在哪
 动到哪一块，先读 `docs/dev/` 下对应的那一份（这一块怎么测也写在里面）：
@@ -114,6 +116,6 @@
 - `clients.md` — 辅助安装 claude / codex / agy、客户端统一更新
 - `release.md` — release.sh 的步骤、测试版先发后验、自动更新、检查更新、`cca gui`
 - `mail.md` — 邮箱助手（`cca mail`）
-- `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面；网页端（手机不装 cca，在浏览器里接入：访客设备、WebSocket 进中转、`server/web/` 的页面、`cca remote pair --web`、带证书的端口和部署；`python3 tests/web_demo.py` 在本机跑起来看）
+- `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面；网页端（手机不装 cca，在浏览器里接入：访客设备、WebSocket 进中转、`server/web/` 的页面、`cca remote pair --web`、带证书的端口和部署；`python3 tests/web_demo.py` 在本机跑起来看）；每个 Team 的会话走这个 Team 自己的服务器中转（配对记在哪台服务器上、`cca remote pair --team`）；给网页端要 IP 证书的证书助手（`server/cca-acme.py`）
 - `desktop.md` — 程序坞整理、Claude App 多开、启动器图标
 - `uninstall.md` — 卸载（`cca uninstall` / `cca restore`）：先后、`~/.cca` 以外要清掉的、不删的、测试里 `defaults` 和缓存目录的坑

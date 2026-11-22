@@ -4,6 +4,7 @@
 /bin/sh（macOS、Fedora 上是 bash，Alpine 上是 busybox）；tests/linux.sh 在各个发行版的容器里也跑这一份。
 装好以后设备（tests/presence.py 的 Device：临时 HOME、假 curl）用辅助程序真的加入。cca hub deploy 的那一半（hub-deploy）经
 假的 ssh 在同一台假服务器上运行脚本（ssh 的命令行、服务器上的文件里都不能有入伙口令和盐）。"""
+import http.client
 import json
 import os
 from pathlib import Path
@@ -694,6 +695,15 @@ class TeamDeployTest(Base):
         tid, root = dev.ok('team-new', name, '--device', 'studio').split('\n')[:2]
         return tid, root, 'cca-team-' + tid[:8]
 
+    @staticmethod
+    def health(port):
+        import ssl
+        c = http.client.HTTPSConnection('127.0.0.1', port, context=ssl._create_unverified_context(), timeout=10)
+        c.request('GET', '/v1/health')
+        j = json.loads(c.getresponse().read())
+        c.close()
+        return j
+
     def test_installer(self):
         """在服务器上直接运行：两个 Team 各一个服务（服务名、系统用户、目录、端口都是自己的），互不相干；没写端口时从 18445 起找空着的；
         再运行（只写目录）是更新；装着另一个 Team 的目录不碰；卸载一个，另一个照旧"""
@@ -712,6 +722,11 @@ class TeamDeployTest(Base):
                          '.env 里是根公钥后面那一段（没有空格）')
         unit = (b.root / 'etc/systemd/system' / (svc1 + '.service')).read_text()
         self.assertTrue('--mode team ' in unit and ('User=%s\n' % svc1) in unit and ('EnvironmentFile=/opt/%s/.env' % svc1) in unit, unit)
+        # Team 的服务器给这个 Team 的远程会话做中转：没写时数据端口是 HTTPS 那个端口的下一个，说清楚两个端口都要放行
+        self.assertEqual(env['CCA_HUB_RELAY'], str(p1 + 1))
+        self.assertIn('--relay-listen 0.0.0.0:%d --relay-port %d\n' % (p1 + 1, p1 + 1), unit)
+        self.assertIn('要放行 TCP %d 和 %d（远程会话的中转）' % (p1, p1 + 1), r.stdout)
+        self.assertEqual(self.health(p1).get('relay'), {'port': p1 + 1})
         self.assertTrue(b.running(svc1) and (b.d / 'users' / svc1).exists() and not b.running(), '服务名、系统用户是这个 Team 的')
         self.assertEqual(a.ok('team-attach', tid1, 'https://127.0.0.1:%d' % p1, pin(b, d1)).split('\n')[0], '127.0.0.1:%d' % p1)
         # 第二个 Team：只写根公钥后面那一段也行；没写端口，从 18445 起找一个空着的
@@ -721,6 +736,7 @@ class TeamDeployTest(Base):
         r = b.install(self.script, '--team-root', root2.split()[1], '--host', '127.0.0.1')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(b.envfile(d2)['CCA_HUB_PORT'], str(18445 + k), '前面 %d 个端口有程序占着' % k)
+        self.assertEqual(b.envfile(d2)['CCA_HUB_RELAY'], str(18446 + k), '各用各的数据端口')
         self.assertTrue(b.running(svc1) and b.running(svc2), '两个都在运行')
         self.assertEqual(c.ok('team-attach', tid2, 'https://127.0.0.1:%d' % (18445 + k), pin(b, d2)).split('\n')[0], '127.0.0.1:%d' % (18445 + k))
         self.assertEqual(self.code(c, 'team-attach', tid2, 'https://127.0.0.1:%d' % p1, pin(b, d1)), 'denied', '各是各的：甲组的服务器不认乙组的根密钥')
@@ -731,6 +747,22 @@ class TeamDeployTest(Base):
         self.assertIn('更新了服务端程序', r.stdout)
         self.assertEqual((pin(b, d1), b.envfile(d1)['CCA_HUB_PORT'], b.running(svc1)), (before, str(p1), True))
         self.assertEqual(a.ok('team-sync').split('\t')[2], 'ok', '管理员照旧连得上')
+        self.assertEqual((b.envfile(d1)['CCA_HUB_RELAY'], self.health(p1).get('relay')), (str(p1 + 1), {'port': p1 + 1}), '中转照上次选的')
+        # 不开中转、换一个数据端口：记在 .env 里；写错的不动
+        r = b.install(self.script, '--dir', '/opt/' + svc1, '--no-relay')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        unit = (b.root / 'etc/systemd/system' / (svc1 + '.service')).read_text()
+        self.assertEqual((b.envfile(d1)['CCA_HUB_RELAY'], '--relay' in unit, 'relay' in self.health(p1)), ('off', False, False))
+        r = b.install(self.script, '--dir', '/opt/' + svc1)
+        self.assertEqual((r.returncode, b.envfile(d1)['CCA_HUB_RELAY']), (0, 'off'), '关了的再运行还是关着')
+        for bad in (str(p1), '80', 'x'):
+            r = b.install(self.script, '--dir', '/opt/' + svc1, '--relay-port', bad)
+            self.assertNotEqual(r.returncode, 0, bad)
+        self.assertEqual(b.envfile(d1)['CCA_HUB_RELAY'], 'off')
+        rp = free_port()
+        r = b.install(self.script, '--dir', '/opt/' + svc1, '--relay-port', str(rp))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((b.envfile(d1)['CCA_HUB_RELAY'], self.health(p1).get('relay')), (str(rp), {'port': rp}))
         # 装着另一个 Team 的目录不碰；Team 的没有 --reset
         r = b.install(self.script, '--team-root', root2, '--dir', '/opt/' + svc1)
         self.assertNotEqual(r.returncode, 0)
@@ -802,7 +834,7 @@ class TeamDeployTest(Base):
         self.assertEqual((a.run('team-deploy', tid, 'root@box', '--check', **env).returncode, d.exists()), (0, False), '--check 只看登录得上不')
         r = a.run('team-deploy', tid, 'root@box', '--port', str(port), **env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(kv(r.stdout), {'mode': 'docker', 'state': 'new', 'port': str(port), 'dir': '/opt/' + svc, 'lan': '1',
+        self.assertEqual(kv(r.stdout), {'mode': 'docker', 'state': 'new', 'port': str(port), 'relay': str(port + 1), 'dir': '/opt/' + svc, 'lan': '1',
                                         'host': '127.0.0.1:%d' % port, 'device': 'studio', 'members': '1', 'stored': '1', 'note': '',
                                         'svc': svc})
         self.assertIn('Team 的同步服务器在运行', r.stderr, '服务器那边的进度经 ssh 的 stderr 直接打出来')

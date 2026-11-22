@@ -156,7 +156,12 @@ elif a[:2] == ['compose', 'up']:
     cmd = json.loads(re.search(r'^    command: (\[.*\])$', y, re.M).group(1))
     vols = dict((c, os.path.abspath(h)) for h, c in re.findall(r'^      - (\./\w+):(/\w+):', y, re.M))
     argv = [sys.executable] + [next((h + x[len(c):] for c, h in vols.items() if x.startswith(c + '/')), x) for x in cmd[1:]]
-    argv = [x.replace('0.0.0.0:18445', '127.0.0.1:' + env['CCA_HUB_PORT']) for x in argv]
+    # compose 做的两件事：${名字:?} 换成 .env 里的值；容器里的端口经 ports 那几行对到外面的（HTTPS 是 18445，中转的数据端口是 18446）
+    argv = [re.sub(r'\$\{(\w+):\?\}', lambda m: env[m.group(1)], x) for x in argv]
+    argv = [x.replace('0.0.0.0:18445', '127.0.0.1:' + env['CCA_HUB_PORT']).replace('0.0.0.0:18446', '127.0.0.1:' + env.get('CCA_HUB_RELAY', '0'))
+            for x in argv]
+    assert ('--relay-listen' in argv) == (env.get('CCA_HUB_RELAY', 'off') != 'off') == bool(re.search(r'^      - "\$\{CCA_HUB_RELAY:\?\}:18446"$', y, re.M)), \
+        '开着中转：命令里有那两个参数、ports 里有数据端口；没开：都没有'
     start(argv, dict(os.environ, **{secret.group(1): env[secret.group(1)]}), svc)
 elif a[:2] == ['compose', 'down']:
     y = open('compose.yaml').read() if os.path.exists('compose.yaml') else ''
