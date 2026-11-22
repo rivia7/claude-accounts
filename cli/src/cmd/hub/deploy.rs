@@ -203,6 +203,11 @@ fn sq(v: &str) -> String {
     format!("'{v}'")
 }
 
+/// 单引号包起来，里面的单引号写成 '\''：Team 的名字什么字都可能有（只是没有控制字符）
+fn shq(v: &str) -> String {
+    format!("'{}'", v.replace('\'', r"'\''"))
+}
+
 /// ssh 的那几个选项（-p、-i）。没有终端（--batch）：BatchMode，不问密码；--askpass：只用密码，经 SSH_ASKPASS 问一次（bash 的 askpass_run
 /// 只给一次，问第二次读不到东西）。App 里（先 --check，再 --askpass）没人能答要不要认这台主机：第一次见的认下（accept-new，和在终端里
 /// 答 yes 一样；要 OpenSSH 7.6），和记下的不一样时照旧不连（ssh_check 说是 ssh_hostkey），ssh 自己的提醒（记下了新主机）不打出来。
@@ -276,7 +281,8 @@ struct Report {
     host: String,
     /// Team 的服务器：远程会话的中转的数据端口（没开是 0；旧的安装脚本不说这一项）
     relay: i64,
-    /// 手机的网页端的地址（https://地址:端口/；没开是空的）、证书拿到了没有（ok | wait）、没开的原因（port80 | lan | host | web_port）
+    /// 手机的网页端的地址（https://地址:端口/；没开是空的）、证书拿到了没有（ok | wait）、没开的原因（port80 | acme_old | lan | host |
+    /// web_port；acme_old：80 端口被另一个 Team 用以前的安装脚本装的、它自己的证书助手占着）
     web: String,
     web_cert: String,
     web_off: String,
@@ -356,12 +362,19 @@ pub struct TeamInstalled {
 
 /// Team 的同步服务器的一键部署（cca team deploy：cmd/team/admin.rs 的 cmd_team_deploy 调）。args 是 Opts 那一套参数；root 是 Team 的
 /// 根公钥（ssh-ed25519 AAAA…），svc 是服务名（cca-team-<编号的前 8 位>：一台服务器上每个 Team
-/// 一个服务，目录默认 /opt/<服务名>）；old 是这个 Team 现在接着的地址和证书公钥的指纹。--check 只看登录得上不（返回 None）。
+/// 一个服务，目录默认 /opt/<服务名>），name 是 Team 的名字（--name：网页端的标题、手机主屏幕上的名字带上它）；old 是这个 Team
+/// 现在接着的地址和证书公钥的指纹。--check 只看登录得上不（返回 None）。
 /// 装好了返回各台设备该连的地址：--host；没写时，装好的那台用的证书就是现在接着的那张（还是那台服务器：只是更新）就照原来的地址，
 /// 不然照安装脚本定下的（report 的 host）。安装脚本在装之前定地址（手机的网页端的证书要它）：--host；没写时照服务器上记着的（.env 的
 /// CCA_HUB_HOST：只是更新，不拿 ssh 的主机名盖掉——ssh 走的可能是内网地址、别名），没记着（第一次装、搬到别的服务器）才用这里放进的
 /// ssh -G 的 hostname（CCA_HUB_HOST_HINT），再是它看得到的公网 IP
-pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &[String])>) -> R<Option<TeamInstalled>> {
+pub fn team_install(
+    args: &[String],
+    root: &str,
+    svc: &str,
+    name: &str,
+    old: Option<(&str, &[String])>,
+) -> R<Option<TeamInstalled>> {
     let o = opts(args, &format!("/opt/{svc}"))?;
     if o.check {
         ssh_check(&o)?;
@@ -379,6 +392,9 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
         }
     }
     pre.push_str(&format!("set -- --dir {}", sq(&o.dir)));
+    if !name.is_empty() && !name.contains(['\n', '\r']) {
+        pre.push_str(&format!(" --name {}", shq(name)));
+    }
     if let Some(p) = o.port {
         pre.push_str(&format!(" --port {p}"));
     }
@@ -536,6 +552,20 @@ mod tests {
                 s.split(&head).nth(1).and_then(|r| r.split(&format!("\n{WEB_EOF}\n")).next()).unwrap_or_else(|| panic!("{name}"));
             assert!(body.lines().all(|l| l.len() <= 64), "{name}");
             assert_eq!(crate::py::base64::b64decode(&body.replace('\n', ""), true).ok().as_deref(), Some(raw), "{name}");
+        }
+    }
+
+    #[test]
+    fn team_names_survive_the_shell() {
+        // 放进 set -- … --name 的 Team 的名字：sh 读回来一个字不差（单引号、$、反引号、空格都不当真）
+        for name in ["甲组", "it's", "a'b'c", "$(touch x) `y` ${z}", " 两头空格 ", "\\'"] {
+            let out = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("set -- --name {}; printf %s \"$2\"", shq(name)))
+                .current_dir(std::env::temp_dir())
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), name);
         }
     }
 

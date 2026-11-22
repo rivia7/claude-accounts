@@ -975,6 +975,31 @@ class FilesTest(unittest.TestCase):
             png = (WEB / ('icon-%d.png' % n)).read_bytes()
             self.assertEqual((png[:8], struct.unpack('>II', png[16:24])), (b'\x89PNG\r\n\x1a\n', (n, n)))
 
+    def test_the_team_name(self):
+        """--web-name-file（安装脚本写的 app/name）：标题、手机主屏幕上的名字带上 Team 的名字（转义过）；别的文件不动；
+        没给、文件不在、名字不对（空的、太长、带控制字符）时照旧叫 cca"""
+        plain = srvmod.Web('https://relay.example.com/', str(WEB), None)
+        with tempfile.TemporaryDirectory() as t:
+            f = Path(t) / 'name'
+            f.write_text('甲组 <b>&"x"\n第二行不算\n')
+            team = srvmod.Web('https://relay.example.com/', str(WEB), None, srvmod.web_name(str(f)))
+            for bad in ('', ' \n', 'x' * 65, 'a\x07b'):
+                f.write_text(bad)
+                self.assertIsNone(srvmod.web_name(str(f)), repr(bad))
+            self.assertIsNone(srvmod.web_name(str(Path(t) / 'nope')))
+            self.assertIsNone(srvmod.web_name(None))
+        page = team.files['index.html'][1].decode()
+        self.assertIn('<title>cca 远程会话（甲组 &lt;b&gt;&amp;"x"）</title>', page)
+        self.assertIn('<meta name="apple-mobile-web-app-title" content="cca 甲组 &lt;b&gt;&amp;&quot;x&quot;">', page)
+        self.assertEqual(page.replace('（甲组 &lt;b&gt;&amp;"x"）', '').replace('cca 甲组 &lt;b&gt;&amp;&quot;x&quot;', 'cca'),
+                         plain.files['index.html'][1].decode(), '别处一个字不差')
+        m, m0 = json.loads(team.files['manifest.webmanifest'][1]), json.loads(plain.files['manifest.webmanifest'][1])
+        self.assertEqual((m['name'], m['short_name']), ('cca 远程会话（甲组 <b>&"x"）', 'cca 甲组 <b>&"x"'))
+        self.assertEqual({k: v for k, v in m.items() if k not in ('name', 'short_name')}, {k: v for k, v in m0.items() if k not in ('name', 'short_name')})
+        self.assertNotEqual(team.files['index.html'][3], plain.files['index.html'][3], 'ETag 跟着内容变')
+        for name in set(plain.files) - {'index.html', 'manifest.webmanifest'}:
+            self.assertEqual(team.files[name][1], plain.files[name][1], name)
+
 
 CHROME = os.environ.get('CCA_CHROME') or '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 

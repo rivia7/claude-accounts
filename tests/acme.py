@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """证书助手（server/cca-acme.py：给网页端申请、续上浏览器信得过的证书）对着假的证书机构（tests/acme_fake.py：照 ACME 的规范逐项核对
 请求，http-01 是真的来取文件）。看：给 IP 地址要的是短期的那一种、nonce 不对时自己再发、证书和私钥放对地方而且权限对、没到时候不重复要、
-到时候续上而私钥不换、各种没成的情况说得清楚而且不留下半截的东西。不联网（都在 127.0.0.1 上）。"""
+到时候续上而私钥不换、各种没成的情况说得清楚而且不留下半截的东西；几个 Team 共用的那种（--teams、--store）：同一个地址只要一张、
+登记的地址不对的跳过、各个 Team 的那一份权限对、手里已经有的（以前它自己的证书助手要的）接着用、运行着时登记了新的马上去要。
+不联网（都在 127.0.0.1 上）。"""
 import http.client
 import json
 import os
@@ -182,6 +184,73 @@ class AcmeTest(unittest.TestCase):
         held = root / '.well-known' / 'acme-challenge'
         self.assertEqual((held.is_dir(), list(held.iterdir())), (True, []), '验证的文件验完就删了')
         self.assertEqual((root / 'index.html').read_text(), '别的网站')
+
+    def teams(self, directory, *args, once=True):
+        """几个 Team 共用的证书助手（--teams）：登记在 teams/，证书存在 store/，放进 out/<服务名>/"""
+        argv = [sys.executable, '-I', str(ACME), '--teams', str(self.d / 'teams'), '--store', str(self.d / 'store'), '--out', str(self.d / 'out'),
+                '--account', str(self.d / 'account'), '--listen', '127.0.0.1:%d' % self.http_port, '--directory', directory,
+                '--ca', str(self.cad / 'ca.pem'), '--any-ip', *args] + (['--once'] if once else [])
+        if not once:
+            p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            self.addCleanup(lambda: (p.kill(), p.wait(), p.stderr.close()))
+            return p
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=180)
+
+    def register(self, team, address, outdir=True):
+        (self.d / 'teams').mkdir(exist_ok=True)
+        (self.d / 'teams' / team).write_text(address + '\n')
+        if outdir:
+            (self.d / 'out' / team).mkdir(parents=True, exist_ok=True)
+
+    def test_several_teams(self):
+        """几个 Team 共用一个：每个地址只要一张（两个 Team 用同一个地址也是一张），放进各自的目录（私钥 640：组是那个 Team 的）；
+        目录还没建的那个 Team 说一声；建了以后不再要、只放进去；看不懂的登记跳过；手里没有、Team 的目录里有用得了的（以前它自己的证书助手
+        要的）就接着用它，不再要一张"""
+        directory = self.authority()
+        a, b, c = 'cca-team-aaaaaaaa', 'cca-team-bbbbbbbb', 'cca-team-cccccccc'
+        self.register(a, '127.0.0.1')
+        self.register(b, '127.0.0.1')
+        self.register(c, 'Relay.Example.com', outdir=False)
+        self.register('cca-team-dddddddd', 'not a name')
+        r = self.teams(directory)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn('cca-team-dddddddd 登记的地址用不了', r.stderr)
+        self.assertIn('%s 的目录 %s 不在' % (c, self.d / 'out' / c), r.stderr)
+        orders = [e['ids'] for e in self.log() if 'order' in e]
+        self.assertEqual(sorted(i[0]['value'] for i in orders), ['127.0.0.1', 'relay.example.com'], '一个地址一张，两个 Team 共用 127.0.0.1 的那张')
+        for t in (a, b):
+            for f in ('fullchain.pem', 'privkey.pem'):
+                self.assertEqual((self.d / 'out' / t / f).read_bytes(), (self.d / 'store' / 'ip-127.0.0.1' / f).read_bytes(), t + f)
+            self.assertEqual([self.mode('out', t, 'privkey.pem'), self.mode('out', t, 'fullchain.pem')], [0o640, 0o644])
+            self.assertEqual(sorted(p.name for p in (self.d / 'out' / t).iterdir()), ['fullchain.pem', 'privkey.pem'], '没有留下半截的文件')
+        self.assertEqual([self.mode('store'), self.mode('store', 'ip-127.0.0.1'), self.mode('store', 'ip-127.0.0.1', 'privkey.pem')], [0o700, 0o700, 0o600])
+        self.assertIn('DNS:relay.example.com', run('x509', '-in', self.d / 'store' / 'dns-relay.example.com' / 'fullchain.pem', '-noout', '-ext',
+                                                   'subjectAltName').decode())
+        # c 的目录建好了：不再要，只放进去
+        (self.d / 'out' / c).mkdir()
+        n = len(self.log())
+        r = self.teams(directory)
+        self.assertEqual((r.returncode, len(self.log())), (0, n), r.stderr)
+        self.assertEqual((self.d / 'out' / c / 'fullchain.pem').read_bytes(), (self.d / 'store' / 'dns-relay.example.com' / 'fullchain.pem').read_bytes())
+        # 存的那一份没了（新装的证书助手），a 的目录里有用得了的：接着用它，不再要一张
+        (self.d / 'store').rename(self.d / 'store.old')
+        (self.d / 'teams' / c).unlink()
+        r = self.teams(directory)
+        self.assertEqual((r.returncode, len(self.log())), (0, n), r.stderr)
+        self.assertIn('127.0.0.1 接着用 %s 原来的证书' % a, r.stderr)
+        self.assertEqual((self.d / 'store' / 'ip-127.0.0.1' / 'privkey.pem').read_bytes(), (self.d / 'out' / a / 'privkey.pem').read_bytes())
+        self.assertFalse((self.d / 'store' / 'dns-relay.example.com').exists(), '没人用的地址不要')
+
+    def test_several_teams_running(self):
+        """一直运行：登记的变了（安装脚本加了一个 Team）过几秒就照新的，不用重启"""
+        directory = self.authority()
+        self.register('cca-team-aaaaaaaa', '127.0.0.1')
+        p = self.teams(directory, once=False)
+        wait_for('第一个 Team 的证书', lambda: (self.d / 'out' / 'cca-team-aaaaaaaa' / 'fullchain.pem').exists())
+        self.register('cca-team-bbbbbbbb', '127.0.0.1')
+        wait_for('第二个 Team 的证书', lambda: (self.d / 'out' / 'cca-team-bbbbbbbb' / 'fullchain.pem').exists(), 30)
+        self.assertIsNone(p.poll())
+        self.assertEqual(len([e for e in self.log() if 'issued' in e]), 1, '同一个地址：还是那一张')
 
     def test_the_responder_and_running_forever(self):
         """不带 --once：拿到证书以后接着运行（等着续）；应答的端口上别的路径都是 404"""

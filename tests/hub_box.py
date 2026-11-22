@@ -2,7 +2,8 @@
 """一台假的 Linux 服务器，给 Team 的同步服务器的一键部署用（tests/hub_deploy.py；regress 11b3d 的 hubbox：python3 hub_box.py 目录）。
 目录下的 root/ 当作 /（安装脚本的 CCA_HUB_ROOT），bin/ 里是假的系统命令：id、useradd、userdel、chown、ip、journalctl、sudo，
 Python 写的 systemctl、docker（照 unit 的 ExecStart、compose.yaml 里各个服务的 command、端口和挂载起真的 server/cca-presence.py，
-监听 127.0.0.1；证书助手 cca-acme.py 不真的去找 Let's Encrypt：换成 acme_stub.py，照 --id 往 --out 里写一张自签的证书），
+监听 127.0.0.1；证书助手 cca-acme.py 不真的去找 Let's Encrypt：换成 acme_stub.py——几个 Team 共用的那一个照 --teams 里登记的地址
+一个地址写一张自签的证书、放进各个 Team 的目录，以前每个 Team 自己的那种照 --id 往 --out 里写一张；写过的记在 acme.issued），
 sh 是 /bin/dash（没有时 /bin/sh）。没有的 docker、systemctl 也放一个会失败的：不然会找到这台机器上真的。
 enter 是假 ssh 的服务器那一头：在这台假服务器上运行一条命令（stdin 照样给它；目录下有 ssh_denied 时登录不了，它的内容是 once 时只拒这一次）。
 目录下这些文件在时：uid（id -u 说的；root 是 0）、sudo_ok（免密码的 sudo）、ip（默认路由出去的源地址）、listening（ss 说这些端口有人监听）、
@@ -19,13 +20,15 @@ SH = '/bin/dash' if os.path.exists('/bin/dash') else '/bin/sh'   # 假服务器�
 
 ID = r'''case "${1:-}" in
 	-u) if [ -n "${HUB_SUDO:-}" ]; then echo 0; else cat "$HUB_BOX/uid" 2>/dev/null || echo 0; fi ;;
+	-g) cat "$HUB_BOX/users/$2" 2>/dev/null ;;
 	'') echo 'uid=0(root) gid=0(root) groups=0(root)' ;;
 	*) [ -f "$HUB_BOX/users/$1" ] ;;
 esac
 '''
+# useradd：系统用户的文件里记着它的组（id -g 说的；第几个建的，4201 起）
 USERADD = r'''printf '%s\n' "$*" >> "$HUB_BOX/useradd.log"
 for a in "$@"; do u=$a; done
-: > "$HUB_BOX/users/$u"
+echo $((4201 + $(ls "$HUB_BOX/users" | wc -l))) > "$HUB_BOX/users/$u"
 '''
 USERDEL = 'rm -f "$HUB_BOX/users/$1"\n'
 # sudo：sudo_ok 在时像免密码的 sudo（之后 id -u 是 0），不在时要密码（-n：不问，失败）。也免得测试里调到真的 sudo
@@ -100,25 +103,55 @@ def start(argv, env, svc='cca-hub'):
 def env_file(path):
     return dict(l.split('=', 1) for l in open(path).read().splitlines() if '=' in l and not l.startswith('#'))
 '''
-# 假的证书助手：参数照真的（--id、--out、--account、--listen），记进 acme.argv；不听端口、不联网，照 --id 写一张自签的证书（已经有了不再写），
-# 然后一直运行（像真的那样等着续）
+# 假的证书助手：参数照真的，记进 acme.argv；不听端口、不联网，一直运行（像真的那样等着续）。几个 Team 共用的（--teams、--store、--out）：
+# 照登记的地址一个地址一张自签的证书，存在 --store/<地址>/（手里没有、Team 的目录里有就接着用它：以前它自己的证书助手要的），放进
+# --out/<服务名>/（目录不在不放：安装脚本建）；登记的变了马上照新的。以前每个 Team 自己的（--id、--out）：照 --id 写一张（有了不再写）。
+# 写过的地址记在 acme.issued；acme_fail 在时什么都不写
 ACME_STUB = r'''
-import os, subprocess, sys, time
+import os, shutil, subprocess, sys, time
 box = os.environ['HUB_BOX']
 a = sys.argv[1:]
 open(os.path.join(box, 'acme.argv'), 'a').write(' '.join(a) + '\n')
 opt = lambda k: a[a.index(k) + 1]
-out = opt('--out')
 assert os.path.isdir(opt('--account')), a
-key, crt = os.path.join(out, 'privkey.pem'), os.path.join(out, 'fullchain.pem')
-if not os.path.exists(os.path.join(box, 'acme_fail')) and not os.path.exists(crt):
+same = lambda x, y: os.path.exists(x) and os.path.exists(y) and open(x, 'rb').read() == open(y, 'rb').read()
+
+def issue(d, cn):
+    if os.path.exists(os.path.join(box, 'acme_fail')):
+        return
+    key, crt = os.path.join(d, 'privkey.pem'), os.path.join(d, 'fullchain.pem')
     subprocess.run(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', key + '.tmp'], check=True, capture_output=True)
-    subprocess.run(['openssl', 'req', '-new', '-x509', '-key', key + '.tmp', '-out', crt + '.tmp', '-days', '7', '-subj', '/CN=' + opt('--id')],
+    subprocess.run(['openssl', 'req', '-new', '-x509', '-key', key + '.tmp', '-out', crt + '.tmp', '-days', '7', '-subj', '/CN=' + cn],
                    check=True, capture_output=True, stdin=subprocess.DEVNULL)
     os.replace(key + '.tmp', key)
     os.replace(crt + '.tmp', crt)
+    open(os.path.join(box, 'acme.issued'), 'a').write(cn + '\n')
+
+if '--id' in a:
+    if not os.path.exists(os.path.join(opt('--out'), 'fullchain.pem')):
+        issue(opt('--out'), opt('--id'))
+    while True:
+        time.sleep(3600)
+teams, store, out = opt('--teams'), opt('--store'), opt('--out')
 while True:
-    time.sleep(3600)
+    for t in sorted(os.listdir(teams)):
+        if '.' in t:
+            continue   # 安装脚本正写到一半的
+        ident = open(os.path.join(teams, t)).read().strip()
+        s, d = os.path.join(store, ident.replace(':', '_')), os.path.join(out, t)
+        os.makedirs(s, exist_ok=True)
+        if not os.path.exists(os.path.join(s, 'fullchain.pem')):
+            if os.path.exists(os.path.join(d, 'fullchain.pem')):
+                for f in ('privkey.pem', 'fullchain.pem'):
+                    shutil.copy(os.path.join(d, f), os.path.join(s, f))
+            else:
+                issue(s, ident)
+        if os.path.isdir(d) and os.path.exists(os.path.join(s, 'fullchain.pem')):
+            for f in ('privkey.pem', 'fullchain.pem'):
+                if not same(os.path.join(s, f), os.path.join(d, f)):
+                    shutil.copy(os.path.join(s, f), os.path.join(d, f + '.tmp'))
+                    os.replace(os.path.join(d, f + '.tmp'), os.path.join(d, f))
+    time.sleep(0.2)
 '''
 SYSTEMCTL = SERVE + r'''
 root = os.environ['CCA_HUB_ROOT']
@@ -206,7 +239,9 @@ elif a[:2] == ['compose', 'up']:
         # 交给容器的环境变量（Team 的根公钥）：compose.yaml 里写着「名字: ${名字:?}」，值在 .env 里
         given = {k: env[v] for k, v in re.findall(r'^      (\w+): \$\{(\w+):\?\}$', block, re.M)}
         cmd = json.loads(re.search(r'^    command: (\[.*\])$', block, re.M).group(1))
-        vols = dict((c, os.path.abspath(h)) for h, c in re.findall(r'^      - (\./\w+):(/\w+)(?::|$)', block, re.M))
+        # 挂载：./目录 是 compose.yaml 旁边的，/绝对路径 是这台假服务器上的（root/ 下面）
+        vols = dict((c, os.path.abspath(h) if h.startswith('./') else os.environ['CCA_HUB_ROOT'] + h)
+                    for h, c in re.findall(r'^      - (\./\w+|/[\w./-]+):(/\w+)(?::|$)', block, re.M))
         argv = [sys.executable] + [next((h + x[len(c):] for c, h in vols.items() if x == c or x.startswith(c + '/')), x) for x in cmd[1:]]
         # compose 做的两件事：${名字:?} 换成 .env 里的值；容器里的端口经 ports 那几行对到外面的
         argv = [interp(x, env) for x in argv]
@@ -215,8 +250,8 @@ elif a[:2] == ['compose', 'up']:
         if 'cca-presence.py' in ' '.join(argv):
             assert ('--relay-listen' in argv) == (env.get('CCA_HUB_RELAY', 'off') != 'off') == ('18446' in ports), \
                 '开着中转：命令里有那两个参数、ports 里有数据端口；没开：都没有'
-            assert ('--web-listen' in argv) == ('CCA_HUB_WEB_URL' in env) == ('18447' in ports) == ('./webcert' in block), \
-                '开着网页端：命令里有那几个参数、ports 里有它的端口、挂着网页端的证书；没开：都没有'
+            assert ('--web-listen' in argv) == ('CCA_HUB_WEB_URL' in env) == ('18447' in ports) == (':/webcert:ro,z' in block), \
+                '开着网页端：命令里有那几个参数、ports 里有它的端口、只读挂着共用的证书助手放给它的证书；没开：都没有'
         else:
             assert ports == {'18080': '80'} and 'cca-acme.py' in ' '.join(argv), '证书助手：80 端口对到容器里的 18080'
         start(argv, dict(os.environ, **given), svc)

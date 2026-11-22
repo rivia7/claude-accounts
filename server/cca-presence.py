@@ -43,6 +43,7 @@ import collections
 import gzip
 import hashlib
 import hmac
+import html
 import http.server
 import ipaddress
 import json
@@ -57,6 +58,7 @@ import ssl
 import sys
 import threading
 import time
+import unicodedata
 
 API = 1
 NS_REPORT = 'cca-presence'
@@ -1591,9 +1593,42 @@ def web_origin(url):
     return '%s://%s%s' % (scheme, host.lower(), ':' + str(int(port)) if port else '')
 
 
+def web_name(path):
+    """--web-name-file 里的 Team 的名字（安装脚本写的 app/name）：第一行，1～64 个字符、没有控制字符（cca 里 Team 的名字也是这样）。
+    没给、读不了、不对是 None（页面照旧叫 cca）"""
+    if not path:
+        return None
+    try:
+        with open(path, encoding='utf-8') as f:
+            name = f.readline(1024).strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not name or len(name) > 64 or any(unicodedata.category(c) == 'Cc' for c in name):
+        return None
+    return name
+
+
+def web_named(fname, raw, name):
+    """网页的标题、手机主屏幕上的名字带上 Team 的名字：index.html 的 <title> 和 apple-mobile-web-app-title（iPhone 加到主屏幕时用它），
+    manifest 的 name、short_name（安卓用它）。几个 Team 的页面加到同一台手机的主屏幕上分得清"""
+    title, short = 'cca 远程会话（%s）' % name, 'cca %s' % name
+    if fname == 'index.html':
+        text = raw.decode('utf-8')
+        text = re.sub(r'<title>[^<]*</title>', lambda m: '<title>%s</title>' % html.escape(title, quote=False), text, count=1)
+        text = re.sub(r'(<meta name="apple-mobile-web-app-title" content=")[^"]*(")', lambda m: m.group(1) + html.escape(short) + m.group(2),
+                      text, count=1)
+        return text.encode('utf-8')
+    if fname == 'manifest.webmanifest':
+        doc = json.loads(raw.decode('utf-8'))
+        doc['name'], doc['short_name'] = title, short
+        return (json.dumps(doc, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    return raw
+
+
 class Web:
-    """网页端（手机浏览器里的那一页，README「网页端」）：页面的文件（启动时读进内存）、页面的地址、WebSocket 交给哪个中转"""
-    def __init__(self, url, root, relay):
+    """网页端（手机浏览器里的那一页，README「网页端」）：页面的文件（启动时读进内存；team 是 Team 的名字：标题带上它）、页面的地址、
+    WebSocket 交给哪个中转"""
+    def __init__(self, url, root, relay, team=None):
         self.url = url.rstrip('/') + '/'
         self.origin = self.url[:-1]
         self.relay = relay
@@ -1615,6 +1650,8 @@ class Web:
                 raw = f.read(WEB_FILE + 1)
             if len(raw) > WEB_FILE:
                 raise ValueError('%s 太大' % path)
+            if team:
+                raw = web_named(name, raw, team)
             gz = gzip.compress(raw, 9) if not name.endswith('.png') else None
             self.files[name] = (ctype, raw, gz if gz and len(gz) < len(raw) else None, '"%s"' % hashlib.sha256(raw).hexdigest()[:32])
         if 'index.html' not in self.files:
@@ -2150,6 +2187,8 @@ def main():
     ap.add_argument('--web-cert', default=os.environ.get('CCA_WEB_CERT'), help='浏览器信得过的证书（连同中间证书；证书机构签的）。文件换了会自己重新读')
     ap.add_argument('--web-key', default=os.environ.get('CCA_WEB_KEY'), help='--web-cert 的私钥')
     ap.add_argument('--web-root', help='网页端的文件在哪（默认是这个程序旁边的 web/）')
+    ap.add_argument('--web-name-file', help='Team 的名字在这个文件的第一行（安装脚本写的 app/name）：网页的标题、手机主屏幕上的名字带上它。'
+                    '读不了、不对时照旧叫 cca')
     ap.add_argument('--web-port-file', help='网页端实际监听的端口写到这里（测试用）')
     a = ap.parse_args()
     a.listen = a.listen or ('0.0.0.0:8080' if hosted else '0.0.0.0:18443')
@@ -2214,7 +2253,8 @@ def main():
         relay.start()
         if a.web_url:
             try:
-                web = Web(a.web_url, a.web_root or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web'), relay)
+                web = Web(a.web_url, a.web_root or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web'), relay,
+                          web_name(a.web_name_file))
             except (OSError, ValueError) as e:
                 ap.error('网页端的文件读不了：%s' % e)
         if a.relay_port_file:

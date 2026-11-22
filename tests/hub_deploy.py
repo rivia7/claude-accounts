@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import shlex
+import shutil
 import signal
 import socket
 import ssl
@@ -29,6 +30,7 @@ TEMPLATE = ROOT / 'server' / 'hub-install.sh'
 WEB = ROOT / 'server' / 'web'
 IMAGES = ['public.ecr.aws/docker/library/python:3.13-slim', 'mirror.ccs.tencentyun.com/library/python:3.13-slim']
 UNITS = Path('etc') / 'systemd' / 'system'
+ASVC = 'cca-team-acme'   # 这台服务器上几个 Team 共用的证书助手（/opt/cca-team-acme）
 # 设备上的 ssh：-G 说这台假服务器在 127.0.0.1（$HUB_SSH_HOST 换一个：ssh 走的是内网地址）；别的把最后一个参数（在服务器上运行的命令）
 # 交给假服务器的 enter（stdin 是安装脚本）
 SSH = r'''printf '%s\n' "$*" >> "$HOME/ssh.argv"
@@ -92,6 +94,18 @@ def two_ports():
     while web in (port, port + 1):
         web = free_port()
     return port, web
+
+
+def apart(n):
+    """n 个 Team 各自的 (HTTPS 的端口, 网页端的端口)：都空着，互不相同，也不是谁的中转自动选的那一个（HTTPS 的下一个）"""
+    out, used = [], set()
+    while len(out) < n:
+        port, web = two_ports()
+        mine = {port, port + 1, web}
+        if not mine & used and len(mine) == 3:
+            out.append((port, web))
+            used |= mine
+    return out
 
 
 def port_free(port):
@@ -215,11 +229,11 @@ class InstallerTest(Base):
         self.assertTrue(e['CCA_HUB_WEB'].isdigit() and e['CCA_HUB_WEB'] not in (str(port), str(port + 1)), '网页端的端口照样选好、记着（下次再看）')
         self.assertFalse({'CCA_HUB_IMAGE', 'CCA_HUB_WEB_URL'} & set(e))
         modes = {p: oct((d / p).stat().st_mode & 0o777)
-                 for p in ('.', '.env', '.cca-hub', 'app', 'app/web', 'app/web/index.html', 'certs', 'certs/key.pem', 'certs/cert.pem',
-                           'data', 'webcert', 'acme')}
+                 for p in ('.', '.env', '.cca-hub', 'app', 'app/web', 'app/web/index.html', 'certs', 'certs/key.pem', 'certs/cert.pem', 'data')}
         self.assertEqual(modes, {'.': '0o755', '.env': '0o600', '.cca-hub': '0o644', 'app': '0o755', 'app/web': '0o755',
                                  'app/web/index.html': '0o644', 'certs': '0o700', 'certs/key.pem': '0o600', 'certs/cert.pem': '0o644',
-                                 'data': '0o700', 'webcert': '0o700', 'acme': '0o700'})
+                                 'data': '0o700'})
+        self.assertEqual(sorted(p.name for p in d.iterdir()), ['.cca-hub', '.env', 'app', 'certs', 'data'], '证书助手不在这里（共用的那一个）')
         self.assertFalse((d / '.env.prev').exists(), '装好了：不留原来的 .env')
         unit = (b.root / UNITS / (svc + '.service')).read_text()
         for want in ('User=%s\n' % svc, 'EnvironmentFile=/opt/%s/.env\n' % svc, 'NoNewPrivileges=yes', 'ProtectSystem=full', 'TasksMax=64\n',
@@ -228,12 +242,12 @@ class InstallerTest(Base):
             self.assertIn(want, unit)
         self.assertRegex(unit, r'ExecStart=/\S+python3\S* -I /opt/%s/app/cca-presence.py ' % svc)
         self.assertNotIn('--web', unit)
-        self.assertFalse((b.root / UNITS / (svc + '-acme.service')).exists(), '网页端没开：没有证书助手')
+        self.assertFalse((b.root / UNITS / (ASVC + '.service')).exists() or (b.root / 'opt' / ASVC).exists(), '网页端没开：没有证书助手')
         self.assertIn('-r -M -d /opt/%s' % svc, b.log('useradd.log'))
-        self.assertIn('-R %s %s/certs %s/data %s/webcert %s/acme' % (svc, d, d, d, d), b.log('chown.log'))
+        self.assertIn('-R %s %s/certs %s/data\n' % (svc, d, d), b.log('chown.log'))
         self.assertEqual(b.log('systemctl.log').split('\n')[:3], ['daemon-reload', 'enable ' + svc, 'restart ' + svc])
-        for f in ('cca-presence.py', 'cca-acme.py'):
-            self.assertEqual((d / 'app' / f).read_text(), (ROOT / 'server' / f).read_text(), f)
+        self.assertEqual((d / 'app' / 'cca-presence.py').read_text(), (ROOT / 'server' / 'cca-presence.py').read_text())
+        self.assertEqual(sorted(p.name for p in (d / 'app').iterdir()), ['cca-presence.py', 'web'], '没写 --name：没有 name')
         self.assertEqual(sorted(p.name for p in (d / 'app' / 'web').iterdir()), sorted(p.name for p in WEB.iterdir()))
         for f in WEB.iterdir():
             self.assertEqual((d / 'app' / 'web' / f.name).read_bytes(), f.read_bytes(), f.name)
@@ -256,48 +270,67 @@ class InstallerTest(Base):
         self.assertIn('disable --now ' + svc, b.log('systemctl.log'))
 
     def test_web(self):
-        """手机的网页端（systemd）：另开一个端口，证书助手（<服务名>-acme，只给绑 80 端口的权限）要来证书，服务端用它给出页面；再运行照旧；
-        --no-web 关掉（证书助手也停掉）、再运行还是关着；80 端口被别的程序占着时不开（写了 --web-port 就停下）；证书没要到时说放行 80"""
+        """手机的网页端（systemd）：另开一个端口；这台服务器上共用的证书助手（cca-team-acme：自己的系统用户，只给绑 80 端口的权限）照登记的地址
+        要来证书、放进这个 Team 的那一份（证书助手的用户、这个 Team 的组，setgid），服务端用它给出页面，标题带上 Team 的名字（--name）；
+        再运行照旧；--no-web 去掉登记、停掉证书助手（没有别的 Team 用它了；证书留着）、再运行还是关着；80 端口被别的程序占着时不开（写了
+        --web-port 就停下）；证书没要到时说放行 80；卸载最后一个用它的 Team 时连同证书助手一起删掉"""
         b = self.box(any_ip=True)
         a, tid, root, svc = self.team()
-        d = b.root / 'opt' / svc
+        d, ad = b.root / 'opt' / svc, b.root / 'opt' / ASVC
         port, web = two_ports()
         url = 'https://127.0.0.1:%d/' % web
-        r = self.install(b, '--team-root', root, '--host', '127.0.0.1', '--port', str(port), '--web-port', str(web))
+        r = self.install(b, '--team-root', root, '--host', '127.0.0.1', '--port', str(port), '--web-port', str(web), '--name', '甲组')
         self.assertIn("手机的网页端：%s（证书是 Let's Encrypt 签的" % url, r.stdout)
         self.assertIn('要放行 TCP %d、%d（远程会话的中转）、%d 和 80（手机的网页端；80 端口给证书机构验证）' % (port, port + 1, web), r.stdout)
         e = b.envfile(d)
         self.assertEqual((e['CCA_HUB_WEB'], e['CCA_HUB_WEB_URL']), (str(web), url))
+        self.assertEqual((d / 'app' / 'name').read_text(), '甲组\n')
         unit = (b.root / UNITS / (svc + '.service')).read_text()
-        self.assertIn(' --web-url %s --web-listen 0.0.0.0:%d --web-cert /opt/%s/webcert/fullchain.pem --web-key /opt/%s/webcert/privkey.pem\n'
-                      % (url, web, svc, svc), unit)
+        self.assertIn(' --web-url %s --web-listen 0.0.0.0:%d --web-cert /opt/%s/webcert/%s/fullchain.pem --web-key /opt/%s/webcert/%s/privkey.pem'
+                      ' --web-name-file /opt/%s/app/name\n' % (url, web, ASVC, svc, ASVC, svc, svc), unit)
         self.assertIn('TasksMax=512\n', unit, '网页端开着：每条 WebSocket 一个线程')
-        acme = (b.root / UNITS / (svc + '-acme.service')).read_text()
-        for want in ('User=%s\n' % svc, 'AmbientCapabilities=CAP_NET_BIND_SERVICE\n', 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n',
-                     'NoNewPrivileges=yes', '-I /opt/%s/app/cca-acme.py --id ${CCA_HUB_HOST} --out /opt/%s/webcert --account /opt/%s/acme '
-                     '--listen 0.0.0.0:80\n' % (svc, svc, svc)):
+        acme = (b.root / UNITS / (ASVC + '.service')).read_text()
+        for want in ('User=%s\n' % ASVC, 'AmbientCapabilities=CAP_NET_BIND_SERVICE\n', 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n',
+                     'NoNewPrivileges=yes', '-I /opt/%s/app/cca-acme.py --teams /opt/%s/teams --store /opt/%s/store --out /opt/%s/webcert '
+                     '--account /opt/%s/acme --listen 0.0.0.0:80\n' % ((ASVC,) * 5)):
             self.assertIn(want, acme)
-        self.assertTrue(b.running(svc + '-acme'))
-        self.assertIn('--id 127.0.0.1 --out %s/webcert --account %s/acme' % (d, d), b.log('acme.argv'))
+        self.assertFalse((b.root / UNITS / (svc + '-acme.service')).exists(), '不再是每个 Team 自己一个')
+        self.assertTrue(b.running(ASVC))
+        self.assertEqual((ad / 'teams' / svc).read_text(), '127.0.0.1\n', '登记了这个 Team 的地址')
+        self.assertEqual((ad / 'app' / 'cca-acme.py').read_text(), (ROOT / 'server' / 'cca-acme.py').read_text())
+        modes = {p: oct((ad / p).stat().st_mode & 0o7777) for p in ('.', '.env', 'app', 'teams', 'store', 'acme', 'webcert', 'webcert/' + svc)}
+        self.assertEqual(modes, {'.': '0o755', '.env': '0o600', 'app': '0o755', 'teams': '0o755', 'store': '0o700', 'acme': '0o700',
+                                 'webcert': '0o711', 'webcert/' + svc: '0o2750'})
+        self.assertEqual(b.envfile(ad), {'CCA_HUB_MODE': 'systemd', 'CCA_HUB_VERSION': '9.9.9'})
+        gid = (b.d / 'users' / svc).read_text().strip()
+        self.assertIn('-R %s:%s %s/webcert/%s\n' % (ASVC, gid, ad, svc), b.log('chown.log'), '这个 Team 的那一份：证书助手的用户、这个 Team 的组')
+        self.assertIn('-r -M -d /opt/%s' % ASVC, b.log('useradd.log'))
+        self.assertIn('--teams %s/teams --store %s/store --out %s/webcert --account %s/acme' % ((ad,) * 4), b.log('acme.argv'))
+        for f in ('fullchain.pem', 'privkey.pem'):
+            self.assertEqual((ad / 'webcert' / svc / f).read_bytes(), (ad / 'store' / '127.0.0.1' / f).read_bytes())
         st, body = https(web, '/')
-        self.assertEqual((st, body), (200, (WEB / 'index.html').read_bytes()), '网页端用证书助手要来的证书给出页面')
+        self.assertEqual(st, 200)
+        self.assertIn('<title>cca 远程会话（甲组）</title>', body.decode(), '网页端用证书助手要来的证书给出页面，标题带上 Team 的名字')
         self.assertEqual(health(port).get('web'), url)
-        # 再运行：照旧开着；80 端口上听着的是这个 Team 自己的证书助手，不算被占着
+        # 再运行：照旧开着；80 端口上听着的是共用的证书助手，不算被占着；没写 --name 照上次的
         (b.d / 'listening').write_text('80\n')
         b.fake('ss', '#!/bin/sh\n' + SS)
         r = self.install(b, '--dir', '/opt/' + svc)
         self.assertIn('手机的网页端：' + url, r.stdout)
         self.assertNotIn('安全组', r.stdout, '端口都没变：不再说要放行')
-        self.assertTrue(b.running(svc + '-acme'))
+        self.assertTrue(b.running(ASVC))
+        self.assertEqual((d / 'app' / 'name').read_text(), '甲组\n')
         # cca team deploy 没写 --host 时放进 ssh -G 的主机名当兜底：记着地址时照记着的（ssh 走的是内网地址也不拿它盖掉、不关网页端）
         r = self.install(b, '--dir', '/opt/' + svc, env={'CCA_HUB_HOST_HINT': '10.0.0.5'})
         self.assertIn('手机的网页端：' + url, r.stdout)
         self.assertEqual((b.envfile(d)['CCA_HUB_HOST'], b.envfile(d)['CCA_HUB_WEB_URL']), ('127.0.0.1', url))
-        # --no-web：证书助手停掉、unit 删掉，服务端不带网页端；再运行还是关着
+        # --no-web：去掉登记和这个 Team 的那一份；没有别的 Team 用证书助手了：停掉它、删掉 unit（证书、账户留着，再开时接着用）
         r = self.install(b, '--dir', '/opt/' + svc, '--no-web')
         e = b.envfile(d)
         self.assertEqual((e['CCA_HUB_WEB'], 'CCA_HUB_WEB_URL' in e), ('off', False))
-        self.assertFalse((b.root / UNITS / (svc + '-acme.service')).exists() or b.running(svc + '-acme'))
+        self.assertFalse((b.root / UNITS / (ASVC + '.service')).exists() or b.running(ASVC))
+        self.assertFalse((ad / 'teams' / svc).exists() or (ad / 'webcert' / svc).exists())
+        self.assertTrue((ad / 'store' / '127.0.0.1' / 'fullchain.pem').exists(), '证书留着')
         self.assertNotIn('--web', (b.root / UNITS / (svc + '.service')).read_text())
         self.assertNotIn('web', health(port))
         self.assertNotIn('手机的网页端', r.stdout, '自己关的：不说')
@@ -308,19 +341,101 @@ class InstallerTest(Base):
         self.assertEqual(r.returncode, 1)
         self.assertIn('80 端口被别的程序占着：证书助手要用它', r.stderr)
         self.assertEqual(b.envfile(d)['CCA_HUB_WEB'], 'off')
-        # 80 端口腾出来了，证书却没要到（安全组没放行 80）：照样开着，说怎么办
+        # 80 端口腾出来了，证书却没要到（安全组没放行 80；存着的那张也没了）：照样开着，说怎么办
         (b.d / 'listening').write_text('')
-        for f in ('fullchain.pem', 'privkey.pem'):
-            (d / 'webcert' / f).unlink()
+        shutil.rmtree(ad / 'store')
         b.flag('acme_fail')
         r = self.install(b, '--dir', '/opt/' + svc, '--web-port', str(web))
         self.assertIn('手机的网页端（%s）的证书还没拿到：证书机构要从公网连这台服务器的 80 端口' % url, r.stdout)
-        self.assertIn('journalctl -u %s-acme' % svc, r.stdout)
-        self.assertTrue(b.running(svc + '-acme'), '证书助手接着试')
-        # 卸载：两个服务、证书、账户的私钥都没了
+        self.assertIn('journalctl -u %s' % ASVC, r.stdout)
+        self.assertTrue(b.running(ASVC), '证书助手接着试')
+        # 卸载最后一个用证书助手的 Team：连同它（目录、unit、系统用户）一起删掉
         r = self.install(b, '--uninstall', '--dir', '/opt/' + svc)
-        self.assertFalse(d.exists() or (b.root / UNITS / (svc + '-acme.service')).exists() or b.running(svc + '-acme') or b.running(svc))
-        self.assertIn('disable --now %s-acme' % svc, b.log('systemctl.log'))
+        self.assertIn('共用的证书助手（/opt/%s，连同证书、账户）也删掉了' % ASVC, r.stdout)
+        self.assertFalse(d.exists() or ad.exists() or (b.root / UNITS / (ASVC + '.service')).exists() or b.running(ASVC) or b.running(svc))
+        self.assertIn('disable --now %s' % ASVC, b.log('systemctl.log'))
+        self.assertEqual(list((b.d / 'users').iterdir()), [])
+
+    def test_web_two_teams(self):
+        """一台服务器上两个 Team 都开网页端：第二个在共用的证书助手那里登记（80 端口上是它，不算被占着），同一个地址只要一张证书，
+        两个 Team 各拿到一份（各是各的组）、各用各的端口和标题；卸载一个，另一个照旧（证书助手还在）；再卸载最后一个，证书助手一起删掉"""
+        b = self.box(any_ip=True)
+        a1, a2 = self.admin('a'), self.admin('b')
+        (tid1, root1, svc1), (tid2, root2, svc2) = self.new_team(a1, '甲组'), self.new_team(a2, '乙组')
+        ad = b.root / 'opt' / ASVC
+        (p1, w1), (p2, w2) = apart(2)
+        self.install(b, '--team-root', root1, '--host', '127.0.0.1', '--port', str(p1), '--web-port', str(w1), '--name', '甲组')
+        (b.d / 'listening').write_text('80\n')
+        b.fake('ss', '#!/bin/sh\n' + SS)
+        r = self.install(b, '--team-root', root2, '--host', '127.0.0.1', '--port', str(p2), '--web-port', str(w2), '--name', '乙组')
+        self.assertIn('手机的网页端：https://127.0.0.1:%d/（证书是' % w2, r.stdout, '80 端口上是共用的证书助手：第二个 Team 照样开得了')
+        self.assertEqual(sorted(p.name for p in (ad / 'teams').iterdir()), sorted([svc1, svc2]))
+        self.assertEqual(b.log('acme.issued'), '127.0.0.1\n', '同一个地址只要一张')
+        for f in ('fullchain.pem', 'privkey.pem'):
+            self.assertEqual((ad / 'webcert' / svc1 / f).read_bytes(), (ad / 'webcert' / svc2 / f).read_bytes())
+        g1, g2 = ((b.d / 'users' / s).read_text().strip() for s in (svc1, svc2))
+        self.assertNotEqual(g1, g2)
+        for s, g in ((svc1, g1), (svc2, g2)):
+            self.assertIn('-R %s:%s %s/webcert/%s\n' % (ASVC, g, ad, s), b.log('chown.log'), '各是各的组：别的 Team 读不了它的私钥')
+        for w, n in ((w1, '甲组'), (w2, '乙组')):
+            st, body = https(w, '/')
+            self.assertEqual(st, 200)
+            self.assertIn('<title>cca 远程会话（%s）</title>' % n, body.decode())
+        self.install(b, '--uninstall', '--dir', '/opt/' + svc1)
+        self.assertTrue(b.running(ASVC) and b.running(svc2) and (ad / 'teams' / svc2).exists())
+        self.assertFalse((ad / 'teams' / svc1).exists() or (ad / 'webcert' / svc1).exists())
+        self.assertEqual(https(w2, '/')[0], 200)
+        r = self.install(b, '--uninstall', '--dir', '/opt/' + svc2)
+        self.assertIn('也删掉了', r.stdout)
+        self.assertFalse(ad.exists() or b.running(ASVC))
+
+    def test_web_old_helper(self):
+        """以前的安装脚本装的：每个 Team 自己一个证书助手（<服务名>-acme，占着 80 端口，证书在这个 Team 的 webcert/ 里）。另一个 Team 这时
+        开不了网页端（说是哪个占着、先更新它；写了 --web-port 就停下）；用这一版更新那个 Team：停掉它自己的，证书、账户搬给共用的证书助手
+        （接着用那张，不再要），再装另一个就开得了"""
+        b = self.box(any_ip=True)
+        a1, a2 = self.admin('a'), self.admin('b')
+        (tid1, root1, svc1), (tid2, root2, svc2) = self.new_team(a1, '甲组'), self.new_team(a2, '乙组')
+        d1, ad = b.root / 'opt' / svc1, b.root / 'opt' / ASVC
+        (p1, w1), (p2, w2) = apart(2)
+        # 甲组：先照这一版装（网页端关着），再摆成以前的样子——它自己的证书助手的 unit、webcert/、acme/，起着
+        self.install(b, '--team-root', root1, '--host', '127.0.0.1', '--port', str(p1), '--no-web')
+        env = (d1 / '.env').read_text().replace('CCA_HUB_WEB=off\n', 'CCA_HUB_WEB=%d\nCCA_HUB_WEB_URL=https://127.0.0.1:%d/\n' % (w1, w1))
+        (d1 / '.env').write_text(env)
+        for x in ('webcert', 'acme'):
+            (d1 / x).mkdir(mode=0o700)
+        (d1 / 'acme' / 'account.key').write_text('以前的账户的私钥\n')
+        (b.root / UNITS / (svc1 + '-acme.service')).write_text(
+            '[Service]\nUser=%s\nEnvironmentFile=/opt/%s/.env\nExecStart=/usr/bin/python3 -I /opt/%s/app/cca-acme.py --id ${CCA_HUB_HOST} '
+            '--out /opt/%s/webcert --account /opt/%s/acme --listen 0.0.0.0:80\n' % (svc1, svc1, svc1, svc1, svc1))
+        subprocess.run([str(b.bin / 'systemctl'), 'restart', svc1 + '-acme'], env=b.env, check=True)
+        wait_for('以前的证书助手要来证书', lambda: (d1 / 'webcert' / 'fullchain.pem').exists())
+        old = {f: (d1 / 'webcert' / f).read_bytes() for f in ('fullchain.pem', 'privkey.pem')}
+        (b.d / 'listening').write_text('80\n')
+        b.fake('ss', '#!/bin/sh\n' + SS)
+        # 乙组：80 端口被甲组以前的证书助手占着
+        r = self.install(b, '--team-root', root2, '--host', '127.0.0.1', '--port', str(p2))
+        self.assertIn('手机的网页端没开：80 端口被 %s-acme 占着' % svc1, r.stdout)
+        r = b.install(self.script, '--dir', '/opt/' + svc2, '--web-port', str(w2))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('80 端口被 %s-acme 占着' % svc1, r.stderr)
+        self.assertFalse(ad.exists(), '还没有共用的证书助手')
+        # 用这一版更新甲组：它自己的证书助手停掉，证书、账户搬给共用的证书助手，接着用那张
+        r = self.install(b, '--dir', '/opt/' + svc1)
+        self.assertIn('手机的网页端：https://127.0.0.1:%d/（证书是' % w1, r.stdout)
+        self.assertIn('disable --now %s-acme' % svc1, b.log('systemctl.log'))
+        self.assertFalse(b.running(svc1 + '-acme') or (b.root / UNITS / (svc1 + '-acme.service')).exists())
+        self.assertFalse((d1 / 'webcert').exists() or (d1 / 'acme').exists(), '以前的目录搬空、删掉了')
+        self.assertEqual((ad / 'acme' / 'account.key').read_text(), '以前的账户的私钥\n', '账户搬过来了')
+        for f, raw in old.items():
+            self.assertEqual((ad / 'webcert' / svc1 / f).read_bytes(), raw, f + '：接着用原来的那张')
+        self.assertEqual(b.log('acme.issued'), '127.0.0.1\n', '没有再要一张')
+        self.assertTrue(b.running(ASVC))
+        # 再装乙组：开得了
+        r = self.install(b, '--dir', '/opt/' + svc2, '--web-port', str(w2))
+        self.assertIn('手机的网页端：https://127.0.0.1:%d/（证书是' % w2, r.stdout)
+        self.assertEqual((ad / 'webcert' / svc2 / 'fullchain.pem').read_bytes(), old['fullchain.pem'])
+        self.assertEqual(b.log('acme.issued'), '127.0.0.1\n')
 
     def test_web_skipped(self):
         """网页端这一次开不了：80 端口被别的程序占着、地址是内网的、认不出地址、它的端口被占着——照样装好，说一声，选的端口记着（下次再看）；
@@ -335,7 +450,7 @@ class InstallerTest(Base):
         self.assertIn('手机的网页端没开：80 端口被别的程序占着', r.stdout)
         e = b.envfile(d)
         self.assertTrue(e['CCA_HUB_WEB'].isdigit() and 'CCA_HUB_WEB_URL' not in e)
-        self.assertFalse((b.root / UNITS / (svc + '-acme.service')).exists())
+        self.assertFalse((b.root / UNITS / (ASVC + '.service')).exists() or (b.root / 'opt' / ASVC).exists())
         r = b.install(self.script, '--dir', '/opt/' + svc, '--web-port', str(free_port()))
         self.assertEqual(r.returncode, 1)
         self.assertIn('80 端口被别的程序占着', r.stderr)
@@ -357,7 +472,7 @@ class InstallerTest(Base):
         r = self.install(b, '--dir', '/opt/' + svc, '--no-relay')
         self.assertNotIn('网页端', r.stdout)
         self.assertEqual(b.envfile(d)['CCA_HUB_RELAY'], 'off')
-        self.assertFalse(b.running(svc + '-acme'))
+        self.assertFalse(b.running(ASVC) or (b.root / 'opt' / ASVC / 'teams' / svc).exists(), '没有 Team 用证书助手了：停掉')
         # 认不出地址（以前的安装脚本没记 CCA_HUB_HOST，机器上又看不到公网 IP）：网页端不开，说加 --host
         r = self.install(b, '--dir', '/opt/' + svc, '--relay-port', str(free_port()))
         env = (d / '.env').read_text()
@@ -375,8 +490,9 @@ class InstallerTest(Base):
         self.assertIn('手机的网页端没开：10.0.0.5 是内网地址', r.stdout)
 
     def test_docker(self):
-        """Docker compose：用第一个拉得到的镜像，容器里的用户 10001，项目名是服务名；网页端开着时证书助手是同一个项目里的另一个容器（80 端口）；
-        改用 systemd 时两个容器都停掉；拉不到镜像时自动改用 systemd，指定了 --docker 就停下"""
+        """Docker compose：用第一个拉得到的镜像，容器里的用户 10001，项目名是服务名；网页端开着时共用的证书助手也是 Docker 的（自己的
+        compose 项目 cca-team-acme，80 端口），这个 Team 只读挂着它放给自己的那一份；改用 systemd 时这个 Team 的容器停掉，证书助手照旧
+        （Docker 还能用）；拉不到镜像时自动改用 systemd，指定了 --docker 就停下"""
         b = self.box(docker=True, any_ip=True)
         a, tid, root, svc = self.team()
         d = b.root / 'opt' / svc
@@ -387,26 +503,42 @@ class InstallerTest(Base):
         self.assertEqual((e['CCA_HUB_MODE'], e['CCA_HUB_IMAGE']), ('docker', IMAGES[0]))
         self.assertIn('Docker compose，镜像 ' + IMAGES[0], r.stdout)
         y = (d / 'compose.yaml').read_text()
-        for want in ('container_name: %s\n' % svc, 'container_name: %s-acme\n' % svc, 'user: "10001:10001"', 'read_only: true', 'cap_drop: [ALL]',
-                     '- ./data:/data:z', '- "80:18080"', '- "${CCA_HUB_WEB:?}:18447"', '- ./webcert:/webcert:ro,z', '- ./webcert:/webcert:z',
-                     'pids_limit: 512', '"--web-url", "${CCA_HUB_WEB_URL:?}"', '"--id", "${CCA_HUB_HOST:?}"', 'CCA_TEAM_ROOT: ${CCA_TEAM_ROOT:?}'):
+        for want in ('container_name: %s\n' % svc, 'user: "10001:10001"', 'read_only: true', 'cap_drop: [ALL]', '- ./data:/data:z',
+                     '- "${CCA_HUB_WEB:?}:18447"', '- /opt/%s/webcert/%s:/webcert:ro,z\n' % (ASVC, svc), 'pids_limit: 512',
+                     '"--web-url", "${CCA_HUB_WEB_URL:?}"', '"--web-key", "/webcert/privkey.pem"]', 'CCA_TEAM_ROOT: ${CCA_TEAM_ROOT:?}'):
             self.assertIn(want, y)
-        self.assertNotIn('@', y.replace('@SVC@', ''), '记号都换掉了')
-        self.assertIn('-R 10001:10001 %s/certs %s/data %s/webcert %s/acme' % (d, d, d, d), b.log('chown.log'))
-        self.assertIn('compose -p %s -f compose.yaml up -d --force-recreate --remove-orphans' % svc, b.log('docker.log'))
-        self.assertFalse((b.root / UNITS / (svc + '.service')).exists())
+        self.assertNotIn('-acme:', y, '证书助手不在这个 Team 的项目里')
+        self.assertNotIn('--web-name-file', y, '没写 --name')
+        self.assertNotIn('@', y, '记号都换掉了')
+        ad = b.root / 'opt' / ASVC
+        ay = (ad / 'compose.yaml').read_text()
+        for want in ('container_name: %s\n' % ASVC, 'user: "10001:10001"', 'read_only: true', 'cap_drop: [ALL]', '- "80:18080"',
+                     '- ./teams:/teams:ro,z', '- ./store:/store:z', '- ./webcert:/webcert:z', '- ./acme:/acme:z',
+                     '"--teams", "/teams", "--store", "/store", "--out", "/webcert", "--account", "/acme", "--listen", "0.0.0.0:18080"'):
+            self.assertIn(want, ay)
+        self.assertEqual(b.envfile(ad), {'CCA_HUB_MODE': 'docker', 'CCA_HUB_IMAGE': IMAGES[0], 'CCA_HUB_VERSION': '9.9.9'})
+        chown = b.log('chown.log')
+        for want in ('-R 10001:10001 %s/certs %s/data\n' % (d, d), '-R 10001 %s/store %s/acme %s/webcert\n' % (ad, ad, ad),
+                     '-R 10001:10001 %s/webcert/%s\n' % (ad, svc)):
+            self.assertIn(want, chown)
+        log = b.log('docker.log')
+        self.assertIn('compose -p %s -f compose.yaml up -d --force-recreate --remove-orphans' % svc, log)
+        self.assertIn('compose -p %s -f compose.yaml up -d --force-recreate --remove-orphans' % ASVC, log)
+        self.assertFalse((b.root / UNITS / (svc + '.service')).exists() or (b.root / UNITS / (ASVC + '.service')).exists())
         self.assertEqual(b.log('useradd.log'), '')
-        self.assertTrue(b.running(svc) and b.running(svc + '-acme'))
+        self.assertTrue(b.running(svc) and b.running(ASVC))
         self.assertEqual(https(web, '/')[0], 200)
         self.assertIn("手机的网页端：https://127.0.0.1:%d/（证书是 Let's Encrypt 签的" % web, r.stdout)
         self.assertIn('docker logs', self.script.read_text(), '证书没要到时说看哪个容器的日志')
         a.ok('team-attach', tid, 'https://127.0.0.1:%d' % port, pin(d))
-        # 改用 systemd（--systemd）：两个容器都停掉，数据照旧
+        # 改用 systemd（--systemd）：这个 Team 的容器停掉，数据照旧；共用的证书助手照旧是 Docker 的（还能用），放给它的那一份换成它的组
         r = self.install(b, '--dir', '/opt/' + svc, '--systemd')
         self.assertIn('compose -p %s -f compose.yaml down' % svc, b.log('docker.log'))
         self.assertFalse((d / 'compose.yaml').exists())
         self.assertEqual(b.envfile(d)['CCA_HUB_MODE'], 'systemd')
-        self.assertTrue((b.root / UNITS / (svc + '-acme.service')).exists() and b.running(svc + '-acme'))
+        self.assertTrue((ad / 'compose.yaml').exists() and b.running(ASVC) and not (b.root / UNITS / (ASVC + '.service')).exists())
+        self.assertIn('-R 10001:%s %s/webcert/%s\n' % ((b.d / 'users' / svc).read_text().strip(), ad, svc), b.log('chown.log'))
+        self.assertIn("手机的网页端：https://127.0.0.1:%d/（证书是" % web, r.stdout)
         self.assertEqual(a.ok('team-sync').split('\t')[2], 'ok', '换了运行方式，照旧连得上')
         r = self.install(b, '--dir', '/opt/' + svc)
         self.assertIn('systemd + python', r.stdout, '没指定：照上次的')
@@ -696,7 +828,7 @@ class DeployTest(Base):
         self.assertEqual(b.envfile(d)['CCA_HUB_HOST'], '127.0.0.1', '装之前就照 ssh -G 定了地址（网页端的证书要它）')
         y = (d / 'compose.yaml').read_text()
         self.assertTrue(('container_name: %s\n' % svc) in y and '"--mode", "team"' in y and 'CCA_TEAM_ROOT: ${CCA_TEAM_ROOT:?}' in y, y)
-        self.assertNotIn('-acme', y, '网页端没开：没有证书助手')
+        self.assertFalse(ASVC in y or (b.root / 'opt' / ASVC).exists(), '网页端没开：没有证书助手')
         self.assertEqual(set(b.log('compose.projects').split()), {svc}, 'compose 的项目名照服务名（不照目录名）')
         argv = (a.home / 'ssh.argv').read_text()
         self.assertNotIn(str(a.cca), argv)
@@ -754,7 +886,8 @@ class DeployTest(Base):
         self.assertEqual(b.envfile(d)['CCA_HUB_HOST'], '127.0.0.1')
 
     def test_web(self):
-        """手机的网页端：装的时候就开上（证书助手要来了证书：web_cert ok）；--no-web 关掉；证书没要到是 web_cert wait"""
+        """手机的网页端：装的时候就开上（证书助手要来了证书：web_cert ok；标题带上 Team 的名字：team-deploy 放进 --name）；--no-web 关掉；
+        证书没要到是 web_cert wait"""
         b = self.box(docker=True, any_ip=True)
         a, tid, root, svc = self.team()
         d = b.root / 'opt' / svc
@@ -763,17 +896,21 @@ class DeployTest(Base):
         r = self.deploy(a, tid, b, '--port', str(port), '--web-port', str(web))
         o = kv(r.stdout)
         self.assertEqual((o['web'], o['web_cert'], o['web_off']), (url, 'ok', ''))
-        self.assertTrue(b.running(svc + '-acme'))
-        self.assertEqual(https(web, '/')[0], 200)
+        self.assertTrue(b.running(ASVC))
+        self.assertEqual((d / 'app' / 'name').read_text(), '甲组\n')
+        self.assertIn('"--web-name-file", "/app/name"]', (d / 'compose.yaml').read_text())
+        st, body = https(web, '/')
+        self.assertEqual(st, 200)
+        self.assertIn('<title>cca 远程会话（甲组）</title>', body.decode())
+        self.assertIn('"short_name": "cca 甲组"', https(web, '/manifest.webmanifest')[1].decode())
         self.assertEqual(health(port).get('web'), url)
         r = self.deploy(a, tid, b)
         self.assertEqual(kv(r.stdout)['web'], url, '再部署：照旧开着')
         r = self.deploy(a, tid, b, '--no-web')
         o = kv(r.stdout)
         self.assertEqual((o['web'], o['web_off']), ('', ''), '自己关的：不说原因')
-        self.assertFalse(b.running(svc + '-acme'))
-        for f in ('fullchain.pem', 'privkey.pem'):
-            (d / 'webcert' / f).unlink()
+        self.assertFalse(b.running(ASVC))
+        shutil.rmtree(b.root / 'opt' / ASVC / 'store')   # 存着的那张也没了
         b.flag('acme_fail')
         r = self.deploy(a, tid, b, '--web-port', str(web))
         self.assertEqual((kv(r.stdout)['web'], kv(r.stdout)['web_cert']), (url, 'wait'))

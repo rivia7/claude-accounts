@@ -170,13 +170,18 @@ docs/dev/team.md。`tests/spec_wire.py` 的 `team_id`、`invite_parts`、`invite
 装在 `/opt/<服务名>`（`--dir` 换：要是新的、空的目录，或者以前装过这个 Team 的，不能在 `/usr`、`/etc`、`/home`、`/root`、`/run`、`/tmp` 这些下面），
 所以一台服务器上能装几个 Team，互不相干。端口没写时照上次的，第一次从 18445 起找空着的。这个 Team 的远程会话的中转默认开着，数据端口是下一个
 空着的；手机的网页端再用一个，证书由证书助手（`cca-acme.py`）向 Let's Encrypt 要（给 IP 地址的是短期证书），到期前自己续。网页端要中转开着、
-认得出公网地址、地址不是内网的、80 端口空着（证书机构从公网连它验证）：开不了时照样装好、说为什么，再运行时再看。
+认得出公网地址、地址不是内网的、80 端口给得了证书助手（证书机构从公网连它验证）：开不了时照样装好、说为什么，再运行时再看。80 端口只有一个：
+一台服务器上的几个 Team 共用一个证书助手（服务名 `cca-team-acme`，装在 `/opt/cca-team-acme`）——第一个开网页端的 Team 装上它，别的 Team 在它
+那里登记自己的地址，同一个地址只要一张证书，各个 Team 只读得了放给自己的那一份；最后一个用它的 Team 卸载时连同它一起删掉。3.5.3-beta.5 以前的
+安装脚本每个 Team 自己一个证书助手（`<服务名>-acme`，占着 80 端口）：用新的再运行一次那个 Team，它的证书、账户就搬给共用的、接着用。
+`--name`（`cca team deploy` 放进 Team 的名字）：网页的标题、手机主屏幕上的名字带上它。
 
-目录里：`app/`（这个程序、证书助手、网页端的文件）、`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按公钥指纹认它）、`data/`（设备、记录、
-密文）、`webcert/`（网页端的证书）、`acme/`（证书机构那里的账户的私钥）、`.env`（运行方式、端口、根公钥；改了以后再运行一次安装脚本；没装完时
-换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的
-同步源、Docker Hub；只读、去掉所有权限），容器是 `<服务名>` 和证书助手 `<服务名>-acme`；systemd 的是 `/etc/systemd/system/<服务名>.service` 和
-`<服务名>-acme.service`。日志：`docker logs <服务名>` 或者 `journalctl -u <服务名>`（证书助手的换成 `<服务名>-acme`）。
+目录里：`app/`（这个程序、网页端的文件、Team 的名字 `name`）、`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按公钥指纹认它）、`data/`
+（设备、记录、密文）、`.env`（运行方式、端口、根公钥；改了以后再运行一次安装脚本；没装完时换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。
+Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的同步源、Docker Hub；只读、去掉所有权限），容器是
+`<服务名>`；systemd 的是 `/etc/systemd/system/<服务名>.service`。共用的证书助手的目录里：`app/cca-acme.py`、`teams/`（用它的 Team 登记的地址）、
+`store/`（每个地址的证书）、`webcert/<服务名>/`（放给那个 Team 的：只有它读得了私钥）、`acme/`（证书机构那里的账户的私钥）；容器、systemd 的服务
+都叫 `cca-team-acme`。日志：`docker logs <服务名>` 或者 `journalctl -u <服务名>`（证书助手的换成 `cca-team-acme`）。
 
 - 云服务商的安全组（轻量应用服务器的防火墙）里放行服务的端口、中转的数据端口，开了网页端的再加它的端口和 80；`cca team deploy` 装完会说
   放行哪几个。systemd 方式下服务器上开着 ufw、firewalld 时脚本会说放行的那一行，不替你改（Docker 发布的端口不经它们）。

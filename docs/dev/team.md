@@ -10,7 +10,7 @@
 | M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；现在的维护者映射当作旧式的 Team 接进来 | 做完了：账号表照 Team 的配置改，设备统计、记下的 API key、折合金额经各个 Team 的服务器同步（见「账号表照配置改」「同步经 Team 的服务器」）。维护者的映射照旧并着用，迁成 Team 是 M4 |
 | M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 做完了（见「迁移」）：`cca team import`、`./policy.sh team` + 机器拉到映射后自己加入、`cca team import Team --mine`（自己的账号建成一个 Team：自己的同步服务器去掉以后就是这么做） |
 | M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 做完了（见「界面」），App 里也能新建 Team、部署它的服务器（M6） |
-| M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 做完了（见「部署」）：`cca team deploy`、安装脚本（`--team-root`；3.5.3 起只装 Team 的，同时给这个 Team 的远程会话做中转；手机的网页端和证书助手 `<服务名>-acme` 是 team-only 这个分支里加的、还没发布）、`cca team hosted`（终端里）；App 里「新建 Team…」「部署到我的服务器…」 |
+| M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 做完了（见「部署」）：`cca team deploy`、安装脚本（`--team-root`；3.5.3 起只装 Team 的，同时给这个 Team 的远程会话做中转；手机的网页端和证书助手是 team-only 这个分支里加的：3.5.3-beta.5 起一台服务器上几个 Team 共用一个证书助手 `cca-team-acme`）、`cca team hosted`（终端里）；App 里「新建 Team…」「部署到我的服务器…」 |
 | M7 | 删掉旧通道：自己的同步服务器；GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半、App 的卡片、配置向导问它的那一步）3.5.3 起删掉了（team-only 分支，做完了、还没发布；升级时 `hub_leftovers` 清掉留下的文件，以前装的 `/opt/cca-hub` 安装脚本只让卸载）。维护者的那一套只标了弃用（`./policy.sh key add`、`cca policy on` 给维护者的那一行旁边说新的做法是 Team）、照常用：和 Team 同一个版本里删掉的话，还没迁过去的机器就断了。删的时候要动的见「要删掉的旧通道」 |
 
 定下来的（用户 2026-11-21、22 定的，照它做，别重新讨论）：
@@ -316,37 +316,62 @@
   `/root`、`/run`、`/tmp` 这些下面（`DIR_HIDDEN`：systemd 方式的 unit 带着 `ProtectSystem=full`、`ProtectHome`、`PrivateTmp`、`PrivateDevices`，
   服务看不到、写不了那里，`/etc` 下面的还能起来、要写状态时才出错；`/run` 重启就清掉）；安装脚本的 `dir_check` 和辅助程序的 `dir_of` 一样查。
   要是还没有、空的，或者以前装过的（有 `.cca-hub` 或者 `.env`，`dir_ours`）：别人的目录不碰，里面的 `data`、`certs` 会被 chown，卸载时会删。
-- 装好的样子：`.cca-hub`（记着这个目录是安装脚本装的、服务名）；`app/`（755：`cca-presence.py`、`cca-acme.py` 644，网页端的文件在 `app/web/`，
-  先都写进 `app/web.new`、核对过再换上）；`certs/`（700：`key.pem` 600、`cert.pem` 644，自签 P-256、10 年，没有才生成：macOS 的 curl 只给 RSA 和
-  P-256/P-384 做公钥钉住；私钥不出这台服务器）；`data/`（700，服务端的状态文件）；`webcert/`（700，网页端的证书：证书助手写的 `fullchain.pem`、
-  `privkey.pem`）；`acme/`（700，证书机构那里的账户的私钥）；`.env`（600：`CCA_HUB_MODE`、`CCA_HUB_PORT`、`CCA_TEAM_ROOT`、`CCA_HUB_RELAY`、
-  `CCA_HUB_WEB`，有的话 `CCA_HUB_HOST`、`CCA_HUB_WEB_URL`、Docker 的 `CCA_HUB_IMAGE`、`CCA_HUB_VERSION`）。选的都记在 `.env` 里，再运行照旧。
-  文件都先写到旁边再 `mv`（`put`：正在运行的服务读不到半截）。
+- 装好的样子：`.cca-hub`（记着这个目录是安装脚本装的、服务名）；`app/`（755：`cca-presence.py` 644，`name` 644——Team 的名字，下面
+  「Team 的名字」，网页端的文件在 `app/web/`，先都写进 `app/web.new`、核对过再换上）；`certs/`（700：`key.pem` 600、`cert.pem` 644，自签
+  P-256、10 年，没有才生成：macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住；私钥不出这台服务器）；`data/`（700，服务端的状态文件）；`.env`
+  （600：`CCA_HUB_MODE`、`CCA_HUB_PORT`、`CCA_TEAM_ROOT`、`CCA_HUB_RELAY`、`CCA_HUB_WEB`，有的话 `CCA_HUB_HOST`、`CCA_HUB_WEB_URL`、Docker 的
+  `CCA_HUB_IMAGE`、`CCA_HUB_VERSION`）。选的都记在 `.env` 里，再运行照旧。文件都先写到旁边再 `mv`（`put`：正在运行的服务读不到半截）。
+  网页端的证书不在这里：这台服务器上几个 Team 共用的证书助手放给它（下面「共用的证书助手」）。
 - Docker 的另有 `compose.yaml`（`docker compose -p <服务名> -f compose.yaml`：目录里别的 compose 文件、override 不认；容器 `<服务名>`，用户
   10001，只读的根、tmpfs 的 /tmp，去掉所有 capability、`no-new-privileges`，内存 256M、进程数 64（网页端开着时 512：每条 WebSocket 一个线程），
-  日志 3×1M；`certs/`、`data/`、`webcert/`、`acme/` chown 给 10001）。容器里 HTTPS 听 18445、中转的数据端口 18446、网页端 18447，对外是 `.env` 里的
-  端口。它是一份模板：`@SVC@` 换成服务名、`@PIDS@` 换成进程数，`@RELAY@…@@`、`@WEB@…@@` 那几处开着时留下、没开时整个去掉（不占端口）。
-  网页端开着时同一个项目里另有证书助手的容器 `<服务名>-acme`（`80:18080`，内存 128M、进程数 32）。
+  日志 3×1M；`certs/`、`data/` chown 给 10001）。容器里 HTTPS 听 18445、中转的数据端口 18446、网页端 18447，对外是 `.env` 里的
+  端口。它是一份模板：`@SVC@` 换成服务名、`@AD@` 换成共用的证书助手的目录、`@PIDS@` 换成进程数，`@RELAY@…@@`、`@WEB@…@@`（里面套着
+  `@NAME@…@@`：记着 Team 的名字时给 `--web-name-file /app/name`）那几处开着时留下、没开时整个去掉（不占端口）。网页端开着时只读挂着共用的
+  证书助手放给它的那一份（`/opt/cca-team-acme/webcert/<服务名>:/webcert:ro,z`）。
 - systemd 的是 `/etc/systemd/system/<服务名>.service`（系统用户 `<服务名>`、`EnvironmentFile` 是 `.env`、`NoNewPrivileges`、`PrivateTmp`、
   `PrivateDevices`、`ProtectSystem=full`、`ProtectHome`、没有 capability、`Restart=on-failure`、内存 256M、`TasksMax` 照上面的进程数），网页端开着时
-  另有 `<服务名>-acme.service`（直接听 80：只给 `CAP_NET_BIND_SERVICE`）。服务端用 `python3 -I` 运行（不看 `PYTHON*` 环境变量），两种方式下都
+  `--web-cert`、`--web-key` 指着共用的证书助手放给它的那一份。服务端用 `python3 -I` 运行（不看 `PYTHON*` 环境变量），两种方式下都
   监听 0.0.0.0；起来以后等它在 127.0.0.1 上用这张证书回话（`wait_served`：`openssl s_client`，最多 30 秒），起不来时打出最近的日志。
 - 运行方式：`--docker`、`--systemd`；不写时上次是 systemd、还能用就照旧，再是 Docker（有 compose 插件、`docker info` 通；只有老的
   `docker-compose` 1.x 的不算：它认不得 `compose.yaml`，重建容器时还会出错），再是 systemd（`/run/systemd/system` 在、有 systemctl、python3 3.6 起、
   带 ssl）。镜像依次试上次用的、ECR 上的官方镜像、腾讯云和 DaoCloud 的同步源、Docker Hub（`IMAGES`；`docker pull` 每个最多 5 分钟；国内常常
   连不上 Docker Hub），都拉不到时、`docker compose up` 没成时（打出它说的最后 20 行）没指定 `--docker` 的改用 systemd。服务端 3.6 起能跑（3.7 才有的
   `ThreadingHTTPServer` 换成 `ThreadingMixIn`，没有 `ssl.TLSVersion` 时用 `OP_NO_TLSv1*`）：CentOS 7、一些云厂商镜像里的 python3 是 3.6。两种方式之间
-  换的时候停掉原来的那个（连同证书助手），数据、证书照旧。
+  换的时候停掉原来的那个，数据、证书照旧（共用的证书助手照它自己的运行方式：还能用就不换）。
 - 中转（远程会话的，见 remote.md「每个 Team 各用各的中转服务器」）：数据端口没写时照上次的、第一次从 HTTPS 那个端口的下一个起找空着的
   （`pick_relay`），被别的程序占着时停下。
 - 网页端（手机的浏览器里接入，见 remote.md「网页端」）：端口照样从数据端口的下一个起找（`pick_web`）。这一次开不开再看几样：中转开着、
-  认得出地址（`pick_host`：`--host`，没写时照上次记下的 `.env` 的 `CCA_HUB_HOST`，再是 `cca team deploy` 放进的 ssh 的主机名 `CCA_HUB_HOST_HINT`、机器上看得到的公网 IP）、不是内网地址、80 端口给得了证书助手（被别的程序占着、又不是它自己
-  时不行）。开不了时照样装好、说为什么（结果行 `web_off`：`web_port` 端口被占、`host` 认不出地址、`lan` 内网地址、`port80`），选的端口记着、
+  认得出地址（`pick_host`：`--host`，没写时照上次记下的 `.env` 的 `CCA_HUB_HOST`，再是 `cca team deploy` 放进的 ssh 的主机名 `CCA_HUB_HOST_HINT`、机器上看得到的公网 IP）、不是内网地址、80 端口给得了证书助手（被别的程序占着、又不是共用的证书助手——或者这个
+  Team 以前它自己的——时不行）。开不了时照样装好、说为什么（结果行 `web_off`：`web_port` 端口被占、`host` 认不出地址、`lan` 内网地址、`port80`、
+  `acme_old`：占着 80 的是另一个 Team 用以前的安装脚本装的、它自己的证书助手，说是哪个、先用这一版更新那个 Team），选的端口记着、
   再运行时再看；写了 `--web-port` 的，它的端口或者 80 被别的程序占着时停下。
-- 网页端的证书：证书助手（`server/cca-acme.py`）向 Let's Encrypt 要（IP 地址的是短期证书），写进 `webcert/`，到期前自己续。服务端不等证书就
+- 网页端的证书：共用的证书助手（`server/cca-acme.py`）向 Let's Encrypt 要（IP 地址的是短期证书），放进 `/opt/cca-team-acme/webcert/<服务名>/`，
+  到期前自己续。服务端不等证书就
   起来（`CertCtx`：头一张来之前网页端那个端口一握手就断，隔一秒看一次文件；有了以后换了自己重新读）。安装脚本起好服务以后等证书（`wait_cert`：
   最多 `CCA_HUB_CERT_WAIT` 秒，默认 120；第一次要时证书机构来验证，多半十几秒），拿到了再等服务端在网页端的端口上用上（最多 10 秒）：结果行
-  `web_cert ok`，没等到是 `wait`（多半是 80 端口没放行：证书助手过一会儿自己再试）。systemd 方式下证书助手起不来时说一声、不等。
+  `web_cert ok`，没等到是 `wait`（多半是 80 端口没放行：证书助手过一会儿自己再试）。证书助手起不来时说一声、不等。
+- 共用的证书助手（80 端口只有一个：一台服务器上几个 Team 都开网页端时只能有一个程序听它）：服务名 `cca-team-acme`（systemd 的服务名和
+  系统用户、Docker 的容器名和 compose 的项目名；不叫 `cca-acme`：维护者的设备统计服务器的证书助手容器叫这个），装在固定的
+  `/opt/cca-team-acme`（每个 Team 的安装脚本都要找得到它，不跟 `--dir`）。里面：`.env`（600：`CCA_HUB_MODE`、Docker 的 `CCA_HUB_IMAGE`、
+  `CCA_HUB_VERSION`）、`app/cca-acme.py`、`teams/<服务名>`（root 的、644：这个 Team 登记的地址，就是它的 `CCA_HUB_HOST`）、`store/<种类>-<值>/`
+  （700：一个地址一张，`privkey.pem` 600、`fullchain.pem` 644；几个 Team 同一个地址时只要一张——同样的证书 7 天最多发 5 张）、`webcert/`（711）
+  下面每个 Team 一份 `webcert/<服务名>/`（证书助手的用户、这个 Team 的组，2750：放进去的文件跟着它的组，私钥 640——只有这个 Team 读得了自己的
+  私钥，不用另建一个共用的组；Docker 的 Team 的组是 10001）、`acme/`（700，证书机构那里的账户的私钥）。证书助手照 `teams/` 里登记的去要
+  （`cca-acme.py --teams --store --out`，见 remote.md「证书从哪来」），过几秒看一次登记的变了没有。
+- 第一个开网页端的 Team 装上它（运行方式照这个 Team 的；装着的照旧，还能用的话：`acme_mode`），后面的 Team 只是登记；网页端开着的每次装都换上
+  这一版的程序、重新起它（`acme_start`，在这个 Team 的服务起来以后）。这个 Team 不再用网页端（`--no-web`、这一次开不了）时去掉它的登记和那一份
+  （`acme_leave`）；没有 Team 用了就停掉它、删掉 unit / 容器（证书、账户留着，再开时接着用，不再要一张）；卸载最后一个用它的 Team 时连同目录、
+  系统用户一起删掉（说一声）。Docker 的：compose 项目 `cca-team-acme`，用户 10001，`80:18080`，挂 `./teams`（只读）、`./store`、`./webcert`、
+  `./acme`，内存 128M、进程数 32。systemd 的：`cca-team-acme.service`（系统用户 `cca-team-acme`，直接听 80：只给 `CAP_NET_BIND_SERVICE`）。
+  证书助手和 Team 的运行方式可以不一样（目录的组照 Team 的）。
+- 从 3.5.3-beta.4 以前的装法迁过来（每个 Team 自己一个证书助手 `<服务名>-acme`，占着 80 端口，证书在 Team 目录的 `webcert/`、账户在 `acme/`）：
+  更新这个 Team 时停掉、删掉它自己的（Docker 的是同一个 compose 项目里的孤儿：`--remove-orphans`；systemd 的 `drop_unit`），服务起来以后
+  `webcert/` 里的证书搬进 `webcert/<服务名>/`、`acme/account.key`（共用的还没有时）搬进 `acme/`，Team 目录里的 `webcert/`、`acme/`、
+  `app/cca-acme.py` 删掉；证书助手看到 `store/` 里还没有、Team 的那一份里有还用得了的就接着用（不再要一张）。
+- Team 的名字：`--name`（`cca team deploy` 放进 Team 的名字，单引号写成 `'\''`：`shq`）写进 `app/name`（644），没写时留着上次的；网页端开着时
+  服务端带 `--web-name-file`（服务端的 `web_name`：第一行，1～64 个字符、没有控制字符，不对时照旧叫 cca），网页的标题（`cca 远程会话（名字）`）、
+  手机主屏幕上的名字（`apple-mobile-web-app-title`、manifest 的 `name` / `short_name`：`cca 名字`）带上它（`web_named`，转义过）。安装脚本查：
+  没有换行，`${#NAME}` 最多 256（dash 数的是字节）。
 - `.env` 在起服务之前写（`write_env`），没装完（`die`，或者被打断：`trap` 了 HUP、INT、TERM、PIPE，SSH 断了以后往 stdout 写是 SIGPIPE）时换回
   原来的（`rollback`；第一次装的删掉）：下一次照原来的判断是新装还是更新。服务用新的 `.env` 起来了（`wait_served` 过了）才删掉 `.env.prev`、
   不再换回：起来以后再换回的话，跑着的服务和 `.env` 对不上。所以打结果时 SSH 断了（管理员那头是 `ssh`）服务器上已经是这一次的，管理员这台照旧
@@ -355,8 +380,8 @@
   怎么样了（`web_say`）、要放行哪些端口。只是更新（端口、证书都没换）时不再打那一行；证书是新生成的（原来的不见了）时说管理员要照新的
   那一行重新接上。
 - 卸载：`--uninstall --dir 目录`（`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/<服务名>`）：只认装过的目录（有
-  `.cca-hub` 或者 `.env`），停掉、删掉程序、证书、数据、`.env`、unit（连同证书助手的）和系统用户；说管理员要换一台接上（`cca team attach`），
-  或者各台设备退出（`cca team leave`）。
+  `.cca-hub` 或者 `.env`），停掉、删掉程序、证书、数据、`.env`、unit（连同以前它自己的证书助手的）和系统用户，去掉它在共用的证书助手那里的
+  登记和那一份（最后一个用它的 Team：连同证书助手一起删掉）；说管理员要换一台接上（`cca team attach`），或者各台设备退出（`cca team leave`）。
 - 防火墙：脚本不动。systemd 的端口经 ufw、firewalld：开着又没放行时说放行的那一行（`fw_hint`；Docker 发布的端口不经它们）；云服务商的安全组
   最后总要说一句（HTTPS 的端口、中转的数据端口，网页端开着时还有它的端口和 80）。
 
@@ -364,7 +389,7 @@
 
 - 安装脚本从 ssh 的 stdin 给过去，前面放进 `CCA_HUB_MANAGED=1`、`CCA_HUB_TEAM_ROOT='根公钥后面那一段'`，命令里没写 `--host` 时
   `CCA_HUB_HOST_HINT='ssh -G 的 hostname'`（服务器上没记着地址——第一次装、搬过去——才用它：更新时不拿 ssh 的主机名盖掉记着的，ssh 走的
-  可能是内网地址、别名），和 `set -- --dir … [--port …] [--no-web | --web-port …] [--host '…'] [--docker|--systemd]`（`--host` 只是命令里写的：
+  可能是内网地址、别名），和 `set -- --dir … [--name '名字'] [--port …] [--no-web | --web-port …] [--host '…'] [--docker|--systemd]`（`--host` 只是命令里写的：
   网页端的证书要在装之前定下地址，地址由安装脚本定）。ssh 带 `-T`（不要伪终端：脚本从 stdin 过去，ssh 配置里写了 `RequestTTY` 也不要）和 `ServerAliveInterval=30`
   （拉镜像时好几分钟没有输出）。在服务器上运行的是 `sh -c '…'`（登录 shell 不一定是 sh）：root 直接 `sh -s`，别的用户能免密码 sudo 就
   `sudo -n sh -s`，要密码时什么都不运行、说用 root 登录（`root`）。
@@ -598,23 +623,28 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - 部署（`tests/hub_deploy.py`：生成一次安装脚本，在 `tests/hub_box.py` 的假服务器上运行；回归的 unit 一节跑它，`tests/linux.sh` 在各个发行版的
   容器里也跑——那个发行版的 sh、openssl、python3）。假服务器 `Box`：临时目录当根（安装脚本的 `CCA_HUB_ROOT`，只给测试用），`bin/` 里 `id`、
   `useradd`、`userdel`、`chown`、`ip`、`journalctl`、`sudo` 是假的（`ufw`、`ss` 要的用例另放：`Box.fake`），`systemctl`、`docker` 是 Python
-  写的（照 unit 的 `ExecStart`、compose.yaml 里各个服务的 `command`、端口和挂载起真的服务端，监听 127.0.0.1；证书助手换成 `acme_stub.py`，照 `--id`
-  往 `--out` 里写一张自签的证书），`sh` 是 `/bin/dash`（没有时 `/bin/sh`）；每个服务各有各的进程号文件（`server.<服务名>.pid`，以前的 `cca-hub`
+  写的（照 unit 的 `ExecStart`、compose.yaml 里各个服务的 `command`、端口和挂载起真的服务端，监听 127.0.0.1；证书助手换成 `acme_stub.py`：共用的
+  那种照 `--teams` 里登记的地址一个地址一张自签的证书，存在 `--store`、放进各个 Team 的那一份，`store` 里没有、Team 的那一份里有就接着用；以前
+  每个 Team 自己的那种照 `--id` 往 `--out` 里写一张；写过的记在 `acme.issued`；假的 `id -g` 说 `useradd` 时记下的组），`sh` 是 `/bin/dash`（没有时 `/bin/sh`）；每个服务各有各的进程号文件（`server.<服务名>.pid`，以前的 `cca-hub`
   是 `server.pid`）；目录下的几个文件让它出各种状况（`uid`、`sudo_ok`、`ip`、`listening`、`no_pull`、`docker_down`、`no_compose`、`compose_fail`、
   `start_fail`、`start_hang`、`acme_fail`、`ssh_denied`……，见它开头），等证书最多 4 秒（`CCA_HUB_CERT_WAIT`），`any_ip` 时内网地址也开网页端
   （`CCA_HUB_ANY_IP`）；`enter` 是假 ssh 的服务器那一头。
   - `InstallerTest`（在服务器上直接运行）：`test_script_itself`（`sh -n`、带着版本、服务端程序和证书助手；模板不能运行；参数、root 的检查）、
     `test_systemd`（装好、打出接上它的那一行，内网地址不开网页端、说一声；目录、权限、unit；再运行是更新；换端口再打一次那一行；`--uninstall`）、
-    `test_web`（证书助手 `<服务名>-acme` 只给绑 80 的权限，要来证书、服务端用它；`--no-web` 连证书助手一起停；80 被占着不开，写了 `--web-port`
-    就停下；没要到证书时说放行 80）、`test_web_skipped`（几种开不了网页端的情况照样装好；不开中转就没有网页端）、`test_docker`（第一个拉得到的镜像、
-    用户 10001、项目名是服务名、证书助手是同一个项目里的另一个容器；改用 systemd 时两个容器都停；拉不到镜像改用 systemd，`--docker` 时停下）、
+    `test_web`（共用的证书助手 `cca-team-acme`：自己的系统用户、只给绑 80 的权限、目录和权限，照登记的地址要来证书、放进这个 Team 的那一份，
+    服务端用它、标题带上 `--name`；再运行照旧；`--no-web` 去掉登记、没别的 Team 用了停掉它（证书留着）；80 被占着不开，写了 `--web-port`
+    就停下；没要到证书时说放行 80；卸载最后一个 Team 连同证书助手删掉）、`test_web_two_teams`（两个 Team 共用一个证书助手、同一个地址只要一张、
+    各是各的组和标题；卸载一个另一个照旧）、`test_web_old_helper`（另一个 Team 以前它自己的证书助手占着 80：`acme_old`、写了 `--web-port` 停下；
+    更新那个 Team：停掉它自己的，证书、账户搬给共用的、接着用那张，之后另一个也开得了）、`test_web_skipped`（几种开不了网页端的情况照样装好；不开中转就没有网页端）、`test_docker`（第一个拉得到的镜像、
+    用户 10001、项目名是服务名、共用的证书助手是另一个 compose 项目，这个 Team 只读挂它的那一份；改用 systemd 时这个 Team 的容器停掉、证书助手照旧是
+    Docker 的；拉不到镜像改用 systemd，`--docker` 时停下）、
     `test_compose`（只有老的 docker-compose、`compose up` 起不来时改用 systemd，`--docker` 时停下、第一次装的 `.env` 不留；Docker 的卸载）、
     `test_dir`（别人的目录装、卸载都不碰，末尾的 `/` 去掉，同一个 Team 一台只装一个）、`test_failed_update_rolls_back`（起不来、被打断时 `.env`
     换回原来的）、`test_needs`（缺东西时停下什么都不动；看得到的公网 IP 照用）、`test_old_own_server`（`/opt/cca-hub` 只能卸载、不往里装）、
     `test_teams`（两个 Team 各一个服务、从 18445 起找端口、只写目录再运行是更新、中转的端口能换能关、另一个 Team 的目录不碰、卸载一个另一个照旧）。
   - `DeployTest`（`team-deploy`：管理员是 `presence.Device`，假 ssh 把命令交给假服务器上的 sh，`-G` 说在 127.0.0.1）：`test_deploy`（经 SSH 装好
-    （Docker）、接上，发邀请、别的设备加入、取到配置；再部署是更新；内网地址不开网页端；托管平台的部署文件）、`test_web`（`web_cert ok`、`--no-web`、
-    `wait`）、`test_args`（参数不对是 `usage`、不连服务器）、`test_unreachable_then_again`（接不上时说放行哪个端口，放行后再部署是更新；服务器自己的
+    （Docker）、接上，发邀请、别的设备加入、取到配置；再部署是更新；内网地址不开网页端；托管平台的部署文件）、`test_web`（`web_cert ok`、标题和
+    manifest 带上 Team 的名字、`--no-web`、`wait`）、`test_args`（参数不对是 `usage`、不连服务器）、`test_unreachable_then_again`（接不上时说放行哪个端口，放行后再部署是更新；服务器自己的
     防火墙也说）、`test_not_root`（免密码的 sudo 能装，要密码时什么都不运行）、`test_dropped_after_start`（服务起来以后 SSH 断了：服务器上不换回，
     管理员照旧接着原来的，再部署是更新）、`test_login_check_and_password`（假 ssh `SSH_PW` 只认密码、经 `SSH_ASKPASS` 取，`SSH_SAYS` 照
     `$HUB_SSH_SAYS` 说一句就退出：`ssh_auth`、`ssh_denied`（不带 `BatchMode`）、`--check` 什么都不装、`ssh_keyonly`、密钥太多是 `ssh_auth`，`--batch`

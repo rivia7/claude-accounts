@@ -749,7 +749,8 @@ fn attach(t: Team, a: &Dict, url: String, pins: &[String]) -> R<Result<Attached,
 /// 服务器上（一台服务器上每个 Team 一个服务：cca-team-<编号的前 8 位>，装在 /opt/<服务名>；再运行是更新），装好了接上（attach）。
 /// --check：只看登录得上不（什么都不装）。stdout 是 sh 的 键=值：mode、state（new | update）、port、relay（中转的数据端口，没开是空的）、
 /// dir、lan、host（地址:端口）、device、members、stored、note（换服务器时原来那台没存上的原因）、svc（服务名）、web（手机的网页端的网址，
-/// 没开是空的）、web_cert（ok | wait：证书拿到了没有）、web_off（这一次没开网页端的原因：port80 | lan | host | web_port；自己关的是空的）。
+/// 没开是空的）、web_cert（ok | wait：证书拿到了没有）、web_off（这一次没开网页端的原因：port80 | acme_old | lan | host | web_port；
+/// 自己关的是空的）。
 /// 原因码：安装那一步的那些（ssh…、root、deps、image、port、taken、start、host、install、usage），加上 no_team、not_admin、key，
 /// 装好了没接上的是 attach 的那些
 pub fn cmd_team_deploy(args: &[String]) -> R<()> {
@@ -759,10 +760,12 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
     // 装的那一段经 SSH，可能要几分钟（第一次用 Docker 要拉镜像）：这段时间不拿着这个 Team 的锁（不然这台设备上取配置、别的管理命令
     // 都卡着等）。装好了再取锁、重新读一遍（等的时候可能被别的命令改过），接上
     let (t, _a, lk) = admin_of(sel)?;
-    let (tid, root, svc) = (t.id.clone(), t.root.clone(), format!("cca-team-{}", &t.id[..8]));
+    let (tid, root, svc, name) = (t.id.clone(), t.root.clone(), format!("cca-team-{}", &t.id[..8]), t.name.clone());
     let old = t.attached().then(|| (t.url.clone(), t.pins.clone()));
     drop(lk);
-    let Some(inst) = team_install(rest, &root, &svc, old.as_ref().map(|(u, p)| (u.as_str(), p.as_slice())))? else { return Ok(()) };
+    let Some(inst) = team_install(rest, &root, &svc, &name, old.as_ref().map(|(u, p)| (u.as_str(), p.as_slice())))? else {
+        return Ok(());
+    };
     let (t, a, _lk) = admin_of(&tid)?;
     let x = match attach(t, &a, inst.url.clone(), std::slice::from_ref(&inst.pin))? {
         Ok(x) => x,
