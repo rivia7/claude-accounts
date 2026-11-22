@@ -6652,10 +6652,12 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team revoke Team 设备                    移除一台设备、撤回邀请
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
       cca team rename Team 设备 新名字             给一台设备改名字（它在服务器上的名字跟着改）
+      cca team name Team 新名字                    改这个 Team 的名字（各台设备下次取配置时跟着改）
       cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
-      cca team alias Team 账号 新别名               改一个账号在这个 Team 里的别名（没起过的默认是 team-1、team-2……）
+      cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成 team-1、team-2……；
+                                                   账号写 工具:邮箱 只改这个工具里的，只写邮箱改它在的每个工具里的）
       cca team publish Team                        和服务器对一遍、发布配置"
 
 restore_teams() {   # restore_teams plan | apply：卸载时的 Team。plan 说会怎样（成员：退出；管理员：根密钥跟着删掉），apply 各个都退出
@@ -6703,6 +6705,12 @@ cmd_team() {
 		grant)
 			out=$(py team-grant "$@") || team_fail "$out" "没改成"
 			okay "改好了：现在给这台设备的是${out}" ;;
+		name)
+			[ $# -eq 2 ] || die "用法: cca team name Team 新名字"
+			out=$(py team-name "$@") || team_fail "$out" "没改成"
+			{ local nm_old nm_new nm_stored; IFS= read -r nm_old; IFS= read -r nm_new; IFS= read -r nm_stored; } <<< "$out"
+			okay "改好了：「${nm_old}」现在叫「${nm_new}」；$(team_stored "$nm_stored")"
+			say "  各台设备下次取配置时跟着改；服务器上手机网页端的标题下次部署时换（cca team deploy ${nm_new} …）" ;;
 		rename)
 			[ $# -eq 3 ] || die "用法: cca team rename Team 设备 新名字"
 			out=$(py team-rename "$@") || team_fail "$out" "没改成"

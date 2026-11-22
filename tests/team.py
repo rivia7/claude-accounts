@@ -151,10 +151,11 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.load(admin, tid), ['3', '5', '1'])
         self.assertEqual(self.lines(admin, 'team-sync'), ['%s\t测试组\tok\t2\t' % tid])
         seq, doc = self.doc(admin, tid)
-        self.assertEqual((doc['accounts'], doc['aliases'], doc['install_node'], doc['name'], doc['server']),
+        self.assertEqual((doc['accounts'], doc['tool_aliases'], doc['aliases'], doc['install_node'], doc['name'], doc['server']),
                          ({'claude': {'alice@example.com': 'US-A', 'bob@example.com': 'US-B'}, 'codex': {'carol@example.com': 'US-A'}},
-                          {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-2'}, 'US-D', '测试组', {'u': url, 'p': [pin]}),
-                         '映射里没写别名的编成 team-1、team-2（照工具、账号的先后）')
+                          {'claude': {'alice@example.com': 'alice', 'bob@example.com': 'team-1'}, 'codex': {'carol@example.com': 'team-1'}},
+                          {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-1'}, 'US-D', '测试组', {'u': url, 'p': [pin]}),
+                         '映射里没写别名的编成 team-N：各工具各编各的（Claude 的 bob、Codex 的 carol 都是 team-1）')
         self.assertEqual([p['name'] for p in doc['nodes']['proxies']], ['US-A', 'US-B', 'US-C', 'US-D'], '用得着的节点（连同 dialer-proxy 连着的）')
         # 邀请：链接只在 stdout 里出现一次；那串随机数、令牌不落盘、不进命令行
         self.assertEqual(self.code(admin, 'team-invite', tid, 'bob', '--accounts', 'nope'), 'usage')
@@ -357,15 +358,15 @@ class TeamTest(Sessions, unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
             return r.stderr
         self.load(admin, tid)
-        self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-2'})
+        self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-1'})
         # 再导入：映射里的先后变了、多了一个账号：原来的编号不变，新的接着编
         (self.d / 'policy.json').write_text(json.dumps(dict(POLICY, claude={'dave@example.com': 'US-A', 'Bob@Example.com': 'US-B', 'alice@example.com': 'US-A'})))
         self.lines(admin, 'team-import', tid, str(self.d / 'policy.json'), str(self.d / 'nodes.json'))
-        self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-2', 'dave@example.com': 'team-3'})
+        self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-1', 'dave@example.com': 'team-2'})
         # 去掉一个账号、再加一个：去掉的那个的号不给新加的
         self.lines(admin, 'team-map', tid, 'claude', 'dave@example.com', '-')
         self.lines(admin, 'team-map', tid, 'claude', 'erin@example.com', 'US-A')
-        self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-2', 'erin@example.com': 'team-4'})
+        self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-1', 'erin@example.com': 'team-3'})
         # 另一个 Team 也有 team-1（给 frank）
         admin2 = self.device('admin2')
         tid2, root2 = self.lines(admin2, 'team-new', '设计 组', '--device', 'desk')
@@ -388,7 +389,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.code(admin, 'team-alias', tid, 'nobody@example.com', 'x'), 'no_account')
         self.assertEqual(self.code(bob, 'team-alias', tid, 'bob@example.com', 'x'), 'not_admin')
         self.assertEqual(self.lines(admin, 'team-alias', tid, 'claude:Bob@Example.com', '小王'), ['team-1', '2'], '管理员自己这台和 bob 的配置变了')
-        self.assertEqual(self.lines(admin, 'team-alias', tid, 'erin@example.com', 'erin-x'), ['team-4', '2'])
+        self.assertEqual(self.lines(admin, 'team-alias', tid, 'erin@example.com', 'erin-x'), ['team-3', '2'])
         self.assertEqual(self.lines(admin2, 'team-alias', tid2, 'frank@example.com', 'f1'), ['team-1', '2'])
         bob.ok('team-sync')
         said = apply(bob)
@@ -418,6 +419,105 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(admin2, 'team-publish', tid2), ['2', ''])
         self.assertEqual(json.loads((self.tdir(admin2, tid2) / 'admin.json').read_text())['config']['aliases'],
                          {'frank@example.com': 'f1', 'gina@example.com': 'team-2'})
+
+    def test_alias_per_tool(self):
+        """别名按工具记（3.5.3-beta.6 起）：各工具各自从 team-1 编；同一个邮箱在两个工具里各有各的号，成员设备上各工具的账号表各用各的；
+        cca team alias 写 工具:邮箱 只改这个工具里的、只写邮箱改它在的每个工具里的；3.5.3-beta.5 的 Team（alias_n 是一个数、没有 tool_aliases）
+        发布时照各工具重新编，成员设备上没有记录的旧编号跟着换；几个账号对调别名一次换好；cca team name 改 Team 的名字，成员设备跟着改"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        adm = lambda: json.loads((self.tdir(admin, tid) / 'admin.json').read_text())
+        self.load(admin, tid)
+        self.assertEqual((adm()['config']['tool_aliases'], adm()['alias_n']),
+                         ({'claude': {'alice@example.com': 'alice', 'bob@example.com': 'team-1'}, 'codex': {'carol@example.com': 'team-1'}},
+                          {'claude': 1, 'codex': 1}))
+        # 3.5.3-beta.5 的 Team：alias_n 是一个数，别名只有按邮箱的那一份（各工具一起编：carol 是 team-2）
+        a = adm()
+        a['alias_n'] = 2
+        del a['config']['tool_aliases']
+        a['config']['aliases'] = {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-2'}
+        (self.tdir(admin, tid) / 'admin.json').write_text(json.dumps(a))
+        listing = json.loads(admin.ok('team-devices', tid, '--json'))
+        self.assertEqual((listing['tool_aliases']['codex'], listing['aliases']['carol@example.com']), ({'carol@example.com': 'team-1'}, 'team-1'),
+                         '还没发布：管理页给的已经是按工具编好的样子')
+        self.assertNotIn('tool_aliases', adm()['config'], 'team devices 不改 admin.json 里的别名')
+        # 成员设备：Codex 的账号表里有 carol，别名是旧版本照 team-2 补上的（没有记录）
+        m = Device(self.d / 'm', 'm', {})
+        m.config(lambda c: c.update(nodes=['US-A', 'US-B', 'US-C', 'US-D']))
+        (m.cca / 'codex.json').write_text(json.dumps({'team-2(carol@example.com)': 'US-A'}))
+        tables = lambda: (json.loads((m.cca / 'accounts.json').read_text()), json.loads((m.cca / 'codex.json').read_text()))
+
+        def apply(*tools):
+            said = ''
+            for tool in tools:
+                r = m.run('team-apply', CCA_TOOL=tool)
+                self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
+                said += r.stderr
+            return said
+        self.lines(m, 'team-join', '--name', 'm-mini', stdin=self.invite(admin, tid, 'm-mini')[0])
+        self.assertEqual((adm()['config']['tool_aliases']['codex'], adm()['alias_n']), ({'carol@example.com': 'team-1'}, {'claude': 1, 'codex': 1}),
+                         '发布（发邀请）时照各工具重新编，alias_n 换成按工具的')
+        said = apply('claude', 'codex')
+        self.assertIn('按「测试组」的配置把 Codex 账号 team-2（carol@example.com） 的别名改成 team-1', said, '没有记录的旧编号跟着换')
+        self.assertEqual(tables(), ({'alice(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B'}, {'team-1(carol@example.com)': 'US-A'}))
+        self.assertEqual(apply('claude', 'codex'), '', '再对一遍没有要改的')
+        # bob 在 Codex 里也有：Codex 里接着编（team-2）；Claude 里还是 team-1，按邮箱的那一份用它最前面那个工具（Claude）的
+        self.lines(admin, 'team-map', tid, 'codex', 'bob@example.com', 'US-A')
+        self.assertEqual((adm()['config']['tool_aliases']['codex'], adm()['config']['aliases']['bob@example.com']),
+                         ({'carol@example.com': 'team-1', 'bob@example.com': 'team-2'}, 'team-1'))
+        m.ok('team-sync')
+        self.assertEqual((self.doc(m, tid)[1]['tool_aliases']['codex']['bob@example.com'], self.doc(m, tid)[1]['aliases']['bob@example.com']),
+                         ('team-2', 'team-1'), '配置里两份都带着：旧版本的设备照按邮箱的')
+        apply('claude', 'codex')
+        self.assertEqual(tables(), ({'alice(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B'},
+                                    {'team-1(carol@example.com)': 'US-A', 'team-2(bob@example.com)': 'US-A'}))
+        # 改别名：写了工具的只改这个工具里的；同一个工具里重名不行，别的工具里的可以；只写邮箱改它在的每个工具里的
+        self.assertEqual(self.code(admin, 'team-alias', tid, 'codex:bob@example.com', 'team-1'), 'alias', 'Codex 里 carol 已经叫 team-1')
+        self.assertEqual(self.code(admin, 'team-alias', tid, 'agy:bob@example.com', 'x'), 'no_account')
+        self.assertEqual(self.lines(admin, 'team-alias', tid, 'codex:bob@example.com', 'alice'), ['team-2', '2'], 'Claude 里的 alice 不碍事')
+        m.ok('team-sync')
+        self.assertIn('按「测试组」的配置把 Codex 账号 team-2（bob@example.com） 的别名改成 alice', apply('claude', 'codex'))
+        self.assertEqual(tables(), ({'alice(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B'},
+                                    {'team-1(carol@example.com)': 'US-A', 'alice(bob@example.com)': 'US-A'}))
+        self.assertEqual(self.lines(admin, 'team-alias', tid, 'bob@example.com', '小王'), ['team-1、alice', '2'])
+        m.ok('team-sync')
+        apply('claude', 'codex')
+        self.assertEqual(tables(), ({'alice(alice@example.com)': 'US-A', '小王(bob@example.com)': 'US-B'},
+                                    {'team-1(carol@example.com)': 'US-A', '小王(bob@example.com)': 'US-A'}))
+        # 两个账号对调别名：成员设备上一次换好（要换走的账号原来的别名不算占着）
+        self.lines(admin, 'team-map', tid, 'claude', 'erin@example.com', 'US-C')
+        m.ok('team-sync')
+        apply('claude', 'codex')
+        self.assertEqual(tables()[0]['team-2(erin@example.com)'], 'US-C')
+        for spec, new in (('claude:bob@example.com', 'tmp'), ('claude:erin@example.com', '小王'), ('claude:bob@example.com', 'team-2')):
+            self.lines(admin, 'team-alias', tid, spec, new)
+        m.ok('team-sync')
+        said = apply('claude')
+        self.assertEqual(tables()[0], {'alice(alice@example.com)': 'US-A', 'team-2(bob@example.com)': 'US-B', '小王(erin@example.com)': 'US-C'}, said)
+        self.assertEqual(apply('claude', 'codex'), '', '对调完了，再对一遍没有要改的')
+        # 改 Team 的名字：管理员这台马上改，成员设备取到新的一版时跟着改；这台设备上别的 Team 已经叫这个的不行
+        self.assertEqual(self.code(admin, 'team-name', tid, ' '), 'name')
+        self.lines(admin, 'team-new', '别的组', '--device', 'studio')
+        self.assertEqual(self.code(admin, 'team-name', tid, '别的组'), 'name', '这台设备上已经有叫这个的 Team')
+        self.assertEqual(self.code(m, 'team-name', tid, '新组'), 'not_admin')
+        self.assertEqual(self.lines(admin, 'team-name', tid, ' 新组 '), ['测试组', '新组', '2'], '管理员自己这台和 m 的配置变了')
+        self.assertEqual(json.loads((self.tdir(admin, tid) / 'team.json').read_text())['name'], '新组')
+        m.ok('team-sync')
+        self.assertEqual((json.loads((self.tdir(m, tid) / 'team.json').read_text())['name'], self.doc(m, tid)[1]['name']), ('新组', '新组'))
+        # 和服务器对不上（假 curl：连不上）时名字不改，照原来的命令再来一次就行；发布没成时名字已经改了，原因里说照新名字发布
+        named = lambda: json.loads((self.tdir(admin, tid) / 'team.json').read_text())['name']
+        (admin.home / 'reply').mkdir()
+        (admin.home / 'reply' / 'team_members').write_text('000\n')
+        self.assertEqual((self.code(admin, 'team-name', tid, '新组二'), named()), ('server', '新组'))
+        (admin.home / 'reply' / 'team_members').unlink()
+        (admin.home / 'reply' / 'team_put').write_text('000\n')
+        r = admin.run('team-name', tid, '新组二')
+        self.assertEqual((r.returncode, r.stdout.split('\t')[0], named()), (1, 'publish', '新组二'), r.stdout)
+        self.assertIn('名字已经改成「新组二」', r.stdout)
+        self.assertIn('cca team publish 新组二', r.stdout)
+        (admin.home / 'reply' / 'team_put').unlink()
+        self.assertEqual(self.lines(admin, 'team-publish', '新组二'), ['2', ''])
+        m.ok('team-sync')
+        self.assertEqual(json.loads((self.tdir(m, tid) / 'team.json').read_text())['name'], '新组二')
 
     def test_spec_admin(self):
         """管理员由照文档独立实现的那一份扮演：它封的、签的辅助程序解得开、验得过；伪造的、调包的、旧的不要"""
@@ -570,28 +670,28 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(admin, 'team-map', tid, 'claude', 'erin@example.com', 'US-D'), ['1'])
         self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '+claude:erin@example.com'), ['3 个账号'])
         self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'ok')
-        self.assertIn('按「测试组」的配置添加了 Claude 账号 team-3（erin@example.com），出口 US-D', apply(), '新加的账号编成 team-3')
-        self.assertEqual(table()['team-3(erin@example.com)'], 'US-D')
+        self.assertIn('按「测试组」的配置添加了 Claude 账号 team-2（erin@example.com），出口 US-D', apply(), '新加的账号编成 team-2（Claude 里的第二个：Codex 的 carol 另编）')
+        self.assertEqual(table()['team-2(erin@example.com)'], 'US-D')
         self.assertEqual(cfg()['team_added'], {ident('erin@example.com'): tid})
         # 手里那一份配置一时读不出来（文件坏了）：说不准还给不给，不把 Team 加的账号收起来
         good = (self.tdir(bob, tid) / 'doc.json').read_text()
         (self.tdir(bob, tid) / 'doc.json').write_text('{')
         self.assertNotIn('收起来', apply())
-        self.assertIn('team-3(erin@example.com)', table())
+        self.assertIn('team-2(erin@example.com)', table())
         (self.tdir(bob, tid) / 'doc.json').write_text(good)
         apply()
-        self.assertEqual((table()['team-3(erin@example.com)'], table()['alice(alice@example.com)']), ('US-D', 'US-A'))
+        self.assertEqual((table()['team-2(erin@example.com)'], table()['alice(alice@example.com)']), ('US-D', 'US-A'))
         # 不再给 erin：收起来（登录留着），再给回来照原来的键
         self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '-claude:erin@example.com'), ['2 个账号'])
         bob.ok('team-sync')
-        self.assertIn('Team 不再给这台设备 Claude 账号 team-3（erin@example.com）：收起来了', apply())
-        self.assertNotIn('team-3(erin@example.com)', table())
+        self.assertIn('Team 不再给这台设备 Claude 账号 team-2（erin@example.com）：收起来了', apply())
+        self.assertNotIn('team-2(erin@example.com)', table())
         self.assertEqual((cfg()['parked'], 'team_added' in cfg()),
-                         ({ident('erin@example.com'): {'key': 'team-3(erin@example.com)', 'node': 'US-D', 'team': tid}}, False))
+                         ({ident('erin@example.com'): {'key': 'team-2(erin@example.com)', 'node': 'US-D', 'team': tid}}, False))
         self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '+claude:erin@example.com'), ['3 个账号'])
         bob.ok('team-sync')
-        self.assertIn('添加了 Claude 账号 team-3（erin@example.com）', apply())
-        self.assertEqual(('team-3(erin@example.com)' in table(), 'parked' in cfg()), (True, False))
+        self.assertIn('添加了 Claude 账号 team-2（erin@example.com）', apply())
+        self.assertEqual(('team-2(erin@example.com)' in table(), 'parked' in cfg()), (True, False))
         # 不再给 bob@example.com：它是这台机器自己的账号，留着（节点不再被固定）
         self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '-claude:bob@example.com'), ['2 个账号'])
         bob.ok('team-sync')
@@ -601,7 +701,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
         self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'removed')
         said = apply()
-        self.assertIn('Team 不再给这台设备 Claude 账号 team-3（erin@example.com）：收起来了', said)
+        self.assertIn('Team 不再给这台设备 Claude 账号 team-2（erin@example.com）：收起来了', said)
         self.assertIn('alice（alice@example.com） 的出口按维护者的映射固定为 US-C（账号表里写的是 US-A，已改回）', said)
         self.assertEqual(table(), {'mine(bob@example.com)': 'US-B', 'alice(alice@example.com)': 'US-C'})
 
@@ -857,10 +957,11 @@ class TeamTest(Sessions, unittest.TestCase):
         m3.policy(None, team={'v': 1, 'invites': {m3.fp: links[m2.fp]}})
         self.assertNotEqual(m3.ok('team-adopt'), '')
         listing = json.loads(admin.ok('team-devices', tid, '--json'))
-        self.assertEqual((listing['name'], sorted(listing['accounts']['claude']), listing['aliases'], sorted(listing['nodes'])),
-                         ('测试组', ['alice@example.com', 'bob@example.com'], {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-2'},
+        self.assertEqual((listing['name'], sorted(listing['accounts']['claude']), listing['aliases'], listing['tool_aliases'], sorted(listing['nodes'])),
+                         ('测试组', ['alice@example.com', 'bob@example.com'], {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-1'},
+                          {'claude': {'alice@example.com': 'alice', 'bob@example.com': 'team-1'}, 'codex': {'carol@example.com': 'team-1'}},
                           ['US-A', 'US-B', 'US-C', 'US-D', 'US-E']),
-                         '管理页要的：Team 的名字、配置里的账号 → 节点、别名、带着定义的节点')
+                         '管理页要的：Team 的名字、配置里的账号 → 节点、别名（按工具的和按邮箱的）、带着定义的节点')
         bad = [r for r in listing['devices'] if r['label'] == 'm2']
         self.assertEqual(len(bad), 1)
         self.assertIn('不是指定的那把密钥', bad[0]['problem'])

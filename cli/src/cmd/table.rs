@@ -502,10 +502,10 @@ pub fn cmd_policy_rows(args: &[String]) -> R<()> {
     arity("cmd_policy_rows", args, 0, 0)?;
     let c = ctx()?.0;
     let (mut rows, mut todo) = (Vec::new(), Vec::new());
-    let names = policy_names();
     let nodes = c.at("nodes");
     for tool in tools() {
         let Some(table) = tool.tab() else { continue };
+        let names = policy_names(tool);
         let (pm, raw) = (policy_map(tool, Some(&c)), policy_raw(tool));
         for (k, v) in table.items() {
             let e = parse_key(&k).1.to_lowercase();

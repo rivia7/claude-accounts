@@ -1013,7 +1013,7 @@ func genericEvents(_ name: String, _ d: Data) -> [CcaEvent] {
 
 /// 给每个对象加不认识的字段（can_why、hello 的 tools 是字典：键就是数据，不往里加）。
 /// 键是数据（邮箱、工具名）的那几个对象：往里塞一个键就成了一条数据，不塞（连它里面的也不塞）。只认值是对象的：别处同名的数组照塞
-private let dataKeyedObjects: Set<String> = ["accounts", "aliases", "grants"]
+private let dataKeyedObjects: Set<String> = ["accounts", "aliases", "tool_aliases", "grants"]
 
 func injectUnknown(_ x: Any, parentKey: String? = nil, inData: Bool = false) -> Any {
     if var d = x as? [String: Any] {

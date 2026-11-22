@@ -4,8 +4,9 @@
 //! admin.json（600，只有管理员的设备有）：
 //! ```text
 //! {"v": 1, "master": 主密钥（64 个十六进制字符）, "salt": 这个 Team 的盐, "next": 下一台设备的序数, "gen": 服务器上这一份记录的编号,
-//!  "alias_n": 默认的别名编到了 team-几（用过的号不再用）,
-//!  "config": {"accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "install_node": 节点, "nodes": {"group", "proxies"} | null},
+//!  "alias_n": {工具: 默认的别名编到了 team-几}（各工具各编各的，用过的号不再用；3.5.3-beta.5 是一个数）,
+//!  "config": {"accounts": {工具: {邮箱: 节点}}, "tool_aliases": {工具: {邮箱: 别名}}, "aliases": {邮箱: 别名}（照 tool_aliases 算的，
+//!             给旧版本用：每个邮箱用它最前面那个工具里的）, "install_node": 节点, "nodes": {"group", "proxies"} | null},
 //!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字, "state": local | invited | joined | expired | revoked,
 //!              "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
 //!              "sha": 那一版内容的摘要, "exp": 邀请什么时候过期}}}
@@ -27,7 +28,7 @@ use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
 use crate::core::model::{node_of, parse_key};
 use crate::core::policy::{alias_ok, fill_problems, policy_problems, policy_sources};
-use crate::core::team::{load_team, team_dir, team_path, Role, Team, TEAMS_DIR};
+use crate::core::team::{load_team, team_dir, team_path, teams, Role, Team, TEAMS_DIR};
 use crate::core::tool::tools;
 use crate::py::fs::{self, load_quiet, save_json};
 use crate::py::hash::{from_hex, hmac_sha256, to_hex};
@@ -35,7 +36,7 @@ use crate::py::obj::{str_list, Dict, List, V};
 use crate::py::rand::token_hex;
 use crate::py::{json, path, Fail, R};
 use crate::{dict, out};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// 邀请默认多久过期（秒）；服务器收 60 秒～30 天
 const INVITE_TTL: i64 = 7 * 86400;
@@ -123,42 +124,80 @@ fn default_n(alias: &str) -> Option<i64> {
     alias.strip_prefix("team-").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
 }
 
-/// 配置里每个账号都有别名：没有的（不合规的）编成 team-1、team-2……（同一个 Team 里不重复；admin.json 的 alias_n 记着编到第几了，用过的号
-/// 不再用：去掉的账号的号不给新加的），已经不在 Team 里的账号的别名去掉。照工具的先后、各工具里账号加进来的先后编。改了 admin.json 里的
-/// config（没存盘）
-fn default_aliases(a: &Dict) {
+/// 各工具的别名算出来是什么样（alias_plan）：tool_aliases、按邮箱的 aliases、alias_n
+struct AliasPlan {
+    by_tool: Dict,
+    flat: Dict,
+    counters: Dict,
+}
+
+/// 配置里每个账号都有别名，按工具记（{工具: {邮箱: 别名}}）：没有的（不合规的、在这个工具里和前面的账号撞了的）编成 team-1、team-2……——
+/// 各工具（Claude、Codex、Antigravity）各编各的，各自的第一个账号都是 team-1；同一个邮箱在两个工具里是两个账号，各有各的别名。
+/// alias_n（{工具: 编到第几}）记着各工具编到第几了，用过的号不再用（去掉的账号在各台设备上收起来了，再给回来时照原来的键：号给了别的账号
+/// 就撞了）；已经不在 Team 里的账号的别名去掉。照工具的先后、各工具里账号加进来的先后编，别名也照这个先后排（每一次算出来的一样：配置的
+/// 摘要不会白变）。按邮箱、各工具通用的 aliases 照它算：每个邮箱用它最前面那个工具里的（给 3.5.3-beta.5 及以前的 cca：旧版本的设备、
+/// 管理员这台换回旧版本时）。没有 tool_aliases 的（3.5.3-beta.5 及以前的 Team）照 aliases 给它在的每个工具；3.5.3-beta.5 的 alias_n 是
+/// 一个数（那时各工具一起编）：那时编的 team-N 都去掉，照各工具重新编。只算，不改 admin.json
+fn alias_plan(a: &Dict) -> AliasPlan {
     let config = a.dict("config").unwrap_or_default();
     let accounts = config.dict("accounts").unwrap_or_default();
-    let emails: Vec<String> = tools()
-        .iter()
-        .flat_map(|x| accounts.dict(x.name).unwrap_or_default().keys().iter().map(|e| e.to_string()).collect::<Vec<_>>())
-        .collect();
-    let old = config.dict("aliases").unwrap_or_default();
-    let aliases = Dict::new();
-    for e in &emails {
-        if let Some(x) = old.get(e).filter(|x| alias_ok(x) && !aliases.has(e)) {
-            aliases.set(e.as_str(), x);
-        }
-    }
-    let mut used: HashSet<String> = aliases.values().iter().map(|x| x.py_str()).collect();
-    let mut n = a.get("alias_n").and_then(|v| v.as_int()).filter(|n| *n >= 0).unwrap_or(0);
-    n = used.iter().filter_map(|x| default_n(x)).fold(n, i64::max);
-    for e in &emails {
-        if aliases.has(e) {
-            continue;
-        }
-        loop {
-            n += 1;
-            let cand = format!("team-{n}");
-            if used.insert(cand.clone()) {
-                aliases.set(e.as_str(), cand);
-                break;
+    let legacy = a.get("alias_n").is_some_and(|v| v.as_dict().is_none());
+    let counters = if legacy { Dict::new() } else { a.dict("alias_n").unwrap_or_default() };
+    let (have, flat) = (config.dict("tool_aliases"), config.dict("aliases").unwrap_or_default());
+    let plan = AliasPlan { by_tool: Dict::new(), flat: Dict::new(), counters: Dict::new() };
+    for tool in tools().iter() {
+        let emails: Vec<String> = accounts.dict(tool.name).unwrap_or_default().keys().iter().map(|e| e.to_string()).collect();
+        let old = match &have {
+            Some(h) => h.dict(tool.name).unwrap_or_default(),
+            None => flat.clone(),
+        };
+        let mut used: HashSet<String> = HashSet::new();
+        let mut kept: HashMap<&str, String> = HashMap::new();
+        for e in &emails {
+            let Some(x) = old.get(e).filter(alias_ok).map(|x| x.py_str()) else { continue };
+            if !(have.is_none() && legacy && default_n(&x).is_some()) && used.insert(x.clone()) {
+                kept.insert(e, x);
             }
         }
+        let mut n = counters.get(tool.name).and_then(|v| v.as_int()).filter(|n| *n >= 0).unwrap_or(0);
+        n = kept.values().filter_map(|x| default_n(x)).fold(n, i64::max);
+        let m = Dict::new();
+        for e in &emails {
+            let x = kept.remove(e.as_str()).unwrap_or_else(|| loop {
+                n += 1;
+                let cand = format!("team-{n}");
+                if used.insert(cand.clone()) {
+                    break cand;
+                }
+            });
+            if !plan.flat.has(e) {
+                plan.flat.set(e.as_str(), x.as_str());
+            }
+            m.set(e.as_str(), x);
+        }
+        if !m.is_empty() {
+            plan.by_tool.set(tool.name, m);
+        }
+        if n > 0 {
+            plan.counters.set(tool.name, n);
+        }
     }
-    config.set("aliases", aliases);
+    plan
+}
+
+/// 照 alias_plan 改 admin.json 里的 config 和 alias_n（没存盘）
+fn default_aliases(a: &Dict) {
+    let plan = alias_plan(a);
+    let config = a.dict("config").unwrap_or_default();
+    config.set("tool_aliases", plan.by_tool);
+    config.set("aliases", plan.flat);
     a.set("config", config);
-    a.set("alias_n", n);
+    a.set("alias_n", plan.counters);
+}
+
+/// 这个工具（tool_aliases 里的那一节）里叫 alias 的另一个账号的邮箱
+fn alias_holder(names: &Dict, email: &str, alias: &str) -> Option<String> {
+    names.items().iter().find(|(e, x)| **e != *email && x.as_str() == Some(alias)).map(|(e, _)| e.to_string())
 }
 
 /// 工具:邮箱（邮箱小写）；不对是 None
@@ -225,18 +264,27 @@ fn build_doc(t: &Team, a: &Dict, dev: &Dict) -> Dict {
     // 拿别的密钥用了这个邀请的（reconcile 记的 mismatch）：一个账号都不给
     let grants = if dev.get("mismatch").is_some_and(|m| m.truthy()) { V::Dict(Dict::new()) } else { dev.at("grants") };
     let accounts = granted(&config, &grants);
-    let mut emails: BTreeSet<String> = BTreeSet::new();
     let mut used: BTreeSet<String> = BTreeSet::new();
     for m in accounts.values().iter().filter_map(|m| m.as_dict()) {
-        for (e, n) in m.items() {
-            emails.insert(e.to_string());
+        for n in m.values() {
             used.insert(n.py_str());
         }
     }
-    let aliases = Dict::new();
-    for (e, alias) in config.dict("aliases").unwrap_or_default().items() {
-        if emails.contains(&*e) {
-            aliases.set(&*e, alias);
+    // 给的账号的别名：按工具的（tool_aliases），和按邮箱的（aliases，每个邮箱用它最前面那个工具里的：给 3.5.3-beta.5 及以前的 cca）
+    let (by_tool, aliases, names) = (Dict::new(), Dict::new(), config.dict("tool_aliases").unwrap_or_default());
+    for tool in tools().iter() {
+        let (Some(m), Some(src)) = (accounts.dict(tool.name), names.dict(tool.name)) else { continue };
+        let got = Dict::new();
+        for e in m.keys() {
+            if let Some(x) = src.get(&e) {
+                if !aliases.has(&e) {
+                    aliases.set(&*e, x.clone());
+                }
+                got.set(&*e, x);
+            }
+        }
+        if !got.is_empty() {
+            by_tool.set(tool.name, got);
         }
     }
     let install = config.str("install_node").map(|n| n.to_string()).unwrap_or_default();
@@ -246,7 +294,8 @@ fn build_doc(t: &Team, a: &Dict, dev: &Dict) -> Dict {
     dict! {
         "v" => 1, "at" => now(), "name" => t.name.as_str(), "salt" => a.at("salt"),
         "server" => dict! { "u" => t.url.as_str(), "p" => str_list(&t.pins) },
-        "accounts" => accounts, "aliases" => aliases, "install_node" => install, "nodes" => needed_nodes(config.dict("nodes"), &used),
+        "accounts" => accounts, "aliases" => aliases, "tool_aliases" => by_tool, "install_node" => install,
+        "nodes" => needed_nodes(config.dict("nodes"), &used),
     }
 }
 
@@ -680,7 +729,9 @@ pub fn cmd_team_new(args: &[String]) -> R<()> {
         let me = dict! { "n" => 0, "label" => device.as_str(), "state" => "local", "grants" => "all", "seq" => 0 };
         let admin = dict! {
             "v" => 1, "master" => master, "salt" => token_hex(16), "next" => 1,
-            "config" => dict! { "accounts" => Dict::new(), "aliases" => Dict::new(), "install_node" => "", "nodes" => V::None },
+            "config" => dict! {
+                "accounts" => Dict::new(), "tool_aliases" => Dict::new(), "aliases" => Dict::new(), "install_node" => "", "nodes" => V::None,
+            },
             "devices" => dict! { dev.as_str() => me },
         };
         save_json(&path::join(&tmp, "admin.json"), &V::Dict(admin), Some(0o600), true)?;
@@ -1136,8 +1187,10 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
         list.push(V::Dict(row));
     }
     if as_json {
-        // 管理页要的都在这一份里：Team 的名字、配置里的账号 → 节点（管理员定的）、别名、带着定义的节点的名字
+        // 管理页要的都在这一份里：Team 的名字、配置里的账号 → 节点（管理员定的）、别名（按工具的，和按邮箱的：照 alias_plan 算，
+        // 还没发布过的旧 Team 也是按工具编好的样子）、带着定义的节点的名字
         let config = a.dict("config").unwrap_or_default();
+        let plan = alias_plan(&a);
         let nodes: Vec<V> = config
             .dict("nodes")
             .and_then(|n| n.list("proxies"))
@@ -1146,8 +1199,7 @@ pub fn cmd_team_devices(args: &[String]) -> R<()> {
         let doc = dict! {
             "version" => 1, "kind" => "team_devices", "team" => t.id.as_str(), "name" => t.name.as_str(),
             "accounts" => config.get("accounts").filter(|x| x.is_dict()).unwrap_or_else(|| V::Dict(Dict::new())),
-            "aliases" => config.get("aliases").filter(|x| x.is_dict()).unwrap_or_else(|| V::Dict(Dict::new())),
-            "nodes" => nodes, "devices" => list,
+            "aliases" => plan.flat, "tool_aliases" => plan.by_tool, "nodes" => nodes, "devices" => list,
         };
         out!("{}", json::dumps(&V::Dict(doc), json::Fmt::new().utf8().indent(2)));
         return Ok(());
@@ -1352,14 +1404,14 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
         if args.len() != 2 {
             return fail("usage", "用法: cca team import Team --mine");
         }
+        default_aliases(&a); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
         let config = a.dict("config").unwrap_or_default();
-        let accounts = config.dict("accounts").unwrap_or_default();
-        let aliases = config.dict("aliases").unwrap_or_default();
+        let (accounts, by_tool) = (config.dict("accounts").unwrap_or_default(), config.dict("tool_aliases").unwrap_or_default());
         let mut count = 0;
         for tool in tools().iter() {
             let Some(table) = load_quiet(&tool.table).and_then(|j| j.as_dict()) else { continue };
             let src = policy_sources(tool);
-            let m = accounts.dict(tool.name).unwrap_or_default();
+            let (m, names) = (accounts.dict(tool.name).unwrap_or_default(), by_tool.dict(tool.name).unwrap_or_default());
             for (k, v) in table.items() {
                 let node = node_of(&v);
                 if !own_account(&src, &k, &v) || node.is_empty() {
@@ -1368,20 +1420,25 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
                 let (alias, email) = parse_key(&k);
                 let email = email.to_lowercase();
                 m.set(email.as_str(), &*node);
-                let replaceable = aliases.str(&email).is_none_or(|x| default_n(&x).is_some());
-                let taken = aliases.items().iter().any(|(e, x)| **e != *email && x.as_str() == Some(alias.as_str()));
-                if !alias.is_empty() && alias_ok(&V::from(alias.as_str())) && replaceable && !taken {
-                    aliases.set(email.as_str(), alias.as_str());
+                // 这台设备上起过的别名带进去：Team 里原来是默认的 team-N（或者还没有）、这个工具里也没有别的账号叫这个时
+                let replaceable = names.str(&email).is_none_or(|x| default_n(&x).is_some());
+                if !alias.is_empty()
+                    && alias_ok(&V::from(alias.as_str()))
+                    && replaceable
+                    && alias_holder(&names, &email, &alias).is_none()
+                {
+                    names.set(email.as_str(), alias.as_str());
                 }
                 count += 1;
             }
             accounts.set(tool.name, m);
+            by_tool.set(tool.name, names);
         }
         if count == 0 {
             return fail("file", "这台设备上没有自己的官方账号可加（维护者共享的、别的 Team 给的、第三方 API 账号都不算）");
         }
         config.set("accounts", accounts);
-        config.set("aliases", aliases);
+        config.set("tool_aliases", by_tool);
         a.set("config", config);
         default_aliases(&a);
         admin_save(&t.id, &a)?;
@@ -1407,18 +1464,27 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
         }
         accounts.set(tool.name, m);
     }
-    let aliases = Dict::new();
+    // 别名：映射里写的（按邮箱，给它在的每个工具）；没写的照这个 Team 原来在这个工具里给它起的（默认的 team-N、cca team alias 改的），
+    // 免得每导入一次编号就变（各台设备跟着改名）。在这个工具里和前面的撞了的不要（default_aliases 另编）
+    let written = Dict::new();
     for (e, alias) in policy.dict("aliases").unwrap_or_default().items() {
-        aliases.set(e.to_lowercase(), alias);
+        written.set(e.to_lowercase(), alias);
     }
-    // 映射里没写别名的：照这个 Team 原来给它起的（默认的 team-N、cca team alias 改的），免得每导入一次编号就变（各台设备跟着改名）；
-    // 和映射里写的撞了的不要（default_aliases 另编）
-    let before = a.dict("config").and_then(|c| c.dict("aliases")).unwrap_or_default();
-    for (e, alias) in before.items() {
-        let taken = aliases.values().iter().any(|x| x.py_eq(&alias));
-        if !aliases.has(&e) && !taken {
-            aliases.set(&*e, alias);
+    default_aliases(&a); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
+    let before = a.dict("config").and_then(|c| c.dict("tool_aliases")).unwrap_or_default();
+    let by_tool = Dict::new();
+    for tool in tools().iter() {
+        let emails = accounts.dict(tool.name).unwrap_or_default().keys();
+        let (names, prev) = (Dict::new(), before.dict(tool.name).unwrap_or_default());
+        let mut used: HashSet<String> = HashSet::new();
+        for src in [&written, &prev] {
+            for e in emails.iter().filter(|e| !names.has(e)) {
+                if let Some(x) = src.get(e).filter(|x| alias_ok(x) && used.insert(x.py_str())) {
+                    names.set(&**e, x);
+                }
+            }
         }
+        by_tool.set(tool.name, names);
     }
     let mut nodes = V::None;
     let mut node_count = 0;
@@ -1432,8 +1498,8 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
         nodes = V::Dict(dict! { "group" => j.at("group"), "proxies" => j.at("proxies") });
     }
     let config = dict! {
-        "accounts" => accounts, "aliases" => aliases, "install_node" => policy.str("install_node").map_or(String::new(), |n| n.to_string()),
-        "nodes" => nodes,
+        "accounts" => accounts, "tool_aliases" => by_tool, "aliases" => Dict::new(),
+        "install_node" => policy.str("install_node").map_or(String::new(), |n| n.to_string()), "nodes" => nodes,
     };
     a.set("config", config);
     default_aliases(&a);
@@ -1472,9 +1538,10 @@ pub fn cmd_team_map(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// py team-alias Team 账号 新别名：改一个账号在这个 Team 里的别名（别名按邮箱，各工具通用；账号写邮箱，或者 工具:邮箱），再发布。各台设备上
-/// 照 Team 给的用着的下次取配置时跟着改，自己改过的不动（team_alias_follow）；管理员这台设备上的账号表不跟着改。同一个 Team 里别的账号
-/// 已经叫这个的不行。stdout：原来的别名、存上了几台的配置。原因码：no_team、not_admin、alias、no_account、publish
+/// py team-alias Team 账号 新别名：改一个账号在这个 Team 里的别名，再发布。别名按工具记：账号写 工具:邮箱 只改这个工具里的，只写邮箱
+/// 改它在的每个工具里的。各台设备上照 Team 给的用着的下次取配置时跟着改，自己改过的不动（team_alias_follow）；管理员这台设备上的账号表
+/// 不跟着改。同一个工具里别的账号已经叫这个的不行（别的工具里的可以：Claude、Codex 各有各的 team-1）。stdout：原来的别名（几个工具里
+/// 不一样时用「、」连起来）、存上了几台的配置。原因码：no_team、not_admin、alias、no_account、publish
 pub fn cmd_team_alias(args: &[String]) -> R<()> {
     arity("team-alias", args, 3, 3)?;
     let alias = args[2].trim().to_string();
@@ -1483,27 +1550,92 @@ pub fn cmd_team_alias(args: &[String]) -> R<()> {
     }
     let (t, a, _lk) = admin_of(&args[0])?;
     let sel = args[1].trim().to_lowercase();
-    let email = match sel.split_once(':') {
-        Some((tool, e)) if tools().iter().any(|x| x.name == tool) => e.trim().to_string(),
-        _ => sel.clone(),
+    let (only, email) = match sel.split_once(':') {
+        Some((tool, e)) if tools().iter().any(|x| x.name == tool) => (Some(tool.to_string()), e.trim().to_string()),
+        _ => (None, sel.clone()),
     };
-    let accounts = a.dict("config").and_then(|c| c.dict("accounts")).unwrap_or_default();
-    if !accounts.values().iter().any(|m| m.as_dict().is_some_and(|m| m.has(&email))) {
+    default_aliases(&a);
+    let config = a.dict("config").unwrap_or_default();
+    let (accounts, by_tool) = (config.dict("accounts").unwrap_or_default(), config.dict("tool_aliases").unwrap_or_default());
+    let targets: Vec<_> = tools()
+        .iter()
+        .filter(|x| only.as_deref().is_none_or(|o| o == x.name) && accounts.dict(x.name).is_some_and(|m| m.has(&email)))
+        .collect();
+    if targets.is_empty() {
         return fail(
             "no_account",
-            &format!("「{}」里没有 {email} 这个账号（cca team devices {} --json 看有哪些）", t.name, &t.id[..8]),
+            &format!("「{}」里没有 {sel} 这个账号（cca team devices {} --json 看有哪些）", t.name, &t.id[..8]),
         );
     }
-    default_aliases(&a);
-    let aliases = a.dict("config").and_then(|c| c.dict("aliases")).unwrap_or_default();
-    if let Some((other, _)) = aliases.items().iter().find(|(e, x)| **e != *email && x.as_str() == Some(alias.as_str())) {
-        return fail("alias", &format!("「{}」里 {other} 已经叫「{alias}」：换一个", t.name));
+    let mut old: Vec<String> = Vec::new();
+    for x in &targets {
+        let names = by_tool.dict(x.name).unwrap_or_default();
+        if let Some(other) = alias_holder(&names, &email, &alias) {
+            return fail("alias", &format!("「{}」里 {} 账号 {other} 已经叫「{alias}」：换一个", t.name, x.label));
+        }
+        if let Some(o) = names.str(&email).map(|o| o.to_string()).filter(|o| !old.contains(o)) {
+            old.push(o);
+        }
     }
-    let old = aliases.str(&email).map(|x| x.to_string()).unwrap_or_default();
-    aliases.set(email.as_str(), alias.as_str());
+    for x in &targets {
+        let names = by_tool.dict(x.name).unwrap_or_default();
+        names.set(email.as_str(), alias.as_str());
+        by_tool.set(x.name, names);
+    }
+    config.set("tool_aliases", by_tool);
+    a.set("config", config);
+    default_aliases(&a); // 按邮箱的 aliases 跟着算
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
-    out!("{old}\n{stored}");
+    out!("{}\n{stored}", old.join("、"));
+    Ok(())
+}
+
+/// py team-name Team 新名字：改这个 Team 的名字（team.json 的 name），再发布：各台设备下次取配置时跟着改（配置里的 name：follow）。
+/// 已经发出去的邀请链接里带着的还是原来的名字，拿它加入的设备第一次取到配置时换成新的。手机网页端的标题是部署时写进服务器的（app/name），
+/// 下次部署（cca team deploy）时才换。这台设备上别的 Team 已经叫这个名字的不行（按名字选 Team 就分不清了）。先和服务器对一遍：连不上、
+/// 对不上（server）时名字还没改，照原来的命令再来一次就行；发布没成（publish）时名字已经改了，原因里说照新名字 cca team publish。
+/// stdout：原来的名字、新的名字、存上了几台的配置。原因码：no_team、not_admin、name、server、publish
+pub fn cmd_team_name(args: &[String]) -> R<()> {
+    arity("team-name", args, 2, 2)?;
+    let name = args[1].trim().to_string();
+    if !team_name_ok(&name) {
+        return fail("name", "Team 的名字要 1～64 个字符，不能有控制字符");
+    }
+    let (t, a, _lk) = admin_of(&args[0])?;
+    if let Some(o) = teams().iter().find(|o| o.id != t.id && o.name == name) {
+        return fail("name", &format!("这台设备上已经有一个叫「{name}」的 Team（{}）：换一个名字", &o.id[..8]));
+    }
+    if t.attached() {
+        if let Err(why) = reconcile(&t, &a)? {
+            return fail("server", &why);
+        }
+    }
+    let old = t.name.clone();
+    if old != name {
+        let raw = t.raw.copy();
+        raw.set("name", name.as_str());
+        save_team(&t.id, &raw)?;
+    }
+    let t = load_team(&t.id).ok_or_else(|| Fail::Die("刚写好的 team.json 读不回来".into()))?;
+    // 发布没成时名字已经改了：照原来的名字再来一次找不到这个 Team，所以说清楚
+    let later = |why: String| {
+        if old == name {
+            why
+        } else {
+            format!("名字已经改成「{name}」，但配置没全发布成（{why}）：修好后运行 cca team publish {name}")
+        }
+    };
+    let stored = if !t.attached() {
+        0
+    } else {
+        match publish(&t, &a, None)? {
+            Ok(p) if p.problems.is_empty() => p.stored,
+            Ok(p) => return fail("publish", &later(p.problems.join("；"))),
+            Err(why) => return fail("publish", &later(why)),
+        }
+    };
+    out!("{old}\n{name}\n{stored}");
     Ok(())
 }
 

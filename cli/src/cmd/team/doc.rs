@@ -261,8 +261,8 @@ pub fn envelope_seal(root_key: &str, keys: &Keys, tid: &str, dev: &str, seq: i64
 }
 
 /// 配置的明文哪里不对（管理员发布前、设备用之前都查；不认得的项不管：以后加的旧版本照样用）：
-/// {"v": 1, "at", "name", "salt", "server": {"u", "p"}, "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "install_node",
-/// "nodes": {"group", "proxies"} | null}
+/// {"v": 1, "at", "name", "salt", "server": {"u", "p"}, "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名},
+/// "tool_aliases": {工具: {邮箱: 别名}}（3.5.3-beta.6 起；设备有它时照它，aliases 给旧版本用）, "install_node", "nodes": {"group", "proxies"} | null}
 pub fn doc_problems(doc: &Dict) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if !doc.get("v").is_some_and(|v| v.py_eq(&V::Int(1))) {
@@ -300,11 +300,13 @@ pub fn doc_problems(doc: &Dict) -> Vec<String> {
             }
         }
     }
-    if let Some(a) = doc.get("aliases") {
-        let ok = a.as_dict().is_some_and(|a| a.items().iter().all(|(e, v)| email_ok(e) && alias_ok(v)));
-        if !ok {
-            out.push("aliases 不对".into());
-        }
+    let names_ok = |a: &V| a.as_dict().is_some_and(|a| a.items().iter().all(|(e, v)| email_ok(e) && alias_ok(v)));
+    if doc.get("aliases").is_some_and(|a| !names_ok(&a)) {
+        out.push("aliases 不对".into());
+    }
+    // 不认得的工具不管（以后加的工具：accounts 里那一节旧版本本来就不认）
+    if doc.get("tool_aliases").is_some_and(|a| !a.as_dict().is_some_and(|a| a.values().iter().all(names_ok))) {
+        out.push("tool_aliases 不对".into());
     }
     if doc.get("install_node").is_some_and(|n| !n.is_str()) {
         out.push("install_node 不对".into());
@@ -447,6 +449,17 @@ mod tests {
         assert_eq!(with("accounts", V::Dict(dict! { "claude" => dict! { "Alice@Example.com" => "US-A" } })), 1);
         assert_eq!(with("accounts", V::Dict(dict! { "codex" => dict! { "bob@example.com" => "" } })), 1);
         assert_eq!(with("aliases", V::Dict(dict! { "alice@example.com" => "a b" })), 1);
+        let by_tool = |m: Dict| V::Dict(dict! { "claude" => dict! { "alice@example.com" => "alice" }, "codex" => m });
+        assert_eq!(
+            with("tool_aliases", by_tool(dict! { "alice@example.com" => "team-1" })),
+            0,
+            "同一个邮箱在两个工具里可以叫得不一样"
+        );
+        assert_eq!(with("tool_aliases", by_tool(dict! { "Alice@Example.com" => "team-1" })), 1);
+        assert_eq!(with("tool_aliases", by_tool(dict! { "alice@example.com" => "a b" })), 1);
+        assert_eq!(with("tool_aliases", V::Dict(dict! { "later" => dict! { "alice@example.com" => "x" } })), 0, "不认得的工具不管");
+        assert_eq!(with("tool_aliases", V::Dict(dict! { "claude" => "x" })), 1);
+        assert_eq!(with("tool_aliases", V::from("x")), 1);
         assert_eq!(with("nodes", V::from("x")), 1);
         assert_eq!(with("later", V::from("旧版本不认得的项不管")), 0);
         let d = good_doc();

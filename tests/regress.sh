@@ -3718,6 +3718,12 @@ out=$(run cca team alias 书房组 claude:bob@example.com 小王 2>&1); rc=$?
 ok "cca team alias：改一个账号在 Team 里的别名（原来是导入时编的 team-2），有这个账号的那台的配置发布新的一版、那一头取到了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：claude:bob@example.com 在这个 Team 里叫「小王」（原来是「team-2」）；1 台设备的配置发布了新的一版" && printf "%s" "$out" | grep -q "自己改过名字的不动" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  4" ]'
 out=$(runev cca team alias 书房组 alice@example.com 小王 2>&1); rc=$?
 ok "cca team alias：这个 Team 里别的账号已经叫这个：不改（fail 事件 team_alias）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_alias\"" && printf "%s" "$out" | grep -q "bob@example.com 已经叫「小王」"'
+out=$(run cca team name 书房组 书房 2>&1); rc=$?
+ok "cca team name：改 Team 的名字，各台设备的配置（管理员自己这台的也算：配置里有名字）发布新的一版、那一头取到了；cca team ls 里是新名字" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：「书房组」现在叫「书房」；2 台设备的配置发布了新的一版" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  5" ] && run cca team ls --json | jok "\"书房\" in [t[\"name\"] for t in d[\"teams\"]] and \"书房组\" not in [t[\"name\"] for t in d[\"teams\"]]"'
+out=$(runev cca team name 书房 "" 2>&1); rc=$?
+ok "cca team name：名字是空的不行（fail 事件 team_name）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_name\""'
+out=$(run cca team name 书房 书房组 2>&1); rc=$?
+ok "cca team name：改回来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：「书房」现在叫「书房组」" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  6" ]'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'

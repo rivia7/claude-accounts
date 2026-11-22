@@ -192,10 +192,11 @@ pub struct AliasFrom {
     pub admin: bool,
 }
 
-/// 映射里给账号起的别名（可选的 aliases 一节，{"邮箱": "别名"}，各工具通用）和是谁给的：[(邮箱（小写）, AliasFrom)]。不合规的不用。
-/// 各个 Team 的配置里的在前（照加入的先后，同一个邮箱先出现的算数），维护者的映射里的在后。
-/// 旧版本的 cca 不认识这一节、照样忽略它：加了别名，旧版本也照常拉得到映射
-pub fn alias_sources() -> Vec<(String, AliasFrom)> {
+/// 映射给这个工具的账号起的别名和是谁给的：[(邮箱（小写）, AliasFrom)]。不合规的不用。各个 Team 的配置里的在前（照加入的先后，同一个邮箱
+/// 先出现的算数），维护者的映射里的在后。Team 的配置里有按工具分的 tool_aliases（{"工具": {"邮箱": "别名"}}，3.5.3-beta.6 起：各工具
+/// 各编各的 team-N，同一个邮箱在两个工具里可以叫得不一样）时照它里面这个工具的，没有时照按邮箱、各工具通用的 aliases（{"邮箱": "别名"}）；
+/// 维护者的映射只有 aliases。旧版本的 cca 不认识这几节、照样忽略它们：加了别名，旧版本也照常拉得到映射
+pub fn alias_sources(tool: &Tool) -> Vec<(String, AliasFrom)> {
     let mut out: Vec<(String, AliasFrom)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut add = |s: Dict, tid: &str, team: &str, admin: bool| {
@@ -207,7 +208,11 @@ pub fn alias_sources() -> Vec<(String, AliasFrom)> {
         }
     };
     for g in super::team::grants().iter() {
-        if let Some(s) = g.doc.dict("aliases") {
+        let names = match g.doc.dict("tool_aliases") {
+            Some(by_tool) => by_tool.dict(tool.name),
+            None => g.doc.dict("aliases"),
+        };
+        if let Some(s) = names {
             add(s, &g.id, &g.name, g.admin);
         }
     }
@@ -217,10 +222,10 @@ pub fn alias_sources() -> Vec<(String, AliasFrom)> {
     out
 }
 
-/// alias_sources 里的别名：{邮箱（小写）: 别名}
-pub fn policy_names() -> Dict {
+/// alias_sources 里这个工具的别名：{邮箱（小写）: 别名}
+pub fn policy_names(tool: &Tool) -> Dict {
     let out = Dict::new();
-    for (e, f) in alias_sources() {
+    for (e, f) in alias_sources(tool) {
         out.set(e, f.alias);
     }
     out
@@ -353,7 +358,7 @@ fn parked_key(c: &Dict, tool: &Tool, e: &str) -> Option<String> {
 /// 别名用映射里 aliases 写的（和这台机器上别的账号重名时只写邮箱）；关掉共享时收起来的照原来的键加回来。
 /// 这台机器自己的账号（映射里没有的）、这台机器上改过的别名都不动；不加的见 policy_missing 的原因（cca policy 里列出来）
 pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
-    let names: HashMap<String, AliasFrom> = alias_sources().into_iter().collect();
+    let names: HashMap<String, AliasFrom> = alias_sources(tool).into_iter().collect();
     let mut added = Vec::new();
     for (e, n, why) in policy_missing(c, table, tool) {
         if !why.is_empty() {
@@ -385,7 +390,7 @@ pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
 /// 这台设备是管理员的那个 Team 给的不补（管理员这台设备上的别名不动）；别名和这台机器上别的账号重名的：Team 给的换成「Team 的名字-N」
 /// （alias_fallback），还撞就不补。只改键：账号目录、端口和上次使用都按邮箱认，跟着走（reconcile 里随后的端口分配按 acct_id 找回原来的端口）
 pub fn policy_alias_fill(table: &Dict, tool: &Tool) -> Vec<(String, String)> {
-    let (pm, names) = (policy_raw(tool), alias_sources().into_iter().collect::<HashMap<_, _>>());
+    let (pm, names) = (policy_raw(tool), alias_sources(tool).into_iter().collect::<HashMap<_, _>>());
     let mut ren: Vec<(String, String)> = Vec::new();
     let mut used = HashSet::new();
     for (k, v) in table.items() {
@@ -420,16 +425,21 @@ fn rekey(table: &Dict, ren: &[(String, String)]) {
 
 /// 管理员改了 Team 里一个账号的别名：这台设备上没自己改过的跟着改，返回 [(旧键, 新键, Team 的编号)]。哪个别名是 Team 给的记在工具状态的
 /// `team_alias`（{账号目录名: {"a": 账号表里现在用着的别名, "t": 那时 Team 给的别名}}）：账号表里的别名就是 Team 给的（或者撞了以后换成的
-/// 「Team 的名字-N」）时记下；以后账号表里的还是记着的那个、Team 给的变了，才换成新的（撞了照样换成「Team 的名字-N」，还撞就先不换、
-/// 下次再看）；账号表里的和记着的不一样了是这台设备上自己改过（cca rename），不再跟着。这台设备是管理员的那个 Team 给的不记、不跟。
+/// 「Team 的名字-N」）时记下；以后账号表里的还是记着的那个、Team 给的变了，才换成新的；账号表里的和记着的不一样了是这台设备上自己改过
+/// （cca rename），不再跟着。没有记录、账号表里是 team-N、Team 给的是另一个 team-N 的（3.5.3-beta.5 各工具一起编的号，旧版本补上时
+/// 不记）也跟着换。几个账号一起换（挨个挪一位、两个对调）时，要换走的账号原来的别名不算占着；新的别名被这台设备上别的账号占着：换成
+/// 「Team 的名字-N」，还撞就先不换、下次再看。这台设备是管理员的那个 Team 给的不记、不跟。
 /// 账号不在账号表里、也没收起来（parked）的，记着的那一项去掉
 pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<(String, String, String)> {
     let rec = st.dict("team_alias").unwrap_or_default();
-    let names: HashMap<String, AliasFrom> = alias_sources().into_iter().filter(|(_, f)| !f.tid.is_empty() && !f.admin).collect();
+    let names: HashMap<String, AliasFrom> =
+        alias_sources(tool).into_iter().filter(|(_, f)| !f.tid.is_empty() && !f.admin).collect();
     if rec.is_empty() && names.is_empty() {
         return Vec::new(); // 没有 Team 给的别名、也没记着的（没用 Team 的机器都是这样）
     }
-    let mut ren: Vec<(String, String, String)> = Vec::new();
+    let team_n = |x: &str| re!(r"^team-[0-9]+$").fullmatch(x).is_some();
+    // 要跟着换的：(键, 邮箱, 账号目录名, 谁给的)
+    let mut todo: Vec<(String, String, String, &AliasFrom)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (k, v) in table.items() {
         let (a, e) = parse_key(&k);
@@ -448,21 +458,47 @@ pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<
         let given = |x: &str| x == f.alias || alias_fallback(&f.alias, &f.team).as_deref() == Some(x);
         match r {
             None if given(&a) => rec.set(&*aid, dict! { "a" => a.as_str(), "t" => f.alias.as_str() }),
+            None if team_n(&a) && team_n(&f.alias) => todo.push((k.to_string(), e, aid, f)),
             None => {}
             Some(r) if r.str("a").as_deref() != Some(a.as_str()) => {
                 rec.pop(&aid);
             }
             Some(r) if r.str("t").as_deref() == Some(f.alias.as_str()) => {}
             Some(r) if given(&a) => r.set("t", f.alias.as_str()), // 账号表里的已经是新给的（或者它撞了以后的那个）
-            Some(_) => {
-                // 新的别名（和「Team 的名字-N」）都被这台设备上别的账号用着：先不换，下次再看
-                let used: HashSet<String> = ren.iter().map(|(_, n, _)| parse_key(n).0).collect();
-                if let Some(w) = pick_alias(table, f, &e, &used) {
-                    ren.push((k.to_string(), format!("{w}({e})"), f.tid.clone()));
-                    rec.set(&*aid, dict! { "a" => w.as_str(), "t" => f.alias.as_str() });
+            Some(_) => todo.push((k.to_string(), e, aid, f)),
+        }
+    }
+    // 先当它们都换，再一轮轮去掉换不了的：账号表最后是一起改的（rekey），要换走的账号原来的别名不算占着（挨个挪一位、两个对调都换得成）；
+    // 新的别名被不换的账号占着、或者前面的已经要了，换成「Team 的名字-N」再看一轮，还不行就这次不换。每一轮不是换掉一个的新别名就是去掉一个，
+    // 几轮就停
+    let mut moving: Vec<(String, String, String, &AliasFrom, String)> =
+        todo.into_iter().map(|(k, e, aid, f)| (k, e, aid, f, f.alias.clone())).collect();
+    loop {
+        let keys: HashSet<String> = moving.iter().map(|m| m.0.clone()).collect();
+        let mut claimed: HashSet<String> = HashSet::new();
+        let mut changed = false;
+        for (k, e, aid, f, w) in std::mem::take(&mut moving) {
+            let held = table.keys().iter().any(|o| **o != *k && !keys.contains(&**o) && parse_key(o).0 == w);
+            if !held && !claimed.contains(&w) && KEY_RE.matches(&format!("{w}({e})")) {
+                claimed.insert(w.clone());
+                moving.push((k, e, aid, f, w));
+                continue;
+            }
+            changed = true;
+            if w == f.alias {
+                if let Some(fb) = alias_fallback(&f.alias, &f.team) {
+                    moving.push((k, e, aid, f, fb));
                 }
             }
         }
+        if !changed {
+            break;
+        }
+    }
+    let mut ren: Vec<(String, String, String)> = Vec::new();
+    for (k, e, aid, f, w) in moving {
+        rec.set(&*aid, dict! { "a" => w.as_str(), "t" => f.alias.as_str() });
+        ren.push((k, format!("{w}({e})"), f.tid.clone()));
     }
     let parked = parked(c, tool);
     for aid in rec.keys() {

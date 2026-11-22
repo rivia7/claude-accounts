@@ -101,8 +101,8 @@ enum CcaCommand: Sendable, Hashable {
     case teamRename(team: String, device: String, name: String)
     /// 定一个账号走哪个节点（`cca team map <Team> <工具> <邮箱> <节点>`；节点写 `-` 是从这个 Team 里去掉这个账号）
     case teamMap(team: String, tool: ToolID, email: String, node: String)
-    /// 改一个账号在这个 Team 里的别名（`cca team alias <Team> <邮箱> <新别名>`；别名按邮箱，各工具通用）
-    case teamAlias(team: String, email: String, alias: String)
+    /// 改一个账号在这个 Team 里的别名（`cca team alias <Team> <工具:邮箱> <新别名>`：别名按工具记，只改这个工具里的）
+    case teamAlias(team: String, account: String, alias: String)
 
     var tool: ToolID? {
         switch self {
@@ -188,7 +188,7 @@ enum CcaCommand: Sendable, Hashable {
         case .teamGrant(let team, let device, let changes): return ["team", "grant", team, device] + changes
         case .teamRename(let team, let device, let name): return ["team", "rename", team, device, name]
         case .teamMap(let team, let tool, let email, let node): return ["team", "map", team, tool.rawValue, email, node]
-        case .teamAlias(let team, let email, let alias): return ["team", "alias", team, email, alias]
+        case .teamAlias(let team, let account, let alias): return ["team", "alias", team, account, alias]
         }
     }
 

@@ -88,13 +88,18 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
     var name: String?
     /// 配置里的账号：工具 → 邮箱 → 节点（管理员定的）
     var accounts: [String: [String: String]]
-    /// 邮箱 → 别名
+    /// 邮箱 → 别名（各工具通用的那一份：每个邮箱用它最前面那个工具里的；cca 3.5.3-beta.5 及以前只有它）
     var aliases: [String: String]
+    /// 工具 → 邮箱 → 别名（按工具记的，各工具各编各的 team-N；cca 3.5.3-beta.6 起，有它时照它）
+    var toolAliases: [String: [String: String]]?
     /// 配置里带着定义的节点的名字
     var nodes: [String]
     var devices: [TeamDevice]
 
-    enum CodingKeys: String, CodingKey { case version, kind, team, name, accounts, aliases, nodes, devices }
+    enum CodingKeys: String, CodingKey {
+        case version, kind, team, name, accounts, aliases, nodes, devices
+        case toolAliases = "tool_aliases"
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -104,13 +109,16 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
         name = c.string(.name)
         accounts = c.lossyDictionary([String: String].self, .accounts) ?? [:]
         aliases = c.lossyDictionary(String.self, .aliases) ?? [:]
+        toolAliases = c.lossyDictionary([String: String].self, .toolAliases)
         nodes = c.lossyArray(String.self, .nodes) ?? []
         devices = c.lossyArray(TeamDevice.self, .devices) ?? []
     }
 
     /// 配置里的账号，排好的：先照工具（Claude、Codex、Antigravity，别的在后），再照邮箱
     var accountList: [TeamAccount] {
-        accounts.flatMap { tool, m in m.map { TeamAccount(tool: ToolID(rawValue: tool), email: $0.key, node: $0.value, alias: aliases[$0.key]) } }
+        accounts.flatMap { tool, m in
+            m.map { TeamAccount(tool: ToolID(rawValue: tool), email: $0.key, node: $0.value, alias: toolAliases?[tool]?[$0.key] ?? aliases[$0.key]) }
+        }
             .sorted { ($0.tool, $0.email) < ($1.tool, $1.email) }
     }
 }
@@ -227,7 +235,7 @@ struct TeamRenameDraft: Equatable, Sendable {
     var name: String
 }
 
-/// 正在改别名的账号：哪个 Team 的哪个账号（`spec`：输入框开在这一行下面；别名按邮箱，各工具通用）、输入框里的别名（一次只改一个）
+/// 正在改别名的账号：哪个 Team 的哪个账号（`spec`：输入框开在这一行下面；别名按工具记，只改这个工具里的）、输入框里的别名（一次只改一个）
 struct TeamAliasDraft: Equatable, Sendable {
     var team: String
     var spec: String

@@ -1733,14 +1733,14 @@ final class AppModel {
 
     /// 改好：这个账号在 Team 里的别名换成它，发布；各台设备上照 Team 给的用着的下次取配置时跟着改。没改成时输入框留着，原因在提示里
     func setTeamAlias(_ t: TeamEntry, _ a: TeamAccount) {
-        guard let draft = teamAlias, draft.team == t.id, draft.email == a.email else { return }
+        guard let draft = teamAlias, draft.team == t.id, draft.spec == a.spec else { return }
         let alias = draft.alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !alias.isEmpty else { return }
         guard alias != a.alias else {
             teamAlias = nil
             return
         }
-        runTeam(.teamAlias(team: t.id, email: a.email, alias: alias), failureTitle: "没能改 \(a.email) 的别名", success: "改好了", refresh: t) { [weak self] ok in
+        runTeam(.teamAlias(team: t.id, account: a.spec, alias: alias), failureTitle: "没能改 \(a.email) 的别名", success: "改好了", refresh: t) { [weak self] ok in
             if ok, self?.teamAlias == draft { self?.teamAlias = nil }
         }
     }

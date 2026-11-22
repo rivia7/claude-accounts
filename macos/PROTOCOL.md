@@ -1025,10 +1025,12 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 - **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", url, host, device,
   state: "local"（管理员还没接上服务器）| "pending"（还没取过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
   error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
-  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "nodes": [配置里带着定义的节点的名字…],
+  "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "nodes": [配置里带着定义的节点的名字…],
   "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
   seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
+  别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
+  `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。
 - **新建**（`cca team new [名字]`）：App 里不写名字，提问会话里问（`team.new`）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
   `state` 是 `local`：还没接上服务器）。**部署**（`cca team deploy <Team> [用户@主机 …]`）：经 SSH 把这个 Team 的同步服务器装到自己的
   服务器上、接上；App 里不写服务器，在提问会话里问（`hub.deploy`、`hub.password`、`hub.pubkey`，登录不上时的原因码是 `hub_ssh`，4.6）；
@@ -1049,10 +1051,10 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   别的设备已经叫它时是 `team_name`）：`team devices --json` 里它的 `label` 换成新名字；加入了的设备在服务器上的名字（`name`）也跟着改
   （被别的设备用了时服务器在后面加 `-2`），那台设备下次取配置时它的 `config.teams[].device` 跟着变。还没加入、已经不在的只改 `label`。
   没有交互，不发布配置（配置里没有设备的名字）。
-- **改别名**（`cca team alias <Team> <邮箱> <新别名>`，3.5.3-beta.5 起；别名按邮箱、各工具通用，`team devices --json` 的 `aliases`）：改完发布，
-  跑完为止（和 `map` 一样）。别名不合规、这个 Team 里别的账号已经叫它是 `team_alias`，Team 里没有这个账号是 `team_no_account`。没起过别名的
-  账号管理员这边默认编成 `team-1`、`team-2`……；各台设备上照 Team 给的用着的跟着改（`notices` 的 `policy_alias`），自己改过的、管理员自己
-  这台的账号表不动。
+- **改别名**（`cca team alias <Team> <工具:邮箱> <新别名>`，3.5.3-beta.5 起；3.5.3-beta.6 起别名按工具记，写 `工具:邮箱` 只改这个工具里的，
+  只写邮箱改它在的每个工具里的——App 写 `工具:邮箱`）：改完发布，跑完为止（和 `map` 一样）。别名不合规、同一个工具里别的账号已经叫它是
+  `team_alias`，Team 里没有这个账号是 `team_no_account`。没起过别名的账号管理员这边默认编成 `team-1`、`team-2`……（各工具各编各的，
+  各自的第一个账号都是 `team-1`）；各台设备上照 Team 给的用着的跟着改（`notices` 的 `policy_alias`），自己改过的、管理员自己这台的账号表不动。
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、

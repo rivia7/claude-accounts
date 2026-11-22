@@ -42,13 +42,18 @@ func teamFixtureTests() {
     check("筛选记在设置里的写法：来回不变；不认识的当全部",
           [TeamFilter.all, .team(teamA), .outside].allSatisfy { TeamFilter(stored: $0.stored) == $0 } && TeamFilter(stored: nil) == .all
           && TeamFilter(stored: "later") == .all && TeamFilter(stored: "team:") == .all)
+    let twoTools = #"{"team":"ab","accounts":{"claude":{"x@example.com":"US-A"},"codex":{"x@example.com":"US-A"}},"aliases":{"x@example.com":"team-3"}"#
+    let perTool = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + #","tool_aliases":{"claude":{"x@example.com":"team-3"},"codex":{"x@example.com":"team-1"}}}"#).utf8))
+    let flatOnly = try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data((twoTools + "}").utf8))
+    check("team devices：别名按工具（同一个邮箱在 Claude、Codex 里叫得不一样）；旧版 cca 没有 tool_aliases 时用按邮箱的",
+          perTool?.accountList.map(\.alias) == ["team-3", "team-1"] && flatOnly?.accountList.map(\.alias) == ["team-3", "team-3"])
     let unknown = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"later-role","state":"later-state"}"#.utf8))
     check("不认识的角色当成员，不认识的状态当出了问题", unknown?.isAdmin == false && unknown?.state.failing == true && unknown?.seq == 0 && unknown?.accounts == 0)
     if let doc = loadFixture(TeamDevicesDoc.self, "team_devices.json") {
         let now = 1794042000.0
         check("team devices：Team 的编号和名字、配置里的账号（照工具、邮箱排）和别名、带着定义的节点", doc.team == teamA && doc.name == "书房组"
               && doc.accountList.map(\.spec) == ["claude:carol@example.com", "claude:grace@example.com", "codex:frank@example.com"]
-              && doc.accountList.first?.alias == "卡罗尔" && doc.accountList.first?.node == "US-C" && doc.nodes == ["US-A", "US-C"])
+              && doc.accountList.map(\.alias) == ["卡罗尔", "team-1", "team-1"] && doc.accountList.first?.node == "US-C" && doc.nodes == ["US-A", "US-C"])
         let d = doc.devices
         check("team devices：这台在前；设备编号、管理员起的名字、它自己报的名字", d.count == 6 && d[0].me && d[0].id == "0a1b2c3d4e5f6071" && d[1].label == "小王的 MacBook"
               && d[1].name == "wang-mbp" && d[2].name == nil)
@@ -73,9 +78,9 @@ func teamFixtureTests() {
           && CcaCommand.teamRename(team: teamA, device: "0a1b", name: "x").gate == CcaCommand.teamRevoke(team: teamA, device: "d").gate
           && !CcaCommand.teamRename(team: teamA, device: "0a1b", name: "x").runsToCompletion
           && CcaCommand.teamMap(team: teamA, tool: .codex, email: "f@example.com", node: "US-A").arguments == ["team", "map", teamA, "codex", "f@example.com", "US-A"]
-          && CcaCommand.teamAlias(team: teamA, email: "f@example.com", alias: "设计-1").arguments == ["team", "alias", teamA, "f@example.com", "设计-1"]
-          && CcaCommand.teamAlias(team: teamA, email: "f@example.com", alias: "x").runsToCompletion
-          && CcaCommand.teamAlias(team: teamA, email: "f@example.com", alias: "x").gate == CcaCommand.routerSync.gate)
+          && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "设计-1").arguments == ["team", "alias", teamA, "codex:f@example.com", "设计-1"]
+          && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "x").runsToCompletion
+          && CcaCommand.teamAlias(team: teamA, account: "codex:f@example.com", alias: "x").gate == CcaCommand.routerSync.gate)
     check("命令：邀请的输出只经内存里的管道（不是跑完为止的那种）；改账号表的几条跑完为止、和同步路由器排队",
           !CcaCommand.teamInvite(team: teamA, label: "x", accounts: "all").runsToCompletion && CcaCommand.teamSync.runsToCompletion
           && CcaCommand.teamLeave(team: teamA).runsToCompletion && CcaCommand.teamSync.gate == CcaCommand.routerSync.gate
@@ -215,8 +220,8 @@ func teamFixtureTests() {
     m.startTeamAlias(a, acct)
     m.teamAlias?.alias = " 书房-1 "
     m.setTeamAlias(a, acct)
-    check("改别名：去掉首尾空白，按邮箱改；改成了收起输入框",
-          await waitUntil { !m.teamBusy && m.teamAlias == nil } && teamRuns(t).contains(["team", "alias", teamA, acct.email, "书房-1"]))
+    check("改别名：去掉首尾空白，按 工具:邮箱 改（只改这个工具里的）；改成了收起输入框",
+          await waitUntil { !m.teamBusy && m.teamAlias == nil } && teamRuns(t).contains(["team", "alias", teamA, acct.spec, "书房-1"]))
     m.joinTeam()
     check("「粘贴邀请链接…」：开提问会话 cca team join", await waitUntil { !t.started.isEmpty } && t.started == [["team", "join"]], "\(t.started)")
     m.shutdown()

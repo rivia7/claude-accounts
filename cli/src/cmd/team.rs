@@ -51,6 +51,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-import", admin::cmd_team_import),
     Cmd::all("team-map", admin::cmd_team_map),
     Cmd::all("team-alias", admin::cmd_team_alias),
+    Cmd::all("team-name", admin::cmd_team_name),
     Cmd::all("team-publish", admin::cmd_team_publish),
 ];
 
