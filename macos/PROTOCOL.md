@@ -942,7 +942,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `team new`、`team join`、`team deploy <Team>` | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` |
-| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team map`、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、各个账号走哪个节点、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -1045,6 +1045,10 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   不进被观察的状态、不显示在界面上。
 - **改授权**（`cca team grant <Team> <设备编号> all | none | +工具:邮箱 | -工具:邮箱 …`，几项照先后做）、**改节点**
   （`cca team map <Team> <工具> <邮箱> <节点>`）：改完发布，管理员自己这台的账号表马上照它对一遍。跑完为止。
+- **改设备的名字**（`cca team rename <Team> <设备编号> <新名字>`，3.5.3-beta.5 起；名字 1～64 个字符、不能有控制字符，还在这个 Team 里的
+  别的设备已经叫它时是 `team_name`）：`team devices --json` 里它的 `label` 换成新名字；加入了的设备在服务器上的名字（`name`）也跟着改
+  （被别的设备用了时服务器在后面加 `-2`），那台设备下次取配置时它的 `config.teams[].device` 跟着变。还没加入、已经不在的只改 `label`。
+  没有交互，不发布配置（配置里没有设备的名字）。
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、

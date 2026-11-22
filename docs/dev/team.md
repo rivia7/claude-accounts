@@ -488,9 +488,10 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   （cca 先问同意：`team_leave` / `team_delete`）。有 Team 要处理（被移除、记录没了、没取成）时侧栏这一行挂「Team 要处理」。
 - **管理员的 Team 展开「设备和账号」**（展开时问一次 `team devices --json`，低优先级；改过东西以后再问一次）：设备（这台在前；状态、给了它
   几个账号、它手里是第几版；有 `problem` 的挂「要处理」、下面一行说原因）、每台设备的「账号」菜单（全部 / 逐个勾：`cca team grant`；全部都给
-  的设备去掉一个 = `none` 加上剩下的）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
+  的设备去掉一个 = `none` 加上剩下的）、「改名…」（这一行下面开一个输入框，`AppModel.teamRename`；名字没变不发命令，没改成时输入框留着：
+  `cca team rename`）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
   哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）。加账号、导入映射还在终端里（`cca team map`、`import`）。
-- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke` 排 `team`。
+- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
 - `HubKind` 认得 `team` 了；`config.hubs`、`devices --json` 的 `hubs[]` 里 Team 的服务器照 `team`（编号）分，账号问的是哪一台照
   `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
 - 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
@@ -514,7 +515,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   （免得一条旧链接把正用着的换掉），只有被移除了的（`sync.json` 是 `removed`）拿新的邀请直接换上；team.json 坏了、管理员的密钥还在的也不当成没有。
 - `cca team sync [Team]`（`py team-sync`，`sync_one`）：`team_get` 带着手里的序号。回来的那一份先核对设备编号，再验根密钥的签名（`ssh-keygen` 用不了
   和验不过分开说，都不用它）、认证解密、查内容；序号比手里的小的不要，一样的什么都不动，大的才换上：**先**照它改 team.json（名字、服务器在哪）、
-  **再**写 doc.json（中间断了下次接着做完）。结果记进 sync.json：`ok`；`removed`（403 `unknown_device`，`gen` 和记着的一样）；`lost`（`gen` 不一样：
+  **再**写 doc.json（中间断了下次接着做完）。服务器回的这台设备的名字（`me_name`：管理员改过名字）和 team.json 的 `device` 不一样时也跟着改
+  （没有签名，只是给人看的）。结果记进 sync.json：`ok`；`removed`（403 `unknown_device`，`gen` 和记着的一样）；`lost`（`gen` 不一样：
   服务器的记录没了，等管理员登记回去，这台设备什么都不用做）；`error`（连不上、签名不对、内容不对……原因在 `error`，手里的那一份照旧用着）。
 - `cca team leave [Team]`（`py team-leave plan | apply`）：先问（成员 `consent team_leave`，管理员 `team_delete`，范围是 Team 的编号）。请服务器移除
   这台设备（连不上也接着退），本机的目录删掉。管理员退出就是根密钥没了。
@@ -547,6 +549,14 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - `cca team grant Team 设备 all | none | +工具:邮箱 | -工具:邮箱 …`、`cca team map Team 工具 邮箱 节点|-`、`cca team import Team policy.json [nodes.json]`
   （现成的映射和参考节点整个导进来：就是维护者映射仓库里的那两份，格式照 `policy_problems`、`fill_problems` 查）、`cca team publish Team`：改完都发布。
 - `cca team revoke Team 设备`（`py team-revoke plan | apply`）：先问（`consent team_revoke`，范围是设备的编号）。管理员移除不了自己这台。
+- `cca team rename Team 设备 新名字`（`py team-rename`）：admin.json 里它的 `label` 换成新名字；`joined` 的先对一遍（自己退出了的不登记回去），
+  再照它的编号把**同一把公钥**再 `team_enroll` 一次、带着新名字——服务器上加入的时间、认证码（`proof`）照旧（3.5.3-beta.5 起的服务器；以前的
+  服务器丢掉认证码，管理员这边已经记下了公钥，不碍事），远程会话的配对按公钥的指纹认，也照旧；名字被别的设备用了时服务器在后面加 `-2`
+  （`name` 记服务器给的）。公钥用记下的（管理员自己这台是本机的）；没记下的用服务器报的（它本来就存着这一把，再登记一次不多给谁什么）；记下的
+  和服务器报的不一样时不登记。那台设备下次取配置时跟着改 team.json 的 `device`（`follow`）。还没加入、已经不在的只改 `label`；管理员自己这台还没
+  接上服务器时改的是接上时用的名字（team.json 的 `device`）。还在这个 Team 里的别的设备已经叫这个名字（`label` 或者 `name`）的不行（`name`），
+  不然以后按名字就分不清。不发布：配置里没有设备的名字。**远程会话里已经配好的对不跟着改名**：配对表（各自的 `remote/peers.json`）记的是配对那一刻服务器的设备清单里
+  对方的名字（没有时是它自己报的主机名，docs/dev/remote.md），只是给人看的、认设备靠指纹；改名以后再配对一次才换成新名字。
 - `cca team devices Team [--json]`：对一遍以后列出来（`seq` 发布到第几版、`have` 它手里第几版、`problem` 对这一遍时发现的要告诉管理员的）。
 - 给 bash 的一行一项、制表符分开的输出里，没有的栏写 `-`（`team-list`、`team-devices`）：bash 按制表符读，空的栏会被并掉、后面的往前挪。
 

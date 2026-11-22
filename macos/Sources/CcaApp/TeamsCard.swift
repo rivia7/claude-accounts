@@ -190,7 +190,8 @@ private struct TeamAdminSection: View {
     }
 }
 
-/// 一台设备：名字（管理员起的；它自己报的不一样时带上）、状态、给了它几个账号；右边改它能用哪些账号、移除（管理员自己这台不能移除）
+/// 一台设备：名字（管理员起的；它自己报的不一样时带上）、状态、给了它几个账号；右边改它能用哪些账号、改名字、移除（管理员自己这台
+/// 不能移除）。「改名…」在这一行下面打开输入框（`AppModel.teamRename`）
 private struct TeamDeviceLine: View {
     @Environment(AppModel.self) private var model
     let team: TeamEntry
@@ -225,6 +226,9 @@ private struct TeamDeviceLine: View {
                     .controlSize(.small)
                     .fixedSize()
                     .help("这台设备能用这个 Team 里的哪些账号：改了马上发布，它下次取配置时生效")
+                    RowAction("改名…", systemImage: "pencil") { model.startTeamRename(team, device) }
+                        .disabled(renaming)
+                        .help("给这台设备换个名字：加入了的，它在服务器上的名字跟着改")
                     if !device.me {
                         RowAction(device.state == .invited ? "撤回…" : "移除…", systemImage: "xmark.circle") { model.revokeTeamDevice(team, device) }
                             .help(device.state == .invited ? "撤回这个还没用的邀请（先问一句）"
@@ -233,11 +237,34 @@ private struct TeamDeviceLine: View {
                 }
                 .disabled(model.teamBusy || model.flow != nil)
             }
+            if renaming { renameField }
             if let p = device.problem {
                 Label(p, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private var renaming: Bool { model.teamRename.map { $0.team == team.id && $0.device == device.id } ?? false }
+
+    private var renameField: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                TextField("新名字", text: Binding(get: { model.teamRename?.name ?? "" }, set: { model.teamRename?.name = $0 }))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 300)
+                    .onSubmit { model.renameTeamDevice(team, device) }
+                SectionAction("改好", systemImage: "checkmark", prominent: true) { model.renameTeamDevice(team, device) }
+                    .disabled((model.teamRename?.name ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
+                SectionAction("取消", systemImage: "xmark") { model.teamRename = nil }
+            }
+            .disabled(model.teamBusy || model.flow != nil)
+            Text(device.state == .joined
+                 ? "它在服务器上的名字跟着改，下次取配置时它那边也换成新的名字。远程会话里已经配好的对照旧叫配对时的名字（再配一次才换）。"
+                 : "只改这边记着的名字（它还没加入：加入时报的是它自己的名字）。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

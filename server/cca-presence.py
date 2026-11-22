@@ -738,8 +738,9 @@ class Store:
             return 'used' if h in team['spent'] else None
 
     def team_enroll(self, devs, now):
-        """管理员直接登记设备的公钥（它自己的那台；服务器的记录没了以后把各台加回去）：devs 是 parse_enroll 的结果。这个编号原来的
-        那把密钥就此不认（换了密钥），还没用掉的邀请作废；公钥已经是别的编号的设备是 409"""
+        """管理员直接登记设备的公钥（它自己的那台；服务器的记录没了以后把各台加回去；给设备改名字：同一把公钥、新的名字）：devs 是
+        parse_enroll 的结果。这个编号原来的那把密钥就此不认（换了密钥），还没用掉的邀请作废；公钥已经是别的编号的设备是 409。
+        同一把公钥再登记：加入的时间、加入时带的认证码（proof）照旧"""
         root = self.root_fp()
         if any(fp == root for fp, _, _ in devs.values()):   # 根密钥不是设备
             return 400, {'error': 'bad'}
@@ -756,6 +757,8 @@ class Store:
                 old = ms.get(fp) or {}
                 names[dev] = self.free_name(name, fp)
                 ms[fp] = {'name': names[dev], 'key': key, 'joined': old['joined'] if is_time(old.get('joined')) else now, 'dev': dev}
+                if old.get('proof'):
+                    ms[fp]['proof'] = old['proof']
             team['invites'] = {h: i for h, i in team['invites'].items() if i['dev'] not in devs}
             self.save()
             return 200, {'v': API, 'ok': True, 'names': names, 'members': len(ms), 'gen': team['gen']}

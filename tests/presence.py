@@ -808,7 +808,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
                          '过期不久的邀请：配置照存（管理员多半会再发一个）')
         self.assertEqual(st.team_members(1100)[1]['invites'], [], '过期的邀请不列出来')
         self.assertEqual(st.team_invite(H(t2), '01' * 8, 60, 1100)[0], 200, '同一个编号再发')
-        self.assertEqual(st.team_join('SHA256:x', self.pubs['a'], 'mac', t2, 1101)[0], 200)
+        self.assertEqual(st.team_join('SHA256:x', self.pubs['a'], 'mac', t2, 1101, proof='pf')[0], 200)
         self.assertEqual(st.invite_state(t2, 1102), 'used')
         later = 1101 + srvmod.INVITE_KEEP + 1
         self.assertEqual(st.team_members(later)[0], 200)   # 看名单、存配置、发邀请时顺带清
@@ -828,6 +828,10 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
             self.assertEqual(st.team_join('SHA256:y', self.pubs['b'], 'two', 'dd' * 16, later), (507, {'error': 'full'}))
             self.assertEqual(st.team_enroll({'01' * 8: ('SHA256:x', self.pubs['a'], 'renamed')}, later)[1]['names'], {'01' * 8: 'renamed'},
                              '已经在的设备改名字不算多')
+        m = st.data['machines']['SHA256:x']
+        self.assertEqual((m['name'], m['joined'], m.get('proof')), ('renamed', 1101, 'pf'), '改名字：加入的时间、加入时的认证码照旧')
+        row = [r for r in st.team_members(later)[1]['members'] if r['dev'] == '01' * 8][0]
+        self.assertEqual((row['name'], row['proof']), ('renamed', 'pf'), '管理员照旧核对得了它的公钥')
         self.assertEqual(st.team_revoke('05' * 8)[0], 200)
         # 状态文件手改坏了：样子不对的邀请、设备不要，照常启动、照常回话
         raw = json.loads((self.d / 's1' / 'state.json').read_text())

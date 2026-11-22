@@ -220,6 +220,13 @@ struct TeamInviteDraft: Equatable, Sendable {
     var picked: Set<String> = []
 }
 
+/// 正在改名字的设备：哪个 Team 的哪台（设备编号）、输入框里的名字（一次只改一台）
+struct TeamRenameDraft: Equatable, Sendable {
+    var team: String
+    var device: String
+    var name: String
+}
+
 /// 按 Team 筛选账号（侧栏、总览、菜单栏面板共用一个选择；只管显示）
 enum TeamFilter: Equatable, Hashable, Sendable {
     /// 全部账号

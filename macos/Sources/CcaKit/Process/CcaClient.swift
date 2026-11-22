@@ -97,6 +97,8 @@ enum CcaCommand: Sendable, Hashable {
     case teamRevoke(team: String, device: String)
     /// 改一台设备能用哪些账号（`cca team grant <Team> <设备编号> all | none | +工具:邮箱 | -工具:邮箱 …`）
     case teamGrant(team: String, device: String, changes: [String])
+    /// 给一台设备改名字（`cca team rename <Team> <设备编号> <新名字>`）：加入了的，它在服务器上的名字跟着改
+    case teamRename(team: String, device: String, name: String)
     /// 定一个账号走哪个节点（`cca team map <Team> <工具> <邮箱> <节点>`；节点写 `-` 是从这个 Team 里去掉这个账号）
     case teamMap(team: String, tool: ToolID, email: String, node: String)
 
@@ -105,7 +107,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamMap: return nil
+             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap: return nil
         }
     }
 
@@ -116,7 +118,7 @@ enum CcaCommand: Sendable, Hashable {
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
              .clientAutoInstall, .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamMap: return nil
+             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap: return nil
         }
     }
 
@@ -182,6 +184,7 @@ enum CcaCommand: Sendable, Hashable {
         case .teamInvite(let team, let label, let accounts): return ["team", "invite", team, label, "--accounts", accounts]
         case .teamRevoke(let team, let device): return ["team", "revoke", team, device]
         case .teamGrant(let team, let device, let changes): return ["team", "grant", team, device] + changes
+        case .teamRename(let team, let device, let name): return ["team", "rename", team, device, name]
         case .teamMap(let team, let tool, let email, let node): return ["team", "map", team, tool.rawValue, email, node]
         }
     }
@@ -205,7 +208,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteList, .remoteAllow, .remoteUnpair: return 40   // 问一次服务器（签名、直连），取消配对被限流时还要再试两次
         case .remoteSwitch: return 30
         case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
-        case .teamDevices, .teamInvite, .teamRevoke: return 60   // 问 Team 的服务器，发布配置（设备多时分几次存）
+        case .teamDevices, .teamInvite, .teamRevoke, .teamRename: return 60   // 问 Team 的服务器，发布配置（设备多时分几次存）
         case .teamSync, .teamLeave, .teamGrant, .teamMap: return 180   // 改完账号表马上照它对一遍，可能同步路由器
         }
     }
@@ -219,7 +222,7 @@ enum CcaCommand: Sendable, Hashable {
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
-             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .teamDevices, .teamInvite, .teamRevoke: return false
+             .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .teamDevices, .teamInvite, .teamRevoke, .teamRename: return false
         case .teamSync, .teamLeave, .teamGrant, .teamMap: return true   // 改账号表、同步路由器：半路杀掉会留下一半
         }
     }
@@ -242,7 +245,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteList: return nil   // AppModel 保证一次一个
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
         case .teamDevices: return nil   // AppModel 保证一次一个
-        case .teamInvite, .teamRevoke: return "team"   // 改管理员这边记着的设备：一个接一个
+        case .teamInvite, .teamRevoke, .teamRename: return "team"   // 改管理员这边记着的设备：一个接一个
         case .teamSync, .teamLeave, .teamGrant, .teamMap: return "router-sync"   // 账号表跟着变，可能同步路由器：和拉映射、同步路由器排队
         }
     }

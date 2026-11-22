@@ -6651,6 +6651,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team devices Team [--json]               有哪些设备
       cca team revoke Team 设备                    移除一台设备、撤回邀请
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
+      cca team rename Team 设备 新名字             给一台设备改名字（它在服务器上的名字跟着改）
       cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
@@ -6701,6 +6702,15 @@ cmd_team() {
 		grant)
 			out=$(py team-grant "$@") || team_fail "$out" "没改成"
 			okay "改好了：现在给这台设备的是${out}" ;;
+		rename)
+			[ $# -eq 3 ] || die "用法: cca team rename Team 设备 新名字"
+			out=$(py team-rename "$@") || team_fail "$out" "没改成"
+			{ local rn_old rn_new rn_why; IFS= read -r rn_old; IFS= read -r rn_new; IFS= read -r rn_why; } <<< "$out"
+			if [ -z "$rn_why" ]; then
+				okay "改好了：「${rn_old}」现在叫「${rn_new}」（它下次取配置时跟着改）"
+			else
+				okay "改好了：「${rn_old}」现在叫「${rn_new}」。${rn_why}"
+			fi ;;
 		import)
 			out=$(py team-import "$@") || team_fail "$out" "没导入成"
 			{ local n nodes stored; IFS= read -r n; IFS= read -r nodes; IFS= read -r stored; } <<< "$out"

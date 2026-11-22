@@ -1206,6 +1206,92 @@ pub fn cmd_team_grant(args: &[String]) -> R<()> {
     Ok(())
 }
 
+/// py team-rename Team 设备 新名字：给一台设备改名字。管理员这边记着的名字（label）改成它；加入了的设备在服务器上的名字也跟着改
+/// （同一把公钥照它的编号再登记一次：team_enroll，加入的时间、远程会话的配对都不变；名字被别的设备用了时服务器在后面加 -2），它自己
+/// 下次取配置时跟着改（team.json 的 device：follow）。登记之前先和服务器对一遍：自己退出了的不登记回去；服务器报的公钥和记下的对不上
+/// 时不登记（只改这边记着的）。管理员自己这台还没接上服务器时改的是接上时用的名字。还在这个 Team 里的别的设备已经叫这个名字的不行。
+/// stdout：原来的名字、改好的名字、服务器上的名字没跟着改的原因（改了是空行）。原因码：no_team、not_admin、no_device、name、server、
+/// 以及请求没成的那些
+pub fn cmd_team_rename(args: &[String]) -> R<()> {
+    let [sel, device, name] = args else {
+        return Err(Fail::Die("用法: py team-rename Team 设备 新名字".into()));
+    };
+    let name = name.trim().to_string();
+    if !name_ok(&name) {
+        return fail("name", NAME_BAD);
+    }
+    let (t, a, _lk) = admin_of(sel)?;
+    let dev = match find_device(&a, device) {
+        Ok(d) => d,
+        Err(why) => return fail("no_device", &why),
+    };
+    let devs = a.dict("devices").unwrap_or_default();
+    let still = |d: &Dict| matches!(d.str("state").as_deref(), Some("local" | "invited" | "joined"));
+    let taken = devs.items().iter().any(|(other, o)| {
+        **other != *dev
+            && o.as_dict().is_some_and(|o| {
+                still(&o) && (o.str("label").as_deref() == Some(name.as_str()) || o.str("name").as_deref() == Some(name.as_str()))
+            })
+    });
+    if taken {
+        return fail("name", &format!("这个 Team 里已经有一台设备叫「{name}」：换一个名字"));
+    }
+    let d = devs.dict(&dev).unwrap_or_default();
+    let (old, me) = (label_of(&d, &dev), dev == t.dev);
+    let mut done = name.clone();
+    let why = if !t.attached() {
+        if me {
+            "还没接上服务器：接上时用这个名字".to_string()
+        } else {
+            "还没接上服务器：只改了这边记着的名字".to_string()
+        }
+    } else if d.str("state").as_deref() != Some("joined") {
+        let gone = !still(&d);
+        format!("{}：只改了这边记着的名字", if gone { "它已经不在这个 Team 里了" } else { "它还没加入" })
+    } else {
+        let rows = match reconcile(&t, &a)? {
+            Ok(r) => r,
+            Err(why) => return fail("server", &why),
+        };
+        let reported = rows.dict("by_dev").and_then(|b| b.dict(&dev)).and_then(|r| r.str("pub")).and_then(|p| root_line(&p));
+        // 记下的公钥（管理员自己这台是本机的）；没记下（加入时没带对认证码）时用服务器报的：它本来就存着这一把，再登记一次不多给谁什么
+        let known = if me { Some(pub_line(&t.path("id_ed25519"))?) } else { d.str("pub").map(|p| p.to_string()) };
+        let key = match (known, reported) {
+            (Some(k), Some(r)) if k == r => Some(k),
+            (None, Some(r)) => Some(r),
+            _ => None,
+        };
+        match key.filter(|_| d.str("state").as_deref() == Some("joined")) {
+            None if d.str("state").as_deref() != Some("joined") => "它已经退出了这个 Team：只改了这边记着的名字".to_string(),
+            None => "服务器报的公钥和这台设备加入时的不一样：服务器上的名字没改（cca team devices 看看）".to_string(),
+            Some(key) => {
+                let cfg = match root_cfg(&t)? {
+                    Ok(c) => c,
+                    Err(why) => return fail("not_attached", &why),
+                };
+                let payload = dict! { dev.as_str() => dict! { "pub" => key.as_str(), "name" => name.as_str() } };
+                let (code, j) = presence_post(&cfg, "team_enroll", &dict! { "devices" => payload }, 20)?;
+                if code != 200 {
+                    let (c, why) = admin_fault(&t, code, &j);
+                    return fail(c, &why);
+                }
+                done = j.dict("names").and_then(|n| n.str(&dev)).filter(|n| name_ok(n)).map_or(name.clone(), |n| n.to_string());
+                d.set("name", done.as_str());
+                String::new()
+            }
+        }
+    };
+    d.set("label", name.as_str());
+    admin_save(&t.id, &a)?;
+    if me && (why.is_empty() || !t.attached()) {
+        let raw = t.raw.copy();
+        raw.set("device", done.as_str());
+        save_team(&t.id, &raw)?;
+    }
+    out!("{old}\n{done}\n{why}");
+    Ok(())
+}
+
 /// py team-import Team policy.json [nodes.json]：把现有的映射（账号 → 节点、别名、安装客户端用的节点）和参考节点导进这个 Team 的
 /// 配置（整个换掉原来的），再发布。文件就是维护者映射仓库里的那两份（格式照旧查）。stdout：几个账号、几个节点、存上了几台的配置。
 /// 原因码：no_team、not_admin、file（读不了、格式不对）、publish

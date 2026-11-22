@@ -47,6 +47,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-devices", admin::cmd_team_devices),
     Cmd::all("team-revoke", admin::cmd_team_revoke),
     Cmd::all("team-grant", admin::cmd_team_grant),
+    Cmd::all("team-rename", admin::cmd_team_rename),
     Cmd::all("team-import", admin::cmd_team_import),
     Cmd::all("team-map", admin::cmd_team_map),
     Cmd::all("team-publish", admin::cmd_team_publish),
@@ -364,8 +365,9 @@ fn sync_fetch(t: &Team, have: i64) -> R<Synced> {
     Ok(Synced { state: "ok", seq, why: String::new() })
 }
 
-/// 新的一版配置里说的 Team 的名字、服务器在哪（管理员搬了服务器、换了证书），和服务器这一份记录的编号：变了就跟着改 team.json。
-/// 名字、服务器只照验过签名的新一版改；编号是服务器回的（没有签名，只用来分清被移除了还是记录没了）
+/// 新的一版配置里说的 Team 的名字、服务器在哪（管理员搬了服务器、换了证书），和服务器这一份记录的编号、这台设备在服务器上的名字
+/// （管理员改了：cca team rename）：变了就跟着改 team.json。Team 的名字、服务器只照验过签名的新一版改；编号和设备的名字是服务器回的
+/// （没有签名：编号只用来分清被移除了还是记录没了，设备的名字只是给人看的）
 fn follow(t: &Team, doc: Option<&Dict>, reply: &Dict) -> R<()> {
     let raw = t.raw.copy();
     let mut changed = false;
@@ -385,6 +387,10 @@ fn follow(t: &Team, doc: Option<&Dict>, reply: &Dict) -> R<()> {
     }
     if let Some(g) = reply.str("gen").filter(|g| hex32(g) && raw.str("gen").as_deref() != Some(&**g)) {
         raw.set("gen", &*g);
+        changed = true;
+    }
+    if let Some(n) = reply.str("me_name").filter(|n| name_ok(n) && **n != *t.device) {
+        raw.set("device", &*n);
         changed = true;
     }
     if changed {

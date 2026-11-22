@@ -1593,6 +1593,7 @@ final class AppModel {
         teamSnapshots = teamSnapshots.filter { ids.contains($0.key) }
         teamExpanded = teamExpanded.filter { ids.contains($0) }
         if let t = teamInvite.team, !ids.contains(t) { teamInvite = TeamInviteDraft() }
+        if let r = teamRename, !ids.contains(r.team) { teamRename = nil }
     }
 
     /// 筛选菜单里的几项：全部、各个 Team、不在 Team 里的
@@ -1620,6 +1621,8 @@ final class AppModel {
     var teamExpanded: Set<String> = []
     /// 正在填的邀请（哪个 Team、给设备起的名字、给哪些账号）
     var teamInvite = TeamInviteDraft()
+    /// 正在改名字的设备（「改名…」打开的输入框；改好了、取消了是 nil）
+    var teamRename: TeamRenameDraft?
 
     func teamSnapshot(_ t: TeamEntry) -> TeamSnapshot? { teamSnapshots[t.id] }
 
@@ -1701,6 +1704,25 @@ final class AppModel {
                 success: "改好了", refresh: t)
     }
 
+    /// 「改名…」：这台设备的名字换成输入框（先填着现在的名字）
+    func startTeamRename(_ t: TeamEntry, _ d: TeamDevice) {
+        teamRename = TeamRenameDraft(team: t.id, device: d.id, name: d.label)
+    }
+
+    /// 改好：管理员这边记着的名字换成它；加入了的设备在服务器上的名字也改（它下次取配置时看到）。没改成时输入框留着，原因在提示里
+    func renameTeamDevice(_ t: TeamEntry, _ d: TeamDevice) {
+        guard let draft = teamRename, draft.team == t.id, draft.device == d.id else { return }
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        guard name != d.label else {
+            teamRename = nil
+            return
+        }
+        runTeam(.teamRename(team: t.id, device: d.id, name: name), failureTitle: "没能给「\(d.label)」改名字", success: "改好了", refresh: t) { [weak self] ok in
+            if ok, self?.teamRename == draft { self?.teamRename = nil }
+        }
+    }
+
     /// 定一个账号走哪个节点（各台设备下次取配置时跟着换）
     func mapTeamAccount(_ t: TeamEntry, _ a: TeamAccount, node: String) {
         guard node != a.node, !node.isEmpty else { return }
@@ -1708,7 +1730,7 @@ final class AppModel {
                 refresh: t)
     }
 
-    private func runTeam(_ command: CcaCommand, failureTitle: String, success: String, refresh: TeamEntry?) {
+    private func runTeam(_ command: CcaCommand, failureTitle: String, success: String, refresh: TeamEntry?, done: (@MainActor (Bool) -> Void)? = nil) {
         guard phase == .ready, teamAvailable, let client, !teamBusy else { return }
         teamBusy = true
         let prompter = hooks.prompter
@@ -1716,6 +1738,7 @@ final class AppModel {
             let r = await client.execute(command, prompter: prompter)
             guard let self else { return }
             self.teamBusy = false
+            done?(r.isSuccess)
             self.finish(r, failureTitle: failureTitle, success: nonEmpty(r.resultEvent?.message) ?? success)
             await self.afterAction()
             if let refresh { self.refreshTeamDevices(refresh, manual: true) }
