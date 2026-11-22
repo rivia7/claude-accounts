@@ -272,6 +272,8 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
 struct Report {
     mode: String,
     port: i64,
+    /// 安装脚本这次定下的服务器地址（--host、服务器上记着的、放进的 ssh -G 的 hostname、它看得到的公网 IP；认不出时空着）
+    host: String,
     /// Team 的服务器：远程会话的中转的数据端口（没开是 0；旧的安装脚本不说这一项）
     relay: i64,
     /// 手机的网页端的地址（https://地址:端口/；没开是空的）、证书拿到了没有（ok | wait）、没开的原因（port80 | lan | host | web_port）
@@ -292,6 +294,7 @@ fn report(stdout: &str) -> Report {
         match k {
             "mode" => r.mode = v.to_string(),
             "port" => r.port = v.parse().unwrap_or(0),
+            "host" => r.host = v.to_string(),
             "relay" => r.relay = v.parse().unwrap_or(0),
             "web" => r.web = v.to_string(),
             "web_cert" => r.web_cert = v.to_string(),
@@ -316,6 +319,7 @@ fn fail_code(code: &str) -> &'static str {
         "deps" => "deps",
         "image" => "image",
         "port" => "port",
+        "taken" => "taken",
         "usage" => "usage",
         "start" => "start",
         "host" => "host",
@@ -354,7 +358,9 @@ pub struct TeamInstalled {
 /// 根公钥（ssh-ed25519 AAAA…），svc 是服务名（cca-team-<编号的前 8 位>：一台服务器上每个 Team
 /// 一个服务，目录默认 /opt/<服务名>）；old 是这个 Team 现在接着的地址和证书公钥的指纹。--check 只看登录得上不（返回 None）。
 /// 装好了返回各台设备该连的地址：--host；没写时，装好的那台用的证书就是现在接着的那张（还是那台服务器：只是更新）就照原来的地址，
-/// 不然是 ssh -G 的 hostname。手机的网页端（证书机构要验证的地址）在装之前就要定：--host，没写时是 ssh -G 的 hostname
+/// 不然照安装脚本定下的（report 的 host）。安装脚本在装之前定地址（手机的网页端的证书要它）：--host；没写时照服务器上记着的（.env 的
+/// CCA_HUB_HOST：只是更新，不拿 ssh 的主机名盖掉——ssh 走的可能是内网地址、别名），没记着（第一次装、搬到别的服务器）才用这里放进的
+/// ssh -G 的 hostname（CCA_HUB_HOST_HINT），再是它看得到的公网 IP
 pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &[String])>) -> R<Option<TeamInstalled>> {
     let o = opts(args, &format!("/opt/{svc}"))?;
     if o.check {
@@ -365,7 +371,14 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
     else {
         return fail("key", "这个 Team 的根公钥读不出来");
     };
-    let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\nset -- --dir {}", sq(key), sq(&o.dir));
+    let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\n", sq(key));
+    if o.host.is_none() {
+        let hint = ssh_host(&o);
+        if HOST_RE.fullmatch(&hint).is_some() {
+            pre.push_str(&format!("CCA_HUB_HOST_HINT={}\n", sq(&hint)));
+        }
+    }
+    pre.push_str(&format!("set -- --dir {}", sq(&o.dir)));
     if let Some(p) = o.port {
         pre.push_str(&format!(" --port {p}"));
     }
@@ -374,9 +387,8 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
         Some(p) => pre.push_str(&format!(" --web-port {p}")),
         None => {}
     }
-    let web_host = o.host.clone().unwrap_or_else(|| ssh_host(&o));
-    if HOST_RE.fullmatch(&web_host).is_some() {
-        pre.push_str(&format!(" --host {}", sq(&web_host)));
+    if let Some(h) = o.host.as_ref().filter(|h| HOST_RE.fullmatch(h).is_some()) {
+        pre.push_str(&format!(" --host {}", sq(h)));
     }
     if let Some(m) = &o.mode {
         pre.push_str(&format!(" --{m}"));
@@ -386,6 +398,7 @@ pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &
     let host = match (&o.host, old) {
         (Some(h), _) => h.clone(),
         (None, Some((u, pins))) if pins.contains(&r.pin) => url_parts(u).0,
+        _ if !r.host.is_empty() => r.host.clone(),
         _ => ssh_host(&o),
     };
     if HOST_RE.fullmatch(&host).is_none() {
@@ -542,15 +555,18 @@ mod tests {
     fn reads_the_report() {
         let r = report("noise\nCCA-HUB mode docker\nCCA-HUB port 18445\nCCA-HUB pin sha256//abc=\nCCA-HUB state new\nCCA-HUB ok\n");
         assert_eq!(
-            (r.mode.as_str(), r.port, r.pin.as_str(), r.state.as_str(), r.ok, r.web.as_str()),
-            ("docker", 18445, "sha256//abc=", "new", true, "")
+            (r.mode.as_str(), r.port, r.pin.as_str(), r.state.as_str(), r.ok, r.web.as_str(), r.host.as_str()),
+            ("docker", 18445, "sha256//abc=", "new", true, "", "")
         );
+        assert_eq!(report("CCA-HUB host 2001:db8::1\nCCA-HUB ok\n").host, "2001:db8::1");
         let r = report("CCA-HUB web https://192.0.2.10:18447/\nCCA-HUB web_cert wait\nCCA-HUB ok\n");
         assert_eq!((r.web.as_str(), r.web_cert.as_str(), r.web_off.as_str()), ("https://192.0.2.10:18447/", "wait", ""));
         assert_eq!(report("CCA-HUB web_off port80\n").web_off, "port80");
         let r = report("CCA-HUB fail port 端口 18445 被别的程序占着\n");
         assert_eq!(r.fail, Some(("port".into(), "端口 18445 被别的程序占着".into())));
         assert!(!r.ok);
+        let codes = ["root", "sudo", "deps", "image", "port", "taken", "usage", "start", "host", "none", "bogus"].map(fail_code);
+        assert_eq!(codes, ["root", "root", "deps", "image", "port", "taken", "usage", "start", "host", "install", "install"]);
     }
 
     #[test]

@@ -36,6 +36,8 @@ SVC="" UNIT=""             # 服务名（systemd 的服务名和系统用户、D
 WHAT="Team 的同步服务器"   # 说话时怎么叫它
 # Team 的根公钥（cca team deploy 放进的，或者 --team-root；这里只留 ssh-ed25519 后面那一段，没有空格好写进 .env）
 TEAMROOT=${CCA_HUB_TEAM_ROOT:-}
+# cca team deploy 没写 --host 时放进的 ssh -G 的主机名：服务器上没记着地址（第一次装、搬过来的）时才用它，更新时不拿它盖掉记着的
+HOSTHINT=${CCA_HUB_HOST_HINT:-}
 DIRSET=""                  # 命令里写了 --dir
 CUID=10001                 # 容器里运行服务端、证书助手的用户（compose.yaml 的 user）
 DEF_PORT=18445
@@ -262,9 +264,10 @@ pick_relay() {   # RELAY：给这个 Team 的远程会话做中转的数据端�
 		die port "中转的数据端口 ${RELAY} 被别的程序占着：换一个（--relay-port），或者不开中转（--no-relay）"
 	fi
 }
-pick_host() {   # HOST：各台设备、手机经它连过来的地址（--host；没写时照上次记下的、再是这台机器上看得到的公网 IP，都没有时在终端里问）。
-	            # HP 是网址里的写法。$1 是 1：一定要有（要打出管理员接上它的那一行），问不到就停下
+pick_host() {   # HOST：各台设备、手机经它连过来的地址（--host；没写时照上次记下的，再是 cca team deploy 放进的 ssh 的主机名、这台机器上
+	            # 看得到的公网 IP，都没有时在终端里问）。HP 是网址里的写法。$1 是 1：一定要有（要打出管理员接上它的那一行），问不到就停下
 	[ -n "$HOST" ] || HOST=$(env_get CCA_HUB_HOST)
+	[ -n "$HOST" ] || HOST=$HOSTHINT
 	[ -n "$HOST" ] || HOST=$(public_ip)
 	if [ -z "$HOST" ] && [ -z "$MANAGED" ] && (: </dev/tty) 2>/dev/null; then
 		printf '这台服务器的公网 IP 或者域名（各台设备经它连过来）: ' >/dev/tty
@@ -586,11 +589,12 @@ how() {
 	else printf 'systemd + %s' "$("$PY" -c 'import platform; print("python " + platform.python_version())' 2>/dev/null)"
 	fi
 }
-report_managed() {   # 给 cca team deploy：一行一项（deploy.rs 的 report 读）
+report_managed() {   # 给 cca team deploy：一行一项（deploy.rs 的 report 读）。host 是这次定下的地址（pick_host；认不出时不说）
 	say "${WHAT}在运行（${D}，$(how)，端口 ${PORT}）"
 	fw_hint
 	note "mode $MODE"
 	note "port $PORT"
+	[ -z "$HOST" ] || note "host $HOST"
 	! relay_on || note "relay $RELAY"
 	if [ -n "$WEBON" ]; then
 		note "web $WEBURL"

@@ -75,8 +75,8 @@ func hubFixtureTests() {
         """#.utf8))
     check("cost sync --json 两台服务器：顶层是最要紧的那一台，hubs 各是各的", sync?.sync?.state == .error && sync?.sync?.hubs.map(\.kind) == [.maintainer, .team]
           && sync?.sync?.hubs.first?.checkedEpoch == 5 && sync?.sync?.hubs.last?.message == "连不上")
-    check("Team 部署时的代码认识：密码错了三次（hub_ssh）、交给终端（hub_deploy）", FailCode.hubSSH.isKnown && TerminalCode.hubDeploy.isKnown
-          && ResultCode.teamDeployed.isKnown)
+    check("Team 部署时的代码认识：密码错了三次（hub_ssh）、交给终端（hub_deploy）、装好了但地址是内网的（team_lan）", FailCode.hubSSH.isKnown
+          && TerminalCode.hubDeploy.isKnown && ResultCode.teamDeployed.isKnown && FailCode.teamLan.isKnown)
     check("自己的同步服务器的结果、失败、同意的代码不再认识（旧版 cca 给了照 message 说）",
           [ResultCode(rawValue: "hub_joined"), ResultCode(rawValue: "hub_deployed"), ResultCode(rawValue: "hub_hosted")].allSatisfy { !$0.isKnown }
           && [FailCode(rawValue: "hub_link"), FailCode(rawValue: "hub_unavailable")].allSatisfy { !$0.isKnown }

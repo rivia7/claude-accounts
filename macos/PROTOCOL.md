@@ -995,8 +995,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 
 - 打开：`cca policy on`，提问会话（要 `hello.forms`）。不知道映射仓库时先问 `policy.repo`。关掉共享时留着 deploy key 的直接拉一次：维护者没撤销
   这台机器的公钥就拉到了，映射里的账号原样加回来（同一个账号目录，不用重新登录），`result` 的 `policy_on`；连不上 GitHub 之类时也是 `policy_on`
-  （`message` 说之后自动再拉）。要维护者加公钥时是 `onboard.policy` 那一页（和配置向导第 1 步一样：边等边拉，拉到了 `policy_on`；选「先跳过」也是
-  `policy_on`，之后 App 定时拉；选「不打开共享」是 `policy_off`）。
+  （`message` 说之后自动再拉）。要维护者加公钥时是 `onboard.policy` 那一页（边等边拉，拉到了 `policy_on`；选「先跳过」也是
+  `policy_on`，之后 App 定时拉；选「不打开共享」是 `policy_off`。题号沿用了 3.5.2 配置向导第 1 步的：3.5.3 起配置向导不再问维护者的共享）。
 - 关掉：`cca policy off`，无交互，要同意（`policy_off`，范围 `all`，默认否）：App 用 `consent` 事件的 `detail` 问用户（会移出账号表的账号，
   用着维护者参考节点、关掉以后要换节点的自己的账号），同意后带 `CCA_GRANT=policy_off:all` 重跑（4.3）。共享的账号正在用（命令行会话、桌面 App
   开着）时不关：退出码非 0，`fail` 的 `policy_off_busy`，`message` 说是哪些。关好了 `result` 的 `policy_off`（本来就关着也是它）。映射的账号
@@ -1048,7 +1048,9 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
-  `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
+  `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）那一步的
+  `team_ssh`、`team_ssh_hostkey`、`team_ssh_denied`、`team_root`、`team_deps`、`team_image`、`team_port`、`team_taken`、`team_host`、`team_start`、
+  `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
   原来那台上没收尾成）。App 不按这些原因码分别处理：`fail` 事件的 `message` 照原样显示。
 
 ## 5. `cca gui`

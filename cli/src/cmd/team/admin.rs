@@ -20,7 +20,7 @@ use super::{cfg_of, fail, fault, find_team, index_add, now, pub_line, save_team,
 use crate::cmd::hub::deploy::team_install;
 use crate::cmd::hub::hosted::team_files;
 use crate::cmd::hub::own_account;
-use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
+use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, with_https_port, NAME_BAD};
 use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
@@ -656,8 +656,8 @@ pub fn cmd_team_new(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// py team-attach Team https://服务器:端口 [证书公钥的指纹…]：接上（换一台）同步服务器。服务器要已经用这个 Team 的根公钥运行着
-/// （--team-root）。把这台设备登记上去，别的加入过的设备也登记回去，再发布各台的配置；换了一台的话，新的配置也存到原来那台上
+/// py team-attach Team https://服务器:端口 [证书公钥的指纹…]：接上（换一台）同步服务器（没写端口是 443：托管平台给的地址）。服务器要已经用
+/// 这个 Team 的根公钥运行着（--team-root）。把这台设备登记上去，别的加入过的设备也登记回去，再发布各台的配置；换了一台的话，新的配置也存到原来那台上
 /// （还连着它的设备取到以后自己换过来）。stdout：服务器的地址:端口、这台设备在服务器上的名字、现在几台设备、存上了几台的配置、
 /// 换服务器时原来那台没存上的原因（存上了、不是换服务器是空行）。原因码：no_team、not_admin、url、pin、denied（服务器配置的不是这个 Team 的根公钥）、
 /// old、unreachable、cert、clock、busy、server、publish
@@ -666,9 +666,9 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
         return Err(Fail::Die("用法: py team-attach Team https://服务器:端口 [证书公钥的指纹…]".into()));
     };
     let (t, a, _lk) = admin_of(sel)?;
-    let url = url.trim_end_matches('/').to_string();
+    let url = with_https_port(url);
     if !url_ok(&url) {
-        return fail("url", "服务器的地址要写成 https://地址:端口");
+        return fail("url", "服务器的地址要写成 https://地址:端口（托管平台给的 https://名字.平台的域名 不用写端口）");
     }
     if pins.len() > 4 || !pins.iter().all(|p| PRESENCE_PIN_RE.fullmatch(p).is_some()) {
         return fail("pin", "证书公钥的指纹要写成 sha256//…（最多 4 个）");

@@ -181,6 +181,18 @@ pub fn host_of(url: &str) -> String {
     url.split_once("://").map_or(url, |x| x.1).trim_end_matches('/').to_string()
 }
 
+/// https://地址 没写端口时补上 443：托管平台（Railway、Sealos）给的公网地址只到主机名。写了端口的、带路径的原样（url_ok 再查）
+pub fn with_https_port(url: &str) -> String {
+    let url = url.trim_end_matches('/');
+    let Some(rest) = url.strip_prefix("https://") else { return url.to_string() };
+    let has_port = if rest.starts_with('[') { rest.contains("]:") } else { rest.contains(':') };
+    if has_port || rest.is_empty() || rest.contains(['/', '?', '#', '@']) {
+        url.to_string()
+    } else {
+        format!("{url}:443")
+    }
+}
+
 /// 设备的名字：1～64 个字符，没有控制字符，前后没有空白（服务器也这么查）；不合格时说 NAME_BAD
 pub fn name_ok(n: &str) -> bool {
     !n.is_empty() && n.trim() == n && text::len(n) <= 64 && !n.chars().any(|c| c.is_control())
@@ -288,6 +300,17 @@ fn fail<T>(code: &str, why: &str) -> R<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn https_port_defaults_to_443() {
+        assert_eq!(with_https_port("https://cca-team.up.railway.app/"), "https://cca-team.up.railway.app:443");
+        assert_eq!(with_https_port("https://192.0.2.10:18445"), "https://192.0.2.10:18445");
+        assert_eq!(with_https_port("https://[2001:db8::1]"), "https://[2001:db8::1]:443");
+        assert_eq!(with_https_port("https://[2001:db8::1]:8443"), "https://[2001:db8::1]:8443");
+        for keep in ["http://example.com", "https://example.com/x", "https://example.com?x", "example.com"] {
+            assert_eq!(with_https_port(keep), keep, "不是 https、带路径的原样：url_ok 再查");
+        }
+    }
 
     #[test]
     fn route_table() {

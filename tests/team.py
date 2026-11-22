@@ -173,8 +173,12 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.code(bob, 'team-join', stdin=link[:-3]), 'link')
         self.assertEqual(self.code(bob, 'team-join', '--name', 'x' * 65, stdin=link), 'name')
         self.assertFalse((bob.cca / 'teams').exists() and list((bob.cca / 'teams').iterdir()), '没成：什么都不留')
+        self.assertNotIn('device_id', json.loads((bob.cca / 'config.json').read_text()))
         got = self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link)
         self.assertEqual(got, ['测试组', '127.0.0.1:%d' % srv.port, 'bob-mini', '2', tid, 'ok', '1'])
+        self.assertRegex(json.loads((bob.cca / 'config.json').read_text()).get('device_id', ''), r'^[0-9a-f]{16}$',
+                         '加入了才生成这台机器的标识（没有路由器的机器靠它：折合金额的 dv）')
+        self.assertRegex(json.loads((admin.cca / 'config.json').read_text()).get('device_id', ''), r'^[0-9a-f]{16}$', '新建 Team 的那台也有')
         argv = (bob.home / 'curl.argv').read_text()
         self.assertTrue(inv['k'] not in argv and token not in argv and link not in argv, '邀请不进 curl 的命令行')
         tb = self.tdir(bob, tid)

@@ -9,8 +9,11 @@ use super::cost::COST_DIR;
 use super::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
 use super::keyshare::is_num;
 use super::presence::{flock, key_at, presence_key, presence_post, PRESENCE_DIR};
+use super::router::device_id;
 use super::{arity, Cmd};
 use crate::core::base::Lock;
+use crate::core::ctx::cfg_save;
+use crate::core::model::cfg_load;
 use crate::core::policy::policy_doc;
 use crate::core::team::{
     forget_grants, grants, index_order, index_path, load_team, team_dir, team_doc, team_path, teams, Role, Team, TEAMS_DIR,
@@ -107,9 +110,16 @@ fn fault(url: &str, code: i64, j: &Dict) -> (&'static str, String) {
     }
 }
 
-/// 把 Team 记进 index.json（加入的先后；已经在的不动）
+/// 把 Team 记进 index.json（加入的先后；已经在的不动）。这台机器还没有 device_id 时顺便生成、写进 config.json：折合金额的密文里写着它
+/// （dv），同一台机器在几台服务器上、退出又加入过都认得出是一台。有路由器的机器同步路由器时就有了（router.rs 的 device_id）；没有路由器的
+/// 靠这里（3.5.2 是加入自己的同步服务器时生成的）
 fn index_add(tid: &str) -> R<()> {
     let _lk = Lock::acquire()?;
+    let c = cfg_load()?;
+    if !c.truthy("device_id") {
+        device_id(&c);
+        cfg_save(&c)?;
+    }
     let mut order = index_order();
     if !order.iter().any(|t| t == tid) {
         order.push(tid.to_string());

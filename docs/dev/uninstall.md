@@ -9,8 +9,9 @@
    `~/.cca` 又长出来）；还有开着的远程会话（删了 `~/.cca` 就再也接不上）；要打包备份却没有 `tar`。
 2. 列出要做的事，输入命令的名字确认。
 3. 每个账号：把会话里新产生的共享内容并回 `~/.claude`、`~/.codex`、`~/.gemini`（`py link`、`py sync`），退出登录、删凭证；钥匙串里 cca 存的
-   key、邮箱助手的密码、远程会话配对的密钥；退出自己的同步服务器；路由器（`router_uninstall`，失败时问要不要接着做本机的）；本机端口池、
-   本机 UDP 的系统服务、内核、crontab 里开机起内核的那一行、上报和统计折合金额的后台进程。
+   key、邮箱助手的密码、远程会话配对的密钥；退出各个 Team（`restore_teams`：服务器上移除这台设备；是管理员的，根密钥跟着 `~/.cca` 删掉、
+   备份里也不带，第 2 步列出来时说了）；路由器（`router_uninstall`，失败时问要不要接着做本机的）；本机端口池、本机 UDP 的系统服务、内核、
+   crontab 里开机起内核的那一行、上报和统计折合金额的后台进程。
 4. 打包备份 `~/cca-backup-日期.tar.gz`（600；哪些不进包见 `cmd_restore` 里 `tar` 那一句的注释）。没打成就留着 `~/.cca`、停下。
    `--no-backup` 跳过这一步（也就不要 `tar`）。
 5. 删 `~/.local/bin` 里 cca 建的链接、cca App、`~/.cca`，然后是放在 `~/.cca` 以外的（下一节）。**删了 `~/.cca` 以后不能再调 `py`**：
@@ -41,7 +42,7 @@
 - `~/.claude`、`~/.claude.json`、`~/.codex`、`~/.gemini` 和 `claude` / `codex` / `agy` 命令：不是 cca 的。cca 写进这几份里的东西也留着
   （`~/.claude.json` 里给附加目录记的 `hasTrustDialogAccepted`、征得同意后在 `~/.codex/config.toml` 里关掉的 `system_proxy_fallback`、
   `cca settings fix` 留在旁边的 `settings.json.cca-backup-*`）：没记过哪些是 cca 写的，分不出来。
-- 仓库上登记的 deploy key（本机那一把删了，卸载时提醒）、Google 账号里的应用专用密码、自己部署的同步服务器（只退出，不卸载服务器）。
+- 仓库上登记的 deploy key（本机那一把删了，卸载时提醒）、Google 账号里的应用专用密码、Team 的同步服务器（只退出，不卸载服务器：管理员照 team.md「部署」卸载）。
 - 钉在程序坞里的启动器图标：启动器删了以后是个问号，没去改程序坞的设置。
 - 临时目录里 App 放事件文件的 `cca-gui-events`：空目录，系统自己会清；开发时编的另一份 App 可能正用着。
 - 本机 UDP 的系统服务在授权框里点了取消、路由器连不上却选了接着做：那一头留着，卸载时说了怎么办。

@@ -5,12 +5,14 @@ App 账号页里的“设备”一节来自这里：映射里的账号在某台 
 App 的「折合金额」（按官方 API 标价折算的用量）也一样：每台设备算自己的，经它交换密文，账号的合计才包括所有设备。
 它还给远程会话做中转（`cca remote pair` / `attach`，见最后一节）：两台配对过的机器之间的终端内容经它转发，是端到端加密的，它只转字节。
 
-同一个程序也是用户自己部署的「自己的同步服务器」（`--mode own`，cca 的 `cca hub`）：不用维护者，用户自己的几台设备拿同一个加入链接加入，
-设备统计、记下的 API key、折合金额照样经它同步。见「自己的同步服务器」一节。
+同一个程序也是 Team 的同步服务器（`--mode team`，Team 的管理员自己部署）。一个 Team 有管理员的设备和别的设备：管理员给每台设备发邀请、
+定它能用哪些账号，账号走哪个节点、节点的定义由管理员的设备加密、签名后存在这台服务器上，各台设备取自己的那一份；这些账号的设备统计、
+记下的 API key、折合金额，这个 Team 的远程会话，照样经它。自己的几台设备之间同步也是建一个 Team。见「Team 的同步服务器」一节
+（cca 那一半见 docs/dev/team.md）。
 
-还有第三种：Team 的同步服务器（`--mode team`）。一个 Team 有管理员的设备和别的设备：管理员给每台设备发邀请、定它能用哪些账号，
-账号走哪个节点、节点的定义由管理员的设备加密、签名后存在这台服务器上，各台设备取自己的那一份。见「Team 的同步服务器」一节
-（服务器这一半做好了，cca 那一半还在做：见 docs/dev/team.md）。
+3.5.3 以前还有一种「自己的同步服务器」（`--mode own`，cca 的 `cca hub`）：去掉了，现在不认这个模式。拿它留下的状态文件起 Team 的服务器
+是从头开始（以前的设备、记录、密文都不要了），起维护者的服务器时以前的设备和上报的记录不要了（等维护者同步设备清单）。以前装在
+`/opt/cca-hub` 的照「Team 的同步服务器 → 部署」里说的卸载。
 
 - 部署和更新：在 cca 的仓库里运行 `./policy.sh presence deploy root@主机`。它把这个目录装到服务器的 `/root/projects/cca-presence`，`--dir` 可以换位置。然后运行 `docker compose up -d`，把地址、证书公钥的指纹和盐写进映射目录的 `policy.json`，再推送设备清单。之后照常 `./policy.sh 映射目录` 发布映射。
 - 设备清单：`./policy.sh presence sync`。它把各台机器的 deploy key 用发布密钥签名（命名空间 `cca-devices`）推给服务器，`./policy.sh key add/rm/mv` 之后会自动推。服务器只认这份清单里的机器。
@@ -74,110 +76,20 @@ get 回各台设备的 `{fp, name, me, revoked, tag, age, blob}`（have 里认�
 
 更新服务器：旧版的服务器不收 API key（cca 每 6 小时再试一次，App 里说要维护者更新服务器）。在 cca 的仓库里再运行一次 `./policy.sh presence deploy root@主机` 就换上新的 `cca-presence.py`，`data/` 里原有的不动。旧版的服务器也不收折合金额（App 里只有这台设备的，说要维护者更新服务器），同样这样更新。早先试过的 `/v1/cost` 是另一种格式，新版不再认（回 404，那时的客户端照旧版服务器处理），服务器上留下的 `data/cost.json` 可以删掉。
 
-## 自己的同步服务器
-
-`--mode own --admit-hash <入伙口令的 SHA-256>`（64 个小写十六进制字符；也可以用环境变量 `CCA_HUB_ADMIT_HASH`，托管平台好配）：不用
-`--release-key`，没有设备清单（`/v1/machines` 回 404），设备拿加入链接自己加入，最多 64 台。别的照上面：上报、查看、API key、折合金额的
-请求和格式都一样，签名的命名空间也是 `cca-presence`，只是每台设备用自己在这台服务器上的 ed25519 密钥（cca 放在 `~/.cca/hub/id_ed25519`）。
-不在名单里的设备（被移除了、服务器的记录清掉了）回 403 `unknown_device`，带着 `gen`（这一份记录的编号：没有状态文件、从头开始时生成，
-32 个小写十六进制字符。和设备加入时记下的一样是被移除了；不一样是服务器的记录没了，cca 拿记着的口令自己重新加入），签名不对回 403 `denied`。
-`GET /v1/health` 的 `mode` 是 `own`。
-
-加入链接：`cca-hub1.<base64url(JSON)>.<校验>`。JSON 是紧凑的 `{"u":地址,"p":[证书公钥的指纹…],"a":入伙口令,"s":盐}`：地址是
-`https://主机:端口`（不带结尾的 `/`），指纹是 curl `--pinnedpubkey` 的写法 `sha256//…`（0～4 个：没有时设备照系统的证书机构验服务器的证书，
-托管平台上的是这样，见下面「托管平台」），入伙口令和盐都是 16 个随机字节写成的
-32 个小写十六进制字符（读的时候盐和映射里设备统计的盐一样认 32～128 个）。base64url 不带 `=`；校验是前面 `cca-hub1.<base64url>` 这一段的 SHA-256 的前 4 个十六进制字符（看出复制时
-少了一截、抄错了）。读的时候不管中间的空白（聊天软件里贴过来可能折了行）。只加字段不升版本，格式不兼容时换成 `cca-hub2.`。
-链接是凭证：谁拿到都能加入。cca 只经 stdin、提问会话传它，不进命令行和环境变量。
-
-服务器只存入伙口令的 SHA-256 和盐的校验值 `check = HMAC(盐的字节, "cca-hub-check-v1")` 的前 16 个字节（32 个小写十六进制字符），
-看不到盐：账号摘要、API key 和折合金额的密钥照上面的算，盐是链接里的那份（和维护者的映射无关，两台服务器上的摘要对不上）。
-`check` 是第一台设备加入时登记的，拿着另一份盐的设备加入不了（不然同一台服务器上的设备互相解不开）。
-
-| op | 请求 | 回 |
-|---|---|---|
-| `join` | `pub`（`ssh-ed25519 …`，要加入的这一把：`key` 是它的指纹，签名也用它）、`name`（1～64 个字符，没有控制字符、前后没有空白）、`admit`（入伙口令）、`check` | `{name, members, gen, seed}`：服务器上这台设备的名字（被别的设备用了时后面加 `-2`、`-3`……）、现在几台、这一份记录的编号、`admit` 是不是启动时配置的那个（是的话设备记下它：换过口令以后，记录没了的服务器认的还是它）。入伙口令不对和签名不对一样回 403 `denied`；`check` 和登记的不一样 409 `salt_mismatch`；满了 507 `full`。同一把密钥再加入是改名字（加入的时间不变） |
-| `members` | （没有别的） | `{me_name, members: [{fp, name, me, joined_age, seen_age}], gen, link}`：`seen_age` 是服务器最近一次收到它签过名的请求（重启以后只算上报）；`link` 是最近一次换的口令 `{n: 第几次, blob: 换的那台设备存的密文, at: 什么时候}`，没换过是 null（`n` 比设备记着的大就解开、换上新的加入链接） |
-| `remove` | `target`（设备指纹） | `{members}`；没有这一台 404 `no_device`。是发请求的设备自己就是退出。被移除的设备上报的记录跟着删掉；传过的 API key、折合金额的密文是账号的，不删（折合金额里它标成撤销了） |
-| `relink` | `admit`（新的入伙口令的 SHA-256）、`blob`（新的口令拿盐加密的密文，最长 512 个字符） | `{n}`：换过几次。以后只认新的口令（旧的加入链接不能再用来加入），已经加入的设备照旧，下次 `members` 时拿到 `link`、换上新的链接。cca 移除了别的设备以后跟着换一次（`cca hub invite --new` 也是它） |
-
-成员之间是平的：谁都能列出、移除别的设备、换口令。启动时给的入伙口令的哈希和上次不一样（用新的加入链接重新部署了；以前是维护者的服务器）就从头开始：
-以前的设备、上报的记录、存的密文都删掉（新的盐算出来的摘要和密钥都不一样，旧的谁也用不上）；换过口令（`relink`）不算，那是 `admit`，
-启动时比的是 `seed`。状态文件里多一项 `"own": {"seed": 启动时给的哈希, "admit": 现在认的哈希, "check": 登记的校验值 | null, "gen": 这一份记录的编号,
-"link": {"n", "blob", "at"}（换过口令时）}`，`machines` 的每一台多一项 `joined`（加入的时间）。
-
-换口令的密文（`relink` 的 `blob`、`members` 的 `link.blob`）：和 API key 的一样是 `{"n", "c", "t"}`，密钥是 `root = HMAC(盐的字节, "cca-hub-link-v1")`，
-加密用 `HMAC(root, "enc")`、认证用 `HMAC(root, "mac")`，认证是 `HMAC(mac, "cca-hub-link-v1\0" nonce 密文)`（只带标签）；明文是紧凑的
-`{"a": 新的口令, "s": 启动时配置的口令 | null}`（换的那台设备知道的话：记录没了的服务器认的是它），不补齐。服务器没有盐，解不开。
-`tests/spec_wire.py` 的 `link_open`、`link_seal` 照这一段独立实现。
-
-### 部署
-
-一台 Linux 服务器（很小的就够：只用 Python 标准库，内存限在 256 MB）上，要 openssl，还要 Docker（带 compose 插件：`docker compose`；
-老的 `docker-compose` 1.x 不用）或者 systemd + python3（3.6 起）：
-
-- 从装了 cca 的电脑上：`cca hub deploy root@服务器`（`-p` SSH 端口、`-i` 私钥、`--port` 服务的端口（默认 18445）、`--host` 各台设备连的地址
-  （默认是 SSH 连的那台）、`--docker` / `--systemd`、`--dir` 装在哪、`--name` 这台电脑在服务器上叫什么）。经 SSH 装好，这台电脑跟着加入；入伙口令
-  和盐在电脑上生成，服务器只拿到口令的 SHA-256。别的设备上 `cca hub join`，贴这台电脑上 `cca hub invite` 显示的加入链接。SSH 要能用密钥登录，
-  用户是 root 或者能免密码 sudo。再运行是更新（数据、证书、加入链接都不变）；`--reset` 换一个加入链接：服务器忘掉所有设备，每台都要重新加入。
-- 直接在服务器上：`curl -fsSLO https://github.com/rivia7/claude-accounts/releases/latest/download/cca-hub-install.sh && sudo sh cca-hub-install.sh`
-  （或者在电脑上 `cca hub deploy --script > cca-hub-install.sh` 拷过去：那一份是本机验过签名的 cca 生成的）。最后打出加入链接，只显示这一次
-  （服务器上只存入伙口令的哈希，盐不落盘），在每台设备上 `cca hub join` 贴它；认不出公网地址时加 `--host 公网IP或域名`。再运行是更新，
-  还没有设备加入过时换一个新的加入链接；`--reset` 同上。
-- 云服务商的安全组（轻量应用服务器的防火墙）里放行这个 TCP 端口。systemd 方式下服务器上开着 ufw、firewalld 时脚本会说放行的那一行，
-  不替你改（Docker 发布的端口不经它们）。
-- 卸载：`cca hub deploy --script | ssh root@服务器 sh -s -- --uninstall`（或者在服务器上 `sudo sh cca-hub-install.sh --uninstall`），加入过的设备上
-  `cca hub leave`。
-
-装在 `/opt/cca-hub`（`--dir` 换：要是新的、空的目录，或者以前装过的，不能在 `/usr`、`/etc`、`/home`、`/root`、`/run`、`/tmp` 这些下面；一台服务器只装一个）：`app/cca-presence.py`（就是这个程序）、
-`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按加入链接里的公钥指纹认它）、`data/state.json`、`.env`（运行方式、端口、入伙口令的哈希；
-改了以后再运行一次安装脚本；没装完时换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。Docker 的另有 `compose.yaml`（容器 `cca-hub`，
-`python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的同步源、Docker Hub；只读、去掉所有权限），systemd 的是
-`/etc/systemd/system/cca-hub.service`（系统用户 `cca-hub`）。日志：`docker logs cca-hub` 或者 `journalctl -u cca-hub`。
-
-### 托管平台
-
-没有服务器时部署到托管平台（Railway、Sealos）：在装了 cca 的电脑上 `cca hub hosted [railway | sealos]`（App 里是「部署到托管平台…」），生成
-部署文件（默认 `~/cca-hub-<平台>`，里面只有入伙口令的 SHA-256），照着打出来的步骤部署（目录里的 README.md 也写着），再填平台给的公网地址，
-这台电脑跟着加入。入伙口令和盐在电脑上生成，加入之前记在 `~/.cca/hub-hosted.json`（只给自己读，加入了就删掉）：中途关掉了，再运行一次照旧用它。
-
-- 程序照样是这一个，只是 `--behind-proxy`：只说 HTTP，HTTPS 由平台做（设备照系统的证书机构验平台的证书，加入链接里没有指纹）；
-  每个 IP 的限额按 `X-Forwarded-For` 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
-- 平台的表单里只填得了环境变量和一条命令：环境变量 `CCA_HUB_HOSTED=1` 等于 `--mode own --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`
-  （命令行里写了的照命令行的），`CCA_HUB_ADMIT_HASH` 是入伙口令的哈希，命令是 `python3 -I /app/cca-presence.py`。端口固定是 8080（平台的
-  公网地址转到它）。`/data` 要挂一块存储：没有时不启动（不然重启一次记录就没了）。记录还是没了（换了存储……）时，设备找它时服务器回的 `gen` 变了，
-  cca 拿记着的口令自己重新加入。
-- Railway：生成的是 `Dockerfile`（`python:3.13-slim`，`ENV CCA_HUB_HOSTED=1 CCA_HUB_ADMIT_HASH=…`）和程序，用它的命令行工具
-  `railway init`、`railway add`、`railway volume add --mount-path /data`、`railway up`、`railway domain --port 8080`。按用量计费（见它的价格页）；
-  国内不一定连得上 `*.up.railway.app`。
-- Sealos（国内，要实名）：在它的「应用管理」里新建应用，镜像 `python:3.13-slim`、1 个实例、端口 8080 打开公网访问、启动命令、两个环境变量、
-  一块挂在 `/data` 的存储卷，再加一个配置文件 `/app/cca-presence.py`（内容就是这个程序）。
-- 更新：再运行一次 `cca hub hosted`（加入着时就是更新），照打出来的步骤换上新的程序；入伙口令的哈希照部署时的（换过口令也不变：启动时比的是 `seed`）。
-  平台的界面会变，步骤以平台现在的为准。
-
 ## Team 的同步服务器
 
-部署（设计和客户端那一半见 docs/dev/team.md「部署」）：服务器上只配置 Team 的根公钥（公开的），没有要保密的东西。
-
-- 一键：管理员的设备上 `cca team deploy Team root@服务器`（经 SSH 运行安装脚本、装好了接上）；或者在服务器上自己运行安装脚本
-  （`cca team deploy --script`、发布页上的 `cca-hub-install.sh`，和自己的同步服务器是同一份）：
-  `sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…'`。每个 Team 一个服务（systemd 的服务名 / 系统用户 / 容器名是
-  `cca-team-<Team 编号的前 8 位>`，装在 `/opt/<服务名>`，端口没写时从 18445 起找空着的），所以一台服务器上能装几个 Team。
-- 自己运行：`python3 -I cca-presence.py --mode team --team-root 'ssh-ed25519 AAAA…' --cert … --key … --state …`。根公钥也可以经环境变量
-  `CCA_TEAM_ROOT` 给，只写 `ssh-ed25519` 后面那一段也行（没有空格，环境变量文件里好写）。
-- 托管平台：`CCA_HUB_HOSTED=1` 加 `CCA_TEAM_ROOT=…` 就是 Team 的服务器（只说 HTTP、监听 8080、状态在 `/data`）；`cca team hosted Team`
-  生成部署文件和步骤。
+服务器上只配置 Team 的根公钥（公开的），没有要保密的东西。怎么装见下面「部署」「托管平台」（设计和客户端那一半见 docs/dev/team.md「部署」）。
 
 `--mode team --team-root 'ssh-ed25519 AAAA…'`（也可以用环境变量 `CCA_TEAM_ROOT`；只看前两段，后面的备注不管）：Team 的根公钥。它是公开的，
 服务器上没有任何要保密的配置。根密钥（ed25519）在管理员的设备上，不出那台设备。Team 的编号是根公钥（base64 那一段解出来的字节）的
 SHA-256 的前 32 个十六进制字符，`GET /v1/health` 的 `mode` 是 `team`、`team` 是这个编号。上报、查看、API key、折合金额的请求和格式
-照上面，没有设备清单（`/v1/machines` 回 404），也没有自己的同步服务器的那几个 op。最多 256 台设备。
+照上面，没有设备清单（`/v1/machines` 回 404）。最多 256 台设备。
 
 请求的样子不变（紧凑 JSON，`v`、`op`、`key`、`ts`、`nonce`，签名的命名空间 `cca-presence`），分两种签名的人：
 
 - 管理员的 op 拿**根密钥**签，`key` 是根公钥的指纹；不是它签的回 403 `denied`。根密钥不是设备：别的 op 不认它，它也登记、加入不了。
-- 设备的 op 拿这台设备自己的密钥签。不在名单里的（被移除了、服务器的记录清掉了）回 403 `unknown_device`，带着 `gen`（这一份记录的编号，
-  和自己的同步服务器一样：和设备记着的一样是被移除了，不一样是服务器的记录没了）。
+- 设备的 op 拿这台设备自己的密钥签。不在名单里的（被移除了、服务器的记录清掉了）回 403 `unknown_device`，带着 `gen`（这一份记录的编号：
+  从头开始时生成，32 个小写十六进制字符。和设备记着的一样是被移除了，不一样是服务器的记录没了）。
 
 | op | 谁 | 请求 | 回 |
 |---|---|---|---|
@@ -199,10 +111,11 @@ SHA-256 的前 32 个十六进制字符，`GET /v1/health` 的 `mode` 是 `team`
 
 ### 邀请链接
 
-管理员给**一台**设备发一个：`cca-team1.<base64url(JSON)>.<校验>`，写法和加入链接一样（base64url 不带 `=`，校验是前面 `cca-team1.<base64url>`
-这一段的 SHA-256 的前 4 个十六进制字符，读的时候不管中间的空白）。校验只为看出复制时少了一截、抄错了，不防人改。JSON 是紧凑的
+管理员给**一台**设备发一个：`cca-team1.<base64url(JSON)>.<校验>`（base64url 不带 `=`，校验是前面 `cca-team1.<base64url>`
+这一段的 SHA-256 的前 4 个十六进制字符，读的时候不管中间的空白：聊天软件里贴过来可能折了行）。校验只为看出复制时少了一截、抄错了，不防人改。JSON 是紧凑的
 `{"u": 地址, "p": [证书公钥的指纹…], "r": 根公钥的 base64 那一段, "k": 一串随机数, "n": Team 的名字, "e": 什么时候过期（时间戳，可以没有：给人看的，过没过期服务器说了算）}`。
-地址、指纹和加入链接里的一样。盐不在链接里：它在设备的配置里（见下面），加入以后才拿得到。以后只加「旧版本不认得也不要紧」的字段；
+地址是 `https://主机:端口`（不带结尾的 `/`），指纹是 curl `--pinnedpubkey` 的写法 `sha256//…`（0～4 个：没有时设备照系统的证书机构验服务器的证书，
+托管平台上的是这样，见下面「托管平台」）。盐不在链接里：它在设备的配置里（见下面），加入以后才拿得到。以后只加「旧版本不认得也不要紧」的字段；
 旧版本必须认得才安全的改动换成 `cca-team2.`。
 
 `k` 是 16 个随机字节写成的 32 个小写十六进制字符（只认这个样子）。下面三样都由它派生，HMAC-SHA256 的密钥是那 16 个字节（不是 32 个字符）：
@@ -237,9 +150,64 @@ cca 只经 stdin、提问会话传它，不进命令行和环境变量。它在�
 docs/dev/team.md。`tests/spec_wire.py` 的 `team_id`、`invite_parts`、`invite_encode`、`invite_decode`、`team_doc_seal`、`team_doc_open`、
 `team_doc_signed`、`team_doc_sign`、`team_doc_verify` 照这一节独立实现。
 
+### 部署
+
+一台 Linux 服务器（很小的就够：只用 Python 标准库，内存限在 256 MB）上，要 openssl，还要 Docker（带 compose 插件：`docker compose`；
+老的 `docker-compose` 1.x 不用）或者 systemd + python3（3.6 起）：
+
+- 从管理员的设备上：`cca team deploy Team root@服务器`（`-p` SSH 端口、`-i` 私钥、`--port` 服务的端口、`--host` 各台设备连的地址、
+  `--web-port` / `--no-web` 手机的网页端、`--docker` / `--systemd`、`--dir` 装在哪；App 里是「共享与同步」里这个 Team 的「部署到我的服务器…」，接上以后在「更多」里：「更新服务器、搬到别的服务器…」）。
+  经 SSH 运行安装脚本，装好了接上。SSH 用户是 root 或者能免密码 sudo。再运行是更新（数据、证书、端口都不变）；写别的服务器就是搬过去。
+- 直接在服务器上：运行发布页上的 `cca-hub-install.sh`（或者在管理员的设备上 `cca team deploy --script > cca-hub-install.sh` 拷过去：那一份是
+  本机验过签名的 cca 生成的）：`sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…'`（根公钥是 `cca team new` 给的那一行），
+  另有 `--host`、`--port`、`--relay-port` / `--no-relay`、`--web-port` / `--no-web`、`--docker` / `--systemd`、`--dir`。最后打出管理员接上它的那一行
+  `cca team attach Team https://地址:端口 sha256//指纹`（地址和指纹都是公开的）；认不出公网地址时有终端就问，没有就要加 `--host 公网IP或域名`。
+  再运行（带 `--team-root`，或者 `--dir 装过的目录`）是更新。
+- 自己运行：`python3 -I cca-presence.py --mode team --team-root 'ssh-ed25519 AAAA…' --cert … --key … --state …`（中转、网页端见下面两节）。
+  根公钥也可以经环境变量 `CCA_TEAM_ROOT` 给，只写 `ssh-ed25519` 后面那一段也行（没有空格，环境变量文件里好写）。
+
+每个 Team 一个服务：systemd 的服务名 / 系统用户、Docker 的容器名 / compose 的项目名都是 `cca-team-<Team 编号的前 8 位>`（下面叫「服务名」），
+装在 `/opt/<服务名>`（`--dir` 换：要是新的、空的目录，或者以前装过这个 Team 的，不能在 `/usr`、`/etc`、`/home`、`/root`、`/run`、`/tmp` 这些下面），
+所以一台服务器上能装几个 Team，互不相干。端口没写时照上次的，第一次从 18445 起找空着的。这个 Team 的远程会话的中转默认开着，数据端口是下一个
+空着的；手机的网页端再用一个，证书由证书助手（`cca-acme.py`）向 Let's Encrypt 要（给 IP 地址的是短期证书），到期前自己续。网页端要中转开着、
+认得出公网地址、地址不是内网的、80 端口空着（证书机构从公网连它验证）：开不了时照样装好、说为什么，再运行时再看。
+
+目录里：`app/`（这个程序、证书助手、网页端的文件）、`certs/`（自签的 P-256 证书，私钥不出这台服务器：设备按公钥指纹认它）、`data/`（设备、记录、
+密文）、`webcert/`（网页端的证书）、`acme/`（证书机构那里的账户的私钥）、`.env`（运行方式、端口、根公钥；改了以后再运行一次安装脚本；没装完时
+换回原来的）、`.cca-hub`（记着这个目录是安装脚本装的）。Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、腾讯云和 DaoCloud 的
+同步源、Docker Hub；只读、去掉所有权限），容器是 `<服务名>` 和证书助手 `<服务名>-acme`；systemd 的是 `/etc/systemd/system/<服务名>.service` 和
+`<服务名>-acme.service`。日志：`docker logs <服务名>` 或者 `journalctl -u <服务名>`（证书助手的换成 `<服务名>-acme`）。
+
+- 云服务商的安全组（轻量应用服务器的防火墙）里放行服务的端口、中转的数据端口，开了网页端的再加它的端口和 80；`cca team deploy` 装完会说
+  放行哪几个。systemd 方式下服务器上开着 ufw、firewalld 时脚本会说放行的那一行，不替你改（Docker 发布的端口不经它们）。
+- 卸载：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/<服务名>`（或者在服务器上
+  `sudo sh cca-hub-install.sh --uninstall --dir /opt/<服务名>`），连同数据一起删掉。3.5.3 以前装的自己的同步服务器（`/opt/cca-hub`）也这样卸载
+  （`--dir /opt/cca-hub`），安装脚本不再往里装。
+
+### 托管平台
+
+没有服务器时部署到托管平台（Railway、Sealos）：在管理员的设备上 `cca team hosted Team [railway | sealos]`（只在终端里），生成部署文件
+（默认 `~/<服务名>-<平台>`，里面只有 Team 的根公钥：公开的），照着打出来的步骤部署（目录里的 README.md 也写着），再在管理员的设备上接上
+平台给的公网地址：`cca team attach Team https://平台给的地址`（没写端口就是 443）。托管平台只转一个 HTTP 端口：上面的不给远程会话做中转，
+也没有网页端。
+
+- 程序照样是这一个，只是 `--behind-proxy`：只说 HTTP，HTTPS 由平台做（设备照系统的证书机构验平台的证书，接上时没有指纹）；
+  每个 IP 的限额按 `X-Forwarded-For` 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
+- 平台的表单里只填得了环境变量和一条命令：环境变量 `CCA_HUB_HOSTED=1` 等于 `--mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json`
+  （命令行里写了的照命令行的），`CCA_TEAM_ROOT` 是根公钥 `ssh-ed25519` 后面那一段，命令是 `python3 -I /app/cca-presence.py`。端口固定是 8080
+  （平台的公网地址转到它）。`/data` 要挂一块存储：没有时不启动（不然重启一次记录就没了）。
+- Railway：生成的是 `Dockerfile`（`python:3.13-slim`，`ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=…`）和程序，用它的命令行工具
+  `railway init`、`railway add`、`railway volume add --mount-path /data`、`railway up`、`railway domain --port 8080`。按用量计费（见它的价格页）；
+  国内不一定连得上 `*.up.railway.app`。
+- Sealos（国内，要实名）：在它的「应用管理」里新建应用，镜像 `python:3.13-slim`、1 个实例、端口 8080 打开公网访问、启动命令、两个环境变量、
+  一块挂在 `/data` 的存储卷，再加一个配置文件 `/app/cca-presence.py`（内容就是这个程序）。
+- 更新：再运行一次 `cca team hosted`（这个 Team 接着的就是托管平台上的那一台时是更新），照打出来的步骤换上新的程序；数据在 `/data` 里照旧，
+  设备不用重新加入。平台的界面会变，步骤以平台现在的为准。
+
 ## 远程会话的中转
 
 `--relay-listen 地址:端口` 才开（不给时那几个接口回 404，和旧版服务器一样）；`--relay-port` 是告诉客户端连哪个端口（容器里外不一样时给）。
+维护者的服务器、Team 的同步服务器都可以开（Team 的安装脚本默认开着，见「Team 的同步服务器 → 部署」；托管平台上的开不了：只有一个 HTTP 端口）。
 格式照下面写的，`tests/spec_wire.py` 是照这一节独立实现的一份（测试里拿它和 cca 互相配对、握手、收发）。
 
 要防的是这台服务器自己（被攻破、被换掉）和路上的人：它们看不到终端的内容、敲不进按键、冒充不了配对过的机器。靠的是两台机器配对时
@@ -248,7 +216,7 @@ docs/dev/team.md。`tests/spec_wire.py` 的 `team_id`、`invite_parts`、`invite
 
 ### 请求
 
-和上报一样是签过名的 `POST /v1/<op>`（deploy key 签，命名空间 `cca-presence`；`key`、`ts`、`nonce` 那几项照旧），所以服务器知道每个请求是
+和上报一样是签过名的 `POST /v1/<op>`（设备的密钥签：维护者的服务器上是 deploy key，Team 的服务器上是这台设备在 Team 里的密钥；命名空间 `cca-presence`；`key`、`ts`、`nonce` 那几项照旧），所以服务器知道每个请求是
 哪台设备发的。`rid`、`pid`、`sid` 都是 32 个小写十六进制字符。
 
 | op | 请求 | 回 |
@@ -375,7 +343,7 @@ CCA-RELAY/1 <角色> <编号> <cn> <mac>\n
 
 **证书。** 浏览器只认证书机构签的证书。`--web-listen 地址:端口 --web-cert 证书 --web-key 私钥` 另开一个端口（同一个服务：同样的接口，
 限流、用过的 nonce 是同一份），原来那个端口上自签的证书照旧给 cca 的设备用；证书文件换了（续上了）服务器一分钟内自己重新读。
-启动时证书还没有、读不了（头一张要等证书助手去要）也照样起来，只是这个端口上一握手就断，几秒钟看一次，有了就用上；日志里说。
+启动时证书还没有、读不了（头一张要等证书助手去要）也照样起来，只是这个端口上一握手就断，每秒看一次，有了就用上；日志里说。
 `--behind-proxy` 时 HTTPS 是平台做的，网页端就在同一个端口上。`--web-url` 是 `http://localhost:端口/` 时（本机试）`--web-listen`
 只能听本机的地址、不用证书。这三项也可以用环境变量 `CCA_WEB_LISTEN`、`CCA_WEB_CERT`、`CCA_WEB_KEY`（`compose.web.yaml`）。
 

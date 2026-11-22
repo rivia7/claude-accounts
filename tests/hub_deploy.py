@@ -29,9 +29,10 @@ TEMPLATE = ROOT / 'server' / 'hub-install.sh'
 WEB = ROOT / 'server' / 'web'
 IMAGES = ['public.ecr.aws/docker/library/python:3.13-slim', 'mirror.ccs.tencentyun.com/library/python:3.13-slim']
 UNITS = Path('etc') / 'systemd' / 'system'
-# 设备上的 ssh：-G 说这台假服务器在 127.0.0.1；别的把最后一个参数（在服务器上运行的命令）交给假服务器的 enter（stdin 是安装脚本）
+# 设备上的 ssh：-G 说这台假服务器在 127.0.0.1（$HUB_SSH_HOST 换一个：ssh 走的是内网地址）；别的把最后一个参数（在服务器上运行的命令）
+# 交给假服务器的 enter（stdin 是安装脚本）
 SSH = r'''printf '%s\n' "$*" >> "$HOME/ssh.argv"
-for a in "$@"; do [ "$a" = -G ] && { printf 'user root\nhostname 127.0.0.1\nport 22\n'; exit 0; }; done
+for a in "$@"; do [ "$a" = -G ] && { printf 'user root\nhostname %s\nport 22\n' "${HUB_SSH_HOST:-127.0.0.1}"; exit 0; }; done
 for a in "$@"; do cmd=$a; done
 exec "$HUB_ENTER" "$cmd"
 '''
@@ -140,9 +141,9 @@ class Base(unittest.TestCase):
         a = self.admin()
         return (a,) + self.new_team(a, name)
 
-    def install(self, b, *args, shell=SH):
+    def install(self, b, *args, shell=SH, env=None):
         """在服务器上直接运行（sudo sh cca-hub-install.sh …），该成的"""
-        r = b.install(self.script, *args, shell=shell)
+        r = b.install(self.script, *args, shell=shell, env=env)
         self.assertEqual((r.returncode, r.stderr), (0, ''), r.stdout)
         return r
 
@@ -288,6 +289,10 @@ class InstallerTest(Base):
         self.assertIn('手机的网页端：' + url, r.stdout)
         self.assertNotIn('安全组', r.stdout, '端口都没变：不再说要放行')
         self.assertTrue(b.running(svc + '-acme'))
+        # cca team deploy 没写 --host 时放进 ssh -G 的主机名当兜底：记着地址时照记着的（ssh 走的是内网地址也不拿它盖掉、不关网页端）
+        r = self.install(b, '--dir', '/opt/' + svc, env={'CCA_HUB_HOST_HINT': '10.0.0.5'})
+        self.assertIn('手机的网页端：' + url, r.stdout)
+        self.assertEqual((b.envfile(d)['CCA_HUB_HOST'], b.envfile(d)['CCA_HUB_WEB_URL']), ('127.0.0.1', url))
         # --no-web：证书助手停掉、unit 删掉，服务端不带网页端；再运行还是关着
         r = self.install(b, '--dir', '/opt/' + svc, '--no-web')
         e = b.envfile(d)
@@ -360,6 +365,10 @@ class InstallerTest(Base):
         (b.d / 'ip').write_text('10.9.0.5')
         r = self.install(b, '--dir', '/opt/' + svc)
         self.assertIn('手机的网页端没开：认不出这台服务器的公网地址', r.stdout)
+        # 没记着地址时才用 cca team deploy 放进的兜底（ssh -G 的主机名），记下来
+        r = self.install(b, '--dir', '/opt/' + svc, env={'CCA_HUB_HOST_HINT': '127.0.0.1'})
+        self.assertEqual(b.envfile(d)['CCA_HUB_HOST'], '127.0.0.1')
+        self.assertIn('手机的网页端：https://127.0.0.1:%s/' % b.envfile(d)['CCA_HUB_WEB'], r.stdout)
         # 内网地址（不是测试里的 any_ip）：不开
         c = self.box()
         r = self.install(c, '--team-root', root, '--host', '10.0.0.5', '--port', str(free_port()))
@@ -702,6 +711,10 @@ class DeployTest(Base):
         r = self.deploy(a, tid, b)
         self.assertEqual([kv(r.stdout)[k] for k in ('state', 'port', 'host', 'members')], ['update', str(port), '127.0.0.1:%d' % port, '2'])
         self.assertEqual(bob.ok('team-sync').split('\t')[2], 'ok')
+        # 这次 ssh 走的是内网地址（别名、VPN）：服务器上记着的地址不拿它盖掉（网页端的证书、各台设备连的都是记着的那个）
+        r = self.deploy(a, tid, b, HUB_SSH_HOST='10.0.0.5')
+        self.assertEqual([kv(r.stdout)[k] for k in ('state', 'host')], ['update', '127.0.0.1:%d' % port])
+        self.assertEqual(b.envfile(d)['CCA_HUB_HOST'], '127.0.0.1')
         # 托管平台：生成部署文件（服务端程序、README；Railway 另有 Dockerfile），里面只有公开的根公钥（后面那一段）
         key = root.split()[1]
         kvs = lambda text: dict(tok.split('=', 1) for tok in shlex.split(text))   # 值里有换行（steps 是几行）：整个输出一起拆
@@ -726,6 +739,19 @@ class DeployTest(Base):
         self.assertEqual(self.code(a, 'team-deploy', 'nope', 'root@box', **env), 'no_team')
         self.assertEqual(self.code(a, 'team-deploy', tid, 'root@box', '--reset', **env), 'usage')
         self.assertEqual(self.code(bob, 'team-deploy', tid, 'root@box', **env), 'not_admin')
+
+    def test_recorded_host(self):
+        """服务器上已经装着这个 Team（在服务器上直接运行安装脚本装的，记着地址），这台设备还没接上它：ssh 走的是内网地址时，
+        各台设备连的也是安装脚本定下的（服务器上记着的）那个，和网页端的一致"""
+        b = self.box(docker=True)
+        a, tid, root, svc = self.team()
+        d = b.root / 'opt' / svc
+        port = free_port()
+        self.install(b, '--team-root', root, '--host', '127.0.0.1', '--port', str(port))
+        r = self.deploy(a, tid, b, HUB_SSH_HOST='10.0.0.5')
+        self.assertEqual([kv(r.stdout)[k] for k in ('state', 'host', 'members')], ['update', '127.0.0.1:%d' % port, '1'])
+        self.assertEqual(json.loads((a.cca / 'teams' / tid / 'team.json').read_text())['url'], 'https://127.0.0.1:%d' % port)
+        self.assertEqual(b.envfile(d)['CCA_HUB_HOST'], '127.0.0.1')
 
     def test_web(self):
         """手机的网页端：装的时候就开上（证书助手要来了证书：web_cert ok）；--no-web 关掉；证书没要到是 web_cert wait"""

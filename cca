@@ -5265,8 +5265,9 @@ remote_prepare() {
 	[ -x "$HELPER" ] || helper_find || return 0
 	HOSTCMD=("$HELPER" remote-host "$TOOL" "$ACC_KEY" "$ACC_NAME" --)
 }
-# 两台机器之间：一台 cca remote pair 显示配对码，另一台 cca remote join 输入；之后输入的那台能经维护者的服务器接入显示的那台
-# 上的会话（两头之间端到端加密，服务器只转字节）。配对表、对方能做什么（allow）、取消（unpair）都在辅助程序里
+# 两台机器之间：一台 cca remote pair 显示配对码，另一台 cca remote join 输入；之后输入的那台能经服务器（配对时选的那台：Team 的或者
+# 维护者的，relay.rs 的 session_hub、home_hub）接入显示的那台上的会话（两头之间端到端加密，服务器只转字节）。配对表、对方能做什么
+# （allow）、取消（unpair）都在辅助程序里
 remote_pair_spec() {   # remote_pair_spec 配对码 [网页端的地址]：提问会话里显示配对码的那一页（给 py prompt-emit）。只显示、不用回答：配好了 cca 自己收场，
 	                     # 不想配了 App 关掉答案管道（「取消」）。给了网页端的地址是和手机配对（题号 remote.pair_web）：多一个 kind 是 qr 的字段，
 	                     # App 把地址画成二维码，手机的相机扫了就打开那一页
@@ -6437,11 +6438,11 @@ policy_opened() {   # 打开了共享、拉到了映射（映射里的账号加�
 	gui_done policy_on "已打开共享（$(py policy-summary)）"
 }
 
-policy_connect() {   # policy_connect 仓库 [on]（提问会话里）：记下仓库、生成 deploy key（policy_prepare），显示给维护者的那一行、等维护者加上
-	                   # （policy_wait_page）。0 拉到了；1 先跳过；2 不打开共享（仓库、deploy key、拉到过的映射都去掉了）。on：「共享与同步」页打开共享
+policy_connect() {   # policy_connect 仓库（提问会话里，「共享与同步」页打开共享）：记下仓库、生成 deploy key（policy_prepare），显示给维护者的
+	                   # 那一行、等维护者加上（policy_wait_page）。0 拉到了；1 先跳过；2 不打开共享（仓库、deploy key、拉到过的映射都去掉了）
 	local rc
 	policy_prepare "$1"
-	policy_wait_page "${2:-}"; rc=$?
+	policy_wait_page; rc=$?
 	[ $rc -ne 2 ] || policy_decline
 	return $rc
 }
@@ -6471,7 +6472,7 @@ policy_setup() {   # policy_setup [仓库]（cca policy on / setup）：打开�
 	fi
 	if [ -n "$PROMPT_GUI" ]; then
 		ONB_TITLE="打开维护者的共享"
-		policy_connect "$repo" on
+		policy_connect "$repo"
 		case $? in
 			0) policy_settle; policy_opened ;;
 			2) gui_done policy_off "没有打开共享" ;;
@@ -7188,7 +7189,8 @@ hub_pubkey_ask() {   # App 里部署时服务器只认密钥、不认这台设�
 }
 
 hub_leftovers() {   # 3.5.3 去掉了自己的同步服务器（cca hub）：以前加入过、部署过的设备上留下的加入信息、这台设备在它上面的密钥、部署到
-	                 # 托管平台时记着的口令、经它同步的状态都删掉（服务器上这台设备的记录不管：那台服务器用不着了）。main 看到 hub/ 还在时调
+	                 # 托管平台时记着的口令、经它同步的状态都删掉（服务器上这台设备的记录不管：那台服务器用不着了）。main 看到 hub/、
+	                 # hub-hosted.json 或者 hub-removed.json（被移除了时只剩它）还在时调
 	rm -rf "$CCA_HOME/hub" 2>/dev/null
 	rm -f "$CCA_HOME/hub-hosted.json" "$CCA_HOME/hub-removed.json" "$CCA_HOME"/presence/own.* "$CCA_HOME"/cost/own.* 2>/dev/null
 	return 0
@@ -7481,17 +7483,17 @@ onboard_policy_quick() {   # 共享开着、有 deploy key（以前走过向导�
 	return 1
 }
 
-policy_wait_page() {   # policy_wait_page [on]：打开维护者的共享时的那一页（提问会话）：显示给维护者的那一行，等维护者把这台机器的公钥加上——每隔几秒
-	                     # 自动拉一次（和 policy_wait 一样，最多 30 分钟），拉到了自己进下一步（App 收到下一页就换掉这一页）；拉不到的原因变了才换一页。
-	                     # 用户也可以先跳过、或者说不打开共享。0 拉到了；1 先跳过；2 不打开共享。on：「共享与同步」页打开共享（cca policy on），
-	                     # 后面没有配置向导的下一步。CCA_POLICY_POLL：每隔几秒（整数，测试用）
-	local poll="${CCA_POLICY_POLL:-5}" i max st last="" seqs="" msg skip="先跳过，接着配置网络出口"
+policy_wait_page() {   # 打开维护者的共享（cca policy on，App 的「共享与同步」页）时的那一页（提问会话）：显示给维护者的那一行，等维护者把这台机器的
+	                     # 公钥加上——每隔几秒自动拉一次（和 policy_wait 一样，最多 30 分钟），拉到了就打开共享（App 收到结果就换掉这一页）；拉不到的
+	                     # 原因变了才换一页。用户也可以先跳过、或者说不打开共享。0 拉到了；1 先跳过；2 不打开共享。3.5.3 起配置向导不再问维护者的
+	                     # 共享（问 Team 的邀请链接），只有这里用它。CCA_POLICY_POLL：每隔几秒（整数，测试用）
+	local poll="${CCA_POLICY_POLL:-5}" i max st last="" seqs="" msg skip="先跳过"
 	case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
 	max=$((1800 / poll))
 	msg="映射由维护者发布：给账号固定出口节点，没有路由器时也提供内置代理用的节点，映射里的账号会自动加进来。把下面这一行发给维护者"
 	[ -z "$POLICY_PREPARE_COPIED" ] || msg="${msg}（已复制到剪贴板）"
 	msg="${msg}，由维护者在 cca 的仓库里运行，把这台 Mac 加成映射仓库的只读 deploy key。"
-	if [ -n "${1:-}" ]; then msg="${msg}加好后这里会自动打开共享。"; skip="先跳过"; else msg="${msg}加好后这里会自动进入下一步。"; fi
+	msg="${msg}加好后这里会自动打开共享。"
 	for ((i = 0; ; i++)); do
 		if [ $i -lt $max ]; then
 			policy_fetch && { policy_got; return 0; }
@@ -8065,8 +8067,9 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca remote end [编号]      结束这台机器上的一个会话（等于关掉它的终端；先问）
   cca remote pair | join    两台机器配对：要被接入的那台 pair（显示配对码），另一台 join（输入）。之后 join 的那台能经
                              服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）。每个 Team 的账号的会话走
-                             这个 Team 自己的服务器中转，别的账号走维护者的：配对记在哪台服务器上，经它看得到的就是走那台的
-                             会话。用得了好几台时 pair 要说在哪台上配：--team 名字（维护者的那一台是 --maintainer）
+                             这个 Team 自己的服务器中转，维护者映射里的走维护者的，别的账号（自己的、第三方 API 的）走加入的
+                             第一个 Team 的（没加入 Team 时是维护者的）。配对记在哪台服务器上，经它看得到的就是走那台的会话：
+                             pair 默认在第一个 Team 的那台上配，别的写 --team 名字（维护者的那一台是 --maintainer）
   cca remote pair --web      和手机配对：手机上不装 cca，在浏览器里打开它给的地址（iPhone 上添加到主屏幕）、输入配对码，
                              之后在手机上接入这台机器上的会话。要那台服务器开着网页端；每个 Team 的服务器各是各的一页
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
@@ -8143,7 +8146,7 @@ main() {
 			[ "${1:-}" = _onboard ] || policy_hook   # 配置向导开头自己拉一次映射（onboard_policy_quick）：不在后台另拉一次
 			team_hook
 			gui_hook
-			[ ! -d "$CCA_HOME/hub" ] && [ ! -e "$CCA_HOME/hub-hosted.json" ] || hub_leftovers
+			[ ! -d "$CCA_HOME/hub" ] && [ ! -e "$CCA_HOME/hub-hosted.json" ] && [ ! -e "$CCA_HOME/hub-removed.json" ] || hub_leftovers
 			# 用着 Codex / agy（有它的账号表，或者这次就是 cca codex|agy …）而 cxa / aga 不见了（以前装的 cca 升级上来、被删掉了）：补上
 			if [ "${1:-}" = codex ] || [ -f "$CCA_HOME/codex.json" ]; then tool_alias_ensure codex "" quiet; fi
 			if [ "${1:-}" = agy ] || [ -f "$CCA_HOME/agy.json" ]; then tool_alias_ensure agy "" quiet; fi

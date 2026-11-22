@@ -395,13 +395,15 @@ struct FailCode: KnownValues {
     /// Team 的部署（`cca team deploy`，PROTOCOL 4.14）：App 里问 SSH 密码，错了三次（3.5.3 以前自己的同步服务器的那些 `hub_` 开头的码都没有了；
     /// Team 的命令没成是 `team_` 开头的，App 照 message 说）
     static let hubSSH = FailCode(rawValue: "hub_ssh")
+    /// Team 的部署装好了、接上了，但地址是内网的：别的网络里的设备连不上（提醒，退出码 0；message 说怎么换成公网地址）
+    static let teamLan = FailCode(rawValue: "team_lan")
     static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy, .hubSSH]
+                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy, .hubSSH, .teamLan]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。

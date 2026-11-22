@@ -2171,7 +2171,7 @@ ok "提问会话：删除账号答是：账号和钥匙串里的 key 都删了" 
 out=$(sess '{"rm.confirm":[{"v":"y"}]}' -- cca rm 图一 2>&1); rc=$?
 ok "提问会话：删除官方账号" '[ $rc -eq 0 ] && tblok "not any(\"gui1@\" in k for k in t)"'
 # 配置向导（_onboard，App 首次运行引导：① 加入 Team → ② 网络出口 → ③ 添加账号；做完记下 onboarded，以后不再弹）。
-# 这里都不在 Team 里：都有第 1 步（加入了的在 11b3d）；已经有账号的不问第 3 步
+# 这里都不在 Team 里：都有第 1 步（已经在 Team 里的那一条在 11b3d：加入了两个 Team 以后）；已经有账号的不问第 3 步
 cp "$H/.cca/config.json" "$T/cfg.onb.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onb.bak"
 out=$(sess '{}' -- cca _onboard --skip 2>&1); rc=$?
 ok "配置向导：--skip（App「以后再说」）只记下 onboarded、不提问" '[ $rc -eq 0 ] && [ -z "$(asks)" ] && gj state | jok "cfg.get(\"onboarded\") is True and d[\"config\"][\"onboarded\"] is True"'
@@ -3747,6 +3747,12 @@ run cca team devices 书房组 --json > "$T/guifx4/team_devices.json" 2>/dev/nul
 out=$(gj state); printf '%s' "$out" > "$T/guifx4/state_team.json"
 ok "_gui hello 说有 Team（team 是 1）；_gui state 的 config.teams 是这台设备在的两个 Team（照加入的先后：书房组是管理员，维护者的组是成员、配置同步着）；team devices --json 带着 Team 的名字和配置里的账号" 'jok "d[\"team\"] == 1" < "$T/guifx4/hello.json" && printf "%s" "$out" | jok "[(t[\"id\"], t[\"name\"], t[\"role\"], t[\"state\"]) for t in d[\"config\"][\"teams\"]] == [(\"$TMID\", \"书房组\", \"admin\", \"ok\"), (\"$TMBID\", \"维护者的组\", \"member\", \"ok\")]" && jok "d[\"kind\"] == \"team_devices\" and d[\"team\"] == \"$TMID\" and d[\"name\"] == \"书房组\" and \"alice@example.com\" in d[\"accounts\"][\"claude\"] and isinstance(d[\"nodes\"], list) and any(x[\"me\"] for x in d[\"devices\"])" < "$T/guifx4/team_devices.json"'
 ok "_gui state：alice 是「维护者的组」给的（账号的 team 是它的编号），经它的同步服务器同步（hub 是 team）；config.hubs 里有它（kind 是 team，带编号和名字）；别的账号没有 team" 'printf "%s" "$out" | jok "(lambda a: a[\"hub\"] == \"team\" and a[\"team\"] == \"$TMBID\")(next(a for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\")) and (\"$TMBID\", \"维护者的组\") in [(h.get(\"team\"), h.get(\"team_name\")) for h in d[\"config\"][\"hubs\"] if h[\"kind\"] == \"team\"] and all(\"team\" not in a for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
+# 配置向导（10h 那几条都不在 Team 里）：已经在 Team 里的不问第 1 步。没配路由器、已有账号时只问网络出口（只有这一步：标题不写第几步）
+cp "$H/.cca/config.json" "$T/cfg.onbt.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onbt.bak"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("onboarded", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- cca _onboard 2>&1); rc=$?
+cp "$T/cfg.onbt.bak" "$H/.cca/config.json"; cp "$T/tbl.onbt.bak" "$H/.cca/accounts.json"
+ok "配置向导：已经在 Team 里 → 不问加入 Team；没配路由器时只问网络出口（标题不写第几步，页说明说 Team 给的账号配好出口后自动加进来）" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.net ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"网络出口\" and e[\"message\"].startswith(\"加入了 Team\")" && [ "$(lastres)" = onboarded ]'
 out=$(runev cca team devices 维护者的组 --json 2>/dev/null); rc=$?
 ok "cca team devices --json：这台设备不是管理员：fail 事件 team_not_admin，stdout 没有东西（不是半截 JSON）" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
 out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join 2>&1); rc=$?
@@ -4573,6 +4579,13 @@ mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail
 RSP=$(printf 'ab%.0s' $(seq 1 16)); mkdir -p "$H/.cca/remote" "$T/keychain/cca-remote-$RSP"; chmod 700 "$H/.cca/remote"
 printf '%064d' 7 > "$T/keychain/cca-remote-$RSP/pair"
 printf '{"v":1,"peers":{"%s":{"fp":"SHA256:%s","name":"dan-air","incoming":"control","shown":true,"at":1794000000}}}\n' "$RSP" "$(printf 'A%.0s' $(seq 1 43))" > "$H/.cca/remote/peers.json"
+# 3.5.3 去掉了自己的同步服务器：以前加入过的设备上留下的，升级以后第一条走默认那一支的命令就删掉（hub_leftovers）
+mkdir -p "$H/.cca/hub" "$H/.cca/presence" "$H/.cca/cost"; : > "$H/.cca/hub/hub.json"; : > "$H/.cca/hub-hosted.json"
+: > "$H/.cca/cost/own.remote.json"; : > "$H/.cca/cost/own.sync.json"; : > "$H/.cca/presence/own.status.json"
+run cca ls >/dev/null 2>&1
+ok "升级上来、以前加入过自己的同步服务器：第一条命令就删掉它留下的（hub/、托管平台记着的、经它同步来的 own. 开头的）" '[ ! -e "$H/.cca/hub" ] && [ ! -e "$H/.cca/hub-hosted.json" ] && [ -z "$(ls "$H/.cca/cost" "$H/.cca/presence" | grep "^own\.")" ]'
+: > "$H/.cca/hub-removed.json"; run cca ls >/dev/null 2>&1
+ok "被自己的同步服务器移除过（只剩 hub-removed.json）：也删掉" '[ ! -e "$H/.cca/hub-removed.json" ]'
 # 3.5.3 以前加入过自己的同步服务器、升级以后还没运行过别的命令（第一条命令就删掉它们：hub_leftovers）：加入信息（入伙口令、盐）、
 # 这台设备在它上面的私钥、经它同步来的折合金额都不进备份
 RHA=$(printf 'e7%.0s' $(seq 1 16)); RHS=$(printf '9d%.0s' $(seq 1 16))

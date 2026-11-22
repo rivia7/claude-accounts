@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""一台假的 Linux 服务器，给 Team 的同步服务器的一键部署用（tests/hub_deploy.py；regress 11b3c 的 hubbox：python3 hub_box.py 目录）。
+"""一台假的 Linux 服务器，给 Team 的同步服务器的一键部署用（tests/hub_deploy.py；regress 11b3d 的 hubbox：python3 hub_box.py 目录）。
 目录下的 root/ 当作 /（安装脚本的 CCA_HUB_ROOT），bin/ 里是假的系统命令：id、useradd、userdel、chown、ip、journalctl、sudo，
 Python 写的 systemctl、docker（照 unit 的 ExecStart、compose.yaml 里各个服务的 command、端口和挂载起真的 server/cca-presence.py，
 监听 127.0.0.1；证书助手 cca-acme.py 不真的去找 Let's Encrypt：换成 acme_stub.py，照 --id 往 --out 里写一张自签的证书），
@@ -287,10 +287,10 @@ class Box:
         elif p.exists():
             p.unlink()
 
-    def install(self, script, *args, shell=SH):
-        # 新的会话：没有控制终端（像 cron、托管平台里那样），问不了公网地址
-        return subprocess.run([shell, str(script)] + list(args), env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              timeout=180, start_new_session=True)
+    def install(self, script, *args, shell=SH, env=None):
+        # 新的会话：没有控制终端（像 cron、托管平台里那样），问不了公网地址。env：另加的环境变量（cca team deploy 放进的那几项）
+        return subprocess.run([shell, str(script)] + list(args), env=dict(self.env, **(env or {})), stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=180, start_new_session=True)
 
     def log(self, name):
         p = self.d / name
