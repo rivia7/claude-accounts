@@ -61,6 +61,8 @@ pub struct Peer {
     /// 配对码是这台机器显示的（握手、派生密钥时两台机器的先后照它）
     pub shown: bool,
     pub at: f64,
+    /// 对方是手机上的网页端（`cca remote pair --web` 配的、不在服务器的设备清单里）：只是给人看的，它能做什么照旧看 incoming
+    pub web: bool,
 }
 
 fn file() -> String {
@@ -94,6 +96,7 @@ pub fn load() -> Vec<Peer> {
                 incoming: Incoming::parse(&d.str("incoming")?)?,
                 shown: d.at("shown").as_bool()?,
                 at: d.at("at").as_num()?,
+                web: d.at("web").as_bool() == Some(true),
             })
         })();
         if let Some(p) = peer.filter(|p| hex32(&p.pid)) {
@@ -108,10 +111,12 @@ pub fn save(peers: &[Peer]) -> R<()> {
     let d = local::ensure_dir()?;
     let all = Dict::new();
     for p in peers {
-        all.set(
-            p.pid.as_str(),
-            dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at },
-        );
+        let row =
+            dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at };
+        if p.web {
+            row.set("web", true); // 只有网页端的才写这一项：别的机器的那几行和以前逐字节一样
+        }
+        all.set(p.pid.as_str(), row);
     }
     fs::save_json(&path::join(&d, "peers.json"), &V::Dict(dict! { "v" => 1, "peers" => all }), Some(0o600), true)
 }
@@ -181,6 +186,7 @@ mod tests {
             incoming: Incoming::Control,
             shown: true,
             at: 1.0,
+            web: false,
         };
         let peers = vec![peer("ab", "服务器"), peer("cd", "服务器"), peer("ef", "笔记本")];
         assert_eq!(find(&peers, "笔记本").unwrap().pid, "ef".repeat(16));

@@ -24,6 +24,9 @@ use std::time::Duration;
 /// 服务器不认这几个 op（旧版，或者没开中转）
 pub const RELAY_OLD: &str = "维护者的服务器还不支持远程会话（要更新服务器、打开中转：./policy.sh presence deploy）";
 
+/// 服务器没开网页端（或者是旧版，不认 `pair_open` 的 web 这一项）：手机上接入不了
+pub const NO_WEB: &str = "维护者的服务器还没有开网页端，手机上接入不了（要更新服务器、打开网页端：./policy.sh presence deploy --web-url …）";
+
 /// 请求没成：服务器回的状态码和 error，加上给人看的原因
 #[derive(Debug)]
 pub struct Fault {
@@ -77,6 +80,7 @@ impl Server {
         let text = match (code, error.as_str()) {
             (404, "not_found") => RELAY_OLD.to_string(),
             (404, "no_pairing") => "服务器上没有这个配对（配对码过期了，或者对方取消了配对）".into(),
+            (404, "no_web") => NO_WEB.into(),
             (404, "no_session") => "那台机器上现在没有这个会话（它结束了，或者那边不让这台机器接入）".into(),
             (409, "taken") => "这个配对码已经有另一台机器在用了：重新显示一个".into(),
             (409, "mismatch") => "配对没对上（两边算出来的不一样）：重新来一次".into(),
@@ -376,9 +380,9 @@ mod tests {
         let sid = "00112233445566778899aabbccddeeff";
         let (fph, fpv) = ("SHA256:host", "SHA256:viewer");
         let peer_of_host =
-            Peer { pid: pid.clone(), fp: fpv.into(), name: "v".into(), incoming: Incoming::Control, shown: true, at: 0.0 };
+            Peer { pid: pid.clone(), fp: fpv.into(), name: "v".into(), incoming: Incoming::Control, shown: true, at: 0.0, web: false };
         let peer_of_viewer =
-            Peer { pid: pid.clone(), fp: fph.into(), name: "h".into(), incoming: Incoming::None, shown: false, at: 0.0 };
+            Peer { pid: pid.clone(), fp: fph.into(), name: "h".into(), incoming: Incoming::None, shown: false, at: 0.0, web: false };
 
         let host = std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
@@ -442,6 +446,7 @@ mod tests {
             incoming: Incoming::Control,
             shown: true,
             at: 0.0,
+            web: false,
         };
         // 宿主那边没有这个配对：说一声“不认识”就关，接入方知道原因
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

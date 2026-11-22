@@ -11,7 +11,7 @@
 use super::crypto::{self, PairKeys};
 use super::far::{self, clean};
 use super::peers::{self, Incoming, Peer};
-use super::relay::{self, Server};
+use super::relay::{self, Server, NO_WEB};
 use crate::cmd::arity;
 use crate::cmd::secrets::keystore_name;
 use crate::core::base::Lock;
@@ -73,9 +73,11 @@ fn wait_theirs(srv: &Server, rid: &str, until: f64) -> R<Option<Theirs>> {
     }
 }
 
-/// 两边的密文都有了：算出密钥、存好、报给服务器、等它记下，再写进配对表。shown：配对码是这台机器显示的
-fn conclude(srv: &Server, k: &PairKeys, shown: bool, mine: &[u8], theirs: Theirs) -> R<Peer> {
+/// 两边的密文都有了：算出密钥、存好、报给服务器、等它记下，再写进配对表。shown：配对码是这台机器显示的；
+/// web：这次配对是开给网页端的（输入配对码的那一头不在设备清单里时，配对表里记成网页端）
+fn conclude(srv: &Server, k: &PairKeys, shown: bool, web: bool, mine: &[u8], theirs: Theirs) -> R<Peer> {
     let Theirs { m, fp: server_fp, listed } = theirs;
+    let web = web && listed.is_empty();
     let Some((fp, n, name)) = crypto::pair_open(&k.keys, &k.rid, if shown { "b" } else { "a" }, &m) else {
         return die("对方放上来的内容打不开（不是用这个配对码封的）：没有配对，重新来一次");
     };
@@ -117,7 +119,7 @@ fn conclude(srv: &Server, k: &PairKeys, shown: bool, mine: &[u8], theirs: Theirs
     let written = (|| -> R<(Peer, Vec<String>)> {
         let _lock = Lock::acquire()?;
         let mut all = peers::load();
-        let (peer, old) = entry(&mut all, &pid, &fp, [listed, name], shown);
+        let (peer, old) = entry(&mut all, &pid, &fp, [listed, name], shown, web);
         peers::save(&all)?;
         Ok((peer, old))
     })();
@@ -136,7 +138,7 @@ fn conclude(srv: &Server, k: &PairKeys, shown: bool, mine: &[u8], theirs: Theirs
 }
 
 /// 配对表里换上这一次配对的那一项。返回它，和这台设备以前配过的那些配对编号（它们的密钥该删了；服务器上也是换掉）
-fn entry(all: &mut Vec<Peer>, pid: &str, fp: &str, names: [String; 2], shown: bool) -> (Peer, Vec<String>) {
+fn entry(all: &mut Vec<Peer>, pid: &str, fp: &str, names: [String; 2], shown: bool, web: bool) -> (Peer, Vec<String>) {
     // 输入配对码不改“让不让它接入”：以前让的照旧
     let before = all.iter().find(|x| x.fp == fp).map(|x| x.incoming);
     let old = all.iter().filter(|x| x.fp == fp && x.pid != pid).map(|x| x.pid.clone()).collect();
@@ -147,25 +149,44 @@ fn entry(all: &mut Vec<Peer>, pid: &str, fp: &str, names: [String; 2], shown: bo
         .iter()
         .map(|n| clean(n, 48).trim().to_string())
         .find(|n| !n.is_empty())
-        .unwrap_or_else(|| format!("机器 {}", &pid[..6]));
+        .unwrap_or_else(|| format!("{} {}", if web { "手机" } else { "机器" }, &pid[..6]));
     let incoming = if shown { Incoming::Control } else { before.unwrap_or(Incoming::None) };
-    let peer = Peer { pid: pid.to_string(), fp: fp.to_string(), name, incoming, shown, at: time() };
+    let peer = Peer { pid: pid.to_string(), fp: fp.to_string(), name, incoming, shown, at: time(), web };
     all.push(peer.clone());
     (peer, old)
 }
 
-/// `remote-pair-show`：出一个配对码、等另一台机器输入。stdout 两行：先是 `code 配对码`（马上写出去：调用方——bash——
-/// 把它显示给用户，终端里打印、界面 App 里是一页），配好以后 `peer 对方的名字`
+/// `remote-pair-show [--web]`：出一个配对码、等另一台机器输入。stdout：先是 `code 配对码`（马上写出去：调用方——bash——
+/// 把它显示给用户，终端里打印、界面 App 里是一页），配好以后 `peer 对方的名字`。
+/// --web：这次配对开给手机上的网页端（输入配对码的可以是不在设备清单里的设备）；`code` 那一行后面紧跟一行 `web 网页端的地址`
+/// （一起写出去：手机上打开它、在那一页里输入配对码）
 pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
-    arity("cmd_remote_pair_show", args, 0, 0)?;
+    let web = match args {
+        [] => false,
+        [a] if a == "--web" => true,
+        _ => return die("用法：remote-pair-show [--web]"),
+    };
     let srv = need_server()?;
     let code = crypto::code_new();
     let k = crypto::pair_keys(&code);
-    ask(&srv, "pair_open", &dict! { "rid" => k.rid.as_str() }, 10)?;
+    let open = dict! { "rid" => k.rid.as_str() };
+    if web {
+        open.set("web", true);
+    }
+    let opened = ask(&srv, "pair_open", &open, 10)?;
+    // 旧版的服务器不认 web 这一项、照普通的配对开了：手机输入配对码会被拒，所以这里就停下
+    let page = opened.str("web").map(|u| u.to_string()).filter(|u| web_url_ok(u));
+    if web && page.is_none() {
+        let _ = srv.post("pair_close", &dict! { "rid" => k.rid.as_str() }, 5);
+        return die(NO_WEB);
+    }
     let na = urandom(32);
     let m = crypto::pair_msg(&k.keys, &k.rid, "a", &srv.fp, &na, &peers::machine_name())?;
     ask(&srv, "pair_put", &dict! { "rid" => k.rid.as_str(), "m" => m }, 10)?;
     crate::out!("code {}", crypto::code_text(&code));
+    if let Some(page) = &page {
+        crate::out!("web {page}");
+    }
     crate::py::io::flush_out();
     // 等的时候被叫停（Ctrl-C、调用方不等了：界面 App 里点了取消）要能收场，所以这几个信号不直接把进程带走
     for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
@@ -175,7 +196,7 @@ pub fn cmd_remote_pair_show(args: &[String]) -> R<()> {
         let Some(theirs) = wait_theirs(&srv, &k.rid, monotonic() + CODE_TTL)? else {
             return die("配对码过期了，没有配对：要配对的话重新运行 cca remote pair");
         };
-        conclude(&srv, &k, true, &na, theirs)
+        conclude(&srv, &k, true, web, &na, theirs)
     })();
     match paired {
         Ok(peer) => {
@@ -215,13 +236,27 @@ pub fn cmd_remote_pair_join(args: &[String]) -> R<()> {
     let Some(theirs) = wait_theirs(&srv, &k.rid, monotonic() + 30.0)? else {
         return die("没等到对方那一份：显示配对码的那台机器还开着 cca remote pair 吗？");
     };
-    let peer = conclude(&srv, &k, false, &nb, theirs)?;
+    let peer = conclude(&srv, &k, false, false, &nb, theirs)?;
     crate::out!("{}", peer.name);
     Ok(())
 }
 
 fn row(p: &Peer, note: &str) -> String {
-    format!("{}  {}  对方{}  {} 配对{}", &p.pid[..8], p.name, p.incoming.text(), strftime_local("%Y-%m-%d", p.at), note)
+    let kind = if p.web { "（手机上的网页端）" } else { "" };
+    format!("{}  {}{}  对方{}  {} 配对{}", &p.pid[..8], p.name, kind, p.incoming.text(), strftime_local("%Y-%m-%d", p.at), note)
+}
+
+/// 服务器给的网页端地址：要拿去显示、做成二维码，所以只认 https://主机[:端口]/ 这一种样子（本机试的时候是 http://localhost）
+fn web_url_ok(u: &str) -> bool {
+    let rest = match u.strip_prefix("https://") {
+        Some(r) => r,
+        None => match u.strip_prefix("http://") {
+            Some(r) if r.starts_with("localhost") || r.starts_with("127.0.0.1") => r,
+            _ => return false,
+        },
+    };
+    let host = rest.strip_suffix('/').unwrap_or(rest);
+    !host.is_empty() && host.len() <= 200 && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':'))
 }
 
 /// `remote-peers [--check]`：一行一台配对过的机器；一台都没有时什么都不打印。--check：问一下服务器，对方取消了的标出来

@@ -46,6 +46,8 @@ Team 的同步服务器（--mode team --team-root 根公钥：cca team）：设�
 """
 import argparse
 import base64
+import collections
+import gzip
 import hashlib
 import hmac
 import http.server
@@ -54,6 +56,7 @@ import json
 import os
 import re
 import secrets
+import select
 import selectors
 import socket
 import socketserver
@@ -1000,6 +1003,9 @@ class Store:
 
 # ---------------------------------------------------------------- 远程会话的中转（--relay-listen 才开；格式见 README.md）
 RELAY_OPS = ('pair_open', 'pair_put', 'pair_get', 'pair_commit', 'pair_close', 'pair_drop', 'relay_host', 'relay_attach', 'relay_list')
+# 访客（手机上的网页端：不在设备清单里，是和它配对的那台设备领进来的）能发的：输入配对码、看配对的设备上有哪些会话、接入。
+# 开配对（pair_open）、当宿主（relay_host）和中转以外的请求都不行
+GUEST_OPS = ('pair_put', 'pair_get', 'pair_commit', 'pair_close', 'pair_drop', 'relay_attach', 'relay_list')
 PAIR_TTL = 600             # 配对码多久过期
 PAIR_SLOTS = 4             # 一台设备同时开着几个配对
 PAIR_WAIT = 10             # pair_get 最多等对方多久（要比 CONN_DEADLINE 短）
@@ -1022,6 +1028,19 @@ PREAMBLE_WAIT = 5          # 连上以后这么久还没说完开场白就断开
 JOIN_WAIT = 10             # 接入方等宿主那一头连上来最多这么久
 CTL_FRAME = 32 * 1024      # 控制连接上一帧最长
 F_JOIN, F_PING, F_PONG, F_ANNOUNCE, F_BYE = 0x02, 0x06, 0x07, 0x08, 0x09
+WS_CONN = 64               # 网页端同时几条 WebSocket
+WS_CONN_IP = 8
+WS_FRAME = 1 << 20         # WebSocket 一帧最长（里面是加密的记录，一条不到 17 KB；浏览器可能把攒着的几条并成一帧）
+WS_STALL = 20              # 一头这么久写不动、一帧这么久收不齐：断开
+WS_IDLE = 100              # 两头这么久都没有动静：断开（比 RELAY_IDLE 长：闲着的由中转那头先断）
+WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+WS_KEY_RE = re.compile(r'^[A-Za-z0-9+/]{22}==$')
+WEB_URL_RE = re.compile(r'^(https://[A-Za-z0-9.-]+(?::\d{1,5})?|http://(?:localhost|127\.0\.0\.1)(?::\d{1,5})?)/?$')
+WEB_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9._-]{0,63}$')
+WEB_TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+             '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json'}
+WEB_FILE = 2 << 20         # 网页的一个文件最长
+WAKE = object()            # 中转的 selector 里“别的线程交了连接过来”的那一项
 RELAY_LINE = re.compile(rb'^CCA-RELAY/1 (host|view|join) ([0-9a-f]{32}) ([0-9a-f]{16}) ([A-Za-z0-9_-]{43})$')
 
 
@@ -1039,20 +1058,66 @@ class Remote:
       配对编号是两台设备从配对出来的密钥算的，服务器只知道是哪两台设备配了对
     - 下面的只在内存里：slots（正在进行的配对：两边各放一份密文、各报一次配对编号）、tickets（进数据端口的票据）、
       sessions（开着的会话：哪台设备的、给哪几个配对看、每个配对一份说明的密文、控制连接）"""
-    def __init__(self, path, port):
-        self.path, self.port = path, port
+    def __init__(self, path, port, web=None):
+        """web：网页端的地址（开着网页端时）。给了才让设备开“给网页端的配对”、才有访客"""
+        self.path, self.port, self.web = path, port, web
         self.lock = threading.RLock()
         self.cond = threading.Condition(self.lock)
-        self.doc = {'v': 1, 'edges': {}}
+        self.doc = {'v': 1, 'edges': {}, 'guests': {}}
         self.doc.update(load_doc(path, ('edges',)) or {})
         self.doc['edges'] = {p: e for p, e in self.doc['edges'].items()
                              if isinstance(p, str) and AID_RE.match(p) and isinstance(e, dict)
                              and all(isinstance(e.get(k), str) and FP_RE.match(e[k]) for k in ('a', 'b'))}
+        g = self.doc.get('guests')
+        self.doc['guests'] = {fp: {'key': x['key'], 'at': x.get('at')} for fp, x in (g.items() if isinstance(g, dict) else ())
+                              if isinstance(fp, str) and FP_RE.match(fp) and isinstance(x, dict) and isinstance(x.get('key'), str)
+                              and KEY_RE.match(x['key']) and key_fp(x['key'].split()[1]) == fp}
         self.slots, self.tickets, self.sessions = {}, {}, {}
+        self.prune_guests()
 
     @property
     def edges(self):
         return self.doc['edges']
+
+    @property
+    def guests(self):
+        """访客（remote.json 的 guests）：{指纹: {"key": 公钥, "at"}}。手机上的网页端没有 deploy key、不在设备清单里：它拿着一台设备
+        显示的配对码配上对，服务器才记下它的公钥；只能发 GUEST_OPS，一个配对都不剩时就删掉"""
+        return self.doc['guests']
+
+    def prune_guests(self):
+        """一个配对都不剩的访客不留（它的票据也作废）。有删掉的回 True"""
+        used = set()
+        for e in self.edges.values():
+            used.update((e['a'], e['b']))
+        gone = [fp for fp in self.guests if fp not in used]
+        for fp in gone:
+            self.guests.pop(fp)
+        if gone:
+            self.tickets = {t: k for t, k in self.tickets.items() if k['fp'] not in gone}
+        return bool(gone)
+
+    def guest_key(self, fp, op, j, now):
+        """不在设备清单里的这把密钥能不能发这个请求：能的话回验签名用的公钥，不能是 None。两种：已经配了对的访客；
+        正拿着配对码来的——那次配对是开给网页端的（pair_open 带 web）、还没有别的设备放过密文，公钥在请求里（pub，指纹要对得上）。
+        知道 rid 就是知道配对码：不知道的人到不了验签名那一步"""
+        if op not in GUEST_OPS:
+            return None
+        with self.lock:
+            g = self.guests.get(fp)
+            if g:
+                return g['key']
+            rid = j.get('rid')
+            s = self.slots.get(rid) if isinstance(rid, str) else None
+            if not s or not s['web'] or s['exp'] < now:
+                return None
+            if s['joiner'] == fp:
+                return s['gkey']
+            pub = j.get('pub')
+            k = KEY_RE.match(pub) if isinstance(pub, str) else None
+            if op == 'pair_put' and s['joiner'] is None and k and key_fp(k.group(1)) == fp:
+                return 'ssh-ed25519 ' + k.group(1)
+        return None
 
     def save(self):
         save_doc(self.path, self.doc)
@@ -1066,12 +1131,14 @@ class Remote:
         return e['b'] if e['a'] == fp else e['a']
 
     def keep_only(self, fps):
-        """设备清单换了：撤销的设备的配对、票据、会话都删掉（它的控制连接由数据端口那边发现会话没了时断开）"""
+        """设备清单换了：撤销的设备的配对、票据、会话都删掉（它的控制连接由数据端口那边发现会话没了时断开）。
+        访客不在清单里：领它进来的设备撤销了，它的配对跟着没有，它也就删掉了"""
         with self.lock:
-            gone = [p for p, e in self.edges.items() if e['a'] not in fps or e['b'] not in fps]
+            ok = set(fps) | set(self.guests)
+            gone = [p for p, e in self.edges.items() if e['a'] not in ok or e['b'] not in ok]
             for p in gone:
                 self.drop_edge(p)
-            self.tickets = {t: k for t, k in self.tickets.items() if k['fp'] in fps}
+            self.tickets = {t: k for t, k in self.tickets.items() if k['fp'] in fps or k['fp'] in self.guests}
             for sid in [s for s, x in self.sessions.items() if x['fp'] not in fps]:
                 self.sessions.pop(sid)
             if gone:
@@ -1084,6 +1151,7 @@ class Remote:
             if pid in x['pids']:
                 x['pids'] = [p for p in x['pids'] if p != pid]
                 x['blobs'].pop(pid, None)
+        self.prune_guests()
 
     def sweep(self, now):
         """过期的配对、票据，很久没用的配对"""
@@ -1112,9 +1180,11 @@ class Remote:
                 return None
             return self.tickets.pop(tid)
 
-    def op(self, op, fp, j, now, name_of):
-        """签名、时间、nonce 都验过了的请求。返回 (状态码, 回的内容)"""
+    def op(self, op, fp, j, now, name_of, gkey=None):
+        """签名、时间、nonce 都验过了的请求。返回 (状态码, 回的内容)。gkey：发请求的是访客（不在设备清单里），这是验它签名用的公钥"""
         hex32 = lambda x: isinstance(x, str) and bool(AID_RE.match(x))
+        if gkey and op not in GUEST_OPS:
+            return 403, {'error': 'denied'}
         with self.lock:
             self.sweep(now)
             if op.startswith('pair_') and op != 'pair_drop':
@@ -1127,12 +1197,18 @@ class Remote:
                         return 409, {'error': 'taken'}
                     if sum(1 for x in self.slots.values() if x['owner'] == fp) >= PAIR_SLOTS:
                         return 429, {'error': 'rate'}
-                    self.slots[rid] = {'owner': fp, 'joiner': None, 'msgs': {}, 'commit': {}, 'done': False, 'exp': now + PAIR_TTL}
-                    return 200, {'v': API, 'ok': True, 'ttl': PAIR_TTL}
+                    web = j.get('web') is True   # 这次配对开给网页端：输入配对码的可以是不在设备清单里的（手机上的那一页）
+                    if web and not self.web:
+                        return 404, {'error': 'no_web'}
+                    self.slots[rid] = {'owner': fp, 'joiner': None, 'msgs': {}, 'commit': {}, 'done': False, 'exp': now + PAIR_TTL,
+                                       'web': web, 'gkey': None}
+                    return 200, dict({'v': API, 'ok': True, 'ttl': PAIR_TTL}, **({'web': self.web} if web else {}))
                 if s is None:
                     return 404, {'error': 'no_pairing'}
+                if gkey and not s['web']:   # 访客只进得了开给网页端的配对
+                    return 403, {'error': 'denied'}
                 if fp != s['owner'] and s['joiner'] is None and op == 'pair_put':
-                    s['joiner'] = fp   # 头一个放密文进来的别的设备
+                    s['joiner'], s['gkey'] = fp, gkey   # 头一个放密文进来的别的设备（是访客的话记下它的公钥：配成了才留下）
                 if fp not in (s['owner'], s['joiner']):
                     return 409, {'error': 'taken'}
                 peer = s['joiner'] if fp == s['owner'] else s['owner']
@@ -1189,6 +1265,8 @@ class Remote:
                         for old in [p for p, e in self.edges.items() if {e['a'], e['b']} == {s['owner'], s['joiner']}]:
                             self.drop_edge(old)
                         self.edges[pid] = {'a': s['owner'], 'b': s['joiner'], 'at': now, 'used': now}
+                        if s['gkey']:   # 输入配对码的是访客：两边算出了同一把密钥（它确实知道配对码），这才记下它
+                            self.guests[s['joiner']] = {'key': s['gkey'], 'at': now}
                         s['done'] = True
                         s['exp'] = min(s['exp'], now + 60)   # 留一会儿，先报的那一边还要来问一次
                         self.save()
@@ -1267,6 +1345,11 @@ class Relay(threading.Thread):
         self.lsock, self.remote = sock, remote
         self.sel = selectors.DefaultSelector()
         self.conns, self.per_ip, self.waiting = set(), {}, {}   # waiting：令牌 → (接入方的连接, 宿主控制连接的票据密钥, 什么时候)
+        # 网页端的连接不是从数据端口进来的：处理 WebSocket 的线程把 socketpair 的一头交过来（adopt），这条线程被叫醒后收下
+        self.handed = collections.deque()
+        self.wake_r, self.wake_w = socket.socketpair()
+        self.wake_r.setblocking(False)
+        self.wake_w.setblocking(False)
 
     def want(self, c):
         ev = (0 if c.paused or c.state == 'wait' else selectors.EVENT_READ) | (selectors.EVENT_WRITE if c.out else 0)
@@ -1502,7 +1585,18 @@ class Relay(threading.Thread):
             sock, addr = self.lsock.accept()
         except OSError:
             return
-        ip = addr[0]
+        self.admit(sock, addr[0], now)
+
+    def adopt(self, sock, ip):
+        """别的线程交过来一条已经连好的连接（网页端的 WebSocket 转成的 socketpair 的一头；ip 是浏览器的地址）：
+        之后和数据端口上接进来的一样——先说开场白，同样的限额"""
+        self.handed.append((sock, ip))
+        try:
+            self.wake_w.send(b'\0')
+        except OSError:   # 叫醒用的那一对满了：已经有没读走的，照样会醒
+            pass
+
+    def admit(self, sock, ip, now):
         if len(self.conns) >= RELAY_CONN or self.per_ip.get(ip, 0) >= RELAY_CONN_IP:
             sock.close()
             return
@@ -1528,6 +1622,7 @@ class Relay(threading.Thread):
 
     def run(self):
         self.sel.register(self.lsock, selectors.EVENT_READ, None)
+        self.sel.register(self.wake_r, selectors.EVENT_READ, WAKE)
         swept = 0
         while True:
             try:
@@ -1543,6 +1638,15 @@ class Relay(threading.Thread):
                     if c is None:
                         self.accept(now)
                         continue
+                    if c is WAKE:
+                        try:
+                            self.wake_r.recv(4096)
+                        except OSError:
+                            pass
+                        while self.handed:
+                            sock, ip = self.handed.popleft()
+                            self.admit(sock, ip, now)
+                        continue
                     if ev & selectors.EVENT_WRITE and c in self.conns:
                         self.writable(c)
                     if ev & selectors.EVENT_READ and c in self.conns:
@@ -1556,6 +1660,174 @@ class Relay(threading.Thread):
                     self.sweep(now)
                 except Exception:
                     self.oops('清理过期的连接时')
+
+
+class Web:
+    """网页端（手机浏览器里的那一页，README「网页端」）：页面的文件（启动时读进内存）、页面的地址、WebSocket 交给哪个中转"""
+    def __init__(self, url, root, relay):
+        self.url = url.rstrip('/') + '/'
+        self.origin = self.url[:-1]
+        self.relay = relay
+        host = self.origin.split('://', 1)[1]
+        # 页面只连自己这一个地址：脚本、样式、图片、请求、WebSocket 都只认同一个源（xterm.js 画界面要动态加样式，所以样式放行内联的）
+        self.headers = (
+            ('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+             "font-src 'self'; manifest-src 'self'; connect-src 'self' %s://%s; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+             % ('wss' if self.origin.startswith('https:') else 'ws', host)),
+            ('X-Content-Type-Options', 'nosniff'), ('X-Frame-Options', 'DENY'), ('Referrer-Policy', 'no-referrer'),
+            ('Cross-Origin-Opener-Policy', 'same-origin'), ('Strict-Transport-Security', 'max-age=31536000'))
+        self.files = {}
+        for name in sorted(os.listdir(root)):
+            ctype = WEB_TYPES.get(os.path.splitext(name)[1])
+            path = os.path.join(root, name)
+            if not (ctype and WEB_NAME_RE.match(name) and os.path.isfile(path)):
+                continue   # 说明、校验和这些不是页面的一部分：不给
+            with open(path, 'rb') as f:
+                raw = f.read(WEB_FILE + 1)
+            if len(raw) > WEB_FILE:
+                raise ValueError('%s 太大' % path)
+            gz = gzip.compress(raw, 9) if not name.endswith('.png') else None
+            self.files[name] = (ctype, raw, gz if gz and len(gz) < len(raw) else None, '"%s"' % hashlib.sha256(raw).hexdigest()[:32])
+        if 'index.html' not in self.files:
+            raise ValueError('%s 里没有 index.html' % root)
+        self.lock, self.conns, self.per_ip = threading.Lock(), 0, {}
+
+    def take(self, ip):
+        with self.lock:
+            if self.conns >= WS_CONN or self.per_ip.get(ip, 0) >= WS_CONN_IP:
+                return False
+            self.conns += 1
+            self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+            return True
+
+    def free(self, ip):
+        with self.lock:
+            self.conns -= 1
+            n = self.per_ip.get(ip, 1) - 1
+            if n > 0:
+                self.per_ip[ip] = n
+            else:
+                self.per_ip.pop(ip, None)
+
+
+def tls_context(cert, key):
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    if hasattr(ssl, 'TLSVersion'):
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    else:   # Python 3.6（CentOS 7、一些云厂商的系统镜像里的 python3）
+        ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
+    ctx.load_cert_chain(cert, key)
+    return ctx
+
+
+class CertCtx:
+    """浏览器信得过的那张证书（--web-cert）：证书机构签的会到期、会被续上（90 天一换，给 IP 地址签的 6 天一换），
+    所以文件变了就重新读（最多一分钟看一次），不用重启；新的读不了时接着用旧的、在日志里说一声"""
+    def __init__(self, cert, key):
+        self.cert, self.key, self.lock = cert, key, threading.Lock()
+        self.checked, self.warned = time.monotonic(), None
+        self.seen = self.stamp()
+        self.ctx = tls_context(cert, key)
+
+    def stamp(self):
+        return tuple((s.st_mtime, s.st_size) for s in (os.stat(self.cert), os.stat(self.key)))
+
+    def get(self):
+        with self.lock:
+            now = time.monotonic()
+            if now - self.checked >= 60:
+                self.checked = now
+                try:
+                    stamp = self.stamp()
+                    if stamp != self.seen:
+                        self.ctx, self.seen, self.warned = tls_context(self.cert, self.key), stamp, None
+                        sys.stderr.write('cca-presence: 网页端的证书换了，已经重新读\n')
+                        sys.stderr.flush()
+                except (OSError, ssl.SSLError, ValueError) as e:
+                    if self.warned != str(e):   # 续证书的程序正写到一半：下一分钟再看；同一个错只说一次
+                        self.warned = str(e)
+                        sys.stderr.write('cca-presence: 网页端的新证书读不了（%s），接着用原来的\n' % e)
+                        sys.stderr.flush()
+            return self.ctx
+
+
+def ws_frame(op, data):
+    """服务器发的一帧（不加掩码）"""
+    n = len(data)
+    head = bytes([0x80 | op]) + (bytes([n]) if n < 126 else b'\x7e' + n.to_bytes(2, 'big') if n < 65536 else b'\x7f' + n.to_bytes(8, 'big'))
+    return head + data
+
+
+def ws_frames(buf):
+    """buf（bytearray）开头收齐了的帧一个个取出来：(操作码, 内容)；还不够一帧就停。不合规矩的抛 ValueError：
+    用了扩展位、没加掩码（浏览器发的一定加）、太长"""
+    while len(buf) >= 2:
+        b0, b1 = buf[0], buf[1]
+        if b0 & 0x70 or not b1 & 0x80:
+            raise ValueError('frame')
+        n, at = b1 & 0x7f, 2
+        if n == 126:
+            if len(buf) < 4:
+                return
+            n, at = int.from_bytes(buf[2:4], 'big'), 4
+        elif n == 127:
+            if len(buf) < 10:
+                return
+            n, at = int.from_bytes(buf[2:10], 'big'), 10
+        if n > WS_FRAME or (b0 & 0x08 and n > 125):
+            raise ValueError('long')
+        if len(buf) < at + 4 + n:
+            return
+        mask, data = bytes(buf[at:at + 4]), bytes(buf[at + 4:at + 4 + n])
+        del buf[:at + 4 + n]
+        if n:   # 去掩码：一个字节一个字节异或太慢，当成两个大整数异或
+            data = (int.from_bytes(data, 'big') ^ int.from_bytes((mask * (n // 4 + 1))[:n], 'big')).to_bytes(n, 'big')
+        yield b0 & 0x0f, data
+
+
+def ws_pump(conn, early, relay, ip):
+    """网页端的一条 WebSocket。浏览器开不了普通的 TCP 连接，所以它把本该发到数据端口的字节装在二进制帧里发过来：这里拆出来，
+    当成一条字节流交给中转（socketpair 的一头交给中转的线程，和数据端口上接进来的连接一样对待），中转回的装成帧发回去。
+    里面照旧是开场白和两头之间的密文，这里一个字节都不看。early：握手时多读进来的"""
+    a, b = socket.socketpair()
+    try:
+        relay.adopt(a, ip)
+        conn.settimeout(WS_STALL)
+        b.settimeout(WS_STALL)
+        buf = bytearray(early)
+        while True:
+            for op, data in ws_frames(buf):
+                if op in (0, 2):   # 二进制的（和它的后续帧）：内容接起来就是那条字节流
+                    if data:
+                        b.sendall(data)
+                elif op == 9:
+                    conn.sendall(ws_frame(10, data))
+                elif op == 8:
+                    return
+                elif op != 10:   # 文本的、不认识的
+                    raise ValueError('op')
+            pending = bool(getattr(conn, 'pending', lambda: 0)())   # TLS 已经解出来、还没取走的：select 看不到
+            ready = select.select([conn, b], [], [], 0 if pending else WS_IDLE)[0]
+            if not ready and not pending:
+                return
+            if b in ready:
+                data = b.recv(65536)
+                if not data:   # 中转那头关了（票据不对、会话没了、对方断开、闲得太久）
+                    return
+                conn.sendall(ws_frame(2, data))
+            if pending or conn in ready:
+                data = conn.recv(65536)
+                if not data:
+                    return
+                buf += data
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            conn.sendall(ws_frame(8, b''))
+        except (OSError, ValueError):
+            pass
+        b.close()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -1577,9 +1849,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == '/v1/health':
-            return self.send(200, self.server.store.health(self.server.sig_ok, self.server.remote and self.server.remote.port))
+        srv = self.server
+        path = self.path.split('?', 1)[0]
+        if path == '/v1/health':
+            health = srv.store.health(srv.sig_ok, srv.remote and srv.remote.port)
+            if srv.web:
+                health['web'] = srv.web.url
+            return self.send(200, health)
+        if srv.web and path == '/v1/relay/ws':
+            return self.websocket(srv.web)
+        f = srv.web and srv.web.files.get('index.html' if path == '/' else path[1:])
+        if f:
+            return self.static(srv.web, f)
         return self.send(404, {'error': 'not_found'})
+
+    def static(self, web, f):
+        """网页端的一个文件。每次都问一下变了没有（no-cache + ETag）：页面更新了手机上马上就是新的"""
+        if not self.server.ip_bucket.take(self.client_ip()):
+            return self.send(429, {'error': 'rate'})
+        ctype, raw, gz, etag = f
+        same = self.headers.get('If-None-Match') == etag
+        body = b'' if same else gz if gz and 'gzip' in (self.headers.get('Accept-Encoding') or '') else raw
+        self.send_response(304 if same else 200)
+        if not same:
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', str(len(body)))
+            if body is gz:
+                self.send_header('Content-Encoding', 'gzip')
+        self.send_header('ETag', etag)
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Vary', 'Accept-Encoding')
+        for k, v in web.headers:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def websocket(self, web):
+        """GET /v1/relay/ws：网页端进数据端口的路（见 ws_pump）。只认自己那一页发起的（Origin）；进得了中转靠的还是开场白里的票据"""
+        h, srv = self.headers, self.server
+        key = h.get('Sec-WebSocket-Key') or ''
+        if (h.get('Upgrade') or '').lower() != 'websocket' or 'upgrade' not in (h.get('Connection') or '').lower() \
+                or h.get('Sec-WebSocket-Version') != '13' or not WS_KEY_RE.match(key):
+            return self.send(400, {'error': 'bad'})
+        if h.get('Origin') not in (None, web.origin):
+            return self.send(403, {'error': 'denied'})
+        ip = self.client_ip()
+        if not srv.ip_bucket.take(ip):
+            return self.send(429, {'error': 'rate'})
+        if not web.take(ip):
+            return self.send(429, {'error': 'busy'})
+        try:
+            accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+            self.wfile.write(('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                              'Sec-WebSocket-Accept: %s\r\n\r\n' % accept).encode())
+            self.wfile.flush()
+            srv.long_lived(self.client_address[0])   # 这条连接要开很久：不受 15 秒的期限管，也不占处理请求的名额
+            # 读请求头时可能多读了几个字节进缓冲区（浏览器等到回了 101 才发帧，一般没有）：取出来
+            self.connection.settimeout(0)
+            try:
+                early = self.rfile.peek()
+            except (OSError, ValueError):
+                early = b''
+            ws_pump(self.connection, early or b'', web.relay, ip)
+        except OSError:
+            pass
+        finally:
+            web.free(ip)
+            self.close_connection = True
 
     def client_ip(self):
         """按哪个 IP 限流：--behind-proxy 时是 X-Forwarded-For 最后一项（平台的代理加的；前面的是客户端自己写的，能乱填），
@@ -1630,6 +1966,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         fp = j.get('key')
         if not (isinstance(fp, str) and FP_RE.match(fp)):
             return self.send(400, {'error': 'bad'})
+        gkey = None
         if op == 'join':
             # 加入：拿要加入的这把密钥签名。入伙口令不对和签名不对回一样的 403（不留判断口）；口令先比（便宜），对了才验签
             pub = j.get('pub')
@@ -1652,9 +1989,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(403, {'error': 'denied'})
         else:
             m = srv.store.machine(fp)
-            if not m:   # 不在设备清单里（维护者还没同步、撤销了；自己的、Team 的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）
+            # 不在设备清单里、发的是中转的请求：可能是访客（手机上的网页端，和哪台设备配了对、或者正拿着配对码来配对）
+            gkey = srv.remote.guest_key(fp, op, j, now) if relay and not m else None
+            if not m and not gkey:   # 不在设备清单里（维护者还没同步、撤销了；自己的、Team 的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）
                 return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()} if own or team else {'error': 'denied'})
-            if not ssh_verify(m['key'], NS_REPORT, body, sig):
+            if not ssh_verify(m['key'] if m else gkey, NS_REPORT, body, sig):
                 return self.send(403, {'error': 'denied'})
         bucket = srv.root_bucket if team and op in TEAM_ADMIN_OPS else srv.fp_bucket
         if not bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
@@ -1667,7 +2006,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, {'error': 'bad'})
         if not srv.nonces.add(nonce, now):
             return self.send(409, {'error': 'replay'})
-        if (own or team) and op not in ('join', 'team_join') + TEAM_ADMIN_OPS:   # 设备的请求。加入的那一次在加入时记（没加入成的不记）
+        if (own or team) and op not in ('join', 'team_join') + TEAM_ADMIN_OPS and not gkey:   # 设备的请求。加入的那一次在加入时记（没加入成的不记）；访客不是这里的设备
             srv.store.seen[fp] = now
         if op == 'join':
             name, check = j.get('name'), j.get('check')
@@ -1697,7 +2036,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 srv.remote.keep_only(srv.store.fps())
             return self.send(code, reply)
         if relay:
-            return self.send(*srv.remote.op(op, fp, j, now, srv.store.name))
+            return self.send(*srv.remote.op(op, fp, j, now, srv.store.name, gkey))
         if op == 'report':
             units, end = parse_units(j.get('units')), j.get('end')
             if units is None or end not in (None, 'none', 'down') or (end == 'none' and units):
@@ -1755,15 +2094,26 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
     allow_reuse_address = True
     request_queue_size = 64
 
-    def __init__(self, addr, ctx, store, release_key, sig_ok, remote=None):
-        """ctx 是 None：--behind-proxy（只说 HTTP，HTTPS 由前面的代理做）"""
-        self.ctx, self.store, self.release_key, self.sig_ok, self.remote = ctx, store, release_key, sig_ok, remote
+    def __init__(self, addr, ctx, store, release_key, sig_ok, remote=None, web=None, share=None):
+        """ctx 是 None：--behind-proxy（只说 HTTP，HTTPS 由前面的代理做）；是 CertCtx：网页端的那个监听（证书会换）。
+        share：另一个监听（网页端的监听和原来的是同一个服务：限流、用过的 nonce 是同一份，不然同一个请求能在两个端口上各用一次）"""
+        self.ctx, self.store, self.release_key, self.sig_ok, self.remote, self.web = ctx, store, release_key, sig_ok, remote, web
         self.proxied = ctx is None
-        self.ip_bucket, self.fp_bucket, self.nonces = Buckets(2, 120), Buckets(0.5, 30), Nonces()
-        self.root_bucket = Buckets(2, 120)   # Team 的管理员（根密钥签的）：一条命令要问两三次，设备的那个限额不够用
+        if share:
+            self.ip_bucket, self.fp_bucket, self.nonces, self.root_bucket = share.ip_bucket, share.fp_bucket, share.nonces, share.root_bucket
+        else:
+            self.ip_bucket, self.fp_bucket, self.nonces = Buckets(2, 120), Buckets(0.5, 30), Nonces()
+            self.root_bucket = Buckets(2, 120)   # Team 的管理员（根密钥签的）：一条命令要问两三次，设备的那个限额不够用
         self.slots = threading.BoundedSemaphore(MAX_CONN)
         self.per_ip, self.per_ip_lock = {}, threading.Lock()
+        self.tl = threading.local()   # 处理这条连接的线程自己的：到期限断开它的定时器、名额还了没有
         super().__init__(addr, Handler)
+
+    def long_lived(self, ip):
+        """这条连接成了 WebSocket，要开很久：不再受 15 秒的期限管，处理请求的名额现在就还（WebSocket 有自己的上限，Web.take）"""
+        self.tl.timer.cancel()
+        self.free_slot(ip)
+        self.tl.freed = True
 
     def take_slot(self, ip):
         """这个连接能不能处理：总数、同一个 IP 的数都没到上限（--behind-proxy 时只看总数：连过来的都是代理）"""
@@ -1798,7 +2148,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self.free_slot(client_address[0])
+            if not getattr(self.tl, 'freed', False):
+                self.free_slot(client_address[0])
 
     def handle_error(self, request, client_address):   # 一行就够：不打印整段 traceback
         sys.stderr.write('cca-presence: 处理请求出错：%s\n' % (sys.exc_info()[1],))
@@ -1811,7 +2162,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
                 request.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-        timer = threading.Timer(CONN_DEADLINE, cut)
+        timer = self.tl.timer = threading.Timer(CONN_DEADLINE, cut)
         timer.daemon = True
         timer.start()
         try:
@@ -1820,7 +2171,8 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
                 self.RequestHandlerClass(request, client_address, self)
                 return
             try:
-                tls = self.ctx.wrap_socket(request, server_side=True)
+                ctx = self.ctx.get() if isinstance(self.ctx, CertCtx) else self.ctx
+                tls = ctx.wrap_socket(request, server_side=True)
             except (OSError, ValueError):
                 return
             try:
@@ -1872,6 +2224,15 @@ def main():
     ap.add_argument('--relay-port', type=int, help='客户端连数据端口用的端口（容器里外端口不一样时给；默认就是监听的那个）')
     ap.add_argument('--relay-port-file', help='数据端口实际监听的端口写到这里（测试用）')
     ap.add_argument('--remote', help='配对的记录（默认在状态文件旁边的 remote.json）')
+    ap.add_argument('--web-url', default=os.environ.get('CCA_WEB_URL'),
+                    help='网页端（手机浏览器接入远程会话的那一页）：手机上打开的地址，https://域名[:端口]/。给了才开网页端（要和 '
+                    '--relay-listen 一起；也可以用环境变量 CCA_WEB_URL）。浏览器只认信得过的证书：用 --web-listen 另开一个端口，'
+                    '或者放在做 HTTPS 的代理后面（--behind-proxy）')
+    ap.add_argument('--web-listen', help='网页端另开的监听 地址:端口，用 --web-cert、--web-key 的证书（原来那个端口上自签的证书照旧给 cca 的设备用）')
+    ap.add_argument('--web-cert', help='浏览器信得过的证书（连同中间证书；证书机构签的）。文件换了会自己重新读')
+    ap.add_argument('--web-key', help='--web-cert 的私钥')
+    ap.add_argument('--web-root', help='网页端的文件在哪（默认是这个程序旁边的 web/）')
+    ap.add_argument('--web-port-file', help='网页端实际监听的端口写到这里（测试用）')
     a = ap.parse_args()
     a.listen = a.listen or ('0.0.0.0:8080' if hosted else '0.0.0.0:18443')
     if not a.state:
@@ -1882,6 +2243,15 @@ def main():
         ap.error('--behind-proxy 时 HTTPS 由平台做：不用 --cert、--key')
     if not a.behind_proxy and not (a.cert and a.key):
         ap.error('要给 --cert 和 --key（在托管平台、反向代理后面运行时用 --behind-proxy）')
+    if a.web_url and not WEB_URL_RE.match(a.web_url):
+        ap.error('--web-url 要写成 https://域名[:端口]/（手机上打开的就是它；本机试的时候可以是 http://localhost:端口/）')
+    if a.web_url and not a.relay_listen:
+        ap.error('网页端是经中转接入会话的：--web-url 要和 --relay-listen 一起给')
+    if a.web_listen or a.web_cert or a.web_key:
+        if not (a.web_url and a.web_listen and a.web_cert and a.web_key):
+            ap.error('--web-listen、--web-cert、--web-key 要一起给，还要有 --web-url')
+        if a.behind_proxy:
+            ap.error('--behind-proxy 时 HTTPS 由平台做：网页端就在同一个端口上，不用 --web-listen')
     release = root = None
     if a.mode == 'own':
         if not HASH_RE.match(a.admit_hash or ''):
@@ -1903,17 +2273,10 @@ def main():
             ap.error('%s 不是 ssh-ed25519 公钥' % a.release_key)
         release = 'ssh-ed25519 ' + k.group(1)
     host, _, port = a.listen.rpartition(':')
-    ctx = None
-    if not a.behind_proxy:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        if hasattr(ssl, 'TLSVersion'):
-            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        else:   # Python 3.6（CentOS 7、一些云厂商的系统镜像里的 python3）
-            ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
-        ctx.load_cert_chain(a.cert, a.key)
+    ctx = None if a.behind_proxy else tls_context(a.cert, a.key)
     sig_ok = self_test()
     store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, a.mode, a.admit_hash, root)
-    remote = None
+    remote = web = None
     if a.relay_listen:
         rhost, _, rport = a.relay_listen.rpartition(':')
         rsock = socket.socket(socket.AF_INET6 if ':' in rhost else socket.AF_INET)
@@ -1921,23 +2284,44 @@ def main():
         rsock.bind((rhost.strip('[]') or '0.0.0.0', int(rport)))
         rsock.listen(64)
         rsock.setblocking(False)
-        remote = Remote(a.remote or os.path.join(os.path.dirname(a.state) or '.', 'remote.json'), a.relay_port or rsock.getsockname()[1])
+        remote = Remote(a.remote or os.path.join(os.path.dirname(a.state) or '.', 'remote.json'), a.relay_port or rsock.getsockname()[1],
+                        a.web_url and a.web_url.rstrip('/') + '/')
         remote.keep_only(store.fps())
-        Relay(rsock, remote).start()
+        relay = Relay(rsock, remote)
+        relay.start()
+        if a.web_url:
+            try:
+                web = Web(a.web_url, a.web_root or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web'), relay)
+            except (OSError, ValueError) as e:
+                ap.error('网页端的文件读不了：%s' % e)
         if a.relay_port_file:
             with open(a.relay_port_file + '.tmp', 'w') as f:
                 f.write('%d\n' % rsock.getsockname()[1])
             os.replace(a.relay_port_file + '.tmp', a.relay_port_file)
-    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, release, sig_ok, remote)
+    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, release, sig_ok, remote, web)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:
             f.write('%d\n' % srv.server_address[1])
         os.replace(a.port_file + '.tmp', a.port_file)
+    wsrv = None
+    if a.web_listen:   # 网页端另开的端口：同一个服务（同样的接口、同一份限流），只是证书是浏览器信得过的那一张
+        whost, _, wport = a.web_listen.rpartition(':')
+        try:
+            wctx = CertCtx(a.web_cert, a.web_key)
+        except (OSError, ssl.SSLError, ValueError) as e:
+            ap.error('网页端的证书读不了：%s' % e)
+        wsrv = Server((whost.strip('[]') or '0.0.0.0', int(wport)), wctx, store, release, sig_ok, remote, web, share=srv)
+        threading.Thread(target=wsrv.serve_forever, name='web', daemon=True).start()
+        if a.web_port_file:
+            with open(a.web_port_file + '.tmp', 'w') as f:
+                f.write('%d\n' % wsrv.server_address[1])
+            os.replace(a.web_port_file + '.tmp', a.web_port_file)
     sys.stderr.write('cca-presence: %s监听 %s:%d%s，设备 %d 台，签名自检%s%s\n' % (
         {'own': '自己的同步服务器，', 'team': 'Team 的同步服务器，'}.get(a.mode, ''), srv.server_address[0], srv.server_address[1],
         '（HTTP，HTTPS 由前面的代理做）' if a.behind_proxy else '', len(store.data['machines']),
         '通过' if sig_ok else '没通过',
-        '，中转的数据端口 %d（%d 个配对）' % (rsock.getsockname()[1], len(remote.edges)) if remote else ''))
+        ('，中转的数据端口 %d（%d 个配对）' % (rsock.getsockname()[1], len(remote.edges)) if remote else '')
+        + ('，网页端 %s（%d 个文件%s）' % (web.url, len(web.files), '，另开的端口 %d' % wsrv.server_address[1] if wsrv else '') if web else '')))
     sys.stderr.flush()
     try:
         srv.serve_forever()

@@ -192,7 +192,7 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
         };
         paired.push(dict! {
             "id" => p.pid.as_str(), "short" => &p.pid[..8], "name" => p.name.as_str(), "incoming" => p.incoming.word(),
-            "shown" => p.shown, "paired_epoch" => p.at, "state" => state
+            "shown" => p.shown, "paired_epoch" => p.at, "state" => state, "web" => p.web
         });
     }
     let relay = match &server {

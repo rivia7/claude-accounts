@@ -107,9 +107,9 @@ class Sniffer:
 class RelayServer:
     """一个真的服务器进程。relay=False：没开中转（和旧版服务器一样）。sniff：告诉客户端连转发器的端口。
     port：重启时用回原来的端口（设备的映射里写着它；数据端口换了没关系，转发器每次现读）"""
-    def __init__(self, d, relay=True, sniff=None, port=0):
+    def __init__(self, d, relay=True, sniff=None, port=0, extra=()):
         self.d = d
-        for name in ('port', 'rport'):
+        for name in ('port', 'rport', 'wport'):
             (d / name).unlink(missing_ok=True)
         args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port'),
                 '--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem'), '--release-key', str(d / 'release.pub'),
@@ -118,6 +118,7 @@ class RelayServer:
             args += ['--relay-listen', '127.0.0.1:0', '--relay-port-file', str(d / 'rport')]
         if sniff:
             args += ['--relay-port', str(sniff.port)]
+        args += list(extra)   # 网页端的那几个参数（tests/web_relay.py）
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
             self.port = int(wait_for('服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
@@ -212,12 +213,16 @@ class Base(unittest.TestCase):
         (d / 'release.pub').write_text(self.relpub + ' test-release\n')
         self.sniff = Sniffer(d)
         self.addCleanup(self.sniff.close)
-        self.srv = RelayServer(d, relay=self.relay, sniff=self.sniff)
+        self.srv = RelayServer(d, relay=self.relay, sniff=self.sniff, extra=self.server_extra(d))
         self.addCleanup(lambda: self.srv.stop())
         self.pin = openssl_pin(d / 'cert.pem')
         self.terms = []
         self.addCleanup(lambda: [t.close() for t in self.terms])
         self.addCleanup(close_socks)
+
+    def server_extra(self, d):
+        """服务器多带的参数（子类给：tests/web_relay.py 开网页端）"""
+        return []
 
     def device(self, name):
         dev = Device(self.d / name, name, {Device.KEY: 'US-A'})
