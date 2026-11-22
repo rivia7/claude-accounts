@@ -250,16 +250,22 @@ private struct FlowMenu: View {
     }
 }
 
-/// 只显示、不用回答的一段配置（等宽字体，可以复制）。
 /// 只显示的一个网址（和手机配对那一页）：画成二维码，手机的相机扫了就打开；下面写着网址，照着输也行。
 /// 二维码是系统自带的生成器画的（CoreImage），App 不联网、不经别人的服务。
 private struct FlowQR: View {
     @Environment(AppModel.self) private var model
     let text: String
+    /// 画好的二维码：建这个视图时算一次（这一页等着的时候会重画很多遍，不每次都重新生成）
+    private let code: CGImage?
+
+    init(text: String) {
+        self.text = text
+        code = Self.render(text)
+    }
 
     /// 生成器出的是一个点一个像素的图：先按整数倍放大成位图（取最近的点，不插值——不然边是糊的），再交给界面；
     /// 容错选中等：屏幕上扫，不用为污损留余量
-    private var code: CGImage? {
+    private static func render(_ text: String) -> CGImage? {
         guard !text.isEmpty, text.utf8.count <= 512, let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(text.utf8), forKey: "inputMessage")
         filter.setValue("M", forKey: "inputCorrectionLevel")
@@ -292,6 +298,7 @@ private struct FlowQR: View {
     }
 }
 
+/// 只显示、不用回答的一段配置（等宽字体，可以复制）。
 private struct FlowCode: View {
     @Environment(AppModel.self) private var model
     let text: String

@@ -68,7 +68,13 @@ const client = new Client({ store, name: deviceName() });
 let leave = null;
 
 function show(view, onLeave) {
-  if (leave) leave();
+  const old = leave;
+  leave = null;
+  try {
+    old?.();   // 上一屏的收尾出了错也照样换屏：不然之后哪儿都去不了
+  } catch (e) {
+    console.error(e);
+  }
   leave = onLeave || null;
   root.replaceChildren(view);
   window.scrollTo(0, 0);
@@ -194,6 +200,7 @@ function pairing() {
     code.value = raw.replace(/(.{4})(?=.)/g, '$1-');
   });
 
+  let here = true;   // 还在这一屏（配到一半点了「取消」：配成了也不把人拉回首页）
   async function run() {
     if (go.disabled) return;
     go.disabled = true;
@@ -204,7 +211,7 @@ function pairing() {
     try {
       const steps = { deriving: '正在算密钥…', asking: '正在等电脑那边…', confirming: '正在确认…' };
       await client.pair(code.value, (s) => { status.textContent = steps[s] || ''; });
-      home();
+      if (here) home();
     } catch (e) {
       status.className = 'problem';
       status.textContent = say(e);
@@ -218,7 +225,7 @@ function pairing() {
     h('header', { class: 'bar' }, h('h1', null, '配对'), h('button', { class: 'plain', onclick: home }, '取消')),
     h('label', { class: 'field' }, h('span', null, '电脑上显示的配对码'), code),
     h('label', { class: 'field' }, h('span', null, '这台设备叫什么（电脑上看到的名字）'), name),
-    go, status));
+    go, status), () => { here = false; });
   code.focus();
 }
 
@@ -258,23 +265,45 @@ async function settings() {
 }
 
 // ---------------------------------------------------------------- 终端
-/** 按住不抢走输入焦点（不然键盘会收起来）、不触发双击放大；repeat：按住连发 */
+/** 按键条上的一个键。手指抬起来才算按（按下以后划动的是在滚动这一排：不算）；按下时不让焦点离开终端（不然键盘会收起来）。
+ *  repeat：按住不动一会儿就连发（方向键） */
 function press(el, fn, repeat) {
   let timer = null;
-  const stop = () => {
+  let start = null;
+  let held = false;
+  const clear = () => {
     clearTimeout(timer);
     clearInterval(timer);
     timer = null;
     el.classList.remove('down');
   };
+  const cancel = () => {
+    start = null;
+    clear();
+  };
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    clear();   // 上一根手指还按着：它的连发先停掉
+    start = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    held = false;
     el.classList.add('down');
-    fn();
-    if (repeat) timer = setTimeout(() => { timer = setInterval(fn, 70); }, 380);
+    if (repeat) {
+      timer = setTimeout(() => {
+        held = true;
+        fn();
+        timer = setInterval(fn, 70);
+      }, 380);
+    }
   });
-  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(ev, stop);
-  el.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+  el.addEventListener('pointermove', (e) => {
+    if (start && e.pointerId === start.id && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
+  });
+  el.addEventListener('pointerup', (e) => {
+    const mine = start && e.pointerId === start.id;
+    cancel();
+    if (mine && !held) fn();
+  });
+  for (const ev of ['pointercancel', 'pointerleave']) el.addEventListener(ev, cancel);   // 浏览器接手去滚动了
   el.addEventListener('click', (e) => e.detail === 0 && fn());   // 键盘、读屏的“点按”
   return el;
 }
@@ -305,22 +334,27 @@ function terminal(peer, session) {
     screen, compose,
     readOnly ? null : h('div', { class: 'keys' }, keys));
 
-  document.body.classList.add('in-terminal');
+  // 收尾里用到的先声明：下面哪一步出了错（比如终端的脚本没载入），离开这一屏时也不会再出一次错
   let gone = false;
+  let att = null;
+  let term = null;
+  let lock = null;
+  const vv = window.visualViewport;
   show(view, () => {
     gone = true;
     document.body.classList.remove('in-terminal');
-    att.detach();
-    term.dispose();
+    att?.detach();
+    term?.dispose();
     vv?.removeEventListener('resize', place);
     vv?.removeEventListener('scroll', place);
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', seen);
     lock?.release?.().catch(() => {});
   });
+  document.body.classList.add('in-terminal');   // 换屏之后才加：上一屏也是终端（「再接一次」）时，它的收尾会把这个类名去掉
   screen.append(veil);
 
-  const term = new window.Terminal({
+  term = new window.Terminal({
     fontFamily: MONO, fontSize: Number(prefs.get('font', 13)) || 13, scrollback: 4000, cursorBlink: false, macOptionIsMeta: true,
     theme: { background: '#000000', foreground: '#e8e9ec', cursor: '#e8e9ec', selectionBackground: '#3b7bff88' },
   });
@@ -329,7 +363,6 @@ function terminal(peer, session) {
   term.open(screen);
 
   // 键盘出来时页面看得见的那一块变矮（visualViewport）：整屏跟着它，按键条贴在键盘上面，终端重新算行数
-  const vv = window.visualViewport;
   let fitting = 0;
   function refit() {
     cancelAnimationFrame(fitting);
@@ -364,7 +397,7 @@ function terminal(peer, session) {
     veil.hidden = false;
     veil.replaceChildren(h('div', { class: over ? null : 'pulse' }, text), ...(buttons || []).filter(Boolean));
   }
-  const att = new Attachment(client, peer, session.sid, {
+  att = new Attachment(client, peer, session.sid, {
     cols: term.cols, rows: term.rows, readOnly,
     on: {
       output: (b) => term.write(b),
@@ -426,6 +459,7 @@ function terminal(peer, session) {
       else composeBox.focus();
     });
     const sendBox = () => {
+      if (att.state !== 'open') return;   // 断着：字留在输入框里，接上了再发（不然一整段话就没了）
       const text = composeBox.value;
       composeBox.value = '';
       if (text) term.paste(text);
@@ -433,7 +467,8 @@ function terminal(peer, session) {
     };
     compose.append(press(h('button', null, '发送'), sendBox));
     composeBox.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      // 输入法选字时的回车不算（Safari 里那一下的 isComposing 已经是 false，要看 keyCode 是不是 229）
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         sendBox();
       }
@@ -485,10 +520,11 @@ function terminal(peer, session) {
   }
 
   // 回到前台：断着的话马上再试，不等退避的那几秒；屏幕别在看着的时候自己灭掉
-  let lock = null;
   async function awake() {
     try {
-      lock = await navigator.wakeLock?.request('screen');
+      const got = await navigator.wakeLock?.request('screen');
+      if (gone) got?.release?.().catch(() => {});   // 还没拿到人就走了：还回去
+      else lock = got || null;
     } catch { /* 不给就算了 */ }
   }
   function seen() {

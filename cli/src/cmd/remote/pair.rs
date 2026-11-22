@@ -246,17 +246,25 @@ fn row(p: &Peer, note: &str) -> String {
     format!("{}  {}{}  对方{}  {} 配对{}", &p.pid[..8], p.name, kind, p.incoming.text(), strftime_local("%Y-%m-%d", p.at), note)
 }
 
-/// 服务器给的网页端地址：要拿去显示、做成二维码，所以只认 https://主机[:端口]/ 这一种样子（本机试的时候是 http://localhost）
+/// 服务器给的网页端地址：要拿去显示、做成二维码，所以只认 `https://主机[:端口]/` 这一种样子（本机试的时候是
+/// `http://localhost[:端口]/`、`http://127.0.0.1[:端口]/`——主机要整个相等，`localhost.别的域名` 不算）
 fn web_url_ok(u: &str) -> bool {
-    let rest = match u.strip_prefix("https://") {
-        Some(r) => r,
-        None => match u.strip_prefix("http://") {
-            Some(r) if r.starts_with("localhost") || r.starts_with("127.0.0.1") => r,
-            _ => return false,
-        },
+    let (local, rest) = match (u.strip_prefix("https://"), u.strip_prefix("http://")) {
+        (Some(r), _) => (false, r),
+        (None, Some(r)) => (true, r),
+        _ => return false,
     };
-    let host = rest.strip_suffix('/').unwrap_or(rest);
-    !host.is_empty() && host.len() <= 200 && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':'))
+    let Some(hostport) = rest.strip_suffix('/') else { return false };
+    let (host, port) = match hostport.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (hostport, None),
+    };
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()));
+    let host_ok = !host.is_empty()
+        && host.len() <= 200
+        && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+        && (!local || host == "localhost" || host == "127.0.0.1");
+    host_ok && port_ok
 }
 
 /// `remote-peers [--check]`：一行一台配对过的机器；一台都没有时什么都不打印。--check：问一下服务器，对方取消了的标出来
@@ -348,4 +356,48 @@ pub fn cmd_remote_forget(args: &[String]) -> R<()> {
         drop_peer(&p.pid)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_urls() {
+        for ok in [
+            "https://relay.example.com/",
+            "https://relay.example.com:18445/",
+            "https://192.0.2.10:8443/",
+            "http://localhost:8080/",
+            "http://127.0.0.1:8080/",
+            "http://localhost/",
+        ] {
+            assert!(web_url_ok(ok), "{ok}");
+        }
+        // 没有结尾的斜杠、带路径 / 账号 / 空白 / 控制字符的、不是本机的明文地址、别的协议：都不认（要显示出来、画成二维码）
+        for bad in [
+            "",
+            "https://",
+            "https:///",
+            "https://relay.example.com",
+            "https://relay.example.com/x",
+            "https://relay.example.com/?a=1",
+            "https://user@relay.example.com/",
+            "https://relay.example.com:/",
+            "https://relay.example.com:123456/",
+            "https://relay.example.com:80a/",
+            "https://relay.example.com:1:2/",
+            "https://relay example.com/",
+            "https://relay.example.com/\nq=x",
+            "https://relay.example.com\u{1b}[31m/",
+            "http://relay.example.com/",
+            "http://localhost.evil.example/",
+            "http://127.0.0.1.evil.example/",
+            "http://localhostx/",
+            "javascript:alert(1)/",
+            "ftp://relay.example.com/",
+        ] {
+            assert!(!web_url_ok(bad), "{bad:?}");
+        }
+    }
 }

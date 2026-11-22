@@ -434,6 +434,7 @@ export class Link {
     this.plain = new Buffer();
     this.phase = 'line';
     this.done = false;
+    this.heard = Date.now();
     this.hello = { cols, rows, readOnly: !!readOnly };
     const cn = hex(random(8));
     const tkey = new Hmac(ticket.tkey);
@@ -589,14 +590,19 @@ export class Client {
     const sig = await id.sign(body);
     let r;
     let j;
+    // 有期限：手机的网络半死不活时请求会一直挂着（服务器替 pair_get 最多等 10 秒，所以给得比它长）
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 25000);
     try {
       r = await this.fetch(`${this.base}/v1/${op}`, {
-        method: 'POST', body, cache: 'no-store', credentials: 'omit',
+        method: 'POST', body, cache: 'no-store', credentials: 'omit', signal: abort.signal,
         headers: { 'Content-Type': 'application/json', 'X-Cca-Sig': b64(utf8(sig)) },
       });
       j = await r.json();
     } catch {
       throw new Failure('unreachable');
+    } finally {
+      clearTimeout(timer);
     }
     if (r.status === 200 && j && j.ok) return j;
     const code = j && typeof j.error === 'string' && /^[a-z_]{1,32}$/.test(j.error) ? j.error : 'error';
@@ -628,29 +634,40 @@ export class Client {
       if (e.status === 403 || e.status === 404 || e.status === 409 || e.status === 400) throw new Failure('no_pairing', e.status);
       throw e;
     }
-    let theirs = null;
-    for (let i = 0; i < 4 && !theirs; i++) {
-      const j = await this.post('pair_get', { rid: k.rid, wait: 10 });
-      if (j.m) theirs = { m: j.m, fp: j.fp, listed: typeof j.name === 'string' ? j.name : '' };
+    // 从这里起没成（没等到、对不上、网络断了）都告诉服务器这次配对作废：电脑那一头马上知道，不用干等；配对码也不留着
+    let committed = null;
+    try {
+      let theirs = null;
+      for (let i = 0; i < 4 && !theirs; i++) {
+        const j = await this.post('pair_get', { rid: k.rid, wait: 10 });
+        if (j.m) theirs = { m: j.m, fp: j.fp, listed: typeof j.name === 'string' ? j.name : '' };
+      }
+      if (!theirs) throw new Failure('no_answer');
+      const opened = pairOpen(k.keys, k.rid, 'a', theirs.m);
+      if (!opened) throw new Failure('bad_peer');
+      if (opened.fp !== theirs.fp || opened.fp === id.fp) throw new Failure('bad_peer');
+      const { p, pid } = pairSecret(k.kc, opened.n, nb, opened.fp, id.fp);
+      progress('confirming');
+      let done = (await this.post('pair_commit', { rid: k.rid, pid })).done === true;
+      for (let i = 0; i < 6 && !done; i++) done = (await this.post('pair_get', { rid: k.rid, wait: 10, until: 'done' })).done === true;
+      if (!done) throw new Failure('no_answer');
+      committed = pid;
+      // 密钥存成不可导出的：页面以后只能拿它算，取不出原样的字节
+      const key = await crypto.subtle.importKey('raw', p, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+      p.fill(0);
+      // 名字先用服务器的设备清单里那台电脑叫什么（cca 里各处看到的都是它，辅助程序也是这么取的），没有才用它自己说的机器名。
+      // 只是给人看的：认设备靠的是上面核对过的指纹
+      const peer = { pid, fp: opened.fp, name: clean(theirs.listed, PEER_NAME) || clean(opened.name, PEER_NAME) || `电脑 ${pid.slice(0, 6)}`, at: Date.now(), key };
+      // 同一台机器以前配过的换掉（服务器上也是换掉）
+      const all = (await this.peers()).filter((x) => x.fp !== peer.fp && x.pid !== pid);
+      all.push(peer);
+      await this.store.set('peers', all);
+      return peer;
+    } catch (e) {
+      // 服务器已经记下了、这边却没存成：把那条配对删掉，不留一条这台设备用不了的
+      await (committed ? this.post('pair_drop', { pid: committed }) : this.post('pair_close', { rid: k.rid })).catch(() => {});
+      throw e;
     }
-    if (!theirs) throw new Failure('no_answer');
-    const opened = pairOpen(k.keys, k.rid, 'a', theirs.m);
-    if (!opened) throw new Failure('bad_peer');
-    if (opened.fp !== theirs.fp || opened.fp === id.fp) throw new Failure('bad_peer');
-    const { p, pid } = pairSecret(k.kc, opened.n, nb, opened.fp, id.fp);
-    progress('confirming');
-    let done = (await this.post('pair_commit', { rid: k.rid, pid })).done === true;
-    for (let i = 0; i < 6 && !done; i++) done = (await this.post('pair_get', { rid: k.rid, wait: 10, until: 'done' })).done === true;
-    if (!done) throw new Failure('no_answer');
-    // 密钥存成不可导出的：页面以后只能拿它算，取不出原样的字节
-    const key = await crypto.subtle.importKey('raw', p, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    p.fill(0);
-    const peer = { pid, fp: opened.fp, name: clean(theirs.listed, PEER_NAME) || clean(opened.name, PEER_NAME) || `电脑 ${pid.slice(0, 6)}`, at: Date.now(), key };
-    // 同一台机器以前配过的换掉（服务器上也是换掉）
-    const all = (await this.peers()).filter((x) => x.fp !== peer.fp && x.pid !== pid);
-    all.push(peer);
-    await this.store.set('peers', all);
-    return peer;
   }
 
   /** 取消配对：服务器上的记录删掉（删不成也不拦着），这台设备上的密钥删掉 */
@@ -703,7 +720,8 @@ export class Client {
     if (!tkey || tkey.length !== 32 || !/^[0-9a-f]{32}$/.test(t.tid || '')) throw new Failure('error');
     const channel = new Channel(await this.derived(peer, 'cca-remote/v1/auth'), peer.pid, sid, peer.fp, id.fp);
     const origin = this.base || (typeof location !== 'undefined' ? location.origin : '');
-    return new Link({ url: origin.replace(/^http/, 'ws') + '/v1/relay/ws', WebSocket: this.WS, ticket: { tid: t.tid, tkey }, channel, cols, rows, readOnly, on });
+    // 网址里带着票据的编号：服务器先看它在不在，才让这条 WebSocket 进来（编号不是秘密；进中转靠的是开场白里证明有票据的密钥）
+    return new Link({ url: `${origin.replace(/^http/, 'ws')}/v1/relay/ws?t=${t.tid}`, WebSocket: this.WS, ticket: { tid: t.tid, tkey }, channel, cols, rows, readOnly, on });
   }
 }
 
@@ -773,7 +791,7 @@ export class Attachment {
     if (this.state === 'open') {
       this.flaps = Date.now() - this.openedAt < 10000 ? this.flaps + 1 : 0;
       if (this.flaps >= FLAPS) return this.stop('gave_up');
-      this.tries = 0;
+      this.tries = this.flaps;   // 刚接上就断的：间隔从长一点的起步，别一秒一次地问服务器
     }
     return this.later();
   }
@@ -788,8 +806,10 @@ export class Attachment {
     return undefined;
   }
 
-  /** 马上再试一次（页面回到前台时：别等退避的那几秒） */
+  /** 页面回到前台：断着的马上再试，不等退避的那几秒；开着却好一阵没听到对面的（手机把页面挂起过，连接多半已经死了）
+   *  当成断了，不等 60 秒的那次检查 */
   nudge() {
+    if (this.state === 'open' && this.link && Date.now() - this.link.heard > 25000) this.link.finish('lost');
     if (this.state !== 'retrying') return;
     this.timers.clearTimeout(this.timer);
     this.connect(true);
@@ -801,8 +821,11 @@ export class Attachment {
     this.set('closed', why);
   }
 
+  /** 敲的键、粘贴的字。回：送出去了没有（断着、还没接上时不送，也不攒着等接上——迟到的按键比丢了的更糟） */
   input(data) {
-    this.link?.input(typeof data === 'string' ? utf8(data) : data);
+    if (this.state !== 'open' || !this.link) return false;
+    this.link.input(typeof data === 'string' ? utf8(data) : data);
+    return true;
   }
 
   resize(cols, rows) {

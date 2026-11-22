@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import signal
 import socket
 import ssl
 import struct
@@ -166,14 +167,23 @@ class Guest:
         self.good('pair_commit', rid=rid, pid=self.pid)
         return self.p, self.pid
 
-    def ws(self, **kw):
-        return WsSock(self.t.wport, self.t.ca, origin=self.t.origin, **kw)
+    def ws(self, tid=None, **kw):
+        """开一条 WebSocket；tid：网址里带的票据的编号（没有票据的进不来）"""
+        return WsSock(self.t.wport, self.t.ca, origin=self.t.origin, path='/v1/relay/ws' + ('?t=' + tid if tid else ''), **kw)
+
+    def ticket(self, sid):
+        return self.good('relay_attach', sid=sid, pid=self.pid)
+
+    def open_ws(self, sid):
+        """换一张票据、拿它开一条 WebSocket（还没说开场白）。返回 (连接, 票据)"""
+        t = self.ticket(sid)
+        s = self.ws(t['tid'])
+        self.t.assertEqual((s.status, s.accept_ok), (101, True), s.head)
+        return s, t
 
     def attach(self, sid):
         """换票据、经 WebSocket 进中转、说开场白。返回 (连接, 服务器该回的那一行)"""
-        t = self.good('relay_attach', sid=sid, pid=self.pid)
-        s = self.ws()
-        self.t.assertEqual((s.status, s.accept_ok), (101, True), s.head)
+        s, t = self.open_ws(sid)
         line, ok = sw.relay_line('view', t['tid'], base64.b64decode(t['tkey']))
         s.sendall(line)
         return s, ok
@@ -372,6 +382,13 @@ class ServerTest(WebBase):
         self.assertEqual(g.ws(headers={'Upgrade': None}).status, 400)
         self.assertEqual(WsSock(self.wport, self.ca, origin='https://evil.example.com').status, 403)
         self.assertEqual(self.get('/v1/relay/ws')[0], 400)
+        # 手里没有票据的开不了 WebSocket（没有凭证的人占不了名额）：不带、乱写的、宿主那种票据、同一张用第二次
+        for path in ('', '?t=' + '0' * 32, '?t=xyz', '?x=1', '?t=' + t['tid']):
+            w = WsSock(self.wport, self.ca, origin=self.origin, path='/v1/relay/ws' + path)
+            self.assertEqual(w.status, 403, path)
+        tv = g.ticket(sid)
+        self.assertEqual(g.ws(tv['tid']).status, 101)
+        self.assertEqual(g.ws(tv['tid']).status, 403, '一张票据只开得了一条')
 
         view, vok = g.attach(sid)
         kind, payload = read_ctl(host)
@@ -411,17 +428,16 @@ class ServerTest(WebBase):
 
         # 不合规矩的帧（没加掩码、文本的）：断开这一条，服务器照常
         for bad in (lambda w: w.frame(2, b'x', mask=False), lambda w: w.frame(1, b'text')):
-            w = g.ws()
-            self.assertEqual(w.status, 101)
+            w, _ = g.open_ws(sid)
             w.s.sendall(bad(w))
             self.assertEqual(w.recv(1), b'')
-        # 开场白不对：中转回一行原因就关
-        w = g.ws()
-        w.sendall(b'CCA-RELAY/1 view ' + b'0' * 32 + b' ' + b'0' * 16 + b' ' + b'A' * 43 + b'\n')
+        # 开场白不对（网址里的票据是真的，开场白里证明不了有它的密钥）：中转回一行原因就关，那张票据不算用掉
+        w, tk = g.open_ws(sid)
+        w.sendall(sw.relay_line('view', tk['tid'], b'k' * 32)[0])
         self.assertEqual(read_line(w), b'CCA-RELAY/1 ERR ticket\n')
         self.assertEqual(w.recv(1), b'')
         # 连上不说话：5 秒后被中转断开（和数据端口上一样，先说一行原因）
-        w = g.ws()
+        w, _ = g.open_ws(sid)
         t0 = time.monotonic()
         self.assertEqual(read_line(w), b'CCA-RELAY/1 ERR slow\n')
         self.assertEqual(w.recv(1), b'')
@@ -432,14 +448,45 @@ class ServerTest(WebBase):
 
     def test_many_websockets(self):
         """同一个地址开得了的 WebSocket 有上限；占着它们不影响普通请求"""
+        a = self.a
         g = Guest(self)
-        socks = [g.ws() for _ in range(9)]
+        p, pid = self.pair_guest(a, g)
+        sid = secrets.token_hex(16)
+        t = self.good(a, 'relay_host', sid=sid, pids=[pid])
+        host, ok = dial(self.srv.rport, 'host', t['tid'], base64.b64decode(t['tkey']))
+        self.assertEqual(read_line(host), ok)
+        host.sendall(ctl(F_ANNOUNCE, json.dumps({pid: sw.dir_seal(p, pid, sid, {'v': 1})}).encode()))
+        wait_for('访客看到会话', lambda: g.good('relay_list', pids=[pid])['sessions'][pid])
+        socks = [g.ws(g.ticket(sid)['tid']) for _ in range(9)]
         self.assertEqual([w.status for w in socks], [101] * 8 + [429])
         self.assertEqual(self.get('/')[0], 200)
         self.assertEqual(json.loads(self.get('/v1/health')[2])['ok'], True)
         for w in socks:
             w.close()
-        wait_for('名额还了', lambda: g.ws().status == 101, 20)
+        wait_for('名额还了', lambda: g.ws(g.ticket(sid)['tid']).status == 101, 20)
+
+    def test_the_web_side_is_switched_off(self):
+        """关掉网页端（重启时不带那几个参数）：记下的访客的请求一律不认；再打开，它还在"""
+        a = self.a
+        g = Guest(self)
+        p, pid = self.pair_guest(a, g)
+        port = self.srv.port
+        self.srv.stop()
+        self.srv = rr.RelayServer(self.d, sniff=self.sniff, port=port)
+        ctx = ssl._create_unverified_context()
+        body = dict(pids=[pid], v=1, op='relay_list', key=g.fp, ts=time.time(), nonce=secrets.token_hex(16))
+        raw = json.dumps(body, separators=(',', ':')).encode()
+        c = http.client.HTTPSConnection('127.0.0.1', port, context=ctx, timeout=10)
+        c.request('POST', '/v1/relay_list', body=raw, headers={'X-Cca-Sig': base64.b64encode(sign(g.keyfile, 'cca-presence', raw)).decode()})
+        r = c.getresponse()
+        self.assertEqual((r.status, json.loads(r.read())), (403, {'error': 'denied'}))
+        c.close()
+        self.assertEqual(list(self.remote()['guests']), [g.fp], '记录留着')
+        self.assertEqual(list(self.good(a, 'relay_list', pids=[pid])['peers']), [pid], '电脑那一头照旧')
+        self.srv.stop()
+        self.srv = rr.RelayServer(self.d, sniff=self.sniff, port=port, extra=self.restart_args())
+        self.wport = int(wait_for('网页端的端口起来', lambda: (self.d / 'wport').exists() and (self.d / 'wport').read_text()))
+        self.assertEqual(list(g.good('relay_list', pids=[pid])['peers']), [pid])
 
 
 class OffTest(Base):
@@ -710,6 +757,20 @@ class ClientTest(WebBase):
         self.assertTrue(j['ok'], j['events'])
         self.assertIn(['exit', 7], j['events'])
 
+    def test_a_pairing_that_fails_is_closed_on_the_server(self):
+        """手机放了密文以后没配成（这里是对面那一份打不开）：告诉服务器这次配对作废，电脑那一头马上知道，配对码不留着"""
+        a = self.a
+        self.node.good('start', base=self.base, name='iPhone')
+        code = secrets.token_bytes(10)
+        kc, keys, rid = sw.pair_keys(code)
+        self.good(a, 'pair_open', rid=rid, web=True)
+        self.good(a, 'pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'b', a.fp, os.urandom(32), 'box'))   # 角色写错了：认证不过
+        j = self.node.call('pair', code=sw.code_text(code))
+        self.assertEqual((j['ok'], j['error']), (False, 'bad_peer'))
+        self.assertEqual(self.call(a, 'pair_get', rid=rid), (404, {'error': 'no_pairing'}))
+        self.assertEqual(self.node.good('list')['rows'], [], '这台设备上什么都没存')
+        self.assertEqual(self.remote()['guests'], {})
+
     def test_view_only_unpair_and_no_session(self):
         a = self.a
         self.node.good('start', base=self.base, name='iPad')
@@ -835,6 +896,19 @@ class ShellOffTest(Base):
         self.assertEqual(self.call(a, 'pair_get', rid='0' * 32)[0], 404)
 
 
+class UrlTest(unittest.TestCase):
+    def test_the_web_url_is_written_the_way_browsers_say_it(self):
+        """--web-url 要和浏览器发的 Origin 逐字相等才让开 WebSocket：主机小写、默认的端口不写"""
+        for given, want in (('https://relay.example.com/', 'https://relay.example.com'), ('https://Relay.Example.COM', 'https://relay.example.com'),
+                            ('https://relay.example.com:443/', 'https://relay.example.com'), ('https://relay.example.com:8443', 'https://relay.example.com:8443'),
+                            ('https://relay.example.com:08443/', 'https://relay.example.com:8443'), ('https://192.0.2.10:443/', 'https://192.0.2.10'),
+                            ('http://localhost:80/', 'http://localhost'), ('http://127.0.0.1:8080/', 'http://127.0.0.1:8080')):
+            self.assertEqual(srvmod.web_origin(given), want, given)
+        for bad in ('', 'relay.example.com', 'http://relay.example.com/', 'https://relay.example.com/x', 'https://relay.example.com:0/',
+                    'https://relay.example.com:99999/', 'https://a b/', 'https://relay.example.com/?x', 'http://localhost.evil.example/', None):
+            self.assertIsNone(srvmod.web_origin(bad), bad)
+
+
 class FilesTest(unittest.TestCase):
     """页面的文件（server/web/）：服务器读得进去、只发该发的；别人的代码（xterm.js）和说明里记的校验和一样；
     页面自己不引别处的东西、没有内联的脚本（内容安全策略不许，写了也不会跑）"""
@@ -892,16 +966,26 @@ class PageTest(Base):
         shots = os.environ.get('CCA_WEB_SHOTS')
         tmp = None if shots else tempfile.TemporaryDirectory(prefix='cca-shots-')
         env = {k: v for k, v in os.environ.items() if k.lower() not in ('http_proxy', 'https_proxy', 'all_proxy')}
+        # 自己一个进程组：等不到时连同它起的 Chrome 一起停掉（只停 node 的话 Chrome 留在那里）
+        browser = subprocess.Popen([NODE, str(ROOT / 'tests' / 'web_page.mjs'), url, code, shots or tmp.name], env=dict(env, CCA_CHROME=CHROME),
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
-            r = subprocess.run([NODE, str(ROOT / 'tests' / 'web_page.mjs'), url, code, shots or tmp.name], env=dict(env, CCA_CHROME=CHROME),
-                               capture_output=True, text=True, timeout=240)
+            out, err = browser.communicate(timeout=240)
+        except subprocess.TimeoutExpired:
+            os.killpg(browser.pid, signal.SIGTERM)
+            try:
+                out, err = browser.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(browser.pid, signal.SIGKILL)
+                out, err = browser.communicate()
+            self.fail('浏览器那一头四分钟没走完：%s %s' % (out[-500:], err[-1500:]))
         finally:
             if tmp:
                 tmp.cleanup()
         try:
-            j = json.loads(r.stdout)
+            j = json.loads(out)
         except ValueError:
-            self.fail('浏览器那一头没给结果：%s %s' % (r.stdout[-500:], r.stderr[-1500:]))
+            self.fail('浏览器那一头没给结果：%s %s' % (out[-500:], err[-1500:]))
         self.assertTrue(j['ok'], '%s\n页面上：%s\n控制台：%s' % (j.get('error'), j.get('dom'), j.get('logs')))
         self.assertEqual(j['steps'], ['welcome', 'paired', 'typed', 'keybar', 'compose', 'menu', 'reattach', 'ended', 'settings'])
         self.assertEqual(j['logs'], [], '页面的控制台里不该有报错（被内容安全策略拦下的也算）')

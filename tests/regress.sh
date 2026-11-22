@@ -3308,7 +3308,8 @@ cp "$T/relkey.pub" "$SV/release.pub"
 srv_start() {   # srv_start [端口]：起服务器（状态文件留着，重启后接着用）
 	rm -f "$SV/port"
 	python3 -I "$D/../server/cca-presence.py" --listen "127.0.0.1:${1:-0}" --port-file "$SV/port" --cert "$SV/cert.pem" --key "$SV/key.pem" \
-		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl "$STTL" --relay-listen 127.0.0.1:0 >>"$SV/log" 2>&1 &
+		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl "$STTL" --relay-listen 127.0.0.1:0 \
+		--web-url https://relay.example.com:18445/ >>"$SV/log" 2>&1 &   # 网页端开着（cca remote pair --web 要它；页面是仓库里的 server/web/）
 	SVP=$!
 	local i; for i in $(seq 1 50); do [ -s "$SV/port" ] && return 0; sleep 0.1; done; return 1
 }
@@ -3498,7 +3499,8 @@ ok "cost_total.devices（设备菜单）：这台设备在前（和 me 一样）
 # 远程会话的配对（docs/dev/remote.md；服务器开着中转）：这里只测 cca remote pair / join / peers / allow / unpair 这几条命令怎么问、怎么说，
 # 配对、列表、接入、加密本身在 tests/remote_relay.py（unit 一节）。另一台机器还是 dan-air，照 server/README.md 的格式自己说话
 dpair() {   # dpair join 配对码 | show 文件：dan-air 输入这台 Mac 显示的配对码 / 自己显示一个（写进文件），等对方输入。配好打印“配对编号 密钥”
-	python3 -B - "$D" "$T/dan" "$SVPORT" "$@" <<'PY'
+	          # dpair web 配对码（DPAIR_KEY=密钥）：手机上的网页端——一把不在设备清单里的密钥输入这台 Mac 给网页端开的配对码，公钥带在请求里
+	python3 -B - "$D" "${DPAIR_KEY:-$T/dan}" "$SVPORT" "$@" <<'PY'
 import secrets, sys
 sys.path.insert(0, sys.argv[1])
 import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
@@ -3514,9 +3516,10 @@ def call(op, **extra):
 
 
 n = secrets.token_bytes(32)
-if op == 'join':
+if op in ('join', 'web'):
     kc, keys, rid = sw.pair_keys(sw.code_bytes(sys.argv[5]))
-    call('pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'b', me, n, 'dan'))
+    extra = {'pub': ' '.join(open(key + '.pub').read().split()[:2])} if op == 'web' else {}
+    call('pair_put', rid=rid, m=sw.pair_msg(keys, rid, 'b', me, n, 'phone' if op == 'web' else 'dan'), **extra)
     theirs = sw.pair_open(keys, rid, 'a', call('pair_get', rid=rid)['m'])
     p, pid = sw.pair_secret(kc, bytes.fromhex(theirs['n']), n, theirs['fp'], me)
 else:
@@ -3582,6 +3585,25 @@ for l in open(sys.argv[1]):
 dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair.jsonl"
 ok "界面 App 里显示配对码：同意当场问，配对码在一页只显示的字段里（不用回答），对方输入后 result 事件 remote_paired" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(asks)" = "consent.remote_pair remote.pair" ] && printf "%s" "$RCODE" | grep -Eq "^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$" && evq "e.get(\"q\") == \"remote.pair\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"code\", \"code\")]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「dan-air」\" in e[\"message\"]" && ! grep -qF "$RCODE" "$T/rp.out" && [ -e "$T/keychain/cca-remote-${dj%% *}" ]'
+# 和手机配对（cca remote pair --web，docs/dev/remote.md「网页端」）：手机没有 deploy key，是一把不在设备清单里的密钥（照 server/README.md「网页端」自己说话）。
+# 先把上一个配对的结果留着（dj），这一段用自己的变量。服务器按设备限流（每秒 0.5 个、最多攒 30 个），上面配对的那些把这台 Mac 的
+# 配额用得差不多了：先重启它（状态文件留着，记下的配对都在），配额从头算
+kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; srv_start "$SVPORT"
+ssh-keygen -q -t ed25519 -N '' -C phone -f "$T/phone" >/dev/null 2>&1
+out=$(run CCA_TTY="$(ans y)" cca remote pair --phone 2>&1); rc3=$?
+sess '{"consent.remote_pair":[{"v":"y"}],"remote.pair_web":[null]}' -- cca remote pair --web > "$T/rpw.out" 2>&1 & RPP=$!
+WCODE=""; for i in $(seq 1 150); do WCODE=$(python3 -I -c 'import json,sys
+for l in open(sys.argv[1]):
+    e = json.loads(l) if l.strip() else {}
+    if e.get("q") == "remote.pair_web":
+        print(e["fields"][1]["value"])' "$T/ev.jsonl" 2>/dev/null); [ -n "$WCODE" ] && break; sleep 0.1; done
+[ -n "$WCODE" ] || kill "$RPP" 2>/dev/null   # 没等到那一页（出毛病了）：别让下面干等到配对码过期
+wj=$(DPAIR_KEY="$T/phone" dpair web "$WCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
+cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair_web.jsonl"
+out2=$(run cca remote list --json 2>/dev/null </dev/null); printf '%s' "$out2" > "$T/guifx3/remote_list_web.json"
+ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是手机上打开的地址（kind 是 qr，服务器配置里写的那个）和配对码，都不用回答；不在设备清单里的密钥输入配对码后配好，配对表里记着它是网页端、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以在浏览器里看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"] == \"https://relay.example.com:18445/\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | python3 -I -c "import json, sys; p = [x for x in json.load(sys.stdin)[\"peers\"] if x[\"name\"] == \"phone\"]; sys.exit(0 if len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\" else 1)" && grep -q "\"guests\"" "$SV/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
+out=$(runev cca remote unpair "${wj%% *}" 2>&1); rc=$?
+ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && python3 -I -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"guests\") == {} else 1)" "$SV/remote.json"'
 out=$(runev cca remote unpair "${dj%% *}" 2>&1); rc=$?
 ok "界面 App 取消配对（按配对的编号）：result 事件 remote_updated，钥匙串里的密钥删掉" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"已经取消和「dan-air」的配对\" in e[\"message\"]" && [ ! -e "$T/keychain/cca-remote-${dj%% *}" ]'
 out=$(sess '{"remote.code":[{"v":"0000-0000-0000-0000"}]}' -- cca remote join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_join.jsonl"

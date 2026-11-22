@@ -13,6 +13,29 @@ const profile = mkdtempSync(join(tmpdir(), 'cca-cdp-'));
 const chrome = spawn(process.env.CCA_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--remote-debugging-port=0',
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--hide-scrollbars', '--no-proxy-server', 'about:blank'],
   { stdio: ['ignore', 'ignore', 'pipe'] });
+// 出什么事都把 Chrome 停掉、它的临时资料目录删掉（这个脚本被叫停时也是：tests/web_relay.py 等不到会给整个进程组发信号）
+let cleaned = false;
+function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  try {
+    chrome.kill('SIGKILL');
+  } catch { /* 已经没了 */ }
+  try {
+    rmSync(profile, { recursive: true, force: true });
+  } catch { /* 删不掉就算了 */ }
+}
+process.on('exit', cleanup);
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => process.exit(130));
+process.on('uncaughtException', (e) => {
+  console.log(JSON.stringify({ ok: false, error: 'exception: ' + String(e && e.message), steps: [], logs: [] }));
+  process.exit(1);
+});
+process.on('unhandledRejection', (e) => {
+  console.log(JSON.stringify({ ok: false, error: 'rejection: ' + String(e && e.message), steps: [], logs: [] }));
+  process.exit(1);
+});
+
 const wsUrl = await new Promise((resolve, reject) => {
   let buf = '';
   chrome.stderr.on('data', (d) => {
@@ -177,6 +200,5 @@ try {
 result.logs = logs;
 console.log(JSON.stringify(result, null, 1));
 chrome.kill();
-await new Promise((r) => chrome.once('exit', r));
-rmSync(profile, { recursive: true, force: true });   // Chrome 的临时资料目录
+await Promise.race([new Promise((r) => chrome.once('exit', r)), sleep(5000)]);   // 等它退出再删资料目录（它还在写）
 process.exit(result.ok ? 0 : 1);

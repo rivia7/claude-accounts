@@ -1037,6 +1037,7 @@ WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 WS_KEY_RE = re.compile(r'^[A-Za-z0-9+/]{22}==$')
 WEB_URL_RE = re.compile(r'^(https://[A-Za-z0-9.-]+(?::\d{1,5})?|http://(?:localhost|127\.0\.0\.1)(?::\d{1,5})?)/?$')
 WEB_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9._-]{0,63}$')
+WS_TICKET_RE = re.compile(r'^t=([0-9a-f]{32})$')
 WEB_TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
              '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json'}
 WEB_FILE = 2 << 20         # 网页的一个文件最长
@@ -1101,7 +1102,7 @@ class Remote:
         """不在设备清单里的这把密钥能不能发这个请求：能的话回验签名用的公钥，不能是 None。两种：已经配了对的访客；
         正拿着配对码来的——那次配对是开给网页端的（pair_open 带 web）、还没有别的设备放过密文，公钥在请求里（pub，指纹要对得上）。
         知道 rid 就是知道配对码：不知道的人到不了验签名那一步"""
-        if op not in GUEST_OPS:
+        if op not in GUEST_OPS or not self.web:   # 没开网页端（关掉了）：访客的请求一律不认；记录留着，再打开时还在
             return None
         with self.lock:
             g = self.guests.get(fp)
@@ -1171,6 +1172,16 @@ class Remote:
         tid, key = os.urandom(16).hex(), os.urandom(32)
         self.tickets[tid] = dict(what, key=key, exp=now + TICKET_TTL)
         return 200, {'v': API, 'ok': True, 'tid': tid, 'tkey': base64.b64encode(key).decode(), 'port': self.port, 'ttl': TICKET_TTL}
+
+    def ws_claim(self, tid, now):
+        """网页端要开一条 WebSocket：先看它说的票据在不在（接入用的、没过期、还没有别的 WebSocket 拿它进来过）。没有凭证的人拿不到票据，
+        也就占不了 WebSocket 的名额；票据本身照旧要在开场白里证明有它的密钥才算用掉"""
+        with self.lock:
+            k = self.tickets.get(tid)
+            if not k or k['role'] != 'view' or k['exp'] < now or k.get('ws'):
+                return False
+            k['ws'] = True
+            return True
 
     def take_ticket(self, tid, role, now, proof):
         """用掉一张票据。proof(票据的密钥) 核对来的人确实有这把密钥：对不上的不算用掉（光知道编号的人废不了别人的票据）"""
@@ -1662,6 +1673,21 @@ class Relay(threading.Thread):
                     self.oops('清理过期的连接时')
 
 
+def web_origin(url):
+    """--web-url 写成浏览器自己说的那个样子（WebSocket 的 Origin 就是这么写的，要拿它比）：主机小写，默认的端口（https 的 443、
+    http 的 80）不写。样子不对、端口不在范围里是 None"""
+    m = WEB_URL_RE.match(url or '')
+    if not m:
+        return None
+    scheme, _, rest = m.group(1).partition('://')
+    host, _, port = rest.partition(':')
+    if port and not 1 <= int(port) <= 65535:
+        return None
+    if port == {'https': '443', 'http': '80'}[scheme]:
+        port = ''
+    return '%s://%s%s' % (scheme, host.lower(), ':' + str(int(port)) if port else '')
+
+
 class Web:
     """网页端（手机浏览器里的那一页，README「网页端」）：页面的文件（启动时读进内存）、页面的地址、WebSocket 交给哪个中转"""
     def __init__(self, url, root, relay):
@@ -1850,14 +1876,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         srv = self.server
-        path = self.path.split('?', 1)[0]
+        path, _, query = self.path.partition('?')
         if path == '/v1/health':
             health = srv.store.health(srv.sig_ok, srv.remote and srv.remote.port)
             if srv.web:
                 health['web'] = srv.web.url
             return self.send(200, health)
         if srv.web and path == '/v1/relay/ws':
-            return self.websocket(srv.web)
+            return self.websocket(srv.web, query)
         f = srv.web and srv.web.files.get('index.html' if path == '/' else path[1:])
         if f:
             return self.static(srv.web, f)
@@ -1884,8 +1910,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def websocket(self, web):
-        """GET /v1/relay/ws：网页端进数据端口的路（见 ws_pump）。只认自己那一页发起的（Origin）；进得了中转靠的还是开场白里的票据"""
+    def websocket(self, web, query):
+        """GET /v1/relay/ws?t=<票据的编号>：网页端进数据端口的路（见 ws_pump）。只认自己那一页发起的（Origin）、手里有一张没用过的
+        接入票据的（没有凭证的人开不了、占不了名额）；进得了中转靠的还是开场白里证明有票据的密钥"""
         h, srv = self.headers, self.server
         key = h.get('Sec-WebSocket-Key') or ''
         if (h.get('Upgrade') or '').lower() != 'websocket' or 'upgrade' not in (h.get('Connection') or '').lower() \
@@ -1896,6 +1923,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ip = self.client_ip()
         if not srv.ip_bucket.take(ip):
             return self.send(429, {'error': 'rate'})
+        t = WS_TICKET_RE.match(query)
+        if not (t and srv.remote.ws_claim(t.group(1), time.time())):
+            return self.send(403, {'error': 'ticket'})
         if not web.take(ip):
             return self.send(429, {'error': 'busy'})
         try:
@@ -1991,9 +2021,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             m = srv.store.machine(fp)
             # 不在设备清单里、发的是中转的请求：可能是访客（手机上的网页端，和哪台设备配了对、或者正拿着配对码来配对）
             gkey = srv.remote.guest_key(fp, op, j, now) if relay and not m else None
-            if not m and not gkey:   # 不在设备清单里（维护者还没同步、撤销了；自己的、Team 的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）
+            # 不在设备清单里（维护者还没同步、撤销了；自己的、Team 的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）。
+            # 访客的签名不对也回这一个：从回的内容里分不出“没有这个配对”和“有、但签名不对”
+            if not m and not (gkey and ssh_verify(gkey, NS_REPORT, body, sig)):
                 return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()} if own or team else {'error': 'denied'})
-            if not ssh_verify(m['key'] if m else gkey, NS_REPORT, body, sig):
+            if m and not ssh_verify(m['key'], NS_REPORT, body, sig):
                 return self.send(403, {'error': 'denied'})
         bucket = srv.root_bucket if team and op in TEAM_ADMIN_OPS else srv.fp_bucket
         if not bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
@@ -2246,8 +2278,10 @@ def main():
         ap.error('--behind-proxy 时 HTTPS 由平台做：不用 --cert、--key')
     if not a.behind_proxy and not (a.cert and a.key):
         ap.error('要给 --cert 和 --key（在托管平台、反向代理后面运行时用 --behind-proxy）')
-    if a.web_url and not WEB_URL_RE.match(a.web_url):
-        ap.error('--web-url 要写成 https://域名[:端口]/（手机上打开的就是它；本机试的时候可以是 http://localhost:端口/）')
+    if a.web_url:
+        if not web_origin(a.web_url):
+            ap.error('--web-url 要写成 https://域名[:端口]/（手机上打开的就是它；本机试的时候可以是 http://localhost:端口/）')
+        a.web_url = web_origin(a.web_url) + '/'   # 浏览器自己说的那个样子：主机小写、默认的端口不写
     if a.web_url and not a.relay_listen:
         ap.error('网页端是经中转接入会话的：--web-url 要和 --relay-listen 一起给')
     web_local = bool(a.web_url) and a.web_url.startswith('http://')   # 本机试：http://localhost（浏览器把它当成安全的来源）

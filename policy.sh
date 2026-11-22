@@ -522,7 +522,7 @@ command -v docker >/dev/null 2>&1 || fail "服务器上没有 docker"
 docker compose version >/dev/null 2>&1 || fail "服务器上没有 docker compose（Docker 的 compose 插件）"
 command -v openssl >/dev/null 2>&1 || fail "服务器上没有 openssl（第一次生成证书要用）"
 mkdir -p "\$D/app" "\$D/config" "\$D/certs" "\$D/data"
-put() { printf '%s' "\$2" | base64 -d > "\$D/\$1.new.\$\$" && chmod 644 "\$D/\$1.new.\$\$" && mv -f "\$D/\$1.new.\$\$" "\$D/\$1"; }
+put() { ( umask 077; printf '%s' "\$2" | base64 -d > "\$D/\$1.new.\$\$" ) && chmod "\${3:-644}" "\$D/\$1.new.\$\$" && mv -f "\$D/\$1.new.\$\$" "\$D/\$1"; }
 SH
 	for f in compose.yaml compose.web.yaml README.md; do printf "put %s '%s'\n" "$f" "$(base64 < "$HERE/server/$f" | tr -d '\n')"; done
 	printf "put app/cca-presence.py '%s'\n" "$(base64 < "$HERE/server/cca-presence.py" | tr -d '\n')"
@@ -534,10 +534,12 @@ SH
 		printf "put app/web.new/%s '%s'\n" "${f##*/}" "$(base64 < "$f" | tr -d '\n')"
 	done
 	printf 'rm -rf "$D/app/web.old"; [ ! -d "$D/app/web" ] || mv "$D/app/web" "$D/app/web.old"; mv "$D/app/web.new" "$D/app/web"; rm -rf "$D/app/web.old"\n'
-	if [ -n "${6:-}" ]; then   # 证书和私钥：私钥只经这条 SSH 连接过去，在服务器上只有容器里的用户读得了
-		printf 'mkdir -p "$D/webcert"\n'
+	if [ -n "${6:-}" ]; then   # 证书和私钥：私钥只经这条 SSH 连接过去；目录先建成只有自己进得去的，私钥落盘时就是 600，
+		                         # 放好马上交给容器里的用户（后面哪一步停下来，它都不会是别人读得了的）
+		printf '( umask 077; mkdir -p "$D/webcert" ); chmod 700 "$D/webcert"\n'
 		printf "put webcert/fullchain.pem '%s'\n" "$(base64 < "$6" | tr -d '\n')"
-		printf "( umask 077; put webcert/privkey.pem '%s' )\n" "$(base64 < "$7" | tr -d '\n')"
+		printf "put webcert/privkey.pem '%s' 600\n" "$(base64 < "$7" | tr -d '\n')"
+		printf 'chown -R 10001:10001 "$D/webcert"\n'
 	fi
 	printf "PORT='%s'\nRELAY='%s'\nWEB='%s'\n" "$2" "$4" "$5"
 	cat <<'SH'
@@ -567,13 +569,18 @@ esac
 web=""
 case "${WEB:-off}" in
 	off) ;;
-	*)
+	https://*)
+		# 这几条在这里查（不只在 Mac 上查参数）：网页端可能是上次部署时开的，这一次只改了别的
+		[ "${RELAY:-18444}" != off ] || fail "这台服务器开着网页端（${WEB}），它是经中转接入会话的：不能关中转。要关的话连网页端一起关：加上 --no-web"
+		wport=$(printf '%s' "$WEB" | sed -n 's#^https://[^:/]*:\([0-9][0-9]*\)/*$#\1#p')
+		wport=${wport:-443}
+		[ "$wport" != "$PORT" ] && [ "$wport" != "${RELAY:-18444}" ] || fail "网页端的端口（${wport}，${WEB}）和设备统计、中转的端口撞了：换一个，或者用 --no-web 关掉网页端"
 		[ -s "$D/webcert/fullchain.pem" ] && [ -s "$D/webcert/privkey.pem" ] ||
 			fail "网页端要一张浏览器信得过的证书：把证书（连同中间证书）和私钥放到 ${D}/webcert/fullchain.pem、privkey.pem（或者部署时用 --web-cert、--web-key 传上来），再运行一次"
+		chown -R 10001:10001 "$D/webcert"; chmod 700 "$D/webcert"; chmod 600 "$D/webcert/privkey.pem"; chmod 644 "$D/webcert/fullchain.pem"
 		openssl x509 -in "$D/webcert/fullchain.pem" -noout -checkend 0 >/dev/null 2>&1 || fail "${D}/webcert/fullchain.pem 不是证书，或者已经过期了"
-		wport=$(printf '%s' "$WEB" | sed -n 's#^https://[^:/]*:\([0-9][0-9]*\)/*$#\1#p')
-		web="CCA_WEB_URL=${WEB}\nCCA_WEB_PORT=${wport:-443}\nCOMPOSE_FILE=compose.yaml:compose.web.yaml\n"
-		chown -R 10001:10001 "$D/webcert"; chmod 700 "$D/webcert"; chmod 600 "$D/webcert/privkey.pem"; chmod 644 "$D/webcert/fullchain.pem" ;;
+		web="CCA_WEB_URL=${WEB}\nCCA_WEB_PORT=${wport}\nCOMPOSE_FILE=compose.yaml:compose.web.yaml\n" ;;
+	*) fail ".env 里的 CCA_WEB_URL 不对：${WEB}（用 --web-url 重新给，或者 --no-web 关掉）" ;;
 esac
 { printf 'CCA_PRESENCE_PORT=%s\nCCA_PRESENCE_IMAGE=%s\n' "$PORT" "$img"; printf "$relay"; printf "$web"; } > .env.new && mv -f .env.new .env
 docker compose up -d --remove-orphans --force-recreate >/dev/null 2>&1 || { docker compose up -d --force-recreate; fail "docker compose up 失败"; }
@@ -658,12 +665,18 @@ presence_deploy() {   # presence_deploy [用户@]主机 [-p SSH 端口] [-i 私�
 		web="${web%/}/"
 		[ "$relay" != off ] || fail "网页端是经中转接入会话的：不能和 --no-relay 一起用"
 		out=$(printf '%s' "$web" | sed -n 's#^https://[^:/]*:\([0-9]*\)/$#\1#p')
+		[ -z "$out" ] || { [ "$out" -ge 1 ] && [ "$out" -le 65535 ]; } || fail "--web-url 里的端口要在 1～65535 之间"
 		[ "${out:-443}" != "$port" ] && [ "${out:-443}" != "${relay:-18444}" ] || fail "网页端的端口不能和 --port、--relay-port 一样"
 	fi
 	[ -z "$wcert$wkey" ] || { [ -n "$web" ] && [ "$web" != off ] && [ -s "$wcert" ] && [ -s "$wkey" ]; } ||
 		fail "--web-cert、--web-key 要一起给（证书连同中间证书、私钥，两个都要是这台 Mac 上的文件），还要有 --web-url"
-	[ -z "$wkey" ] || grep -q 'PRIVATE KEY' "$wkey" || fail "--web-key 不是私钥文件：${wkey}"
-	[ -z "$wcert" ] || grep -q 'BEGIN CERTIFICATE' "$wcert" || fail "--web-cert 不是证书文件：${wcert}"
+	if [ -n "$wkey" ]; then   # 传上去之前在这台 Mac 上先看一遍：到了服务器上才发现不对，服务端起不来
+		grep -q 'BEGIN CERTIFICATE' "$wcert" || fail "--web-cert 不是证书文件：${wcert}"
+		grep -q 'PRIVATE KEY' "$wkey" || fail "--web-key 不是私钥文件：${wkey}"
+		! grep -q 'ENCRYPTED' "$wkey" || fail "--web-key 带着密码：服务端读不了，先去掉密码（openssl pkey -in 带密码的 -out 不带密码的）"
+		[ "$(openssl x509 -in "$wcert" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | openssl dgst -sha256 2>/dev/null)" = \
+			"$(openssl pkey -in "$wkey" -pubout -outform der 2>/dev/null | openssl dgst -sha256 2>/dev/null)" ] || fail "--web-cert 和 --web-key 不是一对（证书里的公钥和私钥对不上）"
+	fi
 	host=${target#*@}
 	[[ "$host" =~ ^[A-Za-z0-9.:-]+$ ]] || fail "主机写错了：${host}"
 	[[ "$rdir" =~ ^/[A-Za-z0-9._/-]+$ ]] && [[ "$rdir" != *..* ]] || fail "--dir 要是服务器上的绝对路径（只用字母、数字和 . _ - /）"

@@ -17,4 +17,5 @@ services:
       - "${CCA_WEB_PORT:-443}:18445"
     volumes:
       - ./webcert:/webcert:ro
-    pids_limit: 192   # 一条 WebSocket 一个线程（最多 64 条），加上处理请求的
+    # 线程也算在这个数里：两个端口各自最多同时处理 64 个请求（一个请求两个线程：处理它的、到期限断开它的），一条 WebSocket 一个线程（最多 64 条）
+    pids_limit: 512
