@@ -11,7 +11,7 @@
 | M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 做完了（见「迁移」）：`cca team import`、`./policy.sh team` + 机器拉到映射后自己加入、`cca team import Team --mine`（自己的账号建成一个 Team：自己的同步服务器去掉以后就是这么做） |
 | M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 做完了（见「界面」），App 里也能新建 Team、部署它的服务器（M6） |
 | M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 做完了（见「部署」）：`cca team deploy`、安装脚本（`--team-root`；3.5.3 起只装 Team 的，同时给这个 Team 的远程会话做中转；手机的网页端和证书助手是 team-only 这个分支里加的：3.5.3-beta.5 起一台服务器上几个 Team 共用一个证书助手 `cca-team-acme`）、`cca team hosted`（终端里）；App 里「新建 Team…」「部署到我的服务器…」 |
-| M7 | 删掉旧通道：自己的同步服务器；GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半、App 的卡片、配置向导问它的那一步）3.5.3 起删掉了（team-only 分支，做完了、还没发布；升级时 `hub_leftovers` 清掉留下的文件，以前装的 `/opt/cca-hub` 安装脚本只让卸载）。维护者的那一套只标了弃用（`./policy.sh key add`、`cca policy on` 给维护者的那一行旁边说新的做法是 Team）、照常用：和 Team 同一个版本里删掉的话，还没迁过去的机器就断了。删的时候要动的见「要删掉的旧通道」 |
+| M7 | 删掉旧通道：自己的同步服务器；GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半、App 的卡片、配置向导问它的那一步）3.5.3 起删掉了（team-only 分支，做完了、还没发布；升级时 `hub_leftovers` 清掉留下的文件，以前装的 `/opt/cca-hub` 安装脚本只让卸载）。维护者的那一套只标了弃用（`./policy.sh key add`、`cca policy on` 给维护者的那一行旁边说新的做法是 Team）、照常用：和 Team 同一个版本里删掉的话，还没迁过去的机器就断了。3.5.3-beta.8 起维护者的日常也在 Team 里：节点用 `cca team node` 改（见「Team 的节点」），加外部账号的 skill 走 Team，映射仓库不再加东西；Team 给的账号不再有锁定请求。删的时候要动的见「要删掉的旧通道」 |
 
 定下来的（用户 2026-11-21、22 定的，照它做，别重新讨论）：
 
@@ -31,14 +31,17 @@
   `cca policy` 这条命令、`~/.cca/policy/`（deploy key、policy.json、nodes.json）；辅助程序 `core/policy.rs` 里读 policy.json 的那一半
   （`policy_doc`、`legacy_raw`、`legacy_fill`；`mapping` 就只剩各个 Team 给的）、`policy-*` 子命令、`cmd/team.rs` 的 `adopt`
   （照映射里的邀请加入：映射没了它也没了）。
-- 维护者那一头：`policy.sh` 的发布、`key`、`lock`、`team`（迁移用的）、`presence deploy / sync`，`cca-external-account` 这个 skill。
+- 维护者那一头：`policy.sh` 的发布、`key`、`lock`、`team`（迁移用的）、`presence deploy / sync`。`cca-external-account` 这个 skill
+  3.5.3-beta.8 起改成走 Team（`cca team node copy` → `test` → `cca team map`，见「Team 的节点」），映射仓库从此不再加账号、节点。
 - 维护者的设备统计服务器那一类（`HubKind::Maintainer`、`presence_server`、`--mode maintainer` 和它的设备清单）：账号都在 Team 里以后没有
   账号走它。远程会话的中转现在也在那台服务器上（remote.md）：删之前先给它找好去处。
 - 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半）：3.5.3 起删掉了（做完了，
   还没发布）。还留着的只有升级时清掉旧文件的 `hub_leftovers`，和安装脚本认得 `/opt/cca-hub`、只让卸载它。
 - 界面：「共享与同步」页的「维护者共享的账号」开关，PROTOCOL 里对应的字段要升 `GUI_API` 才能删。「自己的同步服务器」卡片 3.5.3 起没有了
   （`hello.hub` 跟着去掉）；配置向导第 1 步已经换成「有没有 Team 的邀请链接」（`onboard.team`，见 onboarding.md）。
-- 锁定请求（`cca policy request`、`./policy.sh lock`）：Team 里管理员在自己的设备上改，没有它的位置。
+- 锁定请求（`cca policy request`、`./policy.sh lock`）：Team 里管理员在自己的设备上改，没有它的位置。3.5.3-beta.8 起 Team 给的账号
+  请求时直接说走哪个节点由那个 Team 的管理员定（`cmd_policy_request`，不给命令；App 本来就不显示：`can.policy_lock` 看的映射里有 Team 的账号），
+  命令和 App 的入口删的时候一起删。
 
 ## 信任
 
@@ -580,6 +583,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   恢复的）：它说的数不比记着的小、没到上限才信，接着它的往上加再存一次（只追一次）；它明说不认得的编号记成 `expired`；回话里没提到的不动、说一声。
 - `cca team grant Team 设备 all | none | +工具:邮箱 | -工具:邮箱 …`、`cca team map Team 工具 邮箱 节点|-`、`cca team import Team policy.json [nodes.json]`
   （现成的映射和参考节点整个导进来：就是维护者映射仓库里的那两份，格式照 `policy_problems`、`fill_problems` 查）、`cca team publish Team`：改完都发布。
+  节点的定义一个个加、复制、去掉、实测见「Team 的节点」（`cca team node`）。
 - **默认的别名**（`default_aliases` 照 `alias_plan` 改，3.5.3-beta.5 起；3.5.3-beta.6 起按工具记）：配置的 `tool_aliases`（{工具: {邮箱: 别名}}）里
   没有别名的账号（不合规的、在这个工具里和前面的账号撞了的也算）编成 `team-1`、`team-2`……——各工具各编各的，各自的第一个账号都是 `team-1`
   （照各工具里加进来的先后）；同一个工具里不重复。admin.json 的 `alias_n`（{工具: 编到第几}）记着各工具编到第几，用过的号不再用（去掉的账号的号
@@ -630,6 +634,36 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - 设备加入以后、管理员对一遍之前服务器的记录就没了：那台设备的公钥没记下，登记不回去，要重新邀请。
 - Linux 上没跑过（代码里没有只在 macOS 上有的东西；`ssh-keygen -Y` 要 OpenSSH 8.0 起）。
 
+## Team 的节点（`cca team node`，3.5.3-beta.8 起）
+
+维护者以前改映射仓库的 `nodes.json`（或 `custom.yaml`）、签名推送；现在节点的定义在管理员这台的 admin.json 里（`config.nodes`，
+`{"group", "proxies"}`，和 `nodes.json` 一个样子），管理员用这几条命令改。辅助程序在 `cmd/team/admin/nodes.rs`，bash 是 `team_node`：
+
+- `cca team node Team [ls [--json]]`（`py team-node-ls`）：不联网、不显示密钥（只有名字、类型、服务器、端口、`dialer-proxy`、走它的账号、
+  是不是安装客户端用的）。`--json`（`kind: team_nodes`）另带这个 Team 全部的账号 → 节点（`accounts`：走的节点不在定义里的也算）。
+- `add [链接]`：写法和 `cca node add` 一样（链接或者粘贴一段 Clash 节点配置，`node_read_block`）：`py node-check` 解析、起不冲突的名字
+  （避开这个 Team 已有的和这台设备知道的），`node_validate` 拿内核 `-t` 校验，`py team-node-add`（stdin 是节点的 JSON）。
+- `copy 模板 新名字 [--port 端口]`（`py team-node-copy`）：整份复制一个节点（`deepcopy`，`reality-opts` 这些也是新的一份），只换名字、
+  端口。一台服务器上按端口分开的几个入站（各有各的出口）就这样一个个加，节点的密钥不出这台设备（skill 也不用经手）。
+- `rm 节点`（`py team-node-rm`）：还有账号走它、别的节点经它连出去、它是 `install_node` 时不去掉（`node_used`，原因里说是谁）；去掉最后
+  一个时 `config.nodes` 回到 null。
+- 改了都先过一遍成员设备查配置的那一套（`fill_problems`），不合格的不存（`node`），再和 `map` 一样对一遍、发布。给各台设备的配置只带它的
+  账号用得着的节点（`needed_nodes`）：加、复制、去掉没人用的节点，哪台设备的配置都不变（`各台设备的配置没有变`），有账号走它了（`cca team map`）
+  才发出去。还没有节点的 Team 第一次加时策略组是 `OpenAi`（和维护者的 `policy.sh` 一样）。
+- `test [节点…] [--tool 工具] [--json]`（`team_node_test`）：实测出口。另起一个临时内核（`core_bin`；不碰在跑的内置代理和路由器），
+  `py team-node-testconfig` 把配置写进 `mktemp -d` 的目录（700，文件 600、`O_EXCL`，EXIT trap 停内核、删目录；corenet 的
+  `test_proxy_config`：127.0.0.1 上每个节点一个入站 `cca-test-N` 直通它，带上 `dialer-proxy` 连着的，`MATCH,REJECT`，不开控制接口、
+  TUN、DNS；别的程序开着 TUN 时和内置代理一样绑定物理网卡，`core_bind_apply`）。经每个入站同时取账号要用的服务（`--tool` 的，没写时看这个 Team 里走这些节点的
+  账号是哪些工具的，都没有按 Claude：claude.ai / chatgpt.com）和 www.cloudflare.com（服务器自己的出口）的 `/cdn-cgi/trace`，各试两次；
+  哪个都没取到的直连它的服务器端口（`port_open`），分清没开入站和入站参数不对。结果交给 `py team-node-verdict`（`judge`）：不通、经它出得去
+  而要用的服务不通、出口在受限地区（`RESTRICTED`）、和别的测着的节点在服务那边是同一个 IP、别的节点在那边有自己的出口而它看到的是服务器
+  自己的 IP。退出码：0 都好；1 有节点不通；2 全都不通（多半是这台机器的网络）；3 都通了、有要提醒的。不写节点是全部。`--json`
+  （`kind: team_node_test`：`hosts`、每个节点的 `state`、`exits`、`tcp`、`notes`）给 skill 用。
+- 只在命令行里（App 不调）；失败的原因码 `team_no_node`、`team_node`、`team_node_used`、`team_name`、`team_usage`（PROTOCOL 4.14）。
+- 加外部账号的 skill（`cca-external-account`，只在维护者的仓库里、不进 git）3.5.3-beta.8 起照它做：`copy` 出新节点 → `test`
+  （同一组里有账号在用的节点当对照）→ 好了 `cca team map`，不好 `rm` 撤回；不再碰映射仓库、不签名推送。要这台 Mac 装着有 `cca team node`
+  的版本。
+
 ## 测试
 
 - `tests/presence.py` 的 `TeamServerTest`（回归的 unit 一节跑整份）：真的服务器进程、真的 `ssh-keygen` 签名，客户端是照文档独立实现的
@@ -663,9 +697,17 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     拿这个 Team 的邀请来加入不删东西。
 - regress 11b3d：`cca team` 的命令行一层。这台 Mac 先当管理员（成员由 `tm_spec`——照文档独立实现的那一头——扮演）：`new` 说下一步、还没接上时发不了邀请、
   `attach` 指纹对不上、`import`、`invite`（Claude Code 里不给；链接只一行打到 stdout，那串随机数不在 curl / env 的命令行里、不落盘）、`devices`、`grant`、
-  `map`、`publish`、`revoke` 的同意事件和同意之后、管理员 `leave` 的同意事件（`team_delete`）；再当成员（管理员由 `tm_spec` 扮演）：链接少一截、加入
-  （`team_joined`）、两个 Team 照先后列出、`sync` 取到新的一版并跟着改名、被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后。这一节结束时
-  停掉两台服务器、删掉 `~/.cca/teams`。
+  `map`、`publish`、`node`（列出、粘贴链接加、复制、有账号在用的去不掉、`test` 撞了 IP 是 3 / 不通是 1 / 全都不通是 2、去掉；那一头的序号不动）、
+  `revoke` 的同意事件和同意之后、管理员 `leave` 的同意事件（`team_delete`）；再当成员（管理员由 `tm_spec` 扮演）：链接少一截、加入
+  （`team_joined`）、两个 Team 照先后列出、Team 给的账号 `cca policy request` 说找管理员、成员用不了 `team node`、`sync` 取到新的一版并跟着改名、
+  被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后。这一节结束时停掉两台服务器、删掉 `~/.cca/teams`。
+  `team node test` 的假内核：假 mihomo 看到入站 `cca-test-1` 就把状态放在 `$T/core_test`（`core_load` 另记 `listeners/<端口>`：入站名和节点），
+  假 nc 认它的端口；假 curl 经它时照 `$T/trace/<节点>/<网站>` 回话（默认服务那边 `203.0.113.<100+序号>`、www.cloudflare.com
+  `198.51.100.250`），`$T/trace_down/<节点>` 时连不上；直连节点服务器的端口看 `$T/tcp_open`（「主机 端口」一行一个）。
+- 节点（`tests/team.py` 的 `test_nodes`）：列出来不带密码、`accounts`；加（重名、不是对象、过不了 `fill_problems` 的不要）、复制（整份、
+  模板不变）、去掉（账号、`dialer-proxy`、`install_node` 用着的不行）；没人用的节点不改成员设备的配置，`map` 到它以后才发出去（连同安装用的节点）；
+  `testconfig` 的入站、带上的节点、权限、要测的网站、不写节点是全部；`verdict` 的几种结果和 `--json`；没接上服务器的 Team 只改本机。
+  `cargo test nodes`：`judge` 的各种情况。
 - 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：这台设备上维护者的共享也开着、映射里 alice 走另一个节点——加入以后 alice 照 Team 的
   （说「按「测试组」的配置固定」）、补上别名，本来就有的账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了
   收起来（`parked`），再给回来照原来的键；不再给本来就有的那个，账号留着；被移除以后 Team 加的收起来、alice 轮到维护者的映射。

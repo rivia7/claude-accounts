@@ -1063,6 +1063,39 @@ fn install_proxy_config(name: &str, port: u16) -> Option<Dict> {
     Some(core_bind_apply(cfg, &c, &defs))
 }
 
+/// 实测 Team 的节点（`cca team node Team test`）用的临时内核的配置：127.0.0.1 上每个节点一个入站（cca-test-1、cca-test-2……，直通这个
+/// 节点），带上它们经 dialer-proxy 连着的节点；别的和辅助安装的一样（install_proxy_config：规则只有 MATCH,REJECT，不开控制接口、TUN、
+/// DNS；别的程序开着 TUN 时和内置代理一样绑定物理网卡）。px 是 Team 的节点定义（不是这台机器的），want 是 (节点, 本机端口)
+pub fn test_proxy_config(px: &[Dict], want: &[(String, u16)]) -> Dict {
+    let defs = core_pick(px, &want.iter().map(|(n, _)| V::from(n.as_str())).collect::<Vec<_>>());
+    let listeners: Vec<V> = want
+        .iter()
+        .enumerate()
+        .map(|(i, (n, port))| {
+            V::Dict(dict! {
+                "name" => format!("cca-test-{}", i + 1), "type" => "mixed", "listen" => "127.0.0.1", "port" => *port,
+                "users" => List::new(), "proxy" => n.as_str(),
+            })
+        })
+        .collect();
+    let c = match load_quiet(&CFG) {
+        Some(V::Dict(c)) => c,
+        _ => Dict::new(),
+    };
+    let cfg = dict! {
+        "allow-lan" => false, "bind-address" => "127.0.0.1", "mode" => "rule", "log-level" => "warning", "find-process-mode" => "off",
+        "geo-auto-update" => false, "profile" => dict! { "store-selected" => false, "store-fake-ip" => false },
+        "proxies" => defs_list(&defs), "listeners" => List::from_vec(listeners), "rules" => list!["MATCH,REJECT"],
+    };
+    core_bind_apply(cfg, &c, &defs)
+}
+
+/// 临时内核的配置写进一个新文件（600；已经有了就失败：路径是 bash 在自己的临时目录里起的，有节点密钥）
+pub fn config_write_new(file: &str, conf: &Dict) -> R<()> {
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(file)?.write_all(config_text(conf).as_bytes())?;
+    Ok(())
+}
+
 /// `T.install_env(folder)`：官方安装脚本在空环境里运行时另加的变量。claude install 用一次性的配置目录（不往账号和 ~/.claude 的
 /// 配置里写，不带设备标识，和客户端更新里的 claude update 一样）；codex 不问问题（stdin 是 /dev/null）；agy 没有
 fn install_env(folder: &str) -> R<Vec<(String, String)>> {
@@ -1112,7 +1145,7 @@ pub fn cmd_install_node(args: &[String]) -> R<()> {
     let Some(conf) = install_proxy_config(name, port) else {
         return die(format!("内置代理里没有节点 {name} 的定义"));
     };
-    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(file)?.write_all(config_text(&conf).as_bytes())?;
+    config_write_new(file, &conf)?;
     out!("{port}");
     Ok(())
 }

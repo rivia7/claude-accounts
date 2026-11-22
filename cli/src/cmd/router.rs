@@ -9,9 +9,10 @@ use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, POOL_STEP};
 use crate::core::model::*;
 use crate::core::policy::{
-    fill_fp, fill_name_ok, fill_plan, fill_problems, node_fp, node_ids, policy_fill, policy_map, policy_problems,
+    fill_fp, fill_name_ok, fill_plan, fill_problems, node_fp, node_ids, policy_fill, policy_map, policy_problems, policy_sources,
 };
 use crate::core::sync::router_accounts;
+use crate::core::team::grant_name;
 use crate::core::tool::{t, tools, Tool};
 use crate::py::fs::{self, load_quiet, save_json};
 use crate::py::io;
@@ -707,16 +708,23 @@ pub fn cmd_nodes_rename(args: &[String]) -> R<()> {
 }
 
 /// cca [codex] policy request 账号（key 是 bash 经 resolve 找好的）：写一行维护者直接运行的命令（在 cca 的仓库里），把这个账号
-/// 现在的节点锁进映射。不能请求时 stdout 是原因、退出码 2
+/// 现在的节点锁进映射。不能请求时 stdout 是原因、退出码 2。Team 给的账号不用请求：走哪个节点由那个 Team 的管理员定（cca team map）
 pub fn cmd_policy_request(args: &[String]) -> R<()> {
     arity("cmd_policy_request", args, 1, 1)?;
     let (c, table, _) = ctx()?;
     let key = args[0].as_str();
     let e = parse_key(key).1;
     let pinned = if e.is_empty() { None } else { policy_map(t(), Some(&c)).get(&e.to_lowercase()).filter(|p| p.truthy()) };
+    let team = if e.is_empty() { None } else { policy_sources(t()).str(&e.to_lowercase()).filter(|tid| !tid.is_empty()) };
     let v = table.at(key);
     let why = if is_api(&v) || e.is_empty() {
         Some(format!("{} 是第三方 API 账号：映射只管官方账号", label_of(key)))
+    } else if let Some(tid) = team {
+        let name = grant_name(&tid).unwrap_or_else(|| "Team".to_string());
+        Some(format!(
+            "{} 是「{name}」给的：走哪个节点由这个 Team 的管理员定（管理员在自己的设备上运行 cca team map），不用锁定请求",
+            label_of(key)
+        ))
     } else if !c.truthy("policy") {
         Some("这台机器没打开维护者的共享：先运行 cca policy on".to_string())
     } else {

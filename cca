@@ -6657,6 +6657,10 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
+      cca team node Team [ls [--json]]            这个 Team 的节点定义（不显示密钥）、各有哪些账号在用
+      cca team node Team add [链接] | copy 模板 新名字 [--port 端口] | rm 节点
+                                                   加（粘贴代理链接或 Clash 节点配置）/ 照一个节点复制（换名字、端口）/ 去掉节点
+      cca team node Team test [节点…] [--tool 工具] [--json]   起一个临时内核实测这些节点的出口（不写是全部）
       cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成 team-1、team-2……；
                                                    账号写 工具:邮箱 只改这个工具里的，只写邮箱改它在的每个工具里的）
       cca team alias Team --lock | --unlock        锁定（解开）账号的别名：锁定了，各台设备上照 Team 给的用、不能自己改
@@ -6749,6 +6753,7 @@ cmd_team() {
 			out=$(printf '%s\n' "$out" | sed -n 2p)
 			[ -z "$out" ] || team_forward_warn "$out"
 			team_settle ;;
+		node) team_node "$@" ;;
 		*) die "$TEAM_USAGE" ;;
 	esac
 }
@@ -6782,6 +6787,185 @@ team_alias_lock() {   # cca team alias Team --lock|--unlock：锁定（解开）
 		say "  各台设备上又能自己改别名了（现在用着的不变）"
 	fi
 	team_settle
+}
+
+TEAM_NODE_USAGE="用法: cca team node Team [ls [--json] | add [链接] | copy 模板 新名字 [--port 端口] | rm 节点 | test [节点…] [--tool claude|codex|agy] [--json]]"
+
+team_node() {   # cca team node Team [子命令 …]：管理员管这个 Team 的节点定义（加、复制、去掉、列出，实测出口；见 docs/dev/team.md「Team 的节点」）。
+	              # 给各台设备的配置只带它的账号用得着的节点：加了没人用的节点，哪台设备的配置都不变
+	[ $# -ge 1 ] || die "$TEAM_NODE_USAGE"
+	local team="$1" sub="${2:-ls}" out name stored any="" type server port dialer users install extra note=""
+	shift
+	[ $# -eq 0 ] || shift
+	case "$sub" in
+		ls|list)
+			case "$#:${1:-}" in
+				0:) ;;
+				1:--json) out=$(py team-node-ls "$team" --json) || team_fail "$out" "没列出来"; printf '%s\n' "$out"; return ;;
+				*) die "$TEAM_NODE_USAGE" ;;
+			esac
+			out=$(py team-node-ls "$team") || team_fail "$out" "没列出来"
+			while IFS=$'\t' read -r name type server port dialer users install; do   # 没有的栏是 -
+				[ -n "$name" ] || continue
+				any=1 extra=""
+				[ "$dialer" = - ] || extra="，经 ${dialer} 连出去"
+				[ "$install" != 1 ] || extra="${extra}，各台设备经内置代理安装客户端用它"
+				if [ "$users" = - ]; then say "    ${name}（${type} ${server}:${port}${extra}）"
+				else say "    ${name}（${type} ${server}:${port}${extra}）  ——  ${users//,/、} 在用"; fi
+			done <<< "$out"
+			if [ -n "$any" ]; then
+				say ""
+				info "给账号换节点：cca team map ${team} 工具 邮箱 节点；加一个：cca team node ${team} add；实测出口：cca team node ${team} test 节点…"
+			else
+				info "这个 Team 还没有节点的定义：cca team node ${team} add 粘贴一条代理链接或一段 Clash 节点配置（cca team import 能导入现成的 nodes.json）"
+			fi ;;
+		add)
+			[ $# -le 1 ] || die "$TEAM_NODE_USAGE"
+			team_node_add "$team" "${1:-}" ;;
+		copy|cp)
+			[ $# -eq 2 ] || { [ $# -eq 4 ] && [ "$3" = --port ]; } || die "$TEAM_NODE_USAGE"
+			out=$(py team-node-copy "$team" "$@") || team_fail "$out" "没复制成"
+			{ IFS= read -r name; IFS= read -r stored; } <<< "$out"
+			[ $# -ne 4 ] || note="，端口换成 ${4}"
+			okay "照「${1}」复制了节点「${name}」${note}；$(team_stored "$stored")"
+			say "  先实测出口：cca team node ${team} test ${name}；给账号用它：cca team map ${team} 工具 邮箱 ${name}"
+			team_settle ;;
+		rm|remove)
+			[ $# -eq 1 ] || die "$TEAM_NODE_USAGE"
+			out=$(py team-node-rm "$team" "$1") || team_fail "$out" "没去掉"
+			okay "去掉了节点「${1}」；$(team_stored "$out")"
+			team_settle ;;
+		test) team_node_test "$team" "$@" ;;
+		*) die "$TEAM_NODE_USAGE" ;;
+	esac
+}
+
+team_node_add() {   # team_node_add Team [链接]：解析（写法和 cca node add 一样）→ 拿内核校验 → 加进这个 Team 的节点
+	local team="$1" text proxy out name stored n
+	local -a taken=()
+	node_custom_ok || die "加节点要用内置代理的内核校验，这台机器用不了（内置代理的内核没有 $(uname -m) 这个架构）"
+	if [ -n "${2:-}" ]; then
+		text="$2"
+	else
+		say "  粘贴一条代理链接（${CUSTOM_FORMATS}），或一段 Clash 节点配置。"
+		say "  贴完单独一行写一个点（.）回车结束："
+		text=$(node_read_block) || die "没有输入"
+	fi
+	out=$(py team-node-ls "$team") || team_fail "$out" "没加上"
+	while IFS=$'\t' read -r n _; do [ -n "$n" ] && taken[${#taken[@]}]="$n"; done <<< "$out"   # 这个 Team 里已经有的名字也要避开
+	proxy=$(printf '%s' "$text" | py node-check "${taken[@]}") || return 1
+	info "正在用内核校验这个节点…"
+	node_validate "$proxy" || return 1
+	out=$(printf '%s' "$proxy" | py team-node-add "$team") || team_fail "$out" "没加上"
+	{ IFS= read -r name; IFS= read -r stored; } <<< "$out"
+	okay "加上了节点「${name}」；$(team_stored "$stored")"
+	say "  先实测出口：cca team node ${team} test ${name}；给账号用它：cca team map ${team} 工具 邮箱 ${name}"
+	team_settle
+}
+
+team_trace() {   # team_trace 本机端口 网站：经临时内核的这个入站取网站的 /cdn-cgi/trace（试两次）。取到了打印它，没取到打印 error=原因
+	local out rc i
+	for i in 1 2; do
+		out=$(curl -q --noproxy '' -sS --connect-timeout 10 -m 20 -x "http://127.0.0.1:$1" "https://$2/cdn-cgi/trace" 2>&1); rc=$?
+		if [ $rc -eq 0 ] && printf '%s\n' "$out" | grep -q '^ip='; then printf '%s\n' "$out"; return 0; fi
+		[ "$i" = 2 ] || sleep "${CCA_RETRY_WAIT:-1}"
+	done
+	out=$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n 1 | tr -d '\t' | cut -c1-160)
+	printf 'error=%s\n' "${out:-curl 退出码 ${rc}}"
+}
+
+team_node_test() {   # team_node_test Team [节点…] [--tool 工具] [--json]：起一个临时内核（cca 的 mihomo，只在 127.0.0.1 上、每个节点一个端口；不碰
+	                   # 在跑的内置代理和路由器），经每个节点取账号要用的服务和 www.cloudflare.com（服务器自己的出口）的出口，照 py team-node-verdict
+	                   # 说每个节点通不通、出口对不对。不写节点是这个 Team 的全部节点。临时内核的配置有节点密钥：放在只有自己能读的临时目录里，
+	                   # 用完删掉。退出码同 team-node-verdict：0 都好，1 有节点不通，2 全都不通（多半是这台机器的网络），3 都通了、有要提醒的
+	local team="$1" json="" a
+	local -a args=()
+	shift
+	for a in "$@"; do
+		case "$a" in --json) json=1 ;; *) args[${#args[@]}]="$a" ;; esac
+	done
+	core_fetch || die "内置代理的内核没装上，测不了：${FETCH_ERR}"
+	(
+		tmp="" pid=""
+		trap '[ -z "$pid" ] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }; [ -z "$tmp" ] || rm -rf "$tmp"' EXIT
+		trap 'exit 130' INT TERM HUP
+		tmp=$(mktemp -d "${TMPDIR:-/tmp}/cca-nodetest.XXXXXX") || die "建临时目录失败"
+		chmod 700 "$tmp"
+		plan=$(py team-node-testconfig "$team" "$tmp/test.json" ${args[@]+"${args[@]}"}) || team_fail "$plan" "没测成"
+		mkdir -p "$tmp/core"
+		"$(core_bin)" -d "$tmp/core" -f "$tmp/test.json" >"$tmp/core.log" 2>&1 </dev/null &
+		pid=$!
+		local hosts name port server sport i h n=0 ok="" trace ip loc colo err got lines out rc state text
+		local -a names=() ports=() servers=() sports=() jobs=()
+		{
+			IFS= read -r hosts
+			while IFS=$'\t' read -r name port server sport; do
+				[ -n "$name" ] || continue
+				names[n]="$name" ports[n]="$port" servers[n]="$server" sports[n]="$sport"
+				n=$((n + 1))
+			done
+		} <<< "$plan"
+		for ((i = 0; i < 80; i++)); do   # 最多等 20 秒：入站都开了才测
+			ok=1
+			for port in "${ports[@]}"; do port_open 127.0.0.1 "$port" || { ok=""; break; }; done
+			[ -z "$ok" ] || break
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 0.25
+		done
+		if [ -z "$ok" ]; then
+			err=$(tail -n 1 "$tmp/core.log" 2>/dev/null | cut -c1-200)
+			die "测出口用的临时内核没起来${err:+：${err}}"
+		fi
+		[ -n "$json" ] || info "经 ${n} 个节点测 ${hosts// /、} 看到的出口…"
+		for ((i = 0; i < n; i++)); do   # 每个节点、每个网站一个 curl，一起跑
+			for h in $hosts; do
+				team_trace "${ports[i]}" "$h" > "$tmp/r.$i.$h" &
+				jobs[${#jobs[@]}]=$!
+			done
+		done
+		wait "${jobs[@]}" 2>/dev/null
+		lines="$hosts"
+		for ((i = 0; i < n; i++)); do
+			got=""
+			for h in $hosts; do
+				trace=$(cat "$tmp/r.$i.$h" 2>/dev/null)
+				ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p' | head -n 1)
+				if [ -n "$ip" ]; then
+					got=1
+					loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p' | head -n 1)
+					colo=$(printf '%s\n' "$trace" | sed -n 's/^colo=//p' | head -n 1)
+					lines="${lines}"$'\n'"${names[i]}"$'\t'"${h}"$'\t'"${ip}"$'\t'"${loc:--}"$'\t'"${colo:--}"
+				else
+					err=$(printf '%s\n' "$trace" | sed -n 's/^error=//p' | head -n 1)
+					lines="${lines}"$'\n'"${names[i]}"$'\t'"${h}"$'\t-\t'"${err:-没取到出口}"
+				fi
+			done
+			if [ -z "$got" ]; then   # 哪个网站都没取到：直连它的服务器端口，分清是没开入站，还是入站的参数不对
+				if port_open "${servers[i]}" "${sports[i]}"; then lines="${lines}"$'\n'"${names[i]}"$'\ttcp\topen'
+				else lines="${lines}"$'\n'"${names[i]}"$'\ttcp\tclosed'; fi
+			fi
+		done
+		if [ -n "$json" ]; then
+			printf '%s\n' "$lines" | py team-node-verdict --json
+			exit $?
+		fi
+		out=$(printf '%s\n' "$lines" | py team-node-verdict); rc=$?
+		while IFS=$'\t' read -r state name text; do
+			case "$state" in
+				ok) okay "${name}：${text}" ;;
+				flag) say "  ${name}：${text}" ;;
+				down) warn "${name}：${text}" ;;
+				'!') warn "  ${name}：${text}" ;;
+			esac
+		done <<< "$out"
+		case $rc in
+			0) okay "都通，出口没有问题" ;;
+			1) warn "有节点不通：先别给账号用它（服务器上开好入站、参数对上了再测）" ;;
+			2) warn "全都不通：多半是这台机器现在连不出去，先看看网络" ;;
+			3) warn "都通了，但出口有要注意的（见上面）" ;;
+		esac
+		exit $rc
+	)
 }
 
 team_stored() {   # team_stored 存上了几台的配置：说成一句话
@@ -8085,7 +8269,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca team deploy Team [用户@]主机
                              经 SSH 装到自己的 Linux 服务器上、接上（一台服务器上可以装几个 Team）；没有服务器：cca team hosted Team
   cca team invite Team 名字 [--accounts all|工具:邮箱,…]
-                             给一台设备发邀请。管设备和账号：devices、grant、revoke、map、import（全部用法：cca team help）
+                             给一台设备发邀请。管设备、账号和节点：devices、grant、revoke、map、node、import（全部用法：cca team help）
 
 维护者共享的账号（维护者的账号 → 节点映射；默认关着，有维护者共享给你的账号时才打开）
   cca policy on              打开共享：映射放在维护者的私有 GitHub 仓库里，给这台机器生成只读的 deploy key，把公钥交给
@@ -8098,7 +8282,8 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca policy [pull]          看共享的状态 / 马上拉一次映射（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
                              指定的节点，账号表里改成别的会被改回；映射里有、这台机器上还没有的账号自动加进来
                              （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
-  cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex、Antigravity 账号：cca codex|agy policy request）
+  cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex、Antigravity 账号：cca codex|agy policy request）。
+                             Team 给的账号不用：走哪个节点由那个 Team 的管理员定
   cca devices [账号…] [--json]
                              账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
                              （Team 给的账号问那个 Team 的服务器，维护者共享的问维护者的；Codex 账号：cca codex devices）。

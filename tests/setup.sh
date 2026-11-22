@@ -287,15 +287,18 @@ exec env CCA_ROOT="$CCA_T/router" CCA_WAIT=2 HOME="$CCA_T/router/root" PATH="$CC
 S
 cat > "$T/bin/nc" <<'S'
 #!/bin/bash
-# 127.0.0.1：假内置代理内核（core/up 时）、辅助安装的临时内核（core_install/up 时）的监听端口；
+# 127.0.0.1：假内置代理内核（core/up 时）、辅助安装的临时内核（core_install/up 时）、实测 Team 节点的临时内核（core_test/up 时）的监听端口；
+# 节点的服务器（cca team node test 直连它的端口）：$CCA_T/tcp_open 里有「主机 端口」这一行的连得上；
 # 路由器：出门在外（$CCA_T/away）时连不上，平时 SSH 端口 22 连得上。$CCA_T/vpn 时模拟在外面经 ZeroTier、VPN 也连得到家里的路由器：
 # 不绑定网卡的照样连得上，绑定物理网卡（-b，cca 认出去路由器的路由走虚拟网卡时）的连不上。探路由器的命令行记在 nc.log
 port="${@: -1}"; host="${@: -2:1}"; bound=""
 for a in "$@"; do [ "$a" = -b ] && bound=1; done
 case "$host" in
 	127.0.0.1) { [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; } ||
-		{ [ -f "$CCA_T/core_install/up" ] && grep -qx "$port" "$CCA_T/core_install/listening"; } ;;
+		{ [ -f "$CCA_T/core_install/up" ] && grep -qx "$port" "$CCA_T/core_install/listening"; } ||
+		{ [ -f "$CCA_T/core_test/up" ] && grep -qx "$port" "$CCA_T/core_test/listening"; } ;;
 	*) echo "NC $*" >> "$CCA_T/nc.log"
+		grep -qxF "$host $port" "$CCA_T/tcp_open" 2>/dev/null && exit 0
 		if [ -f "$CCA_T/away" ]; then [ -f "$CCA_T/vpn" ] && [ -z "$bound" ] || exit 1; fi
 		[ "$port" = 22 ] && exit 0; grep -qx "$port" "$CCA_T/router/listening" ;;
 esac
@@ -431,6 +434,19 @@ PY
 esac
 if [ -n "$proxy" ]; then
 	port="${proxy##*:}"; phost="${proxy#*://}"; phost="${phost%:*}"
+	if [ "$phost" = 127.0.0.1 ] && [ -f "$CCA_T/core_test/up" ] && grep -qx "$port" "$CCA_T/core_test/listening"; then
+		# 实测 Team 节点的临时内核（cca team node test）：入站直通节点（core_test/listeners/<端口> 记着入站名和节点）。$CCA_T/trace_down/<节点>
+		# 在时连不上；$CCA_T/trace/<节点>/<网站> 里写着什么就回什么；默认：账号要用的服务看到 203.0.113.<100+入站的序号>，
+		# www.cloudflare.com 看到服务器自己的 198.51.100.250
+		IFS=$'\t' read -r lname node < "$CCA_T/core_test/listeners/$port"
+		echo "CURL via test:$node $url" >> "$CCA_T/curl.log"
+		[ -f "$CCA_T/trace_down/$node" ] && { echo "curl: (56) CONNECT tunnel failed, response 502" >&2; exit 56; }
+		h="${url#https://}"; h="${h%%/*}"
+		if [ -f "$CCA_T/trace/$node/$h" ]; then cat "$CCA_T/trace/$node/$h"
+		elif [ "$h" = www.cloudflare.com ]; then printf 'fl=1\nip=198.51.100.250\nloc=US\ncolo=SJC\n'
+		else printf 'fl=1\nip=203.0.113.%s\nloc=US\ncolo=SJC\n' "$((100 + ${lname#cca-test-}))"; fi
+		exit 0
+	fi
 	if [ "$phost" = 127.0.0.1 ]; then   # 本机的端口（内置代理）：出口 IP 换成 198.51.100.x，选中 REJECT 时连接被拒
 		if [ -f "$CCA_T/core/up" ] && grep -qx "$port" "$CCA_T/core/listening"; then LD="$CCA_T/core"
 		else exit 7; fi
@@ -1571,6 +1587,7 @@ while [ $# -gt 0 ]; do case "$1" in -d) d="$2"; shift ;; -f) f="$2"; shift ;; -t
 CD="$CCA_T/core"
 grep -q '"cca-install"' "$f" 2>/dev/null && CD="$CCA_T/core_install"   # 辅助安装的临时内核（入站叫 cca-install）：状态另放
 grep -q '"tun"' "$f" 2>/dev/null && CD="$CCA_T/core_udp"   # 本机 UDP 走节点的 TUN 内核（cca local udp，root 的系统服务）：状态另放
+grep -q '"cca-test-1"' "$f" 2>/dev/null && CD="$CCA_T/core_test"   # 实测 Team 节点的临时内核（入站叫 cca-test-N）：状态另放
 mkdir -p "$CD/groups" "$CD/sel"
 if [ -n "$test" ]; then   # -t 只校验配置、不起内核（cca node add 用它校验自定义节点；core/reject_text 命中就不过）
 	if FAKE_CORE_DIR="$CD" "$CCA_T/core_load" "$f" >/dev/null 2>&1; then echo "configuration file $f test is successful"; exit 0; fi
@@ -1613,6 +1630,12 @@ for l in c.get('listeners') or []:
     if l.get('proxy') not in known or l.get('listen') != '127.0.0.1':
         sys.exit('listener %s: bad' % l.get('name'))
 open(os.path.join(cd, 'listening'), 'w').write(''.join('%d\n' % l['port'] for l in c.get('listeners') or []))
+if os.path.basename(cd) == 'core_test':   # 实测 Team 节点的临时内核：listeners/<端口> 是「入站名\t节点」（假 curl 照它回出口）
+    os.makedirs(os.path.join(cd, 'listeners'), exist_ok=True)
+    for f in glob.glob(os.path.join(cd, 'listeners', '*')):
+        os.remove(f)
+    for l in c.get('listeners') or []:
+        open(os.path.join(cd, 'listeners', str(l['port'])), 'w').write('%s\t%s\n' % (l['name'], l['proxy']))
 for f in glob.glob(os.path.join(cd, 'groups', '*')) + glob.glob(os.path.join(cd, 'sel', '*')):
     os.remove(f)
 for g in gs:

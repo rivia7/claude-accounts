@@ -606,6 +606,98 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(m.run('rename', '小王(bob@example.com)', 'mybob').returncode, 0)
         self.assertIn('mybob(bob@example.com)', table(m))
 
+    def test_nodes(self):
+        """Team 的节点（cca team node）：列出来不带密钥；加、复制（整份复制，密钥不出这台设备）、去掉；还有账号、别的节点、安装客户端
+        用着的去不掉；没人用的节点不改各台设备的配置，有账号走它了才发出去；实测用的临时内核配置；照实测的结果判断"""
+        admin, tid, root, srv, url, pin = self.new_team()
+        self.load(admin, tid)
+        bob = self.device('bob')
+        self.lines(bob, 'team-join', stdin=self.invite(admin, tid, 'bob', '--accounts', 'claude:alice@example.com')[0])
+        seq = self.doc(bob, tid)[0]
+        j = json.loads(admin.ok('team-node-ls', tid, '--json'))
+        self.assertEqual((j['kind'], j['team'], j['name'], j['group'], j['install_node']), ('team_nodes', tid, '测试组', 'OpenAi', 'US-D'))
+        self.assertEqual(j['accounts'], {'claude': {'alice@example.com': 'US-A', 'bob@example.com': 'US-B'}, 'codex': {'carol@example.com': 'US-A'},
+                                         'agy': {}})
+        by = {n['name']: n for n in j['nodes']}
+        self.assertEqual(list(by), ['US-A', 'US-B', 'US-C', 'US-D', 'US-E'])
+        self.assertEqual((by['US-A']['accounts'], by['US-B']['dialer'], by['US-D']['install'], by['US-E']['accounts']),
+                         (['claude:alice@example.com', 'codex:carol@example.com'], 'US-C', True, []))
+        self.assertIn('US-E\tsocks5\t192.0.2.10\t1149\t-\t-\t0', self.lines(admin, 'team-node-ls', tid), '没有的栏写 -')
+        self.assertEqual(self.code(bob, 'team-node-ls', tid), 'not_admin')
+        # 加：带密码的节点；列出来没有密码
+        hk = {'name': 'HK-A', 'type': 'socks5', 'server': '192.0.2.20', 'port': 1090, 'username': 'u', 'password': 's3cret-pass'}
+        self.assertEqual(self.lines(admin, 'team-node-add', tid, stdin=json.dumps(hk)), ['HK-A', '0'], '还没有账号走它：哪台设备的配置都不变')
+        self.assertEqual(self.code(admin, 'team-node-add', tid, stdin=json.dumps(hk)), 'name')
+        self.assertEqual(self.code(admin, 'team-node-add', tid, stdin='[1]'), 'node')
+        self.assertEqual(self.code(admin, 'team-node-add', tid, stdin=json.dumps(dict(hk, name='CCA-1'))), 'node', '照成员设备查配置的那一套查')
+        for argv in (('team-node-ls', tid), ('team-node-ls', tid, '--json')):
+            self.assertNotIn('s3cret-pass', admin.ok(*argv))
+        # 复制：定义一样（连密码），名字、端口换掉；模板不跟着变
+        self.assertEqual(self.lines(admin, 'team-node-copy', tid, 'HK-A', 'HK-B', '--port', '1091'), ['HK-B', '0'])
+        self.assertEqual(self.code(admin, 'team-node-copy', tid, 'HK-X', 'HK-C'), 'no_node')
+        self.assertEqual(self.code(admin, 'team-node-copy', tid, 'HK-A', 'US-A'), 'name')
+        self.assertEqual(self.code(admin, 'team-node-copy', tid, 'HK-A', 'HK-C', '--port', '0'), 'usage')
+        px = {p['name']: p for p in json.loads((self.tdir(admin, tid) / 'admin.json').read_text())['config']['nodes']['proxies']}
+        self.assertEqual((px['HK-B'], px['HK-A']['port']), (dict(hk, name='HK-B', port=1091), 1090))
+        bob.ok('team-sync')
+        self.assertEqual(self.doc(bob, tid)[0], seq, '加了没人用的节点：bob 的配置没变')
+        # 有账号走它了才发出去（bob 有 alice）；这时去不掉
+        self.assertEqual(self.lines(admin, 'team-map', tid, 'claude', 'alice@example.com', 'HK-B'), ['2'])
+        bob.ok('team-sync')
+        self.assertEqual([p['name'] for p in self.doc(bob, tid)[1]['nodes']['proxies']], ['US-D', 'HK-B'], '还有安装客户端用的')
+        self.assertEqual(self.code(admin, 'team-node-rm', tid, 'HK-B'), 'node_used')
+        r = admin.run('team-node-rm', tid, 'HK-B')
+        self.assertIn('claude:alice@example.com', r.stdout)
+        self.assertEqual([self.code(admin, 'team-node-rm', tid, n) for n in ('US-C', 'US-D', 'NOPE')], ['node_used', 'node_used', 'no_node'],
+                         '别的节点经它连出去、安装客户端用它、没有这个节点')
+        self.lines(admin, 'team-map', tid, 'claude', 'alice@example.com', 'US-A')
+        self.assertEqual(self.lines(admin, 'team-node-rm', tid, 'HK-B'), ['0'])
+        self.assertEqual(self.lines(admin, 'team-node-rm', tid, 'HK-A'), ['0'])
+        self.assertNotIn('HK-A', [n['name'] for n in json.loads(admin.ok('team-node-ls', tid, '--json'))['nodes']])
+        # 实测用的临时内核的配置：每个节点一个入站、带上 dialer-proxy 连着的；要测的网站看走这些节点的账号是哪些工具的
+        f = self.d / 'test.json'
+        plan = self.lines(admin, 'team-node-testconfig', tid, str(f), 'US-A', 'US-B')
+        self.assertEqual(plan[0], 'claude.ai chatgpt.com www.cloudflare.com')
+        rows = [x.split('\t') for x in plan[1:]]
+        self.assertEqual([(r[0], r[2], r[3]) for r in rows], [('US-A', '192.0.2.10', '1145'), ('US-B', '192.0.2.10', '1146')])
+        self.assertEqual(oct(stat.S_IMODE(os.stat(f).st_mode)), '0o600')
+        cfg = json.loads(f.read_text())
+        self.assertEqual([(x['name'], x['listen'], str(x['port']), x['proxy']) for x in cfg['listeners']],
+                         [('cca-test-1', '127.0.0.1', rows[0][1], 'US-A'), ('cca-test-2', '127.0.0.1', rows[1][1], 'US-B')])
+        self.assertEqual(([p['name'] for p in cfg['proxies']], cfg['rules']), (['US-A', 'US-B', 'US-C'], ['MATCH,REJECT']))
+        self.assertFalse({'external-controller', 'external-controller-unix', 'mixed-port', 'tun', 'dns'} & set(cfg))
+        self.assertNotEqual(admin.run('team-node-testconfig', tid, str(f), 'US-A').returncode, 0, '文件已经有了：不覆盖')
+        f.unlink()
+        self.assertEqual(self.lines(admin, 'team-node-testconfig', tid, str(f), 'US-E', '--tool', 'agy')[0], 'www.cloudflare.com')
+        f.unlink()
+        self.assertEqual(self.lines(admin, 'team-node-testconfig', tid, str(f), 'US-E')[0], 'claude.ai www.cloudflare.com', '没有账号走它：按 Claude')
+        f.unlink()
+        self.assertEqual(len(self.lines(admin, 'team-node-testconfig', tid, str(f))), 6, '没写节点：全部')
+        self.assertEqual(self.code(admin, 'team-node-testconfig', tid, str(self.d / 'x.json'), 'NOPE'), 'no_node')
+        # 照实测的结果判断：B 和 A 撞了 IP（3）；C 不通、端口连不上（1）；都不通（2）
+        txt = ('claude.ai www.cloudflare.com\nA\tclaude.ai\t203.0.113.1\tUS\tSJC\nA\twww.cloudflare.com\t198.51.100.1\tUS\tSJC\n'
+               'B\tclaude.ai\t203.0.113.1\tUS\tSJC\nB\twww.cloudflare.com\t198.51.100.1\tUS\tSJC\n')
+        r = admin.run('team-node-verdict', stdin=txt)
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual([x.split('\t')[:2] for x in r.stdout.splitlines()], [['flag', 'A'], ['!', 'A'], ['flag', 'B'], ['!', 'B']])
+        r = admin.run('team-node-verdict', stdin=txt + 'C\tclaude.ai\t-\tcurl: (7) refused\nC\ttcp\tclosed\n')
+        self.assertEqual(r.returncode, 1)
+        j = json.loads(admin.run('team-node-verdict', '--json', stdin=txt + 'C\tclaude.ai\t-\tcurl: (7) refused\nC\ttcp\tclosed\n').stdout)
+        self.assertEqual((j['kind'], j['hosts'], [(n['name'], n['state'], n['tcp']) for n in j['nodes']]),
+                         ('team_node_test', ['claude.ai', 'www.cloudflare.com'], [('A', 'flag', None), ('B', 'flag', None), ('C', 'down', 'closed')]))
+        self.assertEqual((j['nodes'][0]['exits']['claude.ai'], j['nodes'][2]['exits']['claude.ai']),
+                         ({'ip': '203.0.113.1', 'loc': 'US', 'colo': 'SJC'}, {'error': 'curl: (7) refused'}))
+        self.assertEqual(admin.run('team-node-verdict', stdin='claude.ai www.cloudflare.com\nA\tclaude.ai\t-\t超时\n').returncode, 2)
+        # 还没接上服务器的 Team：只改本机；没有节点了是 null
+        lone = self.device('lone')
+        lid = self.lines(lone, 'team-new', '一个人', '--device', 'mini')[0]
+        j = json.loads(lone.ok('team-node-ls', lid, '--json'))
+        self.assertEqual((j['group'], j['nodes'], j['accounts']), (None, [], {}))
+        self.assertEqual(self.lines(lone, 'team-node-add', lid, stdin=json.dumps(hk)), ['HK-A', '0'])
+        self.assertEqual(json.loads(lone.ok('team-node-ls', lid, '--json'))['group'], 'OpenAi')
+        self.assertEqual(self.lines(lone, 'team-node-rm', lid, 'HK-A'), ['0'])
+        self.assertIsNone(json.loads((self.tdir(lone, lid) / 'admin.json').read_text())['config']['nodes'])
+
     def test_spec_admin(self):
         """管理员由照文档独立实现的那一份扮演：它封的、签的辅助程序解得开、验得过；伪造的、调包的、旧的不要"""
         root = keygen(self.d / 'root')

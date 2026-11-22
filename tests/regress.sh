@@ -3731,6 +3731,28 @@ out=$(run cca team alias 书房组 --lock 2>&1); rc=$?
 ok "cca team alias --lock：锁定账号的别名，发布（那一头取到新的一版）；cca team devices 说锁定着，--json 的 alias_lock 是 true" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已锁定「书房组」里账号的别名；2 台设备的配置发布了新的一版" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  7" ] && run cca team devices 书房组 2>&1 | grep -q "账号的别名锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is True"'
 out=$(run cca team alias 书房组 --unlock 2>&1); rc=$?
 ok "cca team alias --unlock：解开（再发布一次）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已解开「书房组」里账号的别名" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ] && ! run cca team devices 书房组 2>&1 | grep -q "锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is False"'
+# cca team node：这个 Team 的节点定义（列出来不带密钥）、加（粘贴链接，本机内核校验）、复制、实测出口（临时内核，不碰内置代理）、去掉；
+# 没人用的节点不改各台设备的配置（那一头的序号不动）
+out=$(run cca team node 书房组 2>&1); rc=$?
+ok "cca team node：列出这个 Team 的节点（类型、服务器、端口、谁在用）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "US-A（socks5 192.0.2.10:1080）  ——  codex:carol@example.com 在用" && printf "%s" "$out" | grep -qF "US-B（socks5 192.0.2.10:1081）  ——  claude:alice@example.com、claude:bob@example.com 在用"'
+out=$(run cca team node 书房组 add 'socks5://u:s3cret-pw@192.0.2.20:1090#HK-A' 2>&1); rc=$?
+ok "cca team node add：粘贴链接加一个节点（本机内核校验过）；还没有账号走它，各台设备的配置不变；列出来不带密码" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加上了节点「HK-A」；各台设备的配置没有变" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ] && ! run cca team node 书房组 ls --json | grep -q s3cret-pw && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"US-A\", \"US-B\", \"HK-A\"] and d[\"nodes\"][2][\"accounts\"] == []"'
+out=$(run cca team node 书房组 copy HK-A HK-B --port 1091 2>&1); rc=$?
+ok "cca team node copy：照一个节点复制（换名字、端口，别的照抄、不出这台设备）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "照「HK-A」复制了节点「HK-B」，端口换成 1091；各台设备的配置没有变" && run cca team node 书房组 ls --json | jok "[(n[\"name\"], n[\"server\"], n[\"port\"]) for n in d[\"nodes\"][2:]] == [(\"HK-A\", \"192.0.2.20\", 1090), (\"HK-B\", \"192.0.2.20\", 1091)]"'
+out=$(runev cca team node 书房组 rm US-B 2>&1); rc=$?
+ok "cca team node rm：还有账号走它的不去掉（fail 事件 team_node_used，说是谁在用）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_node_used\"" && printf "%s" "$out" | grep -q "claude:alice@example.com"'
+mkdir -p "$T/ntmp" "$T/trace/HK-B"; printf 'fl=1\nip=203.0.113.101\nloc=US\ncolo=SJC\n' > "$T/trace/HK-B/claude.ai"; : > "$T/curl.log"
+out=$(run TMPDIR="$T/ntmp" cca team node 书房组 test HK-A HK-B 2>&1); rc=$?
+ok "cca team node test：起一个临时内核（每个节点一个本机端口），经它们测 claude.ai 和服务器自己的出口；HK-B 在 claude.ai 那边和 HK-A 是同一个 IP：退出码 3、说出来；测完内核停了、临时目录删了" '[ $rc -eq 3 ] && printf "%s" "$out" | grep -q "HK-A：claude.ai 看到 203.0.113.101（US）；服务器自己的出口 198.51.100.250（US）" && printf "%s" "$out" | grep -q "claude.ai 看到的出口 203.0.113.101 和 HK-A 一样" && grep -q "CURL via test:HK-B https://www.cloudflare.com/cdn-cgi/trace" "$T/curl.log" && [ ! -f "$T/core_test/up" ] && [ -z "$(ls -A "$T/ntmp")" ]'
+rm -rf "$T/trace"; mkdir -p "$T/trace_down"; touch "$T/trace_down/HK-B"; : > "$T/nc.log"
+out=$(run TMPDIR="$T/ntmp" cca team node 书房组 test HK-A HK-B 2>&1); rc=$?
+ok "HK-B 不通、直连它的服务器端口也连不上：退出码 1，说服务器上还没开这个入站" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "HK-B：不通：直连它的服务器端口也连不上" && printf "%s" "$out" | grep -q "有节点不通" && grep -q "^NC .*192.0.2.20 1091$" "$T/nc.log"'
+echo "192.0.2.20 1091" > "$T/tcp_open"
+out=$(run TMPDIR="$T/ntmp" cca team node 书房组 test HK-B --json 2>/dev/null); rc=$?
+ok "cca team node test --json：端口连得上、经它出不去；全都不通是 2" '[ $rc -eq 2 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"team_node_test\" and d[\"hosts\"] == [\"claude.ai\", \"www.cloudflare.com\"] and [(n[\"name\"], n[\"state\"], n[\"tcp\"]) for n in d[\"nodes\"]] == [(\"HK-B\", \"down\", \"open\")]"'
+rm -rf "$T/trace_down" "$T/tcp_open" "$T/ntmp"
+out=$(run cca team node 书房组 rm HK-B 2>&1); rc=$?; out2=$(run cca team node 书房组 rm HK-A 2>&1); rc2=$?
+ok "cca team node rm：没人用的节点去掉了，各台设备的配置不变" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "去掉了节点「HK-B」；各台设备的配置没有变" && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"US-A\", \"US-B\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ]'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
@@ -3758,6 +3780,10 @@ out=$(run cca team 2>&1)
 ok "加入以后账号表照 Team 的配置改：alice 的节点由它定（说一声）" '[ "$(tm_alice)" = "$TMNODE" ] && [ "$TMNODE" != "$TMWAS" ] && printf "%s" "$TMJOIN" | grep -q "的出口按「维护者的组」的配置固定为 ${TMNODE}（账号表里写的是 ${TMWAS}，已改回）"'
 out=$(run cca team 2>&1)
 ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，这台设备能用 1 个账号"'
+out=$(run cca policy request alice@example.com 2>&1); rc=$?
+ok "cca policy request：Team 给的账号不用锁定请求，说走哪个节点由那个 Team 的管理员定" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "是「维护者的组」给的：走哪个节点由这个 Team 的管理员定" && ! printf "%s" "$out" | grep -q "policy.sh lock"'
+out=$(runev cca team node 维护者的组 2>&1); rc=$?
+ok "cca team node：这台设备不是这个 Team 的管理员（fail 事件 team_not_admin）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
 # App 的契约测试要的真实输出（这一节最后交给 macos/test.sh 解码）：hello、带着 Team 的 state、team ls、管理员的 team devices
 mkdir -p "$T/guifx4"; gj hello > "$T/guifx4/hello.json"; run cca team ls --json > "$T/guifx4/team_list.json" 2>/dev/null
 run cca team devices 书房组 --json > "$T/guifx4/team_devices.json" 2>/dev/null
@@ -3915,6 +3941,7 @@ cp "$H/.cca/config.json" "$T/config.core"; cp "$H/.cca/accounts.json" "$T/accoun
 run cca local off >/dev/null 2>&1
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy', None); c.pop('local', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"   # 连 local 一起清掉（上一句 cca local off 记的 core_off）：模拟全新机器，在家照样拷节点
 rm -rf "$T/policy.core"; mv "$H/.cca/policy" "$T/policy.core"; mkdir -p "$H/.cca/policy"
+rm -f "$CN"/mihomo-v*   # 11b3d 实测 Team 的节点时已经下过内核：这一节从没下过内核的机器开始（同意之后第一次下载、校验）
 edit_table 'j["alice@example.com"] = "US-A"'
 mkdir -p "$GA/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$GA/Contents/Info.plist"

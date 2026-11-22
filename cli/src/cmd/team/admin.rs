@@ -15,6 +15,8 @@
 //! 每台设备那串随机数（邀请里的 k）不存：是 HMAC(主密钥, "cca-team-k-v1\0" 序数) 的前 16 个字节，随时重算。所以备份根密钥和主密钥
 //! 就够了（管理员的本机状态丢了，各台设备的密钥还算得出来）。
 
+pub mod nodes;
+
 use super::doc::{
     doc_digest, doc_problems, envelope_seal, invite_encode, invite_parts, pub_proof, root_line, team_id, team_name_ok, token_hash,
     Invite, SEQ_MAX,

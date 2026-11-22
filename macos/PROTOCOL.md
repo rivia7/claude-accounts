@@ -1072,7 +1072,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
-  `team_alias`、`team_no_account`、
+  `team_alias`、`team_no_account`、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
+  别的节点、安装客户端用着它）、
   `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）那一步的
   `team_ssh`、`team_ssh_hostkey`、`team_ssh_denied`、`team_root`、`team_deps`、`team_image`、`team_port`、`team_taken`、`team_host`、`team_start`、
   `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
