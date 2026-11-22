@@ -395,7 +395,7 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
 `tools[].settings_problems[]`：共享设置里会盖掉账号代理 / 接口 / 凭证的项，形如 `"settings.json:ANTHROPIC_BASE_URL"`（只用来显示）。
 `tools[].chrome`：装了 Google Chrome（网页版要它才能经账号的出口打开）。
 `notices[]`：只读对账时“本来会做”的改动，下一次真正运行 cca 时会写进去：
-`{"code": "policy_added", "tool", "key", "node"}`、`{"code": "policy_alias", "tool", "key"（新键）, "old_key"}`、
+`{"code": "policy_added", "tool", "key", "node"}`、`{"code": "policy_alias", "tool", "key"（新键）, "old_key"}`（补上别名，或者照 Team 改了的别名跟着改）、
 `{"code": "policy_pinned", "tool", "key", "node", "old_node"}`、`{"code": "nodes_filled", "node"}`。
 
 `cost_total`（顶层，折合金额页的页头）：所有账号的折合金额加起来。config.json 里写了 `"cost": false`、没有 Claude / Codex 的官方账号时为 null
@@ -942,7 +942,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `team new`、`team join`、`team deploy <Team>` | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` |
-| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -1049,9 +1049,14 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   别的设备已经叫它时是 `team_name`）：`team devices --json` 里它的 `label` 换成新名字；加入了的设备在服务器上的名字（`name`）也跟着改
   （被别的设备用了时服务器在后面加 `-2`），那台设备下次取配置时它的 `config.teams[].device` 跟着变。还没加入、已经不在的只改 `label`。
   没有交互，不发布配置（配置里没有设备的名字）。
+- **改别名**（`cca team alias <Team> <邮箱> <新别名>`，3.5.3-beta.5 起；别名按邮箱、各工具通用，`team devices --json` 的 `aliases`）：改完发布，
+  跑完为止（和 `map` 一样）。别名不合规、这个 Team 里别的账号已经叫它是 `team_alias`，Team 里没有这个账号是 `team_no_account`。没起过别名的
+  账号管理员这边默认编成 `team-1`、`team-2`……；各台设备上照 Team 给的用着的跟着改（`notices` 的 `policy_alias`），自己改过的、管理员自己
+  这台的账号表不动。
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
+  `team_alias`、`team_no_account`、
   `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）那一步的
   `team_ssh`、`team_ssh_hostkey`、`team_ssh_denied`、`team_root`、`team_deps`、`team_image`、`team_port`、`team_taken`、`team_host`、`team_start`、
   `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、

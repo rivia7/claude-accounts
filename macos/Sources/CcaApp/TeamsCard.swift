@@ -322,27 +322,49 @@ private struct TeamInviteForm: View {
     }
 }
 
-/// Team 的配置里的一个账号：走哪个节点（管理员定的）
+/// Team 的配置里的一个账号：别名、走哪个节点（管理员定的）。「改别名…」在这一行下面打开输入框（`AppModel.teamAlias`）
 private struct TeamAccountLine: View {
     @Environment(AppModel.self) private var model
     let team: TeamEntry
     let account: TeamAccount
     let nodes: [String]
 
+    private var editing: Bool { model.teamAlias.map { $0.team == team.id && $0.spec == account.spec } ?? false }
+
     var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(nonEmpty(account.alias).map { "\($0)（\(account.email)）" } ?? account.email).lineLimit(1).truncationMode(.middle)
-                Text(Texts.product(account.tool)).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(nonEmpty(account.alias).map { "\($0)（\(account.email)）" } ?? account.email).lineLimit(1).truncationMode(.middle)
+                    Text(Texts.product(account.tool)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                RowAction("改别名…", systemImage: "pencil") { model.startTeamAlias(team, account) }
+                    .disabled(editing || model.teamBusy || model.flow != nil)
+                    .help("这个账号在各台设备上叫什么（没起过的默认是 team-1、team-2……）")
+                Picker("节点", selection: Binding(get: { account.node }, set: { model.mapTeamAccount(team, account, node: $0) })) {
+                    ForEach(nodes, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .disabled(model.teamBusy || model.flow != nil)
+                .help("这个账号在各台设备上走哪个节点")
             }
-            Spacer(minLength: 8)
-            Picker("节点", selection: Binding(get: { account.node }, set: { model.mapTeamAccount(team, account, node: $0) })) {
-                ForEach(nodes, id: \.self) { Text($0).tag($0) }
+            if editing {
+                HStack(spacing: 10) {
+                    TextField("新别名", text: Binding(get: { model.teamAlias?.alias ?? "" }, set: { model.teamAlias?.alias = $0 }))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 220)
+                        .onSubmit { model.setTeamAlias(team, account) }
+                    SectionAction("改好", systemImage: "checkmark", prominent: true) { model.setTeamAlias(team, account) }
+                        .disabled((model.teamAlias?.alias ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
+                    SectionAction("取消", systemImage: "xmark") { model.teamAlias = nil }
+                }
+                .disabled(model.teamBusy || model.flow != nil)
+                Text("各台设备上照 Team 给的名字用着的，下次取配置时跟着改；自己改过名字的不动，这台 Mac 的账号表也不动。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .labelsHidden()
-            .fixedSize()
-            .disabled(model.teamBusy || model.flow != nil)
-            .help("这个账号在各台设备上走哪个节点")
         }
     }
 }

@@ -6655,6 +6655,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
+      cca team alias Team 账号 新别名               改一个账号在这个 Team 里的别名（没起过的默认是 team-1、team-2……）
       cca team publish Team                        和服务器对一遍、发布配置"
 
 restore_teams() {   # restore_teams plan | apply：卸载时的 Team。plan 说会怎样（成员：退出；管理员：根密钥跟着删掉），apply 各个都退出
@@ -6719,6 +6720,14 @@ cmd_team() {
 		map)
 			out=$(py team-map "$@") || team_fail "$out" "没改成"
 			okay "改好了；$(team_stored "$out")"
+			team_settle ;;
+		alias)
+			[ $# -eq 3 ] || die "用法: cca team alias Team 账号 新别名"
+			out=$(py team-alias "$@") || team_fail "$out" "没改成"
+			{ local al_old al_stored al_was=""; IFS= read -r al_old; IFS= read -r al_stored; } <<< "$out"
+			[ -z "$al_old" ] || al_was="（原来是「${al_old}」）"
+			okay "改好了：${2} 在这个 Team 里叫「${3}」${al_was}；$(team_stored "$al_stored")"
+			say "  各台设备上照 Team 给的名字用着的，下次取配置时跟着改；自己改过名字的不动"
 			team_settle ;;
 		publish)
 			out=$(py team-publish "$@") || team_fail "$out" "没发布成"

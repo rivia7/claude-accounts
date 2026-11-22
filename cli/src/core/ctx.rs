@@ -29,7 +29,8 @@ fn int_value(v: &V) -> Option<i64> {
 /// 只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。
 /// 映射（各个 Team 给这台设备的配置、维护者的映射：policy_raw）里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，
 /// 说一声）；映射里有、这台机器上还没有的加进来（policy_merge，这台机器自己的账号不动），还没有别名的按映射补上别名
-/// （policy_alias_fill）；Team 加进来的账号，Team 不再给了就收起来（team_park）：每条命令都经过这里，添加、cca edit、启动、同步前都管得到
+/// （policy_alias_fill），管理员改了 Team 给的别名、这台设备上没自己改过的跟着改（team_alias_follow）；Team 加进来的账号，Team 不再给了
+/// 就收起来（team_park）：每条命令都经过这里，添加、cca edit、启动、同步前都管得到
 pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -> R<Vec<String>> {
     let st = tool.state(c, true);
     let added = policy_merge(c, table, tool);
@@ -63,6 +64,15 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
             dict! { "tool" => tool.name, "key" => new, "old_key" => k },
         );
     }
+    let followed = team_alias_follow(c, table, tool, &st);
+    for (k, new, tid) in &followed {
+        let team = super::team::grant_name(tid).unwrap_or_else(|| "Team".to_string());
+        notice(
+            "policy_alias",
+            &format!("• 按「{team}」的配置把 {} 账号 {} 的别名改成 {}", tool.label, label_of(k), parse_key(new).0),
+            dict! { "tool" => tool.name, "key" => new, "old_key" => k },
+        );
+    }
     let pm = policy_map(tool, Some(c));
     let pinned = |k: &str| pm.get(&parse_key(k).1.to_lowercase());
     let fixed: Vec<Rc<str>> = table
@@ -81,7 +91,7 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
         );
         table.set(k.clone(), want);
     }
-    if (!fixed.is_empty() || !added.is_empty() || !renamed.is_empty() || parked_now) && !*RO {
+    if (!fixed.is_empty() || !added.is_empty() || !renamed.is_empty() || !followed.is_empty() || parked_now) && !*RO {
         save_json(&tool.table, &V::Dict(table.clone()), Some(0o600), true)?;
     }
     let errs = table_problems(c, table, tool, &pm);

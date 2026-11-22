@@ -101,13 +101,15 @@ enum CcaCommand: Sendable, Hashable {
     case teamRename(team: String, device: String, name: String)
     /// 定一个账号走哪个节点（`cca team map <Team> <工具> <邮箱> <节点>`；节点写 `-` 是从这个 Team 里去掉这个账号）
     case teamMap(team: String, tool: ToolID, email: String, node: String)
+    /// 改一个账号在这个 Team 里的别名（`cca team alias <Team> <邮箱> <新别名>`；别名按邮箱，各工具通用）
+    case teamAlias(team: String, email: String, alias: String)
 
     var tool: ToolID? {
         switch self {
         case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
         case .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap: return nil
+             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap, .teamAlias: return nil
         }
     }
 
@@ -118,7 +120,7 @@ enum CcaCommand: Sendable, Hashable {
         case .mailForget(_, let k, _): return k
         case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
              .clientAutoInstall, .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
-             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap: return nil
+             .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap, .teamAlias: return nil
         }
     }
 
@@ -186,6 +188,7 @@ enum CcaCommand: Sendable, Hashable {
         case .teamGrant(let team, let device, let changes): return ["team", "grant", team, device] + changes
         case .teamRename(let team, let device, let name): return ["team", "rename", team, device, name]
         case .teamMap(let team, let tool, let email, let node): return ["team", "map", team, tool.rawValue, email, node]
+        case .teamAlias(let team, let email, let alias): return ["team", "alias", team, email, alias]
         }
     }
 
@@ -209,7 +212,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteSwitch: return 30
         case .remoteEnd: return 40   // 里面的程序不理会时 cca 等宿主强行结束它（5 秒），再等它收场
         case .teamDevices, .teamInvite, .teamRevoke, .teamRename: return 60   // 问 Team 的服务器，发布配置（设备多时分几次存）
-        case .teamSync, .teamLeave, .teamGrant, .teamMap: return 180   // 改完账号表马上照它对一遍，可能同步路由器
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias: return 180   // 改完账号表马上照它对一遍，可能同步路由器
         }
     }
 
@@ -223,7 +226,7 @@ enum CcaCommand: Sendable, Hashable {
         case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
              .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .teamDevices, .teamInvite, .teamRevoke, .teamRename: return false
-        case .teamSync, .teamLeave, .teamGrant, .teamMap: return true   // 改账号表、同步路由器：半路杀掉会留下一半
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias: return true   // 改账号表、同步路由器：半路杀掉会留下一半
         }
     }
 
@@ -246,7 +249,7 @@ enum CcaCommand: Sendable, Hashable {
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
         case .teamDevices: return nil   // AppModel 保证一次一个
         case .teamInvite, .teamRevoke, .teamRename: return "team"   // 改管理员这边记着的设备：一个接一个
-        case .teamSync, .teamLeave, .teamGrant, .teamMap: return "router-sync"   // 账号表跟着变，可能同步路由器：和拉映射、同步路由器排队
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias: return "router-sync"   // 账号表跟着变，可能同步路由器：和拉映射、同步路由器排队
         }
     }
 }

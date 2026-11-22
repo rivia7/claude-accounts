@@ -11,8 +11,8 @@ use crate::py::obj::{Dict, List, V};
 use crate::py::path;
 use crate::py::text;
 use crate::py::uni;
-use crate::re;
-use std::collections::HashSet;
+use crate::{dict, re};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -181,22 +181,79 @@ pub fn alias_ok(a: &V) -> bool {
     a.as_str().is_some_and(|s| !s.is_empty() && !ALIAS_BAD.found(s) && uni::width(s) <= 24)
 }
 
-/// 映射里给账号起的别名（可选的 aliases 一节，{"邮箱": "别名"}，各工具通用）：{邮箱（小写）: 别名}。不合规的不用。各个 Team 的配置里的在前
-/// （先出现的算数），维护者的映射里的在后。
+/// 映射里给一个账号起的别名是谁给的
+#[derive(Clone, Debug, PartialEq)]
+pub struct AliasFrom {
+    pub alias: String,
+    /// 哪个 Team（编号、名字）给的；维护者的映射给的两项都是空的
+    pub tid: String,
+    pub team: String,
+    /// 这台设备是那个 Team 的管理员
+    pub admin: bool,
+}
+
+/// 映射里给账号起的别名（可选的 aliases 一节，{"邮箱": "别名"}，各工具通用）和是谁给的：[(邮箱（小写）, AliasFrom)]。不合规的不用。
+/// 各个 Team 的配置里的在前（照加入的先后，同一个邮箱先出现的算数），维护者的映射里的在后。
 /// 旧版本的 cca 不认识这一节、照样忽略它：加了别名，旧版本也照常拉得到映射
-pub fn policy_names() -> Dict {
-    let out = Dict::new();
-    let teams = super::team::grants();
-    let docs = teams.iter().filter_map(|g| g.doc.dict("aliases")).chain(policy_doc().and_then(|j| j.dict("aliases")));
-    for s in docs {
+pub fn alias_sources() -> Vec<(String, AliasFrom)> {
+    let mut out: Vec<(String, AliasFrom)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut add = |s: Dict, tid: &str, team: &str, admin: bool| {
         for (e, a) in s.items() {
             let e = e.to_lowercase();
-            if alias_ok(&a) && !out.has(&e) {
-                out.set(e, a);
+            if alias_ok(&a) && seen.insert(e.clone()) {
+                out.push((e, AliasFrom { alias: a.py_str(), tid: tid.to_string(), team: team.to_string(), admin }));
             }
         }
+    };
+    for g in super::team::grants().iter() {
+        if let Some(s) = g.doc.dict("aliases") {
+            add(s, &g.id, &g.name, g.admin);
+        }
+    }
+    if let Some(s) = policy_doc().and_then(|j| j.dict("aliases")) {
+        add(s, "", "", false);
     }
     out
+}
+
+/// alias_sources 里的别名：{邮箱（小写）: 别名}
+pub fn policy_names() -> Dict {
+    let out = Dict::new();
+    for (e, f) in alias_sources() {
+        out.set(e, f.alias);
+    }
+    out
+}
+
+/// 两个 Team 给的别名在这台设备上撞了（比如都有 team-1）时后来的那个用的：team-N 换成「Team 的名字-N」（书房组-1），别的是「Team 的名字-别名」。
+/// Team 的名字里别名不能有的字符（空格、引号、括号、反斜杠、@）去掉，太长了从后面截短（别名最多 24 格宽）；去掉以后什么都不剩、拼不出
+/// 合规的别名是 None
+pub fn alias_fallback(alias: &str, team: &str) -> Option<String> {
+    let tail = re!(r"^team-([0-9]+)$").fullmatch(alias).map_or(alias, |m| m.g(1)).to_string();
+    let room = 24usize.checked_sub(uni::width(&tail) + 1)?;
+    let mut base = String::new();
+    for c in team.chars().filter(|c| !ALIAS_BAD.found(c.encode_utf8(&mut [0; 4]))) {
+        if uni::width(&base) + uni::width(c.encode_utf8(&mut [0; 4])) > room {
+            break;
+        }
+        base.push(c);
+    }
+    let cand = format!("{}-{tail}", base.trim_end_matches('-'));
+    (!base.trim_end_matches('-').is_empty() && alias_ok(&V::from(cand.as_str()))).then_some(cand)
+}
+
+/// 映射给这个账号（邮箱 e）的别名在账号表 table 里用得上的那一个：别名本身；被这台设备上别的账号用了、又是 Team 给的，换成 alias_fallback。
+/// used：这一轮里已经许给别的账号的。都用不上是 None
+fn pick_alias(table: &Dict, f: &AliasFrom, e: &str, used: &HashSet<String>) -> Option<String> {
+    let fits = |a: &str| alias_problem(table, a).is_empty() && !used.contains(a) && KEY_RE.matches(&format!("{a}({e})"));
+    if fits(&f.alias) {
+        return Some(f.alias.clone());
+    }
+    if f.tid.is_empty() {
+        return None;
+    }
+    alias_fallback(&f.alias, &f.team).filter(|a| fits(a))
 }
 
 /// 这台机器用着这个工具吗：当前的工具，或者已经有它的账号表。映射里的 Codex 账号要到第一次用 cca codex 时
@@ -296,7 +353,7 @@ fn parked_key(c: &Dict, tool: &Tool, e: &str) -> Option<String> {
 /// 别名用映射里 aliases 写的（和这台机器上别的账号重名时只写邮箱）；关掉共享时收起来的照原来的键加回来。
 /// 这台机器自己的账号（映射里没有的）、这台机器上改过的别名都不动；不加的见 policy_missing 的原因（cca policy 里列出来）
 pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
-    let names = policy_names();
+    let names: HashMap<String, AliasFrom> = alias_sources().into_iter().collect();
     let mut added = Vec::new();
     for (e, n, why) in policy_missing(c, table, tool) {
         if !why.is_empty() {
@@ -311,12 +368,10 @@ pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
                 em
             }
         } else {
-            let a = names.str(&e).unwrap_or_else(|| Rc::from(""));
-            let k = if a.is_empty() { e.clone() } else { format!("{a}({e})") };
-            if !a.is_empty() && (!alias_problem(table, &a).is_empty() || !KEY_RE.matches(&k)) {
-                e.clone()
-            } else {
-                k
+            // 别名和这台设备上别的账号撞了：Team 给的换成「Team 的名字-N」，还撞就只写邮箱
+            match names.get(&e).and_then(|f| pick_alias(table, f, &e, &HashSet::new())) {
+                Some(a) => format!("{a}({e})"),
+                None => e.clone(),
             }
         };
         table.set(k.as_str(), n);
@@ -326,37 +381,102 @@ pub fn policy_merge(c: &Dict, table: &Dict, tool: &Tool) -> Vec<String> {
 }
 
 /// 映射里的账号在这台机器上还没有别名（键只是邮箱）、映射里给它起了别名：补上，返回 [(旧键, 新键)]。比如先按没写
-/// 别名的映射加进来的账号，维护者后来在 aliases 里补了别名。这台机器上起过别名的不改，别名和这台机器上别的账号重名的
-/// 不补。只改键：账号目录、端口和上次使用都按邮箱认，跟着走（reconcile 里随后的端口分配按 acct_id 找回原来的端口）
+/// 别名的映射加进来的账号，维护者后来在 aliases 里补了别名；管理员给 Team 里的账号编的 team-1、team-2……。这台机器上起过别名的不改；
+/// 这台设备是管理员的那个 Team 给的不补（管理员这台设备上的别名不动）；别名和这台机器上别的账号重名的：Team 给的换成「Team 的名字-N」
+/// （alias_fallback），还撞就不补。只改键：账号目录、端口和上次使用都按邮箱认，跟着走（reconcile 里随后的端口分配按 acct_id 找回原来的端口）
 pub fn policy_alias_fill(table: &Dict, tool: &Tool) -> Vec<(String, String)> {
-    let (pm, names) = (policy_raw(tool), policy_names());
+    let (pm, names) = (policy_raw(tool), alias_sources().into_iter().collect::<HashMap<_, _>>());
     let mut ren: Vec<(String, String)> = Vec::new();
     let mut used = HashSet::new();
     for (k, v) in table.items() {
         let (a, e) = parse_key(&k);
-        let al = if e.is_empty() { Rc::from("") } else { names.str(&e.to_lowercase()).unwrap_or_else(|| Rc::from("")) };
-        if is_api(&v) || !a.is_empty() || al.is_empty() || !pm.has(&e.to_lowercase()) || used.contains(&*al) {
+        let el = e.to_lowercase();
+        if is_api(&v) || !a.is_empty() || e.is_empty() || !pm.has(&el) {
             continue;
         }
-        let new = format!("{al}({e})");
-        if !alias_problem(table, &al).is_empty() || !KEY_RE.matches(&new) {
+        let Some(al) = names.get(&el).filter(|f| !f.admin).and_then(|f| pick_alias(table, f, &e, &used)) else { continue };
+        ren.push((k.to_string(), format!("{al}({e})")));
+        used.insert(al);
+    }
+    rekey(table, &ren);
+    ren
+}
+
+/// 账号表里的键照 ren（[(旧键, 新键)]）换掉：原地改（table 就是全局记着的那张表），顺序不变
+fn rekey(table: &Dict, ren: &[(String, String)]) {
+    if ren.is_empty() {
+        return;
+    }
+    let items: Vec<(String, V)> = table
+        .items()
+        .into_iter()
+        .map(|(k, v)| (ren.iter().find(|(old, _)| **old == *k).map_or_else(|| k.to_string(), |(_, new)| new.clone()), v))
+        .collect();
+    table.clear();
+    for (k, v) in items {
+        table.set(k, v);
+    }
+}
+
+/// 管理员改了 Team 里一个账号的别名：这台设备上没自己改过的跟着改，返回 [(旧键, 新键, Team 的编号)]。哪个别名是 Team 给的记在工具状态的
+/// `team_alias`（{账号目录名: {"a": 账号表里现在用着的别名, "t": 那时 Team 给的别名}}）：账号表里的别名就是 Team 给的（或者撞了以后换成的
+/// 「Team 的名字-N」）时记下；以后账号表里的还是记着的那个、Team 给的变了，才换成新的（撞了照样换成「Team 的名字-N」，还撞就先不换、
+/// 下次再看）；账号表里的和记着的不一样了是这台设备上自己改过（cca rename），不再跟着。这台设备是管理员的那个 Team 给的不记、不跟。
+/// 账号不在账号表里、也没收起来（parked）的，记着的那一项去掉
+pub fn team_alias_follow(c: &Dict, table: &Dict, tool: &Tool, st: &Dict) -> Vec<(String, String, String)> {
+    let rec = st.dict("team_alias").unwrap_or_default();
+    let names: HashMap<String, AliasFrom> = alias_sources().into_iter().filter(|(_, f)| !f.tid.is_empty() && !f.admin).collect();
+    if rec.is_empty() && names.is_empty() {
+        return Vec::new(); // 没有 Team 给的别名、也没记着的（没用 Team 的机器都是这样）
+    }
+    let mut ren: Vec<(String, String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for (k, v) in table.items() {
+        let (a, e) = parse_key(&k);
+        if is_api(&v) || a.is_empty() || e.is_empty() {
             continue;
         }
-        ren.push((k.to_string(), new));
-        used.insert(al.to_string());
-    }
-    if !ren.is_empty() {
-        // 原地改（table 就是全局记着的那张表），顺序不变
-        let items: Vec<(String, V)> = table
-            .items()
-            .into_iter()
-            .map(|(k, v)| (ren.iter().find(|(old, _)| **old == *k).map_or_else(|| k.to_string(), |(_, new)| new.clone()), v))
-            .collect();
-        table.clear();
-        for (k, v) in items {
-            table.set(k, v);
+        let aid = acct_id(&k, tool);
+        seen.insert(aid.clone());
+        let r = rec.dict(&aid);
+        let Some(f) = names.get(&e.to_lowercase()) else {
+            if r.as_ref().is_some_and(|r| r.str("a").as_deref() != Some(a.as_str())) {
+                rec.pop(&aid); // 自己改过了
+            }
+            continue;
+        };
+        let given = |x: &str| x == f.alias || alias_fallback(&f.alias, &f.team).as_deref() == Some(x);
+        match r {
+            None if given(&a) => rec.set(&*aid, dict! { "a" => a.as_str(), "t" => f.alias.as_str() }),
+            None => {}
+            Some(r) if r.str("a").as_deref() != Some(a.as_str()) => {
+                rec.pop(&aid);
+            }
+            Some(r) if r.str("t").as_deref() == Some(f.alias.as_str()) => {}
+            Some(r) if given(&a) => r.set("t", f.alias.as_str()), // 账号表里的已经是新给的（或者它撞了以后的那个）
+            Some(_) => {
+                // 新的别名（和「Team 的名字-N」）都被这台设备上别的账号用着：先不换，下次再看
+                let used: HashSet<String> = ren.iter().map(|(_, n, _)| parse_key(n).0).collect();
+                if let Some(w) = pick_alias(table, f, &e, &used) {
+                    ren.push((k.to_string(), format!("{w}({e})"), f.tid.clone()));
+                    rec.set(&*aid, dict! { "a" => w.as_str(), "t" => f.alias.as_str() });
+                }
+            }
         }
     }
+    let parked = parked(c, tool);
+    for aid in rec.keys() {
+        if !seen.contains(&*aid) && !parked.has(&aid) {
+            rec.pop(&aid);
+        }
+    }
+    if rec.is_empty() {
+        st.pop("team_alias");
+    } else {
+        st.set("team_alias", rec);
+    }
+    let pairs: Vec<(String, String)> = ren.iter().map(|(o, n, _)| (o.clone(), n.clone())).collect();
+    rekey(table, &pairs);
     ren
 }
 
@@ -709,6 +829,23 @@ mod tests {
         );
         assert_eq!(node_fp(Some("ss".into()), Some("192.0.2.10".into()), Some("8388".into()), None), "60a7807f1456989d");
         assert_eq!(node_fp(Some("ss".into()), None, Some(1.into()), None), "");
+    }
+
+    #[test]
+    fn alias_fallback_names() {
+        // team-N 换成「Team 的名字-N」；别的别名接在 Team 的名字后面
+        assert_eq!(alias_fallback("team-1", "Lab").as_deref(), Some("Lab-1"));
+        assert_eq!(alias_fallback("team-12", "设计 组").as_deref(), Some("设计组-12"), "空格去掉");
+        assert_eq!(alias_fallback("alice", "书房(组)").as_deref(), Some("书房组-alice"), "括号去掉");
+        assert_eq!(alias_fallback("team-x", "A").as_deref(), Some("A-team-x"), "不是 team-数字 的照原样接");
+        // 太长了截短 Team 的名字（别名最多 24 格宽）；截到末尾是连字符的去掉
+        let long = alias_fallback("team-3", "一二三四五六七八九十一二三").expect("截短了拼得出来");
+        assert_eq!(long, "一二三四五六七八九十一-3");
+        assert!(alias_ok(&V::from(long.as_str())));
+        assert_eq!(alias_fallback("team-1", "ab-------------------------").as_deref(), Some("ab-1"));
+        // Team 的名字去掉不能有的字符以后什么都不剩、别名本身太长：拼不出来
+        assert_eq!(alias_fallback("team-1", "(  )"), None);
+        assert_eq!(alias_fallback("一二三四五六七八九十一二", "Lab"), None);
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! admin.json（600，只有管理员的设备有）：
 //! ```text
 //! {"v": 1, "master": 主密钥（64 个十六进制字符）, "salt": 这个 Team 的盐, "next": 下一台设备的序数, "gen": 服务器上这一份记录的编号,
+//!  "alias_n": 默认的别名编到了 team-几（用过的号不再用）,
 //!  "config": {"accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "install_node": 节点, "nodes": {"group", "proxies"} | null},
 //!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字, "state": local | invited | joined | expired | revoked,
 //!              "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
@@ -25,7 +26,7 @@ use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, 
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
 use crate::core::model::{node_of, parse_key};
-use crate::core::policy::{fill_problems, policy_problems, policy_sources};
+use crate::core::policy::{alias_ok, fill_problems, policy_problems, policy_sources};
 use crate::core::team::{load_team, team_dir, team_path, Role, Team, TEAMS_DIR};
 use crate::core::tool::tools;
 use crate::py::fs::{self, load_quiet, save_json};
@@ -34,7 +35,7 @@ use crate::py::obj::{str_list, Dict, List, V};
 use crate::py::rand::token_hex;
 use crate::py::{json, path, Fail, R};
 use crate::{dict, out};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// 邀请默认多久过期（秒）；服务器收 60 秒～30 天
 const INVITE_TTL: i64 = 7 * 86400;
@@ -116,6 +117,49 @@ fn find_device(a: &Dict, sel: &str) -> Result<String, String> {
 }
 
 // --- 每台设备的那一份配置 ---------------------------------------------------------------------------------------------------
+
+/// 默认的别名 team-N 的 N；别的样子是 None
+fn default_n(alias: &str) -> Option<i64> {
+    alias.strip_prefix("team-").filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).and_then(|n| n.parse().ok())
+}
+
+/// 配置里每个账号都有别名：没有的（不合规的）编成 team-1、team-2……（同一个 Team 里不重复；admin.json 的 alias_n 记着编到第几了，用过的号
+/// 不再用：去掉的账号的号不给新加的），已经不在 Team 里的账号的别名去掉。照工具的先后、各工具里账号加进来的先后编。改了 admin.json 里的
+/// config（没存盘）
+fn default_aliases(a: &Dict) {
+    let config = a.dict("config").unwrap_or_default();
+    let accounts = config.dict("accounts").unwrap_or_default();
+    let emails: Vec<String> = tools()
+        .iter()
+        .flat_map(|x| accounts.dict(x.name).unwrap_or_default().keys().iter().map(|e| e.to_string()).collect::<Vec<_>>())
+        .collect();
+    let old = config.dict("aliases").unwrap_or_default();
+    let aliases = Dict::new();
+    for e in &emails {
+        if let Some(x) = old.get(e).filter(|x| alias_ok(x) && !aliases.has(e)) {
+            aliases.set(e.as_str(), x);
+        }
+    }
+    let mut used: HashSet<String> = aliases.values().iter().map(|x| x.py_str()).collect();
+    let mut n = a.get("alias_n").and_then(|v| v.as_int()).filter(|n| *n >= 0).unwrap_or(0);
+    n = used.iter().filter_map(|x| default_n(x)).fold(n, i64::max);
+    for e in &emails {
+        if aliases.has(e) {
+            continue;
+        }
+        loop {
+            n += 1;
+            let cand = format!("team-{n}");
+            if used.insert(cand.clone()) {
+                aliases.set(e.as_str(), cand);
+                break;
+            }
+        }
+    }
+    config.set("aliases", aliases);
+    a.set("config", config);
+    a.set("alias_n", n);
+}
 
 /// 工具:邮箱（邮箱小写）；不对是 None
 fn account_spec(s: &str) -> Option<(String, String)> {
@@ -276,6 +320,7 @@ fn publish(t: &Team, a: &Dict, only: Option<&str>) -> R<Result<Published, String
         Ok(c) => c,
         Err(why) => return Ok(Err(why)),
     };
+    default_aliases(a); // 以前加进来、还没有别名的账号（3.5.3-beta.5 以前的 Team）也编上
     let devs = a.dict("devices").unwrap_or_default();
     let (master, root_key) = (a.at("master").py_str(), t.path("root_ed25519"));
     let seq_of = |d: &Dict| d.get("seq").and_then(|s| s.as_int()).filter(|s| *s >= 0).unwrap_or(0);
@@ -1293,11 +1338,12 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
 }
 
 /// py team-import Team policy.json [nodes.json]：把现有的映射（账号 → 节点、别名、安装客户端用的节点）和参考节点导进这个 Team 的
-/// 配置（整个换掉原来的），再发布。文件就是维护者映射仓库里的那两份（格式照旧查）。stdout：几个账号、几个节点、存上了几台的配置。
-/// 原因码：no_team、not_admin、file（读不了、格式不对）、publish
+/// 配置（整个换掉原来的；别名映射里没写的照这个 Team 原来给它起的，还没有的编成 team-N），再发布。文件就是维护者映射仓库里的那两份
+/// （格式照旧查）。stdout：几个账号、几个节点、存上了几台的配置。原因码：no_team、not_admin、file（读不了、格式不对）、publish
 ///
 /// py team-import Team --mine：把这台设备上**自己的**官方账号（不是维护者共享的、也不是哪个 Team 给的；第三方 API 账号不算）连同现在
-/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换），再发布——把自己的几台设备并成一个 Team 时用。
+/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；这台设备上起过别名的带进去——Team 里原来是默认的
+/// team-N、也没被别的账号用着时换成它，没起过的编成 team-N），再发布——把自己的几台设备并成一个 Team 时用。
 /// stdout 同上（节点数是 0：节点各台设备自己有）
 pub fn cmd_team_import(args: &[String]) -> R<()> {
     arity("team-import", args, 2, 3)?;
@@ -1322,7 +1368,9 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
                 let (alias, email) = parse_key(&k);
                 let email = email.to_lowercase();
                 m.set(email.as_str(), &*node);
-                if !alias.is_empty() && !aliases.has(&email) {
+                let replaceable = aliases.str(&email).is_none_or(|x| default_n(&x).is_some());
+                let taken = aliases.items().iter().any(|(e, x)| **e != *email && x.as_str() == Some(alias.as_str()));
+                if !alias.is_empty() && alias_ok(&V::from(alias.as_str())) && replaceable && !taken {
                     aliases.set(email.as_str(), alias.as_str());
                 }
                 count += 1;
@@ -1335,6 +1383,7 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
         config.set("accounts", accounts);
         config.set("aliases", aliases);
         a.set("config", config);
+        default_aliases(&a);
         admin_save(&t.id, &a)?;
         let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
         out!("{count}\n0\n{stored}");
@@ -1362,6 +1411,15 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
     for (e, alias) in policy.dict("aliases").unwrap_or_default().items() {
         aliases.set(e.to_lowercase(), alias);
     }
+    // 映射里没写别名的：照这个 Team 原来给它起的（默认的 team-N、cca team alias 改的），免得每导入一次编号就变（各台设备跟着改名）；
+    // 和映射里写的撞了的不要（default_aliases 另编）
+    let before = a.dict("config").and_then(|c| c.dict("aliases")).unwrap_or_default();
+    for (e, alias) in before.items() {
+        let taken = aliases.values().iter().any(|x| x.py_eq(&alias));
+        if !aliases.has(&e) && !taken {
+            aliases.set(&*e, alias);
+        }
+    }
     let mut nodes = V::None;
     let mut node_count = 0;
     if let Some(p) = args.get(2) {
@@ -1378,6 +1436,7 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
         "nodes" => nodes,
     };
     a.set("config", config);
+    default_aliases(&a);
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{count}\n{node_count}\n{stored}");
@@ -1406,9 +1465,45 @@ pub fn cmd_team_map(args: &[String]) -> R<()> {
     let config = a.dict("config").unwrap_or_default();
     config.set("accounts", accounts);
     a.set("config", config);
+    default_aliases(&a); // 新加的账号编成 team-N；去掉的账号（别的工具里也没有了）的别名去掉
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
     out!("{stored}");
+    Ok(())
+}
+
+/// py team-alias Team 账号 新别名：改一个账号在这个 Team 里的别名（别名按邮箱，各工具通用；账号写邮箱，或者 工具:邮箱），再发布。各台设备上
+/// 照 Team 给的用着的下次取配置时跟着改，自己改过的不动（team_alias_follow）；管理员这台设备上的账号表不跟着改。同一个 Team 里别的账号
+/// 已经叫这个的不行。stdout：原来的别名、存上了几台的配置。原因码：no_team、not_admin、alias、no_account、publish
+pub fn cmd_team_alias(args: &[String]) -> R<()> {
+    arity("team-alias", args, 3, 3)?;
+    let alias = args[2].trim().to_string();
+    if !alias_ok(&V::from(alias.as_str())) {
+        return fail("alias", "别名不能是空的，不能有空格、引号、括号、反斜杠或 @，最多 12 个汉字或 24 个字母");
+    }
+    let (t, a, _lk) = admin_of(&args[0])?;
+    let sel = args[1].trim().to_lowercase();
+    let email = match sel.split_once(':') {
+        Some((tool, e)) if tools().iter().any(|x| x.name == tool) => e.trim().to_string(),
+        _ => sel.clone(),
+    };
+    let accounts = a.dict("config").and_then(|c| c.dict("accounts")).unwrap_or_default();
+    if !accounts.values().iter().any(|m| m.as_dict().is_some_and(|m| m.has(&email))) {
+        return fail(
+            "no_account",
+            &format!("「{}」里没有 {email} 这个账号（cca team devices {} --json 看有哪些）", t.name, &t.id[..8]),
+        );
+    }
+    default_aliases(&a);
+    let aliases = a.dict("config").and_then(|c| c.dict("aliases")).unwrap_or_default();
+    if let Some((other, _)) = aliases.items().iter().find(|(e, x)| **e != *email && x.as_str() == Some(alias.as_str())) {
+        return fail("alias", &format!("「{}」里 {other} 已经叫「{alias}」：换一个", t.name));
+    }
+    let old = aliases.str(&email).map(|x| x.to_string()).unwrap_or_default();
+    aliases.set(email.as_str(), alias.as_str());
+    admin_save(&t.id, &a)?;
+    let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
+    out!("{old}\n{stored}");
     Ok(())
 }
 

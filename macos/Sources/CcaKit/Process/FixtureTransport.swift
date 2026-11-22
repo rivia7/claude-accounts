@@ -218,7 +218,7 @@ struct FixtureTransport: Transport {
         case ("team", "invite"):
             // 演示用的假邀请：运行时拼出来（仓库里不放长得像真邀请的字符串）
             return CcaResponse(exitCode: 0, stdout: Data(("cca-team1.demo-" + String(repeating: "0", count: 24) + ".0000").utf8), stderr: Data(), events: [])
-        case ("team", "sync"), ("team", "leave"), ("team", "revoke"), ("team", "grant"), ("team", "rename"), ("team", "map"):
+        case ("team", "sync"), ("team", "leave"), ("team", "revoke"), ("team", "grant"), ("team", "rename"), ("team", "map"), ("team", "alias"):
             let code: ResultCode = sub == "leave" ? .teamLeft : sub == "revoke" ? .teamRevoked : .opened
             let e = CcaEvent.result(ResultEvent(code: code, route: nil, node: nil, port: nil, message: "演示数据：没有真的改", tool: nil, key: nil))
             return CcaResponse(exitCode: 0, stdout: Data(), stderr: Data(), events: [e])

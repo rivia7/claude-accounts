@@ -110,7 +110,7 @@
 {"v": 1, "at": 管理员发布的时间, "name": Team 的名字, "salt": 盐,
  "server": {"u": 地址, "p": [证书公钥的指纹…]},
  "accounts": {"claude": {邮箱: 节点}, "codex": {…}, "agy": {…}},
- "aliases": {邮箱: 别名}, "install_node": 节点,
+ "aliases": {邮箱: 别名（3.5.3-beta.5 起每个账号都有：没起过的是 team-N）}, "install_node": 节点,
  "nodes": {"group": 组名, "proxies": [节点定义…]} | null}
 ```
 
@@ -132,6 +132,16 @@
   `cca policy off` 收起哪些账号、`_gui state` 的 `config.policy.accounts` 用它（Team 给的账号不归那个开关管）。
 - 对账时说的话照是谁定的说（`by_whom`）：「按维护者的映射…」或者「按「Team 的名字」的配置…」。事件的代码不变（`policy_added`、`policy_alias`、
   `policy_pinned`、`nodes_filled`）。
+- **别名**（3.5.3-beta.5 起）：`alias_sources()` 是合起来的 [(邮箱, 别名, 哪个 Team 给的、这台设备是不是它的管理员)]（Team 的在前，同一个邮箱先出现的
+  算数），`policy_names` 从它来。管理员那边每个账号都有别名（见下面「管理员的设备」的 `default_aliases`：没起过的是 `team-1`、`team-2`……）。
+  成员设备上：加进来的带着它（`policy_merge`），只有邮箱的补上（`policy_alias_fill`）；和这台设备上别的账号撞了时，Team 给的换成「Team 的名字-N」
+  （`alias_fallback`：`team-N` 取 N，别的别名接在 Team 的名字后面；Team 的名字里别名不能有的字符去掉，太长了截短到 24 格宽），还撞就只写邮箱 / 先不补。
+  管理员后来改了：`team_alias_follow` 让这台设备上照 Team 给的用着的跟着改，自己改过的不动。哪个别名是 Team 给的记在工具状态的 `team_alias`
+  （{账号目录名: {"a": 账号表里用着的别名, "t": 那时 Team 给的}}）：账号表里的就是 Team 给的（或者它撞了以后换成的那个）时记下；以后账号表里的还是
+  `a`、Team 给的不再是 `t` 才换（撞了照样换成「Team 的名字-N」，还撞就下次再看）；账号表里的不是 `a` 了是这台设备上改过（`cca rename`），记着的
+  去掉、不再跟。账号不在账号表里、也没收起来的，记着的那一项去掉。事件还是 `policy_alias`（说「按「Team 的名字」的配置把 … 的别名改成 …」）。
+  **这台设备是管理员的那个 Team 给的别名不补、不跟**（`Grant.admin`）：管理员这台设备上的别名不动。两个账号的别名互换这种一轮里换不过来的，
+  后换的那个用「Team 的名字-N」。维护者的映射给的照旧只补不跟。
 - **Team 加进来的账号记着是它加的**（工具状态里的 `team_added`：{账号目录名: Team 的编号}，`policy_merge` 照 Team 的配置加的才记）。映射里没有它了
   ——管理员不再给这台设备、退出了那个 Team、被移除了——就收起来（`team_park`：记进 `parked`（带着 `team`：`_gui state` 的 `config.policy.parked`
   只数关掉共享时收起来的）、从账号表去掉，登录目录和钥匙串不动；事件 `team_parked`），再给回来时照原来的键加回去，不用重新登录。正开着命令行
@@ -140,7 +150,7 @@
 - 账号走哪一类同步服务器（`cmd/hub.rs` 的 `route`）看是谁定的：Team 给的是 `HubKind::Team(编号)`，维护者映射里的是 `Maintainer`，别的（这台设备
   自己的官方账号、第三方 API 账号）哪台都不去（见下一节）。
 - 配置什么时候取：`cca team join`、`cca team sync`；启动时 `team_hook`（在 Team 里、距上次超过一个小时就在后台 `cca _team-sync`，只换本机存的那一份）。
-  账号表在下一条读它的命令里照新的改；`cca team join / sync / leave`、管理员的 `import / map / publish / attach` 之后马上做完（`team_settle`：
+  账号表在下一条读它的命令里照新的改；`cca team join / sync / leave`、管理员的 `import / map / alias / publish / attach` 之后马上做完（`team_settle`：
   没配置过路由器的把配置带的节点导入可选节点，`py team-apply` 对一遍，同步路由器，改启动器）。
 - 管理员自己这台设备默认拿全部账号（`grants` 是 `all`）：导入映射以后那些账号都会加进它的账号表。不要的话 `cca team grant Team 自己这台 none`
   （或者只留几个）。
@@ -490,8 +500,9 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   几个账号、它手里是第几版；有 `problem` 的挂「要处理」、下面一行说原因）、每台设备的「账号」菜单（全部 / 逐个勾：`cca team grant`；全部都给
   的设备去掉一个 = `none` 加上剩下的）、「改名…」（这一行下面开一个输入框，`AppModel.teamRename`；名字没变不发命令，没改成时输入框留着：
   `cca team rename`）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
-  哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）。加账号、导入映射还在终端里（`cca team map`、`import`）。
-- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
+  哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）、各个账号的「改别名…」（账号那一行下面开输入框，`AppModel.teamAlias`，
+  按邮箱改：`cca team alias`；别名没变不发命令）。加账号、导入映射还在终端里（`cca team map`、`import`）。
+- 改账号表的几条命令（`sync`、`leave`、`grant`、`map`、`alias`）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
 - `HubKind` 认得 `team` 了；`config.hubs`、`devices --json` 的 `hubs[]` 里 Team 的服务器照 `team`（编号）分，账号问的是哪一台照
   `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
 - 截图场景：`teams`（卡片，展开着管理员的 Team）、`team-filter`（总览筛出一个 Team）；屏幕睡着时系统不给截屏，`Snapshot.capture` 退一步
@@ -548,6 +559,14 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   恢复的）：它说的数不比记着的小、没到上限才信，接着它的往上加再存一次（只追一次）；它明说不认得的编号记成 `expired`；回话里没提到的不动、说一声。
 - `cca team grant Team 设备 all | none | +工具:邮箱 | -工具:邮箱 …`、`cca team map Team 工具 邮箱 节点|-`、`cca team import Team policy.json [nodes.json]`
   （现成的映射和参考节点整个导进来：就是维护者映射仓库里的那两份，格式照 `policy_problems`、`fill_problems` 查）、`cca team publish Team`：改完都发布。
+- **默认的别名**（`default_aliases`，3.5.3-beta.5 起）：配置里没有别名的账号编成 `team-1`、`team-2`……（照工具的先后、各工具里加进来的先后），
+  同一个 Team 里不重复；admin.json 的 `alias_n` 记着编到第几，用过的号不再用（去掉的账号的号不给新加的）；不在 Team 里了的账号的别名去掉。
+  `import`、`map`、`alias` 时和每次发布前都过一遍（3.5.3-beta.5 以前建的 Team 下次发布时补上，各台设备的配置因此都发布新的一版）。`import` 一个
+  映射文件时，文件里没写别名的照这个 Team 原来给它的（不然每导入一次编号就变、各台设备跟着改名）。`import --mine` 带进这台设备上起过的别名：
+  Team 里原来是默认的 `team-N`、也没被别的账号用着时换成它；没起过的编成 `team-N`。
+- `cca team alias Team 账号 新别名`（`py team-alias`）：账号写邮箱或者 `工具:邮箱`（别名按邮箱、各工具通用）；别名不合规、这个 Team 里别的账号
+  已经叫它是 `alias`，Team 的配置里没有这个账号是 `no_account`。改完发布（stdout：原来的别名、存上了几台），各台设备下次取配置时照上面的规矩
+  跟着改；管理员这台设备的账号表不动。
 - `cca team revoke Team 设备`（`py team-revoke plan | apply`）：先问（`consent team_revoke`，范围是设备的编号）。管理员移除不了自己这台。
 - `cca team rename Team 设备 新名字`（`py team-rename`）：admin.json 里它的 `label` 换成新名字；`joined` 的先对一遍（自己退出了的不登记回去），
   再照它的编号把**同一把公钥**再 `team_enroll` 一次、带着新名字——服务器上加入的时间、认证码（`proof`）照旧（3.5.3-beta.5 起的服务器；以前的
@@ -612,6 +631,10 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   收起来（`parked`），再给回来照原来的键；不再给本来就有的那个，账号留着；被移除以后 Team 加的收起来、alice 轮到维护者的映射。
   regress 11b3d：管理员自己这台 `grant … none`（导入的映射不进这台 Mac 的账号表），成员加入以后 alice 的节点由 Team 定、说一声；这一节结束时
   账号表和配置照开头的还原。`cmd/hub.rs` 的单元测试 `route_table`：账号走哪一类服务器看是谁定的。
+- 别名（`tests/team.py` 的 `test_aliases`）：导入时编号、再导入（先后变了、多了账号）编号不变、去掉的号不再用；两个 Team 都有 `team-1` 时后加入的
+  那个在成员设备上叫「Team 的名字-1」；`team-alias` 的原因码（不合规、重名、没有这个账号、不是管理员）；改了以后成员设备上照 Team 给的用着的
+  （连同撞了以后换成的）跟着改、自己改过的不跟；管理员这台设备上只有邮箱的不补、以前加进来的不跟；以前的 Team 发布时补上编号。
+  `core/policy.rs` 的单元测试 `alias_fallback_names`：「Team 的名字-N」怎么拼、截短、拼不出来的时候。
 - 同时用着维护者的映射和一个 Team（`tests/team.py` 的 `test_with_maintainer`）：映射里的账号只经维护者的服务器、Team 给的只经 Team 的（账号摘要的盐、
   签名的密钥、状态文件各是各的），上报进程一台服务器一路，Team 的那台连不上时只有它那一路记原因。
 - 同步经 Team 的服务器（`tests/team.py` 的 `test_pipelines`）：Team 给的账号记下 API key、同步折合金额、看设备，请求都是这台设备在 Team 里的

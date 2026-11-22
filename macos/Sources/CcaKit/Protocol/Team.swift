@@ -227,6 +227,14 @@ struct TeamRenameDraft: Equatable, Sendable {
     var name: String
 }
 
+/// 正在改别名的账号：哪个 Team 的哪个账号（`spec`：输入框开在这一行下面；别名按邮箱，各工具通用）、输入框里的别名（一次只改一个）
+struct TeamAliasDraft: Equatable, Sendable {
+    var team: String
+    var spec: String
+    var email: String
+    var alias: String
+}
+
 /// 按 Team 筛选账号（侧栏、总览、菜单栏面板共用一个选择；只管显示）
 enum TeamFilter: Equatable, Hashable, Sendable {
     /// 全部账号

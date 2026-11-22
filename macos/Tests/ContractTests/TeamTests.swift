@@ -61,7 +61,7 @@ func teamFixtureTests() {
               && Texts.teamDeviceDetail(d[2], accounts: 3, now: now) == "邀请还没用（6 天后过期） · 全部账号"
               && Texts.teamDeviceDetail(d[4], accounts: 3, now: now) == "移除了", Texts.teamDeviceDetail(d[0], accounts: 3, now: now))
     }
-    check("命令：看设备（展开时自己查的降优先级）、取配置、退出、邀请、移除、改授权、改名字、改节点",
+    check("命令：看设备（展开时自己查的降优先级）、取配置、退出、邀请、移除、改授权、改名字、改节点、改别名",
           CcaCommand.teamDevices(team: teamA, auto: true).arguments == ["team", "devices", teamA, "--json"] && CcaCommand.teamDevices(team: teamA, auto: true).isBackground
           && !CcaCommand.teamDevices(team: teamA, auto: false).isBackground && CcaCommand.teamSync.arguments == ["team", "sync"]
           && CcaCommand.teamLeave(team: teamA).arguments == ["team", "leave", teamA]
@@ -72,7 +72,10 @@ func teamFixtureTests() {
           && CcaCommand.teamRename(team: teamA, device: "0a1b", name: "小王的 MacBook").arguments == ["team", "rename", teamA, "0a1b", "小王的 MacBook"]
           && CcaCommand.teamRename(team: teamA, device: "0a1b", name: "x").gate == CcaCommand.teamRevoke(team: teamA, device: "d").gate
           && !CcaCommand.teamRename(team: teamA, device: "0a1b", name: "x").runsToCompletion
-          && CcaCommand.teamMap(team: teamA, tool: .codex, email: "f@example.com", node: "US-A").arguments == ["team", "map", teamA, "codex", "f@example.com", "US-A"])
+          && CcaCommand.teamMap(team: teamA, tool: .codex, email: "f@example.com", node: "US-A").arguments == ["team", "map", teamA, "codex", "f@example.com", "US-A"]
+          && CcaCommand.teamAlias(team: teamA, email: "f@example.com", alias: "设计-1").arguments == ["team", "alias", teamA, "f@example.com", "设计-1"]
+          && CcaCommand.teamAlias(team: teamA, email: "f@example.com", alias: "x").runsToCompletion
+          && CcaCommand.teamAlias(team: teamA, email: "f@example.com", alias: "x").gate == CcaCommand.routerSync.gate)
     check("命令：邀请的输出只经内存里的管道（不是跑完为止的那种）；改账号表的几条跑完为止、和同步路由器排队",
           !CcaCommand.teamInvite(team: teamA, label: "x", accounts: "all").runsToCompletion && CcaCommand.teamSync.runsToCompletion
           && CcaCommand.teamLeave(team: teamA).runsToCompletion && CcaCommand.teamSync.gate == CcaCommand.routerSync.gate
@@ -201,6 +204,19 @@ func teamFixtureTests() {
     m.renameTeamDevice(a, dev0)
     check("改名字：去掉首尾空白，按设备编号改；改成了收起输入框",
           await waitUntil { !m.teamBusy && m.teamRename == nil } && teamRuns(t).contains(["team", "rename", teamA, dev0.id, "书房的 Mac mini"]))
+    // 改别名：输入框开在点的那一行（同一个邮箱别的工具的那一行不开）；别名没变不发命令；改成了收起
+    let acct = accounts[0]
+    m.startTeamAlias(a, acct)
+    check("「改别名…」：输入框里先填着现在的别名，开在这一行", m.teamAlias == TeamAliasDraft(team: teamA, spec: acct.spec, email: acct.email, alias: acct.alias ?? ""))
+    m.teamAlias?.alias = acct.alias ?? ""
+    m.setTeamAlias(a, acct)
+    try? await Task.sleep(nanoseconds: 60_000_000)
+    check("别名没变：不发命令，输入框收起", !teamRuns(t).contains { $0.prefix(2) == ["team", "alias"] } && m.teamAlias == nil)
+    m.startTeamAlias(a, acct)
+    m.teamAlias?.alias = " 书房-1 "
+    m.setTeamAlias(a, acct)
+    check("改别名：去掉首尾空白，按邮箱改；改成了收起输入框",
+          await waitUntil { !m.teamBusy && m.teamAlias == nil } && teamRuns(t).contains(["team", "alias", teamA, acct.email, "书房-1"]))
     m.joinTeam()
     check("「粘贴邀请链接…」：开提问会话 cca team join", await waitUntil { !t.started.isEmpty } && t.started == [["team", "join"]], "\(t.started)")
     m.shutdown()

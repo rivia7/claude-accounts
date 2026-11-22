@@ -146,6 +146,8 @@ pub struct Grant {
     pub id: String,
     pub name: String,
     pub doc: Dict,
+    /// 这台设备是这个 Team 的管理员（它给的别名不往这台设备上已有的账号上改：policy_alias_fill、team_alias_follow）
+    pub admin: bool,
 }
 
 thread_local! {
@@ -161,7 +163,7 @@ pub fn grants() -> Rc<Vec<Grant>> {
     let mut out = Vec::new();
     for t in teams() {
         if let Some((_, doc)) = team_doc(&t.id).filter(|_| !removed(&t.id)) {
-            out.push(Grant { id: t.id, name: t.name, doc });
+            out.push(Grant { id: t.id, name: t.name, doc, admin: t.role == Role::Admin });
         }
     }
     let out = Rc::new(out);

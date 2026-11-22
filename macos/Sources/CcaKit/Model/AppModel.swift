@@ -1594,6 +1594,7 @@ final class AppModel {
         teamExpanded = teamExpanded.filter { ids.contains($0) }
         if let t = teamInvite.team, !ids.contains(t) { teamInvite = TeamInviteDraft() }
         if let r = teamRename, !ids.contains(r.team) { teamRename = nil }
+        if let r = teamAlias, !ids.contains(r.team) { teamAlias = nil }
     }
 
     /// 筛选菜单里的几项：全部、各个 Team、不在 Team 里的
@@ -1623,6 +1624,8 @@ final class AppModel {
     var teamInvite = TeamInviteDraft()
     /// 正在改名字的设备（「改名…」打开的输入框；改好了、取消了是 nil）
     var teamRename: TeamRenameDraft?
+    /// 正在改别名的账号（「改别名…」打开的输入框）
+    var teamAlias: TeamAliasDraft?
 
     func teamSnapshot(_ t: TeamEntry) -> TeamSnapshot? { teamSnapshots[t.id] }
 
@@ -1720,6 +1723,25 @@ final class AppModel {
         }
         runTeam(.teamRename(team: t.id, device: d.id, name: name), failureTitle: "没能给「\(d.label)」改名字", success: "改好了", refresh: t) { [weak self] ok in
             if ok, self?.teamRename == draft { self?.teamRename = nil }
+        }
+    }
+
+    /// 「改别名…」：这个账号的别名换成输入框（先填着现在的别名）
+    func startTeamAlias(_ t: TeamEntry, _ a: TeamAccount) {
+        teamAlias = TeamAliasDraft(team: t.id, spec: a.spec, email: a.email, alias: a.alias ?? "")
+    }
+
+    /// 改好：这个账号在 Team 里的别名换成它，发布；各台设备上照 Team 给的用着的下次取配置时跟着改。没改成时输入框留着，原因在提示里
+    func setTeamAlias(_ t: TeamEntry, _ a: TeamAccount) {
+        guard let draft = teamAlias, draft.team == t.id, draft.email == a.email else { return }
+        let alias = draft.alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty else { return }
+        guard alias != a.alias else {
+            teamAlias = nil
+            return
+        }
+        runTeam(.teamAlias(team: t.id, email: a.email, alias: alias), failureTitle: "没能改 \(a.email) 的别名", success: "改好了", refresh: t) { [weak self] ok in
+            if ok, self?.teamAlias == draft { self?.teamAlias = nil }
         }
     }
 
