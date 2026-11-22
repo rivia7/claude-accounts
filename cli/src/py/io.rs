@@ -101,7 +101,7 @@ pub fn read_stdin() -> String {
     String::from_utf8_lossy(&read_stdin_bytes()).into_owned()
 }
 
-/// `sys.stdin.read()`。和 `open()` 读文件不一样：POSIX 上的 sys.stdin 不做通用换行，`\r\n` 原样留着（对拍核实过）
+/// `sys.stdin.read()`。和 `open()` 读文件不一样：POSIX 上的 sys.stdin 不做通用换行，`\r\n` 原样留着（移植时拿 Python 核实过）
 pub fn read_stdin_text() -> String {
     read_stdin()
 }

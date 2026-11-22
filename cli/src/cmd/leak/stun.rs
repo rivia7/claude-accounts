@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn probe_over_ipv6_loopback() {
-        // 经 IPv6 发请求的那条路。对拍里没有它（CCA_STUN 里写不了 IPv6 地址，写 localhost 又要解析主机名：macOS 上几个线程
+        // 经 IPv6 发请求的那条路。黑盒测试里没有它（CCA_STUN 里写不了 IPv6 地址，写 localhost 又要解析主机名：macOS 上几个线程
         // 同时解析时偶尔卡住），这里直接给 ::1。机器上没有 ::1 就不测
         let v6: std::net::Ipv6Addr = "2001:db8:85a3::8a2e:370:7334".parse().unwrap();
         let Some((port, seen)) = responder("[::1]:0", move |q| vec![answer(q, &v6.octets())]) else {

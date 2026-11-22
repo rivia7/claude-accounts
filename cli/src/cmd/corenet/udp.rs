@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn view_without_a_node() {
         // tests/local_udp.py 的 test_view_and_running 开头：没设节点时 node 是 None、不看进程（installed 看 root 那边装没装，这里不管）。
-        // 设了节点的几种状态要有节点定义，在对拍里（udp-env、local-env 的 udp- 用例看的是同一个 udp_state）
+        // 设了节点的几种状态要有节点定义，不在这里测（经 udp-env、local-env 看的是同一个 udp_state）
         let rows = vec![(10, format!("{}/mihomo -d x", udp_paths().0))];
         let view = udp_view(&dict! { "local" => dict! { "client" => "builtin" } }, Some(&rows));
         if cfg!(target_os = "macos") {

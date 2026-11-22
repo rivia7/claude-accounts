@@ -1,7 +1,7 @@
 //! HTML 正文里的链接：原来是 `html.parser.HTMLParser` 的一个子类，只接 `handle_starttag`，收 `<a href=…>`。
 //! 这里照 CPython 3.14.0 的 html/parser.py 手写它认标签的那一套（哪里算一个开始标签、属性怎么切、注释和声明怎么跳过、
 //! script / style / textarea / title 里的不当标签看、属性值里的字符引用怎么解），别的回调原来就是空的，不移植。
-//! 对照数据在 tests/vectors/mail.json 的 html 一节（tools/gen_mail_vectors.py 生成）。
+//! 对照数据在 tests/vectors/mail.json 的 html 一节（移植时生成的固定数据）。
 //!
 //! 原来先 `feed(text)` 再 `close()`：凑不成一个完整标签的那一截留到 close 时当到头处理，结果和一遍看到头一样，
 //! 这里就是一遍看到头。原来唯一会出的异常是字符引用里的十进制数字超过 4300 位（`int()` 的上限，没人接、被外面的

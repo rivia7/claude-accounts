@@ -1025,7 +1025,7 @@ mod tests {
         assert!(last_time(&V::Int(i64::MAX)).unwrap_err().is_os());
     }
 
-    /// 盯完以后记下什么、说什么（原文在 mail_watch 的最后几行；盯够 15 分钟的那条路对拍里等不起，这里照原文的字核对）
+    /// 盯完以后记下什么、说什么（原文在 mail_watch 的最后几行；盯够 15 分钟的那条路经子命令测等不起，这里照原文的字核对）
     #[test]
     fn watch_reports() {
         let run = |code: &str, text: &str, alive: bool, limit: f64| -> (Vec<String>, Vec<String>) {

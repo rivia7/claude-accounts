@@ -3093,8 +3093,8 @@ impl CostView {
     }
 }
 
-/// 只给对拍用（`_cost-periods <现在> [额度窗口的 JSON]`）：打印 cost_days、cost_weeks 切出来的时段。这两个函数靠本地时区、
-/// 夏令时，拿固定的“现在”在几个时区下和原来的 Python 逐字比（cases/cost.py 的 periods 一组）
+/// 只给测试用（`_cost-periods <现在> [额度窗口的 JSON]`）：打印 cost_days、cost_weeks 切出来的时段。这两个函数靠本地时区、
+/// 夏令时，tests/cost_view.py 拿固定的“现在”在几个时区下看
 pub fn cmd_cost_periods(args: &[String]) -> R<()> {
     arity("cmd_cost_periods", args, 1, 2)?;
     let now = text::to_float(&args[0]).ok_or_else(|| Fail::Value("现在要是一个数".into()))?;

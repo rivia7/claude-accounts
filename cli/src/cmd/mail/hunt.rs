@@ -546,7 +546,7 @@ mod tests {
 
     // --- 对照数据的 hunt 一节：真的 mail_hunt 配假的邮件来源、假的时钟跑出来的 ----------------------------------------------------
 
-    /// 照剧本给邮件的来源（和 tools/gen_mail_vectors.py 的 HuntSource 一样）。取全文时给哪一封（gone 是取不到）跟着这一封
+    /// 照剧本给邮件的来源（移植时生成对照数据的脚本里的 HuntSource 是同一套剧本）。取全文时给哪一封（gone 是取不到）跟着这一封
     /// 候选走：记在 label 里（mail_hunt 不看它）
     struct Scripted {
         rounds: Vec<V>,

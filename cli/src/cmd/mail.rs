@@ -13,7 +13,7 @@
 //! 只在进程里经 TLS 交给 Gmail 的 LOGIN，不进任何进程的命令行、环境变量、文件和出错信息。
 //!
 //! 原来靠 Python 标准库的 imaplib、email、html.parser、ssl；这里是照 CPython 3.14 的行为手写的（codec、message、header、
-//! html、imap 各一份），对照数据在 tests/vectors/mail.json（tools/gen_mail_vectors.py 生成）。
+//! html、imap 各一份），对照数据在 tests/vectors/mail.json（移植时从真的 Python 取的固定数据）。
 
 mod cmds;
 pub mod codec;
@@ -568,19 +568,14 @@ pub(crate) mod testing {
         }
     }
 
-    /// 对照数据的一节。环境变量 CCA_MAIL_VECTORS_EXTRA 指着另一份同样格式的文件时（本机多跑一批随机输入用，
-    /// `gen_mail_vectors.py --fuzz`），它的这一节接在后面
+    /// 对照数据的一节
     pub fn vectors(section: &str) -> Vec<Dict> {
         let pick = |doc: &V| -> Vec<Dict> {
             let cases = doc.as_dict().and_then(|d| d.dict("cases")).and_then(|c| c.list(section));
             cases.map(|l| l.items().iter().filter_map(|v| expand(v).as_dict()).collect()).unwrap_or_default()
         };
-        let mut out = pick(&json::loads(include_str!("../../tests/vectors/mail.json")).unwrap());
+        let out = pick(&json::loads(include_str!("../../tests/vectors/mail.json")).unwrap());
         assert!(!out.is_empty(), "tests/vectors/mail.json 里没有 {section} 这一节");
-        if let Some(extra) = std::env::var_os("CCA_MAIL_VECTORS_EXTRA") {
-            let text = std::fs::read_to_string(&extra).unwrap();
-            out.extend(pick(&json::loads(&text).unwrap()));
-        }
         out
     }
 

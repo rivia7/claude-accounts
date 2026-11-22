@@ -756,7 +756,7 @@ mod tests {
         let (port, t) = serve(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n");
         assert_eq!(said(http_get("127.0.0.1", port, "/cb", 5.0)), "IncompleteRead(5 bytes read)");
         t.join().unwrap();
-        // 不回答：等到点。原来的时限是 120 秒，对拍里等不起，在这里用短的走一遍
+        // 不回答：等到点。原来的时限是 120 秒，经子命令测等不起，在这里用短的走一遍
         let (port, t, release) = serve_until(b"", true);
         let t0 = crate::py::time::monotonic();
         assert_eq!(said(http_get("127.0.0.1", port, "/cb", 0.4)), "timed out");

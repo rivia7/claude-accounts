@@ -41,7 +41,7 @@ MAC = sys.platform == 'darwin'
 # Lint：test_every_rule_is_known 在 cli/src/cmd/mail.rs 的 every_rule_is_known；test_python38_syntax_and_lazy_imports 查的是内嵌 Python 的写法，没有了
 # Keystore：下面的 Keystore（经假的 security 走真的进程）；原来进程里的那一条在 cli/src/cmd/secrets.rs 的 write_replaces_the_same_account_only_and_delete_can_pick_one
 
-# 假的钥匙串（和 tests/setup.sh、cli/pydiff/cases/secrets.py 的一样）：条目存在 ~/keychain/<服务名>/<账户名>，每次的命令行记在
+# 假的钥匙串（和 tests/setup.sh 的一样）：条目存在 ~/keychain/<服务名>/<账户名>，每次的命令行记在
 # ~/security.log，-i 从 stdin 读到的命令记在 ~/security.stdin；~/keychain_locked 在的时候存不进去
 SECURITY = r'''#!/bin/sh
 T="$HOME"; KC="$T/keychain"

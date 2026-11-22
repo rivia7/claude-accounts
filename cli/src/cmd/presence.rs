@@ -1366,7 +1366,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 期望值是原来的 Python 算的（tools/gen_src_vectors.py）
+    /// 期望值是移植时原来的 Python 算的（tests/vectors/src_presence.json）
     #[test]
     fn cpu_secs_like_python() {
         for row in vectors().list("cpu_secs").unwrap().items() {

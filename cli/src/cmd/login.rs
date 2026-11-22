@@ -463,7 +463,7 @@ mod tests {
             "https://claude.com/cai/oauth/authorize?login_hint=o%27neil%2Bx%40example.com"
         );
         assert!(matches!(login_hint_url(k, "https://[::1/oauth/authorize"), Err(Fail::Value(m)) if m == "Invalid IPv6 URL"));
-        // Codex、agy 的登录页在对拍里（这里不换当前工具：它是全进程的，别的测试同时在跑）
+        // Codex、agy 的登录页经子命令测（这里不换当前工具：它是全进程的，别的测试同时在跑）
     }
 
     const CB: &str = "response_type=code&code_challenge=CC&state=st-1&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback";

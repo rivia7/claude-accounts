@@ -1,6 +1,6 @@
 //! 邮件里的字节和文字怎么互相变：字符集、正文的传输编码（quoted-printable、base64、uuencode）、`repr(bytes)`、
 //! `raw-unicode-escape`。原来这些是 Python 的 `codecs`、`binascii`、`quopri`、`email._encoded_words` 做的，这里照
-//! CPython 3.14 的行为手写，对照数据在 tests/vectors/mail.json（tools/gen_mail_vectors.py 生成）。
+//! CPython 3.14 的行为手写，对照数据在 tests/vectors/mail.json（移植时生成的固定数据）。
 //!
 //! 字符集只认四个：UTF-8、US-ASCII、ISO-8859-1（Latin-1）、Windows-1252，名字的写法（大小写、连字符、别名）照 Python
 //! 的规则认。别的字符集（GBK、Big5、ISO-2022-JP、UTF-16……）Python 认、这里不认：一律走原实现里「Python 也不认识这个

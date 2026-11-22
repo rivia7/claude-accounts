@@ -809,7 +809,7 @@ mod tests {
         assert!(!is_header_line(b"a b: c") && !is_header_line(b"\r\n") && !is_header_line(b"abc") && !is_header_line(b"\xe4:"));
     }
 
-    /// 能套几层：和 Python 在 cca mail test 那条路上量出来的一样（tools/gen_mail_vectors.py 的 measure_limits）
+    /// 能套几层：和 Python 在 cca mail test 那条路上量出来的一样（移植时量的）
     #[test]
     fn nesting_limit_like_python() {
         let nest = |kind: &str, n: usize| -> String {

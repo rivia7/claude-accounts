@@ -447,7 +447,7 @@
 
 - `hello.team` 是 1：App 才显示 Team 的那一块、才筛选、才调 `cca team`（旧版 cca 的 state 里就算有也不认）。
 - `_gui state` 的 `config.teams`：这台设备在的 Team（照加入的先后，每项和 `cca team ls --json` 的一样：`team_rows`）。**一个都不在时没有
-  这个字段**，账号的 `team` 也只有 Team 给的官方账号才有：没有 Team 的机器输出和原来逐字节一样（对拍照旧过）。
+  这个字段**，账号的 `team` 也只有 Team 给的官方账号才有：没有 Team 的机器输出和原来逐字节一样。
 - `cca team devices <Team> --json` 多了 `name`、`accounts`（工具 → 邮箱 → 节点）、`aliases`、`nodes`：管理页一次要到的就是这一份。
 - 邀请链接是那台设备的密钥：`cca team invite` 的 stdout 只经内存里的管道读（`CcaCommand.teamInvite` 不是跑完为止的那种），放进剪贴板
   （`copySecret`：标成机密、60 秒后清掉），不进被观察的状态、提示和读屏。
@@ -572,7 +572,6 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `map`、`publish`、`revoke` 的同意事件和同意之后、管理员 `leave` 的同意事件（`team_delete`）；再当成员（管理员由 `tm_spec` 扮演）：链接少一截、加入
   （`team_joined`）、两个 Team 照先后列出、`sync` 取到新的一版并跟着改名、被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后。这一节结束时
   停掉两台服务器、删掉 `~/.cca/teams`。
-- 对拍：`CCA_DIR_PRIVATE` 多了 `teams/**`，经 `ORACLE_PATCHES` 给对照的 Python 也加上（`-k env` 那一组受它影响）。
 - 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：这台设备上维护者的共享也开着、映射里 alice 走另一个节点——加入以后 alice 照 Team 的
   （说「按「测试组」的配置固定」）、补上别名，本来就有的账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了
   收起来（`parked`），再给回来照原来的键；不再给本来就有的那个，账号留着；被移除以后 Team 加的收起来、alice 轮到维护者的映射。

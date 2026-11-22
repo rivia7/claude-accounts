@@ -262,7 +262,7 @@ mod tests {
     use super::*;
 
     // 这里的测试只碰临时目录：凡是会用到 HOME、~/.cca 的函数（device_identity、prepare_device）都不在单元测试里调，
-    // 它们由对拍在沙箱里测。也不换全局的当前工具（测试是并行跑的）
+    // 它们经子命令在临时 HOME 里测（tests/*.py、回归）。也不换全局的当前工具（测试是并行跑的）
 
     fn tmpdir(tag: &str) -> String {
         let d = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("cca-device-{}-{}", tag, std::process::id()));

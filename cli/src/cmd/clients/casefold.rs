@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn folds_like_python() {
-        // 对照数据是真的 CPython 3.14 给的（tools/gen_clients_vectors.py 的 casefold_vectors）
+        // 对照数据是真的 CPython 3.14 给的（移植时生成的，tests/vectors/clients.json 的 casefold 一节）
         let all = json::loads(include_str!("../../../tests/vectors/clients.json")).unwrap().as_dict().unwrap();
         let v = all.dict("casefold").unwrap();
         let words = v.list("words").unwrap().items();

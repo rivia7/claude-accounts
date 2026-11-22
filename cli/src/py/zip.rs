@@ -1,6 +1,6 @@
 //! `zipfile.ZipFile(路径)` 只读的那一半：目录表（`infolist()`）、读一个条目（`read()` / `open()`）。照 CPython 3.14 的
 //! zipfile 逐段移植，接受什么、拒绝什么、出的是哪一类异常都照它（tests/vectors/clients.json 的 zip 一节，
-//! tools/gen_clients_vectors.py 生成）。客户端更新解压官方安装包用它。
+//! 移植时生成的固定数据）。客户端更新解压官方安装包用它。
 //!
 //! 出错的类别（`ZipError`）和 Python 的异常类一一对应：调用方靠 `except (zipfile.BadZipFile, UnicodeError, OSError, RuntimeError,
 //! ValueError)` 这样的名单分情况，名单以外的（`zlib.error`、`EOFError`）在原来是没人接的。
@@ -664,9 +664,8 @@ mod tests {
         use crate::py::obj::V;
         // 右边是 CPython 3.14 的 zipfile 给的：打不开是哪一类异常；打得开就是每一项的属性和读出来的内容
         let doc = crate::py::json::loads(include_str!("../../tests/vectors/clients.json")).unwrap();
-        let mut rows = doc.as_dict().unwrap().list("zip").unwrap().items();
+        let rows = doc.as_dict().unwrap().list("zip").unwrap().items();
         assert!(rows.len() > 200);
-        rows.extend(crate::py::xml::test_extra("zip"));
         let dir = std::env::temp_dir().join(format!("cca-zip-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.zip");

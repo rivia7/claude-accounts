@@ -138,7 +138,7 @@ fn response_pieces() {
     assert_eq!(items_repr(&items), "[b\"it's\", None, (b'a', b'b')]");
 }
 
-// --- 照剧本回答的假服务器（明文）：和 tools/gen_mail_vectors.py 里 Python 的 Script 一样演 --------------------------------------
+// --- 照剧本回答的假服务器（明文）：和移植时生成对照数据的 Script 一样演 --------------------------------------
 
 /// 一次连接怎么演：连上就发的、每收到一条命令回的（None 是不回）、演完以后怎么收场
 type Scene = (Option<Vec<u8>>, Vec<Option<Vec<u8>>>, String);

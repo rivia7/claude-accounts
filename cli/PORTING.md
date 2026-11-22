@@ -1,88 +1,19 @@
-# 把 PY_SRC 移植成 Rust：怎么做
+# `cli/src/py/` 的语义：Python → Rust 对照和容易错的地方
 
-`cca` 里原来内嵌的 Python（`PY_SRC`，约 1.36 万行，149 个子命令）已经移植成 `cli/` 下的 Rust 程序 `cca-core`，`cca`
-从 3.5.0 起用的就是它（bash 编排没动：照旧 `py 子命令 参数…`）。辅助程序平时怎么开发、怎么测，看 `docs/dev/rust.md`。
-这份文件是移植时的工作守则。移植已经做完，新功能直接写进 `cli/src`；留着它是因为两处还用得上：`cli/src/py/` 那一层的语义
-（下面的对照表和「容易错的地方」）新代码照样要守，对拍（`cli/pydiff/`）没对上时照它查是哪一条。下面说“照原样移植”
-“在主干上修了再跟着移植”的几条是移植那时候的规矩。原来的 Python 在 `git show $(cat cli/PORTED_FROM):cca` 里。
+`cca` 里原来内嵌的 Python（`PY_SRC`，约 1.36 万行，149 个子命令）已经照原样移植成 `cli/` 下的 Rust 程序 `cca-core`，`cca`
+从 3.5.0 起用的就是它（bash 编排没动：照旧 `py 子命令 参数…`）。移植时用的对拍和从原来的 Python 生成对照数据的脚本已经删了，
+以后的开发直接照 Rust 来；辅助程序平时怎么开发、怎么测，看 `docs/dev/rust.md`。
 
-## 最要紧的三条
+这份文件留下的是 `cli/src/py/` 那一层的语义：移植出来的代码处处照 Python 的值和行为写（字典记着键的先后、`True == 1`、
+`x or 默认值`……），新代码挨着它们写、输出要和以前逐字节一样时照样要守。原来的 Python 在 `git show $(cat cli/PORTED_FROM):cca`
+里（`PY_SRC=$(cat <<'PY'` 到 `PY` 结束符，找函数用名字：`grep -n '^def cmd_env'`），想知道某段代码当初为什么这么写时去翻。
+移植时发现的原实现的问题和有意不一样的地方记在 `cli/FINDINGS.md`。
 
-1. **照原样移植，逐字节一致。** 同样的参数、标准输入、环境变量、`~/.cca` 里的文件，cca-core 的 stdout、stderr、退出码、
-   写出来的文件（内容、权限、是不是链接）都要和 Python 一样。提示的中文原文、空格、标点一个字都不改：回归里有约 500 个用例
-   逐字匹配它们。不“顺手改进”：不改写法更好的提示、不调整顺序、不合并子命令。
-2. **原来的问题照样留着，记下来。** 发现原实现的 bug、死代码、可疑的地方：照原样移植（没有调用方的死代码不移植），
-   在 `cli/FINDINGS.md` 加一条（在哪、是什么、怎么触发）。要修由维护者在主干上修，再跟着移植。这样对拍出了差别就一定是移植的错。
-3. **外部命令照旧按名字起。** 原来用 `subprocess` 起 `curl`、`ssh`、`security`、`ps`、`ssh-keygen`、`scutil`、`osascript`…… 的地方，
-   Rust 里用 `py::proc::Cmd` 起同一条命令、同样的参数顺序（原来写了绝对路径的照写绝对路径）。不改成进程内实现：回归把这些命令
-   换成 PATH 上的假命令并核对它们收到的参数。
-
-## 文件在哪
-
-| | |
-|---|---|
-| `git show $(cat cli/PORTED_FROM):cca` 里 `PY_SRC=$(cat <<'PY'` 到 `PY` 结束符 | 原版 Python（仓库里的 `cca` 从 3.5.0 起不带它了）。找函数用名字：`grep -n '^def cmd_env'` |
-| `cli/src/py/` | Python 兼容层：下面那张对照表。移植出来的代码只经它做这些事 |
-| `cli/src/core/` | 已经移植的地基：目录和常量（`base`）、三种工具（`tool`）、账号表（`model`）、映射（`policy`）、对账（`ctx`）、同步摘要（`sync`） |
-| `cli/src/cmd/<模块>.rs` | 子命令，一个模块一份；每份末尾有自己的 `CMDS` 表 |
-| `cli/pydiff/cases/<模块>.py` | 这个模块的对拍用例 |
-| `cli/FINDINGS.md` | 原实现里发现的问题 |
-
-移植一个子命令：在所属模块里写 `pub fn cmd_xxx(args: &[String]) -> R<()>`，加进那个模块的 `CMDS`
-（`Cmd::all(名字, 函数)`：三种工具走同一个函数，差别在 `core::tool::t()`）。函数名、辅助函数名和 Python 里的一样，方便对着找。
-注释像原来那样用中文、说明“为什么”，原来有用的注释搬过来。
-
-**只改自己模块的文件**（`cli/src/cmd/<模块>…`、`cli/pydiff/cases/<模块>.py`）和 `cli/FINDINGS.md`。要改别处（兼容层缺东西、
-core 里的函数不够用、要加依赖）：先在自己的文件里绕开或留一个带说明的 `unimplemented!("…")`，在交回的报告里说清楚要什么，
-不要自己改公共文件、不要加依赖（`Cargo.toml` 的依赖是白名单，加之前要问维护者）。
-
-## 怎么验证
-
-```
-cd cli
-cargo build                          # 调试版，对拍用它
-cargo test                           # 单元测试
-python3 -I pydiff/run.py -k 模块名    # 对拍：同一份沙箱上分别跑 Python 和 cca-core，逐字节比
-python3 -I pydiff/run.py -v -k 用例名  # 失败时看两边的原样输出
-cargo fmt                            # 交回前排一遍版（回归里查 cargo fmt --check）
-cargo clippy -- -D warnings          # 交回前要干净
-```
-
-对拍用例照 `pydiff/cases/table.py` 的样子写。**每个子命令的每条路都要有用例**：正常的、每个报错、每个退出码、三种工具、
-`CCA_RO=1`（会经过 `ctx()` 的）、文件不存在 / 写坏了 / 类型不对。输出里每次都不一样的东西（时间戳、随机数、进程号）用 `mask`
-换掉，但只换那一小段。要起外部命令的，在沙箱里放假命令（`b.fake('security', '…')`），让假命令把收到的参数记进文件——
-对拍连沙箱里的文件一起比，参数不一样就会被发现。联网的、要等很久的路也用假命令走通。
-
-对拍的沙箱和 `case(…)` 的参数（都在 `pydiff/run.py` 开头的说明里）：
-- **真命令挡在外面。** `security`、`osascript`、`open`、`launchctl`、`ssh`、`curl`、`git`、`claude`、`codex`…… 在沙箱里默认是只会报错的
-  替身；用例调到了没准备假命令的东西会报 `STRAY`、算失败。要用哪个就 `b.fake(名字, 脚本)` 放自己的。写了绝对路径的命令
-  （`lsregister`、`taskpolicy`）挡不住：用例要绕开会真的动到这台机器的路（见 `cases/launchers.py` 开头）。
-- **钥匙串只用假的。** `from cases.secrets import SECURITY`，`b.fake('security', SECURITY)`（条目是沙箱里 `keychain/服务名/账户名`
-  这些文件，收到的命令记在 `security.log`）。单元测试里 `secrets::security()` 只走 `secrets::testing::set_security` 装的假的。
-- `mask=[(正则, 替换)]`：遮掉每次不一样的一小段；`settle=秒数`：命令起了后台进程，等它写完再看沙箱；
-  `fd3='答案\n'`：交互输入（cca 的提问从 3 号描述符读）；`during=函数`：命令运行期间在另一条线程里做的事（给它监听的端口
-  发请求）；`timeout=秒数`；`env={'PATH': '%HOME%/nowhere'}`：命令找不到的那条路。
-  `before=函数`：命令开始之前先做完的事（起一个真的进程、先拿住一把锁；`during` 是并行的，赶不上很快就做完的 Rust），
-  它的返回值能调用的话，命令结束以后调它收尾（杀掉进程、删掉名字里带进程号的文件），然后才比沙箱。
-- **常驻的进程**（上报进程这种不停循环的）：假命令照沙箱里的文件回话，`during` 里等它做了该做的（`cases/presence.py` 的
-  `wait_log`：等假 curl 记下某个请求），再改那些文件或者发 SIGTERM 让它收场。等到了以后留一点时间再动手：请求还在假命令
-  手里时把进程停掉，两边停在假命令的哪一步是碰运气的。
-- `-s` 把通过的用例的输出也打出来，`-t` 再列出跑完以后沙箱里的文件（`PYDIFF_SHOW=curl.log,keychain/` 只看路径里带这些的）：
-  **写完用例一定要看一眼**，确认真的走到了想测的那条路（假命令被调到了、文件真的写了），不是两边一起提前返回。
-- 沙箱里的硬链接、权限、修改时间两边是一样的（拷的时候保留）。
-
-Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里属于这个模块的检查：能用对拍表达的写成对拍用例，
-只能调内部函数的写成 Rust 的 `#[cfg(test)]` 测试（期望值从 Python 的测试里搬，别自己推）。
-
-对拍够不着的内部函数（结果被 mask 盖住的、要等很久才走得到的）：`tools/gen_src_vectors.py` 直接调 PY_SRC 里的函数，把一批
-输入的结果写进 `tests/vectors/src_*.json`，Rust 的测试读它来比（`presence.rs` 的测试：进程树的 CPU 怎么加、隔 30 秒才采样）。
-小数用 `repr()` 的写法存、用 `num::float_repr` 比，差最后一位也看得出来。
-
-`cargo test` 起的进程里 `CCA_HOME` 指到一个不存在的目录（`.cargo/config.toml`）：单元测试碰不到真的 `~/.cca`。要读写文件的
-测试自己建临时目录、把路径当参数传；靠 `CCA_HOME` 下有东西的逻辑用对拍测。
-
-完成的标准：这个模块的子命令都在 `CMDS` 里；`cargo test`、`cargo clippy -- -D warnings`、整套对拍全过；
-没移植的函数（如果有）在报告里列出来。
+- 子命令：在所属模块（`cli/src/cmd/<模块>.rs`）里写 `pub fn cmd_xxx(args: &[String]) -> R<()>`，加进那个模块末尾的 `CMDS`
+  （`Cmd::all(名字, 函数)`：三种工具走同一个函数，差别在 `core::tool::t()`）。
+- 外部命令照旧按名字起（`py::proc::Cmd`，同样的参数顺序；写了绝对路径的照写绝对路径）：回归把它们换成 PATH 上的假命令并核对参数。
+- `cargo test` 起的进程里 `CCA_HOME` 指到一个不存在的目录（`.cargo/config.toml`）：要读写文件的测试自己建临时目录、把路径当参数传；
+  靠 `CCA_HOME` 下有东西的逻辑用 `tests/*.py`（把辅助程序当黑盒跑）或回归测。
 
 ## Python → Rust 对照（`cli/src/py/`）
 
@@ -135,12 +66,12 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 | `sh(K=v)` / `sh_arrays(N=[…])` | `core::base::{sh, sh_vals, sh_array}` |
 | `notice(code, text, k=v)` | `core::base::notice(code, text, dict!{…})` |
 
-兼容层没有的（zip、XML、邮件解析、TLS、sqlite、kqueue……）由第一个用到它的模块在交回时提出来，写在
-`cli/src/py/` 下，照同样的规矩：行为照 CPython，期望值从真的 Python 取（`cli/tools/gen_vectors.py` 那种对照数据最好）。
+兼容层里新加东西（写在 `cli/src/py/` 下）照同样的规矩：行为照 CPython，期望值从真的 Python 取（`cli/tools/gen_vectors.py`
+那种对照数据最好）。
 
 ## 别的模块里已经有的
 
-要用别的模块的函数，先 `grep -rn 'pub fn 名字' cli/src` 看是不是已经移植了（名字和 Python 里一样）。除了各模块的子命令，
+要用别的模块的函数，先 `grep -rn 'pub fn 名字' cli/src` 找（名字和原来的 Python 里一样）。除了各模块的子命令，
 这些常被别处用到的已经有了：
 
 - `cmd::secrets`：`kc_*`、`ks_read / ks_write / ks_del`、`api_secret`、`security`、`keyfile_store`、`keystore_name`
@@ -157,13 +88,10 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 - `cmd::corenet`：`slot_orders`、`local_names`、`local_info`、`local_want`、`core_defs`、`udp_view`、`udp_leak_hint`、`write_text`
 - `cmd::cost`：`CostView`；`cmd::mail`：`mail_cfg`、`mail_view`、`mail_ready`；`cmd::clients`：`cu_claude_channel`、`cu_claude_env`
 
-别的模块还没移植、你又绕不开的函数：在自己的文件里放一个私有的替身，照原函数开头“没开这个功能就什么也不做”的那句判断
-先答了（常见的路要走得通），真要它干活的地方才 `unimplemented!("…（哪个模块的哪个函数）")`；报告里列出挡住了哪些路。
-
 ## 容易错的地方
 
 - **原来顺序不定的地方。** Python 遍历集合（`set`）的先后每次运行都不一样（字符串的哈希是随机的）。输出、起命令的先后靠它时，
-  Rust 里排好序，在注释和 FINDINGS 里说一声；对拍用例避开或者用 mask 抹掉差别。
+  Rust 里排好序，在注释里说一声。
 - **`except Exception` 接不住 `die()`，但接得住别的。** 原来 `try: … except Exception: 退一步` 的地方：`Fail::Die / Exit` 往上传，
   `Fail::Os / Value / Other` 走退一步的那条路（见 `cmd_sync_state`）。原来把 stderr 接到 /dev/null 的，照样接（`QuietStderr`）。
 
@@ -177,13 +105,12 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 - **`str.splitlines()`、`str.split()`、`str.strip()` 认的字符比 Rust 的多**（`\x0b`、`\x1c`–`\x1e`、`\x85`、U+2028 等），用 `py::text` 的。
 - **`print` 一个不是字符串的值** 是 `str()` 的写法：`True`、`None`、`['a', 'b']`。
 - **取整有两种**（见上表）。`'%d' % 小数` 是截断。
-- **原来没接的异常是“调用栈 + 退出码 1”。** Rust 里让它成为 panic 或往上传的 `Fail::Value` / `Fail::Os` 即可（main 会说一句、退出码 1）；
-  对拍遇到 Python 的调用栈只要求 Rust 这边退出码一样、stderr 不是空的。
+- **原来没接的异常是“调用栈 + 退出码 1”。** Rust 里让它成为 panic 或往上传的 `Fail::Value` / `Fail::Os` 即可（main 会说一句、退出码 1）。
 - **有副作用的顺序。** 先写了哪个文件、先说了哪句话、出错时已经改了什么，都照原来的先后。
 - **`except Exception: pass` 接不住 `die()`**（`SystemExit` 不是 `Exception`）；`except SystemExit` 才接得住。
-- **只读模式。** `CCA_RO=1` 时不写文件、不往 stderr 说（`core::base::RO`、`notice` 已经照做）；新移植的会写文件的对账逻辑照这个规矩。
+- **只读模式。** `CCA_RO=1` 时不写文件、不往 stderr 说（`core::base::RO`、`notice` 已经照做）；新加的会写文件的对账逻辑照这个规矩。
 - **文件的权限和原子替换。** 原来用 `save_json(…, 0o600)`、`O_EXCL`、`os.replace`、`follow_symlinks=False` 的地方照样；密钥类文件 600、目录 700。
-- **密钥不进命令行和环境变量。** 原来经 stdin 交给 `security -i`、经文件交的，照样。对拍的假命令也别把密钥打到 stdout 以外的地方。
+- **密钥不进命令行和环境变量。** 原来经 stdin 交给 `security -i`、经文件交的，照样。测试的假命令也别把密钥打到 stdout 以外的地方。
 - **线程。** `V` / `Dict` / `List` 不能跨线程（里面是 `Rc`）：交给线程之前取成 `String`、`Vec`、数字。
 - **时间。** 本地时间的换算一律经 `py::time`（C 库的 `localtime` / `mktime`），别自己算时区。
 - **正则。** 把模式原样搬过来就行；注意 `re.match` 只管开头、`re.search` 哪里都行、`re.fullmatch` 要整串。
@@ -201,10 +128,3 @@ Python 的单元测试（`tests/*.py`，把 PY_SRC 当库执行的那些）里�
 - **运行时拼出来的正则**（`re.compile(a + re.escape(b))`）：Python 的 `re.compile` 有缓存，常驻进程里每一轮都用的不会重新编译。
   Rust 里用 `py::re::compile(写法)`（带同样的缓存）；转义用 `py::re::escape`。
 
-## 提交
-
-一个模块一个提交（或几个小提交），说明用中文，像主干的提交那样写清楚移植了什么、对出了什么问题、测试结果。用仓库约定的作者：
-
-```
-git -c user.name=rivia7 -c user.email=21076402+rivia7@users.noreply.github.com commit -m "…"
-```

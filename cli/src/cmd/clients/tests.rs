@@ -1,17 +1,15 @@
 //! 客户端更新的单元测试。
 //!
-//! 对拍（cli/pydiff/cases/clients.py）够不着的路在这里：检查、下载、暂存、安装要经 `/usr/bin/curl`（真的会联网）、`codesign` /
+//! 黑盒测试（经子命令走）够不着的路在这里：检查、下载、暂存、安装要经 `/usr/bin/curl`（真的会联网）、`codesign` /
 //! `spctl`（假的 App 过不了），原来的 Python 单元测试（tests/client_updates.py）是把 `cu_run`、`cu_host`、`cu_download` 换成假的
 //! 来走这些路的。这里照样：这三个函数（还有改名、删目录、睡眠）在测试里先问一声这条线程上装的钩子（`Hooks`），HOME、CCA_HOME、
 //! 环境变量也换成这条线程自己的一套（`World`），整条路就能在一个进程里、各在各的临时目录里走。
 //!
-//! 期望值不是照着代码推的：tools/gen_clients_vectors.py 拿原来的 Python（cca 里的 PY_SRC）把同一批输入、同一批场景跑一遍，
-//! 结果记在 tests/vectors/src_clients.json 里——
+//! 期望值不是照着代码推的：移植时拿原来的 Python（cca 里的 PY_SRC）把同一批输入、同一批场景跑了一遍，
+//! 结果记在 tests/vectors/src_clients.json 里（生成它的脚本已经删了，有意改了行为就直接改这份数据）——
 //! - 一个个函数：地址规则、版本号比大小、版本列表、解压、进程列表……（`check_functions`、`check_extract`）；
 //! - 整条路的场景（`check_scenarios`）：每一步的输出、退出码、起了哪些命令、跑完以后的文件。tests/client_updates.py
-//!   的每一项检查在生成时对 Python 的结果先核对一遍（不成立就不生成），这里逐个场景重放，要求每一步都和记下来的一样。
-//!
-//! 场景的步骤、假命令怎么回话，两边各有一个解释器（那边是 tools/gen_clients_scenarios.py 的 `Scn`）：改一边要改另一边。
+//!   的每一项检查在生成时对 Python 的结果先核对过一遍，这里逐个场景重放，要求每一步都和记下来的一样。
 //!
 //! 这几组都在 `like_python` 一个测试里按顺序做，不是各占一个测试：`cargo test` 同时跑的测试数是有上限的（CPU 的核数），几个
 //! 要跑一两秒的测试各占一个名额时，排在后面的测试要等名额——`cmd::login::sys::tests::socket_waits_like_settimeout` 就会时好时坏
@@ -528,7 +526,7 @@ fn time_budget_stops_new_downloads() {
 
 #[test]
 fn target_is_found_by_bundle_id() {
-    // cu_target 没被环境变量指定时翻 /Applications、~/Applications：对拍不能走这条路（会翻到这台机器上真的 App），在临时目录里测
+    // cu_target 没被环境变量指定时翻 /Applications、~/Applications：黑盒测试不能走这条路（会翻到这台机器上真的 App），在临时目录里测
     let _reset = Reset;
     let temp = Temp::new("target");
     let plist = |bundle: &str| crate::py::plist::dumps_xml(&P::dict([("CFBundleIdentifier", P::from(bundle))])).unwrap();

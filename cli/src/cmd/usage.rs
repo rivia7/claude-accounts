@@ -1977,7 +1977,7 @@ impl Tool {
     }
 }
 
-/// 单元测试里两个文件共用的：对照数据（tests/vectors/usage.json，tools/gen_usage_vectors.py 从 PY_SRC 生成）和读它的几样
+/// 单元测试里两个文件共用的：对照数据（tests/vectors/usage.json，移植时从 PY_SRC 生成的固定数据）和读它的几样
 #[cfg(test)]
 pub(super) mod vectors {
     use crate::py::json;

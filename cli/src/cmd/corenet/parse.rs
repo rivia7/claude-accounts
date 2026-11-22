@@ -892,7 +892,7 @@ pub(super) fn node_clean_name(n: Option<&Y>) -> String {
 mod tests {
     use super::*;
 
-    /// 对照数据：原版 PY_SRC 的 node_parse、node_clean_name 对一批输入给出的结果（cli/tools/gen_corenet_vectors.py 生成）
+    /// 对照数据：原版 PY_SRC 的 node_parse、node_clean_name 对一批输入给出的结果（移植时生成的固定数据）
     fn vectors() -> Dict {
         json::loads(include_str!("../../../tests/vectors/corenet.json")).unwrap().as_dict().unwrap()
     }

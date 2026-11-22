@@ -1,6 +1,6 @@
 //! `xml.etree.ElementTree.fromstring(字节)`，和它上面的 `find` / `findall` / `findtext` / `get`（只有直接子元素、完整的标签名这
 //! 一种写法：原来用到的就是这些）。底下原来是 expat 2.7（带命名空间处理，标签写成 `{地址}名字`）：接受什么、拒绝什么照它的来，
-//! 拿真的 CPython 3.14 核对过（tests/vectors/clients.json 的 xml 一节，tools/gen_clients_vectors.py 生成）。
+//! 拿真的 CPython 3.14 核对过（tests/vectors/clients.json 的 xml 一节，移植时生成的固定数据）。
 //!
 //! 客户端更新读 ChatGPT 的版本列表（Sparkle 的 appcast）用它。文档写得不对一律是 `ParseError`（原来的 `ET.ParseError`）。
 //!
@@ -810,15 +810,6 @@ pub fn test_blob(v: &crate::py::obj::V) -> Vec<u8> {
     }
 }
 
-/// 另一份对照数据（`CCA_CLIENTS_EXTRA=文件`，tools/gen_clients_vectors.py --fuzz 生成的，量大、不进仓库）里的这一类
-#[cfg(test)]
-pub fn test_extra(kind: &str) -> Vec<crate::py::obj::V> {
-    let Some(path) = std::env::var_os("CCA_CLIENTS_EXTRA") else { return Vec::new() };
-    let text = std::fs::read_to_string(path).expect("CCA_CLIENTS_EXTRA 指的文件读不了");
-    let doc = crate::py::json::loads(&text).expect("JSON");
-    doc.as_dict().and_then(|d| d.list(kind)).map_or(Vec::new(), |l| l.items())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,9 +852,8 @@ mod tests {
     fn like_elementtree_on_expat() {
         // 右边是 CPython 3.14（expat 2.7）给的：解析出来的树，或者出错
         let doc = json::loads(include_str!("../../tests/vectors/clients.json")).unwrap();
-        let mut rows = doc.as_dict().unwrap().list("xml").unwrap().items();
+        let rows = doc.as_dict().unwrap().list("xml").unwrap().items();
         assert!(rows.len() > 900);
-        rows.extend(test_extra("xml"));
         let (mut wrong, mut skipped) = (Vec::new(), 0);
         for row in &rows {
             let row = row.as_list().unwrap();

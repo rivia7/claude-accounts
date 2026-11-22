@@ -2,8 +2,8 @@
 """客户端统一更新：bash 那一半（cmd_clients）——安装要一字不差的令牌、有效的计划、用户的同意。
 
 辅助程序那一半（client-updates：status、check、mode、auto-install、plan、install，签名、目标漂移、中断恢复……）原来
-也在这份文件里（把内嵌的 Python 当库执行，70 个用例）。现在在辅助程序自己的测试里：`cli/tools/gen_clients_scenarios.py`
-拿原来的 Python 把那 70 个用例一步一步走了一遍，每一步的输出、退出码、起的命令、写的文件记在
+也在这份文件里（把内嵌的 Python 当库执行，70 个用例）。现在在辅助程序自己的测试里：移植时拿原来的 Python 把那 70 个用例一步一步
+走了一遍（生成它的脚本已经删了），每一步的输出、退出码、起的命令、写的文件记在
 `cli/tests/vectors/src_clients.json`，`cmd::clients::tests::like_python`（cargo test）照着重放、逐步核对。"""
 from pathlib import Path
 import subprocess
