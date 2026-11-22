@@ -1849,14 +1849,17 @@ def main():
     ap.add_argument('--key', help='TLS 私钥')
     ap.add_argument('--behind-proxy', action='store_true', default=hosted,
                     help='在托管平台、反向代理后面：只说 HTTP（HTTPS 由平台做，不用 --cert、--key），按 X-Forwarded-For 的最后一项限流')
-    ap.add_argument('--mode', choices=('maintainer', 'own', 'team'), default='own' if hosted else 'maintainer',
+    # 托管平台上给了 Team 的根公钥（CCA_TEAM_ROOT）就是 Team 的服务器，不然是自己的同步服务器
+    hosted_mode = 'team' if os.environ.get('CCA_TEAM_ROOT') else 'own'
+    ap.add_argument('--mode', choices=('maintainer', 'own', 'team'), default=hosted_mode if hosted else 'maintainer',
                     help='maintainer：维护者的服务器（设备来自签名的设备清单）；own：自己的同步服务器（设备拿加入链接加入）；'
                     'team：Team 的同步服务器（管理员拿根密钥登记、邀请设备，存着给各台设备的配置）')
     ap.add_argument('--release-key', help='发布公钥（ssh-ed25519 …）：只认它签的设备清单（维护者的服务器必须给）')
     ap.add_argument('--admit-hash', default=os.environ.get('CCA_HUB_ADMIT_HASH'),
                     help='自己的同步服务器：入伙口令的 SHA-256（64 位十六进制；也可以用环境变量 CCA_HUB_ADMIT_HASH）')
     ap.add_argument('--team-root', default=os.environ.get('CCA_TEAM_ROOT'),
-                    help='Team 的同步服务器：Team 的根公钥（ssh-ed25519 AAAA…，是公开的；也可以用环境变量 CCA_TEAM_ROOT）')
+                    help='Team 的同步服务器：Team 的根公钥（ssh-ed25519 AAAA…，是公开的；也可以用环境变量 CCA_TEAM_ROOT；'
+                    '只写后面那一段 AAAA… 也行：安装脚本、托管平台的环境变量里没有空格好写）')
     ap.add_argument('--state', default=HOSTED_STATE if hosted else None, help='状态文件（CCA_HUB_HOSTED=1 时默认是 /data/state.json）')
     ap.add_argument('--ttl', type=float, default=150, help='开着会话却这么多秒没心跳就算离线')
     ap.add_argument('--idle', type=float, default=600, help='这么多秒没动静算闲置')
@@ -1884,7 +1887,10 @@ def main():
         if not HASH_RE.match(a.admit_hash or ''):
             ap.error('自己的同步服务器要给入伙口令的哈希（--admit-hash 或者环境变量 CCA_HUB_ADMIT_HASH，64 位小写十六进制）')
     elif a.mode == 'team':
-        k = KEY_RE.match(' '.join((a.team_root or '').split()[:2]))
+        given = (a.team_root or '').split()[:2]
+        if len(given) == 1 and given[0] != 'ssh-ed25519':
+            given = ['ssh-ed25519'] + given   # 只写了后面那一段
+        k = KEY_RE.match(' '.join(given))
         if not k:
             ap.error('Team 的同步服务器要给根公钥（--team-root 或者环境变量 CCA_TEAM_ROOT：ssh-ed25519 AAAA…）')
         root = 'ssh-ed25519 ' + k.group(1)

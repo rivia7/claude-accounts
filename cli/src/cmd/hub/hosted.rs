@@ -279,6 +279,91 @@ fn readme(p: Platform, dir: &str, hash: &str, ver: &str) -> String {
     }
 }
 
+/// Team 的同步服务器部署到托管平台的文件（cca team hosted：cmd/team/admin.rs 的 cmd_team_hosted 调）。目录（没写是 ~/<服务名>-<平台>）
+/// 里生成服务端程序和 README.md，Railway 另有 Dockerfile。平台上只有 Team 的根公钥（公开的）：环境变量 CCA_TEAM_ROOT 写它
+/// ssh-ed25519 后面那一段 key（服务端有了它、又是 CCA_HUB_HOSTED=1，就是 Team 的服务器）。update：这个 Team 已经接着托管平台上的
+/// 那一台，这一次只是换上新版的服务端程序。返回（目录, 这一次要做的）；平台不认识、目录里有别的东西是（原因码, 原因）
+pub fn team_files(
+    platform: &str,
+    dir: Option<&str>,
+    key: &str,
+    svc: &str,
+    name: &str,
+    update: bool,
+) -> R<Result<(String, String), (String, String)>> {
+    let Some(p) = Platform::parse(platform) else {
+        return Ok(Err(("usage".into(), "平台写 railway 或者 sealos".into())));
+    };
+    let dir = dir.map_or_else(|| path::join(&HOME, &format!("{svc}-{}", p.name())), |d| path::abspath(&path::expanduser(d)));
+    if let Err(why) = prepare_dir(&dir) {
+        return Ok(Err(("dir".into(), why)));
+    }
+    let ver = getenv("CCA_VERSION").filter(|v| version_ok(v)).map_or(String::new(), |v| format!(" {v}"));
+    let first = team_steps(p, &dir, key, svc, false);
+    let again = team_steps(p, &dir, key, svc, true);
+    let readme = format!(
+        "# Team「{name}」的同步服务器：部署到 {}\n\n\
+         这个目录是 cca{ver} 的 `cca team hosted` 生成的：`cca-presence.py` 是服务端程序（只用 Python 标准库）{}。\
+         平台上只有这个 Team 的根公钥（环境变量 `CCA_TEAM_ROOT`：它是公开的，不用保密）；设备、邀请、每台设备的配置都由管理员的设备管，\
+         服务器上存的是密文。\n\n\
+         ## 第一次部署\n\n```\n{first}\n```\n\n\
+         没挂存储（/data）的话服务端程序不启动：不然重启一次数据就全没了。界面、命令以平台现在的为准。\n\n\
+         部署好以后，在管理员的设备上把平台给的公网地址（https://…）接上：\n\n```sh\ncca team attach {name} https://平台给的地址\n```\n\n\
+         ## 更新\n\n\
+         新版 cca 带着新版的服务端程序。在管理员的设备上再运行一次 `cca team hosted`，然后：\n\n```\n{again}\n```\n\n\
+         数据在 /data 的存储里，更新以后照旧，设备不用重新加入。\n",
+        if p == Platform::Railway { "Railway" } else { "Sealos" },
+        if p == Platform::Railway { "，`Dockerfile` 照 python:3.13-slim 运行它" } else { "，在 Sealos 上作为配置文件挂进容器" },
+    );
+    let mut files = vec![("cca-presence.py", SERVER.to_string()), ("README.md", readme)];
+    if p == Platform::Railway {
+        files.push((
+            "Dockerfile",
+            format!(
+                "# cca{ver} 的 cca team hosted railway 生成的：Team 的同步服务器（部署的步骤在 README.md）\n\
+                 FROM python:3.13-slim\n\
+                 COPY cca-presence.py /app/cca-presence.py\n\
+                 ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT={key}\n\
+                 EXPOSE 8080\n\
+                 CMD [\"python3\", \"-I\", \"/app/cca-presence.py\"]\n"
+            ),
+        ));
+    }
+    for (file, body) in &files {
+        fs::put(&path::join(&dir, file), body.as_bytes(), 0o644)?;
+    }
+    Ok(Ok((dir.clone(), team_steps(p, &dir, key, svc, update))))
+}
+
+/// Team 的那一份要做的：Railway 是一行一条的命令，Sealos 是表单里填什么（和 steps 一个样子，口令的哈希换成 Team 的根公钥）
+fn team_steps(p: Platform, dir: &str, key: &str, svc: &str, update: bool) -> String {
+    let cd = format!("cd {}", sh_quote(dir));
+    let file = path::join(dir, "cca-presence.py");
+    match (p, update) {
+        (Platform::Railway, false) => format!(
+            "{cd}\nrailway login\nrailway init --name {svc}\nrailway add --service {svc}\nrailway volume add --mount-path /data\n\
+             railway up --detach\nrailway domain --port 8080"
+        ),
+        (Platform::Railway, true) => format!("{cd}\nrailway up --detach"),
+        (Platform::Sealos, false) => format!(
+            "镜像名称：python:3.13-slim\n\
+             部署模式：固定实例，1 个\n\
+             计算资源：最小的就够（0.1 核、128 MB 内存）\n\
+             网络配置：容器端口 8080，打开公网访问（https）\n\
+             启动命令：python3 -I /app/cca-presence.py\n\
+             环境变量：CCA_HUB_HOSTED=1\n\
+             环境变量：CCA_TEAM_ROOT={key}\n\
+             存储卷：挂载路径 /data，容量 1 Gi\n\
+             配置文件：挂载路径 /app/cca-presence.py，内容是 {file} 的全部内容"
+        ),
+        (Platform::Sealos, true) => format!(
+            "在「应用管理」里打开这个应用，点「变更」\n\
+             配置文件 /app/cca-presence.py 的内容换成 {file} 的全部内容（新版的服务端程序）\n\
+             再点「变更」：应用重启，数据在 /data 的存储卷里，设备不用重新加入"
+        ),
+    }
+}
+
 /// 平台给的地址 → 加入链接里的地址（https://主机:端口，没写端口是 443）。只认 https（平台的公网地址都是）、不带路径
 fn hosted_url(raw: &str) -> Result<String, String> {
     const LIKE: &str = "平台给的公网地址只到主机名，像 Railway 的 https://名字.up.railway.app";

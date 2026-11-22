@@ -1,5 +1,8 @@
 # 维护者的映射
 
+> 这一套（GitHub 上的映射仓库、每台机器一把 deploy key、`./policy.sh` 发布）以后由 Team 代替（team.md）：现在照常用，新加机器建议走 Team 的
+> 邀请，已经在用的机器用 `./policy.sh team` 迁过去。什么时候删、删哪些见 team.md「要删掉的旧通道」。
+
 参考节点（映射仓库里的 nodes.json）见 fill.md；设备统计的服务器见 presence.md。
 
 - `./policy.sh 映射仓库的目录 ["提交说明"]` — 发布维护者的账号 → 节点映射：检查格式（`cca _policy-check`）、确认仓库是私有的，用发布密钥签名（命名空间 `cca-policy`），提交并推送。目录里有 `custom.yaml` 时顺带发布参考节点（抽成 `nodes.json`，`cca _fill-check`，命名空间 `cca-nodes`）；`./policy.sh nodes 参考配置 [策略组]` 只打印不发布

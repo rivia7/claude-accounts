@@ -49,27 +49,30 @@ while read -r p; do echo "LISTEN 0 4096 0.0.0.0:$p 0.0.0.0:*"; done < "$HUB_BOX/
 COMPOSE_V1 = r'''printf '%s\n' "$*" >> "$HUB_BOX/docker-compose.log"
 echo 'docker-compose version 1.29.2, build unknown'
 '''
-# 起服务端、停服务端（systemctl、docker 共用）：进程号记在 server.pid
+# 起服务端、停服务端（systemctl、docker 共用）：进程号记在 server.pid（自己的同步服务器，服务名 cca-hub），Team 的各有各的
+# （server.<服务名>.pid：一台服务器上能装几个 Team）
 SERVE = r'''
 import os, re, signal, subprocess, sys, time
 box = os.environ['HUB_BOX']
-pidf = os.path.join(box, 'server.pid')
 flag = lambda n: os.path.exists(os.path.join(box, n))
 
-def running():
+def pidf_of(svc):
+    return os.path.join(box, 'server.pid' if svc == 'cca-hub' else 'server.%s.pid' % svc)
+
+def running(svc='cca-hub'):
     try:
-        pid = int(open(pidf).read())
+        pid = int(open(pidf_of(svc)).read())
         os.kill(pid, 0)
         return pid
     except (OSError, ValueError):
         return None
 
-def stop():
-    pid = running()
+def stop(svc='cca-hub'):
+    pid = running(svc)
     if pid:
         os.killpg(pid, signal.SIGTERM)
         for _ in range(200):
-            if running() is None:
+            if running(svc) is None:
                 break
             try:
                 if os.waitpid(pid, os.WNOHANG)[0]:
@@ -78,16 +81,16 @@ def stop():
                 pass
             time.sleep(0.02)
     try:
-        os.unlink(pidf)
+        os.unlink(pidf_of(svc))
     except FileNotFoundError:
         pass
 
-def start(argv, env):
-    stop()
+def start(argv, env, svc='cca-hub'):
+    stop(svc)
     with open(os.path.join(box, 'server.log'), 'a') as log, open(os.path.join(box, 'server.argv'), 'a') as a:
         a.write(' '.join(argv) + '\n')
         p = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-    open(pidf, 'w').write(str(p.pid))
+    open(pidf_of(svc), 'w').write(str(p.pid))
 
 def env_file(path):
     return dict(l.split('=', 1) for l in open(path).read().splitlines() if '=' in l and not l.startswith('#'))
@@ -96,24 +99,25 @@ SYSTEMCTL = SERVE + r'''
 root = os.environ['CCA_HUB_ROOT']
 a = sys.argv[1:]
 open(os.path.join(box, 'systemctl.log'), 'a').write(' '.join(a) + '\n')
-unit = root + '/etc/systemd/system/cca-hub.service'
+svc = (a[-1] if len(a) > 1 else 'cca-hub').replace('.service', '')   # 命令的最后一个参数是服务名（daemon-reload 没有：用不到）
+unit = root + '/etc/systemd/system/%s.service' % svc
 if a[:1] in (['restart'], ['start']):
     if flag('start_hang'):
         time.sleep(60)
     if flag('start_fail'):
-        stop()
-        sys.exit('Job for cca-hub.service failed because the control process exited with error code.')
+        stop(svc)
+        sys.exit('Job for %s.service failed because the control process exited with error code.' % svc)
     lines = open(unit).read().splitlines()
     kv = dict(l.split('=', 1) for l in lines if '=' in l and not l.startswith('#'))
     env = dict(os.environ, **env_file(root + kv['EnvironmentFile']))
     argv = kv['ExecStart'].split()
     argv = argv[:1] + [root + x if x.startswith('/') else x for x in argv[1:]]
     argv = [re.sub(r'\$\{(\w+)\}', lambda m: env[m.group(1)], x).replace('0.0.0.0', '127.0.0.1') for x in argv]
-    start(argv, env)
+    start(argv, env, svc)
 elif a[:2] == ['disable', '--now'] or a[:1] == ['stop']:
-    stop()
+    stop(svc)
 elif a[:2] == ['is-active', '--quiet']:
-    sys.exit(0 if running() else 3)
+    sys.exit(0 if running(svc) else 3)
 '''
 DOCKER = SERVE + r'''
 import json
@@ -123,6 +127,9 @@ images = os.path.join(box, 'images')
 if a[:1] == ['compose']:
     if flag('no_compose'):
         sys.exit("docker: 'compose' is not a docker command.")
+    if a[1:2] == ['-p']:   # Team 的：项目名照服务名（两个 Team 的目录同名时不互相当成孤儿删掉）。记下来给测试看
+        open(os.path.join(box, 'compose.projects'), 'a').write(a[2] + '\n')
+        a = a[:1] + a[3:]
     if a[1:2] == ['-f']:   # 安装脚本总是写 -f compose.yaml（不认目录里别的 compose 文件）
         assert a[2] == 'compose.yaml', a
         a = a[:1] + a[3:]
@@ -136,20 +143,25 @@ elif a[:1] == ['pull']:
     open(images, 'a').write(a[-1] + '\n')
 elif a[:2] == ['image', 'inspect']:
     sys.exit(0 if flag('images') and a[2] in open(images).read().split() else 1)
-elif a[:1] == ['inspect']:
-    print('true' if running() else 'false')
+elif a[:1] == ['inspect']:   # docker inspect -f 格式 容器名
+    print('true' if running(a[-1]) else 'false')
 elif a[:2] == ['compose', 'up']:
     if flag('compose_fail'):
         sys.exit('Error response from daemon: driver failed programming external connectivity on endpoint cca-hub')
     y, env = open('compose.yaml').read(), env_file('.env')
-    assert '${CCA_HUB_ADMIT_HASH:?}' in y and env['CCA_HUB_IMAGE'] in open(images).read().split()
+    svc = re.search(r'^    container_name: (\S+)$', y, re.M).group(1)
+    # 交给服务端的那一项（入伙口令的哈希，Team 的是根公钥）：compose.yaml 里写着「名字: ${名字:?}」，值在 .env 里
+    secret = re.search(r'^      (\w+): \$\{(\w+):\?\}$', y, re.M)
+    assert secret and secret.group(1) == secret.group(2) and env['CCA_HUB_IMAGE'] in open(images).read().split()
     cmd = json.loads(re.search(r'^    command: (\[.*\])$', y, re.M).group(1))
     vols = dict((c, os.path.abspath(h)) for h, c in re.findall(r'^      - (\./\w+):(/\w+):', y, re.M))
     argv = [sys.executable] + [next((h + x[len(c):] for c, h in vols.items() if x.startswith(c + '/')), x) for x in cmd[1:]]
     argv = [x.replace('0.0.0.0:18445', '127.0.0.1:' + env['CCA_HUB_PORT']) for x in argv]
-    start(argv, dict(os.environ, CCA_HUB_ADMIT_HASH=env['CCA_HUB_ADMIT_HASH']))
+    start(argv, dict(os.environ, **{secret.group(1): env[secret.group(1)]}), svc)
 elif a[:2] == ['compose', 'down']:
-    stop()
+    y = open('compose.yaml').read() if os.path.exists('compose.yaml') else ''
+    m = re.search(r'^    container_name: (\S+)$', y, re.M)
+    stop(m.group(1) if m else 'cca-hub')
 elif a[:2] == ['compose', 'logs']:
     sys.stdout.write(open(os.path.join(box, 'server.log')).read() if os.path.exists(os.path.join(box, 'server.log')) else '')
 '''
@@ -217,18 +229,24 @@ class Box:
         f = (d or self.dir) / '.env'
         return dict(l.split('=', 1) for l in f.read_text().splitlines() if '=' in l and not l.startswith('#'))
 
-    def running(self):
+    def pidfile(self, svc='cca-hub'):
+        """这个服务的进程号文件（自己的同步服务器是 cca-hub；Team 的是 cca-team-<编号的前 8 位>）"""
+        return self.d / ('server.pid' if svc == 'cca-hub' else 'server.%s.pid' % svc)
+
+    def running(self, svc='cca-hub'):
         try:
-            os.kill(int((self.d / 'server.pid').read_text()), 0)
+            os.kill(int(self.pidfile(svc).read_text()), 0)
             return True
         except (OSError, ValueError):
             return False
 
-    def stop(self):
-        try:
-            os.killpg(int((self.d / 'server.pid').read_text()), 15)
-        except (OSError, ValueError):
-            pass
+    def stop(self, svc=None):
+        """停掉这个服务；不写是哪个就都停"""
+        for f in ([self.pidfile(svc)] if svc else list(self.d.glob('server*.pid'))):
+            try:
+                os.killpg(int(f.read_text()), 15)
+            except (OSError, ValueError):
+                pass
 
     def files_text(self):
         """服务器上（root/ 下）所有文件的内容，接在一起（找口令、盐有没有落盘）"""

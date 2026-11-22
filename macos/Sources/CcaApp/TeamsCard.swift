@@ -46,12 +46,14 @@ struct TeamsCard: View {
                             SectionAction("取配置", systemImage: "arrow.clockwise") { model.syncTeams() }
                                 .help("各个 Team 现在取一次配置（平时每小时自动取）：有新的就马上照它改账号表")
                         }
+                        SectionAction("新建 Team…", systemImage: "plus") { model.newTeam() }
+                            .help("在这台 Mac 上建一个 Team：它是管理员（根密钥只在它上面）。建好以后部署它的同步服务器，再给别的设备发邀请")
                     }
                     Spacer(minLength: 8)
                     if model.teamBusy { ProgressView().controlSize(.small) }
                 }
                 .disabled(model.flow != nil || model.teamBusy)
-                Text("要自己建一个 Team（当管理员）：在终端里运行 cca team new 名字，照它说的部署服务器、接上，再回到这里发邀请。")
+                Text("新建的 Team 要先部署它的同步服务器（经 SSH 装到你自己的 Linux 服务器上；没有服务器的，在终端里运行 cca team hosted 部署到托管平台）。一台服务器上可以装几个 Team，各是一个服务。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -78,7 +80,16 @@ private struct TeamBlock: View {
                     }
                     .help("这个 Team 里的设备（发邀请、定它能用哪些账号、移除）和各个账号走哪个节点")
                 }
+                if team.isAdmin, team.state == .local {
+                    RowAction("部署到我的服务器…", systemImage: "server.rack") { model.deployTeam(team) }
+                        .disabled(model.flow != nil || model.teamBusy)
+                        .help("经 SSH 把这个 Team 的同步服务器装到你自己的 Linux 服务器上（root 登录；有 Docker 用 Docker，没有用 systemd + python3），装好了自动接上")
+                }
                 Menu {
+                    if team.isAdmin, team.state != .local {
+                        Button("更新服务器、搬到别的服务器…") { model.deployTeam(team) }
+                        Divider()
+                    }
                     Button(team.isAdmin ? "删掉这个 Team…" : "退出这个 Team…", role: .destructive) { model.leaveTeam(team) }
                 } label: {
                     Label("更多", systemImage: "ellipsis.circle")

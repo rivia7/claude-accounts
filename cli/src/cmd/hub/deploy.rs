@@ -71,6 +71,19 @@ struct Opts {
     askpass: bool,
     /// 只看登录得上不，不部署（ssh_check）
     check: bool,
+    /// 装的是 Team 的同步服务器（cca team deploy）：说话时的命令名、怎么办的建议照它
+    team: bool,
+}
+
+impl Opts {
+    /// 给人看的命令名
+    fn cmd(&self) -> &'static str {
+        if self.team {
+            "cca team deploy"
+        } else {
+            "cca hub deploy"
+        }
+    }
 }
 
 /// 读参数、核对：不对的都是 usage（bash 的 hub_usage；名字不对是 name），还没连服务器
@@ -337,9 +350,9 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
     if !r.ok {
         if done.rc == 255 {
             let hint = if o.batch && !o.askpass {
-                "；要输密码的话，在终端里运行 cca hub deploy（或者在 cca App 里部署）"
+                format!("；要输密码的话，在终端里运行 {}（或者在 cca App 里部署）", o.cmd())
             } else {
-                ""
+                String::new()
             };
             // 部署到一半断了也是 255：服务起来以后才断的，服务器上已经是这一次的了（安装脚本不再换回），再运行时照它判断
             return fail("ssh", &format!("SSH 连不上 {}、登录不了，或者中途断了（上面是 ssh 说的）{hint}", o.target));
@@ -404,6 +417,9 @@ fn fail_code(code: &str) -> &'static str {
 fn fail_why(code: &str, why: &str, o: &Opts) -> String {
     let why = if why.is_empty() { "服务器上没装成" } else { why };
     let t = &o.target;
+    if o.team && code != "sudo" {
+        return why.to_string(); // Team 的：安装脚本说的就是全部（那个目录里装着别的：换 --dir）
+    }
     match code {
         "taken" => format!(
             "{why}：在加入了的设备上运行 cca hub invite 拿加入链接，在这台设备上 cca hub join；要从头来（服务器忘掉所有设备，每台都要重新加入）：cca hub deploy {t} --reset"
@@ -415,6 +431,73 @@ fn fail_why(code: &str, why: &str, o: &Opts) -> String {
         "sudo" => format!("{t} 不是 root，sudo 又要密码：用 root 登录（root@服务器），或者给这个用户免密码的 sudo"),
         _ => why.to_string(),
     }
+}
+
+/// Team 的同步服务器装好了（team_install）：各台设备该连的地址、证书公钥的指纹、怎么装的
+pub struct TeamInstalled {
+    pub url: String,
+    pub pin: String,
+    pub mode: String,
+    pub state: String,
+    pub port: i64,
+    pub dir: String,
+    /// 地址是内网的：别的网络里的设备连不上
+    pub lan: bool,
+}
+
+const TEAM_USAGE: &str = "用法: py team-deploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
+                          [--mode docker|systemd] [--dir 目录] [--batch] [--askpass] [--check]";
+
+/// Team 的同步服务器的一键部署（cca team deploy：cmd/team/admin.rs 的 cmd_team_deploy 调）。args 是 hub-deploy 那一套参数（没有
+/// --reset、--name）；root 是 Team 的根公钥（ssh-ed25519 AAAA…），svc 是服务名（cca-team-<编号的前 8 位>：一台服务器上每个 Team
+/// 一个服务，目录默认 /opt/<服务名>）；old 是这个 Team 现在接着的地址和证书公钥的指纹。--check 只看登录得上不（返回 None）。
+/// 装好了返回各台设备该连的地址：--host；没写时，装好的那台用的证书就是现在接着的那张（还是那台服务器：只是更新）就照原来的地址，
+/// 不然是 ssh -G 的 hostname
+pub fn team_install(args: &[String], root: &str, svc: &str, old: Option<(&str, &[String])>) -> R<Option<TeamInstalled>> {
+    let given_dir = args.iter().any(|a| a == "--dir");
+    let mut o = opts(args)?;
+    if o.reset || o.name.is_some() {
+        return fail("usage", TEAM_USAGE);
+    }
+    o.team = true;
+    if !given_dir {
+        o.dir = format!("/opt/{svc}");
+    }
+    if o.check {
+        ssh_check(&o)?;
+        return Ok(None);
+    }
+    let Some(key) = root.split(' ').nth(1).filter(|k| k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/'))
+    else {
+        return fail("key", "这个 Team 的根公钥读不出来");
+    };
+    let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\nset -- --dir {}", sq(key), sq(&o.dir));
+    if let Some(p) = o.port {
+        pre.push_str(&format!(" --port {p}"));
+    }
+    if let Some(m) = &o.mode {
+        pre.push_str(&format!(" --{m}"));
+    }
+    pre.push('\n');
+    let r = run_installer(&o, &pre)?;
+    let host = match (&o.host, old) {
+        (Some(h), _) => h.clone(),
+        (None, Some((u, pins))) if pins.contains(&r.pin) => url_parts(u).0,
+        _ => ssh_host(&o),
+    };
+    if HOST_RE.fullmatch(&host).is_none() {
+        return fail("host", &format!("服务器装好了，但认不出各台设备该连的地址（{host}）：加 --host 公网IP或域名，再运行一次"));
+    }
+    let hp = if host.contains(':') { format!("[{host}]") } else { host.clone() };
+    Ok(Some(TeamInstalled {
+        url: format!("https://{hp}:{}", r.port),
+        pin: r.pin,
+        mode: r.mode,
+        state: r.state,
+        port: r.port,
+        dir: o.dir.clone(),
+        lan: lan_only(&host),
+    }))
 }
 
 /// 新的加入链接：地址是 --host，没写时 --reset 的照原来链接里的（安装脚本核对过就是那一台：EXPECT），再是 ssh -G 的 hostname

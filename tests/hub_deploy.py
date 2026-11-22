@@ -681,5 +681,179 @@ class DeployTest(Base):
         self.assertEqual(a.run('hub-devices').returncode, 0)
 
 
+class TeamDeployTest(Base):
+    """Team 的同步服务器（docs/dev/team.md「部署」）：同一份安装脚本（--team-root），每个 Team 一个服务，一台服务器上能装几个；
+    cca team deploy（team-deploy）经假的 ssh 装好、接上"""
+    def admin(self, name='admin'):
+        dev = Device(self.t / ('%s-%s' % (name, secrets.token_hex(4))), name, {})
+        dev.config(lambda c: c.pop('policy'))
+        dev.fake('ssh', SSH)
+        return dev
+
+    def new_team(self, dev, name):
+        tid, root = dev.ok('team-new', name, '--device', 'studio').split('\n')[:2]
+        return tid, root, 'cca-team-' + tid[:8]
+
+    def test_installer(self):
+        """在服务器上直接运行：两个 Team 各一个服务（服务名、系统用户、目录、端口都是自己的），互不相干；没写端口时从 18445 起找空着的；
+        再运行（只写目录）是更新；装着另一个 Team 的目录不碰；卸载一个，另一个照旧"""
+        b = self.box()
+        a, c = self.admin('a'), self.admin('c')
+        (tid1, root1, svc1), (tid2, root2, svc2) = self.new_team(a, '甲组'), self.new_team(c, '乙组')
+        d1, d2 = b.root / 'opt' / svc1, b.root / 'opt' / svc2
+        p1 = free_port()
+        r = b.install(self.script, '--team-root', root1, '--host', '127.0.0.1', '--port', str(p1))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('Team 的同步服务器在运行（/opt/%s，' % svc1, r.stdout)
+        self.assertIn('cca team attach Team https://127.0.0.1:%d %s' % (p1, pin(b, d1)), r.stdout, '打出管理员接上它的那一行')
+        self.assertNotIn('cca-hub1.', r.stdout, '没有加入链接：设备拿管理员发的邀请加入')
+        env = b.envfile(d1)
+        self.assertEqual((env['CCA_TEAM_ROOT'], env['CCA_HUB_PORT'], 'CCA_HUB_ADMIT_HASH' in env), (root1.split()[1], str(p1), False),
+                         '.env 里是根公钥后面那一段（没有空格）')
+        unit = (b.root / 'etc/systemd/system' / (svc1 + '.service')).read_text()
+        self.assertTrue('--mode team ' in unit and ('User=%s\n' % svc1) in unit and ('EnvironmentFile=/opt/%s/.env' % svc1) in unit, unit)
+        self.assertTrue(b.running(svc1) and (b.d / 'users' / svc1).exists() and not b.running(), '服务名、系统用户是这个 Team 的')
+        self.assertEqual(a.ok('team-attach', tid1, 'https://127.0.0.1:%d' % p1, pin(b, d1)).split('\n')[0], '127.0.0.1:%d' % p1)
+        # 第二个 Team：只写根公钥后面那一段也行；没写端口，从 18445 起找一个空着的
+        k = next(k for k in range(40) if self.port_free(18445 + k))
+        (b.d / 'listening').write_text(''.join('%d\n' % (18445 + i) for i in range(k)))
+        b.fake('ss', '#!/bin/sh\n' + SS)
+        r = b.install(self.script, '--team-root', root2.split()[1], '--host', '127.0.0.1')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(b.envfile(d2)['CCA_HUB_PORT'], str(18445 + k), '前面 %d 个端口有程序占着' % k)
+        self.assertTrue(b.running(svc1) and b.running(svc2), '两个都在运行')
+        self.assertEqual(c.ok('team-attach', tid2, 'https://127.0.0.1:%d' % (18445 + k), pin(b, d2)).split('\n')[0], '127.0.0.1:%d' % (18445 + k))
+        self.assertEqual(self.code(c, 'team-attach', tid2, 'https://127.0.0.1:%d' % p1, pin(b, d1)), 'denied', '各是各的：甲组的服务器不认乙组的根密钥')
+        # 再运行，只写目录：照这个目录里装的那个 Team 更新（端口、证书、数据都不变）
+        before = pin(b, d1)
+        r = b.install(self.script, '--dir', '/opt/' + svc1)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('更新了服务端程序', r.stdout)
+        self.assertEqual((pin(b, d1), b.envfile(d1)['CCA_HUB_PORT'], b.running(svc1)), (before, str(p1), True))
+        self.assertEqual(a.ok('team-sync').split('\t')[2], 'ok', '管理员照旧连得上')
+        # 装着另一个 Team 的目录不碰；Team 的没有 --reset
+        r = b.install(self.script, '--team-root', root2, '--dir', '/opt/' + svc1)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('另一个 Team 的同步服务器', r.stdout + r.stderr)
+        r = b.install(self.script, '--team-root', root1, '--reset')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('没有 --reset', r.stdout + r.stderr)
+        self.assertEqual(b.envfile(d1)['CCA_TEAM_ROOT'], root1.split()[1])
+        r = b.install(self.script, '--team-root', 'ssh-ed25519 AAAA')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('根公钥不对', r.stdout + r.stderr)
+        # 卸载时写错了是哪个（根公钥是乙组的、目录是甲组的）：不动（不然停的是乙组的服务，删的却是甲组的数据）
+        r = b.install(self.script, '--uninstall', '--team-root', root2, '--dir', '/opt/' + svc1)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('不是要卸载的这一个', r.stdout + r.stderr)
+        self.assertTrue(b.running(svc1) and b.running(svc2) and (d1 / 'data').exists())
+        # .cca-hub 里记着服务名：.env 不见了也认得出是 Team 的——不带根公钥再装不行（不然会当成自己的同步服务器装进来），卸载照它
+        self.assertIn('# svc=%s\n' % svc1, (d1 / '.cca-hub').read_text())
+        keep = (d1 / '.env').read_text()
+        (d1 / '.env').unlink()
+        r = b.install(self.script, '--dir', '/opt/' + svc1)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('带上 --team-root', r.stdout + r.stderr)
+        (d1 / '.env').write_text(keep)
+        # 没有 ss、netstat 的服务器上自动挑端口：别的 Team 记着用的端口也跳过
+        b.fake('ss', '#!/bin/sh\nexit 127\n')
+        e, tid3 = self.admin('e'), None
+        tid3, root3, svc3 = self.new_team(e, '丙组')
+        used = {b.envfile(d1)['CCA_HUB_PORT'], b.envfile(d2)['CCA_HUB_PORT']}
+        (b.root / 'opt' / 'cca-team-00000000').mkdir()
+        (b.root / 'opt' / 'cca-team-00000000' / '.env').write_text(''.join('CCA_HUB_PORT=%d\n' % (18445 + i) for i in range(k + 1)))
+        r = b.install(self.script, '--team-root', root3, '--host', '127.0.0.1')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn(b.envfile(b.root / 'opt' / svc3)['CCA_HUB_PORT'], used | {str(18445 + i) for i in range(k + 1)})
+        r = b.install(self.script, '--uninstall', '--dir', '/opt/' + svc3)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # 卸载第一个：它的服务、目录、系统用户都没了，第二个照旧
+        r = b.install(self.script, '--uninstall', '--dir', '/opt/' + svc1)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('卸载了 Team 的同步服务器', r.stdout)
+        self.assertFalse(b.running(svc1) or d1.exists() or (b.d / 'users' / svc1).exists()
+                         or (b.root / 'etc/systemd/system' / (svc1 + '.service')).exists())
+        self.assertTrue(b.running(svc2) and (b.d / 'users' / svc2).exists() and d2.exists())
+        self.assertEqual(c.ok('team-sync').split('\t')[2], 'ok')
+
+    def port_free(self, port):
+        import socket
+        with socket.socket() as s:
+            try:
+                s.bind(('127.0.0.1', port))
+                return True
+            except OSError:
+                return False
+
+    def code(self, dev, *argv, **kw):
+        r = dev.run(*argv, **kw)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        return r.stdout.split('\t')[0]
+
+    def test_deploy(self):
+        """cca team deploy：经 SSH 装好（Docker）、接上，整条路通（发邀请、别的设备加入、取到配置）；再部署是更新；和自己的同步服务器
+        装在同一台服务器上互不相干"""
+        b = self.box(docker=True)
+        a = self.admin()
+        tid, root, svc = self.new_team(a, '甲组')
+        d = b.root / 'opt' / svc
+        port = free_port()
+        env = dict(HUB_ENTER=str(b.enter), CCA_VERSION='9.9.9')
+        self.assertEqual((a.run('team-deploy', tid, 'root@box', '--check', **env).returncode, d.exists()), (0, False), '--check 只看登录得上不')
+        r = a.run('team-deploy', tid, 'root@box', '--port', str(port), **env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(kv(r.stdout), {'mode': 'docker', 'state': 'new', 'port': str(port), 'dir': '/opt/' + svc, 'lan': '1',
+                                        'host': '127.0.0.1:%d' % port, 'device': 'studio', 'members': '1', 'stored': '1', 'note': '',
+                                        'svc': svc})
+        self.assertIn('Team 的同步服务器在运行', r.stderr, '服务器那边的进度经 ssh 的 stderr 直接打出来')
+        team = json.loads((a.cca / 'teams' / tid / 'team.json').read_text())
+        self.assertEqual((team['url'], team['pins']), ('https://127.0.0.1:%d' % port, [pin(b, d)]))
+        y = (d / 'compose.yaml').read_text()
+        self.assertTrue(('container_name: %s\n' % svc) in y and '"--mode", "team"' in y and 'CCA_TEAM_ROOT: ${CCA_TEAM_ROOT:?}' in y, y)
+        self.assertEqual(set(b.log('compose.projects').split()), {svc}, 'compose 的项目名照服务名（不照目录名）')
+        self.assertNotIn(str(a.cca), (a.home / 'ssh.argv').read_text())
+        # 发邀请、另一台设备加入：取到了配置
+        link = a.ok('team-invite', tid, 'bob-mini').split('\n')[0]
+        bob = Device(self.t / ('bob-' + secrets.token_hex(4)), 'bob', {})
+        bob.config(lambda c: c.pop('policy'))
+        self.assertEqual(bob.ok('team-join', '--name', 'bob-mini', stdin=link).split('\n')[5], 'ok')
+        # 再部署：更新，地址照原来接着的，设备不用动
+        r = a.run('team-deploy', tid, 'root@box', **env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([kv(r.stdout)[k] for k in ('state', 'port', 'host', 'members')], ['update', str(port), '127.0.0.1:%d' % port, '2'])
+        self.assertEqual(bob.ok('team-sync').split('\t')[2], 'ok')
+        # 同一台服务器上再装自己的同步服务器：各是各的服务，互不相干
+        o = self.device('alice-mbp')
+        o.fake('ssh', SSH)
+        hp = free_port()
+        r = o.run('hub-deploy', 'root@box', '--port', str(hp), '--mode', 'systemd', **env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(b.running() and b.running(svc), '自己的同步服务器（cca-hub）和 Team 的都在运行')
+        self.assertEqual(bob.ok('team-sync').split('\t')[2], 'ok')
+        # 托管平台：生成部署文件（服务端程序、README；Railway 另有 Dockerfile），里面只有公开的根公钥（后面那一段）
+        key = root.split()[1]
+        kvs = lambda text: dict(tok.split('=', 1) for tok in shlex.split(text))   # 值里有换行（steps 是几行）：整个输出一起拆
+        out = kvs(a.ok('team-hosted', tid, 'railway', '--dir', str(a.home / 'rw'), CCA_VERSION='9.9.9'))
+        self.assertEqual((out['dir'], out['tid'], out['name'], out['svc']), (str(a.home / 'rw'), tid, '甲组', svc))
+        self.assertEqual(sorted(f.name for f in (a.home / 'rw').iterdir()), ['Dockerfile', 'README.md', 'cca-presence.py'])
+        self.assertIn('ENV CCA_HUB_HOSTED=1 CCA_TEAM_ROOT=%s\n' % key, (a.home / 'rw' / 'Dockerfile').read_text())
+        self.assertIn('railway init --name %s' % svc, out['steps'])
+        self.assertEqual((a.home / 'rw' / 'cca-presence.py').read_text(), (ROOT / 'server' / 'cca-presence.py').read_text())
+        self.assertIn('cca team attach 甲组 https://', (a.home / 'rw' / 'README.md').read_text())
+        out = kvs(a.ok('team-hosted', tid, 'sealos'))
+        self.assertEqual(out['dir'], str(a.home / (svc + '-sealos')), '没写目录：~/<服务名>-<平台>')
+        self.assertIn('环境变量：CCA_TEAM_ROOT=%s' % key, out['steps'])
+        self.assertFalse((a.home / (svc + '-sealos') / 'Dockerfile').exists())
+        (a.home / 'rw' / 'other.txt').write_text('x')
+        self.assertEqual(self.code(a, 'team-hosted', tid, 'railway', '--dir', str(a.home / 'rw')), 'dir')
+        self.assertEqual(self.code(a, 'team-hosted', tid, 'heroku'), 'usage')
+        self.assertNotIn(str(a.cca), ''.join(f.read_text() for d in ('rw', svc + '-sealos') for f in (a.home / d).iterdir()),
+                         '部署文件里没有这台设备上的东西')
+        # 写错的：没有这个 Team、Team 的部署没有 --reset、成员不是管理员
+        self.assertEqual(self.code(a, 'team-deploy', 'nope', 'root@box', **env), 'no_team')
+        self.assertEqual(self.code(a, 'team-deploy', tid, 'root@box', '--reset', **env), 'usage')
+        self.assertEqual(self.code(bob, 'team-deploy', tid, 'root@box', **env), 'not_admin')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)

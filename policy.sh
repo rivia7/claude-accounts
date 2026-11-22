@@ -297,6 +297,8 @@ key_add() {
 	name=$(alias_pick "  给它起个别名（谁的哪台机器，以后按别名查、删、改）" "$name" "$def") || exit 1
 	key_create "$name" "$pub" ro || fail "没加上：${GH_ERR}"
 	echo "✓ 已把「${name}」加成 ${REPO} 的只读 deploy key：那台机器上正在等的 cca 几秒内就会自己拉到映射（没在等的，在那台机器上运行 cca policy pull）"
+	# 这条路以后会去掉（docs/dev/team.md 的 M7：至少两个正式版以后）：新的做法是 Team，不用一台台加公钥
+	echo "  （手工加公钥这条路以后会去掉：改用 Team 的话，给那台机器发一个邀请就行——cca team invite；已经加了公钥的机器用 ./policy.sh team 一次迁过去）"
 }
 key_rm() {
 	[ $# -eq 1 ] || fail "用法：./policy.sh key rm 别名 [-y]"

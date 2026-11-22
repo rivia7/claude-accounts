@@ -10,8 +10,8 @@
 | M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；现在的维护者映射、自己的同步服务器当作旧式的 Team 接进来 | 做完了：账号表照 Team 的配置改，设备统计、记下的 API key、折合金额经各个 Team 的服务器同步（见「账号表照配置改」「同步经 Team 的服务器」）。旧的两套（维护者的映射、自己的同步服务器）照旧并着用，迁成 Team 是 M4 |
 | M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 做完了（见「迁移」）：`cca team import`、`./policy.sh team` + 机器拉到映射后自己加入、`cca team import Team --mine`。自己的同步服务器是照步骤手动换，不自动 |
 | M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 做完了（见「界面」）。在 App 里新建 Team 的入口等一键部署（M6） |
-| M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 没做 |
-| M7 | 删掉旧通道：GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 没做 |
+| M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 做完了（见「部署」）：`cca team deploy`、同一份安装脚本的 `--team-root`、`cca team hosted`（终端里）；App 里「新建 Team…」「部署到我的服务器…」 |
+| M7 | 删掉旧通道：GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 只标了弃用（`./policy.sh key add`、`cca policy on` 给维护者的那一行旁边说新的做法是 Team）。旧通道照常用：和 Team 同一个版本里删掉的话，还没迁过去的机器就断了。删的时候要动的见「要删掉的旧通道」 |
 
 定下来的（用户 2026-11-21、22 定的，照它做，别重新讨论）：
 
@@ -22,6 +22,22 @@
   现有的映射和参考节点导入一次。锁定请求不要了。
 - 界面上按 Team 筛选的是侧栏、总览、菜单栏图标点开的面板；筛选只管显示，`~/Applications` 里有哪些启动器不跟着变。
 - 不经 Team 共享第三方 API 账号（等于把 key 发给别人）。
+
+## 要删掉的旧通道（M7，至少两个正式版以后）
+
+现在都还在用，不能先删。到时候一起删的：
+
+- 映射的拉取和验签：bash 的 `policy_*`（`policy_setup`、`policy_prepare`、`policy_fetch`、`policy_pull`、`policy_hook`、`policy_request`……）、
+  `cca policy` 这条命令、`~/.cca/policy/`（deploy key、policy.json、nodes.json）；辅助程序 `core/policy.rs` 里读 policy.json 的那一半
+  （`policy_doc`、`legacy_raw`、`legacy_fill`；`mapping` 就只剩各个 Team 给的）、`policy-*` 子命令、`cmd/team.rs` 的 `adopt`
+  （照映射里的邀请加入：映射没了它也没了）。
+- 维护者那一头：`policy.sh` 的发布、`key`、`lock`、`team`（迁移用的）、`presence deploy / sync`，`cca-external-account` 这个 skill。
+- 维护者的设备统计服务器那一类（`HubKind::Maintainer`、`presence_server`、`--mode maintainer` 和它的设备清单）：账号都在 Team 里以后没有
+  账号走它。远程会话的中转现在也在那台服务器上（remote.md）：删之前先给它找好去处。
+- 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半）：都换成 Team 以后删。
+- 界面：「共享与同步」页的「维护者共享的账号」开关、「自己的同步服务器」卡片、配置向导第 1 步问的「有没有维护者共享给你的账号」
+  （换成「有没有 Team 的邀请链接」），PROTOCOL 里对应的字段要升 `GUI_API` 才能删。
+- 锁定请求（`cca policy request`、`./policy.sh lock`）：Team 里管理员在自己的设备上改，没有它的位置。
 
 ## 信任
 
@@ -232,6 +248,53 @@
 换过去以后这些账号的节点由 Team 的配置固定（管理员的设备上 `cca team map` 改），不再是各台设备自己选。折合金额、记下的 API key 各台设备
 自己有一份，换了服务器会重新传上去，不丢。没换的设备还在旧的服务器上，两边各看各的，直到都换完。
 
+## 部署（M6）
+
+服务器上只有 Team 的根公钥（公开的），所以装哪都行；麻烦只在「装」本身。三条路：
+
+- **`cca team deploy Team [用户@]主机 […]`**（`cmd/team/admin.rs` 的 `cmd_team_deploy`）：经 SSH 装到自己的 Linux 服务器上，装好了接上
+  （`attach`，和 `cca team attach` 是同一段）。装的那一半就是自己的同步服务器的那一套（`cmd/hub/deploy.rs`：`opts`、`run_installer`、
+  `ssh_check`、结果行 `CCA-HUB 键 值`；`team_install` 只是换了放进安装脚本前面的几项：`CCA_HUB_TEAM_ROOT`），所以登录不上、缺依赖、
+  端口被占这些原因码和说法都一样。各台设备该连的地址：`--host`；没写时，装好的那台用的证书就是现在接着的那张（指纹对得上：还是那台
+  服务器，只是更新）就照原来的地址，不然是 `ssh -G` 的 hostname。再运行是更新；写别的服务器就是搬过去（`attach` 记 `moved_from`，
+  原来那台上收尾）。没有 `--reset`：设备、邀请都在管理员手里，服务器没有要换的口令。**装的那一段不拿着这个 Team 的锁**（经 SSH 要几分钟，
+  拿着的话这台设备上取配置、别的管理命令都卡着等）：先读出根公钥、现在接着哪台就放锁，装好了再取锁、重新读一遍，接上。
+- **在服务器上自己运行安装脚本**（`cca team deploy --script`、发布页上的 `cca-hub-install.sh`，和自己的同步服务器是同一份）：
+  `sudo sh 脚本 --team-root 'ssh-ed25519 AAAA…' [--host …] [--port …]`，最后打出管理员接上它的那一行（`cca team attach …`，地址和指纹都是
+  公开的）。
+- **托管平台**（`cca team hosted Team [railway | sealos]`，只在终端里）：`cmd/hub/hosted.rs` 的 `team_files` 生成部署文件（服务端程序、
+  README，Railway 另有 Dockerfile）和步骤；平台上的设置是 `CCA_HUB_HOSTED=1` 加 `CCA_TEAM_ROOT`（服务端：托管的预设下给了根公钥就是
+  Team 的服务器）。部署好了 `cca team attach Team https://平台给的地址`（照证书机构验，没有指纹）。
+
+**一台服务器上几个 Team**（用户定的：每个 Team 一个服务，服务端进程还是只管一个）：安装脚本的 Team 模式（`server/hub-install.sh` 的
+`team_setup`）里服务名、系统用户、容器名都是 `cca-team-<Team 编号的前 8 位>`（编号是根公钥的 SHA-256，脚本里拿 openssl 算，和辅助程序的
+`team_id` 一样），目录默认 `/opt/<服务名>`，端口没写时照上次的、第一次从 18445 起找一个空着的。所以各个 Team、还有自己的同步服务器
+（`cca-hub`）在同一台机器上互不相干：各有各的 unit / compose 项目、证书、数据、`.env`。
+
+- `.env` 里是 `CCA_TEAM_ROOT=`根公钥 `ssh-ed25519` 后面那一段（没有空格：systemd 的 EnvironmentFile、compose 的 `.env`、脚本自己的
+  `env_get` 都好读）；服务端两种写法都认。没有 `CCA_HUB_ADMIT_HASH`。
+- 再运行：带 `--team-root`，或者只写 `--dir 那个目录`（`team_here` 照目录里的 `.env` 认出是哪个 Team：更新、卸载）。目录里装着另一个
+  Team 的、装着自己的同步服务器的不碰（`other_kind` → `taken`）——**卸载也查**：写错了 `--team-root`、`--dir` 的话，停的是这个 Team 的
+  服务，删的却是那个目录里别人的数据。`.cca-hub` 里记着服务名（`# svc=…`）：`.env` 不见了、坏了时卸载照它停服务、删系统用户；
+  不带根公钥再装不行（不然会当成自己的同步服务器装进这个目录）。
+- Docker 方式下 compose 的项目名照服务名（`-p`，`DCP`）：不写的话是目录名，两个 Team 装在同名的目录里（`/a/hub`、`/b/hub`）时
+  `up --remove-orphans` 会把对方的容器当成孤儿删掉。自己的同步服务器照旧（目录名）。
+- 自动挑端口（`port_taken`）除了看有没有程序在听，还跳过这台服务器上别的同步服务器（默认目录里的）记着用的：没有 `ss`、`netstat` 的
+  服务器上只看得到这个。
+- 换端口可以（自己的同步服务器不行：加入链接里写死了）：管理员重新接上，各台设备照配置里的新地址换过来。
+- compose.yaml、unit 是一份模板，`@SVC@`、`@SMODE@`、`@SECRET@`（交给服务端的那一项：口令的哈希 / 根公钥）换成这一种的。
+
+bash（`team_deploy`）和部署自己的同步服务器共用问服务器、查登录、问密码、给出加公钥那一行的几段（`hub_deploy_ask`、`hub_deploy_where`、
+`hub_pubkey_ask`、`hub_deploy_run`）：是哪一种由 `DEPLOY_PY` / `DEPLOY_WORDS` / `DEPLOY_WHAT` / `DEPLOY_FAIL` / `DEPLOY_AT` / `DEPLOY_MSG`
+说。所以 App 里是同一套表单（`hub.deploy`、`hub.password`、`hub.pubkey`），标题和说明说的是这个 Team。`cca team new` 在 App 里不写名字
+时问（`team.new`，校验 `teamname`），成了是 `team_created`；部署成了 `team_deployed`，地址是内网的另有 `team_lan`。
+
+App：Team 卡片下面「新建 Team…」（`Handoff.teamNew`），还没接上服务器的 Team 那一行有「部署到我的服务器…」，接着的在「更多」里
+「更新服务器、搬到别的服务器…」（`Handoff.teamDeploy`）。托管平台在 App 里还没有页面（终端里做）。
+
+还没做的：托管平台的那一页（App 里）；Railway、Sealos 上没真的部署过 Team 的服务器（文件和步骤照自己的同步服务器那一套改的）；
+真的 Linux 服务器上没跑过（假服务器 `tests/hub_box.py` 上跑的；`tests/linux.sh` 会在各个发行版的容器里跑同一份测试）。
+
 ## 界面（M5）
 
 接口（PROTOCOL 2.1 的 `hello.team`，2.2 的 `config.teams`、账号的 `team`，4.14）：
@@ -383,3 +446,10 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `copySecret`、改授权和节点发的命令。通用检查（`Generic.swift`）：`config.teams` 和账号的 `team` 对得上、Team 的服务器照编号算、
   `team_devices` / `team_list` 两种文档。回归 11b3d 把真实的 hello、带 Team 的 state、`team ls --json`、`team devices --json` 存进
   `$T/guifx4` 交给 `macos/test.sh` 解码。
+- 部署（`tests/hub_deploy.py` 的 `TeamDeployTest`，假服务器是 `tests/hub_box.py`：每个服务各有各的 unit 和进程号文件，
+  `server.pid` 是 `cca-hub` 的、`server.<服务名>.pid` 是 Team 的）：`test_installer` 在服务器上直接运行——两个 Team 各一个服务、
+  各自的目录和端口（没写端口的从 18445 起找空着的；没有 `ss` 时跳过别的 Team 记着的），甲组的服务器不认乙组的根密钥，只写目录再运行
+  是更新，装着另一个 Team 的目录不碰（卸载也是），`.env` 不见了不带根公钥不装，没有 `--reset`，卸载一个另一个照旧；`test_deploy` 是 `team-deploy`——经假 ssh 装好（Docker）、接上，发邀请、别的设备加入、取到配置，
+  再部署是更新，同一台服务器上再装自己的同步服务器互不相干，托管平台的部署文件。服务端启动参数（只写根公钥后面那一段、托管的预设下
+  给了根公钥就是 Team 的）在 `tests/presence.py` 的 `TeamServerTest.test_cli`。回归 11b3d：App 里新建（`team.new`）、`cca team deploy`
+  装到 11b3c 那台假服务器、App 里再部署（`hub.deploy` 那一页）、`cca team hosted`、卸载。

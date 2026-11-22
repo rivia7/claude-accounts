@@ -3986,6 +3986,23 @@ out=$(run cca policy pull 2>&1); rc=$?
 ok "自己退出以后再拉映射：不再照同一个邀请加入" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "照维护者的映射加入了" && [ ! -e "$H/.cca/teams/$TMBID" ]'
 cp -p "$T/tmh.keys" "$T/deploy_keys.json"; cp -p "$T/tmh.mr" "$MR/policy.json"; cp -p "$T/tmh.pr" "$PR/policy.json"; cp -p "$T/tmh.pr.sig" "$PR/policy.json.sig"
 cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$MR/policy.json.sig" "$H/.cca/teams/adopt.json"
+# --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（11b3c 那台假服务器；和自己的同步服务器是同一份安装脚本，
+#     每个 Team 一个服务），装好了自动接上。App 里新建问名字（team.new），部署问服务器（和自己的同步服务器同一页：hub.deploy）
+out=$(sess '{"team.new":[{"name":"机房组"}]}' -- cca team new 2>&1); rc=$?
+TMDID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID")
+ok "提问会话：cca team new 不写名字：问 Team 的名字，建好了（result 的 team_created），还没接上服务器" '[ $rc -eq 0 ] && [ "$(asks)" = team.new ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_created\"" && [ ${#TMDID} -eq 32 ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，没有服务器"'
+TMDPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); TMDD="$T/hubbox/root/opt/cca-team-${TMDID:0:8}"
+out=$(runev cca team deploy 机房组 root@hubbox --reset 2>&1); rc=$?
+ok "Team 的部署没有 --reset：fail 事件 team_usage，不连服务器" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && [ ! -e "$TMDD" ]'
+out=$(runev cca team deploy "${TMDID:0:8}" root@hubbox --port "$TMDPORT" 2>&1); rc=$?
+ok "cca team deploy：经 SSH 装好（systemd + python3；服务名、目录是这个 Team 的）、自动接上（result 事件 team_deployed）；服务器上只有公开的根公钥" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已部署「机房组」的同步服务器到 root@hubbox（/opt/cca-team-${TMDID:0:8}，systemd + python3，端口 ${TMDPORT}，服务名 cca-team-${TMDID:0:8}），接上了" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_deployed\"" && grep -q "^CCA_TEAM_ROOT=AAAA" "$TMDD/.env" && ! grep -q ADMIT "$TMDD/.env" && ! grep -rq "PRIVATE KEY" "$TMDD/.env" "$TMDD/app" && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，127.0.0.1:${TMDPORT}，已同步"'
+out=$(sess '{"hub.deploy":[{"host":"hubbox","user":"root","port":"22"}]}' -- cca team deploy 机房组 2>&1); rc=$?
+ok "App 里再部署（不写服务器）：问服务器（和自己的同步服务器同一页，标题说的是这个 Team、预填它现在接着的地址），先查登录得上不，只更新" '[ $rc -eq 0 ] && [ "$(asks)" = hub.deploy ] && evq "e.get(\"q\") == \"hub.deploy\" and \"机房组\" in e[\"title\"] and e[\"fields\"][0][\"value\"] == \"127.0.0.1\"" && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
+out=$(run cca team hosted 机房组 sealos --dir "$T/tm-hosted" 2>&1); rc=$?
+ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && printf "%s" "$out" | grep -q "环境变量：CCA_TEAM_ROOT=AAAA" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
+run cca team deploy --script 2>/dev/null | run ssh root@hubbox sh -s -- --uninstall --dir "/opt/cca-team-${TMDID:0:8}" >/dev/null 2>&1
+runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" >/dev/null 2>&1
+ok "收尾：服务器上卸载了这个 Team 的服务，这台设备上删掉了这个 Team" '[ ! -e "$TMDD" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ]'
 out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
 ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then

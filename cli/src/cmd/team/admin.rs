@@ -17,10 +17,13 @@ use super::doc::{
     Invite, SEQ_MAX,
 };
 use super::{cfg_of, fail, fault, find_team, index_add, now, pub_line, save_team, sync_locked, team_lock};
+use crate::cmd::hub::deploy::team_install;
+use crate::cmd::hub::hosted::team_files;
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, NAME_BAD};
 use crate::cmd::hub::{route, HubKind};
 use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
+use crate::core::base::sh;
 use crate::core::model::{node_of, parse_key};
 use crate::core::policy::{fill_problems, policy_problems, policy_sources};
 use crate::core::team::{load_team, team_dir, team_path, Role, Team, TEAMS_DIR};
@@ -670,6 +673,28 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
     if pins.len() > 4 || !pins.iter().all(|p| PRESENCE_PIN_RE.fullmatch(p).is_some()) {
         return fail("pin", "证书公钥的指纹要写成 sha256//…（最多 4 个）");
     }
+    match attach(t, &a, url, pins)? {
+        Ok(x) => {
+            out!("{}\n{}\n{}\n{}\n{}", x.host, x.device, x.members, x.stored, x.note);
+            Ok(())
+        }
+        Err((c, why)) => fail(&c, &why),
+    }
+}
+
+/// 接上了以后要说的：服务器的地址:端口、这台设备在服务器上的名字、现在几台设备、存上了几台的配置、换服务器时原来那台没存上的原因
+struct Attached {
+    host: String,
+    device: String,
+    members: usize,
+    stored: usize,
+    note: String,
+}
+
+/// 接上（换一台）同步服务器（cmd_team_attach、cmd_team_deploy 共用；地址和指纹调用方核对过样子）：把这台设备登记上去，别的加入过的
+/// 设备也登记回去，再发布各台的配置；换了一台的话新的配置也存到原来那台上。服务器不认（没连上、配置的不是这个 Team 的根公钥……）
+/// 是（原因码, 原因）
+fn attach(t: Team, a: &Dict, url: String, pins: &[String]) -> R<Result<Attached, (String, String)>> {
     let devs = a.dict("devices").unwrap_or_default();
     // 换一台：记下原来是哪台、哪些邀请还没用掉（写的是它的地址），新的那台弄好以后去原来那台上收尾（finish_move）。
     // 上一次换到一半没做完的照旧记着最早的那台
@@ -681,7 +706,7 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
             .map(|(dev, _)| dev.to_string())
             .collect();
         a.set("moved_from", dict! { "url" => t.url.as_str(), "pins" => str_list(&t.pins), "pending" => str_list(&pending) });
-        admin_save(&t.id, &a)?;
+        admin_save(&t.id, a)?;
     }
     let raw = t.raw.copy();
     raw.set("url", url.as_str());
@@ -689,7 +714,7 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
     let t = Team { url, pins: pins.to_vec(), raw: raw.copy(), ..t };
     let cfg = match root_cfg(&t)? {
         Ok(c) => c,
-        Err(why) => return fail("key", &why),
+        Err(why) => return Ok(Err(("key".into(), why))),
     };
     // 先登记这台设备：服务器认不认这把根密钥、是不是 Team 的服务器，这一下就知道。认了才把新的地址写进 team.json
     let me = devs.dict(&t.dev).unwrap_or_default();
@@ -699,10 +724,10 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
     if code != 200 {
         if !load_team(&t.id).is_some_and(|cur| cur.attached()) {
             a.pop("moved_from"); // 第一次接就没接上：没有原来那台
-            admin_save(&t.id, &a)?;
+            admin_save(&t.id, a)?;
         }
         let (c, why) = admin_fault(&t, code, &j);
-        return fail(c, &why);
+        return Ok(Err((c.to_string(), why)));
     }
     let device = j.dict("names").and_then(|n| n.str(&t.dev)).filter(|n| name_ok(n)).map_or(t.device.clone(), |n| n.to_string());
     raw.set("device", device.as_str());
@@ -711,14 +736,86 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
     me.set("name", device.as_str());
     me.set("pub", my_pub);
     devs.set(t.dev.as_str(), me);
-    admin_save(&t.id, &a)?;
+    admin_save(&t.id, a)?;
     let t = load_team(&t.id).ok_or_else(|| Fail::Die("刚写好的 team.json 读不回来".into()))?;
-    let stored = settle(&t, &a, None)?;
+    let stored = settle(&t, a, None)?;
     sync_locked(&t)?;
     let members = devs.values().iter().filter(|d| d.as_dict().is_some_and(|d| d.str("state").as_deref() == Some("joined"))).count();
-    let note = finish_move(&t, &a)?;
-    out!("{}\n{device}\n{members}\n{stored}\n{note}", host_of(&t.url));
+    let note = finish_move(&t, a)?;
+    Ok(Ok(Attached { host: host_of(&t.url), device, members, stored, note }))
+}
+
+/// py team-deploy Team [用户@]主机 [hub-deploy 那一套参数，没有 --reset、--name]：经 SSH 把这个 Team 的同步服务器装到一台 Linux
+/// 服务器上（一台服务器上每个 Team 一个服务：cca-team-<编号的前 8 位>，装在 /opt/<服务名>；再运行是更新），装好了接上（attach）。
+/// --check：只看登录得上不（什么都不装）。stdout 是 sh 的 键=值：mode、state（new | update）、port、dir、lan、host（地址:端口）、
+/// device、members、stored、note（换服务器时原来那台没存上的原因）、svc（服务名）。原因码：hub-deploy 的那些（ssh…、root、deps、
+/// image、port、taken、start、host、install、usage），加上 no_team、not_admin、key，装好了没接上的是 attach 的那些
+pub fn cmd_team_deploy(args: &[String]) -> R<()> {
+    let [sel, rest @ ..] = args else {
+        return Err(Fail::Die("用法: py team-deploy Team [用户@]主机 [选项]".into()));
+    };
+    // 装的那一段经 SSH，可能要几分钟（第一次用 Docker 要拉镜像）：这段时间不拿着这个 Team 的锁（不然这台设备上取配置、别的管理命令
+    // 都卡着等）。装好了再取锁、重新读一遍（等的时候可能被别的命令改过），接上
+    let (t, _a, lk) = admin_of(sel)?;
+    let (tid, root, svc) = (t.id.clone(), t.root.clone(), format!("cca-team-{}", &t.id[..8]));
+    let old = t.attached().then(|| (t.url.clone(), t.pins.clone()));
+    drop(lk);
+    let Some(inst) = team_install(rest, &root, &svc, old.as_ref().map(|(u, p)| (u.as_str(), p.as_slice())))? else { return Ok(()) };
+    let (t, a, _lk) = admin_of(&tid)?;
+    let x = match attach(t, &a, inst.url.clone(), std::slice::from_ref(&inst.pin))? {
+        Ok(x) => x,
+        Err((c, why)) => {
+            let fw = if c == "unreachable" {
+                format!("。云服务商的安全组（或者轻量应用服务器的防火墙）里要放行 TCP {}，放行以后再运行一次", inst.port)
+            } else {
+                String::new()
+            };
+            return fail(&c, &format!("服务器上装好了（{}），但没接上：{why}{fw}", host_of(&inst.url)));
+        }
+    };
+    let (port, members, stored) = (inst.port.to_string(), x.members.to_string(), x.stored.to_string());
+    sh(&[
+        ("mode", inst.mode.as_str()),
+        ("state", inst.state.as_str()),
+        ("port", port.as_str()),
+        ("dir", inst.dir.as_str()),
+        ("lan", if inst.lan { "1" } else { "" }),
+        ("host", x.host.as_str()),
+        ("device", x.device.as_str()),
+        ("members", members.as_str()),
+        ("stored", stored.as_str()),
+        ("note", x.note.as_str()),
+        ("svc", svc.as_str()),
+    ]);
     Ok(())
+}
+
+/// py team-hosted Team railway|sealos [--dir 目录]：没有服务器时把这个 Team 的同步服务器部署到托管平台：生成部署文件（team_files）。
+/// 这个 Team 已经接着一台照证书机构验的服务器（托管平台上的：没有指纹）时是更新。stdout 是 sh 的 键=值：dir、steps、tid、name、svc。
+/// 原因码：no_team、not_admin、usage、dir、key
+pub fn cmd_team_hosted(args: &[String]) -> R<()> {
+    let (sel, platform, dir) = match args {
+        [s, p] => (s, p, None),
+        [s, p, flag, d] if flag == "--dir" && !d.is_empty() => (s, p, Some(d.as_str())),
+        _ => return Err(Fail::Die("用法: py team-hosted Team railway|sealos [--dir 目录]".into())),
+    };
+    let (t, _a, _lk) = admin_of(sel)?;
+    let Some(key) = t.root.split(' ').nth(1) else { return fail("key", "这个 Team 的根公钥读不出来") };
+    let svc = format!("cca-team-{}", &t.id[..8]);
+    let update = t.attached() && t.pins.is_empty();
+    match team_files(platform, dir, key, &svc, &t.name, update)? {
+        Ok((dir, steps)) => {
+            sh(&[
+                ("dir", dir.as_str()),
+                ("steps", steps.as_str()),
+                ("tid", t.id.as_str()),
+                ("name", t.name.as_str()),
+                ("svc", svc.as_str()),
+            ]);
+            Ok(())
+        }
+        Err((c, why)) => fail(&c, &why),
+    }
 }
 
 /// 命令里写的授权：all | none | 工具:邮箱[,工具:邮箱…]；不对是 None

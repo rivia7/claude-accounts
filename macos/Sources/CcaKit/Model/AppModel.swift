@@ -1796,6 +1796,18 @@ final class AppModel {
         run(.teamJoin)
     }
 
+    /// 「新建 Team…」：提问会话（`cca team new`，`team.new` 问名字）。建在这台 Mac 上，它是管理员；建好以后要部署它的同步服务器
+    func newTeam() {
+        guard phase == .ready, teamAvailable else { return }
+        run(.teamNew)
+    }
+
+    /// 「部署到我的服务器…」「更新服务器…」：提问会话（`cca team deploy <Team>`：问服务器地址、SSH 用户和端口，登录不了时问密码）
+    func deployTeam(_ t: TeamEntry) {
+        guard phase == .ready, teamAvailable, t.isAdmin else { return }
+        run(.teamDeploy(team: t.id))
+    }
+
     /// 各个 Team 取一次配置：取到新的账号表马上照它改
     func syncTeams() {
         runTeam(.teamSync, failureTitle: "没能取到 Team 的配置", success: "取过了", refresh: nil)

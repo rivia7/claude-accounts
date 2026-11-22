@@ -75,6 +75,10 @@ func teamFixtureTests() {
           && CcaCommand.teamLeave(team: teamA).runsToCompletion && CcaCommand.teamSync.gate == CcaCommand.routerSync.gate
           && CcaCommand.teamGrant(team: teamA, device: "d", changes: ["all"]).gate == CcaCommand.routerSync.gate
           && Handoff.teamJoin.arguments == ["team", "join"] && Handoff.teamJoin.inApp)
+    check("提问会话：新建（问名字）、部署（问服务器：和自己的同步服务器同一套表单）；结果码",
+          Handoff.teamNew.arguments == ["team", "new"] && Handoff.teamNew.inApp && Handoff.teamNew.needsForms
+          && Handoff.teamDeploy(team: teamA).arguments == ["team", "deploy", teamA] && Handoff.teamDeploy(team: teamA).needsForms
+          && ResultCode.allKnown.contains(.teamCreated) && ResultCode.allKnown.contains(.teamDeployed))
 }
 
 /// Team 在界面模型里：筛选（侧栏、菜单栏面板、总览共用），管理员看设备、发邀请（链接只进剪贴板）、改授权
@@ -182,4 +186,15 @@ func teamFixtureTests() {
     m.joinTeam()
     check("「粘贴邀请链接…」：开提问会话 cca team join", await waitUntil { !t.started.isEmpty } && t.started == [["team", "join"]], "\(t.started)")
     m.shutdown()
+    // 新建、部署各开一个提问会话；不是管理员的 Team 不部署
+    for (label, want, act) in [("新建 Team…", ["team", "new"], { (m: AppModel) in m.newTeam() }),
+                               ("部署到我的服务器…", ["team", "deploy", teamA], { (m: AppModel) in m.deployTeam(m.teams[0]) })] {
+        let t2 = transport(hello)
+        let m2 = makeModel(t2)
+        await m2.start()
+        m2.deployTeam(m2.teams[1])
+        act(m2)
+        check("\(label)：开提问会话 cca \(want.joined(separator: " "))（成员的 Team 不部署）", await waitUntil { !t2.started.isEmpty } && t2.started == [want], "\(t2.started)")
+        m2.shutdown()
+    }
 }

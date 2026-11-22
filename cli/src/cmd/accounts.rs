@@ -425,6 +425,7 @@ pub fn cmd_check(args: &[String]) -> R<()> {
             "model" => problem(MODEL_RE.matches(&value), MODEL_MSG),
             "host" => problem(HOST_RE.matches(&value), "地址写成 192.168.1.2 或者主机名（不带 http://、端口和空格）"),
             "sshuser" => problem(SSH_USER_RE.matches(&value), "用户名只能有字母、数字、点、下划线和连字符"),
+            "teamname" => problem(crate::cmd::team::doc::team_name_ok(&value), "Team 的名字要 1～64 个字符，不能有控制字符"),
             "port" => {
                 let ok = re!(r"^[0-9]{1,5}$").matches(&value) && text::to_int(&value).is_some_and(|n| (1..=65535).contains(&n));
                 problem(ok, "端口是 1–65535 之间的数字")

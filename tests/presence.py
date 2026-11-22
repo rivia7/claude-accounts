@@ -1113,6 +1113,22 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
             p.wait(5)
             self.assertIn('Team 的同步服务器', p.stderr.read().decode())
             p.stderr.close()
+        # 只写后面那一段（安装脚本、托管平台的环境变量里这样写：没有空格）；托管平台上（CCA_HUB_HOSTED=1）给了根公钥就是 Team 的服务器，
+        # 不用再写 --mode
+        (d / 'port').unlink()
+        hosted = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--state', str(d / 'hosted.json'), '--port-file', str(d / 'port')]
+        p = subprocess.Popen(hosted, env=dict(os.environ, CCA_HUB_HOSTED='1', CCA_TEAM_ROOT=self.pubs['root'].split()[1]),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            wait_for('服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text(), 20)
+            c = http.client.HTTPConnection('127.0.0.1', int((d / 'port').read_text()), timeout=10)
+            c.request('GET', '/v1/health')
+            j = json.loads(c.getresponse().read())
+            self.assertEqual((j['mode'], j['team']), ('team', self.tid))
+        finally:
+            p.terminate()
+            p.wait(5)
+            p.stderr.close()
 
 
 def ident(email):

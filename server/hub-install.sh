@@ -8,8 +8,14 @@
 #   sudo sh cca-hub-install.sh --reset       换一个新的加入链接：服务器忘掉所有设备和经它同步的数据，每台设备都要重新加入
 #   sudo sh cca-hub-install.sh --uninstall   停掉、删掉（连同数据）
 #
+# Team 的同步服务器（cca team）也是这一份装：
+#   sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--docker | --systemd] [--dir 目录]
+#       根公钥是 cca team new 给的那一行（公开的）。每个 Team 一个服务：服务名、系统用户、容器名是 cca-team-<Team 编号的前 8 位>，
+#       装在 /opt/<服务名>，端口没写时从 18445 起找一个空着的——所以一台服务器上能装几个 Team，互不相干。装好了打出管理员接上它的那一行
+#       （cca team attach …）。再运行（带 --team-root，或者 --dir 那个目录）是更新；--uninstall --dir 目录 删掉那一个
+#
 # 也可以在自己的电脑上运行 cca hub deploy root@服务器：经 SSH 装上这一份，加入链接在电脑上生成，那台电脑跟着加入。
-# 装在 /opt/cca-hub（--dir 换：新的、空的目录，或者以前装过的；一台服务器只装一个）：app/cca-presence.py 服务端（只用 Python 标准库），
+# 装在 /opt/cca-hub（--dir 换：新的、空的目录，或者以前装过的；自己的同步服务器一台服务器只装一个）：app/cca-presence.py 服务端（只用 Python 标准库），
 # certs/ 自签的证书（私钥不出这台服务器），data/ 设备和密文，.env 运行方式、端口、入伙口令的哈希，.cca-hub 记着这个目录是它装的。
 # 不改 Docker 的全局配置，不动防火墙（要放行哪个端口最后会说）。
 #
@@ -23,7 +29,12 @@ umask 022
 ROOT=${CCA_HUB_ROOT:-}     # 只给测试用（tests/hub_box.py）：所有文件都放在这个目录下面
 D=/opt/cca-hub
 UNIT=/etc/systemd/system/cca-hub.service
-SVC=cca-hub                # systemd 的服务名和系统用户、Docker 的容器名（所以一台服务器只装一个）
+SVC=cca-hub                # systemd 的服务名和系统用户、Docker 的容器名（自己的同步服务器一台服务器只装一个；Team 的各有各的：team_setup）
+WHAT=自己的同步服务器      # 说话时怎么叫它（Team 的是「Team 的同步服务器」）
+SMODE=own                  # 服务端的 --mode
+# Team 的同步服务器：根公钥（cca team deploy 放进的，或者 --team-root；这里只留 ssh-ed25519 后面那一段，没有空格好写进 .env）
+TEAMROOT=${CCA_HUB_TEAM_ROOT:-}
+DIRSET=""                  # 命令里写了 --dir
 CUID=10001                 # 容器里运行服务端的用户（compose.yaml 的 user）
 DEF_PORT=18445
 # 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub）。和 policy.sh 部署设备统计的服务器时的一样
@@ -53,6 +64,7 @@ interrupted() {   # Ctrl-C、SSH 断了（之后再往断了的管道里写是 S
 usage() {
 	cat <<'EOF'
 用法: sudo sh cca-hub-install.sh [--host 公网地址] [--port 端口] [--docker | --systemd] [--dir 目录] [--reset]
+      sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…' [--host 公网地址] [--port 端口] [--docker | --systemd] [--dir 目录]
       sudo sh cca-hub-install.sh --uninstall [--dir 目录]
 EOF
 }
@@ -77,7 +89,8 @@ install_cmd() {   # 这个发行版上装这些包的那一行
 	esac
 }
 # Docker：只用 compose 插件（docker compose）。一些发行版的 apt 里的 docker-compose 1.x 认不得 compose.yaml，重建容器时还会出错
-dc() { (cd "$ROOT$D" && docker compose -f compose.yaml "$@") </dev/null; }
+DCP=""   # Team 的：compose 的项目名照服务名（-p）。不写的话是目录名：两个 Team 装在同名的目录里（/a/hub、/b/hub）会互相当成孤儿删掉
+dc() { (cd "$ROOT$D" && docker compose $DCP -f compose.yaml "$@") </dev/null; }
 have_docker() { command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
 PY=""
 have_systemd() {   # systemd 在管这台机器（/run/systemd/system 在），有 python3 3.6 起、带 ssl
@@ -96,6 +109,11 @@ port_busy() {   # 有程序在这个 TCP 端口上监听（ss、netstat 都没�
 	if command -v ss >/dev/null 2>&1; then ss -ltn 2>/dev/null
 	elif command -v netstat >/dev/null 2>&1; then netstat -ltn 2>/dev/null
 	fi | awk '{ print $4 }' | grep -Eq "[:.]$1\$"
+}
+port_taken() {   # 自动挑端口时：有程序在听，或者这台服务器上别的同步服务器（默认目录里的）记着用它（没有 ss、netstat 时只看得到这个）
+	port_busy "$1" && return 0
+	# 先接起来再找：有的文件不在时 grep 的退出码是 2（找到了也是），接起来就只看找没找到
+	cat "$ROOT"/opt/cca-team-*/.env "$ROOT/opt/cca-hub/.env" 2>/dev/null | grep -qx "CCA_HUB_PORT=$1"
 }
 joined_ever() {   # 现在的入伙口令有设备加入过：服务器登记了盐的校验值（状态文件读不懂时也当作加入过：不能随手换掉口令）
 	[ -f "$ROOT$D/data/state.json" ] || return 1
@@ -138,12 +156,50 @@ dir_check() {   # --dir：/ 下面的一个目录（不是 /，没有空的、.�
 	esac
 	D=${D%/}
 }
+team_setup() {   # Team 的同步服务器：每个 Team 一个服务（名字里带 Team 编号的前 8 位：根公钥的 SHA-256），目录默认 /opt/<服务名>
+	TEAMROOT=${TEAMROOT#ssh-ed25519 }
+	TEAMROOT=${TEAMROOT%% *}
+	case "$TEAMROOT" in *[!A-Za-z0-9+/]*) die usage "Team 的根公钥不对（要 cca team new 给的那一行：ssh-ed25519 AAAA…）" ;; esac
+	[ ${#TEAMROOT} -eq 68 ] || die usage "Team 的根公钥不对（要 cca team new 给的那一行：ssh-ed25519 AAAA…）"
+	TID=$(printf '%s' "$TEAMROOT" | openssl base64 -d -A 2>/dev/null | openssl dgst -sha256 -binary 2>/dev/null | hexof | cut -c1-8)
+	[ ${#TID} -eq 8 ] || die install "算不出 Team 的编号（openssl）"
+	SVC=cca-team-$TID
+	UNIT=/etc/systemd/system/$SVC.service
+	WHAT="Team 的同步服务器" SMODE=team DCP="-p $SVC"
+	[ -n "$DIRSET" ] || D=/opt/$SVC
+}
+team_here() {   # 这个目录里装的是哪个 Team 的（上次写的 .env）：没写 --team-root 时照它（再运行是更新、卸载认得出服务名）
+	[ -z "$TEAMROOT" ] || return 0
+	TEAMROOT=$(env_get CCA_TEAM_ROOT)
+	case "$TEAMROOT" in *[!A-Za-z0-9+/]*) TEAMROOT="" ;; esac   # .env 里的值坏了：当作没有（下面照 .cca-hub 里记的认）
+	[ ${#TEAMROOT} -eq 68 ] || TEAMROOT=""
+	if [ -n "$TEAMROOT" ]; then
+		DIRSET=1   # 目录就是读到它的这一个，不换成默认的
+		team_setup
+		return 0
+	fi
+	# .env 不见了（或者坏了）：.cca-hub 里记着服务名。是 Team 的话，卸载照它停服务、删用户；别的要带上 --team-root（不然会当成自己的
+	# 同步服务器装进这个目录）
+	s=$(sed -n 's/^# svc=\(cca-team-[0-9a-f]\{8\}\)$/\1/p' "$ROOT$D/.cca-hub" 2>/dev/null | head -n 1)
+	[ -n "$s" ] || return 0
+	[ -n "$UNINSTALL" ] || die usage "${D} 里装的是 Team 的同步服务器，它的 .env 不见了：带上 --team-root '根公钥' 再运行"
+	SVC=$s UNIT=/etc/systemd/system/$s.service WHAT="Team 的同步服务器" SMODE=team DCP="-p $s"
+}
 dir_ours() {   # 能装在这个目录：还没有、空的，或者是以前装的（有 .cca-hub 或者 .env）。别的目录不碰：里面的 data、certs 会被 chown，卸载时会删掉
 	[ -d "$ROOT$D" ] || return 0
 	[ -f "$ROOT$D/.cca-hub" ] || [ -f "$ROOT$D/.env" ] || [ -z "$(ls -A "$ROOT$D" 2>/dev/null)" ]
 }
 other_dir() {   # 这台服务器上别的目录里装着的那一个（systemd 的 unit 里写着）
 	[ -f "$ROOT$UNIT" ] && sed -n 's/^EnvironmentFile=\(.*\)\/\.env$/\1/p' "$ROOT$UNIT" | grep -vxF "$D" | head -n 1
+}
+other_kind() {   # 这个目录里装着的是另一种（自己的同步服务器 / Team 的）、或者另一个 Team 的：说是什么；不是返回 1
+	t=$(env_get CCA_TEAM_ROOT)
+	if [ -n "$TEAMROOT" ]; then
+		if [ -n "$t" ] && [ "$t" != "$TEAMROOT" ]; then printf '另一个 Team 的同步服务器'
+		elif [ -z "$t" ] && [ -n "$(env_get CCA_HUB_ADMIT_HASH)" ]; then printf '自己的同步服务器（cca hub）'
+		else return 1; fi
+	elif [ -n "$t" ]; then printf 'Team 的同步服务器'
+	else return 1; fi
 }
 
 # --- 这一次怎么装 ------------------------------------------------------------------------------------------------------------
@@ -161,6 +217,12 @@ pick_mode() {   # MODE：--docker、--systemd 照说的；没说时上次是 sys
 	esac
 }
 pick_state() {   # STATE：new 第一次装、update 只更新、replace 还没有设备加入过（换一个新的口令）、reset 从头来；H：这一次的入伙口令的哈希
+	if [ -n "$TEAMROOT" ]; then   # Team 的：没有口令（设备拿管理员发的邀请加入）。装过这个 Team 的就是更新
+		[ -z "$RESET" ] || die usage "Team 的同步服务器没有 --reset：设备、邀请都由管理员的设备管（cca team）"
+		H=""
+		if [ -n "$(env_get CCA_TEAM_ROOT)" ]; then STATE=update; else STATE=new; fi
+		return 0
+	fi
 	E=$(env_get CCA_HUB_ADMIT_HASH)
 	hash_ok "$E" || E=""
 	if [ -n "$MANAGED" ]; then
@@ -192,6 +254,17 @@ pick_state() {   # STATE：new 第一次装、update 只更新、replace 还没�
 }
 pick_port() {   # PORT：--port，没写时照上次的、再是 18445。update 时不能换（已经加入的设备认的是原来的端口）
 	OLDPORT=$(env_get CCA_HUB_PORT)
+	if [ -n "$TEAMROOT" ]; then
+		# Team 的：没写时照上次的，第一次装从 18445 起找一个空着的（一台服务器上几个 Team 各用各的端口）。换端口可以：管理员重新接上
+		# （cca team attach 新地址），各台设备照配置里的新地址换过来
+		if [ -z "$PORT" ] && [ -n "$OLDPORT" ]; then PORT=$OLDPORT
+		elif [ -z "$PORT" ]; then
+			PORT=$DEF_PORT
+			i=0
+			while port_taken "$PORT" && [ $i -lt 50 ]; do PORT=$((PORT + 1)); i=$((i + 1)); done
+		fi
+		return 0
+	fi
 	[ -n "$PORT" ] || PORT=${OLDPORT:-$DEF_PORT}
 	if [ -n "$OLDPORT" ] && [ "$PORT" != "$OLDPORT" ] && [ "$STATE" = update ]; then
 		die port "已经有设备经端口 ${OLDPORT} 加入了：换了端口它们就连不上。要换端口得 --reset（每台设备都要用新的加入链接重新加入）"
@@ -224,7 +297,7 @@ pull_image() {   # IMG：上次用的那个，再依次试几个同步源，第�
 # --- 装 ----------------------------------------------------------------------------------------------------------------------
 prepare() {   # 目录（.cca-hub 记着是这里装的）、服务端程序、证书（没有才生成：NEWCERT）；PIN 是证书公钥的指纹
 	mkdir -p "$ROOT$D/app" "$ROOT$D/certs" "$ROOT$D/data" || die install "建不了 ${D}"
-	printf '# 自己的同步服务器（cca hub）装在这个目录：安装脚本认这个文件（再运行是更新，--uninstall 删掉它装的那些）\n' > "$ROOT$D/.cca-hub" ||
+	printf '# cca 的同步服务器（%s）装在这个目录：安装脚本认这个文件（再运行是更新，--uninstall 删掉它装的那些）\n# svc=%s\n' "$WHAT" "$SVC" > "$ROOT$D/.cca-hub" ||
 		die install "写不了 ${D}/.cca-hub"
 	chmod 755 "$ROOT$D" "$ROOT$D/app" && chmod 700 "$ROOT$D/certs" "$ROOT$D/data" || die install "改不了 ${D} 的权限"
 	put "$ROOT$D/app/cca-presence.py" 644 hub_server_py
@@ -243,8 +316,9 @@ prepare() {   # 目录（.cca-hub 记着是这里装的）、服务端程序、�
 	[ ${#PIN} -eq 44 ] || die install "算不出证书公钥的指纹（openssl）"
 }
 env_file() {
-	printf '# 自己的同步服务器（cca hub）的设置：安装脚本写的，改了以后再运行一次安装脚本\n'
-	printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_HUB_ADMIT_HASH=%s\n' "$MODE" "$PORT" "$H"
+	printf '# %s的设置：安装脚本写的，改了以后再运行一次安装脚本\n' "$WHAT"
+	if [ -n "$TEAMROOT" ]; then printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_TEAM_ROOT=%s\n' "$MODE" "$PORT" "$TEAMROOT"
+	else printf 'CCA_HUB_MODE=%s\nCCA_HUB_PORT=%s\nCCA_HUB_ADMIT_HASH=%s\n' "$MODE" "$PORT" "$H"; fi
 	[ -z "$IMG" ] || printf 'CCA_HUB_IMAGE=%s\n' "$IMG"
 	[ -z "$VERSION" ] || printf 'CCA_HUB_VERSION=%s\n' "$VERSION"
 }
@@ -261,20 +335,21 @@ rollback() {
 	ROLLBACK=""
 	if [ -f "$ROOT$D/.env.prev" ]; then mv -f "$ROOT$D/.env.prev" "$ROOT$D/.env"; else rm -f "$ROOT$D/.env"; fi
 }
-compose_yaml() {
-	cat <<'EOF'
-# 自己的同步服务器（cca hub）：安装脚本写的，再运行安装脚本时会换掉。设置在 .env 里
+compose_yaml() {   # @SVC@、@SMODE@、@SECRET@ 换成这一种的：服务名（容器名）、--mode、交给服务端的那一项（口令的哈希 / Team 的根公钥）
+	if [ -n "$TEAMROOT" ]; then secret=CCA_TEAM_ROOT; else secret=CCA_HUB_ADMIT_HASH; fi
+	sed -e "s/@SVC@/$SVC/g" -e "s/@SMODE@/$SMODE/g" -e "s/@SECRET@/$secret/g" <<'EOF'
+# cca 的同步服务器（@SVC@）：安装脚本写的，再运行安装脚本时会换掉。设置在 .env 里
 services:
-  cca-hub:
+  @SVC@:
     image: ${CCA_HUB_IMAGE:-python:3.13-slim}
-    container_name: cca-hub
+    container_name: @SVC@
     restart: unless-stopped
     user: "10001:10001"
-    command: ["python3", "-I", "/app/cca-presence.py", "--mode", "own", "--listen", "0.0.0.0:18445", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem", "--state", "/data/state.json"]
+    command: ["python3", "-I", "/app/cca-presence.py", "--mode", "@SMODE@", "--listen", "0.0.0.0:18445", "--cert", "/certs/cert.pem", "--key", "/certs/key.pem", "--state", "/data/state.json"]
     ports:
       - "${CCA_HUB_PORT:-18445}:18445"
     environment:
-      CCA_HUB_ADMIT_HASH: ${CCA_HUB_ADMIT_HASH:?}
+      @SECRET@: ${@SECRET@:?}
     volumes:
       - ./app:/app:ro,z
       - ./certs:/certs:ro,z
@@ -296,16 +371,16 @@ EOF
 }
 unit_file() {
 	cat <<EOF
-# 自己的同步服务器（cca hub）：安装脚本写的，再运行安装脚本时会换掉。设置在 $D/.env 里
+# cca 的同步服务器（${SVC}）：安装脚本写的，再运行安装脚本时会换掉。设置在 $D/.env 里
 [Unit]
-Description=cca 自己的同步服务器（cca hub）
+Description=cca ${WHAT}（${SVC}）
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 User=$SVC
 EnvironmentFile=$D/.env
-ExecStart=$PY -I $D/app/cca-presence.py --mode own --listen 0.0.0.0:\${CCA_HUB_PORT} --cert $D/certs/cert.pem --key $D/certs/key.pem --state $D/data/state.json
+ExecStart=$PY -I $D/app/cca-presence.py --mode $SMODE --listen 0.0.0.0:\${CCA_HUB_PORT} --cert $D/certs/cert.pem --key $D/certs/key.pem --state $D/data/state.json
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
@@ -373,7 +448,7 @@ how() {
 	fi
 }
 report_managed() {   # 给 hub-deploy：一行一项（deploy.rs 的 report 读）
-	say "自己的同步服务器在运行（${D}，$(how)，端口 ${PORT}）"
+	say "${WHAT}在运行（${D}，$(how)，端口 ${PORT}）"
 	fw_hint
 	note "mode $MODE"
 	note "port $PORT"
@@ -381,7 +456,24 @@ report_managed() {   # 给 hub-deploy：一行一项（deploy.rs 的 report 读�
 	note "state $STATE"
 	note ok
 }
+report_team() {   # 直接在服务器上运行的、Team 的：打出管理员接上它的那一行（地址和指纹都是公开的）
+	say "✓ Team 的同步服务器在运行（${D}，$(how)，端口 ${PORT}，服务名 ${SVC}）"
+	if [ "$STATE" = update ]; then
+		say "  更新了服务端程序，数据都没变"
+		[ -z "$NEWCERT" ] || say "! 证书是新生成的（原来的不见了）：管理员要照下面这一行重新接上，各台设备取到新的配置以后才连得上"
+		[ -n "$NEWCERT" ] || [ "$PORT" != "$OLDPORT" ] || { fw_hint; return 0; }
+		[ -n "$HP" ] || HP=这台服务器的地址
+	fi
+	say ""
+	say "在管理员的设备上接上它（Team 写名字或者编号）："
+	say ""
+	say "  cca team attach Team https://${HP}:${PORT} sha256//${PIN}"
+	say ""
+	fw_hint
+	say "云服务商的安全组（或轻量应用服务器的防火墙）里要放行 TCP ${PORT}。"
+}
 report() {   # 直接在服务器上运行的：新的加入链接打出来（只这一次）
+	if [ -n "$TEAMROOT" ]; then report_team; return; fi
 	say "✓ 自己的同步服务器在运行（${D}，$(how)，端口 ${PORT}）"
 	if [ "$STATE" = update ]; then
 		say "  更新了服务端程序，加入链接和数据都没变。加入链接在已经加入的设备上运行 cca hub invite 看"
@@ -405,7 +497,7 @@ report() {   # 直接在服务器上运行的：新的加入链接打出来（�
 }
 
 uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录：有 .cca-hub 或者 .env）和系统用户
-	[ -f "$ROOT$D/.cca-hub" ] || [ -f "$ROOT$D/.env" ] || die none "${D} 里没有装自己的同步服务器"
+	[ -f "$ROOT$D/.cca-hub" ] || [ -f "$ROOT$D/.env" ] || die none "${D} 里没有装${WHAT}"
 	o=$(other_dir)
 	stop_docker
 	[ -n "$o" ] || stop_systemd
@@ -413,7 +505,8 @@ uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录�
 	rm -f "$ROOT$D/.env" "$ROOT$D/.env.prev" "$ROOT$D/.cca-hub"
 	rmdir "$ROOT$D" 2>/dev/null
 	[ -n "$o" ] || ! id "$SVC" >/dev/null 2>&1 || userdel "$SVC" >/dev/null 2>&1
-	say "✓ 卸载了自己的同步服务器（${D} 里的程序、证书、数据都删了）。加入过的设备上运行 cca hub leave"
+	if [ "$SMODE" = team ]; then say "✓ 卸载了 Team 的同步服务器（${D} 里的程序、证书、数据都删了）。管理员要换一台接上（cca team attach），或者各台设备退出（cca team leave）"
+	else say "✓ 卸载了自己的同步服务器（${D} 里的程序、证书、数据都删了）。加入过的设备上运行 cca hub leave"; fi
 	note ok
 }
 
@@ -422,9 +515,9 @@ main() {
 	trap interrupted HUP INT TERM PIPE
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--host|--port|--dir)
+			--host|--port|--dir|--team-root)
 				[ $# -ge 2 ] || { usage >&2; exit 2; }
-				case "$1" in --host) HOST=$2 ;; --port) PORT=$2 ;; *) D=$2 ;; esac
+				case "$1" in --host) HOST=$2 ;; --port) PORT=$2 ;; --team-root) TEAMROOT=$2 ;; *) D=$2 DIRSET=1 ;; esac
 				shift ;;
 			--docker) MODE=docker ;;
 			--systemd) MODE=systemd ;;
@@ -436,7 +529,12 @@ main() {
 		shift
 	done
 	command -v hub_server_py >/dev/null 2>&1 || die usage "这是 cca 仓库里的模板：要运行的是 cca hub deploy --script 生成的那一份（发布页上的 cca-hub-install.sh）"
+	if [ -n "$TEAMROOT" ]; then
+		command -v openssl >/dev/null 2>&1 || die deps "要 openssl（生成证书、算指纹）：$(install_cmd openssl)"
+		team_setup
+	fi
 	dir_check
+	team_here   # 没写 --team-root、这个目录里装的是 Team 的：照它（更新、卸载）
 	if [ -n "$PORT" ]; then
 		case "$PORT" in 0*|*[!0-9]*) die usage "--port 要是 1024～65535 的端口" ;; esac
 		[ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || die usage "--port 要是 1024～65535 的端口"
@@ -445,15 +543,22 @@ main() {
 		[ -n "$MANAGED" ] && die root "要用 root 登录服务器（或者能免密码 sudo 的用户）"
 		die root "要用 root 运行：sudo sh $0 …"
 	fi
-	if [ -n "$UNINSTALL" ]; then uninstall; return; fi
+	if [ -n "$UNINSTALL" ]; then
+		o=$(other_kind) && die taken "${D} 里装着的是${o}，不是要卸载的这一个：看清楚 --dir、--team-root 再运行"
+		uninstall
+		return
+	fi
 	command -v openssl >/dev/null 2>&1 || die deps "要 openssl（生成证书、算指纹）：$(install_cmd openssl)"
-	dir_ours || die usage "${D} 里已经有别的东西（不是装过的自己的同步服务器）：换一个新的目录（--dir）"
+	dir_ours || die usage "${D} 里已经有别的东西（不是装过的${WHAT}）：换一个新的目录（--dir）"
+	o=$(other_kind) && die taken "${D} 里装着的是${o}：换一个目录（--dir），或者先卸载它（--uninstall --dir ${D}）"
 	o=$(other_dir)
-	[ -z "$o" ] || die usage "这台服务器上已经在 ${o} 装了自己的同步服务器（一台只装一个）：照旧用 --dir ${o}，或者先卸载它（--uninstall --dir ${o}）"
+	[ -z "$o" ] || die usage "这台服务器上已经在 ${o} 装了${WHAT}（一台只装一个；Team 的是每个 Team 一个）：照旧用 --dir ${o}，或者先卸载它（--uninstall --dir ${o}）"
 	pick_mode
 	pick_state
 	pick_port
+	# 直接在服务器上运行、要打出地址的才问：第一次装；Team 的换了端口、证书重新生成时也要（那时要重新接上）
 	[ -n "$MANAGED" ] || [ "$STATE" = update ] || pick_host
+	if [ -z "$MANAGED" ] && [ -n "$TEAMROOT" ] && [ "$STATE" = update ] && [ "$PORT" != "$OLDPORT" ]; then pick_host; fi
 	[ "$MODE" != docker ] || pull_image
 	if port_busy "$PORT" && ! { [ "$PORT" = "$OLDPORT" ] && svc_running; }; then
 		die port "端口 ${PORT} 被别的程序占着：换一个（--port）"

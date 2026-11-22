@@ -157,6 +157,17 @@ get 回各台设备的 `{fp, name, me, revoked, tag, age, blob}`（have 里认�
 
 ## Team 的同步服务器
 
+部署（设计和客户端那一半见 docs/dev/team.md「部署」）：服务器上只配置 Team 的根公钥（公开的），没有要保密的东西。
+
+- 一键：管理员的设备上 `cca team deploy Team root@服务器`（经 SSH 运行安装脚本、装好了接上）；或者在服务器上自己运行安装脚本
+  （`cca team deploy --script`、发布页上的 `cca-hub-install.sh`，和自己的同步服务器是同一份）：
+  `sudo sh cca-hub-install.sh --team-root 'ssh-ed25519 AAAA…'`。每个 Team 一个服务（systemd 的服务名 / 系统用户 / 容器名是
+  `cca-team-<Team 编号的前 8 位>`，装在 `/opt/<服务名>`，端口没写时从 18445 起找空着的），所以一台服务器上能装几个 Team。
+- 自己运行：`python3 -I cca-presence.py --mode team --team-root 'ssh-ed25519 AAAA…' --cert … --key … --state …`。根公钥也可以经环境变量
+  `CCA_TEAM_ROOT` 给，只写 `ssh-ed25519` 后面那一段也行（没有空格，环境变量文件里好写）。
+- 托管平台：`CCA_HUB_HOSTED=1` 加 `CCA_TEAM_ROOT=…` 就是 Team 的服务器（只说 HTTP、监听 8080、状态在 `/data`）；`cca team hosted Team`
+  生成部署文件和步骤。
+
 `--mode team --team-root 'ssh-ed25519 AAAA…'`（也可以用环境变量 `CCA_TEAM_ROOT`；只看前两段，后面的备注不管）：Team 的根公钥。它是公开的，
 服务器上没有任何要保密的配置。根密钥（ed25519）在管理员的设备上，不出那台设备。Team 的编号是根公钥（base64 那一段解出来的字节）的
 SHA-256 的前 32 个十六进制字符，`GET /v1/health` 的 `mode` 是 `team`、`team` 是这个编号。上报、查看、API key、折合金额的请求和格式

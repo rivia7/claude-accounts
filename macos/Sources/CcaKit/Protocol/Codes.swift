@@ -334,10 +334,13 @@ struct ResultCode: KnownValues {
     static let teamJoined = ResultCode(rawValue: "team_joined")
     static let teamLeft = ResultCode(rawValue: "team_left")
     static let teamRevoked = ResultCode(rawValue: "team_revoked")
+    /// 新建了一个 Team（还没接上同步服务器）；部署好了、更新了它的同步服务器（PROTOCOL 4.14）
+    static let teamCreated = ResultCode(rawValue: "team_created")
+    static let teamDeployed = ResultCode(rawValue: "team_deployed")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
                                          .policyOn, .policyOff, .hubJoined, .hubRemoved, .hubLeft, .hubDeployed, .hubHosted,
-                                         .teamJoined, .teamLeft, .teamRevoked]
+                                         .teamJoined, .teamLeft, .teamRevoked, .teamCreated, .teamDeployed]
 }
 
 struct FailCode: KnownValues {

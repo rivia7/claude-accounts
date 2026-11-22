@@ -898,12 +898,13 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `onboard.share` | `_onboard`（配置向导第 1 步） | `confirm`（默认否） | 有没有维护者共享给你的账号。答有接着 `onboard.policy`；答没有（默认）不生成 deploy key、不拉映射，直接到下一步。共享已经开着时不问（直接 `onboard.policy`，拉一次就拉到了时也不问）；不知道映射仓库（没有维护者的默认仓库、也没关掉过共享）时整个第 1 步都没有 |
 | `onboard.policy` | `_onboard`（配置向导第 1 步）/ `policy on` | `code`、`choice` | 维护者的映射：给维护者运行的那一行（把这台 Mac 加成映射仓库的只读 deploy key），`choice` 是维护者还没加好时怎么办：`skip`（先跳过，App 之后定时拉取）/ `decline`（不打开共享：去掉仓库和 deploy key）。**这一页会自己换掉**：cca 边等边每隔几秒拉一次，拉不到的原因变了就带着新的 `hint` / `error` 再发一页，拉到了直接发下一页（不用回答）；等满 30 分钟不再自动拉，只等回答 |
 | `hub.join` | `hub join` / `_onboard`（配置向导第 4 步答有） | `secret` | 自己的同步服务器的加入链接（`cca-hub1.` 开头的一行：部署服务器时给的，或者已经加入的设备上 `cca hub invite` 给的）。空着、链接不对（少了一截、旧的）、服务器不认（`hub_link`、`hub_denied`、`hub_salt`、`hub_pin` 的那些原因）时带着原因（`error`）重问，不是 `fail`；别的原因（连不上……）是 `fail`，见 4.13。配置向导里这一页是可选的（`optional`）：留空交上来是先不加入，向导接着做完 |
-| `hub.deploy` | `hub deploy`（App 里，不写服务器） | `text` ×3 | 自己的同步服务器部署到哪：服务器地址（校验 host；加入着时预填它的地址，`message` 说是更新）、SSH 用户（校验 sshuser，预填 root）、SSH 端口（校验 port，预填 22）。填完 cca 先查登录得上不（什么都不装）：连不上（地址、端口不对……）带着 ssh 说的原因重问；这台设备的密钥登录不了、服务器认密码时接着问 `hub.password`；不认这台设备的密钥又不让用密码时接着 `hub.pubkey`；主机密钥和记下的不一样是 `fail` 的 `hub_ssh` |
-| `hub.password` | `hub deploy`（App 里） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对是 `fail` 的 `hub_ssh`：错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
-| `hub.pubkey` | `hub deploy`（App 里） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署）；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0 |
+| `hub.deploy` | `hub deploy`、`team deploy <Team>`（App 里，不写服务器；Team 的标题和说明里说的是那个 Team 的服务器，预填它现在接着的地址） | `text` ×3 | 自己的同步服务器部署到哪：服务器地址（校验 host；加入着时预填它的地址，`message` 说是更新）、SSH 用户（校验 sshuser，预填 root）、SSH 端口（校验 port，预填 22）。填完 cca 先查登录得上不（什么都不装）：连不上（地址、端口不对……）带着 ssh 说的原因重问；这台设备的密钥登录不了、服务器认密码时接着问 `hub.password`；不认这台设备的密钥又不让用密码时接着 `hub.pubkey`；主机密钥和记下的不一样是 `fail` 的 `hub_ssh` |
+| `hub.password` | `hub deploy`、`team deploy <Team>`（App 里） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对是 `fail` 的 `hub_ssh`：错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
+| `hub.pubkey` | `hub deploy`、`team deploy <Team>`（App 里；「在终端里部署」交给终端的命令照是哪一种） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署）；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0 |
 | `hub.platform` | `hub hosted`（没写平台、没有记着的） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署 |
 | `hub.hosted` | `hub hosted` | `code`、`text` / `choice` | 部署到托管平台的那一页：`steps`（`code`：Railway 是要一行一行运行的命令，Sealos 是表单里填什么）；Sealos 另有 `server`（`code`：配置文件 `/app/cca-presence.py` 的内容，就是服务端程序，七八万字节）；第一次部署是 `url`（`text`：平台给的公网地址；不对、证书验证不过、还连不上、服务器不认这一份口令时带着原因和填过的地址重问；取消是以后再加入，记着的口令留着），加入着托管平台上的那一台时是更新，最后是 `next`（`choice`，只有 `done`：更新好了） |
 | `onboard.hub` | `_onboard`（配置向导第 4 步） | `confirm`（默认否） | 有没有自己的同步服务器的加入链接。答有接着 `hub.join`（可以留空：先不加入；加入没成不耽误向导做完：原因是 `fail` 事件，最后的 `result` 还是 `onboarded`）；已经加入了时不问 |
+| `team.new` | `team new`（App 里，不写名字） | `text` | 新建 Team：名字（校验 teamname：1～64 个字符，不能有控制字符）。建在这台设备上（它是管理员），成了 `result` 的 `team_created`，接着要部署它的同步服务器 |
 | `team.join` | `team join` | `secret` | Team 的邀请链接（`cca-team1.` 开头的一行：管理员发给这台设备的，一个邀请只能加入一台设备）。链接不对（少了一截、不是邀请链接）、服务器不认、过期了、用过了（`team_link`、`team_denied`、`team_expired`、`team_used`）时带着原因（`error`）重问 |
 | `policy.repo` | `policy on` | `text` | 维护者的映射仓库（GitHub 上的「用户/仓库」，向维护者要）：不知道仓库时才问（没有维护者的默认仓库、也没关掉过共享）；空着是取消，写得不对是 `fail` |
 | `install.share` | `install`（终端，服务器上直连不通时） | `confirm`（默认否） | 有没有维护者共享给你的账号：有就等维护者确认这台机器、导入维护者提供的节点；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问 |
@@ -1116,6 +1117,11 @@ docs/dev/hub.md）以后，自己的各台设备加入它：这些账号的设�
   "devices": [{dev, label, name, state: "local" | "invited" | "joined" | "expired" | "left" | "revoked", me, grants: "all" | {工具: [邮箱…]},
   seq, have, seen_age, expires_epoch, problem}]}`（先问一次服务器、可能顺带发布；`problem` 是和服务器对一遍时发现的、要告诉管理员的一句话，
   没有是 null；`name`、`accounts`、`aliases`、`nodes` 是这个 Team 的配置，管理页一次要到的就是这一份，旧一点的 cca 没有这四项）。
+- **新建**（`cca team new [名字]`）：App 里不写名字，提问会话里问（`team.new`）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
+  `state` 是 `local`：还没接上服务器）。**部署**（`cca team deploy <Team> [用户@主机 …]`）：经 SSH 把这个 Team 的同步服务器装到自己的
+  服务器上、接上；App 里不写服务器，和部署自己的同步服务器同一套表单（`hub.deploy`、`hub.password`、`hub.pubkey`，登录不上时的原因码也是
+  `hub_ssh`）；成了 `result` 的 `team_deployed`，地址是内网的另有 `fail` 的 `team_lan`（做完了、带着提醒）。一台服务器上每个 Team 一个服务
+  （`cca-team-<编号的前 8 位>`），再运行是更新。没有服务器的：`cca team hosted <Team>`（终端里：生成部署到托管平台的文件和步骤）。
 - **取配置**（`cca team sync`）：各个 Team 取一次，取到新的马上照它改账号表、同步路由器。跑完为止。
 - **加入**（`cca team join`）：提问会话（`team.join`：一个密文输入框，贴邀请链接）。邀请是凭证、只能用一次，只经提问会话的管道交给 cca。
   成了 `result` 的 `team_joined`；加入了、配置还没取到时前面有 `fail` 的 `team_sync`（退出码照样是 0）。

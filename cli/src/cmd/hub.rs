@@ -43,8 +43,8 @@ use crate::{dict, out};
 use std::os::unix::fs::MetadataExt;
 use std::sync::LazyLock;
 
-mod deploy;
-mod hosted;
+pub mod deploy;
+pub mod hosted;
 
 /// 这个模块的子命令
 pub const CMDS: &[Cmd] = &[
