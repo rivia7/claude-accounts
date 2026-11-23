@@ -20,6 +20,12 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.1", title: "Team 的管理员指定安装用的节点", points: [
+            .init(symbol: "arrow.down.circle",
+                  text: "Team 的管理员用 cca team node Team install 节点 指定：各台设备直连拿不到安装脚本时，经内置代理的这个节点装 claude、codex、agy 命令，不用在终端里现选。"),
+            .init(symbol: "list.bullet",
+                  text: "cca team node Team 列出节点时标着安装用的是哪个；写 install - 是不再指定。"),
+        ]),
         ReleaseNote(version: "3.6.0", title: "去掉维护者的映射，只用 Team", points: [
             .init(symbol: "person.3",
                   text: "维护者共享的账号（cca policy）去掉了，账号和节点只经 Team 给：还没加入的设备向管理员要邀请链接，在「共享与同步」页或用 cca team join 加入。"),
