@@ -20,6 +20,10 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.2", title: "侧栏的底栏不再挡住账号", points: [
+            .init(symbol: "sidebar.left",
+                  text: "侧栏要滚动时，滚到底栏下面的账号会淡出，不再和版本号、「新手教程」叠在一起。"),
+        ]),
         ReleaseNote(version: "3.6.1", title: "Team 的管理员指定安装用的节点", points: [
             .init(symbol: "arrow.down.circle",
                   text: "Team 的管理员用 cca team node Team install 节点 指定：各台设备直连拿不到安装脚本时，经内置代理的这个节点装 claude、codex、agy 命令，不用在终端里现选。"),
