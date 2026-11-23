@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.5", title: "新建 Team 时选上这台设备的账号", points: [
+            .init(symbol: "checklist",
+                  text: "新建 Team 时多一页：勾选这台设备上的哪些账号放进去，连同现在走的节点和别名。自己加的账号已经勾好，都不勾就先建一个空的 Team。"),
+            .init(symbol: "person.3",
+                  text: "这台设备当管理员的别的 Team 里的账号也能放进去，节点的定义一起带过来；第三方 API 账号和别人共享给你的不能放。"),
+            .init(symbol: "terminal",
+                  text: "终端里 cca team new 名字 也会列出来按编号选，或者直接写 --accounts（all、none，或者 claude:邮箱,codex:邮箱）。"),
+        ]),
         ReleaseNote(version: "3.5.4", title: "更新后马上同步 Team 的配置", points: [
             .init(symbol: "arrow.triangle.2.circlepath",
                   text: "cca 更新到新版本以后，马上和所在的 Team 同步一次配置（平时每小时一次）。用着维护者的映射、还没加入 Team 的机器，更新以后马上自己加入，不用再等一天。"),
