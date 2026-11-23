@@ -43,7 +43,8 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        // 底栏没有底色：用 safeAreaBar（不是 safeAreaInset），账号多到要滚动时滚到它下面的行会淡出，不和版本号、「新手教程」叠在一起
+        .safeAreaBar(edge: .bottom, spacing: 0) {
             SidebarFooter()
         }
         .frame(minWidth: 250)
