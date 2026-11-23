@@ -1,47 +1,76 @@
 # Team
 
-目标：把「维护者共享的账号」（policy.md）和「自己的同步服务器」（`cca hub`：3.5.3 起去掉了，见「自己的同步服务器 → Team」）合成一个概念。一个 Team 是一组设备加一份配置（哪些账号、各走哪个节点、节点的定义），
+目标：把「维护者共享的账号」（维护者的映射：3.6.0 起去掉了，见「3.6.0 去掉的旧通道」）和「自己的同步服务器」（`cca hub`：3.5.3 起去掉了，见「自己的同步服务器 → Team」）合成一个概念；3.6.0 起 Team 是唯一的通道。一个 Team 是一组设备加一份配置（哪些账号、各走哪个节点、节点的定义），
 配置由管理员的设备维护、存在这个 Team 的同步服务器上；管理员给每台设备发邀请、定它能用哪些账号。一台设备可以在几个 Team 里。分阶段做，这一份跟着写：
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M1 | 线上格式和服务端：服务器的 `--mode team`、管理员和设备的 op、邀请链接、每台设备的配置（加密、签名），照文档独立实现一遍来测 | 做完了 |
 | M2 | 辅助程序和命令：Team 在本机的状态（`~/.cca/teams/<编号>/`）、`cca team` 的建立、邀请、加入、同步配置、看设备、移除、退出；管理员这边的账号、节点、每台设备的授权 | 做完了；服务器要自己起（安装脚本是 M6） |
-| M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；现在的维护者映射当作旧式的 Team 接进来 | 做完了：账号表照 Team 的配置改，设备统计、记下的 API key、折合金额经各个 Team 的服务器同步（见「账号表照配置改」「同步经 Team 的服务器」）。维护者的映射照旧并着用，迁成 Team 是 M4 |
-| M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 做完了（见「迁移」）：`cca team import`、`./policy.sh team` + 机器拉到映射后自己加入、`cca team import Team --mine`（自己的账号建成一个 Team：自己的同步服务器去掉以后就是这么做） |
+| M3 | Team 成为唯一的概念：一个地方回答「这个账号属于哪个 Team」，代替 `HubKind`、`route` 和映射的读取；对账、收起账号、三条同步管线都按 Team；当时的维护者映射当作旧式的 Team 接进来 | 做完了：账号表照 Team 的配置改，设备统计、记下的 API key、折合金额经各个 Team 的服务器同步（见「账号表照配置改」「同步经 Team 的服务器」）。维护者的映射当时照旧并着用，3.6.0 删掉（M7） |
+| M4 | 迁移：导入现有的映射和参考节点；用着维护者映射的机器自己迁过来；自己的同步服务器升级成 Team | 做完了（见「迁移」）。迁映射用的那几样（导入映射文件、`./policy.sh team` 给各台机器发邀请、机器拉到映射后自己加入）3.6.0 跟着映射删掉了；留着的是 `cca team import Team --mine`（自己的账号建成一个 Team：自己的同步服务器去掉以后就是这么做） |
 | M5 | 界面：`_gui state` 的 `teams`、账号的 `team`；侧栏、总览、菜单栏面板按 Team 筛选；管理员的管理页 | 做完了（见「界面」），App 里也能新建 Team、部署它的服务器（M6） |
 | M6 | 部署：安装脚本在一台服务器上装几个 Team（各是一个服务）、托管平台 | 做完了（见「部署」）：`cca team deploy`、安装脚本（`--team-root`；3.5.3 起只装 Team 的，同时给这个 Team 的远程会话做中转；手机的网页端和证书助手是 team-only 这个分支里加的：3.5.3-beta.5 起一台服务器上几个 Team 共用一个证书助手 `cca-team-acme`）、`cca team hosted`（终端里）；App 里「新建 Team…」「部署到我的服务器…」 |
-| M7 | 删掉旧通道：自己的同步服务器；GitHub 上的映射仓库、手工登记 deploy key、`policy.sh` 的发布 / `key` / `lock`（至少两个正式版以后） | 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半、App 的卡片、配置向导问它的那一步）3.5.3 起删掉了（team-only 分支，做完了、还没发布；升级时 `hub_leftovers` 清掉留下的文件，以前装的 `/opt/cca-hub` 安装脚本只让卸载）。维护者的那一套只标了弃用（`./policy.sh key add`、`cca policy on` 给维护者的那一行旁边说新的做法是 Team）、照常用：和 Team 同一个版本里删掉的话，还没迁过去的机器就断了。3.5.3-beta.8 起维护者的日常也在 Team 里：节点用 `cca team node` 改（见「Team 的节点」），加外部账号的 skill 走 Team，映射仓库不再加东西；Team 给的账号不再有锁定请求。删的时候要动的见「要删掉的旧通道」 |
+| M7 | 删掉旧通道：自己的同步服务器；维护者的映射（GitHub 上的映射仓库、手工登记 deploy key、`policy.sh`）和维护者的服务器 | 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半、App 的卡片、配置向导问它的那一步）3.5.3 起删掉了（升级时 `hub_leftovers` 清掉留下的文件，以前装的 `/opt/cca-hub` 安装脚本只让卸载）。维护者的映射和维护者的服务器 3.6.0 删掉了（做完了、还没发布；删了什么、留了什么见「3.6.0 去掉的旧通道」）：3.5.3-beta.8 起维护者的日常（节点用 `cca team node` 改，加外部账号的 skill）已经在 Team 里，映射仓库不再加东西；没迁过去的机器升级以后说一声，向 Team 的管理员要邀请。发布以后还要做的，每一样都先问维护者：停掉维护者那台服务器上设备统计和中转的两个端口、把映射仓库归档、删掉仓库上各台机器的 deploy key |
 
 定下来的（用户 2026-11-21、22 定的，照它做，别重新讨论）：
 
-- 照「干净架构」做：Team 是一等概念，旧的两套（`HubKind` 的 maintainer / own、`policy_*`、`own.` 开头的文件）只留作迁移用的垫片，写明什么时候删（own 那一套 3.5.3 起删掉了）。
+- 照「干净架构」做：Team 是一等概念，旧的两套（`HubKind` 的 maintainer / own、`policy_*`、`own.` 开头的文件）只留作迁移用的垫片，写明什么时候删（own 那一套 3.5.3 起、maintainer 和映射 3.6.0 起删掉了；`policy_*` 这些名字留着，管的是 Team 给的账号）。
 - 授权是**每台设备一个邀请链接**：管理员生成时勾好这台设备能用哪些账号（以后能改），对方粘贴就行，没有「申请—批准」的来回。
 - 一台服务器可以放几个 Team，**每个 Team 一个服务**（容器）：服务端进程还是只管一个 Team。
 - 弃用公钥授权：不再手工加 deploy key、不再从 GitHub 拉映射；维护者的 `policy.json` + `custom.yaml` + `./policy.sh` 换成管理员设备上的 `cca team` 和 App 的管理页，
-  现有的映射和参考节点导入一次。锁定请求不要了。
+  当时的映射和参考节点导入一次（3.6.0 起映射整个去掉了）。锁定请求不要了。
 - 界面上按 Team 筛选的是侧栏、总览、菜单栏图标点开的面板；筛选只管显示，`~/Applications` 里有哪些启动器不跟着变。
 - 不经 Team 共享第三方 API 账号（等于把 key 发给别人）。
 
-## 要删掉的旧通道（M7，至少两个正式版以后）
+## 3.6.0 去掉的旧通道（M7）
 
-现在都还在用，不能先删。到时候一起删的：
+3.6.0 删掉了维护者的映射和维护者的服务器（做完了、还没发布），Team 是唯一的通道。自己的同步服务器 3.5.3 起就没有了（还留着的只有升级时
+清掉旧文件的 `hub_leftovers`，和安装脚本认得 `/opt/cca-hub`、只让卸载它）。3.6.0 删掉的：
 
-- 映射的拉取和验签：bash 的 `policy_*`（`policy_setup`、`policy_prepare`、`policy_fetch`、`policy_pull`、`policy_hook`、`policy_request`……）、
-  `cca policy` 这条命令、`~/.cca/policy/`（deploy key、policy.json、nodes.json）；辅助程序 `core/policy.rs` 里读 policy.json 的那一半
-  （`policy_doc`、`legacy_raw`、`legacy_fill`；`mapping` 就只剩各个 Team 给的）、`policy-*` 子命令、`cmd/team.rs` 的 `adopt`
-  （照映射里的邀请加入：映射没了它也没了）。
-- 维护者那一头：`policy.sh` 的发布、`key`、`lock`、`team`（迁移用的）、`presence deploy / sync`。`cca-external-account` 这个 skill
-  3.5.3-beta.8 起改成走 Team（`cca team node copy` → `test` → `cca team map`，见「Team 的节点」），映射仓库从此不再加账号、节点。
-- 维护者的设备统计服务器那一类（`HubKind::Maintainer`、`presence_server`、`--mode maintainer` 和它的设备清单）：账号都在 Team 里以后没有
-  账号走它。远程会话的中转现在也在那台服务器上（remote.md）：删之前先给它找好去处。
-- 自己的同步服务器（`cca hub`、`HubKind::Own`、`--mode own`、`own.` 开头的状态文件、安装脚本里口令那一半）：3.5.3 起删掉了（做完了，
-  还没发布）。还留着的只有升级时清掉旧文件的 `hub_leftovers`，和安装脚本认得 `/opt/cca-hub`、只让卸载它。
-- 界面：「共享与同步」页的「维护者共享的账号」开关，PROTOCOL 里对应的字段要升 `GUI_API` 才能删。「自己的同步服务器」卡片 3.5.3 起没有了
-  （`hello.hub` 跟着去掉）；配置向导第 1 步已经换成「有没有 Team 的邀请链接」（`onboard.team`，见 onboarding.md）。
-- 锁定请求（`cca policy request`、`./policy.sh lock`）：Team 里管理员在自己的设备上改，没有它的位置。3.5.3-beta.8 起 Team 给的账号
-  请求时直接说走哪个节点由那个 Team 的管理员定（`cmd_policy_request`，不给命令；App 本来就不显示：`can.policy_lock` 看的映射里有 Team 的账号），
-  命令和 App 的入口删的时候一起删。
+- 映射：`~/.cca/policy/`（policy.json、nodes.json、deploy key、`known_hosts`、`checked`、`log`、`lock/`）和它的拉取、验签（bash 的 `policy_*`：
+  `policy_setup`、`policy_prepare`、`policy_fetch`、`policy_pull`、`policy_hook`、`policy_wait`……）；共享的开关（`cca policy on|off|setup`，
+  config.json 的 `policy`、`policy_was`、`policy_declined`）、`cca policy pull`（App 开着时一小时拉一次的那条）、锁定请求（`cca policy request`）；
+  配置向导、服务器上安装时等维护者的那一支（`onboard_policy_quick`、`builtin_shared`）。辅助程序里读 policy.json 的那一半（`policy_doc`、
+  `legacy_raw`、`legacy_fill`、`policy_problems`；`mapping` 只剩各个 Team 给的）和只给它用的子命令（`policy-repo`、`policy-set`、`policy-off`、
+  `policy-rows`、`policy-check`、`fill-check`、`policy-request`、`policy-lock`……：记在 `cmd/mod.rs` 的 `REMOVED` 里）。
+- 迁移用的：照映射里的邀请自己加入（`cmd/team.rs` 的 `adopt`、`teams/adopt.json`）、管理员给仓库上的 deploy key 发邀请（`team-handoff`、
+  `./policy.sh team`）、导入映射文件（`cca team import Team policy.json [nodes.json]`：只剩 `--mine`）。
+- 维护者那一头：`policy.sh`（发布、`key`、`lock`、`team`、`presence deploy / sync`）和它部署的 `server/compose.yaml`、`compose.web.yaml`、
+  `compose.acme.yaml`。
+- 维护者的服务器：`HubKind::Maintainer`（`HubKind` 只剩 Team 的）、`presence_server`、`is_maintainer`、服务端的 `--mode maintainer`
+  （`/v1/machines`、`--release-key`）；远程会话的 `--maintainer`、`--hub maintainer`；只有它说得出的几句（`RELAY_OLD`、`NO_WEB`、
+  `KEYSHARE_OLD`、`COST_OLD`）和折合金额的 `old_server`。
+- 界面：「共享与同步」页的「维护者共享的账号」开关、侧栏的「等维护者」、拉取映射、请求锁定节点的菜单项。
+
+留着的、改了的：
+
+- **不升 `GUI_API`**（还是 1）：升了的话已经发布的 App 更新以前用不了；去掉 `config.policy` 的话它们连「共享与同步」页（连同 Team 的卡片）都不显示
+  （它们照 `config.policy.state` 放这一页）。所以 `_gui state` 照旧给 `config.policy`，3.6.0 起是常量
+  `{"configured": false, "repo": null, "next_check_epoch": null, "state": "off", "accounts": 0, "parked": 0}`，`can.policy_lock` 总是 false，
+  `config.hubs[].kind`、账号的 `hub` 只会是 `team`（或者没有），折合金额不会是 `old_server`；PROTOCOL 里写成「3.6.0 起」的常量。新的 App 不读
+  这几项，照 `hello.team` 放「共享与同步」页。
+- `cca policy …` 只说一句（3.6.0 起去掉了：向 Team 的管理员要邀请链接、`cca team join`；自己的几台设备之间同步：`cca team new`），退出码 1；
+  后台的 `cca _policy-fetch` 什么都不做（换上新版以前起的后台进程可能还会起它）；以前 `policy.sh` 调的 `_policy-check`、`_fill-check`、
+  `_policy-lock`、`_team-handoff` 说去掉了。一键安装时带着 `CCA_POLICY_REPO` 只提醒一句（不再起作用，装好以后 `cca team join`）。
+- **升级以后清掉留下的**（`policy_leftovers`，和 `hub_leftovers` 一个样子）：第一条走 `main` 默认那一支的命令（`_` 开头的、`install`、`gui`、`clients`、`cost`、
+  `remote`、`team`、`update`、`restore` 这些不经过它；在 `update_after` 之后、`team_hook` 之前）看到 `~/.cca/policy/` 还在时，先 `py policy-retire` 去掉 config.json 的
+  `policy`、`policy_was`、`policy_declined`（config.json 正被别的命令锁着时什么都不删，下一条命令再来），再删 `~/.cca/policy/`、经维护者的服务器
+  同步的状态（没有 `team.<编号>.` 前缀的 `presence/status.json`、`presence/keys.json`、`presence/keys.lock`、`presence/keys-sync.lock`、
+  `cost/sync.json`、`cost/remote.json`）和 `teams/adopt.json`、`teams/adopt.lock`；Team 的状态文件不碰。共享开着、又不在任何 Team 里的设备
+  在终端里说一次怎么加入（`policy-retire` 的 stdout 不是空的）。映射加进来的账号留在账号表里，出口不再被固定；迁到了 Team 的设备照 Team 的配置用。
+  `cca restore` 的备份照旧不带 `policy/nodes.json*`、`policy/tmp.*`：还原可能就是升级以后的第一条命令，那时它们还在。
+- 以前关掉共享时收起来的账号（`parked` 里没有 `team` 的项）没有谁再放回来，留着不管；`cca restore` 照旧 `py unpark` 放回账号表、退出登录。
+- 远程会话：`home_hub` 是第一个 Team 的服务器，不在 Team 里的设备上没有——配对（`cca remote pair`、`join`）说先加入或者新建一个 Team，这台设备
+  自己的账号、第三方 API 账号的会话没有中转；配对表里没有 `hub` 的行（经维护者的服务器配的）读的时候丢掉（remote.md「每个 Team 各用各的中转服务器」）。
+- 这台设备自己的账号（不是 Team 给的）记下的 API key、折合金额哪台服务器都不同步（以前退到维护者的服务器）。
+- 服务端只剩 `--mode team`（托管平台的预设照旧是它）。Team 的服务器下次 `cca team deploy` 时换上新的程序；维护者那台照旧跑着原来的程序，另外停
+  （见上面的阶段表）。
+- 名字留着的：`core/policy.rs`、`policy_merge`、`policy_sources` 这些，事件的代码（`policy_added`、`policy_alias`、`policy_pinned`、
+  `nodes_filled`），子命令 `policy-node`、`policy-have`、`policy-forget`、`unpark`、`nodes-import`：管的是 Team 给的账号（见「账号表照配置改」），
+  话里不再说维护者。`cca team invite --key`（只认这把公钥）和 `expect` / `mismatch` 也留着：当初是给 deploy key 发邀请用的，本身是 Team 的功能。
+- 路由器端的话（`router_sh` / `router_rb` 里的「维护者参考配置里的节点」「cca 写进去的维护者参考节点」这几句）故意没改：改了它们的字，同步摘要就变了，
+  已安装的机器升级以后都要重新部署路由器端。
 
 ## 信任
 
@@ -68,12 +97,12 @@
 - 序号只增不减只挡得住「服务器拿旧的一份来换一台一直在用的设备手里的」。刚加入的、重装过的设备手里没有序号，服务器给哪一份它都只能认；
   服务器扣着新的不给，设备也看不出来，只能提示「多久没更新了」（明文里有管理员发布的时间）。管理员看名单时看得到各台设备手里是第几版（`have`）。
 - 成员之间：盐是整个 Team 一份，所以知道邮箱的成员算得出别的账号的摘要（看得到它在哪些设备上在用、能往它的 API key 那一格里传东西——别的设备
-  不认伪造的，只是白占一次同步）；API key、折合金额的内容要登录过那个账号才解得开，没给它这个账号的设备解不开。和现在维护者的服务器上一样。
+  不认伪造的，只是白占一次同步）；API key、折合金额的内容要登录过那个账号才解得开，没给它这个账号的设备解不开。
 - 服务器能让设备停在旧的配置上：扣着不给、对管理员谎称存上了、把设备从名单里藏起来（管理员会当它退出了，等它再出现才接着发布）。
   它也能让设备以为自己被移除了、或者以为服务器的记录没了（那个编号 `gen` 没有签名）：后果是说法不对，被说成移除了的设备拿新的邀请能直接换上。
 - 移除一台设备收不回它已经看到的节点凭证，只能换节点的凭证。
 - 根密钥丢了这个 Team 就得重建：建的时候提示导出备份。
-- 管理员的设备不在线时，新的授权、老机器的迁移都等着；已经加入的设备照常用。
+- 管理员的设备不在线时，新的授权都等着；已经加入的设备照常用。
 - 请求的签名里没有「发给哪台服务器」：同一个 Team 搬到新服务器时，旧服务器收到过的请求 5 分钟内能拿去新服务器重放一次。搬的时候等 5 分钟再用新的。
 
 ## 服务端（M1）
@@ -83,8 +112,8 @@
 
 - 管理员的 op（`team_enroll`、`team_invite`、`team_put`、`team_members`、`team_revoke`）拿根密钥签，`key` 是根公钥的指纹；设备的 op
   （`team_join`、`team_get`、`team_leave`，还有原来的上报、查看、API key、折合金额、中转）拿设备自己的密钥签。根密钥不是设备，别的 op 不认它。
-- `team_enroll` 直接登记公钥，三处要用：管理员自己的那台设备（不用给自己发邀请）；服务器的记录没了以后把各台设备登记回去（`team_members`
-  回过公钥，管理员留着）；迁移时登记老机器的 deploy key（服务器照旧认它们签的请求，那些机器上的旧版 cca 不用动）。
+- `team_enroll` 直接登记公钥：管理员自己的那台设备（不用给自己发邀请）；服务器的记录没了以后把各台设备登记回去（`team_members`
+  回过公钥，管理员留着）；改设备的名字（同一把公钥再登记一次，`cca team rename`）。
 - `team_join` 先看有没有这个邀请（便宜），有才验签；没有这个邀请和签名不对回一样的 403。签名对了才说过期了还是用过了：拿着真的邀请的人
   才问得出来，而「这个链接已经在另一台设备上用过了」是最常见的要说清楚的情况。
 - 配置按设备的编号存、不按密钥：管理员在设备加入以前就能存好，设备一加入马上就能同步下来。存在状态文件旁边的 `team-docs.json`（心跳不用跟着重写它）。
@@ -98,16 +127,15 @@
 - 状态文件手改坏了的：样子不对的邀请、设备在启动时去掉（`team_setup`），不让以后每个请求都出错。
 - 管理员的请求（根密钥签的）另有一个限额：每秒 2 个、攒得下 120 个（设备的是每 2 秒一个、攒得下 30 个：管理员的一条命令要问两三次，
   连着发几个邀请、改几次授权就不够用了）。`team_enroll`、`team_put` 照样一次带一批（最多 64 台），不要一台一个请求。
-- 换模式：状态文件是别的模式的（或者根公钥换了）就从头开始（`Store.reset`），两种模式互相都是这样；3.5.3 以前的 `--mode own` 留下的状态文件也是
-  （Team 的服务器的 `Store.team_setup` 在日志里说「以前是自己的同步服务器」，设备、记录、密文都不要了；维护者的服务器读到 own、team 的状态时
-  只去掉设备和上报的记录，存的密文不动：`reset` 不带 kind）。别的模式的服务器旁边不留空的 `team-docs.json`。
-- `team_put` 的 1 MB 请求上限只在 Team 的服务器上放宽：别的模式里这个 op 不存在，照旧 64 KB。
+- 3.6.0 起服务端只有这一种模式（`--mode team`；维护者的 `--mode maintainer` 去掉了，`--mode own` 3.5.3 起就没有了）。状态文件是别的模式留下的
+  （3.6.0 以前维护者的服务器的、3.5.3 以前自己的同步服务器的）或者根公钥换了，就从头开始（`Store.team_setup`：设备、记录、密文都不要了）。
+- `team_put` 的请求上限放宽到 1 MB，别的 op 照旧 64 KB。
 
 安装脚本、托管平台的预设（`CCA_HUB_HOSTED=1`）见「部署」。
 
 ## 设备拿到的配置
 
-明文就是这台设备的映射加参考节点，样子照现在的 `policy.json`、`nodes.json`（对账、补节点的规则不用重写），再加上盐和服务器在哪：
+明文就是给这台设备的账号 → 节点加上节点的定义，样子照以前维护者映射的 `policy.json`、`nodes.json`（对账、补节点的规则沿用了下来），再加上盐和服务器在哪：
 
 ```
 {"v": 1, "at": 管理员发布的时间, "name": Team 的名字, "salt": 盐,
@@ -128,21 +156,27 @@
 
 ## 账号表照配置改（M3 的第一步）
 
-映射原来只有一个来源（维护者的 `policy.json`、`nodes.json`），对账、补节点、固定节点都经 `core/policy.rs` 的那几个读取函数。现在它们给的是
-**合起来的**：各个 Team 给这台设备的配置在前（照加入的先后），维护者的映射（旧的通道）在后，同一个账号先出现的算数。所以对账（`reconcile`）、
-`policy_merge`、`fill_plan`、路由器端的 `--fill-source` 都没动，Team 给的账号和维护者映射里的账号走的是同一条路：
+对账、补节点、固定节点都经 `core/policy.rs` 的那几个读取函数（名字是维护者的映射那时起的：映射原来是它们唯一的来源，3.6.0 起去掉了）。它们给的是
+各个 Team 给这台设备的配置**合起来的**（照加入的先后，同一个账号先出现的算数）；对账（`reconcile`）、`policy_merge`、`fill_plan`、路由器端的
+`--fill-source` 沿用映射那时的规则：
 
 - `core/team.rs` 的 `grants()`：各个 Team 手里验过的那一份配置（一个进程只读一次）。还没同步下来的不算；被管理员移除了的（`sync.json` 是 `removed`）
   也不算——手里那一份不再算数。`lost`、`error` 的照旧用手里的。
-- `core/policy.rs`：`mapping(tool)` 是合起来的 [(邮箱, 节点, 谁定的)]，`policy_raw` / `policy_map`（节点）、`policy_sources`（谁定的：Team 的编号，
-  维护者的映射是空的）、`policy_names`（别名）、`policy_fill`（节点的定义：同名的先出现的算数，策略组照第一份有节点的）、`policy_install_node`
-  都从它来。只有维护者的映射时和以前逐字节一样（`policy_fill` 的 `id` 也一样：路由器不会因此重新校验）。`legacy_raw` 是只看维护者的那一份：
-  `cca policy off` 收起哪些账号、`_gui state` 的 `config.policy.accounts` 用它（Team 给的账号不归那个开关管）。
-- 对账时说的话照是谁定的说（`by_whom`）：「按维护者的映射…」或者「按「Team 的名字」的配置…」。事件的代码不变（`policy_added`、`policy_alias`、
-  `policy_pinned`、`nodes_filled`）。
-- **别名**（3.5.3-beta.5 起）：`alias_sources(工具)` 是合起来的这个工具的 [(邮箱, 别名, 哪个 Team 给的、这台设备是不是它的管理员)]（Team 的在前，
-  同一个邮箱先出现的算数；Team 的配置里有 `tool_aliases` 时照它里面这个工具的，没有时照 `aliases`；维护者的映射只有 `aliases`），`policy_names(工具)`
-  从它来。管理员那边每个账号都有别名（见下面「管理员的设备」的 `default_aliases`：没起过的各工具各自编成 `team-1`、`team-2`……）。
+- `core/policy.rs`：`mapping(tool)` 是合起来的 [(邮箱, 节点, 哪个 Team 定的)]，`policy_raw` / `policy_map`（节点；配置里写的是路由器上改名以前的旧名字时
+  照记下的改名换算：`node_alias`，见 router.md）、`policy_sources`（谁定的：Team 的编号）、`policy_fill`（节点的定义：同名的先出现的算数，策略组照
+  第一份有节点的）、`policy_install_node`（安装客户端用的节点：第一个写了的）都从它来。
+- 对账时说的话照是谁定的说（`by_whom`：「按「Team 的名字」的配置…」）。事件的代码是映射那时的（`policy_added`、`policy_alias`、`policy_pinned`、
+  `nodes_filled`），没改。
+- **合并进账号表**（每条命令读账号表都经过 `reconcile`：添加、`cca edit`、启动、同步前都管得到）：配置里有、这台设备上还没有的官方账号加进来
+  （`policy_merge`，事件 `policy_added`；别名见下面）。不加的，`policy_missing` 给原因：这台设备上删掉过的（工具状态里的 `policy_skip`：`cmd_rm`、
+  `cca edit` 记下——`cca edit` 经 `py policy-have` / `policy-forget`，要在 `py validate` 之前记，不然 ctx 又加回来了——`cmd_add` 清掉）、节点不在可选
+  节点里的（加进来整张表就校验不过）、这台设备还没用过的工具（`policy_in_use`：当前的工具或者已经有账号表；Codex 账号第一次 `cca codex` 时才加，
+  免得白占端口）。已经在表里的，节点和配置的不一样就改回配置的、写回账号表（事件 `policy_pinned`：「! … 的出口按「Team 的名字」的配置固定为 …
+  （账号表里写的是 …，已改回）」）；`cca add` 加一个配置里有的邮箱时不问节点（`py policy-node`）。这台设备自己的账号（配置里没有的）不动。
+  配置要的节点还不在可选节点里、定义在 Team 的配置里的，先加进可选节点（`policy_nodes_fill`，事件 `nodes_filled`，见 fill.md）。
+- **别名**（3.5.3-beta.5 起）：`alias_sources(工具)` 是合起来的这个工具的 [(邮箱, 别名, 哪个 Team 给的、这台设备是不是它的管理员)]（照加入的先后，
+  同一个邮箱先出现的算数；Team 的配置里有 `tool_aliases` 时照它里面这个工具的，没有时照 `aliases`）。管理员那边每个账号都有别名（见下面「管理员的设备」的
+  `default_aliases`：没起过的各工具各自编成 `team-1`、`team-2`……）。
   成员设备上：加进来的带着它（`policy_merge`），只有邮箱的补上（`policy_alias_fill`）；和这台设备上别的账号撞了时，Team 给的换成「Team 的名字-N」
   （`alias_fallback`：`team-N` 取 N，别的别名接在 Team 的名字后面；Team 的名字里别名不能有的字符去掉，太长了截短到 24 格宽），还撞就只写邮箱 / 先不补。
   管理员后来改了：`team_alias_follow` 让这台设备上照 Team 给的用着的跟着改，自己改过的不动。哪个别名是 Team 给的记在工具状态的 `team_alias`
@@ -152,37 +186,37 @@
   接在 Claude 的后面），3.5.3-beta.6 照各工具重新编了，旧版本补上的别名没有记录。几个账号一起换时先当它们都换、再一轮轮去掉换不了的
   （账号表最后一起改，要换走的账号原来的别名不算占着）：挨个挪一位、两个对调都一次换好。账号不在账号表里、也没收起来的，记着的那一项去掉。
   事件还是 `policy_alias`（说「按「Team 的名字」的配置把 … 的别名改成 …」）。**这台设备是管理员的那个 Team 给的别名不补、不跟**（`Grant.admin`）：
-  管理员这台设备上的别名不动。维护者的映射给的照旧只补不跟。
-- **Team 加进来的账号记着是它加的**（工具状态里的 `team_added`：{账号目录名: Team 的编号}，`policy_merge` 照 Team 的配置加的才记）。映射里没有它了
-  ——管理员不再给这台设备、退出了那个 Team、被移除了——就收起来（`team_park`：记进 `parked`（带着 `team`：`_gui state` 的 `config.policy.parked`
-  只数关掉共享时收起来的）、从账号表去掉，登录目录和钥匙串不动；事件 `team_parked`），再给回来时照原来的键加回去，不用重新登录。正开着命令行
-  会话的先不收（`team_busy`），下一条命令再看。那个 Team 的目录还在、配置却读不出来时说不准还给不给（`grant_settled`）：不收。这台机器**本来就有**的账号
-  Team 只管节点、不记成它加的：不再给了账号还在，只是节点不再被固定。
-- 账号走哪一类同步服务器（`cmd/hub.rs` 的 `route`）看是谁定的：Team 给的是 `HubKind::Team(编号)`，维护者映射里的是 `Maintainer`，别的（这台设备
-  自己的官方账号、第三方 API 账号）哪台都不去（见下一节）。
+  管理员这台设备上的别名不动。
+- **Team 加进来的账号记着是它加的**（工具状态里的 `team_added`：{账号目录名: Team 的编号}，`policy_merge` 照 Team 的配置加的才记）。配置里没有它了
+  ——管理员不再给这台设备、退出了那个 Team、被移除了——就收起来（`team_park`：记进 `parked`、从账号表去掉，登录目录和钥匙串不动；事件
+  `team_parked`），再给回来时照原来的键加回去，不用重新登录。正开着命令行会话的先不收（`team_busy`），下一条命令再看。那个 Team 的目录还在、
+  配置却读不出来时说不准还给不给（`grant_settled`）：不收。这台机器**本来就有**的账号 Team 只管节点、不记成它加的：不再给了账号还在，只是节点
+  不再被固定。
+- **收起来的账号**（工具状态里的 `parked`：{账号目录名: {"key": 原来账号表里的键, "node": 节点, "team": 哪个 Team 加的}}）：不在账号表里，登录目录、
+  钥匙串原样留着；再给回来时 `policy_merge` 照原来的键加回来（`parked_key`；别名和这台设备上别的账号撞了就只写邮箱），同一个账号目录，不用重新登录；
+  `reconcile` 看到它又在账号表里（给回来了，或者用户自己加回来了）就从 `parked` 里去掉。记下备查的 API key（`cca secrets forget` 清多余的 key 时）、
+  邮箱助手的设置（`mail_forget_orphans`）都按收起来的账号留着；`cca restore` 退出登录以前先 `py unpark` 放回账号表，好让它们也退出登录。
+  3.6.0 以前关掉维护者的共享时收起来的（没有 `team`）没有谁再放回来，`unpark` 照样放。
+- 账号走哪一类同步服务器（`cmd/hub.rs` 的 `route`）看是谁定的：Team 给的是 `HubKind::Team(编号)`，别的（这台设备自己的官方账号、第三方 API 账号）
+  哪台都不去（见下一节）。
 - 配置什么时候同步：`cca team join`、`cca team sync`；启动时 `team_hook`（在 Team 里、距上次超过一个小时就在后台 `cca _team-sync`，只换本机存的那一份）。
   换了版本以后的第一条命令不等这一个小时（`update_after` 删掉 `teams/checked`，见 release.md）：一更新就和 Team 对一次，拿到最新的那一版，管理员看到的「手里那一份」也跟着新。
   账号表在下一条读它的命令里照新的改；`cca team join / sync / leave`、管理员的 `import / map / alias / publish / attach` 之后马上做完（`team_settle`：
   没配置过路由器的把配置带的节点导入可选节点，`py team-apply` 对一遍，同步路由器，改启动器）。
-- 管理员自己这台设备默认拿全部账号（`grants` 是 `all`）：导入映射以后那些账号都会加进它的账号表。不要的话 `cca team grant Team 自己这台 none`
+- 管理员自己这台设备默认拿全部账号（`grants` 是 `all`）：Team 里的账号都会加进它的账号表。不要的话 `cca team grant Team 自己这台 none`
   （或者只留几个）。
-
-还没改、要知道的：`cca policy` 列出来的受约束的账号里也有 Team 给的，说法还是「维护者的映射」；别处说「被维护者的映射固定」的提示（改节点、
-`cca edit` 时）对 Team 给的账号也是这句话。等维护者的映射迁成 Team（M4）一起改。
 
 ## 同步经 Team 的服务器（M3 的第二步）
 
-设备统计、记下备查的 API key、折合金额三条管线本来就是「这台设备用得了的每台服务器一条线」（`cmd/hub.rs` 的 `hubs()`：维护者的——共享开着、
-映射里有 presence 一节、有 deploy key（`presence_load`）——在前）。现在 `hubs()` 里多了各个 Team 的服务器（`HubKind::Team(编号)`，照加入的先后
-排在维护者的后面；config.json 写着 `"presence": false` 时一台都没有），所以三条管线不用改：
+设备统计、记下备查的 API key、折合金额三条管线是「这台设备用得了的每台服务器一条线」（`cmd/hub.rs` 的 `hubs()`）：各个 Team 的服务器
+（`HubKind::Team(编号)`，照加入的先后；config.json 写着 `"presence": false` 时一台都没有）。3.6.0 以前排在最前面的维护者的那一台去掉了，三条管线没改：
 
 - 一个 Team 的服务器在这台设备上用得了（`cmd/team.rs` 的 `hub_cfgs`）：接上了服务器、这台设备在 Team 里的密钥在、手里有验过的配置（盐在配置里）、
   没被管理员移除，而且没关掉设备统计（`"presence": false`）。请求拿这台设备在这个 Team 里的密钥签名，盐是这个 Team 的那一份：别的 Team、
   别的服务器上的账号摘要和密文都对不上。
-- 账号走哪台：`route` 照 `policy_sources`——某个 Team 给的走那个 Team 的；维护者映射里的走维护者的；别的（这台设备自己的官方账号
-  `own_account`、第三方 API 账号、没有邮箱的）哪台都不去：只在这台设备上统计，`cca devices` 说要和自己的别的设备一起统计就建一个 Team、
-  把它加进去（`unrouted_reason`）。**同一个账号 Team 和维护者的映射里都有时是 Team 的算数**（节点、同步都是），所以它不再经维护者的服务器同步：
-  那台服务器上别的设备看不到这台设备在用它。
+- 账号走哪台：`route` 照 `policy_sources`——某个 Team 给的走那个 Team 的；别的（这台设备自己的官方账号 `own_account`、第三方 API 账号、
+  没有邮箱的）哪台都不去：设备统计、记下的 API key、折合金额只在这台设备上（3.6.0 以前退到维护者的服务器，现在不退），`cca devices` 说要和
+  自己的别的设备一起统计就建一个 Team、把它加进去（`unrouted_reason`）。
 - 状态文件各是各的：`presence/` 和 `cost/` 里 `team.<编号>.` 开头（`HubKind::file`）。退出、被管理员移除（同步配置时知道的）以后把它们删掉
   （`drop_synced`）：不再读它们，而 `cost/` 里那一份是解开了的别的设备的折合金额，不该留在这台设备上。
   删的时候别的进程正好在同步（拿着 `team.<编号>.keys.lock` 之类的锁）时，它收尾写回的几个文件会留下来：服务器已经用不了了，没有害处，
@@ -195,76 +229,27 @@
   建出来的（这台设备第一次加入）时要到下一圈才开始盯，最多晚一次心跳。
 - **没有账号经它时一次都不报**（`Lane::quiet`）：加入了一个 Team、它给的账号却没在用（没登录，或者这个账号是另一个 Team 先给的）时，不必每分钟
   告诉它的服务器这台设备开着。这一路从「报过什么都没开」起步；有会话了照常报、心跳，都关了报一次 `end: none`，然后又不出声。算下一次什么时候
-  醒时不算这几路（它们的 `due` 没人动，算进去就成了每秒醒一次）。维护者的那一路照旧（没有账号时也心跳）。
+  醒时不算这几路（它们的 `due` 没人动，算进去就成了每秒醒一次）。
 - 服务器不认这台设备时（被移除了、服务器的记录没了）不自己重新加入——等管理员；那一路隔 10 分钟再试，
   下一次 `cca team sync`（启动时每小时一次）以后知道是被移除了，这一路就停了。
 - 没成的原因前面带着是哪个 Team（`hub_why`：「「名字」的同步服务器：…」）；`cca devices` 里账号不经服务器时的原因照 `hub_missing_why`。
-  「服务器太旧」那两句（`COST_OLD`、`KEYSHARE_OLD`，让维护者更新服务器）只对维护者的服务器说（`is_maintainer`：配置里没有 `"hub"`）。
+  「服务器太旧」那两句（`COST_OLD`、`KEYSHARE_OLD`，让维护者更新服务器）只对维护者的服务器说过，3.6.0 跟着它去掉了。
 - 一个 Team 的密钥文件读不了只是它用不了（`hub_cfgs` 跳过它），别的服务器照常。没有 Team（或者都还没同步到配置）的机器上 `hubs()` 只多两次
   落空的系统调用（`teams/index.json`、`teams/`），不多读 config.json。
 - 给界面和脚本的输出里是哪个 Team 写在旁边（可能同时在几个 Team 里，`kind` / `hub` 都是 `team`）：`_gui state` 的 `config.hubs` 里 Team 的项带
   `team`（编号）、`team_name`；账号多一项 `team`——是哪个 Team 给的，不看它的服务器用不用得了，不是 Team 给的（第三方 API 账号也是）没有这一项（没有 Team 的机器
-  输出和原来逐字节一样）；`devices --json` 的账号和 `hubs[]`、`cost sync --json` 的 `sync.hubs[]` 里 Team 的也带 `team`。现在的 App 不认识
-  `team` 这个种类（账号当作不同步、`config.hubs` 里跳过那一项），页面等 M5——Swift 的 `HubKind` 到那时再加，不然现在的「共享与同步」页会把
-  Team 的服务器照维护者的那一台来显示。
+  输出和原来逐字节一样）；`devices --json` 的账号和 `hubs[]`、`cost sync --json` 的 `sync.hubs[]` 里 Team 的也带 `team`。3.6.0 起 `kind` / `hub`
+  只会是 `team`（App 那一头见「界面」）。
 
 ## 迁移（M4）
 
-维护者的映射在删掉之前（M7）照常用：迁移是往 Team 那边搬，搬的过程中两边并着。自己的同步服务器 3.5.3 起已经没有了（见下面）。
+### 维护者的映射 → Team（3.6.0 删掉了）
 
-### 维护者的映射 → Team
-
-维护者（管理员）这边，在自己的 Mac 上：
-
-1. `cca team new 名字`，部署服务器、接上（`cca team deploy` 装好了自己接上，自己装的用 `cca team attach`；见「部署」）。
-2. `cca team import Team 映射仓库/policy.json 映射仓库/nodes.json`：账号 → 节点、别名、安装客户端用的节点、参考节点导进 Team 的配置。
-3. `./policy.sh team Team [-C 映射仓库的目录] [-y]`：把各台机器迁过来（下面说）。以后仓库上加了机器、有的邀请过期了，再运行一次。
-
-**各台机器怎么拿到邀请**：没有「申请—批准」的来回，也不用一台台发链接。映射仓库上每台机器有一把 deploy key；`./policy.sh team` 列出它们
-（只读、启用的 ed25519），辅助程序的 `team-handoff` 给每一把发一个邀请（账号全给：以前每台机器拿到的也是整份映射），照指纹写进 policy.json 的
-`team` 一节，然后照常检查、签名、推送：
-
-```json
-"team": {"v": 1, "invites": {"SHA256:<deploy key 的指纹>": "cca-team1.…", …}}
-```
-
-机器这边（`cmd/team.rs` 的 `adopt`）：拉到映射以后（`cca policy pull`、后台的 `_policy-fetch`、每小时的 `_team-sync` 都顺带看一次），里面有
-自己 deploy key 的那一项、自己还不在那个 Team 里，就拿这个邀请加入——**设备密钥就拷原来的 deploy key**（`teams/<编号>/id_ed25519`），
-不新生成。加入以后账号表照 Team 的配置改（同一个账号 Team 和映射里都有时是 Team 的算数），三条同步管线改走 Team 的服务器。
-
-- 可信：映射验过发布密钥的签名才换上，里面的邀请和映射一样可信；共享关着的机器不看它。旧版本的 cca 不认识 `team` 这一节，照样用映射
-  （客户端不查不认识的字段；维护者发布前的 `_policy-check` 认得它、查它的样子：`team_section_problems`）。
-- **邀请写在映射仓库里，能读仓库的机器都看得到。** 这没有比现在多暴露什么（现在每台机器本来就读得到整份映射和参考节点），但一台机器可以
-  拿给别的机器的邀请去加入。所以每个邀请指定了要拿哪把公钥加入（admin.json 里那台设备的 `expect`；`cca team invite --key` 也能手工指定）：
-  对账时（`reconcile`）服务器报的公钥不是它，就记成 `mismatch`：这段时间一个账号都不给它（`build_doc` 看这个记号，授权本身不动），
-  告诉管理员移除它（提示里带设备编号：同名的不止一项）；它已经取走的那一份收不回来（它本来就有）。服务器没报公钥不算，后来报的
-  对上了记号就去掉——服务器一时说错，不该把一台好好的设备的账号永久拿掉。被抢了邀请的那台加入时服务器说用过了，记下不再试；
-  管理员再运行一次 `./policy.sh team` 就给它新发一个。
-- 幂等：那串随机数是照主密钥和序数算的，发过的链接能原样再算出来。拿指定的公钥加入了的不再发；发过、没用、离过期还有三天以上的照原来的；
-  别的新发（30 天过期），同一把公钥以前没用上的那几项去掉、服务器上的邀请撤回。都加入了就把 `team` 一节从映射里去掉。管理员自己这台
-  （它的 deploy key 多半也在仓库上）本来就在 Team 里，不发。服务器上还没用掉的邀请最多 64 个：机器更多时分几次（前面的加入了再运行）。
-- **走了的不自己请回来**：自己退出了的（`left`）、管理员移除了的（`revoked`）那台机器，`./policy.sh team` 不再给它发（输出里列出来）——
-  不然移除、退出都留不住：它的 deploy key 还在仓库上，下一次运行就又回来了。要它回来：管理员手工 `cca team invite Team 名字 --key '它的公钥'`
-  （再运行 `./policy.sh team` 时这个邀请照原来的写进映射），退出过的那台还要自己 `cca team join`。设备这一头也一样：自己退出过这个 Team
-  的（`teams/adopt.json` 的 `left`，按 Team 的编号记，`cca team leave` 时记）不再照映射里的邀请自己加入，手动加入成了才去掉这个记号。
-  仓库上删掉了 deploy key 的机器不在这条命令看得到的范围里：它已经加入的不会被移除（要移除用 `cca team revoke`），给它发过、没用的
-  邀请留在服务器上直到过期（占着 64 个名额里的一个，最多 30 天）。
-- 不反复打扰：`teams/adopt.json` 的 `links` 记着每个邀请（存摘要，不存链接）试的结果——加入了、用过了 / 过期了 / 服务器不认的不再试；
-  连不上、服务器出错、名额满了之类一时的原因过一个小时再试。同时只做一个（`teams/adopt.lock`：后台拉映射和同步配置可能撞上）。
-- 请求到了服务器、回话没收到：邀请已经用掉，本机却什么都没留下。下一次再试时服务器说用过了——拿的是同一把 deploy key，所以接着同步一次
-  配置，服务器认它是这个邀请的那台设备（回的编号对得上）就是已经加入了，把本机这一头补上（手动加入每次新生成密钥，没有这一步）。
-- 管理员移除了这台设备以后，映射里换了新的邀请（管理员手工发的）才会再加入。
-- 什么时候加入：后台拉映射一天一次（`policy_hook`），每小时的 `_team-sync` 只看本机已经拉到的那一份（还不在任何 Team 里的机器上它也不跑）。
-  更新到新版本以后的第一条命令不等（`update_after` 删掉 `policy/checked`、`teams/checked`，见 release.md）：还在用不认得 `team` 一节的旧版本的机器，
-  自动更新换上新版本以后马上拉映射、加入，不用再等一天。
-- 设备密钥沿用 deploy key，所以同一把密钥给三处签名：GitHub 的 ssh 登录（另一种签名）、维护者的设备统计服务器、Team 的服务器（后两处
-  都是 `ssh-keygen -Y sign -n cca-presence`）。这是故意的，不串：请求里写着 op，服务器只认发到那个地址的那一种，`team_*` 这些 op 旧的
-  服务器没有、Team 的服务器也不收别的；随机数 5 分钟内不重复。
-- 加入不出声的地方：后台拉映射、后台同步配置时（账号表在下一条命令读它时照新的改）。终端里 `cca policy pull`、App 的定时拉取会说一句
-  「照维护者的映射加入了…」，接着 `team_settle`。这条命令启动时要是正好也在后台同步配置（`team_hook`，每小时一次），后台那个可能先拿到
-  `adopt.lock` 把加入做了：前台看到有人在做就让开，这一句不说（加入照样成；回归里测前台这一句时先 `touch teams/checked` 不让后台起）。
-- 迁移期间：加入了的机器把这些账号的设备统计、API key、折合金额报给 Team 的服务器，没迁的还报给维护者原来那台，**两边各看各的设备**。
-  都迁完以后维护者把账号从映射里删掉（或者整个停用映射）。
+3.5.3 到 3.5.5 这几版里，维护者把映射里的账号 → 节点、别名、安装客户端用的节点、参考节点导进一个 Team（导入映射文件），再给映射仓库上每台机器的
+deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉到映射以后拿给自己的那个邀请自己加入，设备密钥就是原来的 deploy key
+（`teams/<编号>/id_ed25519`）。这一套连同映射 3.6.0 都删掉了（见「3.6.0 去掉的旧通道」）：已经加入的设备照常用，那把密钥照旧是它在这个 Team 里的
+设备密钥（仓库上的 deploy key 删掉也不碍事）；没迁过去的机器升级以后（共享开着、不在任何 Team 里）在终端里说一次怎么加入——向 Team 的管理员
+要一个邀请链接，`cca team join`（新生成设备密钥）。留下来的只有邀请指定公钥（`cca team invite --key`，见「管理员这一头」）。
 
 ### 自己的同步服务器 → Team
 
@@ -273,7 +258,7 @@
 
 1. 一台设备上 `cca team new 名字`，部署服务器（`cca team deploy`，见「部署」）、接上。新建时就选上自己的账号（3.5.5 起，见「管理员这一头」），
    就不用下一步。
-2. `cca team import Team --mine`：把这台设备上自己的官方账号（不是维护者共享的、不是别的 Team 给的、不是第三方 API 的）连同现在走的节点、
+2. `cca team import Team --mine`：把这台设备上自己的官方账号（不是别的 Team 给的、不是第三方 API 的）连同现在走的节点、
    别名加进 Team 的配置。节点的定义不带（各台设备自己有：同一个路由器，或者各自的内置代理）。
 3. 给别的设备各发一个邀请（`cca team invite`），在那台上 `cca team join`。
 
@@ -290,7 +275,7 @@
 - 服务器上以前装的 `/opt/cca-hub`（服务名 `cca-hub`）：安装脚本只让卸载（`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-hub`）。
   不带 `--uninstall` 指着它、带着 `--team-root` 往那个目录里装都停下（`team_here`、`other_kind`；更早的安装脚本没在 `.cca-hub` 里记服务名，
   `.env` 里有 `CCA_HUB_ADMIT_HASH` 的也认成它）。托管平台上的那一台在平台上删掉。
-- 服务端不再认 `--mode own`；拿它的状态文件起 Team 或者维护者的服务器是从头开始（见「服务端」的换模式）。
+- 服务端不再认 `--mode own`；拿它的状态文件起 Team 的服务器是从头开始（见「服务端」）。
 
 ## 部署（M6）
 
@@ -377,7 +362,7 @@
   最多 `CCA_HUB_CERT_WAIT` 秒，默认 120；第一次要时证书机构来验证，多半十几秒），拿到了再等服务端在网页端的端口上用上（最多 10 秒）：结果行
   `web_cert ok`，没等到是 `wait`（多半是 80 端口没放行：证书助手过一会儿自己再试）。证书助手起不来时说一声、不等。
 - 共用的证书助手（80 端口只有一个：一台服务器上几个 Team 都开网页端时只能有一个程序听它）：服务名 `cca-team-acme`（systemd 的服务名和
-  系统用户、Docker 的容器名和 compose 的项目名；不叫 `cca-acme`：维护者的设备统计服务器的证书助手容器叫这个），装在固定的
+  系统用户、Docker 的容器名和 compose 的项目名；不叫 `cca-acme`：3.6.0 以前维护者的设备统计服务器的证书助手容器叫这个，那台服务器上可能还在），装在固定的
   `/opt/cca-team-acme`（每个 Team 的安装脚本都要找得到它，不跟 `--dir`）。里面：`.env`（600：`CCA_HUB_MODE`、Docker 的 `CCA_HUB_IMAGE`、
   `CCA_HUB_VERSION`）、`app/cca-acme.py`、`teams/<服务名>`（root 的、644：这个 Team 登记的地址，就是它的 `CCA_HUB_HOST`）、`store/<种类>-<值>/`
   （700：一个地址一张，`privkey.pem` 600、`fullchain.pem` 644；几个 Team 同一个地址时只要一张——同样的证书 7 天最多发 5 张）、`webcert/`（711）
@@ -523,7 +508,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `cca team rename`）、移除 / 撤回邀请（`cca team revoke`，先问同意）、发邀请（起名字、勾账号，链接进剪贴板）、各个账号走
   哪个节点（`cca team map`；能选的是这个 Team 带着定义的节点加上这台设备上有的）、各个账号的「改别名…」（账号那一行下面开输入框，`AppModel.teamAlias`，
   按 `工具:邮箱` 改：`cca team alias`，只改这个工具里的；别名没变不发命令）、账号那一块标题右边的「锁定别名」开关（`cca team alias Team --lock`
-  / `--unlock`）。加账号、导入映射还在终端里（`cca team map`、`import`）。
+  / `--unlock`）。加账号、导入还在终端里（`cca team map`、`import --mine`）。
 - 改账号表的几条命令（`sync`、`leave`、`grant`、`map`、`alias`，连同锁定别名）跑完为止、和同步路由器排一个闸门（`router-sync`）；`invite`、`revoke`、`rename` 排 `team`。
 - `HubKind` 认得 `team` 了；`config.hubs`、`devices --json` 的 `hubs[]` 里 Team 的服务器照 `team`（编号）分，账号问的是哪一台照
   `(hub, team)` 认（`DevicesDoc.hub(for:)`）。
@@ -562,7 +547,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `teams/.new.<进程号>` 里建好再改名（编号要有了根公钥才知道；以前建到一半留下的过一个小时清掉）。说下一步：服务器用这把根公钥运行，再 attach。
 - **新建时放进这台设备上的账号**（3.5.5 起）：能放的是 `team_picks` 列的（`py team-candidates`：一行一个，工具、工具的名字、邮箱、别名、已经在哪个
   Team 里、节点，没有的栏是 `-`）——账号表里有邮箱、有节点的官方账号，自己加的（`own_account`），或者这台设备当管理员的别的 Team 给的（账号和
-  节点的定义本来就归这台设备的人管）；维护者的映射给的、这台设备只是成员的 Team 给的不能（是别人的，不能转手给别的设备），第三方 API 账号也不能
+  节点的定义本来就归这台设备的人管）；这台设备只是成员的 Team 给的不能（是别人的，不能转手给别的设备），第三方 API 账号也不能
   （Team 的配置里只有官方账号）。没写 `--accounts` 时 bash 问（`team_new_pick`）：App 里一页多选（`team.accounts`：选项的值是编号，自己加的
   预先选好——写在 `value` 里、`default` 是空的，因为 `gui_ask` 拿默认值顶替空的答案，都不勾就成了全选），终端里列出来按编号选（`a` 全部、`0` 一个
   都不放，直接回车是自己加的那几个），选的拼成 `--accounts 工具:邮箱,…` 交给 `py team-new`；没有终端的不问、一个都不放（说怎么放）。
@@ -579,10 +564,12 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   会加入一台没人管的服务器；这边记成 `expired`，要重新发），同一个序号的配置也存一份上去：还连着原来那台的设备下次同步配置时拿到它、照 `server`
   换过去，到新的那台上发现手里的就是它存的那一版。中途没做完的（`moved_from` 还在）下次 `attach`、`publish` 接着收尾；原来那台连不上时说一声
   （`fail_warn team_forward`：那些设备找不到新的服务器，要重新邀请）。
-- `cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒]`：取下一个序数算出 `k`，`team_invite` 登记令牌的哈希，记进 admin.json，
+- `cca team invite Team 名字 [--accounts all|工具:邮箱,…] [--ttl 秒] [--key '公钥']`：取下一个序数算出 `k`，`team_invite` 登记令牌的哈希，记进 admin.json，
   马上把它的配置存上去（设备一加入就能同步下来）。邀请链接只打到 stdout 一行；在 Claude Code 的会话里不给。默认 7 天过期。链接里带着这个名字（`d`，
   3.5.3-beta.7 起）：设备加入时用它。还在这个 Team 里的别的设备已经叫这个名字（`label` 或者服务器上的 `name`）的不行（`name`，和 `rename` 一样：
-  `name_taken`）；`./policy.sh team`（`team-handoff`）照 deploy key 的标题起名字，不查。
+  `name_taken`）。`--key` 指定要拿哪把公钥加入（admin.json 里那台设备的 `expect`）：对账时服务器报的公钥不是它，就记成 `mismatch`——这段时间一个
+  账号都不给它（`build_doc` 看这个记号，授权本身不动），告诉管理员移除它（提示里带设备编号：同名的不止一项），它已经取走的那一份收不回来；服务器
+  没报公钥不算，后来报的对上了记号就去掉（服务器一时说错，不该把一台好好的设备的账号永久拿掉）。
 - **和服务器对一遍**（`reconcile`，`devices`、`grant`、`import`、`map`、`publish`、`attach` 都先做）：`team_members` 的名单和 admin.json 比——
   - 加入了的设备 `invited` → `joined`，`name` 照服务器的（样子不对的不要）。公钥第一次见到时过了认证码才记下（没过的照样给它发布配置，名单里的
     `problem` 说一声：服务器的记录没了以后它登记不回去）；记下以后服务器报的不一样就不照它的（`problem`）。管理员自己这台的公钥是本机的。
@@ -598,8 +585,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - **发布**（`publish`）：给每台 `invited` / `joined` 的设备照授权拼出明文，内容的摘要（发布时间不算）和上次发布的一样就不动；变了的序号加一、
   封好签好，一个请求最多 32 台、密文加起来不超过 600 KB（`put_docs`，换服务器的收尾也用它）。服务器说序号不比它存着的大（管理员的状态是从备份
   恢复的）：它说的数不比记着的小、没到上限才信，接着它的往上加再存一次（只追一次）；它明说不认得的编号记成 `expired`；回话里没提到的不动、说一声。
-- `cca team grant Team 设备 all | none | +工具:邮箱 | -工具:邮箱 …`、`cca team map Team 工具 邮箱 节点|-`、`cca team import Team policy.json [nodes.json]`
-  （现成的映射和参考节点整个导进来：就是维护者映射仓库里的那两份，格式照 `policy_problems`、`fill_problems` 查）、`cca team publish Team`：改完都发布。
+- `cca team grant Team 设备 all | none | +工具:邮箱 | -工具:邮箱 …`、`cca team map Team 工具 邮箱 节点|-`、`cca team import Team --mine`
+  （见「自己的同步服务器 → Team」；3.6.0 以前还能导入维护者映射仓库里的 policy.json、nodes.json，跟着映射删掉了）、`cca team publish Team`：改完都发布。
   节点的定义一个个加、复制、去掉、实测见「Team 的节点」（`cca team node`）。
 - **默认的别名**（`default_aliases` 照 `alias_plan` 改，3.5.3-beta.5 起；3.5.3-beta.6 起按工具记）：配置的 `tool_aliases`（{工具: {邮箱: 别名}}）里
   没有别名的账号（不合规的、在这个工具里和前面的账号撞了的也算）编成 `team-1`、`team-2`……——各工具各编各的，各自的第一个账号都是 `team-1`
@@ -607,8 +594,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   不给新加的）；不在 Team 里了的账号的别名去掉。按邮箱的 `aliases` 照它算（每个邮箱用它最前面那个工具里的：旧版本的设备、管理员这台换回旧版本
   时用）。没有 `tool_aliases` 的 Team 照 `aliases` 给它在的每个工具；3.5.3-beta.5 的 `alias_n` 是一个数（那时各工具一起编：Claude 有 2 个账号时
   Codex 的从 team-3 编起），那时编的 `team-N` 都去掉、照各工具重新编。`import`、`map`、
-  `alias` 时和每次发布前都过一遍（以前建的 Team 下次发布时换过来，各台设备的配置因此都发布新的一版）。`import` 一个映射文件时，文件里写的别名
-  （按邮箱）给它在的每个工具，没写的照这个 Team 原来在这个工具里给它的（不然每导入一次编号就变、各台设备跟着改名）。`import --mine` 带进这台
+  `alias` 时和每次发布前都过一遍（以前建的 Team 下次发布时换过来，各台设备的配置因此都发布新的一版）。`import --mine` 带进这台
   设备上起过的别名（各工具的账号表各是各的）：Team 里原来是默认的 `team-N`、这个工具里也没有别的账号叫它时换成它；没起过的（还有默认样子的
   `team-N`）编成 `team-N`。
 - `cca team alias Team 账号 新别名`（`py team-alias`）：账号写 `工具:邮箱` 只改这个工具里的，只写邮箱改它在的每个工具里的；别名不合规、
@@ -654,8 +640,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 
 ## Team 的节点（`cca team node`，3.5.3-beta.8 起）
 
-维护者以前改映射仓库的 `nodes.json`（或 `custom.yaml`）、签名推送；现在节点的定义在管理员这台的 admin.json 里（`config.nodes`，
-`{"group", "proxies"}`，和 `nodes.json` 一个样子），管理员用这几条命令改。辅助程序在 `cmd/team/admin/nodes.rs`，bash 是 `team_node`：
+以前维护者改映射仓库的 `nodes.json`（或 `custom.yaml`）、签名推送（映射 3.6.0 起去掉了）；节点的定义在管理员这台的 admin.json 里（`config.nodes`，
+`{"group", "proxies"}`，和以前的 `nodes.json` 一个样子），管理员用这几条命令改。辅助程序在 `cmd/team/admin/nodes.rs`，bash 是 `team_node`：
 
 - `cca team node Team [ls [--json]]`（`py team-node-ls`）：不联网、不显示密钥（只有名字、类型、服务器、端口、`dialer-proxy`、走它的账号、
   是不是安装客户端用的）。`--json`（`kind: team_nodes`）另带这个 Team 全部的账号 → 节点（`accounts`：走的节点不在定义里的也算）。
@@ -667,7 +653,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   一个时 `config.nodes` 回到 null。
 - 改了都先过一遍成员设备查配置的那一套（`fill_problems`），不合格的不存（`node`），再和 `map` 一样对一遍、发布。给各台设备的配置只带它的
   账号用得着的节点（`needed_nodes`）：加、复制、去掉没人用的节点，哪台设备的配置都不变（`各台设备的配置没有变`），有账号走它了（`cca team map`）
-  才发出去。还没有节点的 Team 第一次加时策略组是 `OpenAi`（和维护者的 `policy.sh` 一样）。
+  才发出去。还没有节点的 Team 第一次加时策略组是 `OpenAi`。
 - `test [节点…] [--tool 工具] [--json]`（`team_node_test`）：实测出口。另起一个临时内核（`core_bin`；不碰在跑的内置代理和路由器），
   `py team-node-testconfig` 把配置写进 `mktemp -d` 的目录（700，文件 600、`O_EXCL`，EXIT trap 停内核、删目录；corenet 的
   `test_proxy_config`：127.0.0.1 上每个节点一个入站 `cca-test-N` 直通它，带上 `dialer-proxy` 连着的，`MATCH,REJECT`，不开控制接口、
@@ -689,21 +675,20 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   - `test_flow`：`/v1/health`；管理员的 op 只认根密钥（设备的密钥、冒用根公钥指纹的别的密钥、改过的请求）；根密钥登记、加入不了；登记、
     邀请（令牌和那串随机数不落在服务器上）、加入（没有这个邀请 / 签名不对一样的 403，用过了、同一个编号再发前一个作废、直接登记了邀请作废）；
     配置（只取得到自己的、签名照根公钥验、认证带着设备和序号、补齐到 1024、序号往回走的不存、设备手里的比存着的新也照给、还没加入的先存着）；
-    名单（`seq`、`have`）；API key、折合金额照旧；请求的大小（`team_put` 1 MB，别的 64 KB；`ServerTest.test_no_team_ops` 里另有一条：维护者的服务器
-    没有 Team 的 op、不放宽，以前的自己的同步服务器的 op 也没有）；
+    名单（`seq`、`have`）；API key、折合金额照旧；请求的大小（`team_put` 1 MB，别的 64 KB）；
     移除、退出（配置和上报的记录跟着删）；换了密钥的设备重新登记；重启接着用、换了根公钥从头开始。
   - `test_records_lost`：状态文件丢了（根公钥照旧）以后 `gen` 变了，用过的邀请加不回来，管理员照留着的公钥登记回去、同一个序号再存一次配置。
   - `test_store`：直接调 `Store`（不用真的等）测过期、清理（邀请清掉时给它存的配置跟着删、只剩配置的编号也移除得掉）、邀请 / 配置 / 设备数的上限、
-    手改坏了的状态文件、换模式。
+    手改坏了的状态文件、别的模式留下的状态文件。
   - `test_cli`：启动参数（根公钥从 `--team-root` 或者 `CCA_TEAM_ROOT` 来、只写后面那一段也认；托管的预设 `CCA_HUB_HOSTED=1` 下给了根公钥就是 Team 的服务器，
     没有 `/data` 不启动）。`test_behind_proxy`：只说 HTTP、不用证书，按 `X-Forwarded-For` 的最后一项限流，同一个 IP 的连接数不限。
   - 形状不对的请求直接调解析函数（`parse_enroll`、`parse_team_docs`）；`admin()` 遇到 429 等一会儿再试。
 - `cargo test team`（`cmd/team/doc.rs`、`core/team.rs`）：编号、邀请链接、从 `k` 派生的令牌 / 设备编号 / 密钥、签的那一段字节、解 `tests/spec_wire.py`
   封的密文（`cli/tests/vectors/team_doc_ct.json`：它固定 nonce 封的），都和独立实现的那一份逐字节对得上；配置明文的检查。
 - `tests/team.py`（回归的 unit 一节）：辅助程序对着真的 `--mode team` 服务器，各台设备各一个临时 HOME（`presence.Device`）。
-  - `test_admin_local`：建 Team 只在本机、文件的权限、`k` 不落盘（照主密钥算得出来）、没接上服务器时导入和改映射只改本机、接不上的各种原因。
+  - `test_admin_local`：建 Team 只在本机、文件的权限、`k` 不落盘（照主密钥算得出来）、没接上服务器时导入和 `map` 只改本机、接不上的各种原因。
   - `test_lifecycle`：接上、导入、邀请（那串随机数和令牌不在管理员这台的任何文件、请求、curl 的命令行里，也不在服务器上）、加入（没成什么都不留、
-    用过的邀请、已经在里面）、成员用不了管理员的命令、**独立实现的那一份拿邀请加入并解开辅助程序封的配置**、名单、改授权 / 改映射以后设备同步到新的一版、
+    用过的邀请、已经在里面）、成员用不了管理员的命令、**独立实现的那一份拿邀请加入并解开辅助程序封的配置**、名单、改授权 / `map` 以后设备同步到新的一版、
     没变的不重新发布、移除（设备知道被移除了、拿新的邀请再加入）、退出（管理员那边记成 `left`）。
   - `test_spec_admin`：**管理员由独立实现的那一份扮演**：它封的、签的辅助程序解得开；不是根密钥签的、别的设备的那一份、内容不对的、比手里旧的都不要；
     配置里说服务器搬了跟着换，新的那台上没有这台设备是 `lost`。
@@ -717,9 +702,9 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `attach` 指纹对不上、`import`、`invite`（Claude Code 里不给；链接只一行打到 stdout，那串随机数不在 curl / env 的命令行里、不落盘）、`devices`、`grant`、
   `map`、`publish`、`node`（列出、粘贴链接加、复制、有账号在用的去不掉、`test` 撞了 IP 是 3 / 不通是 1 / 全都不通是 2、去掉；那一头的序号不动）、
   `revoke` 的同意事件和同意之后、管理员 `leave` 的同意事件（`team_delete`）；再当成员（管理员由 `tm_spec` 扮演）：链接少一截、加入
-  （`team_joined`）、两个 Team 照先后列出、Team 给的账号 `cca policy request` 说找管理员、成员用不了 `team node`、`sync` 同步到新的一版并跟着改名、
+  （`team_joined`）、两个 Team 照先后列出、成员用不了 `team node`、`sync` 同步到新的一版并跟着改名、
   被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后；换了版本以后的第一条命令（`update_after`：版本没换、全新安装的不提前；
-  从不记 `update/ran` 的旧版本更新上来的在后台拉映射、照映射里的邀请加入；在 Team 里的马上同步到管理员刚发布的一版）。这一节结束时停掉两台服务器、删掉 `~/.cca/teams`。
+  在 Team 里的马上同步到管理员刚发布的一版）。这一节结束时停掉两台服务器、删掉 `~/.cca/teams`。
   `team node test` 的假内核：假 mihomo 看到入站 `cca-test-1` 就把状态放在 `$T/core_test`（`core_load` 另记 `listeners/<端口>`：入站名和节点），
   假 nc 认它的端口；假 curl 经它时照 `$T/trace/<节点>/<网站>` 回话（默认服务那边 `203.0.113.<100+序号>`、www.cloudflare.com
   `198.51.100.250`），`$T/trace_down/<节点>` 时连不上；直连节点服务器的端口看 `$T/tcp_open`（「主机 端口」一行一个）。
@@ -727,10 +712,10 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   模板不变）、去掉（账号、`dialer-proxy`、`install_node` 用着的不行）；没人用的节点不改成员设备的配置，`map` 到它以后才发出去（连同安装用的节点）；
   `testconfig` 的入站、带上的节点、权限、要测的网站、不写节点是全部；`verdict` 的几种结果和 `--json`；没接上服务器的 Team 只改本机。
   `cargo test nodes`：`judge` 的各种情况。
-- 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：这台设备上维护者的共享也开着、映射里 alice 走另一个节点——加入以后 alice 照 Team 的
-  （说「按「测试组」的配置固定」）、补上别名，本来就有的账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了
-  收起来（`parked`），再给回来照原来的键；不再给本来就有的那个，账号留着；被移除以后 Team 加的收起来、alice 轮到维护者的映射。
-  regress 11b3d：管理员自己这台 `grant … none`（导入的映射不进这台 Mac 的账号表），成员加入以后 alice 的节点由 Team 定、说一声；这一节结束时
+- 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：加入以后 alice 的节点照 Team 的（说「按「测试组」的配置固定」）、补上别名，本来就有的
+  账号只改节点、不记成 Team 加的；管理员多给一个账号加进来（记进 `team_added`），不再给了收起来（`parked`），再给回来照原来的键；不再给本来就有的
+  那个，账号留着；被移除以后 Team 加的收起来。
+  regress 11b3d：管理员自己这台 `grant … none`（导入的账号不进这台 Mac 的账号表），成员加入以后 alice 的节点由 Team 定、说一声；这一节结束时
   账号表和配置照开头的还原。`cmd/hub.rs` 的单元测试 `route_table`：账号走哪一类服务器看是谁定的。
 - 别名（`tests/team.py` 的 `test_aliases`、`test_alias_per_tool`）：各工具各自从 `team-1` 编、同一个邮箱在两个工具里各有各的号（成员设备上各工具的
   账号表各用各的）、3.5.3-beta.5 的 Team 发布时照各工具重新编、成员设备上没有记录的旧编号跟着换、几个账号对调别名一次换好、`team-name` 改名字；
@@ -738,8 +723,6 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   那个在成员设备上叫「Team 的名字-1」；`team-alias` 的原因码（不合规、重名、没有这个账号、不是管理员）；改了以后成员设备上照 Team 给的用着的
   （连同撞了以后换成的）跟着改、自己改过的不跟；管理员这台设备上只有邮箱的不补、以前加进来的不跟；以前的 Team 发布时补上编号。
   `core/policy.rs` 的单元测试 `alias_fallback_names`：「Team 的名字-N」怎么拼、截短、拼不出来的时候。
-- 同时用着维护者的映射和一个 Team（`tests/team.py` 的 `test_with_maintainer`）：映射里的账号只经维护者的服务器、Team 给的只经 Team 的（账号摘要的盐、
-  签名的密钥、状态文件各是各的），上报进程一台服务器一路，Team 的那台连不上时只有它那一路记原因。
 - 同步经 Team 的服务器（`tests/team.py` 的 `test_pipelines`）：Team 给的账号记下 API key、同步折合金额、看设备，请求都是这台设备在 Team 里的
   密钥签的、账号摘要是照 Team 的盐算的；服务器上存的密文照文档（`spec_wire`）拿 Team 的盐解得开；别的服务器的状态文件没有；被移除以后
   不再发请求，留下的状态文件删掉了。
@@ -747,11 +730,12 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   （另一台服务器）接着就有一路，各报各的账号；被第一个 Team 的管理员移除以后那一路停了（再开会话也不报），另一路照旧。假 ps 的进程表里
   一行都没有时上报进程当成没问到（真的 ps 不会这样）：这条测试先放一个不相干的进程。
 - 回归 11b3d：`_gui state` 里 Team 给的账号 `hub` 是 `team`、`team` 是编号，`config.hubs` 里有那个 Team，别的账号没有 `team`。
-- 迁移（`tests/team.py` 的 `test_handoff`）：照 deploy key 的指纹发邀请、格式检查认得 `team` 一节、机器拿原来的 deploy key 自己加入、再运行
-  一次是幂等的、别的机器拿了邀请被认出来（它手里的换成一个账号都没有的，授权本身没动）、用过了的邀请不再试、管理员重发以后加入、
-  自己退出过的管理员不再发、它也不再自己加入（手动加入以后记号去掉）、回话没收到的下一次认出来补上、管理员移除了的不再发、共享关着的不看。`test_import_mine`：只加自己的官方账号。`test_new_with_accounts`：新建时能放的（自己加的、这台设备当管理员的 Team 里的；成员的 Team、维护者的映射、
-  第三方 API 账号的不能）、写错了什么都不建、照账号表的先后放、别名带进去（默认样子的另编）、节点的定义连同 dialer 带过来、发布出去、`all`。回归 11b3d：`./policy.sh team`（假 gh 的 deploy key、假的维护者目录）问过才发、
-  写进映射、签名推送，独立实现的那一头拿映射里的邀请加入；`cca policy pull` 拉到给这台 Mac 的邀请后自己加入、退出后不再加入。
+- 导入、新建时放进账号（`tests/team.py`）：`test_import_mine`：只加自己的官方账号。`test_new_with_accounts`：新建时能放的（自己加的、这台设备当管理员的
+  Team 里的；成员的 Team、第三方 API 账号的不能）、写错了什么都不建、照账号表的先后放、别名带进去（默认样子的另编）、节点的定义连同 dialer 带过来、
+  发布出去、`all`。
+- 3.6.0 去掉映射以后（回归）：`cca policy …` 只说一句、退出码不是 0，`cca _policy-fetch` 什么都不做；升级上来的沙箱里留着 `~/.cca/policy/`、
+  没有前缀的同步状态、`teams/adopt.*`、config.json 的三个开关时，第一条命令清掉它们（Team 的状态文件不动），只有共享开着、又不在 Team 里时
+  说那一句；`_gui state` 的 `config.policy` 是那个常量、`can.policy_lock` 是 false；一键安装带着 `CCA_POLICY_REPO` 只提醒。
 - 界面（`macos/Tests/ContractTests/TeamTests.swift`，手写的夹具 `hello.json`、`state.json`、`team_devices.json`）：解码（旧版 cca 没有
   这些字段、不认识的角色 / 状态）、筛选（三处用的列表、记进设置、Team 不在了当全部、旧版 cca 不筛）、展开时才问设备、邀请只经
   `copySecret`、改授权和节点发的命令。通用检查（`Generic.swift`）：`config.teams` 和账号的 `team` 对得上、Team 的服务器照编号算、

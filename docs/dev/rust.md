@@ -10,7 +10,7 @@
 |---|---|
 | `cli/src/main.rs` | 入口：按第一个参数找子命令（`cmd::find`），没人接的错误说一句、退出码 1 |
 | `cli/src/py/` | Python 兼容层：值（`obj::{V, Dict, List}`）、JSON、正则、文字、路径、文件、子进程、时间、摘要、属性列表、TOML、TLS、zlib……行为照 CPython（有从真的 Python 取的对照数据：`cli/tests/vectors/*.json`，`cli/tools/gen_vectors.py` 生成） |
-| `cli/src/core/` | 地基：目录和常量（`base`）、三种工具（`tool`：原来的 `Tool` / `CodexTool` / `AgyTool`，`t()` 是当前工具）、账号表（`model`）、映射（`policy`）、对账（`ctx`）、同步摘要（`sync`） |
+| `cli/src/core/` | 地基：目录和常量（`base`）、三种工具（`tool`：原来的 `Tool` / `CodexTool` / `AgyTool`，`t()` 是当前工具）、账号表（`model`）、Team 的配置并进账号表（`policy`：名字是维护者的映射那时起的）、对账（`ctx`）、同步摘要（`sync`） |
 | `cli/src/cmd/<模块>.rs` | 子命令，一个模块一份，每份末尾有自己的 `CMDS` 表（子命令名 → 函数、哪几种工具能用） |
 | `cli/Cargo.toml`、`Cargo.lock` | 依赖是白名单（见下面「依赖」）；版本锁在 `Cargo.lock`，一律 `--locked` |
 | `cli/.cargo/config.toml` | 从 macOS 交叉编译 Linux（musl 静态链接，用 Rust 自带的 rust-lld）；`cargo test` 起的进程里 `CCA_HOME` 指到不存在的目录 |

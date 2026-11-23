@@ -42,7 +42,7 @@
 - `~/.claude`、`~/.claude.json`、`~/.codex`、`~/.gemini` 和 `claude` / `codex` / `agy` 命令：不是 cca 的。cca 写进这几份里的东西也留着
   （`~/.claude.json` 里给附加目录记的 `hasTrustDialogAccepted`、征得同意后在 `~/.codex/config.toml` 里关掉的 `system_proxy_fallback`、
   `cca settings fix` 留在旁边的 `settings.json.cca-backup-*`）：没记过哪些是 cca 写的，分不出来。
-- 仓库上登记的 deploy key（本机那一把删了，卸载时提醒）、Google 账号里的应用专用密码、Team 的同步服务器（只退出，不卸载服务器：管理员照 team.md「部署」卸载）。
+- Google 账号里的应用专用密码、Team 的同步服务器（只退出，不卸载服务器：管理员照 team.md「部署」卸载）。
 - 钉在程序坞里的启动器图标：启动器删了以后是个问号，没去改程序坞的设置。
 - 临时目录里 App 放事件文件的 `cca-gui-events`：空目录，系统自己会清；开发时编的另一份 App 可能正用着。
 - 本机 UDP 的系统服务在授权框里点了取消、路由器连不上却选了接着做：那一头留着，卸载时说了怎么办。
