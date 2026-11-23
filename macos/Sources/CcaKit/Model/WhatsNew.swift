@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.0", title: "去掉维护者的映射，只用 Team", points: [
+            .init(symbol: "person.3",
+                  text: "维护者共享的账号（cca policy）去掉了，账号和节点只经 Team 给：还没加入的设备向管理员要邀请链接，在「共享与同步」页或用 cca team join 加入。"),
+            .init(symbol: "trash",
+                  text: "更新后第一次运行时，清掉以前拉取的映射、deploy key 和经维护者的服务器同步的记录；账号表里的账号照旧能用。"),
+            .init(symbol: "server.rack",
+                  text: "远程会话只经 Team 的服务器中转：以前经维护者的服务器配的对不再显示，要在 Team 的服务器上重新配对。"),
+        ]),
         ReleaseNote(version: "3.5.5", title: "新建 Team 时选上这台设备的账号", points: [
             .init(symbol: "checklist",
                   text: "新建 Team 时多一页：勾选这台设备上的哪些账号放进去，连同现在走的节点和别名。自己加的账号已经勾好，都不勾就先建一个空的 Team。"),
