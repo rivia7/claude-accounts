@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """网页端（手机浏览器接入远程会话：docs/dev/remote.md「网页端」、server/README.md「网页端」）在服务器这一头：
-不在设备清单里的访客拿配对码配对、它能发和不能发的请求、WebSocket 进中转、页面的文件、另开的那个带证书机构签的证书的端口。
+不在 Team 的名单里的访客拿配对码配对、它能发和不能发的请求、WebSocket 进中转、页面的文件、另开的那个带证书机构签的证书的端口。
 
-真的服务器进程；扮演手机的是这里照文档写的一份（Guest、WsSock：ssh-keygen 签名、自己说 WebSocket），另一头是设备清单里的
-设备（照文档自己说话，或者真的 cca：见 ClientTest）。浏览器里跑的那一份（server/web/core.js）由 tests/web_client.mjs 测。不联网。"""
+真的服务器进程（Team「测试组」的同步服务器）；扮演手机的是这里照文档写的一份（Guest、WsSock：ssh-keygen 签名、自己说 WebSocket），
+另一头是 Team 里的设备（照文档自己说话，或者真的 cca：见 ClientTest）。浏览器里跑的那一份（server/web/core.js）由 tests/web_client.mjs 测。不联网。"""
 import base64
 import hashlib
 import http.client
@@ -125,7 +125,7 @@ class WsSock:
 
 
 class Guest:
-    """扮演手机上的那一页：一把自己生成的密钥（不在设备清单里），请求照文档签名，发到网页端的那个端口（照证书机构验证书）"""
+    """扮演手机上的那一页：一把自己生成的密钥（不在 Team 的名单里），请求照文档签名，发到网页端的那个端口（照证书机构验证书）"""
     def __init__(self, test, name='iPhone'):
         self.t, self.name = test, name
         self.keyfile = test.d / ('guest-' + secrets.token_hex(4))
@@ -242,7 +242,7 @@ class WebBase(Base):
         code, rid, kc, na = self.open_web(dev)
         p, pid = g.join(code, dev.fp)
         j = self.good(dev, 'pair_get', rid=rid)
-        self.assertEqual((j['fp'], j['name']), (g.fp, None), '访客不在设备清单里：服务器不知道它叫什么')
+        self.assertEqual((j['fp'], j['name']), (g.fp, None), '访客不在 Team 的名单里：服务器不知道它叫什么')
         self.assertEqual(sw.pair_open(sw.pair_keys(code)[1], rid, 'b', j['m'])['name'], g.name)
         self.assertEqual(self.good(dev, 'pair_commit', rid=rid, pid=pid)['done'], True)
         self.assertEqual(g.good('pair_get', rid=rid, until='done')['done'], True)
@@ -291,8 +291,8 @@ class ServerTest(WebBase):
         code, rid, kc, na = self.open_web(a)
         keys = sw.pair_keys(code)[1]
         m = sw.pair_msg(keys, rid, 'b', g.fp, secrets.token_bytes(32), g.name)
-        # 不在设备清单里的：没带公钥、公钥和指纹对不上、签名不是这把密钥签的，都进不来；回的都一样
-        denied = (403, {'error': 'denied'})
+        # 不在名单里的：没带公钥、公钥和指纹对不上、签名不是这把密钥签的，都进不来；回的都一样（和不在名单里的设备收到的一样）
+        denied = self.unknown()
         self.assertEqual(g.post('pair_put', {'rid': rid, 'm': m}), denied)
         self.assertEqual(g.post('pair_put', {'rid': rid, 'm': m, 'pub': other.pub}), denied)
         self.assertEqual(g.post('pair_put', {'rid': rid, 'm': m, 'pub': g.pub}, key=other.keyfile), denied)
@@ -323,14 +323,14 @@ class ServerTest(WebBase):
                           ('relay_host', {'sid': secrets.token_hex(16), 'pids': [pid]}), ('report', {'sessions': []}), ('view', {'accounts': []}),
                           ('keys', {}), ('ledger', {})):
             self.assertEqual(g.post(op, extra), denied, op)
-        # 已经是访客了：再和别的设备配对，也只进得了开给网页端的
+        # 已经是访客了：再和别的设备配对，也只进得了开给网页端的（服务器认得这个访客：回的是 denied）
         kc3, keys3, rid3 = sw.pair_keys(secrets.token_bytes(10))
         self.good(b, 'pair_open', rid=rid3)
-        self.assertEqual(g.post('pair_put', {'rid': rid3, 'm': sw.pair_msg(keys3, rid3, 'b', g.fp, os.urandom(32), 'x')}), denied)
+        self.assertEqual(g.post('pair_put', {'rid': rid3, 'm': sw.pair_msg(keys3, rid3, 'b', g.fp, os.urandom(32), 'x')}), (403, {'error': 'denied'}))
         self.good(b, 'pair_close', rid=rid3)
         p2, pid2 = self.pair_guest(b, g)
         self.assertEqual(sorted(self.remote()['edges']), sorted([pid, pid2]))
-        # 设备清单里的设备也可以输入开给网页端的配对码（它不是访客）
+        # Team 里的设备也可以输入开给网页端的配对码（它不是访客）
         code4, rid4, kc4, na4 = self.open_web(a)
         self.good(b, 'pair_put', rid=rid4, m=sw.pair_msg(sw.pair_keys(code4)[1], rid4, 'b', b.fp, os.urandom(32), 'laptop'))
         self.good(a, 'pair_close', rid=rid4)
@@ -358,10 +358,10 @@ class ServerTest(WebBase):
         g = Guest(self)
         p, pid = self.pair_guest(a, g)
         self.assertEqual(list(self.remote()['guests']), [g.fp])
-        self.machines(b)   # 领它进来的那台设备撤销了：配对没了，访客也就没了
+        self.machines(b)   # 领它进来的那台设备被移出了 Team：配对没了，访客也就没了
         doc = self.remote()
         self.assertEqual((doc['edges'], doc['guests']), ({}, {}))
-        self.assertEqual(g.post('relay_list', {'pids': [pid]}), (403, {'error': 'denied'}))
+        self.assertEqual(g.post('relay_list', {'pids': [pid]}), self.unknown())
 
     def test_attach_over_websocket(self):
         a = self.a
@@ -479,7 +479,7 @@ class ServerTest(WebBase):
         c = http.client.HTTPSConnection('127.0.0.1', port, context=ctx, timeout=10)
         c.request('POST', '/v1/relay_list', body=raw, headers={'X-Cca-Sig': base64.b64encode(sign(g.keyfile, 'cca-presence', raw)).decode()})
         r = c.getresponse()
-        self.assertEqual((r.status, json.loads(r.read())), (403, {'error': 'denied'}))
+        self.assertEqual((r.status, json.loads(r.read())), self.unknown())
         c.close()
         self.assertEqual(list(self.remote()['guests']), [g.fp], '记录留着')
         self.assertEqual(list(self.good(a, 'relay_list', pids=[pid])['peers']), [pid], '电脑那一头照旧')
@@ -530,7 +530,7 @@ class LateCertTest(Base):
 
 
 class OffTest(Base):
-    """没开网页端的服务器（和以前一样）：没有那一页、没有 WebSocket，设备开不了给网页端的配对，不在清单里的一律不认"""
+    """没开网页端的服务器（和以前一样）：没有那一页、没有 WebSocket，设备开不了给网页端的配对，不在名单里的一律不认"""
     def test_off(self):
         a = self.device('box')
         self.machines(a)
@@ -556,7 +556,7 @@ class OffTest(Base):
         c = http.client.HTTPSConnection('127.0.0.1', self.srv.port, context=ctx, timeout=10)
         c.request('POST', '/v1/pair_put', body=raw, headers={'X-Cca-Sig': base64.b64encode(sign(g.keyfile, 'cca-presence', raw)).decode()})
         r = c.getresponse()
-        self.assertEqual((r.status, json.loads(r.read())), (403, {'error': 'denied'}))
+        self.assertEqual((r.status, json.loads(r.read())), self.unknown())
         c.close()
 
 
@@ -928,7 +928,7 @@ class ShellOffTest(Base):
         self.machines(a)
         rc, out, err = self.cca(a, 'remote', 'pair', '--web', answers=['y'])
         self.assertEqual((rc, out), (1, ''))
-        self.assertIn('维护者的服务器还没有开网页端，手机上接入不了', err)
+        self.assertIn('「测试组」的服务器还没有开网页端，手机上接入不了（管理员要重新部署、把网页端打开：cca team deploy）', err)
         self.assertNotIn('配对码：', err)
         # 没开网页端的服务器照样配得了两台机器
         r = a.run('remote-pair-show', '--web')

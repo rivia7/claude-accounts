@@ -140,8 +140,7 @@ class NativeChromeIsolation(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='cca-chrome-native-')
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
-        self.env = {'HOME': str(self.home), 'TMPDIR': str(self.home), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
-                    'CCA_POLICY_DEFAULT': ''}
+        self.env = {'HOME': str(self.home), 'TMPDIR': str(self.home), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}
 
     def helper(self, tool, *args):
         result = subprocess.run(

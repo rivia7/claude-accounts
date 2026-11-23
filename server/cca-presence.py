@@ -1,36 +1,38 @@
 #!/usr/bin/env python3
-"""cca 的设备在线服务（presence）：各台 Mac 报告哪些映射里的账号正经 cca 在用，账号页据此显示连着哪些设备。
+"""cca 的 Team 的同步服务器（cca team；--team-root 根公钥）：这个 Team 的设备报告 Team 给的账号哪些正经 cca 在用（账号页据此
+显示连着哪些设备），交换记下的 API key、折合金额的密文，存着管理员给每台设备的配置，开着中转时还给远程会话中转。
 
 只用标准库（Python 3.6 以上），不调外部命令：签名是 ssh-keygen -Y sign 的 SSHSIG 格式（Ed25519），这里照 RFC 8032
-直接验，所以容器用官方的 python 镜像就行，不用另装 OpenSSH。部署、更新：./policy.sh presence deploy（docker compose）。
+直接验，所以容器用官方的 python 镜像就行，不用另装 OpenSSH。部署、更新：cca team deploy（server/hub-install.sh）、
+托管平台上 cca team hosted。
 
-- 设备：每台 Mac 拉映射用的 deploy key（指纹 SHA256:…）。服务器只认维护者用发布密钥签过的设备清单（命名空间
-  cca-devices，POST /v1/machines，序号只增不减），名字是 GitHub 上 deploy key 的标题。
-- 请求：body 是紧凑 JSON，带 op、key（设备指纹）、ts、nonce，设备用 deploy key 签（命名空间 cca-presence），
+- 设备：每台设备在这个 Team 里的密钥（指纹 SHA256:…）。名单由管理员维护：拿根密钥直接登记（team_enroll）或者发邀请（team_join
+  时验邀请里的令牌），名字是加入时定的。
+- 请求：body 是紧凑 JSON，带 op、key（设备指纹）、ts、nonce，设备用自己在这个 Team 里的密钥签（命名空间 cca-presence），
   签名放在 X-Cca-Sig 头里（armored 签名的 base64）。ts 和服务器的时间差 5 分钟以内、nonce 不能重复。
-- 账号：HMAC(盐, 工具\\0邮箱) 的前 32 位十六进制，盐在签名的映射里，服务器看不到邮箱。
+- 账号：HMAC(盐, 工具\\0邮箱) 的前 32 位十六进制，盐在管理员签名、加密给各台设备的配置里，服务器看不到邮箱。
 - 上报（report）是这台设备现在开着的全部会话（快照，不是开始 / 结束事件）：命令行会话 [开了多久, 闲置多久]，
   桌面 App 同样一对；end 是 "none"（什么都没开了，之后不再心跳）或 "down"（上报进程被停掉）。
 - 状态在读的时候按存下的数据和现在的时间算，没有清理线程：开着会话却 ttl 秒没心跳、或者报过 end=down → offline；
   没开会话 → none；有会话 idle 秒内有动静 → in_use，否则 idle。只有相对秒数上线，两边的时钟对不对不影响状态。
-- API key（keys）：映射里官方账号记下备查的 API key，经这里同步给登录了这个账号的其他设备。服务器只存设备传上来的密文
+- API key（keys）：Team 给的官方账号记下备查的 API key，经这里同步给登录了这个账号的其他设备。服务器只存设备传上来的密文
   （每个账号一份，新的整个换掉旧的），看不到 key，也分不出是 key 还是“删掉了”：密钥由盐、邮箱和账号的登录身份派生，只有
   登录过这个账号的设备算得出来；谁新谁旧、真的假的都由设备自己按密文里认证过的时间判断。存在状态文件旁边的 keys.json。
-- 折合金额（op ledger）：映射里官方账号的用量按官方 API 标价折成的金额，各台设备算自己的，经这里交换。服务器只存设备传上来的密文
-  （每个账号、每台设备一份，设备只能写自己的那一份；撤销设备后不删，是账号的用量，cost_keep 天没再传就删掉），密钥和 API key
+- 折合金额（op ledger）：Team 给的官方账号的用量按官方 API 标价折成的金额，各台设备算自己的，经这里交换。服务器只存设备传上来的密文
+  （每个账号、每台设备一份，设备只能写自己的那一份；移除设备后不删，是账号的用量，cost_keep 天没再传就删掉），密钥和 API key
   一样只有登录过这个账号的设备算得出来。回的时候顺带说哪些设备 30 天内用过这个账号、却没传过（多半是 cca 太旧）。存在 cost-slots.json。
   早先试过的 /v1/cost 是另一种格式，这一版不认（回 404：那时的客户端照旧版服务器处理，过几个小时再试）。
 - 连接：同一个 IP 最多同时 8 个，每个连接从接进来起最多 15 秒（TLS 握手 5 秒），慢吞吞、不说话的连接占不满服务器；
   POST 按 IP 限流，验签通过之后再按设备限流（别的设备拿你的指纹乱发请求，扣不到你的配额）。
-- 证书公钥的指纹（映射里的 presence.pins）在服务器上用 openssl 算：./policy.sh presence deploy 打印、写进映射。
+- 证书公钥的指纹（设备钉住的 pins）在服务器上用 openssl 算：安装脚本打印、写进管理员接上它的那一行（cca team attach）。
 
-Team 的同步服务器（--mode team --team-root 根公钥：cca team）：设备统计、API key、折合金额照旧，另外存着管理员给每台设备的配置
-（账号走哪个节点、节点的定义：管理员的设备加密、拿 Team 的根密钥签名，服务器解不开也改不了）。管理员的请求拿根密钥签名（key 是
-根公钥的指纹）：直接登记设备的公钥（team_enroll）、发只能用一次的邀请（team_invite：服务器只存令牌的 SHA-256）、存各台设备的
-配置（team_put：每台一份，序号只增不减）、列出设备（team_members）、移除设备（team_revoke）。设备拿邀请里的令牌加入
+管理员给每台设备的配置：账号走哪个节点、节点的定义，管理员的设备加密、拿 Team 的根密钥签名，服务器解不开也改不了。管理员的请求拿
+根密钥签名（key 是根公钥的指纹）：直接登记设备的公钥（team_enroll）、发只能用一次的邀请（team_invite：服务器只存令牌的 SHA-256）、
+存各台设备的配置（team_put：每台一份，序号只增不减）、列出设备（team_members）、移除设备（team_revoke）。设备拿邀请里的令牌加入
 （team_join）、取自己的那一份配置（team_get）、退出（team_leave）；不在名单里回 403 unknown_device（带着这一份记录的编号 gen：
 和设备加入时记下的一样是被移除了，不一样是服务器的记录没了），签名不对回 403 denied。配置的根公钥和上次的不一样就从头开始。
-格式见 README.md「Team 的同步服务器」。（原来还有 --mode own「自己的同步服务器」，3.5.3 去掉了：改成建一个 Team。）
+格式见 README.md「Team 的同步服务器」。（以前还有维护者的服务器 --mode maintainer（设备来自签名的设备清单 /v1/machines）和
+--mode own「自己的同步服务器」，3.6.0、3.5.3 先后去掉了：--mode 只剩 team，照旧认得。）
 
 在托管平台、反向代理后面（--behind-proxy）：只说 HTTP，HTTPS 由平台做（设备照证书机构验它的证书，接上时没有指纹）；
 每个 IP 的限额按 X-Forwarded-For 的最后一项算（平台的代理加的那一项，客户端改不了），同一个 IP 同时几个连接不限（连过来的都是代理）。
@@ -62,13 +64,11 @@ import unicodedata
 
 API = 1
 NS_REPORT = 'cca-presence'
-NS_MACHINES = 'cca-devices'
 MAX_BODY = 64 * 1024
 MAX_SIG = 4096
 TS_WINDOW = 300            # 请求里的时间和服务器差多少秒以内
 MAX_ACCOUNTS = 64          # 一次上报 / 查询最多几个账号
 MAX_UNITS = 64             # 一台设备上一个账号最多几个会话
-MAX_MACHINES = 1000
 MAX_CONN = 64              # 同时处理的连接
 MAX_CONN_IP = 8            # 同一个 IP 同时几个连接
 CONN_DEADLINE = 15         # 一个连接从接进来起最多多少秒（到点就断）
@@ -420,18 +420,18 @@ def save_doc(path, data):
 
 
 class Store:
-    """state.json：{"seq": 设备清单的序号, "machines": {指纹: {"name", "key"}}, "beats": {指纹: {"seen", "end"}},
-    "units": {指纹: {账号摘要: {"cli": [[开始, 最后动静]…], "app": [开始, 最后动静] | null, "used": 上次使用}}}}，时间都是服务器的。
+    """state.json：{"seq": 0（以前维护者的设备清单的序号，留着这一项）, "machines": {指纹: {"name", "key", "joined", "dev": 它在
+    Team 里的编号}}, "beats": {指纹: {"seen", "end"}}, "units": {指纹: {账号摘要: {"cli": [[开始, 最后动静]…], "app": [开始, 最后动静]
+    | null, "used": 上次使用}}}, "team": {"root": 配置的根公钥, "gen": 这一份记录的编号, "invites": {令牌的 SHA-256: {"dev",
+    "exp": 什么时候过期, "at"}}, "spent": {用掉的令牌的 SHA-256: 什么时候}}}，时间都是服务器的。
     keys.json（另一个文件：心跳不用跟着重写它）：{"acc": {账号摘要: {"blob": 密文, "fp": 传的设备, "name": 它那时的名字,
-    "at": 什么时候传的}}}（撤销设备不删：是账号的）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob", "name", "at"}}}}
-    （撤销设备不删，cost_keep 秒没再传的才删）。
-    Team 的服务器（mode team）：machines 的每一台多 "joined" 和 "dev"（它在 Team 里的编号），另有 "team": {"root": 配置的根公钥,
-    "gen": 这一份记录的编号, "invites": {令牌的 SHA-256: {"dev", "exp": 什么时候过期, "at"}}, "spent": {用掉的令牌的 SHA-256: 什么时候}}。
-    team-docs.json：{"docs": {设备编号: {"seq", "ct": 密文, "sig": 签名, "at"}}}（管理员给各台设备的配置）"""
-    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, mode='maintainer', team_root=None):
-        self.path, self.ttl, self.idle, self.retain, self.cost_keep, self.mode = path, ttl, idle, retain, cost_keep, mode
-        self.seen = {}   # Team 的服务器：各台设备最近一次验过签的请求（只在内存里：不为它每个请求都重写状态文件）
-        self.have = {}   # Team 的服务器：各台设备同步配置时说的手里那一份的序号（只在内存里）
+    "at": 什么时候传的}}}（移除设备不删：是账号的）。cost-slots.json：{"acc": {账号摘要: {设备指纹: {"blob", "name", "at"}}}}
+    （移除设备不删，cost_keep 秒没再传的才删）。team-docs.json：{"docs": {设备编号: {"seq", "ct": 密文, "sig": 签名, "at"}}}
+    （管理员给各台设备的配置）"""
+    def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, team_root=None):
+        self.path, self.ttl, self.idle, self.retain, self.cost_keep = path, ttl, idle, retain, cost_keep
+        self.seen = {}   # 各台设备最近一次验过签的请求（只在内存里：不为它每个请求都重写状态文件）
+        self.have = {}   # 各台设备同步配置时说的手里那一份的序号（只在内存里）
         self.docs_path = os.path.join(os.path.dirname(path) or '.', 'team-docs.json')
         self.keys_path = keys_path or os.path.join(os.path.dirname(path) or '.', 'keys.json')
         self.cost_path = cost_path or os.path.join(os.path.dirname(path) or '.', 'cost-slots.json')
@@ -448,33 +448,25 @@ class Store:
         self.docs.update(load_doc(self.docs_path, ('docs',)) or {})
         self.docs['docs'] = {dev: e for dev, e in self.docs['docs'].items() if isinstance(e, dict) and is_count(e.get('seq'))
                              and parse_blob(e.get('ct'), MAX_TEAM_DOC) and isinstance(e.get('sig'), str)}
-        if mode == 'team':
-            self.team_setup(team_root)
-        elif 'own' in self.data or 'team' in self.data:   # 以前是自己的（3.5.3 以前的 --mode own）、Team 的服务器：那时加入的设备不是维护者清单里的，不认
-            sys.stderr.write('cca-presence: 状态文件是自己的、Team 的服务器的：%d 台设备不要了，等维护者同步设备清单\n' % len(self.data['machines']))
-            self.reset()
+        self.team_setup(team_root)
 
-    def reset(self, kind=None, entry=None):
-        """从头开始：以前的设备、上报的记录、各台设备的配置都不要了。kind（'team'）是这种服务器在状态文件里的那一项，entry 是它的
-        内容，这时存的密文（API key、折合金额）也不要了；维护者的服务器（不带 kind）不动它们。'own' 是 3.5.3 以前的自己的同步服务器
-        留下的：一起去掉"""
+    def reset(self, entry):
+        """从头开始：以前的设备、上报的记录、存的密文（API key、折合金额）、各台设备的配置都不要了。entry 是状态文件里 "team" 那一项
+        的新内容。'own' 是 3.5.3 以前的自己的同步服务器留下的：一起去掉"""
         self.data.pop('own', None)
-        self.data.pop('team', None)
-        self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {}})
-        if kind:
-            self.data[kind] = entry
-            self.keys, self.cost = {'v': 1, 'acc': {}}, {'v': 1, 'acc': {}}
-            save_doc(self.keys_path, self.keys)
-            save_doc(self.cost_path, self.cost)
+        self.data.update({'seq': 0, 'machines': {}, 'beats': {}, 'units': {}, 'team': entry})
+        self.keys, self.cost = {'v': 1, 'acc': {}}, {'v': 1, 'acc': {}}
+        save_doc(self.keys_path, self.keys)
+        save_doc(self.cost_path, self.cost)
         self.save()
-        if self.docs['docs'] or os.path.exists(self.docs_path):   # 没有就不写：别的模式的服务器旁边不留一个空的 team-docs.json
+        if self.docs['docs'] or os.path.exists(self.docs_path):   # 没有就不写（第一次启动）：不留一个空的 team-docs.json
             self.docs = {'v': 1, 'docs': {}}
             save_doc(self.docs_path, self.docs)
 
     def team_setup(self, root):
-        """Team 的服务器：配置的根公钥和上次的不一样（第一次启动、换了一个 Team、以前是别的模式）就从头开始：以前的设备、邀请、
-        记录、密文都不要了（另一个 Team 的盐算出来的账号摘要和密钥都不一样，旧的谁也用不上；以前的自己的同步服务器的也是）。
-        接着用时，状态文件里样子不对的邀请、设备不要（手改坏了的：留着的话以后每个请求都出错）"""
+        """配置的根公钥和上次的不一样（第一次启动、换了一个 Team、以前是维护者的服务器或者自己的同步服务器）就从头开始：以前的设备、
+        邀请、记录、密文都不要了（另一个 Team 的盐算出来的账号摘要和密钥都不一样，旧的谁也用不上；以前的维护者的服务器、自己的同步
+        服务器的也是）。接着用时，状态文件里样子不对的邀请、设备不要（手改坏了的：留着的话以后每个请求都出错）"""
         team = self.data.get('team')
         if isinstance(team, dict) and team.get('root') == root and GEN_RE.match(str(team.get('gen') or '')):
             entries = lambda k: team[k].items() if isinstance(team.get(k), dict) else ()
@@ -488,9 +480,14 @@ class Store:
             self.docs_prune()
             return
         if self.data['machines'] or self.keys['acc'] or self.cost['acc'] or self.docs['docs']:
-            was = '以前是自己的同步服务器（3.5.3 以前的 --mode own）' if 'own' in self.data else '换了一个 Team（根公钥不一样）'
+            if 'own' in self.data:
+                was = '以前是自己的同步服务器（3.5.3 以前的 --mode own）'
+            elif 'team' not in self.data:
+                was = '以前是维护者的服务器（3.6.0 以前的 --mode maintainer）'
+            else:
+                was = '换了一个 Team（根公钥不一样）'
             sys.stderr.write('cca-presence: %s：以前的 %d 台设备和存的密文都不要了\n' % (was, len(self.data['machines'])))
-        self.reset('team', {'root': root, 'gen': secrets.token_hex(16), 'invites': {}, 'spent': {}})
+        self.reset({'root': root, 'gen': secrets.token_hex(16), 'invites': {}, 'spent': {}})
 
     def save(self):
         save_doc(self.path, self.data)
@@ -500,20 +497,20 @@ class Store:
             return self.data['machines'].get(fp) if isinstance(fp, str) else None
 
     def gen(self):
-        """Team 的服务器：这一份记录的编号"""
+        """这一份记录的编号"""
         with self.lock:
             return self.data['team']['gen']
 
     def team_root(self):
-        """Team 的服务器：配置的根公钥"""
+        """配置的根公钥"""
         return self.data['team']['root']
 
     def root_fp(self):
-        """Team 的服务器：根公钥的指纹（管理员的请求的 key；它不是设备，登记、加入都不收）"""
+        """根公钥的指纹（管理员的请求的 key；它不是设备，登记、加入都不收）"""
         return key_fp(self.team_root().split()[1])
 
     def name(self, fp):
-        """设备清单里这台设备的名字（没有是 None）"""
+        """名单里这台设备的名字（没有是 None）"""
         m = self.machine(fp)
         return m['name'] if m else None
 
@@ -522,51 +519,14 @@ class Store:
             return set(self.data['machines'])
 
     def health(self, sig_ok, relay=None):
+        """GET /v1/health。mode 总是 team、seq 总是 0（这两项留着：以前的客户端、安装脚本照它们认是不是 Team 的服务器）"""
         with self.lock:
-            extra = TEAM_OPS if self.mode == 'team' else ()
-            out = {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'], 'mode': self.mode,
-                   'ops': ['report', 'view'] + list(SYNC_OPS) + list(extra) + (list(RELAY_OPS) if relay else [])}
-            if self.mode == 'team':
-                out['team'] = team_id(self.data['team']['root'])
+            out = {'v': API, 'ok': True, 'sig_ok': sig_ok, 'machines': len(self.data['machines']), 'seq': self.data['seq'], 'mode': 'team',
+                   'ops': ['report', 'view'] + list(SYNC_OPS) + list(TEAM_OPS) + (list(RELAY_OPS) if relay else []),
+                   'team': team_id(self.data['team']['root'])}
             if relay:
                 out['relay'] = {'port': relay}
             return out
-
-    def set_machines(self, body, sig, release_key):
-        if not ssh_verify(release_key, NS_MACHINES, body, sig):
-            return 403, {'error': 'denied'}
-        try:
-            doc = json.loads(body.decode('utf-8'))
-        except ValueError:
-            return 400, {'error': 'bad'}
-        if not isinstance(doc, dict):
-            return 400, {'error': 'bad'}
-        ms, seq = doc.get('machines'), doc.get('seq')
-        if doc.get('version') != 1 or not isinstance(seq, int) or isinstance(seq, bool) or not isinstance(ms, list) or len(ms) > MAX_MACHINES:
-            return 400, {'error': 'bad'}
-        machines, names = {}, set()
-        for m in ms:
-            k = KEY_RE.match(m.get('key') or '') if isinstance(m, dict) and isinstance(m.get('key'), str) else None
-            name = m.get('name') if isinstance(m, dict) else None
-            if not k or not isinstance(name, str) or not name.strip() or len(name) > 64 or NAME_BAD.search(name):
-                return 400, {'error': 'bad'}
-            fp = key_fp(k.group(1))
-            if fp in machines or name in names:
-                return 400, {'error': 'bad'}
-            machines[fp] = {'name': name, 'key': 'ssh-ed25519 ' + k.group(1)}
-            names.add(name)
-        with self.lock:
-            if seq < self.data['seq'] or (seq == self.data['seq'] and machines != self.data['machines']):
-                return 409, {'error': 'seq', 'seq': self.data['seq']}
-            gone = set(self.data['machines']) - set(machines)
-            self.data['machines'], self.data['seq'] = machines, seq
-            for fp in gone:   # 撤销的设备：它的记录一起删掉
-                self.data['beats'].pop(fp, None)
-                self.data['units'].pop(fp, None)
-            self.save()
-        if gone or machines:
-            sys.stderr.write('cca-presence: 设备清单 #%d，%d 台%s\n' % (seq, len(machines), '，撤销 %d 台' % len(gone) if gone else ''))
-        return 200, {'v': API, 'ok': True, 'seq': seq, 'machines': len(machines)}
 
     def report(self, fp, units, end, now):
         with self.lock:
@@ -605,7 +565,7 @@ class Store:
             if len(set(acc) | set(put)) > MAX_KEYS:
                 return 507, {'error': 'full'}
             m = self.data['machines'].get(fp)
-            if not m:   # 验签之后、拿到锁之前设备清单换了，这台被撤销了
+            if not m:   # 验签之后、拿到锁之前这台被移除了
                 return 403, {'error': 'denied'}
             name = m['name']
             for aid, blob in put.items():
@@ -622,7 +582,7 @@ class Store:
 
     def cost_sync(self, fp, put, get, have, now):
         """折合金额的密文：先存这台设备传的（每个账号一份、只写自己的那一份），再回问的那些账号各台设备的（have 里认证码一样的、
-        这台设备自己的不带密文；撤销了的设备照样回，标上 revoked），和 30 天内经 cca 用过这个账号、却没传过的设备（missing）"""
+        这台设备自己的不带密文；移除了的设备照样回，标上 revoked），和 30 天内经 cca 用过这个账号、却没传过的设备（missing）"""
         with self.lock:
             m = self.data['machines'].get(fp)
             if not m:
@@ -911,7 +871,7 @@ class Store:
 
 # ---------------------------------------------------------------- 远程会话的中转（--relay-listen 才开；格式见 README.md）
 RELAY_OPS = ('pair_open', 'pair_put', 'pair_get', 'pair_commit', 'pair_close', 'pair_drop', 'relay_host', 'relay_attach', 'relay_list')
-# 访客（手机上的网页端：不在设备清单里，是和它配对的那台设备领进来的）能发的：输入配对码、看配对的设备上有哪些会话、接入。
+# 访客（手机上的网页端：不在名单里，是和它配对的那台设备领进来的）能发的：输入配对码、看配对的设备上有哪些会话、接入。
 # 开配对（pair_open）、当宿主（relay_host）和中转以外的请求都不行
 GUEST_OPS = ('pair_put', 'pair_get', 'pair_commit', 'pair_close', 'pair_drop', 'relay_attach', 'relay_list')
 PAIR_TTL = 600             # 配对码多久过期
@@ -963,7 +923,7 @@ def hmac256(key, msg):
 
 class Remote:
     """远程会话的中转记着的：
-    - edges（remote.json，撤销设备、180 天没用过才删）：{配对编号: {"a": 显示配对码的设备, "b": 输入配对码的设备, "at", "used"}}。
+    - edges（remote.json，移除设备、180 天没用过才删）：{配对编号: {"a": 显示配对码的设备, "b": 输入配对码的设备, "at", "used"}}。
       配对编号是两台设备从配对出来的密钥算的，服务器只知道是哪两台设备配了对
     - 下面的只在内存里：slots（正在进行的配对：两边各放一份密文、各报一次配对编号）、tickets（进数据端口的票据）、
       sessions（开着的会话：哪台设备的、给哪几个配对看、每个配对一份说明的密文、控制连接）"""
@@ -990,7 +950,7 @@ class Remote:
 
     @property
     def guests(self):
-        """访客（remote.json 的 guests）：{指纹: {"key": 公钥, "at"}}。手机上的网页端没有 deploy key、不在设备清单里：它拿着一台设备
+        """访客（remote.json 的 guests）：{指纹: {"key": 公钥, "at"}}。手机上的网页端不是 Team 里的设备、不在名单里：它拿着一台设备
         显示的配对码配上对，服务器才记下它的公钥；只能发 GUEST_OPS，一个配对都不剩时就删掉"""
         return self.doc['guests']
 
@@ -1007,7 +967,7 @@ class Remote:
         return bool(gone)
 
     def guest_key(self, fp, op, j, now):
-        """不在设备清单里的这把密钥能不能发这个请求：能的话回验签名用的公钥，不能是 None。两种：已经配了对的访客；
+        """不在名单里的这把密钥能不能发这个请求：能的话回验签名用的公钥，不能是 None。两种：已经配了对的访客；
         正拿着配对码来的——那次配对是开给网页端的（pair_open 带 web）、还没有别的设备放过密文，公钥在请求里（pub，指纹要对得上）。
         知道 rid 就是知道配对码：不知道的人到不了验签名那一步"""
         if op not in GUEST_OPS or not self.web:   # 没开网页端（关掉了）：访客的请求一律不认；记录留着，再打开时还在
@@ -1040,8 +1000,8 @@ class Remote:
         return e['b'] if e['a'] == fp else e['a']
 
     def keep_only(self, fps):
-        """设备清单换了：撤销的设备的配对、票据、会话都删掉（它的控制连接由数据端口那边发现会话没了时断开）。
-        访客不在清单里：领它进来的设备撤销了，它的配对跟着没有，它也就删掉了"""
+        """名单变了（管理员登记、移除了设备，设备退出了）：不在名单里的设备的配对、票据、会话都删掉（它的控制连接由数据端口那边
+        发现会话没了时断开）。访客不在名单里：领它进来的设备被移除了，它的配对跟着没有，它也就删掉了"""
         with self.lock:
             ok = set(fps) | set(self.guests)
             gone = [p for p, e in self.edges.items() if e['a'] not in ok or e['b'] not in ok]
@@ -1100,7 +1060,7 @@ class Remote:
             return self.tickets.pop(tid)
 
     def op(self, op, fp, j, now, name_of, gkey=None):
-        """签名、时间、nonce 都验过了的请求。返回 (状态码, 回的内容)。gkey：发请求的是访客（不在设备清单里），这是验它签名用的公钥"""
+        """签名、时间、nonce 都验过了的请求。返回 (状态码, 回的内容)。gkey：发请求的是访客（不在名单里），这是验它签名用的公钥"""
         hex32 = lambda x: isinstance(x, str) and bool(AID_RE.match(x))
         if gkey and op not in GUEST_OPS:
             return 403, {'error': 'denied'}
@@ -1116,7 +1076,7 @@ class Remote:
                         return 409, {'error': 'taken'}
                     if sum(1 for x in self.slots.values() if x['owner'] == fp) >= PAIR_SLOTS:
                         return 429, {'error': 'rate'}
-                    web = j.get('web') is True   # 这次配对开给网页端：输入配对码的可以是不在设备清单里的（手机上的那一页）
+                    web = j.get('web') is True   # 这次配对开给网页端：输入配对码的可以是不在名单里的（手机上的那一页）
                     if web and not self.web:
                         return 404, {'error': 'no_web'}
                     self.slots[rid] = {'owner': fp, 'joiner': None, 'msgs': {}, 'commit': {}, 'done': False, 'exp': now + PAIR_TTL,
@@ -1492,7 +1452,7 @@ class Relay(threading.Thread):
         with self.remote.lock:
             for sid in [s for s, x in self.remote.sessions.items() if x['conn'] is None and now - (x['lost'] or now) > RELAY_GRACE]:
                 self.remote.sessions.pop(sid)
-            # 配对取消了、设备撤销了：会话不在了的控制连接断开，那个配对正接着的（和等着接的）也断开
+            # 配对取消了、设备被移除了：会话不在了的控制连接断开，那个配对正接着的（和等着接的）也断开
             for c in [c for c in self.conns if c.state == 'ctl' and self.remote.sessions.get(c.sid, {}).get('conn') is not c]:
                 c.state = 'gone'
                 self.close(c)
@@ -1919,7 +1879,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             return self.send(411, {'error': 'bad'})
         op = self.path[len('/v1/'):] if self.path.startswith('/v1/') else ''
-        big = op in SYNC_OPS or (op == 'team_put' and srv.store.mode == 'team')   # 交换密文的、管理员存各台设备的配置的
+        big = op in SYNC_OPS or op == 'team_put'   # 交换密文的、管理员存各台设备的配置的
         if n < 0 or n > (MAX_SYNC_BODY if big else MAX_BODY):
             return self.send(413, {'error': 'bad'})
         body = self.rfile.read(n)
@@ -1930,14 +1890,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if len(body) != n or not sig or len(sig) > MAX_SIG:
             return self.send(400, {'error': 'bad'})
         now = time.time()
-        team = srv.store.mode == 'team'
-        if op == 'machines' and not team:   # Team 的服务器没有维护者的设备清单：设备拿邀请加入（404）
-            code, reply = srv.store.set_machines(body, sig, srv.release_key)
-            if code == 200 and srv.remote:
-                srv.remote.keep_only(srv.store.fps())
-            return self.send(code, reply)
         relay = op in RELAY_OPS and srv.remote is not None   # 没开中转时和旧版服务器一样：不认这几个 op（404）
-        if op not in ('report', 'view') and op not in SYNC_OPS and not relay and not (team and op in TEAM_OPS):
+        # 别的都不认（404）：以前维护者的服务器的设备清单（/v1/machines）也是
+        if op not in ('report', 'view') and op not in SYNC_OPS and not relay and op not in TEAM_OPS:
             return self.send(404, {'error': 'not_found'})
         try:
             j = json.loads(body.decode('utf-8'))
@@ -1964,15 +1919,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(403, {'error': 'denied'})
         else:
             m = srv.store.machine(fp)
-            # 不在设备清单里、发的是中转的请求：可能是访客（手机上的网页端，和哪台设备配了对、或者正拿着配对码来配对）
+            # 不在名单里、发的是中转的请求：可能是访客（手机上的网页端，和哪台设备配了对、或者正拿着配对码来配对）
             gkey = srv.remote.guest_key(fp, op, j, now) if relay and not m else None
-            # 不在设备清单里（维护者还没同步、撤销了；Team 的服务器上是被移除了、记录清掉了：设备看 gen 分清是哪种）。
+            # 不在名单里（被移除了、记录清掉了：设备看 gen 分清是哪种）。
             # 访客的签名不对也回这一个：从回的内容里分不出“没有这个配对”和“有、但签名不对”
             if not m and not (gkey and ssh_verify(gkey, NS_REPORT, body, sig)):
-                return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()} if team else {'error': 'denied'})
+                return self.send(403, {'error': 'unknown_device', 'gen': srv.store.gen()})
             if m and not ssh_verify(m['key'], NS_REPORT, body, sig):
                 return self.send(403, {'error': 'denied'})
-        bucket = srv.root_bucket if team and op in TEAM_ADMIN_OPS else srv.fp_bucket
+        bucket = srv.root_bucket if op in TEAM_ADMIN_OPS else srv.fp_bucket
         if not bucket.take(fp):   # 验签之后才扣：别人拿这台设备的指纹乱发，扣不到它的配额
             return self.send(429, {'error': 'rate'})
         ts = j.get('ts')
@@ -1983,7 +1938,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, {'error': 'bad'})
         if not srv.nonces.add(nonce, now):
             return self.send(409, {'error': 'replay'})
-        if team and op not in ('team_join',) + TEAM_ADMIN_OPS and not gkey:   # 设备的请求。加入的那一次在加入时记（没加入成的不记）；访客不是这里的设备
+        if op not in ('team_join',) + TEAM_ADMIN_OPS and not gkey:   # 设备的请求。加入的那一次在加入时记（没加入成的不记）；访客不是这里的设备
             srv.store.seen[fp] = now
         if op == 'team_join':
             proof = j.get('proof')
@@ -2051,11 +2006,11 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):   # 就是 3.
     allow_reuse_address = True
     request_queue_size = 64
 
-    def __init__(self, addr, ctx, store, release_key, sig_ok, remote=None, web=None, share=None, proxied=False):
+    def __init__(self, addr, ctx, store, sig_ok, remote=None, web=None, share=None, proxied=False):
         """ctx 是 None：只说 HTTP（--behind-proxy：HTTPS 由前面的代理做，proxied 是 True、限流照代理报的地址；
         本机试网页端的那个监听也只说 HTTP，但它前面没有代理）；是 CertCtx：网页端的那个监听（证书会换）。
         share：另一个监听（网页端的监听和原来的是同一个服务：限流、用过的 nonce 是同一份，不然同一个请求能在两个端口上各用一次）"""
-        self.ctx, self.store, self.release_key, self.sig_ok, self.remote, self.web = ctx, store, release_key, sig_ok, remote, web
+        self.ctx, self.store, self.sig_ok, self.remote, self.web = ctx, store, sig_ok, remote, web
         self.proxied = proxied
         if share:
             self.ip_bucket, self.fp_bucket, self.nonces, self.root_bucket = share.ip_bucket, share.fp_bucket, share.nonces, share.root_bucket
@@ -2154,19 +2109,17 @@ def main():
     # --mode team --behind-proxy --listen 0.0.0.0:8080 --state /data/state.json（根公钥在 CCA_TEAM_ROOT；命令行里写了的照命令行的）。端口固定是 8080，
     # 不看平台给的 PORT：公网地址指向哪个端口是部署时填的（railway domain --port 8080、Sealos 表单里的容器端口）
     hosted = os.environ.get('CCA_HUB_HOSTED') == '1'
-    ap = argparse.ArgumentParser(description='cca 的设备在线服务')
+    ap = argparse.ArgumentParser(description='cca 的 Team 的同步服务器')
     ap.add_argument('--listen', help='监听的地址:端口（端口 0：随便挑一个，写进 --port-file；默认 0.0.0.0:18443，'
                     'CCA_HUB_HOSTED=1 时是 0.0.0.0:8080）')
     ap.add_argument('--cert', help='TLS 证书（自签的 P-256；macOS 的 curl 只给 RSA 和 P-256/P-384 做公钥钉住）')
     ap.add_argument('--key', help='TLS 私钥')
     ap.add_argument('--behind-proxy', action='store_true', default=hosted,
                     help='在托管平台、反向代理后面：只说 HTTP（HTTPS 由平台做，不用 --cert、--key），按 X-Forwarded-For 的最后一项限流')
-    ap.add_argument('--mode', choices=('maintainer', 'team'), default='team' if hosted else 'maintainer',
-                    help='maintainer：维护者的服务器（设备来自签名的设备清单）；'
-                    'team：Team 的同步服务器（管理员拿根密钥登记、邀请设备，存着给各台设备的配置；CCA_HUB_HOSTED=1 时是它）')
-    ap.add_argument('--release-key', help='发布公钥（ssh-ed25519 …）：只认它签的设备清单（维护者的服务器必须给）')
+    ap.add_argument('--mode', choices=('team',), default='team',
+                    help='只有 team（Team 的同步服务器）：照旧认得这个参数，不写也是它（以前的 maintainer、own 去掉了）')
     ap.add_argument('--team-root', default=os.environ.get('CCA_TEAM_ROOT'),
-                    help='Team 的同步服务器：Team 的根公钥（ssh-ed25519 AAAA…，是公开的；也可以用环境变量 CCA_TEAM_ROOT；'
+                    help='Team 的根公钥（ssh-ed25519 AAAA…，是公开的；也可以用环境变量 CCA_TEAM_ROOT；'
                     '只写后面那一段 AAAA… 也行：安装脚本、托管平台的环境变量里没有空格好写）')
     ap.add_argument('--state', default=HOSTED_STATE if hosted else None, help='状态文件（CCA_HUB_HOSTED=1 时默认是 /data/state.json）')
     ap.add_argument('--ttl', type=float, default=150, help='开着会话却这么多秒没心跳就算离线')
@@ -2186,7 +2139,7 @@ def main():
                     '或者放在做 HTTPS 的代理后面（--behind-proxy）')
     ap.add_argument('--web-listen', default=os.environ.get('CCA_WEB_LISTEN'),
                     help='网页端另开的监听 地址:端口，用 --web-cert、--web-key 的证书（原来那个端口上自签的证书照旧给 cca 的设备用）。'
-                    '这三项也可以用环境变量 CCA_WEB_LISTEN、CCA_WEB_CERT、CCA_WEB_KEY（compose.web.yaml 就是这么给的）')
+                    '这三项也可以用环境变量 CCA_WEB_LISTEN、CCA_WEB_CERT、CCA_WEB_KEY')
     ap.add_argument('--web-cert', default=os.environ.get('CCA_WEB_CERT'), help='浏览器信得过的证书（连同中间证书；证书机构签的）。文件换了会自己重新读')
     ap.add_argument('--web-key', default=os.environ.get('CCA_WEB_KEY'), help='--web-cert 的私钥')
     ap.add_argument('--web-root', help='网页端的文件在哪（默认是这个程序旁边的 web/）')
@@ -2220,27 +2173,17 @@ def main():
                 ap.error('--web-url 是 http://localhost 时（本机试）：--web-listen 只能听本机的地址，不用证书')
         elif not (a.web_cert and a.web_key):
             ap.error('--web-listen 要带浏览器信得过的证书：--web-cert、--web-key')
-    release = root = None
-    if a.mode == 'team':
-        given = (a.team_root or '').split()[:2]
-        if len(given) == 1 and given[0] != 'ssh-ed25519':
-            given = ['ssh-ed25519'] + given   # 只写了后面那一段
-        k = KEY_RE.match(' '.join(given))
-        if not k:
-            ap.error('Team 的同步服务器要给根公钥（--team-root 或者环境变量 CCA_TEAM_ROOT：ssh-ed25519 AAAA…）')
-        root = 'ssh-ed25519 ' + k.group(1)
-    else:
-        if not a.release_key:
-            ap.error('维护者的服务器要给 --release-key')
-        with open(a.release_key) as f:
-            k = KEY_RE.match(' '.join(f.read().split()[:2]))
-        if not k:
-            ap.error('%s 不是 ssh-ed25519 公钥' % a.release_key)
-        release = 'ssh-ed25519 ' + k.group(1)
+    given = (a.team_root or '').split()[:2]
+    if len(given) == 1 and given[0] != 'ssh-ed25519':
+        given = ['ssh-ed25519'] + given   # 只写了后面那一段
+    k = KEY_RE.match(' '.join(given))
+    if not k:
+        ap.error('Team 的同步服务器要给根公钥（--team-root 或者环境变量 CCA_TEAM_ROOT：ssh-ed25519 AAAA…）')
+    root = 'ssh-ed25519 ' + k.group(1)
     host, _, port = a.listen.rpartition(':')
     ctx = None if a.behind_proxy else tls_context(a.cert, a.key)
     sig_ok = self_test()
-    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, a.mode, root)
+    store = Store(a.state, a.ttl, a.idle, a.retain_days * 86400, a.keys, a.cost, a.cost_days * 86400, root)
     remote = web = None
     if a.relay_listen:
         rhost, _, rport = a.relay_listen.rpartition(':')
@@ -2264,7 +2207,7 @@ def main():
             with open(a.relay_port_file + '.tmp', 'w') as f:
                 f.write('%d\n' % rsock.getsockname()[1])
             os.replace(a.relay_port_file + '.tmp', a.relay_port_file)
-    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, release, sig_ok, remote, web, proxied=a.behind_proxy)
+    srv = Server((host.strip('[]') or '0.0.0.0', int(port)), ctx, store, sig_ok, remote, web, proxied=a.behind_proxy)
     if a.port_file:
         with open(a.port_file + '.tmp', 'w') as f:
             f.write('%d\n' % srv.server_address[1])
@@ -2273,14 +2216,14 @@ def main():
     if a.web_listen:   # 网页端另开的端口：同一个服务（同样的接口、同一份限流），只是证书是浏览器信得过的那一张
         whost, _, wport = a.web_listen.rpartition(':')
         wctx = None if web_local else CertCtx(a.web_cert, a.web_key)   # 证书有问题也照样起来（只是这个端口握不了手），日志里说
-        wsrv = Server((whost.strip('[]') or '0.0.0.0', int(wport)), wctx, store, release, sig_ok, remote, web, share=srv)
+        wsrv = Server((whost.strip('[]') or '0.0.0.0', int(wport)), wctx, store, sig_ok, remote, web, share=srv)
         threading.Thread(target=wsrv.serve_forever, name='web', daemon=True).start()
         if a.web_port_file:
             with open(a.web_port_file + '.tmp', 'w') as f:
                 f.write('%d\n' % wsrv.server_address[1])
             os.replace(a.web_port_file + '.tmp', a.web_port_file)
-    sys.stderr.write('cca-presence: %s监听 %s:%d%s，设备 %d 台，签名自检%s%s\n' % (
-        'Team 的同步服务器，' if a.mode == 'team' else '', srv.server_address[0], srv.server_address[1],
+    sys.stderr.write('cca-presence: Team 的同步服务器，监听 %s:%d%s，设备 %d 台，签名自检%s%s\n' % (
+        srv.server_address[0], srv.server_address[1],
         '（HTTP，HTTPS 由前面的代理做）' if a.behind_proxy else '', len(store.data['machines']),
         '通过' if sig_ok else '没通过',
         ('，中转的数据端口 %d（%d 个配对）' % (rsock.getsockname()[1], len(remote.edges)) if remote else '')

@@ -46,8 +46,7 @@ class SharedState(unittest.TestCase):
             args.append(key)
         result = subprocess.run(
             args,
-            env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin',
-                 'CCA_TOOL': tool, 'CCA_POLICY_DEFAULT': ''},
+            env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'CCA_TOOL': tool},
             capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, expected, result.stderr)
         return result

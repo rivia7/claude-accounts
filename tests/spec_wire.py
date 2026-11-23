@@ -1,5 +1,5 @@
 """照 server/README.md 写的格式独立实现一遍（不用 cca 的代码），核对 cca 封的、解的：记下的 API key、折合金额两种密文，
-和设备用 deploy key 签名的请求。tests/presence.py、tests/cost_view.py、regress 的 dkey / dcost（扮演另一台设备 dan-air）共用"""
+和设备拿它在 Team 里的密钥签名的请求。tests/presence.py、tests/cost_view.py、regress 的 dkey / dcost（扮演另一台设备 dan-air）共用"""
 import base64
 import hashlib
 import hmac
@@ -16,7 +16,7 @@ KEYSHARE, COST = 'cca-keyshare-v1', 'cca-cost-v1'
 
 
 def derive(label, salt, tool, email, ident):
-    """两把 HMAC 密钥（加密、认证）：由映射的盐（十六进制）、工具、邮箱（小写）和登录身份派生"""
+    """两把 HMAC 密钥（加密、认证）：由 Team 的配置里的盐（十六进制）、工具、邮箱（小写）和登录身份派生"""
     root = hmac.new(bytes.fromhex(salt), ('%s\0%s\0%s\0%s' % (label, tool, email.lower(), ident)).encode(), hashlib.sha256).digest()
     return hmac.new(root, b'enc', hashlib.sha256).digest(), hmac.new(root, b'mac', hashlib.sha256).digest()
 
@@ -82,7 +82,7 @@ def aid_of(salt, tool, email):
 
 
 def fp_of(pubfile):
-    """deploy key 的指纹 SHA256:…"""
+    """设备在 Team 里的那把密钥（公钥文件）的指纹 SHA256:…"""
     with open(pubfile) as f:
         pub = f.read().split()[1]
     return 'SHA256:' + base64.b64encode(hashlib.sha256(base64.b64decode(pub)).digest()).decode().rstrip('=')
@@ -327,7 +327,7 @@ def team_doc_verify(root_pub, tid, dev, seq, ct, sig):
 
 
 def post(keyfile, port, op, extra):
-    """用 deploy key（keyfile）签名，向 127.0.0.1:port 的测试服务器发 op 请求（extra 是 put / get 这些）；限流（429）时等一会儿再试。
+    """用 keyfile（设备在 Team 里的密钥，或者管理员的根密钥）签名，向 127.0.0.1:port 的测试服务器发 op 请求（extra 是 put / get 这些）；限流（429）时等一会儿再试。
     回 (状态码, JSON)"""
     body = dict(extra, v=1, op=op, key=fp_of(keyfile + '.pub'), ts=time.time(), nonce=secrets.token_hex(16))
     raw = json.dumps(body, separators=(',', ':')).encode()

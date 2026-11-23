@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""连接设备（presence）：服务端的验签、设备清单、状态；客户端的上报、cca devices、共享记下的 API key、折合金额的同步。
+"""连接设备（presence）：Team 的同步服务器的验签、名单、状态；客户端的上报、cca devices、共享记下的 API key、折合金额的同步。
 真的 ssh-keygen、真的 TLS 服务器（127.0.0.1，随机端口）；客户端是 cca 的辅助程序（cca-core，各台设备各一个临时 HOME），不联网。"""
 import base64
 import fcntl
@@ -33,9 +33,6 @@ spec = importlib.util.spec_from_file_location('cca_presence_server', SERVER)
 srvmod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(srvmod)
 import spec_wire as sw   # noqa: E402  照 server/README.md 的格式独立实现的密文（不用 cca 的代码）
-
-# cli/src/cmd/cost.rs 的同名常量
-COST_OLD = '维护者的设备统计服务器还不支持同步折合金额（维护者要更新服务器：./policy.sh presence deploy）'
 
 
 def keygen(path, comment='test'):
@@ -71,7 +68,7 @@ def make_ca_cert(d):
 
 
 def openssl_pin(cert):
-    """维护者那边（部署脚本、文档）算公钥指纹的办法：和服务器的 --print-pin 必须一样"""
+    """管理员那边（安装脚本、文档）算公钥指纹的办法：和服务器的 --print-pin 必须一样"""
     pub = subprocess.run(['openssl', 'x509', '-in', str(cert), '-pubkey', '-noout'], stdout=subprocess.PIPE, check=True).stdout
     der = subprocess.run(['openssl', 'pkey', '-pubin', '-outform', 'der'], input=pub, stdout=subprocess.PIPE, check=True).stdout
     import hashlib
@@ -79,15 +76,14 @@ def openssl_pin(cert):
 
 
 class Server:
-    """跑一个真的服务器进程（ttl 2 秒、闲置 3 秒，测试不用干等）。team_root：Team 的同步服务器（--mode team，根公钥），没有时是
-    维护者的（--release-key 是 d 下的 release.pub）；proxied：--behind-proxy（只说 HTTP，不用证书）；
-    port：监听这个端口（重启后设备照旧连得上），0 是随便挑一个"""
+    """跑一个真的 Team 的同步服务器进程（ttl 2 秒、闲置 3 秒，测试不用干等）。team_root：Team 的根公钥（必须给；不写 --mode：
+    默认就是 team）；proxied：--behind-proxy（只说 HTTP，不用证书）；port：监听这个端口（重启后设备照旧连得上），0 是随便挑一个"""
     def __init__(self, d, ttl='2', idle='3', proxied=False, port=0, team_root=None):
+        assert team_root, '服务器只有 Team 的一种：要给根公钥'
         self.d, self.proxied = d, proxied
-        who = ['--mode', 'team', '--team-root', team_root] if team_root else ['--release-key', str(d / 'release.pub')]
         tls = ['--behind-proxy'] if proxied else ['--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem')]
-        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port')] + tls + who + [
-                '--state', str(d / 'state.json'), '--ttl', ttl, '--idle', idle]
+        args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port')] + tls + [
+                '--team-root', team_root, '--state', str(d / 'state.json'), '--ttl', ttl, '--idle', idle]
         (d / 'port').unlink() if (d / 'port').exists() else None
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         for _ in range(100):
@@ -128,35 +124,33 @@ class Server:
 
 
 class ServerTest(unittest.TestCase):
+    """设备的请求（上报、查看、记下的 API key、折合金额）：名单由管理员拿根密钥登记、移除（team_enroll、team_revoke），
+    Team 的那几个 op 本身在 TeamServerTest"""
+    DEV, DEV2 = '0a' * 8, '0b' * 8   # 两台设备在 Team 里的编号
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix='cca-presence-test-')
         d = cls.d = Path(cls.tmp.name)
         make_cert(d)
-        cls.relpub = keygen(d / 'rel', 'test-release')
-        (d / 'release.pub').write_text(cls.relpub + ' test-release\n')
+        cls.rootpub = keygen(d / 'root', 'test-root')
         cls.devpub, cls.dev2pub, cls.evilpub = keygen(d / 'dev'), keygen(d / 'dev2'), keygen(d / 'evil')
-        cls.srv = Server(d)
-        cls.seq = 0
+        cls.srv = Server(d, team_root=cls.rootpub)
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.stop()
         cls.tmp.cleanup()
 
+    @classmethod
+    def restart(cls):
+        """重起服务器（状态都在文件里，接着用）：限流的配额从头算"""
+        cls.srv.stop()
+        cls.srv = Server(cls.d, team_root=cls.rootpub)
+
     @staticmethod
     def fp(pub):
         return srvmod.key_fp(pub.split()[1])
-
-    def machines(self, ms, key='rel', seq=None):
-        if seq is None:
-            ServerTest.seq += 1
-            seq = ServerTest.seq
-        doc = json.dumps({'version': 1, 'seq': seq, 'machines': ms}).encode()
-        return self.srv.req('POST', '/v1/machines', doc, sign(self.d / key, 'cca-devices', doc))
-
-    def both(self):
-        return self.machines([{'key': self.devpub, 'name': 'alice-mbp'}, {'key': self.dev2pub, 'name': 'bob-mini'}])
 
     def call(self, op, key='dev', ns='cca-presence', pub=None, tamper=False, **extra):
         body = dict({'v': 1, 'op': op, 'key': self.fp(pub or getattr(self, key + 'pub')), 'ts': time.time(),
@@ -167,6 +161,19 @@ class ServerTest(unittest.TestCase):
             raw = raw.replace(b'"v":1', b'"v":1 ')
         return self.srv.req('POST', '/v1/' + op, raw, sig)
 
+    def enroll(self, **devs):
+        """管理员登记这几台设备（{编号: (公钥, 名字)}）"""
+        st, j = self.call('team_enroll', key='root', devices={dev: {'pub': pub, 'name': name} for dev, (pub, name) in devs.items()})
+        self.assertEqual(st, 200, j)
+        return j
+
+    def both(self):
+        return self.enroll(**{self.DEV: (self.devpub, 'alice-mbp'), self.DEV2: (self.dev2pub, 'bob-mini')})
+
+    def revoke(self, dev):
+        st, j = self.call('team_revoke', key='root', dev=dev)
+        self.assertEqual(st, 200, j)
+
     def view(self, aid, key='dev2'):
         st, j = self.call('view', key=key, accounts=[aid])
         self.assertEqual(st, 200, j)
@@ -176,34 +183,19 @@ class ServerTest(unittest.TestCase):
         st, j = self.srv.req('GET', '/v1/health')
         self.assertEqual(st, 200)
         self.assertTrue(j['ok'] and j['sig_ok'])
-        self.assertRegex(openssl_pin(self.d / 'cert.pem'), r'^sha256//[A-Za-z0-9+/]{43}=$', 'P-256 证书的公钥指纹（写进映射的 pins）')
+        self.assertEqual((j['mode'], j['seq'], j['team']), ('team', 0, sw.team_id(self.rootpub)), '不写 --mode 也是 Team 的服务器')
+        self.assertRegex(openssl_pin(self.d / 'cert.pem'), r'^sha256//[A-Za-z0-9+/]{43}=$', 'P-256 证书的公钥指纹（设备钉住的 pins）')
 
-    def test_no_team_ops(self):
-        """维护者的服务器没有 Team 的那几个 op（404），也不为它们放宽请求的大小；3.5.3 以前的自己的同步服务器的 op 也没有"""
-        self.assertIn(self.srv.req('POST', '/v1/team_put', b'x' * (srvmod.MAX_BODY + 1), b'sig')[0], (413, None))
-        self.assertEqual(self.srv.req('POST', '/v1/team_put', b'{}', b'sig')[0], 404)
+    def test_old_ops(self):
+        """以前的维护者的服务器的设备清单（/v1/machines，发布密钥签的）、3.5.3 以前的自己的同步服务器的 op：都不认（404）"""
+        self.both()
+        for key in ('root', 'dev'):
+            doc = json.dumps({'version': 1, 'seq': 1, 'machines': [{'key': self.evilpub, 'name': 'evil'}]}).encode()
+            self.assertEqual(self.srv.req('POST', '/v1/machines', doc, sign(self.d / key, 'cca-devices', doc))[0], 404, key)
+            self.assertEqual(self.call('machines', key=key, version=1, seq=1, machines=[])[0], 404, key)
         for op in ('join', 'members', 'relink', 'remove'):
             self.assertEqual(self.srv.req('POST', '/v1/' + op, b'{}', b'sig')[0], 404, op)
-
-    def test_machines_only_release_key_and_monotonic(self):
-        st, j = self.both()
-        self.assertEqual((st, j['machines']), (200, 2))
-        st, _ = self.machines([{'key': self.evilpub, 'name': 'evil'}], key='evil')
-        self.assertEqual(st, 403, '只认发布密钥签的清单')
-        doc = json.dumps({'version': 1, 'seq': ServerTest.seq + 1, 'machines': []}).encode()
-        st, _ = self.srv.req('POST', '/v1/machines', doc, sign(self.d / 'rel', 'cca-presence', doc))
-        self.assertEqual(st, 403, '命名空间不对的签名不算')
-        st, j = self.machines([{'key': self.devpub, 'name': 'x'}], seq=ServerTest.seq - 1)
-        self.assertEqual((st, j['error']), (409, 'seq'), '序号不能往回退')
-        st, _ = self.machines([{'key': self.devpub, 'name': 'alice-mbp'}, {'key': self.dev2pub, 'name': 'bob-mini'}], seq=ServerTest.seq)
-        self.assertEqual(st, 200, '同一个序号、同样的内容：重发也成功（推送的回应丢了时重试）')
-        st, _ = self.machines([{'key': self.devpub, 'name': 'renamed'}], seq=ServerTest.seq)
-        self.assertEqual(st, 409, '同一个序号、内容不同：不收')
-        for bad in ([{'key': 'ssh-rsa AAAAB3NzaC1yc2E', 'name': 'x'}], [{'key': self.devpub, 'name': 'a\x1b[2J'}],
-                    [{'key': self.devpub, 'name': 'a'}, {'key': self.dev2pub, 'name': 'a'}],
-                    [{'key': self.devpub, 'name': 'a'}, {'key': self.devpub, 'name': 'b'}]):
-            st, _ = self.machines(bad)
-            self.assertEqual(st, 400, bad)
+        self.assertEqual(self.call('report', key='evil', units={})[0], 403, '没登记上')
 
     def test_states(self):
         self.both()
@@ -245,10 +237,12 @@ class ServerTest(unittest.TestCase):
         self.both()
         aid = secrets.token_hex(16)
         u = {'units': {aid: {'cli': [[1, 0]], 'app': None}}}
-        self.assertEqual(self.call('report', key='evil', **u)[0], 403, '不在清单里的设备')
-        self.assertEqual(self.call('report', tamper=True, **u)[0], 403, '签过之后又改过的 body')
+        st, j = self.call('report', key='evil', **u)
+        self.assertEqual((st, j['error']), (403, 'unknown_device'), '不在名单里的设备')
+        self.assertEqual(self.call('report', tamper=True, **u), (403, {'error': 'denied'}), '签过之后又改过的 body')
         self.assertEqual(self.call('report', ns='cca-devices', **u)[0], 403, '命名空间不对')
         self.assertEqual(self.call('report', key='dev', pub=self.dev2pub, **u)[0], 403, '用自己的 key 冒充别的设备')
+        self.assertEqual(self.call('report', key='root', **u)[0], 403, '根密钥不是设备')
         st, j = self.call('report', ts=time.time() - 900, **u)
         self.assertEqual((st, j['error']), (400, 'clock'))
         self.assertIn('now', j)
@@ -294,24 +288,27 @@ class ServerTest(unittest.TestCase):
         aid = secrets.token_hex(16)
         self.call('report', units={aid: {'cli': [[1, 0]], 'app': None}})
         self.assertIn('alice-mbp', self.view(aid)[0])
-        st, _ = self.machines([{'key': self.dev2pub, 'name': 'bob-mini'}])
-        self.assertEqual(st, 200)
-        self.assertNotIn('alice-mbp', self.view(aid)[0], '撤销的设备：记录一起删掉')
+        self.revoke(self.DEV)
+        self.assertNotIn('alice-mbp', self.view(aid)[0], '移除的设备：记录一起删掉')
         self.assertEqual(self.call('report', units={})[0], 403)
 
     def test_persist(self):
         self.both()
         aid = secrets.token_hex(16)
         self.call('report', units={aid: {'cli': [[60, 0]], 'app': None}})
-        self.srv.stop()
-        ServerTest.srv = Server(self.d)
-        self.assertEqual(self.view(aid)[0]['alice-mbp']['state'], 'in_use', '重启后照样认得设备清单和会话')
+        self.restart()
+        self.assertEqual(self.view(aid)[0]['alice-mbp']['state'], 'in_use', '重启后照样认得名单和会话')
         self.assertEqual(oct(os.stat(self.d / 'state.json').st_mode & 0o777), '0o600')
+
+    def store(self):
+        """直接调 Store 用的（不经网络）：临时目录里一个新的，名单是空的"""
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        return srvmod.Store(os.path.join(t.name, 'state.json'), 150, 600, 86400, cost_keep=1000, team_root=self.rootpub)
 
     def test_keys(self):
         """API key 的密文：设备传上来的整份换掉旧的，问的时候回现在的（谁传的、多久以前）；服务器不懂里面是什么，只查形状和长度"""
-        self.srv.stop()
-        ServerTest.srv = Server(self.d)   # 限流的配额从头算（前面的用例用掉了不少）
+        self.restart()   # 限流的配额从头算（前面的用例用掉了不少）
         self.both()
         a1, a2 = secrets.token_hex(16), secrets.token_hex(16)
         blob = lambda n=256: {'n': base64.b64encode(secrets.token_bytes(16)).decode(), 'c': base64.b64encode(secrets.token_bytes(n)).decode(),
@@ -341,40 +338,36 @@ class ServerTest(unittest.TestCase):
         raw = (self.d / 'keys.json').read_text()
         self.assertEqual(oct(os.stat(self.d / 'keys.json').st_mode & 0o777), '0o600')
         self.assertIn(b2['c'], raw)
-        self.srv.stop()
-        ServerTest.srv = Server(self.d)
+        self.restart()
         st, j = self.call('keys', get=[a1])
         self.assertEqual(j['keys'][a1]['blob'], b2, '重启后还在')
-        st, _ = self.machines([{'key': self.devpub, 'name': 'alice-mbp'}])
+        self.revoke(self.DEV2)
         st, j = self.call('keys', get=[a1])
         self.assertEqual((st, j['keys'][a1]['blob'], j['keys'][a1]['name']), (200, b2, 'bob-mini'),
-                         '撤销了传它的设备：密文留着（是账号的，登录了这个账号的设备还要用）')
-        self.assertEqual(self.call('keys', key='dev2', get=[a1])[0], 403, '撤销的设备不能再问')
+                         '移除了传它的设备：密文留着（是账号的，登录了这个账号的设备还要用）')
+        self.assertEqual(self.call('keys', key='dev2', get=[a1])[0], 403, '移除的设备不能再问')
         # 存满了（MAX_KEYS 个账号）：新的账号不收，已有的照常换
-        with tempfile.TemporaryDirectory() as t:
-            store = srvmod.Store(os.path.join(t, 'state.json'), 150, 600, 86400)
-            fp = self.fp(self.devpub)
-            store.data['machines'][fp] = {'name': 'alice-mbp', 'key': self.devpub}
-            with mock.patch.object(srvmod, 'MAX_KEYS', 2):
-                x, y, z = (secrets.token_hex(16) for _ in range(3))
-                self.assertEqual(store.key_sync(fp, {x: ok, y: ok}, [], time.time())[0], 200)
-                self.assertEqual(store.key_sync(fp, {z: ok}, [], time.time()), (507, {'error': 'full'}))
-                self.assertEqual(store.key_sync(fp, {x: b1}, [], time.time())[0], 200)
-                self.assertEqual(store.keys['acc'][x]['blob'], b1)
-
+        store = self.store()
+        fp = self.fp(self.devpub)
+        store.data['machines'][fp] = {'name': 'alice-mbp', 'key': self.devpub, 'dev': self.DEV}
+        with mock.patch.object(srvmod, 'MAX_KEYS', 2):
+            x, y, z = (secrets.token_hex(16) for _ in range(3))
+            self.assertEqual(store.key_sync(fp, {x: ok, y: ok}, [], time.time())[0], 200)
+            self.assertEqual(store.key_sync(fp, {z: ok}, [], time.time()), (507, {'error': 'full'}))
+            self.assertEqual(store.key_sync(fp, {x: b1}, [], time.time())[0], 200)
+            self.assertEqual(store.keys['acc'][x]['blob'], b1)
 
     def test_cost(self):
         """折合金额的密文：每个账号、每台设备一份，设备只写自己的那一份；问的时候回各台设备的（认证码没变的、自己的不带密文），
-        撤销的设备照样回（标上 revoked），顺带说哪些设备用过这个账号却没传过；服务器只查形状和长度"""
-        self.srv.stop()
-        ServerTest.srv = Server(self.d)   # 限流的配额从头算
+        移除的设备照样回（标上 revoked），顺带说哪些设备用过这个账号却没传过；服务器只查形状和长度"""
+        self.restart()   # 限流的配额从头算
         self.both()
         a1, a2 = secrets.token_hex(16), secrets.token_hex(16)
         fa, fb = self.fp(self.devpub), self.fp(self.dev2pub)
         blob = lambda n=2048: {'n': base64.b64encode(secrets.token_bytes(16)).decode(), 'c': base64.b64encode(secrets.token_bytes(n)).decode(),
                                't': base64.b64encode(secrets.token_bytes(32)).decode()}
         st, j = self.srv.req('GET', '/v1/health')
-        self.assertIn('ledger', j['ops'], 'health 说支持哪些 op（维护者看服务器是不是新的）')
+        self.assertIn('ledger', j['ops'], 'health 说支持哪些 op（管理员看服务器是不是新的）')
         self.assertEqual(self.call('cost', accounts={a1: {'since': None, 'h': [[1, 2]]}})[0], 404,
                          '早先试过的 /v1/cost（另一种格式）不认：那时的客户端照旧版服务器处理')
         b1 = blob()
@@ -422,42 +415,41 @@ class ServerTest(unittest.TestCase):
         raw = (self.d / 'cost-slots.json').read_text()
         self.assertEqual(oct(os.stat(self.d / 'cost-slots.json').st_mode & 0o777), '0o600')
         self.assertIn(b2['c'], raw)
-        self.srv.stop()
-        ServerTest.srv = Server(self.d)
+        self.restart()
         st, j = self.call('ledger', key='dev2', get=[a1])
         self.assertEqual({x['name']: x.get('blob') for x in j['cost'][a1]}, {'alice-mbp': b3, 'bob-mini': None}, '重启后还在')
-        self.machines([{'key': self.devpub, 'name': 'alice-mbp'}])
+        self.revoke(self.DEV2)
         st, j = self.call('ledger', get=[a1])
         rows = {x['name']: x for x in j['cost'][a1]}
         self.assertEqual((rows['bob-mini']['revoked'], rows['bob-mini']['blob'], rows['alice-mbp']['revoked']), (True, b2, False),
-                         '撤销了的设备：它传的留着（是账号的用量），标上 revoked')
-        self.assertEqual(self.call('ledger', key='dev2', get=[a1])[0], 403, '撤销的设备不能再问')
-        with tempfile.TemporaryDirectory() as t:
-            store = srvmod.Store(os.path.join(t, 'state.json'), 150, 600, 86400, cost_keep=1000)
-            store.data['machines'] = {fa: {'name': 'alice-mbp', 'key': self.devpub}, fb: {'name': 'bob-mini', 'key': self.dev2pub}}
-            now = time.time()
-            x, y, z = (secrets.token_hex(16) for _ in range(3))
-            with mock.patch.object(srvmod, 'COST_SLOTS', 2):
-                self.assertEqual(store.cost_sync(fa, {x: ok, y: ok}, [], {}, now)[0], 200)
-                self.assertEqual(store.cost_sync(fa, {z: ok}, [], {}, now), (507, {'error': 'full'}), '一台设备最多这么多个账号')
-                self.assertEqual(store.cost_sync(fa, {x: b1}, [], {}, now)[0], 200, '已有的照常换')
-                self.assertEqual(store.cost_sync(fb, {z: ok}, [], {}, now)[0], 200, '别的设备不受影响')
-            with mock.patch.object(srvmod, 'COST_DEVICE_BYTES', len(ok['c']) * 2 + 10):
-                self.assertEqual(store.cost_sync(fb, {x: ok, y: ok}, [], {}, now)[0], 507, '一台设备存的加起来有上限')
-            with mock.patch.object(srvmod, 'COST_TOTAL_BYTES', len(ok['c']) * 4 - 1):
-                self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now)[0], 507, '所有设备加起来有上限')
-            store.cost_sync(fb, {x: blob(3000)}, [], {}, now + 5)   # 4000 个字符
-            fc = 'SHA256:' + 'C' * 43
-            store.data['machines'][fc] = {'name': 'carol-air', 'key': self.evilpub}
-            with mock.patch.object(srvmod, 'COST_RESP', 4500):
-                st, j = store.cost_sync(fc, {}, [x], {}, now + 6)
-                self.assertEqual([(r['name'], 'blob' in r) for r in j['cost'][x]], [('bob-mini', True), ('alice-mbp', False)],
-                                 '回的密文有上限：最近传的先给，别的下次再取')
-            self.assertEqual(store.cost_sync('SHA256:gone', {}, [x], {}, now)[0], 403)
-            with mock.patch.object(srvmod, 'COST_TOTAL_BYTES', len(ok['c']) * 2):
-                self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now + 2000)[0], 200,
-                                 '存满了：先清掉 cost_keep 秒没再传的，再看放不放得下（不然一直清不掉）')
-            self.assertEqual(sorted(store.cost['acc']), [y], 'cost_keep 秒没再传的删掉')
+                         '移除了的设备：它传的留着（是账号的用量），标上 revoked')
+        self.assertEqual(self.call('ledger', key='dev2', get=[a1])[0], 403, '移除的设备不能再问')
+        store = self.store()
+        store.data['machines'] = {fa: {'name': 'alice-mbp', 'key': self.devpub, 'dev': self.DEV},
+                                  fb: {'name': 'bob-mini', 'key': self.dev2pub, 'dev': self.DEV2}}
+        now = time.time()
+        x, y, z = (secrets.token_hex(16) for _ in range(3))
+        with mock.patch.object(srvmod, 'COST_SLOTS', 2):
+            self.assertEqual(store.cost_sync(fa, {x: ok, y: ok}, [], {}, now)[0], 200)
+            self.assertEqual(store.cost_sync(fa, {z: ok}, [], {}, now), (507, {'error': 'full'}), '一台设备最多这么多个账号')
+            self.assertEqual(store.cost_sync(fa, {x: b1}, [], {}, now)[0], 200, '已有的照常换')
+            self.assertEqual(store.cost_sync(fb, {z: ok}, [], {}, now)[0], 200, '别的设备不受影响')
+        with mock.patch.object(srvmod, 'COST_DEVICE_BYTES', len(ok['c']) * 2 + 10):
+            self.assertEqual(store.cost_sync(fb, {x: ok, y: ok}, [], {}, now)[0], 507, '一台设备存的加起来有上限')
+        with mock.patch.object(srvmod, 'COST_TOTAL_BYTES', len(ok['c']) * 4 - 1):
+            self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now)[0], 507, '所有设备加起来有上限')
+        store.cost_sync(fb, {x: blob(3000)}, [], {}, now + 5)   # 4000 个字符
+        fc = 'SHA256:' + 'C' * 43
+        store.data['machines'][fc] = {'name': 'carol-air', 'key': self.evilpub, 'dev': '0c' * 8}
+        with mock.patch.object(srvmod, 'COST_RESP', 4500):
+            st, j = store.cost_sync(fc, {}, [x], {}, now + 6)
+            self.assertEqual([(r['name'], 'blob' in r) for r in j['cost'][x]], [('bob-mini', True), ('alice-mbp', False)],
+                             '回的密文有上限：最近传的先给，别的下次再取')
+        self.assertEqual(store.cost_sync('SHA256:gone', {}, [x], {}, now)[0], 403)
+        with mock.patch.object(srvmod, 'COST_TOTAL_BYTES', len(ok['c']) * 2):
+            self.assertEqual(store.cost_sync(fb, {y: ok}, [], {}, now + 2000)[0], 200,
+                             '存满了：先清掉 cost_keep 秒没再传的，再看放不放得下（不然一直清不掉）')
+        self.assertEqual(sorted(store.cost['acc']), [y], 'cost_keep 秒没再传的删掉')
 
 
 class SignedCalls:
@@ -798,7 +790,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         root, H = self.pubs['root'], lambda t: hashlib.sha256(t.encode()).hexdigest()
         b64 = lambda n: base64.b64encode(b'\0' * n).decode()
         blob = lambda size=1024: {'n': b64(16), 'c': 'A' * size, 't': b64(32)}
-        st = self.store('s1', mode='team', team_root=root)
+        st = self.store('s1', team_root=root)
         t1, t2 = 'aa' * 16, 'bb' * 16
         self.assertEqual(st.team_invite(H(t1), '01' * 8, 60, 1000)[0], 200)
         self.assertEqual((st.invite_state(t1, 1059), st.invite_state(t1, 1060), st.invite_state(t2, 1000), st.invite_state('zz', 1000)),
@@ -839,11 +831,11 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         raw['team']['spent'] = {'x': 'soon'}
         raw['machines'].update({'SHA256:bad': {'name': 'no-dev', 'key': self.pubs['c']}, 'SHA256:worse': 7})
         (self.d / 's1' / 'state.json').write_text(json.dumps(raw))
-        st = self.store('s1', mode='team', team_root=root)
+        st = self.store('s1', team_root=root)
         self.assertEqual((st.data['team']['invites'], st.data['team']['spent'], sorted(st.data['machines'])), ({}, {}, ['SHA256:x']))
         self.assertEqual((st.team_members(later)[0], st.invite_state('aa' * 16, later)), (200, None))
         # 没用掉的邀请最多 MAX_INVITES 个（过期的不算）
-        st = self.store('s2', mode='team', team_root=root)
+        st = self.store('s2', team_root=root)
         self.assertEqual(st.team_invite(H('00' * 16), 'ff' * 8, 60, 0)[0], 200)
         for i in range(srvmod.MAX_INVITES):
             self.assertEqual(st.team_invite(H('%032x' % i), '%016x' % i, 3600, 100)[0], 200, i)
@@ -852,15 +844,15 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         big = {'seq': 1, 'ct': blob(srvmod.MAX_TEAM_DOC), 'sig': 'AAAA'}
         n = srvmod.TEAM_DOCS_BYTES // srvmod.MAX_TEAM_DOC
         with mock.patch.object(srvmod, 'MAX_INVITES', 10 ** 6):
-            st = self.store('s3', mode='team', team_root=root)
+            st = self.store('s3', team_root=root)
             for i in range(n + 1):
                 st.team_invite(H('%032x' % i), '%016x' % i, 3600, 100)
             for i in range(0, n, 32):
                 self.assertEqual(st.team_put({'%016x' % k: big for k in range(i, min(i + 32, n))}, 100)[0], 200, i)
             self.assertEqual(st.team_put({'%016x' % n: big}, 100), (507, {'error': 'full'}))
             self.assertEqual(st.team_put({'%016x' % 0: dict(big, seq=2)}, 100)[0], 200, '换掉已有的一份不算多')
-        # 换模式：状态文件是别的模式的就从头开始，各台设备的配置也删掉
-        st = self.store('s1', mode='team', team_root=root)
+        # 状态文件是以前别的服务器的（3.5.3 以前的自己的同步服务器、3.6.0 以前的维护者的服务器）就从头开始，各台设备的配置也删掉
+        st = self.store('s1', team_root=root)
         self.assertEqual((len(st.data['machines']), len(st.docs['docs'])), (1, 1), '同一个根公钥：接着用')
         gen = st.gen()
         # 3.5.3 以前的自己的同步服务器（--mode own）留下的状态文件：从头开始（那时加入的设备、存的密文都不要了）
@@ -868,21 +860,35 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         raw.pop('team')
         raw['own'] = {'seed': '0' * 64, 'admit': '0' * 64, 'gen': 'ab' * 16}
         (self.d / 's1' / 'state.json').write_text(json.dumps(raw))
-        st = self.store('s1', mode='team', team_root=root)
+        st = self.store('s1', team_root=root)
         self.assertEqual((st.data['machines'], st.docs['docs'], 'own' in st.data), ({}, {}, False))
         self.assertNotIn(st.gen(), (gen, 'ab' * 16))
         self.assertIn('以前是自己的同步服务器（3.5.3 以前的 --mode own）：以前的 1 台设备', err.getvalue())
         self.assertEqual(json.loads((self.d / 's1' / 'team-docs.json').read_text())['docs'], {})
         self.assertNotIn('own', json.loads((self.d / 's1' / 'state.json').read_text()))
         self.assertEqual(st.team_enroll({'01' * 8: ('SHA256:x', self.pubs['a'], 'mac')}, 5)[0], 200)
-        m = self.store('s1', mode='maintainer')
-        self.assertEqual((m.data['machines'], 'team' in m.data), ({}, False), '维护者的服务器不认 Team 里加入的设备')
+        # 3.6.0 以前的维护者的服务器（--mode maintainer：发布密钥签的设备清单）留下的：清单里的设备不是这个 Team 的，存的密文也不要了
+        m = self.d / 'm1'
+        m.mkdir()
+        (m / 'state.json').write_text(json.dumps({'v': 1, 'seq': 7, 'machines': {'SHA256:m': {'name': 'old-mac', 'key': self.pubs['b']}},
+                                                  'beats': {}, 'units': {}}))
+        (m / 'keys.json').write_text(json.dumps({'v': 1, 'acc': {'ab' * 16: {'blob': blob(), 'fp': 'SHA256:m', 'name': 'old-mac', 'at': 1}}}))
+        st = self.store('m1', team_root=root)
+        self.assertEqual((st.data['machines'], st.data['seq'], st.keys['acc'], st.data['team']['root']), ({}, 0, {}, root))
+        self.assertIn('以前是维护者的服务器（3.6.0 以前的 --mode maintainer）：以前的 1 台设备', err.getvalue())
+        self.assertEqual(json.loads((m / 'keys.json').read_text())['acc'], {}, '存的密文也不要了')
+        self.assertEqual(st.team_enroll({'01' * 8: ('SHA256:x', self.pubs['a'], 'mac')}, 5)[0], 200)
+        self.assertFalse((m / 'team-docs.json').exists(), '没有配置要删：旁边不留一个空的 team-docs.json')
+        # 第一次启动（什么都没有）：不说话，也不留一个空的 team-docs.json
+        said = err.getvalue()
         self.assertFalse((self.d / 'none').exists())
-        self.store('none', mode='maintainer')
-        self.assertFalse((self.d / 'none' / 'team-docs.json').exists(), '别的模式的服务器旁边不留一个空的 team-docs.json')
+        self.store('none', team_root=root)
+        self.assertEqual(err.getvalue(), said)
+        self.assertFalse((self.d / 'none' / 'team-docs.json').exists())
 
     def test_cli(self):
-        """启动参数：根公钥从 --team-root 或者环境变量 CCA_TEAM_ROOT 来，不是 ssh-ed25519 公钥就不启动"""
+        """启动参数：根公钥从 --team-root 或者环境变量 CCA_TEAM_ROOT 来，不是 ssh-ed25519 公钥就不启动；--mode 只剩 team（安装脚本照旧
+        写着它），以前的维护者的服务器（--mode maintainer、--release-key）起不来"""
         d = self.d / 'cli'
         d.mkdir()
         base = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--behind-proxy', '--state', str(d / 'state.json'), '--mode', 'team']
@@ -891,6 +897,13 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
                                stderr=subprocess.PIPE, timeout=20)
             self.assertEqual(r.returncode, 2, (extra, env))
             self.assertIn('根公钥', r.stderr.decode())
+        (d / 'release.pub').write_text(self.pubs['evil'] + ' test-release\n')
+        for old in (['--mode', 'maintainer'], ['--release-key', str(d / 'release.pub')]):
+            r = subprocess.run(base[:-2] + old + ['--team-root', self.pubs['root']], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, timeout=20)
+            self.assertEqual(r.returncode, 2, old)
+            self.assertIn(old[0], r.stderr.decode())
+        self.assertFalse((d / 'state.json').exists(), '起不来的时候什么都不写')
         p = subprocess.Popen(base + ['--port-file', str(d / 'port')], env=dict(os.environ, CCA_TEAM_ROOT=self.pubs['root'] + ' 备注'),
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
@@ -973,30 +986,101 @@ def wait_for(what, cond, secs=60):
         time.sleep(0.05)
 
 
-SHARED_REPO = 'example/cca-policy'
+class Team:
+    """测试里的一个 Team：根密钥是 d 下的 key，测试拿着它扮演管理员——在服务器上登记、移除设备（照 server/README.md「Team 的同步
+    服务器」自己签名）。设备那边不经邀请：Device.join 直接写好“加入了、同步到了配置”的样子（~/.cca/teams/<编号>/，见
+    cli/src/core/team.rs）；邀请、加入、同步配置这一套在 tests/team.py"""
+    def __init__(self, d, name='测试组', key='root', salt='00' * 16):
+        self.d, self.name, self.salt = d, name, salt
+        self.keyfile = d / key
+        self.root = keygen(self.keyfile, 'cca-team-root')
+        self.id = sw.team_id(self.root)
+        self.lane = 'team.%s.' % self.id   # 设备上这个 Team 的服务器的状态文件的前缀（presence/、cost/ 里）
+
+    def doc(self, url, pins, accounts=None, **more):
+        """管理员给设备的配置（明文；样子见 cli/src/cmd/team/doc.rs 的 doc_problems）。默认只给 alice 的 Claude 账号"""
+        if accounts is None:
+            accounts = {'claude': {'alice@example.com': 'US-A'}}
+        return dict({'v': 1, 'at': time.time(), 'name': self.name, 'salt': self.salt, 'server': {'u': url, 'p': list(pins)},
+                     'accounts': accounts, 'aliases': {}, 'install_node': '', 'nodes': None}, **more)
+
+    def admin(self, port, op, **extra):
+        """管理员的请求：拿根密钥签名"""
+        return sw.post(str(self.keyfile), port, op, extra)
+
+    def only(self, port, *devs):
+        """服务器上的名单正好是这几台设备：没登记的登记上（名字是设备的名字），名单里别的移除"""
+        st, j = self.admin(port, 'team_members')
+        assert st == 200, (st, j)
+        keep = {d.team(self)['dev'] for d in devs}
+        for m in j['members']:
+            if m['dev'] not in keep:
+                st, r = self.admin(port, 'team_revoke', dev=m['dev'])
+                assert st == 200, (st, r)
+        if devs:
+            st, j = self.admin(port, 'team_enroll', devices={d.team(self)['dev']: {'pub': d.team(self)['pub'], 'name': d.name} for d in devs})
+            assert st == 200 and sorted(j['names'].values()) == sorted(d.name for d in devs), (st, j)
+            for d in devs:
+                d.team_json(self, lambda t: t.update(gen=j['gen']))
 
 
 class Device:
-    """一台设备：自己的 HOME（~/.cca）和 deploy key；cca 的辅助程序在它里面跑。命令都在它自己的 bin/ 里（见上面几段）"""
+    """一台设备：自己的 HOME（~/.cca）；cca 的辅助程序在它里面跑。命令都在它自己的 bin/ 里（见上面几段）。join 以后它在那个 Team 里：
+    keyfile、pub、fp 是它在头一个加入的 Team 里的密钥，lane 是那个 Team 的服务器的状态文件的前缀"""
     KEY = 'alice(alice@example.com)'
     ACCT = ident('alice@example.com')
 
     def __init__(self, home, name, table):
         self.name, self.home, self.cca = name, home, home / '.cca'
-        (self.cca / 'policy').mkdir(parents=True)
+        self.cca.mkdir(parents=True)
         (home / 'bin').mkdir()
-        self.keyfile = self.cca / 'policy' / 'id_ed25519'
-        self.pub = keygen(self.keyfile, 'cca-policy@' + name)
-        self.fp = sw.fp_of(str(self.keyfile) + '.pub')
+        self.keyfile = self.pub = self.fp = self.lane = None
         for cmd, script in (('curl', CURL), ('ps', PS), ('cca', SELF), ('security', NO_KEYCHAIN)):
             self.fake(cmd, script)
-        # 打开着维护者的共享（映射仓库；辅助程序的 policy_on：没有它时 policy.json 不生效）
-        (self.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO}))
+        (self.cca / 'config.json').write_text('{}')
         (self.cca / 'accounts.json').write_text(json.dumps(table))
         self.env = {'HOME': str(home), 'CCA_HOME': str(self.cca), 'CCA_TOOL': 'claude', 'PATH': '%s:/usr/bin:/bin' % (home / 'bin'),
                     'CCA_SELF': str(home / 'bin' / 'cca'), 'CCA_KEYSTORE': 'file', 'CCA_COST': 'off'}
         if 'TZ' in os.environ:
             self.env['TZ'] = os.environ['TZ']
+
+    # --- Team ---
+    def join(self, team, url, pins, doc=None, dev=None):
+        """这台设备加入了 team、同步到了配置 doc（默认 team.doc(url, pins)）：直接写好 ~/.cca/teams/<编号>/ 下的 team.json、doc.json
+        和这台设备在 Team 里的密钥（不经邀请；服务器上的名单由 team.only 登记）。dev：它在 Team 里的编号（默认随机）"""
+        td = self.cca / 'teams' / team.id
+        td.mkdir(parents=True, mode=0o700)
+        keyfile = td / 'id_ed25519'
+        pub = keygen(keyfile, 'cca-team@' + self.name)
+        (td / 'team.json').write_text(json.dumps({'v': 1, 'id': team.id, 'name': team.name, 'url': url, 'pins': list(pins), 'root': team.root,
+                                                  'role': 'member', 'dev': dev or secrets.token_hex(8), 'device': self.name,
+                                                  'joined_at': time.time()}))
+        self.set_doc(team, doc or team.doc(url, pins))
+        index = self.cca / 'teams' / 'index.json'
+        order = json.loads(index.read_text())['order'] if index.exists() else []
+        index.write_text(json.dumps({'v': 1, 'order': order + [team.id]}))
+        if self.keyfile is None:
+            self.keyfile, self.pub, self.fp, self.lane = keyfile, pub, sw.fp_of(str(keyfile) + '.pub'), team.lane
+        return self
+
+    def team(self, team):
+        """这台设备在 team 里的：{dev 编号, pub 公钥, fp 指纹, keyfile 私钥}"""
+        td = self.cca / 'teams' / team.id
+        return {'dev': json.loads((td / 'team.json').read_text())['dev'], 'pub': ' '.join((td / 'id_ed25519.pub').read_text().split()[:2]),
+                'fp': sw.fp_of(str(td / 'id_ed25519.pub')), 'keyfile': td / 'id_ed25519'}
+
+    def team_json(self, team, edit):
+        """改一改这台设备记着的 team.json（服务器在哪、钉住的指纹……）"""
+        p = self.cca / 'teams' / team.id / 'team.json'
+        t = json.loads(p.read_text())
+        edit(t)
+        p.write_text(json.dumps(t))
+
+    def set_doc(self, team, doc):
+        """这台设备手里的配置换成 doc（像是同步到了新的一版：序号加一）"""
+        p = self.cca / 'teams' / team.id / 'doc.json'
+        seq = json.loads(p.read_text())['seq'] + 1 if p.exists() else 1
+        p.write_text(json.dumps({'v': 1, 'seq': seq, 'at': time.time(), 'doc': doc}))
 
     def fake(self, name, script):
         p = self.home / 'bin' / name
@@ -1012,12 +1096,6 @@ class Device:
         if (r.returncode, r.stderr) != (0, ''):
             raise AssertionError('%s 上 %s 没成：退出码 %d，%s%s' % (self.name, ' '.join(argv[:2]), r.returncode, r.stdout, r.stderr))
         return r.stdout
-
-    def policy(self, presence, **more):
-        j = dict({'version': 1, 'claude': {'alice@example.com': 'US-A'}}, **more)
-        if presence is not None:
-            j['presence'] = presence
-        (self.cca / 'policy' / 'policy.json').write_text(json.dumps(j))
 
     def config(self, edit=None):
         """config.json；edit(c) 改一改再写回去"""
@@ -1061,7 +1139,8 @@ class Device:
         return [args for _, _, args in done] + [args for pid, args in sorted(waiting.items()) if pid not in logged]
 
     def keys_json(self):
-        p = self.cca / 'presence' / 'keys.json'
+        """头一个加入的 Team 的服务器的那一份 keys.json（presence/team.<编号>.keys.json）"""
+        p = self.cca / 'presence' / (self.lane + 'keys.json')
         return json.loads(p.read_text()) if p.exists() else None
 
     def sync(self, mode='force'):
@@ -1098,7 +1177,7 @@ class Device:
         return [r for r in out if op in (None, r['op'])]
 
     def post(self, port, op, extra):
-        """照文档自己签一个请求发给服务器（不经 cca：扮演这台设备上别的程序、有问题的程序）"""
+        """照文档自己签一个请求发给服务器（不经 cca：扮演这台设备上别的程序、有问题的程序）：拿它在头一个加入的 Team 里的密钥"""
         return sw.post(str(self.keyfile), port, op, extra)
 
     # --- 折合金额 ---
@@ -1113,20 +1192,22 @@ class Device:
         return json.loads(self.ok('cost-sync', '--json', *(['--now'] if force else [])))['sync']
 
     def cost(self, name):
+        """cost/ 下的文件；Team 的服务器的那几份带着前缀（self.lane + 'remote.json' 这样写）"""
         return json.loads((self.cca / 'cost' / name).read_text())
 
-    def cost_view(self, accounts=(), sync=()):
-        """App 看到的（_gui state 的 cost）：经辅助程序只给测试用的 _cost-view 看，设备统计的配置现读"""
-        spec = {'config': {}, 'presence': 'load', 'accounts': [list(a) for a in accounts], 'sync': [list(s) for s in sync], 'tools': ['claude']}
+    def cost_view(self, team, accounts=(), sync=()):
+        """App 看到的（_gui state 的 cost）：经辅助程序只给测试用的 _cost-view 看。team 是同步走的那个 Team 的编号；accounts 的行是
+        [工具, 键, usage_weeks, 谁给的（Team 的编号，这台设备自己的是 False）, 登录着没有]，sync 的行是 [slot, 谁给的, 登录着没有]"""
+        spec = {'config': {}, 'team': team, 'accounts': [list(a) for a in accounts], 'sync': [list(s) for s in sync], 'tools': ['claude']}
         return json.loads(self.ok('_cost-view', repr(time.time()), json.dumps(spec)))
 
 
 class FreshServer(Server):
     """ClientTest 每个用例重起一次的服务器：5 秒还没起来（机器忙）接着等；起不来、停不下来也不留下进程"""
-    def __init__(self, d, port=0):
+    def __init__(self, d, port=0, team_root=None):
         try:
             try:
-                super().__init__(d, ttl='60', idle='600', port=port)
+                super().__init__(d, ttl='60', idle='600', port=port, team_root=team_root)
             except FileNotFoundError:   # 端口文件还没有
                 self.port = int(wait_for('服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
         except BaseException:
@@ -1183,23 +1264,23 @@ class Sessions:
         start = [self.rounds(d) for d in devs]
         wait_for('上报进程再转 %d 圈' % n, lambda: all(self.rounds(d) >= s + n for d, s in zip(devs, start)))
 
-    def status(self, dev, lane=''):
-        """上报进程最近一次没报到维护者的服务器（lane 是 Team 的那一路的 team.<编号>.：报到那个 Team 的服务器）的原因（cca devices 显示）"""
+    def status(self, dev, lane):
+        """上报进程最近一次没报到某个 Team 的服务器（lane 是那一路的前缀 team.<编号>.）的原因（cca devices 显示）"""
         p = dev.cca / 'presence' / (lane + 'status.json')
         return json.loads(p.read_text()).get('error', '') if p.exists() else None
 
 
 class ClientTest(Sessions, unittest.TestCase):
-    """客户端（cca 的辅助程序）：映射里那一节的检查、账号摘要、上报、cca devices、共享记下的 API key、折合金额的同步，
-    经 curl + 公钥钉住连真的服务器。只能在进程内测的几处在辅助程序自己的单元测试里（cargo test），下面各留了一行说它在哪"""
+    """客户端（cca 的辅助程序）：账号摘要、上报、cca devices、共享记下的 API key、折合金额的同步，经 curl + 公钥钉住连真的 Team 的
+    同步服务器。设备都在 Team「测试组」里（它给 alice 的 Claude 账号；bob 是 alice-mbp 自己的账号）。只能在进程内测的几处在辅助程序
+    自己的单元测试里（cargo test），下面各留了一行说它在哪"""
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix='cca-presence-client-')
         d = cls.d = Path(cls.tmp.name).resolve()
         make_cert(d)
-        cls.relpub = keygen(d / 'rel', 'test-release')
-        (d / 'release.pub').write_text(cls.relpub + ' test-release\n')
-        cls.srv = FreshServer(d)
+        cls.team = Team(d)
+        cls.srv = FreshServer(d, team_root=cls.team.root)
         cls.pin = openssl_pin(d / 'cert.pem')
 
     @classmethod
@@ -1209,14 +1290,14 @@ class ClientTest(Sessions, unittest.TestCase):
         cls.tmp.cleanup()
 
     def setUp(self):
-        # 每个用例一个新的服务器进程（设备清单、存的密文都在文件里，接着用）：限流的配额从头算
+        # 每个用例一个新的服务器进程（名单、存的密文都在文件里，接着用）：限流的配额从头算
         cls = type(self)
         old, cls.srv = cls.srv, None
         if old is not None:
             old.stop()
-        cls.srv = FreshServer(self.d)
+        cls.srv = FreshServer(self.d, team_root=self.team.root)
         self.key = Device.KEY
-        self.salt = '00' * 16
+        self.salt, self.lane, self.tid = self.team.salt, self.team.lane, self.team.id
         self.aid = sw.aid_of(self.salt, 'claude', 'alice@example.com')
         self.devices = []
         self.dev = self.device('alice-mbp', table={self.key: 'US-A', 'bob@example.com': 'US-B'})
@@ -1225,44 +1306,22 @@ class ClientTest(Sessions, unittest.TestCase):
     def no_keychain(self):
         self.assertEqual([d.name for d in self.devices if (d.home / 'security.log').exists()], [], '调到了 security（钥匙串）')
 
-    def presence(self, **over):
-        return dict({'url': 'https://127.0.0.1:%d' % self.srv.port, 'pins': [self.pin], 'salt': self.salt}, **over)
+    def doc(self, **over):
+        """Team 给设备的配置（服务器是这一次的）"""
+        return self.team.doc('https://127.0.0.1:%d' % self.srv.port, [self.pin], **over)
 
     def device(self, name, uuid=None, table=None):
-        """一台设备：自己的 ~/.cca 和 deploy key，同一份映射、同一个账号；uuid 不是 None 时 alice 在它上面登录着"""
+        """一台设备：自己的 ~/.cca，在 Team 里、同一份配置；uuid 不是 None 时 alice 在它上面登录着"""
         d = Device(self.d / ('%s-%s' % (name, secrets.token_hex(4))), name, table or {self.key: 'US-A'})
-        d.policy(self.presence())
+        d.join(self.team, 'https://127.0.0.1:%d' % self.srv.port, [self.pin])
         if uuid:
             d.login(uuid)
         self.devices.append(d)
         return d
 
     def machines(self, *devs):
-        """维护者的设备清单：这几台（名字就是设备的名字）"""
-        doc = json.dumps({'version': 1, 'seq': int(time.time() * 1000), 'machines': [{'key': d.pub, 'name': d.name} for d in devs]}).encode()
-        st, _ = self.srv.req('POST', '/v1/machines', doc, sign(self.d / 'rel', 'cca-devices', doc))
-        self.assertEqual(st, 200)
-
-    def test_policy_block(self):
-        def check(j, strict=False):
-            """映射文件的问题（py policy-check：拉下来以后查；strict 是维护者发布前查的）"""
-            p = self.dev.home / 'candidate.json'
-            p.write_text(json.dumps(j))
-            r = self.dev.run('policy-check', str(p), *(['strict'] if strict else []))
-            self.assertEqual((r.returncode, r.stderr), (1 if r.stdout else 0, ''))
-            return r.stdout.splitlines()
-        pp = lambda p: check({'version': 1, 'claude': {}, 'presence': p}, True)   # presence 那一节的问题
-        ok = {'url': 'https://203.0.113.10:18443', 'pins': ['sha256//' + 'A' * 43 + '='], 'salt': 'ab' * 16}
-        self.assertEqual(pp(ok), [])
-        for bad in ({**ok, 'url': 'http://203.0.113.10:18443'}, {**ok, 'url': 'https://203.0.113.10'},
-                    {**ok, 'url': 'https://203.0.113.10:99999'}, {**ok, 'pins': []}, {**ok, 'pins': ['sha1//x']},
-                    {**ok, 'salt': 'XYZ'}, 'nonsense'):
-            self.assertTrue(pp(bad), bad)
-        strict = check
-        j = {'version': 1, 'claude': {}, 'presence': ok}
-        self.assertEqual(strict(j, True), [], '维护者的严格检查认识 presence')
-        self.assertTrue(strict(dict(j, presence={'url': 'x'}), True))
-        self.assertEqual(strict(dict(j, presence={'url': 'x'})), [], '客户端不因为它拒绝整份映射')
+        """服务器上的名单正好是这几台（管理员拿根密钥登记、移除；名字就是设备的名字）"""
+        self.team.only(self.srv.port, *devs)
 
     def view(self, dev, *args, rc=0, **env):
         """cca devices …：(stdout, 这次问服务器的那个请求)"""
@@ -1277,30 +1336,31 @@ class ClientTest(Sessions, unittest.TestCase):
                             stdout=subprocess.PIPE, text=True, check=True).stdout.split()[1]
         self.machines(dev)
         _, asked = self.view(dev, '--json')
-        self.assertEqual((asked['key'], asked['code']), (fp, 200), '和 ssh-keygen -l 的指纹一样（服务器照设备清单里的公钥认它）')
+        self.assertEqual((asked['key'], asked['code']), (fp, 200), '和 ssh-keygen -l 的指纹一样（服务器照登记的公钥认它）')
         [a] = asked['accounts']
         self.assertRegex(a, r'^[0-9a-f]{32}$')
         self.assertEqual(a, sw.aid_of(self.salt, 'claude', 'alice@example.com'), '账号摘要和文档写的一样')
         (dev.cca / 'accounts.json').write_text(json.dumps({'alice(Alice@Example.com)': 'US-A'}))
         self.assertEqual(self.view(dev, '--json')[1]['accounts'], [a], '邮箱不分大小写')
         (dev.cca / 'codex.json').write_text(json.dumps({'alice@example.com': 'US-A'}))
-        dev.policy(self.presence(), codex={'alice@example.com': 'US-A'})
+        dev.set_doc(self.team, self.doc(accounts={'claude': {'alice@example.com': 'US-A'}, 'codex': {'alice@example.com': 'US-A'}}))
         [x] = self.view(dev, '--json', CCA_TOOL='codex')[1]['accounts']
         self.assertNotEqual(a, x, 'Claude 账号和 Codex 账号不撞')
         self.assertEqual(x, sw.aid_of(self.salt, 'codex', 'alice@example.com'))
-        dev.policy(self.presence(salt='11' * 16))
+        dev.set_doc(self.team, self.doc(salt='11' * 16))
         [y] = self.view(dev, '--json')[1]['accounts']
         self.assertNotEqual(a, y, '换了盐就认不出')
         self.assertEqual(y, sw.aid_of('11' * 16, 'claude', 'alice@example.com'))
         # 用不了的几种（cca devices 说原因，退出码 2）
-        dev.policy(self.presence())
-        (dev.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO, 'presence': False}))
+        dev.config(lambda c: c.update(presence=False))
         self.assertIn('关掉了', self.view(dev, rc=2)[0])
         dev.config(lambda c: c.pop('presence'))
-        dev.policy(None)
-        self.assertIn('还没有设备统计', self.view(dev, rc=2)[0])
-        dev.policy({'url': 'bad'})
-        self.assertIn('不对', self.view(dev, rc=2)[0])
+        doc = dev.cca / 'teams' / self.tid / 'doc.json'
+        doc.rename(doc.with_name('doc.bak'))   # 配置还没同步下来
+        self.assertIn('Team', self.view(dev, rc=2)[0])
+        doc.with_name('doc.bak').rename(doc)
+        dev.keyfile.rename(dev.keyfile.with_name('id.bak'))   # 这台设备在 Team 里的密钥不见了
+        self.assertIn('Team', self.view(dev, rc=2)[0])
         self.assertEqual(len(dev.sent()), 4, '用不了的时候不问服务器')
 
     def test_scan_cli_idle_from_tty(self):
@@ -1330,21 +1390,21 @@ class ClientTest(Sessions, unittest.TestCase):
     def test_post_and_devices(self):
         dev = self.dev
         out, asked = self.view(dev, '--json', rc=1)
-        self.assertEqual((asked['code'], asked['reply'].get('error')), (403, 'denied'), '设备清单里还没有这台 Mac')
-        self.assertIn('presence sync', out)
+        self.assertEqual((asked['code'], asked['reply'].get('error')), (403, 'unknown_device'), '服务器的名单里还没有这台设备')
+        self.assertIn('不认这台设备', out)
         self.machines(dev)
         since = self.session(dev)   # 100 秒前开的
-        self.session(dev, 'bob@example.com', SESSION_PID - 1)   # 不在映射里的账号也开着会话
+        self.session(dev, 'bob@example.com', SESSION_PID - 1)   # 这台设备自己的账号（Team 没给的）也开着会话
         self.agent(dev)
         [report] = wait_for('上报进程报上去', lambda: dev.sent('report'))
-        self.assertEqual((report['code'], list(report['units']), report['end']), (200, [self.aid], None), '只报映射里的官方账号')
+        self.assertEqual((report['code'], list(report['units']), report['end']), (200, [self.aid], None), '只报 Team 给的官方账号')
         [[opened, idle]] = report['units'][self.aid]['cli']
         self.assertEqual((idle, report['units'][self.aid]['app']), (0, None), '没有终端：在跑就算在干活；没开桌面 App')
         self.assertTrue(opened >= 100 and abs(since + opened - report['done']) < 15, '开了多久：到上报的时候为止')
         doc = json.loads(self.view(dev, '--json')[0])
         self.assertEqual((doc['kind'], doc['me'], doc['tool']), ('devices', 'alice-mbp', 'claude'))
         [a] = doc['accounts']
-        self.assertEqual(a['key'], self.key)
+        self.assertEqual((a['key'], a['hub'], a['team']), (self.key, 'team', self.tid))
         [d] = a['devices']
         self.assertEqual((d['name'], d['me'], d['state'], d['cli'], d['app']), ('alice-mbp', True, 'in_use', 1, False))
         self.assertTrue(abs(d['since_epoch'] - since) < 15 and abs(d['last_used_epoch'] - report['done']) < 15,
@@ -1352,27 +1412,27 @@ class ClientTest(Sessions, unittest.TestCase):
         out = self.view(dev)[0]
         self.assertIn('alice-mbp（这台 Mac）  在用 · 命令行里 1 个会话 · ', out)
         self.assertIn(' 起', out)
-        self.assertIn('是这台设备自己的账号：只统计 Team 给的、维护者共享的账号', self.view(dev, 'bob', rc=2)[0])
+        self.assertIn('是这台设备自己的账号', self.view(dev, 'bob', rc=2)[0])
         n = len(dev.sent())
-        dev.policy(self.presence(pins=['sha256//' + 'A' * 43 + '=']))
+        dev.team_json(self.team, lambda t: t.update(pins=['sha256//' + 'A' * 43 + '=']))
         out = self.view(dev, rc=1)[0]
         self.assertIn('钉住的指纹对不上', out, '证书不是钉住的那张：不发')
         self.assertEqual([r['code'] for r in dev.sent()[n:]], [0])
-        dev.policy(self.presence(url='https://127.0.0.1:9'))
-        self.assertIn('连不上设备统计的服务器（https://127.0.0.1:9）', self.view(dev, rc=1)[0])
+        dev.team_json(self.team, lambda t: t.update(url='https://127.0.0.1:9', pins=[self.pin]))
+        self.assertIn('连不上 Team 的同步服务器（127.0.0.1:9）', self.view(dev, rc=1)[0])
 
     # test_past_time（cca devices 里过去的时刻怎么写：今天、昨天、星期几、日期）：cli/src/cmd/presence.rs 的单元测试 past_time_like_python_test
 
     def test_agent_backoff(self):
-        """报不出去（服务器连不上、不认这台 Mac）：按退避再试，心跳到期、会话变了都不会马上重发。
-        隔多久再试的那几个数（心跳 60 秒上下，退避 10、20 秒……，不认这台 Mac 时 10 分钟）：cli/src/cmd/presence.rs 的单元测试 retry_backs_off"""
+        """报不出去（服务器连不上、不认这台设备）：按退避再试，心跳到期、会话变了都不会马上重发。
+        隔多久再试的那几个数（心跳 60 秒上下，退避 10、20 秒……，不认这台设备时 10 分钟）：cli/src/cmd/presence.rs 的单元测试 retry_backs_off"""
         ok, denied, down = self.dev, self.device('bob-mini', 'u-alice-0007'), self.device('carol-air', 'u-alice-0007')
         recent = self.device('dan-air', 'u-alice-0007')
-        self.machines(ok, recent)   # bob-mini 不在设备清单里（403）；carol-air 连不上服务器
+        self.machines(ok, recent)   # bob-mini 不在名单里（403）；carol-air 连不上服务器
         ok.login('u-alice-0007')
-        down.policy(self.presence(url='https://127.0.0.1:9'))
+        down.team_json(self.team, lambda t: t.update(url='https://127.0.0.1:9'))
         (recent.cca / 'presence').mkdir(mode=0o700)   # dan-air 半分钟前刚同步过记下的 API key
-        (recent.cca / 'presence' / 'keys.json').write_text(json.dumps({'v': 1, 'acc': {}, 'synced': time.time() - 30}))
+        (recent.cca / 'presence' / (self.lane + 'keys.json')).write_text(json.dumps({'v': 1, 'acc': {}, 'synced': time.time() - 30}))
         everyone = (ok, denied, down, recent)
         for d in everyone:
             self.session(d)
@@ -1380,9 +1440,9 @@ class ClientTest(Sessions, unittest.TestCase):
         for d, code in ((ok, 200), (denied, 403), (down, 0), (recent, 200)):
             [r] = wait_for('%s 的第一次上报' % d.name, lambda: d.sent('report'))
             self.assertEqual(r['code'], code)
-        self.assertIn('presence sync', wait_for('没报成的原因', lambda: self.status(denied)))
-        self.assertIn('连不上设备统计的服务器', wait_for('没报成的原因', lambda: self.status(down)))
-        self.assertIn(self.status(ok), (None, ''), '报成了：没有没报成的原因')
+        self.assertIn('不认这台设备', wait_for('没报成的原因', lambda: self.status(denied, self.lane)))
+        self.assertIn('连不上 Team 的同步服务器', wait_for('没报成的原因', lambda: self.status(down, self.lane)))
+        self.assertIn(self.status(ok, self.lane), (None, ''), '报成了：没有没报成的原因')
         # 开着会话：马上同步一次记下的 API key（不 force：最近同步过就不发）
         self.assertEqual([[r['code'] for r in d.sent('keys')] for d in everyone], [[200], [403], [0], []])
         for d in everyone:
@@ -1392,7 +1452,7 @@ class ClientTest(Sessions, unittest.TestCase):
         sent = ok.sent('report')
         self.assertEqual([len(r['units'][self.aid]['cli']) for r in sent[:2]], [1, 2], '报成了的：会话变了马上再报')
         self.assertTrue(all(gap > 30 for gap in gaps(sent[1:])), '没到心跳的时候（60 秒上下）转多少圈都不再发')
-        self.assertEqual(len(denied.sent('report')), 1, '服务器不认这台 Mac：转了几圈、会话变了都不重发（10 分钟后再试）')
+        self.assertEqual(len(denied.sent('report')), 1, '服务器不认这台设备：转了几圈、会话变了都不重发（10 分钟后再试）')
         self.assertTrue(all(gap > 5 for gap in gaps(down.sent('report'))), '连不上：转了几圈、会话变了都不重发，退避到点（10 秒）才再试')
         self.assertEqual([len(d.sent('keys')) for d in everyone], [1, 1, 1, 0], '记下的 API key 隔 10 分钟才再同步，不是每圈都同步')
 
@@ -1471,10 +1531,11 @@ class ClientTest(Sessions, unittest.TestCase):
         a.login('u-alice-0001')
         aid, acct = self.aid, Device.ACCT
         k = sw.derive(sw.KEYSHARE, self.salt, 'claude', 'alice@example.com', 'u-alice-0001')
-        self.assertEqual((a.keyset(K1, 'bob@example.com'), a.ok('key-share', 'bob@example.com')), ('', ''), '不在映射里的账号：只记在这台设备上，不同步')
-        self.assertEqual(a.keyset(K1).strip(), 'shared', '映射里的账号、开着设备统计：说一声会同步')
+        self.assertEqual((a.keyset(K1, 'bob@example.com'), a.ok('key-share', 'bob@example.com')), ('', ''),
+                         '这台设备自己的账号（Team 没给的）：只记在这台设备上，不同步')
+        self.assertEqual(a.keyset(K1).strip(), 'shared', 'Team 给的账号、开着设备统计：说一声会同步')
         self.assertEqual(wait_for('后台起同步', a.kicks), ['_key-sync force'], '马上在后台同步（就这一次：bob@example.com 的那一把没起）')
-        self.assertEqual(oct(os.stat(a.cca / 'presence' / 'keys.json').st_mode & 0o777), '0o600')
+        self.assertEqual(oct(os.stat(a.cca / 'presence' / (self.lane + 'keys.json')).st_mode & 0o777), '0o600')
         self.assertEqual(a.sync(), '')
         raw = (self.d / 'keys.json').read_text()
         for secret in (K1, 'alice@example.com', 'u-alice-0001', 'a' * 40):
@@ -1501,7 +1562,7 @@ class ClientTest(Sessions, unittest.TestCase):
         self.assertEqual((ha['from_device'], ha['hint']), ('bob-mini', self.HINT2))
         self.assertEqual(a.sync(), '', '再同步一次：没有新的，什么都不变')
         self.assertEqual(a.stored(), (0, K2))
-        # carol-air（在设备清单里、没登录 alice）把旧的那一份传回去（重放），再传一份伪造的：都不认，传回新的
+        # carol-air（在名单里、没登录 alice）把旧的那一份传回去（重放），再传一份伪造的：都不认，传回新的
         for bad in (blob1, {'n': blob1['n'], 'c': base64.b64encode(secrets.token_bytes(256)).decode(), 't': blob1['t']}):
             self.assertEqual(c.post(self.srv.port, 'keys', {'put': {aid: bad}})[0], 200)
             self.assertEqual(a.sync(), '')
@@ -1551,13 +1612,13 @@ class ClientTest(Sessions, unittest.TestCase):
         self.machines(a, b)
         a.login('u-alice-0002')
         aid, acct = self.aid, Device.ACCT
-        (a.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO, 'presence': False}))
+        (a.cca / 'config.json').write_text(json.dumps({'presence': False}))
         self.assertEqual(a.keyset(K1), '', '关掉了设备统计：不说会同步')
         self.assertFalse((a.cca / 'presence').exists(), '也不建 presence 目录')
         self.assertIsNone(a.sync())
         a.config(lambda c: c.pop('presence'))
         # bob-mini 的是旧版本记下的：key_hints 里没有时间，按密钥文件的修改时间算（比 alice-mbp 记下的早）
-        (b.cca / 'config.json').write_text(json.dumps({'policy': SHARED_REPO, 'presence': False}))   # 记的时候不经设备统计（keys.json 里没有它）
+        (b.cca / 'config.json').write_text(json.dumps({'presence': False}))   # 记的时候不经设备统计（keys.json 里没有它）
         b.keyset(K2)
         b.config(lambda c: (c.pop('presence'), c['key_hints'][acct].pop('at')))
         self.assertFalse((b.cca / 'presence').exists())
@@ -1603,7 +1664,7 @@ class ClientTest(Sessions, unittest.TestCase):
         # 上报进程：同步 API key 时出错退出的那种（config.json 读不了）也接着报
         (a.cca / 'config.json').write_text('{oops')
         j = a.keys_json()
-        (a.cca / 'presence' / 'keys.json').write_text(json.dumps(dict(j, synced=j['synced'] - 3600)))   # 上次同步是一小时以前的事：这一圈该同步了
+        (a.cca / 'presence' / (self.lane + 'keys.json')).write_text(json.dumps(dict(j, synced=j['synced'] - 3600)))   # 上次同步是一小时以前的事：这一圈该同步了
         self.session(a)
         self.agent(a)
         [r] = wait_for('照常上报', lambda: a.sent('report'))
@@ -1616,7 +1677,8 @@ class ClientTest(Sessions, unittest.TestCase):
         self.machines(dev)
         dev.login('u-alice-0004')
         dev.keyset(self.K1)
-        held = open(dev.cca / 'presence' / 'keys-sync.lock', 'a')
+        lock = dev.cca / 'presence' / (self.lane + 'keys-sync.lock')
+        held = open(lock, 'a')
         fcntl.flock(held, fcntl.LOCK_EX)
         release = threading.Timer(0.6, held.close)
         release.start()
@@ -1628,8 +1690,8 @@ class ClientTest(Sessions, unittest.TestCase):
         self.assertEqual([sorted(set(r) & {'get', 'put'}) for r in dev.sent()], [['get'], ['put']], '放锁以后照常同步：问一次，传上去')
         # 上次同步是一小时以前的事（到时候了）：不是 force 的碰上正在跑的一轮就走
         j = dev.keys_json()
-        (dev.cca / 'presence' / 'keys.json').write_text(json.dumps(dict(j, synced=j['synced'] - 3600)))
-        held = open(dev.cca / 'presence' / 'keys-sync.lock', 'a')
+        (dev.cca / 'presence' / (self.lane + 'keys.json')).write_text(json.dumps(dict(j, synced=j['synced'] - 3600)))
+        held = open(lock, 'a')
         fcntl.flock(held, fcntl.LOCK_EX)
         try:
             t0 = time.monotonic()
@@ -1640,38 +1702,19 @@ class ClientTest(Sessions, unittest.TestCase):
             held.close()
         self.assertEqual(dev.sync(''), '', '没有别的在跑：到时候了就同步')
 
-    def test_keyshare_old_server(self):
-        """旧的服务器（还不收 key：404）：记下原因（维护者要更新服务器），6 小时后再试；cca devices、App 说一句"""
-        dev = self.dev
-        self.machines(dev)
-        dev.login('u-alice-0003')
-        (dev.home / 'reply').mkdir()
-        (dev.home / 'reply' / 'keys').write_text('404\n{"error": "not_found"}\n')
-        dev.keyset(self.K1)
-        err = dev.sync()
-        self.assertIn('./policy.sh presence deploy', err)
-        j = dev.keys_json()
-        self.assertTrue(j['retry'] - time.time() > 5 * 3600 and j['error'] == err, j)
-        (dev.cca / 'presence' / 'keys.json').write_text(json.dumps(dict(j, synced=j['synced'] - 3600)))   # 上次同步是一小时以前的事（平时该再同步了）
-        self.assertIsNone(dev.sync(''), '不 force：6 小时内不再试')
-        self.assertEqual([r['op'] for r in dev.sent()], ['keys'])
-        self.assertIn('  记下的 API key 最近一次没同步成：' + err, self.view(dev)[0].splitlines(), 'cca devices 说一句')
-        # App：会同步的账号的 api_key.sync_error 是它，不同步的账号不说（cli/src/cmd/gui.rs 的单元测试 api_key_like_python_test）
-        self.assertEqual((dev.ok('key-share', self.key).strip(), dev.ok('key-share', 'bob@example.com')), ('1', ''))
-
     # 折合金额：各台设备算自己的，经服务器交换密文
     def slots(self, aid):
         return json.loads((self.d / 'cost-slots.json').read_text())['acc'].get(aid, {})
 
     def test_cost_sync(self):
         """alice-mbp、bob-mini 登录着 alice，carol-air 没有：两台互相取到对方的，服务器上只有密文；伪造的、重放的不认；
-        没变的不重传、不重取；撤销的设备留着、标上；用过却没传过的设备说一声"""
+        没变的不重传、不重取；移除的设备留着、标上；用过却没传过的设备说一声"""
         a = self.dev
         b = self.device('bob-mini', 'u-alice-0005')
         c = self.device('carol-air', None)
         self.machines(a, b, c)
         a.login('u-alice-0005')
-        aid = self.aid
+        aid, lane, slot = self.aid, self.lane, 'claude:alice@example.com'
         hour = int(time.time() // 3600 * 3600) - 3600
         a.cost_local('u-alice-0005', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]})
         b.cost_local('u-alice-0005', {str(hour - 86400): [3000000, 1, 50, 5, 0, 0, 0]})
@@ -1684,7 +1727,7 @@ class ClientTest(Sessions, unittest.TestCase):
         fa = a.fp
         self.assertEqual(list(self.slots(aid)), [fa])
         self.assertEqual(b.cost_sync()['state'], 'ok')
-        rb = b.cost('remote.json')['acc']['claude:alice@example.com']
+        rb = b.cost(lane + 'remote.json')['acc'][slot]
         self.assertEqual([(e['name'], e['h'], e['revoked']) for e in rb.values()], [('alice-mbp', {str(hour): [5000000, 2, 100, 10, 0, 0, 0]}, False)],
                          'bob-mini 取到了 alice-mbp 的')
         self.assertEqual(c.cost_sync()['state'], 'skipped', 'carol-air 没登录 alice（解不开）：不问也不传')
@@ -1696,62 +1739,40 @@ class ClientTest(Sessions, unittest.TestCase):
         posts = a.sent()[n:]
         self.assertEqual((len(posts), 'put' in posts[0]), (1, False), '这台设备的没变：只问，不传')
         self.assertEqual(self.slots(aid)[fa]['at'], at_a)
-        ra = a.cost('remote.json')['acc']['claude:alice@example.com']
+        ra = a.cost(lane + 'remote.json')['acc'][slot]
         self.assertEqual([e['name'] for e in ra.values()], ['bob-mini'])
         n = len(a.sent())
         self.assertEqual(a.cost_sync()['state'], 'ok')
         posts = a.sent()[n:]
         self.assertEqual(list(posts[0]['have'][aid].values()).count(None), 0)
         self.assertEqual(len(posts[0]['have'][aid]), 2, '带着已经有的认证码（自己的、bob-mini 的）：没变的服务器不回密文')
-        [v] = a.cost_view([('claude', self.key, None, True, True)])['accounts']
+        [v] = a.cost_view(self.tid, [('claude', self.key, None, self.tid, True)])['accounts']
         self.assertEqual((v['summary']['days_usd'], [d['name'] for d in v['devices']], v['sync']['state']), (8.0, ['alice-mbp', 'bob-mini'], 'ok'),
                          'App 看到的：两台设备加起来')
-        # carol-air 在设备清单里，在自己的那一份里放伪造的、重放 alice-mbp 的：认证里带着设备指纹，都不认
+        # carol-air 在名单里，在自己的那一份里放伪造的、重放 alice-mbp 的：认证里带着设备指纹，都不认
         fake = sw.cost_seal(sw.derive(sw.COST, self.salt, 'claude', 'alice@example.com', 'u-wrong'), aid, c.fp,
                             {'v': 1, 'at': time.time(), 'h': {str(hour): [10 ** 9, 1, 0, 0, 0, 0, 0]}, 'um': []})
         for bad in (fake, self.slots(aid)[fa]['blob']):
             self.assertEqual(c.post(self.srv.port, 'ledger', {'put': {aid: bad}})[0], 200)
             self.assertEqual(a.cost_sync()['state'], 'ok')
-            ra = a.cost('remote.json')['acc']['claude:alice@example.com']
+            ra = a.cost(lane + 'remote.json')['acc'][slot]
             self.assertEqual([e['name'] for e in ra.values()], ['bob-mini'], '伪造的、重放的都不认')
-        # 撤销 bob-mini：它传的留着、标上；dan（用过 alice、没传过）
+        # 移除 bob-mini：它传的留着、标上；dan（用过 alice、没传过）
         d = self.device('dan-air', 'u-alice-0005')
         self.machines(a, c, d)
         self.assertEqual(d.post(self.srv.port, 'report', {'units': {aid: {'cli': [[60, 0]], 'app': None}}, 'end': None})[0], 200)
         self.assertEqual(a.cost_sync()['state'], 'ok')
-        ra = a.cost('remote.json')['acc']['claude:alice@example.com']
+        ra = a.cost(lane + 'remote.json')['acc'][slot]
         self.assertEqual([(e['name'], e['revoked']) for e in ra.values()], [('bob-mini', True)])
-        sync = a.cost('sync.json')
-        self.assertEqual([m['name'] for m in sync['acc']['claude:alice@example.com']['missing']], ['dan-air'])
-        [v] = a.cost_view([('claude', self.key, None, True, True)])['accounts']
+        sync = a.cost(lane + 'sync.json')
+        self.assertEqual([m['name'] for m in sync['acc'][slot]['missing']], ['dan-air'])
+        [v] = a.cost_view(self.tid, [('claude', self.key, None, self.tid, True)])['accounts']
         self.assertEqual(([(x['name'], x['revoked']) for x in v['devices']], [m['name'] for m in v['sync']['missing']]),
                          ([('alice-mbp', False), ('bob-mini', True)], ['dan-air']))
         for f in ('remote.json', 'sync.json'):
-            self.assertEqual(oct(os.stat(a.cca / 'cost' / f).st_mode & 0o777), '0o600', f)
-
-    def test_cost_old_server(self):
-        """旧的服务器（没有 /v1/ledger：404，body 太大时先回 413）：记下原因，6 小时后再试；App 说要维护者更新服务器"""
-        dev = self.dev
-        dev.login('u-alice-0006')
-        (dev.home / 'reply').mkdir()
-        for code in (404, 413):
-            (dev.home / 'reply' / 'ledger').write_text('%d\n{"error": "not_found"}\n' % code)
-            (dev.cca / 'cost' / 'sync.json').unlink(missing_ok=True)
-            n = len(dev.sent())
-            r = dev.cost_sync()
-            self.assertEqual((r['state'], r['message']), ('old_server', COST_OLD), code)
-            self.assertIn('./policy.sh presence deploy', r['message'])
-            j = dev.cost('sync.json')
-            self.assertTrue(j['retry'] - time.time() > 5 * 3600, j)
-            self.assertEqual(dev.cost_sync(force=False)['state'], 'waiting', '不 force：6 小时内不再试')
-            self.assertEqual([x['op'] for x in dev.sent()[n:]], ['ledger'])
-        n = len(dev.sent())
-        (dev.cca / 'cost' / 'sync.json').write_text(json.dumps({'v': 1, 'at': time.time() + 3 * 86400, 'retry': time.time() + 30 * 86400,
-                                                                'state': 'old_server', 'error': COST_OLD}))
-        dev.cost_sync(force=False)
-        self.assertEqual([x['op'] for x in dev.sent()[n:]], ['ledger'], '记下的时间在未来（这台设备的时钟快过、又调回来了）：不当真，照常同步')
-        [s] = dev.cost_view(sync=[('claude:alice@example.com', True, True)])['sync']
-        self.assertEqual(s['state'], 'old_server')
+            self.assertEqual(oct(os.stat(a.cca / 'cost' / (lane + f)).st_mode & 0o777), '0o600', f)
+        for f in ('remote.json', 'sync.json'):
+            self.assertFalse((a.cca / 'cost' / f).exists(), '没有别的服务器的那一份（不带前缀的）')
 
 
 class VerifyTest(unittest.TestCase):

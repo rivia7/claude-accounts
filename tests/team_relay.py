@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """每个 Team 的会话走这个 Team 自己的服务器中转（docs/dev/remote.md「每个 Team 各用各的中转服务器」）。
 
-两台真的服务器进程：维护者的那一台（旧的通道，tests/remote_relay.py 的 Base 起的）和一个 Team 的同步服务器（--mode team，开着中转）；
-两台设备都在这个 Team 里、也都在维护者的设备清单里，跑的是 cca 的辅助程序。box 上三个会话：Team 给的账号的、这台设备自己的账号的
-（走这台机器的「家」：加入的第一个 Team）、只在维护者映射里的账号的（走维护者的那一台）。看：配对记在哪台服务器上、经它看得到的是走
-那台服务器的会话；没说在哪台上配对时在家里那一台上配；输入配对码的那一头自己找得到是哪台。不联网。"""
+两台真的服务器进程，各是一个 Team 的同步服务器、都开着中转：「研发组」的（管理员是一台真的 cca：建 Team、接上服务器、发邀请，设备拿
+邀请加入）和「测试组」的（tests/remote_relay.py 的 Base 起的：设备直接写好加入了的样子；它的数据端口前面隔着转发器，经过的字节都记下来）。
+两台设备先加入研发组、再加入测试组，跑的是 cca 的辅助程序。box 上三个会话：研发组给的账号的（alice）、这台设备自己的账号的（dave：
+走这台机器的「家」，加入的第一个 Team 的那一台）、测试组给的账号的（bob：走测试组的那一台）。看：配对记在哪台服务器上、经它看得到的
+是走那台服务器的会话；没说在哪台上配对时在家里那一台上配；输入配对码的那一头自己找得到是哪台。不联网。"""
 import json
 from pathlib import Path
 import subprocess
@@ -16,20 +17,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from presence import SERVER, Device, make_cert, openssl_pin, wait_for   # noqa: E402
 import remote_relay as rr   # noqa: E402
 
-POLICY = {'version': 1, 'claude': {'alice@example.com': 'US-A'}, 'aliases': {'alice@example.com': 'alice'}}
-NODE = lambda name: {'name': name, 'type': 'socks5', 'server': '192.0.2.10', 'port': 1080 + ord(name[-1])}
-NODES = {'version': 1, 'group': 'OpenAi', 'proxies': [NODE('US-A'), NODE('US-B')]}
-TEAM_KEY, OWN_KEY, OLD_KEY = 'alice(alice@example.com)', 'mine(dave@example.com)', 'old(bob@example.com)'
+TEAM_KEY, OWN_KEY, OTHER_KEY = 'alice(alice@example.com)', 'mine(dave@example.com)', 'other(bob@example.com)'
 
 
 class TeamServer:
-    """一个 Team 的同步服务器（--mode team），开着中转"""
+    """「研发组」的同步服务器（自己的目录、证书），开着中转"""
     def __init__(self, d, root):
         d.mkdir()
         make_cert(d)
         self.d = d
         args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'), '--cert', str(d / 'cert.pem'),
-                '--key', str(d / 'key.pem'), '--mode', 'team', '--team-root', root, '--state', str(d / 'state.json'), '--ttl', '60',
+                '--key', str(d / 'key.pem'), '--team-root', root, '--state', str(d / 'state.json'), '--ttl', '60',
                 '--idle', '600', '--relay-listen', '127.0.0.1:0', '--relay-port-file', str(d / 'rport')]
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
@@ -57,36 +55,32 @@ class TeamRelayTest(rr.Base):
         return dev.ok(*argv, **kw).split('\n')[:-1]
 
     def member(self, name, admin, tid):
-        """一台在维护者的设备清单里、也加入了 Team 的设备：账号表里一个 Team 给的账号（alice，维护者的映射里也有：Team 的算数）、
-        一个这台设备自己的（dave）、一个只在维护者映射里的（bob）"""
-        dev = self.device(name)
+        """一台设备：先拿邀请加入研发组（它给 alice），再加入测试组（它给 bob）；账号表里还有一个这台设备自己的（dave）"""
+        dev = self.device(name, join=False)
         table = json.loads((dev.cca / 'accounts.json').read_text())
-        table[OWN_KEY], table[OLD_KEY] = 'US-B', 'US-A'
+        table[OWN_KEY], table[OTHER_KEY] = 'US-B', 'US-A'
         (dev.cca / 'accounts.json').write_text(json.dumps(table))
-        pol = json.loads((dev.cca / 'policy' / 'policy.json').read_text())
-        pol['claude']['bob@example.com'] = 'US-A'
-        (dev.cca / 'policy' / 'policy.json').write_text(json.dumps(pol))
         dev.config(lambda c: c.update(nodes=['US-A', 'US-B']))
         link, _, problem = self.lines(admin, 'team-invite', tid, name, '--accounts', 'claude:alice@example.com')
         self.assertEqual(problem, '')
         self.assertEqual(self.lines(dev, 'team-join', '--name', name, stdin=link)[5:], ['ok', '1'])
+        dev.join(self.team, self.url(), [self.pin], doc=self.team.doc(self.url(), [self.pin], accounts={'claude': {'bob@example.com': 'US-A'}}))
         r = dev.run('team-apply')
         self.assertEqual((r.returncode, r.stdout), (0, ''), r.stderr)
-        self.assertEqual(sorted(json.loads((dev.cca / 'accounts.json').read_text())), sorted([TEAM_KEY, OWN_KEY, OLD_KEY]))
+        self.assertEqual(sorted(json.loads((dev.cca / 'accounts.json').read_text())), sorted([TEAM_KEY, OWN_KEY, OTHER_KEY]))
         return dev
 
     def setUp(self):
         super().setUp()
         admin = self.admin = Device(self.d / 'admin', 'admin', {})
         self.tid, root, _ = self.lines(admin, 'team-new', '研发组', '--device', 'studio')
-        self.team = TeamServer(self.d / 'team-srv', root)
-        self.addCleanup(self.team.stop)
-        self.lines(admin, 'team-attach', self.tid, self.team.url, self.team.pin)
-        (self.d / 'policy.json').write_text(json.dumps(POLICY))
-        (self.d / 'nodes.json').write_text(json.dumps(NODES))
-        self.lines(admin, 'team-import', self.tid, str(self.d / 'policy.json'), str(self.d / 'nodes.json'))
+        self.rsrv = TeamServer(self.d / 'team-srv', root)
+        self.addCleanup(self.rsrv.stop)
+        self.lines(admin, 'team-attach', self.tid, self.rsrv.url, self.rsrv.pin)
+        self.lines(admin, 'team-map', self.tid, 'claude', 'alice@example.com', 'US-A')
+        self.lines(admin, 'team-alias', self.tid, 'alice@example.com', 'alice')
         self.a, self.b = self.member('box', admin, self.tid), self.member('laptop', admin, self.tid)
-        self.machines(self.a, self.b)
+        self.machines(self.a, self.b)   # 登记到测试组的服务器上
 
     def session(self, dev, key, name):
         h = rr.Term([rr.HELPER, 'remote-host', 'claude', key, name, '--', sys.executable, str(dev.home / 'client.py'), name], dev.env, str(dev.work))
@@ -121,40 +115,40 @@ class TeamRelayTest(rr.Base):
         return json.loads(r.stdout)
 
     def test_each_teams_sessions_go_through_its_own_server(self):
-        a, b, tid = self.a, self.b, self.tid
-        # 用得了两台：没说在哪台上配对时用的那一台（家）是加入的 Team 的
-        self.assertEqual(self.lines(a, 'remote-hubs'), ['%s\t「研发组」的服务器\thome' % tid, 'maintainer\t维护者的服务器'])
-        ha, ho, hm = self.session(a, TEAM_KEY, 'alice'), self.session(a, OWN_KEY, 'mine'), self.session(a, OLD_KEY, 'old')
+        a, b, tid, other = self.a, self.b, self.tid, self.team.id
+        # 用得了两台：没说在哪台上配对时用的那一台（家）是先加入的那个 Team 的
+        self.assertEqual(self.lines(a, 'remote-hubs'), ['%s\t「研发组」的服务器\thome' % tid, '%s\t「测试组」的服务器' % other])
+        ha, ho, hm = self.session(a, TEAM_KEY, 'alice'), self.session(a, OWN_KEY, 'mine'), self.session(a, OTHER_KEY, 'other')
         self.assertEqual(a.run('remote-pair-show', '--hub', '没有这个组').returncode, 1)
-        self.assertEqual((self.team.edges(), self.edges()), ({}, {}))
+        self.assertEqual((self.rsrv.edges(), self.edges()), ({}, {}))
 
-        # 没说在哪台上配对：在家里那一台（Team 的服务器）上配，记在它上面，维护者的那一台不知道；输入配对码的那一头没说在哪台，自己找到了
+        # 没说在哪台上配对：在家里那一台（研发组的服务器）上配，记在它上面，测试组的那一台不知道；输入配对码的那一头没说在哪台，自己找到了
         team_pid = self.pair(a, b)
-        self.assertEqual((list(self.team.edges()), self.edges()), ([team_pid], {}))
+        self.assertEqual((list(self.rsrv.edges()), self.edges()), ([team_pid], {}))
         for dev, shown in ((a, True), (b, False)):
             row = rr.ClientTest.peers(dev)[team_pid]
             self.assertEqual((row['hub'], row['shown']), (tid, shown))
         self.assertIn('经「研发组」的服务器', a.ok('remote-peers'))
-        # 经它看得到的：这个 Team 给的账号的会话，和这台设备自己的账号的会话（走家里那一台）；只在维护者映射里的账号的会话走维护者的
-        # 那一台，那边还没配对：看不到
+        # 经它看得到的：研发组给的账号的会话，和这台设备自己的账号的会话（走家里那一台）；测试组给的账号的会话走测试组的那一台，
+        # 那边还没配对：看不到
         doc = wait_for('laptop 看到会话', lambda: (lambda d: d if len(d['sessions']) == 2 else None)(self.far(b)))
         self.assertEqual(sorted((s['name'], s['peer']) for s in doc['sessions']), [('alice', team_pid), ('mine', team_pid)])
         self.assertEqual([(p['id'], p['team'], p['state']) for p in doc['peers']], [(team_pid, tid, 'ok')])
-        self.assertEqual(doc['relay']['hubs'], [{'team': tid, 'name': '「研发组」的服务器'}, {'team': None, 'name': '维护者的服务器'}])
+        self.assertEqual(doc['relay']['hubs'], [{'team': tid, 'name': '「研发组」的服务器'}, {'team': other, 'name': '「测试组」的服务器'}])
         self.assertEqual(doc['errors'], [])
-        # 在 Team 的服务器上配对，名字、编号都认
-        self.assertEqual(len(self.team.edges()), 1)
+        # 在研发组的服务器上配对，名字、编号都认
+        self.assertEqual(len(self.rsrv.edges()), 1)
 
-        # 再在维护者的那一台上配一次（同两台设备，各记各的、各有一把密钥）：这才看得到维护者映射里的那个会话，走的是维护者的服务器
-        old_pid = self.pair(a, b, '--hub', 'maintainer', join_hub=('--hub', 'maintainer'))
-        self.assertEqual((list(self.team.edges()), list(self.edges())), ([team_pid], [old_pid]))
-        self.assertNotIn('hub', rr.ClientTest.peers(b)[old_pid], '记在维护者那一台上的不写这一项（和以前的配对表一样）')
-        self.assertNotEqual(rr.ClientTest.secret(b, team_pid), rr.ClientTest.secret(b, old_pid))
+        # 再在测试组的那一台上配一次（同两台设备，各记各的、各有一把密钥）：这才看得到测试组给的那个账号的会话，走的是测试组的服务器
+        other_pid = self.pair(a, b, '--hub', '测试组', join_hub=('--hub', other))
+        self.assertEqual((list(self.rsrv.edges()), list(self.edges())), ([team_pid], [other_pid]))
+        self.assertEqual(rr.ClientTest.peers(b)[other_pid]['hub'], other, '配对表里记着是哪个 Team 的服务器')
+        self.assertNotEqual(rr.ClientTest.secret(b, team_pid), rr.ClientTest.secret(b, other_pid))
         doc = wait_for('laptop 看到三个会话', lambda: (lambda d: d if len(d['sessions']) == 3 else None)(self.far(b)))
-        self.assertEqual(sorted((s['name'], s['peer']) for s in doc['sessions']), [('alice', team_pid), ('mine', team_pid), ('old', old_pid)])
-        self.assertEqual(sorted((p['id'], p['team']) for p in doc['peers']), sorted([(team_pid, tid), (old_pid, None)]))
+        self.assertEqual(sorted((s['name'], s['peer']) for s in doc['sessions']), [('alice', team_pid), ('mine', team_pid), ('other', other_pid)])
+        self.assertEqual(sorted((p['id'], p['team']) for p in doc['peers']), sorted([(team_pid, tid), (other_pid, other)]))
 
-        # 接入 Team 的那个会话：经 Team 的服务器握手、收发（维护者那一台的转发器上一个字节都没有经过它的内容）
+        # 接入研发组的那个会话：经研发组的服务器握手、收发（测试组那一台的转发器上一个字节都没有经过它的内容）
         sid = next(s['id'] for s in doc['sessions'] if s['name'] == 'alice')
         seen = len(self.sniff.snapshot())
         t = rr.Term([rr.HELPER, 'remote-attach', sid[:10]], b.env, str(b.work))
@@ -164,17 +158,17 @@ class TeamRelayTest(rr.Base):
         t.expect('<via the team server>')
         ha.expect('<via the team server>')
         self.assertNotIn(b'via the team server', ho.out + hm.out)
-        self.assertEqual(len(self.sniff.snapshot()), seen, '这个会话的数据不经维护者的服务器')
+        self.assertEqual(len(self.sniff.snapshot()), seen, '这个会话的数据不经测试组的服务器')
 
-        # 取消 Team 上的那个配对：告诉的是 Team 的服务器，维护者那一台上的照旧
+        # 取消研发组上的那个配对：告诉的是研发组的服务器，测试组那一台上的照旧
         self.assertEqual(self.lines(b, 'remote-unpair', team_pid[:8]), ['box'])
-        self.assertEqual((self.team.edges(), list(self.edges())), ({}, [old_pid]))
-        doc = wait_for('只剩维护者那一台上的', lambda: (lambda d: d if [s['name'] for s in d['sessions']] == ['old'] else None)(self.far(b)))
-        self.assertEqual([(p['id'], p['team']) for p in doc['peers']], [(old_pid, None)])
+        self.assertEqual((self.rsrv.edges(), list(self.edges())), ({}, [other_pid]))
+        doc = wait_for('只剩测试组那一台上的', lambda: (lambda d: d if [s['name'] for s in d['sessions']] == ['other'] else None)(self.far(b)))
+        self.assertEqual([(p['id'], p['team']) for p in doc['peers']], [(other_pid, other)])
 
 
 class ShellTest(TeamRelayTest):
-    """bash 这一层（真的 cca 脚本）：cca remote pair --team 名字 / --maintainer，cca remote join 自己找到是哪台服务器"""
+    """bash 这一层（真的 cca 脚本）：cca remote pair --team 名字，cca remote join 自己找到是哪台服务器"""
     env, answers, cca = rr.ShellTest.env, rr.ShellTest.answers, rr.ShellTest.cca
     test_each_teams_sessions_go_through_its_own_server = None   # 上面那一类的用例不在这里再跑一遍
 
@@ -195,40 +189,40 @@ class ShellTest(TeamRelayTest):
     def test_terminal(self):
         a, b, tid = self.a, self.b, self.tid
         self.n = 0
-        for bad in (('--team',), ('--team', '研发组', '--maintainer'), ('--nope',)):
+        for bad in (('--team',), ('--nope',)):
             rc, out, err = self.cca(a, 'remote', 'pair', *bad)
             self.assertEqual((rc, out), (1, ''), bad)
-            self.assertIn('用法：cca remote pair [--web] [--team 名字 | --maintainer]', err)
+            self.assertIn('用法：cca remote pair [--web] [--team 名字', err)
         self.assertEqual(self.cca(b, 'remote', 'join', '--web')[0], 1)
-        # 用得了两台、没说在哪台上：在家里那一台（加入的 Team 的）上配，问之前说清楚记在哪台上、对方看得到的是哪些会话、
+        # 用得了两台、没说在哪台上：在家里那一台（先加入的研发组的）上配，问之前说清楚记在哪台上、对方看得到的是哪些会话、
         # 要在别的上面配怎么写；另一台输入时不用说在哪台
         p, code, seen = self.shown(a)
         self.assertIn('这次配对记在「研发组」的服务器上：对方经它看得到的，是走这台服务器的会话', seen)
-        self.assertIn('要在别的服务器上配对：--team 名字，或者 --maintainer', seen)
+        self.assertIn('要在别的服务器上配对：--team 名字', seen)
         rc, out, err = self.cca(b, 'remote', 'join', answers=[code])
         self.assertEqual((rc, out), (0, ''), err)
         self.assertIn('已经和「box」配对', err)
         self.assertEqual(p.wait(60), 0, p.stderr.read())
-        (team_pid,) = self.team.edges()
+        (team_pid,) = self.rsrv.edges()
         self.assertEqual((rr.ClientTest.peers(b)[team_pid]['hub'], self.edges()), (tid, {}))
-        # 写明了在 Team 的服务器上（名字）：不再说要在别的上面配怎么写
+        # 写明了在研发组的服务器上（名字）：不再说要在别的上面配怎么写
         p, code, seen = self.shown(a, '--team', '研发组')
         self.assertIn('这次配对记在「研发组」的服务器上', seen)
         self.assertNotIn('要在别的服务器上配对', seen)
         p.terminate()   # 不配了：cca 退出时停掉后台的辅助程序（SIGKILL 的话 EXIT 的 trap 不跑，它会一直等着）
         self.assertEqual(p.wait(30), 130)
-        # 维护者的那一台：写编号以外的另一种说法；输入的那一头指定了 Team 的话，在 Team 的服务器上找不到这个配对码
-        p, code, seen = self.shown(a, '--maintainer')
-        self.assertIn('这次配对记在维护者的服务器上', seen)
+        # 测试组的那一台：输入的那一头指定了研发组（写编号）的话，在研发组的服务器上找不到这个配对码
+        p, code, seen = self.shown(a, '--team', '测试组')
+        self.assertIn('这次配对记在「测试组」的服务器上', seen)
         rc, out, err = self.cca(b, 'remote', 'join', '--team', tid, answers=[code])
         self.assertEqual((rc, out), (1, ''))
         self.assertIn('没有这个配对码', err)
-        rc, out, err = self.cca(b, 'remote', 'join', '--maintainer', answers=[code])
+        rc, out, err = self.cca(b, 'remote', 'join', '--team', '测试组', answers=[code])
         self.assertEqual((rc, out), (0, ''), err)
         self.assertEqual(p.wait(60), 0, p.stderr.read())
-        self.assertEqual((len(self.edges()), list(self.team.edges())), (1, [team_pid]))
+        self.assertEqual((len(self.edges()), list(self.rsrv.edges())), (1, [team_pid]))
         rc, out, err = self.cca(b, 'remote', 'peers')
-        self.assertEqual(sorted('经「研发组」的服务器' in line for line in out.splitlines()), [False, True])
+        self.assertEqual(sorted(line.rsplit('  ', 1)[-1] for line in out.splitlines()), ['经「测试组」的服务器', '经「研发组」的服务器'])
 
 
 class NoRelayTest(rr.Base):
@@ -241,15 +235,13 @@ class NoRelayTest(rr.Base):
         d.mkdir()
         make_cert(d)
         args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:0', '--port-file', str(d / 'port'), '--cert', str(d / 'cert.pem'),
-                '--key', str(d / 'key.pem'), '--mode', 'team', '--team-root', root, '--state', str(d / 'state.json')]
+                '--key', str(d / 'key.pem'), '--team-root', root, '--state', str(d / 'state.json')]
         proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: (proc.kill(), proc.wait()))
         port = int(wait_for('Team 的服务器起来', lambda: (d / 'port').exists() and (d / 'port').read_text()))
         admin.ok('team-attach', tid, 'https://127.0.0.1:%d' % port, openssl_pin(d / 'cert.pem'))
-        (self.d / 'policy.json').write_text(json.dumps(POLICY))
-        (self.d / 'nodes.json').write_text(json.dumps(NODES))
-        admin.ok('team-import', tid, str(self.d / 'policy.json'), str(self.d / 'nodes.json'))
-        dev = self.device('box')
+        admin.ok('team-map', tid, 'claude', 'alice@example.com', 'US-A')
+        dev = self.device('box')   # 在测试组里（它的服务器开着中转）
         dev.config(lambda c: c.update(nodes=['US-A', 'US-B']))
         link = admin.ok('team-invite', tid, 'box', '--accounts', 'claude:alice@example.com').split('\n')[0]
         dev.ok('team-join', '--name', 'box', stdin=link)
@@ -257,8 +249,8 @@ class NoRelayTest(rr.Base):
         r = dev.run('remote-pair-show', '--hub', tid)
         self.assertEqual((r.returncode, r.stdout), (1, ''))
         self.assertIn('「研发组」的服务器还没开远程会话的中转（管理员要重新部署、把中转打开：cca team deploy）', r.stderr)
-        # 维护者的那一台照常配得了
-        p = subprocess.Popen([rr.HELPER, 'remote-pair-show', '--hub', 'maintainer'], env=dev.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        # 测试组的那一台照常配得了
+        p = subprocess.Popen([rr.HELPER, 'remote-pair-show', '--hub', self.team.id], env=dev.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: (p.kill(), p.wait(), p.stdout.close(), p.stderr.close()))
         self.assertRegex(p.stdout.readline(), r'^code [0-9A-Z]{4}(-[0-9A-Z]{4}){3}$')

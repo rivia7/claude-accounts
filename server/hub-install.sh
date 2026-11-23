@@ -50,7 +50,7 @@ DEF_PORT=18445
 ASVC=cca-team-acme
 AD=/opt/$ASVC
 AMODE="" AIMG=""           # 证书助手怎么运行、用哪个镜像（acme_mode）
-# 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub）。和 policy.sh 部署设备统计的服务器时的一样
+# 官方的 python 镜像：上次用的那个，再依次试官方镜像的几个同步源（国内常常连不上 Docker Hub），最后是 Docker Hub 上的
 IMAGES="public.ecr.aws/docker/library/python:3.13-slim mirror.ccs.tencentyun.com/library/python:3.13-slim docker.m.daocloud.io/library/python:3.13-slim python:3.13-slim"
 # cca team deploy 经 SSH 运行时（上面那一行放进了 CCA_HUB_MANAGED=1、根公钥和参数）：进度写 stderr，结果一行一项（CCA-HUB 键 值）写 stdout
 MANAGED=${CCA_HUB_MANAGED:-}

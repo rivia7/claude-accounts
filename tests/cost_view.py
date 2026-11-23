@@ -39,10 +39,9 @@ M = 1000000   # 一美元 = 这么多个百万分之一美元
 WEEK = 7 * 86400
 # cli/src/cmd/cost.rs 的同名常量
 COST_PRICES_DATE = '2026-11-13'
-COST_OLD = '维护者的设备统计服务器还不支持同步折合金额（维护者要更新服务器：./policy.sh presence deploy）'
 COST_PUBLISH = 14 * WEEK   # 传给别的设备的留这么久
 
-# 假的设备统计服务器（curl）：请求（签过名的 JSON）一个一个记进 ~/sent/，照 ~/server/get、~/server/put 里准备好的回（没有就是连不上）
+# 假的 Team 的同步服务器（curl）：请求（签过名的 JSON）一个一个记进 ~/sent/，照 ~/server/get、~/server/put 里准备好的回（没有就是连不上）
 CURL = r'''mkdir -p "$HOME/sent"
 f="$HOME/sent/$(ls "$HOME/sent" | wc -l | tr -d ' ').json"
 cat > "$f"
@@ -73,9 +72,14 @@ def ident(email):
 
 
 def fake_pub(seed):
-    """一把编出来的 ed25519 公钥（32 个连着的字节）：只用来算设备指纹"""
+    """一把编出来的 ed25519 公钥（32 个连着的字节）：只用来算设备指纹、Team 的编号"""
     blob = b'\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20' + bytes(range(seed, seed + 32))
-    return 'ssh-ed25519 %s cca-policy@test\n' % base64.b64encode(blob).decode()
+    return 'ssh-ed25519 %s cca-team@test\n' % base64.b64encode(blob).decode()
+
+
+ROOT_PUB = ' '.join(fake_pub(200).split()[:2])   # 编出来的 Team 的根公钥
+TID = sw.team_id(ROOT_PUB)   # 那个 Team 的编号：它的服务器在设备上的状态文件是 cost/team.<编号>.remote.json 这些
+LANE = 'team.%s.' % TID
 
 
 def reply(ts, mid, sid='s1', model='claude-opus-5-5', inp=1000, out=100, **more):
@@ -492,7 +496,7 @@ class Scan(Base):
         self.write_all()
         doc = self.dev.sync('--now')
         self.assertEqual((doc['version'], doc['kind'], doc['scan']['state'], doc['scan']['records'], doc['sync']['state']),
-                         (1, 'cost_sync', 'ready', 9, 'skipped'), '没开设备统计：不同步')
+                         (1, 'cost_sync', 'ready', 9, 'skipped'), '不在哪个 Team 里（bob 是这台设备自己的账号）：不同步')
         # 另一个统计正在跑（拿着 cost.lock）：后台的那种（cost-worker）马上走，cca cost sync 等它跑完再统计。
         # 等满了还没结束是退出码 1（要等 4 分钟）：cli/src/cmd/cost.rs 的单元测试 lock_waits_then_gives_up、sync_failures_exit_1
         with open(self.proj / 's1.jsonl', 'a') as f:
@@ -583,10 +587,10 @@ class Periods(Base):
 
 class CostView:
     """辅助程序里的 CostView（_gui state 的 cost、cost_total 靠它），经只给测试用的 _cost-view 看：“现在”是给定的。
-    c 是 config.json 里它看的那两项，cfg 是设备统计的配置（None：没开）。每问一次都照 cost/ 里现在的文件现算"""
-    def __init__(self, dev, c, now, cfg):
+    c 是 config.json 里它看的那两项，team 是同步经的那个 Team 的编号（None：这台设备不在 Team 里）。每问一次都照 cost/ 里现在的文件现算"""
+    def __init__(self, dev, c, now, team):
         self.dev, self.now = dev, now
-        self.spec = {'config': c, 'presence': cfg, 'accounts': [], 'sync': [], 'tools': []}
+        self.spec = {'config': c, 'team': team, 'accounts': [], 'sync': [], 'tools': []}
 
     def ask(self, **more):
         r = self.dev.run('_cost-view', repr(self.now), json.dumps(dict(self.spec, **more)))
@@ -594,8 +598,9 @@ class CostView:
             raise AssertionError('_cost-view 没成：退出码 %d，%s' % (r.returncode, r.stderr))
         return json.loads(r.stdout)
 
-    def account(self, tool, key, quota, mapped, logged_in):
-        self.spec['accounts'].append([tool, key, quota, mapped, logged_in])
+    def account(self, tool, key, quota, given, logged_in):
+        """given：谁给的账号——True 是这一份的那个 Team，也可以直接写 Team 的编号；False 是这台设备自己的"""
+        self.spec['accounts'].append([tool, key, quota, self.spec['team'] if given is True else given, logged_in])
         return self.ask()['accounts'][-1]
 
     def total(self, tools):
@@ -638,16 +643,15 @@ class View(Base):
         self.sync = {'v': 1, 'state': 'ok', 'at': now - 100, 'ok_at': now - 100, 'me': 'alice-mbp',
                      'acc': {'claude:alice@example.com': {'checked': now - 100, 'missing': [
                          {'name': 'dan-air', 'used_epoch': now - 3600}, {'name': 'old-air', 'used_epoch': now - 60 * 86400}]}}}
-        self.cfg = {'url': 'https://192.0.2.10:18443', 'pins': [], 'salt': '00' * 16, 'key': '/x', 'fp': 'SHA256:me'}
         self.write()
         (cost / 'scanned').write_text('')
 
     def write(self):
-        for name, doc in (('local.json', self.local), ('remote.json', self.remote), ('sync.json', self.sync)):
+        for name, doc in (('local.json', self.local), (LANE + 'remote.json', self.remote), (LANE + 'sync.json', self.sync)):
             (self.cca / 'cost' / name).write_text(json.dumps(doc))
 
-    def view(self, c=None, cfg='default'):
-        return CostView(self.dev, c or {'device_id': self.DV}, self.NOW, self.cfg if cfg == 'default' else cfg)
+    def view(self, c=None, team=TID):
+        return CostView(self.dev, c or {'device_id': self.DV}, self.NOW, team)
 
     def test_account(self):
         cv = self.view()
@@ -677,8 +681,8 @@ class View(Base):
         self.assertEqual(devs[1]['summary']['weeks_usd'], 3.0, 'bob-mini：现在的 2 + 撤销以前的 1（撤销以后的 9 不重复计）')
         self.assertEqual(sum(devs[0]['days_usd']), 15.0)
         self.assertEqual(len(devs[0]['weeks_usd']), 13)
-        self.assertEqual(a['sync'], {'state': 'ok', 'message': None, 'checked_epoch': self.NOW - 100, 'hub': 'maintainer',
-                                     'missing': [{'name': 'dan-air', 'used_epoch': self.NOW - 3600}]}, '30 天以前用过的不提；经维护者的服务器')
+        self.assertEqual(a['sync'], {'state': 'ok', 'message': None, 'checked_epoch': self.NOW - 100, 'hub': 'team',
+                                     'missing': [{'name': 'dan-air', 'used_epoch': self.NOW - 3600}]}, '30 天以前用过的不提；经 Team 的服务器')
         x = cv.account('codex', 'alice@example.com', None, True, True)
         self.assertEqual((x['summary']['weeks_usd'], [d['name'] for d in x['devices']]), (4.0, ['alice-mbp']), '工具分开')
         self.assertIsNone(cv.account('claude', 'bob@example.com', None, True, True), '没有记录：None')
@@ -745,8 +749,8 @@ class View(Base):
         devs = cv.total(['claude'])['devices']
         self.assertEqual([(d['name'], d['revoked'], d['stale'], d['days_usd']) for d in devs],
                          [('alice-mbp', False, False, 15.0), ('dave-mini', True, True, 6.0), ('bob-mini', False, False, 3.0), ('carol-air', False, True, 1.0)])
-        # 没开设备统计：只有这台设备；没有 device_id（还没同步过路由器、也没别处生成过）时 id 是 local
-        lo = self.view(c={'cost': True}, cfg=None)
+        # 不在 Team 里：只有这台设备；没有 device_id（还没同步过路由器、也没别处生成过）时 id 是 local
+        lo = self.view(c={'cost': True}, team=None)
         lo.account('claude', 'alice(alice@example.com)', None, True, True)
         self.assertEqual([(d['id'], d['me'], d['days_usd']) for d in lo.total(['claude'])['devices']], [('local', True, 15.0)])
 
@@ -768,21 +772,19 @@ class View(Base):
         self.assertEqual((devs[0]['summary']['weeks_usd'], devs[1]['summary']['weeks_usd'], a['summary']['weeks_usd']), (20.0, 3.0, 24.0),
                          '这台机器以前传的：只用这台有数据（10 月 1 日）以前的 4（11 月 13 日的 5 不重复计）；bob-mini 照旧是 2 + 撤销以前的 1')
 
-    def test_machine_across_hubs(self):
-        """同一台机器在两台服务器上（alice 经维护者的、bob 经一个 Team 的）：指纹不一样，dv 一样，设备菜单里是一台、两个账号的加在一起"""
-        tid = 'ab' * 16
+    def test_machine_across_accounts(self):
+        """同一台机器在两个账号里的指纹不一样（换过密钥；在两个 Team 里也是各用各的密钥）、dv 一样：设备菜单里是一台，两个账号的加在一起。
+        （_cost-view 一次只看一个 Team：两个 Team 的各算各的、按 dv 并成一台，走的是同一段）"""
         self.remote['acc']['claude:alice@example.com']['SHA256:bob']['dv'] = 'b0b0b0b0b0b0b0b0'
-        team = {'v': 1, 'acc': {'claude:bob@example.com': {'SHA256:bob-team': {
+        self.remote['acc']['claude:bob@example.com'] = {'SHA256:bob-new': {
             'h': {self.at(2026, 11, 12, 12): self.row(6)}, 'um': [], 'at': self.NOW - 600, 'name': 'bob-mini', 'revoked': False, 'tag': 't9',
-            'dv': 'b0b0b0b0b0b0b0b0'}}}}
-        (self.cca / 'cost' / ('team.%s.remote.json' % tid)).write_text(json.dumps(team))
+            'dv': 'b0b0b0b0b0b0b0b0'}}
         self.write()
         cv = self.view()
-        cv.spec['team'] = tid
         mine = cv.account('claude', 'alice(alice@example.com)', None, True, True)
-        theirs = cv.account('claude', 'bob(bob@example.com)', None, tid, True)
+        theirs = cv.account('claude', 'bob(bob@example.com)', None, TID, True)
         usd = lambda a, dv: [d['summary']['days_usd'] for d in a['devices'] if d['id'] == dv]
-        self.assertEqual((usd(mine, 'b0b0b0b0b0b0b0b0'), usd(theirs, 'b0b0b0b0b0b0b0b0')), ([3.0], [6.0]), '各账号里是那台机器经各自的服务器传的（alice 的还带着撤销了的旧 key 以前的 1）')
+        self.assertEqual((usd(mine, 'b0b0b0b0b0b0b0b0'), usd(theirs, 'b0b0b0b0b0b0b0b0')), ([3.0], [6.0]), '各账号里是那台机器各自传的（alice 的还带着移除了的旧 key 以前的 1）')
         t = cv.total(['claude'])
         self.assertEqual([(d['id'], d['name']) for d in t['devices']],
                          [(self.DV, 'alice-mbp'), ('b0b0b0b0b0b0b0b0', 'bob-mini'), ('SHA256:carol', 'carol-air')], '按机器归成一台')
@@ -857,18 +859,15 @@ class View(Base):
 
     def test_sync_states(self):
         C, k = 'claude', 'alice(alice@example.com)'
-        st = lambda cv, mapped=True, logged=True: cv.account(C, k, None, mapped, logged)['sync']
+        st = lambda cv, given=True, logged=True: cv.account(C, k, None, given, logged)['sync']
         self.assertEqual(st(self.view({'presence': False}))['state'], 'off')
-        lo = self.view(cfg=None)
+        lo = self.view(team=None)
         a = lo.account(C, k, None, True, True)
         self.assertEqual((a['sync']['state'], a['sync']['hub'], [d['name'] for d in a['devices']], a['devices'][0]['id']),
-                         ('local_only', None, [os.uname().nodename.split('.')[0]], self.DV), '没有设备统计：只有这台设备的（不经哪台服务器）')
-        self.assertEqual(st(self.view(), mapped=False)['state'], 'local_only', '不在映射里的账号')
+                         ('local_only', None, [os.uname().nodename.split('.')[0]], self.DV), '不在 Team 里：只有这台设备的（不经哪台服务器）')
+        self.assertEqual(st(self.view(), given=False)['state'], 'local_only', '这台设备自己的账号（Team 没给的）')
+        self.assertEqual(st(self.view(), given='cd' * 16)['state'], 'local_only', '别的 Team 给的（这台设备用不了它的服务器）')
         self.assertEqual(st(self.view(), logged=False)['state'], 'not_logged_in')
-        self.sync['state'] = 'old_server'
-        self.write()
-        s = st(self.view())
-        self.assertEqual((s['state'], s['message']), ('old_server', COST_OLD))
         self.sync.update(state='error', error='连不上', at=self.NOW - 50)
         self.write()
         self.assertEqual((st(self.view())['state'], st(self.view())['message']), ('error', '连不上'), '这个账号上次同步好了以后又出错了')
@@ -899,18 +898,24 @@ class Crypto(Base):
     KEY = 'alice(Alice@Example.com)'   # 账号表里邮箱的大小写随人写：账号摘要、密钥都按小写的算
 
     def device(self, name, seed):
-        """映射里的账号 alice、开着设备统计、登录着（身份 U1）的一台设备；deploy key 是编的（seed 不同指纹就不同），服务器是假的 curl"""
+        """在 Team 里（它给 alice 的 Claude 账号）、登录着 alice（身份 U1）的一台设备：直接写好加入了、同步到了配置的样子
+        （~/.cca/teams/<编号>/，见 cli/src/core/team.rs）；它在 Team 里的密钥是编的（seed 不同指纹就不同），服务器是假的 curl"""
         d = Home(self.root / name, self.TZ)
         d.write(d.cca / 'accounts.json', {self.KEY: 'US-A'})
-        d.write(d.cca / 'config.json', {'policy': 'example/cca-policy'})   # 打开着维护者的共享：没有它时 policy.json 不生效
-        d.write(d.cca / 'policy' / 'policy.json', {'version': 1, 'claude': {'alice@example.com': 'US-A'}, 'presence': {
-            'url': 'https://192.0.2.10:18443', 'pins': ['sha256//' + 'A' * 43 + '='], 'salt': self.SALT}})
-        d.write(d.cca / 'policy' / 'id_ed25519.pub', fake_pub(seed))
-        d.write(d.cca / 'policy' / 'id_ed25519', '测试用的占位：签名的是假的 ssh-keygen\n')
+        url, pins = 'https://192.0.2.10:18443', ['sha256//' + 'A' * 43 + '=']
+        td = d.cca / 'teams' / TID
+        d.write(d.cca / 'teams' / 'index.json', {'v': 1, 'order': [TID]})
+        d.write(td / 'team.json', {'v': 1, 'id': TID, 'name': '测试组', 'url': url, 'pins': pins, 'root': ROOT_PUB, 'role': 'member',
+                                   'dev': '%016x' % seed, 'device': name})
+        d.write(td / 'doc.json', {'v': 1, 'seq': 1, 'at': time.time(), 'doc': {
+            'v': 1, 'at': time.time(), 'name': '测试组', 'salt': self.SALT, 'server': {'u': url, 'p': pins},
+            'accounts': {'claude': {'alice@example.com': 'US-A'}}, 'aliases': {}, 'install_node': '', 'nodes': None}})
+        d.write(td / 'id_ed25519.pub', fake_pub(seed))
+        d.write(td / 'id_ed25519', '测试用的占位：签名的是假的 ssh-keygen\n')
         d.write(d.cdir(self.KEY) / '.claude.json', {'oauthAccount': {'accountUuid': U1, 'emailAddress': 'Alice@Example.com'}})
         d.fake('ssh-keygen', KEYGEN)
         d.fake('curl', CURL)
-        d.fp = sw.fp_of(str(d.cca / 'policy' / 'id_ed25519.pub'))
+        d.fp = sw.fp_of(str(td / 'id_ed25519.pub'))
         self.serve(d, [])
         return d
 
@@ -1005,7 +1010,7 @@ class Crypto(Base):
         bob = self.device('bob-mini', 32)
         self.serve(bob, rows)
         self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
-        got = bob.cost('remote.json')['acc']['claude:alice@example.com']
+        got = bob.cost(LANE + 'remote.json')['acc']['claude:alice@example.com']
         self.assertEqual(sorted(e['name'] for e in got.values()), ['alice-mbp', 'bad-diag', 'diag', 'models', 'spec'], '别的都不认')
         self.assertEqual(got, want)
 

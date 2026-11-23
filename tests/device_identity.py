@@ -39,7 +39,7 @@ class DeviceIdentity(unittest.TestCase):
     def run_cca(self, tool, command, key=ACCOUNTS[0]):
         result = subprocess.run(
             [HELPER, command, key],
-            env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'CCA_TOOL': tool, 'CCA_POLICY_DEFAULT': ''},
+            env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin', 'CCA_TOOL': tool},
             capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
 

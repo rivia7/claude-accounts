@@ -379,8 +379,7 @@ name = "one"
         # 原来是「整份内嵌的 Python 当参数传、再带着很大的环境」起不起得来（BootstrapTests）；辅助程序没有那么长的参数，
         # 留下的是：继承来的环境很大时照常工作
         with tempfile.TemporaryDirectory(prefix='cca-bootstrap-') as d:
-            env = {'HOME': d, 'PATH': '/usr/bin:/bin', 'CCA_TOOL': 'codex', 'CCA_POLICY_DEFAULT': '',
-                   'CCA_TEST_LARGE_ENV': 'x' * 90000}
+            env = {'HOME': d, 'PATH': '/usr/bin:/bin', 'CCA_TOOL': 'codex', 'CCA_TEST_LARGE_ENV': 'x' * 90000}
             result = subprocess.run([HELPER, 'settings-check'], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                                     encoding='utf-8', timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)

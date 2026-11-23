@@ -139,9 +139,8 @@ class Base(unittest.TestCase):
         return b
 
     def admin(self, name='admin'):
-        """一台设备（没打开维护者的共享），设备上的 ssh 是假的（连到 HUB_ENTER 那台假服务器）"""
+        """一台设备，设备上的 ssh 是假的（连到 HUB_ENTER 那台假服务器）"""
         dev = Device(self.t / ('%s-%s' % (name, secrets.token_hex(4))), name, {})
-        dev.config(lambda c: c.pop('policy'))
         dev.fake('ssh', SSH)
         return dev
 
@@ -837,7 +836,6 @@ class DeployTest(Base):
         # 发邀请、另一台设备加入：取到了配置
         link = a.ok('team-invite', tid, 'bob-mini').split('\n')[0]
         bob = Device(self.t / ('bob-' + secrets.token_hex(4)), 'bob', {})
-        bob.config(lambda c: c.pop('policy'))
         self.assertEqual(bob.ok('team-join', '--name', 'bob-mini', stdin=link).split('\n')[5], 'ok')
         # 再部署：更新，地址照原来接着的，设备不用动
         r = self.deploy(a, tid, b)

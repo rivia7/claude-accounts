@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """远程会话经服务器中转（docs/dev/remote.md、server/README.md「远程会话的中转」）：配对、会话的列表、端到端加密的通道。
 
-真的服务器进程（server/cca-presence.py，127.0.0.1、随机端口，开着中转）、真的 ssh-keygen；每台设备一个临时 HOME 和自己的
-deploy key（tests/presence.py 的 Device），跑的是 cca 的辅助程序，会话在真的伪终端上（tests/remote_host.py 的 Term 和 CLIENT）。
+真的服务器进程（server/cca-presence.py：一个 Team 的同步服务器，127.0.0.1、随机端口，开着中转）、真的 ssh-keygen；每台设备一个
+临时 HOME，在 Team「测试组」里、有自己在 Team 里的密钥（tests/presence.py 的 Device、Team），跑的是 cca 的辅助程序，会话在真的伪终端上
+（tests/remote_host.py 的 Term 和 CLIENT）。
 设备和数据端口之间隔着一个转发器（Sniffer），经过的字节都记下来：服务器看得到的就是这些。
 另一头有时由 tests/spec_wire.py（照文档独立实现的那一份）扮演：两份实现要能互相配对、握手、收发。不联网。"""
 import base64
-import http.client
 import json
 import os
 from pathlib import Path
 import re
 import secrets
 import socket
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -23,14 +22,12 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helper_bin import HELPER   # noqa: E402
-from presence import ROOT, SERVER, Device, keygen, make_cert, openssl_pin, sign, srvmod, wait_for   # noqa: E402
+from presence import ROOT, SERVER, Device, Team, make_cert, openssl_pin, srvmod, wait_for   # noqa: E402
 from remote_host import CLIENT, Term   # noqa: E402
 import spec_wire as sw   # noqa: E402
 
 F_JOIN, F_PING, F_PONG, F_ANNOUNCE, F_BYE = 0x02, 0x06, 0x07, 0x08, 0x09
 HELLO, INPUT, RESIZE, DETACH, WELCOME, OUTPUT, EXIT = 0x01, 0x02, 0x03, 0x04, 0x11, 0x12, 0x13
-# cli/src/cmd/remote/relay.rs 的同名常量
-RELAY_OLD = '维护者的服务器还不支持远程会话'
 
 
 # 设备和数据端口之间的转发器，自己一个进程（测试进程里不留线程：开伪终端要 fork）：两个方向经过的字节都追加到一个文件里。
@@ -105,14 +102,16 @@ class Sniffer:
 
 
 class RelayServer:
-    """一个真的服务器进程。relay=False：没开中转（和旧版服务器一样）。sniff：告诉客户端连转发器的端口。
-    port：重启时用回原来的端口（设备的映射里写着它；数据端口换了没关系，转发器每次现读）"""
+    """一个真的服务器进程（Team「测试组」的同步服务器：根公钥是 d 下的 root.pub，Base 建的）。relay=False：没开中转（和旧版服务器
+    一样）。sniff：告诉客户端连转发器的端口。port：重启时用回原来的端口（设备记着的服务器地址里写着它；数据端口换了没关系，转发器
+    每次现读）。名单、配对记在 d 下的文件里：重启以后照旧"""
     def __init__(self, d, relay=True, sniff=None, port=0, extra=()):
         self.d = d
         for name in ('port', 'rport', 'wport'):
             (d / name).unlink(missing_ok=True)
+        root = ' '.join((d / 'root.pub').read_text().split()[:2])
         args = [sys.executable, '-I', str(SERVER), '--listen', '127.0.0.1:%d' % port, '--port-file', str(d / 'port'),
-                '--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem'), '--release-key', str(d / 'release.pub'),
+                '--cert', str(d / 'cert.pem'), '--key', str(d / 'key.pem'), '--team-root', root,
                 '--state', str(d / 'state.json'), '--ttl', '60', '--idle', '600']
         if relay:
             args += ['--relay-listen', '127.0.0.1:0', '--relay-port-file', str(d / 'rport')]
@@ -209,8 +208,7 @@ class Base(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         d = self.d = Path(self.tmp.name).resolve()
         make_cert(d)
-        self.relpub = keygen(d / 'rel', 'test-release')
-        (d / 'release.pub').write_text(self.relpub + ' test-release\n')
+        self.team = Team(d)   # 根密钥在 d/root：测试扮演管理员，在服务器上登记、移除设备
         self.sniff = Sniffer(d)
         self.addCleanup(self.sniff.close)
         self.srv = RelayServer(d, relay=self.relay, sniff=self.sniff, extra=self.server_extra(d))
@@ -224,9 +222,16 @@ class Base(unittest.TestCase):
         """服务器多带的参数（子类给：tests/web_relay.py 开网页端）"""
         return []
 
-    def device(self, name):
+    def url(self):
+        """设备记着的服务器地址"""
+        return 'https://127.0.0.1:%d' % self.srv.port
+
+    def device(self, name, join=True):
+        """一台在 Team 里的设备（Team 给它 alice 的 Claude 账号：alice 的会话经这个 Team 的服务器中转）；登记到服务器上用 machines。
+        join=False：还没加入（之后自己 dev.join(self.team, self.url(), [self.pin], …)）"""
         dev = Device(self.d / name, name, {Device.KEY: 'US-A'})
-        dev.policy({'url': 'https://127.0.0.1:%d' % self.srv.port, 'pins': [self.pin], 'salt': '00' * 16})
+        if join:
+            dev.join(self.team, self.url(), [self.pin])
         dev.env['TERM'] = 'xterm-256color'
         dev.work = dev.home / 'work'
         dev.work.mkdir()
@@ -234,13 +239,15 @@ class Base(unittest.TestCase):
         return dev
 
     def machines(self, *devs):
-        doc = json.dumps({'version': 1, 'seq': int(time.time() * 1000), 'machines': [{'key': d.pub, 'name': d.name} for d in devs]}).encode()
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
-        c = http.client.HTTPSConnection('127.0.0.1', self.srv.port, context=ctx, timeout=10)
-        c.request('POST', '/v1/machines', body=doc, headers={'X-Cca-Sig': base64.b64encode(sign(self.d / 'rel', 'cca-devices', doc)).decode()})
-        self.assertEqual(c.getresponse().status, 200)
-        c.close()
+        """服务器上 Team 的名单正好是这几台设备（管理员登记上没登记的、移除别的）"""
+        self.team.only(self.srv.port, *devs)
+
+    def unknown(self):
+        """服务器回给不在名单里的设备的：403 unknown_device，带着这个 Team 在服务器上的这一份记录的编号（设备拿它分清是被移除了、
+        还是服务器的记录清掉了）。访客的请求不认时回的也是这一个：分不出是没有这个访客、还是签名不对"""
+        st, j = self.team.admin(self.srv.port, 'team_members')
+        self.assertEqual(st, 200, j)
+        return 403, {'error': 'unknown_device', 'gen': j['gen']}
 
     def call(self, dev, op, **extra):
         return dev.post(self.srv.port, op, extra)
@@ -508,12 +515,12 @@ class ServerTest(Base):
         self.assertEqual(self.good(c, 'relay_list', pids=[pid2]), {'v': 1, 'ok': True, 'peers': {}, 'sessions': {}})
         self.assertEqual(self.call(c, 'relay_attach', sid=sid, pid=pid2), (404, {'error': 'no_session'}))
         self.assertEqual(len(self.good(b, 'relay_list', pids=[pid])['sessions'][pid]), 1)
-        # 维护者撤销了一台设备：它的配对、会话都没了（重启服务器以后也一样：配对记在文件里）
+        # 管理员把一台设备移出了 Team：它的配对、会话都没了（重启服务器以后也一样：配对记在文件里）
         self.machines(b, c)
         self.assertEqual(self.edges(), {})
         self.assertEqual(self.call(a, 'relay_list', pids=[pid])[0], 403)
         self.assertEqual(self.good(b, 'relay_list', pids=[pid]), {'v': 1, 'ok': True, 'peers': {}, 'sessions': {}})
-        self.assertEqual([s.recv(1) for s in pipes[pid]], [b'', b''], '被撤销的设备正接着的也断开')
+        self.assertEqual([s.recv(1) for s in pipes[pid]], [b'', b''], '被移除的设备正接着的也断开')
         self.assertEqual(host.recv(1), b'', '它的控制连接也断开')
 
     def test_pairings_survive_a_restart(self):
@@ -614,16 +621,14 @@ class OldServerTest(Base):
         self.assertFalse((self.d / 'remote.json').exists())
         r = a.run('remote-pair-show')
         self.assertEqual((r.returncode, r.stdout), (1, ''), '服务器不支持时不给配对码')
-        self.assertIn(RELAY_OLD, r.stderr)
-        # 还没拉到映射的机器、关着共享的机器：说清楚原因，会话照常能在这台机器上用
-        (a.cca / 'policy' / 'policy.json').unlink()
-        r = a.run('remote-pair-join', stdin='0000-0000-0000-0000\n')
-        self.assertEqual(r.returncode, 1)
-        self.assertIn('还没拉到维护者的映射', r.stderr)
-        a.config(lambda c: c.pop('policy'))
-        r = a.run('remote-pair-join', stdin='0000-0000-0000-0000\n')
-        self.assertEqual(r.returncode, 1)
-        self.assertIn('没打开维护者的共享', r.stderr)
+        self.assertIn('「测试组」的服务器还没开远程会话的中转（管理员要重新部署、把中转打开：cca team deploy）', r.stderr)
+        # 不在哪个 Team 里的机器：没有中转的服务器，什么都不发、说不行；会话照常能在这台机器上用
+        lone = Device(self.d / 'lone', 'lone', {Device.KEY: 'US-A'})
+        for argv, stdin in ((('remote-pair-show',), ''), (('remote-pair-join',), '0000-0000-0000-0000\n')):
+            r = lone.run(*argv, stdin=stdin)
+            self.assertEqual((r.returncode, r.stdout), (1, ''), argv)
+            self.assertTrue(r.stderr.strip(), argv)
+        self.assertEqual(lone.sent(), [])
 
 
 class PyPeer:
@@ -778,7 +783,8 @@ class ClientTest(Base):
         self.assertEqual(sw.pair_keys(sw.code_bytes(code))[2], [r for r in a.sent('pair_open')][0]['rid'])
         self.assertEqual(list(self.edges()), [pid])
         rows = a.run('remote-peers', '--check').stdout
-        self.assertRegex(rows, r'^%s  laptop  对方可以看和操作这台机器的会话  \d{4}-\d\d-\d\d 配对\n$' % pid[:8])
+        self.assertRegex(rows, r'^%s  laptop  对方可以看和操作这台机器的会话  \d{4}-\d\d-\d\d 配对  经「测试组」的服务器\n$' % pid[:8],
+                         '配对记在哪个 Team 的服务器上也写出来')
         self.assertRegex(b.run('remote-peers').stdout, r'^%s  box  对方不能接入这台机器  ' % pid[:8])
 
         # laptop 看得到 box 上的会话（box 看不到 laptop 的：没有，也不让）
@@ -791,7 +797,7 @@ class ClientTest(Base):
         # 给界面 App 的那一份（PROTOCOL 9.1）：laptop 上是 box 的会话和“对方接不进来”，box 上是自己的会话和“对方能操作”
         doc = json.loads(b.ok('remote-list', '--json'))
         self.assertEqual((doc['version'], doc['kind'], doc['enabled'], doc['relay'], doc['errors']),
-                         (1, 'remote', False, {'available': True, 'message': None, 'hubs': [{'team': None, 'name': '维护者的服务器'}]}, []))
+                         (1, 'remote', False, {'available': True, 'message': None, 'hubs': [{'team': self.team.id, 'name': '「测试组」的服务器'}]}, []))
         (s,) = doc['sessions']
         self.assertEqual((s['short'], s['id'][:8], len(s['id']), s['where'], s['peer'], s['machine'], s['tool'], s['name'], s['cwd'],
                           s['state'], s['access'], s['local_terminal']),
@@ -972,7 +978,7 @@ class ClientTest(Base):
         h.expect('<host-still-fine>')
         self.assertNotIn(b'tampered', h.out[mark:])
 
-        # 没有配对密钥的（服务器自己、偷了设备 deploy key 的人）：接入方那头看得出宿主的证明不对；
+        # 没有配对密钥的（服务器自己、偷了设备在 Team 里的密钥的人）：接入方那头看得出宿主的证明不对；
         # 硬着头皮发一个证明过去，宿主不认、什么都不给
         sock, ch = peer.attach(sid, p=os.urandom(32))
         self.assertIsNone(ch)
@@ -1112,7 +1118,7 @@ class ClientTest(Base):
         self.assertEqual(v.wait(), 0)
         r = b.run('remote-list')
         self.assertEqual((r.returncode, r.stdout), (0, ''))
-        self.assertIn('别的机器上的会话没查到：连不上', r.stderr)
+        self.assertIn('别的机器上的会话没查到：「测试组」的同步服务器：连不上 Team 的同步服务器（127.0.0.1:%d）' % self.srv.port, r.stderr)
         doc = json.loads(a.ok('remote-list', '--json'))   # 给 App 的：没问到不算失败，这台机器上的照给，原因在 errors 里
         self.assertEqual((len(doc['sessions']), [e['code'] for e in doc['errors']], [p['state'] for p in doc['peers']]),
                          (1, ['relay_unreachable'], ['unknown']))
