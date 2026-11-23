@@ -6292,6 +6292,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team node Team add [链接] | copy 模板 新名字 [--port 端口] | rm 节点
                                                    加（粘贴代理链接或 Clash 节点配置）/ 照一个节点复制（换名字、端口）/ 去掉节点
       cca team node Team test [节点…] [--tool 工具] [--json]   起一个临时内核实测这些节点的出口（不写是全部）
+      cca team node Team install 节点|-            各台设备经内置代理安装客户端时用哪个节点（- 是不再指定）
       cca team alias Team 账号 新别名              改一个账号在这个 Team 里的别名（没起过的各工具各自编成 team-1、team-2……；
                                                    账号写 工具:邮箱 只改这个工具里的，只写邮箱改它在的每个工具里的）
       cca team alias Team --lock | --unlock        锁定（解开）账号的别名：锁定了，各台设备上照 Team 给的用、不能自己改
@@ -6420,9 +6421,9 @@ team_alias_lock() {   # cca team alias Team --lock|--unlock：锁定（解开）
 	team_settle
 }
 
-TEAM_NODE_USAGE="用法: cca team node Team [ls [--json] | add [链接] | copy 模板 新名字 [--port 端口] | rm 节点 | test [节点…] [--tool claude|codex|agy] [--json]]"
+TEAM_NODE_USAGE="用法: cca team node Team [ls [--json] | add [链接] | copy 模板 新名字 [--port 端口] | rm 节点 | test [节点…] [--tool claude|codex|agy] [--json] | install 节点|-]"
 
-team_node() {   # cca team node Team [子命令 …]：管理员管这个 Team 的节点定义（加、复制、去掉、列出，实测出口；见 docs/dev/team.md「Team 的节点」）。
+team_node() {   # cca team node Team [子命令 …]：管理员管这个 Team 的节点定义（加、复制、去掉、列出，实测出口，指定安装客户端用的；见 docs/dev/team.md「Team 的节点」）。
 	              # 给各台设备的配置只带它的账号用得着的节点：加了没人用的节点，哪台设备的配置都不变
 	[ $# -ge 1 ] || die "$TEAM_NODE_USAGE"
 	local team="$1" sub="${2:-ls}" out name stored any="" type server port dialer users install extra note=""
@@ -6467,6 +6468,21 @@ team_node() {   # cca team node Team [子命令 …]：管理员管这个 Team �
 			okay "去掉了节点「${1}」；$(team_stored "$out")"
 			team_settle ;;
 		test) team_node_test "$team" "$@" ;;
+		install)   # 各台设备直连拿不到安装脚本时（install-cli）经内置代理的哪个节点装：Team 的配置的 install_node
+			[ $# -eq 1 ] || die "$TEAM_NODE_USAGE"
+			out=$(py team-node-install "$team" "$1") || team_fail "$out" "没改成"
+			{ IFS= read -r name; IFS= read -r stored; } <<< "$out"   # name 是原来的（没有是空的）
+			[ -z "$name" ] || [ "$name" = "$1" ] || note="（原来是「${name}」）"
+			if [ "$1" != - ]; then
+				okay "改好了：各台设备经内置代理安装客户端用「${1}」${note}；$(team_stored "$stored")"
+				say "  各台设备直连拿不到安装脚本时（cca install-cli）经它装，不用在终端里现选"
+			elif [ -n "$name" ]; then
+				okay "不再指定安装客户端用的节点${note}；$(team_stored "$stored")"
+				say "  各台设备直连拿不到安装脚本时在终端里现选一个节点"
+			else
+				okay "本来就没有指定安装客户端用的节点；$(team_stored "$stored")"
+			fi
+			team_settle ;;
 		*) die "$TEAM_NODE_USAGE" ;;
 	esac
 }

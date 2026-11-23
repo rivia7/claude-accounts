@@ -1,4 +1,5 @@
-//! Team 的节点（`cca team node`）：管理员给这个 Team 的配置加、复制、去掉节点的定义，列出来，起临时内核实测出口。节点的定义存在
+//! Team 的节点（`cca team node`）：管理员给这个 Team 的配置加、复制、去掉节点的定义，列出来，起临时内核实测出口，指定各台设备
+//! 安装客户端用哪个（install_node）。节点的定义存在
 //! admin.json 的 config.nodes（`{"group": 策略组, "proxies": [节点定义…]}`，和以前维护者映射仓库的 nodes.json 一个样子）；给各台
 //! 设备的配置只带它的账号用得着的那几个（needed_nodes），所以加了没人用的节点，哪台设备的配置都不变。
 //! 节点的密钥不出这台设备：列出来、实测出口都不显示 uuid、密码这些。见 docs/dev/team.md「Team 的节点」
@@ -223,6 +224,29 @@ pub fn cmd_team_node_rm(args: &[String]) -> R<()> {
     admin_save(&t.id, &a)?;
     let stored = publish_now(&t, &a)?;
     out!("{stored}");
+    Ok(())
+}
+
+/// py team-node-install Team 节点|-：指定各台设备直连拿不到安装脚本时经内置代理的哪个节点装客户端（config.install_node；- 是不再指定），
+/// 再发布。只能是这个 Team 的节点；每台设备的配置都带着它（连同它的定义：needed_nodes），所以换了一般每台都发一版新的。
+/// stdout：原来的（没有是空行）、存上了几台的配置。原因码：no_team、not_admin、usage、no_node、server、publish
+pub fn cmd_team_node_install(args: &[String]) -> R<()> {
+    arity("team-node-install", args, 2, 2)?;
+    let name = args[1].trim();
+    if name.is_empty() {
+        return fail("usage", "用法: cca team node Team install 节点|-（- 是不再指定）");
+    }
+    let (t, a, _lk) = admin_of(&args[0])?;
+    if name != "-" && named(&proxies(&a), name).is_none() {
+        return fail("no_node", &format!("这个 Team 里没有节点「{name}」（cca team node {} 列出有哪些）", t.name));
+    }
+    let was = install_node(&a);
+    let config = a.dict("config").unwrap_or_default();
+    config.set("install_node", if name == "-" { "" } else { name });
+    a.set("config", config);
+    admin_save(&t.id, &a)?;
+    let stored = publish_now(&t, &a)?;
+    out!("{was}\n{stored}");
     Ok(())
 }
 

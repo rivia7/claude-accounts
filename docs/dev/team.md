@@ -153,6 +153,7 @@
 重新发邀请。别名按工具记在 `tool_aliases` 里（3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里是两个账号、可以叫得
 不一样），设备有它时照它；`aliases` 是照它算的按邮箱的那一份（每个邮箱用它最前面那个工具里的），给 3.5.3-beta.5 及以前的 cca。
 `alias_lock` 是 true 或者 false（`doc_problems` 查；管理员只在锁定时写 true），旧版本的 cca 不认得它：照没锁定的用。
+`install_node` 是直连拿不到安装脚本时经内置代理装客户端用的节点（管理员用 `cca team node Team install 节点` 指定，没指定是空的）。
 
 ## 账号表照配置改（M3 的第一步）
 
@@ -651,6 +652,10 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   端口。一台服务器上按端口分开的几个入站（各有各的出口）就这样一个个加，节点的密钥不出这台设备（skill 也不用经手）。
 - `rm 节点`（`py team-node-rm`）：还有账号走它、别的节点经它连出去、它是 `install_node` 时不去掉（`node_used`，原因里说是谁）；去掉最后
   一个时 `config.nodes` 回到 null。
+- `install 节点|-`（`py team-node-install`，3.6.1 起）：指定各台设备直连拿不到安装脚本时经内置代理装客户端用的节点（`config.install_node`，
+  见 clients.md「辅助安装」；`-` 是不再指定，写回空的）。只能是这个 Team 的节点（`no_node`）。每台设备的配置都带着 `install_node` 和它的定义
+  （`needed_nodes`），所以指定、换、不再指定都给每台发布新的一版；没变时不发布。stdout 是原来的（没有是空行）和存上了几台。以前只有从维护者的
+  映射导入（`cca team import Team policy.json`，3.6.0 去掉了）时写它。
 - 改了都先过一遍成员设备查配置的那一套（`fill_problems`），不合格的不存（`node`），再和 `map` 一样对一遍、发布。给各台设备的配置只带它的
   账号用得着的节点（`needed_nodes`）：加、复制、去掉没人用的节点，哪台设备的配置都不变（`各台设备的配置没有变`），有账号走它了（`cca team map`）
   才发出去。还没有节点的 Team 第一次加时策略组是 `OpenAi`。
@@ -700,7 +705,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     拿这个 Team 的邀请来加入不删东西。
 - regress 11b3d：`cca team` 的命令行一层。这台 Mac 先当管理员（成员由 `tm_spec`——照文档独立实现的那一头——扮演）：`new` 说下一步、还没接上时发不了邀请、
   `attach` 指纹对不上、`import`、`invite`（Claude Code 里不给；链接只一行打到 stdout，那串随机数不在 curl / env 的命令行里、不落盘）、`devices`、`grant`、
-  `map`、`publish`、`node`（列出、粘贴链接加、复制、有账号在用的去不掉、`test` 撞了 IP 是 3 / 不通是 1 / 全都不通是 2、去掉；那一头的序号不动）、
+  `map`、`publish`、`node`（列出、粘贴链接加、复制、有账号在用的去不掉、`test` 撞了 IP 是 3 / 不通是 1 / 全都不通是 2、去掉；那一头的序号不动；
+  `install` 没有的节点不行、指定和不再指定各发布一版，`tm_spec doc` 验签、解开看那一头的 `install_node` 和带的节点）、
   `revoke` 的同意事件和同意之后、管理员 `leave` 的同意事件（`team_delete`）；再当成员（管理员由 `tm_spec` 扮演）：链接少一截、加入
   （`team_joined`）、两个 Team 照先后列出、成员用不了 `team node`、`sync` 同步到新的一版并跟着改名、
   被移除以后 `sync` 说出来、`leave` 的同意事件和同意之后；换了版本以后的第一条命令（`update_after`：版本没换、全新安装的不提前；
@@ -710,6 +716,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   `198.51.100.250`），`$T/trace_down/<节点>` 时连不上；直连节点服务器的端口看 `$T/tcp_open`（「主机 端口」一行一个）。
 - 节点（`tests/team.py` 的 `test_nodes`）：列出来不带密码、`accounts`；加（重名、不是对象、过不了 `fill_problems` 的不要）、复制（整份、
   模板不变）、去掉（账号、`dialer-proxy`、`install_node` 用着的不行）；没人用的节点不改成员设备的配置，`map` 到它以后才发出去（连同安装用的节点）；
+  `install`（没有的节点、空的、成员设备不行；换了每台设备的配置带着新的、原来的不再带，没变不发布，`-` 不再指定）；
   `testconfig` 的入站、带上的节点、权限、要测的网站、不写节点是全部；`verdict` 的几种结果和 `--json`；没接上服务器的 Team 只改本机。
   `cargo test nodes`：`judge` 的各种情况。
 - 账号表照配置改（`tests/team.py` 的 `test_accounts_follow`）：加入以后 alice 的节点照 Team 的（说「按「测试组」的配置固定」）、补上别名，本来就有的

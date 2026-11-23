@@ -697,6 +697,23 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(admin, 'team-node-rm', tid, 'HK-B'), ['0'])
         self.assertEqual(self.lines(admin, 'team-node-rm', tid, 'HK-A'), ['0'])
         self.assertNotIn('HK-A', [n['name'] for n in json.loads(admin.ok('team-node-ls', tid, '--json'))['nodes']])
+        # 安装客户端用的节点：只能是这个 Team 的；换了每台设备的配置都带着新的（连同它的定义），原来的没人用了就不再带；- 是不再指定；
+        # stdout 是原来的、存上了几台
+        self.assertEqual([self.code(admin, 'team-node-install', tid, n) for n in ('NOPE', ' ')], ['no_node', 'usage'])
+        self.assertEqual(self.code(bob, 'team-node-install', tid, 'US-E'), 'not_admin')
+        self.assertEqual(self.lines(admin, 'team-node-install', tid, 'US-E'), ['US-D', '2'], '管理员自己这台和 bob 的配置里都有它')
+        bob.ok('team-sync')
+        doc = self.doc(bob, tid)[1]
+        self.assertEqual((doc['install_node'], [p['name'] for p in doc['nodes']['proxies']]), ('US-E', ['US-A', 'US-E']))
+        self.assertEqual(json.loads(admin.ok('team-node-ls', tid, '--json'))['install_node'], 'US-E')
+        self.assertEqual(self.code(admin, 'team-node-rm', tid, 'US-E'), 'node_used')
+        self.assertEqual(self.lines(admin, 'team-node-install', tid, 'US-E'), ['US-E', '0'], '没变：不重新发布')
+        self.assertEqual(self.lines(admin, 'team-node-install', tid, '-'), ['US-E', '2'])
+        bob.ok('team-sync')
+        doc = self.doc(bob, tid)[1]
+        self.assertEqual((doc['install_node'], [p['name'] for p in doc['nodes']['proxies']]), ('', ['US-A']))
+        self.assertEqual(self.lines(admin, 'team-node-install', tid, '-'), ['', '0'])
+        self.assertEqual(self.lines(admin, 'team-node-install', tid, 'US-D'), ['', '2'])
         # 实测用的临时内核的配置：每个节点一个入站、带上 dialer-proxy 连着的；要测的网站看走这些节点的账号是哪些工具的
         f = self.d / 'test.json'
         plan = self.lines(admin, 'team-node-testconfig', tid, str(f), 'US-A', 'US-B')
@@ -738,6 +755,8 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual((j['group'], j['nodes'], j['accounts']), (None, [], {}))
         self.assertEqual(self.lines(lone, 'team-node-add', lid, stdin=json.dumps(hk)), ['HK-A', '0'])
         self.assertEqual(json.loads(lone.ok('team-node-ls', lid, '--json'))['group'], 'OpenAi')
+        self.assertEqual((self.lines(lone, 'team-node-install', lid, 'HK-A'), self.lines(lone, 'team-node-install', lid, '-')),
+                         (['', '0'], ['HK-A', '0']))
         self.assertEqual(self.lines(lone, 'team-node-rm', lid, 'HK-A'), ['0'])
         self.assertIsNone(json.loads((self.tdir(lone, lid) / 'admin.json').read_text())['config']['nodes'])
 

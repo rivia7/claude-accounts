@@ -132,6 +132,13 @@ sys.path.insert(0, sys.argv[1])
 import spec_wire as sw
 op, a = sys.argv[2], sys.argv[3:]
 pub_of = lambda p: ' '.join(open(p + '.pub').read().split()[:2])
+names = lambda doc: [p['name'] for p in (doc['nodes'] or {}).get('proxies', [])]
+def opened(inv, key, port):   # 取这台设备的配置、验过根密钥的签名、解开：(序号, 明文)
+    token, dev, keys = sw.invite_parts(inv['k'])
+    st, j = sw.post(key, port, 'team_get', {})
+    env, tid = j['doc'], sw.team_id('ssh-ed25519 ' + inv['r'])
+    assert sw.team_doc_verify('ssh-ed25519 ' + inv['r'], tid, dev, env['seq'], env['ct'], env['sig']), '不是根密钥签的'
+    return env['seq'], sw.team_doc_open(keys, tid, dev, env['seq'], env['ct'])
 if op == 'join':   # join 邀请链接 密钥文件 端口 [名字]：一台设备拿这个邀请加入（名字默认 dan-air）、同步配置、验签、解开；打印 给了哪些账号 和 节点的名字
     link, key, port = a[0], a[1], int(a[2])
     inv = sw.invite_decode(link)
@@ -140,11 +147,11 @@ if op == 'join':   # join 邀请链接 密钥文件 端口 [名字]：一台设�
     st, j = sw.post(key, port, 'team_join', {'pub': pub, 'name': a[3] if a[3:] else 'dan-air', 'token': token, 'proof': sw.team_pub_proof(inv['k'], pub)})
     if st != 200:
         sys.exit('join %s %s' % (st, j))
-    st, j = sw.post(key, port, 'team_get', {})
-    env, tid = j['doc'], sw.team_id('ssh-ed25519 ' + inv['r'])
-    assert sw.team_doc_verify('ssh-ed25519 ' + inv['r'], tid, dev, env['seq'], env['ct'], env['sig']), '不是根密钥签的'
-    doc = sw.team_doc_open(keys, tid, dev, env['seq'], env['ct'])
-    print(json.dumps({'accounts': doc['accounts'], 'nodes': [p['name'] for p in (doc['nodes'] or {}).get('proxies', [])], 'seq': env['seq']}, sort_keys=True))
+    seq, doc = opened(inv, key, port)
+    print(json.dumps({'accounts': doc['accounts'], 'nodes': names(doc), 'seq': seq}, sort_keys=True))
+elif op == 'doc':   # doc 邀请链接 密钥文件 端口：加入了的那一头再取一次、验签、解开；打印 安装客户端用的节点、节点的名字 和 序号
+    seq, doc = opened(sw.invite_decode(a[0]), a[1], int(a[2]))
+    print(json.dumps({'install_node': doc['install_node'], 'nodes': names(doc), 'seq': seq}, sort_keys=True))
 elif op == 'get':   # get 邀请链接 密钥文件 端口：再取一次（状态码；被移除了是 403）
     st, j = sw.post(a[1], int(a[2]), 'team_get', {})
     print(st, j.get('error') or '', (j.get('doc') or {}).get('seq') or j.get('seq') or '')
@@ -3521,6 +3528,16 @@ ok "cca team node test --json：端口连得上、经它出不去；全都不通
 rm -rf "$T/trace_down" "$T/tcp_open" "$T/ntmp"
 out=$(run cca team node 书房组 rm HK-B 2>&1); rc=$?; out2=$(run cca team node 书房组 rm HK-A 2>&1); rc2=$?
 ok "cca team node rm：没人用的节点去掉了，各台设备的配置不变" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "去掉了节点「HK-B」；各台设备的配置没有变" && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"JP-A\", \"JP-B\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ]'
+# cca team node install：各台设备经内置代理安装客户端用的节点（配置的 install_node）。只能是这个 Team 的节点；每台的配置都带着它（连同它的
+# 定义），所以指定、不再指定都给每台发布新的一版
+out=$(runev cca team node 书房组 install NOPE 2>&1); rc=$?
+ok "cca team node install：这个 Team 里没有的节点不行（fail 事件 team_no_node），各台设备的配置不变" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_no_node\"" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ]'
+out=$(run cca team node 书房组 install JP-A 2>&1); rc=$?
+TMDOC='{"install_node": "JP-A", "nodes": ["JP-A", "JP-B"], "seq": 9}'
+ok "cca team node install：指定安装客户端用的节点，每台设备的配置发布新的一版（那一头验签、解开：带着它和它的定义）；列出来说它是安装用的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：各台设备经内置代理安装客户端用「JP-A」；2 台设备的配置发布了新的一版" && [ "$(tm_spec doc "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "$TMDOC" ] && run cca team node 书房组 2>&1 | grep -qF "JP-A（socks5 192.0.2.10:1080，各台设备经内置代理安装客户端用它）"'
+out=$(run cca team node 书房组 install - 2>&1); rc=$?
+TMDOC='{"install_node": "", "nodes": ["JP-B"], "seq": 10}'
+ok "cca team node install -：不再指定（说原来是哪个），再发布一版：那一头的配置不再带它" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "不再指定安装客户端用的节点（原来是「JP-A」）；2 台设备的配置发布了新的一版" && [ "$(tm_spec doc "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "$TMDOC" ] && run cca team node 书房组 ls --json | jok "d[\"install_node\"] == \"\""'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
