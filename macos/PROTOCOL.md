@@ -719,14 +719,15 @@ cca 往里追加 JSON 行（一行一个事件）。不设就什么都不写；�
   `unsupported`（这种账号没有这个功能：Antigravity 的 `usage`、`app`、`billing`、`limit-resets`、`add api`）|
   `cost_unavailable`（`cost sync`：没统计成，见 3.5）| `cost_off`（`cost sync`：折合金额关掉了、没有可统计的账号）|
   `mail_connect`（邮箱助手：连不上 Gmail，网络 / 代理 / 证书 / 认证，见 4.11）| `node_pinned`（`node use`：Team 的配置锁定了这个账号的节点）|
-  `hub_ssh`（`team deploy` 在 App 里问的服务器登录不上：密码错了三次、主机密钥和记下的不一样，4.6 的 `hub.deploy`、`hub.password`）|
+  `hub_ssh`（`team deploy` 在 App 里问的服务器登录不上：密码错了三次、主机密钥和记下的不一样，4.6 的 `hub.deploy`、`hub.password`；
+  删除 Team 时登录不上的不是它：问要不要照样删，`team.keep_server`）|
   `team_…`（Team 的命令没成、做完了带着的提醒，4.14）。3.5.2 的 cca 还有自己的同步服务器的 `hub_…`（`hub_link`、`hub_denied`……），3.5.3 去掉了；
   3.6.0 以前还有维护者的映射的 `policy_unavailable`（`policy pull --json` 拉不到）、`policy_off_busy`（`policy off`：共享的账号正在用），3.6.0 去掉了（4.9、4.12）；
   不认识的 `hub_`、`team_` 开头的当 `error`，照 `message` 说。
   可能有好几条，最后一条是最终原因。
 - `terminal`：这一步要在终端里完成（登录之类）。`argv` 是 `cca` 后面的参数（Codex 账号带 `codex`，Antigravity 账号带 `agy`），`display` 是给人看、能直接复制进终端的
   完整命令（只有字母数字和 `@%+=:,./_-` 的参数照写，别的加单引号，例如 `cca login '工作(bob@example.com)'`）。
-  `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key` | `edit`（账号表有表单改不了的问题：不是 JSON、键写错了）| `hub_deploy`（部署 Team 的同步服务器：服务器只认密钥，这台 Mac 的私钥有密码、或者要用别的私钥，`argv` 是 `team deploy <Team 编号的前 8 位> 目标 -p 端口`；3.5.2 的 cca 部署自己的同步服务器时是 `hub deploy 目标 -p 端口`）。App 能在表单里做的（`router_setup`、`local_setup`，要 `hello.forms`）直接开表单，别的走终端交接。
+  `code`：`login` | `router_sync` | `router_setup` | `local_setup` | `api_key` | `edit`（账号表有表单改不了的问题：不是 JSON、键写错了）| `hub_deploy`（部署 Team 的同步服务器：服务器只认密钥，这台 Mac 的私钥有密码、或者要用别的私钥，`argv` 是 `team deploy <Team 编号的前 8 位> 目标 -p 端口`；删除 Team 时卸载它的同步服务器也是这个码，`argv` 是 `team leave <Team 编号的前 8 位> 目标 [-p 端口]`；3.5.2 的 cca 部署自己的同步服务器时是 `hub deploy 目标 -p 端口`）。App 能在表单里做的（`router_setup`、`local_setup`，要 `hello.forms`）直接开表单，别的走终端交接。
 
 ### 4.2 同意
 
@@ -746,7 +747,7 @@ App 弹原生对话框，用户同意后，带上 `CCA_GRANT=<grant>[,<grant>…
 | `remote_pair` | 空；和手机配对（`cca remote pair --web`）时是 `web` | `cca remote pair`：这台机器显示一个配对码；在另一台机器上输入它以后，那台机器可以经中转的服务器（加入的某个 Team 的，9.2）看和操作这台机器上开着远程会话的会话（两头之间加密；之后能改成只看、不让，或者取消配对）。这台设备用得了不止一台中转服务器时，`detail` 末尾说这次配对记在哪一台上（对方看得到的只是走这台服务器的会话）。App 里是提问会话（「远程会话」页的「显示配对码…」，9.2），当场问；终端里问之前先把这段说明打出来 范围是 `web` 时说的是手机：手机在浏览器里输入配对码以后可以看和操作这台机器的会话；那一页是中转的服务器给的，内容照样在两头之间加密，但管着服务器的人能换掉那一页的代码（`detail` 里写着） | yes |
 | `remote_end` | 会话的 id（`remote list --json` 的 `sessions[].id`，32 个十六进制字符） | `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端——里面的程序收到通知（SIGHUP）后自己退出，几秒钟还不退出就被强行结束；它正在做的那一步会中断，接着的各处都断开。`detail` 开头是列表里这个会话的那一行（编号、工具、账号、文件夹）。同意只对这一个会话有效 | no |
 | `team_leave` | Team 的编号（32 个十六进制字符） | `cca team leave`（这台设备是成员）：服务器上移除这台设备，这台设备上这个 Team 的配置都删掉；以后要再加入要管理员重新发邀请 | no |
-| `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置） | no |
+| `team_delete` | Team 的编号 | `cca team leave`（这台设备是管理员）：删除这个 Team——部署过同步服务器的先经 SSH 卸掉它（`detail` 说登录哪台、删掉哪个目录；没记下部署到哪的照部署的默认猜，也说怎么写清楚），这台设备上就没有这个 Team 的根密钥了，这个 Team 再没有谁能邀请、移除设备、改配置（别的设备照旧用着手里的配置）。App 里是提问会话（「删掉这个 Team…」，4.14），当场问 | no |
 | `team_revoke` | 设备在 Team 里的编号（16 个十六进制字符） | `cca team revoke`：管理员移除一台设备（或者撤回还没用掉的邀请）：服务器就此不认它的密钥，给它的配置删掉；它已经拿到的节点凭证收不回来 | no |
 | `settings_fix` | 这次要改的摘要（16 位十六进制：文件、原文的摘要和要去掉的几项，文件变了就对不上） | `cca settings fix`：先把共享的 `~/.claude/settings.json`（`settings.local.json`）整份备份在旁边，再只去掉会盖掉各账号设置的几项（第三方 API、代理、云厂商开关、账号目录这类，连同官方账号用不了的模型名）。App 不运行这条命令，在终端里问 | yes |
 
@@ -886,8 +887,9 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 |---|---|---|---|
 | `onboard.team` | `_onboard`（配置向导的「加入 Team」，一般是第 1 步） | `confirm`（默认否） | 有没有 Team 的邀请链接（`detail` 说 Team 是什么：管理员定好账号和出口节点、给每台设备发邀请）。答有接着 `team.join`（可以留空：先不加入；加入没成不耽误向导做完：原因是 `fail` 事件，最后的 `result` 还是 `onboarded`）；答没有（默认）直接到下一步。已经在 Team 里时不问 |
 | `hub.deploy` | `team deploy <Team>`（App 里，不写服务器） | `text` ×3 | 这个 Team 的同步服务器部署到哪（标题、说明里说的是哪个 Team）：服务器地址（校验 host；Team 接着服务器时预填它的地址，`message` 说是更新，填别的是搬过去）、SSH 用户（校验 sshuser，预填 root）、SSH 端口（校验 port，预填 22）。填完 cca 先查登录得上不（什么都不装）：连不上（地址、端口不对……）带着 ssh 说的原因重问；这台设备的密钥登录不了、服务器认密码时接着问 `hub.password`；不认这台设备的密钥又不让用密码时接着 `hub.pubkey`；主机密钥和记下的不一样是 `fail` 的 `hub_ssh`。题号、原因码里的 `hub` 是 3.5.2 部署自己的同步服务器（`hub deploy`）时起的，照旧 |
-| `hub.password` | `team deploy <Team>`（App 里） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对是 `fail` 的 `hub_ssh`：错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
-| `hub.pubkey` | `team deploy <Team>`（App 里；「在终端里部署」交给终端的命令照是哪一种） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署）；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0 |
+| `hub.password` | `team deploy <Team>`（App 里）；`team leave <Team>`（App 里删除 Team：卸载它的同步服务器时） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（卸载）（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对：部署时是 `fail` 的 `hub_ssh`，卸载时接着问 `team.keep_server`；错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
+| `hub.pubkey` | `team deploy <Team>`、`team leave <Team>`（App 里；「在终端里部署」「在终端里卸载」交给终端的命令照是哪一种） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署（卸载））；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0 |
+| `team.keep_server` | `team leave <Team>`（管理员删除 Team：同意以后，卸载它的同步服务器没成时） | `confirm`（默认否，`severity` 是 `warn`） | 仍然删掉这个 Team 吗、服务器上的服务留着：`detail` 说为什么没卸成（SSH 登录不上、那个目录里没装、装着别的 Team 的……）和服务器上怎么自己卸载（`sudo sh cca-hub-install.sh --uninstall --dir 目录`）。答是：删掉这台设备上的（`result` 的 `team_left`）；答否（默认）：什么都不删，按取消收场（`fail` 的 `cancelled`）。终端里没人能答时不删，原因里说确定只删这台设备上的就加 `--keep-server` |
 | `hub.platform` | `team hosted <Team>`（没写平台时；App 不调这条命令，一般在终端里问） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署 |
 | `team.new` | `team new`（App 里，不写名字） | `text` | 新建 Team：名字（校验 teamname：1～64 个字符，不能有控制字符）。建在这台设备上（它是管理员），接着问 `team.accounts`（这台设备上没有能放的账号时不问），成了 `result` 的 `team_created`（`message` 说放进了几个账号），接着要部署它的同步服务器 |
 | `team.accounts` | `team new`（没写 `--accounts` 时） | `multi`（`optional`，`min` 是 0） | 这台设备上哪些账号连同现在走的节点、别名放进新建的 Team：每个选项是一个账号（`label` 是工具、别名和邮箱，`note` 是走哪个节点、已经在哪个 Team 里），只列能放的（自己加的官方账号，和这台设备当管理员的别的 Team 里的）。自己加的预先选好：写在 `value` 里、`default` 是空的（都不勾交上来是空的答案：一个都不放）。页上有 `submit`（「新建」）。3.5.5 起；以前的 cca 新建时不问，建的是空的 Team |
@@ -938,8 +940,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `[codex] rename` | 账号页的名字 | 无交互命令（4.4） |
 | `[codex] reorder` | 拖动账号、置顶 | 无交互命令（4.7） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
-| `team new`、`team join`、`team deploy <Team>` | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` |
-| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave` | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team new`、`team join`、`team deploy <Team>`、`team leave <Team>`（管理员） | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」「删掉这个 Team…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`；`consent.team_delete`、`hub.password`、`hub.pubkey`、`team.keep_server`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` / `team_left` |
+| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave`（成员） | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -1038,6 +1040,12 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   成了 `result` 的 `team_joined`；加入了、配置还没同步下来时前面有 `fail` 的 `team_sync`（退出码照样是 0）。这台设备在 Team 里的名字用管理员发邀请时
   给它起的（邀请里带着；旧版本发的邀请里没有：用主机名，管理员那边对一遍时改成它起的）。
 - **退出**（`cca team leave [Team]`）：要同意（成员是 `team_leave`、管理员是 `team_delete`，范围都是 Team 的编号，默认否），成了 `result` 的 `team_left`。
+  管理员退出就是**删除**这个 Team（`cca team leave <Team> [[用户@]主机] [-p 端口] [-i 私钥] [--dir 目录] [--keep-server]`，3.6.3 起）：同意以后先经 SSH
+  卸掉它的同步服务器（`cca team deploy` 记下的那台；以前的版本部署的照部署的默认猜：`root@`服务器的地址、`/opt/cca-team-<编号的前 8 位>`；
+  托管平台上的、自己配的不卸，`detail` 里说要自己去删），卸好了再删这台设备上的。App 里是提问会话（`Handoff.teamDelete`）：登录不了时和部署一样问密码
+  （`hub.password`）、给出加公钥那一行（`hub.pubkey`），卸不掉时问要不要照样删、服务器留着（`team.keep_server`）；`result` 的 `message` 说卸掉了哪台上的
+  哪个目录。命令行里没人能答时卸不掉就不删（`fail` 的 `team_ssh`、`team_install`、`team_taken`……，原因里说加 `--keep-server`）。成员退出照旧是无交互命令
+  （先同意再重跑）。
 - **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
 - **邀请**（`cca team invite <Team> <名字> [--accounts all|none|工具:邮箱,…]`；还在这个 Team 里的别的设备已经叫这个名字时是 `team_name`，
   3.5.3-beta.7 起）：邀请链接只打到 stdout 一行（说明在 stderr），在 Claude Code 的
@@ -1063,9 +1071,10 @@ cca 升级后第一次运行时删掉本机的映射、deploy key 和经维护�
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
   `team_alias`、`team_no_account`、`team_accounts`（`cca team new --accounts` 写的账号这台设备上没有、不能放：什么都没建）、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
   别的节点、安装客户端用着它）、
-  `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）那一步的
+  `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）、删除 Team 时卸载
+  （`cca team leave`）那一步的
   `team_ssh`、`team_ssh_hostkey`、`team_ssh_denied`、`team_root`、`team_deps`、`team_image`、`team_port`、`team_taken`、`team_host`、`team_start`、
-  `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
+  `team_install`（SSH、服务器上的安装脚本说的，见 docs/dev/team.md「经 SSH 装」；卸载时目录里没装也是 `team_install`）；做完了、带着的提醒（退出码 0）：`team_sync`、`team_publish`（邀请发了、配置还没存上）、`team_forward`（换了服务器、
   原来那台上没收尾成）。App 不按这些原因码分别处理：`fail` 事件的 `message` 照原样显示。
 
 ## 5. `cca gui`

@@ -870,6 +870,32 @@ class DeployTest(Base):
         self.assertEqual(self.code(a, 'team-deploy', tid, 'root@box', '--reset', **env), 'usage')
         self.assertEqual(self.code(bob, 'team-deploy', tid, 'root@box', **env), 'not_admin')
 
+    def test_undeploy(self):
+        """删除 Team 时卸载（team-undeploy：cca team leave 的管理员经它）：经 SSH 运行同一个脚本的 --uninstall，带着这个 Team 的根公钥——
+        目录里装的是别的 Team 的不动（taken），没装的是 install；卸好了 stdout 是目录。部署时记下了装到哪（admin.json 的 deploy），删除时照它"""
+        b = self.box()
+        a, tid, root, svc = self.team()
+        a2, tid2, root2, svc2 = self.team('乙组')
+        d, d2 = b.root / 'opt' / svc, b.root / 'opt' / svc2
+        self.deploy(a, tid, b, '--port', str(free_port()))
+        self.deploy(a2, tid2, b, '--port', str(free_port()))
+        self.assertEqual(json.loads((a.cca / 'teams' / tid / 'admin.json').read_text())['deploy'],
+                         {'target': 'root@box', 'ssh_port': '', 'dir': '/opt/' + svc})
+        self.assertEqual(a.ok('team-leave', 'plan', tid).rstrip('\n').split('\t')[4:], ['root@box', '', '/opt/' + svc, '1'])
+        env = dict(self.ENV, HUB_ENTER=str(b.enter))
+        self.assertEqual(self.code(a, 'team-undeploy', tid, 'root@box', '--dir', '/opt/' + svc2, **env), 'taken', '装的是别的 Team 的')
+        self.assertTrue((d2 / '.env').exists(), '别的 Team 的不动')
+        self.assertEqual(self.code(a, 'team-undeploy', tid, 'root@box', '--dir', '/opt/nothing-here', **env), 'install', '目录里没装')
+        r = a.run('team-undeploy', tid, 'root@box', '--check', **env)
+        self.assertEqual((r.returncode, r.stdout, (d / '.env').exists()), (0, '', True), '--check 只看登录得上不')
+        r = a.run('team-undeploy', tid, 'root@box', **env)
+        self.assertEqual((r.returncode, r.stdout), (0, '/opt/%s\n' % svc), r.stderr)
+        self.assertIn('卸载了 Team 的同步服务器', r.stderr, '服务器那边的进度经 ssh 的 stderr 直接打出来')
+        self.assertNotIn('cca team attach', r.stderr, '删除 Team 时卸载：不再说换一台接上')
+        self.assertFalse(d.exists())
+        self.assertTrue((d2 / '.env').exists(), '同一台服务器上别的 Team 的照旧')
+        self.assertEqual(self.code(a2, 'team-undeploy', tid, 'root@box', **env), 'no_team')
+
     def test_recorded_host(self):
         """服务器上已经装着这个 Team（在服务器上直接运行安装脚本装的，记着地址），这台设备还没接上它：ssh 走的是内网地址时，
         各台设备连的也是安装脚本定下的（服务器上记着的）那个，和网页端的一致"""

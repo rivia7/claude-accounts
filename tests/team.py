@@ -324,7 +324,9 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.code(bob, 'team-sync', tid), 'no_team')
         rows = {r['label']: r['state'] for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
         self.assertEqual(rows, {'studio': 'joined', 'bob-mini': 'revoked', 'spec': 'joined', 'no-proof': 'revoked', 'bob-again': 'left'})
-        self.assertEqual(self.lines(admin, 'team-leave', 'plan', '测试组'), ['%s\t测试组\tadmin\t127.0.0.1:%d' % (tid, srv.port)])
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', '测试组'),
+                         ['%s\t测试组\tadmin\t127.0.0.1:%d\troot@127.0.0.1\t22\t/opt/cca-team-%s\t0' % (tid, srv.port, tid[:8])],
+                         '管理员：后面是删除时去哪卸载它的同步服务器（手动接上的、没记下部署到哪：照部署的默认猜，最后一项是 0）')
         self.assertTrue(t.exists())
         self.assertEqual(self.lines(admin, 'team-leave', 'apply', tid)[:2], ['测试组', '127.0.0.1:%d' % srv.port])
         self.assertFalse(t.exists())
@@ -1074,6 +1076,8 @@ class TeamTest(Sessions, unittest.TestCase):
         admin.env['CURL_CA_BUNDLE'] = str(d / 'ca.pem')
         self.assertEqual(self.lines(admin, 'team-attach', tid, url)[0], '127.0.0.1:%d' % srv.port)
         self.assertEqual(json.loads((self.tdir(admin, tid) / 'team.json').read_text())['pins'], [])
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid), ['%s\t托管组\tadmin\t127.0.0.1:%d' % (tid, srv.port)],
+                         '照证书机构验的（托管平台、自己配的反向代理）不是安装脚本装的：删除 Team 时不猜去哪卸载')
         link, _ = self.invite(admin, tid, 'bob-mini')
         bob = self.device('bob')
         self.assertEqual(self.code(bob, 'team-join', '--name', 'bob-mini', stdin=link), 'cert')
@@ -1082,6 +1086,37 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(bob, 'team-join', '--name', 'bob-mini', stdin=link)[5], 'ok')
         argv = (bob.home / 'curl.argv').read_text()
         self.assertTrue('--pinnedpubkey' not in argv and ' -k ' not in argv, argv)
+
+    def test_delete_plan(self):
+        """删除 Team（管理员的 team-leave）时去哪卸载它的同步服务器：cca team deploy 记下的照它（装好了没接上、再手动接上的也是），从接着的
+        一台换到别的地址就不算了，照部署的默认猜；中间空着的项照样占一栏（bash 按 \\037 分）。apply --server-gone（刚卸掉了）不再告诉
+        服务器。team-undeploy 只收 SSH 的几项和 --dir"""
+        admin = self.device('admin')
+        tid, root, _ = self.lines(admin, 'team-new', '机房组', '--device', 'studio')
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid), ['%s\t机房组\tadmin\t' % tid], '没接上、没部署过：没有要卸的')
+        p = self.tdir(admin, tid) / 'admin.json'
+        a = json.loads(p.read_text())
+        a['deploy'] = {'target': 'ops@vps', 'ssh_port': '', 'dir': '/srv/team'}   # cca team deploy 装好了、没接上
+        p.write_text(json.dumps(a))
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid), ['%s\t机房组\tadmin\t\tops@vps\t\t/srv/team\t1' % tid])
+        srv, url, pin = self.server(root)
+        self.lines(admin, 'team-attach', tid, url, pin)
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid),
+                         ['%s\t机房组\tadmin\t127.0.0.1:%d\tops@vps\t\t/srv/team\t1' % (tid, srv.port)], '再手动接上：照旧是记下的那台')
+        srv2, url2, pin2 = self.server(root, name='srv2')
+        self.lines(admin, 'team-attach', tid, url2, pin2)
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid),
+                         ['%s\t机房组\tadmin\t127.0.0.1:%d\troot@127.0.0.1\t22\t/opt/cca-team-%s\t0' % (tid, srv2.port, tid[:8])],
+                         '换到别的地址：记下的那台不算了，照部署的默认猜')
+        self.assertNotIn('deploy', json.loads(p.read_text()))
+        self.assertEqual(self.code(admin, 'team-undeploy', tid), 'usage', '要写服务器')
+        for bad in (('--port', '18445'), ('--no-web',), ('--dir', '/etc/cca'), ('--ssh-port', '0')):
+            self.assertEqual(self.code(admin, 'team-undeploy', tid, 'root@192.0.2.10', *bad), 'usage', bad)
+        self.assertEqual(self.code(self.device('bob'), 'team-undeploy', tid, 'root@192.0.2.10'), 'no_team')
+        srv2.stop()
+        self.assertEqual(self.lines(admin, 'team-leave', 'apply', tid, '--server-gone'), ['机房组', '127.0.0.1:%d' % srv2.port, ''],
+                         '服务器刚卸掉了：不再去告诉它（连不上也不说）')
+        self.assertFalse(self.tdir(admin, tid).exists())
 
     def test_invite_for_a_key(self):
         """给一把指定的公钥的邀请（cca team invite --key：设备拿已经有的密钥加入，这里由照文档独立实现的那一份扮演）：拿这把密钥加入的

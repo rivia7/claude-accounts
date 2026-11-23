@@ -98,10 +98,11 @@ func teamFixtureTests() {
           && CcaCommand.teamLeave(team: teamA).runsToCompletion && CcaCommand.teamSync.gate == CcaCommand.routerSync.gate
           && CcaCommand.teamGrant(team: teamA, device: "d", changes: ["all"]).gate == CcaCommand.routerSync.gate
           && Handoff.teamJoin.arguments == ["team", "join"] && Handoff.teamJoin.inApp)
-    check("提问会话：新建（问名字）、部署（问服务器：和自己的同步服务器同一套表单）；结果码",
+    check("提问会话：新建（问名字）、部署（问服务器：和自己的同步服务器同一套表单）、删除（管理员：卸载服务器时问密码、卸不掉时问要不要照样删）；结果码",
           Handoff.teamNew.arguments == ["team", "new"] && Handoff.teamNew.inApp && Handoff.teamNew.needsForms
           && Handoff.teamDeploy(team: teamA).arguments == ["team", "deploy", teamA] && Handoff.teamDeploy(team: teamA).needsForms
-          && ResultCode.allKnown.contains(.teamCreated) && ResultCode.allKnown.contains(.teamDeployed))
+          && Handoff.teamDelete(team: teamA).arguments == ["team", "leave", teamA] && Handoff.teamDelete(team: teamA).inApp
+          && ResultCode.allKnown.contains(.teamCreated) && ResultCode.allKnown.contains(.teamDeployed) && ResultCode.allKnown.contains(.teamLeft))
 }
 
 /// Team 在界面模型里：筛选（侧栏、菜单栏面板、总览共用），管理员看设备、发邀请（链接只进剪贴板）、改授权
@@ -254,4 +255,15 @@ func teamFixtureTests() {
         check("\(label)：开提问会话 cca \(want.joined(separator: " "))（成员的 Team 不部署）", await waitUntil { !t2.started.isEmpty } && t2.started == [want], "\(t2.started)")
         m2.shutdown()
     }
+    // 删掉（管理员）开提问会话：卸载服务器时要问密码、卸不掉时问要不要照样删。成员退出照旧是一条命令（先同意再重跑）
+    let t3 = transport(hello)
+    let m3 = makeModel(t3)
+    await m3.start()
+    m3.leaveTeam(m3.teams[1])
+    check("退出这个 Team…（成员）：一条命令 cca team leave，不开会话",
+          await waitUntil { teamRuns(t3).contains(["team", "leave", teamB]) && !m3.teamBusy } && t3.started.isEmpty, "\(teamRuns(t3)) \(t3.started)")
+    m3.leaveTeam(m3.teams[0])
+    check("删掉这个 Team…（管理员）：开提问会话 cca team leave", await waitUntil { !t3.started.isEmpty } && t3.started == [["team", "leave", teamA]]
+          && !teamRuns(t3).contains(["team", "leave", teamA]), "\(t3.started)")
+    m3.shutdown()
 }

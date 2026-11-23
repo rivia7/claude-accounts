@@ -261,6 +261,11 @@ case "$dest" in
 	nohub|*@nohub)
 		case " ${args[*]} " in *" -G "*) printf 'user root\nhostname nohub\nport 22\n'; exit 0 ;; esac
 		echo "ssh: Could not resolve hostname nohub: nodename nor servname provided, or not known" >&2; exit 255 ;;
+	# 本机：回归里 Team 的服务器在 127.0.0.1，删除 Team 照部署的默认猜的是 root@127.0.0.1——连不上，绝不能落到下面路由器的假命令里
+	# （那里是 /bin/dash 直接运行：卸载用的安装脚本会在这台 Mac 上跑）
+	127.0.0.1|*@127.0.0.1|localhost|*@localhost)
+		case " ${args[*]} " in *" -G "*) printf 'user root\nhostname 127.0.0.1\nport 22\n'; exit 0 ;; esac
+		echo "ssh: connect to host 127.0.0.1 port 22: Connection refused" >&2; exit 255 ;;
 esac
 # 出门在外（$CCA_T/away）：连不上路由器（$CCA_T/vpn 时经 ZeroTier、VPN 连得上）
 [ -f "$CCA_T/away" ] && [ ! -f "$CCA_T/vpn" ] && { echo "ssh: connect to host $dest port 22: Operation timed out" >&2; exit 255; }

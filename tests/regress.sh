@@ -3544,7 +3544,7 @@ ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备�
 out=$(runev CCA_GRANT="team_revoke:$TMDEV" cca team revoke 书房组 dan-air 2>&1); rc=$?
 ok "同意以后移除了（result 的 team_revoked）：服务器不认它了" '[ $rc -eq 0 ] && [ "$(lastres)" = team_revoked ] && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1,2)" = "403 unknown_device" ] && run cca team devices 书房组 2>&1 | grep -q "dan-air（.*）：revoked"'
 out=$(runev cca team leave 书房组 2>&1); rc=$?
-ok "cca team leave（管理员）：先发同意事件（team_delete，范围是 Team 的编号，说根密钥就没了），什么都不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_delete\" and e[\"scope\"] == \"$TMID\" and \"根密钥\" in e[\"detail\"]" && [ -f "$H/.cca/teams/$TMID/root_ed25519" ]'
+ok "cca team leave（管理员）：先发同意事件（team_delete，范围是 Team 的编号，说根密钥就没了；没记下部署到哪：照部署的默认猜 root@服务器的地址，说不对怎么写清楚），什么都不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_delete\" and e[\"scope\"] == \"$TMID\" and \"根密钥\" in e[\"detail\"] and \"经 SSH 登录 root@127.0.0.1（端口 22）\" in e[\"detail\"] and \"照部署的默认猜的\" in e[\"detail\"] and \"cca team leave ${TMID:0:8} 用户@服务器\" in e[\"detail\"]" && [ -f "$H/.cca/teams/$TMID/root_ed25519" ]'
 out=$(run CCA_TTY="$(ans n)" cca team leave 2>&1); rc=$?
 ok "终端里问（默认否）：答不就不退" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已取消" && [ -f "$H/.cca/teams/$TMID/root_ed25519" ]'
 # --- 这台 Mac 当成员：另一个 Team，管理员是独立实现的那一头
@@ -3651,7 +3651,11 @@ runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>
 out=$(run CCA_TTY="$(ans '')" cca team new 终端组 --device 书房的Mac 2>&1); rc=$?
 TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
 ok "终端里直接回车：放进自己加的那几个（预先选好的）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "放进了 ${TMCON} 个账号" && [ "$(tmacc "$TMXID")" = "$TMCO" ]'
-runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>&1
+# 删除时卸不掉服务器（记下的部署是 root@127.0.0.1：假 ssh 一律连不上），App 里答「仍然删掉」：照样删，result 说哪台上的没卸掉、怎么自己卸载
+python3 -I -c 'import json, sys; p = sys.argv[1]; a = json.load(open(p)); a["deploy"] = {"target": "root@127.0.0.1", "ssh_port": "", "dir": "/opt/tm-left"}; open(p, "w").write(json.dumps(a))' "$H/.cca/teams/$TMXID/admin.json"
+: > "$T/ssh.log"
+out=$(sess '{"consent.team_delete":[{"v":"y"}],"team.keep_server":[{"v":"y"}]}' -- cca team leave "${TMXID:0:8}" 2>&1); rc=$?
+ok "App 里删除、服务器连不上（照 cca team deploy 记下的那台）：问要不要仍然删掉，答是就删（result 事件 team_left 说哪台上的没卸掉、在服务器上怎么自己卸载）" '[ $rc -eq 0 ] && [ "$(asks)" = "consent.team_delete team.keep_server" ] && grep -q "^SSH root@127.0.0.1 " "$T/ssh.log" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_left\" and \"root@127.0.0.1 上的同步服务器没卸掉\" in e[\"message\"] and \"--uninstall --dir /opt/tm-left\" in e[\"message\"]" && [ ! -e "$H/.cca/teams/$TMXID" ]'
 TMN=$(ls "$H/.cca/teams" | grep -cE '^[0-9a-f]{32}$')
 out=$(runev cca team new 坏组 --accounts claude:nobody@example.com 2>&1); rc=$?
 ok "cca team new --accounts：写的账号这台设备上没有（不能放的也一样）：什么都不建（fail 事件 team_accounts）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_accounts\"" && printf "%s" "$out" | grep -q "这台设备上没有 claude:nobody@example.com" && [ "$(ls "$H/.cca/teams" | grep -cE "^[0-9a-f]{32}$")" = "$TMN" ]'
@@ -3694,11 +3698,22 @@ out=$(run CCA_TTY="$(ans hubbox '' '')" cca team deploy 机房组 2>&1); rc=$?
 ok "终端里不写服务器（App 里「改在终端里完成」）：问地址（接着的预填它的）、SSH 用户（root）、端口（22），再部署（只更新）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新 root@hubbox 上「机房组」的同步服务器"'
 out=$(run cca team hosted 机房组 sealos --dir "$T/tm-hosted" 2>&1); rc=$?
 ok "cca team hosted：生成部署到托管平台的文件、打出步骤（环境变量里是公开的根公钥），说接上的那一行" '[ $rc -eq 0 ] && [ -s "$T/tm-hosted/cca-presence.py" ] && [ -s "$T/tm-hosted/README.md" ] && printf "%s" "$out" | grep -q "环境变量：CCA_TEAM_ROOT=AAAA" && printf "%s" "$out" | grep -q "cca team attach ${TMDID:0:8} https://"'
-out=$(run cca team deploy --script 2>/dev/null | run ssh root@hubbox sh -s -- --uninstall --dir "/opt/$TMDSVC" 2>&1); rc=$?
-runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" >/dev/null 2>&1
-ok "照文档卸载（cca team deploy --script | ssh 服务器 sh -s -- --uninstall --dir 目录）：停掉这个 Team 的服务、删掉程序和数据；这台设备上删掉了这个 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "卸载了 Team 的同步服务器" && [ ! -e "$TMDD" ] && [ ! -e "$T/hubbox/server.$TMDSVC.pid" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ]'
-out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
-ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
+# 删除 Team（管理员的 cca team leave）：先经 SSH 卸掉它的同步服务器（cca team deploy 记下了装到哪：root@hubbox、端口 22、/opt/<服务名>），
+# 卸好了才删这台设备上的。卸不成：命令行里不删，说加 --keep-server；App 里问要不要照样删（team.keep_server）。安装脚本的 --uninstall 细的在
+# tests/hub_deploy.py
+out=$(runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" root@nohub 2>&1); rc=$?
+ok "cca team leave（管理员，写了服务器）：SSH 连不上就不删（fail 事件 team_ssh，说确定只删这台设备上的要加 --keep-server）；服务器上、这台设备上都没动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_ssh\" and \"root@nohub\" in e[\"message\"] and \"cca team leave ${TMDID:0:8} --keep-server\" in e[\"message\"]" && [ -d "$H/.cca/teams/$TMDID" ] && [ -e "$TMDD/.env" ]'
+out=$(run cca team leave "${TMDID:0:8}" root@hubbox --keep-server 2>&1); rc=$?
+ok "--keep-server 是不卸载：不能再写服务器" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不用再写服务器" && [ -d "$H/.cca/teams/$TMDID" ]'
+out=$(sess '{"consent.team_delete":[{"v":"y"}],"team.keep_server":[{"v":"n"}]}' -- cca team leave "${TMDID:0:8}" root@hubbox --dir /opt/cca-team-elsewhere 2>&1); rc=$?
+ok "App 里删除：先问同意（consent.team_delete：说经 SSH 登录哪台、删掉哪个目录、根密钥）；那个目录里没装（卸不成）：问要不要仍然删掉（team.keep_server，默认否，说服务器上怎么自己卸载），答否就不删" '[ $rc -ne 0 ] && [ "$(asks)" = "consent.team_delete team.keep_server" ] && evq "e.get(\"q\") == \"consent.team_delete\" and e[\"title\"] == \"删除 Team\" and \"root@hubbox\" in e[\"fields\"][0][\"detail\"] and \"/opt/cca-team-elsewhere\" in e[\"fields\"][0][\"detail\"] and \"根密钥\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"team.keep_server\" and e[\"fields\"][0][\"default\"] == \"n\" and \"--uninstall --dir /opt/cca-team-elsewhere\" in e[\"fields\"][0][\"detail\"]" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\"" && [ -d "$H/.cca/teams/$TMDID" ] && [ -e "$TMDD/.env" ]'
+printf '%s' "$HBPW" > "$T/hubbox/password"; : > "$T/ssh.log"
+out=$(sess '{"consent.team_delete":[{"v":"y"}],"hub.password":[{"v":"'$HBPW'"}]}' -- env TMPDIR="$T/askpass.tmp" cca team leave 机房组 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx4/prompts_team_delete.jsonl"
+rm -f "$T/hubbox/password"
+ok "App 里删除，照部署时记下的卸载：这台 Mac 的密钥登录不了时问密码（hub.password，说只用在这一次卸载），经 SSH_ASKPASS 给 ssh；停掉这个 Team 的服务、删掉程序和数据，再删掉这台设备上的（result 事件 team_left 说卸掉了哪台上的哪个目录）；密码不在事件、输出里" '[ $rc -eq 0 ] && [ "$(asks)" = "consent.team_delete hub.password" ] && evq "e.get(\"q\") == \"hub.password\" and \"这一次卸载\" in e[\"message\"]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_left\" and \"卸掉了 root@hubbox 上的同步服务器（/opt/${TMDSVC}）\" in e[\"message\"]" && grep -q "^ASKPASS rc=0 dir=$T/askpass.tmp/cca-askpass\." "$T/ssh.log" && [ ! -e "$TMDD" ] && [ ! -e "$T/hubbox/server.$TMDSVC.pid" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ] && ! grep -qF "$HBPW" "$T/ev.jsonl" "$T/ssh.log" && ! printf "%s" "$out" | grep -qF "$HBPW"'
+: > "$T/ssh.log"
+out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave --keep-server 2>&1); rc=$?
+ok "管理员 --keep-server：不碰服务器（说它留着、怎么自己卸载），这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && printf "%s" "$out" | grep -q "留着不卸，要自己卸载（在服务器上运行 sudo sh cca-hub-install.sh --uninstall --dir /opt/cca-team-${TMID:0:8}）" && ! grep -qE "^SSH ([^ ]*@)?(127\.0\.0\.1|hubbox) " "$T/ssh.log" && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
 # --- 换了版本以后的第一条命令（update_after）：各个 Team 同步配置这次不等间隔（在后台）。照 update/ran（上一次运行的版本）认；以前的
 #     版本不记 ran：没有 ran、有更新留下的上一个版本（update/cca.prev.version）也算换了版本，全新安装的两样都没有，不算。这台 Mac
 #     先拿一个新的邀请重新加入客厅组（spec_wire 扮演管理员）

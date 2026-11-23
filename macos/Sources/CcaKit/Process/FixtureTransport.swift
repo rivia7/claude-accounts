@@ -248,6 +248,7 @@ struct FixtureTransport: Transport {
         if args.first == "mail", args.dropFirst().first == "setup" { args = ["mail", "setup"] }   // 默认 / --account 都用同一个演示流程
         if args.first == "mail", args.dropFirst().first == "trust-forwarder" { args = ["mail", "trust-forwarder"] }   // 不管哪个账号都用同一个演示流程
         if args.first == "team", args.dropFirst().first == "deploy" { args = ["team", "deploy"] }   // 哪个 Team 都用同一个演示流程
+        if args.first == "team", args.dropFirst().first == "leave" { args = ["team", "leave"] }   // 删除 Team（管理员）：同上
         let name = "flow_" + args.joined(separator: "_") + ".flow"
         guard let d = read(name) else { throw SessionUnsupported() }
         return DemoSession(data: d)

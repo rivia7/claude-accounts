@@ -98,7 +98,7 @@ private struct TeamBlock: View {
                 .buttonStyle(.glass)
                 .fixedSize()
                 .disabled(model.flow != nil || model.teamBusy)
-                .help(team.isAdmin ? "删掉：这台设备上的根密钥跟着没了，这个 Team 再没有谁管得了（先问一句）"
+                .help(team.isAdmin ? "删掉：部署过同步服务器的先经 SSH 卸掉它，这台设备上的根密钥跟着没了，这个 Team 再没有谁管得了（先问一句）"
                       : "退出：这个 Team 给的账号移出账号表，登录都留着（先问一句）")
             }
             InfoRow(Text(Texts.teamState(team)), systemImage: Self.symbol(team.state), tint: Self.tint(team.state)) { EmptyView() }

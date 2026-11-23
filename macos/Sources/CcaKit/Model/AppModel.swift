@@ -1617,8 +1617,14 @@ final class AppModel {
         runTeam(.teamSync, failureTitle: "没能同步 Team 的配置", success: "已同步", refresh: nil)
     }
 
-    /// 退出一个 Team（cca 先问同意：成员是 `consent.team_leave`，管理员是 `consent.team_delete`——这台设备上的根密钥跟着没了）
+    /// 退出一个 Team（cca 先问同意：`consent.team_leave`）。管理员是删除：提问会话（`Handoff.teamDelete`，`consent.team_delete`——先经 SSH 卸掉
+    /// 它的同步服务器，登录不了时问密码、卸不掉时问要不要照样删，这台设备上的根密钥跟着没了）
     func leaveTeam(_ t: TeamEntry) {
+        if t.isAdmin {
+            guard phase == .ready, teamAvailable, !teamBusy else { return }
+            run(.teamDelete(team: t.id))
+            return
+        }
         runTeam(.teamLeave(team: t.id), failureTitle: "没能退出「\(t.name)」", success: "退出了", refresh: nil)
     }
 

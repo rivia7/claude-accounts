@@ -773,6 +773,7 @@ uninstall() {   # 停掉、删掉这个目录里装的（只认装过的目录�
 	rmdir "$ROOT$D" 2>/dev/null
 	[ -n "$o" ] || ! id "$SVC" >/dev/null 2>&1 || userdel "$SVC" >/dev/null 2>&1
 	if [ "$SVC" = cca-hub ]; then say "✓ 卸载了以前的自己的同步服务器（${D} 里的程序、证书、数据都删了）"
+	elif [ -n "$MANAGED" ]; then say "✓ 卸载了 Team 的同步服务器（${D} 里的程序、证书、数据都删了）"   # 删除 Team（cca team leave）时：接着删的就是这个 Team
 	else say "✓ 卸载了 Team 的同步服务器（${D} 里的程序、证书、数据都删了）。管理员要换一台接上（cca team attach），或者各台设备退出（cca team leave）"; fi
 	[ -z "$ACMEGONE" ] || say "  这台服务器上没有别的 Team 用网页端了：共用的证书助手（${AD}，连同证书、账户）也删掉了"
 	note ok

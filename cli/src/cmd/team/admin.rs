@@ -10,7 +10,9 @@
 //!             "nodes": {"group", "proxies"} | null},
 //!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字（设备的名字以它为准：align_names）, "state": local | invited | joined |
 //!              expired | revoked, "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
-//!              "sha": 那一版内容的摘要, "exp": 邀请什么时候过期}}}
+//!              "sha": 那一版内容的摘要, "exp": 邀请什么时候过期}},
+//!  "deploy": {"target": [用户@]主机, "ssh_port": SSH 端口（没写是空的）, "dir": 目录}（cca team deploy 装到了哪台：删除 Team 时照它卸载；
+//!             手动 cca team attach 换到别的地址时去掉）}
 //! ```
 //! 每台设备那串随机数（邀请里的 k）不存：是 HMAC(主密钥, "cca-team-k-v1\0" 序数) 的前 16 个字节，随时重算。所以备份根密钥和主密钥
 //! 就够了（管理员的本机状态丢了，各台设备的密钥还算得出来）。
@@ -22,7 +24,7 @@ use super::doc::{
     Invite, SEQ_MAX,
 };
 use super::{cfg_of, fail, fault, find_team, index_add, now, pub_line, save_team, sync_locked, team_lock};
-use crate::cmd::hub::deploy::team_install;
+use crate::cmd::hub::deploy::{team_install, team_uninstall, url_parts};
 use crate::cmd::hub::hosted::team_files;
 use crate::cmd::hub::own_account;
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, with_https_port, NAME_BAD};
@@ -1020,8 +1022,14 @@ pub fn cmd_team_attach(args: &[String]) -> R<()> {
     if pins.len() > 4 || !pins.iter().all(|p| PRESENCE_PIN_RE.fullmatch(p).is_some()) {
         return fail("pin", "证书公钥的指纹要写成 sha256//…（最多 4 个）");
     }
+    let (tid, moving) = (t.id.clone(), t.attached() && t.url != url);
     match attach(t, &a, url, pins)? {
         Ok(x) => {
+            // 从接着的一台换到了别的地址：新的那台不知道是怎么装的（手动、托管平台），删除 Team 时不再照原来记下的那台去卸载（没接上的
+            // 话还连着原来那台：照旧）。原来没接上的（cca team deploy 装好了、没接上，再手动接上）照旧：多半接的就是装好的那台
+            if moving && a.pop("deploy").is_some() {
+                admin_save(&tid, &a)?;
+            }
             out!("{}\n{}\n{}\n{}\n{}", x.host, x.device, x.members, x.stored, x.note);
             Ok(())
         }
@@ -1114,6 +1122,9 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         return Ok(());
     };
     let (t, a, _lk) = admin_of(&tid)?;
+    // 记下装到了哪台（接没接上都是装在那里了）：删除 Team 时照它卸载（undeploy_plan）
+    a.set("deploy", dict! { "target" => inst.target.as_str(), "ssh_port" => inst.ssh_port.as_str(), "dir" => inst.dir.as_str() });
+    admin_save(&tid, &a)?;
     let x = match attach(t, &a, inst.url.clone(), std::slice::from_ref(&inst.pin))? {
         Ok(x) => x,
         Err((c, why)) => {
@@ -1145,6 +1156,44 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         ("web_off", inst.web_off.as_str()),
     ]);
     Ok(())
+}
+
+/// py team-undeploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--dir 目录] [--batch] [--askpass] [--check]：经 SSH 卸掉这个
+/// Team 的同步服务器（deploy.rs 的 team_uninstall；带着根公钥，安装脚本核对目录里装的是这个 Team 的）。删除 Team（管理员 cca team leave）
+/// 时 bash 先调它，卸好了才删这台设备上的（team-leave apply --server-gone）。--check：只看登录得上不。stdout：卸掉的目录（--check 时没有）。
+/// 原因码：no_team、not_admin、usage、key，SSH 和安装脚本的那些（ssh…、root、deps、taken、install：目录里没装它也是 install）
+pub fn cmd_team_undeploy(args: &[String]) -> R<()> {
+    let [sel, rest @ ..] = args else {
+        return Err(Fail::Die("用法: py team-undeploy Team [用户@]主机 [选项]".into()));
+    };
+    // 经 SSH 可能要一会儿：不拿着这个 Team 的锁
+    let (t, _a, lk) = admin_of(sel)?;
+    let (root, svc) = (t.root.clone(), format!("cca-team-{}", &t.id[..8]));
+    drop(lk);
+    if let Some(dir) = team_uninstall(rest, &root, &svc)? {
+        out!("{dir}");
+    }
+    Ok(())
+}
+
+/// 删除 Team 时去哪卸载它的同步服务器（team-leave plan）：(目标, SSH 端口（空的是照 ssh 的配置）, 目录, 是不是部署时记下的)。cca team deploy
+/// 记下的照它（装好了、没接上的也是：服务器上装着）；没记下的（以前的版本部署的、手动装的）照部署的默认猜：root@服务器的地址、22、
+/// /opt/cca-team-<编号的前 8 位>（猜错了卸不成，bash 那边问要不要只删这台设备上的；安装脚本核对目录里装的是这个 Team 的，别的不动）。
+/// 证书照证书机构验的（没钉指纹：托管平台、自己配的反向代理）不是安装脚本直接装的，不猜。不是管理员、没有服务器是 None
+pub fn undeploy_plan(t: &Team) -> Option<(String, String, String, bool)> {
+    let a = admin_load(t).ok()?;
+    let def_dir = format!("/opt/cca-team-{}", &t.id[..8]);
+    if let Some(d) = a.dict("deploy") {
+        if let Some(target) = d.str("target").filter(|x| !x.is_empty()) {
+            let dir = d.str("dir").filter(|x| !x.is_empty()).map_or(def_dir, |x| x.to_string());
+            return Some((target.to_string(), d.str("ssh_port").map(|x| x.to_string()).unwrap_or_default(), dir, true));
+        }
+    }
+    if !t.attached() || t.pins.is_empty() {
+        return None;
+    }
+    let (host, _) = url_parts(&t.url);
+    (!host.is_empty()).then(|| (format!("root@{host}"), "22".to_string(), def_dir, false))
 }
 
 /// py team-hosted Team railway|sealos [--dir 目录]：没有服务器时把这个 Team 的同步服务器部署到托管平台：生成部署文件（team_files）。

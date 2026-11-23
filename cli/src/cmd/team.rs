@@ -39,6 +39,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-candidates", admin::cmd_team_candidates),
     Cmd::all("team-attach", admin::cmd_team_attach),
     Cmd::all("team-deploy", admin::cmd_team_deploy),
+    Cmd::all("team-undeploy", admin::cmd_team_undeploy),
     Cmd::all("team-hosted", admin::cmd_team_hosted),
     Cmd::all("team-invite", admin::cmd_team_invite),
     Cmd::all("team-devices", admin::cmd_team_devices),
@@ -560,15 +561,19 @@ pub fn cmd_team_sync(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// py team-leave plan [Team] | apply 编号：退出一个 Team。plan（只读）：stdout 是「编号\t名字\t角色\t服务器的地址:端口」（bash 据此问同意：
-/// 管理员的设备退出就是这台设备上不再有这个 Team 的根密钥）。apply：请服务器移除这台设备（连不上、服务器已经不认它了也接着退），
-/// 本机记着的都删掉；stdout：Team 的名字、服务器的地址:端口（没接上是空行）、没告诉成服务器时的原因（告诉了是空行）。原因码：no_team
+/// py team-leave plan [Team] | apply 编号 [--server-gone]：退出一个 Team。plan（只读）：stdout 是「编号\t名字\t角色\t服务器的地址:端口」
+/// （没接上服务器时地址是空的），管理员知道服务器装在哪时后面再加「\t卸载的目标\tSSH 端口\t目录\t记下的」——bash 据此问同意：管理员的设备
+/// 退出就是删除这个 Team，先卸掉它的同步服务器（admin.rs 的 undeploy_plan：部署时记下的那台，「记下的」是 1；没记下的照部署的默认猜，是 0），
+/// 这台设备上不再有根密钥。中间的项可能是空的（没接上服务器的地址、没写的 SSH 端口）：bash 按 \037 分（tab 是 IFS 的空白，连着的会并成一个）。
+/// apply：请服务器移除这台设备（连不上、服务器已经不认它了也接着退；--server-gone：服务器刚卸掉了，不请），本机记着的都删掉；stdout：
+/// Team 的名字、服务器的地址:端口（没接上是空行）、没告诉成服务器时的原因（告诉了是空行）。原因码：no_team
 pub fn cmd_team_leave(args: &[String]) -> R<()> {
-    let (apply, sel) = match args {
-        [m] if m == "plan" => (false, None),
-        [m, s] if m == "plan" => (false, Some(s.as_str())),
-        [m, s] if m == "apply" => (true, Some(s.as_str())),
-        _ => return Err(Fail::Die("用法: py team-leave plan [Team] | apply 编号".into())),
+    let (apply, sel, gone) = match args {
+        [m] if m == "plan" => (false, None, false),
+        [m, s] if m == "plan" => (false, Some(s.as_str()), false),
+        [m, s] if m == "apply" => (true, Some(s.as_str()), false),
+        [m, s, g] if m == "apply" && g == "--server-gone" => (true, Some(s.as_str()), true),
+        _ => return Err(Fail::Die("用法: py team-leave plan [Team] | apply 编号 [--server-gone]".into())),
     };
     let t = match find_team(sel).and_then(|t| {
         if apply && Some(t.id.as_str()) != sel {
@@ -582,11 +587,15 @@ pub fn cmd_team_leave(args: &[String]) -> R<()> {
     };
     let host = if t.attached() { host_of(&t.url) } else { String::new() };
     if !apply {
-        out!("{}\t{}\t{}\t{host}", t.id, t.name, t.role.name());
+        let mut line = format!("{}\t{}\t{}\t{host}", t.id, t.name, t.role.name());
+        if let Some((target, port, dir, saved)) = admin::undeploy_plan(&t) {
+            line.push_str(&format!("\t{target}\t{port}\t{dir}\t{}", if saved { 1 } else { 0 }));
+        }
+        out!("{line}");
         return Ok(());
     }
     let mut note = String::new();
-    if t.attached() {
+    if t.attached() && !gone {
         match device_cfg(&t)? {
             Ok(cfg) => {
                 let (code, j) = presence_post(&cfg, "team_leave", &dict! {}, 10)?;

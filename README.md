@@ -205,7 +205,8 @@ cca 先用内置代理的内核校验一下（不联网），存成自定义节�
 - **管理**（管理员的设备上）：App 的「设备和账号」里看各台设备、改它能用哪些账号、移除它、改账号走的节点；终端里 `cca team devices Team`、`cca team grant Team 设备 all|none|+claude:邮箱|-claude:邮箱`、`cca team revoke Team 设备`（移除一台、撤回还没用掉的邀请）、`cca team rename Team 设备 新名字`（给一台设备改名字）、`cca team name Team 新名字`（改 Team 的名字，各台设备下次同步配置时跟着改）、`cca team alias Team 工具:邮箱 新别名`（改账号的别名：没起过的各工具各自编成 team-1、team-2……，同一个邮箱在两个工具里各有各的；各台设备上照 Team 给的用着的跟着改，自己改过的不动）、`cca team alias Team --lock`（锁定别名：各台设备上都照 Team 给的用、自己改不了；`--unlock` 解开）、`cca team publish Team`（和服务器对一遍、发布配置）。管理员退出（App「更多」里的「删掉这个 Team…」、`cca team leave`）以后这台设备上就没有根密钥了：这个 Team 再没有谁能邀请、移除设备、改配置，别的设备照旧用着手里的配置，服务器不会自己卸掉。
 - **以前用维护者共享的账号（`cca policy`）的**：3.6.0 去掉了维护者的映射和它的服务器，Team 是唯一的办法：向 Team 的管理员要一个邀请链接，运行 `cca team join` 加入（或者在 App 的「共享与同步」里点「粘贴邀请链接…」）。升级以后 cca 自己删掉这台设备上留下的映射、deploy key 和经维护者的服务器同步来的数据；`cca policy` 只说一声这件事。经维护者的服务器配对的远程会话要在 Team 的服务器上再配一次。
 - **以前用「自己的同步服务器」（`cca hub`）的**：3.5.3 去掉了它。升级以后 cca 自己删掉这台设备上留下的加入信息和经它同步来的数据；照上面在一台设备上建一个 Team（建的时候选上自己的账号，或者之后 `cca team import Team --mine`）、给别的设备发邀请。服务器上以前装的那一份这样卸掉：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-hub`（托管平台上的在平台上删掉）。
-- 卸载一个 Team 的服务器：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-team-<Team 编号的前 8 位>`（数据一起删掉）。服务器上装了什么、请求的格式见 [server/README.md](server/README.md)「Team 的同步服务器」。
+- **删除**一个 Team（管理员的设备上）：App「更多」里的「删掉这个 Team…」，或者 `cca team leave Team`。先问一句，再经 SSH 卸掉它的同步服务器（`cca team deploy` 装到的那台，停掉服务、程序和数据一起删掉；以前的版本部署的照部署的默认找 `root@服务器` 上的 `/opt/cca-team-<Team 编号的前 8 位>`，不对就写清楚：`cca team leave Team 用户@服务器 [-p 端口] [--dir 目录]`），卸好了再删这台设备上的根密钥。服务器连不上、卸不掉时会问要不要照样删（终端里没法问时不删）；只删这台设备上的、服务器留着：`--keep-server`。别的设备从此同步不到它的配置，各自退出。
+- 手动卸载一个 Team 的服务器：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-team-<Team 编号的前 8 位>`（数据一起删掉）。服务器上装了什么、请求的格式见 [server/README.md](server/README.md)「Team 的同步服务器」。
 
 ### 设备统计：Team 给的账号在哪些设备上用
 
@@ -508,7 +509,7 @@ cca uninstall
 不会动的：你原来的 `~/.claude`、`~/.claude.json`、`~/.codex`、`~/.gemini`（对话记录、设置等）和 `claude`、`codex`、`agy` 命令本身。要自己处理的：
 
 - 邮箱助手用的 Gmail 应用专用密码，在 Google 账号里自己撤销。
-- Team 的同步服务器不会被卸载（别的设备可能还在用），这台设备只是退出。是你部署的、都不用了，卸载 cca 之前先把服务器上的卸掉：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-team-<Team 编号的前 8 位>`（见 [server/README.md](server/README.md)「Team 的同步服务器」）。
+- Team 的同步服务器不会被卸载（别的设备可能还在用），这台设备只是退出。是你部署的、都不用了，卸载 cca 之前先删掉那个 Team（`cca team leave Team`：经 SSH 一起卸掉它的服务器，见上面「Team」），或者手动卸掉：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-team-<Team 编号的前 8 位>`（见 [server/README.md](server/README.md)「Team 的同步服务器」）。
 - 钉在程序坞里的账号启动器会变成带问号的图标，拖出去就行。
 
 ## 常见问题

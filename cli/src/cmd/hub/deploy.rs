@@ -3,6 +3,7 @@
 //!   证书助手 server/cca-acme.py 和网页端的文件 server/web/（都编进辅助程序里：改了要重新编）。`cca team deploy --script` 打出来的、
 //!   release.sh 放到发布页上的 cca-hub-install.sh 都是它：在服务器上用 root 运行（加 --team-root 这个 Team 的根公钥）
 //! - `team_install`（cca team deploy 经 cmd/team/admin.rs 调）：经 SSH 在服务器上运行同一个脚本（从 stdin 给过去，前面放进根公钥和参数）
+//! - `team_uninstall`（删除 Team：cca team leave 的管理员经 cmd/team/admin.rs 的 cmd_team_undeploy 调）：同样经 SSH 运行它的 --uninstall
 
 use super::fail;
 use crate::cmd::cost::version_ok;
@@ -49,6 +50,52 @@ const WEB_EOF: &str = "CCA_HUB_WEB_EOF";
 const REMOTE: &str = r#"sh -c 'if [ "$(id -u)" = 0 ]; then exec sh -s; elif sudo -n true 2>/dev/null; then exec sudo -n sh -s; else echo "CCA-HUB fail sudo"; exit 1; fi'"#;
 const USAGE: &str = "用法: py team-deploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--port 端口] [--host 地址] \
                      [--web-port 端口 | --no-web] [--mode docker|systemd] [--dir 目录] [--batch] [--askpass] [--check]";
+const UNDEPLOY_USAGE: &str =
+    "用法: py team-undeploy Team [用户@]主机 [--ssh-port 端口] [--identity 私钥] [--dir 目录] [--batch] [--askpass] [--check]";
+
+/// 经 SSH 在服务器上做的是哪一件：部署（装、更新：team_install）还是卸载（删除 Team 时：team_uninstall）。只是说给人听的话不一样
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+enum Job {
+    #[default]
+    Deploy,
+    Undeploy,
+}
+
+impl Job {
+    fn usage(self) -> &'static str {
+        match self {
+            Job::Deploy => USAGE,
+            Job::Undeploy => UNDEPLOY_USAGE,
+        }
+    }
+    /// 「再部署」「SSH 登录不上……再卸载」里的那个词
+    fn verb(self) -> &'static str {
+        match self {
+            Job::Deploy => "部署",
+            Job::Undeploy => "卸载",
+        }
+    }
+    /// 「服务器上没装完」「没卸载完」
+    fn act(self) -> &'static str {
+        match self {
+            Job::Deploy => "装",
+            Job::Undeploy => "卸载",
+        }
+    }
+    /// 要输私钥的密码、密码时在终端里接着做的那一条，和 App 里的那一步
+    fn cmd(self) -> &'static str {
+        match self {
+            Job::Deploy => "cca team deploy",
+            Job::Undeploy => "cca team leave",
+        }
+    }
+    fn app(self) -> &'static str {
+        match self {
+            Job::Deploy => "部署",
+            Job::Undeploy => "删掉这个 Team",
+        }
+    }
+}
 
 /// SSH 的目标（[用户@]主机；ssh 配置里的别名也行）：不能以 - 开头（会被当成 ssh 的选项）
 static TARGET_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^[A-Za-z0-9_][A-Za-z0-9._@:%\[\]-]*$"));
@@ -110,11 +157,13 @@ struct Opts {
     askpass: bool,
     /// 只看登录得上不，不部署（ssh_check）
     check: bool,
+    job: Job,
 }
 
-/// 读参数、核对：不对的都是 usage，还没连服务器。def_dir：没写 --dir 时装在哪
-fn opts(args: &[String], def_dir: &str) -> R<Opts> {
-    let mut o = Opts { dir: def_dir.into(), ..Default::default() };
+/// 读参数、核对：不对的都是 usage，还没连服务器。def_dir：没写 --dir 时装在哪。卸载只收 SSH 的几项和 --dir
+fn opts(args: &[String], def_dir: &str, job: Job) -> R<Opts> {
+    let usage = job.usage();
+    let mut o = Opts { dir: def_dir.into(), job, ..Default::default() };
     let (mut port, mut web) = (None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -122,9 +171,10 @@ fn opts(args: &[String], def_dir: &str) -> R<Opts> {
             "--batch" => o.batch = true,
             "--askpass" => o.askpass = true,
             "--check" => o.check = true,
+            "--no-web" | "--port" | "--host" | "--web-port" | "--mode" if job == Job::Undeploy => return fail("usage", usage),
             "--no-web" if web.is_none() => web = Some(String::new()),
             f @ ("--ssh-port" | "--identity" | "--port" | "--host" | "--web-port" | "--mode" | "--dir") => {
-                let Some(v) = it.next().cloned() else { return fail("usage", USAGE) };
+                let Some(v) = it.next().cloned() else { return fail("usage", usage) };
                 match f {
                     "--ssh-port" => o.ssh_port = Some(v),
                     "--identity" => o.identity = Some(v),
@@ -137,11 +187,11 @@ fn opts(args: &[String], def_dir: &str) -> R<Opts> {
                 }
             }
             t if o.target.is_empty() && !t.starts_with('-') => o.target = t.to_string(),
-            _ => return fail("usage", USAGE),
+            _ => return fail("usage", usage),
         }
     }
     if o.target.is_empty() {
-        return fail("usage", USAGE);
+        return fail("usage", usage);
     }
     if TARGET_RE.fullmatch(&o.target).is_none() {
         return fail("usage", &format!("服务器写错了：{}", o.target));
@@ -236,9 +286,9 @@ fn ssh_argv(o: &Opts) -> Vec<String> {
     v
 }
 
-/// 经 SSH 在服务器上运行安装脚本，读它的结果。-T：不要伪终端（ssh 配置里写了 RequestTTY 也不要：脚本从 stdin 过去）；
-/// ServerAliveInterval：拉镜像时好几分钟没有输出，别让路上的 NAT 把连接断了。整个最多等半个小时
-fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
+/// 经 SSH 在服务器上运行安装脚本（装、更新、卸载），读它的结果：安装脚本说了 ok 才算成。-T：不要伪终端（ssh 配置里写了 RequestTTY
+/// 也不要：脚本从 stdin 过去）；ServerAliveInterval：拉镜像时好几分钟没有输出，别让路上的 NAT 把连接断了。整个最多等半个小时
+fn run_remote(o: &Opts, preamble: &str) -> R<Report> {
     let mut argv = ssh_argv(o);
     argv.extend(["-T".into(), "-o".into(), "ServerAliveInterval=30".into(), o.target.clone(), REMOTE.into()]);
     let ran = Proc::new(argv).input(installer(preamble)).capture().stderr(Out::Inherit).timeout(1800.0).run();
@@ -246,7 +296,10 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
     let done = match ran {
         Ok(d) => d,
         Err(ProcError::Timeout { .. }) => {
-            return fail("install", "服务器上半个小时还没装完：停下了（在服务器上看看 docker、systemd 在做什么）")
+            return fail(
+                "install",
+                &format!("服务器上半个小时还没{}完：停下了（在服务器上看看 docker、systemd 在做什么）", o.job.act()),
+            )
         }
         Err(_) => return fail("ssh", "这台设备上没有 ssh"),
     };
@@ -257,15 +310,21 @@ fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
     if !r.ok {
         if done.rc == 255 {
             let hint = if o.batch && !o.askpass {
-                "；要输密码的话，在终端里运行 cca team deploy（或者在 cca App 里部署）".to_string()
+                format!("；要输密码的话，在终端里运行 {}（或者在 cca App 里{}）", o.job.cmd(), o.job.app())
             } else {
                 String::new()
             };
             // 部署到一半断了也是 255：服务起来以后才断的，服务器上已经是这一次的了（安装脚本不再换回），再运行时照它判断
             return fail("ssh", &format!("SSH 连不上 {}、登录不了，或者中途断了（上面是 ssh 说的）{hint}", o.target));
         }
-        return fail("install", "服务器上没装完（上面是服务器那边的输出）");
+        return fail("install", &format!("服务器上没{}完（上面是服务器那边的输出）", o.job.act()));
     }
+    Ok(r)
+}
+
+/// 装、更新（team_install）：run_remote，再要安装脚本说清楚装好的服务器用哪个端口、哪张证书
+fn run_installer(o: &Opts, preamble: &str) -> R<Report> {
+    let r = run_remote(o, preamble)?;
     if PRESENCE_PIN_RE.fullmatch(&r.pin).is_none() || !(1..=65535).contains(&r.port) {
         return fail("install", "服务器没说清楚装好的服务器用哪个端口、哪张证书");
     }
@@ -358,6 +417,18 @@ pub struct TeamInstalled {
     pub dir: String,
     /// 地址是内网的：别的网络里的设备连不上
     pub lan: bool,
+    /// 经 SSH 装到的哪台（[用户@]主机，ssh 配置里的别名也行）和 SSH 端口（没写是空的：照 ssh 的配置）：删除 Team 时照它卸载
+    pub target: String,
+    pub ssh_port: String,
+}
+
+/// Team 的根公钥（ssh-ed25519 AAAA…）里 base64 的那一段：放进安装脚本的 CCA_HUB_TEAM_ROOT
+fn root_key(root: &str) -> R<String> {
+    match root.split(' ').nth(1).filter(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/'))
+    {
+        Some(k) => Ok(k.to_string()),
+        None => fail("key", "这个 Team 的根公钥读不出来"),
+    }
 }
 
 /// Team 的同步服务器的一键部署（cca team deploy：cmd/team/admin.rs 的 cmd_team_deploy 调）。args 是 Opts 那一套参数；root 是 Team 的
@@ -375,16 +446,13 @@ pub fn team_install(
     name: &str,
     old: Option<(&str, &[String])>,
 ) -> R<Option<TeamInstalled>> {
-    let o = opts(args, &format!("/opt/{svc}"))?;
+    let o = opts(args, &format!("/opt/{svc}"), Job::Deploy)?;
     if o.check {
         ssh_check(&o)?;
         return Ok(None);
     }
-    let Some(key) = root.split(' ').nth(1).filter(|k| k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/'))
-    else {
-        return fail("key", "这个 Team 的根公钥读不出来");
-    };
-    let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\n", sq(key));
+    let key = root_key(root)?;
+    let mut pre = format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\n", sq(&key));
     if o.host.is_none() {
         let hint = ssh_host(&o);
         if HOST_RE.fullmatch(&hint).is_some() {
@@ -433,7 +501,29 @@ pub fn team_install(
         web_off: r.web_off,
         dir: o.dir.clone(),
         lan: lan_only(&host),
+        target: o.target.clone(),
+        ssh_port: o.ssh_port.clone().unwrap_or_default(),
     }))
+}
+
+/// 卸载时放进安装脚本的几项：根公钥（安装脚本核对目录里装着的是这个 Team 的：不是就说 taken，什么都不动）和 --uninstall --dir
+fn uninstall_preamble(key: &str, dir: &str) -> String {
+    format!("CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT={}\nset -- --uninstall --dir {}\n", sq(key), sq(dir))
+}
+
+/// 删除 Team 时卸掉它的同步服务器（cmd/team/admin.rs 的 cmd_team_undeploy 调）：经 SSH 运行同一个安装脚本的 --uninstall --dir 目录——停掉
+/// 这个 Team 的服务、删掉它的程序、证书、数据和系统用户，去掉它在共用的证书助手里的登记（最后一个用证书助手的 Team 连证书助手一起删）。
+/// args 是 Opts 里 SSH 的那几项和 --dir（默认 /opt/<服务名>）；--check 只看登录得上不（返回 None）。卸好了返回目录。
+/// 目录里没装（安装脚本的 none）、装着别的 Team（taken）都算没卸成：原因码 install、taken
+pub fn team_uninstall(args: &[String], root: &str, svc: &str) -> R<Option<String>> {
+    let o = opts(args, &format!("/opt/{svc}"), Job::Undeploy)?;
+    if o.check {
+        ssh_check(&o)?;
+        return Ok(None);
+    }
+    let key = root_key(root)?;
+    run_remote(&o, &uninstall_preamble(&key, &o.dir))?;
+    Ok(Some(o.dir))
 }
 
 /// --check：只看登录得上不（`ssh … true`，不运行安装脚本，什么都不动）。App 里部署前先查：成了退出码 0，没成见 ssh_trouble
@@ -464,7 +554,8 @@ fn ssh_trouble(err: &str, o: &Opts) -> (&'static str, String) {
             "ssh_hostkey",
             format!(
                 "{t} 的 SSH 主机密钥和这台设备以前记下的不一样（服务器重装过系统，或者有人在中间冒充它）：确认是重装过的话，\
-                 在终端里运行 ssh-keygen -R 服务器地址 删掉记下的那一把，再部署"
+                 在终端里运行 ssh-keygen -R 服务器地址 删掉记下的那一把，再{}",
+                o.job.verb()
             ),
         );
     }
@@ -486,7 +577,8 @@ fn ssh_trouble(err: &str, o: &Opts) -> (&'static str, String) {
                 "ssh_keyonly",
                 format!(
                     "{t} 不认这台设备的 SSH 密钥，也不让用密码登录：把这台设备的公钥加进服务器的 ~/.ssh/authorized_keys，\
-                     或者私钥有密码的话，在终端里运行 cca team deploy（在那里输私钥的密码）"
+                     或者私钥有密码的话，在终端里运行 {}（在那里输私钥的密码）",
+                    o.job.cmd()
                 ),
             ),
         };
@@ -509,7 +601,7 @@ fn ssh_host(o: &Opts) -> String {
 }
 
 /// 服务器的地址（https://主机:端口）里的主机（IPv6 不带方括号）和端口（认不出时是空的、0）
-fn url_parts(url: &str) -> (String, i64) {
+pub fn url_parts(url: &str) -> (String, i64) {
     let m = PRESENCE_URL_RE.match_(url);
     let host = m.as_ref().and_then(|m| m.name("host")).unwrap_or("").trim_matches(['[', ']']).to_string();
     (host, m.as_ref().and_then(|m| m.name("port")).and_then(text::to_int).unwrap_or(0))
@@ -653,7 +745,9 @@ mod tests {
 
     #[test]
     fn web_options() {
-        let o = |a: &[&str]| opts(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "/opt/cca-team-0123abcd").map(|o| o.web);
+        let o = |a: &[&str]| {
+            opts(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "/opt/cca-team-0123abcd", Job::Deploy).map(|o| o.web)
+        };
         assert_eq!(o(&["root@192.0.2.10"]).ok(), Some(None), "没写：照安装脚本（上次的，第一次是开着）");
         assert_eq!(o(&["root@192.0.2.10", "--no-web"]).ok(), Some(Some(0)));
         assert_eq!(o(&["root@192.0.2.10", "--web-port", "18448"]).ok(), Some(Some(18448)));
@@ -713,6 +807,56 @@ mod tests {
             ("ssh", "SSH 连不上 root@192.0.2.10：ssh: connect to host 192.0.2.10 port 22: Connection refused")
         );
         assert_eq!(ssh_trouble("", &o(false)), ("ssh", "SSH 连不上 root@192.0.2.10".into()));
+    }
+
+    #[test]
+    fn undeploy_options() {
+        let o = |a: &[&str]| opts(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "/opt/cca-team-0123abcd", Job::Undeploy);
+        let x = o(&["root@192.0.2.10", "--ssh-port", "2222", "--batch", "--askpass", "--check"]).expect("SSH 的几项都收");
+        assert_eq!(
+            (x.target.as_str(), x.ssh_port.as_deref(), x.dir.as_str()),
+            ("root@192.0.2.10", Some("2222"), "/opt/cca-team-0123abcd")
+        );
+        assert!(x.batch && x.askpass && x.check);
+        assert_eq!(o(&["vps", "--dir", "/srv/team"]).map(|o| o.dir).ok().as_deref(), Some("/srv/team"));
+        for only_deploy in [
+            &["root@192.0.2.10", "--port", "18445"][..],
+            &["root@192.0.2.10", "--host", "192.0.2.10"],
+            &["root@192.0.2.10", "--web-port", "18448"],
+            &["root@192.0.2.10", "--no-web"],
+            &["root@192.0.2.10", "--mode", "docker"],
+        ] {
+            let args: Vec<String> = only_deploy.iter().map(|s| s.to_string()).collect();
+            assert!(opts(&args, "/opt/cca-team-0123abcd", Job::Deploy).is_ok(), "部署收：{only_deploy:?}");
+            assert!(o(only_deploy).is_err(), "卸载只收 SSH 的几项和 --dir：{only_deploy:?}");
+        }
+        assert!(o(&[]).is_err(), "要写服务器");
+    }
+
+    #[test]
+    fn uninstall_script() {
+        let pre = uninstall_preamble("AAAAC3NzaC1lZDI1NTE5AAAAIExample", "/opt/cca-team-0123abcd");
+        assert_eq!(
+            pre,
+            "CCA_HUB_MANAGED=1\nCCA_HUB_TEAM_ROOT='AAAAC3NzaC1lZDI1NTE5AAAAIExample'\nset -- --uninstall --dir '/opt/cca-team-0123abcd'\n"
+        );
+        assert!(installer(&pre).contains(&pre), "前面放进的几项原样进了安装脚本");
+        assert!(root_key("ssh-ed25519 AAAA+/09 cca-team").is_ok());
+        for bad in ["", "ssh-ed25519", "ssh-ed25519  x", "ssh-ed25519 AAAA;rm"] {
+            assert!(root_key(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn undeploy_wording() {
+        let o = Opts { target: "root@192.0.2.10".into(), batch: true, job: Job::Undeploy, ..Default::default() };
+        let (_, why) = ssh_trouble("Host key verification failed.\n", &o);
+        assert!(why.ends_with("再卸载"), "{why}");
+        let (c, why) = ssh_trouble("root@192.0.2.10: Permission denied (publickey).\n", &o);
+        assert_eq!(c, "ssh_keyonly");
+        assert!(why.contains("在终端里运行 cca team leave（在那里输私钥的密码）"), "{why}");
+        let d = Opts { job: Job::Deploy, ..o };
+        assert!(ssh_trouble("Host key verification failed.\n", &d).1.ends_with("再部署"), "部署的说法不变");
     }
 
     #[test]

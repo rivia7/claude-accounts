@@ -177,7 +177,8 @@ Docker 的另有 `compose.yaml`（`python:3.13-slim` 镜像，依次试 ECR、�
 
 - 云服务商的安全组（轻量应用服务器的防火墙）里放行服务的端口、中转的数据端口，开了网页端的再加它的端口和 80；`cca team deploy` 装完会说
   放行哪几个。systemd 方式下服务器上开着 ufw、firewalld 时脚本会说放行的那一行，不替你改（Docker 发布的端口不经它们）。
-- 卸载：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/<服务名>`（或者在服务器上
+- 卸载：管理员删除这个 Team（`cca team leave`）时经 SSH 自己卸掉（带着根公钥：目录里装的是别的 Team 的不动）；手动的话
+  `cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/<服务名>`（或者在服务器上
   `sudo sh cca-hub-install.sh --uninstall --dir /opt/<服务名>`），连同数据一起删掉。3.5.3 以前装的自己的同步服务器（`/opt/cca-hub`）也这样卸载
   （`--dir /opt/cca-hub`），安装脚本不再往里装。
 

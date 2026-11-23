@@ -200,6 +200,14 @@ struct Handoff: Sendable, Equatable, Hashable, Identifiable {
                 message: "在终端里填服务器地址、SSH 用户和端口，接着部署（ssh 要的密码、私钥的密码也在那里输）。", inApp: true, needsForms: true)
     }
 
+    /// 删除一个 Team（这台 Mac 是它的管理员：`cca team leave <Team>`，PROTOCOL 4.14）：先问同意（`consent.team_delete`：说要经 SSH 卸掉它的
+    /// 同步服务器、删掉根密钥），卸载时和部署一样，这台 Mac 的密钥登录不了时问密码（`hub.password`），只认密钥时给出加公钥那一行（`hub.pubkey`）；
+    /// 卸不掉时问要不要照样删、服务器留着（`team.keep_server`）。成员退出不用它（先同意再重跑：`CcaCommand.teamLeave`）
+    static func teamDelete(team: String) -> Handoff {
+        Handoff(arguments: ["team", "leave", team], title: "删除 Team",
+                message: "在终端里删除：先经 SSH 卸掉它的同步服务器（ssh 要的密码、私钥的密码在那里输），再删掉这台 Mac 上的根密钥。", inApp: true, needsForms: true)
+    }
+
     /// 用官方安装脚本装 claude / codex / agy 命令（`cca [codex|agy] install-cli`，`hello.install_cli`）：先直连，不通时问过再经内置代理装。
     static func installCLI(prefix: [String], tool: ToolID) -> Handoff {
         Handoff(arguments: prefix + ["install-cli"], title: "安装 \(Texts.cliCommand(tool)) 命令",
