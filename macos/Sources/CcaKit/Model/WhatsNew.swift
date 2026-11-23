@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.5.4", title: "更新后马上同步 Team 的配置", points: [
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "cca 更新到新版本以后，马上和所在的 Team 同步一次配置（平时每小时一次）。用着维护者的映射、还没加入 Team 的机器，更新以后马上自己加入，不用再等一天。"),
+            .init(symbol: "list.number",
+                  text: "「共享与同步」页 Team 的「账号的别名和节点」先按工具、再按别名排（team-2 在 team-10 前面），不再按邮箱排。"),
+            .init(symbol: "character.bubble",
+                  text: "「取配置」改叫「同步配置」，App 和命令行里的说法都跟着改了。"),
+        ]),
         ReleaseNote(version: "3.5.3", title: "Team、在 iPhone 上接入远程会话", points: [
             .init(symbol: "person.3",
                   text: "「共享与同步」页多了 Team：一组设备共用一份配置（哪些账号、各走哪个节点）。管理员给每台设备发邀请链接，粘贴就加入；侧栏、总览和菜单栏面板能按 Team 筛选。"),
