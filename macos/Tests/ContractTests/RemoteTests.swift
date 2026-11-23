@@ -95,20 +95,28 @@ func remoteProtocolTests() {
     check("配对过的机器：它能做什么、谁显示的配对码、对方取消了的", doc.peers.map(\.incoming) == [.none, .control, .control, .view]
           && doc.peers.map(\.shown) == [false, true, true, true] && doc.peers.last?.state == .gone)
     check("配对过的机器里有一台是手机上的网页端", doc.peers.map(\.web) == [false, false, true, false] && doc.peers[2].name == "我的 iPhone")
-    check("用得了的中转服务器、配对记在哪个 Team 的服务器上", doc.relayHubs.map(\.id) == ["0123456789abcdef0123456789abcdef", "maintainer"]
-          && doc.relayHubs.map(\.name) == ["「研发组」的服务器", "维护者的服务器"]
-          && doc.peers.map(\.team) == [nil, nil, "0123456789abcdef0123456789abcdef", nil])
+    let lab = "0123456789abcdef0123456789abcdef", study = "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"
+    check("用得了的中转服务器（各个 Team 的）、配对记在哪个 Team 的服务器上", doc.relayHubs.map(\.id) == [lab, study]
+          && doc.relayHubs.map(\.name) == ["「研发组」的服务器", "「书房组」的服务器"]
+          && doc.peers.map(\.team) == [study, lab, lab, study])
     check("在哪台服务器上配对写进命令里；只用得了一台时不写",
-          Handoff.remotePair.on(doc.relayHubs[0]).arguments == ["remote", "pair", "--team", "0123456789abcdef0123456789abcdef"]
-          && Handoff.remotePairWeb.on(doc.relayHubs[1]).arguments == ["remote", "pair", "--web", "--maintainer"]
+          Handoff.remotePair.on(doc.relayHubs[0]).arguments == ["remote", "pair", "--team", lab]
+          && Handoff.remotePairWeb.on(doc.relayHubs[1]).arguments == ["remote", "pair", "--web", "--team", study]
           && Handoff.remotePair.on(nil) == Handoff.remotePair && Handoff.remotePair.on(doc.relayHubs[0]).inApp)
     let old = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"{"version":1,"kind":"remote","relay":{"available":true,"message":null},"sessions":[],"peers":[{"id":"aa"}]}"#.utf8))
-    check("旧版 cca 没有这两项：不用选服务器，配对都算记在维护者那一台上", old?.relayHubs.isEmpty == true && old?.peers.first?.team == nil)
+    check("旧版 cca 没有这两项：不用选服务器，配对不标是哪个 Team 的", old?.relayHubs.isEmpty == true && old?.peers.first?.team == nil)
+    // 3.6.0 以前的 cca：还列维护者的那台中转服务器（team 是 null）、经它配的配对（team 是 null）
+    let before = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(#"""
+        {"version":1,"kind":"remote","relay":{"available":true,"message":null,"hubs":[{"team":"\#(lab)","name":"「研发组」的服务器"},{"team":null,"name":"维护者的服务器"}]},
+         "sessions":[],"peers":[{"id":"aa","team":null},{"id":"bb","team":"\#(lab)"}]}
+        """#.utf8))
+    check("3.6.0 以前的 cca：维护者的那台中转服务器去掉（不在它上面配对、不写 --maintainer）；经它配的配对照样列出来，不标是哪个 Team 的",
+          before?.relayHubs.map(\.id) == [lab] && before?.relayHubs.map(\.arguments) == [["--team", lab]] && before?.peers.map(\.team) == [nil, lab])
     check("按 id 找会话", doc.session(far[0].id)?.machine == "office-linux" && doc.session("nope") == nil)
 
-    let problem = #"{"version":1,"kind":"remote","generated_epoch":1,"enabled":false,"relay":{"available":false,"message":"没有配置维护者的映射"},"sessions":[{"id":"aa","where":"zz_new","state":"zz","access":"zz"},{"short":"没有 id"}],"peers":[{"id":"bb","incoming":"zz"}],"errors":[{"code":"relay_off","message":"没有配置维护者的映射"},{"code":"zz_new","message":"别的"}]}"#
+    let problem = #"{"version":1,"kind":"remote","generated_epoch":1,"enabled":false,"relay":{"available":false,"message":"先加入或者新建一个 Team：远程会话经 Team 的服务器中转"},"sessions":[{"id":"aa","where":"zz_new","state":"zz","access":"zz"},{"short":"没有 id"}],"peers":[{"id":"bb","incoming":"zz"}],"errors":[{"code":"relay_off","message":"先加入或者新建一个 Team：远程会话经 Team 的服务器中转"},{"code":"zz_new","message":"别的"}]}"#
     let pd = try? DocumentDecoder.decode(RemoteDoc.self, from: Data(problem.utf8))
-    check("用不了中转：原因照给；没有 id 的行丢掉，不认识的值留着", pd?.relayAvailable == false && pd?.relayMessage == "没有配置维护者的映射"
+    check("用不了中转：原因照给；没有 id 的行丢掉，不认识的值留着", pd?.relayAvailable == false && pd?.relayMessage == "先加入或者新建一个 Team：远程会话经 Team 的服务器中转"
           && pd?.sessions.count == 1 && pd?.sessions.first?.short == "aa" && pd?.sessions.first?.attachable == false
           && pd?.peers.first?.incoming.isKnown == false && pd?.errors.map(\.code.isKnown) == [true, false])
 

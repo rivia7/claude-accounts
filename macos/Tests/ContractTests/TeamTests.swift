@@ -15,29 +15,30 @@ func teamFixtureTests() {
     if let s = loadFixture(StateDoc.self, "state.json") {
         let teams = s.config?.teams ?? []
         check("state：config.teams 照加入的先后，编号是空的不算", teams.map(\.name) == ["书房组", "设计组"] && teams.map(\.id) == [teamA, teamB])
-        check("state：这台设备是书房组的管理员，配置同步着、给了它 2 个账号",
+        check("state：这台设备是书房组的管理员，配置同步着、给了它 3 个账号",
               teams.first?.isAdmin == true && teams.first?.state == .ok && teams.first?.state.failing == false && teams.first?.seq == 4
-              && teams.first?.accounts == 2 && teams.first?.host == "team.example.com:18445" && teams.first?.device == "studio-mac"
+              && teams.first?.accounts == 3 && teams.first?.host == "team.example.com:18445" && teams.first?.device == "studio-mac"
               && teams.first?.joinedEpoch == 1793900000)
         check("state：被设计组的管理员移除了（要用户知道，有 cca 给的原因）",
               teams.last?.isAdmin == false && teams.last?.state == .removed && teams.last?.state.failing == true
               && teams.last?.error?.contains("被「设计组」的管理员移除了") == true)
         let carol = s.account(AccountRef(tool: .claude, key: "carol@example.com"))
         let bob = s.account(AccountRef(tool: .claude, key: "工作(bob@example.com)"))
-        check("state：carol 是书房组给的（它的服务器这台设备没在用：hub 是 nil，team 照样有）；bob 不是哪个 Team 给的",
-              carol?.team == teamA && carol?.hub == nil && bob?.team == nil)
-        check("state：carol 的别名被书房组的管理员锁定了（不能改）；bob 的没有；旧版 cca 没有这一项是没锁定",
-              carol?.aliasLocked == true && bob?.aliasLocked == false
+        let dave = s.account(AccountRef(tool: .claude, key: "测试(dave@example.com)"))
+        check("state：bob、carol 是书房组给的（bob 经它的服务器同步；carol 的 hub 是 nil，team 照样有）；dave 不是哪个 Team 给的",
+              bob?.team == teamA && bob?.hub == .team && carol?.team == teamA && carol?.hub == nil && dave != nil && dave?.team == nil)
+        check("state：carol 的别名被书房组的管理员锁定了（不能改）；dave 的没有；旧版 cca 没有这一项是没锁定",
+              carol?.aliasLocked == true && dave?.aliasLocked == false
               && loadFixture(StateDoc.self, "state_cost_sync.json")?.allAccounts.allSatisfy { !$0.aliasLocked } == true)
         let all = s.allAccounts
         check("按 Team 筛选：全部、某个 Team 的、不在 Team 里的",
-              all.filter(TeamFilter.all.includes).count == all.count && all.filter(TeamFilter.team(teamA).includes).map(\.key) == ["carol@example.com", "grace@example.com"]
-              && all.filter(TeamFilter.team(teamB).includes).isEmpty && all.filter(TeamFilter.outside.includes).count == all.count - 2)
+              all.filter(TeamFilter.all.includes).count == all.count && all.filter(TeamFilter.team(teamA).includes).map(\.key) == ["工作(bob@example.com)", "carol@example.com", "grace@example.com"]
+              && all.filter(TeamFilter.team(teamB).includes).isEmpty && all.filter(TeamFilter.outside.includes).count == all.count - 3)
         check("筛选项的名字：Team 的名字；不在了的 Team 写编号的开头", Texts.teamFilter(.all, teams: teams) == "全部账号"
               && Texts.teamFilter(.team(teamA), teams: teams) == "书房组" && Texts.teamFilter(.team("0123456789abcdef"), teams: teams) == "01234567"
               && Texts.teamFilter(.outside, teams: teams) == "不在 Team 里的")
         check("Team 的状态那一句照 cca 给的说（不说第几版）", Texts.teamState(teams[0]) == "配置已同步" && Texts.teamState(teams[1]).contains("被「设计组」的管理员移除了")
-              && Texts.teamSummary(teams[0]) == "这台设备叫 studio-mac · 给了这台设备 2 个账号 · team.example.com:18445")
+              && Texts.teamSummary(teams[0]) == "这台设备叫 studio-mac · 给了这台设备 3 个账号 · team.example.com:18445")
     }
     if let s = loadFixture(StateDoc.self, "state_cost_sync.json") {
         check("旧版 cca 的 state（没有 config.teams、账号的 team）：不在任何 Team 里", s.config?.teams.isEmpty == true && s.allAccounts.allSatisfy { $0.team == nil })
@@ -152,17 +153,19 @@ func teamFixtureTests() {
     let everyone = m.arrangedAccounts(.claude).map(\.key)
     m.teamFilter = .team(teamA)
     check("筛出书房组的：侧栏、菜单栏面板只列它给的账号；排序、写回账号表用的那一份还是全部",
-          m.shownAccounts(.claude).map(\.key).sorted() == ["carol@example.com", "grace@example.com"] && m.arrangedAccounts(.claude).map(\.key) == everyone
+          m.shownAccounts(.claude).map(\.key).sorted() == ["carol@example.com", "grace@example.com", "工作(bob@example.com)"]
+          && m.arrangedAccounts(.claude).map(\.key) == everyone
           && m.shownGroups(.claude).count == 1, "\(m.shownAccounts(.claude).map(\.key))")
     check("筛选记进设置", prefs.string(forKey: AppModel.Prefs.teamFilter) == "team:" + teamA)
     let office = m.office(now: 1794042000)
-    check("总览也只有这两个账号", office.rooms.flatMap(\.people).map(\.account.key).sorted() == ["carol@example.com", "grace@example.com"])
+    check("总览也只有这三个账号", office.rooms.flatMap(\.people).map(\.account.key).sorted()
+          == ["carol@example.com", "grace@example.com", "工作(bob@example.com)"])
     check("侧栏「总览」那一行的统计不跟着筛选走（别的账号出了问题照样看得到）",
           m.office(now: 1794042000, filtered: false).rooms.flatMap(\.people).count == m.state?.allAccounts.count)
     check("别的工具在这个筛选下没有账号：官方账号那一组留着（标题上有添加按钮）", m.shownGroups(.codex).count == 1 && m.shownGroups(.codex)[0].accounts.isEmpty)
     m.teamFilter = .outside
     check("不在 Team 里的：别的账号都在，第三方 API 的那一组也在",
-          m.shownAccounts(.claude).count == everyone.count - 2 && !m.shownAccounts(.claude).contains { $0.team != nil } && m.shownGroups(.claude).count == 2)
+          m.shownAccounts(.claude).count == everyone.count - 3 && !m.shownAccounts(.claude).contains { $0.team != nil } && m.shownGroups(.claude).count == 2)
     m.teamFilter = .team("0123456789abcdef0123456789abcdef")
     check("选的那个 Team 已经不在了：当作全部", m.activeTeamFilter == .all && m.shownAccounts(.claude).map(\.key) == everyone)
     await m.loadState()

@@ -1,5 +1,6 @@
 {
   "version": 1, "kind": "cost_sync", "generated_epoch": 1794042000.0,
   "scan": {"state": "ready", "updated_epoch": 1794042000.0, "files": 190, "read_bytes": 123456, "records": 120, "first": false},
-  "sync": {"state": "ok", "message": null, "checked_epoch": 1794042000.0}
+  "sync": {"state": "ok", "message": null, "checked_epoch": 1794042000.0,
+           "hubs": [{"kind": "team", "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "state": "ok", "message": null, "checked_epoch": 1794042000.0}]}
 }

@@ -180,7 +180,7 @@ private struct TeamAdminSection: View {
                             TeamAccountLine(team: team, account: a, nodes: Self.nodes(doc, local: model.state?.config?.nodes ?? [], current: a.node),
                                             locked: doc.aliasLock == true)
                         }
-                        Text("改了以后，各台设备下次同步配置时跟着换（每小时自动同步一次，或者在那台设备上点「同步配置」）。加账号、导入现成的映射在终端里：cca team map、cca team import。")
+                        Text("改了以后，各台设备下次同步配置时跟着换（每小时自动同步一次，或者在那台设备上点「同步配置」）。加账号在终端里：cca team map，或者 cca team import <Team> --mine 把这台设备上自己的账号一起导进来。")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

@@ -201,7 +201,9 @@ func watcherTests() async {
     let cases: [(String, CcaWatcher.Trigger?)] = [
         ("/Users/me/.cca/accounts.json", .state), ("/Users/me/.cca/codex.json", .state), ("/Users/me/.cca/config.json", .state),
         ("/Users/me/.cca/accounts/bob-1/usage.json", .state), ("/Users/me/.cca/codex/accounts/frank-1/health.json", .state),
-        ("/Users/me/.cca/policy/policy.json", .state), ("/Users/me/.cca/bin/cca", .hello),
+        ("/Users/me/.cca/bin/cca", .hello),
+        // 维护者的映射（3.6.0 去掉了）：cca 启动时删掉的目录，不再看
+        ("/Users/me/.cca/policy/policy.json", nil),
         ("/Users/me/.cca/accounts/bob-1/chrome/Default/usage.json", nil), ("/Users/me/.cca/accounts/bob-1/desktop/health.json", nil),
         ("/Users/me/.cca/chrome/x/config.json", nil), ("/Users/me/.cca/accounts.json.tmp123", nil), ("/Users/me/.cca/leak.json", nil),
         ("/Users/me/.cca/usage.json", nil), ("/Users/me/.ccaX/accounts.json", nil), ("/Users/me/.cca", nil),

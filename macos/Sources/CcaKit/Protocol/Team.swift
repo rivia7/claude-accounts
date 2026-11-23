@@ -269,7 +269,7 @@ enum TeamFilter: Equatable, Hashable, Sendable {
     case all
     /// 某个 Team 给的
     case team(String)
-    /// 不是哪个 Team 给的（自己的账号、维护者共享的、第三方 API 的）
+    /// 不是哪个 Team 给的（自己的账号、第三方 API 的）
     case outside
 
     /// 存进设置里的写法

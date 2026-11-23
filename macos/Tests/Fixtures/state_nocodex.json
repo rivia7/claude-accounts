@@ -40,7 +40,11 @@
     "update": "auto",
     "policy": {
       "configured": false,
-      "repo": null
+      "repo": null,
+      "next_check_epoch": null,
+      "state": "off",
+      "accounts": 0,
+      "parked": 0
     }
   },
   "routing": {

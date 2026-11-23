@@ -126,7 +126,8 @@ let tinyHello = #"{"version":1,"kind":"hello","api":1,"cca_version":"9.9.9","ins
 /// tinyHello 加上提问会话和表单（流程能在 App 里问）
 let tinyHelloForms = tinyHello.replacingOccurrences(of: #""api":1"#, with: #""api":1,"prompt":1,"forms":1"#)
 
-/// state_nocodex.json 换上这一份 `config.policy`（nil 写成 null）
+/// state_nocodex.json 换上这一份 `config.policy`（nil 写成 null）：看 App 对 3.6.0 以前的 cca 给的几种样子（开着、在等维护者……）
+/// 是不是照样不管（3.6.0 起总是关着的那一份，App 不读）
 func stateWithPolicy(_ policy: [String: Any]?) -> String {
     var root = (try? JSONSerialization.jsonObject(with: fixture("state_nocodex.json") ?? Data())) as? [String: Any] ?? [:]
     var config = root["config"] as? [String: Any] ?? [:]

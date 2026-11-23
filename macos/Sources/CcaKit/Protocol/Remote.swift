@@ -15,11 +15,12 @@ struct RemoteDoc: CcaDocument, Equatable {
     var generatedEpoch: Double?
     /// 开关（`cca remote on`）：开着时，之后在终端里启动的会话放进会话宿主里运行，才接得上
     var enabled: Bool
-    /// 这台 Mac 用不用得了中转（配置了维护者的映射、映射里有服务器、有 deploy key）；用不了时 `relayMessage` 说原因
+    /// 这台 Mac 用不用得了中转（在哪个 Team 里、用得了它的服务器）；用不了时 `relayMessage` 说原因
     var relayAvailable: Bool
     var relayMessage: String?
-    /// 用得了哪几台中转服务器（各个 Team 的，再是维护者的）：每个 Team 的账号的会话走这个 Team 自己的服务器，配对记在哪台上，
-    /// 对方经它看得到的就是走那台的会话。有好几台时，显示配对码要先选在哪台上配。旧版 cca 没有这一项（空的：不用选）
+    /// 用得了哪几台中转服务器（各个 Team 的，照加入的先后）：每个 Team 的账号的会话走这个 Team 自己的服务器，配对记在哪台上，
+    /// 对方经它看得到的就是走那台的会话。有好几台时，显示配对码要先选在哪台上配。旧版 cca 没有这一项（空的：不用选）；
+    /// 3.6.0 以前的 cca 还会给维护者的那一台（没有 `team`）：去掉了，App 不在它上面配对
     var relayHubs: [RemoteHub]
     var sessions: [RemoteSession]
     var peers: [RemotePeer]
@@ -118,32 +119,36 @@ struct RemoteSession: Decodable, Sendable, Equatable, Identifiable {
     var attachable: Bool { state == .ok }
 }
 
-/// 配对过的一台机器。
-/// 一台用得了的中转服务器（`relay.hubs[]`）：某个 Team 的同步服务器，或者维护者的那一台（`team` 是 nil）。
+/// 一台用得了的中转服务器（`relay.hubs[]`）：某个 Team 的同步服务器。没有 `team` 的（3.6.0 以前的 cca 给的维护者的那一台）解不出来，
+/// 列表里丢掉
 struct RemoteHub: Decodable, Sendable, Equatable, Identifiable {
-    /// Team 的编号；nil 是维护者的那一台
-    var team: String?
-    /// 给人看的：「研发组」的服务器、维护者的服务器
+    /// Team 的编号
+    var team: String
+    /// 给人看的：「研发组」的服务器
     var name: String
 
-    var id: String { team ?? "maintainer" }
+    var id: String { team }
     /// `cca remote pair` 后面说在这台上配对的参数
-    var arguments: [String] { team.map { ["--team", $0] } ?? ["--maintainer"] }
+    var arguments: [String] { ["--team", team] }
 
     enum CodingKeys: String, CodingKey { case team, name }
 
-    init(team: String?, name: String) {
+    init(team: String, name: String) {
         self.team = team
         self.name = name
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
+        guard let team = nonEmpty(c.string(.team)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "relay hub without team"))
+        }
+        self.team = team
         name = c.string(.name) ?? ""
     }
 }
 
+/// 配对过的一台机器。
 struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     /// 配对的编号（32 个十六进制字符）：`cca remote allow|unpair` 的参数
     var id: String
@@ -157,7 +162,8 @@ struct RemotePeer: Decodable, Sendable, Equatable, Identifiable {
     var state: RemotePeerState
     /// 它是手机上的网页端（`cca remote pair --web` 配的）：只是给人看的，它能做什么照旧看 `incoming`。旧版 cca 没有这个字段
     var web: Bool
-    /// 这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）；nil 是维护者的那一台
+    /// 这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）。旧版 cca 没有这个字段、3.6.0 以前经维护者的
+    /// 服务器配的（3.6.0 的 cca 不再列出）是 nil：照样列出来，不标是哪个 Team 的
     var team: String?
 
     enum CodingKeys: String, CodingKey {

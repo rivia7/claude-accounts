@@ -17,7 +17,8 @@ struct CostBasis: KnownValues {
     static let allKnown: [CostBasis] = [.quota, .calendar]
 }
 
-/// `cost.sync.state`：设备间同步的状态。不认识的值当 `error` 显示（`shown`）。
+/// `cost.sync.state`：设备间同步的状态。不认识的值当 `error` 显示（`shown`；3.6.0 以前的 `old_server`：维护者的服务器还不支持，
+/// 也照这样说 cca 给的原因）。
 struct CostSyncState: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
@@ -25,17 +26,15 @@ struct CostSyncState: KnownValues {
     static let ok = CostSyncState(rawValue: "ok")
     /// 会同步，还没同步过
     static let pending = CostSyncState(rawValue: "pending")
-    /// 只有这台设备：账号不经哪台服务器同步（不在维护者的映射里、也不是 Team 给的），或者该走的那一台这台设备用不了
+    /// 只有这台设备：账号不经哪台服务器同步（不是哪个 Team 给的），或者该走的那一台这台设备用不了
     static let localOnly = CostSyncState(rawValue: "local_only")
     /// config.json 里写了 `"presence": false`
     static let off = CostSyncState(rawValue: "off")
     /// 这台设备上没登录这个账号：解不开别的设备的数据，显示上次同步来的
     static let notLoggedIn = CostSyncState(rawValue: "not_logged_in")
-    /// 维护者的服务器还不支持：只显示这台设备的
-    static let oldServer = CostSyncState(rawValue: "old_server")
     /// 最近一次没同步成（`message` 是原因），显示上次同步来的
     static let error = CostSyncState(rawValue: "error")
-    static let allKnown: [CostSyncState] = [.ok, .pending, .localOnly, .off, .notLoggedIn, .oldServer, .error]
+    static let allKnown: [CostSyncState] = [.ok, .pending, .localOnly, .off, .notLoggedIn, .error]
 
     /// 界面按哪种说：不认识的值当 error
     var shown: CostSyncState { isKnown ? self : .error }
@@ -139,11 +138,10 @@ struct CostSyncRunState: KnownValues {
     static let ok = CostSyncRunState(rawValue: "ok")
     /// 不用同步：没有经服务器同步的账号、这台设备用不了哪台服务器
     static let skipped = CostSyncRunState(rawValue: "skipped")
-    static let oldServer = CostSyncRunState(rawValue: "old_server")
     static let error = CostSyncRunState(rawValue: "error")
     /// 上次失败了，还没到重试的时候（`--now` 不等）
     static let waiting = CostSyncRunState(rawValue: "waiting")
-    static let allKnown: [CostSyncRunState] = [.ok, .skipped, .oldServer, .error, .waiting]
+    static let allKnown: [CostSyncRunState] = [.ok, .skipped, .error, .waiting]
 }
 
 /// 一项的 token 数：输入（不含缓存）、输出、缓存读、缓存写。只给账号合计，不给每台设备。
@@ -306,10 +304,10 @@ struct CostSummary: Decodable, Sendable, Equatable {
 struct CostDevice: Sendable, Equatable, Identifiable {
     /// 设备统计里的设备指纹（`SHA256:…`）；这台设备没开设备统计时是 `local`
     var id: String
-    /// 设备统计里的名字（维护者给 deploy key 起的别名）；这台设备没开设备统计时是主机名
+    /// 设备统计里的名字（Team 的管理员给这台设备起的名字）；这台设备没开设备统计时是主机名
     var name: String
     var isMe: Bool
-    /// 维护者撤销了它的 key（数字是撤销前同步来的，照样算进合计）
+    /// 它的 key 作废了（被 Team 的管理员移除了：数字是那以前同步来的，照样算进合计）
     var revoked: Bool
     /// 这些数字是什么时候的（别的设备最后一次同步上来的时间；这台设备是最后一次统计的时间）
     var syncedEpoch: Double?
@@ -441,7 +439,7 @@ struct CostSync: Decodable, Sendable, Equatable {
     var message: String?
     /// 最后一次同步成功的时间
     var checkedEpoch: Double?
-    /// 经哪台服务器同步（和账号的 `hub` 一样；`local_only`、`off` 时是 nil）。旧版 cca 没有这个字段：当作维护者的
+    /// 经哪台服务器同步（和账号的 `hub` 一样；`local_only`、`off`、不认识的值（3.6.0 以前的 `maintainer`）、旧版 cca 没有这个字段时是 nil）
     var hub: HubKind?
     var missing: [CostMissingDevice]
 
@@ -455,11 +453,7 @@ struct CostSync: Decodable, Sendable, Equatable {
         state = c.lossy(CostSyncState.self, .state) ?? CostSyncState(rawValue: "")
         message = nonEmpty(c.string(.message))
         checkedEpoch = c.double(.checkedEpoch)
-        if c.contains(.hub) {
-            hub = c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil }
-        } else {
-            hub = state == .localOnly || state == .off ? nil : .maintainer
-        }
+        hub = c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil }
         missing = c.lossyArray(CostMissingDevice.self, .missing) ?? []
     }
 }
@@ -631,7 +625,7 @@ struct CostTotalDevice: Decodable, Sendable, Equatable, Identifiable {
     var id: String
     var name: String
     var isMe: Bool
-    /// 维护者撤销了它的 key（数字是撤销前同步来的）
+    /// 它的 key 作废了（被 Team 的管理员移除了：数字是那以前同步来的）
     var revoked: Bool
     /// 每个账号里都超过 36 小时没同步上来：之后用的可能还没算进来（设备菜单里标出来）
     var stale: Bool

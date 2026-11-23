@@ -45,7 +45,7 @@ func flowProtocolTests() async {
           proxy.arguments == ["agy", "node", "use", "k"] && proxy.inApp && proxy.needsForms && proxy.title == "给 工作 换上自定义代理")
     if let s = loadFixture(StateDoc.self, "state.json") {
         let all = s.tools.flatMap(\.accounts)
-        check("can.custom_proxy：维护者固定了节点的官方账号不能换，别的（第三方 API 账号也算）能",
+        check("can.custom_proxy：Team 锁定了节点的官方账号不能换，别的（第三方 API 账号也算）能",
               all.contains { $0.pinned && !$0.can.customProxy } && all.filter { !($0.kind == .oauth && $0.pinned) }.allSatisfy(\.can.customProxy)
               && all.contains { $0.kind == .api && $0.can.customProxy })
     }
@@ -186,23 +186,24 @@ func flowProtocolTests() async {
         check("等太久可以停掉", s.stopped == 1)
     }
     do {
-        // cca 边等边干活的一页（配置向导等维护者）：还没交答案时同一题换了说明再发一页，用户改了的选择留着；别的题、交了之后的重问照 cca 的来
+        // cca 边等边干活的一页（等别处做好一件事，状态变了带着新的说明再发；3.6.0 起 cca 没有这样的页了，以前是配置向导等维护者加公钥）：
+        // 还没交答案时同一题换了说明再发一页，用户改了的选择留着；别的题、交了之后的重问照 cca 的来
         let (s, f, _) = make()
         func page(_ seq: Int, _ q: String, hint: String = "") -> CcaEvent {
             .ask(AskEvent(seq: seq, q: q, title: "", message: "", fields: [
-                PromptField(id: "line", kind: .code, value: "./policy.sh key add x", hint: hint),
+                PromptField(id: "line", kind: .code, value: "在那边运行的一行", hint: hint),
                 PromptField(id: "next", kind: .choice, defaultValue: "skip",
                             options: [PromptOption(value: "skip", label: "先跳过"), PromptOption(value: "decline", label: "不用")])]))
         }
-        s.feed(page(1, "onboard.policy", hint: "正在等"))
+        s.feed(page(1, "demo.wait", hint: "正在等"))
         _ = await waitUntil { if case .asking = f.phase { return true }; return false }
         f.draft["next"] = "decline"
-        s.feed(page(2, "onboard.policy", hint: "这次没拉到"))
+        s.feed(page(2, "demo.wait", hint: "还没好"))
         _ = await waitUntil { if case .asking(let e) = f.phase { return e.seq == 2 }; return false }
         check("同一题换了说明再发：还没交的选择留着", f.draft["next"] == "decline")
         f.submit()
         check("答案用新的序号", s.answers.last == ["2 next decline"])
-        s.feed(page(3, "onboard.policy"))
+        s.feed(page(3, "demo.wait"))
         _ = await waitUntil { if case .asking(let e) = f.phase { return e.seq == 3 }; return false }
         check("交了答案之后的同一题：照 cca 给的值", f.draft["next"] == "skip")
         f.draft["next"] = "decline"

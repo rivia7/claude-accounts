@@ -26,9 +26,12 @@
     "leak_check": false,
     "update": "auto",
     "policy": {
-      "configured": true,
-      "repo": "example/cca-policy",
-      "next_check_epoch": 1794045600.0
+      "configured": false,
+      "repo": null,
+      "next_check_epoch": null,
+      "state": "off",
+      "accounts": 0,
+      "parked": 0
     }
   },
   "routing": {

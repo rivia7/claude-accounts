@@ -7,10 +7,15 @@
   "idle_after": 600,
   "offline_after": 150,
   "reporting_error": null,
+  "hubs": [
+    {"kind": "team", "me": "studio-mac", "idle_after": 600, "offline_after": 150, "reporting_error": null, "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b"}
+  ],
   "accounts": [
     {
       "key": "工作(bob@example.com)",
       "id": "bob-example-com-1a2b3c",
+      "hub": "team",
+      "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
       "devices": [
         {
           "id": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

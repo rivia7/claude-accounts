@@ -216,7 +216,7 @@ private struct FlowChoice: View {
     }
 }
 
-/// 一行里的弹出菜单（字段多的表单）。只有一个选项、没得选的（维护者固定了）只显示它。
+/// 一行里的弹出菜单（字段多的表单）。只有一个选项、没得选的（Team 的配置固定了）只显示它。
 private struct FlowMenu: View {
     let options: [PromptOption]
     /// 可以不选时，“不选”那一项的说法（答案是空的）。

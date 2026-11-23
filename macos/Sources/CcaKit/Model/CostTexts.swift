@@ -173,7 +173,7 @@ extension Texts {
     }
 
     /// 同步的状态、还没算进来的设备（看所有设备时，只在要说的时候有）：
-    /// old_server、not_logged_in、pending、local_only、off 说一句（灰字）；error、30 天内用过却没同步过金额的设备（missing）、
+    /// not_logged_in、pending、local_only、off 说一句（灰字）；error（和不认识的状态）、30 天内用过却没同步过金额的设备（missing）、
     /// 很久没同步上来的设备、有用量没算进来的设备（cca 给的 diag.why）说一句（橙色）。ok 不说。撤销了的设备不提醒（数字本来就是撤销前同步来的）。
     /// 只看一台设备时只说那一台的：本机只说有用量没算进来（这台设备自己的数字不经同步，别的设备没算进来、没同步上来不影响它），
     /// 另一台设备再说它很久没同步上来
@@ -185,10 +185,9 @@ extension Texts {
         var out: [CostNote] = []
         // cca 没给 sync 时（syncState 当作 local_only）不知道为什么只有这台设备，不说
         switch c.sync?.state.shown {
-        case .oldServer?: out.append(CostNote(text: "只算了这台设备：维护者的设备统计服务器还不支持同步金额"))
         case .notLoggedIn?: out.append(CostNote(text: "这台设备没登录这个账号，显示的是上次同步来的"))
         case .pending?: out.append(CostNote(text: "还没和别的设备同步过"))
-        case .localOnly?: out.append(CostNote(text: "只算了这台设备：这个账号不在维护者的映射里，或者这台设备没配置设备统计"))
+        case .localOnly?: out.append(CostNote(text: "只算了这台设备：这个账号不是哪个 Team 给的，或者这台设备用不了那个 Team 的服务器"))
         case .off?: out.append(CostNote(text: "只算了这台设备：这台设备关掉了设备统计"))
         case .error?: out.append(CostNote(text: "上次同步没成功" + (c.sync?.message.map { "：" + $0 } ?? ""), warning: true))
         default: break

@@ -41,23 +41,23 @@
     "leak_check": true,
     "update": "auto",
     "policy": {
-      "configured": true,
-      "repo": "example/cca-policy",
-      "next_check_epoch": 1794045600.0,
-      "state": "on",
-      "accounts": 2,
+      "configured": false,
+      "repo": null,
+      "next_check_epoch": null,
+      "state": "off",
+      "accounts": 0,
       "parked": 0
     },
     "hubs": [
-      {"kind": "maintainer", "url": "https://presence.example.com:18443", "host": "presence.example.com:18443", "state": "ok", "error": null,
+      {"kind": "team", "url": "https://team.example.com:18445", "host": "team.example.com:18445", "state": "ok", "error": null,
        "checked_epoch": 1794041700.0, "accounts": 1, "name": "studio-mac", "members": null, "joined_epoch": null, "can_invite": false,
-       "pinned": null},
+       "pinned": null, "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "team_name": "书房组"},
       {"kind": "later-kind", "url": "https://x.example.com:1", "host": "x.example.com:1", "state": "ok", "error": null,
        "checked_epoch": null, "accounts": 0, "name": null, "members": null, "joined_epoch": null, "can_invite": false}
     ],
     "teams": [
       {"id": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b", "name": "书房组", "role": "admin", "url": "https://team.example.com:18445",
-       "host": "team.example.com:18445", "device": "studio-mac", "state": "ok", "error": null, "seq": 4, "accounts": 2,
+       "host": "team.example.com:18445", "device": "studio-mac", "state": "ok", "error": null, "seq": 4, "accounts": 3,
        "joined_epoch": 1793900000},
       {"id": "c7e1a4b2d39f40718e5a6c7d8b9f0a1e", "name": "设计组", "role": "member", "url": "https://design.example.com",
        "host": "design.example.com", "device": "studio-mac", "state": "removed",
@@ -1683,6 +1683,7 @@
           "id": "bob-example-com-1a2b3c",
           "alias": "工作",
           "email": "bob@example.com",
+          "team": "5d0c2a9be17f4c3e8a6b1d2f3e4c5a6b",
           "name": "工作",
           "label": "工作（bob@example.com）",
           "kind": "oauth",
@@ -1697,7 +1698,7 @@
           "pinned": true,
           "pinned_node": "US-B",
           "is_last": true,
-          "hub": "maintainer",
+          "hub": "team",
           "api": null,
           "badge": {
             "label": "工",
@@ -2856,7 +2857,7 @@
               "state": "ok",
               "message": null,
               "checked_epoch": 1794041700.0,
-              "hub": "maintainer",
+              "hub": "team",
               "missing": [
                 {
                   "name": "carol-air",
@@ -3002,7 +3003,7 @@
             "usage": false,
             "check": true,
             "cli": true,
-            "policy_lock": true,
+            "policy_lock": false,
             "api_key": true,
             "cost": true,
             "mail": true,
@@ -3895,7 +3896,7 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true,
+            "policy_lock": false,
             "api_key": true,
             "cost": true,
             "mail": true,
@@ -3959,7 +3960,7 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true,
+            "policy_lock": false,
             "api_key": true,
             "cost": true,
             "mail": true,
@@ -4958,7 +4959,7 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true,
+            "policy_lock": false,
             "api_key": true,
             "cost": true,
             "mail": true,
@@ -6148,7 +6149,7 @@
             "usage": true,
             "check": true,
             "cli": true,
-            "policy_lock": true,
+            "policy_lock": false,
             "api_key": true,
             "cost": true,
             "custom_proxy": true
@@ -7009,7 +7010,7 @@
               "codex-auto-review"
             ],
             "sync": {
-              "state": "old_server",
+              "state": "local_only",
               "message": null,
               "checked_epoch": null,
               "missing": []

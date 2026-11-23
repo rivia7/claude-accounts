@@ -12,7 +12,7 @@ enum SidebarItem: Hashable, Sendable {
     case routing
     /// 远程会话：可以接入的会话（这台 Mac 上的、配对过的机器上的）、配对、内嵌的终端（cca 有远程会话时才有这一项）
     case remoteSessions
-    /// 共享与同步：维护者共享的账号的开关、自己的同步服务器（cca 有其中一样时才有这一项）
+    /// 共享与同步：这台设备在哪些 Team 里、加入和新建 Team、管理员的设备和账号（cca 有 Team 时才有这一项）
     case sharing
     case clientUpdates
 
@@ -168,8 +168,6 @@ final class AppModel {
     /// 账号在各组里的排序和置顶（用户拖的；存在 App 的设置里）
     private(set) var arrangement = AccountArrangement()
     private(set) var syncActivity: Activity?
-    /// 正在拉维护者的映射（定时的和手动的同一时间一个）。
-    private(set) var policyPulling = false
     /// 账号页「设备」一节（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号页看得见时一分钟查一次，只记在内存里
     private(set) var devices: [AccountRef: DevicesSnapshot] = [:]
     private(set) var devicesLoading: Set<AccountRef> = []
@@ -286,7 +284,7 @@ final class AppModel {
     var routingVisible: Bool { mainVisible && selection == .routing }
     /// 看得见、并且用得上路由器实况的页面开着：分流页，或者办公室（端口连不上、选错节点的员工看它）
     var liveVisible: Bool { mainVisible && (selection == .routing || selection == .office) }
-    /// 看得见的账号页有「设备」一节（cca 说这个账号有：映射里的官方账号、配置了设备统计的服务器）：这个账号
+    /// 看得见的账号页有「设备」一节（cca 说这个账号有：Team 给的官方账号、这台设备用得了那个 Team 的服务器）：这个账号
     var devicesRef: AccountRef? {
         guard mainVisible, case .account(let r)? = selection, account(r)?.can.devices == true else { return nil }
         return r
@@ -390,8 +388,6 @@ final class AppModel {
         self.scheduler.clientCheckDelay = { [weak self] in self?.clientCheckDelay() ?? 3600 }
         self.scheduler.onLiveTick = { [weak self] in self?.refreshLive() }
         self.scheduler.onClientCheckTick = { [weak self] in self?.checkClientUpdates(manual: false) }
-        self.scheduler.policyDelay = { [weak self] in self?.policyDelay() ?? PolicyPolling.fallback }
-        self.scheduler.onPolicyTick = { [weak self] in self?.pollPolicy() }
         self.scheduler.onDevicesTick = { [weak self] in self?.pollDevices() }
         self.scheduler.onRemoteTick = { [weak self] in self?.pollRemote() }
     }
@@ -582,8 +578,7 @@ final class AppModel {
             stateError = nil
             fixSelection()
             reconcileCore()
-            reconcilePolicyPolling()   // 映射可能是刚配置的
-            reconcileDevicesPolling()  // 映射里刚加了设备统计的服务器、这个账号刚进了映射
+            reconcileDevicesPolling()  // 刚加入了 Team、这个账号刚由 Team 给了这台设备
             if s.costTotal?.scan.state == .never { startDueCostSync() }   // 还没统计过：马上统计一次（PROTOCOL 3.5）
             // 2.9.0-beta.17 的顺序只记在 App 里：第一次读到账号表时写回去
             if !orderChecked {
@@ -1263,26 +1258,6 @@ final class AppModel {
         showToast("已复制：\(text)", .info)
     }
 
-    /// 请求维护者把这个账号现在的节点锁进映射（PROTOCOL 4.8）：cca 写好一条维护者直接运行的命令，复制给用户发给维护者。
-    func requestPolicyLock(_ a: Account) {
-        if isFixtureMode {
-            showToast("演示模式：不会生成请求", .info)
-            return
-        }
-        guard let client else { return }
-        Task { [weak self] in
-            let r = await client.execute(.policyRequest(a.tool, key: a.key), prompter: nil)
-            guard let self else { return }
-            let line = String(decoding: r.last?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard r.isSuccess, !line.isEmpty else {
-                self.finish(r, failureTitle: "没能生成锁定请求", success: "cca 没有给出请求的内容")
-                return
-            }
-            self.hooks.copy(line)
-            self.showToast("已复制命令：发给维护者，在 cca 的仓库里运行后这个账号的节点就固定了", .success)
-        }
-    }
-
     // MARK: API key（PROTOCOL 4.10）
 
     /// 读这个账号存的 API key（`cca [codex] key KEY --show`，经内存里的管道）；读不了时弹框说原因、返回 nil。
@@ -1489,11 +1464,6 @@ final class AppModel {
     private func reconcileBackgroundPolling() {
         scheduler.updateUsagePolling(enabled: phase == .ready)
         scheduler.updateClientChecks(enabled: phase == .ready && !isFixtureMode && hello?.devMode != true)
-        reconcilePolicyPolling()
-    }
-
-    private func reconcilePolicyPolling() {
-        scheduler.updatePolicyPolling(enabled: phase == .ready && !isFixtureMode && policyPullAvailable)
     }
 
     // MARK: 账号连着的设备（PROTOCOL 3.4）
@@ -1527,44 +1497,10 @@ final class AppModel {
         }
     }
 
-    // MARK: 维护者的共享（PROTOCOL 4.12）
-
-    /// cca 有「共享与同步」的开关（新版 cca 的 `config.policy` 带 `state`；旧版没有：不显示这一页、不调 `policy on` / `off`）
-    var sharingAvailable: Bool { state?.config?.policy?.switchable == true }
-    /// 「共享与同步」页上维护者共享的开关（以前的做法）：cca 没有 Team 时照旧；有 Team 时只给还开着、关掉时收起了账号的设备
-    /// （别的设备经 Team 拿账号：维护者的账号也是）
-    var policyCardShown: Bool {
-        let p = state?.config?.policy
-        return !teamAvailable || p?.isOn == true || (p?.parked ?? 0) > 0
-    }
-    /// 正在关掉共享（`cca policy off`：问过同意以后要改账号表，配置了路由器的还要同步），开关先停用
-    private(set) var sharingBusy = false
-
-    /// 「共享与同步」页的开关。打开：提问会话（`cca policy on`：不知道仓库时问仓库，要维护者加公钥时显示给维护者的那一行、边等边拉）；
-    /// 关掉：`cca policy off`，先问同意（共享的账号会移出账号表，登录留着），共享的账号正在用时 cca 不关、说是哪些
-    func setSharing(_ on: Bool) {
-        guard !isFixtureMode else { showToast(on ? "演示模式：不会打开共享" : "演示模式：不会关掉共享", .info); return }
-        guard phase == .ready, sharingAvailable, !sharingBusy, flow == nil else { return }
-        guard on != (state?.config?.policy?.isOn ?? false) else { return }
-        if on {
-            run(.policyOn)
-            return
-        }
-        guard let client else { return }
-        sharingBusy = true
-        let prompter = hooks.prompter
-        Task { [weak self] in
-            let r = await client.execute(.policyOff, prompter: prompter)
-            guard let self else { return }
-            self.finish(r, failureTitle: "没能关掉共享", success: nonEmpty(r.resultEvent?.message) ?? "已关掉共享")
-            await self.afterAction()
-            self.sharingBusy = false
-        }
-    }
-
     // MARK: Team（PROTOCOL 4.14）
 
-    /// cca 有 Team（`hello.team` 是 App 认识的版本；旧版 cca 没有：不显示 Team 的那一块、不按 Team 筛选、不调 `cca team`）
+    /// cca 有 Team（`hello.team` 是 App 认识的版本；旧版 cca 没有：没有「共享与同步」这一页、不按 Team 筛选、不调 `cca team`）。
+    /// 3.6.0 以前这一页看的是 `config.policy`（维护者的共享），现在只看这一项
     var teamAvailable: Bool { hello?.team == TeamAPI.version }
     /// 这台设备在的 Team，照加入的先后
     var teams: [TeamEntry] { teamAvailable ? state?.config?.teams ?? [] : [] }
@@ -1823,7 +1759,7 @@ final class AppModel {
     /// 还接着的有几个（侧栏那一行说一声）
     var remoteAttachedCount: Int { remoteTerminals.filter { $0.isRunning }.count }
     /// 最多同时开几个终端：每个都是一个进程、在会话那边占一处接入（窗口大小要照顾它）；接着别的机器的那些断线时各自重试，
-    /// 都要问维护者的服务器，而服务器给每台设备限了流
+    /// 都要问 Team 的服务器，而服务器给每台设备限了流
     static let remoteTerminalLimit = 8
     @ObservationIgnored private var remoteAgain = false
 
@@ -2096,51 +2032,6 @@ final class AppModel {
                 break
             }
             await self.loadState()
-        }
-    }
-
-    /// 能拉维护者的映射：配置了映射，cca 也够新（和 `hello.forms` 同一版起才有 `policy pull --json` 和 `next_check_epoch`；没有下次的时间，定时拉取就成了每 5 分钟一次）。
-    var policyPullAvailable: Bool {
-        formsSupported && state?.config?.policy?.configured == true
-    }
-
-    /// 离下次该拉维护者的映射还有多久：cca 给的时间（一小时一次）。到期了、没拉成时过一会儿再来。
-    private func policyDelay() -> TimeInterval {
-        PolicyPolling.delay(next: state?.config?.policy?.nextCheckEpoch, now: Date().timeIntervalSince1970)
-    }
-
-    /// 定时拉维护者的映射（`cca policy pull --json`）：有变化时 cca 照映射改账号表、同步路由器（要重载的不问，留着“待同步”，用户点同步时再问）。
-    /// 在后台也拉（App 平时就在后台）；拉不成不打扰，到点再试，原因记在 cca 的日志里（`cca policy` 看得到）。
-    private func pollPolicy() {
-        guard phase == .ready, let client, !isFixtureMode, !policyPulling, flow == nil, policyPullAvailable,
-              PolicyPolling.isDue(next: state?.config?.policy?.nextCheckEpoch, now: Date().timeIntervalSince1970),
-              !hooks.systemConditions().thermalPressure else { return }
-        policyPulling = true
-        Task { [weak self] in
-            let (doc, _) = await client.document(.policyPull(manual: false), as: PolicyPullDoc.self, prompter: nil)
-            guard let self else { return }
-            self.policyPulling = false
-            if doc?.changed == true { self.showToast("维护者更新了节点映射，账号表已经跟着改好", .info) }
-            await self.loadState()
-        }
-    }
-
-    /// 现在就拉一次维护者的映射（节点分流页、账号的菜单）。结果照实提示；路由器要重载时接着走“同步路由器”：这次是用户点的，可以弹框问。
-    func pullPolicyNow() {
-        if isFixtureMode {
-            showToast("演示模式：不会拉取映射", .info)
-            return
-        }
-        guard phase == .ready, let client, !policyPulling, flow == nil, policyPullAvailable else { return }
-        policyPulling = true
-        Task { [weak self] in
-            let (doc, r) = await client.document(.policyPull(manual: true), as: PolicyPullDoc.self, prompter: nil)
-            guard let self else { return }
-            self.policyPulling = false
-            await self.loadState()
-            let detail = nonEmpty(doc?.summary).map { "（\($0)）" } ?? ""
-            self.finish(r, failureTitle: "没能拉取映射", success: (doc?.changed == true ? "已更新映射" : "映射没有变化") + detail)
-            if r.isSuccess, r.last?.events.contains(where: { $0.consent != nil }) == true { self.syncRouter() }
         }
     }
 
@@ -2683,7 +2574,8 @@ final class AppModel {
         case .remoteSessions?:
             if !remoteAvailable { selection = .office }
         case .sharing?:
-            if !sharingAvailable { selection = .office }
+            // 侧栏只在 cca 有 Team 时列这一页
+            if !teamAvailable { selection = .office }
         case .account(let r)?:
             if r.tool == tool, account(r) != nil { return }
             // 正在改名：旧键没了是改名的结果，改名完成后会换成新键（rename）

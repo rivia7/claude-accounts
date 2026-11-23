@@ -1,15 +1,14 @@
 import Foundation
 
 /// 账号的设备统计、记下的 API key、折合金额经哪一类服务器同步（PROTOCOL 2.2 的 `config.hubs[].kind`、账号的 `hub`、`cost.sync.hub`）。
-/// 3.5.3 以前还有 `own`（自己的同步服务器，后来去掉了）：旧版 cca 给的 `own` 不认识，当作没有
+/// 3.5.3 以前还有 `own`（自己的同步服务器），3.6.0 以前还有 `maintainer`（维护者的服务器），后来都去掉了：旧版 cca 给的这两个值不认识，
+/// 当作没有（不当成哪个 Team 的）
 struct HubKind: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
-    /// 维护者的服务器：映射里的官方账号
-    static let maintainer = HubKind(rawValue: "maintainer")
     /// 某个 Team 的同步服务器：这个 Team 给这台设备的账号（PROTOCOL 4.14；是哪个 Team 看旁边的 `team`）
     static let team = HubKind(rawValue: "team")
-    static let allKnown: [HubKind] = [.maintainer, .team]
+    static let allKnown: [HubKind] = [.team]
 }
 
 /// 一台服务器同步得怎么样（`config.hubs[].state`）。不认识的值当 `error`
@@ -42,7 +41,7 @@ struct HubEntry: Decodable, Sendable, Equatable {
     var accounts: Int
     /// 这台设备在它上面的名字（上次同步折合金额时服务器说的，没同步过是 nil）
     var name: String?
-    /// Team 的服务器（`kind` 是 `team`）：是哪个 Team 的（编号）、它的名字；维护者的是 nil
+    /// 是哪个 Team 的服务器（编号）、这个 Team 的名字
     var team: String?
     var teamName: String?
 

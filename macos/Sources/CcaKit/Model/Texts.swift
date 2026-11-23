@@ -176,7 +176,7 @@ enum Texts {
     static func apiKeyShare(_ k: APIKeyInfo, now: Double, calendar: Calendar = .current) -> String? {
         guard k.shared else { return nil }
         if let err = k.syncError { return "没能和其他设备同步：\(err)" }
-        guard k.saved else { return "记下后，登录了这个账号的其他设备也能看到（加密同步，维护者的服务器看不到 key）。" }
+        guard k.saved else { return "记下后，登录了这个账号的其他设备也能看到（加密同步，Team 的服务器看不到 key）。" }
         let when = k.savedEpoch.map { " " + pastTime($0, now: now, calendar: calendar) } ?? ""
         if let from = k.fromDevice { return "\(from)\(when) 记下，已加密同步到这台 Mac。" }
         return "这台 Mac\(when) 记下，登录了这个账号的其他设备也能看到（加密同步）。"
@@ -237,14 +237,11 @@ enum Texts {
 
     // MARK: Team（PROTOCOL 4.14）
 
-    /// 侧栏「共享与同步」下面那句（短写，免得截断）：在 Team 里时一个说名字、几个说几个（维护者的共享还开着时带一句「共享开着」）；
-    /// 不在 Team 里时说维护者的共享开没开。teams 是 nil：cca 没有 Team，照旧只说维护者的共享
-    static func sharingSubtitle(policyOn: Bool, teams: [String]?) -> String {
-        guard let teams else { return policyOn ? "维护者的共享开着" : "维护者的共享关着" }
-        if teams.isEmpty { return policyOn ? "维护者的共享开着" : "还没加入 Team" }
-        let one = teams.count == 1 ? "「\(nonEmpty(teams[0]) ?? "Team")」" : nil
-        if policyOn { return (one ?? "\(teams.count) 个 Team") + " · 共享开着" }
-        return one.map { "在\($0)里" } ?? "在 \(teams.count) 个 Team 里"
+    /// 侧栏「共享与同步」下面那句（短写，免得截断）：在 Team 里时一个说名字、几个说几个，不在时说还没加入
+    static func sharingSubtitle(teams: [String]) -> String {
+        if teams.isEmpty { return "还没加入 Team" }
+        if teams.count == 1 { return "在「\(nonEmpty(teams[0]) ?? "Team")」里" }
+        return "在 \(teams.count) 个 Team 里"
     }
 
     /// 筛选菜单里一项的名字：全部账号、Team 的名字（不在了的写编号的开头）、不在 Team 里的
@@ -559,13 +556,14 @@ enum Texts {
         }
     }
 
+    /// 对账时要做的改动（`notices`）：都是照 Team 给这台设备的配置做的（cca 没说是哪个 Team，这里也不说）
     static func notice(_ n: StateNotice) -> String {
         let who = n.key ?? ""
         switch n.code {
-        case .policyAdded: return "维护者的映射会加入账号 \(who)（节点 \(n.node ?? "—")）"
-        case .policyAlias: return "维护者的映射会把 \(n.oldKey ?? "账号") 改名为 \(who)"
-        case .policyPinned: return "维护者的映射会把 \(who) 的节点从 \(n.oldNode ?? "—") 改成 \(n.node ?? "—")"
-        case .nodesFilled: return "维护者的参考节点 \(n.node ?? "") 会加入可选节点"
+        case .policyAdded: return "Team 的配置会加入账号 \(who)（节点 \(n.node ?? "—")）"
+        case .policyAlias: return "Team 的配置会把 \(n.oldKey ?? "账号") 改名为 \(who)"
+        case .policyPinned: return "Team 的配置会把 \(who) 的节点从 \(n.oldNode ?? "—") 改成 \(n.node ?? "—")"
+        case .nodesFilled: return "Team 配置里的节点 \(n.node ?? "") 会加入可选节点"
         default: return "下次运行 cca 时会有改动"
         }
     }

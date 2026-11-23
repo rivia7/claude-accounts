@@ -120,9 +120,9 @@ struct StateConfig: Decodable, Sendable, Equatable {
     var minTrust: Double?
     var leakCheck: Bool?
     var update: String?
-    var policy: PolicyConfig?
-    /// 经哪几台服务器和自己的其他设备同步（PROTOCOL 2.2 的 `config.hubs`）：维护者的在前，各个 Team 的在后；
-    /// 不认识的 `kind`（旧版 cca 的 `own`：自己的同步服务器）已经去掉；旧版 cca 没有这个字段，是空的
+    /// 经哪几台服务器和自己的其他设备同步（PROTOCOL 2.2 的 `config.hubs`）：各个 Team 的，照加入的先后；
+    /// 不认识的 `kind`（旧版 cca 的 `own`：自己的同步服务器；3.6.0 以前的 `maintainer`：维护者的服务器）已经去掉；
+    /// 旧版 cca 没有这个字段，是空的。`config.policy`（3.6.0 起是固定的「关着」）不读
     var hubs: [HubEntry]
     /// 这台设备在哪些 Team 里（`cca team`，PROTOCOL 4.14），照加入的先后；一个都不在、旧版 cca 没有这个字段时是空的
     var teams: [TeamEntry]
@@ -134,7 +134,7 @@ struct StateConfig: Decodable, Sendable, Equatable {
         case router, local, nodes
         case minTrust = "min_trust"
         case leakCheck = "leak_check"
-        case update, policy, hubs, teams, onboarded
+        case update, hubs, teams, onboarded
     }
 
     init(from decoder: Decoder) throws {
@@ -146,7 +146,6 @@ struct StateConfig: Decodable, Sendable, Equatable {
         minTrust = c.double(.minTrust)
         leakCheck = c.bool(.leakCheck)
         update = c.stringish(.update)
-        policy = c.lossy(PolicyConfig.self, .policy)
         hubs = (c.lossyArray(HubEntry.self, .hubs) ?? []).filter { $0.kind.isKnown }
         teams = (c.lossyArray(TeamEntry.self, .teams) ?? []).filter { !$0.id.isEmpty }
         onboarded = c.bool(.onboarded)
@@ -237,44 +236,6 @@ struct LocalUDP: Decodable, Sendable, Equatable {
     var active: Bool { state == .ok && running }
     /// 开着、给别的 VPN 让开了：UDP 照它的规则出去，它关掉后 cca 自动接回节点（不用做什么）
     var yielded: Bool { state == .ok && otherVPN != nil }
-}
-
-/// 维护者共享的账号（维护者的映射，默认关着；PROTOCOL 2.2 的 `config.policy`、4.12）
-struct PolicyConfig: Decodable, Sendable, Equatable {
-    /// 共享开着（记着映射仓库）
-    var configured: Bool
-    var repo: String?
-    /// App 下次该拉映射的时间（cca 算的，App 不重算）；没拉过是 nil。
-    var nextCheckEpoch: Double?
-    /// cca 报的状态（`state`）；旧版 cca 没有这一项
-    var reported: PolicyState?
-    /// 账号表里属于映射的账号（各工具加起来）；旧版 cca 是 0
-    var accounts: Int
-    /// 关掉共享时移出账号表的账号（登录都留着，打开时原样加回来）；旧版 cca 是 0
-    var parked: Int
-
-    enum CodingKeys: String, CodingKey {
-        case configured, repo, accounts, parked
-        case reported = "state"
-        case nextCheckEpoch = "next_check_epoch"
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        configured = c.bool(.configured) ?? false
-        repo = c.string(.repo)
-        nextCheckEpoch = c.double(.nextCheckEpoch)
-        reported = c.lossy(PolicyState.self, .reported)
-        accounts = c.int(.accounts) ?? 0
-        parked = c.int(.parked) ?? 0
-    }
-
-    /// 关着 / 打开了还没拉到映射 / 拉到了。旧版 cca 没有 `state`：照 `configured` 当作开着（`on`）或关着（`off`）
-    var state: PolicyState { reported ?? (configured ? .on : .off) }
-    /// cca 有「共享与同步」的开关（`cca policy on` / `off`）：新版 cca 的这一项带 `state`，旧版没有
-    var switchable: Bool { reported != nil }
-    /// 共享开着（拉到了映射，或者在等维护者）：开关画成打开的
-    var isOn: Bool { state != .off }
 }
 
 struct Routing: Decodable, Sendable, Equatable {
@@ -494,8 +455,8 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
     /// 别名被 Team 的管理员锁定了（`cca rename` 改不了：`alias_locked`）；旧版 cca 没有这个字段是 false
     var aliasLocked: Bool
     var isLast: Bool
-    /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：维护者的、某个 Team 的，不同步（和不认识的值）是 nil。
-    /// 旧版 cca 没有这个字段：有「设备」一节的当作维护者的（那时只有它）
+    /// 设备统计、记下的 API key、折合金额经哪台服务器同步（PROTOCOL 2.2）：某个 Team 的（是哪个看 `team`），不同步、
+    /// 不认识的值（3.6.0 以前的 `maintainer`：维护者的服务器）、旧版 cca 没有这个字段时是 nil
     var hub: HubKind?
     /// 这个账号是哪个 Team 给的（Team 的编号，PROTOCOL 2.2）：只说是谁给的，它的服务器这台设备用不了时也有；不是 Team 给的是 nil
     var team: String?
@@ -570,7 +531,7 @@ struct Account: Decodable, Sendable, Equatable, Identifiable {
         app = c.lossy(AppRun.self, .app)
         cli = c.lossy(CLIRun.self, .cli)
         can = c.lossy(Can.self, .can) ?? Can()
-        hub = c.contains(.hub) ? c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil } : (can.devices ? .maintainer : nil)
+        hub = c.lossy(HubKind.self, .hub).flatMap { $0.isKnown ? $0 : nil }
         team = c.string(.team).flatMap { $0.isEmpty ? nil : $0 }
         canWhy = c.lossyDictionary(CanWhy.self, .canWhy) ?? [:]
         mail = c.lossy(MailConfig.self, .mail)
@@ -727,10 +688,8 @@ struct Can: Decodable, Sendable, Equatable {
     var check: Bool = true
     /// 能不能在终端里打开（要有 claude / codex 命令）
     var cli: Bool = false
-    /// 能不能请求维护者把节点锁进映射（官方账号、这台机器配置了映射、还没被映射固定；PROTOCOL 4.8）
-    var policyLock: Bool = false
-    /// 账号页有没有「设备」一节（映射里的官方账号、映射里配置了设备统计的服务器、这台 Mac 没关掉；PROTOCOL 3.4）。
-    /// 旧版 cca 没有这一项，当作没有
+    /// 账号页有没有「设备」一节（Team 给的官方账号、这台设备用得了那个 Team 的服务器、没关掉设备统计；PROTOCOL 3.4）。
+    /// 旧版 cca 没有这一项，当作没有。`policy_lock`（3.6.0 起总是 false）不读
     var devices: Bool = false
     /// 能不能记下 / 显示 / 复制 API key（`cca [codex] key`，PROTOCOL 4.10；旧版 cca 没有这一项，当作不能）
     var apiKey: Bool = false
@@ -740,14 +699,13 @@ struct Can: Decodable, Sendable, Equatable {
     /// 账号页有没有「邮箱」一节（邮箱助手，PROTOCOL 4.11；只有 Claude 官方账号、账号表里写了邮箱）。
     /// 旧版 cca 没有这一项，当作没有
     var mail: Bool = false
-    /// 能不能给这个账号换上自定义代理（`cca [codex|agy] node use`，PROTOCOL 4.6 的 `node.custom`；维护者的映射固定了节点的官方账号不能）。
+    /// 能不能给这个账号换上自定义代理（`cca [codex|agy] node use`，PROTOCOL 4.6 的 `node.custom`；Team 的配置固定了节点的官方账号不能）。
     /// 旧版 cca 没有这一项，当作不能
     var customProxy: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case app, web, billing, usage, check, cli, devices, cost, mail
         case limitResets = "limit_resets"
-        case policyLock = "policy_lock"
         case apiKey = "api_key"
         case customProxy = "custom_proxy"
     }
@@ -763,7 +721,6 @@ struct Can: Decodable, Sendable, Equatable {
         usage = c.bool(.usage) ?? false
         check = c.bool(.check) ?? true
         cli = c.bool(.cli) ?? false
-        policyLock = c.bool(.policyLock) ?? false
         devices = c.bool(.devices) ?? false
         apiKey = c.bool(.apiKey) ?? false
         cost = c.bool(.cost) ?? false

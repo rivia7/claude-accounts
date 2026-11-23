@@ -3,10 +3,11 @@ import Foundation
 
 /// 看着 `hello.home`（~/.cca）的变化，只当作“该重新跑一次 `_gui state` / `_gui hello`”的信号：从不读那些文件。
 /// 收：accounts.json、codex.json、agy.json、config.json、*/usage.json、*/health.json、accounts/*/cli-<数字>.json（命令行会话的登记）、
-/// policy/policy.json、cost/ 里的 local.json、remote.json、sync.json 和各个 Team 的 team.<编号>.remote.json、team.<编号>.sync.json
-/// （折合金额，cost/ 里别的文件不算）、presence/status.json、presence/team.<编号>.status.json（设备统计报没报上去）（→ state），
+/// cost/ 里的 local.json 和各个 Team 的 team.<编号>.remote.json、team.<编号>.sync.json（折合金额，cost/ 里别的文件不算）、
+/// presence/team.<编号>.status.json（设备统计报没报上去）（→ state），
 /// core/config.yaml（→ core：内置代理的配置，看不见时也要马上读 state，见 AppModel），bin/cca（→ hello）。
-/// 不收：chrome/、desktop/ 下面的一切（浏览器和桌面 App 的资料目录一直在写）。
+/// 不收：chrome/、desktop/ 下面的一切（浏览器和桌面 App 的资料目录一直在写）；3.6.0 以前维护者的映射、经维护者的服务器同步的那几份
+/// （policy/policy.json，不带 team.<编号>. 的 presence/status.json、cost/remote.json、cost/sync.json：3.6.0 的 cca 删掉了，不再写）。
 /// 500 毫秒内的多次变化合并成一次（hello > core > state）。看不见时只记下“脏了”（由 AppModel 处理）。
 final class CcaWatcher: @unchecked Sendable {
     enum Trigger: Sendable, Equatable {
@@ -25,10 +26,9 @@ final class CcaWatcher: @unchecked Sendable {
         }
     }
 
-    private static let statePaths: Set<String> = ["accounts.json", "codex.json", "agy.json", "config.json", "policy/policy.json",
-                                                  "presence/status.json"]
-    /// `cost/` 下面的：这台设备的统计、别的设备经维护者的服务器同步来的、同步的状态（各个 Team 的见 `teamFile`）
-    private static let costPaths: Set<String> = ["local.json", "remote.json", "sync.json"]
+    private static let statePaths: Set<String> = ["accounts.json", "codex.json", "agy.json", "config.json"]
+    /// `cost/` 下面的：这台设备的统计（别的设备经各个 Team 的服务器同步来的、同步的状态见 `teamFile`）
+    private static let costPaths: Set<String> = ["local.json"]
 
     /// 一个变化的路径该触发什么（纯函数，测试用）。homes 是 ~/.cca 的几种写法（原样、解析过链接的）。
     static func classify(path: String, homes: [String]) -> Trigger? {

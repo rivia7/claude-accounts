@@ -90,6 +90,7 @@ struct StateErrorCode: KnownValues {
     static let allKnown: [StateErrorCode] = [.configUnreadable, .tableUnreadable, .accountUnreadable, .tableInvalid]
 }
 
+/// `notices[].code`（PROTOCOL 2.2）：照 Team 给这台设备的配置对账时要做的改动（名字里的 `policy` 是以前维护者的映射留下的叫法）
 struct NoticeCode: KnownValues {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
@@ -155,19 +156,6 @@ struct LocalUDPState: KnownValues {
     /// 内置代理里已经没有这个节点转发 UDP 的定义
     static let undefined = LocalUDPState(rawValue: "undefined")
     static let allKnown: [LocalUDPState] = [.off, .ok, .stale, .missing, .undefined]
-}
-
-/// `config.policy.state`：维护者的共享（PROTOCOL 2.2、4.12）。不认识的值当作开着、还没拉到（`pending`）显示
-struct PolicyState: KnownValues {
-    let rawValue: String
-    init(rawValue: String) { self.rawValue = rawValue }
-    /// 关着：从没打开过、说过不用、`cca policy off` 关掉了
-    static let off = PolicyState(rawValue: "off")
-    /// 打开了，还没拉到映射（在等维护者加上这台 Mac 的公钥，或者还没拉过）
-    static let pending = PolicyState(rawValue: "pending")
-    /// 拉到了映射
-    static let on = PolicyState(rawValue: "on")
-    static let allKnown: [PolicyState] = [.off, .pending, .on]
 }
 
 struct Backend: KnownValues {
@@ -318,10 +306,6 @@ struct ResultCode: KnownValues {
     static let remotePaired = ResultCode(rawValue: "remote_paired")
     /// 远程会话：开关、对方能做什么、取消配对改好了（`cca remote on|off|allow|unpair`）。
     static let remoteUpdated = ResultCode(rawValue: "remote_updated")
-    /// 打开了维护者的共享（`cca policy on`，PROTOCOL 4.12）：拉到了映射，或者先跳过、这次没拉到（message 说是哪种）。
-    static let policyOn = ResultCode(rawValue: "policy_on")
-    /// 共享关着：`cca policy off` 关掉了（本来就关着也是它），或者 `policy on` 里选了「不打开共享」。
-    static let policyOff = ResultCode(rawValue: "policy_off")
     /// Team（`cca team join` / `leave` / `revoke`；PROTOCOL 4.14）
     static let teamJoined = ResultCode(rawValue: "team_joined")
     static let teamLeft = ResultCode(rawValue: "team_left")
@@ -331,7 +315,6 @@ struct ResultCode: KnownValues {
     static let teamDeployed = ResultCode(rawValue: "team_deployed")
     static let allKnown: [ResultCode] = [.opened, .activated, .added, .keySaved, .removed, .saved, .routerReady, .localReady, .keyForgotten,
                                          .mailReady, .mailForgotten, .localUDP, .onboarded, .remotePaired, .remoteUpdated,
-                                         .policyOn, .policyOff,
                                          .teamJoined, .teamLeft, .teamRevoked, .teamCreated, .teamDeployed]
 }
 
@@ -375,8 +358,6 @@ struct FailCode: KnownValues {
     static let cancelled = FailCode(rawValue: "cancelled")
     /// 删除账号：它的桌面 App 还开着。
     static let appRunning = FailCode(rawValue: "app_running")
-    /// 拉不到维护者的映射（`cca policy pull --json`，上次拉到的照用）。
-    static let policyUnavailable = FailCode(rawValue: "policy_unavailable")
     /// 设备统计（PROTOCOL 3.4）：服务器那边没成（连不上、不认这台 Mac、证书指纹对不上……，message 是原因）/ 这台 Mac 用不了
     static let devicesUnavailable = FailCode(rawValue: "devices_unavailable")
     static let devicesOff = FailCode(rawValue: "devices_off")
@@ -390,22 +371,20 @@ struct FailCode: KnownValues {
     static let costOff = FailCode(rawValue: "cost_off")
     /// 邮箱助手：连不上 Gmail（网络 / 代理 / 证书 / 认证，`cca mail setup`，PROTOCOL 4.11）。
     static let mailConnect = FailCode(rawValue: "mail_connect")
-    /// 换自定义代理（`cca [codex|agy] node use`）：维护者的映射固定了这个账号的节点。
+    /// 换自定义代理（`cca [codex|agy] node use`）：Team 的配置固定了这个账号的节点。
     static let nodePinned = FailCode(rawValue: "node_pinned")
-    /// 关掉共享（`cca policy off`）：共享的账号正在用（命令行会话、桌面 App 开着），什么都没改；message 说是哪些。
-    static let policyOffBusy = FailCode(rawValue: "policy_off_busy")
     /// Team 的部署（`cca team deploy`，PROTOCOL 4.14）：App 里问 SSH 密码，错了三次（3.5.3 以前自己的同步服务器的那些 `hub_` 开头的码都没有了；
     /// Team 的命令没成是 `team_` 开头的，App 照 message 说）
     static let hubSSH = FailCode(rawValue: "hub_ssh")
     /// Team 的部署装好了、接上了，但地址是内网的：别的网络里的设备连不上（提醒，退出码 0；message 说怎么换成公网地址）
     static let teamLan = FailCode(rawValue: "team_lan")
-    static let allKnown: [FailCode] = [.cancelled, .appRunning, .policyUnavailable, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
+    static let allKnown: [FailCode] = [.cancelled, .appRunning, .error, .appMissing, .apiAccount, .toolMissing, .tableInvalid, .syncFailed, .noRouter,
                                        .portClosed, .localUnavailable, .nodeMissing, .settingsConflict, .regionRestricted,
                                        .noExitIP, .lowPurity, .notLoggedIn, .loginMismatch, .apiUnreachable, .openFailed,
                                        .appProfileUnsupported, .noChrome, .invalidURL, .loginUnsupported,
                                        .aliasInvalid, .accountMissing, .aliasLocked, .noResetCredit, .resetUnsupported,
                                        .devicesUnavailable, .devicesOff, .keyMissing, .keychainUnavailable, .unsupported,
-                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .policyOffBusy, .hubSSH, .teamLan]
+                                       .costUnavailable, .costOff, .mailConnect, .nodePinned, .hubSSH, .teamLan]
 }
 
 /// `terminal.code`（`install` 不在其中：`hello.installed == false` 由 App 自己处理）。
@@ -445,8 +424,6 @@ struct ConsentItem: KnownValues {
     static let remotePair = ConsentItem(rawValue: "remote_pair")
     /// `cca remote end`：结束这台机器上的一个会话，等于关掉它的终端（范围是会话的 id，默认不同意）。
     static let remoteEnd = ConsentItem(rawValue: "remote_end")
-    /// `cca policy off`：关掉维护者的共享，映射里的账号移出账号表（范围 `all`，默认不同意；PROTOCOL 4.12）。
-    static let policyOff = ConsentItem(rawValue: "policy_off")
     /// `cca team leave`（这台设备是成员）：退出一个 Team（范围是 Team 的编号，默认不同意；PROTOCOL 4.14）。
     static let teamLeave = ConsentItem(rawValue: "team_leave")
     /// `cca team leave`（这台设备是管理员）：这台设备上就没有这个 Team 的根密钥了（范围是 Team 的编号，默认不同意）。
@@ -454,7 +431,7 @@ struct ConsentItem: KnownValues {
     /// `cca team revoke`：管理员从 Team 里移除一台设备（范围是设备在 Team 里的编号，默认不同意）。
     static let teamRevoke = ConsentItem(rawValue: "team_revoke")
     static let allKnown: [ConsentItem] = [.routerReload, .routerRestart, .lowPurity, .codexFallbackOff, .builtinCore,
-                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd, .policyOff,
+                                          .resetCredit, .keyForget, .installProxy, .settingsFix, .remotePair, .remoteEnd,
                                           .teamLeave, .teamDelete, .teamRevoke]
 }
 

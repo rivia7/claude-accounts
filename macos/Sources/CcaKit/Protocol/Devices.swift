@@ -1,6 +1,6 @@
 import Foundation
 
-/// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号走的那台服务器（维护者的、某个 Team 的）上的记录，
+/// 账号连着的设备（`cca [codex] devices KEY --json`，PROTOCOL 3.4）：账号走的那台服务器（给它的那个 Team 的同步服务器）上的记录，
 /// 时间 cca 已经换成这台 Mac 的时钟。只有经服务器同步的官方账号才有（`can.devices`）。
 struct DevicesDoc: CcaDocument, Equatable {
     static let expectedKind: String? = "devices"
@@ -9,7 +9,7 @@ struct DevicesDoc: CcaDocument, Equatable {
     var kind: String?
     var generatedEpoch: Double?
     var tool: ToolID?
-    /// 这台 Mac 在服务器上的名字（维护者给它的 deploy key 起的别名）；服务器还不认它时是 nil
+    /// 这台 Mac 在服务器上的名字（Team 的管理员给这台设备起的名字）；服务器还不认它时是 nil
     var me: String?
     /// 多久没动静算闲置、多久没回报算离线（秒，服务器的设置）
     var idleAfter: Double?
@@ -44,11 +44,13 @@ struct DevicesDoc: CcaDocument, Equatable {
 
     func account(_ key: String) -> DevicesAccount? { accounts.first { $0.key == key } }
 
-    /// 这个账号问的那台服务器的设置和名字（旧版 cca 没有 `hubs`：用顶层的几项）
+    /// 这个账号问的那台服务器的设置和名字。旧版 cca 没有 `hubs`、`hubs` 里没有它那一台时用顶层的几项：`kind` 照账号的 `hub`，
+    /// 账号没有 `hub` 时是空的（不当成哪个 Team 的）
     func hub(for account: DevicesAccount) -> DevicesHub {
         // 可能同时在几个 Team 里（kind 都是 team）：照编号认
         if let h = hubs.first(where: { $0.kind == account.hub && $0.team == account.team }) { return h }
-        return DevicesHub(kind: account.hub ?? .maintainer, me: me, idleAfter: idleAfter, offlineAfter: offlineAfter, reportingError: reportingError)
+        return DevicesHub(kind: account.hub ?? HubKind(rawValue: ""), me: me, idleAfter: idleAfter, offlineAfter: offlineAfter,
+                          reportingError: reportingError)
     }
 }
 
@@ -92,7 +94,7 @@ struct DevicesHub: Decodable, Sendable, Equatable {
 
 struct DevicesAccount: Decodable, Sendable, Equatable {
     var key: String
-    /// 问的哪台服务器（旧版 cca 没有：nil，当作维护者的）
+    /// 问的哪台服务器（cca 给的原样；旧版 cca 没有：nil）
     var hub: HubKind?
     /// 经 Team 的服务器问的（`hub` 是 `team`）：是哪个 Team 的
     var team: String?

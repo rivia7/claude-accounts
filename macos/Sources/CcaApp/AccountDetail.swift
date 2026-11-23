@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 一个账号的详情：身份和主要操作（打开 App、网页版）、“现在能不能用、下一步点什么”的一句话、用量、每周用量和折合金额（第三方 API 账号是
-/// 「API key」）、网络出口；映射里的账号还有「设备」（在哪些设备上用，DevicesSection）。
+/// 「API key」）、网络出口；Team 给的账号还有「设备」（在哪些设备上用，DevicesSection）。
 /// 操作放在它作用的那一节旁边：刷新用量在“用量”的标题上，检测出口在“网络出口”的标题上。第一次来时顶上有一张提示卡片。
 /// 窗口宽的时候（全屏）用量（连同每周用量）和网络出口左右并排，窄了上下排（SectionColumns）；「设备」总是在下面占一整行。
 struct AccountDetail: View {
@@ -16,7 +16,7 @@ struct AccountDetail: View {
                         TipCard(id: "account-page", title: "这一页怎么看",
                                 message: "名字下面那句话说这个账号现在能不能用、下一步点什么。"
                                     + (a.isAPI ? "往下是它的 API key 和网络出口。"
-                                       : "往下是用量和网络出口；维护者映射里的账号，最下面还有它在哪些设备上用。")
+                                       : "往下是用量和网络出口；Team 给的账号，最下面还有它在哪些设备上用。")
                                     + "端口、纯净度这些细节，点「显示细节」。")
                         DetailHeader(account: a)
                         SectionColumns {
@@ -39,7 +39,7 @@ struct AccountDetail: View {
                             }
                             RouteSection(account: a)
                         }
-                        // 映射里的账号：在哪些设备上用（整行，不进并排的两栏）
+                        // Team 给的账号：在哪些设备上用（整行，不进并排的两栏）
                         if a.can.devices { DevicesSection(account: a) }
                         // 邮箱助手：收登录邮件的 Gmail、最近的登录邮件、在浏览器里打开（整行）
                         if model.mailSupported, a.can.mail { MailSection(account: a) }

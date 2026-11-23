@@ -26,17 +26,10 @@ enum CcaCommand: Sendable, Hashable {
     /// claude.ai 的用量页（`cca limit-resets KEY`）：Claude 账号的重置次数和到期日在那里看，检查和网页版一样。
     case limitResets(ToolID, key: String)
     case routerSync
-    /// 拉维护者的映射（`cca policy pull --json`，PROTOCOL 4.9）：照映射改账号表、同步路由器，要重载的不做（待同步）。manual 是用户点的，不降优先级。
-    case policyPull(manual: Bool)
     /// 「更新并重新打开」的第一步：下载校验好和 cca 同版本的 App，先放着（PROTOCOL 5）。
     case guiUpdate
     /// 账号表按这个顺序排（`cca [codex] reorder 账号…`）：只改先后，端口、路由器都不动。
     case reorder(ToolID, keys: [String])
-    /// 请求维护者把这个账号现在的节点锁进映射（`cca [codex] policy request KEY`，PROTOCOL 4.8）：stdout 是维护者直接运行的那条命令。
-    case policyRequest(ToolID, key: String)
-    /// 关掉维护者的共享（`cca policy off`，PROTOCOL 4.12）：要同意（映射里的账号移出账号表），共享的账号正在用时 cca 不关；
-    /// 配置了路由器的接着同步。打开（`cca policy on`）是提问会话，见 Handoff.policyOn
-    case policyOff
     /// 改别名（`cca [codex] rename KEY 新别名`，新别名是 - 时去掉别名）：stdout 是新的键。
     case rename(ToolID, key: String, alias: String)
     /// 重置额度（`cca codex reset KEY --json`，PROTOCOL 4.5）：要同意（reset_credit），stdout 是 kind=reset 的文档。
@@ -108,8 +101,8 @@ enum CcaCommand: Sendable, Hashable {
 
     var tool: ToolID? {
         switch self {
-        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .policyRequest(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
-        case .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
+        case .usage(let t, _), .usagePoll(let t, _), .check(let t, _), .checkPoll(let t, _), .app(let t, _), .web(let t, _), .billing(let t, _), .limitResets(let t, _), .rename(let t, _, _), .reorder(let t, _), .reset(let t, _), .devices(let t, _, _), .keyShow(let t, _), .keyForget(let t, _), .mailOpen(let t, _, _), .mailForget(let t, _, _), .mailTrustForwarderOff(let t, _): return t
+        case .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode, .clientAutoInstall, .clientInstall,
              .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock: return nil
         }
@@ -118,9 +111,9 @@ enum CcaCommand: Sendable, Hashable {
     var key: String? {
         switch self {
         case .usage(_, let k), .check(_, let k): return k
-        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .policyRequest(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _), .mailTrustForwarderOff(_, let k): return k
+        case .app(_, let k), .web(_, let k), .billing(_, let k), .limitResets(_, let k), .rename(_, let k, _), .reset(_, let k), .devices(_, let k, _), .keyShow(_, let k), .keyForget(_, let k), .mailOpen(_, let k, _), .mailTrustForwarderOff(_, let k): return k
         case .mailForget(_, let k, _): return k
-        case .usagePoll, .checkPoll, .reorder, .routerSync, .policyPull, .policyOff, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
+        case .usagePoll, .checkPoll, .reorder, .routerSync, .guiUpdate, .update, .updateCheck, .clientCheck, .clientMode,
              .clientAutoInstall, .clientInstall, .costSync, .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd,
              .teamDevices, .teamSync, .teamLeave, .teamInvite, .teamRevoke, .teamGrant, .teamRename, .teamMap, .teamAlias, .teamAliasLock: return nil
         }
@@ -129,7 +122,7 @@ enum CcaCommand: Sendable, Hashable {
     /// 后台的活：低优先级运行。
     var isBackground: Bool {
         switch self {
-        case .usagePoll, .checkPoll, .policyPull(manual: false), .clientCheck(force: false, install: _), .devices(_, _, auto: true),
+        case .usagePoll, .checkPoll, .clientCheck(force: false, install: _), .devices(_, _, auto: true),
              .costSync(manual: false), .remoteList(local: _, auto: true), .teamDevices(team: _, auto: true): return true
         default: return false
         }
@@ -153,12 +146,9 @@ enum CcaCommand: Sendable, Hashable {
         case .billing(_, let k): return prefix + ["billing", k]
         case .limitResets(_, let k): return prefix + ["limit-resets", k]
         case .routerSync: return ["router", "sync"]
-        case .policyPull: return ["policy", "pull", "--json"]
-        case .policyOff: return ["policy", "off"]
         case .guiUpdate: return ["gui", "update"]
         case .rename(_, let k, let a): return prefix + ["rename", k, a]
         case .reorder(_, let keys): return prefix + ["reorder"] + keys
-        case .policyRequest(_, let k): return prefix + ["policy", "request", k]
         case .reset(_, let k): return prefix + ["reset", k, "--json"]
         case .update(let v): return ["update", v]
         case .updateCheck: return ["update", "--check", "--json"]
@@ -203,9 +193,9 @@ enum CcaCommand: Sendable, Hashable {
         case .checkPoll: return 300
         case .app, .web, .billing, .limitResets, .mailOpen: return 120
         case .mailForget, .mailTrustForwarderOff: return 60
-        case .routerSync, .policyPull, .policyOff: return 180
+        case .routerSync: return 180
         case .guiUpdate, .update: return 300
-        case .rename, .reorder, .policyRequest: return 60
+        case .rename, .reorder: return 60
         case .reset, .updateCheck: return 150
         case .clientCheck, .clientInstall: return 900
         case .clientMode, .clientAutoInstall, .devices: return 30
@@ -224,9 +214,8 @@ enum CcaCommand: Sendable, Hashable {
     var runsToCompletion: Bool {
         switch self {
         case .app, .web, .billing, .limitResets, .mailOpen, .routerSync, .reset, .clientInstall: return true
-        case .policyOff: return true   // 改账号表、同步路由器：半路杀掉会留下一半（下一条命令照映射补回来，但路由器可能没同步）
         case .clientCheck(_, let install): return install   // 允许自动更新时检查完可能马上替换客户端：半路杀掉要等下次检查才回滚
-        case .usage, .usagePoll, .check, .checkPoll, .policyPull, .guiUpdate, .rename, .reorder, .policyRequest, .update, .updateCheck, .clientMode,
+        case .usage, .usagePoll, .check, .checkPoll, .guiUpdate, .rename, .reorder, .update, .updateCheck, .clientMode,
              .clientAutoInstall, .devices, .keyShow, .keyForget, .costSync, .mailForget, .mailTrustForwarderOff,
              .remoteList, .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd, .teamDevices, .teamInvite, .teamRevoke, .teamRename: return false
         case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock: return true   // 改账号表、同步路由器：半路杀掉会留下一半
@@ -242,17 +231,17 @@ enum CcaCommand: Sendable, Hashable {
         case .usage(let t, _), .usagePoll(let t, _): return "usage:\(t.rawValue)"
         case .reorder(let t, _): return "reorder:\(t.rawValue)"   // 连着拖几次：一个接一个，最后拖的那次写在最后
         case .reset(let t, let k): return "reset:\(t.rawValue):\(k)"
-        case .routerSync, .policyPull, .policyOff: return "router-sync"   // 拉映射、关掉共享时可能同步路由器：一个接一个
+        case .routerSync: return "router-sync"
         case .guiUpdate, .update: return "gui-update"
         case .clientCheck, .clientMode, .clientAutoInstall, .clientInstall: return "client-update"
-        case .check, .checkPoll, .updateCheck, .policyRequest, .devices: return nil   // devices：AppModel 已保证同一个账号一次一个
+        case .check, .checkPoll, .updateCheck, .devices: return nil   // devices：AppModel 已保证同一个账号一次一个
         case .keyShow(let t, let k), .keyForget(let t, let k): return "key:\(t.rawValue):\(k)"
         case .costSync: return "cost-sync"   // 定时的和手动的一个接一个
         case .remoteList: return nil   // AppModel 保证一次一个
         case .remoteSwitch, .remoteAllow, .remoteUnpair, .remoteEnd: return "remote"   // 改配对表、开关、结束会话：一个接一个
         case .teamDevices: return nil   // AppModel 保证一次一个
         case .teamInvite, .teamRevoke, .teamRename: return "team"   // 改管理员这边记着的设备：一个接一个
-        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock: return "router-sync"   // 账号表跟着变，可能同步路由器：和拉映射、同步路由器排队
+        case .teamSync, .teamLeave, .teamGrant, .teamMap, .teamAlias, .teamAliasLock: return "router-sync"   // 账号表跟着变，可能同步路由器：和同步路由器排队
         }
     }
 }

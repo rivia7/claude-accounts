@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 账号页的「设备」：映射里的这个账号现在在哪些设备上用（维护者的服务器上的记录，cca 查好、把时间换成这台 Mac 的）。
+/// 账号页的「设备」：Team 给的这个账号现在在哪些设备上用（那个 Team 的服务器上的记录，cca 查好、把时间换成这台 Mac 的）。
 /// 这台 Mac 排第一，其余按 在用、闲置、离线、没在用。在用是开着会话、10 分钟内有动静；闲置是开着却很久没动静；
 /// 离线是开着会话却很久没回报（可能休眠、断网）；没在用的写上次什么时候用。账号页看得见时一分钟查一次（AppModel），
 /// 标题右边是查到的一句话、多久以前查的和「刷新」。只有 cca 说这个账号有（`can.devices`）时才显示。
@@ -19,7 +19,7 @@ struct DevicesSection: View {
                 }
                 SectionAction(loading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshDevices(account.ref, manual: true) }
                     .disabled(loading)
-                    .help("问一次维护者的服务器：这个账号现在在哪些设备上用")
+                    .help("问一次 Team 的服务器：这个账号现在在哪些设备上用")
             }
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 content(snap, loading: loading, now: context.date.timeIntervalSince1970)
@@ -69,7 +69,7 @@ struct DevicesSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if guide.showDetails, let doc = s?.doc, let idle = doc.idleAfter, let offline = doc.offlineAfter {
-                Text("经 cca 打开的终端会话和 \(label) 算在用；\(Texts.span(idle))没动静算闲置（终端看最后一次输入、输出，App 看它用的 CPU）；开着却\(Texts.span(offline))没回报算离线。设备名是维护者给每台 Mac 起的名字" + (nonEmpty(doc.me).map { "，这台 Mac 叫 \($0)" } ?? ""))
+                Text("经 cca 打开的终端会话和 \(label) 算在用；\(Texts.span(idle))没动静算闲置（终端看最后一次输入、输出，App 看它用的 CPU）；开着却\(Texts.span(offline))没回报算离线。设备名是 Team 的管理员给每台设备起的名字" + (nonEmpty(doc.me).map { "，这台 Mac 叫 \($0)" } ?? ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

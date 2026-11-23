@@ -170,11 +170,6 @@ struct RoutingHeader: View {
                         .disabled(!model.checkingExits.isEmpty || model.phase != .ready)
                         .help("一次检测所有账号现在的出口 IP、地区、纯净度，以及 DNS / WebRTC 有没有泄露风险（会访问检测网站；和账号页的「检测出口」一样，只是一次测全部）")
                 }
-                if model.policyPullAvailable {
-                    SectionAction(model.policyPulling ? "拉取中…" : "拉取映射", systemImage: "arrow.down.to.line") { model.pullPolicyNow() }
-                        .disabled(model.policyPulling)
-                        .help("马上从维护者那里拉一次账号和节点的映射（App 开着时每小时自动拉一次）")
-                }
                 DetailsToggle(help: "后端、钩子、定时任务的状态，和端口的分组名")
                 if model.routerConfigured {
                     SectionAction(model.syncActivity == nil ? "同步路由器" : "同步中…", systemImage: "wifi.router", prominent: true) { model.syncRouter() }

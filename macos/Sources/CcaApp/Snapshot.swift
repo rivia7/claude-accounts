@@ -188,7 +188,7 @@ enum Snapshot {
                 m.closeAllRemoteTerminals()
                 m.selection = .office
             },
-            // 共享与同步：Team（书房组的管理员、被设计组移除了），维护者共享的开关（演示数据里开着、拉到了映射：还显示它）
+            // 共享与同步：Team（书房组的管理员、被设计组移除了）
             Scene(name: "sharing") { m in
                 m.selection = .sharing
             },

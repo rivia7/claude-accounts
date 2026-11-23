@@ -420,6 +420,15 @@ func genericCostSync(_ name: String, _ d: Data) -> CostSyncDoc? {
     return doc
 }
 
+/// 3.6.0 起 `config.policy` 固定是这一份（PROTOCOL 2.2）：`{"configured": false, "repo": null, "next_check_epoch": null, "state": "off", "accounts": 0, "parked": 0}`
+func isConstantPolicy(_ v: Any) -> Bool {
+    guard let p = v as? [String: Any] else { return false }
+    return ["configured", "repo", "next_check_epoch", "state", "accounts", "parked"].allSatisfy { p[$0] != nil }
+        && isBool(p["configured"]) && p["configured"] as? Bool == false && isNull(p["repo"]) && isNull(p["next_check_epoch"])
+        && p["state"] as? String == "off" && isNumber(p["accounts"]) && (p["accounts"] as? NSNumber)?.doubleValue == 0
+        && isNumber(p["parked"]) && (p["parked"] as? NSNumber)?.doubleValue == 0
+}
+
 /// `config.hubs[]`（PROTOCOL 2.2）
 func hubEntryInvariants(_ n: String, _ h: HubEntry, _ raw: [String: Any]) {
     check("\(n) 字段类型", raw["kind"] is String && raw["url"] is String && raw["host"] is String && raw["state"] is String
@@ -429,7 +438,7 @@ func hubEntryInvariants(_ n: String, _ h: HubEntry, _ raw: [String: Any]) {
     check("\(n) 地址是 https，host 是它的主机和端口", h.url.hasPrefix("https://") && h.url.hasSuffix(h.host) && !h.host.isEmpty)
     check("\(n) 没同步成的有原因，别的没有", (h.state == .error) == (h.error != nil))
     check("\(n) 成了就有时间", h.state != .ok || h.checkedEpoch != nil)
-    check("\(n) Team 的服务器有 Team 的编号和名字，维护者的没有", h.kind == .team ? h.team?.count == 32 && h.teamName != nil : h.team == nil && h.teamName == nil)
+    check("\(n) 是哪个 Team 的服务器：有 Team 的编号和名字", h.kind == .team && h.team?.count == 32 && h.teamName != nil)
     // 以前只有自己的同步服务器才有值的几项：接口只加不删，cca 照旧给空的（PROTOCOL 2.2）
     check("\(n) members、joined_epoch、pinned 是 null，can_invite 是 false", isNull(raw["members"]) && isNull(raw["joined_epoch"])
           && isNull(raw["pinned"]) && isBool(raw["can_invite"]) && raw["can_invite"] as? Bool == false)
@@ -449,6 +458,10 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
     if let can = ra["can"] as? [String: Any], can["limit_resets"] != nil {
         check("\(n) 用量页只有 Claude 账号有，其余条件和网页版一样", a.can.limitResets == (t.id == .claude && a.can.web))
     }
+    if let can = ra["can"] as? [String: Any], can["policy_lock"] != nil {
+        // 请求维护者锁定节点（3.6.0 去掉了）：接口只加不删，cca 照旧给 false（PROTOCOL 2.2）
+        check("\(n) can.policy_lock 总是 false", isBool(can["policy_lock"]) && can["policy_lock"] as? Bool == false)
+    }
     if let raw = ra["api_key"], !isNull(raw) {
         // API key 只给掩码：前缀（最多 8 个字符）+ … + 最后 4 个字符，短的 key 没有掩码；没存的掩码、来源都是空的
         let k = a.apiKey
@@ -459,7 +472,7 @@ func accountInvariants(_ name: String, _ t: ToolState, _ a: Account, _ ra: [Stri
             check("\(n) api_key 的来源认得", k.source.isKnown, k.source.rawValue)
             check("\(n) 账号表里写的 key 只有第三方 API 账号有", k.source != .table || a.kind == .api)
             if let rk = raw as? [String: Any], rk["shared"] != nil {
-                // 同步（PROTOCOL 2.2）：映射里的官方账号、开着设备统计（和「设备」一样），Antigravity 不同步；来源、时间只给记下的
+                // 同步（PROTOCOL 2.2）：Team 给的官方账号、这台设备用得了那个 Team 的服务器（和「设备」一样），Antigravity 不同步；来源、时间只给记下的
                 check("\(n) 会同步的和有「设备」的是同一批账号（Antigravity 除外）", k.shared == (a.can.devices && t.id != .agy))
                 check("\(n) 同步来源、记下的时间只给存着的 key", k.saved || (k.fromDevice == nil && k.savedEpoch == nil))
                 check("\(n) 同步的原因只给会同步的账号", k.shared || k.syncError == nil)
@@ -675,16 +688,21 @@ func genericState(_ name: String, _ d: Data) -> StateDoc? {
                   teams.contains { $0.id == a.team } && !a.isAPI)
         }
     }
-    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话维护者的在前、最多一台，Team 的可以有几台（照编号分），账号走的那一台在里面
+    // config.policy（PROTOCOL 2.2）：维护者的共享 3.6.0 去掉了，接口只加不删，cca 照旧给固定的「关着」那一份（已经发出去的 App 照它有没有
+    // state 显示「共享与同步」页）
     let rawConfig = raw["config"] as? [String: Any] ?? [:]
+    if let p = rawConfig["policy"] {
+        check("\(name) config.policy 是固定的关着（configured false，state off，accounts、parked 是 0，repo、next_check_epoch 是 null）", isConstantPolicy(p), "\(p)")
+    }
+    // config.hubs（PROTOCOL 2.2）：旧版 cca 没有；有的话是各个 Team 的（每个 Team 最多一台，照编号分），账号走的那一台在里面
     if let rh = rawConfig["hubs"] {
         let rawHubs = rh as? [[String: Any]] ?? []
         let rawKnown = rawHubs.filter { HubKind(rawValue: $0["kind"] as? String ?? "").isKnown }
         check("\(name) config.hubs 是对象数组，认识的都解码了（不认识的 kind 去掉）", rh is [Any] && rawKnown.count == doc.config?.hubs.count)
+        check("\(name) config.hubs 里没有维护者的服务器（3.6.0 去掉了）", !rawHubs.contains { $0["kind"] as? String == "maintainer" })
         let hubs = doc.config?.hubs ?? []
-        check("\(name) config.hubs 每类最多一台（Team 的照编号算），维护者的在前", Set(hubs.map { $0.kind.rawValue + "/" + ($0.team ?? "") }).count == hubs.count
-              && hubs.allSatisfy { ($0.kind == .team) == ($0.team?.isEmpty == false) }
-              && hubs.map(\.kind) == hubs.map(\.kind).sorted { $0 == .maintainer && $1 != .maintainer })
+        check("\(name) config.hubs 每个 Team 最多一台（照编号算）", Set(hubs.map { $0.kind.rawValue + "/" + ($0.team ?? "") }).count == hubs.count
+              && hubs.allSatisfy { ($0.kind == .team) == ($0.team?.isEmpty == false) })
         for (i, h) in hubs.enumerated() {
             hubEntryInvariants("\(name) config.hubs[\(i)]", h, i < rawKnown.count ? rawKnown[i] : [:])
         }
@@ -841,7 +859,7 @@ func genericDevices(_ name: String, _ d: Data) -> DevicesDoc? {
         check("\(name) \(a.key) 的设备都解码了", rd.count == a.devices.count)
         check("\(name) \(a.key) 这台 Mac 排第一", a.devices.dropFirst().allSatisfy { !$0.isMe })
         if raw["hubs"] != nil {
-            check("\(name) \(a.key) 问的那台服务器在 hubs 里", a.hub == nil || doc.hubs.contains { $0.kind == a.hub })
+            check("\(name) \(a.key) 问的那台服务器在 hubs 里（Team 的照编号认）", a.hub == nil || doc.hubs.contains { $0.kind == a.hub && $0.team == a.team })
         }
         for (j, dev) in a.devices.enumerated() {
             let r = j < rd.count ? rd[j] : [:]
@@ -869,6 +887,11 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
     check("\(name) enabled 是布尔", raw["enabled"] is Bool)
     let relay = raw["relay"] as? [String: Any]
     check("\(name) relay.available 是布尔，用不了时有原因", relay?["available"] is Bool && (doc.relayAvailable || nonEmpty(doc.relayMessage) != nil))
+    if let rh = relay?["hubs"] {
+        // 3.6.0 起只有各个 Team 的服务器（维护者的那一台去掉了：没有 team 的解不出来）
+        check("\(name) relay.hubs 都解码了：都是某个 Team 的（编号 32 个十六进制字符、不重复）", (rh as? [Any])?.count == doc.relayHubs.count
+              && doc.relayHubs.allSatisfy { $0.team.count == 32 && $0.team.allSatisfy(\.isHexDigit) } && Set(doc.relayHubs.map(\.team)).count == doc.relayHubs.count)
+    }
     let rawSessions = raw["sessions"] as? [[String: Any]] ?? [], rawPeers = raw["peers"] as? [[String: Any]] ?? []
     check("\(name) 会话、配对过的机器、原因都解码了", rawSessions.count == doc.sessions.count && rawPeers.count == doc.peers.count
           && (raw["errors"] as? [[String: Any]])?.count == doc.errors.count)
@@ -894,6 +917,10 @@ func genericRemote(_ name: String, _ d: Data) -> RemoteDoc? {
         let r = i < rawPeers.count ? rawPeers[i] : [:]
         check("\(name) \(p.short) 有名字，shown 是布尔，paired_epoch 是数字或 null",
               !p.name.isEmpty && r["shown"] is Bool && (isNull(r["paired_epoch"]) || isNumber(r["paired_epoch"])))
+        if r["team"] != nil {
+            // 3.6.0 起配对都记在某个 Team 的服务器上（以前经维护者的服务器配的，cca 读配对表时去掉了）
+            check("\(name) \(p.short) 记在某个 Team 的服务器上", p.team?.count == 32)
+        }
     }
     check("\(name) 用不了中转时不列别的机器上的会话", doc.relayAvailable || doc.sessions.allSatisfy(\.isLocal))
     knownEnums(name, auditRemote(doc))
@@ -1202,11 +1229,6 @@ func runGeneric() -> (hello: [String: HelloDoc], state: [String: StateDoc]) {
         case "reset":
             genericReset(f, d)
             tolerance(ResetDoc.self, f, d) { [$0.usage == nil ? 0 : 1, $0.usage?.modelScoped.count ?? 0] }
-        case "policy_pull":
-            if let doc = decodeOrFail(PolicyPullDoc.self, f, d) {
-                check("\(f) 有说明", !doc.summary.isEmpty)
-            }
-            tolerance(PolicyPullDoc.self, f, d) { [$0.changed ? 1 : 0] }
         case "devices":
             genericDevices(f, d)
             tolerance(DevicesDoc.self, f, d) { [$0.accounts.count, $0.accounts.reduce(0) { $0 + $1.devices.count }] }
@@ -1317,7 +1339,6 @@ func auditState(_ s: StateDoc) -> [String] {
     a.add("config.route_pref", s.config?.routePref)
     a.add("config.local.client", s.config?.local?.client)
     a.add("config.local.udp.state", s.config?.local?.udp?.state)
-    a.add("config.policy.state", s.config?.policy?.reported)
     // config.hubs[].kind、账号的 hub、cost.sync.hub 不认识的在解码时就去掉了（PROTOCOL：当作没有 / null），这里看不到
     for (i, h) in (s.config?.hubs ?? []).enumerated() {
         a.add("config.hubs[\(i)].state", h.state)

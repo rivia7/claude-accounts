@@ -74,8 +74,8 @@ func costFixtureTests() {
           && grace?.days.allSatisfy { $0.usd == 0 } == true && grace?.summary.averageUSD == 0 && grace?.syncState == .error
           && grace?.sync?.message == "连不上设备统计的服务器（https://192.0.2.10:18443）")
     let frank = codex?.accounts.first?.cost
-    check("frank（Codex）：服务器还不支持同步金额，有没有公开价格的模型", frank?.syncState == .oldServer && frank?.unpricedModels == ["codex-auto-review"]
-          && frank?.summary.currentUSD == 544.31 && frank?.weeks.count == 13)
+    check("frank（Codex）：不是哪个 Team 给的，只有这台设备（local_only），有没有公开价格的模型", frank?.syncState == .localOnly
+          && frank?.sync?.hub == nil && frank?.unpricedModels == ["codex-auto-review"] && frank?.summary.currentUSD == 544.31 && frank?.weeks.count == 13)
     if let t = s.costTotal {
         check("cost_total：统计过", t.scan.state == .ready && t.scan.updatedEpoch == 1794041880)
         check("cost_total：合计", t.all.summary.currentUSD == 1324.9 && t.all.summary.weeksUSD == 18160.52 && t.all.summary.averageUSD == 2048.52
@@ -386,9 +386,13 @@ func costUnitTests() {
           && syncFailed.map { meNotes($0) }?.isEmpty == true, "\(String(describing: syncFailed.map { notes($0) }))")
     check("没登录这个账号", notes(carol) == [CostNote(text: "这台设备没登录这个账号，显示的是上次同步来的")], "\(notes(carol))")
     check("上次同步没成功（橙色，带原因）", notes(grace) == [CostNote(text: "上次同步没成功：连不上设备统计的服务器（https://192.0.2.10:18443）", warning: true)])
-    check("服务器还不支持", notes(frank) == [CostNote(text: "只算了这台设备：维护者的设备统计服务器还不支持同步金额")])
-    check("只有这台设备（灰字：所有设备和本机一样）", notes(erin) == [CostNote(text: "只算了这台设备：这个账号不在维护者的映射里，或者这台设备没配置设备统计")],
-          "\(notes(erin))")
+    let localOnly = [CostNote(text: "只算了这台设备：这个账号不是哪个 Team 给的，或者这台设备用不了那个 Team 的服务器")]
+    check("只有这台设备（灰字：所有设备和本机一样）", notes(erin) == localOnly && notes(frank) == localOnly, "\(notes(erin))")
+    let oldServer = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"old_server","message":"维护者的设备统计服务器还不支持同步折合金额","hub":"maintainer","missing":[]}}"#)
+    check("3.6.0 以前的 cca 给的 old_server（维护者的服务器还不支持）：当没同步成，照 cca 给的原因说；维护者的服务器不认识",
+          oldServer?.syncState == .error && oldServer?.sync?.hub == nil
+          && oldServer.map({ notes($0) }) == [CostNote(text: "上次同步没成功：维护者的设备统计服务器还不支持同步折合金额", warning: true)],
+          "\(String(describing: oldServer.map { notes($0) }))")
     let pending = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"pending","missing":[]}}"#)
     let weird = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"later","missing":[{"name":"a"},{"name":"b"},{"name":"c"},{"name":"d"},{"name":""}]}}"#)
     let off = decodeCost(#"{"weeks":[],"days":[],"sync":{"state":"off","missing":[]}}"#)
@@ -538,13 +542,15 @@ func costUnitTests() {
 
     let homes = ["/Users/me/.cca"]
     let costCases: [(String, CcaWatcher.Trigger?)] = [
-        ("/Users/me/.cca/cost/local.json", .state), ("/Users/me/.cca/cost/remote.json", .state), ("/Users/me/.cca/cost/sync.json", .state),
+        ("/Users/me/.cca/cost/local.json", .state),
+        // 不带 Team 编号的 remote.json、sync.json 是维护者的服务器（3.6.0 去掉了）留下的；各个 Team 的见 hubFixtureTests
+        ("/Users/me/.cca/cost/remote.json", nil), ("/Users/me/.cca/cost/sync.json", nil),
         ("/Users/me/.cca/cost/scan.json", nil), ("/Users/me/.cca/cost/local.json.tmp", nil), ("/Users/me/.cca/cost/.local.json.x1", nil),
         ("/Users/me/.cca/cost/cost.lock", nil), ("/Users/me/.cca/cost", nil), ("/Users/me/.cca/cost/old/local.json", nil),
         ("/Users/me/.cca/cost/usage.json", nil), ("/Users/me/.cca/accounts/a/cost/local.json", nil),
     ]
     let wrong = costCases.filter { CcaWatcher.classify(path: $0.0, homes: homes) != $0.1 }.map(\.0)
-    check("看着 cost/ 里的 local.json、remote.json、sync.json（别的不算）", wrong.isEmpty, wrong.joined(separator: " "))
+    check("看着 cost/ 里的 local.json、各个 Team 的 remote.json、sync.json（别的不算）", wrong.isEmpty, wrong.joined(separator: " "))
 
     // 演示模式：时间平移时，每一天的本地日期跟着挪整天（最后一天还是“今天”）
     let raw = Data(#"{"generated_at":1794042000,"x_epoch":5,"cost":{"prices_date":"2026-11-01","days":[{"date":"2026-10-31"},{"date":"2026-11-07"},{"date":"x"}]}}"#.utf8)

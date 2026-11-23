@@ -183,7 +183,7 @@ private struct RemoteSessionList: View {
             }
             SectionAction(model.remoteLoading ? "刷新中…" : "刷新", systemImage: "arrow.clockwise") { model.refreshRemote(manual: true) }
                 .disabled(model.remoteLoading)
-                .help("再查一次：这台 Mac 上的会话，和配对过的机器上的（问一次维护者的服务器）")
+                .help("再查一次：这台 Mac 上的会话，和配对过的机器上的（问一次 Team 的服务器）")
         }
     }
 
@@ -306,7 +306,7 @@ private struct RemoteSessionList: View {
                 } else if doc != nil {
                     Text("还没有配对过的机器。").font(.callout).foregroundStyle(.secondary)
                 }
-                Text("配对是有方向的：显示配对码的那台机器上的会话，可以被输入配对码的那台接入。两台机器经维护者的服务器中转，内容端到端加密，服务器看不到。")
+                Text("配对是有方向的：显示配对码的那台机器上的会话，可以被输入配对码的那台接入。两台机器经 Team 的服务器中转，内容端到端加密，服务器看不到。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 4)

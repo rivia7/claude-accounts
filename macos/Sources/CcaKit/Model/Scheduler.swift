@@ -72,23 +72,6 @@ enum ExitPolling {
     }
 }
 
-/// 定时拉维护者的映射（`cca policy pull --json`）：低频，下次的时间是 cca 给的（`next_check_epoch`，一小时一次），App 不重算。
-enum PolicyPolling {
-    /// 刚启动、到期了或者没拉成时至少等这么久：不空转，也不抢着在启动时干活
-    static let minDelay: TimeInterval = 5 * 60
-    /// 不知道下次什么时候（还没读到 state）隔多久看一次
-    static let fallback: TimeInterval = 3600
-
-    static func delay(next: Double?, now: Double) -> TimeInterval {
-        guard let next else { return minDelay }
-        return max(next - now, minDelay)
-    }
-
-    static func isDue(next: Double?, now: Double) -> Bool {
-        (next ?? 0) <= now
-    }
-}
-
 /// 自动统计折合金额（`cca cost sync --json`，PROTOCOL 3.5）：看得见金额时（折合金额页、账号页的「折合金额」）5 分钟一次，
 /// 看不见时 30 分钟一次；还没统计过（`scan.state` 是 never）时马上跑一次。不另开定时器：跟着查用量的那一下（每分钟一次）看到没到期，
 /// 用户走开了、系统过热时一样不跑。上次统计的时间取 cca 给的（`scan.updated_epoch`：会话结束时 cca 自己也会统计）和 App 上次试的里晚的那个，
@@ -112,8 +95,8 @@ enum CostPolling {
 /// App 的定时器。都带容差，让系统把唤醒合在一起：
 /// - 用量、网络出口和折合金额：每分钟看一眼该查哪些账号（只算内存里的东西，到期了才起进程，见 UsagePolling、ExitPolling、CostPolling）；
 /// - 分流页打开时每 60 秒查一次 live；
-/// - 账号页的「设备」看得见时马上查一次，之后每 60 秒一次（问维护者的服务器，很轻）；
-/// - 「远程会话」一页看得见时马上查一次，之后每 15 秒一次（配对过别的机器时要问维护者的服务器；服务器给每台设备限了流）；
+/// - 账号页的「设备」看得见时马上查一次，之后每 60 秒一次（问 Team 的服务器，很轻）；
+/// - 「远程会话」一页看得见时马上查一次，之后每 15 秒一次（配对过别的机器时要问 Team 的服务器；服务器给每台设备限了流）；
 /// - 客户端更新：睡到 cca 说的下一次检查时间（App 隐藏时也一样），不空转；定时器自己不发安装命令（允许自动更新时由 cca 在检查里顺带装上）。
 @MainActor
 final class Scheduler {
@@ -126,9 +109,6 @@ final class Scheduler {
     /// 离下次该检查客户端更新还有多久（AppModel 按 cca 给的时间算）
     var clientCheckDelay: (() -> TimeInterval)?
     var onClientCheckTick: (() -> Void)?
-    /// 离下次该拉映射还有多久（AppModel 按 cca 给的时间算）
-    var policyDelay: (() -> TimeInterval)?
-    var onPolicyTick: (() -> Void)?
     /// 账号页的「设备」看得见时隔多久查一次
     var devicesInterval: TimeInterval
     var onDevicesTick: (() -> Void)?
@@ -137,7 +117,6 @@ final class Scheduler {
     var onRemoteTick: (() -> Void)?
 
     private var remoteLoop: Task<Void, Never>?
-    private var policyLoop: Task<Void, Never>?
     private var usageLoop: Task<Void, Never>?
     private var liveLoop: Task<Void, Never>?
     private var clientCheckLoop: Task<Void, Never>?
@@ -154,7 +133,6 @@ final class Scheduler {
     var usageRunning: Bool { usageLoop != nil }
     var liveRunning: Bool { liveLoop != nil }
     var clientChecksRunning: Bool { clientCheckLoop != nil }
-    var policyPollingRunning: Bool { policyLoop != nil }
     var devicesPollingRunning: Bool { devicesLoop != nil }
     var remotePollingRunning: Bool { remoteLoop != nil }
 
@@ -204,17 +182,6 @@ final class Scheduler {
         }
     }
 
-    func updatePolicyPolling(enabled: Bool) {
-        if enabled {
-            if policyLoop == nil {
-                policyLoop = loop(every: { [weak self] in self?.policyDelay?() ?? PolicyPolling.fallback }, immediately: false) { [weak self] in self?.onPolicyTick?() }
-            }
-        } else {
-            policyLoop?.cancel()
-            policyLoop = nil
-        }
-    }
-
     /// visible：窗口或面板可见；routingVisible：分流页可见（live 立刻查一次，之后每 liveInterval 秒一次）。
     func update(visible: Bool, routingVisible: Bool) {
         if visible && routingVisible {
@@ -231,7 +198,6 @@ final class Scheduler {
         update(visible: false, routingVisible: false)
         updateUsagePolling(enabled: false)
         updateClientChecks(enabled: false)
-        updatePolicyPolling(enabled: false)
         updateDevicesPolling(enabled: false)
         updateRemotePolling(enabled: false)
     }

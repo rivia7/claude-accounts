@@ -34,7 +34,7 @@ func fixtureAssertions() {
         check("state：官方账号有账单页入口，第三方 API 账号没有", c?.accounts.allSatisfy { $0.can.billing == !$0.isAPI } == true)
         check("state：用量页入口只给 Claude 的官方账号", c?.accounts.allSatisfy { $0.can.limitResets == !$0.isAPI } == true
               && x?.accounts.allSatisfy { !$0.can.limitResets } == true)
-        check("state：bob 被锁定、登录着、上次用的、App 开着",bob?.pinned == true && bob?.pinnedNode == "US-B" && bob?.login == .loggedIn
+        check("state：bob 的节点被 Team 锁定、登录着、上次用的、App 开着", bob?.pinned == true && bob?.pinnedNode == "US-B" && bob?.login == .loggedIn
               && bob?.isLast == true && bob?.appRunning == true && bob?.app?.pid == 4242)
         check("state：bob 的缓存用量", bob?.usage?.fiveHour?.utilization == 92 && bob?.usage?.source == .cache
               && bob?.usage?.sevenDaySonnet?.utilization == 60 && bob?.usage?.modelScoped.first?.name == "Sonnet")
@@ -72,8 +72,7 @@ func fixtureAssertions() {
         check("state：notices", s.notices.count == 2 && s.notices[0].code == .policyPinned && s.notices[0].oldNode == "US-A"
               && s.notices[1].code == .nodesFilled && s.notices[1].tool == nil && s.notices[1].node == "HK-A")
         check("state：config", s.config?.routerConfigured == true && s.config?.localConfigured == false && s.config?.minTrust == 50
-              && s.config?.policy?.repo == "example/cca-policy" && s.config?.policy?.state == .on && s.config?.policy?.switchable == true
-              && s.config?.policy?.accounts == 2 && s.config?.policy?.parked == 0)
+              && s.config?.leakCheck == true && s.config?.update == "auto")
         check("state：bob 的 Claude Code 还记着 Pro（账号现在是 Ultra），别的账号没有（null、Codex 没这个字段）",
               bob?.usage?.outdatedLoginPlan == "Pro" && s.account(AccountRef(tool: .claude, key: "erin@example.com"))?.usage?.outdatedLoginPlan == nil
               && frank?.usage?.outdatedLoginPlan == nil)

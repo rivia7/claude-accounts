@@ -44,7 +44,6 @@ if fullMode {
     await clientUpdateModelTests()
     await clientAutoInstallModelTests()
     await pollingTests()
-    await sharingTests()
     await sharingPageTests()
     await teamModelTests()
     await devicesTests()

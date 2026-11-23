@@ -24,7 +24,7 @@ struct Sidebar: View {
                     RemoteSessionsRow()
                         .tag(SidebarItem.remoteSessions)
                 }
-                if model.sharingAvailable {
+                if model.teamAvailable {
                     SharingRow()
                         .tag(SidebarItem.sharing)
                 }
@@ -203,13 +203,6 @@ struct AccountManageItems: View {
         } else {
             Button(a.login == .loggedOut ? "登录…" : "重新登录…") { model.relogin(a) }
                 .disabled(busy)
-            if a.can.policyLock {
-                Button("请求维护者锁定节点") { model.requestPolicyLock(a) }
-            }
-            if model.policyPullAvailable {
-                Button(model.policyPulling ? "正在拉取映射…" : "现在拉取映射") { model.pullPolicyNow() }
-                    .disabled(model.policyPulling)
-            }
         }
         if a.can.apiKey {
             let saved = a.apiKey?.saved == true
@@ -474,7 +467,7 @@ struct AccountRow: View {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 9))
                             .foregroundStyle(.tertiary)
-                            .help("维护者锁定了节点")
+                            .help("Team 的配置锁定了节点")
                     }
                     if model.isOnTop(a) { OnTopMark() }
                     UseFirstMark(account: a)

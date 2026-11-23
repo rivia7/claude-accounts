@@ -89,7 +89,7 @@ final class FlowModel: Identifiable {
     @ObservationIgnored private var unreadable = false
 
     private func begin(_ e: AskEvent) {
-        // 还没交答案时 cca 自己换了同一题的一页（边等边干活的页，比如配置向导等维护者时只换了说明）：用户已经改了的选择留着，
+        // 还没交答案时 cca 自己换了同一题的一页（边等边干活的页：cca 等着别处的结果时只换了说明）：用户已经改了的选择留着，
         // 在新的一页上还能选的才算。交了答案之后再来的同一题是 cca 重问（带着原因和它给的值），照 cca 的来
         var kept: [String: String] = [:]
         if case .asking(let prev) = phase, prev.q == e.q { kept = draft }

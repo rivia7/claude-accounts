@@ -31,7 +31,7 @@ private final class DevicesSwitch: @unchecked Sendable {
         if request.arguments == ["_gui", "state"] { return response(0, stdout: state) }
         if request.arguments.first == "devices" {
             if sw.failing {
-                return response(1, [.fail(FailEvent(code: .devicesUnavailable, message: "连不上设备统计的服务器（https://192.0.2.10:18443）"))])
+                return response(1, [.fail(FailEvent(code: .devicesUnavailable, message: "连不上设备统计的服务器（https://team.example.com:18445）"))])
             }
             return response(0, stdout: devices)
         }
@@ -41,13 +41,13 @@ private final class DevicesSwitch: @unchecked Sendable {
     await m.start()
     func asked() -> [[String]] { t.requests.map(\.arguments).filter { $0.first == "devices" } }
     guard let bob = m.accounts(.claude).first(where: { $0.can.devices }), let carol = m.accounts(.claude).first(where: { !$0.can.devices && !$0.isAPI }) else {
-        check("夹具里有映射里的账号（can.devices）", false)
+        check("夹具里有 Team 给的、经它的服务器同步的账号（can.devices）", false)
         return
     }
     check("看不见的时候不查", !m.scheduler.devicesPollingRunning && asked().isEmpty)
     m.setMainVisible(true)
     m.selection = .account(bob.ref)
-    check("打开映射里账号的账号页：马上查一次，之后定时查", m.scheduler.devicesPollingRunning)
+    check("打开 Team 给的账号的账号页：马上查一次，之后定时查", m.scheduler.devicesPollingRunning)
     check("查到了", await waitUntil { m.devices[bob.ref]?.account?.devices.count == 4 }, "\(asked())")
     check("问的是这个账号", asked().first == ["devices", bob.key, "--json"])
     let s = m.devices[bob.ref]
@@ -68,7 +68,7 @@ private final class DevicesSwitch: @unchecked Sendable {
     m.refreshDevices(carol.ref, manual: true)
     check("点了也不查", !m.devicesLoading.contains(carol.ref) && asked().count == n)
     m.selection = .account(bob.ref)
-    check("回到映射里的账号：马上再查一次", await waitUntil { asked().count == n + 1 })
+    check("回到 Team 给的账号：马上再查一次", await waitUntil { asked().count == n + 1 })
     m.setMainVisible(false)
     check("窗口看不见了：停", !m.scheduler.devicesPollingRunning)
     m.selection = .office

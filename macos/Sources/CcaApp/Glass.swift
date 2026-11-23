@@ -142,7 +142,7 @@ extension InfoRow where Value == EmptyView {
     }
 }
 
-/// 一台机器（远程会话配对过的、加入了自己的同步服务器的）：电脑图标、名字和它的标记、下面一行说明，右边是这一行的操作
+/// 一台机器（远程会话配对过的、Team 里的）：电脑图标、名字和它的标记、下面一行说明，右边是这一行的操作
 struct MachineLine<Badge: View, Trailing: View>: View {
     let name: String
     let detail: String

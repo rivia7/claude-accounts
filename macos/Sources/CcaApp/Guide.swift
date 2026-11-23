@@ -138,18 +138,18 @@ struct TutorialCard {
         ], art: .fan),
         // 配置步骤卡（setupStart…）：第一次装好、在 App 里一步步配置时照着走；配好后、点「新手教程」时也能当参考再看。
         TutorialCard(title: "先把这台 Mac 配置好", points: [
-            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 分四步带你走——有没有维护者共享给你的账号、选这台 Mac 怎么给账号联网、添加账号、有没有自己的同步服务器。"),
-            ("person.badge.key", "维护者共享的账号：没有就选「否」，只用你自己的账号。有的话，向导给出一行命令，发给维护者运行，把这台 Mac 加进维护者的映射（映射里的账号自动加进来，出口节点由维护者固定）；维护者一时没空就先跳过，之后 App 会自动拉取。以后也能在「共享与同步」里打开、关掉。"),
+            ("sparkles", "第一次打开，首页有「开始配置」：点它，cca 分三步带你走——有没有 Team 的邀请链接、选这台 Mac 怎么给账号联网、添加账号。"),
+            ("person.badge.key", "Team 的邀请链接：没有就选「否」，只用你自己的账号。有的话粘贴进来，加入以后 Team 给这台 Mac 的账号自动加进来，出口节点由 Team 的管理员定好。以后也能在「共享与同步」里加入、退出，或者自己建一个 Team。"),
             ("list.number", "每一步都有说明，照着填就行；中途点「以后再说」也行，随时能从总览的「开始配置」接着来。"),
-            ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」，自己的同步服务器在「共享与同步」里部署、加入。"),
+            ("slider.horizontal.3", "配好的以后都能改：添加账号点账号列表上的「＋」，改或加网络出口点工具栏的「＋」，Team 在「共享与同步」里加入、新建、部署。"),
         ], art: .onboard),
         TutorialCard(title: "选这台 Mac 怎么联网", points: [
             ("wifi.router", "有路由器：家里/办公室有改好的旁路由（装了 OpenClash 或 ShellCrash），向导里填地址、输一次密码装免密登录、勾选允许用的节点，按端口给每个账号分流。"),
-            ("laptopcomputer", "没有路由器：用 cca 自带的内置代理（内核在这个 App 里跑），添加账号时粘贴一个你自己的代理（分享链接）当出口；打开了维护者的共享的话，维护者提供的节点自动导入。"),
+            ("laptopcomputer", "没有路由器：用 cca 自带的内置代理（内核在这个 App 里跑），添加账号时粘贴一个你自己的代理（分享链接）当出口；加入了 Team 的话，Team 配置里的节点自动导入。"),
             ("arrow.forward", "先跳过：还没想好也行，接着添加账号；以后在工具栏的「＋」里再配。"),
         ], art: .netchoice),
         TutorialCard(title: "添加账号", points: [
-            ("person.badge.plus", "最后一步添加账号：填登录邮箱、起个别名（可留空）、选一个出口节点，不用先配置路由器。打开了维护者的共享的话，映射里的账号会自动加进来。"),
+            ("person.badge.plus", "最后一步添加账号：填登录邮箱、起个别名（可留空）、选一个出口节点，不用先配置路由器。加入了 Team 的话，Team 给这台 Mac 的账号会自动加进来。"),
             ("globe", "第一次使用时，会在这个账号专属的浏览器窗口里登录——每个账号各用各的登录资料，换账号不用重登。"),
             ("checkmark.circle", "加好就能用了：在总览点这张卡片打开账号。想再加就点账号列表上的「＋」。"),
         ], art: .addacct),
@@ -183,7 +183,7 @@ struct TutorialCard {
             ("arrow.triangle.branch", "这条线就是这个账号的流量：这台 Mac → 节点 → 出口 IP。"),
             ("checkmark.shield", "第一次用某个账号，先点「检测出口」：看看出口在哪、纯净度怎么样、DNS / WebRTC 有没有泄露风险。之后会在后台定时重测。"),
             ("slider.horizontal.3", "想看端口、纯净度这些明细，点「显示细节」。"),
-            ("link.badge.plus", "维护者没固定节点的账号，可以点「自定义代理…」改走你自己的代理：粘贴 socks5://、http:// 地址或分享链接。"),
+            ("link.badge.plus", "节点没被 Team 锁定的账号，可以点「自定义代理…」改走你自己的代理：粘贴 socks5://、http:// 地址或分享链接。"),
         ], art: .route),
         TutorialCard(title: "节点分流", points: [
             ("wifi.router", "「节点分流」页画出每个账号经路由器连到哪个节点。"),
@@ -484,10 +484,10 @@ struct TutorialArt: View {
         }
     }
 
-    /// 配置向导的四步：维护者共享的账号 → 网络出口 → 添加账号 → 自己的同步服务器（第一步高亮）。
+    /// 配置向导的三步：加入 Team → 网络出口 → 添加账号（第一步高亮）。
     private var onboardArt: some View {
-        let steps: [(String, String)] = [("person.badge.key", "共享的账号"), ("wifi.router", "选网络出口"),
-                                         ("person.badge.plus", "添加账号"), ("server.rack", "同步服务器")]
+        let steps: [(String, String)] = [("person.badge.key", "加入 Team"), ("wifi.router", "选网络出口"),
+                                         ("person.badge.plus", "添加账号")]
         return HStack(spacing: 6) {
             ForEach(steps.indices, id: \.self) { i in
                 VStack(spacing: 8) {
@@ -515,7 +515,7 @@ struct TutorialArt: View {
     private var netchoiceArt: some View {
         let opts: [(String, String, String)] = [
             ("wifi.router", "路由器", "OpenClash / ShellCrash，按端口分流"),
-            ("laptopcomputer", "没有路由器", "用 cca 内置的代理，节点由维护者提供或自己填"),
+            ("laptopcomputer", "没有路由器", "用 cca 内置的代理，节点由 Team 提供或自己填"),
             ("arrow.forward", "先跳过", "接着添加账号，以后再配"),
         ]
         return panel {
@@ -930,7 +930,7 @@ struct WelcomeBanner: View {
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 7) {
                 Text("欢迎使用 cca").font(.title3.weight(.semibold))
-                Text("只要配置一次：选好这台 Mac 怎么给账号联网，再添加账号——cca 会一步步引导你填。有维护者共享给你的账号时，第一步连上维护者。")
+                Text("只要配置一次：选好这台 Mac 怎么给账号联网，再添加账号——cca 会一步步引导你填。有 Team 的邀请链接时，第一步先加入 Team。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
