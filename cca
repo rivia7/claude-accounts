@@ -6717,12 +6717,13 @@ team_sync() {   # cca team sync [Team]：同步一次配置，说每个 Team 的
 }
 
 TEAM_LEAVE_USAGE="用法: cca team leave [Team [[用户@]主机]] [-p SSH 端口] [-i 私钥] [--dir 目录] [--keep-server]
-      管理员的设备上是删除这个 Team：先经 SSH 卸掉它的同步服务器（cca team deploy 装到的那台；没记下的照部署的默认猜：root@服务器的地址、
-      /opt/cca-team-<编号的前 8 位>）。写了服务器、-p、-i、--dir 的照写的卸；--keep-server 不卸（服务器留着，自己卸载）"
+      管理员的设备上是删除这个 Team：先经 SSH 卸掉它的同步服务器（cca team deploy 装到的那台，用部署时写的 -i 私钥登录；没记下的照部署的默认猜：
+      root@服务器的地址、/opt/cca-team-<编号的前 8 位>）。写了服务器、-p、-i、--dir 的照写的卸（写的就是记下的那台时，没写的 -p、-i 照记下的）；
+      --keep-server 不卸（服务器留着，自己卸载）"
 team_leave() {   # cca team leave [Team …]：退出。成员：服务器上移除这台设备。管理员：删除这个 Team——先卸掉它的同步服务器（team_undeploy；
 	               # 卸不成时问要不要照样删、服务器留着），这台设备上的根密钥跟着没了。先问同意
 	local sel="" target="" given="" port="" ident="" dir="" keep="" uport="" udir="" rc gone="" left="" how="" done_msg
-	local out tid name role host ptarget pport pdir saved why item title question note
+	local out tid name role host ptarget pport pdir saved pident via why item title question note
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			-p|-i|--dir)
@@ -6739,8 +6740,9 @@ team_leave() {   # cca team leave [Team …]：退出。成员：服务器上移
 		shift
 	done
 	out=$(py team-leave plan ${sel:+"$sel"}) || team_fail "$out" "没有这个 Team"
-	# 按 \037 分：中间的项可能是空的（没接上服务器的地址、没写的 SSH 端口），tab 是 IFS 的空白，连着的会并成一个
-	IFS=$'\037' read -r tid name role host ptarget pport pdir saved <<< "${out//$'\t'/$'\037'}"
+	# 按 \037 分：中间的项可能是空的（没接上服务器的地址、没写的 SSH 端口），tab 是 IFS 的空白，连着的会并成一个。
+	# 最后一项是部署时写的私钥（-i，绝对路径；没写、文件不在了就没有这一项）
+	IFS=$'\037' read -r tid name role host ptarget pport pdir saved pident <<< "${out//$'\t'/$'\037'}"
 	if [ "$role" != admin ]; then
 		[ -z "${target}${keep}${uport}${ident}${udir}" ] ||
 			FAIL_CODE=team_usage die "这台设备不是「${name}」的管理员：退出时不碰服务器（服务器、-p、-i、--dir、--keep-server 只在管理员删除 Team 时用）"
@@ -6751,17 +6753,22 @@ team_leave() {   # cca team leave [Team …]：退出。成员：服务器上移
 		[ -z "$keep" ] || [ -z "${target}${uport}${ident}${udir}" ] ||
 			FAIL_CODE=team_usage die "--keep-server 是不卸载服务器：不用再写服务器、-p、-i、--dir"
 		if [ -z "$keep" ]; then
-			if [ -n "$given" ]; then port=$uport
-			else target=$ptarget port=${uport:-$pport}; fi
+			[ -n "$given" ] || target=$ptarget
+			# 没写服务器、写的就是记下的那台（App 交给终端的 cca team leave 编号 目标 -p 端口 也是）：没写的 -p、-i 照记下的（部署时写的私钥：
+			# App 里没法写 -i）。写了别的服务器的只照写的
+			if [ "$target" = "$ptarget" ]; then port=${uport:-$pport} ident=${ident:-$pident}
+			else port=$uport; fi
 			dir=${udir:-$pdir}
 			[ -n "$target" ] || keep=none   # 没接上服务器（也没记下部署到了哪），或者不是安装脚本装的：只有这台设备上的
 		fi
 		why="这台设备是「${name}」的管理员：删掉以后这台设备上就没有它的根密钥了，这个 Team 再没有谁能邀请设备、移除设备、改配置"
 		case "$keep" in
 			"")
-				why="这台设备是「${name}」的管理员：删掉它就是经 SSH 登录 ${target}${port:+（端口 ${port}）}，卸掉它的同步服务器（停掉服务，删掉 ${dir:-/opt/cca-team-${tid:0:8}} 里的程序、证书和数据），再删掉这台设备上的根密钥。别的设备从此同步不到它的配置：手里的照旧能用，各自用 cca team leave 退出"
+				via=${port:+端口 ${port}}
+				[ -z "$ident" ] || via="${via:+${via}，}私钥 ${ident}"
+				why="这台设备是「${name}」的管理员：删掉它就是经 SSH 登录 ${target}${via:+（${via}）}，卸掉它的同步服务器（停掉服务，删掉 ${dir:-/opt/cca-team-${tid:0:8}} 里的程序、证书和数据），再删掉这台设备上的根密钥。别的设备从此同步不到它的配置：手里的照旧能用，各自用 cca team leave 退出"
 				[ -n "$given" ] || [ "$saved" = 1 ] ||
-					why="${why}。没记下服务器是怎么装的，照部署的默认猜的；不对的话写清楚：cca team leave ${tid:0:8} 用户@服务器 [-p 端口] [--dir 目录]" ;;
+					why="${why}。没记下服务器是怎么装的，照部署的默认猜的；不对的话写清楚：cca team leave ${tid:0:8} 用户@服务器 [-p 端口] [-i 私钥] [--dir 目录]" ;;
 			1) [ -z "${host}${ptarget}" ] ||
 				why="${why}。它的同步服务器${host:+（${host}）}留着不卸，要自己卸载${pdir:+（在服务器上运行 sudo sh cca-hub-install.sh --uninstall --dir ${pdir}）}" ;;
 			*) [ -z "$host" ] || why="${why}。它的同步服务器（${host}）不是 cca team deploy 装的（托管平台、自己配的）：要自己到那里删掉" ;;
@@ -6806,15 +6813,16 @@ team_leave() {   # cca team leave [Team …]：退出。成员：服务器上移
 }
 
 team_undeploy() {   # 删除 Team 时卸掉它的同步服务器（变量是 team_leave 的：tid name target port ident dir）。终端里直接运行（ssh 自己问密码、私钥的
-	                  # 密码、要不要认这台主机）；App 里和部署时一样先查登录得上不，要密码时问（hub.password），只认密钥时给出加公钥那一行（hub.pubkey）：
-	                  # hub_login。返回 0 卸好了（dir 是卸掉的目录）；1 取消了；2 没卸成（原因码在 DEPLOY_CODE，原因在 DEPLOY_WHY）
+	                  # 密码、要不要认这台主机）；App 里和部署时一样先查登录得上不（ident 是部署时写的私钥时照它查），要密码时问（hub.password），只认
+	                  # 密钥时给出加公钥那一行（hub.pubkey；照写的私钥登录不了的不给，算没卸成）：hub_login。返回 0 卸好了（dir 是卸掉的目录）；1 取消了；
+	                  # 2 没卸成（原因码在 DEPLOY_CODE，原因在 DEPLOY_WHY）
 	local a=() pw="" out
 	DEPLOY_PY=(team-undeploy "$tid") DEPLOY_WORDS=(team leave "${tid:0:8}") DEPLOY_WHAT="「${name}」的同步服务器" DEPLOY_VERB=卸载 DEPLOY_SOFT=1
 	[ -z "$port" ] || a+=(--ssh-port "$port")
 	[ -z "$ident" ] || a+=(--identity "$ident")
 	[ -z "$dir" ] || a+=(--dir "$dir")
 	if [ -n "$PROMPT_GUI" ]; then
-		hub_target_set "$target" "$port"
+		hub_target_set "$target" "$port" "$ident"
 		hub_login || return
 	fi
 	if [ -n "$PROMPT_GUI" ] || ! (: </dev/tty) 2>/dev/null; then a+=(--batch); fi
@@ -7129,7 +7137,7 @@ DEPLOY_VERB=部署              # 说给人听的那个词：部署 | 卸载（�
 DEPLOY_SOFT=""                # 卸载时：登录不上不 die，原因码、原因放进 DEPLOY_CODE、DEPLOY_WHY（hub_ask_fail），调用的接着问要不要照样删
 DEPLOY_CODE="" DEPLOY_WHY=""
 
-hub_target_set() { case "$1" in *@*) F_user=${1%@*} F_host=${1##*@} ;; *) F_user="" F_host=$1 ;; esac; F_port=${2:-}; }   # [用户@]主机 [端口] 拆进 F_user F_host F_port
+hub_target_set() { case "$1" in *@*) F_user=${1%@*} F_host=${1##*@} ;; *) F_user="" F_host=$1 ;; esac; F_port=${2:-}; F_ident=${3:-}; }   # [用户@]主机 [端口] [私钥] 拆进 F_user F_host F_port F_ident
 hub_target() { printf '%s' "${F_user:+${F_user}@}${F_host}"; }   # F_user F_host 拼回 [用户@]主机（没写用户是空的：照 ssh 的配置）
 
 hub_ask_fail() {   # hub_ask_fail 原因码 原因 | hub_ask_fail - 辅助程序的输出 默认的说法：登录不上、问不下去了。部署时 die（- 是照 DEPLOY_FAIL 给
@@ -7150,7 +7158,7 @@ hub_deploy_ask() {   # App 里 cca team deploy 不写服务器（提问会话）
 	                   # F_host F_user F_port。接着查登录得上不（辅助程序的 --check，什么都不动）：连不上的带着原因重问，登录不了的照 hub_login_more
 	                   # （问密码、给出加公钥那一行）。终端里不问：服务器写在命令行上，ssh 自己问密码、问要不要认这台主机
 	local err="" out msg=$DEPLOY_MSG
-	F_host=$DEPLOY_AT F_user=root F_port=22
+	F_host=$DEPLOY_AT F_user=root F_port=22 F_ident=""   # App 里部署不写私钥：照 ssh 的配置（hub_login_more 照常给出加公钥那一行）
 	while :; do
 		ask_fields hub.deploy "部署${DEPLOY_WHAT}" "$msg" \
 			"host|text|host||服务器地址|IP 或者域名，例如 203.0.113.7|${F_host}|${err}" \
@@ -7164,10 +7172,10 @@ hub_deploy_ask() {   # App 里 cca team deploy 不写服务器（提问会话）
 	done
 }
 
-hub_login() {   # 服务器已经定了（F_host F_user F_port：删除 Team 时卸载它的同步服务器）的提问会话：查登录得上不，登录不了的照 hub_login_more；
-	              # 连不上不重问地址（hub_ask_fail）。返回同 hub_login_more
+hub_login() {   # 服务器已经定了（F_host F_user F_port，F_ident 是部署时写的私钥：删除 Team 时卸载它的同步服务器）的提问会话：查登录得上不，
+	              # 登录不了的照 hub_login_more；连不上不重问地址（hub_ask_fail）。返回同 hub_login_more
 	local out
-	out=$(py "${DEPLOY_PY[@]}" "$(hub_target)" ${F_port:+--ssh-port "$F_port"} --batch --check) && return 0
+	out=$(py "${DEPLOY_PY[@]}" "$(hub_target)" ${F_port:+--ssh-port "$F_port"} ${F_ident:+--identity "$F_ident"} --batch --check) && return 0
 	hub_login_more "$out"
 }
 
@@ -7175,10 +7183,14 @@ hub_login_more() {   # hub_login_more 辅助程序的输出：提问会话里 --
 	                   # （hub.password，错了重问，最多三次），放进调用者的 pw（部署、卸载时经 SSH_ASKPASS 给 ssh，见 askpass_run）；只认密钥、不认
 	                   # 这台设备的：说怎么把公钥加到服务器上（hub_pubkey_ask）；别的（主机密钥和记下的不一样、连不上）照 hub_ask_fail。
 	                   # 返回 0 登录得上；1 取消了；2 登录不上（DEPLOY_SOFT 时）
-	local out=$1 perr="" tries=0 hint="" rc
+	local out=$1 perr="" tries=0 hint="" rc who="这台 Mac 的 SSH 密钥"
+	[ -z "${F_ident:-}" ] || who="私钥 ${F_ident} "
 	case "${out%%$'\t'*}" in
 		ssh_auth) ;;
-		ssh_keyonly) hub_pubkey_ask; rc=$?; [ $rc -eq 3 ] || return $rc ;;   # 加好了登录上了（0）；这回认密码了（3）：接着问密码
+		# 照部署时写的私钥（F_ident）登录不了、服务器只认密钥：这台设备默认的那把加到服务器上也没用（ssh 只试写的那把），私钥有密码的话
+		# App 里也没法输——不问加公钥那一页，算登录不上（原因里说是哪把私钥、在终端里怎么做）
+		ssh_keyonly) [ -z "${F_ident:-}" ] || { hub_ask_fail hub_ssh "${out#*$'\t'}"; return; }
+			hub_pubkey_ask; rc=$?; [ $rc -eq 3 ] || return $rc ;;   # 加好了登录上了（0）；这回认密码了（3）：接着问密码
 		ssh*) hub_ask_fail hub_ssh "${out#*$'\t'}"; return ;;
 		*) hub_ask_fail - "$out" "没登录上 ${F_host}"; return ;;
 	esac
@@ -7190,7 +7202,7 @@ hub_login_more() {   # hub_login_more 辅助程序的输出：提问会话里 --
 	fi
 	while :; do
 		pw=$(ask_secret "$(hub_target) 的密码" q=hub.password "title=登录服务器" \
-			"message=这台 Mac 的 SSH 密钥登录不了 ${F_host}，用密码登录：密码只用在这一次${DEPLOY_VERB}，不保存，也不在服务器上留下公钥。" \
+			"message=${who}登录不了 ${F_host}，用密码登录：密码只用在这一次${DEPLOY_VERB}，不保存，也不在服务器上留下公钥。" \
 			label=密码 "error=$perr") || return 1
 		out=$(askpass_run "$pw" py "${DEPLOY_PY[@]}" "$(hub_target)" ${F_port:+--ssh-port "$F_port"} --askpass --check) && return 0
 		case "${out%%$'\t'*}" in

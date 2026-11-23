@@ -11,6 +11,7 @@ use crate::cmd::presence::{PRESENCE_PIN_RE, PRESENCE_URL_RE};
 use crate::core::base::HOST_RE;
 use crate::py::base64::b64encode;
 use crate::py::hash::sha256_hex;
+use crate::py::path::{abspath, expanduser};
 use crate::py::proc::{getenv, Cmd as Proc, In, Out, ProcError};
 use crate::py::re::Re;
 use crate::py::{text, Fail, R};
@@ -420,6 +421,8 @@ pub struct TeamInstalled {
     /// 经 SSH 装到的哪台（[用户@]主机，ssh 配置里的别名也行）和 SSH 端口（没写是空的：照 ssh 的配置）：删除 Team 时照它卸载
     pub target: String,
     pub ssh_port: String,
+    /// 部署时写的私钥（-i，绝对路径：换个目录运行也找得到；没写是空的）：删除 Team 时照它登录（App 里没法写 -i）
+    pub identity: String,
 }
 
 /// Team 的根公钥（ssh-ed25519 AAAA…）里 base64 的那一段：放进安装脚本的 CCA_HUB_TEAM_ROOT
@@ -503,6 +506,7 @@ pub fn team_install(
         lan: lan_only(&host),
         target: o.target.clone(),
         ssh_port: o.ssh_port.clone().unwrap_or_default(),
+        identity: o.identity.as_deref().map(|k| abspath(&expanduser(k))).unwrap_or_default(),
     }))
 }
 
@@ -565,7 +569,10 @@ fn ssh_trouble(err: &str, o: &Opts) -> (&'static str, String) {
         let password = many || methods.is_some_and(|m| m.split(',').any(|m| m == "password" || m == "keyboard-interactive"));
         return match (o.askpass, password) {
             (true, true) => ("ssh_denied", "密码不对".into()),
-            (false, true) => ("ssh_auth", format!("这台设备的 SSH 密钥登录不了 {t}，要用密码登录")),
+            (false, true) => match &o.identity {
+                Some(k) => ("ssh_auth", format!("私钥 {k} 登录不了 {t}，要用密码登录")),
+                None => ("ssh_auth", format!("这台设备的 SSH 密钥登录不了 {t}，要用密码登录")),
+            },
             (true, false) => (
                 "ssh_keyonly",
                 format!(
@@ -573,14 +580,25 @@ fn ssh_trouble(err: &str, o: &Opts) -> (&'static str, String) {
                      密钥太多、服务器只让试几把，在 ~/.ssh/config 里给它写上 IdentityFile 和 IdentitiesOnly yes"
                 ),
             ),
-            (false, false) => (
-                "ssh_keyonly",
-                format!(
-                    "{t} 不认这台设备的 SSH 密钥，也不让用密码登录：把这台设备的公钥加进服务器的 ~/.ssh/authorized_keys，\
-                     或者私钥有密码的话，在终端里运行 {}（在那里输私钥的密码）",
-                    o.job.cmd()
+            // 写了私钥（-i；删除 Team 时照部署时记下的那把）：说是哪一把，它的公钥要在服务器上
+            (false, false) => match &o.identity {
+                Some(k) => (
+                    "ssh_keyonly",
+                    format!(
+                        "{t} 不认私钥 {k}，也不让用密码登录：把它的公钥（{k}.pub）加进服务器的 ~/.ssh/authorized_keys，\
+                         或者这把私钥有密码的话，在终端里运行 {}（在那里输私钥的密码）",
+                        o.job.cmd()
+                    ),
                 ),
-            ),
+                None => (
+                    "ssh_keyonly",
+                    format!(
+                        "{t} 不认这台设备的 SSH 密钥，也不让用密码登录：把这台设备的公钥加进服务器的 ~/.ssh/authorized_keys，\
+                         或者私钥有密码的话，在终端里运行 {}（在那里输私钥的密码）",
+                        o.job.cmd()
+                    ),
+                ),
+            },
         };
     }
     match err.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
@@ -856,6 +874,23 @@ mod tests {
         assert_eq!(c, "ssh_keyonly");
         assert!(why.contains("在终端里运行 cca team leave（在那里输私钥的密码）"), "{why}");
         assert_eq!(fail_why("install", "", &o), "服务器上没卸载成", "安装脚本没说原因时");
+        let k = Opts {
+            target: "root@192.0.2.10".into(),
+            batch: true,
+            job: Job::Undeploy,
+            identity: Some("/Users/me/.ssh/vps/id_rsa".into()),
+            ..Default::default()
+        };
+        let (c, why) = ssh_trouble("root@192.0.2.10: Permission denied (publickey).\n", &k);
+        assert_eq!(c, "ssh_keyonly");
+        assert!(
+            why.contains("不认私钥 /Users/me/.ssh/vps/id_rsa") && why.contains("（/Users/me/.ssh/vps/id_rsa.pub）"),
+            "写了私钥：说是哪一把：{why}"
+        );
+        assert_eq!(
+            ssh_trouble("root@192.0.2.10: Permission denied (publickey,password).\n", &k),
+            ("ssh_auth", "私钥 /Users/me/.ssh/vps/id_rsa 登录不了 root@192.0.2.10，要用密码登录".to_string())
+        );
         let d = Opts { job: Job::Deploy, ..o };
         assert!(ssh_trouble("Host key verification failed.\n", &d).1.ends_with("再部署"), "部署的说法不变");
         assert_eq!(fail_why("install", "", &d), "服务器上没装成");

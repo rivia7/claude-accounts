@@ -11,8 +11,8 @@
 //!  "devices": {设备编号: {"n": 序数, "label": 管理员起的名字（设备的名字以它为准：align_names）, "state": local | invited | joined |
 //!              expired | revoked, "pub": 它的公钥, "name": 它在服务器上的名字, "grants": "all" | {工具: [邮箱…]}, "seq": 发布到第几版,
 //!              "sha": 那一版内容的摘要, "exp": 邀请什么时候过期}},
-//!  "deploy": {"target": [用户@]主机, "ssh_port": SSH 端口（没写是空的）, "dir": 目录}（cca team deploy 装到了哪台：删除 Team 时照它卸载；
-//!             手动 cca team attach 换到别的地址时去掉）}
+//!  "deploy": {"target": [用户@]主机, "ssh_port": SSH 端口（没写是空的）, "dir": 目录, "identity": 私钥（-i 的绝对路径，没写是空的）}
+//!            （cca team deploy 装到了哪台、用哪把私钥登录的：删除 Team 时照它卸载；手动 cca team attach 换到别的地址时去掉）}
 //! ```
 //! 每台设备那串随机数（邀请里的 k）不存：是 HMAC(主密钥, "cca-team-k-v1\0" 序数) 的前 16 个字节，随时重算。所以备份根密钥和主密钥
 //! 就够了（管理员的本机状态丢了，各台设备的密钥还算得出来）。
@@ -1122,8 +1122,17 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
         return Ok(());
     };
     let (t, a, _lk) = admin_of(&tid)?;
-    // 记下装到了哪台（接没接上都是装在那里了）：删除 Team 时照它卸载（undeploy_plan）
-    a.set("deploy", dict! { "target" => inst.target.as_str(), "ssh_port" => inst.ssh_port.as_str(), "dir" => inst.dir.as_str() });
+    // 记下装到了哪台、用哪把私钥登录的（接没接上都是装在那里了）：删除 Team 时照它卸载（undeploy_plan）。这一次没写 -i 的就没有：
+    // 照这一次登录上的办法（ssh 的配置、密码）
+    a.set(
+        "deploy",
+        dict! {
+            "target" => inst.target.as_str(),
+            "ssh_port" => inst.ssh_port.as_str(),
+            "dir" => inst.dir.as_str(),
+            "identity" => inst.identity.as_str(),
+        },
+    );
     admin_save(&tid, &a)?;
     let x = match attach(t, &a, inst.url.clone(), std::slice::from_ref(&inst.pin))? {
         Ok(x) => x,
@@ -1176,24 +1185,48 @@ pub fn cmd_team_undeploy(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 删除 Team 时去哪卸载它的同步服务器（team-leave plan）：(目标, SSH 端口（空的是照 ssh 的配置）, 目录, 是不是部署时记下的)。cca team deploy
-/// 记下的照它（装好了、没接上的也是：服务器上装着）；没记下的（以前的版本部署的、手动装的）照部署的默认猜：root@服务器的地址、22、
+/// 删除 Team 时去哪卸载它的同步服务器（undeploy_plan，team-leave plan 打给 bash）
+pub struct UndeployPlan {
+    /// [用户@]主机
+    pub target: String,
+    /// SSH 端口：空的是照 ssh 的配置
+    pub ssh_port: String,
+    pub dir: String,
+    /// 是部署时记下的（不是照部署的默认猜的）
+    pub saved: bool,
+    /// 部署时写的私钥（-i）：记下的、文件还在才有（不在了照 ssh 的配置登录）；空的是没写
+    pub identity: String,
+}
+
+/// 删除 Team 时去哪卸载它的同步服务器（team-leave plan）。cca team deploy 记下的照它（装好了、没接上的也是：服务器上装着），连同部署时
+/// 写的私钥（App 里删除时没法写 -i）；没记下的（以前的版本部署的、手动装的）照部署的默认猜：root@服务器的地址、22、
 /// /opt/cca-team-<编号的前 8 位>（猜错了卸不成，bash 那边问要不要只删这台设备上的；安装脚本核对目录里装的是这个 Team 的，别的不动）。
 /// 证书照证书机构验的（没钉指纹：托管平台、自己配的反向代理）不是安装脚本直接装的，不猜。不是管理员、没有服务器是 None
-pub fn undeploy_plan(t: &Team) -> Option<(String, String, String, bool)> {
+pub fn undeploy_plan(t: &Team) -> Option<UndeployPlan> {
     let a = admin_load(t).ok()?;
     let def_dir = format!("/opt/cca-team-{}", &t.id[..8]);
     if let Some(d) = a.dict("deploy") {
         if let Some(target) = d.str("target").filter(|x| !x.is_empty()) {
-            let dir = d.str("dir").filter(|x| !x.is_empty()).map_or(def_dir, |x| x.to_string());
-            return Some((target.to_string(), d.str("ssh_port").map(|x| x.to_string()).unwrap_or_default(), dir, true));
+            return Some(UndeployPlan {
+                target: target.to_string(),
+                ssh_port: d.str("ssh_port").map(|x| x.to_string()).unwrap_or_default(),
+                dir: d.str("dir").filter(|x| !x.is_empty()).map_or(def_dir, |x| x.to_string()),
+                saved: true,
+                identity: d.str("identity").filter(|k| !k.is_empty() && path::isfile(k)).map(|k| k.to_string()).unwrap_or_default(),
+            });
         }
     }
     if !t.attached() || t.pins.is_empty() {
         return None;
     }
     let (host, _) = url_parts(&t.url);
-    (!host.is_empty()).then(|| (format!("root@{host}"), "22".to_string(), def_dir, false))
+    (!host.is_empty()).then(|| UndeployPlan {
+        target: format!("root@{host}"),
+        ssh_port: "22".into(),
+        dir: def_dir,
+        saved: false,
+        identity: String::new(),
+    })
 }
 
 /// py team-hosted Team railway|sealos [--dir 目录]：没有服务器时把这个 Team 的同步服务器部署到托管平台：生成部署文件（team_files）。

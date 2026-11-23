@@ -1099,6 +1099,15 @@ class TeamTest(Sessions, unittest.TestCase):
         a['deploy'] = {'target': 'ops@vps', 'ssh_port': '', 'dir': '/srv/team'}   # cca team deploy 装好了、没接上
         p.write_text(json.dumps(a))
         self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid), ['%s\t机房组\tadmin\t\tops@vps\t\t/srv/team\t1' % tid])
+        key = self.d / 'vps_key'
+        key.write_text('私钥\n')
+        a['deploy']['identity'] = str(key)   # 部署时写了 -i（记下的是绝对路径）
+        p.write_text(json.dumps(a))
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid), ['%s\t机房组\tadmin\t\tops@vps\t\t/srv/team\t1\t%s' % (tid, key)],
+                         '部署时写了私钥：最后一栏是它（App 里删除时照它登录）')
+        key.unlink()
+        self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid), ['%s\t机房组\tadmin\t\tops@vps\t\t/srv/team\t1' % tid],
+                         '私钥文件不在了：不给（照 ssh 的配置登录）')
         srv, url, pin = self.server(root)
         self.lines(admin, 'team-attach', tid, url, pin)
         self.assertEqual(self.lines(admin, 'team-leave', 'plan', tid),

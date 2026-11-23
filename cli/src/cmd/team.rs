@@ -562,9 +562,10 @@ pub fn cmd_team_sync(args: &[String]) -> R<()> {
 }
 
 /// py team-leave plan [Team] | apply 编号 [--server-gone]：退出一个 Team。plan（只读）：stdout 是「编号\t名字\t角色\t服务器的地址:端口」
-/// （没接上服务器时地址是空的），管理员知道服务器装在哪时后面再加「\t卸载的目标\tSSH 端口\t目录\t记下的」——bash 据此问同意：管理员的设备
-/// 退出就是删除这个 Team，先卸掉它的同步服务器（admin.rs 的 undeploy_plan：部署时记下的那台，「记下的」是 1；没记下的照部署的默认猜，是 0），
-/// 这台设备上不再有根密钥。中间的项可能是空的（没接上服务器的地址、没写的 SSH 端口）：bash 按 \037 分（tab 是 IFS 的空白，连着的会并成一个）。
+/// （没接上服务器时地址是空的），管理员知道服务器装在哪时后面再加「\t卸载的目标\tSSH 端口\t目录\t记下的」，部署时写了私钥（-i）的再加
+/// 「\t私钥」——bash 据此问同意：管理员的设备退出就是删除这个 Team，先卸掉它的同步服务器（admin.rs 的 undeploy_plan：部署时记下的那台，
+/// 「记下的」是 1；没记下的照部署的默认猜，是 0），这台设备上不再有根密钥。中间的项可能是空的（没接上服务器的地址、没写的 SSH 端口）：
+/// bash 按 \037 分（tab 是 IFS 的空白，连着的会并成一个）。
 /// apply：请服务器移除这台设备（连不上、服务器已经不认它了也接着退；--server-gone：服务器刚卸掉了，不请），本机记着的都删掉；stdout：
 /// Team 的名字、服务器的地址:端口（没接上是空行）、没告诉成服务器时的原因（告诉了是空行）。原因码：no_team
 pub fn cmd_team_leave(args: &[String]) -> R<()> {
@@ -588,8 +589,11 @@ pub fn cmd_team_leave(args: &[String]) -> R<()> {
     let host = if t.attached() { host_of(&t.url) } else { String::new() };
     if !apply {
         let mut line = format!("{}\t{}\t{}\t{host}", t.id, t.name, t.role.name());
-        if let Some((target, port, dir, saved)) = admin::undeploy_plan(&t) {
-            line.push_str(&format!("\t{target}\t{port}\t{dir}\t{}", if saved { 1 } else { 0 }));
+        if let Some(p) = admin::undeploy_plan(&t) {
+            line.push_str(&format!("\t{}\t{}\t{}\t{}", p.target, p.ssh_port, p.dir, if p.saved { 1 } else { 0 }));
+            if !p.identity.is_empty() {
+                line.push_str(&format!("\t{}", p.identity));
+            }
         }
         out!("{line}");
         return Ok(());

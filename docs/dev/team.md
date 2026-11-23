@@ -461,15 +461,17 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 管理员的 `cca team leave` 就是删除这个 Team：以前只删这台设备上的（根密钥没了），服务器上的服务一直留着、没人管。现在先经 SSH 卸掉它，卸好了
 再删这台设备上的。
 
-- 去哪卸（辅助程序 `admin.rs` 的 `undeploy_plan`，`team-leave plan` 那一行后面的四栏：目标、SSH 端口、目录、记下的）：`cca team deploy` 装好以后
-  在 `admin.json` 记下 `deploy`（`target`、`ssh_port`：没写是空的、照 ssh 的配置，`dir`；没接上也记：服务器上装着），照它；从接着的一台换到别的地址
-  （`cca team attach` 接上了别的）就不算了（新的那台不知道是怎么装的）。没记下的（以前的版本部署的、手动装的）照部署的默认猜：`root@`服务器的地址、22、
+- 去哪卸（辅助程序 `admin.rs` 的 `undeploy_plan`，`team-leave plan` 那一行后面的四栏：目标、SSH 端口、目录、记下的；部署时写了私钥的再加一栏私钥）：
+  `cca team deploy` 装好以后在 `admin.json` 记下 `deploy`（`target`、`ssh_port`：没写是空的、照 ssh 的配置，`dir`，`identity`（3.6.4 起）：`-i` 的绝对路径——`~/`
+  换成主目录、相对的接上当时的目录，没写是空的；没接上也记：服务器上装着），照它；每次部署都照这一次登录上的办法重记（这次没写 `-i` 的就没有）。
+  私钥文件不在了不给那一栏（照 ssh 的配置登录）。从接着的一台换到别的地址（`cca team attach` 接上了别的）就不算了（新的那台不知道是怎么装的）。没记下的（以前的版本部署的、手动装的）照部署的默认猜：`root@`服务器的地址、22、
   `/opt/cca-team-<编号的前 8 位>`（最后一栏是 0，同意的说明里说是猜的、不对怎么写清楚）；猜错了没关系：安装脚本带着根公钥核对目录里装的是不是
   这个 Team 的（`taken`），没装是 `none`，都什么不动、算没卸成。证书照证书机构验的（没钉指纹：托管平台、自己配的反向代理）不是安装脚本直接装的，
   不猜：说要自己到那里删掉。没接上、没部署过的只有本机的。
-- 命令行：`cca team leave Team [[用户@]主机] [-p 端口] [-i 私钥] [--dir 目录] [--keep-server]`：写了服务器的照写的（`-p` 只跟写的服务器），`--dir`
-  也能单独改；`--keep-server` 不卸（不能再写服务器这些）。成员写了这些是 `team_usage`（成员退出不碰服务器）。同意（`team_delete`）的说明里说经 SSH 登录
-  哪台、删掉哪个目录、根密钥没了，别的设备从此同步不到配置（手里的照旧能用，各自 `cca team leave`）。
+- 命令行：`cca team leave Team [[用户@]主机] [-p 端口] [-i 私钥] [--dir 目录] [--keep-server]`：写了服务器的照写的；写的就是记下（猜）的那台时
+  （App 交给终端的 `cca team leave 编号 目标 -p 端口` 也是），没写的 `-p`、`-i` 照记下的；写了别的服务器的 `-p`、`-i` 只照写的。`--dir` 也能单独改；
+  `--keep-server` 不卸（不能再写服务器这些）。成员写了这些是 `team_usage`（成员退出不碰服务器）。同意（`team_delete`）的说明里说经 SSH 登录
+  哪台（端口、私钥）、删掉哪个目录、根密钥没了，别的设备从此同步不到配置（手里的照旧能用，各自 `cca team leave`）。
 - 卸（bash `team_undeploy`，辅助程序 `team-undeploy`：`deploy.rs` 的 `team_uninstall`）：和部署同一个安装脚本、同一套 SSH（`run_remote`），前面放进
   `CCA_HUB_MANAGED=1`、`CCA_HUB_TEAM_ROOT` 和 `set -- --uninstall --dir 目录`；成了 stdout 是目录，`team-leave apply 编号 --server-gone`（服务器刚卸掉了，
   不再请它移除这台设备），`result` 的 `team_left` 说卸掉了哪台上的哪个目录。原因码照部署的（`ssh…`、`root`、`taken`；`none` 是 `install`），
@@ -477,7 +479,9 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
 - 卸不成时：有人能答（终端、App 的提问会话）问要不要仍然删掉、服务器上的服务留着（`team.keep_server`，默认否，说服务器上怎么自己卸载）；没人能答
   （脚本、App 以前的那种先同意再重跑）不删，`fail` 的 `team_…`，原因里说确定只删这台设备上的就加 `--keep-server`。
 - App 里（「删掉这个 Team…」，`Handoff.teamDelete`）是提问会话：同意当场问（`consent.team_delete`），登录照部署的那几段（`hub_login`：服务器已经定了，
-  不问地址；`hub_login_more`：问密码 `hub.password`、只认密钥时 `hub.pubkey`，「在终端里卸载」交给终端的是 `cca team leave <编号的前 8 位> 目标 [-p 端口]`）。
+  不问地址，部署时写了私钥的照它查（`F_ident`：App 里没法写 `-i`）；`hub_login_more`：问密码 `hub.password`、只认密钥时 `hub.pubkey`，「在终端里卸载」
+  交给终端的是 `cca team leave <编号的前 8 位> 目标 [-p 端口]`）。照记下的私钥登录不了、服务器只认密钥时不问 `hub.pubkey`（ssh 只试写的那把：
+  这台 Mac 默认的那把加到服务器上也没用；有密码的私钥 App 里也没法输），算登录不上，原因里说不认哪把私钥（`ssh_trouble` 写了 `-i` 时的说法）。
   这几段说给人听的「部署」「卸载」照 `DEPLOY_VERB`；`DEPLOY_SOFT` 时登录不上不停下（`hub_ask_fail` 把原因码、原因放进 `DEPLOY_CODE`、`DEPLOY_WHY`，
   返回 2），接着问 `team.keep_server`。成员退出照旧是先同意再重跑的无交互命令。演示夹具 `flow_team_leave.flow`。
 - 卸载 cca（`cca restore`）不卸各个 Team 的服务器：确认清单里说要一起卸掉的先 `cca team leave`。
@@ -727,7 +731,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   - `test_lifecycle`：接上、导入、邀请（那串随机数和令牌不在管理员这台的任何文件、请求、curl 的命令行里，也不在服务器上）、加入（没成什么都不留、
     用过的邀请、已经在里面）、成员用不了管理员的命令、**独立实现的那一份拿邀请加入并解开辅助程序封的配置**、名单、改授权 / `map` 以后设备同步到新的一版、
     没变的不重新发布、移除（设备知道被移除了、拿新的邀请再加入）、退出（管理员那边记成 `left`；管理员的 plan 带着去哪卸载）。
-  - `test_delete_plan`：删除 Team 时去哪卸载（没部署过的没有；记下的照它，装好了没接上、再手动接上的也是；换到别的地址照部署的默认猜，空栏照样占一栏）、
+  - `test_delete_plan`：删除 Team 时去哪卸载（没部署过的没有；记下的照它，装好了没接上、再手动接上的也是；记下的私钥文件在才给那一栏；换到别的地址照部署的默认猜，空栏照样占一栏）、
     `team-undeploy` 只收 SSH 的几项和 `--dir`、`apply --server-gone` 不再告诉服务器。`test_ca_mode` 里照证书机构验的不猜。
   - `test_spec_admin`：**管理员由独立实现的那一份扮演**：它封的、签的辅助程序解得开；不是根密钥签的、别的设备的那一份、内容不对的、比手里旧的都不要；
     配置里说服务器搬了跟着换，新的那台上没有这台设备是 `lost`。
@@ -811,7 +815,7 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
     管理员照旧接着原来的，再部署是更新）、`test_login_check_and_password`（假 ssh `SSH_PW` 只认密码、经 `SSH_ASKPASS` 取，`SSH_SAYS` 照
     `$HUB_SSH_SAYS` 说一句就退出：`ssh_auth`、`ssh_denied`（不带 `BatchMode`）、`--check` 什么都不装、`ssh_keyonly`、密钥太多是 `ssh_auth`，`--batch`
     不带 `accept-new`，`--askpass` 只问一次密码、密码不在命令行和服务器上；只认公钥、主机密钥变了、解析不了、什么都没说各是哪个原因码）、
-    `test_ssh_and_cert`（ssh 连不上、登录不了；服务器上的证书没了重新生成时照新的重新接上）、`test_undeploy`（删除 Team 时卸载：记下了装到哪；
+    `test_ssh_and_cert`（ssh 连不上、登录不了；服务器上的证书没了重新生成时照新的重新接上）、`test_undeploy`（删除 Team 时卸载：记下了装到哪、`-i` 记成绝对路径（相对的、`~/` 的）；
     目录里装的是别的 Team 的 `taken`、没装的 `install`，都不动；`--check` 什么都不动；卸好了 stdout 是目录、同一台上别的 Team 照旧）。
 - 服务端的托管预设、`--behind-proxy` 在 `tests/presence.py` 的 `TeamServerTest.test_cli`、`test_behind_proxy`；不写指纹的服务器（托管平台上的）
   照证书机构验在 `tests/team.py` 的 `test_ca_mode`。
@@ -824,5 +828,6 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   经 askpass 部署，`prompts_hub_deploy.jsonl` 交给契约测试；错了三次 `hub_ssh`；只认密钥时生成密钥、给出加公钥那一行、「在终端里部署」的
   `terminal` 事件）；终端里不写服务器时问；`cca team hosted sealos`；删除 Team（`cca team leave`）：没记下部署到哪的同意说明里说照默认猜的
   `root@127.0.0.1`，SSH 连不上时命令行里不删、说加 `--keep-server`，App 里卸不成问 `team.keep_server`（答否不删；手写的部署记录指着连不上的
-  `root@127.0.0.1`、答是照样删，`team_left` 说哪台上的没卸掉、怎么自己卸载），照记下的经密码卸掉（`prompts_team_delete.jsonl` 交给契约测试），
+  `root@127.0.0.1`、答是照样删，`team_left` 说哪台上的没卸掉、怎么自己卸载）；记下了私钥的：同意的说明里说是哪把，它登录不了、服务器只认密钥时
+  不问 `hub.pubkey`、直接问 `team.keep_server`（原因里说不认哪把私钥），照记下的经密码卸掉时查登录带着 `-i`（`ssh.env`）（`prompts_team_delete.jsonl` 交给契约测试），
   `--keep-server` 不碰服务器。假 ssh 碰到 127.0.0.1、localhost 一律连不上（不让猜的目标落到路由器的假命令上）。

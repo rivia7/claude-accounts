@@ -877,11 +877,19 @@ class DeployTest(Base):
         a, tid, root, svc = self.team()
         a2, tid2, root2, svc2 = self.team('乙组')
         d, d2 = b.root / 'opt' / svc, b.root / 'opt' / svc2
-        self.deploy(a, tid, b, '--port', str(free_port()))
-        self.deploy(a2, tid2, b, '--port', str(free_port()))
+        rel = 'no-such-%s/vps' % secrets.token_hex(4)   # 相对的、不存在的（假 ssh 不看 -i）
+        self.deploy(a, tid, b, '--port', str(free_port()), '--identity', rel)
+        key2 = a2.home / '.ssh' / 'vps_key'
+        key2.parent.mkdir(exist_ok=True)
+        key2.write_text('私钥\n')
+        self.deploy(a2, tid2, b, '--port', str(free_port()), '--identity', '~/.ssh/vps_key')
         self.assertEqual(json.loads((a.cca / 'teams' / tid / 'admin.json').read_text())['deploy'],
-                         {'target': 'root@box', 'ssh_port': '', 'dir': '/opt/' + svc})
-        self.assertEqual(a.ok('team-leave', 'plan', tid).rstrip('\n').split('\t')[4:], ['root@box', '', '/opt/' + svc, '1'])
+                         {'target': 'root@box', 'ssh_port': '', 'dir': '/opt/' + svc, 'identity': os.path.abspath(rel)},
+                         '-i 记成绝对路径（换个目录运行、App 里删除时也找得到）')
+        self.assertEqual(a.ok('team-leave', 'plan', tid).rstrip('\n').split('\t')[4:], ['root@box', '', '/opt/' + svc, '1'],
+                         '记下的私钥文件不在：不给，照 ssh 的配置登录')
+        self.assertEqual(a2.ok('team-leave', 'plan', tid2).rstrip('\n').split('\t')[4:], ['root@box', '', '/opt/' + svc2, '1', str(key2)],
+                         '~/ 换成主目录；文件在：最后一栏是它')
         env = dict(self.ENV, HUB_ENTER=str(b.enter))
         self.assertEqual(self.code(a, 'team-undeploy', tid, 'root@box', '--dir', '/opt/' + svc2, **env), 'taken', '装的是别的 Team 的')
         self.assertTrue((d2 / '.env').exists(), '别的 Team 的不动')
