@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.4", title: "删除 Team 时用部署时写的私钥登录", points: [
+            .init(symbol: "key",
+                  text: "cca team deploy 时用 -i 写的私钥会记下来：删掉这个 Team（「删掉这个 Team…」或 cca team leave）时照它登录服务器、卸掉同步服务器，在 App 里删也行。"),
+            .init(symbol: "lock",
+                  text: "服务器不认这把私钥、也不让用密码时，不再让你把这台 Mac 的公钥加到服务器上，直接问要不要只删这台设备上的，并说是哪把私钥。"),
+            .init(symbol: "arrow.triangle.2.circlepath",
+                  text: "以前部署的没记下私钥：带着 -i 再部署一次（cca team deploy Team 用户@服务器 -i 私钥），或者在 ~/.ssh/config 里给这台服务器写上 IdentityFile。"),
+        ]),
         ReleaseNote(version: "3.6.3", title: "删除 Team 时一起卸掉它的同步服务器", points: [
             .init(symbol: "trash",
                   text: "管理员删掉一个 Team（「删掉这个 Team…」或 cca team leave）时，先经 SSH 卸掉它的同步服务器：停掉服务，程序、证书和数据一起删掉，服务器上不再留下没人用的服务。"),
