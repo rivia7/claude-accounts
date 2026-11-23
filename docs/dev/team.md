@@ -476,8 +476,9 @@ deploy key 各发一个邀请、写进映射（`./policy.sh team`）；机器拉
   文件的内容），数据在 `/data` 里照旧，设备不用重新加入。
 
 还没做的：托管平台的那一页（App 里）；Railway、Sealos 上没真的部署过 Team 的服务器（步骤照它们现在的文档写，生成的 README 里说以平台现在
-的界面为准）；真的 Linux 服务器上没跑过安装脚本（假服务器 `tests/hub_box.py` 上跑的，证书助手换成假的；`tests/linux.sh` 会在各个发行版的容器里
-跑同一份测试）。`cca team deploy` 传不了 `--relay-port`、`--no-relay`（要换中转的端口、不开中转的，在服务器上直接运行安装脚本）。
+的界面为准）；安装脚本在一台真的 Linux 云服务器上用 Docker 装过、更新过多次（2026-11-22 起，`cca team deploy` 经 SSH：同一台上两个 Team，
+网页端、共用的证书助手、从各自的证书助手搬到共用的都在它上面做过），systemd 那一种只在假服务器 `tests/hub_box.py` 上跑过（证书助手换成假的；
+`tests/linux.sh` 会在各个发行版的容器里跑同一份测试）。`cca team deploy` 传不了 `--relay-port`、`--no-relay`（要换中转的端口、不开中转的，在服务器上直接运行安装脚本）。
 
 ## 界面（M5）
 
@@ -637,7 +638,9 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - 根密钥和主密钥的导出、第二个管理员（现在换一台管理员的设备只能手工拷 `~/.cca/teams/<编号>/`）。
 - `cca help` 里还没列 `cca team`（还用不上：账号表不照配置改）；失败的原因码在 Swift 的 `FailCode` 里还没登记（App 的页面是 M5）。
 - 设备加入以后、管理员对一遍之前服务器的记录就没了：那台设备的公钥没记下，登记不回去，要重新邀请。
-- Linux 上没跑过（代码里没有只在 macOS 上有的东西；`ssh-keygen -Y` 要 OpenSSH 8.0 起）。
+- Linux 上：`tests/linux.sh` 测设备那一边（`cca install` 里贴邀请链接加入、照配置加账号、导入安装用的节点）；一台没有路由器的真的 Linux 服务器
+  也加入过真的 Team、照它的配置用着账号（2026-11-23，那时经维护者映射里的邀请）。管理员那一边（`cca team new`、`node`、`invite`……）只在 macOS 上跑过（代码里没有只在 macOS 上有的东西；
+  `ssh-keygen -Y` 要 OpenSSH 8.0 起）。
 
 ## Team 的节点（`cca team node`，3.5.3-beta.8 起）
 
