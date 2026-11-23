@@ -263,8 +263,8 @@ gui_answer() {   # gui_answer 序号 字段：读这一页这个字段的答案�
 		esac
 	done
 }
-gui_answer_wait() {   # gui_answer_wait "序号…" 字段 [秒数]：读这个字段的答案，放进 ANSWER。cca 边等边干活、会自己换页的一页用（policy_wait_page：
-	                    # 等维护者时自动重拉，拉到了自己发下一页，App 收到新的一页就换掉这一页）。第一个参数是这一题先后发过的序号（空格隔开，最后一个
+gui_answer_wait() {   # gui_answer_wait "序号…" 字段 [秒数]：读这个字段的答案，放进 ANSWER。cca 边等边干活的一页用（remote_pair_run：
+	                    # 等对方输入配对码，App 取消时马上停下；会自己换页的话自己发下一页，App 收到新的一页就换掉这一页）。第一个参数是这一题先后发过的序号（空格隔开，最后一个
 	                    # 是现在这一页）：只是换了说明再发的同一题，换页前点的答案照样认，别的序号的丢掉。秒数：最多等这么久（整数），到时间了返回 1；
 	                    # 不写就一直等。读到头是取消；现在这一页的字段对不上就停下（同 gui_answer）。不能在 $(…) 里调用
 	local line rc t0 s cur="${1##* }"
@@ -1900,7 +1900,7 @@ cmd_router_setup() {
 	py router-set "$host" "$port" "$user" "$key" || die "保存路由器配置失败"
 	ROUTER_SEEN=""
 	load_router
-	# 账号表现在有错误时先别同步（同步前会校验，过不去就走不到下面）：例如维护者的映射要的节点不在可选节点里，
+	# 账号表现在有错误时先别同步（同步前会校验，过不去就走不到下面）：例如 Team 的配置要的节点不在可选节点里，
 	# cca edit 改不了，只能在这里重新选可选节点。只是路由器上的节点改了名的话，先跟上就好了
 	py validate all >/dev/null 2>&1 || nodes_follow || true
 	if py validate all >/dev/null 2>&1; then
@@ -2065,7 +2065,7 @@ pick_nodes_form() {   # pick_allowed_nodes 在提问会话里的那一页（用�
 }
 
 router_node_list() {   # 路由器上的节点（P<TAB>名字<TAB>类型<TAB>服务器<TAB>端口）：拿这一版的路由器脚本现跑，不依赖路由器上部署的版本。
-	                    # 后面接上维护者参考配置里、路由器上还没有的节点（同步时补上，先就能选）
+	                    # 后面接上 Team 的配置里、路由器上还没有的节点（同步时补上，先就能选）
 	local out
 	out=$(router_sh | rsh 'sh -s nodes') || return 1
 	printf '%s\n' "$out" | py nodes-fill
@@ -2327,24 +2327,19 @@ cmd_add() {   # cca [codex] add [api]
 	local email alias key node out hint pmsg=""
 	[ "${1:-}" = api ] && { cmd_add_api; return; }
 	need_tty
-	# 不要求先配置路由器：有可选节点（路由器上选的、维护者映射里的参考节点、自定义代理）就能加。一个都没有时先导入维护者映射里的节点，
-	# 还没有的话，选节点那步可以粘贴一个自定义代理（内置代理用）。只有这样也不行时才先配置路由器：配置过路由器、只是现在用不了（比如密钥
-	# 没了），或者这台机器用不了内置代理。服务器上（从来没配置过路由器、直连不通）照旧等维护者确认这台机器、导入节点（builtin_onboard）
+	# 不要求先配置路由器：有可选节点（路由器上选的、Team 的配置带的、自定义代理）就能加。一个都没有时，选节点那步可以粘贴一个自定义代理
+	# （内置代理用）。只有这样也不行时才先配置路由器：配置过路由器、只是现在用不了（比如密钥没了），或者这台机器用不了内置代理。
+	# 服务器上（从来没配置过路由器、直连不通）先问有没有 Team 的邀请链接，没有就粘贴一条自己的代理（builtin_onboard）
 	if ! router_ready && [ -z "$(py nodes-allowed)" ]; then
 		if server_builtin; then
 			builtin_onboard "${CMD} add" || return 1
+		elif [ -n "$ROUTER_HOST" ] || ! node_custom_ok; then
+			info "还没有可选的出口节点：先配置路由器，账号从路由器的节点里选出口（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
+			ROUTER_FORM_WHY="还没有可选的出口节点：先配置路由器，账号从它的节点里选出口（只用第三方 API 账号的话不需要路由器）。"
+			cmd_router_setup || return 1
 		else
-			policy_import
-			if [ -n "$(py nodes-allowed)" ]; then
-				:
-			elif [ -n "$ROUTER_HOST" ] || ! node_custom_ok; then
-				info "还没有可选的出口节点：先配置路由器，账号从路由器的节点里选出口（只用第三方 API 账号的话不需要路由器：按 Ctrl-C 退出，运行 ${CMD} add api）"
-				ROUTER_FORM_WHY="还没有可选的出口节点：先配置路由器，账号从它的节点里选出口（只用第三方 API 账号的话不需要路由器）。"
-				cmd_router_setup || return 1
-			else
-				info "还没有可选的出口节点：选节点那步可以粘贴一个自定义代理（分享链接，内置代理用）；家里有装了 OpenClash / ShellCrash 的路由器的话，先运行 ${CMD} router setup"
-				pmsg="还没有可选的出口节点：粘贴一个自定义代理（分享链接）当它的出口，经 cca 内置的代理出去。家里有改好的路由器的话，之后配置路由器再换节点。"
-			fi
+			info "还没有可选的出口节点：选节点那步可以粘贴一个自定义代理（分享链接，内置代理用）；家里有装了 OpenClash / ShellCrash 的路由器的话，先运行 ${CMD} router setup"
+			pmsg="还没有可选的出口节点：粘贴一个自定义代理（分享链接）当它的出口，经 cca 内置的代理出去。家里有改好的路由器的话，之后配置路由器再换节点。"
 		fi
 	fi
 	say ""
@@ -2363,7 +2358,7 @@ cmd_add() {   # cca [codex] add [api]
 	say ""
 	node=$(py policy-node "$email")
 	if [ -n "$node" ]; then
-		info "${alias:-$email} 的出口按维护者的映射固定为 ${node}"
+		info "${alias:-$email} 的出口按 Team 的配置固定为 ${node}"
 	else
 		say "  给 ${alias:-$email} 选一个出口节点（每个账号最好用不同的节点）："
 		say ""
@@ -2593,7 +2588,7 @@ cmd_edit() {
 	need_tty
 	if [ -n "$PROMPT_GUI" ]; then edit_form; return; fi
 	before=$(digest)
-	had=$(py policy-have)   # 映射里的账号：编辑时删掉的要记下来，不然 validate（经过 ctx）又会按映射把它加回来
+	had=$(py policy-have)   # Team 给的账号：编辑时删掉的要记下来，不然 validate（经过 ctx）又会按 Team 的配置把它加回来
 	${EDITOR:-vi} "$TABLE" <&3 3<&-
 	py policy-forget "$had"
 	while ! py validate; do
@@ -2951,7 +2946,7 @@ cmd_login_page() {   # cca [codex|agy] login-page <账号> [--alias 别名] [--n
 		case "$TOOL" in codex|agy) tool_alias_ensure "$TOOL" "$ACC_NAME" ;; esac
 	fi
 	eval "$(py env "$key")"
-	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
+	sync_if_changed   # 账号表可能刚按 Team 的配置改过：先让路由器跟上，免得经旧的节点出去
 	preflight app || exit 1
 	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
 	if [ "$TOOL" = agy ]; then
@@ -3179,7 +3174,7 @@ mail_open_cmd() {   # cca mail open [账号] [--wait 秒] [--again] [--msg 文�
 	[ -n "$ACC_EMAIL" ] || die "账号表里 ${ACC_NAME} 没写邮箱：认不出哪封登录邮件是它的"
 	py mail-ready "$ACC_KEY" || exit 1   # 没配置（默认和这个账号都没有）就马上说（不用先花几秒检测出口）
 	has_chrome || { fail_warn no_chrome "没装 Google Chrome：登录链接要在账号专属的 Chrome 里打开"; return 1; }
-	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
+	sync_if_changed   # 账号表可能刚按 Team 的配置改过：先让路由器跟上，免得经旧的节点出去
 	preflight app || exit 1
 	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
 	local rc
@@ -3792,7 +3787,7 @@ cmd_web() {   # cmd_web [账号] [网址] [给人看的叫法] [mail]：网页�
 	[ "$ACC_KIND" = api ] && FAIL_CODE=api_account die "${ACC_NAME} 是第三方 API 账号：${what:-网页版}只能用官方账号"
 	has_chrome || { fail_warn no_chrome "没装 Google Chrome，已停止打开：请先安装 Chrome，再使用账号的独立浏览器"; return 1; }
 	gui_step sync
-	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，免得经旧的节点出去
+	sync_if_changed   # 账号表可能刚按 Team 的配置改过：先让路由器跟上，免得经旧的节点出去
 	gui_step preflight
 	preflight app || exit 1
 	prepare_account "$ACC_KEY" || die "初始化账号目录失败"
@@ -3992,7 +3987,7 @@ app_activate_existing() {   # 不接管或终止已有实例；不能验证时�
 	fi
 	activate_pid "$1"
 	dock_watch "$1" "$3"   # 以前的版本打开的也等（已经有一个在等就不再起）
-	py presence-wake "$ACC_KEY" >/dev/null 2>&1   # 映射里的账号：确保在报告给维护者的服务器（设备统计）
+	py presence-wake "$ACC_KEY" >/dev/null 2>&1   # Team 给的账号：确保在报告给 Team 的服务器（设备统计）
 	info "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 	gui_result activated "${ACC_NAME} 的 ${APP_LABEL} 已经开着，已切到前面"
 }
@@ -4093,7 +4088,7 @@ cmd_app() {   # 用账号专属的资料目录和出口打开桌面 App（Claude
 	app_launch_restore_traps
 	app_launch_unlock
 	dock_watch "$pid" "$app"   # 退出以后程序坞不留它的图标
-	py presence-wake "$key" >/dev/null 2>&1   # 映射里的账号：报告给维护者的服务器（设备统计）
+	py presence-wake "$key" >/dev/null 2>&1   # Team 给的账号：报告给 Team 的服务器（设备统计）
 	okay "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	gui_result opened "已打开 ${ACC_LABEL} 的 ${APP_LABEL}，出口 ${ACC_NODE}（$(route_note)）"
 	[ -n "$first" ] && tool app_first
@@ -4240,7 +4235,7 @@ cmd_local_status() {
 
 # ===== cca Phase B bash: custom nodes for the builtin proxy =====
 # 自定义节点：粘贴代理链接（分享链接、socks5://、http(s)://）或 Clash 节点块 → 内核 -t 校验 → 存进 core/custom-nodes.json，
-# 名字加进可选节点（py node-save）。内置代理直接用；配置了路由器的，同步时照维护者参考节点那一套写进路由器的配置文件（fill_source）。
+# 名字加进可选节点（py node-save）。内置代理直接用；配置了路由器的，同步时照 Team 的节点那一套写进路由器的配置文件（fill_source）。
 node_custom_ok() {   # 这台机器能加自定义节点吗：能用内置代理（拿它的内核先校验）。配置了路由器的，同步时也写进路由器的配置文件
 	core_possible
 }
@@ -4337,7 +4332,7 @@ node_rm() {
 }
 
 node_use() {   # node_use 账号 [链接]：给这个账号配自定义代理：粘贴（图形界面里是 node.custom 表单）→ 校验 → 存成自定义节点 →
-	            # 账号改走它 → 同步路由器（配置文件里写进节点，要重启一次 OpenClash / ShellCrash，先问）。维护者固定了节点的账号不能换
+	            # 账号改走它 → 同步路由器（配置文件里写进节点，要重启一次 OpenClash / ShellCrash，先问）。Team 固定了节点的账号不能换
 	local key out rc name
 	[ -n "${1:-}" ] || die "用法: ${CMD} node use <账号> [代理链接]"
 	need_tty
@@ -4398,7 +4393,7 @@ cmd_local() {
 # - Linux（服务器）上没有界面 App：由 cca 自己的后台进程 cca _core-keep 照 App 的做法托管（py 的 cmd_core_keep），不用 root、不靠
 #   systemd；机器重启后，下次在外面启动账号时再起
 # - 内核文件第一次用时从 mihomo 官方 Release 下载，按开头写死的 SHA256 校验（cca 本身有签名，校验值可信）
-# - 节点：在家时从路由器拷一份可选节点的完整定义（core/nodes.json，路由器端的 defs），再补上维护者参考节点里路由器上没有的；
+# - 节点：在家时从路由器拷一份可选节点的完整定义（core/nodes.json，路由器端的 defs），再补上 Team 的配置里路由器上没有的节点；
 #   两边都没有定义的节点在组里 REJECT 排第一（宁可断开也不换出口）
 # - 配置 core/config.yaml 只有这些入站、组和节点：不开通用的代理端口、系统代理、TUN、DNS；控制接口只开 Unix socket
 # ---------------------------------------------------------------------------
@@ -4910,7 +4905,7 @@ udp_on() {   # cca local udp on [节点] / pick：这台 Mac 的 UDP 经这个�
 	node=$(py udp-node "$want"); rc=$?
 	if [ $rc != 0 ]; then
 		case "$rc:$want" in
-			2:?*) warn "内置代理里没有节点「${want}」的定义（节点定义来自在家时从路由器拷的可选节点、维护者参考节点和自定义节点）" ;;
+			2:?*) warn "内置代理里没有节点「${want}」的定义（节点定义来自在家时从路由器拷的可选节点、Team 的配置带的节点和自定义节点）" ;;
 			3:?*) warn "节点「${want}」不转发 UDP（它的定义里没有 udp: true）" ;;
 		esac
 		node=$(udp_pick "$node") || { gui_cancelled; return 1; }
@@ -5055,8 +5050,8 @@ cmd_local_udp() {   # cca local udp [on [节点] | 节点 | pick | off | uninsta
 # 辅助安装（cca [codex|agy] install-cli；用到 claude / codex / agy 却没装时，终端里先问要不要装）：用它们的官方安装脚本，和官网上的
 # curl -fsSL … | bash 一样（脚本自己下载、校验，装进 ~/.local/bin）。先直连；拿不到安装脚本、或者直连没装成时，问过再经内置代理装：
 # 另起一个临时的内核（cca 的 mihomo，只在 127.0.0.1 上开一个端口、只走安装用的节点；不碰在跑的内置代理和路由器），
-# 装完就停，它的配置（有节点密钥）放在只有自己能读的临时目录里、用完删掉。安装用的节点由维护者在映射里指定（install_node，节点名只在
-# 私有的映射里），定义是内置代理拿得到的那些（在家时从路由器拷的、维护者参考节点）；映射没指定、这台机器没有它的定义时在终端里现选
+# 装完就停，它的配置（有节点密钥）放在只有自己能读的临时目录里、用完删掉。安装用的节点由 Team 的配置指定（install_node），
+# 定义是内置代理拿得到的那些（在家时从路由器拷的、Team 的配置带的、自定义节点）；没指定、这台机器没有它的定义时在终端里现选
 # 一个（不记下）。安装脚本在空环境里运行（不带账号、代理设置和 API key）：claude install 用一次性的配置目录（不往账号和 ~/.claude 的
 # 配置里写，不带设备标识；安装脚本只把下载的文件临时放在 ~/.claude/downloads），codex 不问问题；PATH 里有 ~/.local/bin，安装脚本不去
 # 改 shell 的配置文件。实测（2026-11-12，经临时内核和一个 REALITY 节点）：codex 0.167.2、Claude Code 2.1.322 都装上了
@@ -5110,19 +5105,19 @@ install_once() {   # install_once [节点]：下载、运行一次官方安装�
 		exit 0
 	)
 }
-install_node_pick() {   # 打印经内置代理安装用的节点：维护者映射指定的（返回 0）；映射没指定、这台机器没有它的定义时在终端里现选一个（返回 2，
+install_node_pick() {   # 打印经内置代理安装用的节点：Team 的配置指定的（返回 0）；没指定、这台机器没有它的定义时在终端里现选一个（返回 2，
 	                     # 选了就是同意，不记下）；选不了、取消时返回 1
 	local node rc n=0 def=0 sel
 	local -a names
 	node=$(py install-node get); rc=$?
 	[ $rc = 0 ] && { printf '%s' "$node"; return 0; }
-	[ $rc = 4 ] && warn "维护者映射指定的安装节点 ${node} 在这台机器上没有定义（内置代理的节点定义来自在家时从路由器拷的可选节点和维护者参考节点）"
+	[ $rc = 4 ] && warn "Team 的配置指定的安装节点 ${node} 在这台机器上没有定义（内置代理的节点定义来自在家时从路由器拷的可选节点、Team 的配置带的节点和自定义节点）"
 	while IFS= read -r node; do [ -n "$node" ] && { names[n]="$node"; n=$((n + 1)); }; done < <(py install-node choices)
 	if [ $n = 0 ]; then
 		warn "这台机器的内置代理还没有节点定义：在家启动一次账号（会从路由器拷可选节点），或者用 cca node add 加一个自己的代理（有 Team 给你账号的话，加入那个 Team：它的配置带着节点，cca team join）之后再装"
 		return 1
 	fi
-	interactive || { warn "维护者映射没指定安装用的节点，要在终端里选一个：运行 ${CMD} install-cli"; return 1; }
+	interactive || { warn "没有指定安装用的节点（Team 的配置里的 install_node），要在终端里选一个：运行 ${CMD} install-cli"; return 1; }
 	say "  经内置代理的哪个节点安装 ${TOOL}？（只用这一次）"
 	if [ -n "$PROMPT_GUI" ]; then
 		local -a opts=()
@@ -5149,7 +5144,7 @@ install_found() {   # 安装脚本跑完之后：重新找命令，找到了说�
 	return 0
 }
 tool_install() {   # tool_install [proxy]：用官方安装脚本装当前工具的命令（先直连，不行时问过再经内置代理装）。装好了返回 0（TOOL_BIN 等换成新装的）。
-	               # proxy：已经知道直连不通（服务器上安装时测过、用户也同意了经内置代理装）：不再直连试，映射指定的节点也不另外问
+	               # proxy：已经知道直连不通（服务器上安装时测过、用户也同意了经内置代理装）：不再直连试，Team 的配置指定的节点也不另外问
 	local rc why node via="${1:-}"
 	say "  用官方安装脚本安装 ${TOOL}：${INSTALL_URL}（脚本自己下载、校验，装进 ~/.local/bin）"
 	if [ -z "$via" ]; then
@@ -5199,7 +5194,7 @@ cmd_check() {   # cca check [账号…] [--json]：各账号的出口、纯净�
 	since=$(date +%s)
 	[ -n "$keys" ] || keys=$(py keys)
 	[ -n "$keys" ] || { info "还没有账号"; [ -z "$json" ] || py check-render "" </dev/null; return 0; }
-	sync_if_changed   # 账号表可能刚按维护者的映射改过：先让路由器跟上，测到的才是账号现在的出口
+	sync_if_changed   # 账号表可能刚按 Team 的配置改过：先让路由器跟上，测到的才是账号现在的出口
 	# 账号列表从 fd 4 读：循环里要连路由器（ssh 会把 stdin 读走）、要问用户（interactive 看 fd 0 是不是终端）
 	while IFS= read -r key <&4; do
 		eval "$(py env "$key")" || continue
@@ -5266,8 +5261,8 @@ remote_prepare() {
 	[ -x "$HELPER" ] || helper_find || return 0
 	HOSTCMD=("$HELPER" remote-host "$TOOL" "$ACC_KEY" "$ACC_NAME" --)
 }
-# 两台机器之间：一台 cca remote pair 显示配对码，另一台 cca remote join 输入；之后输入的那台能经服务器（配对时选的那台：Team 的或者
-# 维护者的，relay.rs 的 session_hub、home_hub）接入显示的那台上的会话（两头之间端到端加密，服务器只转字节）。配对表、对方能做什么
+# 两台机器之间：一台 cca remote pair 显示配对码，另一台 cca remote join 输入；之后输入的那台能经服务器（配对时选的那个 Team 的，
+# relay.rs 的 session_hub、home_hub）接入显示的那台上的会话（两头之间端到端加密，服务器只转字节）。配对表、对方能做什么
 # （allow）、取消（unpair）都在辅助程序里
 remote_pair_spec() {   # remote_pair_spec 配对码 [网页端的地址]：提问会话里显示配对码的那一页（给 py prompt-emit）。只显示、不用回答：配好了 cca 自己收场，
 	                     # 不想配了 App 关掉答案管道（「取消」）。给了网页端的地址是和手机配对（题号 remote.pair_web）：多一个 kind 是 qr 的字段，
@@ -5283,32 +5278,34 @@ remote_pair_spec() {   # remote_pair_spec 配对码 [网页端的地址]：提�
 	printf 'code=%s\n' "$1"
 }
 remote_hub_args() {   # remote_hub_args 参数…：cca remote pair|join 的参数。在哪台服务器上配对放进 REMOTE_HUB（给辅助程序 --hub 的值：Team 的名字或者编号，
-	                    # 维护者的那一台是 maintainer；没说是空的），有 --web 时 REMOTE_WEB 是 web。写错了回 1。
+	                    # 没说是空的），有 --web 时 REMOTE_WEB 是 web。写错了回 1。
 	                    # 每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上，对方经它看得到的就是走那台服务器的会话
 	REMOTE_HUB=""; REMOTE_WEB=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--web) [ -z "$REMOTE_WEB" ] || return 1; REMOTE_WEB=web ;;
 			--team) [ $# -ge 2 ] && [ -n "$2" ] && [ -z "$REMOTE_HUB" ] || return 1; REMOTE_HUB="$2"; shift ;;
-			--maintainer) [ -z "$REMOTE_HUB" ] || return 1; REMOTE_HUB=maintainer ;;
 			*) return 1 ;;
 		esac
 		shift
 	done
 }
 remote_hub_label() {   # 给人看的：REMOTE_HUB 是谁的服务器。写的是编号时问辅助程序它叫什么。没说在哪台上时：这台机器用得了好几台的话是
-	                     # 默认的那一台（辅助程序标着 home 的：加入的第一个 Team 的，没有时是维护者的），只有一台时是空的
+	                     # 默认的那一台（辅助程序标着 home 的：加入的第一个 Team 的），只有一台时是空的
 	local name rows
 	case "$REMOTE_HUB" in
 		"")
 			rows=$(py remote-hubs 2>/dev/null)
 			[ "$(printf '%s\n' "$rows" | grep -c .)" -gt 1 ] || return 0
 			printf '%s\n' "$rows" | awk -F '\t' '$3 == "home" { print $2; exit }' ;;
-		maintainer) printf '维护者的服务器' ;;
 		*)
 			name=$(py remote-hubs 2>/dev/null | awk -F '\t' -v w="$REMOTE_HUB" '$1 == w { print $2; exit }')
 			printf '%s' "${name:-「${REMOTE_HUB}」的服务器}" ;;
 	esac
+}
+remote_need_hub() {   # 配对要经 Team 的服务器中转（3.6.0 起没有维护者的那一台了）：这台设备一台都用不了时先说清楚，不先问同意
+	[ -z "$(py remote-hubs 2>/dev/null)" ] || return 0
+	die "远程会话经 Team 的服务器中转，这台设备还没有能用的：先加入一个 Team（cca team join），或者自己建一个、部署它的服务器（cca team new）"
 }
 remote_pair_run() {   # remote_pair_run web|"" [--hub 服务器]：出一个配对码、等另一台机器输入；配好了把对方的名字放进 REMOTE_PEER，没配成把原因放进 REMOTE_ERR。
 	                    # web：这次配对开给手机上的网页端（辅助程序多给一行网页端的地址，一起显示出来）。后面的参数原样交给辅助程序。辅助程序在后台跑
@@ -5386,13 +5383,14 @@ cmd_remote() {
 		ls|list) shift; py remote-list "$@" ;;   # --json 是给界面 App 的（PROTOCOL 9.1）
 		pair)   # 这台机器显示配对码：输入它的那台机器之后能接入这台机器上的会话，所以先问。--web：输入配对码的是手机上的网页端
 			      # （手机没有 cca：在浏览器里打开中转服务器给的那一页；同意的范围是 web，和两台机器配对分开问）。
-			      # --team 名字 / --maintainer：在哪台服务器上配对（不写是加入的第一个 Team 的，没有 Team 时是维护者的）
+			      # --team 名字：在哪个 Team 的服务器上配对（不写是加入的第一个 Team 的）
 			shift
-			remote_hub_args "$@" || die "用法：cca remote pair [--web] [--team 名字 | --maintainer]（--web：和手机配对，在手机的浏览器里接入；--team：在哪个 Team 的服务器上配对，对方看得到的是这个 Team 的账号的会话）"
+			remote_hub_args "$@" || die "用法：cca remote pair [--web] [--team 名字]（--web：和手机配对，在手机的浏览器里接入；--team：在哪个 Team 的服务器上配对，对方看得到的是这个 Team 的账号的会话）"
 			web=$REMOTE_WEB
 			need_tty
+			remote_need_hub
 			via=$(remote_hub_label)
-			[ -z "$via" ] || via="。这次配对记在${via}上：对方经它看得到的，是走这台服务器的会话（哪个 Team 的服务器，就是那个 Team 的账号的会话）$([ -n "$REMOTE_HUB" ] || printf '；要在别的服务器上配对：--team 名字，或者 --maintainer')"
+			[ -z "$via" ] || via="。这次配对记在${via}上：对方经它看得到的，是走这台服务器的会话（哪个 Team 的服务器，就是那个 Team 的账号的会话）$([ -n "$REMOTE_HUB" ] || printf '；要在别的 Team 的服务器上配对：--team 名字')"
 			if [ -n "$web" ]; then
 				out="在手机上输入配对码以后，那台手机可以在浏览器里看和操作这台机器上开着远程会话的会话（之后能改成只看或者不让：cca remote allow；取消配对：cca remote unpair）。手机上的那一页是中转服务器给的：终端的内容在手机和这台机器之间加密，服务器看不到，但管着服务器的人能换掉那一页的代码${via}"
 				rows="和手机配对"
@@ -5408,10 +5406,11 @@ cmd_remote() {
 			say "  只让它看：cca remote allow $(shq "$out") view；取消配对：cca remote unpair $(shq "$out")"
 			gui_done remote_paired "已经和「${out}」配对：它可以接入这台机器上开着远程会话的会话" ;;
 		join)   # 输入另一台机器显示的配对码（从 stdin 交给辅助程序，不进命令行）。配对码是在哪台服务器上开的，辅助程序自己挨个试得出来；
-			      # --team 名字 / --maintainer 是只在那一台上找
+			      # --team 名字 是只在那个 Team 的服务器上找
 			shift
-			remote_hub_args "$@" && [ -z "$REMOTE_WEB" ] || die "用法：cca remote join [--team 名字 | --maintainer]"
+			remote_hub_args "$@" && [ -z "$REMOTE_WEB" ] || die "用法：cca remote join [--team 名字]"
 			need_tty
+			remote_need_hub
 			code=$(ask "另一台机器上显示的配对码: " "" q=remote.code "title=输入配对码" "label=配对码" \
 				"message=配对码在另一台机器上：那边运行 cca remote pair，或者在 cca App 的「远程会话」里点「显示配对码…」。配好以后这台机器可以接入那台机器上的会话。" \
 				"hint=16 个字母和数字，大小写、横线随意")
@@ -5529,7 +5528,7 @@ run_account() {
 sync_if_changed() {   # 账号表或路由器端脚本变了：先同步到路由器（需要重载但没获同意时照常继续）；在外面就等回家
 	# 校验账号表、清掉钥匙串里直接改账号表删掉的第三方 API 账号的 key、算摘要，一个 py sync-state 做完（"这次的摘要<TAB>上次同步的"）
 	local st
-	if ! st=$({ router_sh; router_rb; } | py sync-state quiet); then   # 可能是路由器上的节点改了名（比如维护者的映射已经换成新名字）：先跟上再校验
+	if ! st=$({ router_sh; router_rb; } | py sync-state quiet); then   # 可能是路由器上的节点改了名（比如 Team 的配置已经换成新名字）：先跟上再校验
 		if router_ready && at_home; then nodes_follow; fi
 		st=$({ router_sh; router_rb; } | py sync-state) || FAIL_CODE=table_invalid die "账号表有错误：运行 ${CMD} edit 修正"
 	fi
@@ -5820,8 +5819,8 @@ update_hook() {   # 启动时调用，参数是这次命令的参数
 	return 0
 }
 
-update_after() {   # 启动时（update_hook 之后、policy_hook / team_hook 之前）：换了版本以后的第一条命令，拉映射、各个 Team 同步配置这次不等间隔
-	# （不然最长要等一天、一个小时）——用着映射、映射里有给它的邀请的机器马上自己加入 Team，在 Team 里的马上同步一次（都在后台）。
+update_after() {   # 启动时（update_hook 之后、team_hook 之前）：换了版本以后的第一条命令，各个 Team 同步配置这次不等间隔（不然最长要等
+	# 一个小时）——在 Team 里的马上在后台同步一次。
 	# 自动更新、cca update、一键安装再装一次都留着上一个版本（update/cca.prev.version），全新安装的没有：不算换了版本。
 	# update/ran 记着上一次运行的版本；开发模式不自动更新，也就没有「更新后」
 	local ran=""
@@ -5830,7 +5829,7 @@ update_after() {   # 启动时（update_hook 之后、policy_hook / team_hook �
 	[ "$ran" != "$VERSION" ] || return 0
 	mkdir -p "$UPD" && printf '%s\n' "$VERSION" > "$UPD/ran" || return 0
 	[ -n "$ran" ] || [ -f "$UPD/cca.prev.version" ] || return 0
-	rm -f "$POLICY_DIR/checked" "$CCA_HOME/teams/checked"
+	rm -f "$CCA_HOME/teams/checked"
 }
 
 cmd_update_fetch() {   # 后台任务：有新版本就下载校验好，下次启动时换上
@@ -5946,7 +5945,7 @@ cmd_update() {   # cca update [版本号 | --check [--json] | --rollback | auto 
 			return 0 ;;
 		--rollback) update_rollback; return ;;
 		--check) update_check "$([ "${2:-}" = --json ] && echo json)"; return ;;   # 开发模式下也能查
-		'') [ ! -f "$POLICY_DIR/id_ed25519" ] || ! sharing_on || policy_pull || true ;;   # 打开着维护者的共享：顺便拉一次映射
+		'') ;;
 		*) want="${1#[vV]}"   # 手动装指定的版本，例如测试版 2.6.0-beta.1（照 GitHub 上 tag 的样子写成 v2.6.0-beta.1 也认）
 		   is_ver "$want" || die "用法: cca update [版本号 | --check | --rollback | auto | notify | off]" ;;
 	esac
@@ -6005,7 +6004,7 @@ gui_lock() {   # gui_lock [最多等几秒，默认 120]：前台的 cca gui 和
 gui_unlock() { rmdir "$GUI_DIR/lock" 2>/dev/null; return 0; }
 wait_pid() { local i; for i in $(seq 1 240); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.25; done; return 1; }   # 最多等 60 秒
 
-cmd_gui_api() {   # cca _gui hello|state|live|mail-list（不经过自动更新和映射拉取，不写文件）
+cmd_gui_api() {   # cca _gui hello|state|live|mail-list（不经过自动更新和 Team 的同步，不写文件）
 	case "${1:-}" in
 		hello) gui_hello ;;
 		state) gui_state ;;
@@ -6230,394 +6229,11 @@ cmd_gui_fetch() {   # 后台任务：下载校验好和 cca 同版本的 App；A
 }
 
 # ---------------------------------------------------------------------------
-# 维护者共享的账号（维护者的账号 → 节点映射）：默认关着，有维护者共享给你的账号时才打开（共享开着 = config.json 里有 policy，
-# 辅助程序的 policy_on）。映射放在维护者的私有 GitHub 仓库里（policy.json，和用发布密钥签的 policy.json.sig），
-# 每台机器用自己的只读 deploy key 去拉，验签通过才换上；映射里的账号出口固定为指定的节点（辅助程序的 reconcile 强制），
-# 映射和这台机器的账号表合并：映射里有、这台机器上还没有的官方账号自动加进来，这台机器自己的账号不动（policy_merge）
-#   · cca policy on / setup [仓库]：打开共享。生成 deploy key，把公钥交给维护者加到仓库上；不写仓库就是关掉时记着的，再不然是维护者的
-#     默认仓库。安装时带 CCA_POLICY_REPO=仓库、配置向导里答了「有维护者共享给你的账号」也会做这一步
-#   · cca policy off [--forget-key]：关掉共享。映射里的账号移出账号表（登录留着，打开时加回来）、不再拉映射、不再上报设备统计
-#   · 每天在后台拉一次（和自动更新的开关、开发模式无关）；cca policy pull、cca update 时也拉；拉不到就接着用上次的
-# ---------------------------------------------------------------------------
-POLICY_DIR="$CCA_HOME/policy"
-# 维护者的默认映射仓库（仓库是私有的，写在这里只暴露名字）。CCA_POLICY_DEFAULT 可以换掉，设成空就不问有没有维护者共享的账号（回归测试里默认是空的）
-POLICY_REPO_DEFAULT="${CCA_POLICY_DEFAULT-rivia7/cca-policy}"
-GITHUB_HOST_KEYS=(   # GitHub 公布的 SSH 主机公钥（api.github.com/meta）；ssh.github.com:443 用的是同一组
-	'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
-	'ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg='
-)
-
-policy_log() {   # 最近的拉取结果（App 一小时拉一次：只留最后 200 行）
-	printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$POLICY_DIR/log" 2>/dev/null
-	if [ "$(wc -l 2>/dev/null < "$POLICY_DIR/log" || echo 0)" -gt 300 ]; then
-		tail -n 200 "$POLICY_DIR/log" > "$POLICY_DIR/log.$$" 2>/dev/null && mv -f "$POLICY_DIR/log.$$" "$POLICY_DIR/log"
-	fi
-}
-
-policy_clone() {   # policy_clone 仓库 目录：0 拉到了；1 连不上（可以重试）；2 GitHub 拒绝了（重试也没用）。原因在 POLICY_ERR
-	# 只用这台机器的 deploy key、只认 GitHub 的主机公钥，不读用户自己的 git / ssh 配置和 ssh-agent：ssh 要是先拿用户
-	# 自己的 GitHub 密钥登录上了，这个私有仓库只会回"不存在"。22 端口连不上时改走 ssh.github.com:443
-	local url err k ssh_cmd
-	for k in "${GITHUB_HOST_KEYS[@]}"; do printf 'github.com %s\n[ssh.github.com]:443 %s\n' "$k" "$k"; done > "$POLICY_DIR/known_hosts.$$"
-	mv -f "$POLICY_DIR/known_hosts.$$" "$POLICY_DIR/known_hosts"   # 前台、后台同时在拉时也不会读到写了一半的
-	ssh_cmd="ssh -F /dev/null -i $(printf %q "$POLICY_DIR/id_ed25519") -o IdentitiesOnly=yes -o IdentityAgent=none"
-	ssh_cmd="$ssh_cmd -o UserKnownHostsFile=$(printf %q "$POLICY_DIR/known_hosts") -o GlobalKnownHostsFile=/dev/null"
-	ssh_cmd="$ssh_cmd -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR"
-	for url in "git@github.com:$1.git" "ssh://git@ssh.github.com:443/$1.git"; do
-		rm -rf "$2"
-		err=$(GIT_SSH_COMMAND="$ssh_cmd" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
-			git clone --quiet --depth 1 "$url" "$2" 2>&1 >/dev/null) && return 0
-		case "$err" in
-			*"Permission denied"*) POLICY_ERR="GitHub 不认这台机器的 deploy key：维护者还没把公钥加到 ${1} 上，或者已经撤销了"
-				POLICY_DENIED=1; return 2 ;;
-			*"not found"*|*"not appear to be a git repository"*) POLICY_ERR="仓库 ${1} 不存在，或者这台机器的 deploy key 不是加在它上面的"; return 2 ;;
-			*"Host key verification failed"*|*"IDENTIFICATION HAS CHANGED"*) POLICY_ERR="GitHub 的主机密钥对不上（网络可能被劫持了），没有拉取"; return 2 ;;
-		esac
-		# 原因在 ssh 那一行（例如 ssh: connect to host github.com port 22: Operation timed out），git 后面跟的是套话
-		POLICY_ERR="连不上 GitHub：$(printf '%s\n' "$err" | grep -v -e '^[[:space:]]*$' -e '^fatal: Could not read from remote' \
-			-e '^Please make sure you have the correct access' -e '^and the repository exists' | tail -n 1)"
-	done
-	return 1
-}
-
-policy_fetch() {   # 拉取映射，验签（发布密钥，命名空间 cca-policy）、检查格式后换上 $POLICY_DIR/policy.json；仓库里有
-	                 # 维护者参考配置里的节点（nodes.json，命名空间 cca-nodes）时同样验过换上，没有了就删掉。
-	                 # 两份都没问题才换（任何一份不对都不换），失败时原来的照用，原因在 POLICY_ERR（GitHub 不认 deploy key 时 POLICY_DENIED=1）
-	local repo tmp rc i err nodes
-	POLICY_DENIED=""
-	repo=$(py policy-repo)
-	[ -n "$repo" ] || { POLICY_ERR="维护者的共享关着（有维护者共享给你的账号时，运行 cca policy on 打开）"; return 1; }
-	[ -f "$POLICY_DIR/id_ed25519" ] || { POLICY_ERR="这台机器还没有 deploy key：运行 cca policy setup ${repo}"; return 1; }
-	if ! command -v git >/dev/null 2>&1; then
-		if on_linux; then POLICY_ERR="需要 git，这台机器上没有$(pkg_hint git)"
-		else POLICY_ERR="需要 git：运行 xcode-select --install 装上苹果的命令行工具"; fi
-		return 1
-	fi
-	tmp=$(mktemp -d "$POLICY_DIR/tmp.XXXXXX") || { POLICY_ERR="建不了临时目录"; return 1; }
-	for i in 1 2 3; do   # 有的网络偶尔会丢新连接；GitHub 拒绝了的不用再试
-		policy_clone "$repo" "$tmp/repo"; rc=$?
-		[ $rc -eq 1 ] && [ $i -lt 3 ] || break
-		sleep "${CCA_RETRY_WAIT:-2}"
-	done
-	if [ $rc -eq 0 ]; then
-		rc=1
-		nodes="$tmp/repo/nodes.json"
-		printf 'cca-release %s\n' "$RELEASE_KEY" > "$tmp/allowed"
-		if ! ssh-keygen -Y verify -f "$tmp/allowed" -I cca-release -n cca-policy -s "$tmp/repo/policy.json.sig" \
-			< "$tmp/repo/policy.json" >/dev/null 2>&1; then
-			POLICY_ERR="签名不对（不是维护者签发的，或者文件被改过），没有换上"
-		elif ! err=$(py policy-check "$tmp/repo/policy.json"); then
-			POLICY_ERR="映射的格式不对：${err//$'\n'/；}"
-		elif [ -f "$nodes" ] && ! ssh-keygen -Y verify -f "$tmp/allowed" -I cca-release -n cca-nodes -s "$nodes.sig" \
-			< "$nodes" >/dev/null 2>&1; then
-			POLICY_ERR="参考节点（nodes.json）的签名不对（不是维护者签发的，或者文件被改过），映射和参考节点都没有换上"
-		elif [ -f "$nodes" ] && ! err=$(py fill-check "$nodes"); then
-			POLICY_ERR="参考节点（nodes.json）的格式不对：${err//$'\n'/；}"
-		elif ( umask 077; cp "$tmp/repo/policy.json" "$POLICY_DIR/policy.json.$$" && { [ ! -f "$nodes" ] || cp "$nodes" "$POLICY_DIR/nodes.json.$$"; } ) &&
-			mv -f "$POLICY_DIR/policy.json.$$" "$POLICY_DIR/policy.json" &&
-			if [ -f "$nodes" ]; then mv -f "$POLICY_DIR/nodes.json.$$" "$POLICY_DIR/nodes.json"; else rm -f "$POLICY_DIR/nodes.json"; fi; then
-			rc=0
-		else
-			rm -f "$POLICY_DIR/policy.json.$$" "$POLICY_DIR/nodes.json.$$"
-			POLICY_ERR="写不进 ${POLICY_DIR}"
-		fi
-	fi
-	rm -rf "$tmp"
-	return $rc
-}
-
-policy_rows() {   # 这台机器上按映射固定出口的账号、映射里还没加到这台机器上的账号（顺便让账号表照映射改好、
-	                  # 加上映射里的账号：py 每次读账号表都会做）
-	local rows
-	rows=$(py policy-rows)
-	[ -z "$rows" ] || say "$rows"
-}
-
-policy_pull() {   # policy_pull [--json]：现在就拉一次，说明结果；拉不到时说明原因（上次拉到的照用）。--json 是 App 的定时拉取（PROTOCOL 4.9）：stdout 一行 JSON
-	local before fill summary changed=false json="${1:-}"
-	case "$json" in ''|--json) ;; *) die "用法: cca policy pull [--json]" ;; esac
-	before=$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)
-	touch "$POLICY_DIR/checked" 2>/dev/null   # 记下拉过了：启动时的 policy_hook 不用再拉，App 据此算下一次
-	if policy_fetch; then
-		policy_log "拉取成功"
-		fill=$(py fill-summary)
-		summary="$(py policy-summary)${fill:+；参考节点：${fill}}"
-		[ "$(cat "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" 2>/dev/null)" = "$before" ] || changed=true
-		if [ "$changed" = true ]; then okay "已更新映射（${summary}）"; else okay "映射没有变化（${summary}）"; fi
-		policy_settle
-		team_adopt
-		[ -z "$json" ] || printf '{"version":1,"kind":"policy_pull","generated_epoch":%s,"changed":%s,"summary":%s}\n' "$(date +%s)" "$changed" "$(jstr "$summary")"
-		return 0
-	fi
-	policy_log "$POLICY_ERR"
-	fail_warn policy_unavailable "没有拉到映射：${POLICY_ERR}${before:+（接着用上次拉到的）}"
-	return 1
-}
-
-policy_prepare() {   # policy_prepare 仓库（owner/name）：记下仓库、生成这台机器的 deploy key，显示维护者要运行的那一行命令（公钥和别名都写在
-	                  # 里面，维护者复制过去直接运行；Mac 上顺便复制到剪贴板）
-	local repo="$1" old host opt="" line
-	mkdir -p "$POLICY_DIR" && chmod 700 "$POLICY_DIR" || die "建不了 ${POLICY_DIR}"
-	old=$(py policy-repo --known)   # 开着的，或者关掉共享时记着的仓库：deploy key 是加在它上面的
-	if [ -n "$old" ] && [ "$old" != "$repo" ]; then   # GitHub 的 deploy key 只能加在一个仓库上：换了仓库就换一把，旧仓库的映射也不再用
-		policy_drop_key
-		rm -f "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json"
-	fi
-	host=$(short_host)
-	if [ ! -f "$POLICY_DIR/id_ed25519" ]; then
-		ssh-keygen -q -t ed25519 -N '' -C "cca-policy@${host}" -f "$POLICY_DIR/id_ed25519" || die "生成 deploy key 失败"
-	fi
-	py policy-set "$repo" || die "保存配置失败"
-	# 维护者那边：policy.sh key add 认命令里写的公钥，别名默认是这台机器的名字（和别的机器重名时它会另问一个；之后按别名查、删、改），
-	# 默认就管 POLICY_REPO_DEFAULT
-	[ "$repo" = "$POLICY_REPO_DEFAULT" ] || opt=" -R ${repo}"
-	line="./policy.sh key add${opt} $(shq "$(cat "$POLICY_DIR/id_ed25519.pub")") $(shq "$host")"
-	POLICY_PREPARE_LINE="$line" POLICY_PREPARE_COPIED=""   # 图形界面（配置向导的第 1 步）照它在 code 字段里显示这一行
-	say ""
-	say "  映射仓库：${repo}。把下面这一行发给维护者（顺便说一声是谁的哪台机器），由维护者在 cca 的仓库里运行，"
-	say "  把这台机器的公钥加成这个仓库的只读 deploy key："
-	say "  （维护者改用 Team 以后不用这一步：让维护者发一个邀请链接，在这台机器上 cca team join。公钥这条路以后会去掉）"
-	say ""
-	say "    ${line}"
-	say ""
-	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then POLICY_PREPARE_COPIED=1; say "  （这一行已复制到剪贴板，直接粘贴发给维护者）"; say ""; fi
-}
-policy_got() {   # 拉到了映射（policy_fetch 成功之后）：记下来，说一声
-	policy_log "拉取成功"
-	touch "$POLICY_DIR/checked" 2>/dev/null
-	okay "拉到了维护者的映射（$(py policy-summary)）"
-}
-policy_wait() {   # 等维护者加上这台机器的公钥：马上拉一次，之后每 5 秒自动再拉（回车马上再拉，输入 s 先跳过；读到头也算跳过），最多等
-	               # 30 分钟。拉到了说一声、返回 0。还没加上（GitHub 不认 deploy key）不用每次都说，别的原因（连不上 GitHub 等）变了才说。
-	               # CCA_POLICY_POLL：每隔几秒（整数，测试用）
-	local w rc i t0 last="" said="" poll="${CCA_POLICY_POLL:-5}"
-	case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
-	for ((i = 0; i < 1800 / poll; i++)); do
-		policy_fetch && { policy_got; return 0; }
-		if [ "$POLICY_ERR" != "$last" ]; then
-			policy_log "$POLICY_ERR"
-			[ -n "$POLICY_DENIED" ] || warn "这次没拉到映射：${POLICY_ERR}"
-			last="$POLICY_ERR"
-		fi
-		if [ -z "$said" ]; then
-			say "  ${C_D}等维护者运行上面那一行：每 5 秒自动重试（回车马上重试，输入 s 先跳过）…${C_0}"
-			said=1
-		fi
-		t0=$SECONDS
-		IFS= read -r -t "$poll" w <&3; rc=$?
-		if [ $rc -ne 0 ]; then
-			# 到时间了：bash 4 起退出码大于 128；macOS 的 bash 3.2 和读到头一样是 1，按等了多久分（读到头是马上返回的）
-			[ $rc -gt 128 ] || [ $((SECONDS - t0)) -ge 1 ] && continue
-			return 1   # 读到头（终端关了、答案用完了）：当跳过
-		fi
-		case "$w" in s|S|q|Q) return 1 ;; esac
-	done
-	return 1
-}
-policy_settle() {   # 拉到了映射之后：没配置过路由器的导入映射里账号的节点（账号随即加进来），列出受约束的账号，同步到路由器
-	policy_import   # 没配置过路由器（没有路由器的笔记本、服务器）：映射里账号的节点导入可选节点，账号随即加进来
-	policy_rows
-	# 账号表刚照映射改过：马上同步到路由器（后台拉取不做这一步，它不能问、不能重载，留给下一条命令）。要重载的这里不问（没有终端、App 的定时拉取也不弹框），
-	# 账号表已经上传，端口池等用户点“同步”或下次重启
-	if [ "$(digest)" != "$(py get synced)" ] && router_needed; then
-		router_sync_soon || warn "路由器同步没完成：修好后运行 cca router sync"
-	fi
-}
-
-sharing_on() { [ -n "$(py policy-repo)" ]; }   # 维护者的共享开着（config.json 里有映射仓库）
-
-policy_repo_hint() {   # 打开共享时不写仓库就用它：开着的、关掉共享时记着的（deploy key 加在它上面），再不然是维护者的默认仓库；都没有时是空的
-	local r
-	r=$(py policy-repo --known)
-	printf '%s' "${r:-$POLICY_REPO_DEFAULT}"
-}
-
-policy_key_for() {   # policy_key_for 仓库：这台机器的 deploy key 还在、加在这个仓库上（共享开着，或者关掉时留着的）——拿它直接拉，维护者没撤销
-	                   # 这台机器就不用再找维护者
-	[ -f "$POLICY_DIR/id_ed25519" ] && [ "$(py policy-repo --known)" = "$1" ]
-}
-
-policy_drop_key() {   # 删掉这台机器的 deploy key（维护者那边加没加着都不再用它）
-	rm -f "$POLICY_DIR/id_ed25519" "$POLICY_DIR/id_ed25519.pub" "$POLICY_DIR/known_hosts"
-}
-
-policy_decline() {   # 说了不打开共享（或者 cca policy off --forget-key）：去掉仓库、不再记着它，deploy key、拉到过的映射都不留（账号表不再受它约束）
-	py policy-decline
-	policy_drop_key
-	rm -f "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" "$POLICY_DIR/checked"
-}
-
-policy_opened() {   # 打开了共享、拉到了映射（映射里的账号加进来了）：Claude、Codex 的启动器跟上，告诉 App
-	launchers_all
-	gui_done policy_on "已打开共享（$(py policy-summary)）"
-}
-
-policy_connect() {   # policy_connect 仓库（提问会话里，「共享与同步」页打开共享）：记下仓库、生成 deploy key（policy_prepare），显示给维护者的
-	                   # 那一行、等维护者加上（policy_wait_page）。0 拉到了；1 先跳过；2 不打开共享（仓库、deploy key、拉到过的映射都去掉了）
-	local rc
-	policy_prepare "$1"
-	policy_wait_page; rc=$?
-	[ $rc -ne 2 ] || policy_decline
-	return $rc
-}
-
-policy_setup() {   # policy_setup [仓库]（cca policy on / setup）：打开维护者的共享——配置映射仓库（不写就是 policy_repo_hint：开着的、关掉共享时
-	                 # 记着的、维护者的默认仓库），再试着拉一次。deploy key 还在、就是这个仓库的先直接拉（policy_key_for）。图形界面里（App 的
-	                 # 「共享与同步」页）拉不到时显示给维护者的那一行、边等边拉（policy_connect）
-	local repo="${1:-}"
-	[ -n "$repo" ] || repo=$(policy_repo_hint)
-	if [ -z "$repo" ]; then   # 不知道仓库（没有维护者的默认仓库、也没打开过）：问一句，名字向维护者要
-		repo=$(ask "维护者的映射仓库（像 someone/cca-policy；回车取消）: " "" q=policy.repo "title=打开维护者的共享" "label=映射仓库" \
-			"message=映射仓库是维护者在 GitHub 上放账号映射的私有仓库，名字向维护者要。填好以后 cca 给这台机器生成一把只读的公钥，发给维护者加上。" \
-			"hint=GitHub 上的「用户/仓库」")
-		repo=$(printf '%s' "$repo" | tr -d '[:space:]')
-		[ -n "$repo" ] || { say "已取消：知道维护者的映射仓库以后，运行 cca policy setup 仓库"; gui_cancelled; return 1; }
-	fi
-	[[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "映射仓库要写成「用户/仓库」，例如 cca policy setup someone/cca-policy"
-	if policy_key_for "$repo"; then
-		py policy-set "$repo" || die "保存配置失败"
-		if policy_pull; then policy_opened; return 0; fi
-		if [ -z "$POLICY_DENIED" ]; then   # 连不上 GitHub 之类：共享已经打开，之后定时再拉
-			info "共享已经打开：cca 每天会自动再拉一次映射（也可以运行 cca policy pull 马上拉）"
-			gui_done policy_on "共享已经打开，这次没拉到映射：之后会自动再拉"
-			return 0
-		fi
-		# 维护者撤销了这台机器的公钥：把给维护者的那一行再显示一次
-	fi
-	if [ -n "$PROMPT_GUI" ]; then
-		ONB_TITLE="打开维护者的共享"
-		policy_connect "$repo"
-		case $? in
-			0) policy_settle; policy_opened ;;
-			2) gui_done policy_off "没有打开共享" ;;
-			*) gui_done policy_on "先跳过：维护者加上公钥之后，App 会自动拉取映射" ;;
-		esac
-		return 0
-	fi
-	policy_prepare "$repo"   # 记下仓库（打开共享）、生成这台机器的 deploy key（有了就用原来的），给出维护者的那一行
-	if policy_pull; then policy_opened; return 0; fi
-	info "维护者加上公钥之后，cca 每天会自动拉一次映射（也可以运行 cca policy pull 马上拉）"
-}
-
-policy_off() {   # cca policy off [--forget-key]：关掉维护者的共享。映射里的账号移出账号表（登录、钥匙串里的东西留着，打开共享时原样加回来，
-	               # 不用重新登录），不再拉映射、不再上报设备统计；拉到过的映射、参考节点、别的设备的折合金额都删掉。deploy key 默认留着
-	               # （打开时不用再找维护者），--forget-key 连它一起删。有共享账号正在用（命令行会话、桌面 App）时不关
-	local forget="" plan rc out
-	case "$#:${1:-}" in
-		0:) ;;
-		1:--forget-key) forget=--forget ;;
-		*) die "用法: cca policy off [--forget-key]" ;;
-	esac
-	out=$(py policy-off plan); rc=$?
-	if [ $rc -eq 0 ]; then
-		plan=$out
-		say "${C_B}关掉维护者共享的账号${C_0}"
-		while IFS= read -r out; do [ -z "$out" ] || say "  · ${out}"; done <<< "$plan"
-		say "  · 不再拉维护者的映射、不再上报设备统计；拉到过的映射、参考节点，别的设备上这些账号的折合金额都从这台机器上删掉"
-		if [ -n "$forget" ]; then say "  · 这台机器的 deploy key 也删掉：以后再打开共享，要把新的公钥发给维护者"
-		else say "  · 这台机器的 deploy key 留着：以后运行 cca policy on 打开，维护者没撤销的话不用再找维护者"; fi
-		consent policy_off all "关掉共享" "关掉维护者共享的账号？" "${plan//$'\n'/；}" n
-		case $? in
-			0) ;;
-			1) say "已取消"; return 0 ;;
-			*) die "要先同意：在终端里运行 cca policy off（会先问你）" ;;   # App 问过以后带着 CCA_GRANT 重新运行
-		esac
-		py presence-stop 2>/dev/null   # 设备统计的上报进程（停的时候告诉维护者的服务器这些会话停了）、正在统计折合金额的后台进程：先停掉
-		py cost-stop 2>/dev/null
-		out=$(py policy-off apply $forget); rc=$?
-		py presence-wake >/dev/null 2>&1   # 再起上报进程：还用得了的服务器（Team 的，没关成时还有维护者的）接着报，没有要报的它马上退出
-	fi
-	case $rc in
-		0) ;;
-		2) if [ -n "$forget" ]; then policy_decline; out="${out}（deploy key 已删掉）"; fi   # 本来就关着：--forget-key 照样删掉 key、不再记着仓库
-		   info "$out"; gui_done policy_off "$out"; return 0 ;;
-		3) FAIL_CODE=policy_off_busy die "$out" ;;
-		*) die "${out:-关掉共享没成}" ;;
-	esac
-	# 关掉时正好在后台拉的那一次（policy_hook 另起的进程）可能之后才写回来：不要紧，共享关着时辅助程序不认这些文件
-	rm -f "$POLICY_DIR/policy.json" "$POLICY_DIR/nodes.json" "$POLICY_DIR/checked" "$POLICY_DIR/log" \
-		"$CCA_HOME/cost/remote.json" "$CCA_HOME/cost/sync.json"
-	[ -z "$forget" ] || policy_drop_key
-	okay "已关掉共享${out:+：${out} 移出了账号表（登录留着，运行 cca policy on 打开时加回来）}"
-	if [ -n "$out" ]; then
-		router_sync_soon || fail_warn sync_failed "路由器同步没完成：修好后运行 cca router sync"
-		launchers_all   # 收起来的账号的启动器删掉
-	fi
-	gui_done policy_off "已关掉共享${out:+：${out} 移出了账号表（登录留着，打开共享时加回来）}"
-}
-
-policy_status() {   # cca policy：共享开没开、映射仓库、这台机器的 deploy key、上次拉到的映射和参考节点、最近一次拉取的结果、受约束的账号
-	local repo fill
-	repo=$(py policy-repo)
-	if [ -z "$repo" ]; then
-		repo=$(py policy-repo --known)   # 关掉共享时记着的
-		if [ -n "$repo" ]; then
-			info "维护者的共享关着（映射仓库 ${repo}，这台机器的 deploy key $([ -f "$POLICY_DIR/id_ed25519" ] && echo 还留着 || echo 已经删了)）：运行 cca policy on 打开"
-		else
-			info "维护者的共享关着：有维护者共享给你的账号时，运行 cca policy on 打开"
-		fi
-		return 0
-	fi
-	say "  映射仓库：${repo}（共享开着：cca policy off 关掉）"
-	if [ -f "$POLICY_DIR/id_ed25519.pub" ]; then say "  这台机器的 deploy key：$(cat "$POLICY_DIR/id_ed25519.pub")"
-	else say "  这台机器还没有 deploy key：运行 cca policy setup ${repo}"; fi
-	if [ -f "$POLICY_DIR/policy.json" ]; then say "  映射：$(py policy-summary)（$(date -r "$POLICY_DIR/policy.json" '+%F %T') 拉到的）"
-	else say "  还没拉到映射"; fi
-	fill=$(py fill-summary)
-	[ -z "$fill" ] || say "  参考节点：维护者参考配置里${fill}（路由器配置文件里缺的直接写进去；内置代理直接进内核的节点定义）"
-	[ ! -f "$POLICY_DIR/log" ] || say "  最近一次拉取：$(tail -n 1 "$POLICY_DIR/log")"
-	if fill=$(py install-node get); then say "  安装用的节点：${fill}（直连装不上 claude / codex / agy 命令时，问过再经内置代理走它）"
-	elif [ -n "$fill" ]; then say "  安装用的节点：${fill}（这台机器的内置代理里没有它的定义：要装的时候现选一个）"; fi
-	fill=$(py presence-note)
-	[ -z "$fill" ] || say "  ${fill}"
-	policy_rows
-}
-
-team_adopt() {   # 维护者把各台机器迁到 Team 时（./policy.sh team）邀请写在映射里：有给这台设备的就自己加入，说一声，马上照它的配置对一遍
-	local out name host device n
-	out=$(py team-adopt 2>/dev/null) || return 0
-	[ -n "$out" ] || return 0
-	IFS=$'\t' read -r name host device n <<< "$out"
-	if [ "$n" = - ]; then okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}；配置还没同步下来（cca team sync）"
-	else okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}，管理员给了它 ${n} 个账号"; fi
-	team_settle
-}
-
 team_hook() {   # 启动时：这台设备在 Team 里、距上次同步配置超过一个小时，就在后台同步一次（只换本机存的那一份：账号表在下一条命令读它时照新的改）
 	[ -f "$CCA_HOME/teams/index.json" ] || return 0
 	[ -z "$(find "$CCA_HOME/teams/checked" -mmin -60 2>/dev/null)" ] || return 0
 	touch "$CCA_HOME/teams/checked"
 	( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _team-sync </dev/null >/dev/null 2>&1 3<&- & )
-}
-
-policy_hook() {   # 启动时：共享开着（配置了映射仓库）、距上次拉取超过一天，就在后台拉一次（和自动更新的开关、开发模式无关）
-	[ -f "$POLICY_DIR/id_ed25519" ] || return 0
-	[ -z "$(find "$POLICY_DIR/checked" -mmin -1440 2>/dev/null)" ] || return 0
-	touch "$POLICY_DIR/checked"   # 先记下：关掉共享、deploy key 留着的机器一天也只多起这一次 py
-	sharing_on || return 0
-	( perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$SELF" _policy-fetch </dev/null >/dev/null 2>&1 3<&- & )
-}
-
-cmd_policy_fetch() {   # 后台任务：拉一次映射，结果记在 $POLICY_DIR/log；账号表在下一条命令读它时照新映射改
-	[ -n "$(find "$POLICY_DIR/lock" -maxdepth 0 -mmin +30 2>/dev/null)" ] && rmdir "$POLICY_DIR/lock"   # 上次异常退出留下的锁
-	mkdir "$POLICY_DIR/lock" 2>/dev/null || return 0
-	trap 'rmdir "$POLICY_DIR/lock" 2>/dev/null' EXIT
-	if policy_fetch; then
-		policy_log "拉取成功"
-		py team-adopt >/dev/null 2>&1   # 映射里有给这台设备的 Team 邀请就加入（账号表在下一条命令读它时照新的改）
-	else policy_log "$POLICY_ERR"; fi
-}
-
-policy_request() {   # cca [codex] policy request 账号：一行给维护者直接运行的命令（stdout，App 自己复制），把这个账号现在的节点锁进映射
-	local key line rc=0
-	[ $# -eq 1 ] || die "用法: ${CMD} policy request 账号"
-	key=$(py resolve "$1") || FAIL_CODE=account_missing die "没找到账号：$1"
-	line=$(py policy-request "$key") || rc=$?
-	[ "$rc" -eq 0 ] || die "$line"
-	printf '%s\n' "$line"
-	[ -z "${CCA_EVENTS:-}" ] || return 0
-	if printf '%s\n' "$line" | pbcopy 2>/dev/null; then info "已复制到剪贴板：发给维护者，在 cca 的仓库里运行这条命令"
-	else info "把上面这条命令发给维护者，在 cca 的仓库里运行"; fi
 }
 
 cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增的会话记录、和别的设备同步），两个工具一起；--json 给 App（PROTOCOL 3.5）
@@ -6634,7 +6250,7 @@ cmd_cost() {   # cca cost sync [--now] [--json]：统计折合金额（读新增
 	esac
 }
 
-cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪些设备（问它走的那台同步服务器：维护者共享的问维护者的，自己的问自己的；--json 给 App，PROTOCOL 3.4）
+cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪些设备（问它走的那台同步服务器：Team 给的问那个 Team 的；--json 给 App，PROTOCOL 3.4）
 	local a json="" out rc
 	for a in "$@"; do [ "$a" = --json ] && json=1; done
 	out=$(py presence-view "$@"); rc=$?
@@ -6668,7 +6284,6 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
       cca team rename Team 设备 新名字             给一台设备改名字（它在服务器上的名字跟着改）
       cca team name Team 新名字                    改这个 Team 的名字（各台设备下次同步配置时跟着改）
-      cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
       cca team node Team [ls [--json]]            这个 Team 的节点定义（不显示密钥）、各有哪些账号在用
@@ -6831,7 +6446,7 @@ team_node() {   # cca team node Team [子命令 …]：管理员管这个 Team �
 				say ""
 				info "给账号换节点：cca team map ${team} 工具 邮箱 节点；加一个：cca team node ${team} add；实测出口：cca team node ${team} test 节点…"
 			else
-				info "这个 Team 还没有节点的定义：cca team node ${team} add 粘贴一条代理链接或一段 Clash 节点配置（cca team import 能导入现成的 nodes.json）"
+				info "这个 Team 还没有节点的定义：cca team node ${team} add 粘贴一条代理链接或一段 Clash 节点配置"
 			fi ;;
 		add)
 			[ $# -le 1 ] || die "$TEAM_NODE_USAGE"
@@ -7533,6 +7148,20 @@ hub_leftovers() {   # 3.5.3 去掉了自己的同步服务器（cca hub）：以
 	return 0
 }
 
+policy_leftovers() {   # 3.6.0 去掉了维护者的映射（维护者私有仓库里的账号 → 节点映射、每台机器一把 deploy key；改用 Team）：以前打开过共享的设备上
+	                    # 留下的映射、参考节点、deploy key、拉取的记录，经维护者的服务器同步的状态（没有 team.<编号>. 前缀的设备统计、记下的
+	                    # API key、折合金额），映射里的 Team 邀请（teams/adopt.*），config.json 里的开关（py policy-retire）都删掉。映射里的账号
+	                    # 照旧留在账号表里，出口不再受映射约束（迁到了 Team 的设备，Team 照旧给这些账号）；共享开着、又没加入任何 Team 的设备
+	                    # 说一声怎么加入。main 看到 policy/ 还在时调；config.json 没改成（正被别的命令锁着）就留着 policy/，下一条命令再来
+	local alone
+	alone=$(py policy-retire 2>/dev/null) || return 0
+	rm -rf "$CCA_HOME/policy" 2>/dev/null
+	rm -f "$CCA_HOME/presence/status.json" "$CCA_HOME/presence/keys.json" "$CCA_HOME/presence/keys.lock" "$CCA_HOME/presence/keys-sync.lock" \
+		"$CCA_HOME/cost/sync.json" "$CCA_HOME/cost/remote.json" "$CCA_HOME/teams/adopt.json" "$CCA_HOME/teams/adopt.lock" 2>/dev/null
+	[ -z "$alone" ] || warn "维护者共享的账号（cca policy）3.6.0 起去掉了，改用 Team：这台设备还没加入 Team，向管理员要一个邀请链接，运行 cca team join 加入（账号表里的账号照旧能用）"
+	return 0
+}
+
 hub_deploy_run() {   # hub_deploy_run 目标 参数…：部署一次，辅助程序的输出放进 out；App 里问过密码的（team_deploy 的 pw）经 SSH_ASKPASS 给 ssh
 	if [ -n "$pw" ]; then out=$(askpass_run "$pw" py "${DEPLOY_PY[@]}" "$@" --askpass)
 	else out=$(py "${DEPLOY_PY[@]}" "$@"); fi
@@ -7557,21 +7186,11 @@ hub_platform_ask() {   # 部署到哪个托管平台：打出 railway 或者 sea
 		*) say "  已取消"; return 1 ;;
 	esac
 }
-cmd_policy() {   # cca [codex] policy [on | setup [仓库] | off [--forget-key] | pull [--json] | request 账号]
-	case "${1:-}" in
-		on) [ $# -eq 1 ] || die "用法: cca policy on"; policy_setup ;;
-		setup) shift; policy_setup "$@" ;;
-		off) shift; policy_off "$@" ;;
-		pull) shift; policy_pull "$@" ;;
-		request) shift; policy_request "$@" ;;
-		''|status) policy_status ;;
-		*) die "用法: cca policy [on | setup [仓库] | off [--forget-key] | pull [--json] | request 账号]" ;;
-	esac
+cmd_policy() {   # cca [codex] policy …：维护者共享的账号 3.6.0 起去掉了（改用 Team），只说一声。界面 App 不再调它：_gui state 的 config.policy
+	               # 总是关着的样子（PROTOCOL 2.2）
+	die "维护者共享的账号（cca policy）3.6.0 起去掉了，改用 Team：向 Team 的管理员要一个邀请链接，运行 cca team join 加入；自己的几台设备之间同步：cca team new"
 }
 
-# ---------------------------------------------------------------------------
-# 安装 / 还原
-# ---------------------------------------------------------------------------
 pkg_hint() {   # pkg_hint 命令…：Linux 上装这些命令的那一行（认出包管理器时，前面带「：」）。和 install.sh 里的一样
 	local pm p c out="" s=""
 	on_linux || return 0
@@ -7606,12 +7225,12 @@ pkg_hint() {   # pkg_hint 命令…：Linux 上装这些命令的那一行（认
 }
 need_deps() {   # 安装时查依赖：install.sh 下载之前查的是同一份（命令和 OpenSSH 的版本），两边一起改
 	local c miss="" v
-	# find：自动更新、映射多久没查过，清掉上次异常退出留下的锁（Amazon Linux、openSUSE 的最小安装没有它）
+	# find：自动更新多久没查过、Team 的配置多久没同步过，清掉上次异常退出留下的锁（Amazon Linux、openSUSE 的最小安装没有它）
 	for c in ssh ssh-keygen nc curl perl gunzip base64 find; do command -v "$c" >/dev/null 2>&1 || miss="${miss:+$miss }$c"; done
 	[ -z "$miss" ] || die "缺少命令 ${miss// /、}，先装上再运行 cca install$(pkg_hint $miss)"
-	# 校验更新、映射的签名用 ssh-keygen -Y，OpenSSH 8.1 才有（RHEL / Rocky 8 是 8.0）；认不出版本（不是 OpenSSH）时不拦
+	# 校验更新的签名用 ssh-keygen -Y，OpenSSH 8.1 才有（RHEL / Rocky 8 是 8.0）；认不出版本（不是 OpenSSH）时不拦
 	v=$(ssh -V 2>&1 | sed -n 's/^OpenSSH_\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)
-	case "$v" in [1-7].*|8.0) die "OpenSSH 太旧（${v}）：cca 校验更新和映射的签名要 8.1 或更新（ssh-keygen -Y）" ;; esac
+	case "$v" in [1-7].*|8.0) die "OpenSSH 太旧（${v}）：cca 校验更新的签名要 8.1 或更新（ssh-keygen -Y）" ;; esac
 	if on_linux; then warn "Linux 上能用的是命令行：账号的网络（路由器的端口池、cca 内置的代理）、登录（登录页在 Mac 上用账号专属的 Chrome 打开）、API key（存成权限 600 的文件）；桌面 App、网页版、图形界面这些只在 macOS 上"
 	elif [ "$(uname)" != Darwin ]; then warn "本脚本按 macOS 编写（钥匙串、open、Chrome 路径），其它系统需自行调整"; fi
 }
@@ -7706,11 +7325,8 @@ tool_alias_ensure() {   # tool_alias_ensure codex|agy [账号名] [quiet]：没�
 
 # ---------------------------------------------------------------------------
 # 服务器上不用路由器（Linux；CCA_REMOTE_LOGIN=1 时 macOS 上也这样，测试用）：从没配置过路由器、直连不通（连不上，或者出口在受限地区）时，
-# cca install、cca add 不问路由器，直接用内置代理。节点有三种来源：
-#   · 打开着维护者的共享（一键安装时带了 CCA_POLICY_REPO、以前打开过）：这台机器生成只读 deploy key，给出维护者在 cca 的仓库里运行的
-#     一行命令（公钥写在里面），之后每 5 秒拉一次映射；维护者加上以后，把验过签名的映射指定的安装节点（install_node）和映射里这台
-#     机器的账号要用的节点（都在维护者参考节点里）导入可选节点；映射里的账号随后自动加进来
-#   · 别的先问一句有没有 Team 的邀请链接（默认没有）。有：加入 Team，节点用它的配置带的（加入时导入）；到了那一步留空是先不加入
+# cca install、cca add 不问路由器，直接用内置代理。节点有两种来源（已经有可选节点时不问）：
+#   · 先问一句有没有 Team 的邀请链接（默认没有）。有：加入 Team，节点用它的配置带的（加入时导入）；到了那一步留空是先不加入
 #   · 没有：粘贴一条你自己的代理（分享链接，cca node add 那一套），当这台机器的可选节点
 # 有了节点就配置好内置代理，再经它装 Claude Code
 # ---------------------------------------------------------------------------
@@ -7738,24 +7354,20 @@ server_builtin() {   # 服务器上要不要直接用内置代理（不问路由
 	okay "这台机器能直连 ${TRACE_HOST}"
 	return 1
 }
-builtin_onboard() {   # builtin_onboard 接着配置的命令：服务器上直连不通、没配置过路由器时不配置路由器，改用 cca 内置的代理。打开着维护者的
-	                    # 共享时（一键安装时带了 CCA_POLICY_REPO、以前打开过）等维护者确认这台机器、导入维护者提供的节点（builtin_shared）；
-	                    # 别的先问一句有没有 Team 的邀请链接（默认没有；已经有可选节点时不问）：有就加入、导入 Team 的配置带的节点（builtin_team），
+builtin_onboard() {   # builtin_onboard 接着配置的命令：服务器上直连不通、没配置过路由器时不配置路由器，改用 cca 内置的代理。
+	                    # 先问一句有没有 Team 的邀请链接（默认没有；已经有可选节点时不问）：有就加入、导入 Team 的配置带的节点（builtin_team），
 	                    # 没有就粘贴一条自己的代理（builtin_own）。有了节点就配置好内置代理、返回 0（内置代理没就绪只说一声：
 	                    # 启动账号时还会再试）；没有（先跳过了、用不了）时说明之后再运行哪条命令接着配置
-	local again="$1" repo
+	local again="$1"
 	say ""
 	say "  ${C_B}${DIRECT_WHY:-直连不通}：这台机器不用配置路由器，改用 cca 内置的代理${C_0}"
 	if ! core_possible; then
 		warn "内置代理的内核只有 x86-64 和 arm64 的 Linux 版，这台是 $(uname -m)：用不了内置代理"
 		return 1
 	fi
-	repo=$(py policy-repo)
-	if [ -n "$repo" ]; then   # 打开着维护者的共享（一键安装时带了 CCA_POLICY_REPO、以前打开过）：节点由维护者提供
-		builtin_shared "$again" "$repo" || return 1
-	elif [ -z "$(py nodes-allowed)" ]; then
+	if [ -z "$(py nodes-allowed)" ]; then
 		if confirm "有没有 Team 的邀请链接？" n "q=install.team" "title=节点从哪来" \
-			"detail=有的话节点、账号由 Team 的管理员定（维护者共享的账号也是这样给的）；没有就粘贴一条你自己的代理当出口。"; then
+			"detail=有的话节点、账号由 Team 的管理员定；没有就粘贴一条你自己的代理当出口。"; then
 			builtin_team "$again" || return 1
 		else
 			builtin_own "$again" || return 1
@@ -7763,27 +7375,6 @@ builtin_onboard() {   # builtin_onboard 接着配置的命令：服务器上直�
 	fi
 	core_setup || warn "内置代理还没就绪（原因见上面）：之后运行 cca local setup 再试，启动账号时 cca 也会再试"
 	return 0
-}
-builtin_shared() {   # builtin_shared 接着配置的命令 仓库：等维护者确认这台机器（deploy key），导入维护者提供的节点。导入了返回 0
-	local again="$1" repo="$2" added n list=""
-	say "  节点由维护者提供：维护者确认这台机器之后，cca 自动导入节点、配置好内置代理（要用路由器的话，之后运行 cca router setup）"
-	if ! command -v git >/dev/null 2>&1; then
-		warn "拉维护者的映射要 git，这台机器上没有$(pkg_hint git)。装好后再运行 ${again}"
-		return 1
-	fi
-	if policy_key_for "$repo" && py policy-set "$repo" && policy_fetch; then   # 以前就确认过（重新运行 cca install，或者关掉共享时留着 deploy key）
-		policy_got
-	else
-		policy_prepare "$repo"
-		if ! policy_wait; then
-			info "先跳过：维护者运行上面那一行之后，再运行 ${again} 接着配置（导入节点、配置内置代理）"
-			return 1
-		fi
-	fi
-	added=$(py nodes-import) || { warn "${added}：请维护者在映射里指定安装用的节点（install_node），或者把这台机器的账号写进映射"; return 1; }
-	while IFS= read -r n; do [ -z "$n" ] || list="${list:+${list}、}${n}"; done <<< "$added"
-	[ -z "$list" ] || okay "已导入维护者提供的节点：${list}（这台机器的可选节点）"
-	policy_rows
 }
 builtin_team() {   # builtin_team 接着配置的命令：加入 Team（邀请链接可以留空：先不加入），导入它的配置带的节点（加入时 team_settle 导入的）。
 	                 # 有了可选节点返回 0
@@ -7797,7 +7388,7 @@ builtin_team() {   # builtin_team 接着配置的命令：加入 Team（邀请�
 	fi
 	return 1
 }
-builtin_own() {   # builtin_own 接着配置的命令：没有维护者，粘贴一条自己的代理当这台机器的可选节点（内置代理经它出去）。加上了返回 0
+builtin_own() {   # builtin_own 接着配置的命令：没有 Team，粘贴一条自己的代理当这台机器的可选节点（内置代理经它出去）。加上了返回 0
 	say "  节点用你自己的代理：粘贴一条代理链接，cca 内置的代理经它出去（之后还能用 cca node add 再加）"
 	if ! node_add; then
 		info "没加上节点：之后运行 cca node add 粘贴自己的代理，再运行 ${1} 接着配置"
@@ -7807,80 +7398,8 @@ builtin_own() {   # builtin_own 接着配置的命令：没有维护者，粘贴
 }
 
 # ---- 配置向导（cca _onboard，App 首次运行的引导）：① 加入 Team → ② 网络出口 → ③ 添加账号 ----
-onboard_policy_quick() {   # 共享开着、有 deploy key（以前走过向导、在终端里打开过、一键安装时带了 CCA_POLICY_REPO）时先拉一次：
-	                         # 拉到了，或者这次没拉成、但有上次拉到的（不是 GitHub 不认 key）返回 0——向导不用问这一步
-	[ -f "$POLICY_DIR/id_ed25519" ] || return 1
-	info "正在拉取维护者的映射…"
-	if policy_fetch; then policy_got; return 0; fi
-	policy_log "$POLICY_ERR"
-	if [ -z "$POLICY_DENIED" ] && [ -f "$POLICY_DIR/policy.json" ]; then   # 连不上 GitHub 之类：接着用上次拉到的
-		warn "这次没拉到映射：${POLICY_ERR}（接着用上次拉到的）"
-		return 0
-	fi
-	return 1
-}
-
-policy_wait_page() {   # 打开维护者的共享（cca policy on，App 的「共享与同步」页）时的那一页（提问会话）：显示给维护者的那一行，等维护者把这台机器的
-	                     # 公钥加上——每隔几秒自动拉一次（和 policy_wait 一样，最多 30 分钟），拉到了就打开共享（App 收到结果就换掉这一页）；拉不到的
-	                     # 原因变了才换一页。用户也可以先跳过、或者说不打开共享。0 拉到了；1 先跳过；2 不打开共享。3.5.3 起配置向导不再问维护者的
-	                     # 共享（问 Team 的邀请链接），只有这里用它。CCA_POLICY_POLL：每隔几秒（整数，测试用）
-	local poll="${CCA_POLICY_POLL:-5}" i max st last="" seqs="" msg skip="先跳过"
-	case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
-	max=$((1800 / poll))
-	msg="映射由维护者发布：给账号固定出口节点，没有路由器时也提供内置代理用的节点，映射里的账号会自动加进来。把下面这一行发给维护者"
-	[ -z "$POLICY_PREPARE_COPIED" ] || msg="${msg}（已复制到剪贴板）"
-	msg="${msg}，由维护者在 cca 的仓库里运行，把这台 Mac 加成映射仓库的只读 deploy key。"
-	msg="${msg}加好后这里会自动打开共享。"
-	for ((i = 0; ; i++)); do
-		if [ $i -lt $max ]; then
-			policy_fetch && { policy_got; return 0; }
-			if [ -n "$POLICY_DENIED" ]; then st=wait; else st="err:${POLICY_ERR}"; fi
-		else
-			st=timeout
-		fi
-		if [ "$st" != "$last" ]; then   # 同一题换一页：换页前点的答案照样认（序号都记着）
-			[ "$st" = timeout ] || policy_log "$POLICY_ERR"
-			seqs="${seqs:+${seqs} }$(policy_wait_spec "$msg" "$st" "$poll" "$skip" | py prompt-emit)" || gui_abort
-			last=$st
-		fi
-		if [ "$st" = timeout ]; then
-			gui_answer_wait "$seqs" next
-		else
-			gui_answer_wait "$seqs" next "$poll" || continue   # 到时间了：再拉一次
-		fi
-		[ "$ANSWER" = decline ] && return 2
-		return 1
-	done
-}
-policy_wait_spec() {   # policy_wait_spec 页说明 状态 秒数 先跳过的说法：policy_wait_page 那一页的描述（给 py prompt-emit）。状态：wait（还没加上）| timeout | err:原因
-	local l hint="" err=""
-	case "$2" in
-		wait) hint="正在等维护者加上：每 ${3} 秒自动检查一次" ;;
-		timeout) hint="等了 30 分钟还没加上，不再自动检查：先跳过，维护者加好后 App 会自动拉取映射" ;;
-		*) err="这次没拉到映射：${2#err:}（每 ${3} 秒自动重试）" ;;
-	esac
-	gui_kv "q=onboard.policy" "title=${ONB_TITLE:-维护者的映射}" "message=$1"
-	gui_kv field=line kind=code "label=给维护者运行的命令" "hint=${hint}" "error=${err}"
-	while IFS= read -r l; do printf 'code=%s\n' "$l"; done <<< "$POLICY_PREPARE_LINE"
-	gui_kv field=next kind=choice "label=维护者还没加好的话" default=skip \
-		"opt=skip"$'\t'"${4}"$'\t'"维护者加好后 App 会自动拉取映射" \
-		"opt=decline"$'\t'"不打开共享"$'\t'"以后想用，在 App 的「共享与同步」里打开（或者在终端里运行 cca policy on）"
-}
-
-policy_import() {   # 没配置过路由器时导入维护者映射里的节点（参考节点：映射指定的安装节点、映射里这台机器的账号要用的），映射里的账号
-	                  # 随后加进来（配置向导、加账号时还没有可选节点、cca policy pull 和 App 的定时拉取）。配置过路由器的不导入：路由器上选可选
-	                  # 节点时参考节点也列在里面，可选节点里有了以后的新节点由 policy_nodes_fill 照常补
-	local added n list=""
-	load_router
-	[ -z "$ROUTER_HOST" ] && [ -f "$POLICY_DIR/policy.json" ] || return 0
-	added=$(py nodes-import 2>/dev/null) || return 0   # 一个都没有：加账号时再选（自定义代理）
-	while IFS= read -r n; do [ -z "$n" ] || list="${list:+${list}、}${n}"; done <<< "$added"
-	[ -z "$list" ] || okay "已导入维护者提供的节点：${list}（这台机器的可选节点）"
-	return 0
-}
-
 onboard_builtin() {   # 向导第 2 步选了「没有路由器（内置代理）」：本机的客户端用 cca 内置的代理（mihomo；macOS 26 起内核在界面 App 里跑）。
-	                    # 节点是映射里的参考节点（policy_import 已经导入），或者第 3 步加账号时粘贴的自定义代理。用不了返回 1
+	                    # 节点是 Team 的配置带的（加入时导入了），或者第 3 步加账号时粘贴的自定义代理。用不了返回 1
 	if ! core_possible; then gui_fail local_unavailable "这台机器用不了 cca 内置的代理（内核没有 $(uname -m) 的版本）：配置一个路由器"; return 1; fi
 	py local-set client builtin >/dev/null || { gui_fail local_unavailable "配置内置代理失败"; return 1; }
 	LOCAL_SET=builtin
@@ -7897,24 +7416,23 @@ onboard_title() {   # onboard_title 这一步的名字：向导的页标题 ONB_
 
 cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App 启动的提问会话，PROMPT_GUI 下跑），三步：
 	                # ① 加入 Team（onboard.team：有没有 Team 的邀请链接，默认没有；答了有走 team join，那一页可以留空：先不加入。已经在 Team 里的
-	                #   不问。维护者的共享开着——一键安装时带了 CCA_POLICY_REPO、以前打开过——先拉一次映射：映射里有给这台机器的邀请就自己加入了）；
+	                #   不问）；
 	                # ② 网络出口（onboard.net：路由器 / 内置代理 / 先跳过；路由器、本机的客户端已经配好时不问）；
 	                # ③ 添加账号（不要求配置了路由器：没有可选节点时选节点那步可以粘贴自定义代理）。
 	                # 做完记下 onboarded（以后 App 不再弹向导）。--skip：不配置、只记下。取消（答案管道关掉）走 gui_abort：不记 onboarded，下次还能再来
-	local mode pol="" team="" askteam="" asknet="" askadd="" keys0 keys1 k added="" n=0 det net_default net_msg
+	local mode team="" askteam="" asknet="" askadd="" keys0 keys1 k added="" n=0 det net_default net_msg
 	if [ "${1:-}" = --skip ]; then py onboard-done; return 0; fi
 	if [ -z "$PROMPT_GUI" ]; then info "配置向导在 cca App 里使用（或运行 ${SELF} install 在终端里配置）"; return 0; fi
 	keys0=$(py keys)
 	# 先定下要问哪几步（页标题写第几步、共几步，onboard_title 照它们数）：已经在 Team 里的不问 Team；路由器、本机的客户端配好了的不问网络出口
-	if sharing_on && onboard_policy_quick; then pol=1; team_adopt; fi   # 共享开着、拉到了映射：映射里有给这台机器的邀请就自己加入
 	[ -n "$(py team-list)" ] || askteam=1
 	if ! router_ready && [ -z "$LOCAL_SET" ]; then asknet=1; fi
-	# 添加账号：开始时还没有账号才问（那时拉到的映射、加入的 Team 给了账号的，问还要不要再加一个自己的）；已经有账号的不问
+	# 添加账号：开始时还没有账号才问（那时加入的 Team 给了账号的，问还要不要再加一个自己的）；已经有账号的不问
 	[ -n "$keys0" ] || askadd=1
 	if [ -n "$askteam" ]; then   # ① 加入 Team
 		onboard_title "加入 Team"
 		if confirm "有没有 Team 的邀请链接？" n "q=onboard.team" "title=${ONB_TITLE}" \
-			"detail=Team 的管理员定好账号和出口节点，给每台设备发一个邀请链接（维护者共享的账号也是这样给的）：加入以后账号自动加进来，各台设备的设备统计、折合金额、记下的 API key 经 Team 的服务器合在一起（服务器上只有密文）。没有就选「否」：自己的账号照常添加，以后也能在「共享与同步」里加入，或者自己建一个 Team。"; then
+			"detail=Team 的管理员定好账号和出口节点，给每台设备发一个邀请链接：加入以后账号自动加进来，各台设备的设备统计、折合金额、记下的 API key 经 Team 的服务器合在一起（服务器上只有密文）。没有就选「否」：自己的账号照常添加，以后也能在「共享与同步」里加入，或者自己建一个 Team。"; then
 			( TEAM_JOIN_OPTIONAL=1 team_join ) || true   # 留空是先不加入；没加入成（链接不对以外的原因，失败已经报给 App）：向导照样往下走
 		fi
 	fi
@@ -7929,8 +7447,7 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 		elif core_possible; then net_default=builtin
 		else net_default=router
 		fi
-		if [ -n "$team" ]; then net_msg="加入了 Team：网络出口配好后，Team 给的账号自动加进来。${net_msg}"
-		elif [ -n "$pol" ]; then net_msg="拉到了维护者的映射（$(py policy-summary)）：网络出口配好后，映射里的账号自动加进来。${net_msg}"; fi
+		[ -z "$team" ] || net_msg="加入了 Team：网络出口配好后，Team 给的账号自动加进来。${net_msg}"
 		mode=$(gui_ask choice "这台 Mac 怎么给账号联网？" "$net_default" \
 			"q=onboard.net" "title=${ONB_TITLE}" "message=${net_msg}" \
 			"opt=router"$'\t'"路由器（OpenClash / ShellCrash）"$'\t'"家里/办公室有改好的路由器，按端口给每个账号分流" \
@@ -7938,11 +7455,9 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 			"opt=skip"$'\t'"先跳过，以后再配置"$'\t'"接着添加账号；启动账号时 cca 会再问怎么联网") || return 1
 		case "$mode" in
 			router) cmd_router_setup || return 1 ;;   # 取消时 gui_abort 已经杀掉进程；软失败就把失败交给 App，不记 onboarded
-			builtin) policy_import; onboard_builtin || return 1 ;;
-			*) policy_import ;;   # 先跳过：映射里的节点照样导入（加账号时能选，启动时 cca 再问怎么联网）
+			builtin) onboard_builtin || return 1 ;;
+			*) ;;   # 先跳过：加账号时能选 Team 的配置带的节点、粘贴自定义代理，启动时 cca 再问怎么联网
 		esac
-	elif ! router_ready; then
-		policy_import   # 本机的客户端（内置代理）已经配好：映射里的节点照样导入
 	fi
 	if [ -n "$askadd" ]; then   # ③ 添加账号
 		onboard_title "添加账号"
@@ -7952,15 +7467,15 @@ cmd_onboard() {   # cca _onboard [--skip]：图形界面的配置向导（App �
 				"detail=填登录邮箱、选一个出口节点；第一次使用时会在它专属的浏览器窗口里登录。"; then
 				cmd_add || true
 			fi
-		else   # Team 给的、映射里的账号这次加进来了（开始时一个都没有）：问要不要再加一个自己的
+		else   # Team 给的账号这次加进来了（开始时一个都没有）：问要不要再加一个自己的
 			while IFS= read -r k; do [ -z "$k" ] || added="${added:+${added}、}${k%%(*}"; done <<< "$keys1"
-			if confirm "还要再添加一个账号吗？" n "q=onboard.add" "title=${ONB_TITLE}" "message=已按$([ -n "$team" ] && printf ' Team 的配置' || printf '维护者的映射')添加了 ${added}。" \
-				"detail=$([ -n "$team" ] && printf 'Team ' || printf '映射')里没有的账号在这里添加：填登录邮箱、选一个出口节点。"; then
+			if confirm "还要再添加一个账号吗？" n "q=onboard.add" "title=${ONB_TITLE}" "message=已按 Team 的配置添加了 ${added}。" \
+				"detail=Team 里没有的账号在这里添加：填登录邮箱、选一个出口节点。"; then
 				cmd_add || true
 			fi
 		fi
 	fi
-	# 映射里的账号这次加进来了、还没同步到路由器（刚配好路由器时还没有账号，配置路由器那一步不同步）：现在同步，要重载时当场问
+	# Team 给的账号这次加进来了、还没同步到路由器（刚配好路由器时还没有账号，配置路由器那一步不同步）：现在同步，要重载时当场问
 	if [ "$(py keys)" != "$keys0" ] && router_ready && [ "$(digest)" != "$(py get synced)" ]; then
 		router_sync_soon
 		case $? in 0|3) ;; *) fail_warn sync_failed "账号还没同步到路由器：修好后在节点分流页点「同步」（或者运行 cca router sync）" ;; esac
@@ -8002,9 +7517,8 @@ cmd_install() {
 	info "已安装：$bin/cca → $target"
 	tool_alias_ensure codex
 	tool_alias_ensure agy
-	if [ -n "${CCA_POLICY_REPO:-}" ]; then   # 一键安装时带上维护者的映射仓库：curl … | CCA_POLICY_REPO=仓库 bash
-		( policy_setup "$CCA_POLICY_REPO" ) || warn "映射仓库没配置好：稍后运行 cca policy setup ${CCA_POLICY_REPO}"
-	fi
+	# 3.6.0 以前一键安装时能带上维护者的映射仓库（curl … | CCA_POLICY_REPO=仓库 bash）：映射去掉了，改用 Team
+	[ -z "${CCA_POLICY_REPO:-}" ] || warn "维护者的映射 3.6.0 起去掉了（CCA_POLICY_REPO 不再起作用）：向 Team 的管理员要一个邀请链接，装好后运行 cca team join 加入"
 	if dev_mode; then info "开发模式：直接用 git 仓库里的这份脚本，不自动更新"
 	else info "自动更新已开启：每天检查一次，新版本在下次启动时安装（cca update off 可关闭）"; fi
 	info "账号表：${TABLE}；可选节点、纯净度阈值在 ${CFG}（nodes / min_trust）"
@@ -8013,21 +7527,21 @@ cmd_install() {
 		info "正在安装图形界面 cca App…"
 		if ( cmd_gui ); then   # 子 shell：cmd_gui 自己的 EXIT trap 不影响这里
 			say ""
-			okay "基础安装完成。接下来在打开的 cca App 里按引导完成配置（选网络出口、添加账号；有维护者共享给你的账号时也在这里连上）。"
+			okay "基础安装完成。接下来在打开的 cca App 里按引导完成配置（加入 Team、选网络出口、添加账号）。"
 			info "想在终端里配置就运行 cca install。"
 			return 0
 		fi
 		warn "图形界面没能装上或打开，改在终端里配置。"
 	fi
-	local onboard=""   # 服务器上直连不通（见 builtin_onboard）：ok 配置好了内置代理；skip 没配置好（等维护者确认之后再运行 cca install）
+	local onboard=""   # 服务器上直连不通（见 builtin_onboard）：ok 配置好了内置代理；skip 没配置好（有了节点以后再运行 cca install）
 	if server_builtin; then
 		if builtin_onboard "cca install"; then onboard=ok; else onboard=skip; fi
 	elif ! router_ready && confirm "现在配置路由器（OpenClash 或 ShellCrash；SSH 免密 + 按端口分流）？" y; then
 		cmd_router_setup || warn "路由器配置没完成，稍后可运行 cca router setup"
 	fi
-	if [ -z "$CLAUDE_BIN" ]; then   # 辅助安装：直连不通时可以经内置代理装（要有节点定义：映射的参考节点，或者在家时从路由器拷的）
+	if [ -z "$CLAUDE_BIN" ]; then   # 辅助安装：直连不通时可以经内置代理装（要有节点定义：Team 的配置带的、自己粘贴的，或者在家时从路由器拷的）
 		if [ "$onboard" = skip ]; then
-			:   # 还没有节点：等维护者确认之后再运行 cca install
+			:   # 还没有节点：builtin_onboard 说了之后怎么接着配置
 		elif [ "$onboard" = ok ]; then
 			if confirm "没找到 Claude Code（claude 命令）。现在经内置代理用官方安装脚本装上吗？" y; then
 				tool_install proxy || warn "Claude Code 没装上：稍后运行 cca install-cli 再装"
@@ -8048,7 +7562,7 @@ cmd_install() {
 }
 
 cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的两个名字（确认时输入的就是用的那个名字）
-	local word="${1:-restore}" title="一键还原" backup=1 dkey="" key bk out rc pid running="" wt="" t a mail_user
+	local word="${1:-restore}" title="一键还原" backup=1 key bk out rc pid running="" wt="" t a mail_user
 	[ $# -eq 0 ] || shift
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -8085,7 +7599,6 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	[ -z "$out" ] || die "还有开着的远程会话，先把它们结束再还原（cca remote list 看是哪些，cca remote end 编号 结束，或者 cca remote attach 接进去退出）"
 	# 删 ~/.cca 之前要先打包备份（下面答应了的）：没有 tar 就什么都别动（有的 Linux 最小安装没有它）
 	[ -z "$backup" ] || command -v tar >/dev/null 2>&1 || die "这台机器上没有 tar，没法先打包备份配置，什么都没改：装上 tar 再还原$(pkg_hint tar)；不要备份的话用 cca uninstall --no-backup"
-	[ ! -f "$POLICY_DIR/id_ed25519" ] || dkey=1
 	say "${C_B}${title}${C_0}：撤销 cca 做过的全部改动"
 	say "  · 每个账号（Claude、Codex 和 Antigravity）：把会话里新产生的共享内容并回 ~/.claude、~/.codex、~/.gemini，然后退出登录、删除它的登录凭证"
 	say "  · ${KEYSTORE}里 cca 存的 API key 全部删掉：第三方 API 账号的，和给官方账号记下备查的（删了找不回来，要留的先用 cca [codex] key 账号 --show 抄下来）"
@@ -8096,14 +7609,13 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	say "  · 路由器：移除钩子、cron、端口池（要让 OpenClash / ShellCrash 重载一次，约 20 秒，期间局域网新连接会失败）、/etc/cca 和 cca 的 SSH 公钥"
 	say "  · 内置代理（用过的话）：停掉它的内核，删掉配置和拷来的节点"
 	if ! on_linux; then udp_env; udp_present && say "  · 本机 UDP 走节点：删掉 root 的系统服务 ${UDP_LABEL}（要输管理员密码）"; fi
-	[ -z "$dkey" ] || say "  · 维护者共享用的 deploy key：本机这一把删掉（仓库上登记的那一把要请维护者撤掉）"
 	if [ -n "$backup" ]; then a="先打包备份配置（不含浏览器资料、登录凭证和私钥），再删除"; else a="${C_Y}不留备份（--no-backup：账号表和配置删了找不回来）${C_0}，删除"; fi
 	say "  · 本机：${a} ~/.local/bin 里的 cca、${CODEX_ALIAS}、${AGY_ALIAS}，${CCA_HOME} 和各账号的 App 启动器$(gui_ours "$GUI_APP" && printf '，还有图形界面 %s' "$GUI_APP")"
 	say "  · cca 放在别处的也清掉：解出来的辅助程序和缓存$(on_linux || printf '、界面 App 的缓存和设置')、shell 启动文件里 cca 加的那两行（~/.local/bin 里还有别的命令时留着）"
 	say "  · ~/.claude、~/.claude.json、~/.codex 和 ~/.gemini 保持现状（共享主目录本来就是你的数据${backup:+；安装前的备份在打包里}）"
 	[ -z "$wt" ] || say "  · ${C_Y}这些 Codex 账号建的 git 工作树（worktrees）会一起删掉：${wt}。还没提交的改动先处理好${C_0}"
 	[ "$(ask "确认请输入 ${word}: " '')" = "$word" ] || { say "已取消"; return 0; }
-	py unpark || warn "关掉共享时收起来的账号没能放回账号表：它们的登录凭证要自己删（cca policy on 打开共享加回来以后再还原）"
+	py unpark || warn "收起来的账号（Team 不再给的、以前关掉维护者的共享时收起来的）没能放回账号表：它们的登录凭证要自己删"
 	for t in claude codex agy; do
 		use_tool "$t"
 		while IFS= read -r key; do
@@ -8140,8 +7652,8 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	py presence-stop 2>/dev/null   # 设备统计的上报进程：先停掉（它告诉服务器这台机器停了；打包的时候也没人再往 ~/.cca 里写）
 	py cost-stop 2>/dev/null       # 正在统计折合金额的后台进程也停掉
 	bk=""; [ -z "$backup" ] || bk="$HOME/cca-backup-$(date +%Y%m%d-%H%M%S).tar.gz"   # --no-backup：不打包，直接删
-	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点、维护者的参考节点，
-	# 连同拉取映射时的临时文件）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
+	# 只给自己读：账号表里可能写着第三方 API 的 key，config.json 里有本机 Clash 的密钥。节点密钥（内置代理拷来的节点；3.6.0 以前维护者的
+	# 参考节点和拉取映射时的临时文件：升级以后第一条命令就删掉，policy_leftovers，还原是第一条命令时还在）、内置代理的配置和内核文件不打包（bsdtar 的 --exclude 不锚定开头，写具体的文件名，免得误伤别处叫 core、
 	# policy 的目录）；备份目录（backup/）是用户自己的配置文件，照样打包。登录凭证（Codex 的 auth.json、Linux 上
 	# Claude Code 的 .credentials.json、agy 的 antigravity-oauth-token）、密钥文件（secrets：上面按记账删过，没记上账的也不带）、
 	# 去掉了的自己的同步服务器留下的加入信息（hub/hub.json：加入链接是凭证；hub-hosted.json：部署到托管平台时还没用上的口令和盐；升级以后
@@ -8174,7 +7686,6 @@ cmd_restore() {   # cca restore | cca uninstall [--no-backup]：同一件事的�
 	# 从这往下不能再调 py：解出来的辅助程序这就删掉，~/.cca 里的这一份 cca 也没有了（再解不出来）
 	cache_leftovers
 	path_unhint
-	[ -z "$dkey" ] || info "本机的 deploy key 删掉了：请维护者把仓库上登记的这一把也撤掉"
 	info "已还原。原来的 claude、codex、agy 命令和 ~/.claude、~/.codex、~/.gemini 不受影响"
 }
 
@@ -8322,11 +7833,11 @@ EOF
 出门在外（连不上路由器时用 cca 内置的代理：自带的 mihomo 内核）
   cca local [status]         现在走哪条路；本机端口池各端口的监听状态和选中的节点
   cca local setup            配置内置代理：每个账号在本机开一个端口走它自己的节点（macOS 26 以上内核在界面 App 里
-                             运行，以下由 cca 在后台运行）。节点在家时从路由器拷一份；不在维护者映射里的账号，
+                             运行，以下由 cca 在后台运行）。节点在家时从路由器拷一份；Team 没给节点的账号，
                              用 cca node add 填一个。在外面第一次启动时也会问
   cca node add|ls|rm         加 / 看 / 删自定义节点（粘贴分享链接、socks5:// http:// 代理或 Clash 节点配置）：内置代理用，
                              配置了路由器的同步时也写进路由器的配置文件（要重启一次 OpenClash / ShellCrash，先问你）
-  cca node use 账号 [链接]   给这个账号换上一个自定义代理（加好节点、改走它、同步路由器；维护者固定了节点的不行）
+  cca node use 账号 [链接]   给这个账号换上一个自定义代理（加好节点、改走它、同步路由器；Team 固定了节点的不行）
   cca local udp [on [节点]]  这台 Mac 自己的 UDP（浏览器的 WebRTC、QUIC 这些）也经节点出去：内置代理只管账号的端口，
                              这些照旧直连。开着时一个 root 的系统服务只接 UDP（TCP 照旧直连），装的时候要输一次
                              管理员密码；不带参数看现在从哪出去，pick 换节点，off 关掉，uninstall 删掉系统服务。
@@ -8340,10 +7851,10 @@ EOF
 连不上路由器时（云服务器、不在家）改走 cca 内置的代理
   cca local [status]         现在走哪条路；本机端口池各端口的监听状态和选中的节点
   cca local setup            配置内置代理（mihomo 内核，由 cca 在后台运行，不用 root；节点在家时从路由器拷一份，
-                             连不到路由器的服务器上用维护者的参考节点）；不在映射里的账号用 cca node add 填一个。
+                             连不到路由器的服务器上用 Team 的配置带的）；Team 没给节点的账号用 cca node add 填一个。
                              在外面第一次启动时也会问
   cca node add|ls|rm         给内置代理加 / 看 / 删自定义节点（粘贴分享链接、socks5:// http:// 代理或 Clash 节点配置）
-  cca node use 账号 [链接]   给这个账号换上一个自定义代理（维护者固定了节点的不行）
+  cca node use 账号 [链接]   给这个账号换上一个自定义代理（Team 固定了节点的不行）
   cca local off              停掉内置代理的内核、删掉它的配置和拷来的节点
                              平时自动判断：连得上路由器走路由器，连不上走内置代理（只经 VPN、ZeroTier 这类
                              虚拟网卡连得到路由器的不算）；想固定一种，把 ${CFG} 的 route 改成 router 或 local
@@ -8361,29 +7872,15 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              经 SSH 装到自己的 Linux 服务器上、接上（一台服务器上可以装几个 Team）；没有服务器：cca team hosted Team
   cca team invite Team 名字 [--accounts all|工具:邮箱,…]
                              给一台设备发邀请。管设备、账号和节点：devices、grant、revoke、map、node、import（全部用法：cca team help）
-
-维护者共享的账号（维护者的账号 → 节点映射；默认关着，有维护者共享给你的账号时才打开）
-  cca policy on              打开共享：映射放在维护者的私有 GitHub 仓库里，给这台机器生成只读的 deploy key，把公钥交给
-                             维护者加到仓库上（关掉时留着 deploy key 的，维护者没撤销就直接拉到）。安装时带
-                             CCA_POLICY_REPO=仓库时也会做这一步。维护者正把各台机器迁到 Team：迁好的机器自己加入，以后不用这一节
-  cca policy setup [仓库]    同上，换一个映射仓库（不写就是关掉时记着的，再不然是 ${POLICY_REPO_DEFAULT:-维护者的仓库}）
-  cca policy off [--forget-key]
-                             关掉共享：映射里的账号移出账号表（登录留着，打开时加回来，不用重新登录），不再拉映射、
-                             不再上报设备统计。deploy key 默认留着，--forget-key 一起删掉。有共享账号正在用时不关
-  cca policy [pull]          看共享的状态 / 马上拉一次映射（平时每天自动拉，验签通过才用）。映射里的账号出口固定为
-                             指定的节点，账号表里改成别的会被改回；映射里有、这台机器上还没有的账号自动加进来
-                             （这台机器自己的账号不动；删掉的不再加回来，cca add 可以加回来）
-  cca policy request <账号>  生成一条给维护者运行的命令（把这个账号现在的节点锁进映射）并复制到剪贴板（Codex、Antigravity 账号：cca codex|agy policy request）。
-                             Team 给的账号不用：走哪个节点由那个 Team 的管理员定
   cca devices [账号…] [--json]
                              账号现在连着哪些设备：在用、开着但闲置（10 分钟没动静）、没在用、离线，上次什么时候用
-                             （Team 给的账号问那个 Team 的服务器，维护者共享的问维护者的；Codex 账号：cca codex devices）。
+                             （问它所在的 Team 的服务器；Codex 账号：cca codex devices）。
                              这些账号经 cca 用的时候（命令行会话${mac:+、cca app 打开的 App}），${host}也会报告给它走的那台服务器
 
 其它
   cca install                安装或修复（链接到 ~/.local/bin/cca，还有等于 cca codex 的 cxa、等于 cca agy 的 aga）
   cca install-cli            用官方安装脚本装 Claude Code（cca codex install-cli、cca agy install-cli 装 codex、agy 命令）：
-                             先直连，拿不到时问过再经内置代理的一个节点装（维护者的映射指定，没指定时现选一个）；
+                             先直连，拿不到时问过再经内置代理的一个节点装（Team 的配置指定，没指定时现选一个）；
                              用到没装的命令时，终端里也会先问要不要装
   cca update                 立即更新到最新版本；平时每天自动检查一次，新版本在下次启动时自动安装
   cca update <版本号>        手动装指定的版本，例如测试版 2.6.0-beta.1（测试版不会自动装，只能这样装）
@@ -8404,10 +7901,10 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              接着别的机器上的会话时网络断了会自己重新接上
   cca remote end [编号]      结束这台机器上的一个会话（等于关掉它的终端；先问）
   cca remote pair | join    两台机器配对：要被接入的那台 pair（显示配对码），另一台 join（输入）。之后 join 的那台能经
-                             服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）。每个 Team 的账号的会话走
-                             这个 Team 自己的服务器中转，维护者映射里的走维护者的，别的账号（自己的、第三方 API 的）走加入的
-                             第一个 Team 的（没加入 Team 时是维护者的）。配对记在哪台服务器上，经它看得到的就是走那台的会话：
-                             pair 默认在第一个 Team 的那台上配，别的写 --team 名字（维护者的那一台是 --maintainer）
+                             Team 的服务器接入 pair 的那台上的会话（两头之间加密，服务器看不到内容）。每个 Team 的账号的
+                             会话走这个 Team 自己的服务器中转，别的账号（自己的、第三方 API 的）走加入的第一个 Team 的。
+                             配对记在哪台服务器上，经它看得到的就是走那台的会话：pair 默认在第一个 Team 的那台上配，别的
+                             写 --team 名字。没加入 Team 的设备用不了
   cca remote pair --web      和手机配对：手机上不装 cca，在浏览器里打开它给的地址（iPhone 上添加到主屏幕）、输入配对码，
                              之后在手机上接入这台机器上的会话。要那台服务器开着网页端；每个 Team 的服务器各是各的一页
   cca remote peers           配对过的机器；allow 名字 control|view|none 改对方能做什么，unpair 名字 取消配对
@@ -8419,7 +7916,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
                              和它链到 ~/.claude 里共享的目录）、
                              leak_check（设成 false：启动前不测 ${leaks}）、
                              cost（设成 false：不统计按 API 标价折算的金额，App 里也不显示）、
-                             presence（设成 false：${host}不向同步服务器（维护者的、Team 的）报告、也不查设备统计、不同步）${mac:+、}
+                             presence（设成 false：${host}不向 Team 的同步服务器报告、也不查设备统计、不同步）${mac:+、}
 EOF
 	[ -z "$mac" ] || cat >&2 <<EOF
                              dock_tidy（设成 false：cca 打开的 Chrome、桌面 App、终端退出后，不去掉程序坞「最近使用的 App」里留下的图标）、
@@ -8450,12 +7947,9 @@ main() {
 			shift
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
 		_update-fetch) cmd_update_fetch ;;
-		_policy-fetch) cmd_policy_fetch ;;
+		_policy-fetch) ;;   # 3.6.0 去掉了维护者的映射：以前的版本在后台起的（起的时候还是旧版、跑到这里已经换成新版）什么都不做
 		_team-sync) CCA_SELF="$SELF" exec "$HELPER" team-sync ;;   # 后台：各个 Team 同步一次配置（team_hook 起的）
-		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
-		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
-		_policy-lock) shift; py policy-lock "$@" ;;   # 维护者把账号锁到节点（policy.sh lock 调用）
-		_team-handoff) shift; py team-handoff "$@" ;;   # 维护者把各台机器迁到 Team（policy.sh team 调用；stdin 是各台机器的 deploy key）
+		_policy-check|_fill-check|_policy-lock|_team-handoff) die "这条命令 3.6.0 起去掉了：维护者的映射（连同 policy.sh）改用 Team" ;;   # 以前 policy.sh 调的
 		_gui) shift; cmd_gui_api "$@" ;;   # 图形界面的只读接口（macos/PROTOCOL.md）
 		_gui-fetch) cmd_gui_fetch ;;
 		_core) shift; cmd_core "$@" ;;   # 界面 App 托管的内置代理（cca _core run，见"内置代理"一节）
@@ -8468,9 +7962,9 @@ main() {
 		_dock-wait) shift; cmd_dock_wait "$@" ;;   # 后台小 App 里：等 cca 打开的实例退出，再整理程序坞
 		gui) shift; cmd_gui "$@" ;;
 		clients) shift; cmd_clients "$@" ;;
-		cost) shift; cmd_cost "$@" ;;   # 统计折合金额（App 定时运行，PROTOCOL 3.5；不经过自动更新、映射拉取）
-		remote) shift; cmd_remote "$@" ;;   # 远程会话：开关、这台机器上可以接入的会话、接入（和工具无关；不经过自动更新、映射拉取）
-		team) shift; cmd_team "$@" ;;   # Team（和工具无关；不经过自动更新、映射拉取）
+		cost) shift; cmd_cost "$@" ;;   # 统计折合金额（App 定时运行，PROTOCOL 3.5；不经过自动更新、Team 的同步）
+		remote) shift; cmd_remote "$@" ;;   # 远程会话：开关、这台机器上可以接入的会话、接入（和工具无关；不经过自动更新、Team 的同步）
+		team) shift; cmd_team "$@" ;;   # Team（和工具无关；不经过自动更新、Team 的同步）
 		update) shift; cmd_update "$@" ;;
 		restore|uninstall) cmd_restore "$@" ;;   # 同一条命令的两个名字
 		*)
@@ -8482,7 +7976,7 @@ main() {
 			fi
 			update_hook "$@"
 			update_after   # 换了版本以后的第一条命令：下面两个马上在后台做，不等间隔
-			[ "${1:-}" = _onboard ] || policy_hook   # 配置向导开头自己拉一次映射（onboard_policy_quick）：不在后台另拉一次
+			[ ! -d "$CCA_HOME/policy" ] || policy_leftovers   # 3.6.0 去掉了维护者的映射：升级上来的设备上留下的，第一条命令时清掉
 			team_hook
 			gui_hook
 			[ ! -d "$CCA_HOME/hub" ] && [ ! -e "$CCA_HOME/hub-hosted.json" ] && [ ! -e "$CCA_HOME/hub-removed.json" ] || hub_leftovers
@@ -8492,7 +7986,7 @@ main() {
 			if [ "${1:-}" = codex ] || [ "${1:-}" = agy ]; then   # cca codex|agy …：后面的子命令都作用于 Codex / agy 的账号
 				use_tool "$1"
 				shift
-				[ -f "$TABLE" ] || [ "${1:-}" = install-cli ] || [ "${1:-}" = settings ] || py init   # 只装命令、查设置不算用起这个工具（不建账号表，映射里的账号不加进来）
+				[ -f "$TABLE" ] || [ "${1:-}" = install-cli ] || [ "${1:-}" = settings ] || py init   # 只装命令、查设置不算用起这个工具（不建账号表，Team 给的账号不加进来）
 			fi
 			dispatch "$@" ;;
 	esac
