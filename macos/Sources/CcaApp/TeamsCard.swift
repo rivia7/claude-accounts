@@ -21,7 +21,7 @@ struct TeamFilterMenu: View {
     }
 }
 
-/// 「Team」（PROTOCOL 4.14）：这台设备在的 Team（状态、给了它几个账号）、粘贴邀请链接加入、取配置、退出；管理员的 Team 展开是设备
+/// 「Team」（PROTOCOL 4.14）：这台设备在的 Team（状态、给了它几个账号）、粘贴邀请链接加入、同步配置、退出；管理员的 Team 展开是设备
 /// （发邀请、定它能用哪些账号、移除）和各个账号走哪个节点。状态、设备、账号都照 cca 给的（`config.teams`、`team devices --json`），
 /// 不在界面里重算；加入是提问会话，退出、移除由 cca 先问同意（对话框里的话是 cca 给的）
 struct TeamsCard: View {
@@ -43,8 +43,8 @@ struct TeamsCard: View {
                         SectionAction("粘贴邀请链接…", systemImage: "link", prominent: model.teams.isEmpty) { model.joinTeam() }
                             .help("管理员给这台设备发的邀请链接，贴到这里加入（一个邀请只能加入一台设备）")
                         if !model.teams.isEmpty {
-                            SectionAction("取配置", systemImage: "arrow.clockwise") { model.syncTeams() }
-                                .help("各个 Team 现在取一次配置（平时每小时自动取）：有新的就马上照它改账号表")
+                            SectionAction("同步配置", systemImage: "arrow.clockwise") { model.syncTeams() }
+                                .help("各个 Team 马上同步一次配置（平时每小时自动同步）：有新的就马上照它改账号表")
                         }
                         SectionAction("新建 Team…", systemImage: "plus") { model.newTeam() }
                             .help("在这台 Mac 上建一个 Team：它是管理员（根密钥只在它上面）。建好以后部署它的同步服务器，再给别的设备发邀请")
@@ -180,7 +180,7 @@ private struct TeamAdminSection: View {
                             TeamAccountLine(team: team, account: a, nodes: Self.nodes(doc, local: model.state?.config?.nodes ?? [], current: a.node),
                                             locked: doc.aliasLock == true)
                         }
-                        Text("改了以后各台设备下次取配置时跟着换（每小时一次，或者在那台设备上点「取配置」）。加账号、导入现成的映射在终端里：cca team map、cca team import。")
+                        Text("改了以后，各台设备下次同步配置时跟着换（每小时自动同步一次，或者在那台设备上点「同步配置」）。加账号、导入现成的映射在终端里：cca team map、cca team import。")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -230,7 +230,7 @@ private struct TeamDeviceLine: View {
                     .buttonStyle(.glass)
                     .controlSize(.small)
                     .fixedSize()
-                    .help("这台设备能用这个 Team 里的哪些账号：改了马上发布，它下次取配置时生效")
+                    .help("这台设备能用这个 Team 里的哪些账号：改了马上发布，它下次同步配置时生效")
                     RowAction("改名…", systemImage: "pencil") { model.startTeamRename(team, device) }
                         .disabled(renaming)
                         .help("给这台设备换个名字：加入了的，它在服务器上的名字跟着改")
@@ -266,7 +266,7 @@ private struct TeamDeviceLine: View {
             }
             .disabled(model.teamBusy || model.flow != nil)
             Text(device.state == .joined
-                 ? "它在服务器上的名字跟着改，下次取配置时它那边也换成新的名字。远程会话里已经配好的对照旧叫配对时的名字（再配一次才换）。"
+                 ? "它在服务器上的名字跟着改，下次同步配置时它那边也换成新的名字。远程会话里已经配好的对照旧叫配对时的名字（再配一次才换）。"
                  : "只改这边记着的名字（它还没加入：加入时报的是它自己的名字）。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -368,8 +368,8 @@ private struct TeamAccountLine: View {
                     SectionAction("取消", systemImage: "xmark") { model.teamAlias = nil }
                 }
                 .disabled(model.teamBusy || model.flow != nil)
-                Text(locked ? "别名锁定着：各台设备下次取配置时都换成这个；这台 Mac 的账号表不动。"
-                            : "各台设备上照 Team 给的名字用着的，下次取配置时跟着改；自己改过名字的不动，这台 Mac 的账号表也不动。")
+                Text(locked ? "别名锁定着：各台设备下次同步配置时都换成这个；这台 Mac 的账号表不动。"
+                            : "各台设备上照 Team 给的名字用着的，下次同步配置时跟着改；自己改过名字的不动，这台 Mac 的账号表也不动。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

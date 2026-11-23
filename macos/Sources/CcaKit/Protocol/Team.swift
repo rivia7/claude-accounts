@@ -21,19 +21,19 @@ struct TeamState: KnownValues {
     init(rawValue: String) { self.rawValue = rawValue }
     /// 管理员刚建的，还没接上同步服务器
     static let local = TeamState(rawValue: "local")
-    /// 还没取过配置
+    /// 还没同步过配置
     static let pending = TeamState(rawValue: "pending")
-    /// 最近一次取配置成了
+    /// 最近一次同步配置成了
     static let ok = TeamState(rawValue: "ok")
     /// 被管理员移除了
     static let removed = TeamState(rawValue: "removed")
     /// 服务器的记录没了，等管理员把这台设备登记回去
     static let lost = TeamState(rawValue: "lost")
-    /// 最近一次没取成（`error` 是给人看的原因）
+    /// 最近一次没同步成（`error` 是给人看的原因）
     static let error = TeamState(rawValue: "error")
     static let allKnown: [TeamState] = [.local, .pending, .ok, .removed, .lost, .error]
 
-    /// 要用户知道的：被移除了、记录没了、没取成，和不认识的值
+    /// 要用户知道的：被移除了、记录没了、没同步成，和不认识的值
     var failing: Bool { self == .removed || self == .lost || self == .error || !isKnown }
 }
 
@@ -49,7 +49,7 @@ struct TeamEntry: Decodable, Sendable, Equatable, Identifiable {
     var device: String?
     var state: TeamState
     var error: String?
-    /// 手里那一份配置是第几版（还没取到是 0）
+    /// 手里那一份配置是第几版（还没同步下来是 0）
     var seq: Int
     /// 这一份配置给了这台设备几个账号
     var accounts: Int
@@ -118,12 +118,13 @@ struct TeamDevicesDoc: CcaDocument, Equatable {
         devices = c.lossyArray(TeamDevice.self, .devices) ?? []
     }
 
-    /// 配置里的账号，排好的：先照工具（Claude、Codex、Antigravity，别的在后），再照邮箱
+    /// 配置里的账号，排好的：先照工具（Claude、Codex、Antigravity，别的在后），再照别名（数字按大小：team-2 在 team-10 前面；
+    /// 不分大小写、不随系统的语言变），没有别名的在后，最后照邮箱
     var accountList: [TeamAccount] {
         accounts.flatMap { tool, m in
             m.map { TeamAccount(tool: ToolID(rawValue: tool), email: $0.key, node: $0.value, alias: toolAliases?[tool]?[$0.key] ?? aliases[$0.key]) }
         }
-            .sorted { ($0.tool, $0.email) < ($1.tool, $1.email) }
+            .sorted(by: TeamAccount.listOrder)
     }
 }
 
@@ -137,6 +138,21 @@ struct TeamAccount: Equatable, Sendable, Identifiable {
     /// `cca team grant`、`cca team invite --accounts` 里的写法：工具:邮箱
     var spec: String { "\(tool.rawValue):\(email)" }
     var id: String { spec }
+
+    /// `TeamDevicesDoc.accountList` 的先后：工具、别名（`.numeric`，不带 locale：结果不随系统的语言变）、邮箱
+    static func listOrder(_ a: TeamAccount, _ b: TeamAccount) -> Bool {
+        if a.tool != b.tool { return a.tool < b.tool }
+        let named = { (s: String?) in s.flatMap { $0.isEmpty ? nil : $0 } }
+        switch (named(a.alias), named(b.alias)) {
+        case let (x?, y?):
+            let r = x.compare(y, options: [.numeric, .caseInsensitive])
+            if r != .orderedSame { return r == .orderedAscending }
+        case (.some, nil): return true
+        case (nil, .some): return false
+        case (nil, nil): break
+        }
+        return a.email < b.email
+    }
 }
 
 /// 一台设备在管理员这边的状态（`devices[].state`）。不认识的值照原样显示不了，当 `invited` 以外的“别的”

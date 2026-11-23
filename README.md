@@ -86,7 +86,7 @@ Linux 上能用的是命令行：
   2. cca 每 5 秒自动拉一次维护者的映射，维护者加好后几秒内就接着往下走（回车马上再拉；输入 s 先跳过，之后再运行 `cca install` 接着来）。
   3. 映射验过签名后，导入维护者指定的安装节点和映射里这台机器的账号要用的节点（只导入维护者参考节点里有的），配置好内置代理，再经它装上 Claude Code（不再先直连试），映射里的账号自动加进来，接着 `cca login 账号` 登录就能用。
   - **别的先问一句有没有 Team 的邀请链接**（默认没有；已经有可选节点时不问）：
-    - **有**：贴管理员给的邀请链接加入（留空是先不加入，接着粘贴自己的代理），Team 的配置带的节点自动导入，配置好内置代理，管理员给这台机器的账号自动加进来。配置还没取到、里面没有这台机器能用的节点时，取到以后再运行 `cca install` 接着配置（`cca team sync` 马上取）。
+    - **有**：贴管理员给的邀请链接加入（留空是先不加入，接着粘贴自己的代理），Team 的配置带的节点自动导入，配置好内置代理，管理员给这台机器的账号自动加进来。配置还没同步下来、里面没有这台机器能用的节点时，同步下来以后再运行 `cca install` 接着配置（`cca team sync` 马上同步）。
     - **没有**：粘贴一条你自己的代理（`socks5://…`、`http://…` 或分享链接）当出口，cca 先用内核校验，存成这台机器的可选节点，配置好内置代理（之后 `cca node add` 还能再加）。
   - 还没有可选节点时 `cca add` 也走这一套；能直连的服务器照旧问要不要配置路由器。要用路由器的，之后运行 `cca router setup`。
 - **登录**：服务器上没有账号专属的浏览器。`cca login 工作` 给出一行在 Mac 上运行的命令，登录页在 Mac 上用这个账号专属的 Chrome 打开，再把拿到的验证码贴回服务器（见「常见问题」）。Mac 上还没有这个账号的话，会问要不要用同一个节点加上它。
@@ -285,14 +285,14 @@ cca 先用内置代理的内核校验一下（不联网），存成自定义节�
 
 一个 Team 是一组设备加一份配置：哪些账号、各走哪个节点、节点的定义。建 Team 的那台设备是它的管理员：定好每台设备能用哪些账号，给每台设备发一个邀请。设备加入以后，管理员给它的账号自动加进账号表、出口照配置固定；各台设备的设备统计（账号页的「设备」一节）、记下的 API key、折合金额经这个 Team 的同步服务器合在一起（也能按设备看），这个 Team 的账号的远程会话也经它中转。服务器由管理员自己部署，上面只有 Team 的根公钥（公开的）和密文：没有邮箱、登录身份、key、金额，也看不到配置的内容。自己的几台设备之间同步，也是自己建一个 Team；维护者共享的账号也可以经 Team 给（维护者在映射里给这台设备发了邀请的话，拉到映射以后它自己加入）。
 
-- **加入**（有人给了你邀请链接）：App 的「共享与同步」里点「粘贴邀请链接…」（配置向导的第 1 步也是它），或者在终端里运行 `cca team join`（链接不写在命令行上：会问你，输入不显示）。一个邀请只能加入一台设备，默认 7 天后过期。之后每小时自动取一次配置（App 的「取配置」、`cca team sync` 马上取）；`cca team` 看这台设备在哪些 Team 里。退出：App「更多」里的「退出这个 Team…」，或者 `cca team leave`（服务器上移除这台设备，它给的账号从账号表里收起来）。
+- **加入**（有人给了你邀请链接）：App 的「共享与同步」里点「粘贴邀请链接…」（配置向导的第 1 步也是它），或者在终端里运行 `cca team join`（链接不写在命令行上：会问你，输入不显示）。一个邀请只能加入一台设备，默认 7 天后过期。之后每小时自动同步一次配置，cca 更新到新版本以后也马上同步一次（App 的「同步配置」、`cca team sync` 随时同步）；`cca team` 看这台设备在哪些 Team 里。退出：App「更多」里的「退出这个 Team…」，或者 `cca team leave`（服务器上移除这台设备，它给的账号从账号表里收起来）。
 - **自己建一个**：
   1. App 的「新建 Team…」，或者 `cca team new 名字`。这台设备就是管理员：Team 的根密钥只在它上面（卸载 cca 时跟着删掉，备份里也不带）。
   2. 部署它的同步服务器（一台小的 Linux 云服务器就行）：App 里这个 Team 的「部署到我的服务器…」，填服务器地址（SSH 用户、端口默认 root、22），或者在终端里运行 `cca team deploy Team root@服务器`。它经 SSH 装好（服务器上有 Docker（带 compose 插件）就用 Docker，没有、起不来就用 systemd 和系统的 python3），装好了自动接上。SSH 用密钥、密码登录都行（App 里问的密码只用这一次，不保存；终端里是 ssh 自己问），用户是 root 或者能免密码 sudo；云服务商的安全组里放行它最后说的那几个端口（服务的端口默认从 18445 起，还有远程会话的中转、手机的网页端和 80）。再运行一次是更新，写另一台服务器就是搬过去；一台服务器上能装好几个 Team。不方便从电脑上部署时，在服务器上运行发布页上的 `cca-hub-install.sh`：`sudo sh cca-hub-install.sh --team-root '根公钥'`（`cca team new` 给的那一行），它最后打出接上它的那一行 `cca team attach …`，回到管理员的设备上运行。
   3. 没有服务器：`cca team hosted Team railway`（海外，要 Railway 的账号和它的命令行工具）/ `cca team hosted Team sealos`（国内，要实名，在它的网页上填表单），只在终端里。cca 生成部署文件，打出要做的几步；部署好以后运行 `cca team attach Team https://平台给的地址`。平台按用量收费，界面以平台现在的为准；托管平台上的不给远程会话做中转，也没有手机的网页端。更新：再运行一次 `cca team hosted`，照着把新版的程序换上。
   4. 把账号放进去：`cca team import Team --mine`（这台设备上自己的官方账号，连同现在走的节点），或者 `cca team import Team policy.json [nodes.json]`（现成的映射和参考节点）；`cca team map Team claude 邮箱 节点` 改一个账号走的节点（不在 Team 里的邮箱就是加进来）。节点的定义：`cca team node Team` 列出来（不显示密钥），`cca team node Team add` 粘贴一条代理链接或一段 Clash 节点配置加一个，`cca team node Team copy 节点 新名字 --port 端口` 照一个节点复制（同一台服务器上按端口分开的入站），`cca team node Team rm 节点` 去掉；`cca team node Team test 节点…` 起一个临时内核实测它们的出口（账号要用的服务和服务器自己看到的 IP、地区，几个节点在服务那边是不是同一个 IP），不碰正在用的代理。没有账号走的节点不发给任何设备。
   5. 给每台设备发邀请：App 里这个 Team 的「设备和账号」→「邀请一台设备」→「复制邀请链接」（链接放进剪贴板，60 秒后清掉），或者 `cca team invite Team 设备名 [--accounts all|claude:邮箱,…]`。链接就是那台设备的密钥：当密码传，别贴到群里。在那台设备上照上面「加入」：它在 Team 里就叫这里起的名字。
-- **管理**（管理员的设备上）：App 的「设备和账号」里看各台设备、改它能用哪些账号、移除它、改账号走的节点；终端里 `cca team devices Team`、`cca team grant Team 设备 all|none|+claude:邮箱|-claude:邮箱`、`cca team revoke Team 设备`（移除一台、撤回还没用掉的邀请）、`cca team rename Team 设备 新名字`（给一台设备改名字）、`cca team name Team 新名字`（改 Team 的名字，各台设备下次取配置时跟着改）、`cca team alias Team 工具:邮箱 新别名`（改账号的别名：没起过的各工具各自编成 team-1、team-2……，同一个邮箱在两个工具里各有各的；各台设备上照 Team 给的用着的跟着改，自己改过的不动）、`cca team alias Team --lock`（锁定别名：各台设备上都照 Team 给的用、自己改不了；`--unlock` 解开）、`cca team publish Team`（和服务器对一遍、发布配置）。管理员退出（App「更多」里的「删掉这个 Team…」、`cca team leave`）以后这台设备上就没有根密钥了：这个 Team 再没有谁能邀请、移除设备、改配置，别的设备照旧用着手里的配置，服务器不会自己卸掉。
+- **管理**（管理员的设备上）：App 的「设备和账号」里看各台设备、改它能用哪些账号、移除它、改账号走的节点；终端里 `cca team devices Team`、`cca team grant Team 设备 all|none|+claude:邮箱|-claude:邮箱`、`cca team revoke Team 设备`（移除一台、撤回还没用掉的邀请）、`cca team rename Team 设备 新名字`（给一台设备改名字）、`cca team name Team 新名字`（改 Team 的名字，各台设备下次同步配置时跟着改）、`cca team alias Team 工具:邮箱 新别名`（改账号的别名：没起过的各工具各自编成 team-1、team-2……，同一个邮箱在两个工具里各有各的；各台设备上照 Team 给的用着的跟着改，自己改过的不动）、`cca team alias Team --lock`（锁定别名：各台设备上都照 Team 给的用、自己改不了；`--unlock` 解开）、`cca team publish Team`（和服务器对一遍、发布配置）。管理员退出（App「更多」里的「删掉这个 Team…」、`cca team leave`）以后这台设备上就没有根密钥了：这个 Team 再没有谁能邀请、移除设备、改配置，别的设备照旧用着手里的配置，服务器不会自己卸掉。
 - **以前用「自己的同步服务器」（`cca hub`）的**：3.5.3 去掉了它。升级以后 cca 自己删掉这台设备上留下的加入信息和经它同步来的数据；照上面在一台设备上建一个 Team、`cca team import Team --mine`、给别的设备发邀请。服务器上以前装的那一份这样卸掉：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-hub`（托管平台上的在平台上删掉）。
 - 卸载一个 Team 的服务器：`cca team deploy --script | ssh root@服务器 sh -s -- --uninstall --dir /opt/cca-team-<Team 编号的前 8 位>`（数据一起删掉）。服务器上装了什么、请求的格式见 [server/README.md](server/README.md)「Team 的同步服务器」。
 

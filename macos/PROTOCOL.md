@@ -946,7 +946,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 | `policy off` | 「共享与同步」页的开关（关掉） | 无交互命令 + 同意重跑（`consent.policy_off`，4.12） |
 | `[codex] devices KEY --json` | 账号页的「设备」（看得见时每分钟一次、「刷新」） | 无交互命令（3.4） |
 | `team new`、`team join`、`team deploy <Team>` | 「共享与同步」页 Team 那一块的「新建 Team…」「粘贴邀请链接…」，管理员的「部署到我的服务器…」（还没接上服务器时）、「更多」里的「更新服务器、搬到别的服务器…」（要 `hello.team`） | 提问会话（`team.new`；`team.join`；`hub.deploy`、`hub.password`、`hub.pubkey`，4.14）；做完 `result` 的 `team_created` / `team_joined` / `team_deployed` |
-| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave` | 同一块的「取配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
+| `team sync`、`team devices <Team> --json`、`team invite`、`team grant`、`team rename`、`team map`、`team alias`（含 `--lock` / `--unlock`）、`team revoke`、`team leave` | 同一块的「同步配置」；管理员展开的设备、账号（「复制邀请链接」、每台设备能用哪些账号、「改名…」、各个账号走哪个节点、「改别名…」、「锁定别名」、「移除…」）；「更多」里的「退出这个 Team…」「删掉这个 Team…」 | 无交互命令（`revoke`、`leave` 先同意：`consent.team_revoke`、`consent.team_leave` / `consent.team_delete`；`invite` 的 stdout 只经内存里的管道读，4.14） |
 | `[codex] edit` | 工具栏「＋」、账号表校验不过的提示 | 提问会话（表单）；表单改不了时走终端 |
 | `router setup`、`local setup` | 工具栏「＋」、分流页、失败页的补救按钮、`terminal` 事件 | 提问会话（要 `hello.forms`；旧版 cca 走终端） |
 | `[codex] usage`、`check`、`app`、`web`、`billing`、`limit-resets`、`codex reset`、`router sync`、`update`、`clients`、`gui update` | 各自的按钮 | 无交互命令 + 同意重跑 |
@@ -1027,7 +1027,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   只管显示，不影响账号表、启动器和排序），在「共享与同步」页列出各个 Team。
 
 - **只读**：`cca team ls --json` → `{"version": 1, "kind": "team_list", "teams": [{id, name, role: "admin" | "member", url, host, device,
-  state: "local"（管理员还没接上服务器）| "pending"（还没取过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
+  state: "local"（管理员还没接上服务器）| "pending"（还没同步过配置）| "ok" | "removed"（被管理员移除了）| "lost"（服务器的记录没了，等管理员登记回去）| "error",
   error, seq, accounts, joined_epoch}]}`，只看本机记着的、不联网。管理员的 `cca team devices <Team> --json` → `{"version": 1, "kind": "team_devices",
   "team", "name", "accounts": {工具: {邮箱: 节点}}, "aliases": {邮箱: 别名}, "tool_aliases": {工具: {邮箱: 别名}}, "alias_lock": 别名锁定着没有,
   "nodes": [配置里带着定义的节点的名字…],
@@ -1037,16 +1037,16 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   别名按工具记（`tool_aliases`，3.5.3-beta.6 起：各工具各编各的 `team-N`，同一个邮箱在 Claude、Codex 里可以叫得不一样），有它时照它；
   `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。`alias_lock`（3.5.3-beta.7 起；没有这一项时 App 不给锁定的开关）
   见下面「锁定别名」。设备只有一个名字：`label`（管理员起的，界面上只用它）；`name` 是它在服务器上的名字，3.5.3-beta.7 起和服务器对一遍时照
-  `label` 改成一样的（以前的设备加入时报的是主机名），App 不显示。`seq`、`have` 只用来比新旧：App 只说「配置是最新的」「还没取到最新的配置」，不说第几版。
+  `label` 改成一样的（以前的设备加入时报的是主机名），App 不显示。`seq`、`have` 只用来比新旧：App 只说「配置是最新的」「还没同步到最新的配置」，不说第几版。
 - **新建**（`cca team new [名字]`）：App 里不写名字，提问会话里问（`team.new`）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
   `state` 是 `local`：还没接上服务器）。**部署**（`cca team deploy <Team> [用户@主机 …]`）：经 SSH 把这个 Team 的同步服务器装到自己的
   服务器上、接上；App 里不写服务器，在提问会话里问（`hub.deploy`、`hub.password`、`hub.pubkey`，登录不上时的原因码是 `hub_ssh`，4.6）；
   成了 `result` 的 `team_deployed`（`message` 里说手机的网页端开没开、证书拿到没有），地址是内网的另有 `fail` 的 `team_lan`、换了服务器
   原来那台上没收尾成的有 `team_forward`（做完了、带着提醒）。一台服务器上每个 Team 一个服务（`cca-team-<编号的前 8 位>`，带远程会话的中转、
   手机的网页端和给网页端要证书的证书助手），再运行是更新。没有服务器的：`cca team hosted <Team>`（终端里：生成部署到托管平台的文件和步骤）。
-- **取配置**（`cca team sync`）：各个 Team 取一次，取到新的马上照它改账号表、同步路由器。跑完为止。
+- **同步配置**（`cca team sync`）：各个 Team 同步一次，有新的一版马上照它改账号表、同步路由器。跑完为止。
 - **加入**（`cca team join`）：提问会话（`team.join`：一个密文输入框，贴邀请链接）。邀请是凭证、只能用一次，只经提问会话的管道交给 cca。
-  成了 `result` 的 `team_joined`；加入了、配置还没取到时前面有 `fail` 的 `team_sync`（退出码照样是 0）。这台设备在 Team 里的名字用管理员发邀请时
+  成了 `result` 的 `team_joined`；加入了、配置还没同步下来时前面有 `fail` 的 `team_sync`（退出码照样是 0）。这台设备在 Team 里的名字用管理员发邀请时
   给它起的（邀请里带着；旧版本发的邀请里没有：用主机名，管理员那边对一遍时改成它起的）。
 - **退出**（`cca team leave [Team]`）：要同意（成员是 `team_leave`、管理员是 `team_delete`，范围都是 Team 的编号，默认否），成了 `result` 的 `team_left`。
 - **移除设备**（`cca team revoke <Team> <设备>`）：要同意（`team_revoke`，范围是设备的编号，默认否），成了 `result` 的 `team_revoked`。
@@ -1058,7 +1058,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   （`cca team map <Team> <工具> <邮箱> <节点>`）：改完发布，管理员自己这台的账号表马上照它对一遍。跑完为止。
 - **改设备的名字**（`cca team rename <Team> <设备编号> <新名字>`，3.5.3-beta.5 起；名字 1～64 个字符、不能有控制字符，还在这个 Team 里的
   别的设备已经叫它时是 `team_name`）：`team devices --json` 里它的 `label` 换成新名字；加入了的设备在服务器上的名字（`name`）也跟着改
-  （被别的设备用了时服务器在后面加 `-2`：`label` 也记成它），那台设备下次取配置时它的 `config.teams[].device` 跟着变。还没加入的加入以后照它改，
+  （被别的设备用了时服务器在后面加 `-2`：`label` 也记成它），那台设备下次同步配置时它的 `config.teams[].device` 跟着变。还没加入的加入以后照它改，
   已经不在的只改 `label`。
   没有交互，不发布配置（配置里没有设备的名字）。
 - **改别名**（`cca team alias <Team> <工具:邮箱> <新别名>`，3.5.3-beta.5 起；3.5.3-beta.6 起别名按工具记，写 `工具:邮箱` 只改这个工具里的，

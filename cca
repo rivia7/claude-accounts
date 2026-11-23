@@ -5820,6 +5820,19 @@ update_hook() {   # 启动时调用，参数是这次命令的参数
 	return 0
 }
 
+update_after() {   # 启动时（update_hook 之后、policy_hook / team_hook 之前）：换了版本以后的第一条命令，拉映射、各个 Team 同步配置这次不等间隔
+	# （不然最长要等一天、一个小时）——用着映射、映射里有给它的邀请的机器马上自己加入 Team，在 Team 里的马上同步一次（都在后台）。
+	# 自动更新、cca update、一键安装再装一次都留着上一个版本（update/cca.prev.version），全新安装的没有：不算换了版本。
+	# update/ran 记着上一次运行的版本；开发模式不自动更新，也就没有「更新后」
+	local ran=""
+	dev_mode && return 0
+	[ ! -f "$UPD/ran" ] || read -r ran < "$UPD/ran"
+	[ "$ran" != "$VERSION" ] || return 0
+	mkdir -p "$UPD" && printf '%s\n' "$VERSION" > "$UPD/ran" || return 0
+	[ -n "$ran" ] || [ -f "$UPD/cca.prev.version" ] || return 0
+	rm -f "$POLICY_DIR/checked" "$CCA_HOME/teams/checked"
+}
+
 cmd_update_fetch() {   # 后台任务：有新版本就下载校验好，下次启动时换上
 	local v
 	mkdir -p "$UPD" || return 1
@@ -6565,12 +6578,12 @@ team_adopt() {   # 维护者把各台机器迁到 Team 时（./policy.sh team）
 	out=$(py team-adopt 2>/dev/null) || return 0
 	[ -n "$out" ] || return 0
 	IFS=$'\t' read -r name host device n <<< "$out"
-	if [ "$n" = - ]; then okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}；配置还没取到（cca team sync）"
+	if [ "$n" = - ]; then okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}；配置还没同步下来（cca team sync）"
 	else okay "照维护者的映射加入了「${name}」（${host}）：这台设备叫 ${device}，管理员给了它 ${n} 个账号"; fi
 	team_settle
 }
 
-team_hook() {   # 启动时：这台设备在 Team 里、距上次取配置超过一个小时，就在后台取一次（只换本机存的那一份：账号表在下一条命令读它时照新的改）
+team_hook() {   # 启动时：这台设备在 Team 里、距上次同步配置超过一个小时，就在后台同步一次（只换本机存的那一份：账号表在下一条命令读它时照新的改）
 	[ -f "$CCA_HOME/teams/index.json" ] || return 0
 	[ -z "$(find "$CCA_HOME/teams/checked" -mmin -60 2>/dev/null)" ] || return 0
 	touch "$CCA_HOME/teams/checked"
@@ -6635,10 +6648,10 @@ cmd_devices() {   # cca [codex] devices [账号…] [--json]：账号连着哪�
 # ---------------------------------------------------------------------------
 # Team（cca team；docs/dev/team.md）：一组设备加一份配置（哪些账号、各走哪个节点、节点的定义），配置由管理员的设备维护、存在这个 Team 的
 # 同步服务器上（server/cca-presence.py --mode team）。这里只管问和说，事情在辅助程序的 team-*（cli/src/cmd/team.rs）。
-# 这一阶段配置只是取到本机（~/.cca/teams/），账号表还不跟着变。
+# 配置同步到本机（~/.cca/teams/）以后，账号表照它改（team_settle）。
 TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪些 Team 里
       cca team join [--stdin] [--name 名字]        拿管理员给的邀请链接加入（链接不写在命令行上）
-      cca team sync [Team]                         取一次配置
+      cca team sync [Team]                         马上同步一次配置（平时每小时自动同步）
       cca team leave [Team]                        退出
     管理员：
       cca team new 名字 [--device 这台设备的名字]   建一个 Team（接着部署它的同步服务器）
@@ -6653,7 +6666,7 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team revoke Team 设备                    移除一台设备、撤回邀请
       cca team grant Team 设备 all|none|+工具:邮箱|-工具:邮箱 …   改一台设备能用哪些账号
       cca team rename Team 设备 新名字             给一台设备改名字（它在服务器上的名字跟着改）
-      cca team name Team 新名字                    改这个 Team 的名字（各台设备下次取配置时跟着改）
+      cca team name Team 新名字                    改这个 Team 的名字（各台设备下次同步配置时跟着改）
       cca team import Team policy.json [nodes.json]   导入现成的映射和参考节点
       cca team import Team --mine                  把这台设备上自己的官方账号（连同现在的节点）加进这个 Team
       cca team map Team 工具 邮箱 节点|-            定一个账号走哪个节点（- 是去掉）
@@ -6716,13 +6729,13 @@ cmd_team() {
 			out=$(py team-name "$@") || team_fail "$out" "没改成"
 			{ local nm_old nm_new nm_stored; IFS= read -r nm_old; IFS= read -r nm_new; IFS= read -r nm_stored; } <<< "$out"
 			okay "改好了：「${nm_old}」现在叫「${nm_new}」；$(team_stored "$nm_stored")"
-			say "  各台设备下次取配置时跟着改；服务器上手机网页端的标题下次部署时换（cca team deploy ${nm_new} …）" ;;
+			say "  各台设备下次同步配置时跟着改；服务器上手机网页端的标题下次部署时换（cca team deploy ${nm_new} …）" ;;
 		rename)
 			[ $# -eq 3 ] || die "用法: cca team rename Team 设备 新名字"
 			out=$(py team-rename "$@") || team_fail "$out" "没改成"
 			{ local rn_old rn_new rn_why; IFS= read -r rn_old; IFS= read -r rn_new; IFS= read -r rn_why; } <<< "$out"
 			if [ -z "$rn_why" ]; then
-				okay "改好了：「${rn_old}」现在叫「${rn_new}」（它下次取配置时跟着改）"
+				okay "改好了：「${rn_old}」现在叫「${rn_new}」（它下次同步配置时跟着改）"
 			else
 				okay "改好了：「${rn_old}」现在叫「${rn_new}」。${rn_why}"
 			fi ;;
@@ -6745,7 +6758,7 @@ cmd_team() {
 			{ local al_old al_stored al_was=""; IFS= read -r al_old; IFS= read -r al_stored; } <<< "$out"
 			[ -z "$al_old" ] || al_was="（原来是「${al_old}」）"
 			okay "改好了：${2} 在这个 Team 里叫「${3}」${al_was}；$(team_stored "$al_stored")"
-			say "  各台设备上照 Team 给的名字用着的，下次取配置时跟着改；自己改过名字的不动"
+			say "  各台设备上照 Team 给的名字用着的，下次同步配置时跟着改；自己改过名字的不动"
 			team_settle ;;
 		publish)
 			out=$(py team-publish "$@") || team_fail "$out" "没发布成"
@@ -6758,7 +6771,7 @@ cmd_team() {
 	esac
 }
 
-team_settle() {   # Team 的配置变了以后（加入、取到新的一版、退出、管理员发布）：账号表下一条命令就照它改，这里马上做完——没配置过路由器的
+team_settle() {   # Team 的配置变了以后（加入、同步到新的一版、退出、管理员发布）：账号表下一条命令就照它改，这里马上做完——没配置过路由器的
                   # 把配置带的节点导入可选节点，对一遍账号表（加了、收起了哪些账号辅助程序会说），同步到路由器，改启动器
 	local added n list=""
 	load_router
@@ -6781,7 +6794,7 @@ team_alias_lock() {   # cca team alias Team --lock|--unlock：锁定（解开）
 	{ IFS= read -r name; IFS= read -r stored; } <<< "$out"
 	if [ "$on" = on ]; then
 		okay "已锁定「${name}」里账号的别名；$(team_stored "$stored")"
-		say "  各台设备下次取配置时换成 Team 给的别名（自己改过的也换回来），之后在设备上改不了；这台设备的账号表不动"
+		say "  各台设备下次同步配置时换成 Team 给的别名（自己改过的也换回来），之后在设备上改不了；这台设备的账号表不动"
 	else
 		okay "已解开「${name}」里账号的别名；$(team_stored "$stored")"
 		say "  各台设备上又能自己改别名了（现在用着的不变）"
@@ -6978,11 +6991,11 @@ team_stored() {   # team_stored 存上了几台的配置：说成一句话
 team_state_say() {   # team_state_say 状态：给人看的说法
 	case "$1" in
 		ok) printf '已同步' ;;
-		pending) printf '还没取过配置' ;;
+		pending) printf '还没同步过配置' ;;
 		local) printf '还没接上服务器' ;;
 		removed) printf '被管理员移除了' ;;
 		lost) printf '等管理员登记回去' ;;
-		*) printf '没取成' ;;
+		*) printf '没同步成' ;;
 	esac
 }
 
@@ -7046,16 +7059,16 @@ team_join() {   # cca team join [--stdin] [--name 名字]：问邀请链接（�
 		say "  管理员给了这台设备 ${detail} 个账号：账号表照它改（节点由它定；这台机器上已经有的账号只改节点）"
 		team_settle
 	else
-		fail_warn team_sync "加入了，配置还没取到：${detail}（稍后 cca team sync 再取）"
+		fail_warn team_sync "加入了，配置还没同步下来：${detail}（稍后运行 cca team sync 再同步）"
 	fi
 	gui_done team_joined "已加入「${tname}」"
 }
 
-team_sync() {   # cca team sync [Team]：取一次配置，说每个 Team 的结果
+team_sync() {   # cca team sync [Team]：同步一次配置，说每个 Team 的结果
 	[ $# -le 1 ] || die "用法: cca team sync [Team]"
 	local out id name state seq why bad=0
-	out=$(py team-sync "$@") || team_fail "$out" "没取成"
-	[ -n "$out" ] || { say "没有要取配置的 Team"; return 0; }
+	out=$(py team-sync "$@") || team_fail "$out" "没同步成"
+	[ -n "$out" ] || { say "没有要同步配置的 Team"; return 0; }
 	while IFS=$'\t' read -r id name state seq why; do
 		if [ "$state" = ok ]; then
 			okay "${name}：配置已同步"
@@ -7149,7 +7162,7 @@ team_deploy() {   # cca team deploy Team [用户@]主机 [选项]：经 SSH 把�
 	DEPLOY_AT=${at%:*}
 	DEPLOY_AT=${DEPLOY_AT#[}; DEPLOY_AT=${DEPLOY_AT%]}
 	if [ -n "$at" ]; then
-		DEPLOY_MSG="「${name}」现在接着 ${at}：经 SSH 把服务器上的程序换成这一版 cca 带的（数据不变）；填别的服务器就是搬过去，各台设备取到新的配置以后自己换过来。要用 root 登录，或者能免密码 sudo 的用户。"
+		DEPLOY_MSG="「${name}」现在接着 ${at}：经 SSH 把服务器上的程序换成这一版 cca 带的（数据不变）；填别的服务器就是搬过去，各台设备同步到新的配置以后自己换过来。要用 root 登录，或者能免密码 sudo 的用户。"
 	else
 		DEPLOY_MSG="经 SSH 在你自己的 Linux 服务器上装好「${name}」的同步服务器（有 Docker 用 Docker，没有用 systemd + python3），装好了自动接上。一台服务器上可以装几个 Team，各是一个服务、各用一个端口（从 18445 起找空着的）：云服务商的安全组里要放行它。要用 root 登录，或者能免密码 sudo 的用户。"
 	fi
@@ -7273,7 +7286,7 @@ team_devices() {   # cca team devices Team [--json]：先和服务器对一遍�
 					case "$seq:$have" in
 						-:*|0:*) cfg="配置还没发布" ;;
 						*:-) cfg="配置发布了" ;;
-						*) if [ "$have" -ge "$seq" ] 2>/dev/null; then cfg="配置是最新的"; else cfg="还没取到最新的配置"; fi ;;
+						*) if [ "$have" -ge "$seq" ] 2>/dev/null; then cfg="配置是最新的"; else cfg="还没同步到最新的配置"; fi ;;
 					esac ;;
 			esac
 			say "${label}（${dev:0:8}）：${state}，${grants}${cfg:+，${cfg}}"
@@ -7699,7 +7712,7 @@ builtin_team() {   # builtin_team 接着配置的命令：加入 Team（邀请�
 	( TEAM_JOIN_OPTIONAL=1 team_join ) || true   # 没加入成：原因已经说了
 	[ -n "$(py nodes-allowed)" ] && return 0
 	if [ -n "$(py team-list)" ]; then
-		info "Team 的配置里还没有这台机器能用的节点（还没取到配置，或者管理员没给节点）：取到以后再运行 ${1} 接着配置（cca team sync 马上取）"
+		info "Team 的配置里还没有这台机器能用的节点（配置还没同步下来，或者管理员没给节点）：同步下来以后再运行 ${1} 接着配置（cca team sync 马上同步）"
 	else
 		info "加入 Team 以后再运行 ${1}，节点就用 Team 的配置带的；也可以现在粘贴一条自己的代理"
 		builtin_own "$1" && return 0
@@ -8264,7 +8277,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca team [ls]              这台设备在哪些 Team 里
   cca team join              拿管理员给的邀请链接加入（一个邀请只能加入一台设备；链接不写在命令行上，会问你）
   cca team sync | leave [Team]
-                             现在取一次配置（平时每小时自动取）/ 退出
+                             马上同步一次配置（平时每小时自动同步）/ 退出
   cca team new 名字          建一个 Team（这台设备是管理员），接着部署它的同步服务器：
   cca team deploy Team [用户@]主机
                              经 SSH 装到自己的 Linux 服务器上、接上（一台服务器上可以装几个 Team）；没有服务器：cca team hosted Team
@@ -8360,7 +8373,7 @@ main() {
 			py session-start "${1:-}" >/dev/null 2>&1 || : ;;
 		_update-fetch) cmd_update_fetch ;;
 		_policy-fetch) cmd_policy_fetch ;;
-		_team-sync) CCA_SELF="$SELF" exec "$HELPER" team-sync ;;   # 后台：各个 Team 取一次配置（team_hook 起的）
+		_team-sync) CCA_SELF="$SELF" exec "$HELPER" team-sync ;;   # 后台：各个 Team 同步一次配置（team_hook 起的）
 		_policy-check) shift; py policy-check "${1:-}" strict ;;   # 维护者发布映射前检查（policy.sh 调用）
 		_fill-check) shift; py fill-check "${1:-}" ;;   # 维护者发布参考节点前检查（policy.sh 调用）
 		_policy-lock) shift; py policy-lock "$@" ;;   # 维护者把账号锁到节点（policy.sh lock 调用）
@@ -8390,6 +8403,7 @@ main() {
 				exit 0
 			fi
 			update_hook "$@"
+			update_after   # 换了版本以后的第一条命令：下面两个马上在后台做，不等间隔
 			[ "${1:-}" = _onboard ] || policy_hook   # 配置向导开头自己拉一次映射（onboard_policy_quick）：不在后台另拉一次
 			team_hook
 			gui_hook

@@ -98,7 +98,7 @@ SHA-256 的前 32 个十六进制字符，`GET /v1/health` 的 `mode` 是 `team`
 | `team_join` | 要加入的设备 | `pub`（`key` 是它的指纹，签名也用它）、`name`、`token`（邀请里的令牌）、`proof`（公钥的认证码，见「邀请链接」；可以没有） | `{name, dev, members, gen}`：令牌就此用掉，这把密钥记成邀请里的那个编号。没有这个邀请和签名不对一样回 403 `denied`；签名对了、邀请过期了是 403 `expired`、用过了是 403 `used`（过期、用掉 30 天以内说得出来）；这把密钥已经是一台设备了 409 `taken`；满了 507 `full` |
 | `team_put` | 管理员 | `docs`：`{设备编号: {"seq": 序号, "ct": 密文, "sig": 签名}}`，一次最多 64 台，请求最大 1 MB | `{stored: [设备编号…], stale: {设备编号: 存着的序号}, unknown: [设备编号…], gen}`：序号要比存着的大（一样、认证码也一样的算存过了）；不认得的编号（没登记过、也没有给它的邀请，或者被移除了；邀请过期 30 天以后也不认，给它存的跟着删掉）不存。还没加入的设备（邀请还没用掉）的可以先存着。每一项只有这三个键：`seq` 是 1 到 2^53 − 1 的整数，`ct` 的 `c` 最长 131072 个字符，`sig` 最长 1024 个字符；所有设备的 `c` 加起来最多 16 MB（按 base64 的字符数算），超了 507 `full` |
 | `team_get` | 设备 | `have`（手里那一份的序号，没有就不带） | `{dev, me_name, seq, doc, gen}`：`seq` 是存着的序号（还没有是 0），`doc` 是 `{seq, ct, sig}`，和 `have` 一样时是 null（不一样就给，比 `have` 小的也给：要不要由设备定）。只取得到自己的。服务器记着 `have`（只在内存里），管理员看名单时看得到 |
-| `team_members` | 管理员 | （没有别的） | `{members: [{fp, dev, name, pub, proof, joined_age, seen_age, seq, have}], invites: [{dev, expires_in, seq}], gen}`：`proof` 是这台设备加入时带的认证码（没带、管理员直接登记的是 null），`seq` 是这台设备存着的配置的序号（没有是 0），`have` 是它最近一次取配置时说的手里那一份的序号（没说、服务器重启以后还没取过是 null），`invites` 是还没用掉、没过期的邀请 |
+| `team_members` | 管理员 | （没有别的） | `{members: [{fp, dev, name, pub, proof, joined_age, seen_age, seq, have}], invites: [{dev, expires_in, seq}], gen}`：`proof` 是这台设备加入时带的认证码（没带、管理员直接登记的是 null），`seq` 是这台设备存着的配置的序号（没有是 0），`have` 是它最近一次同步配置时说的手里那一份的序号（没说、服务器重启以后还没同步过是 null），`invites` 是还没用掉、没过期的邀请 |
 | `team_revoke` | 管理员 | `dev` | `{members}`：这台设备的密钥就此不认，给它的配置、还没用掉的邀请一起删掉，它上报的记录跟着删掉（传过的 API key、折合金额的密文是账号的，不删）。这个编号没有设备、也没有邀请是 404 `no_device`（只有还没用掉的邀请时就是撤回邀请） |
 | `team_leave` | 设备 | （没有别的） | `{members}`：自己退出，和被移除一样 |
 

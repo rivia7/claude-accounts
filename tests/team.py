@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Team（cca team）：辅助程序（cca-core）这一头的建 Team、接上服务器、邀请、加入、取配置、授权、移除、退出，对着真的服务器
+"""Team（cca team）：辅助程序（cca-core）这一头的建 Team、接上服务器、邀请、加入、同步配置、授权、移除、退出，对着真的服务器
 （server/cca-presence.py --mode team，127.0.0.1、随机端口）。各台设备各一个临时 HOME（tests/presence.py 的 Device）。
 另一头有时由 tests/spec_wire.py（照 server/README.md 独立实现的那一份）扮演：两份实现封的、签的要能互相解开、验过。不联网。"""
 import hashlib
@@ -241,7 +241,7 @@ class TeamTest(Sessions, unittest.TestCase):
         listing = admin.ok('team-devices', tid).split('\n')
         self.assertEqual((listing[0], listing[4].split('\t')[2:]), ('0', ['joined', '0 个账号', '1', '-', row['problem']]), '第一行是别名锁定着没有')
         self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'no-proof'), ['no-proof'])
-        # 改授权、改映射：发布以后设备取到新的一版
+        # 改授权、改映射：发布以后设备同步到新的一版
         self.assertEqual(self.lines(admin, 'team-grant', tid, 'bob-mini', '+claude:bob@example.com'), ['2 个账号'])
         self.assertEqual(self.lines(bob, 'team-sync', tid[:6]), ['%s\t测试组\tok\t2\t' % tid])
         seq, doc = self.doc(bob, tid)
@@ -258,7 +258,7 @@ class TeamTest(Sessions, unittest.TestCase):
         rows = {r['label']: r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
         self.assertEqual((rows['bob-mini']['seq'], rows['bob-mini']['have']), (5, 2), '它上次取的时候说手里是第 2 版')
         self.assertEqual(self.lines(admin, 'team-publish', tid), ['0', ''], '没变的不重新发布')
-        # 移除：设备取配置时知道被移除了；拿新的邀请再加入
+        # 移除：设备同步配置时知道被移除了；拿新的邀请再加入
         self.assertEqual(self.code(admin, 'team-revoke', 'plan', tid, 'studio'), 'self')
         self.assertEqual(self.lines(admin, 'team-revoke', 'plan', tid, 'bob-mini'), ['%s\t%s\tbob-mini\tjoined' % (tid, dev_b)])
         self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
@@ -286,7 +286,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertFalse(t.exists())
 
     def test_rename(self):
-        """管理员给设备改名字：这边记着的、服务器上的一起改（同一把公钥再登记：加入的时间、认证码、配对认的指纹都不变），设备下次取配置时
+        """管理员给设备改名字：这边记着的、服务器上的一起改（同一把公钥再登记：加入的时间、认证码、配对认的指纹都不变），设备下次同步配置时
         跟着改；服务器上别的设备叫这个名字时服务器加 -2；还没加入的、已经不在的只改这边记着的；还在的别的设备叫这个名字不行"""
         admin, tid, root, srv, url, pin = self.new_team()
         t = self.tdir(admin, tid)
@@ -298,7 +298,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual([m['name'] for m in before.values()], ['bob-host'], '加入时写了 --name：先照它报')
         self.assertTrue(list(before.values())[0].get('proof'))
         device = lambda: json.loads(bob.ok('team-list', '--json'))['teams'][0]['device']
-        # 和服务器对一遍时名字以管理员起的为准：服务器上照它再登记（还是那把公钥，加入的时间、认证码照旧），设备下次取配置时跟着改
+        # 和服务器对一遍时名字以管理员起的为准：服务器上照它再登记（还是那把公钥，加入的时间、认证码照旧），设备下次同步配置时跟着改
         rows = {r['dev']: r for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
         self.assertEqual((rows[dev_b]['label'], rows[dev_b]['name'], rows[dev_b]['problem']), ('bob-mini', 'bob-mini', None))
         aligned = {f: m for f, m in state().items() if m['dev'] == dev_b}
@@ -316,7 +316,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(list(after), list(before))
         m2 = list(after.values())[0]
         self.assertEqual((m2['name'], m2['joined'], m2.get('proof')), ('小王的 MacBook', m0['joined'], m0['proof']), f)
-        # 设备下次取配置时跟着改（配置本身没变：序号照旧）
+        # 设备下次同步配置时跟着改（配置本身没变：序号照旧）
         self.assertEqual(device(), 'bob-mini')
         self.assertEqual(self.lines(bob, 'team-sync'), ['%s\t测试组\tok\t1\t' % tid])
         self.assertEqual(device(), '小王的 MacBook')
@@ -344,7 +344,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(self.lines(admin, 'team-rename', tid, 'studio', 'studio-2026'), ['studio', 'studio-2026', ''])
         self.assertEqual(json.loads((t / 'team.json').read_text())['device'], 'studio-2026')
         self.assertEqual(self.lines(admin, 'team-sync'), ['%s\t测试组\tok\t1\t' % tid])
-        self.assertEqual(json.loads((t / 'team.json').read_text())['device'], 'studio-2026', '取配置时服务器说的也是它')
+        self.assertEqual(json.loads((t / 'team.json').read_text())['device'], 'studio-2026', '同步配置时服务器说的也是它')
         # 还没加入的：只改这边记着的；它照邀请里的（改名之前的）名字加入，对一遍时服务器上换成改好的
         link_c, dev_c = self.invite(admin, tid, 'carol')
         got = self.lines(admin, 'team-rename', tid, 'carol', 'carol-mac')
@@ -517,7 +517,7 @@ class TeamTest(Sessions, unittest.TestCase):
         said = apply('claude')
         self.assertEqual(tables()[0], {'alice(alice@example.com)': 'US-A', 'team-2(bob@example.com)': 'US-B', '小王(erin@example.com)': 'US-C'}, said)
         self.assertEqual(apply('claude', 'codex'), '', '对调完了，再对一遍没有要改的')
-        # 改 Team 的名字：管理员这台马上改，成员设备取到新的一版时跟着改；这台设备上别的 Team 已经叫这个的不行
+        # 改 Team 的名字：管理员这台马上改，成员设备同步到新的一版时跟着改；这台设备上别的 Team 已经叫这个的不行
         self.assertEqual(self.code(admin, 'team-name', tid, ' '), 'name')
         self.lines(admin, 'team-new', '别的组', '--device', 'studio')
         self.assertEqual(self.code(admin, 'team-name', tid, '别的组'), 'name', '这台设备上已经有叫这个的 Team')
@@ -800,7 +800,7 @@ class TeamTest(Sessions, unittest.TestCase):
         rows = {r['label']: r['state'] for r in json.loads(admin.ok('team-devices', tid, '--json'))['devices']}
         self.assertEqual((rows['pending-2'], rows['bob-mini']), ('expired', 'joined'))
         self.assertNotIn('moved_from', json.loads((self.tdir(admin, tid) / 'admin.json').read_text()))
-        self.assertEqual(json.loads((self.tdir(bob, tid) / 'team.json').read_text())['url'], url, '还没取过：还连着原来那台')
+        self.assertEqual(json.loads((self.tdir(bob, tid) / 'team.json').read_text())['url'], url, '还没同步过：还连着原来那台')
         self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2:4], ['ok', '3'], '从原来那台上取到指着新地址的配置')
         tj = json.loads((self.tdir(bob, tid) / 'team.json').read_text())
         self.assertEqual((tj['url'], tj['pins']), (url2, [pin2]))
@@ -984,7 +984,7 @@ class TeamTest(Sessions, unittest.TestCase):
         [r2] = wait_for('新加入的那个 Team 也有了一路', lambda: reports(fp2))
         self.assertEqual((r2['code'], list(r2['units'])), (200, [aid2]))
         self.assertTrue(all(list(x['units']) == [aid] for x in reports(fp)), '各报各的账号')
-        # 被第一个 Team 的管理员移除：取配置时知道了，那一路停了（alice 又开一个会话也不报）；第二个 Team 那一路照旧
+        # 被第一个 Team 的管理员移除：同步配置时知道了，那一路停了（alice 又开一个会话也不报）；第二个 Team 那一路照旧
         self.assertEqual(self.lines(admin, 'team-revoke', 'apply', tid, 'bob-mini'), ['bob-mini'])
         self.assertEqual(self.lines(bob, 'team-sync')[0].split('\t')[2], 'removed')
         self.more_rounds([bob], 2)
@@ -1155,7 +1155,7 @@ class TeamTest(Sessions, unittest.TestCase):
         n = len(m2.sent())
         self.assertEqual((m2.ok('team-adopt'), len(m2.sent())), ('', n), '用过了的邀请不再试')
         self.assertFalse(self.tdir(m2, tid).exists())
-        # 管理员再运行一次：给 m2 新发一个；m2 取配置时顺带加入
+        # 管理员再运行一次：给 m2 新发一个；m2 同步配置时顺带加入
         h3 = handoff(m1, m2)
         self.assertEqual((h3['joined'], h3['kept'], h3['new']), (['m1'], [], ['m2']))
         self.assertNotEqual(h3['section']['invites'][m2.fp], links[m2.fp])

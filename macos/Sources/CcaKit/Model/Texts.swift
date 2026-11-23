@@ -256,15 +256,15 @@ enum Texts {
         }
     }
 
-    /// Team 那一行状态：照 cca 给的 `config.teams[].state` 说（没取成、被移除、记录没了时 cca 给了原因）
+    /// Team 那一行状态：照 cca 给的 `config.teams[].state` 说（没同步成、被移除、记录没了时 cca 给了原因）
     static func teamState(_ t: TeamEntry) -> String {
         switch t.state {
         case .ok: return t.seq > 0 ? "配置已同步" : "已同步"
-        case .pending: return "还没取到配置"
+        case .pending: return "还没同步过配置"
         case .local: return "还没接上同步服务器"
         case .removed: return nonEmpty(t.error) ?? "这台设备被管理员移除了"
         case .lost: return nonEmpty(t.error) ?? "服务器的记录没了：等管理员把这台设备登记回去"
-        default: return nonEmpty(t.error).map { "没取到配置：\($0)" } ?? "没取到配置"
+        default: return nonEmpty(t.error).map { "配置没同步成：\($0)" } ?? "配置没同步成"
         }
     }
 
@@ -292,7 +292,7 @@ enum Texts {
         }
         if d.state.active {
             parts.append(d.grantsAll ? "全部账号" : "\(d.grantCount(of: total)) 个账号")
-            if let have = d.have, d.seq > 0 { parts.append(have >= d.seq ? "配置是最新的" : "还没取到最新的配置") }
+            if let have = d.have, d.seq > 0 { parts.append(have >= d.seq ? "配置是最新的" : "还没同步到最新的配置") }
         }
         return parts.joined(separator: " · ")
     }

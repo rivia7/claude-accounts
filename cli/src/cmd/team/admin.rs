@@ -652,7 +652,7 @@ fn name_taken(a: &Dict, except: &str, name: &str) -> bool {
 }
 
 /// 设备只有一个名字：管理员起的（label）。加入了的设备在服务器上的名字（它加入时报的：旧版本发的邀请里没有名字，它报的是主机名；
-/// 或者加入时写了 --name）不一样时，照管理员起的再登记一次（同 cca team rename：同一把公钥、新名字），它下次取配置时跟着改。
+/// 或者加入时写了 --name）不一样时，照管理员起的再登记一次（同 cca team rename：同一把公钥、新名字），它下次同步配置时跟着改。
 /// 管理员起的不合规、这个 Team 里还在的别的设备用着（管理员给它起的，或者不跟着改的那些在服务器上的名字）时反过来，这边记着的换成
 /// 服务器上的；服务器给改成了别的（服务器上有这边没记着的设备叫这个名字时加了 -2）也照服务器的记。公钥对不上的（problems 里有它的）不碰。
 /// 没登记成不耽误别的：原因记进 problems，下次对账再试。管理员自己这台不在这里管（它的名字照 team.json 的 device，接上服务器、改名时都登记）
@@ -948,7 +948,7 @@ pub fn cmd_team_deploy(args: &[String]) -> R<()> {
     let [sel, rest @ ..] = args else {
         return Err(Fail::Die("用法: py team-deploy Team [用户@]主机 [选项]".into()));
     };
-    // 装的那一段经 SSH，可能要几分钟（第一次用 Docker 要拉镜像）：这段时间不拿着这个 Team 的锁（不然这台设备上取配置、别的管理命令
+    // 装的那一段经 SSH，可能要几分钟（第一次用 Docker 要拉镜像）：这段时间不拿着这个 Team 的锁（不然这台设备上同步配置、别的管理命令
     // 都卡着等）。装好了再取锁、重新读一遍（等的时候可能被别的命令改过），接上
     let (t, _a, lk) = admin_of(sel)?;
     let (tid, root, svc, name) = (t.id.clone(), t.root.clone(), format!("cca-team-{}", &t.id[..8]), t.name.clone());
@@ -1406,7 +1406,7 @@ pub fn cmd_team_grant(args: &[String]) -> R<()> {
 
 /// py team-rename Team 设备 新名字：给一台设备改名字。管理员这边记着的名字（label）改成它；加入了的设备在服务器上的名字也跟着改
 /// （同一把公钥照它的编号再登记一次：team_enroll，加入的时间、远程会话的配对都不变；名字被别的设备用了时服务器在后面加 -2，这边也记成
-/// 服务器的：一台设备只有一个名字），它自己下次取配置时跟着改（team.json 的 device：follow）。还没加入的设备加入以后照这个名字改
+/// 服务器的：一台设备只有一个名字），它自己下次同步配置时跟着改（team.json 的 device：follow）。还没加入的设备加入以后照这个名字改
 /// （align_names）。登记之前先和服务器对一遍：自己退出了的不登记回去；服务器报的公钥和记下的对不上时不登记（只改这边记着的）。
 /// 管理员自己这台还没接上服务器时改的是接上时用的名字。还在这个 Team 里的别的设备已经叫这个名字的不行（name_taken）。
 /// stdout：原来的名字、改好的名字、服务器上的名字没跟着改的原因（改了是空行）。原因码：no_team、not_admin、no_device、name、server、
@@ -1639,7 +1639,7 @@ pub fn cmd_team_map(args: &[String]) -> R<()> {
 }
 
 /// py team-alias Team 账号 新别名：改一个账号在这个 Team 里的别名，再发布。别名按工具记：账号写 工具:邮箱 只改这个工具里的，只写邮箱
-/// 改它在的每个工具里的。各台设备上照 Team 给的用着的下次取配置时跟着改，自己改过的不动（team_alias_follow）；管理员这台设备上的账号表
+/// 改它在的每个工具里的。各台设备上照 Team 给的用着的下次同步配置时跟着改，自己改过的不动（team_alias_follow）；管理员这台设备上的账号表
 /// 不跟着改。同一个工具里别的账号已经叫这个的不行（别的工具里的可以：Claude、Codex 各有各的 team-1）。stdout：原来的别名（几个工具里
 /// 不一样时用「、」连起来）、存上了几台的配置。原因码：no_team、not_admin、alias、no_account、publish
 pub fn cmd_team_alias(args: &[String]) -> R<()> {
@@ -1715,8 +1715,8 @@ pub fn cmd_team_alias_lock(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// py team-name Team 新名字：改这个 Team 的名字（team.json 的 name），再发布：各台设备下次取配置时跟着改（配置里的 name：follow）。
-/// 已经发出去的邀请链接里带着的还是原来的名字，拿它加入的设备第一次取到配置时换成新的。手机网页端的标题是部署时写进服务器的（app/name），
+/// py team-name Team 新名字：改这个 Team 的名字（team.json 的 name），再发布：各台设备下次同步配置时跟着改（配置里的 name：follow）。
+/// 已经发出去的邀请链接里带着的还是原来的名字，拿它加入的设备第一次同步到配置时换成新的。手机网页端的标题是部署时写进服务器的（app/name），
 /// 下次部署（cca team deploy）时才换。这台设备上别的 Team 已经叫这个名字的不行（按名字选 Team 就分不清了）。先和服务器对一遍：连不上、
 /// 对不上（server）时名字还没改，照原来的命令再来一次就行；发布没成（publish）时名字已经改了，原因里说照新名字 cca team publish。
 /// stdout：原来的名字、新的名字、存上了几台的配置。原因码：no_team、not_admin、name、server、publish

@@ -83,7 +83,7 @@ pub fn label(kind: HubKind) -> String {
 }
 
 /// 某一台中转服务器。用得了的话是 Ok；用不了是 Err(原因)：维护者的——没配置映射、映射里没有服务器、没有 deploy key；
-/// Team 的——退出了、还没取到它的配置、它没接上服务器
+/// Team 的——退出了、还没同步到它的配置、它没接上服务器
 pub fn server_of(kind: HubKind) -> R<Result<Server, String>> {
     match kind {
         HubKind::Team(tag) => {
@@ -91,7 +91,7 @@ pub fn server_of(kind: HubKind) -> R<Result<Server, String>> {
             Ok(match crate::cmd::team::hub_cfgs().into_iter().find(|(t, _)| *t == tid) {
                 Some((_, cfg)) => build(kind, cfg),
                 None => {
-                    Err(format!("这台机器现在用不了{}（退出了这个 Team、还没取到它的配置，或者它还没接上服务器）", label(kind)))
+                    Err(format!("这台机器现在用不了{}（退出了这个 Team、还没同步到它的配置，或者它还没接上服务器）", label(kind)))
                 }
             })
         }

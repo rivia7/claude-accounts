@@ -743,7 +743,7 @@ report() {   # 直接在服务器上运行的：打出管理员接上它的那�
 	say "✓ Team 的同步服务器在运行（${D}，$(how)，端口 ${PORT}，服务名 ${SVC}）"
 	if [ "$STATE" = update ]; then
 		say "  更新了服务端程序，数据都没变"
-		[ -z "$NEWCERT" ] || say "! 证书是新生成的（原来的不见了）：管理员要照下面这一行重新接上，各台设备取到新的配置以后才连得上"
+		[ -z "$NEWCERT" ] || say "! 证书是新生成的（原来的不见了）：管理员要照下面这一行重新接上，各台设备同步到新的配置以后才连得上"
 		if [ -z "$NEWCERT" ] && [ "$PORT" = "$OLDPORT" ]; then
 			web_say
 			fw_hint

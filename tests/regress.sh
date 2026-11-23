@@ -161,7 +161,7 @@ ok "App 隔离：环境清理、启动锁、真实资料目录证据" 'python3 "
 ok "客户端更新（bash 那一半，cmd_clients）：安装要一字不差的令牌、有效的计划和用户的同意；征求同意时说清楚终端工具怎么更新" 'python3 "$D/client_updates.py"'
 ok "卸载时去掉 shell 启动文件里 cca 加的那两行（bash 的 path_unhint）：逐字节还原、权限不变；~/.local/bin 里还有别的命令、用户改过、文件是链接、写不了时不动" 'bash "$D/path_unhint.sh" "$CCA" > "$T/path-unhint.log" 2>&1'
 ok "设备统计：服务端验签（和 ssh-keygen 交叉核对）、设备清单、状态，客户端（辅助程序）的上报、闲置判定、共享 API key、折合金额同步，经 curl 钉住证书公钥" 'python3 "$D/presence.py" 2>/dev/null'
-ok "Team：辅助程序建 Team、接上服务器、邀请、加入、取配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
+ok "Team：辅助程序建 Team、接上服务器、邀请、加入、同步配置（验根密钥的签名、解开、序号往回走的不要）、授权、移除、退出，服务器的记录没了登记回去、换服务器；和照文档独立实现的那一份互相解得开、验得过" 'python3 "$D/team.py" 2>/dev/null'
 ok "Team 的同步服务器的一键部署：安装脚本在假服务器上装好（systemd、Docker compose，拉不到镜像、起不来改用 systemd；一台服务器上几个 Team 各一个服务）、远程会话的中转和手机的网页端（证书助手要来了证书才说好了；80 端口被占、地址是内网的时候不开）、更新、卸载，没装完时 .env 换回原来的，别人的目录不碰，以前的自己的同步服务器只能卸载；cca team deploy 经 SSH 部署、接上、更新，连不上时说要放行的端口" 'python3 "$D/hub_deploy.py" 2>/dev/null'
 ok "cca usage 的表格（一个账号一行、不超过终端的宽度）、周结算提醒（use_first）、API key 的掩码、每周用量（usage_weeks）" 'python3 "$D/usage_view.py" 2>/dev/null'
 ok "折合金额：读会话记录（增量、去重、按账号身份认）、按周 / 按天的时段（夏令时、额度窗口）、App 要的视图、密文的格式" 'python3 "$D/cost_view.py" 2>/dev/null'
@@ -3635,7 +3635,7 @@ import hashlib, json, subprocess, sys
 sys.path.insert(0, sys.argv[1])
 import spec_wire as sw
 op, a = sys.argv[2], sys.argv[3:]
-if op == 'join':   # join 邀请链接 密钥文件 端口：加入、取配置、验签、解开；打印 给了哪些账号 和 节点的名字
+if op == 'join':   # join 邀请链接 密钥文件 端口：加入、同步配置、验签、解开；打印 给了哪些账号 和 节点的名字
     link, key, port = a[0], a[1], int(a[2])
     inv = sw.invite_decode(link)
     token, dev, keys = sw.invite_parts(inv['k'])
@@ -3712,7 +3712,7 @@ ok "照文档独立实现的那一头拿这个邀请加入、验过根密钥的�
 out=$(run cca team devices 书房组 2>&1); rc=$?
 ok "cca team devices：和服务器对一遍，两台都加入了（不说第几版）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -Eq "书房的Mac（.*）：joined，0 个账号，配置(是最新的|发布了)$" && printf "%s" "$out" | grep -Eq "dan-air（.*）：joined，1 个账号，配置(是最新的|发布了)$" && ! printf "%s" "$out" | grep -q "第 [0-9]* 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
 out=$(run cca team grant 书房组 dan-air +claude:bob@example.com 2>&1); rc=$?
-ok "cca team grant：多给一个账号，发布；那一头取到新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是2 个账号" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  2" ]'
+ok "cca team grant：多给一个账号，发布；那一头同步到新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是2 个账号" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  2" ]'
 out=$(run cca team map 书房组 claude alice@example.com US-B 2>&1); rc=$?
 ok "cca team map：改一个账号走的节点，有这个账号的那台的配置发布新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了；1 台设备的配置发布了新的一版"'
 out=$(run cca team publish 书房组 2>&1); rc=$?
@@ -3728,7 +3728,7 @@ ok "cca team name：名字是空的不行（fail 事件 team_name）" '[ $rc -ne
 out=$(run cca team name 书房 书房组 2>&1); rc=$?
 ok "cca team name：改回来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：「书房」现在叫「书房组」" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  6" ]'
 out=$(run cca team alias 书房组 --lock 2>&1); rc=$?
-ok "cca team alias --lock：锁定账号的别名，发布（那一头取到新的一版）；cca team devices 说锁定着，--json 的 alias_lock 是 true" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已锁定「书房组」里账号的别名；2 台设备的配置发布了新的一版" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  7" ] && run cca team devices 书房组 2>&1 | grep -q "账号的别名锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is True"'
+ok "cca team alias --lock：锁定账号的别名，发布（那一头同步到新的一版）；cca team devices 说锁定着，--json 的 alias_lock 是 true" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已锁定「书房组」里账号的别名；2 台设备的配置发布了新的一版" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  7" ] && run cca team devices 书房组 2>&1 | grep -q "账号的别名锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is True"'
 out=$(run cca team alias 书房组 --unlock 2>&1); rc=$?
 ok "cca team alias --unlock：解开（再发布一次）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已解开「书房组」里账号的别名" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ] && ! run cca team devices 书房组 2>&1 | grep -q "锁定着" && run cca team devices 书房组 --json | jok "d[\"alias_lock\"] is False"'
 # cca team node：这个 Team 的节点定义（列出来不带密钥）、加（粘贴链接，本机内核校验）、复制、实测出口（临时内核，不碰内置代理）、去掉；
@@ -3802,11 +3802,11 @@ out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join 2>&1); rc=$?
 ok "再拿同一个邀请加入：已经在这个 Team 里了（fail 事件 team_joined）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_joined\""'
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 2 改过名的组 "$TMNODE" >/dev/null 2>&1
 out=$(run cca team sync 维护者的组 2>&1); rc=$?
-ok "cca team sync：取到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：配置已同步" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
+ok "cca team sync：同步到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：配置已同步" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
 tm_akey() { python3 -c 'import json,sys; print(next(k for k in json.load(open(sys.argv[1])) if k == "alice@example.com" or k.endswith("(alice@example.com)")))' "$H/.cca/accounts.json"; }   # alice 现在的键
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 3 改过名的组 "$TMNODE" lock >/dev/null 2>&1
 out=$(run cca team sync "${TMBID:0:8}" 2>&1); rc=$?
-ok "管理员锁定了别名：取到配置以后 alice 的别名换成 Team 给的（说一声）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组.*team-1" && [ "$(tm_akey)" = "team-1(alice@example.com)" ]'
+ok "管理员锁定了别名：同步到配置以后 alice 的别名换成 Team 给的（说一声）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组.*team-1" && [ "$(tm_akey)" = "team-1(alice@example.com)" ]'
 out=$(runev cca rename "team-1(alice@example.com)" 主号 2>&1); rc=$?
 ok "cca rename：别名被 Team 锁定了的改不了（fail 事件 alias_locked，说是哪个 Team），账号表不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"alias_locked\" and \"改过名的组\" in e[\"message\"]" && [ "$(tm_akey)" = "team-1(alice@example.com)" ]'
 out=$(gj state)
@@ -3848,7 +3848,7 @@ ok "再运行一次（-y 不问）：加入了的不再发，还没用的照原�
 # 机器那一头：映射里有给这台 Mac 的邀请（照它 deploy key 的指纹），拉到映射后自己加入，拿原来的 deploy key 当设备密钥；管理员由 spec_wire 扮演
 TMS2=$(printf '5c%.0s' $(seq 1 16)); TMMYFP=$(ssh-keygen -lf "$H/.cca/policy/id_ed25519.pub" | awk '{print $2}')
 rm -f "$H/.cca/teams/adopt.json"   # 前面刚自己退出过这个 Team：记着退出过的不再自己加入（下面另测），这里先当没退出过
-touch "$H/.cca/teams/checked"   # 这条命令启动时不另起后台的取配置（team_hook）：它也会顺带加入，抢在前头的话前台这一句就不说了（加入照样成）
+touch "$H/.cca/teams/checked"   # 这条命令启动时不另起后台的同步配置（team_hook）：它也会顺带加入，抢在前头的话前台这一句就不说了（加入照样成）
 TMB2LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS2" 1 维护者的组 "$TMNODE" 2>&1)
 pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["team"]={"v": 1, "invites": {sys.argv[2]: sys.argv[3]}}; print(json.dumps(j, ensure_ascii=False))' "$T/tmh.pr" "$TMMYFP" "$TMB2LINK")"
 out=$(run cca policy pull 2>&1); rc=$?
@@ -3916,6 +3916,33 @@ runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" >/dev/null 2>
 ok "照文档卸载（cca team deploy --script | ssh 服务器 sh -s -- --uninstall --dir 目录）：停掉这个 Team 的服务、删掉程序和数据；这台设备上删掉了这个 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "卸载了 Team 的同步服务器" && [ ! -e "$TMDD" ] && [ ! -e "$T/hubbox/server.$TMDSVC.pid" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ]'
 out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
 ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
+# --- 换了版本以后的第一条命令（update_after）：拉映射、同步配置这次不等间隔（都在后台）。照 update/ran（上一次运行的版本）认；以前的
+#     版本不记 ran：没有 ran、有更新留下的上一个版本（update/cca.prev.version）也算换了版本，全新安装的两样都没有，不算。这时这台 Mac
+#     不在任何 Team 里（像还没迁过来的机器），维护者的组（spec_wire 扮演管理员）还开着
+TMUP="$H/.cca/update"; TMS3=$(printf '3a%.0s' $(seq 1 16))
+tmu_mt() { stat -f %m "$H/.cca/policy/checked" "$H/.cca/teams/checked" 2>/dev/null | tr '\n' ' '; }   # 上一次拉映射、同步配置的时候（钩子做了就会变）
+tmu_back() { touch -t "$(date -v-30M +%Y%m%d%H%M.%S)" "$H/.cca/policy/checked" "$H/.cca/teams/checked"; }   # 半个小时前刚做过：平时这时都不再做
+tmu_pulled() { local i; for i in $(seq 1 300); do [ -s "$H/.cca/policy/log" ] && [ ! -d "$H/.cca/policy/lock" ] && return 0; sleep 0.1; done; return 1; }   # 等后台拉映射那一次做完（记下了结果、放了锁：照邀请加入在这之间）
+tmu_seq() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seq"])' "$H/.cca/teams/$TMBID/doc.json" 2>/dev/null; }   # 这台设备手里维护者的组的配置是第几版
+tmu_seq_is() { local i; for i in $(seq 1 300); do [ "$(tmu_seq)" = "$1" ] && return 0; sleep 0.1; done; return 1; }   # 等后台同步到这一版（名字先写进 team.json、再写 doc.json）
+mv "$TMUP/cca.prev.version" "$T/tmu.prev" 2>/dev/null   # 更新留下的上一个版本下面自己摆（前面退回过的话本来就没有），最后放回原样
+rm -f "$H/.cca/teams/index.json" "$H/.cca/teams/adopt.json"   # 从来没在 Team 里过（前面自己退出过维护者的组：也当没退出过）
+TMB3LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 1 维护者的组 "$TMNODE" 2>&1)
+pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["team"]={"v": 1, "invites": {sys.argv[2]: sys.argv[3]}}; print(json.dumps(j, ensure_ascii=False))' "$T/tmh.pr" "$TMMYFP" "$TMB3LINK")"
+tmu_back; mt0=$(tmu_mt); run cca ls >/dev/null 2>&1
+ok "版本没换（update/ran 就是现在的版本）：拉映射、同步配置照常按间隔，不提前" '[ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" = "$mt0" ]'
+rm -f "$TMUP/ran"; run cca ls >/dev/null 2>&1
+ok "全新安装（没有 update/ran，也没有更新留下的上一个版本）：不算换了版本，只记下现在的版本" '[ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" = "$mt0" ]'
+rm -f "$TMUP/ran"; echo 0.0.1 > "$TMUP/cca.prev.version"; : > "$H/.cca/policy/log"
+run cca ls >/dev/null 2>&1; tmu_pulled
+ok "从不记 update/ran 的旧版本更新上来（有更新留下的上一个版本）的第一条命令：不等一天，在后台拉映射、照里面给这台设备的邀请加入 Team（设备密钥是原来的 deploy key）；记下现在的版本" '[ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" != "$mt0" ] && grep -q "拉取成功" "$H/.cca/policy/log" && [ "$(tmu_seq)" = 1 ] && [ "$(cat "$H/.cca/teams/$TMBID/id_ed25519.pub")" = "$(cat "$H/.cca/policy/id_ed25519.pub")" ]'
+tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 2 换了版本的组 "$TMNODE" >/dev/null 2>&1   # 管理员发布了新的一版（改了名字）
+tmu_back; echo 0.0.1 > "$TMUP/ran"; : > "$H/.cca/policy/log"
+run cca ls >/dev/null 2>&1; tmu_seq_is 2; tmu_pulled
+ok "在 Team 里的：换了版本以后的第一条命令不等一个小时，在后台马上同步一次配置（拿到管理员刚发布的那一版，名字跟着改），映射也马上拉；记下现在的版本" '[ "$(tmu_seq)" = 2 ] && run cca team 2>&1 | grep -q "换了版本的组（${TMBID:0:8}）" && grep -q "拉取成功" "$H/.cca/policy/log" && [ "$(cat "$TMUP/ran")" = "$(ver)" ]'
+runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" >/dev/null 2>&1
+cp -p "$T/tmh.pr" "$PR/policy.json"; cp -p "$T/tmh.pr.sig" "$PR/policy.json.sig"; cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$H/.cca/teams/adopt.json" "$TMUP/cca.prev.version"
+mv "$T/tmu.prev" "$TMUP/cca.prev.version" 2>/dev/null
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码真实的带着 Team 的 _gui state、cca team ls --json、cca team devices --json、部署时的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx4" > "$T/contract4.log" 2>&1'
 fi

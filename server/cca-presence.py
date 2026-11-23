@@ -431,7 +431,7 @@ class Store:
     def __init__(self, path, ttl, idle, retain, keys_path=None, cost_path=None, cost_keep=100 * 86400, mode='maintainer', team_root=None):
         self.path, self.ttl, self.idle, self.retain, self.cost_keep, self.mode = path, ttl, idle, retain, cost_keep, mode
         self.seen = {}   # Team 的服务器：各台设备最近一次验过签的请求（只在内存里：不为它每个请求都重写状态文件）
-        self.have = {}   # Team 的服务器：各台设备取配置时说的手里那一份的序号（只在内存里）
+        self.have = {}   # Team 的服务器：各台设备同步配置时说的手里那一份的序号（只在内存里）
         self.docs_path = os.path.join(os.path.dirname(path) or '.', 'team-docs.json')
         self.keys_path = keys_path or os.path.join(os.path.dirname(path) or '.', 'keys.json')
         self.cost_path = cost_path or os.path.join(os.path.dirname(path) or '.', 'cost-slots.json')
@@ -843,8 +843,8 @@ class Store:
                          'gen': self.data['team']['gen']}
 
     def team_members(self, now):
-        """管理员看现在有哪些设备（公钥也带着：服务器的记录没了以后照它登记回去）、它们各自存着的配置的序号（seq）和设备取配置时
-        说的手里那一份的序号（have：重启以后、还没取过是 null）、还没用掉的邀请"""
+        """管理员看现在有哪些设备（公钥也带着：服务器的记录没了以后照它登记回去）、它们各自存着的配置的序号（seq）和设备同步配置时
+        说的手里那一份的序号（have：重启以后、还没同步过是 null）、还没用掉的邀请"""
         with self.lock:
             self.invite_prune(now)
             team, docs = self.data['team'], self.docs['docs']

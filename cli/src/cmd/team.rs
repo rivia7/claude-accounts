@@ -148,7 +148,7 @@ fn index_remove(tid: &str) -> R<()> {
     Ok(())
 }
 
-/// 这个 Team 在本机的文件一次只让一个进程改（取配置、管理员的命令）：拿着 teams/<编号>/lock 的锁。锁着的时候会联网（最多几十秒），
+/// 这个 Team 在本机的文件一次只让一个进程改（同步配置、管理员的命令）：拿着 teams/<编号>/lock 的锁。锁着的时候会联网（最多几十秒），
 /// 所以不用全局的那一把（Lock）；同一个进程里别拿两次（flock 按打开的文件算：会等自己）
 fn team_lock(tid: &str) -> R<std::fs::File> {
     let f = std::fs::OpenOptions::new().append(true).create(true).open(team_path(tid, "lock"))?;
@@ -220,7 +220,7 @@ pub fn hub_cfgs() -> Vec<(String, Dict)> {
     let grants = grants();
     let mut out = Vec::new();
     if grants.is_empty() {
-        return out; // 没有 Team、都还没取到配置：不再读别的文件
+        return out; // 没有 Team、都还没同步到配置：不再读别的文件
     }
     for t in teams() {
         let Some(salt) = grants.iter().find(|g| g.id == t.id).and_then(|g| g.doc.str("salt")) else { continue };
@@ -255,25 +255,25 @@ pub fn hub_missing_why(tid: &str) -> String {
     match sync_state(tid) {
         _ if !t.attached() => format!("「{}」还没有接上同步服务器", t.name),
         Some((s, why)) if s == "removed" => why,
-        _ if team_doc(tid).is_none() => format!("「{}」的配置还没取到（cca team sync）", t.name),
+        _ if team_doc(tid).is_none() => format!("「{}」的配置还没同步下来（cca team sync）", t.name),
         _ => format!("这台设备用不了「{}」的同步服务器（密钥不见了，或者关掉了设备统计）", t.name),
     }
 }
 
-// --- 取配置 ----------------------------------------------------------------------------------------------------------------
+// --- 同步配置 --------------------------------------------------------------------------------------------------------------
 
 /// 这台设备那串随机数（邀请里的；管理员自己的那台是照主密钥算的）；没有、不合格是 None
 fn secret_of(tid: &str) -> Option<String> {
     fs::read_text(&team_path(tid, "secret")).ok().map(|s| s.trim().to_string()).filter(|s| hex32(s))
 }
 
-/// sync.json 里的状态（还没取过是 None）
+/// sync.json 里的状态（还没同步过是 None）
 fn sync_state(tid: &str) -> Option<(String, String)> {
     let j = load_quiet(&team_path(tid, "sync.json"))?.as_dict()?;
     Some((j.str("state")?.to_string(), j.str("error").map(|e| e.to_string()).unwrap_or_default()))
 }
 
-/// 记下取配置的结果；只在变了时写（界面盯着这个文件）
+/// 记下同步配置的结果；只在变了时写（界面盯着这个文件）
 fn sync_note(tid: &str, state: &str, error: &str) -> R<()> {
     if sync_state(tid).as_ref().map(|(s, e)| (s.as_str(), e.as_str())) != Some((state, error)) {
         let j = dict! { "v" => 1, "state" => state, "error" => error, "at" => now() };
@@ -286,8 +286,8 @@ fn sync_note(tid: &str, state: &str, error: &str) -> R<()> {
     Ok(())
 }
 
-/// 取一次配置的结果：state 是 ok（手里的是最新的）| removed（被管理员移除了）| lost（服务器的记录没了，等管理员把这台设备登记回去）|
-/// error（这次没取成，why 是原因）；seq 是手里那一份的序号（还没有是 0）
+/// 同步一次配置的结果：state 是 ok（手里的是最新的）| removed（被管理员移除了）| lost（服务器的记录没了，等管理员把这台设备登记回去）|
+/// error（这次没同步成，why 是原因）；seq 是手里那一份的序号（还没有是 0）
 pub struct Synced {
     pub state: &'static str,
     pub seq: i64,
@@ -416,7 +416,7 @@ fn doc_accounts(doc: &Dict) -> usize {
 // --- 子命令 ----------------------------------------------------------------------------------------------------------------
 
 /// 加入成了以后要说的：Team 的名字、服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空的）、Team 的编号、
-/// 取配置的结果（ok | error…）、没取成时的原因（取成了是给了这台设备几个账号）
+/// 同步配置的结果（ok | error…）、没同步成时的原因（同步成了是给了这台设备几个账号）
 pub struct Joined {
     pub tid: String,
     pub name: String,
@@ -479,7 +479,7 @@ fn join(inv: &Invite, name: &str, key_src: Option<&str>, via: Option<&str>) -> R
     }
     let (mut code, mut j) = presence_post(&cfg, "team_join", &payload, 15)?;
     // 说用过了、拿的又是现成的密钥（照映射迁过来的）：可能就是这台设备上一次用掉的——请求到了服务器、回话没收到。服务器认这把密钥是
-    // 这个邀请的那台设备（取配置时回的编号对得上）就是已经加入了：把本机这一头补上
+    // 这个邀请的那台设备（同步配置时回的编号对得上）就是已经加入了：把本机这一头补上
     if key_src.is_some() && code == 403 && j.str("error").as_deref() == Some("used") {
         let (c2, j2) = presence_post(&cfg, "team_get", &dict! {}, 15)?;
         if c2 == 200 && j2.str("dev").as_deref() == Some(parts.dev.as_str()) {
@@ -539,8 +539,8 @@ fn join(inv: &Invite, name: &str, key_src: Option<&str>, via: Option<&str>) -> R
 
 /// py team-join [--name 名字]：拿邀请加入一个 Team。邀请链接从 stdin 读（它是凭证：不进命令行）。没写名字时用管理员发邀请时给这台
 /// 设备起的（邀请里的 d；旧版本发的邀请里没有：用主机名）。成了：stdout 一行一项：Team 的名字、
-/// 服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空行）、Team 的编号、取配置的结果（ok | error…）、
-/// 没取成时的原因（取成了是给了这台设备几个账号），退出码 0。没成见 fail（原因码：link 链接不对、name 名字不对、joined 已经在这个
+/// 服务器的地址:端口、这台设备在服务器上的名字、现在几台设备（服务器没说是空行）、Team 的编号、同步配置的结果（ok | error…）、
+/// 没同步成时的原因（同步成了是给了这台设备几个账号），退出码 0。没成见 fail（原因码：link 链接不对、name 名字不对、joined 已经在这个
 /// Team 里、sign、denied 服务器不认这个邀请、expired 过期了、used 用过了、taken 这把密钥已经是一台设备、full、pin、cert、
 /// unreachable、old、clock、busy、server）。没成时什么都不留
 pub fn cmd_team_join(args: &[String]) -> R<()> {
@@ -635,7 +635,7 @@ fn policy_invite() -> R<Option<(String, String)>> {
 
 /// 照映射里的邀请加入（policy_invite）：这台设备还不在那个 Team 里（或者被移除了、映射里换了一个新的邀请），这个邀请没试过（上次是
 /// 连不上、服务器出错、名额满了之类一时的原因、过了一个小时的再试）才加入，拿拉映射用的 deploy key 当设备密钥。自己退出过这个 Team 的
-/// 不再自己加入。没成不出声，原因记在 teams/adopt.json（拉映射、取配置时在后台做的：下一次再试）。同时只做一个（后台拉映射、取配置
+/// 不再自己加入。没成不出声，原因记在 teams/adopt.json（拉映射、同步配置时在后台做的：下一次再试）。同时只做一个（后台拉映射、同步配置
 /// 可能撞上：另一个在做就算了）。加入了返回要说的那几项
 pub fn adopt() -> R<Option<Joined>> {
     let Some((link, key)) = policy_invite()? else { return Ok(None) };
@@ -678,7 +678,7 @@ pub fn adopt() -> R<Option<Joined>> {
 }
 
 /// py team-adopt：照维护者的映射里给这台设备的邀请加入（adopt）。加入了：stdout 一行「Team 的名字\t服务器的地址:端口\t这台设备在服务器
-/// 上的名字\t给了它几个账号（没取到配置是 -）」；没有要加入的、没成：什么都不输出。退出码都是 0
+/// 上的名字\t给了它几个账号（配置还没同步下来是 -）」；没有要加入的、没成：什么都不输出。退出码都是 0
 pub fn cmd_team_adopt(args: &[String]) -> R<()> {
     arity("team-adopt", args, 0, 0)?;
     if let Some(j) = adopt()? {
@@ -688,7 +688,7 @@ pub fn cmd_team_adopt(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// py team-sync [Team]：取一次配置（不写是哪个就每个都取）。stdout 一个 Team 一行：编号\t名字\t结果（ok | removed | lost | error）\t
+/// py team-sync [Team]：同步一次配置（不写是哪个就每个都同步）。stdout 一个 Team 一行：编号\t名字\t结果（ok | removed | lost | error）\t
 /// 手里那一份的序号\t原因；要找的 Team 没有是「原因码\t原因」、退出码 1
 pub fn cmd_team_sync(args: &[String]) -> R<()> {
     arity("team-sync", args, 0, 1)?;
@@ -771,7 +771,7 @@ pub fn team_rows() -> Vec<V> {
     teams().iter().map(|t| V::Dict(team_row(t))).collect()
 }
 
-/// 一个 Team 在列表里的样子：state 是 local（管理员还没接上服务器）| pending（还没取过配置）| ok | removed | lost | error
+/// 一个 Team 在列表里的样子：state 是 local（管理员还没接上服务器）| pending（还没同步过配置）| ok | removed | lost | error
 fn team_row(t: &Team) -> Dict {
     let doc = team_doc(&t.id);
     let (state, error) = match sync_state(&t.id) {

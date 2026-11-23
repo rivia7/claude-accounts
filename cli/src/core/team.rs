@@ -1,11 +1,11 @@
 //! Team 在本机的状态（~/.cca/teams/）：加入了哪些 Team、各自的服务器、这台设备在里面是谁、拿到的配置。只读文件，不联网、不碰密钥
-//! （加入、取配置、管理员的操作在 cmd/team.rs；线上格式在 cmd/team/doc.rs）。计划和信任怎么来见 docs/dev/team.md。
+//! （加入、同步配置、管理员的操作在 cmd/team.rs；线上格式在 cmd/team/doc.rs）。计划和信任怎么来见 docs/dev/team.md。
 //!
 //! ```text
 //! teams/index.json         {"v": 1, "order": [编号…]}：加入的先后（同一个账号出现在两个 Team 里时先加入的算数）
 //! teams/<编号>/team.json   这个 Team：名字、服务器、根公钥、这台设备的角色和编号（见 Team）
-//! teams/<编号>/doc.json    {"v": 1, "seq": 序号, "at": 什么时候取到的, "doc": 验过签名、解开的配置}
-//! teams/<编号>/sync.json   {"v": 1, "state": ok | removed | lost | error, "error": 原因, "at"}：最近一次取配置的结果（变了才写）
+//! teams/<编号>/doc.json    {"v": 1, "seq": 序号, "at": 什么时候同步到的, "doc": 验过签名、解开的配置}
+//! teams/<编号>/sync.json   {"v": 1, "state": ok | removed | lost | error, "error": 原因, "at"}：最近一次同步配置的结果（变了才写）
 //! teams/<编号>/id_ed25519  这台设备在这个 Team 里的密钥；secret 是邀请里那串随机数（配置的密钥由它派生）
 //! teams/<编号>/root_ed25519、admin.json  只有管理员的设备有：Team 的根密钥、管理员的状态（cmd/team/admin.rs）
 //! ```
@@ -135,7 +135,7 @@ pub fn teams() -> Vec<Team> {
     ids.iter().filter_map(|t| load_team(t)).collect()
 }
 
-/// 拿到的配置：(序号, 配置)；还没取到、读不了是 None
+/// 拿到的配置：(序号, 配置)；还没同步下来、读不了是 None
 pub fn team_doc(tid: &str) -> Option<(i64, Dict)> {
     let j = load_quiet(&team_path(tid, "doc.json"))?.as_dict()?;
     Some((j.get("seq")?.as_int().filter(|n| *n > 0)?, j.dict("doc")?))
@@ -154,7 +154,7 @@ thread_local! {
     static GRANTS: RefCell<Option<Rc<Vec<Grant>>>> = const { RefCell::new(None) };
 }
 
-/// 各个 Team 给这台设备的配置，照加入的先后（同一个账号出现在两个 Team 里，先加入的算数）。还没取到配置的不在里面；被管理员移除了的
+/// 各个 Team 给这台设备的配置，照加入的先后（同一个账号出现在两个 Team 里，先加入的算数）。还没同步到配置的不在里面；被管理员移除了的
 /// （sync.json 是 removed）也不在：手里那一份不再算数，它给的账号收起来。一个进程里只读一次（对账时每张账号表都要问）
 pub fn grants() -> Rc<Vec<Grant>> {
     if let Some(g) = GRANTS.with(|g| g.borrow().clone()) {
@@ -176,7 +176,7 @@ pub fn forget_grants() {
     GRANTS.with(|g| *g.borrow_mut() = None);
 }
 
-/// 被管理员移除了（最近一次取配置时服务器说的）
+/// 被管理员移除了（最近一次同步配置时服务器说的）
 fn removed(tid: &str) -> bool {
     load_quiet(&team_path(tid, "sync.json")).and_then(|j| j.as_dict()).is_some_and(|j| j.str("state").as_deref() == Some("removed"))
 }
@@ -187,7 +187,7 @@ pub fn grant_settled(tid: &str) -> bool {
     !path::isdir(&team_dir(tid)) || removed(tid) || grants().iter().any(|g| g.id == tid)
 }
 
-/// 这个 Team 叫什么（给人看的；不在了、没取到配置时是 None）
+/// 这个 Team 叫什么（给人看的；不在了、还没同步到配置时是 None）
 pub fn grant_name(tid: &str) -> Option<String> {
     grants().iter().find(|g| g.id == tid).map(|g| g.name.clone())
 }

@@ -6,6 +6,12 @@
 - `cca` 和 `install.sh` 里各有一份 `RELEASE_KEY`，必须和 `~/.ssh/cca_release_ed25519.pub` 一致（release.sh 会检查）
 - release.sh 在跑完回归后编通用版 App、`ditto` 打成 `cca-app.zip`、用发布密钥按 `cca-app` 签名，并确认这个签名在 `cca-release` 命名空间里不通过，和 cca 一起上传
 - 检查更新（`cca update --check [--json]`，App 的「检查更新…」，PROTOCOL 5.1）：发布列表走 `api.github.com` 的 releases（`update_releases`，拿不到、被限流时退回 `releases/latest`：只看得到正式版），按现在的版本挑（测试版也看更新的测试版）；版本的先后 辅助程序的 `ver_key`、Swift 的 `AppVersion` 都和 bash 的 `ver_gt` 一样。自动更新、不带版本号的 `cca update` 不变（只看正式版）。App 带事件文件运行它（查不了的原因看 `fail` 事件，不读 stderr），一天最多自动查一次、查不了 3 小时后再查；开发模式看 hello 的 `dev_mode`。「更新并重新打开」先 `cca update 版本号`，再照常 `cca gui update` 两步
+- 换了版本以后的第一条命令（`update_after`，`main` 的 `*)` 里 `update_hook` 之后、`policy_hook` / `team_hook` 之前）：删掉 `policy/checked`、`teams/checked`，这一次拉映射、
+  各个 Team 同步配置都不等间隔（平时一天、一个小时；都在后台）——在 Team 里的设备一更新就拿到最新的配置，映射里有给它的邀请、还没加入的机器马上加入
+  （docs/dev/team.md「维护者的映射 → Team」）。`update/ran` 记着上一次运行的版本，和现在的不一样就是换了版本；以前的版本不记它，所以没有 `ran` 时要有
+  更新留下的上一个版本（`update/cca.prev.version`：自动更新、`cca update`、一键安装再装一次都留着）才算，全新安装的两样都没有、不算。开发模式不做（不自动
+  更新，也就没有更新后）。不经过启动钩子的命令（`_gui`、`team`、`cost`、`remote`、`update`、`install`、`version`）不算：换了版本以后第一条经过钩子的命令才做。
+  回归 11b3d 的最后几条。
 - `cca gui`（在 `main` 最前面分派）：只装和当前 cca 版本号相同的 App（`$UPDATE_REPO/releases/download/v版本/cca-app.zip` 和 `.sig`，命名空间 `cca-app`、principal `cca-app`，和 cca 的 `cca-release` 分开；再查 bundle id `local.cca.app`、版本号、`codesign --verify`、`--self-check`）。下载好的先放在 `~/.cca/gui/next`，App 开着时不换（`gui_running`），换的时候旧的先挪开、换不上挪回去。`gui_hook` 在每次启动时看：装过 App（`gui/enabled`）、版本和 cca 不同 → 后台 `_gui-fetch`（6 小时一次）；用户自己删掉的 App 不装回来。开发模式下 `cca gui` 用 `macos/build.sh` 现编，`open --env CCA_GUI_CCA=<仓库里的 cca>` 打开 `macos/build/cca.app`，不装进 `~/Applications`
 - 辅助程序（`cli/` 的 Rust 程序，见 docs/dev/rust.md）：release.sh 一开始先编四种机器的那一份（`cargo build --release --locked --target …`：两种芯片的 Mac、x86_64 / arm64 的 Linux（musl 静态链接，在 Mac 上交叉编译）；要装 Rust 和这四个目标，`rustup target add`），带 `--remap-path-prefix` 去掉这台机器的路径并核对程序里没有 `$HOME`，各看一眼文件头（确实是那种机器的程序，Linux 的两份是静态链接的——它们在这台 Mac 上运行不了，真跑要靠 `tests/linux.sh`）；回归用要发布的那一份跑（`CCA_HELPER=cli/target/<这台机器的目标>/release/cca-core`，不另编）；回归过了以后用 `cli/pack.py` 把四份接到 `cca` 后面（仓库里的 `cca` 不带辅助程序，发布的那一份约 13 MB），接好的文件 `bash -n`、在一个空的 HOME 和空的缓存目录里真的运行一次（`cca _gui hello`：解出这台机器的那一份、校验、经它报出版本号；解出来的要和编出来的一字节不差；这台 Mac 能经 Rosetta 跑 Intel 的程序时，另一种芯片的那一份也这样跑一次），然后才签名。测试版「先发后验」用的那份 release.sh 拷贝只去掉回归那一步，编和接照旧
 

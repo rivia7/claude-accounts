@@ -812,7 +812,7 @@ class DeployTest(Base):
         return r
 
     def test_deploy(self):
-        """经 SSH 装好（Docker）、接上，整条路通（发邀请、别的设备加入、取到配置）；再部署是更新；地址是内网的：网页端不开；托管平台的部署文件"""
+        """经 SSH 装好（Docker）、接上，整条路通（发邀请、别的设备加入、同步到配置）；再部署是更新；地址是内网的：网页端不开；托管平台的部署文件"""
         b = self.box(docker=True)
         a, tid, root, svc = self.team()
         d = b.root / 'opt' / svc

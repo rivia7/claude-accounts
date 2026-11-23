@@ -105,7 +105,7 @@
 - `usage.md` — 查用量和用量表格、5 小时 / 按模型 / 每周的额度、周结算提醒、Codex 重置额度、登录失效、套餐档位、命令行会话登记、API 额度的入口
 - `cost.md` — 折合金额的统计和同步
 - `presence.md` — 设备统计的服务器（`./policy.sh presence`）、共享记下的 API key
-- `team.md` — Team：把维护者共享和自己的同步服务器合成一个概念（管理员的设备维护账号 → 节点和节点的定义、给每台设备发邀请；3.5.3 起自己的几台设备之间同步也用它，`cca hub` 去掉了）；分阶段的计划和已经定下来的、信任怎么来、服务器的 `--mode team`、账号走哪台服务器（`route`）、本机的状态（`~/.cca/teams/`）和 `cca team` 的命令（成员：加入、取配置、退出；管理员：建、接上服务器、邀请、授权、导入映射、发布、移除）；部署（一键部署 `cca team deploy`、安装脚本 `server/hub-install.sh`、假服务器 `tests/hub_box.py`、App 里部署（问地址和密码、`askpass_run`）、托管平台 `cca team hosted`）；从维护者的映射、自己的同步服务器迁过来（`hub_leftovers`）；做到哪一步了看它的阶段表
+- `team.md` — Team：把维护者共享和自己的同步服务器合成一个概念（管理员的设备维护账号 → 节点和节点的定义、给每台设备发邀请；3.5.3 起自己的几台设备之间同步也用它，`cca hub` 去掉了）；分阶段的计划和已经定下来的、信任怎么来、服务器的 `--mode team`、账号走哪台服务器（`route`）、本机的状态（`~/.cca/teams/`）和 `cca team` 的命令（成员：加入、同步配置、退出；管理员：建、接上服务器、邀请、授权、导入映射、发布、移除）；部署（一键部署 `cca team deploy`、安装脚本 `server/hub-install.sh`、假服务器 `tests/hub_box.py`、App 里部署（问地址和密码、`askpass_run`）、托管平台 `cca team hosted`）；从维护者的映射、自己的同步服务器迁过来（`hub_leftovers`）；做到哪一步了看它的阶段表
 - `policy.md` — 维护者的映射：共享的开关（默认关着，`cca policy on|off`、「共享与同步」页）、拉取、合并进账号表、锁定请求、deploy key（`./policy.sh`）
 - `fill.md` — 维护者的参考节点，写进路由器的配置文件
 - `router.md` — 路由器端：OpenClash / ShellCrash、几台设备共用一个路由器、节点改名
@@ -113,7 +113,7 @@
 - `network.md` — 在家还是在外、出口检测的结果、DNS / WebRTC 泄露检测
 - `linux.md` — Linux 上安装、服务器上登录、服务器上不用路由器
 - `clients.md` — 辅助安装 claude / codex / agy、客户端统一更新
-- `release.md` — release.sh 的步骤、测试版先发后验、自动更新、检查更新、`cca gui`
+- `release.md` — release.sh 的步骤、测试版先发后验、自动更新、换了版本以后马上拉映射和同步配置（`update_after`）、检查更新、`cca gui`
 - `mail.md` — 邮箱助手（`cca mail`）
 - `remote.md` — 远程会话：会话宿主（`cca remote on|off|list|attach`、`CCA_REMOTE`）、终端关了会话照样运行、接回去；两台机器配对（`cca remote pair|join|peers|allow|unpair`）、经维护者的服务器中转、端到端加密、宿主那头的转接进程；界面 App 的「远程会话」页和内嵌的终端（伪终端、SwiftTerm）；分阶段的计划和已经定下来的也在里面；网页端（手机不装 cca，在浏览器里接入：访客设备、WebSocket 进中转、`server/web/` 的页面、`cca remote pair --web`、带证书的端口和部署；`python3 tests/web_demo.py` 在本机跑起来看）；每个 Team 的会话走这个 Team 自己的服务器中转（配对记在哪台服务器上、`cca remote pair --team`）；给网页端要 IP 证书的证书助手（`server/cca-acme.py`）
 - `desktop.md` — 程序坞整理、Claude App 多开、启动器图标

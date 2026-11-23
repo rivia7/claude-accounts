@@ -86,7 +86,7 @@ enum CcaCommand: Sendable, Hashable {
     /// 一个 Team 的设备和配置（`cca team devices <Team> --json`，PROTOCOL 4.14；只有管理员的设备问得到）：和服务器对一遍，可能发布。
     /// auto：这一页看得见时自己查的（低优先级）
     case teamDevices(team: String, auto: Bool)
-    /// 各个 Team 取一次配置（`cca team sync`）：取到新的账号表马上照它改、同步路由器
+    /// 各个 Team 同步一次配置（`cca team sync`）：同步到新的，账号表马上照它改、同步路由器
     case teamSync
     /// 退出一个 Team（`cca team leave <编号>`）：要同意（成员是 team_leave，管理员是 team_delete，范围是 Team 的编号，默认不同意）
     case teamLeave(team: String)

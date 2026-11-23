@@ -890,7 +890,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
         // 账号目录在看之前的样子（在问进程、读登记之前记下）：等的时候拿它比，看的这段时间里变了的不会漏
         let mut dirs: Vec<String> = targets.iter().flatten().flatten().map(|(_, _, d)| d.clone()).collect();
         // Team：加入了、退出了（teams/ 里多了、少了一个目录），取到了新的配置、被移除了（那个 Team 的目录里换了文件）：马上醒来换各路。
-        // 不只盯现在有一路的：刚加入、配置还没取到的那个 Team 也盯着
+        // 不只盯现在有一路的：刚加入、配置还没同步下来的那个 Team 也盯着
         if path::isdir(&TEAMS_DIR) {
             dirs.push(TEAMS_DIR.clone());
             dirs.extend(teams().iter().map(|t| team_dir(&t.id)));

@@ -51,26 +51,30 @@ func teamFixtureTests() {
     check("team devices：旧版 cca 没有 alias_lock 时是 nil（App 不给锁定的开关）", flatOnly != nil && flatOnly?.aliasLock == nil && perTool?.aliasLock == nil)
     check("team devices：别名按工具（同一个邮箱在 Claude、Codex 里叫得不一样）；旧版 cca 没有 tool_aliases 时用按邮箱的",
           perTool?.accountList.map(\.alias) == ["team-3", "team-1"] && flatOnly?.accountList.map(\.alias) == ["team-3", "team-3"])
+    let mixed = #"{"team":"ab","accounts":{"codex":{"z@example.com":"US-A"},"claude":{"a@example.com":"US-A","b@example.com":"US-B","c@example.com":"US-A","d@example.com":"US-A","e@example.com":"US-A"}},"aliases":{},"tool_aliases":{"claude":{"a@example.com":"team-10","b@example.com":"team-2","d@example.com":"Work","e@example.com":"team-1"},"codex":{"z@example.com":"team-1"}}}"#
+    check("team devices：账号先照工具、再照别名排（team-2 在 team-10 前面），没有别名的在后",
+          (try? JSONDecoder().decode(TeamDevicesDoc.self, from: Data(mixed.utf8)))?.accountList.map(\.spec)
+            == ["claude:e@example.com", "claude:b@example.com", "claude:a@example.com", "claude:d@example.com", "claude:c@example.com", "codex:z@example.com"])
     let unknown = try? JSONDecoder().decode(TeamEntry.self, from: Data(#"{"id":"ab","name":"x","role":"later-role","state":"later-state"}"#.utf8))
     check("不认识的角色当成员，不认识的状态当出了问题", unknown?.isAdmin == false && unknown?.state.failing == true && unknown?.seq == 0 && unknown?.accounts == 0)
     if let doc = loadFixture(TeamDevicesDoc.self, "team_devices.json") {
         let now = 1794042000.0
-        check("team devices：Team 的编号和名字、配置里的账号（照工具、邮箱排）和别名、带着定义的节点", doc.team == teamA && doc.name == "书房组"
-              && doc.accountList.map(\.spec) == ["claude:carol@example.com", "claude:grace@example.com", "codex:frank@example.com"]
-              && doc.accountList.map(\.alias) == ["卡罗尔", "team-1", "team-1"] && doc.accountList.first?.node == "US-C" && doc.nodes == ["US-A", "US-C"])
+        check("team devices：Team 的编号和名字、配置里的账号（照工具、别名排）和别名、带着定义的节点", doc.team == teamA && doc.name == "书房组"
+              && doc.accountList.map(\.spec) == ["claude:grace@example.com", "claude:carol@example.com", "codex:frank@example.com"]
+              && doc.accountList.map(\.alias) == ["team-1", "卡罗尔", "team-1"] && doc.accountList.first?.node == "US-C" && doc.nodes == ["US-A", "US-C"])
         let d = doc.devices
         check("team devices：这台在前；设备编号、管理员起的名字、它在服务器上的名字；别名锁定着", d.count == 6 && d[0].me && d[0].id == "0a1b2c3d4e5f6071"
               && d[1].label == "小王的 MacBook" && d[1].name == "wang-mbp" && d[2].name == nil && doc.aliasLock == true)
-        check("team devices：授权：全部 / 只给几个 / 一个都不给", d[0].grantsAll && d[0].has(doc.accountList[2]) && !d[1].grantsAll && d[1].has(doc.accountList[0])
-              && !d[1].has(doc.accountList[1]) && d[1].grantCount(of: 3) == 1 && d[0].grantCount(of: 3) == 3 && !d[4].grantsAll && d[4].grantCount(of: 3) == 0)
+        check("team devices：授权：全部 / 只给几个 / 一个都不给", d[0].grantsAll && d[0].has(doc.accountList[2]) && !d[1].grantsAll && d[1].has(doc.accountList[1])
+              && !d[1].has(doc.accountList[0]) && d[1].grantCount(of: 3) == 1 && d[0].grantCount(of: 3) == 3 && !d[4].grantsAll && d[4].grantCount(of: 3) == 0)
         check("team devices：状态；不认识的状态不算还在的", d[2].state == .invited && d[2].state.active && d[4].state == .revoked && !d[4].state.active
               && !d[5].state.isKnown && !d[5].state.active && d[2].expiresEpoch == 1794600000 && d[3].problem?.contains("公钥") == true)
         check("team devices：给人看的那一句", Texts.teamDeviceDetail(d[0], accounts: 3, now: now) == "刚刚来过 · 全部账号 · 配置是最新的"
-              && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 还没取到最新的配置")
+              && Texts.teamDeviceDetail(d[1], accounts: 3, now: now).hasSuffix("1 个账号 · 还没同步到最新的配置")
               && Texts.teamDeviceDetail(d[2], accounts: 3, now: now) == "邀请还没用（6 天后过期） · 全部账号"
               && Texts.teamDeviceDetail(d[4], accounts: 3, now: now) == "移除了", Texts.teamDeviceDetail(d[0], accounts: 3, now: now))
     }
-    check("命令：看设备（展开时自己查的降优先级）、取配置、退出、邀请、移除、改授权、改名字、改节点、改别名",
+    check("命令：看设备（展开时自己查的降优先级）、同步配置、退出、邀请、移除、改授权、改名字、改节点、改别名",
           CcaCommand.teamDevices(team: teamA, auto: true).arguments == ["team", "devices", teamA, "--json"] && CcaCommand.teamDevices(team: teamA, auto: true).isBackground
           && !CcaCommand.teamDevices(team: teamA, auto: false).isBackground && CcaCommand.teamSync.arguments == ["team", "sync"]
           && CcaCommand.teamLeave(team: teamA).arguments == ["team", "leave", teamA]
@@ -176,6 +180,10 @@ func teamFixtureTests() {
     check("不是管理员的 Team：不问设备", teamRuns(t).count == 1 && m.teamSnapshot(m.teams[1]) == nil)
     guard let doc = m.teamSnapshot(a)?.doc else { return }
     let accounts = doc.accountList
+    guard let carol = accounts.first(where: { $0.email == "carol@example.com" }), let grace = accounts.first(where: { $0.email == "grace@example.com" }) else {
+        check("夹具里有 carol、grace", false)
+        return
+    }
     // 发邀请：链接只进剪贴板
     m.teamInvite = TeamInviteDraft(team: teamB, label: "dan-air")
     m.sendTeamInvite(a)
@@ -189,17 +197,17 @@ func teamFixtureTests() {
           && log.copiedSecrets == [link] && log.copied.isEmpty && m.toast?.text.contains(link) == false && m.toast?.text.contains("dan-air") == true
           && m.teamInvite == TeamInviteDraft())
     // 改授权
-    m.setTeamGrant(a, doc.devices[0], accounts[1], on: false, all: accounts)
+    m.setTeamGrant(a, doc.devices[0], grace, on: false, all: accounts)
     _ = await waitUntil { !m.teamBusy && teamRuns(t).contains { $0.prefix(2) == ["team", "grant"] } }
     check("全部都给的设备去掉一个账号：改成只给剩下的",
           teamRuns(t).contains(["team", "grant", teamA, "0a1b2c3d4e5f6071", "none", "+claude:carol@example.com", "+codex:frank@example.com"]))
-    m.setTeamGrant(a, doc.devices[1], accounts[1], on: true, all: accounts)
+    m.setTeamGrant(a, doc.devices[1], grace, on: true, all: accounts)
     _ = await waitUntil { !m.teamBusy && teamRuns(t).contains(["team", "grant", teamA, "1b2c3d4e5f607182", "+claude:grace@example.com"]) }
     check("只给几个的设备加一个", teamRuns(t).contains(["team", "grant", teamA, "1b2c3d4e5f607182", "+claude:grace@example.com"]))
-    m.mapTeamAccount(a, accounts[0], node: "US-C")
+    m.mapTeamAccount(a, carol, node: "US-C")
     try? await Task.sleep(nanoseconds: 60_000_000)
     check("节点没变：不发命令", !teamRuns(t).contains { $0.prefix(2) == ["team", "map"] })
-    m.mapTeamAccount(a, accounts[0], node: "US-A")
+    m.mapTeamAccount(a, carol, node: "US-A")
     check("改节点", await waitUntil { !m.teamBusy && teamRuns(t).contains(["team", "map", teamA, "claude", "carol@example.com", "US-A"]) })
     // 改名字：打开输入框时填着现在的名字；名字没变不发命令；改成了收起输入框
     let dev0 = doc.devices[0]

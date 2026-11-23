@@ -683,7 +683,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         self.assertEqual(srvmod.parse_team_docs({db: d1}), {db: d1})
         self.assertEqual(self.admin('team_put', docs={db: dict(d1, seq=0)})[0], 400)
         self.assertEqual(self.call('team_put', 'b', docs={db: d1}), (403, {'error': 'denied'}), '设备存不了配置')
-        # 还没加入的设备的配置可以先存着：加入以后马上取得到
+        # 还没加入的设备的配置可以先存着：加入以后马上同步得到
         _, tc, dc, kc = self.invite()
         d0 = self.doc(kc, dc, 1, content)
         self.assertEqual(self.admin('team_put', docs={dc: d0})[1]['stored'], [dc])
@@ -693,7 +693,7 @@ class TeamServerTest(SignedCalls, unittest.TestCase):
         self.assertEqual((rows['studio']['dev'], rows['studio']['pub'], rows['studio']['fp'], rows['studio']['seq']),
                          (da, self.pubs['a'], self.fp('a'), 0))
         self.assertEqual((rows['studio-2']['dev'], rows['studio-2']['seq'], rows['studio-2']['have'], rows['studio']['have']), (db, 3, 7, None),
-                         '各台设备取配置时说的手里那一份的序号')
+                         '各台设备同步配置时说的手里那一份的序号')
         self.assertEqual((rows['studio-2']['proof'], rows['studio']['proof']), (proof, None), '设备加入时带的认证码原样回给管理员；直接登记的没有')
         self.assertTrue(all(0 <= r['joined_age'] <= 120 and 0 <= r['seen_age'] <= 120 for r in rows.values()), rows)
         self.assertEqual([(i['dev'], i['seq'], 3500 < i['expires_in'] <= 3600) for i in j['invites']], [(dc, 1, True)], j['invites'])

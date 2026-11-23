@@ -1617,7 +1617,7 @@ final class AppModel {
     /// 最近一次问到的各个 Team 的设备和配置（只在内存里；只有管理员的设备问得到）
     private(set) var teamSnapshots: [String: TeamSnapshot] = [:]
     private(set) var teamLoading: Set<String> = []
-    /// 正在改（取配置、退出、发邀请、移除、改授权、改节点）：按钮先停用
+    /// 正在改（同步配置、退出、发邀请、移除、改授权、改节点）：按钮先停用
     private(set) var teamBusy = false
     /// 展开着「设备和账号」的 Team（管理员的）
     var teamExpanded: Set<String> = []
@@ -1676,9 +1676,9 @@ final class AppModel {
         run(.teamDeploy(team: t.id))
     }
 
-    /// 各个 Team 取一次配置：取到新的账号表马上照它改
+    /// 各个 Team 同步一次配置：同步到新的，账号表马上照它改
     func syncTeams() {
-        runTeam(.teamSync, failureTitle: "没能取到 Team 的配置", success: "取过了", refresh: nil)
+        runTeam(.teamSync, failureTitle: "没能同步 Team 的配置", success: "已同步", refresh: nil)
     }
 
     /// 退出一个 Team（cca 先问同意：成员是 `consent.team_leave`，管理员是 `consent.team_delete`——这台设备上的根密钥跟着没了）
@@ -1713,7 +1713,7 @@ final class AppModel {
         teamRename = TeamRenameDraft(team: t.id, device: d.id, name: d.label)
     }
 
-    /// 改好：管理员这边记着的名字换成它；加入了的设备在服务器上的名字也改（它下次取配置时看到）。没改成时输入框留着，原因在提示里
+    /// 改好：管理员这边记着的名字换成它；加入了的设备在服务器上的名字也改（它下次同步配置时看到）。没改成时输入框留着，原因在提示里
     func renameTeamDevice(_ t: TeamEntry, _ d: TeamDevice) {
         guard let draft = teamRename, draft.team == t.id, draft.device == d.id else { return }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1732,7 +1732,7 @@ final class AppModel {
         teamAlias = TeamAliasDraft(team: t.id, spec: a.spec, email: a.email, alias: a.alias ?? "")
     }
 
-    /// 改好：这个账号在 Team 里的别名换成它，发布；各台设备上照 Team 给的用着的下次取配置时跟着改。没改成时输入框留着，原因在提示里
+    /// 改好：这个账号在 Team 里的别名换成它，发布；各台设备上照 Team 给的用着的下次同步配置时跟着改。没改成时输入框留着，原因在提示里
     func setTeamAlias(_ t: TeamEntry, _ a: TeamAccount) {
         guard let draft = teamAlias, draft.team == t.id, draft.spec == a.spec else { return }
         let alias = draft.alias.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1752,7 +1752,7 @@ final class AppModel {
                 refresh: t)
     }
 
-    /// 定一个账号走哪个节点（各台设备下次取配置时跟着换）
+    /// 定一个账号走哪个节点（各台设备下次同步配置时跟着换）
     func mapTeamAccount(_ t: TeamEntry, _ a: TeamAccount, node: String) {
         guard node != a.node, !node.isEmpty else { return }
         runTeam(.teamMap(team: t.id, tool: a.tool, email: a.email, node: node), failureTitle: "没能改 \(a.email) 走的节点", success: "改好了",
