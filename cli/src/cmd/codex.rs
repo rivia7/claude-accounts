@@ -228,14 +228,6 @@ pub(super) fn temp_file() -> std::io::Result<std::fs::File> {
     Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "No usable temporary file name found"))
 }
 
-/// 这个进程现在开着的文件描述符里不小于 from 的那些（和 py::proc 里的一样：/dev/fd 里列的，读不了就当 from 到 255 都开着）
-fn open_fds_from(from: i32) -> Vec<i32> {
-    match std::fs::read_dir("/dev/fd") {
-        Ok(dir) => dir.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok()).filter(|fd| *fd >= from).collect(),
-        Err(_) => (from..256).collect(),
-    }
-}
-
 /// 程序名是空的时候 Python 报的 errno：它把 PATH 里每个目录拼上空的名字去 exec（目录不能执行，EACCES），报第一个不是
 /// “没有这个文件 / 不是目录”的错，都是就报最后一个；Rust 的 execvp 遇到空名字直接是 ENOENT
 fn empty_program_errno(cwd: &str) -> i32 {
@@ -301,24 +293,15 @@ const TIMEOUT_MAX: f64 = 9223372036.854775;
 impl Piped {
     /// 起不来是 `Fail::Other("OSError", [str(e)])`（说明里带着文件名）
     pub(super) fn spawn<S: AsRef<str>>(argv: &[S], cwd: &str, err: std::fs::File) -> R<Piped> {
-        use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         let program = argv[0].as_ref();
         let mut c = Command::new(program);
         c.args(argv[1..].iter().map(|a| a.as_ref()));
         c.current_dir(cwd);
         c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::from(err.try_clone()?));
-        // 和 py::proc::Cmd 一样（Python 的 close_fds=True）：bash 那边开着的 3 号（提问的终端）、9 号（启动锁）不留给子进程
-        let inherited = open_fds_from(3);
-        // SAFETY: fork 之后、exec 之前只调 fcntl；inherited 是之前就分配好的
-        unsafe {
-            c.pre_exec(move || {
-                for fd in &inherited {
-                    libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC);
-                }
-                Ok(())
-            });
-        }
+        // 和 py::proc::Cmd 一样（Python 的 close_fds=True）：bash 那边开着的 3 号（提问的终端）、9 号（启动锁）不留给子进程。
+        // 在这边标、不在子进程里标：见 cloexec_inherited（多线程的进程 fork 时子进程可能被杀）
+        proc::cloexec_inherited();
         let mut child = c.spawn().map_err(|e| popen_error(&e, program, cwd))?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout 接的是管道");

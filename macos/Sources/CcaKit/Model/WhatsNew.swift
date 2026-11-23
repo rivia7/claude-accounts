@@ -23,6 +23,8 @@ enum WhatsNew {
         ReleaseNote(version: "3.6.2", title: "侧栏的底栏不再挡住账号", points: [
             .init(symbol: "sidebar.left",
                   text: "侧栏要滚动时，滚到底栏下面的账号会淡出，不再和版本号、「新手教程」叠在一起。"),
+            .init(symbol: "checkmark.shield",
+                  text: "启动账号、cca check 时的 DNS 泄露检测偶尔会少发一个请求、甚至没测成：修好了。"),
         ]),
         ReleaseNote(version: "3.6.1", title: "Team 的管理员指定安装用的节点", points: [
             .init(symbol: "arrow.down.circle",

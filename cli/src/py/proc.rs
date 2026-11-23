@@ -15,6 +15,43 @@ fn open_fds_from(from: i32) -> Vec<i32> {
     }
 }
 
+/// 起子进程前调：这个进程现在开着的 3 号及以上的描述符都标成 exec 时关掉（Python 的 subprocess 默认 close_fds=True：子进程只带着
+/// 0、1、2）。bash 那边开着的 3（提问的终端 / 答案）、9（启动锁）不能漏给子进程：后台的上报进程带着 9 号会一直占着锁。这个进程自己
+/// 照样用它们，只是不带进 exec 出来的程序。
+/// 在这边标，不在子进程里（fork 之后、exec 之前）标：子进程里要做事，标准库就只能 fork，而 macOS 上多线程的进程 fork 的那一刻，
+/// 别的线程正在做 libSystem 里只做一次的初始化（比如 getaddrinfo 第一次用到 libnotify）的话，子进程在 fork 自己的收尾里就被杀掉
+/// （SIGKILL；崩溃报告说 crashed on child side of fork pre-exec、os_once_t is corrupt）：泄露检测里 STUN 线程查地址的同时，
+/// 别的线程起 curl，偶尔就少一个请求、甚至没测成。子进程里不做事的，标准库用 posix_spawn（不走 fork 的那些收尾）
+pub fn cloexec_inherited() {
+    for fd in open_fds_from(3) {
+        // SAFETY: 只是给这个描述符设 exec 时关掉（列目录用的那个这时已经关了：EBADF，不管）
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+}
+
+/// 给了新环境、命令只写了名字时，照新环境的 PATH 找到它（Python 的 subprocess 也是照新环境的 PATH 找）：标准库这时自己在子进程里找，
+/// 只能 fork（见 cloexec_inherited），找好了交给它的是路径，就能用 posix_spawn。PATH 里有不是绝对路径的一项（照子进程的当前目录算）、
+/// 没有 PATH、都没找到时是 None：照旧交给标准库
+fn resolve(name: &str, env: &[(String, String)]) -> Option<String> {
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    let path = env.iter().rev().find(|(k, _)| k == "PATH").map(|(_, v)| v.as_str())?;
+    for dir in path.split(':') {
+        if !dir.starts_with('/') {
+            return None;
+        }
+        let p = format!("{}/{name}", dir.trim_end_matches('/'));
+        let Ok(c) = std::ffi::CString::new(p.as_str()) else { return None };
+        // execvp 一样：是文件、能执行的才算，不能执行的接着往后找
+        // SAFETY: c 是以 0 结尾的路径，access 只是问一下
+        if std::fs::metadata(&p).is_ok_and(|m| m.is_file()) && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0 {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// 起了以后不等的子进程（`subprocess._active`）。Python 的 Popen 对象没人管了以后，下一次起子进程时 `_cleanup()` 把已经退出的
 /// 收走，不留僵尸；Rust 的 `Child` 丢掉就没人收了——常驻的上报进程每隔几分钟在后台起一次统计，一天下来就是上百个僵尸，
 /// 占着这个用户的进程数。交给 `forget` 的子进程由 `reap` 收：每次 `spawn` 之前收一遍（上报进程每分钟都要起 ps、curl）
@@ -176,7 +213,11 @@ impl Cmd {
     }
 
     fn command(&self) -> Command {
-        let mut c = Command::new(&self.argv[0]);
+        let found = self.env.as_deref().and_then(|env| resolve(&self.argv[0], env));
+        let mut c = Command::new(found.as_deref().unwrap_or(&self.argv[0]));
+        if found.is_some() {
+            c.arg0(&self.argv[0]); // 程序看到的 argv[0] 照旧是写的名字
+        }
         c.args(&self.argv[1..]);
         if let Some(env) = &self.env {
             c.env_clear();
@@ -197,25 +238,22 @@ impl Cmd {
         };
         c.stdout(io_of(self.stdout));
         c.stderr(io_of(self.stderr));
+        cloexec_inherited();
         let (merge, session) = (self.stderr == Out::ToStdout, self.new_session);
-        // Python 的 subprocess 默认 close_fds=True：子进程只带着 0、1、2。bash 那边开着的 3（提问的终端 / 答案）、9（启动锁）
-        // 不能漏给子进程，后台的上报进程带着 9 号会一直占着锁。先在这里记下开着哪些，fork 以后只做 fcntl（exec 成功才关：
-        // 标准库报告 exec 失败用的管道也在里面，不能直接关）
-        let inherited = open_fds_from(3);
-        // SAFETY: fork 之后、exec 之前只调 fcntl、dup2 和 setsid，都是可以在这里调的系统调用；inherited 是之前就分配好的
-        unsafe {
-            c.pre_exec(move || {
-                for fd in &inherited {
-                    libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC);
-                }
-                if merge && libc::dup2(1, 2) < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                if session && libc::setsid() < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        if merge || session {
+            // stderr 并进 stdout、新的会话只能在子进程里做：只有这两种让标准库 fork（见 cloexec_inherited）
+            // SAFETY: fork 之后、exec 之前只调 dup2 和 setsid，都是可以在这里调的系统调用
+            unsafe {
+                c.pre_exec(move || {
+                    if merge && libc::dup2(1, 2) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if session && libc::setsid() < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
         c
     }
@@ -497,5 +535,57 @@ mod tests {
         env_set(&mut env, "B", "3");
         env_drop(&mut env, "A");
         assert_eq!(env, [("B".to_string(), "3".to_string())]);
+    }
+
+    /// 给了新环境、只写了名字的命令照新环境的 PATH 找（找好了交给标准库的是路径：它就用 posix_spawn），程序看到的 argv[0] 照旧
+    #[test]
+    fn finds_commands_on_the_new_path() {
+        let env = |p: &str| vec![("PATH".to_string(), p.to_string())];
+        assert_eq!(resolve("sh", &env("/nonexistent:/bin")).as_deref(), Some("/bin/sh"));
+        assert_eq!(resolve("sh", &env("/bin/")).as_deref(), Some("/bin/sh"));
+        assert_eq!(resolve("/bin/sh", &env("/bin")), None, "写了路径的不用找");
+        assert_eq!(resolve("sh", &env("bin:/bin")), None, "相对的一项照子进程的当前目录算：交给标准库");
+        assert_eq!(resolve("sh", &env(":/bin")), None, "空的一项是当前目录：同上");
+        assert_eq!(resolve("sh", &[]), None, "没有 PATH：交给标准库");
+        assert_eq!(resolve("cca-no-such-command", &env("/bin:/usr/bin")), None);
+        let d = crate::py::fs::TempDir::new().unwrap();
+        let fake = format!("{}/sh", d.path);
+        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+        assert_eq!(resolve("sh", &env(&format!("{}:/bin", d.path))).as_deref(), Some("/bin/sh"), "不能执行的接着往后找");
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        assert_eq!(resolve("sh", &env(&format!("{}:/bin", d.path))).as_deref(), Some(fake.as_str()), "前面的先用");
+        let twice = vec![("PATH".to_string(), d.path.clone()), ("PATH".to_string(), "/bin".to_string())];
+        assert_eq!(resolve("sh", &twice).as_deref(), Some("/bin/sh"), "写了两次的照后写的（和传给子进程的一样）");
+        let d0 = Cmd::new(["sh", "-c", "echo $0"]).env(env("/bin:/usr/bin")).stdout(Out::Capture).run().unwrap();
+        assert_eq!(d0.out(), "sh\n", "argv[0] 是写的名字，不是找到的路径");
+    }
+
+    /// 不带 CLOEXEC 开着的描述符（像 bash 交给这个进程的 3 号、9 号）不带给子进程：直接起的、给了新环境的、stderr 并进 stdout 的、
+    /// 新会话的都是
+    #[test]
+    fn children_get_only_stdio() {
+        // SAFETY: 测试自己开、自己关的描述符；挪到 200 号，免得和 sh 自己用的撞上
+        let fd = unsafe {
+            let fd = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY);
+            assert!(fd >= 0);
+            assert_eq!(libc::dup2(fd, 200), 200);
+            libc::close(fd);
+            200
+        };
+        let probe = format!("[ -e /dev/fd/{fd} ] && echo open || echo closed");
+        let path = vec![("PATH".to_string(), "/bin:/usr/bin".to_string())];
+        for (what, c) in [
+            ("直接起", Cmd::new(["/bin/sh", "-c", probe.as_str()])),
+            ("新环境", Cmd::new(["sh", "-c", probe.as_str()]).env(path)),
+            ("stderr 并进 stdout", Cmd::new(["/bin/sh", "-c", probe.as_str()]).stderr(Out::ToStdout)),
+            ("新会话", Cmd::new(["/bin/sh", "-c", probe.as_str()]).new_session()),
+        ] {
+            // SAFETY: 每次先把它改回不带 CLOEXEC（像刚从 bash 那边继承来的）
+            unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+            let d = c.stdin(In::Null).stdout(Out::Capture).run().unwrap();
+            assert_eq!(d.out(), "closed\n", "{what}");
+        }
+        // SAFETY: 测试自己开的
+        unsafe { libc::close(fd) };
     }
 }
