@@ -42,7 +42,7 @@ fn named<'a>(px: &'a [Dict], name: &str) -> Option<&'a Dict> {
 
 /// 换掉这个 Team 的节点定义（空了就是没有节点：null）。先照成员设备查配置的那一套（fill_problems）查一遍：不合格的不存，免得发出去
 /// 各台设备整份不用
-fn set_proxies(a: &Dict, px: Vec<Dict>) -> Result<(), String> {
+pub(super) fn set_proxies(a: &Dict, px: Vec<Dict>) -> Result<(), String> {
     let config = a.dict("config").unwrap_or_default();
     let group = config.dict("nodes").and_then(|n| n.str("group")).map_or(DEFAULT_GROUP.to_string(), |g| g.to_string());
     if px.is_empty() {

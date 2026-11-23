@@ -78,7 +78,7 @@ class TeamRelayTest(rr.Base):
     def setUp(self):
         super().setUp()
         admin = self.admin = Device(self.d / 'admin', 'admin', {})
-        self.tid, root = self.lines(admin, 'team-new', '研发组', '--device', 'studio')
+        self.tid, root, _ = self.lines(admin, 'team-new', '研发组', '--device', 'studio')
         self.team = TeamServer(self.d / 'team-srv', root)
         self.addCleanup(self.team.stop)
         self.lines(admin, 'team-attach', self.tid, self.team.url, self.team.pin)

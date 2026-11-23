@@ -6654,7 +6654,8 @@ TEAM_USAGE="用法: cca team [ls [--json]]                    这台设备在哪
       cca team sync [Team]                         马上同步一次配置（平时每小时自动同步）
       cca team leave [Team]                        退出
     管理员：
-      cca team new 名字 [--device 这台设备的名字]   建一个 Team（接着部署它的同步服务器）
+      cca team new 名字 [--device 这台设备的名字] [--accounts all|none|工具:邮箱,…]
+                                                   建一个 Team（接着部署它的同步服务器）。这台设备上哪些账号放进去：不写 --accounts 时问你
       cca team deploy Team [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--web-port 端口 | --no-web]
                       [--docker | --systemd] [--dir 目录]
                                                    经 SSH 把它的同步服务器装到自己的 Linux 服务器上、接上（再运行是更新；--script 只打出安装脚本）。
@@ -7107,23 +7108,100 @@ team_leave() {   # cca team leave [Team]：退出。成员：服务器上移除�
 	gui_done team_left "已退出「${name}」${note:+。${note}}"
 }
 
-team_new() {   # cca team new 名字 [--device 这台设备的名字]：建一个 Team（只在这台设备上：还没有服务器），说下一步。App 里不写名字：问（team.new）
-	local out tid root err=""
+TEAM_NEW_USAGE="用法: cca team new 名字 [--device 这台设备的名字] [--accounts all|none|工具:邮箱,…]"
+team_new() {   # cca team new 名字 [--device 这台设备的名字] [--accounts all|none|工具:邮箱,…]：建一个 Team（只在这台设备上：还没有服务器），
+	             # 说下一步。没写 --accounts 时问这台设备上哪些账号连同节点、别名放进去（team_new_pick；没有终端的不问、一个都不放）。
+	             # App 里不写名字：先问名字（team.new）
+	local out tid root n name spec="" asked=""
+	local -a args=()
 	if [ $# -eq 0 ] && [ -n "$PROMPT_GUI" ]; then
 		ask_fields team.new "新建 Team" "一个 Team 是一组设备加一份配置（哪些账号、各走哪个节点）。建在这台 Mac 上：它是管理员，Team 的根密钥只在它上面。建好以后部署这个 Team 的同步服务器，再给别的设备发邀请。" \
 			"name|text|teamname||Team 的名字|比如 我的设备、设计组|" || return 1
 		set -- "$F_name"
 	fi
-	[ $# -ge 1 ] || die "用法: cca team new 名字 [--device 这台设备的名字]"
-	out=$(py team-new "$@") || team_fail "$out" "没建成"
-	{ IFS= read -r tid; IFS= read -r root; } <<< "$out"
-	okay "建好了「${1}」（${tid:0:8}）：这台设备是它的管理员"
+	[ $# -ge 1 ] || die "$TEAM_NEW_USAGE"
+	name=$1
+	shift
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--device) [ $# -ge 2 ] || die "$TEAM_NEW_USAGE"; args+=(--device "$2"); shift ;;
+			--accounts) [ $# -ge 2 ] || die "$TEAM_NEW_USAGE"; spec=$2; asked=1; shift ;;
+			*) die "$TEAM_NEW_USAGE" ;;
+		esac
+		shift
+	done
+	if [ -z "$asked" ] && interactive && [ -n "${name//[[:space:]]/}" ]; then   # 名字是空的：不问，下面辅助程序说名字不对
+		[ -n "$PROMPT_GUI" ] || out=$(py check teamname "$name") || FAIL_CODE=team_name die "$out"   # 名字不对的话先说，别等选完账号
+		team_new_pick "$name" || return 1
+	fi
+	[ -z "$spec" ] || args+=(--accounts "$spec")
+	out=$(py team-new "$name" ${args[@]+"${args[@]}"}) || team_fail "$out" "没建成"
+	{ IFS= read -r tid; IFS= read -r root; IFS= read -r n; } <<< "$out"
+	[ -n "$n" ] && [ "$n" != 0 ] || n=""
+	okay "建好了「${name}」（${tid:0:8}）：这台设备是它的管理员${n:+，放进了 ${n} 个账号（连同现在走的节点、别名）}"
 	say "  下一步：部署它的同步服务器（服务器上只放这把公开的根公钥，没有要保密的东西）"
 	say "    有自己的 Linux 服务器：cca team deploy ${tid:0:8} root@服务器"
 	say "    没有服务器：cca team hosted ${tid:0:8}（部署到 Railway 或者 Sealos）"
 	say "    自己运行服务端的：--mode team --team-root '${root}'，然后 cca team attach ${tid:0:8} https://服务器:端口 [证书公钥的指纹]"
+	[ -n "$n" ] || say "  往里放账号：cca team map ${tid:0:8} 工具 邮箱 节点（这台设备上自己加的账号一次都放进去：cca team import ${tid:0:8} --mine）"
 	warn "根密钥只在这台设备上（~/.cca/teams/${tid}/）：它丢了这个 Team 就得重建。cca restore 的备份不带它，要自己留一份"
-	gui_done team_created "建好了「${1}」：接着部署它的同步服务器"
+	gui_done team_created "建好了「${name}」${n:+，放进了 ${n} 个账号}：接着部署它的同步服务器"
+}
+
+team_new_pick() {   # team_new_pick Team 的名字：问这台设备上哪些账号放进新建的 Team（py team-candidates 列出的：自己加的，和这台设备当管理员的
+	                  # 别的 Team 里的），结果放进调用者的 spec（工具:邮箱,…；一个都不放是 none）。自己加的预先选上（App 里勾好，终端里直接回车
+	                  # 就是它们），已经在别的 Team 里的不选。一个能放的都没有时不问。App 里是一页多选（team.accounts，可以都不勾）
+	local rows tool label email alias from node n=0 i w def="" all="" sel tip bad tries=0
+	local -a keys texts notes opts
+	rows=$(py team-candidates 2>/dev/null) || rows=""
+	while IFS=$'\t' read -r tool label email alias from node; do   # 没有的栏是 -
+		[ -n "$tool" ] || continue
+		[ "$alias" != - ] || alias=""
+		[ "$from" != - ] || from=""
+		keys[n]="${tool}:${email}"
+		texts[n]="${label}：${alias:+${alias}（}${email}${alias:+）}"
+		notes[n]="走 ${node}${from:+，已在「${from}」里}"
+		n=$((n + 1))
+		all="${all:+${all} }${n}"
+		[ -n "$from" ] || def="${def:+${def} }${n}"
+	done <<< "$rows"
+	[ $n -gt 0 ] || return 0
+	if [ -n "$PROMPT_GUI" ]; then
+		for ((i = 0; i < n; i++)); do opts[i]="opt=$((i + 1))"$'\t'"${texts[i]}"$'\t'"${notes[i]}"; done
+		# 预先勾上的写在 value 里，不写成默认值：都不勾时答案是空的，gui_ask 会拿默认值顶上
+		sel=$(gui_ask multi "放进「${1}」的账号" "" q=team.accounts "title=新建 Team" label=这台设备上的账号 optional=1 min=0 "value=${def}" submit=新建 \
+			"message=勾上的账号连同现在走的节点、别名放进「${1}」。别的设备加入以后拿到这些账号，在各自的设备上登录。已经在别的 Team 里的也能放，这台设备上照旧用原来那个 Team 的节点。" \
+			"hint=都不勾就先建一个空的 Team" "${opts[@]}") || return 1
+	else
+		say ""
+		say "  这台设备上的这些账号能放进「${1}」（连同现在走的节点、别名）："
+		for ((i = 0; i < n; i++)); do say "    $((i + 1)). ${texts[i]}  ${C_D}${notes[i]}${C_0}"; done
+		say ""
+		tip="直接回车是自己加的 ${def// /、}"
+		[ -n "$def" ] || tip="直接回车是一个都不放"
+		[ "$def" != "$all" ] || tip="直接回车是全部"
+		while :; do
+			tries=$((tries + 1))
+			[ $tries -le 5 ] || return 1
+			sel=$(ask "  放进哪几个（编号用空格分隔；全部写 a，一个都不放写 0；${tip}）：" "${def:-0}" | sed 's/,/ /g; s/，/ /g; s/、/ /g')
+			case "$sel" in
+				a|A|all) sel=$all ;;
+			esac
+			bad=""
+			for w in $sel; do
+				case "$w" in *[!0-9]*) warn "「${w}」不是编号"; bad=1; break ;; esac
+				if [ "$w" -gt $n ]; then warn "没有编号 ${w}"; bad=1; break; fi
+			done
+			[ -n "$bad" ] || break
+		done
+	fi
+	spec=""
+	for w in $sel; do
+		case "$w" in *[!0-9]*) continue ;; esac
+		[ "$w" -ge 1 ] && [ "$w" -le $n ] || continue   # 0 是一个都不放
+		case ",${spec}," in *",${keys[w - 1]},"*) ;; *) spec="${spec:+${spec},}${keys[w - 1]}" ;; esac
+	done
+	[ -n "$spec" ] || spec=none
 }
 
 TEAM_DEPLOY_USAGE="用法: cca team deploy Team [用户@]主机 [-p SSH 端口] [-i 私钥] [--port 端口] [--host 公网地址] [--web-port 端口 | --no-web]
@@ -8278,7 +8356,7 @@ Team（一组设备加一份配置：哪些账号、各走哪个节点，由管�
   cca team join              拿管理员给的邀请链接加入（一个邀请只能加入一台设备；链接不写在命令行上，会问你）
   cca team sync | leave [Team]
                              马上同步一次配置（平时每小时自动同步）/ 退出
-  cca team new 名字          建一个 Team（这台设备是管理员），接着部署它的同步服务器：
+  cca team new 名字          建一个 Team（这台设备是管理员；会问这台设备上哪些账号放进去），接着部署它的同步服务器：
   cca team deploy Team [用户@]主机
                              经 SSH 装到自己的 Linux 服务器上、接上（一台服务器上可以装几个 Team）；没有服务器：cca team hosted Team
   cca team invite Team 名字 [--accounts all|工具:邮箱,…]

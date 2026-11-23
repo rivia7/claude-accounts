@@ -39,6 +39,7 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("team-apply", cmd_team_apply),
     Cmd::all("team-adopt", cmd_team_adopt),
     Cmd::all("team-new", admin::cmd_team_new),
+    Cmd::all("team-candidates", admin::cmd_team_candidates),
     Cmd::all("team-attach", admin::cmd_team_attach),
     Cmd::all("team-deploy", admin::cmd_team_deploy),
     Cmd::all("team-hosted", admin::cmd_team_hosted),

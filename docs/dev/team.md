@@ -271,7 +271,8 @@
 3.5.3 去掉了自己的同步服务器（`cca hub`、服务端的 `--mode own`）：自己的几台设备之间同步改成建一个 Team。设备少、都是自己的，照步骤手动换，
 不自动：
 
-1. 一台设备上 `cca team new 名字`，部署服务器（`cca team deploy`，见「部署」）、接上。
+1. 一台设备上 `cca team new 名字`，部署服务器（`cca team deploy`，见「部署」）、接上。新建时就选上自己的账号（3.5.5 起，见「管理员这一头」），
+   就不用下一步。
 2. `cca team import Team --mine`：把这台设备上自己的官方账号（不是维护者共享的、不是别的 Team 给的、不是第三方 API 的）连同现在走的节点、
    别名加进 Team 的配置。节点的定义不带（各台设备自己有：同一个路由器，或者各自的内置代理）。
 3. 给别的设备各发一个邀请（`cca team invite`），在那台上 `cca team join`。
@@ -461,7 +462,8 @@
 - 终端里不问这些：服务器写在命令行上，ssh 自己问密码、问要不要认这台主机（有终端时不带 `--batch`）；终端里没写服务器（App 失败页的「改在
   终端里完成」交过来的就是不带服务器的 `cca team deploy 编号`）时 `hub_deploy_where` 先问地址（接着的预填）、SSH 用户（root）、端口（22），
   没有终端的照旧说用法。SSH 的目标不记：App 里再部署预填的是接着的那台的地址和 root、22，经别的用户、端口、ssh 配置里的别名部署的要自己改。
-- `cca team new` 在 App 里不写名字时问（`team.new`，校验 `teamname`），成了是 `team_created`；部署成了 `team_deployed`，地址是内网的另有 `team_lan`。
+- `cca team new` 在 App 里不写名字时问（`team.new`，校验 `teamname`），接着一页多选问放进哪些账号（`team.accounts`，见「管理员这一头」），
+  成了是 `team_created`；部署成了 `team_deployed`，地址是内网的另有 `team_lan`。
 - 页面：Team 卡片下面「新建 Team…」（`Handoff.teamNew`），还没接上服务器的 Team 那一行有「部署到我的服务器…」，接着的在「更多」里
   「更新服务器、搬到别的服务器…」（`Handoff.teamDeploy`）。托管平台在 App 里还没有页面（卡片下面那句话说在终端里运行 `cca team hosted`）。
   截图场景 `flow-team-deploy`、`flow-team-password`（夹具 `flow_team_deploy.flow`）。
@@ -556,8 +558,19 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 
 管理员这一头（`admin.json` 的样子在 `cmd/team/admin.rs` 开头）：
 
-- `cca team new 名字`：生成根密钥、主密钥（32 个随机字节）和盐，这台设备是第 0 台设备。先在 `teams/.new.<进程号>` 里建好再改名（编号要有了根公钥才知道；
-  以前建到一半留下的过一个小时清掉）。说下一步：服务器用这把根公钥运行，再 attach。
+- `cca team new 名字 [--device 名字] [--accounts all|none|工具:邮箱,…]`：生成根密钥、主密钥（32 个随机字节）和盐，这台设备是第 0 台设备。先在
+  `teams/.new.<进程号>` 里建好再改名（编号要有了根公钥才知道；以前建到一半留下的过一个小时清掉）。说下一步：服务器用这把根公钥运行，再 attach。
+- **新建时放进这台设备上的账号**（3.5.5 起）：能放的是 `team_picks` 列的（`py team-candidates`：一行一个，工具、工具的名字、邮箱、别名、已经在哪个
+  Team 里、节点，没有的栏是 `-`）——账号表里有邮箱、有节点的官方账号，自己加的（`own_account`），或者这台设备当管理员的别的 Team 给的（账号和
+  节点的定义本来就归这台设备的人管）；维护者的映射给的、这台设备只是成员的 Team 给的不能（是别人的，不能转手给别的设备），第三方 API 账号也不能
+  （Team 的配置里只有官方账号）。没写 `--accounts` 时 bash 问（`team_new_pick`）：App 里一页多选（`team.accounts`：选项的值是编号，自己加的
+  预先选好——写在 `value` 里、`default` 是空的，因为 `gui_ask` 拿默认值顶替空的答案，都不勾就成了全选），终端里列出来按编号选（`a` 全部、`0` 一个
+  都不放，直接回车是自己加的那几个），选的拼成 `--accounts 工具:邮箱,…` 交给 `py team-new`；没有终端的不问、一个都不放（说怎么放）。
+  `put_accounts`（`import --mine` 也用它）：节点照这台设备的账号表；别名照这台设备上起过的带进去，默认样子的 `team-N` 不带（是别的 Team 编的号，
+  这里照 `default_aliases` 另编）；别的 Team 给的账号，那个 Team 带着它的节点的定义时连同经 `dialer-proxy` 连着的一起带过来（`needed_nodes`：
+  别的设备照这一份连，不一定有这个节点；同名的已经有了的不换，策略组照第一个带过来的），自己加的账号的节点不带（各台设备自己有）。都在生成密钥
+  之前算好：写的账号不能放、带过来的节点的定义不合格（`fill_problems`）时是 `accounts`，什么都没建。stdout 第三行是放进了几个。一个账号同时在
+  两个 Team 里时，这台设备上照先加入（建）的那个用（`mapping` 照 index.json 的先后），别的设备照它们自己在的 Team；以后各改各的。
 - **每台设备那串随机数不存**：`k = HMAC(主密钥, "cca-team-k-v1\0" 序数)` 的前 16 个字节，要用时重算（`device_secret`）。所以管理员这边要备份的只有
   根密钥和主密钥；序数发一个邀请用掉一个（没发成也不回收）。导出、交给第二个管理员的命令还没做。
 - `cca team attach Team 地址 [指纹…]`：先 `team_enroll` 这台设备（服务器认不认这把根密钥、是不是 Team 的服务器，这一下就知道；认了才把地址写进
@@ -596,7 +609,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   Codex 的从 team-3 编起），那时编的 `team-N` 都去掉、照各工具重新编。`import`、`map`、
   `alias` 时和每次发布前都过一遍（以前建的 Team 下次发布时换过来，各台设备的配置因此都发布新的一版）。`import` 一个映射文件时，文件里写的别名
   （按邮箱）给它在的每个工具，没写的照这个 Team 原来在这个工具里给它的（不然每导入一次编号就变、各台设备跟着改名）。`import --mine` 带进这台
-  设备上起过的别名（各工具的账号表各是各的）：Team 里原来是默认的 `team-N`、这个工具里也没有别的账号叫它时换成它；没起过的编成 `team-N`。
+  设备上起过的别名（各工具的账号表各是各的）：Team 里原来是默认的 `team-N`、这个工具里也没有别的账号叫它时换成它；没起过的（还有默认样子的
+  `team-N`）编成 `team-N`。
 - `cca team alias Team 账号 新别名`（`py team-alias`）：账号写 `工具:邮箱` 只改这个工具里的，只写邮箱改它在的每个工具里的；别名不合规、
   同一个工具里别的账号已经叫它是 `alias`（别的工具里的可以），Team 的配置里没有这个账号是 `no_account`。改完发布（stdout：原来的别名——几个工具里
   不一样时用「、」连起来——、存上了几台），各台设备下次同步配置时照上面的规矩跟着改；管理员这台设备的账号表不动。
@@ -735,7 +749,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
 - 回归 11b3d：`_gui state` 里 Team 给的账号 `hub` 是 `team`、`team` 是编号，`config.hubs` 里有那个 Team，别的账号没有 `team`。
 - 迁移（`tests/team.py` 的 `test_handoff`）：照 deploy key 的指纹发邀请、格式检查认得 `team` 一节、机器拿原来的 deploy key 自己加入、再运行
   一次是幂等的、别的机器拿了邀请被认出来（它手里的换成一个账号都没有的，授权本身没动）、用过了的邀请不再试、管理员重发以后加入、
-  自己退出过的管理员不再发、它也不再自己加入（手动加入以后记号去掉）、回话没收到的下一次认出来补上、管理员移除了的不再发、共享关着的不看。`test_import_mine`：只加自己的官方账号。回归 11b3d：`./policy.sh team`（假 gh 的 deploy key、假的维护者目录）问过才发、
+  自己退出过的管理员不再发、它也不再自己加入（手动加入以后记号去掉）、回话没收到的下一次认出来补上、管理员移除了的不再发、共享关着的不看。`test_import_mine`：只加自己的官方账号。`test_new_with_accounts`：新建时能放的（自己加的、这台设备当管理员的 Team 里的；成员的 Team、维护者的映射、
+  第三方 API 账号的不能）、写错了什么都不建、照账号表的先后放、别名带进去（默认样子的另编）、节点的定义连同 dialer 带过来、发布出去、`all`。回归 11b3d：`./policy.sh team`（假 gh 的 deploy key、假的维护者目录）问过才发、
   写进映射、签名推送，独立实现的那一头拿映射里的邀请加入；`cca policy pull` 拉到给这台 Mac 的邀请后自己加入、退出后不再加入。
 - 界面（`macos/Tests/ContractTests/TeamTests.swift`，手写的夹具 `hello.json`、`state.json`、`team_devices.json`）：解码（旧版 cca 没有
   这些字段、不认识的角色 / 状态）、筛选（三处用的列表、记进设置、Team 不在了当全部、旧版 cca 不筛）、展开时才问设备、邀请只经
@@ -776,7 +791,8 @@ App 里（`macos/Sources/CcaKit/Protocol/Team.swift`、`AppModel` 的「Team」�
   照证书机构验在 `tests/team.py` 的 `test_ca_mode`。
 - 回归 11b3d 的部署（`hubbox`：`tests/hub_box.py` 建的假服务器，假 ssh 认得 `hubbox`、`*@hubbox`，交给它的 `enter`；`$T/hubbox/ssh_denied` 时
   登录不了，`$T/hubbox/password` 在时不认密钥、只认这个密码；`nohub` 是解析不了的主机名）：`--script`（带着版本、两段程序和网页端的文件原样、
-  `dash -n` 过得去、没有 `CCA_HUB_MANAGED`）；App 里新建（`team.new` → `team_created`）；没写服务器、`--reset` 是 `team_usage`，端口写错了也是、
+  `dash -n` 过得去、没有 `CCA_HUB_MANAGED`）；App 里新建（`team.new` → `team.accounts` → `team_created`：选项和 `team-candidates` 的一样多、自己加的预先选好；都不勾是空的 Team，勾了的连同节点
+  放进去），终端里按编号选（没有的编号重问），没有终端时不问，`--accounts` 写了这台设备上没有的是 `team_accounts`、什么都不建；没写服务器、`--reset` 是 `team_usage`，端口写错了也是、
   不连服务器；登录不了 `team_ssh`；`cca team deploy` 装好（systemd，`team_lan` 在 `team_deployed` 前面，内网地址不开网页端，`.env` 里只有公开的
   根公钥）；App 里再部署（预填 127.0.0.1、root、22，说数据不变，先查登录 `SSH root@hubbox :: true`；`nohub` 带着 ssh 的原因重问，密钥不行问密码、
   经 askpass 部署，`prompts_hub_deploy.jsonl` 交给契约测试；错了三次 `hub_ssh`；只认密钥时生成密钥、给出加公钥那一行、「在终端里部署」的

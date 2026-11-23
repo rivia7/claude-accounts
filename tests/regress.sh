@@ -3682,9 +3682,10 @@ ok "cca team：还不在任何 Team 里时说怎么加入、怎么建" '[ $rc -e
 out=$(run cca team nope 2>&1); rc=$?
 ok "cca team：不认得的子命令说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "cca team invite Team"'
 # --- 这台 Mac 当管理员
-out=$(run cca team new 书房组 --device 书房的Mac 2>&1); rc=$?
+out=$(run cca team new 书房组 --device 书房的Mac 2>&1 </dev/null); rc=$?   # stdin 不是终端：不问放进哪些账号
 TMID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$'); TMROOT=$(cut -d' ' -f1,2 "$H/.cca/teams/$TMID/root_ed25519.pub")
-ok "cca team new：建好了，说下一步（服务器用这把根公钥运行、再 attach），提醒根密钥只在这台设备上；目录和密钥只给自己读" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "建好了「书房组」（${TMID:0:8}）：这台设备是它的管理员" && printf "%s" "$out" | grep -qF -- "--mode team --team-root '"'"'$TMROOT'"'"'" && printf "%s" "$out" | grep -q "cca team attach ${TMID:0:8}" && printf "%s" "$out" | grep -q "备份不带它" && [ "$(stat -f %Lp "$H/.cca/teams/$TMID")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/root_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/admin.json")" = 600 ]'
+tmacc() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["config"]["accounts"], sort_keys=True))' "$H/.cca/teams/$1/admin.json" 2>/dev/null; }   # 这个 Team 的配置里的账号
+ok "cca team new：建好了，说下一步（服务器用这把根公钥运行、再 attach），提醒根密钥只在这台设备上；目录和密钥只给自己读；没有终端时不问、一个账号都不放（说怎么放）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "建好了「书房组」（${TMID:0:8}）：这台设备是它的管理员$" && printf "%s" "$out" | grep -q "往里放账号：cca team map ${TMID:0:8} 工具 邮箱 节点" && [ "$(tmacc "$TMID")" = "{}" ] && printf "%s" "$out" | grep -qF -- "--mode team --team-root '"'"'$TMROOT'"'"'" && printf "%s" "$out" | grep -q "cca team attach ${TMID:0:8}" && printf "%s" "$out" | grep -q "备份不带它" && [ "$(stat -f %Lp "$H/.cca/teams/$TMID")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/root_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/admin.json")" = 600 ]'
 out=$(run cca team 2>&1)
 ok "cca team：列出来，还没接上服务器" 'printf "%s" "$out" | grep -q "书房组（${TMID:0:8}）：管理员，没有服务器，还没接上服务器"'
 out=$(runev cca team invite 书房组 dan-air 2>&1); rc=$?
@@ -3869,9 +3870,46 @@ HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$
 hbdoc() { printf '%s\n' "$out" | sed -n "/^	cat <<'$1'\$/,/^$1\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # hbdoc 结束行：安装脚本里那一段 here-document 的 SHA-256
 HBWEB=$(printf '%s\n' "$out" | sed -n 's/^	web_file "\$1" \([^ ]*\) \([0-9a-f]\{64\}\) .*/\1 \2/p' | while read -r n h; do [ "$h" = "$(shasum -a 256 < "$D/../server/web/$n" | cut -d' ' -f1)" ] && echo "$n"; done | wc -l | tr -d ' ')
 ok "cca team deploy --script：打出安装脚本（带着这一版的版本号，原样的服务端程序、证书助手，网页端的每个文件的校验和都对，sh -n 过得去；不带 team-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && printf "%s\n" "$out" | /bin/dash -n && [ "$(hbdoc CCA_HUB_SERVER_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d" " -f1)" ] && [ "$(hbdoc CCA_HUB_ACME_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-acme.py" | cut -d" " -f1)" ] && [ "$HBWEB" = "$(ls "$D/../server/web" | wc -l | tr -d " ")" ] && ! printf "%s\n" "$out" | grep -q "^CCA_HUB_MANAGED="'
-out=$(sess '{"team.new":[{"name":"机房组"}]}' -- cca team new 2>&1); rc=$?
+# 新建时问这台设备上哪些账号放进去（team-candidates 列出的：自己加的官方账号，和这台设备当管理员的 Team 给的；第三方 API 账号、维护者共享的不列）
+TMCAND=$(run "$HELPER_BIN" team-candidates); TMCN=$(printf '%s\n' "$TMCAND" | grep -c .)
+TMCOWN=$(printf '%s\n' "$TMCAND" | awk -F '\t' '$5 == "-" { printf "%s%d", (n++ ? " " : ""), NR }')   # 自己加的是第几个：预先勾上
+out=$(sess '{"team.new":[{"name":"机房组"}],"team.accounts":[{"v":""}]}' -- cca team new 2>&1); rc=$?
 TMDID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID")
-ok "提问会话：cca team new 不写名字：问 Team 的名字，建好了（result 的 team_created），还没接上服务器" '[ $rc -eq 0 ] && [ "$(asks)" = team.new ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_created\"" && [ ${#TMDID} -eq 32 ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，没有服务器"'
+ok "提问会话：cca team new 不写名字：问 Team 的名字，建好了（result 的 team_created），还没接上服务器" '[ $rc -eq 0 ] && [ "$(asks)" = "team.new team.accounts" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_created\"" && [ ${#TMDID} -eq 32 ] && run cca team 2>&1 | grep -q "机房组（${TMDID:0:8}）：管理员，没有服务器"'
+tmask() { python3 -I - "$T/ev.jsonl" "$TMCN" "$TMCOWN" <<'PY'
+import json, sys
+ev, n, own = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+e = next(e for e in map(json.loads, open(ev)) if e.get('q') == 'team.accounts')
+f = e['fields'][0]
+ok = (f['kind'], f['optional'], f['min'], f['default'], f['value'], e['submit']) == ('multi', True, 0, '', own, '新建') and len(f['options']) == n
+ok = ok and [o['value'] for o in f['options']] == [str(i) for i in range(1, n + 1)] and all(o['note'].startswith('走 ') for o in f['options'])
+ok = ok and '「机房组」' in e['message']
+sys.exit(0 if ok else 1)
+PY
+}
+ok "提问会话：名字之后一页多选（team.accounts，可以都不勾）：列出这台设备上能放的账号（工具、别名、邮箱，注着走哪个节点），自己加的预先勾上（写在 value 里）；都不勾就是一个都不放" '[ "$TMCN" -gt 0 ] && [ -n "$TMCOWN" ] && tmask && [ "$(tmacc "$TMDID")" = "{}" ] && ! printf "%s" "$out" | grep -q "放进了"'
+tmexp() { printf '%s\n' "$TMCAND" | python3 -c 'import json,sys
+want, d = set(map(int, sys.argv[1].split())), {}
+for i, l in enumerate(sys.stdin, 1):
+    c = l.rstrip("\n").split("\t")
+    if i in want: d.setdefault(c[0], {})[c[2]] = c[5]
+print(json.dumps(d, sort_keys=True))' "$1"; }   # 这几个候选（编号）放进去以后，Team 的配置里的账号
+TMC1=$(tmexp 1); TMCO=$(tmexp "$TMCOWN"); TMCON=$(printf '%s\n' $TMCOWN | grep -c .)
+out=$(sess '{"team.new":[{"name":"选账号组"}],"team.accounts":[{"v":"1"}]}' -- cca team new 2>&1); rc=$?
+TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
+ok "提问会话：勾了的账号连同这台设备上的节点放进去（result 说放进了几个）" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"team_created\" and \"放进了 1 个账号\" in e[\"message\"]" && [ ${#TMXID} -eq 32 ] && [ "$(tmacc "$TMXID")" = "$TMC1" ]'
+runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>&1
+out=$(run CCA_TTY="$(ans 9 x 0)" cca team new 终端组 --device 书房的Mac 2>&1); rc=$?
+TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
+ok "终端里：列出能放的账号（编号，注着走哪个节点）；没有这个编号、不是编号的重问；0 是一个都不放" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "能放进「终端组」" && printf "%s" "$out" | grep -q "^    1\. .*走 " && printf "%s" "$out" | grep -q "没有编号 9" && printf "%s" "$out" | grep -q "「x」不是编号" && ! printf "%s" "$out" | grep -q "放进了" && [ "$(tmacc "$TMXID")" = "{}" ]'
+runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>&1
+out=$(run CCA_TTY="$(ans '')" cca team new 终端组 --device 书房的Mac 2>&1); rc=$?
+TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
+ok "终端里直接回车：放进自己加的那几个（预先选好的）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "放进了 ${TMCON} 个账号" && [ "$(tmacc "$TMXID")" = "$TMCO" ]'
+runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>&1
+TMN=$(ls "$H/.cca/teams" | grep -cE '^[0-9a-f]{32}$')
+out=$(runev cca team new 坏组 --accounts claude:nobody@example.com 2>&1); rc=$?
+ok "cca team new --accounts：写的账号这台设备上没有（不能放的也一样）：什么都不建（fail 事件 team_accounts）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_accounts\"" && printf "%s" "$out" | grep -q "这台设备上没有 claude:nobody@example.com" && [ "$(ls "$H/.cca/teams" | grep -cE "^[0-9a-f]{32}$")" = "$TMN" ]'
 TMDPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); TMDSVC="cca-team-${TMDID:0:8}"; TMDD="$T/hubbox/root/opt/$TMDSVC"
 tmdpin() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pins"])' "$H/.cca/teams/$TMDID/team.json" 2>/dev/null; }   # 这台设备给这个 Team 的服务器钉着的指纹
 : > "$T/ssh.log"

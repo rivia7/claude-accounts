@@ -29,7 +29,7 @@ use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, with_https_por
 use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
-use crate::core::model::{node_of, parse_key};
+use crate::core::model::{is_api, node_of, parse_key};
 use crate::core::policy::{alias_ok, fill_problems, policy_problems, policy_sources};
 use crate::core::team::{load_team, team_dir, team_path, teams, Role, Team, TEAMS_DIR};
 use crate::core::tool::tools;
@@ -774,19 +774,175 @@ fn settle(t: &Team, a: &Dict, only: Option<&str>) -> R<usize> {
     }
 }
 
-/// py team-new 名字 [--device 这台设备的名字]：在这台设备上建一个 Team（还没有服务器）：生成根密钥、主密钥和盐，这台设备是管理员、
-/// 也是第一台设备。stdout：Team 的编号、根公钥（部署服务器时的 --team-root）。原因码：name
+/// 这台设备上能放进 Team 的一个官方账号（team_picks）
+struct Pick {
+    tool: &'static str,
+    label: &'static str,
+    email: String,
+    /// 这台设备的账号表里的别名（没起过是空的）
+    alias: String,
+    node: String,
+    /// 哪个 Team 给的（这台设备是它的管理员）：它的名字；自己加的是 None
+    from: Option<String>,
+    /// 那个 Team 带着的、这个账号的节点的定义（needed_nodes：连同经 dialer-proxy 连着的）；没有是 null
+    defs: V,
+}
+
+/// 这台设备上能放进 Team 的官方账号（cca team new 选的、cca team import --mine 放的）：账号表里有邮箱、有节点的官方账号——自己加的
+/// （不是谁给的），或者这台设备当管理员的 Team 给的（账号和节点的定义本来就归这台设备的人管）。维护者的映射给的、这台设备只是成员的
+/// Team 给的不算（是别人的，不能转手给别的设备），第三方 API 账号也不算（Team 的配置里只有官方账号）。照工具的先后、各工具账号表里的先后
+fn team_picks() -> Vec<Pick> {
+    let admins: HashMap<String, (String, Option<Dict>)> = teams()
+        .into_iter()
+        .filter_map(|t| {
+            let nodes = admin_load(&t).ok()?.dict("config").and_then(|c| c.dict("nodes"));
+            Some((t.id, (t.name, nodes)))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for tool in tools().iter() {
+        let Some(table) = load_quiet(&tool.table).and_then(|j| j.as_dict()) else { continue };
+        let src = policy_sources(tool);
+        for (k, v) in table.items() {
+            let (alias, email) = parse_key(&k);
+            let (email, node) = (email.to_lowercase(), node_of(&v));
+            if node.is_empty() {
+                continue;
+            }
+            let (from, defs) = match src.str(&email) {
+                _ if own_account(&src, &k, &v) => (None, V::None),
+                // 维护者的映射给的（编号是空的）、这台设备只是成员的 Team 给的：不能放；第三方 API 账号、没有邮箱的也不能
+                Some(tid) if !is_api(&v) => match admins.get(&*tid) {
+                    Some((name, nodes)) => (Some(name.clone()), needed_nodes(nodes.clone(), &BTreeSet::from([node.to_string()]))),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            out.push(Pick { tool: tool.name, label: tool.label, email, alias, node: node.to_string(), from, defs });
+        }
+    }
+    out
+}
+
+/// 把这几个账号连同节点、别名放进这个 Team 的配置（admin.json 的 config，没存盘；之后要 default_aliases），同一个账号照这台设备上的换。
+/// 这台设备上起过的别名带进去：Team 里原来是默认的 team-N（或者还没有）、这个工具里也没有别的账号叫它时；默认样子的 team-N 不带（是别的
+/// Team 编的号，这里另编）。别的 Team 给的账号，那个 Team 带着它的节点的定义时一起带过来（别的设备照这一份连：它们不一定有这个节点），
+/// 这个 Team 已经有了同名的节点的不换。节点的定义不合格（fill_problems）时什么都不改，Err 是给人看的原因
+fn put_accounts(a: &Dict, picks: &[Pick]) -> Result<(), String> {
+    let config = a.dict("config").unwrap_or_default();
+    let nodes = config.dict("nodes");
+    let mut px: Vec<Dict> = nodes
+        .as_ref()
+        .and_then(|n| n.list("proxies"))
+        .map(|l| l.items().iter().filter_map(|p| p.as_dict()).collect())
+        .unwrap_or_default();
+    let mut names: HashSet<String> = px.iter().filter_map(|p| p.str("name").map(|n| n.to_string())).collect();
+    let mut group = nodes.as_ref().map(|n| n.at("group"));
+    let before = px.len();
+    for defs in picks.iter().filter_map(|p| p.defs.as_dict()) {
+        group.get_or_insert_with(|| defs.at("group"));
+        for p in defs.list("proxies").map(|l| l.items()).unwrap_or_default().iter().filter_map(|p| p.as_dict()) {
+            if p.str("name").is_some_and(|n| names.insert(n.to_string())) {
+                px.push(p);
+            }
+        }
+    }
+    if px.len() > before {
+        let probe = dict! { "config" => dict! { "nodes" => dict! { "group" => group.unwrap_or(V::None) } } };
+        nodes::set_proxies(&probe, px)?;
+        config.set("nodes", probe.dict("config").unwrap_or_default().at("nodes"));
+    }
+    let (accounts, by_tool) = (config.dict("accounts").unwrap_or_default(), config.dict("tool_aliases").unwrap_or_default());
+    for p in picks {
+        let (m, names) = (accounts.dict(p.tool).unwrap_or_default(), by_tool.dict(p.tool).unwrap_or_default());
+        m.set(p.email.as_str(), p.node.as_str());
+        let replaceable = names.str(&p.email).is_none_or(|x| default_n(&x).is_some());
+        if default_n(&p.alias).is_none()
+            && alias_ok(&V::from(p.alias.as_str()))
+            && replaceable
+            && alias_holder(&names, &p.email, &p.alias).is_none()
+        {
+            names.set(p.email.as_str(), p.alias.as_str());
+        }
+        accounts.set(p.tool, m);
+        by_tool.set(p.tool, names);
+    }
+    config.set("accounts", accounts);
+    config.set("tool_aliases", by_tool);
+    a.set("config", config);
+    Ok(())
+}
+
+/// py team-candidates：这台设备上能放进 Team 的官方账号（team_picks），一行一个：工具、工具的名字、邮箱、别名、已经在哪个 Team 里
+/// （这台设备当管理员的那个，它的名字）、节点，制表符分开，没有的栏写 -（bash 按制表符读，空的栏会被并掉）。cca team new 问放进哪些账号时用
+pub fn cmd_team_candidates(args: &[String]) -> R<()> {
+    arity("team-candidates", args, 0, 0)?;
+    let col = |s: &str| if s.is_empty() { "-".to_string() } else { s.replace(['\t', '\n', '\r'], " ") };
+    for p in team_picks() {
+        out!("{}\t{}\t{}\t{}\t{}\t{}", p.tool, p.label, p.email, col(&p.alias), col(p.from.as_deref().unwrap_or("")), col(&p.node));
+    }
+    Ok(())
+}
+
+/// --accounts 写的（grants_spec 的结果：all，或者 {工具: [邮箱…]}）是 picks 里的哪几个，照 picks 的先后；有不在里面的是给人看的原因
+fn chosen_picks(picks: Vec<Pick>, want: &V) -> Result<Vec<Pick>, String> {
+    let Some(want) = want.as_dict() else { return Ok(picks) }; // all
+    let mut keep = vec![false; picks.len()];
+    for (tool, emails) in want.items() {
+        for email in emails.as_list().map(|l| l.strs()).unwrap_or_default() {
+            match picks.iter().position(|p| *p.tool == *tool && *p.email == *email) {
+                Some(i) => keep[i] = true,
+                None => {
+                    return Err(format!(
+                        "这台设备上没有 {tool}:{email} 这个账号，或者它不能放进 Team（第三方 API 账号、维护者共享的、这台设备不是管理员的 Team 给的都不能放）"
+                    ))
+                }
+            }
+        }
+    }
+    Ok(picks.into_iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| p).collect())
+}
+
+/// py team-new 名字 [--device 这台设备的名字] [--accounts all|none|工具:邮箱,…]：在这台设备上建一个 Team（还没有服务器）：生成根密钥、
+/// 主密钥和盐，这台设备是管理员、也是第一台设备。--accounts：这台设备上的哪些账号连同节点、别名放进去（team-candidates 列出的那些，
+/// all 是全部，见 put_accounts）；不写是一个都不放。stdout：Team 的编号、根公钥（部署服务器时的 --team-root）、放进了几个账号。
+/// 原因码：name、usage、accounts（写的账号这台设备上没有、不能放，带过来的节点的定义不合格）
 pub fn cmd_team_new(args: &[String]) -> R<()> {
-    let (name, device) = match args {
-        [n] => (n.trim().to_string(), host_name()),
-        [n, flag, d] if flag == "--device" => (n.trim().to_string(), d.trim().to_string()),
-        _ => return Err(Fail::Die("用法: py team-new 名字 [--device 这台设备的名字]".into())),
-    };
+    const USAGE: &str = "用法: py team-new 名字 [--device 这台设备的名字] [--accounts all|none|工具:邮箱,…]";
+    let Some((name, rest)) = args.split_first() else { return Err(Fail::Die(USAGE.into())) };
+    let (name, mut device, mut spec) = (name.trim().to_string(), host_name(), None);
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        match (flag.as_str(), it.next()) {
+            ("--device", Some(d)) => device = d.trim().to_string(),
+            ("--accounts", Some(s)) => spec = Some(s.as_str()),
+            _ => return Err(Fail::Die(USAGE.into())),
+        }
+    }
     if !team_name_ok(&name) {
         return fail("name", "Team 的名字要 1～64 个字符，不能有控制字符");
     }
     if !name_ok(&device) {
         return fail("name", NAME_BAD);
+    }
+    // 放进的账号先算好：写错了、节点的定义不合格时什么都还没建
+    let config = dict! {
+        "accounts" => Dict::new(), "tool_aliases" => Dict::new(), "aliases" => Dict::new(), "install_node" => "", "nodes" => V::None,
+    };
+    let held = dict! { "config" => config };
+    let chosen = match spec.map(grants_spec) {
+        None => Vec::new(),
+        Some(None) => return fail("usage", "--accounts 写成 all、none，或者 工具:邮箱,工具:邮箱（工具是 claude、codex、agy）"),
+        Some(Some(want)) => match chosen_picks(team_picks(), &want) {
+            Ok(chosen) => chosen,
+            Err(why) => return fail("accounts", &why),
+        },
+    };
+    if !chosen.is_empty() {
+        if let Err(why) = put_accounts(&held, &chosen) {
+            return fail("accounts", &format!("带过来的节点的定义不对：{why}"));
+        }
+        default_aliases(&held);
     }
     fs::makedirs_mode(&TEAMS_DIR, 0o700)?;
     // 以前建到一半被打断留下的（里面有根密钥）：过了一个小时的清掉
@@ -823,12 +979,12 @@ pub fn cmd_team_new(args: &[String]) -> R<()> {
         save_json(&path::join(&tmp, "team.json"), &V::Dict(team), Some(0o600), true)?;
         let me = dict! { "n" => 0, "label" => device.as_str(), "state" => "local", "grants" => "all", "seq" => 0 };
         let admin = dict! {
-            "v" => 1, "master" => master, "salt" => token_hex(16), "next" => 1,
-            "config" => dict! {
-                "accounts" => Dict::new(), "tool_aliases" => Dict::new(), "aliases" => Dict::new(), "install_node" => "", "nodes" => V::None,
-            },
+            "v" => 1, "master" => master, "salt" => token_hex(16), "next" => 1, "config" => held.at("config"),
             "devices" => dict! { dev.as_str() => me },
         };
+        if let Some(n) = held.get("alias_n") {
+            admin.set("alias_n", n);
+        }
         save_json(&path::join(&tmp, "admin.json"), &V::Dict(admin), Some(0o600), true)?;
         Ok(Some(tid))
     })();
@@ -843,7 +999,7 @@ pub fn cmd_team_new(args: &[String]) -> R<()> {
     std::fs::rename(&tmp, team_dir(&tid))?;
     index_add(&tid)?;
     let root = load_team(&tid).map(|t| t.root).unwrap_or_default();
-    out!("{tid}\n{root}");
+    out!("{tid}\n{root}\n{}", chosen.len());
     Ok(())
 }
 
@@ -1494,8 +1650,8 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
 /// （格式照旧查）。stdout：几个账号、几个节点、存上了几台的配置。原因码：no_team、not_admin、file（读不了、格式不对）、publish
 ///
 /// py team-import Team --mine：把这台设备上**自己的**官方账号（不是维护者共享的、也不是哪个 Team 给的；第三方 API 账号不算）连同现在
-/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；这台设备上起过别名的带进去——Team 里原来是默认的
-/// team-N、也没被别的账号用着时换成它，没起过的编成 team-N），再发布——把自己的几台设备并成一个 Team 时用。
+/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；别名照 put_accounts：这台设备上起过的带进去——Team 里
+/// 原来是默认的 team-N、也没被别的账号用着时换成它，没起过的编成 team-N），再发布——把自己的几台设备并成一个 Team 时用。
 /// stdout 同上（节点数是 0：节点各台设备自己有）
 pub fn cmd_team_import(args: &[String]) -> R<()> {
     arity("team-import", args, 2, 3)?;
@@ -1505,41 +1661,14 @@ pub fn cmd_team_import(args: &[String]) -> R<()> {
             return fail("usage", "用法: cca team import Team --mine");
         }
         default_aliases(&a); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
-        let config = a.dict("config").unwrap_or_default();
-        let (accounts, by_tool) = (config.dict("accounts").unwrap_or_default(), config.dict("tool_aliases").unwrap_or_default());
-        let mut count = 0;
-        for tool in tools().iter() {
-            let Some(table) = load_quiet(&tool.table).and_then(|j| j.as_dict()) else { continue };
-            let src = policy_sources(tool);
-            let (m, names) = (accounts.dict(tool.name).unwrap_or_default(), by_tool.dict(tool.name).unwrap_or_default());
-            for (k, v) in table.items() {
-                let node = node_of(&v);
-                if !own_account(&src, &k, &v) || node.is_empty() {
-                    continue;
-                }
-                let (alias, email) = parse_key(&k);
-                let email = email.to_lowercase();
-                m.set(email.as_str(), &*node);
-                // 这台设备上起过的别名带进去：Team 里原来是默认的 team-N（或者还没有）、这个工具里也没有别的账号叫这个时
-                let replaceable = names.str(&email).is_none_or(|x| default_n(&x).is_some());
-                if !alias.is_empty()
-                    && alias_ok(&V::from(alias.as_str()))
-                    && replaceable
-                    && alias_holder(&names, &email, &alias).is_none()
-                {
-                    names.set(email.as_str(), alias.as_str());
-                }
-                count += 1;
-            }
-            accounts.set(tool.name, m);
-            by_tool.set(tool.name, names);
-        }
+        let mine: Vec<Pick> = team_picks().into_iter().filter(|p| p.from.is_none()).collect();
+        let count = mine.len();
         if count == 0 {
             return fail("file", "这台设备上没有自己的官方账号可加（维护者共享的、别的 Team 给的、第三方 API 账号都不算）");
         }
-        config.set("accounts", accounts);
-        config.set("tool_aliases", by_tool);
-        a.set("config", config);
+        if let Err(why) = put_accounts(&a, &mine) {
+            return fail("file", &why); // 自己的账号不带节点的定义：到不了这里
+        }
         default_aliases(&a);
         admin_save(&t.id, &a)?;
         let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };

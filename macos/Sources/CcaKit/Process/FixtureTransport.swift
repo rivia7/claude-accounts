@@ -22,6 +22,7 @@ import Foundation
 /// | `team devices <Team> --json` | team_devices.json | — |
 /// | `team invite …` | 演示用的邀请链接（运行时拼出来） | — |
 /// | `team sync` / `leave` / `revoke` / `grant` / `map` | 直接成功（没有真的改） | — |
+/// | `team new`（提问会话） | flow_team_new.flow | — |
 /// | `team deploy <Team>`（提问会话） | flow_team_deploy.flow（哪个 Team 都用它） | — |
 ///
 /// 事件文件的退出码：有没授权的 consent → 3；有 fail / terminal → 1；否则 0。consent 都授权了就当作成功

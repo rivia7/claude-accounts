@@ -894,7 +894,8 @@ App 只拦空着的必填项，别的校验都是 cca 做的：不合格时同�
 | `hub.password` | `team deploy <Team>`（App 里） | `secret` | 服务器的 SSH 密码（这台设备的密钥登录不了时）：只用在这一次部署（经 `SSH_ASKPASS` 交给 ssh，不进命令行、环境变量、事件），不保存，也不在服务器上留下公钥；不对时带着原因重问，最多问三次（第三次还不对是 `fail` 的 `hub_ssh`：错得太多，服务器上的 fail2ban 这类会封这个地址）。不让 root 用密码登录的服务器，密码对了也说不对（这边分不出来）：用户是 root 时原因里提醒换成能免密码 sudo 的用户 |
 | `hub.pubkey` | `team deploy <Team>`（App 里；「在终端里部署」交给终端的命令照是哪一种） | `code`、`choice` | 服务器只认 SSH 密钥、不认这台设备的（不让用密码）：有密钥时 `cmd`（`code`：在服务器上运行的那一行，把这台设备的公钥加进 `~/.ssh/authorized_keys`）和 `next`（`retry` 加好了，再试 / `terminal` 在终端里部署）；再试还不认时带着原因（`cmd` 的 `error`）重问，这回认密码了接着 `hub.password`。还没有密钥时只有 `next`（`keygen` 生成一把 `~/.ssh/id_ed25519`，ed25519、没有密码，生成了再问这一页 / `terminal`）。选 `terminal`：`terminal` 事件（`code` 是 `hub_deploy`，`argv` 带上服务器和端口），退出码非 0 |
 | `hub.platform` | `team hosted <Team>`（没写平台时；App 不调这条命令，一般在终端里问） | `choice` | 部署到哪个托管平台：`railway`（海外的，要它的账号和命令行工具）/ `sealos`（国内的，要实名，在网页上填表单）。取消就是不部署 |
-| `team.new` | `team new`（App 里，不写名字） | `text` | 新建 Team：名字（校验 teamname：1～64 个字符，不能有控制字符）。建在这台设备上（它是管理员），成了 `result` 的 `team_created`，接着要部署它的同步服务器 |
+| `team.new` | `team new`（App 里，不写名字） | `text` | 新建 Team：名字（校验 teamname：1～64 个字符，不能有控制字符）。建在这台设备上（它是管理员），接着问 `team.accounts`（这台设备上没有能放的账号时不问），成了 `result` 的 `team_created`（`message` 说放进了几个账号），接着要部署它的同步服务器 |
+| `team.accounts` | `team new`（没写 `--accounts` 时） | `multi`（`optional`，`min` 是 0） | 这台设备上哪些账号连同现在走的节点、别名放进新建的 Team：每个选项是一个账号（`label` 是工具、别名和邮箱，`note` 是走哪个节点、已经在哪个 Team 里），只列能放的（自己加的官方账号，和这台设备当管理员的别的 Team 里的）。自己加的预先选好：写在 `value` 里、`default` 是空的（都不勾交上来是空的答案：一个都不放）。页上有 `submit`（「新建」）。3.5.5 起；以前的 cca 新建时不问，建的是空的 Team |
 | `team.join` | `team join` | `secret` | Team 的邀请链接（`cca-team1.` 开头的一行：管理员发给这台设备的，一个邀请只能加入一台设备）。链接不对（少了一截、不是邀请链接）、服务器不认、过期了、用过了（`team_link`、`team_denied`、`team_expired`、`team_used`）时带着原因（`error`）重问。配置向导、终端里的安装（`onboard.team`、`install.team` 答有）问的这一页是可选的（`optional`）：留空交上来是先不加入，接着往下做 |
 | `policy.repo` | `policy on` | `text` | 维护者的映射仓库（GitHub 上的「用户/仓库」，向维护者要）：不知道仓库时才问（没有维护者的默认仓库、也没关掉过共享）；空着是取消，写得不对是 `fail` |
 | `install.team` | `install`（终端，服务器上直连不通、没打开维护者的共享时） | `confirm`（默认否） | 有没有 Team 的邀请链接：有就加入（接着 `team.join`，可以留空：先不加入），节点用 Team 的配置带的；没有就粘贴一条自己的代理当出口（`node add` 那一套）。只在终端里问。打开着维护者的共享（一键安装时带了 `CCA_POLICY_REPO`）时不问：等维护者确认这台机器、导入映射里的节点 |
@@ -1011,7 +1012,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 
 3.5.2 的 cca 有 `cca hub`：自己部署一台同步服务器，把自己的几台设备加进去，同步这台设备自己的官方账号的设备统计、折合金额、记下的 API key
 （`hello.hub`、`config.hubs` 里 `kind` 是 `own` 的那一项、`hub_…` 的事件和同意、`hub.join` / `hub.hosted` / `onboard.hub` 这几题）。3.5.3 起去掉了：
-自己的几台设备之间同步改用 Team（4.14：建一个 Team，部署它的服务器，`cca team import <Team> --mine` 把这台设备自己的账号放进去，
+自己的几台设备之间同步改用 Team（4.14：建一个 Team（新建时选上这台设备自己的账号，或者之后 `cca team import <Team> --mine`），部署它的服务器，
 再给别的设备发邀请）。以前加入过、部署过的设备，cca 升级后第一次运行时删掉本机记着的加入信息、密钥和经它同步来的数据（服务器上的不管）。
 `hello` 没有 `hub` 了，旧版的 App 照它不显示那一块、不调 `cca hub`；部署 Team 的服务器沿用了那时的题号（`hub.deploy`、`hub.password`、
 `hub.pubkey`、`hub.platform`）、原因码 `hub_ssh` 和交给终端的 `hub_deploy`。
@@ -1038,7 +1039,8 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
   `aliases` 是按邮箱的那一份（每个邮箱用它最前面那个工具里的），3.5.3-beta.5 只有它。`alias_lock`（3.5.3-beta.7 起；没有这一项时 App 不给锁定的开关）
   见下面「锁定别名」。设备只有一个名字：`label`（管理员起的，界面上只用它）；`name` 是它在服务器上的名字，3.5.3-beta.7 起和服务器对一遍时照
   `label` 改成一样的（以前的设备加入时报的是主机名），App 不显示。`seq`、`have` 只用来比新旧：App 只说「配置是最新的」「还没同步到最新的配置」，不说第几版。
-- **新建**（`cca team new [名字]`）：App 里不写名字，提问会话里问（`team.new`）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
+- **新建**（`cca team new [名字] [--accounts all|none|工具:邮箱,…]`）：App 里不写名字，提问会话里问（`team.new`），再问这台设备上哪些账号放进去
+  （`team.accounts`，3.5.5 起）；成了 `result` 的 `team_created`（这时 `config.teams` 里它的
   `state` 是 `local`：还没接上服务器）。**部署**（`cca team deploy <Team> [用户@主机 …]`）：经 SSH 把这个 Team 的同步服务器装到自己的
   服务器上、接上；App 里不写服务器，在提问会话里问（`hub.deploy`、`hub.password`、`hub.pubkey`，登录不上时的原因码是 `hub_ssh`，4.6）；
   成了 `result` 的 `team_deployed`（`message` 里说手机的网页端开没开、证书拿到没有），地址是内网的另有 `fail` 的 `team_lan`、换了服务器
@@ -1072,7 +1074,7 @@ App 不碰账号表文件，也看不到 key；表单改不了的问题（不是
 - 失败的原因（`fail` 事件的 `code`）是 `team_` 加上辅助程序的原因码：`team_link`、`team_name`、`team_joined`（已经在这个 Team 里）、`team_denied`、
   `team_expired`、`team_used`、`team_taken`、`team_full`、`team_pin`、`team_cert`、`team_unreachable`、`team_old`（不是 Team 的服务器）、`team_clock`、
   `team_busy`、`team_sign`、`team_key`（根密钥不见了）、`team_server`、`team_no_team`、`team_not_admin`、`team_not_attached`、`team_no_device`、`team_self`、
-  `team_alias`、`team_no_account`、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
+  `team_alias`、`team_no_account`、`team_accounts`（`cca team new --accounts` 写的账号这台设备上没有、不能放：什么都没建）、节点（`cca team node`，3.5.3-beta.8 起，只在命令行里）的 `team_no_node`、`team_node`（节点的定义不合格）、`team_node_used`（还有账号、
   别的节点、安装客户端用着它）、
   `team_usage`、`team_url`、`team_file`、`team_publish`（配置没存上：原因在说明里，连不上、被限流也是它），部署（`cca team deploy`）那一步的
   `team_ssh`、`team_ssh_hostkey`、`team_ssh_denied`、`team_root`、`team_deps`、`team_image`、`team_port`、`team_taken`、`team_host`、`team_start`、

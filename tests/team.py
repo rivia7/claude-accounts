@@ -64,7 +64,7 @@ class TeamTest(Sessions, unittest.TestCase):
     def new_team(self, name='测试组', device='studio'):
         """一台管理员的设备、建好的 Team、照它的根公钥起的服务器、接上：(管理员, 编号, 根公钥, 服务器, 地址, 指纹)"""
         admin = self.device('admin')
-        tid, root = self.lines(admin, 'team-new', name, '--device', device)
+        tid, root, _ = self.lines(admin, 'team-new', name, '--device', device)
         srv, url, pin = self.server(root)
         self.assertEqual(self.lines(admin, 'team-attach', tid, url, pin), ['127.0.0.1:%d' % srv.port, device, '1', '1', ''])
         return admin, tid, root, srv, url, pin
@@ -95,7 +95,8 @@ class TeamTest(Sessions, unittest.TestCase):
         admin = self.device('admin')
         self.assertEqual(self.code(admin, 'team-new', ''), 'name')
         self.assertEqual(self.lines(admin, 'team-list'), [])
-        tid, root = self.lines(admin, 'team-new', '测试组', '--device', 'studio')
+        tid, root, n = self.lines(admin, 'team-new', '测试组', '--device', 'studio')
+        self.assertEqual(n, '0', '没写 --accounts：一个账号都不放')
         self.assertEqual((tid, len(tid)), (sw.team_id(root), 32))
         t = self.tdir(admin, tid)
         self.assertEqual(sorted(p.name for p in t.iterdir()), ['admin.json', 'id_ed25519', 'id_ed25519.pub', 'root_ed25519', 'root_ed25519.pub',
@@ -392,7 +393,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual(aliases(), {'alice@example.com': 'alice', 'bob@example.com': 'team-1', 'carol@example.com': 'team-1', 'erin@example.com': 'team-3'})
         # 另一个 Team 也有 team-1（给 frank）
         admin2 = self.device('admin2')
-        tid2, root2 = self.lines(admin2, 'team-new', '设计 组', '--device', 'desk')
+        tid2, root2, _ = self.lines(admin2, 'team-new', '设计 组', '--device', 'desk')
         srv2, url2, pin2 = self.server(root2, name='srv2')
         self.lines(admin2, 'team-attach', tid2, url2, pin2)
         self.lines(admin2, 'team-map', tid2, 'claude', 'frank@example.com', 'US-C')
@@ -971,7 +972,7 @@ class TeamTest(Sessions, unittest.TestCase):
         self.assertEqual((r['code'], list(r['units'])), (200, [aid]))
         # 进程开着时加入第二个 Team（另一台服务器），它给的是 bob@example.com
         admin2 = self.device('admin2')
-        tid2, root2 = self.lines(admin2, 'team-new', '第二组', '--device', 'imac')
+        tid2, root2, _ = self.lines(admin2, 'team-new', '第二组', '--device', 'imac')
         srv2, url2, pin2 = self.server(root2, name='srv2')
         self.lines(admin2, 'team-attach', tid2, url2, pin2)
         self.load(admin2, tid2)
@@ -1070,7 +1071,7 @@ class TeamTest(Sessions, unittest.TestCase):
         """没有指纹的服务器（托管平台上的、反向代理后面的）：照系统的证书机构验证书（不带 -k、--pinnedpubkey）；验不过时接不上、
         加入不了，什么都不留"""
         admin = self.device('admin')
-        tid, root = self.lines(admin, 'team-new', '托管组', '--device', 'studio')
+        tid, root, _ = self.lines(admin, 'team-new', '托管组', '--device', 'studio')
         d = self.d / 'ca'
         d.mkdir()
         make_ca_cert(d)
@@ -1202,7 +1203,7 @@ class TeamTest(Sessions, unittest.TestCase):
         admin = Device(self.d / 'admin', 'admin', {'me(me@example.com)': 'US-C', 'alice(alice@example.com)': 'US-A', 'plain@example.com': 'US-D',
                                                    'api(k@example.com)': {'node': 'US-B', 'base_url': 'https://api.example.com'}})
         admin.policy(None)   # 维护者的映射里有 alice
-        tid, root = self.lines(admin, 'team-new', '我的设备', '--device', 'studio')
+        tid, root, _ = self.lines(admin, 'team-new', '我的设备', '--device', 'studio')
         self.assertEqual(self.lines(admin, 'team-import', tid, '--mine'), ['2', '0', '0'])
         a = json.loads((self.tdir(admin, tid) / 'admin.json').read_text())
         self.assertEqual((a['config']['accounts']['claude'], a['config']['aliases']),
@@ -1213,6 +1214,50 @@ class TeamTest(Sessions, unittest.TestCase):
         self.lines(admin, 'team-attach', tid, url, pin)
         self.assertEqual(sorted(self.doc(admin, tid)[1]['accounts']['claude']), ['me@example.com', 'plain@example.com'])
         self.assertEqual(self.code(admin, 'team-import', tid, '--mine', 'x'), 'usage')
+
+    def test_new_with_accounts(self):
+        """新建 Team 时放进这台设备上的账号（team-candidates 列出来、team-new --accounts 选）：自己加的，和这台设备当管理员的 Team 里的
+        （那个 Team 带着节点的定义的，连同经 dialer-proxy 连着的一起带过来）；维护者共享的、这台设备只是成员的 Team 给的、第三方 API 账号
+        不能放。节点、别名照这台设备上的（默认样子的 team-N 另编）；写错了什么都不建"""
+        admin, tid, root, srv, url, pin = self.new_team()   # 「测试组」：这台设备是它的管理员
+        self.load(admin, tid)   # alice → US-A、bob → US-B（经 US-C 连出去）、Codex 的 carol → US-A，节点的定义都在里面
+        other = self.device('other')   # 别人当管理员的 Team：这台设备只是成员，它给的 frank 不能转手
+        tid2, root2, _ = self.lines(other, 'team-new', '别人的组', '--device', 'desk')
+        srv2, url2, pin2 = self.server(root2, name='srv2')
+        self.lines(other, 'team-attach', tid2, url2, pin2)
+        self.lines(other, 'team-map', tid2, 'claude', 'frank@example.com', 'US-E')
+        self.assertEqual(self.lines(admin, 'team-join', '--name', 'studio-2', stdin=self.invite(other, tid2, 'studio-2')[0])[5], 'ok')
+        admin.ok('team-sync')   # 导入以后这台设备自己的那一份也同步下来：alice、bob、carol 是「测试组」给的
+        admin.policy(None, claude={'zed@example.com': 'US-A'})   # 维护者的映射里的 zed 也不能
+        (admin.cca / 'accounts.json').write_text(json.dumps({
+            'me(me@example.com)': 'US-C', 'team-7(old@example.com)': 'US-D', 'alice(alice@example.com)': 'US-A', 'team-1(bob@example.com)': 'US-B',
+            'frank@example.com': 'US-E', 'zed@example.com': 'US-A', 'api(k@example.com)': {'node': 'US-B', 'base_url': 'https://api.example.com'}}))
+        (admin.cca / 'codex.json').write_text(json.dumps({'carol@example.com': 'US-A', 'cx(cx@example.com)': 'US-B'}))
+        self.assertEqual(self.lines(admin, 'team-candidates'), [
+            'claude\tClaude\tme@example.com\tme\t-\tUS-C', 'claude\tClaude\told@example.com\tteam-7\t-\tUS-D',
+            'claude\tClaude\talice@example.com\talice\t测试组\tUS-A', 'claude\tClaude\tbob@example.com\tteam-1\t测试组\tUS-B',
+            'codex\tCodex\tcarol@example.com\t-\t测试组\tUS-A', 'codex\tCodex\tcx@example.com\tcx\t-\tUS-B'])
+        for spec, code in (('claude:frank@example.com', 'accounts'), ('claude:zed@example.com', 'accounts'), ('claude:k@example.com', 'accounts'),
+                           ('claude:me@example.com,claude:nobody@example.com', 'accounts'), ('me@example.com', 'usage')):
+            self.assertEqual(self.code(admin, 'team-new', '新组', '--device', 'studio', '--accounts', spec), code, spec)
+        self.assertEqual(len(self.lines(admin, 'team-list')), 2, '写错了什么都不建')
+        # 照账号表里的先后放（不照 --accounts 写的先后）；别名带进去，默认样子的另编
+        tid3, root3, n = self.lines(admin, 'team-new', '新组', '--device', 'studio',
+                                    '--accounts', 'codex:carol@example.com,claude:bob@example.com,claude:me@example.com,claude:old@example.com')
+        config = json.loads((self.tdir(admin, tid3) / 'admin.json').read_text())['config']
+        self.assertEqual((n, config['accounts'], config['tool_aliases']),
+                         ('4', {'claude': {'me@example.com': 'US-C', 'old@example.com': 'US-D', 'bob@example.com': 'US-B'}, 'codex': {'carol@example.com': 'US-A'}},
+                          {'claude': {'me@example.com': 'me', 'old@example.com': 'team-1', 'bob@example.com': 'team-2'}, 'codex': {'carol@example.com': 'team-1'}}))
+        self.assertEqual((config['nodes']['group'], [p['name'] for p in config['nodes']['proxies']]), ('OpenAi', ['US-B', 'US-C', 'US-A']),
+                         '「测试组」带着的定义带过来（US-B 经 US-C 连出去）；自己加的账号的节点各台设备自己有，不带')
+        # 接上服务器、发布：这台设备拿到的配置里就是这几个账号和要用的节点
+        srv3, url3, pin3 = self.server(root3, name='srv3')
+        self.lines(admin, 'team-attach', tid3, url3, pin3)
+        doc = self.doc(admin, tid3)[1]
+        self.assertEqual((sorted(doc['accounts']['claude']), sorted(p['name'] for p in doc['nodes']['proxies'])),
+                         (['bob@example.com', 'me@example.com', 'old@example.com'], ['US-A', 'US-B', 'US-C']))
+        # all 是列出来的全部
+        self.assertEqual(self.lines(admin, 'team-new', '全都放', '--device', 'studio', '--accounts', 'all')[2], '6')
 
     def test_server_lies(self):
         """服务器说的没有签名，管理员只拿它当线索：换了的公钥不照它的；它那边的配置丢了、旧了就重新发布；它乱说序号不信"""
