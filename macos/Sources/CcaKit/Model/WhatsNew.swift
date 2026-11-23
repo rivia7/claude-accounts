@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.3", title: "删除 Team 时一起卸掉它的同步服务器", points: [
+            .init(symbol: "trash",
+                  text: "管理员删掉一个 Team（「删掉这个 Team…」或 cca team leave）时，先经 SSH 卸掉它的同步服务器：停掉服务，程序、证书和数据一起删掉，服务器上不再留下没人用的服务。"),
+            .init(symbol: "key",
+                  text: "这台 Mac 的密钥登录不了时问密码；卸不掉时问要不要仍然删掉、服务器留着。只想删这台设备上的：cca team leave Team --keep-server。"),
+            .init(symbol: "server.rack",
+                  text: "以前部署的照部署时的默认位置卸载（root@服务器、/opt/cca-team-编号的前 8 位），不对的话写清楚：cca team leave Team 用户@服务器 [-p 端口] [-i 私钥] [--dir 目录]。"),
+        ]),
         ReleaseNote(version: "3.6.2", title: "侧栏的底栏不再挡住账号", points: [
             .init(symbol: "sidebar.left",
                   text: "侧栏要滚动时，滚到底栏下面的账号会淡出，不再和版本号、「新手教程」叠在一起。"),
