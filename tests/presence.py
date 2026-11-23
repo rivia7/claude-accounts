@@ -1357,10 +1357,10 @@ class ClientTest(Sessions, unittest.TestCase):
         dev.config(lambda c: c.pop('presence'))
         doc = dev.cca / 'teams' / self.tid / 'doc.json'
         doc.rename(doc.with_name('doc.bak'))   # 配置还没同步下来
-        self.assertIn('Team', self.view(dev, rc=2)[0])
+        self.assertIn('「测试组」的配置还没同步下来（cca team sync）', self.view(dev, rc=2)[0])
         doc.with_name('doc.bak').rename(doc)
         dev.keyfile.rename(dev.keyfile.with_name('id.bak'))   # 这台设备在 Team 里的密钥不见了
-        self.assertIn('Team', self.view(dev, rc=2)[0])
+        self.assertIn('这台设备用不了「测试组」的同步服务器（密钥不见了', self.view(dev, rc=2)[0])
         self.assertEqual(len(dev.sent()), 4, '用不了的时候不问服务器')
 
     def test_scan_cli_idle_from_tty(self):

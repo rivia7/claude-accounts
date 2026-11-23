@@ -198,7 +198,7 @@ class ShellTest(TeamRelayTest):
         # 要在别的上面配怎么写；另一台输入时不用说在哪台
         p, code, seen = self.shown(a)
         self.assertIn('这次配对记在「研发组」的服务器上：对方经它看得到的，是走这台服务器的会话', seen)
-        self.assertIn('要在别的服务器上配对：--team 名字', seen)
+        self.assertIn('要在别的 Team 的服务器上配对：--team 名字', seen)
         rc, out, err = self.cca(b, 'remote', 'join', answers=[code])
         self.assertEqual((rc, out), (0, ''), err)
         self.assertIn('已经和「box」配对', err)
@@ -208,7 +208,7 @@ class ShellTest(TeamRelayTest):
         # 写明了在研发组的服务器上（名字）：不再说要在别的上面配怎么写
         p, code, seen = self.shown(a, '--team', '研发组')
         self.assertIn('这次配对记在「研发组」的服务器上', seen)
-        self.assertNotIn('要在别的服务器上配对', seen)
+        self.assertNotIn('要在别的 Team 的服务器上配对', seen)
         p.terminate()   # 不配了：cca 退出时停掉后台的辅助程序（SIGKILL 的话 EXIT 的 trap 不跑，它会一直等着）
         self.assertEqual(p.wait(30), 130)
         # 测试组的那一台：输入的那一头指定了研发组（写编号）的话，在研发组的服务器上找不到这个配对码
