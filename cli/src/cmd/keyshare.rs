@@ -5,7 +5,7 @@
 //! 每个账号经它走的那台同步服务器（hub.rs 的 `route`）同步；各台的 keys.json、锁、盐各是各的（`HubKind::file`）。
 
 use super::hub::{hub_of, hubs, Hub, HubKind};
-use super::presence::{is_maintainer, presence_aid, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
+use super::presence::{presence_aid, presence_post, presence_targets, presence_why, spawn_background, PRESENCE_DIR};
 use super::secrets::{
     kc_del, kc_hints, kc_put, kc_read, kc_svc, kc_unbook, keyfile_store, keystore_name, py_set, security, SECRETS_DIR,
 };
@@ -29,8 +29,8 @@ use std::os::unix::io::AsRawFd;
 /// 这个模块移植好的子命令
 pub const CMDS: &[Cmd] = &[Cmd::all("key-sync", cmd_key_sync)];
 
-/// PRESENCE_DIR 里（Team 的服务器的是 team.<编号>.keys.json）：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
-/// "synced": 上次同步, "retry": 旧的服务器什么时候再试, "error": 没同步成的原因}
+/// PRESENCE_DIR 里（各台服务器的是 team.<编号>.keys.json）：{"v": 1, "acc": {工具:账号目录名: {"at": 时间, "sum": key 的摘要 | null}},
+/// "synced": 上次同步, "error": 没同步成的原因}
 pub const KEYSHARE_FILE: &str = "keys.json";
 /// 后台最多隔这么久同步一次（在这台设备上记下、删掉时马上）
 pub const KEYSHARE_EVERY: f64 = 600.0;
@@ -101,9 +101,8 @@ impl KeyshareFile {
 
 /// `with keyshare_edit(键, 值, 时间) as ed`：在这台设备上记下（换掉）、删掉这个账号（当前工具的）记下备查的 key，改完
 /// `ed.mark(key 或 None)` 记下时间（同步时按它比新旧），记在它走的那台服务器的 keys.json 里。哪台都不走（这台设备自己的、第三方
-/// API 账号）时照旧记进维护者的（这台设备用得了它时，和以前一样）：以后这个账号进了映射，
-/// 同步时按记下的时间比新旧，删掉的也同步。拿着 keys.lock：同步不会在这中间拿服务器上旧的盖掉刚记下的。一台都用不了时不记
-/// （以后用得了了，记下的按 key_hints 里的时间算，删掉的不同步）；出错不影响记下、删掉本身
+/// API 账号）、走的那台这台设备用不了时不记（3.6.0 起不再记进维护者的那一台；以后用得了了，记下的按 key_hints 里的时间算，
+/// 删掉的不同步）。拿着 keys.lock：同步不会在这中间拿服务器上旧的盖掉刚记下的；出错不影响记下、删掉本身
 pub struct KeyshareEdit {
     key: String,
     at: f64,
@@ -114,8 +113,7 @@ pub struct KeyshareEdit {
 pub fn keyshare_edit(key: &str, v: &V, at: f64) -> KeyshareEdit {
     let open = || -> R<Option<KeyshareFile>> {
         let hs = hubs()?;
-        let hub = hub_of(&hs, &policy_sources(t()), key, v).or_else(|| hs.iter().find(|h| h.kind == HubKind::Maintainer));
-        match hub {
+        match hub_of(&hs, &policy_sources(t()), key, v) {
             Some(h) => Ok(Some(KeyshareFile::enter(h.kind)?)),
             None => Ok(None),
         }
@@ -155,8 +153,8 @@ pub fn keyshare_kick(force: bool) {
         let hubs = hubs()?;
         let due = |h: &Hub| {
             let j = load_quiet(&path::join(&PRESENCE_DIR, &h.file(KEYSHARE_FILE))).and_then(|j| j.as_dict()).unwrap_or_default();
-            let last = |k: &str| j.get(k).filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
-            !(time() - last("synced") < KEYSHARE_EVERY || time() < last("retry"))
+            let synced = j.get("synced").filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
+            time() - synced >= KEYSHARE_EVERY
         };
         if hubs.is_empty() || !(force || hubs.iter().any(due)) {
             return Ok(());
@@ -293,10 +291,6 @@ pub fn keyshare_open(keys: &Keys, aid: &str, blob: &V) -> R<Option<Dict>> {
 // （cca rm、cca edit）、cca restore 只删这台设备上的，不同步；钥匙串里的被删了，下次同步从服务器取回来。
 // 什么时候同步：记下、删掉之后马上（后台）；cca usage、cca devices 之后，和上报进程开着时，最多 KEYSHARE_EVERY 一次。
 
-/// 旧的服务器（404：还不收 key）：隔这么久再试
-pub const KEYSHARE_RETRY: f64 = 6.0 * 3600.0;
-pub const KEYSHARE_OLD: &str = "设备统计的服务器还不收 API key（维护者要更新服务器：./policy.sh presence deploy）";
-
 /// 只有登录了这个账号的设备才知道的身份（共享 API key 的密钥由它派生，见 keyshare_keys；原来是各工具的 `share_ident`，
 /// 调用时当前工具就是 tool）。Claude：accountUuid，每次现读，读不出（.claude.json 半写、手改坏了）当作没登录，只是这一轮
 /// 不同步这个账号——不经 acct_json：它读不了时退出（会停掉上报进程），一个进程里又只读一次（上报进程一开好几天，看不到
@@ -363,13 +357,7 @@ pub fn keyshare_local(key: &str, e: Option<&V>, booked: bool, hint: Option<&V>) 
 }
 
 fn keyshare_note(code: i64, cfg: &Dict, j: &Dict) -> R<String> {
-    Ok(if code == 404 && is_maintainer(cfg) {
-        KEYSHARE_OLD.to_string()
-    } else if code != 200 {
-        presence_why(cfg, code, j)?
-    } else {
-        "设备统计的服务器回的内容看不懂".to_string()
-    })
+    Ok(if code != 200 { presence_why(cfg, code, j)? } else { "设备统计的服务器回的内容看不懂".to_string() })
 }
 
 /// 同步这台设备上记下备查的 API key：用得了的每一台同步服务器各一轮（见 keyshare_hub）。返回没同步成的原因：都成了是空的，
@@ -404,7 +392,7 @@ fn keyshare_hub(hub: &Hub, force: bool, timeout: i64) -> R<Option<String>> {
     let f = KeyshareFile::enter(hub.kind)?;
     let now = time();
     let num = |j: &Dict, k: &str| j.get(k).filter(is_num).and_then(|v| v.as_num()).unwrap_or(0.0);
-    if !force && (now - num(&f.j, "synced") < KEYSHARE_EVERY || now < num(&f.j, "retry")) {
+    if !force && now - num(&f.j, "synced") < KEYSHARE_EVERY {
         f.exit(true)?;
         return Ok(None);
     }
@@ -423,11 +411,6 @@ fn keyshare_hub(hub: &Hub, force: bool, timeout: i64) -> R<Option<String>> {
         f.j.pop("error");
     } else {
         f.j.set("error", err.as_str());
-    }
-    if err == KEYSHARE_OLD {
-        f.j.set("retry", time() + KEYSHARE_RETRY);
-    } else {
-        f.j.pop("retry");
     }
     f.exit(true)?;
     Ok(Some(err))

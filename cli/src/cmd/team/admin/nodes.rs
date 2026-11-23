@@ -1,6 +1,6 @@
 //! Team 的节点（`cca team node`）：管理员给这个 Team 的配置加、复制、去掉节点的定义，列出来，起临时内核实测出口。节点的定义存在
-//! admin.json 的 config.nodes（`{"group": 策略组, "proxies": [节点定义…]}`，和维护者映射仓库的 nodes.json 一个样子，`cca team import`
-//! 整份导入的也是它）；给各台设备的配置只带它的账号用得着的那几个（needed_nodes），所以加了没人用的节点，哪台设备的配置都不变。
+//! admin.json 的 config.nodes（`{"group": 策略组, "proxies": [节点定义…]}`，和以前维护者映射仓库的 nodes.json 一个样子）；给各台
+//! 设备的配置只带它的账号用得着的那几个（needed_nodes），所以加了没人用的节点，哪台设备的配置都不变。
 //! 节点的密钥不出这台设备：列出来、实测出口都不显示 uuid、密码这些。见 docs/dev/team.md「Team 的节点」
 
 use super::{admin_of, admin_save, fail, settle};
@@ -16,7 +16,7 @@ use crate::py::io::read_stdin_text;
 use crate::py::obj::{str_list, Dict, List, V};
 use crate::py::{exit, json, Fail, R};
 
-/// 还没有节点的 Team 加第一个节点时用的策略组（各台设备把节点写进路由器的配置时，名字加进这个组）：和维护者的 policy.sh 默认的一样
+/// 还没有节点的 Team 加第一个节点时用的策略组（各台设备把节点写进路由器的配置时，名字加进这个组）：和以前维护者映射默认的一样
 const DEFAULT_GROUP: &str = "OpenAi";
 
 /// 看服务器自己的出口用的网站（经它看到的是节点服务器自己的 IP；Antigravity 测出口也用它）

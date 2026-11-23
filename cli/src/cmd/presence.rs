@@ -1,8 +1,8 @@
-//! 设备统计（`presence_problems` 到 `cmd_presence_stop`、`past_time` 到 `cmd_presence_note`）：presence-agent、presence-wake、
-//! presence-stop、presence-view、presence-note。
+//! 设备统计：presence-agent、presence-wake、presence-stop、presence-view。
 //!
-//! 都移植了；别处要用的：`presence_problems`、`presence_load`、`presence_post`、`presence_targets`、`app_proc_re`、`spawn_background`。
-//! 上报、cca devices 对着这台设备用得了的每一台同步服务器（维护者的、各个 Team 的，见 hub.rs）各走一路：账号只报给它走的那一台。
+//! 都移植了（presence-note 只说维护者的服务器，3.6.0 和它一起去掉了）；别处要用的：`presence_post`、`presence_targets`、
+//! `app_proc_re`、`spawn_background`。上报、cca devices 对着这台设备用得了的每一台同步服务器（各个 Team 的，见 hub.rs）各走一路：
+//! 账号只报给它走的那一台。
 
 use super::cost::cost_kick;
 use super::hub::{hub_of, hubs, route, Hub, HubKind};
@@ -14,7 +14,7 @@ use super::{arity, Cmd};
 use crate::core::base::{CCA_HOME, CFG, SELF_PATH};
 use crate::core::ctx::ctx;
 use crate::core::model::{acct_id, adir, is_api, label_of, name_of, parse_key};
-use crate::core::policy::{policy_doc, policy_on, policy_sources};
+use crate::core::policy::policy_sources;
 use crate::core::team::{forget_grants, team_dir, teams, TEAMS_DIR};
 use crate::core::tool::{t, tools, Tool, Using};
 use crate::py::base64::{b64decode, b64encode};
@@ -37,7 +37,6 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("presence-agent", cmd_presence_agent),
     Cmd::all("presence-wake", cmd_presence_wake),
     Cmd::all("presence-stop", cmd_presence_stop),
-    Cmd::all("presence-note", cmd_presence_note),
     Cmd::all("presence-view", cmd_presence_view),
 ];
 
@@ -50,6 +49,7 @@ pub static PRESENCE_URL_RE: LazyLock<Re> = LazyLock::new(|| {
     ))
 });
 pub static PRESENCE_PIN_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^sha256//[A-Za-z0-9+/]{43}=$"));
+/// 服务器的盐（Team 的配置里的 salt）：32～128 位（偶数位）小写十六进制
 pub static PRESENCE_SALT_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^([0-9a-f]{2}){16,64}$"));
 
 /// https://地址:端口（端口 1～65535）
@@ -57,40 +57,10 @@ pub fn url_ok(u: &str) -> bool {
     PRESENCE_URL_RE.match_(u).and_then(|m| m.name("port")).and_then(text::to_int).is_some_and(|n| (1..=65535).contains(&n))
 }
 
-/// 映射里 presence 一节的问题：{"url": "https://地址:端口", "pins": ["sha256//…"], "salt": "十六进制"}。维护者发布前
-/// 严格检查；客户端只在完全合格时启用（不合格就当没有，映射的其余部分照用）
-pub fn presence_problems(p: &V) -> Vec<String> {
-    let Some(p) = p.as_dict() else {
-        return vec![
-            "presence 应该是 {\"url\": \"https://地址:端口\", \"pins\": [\"sha256//…\"], \"salt\": \"…\"} 形式的对象".to_string()
-        ];
-    };
-    let mut errs = Vec::new();
-    if !p.get("url").as_ref().and_then(|u| u.as_str()).is_some_and(url_ok) {
-        errs.push("presence.url 应该是 https://地址:端口（例如 https://203.0.113.10:18443）".to_string());
-    }
-    let pins_ok = p.list("pins").is_some_and(|pins| {
-        (1..=4).contains(&pins.len()) && pins.items().iter().all(|x| x.as_str().is_some_and(|x| PRESENCE_PIN_RE.matches(x)))
-    });
-    if !pins_ok {
-        errs.push("presence.pins 应该是 1～4 个服务器证书公钥的指纹（sha256//…，./policy.sh presence deploy 打印的）".to_string());
-    }
-    let salt = p.get("salt");
-    if !salt.as_ref().and_then(|s| s.as_str()).is_some_and(|s| PRESENCE_SALT_RE.matches(s)) {
-        errs.push("presence.salt 应该是 32～128 位（偶数位）小写十六进制".to_string());
-    }
-    errs
-}
-
 /// 公钥（base64 那一段）的指纹，和 ssh-keygen -l 的写法一样（SHA256:…）；不是 base64 是 None
 pub fn ssh_fp(b64: &str) -> Option<String> {
     let raw = b64decode(b64, true).ok()?;
     Some(format!("SHA256:{}", b64encode(&sha256(&raw)).trim_end_matches('=')))
-}
-
-/// 这台 Mac 拉映射用的 deploy key：(私钥路径, 指纹)；没有、不是 ed25519 是 None。公钥文件不是 UTF-8 是 ValueError（调用方接）
-pub fn presence_key() -> R<Option<(String, String)>> {
-    key_at(&path::join_all(&[&CCA_HOME, "policy", "id_ed25519"]))
 }
 
 /// 一把 ed25519 私钥（旁边有 .pub）：(私钥路径, 指纹)；没有、不是 ed25519 是 None。公钥文件不是 UTF-8 是 ValueError（调用方接）
@@ -106,47 +76,13 @@ pub fn key_at(key: &str) -> R<Option<(String, String)>> {
     Ok(fp.map(|fp| (key, fp)))
 }
 
-/// 这台设备关掉了设备统计和同步（config.json 里写着 "presence": false：两种服务器都不用）时是原因
+/// 这台设备关掉了设备统计和同步（config.json 里写着 "presence": false：Team 的服务器都不用）时是原因
 pub fn presence_off_reason() -> Option<String> {
     let off = load_quiet(&CFG).and_then(|c| c.as_dict()).is_some_and(|c| matches!(c.get("presence"), Some(V::Bool(false))));
     off.then(|| "这台 Mac 关掉了设备统计（config.json 里写着 \"presence\": false）".to_string())
 }
 
-/// 维护者的服务器（映射里的那一台）：(用不了的原因, 配置)。能用时原因是空的，配置是 {url, pins, salt, key, fp}
-pub fn presence_load() -> R<(String, Option<Dict>)> {
-    if let Some(why) = presence_off_reason() {
-        return Ok((why, None));
-    }
-    presence_server()
-}
-
-/// 维护者的服务器的配置，不看这台 Mac 关没关设备统计：远程会话的中转（docs/dev/remote.md）也经这台服务器，
-/// 那是用户自己配对了才用的，和上报不上报是两回事
-pub fn presence_server() -> R<(String, Option<Dict>)> {
-    let Some(j) = policy_doc() else {
-        let why = if policy_on() {
-            "这台 Mac 还没拉到维护者的映射（cca policy pull）"
-        } else {
-            "这台 Mac 没打开维护者的共享（cca policy on）"
-        };
-        return Ok((why.into(), None));
-    };
-    let Some(p) = j.get("presence").filter(|p| !p.is_none()) else {
-        return Ok(("维护者的映射里还没有设备统计的服务器".into(), None));
-    };
-    let errs = presence_problems(&p);
-    if !errs.is_empty() {
-        return Ok((format!("维护者的映射里设备统计那一节不对：{}", errs.join("；")), None));
-    }
-    let Some((key, fp)) = presence_key()? else {
-        return Ok(("这台 Mac 没有映射的 deploy key（cca policy on）".into(), None));
-    };
-    let p = p.as_dict().expect("presence_problems 核对过是字典");
-    let cfg = dict! { "url" => p.at("url").py_str().trim_end_matches('/'), "pins" => p.at("pins"), "salt" => p.at("salt"), "key" => key, "fp" => fp };
-    Ok((String::new(), Some(cfg)))
-}
-
-/// 上报用的账号摘要：服务器只看到它，看不到邮箱（盐在签名的映射里，各台 Mac 算出来的一样）
+/// 上报用的账号摘要：服务器只看到它，看不到邮箱（盐在签名的 Team 的配置里，各台设备算出来的一样）
 pub fn presence_aid(salt: &str, tool: &str, email: &str) -> R<String> {
     let compact: String = salt.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     let key = crate::py::hash::from_hex(&compact)
@@ -213,29 +149,13 @@ pub fn agent_kick() {
     }
 }
 
-/// py presence-wake [账号]：带账号时同 presence_wake；不带时只是 agent_kick（cca policy off 停掉上报进程以后：
-/// 还用得了的服务器接着报，没有要报的它马上退出）
+/// py presence-wake [账号]：带账号时同 presence_wake；不带时只是 agent_kick（上报进程停掉以后再起：还用得了的服务器接着报，
+/// 没有要报的它马上退出）
 pub fn cmd_presence_wake(args: &[String]) -> R<()> {
     arity("cmd_presence_wake", args, 0, 1)?;
     match args.first() {
         Some(key) => presence_wake(key),
         None => agent_kick(),
-    }
-    Ok(())
-}
-
-/// cca policy 里的一句：这台 Mac 会不会把映射里账号的使用情况报告给维护者的服务器
-pub fn cmd_presence_note(args: &[String]) -> R<()> {
-    arity("cmd_presence_note", args, 0, 0)?;
-    if !policy_doc().is_some_and(|j| j.has("presence")) {
-        return Ok(());
-    }
-    match presence_load()? {
-        (_, Some(cfg)) => crate::out!(
-            "设备统计：映射里的账号在这台 Mac 上用的时候（命令行会话、cca app 打开的 App），会报告给维护者的服务器 {}，配置了同一份映射的设备在账号页能看到这台 Mac 在不在用；给这些账号记下备查的 API key（cca key 账号）也经它加密同步给登录了同一个账号的其他设备，服务器看不到 key（都不想要：config.json 里加上 \"presence\": false）",
-            cfg.at("url").py_str()
-        ),
-        (reason, None) => crate::out!("设备统计：{reason}"),
     }
     Ok(())
 }
@@ -275,11 +195,11 @@ pub fn cmd_presence_stop(args: &[String]) -> R<()> {
 }
 
 // --- 上报进程（cca _presence-agent） ---------------------------------------------------------------------------------------
-// 每台 Mac 一个（后台优先级）：有映射里账号的会话时才在，先报一次全部开着的会话（快照），之后 60 秒一次心跳，其余时间睡在
+// 每台 Mac 一个（后台优先级）：有 Team 给的账号的会话时才在，先报一次全部开着的会话（快照），之后 60 秒一次心跳，其余时间睡在
 // kqueue 里：会话进程退出、账号目录里的登记变了马上醒来再报；最后一个关掉时报一次「什么都没开了」就退出。报不出去时按退避
 // 再试（5 秒起翻倍，最多 2 分钟；服务器不认这台 Mac 时 10 分钟）。动静：命令行会话看它终端的最后输入、输出时间（和 w 算
-// 闲置一样），桌面 App 看进程树的 CPU；10 分钟没动静算闲置（服务器算）。请求用 deploy key 签名（命名空间 cca-presence），
-// 直连、钉住服务器证书的公钥；账号只报 HMAC(盐, 工具\0邮箱)，服务器看不到邮箱。
+// 闲置一样），桌面 App 看进程树的 CPU；10 分钟没动静算闲置（服务器算）。请求用这台设备在那个 Team 里的密钥签名（命名空间
+// cca-presence），直连、钉住服务器证书的公钥；账号只报 HMAC(盐, 工具\0邮箱)，服务器看不到邮箱。
 
 /// 心跳间隔（秒）：服务器 150 秒收不到、又开着会话就算离线
 pub const PRESENCE_BEAT: f64 = 60.0;
@@ -294,7 +214,7 @@ pub static TTY_RE: LazyLock<Re> = LazyLock::new(|| Re::new(r"^(ttys[0-9]+|pts/[0
 /// 上报的对象：(工具, 账号表的键, 账号目录)
 pub type Target = (&'static Tool, String, String);
 
-/// 这台 Mac 上经这一类服务器同步的账号（route 给的是它：维护者的是映射里的官方账号，Team 的是那个 Team 给的）。账号表读不了是 None
+/// 这台 Mac 上经这台服务器同步的账号（route 给的是它：那个 Team 给的官方账号）。账号表读不了是 None
 /// （这一轮不报：不能当成什么都没开）
 pub fn presence_targets(kind: HubKind) -> Option<Vec<Target>> {
     let mut out = Vec::new();
@@ -593,7 +513,7 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
         return Ok((0, dict! { "error" => "unreachable" }));
     };
     if r.rc == 90 {
-        // CURLE_SSL_PINNEDPUBKEYNOTMATCH：证书不是映射里钉住的那张
+        // CURLE_SSL_PINNEDPUBKEYNOTMATCH：证书不是配置里钉住的那张
         return Ok((0, dict! { "error" => "pin" }));
     }
     if pins.is_empty() && matches!(r.rc, 51 | 60) {
@@ -611,38 +531,9 @@ pub fn presence_post(cfg: &Dict, op: &str, payload: &Dict, timeout: i64) -> R<(i
     Ok((code, j))
 }
 
-/// 维护者的服务器（配置里没有 "hub"）：只有它可能是还不支持新接口的旧版（Team 的都是新的）
-pub fn is_maintainer(cfg: &Dict) -> bool {
-    cfg.get("hub").is_none()
-}
-
-/// 请求没成的原因（给人看的）；cfg 里有 "hub": "team" 的是 Team 的同步服务器（team::hub_why），别的是维护者的
+/// 请求没成的原因（给人看的）：Team 的同步服务器的说法（team::hub_why；3.6.0 以前还有维护者的服务器的另一套）
 pub fn presence_why(cfg: &Dict, code: i64, j: &Dict) -> R<String> {
-    if cfg.str("hub").as_deref() == Some("team") {
-        return Ok(super::team::hub_why(cfg, code, j));
-    }
-    let err = j.get("error");
-    let err = err.as_ref().and_then(|e| e.as_str());
-    Ok(if err == Some("pin") {
-        "服务器的证书和映射里钉住的指纹对不上（可能有人冒充服务器，也可能维护者换了证书、映射还没更新）".into()
-    } else if err == Some("sign") {
-        "没法用这台 Mac 的 deploy key 签名（~/.cca/policy/id_ed25519）".into()
-    } else if code == 0 {
-        format!("连不上设备统计的服务器（{}）", cfg.at("url").py_str())
-    } else if code == 403 {
-        "服务器还不认这台 Mac：维护者要把它的 deploy key 同步到服务器的设备清单（./policy.sh presence sync）".into()
-    } else if let Some(now) = j.get("now").filter(|n| err == Some("clock") && is_num(n)).and_then(|n| n.as_num()) {
-        // '%d' % abs(…)：朝 0 取整；不是有限的数原来是没人接的 OverflowError / ValueError
-        let gap = (time() - now).abs();
-        if !gap.is_finite() {
-            return Err(Fail::Value("cannot convert float NaN or infinity to integer".into()));
-        }
-        format!("这台 Mac 的时间和服务器差了 {:.0} 秒：打开“系统设置 › 通用 › 日期与时间”里的自动设置", gap.trunc())
-    } else if code == 429 {
-        "请求太频繁，稍后再试".into()
-    } else {
-        format!("设备统计的服务器出错了（HTTP {code}）")
-    })
+    Ok(super::team::hub_why(cfg, code, j))
 }
 
 /// 上报进程最近一次没报到这台服务器的原因（cca devices 显示）；报成了是空的。只在变了的时候写
@@ -773,8 +664,8 @@ pub fn flock(f: &std::fs::File, op: libc::c_int) -> bool {
     unsafe { libc::flock(f.as_raw_fd(), op) == 0 }
 }
 
-/// 没报成：隔多久再试。服务器不认这台 Mac（403）等维护者同步，10 分钟；别的按退避，5 秒起翻倍、最多 2 分钟（fails 是连着
-/// 没报成的次数，从 1 起）
+/// 没报成：隔多久再试。服务器不认这台 Mac（403：被管理员移除了，或者签名不对）一时好不了，10 分钟；别的按退避，5 秒起翻倍、
+/// 最多 2 分钟（fails 是连着没报成的次数，从 1 起）
 fn retry_after(code: i64, fails: u32) -> f64 {
     if code == 403 {
         600.0
@@ -787,8 +678,8 @@ fn retry_after(code: i64, fails: u32) -> f64 {
 struct Lane {
     kind: HubKind,
     cfg: Dict,
-    /// 上次报成的样子：[(账号摘要, 命令行会话数, 桌面 App 开没开)]，排好序的；还没报成过是 None
-    shape: Option<Vec<(String, usize, bool)>>,
+    /// 上次报成的样子：[(账号摘要, 命令行会话数, 桌面 App 开没开)]，排好序的；从「报过什么都没开」（空的）起步
+    shape: Vec<(String, usize, bool)>,
     units: Dict,
     /// 这一路的账号的桌面 App 的 CPU 采样（presence_scan 只留它看的那些账号的）
     apps: AppSamples,
@@ -800,30 +691,29 @@ struct Lane {
 
 impl Lane {
     fn new(h: Hub) -> Lane {
-        // Team 的那一路从「报过什么都没开」起步：没有账号经它时一次都不报（见 quiet）
-        let shape = matches!(h.kind, HubKind::Team(_)).then(Vec::new);
-        Lane { kind: h.kind, cfg: h.cfg, shape, units: Dict::new(), apps: AppSamples::new(), due: 0.0, fails: 0 }
+        // 从「报过什么都没开」起步：没有账号经它时一次都不报（见 quiet）
+        Lane { kind: h.kind, cfg: h.cfg, shape: Vec::new(), units: Dict::new(), apps: AppSamples::new(), due: 0.0, fails: 0 }
     }
 
-    /// Team 的那一路没有东西可报、上次报的也是什么都没开：不发心跳。加入了一个 Team、它给的账号却没在用（没登录，或者这个账号是
+    /// 这一路没有东西可报、上次报的也是什么都没开：不发心跳。加入了一个 Team、它给的账号却没在用（没登录，或者这个账号是
     /// 另一个 Team 先给的）时，不必每分钟告诉它的服务器这台设备开着
     fn quiet(&self) -> bool {
-        matches!(self.kind, HubKind::Team(_)) && self.units.is_empty() && self.shape.as_ref().is_some_and(|s| s.is_empty())
+        self.units.is_empty() && self.shape.is_empty()
     }
 
-    /// 还是不是同一台：种类、地址、这台设备在它上面的指纹都一样，也还是同一次加入（Team 的 "rev"：重新加入以后从头报，
+    /// 还是不是同一台：哪个 Team、地址、这台设备在它上面的指纹都一样，也还是同一次加入（"rev"：重新加入以后从头报，
     /// 不接着被移除那会儿的退避）
     fn same(&self, h: &Hub) -> bool {
         let eq = |k: &str| match (self.cfg.get(k), h.cfg.get(k)) {
             (Some(a), Some(b)) => a.py_eq(&b),
-            (a, b) => a.is_none() && b.is_none(), // 维护者的没有 rev
+            (a, b) => a.is_none() && b.is_none(), // 两边都没有这一项也算一样
         };
         self.kind == h.kind && ["url", "fp", "rev"].into_iter().all(eq)
     }
 
     /// 什么都没开了：报过了，或者一直报不出去
     fn idle(&self) -> bool {
-        self.units.is_empty() && (self.shape.as_ref().is_some_and(|s| s.is_empty()) || self.fails >= 3)
+        self.units.is_empty() && (self.shape.is_empty() || self.fails >= 3)
     }
 }
 
@@ -853,7 +743,7 @@ pub fn cmd_presence_agent(args: &[String]) -> R<()> {
         Err(e) if e.is("Stop") => {
             // 被停掉（关机、注销、cca restore）：告诉各台服务器，马上算离线，不用等心跳超时
             for lane in &agent.lanes {
-                if lane.shape.as_ref().is_some_and(|s| !s.is_empty()) {
+                if !lane.shape.is_empty() {
                     presence_post(&lane.cfg, "report", &dict! { "units" => &lane.units, "end" => "down" }, 3)?;
                 }
             }
@@ -871,7 +761,7 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
         forget_grants(); // 这个进程一直开着：各个 Team 的配置每一圈重读（加入了、被移除了、换了盐）
         let hubs = hubs()?;
         if hubs.is_empty() {
-            return Ok(()); // 映射里去掉了、退出了 Team、这台 Mac 关掉了、cca restore 了：不再报
+            return Ok(()); // 退出了 Team、被移除了、这台 Mac 关掉了、cca restore 了：不再报
         }
         // 各路跟着现在用得了的服务器走：还是同一台的接着用（配置换成刚读的），新加的从头报，没了的不再报
         let mut old = std::mem::take(&mut agent.lanes);
@@ -942,11 +832,11 @@ fn agent_loop(lock: std::fs::File, agent: &mut Agent) -> R<()> {
                 })
                 .collect();
             cur.sort();
-            if !lane.quiet() && (mono >= lane.due || (lane.shape.as_ref() != Some(&cur) && lane.fails == 0)) {
+            if !lane.quiet() && (mono >= lane.due || (lane.shape != cur && lane.fails == 0)) {
                 let end = if lane.units.is_empty() { V::from("none") } else { V::None };
                 let (code, j) = presence_post(&lane.cfg, "report", &dict! { "units" => &lane.units, "end" => end }, 8)?;
                 if code == 200 {
-                    lane.shape = Some(cur);
+                    lane.shape = cur;
                     lane.fails = 0;
                     lane.due = mono + PRESENCE_BEAT * uniform(0.9, 1.1);
                     presence_status(lane.kind, "")?;
@@ -1066,29 +956,31 @@ fn presence_line(d: &Dict, now: f64) -> R<String> {
     })
 }
 
-/// 一台服务器都用不了时，cca devices 说的原因
-fn no_hub_reason() -> R<String> {
+/// 一台服务器都用不了时，cca devices 说的原因：关掉了设备统计；在 Team 里时是第一个 Team 的服务器用不了的原因；没加入 Team
+fn no_hub_reason() -> String {
     if let Some(why) = presence_off_reason() {
-        return Ok(why);
+        return why;
     }
-    Ok(format!("{}，也没加入 Team（cca team join）", presence_load()?.0))
+    match teams().first() {
+        Some(t) => super::team::hub_missing_why(&t.id),
+        None => "这台设备没加入 Team（cca team join）：设备统计经 Team 的同步服务器".to_string(),
+    }
 }
 
 /// 这个账号不经哪台服务器（或者它走的那台这台设备用不了）：cca devices 说的原因
-fn unrouted_reason(k: &str, v: &V, pm: &Dict) -> R<String> {
+fn unrouted_reason(k: &str, v: &V, pm: &Dict) -> String {
     let name = name_of(k);
-    Ok(match route(pm, k, v) {
+    match route(pm, k, v) {
         None if is_api(v) => format!("{name} 是第三方 API 账号：只统计官方账号"),
         None if parse_key(k).1.is_empty() => format!("{name} 没有邮箱：只统计官方账号"),
-        None => format!("{name} 是这台设备自己的账号：只统计 Team 给的、维护者共享的账号（要和自己的别的设备一起统计，建一个 Team，把它加进去）"),
-        Some(HubKind::Maintainer) => format!("{name} 是维护者共享的账号：{}", presence_load()?.0),
-        Some(HubKind::Team(t)) => {
-            format!("{name} 是 Team 给的账号，经 Team 的同步服务器统计：{}", super::team::hub_missing_why(&t.id()))
+        None => format!("{name} 是这台设备自己的账号：只统计 Team 给的账号（要和自己的别的设备一起统计，建一个 Team，把它加进去）"),
+        Some(kind) => {
+            format!("{name} 是 Team 给的账号，经 Team 的同步服务器统计：{}", super::team::hub_missing_why(&kind.team()))
         }
-    })
+    }
 }
 
-/// cca [codex] devices [账号…] [--json]：账号现在连着哪些设备（问它走的那台同步服务器：维护者共享的问维护者的，Team 给的问那个 Team 的）。
+/// cca [codex] devices [账号…] [--json]：账号现在连着哪些设备（问它走的那台同步服务器：给它的那个 Team 的）。
 /// --json 是给 App 的（PROTOCOL 3.4）。退出码：0 成功；1 服务器那边没成；2 用不了（这台 Mac 没有用得了的服务器，账号不经服务器同步）。
 /// 没成时 stdout 是原因
 pub fn cmd_presence_view(args: &[String]) -> R<()> {
@@ -1096,7 +988,7 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
     let names: Vec<&String> = args.iter().filter(|a| *a != "--json").collect();
     let hubs = hubs()?;
     if hubs.is_empty() {
-        out!("{}", no_hub_reason()?);
+        out!("{}", no_hub_reason());
         return exit(2);
     }
     let (table, pm) = (ctx()?.1, policy_sources(t()));
@@ -1109,12 +1001,12 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
     for k in &keys {
         let v = table.at(k);
         let Some(h) = hub_of(&hubs, &pm, k, &v) else {
-            out!("{}", unrouted_reason(k, &v, &pm)?);
+            out!("{}", unrouted_reason(k, &v, &pm));
             return exit(2);
         };
         routed.push((k.clone(), h.kind));
     }
-    // 各台服务器各问一次（维护者的在前）：{账号摘要: 键}，摘要一样的（同一个邮箱写了两次）后来的顶掉，位置不变
+    // 各台服务器各问一次（照加入 Team 的先后）：{账号摘要: 键}，摘要一样的（同一个邮箱写了两次）后来的顶掉，位置不变
     struct Asked<'a> {
         hub: &'a Hub,
         aids: Dict,
@@ -1206,9 +1098,7 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
             let devices: Vec<V> = rows.into_iter().map(V::Dict).collect();
             let doc = dict! { "key" => k.as_str(), "id" => acct_id(&k, t()), "devices" => devices };
             doc.set("hub", a.hub.kind.name());
-            if let Some(tid) = a.hub.kind.team() {
-                doc.set("team", tid);
-            }
+            doc.set("team", a.hub.kind.team());
             accounts.push((a.hub.kind, doc));
         }
     }
@@ -1222,7 +1112,7 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
     // 和别的设备同步（最多 COST_EVERY 一次）
     keyshare_kick(false);
     cost_kick();
-    // 顶层的 me、idle_after、offline_after、reporting_error 是先问的那一台的（没有要问的账号时是维护者的、没问）；hubs 是各台的
+    // 顶层的 me、idle_after、offline_after、reporting_error 是先问的那一台的（没有要问的账号时是第一台的、没问）；hubs 是各台的
     let first = asked.first();
     let head_kind = first.map_or(hubs[0].kind, |a| a.hub.kind);
     let reply_of = |a: Option<&Asked>, k: &str| a.and_then(|a| a.reply.get(k)).unwrap_or(V::None);
@@ -1231,14 +1121,10 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
             .iter()
             .map(|h| {
                 let a = asked.iter().find(|a| a.hub.kind == h.kind);
-                let d = dict! {
+                V::Dict(dict! {
                     "kind" => h.kind.name(), "me" => reply_of(a, "me_name"), "idle_after" => reply_of(a, "idle"),
-                    "offline_after" => reply_of(a, "ttl"), "reporting_error" => failing(h.kind),
-                };
-                if let Some(tid) = h.kind.team() {
-                    d.set("team", tid);
-                }
-                V::Dict(d)
+                    "offline_after" => reply_of(a, "ttl"), "reporting_error" => failing(h.kind), "team" => h.kind.team(),
+                })
             })
             .collect();
         let doc = dict! {
@@ -1251,21 +1137,13 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
         return Ok(());
     }
     let mut lines: Vec<String> = Vec::new();
-    // 各台服务器一段（没有要问的账号时只有维护者的那一段的标题）
+    // 各台服务器一段（没有要问的账号时只有第一台那一段的标题）
     let shown: Vec<HubKind> = if asked.is_empty() { vec![head_kind] } else { asked.iter().map(|a| a.hub.kind).collect() };
     for kind in &shown {
         // 服务器给的不是字符串也照样打出来（原来的 '%s'）
         let me = reply_of(asked.iter().find(|a| a.hub.kind == *kind), "me_name");
-        let me = match (me.truthy(), *kind) {
-            (false, _) => String::new(),
-            (true, HubKind::Maintainer) => format!("，这台 Mac 叫 {}", me.py_str()),
-            (true, _) => format!("，这台设备叫 {}", me.py_str()),
-        };
-        let whose = match kind {
-            HubKind::Maintainer => "维护者的服务器",
-            HubKind::Team(_) => "Team 的同步服务器",
-        };
-        lines.push(format!("{} 账号连着的设备（{whose}上的记录{me}）：", t().label));
+        let me = if me.truthy() { format!("，这台设备叫 {}", me.py_str()) } else { String::new() };
+        lines.push(format!("{} 账号连着的设备（Team 的同步服务器上的记录{me}）：", t().label));
         for (_, a) in accounts.iter().filter(|(k, _)| k == kind) {
             lines.push(format!("  {}", label_of(&a.at("key").py_str())));
             let devices = a.list("devices").expect("刚建的");
@@ -1283,12 +1161,8 @@ pub fn cmd_presence_view(args: &[String]) -> R<()> {
             }
         }
     }
-    for (kind, why) in &failed {
-        let whose = match kind {
-            HubKind::Maintainer => "维护者的服务器",
-            HubKind::Team(_) => "Team 的同步服务器",
-        };
-        lines.push(format!("{} 账号连着的设备（{whose}上的记录）：没问到：{why}", t().label));
+    for (_, why) in &failed {
+        lines.push(format!("{} 账号连着的设备（Team 的同步服务器上的记录）：没问到：{why}", t().label));
     }
     for kind in &shown {
         if let Some(f) = failing(*kind) {
@@ -1311,10 +1185,11 @@ mod tests {
         json::loads(include_str!("../../tests/vectors/src_presence.json")).unwrap().as_dict().unwrap()
     }
 
-    /// 上报进程的一路还是不是同一台：维护者的没有 rev（不能当缺了键）；Team 的重新加入以后（rev 变了）从头报
+    /// 上报进程的一路还是不是同一台：两边都没有 rev 也算一样（不能当缺了键）；别的 Team 的不是；重新加入以后（rev 变了）从头报
     #[test]
     fn lane_same_hub_and_rejoin() {
-        let team = HubKind::Team(crate::cmd::hub::TeamTag::new(&"0a".repeat(16)).unwrap());
+        let tag = |t: &str| HubKind::Team(crate::cmd::hub::TeamTag::new(&t.repeat(16)).unwrap());
+        let (team, other) = (tag("0a"), tag("0b"));
         let hub = |kind, rev: Option<f64>| {
             let cfg = dict! { "url" => "https://192.0.2.10:18443", "fp" => "SHA256:x" };
             if let Some(r) = rev {
@@ -1322,8 +1197,9 @@ mod tests {
             }
             Hub { kind, cfg }
         };
-        let m = Lane::new(hub(HubKind::Maintainer, None));
-        assert!(m.same(&hub(HubKind::Maintainer, None)) && !m.same(&hub(team, None)));
+        let m = Lane::new(hub(other, None));
+        assert!(m.same(&hub(other, None)) && !m.same(&hub(team, None)), "地址、指纹一样，别的 Team 的也不是同一台");
+        assert!(m.quiet() && m.idle(), "从「报过什么都没开」起步");
         let o = Lane::new(hub(team, Some(1.5)));
         assert!(o.same(&hub(team, Some(1.5))), "同一次加入");
         assert!(!o.same(&hub(team, Some(2.5))) && !o.same(&hub(team, None)), "重新加入了、team.json 读不出时间");

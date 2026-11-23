@@ -16,12 +16,12 @@ use super::session::{cli_marks, cli_view, gui_procs, proc_starts};
 use super::usage::{parse_ts, usage_cached, usage_entry, usage_row, usage_weeks_view};
 use super::{arg, arity, Cmd};
 use crate::cmd::secrets::{kc_hints, kc_list, kc_slot, py_in};
-use crate::core::base::{sh, CCA_HOME, CFG, FIRST_PORT, HINT_RE, NOTICES, RO_BAD};
+use crate::core::base::{sh, CFG, FIRST_PORT, HINT_RE, NOTICES, RO_BAD};
 use crate::core::ctx::{cfg_save, ctx, pool_size, reconcile_all};
 use crate::core::model::{
     acct_id, adir, api_host, cfg_fill, cfg_load, is_api, key_hint, label_of, name_of, node_of, parse_key, pool, secret_ok,
 };
-use crate::core::policy::{alias_locks, legacy_raw, parked, policy_doc, policy_map, policy_sources};
+use crate::core::policy::{alias_locks, policy_map, policy_sources};
 use crate::core::sync::sync_digest;
 use crate::core::tool::{t, tools, Kind, Using};
 use crate::py::fs::{load_quiet, save_json};
@@ -176,14 +176,6 @@ pub fn gui_api_key(c: &Dict, k: &str, v: &V, share: bool, share_err: &V) -> R<Di
         out.set("from_device", from.unwrap_or(V::None));
     }
     Ok(out)
-}
-
-/// App 下次该拉映射的时间：上次拉（$POLICY_DIR/checked）之后过 POLICY_POLL_INTERVAL 秒；没拉过是 None
-pub fn policy_next_check() -> Option<f64> {
-    Some(
-        crate::py::shutil::getmtime(&path::join_all(&[&CCA_HOME, "policy", "checked"])).ok()?
-            + crate::core::policy::POLICY_POLL_INTERVAL as f64,
-    )
 }
 
 /// 配置向导还要不要出现：显式标记过（cmd_onboard 做完写的），或者这台机器已经有账号 / 配过路由器 / 配过本机客户端
@@ -486,7 +478,7 @@ fn gui_account(
     let weeks = if api || !tool.has_usage { None } else { usage_weeks_view(k, now, cached.as_ref())? };
     let can_cost = env.cost.on && tool.has_cost && !api; // 折合金额（PROTOCOL 2.2 的 cost）
     let lower = e.to_lowercase();
-    // 映射里的官方账号（维护者的映射、Team 的配置）：节点被它固定
+    // Team 的配置里的官方账号：节点被它固定
     let pinned = mapped(pm, k, v);
     // 设备统计、记下的 API key、折合金额经哪台服务器同步（这台设备用不了它走的那台时是 None）
     let hub = hub_of(env.hubs, src, k, v).map(|h| h.kind);
@@ -500,13 +492,13 @@ fn gui_account(
     }
     can.set("billing", !why.has("web") && !tool.billing_url.is_empty()); // 控制台的账单页和网页版走同一条路（cmd_web）；agy 没有
     can.set("limit_resets", tool.kind == Kind::Claude && !why.has("web")); // claude.ai 的用量页，只有 Claude 账号有
-    can.set("policy_lock", !api && !e.is_empty() && c.truthy("policy") && !pm.has(&lower));
+    can.set("policy_lock", false); // 以前是请维护者把节点锁进映射（cca policy request）：3.6.0 起没有映射了，总是 false（接口只加不删）
     can.set("devices", hub.is_some()); // 账号页的「设备」（PROTOCOL 3.4）
     can.set("api_key", true); // 记下 / 显示 / 复制 API key（cca [codex] key，PROTOCOL 4.10）
     let with_mail = tool.kind == Kind::Claude && !api && !e.is_empty();
     can.set("mail", with_mail); // 邮箱助手：账号页的「邮箱」一节（PROTOCOL 4.11），只有 Claude 官方账号有
     can.set("cost", can_cost);
-    // 自定义代理（cca [codex|agy] node use，PROTOCOL 4.6 的 node.custom）：维护者的映射固定了节点的官方账号不能换
+    // 自定义代理（cca [codex|agy] node use，PROTOCOL 4.6 的 node.custom）：Team 的配置固定了节点的官方账号不能换
     can.set("custom_proxy", super::accounts::node_free(k, v, pm));
     let share = hub.is_some() && matches!(tool.kind, Kind::Claude | Kind::Codex);
     let share_err =
@@ -540,8 +532,8 @@ fn gui_account(
         "hub" => hub.map(|h| h.name()),
     };
     // 这个账号是哪个 Team 给的（编号；不是 Team 给的没有这一项）：不看它的服务器这台设备用不用得了。第三方 API 账号不是谁给的
-    // （键里的邮箱碰巧和 Team 给的一样也不算：映射只管官方账号）
-    if let Some(tid) = src.str(&lower).filter(|t| !api && !t.is_empty()) {
+    // （键里的邮箱碰巧和 Team 给的一样也不算：Team 的配置只管官方账号）
+    if let Some(tid) = src.str(&lower).filter(|_| !api) {
         d.set("team", &*tid);
     }
     Ok(d)
@@ -609,7 +601,6 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         let list = users.setdefault(&node, List::new()).as_list().expect("刚放进去的");
         list.push(dict! { "tool" => tool.name, "key" => k });
     }
-    let pol = c.get("policy").unwrap_or(V::None);
     let nodes = c.at("nodes");
     let node_rows: Vec<V> = match &nodes {
         V::List(l) => l
@@ -631,18 +622,9 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         "pending"
     };
     let local = local_info(&c);
+    // 维护者的共享（PROTOCOL 2.2 的 config.policy）：3.6.0 起没有了，总是关着的样子（这一项留着：App 的接口只加不删）
     let policy = dict! {
-        "configured" => pol.truthy(), "repo" => if pol.is_str() { pol.clone() } else { V::None },
-        "next_check_epoch" => if pol.truthy() { policy_next_check() } else { None },
-        // 维护者的共享：off 关着（没打开过、说过不用、cca policy off 关掉了）；pending 打开了、还没拉到映射（等维护者加上这台
-        // 机器的公钥）；on 拉到了映射。accounts 是账号表里映射的账号（下面数完了再填），parked 是关掉共享时收起来的（打开时加回来）
-        "state" => if !pol.truthy() { "off" } else if policy_doc().is_some() { "on" } else { "pending" },
-        "accounts" => 0,
-        // 关掉共享时收起来的；Team 不再给而收起来的（带着 team）不归这个开关管，不算
-        "parked" => tools()
-            .iter()
-            .map(|tool| parked(&c, tool).values().iter().filter(|p| !p.as_dict().is_some_and(|p| p.has("team"))).count())
-            .sum::<usize>(),
+        "configured" => false, "repo" => V::None, "next_check_epoch" => V::None, "state" => "off", "accounts" => 0, "parked" => 0,
     };
     let out = dict! {
         "version" => 1, "kind" => "state", "generated_at" => now, "cca_version" => getenv("CCA_VERSION").unwrap_or_default(),
@@ -678,7 +660,6 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
     let mut cv = CostView::new(&c, now, &kinds);
     let entries = out.list("tools").expect("刚建的");
     let mut enabled_ids: Vec<&'static str> = Vec::new();
-    let mut shared = 0;
     let mut counts: Vec<HubKind> = Vec::new();
     for tool in tools() {
         let name = tool.name.to_uppercase();
@@ -710,9 +691,8 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
                 }
             }
             let badges = launcher_badges(&c, &official, &launcher_names(&official));
-            let (pm, src, legacy) = (policy_map(tool, Some(&c)), policy_sources(tool), legacy_raw(tool));
+            let (pm, src) = (policy_map(tool, Some(&c)), policy_sources(tool));
             let locks = alias_locks(tool);
-            shared += table.items().iter().filter(|(k, v)| mapped(&legacy, k, v)).count();
             entry.set(
                 "errors",
                 tool.errs().into_iter().map(|m| V::Dict(dict! { "code" => "table_invalid", "message" => m })).collect::<Vec<V>>(),
@@ -733,7 +713,6 @@ pub fn cmd_gui_state(args: &[String]) -> R<()> {
         }
         entries.push(entry);
     }
-    policy.set("accounts", shared);
     // 同步服务器（PROTOCOL 2.2 的 config.hubs）：经它同步的账号数是上面数的
     let hub_list = hub_entries(|kind| counts.iter().filter(|k| **k == kind).count())?;
     out.dict("config").expect("刚建的").set("hubs", hub_list);
@@ -911,7 +890,7 @@ pub fn cmd_gui_live(args: &[String]) -> R<()> {
 mod tests {
     use super::*;
 
-    /// tests/presence.py 的 test_keyshare、test_keyshare_old_server 里看 gui_api_key 的那几处：_gui state 的 api_key 照 config.json 里
+    /// tests/presence.py 的 test_keyshare 里看 gui_api_key 的那几处：_gui state 的 api_key 照 config.json 里
     /// 记下的说（存了没有、掩码、什么时候记下的、从哪台设备同步来的），会同步的账号带上最近一次没同步成的原因
     #[test]
     fn api_key_like_python_test() {
@@ -945,7 +924,7 @@ mod tests {
             r#"{"saved": false, "hint": "", "source": "", "shared": true, "saved_epoch": null, "from_device": null, "sync_error": null}"#
         );
         // 最近一次没同步成的原因：会同步的账号才说
-        let err = V::from("设备统计的服务器还不收 API key（维护者要更新服务器：./policy.sh presence deploy）");
+        let err = V::from("「书房组」的同步服务器：连不上");
         let said = |share: bool| gui_api_key(&booked(Dict::new()), key, &node, share, &err).unwrap().at("sync_error");
         assert!(said(true).py_eq(&err));
         assert!(said(false).is_none(), "不同步的账号不说");

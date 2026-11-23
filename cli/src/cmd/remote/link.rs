@@ -13,7 +13,7 @@
 //! - 标准输入是宿主留着的一根管道：宿主不在了（会话结束、宿主被强行结束）读到头，告诉服务器会话结束了就退出。
 //!   这个进程自己被强行结束时，子进程看到父进程换了也跟着走（不然它们没人管着，配对表变了也照转）。
 //!
-//! 退出码 3：这台机器用不了中转（没有维护者的映射、服务器没开中转），宿主不用再起它。
+//! 退出码 3：这台机器用不了中转（不在哪个 Team 里、用不了会话走的那台服务器、服务器没开中转），宿主不用再起它。
 
 use super::far;
 use super::local::{self, Asked, Conn, Decoder, Meta};
@@ -268,8 +268,9 @@ fn find_session(sid: &str) -> Option<Session> {
 pub fn cmd_remote_link(args: &[String]) -> R<()> {
     arity("cmd_remote_link", args, 1, 1)?;
     let Some(at) = find_session(&args[0]) else { return exit(1) };
-    // 会话走哪台服务器照它的账号：是哪个 Team 给的账号就走那个 Team 的服务器，别的走维护者的那一台
-    let hub = relay::session_hub(&at.meta.tool, &at.meta.key);
+    // 会话走哪台服务器照它的账号：是哪个 Team 给的账号就走那个 Team 的服务器，别的走这台机器的家（加入的第一个 Team 的；
+    // 不在哪个 Team 里时没有，这个会话不经中转）
+    let Some(hub) = relay::session_hub(&at.meta.tool, &at.meta.key) else { return exit(EXIT_OFF) };
     let Ok(srv) = relay::server_of(hub)? else { return exit(EXIT_OFF) };
     let wake = sig::install()?;
 

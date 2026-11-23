@@ -426,7 +426,7 @@ pub fn cmd_session_open(args: &[String]) -> R<()> {
     let mark =
         dict! { "v" => 1, "tool" => t().name, "id" => acct_id(key, t()), "pid" => pid, "started" => started, "since" => time() };
     save_json(&path::join(&d, &format!("cli-{pid}.json")), &V::Dict(mark), Some(0o600), true)?;
-    presence_wake(key); // 映射里的账号：报告给维护者的服务器（上报进程在后台，不拖慢启动）
+    presence_wake(key); // Team 给的账号：报告给那个 Team 的同步服务器（上报进程在后台，不拖慢启动）
     Ok(())
 }
 

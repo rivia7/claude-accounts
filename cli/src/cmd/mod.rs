@@ -262,12 +262,26 @@ mod tests {
         assert_eq!((NAMES[0], NAMES[152]), ("init", "gui-mail-list"));
     }
 
-    /// 切换以后新加的子命令（`sh-…`、`remote-…` 之外的）
-    const ADDED: &[&str] = &["policy-off", "unpark"];
-    /// 切换以后去掉的：共享默认关以后终端里启动时不再引导配置映射（policy-ask 是问不问）
-    const REMOVED: &[&str] = &["policy-ask"];
+    /// 切换以后新加的子命令（`sh-…`、`remote-…` 之外的）。policy-retire：升级到 3.6.0 时去掉 config.json 里映射的那几项
+    const ADDED: &[&str] = &["unpark", "policy-retire"];
+    /// 切换以后去掉的：共享默认关以后终端里启动时不再引导配置映射（policy-ask 是问不问）；3.6.0 去掉了维护者的映射和他的服务器，
+    /// 只给它们用的几个也去掉了
+    const REMOVED: &[&str] = &[
+        "policy-ask",
+        "policy-check",
+        "policy-summary",
+        "policy-request",
+        "policy-lock",
+        "policy-rows",
+        "policy-repo",
+        "policy-decline",
+        "policy-set",
+        "fill-check",
+        "fill-summary",
+        "presence-note",
+    ];
 
-    /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
+    /// 原来的 149 个子命令（加上切换以后新加的）除了特意去掉的（REMOVED）一个不少；另外只有 `sh-…`（bash 里原来内嵌的那几小段 Python）、
     /// `remote-…`（远程会话，辅助程序里新写的，见 remote.rs）、`hub-…`（一键部署的安装脚本，见 hub/deploy.rs）、`team-…`（Team，
     /// 见 team.rs、team/admin.rs）和 ADDED；没有登记两次的
     #[test]

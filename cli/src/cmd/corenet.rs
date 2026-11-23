@@ -91,7 +91,7 @@ pub static CORE_NODES: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR,
 pub static CORE_CONFIG: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR, "config.yaml"));
 pub const CORE_STALE_AFTER: f64 = 12.0 * 3600.0;
 /// 用户自己填/粘贴的节点（分享链接或 Clash 节点块；带密钥，600）。在可选节点里的给内置代理，也经账号表的 custom 写进路由器的配置文件
-/// （和维护者的参考节点同一套：`custom_fill`、路由器端的 fill_source）
+/// （和参考节点——Team 的配置带的节点——同一套：`custom_fill`、路由器端的 fill_source）
 pub static CORE_CUSTOM: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR, "custom-nodes.json"));
 /// Linux 上内核的输出（macOS 上在界面 App 的缓存目录里）
 pub static CORE_LOG: LazyLock<String> = LazyLock::new(|| path::join(&CORE_DIR, "core.log"));
@@ -539,7 +539,7 @@ pub fn cmd_node_save(args: &[String]) -> R<()> {
 }
 
 /// 要写进路由器的自定义节点（账号表的 custom）：在可选节点里的那些，{'id': 摘要, 'proxies': [节点定义…]}；没有时是 None
-/// （账号表和以前逐字节一样）。路由器端照维护者的参考节点那一套写进配置文件（行尾带 # cca、先拿内核校验、写了要重启才用上），
+/// （账号表和以前逐字节一样）。路由器端照参考节点（fill：Team 的配置带的节点）那一套写进配置文件（行尾带 # cca、先拿内核校验、写了要重启才用上），
 /// 只是不进任何策略组：账号的端口组 CCA-n 本来就列着全部可选节点
 pub fn custom_fill(c: &Dict) -> Option<Dict> {
     let nodes = c.get("nodes").and_then(|n| n.as_list()).map(|l| l.items()).unwrap_or_default();
@@ -742,8 +742,8 @@ pub fn core_stale(c: &Dict) -> bool {
 }
 
 /// 内置代理能用的节点定义（还没按可选节点挑）：自定义节点，路由器上拷来的（自定义节点写进路由器以后也在里面：同名的以
-/// 本机的为准，core_pick 留第一个），加上维护者参考节点里要补的（和往路由器里补的同一套规则 fill_plan：同名的、服务器一样的
-/// 以路由器的为准）
+/// 本机的为准，core_pick 留第一个），加上 Team 的配置带的节点里要补的（和往路由器里补的同一套规则 fill_plan：同名的、服务器
+/// 一样的以路由器的为准）
 pub fn core_defs() -> Vec<Dict> {
     let mut px = core_own_defs();
     let have = fps_of(&px);
@@ -752,21 +752,11 @@ pub fn core_defs() -> Vec<Dict> {
     px
 }
 
-/// 这台机器自己有的节点定义：自定义节点，路由器上拷来的（不算维护者的参考节点）
+/// 这台机器自己有的节点定义：自定义节点，路由器上拷来的（不算 Team 的配置带的节点）
 fn core_own_defs() -> Vec<Dict> {
     let mut px: Vec<Dict> = core_custom();
     px.extend(cached_proxies(&core_cache()).iter().filter_map(named));
     px
-}
-
-/// 可选节点里只有维护者的参考节点才有定义的（自定义节点、从路由器拷来的都没有它）：关掉共享（cca policy off）以后内置代理里
-/// 就没有它了。配置过路由器的机器不算：参考节点已经写进路由器的配置文件，不会删（fill.md）。要在关掉之前算（关掉以后 policy_fill 是 None）
-pub fn fill_only_nodes(c: &Dict) -> Vec<String> {
-    if router_host(c) || policy_fill().is_none() {
-        return Vec::new();
-    }
-    let own = names_in(c, &fps_of(&core_own_defs()));
-    names_in(c, &fps_of(&core_defs())).keys().iter().filter(|n| !own.has(n)).map(|n| n.to_string()).collect()
 }
 
 /// 可选节点在内置代理的节点定义里叫什么（按服务器地址认：路由器上改了名、还没同步时也认得出）
@@ -988,7 +978,7 @@ pub fn cmd_core_summary(args: &[String]) -> R<()> {
     let used = core_pick(&core_defs(), &wanted_names(&c, &m));
     let extra = used.iter().map(def_name).filter(|n| !names.iter().any(|have| have.as_str() == Some(n))).count();
     let miss = core_missing(&c);
-    let filled = if extra > 0 { format!("，补上维护者参考节点 {extra} 个") } else { String::new() };
+    let filled = if extra > 0 { format!("，补上 Team 的配置带的节点 {extra} 个") } else { String::new() };
     let lacking = if miss.is_empty() {
         String::new()
     } else {
@@ -1000,7 +990,7 @@ pub fn cmd_core_summary(args: &[String]) -> R<()> {
 
 // --- 辅助安装（bash 的“辅助安装”一节）：直连装不上 claude / codex / agy 时，经内置代理的一个节点装 ------------------------------
 
-/// 这台机器拿得到定义、能拿来装的节点（内置代理的节点定义：路由器上拷来的，加上维护者参考节点里补的），同名的只算一次
+/// 这台机器拿得到定义、能拿来装的节点（内置代理的节点定义：路由器上拷来的，加上 Team 的配置带的节点里补的），同名的只算一次
 pub fn install_names() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for p in core_defs() {
@@ -1012,7 +1002,7 @@ pub fn install_names() -> Vec<String> {
     out
 }
 
-/// 映射要的安装节点在这里的节点定义里叫什么：同名的；路由器上改过名、cca 跟着改过的（node_alias）；名字都对不上时按服务器地址认
+/// Team 的配置要的安装节点在这里的节点定义里叫什么：同名的；路由器上改过名、cca 跟着改过的（node_alias）；名字都对不上时按服务器地址认
 /// （参考节点里同名那个的摘要，或者可选节点记下的摘要）。认不出是空的
 fn install_resolve(c: &Dict, want: &str) -> String {
     let defs = core_defs();
@@ -1116,7 +1106,7 @@ pub fn cmd_install_env(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 辅助安装的节点。get：映射指定的安装节点在这里叫什么（退出码 3：映射没指定；4：指定了、这台机器没有它的定义，stdout 是映射里写的
+/// 辅助安装的节点。get：Team 的配置指定的安装节点在这里叫什么（退出码 3：没指定；4：指定了、这台机器没有它的定义，stdout 是配置里写的
 /// 名字）；choices：这台机器拿得到定义的节点，一行一个（现选用）；proxy 节点 文件：把临时内核的配置写进文件（600，新建），打印端口
 pub fn cmd_install_node(args: &[String]) -> R<()> {
     arity("cmd_install_node", args, 0, 3)?;

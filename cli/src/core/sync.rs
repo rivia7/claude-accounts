@@ -12,7 +12,7 @@ use crate::py::hash::sha1_hex;
 use crate::py::json;
 use crate::py::obj::{Dict, List, V};
 
-/// 路由器端口池的内容：各工具走节点的账号（直连的第三方 API 账号不占槽位）。有维护者的参考节点时带上 fill、
+/// 路由器端口池的内容：各工具走节点的账号（直连的第三方 API 账号不占槽位）。Team 的配置带着节点时带上 fill、
 /// 可选节点里有自定义节点时带上 custom（路由器把缺的写进配置文件），用自定义节点的槽位带上它的 ck（`custom_ck`）；
 /// 都没有时和以前逐字节一样
 pub fn router_accounts(c: &Dict) -> Dict {

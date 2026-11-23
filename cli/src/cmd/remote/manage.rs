@@ -187,23 +187,24 @@ fn list_doc(near: bool, distant: bool) -> R<Dict> {
             Some(_) => "gone",
             None => "unknown",
         };
-        // team：这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）；null 是维护者的那一台
+        // team：这个配对记在哪个 Team 的服务器上（经它看得到的是这个 Team 的账号的会话）。3.6.0 起总是 Team 的编号
+        // （维护者那一台上的旧配对读配对表时就不算了）
         paired.push(dict! {
             "id" => p.pid.as_str(), "short" => &p.pid[..8], "name" => p.name.as_str(), "incoming" => p.incoming.word(),
             "shown" => p.shown, "paired_epoch" => p.at, "state" => state, "web" => p.web,
-            "team" => p.hub.team().map_or(V::None, V::from)
+            "team" => p.hub.team()
         });
     }
-    // 用得了哪几台中转服务器（配对时要选在哪一台上）：各个 Team 的，再是维护者的。一台都用不了时 message 是维护者那一台的原因
+    // 用得了哪几台中转服务器（配对时要选在哪一台上）：各个 Team 的。一台都用不了时 message 是原因（不在哪个 Team 里，或者
+    // 加入的第一个 Team 的服务器为什么用不了）
     let hubs = List::new();
     for s in relay::servers()? {
-        hubs.push(dict! { "team" => s.kind.team().map_or(V::None, V::from), "name" => relay::label(s.kind) });
+        hubs.push(dict! { "team" => s.kind.team(), "name" => relay::label(s.kind) });
     }
     let relay = if !hubs.is_empty() {
         dict! { "available" => true, "message" => V::None, "hubs" => hubs }
     } else {
-        let why = relay::server_of(crate::cmd::hub::HubKind::Maintainer)?.err().unwrap_or_default();
-        dict! { "available" => false, "message" => why, "hubs" => hubs }
+        dict! { "available" => false, "message" => relay::no_home_why(), "hubs" => hubs }
     };
     Ok(dict! {
         "version" => 1, "kind" => "remote", "generated_epoch" => time(), "enabled" => remote_on(&cfg_load()?), "relay" => relay,

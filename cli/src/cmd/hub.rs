@@ -1,17 +1,16 @@
-//! 同步服务器（hub）：设备统计、记下备查的 API key、折合金额经哪台服务器和这个账号的其他设备同步。两种：
-//! - 某个 Team 的（`HubKind::Team`）：Team 给这台设备的账号走它（docs/dev/team.md）
-//! - 维护者的（`HubKind::Maintainer`，旧的通道）：映射里的 presence 一节，拿映射的 deploy key 签名（`presence_load`）。只管维护者映射里的
-//!   官方账号；都迁成 Team 以后去掉
+//! 同步服务器（hub）：设备统计、记下备查的 API key、折合金额经哪台服务器和这个账号的其他设备同步。只有一种：某个 Team 的
+//! （`HubKind::Team`），Team 给这台设备的账号走它（docs/dev/team.md）。
 //!
 //! 账号走哪台只看 `route`（这台设备自己的官方账号、第三方 API 账号哪都不去）；`hub_of` 再看这台设备用不用得了那台。各台的状态文件
-//! 分开（`HubKind::file`：Team 的前面加 team.<编号>.），盐、设备指纹也各是各的；服务器只看到账号摘要和密文。
+//! 分开（`HubKind::file`：前面加 team.<编号>.），盐、设备指纹也各是各的；服务器只看到账号摘要和密文。
 //!
-//! 原来还有第三种「自己的同步服务器」（`cca hub`、服务端的 `--mode own`），3.5.3 去掉了：自己的几台设备之间同步改成建一个 Team。
+//! 原来还有维护者的服务器（映射里的 presence 一节，拿映射的 deploy key 签名；3.6.0 和映射一起去掉了）和「自己的同步服务器」
+//! （`cca hub`、服务端的 `--mode own`，3.5.3 去掉了：自己的几台设备之间同步改成建一个 Team）。
 //! 一键部署（安装脚本 `hub-installer`、`cca team deploy` 用的那一套）在 hub/deploy.rs，部署到托管平台在 hub/hosted.rs。
 
 use super::cost::cost_json;
 use super::keyshare::is_num;
-use super::presence::{presence_load, presence_off_reason, PRESENCE_DIR};
+use super::presence::{presence_off_reason, PRESENCE_DIR};
 use super::Cmd;
 use crate::core::model::{is_api, parse_key};
 use crate::py::fs::load_quiet;
@@ -43,44 +42,35 @@ impl TeamTag {
     }
 }
 
-/// 同步服务器的几种：维护者的（旧的通道：映射里的 presence 一节）、某个 Team 的（cca team）
+/// 同步服务器是哪一台：某个 Team 的（cca team）。原来还有维护者的那一台（3.6.0 去掉了）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubKind {
-    Maintainer,
     Team(TeamTag),
 }
 
 impl HubKind {
-    /// 接口里的名字（_gui state 的 accounts[].hub、config.hubs[].kind）
+    /// 接口里的名字（_gui state 的 accounts[].hub、config.hubs[].kind）：只有 "team"
     pub fn name(self) -> &'static str {
-        match self {
-            HubKind::Maintainer => "maintainer",
-            HubKind::Team(_) => "team",
-        }
+        "team"
     }
 
-    /// 是某个 Team 的服务器时：那个 Team 的编号
-    pub fn team(self) -> Option<String> {
-        match self {
-            HubKind::Team(t) => Some(t.id()),
-            _ => None,
-        }
+    /// 那个 Team 的编号
+    pub fn team(self) -> String {
+        let HubKind::Team(t) = self;
+        t.id()
     }
 
-    /// 这台服务器的状态文件叫什么：维护者的照旧，Team 的前面加 team.<编号>.（presence/、cost/ 里各一份）
+    /// 这台服务器的状态文件叫什么：前面加 team.<编号>.（presence/、cost/ 里各一份；没有前缀的是以前维护者的那一台的）
     pub fn file(self, base: &str) -> String {
-        match self {
-            HubKind::Maintainer => base.to_string(),
-            HubKind::Team(t) => format!("team.{}.{base}", t.id()),
-        }
+        format!("team.{}.{base}", self.team())
     }
 }
 
 /// 一台用得了的同步服务器
 pub struct Hub {
     pub kind: HubKind,
-    /// presence_post 用的配置：{url, pins, salt, key（私钥的路径）, fp（这台设备在它上面的指纹）}；Team 的还有 "hub": "team"、
-    /// "name"（presence_why、is_maintainer 照它说原因）
+    /// presence_post 用的配置：{url, pins, salt, key（私钥的路径）, fp（这台设备在它上面的指纹）, "hub": "team",
+    /// "name"（Team 的名字：presence_why 照它说原因）}
     pub cfg: Dict,
 }
 
@@ -94,12 +84,9 @@ impl Hub {
     }
 }
 
-/// 这台设备现在用得了的同步服务器：维护者的，再是各个 Team 的（照加入的先后；config.json 里写着 "presence": false 时一台都没有）
+/// 这台设备现在用得了的同步服务器：各个 Team 的（照加入的先后；config.json 里写着 "presence": false 时一台都没有）
 pub fn hubs() -> R<Vec<Hub>> {
     let mut out = Vec::new();
-    if let Some(cfg) = presence_load()?.1 {
-        out.push(Hub { kind: HubKind::Maintainer, cfg });
-    }
     let teams = super::team::hub_cfgs();
     if !teams.is_empty() && presence_off_reason().is_none() {
         for (tid, cfg) in teams {
@@ -111,29 +98,24 @@ pub fn hubs() -> R<Vec<Hub>> {
     Ok(out)
 }
 
-/// 这个账号（src 是它那个工具的 policy_sources：映射里的账号各是谁定的）的设备统计、记下的 key、折合金额该走哪一类服务器，不看那台
-/// 配置了没有：某个 Team 给的走那个 Team 的；维护者映射里的走维护者的（它的数据是共享这个账号的各台设备的）；别的——这台设备自己的
-/// 官方账号（`own_account`）、第三方 API 账号、没有邮箱的——哪都不去
+/// 这个账号（src 是它那个工具的 policy_sources：映射里的账号各是哪个 Team 给的）的设备统计、记下的 key、折合金额该走哪台服务器，
+/// 不看那台配置了没有：某个 Team 给的走那个 Team 的；别的——这台设备自己的官方账号（`own_account`）、第三方 API 账号、没有邮箱的——
+/// 哪都不去
 pub fn route(src: &Dict, key: &str, v: &V) -> Option<HubKind> {
     let e = parse_key(key).1.to_lowercase();
     if e.is_empty() || is_api(v) {
         return None;
     }
-    match src.str(&e) {
-        None => None,
-        Some(who) if who.is_empty() => Some(HubKind::Maintainer),
-        Some(tid) => TeamTag::new(&tid).map(HubKind::Team),
-    }
+    src.str(&e).and_then(|tid| TeamTag::new(&tid)).map(HubKind::Team)
 }
 
-/// 这台设备自己的官方账号吗：有邮箱、不是第三方 API 的，也不是哪个 Team 给的、维护者映射里的（route 给 None 的里面分出来的那一种）
+/// 这台设备自己的官方账号吗：有邮箱、不是第三方 API 的，也不是哪个 Team 给的（route 给 None 的里面分出来的那一种）
 pub fn own_account(src: &Dict, key: &str, v: &V) -> bool {
     let e = parse_key(key).1.to_lowercase();
     !e.is_empty() && !is_api(v) && !src.has(&e)
 }
 
-/// 这个账号是映射 pm（{邮箱: 节点}）里的官方账号吗：节点被它固定的就是它们（pm 是 policy_map 时）；关掉共享时收起来的是维护者
-/// 映射里的那些（pm 是 legacy_raw 时）
+/// 这个账号是映射 pm（{邮箱: 节点}，policy_map）里的官方账号吗：节点被它固定的就是它们
 pub fn mapped(pm: &Dict, key: &str, v: &V) -> bool {
     let e = parse_key(key).1.to_lowercase();
     !e.is_empty() && !is_api(v) && pm.has(&e)
@@ -247,7 +229,7 @@ pub fn hub_view(kind: HubKind, url: &str, accounts: usize) -> Dict {
     if let Some(ok) = num(&cost, "ok_at") {
         oks.push(ok);
     }
-    if matches!(cost.str("state").as_deref(), Some("error") | Some("old_server")) {
+    if cost.str("state").as_deref() == Some("error") {
         if let (Some(at), Some(e)) = (num(&cost, "at"), cost.str("error").filter(|e| !e.is_empty())) {
             errors.push((at, e.to_string()));
         }
@@ -269,13 +251,10 @@ pub fn hub_view(kind: HubKind, url: &str, accounts: usize) -> Dict {
     }
 }
 
-/// _gui state 的 config.hubs（PROTOCOL 2.2）：这台设备用得了的维护者的服务器，各个 Team 的服务器
+/// _gui state 的 config.hubs（PROTOCOL 2.2）：这台设备用得了的各个 Team 的服务器
 pub fn hub_entries(count: impl Fn(HubKind) -> usize) -> R<Vec<V>> {
     let mut out = Vec::new();
-    if let Some(cfg) = presence_load()?.1 {
-        out.push(V::Dict(hub_view(HubKind::Maintainer, &cfg.at("url").py_str(), count(HubKind::Maintainer))));
-    }
-    // 各个 Team 的：多 "team"（编号）、"team_name"（Team 的名字）
+    // 比 hub_view 多 "team"（编号）、"team_name"（Team 的名字）
     let teams = super::team::hub_cfgs();
     if !teams.is_empty() && presence_off_reason().is_none() {
         for (tid, cfg) in teams {
@@ -314,19 +293,20 @@ mod tests {
 
     #[test]
     fn route_table() {
-        let tid = "0a".repeat(16);
-        let src = dict! { "alice@example.com" => "", "carol@example.com" => tid.as_str() };
+        let (tid, other) = ("0a".repeat(16), "0b".repeat(16));
+        let src = dict! { "alice@example.com" => other.as_str(), "carol@example.com" => tid.as_str(), "dave@example.com" => "x" };
         let api = V::Dict(dict! { "base_url" => "https://api.example.com", "model" => "x" });
-        assert_eq!(
-            route(&src, "alice(Alice@Example.com)", &V::from("US-A")),
-            Some(HubKind::Maintainer),
-            "维护者映射里的（邮箱不分大小写）"
-        );
+        let tag = |t: &str| HubKind::Team(TeamTag::new(t).expect("32 个十六进制字符"));
+        assert_eq!(route(&src, "alice(Alice@Example.com)", &V::from("US-A")), Some(tag(&other)), "邮箱不分大小写");
         assert_eq!(route(&src, "bob(bob@example.com)", &V::from("US-B")), None, "自己的：哪都不去");
         let team = route(&src, "carol@example.com", &V::from("US-A"));
-        assert_eq!(team, Some(HubKind::Team(TeamTag::new(&tid).expect("32 个十六进制字符"))), "Team 给的");
-        assert_eq!(team.map(|k| (k.name(), k.file("keys.json"))), Some(("team", format!("team.{tid}.keys.json"))));
-        assert_eq!(route(&Dict::new(), "alice(alice@example.com)", &V::from("US-A")), None, "共享关着：都是自己的");
+        assert_eq!(team, Some(tag(&tid)), "Team 给的");
+        assert_eq!(
+            team.map(|k| (k.name(), k.team(), k.file("keys.json"))),
+            Some(("team", tid.clone(), format!("team.{tid}.keys.json")))
+        );
+        assert_eq!(route(&src, "dave@example.com", &V::from("US-A")), None, "编号不对：哪都不去");
+        assert_eq!(route(&Dict::new(), "alice(alice@example.com)", &V::from("US-A")), None, "不在 Team 里：都是自己的");
         assert_eq!(route(&src, "relay(alice@example.com)", &api), None, "第三方 API 账号");
         assert_eq!(route(&src, "noemail", &V::from("US-A")), None, "没有邮箱");
         assert!(own_account(&src, "bob(bob@example.com)", &V::from("US-B")), "自己的官方账号");
@@ -338,12 +318,6 @@ mod tests {
         let pm = dict! { "alice@example.com" => "US-A" };
         assert!(mapped(&pm, "alice(alice@example.com)", &V::from("US-A")) && !mapped(&pm, "alice(alice@example.com)", &api));
         assert!(!mapped(&pm, "bob@example.com", &V::from("US-A")) && !mapped(&pm, "noemail", &V::from("US-A")));
-    }
-
-    #[test]
-    fn files_per_kind() {
-        assert_eq!(HubKind::Maintainer.file("sync.json"), "sync.json");
-        assert_eq!(HubKind::Maintainer.name(), "maintainer");
     }
 
     #[test]

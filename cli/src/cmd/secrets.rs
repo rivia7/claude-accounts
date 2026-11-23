@@ -537,7 +537,7 @@ pub fn cmd_secrets_forget(args: &[String]) -> R<()> {
             let mut keep: HashSet<String> =
                 table.items().iter().filter(|(_, v)| is_api(v) != is_ref).map(|(k, _)| acct_id(k, t())).collect();
             if is_ref {
-                // 关掉共享时收起来的官方账号：不在账号表里，记下备查的 key 照样留着（重新打开共享时加回来）
+                // 收起来的官方账号（Team 不再给的；3.6.0 以前关掉共享时收起来的）：不在账号表里，记下备查的 key 照样留着（再给回来时加回来）
                 keep.extend(parked(&c, t()).keys().iter().map(|a| a.to_string()));
             }
             keep

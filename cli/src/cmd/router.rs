@@ -1,20 +1,17 @@
 //! 多设备共用一个路由器的合并（`router_merge`、`cmd_router_merge`、`cmd_slot_name`、`cmd_router_evict`）、节点改名跟着走
-//! （`node_match` 到 `cmd_nodes_rename`）、fill-check / fill-summary / nodes-fill、policy-check / policy-request / policy-lock。
+//! （`node_match` 到 `cmd_nodes_rename`）、nodes-fill。
 //!
-//! 这一块的子命令都移植了。
+//! 这一块的子命令都移植了（policy-check / fill-check / fill-summary / policy-request / policy-lock 只给维护者的映射用，3.6.0 去掉了）。
 
 use super::table::all_errors;
-use super::{arg, arity, Cmd};
+use super::{arity, Cmd};
 use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, POOL_STEP};
 use crate::core::model::*;
-use crate::core::policy::{
-    fill_fp, fill_name_ok, fill_plan, fill_problems, node_fp, node_ids, policy_fill, policy_map, policy_problems, policy_sources,
-};
+use crate::core::policy::{fill_fp, fill_plan, node_fp, node_ids, policy_fill};
 use crate::core::sync::router_accounts;
-use crate::core::team::grant_name;
-use crate::core::tool::{t, tools, Tool};
-use crate::py::fs::{self, load_quiet, save_json};
+use crate::core::tool::{tools, Tool};
+use crate::py::fs::{load_quiet, save_json};
 use crate::py::io;
 use crate::py::json;
 use crate::py::num::ceil_to;
@@ -31,14 +28,9 @@ pub const CMDS: &[Cmd] = &[
     Cmd::all("slot-name", cmd_slot_name),
     Cmd::all("router-evict", cmd_router_evict),
     Cmd::all("custom-clashes", cmd_custom_clashes),
-    Cmd::all("policy-check", cmd_policy_check),
-    Cmd::all("fill-check", cmd_fill_check),
-    Cmd::all("fill-summary", cmd_fill_summary),
     Cmd::all("nodes-fill", cmd_nodes_fill),
     Cmd::all("nodes-follow", cmd_nodes_follow),
     Cmd::all("nodes-rename", cmd_nodes_rename),
-    Cmd::all("policy-request", cmd_policy_request),
-    Cmd::all("policy-lock", cmd_policy_lock),
 ];
 
 /// 这台设备的随机标识（多设备共用一个路由器时写进路由器的 owners，合并时据此认出哪些槽位是别的设备的）：懒生成，非隐私、
@@ -413,50 +405,6 @@ pub fn cmd_router_evict(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// `json.load(open(path))`：读不了、不是 JSON 时给出 `str(e)`
-fn load_or_why(p: &str) -> Result<V, String> {
-    let raw = std::fs::read(p).map_err(|e| fs::open_error_text(&e, p))?;
-    json::loads_file_bytes(&raw).map_err(|e| e.0)
-}
-
-/// policy-check / fill-check 共用：读文件、打印问题（stdout）、有问题退出码 1
-fn check_file(p: &str, problems: impl Fn(&V) -> Vec<String>) -> R<()> {
-    let j = match load_or_why(p) {
-        Ok(j) => j,
-        Err(why) => {
-            out!("读不了，或者不是正确的 JSON：{why}");
-            return exit(1);
-        }
-    };
-    let errs = problems(&j);
-    for e in &errs {
-        out!("{e}");
-    }
-    exit(if errs.is_empty() { 0 } else { 1 })
-}
-
-/// 检查映射文件（拉下来验签之后、维护者发布之前）：有问题就打印出来（stdout）并返回 1
-pub fn cmd_policy_check(args: &[String]) -> R<()> {
-    arity("cmd_policy_check", args, 1, 2)?;
-    let strict = arg(args, 1, "") == "strict";
-    check_file(&args[0], |j| policy_problems(j, strict))
-}
-
-/// 检查参考节点文件（拉下来验签之后、维护者发布之前）：有问题就打印出来（stdout）并返回 1
-pub fn cmd_fill_check(args: &[String]) -> R<()> {
-    arity("cmd_fill_check", args, 1, 1)?;
-    check_file(&args[0], fill_problems)
-}
-
-/// 参考节点的摘要，例如：策略组 OpenAi 的 11 个节点；没有参考节点时什么都不打印
-pub fn cmd_fill_summary(args: &[String]) -> R<()> {
-    arity("cmd_fill_summary", args, 0, 0)?;
-    if let Some(f) = policy_fill() {
-        out!("策略组 {} 的 {} 个节点", f.at("group").py_str(), f.list("proxies").map_or(0, |l| l.len()));
-    }
-    Ok(())
-}
-
 /// stdin 是路由器上的节点列表（cca-router.sh nodes 的输出），原样输出，后面接上参考节点、可选节点里的自定义节点里路由器上
 /// 还没有的：同步时路由器会补上它们，可选节点里先就选得到，改名跟随也不会把它们当成丢了。没读到节点时只原样输出
 pub fn cmd_nodes_fill(args: &[String]) -> R<()> {
@@ -539,7 +487,7 @@ fn tables_on_disk() -> Vec<(&'static Tool, Dict)> {
 }
 
 /// 把改名 [(旧名, 新名)] 用到可选节点和各工具的账号表上（第三方 API 账号的 node 也改）。alias：按地址认出的改名，
-/// 记下来（维护者的映射里还写着旧名字时靠它换算，见 node_alias）；用户自己选的代替节点不记，映射照样要求旧节点。
+/// 记下来（Team 的配置里还写着旧名字时靠它换算，见 node_alias）；用户自己选的代替节点不记，配置照样要求旧节点。
 /// 返回 [(旧名, [受影响的账号])]
 pub fn nodes_rename(c: &Dict, ren: &[(String, String)], alias: bool) -> R<Vec<(String, Vec<String>)>> {
     let to = |n: &str| ren.iter().find(|(o, _)| o == n).map(|(_, new)| new.as_str());
@@ -705,109 +653,6 @@ pub fn cmd_nodes_rename(args: &[String]) -> R<()> {
     nodes_rename(&c, &[(args[0].clone(), args[1].clone())], false)?;
     nodes_record(&c, &have);
     cfg_save(&c)
-}
-
-/// cca [codex] policy request 账号（key 是 bash 经 resolve 找好的）：写一行维护者直接运行的命令（在 cca 的仓库里），把这个账号
-/// 现在的节点锁进映射。不能请求时 stdout 是原因、退出码 2。Team 给的账号不用请求：走哪个节点由那个 Team 的管理员定（cca team map）
-pub fn cmd_policy_request(args: &[String]) -> R<()> {
-    arity("cmd_policy_request", args, 1, 1)?;
-    let (c, table, _) = ctx()?;
-    let key = args[0].as_str();
-    let e = parse_key(key).1;
-    let pinned = if e.is_empty() { None } else { policy_map(t(), Some(&c)).get(&e.to_lowercase()).filter(|p| p.truthy()) };
-    let team = if e.is_empty() { None } else { policy_sources(t()).str(&e.to_lowercase()).filter(|tid| !tid.is_empty()) };
-    let v = table.at(key);
-    let why = if is_api(&v) || e.is_empty() {
-        Some(format!("{} 是第三方 API 账号：映射只管官方账号", label_of(key)))
-    } else if let Some(tid) = team {
-        let name = grant_name(&tid).unwrap_or_else(|| "Team".to_string());
-        Some(format!(
-            "{} 是「{name}」给的：走哪个节点由这个 Team 的管理员定（管理员在自己的设备上运行 cca team map），不用锁定请求",
-            label_of(key)
-        ))
-    } else if !c.truthy("policy") {
-        Some("这台机器没打开维护者的共享：先运行 cca policy on".to_string())
-    } else {
-        pinned.map(|p| format!("{} 已经按维护者的映射固定在 {} 上了", label_of(key), p.py_str()))
-    };
-    if let Some(why) = why {
-        out!("{why}");
-        return exit(2);
-    }
-    out!("./policy.sh lock {} {} {}", t().name, text::sh_quote(&e.to_lowercase()), text::sh_quote(&node_of(&v)));
-    Ok(())
-}
-
-/// 维护者把账号锁到节点（policy.sh lock）：plan 说明会改什么，apply 写进 policy.json。退出码：0 有要改的（apply 时已改好，
-/// stdout 是提交说明）；3 已经是这样了；1 参数或映射有问题（原因在 stdout）。命令多半是别人发来的：控制字符、不合规的值不收，
-/// 也不原样显示，免得搅乱维护者的终端
-pub fn cmd_policy_lock(args: &[String]) -> R<()> {
-    arity("cmd_policy_lock", args, 0, 5)?;
-    let (action, file, tool, email, node) =
-        (arg(args, 0, ""), arg(args, 1, ""), arg(args, 2, ""), arg(args, 3, ""), arg(args, 4, ""));
-    if !matches!(action, "plan" | "apply") || file.is_empty() {
-        return die("用法: cca _policy-lock plan|apply policy.json 工具 邮箱 节点");
-    }
-    let names: Vec<(&str, &str)> = tools().iter().map(|x| (x.name, x.label)).collect();
-    let mut errs = Vec::new();
-    if !names.iter().any(|(n, _)| *n == tool) {
-        let all: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
-        errs.push(format!("工具应该是 {} 或 {}", all[..all.len() - 1].join("、"), all[all.len() - 1]));
-    }
-    if email.chars().any(|ch| (ch as u32) < 0x20 || ch == '\u{7f}') || !EMAIL_RE.matches(email) {
-        errs.push("邮箱不对".to_string());
-    }
-    if !fill_name_ok(&V::from(node)) {
-        errs.push("节点名不对（不能是空的，首尾不能有空格，不能有控制字符，不能以 CCA- 开头）".to_string());
-    }
-    let j = load_quiet(file);
-    if errs.is_empty() && !j.as_ref().is_some_and(|j| j.is_dict() && policy_problems(j, false).is_empty()) {
-        errs.push(format!("{file} 读不出来，或者格式不对"));
-    }
-    if !errs.is_empty() {
-        out!("{}", errs.join("\n"));
-        return exit(1);
-    }
-    let j = j.and_then(|j| j.as_dict()).expect("上面查过是字典");
-    let s = match j.setdefault(tool, Dict::new()) {
-        V::Dict(d) => d,
-        other => panic!("AttributeError: 映射里 {tool} 不是对象（{}）", other.py_repr()),
-    };
-    let email = email.to_lowercase();
-    let key = s.keys().into_iter().find(|k| k.to_lowercase() == email).map_or(email.clone(), |k| k.to_string());
-    let old = s.get(&key);
-    let label = names.iter().find(|(n, _)| *n == tool).expect("上面查过").1;
-    let head = format!("  {label}  {key}");
-    if old.as_ref().is_some_and(|o| o.as_str() == Some(node)) {
-        out!("{head} → {node}（已经是这样）");
-        return exit(3);
-    }
-    s.set(key.as_str(), node);
-    let mut lines = vec![match &old {
-        None | Some(V::None) => format!("{head} → {node}（新加）"),
-        Some(o) => format!("{}：{} → {}（换节点）", head, o.py_str(), node),
-    }];
-    let fill = load_quiet(&path::join(&path::dirname(file), "nodes.json"));
-    let known: Vec<V> = fill
-        .and_then(|f| f.as_dict())
-        .and_then(|f| f.list("proxies"))
-        .map(|l| l.items().iter().filter_map(|p| p.as_dict()).map(|p| p.get("name").unwrap_or(V::None)).collect())
-        .unwrap_or_default();
-    if !known.is_empty() && !known.iter().any(|n| n.as_str() == Some(node)) {
-        lines.push(format!("  ! 节点 {node} 不在参考节点（nodes.json）里：路由器上没有这个节点的机器，这个账号会用不了"));
-    }
-    let errs = policy_problems(&V::Dict(j.clone()), true);
-    if !errs.is_empty() {
-        out!("写进去之后映射的检查不通过：\n{}", errs.join("\n"));
-        return exit(1);
-    }
-    if action == "plan" {
-        out!("{}", lines.join("\n"));
-    } else {
-        save_json(file, &V::Dict(j), None, true)?;
-        out!("按请求锁定账号的节点：{key} → {node}");
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -26,11 +26,11 @@ use crate::cmd::hub::deploy::team_install;
 use crate::cmd::hub::hosted::team_files;
 use crate::cmd::hub::own_account;
 use crate::cmd::hub::{hex32, host_name, host_of, keygen, name_ok, with_https_port, NAME_BAD};
-use crate::cmd::presence::{key_at, presence_key, presence_post, ssh_fp, url_ok, PRESENCE_PIN_RE};
+use crate::cmd::presence::{key_at, presence_post, url_ok, PRESENCE_PIN_RE};
 use crate::cmd::{arity, keyshare::is_num};
 use crate::core::base::sh;
 use crate::core::model::{is_api, node_of, parse_key};
-use crate::core::policy::{alias_ok, fill_problems, policy_problems, policy_sources};
+use crate::core::policy::{alias_ok, policy_sources};
 use crate::core::team::{load_team, team_dir, team_path, teams, Role, Team, TEAMS_DIR};
 use crate::core::tool::tools;
 use crate::py::fs::{self, load_quiet, save_json};
@@ -586,7 +586,7 @@ fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
                 }
                 Some(_) => {}
                 None if *dev == *t.dev => {} // 管理员自己这台：公钥是本机的（接上服务器时记下）
-                // 这个邀请是给某一把公钥的（照映射迁过来的机器：它的 deploy key），服务器报的却是别的：邀请被别的机器用了。它已经
+                // 这个邀请是给某一把公钥的（cca team invite --key 指定的），服务器报的却是别的：邀请被别的机器用了。它已经
                 // 取走的那一份收不回来，以后不给它账号（build_doc 看 mismatch）。服务器没报公钥不算；后来报的对上了就不再这样记
                 // （服务器一时说错，不该把一台好好的设备的账号永久拿掉）
                 None if d.str("expect").is_some_and(|e| reported.as_deref().is_some_and(|p| p != &*e)) => {
@@ -595,7 +595,7 @@ fn reconcile(t: &Team, a: &Dict) -> R<Result<Dict, String>> {
                         &*dev,
                         format!(
                             "拿这个邀请加入的不是指定的那把密钥（邀请被别的机器用了）：不给它账号；移除它（cca team revoke {} {}），\
-                             再运行一次 ./policy.sh team 给那台机器重发",
+                             再给那台机器发一个新的邀请（cca team invite … --key 它的公钥）",
                             &t.id[..8],
                             &dev[..8.min(dev.len())]
                         ),
@@ -789,8 +789,8 @@ struct Pick {
 }
 
 /// 这台设备上能放进 Team 的官方账号（cca team new 选的、cca team import --mine 放的）：账号表里有邮箱、有节点的官方账号——自己加的
-/// （不是谁给的），或者这台设备当管理员的 Team 给的（账号和节点的定义本来就归这台设备的人管）。维护者的映射给的、这台设备只是成员的
-/// Team 给的不算（是别人的，不能转手给别的设备），第三方 API 账号也不算（Team 的配置里只有官方账号）。照工具的先后、各工具账号表里的先后
+/// （不是谁给的），或者这台设备当管理员的 Team 给的（账号和节点的定义本来就归这台设备的人管）。这台设备只是成员的 Team 给的不算
+/// （是别人的，不能转手给别的设备），第三方 API 账号也不算（Team 的配置里只有官方账号）。照工具的先后、各工具账号表里的先后
 fn team_picks() -> Vec<Pick> {
     let admins: HashMap<String, (String, Option<Dict>)> = teams()
         .into_iter()
@@ -811,7 +811,7 @@ fn team_picks() -> Vec<Pick> {
             }
             let (from, defs) = match src.str(&email) {
                 _ if own_account(&src, &k, &v) => (None, V::None),
-                // 维护者的映射给的（编号是空的）、这台设备只是成员的 Team 给的：不能放；第三方 API 账号、没有邮箱的也不能
+                // 这台设备只是成员的 Team 给的：不能放；第三方 API 账号、没有邮箱的也不能
                 Some(tid) if !is_api(&v) => match admins.get(&*tid) {
                     Some((name, nodes)) => (Some(name.clone()), needed_nodes(nodes.clone(), &BTreeSet::from([node.to_string()]))),
                     None => continue,
@@ -894,7 +894,7 @@ fn chosen_picks(picks: Vec<Pick>, want: &V) -> Result<Vec<Pick>, String> {
                 Some(i) => keep[i] = true,
                 None => {
                     return Err(format!(
-                        "这台设备上没有 {tool}:{email} 这个账号，或者它不能放进 Team（第三方 API 账号、维护者共享的、这台设备不是管理员的 Team 给的都不能放）"
+                        "这台设备上没有 {tool}:{email} 这个账号，或者它不能放进 Team（第三方 API 账号、这台设备不是管理员的 Team 给的都不能放）"
                     ))
                 }
             }
@@ -1294,115 +1294,6 @@ fn invite_link(t: &Team, secret: &str, exp: i64, device: &str) -> String {
     })
 }
 
-/// py team-handoff Team：把用着维护者映射的各台机器迁到这个 Team（./policy.sh team 调的）。stdin 一行一台：「公钥（ssh-ed25519 AAAA…）
-/// \t别名」——映射仓库上各台机器的 deploy key。每台机器一个邀请，指定要拿这把公钥加入（expect）、账号全给：拿这把公钥加入了的不用
-/// 再发；发过、还没用、离过期还有三天以上的照原来的那个；自己退出了的、管理员移除了的不再发（要它回来：手工 cca team invite … --key，
-/// 退出过的那台还要自己 cca team join）；别的（没发过、过期了、被别的密钥用掉了）新发一个，30 天过期，同一把公钥以前没用上的那几项
-/// 去掉。最后和服务器对一遍、发布。stdout 一行 JSON：{"version": 1, "kind": "team_handoff", "team": 编号, "name": 名字,
-/// "section": {"v": 1, "invites": {deploy key 的指纹: 邀请链接}}（写进 policy.json 的 team 一节）, "joined": [别名…], "kept": [别名…],
-/// "new": [别名…], "left": [别名…], "revoked": [别名…], "problems": [没发成的原因…]}。原因码：no_team、not_admin、not_attached、
-/// usage（stdin 里没有一把合格的公钥）、server、publish
-pub fn cmd_team_handoff(args: &[String]) -> R<()> {
-    arity("team-handoff", args, 1, 1)?;
-    let mut machines: Vec<(String, String, String)> = Vec::new(); // (公钥, 指纹, 别名)
-    for line in crate::py::io::read_stdin_text().lines() {
-        let (key, alias) = line.split_once('\t').unwrap_or((line, ""));
-        let Some(key) = root_line(key) else { continue };
-        let Some(fp) = key.split(' ').nth(1).and_then(ssh_fp) else { continue };
-        if machines.iter().any(|m| m.0 == key) {
-            continue;
-        }
-        let alias =
-            Some(alias.trim().to_string()).filter(|n| name_ok(n)).unwrap_or_else(|| format!("device-{}", machines.len() + 1));
-        machines.push((key, fp, alias));
-    }
-    if machines.is_empty() {
-        return fail("usage", "没有要迁的机器：stdin 一行一台「公钥\\t别名」");
-    }
-    let (t, a, _lk) = admin_of(&args[0])?;
-    let cfg = match root_cfg(&t)? {
-        Ok(c) => c,
-        Err(why) => return fail("not_attached", &why),
-    };
-    if let Err(why) = reconcile(&t, &a)? {
-        return fail("server", &why);
-    }
-    let master = a.at("master").py_str();
-    let devs = a.dict("devices").unwrap_or_default();
-    // 管理员自己这台（它的 deploy key 多半也在仓库上）本来就在 Team 里：不用给它发
-    let own = presence_key()?.map(|(_, fp)| fp);
-    let invites = Dict::new();
-    let (mut joined, mut kept, mut fresh, mut problems): (Vec<V>, Vec<V>, Vec<V>, Vec<V>) = Default::default();
-    let (mut left, mut revoked): (Vec<V>, Vec<V>) = Default::default();
-    let mut full = false;
-    for (key, fp, alias) in &machines {
-        let mine: Vec<(String, Dict)> = devs
-            .items()
-            .iter()
-            .filter_map(|(dev, d)| Some((dev.to_string(), d.as_dict()?)))
-            .filter(|(_, d)| d.str("expect").as_deref() == Some(key.as_str()))
-            .collect();
-        let state = |d: &Dict| d.str("state").map(|s| s.to_string()).unwrap_or_default();
-        if own.as_deref() == Some(fp.as_str())
-            || mine.iter().any(|(_, d)| state(d) == "joined" && !d.get("mismatch").is_some_and(|m| m.truthy()))
-        {
-            joined.push(V::from(alias.as_str()));
-            continue;
-        }
-        let live = mine
-            .iter()
-            .find(|(_, d)| state(d) == "invited" && d.get("exp").and_then(|e| e.as_int()).is_some_and(|e| e - now() > 3 * 86400));
-        if let Some((_, d)) = live {
-            let secret = device_secret(&master, d.get("n").and_then(|n| n.as_int()).unwrap_or(0));
-            let exp = d.get("exp").and_then(|e| e.as_int()).unwrap_or(0);
-            invites.set(fp.as_str(), invite_link(&t, &secret, exp, &d.str("label").unwrap_or_default()));
-            kept.push(V::from(alias.as_str()));
-            continue;
-        }
-        // 这台机器自己退出了、被管理员移除了（拿别的密钥用了邀请、后来被移除的那一项不算：那不是它）：不再自己把它请回来
-        let wrong = |d: &Dict| d.get("mismatch").is_some_and(|m| m.truthy());
-        if let Some(gone) = mine.iter().map(|(_, d)| d).find(|d| matches!(state(d).as_str(), "left" | "revoked") && !wrong(d)) {
-            let list = if state(gone) == "left" { &mut left } else { &mut revoked };
-            list.push(V::from(alias.as_str()));
-            continue;
-        }
-        // 以前给这把公钥的、没用上的那几项不要了（服务器上还没用掉的邀请一起撤回，免得占着名额）
-        for (dev, d) in &mine {
-            if state(d) == "invited" {
-                presence_post(&cfg, "team_revoke", &dict! { "dev" => dev.as_str() }, 15)?;
-            }
-            if state(d) != "joined" {
-                devs.pop(dev);
-            }
-        }
-        if full {
-            continue;
-        }
-        match issue(&t, &a, &cfg, alias, V::from("all"), 30 * 86400, Some(key))? {
-            Ok((link, _)) => {
-                invites.set(fp.as_str(), link);
-                fresh.push(V::from(alias.as_str()));
-            }
-            Err((c, why)) => {
-                full = c == "full"; // 名额满了：后面的也发不了，等前面的机器加入了再运行一次
-                problems.push(V::from(format!("{alias}：{why}")));
-            }
-        }
-    }
-    admin_save(&t.id, &a)?;
-    match publish(&t, &a, None)? {
-        Ok(p) => problems.extend(p.problems.into_iter().map(V::from)),
-        Err(why) => return fail("publish", &why),
-    }
-    let doc = dict! {
-        "version" => 1, "kind" => "team_handoff", "team" => t.id.as_str(), "name" => t.name.as_str(),
-        "section" => dict! { "v" => 1, "invites" => invites },
-        "joined" => joined, "kept" => kept, "new" => fresh, "left" => left, "revoked" => revoked, "problems" => problems,
-    };
-    out!("{}", json::dumps(&V::Dict(doc), json::Fmt::new().utf8()));
-    Ok(())
-}
-
 /// 授权给人看的样子：全部 / 几个账号
 fn grants_text(g: &V) -> String {
     match g.as_dict() {
@@ -1645,96 +1536,30 @@ pub fn cmd_team_rename(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// py team-import Team policy.json [nodes.json]：把现有的映射（账号 → 节点、别名、安装客户端用的节点）和参考节点导进这个 Team 的
-/// 配置（整个换掉原来的；别名映射里没写的照这个 Team 原来给它起的，还没有的编成 team-N），再发布。文件就是维护者映射仓库里的那两份
-/// （格式照旧查）。stdout：几个账号、几个节点、存上了几台的配置。原因码：no_team、not_admin、file（读不了、格式不对）、publish
-///
-/// py team-import Team --mine：把这台设备上**自己的**官方账号（不是维护者共享的、也不是哪个 Team 给的；第三方 API 账号不算）连同现在
-/// 走的节点、别名加进这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；别名照 put_accounts：这台设备上起过的带进去——Team 里
-/// 原来是默认的 team-N、也没被别的账号用着时换成它，没起过的编成 team-N），再发布——把自己的几台设备并成一个 Team 时用。
-/// stdout 同上（节点数是 0：节点各台设备自己有）
+/// py team-import Team --mine：把这台设备上**自己的**官方账号（不是哪个 Team 给的；第三方 API 账号不算）连同现在走的节点、别名加进
+/// 这个 Team 的配置（原来有的留着，同一个账号照这台设备上的换；别名照 put_accounts：这台设备上起过的带进去——Team 里原来是默认的
+/// team-N、也没被别的账号用着时换成它，没起过的编成 team-N），再发布——把自己的几台设备并成一个 Team 时用。stdout：几个账号、
+/// 0（节点各台设备自己有）、存上了几台的配置。原因码：no_team、not_admin、usage、file（没有可加的账号）、publish。
+/// 3.6.0 起没有维护者的映射了：导入映射文件的那一种（team-import Team policy.json [nodes.json]）去掉了，照旧写是 usage
 pub fn cmd_team_import(args: &[String]) -> R<()> {
     arity("team-import", args, 2, 3)?;
     let (t, a, _lk) = admin_of(&args[0])?;
-    if args[1] == "--mine" {
-        if args.len() != 2 {
-            return fail("usage", "用法: cca team import Team --mine");
-        }
-        default_aliases(&a); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
-        let mine: Vec<Pick> = team_picks().into_iter().filter(|p| p.from.is_none()).collect();
-        let count = mine.len();
-        if count == 0 {
-            return fail("file", "这台设备上没有自己的官方账号可加（维护者共享的、别的 Team 给的、第三方 API 账号都不算）");
-        }
-        if let Err(why) = put_accounts(&a, &mine) {
-            return fail("file", &why); // 自己的账号不带节点的定义：到不了这里
-        }
-        default_aliases(&a);
-        admin_save(&t.id, &a)?;
-        let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
-        out!("{count}\n0\n{stored}");
-        return Ok(());
-    }
-    let read = |p: &str| load_quiet(p).filter(|j| j.is_dict());
-    let Some(policy) = read(&args[1]) else { return fail("file", &format!("{} 读不了，或者不是 JSON 对象", args[1])) };
-    if let Some(why) = policy_problems(&policy, false).into_iter().next() {
-        return fail("file", &format!("{} 的格式不对：{why}", args[1]));
-    }
-    let policy = policy.as_dict().expect("刚查过是对象");
-    let accounts = Dict::new();
-    let mut count = 0;
-    for tool in tools().iter() {
-        let m = Dict::new();
-        for (e, n) in policy.dict(tool.name).unwrap_or_default().items() {
-            if n.as_str().is_some_and(|n| !n.is_empty()) {
-                m.set(e.to_lowercase(), n);
-                count += 1;
-            }
-        }
-        accounts.set(tool.name, m);
-    }
-    // 别名：映射里写的（按邮箱，给它在的每个工具）；没写的照这个 Team 原来在这个工具里给它起的（默认的 team-N、cca team alias 改的），
-    // 免得每导入一次编号就变（各台设备跟着改名）。在这个工具里和前面的撞了的不要（default_aliases 另编）
-    let written = Dict::new();
-    for (e, alias) in policy.dict("aliases").unwrap_or_default().items() {
-        written.set(e.to_lowercase(), alias);
+    if args[1] != "--mine" || args.len() != 2 {
+        return fail("usage", "用法: cca team import Team --mine");
     }
     default_aliases(&a); // 原来的先换成按工具记的（3.5.3-beta.5 及以前的 Team）
-    let before = a.dict("config").and_then(|c| c.dict("tool_aliases")).unwrap_or_default();
-    let by_tool = Dict::new();
-    for tool in tools().iter() {
-        let emails = accounts.dict(tool.name).unwrap_or_default().keys();
-        let (names, prev) = (Dict::new(), before.dict(tool.name).unwrap_or_default());
-        let mut used: HashSet<String> = HashSet::new();
-        for src in [&written, &prev] {
-            for e in emails.iter().filter(|e| !names.has(e)) {
-                if let Some(x) = src.get(e).filter(|x| alias_ok(x) && used.insert(x.py_str())) {
-                    names.set(&**e, x);
-                }
-            }
-        }
-        by_tool.set(tool.name, names);
+    let mine: Vec<Pick> = team_picks().into_iter().filter(|p| p.from.is_none()).collect();
+    let count = mine.len();
+    if count == 0 {
+        return fail("file", "这台设备上没有自己的官方账号可加（别的 Team 给的、第三方 API 账号都不算）");
     }
-    let mut nodes = V::None;
-    let mut node_count = 0;
-    if let Some(p) = args.get(2) {
-        let Some(j) = read(p) else { return fail("file", &format!("{p} 读不了，或者不是 JSON 对象")) };
-        if let Some(why) = fill_problems(&j).into_iter().next() {
-            return fail("file", &format!("{p} 的格式不对：{why}"));
-        }
-        let j = j.as_dict().expect("刚查过是对象");
-        node_count = j.list("proxies").map_or(0, |l| l.len());
-        nodes = V::Dict(dict! { "group" => j.at("group"), "proxies" => j.at("proxies") });
+    if let Err(why) = put_accounts(&a, &mine) {
+        return fail("file", &why); // 自己的账号不带节点的定义：到不了这里
     }
-    let config = dict! {
-        "accounts" => accounts, "tool_aliases" => by_tool, "aliases" => Dict::new(),
-        "install_node" => policy.str("install_node").map_or(String::new(), |n| n.to_string()), "nodes" => nodes,
-    };
-    a.set("config", config);
     default_aliases(&a);
     admin_save(&t.id, &a)?;
     let stored = if t.attached() { settle(&t, &a, None)? } else { 0 };
-    out!("{count}\n{node_count}\n{stored}");
+    out!("{count}\n0\n{stored}");
     Ok(())
 }
 

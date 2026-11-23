@@ -29,7 +29,7 @@ use super::{arg, arity, Cmd};
 use crate::core::base::{sh, EMAIL_RE};
 use crate::core::ctx::ctx;
 use crate::core::model::{cfg_load, is_api, label_of, node_of, parse_key};
-use crate::core::policy::{alias_problem, fill_fp, node_ids, policy_fill, policy_map};
+use crate::core::policy::{alias_problem, by_whom, fill_fp, node_ids, policy_fill, policy_map};
 use crate::core::tool::{agy, t, tools, Kind};
 use crate::py::obj::{Dict, V};
 use crate::py::text;
@@ -236,8 +236,8 @@ pub fn urlsplit_host(url: &str) -> String {
     urlsplit(url).ok().and_then(|u| u.hostname()).unwrap_or_default()
 }
 
-/// 这台机器上节点 n（账号表里的叫法）的摘要：路由器同步时记下的（node_ids），没有就从内置代理拷来的节点定义、维护者的
-/// 参考节点里按名字找。认不出是空的。node_ids 里记的原样返回（被手改成别的类型时也是：原来就这样）
+/// 这台机器上节点 n（账号表里的叫法）的摘要：路由器同步时记下的（node_ids），没有就从内置代理拷来的节点定义、Team 的配置
+/// 带的节点里按名字找。认不出是空的。node_ids 里记的原样返回（被手改成别的类型时也是：原来就这样）
 pub fn node_fp_here(c: &Dict, n: &str) -> V {
     if let Some(f) = node_ids(c).get(n).filter(|f| f.truthy()) {
         return f;
@@ -329,7 +329,8 @@ pub fn cmd_login_page_acct(args: &[String]) -> R<()> {
     let n = if hit.iter().any(|h| h == node) { node.to_string() } else { hit.first().cloned().unwrap_or_default() };
     if let Some(want) = want.as_deref().filter(|_| n.is_empty()) {
         return die(format!(
-            "维护者的映射要 {email} 走 {want}，和服务器上的 {node} 不是同一个节点：两边的映射可能不是同一版，先在两边各运行一次 cca policy pull"
+            "{}要 {email} 走 {want}，和服务器上的 {node} 不是同一个节点：两边的配置可能不是同一版，先在两边各运行一次 cca team sync",
+            by_whom(t(), &email)
         ));
     }
     if n.is_empty() || !py_contains(&nodes, &n)? {

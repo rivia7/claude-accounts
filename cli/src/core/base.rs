@@ -78,7 +78,7 @@ pub const RESTRICTED: &[(&str, &str)] = &[
     ("VE", "委内瑞拉"),
 ];
 
-/// 只读（cca _gui state / live，CCA_RO=1）：按维护者的映射对账、分配端口都只在内存里做，不写 config.json 和账号表，
+/// 只读（cca _gui state / live，CCA_RO=1）：按 Team 的配置对账、分配端口都只在内存里做，不写 config.json 和账号表，
 /// 也不往 stderr 说；本来会做的改动记在 NOTICES，给图形界面看
 pub static RO: LazyLock<bool> = LazyLock::new(|| getenv("CCA_RO").as_deref() == Some("1"));
 

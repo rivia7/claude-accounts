@@ -54,7 +54,7 @@ impl Incoming {
 pub struct Peer {
     /// 配对的编号（32 个十六进制字符）
     pub pid: String,
-    /// 对方的设备指纹（它的 deploy key 的）
+    /// 对方的设备指纹（它在服务器上的设备密钥的）
     pub fp: String,
     /// 对方给自己起的名字（它的机器名）
     pub name: String,
@@ -64,21 +64,27 @@ pub struct Peer {
     pub at: f64,
     /// 对方是手机上的网页端（`cca remote pair --web` 配的、不在服务器的设备清单里）：只是给人看的，它能做什么照旧看 incoming
     pub web: bool,
-    /// 这个配对是在哪台服务器上做的（记在它上面）：经它只看得到走这台服务器的会话——某个 Team 的同步服务器，
-    /// 或者维护者的那一台（旧的通道；以前的配对都是它）
+    /// 这个配对是在哪台服务器上做的（记在它上面）：经它只看得到走这台服务器的会话——某个 Team 的同步服务器
     pub hub: HubKind,
 }
 
-/// 配对表里 hub 这一项的写法：维护者的不写（以前的配对表就没有这一项），Team 的写它的编号
-fn hub_word(kind: HubKind) -> Option<String> {
-    kind.team()
+/// 配对表里 hub 这一项（Team 的编号）是哪台服务器。没有这一项的是以前在维护者那一台上配的：3.6.0 起那台服务器没了，
+/// 这一项不算（old_pids）
+fn hub_of(word: Option<&str>) -> Option<HubKind> {
+    word.and_then(TeamTag::new).map(HubKind::Team)
 }
 
-fn hub_of(word: Option<&str>) -> Option<HubKind> {
-    match word {
-        None => Some(HubKind::Maintainer),
-        Some(tid) => TeamTag::new(tid).map(HubKind::Team),
-    }
+/// 配对表里以前在维护者那一台上配的（没有 hub 这一项，load 不认了）的编号：写回配对表、cca restore 时把它们的密钥也删掉，
+/// 不然钥匙串里一直留着
+fn old_pids() -> Vec<String> {
+    let Some(peers) = fs::load_quiet(&file()).and_then(|j| j.as_dict()).and_then(|j| j.dict("peers")) else { return Vec::new() };
+    let old = |v: &V| v.as_dict().is_some_and(|d| d.get("hub").is_none_or(|h| h.is_none()));
+    peers.items().into_iter().filter(|(pid, v)| hex32(pid) && old(v)).map(|(pid, _)| pid.to_string()).collect()
+}
+
+/// 配对表里还有以前在维护者那一台上配的（见 old_pids）
+pub fn has_old() -> bool {
+    !old_pids().is_empty()
 }
 
 fn file() -> String {
@@ -110,7 +116,7 @@ fn row_of(pid: &str, d: &Dict) -> Option<Peer> {
         at: d.get("at")?.as_num()?,
         // 两台机器之间的配对、旧版写的配对表没有这一项（`at` 取不存在的键会崩：用 `get`）
         web: d.get("web").and_then(|v| v.as_bool()) == Some(true),
-        // 写了却看不懂的（以后的版本加的别的种类）：这一项不算，不当成维护者的那一台
+        // 没有这一项（维护者那一台上的旧配对）、写了却看不懂的（以后的版本加的别的种类）：这一项不算
         hub: hub_of(d.get("hub").filter(|v| !v.is_none()).map(|v| v.py_str()).as_deref())?,
     })
 }
@@ -130,18 +136,24 @@ pub fn load() -> Vec<Peer> {
 
 pub fn save(peers: &[Peer]) -> R<()> {
     let d = local::ensure_dir()?;
+    // 维护者那一台上的旧配对（load 不认了）写回去就没有了：它们的密钥也删掉
+    let old = old_pids();
     let all = Dict::new();
     for p in peers {
         let row = dict! { "fp" => p.fp.as_str(), "name" => p.name.as_str(), "incoming" => p.incoming.word(), "shown" => p.shown, "at" => p.at };
         if p.web {
             row.set("web", true); // 只有网页端的才写这一项：别的机器的那几行和以前逐字节一样
         }
-        if let Some(hub) = hub_word(p.hub) {
-            row.set("hub", hub); // 同上：记在维护者那一台上的不写
-        }
+        row.set("hub", p.hub.team());
         all.set(p.pid.as_str(), row);
     }
-    fs::save_json(&path::join(&d, "peers.json"), &V::Dict(dict! { "v" => 1, "peers" => all }), Some(0o600), true)
+    fs::save_json(&path::join(&d, "peers.json"), &V::Dict(dict! { "v" => 1, "peers" => all }), Some(0o600), true)?;
+    for pid in old {
+        if let Err(e) = del_secret(&pid) {
+            e.swallowed(); // 删不掉的只是留在钥匙串里，配对表里已经没有它了
+        }
+    }
+    Ok(())
 }
 
 fn svc(pid: &str) -> String {
@@ -199,27 +211,30 @@ mod tests {
     #[test]
     fn rows() {
         let pid = "ab".repeat(16);
-        let full = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0 };
+        let tid = "0123456789abcdef0123456789abcdef";
+        let full = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0, "hub" => tid };
         let p = row_of(&pid, &full).unwrap();
         assert_eq!(
             (p.incoming, p.shown, p.at, p.web),
             (Incoming::View, true, 5.0, false),
-            "没有 web 这一项：不是网页端（旧的配对表都这样）"
+            "没有 web 这一项：不是网页端（两台机器之间的配对都这样）"
         );
-        assert_eq!(p.hub, HubKind::Maintainer, "没有 hub 这一项：记在维护者那一台上（旧的配对表都这样）");
-        let tid = "0123456789abcdef0123456789abcdef";
-        full.set("hub", tid);
-        assert_eq!(row_of(&pid, &full).unwrap().hub.team().as_deref(), Some(tid));
-        full.set("hub", "something-new");
-        assert!(row_of(&pid, &full).is_none(), "看不懂的 hub：这一项不算（不能当成维护者的）");
+        assert_eq!(p.hub.team(), tid);
+        full.pop("hub");
+        assert!(row_of(&pid, &full).is_none(), "没有 hub 这一项：维护者那一台上的旧配对，3.6.0 起不算");
         full.set("hub", V::None);
+        assert!(row_of(&pid, &full).is_none(), "hub 是 null 也一样");
+        full.set("hub", "something-new");
+        assert!(row_of(&pid, &full).is_none(), "看不懂的 hub：这一项不算");
+        full.set("hub", tid);
         full.set("web", true);
         assert!(row_of(&pid, &full).unwrap().web);
         full.set("web", "yes");
         assert!(!row_of(&pid, &full).unwrap().web, "不是 true 的都不算");
         // 缺了该有的、样子不对：这一项不算，不崩
         for (k, bad) in [("fp", V::None), ("incoming", "all".into()), ("shown", "x".into()), ("at", "x".into())] {
-            let d = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0 };
+            let d = dict! { "fp" => "SHA256:x", "name" => "box", "incoming" => "view", "shown" => true, "at" => 5.0, "hub" => tid };
+            assert!(row_of(&pid, &d).is_some());
             d.set(k, bad);
             assert!(row_of(&pid, &d).is_none(), "{k}");
         }
@@ -248,7 +263,7 @@ mod tests {
             shown: true,
             at: 1.0,
             web: false,
-            hub: HubKind::Maintainer,
+            hub: HubKind::Team(TeamTag::new(&"01".repeat(16)).expect("是个 Team 的编号")),
         };
         let peers = vec![peer("ab", "服务器"), peer("cd", "服务器"), peer("ef", "笔记本")];
         assert_eq!(find(&peers, "笔记本").unwrap().pid, "ef".repeat(16));

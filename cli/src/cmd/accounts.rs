@@ -9,7 +9,7 @@ use super::{arg, arity, Cmd};
 use crate::core::base::*;
 use crate::core::ctx::{cfg_save, ctx, policy_skip_add, table_problems};
 use crate::core::model::*;
-use crate::core::policy::{alias_locks, alias_problem, policy_in_use, policy_map, policy_raw};
+use crate::core::policy::{alias_locks, alias_problem, by_whom, policy_in_use, policy_map, policy_raw};
 use crate::core::tool::{t, tools, Kind, Tool, CLAUDE_SHARED, CODEX_PROVIDER};
 use crate::py::fs::{load_quiet, save_json};
 use crate::py::hash::sha1_hex;
@@ -169,8 +169,9 @@ pub fn session_hook(key: &str) -> Option<Dict> {
     Some(dict! { "SessionStart" => crate::list![dict! { "hooks" => crate::list![hook] }] })
 }
 
-/// ~/.cca 里绝不给 Claude 读写的（在不在工作目录里都挡，用户同意了、bypassPermissions 时也一样）：登录凭证和浏览器资料（映射 deploy key
-/// 的私钥、维护者参考节点和内置代理里的节点密钥、去掉了的自己的同步服务器留下的加入信息、这台设备在它上面的私钥和部署到托管平台时
+/// ~/.cca 里绝不给 Claude 读写的（在不在工作目录里都挡，用户同意了、bypassPermissions 时也一样）：登录凭证和浏览器资料（以前拉维护者
+/// 映射的 deploy key 的私钥、维护者的参考节点（policy/id_ed25519、policy/nodes.json：3.6.0 升级时删掉，没删成的设备上可能还有）、
+/// 内置代理里的节点密钥、去掉了的自己的同步服务器留下的加入信息、这台设备在它上面的私钥和部署到托管平台时
 /// 还没用上的口令（hub/hub.json、hub/id_ed25519、hub-hosted.json：3.5.3 以前加入过的设备上可能还有，升级时删掉）、Team 的整个目录（根密钥、管理员的主密钥、这台设备的密钥和拿到的配置：里面有节点凭证）、Codex 的登录 token、各账号的
 /// Chrome 和桌面 App 资料目录里的 cookie，包括这个账号自己的；没有钥匙串的系统上 Claude Code 的登录凭证、cca 存的 API key）。
 /// ~/.cca 里新加了凭证类的文件要补进来
@@ -197,7 +198,7 @@ pub const CCA_DIR_PRIVATE: &[&str] = &[
 
 /// Claude Code 默认只对这个账号自己的目录（adir：~/.cca/accounts/<账号目录名>）放开权限：加成工作目录（--add-dir），
 /// 它的用量、出口检测、Claude Code 自己的配置读起来不用确认，改动照权限模式走。账号目录里共享的目录是链到 ~/.claude 的符号链接，
-/// Claude Code 判断权限时先解析链接，所以它们的真实路径也加上（shared_real_dirs）。整个 ~/.cca 不加：账号表、config.json、映射、
+/// Claude Code 判断权限时先解析链接，所以它们的真实路径也加上（shared_real_dirs）。整个 ~/.cca 不加：账号表、config.json、Team 的配置、
 /// 别的账号的目录都不在工作目录里，读之前照权限模式确认。登录凭证和浏览器资料用 --disallowedTools 挡住整个 ~/.cca 的
 /// （CCA_DIR_PRIVATE，包括这个账号自己的 Chrome、桌面 App 资料目录；规则里 // 开头是绝对路径，Read 规则也管 cat、head
 /// 这类命令）。两个参数都写成 --x=值：它们能跟好几个值，分开写会把后面用户写的提示词也吞进去。
@@ -441,7 +442,7 @@ pub fn cmd_check(args: &[String]) -> R<()> {
     exit(if p.is_empty() { 0 } else { 1 })
 }
 
-/// 新增账号，打印账号表里的键：有别名是「别名(邮箱)」，没有就是邮箱。维护者的映射里有这个邮箱时，节点用映射的
+/// 新增账号，打印账号表里的键：有别名是「别名(邮箱)」，没有就是邮箱。Team 的配置里有这个邮箱时，节点用配置里的
 pub fn cmd_add(args: &[String]) -> R<()> {
     arity("cmd_add", args, 3, 3)?;
     let (c, table, _) = ctx()?;
@@ -458,9 +459,9 @@ pub fn cmd_add(args: &[String]) -> R<()> {
     let nodes = c.at("nodes");
     if nodes.truthy() && !nodes.as_list().is_some_and(|l| l.has_str(&node)) {
         let why = if want.is_some() {
-            "（维护者的映射要求这个账号走它：运行 cca router setup 重新选可选节点）"
+            format!("（{}要求这个账号走它：运行 cca router setup 重新选可选节点）", by_whom(t(), &email))
         } else {
-            ""
+            String::new()
         };
         return die(format!("节点「{node}」不在可选列表{why}"));
     }
@@ -469,7 +470,7 @@ pub fn cmd_add(args: &[String]) -> R<()> {
     save_json(&t().table, &V::Dict(table.clone()), Some(0o600), true)?;
     let st = t().state(&c, false);
     if let Some(V::List(skip)) = st.get("policy_skip") {
-        // 删掉过的映射里的账号又加回来了：以后照常跟着映射
+        // 删掉过的 Team 给的账号又加回来了：以后照常跟着 Team 的配置
         if skip.has_str(&email) {
             let rest: Vec<V> = skip.items().into_iter().filter(|e| e.as_str() != Some(email.as_str())).collect();
             if rest.is_empty() {
@@ -610,9 +611,9 @@ pub fn cmd_rm(args: &[String]) -> R<()> {
     need(&table, key)?;
     let e = if is_api(&table.at(key)) { String::new() } else { parse_key(key).1.to_lowercase() };
     if !e.is_empty() && policy_raw(t()).has(&e) {
-        // 映射里的账号：记下来，不然下一条命令又按映射把它加回来
+        // Team 给的账号：记下来，不然下一条命令又照 Team 的配置把它加回来
         policy_skip_add(t(), std::slice::from_ref(&e))?;
-        err!("• {} 在维护者的映射里：这台机器上不会再自动加回来（要加回来：{} add）", label_of(key), t().cmd);
+        err!("• {} 在{}里：这台机器上不会再自动加回来（要加回来：{} add）", label_of(key), by_whom(t(), &e), t().cmd);
     }
     table.pop(key);
     save_json(&t().table, &V::Dict(table.clone()), Some(0o600), true)?;
@@ -743,8 +744,8 @@ pub fn cmd_nodes_allowed(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 路由器上的这些节点里，预先选好的编号（从 1 起，空格隔开）：现在的可选节点，加上维护者的映射里这台机器的账号要用的
-/// （配置向导第 1 步拉到映射、第 2 步配置路由器时不用自己找；这台机器删掉过的账号不算）
+/// 路由器上的这些节点里，预先选好的编号（从 1 起，空格隔开）：现在的可选节点，加上 Team 的配置里这台机器的账号要用的
+/// （加入了 Team 再配置路由器时不用自己找；这台机器删掉过的账号不算）
 pub fn cmd_nodes_preselect(args: &[String]) -> R<()> {
     let c = ctx()?.0;
     let mut want: Vec<String> = c.at("nodes").as_list().map(|l| l.items().iter().map(|n| n.py_str()).collect()).unwrap_or_default();
@@ -872,7 +873,7 @@ pub fn cmd_sync_state(args: &[String]) -> R<()> {
 
 // --- 提问会话里的账号表表单（cca [codex] edit，PROTOCOL 4.6）：节点、接口地址、模型、环境变量。App 不碰账号表，也看不到 key ---
 
-/// 账号表的键和先后的摘要：表单按编号对应账号，表在中途变了（映射更新、别处改了别名）就重新出表单
+/// 账号表的键和先后的摘要：表单按编号对应账号，表在中途变了（Team 的配置更新、别处改了别名）就重新出表单
 pub fn edit_sum(table: &Dict) -> String {
     let keys = V::List(List::from_vec(table.keys().into_iter().map(V::Str).collect()));
     text::head(&sha1_hex(json::dumps(&keys, json::LINE)), 12).to_string()
@@ -1032,9 +1033,9 @@ pub fn cmd_edit_form(args: &[String]) -> R<()> {
                 let error = if in_nodes(&want) {
                     String::new()
                 } else {
-                    format!("维护者的映射要求它走「{want}」，这个节点不在可选列表：先在“配置路由器”里选上它")
+                    format!("{}要求它走「{want}」，这个节点不在可选列表：先在“配置路由器”里选上它", by_whom(tool, &email))
                 };
-                let (hint, style) = ("维护者固定了这个账号的节点", "menu");
+                let (hint, style) = ("Team 的配置固定了这个账号的节点", "menu");
                 put(
                     &mut out,
                     Field {
@@ -1158,7 +1159,7 @@ pub fn cmd_edit_apply(args: &[String]) -> R<()> {
     let tool = t();
     let (c, table, _) = ctx()?;
     if edit_sum(&table) != args[0] {
-        out!("!\t账号表刚刚变了（维护者的映射更新了，或者在别处改过）：下面是最新的内容，再确认一次");
+        out!("!\t账号表刚刚变了（Team 的配置更新了，或者在别处改过）：下面是最新的内容，再确认一次");
         return exit(3);
     }
     let ans: HashMap<String, String> = read_fields().into_iter().collect();
@@ -1175,7 +1176,7 @@ pub fn cmd_edit_apply(args: &[String]) -> R<()> {
         let Some(d) = v.as_dict().filter(|_| is_api(&v)) else {
             let email = parse_key(&k).1;
             match n {
-                // 维护者固定的不看答案
+                // Team 的配置固定的不看答案
                 Some(n) if email.is_empty() || !pm.has(&email.to_lowercase()) => {
                     if in_nodes(n) {
                         new.set(k, n.as_str());
@@ -1253,13 +1254,13 @@ pub fn cmd_edit_apply(args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// 账号能不能自己换出口（cca [codex|agy] node use）：维护者的映射固定了节点的官方账号不能
+/// 账号能不能自己换出口（cca [codex|agy] node use）：Team 的配置固定了节点的官方账号不能
 pub fn node_free(key: &str, v: &V, pm: &Dict) -> bool {
     let email = parse_key(key).1;
     is_api(v) || email.is_empty() || !pm.has(&email.to_lowercase())
 }
 
-/// cca [codex|agy] node use 账号 的一头一尾：只给账号（key 是 bash 经 resolve 找好的）时只查能不能换（维护者固定了节点的
+/// cca [codex|agy] node use 账号 的一头一尾：只给账号（key 是 bash 经 resolve 找好的）时只查能不能换（Team 的配置固定了节点的
 /// 退出码 3，stdout 是原因）；再给节点时把这个账号改走它（第三方 API 账号改 node），打印 changed / same。节点要在可选节点里
 pub fn cmd_node_assign(args: &[String]) -> R<()> {
     arity("cmd_node_assign", args, 1, 2)?;
@@ -1270,7 +1271,7 @@ pub fn cmd_node_assign(args: &[String]) -> R<()> {
         return die(format!("没找到账号：{key}"));
     };
     if !node_free(key, &v, &policy_map(tool, Some(&c))) {
-        out!("维护者的映射固定了 {} 的出口节点，不能换成自定义代理", name_of(key));
+        out!("{}固定了 {} 的出口节点，不能换成自定义代理", by_whom(tool, &parse_key(key).1), name_of(key));
         return exit(3);
     }
     let Some(node) = args.get(1) else {
@@ -1421,8 +1422,8 @@ mod tests {
 
     #[test]
     fn node_free_only_blocks_accounts_the_mapping_pins() {
-        // cca node use、can.custom_proxy：维护者的映射固定了节点的官方账号不能换（邮箱不分大小写）；映射里没有的、键里没有邮箱的、
-        // 第三方 API 账号（映射只管官方账号）都能换
+        // cca node use、can.custom_proxy：Team 的配置固定了节点的官方账号不能换（邮箱不分大小写）；配置里没有的、键里没有邮箱的、
+        // 第三方 API 账号（Team 的配置只管官方账号）都能换
         let pm = json::loads(r#"{"alice@example.com": "US-A"}"#).unwrap().as_dict().unwrap();
         let official = V::from("US-B");
         let api = json::loads(r#"{"base_url": "https://api.example.com", "node": "US-A"}"#).unwrap();

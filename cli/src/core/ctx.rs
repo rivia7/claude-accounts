@@ -1,4 +1,4 @@
-//! 对账：校验账号表、照维护者的映射改、分配端口，以及每条命令开头的 `ctx()`。
+//! 对账：校验账号表、照 Team 的配置改、分配端口，以及每条命令开头的 `ctx()`。
 //! 对应 PY_SRC 的 `reconcile` 到 `slot_nodes`。
 
 use super::base::*;
@@ -27,7 +27,7 @@ fn int_value(v: &V) -> Option<i64> {
 /// 校验一个工具的账号表；给走节点的账号分配固定端口（直连的第三方 API 账号不占端口），回收已删除账号的端口。
 /// reserved 是别的工具占着的端口（大家共用一个端口池），不分给这张表。返回错误列表。
 /// 只改了别名的账号按邮箱（第三方 API 账号按 id）认出来：端口和"上次使用"跟着走。
-/// 映射（各个 Team 给这台设备的配置、维护者的映射：policy_raw）里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，
+/// 映射（各个 Team 给这台设备的配置合起来：policy_raw）里有的官方账号，节点和映射不一致时改回映射的节点（写回账号表，
 /// 说一声）；映射里有、这台机器上还没有的加进来（policy_merge，这台机器自己的账号不动），还没有别名的按映射补上别名
 /// （policy_alias_fill），管理员改了 Team 给的别名、这台设备上没自己改过的跟着改（team_alias_follow）；Team 加进来的账号，Team 不再给了
 /// 就收起来（team_park）：每条命令都经过这里，添加、cca edit、启动、同步前都管得到
@@ -44,7 +44,7 @@ pub fn reconcile(c: &Dict, table: &Dict, tool: &Tool, reserved: &HashSet<i64>) -
         );
     }
     let parked_now = team_park(table, tool, &st, &added);
-    // 关掉共享时收起来的账号又在账号表里了（重新打开共享时按映射加回来了，或者用户自己加回来了）：不再算收起来的
+    // 收起来的账号又在账号表里了（Team 又给了、照配置加回来了，或者用户自己加回来了）：不再算收起来的
     if let Some(p) = st.dict("parked") {
         let ids: HashSet<String> = table.keys().iter().map(|k| acct_id(k, tool)).collect();
         for aid in p.keys() {
@@ -167,7 +167,7 @@ fn team_park(table: &Dict, tool: &Tool, st: &Dict, added: &[String]) -> bool {
     }
     let src = policy_sources(tool);
     for k in added {
-        if let Some(tid) = src.str(&parse_key(k).1.to_lowercase()).filter(|t| !t.is_empty()) {
+        if let Some(tid) = src.str(&parse_key(k).1.to_lowercase()) {
             by.set(acct_id(k, tool), &*tid);
         }
     }
@@ -196,7 +196,7 @@ fn team_park(table: &Dict, tool: &Tool, st: &Dict, added: &[String]) -> bool {
             continue;
         }
         let parked = st.dict("parked").unwrap_or_default();
-        parked.set(&*aid, dict! { "key" => &*k, "node" => table.at(&k), "team" => tid }); // team：哪个 Team 加的（和关掉共享时收起来的分开数）
+        parked.set(&*aid, dict! { "key" => &*k, "node" => table.at(&k), "team" => tid }); // team：哪个 Team 加的（和 3.6.0 以前关掉共享时收起来的分开）
         st.set("parked", parked);
         table.pop(&k);
         by.pop(&aid);
@@ -253,7 +253,7 @@ pub fn table_problems(c: &Dict, table: &Dict, tool: &Tool, pm: &Dict) -> Vec<Str
                     errs.push(if !e.is_empty() && pm.has(&e.to_lowercase()) {
                         format!(
                             "{k}：{}要求它走「{s}」，可这个节点不在可选列表（{all}）。cca edit 改不了它：\
-                             运行 cca router setup 重新选可选节点（路由器上也没有这个节点的话，请联系维护者）",
+                             运行 cca router setup 重新选可选节点（路由器上也没有这个节点的话，请联系 Team 的管理员）",
                             by_whom(tool, &e)
                         )
                     } else {
@@ -275,10 +275,10 @@ pub fn table_problems(c: &Dict, table: &Dict, tool: &Tool, pm: &Dict) -> Vec<Str
     errs
 }
 
-/// 维护者的映射要用、还不在可选节点里的节点，是维护者参考配置里的（同步时 cca 把它写进路由器的配置）：自动加进
-/// 可选节点、记下摘要，说一声，映射里的账号随后就能加进来。还没有可选节点（没配置路由器）、这台机器删掉过的账号不算。
-/// server：服务器上导入维护者提供的节点（cca install 里维护者确认了这台机器之后，见 cmd_nodes_import）：还没有可选节点也加，
-/// 映射指定的安装节点也加，不说（bash 汇总成一句）。返回加进来的节点
+/// Team 的配置要用、还不在可选节点里的节点，是 Team 的配置带着的（同步时 cca 把它写进路由器的配置）：自动加进
+/// 可选节点、记下摘要，说一声，配置里的账号随后就能加进来。还没有可选节点（没配置路由器）、这台机器删掉过的账号不算。
+/// server：服务器上导入 Team 的配置带的节点（不用路由器的服务器，见 cmd_nodes_import）：还没有可选节点也加，
+/// 配置指定的安装节点也加，不说（bash 汇总成一句）。返回加进来的节点
 pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
     let Some(f) = policy_fill() else {
         return Vec::new();
@@ -326,7 +326,7 @@ pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
         if !server {
             notice(
                 "nodes_filled",
-                &format!("• {}：它在{}（同步时写进路由器的配置），已加进可选节点", filled_who(who, n), filled_where(n)),
+                &format!("• {}：它在Team 的配置带的节点里（同步时写进路由器的配置），已加进可选节点", filled_who(who, n)),
                 dict! { "node" => n },
             );
         }
@@ -334,16 +334,16 @@ pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
     want.into_iter().map(|(n, _)| n).collect()
 }
 
-/// nodes_filled 那句话的前半：谁要这些账号走这个节点（都是维护者的映射要的时和以前一字不差）
+/// nodes_filled 那句话的前半：哪几个 Team 的配置要这些账号走这个节点（Team 的名字一时读不出来时是「Team 的配置」）
 fn filled_who(who: &[String], n: &str) -> String {
     let teams: HashSet<String> = tools()
         .iter()
         .flat_map(|t| policy_sources(t).items())
-        .filter(|(e, tid)| who.iter().any(|w| **w == **e) && tid.truthy())
+        .filter(|(e, _)| who.iter().any(|w| **w == **e))
         .filter_map(|(_, tid)| super::team::grant_name(&tid.py_str()))
         .collect();
     if teams.is_empty() {
-        format!("维护者的映射要 {} 走节点 {n}", who.join("、"))
+        format!("Team 的配置要 {} 走节点 {n}", who.join("、"))
     } else {
         let mut names: Vec<String> = teams.into_iter().collect();
         names.sort();
@@ -351,23 +351,8 @@ fn filled_who(who: &[String], n: &str) -> String {
     }
 }
 
-/// nodes_filled 那句话里节点的定义在哪：某个 Team 的配置带着它就是 Team 的，不然是维护者的参考配置
-fn filled_where(n: &str) -> &'static str {
-    let in_team = super::team::grants().iter().any(|g| {
-        g.doc
-            .dict("nodes")
-            .and_then(|x| x.list("proxies"))
-            .is_some_and(|l| l.items().iter().any(|p| p.as_dict().is_some_and(|p| p.str("name").as_deref() == Some(n))))
-    });
-    if in_team {
-        "Team 的配置带的节点里"
-    } else {
-        "维护者的参考配置里"
-    }
-}
-
 /// 各工具的账号表一起对账（大家共用一个端口池）：各自已有的端口不动，新端口避开别的工具占着的。
-/// 账号表读不了的工具不对账，它记着的端口照样留着。映射要的参考节点先加进可选节点（policy_nodes_fill）
+/// 账号表读不了的工具不对账，它记着的端口照样留着。Team 的配置要的节点先加进可选节点（policy_nodes_fill）
 pub fn reconcile_all(c: &Dict) -> R<()> {
     for tool in tools() {
         tool.clear_errs();
@@ -424,7 +409,7 @@ pub fn cfg_save(c: &Dict) -> R<()> {
     save_json(&CFG, &V::Dict(c.clone()), Some(0o600), true)
 }
 
-/// 这台机器上删掉的映射里的账号记进 policy_skip：以后不再自动加回来（cca add 加回来时清掉）
+/// 这台机器上删掉的 Team 给的账号记进 policy_skip：以后不再自动加回来（cca add 加回来时清掉）
 pub fn policy_skip_add(tool: &Tool, emails: &[String]) -> R<()> {
     let c = cfg_load()?;
     let st = tool.state(&c, true);
@@ -561,7 +546,7 @@ mod tests {
         );
         let pinned = dict! { "a@example.com" => "ZZ" };
         assert!(table_problems(&c, &dict! { "a@example.com" => "ZZ" }, claude(), &pinned)[0]
-            .starts_with("a@example.com：维护者的映射要求它走「ZZ」"));
+            .starts_with("a@example.com：Team 的配置要求它走「ZZ」"));
     }
 
     #[test]

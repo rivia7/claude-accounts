@@ -517,7 +517,7 @@ pub fn mail_forget_orphans() -> R<()> {
         Some(V::Dict(table)) => table.keys().iter().map(|k| acct_id(k, claude())).collect(),
         Some(_) => Vec::new(),
     };
-    // 关掉共享时收起来的账号：不在账号表里，单独配的邮箱照样留着（重新打开共享时加回来）
+    // 收起来的账号（Team 不再给的；3.6.0 以前关掉共享时收起来的）：不在账号表里，单独配的邮箱照样留着（再给回来时加回来）
     live.extend(crate::core::policy::parked(&c, claude()).keys().iter().map(|a| a.to_string()));
     let orphan: Vec<_> = accts.keys().into_iter().filter(|aid| !live.iter().any(|l| **l == **aid)).collect();
     if orphan.is_empty() {
