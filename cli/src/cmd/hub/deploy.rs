@@ -396,7 +396,7 @@ fn fail_code(code: &str) -> &'static str {
 fn fail_why(code: &str, why: &str, o: &Opts) -> String {
     match code {
         "sudo" => format!("{} 不是 root，sudo 又要密码：用 root 登录（root@服务器），或者给这个用户免密码的 sudo", o.target),
-        _ if why.is_empty() => "服务器上没装成".to_string(),
+        _ if why.is_empty() => format!("服务器上没{}成", o.job.act()),
         _ => why.to_string(),
     }
 }
@@ -855,8 +855,10 @@ mod tests {
         let (c, why) = ssh_trouble("root@192.0.2.10: Permission denied (publickey).\n", &o);
         assert_eq!(c, "ssh_keyonly");
         assert!(why.contains("在终端里运行 cca team leave（在那里输私钥的密码）"), "{why}");
+        assert_eq!(fail_why("install", "", &o), "服务器上没卸载成", "安装脚本没说原因时");
         let d = Opts { job: Job::Deploy, ..o };
         assert!(ssh_trouble("Host key verification failed.\n", &d).1.ends_with("再部署"), "部署的说法不变");
+        assert_eq!(fail_why("install", "", &d), "服务器上没装成");
     }
 
     #[test]
