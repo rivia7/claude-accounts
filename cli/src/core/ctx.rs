@@ -326,7 +326,7 @@ pub fn policy_nodes_fill(c: &Dict, server: bool) -> Vec<String> {
         if !server {
             notice(
                 "nodes_filled",
-                &format!("• {}：它在Team 的配置带的节点里（同步时写进路由器的配置），已加进可选节点", filled_who(who, n)),
+                &format!("• {}：它在 Team 的配置带的节点里（同步时写进路由器的配置），已加进可选节点", filled_who(who, n)),
                 dict! { "node" => n },
             );
         }

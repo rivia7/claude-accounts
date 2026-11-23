@@ -55,7 +55,7 @@
   `_policy-lock`、`_team-handoff` 说去掉了。一键安装时带着 `CCA_POLICY_REPO` 只提醒一句（不再起作用，装好以后 `cca team join`）。
 - **升级以后清掉留下的**（`policy_leftovers`，和 `hub_leftovers` 一个样子）：第一条走 `main` 默认那一支的命令（`_` 开头的、`install`、`gui`、`clients`、`cost`、
   `remote`、`team`、`update`、`restore` 这些不经过它；在 `update_after` 之后、`team_hook` 之前）看到 `~/.cca/policy/` 还在时，先 `py policy-retire` 去掉 config.json 的
-  `policy`、`policy_was`、`policy_declined`（config.json 正被别的命令锁着时什么都不删，下一条命令再来），再删 `~/.cca/policy/`、经维护者的服务器
+  `policy`、`policy_was`、`policy_declined`（config.json 只读、读不了、写不进去时什么都不删，下一条命令再来；别的命令拿着 sync.lock 时等它放开），再删 `~/.cca/policy/`、经维护者的服务器
   同步的状态（没有 `team.<编号>.` 前缀的 `presence/status.json`、`presence/keys.json`、`presence/keys.lock`、`presence/keys-sync.lock`、
   `cost/sync.json`、`cost/remote.json`）和 `teams/adopt.json`、`teams/adopt.lock`；Team 的状态文件不碰。共享开着、又不在任何 Team 里的设备
   在终端里说一次怎么加入（`policy-retire` 的 stdout 不是空的）。映射加进来的账号留在账号表里，出口不再被固定；迁到了 Team 的设备照 Team 的配置用。

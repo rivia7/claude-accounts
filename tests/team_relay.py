@@ -255,6 +255,23 @@ class NoRelayTest(rr.Base):
         self.addCleanup(lambda: (p.kill(), p.wait(), p.stdout.close(), p.stderr.close()))
         self.assertRegex(p.stdout.readline(), r'^code [0-9A-Z]{4}(-[0-9A-Z]{4}){3}$')
 
+    def test_need(self):
+        """cca remote pair / join 问同意之前先看一眼（remote-hubs --need，bash 的 remote_need_hub）：一台都用不了时说的原因和配对时
+        一样（不在哪个 Team 里、Team 还没接上服务器……），用得了时什么都不说"""
+        admin = Device(self.d / 'admin', 'admin', {})
+        r = admin.run('remote-hubs', '--need')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (1, '', '先加入或者新建一个 Team：远程会话经 Team 的服务器中转\n'))
+        admin.ok('team-new', '研发组', '--device', 'studio')
+        r = admin.run('remote-hubs', '--need')
+        self.assertEqual((r.returncode, r.stdout), (1, ''))
+        self.assertIn('「研发组」还没有接上同步服务器', r.stderr)
+        dev = self.device('box')   # 在测试组里，它的服务器用得了
+        r = dev.run('remote-hubs', '--need')
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
+        r = dev.run('remote-hubs', '--nope')
+        self.assertEqual((r.returncode, r.stdout), (1, ''))
+        self.assertIn('用法', r.stderr)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

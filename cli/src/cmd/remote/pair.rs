@@ -343,11 +343,23 @@ fn row(p: &Peer, note: &str) -> String {
 }
 
 /// `remote-hubs`：这台机器现在用得了的中转服务器，一行一台：`编号<TAB>给人看的名字`（编号是 Team 的编号；3.6.0 起没有
-/// maintainer 那一行了），没说在哪台上配对时用的那一台（home_hub）后面再有 `<TAB>home`。bash 拿它给人看配对记在哪台服务器上
+/// maintainer 那一行了），没说在哪台上配对时用的那一台（home_hub）后面再有 `<TAB>home`。bash 拿它给人看配对记在哪台服务器上。
+/// `--need`：配对之前（还没问同意，bash 的 remote_need_hub）看一眼：用得了的话什么都不输出；一台都用不了时和配对一样说原因
+/// （need_server：不在哪个 Team 里、Team 还没接上服务器、配置还没同步下来……；stderr，退出码 1）
 pub fn cmd_remote_hubs(args: &[String]) -> R<()> {
-    arity("cmd_remote_hubs", args, 0, 0)?;
+    arity("cmd_remote_hubs", args, 0, 1)?;
+    let servers = relay::servers()?;
+    match args.first().map(String::as_str) {
+        None => {}
+        Some("--need") if servers.is_empty() => {
+            need_server(None)?;
+            return die("远程会话经 Team 的服务器中转，这台机器现在一台都用不了");
+        }
+        Some("--need") => return Ok(()),
+        Some(_) => return die("用法: remote-hubs [--need]"),
+    }
     let home = relay::home_hub();
-    for s in relay::servers()? {
+    for s in servers {
         let mark = if Some(s.kind) == home { "\thome" } else { "" };
         crate::out!("{}\t{}{mark}", s.kind.team(), relay::label(s.kind));
     }

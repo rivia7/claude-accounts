@@ -5303,9 +5303,11 @@ remote_hub_label() {   # 给人看的：REMOTE_HUB 是谁的服务器。写的�
 			printf '%s' "${name:-「${REMOTE_HUB}」的服务器}" ;;
 	esac
 }
-remote_need_hub() {   # 配对要经 Team 的服务器中转（3.6.0 起没有维护者的那一台了）：这台设备一台都用不了时先说清楚，不先问同意
-	[ -z "$(py remote-hubs 2>/dev/null)" ] || return 0
-	die "远程会话经 Team 的服务器中转，这台设备还没有能用的：先加入一个 Team（cca team join），或者自己建一个、部署它的服务器（cca team new）"
+remote_need_hub() {   # 配对要经 Team 的服务器中转（3.6.0 起没有维护者的那一台了）：这台设备一台都用不了时先说清楚，不先问同意。
+	                    # 原因照辅助程序说（和配对时一样：不在哪个 Team 里、Team 还没接上服务器、配置还没同步下来……）
+	local why
+	why=$(py remote-hubs --need 2>&1) && return 0
+	die "${why:-远程会话经 Team 的服务器中转，这台机器现在一台都用不了}"
 }
 remote_pair_run() {   # remote_pair_run web|"" [--hub 服务器]：出一个配对码、等另一台机器输入；配好了把对方的名字放进 REMOTE_PEER，没配成把原因放进 REMOTE_ERR。
 	                    # web：这次配对开给手机上的网页端（辅助程序多给一行网页端的地址，一起显示出来）。后面的参数原样交给辅助程序。辅助程序在后台跑
@@ -7152,7 +7154,8 @@ policy_leftovers() {   # 3.6.0 去掉了维护者的映射（维护者私有仓�
 	                    # 留下的映射、参考节点、deploy key、拉取的记录，经维护者的服务器同步的状态（没有 team.<编号>. 前缀的设备统计、记下的
 	                    # API key、折合金额），映射里的 Team 邀请（teams/adopt.*），config.json 里的开关（py policy-retire）都删掉。映射里的账号
 	                    # 照旧留在账号表里，出口不再受映射约束（迁到了 Team 的设备，Team 照旧给这些账号）；共享开着、又没加入任何 Team 的设备
-	                    # 说一声怎么加入。main 看到 policy/ 还在时调；config.json 没改成（正被别的命令锁着）就留着 policy/，下一条命令再来
+	                    # 说一声怎么加入。main 看到 policy/ 还在时调；config.json 没改成（只读、读不了、写不进去）就留着 policy/，下一条命令再来（别的命令拿着
+	                    # sync.lock 时等它放开）
 	local alone
 	alone=$(py policy-retire 2>/dev/null) || return 0
 	rm -rf "$CCA_HOME/policy" 2>/dev/null
@@ -7975,7 +7978,7 @@ main() {
 				exit 0
 			fi
 			update_hook "$@"
-			update_after   # 换了版本以后的第一条命令：下面两个马上在后台做，不等间隔
+			update_after   # 换了版本以后的第一条命令：各个 Team 马上在后台同步一次配置（team_hook），不等间隔
 			[ ! -d "$CCA_HOME/policy" ] || policy_leftovers   # 3.6.0 去掉了维护者的映射：升级上来的设备上留下的，第一条命令时清掉
 			team_hook
 			gui_hook
