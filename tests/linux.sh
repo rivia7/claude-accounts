@@ -8,11 +8,12 @@
 #   内置代理：cca local setup（下载、校验内核，后台托管，端口池，问过后在 crontab 里加开机起内核的一行）→ 经账号的端口访问本机的
 #     HTTP 服务 → 杀掉内核看托管进程拉起来 → 模拟重启（照 crontab 那一行、在 cron 的环境里起托管进程）
 #   登录（给出在 Mac 上运行的 cca login-page 那一行：带别名、节点和节点摘要；贴回验证码，转给假 claude 本机的回调）→ 启动账号 →
-#     API key 存成 600 的文件 → 维护者的映射（假 git：验签、照映射加账号、签名不对不换）→ 设备统计（真的 server/cca-presence.py：
-#     会话开着报在用、关了报没在用；会话的登记、进程的启动时间从 /proc 读）→ Codex（假的 codex 和 app-server：添加、服务器上登录、
-#     启动、查用量、cxa）→ 真实的出口和泄露检测（测试节点直连出去；服务器上不测 WebRTC）→ 只在 macOS 上的命令说清楚 → cca local off
-#   服务器上不用路由器（全新的 HOME，直连通不通由假 curl 定）：直连不通时 cca install 不问路由器，给出维护者运行的那一行，先跳过；
-#     维护者加上公钥后再运行：拉到映射、导入映射指定的节点、照映射加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
+#     API key 存成 600 的文件 → Team（真的 server/cca-presence.py --mode team，管理员由 tests/spec_wire.py 扮演：加入、照配置加账号、
+#     不是根密钥签的一版不用）→ 设备统计（报给 Team 的服务器：会话开着报在用、关了报没在用；会话的登记、进程的启动时间从 /proc 读）
+#     → Codex（假的 codex 和 app-server：添加、服务器上登录、启动、查用量、cxa）→ 真实的出口和泄露检测（测试节点直连出去；服务器上
+#     不测 WebRTC）→ 只在 macOS 上的命令说清楚 → cca local off
+#   服务器上不用路由器（全新的 HOME，直连通不通由假 curl 定）：直连不通时 cca install 不问路由器，先问有没有 Team 的邀请链接，没有就
+#     先跳过；再运行时贴上邀请链接：加入、导入 Team 的配置指定的节点、照配置加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
 #   Team 的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py：这个发行版的 sh、openssl、python3，假的 systemctl、docker 起真的服务端）
@@ -116,7 +117,7 @@ for p in $(seq 7901 7916) 18080 18081; do
 	if (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then echo "端口 $p 已被占用（这台机器上有在用的 cca？）：不跑" >&2; exit 2; fi
 done
 D=$(mktemp -d "${TMPDIR:-/tmp}/cca-linux-test.XXXXXX")
-H="$D/home"; mkdir -p "$H/.local/bin" "$H/.cache" "$D/bin" "$D/up" "$D/www" "$D/policy_repo"
+H="$D/home"; mkdir -p "$H/.local/bin" "$H/.cache" "$D/bin" "$D/up" "$D/www"
 cleanup() {   # 停掉这次起的进程（测试服务、内核、托管进程、上报进程、后台下载…：命令行或环境里带着 $D 的），删掉沙箱
 	local p n h
 	kill $(cat "$D/pids" 2>/dev/null) 2>/dev/null
@@ -310,17 +311,7 @@ case "\$1" in
 	*) echo "crontab: 测试里只支持 -l 和 -" >&2; exit 2 ;;
 esac
 S
-# 假的 git：只管 cca 拉映射的 git clone（把 $D/policy_repo 里的文件拷过去），记下用的 ssh 命令；$D/policy_denied 时像 GitHub 不认这台
-# 机器的 deploy key（维护者还没加上）那样拒绝
-cat > "$D/bin/git" <<S
-#!/bin/sh
-echo "GIT \$* SSH=\${GIT_SSH_COMMAND:-}" >> "$D/git.log"
-[ "\$1" = clone ] || exit 1
-if [ -f "$D/policy_denied" ]; then echo 'git@github.com: Permission denied (publickey).' >&2; echo 'fatal: Could not read from remote repository.' >&2; exit 128; fi
-for a; do dst=\$a; done
-rm -rf "\$dst" && mkdir -p "\$dst" && cp -R "$D/policy_repo/." "\$dst/"
-S
-chmod 755 "$D/bin/claude" "$D/bin/codex" "$D/bin/crontab" "$D/bin/git"
+chmod 755 "$D/bin/claude" "$D/bin/codex" "$D/bin/crontab"
 # 假的 curl（包着真的）：cca 直连 claude.ai 这些的 /cdn-cgi/trace（direct_probe：服务器上能不能直连）由测试定，不看这台机器的网络：
 # $D/direct_down 时连不上，$D/direct_loc 是出口地区（默认 US）。CCA_LINUX_CORE_CACHE（--docker 时宿主机下好的内核）：cca 下载内核时
 # 从这里拿（照样校验 SHA256）。别的照常交给真的 curl
@@ -348,7 +339,7 @@ esac
 exec "$REAL" "$@"
 S
 chmod 755 "$D/bin/curl"
-export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" CCA_POLICY_DEFAULT= LANG=C.UTF-8 CCA_COST=off
+export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" LANG=C.UTF-8 CCA_COST=off
 unset CCA_HOME XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CACHE_HOME DISPLAY WAYLAND_DISPLAY   # XDG_CACHE_HOME：辅助程序解在它里面，不清掉就解到沙箱外面去了
 echo "  bash ${BASH_VERSION%%(*}，$(python3 --version 2>&1)，$(curl --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2)，nc：$(readlink -f "$(command -v nc)" 2>/dev/null || echo 无)，ps：$(readlink -f "$(command -v ps)" 2>/dev/null || echo 无)，ruby：$(ruby -e 'print RUBY_VERSION' 2>/dev/null || echo 无)"
 ans() { local f; f=$(mktemp "$D/ans.XXXXXX"); printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
@@ -365,7 +356,7 @@ python3 -I "$R/cli/pack.py" "$R/cca" "$I/cca.packed" --only "$HT=$HB" >/dev/null
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$I/cca.packed" > "$I/gh/cca"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$R/install.sh" > "$I/install.sh"
 ssh-keygen -q -Y sign -f "$I/relkey" -n cca-release "$I/gh/cca" </dev/null
-# 下面用的 cca：同一份（认这次的发布密钥：映射、设备清单都用它签），旁边有 .git（开发模式：不自动更新，不去连 GitHub）
+# 下面用的 cca：同一份（认这次的发布密钥），旁边有 .git（开发模式：不自动更新，不去连 GitHub）
 mkdir -p "$D/cca/.git"; C="$D/cca/cca"; cp "$I/gh/cca" "$C"; chmod 755 "$C"
 # 假 GitHub：releases/latest 跳到 $I/gh/latest 里写的版本，releases/download/v版本/ 下是 $I/gh/v版本/ 里的文件
 { echo '#!/bin/sh'; echo "I='$I'"; cat <<'S'; } > "$I/bin/curl"
@@ -538,47 +529,70 @@ else no "第三方 API 账号（退出码 $rc）：$(printf '%s\n%s' "$out" "$ou
 CCA_TTY=$(ans y) "$C" rm kf >/dev/null 2>&1
 if [ -z "$(ls "$H"/.cca/secrets/cca-api-kf-* 2>/dev/null)" ]; then ok "cca rm：第三方 API 账号的 key 文件一起删掉"; else no "cca rm 之后 key 文件还在"; fi
 
-# 维护者的映射：假 git 把 $D/policy_repo 当作私有仓库（这次的发布密钥签名）。cca policy setup 生成这台机器的 deploy key、拉取、验签，
-# 照映射加上这台机器还没有的账号（bob，别名取映射里的）
-PR="$D/policy_repo"
-pol() { printf '%s\n' "$1" > "$PR/policy.json"; rm -f "$PR/policy.json.sig"; ssh-keygen -q -Y sign -n cca-policy -f "$I/relkey" "$PR/policy.json" </dev/null; }
-pol '{"version": 1, "claude": {"alice@example.com": "US-A", "bob@example.com": "US-A"}, "aliases": {"bob@example.com": "bob"}}'
-out=$("$C" policy setup example/cca-policy 2>&1); rc=$?
-PK="$H/.cca/policy/id_ed25519"
-if [ $rc -eq 0 ] && [ "$(sha256sum < "$PR/policy.json")" = "$(sha256sum < "$H/.cca/policy/policy.json" 2>/dev/null)" ] && [ "$(stat -c %a "$PK" 2>/dev/null)" = 600 ] && ! printf '%s' "$out" | grep -q '路由器' &&
-	printf '%s' "$out" | grep -qF "$(cut -d' ' -f1-2 "$PK.pub")" && grep -q 'IdentitiesOnly=yes' "$D/git.log" && grep -q 'IdentityAgent=none' "$D/git.log" &&
-	grep -q '"bob(bob@example.com)": "US-A"' "$H/.cca/accounts.json"; then
-	ok "cca policy setup：生成 deploy key（600）、只用它拉取、验签，照映射加上 bob（别名取映射里的；没有路由器，不提同步路由器）"
-else no "cca policy setup（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)；账号表：$(tr -d '\n' < "$H/.cca/accounts.json")"; fi
-cp "$PR/policy.json.sig" "$D/sig.keep"
-printf '%s\n' '{"version": 1, "claude": {"alice@example.com": "US-B"}}' > "$PR/policy.json"; cp "$D/sig.keep" "$PR/policy.json.sig"
-out=$("$C" policy pull 2>&1); rc=$?
-out2=$("$C" policy 2>&1)
-if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q '签名' && grep -q 'bob@example.com' "$H/.cca/policy/policy.json" &&
-	printf '%s' "$out2" | grep -qE '映射：.*（20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ 拉到的）'; then
-	ok "签名对不上的映射不换（接着用上次的）；cca policy 说上次什么时候拉到的"
-else no "签名对不上的映射（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)；$(printf '%s' "$out2" | grep '映射' | head -n 1)"; fi
-pol '{"version": 1, "claude": {"alice@example.com": "US-A", "bob@example.com": "US-A"}, "aliases": {"bob@example.com": "bob"}}'
-"$C" policy pull >/dev/null 2>&1
-
-# 设备统计（presence）：映射里配置了维护者的服务器（真的 server/cca-presence.py：127.0.0.1 上随机端口、openssl 生成的 P-256 证书、
-# 这次的发布密钥，ttl 3 秒），设备清单是这台机器的 deploy key（发布密钥签名）。映射里的账号开着会话时 cca 在后台起上报进程报给服务器
-# （Linux 上没有 kqueue：每 5 秒看一次）；会话的登记（cli-<进程号>.json）、进程的启动时间从 /proc 读（busybox 的 ps 不认 -p、-x、lstart）
+# Team「书房组」：真的 server/cca-presence.py --mode team（127.0.0.1 上随机端口、openssl 生成的 P-256 证书，ttl 10 秒），管理员由
+# tests/spec_wire.py 扮演（照 server/README.md 独立实现的那一头，不用 cca 的代码；签名用 ssh-keygen -Y）。后面服务器上不用路由器那一节
+# 也用它（另一台设备）。没有 openssl 时生成不了服务器的证书：这几个用例跳过
+TV="$D/team"; TVPORT=""; TID=""
+team_put() {   # team_put 那串随机数 序号 'JSON' [签名的密钥]：管理员给那串随机数派生出来的设备存一版配置（accounts、aliases、nodes、install_node
+	         # 照 JSON），序号是 1 时先发邀请；写了签名的密钥时拿它签（不是根密钥签的：像服务器被人冒充）。打印邀请链接
+	python3 -B - "$R/tests" "$TV/root" "$TVPORT" "https://127.0.0.1:$TVPORT" "$TVPIN" "$@" <<'PY'
+import hashlib, json, sys
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw
+root, port, url, pin, secret, seq = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], int(sys.argv[7])
+signer = sys.argv[9] if sys.argv[9:] else root
+pub = ' '.join(open(root + '.pub').read().split()[:2])
+token, dev, keys = sw.invite_parts(secret)
+tid = sw.team_id(pub)
+if seq == 1:
+    st, j = sw.post(root, port, 'team_invite', {'token': hashlib.sha256(token.encode()).hexdigest(), 'dev': dev, 'ttl': 600})
+    assert st == 200, (st, j)
+doc = {'v': 1, 'at': 1790000000 + seq, 'name': '书房组', 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
+       'accounts': {}, 'aliases': {}, 'install_node': '', 'nodes': None}
+doc.update(json.loads(sys.argv[8]))
+ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
+st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(signer, tid, dev, seq, ct)}}})
+assert (st, j.get('stored')) == (200, [dev]), (st, j)
+print(sw.invite_encode(url, [pin], pub, secret, '书房组'))
+PY
+}
 if command -v openssl >/dev/null 2>&1; then
-	SV="$D/presence"; mkdir -p "$SV"
-	openssl ecparam -name prime256v1 -genkey -noout -out "$SV/key.pem" 2>/dev/null
-	openssl req -new -x509 -key "$SV/key.pem" -subj /CN=cca-presence -days 2 -out "$SV/cert.pem" 2>/dev/null
-	python3 -I "$R/server/cca-presence.py" --listen 127.0.0.1:0 --port-file "$SV/port" --cert "$SV/cert.pem" --key "$SV/key.pem" \
-		--release-key "$I/relkey.pub" --state "$SV/state.json" --ttl 3 >> "$SV/log" 2>&1 & echo $! >> "$D/pids"
-	for i in $(seq 1 50); do [ -s "$SV/port" ] && break; sleep 0.1; done
-	SVPORT=$(cat "$SV/port" 2>/dev/null)
-	PIN="sha256//$(openssl x509 -in "$SV/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"
-	pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]={"url":"https://127.0.0.1:%s" % sys.argv[2],"pins":[sys.argv[3]],"salt":"ab"*16}; print(json.dumps(j))' "$PR/policy.json" "$SVPORT" "$PIN")"
-	"$C" policy pull >/dev/null 2>&1
-	printf '{"version":1,"seq":%s,"machines":[{"key":"%s","name":"linux-test"}]}' "$(date +%s)" "$(cut -d' ' -f1-2 "$PK.pub")" > "$SV/machines.json"
-	ssh-keygen -q -Y sign -n cca-devices -f "$I/relkey" "$SV/machines.json" </dev/null
-	code=$(curl -q -s -k --noproxy '*' --pinnedpubkey "$PIN" -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-		-H "X-Cca-Sig: $(base64 < "$SV/machines.json.sig" | tr -d '\n')" --data-binary "@$SV/machines.json" "https://127.0.0.1:$SVPORT/v1/machines")
+	mkdir -p "$TV"
+	openssl ecparam -name prime256v1 -genkey -noout -out "$TV/key.pem" 2>/dev/null
+	openssl req -new -x509 -key "$TV/key.pem" -subj /CN=cca-team -days 2 -out "$TV/cert.pem" 2>/dev/null
+	ssh-keygen -q -t ed25519 -N '' -C root -f "$TV/root" </dev/null; ssh-keygen -q -t ed25519 -N '' -C evil -f "$TV/evil" </dev/null
+	python3 -I "$R/server/cca-presence.py" --mode team --team-root "$(cut -d' ' -f1-2 "$TV/root.pub")" --listen 127.0.0.1:0 --port-file "$TV/port" \
+		--cert "$TV/cert.pem" --key "$TV/key.pem" --state "$TV/state.json" --ttl 10 >> "$TV/log" 2>&1 & echo $! >> "$D/pids"
+	for i in $(seq 1 50); do [ -s "$TV/port" ] && break; sleep 0.1; done
+	TVPORT=$(cat "$TV/port" 2>/dev/null)
+	TVPIN="sha256//$(openssl x509 -in "$TV/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"
+fi
+if [ -n "$TVPORT" ]; then
+	# 这台机器拿邀请链接加入（--stdin：链接是凭证，不写在命令行上），照 Team 的配置加上这台机器还没有的账号（bob，别名取配置里的）；
+	# alice 这台机器上本来就有，Team 也给了它（节点一样）
+	TS1=$(printf '1a%.0s' $(seq 1 16))
+	TLINK=$(team_put "$TS1" 1 '{"accounts": {"claude": {"alice@example.com": "US-A", "bob@example.com": "US-A"}}, "aliases": {"bob@example.com": "bob"}}')
+	out=$(printf '%s' "$TLINK" | "$C" team join --stdin --name linux-test 2>&1); rc=$?
+	TID=$(ls "$H/.cca/teams" 2>/dev/null | grep -E '^[0-9a-f]{32}$')
+	[ -z "$TID" ] || touch "$H/.cca/teams/checked"   # 不让启动时的后台同步（一个小时一次）插进来：同步都是测试自己做的
+	if [ $rc -eq 0 ] && [ -n "$TLINK" ] && [ -n "$TID" ] && printf '%s' "$out" | grep -q "已加入「书房组」（127.0.0.1:${TVPORT}）：这台设备叫 linux-test" &&
+		grep -q '"bob(bob@example.com)": "US-A"' "$H/.cca/accounts.json" && [ "$(stat -c %a "$H/.cca/teams/$TID/doc.json" 2>/dev/null)" = 600 ] &&
+		! printf '%s' "$out" | grep -q '路由器' && ! printf '%s' "$out" | grep -qF "$TLINK"; then
+		ok "cca team join --stdin：加入 Team，照它的配置加上 bob（别名取配置里的；没有路由器，不提同步路由器）；本机存的配置只有自己能读（600）"
+	else no "cca team join（退出码 $rc）：$(printf '%s' "$out" | tail -n 3)；账号表：$(tr -d '\n' < "$H/.cca/accounts.json")"; fi
+	team_put "$TS1" 2 '{"accounts": {"claude": {"alice@example.com": "US-A"}}}' "$TV/evil" >/dev/null
+	out=$("$C" team sync 2>&1); rc=$?
+	if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q '书房组：配置的签名不是这个 Team 的根密钥签的（可能有人冒充服务器）：不用它' &&
+		grep -q '"bob(bob@example.com)": "US-A"' "$H/.cca/accounts.json"; then
+		ok "不是 Team 的根密钥签的一版（像服务器被人冒充）：cca team sync 说出来（退出码非 0），不用它，接着用手里的那一版"
+	else no "签名不对的一版（退出码 $rc）：$(printf '%s' "$out" | tail -n 2)"; fi
+	team_put "$TS1" 3 '{"accounts": {"claude": {"alice@example.com": "US-A", "bob@example.com": "US-A"}}, "aliases": {"bob@example.com": "bob"}}' >/dev/null
+	"$C" team sync >/dev/null 2>&1
+fi
+
+# 设备统计（presence）：Team 给的账号开着会话时 cca 在后台起上报进程，报给这个 Team 的服务器（Linux 上没有 kqueue：每 5 秒看一次）；
+# 会话的登记（cli-<进程号>.json）、进程的启动时间从 /proc 读（busybox 的 ps 不认 -p、-x、lstart）
+if [ -n "$TID" ]; then
 	dstate() { "$C" devices alice@example.com --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' 2>/dev/null; }
 	AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
 	touch "$D/hold"
@@ -589,9 +603,9 @@ if command -v openssl >/dev/null 2>&1; then
 	for i in $(seq 1 60); do [ "$(dstate)" = linux-test:in_use:1 ] && break; sleep 0.8; done
 	st1=$(dstate)
 	ap=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$H/.cca/presence/agent.json" 2>/dev/null)
-	if [ "$code" = 200 ] && [ "$mk" = "$S1:claude" ] && [ "$st1" = linux-test:in_use:1 ] && [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; then
-		ok "设备统计：会话开着时登记 cli-<进程号>.json（启动时间从 /proc 读），后台的上报进程报给服务器：在用、1 个会话"
-	else no "设备统计：设备清单 HTTP ${code:-无}，登记 ${mk:-没有}，服务器上是「${st1:-空}」，上报进程 ${ap:-没有}；$(tail -n 2 "$SV/log" 2>/dev/null | tr '\n' ' ')$(cat "$H/.cca/presence/status.json" 2>/dev/null)"; fi
+	if [ "$mk" = "$S1:claude" ] && [ "$st1" = linux-test:in_use:1 ] && [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; then
+		ok "设备统计：Team 给的账号会话开着时登记 cli-<进程号>.json（启动时间从 /proc 读），后台的上报进程报给 Team 的服务器：在用、1 个会话"
+	else no "设备统计：登记 ${mk:-没有}，服务器上是「${st1:-空}」，上报进程 ${ap:-没有}；$(tail -n 2 "$TV/log" 2>/dev/null | tr '\n' ' ')$(cat "$H/.cca/presence/team.$TID.status.json" 2>/dev/null)"; fi
 	rm -f "$D/hold"; wait "$S1" 2>/dev/null
 	for i in $(seq 1 80); do [ "$(dstate)" = linux-test:none:0 ] && break; sleep 0.8; done
 	st2=$(dstate)
@@ -599,12 +613,14 @@ if command -v openssl >/dev/null 2>&1; then
 	if [ "$st2" = linux-test:none:0 ] && [ ! -e "$AD/cli-$S1.json" ] && ! { [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; }; then
 		ok "会话关了：登记删掉，上报进程几秒内报“没在用”后自己退出"
 	else no "会话关了之后：服务器上是「${st2:-空}」，登记$([ -e "$AD/cli-$S1.json" ] && echo 还在 || echo 删了)，上报进程$({ [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; } && echo 还在 || echo 退出了)"; fi
+elif [ -n "$TVPORT" ]; then
+	no "设备统计：没加入成 Team，测不了"
 else
-	echo "  （跳过设备统计：没有 openssl，生成不了服务器的证书）"
+	echo "  （跳过 Team 和设备统计：没有 openssl，生成不了服务器的证书）"
 fi
 
 # 远程会话（docs/dev/remote.md）：会话宿主和接入端、两台机器配对、经服务器中转接入。两份 Python 测试把辅助程序当黑盒跑
-# （真的伪终端、真的服务器进程、每台设备一个临时 HOME 和自己的 deploy key），不碰上面的沙箱。只在宿主机上跑：容器里各发行版的
+# （真的伪终端、真的服务器进程、每台设备一个临时 HOME 和自己在 Team 里的密钥），不碰上面的沙箱。只在宿主机上跑：容器里各发行版的
 # ps、pgrep 不一样（busybox 的 ps 没有 -p），还没在那一套上试过
 if [ -n "${CCA_LINUX_CONTAINER:-}" ]; then
 	echo "  （容器里不跑远程会话的测试）"
@@ -768,8 +784,9 @@ mkdir -p "$H/.cca/secrets" "$H/.cca/accounts/orphan-example-com/claude"
 echo '{"v": 1, "host": "api.example.com", "key": "sk-LEFTOVER-SECRET"}' > "$H/.cca/secrets/cca-api-orphan"
 echo '{"claudeAiOauth": {"accessToken": "cred-LEFTOVER-SECRET"}}' > "$H/.cca/accounts/orphan-example-com/claude/.credentials.json"
 printf '%s\n' "@reboot '$C' _core-keep >/dev/null 2>&1 # cca-core" >> "$D/crontab"
-# 维护者的参考节点里有节点密钥（连同拉取映射时留下的临时文件）：也不进备份；映射本身照样打包
-mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; [ -f "$H/.cca/policy/policy.json" ] || echo '{}' > "$H/.cca/policy/policy.json"
+# 3.6.0 以前拉过维护者的映射、升级以后还没运行过别的命令（第一条走默认那一支的命令就删掉 ~/.cca/policy；cca uninstall 不走那一支）：
+# 参考节点里有节点密钥（连同拉取映射时留下的临时文件），也不进备份；映射本身照样打包
+mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; echo '{}' > "$H/.cca/policy/policy.json"
 for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do
 	printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}' > "$H/.cca/policy/$f"
 done
@@ -810,70 +827,53 @@ else
 	else no "卸载以后 ~/.bashrc：$(tr '\n' '|' < "$H/.bashrc")"; fi
 fi
 
-# 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理。
-# 一键安装时带了 CCA_POLICY_REPO（打开着维护者的共享）：节点由维护者提供，不问有没有 Team 的邀请链接。维护者还没加上这台机器的公钥（假 git 拒绝）时给出维护者运行的那一行，回答 s 先跳过；加上之后再运行 cca install：
-# 拉到映射，导入映射指定的节点（install_node、映射里账号的节点，只要维护者参考节点里有），照映射加上账号，内置代理由 cca _core-keep
-# 托管（问过后在 crontab 里加开机那一行），经账号的端口出去。内核文件用前面下好的那份（不再下载一次）
+# 服务器上不用路由器：全新的 HOME，从来没配置过路由器、直连不通（假 curl：$D/direct_down）时，cca install 不问路由器，改用内置代理，
+# 先问有没有 Team 的邀请链接。一键安装时带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：只说一声去掉了。先回答没有、也不贴代理：
+# 先跳过。再运行 cca install、贴上 Team 的邀请链接（上面「书房组」的服务器，另一台设备）：加入，导入 Team 的配置指定的节点（install_node、
+# 给这台设备的账号的节点，只要配置带的节点里有），照配置加上账号，内置代理由 cca _core-keep 托管（问过后在 crontab 里加开机那一行），
+# 经账号的端口出去。内核文件用前面下好的那份（不再下载一次）
 SH="$D/shome"; mkdir -p "$SH/.local/bin"
-sr() { HOME="$SH" PATH="$SH/.local/bin:$PATH" CCA_POLICY_DEFAULT=example/cca-policy "$@"; }   # ~/.local/bin 在 PATH 里：不问要不要写进 ~/.bashrc
+sr() { HOME="$SH" PATH="$SH/.local/bin:$PATH" "$@"; }   # ~/.local/bin 在 PATH 里：不问要不要写进 ~/.bashrc
 if [ -x "$D/mihomo" ]; then mkdir -p -m 700 "$SH/.cca" "$SH/.cca/core" && cp "$D/mihomo" "$SH/.cca/core/mihomo-v$(sed -n 's/^CORE_VERSION="\(.*\)"$/\1/p' "$C")"; fi
-pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-S"}'
-printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-S", "type": "socks5", "server": "127.0.0.1", "port": 18080}, {"name": "US-X", "type": "ss", "server": "192.0.2.83", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$PR/nodes.json"
-rm -f "$PR/nodes.json.sig"; ssh-keygen -q -Y sign -n cca-nodes -f "$I/relkey" "$PR/nodes.json" </dev/null
-touch "$D/direct_down" "$D/policy_denied"; : > "$D/curl.log"
-out=$(sr env CCA_TTY="$(ans s)" CCA_POLICY_REPO=example/cca-policy "$C" install 2>&1); rc=$?
-pk="$SH/.cca/policy/id_ed25519.pub"
-line=$(printf '%s\n' "$out" | sed -n 's/^    \(\.\/policy\.sh key add .*\)$/\1/p' | head -n 1)
-if [ $rc -eq 0 ] && grep -q '^CURL direct https://claude.ai/cdn-cgi/trace' "$D/curl.log" && [ -s "$pk" ] && [ "$(stat -c %a "${pk%.pub}")" = 600 ] &&
+touch "$D/direct_down"; : > "$D/curl.log"
+out=$(sr env CCA_TTY="$(ans n)" CCA_POLICY_REPO=example/cca-policy "$C" install 2>&1); rc=$?
+if [ $rc -eq 0 ] && grep -q '^CURL direct https://claude.ai/cdn-cgi/trace' "$D/curl.log" &&
 	printf '%s' "$out" | grep -q '直连 claude.ai 不通：这台机器不用配置路由器，改用 cca 内置的代理' &&
-	[ "$line" = "./policy.sh key add '$(cat "$pk")' $(cut -d@ -f2 "$pk")" ] && printf '%s' "$out" | grep -q '等维护者运行上面那一行' &&
-	printf '%s' "$out" | grep -q '先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置' &&
-	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|有没有 Team 的邀请链接' && [ -z "$(keeper "$SH")" ]; then
-	ok "服务器上直连不通：不问路由器，给出维护者运行的那一行（这台机器的公钥、机器名）；维护者还没加上时先跳过，说清楚之后再运行什么"
+	printf '%s' "$out" | grep -q '维护者的映射 3.6.0 起去掉了（CCA_POLICY_REPO 不再起作用）' && printf '%s' "$out" | grep -q '有没有 Team 的邀请链接？' &&
+	printf '%s' "$out" | grep -q '再运行 cca install 接着配置' && [ ! -e "$SH/.cca/policy" ] &&
+	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号' && [ -z "$(keeper "$SH")" ]; then
+	ok "服务器上直连不通：不问路由器，先问有没有 Team 的邀请链接；带着 CCA_POLICY_REPO 只说一声去掉了（不生成 deploy key）；没有链接、也没贴代理时先跳过，说清楚之后再运行什么"
 else no "服务器上直连不通（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
-# 再运行 cca install，这次一直等着（不按回车：每隔几秒自动拉，CCA_POLICY_POLL=1 秒；答案是一直开着的管道）：维护者中途运行了那一行
-# （假 git 不再拒绝），cca 自己拉到、接着配置。开机起内核那一问的答案等拉到映射以后才写进管道（那之前读到的会当作“马上重试”）
-touch "$SH/.cca/policy/checked"   # 今天拉过了：启动时不再在后台拉（git.log 里只有这次 cca install 拉的）
-mkfifo "$D/tty.fifo"; exec 8<>"$D/tty.fifo"; : > "$D/git.log"
-sr env CCA_TTY="$D/tty.fifo" CCA_POLICY_POLL=1 "$C" install > "$D/onboard.out" 2>&1 & job=$!
-for i in $(seq 1 80); do [ "$(grep -c '^GIT clone' "$D/git.log")" -ge 3 ] && break; sleep 0.25; done   # 第三次是等了一轮之后自动拉的
-n_wait=$(grep -c '^GIT clone' "$D/git.log")
-rm -f "$D/policy_denied"   # 维护者运行了那一行
-for i in $(seq 1 80); do [ -f "$SH/.cca/policy/policy.json" ] && break; sleep 0.25; done
-printf 'y\n' >&8
-for i in $(seq 1 240); do kill -0 "$job" 2>/dev/null || break; sleep 0.25; done
-if kill -0 "$job" 2>/dev/null; then   # 卡住了：停掉这个 HOME 的进程（失败时才扫 /proc）
-	for p in /proc/[0-9]*; do { tr '\0' '\n' < "$p/environ"; } 2>/dev/null | grep -qxF "HOME=$SH" && kill "${p#/proc/}" 2>/dev/null; done
+if [ -n "$TVPORT" ]; then
+	TS2=$(printf '2b%.0s' $(seq 1 16))
+	SLINK=$(team_put "$TS2" 1 '{"accounts": {"claude": {"sam@example.com": "US-S"}}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-S", "nodes": {"group": "OpenAi", "proxies": [{"name": "US-S", "type": "socks5", "server": "127.0.0.1", "port": 18080}, {"name": "US-X", "type": "ss", "server": "192.0.2.83", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}}')
+	out=$(sr env CCA_TTY="$(ans y "$SLINK" y)" "$C" install 2>&1); rc=$?
+	for i in $(seq 1 40); do [ "$(get)" = cca-linux-ok ] && break; sleep 0.25; done
+	boot=$(grep -F '# cca-core' "$D/crontab" 2>/dev/null)
+	if [ $rc -eq 0 ] && [ -n "$SLINK" ] && printf '%s' "$out" | grep -q '已加入「书房组」' && printf '%s' "$out" | grep -qF '已导入 Team 的配置带的节点：US-S（这台机器的可选节点）' &&
+		python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c["nodes"] == ["US-S"] and c["node_ids"].get("US-S") == sys.argv[2] and c["local"]["client"] == "builtin" else 1)' "$SH/.cca/config.json" "$FPA" 2>/dev/null &&
+		grep -q '"sam(sam@example.com)": "US-S"' "$SH/.cca/accounts.json" && printf '%s' "$out" | grep -q '本机端口池已就绪：内置代理 127.0.0.1:7901' &&
+		[ "$boot" = "@reboot $C _core-keep >/dev/null 2>&1 # cca-core" ] && [ -n "$(keeper "$SH")" ] && [ "$(get)" = cca-linux-ok ] &&
+		! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|没找到 Claude Code' && ! printf '%s' "$out" | grep -qF "$SLINK"; then
+		ok "再运行 cca install、贴上 Team 的邀请链接：加入，导入 Team 的配置指定的节点（配置带的别的节点不导入），照配置加上 sam，内置代理由 cca _core-keep 托管（问过后加开机那一行），经账号的端口出去"
+	else no "服务器上加入 Team 的 cca install（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)；crontab 是「$(tr '\n' '|' < "$D/crontab" 2>/dev/null)」"; fi
+	sr "$C" local off >/dev/null 2>&1
+	for i in $(seq 1 40); do [ -z "$(keeper "$SH")" ] && ! listen 7901 && break; sleep 0.25; done
+else
+	echo "  （跳过服务器上加入 Team：没有 openssl，起不了 Team 的服务器）"
 fi
-wait "$job"; rc=$?
-exec 8<&-; rm -f "$D/tty.fifo"
-out=$(cat "$D/onboard.out")
-for i in $(seq 1 40); do [ "$(get)" = cca-linux-ok ] && break; sleep 0.25; done
-boot=$(grep -F '# cca-core' "$D/crontab" 2>/dev/null)
-if [ $rc -eq 0 ] && [ "$n_wait" -ge 3 ] && [ "$(printf '%s' "$out" | grep -c '等维护者运行上面那一行')" = 1 ] &&
-	printf '%s' "$out" | grep -q '拉到了维护者的映射（Claude 1 个账号' && printf '%s' "$out" | grep -qF '已导入维护者提供的节点：US-S（这台机器的可选节点）' &&
-	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c["nodes"] == ["US-S"] and c["node_ids"].get("US-S") == sys.argv[2] and c["local"]["client"] == "builtin" else 1)' "$SH/.cca/config.json" "$FPA" 2>/dev/null &&
-	grep -q '"sam(sam@example.com)": "US-S"' "$SH/.cca/accounts.json" && printf '%s' "$out" | grep -q '本机端口池已就绪：内置代理 127.0.0.1:7901' &&
-	[ "$boot" = "@reboot $C _core-keep >/dev/null 2>&1 # cca-core" ] && [ -n "$(keeper "$SH")" ] && [ "$(get)" = cca-linux-ok ] &&
-	! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|没找到 Claude Code'; then
-	ok "再运行 cca install 等着：每隔几秒自动拉（拉了 ${n_wait} 次还没加上），维护者加上后拉到映射，导入映射指定的节点（参考节点里别的不导入），照映射加上 sam，内置代理由 cca _core-keep 托管（问过后加开机那一行），经账号的端口出去"
-else no "等维护者确认的 cca install（退出码 $rc，加上之前拉了 ${n_wait} 次）：$(printf '%s' "$out" | tail -n 4)；crontab 是「$(tr '\n' '|' < "$D/crontab" 2>/dev/null)」"; fi
-sr "$C" local off >/dev/null 2>&1
-for i in $(seq 1 40); do [ -z "$(keeper "$SH")" ] && ! listen 7901 && break; sleep 0.25; done
-# 没有 Team 的邀请链接（默认）、没打开维护者的共享：直连不通时粘贴一条自己的代理（本机测试节点的 socks5），真的内核校验过当可选节点，配置好内置代理；
-# 不生成 deploy key、不拉映射
+# 没有 Team 的邀请链接（默认）：直连不通时粘贴一条自己的代理（本机测试节点的 socks5），真的内核校验过当可选节点，配置好内置代理；没加入 Team
 SH2="$D/shome2"; mkdir -p "$SH2/.local/bin"
 if [ -x "$D/mihomo" ]; then mkdir -p -m 700 "$SH2/.cca" "$SH2/.cca/core" && cp "$D/mihomo" "$SH2/.cca/core/mihomo-v$(sed -n 's/^CORE_VERSION="\(.*\)"$/\1/p' "$C")"; fi
-: > "$D/git.log"
-out=$(HOME="$SH2" PATH="$SH2/.local/bin:$PATH" CCA_POLICY_DEFAULT=example/cca-policy CCA_TTY="$(ans n 'socks5://127.0.0.1:18080' . n n n)" "$C" install 2>&1); rc=$?
+out=$(HOME="$SH2" PATH="$SH2/.local/bin:$PATH" CCA_TTY="$(ans n 'socks5://127.0.0.1:18080' . n n n)" "$C" install 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '有没有 Team 的邀请链接？' && printf '%s' "$out" | grep -q '已加上你的代理：' &&
-	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if len(c["nodes"]) == 1 and c["local"]["client"] == "builtin" and not c.get("policy") else 1)' "$SH2/.cca/config.json" 2>/dev/null &&
-	[ ! -e "$SH2/.cca/policy/id_ed25519" ] && ! grep -q '^GIT clone' "$D/git.log" && ! printf '%s' "$out" | grep -q 'policy.sh key add'; then
-	ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理（内核校验过）当可选节点，配置好内置代理；不生成 deploy key、不拉映射"
+	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if len(c["nodes"]) == 1 and c["local"]["client"] == "builtin" else 1)' "$SH2/.cca/config.json" 2>/dev/null &&
+	[ -z "$(ls "$SH2/.cca/teams" 2>/dev/null)" ]; then
+	ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理（内核校验过）当可选节点，配置好内置代理；没加入 Team"
 else no "服务器上直连不通、贴自己的代理（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
 HOME="$SH2" PATH="$SH2/.local/bin:$PATH" "$C" local off >/dev/null 2>&1
 for i in $(seq 1 40); do [ -z "$(keeper "$SH2")" ] && ! listen 7901 && break; sleep 0.25; done
-rm -f "$D/direct_down" "$PR/nodes.json" "$PR/nodes.json.sig"
+rm -f "$D/direct_down"
 
 # 在家走路由器：假路由器（127.0.0.2）上跑真的 cca-router.sh / apply.rb（sh 是这个发行版的 /bin/sh），内核是真的 mihomo（当作 OpenClash
 # 的 clash，-d /etc/openclash），uci、pidof、netstat 是假的（netstat 读 /proc/net/tcp），假 ssh 把命令交给它；SSH 端口（12222）只是

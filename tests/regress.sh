@@ -6,10 +6,10 @@ D=$(cd "$(dirname "$0")" && pwd)
 CCA="$D/../cca"; CCA=$(cd "$(dirname "$CCA")" && pwd)/cca
 if [ -n "${CKPT:-}" ]; then mkdir -p "$CKPT"; T="${TMPDIR:-/tmp}/cca-ckpt.sandbox"; mkdir "$T.lock" 2>/dev/null || { echo "另一个分节续跑（CKPT/FROM/ONLY）在用同一个沙箱 ${T}：一次只能跑一个，先等它跑完，或删掉 $T.lock" >&2; exit 1; }; [ -n "${FROM:-}${ONLY:-}" ] || rm -rf "$T"; mkdir -p "$T"; else T=$(mktemp -d "${TMPDIR:-/tmp}/cca-test.XXXXXX"); fi; T=$(cd "$T" && pwd -P); H=$T/home; R=$T/router   # 规整成真实路径（TMPDIR 结尾有 / 时会出现 //）；CKPT 时用 $TMPDIR 下的固定沙箱 + $T.lock 防并发（分节续跑：路径要稳定、在 /var/folders 下、一次只能一个）
 STUN="" STUN_PID=""   # 假的 STUN 服务器（泄露检测那一节才开）；平时 CCA_STUN 指向不通的端口：UDP 出不去，马上就知道
-SVP=""   # 设备统计的测试服务器（11b3c 那一节才开）
+TMPIDS=""   # Team 的测试服务器（tm_srv 起的，11b2 起的几节用；各节自己停）
 MBP=""   # 邮箱助手的假 Gmail（3b3 那一节才开）
 HC=""    # 辅助程序的缓存目录（10g 测“解出来”的那几个用例才建；在这个用户的临时目录里）
-trap '[ -z "$HC" ] || rm -rf "$HC"; [ -z "$SVP" ] || kill "$SVP" 2>/dev/null; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
+trap '[ -z "$HC" ] || rm -rf "$HC"; type tm_stop_all >/dev/null 2>&1 && tm_stop_all; [ -z "$MBP" ] || kill "$MBP" 2>/dev/null; [ -z "$STUN_PID" ] || kill "$STUN_PID" 2>/dev/null; [ ! -f "$T/core/up" ] || kill "$(cat "$T/core/pid")" 2>/dev/null; [ -n "${KEEP:-}" ] && echo "沙箱保留在 $T" || rm -rf "$T"; [ -z "${CKPT:-}" ] || rmdir "$T.lock" 2>/dev/null' EXIT
 [ -n "${FROM:-}${ONLY:-}" ] || bash "$D/setup.sh" "$T" >/dev/null || exit 1   # 分节续跑时跳过建沙箱：快照恢复会填好 $T
 cd "$T" || exit 1
 # 辅助程序（cli/ 的 Rust 程序）：仓库里的 cca 用 cli/target/release 里编出来的那一份，这里先编（没改过就是零点几秒；--locked --offline：
@@ -38,7 +38,7 @@ if [ -n "${TIMING:-}" ]; then
 	printf '#!/bin/dash\necho "$1" >> "%s/sleep.log"\nexec /bin/sleep "$@"\n' "$T" > "$T/bin/sleep"; chmod 755 "$T/bin/sleep"; : > "$T/sleep.log"
 	TIMING_T=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 fi
-run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_POLICY_DEFAULT= CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_HELPER="$HELPERWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+run() { env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_STUN="${STUN:-127.0.0.1:9}" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_HELPER="$HELPERWRAP" CCA_RETRY_WAIT=0 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 rr() { env CCA_ROOT="$R" CCA_T="$T" CCA_WAIT=2 HOME="$R/root" PATH="$T/rbin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" /bin/dash "$R/etc/cca/cca-router.sh" "$@"; }
 ans() { f="$T/ans.$RANDOM$RANDOM"; printf '%s\n' "$@" > "$f"; echo "$f"; }
 pass=0; fail=0
@@ -102,6 +102,103 @@ evq() { python3 -c 'import json,sys; ev=[json.loads(l) for l in open(sys.argv[1]
 evn() { grep -c "\"ev\":\"$1\"" "$T/ev.jsonl"; }   # 这种事件有几条
 runev() { : > "$T/ev.jsonl"; run CCA_EVENTS="$T/ev.jsonl" "$@" </dev/null; }   # 带事件文件运行（stdin 不是终端：App 就是这样调的）
 claude_device() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["userID"] + ":" + d["machineID"])' "$1/claude/.claude.json"; }
+# Team 的服务器（真的 server/cca-presence.py --mode team，127.0.0.1 上、测试证书）和照 server/README.md 独立实现的那一头
+# （tests/spec_wire.py，不用 cca 的代码：扮演管理员、别的设备）。11b2 起的几节都用；各节自己起、自己停（tm_stop），退出时停掉还开着的
+tm_cert() { mkdir -p "$1"; openssl ecparam -name prime256v1 -genkey -noout -out "$1/key.pem" 2>/dev/null; openssl req -new -x509 -key "$1/key.pem" -subj /CN=cca-team -days 2 -out "$1/cert.pem" 2>/dev/null; }
+tm_srv() {   # tm_srv 目录 根公钥 [端口 [服务器的别的参数…]]：起一台 Team 的服务器（证书在 目录/cert.pem；状态文件 目录/state.json 留着，
+	           # 重启后接着用；实际的端口写在 目录/port），进程号在 TMPID
+	local dir=$1 root=$2 port=${3:-0} i
+	shift 2; [ $# -eq 0 ] || shift
+	rm -f "$dir/port"
+	python3 -I "$D/../server/cca-presence.py" --mode team --team-root "$root" --listen "127.0.0.1:$port" --port-file "$dir/port" \
+		--cert "$dir/cert.pem" --key "$dir/key.pem" --state "$dir/state.json" "$@" >>"$dir/log" 2>&1 &
+	TMPID=$!; TMPIDS="$TMPIDS $TMPID"
+	for i in $(seq 1 50); do [ -s "$dir/port" ] && return 0; sleep 0.1; done; return 1
+}
+tm_stop() {   # tm_stop 进程号…：停掉 tm_srv 起的服务器
+	local p
+	for p in "$@"; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; TMPIDS=$(printf '%s\n' $TMPIDS | grep -vx "$p" | tr '\n' ' '); done
+}
+tm_stop_all() {   # 退出时：停掉还开着的（分节续跑时快照里记着的进程号可能早就是别的进程了：只停这个沙箱里起的服务器）
+	local p
+	for p in $TMPIDS; do ps -o command= -p "$p" 2>/dev/null | grep -qF -- "--state $T/" && kill "$p" 2>/dev/null; done
+	TMPIDS=""
+}
+tm_pin() { printf 'sha256//%s' "$(openssl x509 -in "$1/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"; }   # 和部署时一样用 openssl 算
+tm_spec() {   # tm_spec 操作 参数…：照文档独立实现的那一头（不用 cca 的代码）
+	python3 -B - "$D" "$@" <<'PY'
+import hashlib, json, sys
+sys.path.insert(0, sys.argv[1])
+import spec_wire as sw
+op, a = sys.argv[2], sys.argv[3:]
+pub_of = lambda p: ' '.join(open(p + '.pub').read().split()[:2])
+if op == 'join':   # join 邀请链接 密钥文件 端口 [名字]：一台设备拿这个邀请加入（名字默认 dan-air）、同步配置、验签、解开；打印 给了哪些账号 和 节点的名字
+    link, key, port = a[0], a[1], int(a[2])
+    inv = sw.invite_decode(link)
+    token, dev, keys = sw.invite_parts(inv['k'])
+    pub = pub_of(key)
+    st, j = sw.post(key, port, 'team_join', {'pub': pub, 'name': a[3] if a[3:] else 'dan-air', 'token': token, 'proof': sw.team_pub_proof(inv['k'], pub)})
+    if st != 200:
+        sys.exit('join %s %s' % (st, j))
+    st, j = sw.post(key, port, 'team_get', {})
+    env, tid = j['doc'], sw.team_id('ssh-ed25519 ' + inv['r'])
+    assert sw.team_doc_verify('ssh-ed25519 ' + inv['r'], tid, dev, env['seq'], env['ct'], env['sig']), '不是根密钥签的'
+    doc = sw.team_doc_open(keys, tid, dev, env['seq'], env['ct'])
+    print(json.dumps({'accounts': doc['accounts'], 'nodes': [p['name'] for p in (doc['nodes'] or {}).get('proxies', [])], 'seq': env['seq']}, sort_keys=True))
+elif op == 'get':   # get 邀请链接 密钥文件 端口：再取一次（状态码；被移除了是 403）
+    st, j = sw.post(a[1], int(a[2]), 'team_get', {})
+    print(st, j.get('error') or '', (j.get('doc') or {}).get('seq') or j.get('seq') or '')
+elif op in ('admin', 'put'):
+    # admin 根密钥 端口 地址 指纹 那串随机数 序号 名字 节点 [lock]：给那串随机数的设备存一份配置（alice 走这个节点；lock：alice 叫 team-1，锁定别名）
+    # put 根密钥 端口 地址 指纹 那串随机数 序号 名字 'JSON' [签名的密钥]：同上，配置照 JSON 改（accounts、aliases、nodes、install_node、
+    # salt……）；写了签名的密钥时配置拿它签（不是根密钥签的：像服务器被人冒充，存上去的请求照样是管理员签的）
+    # 序号是 1 时先发邀请。打印邀请链接
+    root, port, url, pin, secret, seq, name = a[0], int(a[1]), a[2], a[3], a[4], int(a[5]), a[6]
+    pub = pub_of(root)
+    token, dev, keys = sw.invite_parts(secret)
+    tid = sw.team_id(pub)
+    if seq == 1:
+        st, j = sw.post(root, port, 'team_invite', {'token': hashlib.sha256(token.encode()).hexdigest(), 'dev': dev, 'ttl': 600})
+        assert st == 200, (st, j)
+    doc = {'v': 1, 'at': 1790000000 + seq, 'name': name, 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
+           'accounts': {}, 'aliases': {}, 'install_node': '', 'nodes': None}
+    if op == 'admin':
+        doc['accounts'] = {'claude': {'alice@example.com': a[7]}}
+        if a[8:] == ['lock']:
+            doc.update(aliases={'alice@example.com': 'team-1'}, tool_aliases={'claude': {'alice@example.com': 'team-1'}}, alias_lock=True)
+    else:
+        doc.update(json.loads(a[7]))
+    signer = a[8] if op == 'put' and a[8:] else root
+    ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
+    st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(signer, tid, dev, seq, ct)}}})
+    assert (st, j.get('stored')) == (200, [dev]), (st, j)
+    print(sw.invite_encode(url, [pin], pub, secret, name))
+elif op == 'revoke':   # revoke 根密钥 端口 那串随机数
+    print(sw.post(a[0], int(a[1]), 'team_revoke', {'dev': sw.invite_parts(a[2])[1]})[0])
+PY
+}
+tm_fake() {   # tm_fake 名字 '配置 JSON'：直接写一个这台设备加入了的 Team（没接服务器：像同步配置以后的样子，只是不联网），打印它的编号。
+	            # 配置的样子照 cmd/team/doc.rs 的 doc_problems；不验签（同步时才验，辅助程序读的是验过的那一份）
+	python3 -I - "$H/.cca/teams" "$1" "$2" <<'PY'
+import json, os, sys
+d, name, doc = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+tid = '4f' * 16
+os.makedirs(os.path.join(d, tid), mode=0o700, exist_ok=True)
+base = {'v': 1, 'name': name, 'salt': 'cd' * 16, 'server': {'u': 'https://127.0.0.1:9', 'p': []}, 'accounts': {}, 'aliases': {}, 'install_node': '', 'nodes': None}
+base.update(doc)
+team = {'v': 1, 'id': tid, 'name': name, 'url': '', 'pins': [], 'root': 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI' + 'A' * 43, 'role': 'member',
+        'dev': '5e' * 16, 'device': 'test-mac', 'joined_at': 1790000000, 'gen': 1}
+for f, j in (('team.json', team), ('doc.json', {'v': 1, 'seq': 1, 'at': 1790000000, 'doc': base})):
+    with open(os.path.join(d, tid, f), 'w') as fh:
+        json.dump(j, fh, ensure_ascii=False)
+idx = os.path.join(d, 'index.json')
+order = json.load(open(idx)).get('order', []) if os.path.exists(idx) else []
+with open(idx, 'w') as fh:
+    json.dump({'v': 1, 'order': order + ([tid] if tid not in order else [])}, fh)
+ck = os.path.join(d, 'checked'); open(ck, 'a').close(); os.utime(ck)   # 不在后台同步配置（team_hook）：这个 Team 没有服务器
+print(tid)
+PY
+}
 # 分节续跑（省开发时间；发版和平时照样跑全量，sect 恒为真）：
 #   CKPT=目录 bash tests/regress.sh                       跑一次全量，在每节开头存下沙箱快照（tar $T + 变量）
 #   CKPT=目录 FROM=10h bash tests/regress.sh              从某节恢复快照、只跑那节到结尾
@@ -168,7 +265,7 @@ ok "折合金额：读会话记录（增量、去重、按账号身份认）、�
 ok "邮箱助手：对着假 Gmail（真的 TLS）跑 mail-setup / test / open / watch / forget——只读的 IMAP（经 SOCKS5、HTTP 代理）、登录出错、证书总是校验、代理出错再试、没有 All Mail、搜索滞后、断线重连；密码不进命令行" 'python3 "$D/mail_view.py" 2>/dev/null'
 ok "远程会话：会话宿主（客户端的环境、参数、退出码原样；启动它的终端没了会话照样运行）、接入端（回放、补上终端的模式、断开时还原、只看）、几个终端共用一个会话时的大小和查询" 'python3 "$D/remote_host.py" 2>/dev/null'
 ok "远程会话经服务器中转：配对（服务器见不到配对码和密钥）、别的机器上的会话列表、接入（两头之间端到端加密：路上没有明文）、对方只能看 / 不让接入由宿主那头把关、取消配对；和照文档独立实现的另一头互通" 'python3 "$D/remote_relay.py" 2>/dev/null'
-ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，维护者映射里的走维护者的，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
+ok "每个 Team 的会话走这个 Team 自己的服务器中转：配对记在哪台服务器上、经它只看得到走那台的会话（Team 给的账号走 Team 的服务器，这台设备自己的走加入的第一个 Team 的），数据不经别的服务器；没说在哪台上配对时在加入的第一个 Team 的服务器上配；Team 的服务器没开中转时说清楚" 'python3 "$D/team_relay.py" 2>/dev/null'
 ok "证书助手（给网页端要 Let's Encrypt 的 IP 证书）：对着照规范核对请求的假证书机构——短期证书那一种、nonce 不对自己再发、到时候续上而私钥不换、没成时说清楚不留半截" 'python3 "$D/acme.py" 2>/dev/null'
 # 浏览器里跑的那一份（server/web/core.js）和真的页面要 Node 22 以上、Chrome 才测得了：没有时那几个用例自己跳过（回归不要求装它们），别的照测
 ok "远程会话的网页端（手机在浏览器里接入）：不在设备清单里的访客拿配对码配对、它只能发接入用的请求、WebSocket 进中转、页面的文件和内容安全策略、cca remote pair --web（终端里、App 的提问会话里）；有 Node 和 Chrome 时连同浏览器里跑的那一份、真的页面一起测" 'python3 "$D/web_relay.py" 2>/dev/null'
@@ -532,7 +629,7 @@ if sect 3e; then
 rs_pty() {   # rs_pty 一项环境：在真的终端里（script，不设 CCA_TTY）运行 cca @alice --version，退出码写进 $T/rs.rc，完了建 $T/rs.done
 	rm -f "$T/rs.done" "$T/rs.rc"
 	{ for i in $(seq 1 300); do [ -f "$T/rs.done" ] && break; sleep 0.1; done; } |
-		script -q "$T/rs.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_POLICY_DEFAULT= CCA_STUN=127.0.0.1:9 CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_RETRY_WAIT=0 "$1" \
+		script -q "$T/rs.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_RESOLV_CONF="$T/resolv.conf" CCA_STUN=127.0.0.1:9 CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" CCA_RETRY_WAIT=0 "$1" \
 		PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; echo $? > "$CCA_T/rs.rc"; touch "$CCA_T/rs.done"' >/dev/null 2>&1
 }
 rs_last() { grep "^$1:" claude.log | tail -n 1; }   # 假 claude 最近一次记下的参数（ARGS）、环境（ENV）
@@ -730,10 +827,10 @@ ok "名字和服务器地址都变了（认不出）、非交互：说明哪个�
 # 在真的终端里（pty，不设 CCA_TTY）："换成哪个节点"和"现在重载吗"都要问得出来
 rm -f "$T/pty.done"
 { printf '%s\n' 3 y; for i in $(seq 1 300); do [ -f "$T/pty.done" ] && break; sleep 0.1; done; } |
-	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
+	script -q "$T/pty.log" env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_CLAUDE_APP="$T/Claude.app" CCA_CODEX_APP="$T/ChatGPT.app" \
 	PATH="$T/bin:$H/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb /bin/bash -c 'cca @alice --version; touch "$CCA_T/pty.done"' >/dev/null 2>&1
 ok "认不出、在真的终端里：列出路由器上的节点让用户选一个代替（选 US-C9），账号表跟着改，问过之后重载，照常启动" '[ -f "$T/pty.done" ] && grep -q "3\. US-C9" "$T/pty.log" && grep -q "「US-C」换成了「US-C9」" "$T/pty.log" && grep -q "现在重载吗" "$T/pty.log" && tblok "t[\"alice@example.com\"] == \"US-C9\"" && [ "$(sel CCA-1)" = US-C9 ]'
-ok "用户自己选的代替节点不算改名（维护者的映射里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
+ok "用户自己选的代替节点不算改名（Team 的配置里写着 US-C 时照样要求 US-C）" 'cfgok "\"US-C\" not in c.get(\"node_renames\", {})"'
 rm -f "$RC"
 out=$(run cca router status 2>&1)
 ok "运行配置文件被删了：cca router status 说明情况，各槽位照样读得到（控制接口的端口和密钥改从 uci 读）" 'printf "%s" "$out" | grep -q "文件不见了" && printf "%s" "$out" | grep -q "槽位 CCA-1 :7901 监听中 → US-C9"'
@@ -1317,7 +1414,7 @@ fi
 if sect 10e; then
 # 10e. 不用路由器、只用直连的第三方 API 账号
 H4="$T/home4"; mkdir -p "$H4/.claude"
-r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_HELPER="$HELPERWRAP" PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r4() { env -i LANG=en_US.UTF-8 HOME="$H4" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" PATH="$T/bin:$H4/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 r4 CCA_TTY="$(ans n n)" bash "$CCA" install >/dev/null 2>&1
 out=$(r4 CCA_TTY="$(ans solo https://api.example.com/anthropic "$S1" '')" cca add api 2>&1); rc=$?
 out2=$(r4 CCA_TTY="$(ans)" cca @solo --version 2>&1); rc2=$?
@@ -2213,28 +2310,23 @@ cp "$T/tbl.onb.bak" "$H/.cca/accounts.json"; cp "$T/cfg.onb.bak" "$H/.cca/config
 ok "配置向导：路由器配好、还没有账号 → 问加不加账号（confirm），答是接着走 add.basic（在那页取消就不加）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"kind\"] == \"confirm\" and e[\"fields\"][0][\"default\"] == \"y\""'
 # 没有路由器笔记本：向导「没有路由器（内置代理）」。有可选节点 → 配好内置代理、接着加账号；没有可选节点 → 加账号时粘贴自定义代理（下面）
 cp "$H/.cca/config.json" "$T/cfg.b2.bak"; cp "$H/.cca/accounts.json" "$T/tbl.b2.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.b2.bak"
-b2_had_policy=0; [ -d "$H/.cca/policy" ] && { b2_had_policy=1; rm -rf "$T/policy.b2"; cp -R "$H/.cca/policy" "$T/policy.b2"; }
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"   # 端口池清空(Claude+Codex)→ LOCAL_SLOTS=0,core_setup 早返回不下载/不起内核
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}]}' --eof-at add.basic -- cca _onboard 2>&1); rc=$?
 ok "没有路由器笔记本：选「没有路由器（内置代理）」、有可选节点 → 配好内置代理（local.client=builtin）、接着问加账号（onboard.net 第二项就是它）" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic" ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"fields\"][0][\"options\"][1][\"value\"] == \"builtin\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
-# 没有路由器、没有可选节点、没有映射：加账号不要求先配置路由器（以前会接着走配置路由器的表单），选节点那步可以粘贴自定义代理
+# 没有路由器、没有可选节点、不在 Team 里：加账号不要求先配置路由器（以前会接着走配置路由器的表单），选节点那步可以粘贴自定义代理
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); c.pop("policy", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
-rm -rf "$H/.cca/policy"
 out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"builtin"}],"onboard.add":[{"v":"y"}],"add.basic":[{"email":"nr@example.com","alias":""}]}' --eof-at add.node -- cca _onboard 2>&1); rc=$?
-ok "没有路由器、没有可选节点、没有映射：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
-# 三步都问（还没有账号、没配过路由器、不在 Team 里）：各页标题写第几步（共 3 步）。知道维护者的默认仓库也不再问有没有维护者共享的账号
-# （那些账号也经 Team 的邀请给）：不生成 deploy key、不拉
+ok "没有路由器、没有可选节点、不在 Team 里：选内置代理后加账号不要求配置路由器，选节点那步只有「自定义代理…」，页上说明怎么办" '[ $rc -ne 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add add.basic add.node" ] && evq "e.get(\"q\") == \"add.node\" and [o[\"label\"][:5] for o in e[\"fields\"][0][\"options\"]] == [\"自定义代理\"] and \"还没有可选的出口节点\" in e.get(\"message\", \"\")" && ! evq "e.get(\"q\") == \"router.basic\"" && gj state | jok "cfg.get(\"local\", {}).get(\"client\") == \"builtin\""'
+# 三步都问（还没有账号、没配过路由器、不在 Team 里）：各页标题写第几步（共 3 步）
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("policy", None); c.pop("policy_declined", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
+python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
-rm -rf "$H/.cca/policy"; : > git.log
-out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env CCA_POLICY_DEFAULT=example/cca-policy cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
-ok "配置向导：还没有账号、没配过路由器、不在 Team 里 → 三步（加入 Team、网络出口、添加账号：第 1～3 步（共 3 步））；有维护者的默认仓库也不问维护者共享的账号：不生成 deploy key、不拉；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.team\" and e[\"title\"] == \"第 1 步（共 3 步）：加入 Team\"" && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 2 步（共 3 步）：网络出口\"" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"] == \"第 3 步（共 3 步）：添加账号\" and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "not c.get(\"policy\") and c.get(\"onboarded\") is True" && [ ! -e "$H/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
+out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- cca _onboard 2>&1); rc=$?; cp "$T/ev.jsonl" "$GF/prompts_onboard.jsonl"
+ok "配置向导：还没有账号、没配过路由器、不在 Team 里 → 三步（加入 Team、网络出口、添加账号：第 1～3 步（共 3 步））；做完记下 onboarded" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add" ] && evq "e.get(\"q\") == \"onboard.team\" and e[\"title\"] == \"第 1 步（共 3 步）：加入 Team\"" && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 2 步（共 3 步）：网络出口\"" && evq "e.get(\"q\") == \"onboard.add\" and e[\"title\"] == \"第 3 步（共 3 步）：添加账号\" and e[\"fields\"][0][\"default\"] == \"y\"" && cfgok "c.get(\"onboarded\") is True" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"onboarded\""'
 cp "$T/cfg.b2.bak" "$H/.cca/config.json"; cp "$T/tbl.b2.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.b2.bak" ] && cp "$T/cdx.b2.bak" "$H/.cca/codex.json"
-rm -rf "$H/.cca/policy"; [ "$b2_had_policy" = 1 ] && cp -R "$T/policy.b2" "$H/.cca/policy"
 unlisten 7901; n=$(reloads)
 out=$(sess '{}' --eof-at consent.router_reload -- cca router sync 2>&1); rc=$?
 ok "提问会话：默认“是”的同意，问的时候 App 关掉管道：按取消，不重载" '[ $rc -ne 0 ] && [ "$(reloads)" = "$n" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"cancelled\""'
@@ -2325,7 +2417,7 @@ lint_prompts() {   # 提问只能经基元：别的地方直接读 fd 3，图形
 import re, sys
 src = open(sys.argv[1], encoding='utf-8').read()
 doc = open(sys.argv[2], encoding='utf-8').read()
-allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'gui_answer_wait', 'policy_wait', 'cmd_edit', 'node_read_block'}
+allowed = {'ask', 'ask_secret', 'arrow_menu', 'gui_ask', 'gui_answer', 'gui_answer_wait', 'cmd_edit', 'node_read_block'}
 bad, fn = [], ''
 for line in src.split('\n'):
     m = re.match(r'([A-Za-z_][A-Za-z0-9_]*)\(\) \{', line)
@@ -2391,9 +2483,9 @@ if sect 11; then
 out=$(run cca router sync 2>&1); m=$(run CCA_TTY="$(ans q)" cca 2>&1)
 ok "UTF-8 下中文提示完整" 'printf "%s" "$out" | grep -q "正在同步账号到路由器 192.0.2.10" && printf "%s" "$m" | grep -q "继续使用 alice@example.com" && printf "%s%s" "$out" "$m" | python3 -I -c "import sys; sys.stdin.buffer.read().decode(\"utf-8\")"'
 lint_dollar() {   # $变量 紧跟非 ASCII 字符：macOS 的 bash 3.2 在 UTF-8 下会把多字节字符的首字节吞进变量名，要写 ${变量}。
-	# 查发出去的 bash：cca、install.sh、release.sh、policy.sh、Team 的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
+	# 查发出去的 bash：cca、install.sh、release.sh、Team 的同步服务器的安装脚本（服务器上的 sh 可能是 bash）、macos 下的脚本，
 	# 还有 App 里拼出来的 bash（Swift 源码，比如终端交接脚本）
-	python3 -I - "$D/.." "$CCA" install.sh release.sh policy.sh server/hub-install.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
+	python3 -I - "$D/.." "$CCA" install.sh release.sh server/hub-install.sh 'macos/*.sh' macos/Sources macos/tools <<'PY'
 import glob, os, re, sys
 root, files = sys.argv[1], []
 for a in sys.argv[2:]:
@@ -2412,12 +2504,11 @@ print('ok' if not bad else '：' + '、'.join(bad))
 PY
 }
 ld=$(lint_dollar)
-ok "lint：cca、install.sh、release.sh、policy.sh、server/hub-install.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
+ok "lint：cca、install.sh、release.sh、server/hub-install.sh、macos 的脚本和 App 里拼的 bash 都没有 \$变量 紧跟非 ASCII 字符${ld#ok}" '[ "$ld" = ok ]'
 lint_helper_env() {   # 回归里自己拼环境运行 cca 的地方（不经 run 的那几处）都要带着 CCA_HELPER="$HELPERWRAP"：不带的话那一处用的是
-	# 仓库里 cli/target/release 下的那一份，release.sh 跑回归时（CCA_HELPER 指着要发布的那一份）它可能是以前编的、甚至没有。
-	# 运行 policy.sh 的那一处不算（它不运行 cca）
+	# 仓库里 cli/target/release 下的那一份，release.sh 跑回归时（CCA_HELPER 指着要发布的那一份）它可能是以前编的、甚至没有
 	local bad
-	bad=$(grep -n 'env -i ' "$D/regress.sh" | grep -v 'CCA_HELPER=' | grep -v 'bash "\$PS"' | cut -d: -f1 | tr '\n' ' ')
+	bad=$(grep -n 'env -i ' "$D/regress.sh" | grep -v 'CCA_HELPER=' | cut -d: -f1 | tr '\n' ' ')
 	[ -z "$bad" ] && echo ok || echo "：第 ${bad}行"
 }
 lh=$(lint_helper_env)
@@ -2670,235 +2761,174 @@ ok "开发模式（git 仓库里的 cca）：cca gui 从源码编译（源码没
 
 fi
 if sect 11b2; then
-# 11b2. 维护者的账号 → 节点映射：私有仓库（假 git）+ 这台机器的 deploy key + 发布密钥签名
-# （这时装着的是 mkver 换成测试密钥的版本，映射用 $T/relkey 签）
-PR="$T/policy_repo"; mkdir -p "$PR"; PK="$H/.cca/policy/id_ed25519"
-pol() {   # pol JSON [签名密钥]：写进假的私有映射仓库并签名
-	printf '%s\n' "$1" > "$PR/policy.json"; rm -f "$PR/policy.json.sig"
-	ssh-keygen -Y sign -q -n cca-policy -f "${2:-$T/relkey}" "$PR/policy.json" 2>/dev/null
+# 11b2. 3.6.0 去掉了维护者的映射（cca policy、每台机器一把 deploy key、policy.sh）：Team 是唯一的通道。先是去掉的命令、升级上来的设备上
+#       留下的东西，再是 Team 给这台设备的账号怎么和账号表合并（以前映射的那一套照旧：节点由 Team 定、没有的加进来、别名、删掉的不再
+#       自动加回来；Team 不再给了收起来）。Team「阁楼组」：管理员是照 server/README.md 独立实现的那一头（tm_spec，根密钥 $GLROOT），
+#       服务器是真的 server/cca-presence.py --mode team（127.0.0.1 上固定的端口 $GLPORT）。这台 Mac 加入以后一直在里面：11b2b、11b2c、
+#       11b3c 接着用它（各节开头 gl_up 在同一个端口上重新起服务器），11b3c 结束时退出。这几节 config.json 里写着 "presence": false
+#       （设备统计、记下的 key、折合金额不经它同步，后台不起上报进程），11b3c 再打开
+# --- 3.6.0 去掉的命令
+out=$(run cca policy 2>&1); rc=$?
+out2=$(runev cca codex policy pull --json 2>&1); rc2=$?
+ok "cca policy（3.6.0 去掉了维护者共享的账号）：说改用 Team（向管理员要邀请链接、cca team join；自己的几台设备之间：cca team new），退出码非 0；cca codex policy、以前 App 定时运行的 --json 一样（fail 事件，stdout 没有 JSON）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者共享的账号（cca policy）3.6.0 起去掉了，改用 Team：向 Team 的管理员要一个邀请链接，运行 cca team join 加入；自己的几台设备之间同步：cca team new" && [ $rc2 -ne 0 ] && ! printf "%s" "$out2" | grep -q "^{" && evq "e[\"ev\"] == \"fail\" and \"3.6.0 起去掉了\" in e[\"message\"]"'
+out=$(run cca _policy-check "$T/no-policy.json" 2>&1); rc=$?; out2=$(run cca _team-handoff 2>&1); rc2=$?
+out3=$(run cca _policy-fetch 2>&1); rc3=$?
+ok "以前 policy.sh 调的内部命令（_policy-check、_team-handoff……）说 3.6.0 起去掉了；以前的版本在后台起的 _policy-fetch（跑到这里已经换成新版）什么都不做、不说" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这条命令 3.6.0 起去掉了：维护者的映射（连同 policy.sh）改用 Team" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "这条命令 3.6.0 起去掉了" && [ $rc3 -eq 0 ] && [ -z "$out3" ]'
+out=$(run CCA_TTY="$(ans y)" cca remote pair 2>&1); rc=$?; out2=$(run CCA_TTY="$(ans y)" cca remote pair --maintainer 2>&1); rc2=$?
+ok "还不在 Team 里：cca remote pair 先说要加入或新建一个 Team（远程会话经 Team 的服务器中转；不先问同意、不出配对码）；以前的 --maintainer 没有了（说用法）" '[ $rc -eq 1 ] && printf "%s" "$out" | grep -q "先加入或者新建一个 Team：远程会话经 Team 的服务器中转" && ! printf "%s" "$out" | grep -q "配对码\|显示配对码吗" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "用法：cca remote pair \[--web\] \[--team 名字\]"'
+# --- 升级上来的设备上留下的（3.5.x 打开过维护者的共享）：第一条命令时清掉（policy_leftovers）。界面 App 的只读接口不清、也不说
+cp -p "$H/.cca/config.json" "$T/lo.config.json"
+GLCANARY="team.$(printf '9e%.0s' $(seq 1 16)).status.json"   # Team 的同步状态（有 team.<编号>. 前缀）：不动
+lo_make() {   # lo_make 开着|关着：摆出 3.5.x 打开过（关掉过）维护者共享的设备上留下的：映射、参考节点、deploy key、拉取的记录和临时目录，经维护者的
+	            # 服务器同步的状态（设备统计、记下的 API key、折合金额），映射里的 Team 邀请，config.json 里的开关
+	local f
+	mkdir -p "$H/.cca/policy/tmp.Ab12cd" "$H/.cca/presence" "$H/.cca/cost" "$H/.cca/teams"
+	for f in policy.json policy.json.sig nodes.json nodes.json.sig id_ed25519 id_ed25519.pub known_hosts checked log tmp.Ab12cd/nodes.json; do printf 'x\n' > "$H/.cca/policy/$f"; done
+	for f in presence/status.json presence/keys.json presence/keys.lock presence/keys-sync.lock cost/sync.json cost/remote.json teams/adopt.json teams/adopt.lock "presence/$GLCANARY"; do printf '{}\n' > "$H/.cca/$f"; done
+	python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.update({"policy": "example/cca-policy", "policy_declined": True} if sys.argv[2] == "开着" else {"policy_was": "example/cca-policy"}); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json" "$1"
 }
-nodes_pub() {   # nodes_pub [签名密钥]：$PR/nodes.json 用发布密钥签名（参考节点和映射用不同的命名空间）；11b2b、11b6 用
-	rm -f "$PR/nodes.json.sig"; ssh-keygen -Y sign -q -n cca-nodes -f "${1:-$T/relkey}" "$PR/nodes.json" 2>/dev/null
+lo_gone() { [ ! -e "$H/.cca/policy" ] && for f in presence/status.json presence/keys.json presence/keys.lock presence/keys-sync.lock cost/sync.json cost/remote.json teams/adopt.json teams/adopt.lock; do [ ! -e "$H/.cca/$f" ] || return 1; done && [ -f "$H/.cca/presence/$GLCANARY" ] && cfgok "not ({\"policy\", \"policy_was\", \"policy_declined\"} & set(c))"; }   # 都清掉了（Team 的同步状态还在）
+lo_make 开着; edit_table 'j["alice@example.com"] = "US-C"'   # 以前照映射固定的节点：账号表里照旧
+out=$(gj state)
+ok "_gui state（只读）：config.policy 总是关着的样子（3.6.0 起没有映射：接口只加不删），账号的 can.policy_lock 都是 false；留下的不动" 'printf "%s" "$out" | jok "d[\"config\"][\"policy\"] == {\"configured\": False, \"repo\": None, \"next_check_epoch\": None, \"state\": \"off\", \"accounts\": 0, \"parked\": 0} and all(a[\"can\"][\"policy_lock\"] is False for t in d[\"tools\"] for a in t[\"accounts\"])" && [ -f "$H/.cca/policy/policy.json" ] && cfgok "c.get(\"policy\") == \"example/cca-policy\""'
+out=$(run cca ls 2>&1); rc=$?; out2=$(run cca ls 2>&1)
+ok "升级上来的设备（以前打开着维护者的共享、不在 Team 里）：第一条命令删掉留下的映射、参考节点、deploy key、拉取的记录，经维护者的服务器同步的状态和映射里的 Team 邀请（Team 的同步状态不动），去掉 config.json 里的开关；说一声怎么加入 Team（只说这一次）；账号表里的照旧" '[ $rc -eq 0 ] && lo_gone && printf "%s" "$out" | grep -q "维护者共享的账号（cca policy）3.6.0 起去掉了，改用 Team：这台设备还没加入 Team，向管理员要一个邀请链接，运行 cca team join 加入（账号表里的账号照旧能用）" && ! printf "%s" "$out2" | grep -q "3.6.0 起去掉了" && tblok "t[\"alice@example.com\"] == \"US-C\""'
+lo_make 关着; out=$(run cca ls 2>&1)
+ok "以前关掉了共享的（config.json 里只有 policy_was）：一样清掉，不说" 'lo_gone && ! printf "%s" "$out" | grep -q "3.6.0 起去掉了"'
+cp -p "$T/lo.config.json" "$H/.cca/config.json"; edit_table 'j["alice@example.com"] = "US-A"'; run cca router sync >/dev/null 2>&1
+# --- Team「阁楼组」：管理员给这台 Mac 的配置里 alice 走 US-C
+GLD="$T/gl"; tm_cert "$GLD"; ssh-keygen -q -t ed25519 -N '' -C root -f "$GLD/root" </dev/null >/dev/null 2>&1
+ssh-keygen -q -t ed25519 -N '' -C evil -f "$GLD/evil" </dev/null >/dev/null 2>&1
+GLROOT="$GLD/root"; GLPUB=$(cut -d' ' -f1,2 "$GLD/root.pub")
+GLPORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+gl_up() { tm_srv "$GLD" "$GLPUB" "$GLPORT" "$@"; GLPID=$TMPID; }   # gl_up [服务器的别的参数…]：在原来的端口上起阁楼组的服务器（状态文件接着用；限流从头算）
+gl_down() { tm_stop "$GLPID"; GLPID=""; }
+gl_put() {   # gl_put 'JSON' [签名的密钥]：管理员给这台 Mac 发布新的一版配置（序号接着往上加；accounts、aliases、nodes……照 JSON），这台 Mac 还没同步
+	GLSEQ=$((GLSEQ + 1)); tm_spec put "$GLROOT" "$GLPORT" "$GLURL" "$GLPIN" "$GLS" "$GLSEQ" 阁楼组 "$@" >/dev/null
 }
-pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
-# 共享默认关着：终端里启动账号不引导配置映射（以前会问）。默认仓库用 CCA_POLICY_DEFAULT 换成假的（平时的用例里它是空的）
-P=CCA_POLICY_DEFAULT=example/cca-policy
-kl() { printf "'%s' %s" "$(cat "$PK.pub")" "$(cut -d@ -f2 "$PK.pub")"; }   # 给维护者的那一行里 key add 后面的部分：这台机器现在的公钥（单引号）和别名（机器名）
-: > git.log
-out=$(run $P CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?; out2=$(run $P cca policy 2>&1)
-ok "共享默认关着：终端里启动账号不引导、不生成 deploy key、不拉；cca policy 说共享关着、怎么打开" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "映射" && [ ! -f "$PK" ] && [ "$(cfgv "c.get(\"policy\", \"\")")" = "" ] && [ ! -s git.log ] && printf "%s" "$out2" | grep -q "维护者的共享关着：有维护者共享给你的账号时，运行 cca policy on 打开"'
-printf 2 > "$T/policy_denied_n"; rm -f "$T/clipboard"
-out=$(run $P CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
-ok "cca policy on（维护者的默认仓库）：生成 deploy key，显示维护者要运行的那一行（公钥和别名写在里面，复制到剪贴板）；还没加上时说明之后每天自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "    ./policy.sh key add $(kl)" && [ "$(cat "$T/clipboard")" = "./policy.sh key add $(kl)" ] && printf "%s" "$out" | grep -q "这一行已复制到剪贴板" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ] && [ ! -f "$H/.cca/policy/policy.json" ]'
-out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "共享开着、还没拉到映射：照常启动，不提问" '[ $rc -eq 3 ] && ! printf "%s" "$out" | grep -q "policy.sh key add"'
-# App 的「共享与同步」页打开共享（提问会话里的 cca policy on）：等维护者时这一页不用点，每隔几秒自动拉，拉到映射就打开了；没有路由器时导入
-# 映射里账号的参考节点，映射里的账号自动加进来。配置向导不再有这一页（维护者共享的账号也经 Team 的邀请给）。这一段结束时配置、账号表、映射仓库都还原
-cp "$H/.cca/config.json" "$T/cfg.ow.bak"; cp "$H/.cca/accounts.json" "$T/tbl.ow.bak"; [ -f "$H/.cca/codex.json" ] && cp "$H/.cca/codex.json" "$T/cdx.ow.bak"
-cp "$PR/policy.json" "$T/pr.ow"; cp "$PR/policy.json.sig" "$T/pr.ow.sig"
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c["nodes"]=[]; c.pop("node_ids", None); c.pop("local", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-printf '{}' > "$H/.cca/accounts.json"; [ -f "$H/.cca/codex.json" ] && printf '{}' > "$H/.cca/codex.json"
-pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}}'
-python3 -c 'import json,sys; json.dump({"version": 1, "group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (91 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-S", "US-X"])]}, open(sys.argv[1], "w"))' "$PR/nodes.json"; nodes_pub
-printf 2 > "$T/policy_denied_n"; : > git.log
-out=$(sess '{"onboard.policy":[null,null,null]}' -- env $P CCA_POLICY_POLL=1 cca policy on 2>&1); rc=$?
-ok "App 里打开共享（提问会话、维护者还没加上公钥）：给维护者的那一页不用点，每隔几秒自动拉，维护者加上公钥后拉到映射（result 是 policy_on）" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.policy ] && [ "$(grep -c "^GIT clone" git.log)" = 3 ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"] == \"打开维护者的共享\" and e[\"fields\"][0][\"value\"].startswith(\"./policy.sh key add \")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_on\"" && [ -f "$H/.cca/policy/policy.json" ]'
-ok "没有路由器：拉到以后导入映射里账号的参考节点（别的参考节点不导入），映射里的账号自动加进来" 'cfgok "c[\"nodes\"] == [\"US-S\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
-# 共享开着、拉一下就拉到了（比如一键安装时带了 CCA_POLICY_REPO，维护者也加好了公钥）：配置向导先拉一次，映射里的账号加进来；第 1 步照旧问 Team
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; c.pop("node_ids", None); c.pop("onboarded", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-printf '{}' > "$H/.cca/accounts.json"; : > git.log
-out=$(sess '{"onboard.team":[{"v":"n"}],"onboard.net":[{"v":"skip"}],"onboard.add":[{"v":"n"}]}' -- env $P CCA_POLICY_POLL=1 cca _onboard 2>&1); rc=$?
-ok "配置向导：映射已经配置好、拉一下就拉到了 → 第 2 步网络出口的页上说拉到了映射，映射里的账号自动加进来；第 3 步只问还要不要再加（默认不加），说明加了谁" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.team onboard.net onboard.add" ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"第 2 步（共 3 步）：网络出口\" and \"拉到了维护者的映射\" in e[\"message\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}" && evq "e.get(\"q\") == \"onboard.add\" and e[\"fields\"][0][\"default\"] == \"n\" and \"sam\" in e.get(\"message\", \"\")" && cfgok "c.get(\"onboarded\") is True"'
-# 共享开着、这次没等到维护者的：维护者加好后靠 App 的定时拉取（cca policy pull --json，终端里的 cca policy pull 一样）补上节点和账号
-python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["nodes"]=[]; c.pop("node_ids", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
-printf '{}' > "$H/.cca/accounts.json"
-out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>"$T/pull.err" </dev/null); rc=$?
-ok "没有路由器：App 的定时拉取（cca policy pull --json）拉到映射后导入映射里账号的参考节点，映射里的账号随即加进来；stdout 只有 JSON，不提同步路由器" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"policy_pull\"" && grep -q "已导入维护者提供的节点：US-S" "$T/pull.err" && ! grep -q "同步" "$T/pull.err" && cfgok "c[\"nodes\"] == [\"US-S\"]" && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}"'
-# 没有路由器的机器关掉共享（cca policy off）：映射里的账号移出账号表（记进 parked），只有维护者参考节点才有定义的可选节点：自己的账号
-# 用着的留着（说清楚关掉以后用不了、要换节点），没人用的去掉；cca policy on（deploy key 留着）直接拉到，原样加回来
-edit_table 'j["mine(mine@example.com)"] = "US-S"'
-out=$(run CCA_TTY="$(ans n)" cca policy off 2>&1); rc=$?
-ok "cca policy off：先说会动什么（移出账号表的共享账号、登录留着；自己的账号用着只有参考节点才有的节点，关掉以后要换），问过才关（默认否），答否什么都不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "移出账号表的共享账号（登录留着，重新打开共享时加回来，不用重新登录）：Claude 的 sam（sam@example.com）" && printf "%s" "$out" | grep -q "这些账号用着维护者的参考节点，关掉以后用不了，要换一个节点：Claude 的 mine（mine@example.com）：US-S" && printf "%s" "$out" | grep -q "关掉维护者共享的账号？ \[y/N\]" && printf "%s" "$out" | grep -q "已取消" && tblok "\"sam(sam@example.com)\" in t" && cfgok "c.get(\"policy\") == \"example/cca-policy\""'
-: > git.log
-out=$(run CCA_TTY="$(ans y)" cca policy off 2>&1); rc=$?
-ok "答是：sam 移出账号表（记进 parked），US-S 还有 mine 在用、留着；共享关掉（仓库记进 policy_was），拉到的映射、参考节点删掉，deploy key 留着" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已关掉共享：Claude 的 sam（sam@example.com） 移出了账号表" && tblok "t == {\"mine(mine@example.com)\": \"US-S\"}" && cfgok "\"policy\" not in c and c.get(\"policy_was\") == \"example/cca-policy\" and list(c[\"parked\"].values()) == [{\"key\": \"sam(sam@example.com)\", \"node\": \"US-S\"}] and c[\"nodes\"] == [\"US-S\"]" && [ ! -e "$H/.cca/policy/policy.json" ] && [ ! -e "$H/.cca/policy/nodes.json" ] && [ -f "$PK" ] && [ ! -s git.log ]'
-out=$(run CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
-ok "cca policy on：关掉时留着的 deploy key 直接拉到（不再显示给维护者的那一行），sam 原样加回来，parked 清掉" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && ! printf "%s" "$out" | grep -q "policy.sh key add" && printf "%s" "$out" | grep -q "已更新映射" && tblok "t == {\"mine(mine@example.com)\": \"US-S\", \"sam(sam@example.com)\": \"US-S\"}" && cfgok "c.get(\"policy\") == \"example/cca-policy\" and \"policy_was\" not in c and \"parked\" not in c"'
-edit_table 'j.pop("mine(mine@example.com)")'
-run CCA_TTY="$(ans y)" cca policy off >/dev/null 2>&1
-ok "再关一次（没有自己的账号用 US-S 了）：只有参考节点才有定义的 US-S 从可选节点里去掉" 'tblok "t == {}" && cfgok "c[\"nodes\"] == [] and \"US-S\" not in c.get(\"node_ids\", {}) and list(c[\"parked\"]) != []"'
-printf '{"version": 1, "claude": {"sam@example.com": "US-S"}}\n' > "$H/.cca/policy/policy.json"
-out=$(run cca ls 2>&1); out2=$(gj state)
-ok "关掉时后台正在拉的那一次之后才写回来（policy.json 又在了）：共享关着就不认它，sam 不会被加回来；_gui state 说共享关着、收起了 1 个" '! grep -q sam "$H/.cca/accounts.json" && printf "%s" "$out2" | jok "d[\"config\"][\"policy\"][\"state\"] == \"off\" and d[\"config\"][\"policy\"][\"parked\"] == 1 and d[\"config\"][\"policy\"][\"configured\"] is False and d[\"config\"][\"policy\"][\"accounts\"] == 0"'
-rm -f "$H/.cca/policy/policy.json"
-out=$(run cca policy pull 2>&1); rc=$?
-ok "共享关着时 cca policy pull 不拉，说怎么打开" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的共享关着（有维护者共享给你的账号时，运行 cca policy on 打开）"'
-out=$(runev cca policy on 2>&1); rc=$?
-ok "App 里打开共享（提问会话外、deploy key 还在）：导入映射里账号的参考节点，sam 加回来；result 是 policy_on" '[ $rc -eq 0 ] && tblok "t == {\"sam(sam@example.com)\": \"US-S\"}" && cfgok "c[\"nodes\"] == [\"US-S\"] and \"parked\" not in c" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_on\"" && gj state | jok "d[\"config\"][\"policy\"][\"state\"] == \"on\" and d[\"config\"][\"policy\"][\"accounts\"] == 1 and d[\"config\"][\"policy\"][\"parked\"] == 0"'
-cp "$T/cfg.ow.bak" "$H/.cca/config.json"; cp "$T/tbl.ow.bak" "$H/.cca/accounts.json"; [ -f "$T/cdx.ow.bak" ] && cp "$T/cdx.ow.bak" "$H/.cca/codex.json"
-cp "$T/pr.ow" "$PR/policy.json"; cp "$T/pr.ow.sig" "$PR/policy.json.sig"; rm -f "$PR/nodes.json" "$PR/nodes.json.sig"
-# 还原成没配置映射（账号表改回 US-A），接着测 cca policy setup
-rm -f "$T/policy_denied_n"
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-rm -rf "$H/.cca/policy"; edit_table 'j["alice@example.com"] = "US-A"'; run cca router sync >/dev/null 2>&1
-touch "$T/policy_denied"; : > git.log
-out=$(run $P CCA_TTY="$(ans)" cca policy setup 2>&1); rc=$?
-ok "cca policy setup（不写仓库就是维护者的默认仓库）：给这台机器生成 deploy key，显示公钥和维护者要运行的命令；公钥还没加上时说明之后会自动拉" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "说一声是谁的哪台机器" && printf "%s" "$out" | grep -qF "    ./policy.sh key add $(kl)" && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key" && printf "%s" "$out" | grep -q "cca 每天会自动拉一次映射" && [ ! -f "$H/.cca/policy/policy.json" ] && [ "$(cfgv "c[\"policy\"]")" = example/cca-policy ]'
-ok "拉映射只用这台机器的 deploy key：不读用户的 ssh / git 配置和 ssh-agent，只认 GitHub 的主机公钥；GitHub 拒绝了就不再重试" '[ "$(grep -c "^GIT clone" git.log)" = 1 ] && grep -q "^GIT clone git@github.com:example/cca-policy.git SSH=ssh -F /dev/null -i $PK -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=$H/.cca/policy/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes .* GLOBAL=/dev/null$" git.log && grep -qx "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" "$H/.cca/policy/known_hosts"'
-rm -f "$T/policy_denied"
-out=$(run cca policy pull 2>&1); rc=$?
-ok "cca policy pull：验签通过才换上（只有自己能读），马上按映射改账号表并说明" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已更新映射（Claude 1 个账号、Codex 0 个账号）" && [ "$(stat -f %Lp "$H/.cca/policy/policy.json")" = 600 ] && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "alice@example.com 的出口按维护者的映射固定为 US-C（账号表里写的是 US-A，已改回）" && printf "%s" "$out" | grep -q "Claude  alice@example.com → US-C"'
+gl_have() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seq"])' "$H/.cca/teams/$GLTID/doc.json" 2>/dev/null; }   # 这台 Mac 手里的是第几版
+gl_up; GLPIN=$(tm_pin "$GLD"); GLURL="https://127.0.0.1:$GLPORT"; GLS=$(printf '6b%.0s' $(seq 1 16)); GLSEQ=1
+GLLINK=$(tm_spec put "$GLROOT" "$GLPORT" "$GLURL" "$GLPIN" "$GLS" 1 阁楼组 '{"accounts": {"claude": {"alice@example.com": "US-C"}}}')
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["presence"]=False; json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"
+n0=$(reloads)
+out=$(run CCA_TTY="$(ans "$GLLINK")" cca team join --name alice-mbp 2>&1); rc=$?
+GLTID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$')
+touch "$H/.cca/teams/checked"   # 这几节不让启动时的后台同步（team_hook，一个小时一次）插进来：同步都是测试自己做的
+ok "加入「阁楼组」：马上照它的配置改账号表（alice 的节点由它定，说一声），同步到路由器（只换节点、不重载）；本机存的配置只有自己能读" '[ $rc -eq 0 ] && [ ${#GLTID} -eq 32 ] && printf "%s" "$out" | grep -q "已加入「阁楼组」（127.0.0.1:${GLPORT}）：这台设备叫 alice-mbp" && printf "%s" "$out" | grep -q "alice@example.com 的出口按「阁楼组」的配置固定为 US-C（账号表里写的是 US-A，已改回）" && tblok "t[\"alice@example.com\"] == \"US-C\"" && [ "$(sel CCA-1)" = US-C ] && [ "$(reloads)" = "$n0" ] && [ "$(stat -f %Lp "$H/.cca/teams/$GLTID/doc.json")" = 600 ]'
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-B"}}}'; run cca _team-sync >/dev/null 2>&1   # 后台同步到了新的一版（_team-sync 就是 team_hook 在后台起的那一个）
 n0=$(reloads); out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "映射换了出口：启动前同步到路由器（只换节点，不重载），照常启动" '[ $rc -eq 3 ] && [ "$(sel CCA-1)" = US-C ] && [ "$(reloads)" = "$n0" ]'
-out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j["alice@example.com"] = "US-B"' cca edit 2>&1)
-ok "cca edit 把映射里的账号改成别的节点：改回映射的节点并说明" 'grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "按维护者的映射固定为 US-C（账号表里写的是 US-B，已改回）"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-D"}}' "$T/evilkey"
-out=$(run cca policy pull 2>&1); rc=$?
-pol '{"version": 1, "claude": {"not-an-email": "US-D", "alice@example.com": "US-C", "ALICE@example.com": "US-D"}}'
-out2=$(run cca policy pull 2>&1); rc2=$?
-pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'; printf '{"version": 1, "claude": {"alice@example.com": "US-D"}}\n' > "$PR/policy.json"
-out3=$(run cca policy pull 2>&1); rc3=$?
-ok "不是发布密钥签的、签过之后又被改过的、格式不对的映射都不用，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "映射的格式不对：claude：「not-an-email」不像邮箱" && printf "%s" "$out2" | grep -q "claude：ALICE@example.com 写了不止一次（邮箱不分大小写）" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "签名不对" && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/policy/policy.json"'
-# App 的定时拉取（PROTOCOL 4.9）：stdout 一行 JSON；有变化时马上照映射改账号表并同步路由器，要重载的不问；拉不到时 fail 事件；state 给下次的时间
-rm -f "$H/.cca/policy/checked"
-ok "App 定时拉映射：还没拉过时 state 的 next_check_epoch 是 null" 'gj state | jok "d[\"config\"][\"policy\"][\"configured\"] and d[\"config\"][\"policy\"][\"next_check_epoch\"] is None"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-D"}}'
-runev cca policy pull --json >/dev/null 2>&1
-out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>/dev/null </dev/null); rc=$?
-ok "App 定时拉映射：cca policy pull --json：stdout 只有一份 JSON，这次没变化时 changed 是 false" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"policy_pull\" and d[\"changed\"] is False and d[\"summary\"] and d[\"generated_epoch\"] > 0"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-A"}}'
-: > ssh.log
-out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>/dev/null </dev/null); rc=$?
-ok "App 定时拉映射：有变化：changed，账号表马上改好，同步到路由器（不用等下一条命令）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"changed\"] is True" && tblok "t[\"alice@example.com\"] == \"US-A\"" && grep -q "sh -s" ssh.log && [ "$(cfgv "c.get(\"synced\") != None")" = True ]'
-ok "App 定时拉映射：拉过之后 state 给下次的时间（一小时后），启动时的后台拉取不用再拉" 'gj state | jok "abs(d[\"config\"][\"policy\"][\"next_check_epoch\"] - __import__(\"time\").time() - 3600) < 120" && [ -n "$(find "$H/.cca/policy/checked" -mmin -1)" ]'
-touch "$T/policy_offline"
-: > "$T/ev.jsonl"; out=$(run CCA_EVENTS="$T/ev.jsonl" cca policy pull --json 2>/dev/null </dev/null); rc=$?
-rm -f "$T/policy_offline"
-ok "App 定时拉映射：拉不到：退出码 1，没有 JSON，fail 事件说原因" '[ $rc -eq 1 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"policy_unavailable\" and \"连不上 GitHub\" in e[\"message\"]"'
-out=$(run cca policy pull --what 2>&1); rc=$?
-ok "cca policy pull：不认识的参数说用法" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法: cca policy pull"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'; run cca policy pull >/dev/null 2>&1
-# 账号表表单里，维护者固定的账号不能改（只有一个选项），答案不算数
+ok "后台同步到了新的一版（alice 换了节点）：启动前照它改账号表（说一声）、同步到路由器（只换节点，不重载），照常启动" '[ $rc -eq 3 ] && [ "$(gl_have)" = "$GLSEQ" ] && tblok "t[\"alice@example.com\"] == \"US-B\"" && [ "$(sel CCA-1)" = US-B ] && [ "$(reloads)" = "$n0" ] && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-C，已改回）"'
+out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j["alice@example.com"] = "US-D"' cca edit 2>&1)
+ok "cca edit 把 Team 给的账号改成别的节点：改回 Team 的配置定的节点并说明" 'tblok "t[\"alice@example.com\"] == \"US-B\"" && printf "%s" "$out" | grep -q "按「阁楼组」的配置固定为 US-B（账号表里写的是 US-D，已改回）"'
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-D"}}}' "$GLD/evil"; out=$(run cca team sync 2>&1); rc=$?
+gl_put '{"accounts": {"claude": {"Not-An-Email": "US-D", "alice@example.com": "US-D"}}}'; out2=$(run cca team sync 2>&1); rc2=$?
+gl_down; out3=$(run cca team sync 2>&1); rc3=$?; gl_up
+ok "管理员发布的那一版不是 Team 的根密钥签的（像服务器被人冒充）、内容不对、服务器连不上：cca team sync 说出来（退出码非 0），不用它，接着用手里的那一版" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "阁楼组：配置的签名不是这个 Team 的根密钥签的（可能有人冒充服务器）：不用它" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "阁楼组：配置的内容不对（accounts.claude 里的 Not-An-Email 不对）：不用它" && [ $rc3 -ne 0 ] && printf "%s" "$out3" | grep -q "阁楼组：连不上 Team 的同步服务器（127.0.0.1:${GLPORT}）" && [ "$(gl_have)" = $((GLSEQ - 2)) ] && tblok "t[\"alice@example.com\"] == \"US-B\""'
+# 账号表表单里，Team 的配置固定了节点的账号不能改（只有一个选项），答案不算数
 edit_table 'j["自己(self1@example.com)"] = "US-D"'; rm -f "$T/ev.jsonl"
 out=$(sess '{}' --eof-at edit.form -- cca edit 2>&1)
-ok "账号表表单：维护者固定的账号：只有一个选项，说明是维护者固定的" 'evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"alice@example.com\" and len(f[\"options\"]) == 1 and f[\"options\"][0][\"value\"] == \"US-C\" and \"维护者固定\" in f[\"hint\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"自己（self1@example.com）\" and len(f[\"options\"]) > 1 for f in e[\"fields\"])"'
+ok "账号表表单：Team 的配置固定了节点的账号只有一个选项，说是 Team 的配置固定的；自己的账号照常能选" 'evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"alice@example.com\" and len(f[\"options\"]) == 1 and f[\"options\"][0][\"value\"] == \"US-B\" and \"Team 的配置固定\" in f[\"hint\"] for f in e[\"fields\"])" && evq "e.get(\"q\") == \"edit.form\" and any(f[\"label\"] == \"自己（self1@example.com）\" and len(f[\"options\"]) > 1 for f in e[\"fields\"])"'
 FP=$(python3 -I -c 'import json,sys; print([x["id"] for e in map(json.loads, open(sys.argv[1])) if e.get("q") == "edit.form" for x in e["fields"] if x["label"] == "alice@example.com"][0])' "$T/ev.jsonl")
-sess '{"edit.form":[{"'$FP'":"US-B"}]}' --keep -- cca edit >/dev/null 2>&1
-ok "账号表表单：维护者固定的账号：答案不算数，账号表不变" 'tblok "t[\"alice@example.com\"] == \"US-C\""'
+sess '{"edit.form":[{"'$FP'":"US-D"}]}' --keep -- cca edit >/dev/null 2>&1
+ok "账号表表单：Team 的配置固定了节点的账号：答案不算数，账号表不变" 'tblok "t[\"alice@example.com\"] == \"US-B\""'
 edit_table 'j.pop("自己(self1@example.com)")'
-touch "$T/policy_offline"; : > git.log
-out=$(run cca policy pull 2>&1); rc=$?
-rm -f "$T/policy_offline"
-ok "连不上 GitHub：22 端口不通就改走 ssh.github.com:443，一共试三轮；说出真正的原因（不是 git 的套话），原来的映射照用" '[ $rc -ne 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 6 ] && grep -q "^GIT clone ssh://git@ssh.github.com:443/example/cca-policy.git " git.log && printf "%s" "$out" | grep -q "连不上 GitHub：ssh: connect to host github.com port 22: Operation timed out（接着用上次拉到的）" && grep -q "\"alice@example.com\": \"US-C\"" "$H/.cca/policy/policy.json"'
-# 映射和这台机器的账号表合并：映射里有、这台机器上还没有的官方账号自动加进来（别名用映射里 aliases 写的），
-# 这台机器自己的账号不动；删掉的不再自动加回来（cca add 加回来）
+# Team 的配置和这台机器的账号表合并：配置里有、这台机器上还没有的官方账号加进来（别名用 Team 给的；和这台机器上的别名撞了换成
+# 「Team 的名字-别名」），这台机器自己的账号不动；删掉的不再自动加回来（cca add 加回来）
 edit_table 'j["自己(own@example.com)"] = "US-A"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": "US-D", "frank@example.com": "US-B", "gina@example.com": "HK-A"}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'
-out=$(run cca policy pull 2>&1); rc=$?
-ok "合并：映射里有、这台机器上还没有的账号自动加进账号表并分到端口（别名用映射里写的，和这台机器上的别名重名时只写邮箱）；这台机器自己的账号不动" '[ $rc -eq 0 ] && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\" and t.get(\"frank@example.com\") == \"US-B\" and t.get(\"自己(own@example.com)\") == \"US-A\" and \"kimi\" in t" && cfgok "\"Erin(erin@example.com)\" in c[\"ports\"] and \"frank@example.com\" in c[\"ports\"]" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 Erin（erin@example.com），出口 US-D" && printf "%s" "$out" | grep -q "Claude  Erin（erin@example.com） → US-D"'
-ok "映射要的节点不在这台机器的可选节点里：先不加（加进来整张表就校验不过），cca policy 里注明怎么办" '! grep -q gina "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "映射里还没加到这台机器上的账号：" && printf "%s" "$out" | grep -q "Claude  gina@example.com → HK-A：节点 HK-A 不在这台机器的可选节点里（运行 cca router setup 选上它）"'
-cp "$H/.cca/policy/policy.json" "$T/policy.gui"
-python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); j["claude"]["hank@example.com"]="US-B"; json.dump(j, open(p, "w"))' "$H/.cca/policy/policy.json"
+GLA='"alice@example.com": "US-B", "erin@example.com": "US-D"'   # 下面几版配置里都有的
+gl_put '{"accounts": {"claude": {'"$GLA"', "frank@example.com": "US-B", "gina@example.com": "HK-A"}}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'
+out=$(run cca team sync 2>&1); rc=$?
+ok "合并：Team 给的、这台机器上还没有的账号加进账号表、分到端口（别名用 Team 给的；frank 的 kimi 和这台机器上的第三方 API 账号撞了，换成「阁楼组-kimi」）；这台机器自己的账号不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "阁楼组：配置已同步" && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\" and t.get(\"阁楼组-kimi(frank@example.com)\") == \"US-B\" and t.get(\"自己(own@example.com)\") == \"US-A\" and \"kimi\" in t" && cfgok "\"Erin(erin@example.com)\" in c[\"ports\"] and \"阁楼组-kimi(frank@example.com)\" in c[\"ports\"]" && printf "%s" "$out" | grep -q "按「阁楼组」的配置添加了 Claude 账号 Erin（erin@example.com），出口 US-D"'
+ok "Team 要的节点不在这台机器的可选节点里（也不是它的配置带的节点）：先不加（加进来整张表就校验不过）" '! grep -q gina "$H/.cca/accounts.json"'
+gl_put '{"accounts": {"claude": {'"$GLA"', "frank@example.com": "US-B", "gina@example.com": "HK-A", "hank@example.com": "US-B"}}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'
+run cca _team-sync >/dev/null 2>&1; cp -p "$H/.cca/accounts.json" "$T/gl.tbl"; cp -p "$H/.cca/config.json" "$T/gl.cfg"   # 后台同步到了：账号表在下一条命令里才改
 out=$(gj state)
-ok "_gui state（只读）：映射里新加的账号算进快照，notices 里说本来会加（policy_added），账号表和 config.json 都不改" 'printf "%s" "$out" | jok "any(n[\"code\"] == \"policy_added\" and n[\"key\"] == \"hank@example.com\" and n[\"node\"] == \"US-B\" for n in d[\"notices\"]) and \"hank@example.com\" in [a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]]" && ! grep -q hank "$H/.cca/accounts.json" "$H/.cca/config.json"'
-cp "$T/policy.gui" "$H/.cca/policy/policy.json"
+ok "_gui state（只读）：后台同步到的那一版里新给的账号算进快照，notices 里说本来会加（policy_added），账号表和 config.json 都不改" 'printf "%s" "$out" | jok "any(n[\"code\"] == \"policy_added\" and n[\"key\"] == \"hank@example.com\" and n[\"node\"] == \"US-B\" for n in d[\"notices\"]) and \"hank@example.com\" in [a[\"key\"] for a in d[\"tools\"][0][\"accounts\"]]" && cmp -s "$H/.cca/accounts.json" "$T/gl.tbl" && cmp -s "$H/.cca/config.json" "$T/gl.cfg"'
+gl_put '{"accounts": {"claude": {'"$GLA"', "frank@example.com": "US-B", "gina@example.com": "HK-A"}}, "aliases": {"erin@example.com": "Erin", "frank@example.com": "kimi"}}'; run cca _team-sync >/dev/null 2>&1
 p=$(cfgv 'c["ports"]["Erin(erin@example.com)"]')
 out=$(run CCA_TTY="$(ans)" cca @erin --version 2>&1); rc=$?
-ok "加进来的账号照常启动：先用它的邮箱登录，路由器同步到映射的节点" '[ $rc -eq 3 ] && grep -q "ARGS: auth login --claudeai --email erin@example.com" claude.log && [ "$(sel "CCA-$((p - 7900))")" = US-D ]'
-out=$(run CCA_TTY="$(ans y)" cca rm frank 2>&1); rc=$?
-out2=$(run cca ls 2>&1); out3=$(run cca policy 2>&1)
-ok "删掉映射里的账号：记下来，以后不再自动加回来；cca policy 里注明怎么加回来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "frank@example.com 在维护者的映射里：这台机器上不会再自动加回来（要加回来：cca add）" && ! grep -q frank "$H/.cca/accounts.json" && ! printf "%s" "$out2" | grep -q "按维护者的映射添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]" && printf "%s" "$out3" | grep -q "Claude  kimi（frank@example.com） → US-B：这台机器上删掉过（要加回来：cca add）"'
+ok "加进来的账号照常启动：先用它的邮箱登录，路由器同步到 Team 定的节点" '[ $rc -eq 3 ] && grep -q "ARGS: auth login --claudeai --email erin@example.com" claude.log && [ "$(sel "CCA-$((p - 7900))")" = US-D ]'
+out=$(run CCA_TTY="$(ans y)" cca rm frank@example.com 2>&1); rc=$?; out2=$(run cca ls 2>&1)
+ok "删掉 Team 给的账号：记下来，以后不再自动加回来（说怎么加回来）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "阁楼组-kimi（frank@example.com） 在「阁楼组」的配置里：这台机器上不会再自动加回来（要加回来：cca add）" && ! grep -q frank "$H/.cca/accounts.json" && ! printf "%s" "$out2" | grep -q "按「阁楼组」的配置添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]"'
 out=$(run CCA_TTY="$(ans frank@example.com '')" cca add 2>&1); rc=$?
-ok "用 cca add 加回来：出口直接用映射的节点，不让选；以后照常跟着映射" '[ $rc -eq 0 ] && tblok "t.get(\"frank@example.com\") == \"US-B\"" && printf "%s" "$out" | grep -q "frank@example.com 的出口按维护者的映射固定为 US-B" && ! printf "%s" "$out" | grep -q "选择节点编号" && cfgok "\"policy_skip\" not in c"'
-run CCA_TTY="$(ans "$R1")" cca key frank >/dev/null 2>&1; FAID=$(cd "$T/keychain" && ls -d cca-ref-frank-example-com-* 2>/dev/null); FAID=${FAID#cca-ref-}
-out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='j.pop("frank@example.com")' cca edit 2>&1)
+ok "用 cca add 加回来：出口直接用 Team 定的节点，不让选（别名照 Team 给的补上）；以后照常跟着 Team 的配置" '[ $rc -eq 0 ] && tblok "[v for k, v in t.items() if \"(frank@example.com)\" in k or k == \"frank@example.com\"] == [\"US-B\"]" && printf "%s" "$out" | grep -q "frank@example.com 的出口按 Team 的配置固定为 US-B" && ! printf "%s" "$out" | grep -q "选择节点编号" && cfgok "\"policy_skip\" not in c"'
+run CCA_TTY="$(ans "$R1")" cca key frank@example.com >/dev/null 2>&1; FAID=$(cd "$T/keychain" && ls -d cca-ref-frank-example-com-* 2>/dev/null); FAID=${FAID#cca-ref-}
+out=$(run CCA_TTY="$(ans)" EDITOR="$T/edit.py" CCA_TEST_EDIT='[j.pop(k) for k in list(j) if "frank@example.com" in k]' cca edit 2>&1)
 ok "cca edit 里删掉官方账号：它记下备查的 API key 一起删（钥匙串的条目和 config.json 里的记录）；删了找不回来，说一声" '[ -n "$FAID" ] && [ ! -e "$T/keychain/cca-ref-$FAID" ] && cfgok "\"$FAID\" not in c.get(\"ref_keys\", []) and \"$FAID\" not in c.get(\"key_hints\", {})" && printf "%s" "$out" | grep -qF "已从钥匙串删掉 $FAID 记下的 API key（sk-ant-…WXYZ）：账号表里已经没有这个账号了"'
-ok "cca edit 里删掉映射里的账号：同样记下来，不会马上又按映射加回来" '! grep -q frank "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "frank@example.com 在维护者的映射里：删掉了就不再自动加回来" && ! printf "%s" "$out" | grep -q "按维护者的映射添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]"'
-# 先按没写别名的映射加进来、只有邮箱的账号（这里直接写进账号表），维护者后来在 aliases 里补了别名
-edit_table 'j["hank@example.com"] = "US-B"'; run cca ls >/dev/null 2>&1; p0=$(cfgv 'c["ports"].get("hank@example.com")')
-pol '{"version": 1, "claude": {"alice@example.com": "US-C", "erin@example.com": "US-D", "hank@example.com": "US-B"}, "aliases": {"erin@example.com": "E2", "hank@example.com": "Hank"}}'
-out=$(run cca policy pull 2>&1); rc=$?; out2=$(run cca ls 2>&1)
-ok "映射里给账号起了别名：这台机器上还没有别名的补上（端口不变，只说一次），已经起过别名的不改" '[ $rc -eq 0 ] && [ "$p0" != None ] && tblok "\"Hank(hank@example.com)\" in t and \"hank@example.com\" not in t and \"Erin(erin@example.com)\" in t" && [ "$(cfgv "c[\"ports\"].get(\"Hank(hank@example.com)\")")" = "$p0" ] && printf "%s" "$out" | grep -q "按维护者的映射给 Claude 账号 hank@example.com 起了别名 Hank" && ! printf "%s" "$out" | grep -q "起了别名 E2" && ! printf "%s" "$out2" | grep -q "起了别名"'
-pol '{"version": 1, "claude": {"alice@example.com": "US-C"}}'
-out=$(run cca policy pull 2>&1); rc=$?
-ok "维护者从映射里删掉了账号：这台机器上的账号留着（登录还在），只是不再固定出口" '[ $rc -eq 0 ] && tblok "t.get(\"Erin(erin@example.com)\") == \"US-D\"" && ! printf "%s" "$out" | grep -q "Erin（erin@example.com） →"'
-run CCA_TTY="$(ans y)" cca rm erin >/dev/null 2>&1; run CCA_TTY="$(ans y)" cca rm 自己 >/dev/null 2>&1; run CCA_TTY="$(ans y)" cca rm Hank >/dev/null 2>&1
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_skip'); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-# 映射里的 Codex 账号要到第一次用 cca codex 时才加（模拟还没用过 Codex 的机器：先把 Codex 的账号表挪开，测完还原）
+ok "cca edit 里删掉 Team 给的账号：同样记下来，不会马上又照 Team 的配置加回来" '! grep -q frank "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "frank@example.com 在「阁楼组」的配置里：删掉了就不再自动加回来（要加回来：cca add）" && ! printf "%s" "$out" | grep -q "按「阁楼组」的配置添加了" && cfgok "c.get(\"policy_skip\") == [\"frank@example.com\"]"'
+# 别名：先照没写别名的配置加进来的 hank，Team 后来给它起了别名（这台机器上还没有别名：补上）；管理员把 erin 的 Erin 改成 E2（没自己
+# 改过：跟着改）；自己改过的不再跟着改
+gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"erin@example.com": "Erin"}}'
+run cca team sync >/dev/null 2>&1; p0=$(cfgv 'c["ports"].get("hank@example.com")')
+gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"erin@example.com": "E2", "hank@example.com": "Hank"}}'
+out=$(run cca team sync 2>&1); rc=$?; out2=$(run cca ls 2>&1)
+ok "Team 给账号起了别名：这台机器上还没有别名的补上（端口不变，只说一次）；管理员改了 Team 给的别名（Erin → E2）：这台机器上没自己改过的跟着改" '[ $rc -eq 0 ] && [ "$p0" != None ] && tblok "\"Hank(hank@example.com)\" in t and \"hank@example.com\" not in t and \"E2(erin@example.com)\" in t" && [ "$(cfgv "c[\"ports\"].get(\"Hank(hank@example.com)\")")" = "$p0" ] && printf "%s" "$out" | grep -q "按「阁楼组」的配置给 Claude 账号 hank@example.com 起了别名 Hank" && printf "%s" "$out" | grep -q "按「阁楼组」的配置把 Claude 账号 Erin（erin@example.com） 的别名改成 E2" && ! printf "%s" "$out2" | grep -q "起了别名\|别名改成"'
+run cca rename erin@example.com 二号 >/dev/null 2>&1 </dev/null
+gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"erin@example.com": "E3", "hank@example.com": "Hank"}}'
+out=$(run cca team sync 2>&1)
+ok "这台机器上自己改过别名的（cca rename）：管理员再改也不跟着改" 'tblok "\"二号(erin@example.com)\" in t" && ! printf "%s" "$out" | grep -q "E3"'
+# Team 不再给的账号：Team 加进来的收起来（登录留着），这台机器本来就有的留着、不再固定出口；再给回来时照原来的键加回来
+gl_put '{"accounts": {"claude": {"hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
+out=$(run cca team sync 2>&1); rc=$?
+ok "Team 不再给这台设备的账号：Team 加进来的（erin）收起来（从账号表去掉、记进 parked，账号目录留着），这台机器本来就有的（alice）留着" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "Team 不再给这台设备 Claude 账号 二号（erin@example.com）：收起来了（登录还留着，再给回来时不用重新登录）" && ! grep -q erin "$H/.cca/accounts.json" && cfgok "[v for v in c[\"parked\"].values() if \"erin\" in v[\"key\"]] == [{\"key\": \"二号(erin@example.com)\", \"node\": \"US-D\", \"team\": \"$GLTID\"}]" && tblok "t[\"alice@example.com\"] == \"US-B\"" && ls -d "$H"/.cca/accounts/erin-example-com-* >/dev/null 2>&1'
+edit_table 'j["alice@example.com"] = "US-A"'; out=$(run cca ls 2>&1)
+ok "Team 不再给 alice：出口不再固定（改成 US-A 不被改回）" 'tblok "t[\"alice@example.com\"] == \"US-A\"" && ! printf "%s" "$out" | grep -q "固定为"'
+gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
+out=$(run cca team sync 2>&1)
+ok "再给回来：照收起来时的键加回来（同一个账号目录，不用重新登录），不再算收起来的" 'tblok "t.get(\"二号(erin@example.com)\") == \"US-D\" and t[\"alice@example.com\"] == \"US-B\"" && cfgok "not [v for v in c.get(\"parked\", {}).values() if \"erin\" in v[\"key\"]]"'
+# Team 给的 Codex 账号要到第一次用 cca codex 时才加（模拟还没用过 Codex 的机器：先把 Codex 的账号表挪开，测完还原）
 cp "$H/.cca/config.json" "$T/config.pre"; mv "$H/.cca/codex.json" "$T/codex.pre"
-pol '{"version": 1, "claude": {"alice@example.com": "US-C"}, "codex": {"gina@example.com": "US-A"}, "aliases": {"gina@example.com": "Gina"}}'
-out=$(run cca policy pull 2>&1); rc=$?; [ -f "$H/.cca/codex.json" ] && cx1=yes || cx1=no
+gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}, "codex": {"gina@example.com": "US-A"}}, "aliases": {"hank@example.com": "Hank", "gina@example.com": "Gina"}}'
+out=$(run cca team sync 2>&1); rc=$?; [ -f "$H/.cca/codex.json" ] && cx1=yes || cx1=no
 out2=$(run cca codex ls 2>&1)
-ok "映射里的 Codex 账号：这台机器还没用过 cca codex 时不加（cca policy 里注明），第一次用 cca codex 时加进来" '[ $rc -eq 0 ] && [ $cx1 = no ] && printf "%s" "$out" | grep -q "Codex  1 个账号：第一次用 cca codex 时加进来" && printf "%s" "$out2" | grep -q "按维护者的映射添加了 Codex 账号 Gina（gina@example.com），出口 US-A" && tblok "t == {\"Gina(gina@example.com)\": \"US-A\"}" "$H/.cca/codex.json"'
-printf '{"version": 1, "claude": {"alice@example.com": "US-C"}}\n' > "$H/.cca/policy/policy.json"
+ok "Team 给的 Codex 账号：这台机器还没用过 cca codex 时不加（不建 Codex 的账号表），第一次用 cca codex 时加进来" '[ $rc -eq 0 ] && [ $cx1 = no ] && printf "%s" "$out2" | grep -q "按「阁楼组」的配置添加了 Codex 账号 Gina（gina@example.com），出口 US-A" && tblok "t == {\"Gina(gina@example.com)\": \"US-A\"}" "$H/.cca/codex.json"'
+gl_put '{"accounts": {"claude": {'"$GLA"', "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'; run cca _team-sync >/dev/null 2>&1
 mv "$T/codex.pre" "$H/.cca/codex.json"; cp "$T/config.pre" "$H/.cca/config.json"
-# 后台拉到了新映射（这里直接写进去，模拟后台拉取的结果）：账号表在下一条命令里才改，cca web / check 要先让路由器跟上
-printf '{"version": 1, "claude": {"alice@example.com": "US-D"}}\n' > "$H/.cca/policy/policy.json"
+# 后台同步到了新的一版（账号表在下一条命令里才改）：cca web / check 要先让路由器跟上
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-D", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'; run cca _team-sync >/dev/null 2>&1
 run CCA_TTY="$(ans)" cca web alice >/dev/null 2>&1; s1=$(sel CCA-1)
-printf '{"version": 1, "claude": {"alice@example.com": "US-B"}}\n' > "$H/.cca/policy/policy.json"
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-C", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'; run cca _team-sync >/dev/null 2>&1
 run cca check alice >/dev/null 2>&1; s2=$(sel CCA-1)
-ok "映射在后台换了之后，cca web、cca check 先把路由器同步到映射的节点，不经旧的节点出去" '[ "$s1" = US-D ] && [ "$s2" = US-B ]'
-pol '{"version": 1, "claude": {"alice@example.com": "US-A"}, "codex": {"dave@example.com": "US-D"}}'
-run cca update off >/dev/null 2>&1; rm -f "$H/.cca/policy/checked"; run cca ls >/dev/null 2>&1
-for i in $(seq 1 50); do grep -q US-A "$H/.cca/policy/policy.json" 2>/dev/null && break; sleep 0.2; done
-run cca update auto >/dev/null 2>&1
-ok "每天在后台自动拉一次映射（关了自动更新也拉）" 'grep -q "\"alice@example.com\": \"US-A\"" "$H/.cca/policy/policy.json" && [ -f "$H/.cca/policy/checked" ] && tail -n 1 "$H/.cca/policy/log" | grep -q "拉取成功"'
-out=$(run cca policy 2>&1)
-ok "cca policy：映射仓库、deploy key、映射摘要、最近一次拉取，以及这台机器上按映射固定出口的账号（Claude、Codex 都列）" 'printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -qF "$(cat "$PK.pub")" && printf "%s" "$out" | grep -q "映射：Claude 1 个账号、Codex 1 个账号" && printf "%s" "$out" | grep -q "最近一次拉取：.*拉取成功" && printf "%s" "$out" | grep -q "Claude  alice@example.com → US-A" && printf "%s" "$out" | grep -q "Codex  dave@example.com → US-D" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json"'
-# 关掉共享（配置过路由器的机器）：共享账号正在用（Claude App 开着）时不关；App 里关先要同意；关掉以后 alice、dave 移出账号表（登录目录
-# 还在），路由器同步、启动器删掉，不再拉映射（deploy key 留着）；cca policy on 原样加回来（同一个账号目录，不用重新登录）
-mkdir -p "$T/fakeapp2/Contents/MacOS"; printf '#!/bin/bash\nsleep 30\n' > "$T/fakeapp2/Contents/MacOS/Claude"; chmod 755 "$T/fakeapp2/Contents/MacOS/Claude"
-"$T/fakeapp2/Contents/MacOS/Claude" --user-data-dir="$AD/desktop" & FAKEPID=$!
-sleep 0.3
-out=$(run CCA_TTY="$(ans y)" cca policy off 2>&1); rc=$?
-runev cca policy off >/dev/null 2>&1; rc2=$?
-kill $FAKEPID 2>/dev/null; wait $FAKEPID 2>/dev/null
-ok "cca policy off：共享账号的 Claude App 还开着：不关，说是哪个；App 里是 fail 事件 policy_off_busy（不先问同意）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "这些共享账号正在用：Claude 的 alice@example.com（Claude App）" && [ $rc2 -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"policy_off_busy\" and \"Claude App\" in e[\"message\"]" && ! evq "e[\"ev\"] == \"consent\"" && tblok "\"alice@example.com\" in t" && cfgok "c.get(\"policy\") == \"example/cca-policy\""'
-out=$(runev cca policy off 2>&1); rc=$?
-ok "App 里关（不在终端）：先要同意（consent policy_off，范围 all，默认否），什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "要先同意：在终端里运行 cca policy off" && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"policy_off\" and e[\"scope\"] == \"all\" and e[\"default\"] == \"no\"" && tblok "\"alice@example.com\" in t"'
-: > ssh.log; : > git.log
-out=$(runev CCA_GRANT=policy_off:all cca policy off 2>&1); rc=$?
-ok "同意以后：alice、dave 移出账号表（登录目录还在，记进各自工具的 parked），路由器同步，启动器删掉，deploy key 留着，result 是 policy_off" '[ $rc -eq 0 ] && ! grep -q alice "$H/.cca/accounts.json" && ! grep -q dave "$H/.cca/codex.json" && [ -d "$AD" ] && cfgok "\"policy\" not in c and c[\"parked\"][\"$(basename "$AD")\"] == {\"key\": \"alice@example.com\", \"node\": \"US-A\"} and [v[\"key\"] for v in c[\"codex\"][\"parked\"].values()] == [\"dave@example.com\"]" && grep -q "sh -s" ssh.log && printf "%s" "$out" | grep -q "已删除启动器「" && [ -f "$PK" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_off\"" && [ ! -s git.log ]'
+ok "后台同步到了新的一版之后，cca web、cca check 先把路由器同步到 Team 定的节点，不经旧的节点出去" '[ "$s1" = US-D ] && [ "$s2" = US-C ]'
+# 启动时的后台同步：距上次超过一个小时就在后台同步一次（关了自动更新也同步）
+gl_put '{"accounts": {"claude": {"alice@example.com": "US-A", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
+run cca update off >/dev/null 2>&1; touch -t "$(date -v-2H +%Y%m%d%H%M.%S)" "$H/.cca/teams/checked"; run cca ls >/dev/null 2>&1
+for i in $(seq 1 50); do [ "$(gl_have)" = "$GLSEQ" ] && break; sleep 0.2; done
+run cca update auto >/dev/null 2>&1; run cca ls >/dev/null 2>&1
+ok "距上次同步配置超过一个小时：启动时在后台同步一次（关了自动更新也同步），账号表在下一条命令里照新的一版改" '[ "$(gl_have)" = "$GLSEQ" ] && [ -n "$(find "$H/.cca/teams/checked" -mmin -1)" ] && tblok "t[\"alice@example.com\"] == \"US-A\""'
+# Team 要的节点不在这台机器的可选节点里（路由器上有 HK-A，装的时候只选了 US-A…US-D）
+gl_put '{"accounts": {"claude": {"alice@example.com": "HK-A", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
+run cca team sync >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "关掉以后 alice 不在账号表里：启动不了它（登录还留着，打开共享时加回来）" '[ $rc -ne 0 ] && ! grep -q alice "$H/.cca/accounts.json"'
-out=$(run CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
-ok "cca policy on：deploy key 还在，直接拉到；alice、dave 原样加回来（同一个账号目录），parked 清掉，启动器加回来" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 1 ] && ! printf "%s" "$out" | grep -q "policy.sh key add" && tblok "t.get(\"alice@example.com\") == \"US-A\"" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json" && cfgok "\"parked\" not in c and \"parked\" not in c.get(\"codex\", {})" && [ "$(ls -d "$H"/.cca/accounts/alice-example-com-*)" = "$AD" ] && printf "%s" "$out" | grep -q "已生成启动器「"'
-out=$(run CCA_TTY="$(ans y)" cca policy off --forget-key 2>&1); rc=$?; out2=$(run cca policy 2>&1)
-ok "cca policy off --forget-key：deploy key 一起删，不再记着仓库；cca policy 说共享关着、怎么打开" '[ $rc -eq 0 ] && [ ! -e "$PK" ] && [ ! -e "$PK.pub" ] && cfgok "\"policy\" not in c and \"policy_was\" not in c" && printf "%s" "$out2" | grep -q "维护者的共享关着：有维护者共享给你的账号时，运行 cca policy on 打开"'
-out=$(run CCA_TTY="$(ans)" cca policy on 2>&1); rc=$?
-ok "不记着仓库、也没有维护者的默认仓库：cca policy on 问映射仓库，回车取消（什么都不生成）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的映射仓库（像 someone/cca-policy；回车取消）" && printf "%s" "$out" | grep -q "已取消：知道维护者的映射仓库以后，运行 cca policy setup 仓库" && [ ! -e "$PK" ] && cfgok "not c.get(\"policy\")"'
-out=$(sess '{"policy.repo":[{"v":"bad name"}]}' -- cca policy on 2>&1); rc=$?
-ok "App 里打开共享、不知道仓库：问映射仓库（policy.repo）；填得不对：报错，什么都不生成" '[ $rc -ne 0 ] && [ "$(asks)" = "policy.repo" ] && evq "e.get(\"q\") == \"policy.repo\" and e[\"fields\"][0][\"kind\"] == \"text\"" && [ ! -e "$PK" ]'
-touch "$T/policy_denied"
-out=$(sess '{"policy.repo":[{"v":"example/cca-policy"}],"onboard.policy":[{"next":"skip"}]}' -- env CCA_POLICY_POLL=1 cca policy on 2>&1); rc=$?
-ok "App 里打开共享、维护者还没加上：给维护者那一行的那一页（标题是打开维护者的共享，选项说「先跳过」，页上说加好后会自动打开共享）；先跳过：共享开着、在等维护者，result 是 policy_on" '[ $rc -eq 0 ] && [ "$(asks)" = "policy.repo onboard.policy" ] && evq "e.get(\"q\") == \"onboard.policy\" and e[\"title\"] == \"打开维护者的共享\" and \"加好后这里会自动打开共享\" in e[\"message\"] and e[\"fields\"][1][\"options\"][0][\"label\"] == \"先跳过\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_on\"" && [ -f "$PK" ] && cfgok "c.get(\"policy\") == \"example/cca-policy\"" && gj state | jok "d[\"config\"][\"policy\"][\"state\"] == \"pending\""'
-out=$(sess '{"onboard.policy":[{"next":"decline"}]}' -- env CCA_POLICY_POLL=1 cca policy on 2>&1); rc=$?
-ok "再打开一次（仓库就是开着的那个，维护者还没加上）：直接是那一页；选「不打开共享」：去掉仓库、删掉 deploy key，result 是 policy_off" '[ $rc -eq 0 ] && [ "$(asks)" = "onboard.policy" ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"policy_off\"" && [ ! -e "$PK" ] && cfgok "not c.get(\"policy\") and \"policy_was\" not in c"'
-rm -f "$T/policy_denied"
-out=$(run CCA_TTY="$(ans)" cca policy setup example/cca-policy 2>&1); rc=$?
-ok "cca policy setup 仓库：新生成一把 deploy key（给维护者的那一行），拉到以后 alice、dave 照原样加回来" '[ $rc -eq 0 ] && [ -f "$PK" ] && printf "%s" "$out" | grep -q "policy.sh key add" && tblok "t.get(\"alice@example.com\") == \"US-A\"" && grep -q "\"dave@example.com\": \"US-D\"" "$H/.cca/codex.json"'
-# 映射要的节点不在这台机器的可选节点里（路由器上有 HK-A，装的时候只选了 US-A…US-D）
-pol '{"version": 1, "claude": {"alice@example.com": "HK-A"}}'; run cca policy pull >/dev/null 2>&1
-out=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc=$?
-ok "映射要的节点不在可选节点里：不启动，说明 cca edit 改不了、要用 cca router setup 重新选可选节点" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的映射要求它走「HK-A」，可这个节点不在可选列表" && printf "%s" "$out" | grep -q "运行 cca router setup 重新选可选节点"'
+ok "Team 要的节点不在可选节点里：不启动，说明 cca edit 改不了、要用 cca router setup 重新选可选节点" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "「阁楼组」的配置要求它走「HK-A」，可这个节点不在可选列表" && printf "%s" "$out" | grep -q "运行 cca router setup 重新选可选节点"'
 n0=$(reloads)
 out=$(run CCA_TTY="$(ans '' '' '' '1 2 3 4 5' y)" cca router setup 2>&1); rc=$?
 out2=$(run CCA_TTY="$(ans)" cca @alice --version 2>&1); rc2=$?
 ok "这时 cca router setup 不会因为账号表有错误就退出：直接让重新选可选节点，选上 HK-A 后同步（端口池变了，问过再重载），照常启动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "先重新选可选节点" && [ "$(cfgv "c[\"nodes\"] == [\"US-A\", \"US-B\", \"US-C\", \"US-D\", \"HK-A\"]")" = True ] && [ "$(sel CCA-1)" = HK-A ] && [ "$(reloads)" -gt "$n0" ] && [ $rc2 -eq 3 ]'
-# 路由器上 HK-A 改名叫 HK-A2（地址不变），维护者的映射还写着 HK-A：账号表跟着改名，映射里的旧名字按记下的改名换算，不会被改回去
+# 路由器上 HK-A 改名叫 HK-A2（地址不变），Team 的配置还写着 HK-A：账号表跟着改名，配置里的旧名字按记下的改名换算，不会被改回去
 node_rn HK-A 192.0.2.5 HK-A2 192.0.2.5; oc_restart
 out=$(run CCA_TTY="$(ans y)" cca @alice --version 2>&1); rc=$?
-out2=$(run cca policy 2>&1)
-ok "映射里的节点在路由器上改了名、映射还没更新：账号表跟着改成 HK-A2，不会被映射改回旧名字，照常启动" '[ $rc -eq 3 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && [ "$(sel CCA-1)" = HK-A2 ] && ! printf "%s" "$out" | grep -q "按维护者的映射固定为" && printf "%s" "$out2" | grep -q "Claude  alice@example.com → HK-A2（映射里写的是 HK-A，路由器上已经改名）"'
-pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'; out=$(run cca policy pull 2>&1)
-ok "维护者把映射更新成新名字之后：照常，不再注明改名" 'grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && printf "%s" "$out" | grep -q "Claude  alice@example.com → HK-A2$"'
-
+ok "Team 定的节点在路由器上改了名、管理员还没更新配置：账号表跟着改成 HK-A2，不会被 Team 的配置改回旧名字，照常启动" '[ $rc -eq 3 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && [ "$(sel CCA-1)" = HK-A2 ] && ! printf "%s" "$out" | grep -q "固定为"'
+gl_put '{"accounts": {"claude": {"alice@example.com": "HK-A2", "erin@example.com": "US-D", "hank@example.com": "US-B"}}, "aliases": {"hank@example.com": "Hank"}}'
+out=$(run cca team sync 2>&1); rc=$?
+ok "管理员把配置更新成新名字之后：照常" '[ $rc -eq 0 ] && grep -q "\"alice@example.com\": \"HK-A2\"" "$H/.cca/accounts.json" && ! printf "%s" "$out" | grep -q "固定为"'
+# 已经在 Team 里的设备升级上来：留下的照样清掉，不再说怎么加入
+lo_make 开着; out=$(run cca ls 2>&1)
+ok "已经在 Team 里的设备（迁过来了）升级上来：留下的照样清掉，不说怎么加入" 'lo_gone && ! printf "%s" "$out" | grep -q "3.6.0 起去掉了"'
+rm -f "$H/.cca/presence/$GLCANARY"
+# 收尾：这台机器上删掉 erin、hank、自己（Team 还给着的先删掉：记进 policy_skip，不会被收起来），Team 只给 alice（HK-A2，11b2b 接着用）
+for a in erin@example.com hank@example.com own@example.com; do run CCA_TTY="$(ans y)" cca rm "$a" >/dev/null 2>&1; done
+gl_put '{"accounts": {"claude": {"alice@example.com": "HK-A2"}}}'; run cca team sync >/dev/null 2>&1
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy_skip', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+ok "（这一节结束：账号表里没有 Team 加进来的了，没有收起来的）" '! grep -q "erin\|hank\|own@" "$H/.cca/accounts.json" && cfgok "not c.get(\"parked\")"'
+gl_down
 fi
 if sect 11b2b; then
-# 11b2b. 维护者参考配置里的节点写进路由器：./policy.sh 从维护者的 custom.yaml 抽出策略组 OpenAi 和它引用的节点（nodes.json，命名空间
-#        cca-nodes 签名），各台机器拉映射时一起拉；缺的直接写进路由器的配置文件（OpenClash 选用的配置、ShellCrash 的订阅配置，行尾带
-#        # cca），名字补进同名策略组。3.3.0-beta.8 删 Clash Verge 时这一节整个删掉过，这里恢复的是路由器这一半。
-#        这一节结束时路由器、config.json、账号表和映射仓库都还原
+# 11b2b. Team 的配置带的节点写进路由器：管理员发布的配置里可以带一个策略组（OpenAi）和它引用的节点（nodes），设备同步配置时一起拿到、
+#        和账号一起验签；缺的直接写进路由器的配置文件（OpenClash 选用的配置、ShellCrash 的订阅配置，行尾带 # cca），名字补进同名策略组。
+#        路由器端的说法（「维护者参考配置里的节点」）没改：改了路由器端的代码，已安装的机器都要重新部署一次。
+#        这一节结束时路由器、config.json、账号表还原，Team 的配置回到只给 alice（HK-A2）、不带节点
+gl_up; touch "$H/.cca/teams/checked"   # 同步都是测试自己做的：不让启动时的后台同步插进来
 rm -rf "$T/router.snap"; cp -R "$R" "$T/router.snap"; cp "$H/.cca/config.json" "$T/config.snap"; cp "$H/.cca/accounts.json" "$T/accounts.snap"
 rget() {   # rget 配置 'Ruby 表达式'：c 是读出来的配置，g 是它的 OpenAi 组成员，px 是节点名
 	ruby -ryaml -e 'c = YAML.load_file(ARGV[0]) || {}; g = ((c["proxy-groups"] || []).find { |x| x["name"] == "OpenAi" } || {})["proxies"]; px = (c["proxies"] || []).map { |p| p["name"] }; exit(eval(ARGV[1]) ? 0 : 1)' "$1" "$2"
@@ -2911,50 +2941,31 @@ one_line() {   # one_line 配置文件 节点 一行写法 [缩进]：把 cca �
 	python3 -c "import re,sys; p, n, f, i = sys.argv[1:5]; s = open(p).read(); t = re.sub(r\"(?m)^%s- name: %s # cca\\n(?:%s  .*\\n)*\" % (i, re.escape(n), i), lambda m: i + \"- \" + f + \" # cca\\n\", s, count=1); assert t != s; open(p, \"w\").write(t)" "$1" "$2" "$3" "${4:-}"
 }
 fill_tmp() { ls "$R"/tmp/cca.src.* "$R"/tmp/cca.fill.* 2>/dev/null; }   # 参考节点用过的临时文件（应该都删了）
-cat > "$T/custom.yaml" <<'Y'
-proxies:
-  - {name: AI-A, type: ss, server: 192.0.2.21, port: 8388, cipher: aes-128-gcm, password: x}
-  - name: AI-B
-    type: vless
-    server: 192.0.2.22
-    port: 443
-    uuid: 00000000-0000-4000-8000-000000000001
-    tls: true
-    servername: www.example.com
-    flow: xtls-rprx-vision
-    reality-opts:
-      public-key: -test-public-key
-      short-id: '0a1b2c3d4e5f6789'
-  - {name: US-A, type: ss, server: 192.0.2.1, port: 8388, cipher: aes-128-gcm, password: other}
-  - {name: AI-B2, type: ss, server: 192.0.2.2, port: 8388, cipher: aes-128-gcm, password: x}
-  - {name: LAN-ONLY, type: ss, server: 192.0.2.99, port: 8388, cipher: aes-128-gcm, password: x}
-proxy-groups:
-  - {name: Proxy, type: select, proxies: [LAN-ONLY, AI-A]}
-  - name: OpenAi
-    type: select
-    proxies:
-      - Proxy
-      - AI-A
-      - AI-B
-      - US-A
-      - AI-B2
-rules:
-  - SRC-IP-CIDR,192.0.2.100/32,Proxy
-  - MATCH,Proxy
-Y
-out=$(run bash "$D/../policy.sh" nodes "$T/custom.yaml" 2>"$T/pn.err"); rc=$?
-printf '%s\n' "$out" > "$PR/nodes.json"
-ok "policy.sh nodes：从维护者的配置里只抽出策略组 OpenAi 引用的节点（组成员里的策略组不算，规则、别的节点都不带），格式检查通过" '[ $rc -eq 0 ] && grep -q "参考节点：策略组「OpenAi」里的 4 个节点（Proxy 不是节点，不算）" "$T/pn.err" && python3 -c "import json,sys; j=json.load(open(sys.argv[1])); sys.exit(0 if j[\"version\"] == 1 and j[\"group\"] == \"OpenAi\" and [p[\"name\"] for p in j[\"proxies\"]] == [\"AI-A\", \"AI-B\", \"US-A\", \"AI-B2\"] and j[\"proxies\"][1][\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" else 1)" "$PR/nodes.json" && ! grep -q "LAN-ONLY\|SRC-IP" "$PR/nodes.json" && run bash "$CCA" _fill-check "$PR/nodes.json" >/dev/null'
-nodes_pub
+GLN="$T/gl.nodes.json"   # 管理员放进配置里的节点：策略组 OpenAi 引用的（从他自己的配置里挑的；LAN-ONLY 这类别的节点、规则不带）
+cat > "$GLN" <<'J'
+{"group": "OpenAi", "proxies": [
+  {"name": "AI-A", "type": "ss", "server": "192.0.2.21", "port": 8388, "cipher": "aes-128-gcm", "password": "x"},
+  {"name": "AI-B", "type": "vless", "server": "192.0.2.22", "port": 443, "uuid": "00000000-0000-4000-8000-000000000001", "tls": true,
+   "servername": "www.example.com", "flow": "xtls-rprx-vision", "reality-opts": {"public-key": "-test-public-key", "short-id": "0a1b2c3d4e5f6789"}},
+  {"name": "US-A", "type": "ss", "server": "192.0.2.1", "port": 8388, "cipher": "aes-128-gcm", "password": "other"},
+  {"name": "AI-B2", "type": "ss", "server": "192.0.2.2", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}
+]}
+J
+GLACC='"alice@example.com": "HK-A2"'   # 这一节配置里给的账号（最后加上 bea）
+gl_nodes() {   # gl_nodes ['Python 语句']：管理员发布带节点的一版（先照语句改 GLN 里的节点：n 是节点的列表），这台 Mac 还没同步
+	[ -z "${1:-}" ] || python3 -c 'import json,sys; p=sys.argv[1]; j=json.load(open(p)); n=j["proxies"]; exec(sys.argv[2]); json.dump(j, open(p, "w"))' "$GLN" "$1"
+	gl_put "{\"accounts\": {\"claude\": {$GLACC}}, \"nodes\": $(cat "$GLN")}"
+}
+gl_nodes
 # 用户路由器上的配置：有 OpenAi 组（块写法，只有 US-A），没有 AI-A、AI-B；AI-B2 和 US-B 是同一个节点（地址一样）
 awk '{ print } /^proxy-groups:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" }' "$SRC" > "$T/src.tmp" && cat "$T/src.tmp" > "$SRC"; oc_restart
 cp "$SRC" "$T/src.fill"; n0=$(reloads); r0=$(restarts)
-out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "拉映射时一起拉参考节点（验签通过才换上，只有自己能读），马上同步：缺的直接写进 OpenClash 选用的配置文件，说明要重启一次才用得上，问过后重启（不热加载）" '[ $rc -eq 0 ] && [ "$(stat -f %Lp "$H/.cca/policy/nodes.json")" = 600 ] && printf "%s" "$out" | grep -q "已更新映射（.*；参考节点：策略组 OpenAi 的 4 个节点）" && printf "%s" "$out" | grep -qF "已把维护者参考配置里的节点写进 OpenClash 的配置文件 ${SRC}：补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B（行尾带 # cca；改之前的在 $R/etc/cca/source.bak.yaml）" && printf "%s" "$out" | grep -q "OpenClash 的配置文件里新写了维护者参考配置里的节点，要用上只能重启一次 OpenClash" && printf "%s" "$out" | grep -q "现在重启 OpenClash 吗" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ]'
+out=$(run CCA_TTY="$(ans y)" cca team sync 2>&1); rc=$?
+ok "同步到带节点的配置（和账号一起验签）：马上同步路由器：缺的直接写进 OpenClash 选用的配置文件，说明要重启一次才用得上，问过后重启（不热加载）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "阁楼组：配置已同步" && printf "%s" "$out" | grep -qF "已把维护者参考配置里的节点写进 OpenClash 的配置文件 ${SRC}：补上节点 AI-A、AI-B；策略组 OpenAi 里加上 AI-A、AI-B、US-B（行尾带 # cca；改之前的在 $R/etc/cca/source.bak.yaml）" && printf "%s" "$out" | grep -q "OpenClash 的配置文件里新写了维护者参考配置里的节点，要用上只能重启一次 OpenClash" && printf "%s" "$out" | grep -q "现在重启 OpenClash 吗" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ]'
 ok "OpenClash 的配置文件：AI-A、AI-B 一个一行插在 proxies 开头，名字接在 OpenAi 组后面，行尾都带 # cca，别的一个字节不动；US-A 是用户自己的（定义不动、不重复）；AI-B2 地址和 US-B 一样，组里加的是 US-B；原来的留了备份" '[ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$SRC" "px.count(\"AI-A\") == 1 && px.include?(\"AI-B\") && !px.include?(\"AI-B2\") && px.count(\"US-A\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\" && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"reality-opts\"][\"short-id\"] == \"0a1b2c3d4e5f6789\" && g == %w[US-A AI-A AI-B US-B]" && cmp -s "$R/etc/cca/source.bak.yaml" "$T/src.fill"'
 ok "写之前用内核 -t 校验过（拿正在用的运行配置加上这些节点），记下了这一版的 id；重启后按写好的配置文件生成运行配置，里面就有；临时文件都删了" 'grep -q "^CORE .* -t -d $R/etc/openclash -f $R/tmp/cca.fill\." router.log && [ -s "$R/etc/cca/fill.ok" ] && grep -qF "\"id\": \"$(cat "$R/etc/cca/fill.ok")\"" "$R/etc/cca/accounts.yaml" && rget "$RC" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && g == %w[US-A AI-A AI-B US-B]" && [ ! -e "$R/etc/cca/fill.pending" ] && [ -z "$(fill_tmp)" ]'
-out=$(run cca router nodes 2>&1); out2=$(run cca router status 2>&1); out3=$(run cca policy 2>&1)
-ok "cca router nodes 列得出写进去的节点；cca router status、cca policy 说明参考节点" 'printf "%s" "$out" | grep -qx AI-A && printf "%s" "$out" | grep -qx AI-B && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有" && printf "%s" "$out3" | grep -q "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点（路由器配置文件里缺的直接写进去；内置代理直接进内核的节点定义）"'
+out=$(run cca router nodes 2>&1); out2=$(run cca router status 2>&1)
+ok "cca router nodes 列得出写进去的节点；cca router status 说明参考节点" 'printf "%s" "$out" | grep -qx AI-A && printf "%s" "$out" | grep -qx AI-B && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有"'
 cp "$SRC" "$T/src.filled"; c0=$(grep -c '^CORE' router.log); r0=$(restarts); n0=$(reloads)
 out=$(run cca router sync 2>&1); rc=$?
 ok "再同步一次：配置文件里都有了，不再写、不重启也不重载，也不再拿内核校验" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.filled" && [ "$(restarts)" = "$r0" ] && [ "$(reloads)" = "$n0" ] && [ "$(grep -c "^CORE" router.log)" = "$c0" ] && ! printf "%s" "$out" | grep -q "写进 OpenClash 的配置文件"'
@@ -2978,32 +2989,31 @@ ok "同步时照样再校验一次，内核还是不认：说明没写，配置�
 rm -f "$R/core_reject"; r0=$(restarts); n0=$(reloads)
 out=$(run cca router sync -y 2>&1); rc=$?
 ok "内核认了（比如升级了）：同步时写进配置文件，重启一次用上，账号的端口回到 AI-A" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(reloads)" = "$n0" ] && [ "$(added "$T/src.fill" "$SRC")" = 5 ] && rget "$RC" "px.include?(\"AI-A\") && g == %w[US-A AI-A AI-B US-B]" && [ "$(sel "CCA-$fs")" = AI-A ] && [ -s "$R/etc/cca/fill.ok" ]'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(port=8443) for x in j['proxies'] if x['name'] == 'AI-B']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "维护者改了参考配置里的节点：cca 写进去的那一行跟着改（不会多出一个），问过后重启" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "按参考配置更新了节点 AI-B" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(diff "$T/src.prev" "$SRC" | grep -c "^[<>]")" = 2 ] && rget "$SRC" "px.count(\"AI-B\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443"'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(password='changed') for x in j['proxies'] if x['name'] == 'US-A']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
-ok "参考配置里和用户自己的节点同名的改了：用户的那个不动（不是 cca 写的），也不用重启" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.prev" && [ "$(restarts)" = "$r0" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\""'
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); [x.update(password='y2') for x in j['proxies'] if x['name'] == 'AI-A']; json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-r0=$(restarts); out=$(run cca policy pull 2>&1); rc=$?
+gl_nodes '[x.update(port=8443) for x in n if x["name"] == "AI-B"]'
+cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca team sync 2>&1); rc=$?
+ok "管理员改了配置里的节点：cca 写进去的那一行跟着改（不会多出一个），问过后重启" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "按参考配置更新了节点 AI-B" && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(diff "$T/src.prev" "$SRC" | grep -c "^[<>]")" = 2 ] && rget "$SRC" "px.count(\"AI-B\") == 1 && c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-B\" }[\"port\"] == 8443"'
+gl_nodes '[x.update(password="changed") for x in n if x["name"] == "US-A"]'
+cp "$SRC" "$T/src.prev"; r0=$(restarts); out=$(run CCA_TTY="$(ans y)" cca team sync 2>&1); rc=$?
+ok "配置里和用户自己的节点同名的改了：用户的那个不动（不是 cca 写的），也不用重启" '[ $rc -eq 0 ] && cmp -s "$SRC" "$T/src.prev" && [ "$(restarts)" = "$r0" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"US-A\" }[\"password\"] == \"x\""'
+gl_nodes '[x.update(password="y2") for x in n if x["name"] == "AI-A"]'
+r0=$(restarts); out=$(run cca team sync 2>&1); rc=$?
 out2=$(run cca router status 2>&1)
 ok "非交互时要重启也不重启：配置文件照样写好，说清楚这次的改动要等 OpenClash 下次重启；cca router status 也这么说" '[ "$(restarts)" = "$r0" ] && printf "%s" "$out" | grep -q "没有重启：这次的改动要等 OpenClash 下次重启" && [ -e "$R/etc/cca/fill.pending" ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"x\"" && printf "%s\n" "$out2" | grep -qx "参考节点：维护者参考配置里策略组 OpenAi 的 4 个节点，OpenClash 的配置文件里都有（新写进去的要等 OpenClash 重启后才用上）"'
 r0=$(restarts); n_cli=$(grep -c '^ARGS:' claude.log); out=$(run CCA_TTY="$(ans n)" cca @ai --version 2>&1); rc=$?
 ok "在家启动账号：必要重启只问一次；拒绝后即使节点同名也阻断，不调用客户端" '[ $rc -eq 1 ] && [ "$(printf "%s" "$out" | grep -c "现在重启 OpenClash 吗")" = 1 ] && [ "$(restarts)" = "$r0" ] && [ "$(sel "CCA-$fs")" = AI-A ] && printf "%s" "$out" | grep -q "路由器账号节点未能核实" && [ "$(grep -c "^ARGS:" claude.log)" = "$n_cli" ]'
 out=$(run CCA_TTY="$(ans y)" cca router sync 2>&1); rc=$?
 ok "再同步时同意重启：用上配置文件里新写的" '[ $rc -eq 0 ] && [ "$(restarts)" = $((r0 + 1)) ] && rget "$RC" "c[\"proxies\"].find { |p| p[\"name\"] == \"AI-A\" }[\"password\"] == \"y2\"" && [ ! -e "$R/etc/cca/fill.pending" ] && [ "$(sel "CCA-$fs")" = AI-A ]'
-cp "$H/.cca/policy/nodes.json" "$T/nodes.good"; nodes_pub "$T/evilkey"
-out=$(run cca policy pull 2>&1); rc=$?
-nodes_pub; python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'][0].pop('server'); json.dump(j, open(p, 'w'))" "$PR/nodes.json"; nodes_pub
-out2=$(run cca policy pull 2>&1); rc2=$?
-ok "参考节点不是发布密钥签的、格式不对：映射和参考节点都不换，接着用上次拉到的" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "参考节点（nodes.json）的签名不对" && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "参考节点（nodes.json）的格式不对：第 1 个节点「AI-A」：server 不对" && cmp -s "$H/.cca/policy/nodes.json" "$T/nodes.good"'
-cp "$T/nodes.good" "$PR/nodes.json"
-python3 -c "import json,sys; p=sys.argv[1]; j=json.load(open(p)); j['proxies'].append({'name': 'SC-X', 'type': 'ss', 'server': '192.0.2.29', 'port': 8388, 'cipher': 'aes-128-gcm', 'password': 'x'}); json.dump(j, open(p, 'w'), indent=2)" "$PR/nodes.json"; nodes_pub
-# ShellCrash：订阅配置里有 OpenAi 组（块写法）；参考节点里的 SC-X 和它的自定义节点重名，不写
+cp "$GLN" "$T/gl.nodes.good"; cp "$SRC" "$T/src.prev"; s0=$(gl_have)
+gl_nodes 'n[0].pop("server")'
+out=$(run cca team sync 2>&1); rc=$?
+ok "管理员发布的配置里节点的格式不对：整份配置都不用（账号、节点接着用手里的那一版），路由器的配置文件不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "阁楼组：配置的内容不对（nodes：第 1 个节点「AI-A」：server 不对）：不用它" && [ "$(gl_have)" = "$s0" ] && cmp -s "$SRC" "$T/src.prev"'
+cp "$T/gl.nodes.good" "$GLN"
+gl_nodes 'n.append({"name": "SC-X", "type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x"})'
+# ShellCrash：订阅配置里有 OpenAi 组（块写法）；配置带的节点里的 SC-X 和它的自定义节点重名，不写
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp -R "$T/shellcrash/." "$R/"; echo CrashCore > "$R/core"
 awk '{ sub(/^  - name: HK-A$/, "  - name: HK-A2") } /^rules:$/ { print "  - name: OpenAi"; print "    type: select"; print "    proxies:"; print "      - US-A" } { print }' "$T/shellcrash/etc/ShellCrash/yamls/config.yaml" > "$SCD/yamls/config.yaml"
 cp "$SCD/yamls/config.yaml" "$T/sc_base.fill"; sc_restart; n0=$(reloads); r0=$(restarts)
-out=$(run CCA_TTY="$(ans y)" cca policy pull 2>&1); rc=$?
+out=$(run CCA_TTY="$(ans y)" cca team sync 2>&1); rc=$?
 ok "ShellCrash：缺的写进订阅配置、名字补进 OpenAi 组，问过后重启一次（不热加载）；和它的自定义节点重名的 SC-X 不写（说明原因，只有一个 SC-X）" '[ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = $((r0 + 1)) ] && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 5 ] && rget "$SCR" "px.include?(\"AI-A\") && px.include?(\"AI-B\") && px.count(\"SC-X\") == 1 && g == %w[US-A AI-A AI-B US-B]" && printf "%s" "$out" | grep -q "参考节点「SC-X」和这里的策略组（或内置出站、ShellCrash 的自定义节点）重名，没有写" && printf "%s" "$out" | grep -q "现在重启 ShellCrash 吗" && [ "$(sel "CCA-$fs")" = AI-A ] && ! grep -q SCBAD router.log'
 out=$(run cca router sync 2>&1); rc=$?
 out2=$(run cca router nodes 2>&1)
@@ -3014,22 +3024,23 @@ python3 -c "import sys; p=sys.argv[1]; s=open(p).read(); b='  - name: OpenAi\n  
 cp "$T/sc_base.fill" "$SCD/yamls/config.yaml"; sc_restart; n0=$(reloads); r0=$(restarts)
 out=$(run cca router sync 2>&1); rc=$?
 ok "订阅配置里 OpenAi 组写成一行的：只写节点、组不动（说明为什么）；同步时不用再重载、重启" 'grep -q "策略组 OpenAi 不是一行一项的写法" "$R/tmp/cca-router.log" && [ "$(added "$T/sc_base.fill" "$SCD/yamls/config.yaml")" = 2 ] && rget "$SCR" "px.include?(\"AI-A\") && g == %w[US-A]" && ! grep -q SCBAD router.log && [ $rc -eq 0 ] && [ "$(reloads)" = "$n0" ] && [ "$(restarts)" = "$r0" ]'
-# 维护者的映射要某个账号走参考节点，这台机器的可选节点里还没有它：自动加进可选节点（记下摘要），账号随后照常加进来（新端口问过后生效）
-pol '{"version": 1, "claude": {"alice@example.com": "HK-A2", "bea@example.com": "AI-B"}}'
-out=$(run CCA_TTY="$(ans y y)" cca policy pull 2>&1); rc=$?
-ok "映射要的节点是维护者的参考节点、还不在可选节点里：自动加进可选节点（说一声），映射里的账号照常加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "维护者的映射要 bea@example.com 走节点 AI-B：它在维护者的参考配置里（同步时写进路由器的配置），已加进可选节点" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 bea@example.com，出口 AI-B" && cfgok "\"AI-B\" in c[\"nodes\"] and c[\"node_ids\"].get(\"AI-B\")" && tblok "t.get(\"bea@example.com\") == \"AI-B\""'
-pol '{"version": 1, "claude": {"alice@example.com": "HK-A2"}}'
-# 还原：路由器、config.json、账号表回到这一节开头。维护者不再发布参考节点（映射仓库里删掉 nodes.json），拉下来后这台机器上的也删掉
+# Team 的配置要某个账号走它带的节点，这台机器的可选节点里还没有它：自动加进可选节点（记下摘要），账号随后照常加进来（新端口问过后生效）
+GLACC='"alice@example.com": "HK-A2", "bea@example.com": "AI-B"'; gl_nodes
+out=$(run CCA_TTY="$(ans y y)" cca team sync 2>&1); rc=$?
+ok "Team 的配置要的节点是它带的节点、还不在可选节点里：自动加进可选节点（说一声），配置里的账号照常加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「阁楼组」的配置要 bea@example.com 走节点 AI-B：它在 Team 的配置带的节点里（同步时写进路由器的配置），已加进可选节点" && printf "%s" "$out" | grep -q "按「阁楼组」的配置添加了 Claude 账号 bea@example.com，出口 AI-B" && cfgok "\"AI-B\" in c[\"nodes\"] and c[\"node_ids\"].get(\"AI-B\")" && tblok "t.get(\"bea@example.com\") == \"AI-B\""'
+# 还原：路由器、config.json、账号表回到这一节开头。管理员不再在配置里带节点：同步以后这台机器上也没有了
 rm -rf "$R"; cp -R "$T/router.snap" "$R"; cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
-rm -f "$PR/nodes.json" "$PR/nodes.json.sig"; out=$(run cca policy pull 2>&1)
-ok "映射仓库里没有 nodes.json 了：这台机器上的参考节点也删掉" '[ ! -e "$H/.cca/policy/nodes.json" ] && ! printf "%s" "$out" | grep -q "参考节点："'
+gl_put '{"accounts": {"claude": {"alice@example.com": "HK-A2"}}}'
+out=$(run cca team sync 2>&1); rc=$?; out2=$(run cca router status 2>&1)
+ok "Team 的配置不再带节点：同步以后这台机器上也没有了（cca router status 不再说参考节点），bea 也不会加回来" '[ $rc -eq 0 ] && [ "$(gl_have)" = "$GLSEQ" ] && ! printf "%s" "$out2" | grep -q "参考节点" && ! grep -q bea "$H/.cca/accounts.json"'
 cp "$T/config.snap" "$H/.cca/config.json"; cp "$T/accounts.snap" "$H/.cca/accounts.json"
-
+gl_down
 fi
 if sect 11b2c; then
 # 11b2c. 自定义节点写进路由器（cca node add / node use，App 账号页的「自定义代理…」）：和参考节点同一套写法（行尾带 # cca、先拿内核
-#        校验、写了要重启才用上，问过才重启），只是不进任何策略组；分享链接以外也认 socks5:// 和 http(s)://。维护者的映射固定了节点的
-#        账号不能换。这一节结束时路由器、config.json、账号表、自定义节点都还原
+#        校验、写了要重启才用上，问过才重启），只是不进任何策略组；分享链接以外也认 socks5:// 和 http(s)://。Team 的配置固定了节点的
+#        账号不能换（alice：「阁楼组」给的，HK-A2）。这一节结束时路由器、config.json、账号表、自定义节点都还原
+touch "$H/.cca/teams/checked"   # 不让启动时的后台同步插进来（这一节不起阁楼组的服务器，用手里的那一版配置）
 rm -rf "$T/router.snap2" "$T/core.snap2"; cp -R "$R" "$T/router.snap2"; cp "$H/.cca/config.json" "$T/config.snap2"; cp "$H/.cca/accounts.json" "$T/accounts.snap2"
 [ ! -d "$H/.cca/core" ] || cp -Rp "$H/.cca/core" "$T/core.snap2"   # 校验节点要下载内置代理的内核：这一节结束时还原（11b4 测第一次下载）
 CNF="$H/.cca/core/custom-nodes.json"
@@ -3047,7 +3058,7 @@ for b in k.encode(): x = ((x ^ b) * 0x100000001b3) & 0xffffffffffffffff
 print("%016x" % x)' "$1"
 }
 out=$(run CCA_TTY="$(ans 'socks5://u:p@198.51.100.7:1080' .)" cca node use alice 2>&1); rc=$?
-ok "cca node use：维护者的映射固定了节点的账号不能换（不问链接，什么都不存）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "维护者的映射固定了 alice@example.com 的出口节点" && ! printf "%s" "$out" | grep -q "粘贴" && [ ! -e "$CNF" ]'
+ok "cca node use：Team 的配置固定了节点的账号不能换（不问链接，什么都不存）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "「阁楼组」的配置固定了 alice@example.com 的出口节点，不能换成自定义代理" && ! printf "%s" "$out" | grep -q "粘贴" && [ ! -e "$CNF" ]'
 edit_table 'j["cu@example.com"] = "US-B"'; run cca router sync -y >/dev/null 2>&1
 cs=$(( $(cfgv 'c["ports"]["cu@example.com"]') - 7900 )); cp "$SRC" "$T/src.cu"; n0=$(reloads); r0=$(restarts); : > ssh.log
 out=$(run CCA_TTY="$(ans y)" cca node use cu 'socks5://u%40x:p%3Aw@198.51.100.7:1080#Home%20IP' 2>&1); rc=$?
@@ -3065,7 +3076,7 @@ r0=$(restarts)
 out=$(sess '{"node.custom":[{"link":"这不是链接"},{"link":"http://a:b@198.51.100.10:3128#Office"}],"consent.router_restart":[{"v":"y"}]}' -- cca node use cu 2>&1); rc=$?
 ok "App 的「自定义代理…」（提问会话 cca node use）：粘贴代理链接，认不出的带着原因重问；同步时要重启 OpenClash 在会话里问（consent.router_restart），同意后重启；做完 result 是 saved、带账号" '[ $rc -eq 0 ] && [ "$(asks)" = "node.custom node.custom consent.router_restart" ] && evq "e.get(\"q\") == \"node.custom\" and \"认不出\" in (e[\"fields\"][0].get(\"error\") or \"\")" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"saved\" and e[\"key\"] == \"cu@example.com\" and \"Office\" in e[\"message\"]" && [ "$(restarts)" = $((r0 + 1)) ] && tblok "t[\"cu@example.com\"] == \"Office\"" && [ "$(sel "CCA-$cs")" = Office ] && rget "$SRC" "c[\"proxies\"].find { |p| p[\"name\"] == \"Office\" } == {\"name\" => \"Office\", \"type\" => \"http\", \"server\" => \"198.51.100.10\", \"port\" => 3128, \"username\" => \"a\", \"password\" => \"b\"}"'
 out=$(run cca _gui state 2>/dev/null)
-ok "_gui state：can.custom_proxy——维护者固定了节点的账号是 false，别的是 true" 'printf "%s" "$out" | jok "[a[\"can\"][\"custom_proxy\"] for a in d[\"tools\"][0][\"accounts\"] if a[\"key\"] in (\"alice@example.com\", \"cu@example.com\")] == [False, True]"'
+ok "_gui state：can.custom_proxy——Team 的配置固定了节点的账号是 false，别的是 true" 'printf "%s" "$out" | jok "[a[\"can\"][\"custom_proxy\"] for a in d[\"tools\"][0][\"accounts\"] if a[\"key\"] in (\"alice@example.com\", \"cu@example.com\")] == [False, True]"'
 # 多设备共用一个路由器：扮演另一台设备（owner bbbb…，直接写路由器的 accounts.yaml + owners，见 11a2），它的账号 dave-dev2
 # 用它那台的节点。路由器按槽位带着的 ck 核对自定义节点，同名却不是同一个的宁可断开。这几个用例结束时还原到这里
 rm -rf "$T/router.md"; cp -R "$R" "$T/router.md"; cp "$H/.cca/config.json" "$T/config.md"; cp "$H/.cca/accounts.json" "$T/acct.md"; cp -p "$CNF" "$T/cnf.md"
@@ -3127,193 +3138,19 @@ rm -rf "$R" "$H/.cca/core"; cp -R "$T/router.snap2" "$R"; cp "$T/config.snap2" "
 [ ! -d "$T/core.snap2" ] || cp -Rp "$T/core.snap2" "$H/.cca/core"
 
 fi
-if sect 11b3; then
-# 11b3. 维护者管理各台机器的 deploy key（policy.sh key）：假 gh 模拟 GitHub 的 deploy key 接口（存在 $T/deploy_keys.json），
-# 有 $T/policy_keys 时假 git 按它认 deploy key（没加上就拒绝，认出来了记下最近使用）
-PS="$D/../policy.sh"; touch "$T/policy_keys"; : > ghcli.log
-NOPD="CCA_POLICY_DIR=$T/no-policy-dir"   # 仓库里的 policy.sh 默认看仓库旁边的 cca-policy（维护者真的映射）：测试里指到沙箱
-pks() { local a="$1"; shift; run $P $NOPD CCA_TTY="$a" bash "$PS" key "$@"; }   # pks 答案文件 子命令…
-dkt() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(\"|\".join(\"%s:%s\" % (k[\"title\"], \"ro\" if k[\"read_only\"] else \"rw\") for k in d[\"repos\"].get(\"example/cca-policy\", [])))" "$T/deploy_keys.json" 2>/dev/null; }   # 假 GitHub 上的 key：别名:ro|rw
-dkk() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(\"\".join(k[\"key\"] for k in d[\"repos\"][\"example/cca-policy\"] if k[\"title\"] == sys.argv[2]))" "$T/deploy_keys.json" "$1"; }   # dkk 别名：那把 key 的公钥
-posts() { grep -c '^GH api POST' ghcli.log; }
-out=$(pks "$(ans)" 2>&1); rc=$?
-ok "policy.sh key：仓库上还没有 deploy key 时说明怎么加" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上还没有 deploy key：有人发来公钥后复制它，运行 ./policy.sh key add"'
-rm -f "$T/clipboard"
-out=$(run $P CCA_TTY="$(ans)" cca policy setup 2>&1)
-ok "这台机器的公钥还没加到仓库上：拉不到映射；给维护者的那一行（带着公钥）复制到了剪贴板" '[ "$(cat "$T/clipboard")" = "./policy.sh key add $(kl)" ] && printf "%s" "$out" | grep -q "GitHub 不认这台机器的 deploy key"'
-out=$(pks "$(ans alice-mbp)" add 2>&1); rc=$?
-ok "policy.sh key add：读剪贴板里的公钥（认出是这台机器的），提示起别名，加成只读 deploy key" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "要加的公钥：SHA256:.*（cca-policy@.*），是这台机器的" && printf "%s" "$out" | grep -q "给它起个别名（谁的哪台机器，以后按别名查、删、改） \[" && printf "%s" "$out" | grep -q "已把「alice-mbp」加成 example/cca-policy 的只读 deploy key" && [ "$(dkt)" = alice-mbp:ro ] && [ "$(dkk alice-mbp)" = "$(cut -d" " -f1,2 "$PK.pub")" ]'
-out=$(run cca policy pull 2>&1); rc=$?
-ok "维护者加上之后：这台机器拉得到映射" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "映射没有变化"'
-out=$(pks "$(ans)" add 2>&1); rc=$?
-ok "同一把公钥再加一次：说已经加过了、别名是什么，不重复加" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "这把公钥已经加过了，别名「alice-mbp」" && [ "$(posts)" = 1 ]'
-ssh-keygen -q -t ed25519 -N "" -C "cca-policy@bob-mini" -f "$T/bob"; ssh-keygen -q -t ed25519 -N "" -C "cca-policy@carol-air" -f "$T/carol"
-out=$(pks "$(ans " alice-mbp " '')" add "$T/bob.pub" 2>&1); rc=$?
-ok "从文件加：别名重复了（不计首尾空格）要换一个；直接回车用公钥备注里的机器名" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "别名「alice-mbp」已经有了，换一个" && [ "$(dkt)" = "alice-mbp:ro|bob-mini:ro" ]'
-cp "$T/bob" "$T/clipboard"
-out=$(pks "$(ans x)" add 2>&1); rc=$?
-ok "剪贴板里是私钥：不加，提醒别再外传" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "剪贴板里是私钥，不是公钥" && [ "$(posts)" = 2 ]'
-out=$(printf '这是我的公钥：%s 谢谢\n' "$(cat "$T/carol.pub")" | run $P $NOPD bash "$PS" key add - "Carol 的 Air" 2>&1); rc=$?
-ok "从标准输入加、别名写在命令后面（不提问）；夹在聊天消息里的公钥也认得出" '[ $rc -eq 0 ] && [ "$(dkt)" = "alice-mbp:ro|bob-mini:ro|Carol 的 Air:ro" ] && [ "$(dkk "Carol 的 Air")" = "$(cut -d" " -f1,2 "$T/carol.pub")" ]'
-out=$(pks "$(ans)" ls 2>&1); rc=$?; today=$(date +%F)
-ok "policy.sh key：列出各台机器的 key（添加时间、最近一次拉取、别名），标出这台机器的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上有 3 把 deploy key" && printf "%s\n" "$out" | grep -qx "  $today  $today  alice-mbp（这台机器）" && printf "%s\n" "$out" | grep -qx "  $today  还没用过    bob-mini" && printf "%s\n" "$out" | grep -qx "  $today  还没用过    Carol 的 Air"'
-out=$(pks "$(ans)" mv bob-mini "Bob 的 mini" 2>&1); rc=$?
-ok "policy.sh key mv：改别名（GitHub 的 deploy key 不能改：删掉后用同一把公钥重新加上，还是只读）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「bob-mini」改叫「Bob 的 mini」" && [ "$(dkt)" = "alice-mbp:ro|Carol 的 Air:ro|Bob 的 mini:ro" ] && [ "$(dkk "Bob 的 mini")" = "$(cut -d" " -f1,2 "$T/bob.pub")" ]'
-out=$(pks "$(ans "Carol 的 Air" '' carol)" mv alice-mbp 2>&1); rc=$?
-ok "改别名不写新别名就提示；新别名已经有了、是空的都要重输" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "「alice-mbp」的新别名：" && printf "%s" "$out" | grep -q "别名「Carol 的 Air」已经有了，换一个" && printf "%s" "$out" | grep -q "别名不能是空的" && [ "$(dkt)" = "Carol 的 Air:ro|Bob 的 mini:ro|carol:ro" ]'
-out=$(pks "$(ans)" mv carol "Bob 的 mini" 2>&1); rc=$?
-ok "命令里写的新别名已经有了：不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "别名「Bob 的 mini」已经有了" && [ "$(dkt)" = "Carol 的 Air:ro|Bob 的 mini:ro|carol:ro" ]'
-pks "$(ans)" mv carol alice-mbp >/dev/null 2>&1
-out=$(pks "$(ans)" rm "Carol 的 Air" 2>&1); rc=$?
-out2=$(pks "$(ans y)" rm "Carol 的 Air" 2>&1); rc2=$?
-ok "policy.sh key rm：先确认（默认不删）；确认后删掉，并给出它的公钥（要加回来时用）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "删掉「Carol 的 Air」吗？" && printf "%s" "$out" | grep -q "没删" && [ $rc2 -eq 0 ] && [ "$(dkt)" = "Bob 的 mini:ro|alice-mbp:ro" ] && printf "%s" "$out2" | grep -qF "$(cut -d" " -f1,2 "$T/carol.pub")"'
-out=$(pks "$(ans)" rm nobody 2>&1); rc=$?
-ok "没有这个别名：说明现有哪些" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上没有叫「nobody」的 key（现有：Bob 的 mini、alice-mbp）"'
-out=$(pks "$(ans)" rm -y alice-mbp 2>&1); rc=$?
-out2=$(run cca policy pull 2>&1); rc2=$?
-ok "删掉这台机器的 key（-y 不问）：这台机器拉不到新映射了，已经拉到的照用" '[ $rc -eq 0 ] && [ "$(dkt)" = "Bob 的 mini:ro" ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "GitHub 不认这台机器的 deploy key" && [ -f "$H/.cca/policy/policy.json" ]'
-touch "$T/gh_post_fail"; out=$(pks "$(ans)" mv "Bob 的 mini" bob 2>&1); rc=$?; rm -f "$T/gh_post_fail"
-ok "改别名时旧的删掉了、新的没加上（GitHub 出错，试了三次）：说清楚，并给出加回来的那一行（公钥写在命令里）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "旧的「Bob 的 mini」已经删了，可新的没加上：Server Error" && printf "%s" "$out" | grep -qxF "  ./policy.sh key add -R example/cca-policy '\''$(cut -d" " -f1,2 "$T/bob.pub")'\'' '\''bob'\''" && [ "$(dkt)" = "" ] && [ "$(grep -c "^GH api POST .* title=bob$" ghcli.log)" = 3 ]'
-# cca 给出的那一行：公钥和别名都写在命令里（服务器上没有剪贴板，用户复制那一行发给维护者）
-ssh-keygen -q -t ed25519 -N "" -C "cca-policy@srv-a" -f "$T/srva"; ssh-keygen -q -t ed25519 -N "" -C "cca-policy@srv-a" -f "$T/srvb"
-: > "$T/clipboard"
-out=$(pks "$(ans)" add "$(cat "$T/srva.pub")" srv-a 2>&1); rc=$?
-ok "policy.sh key add '公钥' 别名（cca 给出的那一行）：认命令里写的公钥，不读剪贴板、不提问" '[ $rc -eq 0 ] && [ "$(dkt)" = "srv-a:ro" ] && [ "$(dkk srv-a)" = "$(cut -d" " -f1,2 "$T/srva.pub")" ] && ! printf "%s" "$out" | grep -q "起个别名"'
-out=$(pks "$(ans srv-b)" add "$(cat "$T/srvb.pub")" srv-a 2>&1); rc=$?
-ok "两台机器同名（命令里写的别名已经有了）：有终端时另问一个（不拿重名的当默认值）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "别名「srv-a」已经有了，换一个" && printf "%s" "$out" | grep -q "给它起个别名（谁的哪台机器，以后按别名查、删、改）：" && [ "$(dkt)" = "srv-a:ro|srv-b:ro" ]'
-pks "$(ans)" rm -y srv-a >/dev/null 2>&1; pks "$(ans)" rm -y srv-b >/dev/null 2>&1
-touch "$T/gh_down"; out=$(pks "$(ans)" 2>&1); rc=$?; rm -f "$T/gh_down"
-ok "连不上 GitHub：说明原因" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "读不到 example/cca-policy 上的 deploy key：连不上 GitHub（error connecting to api.github.com）"'
-defrepo=$(sed -n 's/^POLICY_REPO_DEFAULT="\${CCA_POLICY_DEFAULT-\([^}]*\)}"$/\1/p' "$CCA")
-out=$(run $NOPD CCA_TTY="$(ans)" bash "$PS" key 2>&1); rc=$?
-out2=$(run $NOPD CCA_TTY="$(ans)" bash "$PS" key -R example/other 2>&1); rc2=$?
-: > ghcli.log; env -i LANG=en_US.UTF-8 HOME="$H" CCA_T="$T" "$NOPD" CCA_TTY="$(ans)" PATH="$T/bin:/usr/bin:/bin" bash "$PS" key >/dev/null 2>&1
-ok "仓库：CCA_POLICY_DEFAULT 设成空、又没写 -R 时不猜；-R 指定别的仓库；都没设时用 cca 里写的默认仓库" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不知道是哪个映射仓库：加上 -R 维护者/仓库" && [ $rc2 -eq 0 ] && printf "%s" "$out2" | grep -q "example/other 上还没有 deploy key" && [ -n "$defrepo" ] && grep -q "^GH api GET repos/$defrepo/keys" ghcli.log'
-rm -f "$T/policy_keys"
-
-fi
-if sect 11b3b; then
-# 11b3b. 把账号锁进映射：这台机器生成一条命令（cca policy request），维护者在 cca 的仓库里直接运行（policy.sh lock），确认后写进映射、
-#        签名推送，再拉回来这个账号就被固定了。policy.sh 读旁边那份 cca 的发布公钥：放在假的维护者目录里，用测试发布密钥的 cca；
-#        映射仓库就放在它旁边（默认的位置）。这一节用自己的映射，结束时账号表、配置、映射、假的映射仓库都还原
-PD="$H/.cca/policy/policy.json"
-for f in "$H/.cca/accounts.json" "$H/.cca/codex.json" "$H/.cca/config.json" "$PD" "$PR/policy.json" "$PR/policy.json.sig"; do cp -p "$f" "$T/lock.$(basename "$f")"; done
-MT="$T/maint"; MR="$T/cca-policy"; mkdir -p "$MT" "$MR"; cp -p "$PS" "$MT/policy.sh"; cp "$H/.cca/bin/cca" "$MT/cca"
-printf '%s\n' '{"version": 1, "claude": {"alice@example.com": "US-C"}}' | tee "$PD" > "$MR/policy.json"
-git -C "$MR" init -q; git -C "$MR" config user.name t; git -C "$MR" config user.email t@example.com
-git -C "$MR" remote add origin git@github.com:example/cca-policy.git; git -C "$MR" add -A; git -C "$MR" commit -qm init
-edit_table 'j["工作(bob@example.com)"] = "US-B"'   # 这时账号表里只有 alice（映射固定）和第三方 API：加一个映射里没有的
-LK="工作(bob@example.com)"; LE=bob@example.com; LN=US-B
-AK=$(python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$H/.cca/accounts.json")
-: > "$T/clipboard"
-out=$(run cca policy request "$LK" 2>"$T/lock.err"); rc=$?
-ok "cca policy request：写一条维护者直接运行的命令（账号和它现在的节点，不带别名），复制到剪贴板" '[ $rc -eq 0 ] && [ "$out" = "./policy.sh lock claude $LE $LN" ] && [ "$(cat "$T/clipboard")" = "$out" ] && grep -q "在 cca 的仓库里运行这条命令" "$T/lock.err"'
-out=$(run cca policy request alice@example.com 2>&1); rc=$?
-ok "已经被映射固定的账号不用请求：说清楚固定在哪个节点上" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "已经按维护者的映射固定在 US-C 上了" && ! printf "%s" "$out" | grep -q policy.sh'
-out=$(run cca policy request "$AK" 2>&1); rc=$?
-ok "第三方 API 账号不能请求（映射只管官方账号）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "映射只管官方账号"'
-out=$(run cca policy request 没这个账号 2>&1); rc=$?
-ok "没有这个账号：说清楚" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没找到账号"'
-: > "$T/clipboard"
-out=$(runev cca policy request "$LK" 2>/dev/null); rc=$?
-ok "图形界面（有事件文件）：stdout 还是那条命令，由 App 自己复制，cca 不碰剪贴板" '[ $rc -eq 0 ] && [ "$out" = "./policy.sh lock claude $LE $LN" ] && [ ! -s "$T/clipboard" ]'
-out=$(runev cca policy request alice@example.com 2>/dev/null); rc=$?
-ok "图形界面：不能请求时 fail 事件里写着原因，stdout 没有内容" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and \"已经按维护者的映射固定\" in e[\"message\"]"'
-out=$(run cca _gui state 2>/dev/null </dev/null)
-ok "_gui state：can.policy_lock：没被映射固定的官方账号能请求，被固定的、第三方 API 账号不能" 'printf "%s" "$out" | LK="$LK" AK="$AK" jok "(lambda a: a[__import__(\"os\").environ[\"LK\"]][\"can\"][\"policy_lock\"] and not a[__import__(\"os\").environ[\"AK\"]][\"can\"][\"policy_lock\"] and not next(v for k, v in a.items() if \"alice@example.com\" in k)[\"can\"][\"policy_lock\"])({x[\"key\"]: x for x in d[\"tools\"][0][\"accounts\"]})"'
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("policy", None); json.dump(d, open(sys.argv[1], "w"))' "$H/.cca/config.json"
-out=$(run cca policy request "$LK" 2>&1); rc=$?
-out2=$(run cca _gui state 2>/dev/null </dev/null)
-ok "这台机器没打开共享：不能请求（先 cca policy on），App 里也没有这个入口" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没打开维护者的共享：先运行 cca policy on" && printf "%s" "$out2" | jok "not any(x[\"can\"][\"policy_lock\"] for t in d[\"tools\"] for x in t[\"accounts\"])"'
-cp -p "$T/lock.config.json" "$H/.cca/config.json"
-out=$(run cca codex policy request dave@example.com 2>/dev/null); rc=$?
-ok "cca codex policy request：命令里写着是 Codex 的账号" '[ $rc -eq 0 ] && [ "$out" = "./policy.sh lock codex dave@example.com US-D" ]'
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["nodes"].append("HK 香港 (1)"); json.dump(d, open(sys.argv[1], "w"), ensure_ascii=False)' "$H/.cca/config.json"
-edit_table 'j["weird@example.com"] = "HK 香港 (1)"'
-out=$(run cca policy request weird@example.com 2>/dev/null); rc=$?
-args=$(eval "$(printf '%s' "$out" | sed 's#^\./policy\.sh#printf "[%s]"#')")
-ok "节点名里有空格、括号、中文：命令里加了引号，粘贴运行时还是一个参数" '[ $rc -eq 0 ] && [ "$args" = "[lock][claude][weird@example.com][HK 香港 (1)]" ]'
-edit_table 'j.pop("weird@example.com")'; cp -p "$T/lock.config.json" "$H/.cca/config.json"
-# 维护者这边：拿到的就是这条命令，在 cca 的仓库里直接运行，看过、确认才写
-runcmd() { out=$(run CCA_RELEASE_KEY="$T/relkey" CCA_TTY="$1" bash -c "cd '$MT' && $2" 2>&1); rc=$?; }   # runcmd 答案文件 命令
-CMD=$(run cca policy request "$LK" 2>/dev/null)
-head0=$(git -C "$MR" rev-parse HEAD); sum0=$(cat "$MR/policy.json")
-runcmd "$(ans n)" "$CMD"
-ok "policy.sh lock：发来的命令直接运行（映射仓库默认在 cca 仓库旁边），列出会改什么、问过才写；回答 n 什么都不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "${LE} → ${LN}（新加）" && printf "%s" "$out" | grep -q "写进 policy.json、签名并推送吗" && printf "%s" "$out" | grep -q "没有改" && [ "$(cat "$MR/policy.json")" = "$sum0" ] && [ "$(git -C "$MR" rev-parse HEAD)" = "$head0" ]'
-: > git.log
-runcmd "$(ans y)" "$CMD"
-printf 'cca-release %s\n' "$(cut -d' ' -f1,2 "$T/relkey.pub")" > "$T/lock.allowed"
-ok "policy.sh lock：确认后写进 policy.json（不带别名）、用发布密钥签名（cca-policy）、提交并推送" '[ $rc -eq 0 ] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"claude\"].get(sys.argv[2]) == sys.argv[3] and d[\"claude\"][\"alice@example.com\"] == \"US-C\" and \"aliases\" not in d else 1)" "$MR/policy.json" "$LE" "$LN" && ssh-keygen -Y verify -f "$T/lock.allowed" -I cca-release -n cca-policy -s "$MR/policy.json.sig" < "$MR/policy.json" >/dev/null 2>&1 && git -C "$MR" log -1 --format=%s | grep -q "按请求锁定账号的节点：$LE → $LN" && grep -q "GIT push $MR" git.log && printf "%s" "$out" | grep -q "已发布到 example/cca-policy"'
-cp "$MR/policy.json" "$MR/policy.json.sig" "$PR/"
-out=$(run cca policy pull 2>&1); rc=$?
-out2=$(run cca policy request "$LK" 2>&1); rc2=$?
-out3=$(run cca _gui state 2>/dev/null </dev/null)
-ok "拉到新映射后这个账号被固定了：不用再请求，App 里也没有这个入口" '[ $rc -eq 0 ] && [ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "已经按维护者的映射固定在 $LN 上了" && printf "%s" "$out3" | LE="$LE" jok "(lambda a: a[\"pinned\"] and not a[\"can\"][\"policy_lock\"])(next(x for x in d[\"tools\"][0][\"accounts\"] if __import__(\"os\").environ[\"LE\"] in x[\"key\"]))"'
-head1=$(git -C "$MR" rev-parse HEAD)
-runcmd "$(ans)" "$CMD"
-ok "同一条命令再运行一次：说已经是这样了，不用发布，不提交" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经是这样" && printf "%s" "$out" | grep -q "不用发布" && [ "$(git -C "$MR" rev-parse HEAD)" = "$head1" ]'
-runcmd "$(ans)" "./policy.sh lock claude ALICE@example.com US-A -y"
-ok "已有的账号换节点（邮箱不分大小写，改原来那一项）；-y 不问" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "alice@example.com：US-C → US-A（换节点）" && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"claude\"][\"alice@example.com\"] == \"US-A\" and len(d[\"claude\"]) == 2 else 1)" "$MR/policy.json"'
-runcmd "$(ans)" "./policy.sh lock codex Mixed@Example.com US-D -y"
-ok "Codex 账号写进 codex 那一节，邮箱存成小写" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "mixed@example.com → US-D（新加）" && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"codex\"] == {\"mixed@example.com\": \"US-D\"} else 1)" "$MR/policy.json"'
-printf '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-A", "type": "vless", "server": "192.0.2.1", "port": 443}]}\n' > "$MR/nodes.json"
-runcmd "$(ans n)" "./policy.sh lock claude new@example.com US-B"
-rm -f "$MR/nodes.json" "$MR/nodes.json.sig"
-ok "节点不在参考节点里：提醒路由器上没有这个节点的机器会用不了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "节点 US-B 不在参考节点（nodes.json）里"'
-mkdir -p "$T/other"; cp "$MR/policy.json" "$T/other/"
-runcmd "$(ans n)" "./policy.sh lock claude x@example.com US-A -C '$T/other'"
-out2="$out"; out=$(run CCA_RELEASE_KEY="$T/relkey" CCA_POLICY_DIR="$T/other" CCA_TTY="$(ans n)" bash -c "cd '$MT' && ./policy.sh lock claude x@example.com US-A" 2>&1)
-ok "映射仓库在别的地方：环境变量 CCA_POLICY_DIR 或者 -C 指定" 'printf "%s" "$out" | grep -qF "要写进映射（$T/other）" && printf "%s" "$out2" | grep -qF "要写进映射（$T/other）"'
-runcmd "$(ans)" "./policy.sh lock claude x@example.com US-A -C '$T/nope'"
-ok "找不到映射仓库：说明怎么指定" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用 -C 指定映射仓库的目录"'
-headx=$(git -C "$MR" rev-parse HEAD); sumx=$(cat "$MR/policy.json")
-bad() { out=$(cd "$MT" && run CCA_RELEASE_KEY="$T/relkey" ./policy.sh lock "$@" -y 2>&1); rc=$?; }
-unchanged() { [ "$(git -C "$MR" rev-parse HEAD)" = "$headx" ] && [ "$(cat "$MR/policy.json")" = "$sumx" ]; }
-noesc() { ! printf "%s" "$out" | grep -q "$(printf "\033")"; }
-bad claude
-ok "少写了参数：说用法，什么都不改" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "用法：./policy.sh lock claude|codex|agy 邮箱 节点" && unchanged'
-bad router e@example.com US-A
-ok "不认识的工具：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "工具应该是 claude、codex 或 agy" && unchanged'
-bad claude nonsense US-A
-ok "不像邮箱：不收" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "邮箱不对" && unchanged'
-bad claude "e$(printf '\033')[2J@example.com" US-A
-ok "邮箱里有控制字符（可能搅乱终端）：不收，也不原样显示" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "邮箱不对" && noesc && unchanged'
-bad claude e@example.com "US$(printf '\033')[2J"
-ok "节点名里有控制字符：不收，也不原样显示" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "节点名不对" && noesc && unchanged'
-touch "$T/gh_public"; : > git.log
-runcmd "$(ans)" "./policy.sh lock claude pub@example.com US-A -y"; rm -f "$T/gh_public"
-ok "映射仓库不是私有的：不签名、不推送" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "不是私有仓库" && ! grep -q "GIT push" git.log'
-runcmd "$(ans)" "./policy.sh lock claude pub@example.com US-A -y"
-ok "上次写进去了、没发布成：再运行一次时提醒还没发布，告诉维护者怎么发布" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "还有没发布的改动" && printf "%s" "$out" | grep -qF "./policy.sh $MR"'
-for f in accounts.json codex.json config.json; do cp -p "$T/lock.$f" "$H/.cca/$f"; done; cp -p "$T/lock.policy.json" "$PD"; cp -p "$T/lock.policy.json" "$PR/policy.json"; cp -p "$T/lock.policy.json.sig" "$PR/policy.json.sig"
-
-fi
 if sect 11b3c; then
-# 11b3c. 设备统计（presence）：维护者在映射里配置了设备统计的服务器（真的 server/cca-presence.py：127.0.0.1 上随机端口、测试证书、
-#        测试发布密钥，ttl 是 STTL 秒）之后，映射里的账号经 cca 用的时候这台 Mac 在后台起一个上报进程，把开着的会话报给服务器；
-#        cca devices 问服务器这个账号连着哪些设备。设备清单由维护者 ./policy.sh presence sync（假 gh 的 deploy key）推给服务器。
-#        测试里的会话没有终端：在跑就算在用。这一节结束时停掉服务器，映射、配置、假的映射仓库、假 GitHub 上的 key 都还原
-SV="$T/presence-srv"; mkdir -p "$SV"
+# 11b3c. 设备统计、记下的 API key、折合金额、远程会话的配对：Team 给的账号经这个 Team 的同步服务器和别的设备同步（「阁楼组」：真的
+#        server/cca-presence.py --mode team，ttl 是 STTL 秒，开着中转和网页端）。alice 是阁楼组给的：经 cca 用的时候这台 Mac 在后台起一个
+#        上报进程，把开着的会话报给服务器；cca devices 问服务器这个账号连着哪些设备。另一台设备 dan-air 是照 server/README.md 独立实现的
+#        那一头（拿管理员给的邀请加入）。测试里的会话没有终端：在跑就算在用。这一节结束时这台 Mac 退出阁楼组、停掉服务器，配置还原
 STTL=10   # 服务器这么多秒没收到上报就算离线。上报进程 60 秒才一次心跳，所以「在用」只在每次上报后的这几秒里看得到：
           # 以前是 3 秒，机器慢时（xprotectd 忙着扫新文件，cca 每次运行慢好几倍）看到在用以后再问一两次就过了
-openssl ecparam -name prime256v1 -genkey -noout -out "$SV/key.pem" 2>/dev/null
-openssl req -new -x509 -key "$SV/key.pem" -subj /CN=cca-presence -days 2 -out "$SV/cert.pem" 2>/dev/null
-cp "$T/relkey.pub" "$SV/release.pub"
-srv_start() {   # srv_start [端口]：起服务器（状态文件留着，重启后接着用）
-	rm -f "$SV/port"
-	python3 -I "$D/../server/cca-presence.py" --listen "127.0.0.1:${1:-0}" --port-file "$SV/port" --cert "$SV/cert.pem" --key "$SV/key.pem" \
-		--release-key "$SV/release.pub" --state "$SV/state.json" --ttl "$STTL" --relay-listen 127.0.0.1:0 \
-		--web-url https://relay.example.com:18445/ >>"$SV/log" 2>&1 &   # 网页端开着（cca remote pair --web 要它；页面是仓库里的 server/web/）
-	SVP=$!
-	local i; for i in $(seq 1 50); do [ -s "$SV/port" ] && return 0; sleep 0.1; done; return 1
-}
-srv_start; SVPORT=$(cat "$SV/port")
-PIN="sha256//$(openssl x509 -in "$SV/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"   # 和部署时一样用 openssl 算
-PRD="$H/.cca/presence"
-cp -p "$H/.cca/config.json" "$T/pres.config.json"; cp -p "$H/.cca/accounts.json" "$T/pres.accounts.json"; cp -p "$T/deploy_keys.json" "$T/pres.keys.json"
-cp -p "$PR/policy.json" "$T/pres.pr.json"; cp -p "$PR/policy.json.sig" "$T/pres.pr.sig"; cp -p "$H/.cca/policy/policy.json" "$T/pres.local.json"; cp -p "$MR/policy.json" "$T/pres.mr.json"
+gl_upr() { gl_up --ttl "$STTL" --relay-listen 127.0.0.1:0 --web-url https://relay.example.com:18445/; }   # 网页端开着（cca remote pair --web 要它；页面是仓库里的 server/web/）
+gl_upr; touch "$H/.cca/teams/checked"
+PRD="$H/.cca/presence"; ME=alice-mbp   # 这台 Mac 加入阁楼组时起的名字
+python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop("presence", None); json.dump(c, open(p, "w"), indent=2, ensure_ascii=False)' "$H/.cca/config.json"   # 打开设备统计（11b2 起关着）
+cp -p "$H/.cca/config.json" "$T/pres.config.json"; cp -p "$H/.cca/accounts.json" "$T/pres.accounts.json"
 cp -p "$AJ" "$T/pres.aj.json"   # 下面 API key 的同步按登录身份（accountUuid）认，用完还原
-withp() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]={"url":"https://127.0.0.1:%s" % sys.argv[2],"pins":[sys.argv[3]],"salt":"ab"*16}; print(json.dumps(j))' "$T/pres.pr.json" "$SVPORT" "${1:-$PIN}"; }   # withp [指纹]：现在发布的映射加上 presence 一节
 dv() { run cca devices alice@example.com --json 2>/dev/null; }   # 问服务器：alice 连着哪些设备
 dstate() { dv > "$T/dv.json"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' "$T/dv.json" 2>/dev/null; }   # 问到的留在 dv.json
 # 等服务器上 alice 的设备变成这样。一秒左右问一次：服务器给每台设备限了流（每秒 0.5 个请求、最多攒 30 个，上报进程的上报和这里的查询
@@ -3322,45 +3159,22 @@ dstate() { dv > "$T/dv.json"; python3 -c 'import json,sys; d=json.load(open(sys.
 dwait() { local i; for i in $(seq 1 60); do [ "$(dstate)" = "$1" ] && return 0; sleep 0.8; done; return 1; }
 apid() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$PRD/agent.json" 2>/dev/null; }   # 上报进程的进程号
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
-pol "$(withp)"
-out=$(run cca policy pull 2>&1); rc=$?
-out2=$(run cca policy 2>&1)
-ok "映射里加了设备统计的服务器（presence 一节）：照常验签拉到；cca policy 说明映射里的账号经 cca 用时会报告给它、怎么关掉" '[ $rc -eq 0 ] && grep -q "\"presence\"" "$H/.cca/policy/policy.json" && printf "%s" "$out2" | grep -q "设备统计：映射里的账号在这台 Mac 上用的时候.*https://127.0.0.1:$SVPORT" && printf "%s" "$out2" | grep -qF "\"presence\": false"'
-printf '%s\n' "$(withp)" > "$T/pres.ok.json"; python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["presence"]["url"]="http://x"; j["presence"]["pins"]=[]; json.dump(j, open(sys.argv[2], "w"))' "$T/pres.ok.json" "$T/pres.bad.json"
-out=$(run cca _policy-check "$T/pres.bad.json" 2>&1); rc=$?
-ok "维护者发布前的严格检查认识 presence 这一节，也查它的格式" 'run cca _policy-check "$T/pres.ok.json" >/dev/null 2>&1 && [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "presence.url 应该是 https://地址:端口" && printf "%s" "$out" | grep -q "presence.pins"'
 out=$(gj state)
-ok "_gui state：映射里的官方账号 can.devices 为真（账号页有「设备」），第三方 API 账号没有" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"can\"][\"devices\"] is True and not any(a[\"can\"].get(\"devices\") for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
-out=$(runev cca devices alice@example.com --json); rc=$?
-ok "服务器还不认这台 Mac（维护者还没同步设备清单）：退出码 1，fail 事件说清楚要维护者做什么" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_unavailable\" and \"presence sync\" in e[\"message\"]"'
-# 维护者：仓库上各台机器的 deploy key（这台机器的要在上面）推成服务器的设备清单
-printf '%s\n' "$(withp)" > "$MR/policy.json"
-python3 - "$T/deploy_keys.json" "$PK.pub" <<'PY'
-import json, sys
-p, pub = sys.argv[1], " ".join(open(sys.argv[2]).read().split()[:2])
-d = json.load(open(p))
-ks = d["repos"].setdefault("example/cca-policy", [])
-if not any(k["key"] == pub for k in ks):
-    ks.append({"id": d["next"], "key": pub, "url": "", "title": "alice-mbp", "verified": True, "created_at": "2026-11-01T00:00:00Z",
-               "read_only": True, "added_by": "maintainer", "last_used": None, "enabled": True})
-    d["next"] += 1
-json.dump(d, open(p, "w"), indent=1, ensure_ascii=False)
-PY
-ME=$(python3 -c 'import json,sys; pub=" ".join(open(sys.argv[2]).read().split()[:2]); print(next(k["title"] for k in json.load(open(sys.argv[1]))["repos"]["example/cca-policy"] if k["key"] == pub))' "$T/deploy_keys.json" "$PK.pub")
-NK=$(python3 -c 'import json,sys; print(sum(1 for k in json.load(open(sys.argv[1]))["repos"]["example/cca-policy"] if k["read_only"] and k["enabled"] and k["key"].startswith("ssh-ed25519 ")))' "$T/deploy_keys.json")
-runcmd "$(ans)" "$P ./policy.sh presence sync"
-out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1)
-ok "./policy.sh presence sync：仓库上的只读 deploy key 用发布密钥签名（cca-devices）推给服务器；presence status 说服务器认得几台、验签自检过了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "设备清单已推给服务器（$NK 台）" && printf "%s" "$out2" | grep -q "认得 $NK 台设备.*签名自检通过"'
+ok "_gui state：Team 给的官方账号 can.devices 为真（账号页有「设备」），第三方 API 账号没有" 'printf "%s" "$out" | jok "acct(0, \"alice@example.com\")[\"can\"][\"devices\"] is True and not any(a[\"can\"].get(\"devices\") for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
+cp -p "$H/.cca/config.json" "$T/own.cfg"; cp -p "$H/.cca/accounts.json" "$T/own.tbl"; edit_table 'j["mine@example.com"] = j["alice@example.com"]'   # 节点和 alice 的一样（一定在可选节点里）
+out=$(runev cca devices mine@example.com --json); rc=$?
+cp -p "$T/own.cfg" "$H/.cca/config.json"; cp -p "$T/own.tbl" "$H/.cca/accounts.json"
+ok "这台设备自己的官方账号（不是 Team 给的）：不统计，说只统计 Team 给的账号、要统计怎么办（fail 事件 devices_off）" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"mine@example.com 是这台设备自己的账号：只统计 Team 给的账号\" in e[\"message\"]"'
 out=$(run cca devices alice@example.com --json 2>&1); rc=$?
-ok "cca devices：还没有设备经 cca 用过 alice（这台 Mac 已经被认出来）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"devices\" and d[\"me\"] == \"$ME\" and d[\"accounts\"][0][\"key\"] == \"alice@example.com\" and d[\"accounts\"][0][\"devices\"] == []"'
+ok "cca devices：还没有设备经 cca 用过 alice（这台 Mac 是阁楼组里的 alice-mbp）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"devices\" and d[\"me\"] == \"$ME\" and d[\"accounts\"][0][\"key\"] == \"alice@example.com\" and d[\"accounts\"][0][\"devices\"] == []"'
 # 会话开着：上报进程在后台报（假 claude 在 hold 存在时不退出）
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS1=$!
 waitmark "$AD"; m1=$(marks "$AD")
 dwait "$ME:in_use:1"; rc=$?; a1=$(apid)
 mkdir -p "$T/guifx3"; cp "$T/dv.json" "$T/guifx3/devices.json"   # 契约测试解码的是 dwait 看到在用的那一份
 out=$(run cca devices 2>&1)   # 看到在用就马上问：过了 STTL 秒（下一次心跳之前）服务器就算离线了
-ok "映射里的账号开着会话：后台的上报进程马上报给服务器（在用、1 个会话、这台 Mac 排第一）；上报进程只有一个，后台优先级" '[ $rc -eq 0 ] && alive "$a1" && ps -o command= -p "$a1" | grep -q presence-agent && [ "$(ps -o pri= -p "$a1" | tr -d " ")" -le 20 ] && dv | jok "(lambda x: x[\"me\"] is True and x[\"since_epoch\"] and x[\"last_used_epoch\"] and x[\"last_active_epoch\"])(d[\"accounts\"][0][\"devices\"][0])"'
-ok "cca devices（给人看的）：每个映射里的账号连着哪些设备，这台 Mac 标出来" 'printf "%s" "$out" | grep -q "Claude 账号连着的设备" && printf "%s" "$out" | grep -qF "${ME}（这台 Mac）  在用 · 命令行里 1 个会话"'
+ok "Team 给的账号开着会话：后台的上报进程马上报给服务器（在用、1 个会话、这台 Mac 排第一）；上报进程只有一个，后台优先级" '[ $rc -eq 0 ] && alive "$a1" && ps -o command= -p "$a1" | grep -q presence-agent && [ "$(ps -o pri= -p "$a1" | tr -d " ")" -le 20 ] && dv | jok "(lambda x: x[\"me\"] is True and x[\"since_epoch\"] and x[\"last_used_epoch\"] and x[\"last_active_epoch\"])(d[\"accounts\"][0][\"devices\"][0])"'
+ok "cca devices（给人看的）：每个 Team 给的账号连着哪些设备，这台 Mac 标出来" 'printf "%s" "$out" | grep -q "Claude 账号连着的设备" && printf "%s" "$out" | grep -qF "${ME}（这台 Mac）  在用 · 命令行里 1 个会话"'
 touch "$T/hold"; run CCA_TTY="$(ans)" cca @alice --version >/dev/null 2>&1 & SS2=$!
 waitmark "$AD" 2
 dwait "$ME:in_use:2"; rc=$?
@@ -3379,7 +3193,7 @@ rm -f "$T/hold"; wait "$SS1" "$SS3" 2>/dev/null; for i in $(seq 1 30); do alive 
 dwait "$ME:none:0"; rc=$?
 for i in $(seq 1 30); do alive "$a2" || break; sleep 0.1; done
 ok "会话都关了：马上报“没在用”（留着上次使用），上报进程自己退出，这台 Mac 上不再有它" '[ $rc -eq 0 ] && ! alive "$a2" && dv | jok "d[\"accounts\"][0][\"devices\"][0][\"last_used_epoch\"] is not None"'
-ok "上报不经账号的出口：直连（钉住证书公钥），不经路由器和本机 Clash" '! grep -q "127.0.0.1:$SVPORT" curl.log 2>/dev/null'
+ok "上报不经账号的出口：直连（钉住证书公钥），不经路由器和本机 Clash" '! grep -q "127.0.0.1:$GLPORT" curl.log 2>/dev/null'
 AK=$(python3 -c 'import json,sys; print(next(k for k, v in json.load(open(sys.argv[1])).items() if isinstance(v, dict)))' "$H/.cca/accounts.json")
 out=$(runev cca devices "$AK" --json); rc=$?
 ok "第三方 API 账号：不统计（说只统计官方账号），fail 事件 devices_off" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"devices_off\" and \"是第三方 API 账号：只统计官方账号\" in e[\"message\"]"'
@@ -3390,34 +3204,31 @@ waitmark "$AD"; sleep 1; a3=$(apid)
 out2=$(gj state)
 ok "config.json 里写着 \"presence\": false：这台 Mac 不报告（没起上报进程）、也不查，账号页没有「设备」" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_off\" and \"关掉了设备统计\" in e[\"message\"]" && ! alive "$a3" && printf "%s" "$out2" | jok "acct(0, \"alice@example.com\")[\"can\"][\"devices\"] is False"'
 rm -f "$T/hold"; wait "$SS4" 2>/dev/null; cp -p "$T/pres.config.json" "$H/.cca/config.json"
-kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null
+gl_down
 out=$(runev cca devices alice@example.com --json); rc=$?
-ok "服务器连不上：退出码 1，fail 事件 devices_unavailable 说连不上" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_unavailable\" and \"连不上设备统计的服务器\" in e[\"message\"]"'
-out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1); rc2=$?
-ok "./policy.sh presence status：服务器连不上时说清楚原因" '[ $rc2 -ne 0 ] && printf "%s" "$out2" | grep -q "连不上 https://127.0.0.1:$SVPORT"'
-srv_start "$SVPORT"
-ok "服务器重启后照样认得设备清单、记得上次使用" '[ "$(dstate)" = "$ME:none:0" ]'
-pol "$(withp "sha256//$(printf 'A%.0s' $(seq 1 43))=")"; run cca policy pull >/dev/null 2>&1
+ok "服务器连不上：退出码 1，fail 事件 devices_unavailable 说连不上 Team 的同步服务器" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_unavailable\" and \"连不上 Team 的同步服务器（127.0.0.1:${GLPORT}）\" in e[\"message\"]"'
+gl_upr
+ok "服务器重启后照样认得这台设备、记得上次使用" '[ "$(dstate)" = "$ME:none:0" ]'
+gl_down; mkdir -p "$GLD/real"; mv "$GLD/cert.pem" "$GLD/key.pem" "$GLD/real/"; tm_cert "$GLD"; gl_upr   # 同一个地址上换了一张证书（像被人冒充）
 out=$(runev cca devices alice@example.com --json); rc=$?
-ok "服务器的证书不是映射里钉住的那张（被冒充）：不发请求，说清楚" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_unavailable\" and \"钉住的指纹对不上\" in e[\"message\"]"'
-pol "$(withp)"; run cca policy pull >/dev/null 2>&1
-ssh-keygen -q -t ed25519 -N "" -C "cca-policy@dan-air" -f "$T/dan"
-runcmd "$(ans dan-air)" "$P ./policy.sh key add '$T/dan.pub'"
-ok "./policy.sh key add：映射里配置了设备统计的服务器时，顺带把新的设备清单推过去" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "设备统计的服务器认得的设备跟着更新了（$((NK + 1)) 台）"'
-ssh-keygen -q -t ed25519 -N "" -C "cca-policy@eve-air" -f "$T/eve"
-runcmd "$(ans eve-air)" "$P ./policy.sh key add -R example/other '$T/eve.pub'"
-out2=$(run $P CCA_RELEASE_KEY="$T/relkey" bash -c "cd '$MT' && ./policy.sh presence status" 2>&1)
-ok "./policy.sh key add -R 别的仓库：不拿那个仓库的 key 当设备清单推给服务器（服务器照样认得原来那些机器）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "推送到的是 example/cca-policy，不是 example/other" && printf "%s" "$out2" | grep -q "认得 $((NK + 1)) 台设备"'
-# 记下的 API key 同步给登录了 alice 的其他设备：dan-air 也登录着 alice（身份 u-alice-0001：真的 accountUuid 是 UUID，cca 只认 8 个字符以上的），照 server/README.md 写的格式解开、封好，用自己的
-# deploy key 和服务器交换。这台 Mac 记下、删掉后马上在后台同步；之后的 cca _key-sync force 是同一件事，测试里直接跑
+gl_down; mv "$GLD/real/cert.pem" "$GLD/real/key.pem" "$GLD/"; gl_upr
+ok "服务器的证书不是加入时钉住的那张（被冒充）：不发请求，说清楚" '[ $rc -ne 0 ] && evq "e[\"code\"] == \"devices_unavailable\" and \"钉住的指纹对不上\" in e[\"message\"]"'
+# 另一台设备 dan-air：管理员给它发邀请（它也用 alice），它照文档加入阁楼组、用自己在 Team 里的密钥和服务器说话
+ssh-keygen -q -t ed25519 -N '' -C dan-air -f "$T/dan" </dev/null >/dev/null 2>&1
+DANS=$(printf '7d%.0s' $(seq 1 16))
+DLINK=$(tm_spec put "$GLROOT" "$GLPORT" "$GLURL" "$GLPIN" "$DANS" 1 阁楼组 '{"accounts": {"claude": {"alice@example.com": "HK-A2"}}}')
+dj=$(tm_spec join "$DLINK" "$T/dan" "$GLPORT" dan-air); rc=$?
+ok "（准备）管理员邀请 dan-air（也给它 alice），它照文档加入「阁楼组」、取到自己的配置" '[ $rc -eq 0 ] && printf "%s" "$dj" | jok "d[\"accounts\"] == {\"claude\": {\"alice@example.com\": \"HK-A2\"}}"'
+# 记下的 API key 同步给登录了 alice 的其他设备：dan-air 也登录着 alice（身份 u-alice-0001：真的 accountUuid 是 UUID，cca 只认 8 个字符以上的），照 server/README.md 写的格式解开、封好，用自己
+# 在 Team 里的密钥和服务器交换（盐是阁楼组的配置里的）。这台 Mac 记下、删掉后马上在后台同步；之后的 cca _key-sync force 是同一件事，测试里直接跑
 dkey() {   # dkey get | junk | put KEY|- 时间：dan-air 取 alice 现在的（打印 JSON；none：没有；bad：认证不过）/ 传一份伪造的 / 传一份
-	python3 -B - "$D" "$T/dan" "$SVPORT" "$@" <<'PY'
+	python3 -B - "$D" "$T/dan" "$GLPORT" "$@" <<'PY'
 import base64, json, secrets, sys
 sys.path.insert(0, sys.argv[1])
 import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
 key, port, op = sys.argv[2], int(sys.argv[3]), sys.argv[4]
-aid = sw.aid_of('ab' * 16, 'claude', 'alice@example.com')
-keys = sw.derive(sw.KEYSHARE, 'ab' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
+aid = sw.aid_of('cd' * 16, 'claude', 'alice@example.com')
+keys = sw.derive(sw.KEYSHARE, 'cd' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
 b64 = lambda x: base64.b64encode(x).decode()
 if op == 'get':
     extra = {'get': [aid]}
@@ -3440,7 +3251,7 @@ setoa "$AJ" accountUuid=u-alice-0001
 KS1="sk-ant-api03-REGRESSshare$(printf 'a%.0s' $(seq 1 20))"; KS2="sk-ant-api03-REGRESSdan$(printf 'b%.0s' $(seq 1 24))"
 out=$(run CCA_TTY="$(ans "$KS1")" cca key alice 2>&1); rc=$?
 dkwait "$KS1"; rc2=$?; L1=$(dkey get | python3 -c 'import json,sys; print(json.load(sys.stdin)["len"])' 2>/dev/null)
-ok "记下 alice 的 API key（映射里的账号、开着设备统计）：说登录了这个账号的其他设备也能看到，马上在后台加密传给服务器；dan-air 照文档的格式解得开；服务器上没有 key、邮箱、登录身份（600）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录了这个账号的其他设备也能看到" && [ $rc2 -eq 0 ] && [ "$(stat -f %Lp "$SV/keys.json")" = 600 ] && ! grep -q "REGRESSshare\|example.com\|u-alice" "$SV/keys.json" && [ "$(stat -f %Lp "$PRD/keys.json")" = 600 ] && ! grep -q "REGRESSshare" "$PRD/keys.json"'
+ok "记下 alice 的 API key（Team 给的账号、开着设备统计）：说登录了这个账号的其他设备也能看到，马上在后台加密传给服务器；dan-air 照文档的格式解得开；服务器上没有 key、邮箱、登录身份（600）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "登录了这个账号的其他设备也能看到" && [ $rc2 -eq 0 ] && [ "$(stat -f %Lp "$GLD/keys.json")" = 600 ] && ! grep -q "REGRESSshare\|example.com\|u-alice" "$GLD/keys.json" && [ "$(stat -f %Lp "$PRD/team.$GLTID.keys.json")" = 600 ] && ! grep -q "REGRESSshare" "$PRD/team.$GLTID.keys.json"'
 out=$(gj state)
 ok "_gui state：alice 记下的 key 会同步（shared），这台 Mac 自己记下的没有来源、有记下的时间；第三方 API 账号不同步" 'printf "%s" "$out" | jok "(lambda k: k[\"shared\"] is True and k[\"saved\"] and k[\"from_device\"] is None and k[\"saved_epoch\"] > d[\"generated_at\"] - 300 and k[\"sync_error\"] is None)(acct(0, \"alice@example.com\")[\"api_key\"]) and not any(a[\"api_key\"][\"shared\"] for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"kind\"] == \"api\")"'
 dkey put "$KS2" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["key_hints"][sys.argv[2]]["at"] + 0.5)' "$H/.cca/config.json" "$AAID")"; rc=$?   # 比这台 Mac 记下的晚半秒（不用将来的时间：之后在这台 Mac 上删掉，删掉的那一下才是新的）
@@ -3458,13 +3269,13 @@ ok "这台 Mac 上没有、dan-air 又记下了：cca key alice --show 先同步
 # 折合金额经服务器交换：各台设备只写自己的那一份，密文（密钥和 API key 一样由盐、邮箱、登录身份派生，标签是 cca-cost-v1；认证里带着设备指纹）。
 # 10g 里 alice 在这台 Mac 上 4 次请求、折合 0.026 美元。dan-air 照 server/README.md 写的格式封好、解开
 dcost() {   # dcost get | put 时间 美元：dan-air 解开这台 Mac 传的 alice 的那一份（打印 JSON；none：没有；bad：认证不过；明文没补齐到 1024 字节的整数倍时出错）/ 传自己的那一份
-	python3 -B - "$D" "$T/dan" "$SVPORT" "$PK.pub" "$@" <<'PY'
+	python3 -B - "$D" "$T/dan" "$GLPORT" "$H/.cca/teams/$GLTID/id_ed25519.pub" "$@" <<'PY'
 import json, sys, time
 sys.path.insert(0, sys.argv[1])
 import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
 key, port, me, op = sys.argv[2], int(sys.argv[3]), sw.fp_of(sys.argv[4]), sys.argv[5]
-aid = sw.aid_of('ab' * 16, 'claude', 'alice@example.com')
-keys = sw.derive(sw.COST, 'ab' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
+aid = sw.aid_of('cd' * 16, 'claude', 'alice@example.com')
+keys = sw.derive(sw.COST, 'cd' * 16, 'claude', 'alice@example.com', 'u-alice-0001')
 if op == 'get':
     extra = {'get': [aid]}
 else:
@@ -3482,7 +3293,7 @@ if op == 'get':
 PY
 }
 out=$(run cca cost sync --now --json 2>/dev/null </dev/null); rc=$?
-ok "cost sync --now --json：开了设备统计、alice 在映射里、登录着：加密传给服务器（服务器上没有邮箱、登录身份、金额，600）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"sync\"][\"state\"] == \"ok\" and isinstance(d[\"sync\"][\"checked_epoch\"], float)" && [ "$(stat -f %Lp "$SV/cost-slots.json")" = 600 ] && ! grep -q "example.com\|u-alice\|26000" "$SV/cost-slots.json"'
+ok "cost sync --now --json：开了设备统计、alice 是 Team 给的、登录着：加密传给服务器（服务器上没有邮箱、登录身份、金额，600）" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"sync\"][\"state\"] == \"ok\" and isinstance(d[\"sync\"][\"checked_epoch\"], float)" && [ "$(stat -f %Lp "$GLD/cost-slots.json")" = 600 ] && ! grep -q "example.com\|u-alice\|26000" "$GLD/cost-slots.json"'
 v=$(dcost get)
 ok "dan-air（也登录着 alice）照文档的格式解得开这台 Mac 传的：4 次请求、折合 0.026 美元，明文补齐到 1024 字节的整数倍" 'printf "%s" "$v" | jok "d == {\"usd\": 0.026, \"requests\": 4, \"name\": \"$ME\"}"'
 dcost put "$(python3 -c 'import time; print(time.time() - 86400)')" 2.5; rc=$?
@@ -3494,7 +3305,7 @@ ok "cost_total.devices（设备菜单）：这台设备在前（和 me 一样）
 # 配对、列表、接入、加密本身在 tests/remote_relay.py（unit 一节）。另一台机器还是 dan-air，照 server/README.md 的格式自己说话
 dpair() {   # dpair join 配对码 | show 文件：dan-air 输入这台 Mac 显示的配对码 / 自己显示一个（写进文件），等对方输入。配好打印“配对编号 密钥”
 	          # dpair web 配对码（DPAIR_KEY=密钥）：手机上的网页端——一把不在设备清单里的密钥输入这台 Mac 给网页端开的配对码，公钥带在请求里
-	python3 -B - "$D" "${DPAIR_KEY:-$T/dan}" "$SVPORT" "$@" <<'PY'
+	python3 -B - "$D" "${DPAIR_KEY:-$T/dan}" "$GLPORT" "$@" <<'PY'
 import secrets, sys
 sys.path.insert(0, sys.argv[1])
 import spec_wire as sw   # 照 server/README.md 的格式独立实现的（不用 cca 的代码）
@@ -3545,10 +3356,10 @@ RCODE=$(sed -n 's/.*配对码：\([0-9A-Z-]*\).*/\1/p' "$T/rp.out" | head -n 1)
 dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 RPID=${dj%% *}; RKEY=${dj#* }
 out=$(run cca remote peers 2>&1); out2=$(run cca remote 2>&1)
-ok "cca remote pair：显示配对码，dan-air 输入后配好：两边算出同一把密钥，存进钥匙串（经 security -i 的十六进制，不进命令行）；配对表里是维护者设备清单里它的名字，让它看和操作" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q "已经和「dan-air」配对" "$T/rp.out" && grep -q "cca remote allow dan-air view" "$T/rp.out" && [ "$(cat "$T/keychain/cca-remote-$RPID/pair")" = "$RKEY" ] && ! grep -qF "$RKEY" security.log "$T/env.log" && [ "$(stat -f %Lp "$H/.cca/remote/peers.json")" = 600 ] && ! grep -qF "$RKEY" "$H/.cca/remote/peers.json" && printf "%s" "$out" | grep -q "^${RPID:0:8}  dan-air  对方可以看和操作这台机器的会话" && printf "%s" "$out2" | grep -q "配对过 1 台机器"'
-ok "配对码、密钥都没有发给服务器（它只记着是哪两台设备配了对，600）" '[ "$(stat -f %Lp "$SV/remote.json")" = 600 ] && grep -q "\"$RPID\"" "$SV/remote.json" && ! grep -qF "$RKEY" "$SV"/*.json && ! grep -qF "${RCODE//-/}" "$SV"/*.json'
+ok "cca remote pair：显示配对码，dan-air 输入后配好：两边算出同一把密钥，存进钥匙串（经 security -i 的十六进制，不进命令行）；配对表里是它在 Team 里的名字，让它看和操作" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q "已经和「dan-air」配对" "$T/rp.out" && grep -q "cca remote allow dan-air view" "$T/rp.out" && [ "$(cat "$T/keychain/cca-remote-$RPID/pair")" = "$RKEY" ] && ! grep -qF "$RKEY" security.log "$T/env.log" && [ "$(stat -f %Lp "$H/.cca/remote/peers.json")" = 600 ] && ! grep -qF "$RKEY" "$H/.cca/remote/peers.json" && printf "%s" "$out" | grep -q "^${RPID:0:8}  dan-air  对方可以看和操作这台机器的会话" && printf "%s" "$out2" | grep -q "配对过 1 台机器"'
+ok "配对码、密钥都没有发给服务器（它只记着是哪两台设备配了对，600）" '[ "$(stat -f %Lp "$GLD/remote.json")" = 600 ] && grep -q "\"$RPID\"" "$GLD/remote.json" && ! grep -qF "$RKEY" "$GLD"/*.json && ! grep -qF "${RCODE//-/}" "$GLD"/*.json'
 out=$(run cca remote list --json 2>/dev/null </dev/null); rc=$?; printf '%s' "$out" > "$T/guifx3/remote_list.json"
-ok "cca remote list --json：中转用得了（只有维护者的服务器），配对过的机器（配对的编号、名字、它能做什么、配对码是这台显示的、服务器上还在、不是手机、不属于哪个 Team）；它上面没有会话" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"relay\"][\"available\"] is True and d[\"relay\"][\"message\"] is None and [h[\"team\"] for h in d[\"relay\"][\"hubs\"]] == [None] and d[\"errors\"] == [] and d[\"sessions\"] == [] and len(d[\"peers\"]) == 1 and (lambda p: p[\"id\"] == \"$RPID\" and p[\"short\"] == \"${RPID:0:8}\" and p[\"name\"] == \"dan-air\" and p[\"incoming\"] == \"control\" and p[\"shown\"] is True and p[\"state\"] == \"ok\" and p[\"web\"] is False and p[\"team\"] is None and isinstance(p[\"paired_epoch\"], (int, float)))(d[\"peers\"][0])"'
+ok "cca remote list --json：中转用得了（只有阁楼组的服务器：team 是它的编号），配对过的机器（配对的编号、名字、它能做什么、配对码是这台显示的、服务器上还在、不是手机、记在阁楼组的服务器上）；它上面没有会话" '[ $rc -eq 0 ] && printf "%s" "$out" | jok "d[\"relay\"][\"available\"] is True and d[\"relay\"][\"message\"] is None and [h[\"team\"] for h in d[\"relay\"][\"hubs\"]] == [\"$GLTID\"] and d[\"errors\"] == [] and d[\"sessions\"] == [] and len(d[\"peers\"]) == 1 and (lambda p: p[\"id\"] == \"$RPID\" and p[\"short\"] == \"${RPID:0:8}\" and p[\"name\"] == \"dan-air\" and p[\"incoming\"] == \"control\" and p[\"shown\"] is True and p[\"state\"] == \"ok\" and p[\"web\"] is False and p[\"team\"] == \"$GLTID\" and isinstance(p[\"paired_epoch\"], (int, float)))(d[\"peers\"][0])"'
 ok "cca remote list --local --json：不问服务器，配对的状态是 unknown" 'run cca remote list --local --json 2>/dev/null </dev/null | jok "d[\"peers\"][0][\"state\"] == \"unknown\" and d[\"errors\"] == []"'
 out=$(runev cca remote allow "$RPID" none 2>&1); rc=$?
 ok "界面 App 改对方能做什么（按配对的编号，不问）：result 事件 remote_updated 带着那句话" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"不能接入这台机器了\" in e[\"message\"]" && run cca remote list --local --json 2>/dev/null </dev/null | jok "d[\"peers\"][0][\"incoming\"] == \"none\""'
@@ -3561,14 +3372,14 @@ rm -f "$T/dan.code"; dpair show "$T/dan.code" > "$T/dan.pair" 2>&1 & DPP=$!
 for i in $(seq 1 100); do [ -s "$T/dan.code" ] && break; sleep 0.1; done
 out=$(run CCA_TTY="$(ans "$(tr 'A-Z' 'a-z' < "$T/dan.code")")" cca remote join 2>&1); rc=$?; wait "$DPP"; rc2=$?
 RPID2=$(cut -d' ' -f1 "$T/dan.pair")
-ok "cca remote join：输入 dan-air 显示的配对码（小写也行；从 stdin 交给辅助程序）；同两台机器再配一次换成新的一把密钥，以前让它做的照旧" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "已经和「dan-air」配对：这台机器可以接入它上面的会话" && [ -n "$RPID2" ] && [ "$RPID2" != "$RPID" ] && [ ! -e "$T/keychain/cca-remote-$RPID" ] && [ "$(cat "$T/keychain/cca-remote-$RPID2/pair")" = "$(cut -d" " -f2 "$T/dan.pair")" ] && run cca remote peers 2>/dev/null | grep -q "^${RPID2:0:8}  dan-air  对方只能看这台机器的会话" && ! grep -q "\"$RPID\"" "$SV/remote.json" && grep -q "\"$RPID2\"" "$SV/remote.json"'
+ok "cca remote join：输入 dan-air 显示的配对码（小写也行；从 stdin 交给辅助程序）；同两台机器再配一次换成新的一把密钥，以前让它做的照旧" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "已经和「dan-air」配对：这台机器可以接入它上面的会话" && [ -n "$RPID2" ] && [ "$RPID2" != "$RPID" ] && [ ! -e "$T/keychain/cca-remote-$RPID" ] && [ "$(cat "$T/keychain/cca-remote-$RPID2/pair")" = "$(cut -d" " -f2 "$T/dan.pair")" ] && run cca remote peers 2>/dev/null | grep -q "^${RPID2:0:8}  dan-air  对方只能看这台机器的会话" && ! grep -q "\"$RPID\"" "$GLD/remote.json" && grep -q "\"$RPID2\"" "$GLD/remote.json"'
 out=$(run cca remote list 2>&1); rc=$?
 ok "cca remote list：配对过的机器上没有会话时什么都不列（问过服务器了，没报错）" '[ $rc -eq 0 ] && [ -z "$out" ]'
 out=$(run CCA_TTY="$(ans 0000-0000-0000-0000)" cca remote join 2>&1); rc=$?
 ok "cca remote join：配对码不对时说清楚，配对表不动" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有这个配对码：输错了，或者过期了" && [ -e "$T/keychain/cca-remote-$RPID2" ]'
 out=$(run cca remote unpair dan-air 2>&1); rc=$?
 out2=$(run cca remote peers 2>&1)
-ok "cca remote unpair：配对表、钥匙串里的密钥、服务器上的记录都删掉" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经取消和「dan-air」的配对" && [ ! -e "$T/keychain/cca-remote-$RPID2" ] && ! grep -q "\"$RPID2\"" "$SV/remote.json" && printf "%s" "$out2" | grep -q "还没有配对过的机器"'
+ok "cca remote unpair：配对表、钥匙串里的密钥、服务器上的记录都删掉" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经取消和「dan-air」的配对" && [ ! -e "$T/keychain/cca-remote-$RPID2" ] && ! grep -q "\"$RPID2\"" "$GLD/remote.json" && printf "%s" "$out2" | grep -q "还没有配对过的机器"'
 # 界面 App 里配对（提问会话，PROTOCOL 9.2）：先问，再一页只显示配对码（不用回答），dan-air 输入后 cca 自己收场
 sess '{"consent.remote_pair":[{"v":"y"}],"remote.pair":[null]}' -- cca remote pair > "$T/rp.out" 2>&1 & RPP=$!
 RCODE=""; for i in $(seq 1 150); do RCODE=$(python3 -I -c 'import json,sys
@@ -3579,10 +3390,10 @@ for l in open(sys.argv[1]):
 dj=$(dpair join "$RCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair.jsonl"
 ok "界面 App 里显示配对码：同意当场问，配对码在一页只显示的字段里（不用回答），对方输入后 result 事件 remote_paired" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(asks)" = "consent.remote_pair remote.pair" ] && printf "%s" "$RCODE" | grep -Eq "^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$" && evq "e.get(\"q\") == \"remote.pair\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"code\", \"code\")]" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「dan-air」\" in e[\"message\"]" && ! grep -qF "$RCODE" "$T/rp.out" && [ -e "$T/keychain/cca-remote-${dj%% *}" ]'
-# 和手机配对（cca remote pair --web，docs/dev/remote.md「网页端」）：手机没有 deploy key，是一把不在设备清单里的密钥（照 server/README.md「网页端」自己说话）。
+# 和手机配对（cca remote pair --web，docs/dev/remote.md「网页端」）：手机不是 Team 里的设备，是一把不在名单里的密钥（照 server/README.md「网页端」自己说话）。
 # 先把上一个配对的结果留着（dj），这一段用自己的变量。服务器按设备限流（每秒 0.5 个、最多攒 30 个），上面配对的那些把这台 Mac 的
 # 配额用得差不多了：先重启它（状态文件留着，记下的配对都在），配额从头算
-kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; srv_start "$SVPORT"
+gl_down; gl_upr
 ssh-keygen -q -t ed25519 -N '' -C phone -f "$T/phone" >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans y)" cca remote pair --phone 2>&1); rc3=$?
 sess '{"consent.remote_pair":[{"v":"y"}],"remote.pair_web":[null]}' -- cca remote pair --web > "$T/rpw.out" 2>&1 & RPP=$!
@@ -3595,86 +3406,35 @@ for l in open(sys.argv[1]):
 wj=$(DPAIR_KEY="$T/phone" dpair web "$WCODE" 2>&1); rc2=$?; wait "$RPP"; rc=$?
 cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_pair_web.jsonl"
 out2=$(run cca remote list --json 2>/dev/null </dev/null); printf '%s' "$out2" > "$T/guifx3/remote_list_web.json"
-ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是手机上打开的地址（kind 是 qr，服务器配置里写的那个）和配对码，都不用回答；不在设备清单里的密钥输入配对码后配好，配对表里记着它是网页端、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以在浏览器里看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"] == \"https://relay.example.com:18445/\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | python3 -I -c "import json, sys; p = [x for x in json.load(sys.stdin)[\"peers\"] if x[\"name\"] == \"phone\"]; sys.exit(0 if len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\" else 1)" && grep -q "\"guests\"" "$SV/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
+ok "界面 App 里和手机配对（cca remote pair --web）：同意的范围是 web；一页里是手机上打开的地址（kind 是 qr，服务器配置里写的那个）和配对码，都不用回答；不在 Team 的名单里的密钥输入配对码后配好，配对表里记着它是网页端、让它看和操作；参数写错给用法" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -ne 0 ] && printf "%s" "$out" | grep -q "用法：cca remote pair \[--web\]" && [ "$(asks)" = "consent.remote_pair remote.pair_web" ] && evq "e.get(\"q\") == \"consent.remote_pair\" and \"那台手机可以在浏览器里看和操作\" in e[\"fields\"][0][\"detail\"]" && evq "e.get(\"q\") == \"remote.pair_web\" and [(f[\"id\"], f[\"kind\"]) for f in e[\"fields\"]] == [(\"url\", \"qr\"), (\"code\", \"code\")] and e[\"fields\"][0][\"value\"] == \"https://relay.example.com:18445/\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_paired\" and \"「phone」\" in e[\"message\"]" && printf "%s" "$out2" | python3 -I -c "import json, sys; p = [x for x in json.load(sys.stdin)[\"peers\"] if x[\"name\"] == \"phone\"]; sys.exit(0 if len(p) == 1 and p[0][\"web\"] is True and p[0][\"incoming\"] == \"control\" and p[0][\"state\"] == \"ok\" else 1)" && grep -q "\"guests\"" "$GLD/remote.json" && [ -e "$T/keychain/cca-remote-${wj%% *}" ]'
 out=$(runev cca remote unpair "${wj%% *}" 2>&1); rc=$?
-ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && python3 -I -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"guests\") == {} else 1)" "$SV/remote.json"'
+ok "取消和手机的配对：服务器上那个访客跟着删掉（它一个配对都不剩了）" '[ $rc -eq 0 ] && [ ! -e "$T/keychain/cca-remote-${wj%% *}" ] && python3 -I -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get(\"guests\") == {} else 1)" "$GLD/remote.json"'
 out=$(runev cca remote unpair "${dj%% *}" 2>&1); rc=$?
 ok "界面 App 取消配对（按配对的编号）：result 事件 remote_updated，钥匙串里的密钥删掉" '[ $rc -eq 0 ] && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"remote_updated\" and \"已经取消和「dan-air」的配对\" in e[\"message\"]" && [ ! -e "$T/keychain/cca-remote-${dj%% *}" ]'
 out=$(sess '{"remote.code":[{"v":"0000-0000-0000-0000"}]}' -- cca remote join 2>&1); rc=$?; cp "$T/ev.jsonl" "$T/guifx3/prompts_remote_join.jsonl"
 ok "界面 App 里输入配对码：一个输入框；配对码不对是 fail 事件，说原因" '[ $rc -ne 0 ] && [ "$(asks)" = "remote.code" ] && evq "e[\"ev\"] == \"fail\" and \"没有这个配对码\" in e[\"message\"]"'
 rm -f "$H/.cca/remote/peers.json"; rmdir "$H/.cca/remote" 2>/dev/null
-runcmd "$(ans y)" "$P ./policy.sh key rm dan-air"
+tm_spec revoke "$GLROOT" "$GLPORT" "$DANS" >/dev/null   # 管理员把 dan-air 移出阁楼组
 run cca cost sync --now --json >/dev/null 2>&1 </dev/null; out=$(gj state)
-ok "维护者撤销了 dan-air：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
-# 维护者的服务器按设备限流（每秒 0.5 个、最多攒 30 个）：上面配对的那些把这台 Mac 的配额用得差不多了，后面还要经它同步：
+ok "管理员把 dan-air 移出了阁楼组：它传过的照样算（是 alice 的用量），标上已撤销" 'printf "%s" "$out" | jok "(lambda a: [(x[\"name\"], x[\"revoked\"]) for x in a[\"devices\"]] == [(\"$ME\", False), (\"dan-air\", True)] and a[\"summary\"][\"days_usd\"] == 2.526)(acct(0, \"alice@example.com\")[\"cost\"])"'
+# Team 的服务器按设备限流（每秒 0.5 个、最多攒 30 个）：上面配对的那些把这台 Mac 的配额用得差不多了，后面还要经它退出：
 # 先重启它（状态文件留着），配额从头算
-kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; srv_start "$SVPORT"
+gl_down; gl_upr
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码真实的 cca devices --json、同步来的 API key、remote list --json、配对的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx3" > "$T/contract3.log" 2>&1'
 fi
-kill "$SVP" 2>/dev/null; wait "$SVP" 2>/dev/null; SVP=""
-cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"; cp -p "$T/pres.keys.json" "$T/deploy_keys.json"
-cp -p "$T/pres.pr.json" "$PR/policy.json"; cp -p "$T/pres.pr.sig" "$PR/policy.json.sig"; cp -p "$T/pres.local.json" "$H/.cca/policy/policy.json"
-cp -p "$T/pres.mr.json" "$MR/policy.json"; cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
+# 退出阁楼组（11b3d 从不在任何 Team 里开始）：服务器上移除这台设备，这台设备上它的配置、同步状态都删掉；alice 是这台 Mac 本来就有的账号，留着
+cp -p "$H/.cca/teams/$GLTID/id_ed25519" "$T/gl-me"; cp -p "$H/.cca/teams/$GLTID/id_ed25519.pub" "$T/gl-me.pub"   # 退出以后拿它问服务器还认不认
+out=$(run CCA_TTY="$(ans y)" cca team leave 阁楼组 2>&1); rc=$?
+ok "cca team leave（成员）：先问（说服务器上移除这台设备、这台设备上它的配置都删掉），退出后服务器不再认这台设备；alice（这台 Mac 本来就有的）留在账号表里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "127.0.0.1:${GLPORT} 上的服务器移除这台设备，这台设备上「阁楼组」的配置都删掉" && printf "%s" "$out" | grep -q "已退出「阁楼组」" && [ ! -e "$H/.cca/teams/$GLTID" ] && tblok "t[\"alice@example.com\"] == \"HK-A2\"" && [ "$(tm_spec get x "$T/gl-me" "$GLPORT" 2>/dev/null | cut -d" " -f1,2)" = "403 unknown_device" ]'
+gl_down
+cp -p "$T/pres.config.json" "$H/.cca/config.json"; cp -p "$T/pres.accounts.json" "$H/.cca/accounts.json"
+cp -p "$T/pres.aj.json" "$AJ"; rm -rf "$PRD" "$T/keychain/cca-ref-$AAID"
 
 fi
 if sect 11b3d; then
 # 11b3d. Team（docs/dev/team.md）：cca team 的命令行一层（事情在辅助程序里：tests/team.py 细测）。真的 server/cca-presence.py --mode team。
 # 先是这台 Mac 当管理员（成员由照 server/README.md 独立实现的 spec_wire 扮演），再是它当成员（管理员由 spec_wire 扮演）
-tm_cert() { mkdir -p "$1"; openssl ecparam -name prime256v1 -genkey -noout -out "$1/key.pem" 2>/dev/null; openssl req -new -x509 -key "$1/key.pem" -subj /CN=cca-team -days 2 -out "$1/cert.pem" 2>/dev/null; }
-tm_srv() {   # tm_srv 目录 根公钥：起一台 Team 的服务器（端口写在 目录/port），进程号在 TMPID
-	rm -f "$1/port"
-	python3 -I "$D/../server/cca-presence.py" --mode team --team-root "$2" --listen 127.0.0.1:0 --port-file "$1/port" --cert "$1/cert.pem" --key "$1/key.pem" \
-		--state "$1/state.json" >>"$1/log" 2>&1 & TMPID=$!
-	for i in $(seq 1 50); do [ -s "$1/port" ] && break; sleep 0.1; done
-}
-tm_pin() { printf 'sha256//%s' "$(openssl x509 -in "$1/cert.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64)"; }
-tm_spec() {   # tm_spec 操作 参数…：照文档独立实现的那一头（不用 cca 的代码）
-	python3 -B - "$D" "$@" <<'PY'
-import hashlib, json, subprocess, sys
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw
-op, a = sys.argv[2], sys.argv[3:]
-if op == 'join':   # join 邀请链接 密钥文件 端口：加入、同步配置、验签、解开；打印 给了哪些账号 和 节点的名字
-    link, key, port = a[0], a[1], int(a[2])
-    inv = sw.invite_decode(link)
-    token, dev, keys = sw.invite_parts(inv['k'])
-    with open(key + '.pub') as f:
-        pub = ' '.join(f.read().split()[:2])
-    st, j = sw.post(key, port, 'team_join', {'pub': pub, 'name': 'dan-air', 'token': token, 'proof': sw.team_pub_proof(inv['k'], pub)})
-    if st != 200:
-        sys.exit('join %s %s' % (st, j))
-    st, j = sw.post(key, port, 'team_get', {})
-    env, tid = j['doc'], sw.team_id('ssh-ed25519 ' + inv['r'])
-    assert sw.team_doc_verify('ssh-ed25519 ' + inv['r'], tid, dev, env['seq'], env['ct'], env['sig']), '不是根密钥签的'
-    doc = sw.team_doc_open(keys, tid, dev, env['seq'], env['ct'])
-    print(json.dumps({'accounts': doc['accounts'], 'nodes': [p['name'] for p in (doc['nodes'] or {}).get('proxies', [])], 'seq': env['seq']}, sort_keys=True))
-elif op == 'get':   # get 邀请链接 密钥文件 端口：再取一次（状态码；被移除了是 403）
-    inv = sw.invite_decode(a[0])
-    st, j = sw.post(a[1], int(a[2]), 'team_get', {})
-    print(st, j.get('error') or '', (j.get('doc') or {}).get('seq') or j.get('seq') or '')
-elif op == 'admin':   # admin 根密钥 端口 地址 指纹 那串随机数 序号 名字 节点 [lock]：发邀请、存一份配置（alice 走这个节点；lock：alice 叫 team-1，
-    # 锁定别名），打印邀请链接
-    root, port, url, pin, secret, seq, name, node = a[0], int(a[1]), a[2], a[3], a[4], int(a[5]), a[6], a[7]
-    with open(root + '.pub') as f:
-        pub = ' '.join(f.read().split()[:2])
-    token, dev, keys = sw.invite_parts(secret)
-    tid = sw.team_id(pub)
-    if seq == 1:
-        st, j = sw.post(root, port, 'team_invite', {'token': hashlib.sha256(token.encode()).hexdigest(), 'dev': dev, 'ttl': 600})
-        assert st == 200, (st, j)
-    doc = {'v': 1, 'at': 1790000000 + seq, 'name': name, 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
-           'accounts': {'claude': {'alice@example.com': node}}, 'aliases': {}, 'install_node': '', 'nodes': None}
-    if a[8:] == ['lock']:
-        doc.update(aliases={'alice@example.com': 'team-1'}, tool_aliases={'claude': {'alice@example.com': 'team-1'}}, alias_lock=True)
-    ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
-    st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(root, tid, dev, seq, ct)}}})
-    assert (st, j.get('stored')) == (200, [dev]), (st, j)
-    print(sw.invite_encode(url, [pin], pub, secret, name))
-elif op == 'revoke':   # revoke 根密钥 端口 那串随机数
-    print(sw.post(a[0], int(a[1]), 'team_revoke', {'dev': sw.invite_parts(a[2])[1]})[0])
-PY
-}
 cp "$H/.cca/accounts.json" "$T/tm-accounts.bak"; cp "$H/.cca/config.json" "$T/tm-config.bak"   # 加入 Team 以后账号表照它的配置改：这一节结束时还原
 out=$(run cca team 2>&1); rc=$?
 TMLS=$(run cca team ls --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["teams"])')
@@ -3688,6 +3448,8 @@ tmacc() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[
 ok "cca team new：建好了，说下一步（服务器用这把根公钥运行、再 attach），提醒根密钥只在这台设备上；目录和密钥只给自己读；没有终端时不问、一个账号都不放（说怎么放）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "建好了「书房组」（${TMID:0:8}）：这台设备是它的管理员$" && printf "%s" "$out" | grep -q "往里放账号：cca team map ${TMID:0:8} 工具 邮箱 节点" && [ "$(tmacc "$TMID")" = "{}" ] && printf "%s" "$out" | grep -qF -- "--mode team --team-root '"'"'$TMROOT'"'"'" && printf "%s" "$out" | grep -q "cca team attach ${TMID:0:8}" && printf "%s" "$out" | grep -q "备份不带它" && [ "$(stat -f %Lp "$H/.cca/teams/$TMID")" = 700 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/root_ed25519")" = 600 ] && [ "$(stat -f %Lp "$H/.cca/teams/$TMID/admin.json")" = 600 ]'
 out=$(run cca team 2>&1)
 ok "cca team：列出来，还没接上服务器" 'printf "%s" "$out" | grep -q "书房组（${TMID:0:8}）：管理员，没有服务器，还没接上服务器"'
+out=$(run CCA_TTY="$(ans y)" cca remote pair 2>&1); rc=$?
+ok "cca remote pair：唯一的 Team 还没接上服务器：先说清楚（照辅助程序说的原因），不问同意、不显示配对码" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "「书房组」还没有接上同步服务器" && ! printf "%s" "$out" | grep -q "显示配对码吗\|配对码："'
 out=$(runev cca team invite 书房组 dan-air 2>&1); rc=$?
 ok "还没接上服务器：发不了邀请（fail 事件 team_not_attached）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_attached\""'
 TMA="$T/team-a"; tm_cert "$TMA"; tm_srv "$TMA" "$TMROOT"; TMAPID=$TMPID; TMAPORT=$(cat "$TMA/port"); TMAPIN=$(tm_pin "$TMA")
@@ -3696,11 +3458,16 @@ ok "cca team attach：证书的指纹对不上：不接（fail 事件 team_pin�
 out=$(run cca team attach "${TMID:0:8}" "https://127.0.0.1:$TMAPORT" "$TMAPIN" 2>&1); rc=$?
 ok "cca team attach：接上了，这台设备登记上去、取到了自己的配置" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "接上了 127.0.0.1:${TMAPORT}：这台设备叫 书房的Mac，现在有 1 台设备；1 台设备的配置发布了新的一版" && [ -s "$H/.cca/teams/$TMID/doc.json" ] && run cca team 2>&1 | grep -q "已同步，这台设备能用 0 个账号"'
 out=$(run cca team grant 书房组 书房的Mac none 2>&1); rc=$?
-ok "cca team grant：管理员自己这台不要 Team 的账号（下面导入的映射不进这台 Mac 的账号表）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是0 个账号"'
-printf '%s' '{"version": 1, "claude": {"alice@example.com": "US-A", "bob@example.com": "US-B"}, "codex": {"carol@example.com": "US-A"}}' > "$T/tm-policy.json"
-printf '%s' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-A", "type": "socks5", "server": "192.0.2.10", "port": 1080}, {"name": "US-B", "type": "socks5", "server": "192.0.2.10", "port": 1081}]}' > "$T/tm-nodes.json"
-out=$(run cca team import 书房组 "$T/tm-policy.json" "$T/tm-nodes.json" 2>&1); rc=$?
-ok "cca team import：导入现成的映射和参考节点（给各台设备的配置没变：还没有设备要这些账号），这台 Mac 的账号表不动" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "导入了 3 个账号、2 个节点；各台设备的配置没有变" && [ "$(shasum < "$H/.cca/accounts.json")" = "$(shasum < "$T/tm-accounts.bak")" ]'
+ok "cca team grant：管理员自己这台不要 Team 的账号（下面加进 Team 的账号不进这台 Mac 的账号表）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是0 个账号"'
+printf '%s' '{"version": 1, "claude": {"alice@example.com": "US-A"}}' > "$T/tm-policy.json"
+out=$(runev cca team import 书房组 "$T/tm-policy.json" 2>&1); rc=$?
+ok "cca team import Team 映射文件（3.6.0 起没有维护者的映射了，只剩 --mine）：说用法（fail 事件 team_usage），Team 的配置不动" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_usage\"" && printf "%s" "$out" | grep -q "用法: cca team import Team --mine" && [ "$(tmacc "$TMID")" = "{}" ]'
+# Team 的节点用 JP-A、JP-B：这台 Mac 自己的节点（路由器上的 US-A…US-D）的名字 cca team node add 会避开（起成 US-A-2 这样）
+out=$(run cca team node 书房组 add 'socks5://192.0.2.10:1080#JP-A' 2>&1); rc=$?; out2=$(run cca team node 书房组 add 'socks5://192.0.2.10:1081#JP-B' 2>&1); rc2=$?
+out3=$(run cca team map 书房组 claude alice@example.com JP-A 2>&1); rc3=$?
+run cca team map 书房组 claude bob@example.com JP-B >/dev/null 2>&1 && run cca team map 书房组 codex carol@example.com JP-A >/dev/null 2>&1; rc4=$?
+TMACC0='{"claude": {"alice@example.com": "JP-A", "bob@example.com": "JP-B"}, "codex": {"carol@example.com": "JP-A"}}'
+ok "cca team node add、cca team map：管理员加两个节点、三个账号（还没有设备要这些账号：各台设备的配置不变），这台 Mac 的账号表不动" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ $rc3 -eq 0 ] && [ $rc4 -eq 0 ] && printf "%s" "$out2" | grep -q "加上了节点「JP-B」；各台设备的配置没有变" && printf "%s" "$out3" | grep -q "改好了；各台设备的配置没有变" && [ "$(tmacc "$TMID")" = "$TMACC0" ] && [ "$(shasum < "$H/.cca/accounts.json")" = "$(shasum < "$T/tm-accounts.bak")" ]'
 out=$(run CLAUDECODE=1 cca team invite 书房组 dan-air 2>&1); rc=$?
 ok "cca team invite：在 Claude Code 的会话里不给邀请链接（会进对话记录）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "在 Claude Code 里不显示邀请链接" && ! printf "%s" "$out" | grep -q "cca-team1\."'
 : > "$T/curl.argv"; : > "$T/env.log"
@@ -3709,17 +3476,17 @@ TMK=$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import spec_wi
 ok "cca team invite：邀请链接打到 stdout（只这一行），说明在 stderr；那串随机数不在子进程的命令行（curl、env）里，也不落在这台 Mac 和服务器上" '[ $rc -eq 0 ] && [ "$(printf "%s\n" "$TMLINK" | wc -l | tr -d " ")" = 1 ] && [ "${TMLINK#cca-team1.}" != "$TMLINK" ] && grep -q "只显示这一次" "$T/tm-invite.err" && ! grep -q "cca-team1" "$T/tm-invite.err" && [ -n "$TMK" ] && ! grep -qF "$TMK" "$T/curl.argv" "$T/env.log" && ! grep -rqF "$TMK" "$H/.cca/teams" "$TMA/state.json"'
 ssh-keygen -q -t ed25519 -N '' -C dan -f "$T/tm-dan" </dev/null >/dev/null 2>&1
 out=$(tm_spec join "$TMLINK" "$T/tm-dan" "$TMAPORT" 2>&1)
-ok "照文档独立实现的那一头拿这个邀请加入、验过根密钥的签名、解开：只有给它的账号和这个账号要的节点" '[ "$out" = "{\"accounts\": {\"claude\": {\"alice@example.com\": \"US-A\"}}, \"nodes\": [\"US-A\"], \"seq\": 1}" ]'
+ok "照文档独立实现的那一头拿这个邀请加入、验过根密钥的签名、解开：只有给它的账号和这个账号要的节点" '[ "$out" = "{\"accounts\": {\"claude\": {\"alice@example.com\": \"JP-A\"}}, \"nodes\": [\"JP-A\"], \"seq\": 1}" ]'
 out=$(run cca team devices 书房组 2>&1); rc=$?
 ok "cca team devices：和服务器对一遍，两台都加入了（不说第几版）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -Eq "书房的Mac（.*）：joined，0 个账号，配置(是最新的|发布了)$" && printf "%s" "$out" | grep -Eq "dan-air（.*）：joined，1 个账号，配置(是最新的|发布了)$" && ! printf "%s" "$out" | grep -q "第 [0-9]* 版" && run cca team devices 书房组 --json | jok "d[\"kind\"] == \"team_devices\" and [x[\"state\"] for x in d[\"devices\"]] == [\"joined\", \"joined\"]"'
 out=$(run cca team grant 书房组 dan-air +claude:bob@example.com 2>&1); rc=$?
 ok "cca team grant：多给一个账号，发布；那一头同步到新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：现在给这台设备的是2 个账号" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  2" ]'
-out=$(run cca team map 书房组 claude alice@example.com US-B 2>&1); rc=$?
+out=$(run cca team map 书房组 claude alice@example.com JP-B 2>&1); rc=$?
 ok "cca team map：改一个账号走的节点，有这个账号的那台的配置发布新的一版" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了；1 台设备的配置发布了新的一版"'
 out=$(run cca team publish 书房组 2>&1); rc=$?
 ok "cca team publish：没变的不重新发布" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "各台设备的配置没有变"'
 out=$(run cca team alias 书房组 claude:bob@example.com 小王 2>&1); rc=$?
-ok "cca team alias：改一个账号在 Team 里的别名（原来是导入时编的 team-2），有这个账号的那台的配置发布新的一版、那一头取到了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：claude:bob@example.com 在这个 Team 里叫「小王」（原来是「team-2」）；1 台设备的配置发布了新的一版" && printf "%s" "$out" | grep -q "自己改过名字的不动" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  4" ]'
+ok "cca team alias：改一个账号在 Team 里的别名（原来是加进来时编的 team-2），有这个账号的那台的配置发布新的一版、那一头取到了" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改好了：claude:bob@example.com 在这个 Team 里叫「小王」（原来是「team-2」）；1 台设备的配置发布了新的一版" && printf "%s" "$out" | grep -q "自己改过名字的不动" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  4" ]'
 out=$(runev cca team alias 书房组 alice@example.com 小王 2>&1); rc=$?
 ok "cca team alias：这个 Team 里别的账号已经叫这个：不改（fail 事件 team_alias）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_alias\"" && printf "%s" "$out" | grep -q "bob@example.com 已经叫「小王」"'
 out=$(run cca team name 书房组 书房 2>&1); rc=$?
@@ -3735,12 +3502,12 @@ ok "cca team alias --unlock：解开（再发布一次）" '[ $rc -eq 0 ] && pri
 # cca team node：这个 Team 的节点定义（列出来不带密钥）、加（粘贴链接，本机内核校验）、复制、实测出口（临时内核，不碰内置代理）、去掉；
 # 没人用的节点不改各台设备的配置（那一头的序号不动）
 out=$(run cca team node 书房组 2>&1); rc=$?
-ok "cca team node：列出这个 Team 的节点（类型、服务器、端口、谁在用）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "US-A（socks5 192.0.2.10:1080）  ——  codex:carol@example.com 在用" && printf "%s" "$out" | grep -qF "US-B（socks5 192.0.2.10:1081）  ——  claude:alice@example.com、claude:bob@example.com 在用"'
+ok "cca team node：列出这个 Team 的节点（类型、服务器、端口、谁在用）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -qF "JP-A（socks5 192.0.2.10:1080）  ——  codex:carol@example.com 在用" && printf "%s" "$out" | grep -qF "JP-B（socks5 192.0.2.10:1081）  ——  claude:alice@example.com、claude:bob@example.com 在用"'
 out=$(run cca team node 书房组 add 'socks5://u:s3cret-pw@192.0.2.20:1090#HK-A' 2>&1); rc=$?
-ok "cca team node add：粘贴链接加一个节点（本机内核校验过）；还没有账号走它，各台设备的配置不变；列出来不带密码" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加上了节点「HK-A」；各台设备的配置没有变" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ] && ! run cca team node 书房组 ls --json | grep -q s3cret-pw && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"US-A\", \"US-B\", \"HK-A\"] and d[\"nodes\"][2][\"accounts\"] == []"'
+ok "cca team node add：粘贴链接加一个节点（本机内核校验过）；还没有账号走它，各台设备的配置不变；列出来不带密码" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "加上了节点「HK-A」；各台设备的配置没有变" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ] && ! run cca team node 书房组 ls --json | grep -q s3cret-pw && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"JP-A\", \"JP-B\", \"HK-A\"] and d[\"nodes\"][2][\"accounts\"] == []"'
 out=$(run cca team node 书房组 copy HK-A HK-B --port 1091 2>&1); rc=$?
 ok "cca team node copy：照一个节点复制（换名字、端口，别的照抄、不出这台设备）" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "照「HK-A」复制了节点「HK-B」，端口换成 1091；各台设备的配置没有变" && run cca team node 书房组 ls --json | jok "[(n[\"name\"], n[\"server\"], n[\"port\"]) for n in d[\"nodes\"][2:]] == [(\"HK-A\", \"192.0.2.20\", 1090), (\"HK-B\", \"192.0.2.20\", 1091)]"'
-out=$(runev cca team node 书房组 rm US-B 2>&1); rc=$?
+out=$(runev cca team node 书房组 rm JP-B 2>&1); rc=$?
 ok "cca team node rm：还有账号走它的不去掉（fail 事件 team_node_used，说是谁在用）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_node_used\"" && printf "%s" "$out" | grep -q "claude:alice@example.com"'
 mkdir -p "$T/ntmp" "$T/trace/HK-B"; printf 'fl=1\nip=203.0.113.101\nloc=US\ncolo=SJC\n' > "$T/trace/HK-B/claude.ai"; : > "$T/curl.log"
 out=$(run TMPDIR="$T/ntmp" cca team node 书房组 test HK-A HK-B 2>&1); rc=$?
@@ -3753,7 +3520,7 @@ out=$(run TMPDIR="$T/ntmp" cca team node 书房组 test HK-B --json 2>/dev/null)
 ok "cca team node test --json：端口连得上、经它出不去；全都不通是 2" '[ $rc -eq 2 ] && printf "%s" "$out" | jok "d[\"kind\"] == \"team_node_test\" and d[\"hosts\"] == [\"claude.ai\", \"www.cloudflare.com\"] and [(n[\"name\"], n[\"state\"], n[\"tcp\"]) for n in d[\"nodes\"]] == [(\"HK-B\", \"down\", \"open\")]"'
 rm -rf "$T/trace_down" "$T/tcp_open" "$T/ntmp"
 out=$(run cca team node 书房组 rm HK-B 2>&1); rc=$?; out2=$(run cca team node 书房组 rm HK-A 2>&1); rc2=$?
-ok "cca team node rm：没人用的节点去掉了，各台设备的配置不变" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "去掉了节点「HK-B」；各台设备的配置没有变" && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"US-A\", \"US-B\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ]'
+ok "cca team node rm：没人用的节点去掉了，各台设备的配置不变" '[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && printf "%s" "$out" | grep -q "去掉了节点「HK-B」；各台设备的配置没有变" && run cca team node 书房组 ls --json | jok "[n[\"name\"] for n in d[\"nodes\"]] == [\"JP-A\", \"JP-B\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT")" = "200  8" ]'
 out=$(runev cca team revoke 书房组 dan-air 2>&1); rc=$?
 TMDEV=$(python3 -c 'import json,sys; print(next(e["scope"] for e in map(json.loads, open(sys.argv[1])) if e.get("ev") == "consent"))' "$T/ev.jsonl" 2>/dev/null)
 ok "cca team revoke：App 里先发同意事件（team_revoke，范围是设备编号，说节点凭证收不回来），不移除" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_revoke\" and \"收不回来\" in e[\"detail\"]" && [ "$(tm_spec get "$TMLINK" "$T/tm-dan" "$TMAPORT" | cut -d" " -f1)" = 200 ]'
@@ -3769,40 +3536,38 @@ TMB="$T/team-b"; tm_cert "$TMB"; tm_srv "$TMB" "$(cut -d' ' -f1,2 "$T/tm-root.pu
 TMS=$(printf '7e%.0s' $(seq 1 16))
 tm_alice() { python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); print(next(v for k, v in t.items() if k == "alice@example.com" or k.endswith("(alice@example.com)")))' "$H/.cca/accounts.json"; }   # alice 现在走的节点
 TMWAS=$(tm_alice); TMNODE=$(python3 -c 'import json,sys; print(next(n for n in json.load(open(sys.argv[1]))["nodes"] if n != sys.argv[2]))' "$H/.cca/config.json" "$TMWAS")   # 可选节点里另一个
-TMBLINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 1 维护者的组 "$TMNODE" 2>&1)
+TMBLINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 1 客厅组 "$TMNODE" 2>&1)
 out=$(runev CCA_TTY="$(ans "${TMBLINK%???}")" cca team join 2>&1); rc=$?
 ok "cca team join：链接少了一截（校验对不上）：fail 事件 team_link，不联网" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_link\"" && [ "$(ls "$H/.cca/teams" | grep -cE "^[0-9a-f]{32}$")" = 1 ]'
 : > "$T/curl.argv"; : > "$T/env.log"
 out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join --name 书房的Mac 2>&1); rc=$?
 TMJOIN=$out
 TMBID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID")
-ok "cca team join：问邀请链接（输入不显示），加入了、取到了配置（result 的 team_joined）；邀请不在输出里，也不在子进程的命令行里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已加入「维护者的组」（127.0.0.1:${TMBPORT}）：这台设备叫 书房的Mac，现在有 1 台设备" && printf "%s" "$out" | grep -q "管理员给了这台设备 1 个账号" && [ "$(lastres)" = team_joined ] && ! printf "%s" "$out" | grep -qF "$TMS" && ! grep -qF "$TMS" "$T/curl.argv" "$T/env.log" && [ "$(stat -f %Lp "$H/.cca/teams/$TMBID/secret")" = 600 ]'
+ok "cca team join：问邀请链接（输入不显示），加入了、取到了配置（result 的 team_joined）；邀请不在输出里，也不在子进程的命令行里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已加入「客厅组」（127.0.0.1:${TMBPORT}）：这台设备叫 书房的Mac，现在有 1 台设备" && printf "%s" "$out" | grep -q "管理员给了这台设备 1 个账号" && [ "$(lastres)" = team_joined ] && ! printf "%s" "$out" | grep -qF "$TMS" && ! grep -qF "$TMS" "$T/curl.argv" "$T/env.log" && [ "$(stat -f %Lp "$H/.cca/teams/$TMBID/secret")" = 600 ]'
 out=$(run cca team 2>&1)
-ok "加入以后账号表照 Team 的配置改：alice 的节点由它定（说一声）" '[ "$(tm_alice)" = "$TMNODE" ] && [ "$TMNODE" != "$TMWAS" ] && printf "%s" "$TMJOIN" | grep -q "的出口按「维护者的组」的配置固定为 ${TMNODE}（账号表里写的是 ${TMWAS}，已改回）"'
+ok "加入以后账号表照 Team 的配置改：alice 的节点由它定（说一声）" '[ "$(tm_alice)" = "$TMNODE" ] && [ "$TMNODE" != "$TMWAS" ] && printf "%s" "$TMJOIN" | grep -q "的出口按「客厅组」的配置固定为 ${TMNODE}（账号表里写的是 ${TMWAS}，已改回）"'
 out=$(run cca team 2>&1)
-ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "维护者的组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，这台设备能用 1 个账号"'
-out=$(run cca policy request alice@example.com 2>&1); rc=$?
-ok "cca policy request：Team 给的账号不用锁定请求，说走哪个节点由那个 Team 的管理员定" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "是「维护者的组」给的：走哪个节点由这个 Team 的管理员定" && ! printf "%s" "$out" | grep -q "policy.sh lock"'
-out=$(runev cca team node 维护者的组 2>&1); rc=$?
+ok "cca team：两个 Team，照加入的先后" '[ "$(printf "%s\n" "$out" | grep -c "：")" -ge 2 ] && printf "%s" "$out" | head -1 | grep -q "书房组" && printf "%s" "$out" | grep -q "客厅组（${TMBID:0:8}）：成员，127.0.0.1:${TMBPORT}，已同步，这台设备能用 1 个账号"'
+out=$(runev cca team node 客厅组 2>&1); rc=$?
 ok "cca team node：这台设备不是这个 Team 的管理员（fail 事件 team_not_admin）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
 # App 的契约测试要的真实输出（这一节最后交给 macos/test.sh 解码）：hello、带着 Team 的 state、team ls、管理员的 team devices
 mkdir -p "$T/guifx4"; gj hello > "$T/guifx4/hello.json"; run cca team ls --json > "$T/guifx4/team_list.json" 2>/dev/null
 run cca team devices 书房组 --json > "$T/guifx4/team_devices.json" 2>/dev/null
 out=$(gj state); printf '%s' "$out" > "$T/guifx4/state_team.json"
-ok "_gui hello 说有 Team（team 是 1）；_gui state 的 config.teams 是这台设备在的两个 Team（照加入的先后：书房组是管理员，维护者的组是成员、配置同步着）；team devices --json 带着 Team 的名字和配置里的账号" 'jok "d[\"team\"] == 1" < "$T/guifx4/hello.json" && printf "%s" "$out" | jok "[(t[\"id\"], t[\"name\"], t[\"role\"], t[\"state\"]) for t in d[\"config\"][\"teams\"]] == [(\"$TMID\", \"书房组\", \"admin\", \"ok\"), (\"$TMBID\", \"维护者的组\", \"member\", \"ok\")]" && jok "d[\"kind\"] == \"team_devices\" and d[\"team\"] == \"$TMID\" and d[\"name\"] == \"书房组\" and \"alice@example.com\" in d[\"accounts\"][\"claude\"] and isinstance(d[\"nodes\"], list) and any(x[\"me\"] for x in d[\"devices\"])" < "$T/guifx4/team_devices.json"'
-ok "_gui state：alice 是「维护者的组」给的（账号的 team 是它的编号），经它的同步服务器同步（hub 是 team）；config.hubs 里有它（kind 是 team，带编号和名字）；别的账号没有 team" 'printf "%s" "$out" | jok "(lambda a: a[\"hub\"] == \"team\" and a[\"team\"] == \"$TMBID\")(next(a for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\")) and (\"$TMBID\", \"维护者的组\") in [(h.get(\"team\"), h.get(\"team_name\")) for h in d[\"config\"][\"hubs\"] if h[\"kind\"] == \"team\"] and all(\"team\" not in a for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
+ok "_gui hello 说有 Team（team 是 1）；_gui state 的 config.teams 是这台设备在的两个 Team（照加入的先后：书房组是管理员，客厅组是成员、配置同步着）；team devices --json 带着 Team 的名字和配置里的账号" 'jok "d[\"team\"] == 1" < "$T/guifx4/hello.json" && printf "%s" "$out" | jok "[(t[\"id\"], t[\"name\"], t[\"role\"], t[\"state\"]) for t in d[\"config\"][\"teams\"]] == [(\"$TMID\", \"书房组\", \"admin\", \"ok\"), (\"$TMBID\", \"客厅组\", \"member\", \"ok\")]" && jok "d[\"kind\"] == \"team_devices\" and d[\"team\"] == \"$TMID\" and d[\"name\"] == \"书房组\" and \"alice@example.com\" in d[\"accounts\"][\"claude\"] and isinstance(d[\"nodes\"], list) and any(x[\"me\"] for x in d[\"devices\"])" < "$T/guifx4/team_devices.json"'
+ok "_gui state：alice 是「客厅组」给的（账号的 team 是它的编号），经它的同步服务器同步（hub 是 team）；config.hubs 里有它（kind 是 team，带编号和名字）；别的账号没有 team" 'printf "%s" "$out" | jok "(lambda a: a[\"hub\"] == \"team\" and a[\"team\"] == \"$TMBID\")(next(a for a in d[\"tools\"][0][\"accounts\"] if a[\"email\"] == \"alice@example.com\")) and (\"$TMBID\", \"客厅组\") in [(h.get(\"team\"), h.get(\"team_name\")) for h in d[\"config\"][\"hubs\"] if h[\"kind\"] == \"team\"] and all(\"team\" not in a for t in d[\"tools\"] for a in t[\"accounts\"] if a[\"email\"] != \"alice@example.com\")"'
 # 配置向导（10h 那几条都不在 Team 里）：已经在 Team 里的不问第 1 步。没配路由器、已有账号时只问网络出口（只有这一步：标题不写第几步）
 cp "$H/.cca/config.json" "$T/cfg.onbt.bak"; cp "$H/.cca/accounts.json" "$T/tbl.onbt.bak"
 python3 -I -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["router"]={}; c.pop("onboarded", None); json.dump(c,open(p,"w"))' "$H/.cca/config.json"
 out=$(sess '{"onboard.net":[{"v":"skip"}]}' -- cca _onboard 2>&1); rc=$?
 cp "$T/cfg.onbt.bak" "$H/.cca/config.json"; cp "$T/tbl.onbt.bak" "$H/.cca/accounts.json"
 ok "配置向导：已经在 Team 里 → 不问加入 Team；没配路由器时只问网络出口（标题不写第几步，页说明说 Team 给的账号配好出口后自动加进来）" '[ $rc -eq 0 ] && [ "$(asks)" = onboard.net ] && evq "e.get(\"q\") == \"onboard.net\" and e[\"title\"] == \"网络出口\" and e[\"message\"].startswith(\"加入了 Team\")" && [ "$(lastres)" = onboarded ]'
-out=$(runev cca team devices 维护者的组 --json 2>/dev/null); rc=$?
+out=$(runev cca team devices 客厅组 --json 2>/dev/null); rc=$?
 ok "cca team devices --json：这台设备不是管理员：fail 事件 team_not_admin，stdout 没有东西（不是半截 JSON）" '[ $rc -ne 0 ] && [ -z "$out" ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_not_admin\""'
 out=$(runev CCA_TTY="$(ans "$TMBLINK")" cca team join 2>&1); rc=$?
 ok "再拿同一个邀请加入：已经在这个 Team 里了（fail 事件 team_joined）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"team_joined\""'
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 2 改过名的组 "$TMNODE" >/dev/null 2>&1
-out=$(run cca team sync 维护者的组 2>&1); rc=$?
+out=$(run cca team sync 客厅组 2>&1); rc=$?
 ok "cca team sync：同步到新的一版，名字照配置里的改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "改过名的组：配置已同步" && run cca team 2>&1 | grep -q "改过名的组（${TMBID:0:8}）"'
 tm_akey() { python3 -c 'import json,sys; print(next(k for k in json.load(open(sys.argv[1])) if k == "alice@example.com" or k.endswith("(alice@example.com)")))' "$H/.cca/accounts.json"; }   # alice 现在的键
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS" 3 改过名的组 "$TMNODE" lock >/dev/null 2>&1
@@ -3822,45 +3587,6 @@ out=$(runev cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "cca team leave（成员）：App 里先发同意事件（team_leave，范围是 Team 的编号）" '[ $rc -ne 0 ] && evq "e[\"ev\"] == \"consent\" and e[\"item\"] == \"team_leave\" and e[\"scope\"] == \"$TMBID\"" && [ -d "$H/.cca/teams/$TMBID" ]'
 out=$(runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" 2>&1); rc=$?
 ok "同意以后退出了（result 的 team_left）：本机记着的删掉，另一个 Team 还在" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMBID" ] && [ -d "$H/.cca/teams/$TMID" ]'
-# --- 把用着维护者映射的机器迁到 Team（docs/dev/team.md「迁移」）。维护者那一头：policy.sh team 给映射仓库上每把 deploy key 发一个邀请，
-#     写进映射的 team 一节、照常检查签名推送（假的维护者目录 $T/maint、映射仓库 $T/cca-policy 是 11b3b 搭的；假 gh 列 deploy key）
-MT="$T/maint"; MR="$T/cca-policy"; mkdir -p "$MT"; cp -p "$D/../policy.sh" "$MT/policy.sh"; cp "$H/.cca/bin/cca" "$MT/cca"
-tmh_run() { out=$(run CCA_RELEASE_KEY="$T/relkey" CCA_TTY="$1" bash -c "cd '$MT' && $2" 2>&1); rc=$?; }   # tmh_run 答案文件 命令：像维护者那样在 cca 的仓库里运行
-cp -p "$T/deploy_keys.json" "$T/tmh.keys"; cp -p "$MR/policy.json" "$T/tmh.mr"; cp -p "$PR/policy.json" "$T/tmh.pr"; cp -p "$PR/policy.json.sig" "$T/tmh.pr.sig"
-cp -p "$H/.cca/policy/policy.json" "$T/tmh.local"
-for n in 1 2; do rm -f "$T/tmh-k$n" "$T/tmh-k$n.pub"; ssh-keygen -q -t ed25519 -N '' -C "cca-policy@m$n" -f "$T/tmh-k$n"; done
-python3 - "$T/deploy_keys.json" "$T/tmh-k1.pub" "$T/tmh-k2.pub" "$H/.cca/policy/id_ed25519.pub" <<'PY'
-import json, sys
-pub = lambda p: " ".join(open(p).read().split()[:2])
-keys = [{"id": i + 1, "title": t, "key": pub(p), "read_only": True, "verified": True, "created_at": "2026-11-01T00:00:00Z", "last_used": None}
-        for i, (t, p) in enumerate(zip(["客厅的Mac", "dan-air", "书房的Mac"], sys.argv[2:5]))]
-json.dump({"next": 9, "repos": {"example/cca-policy": keys}}, open(sys.argv[1], "w"), ensure_ascii=False)
-PY
-TMHFP=$(ssh-keygen -lf "$T/tmh-k1.pub" | awk '{print $2}'); : > git.log
-tmh_run "$(ans n)" "./policy.sh team 书房组"
-ok "policy.sh team：先说会怎样（几台机器、邀请写在映射仓库里意味着什么）、问过才发；回答 n 什么都不改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "example/cca-policy 上有 3 台机器" && printf "%s" "$out" | grep -q "只认它那台机器的 deploy key" && printf "%s" "$out" | grep -q "没有改" && ! grep -q cca-team1 "$MR/policy.json"'
-tmh_run "$(ans y)" "./policy.sh team 书房组"
-ok "policy.sh team：给还没加入的每台机器发邀请（管理员自己这台不用），照 deploy key 的指纹写进映射的 team 一节，检查、签名、推送" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "新发了邀请（2 台）：客厅的Mac、dan-air" && printf "%s" "$out" | grep -q "已经加入了（1 台）：书房的Mac" && python3 -c "import json,sys; t=json.load(open(sys.argv[1]))[\"team\"]; sys.exit(0 if t[\"v\"] == 1 and len(t[\"invites\"]) == 2 and t[\"invites\"][sys.argv[2]].startswith(\"cca-team1.\") else 1)" "$MR/policy.json" "$TMHFP" && [ -s "$MR/policy.json.sig" ] && grep -q "GIT push" git.log && printf "%s" "$out" | grep -q "已发布到 example/cca-policy"'
-TMHLINK=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["team"]["invites"][sys.argv[2]])' "$MR/policy.json" "$TMHFP")
-out=$(tm_spec join "$TMHLINK" "$T/tmh-k1" "$TMAPORT" 2>&1)
-ok "那台机器（照文档独立实现的那一头）拿映射里给它的邀请、自己的 deploy key 加入，取到了配置" 'printf "%s" "$out" | grep -q "\"accounts\"" && printf "%s" "$out" | grep -q "\"seq\""'
-tmh_run "$(ans)" "./policy.sh team 书房组 -y"
-ok "再运行一次（-y 不问）：加入了的不再发，还没用的照原来的那个；映射里只剩还没加入的" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已经加入了（2 台）：客厅的Mac、书房的Mac" && printf "%s" "$out" | grep -q "邀请还没用、照原来的（1 台）：dan-air" && python3 -c "import json,sys; t=json.load(open(sys.argv[1]))[\"team\"]; sys.exit(0 if len(t[\"invites\"]) == 1 else 1)" "$MR/policy.json"'
-# 机器那一头：映射里有给这台 Mac 的邀请（照它 deploy key 的指纹），拉到映射后自己加入，拿原来的 deploy key 当设备密钥；管理员由 spec_wire 扮演
-TMS2=$(printf '5c%.0s' $(seq 1 16)); TMMYFP=$(ssh-keygen -lf "$H/.cca/policy/id_ed25519.pub" | awk '{print $2}')
-rm -f "$H/.cca/teams/adopt.json"   # 前面刚自己退出过这个 Team：记着退出过的不再自己加入（下面另测），这里先当没退出过
-touch "$H/.cca/teams/checked"   # 这条命令启动时不另起后台的同步配置（team_hook）：它也会顺带加入，抢在前头的话前台这一句就不说了（加入照样成）
-TMB2LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS2" 1 维护者的组 "$TMNODE" 2>&1)
-pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["team"]={"v": 1, "invites": {sys.argv[2]: sys.argv[3]}}; print(json.dumps(j, ensure_ascii=False))' "$T/tmh.pr" "$TMMYFP" "$TMB2LINK")"
-out=$(run cca policy pull 2>&1); rc=$?
-ok "cca policy pull：映射里有给这台设备的邀请：自己加入（说一声），设备密钥就是原来的 deploy key，账号表马上照 Team 的配置改" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "照维护者的映射加入了「维护者的组」（127.0.0.1:${TMBPORT}）" && [ -d "$H/.cca/teams/$TMBID" ] && [ "$(cat "$H/.cca/teams/$TMBID/id_ed25519.pub")" = "$(cat "$H/.cca/policy/id_ed25519.pub")" ] && [ "$(tm_alice)" = "$TMNODE" ]'
-out=$(run cca policy pull 2>&1); rc=$?
-ok "再拉一次：已经在里面了，不再加入" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "照维护者的映射加入了"'
-runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" >/dev/null 2>&1
-out=$(run cca policy pull 2>&1); rc=$?
-ok "自己退出以后再拉映射：不再照同一个邀请加入" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -q "照维护者的映射加入了" && [ ! -e "$H/.cca/teams/$TMBID" ]'
-cp -p "$T/tmh.keys" "$T/deploy_keys.json"; cp -p "$T/tmh.mr" "$MR/policy.json"; cp -p "$T/tmh.pr" "$PR/policy.json"; cp -p "$T/tmh.pr.sig" "$PR/policy.json.sig"
-cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$MR/policy.json.sig" "$H/.cca/teams/adopt.json"
 # --- 一键部署（docs/dev/team.md「部署」）：新建一个 Team，经假 ssh 装到 hubbox（tests/hub_box.py 建的假服务器：目录当根，假 systemctl 起真的
 #     server/cca-presence.py；一台服务器上每个 Team 一个服务），装好了自动接上。Docker、拉不到镜像、网页端和证书助手、连不上、几个 Team 这些
 #     细的在 tests/hub_deploy.py。App 里新建问名字（team.new），部署问服务器（hub.deploy）、密码（hub.password）、怎么加公钥（hub.pubkey）
@@ -3870,7 +3596,7 @@ HBV=$(printf '%s\n' "$out" | sed -n "s/^CCA_HUB_VERSION='\(.*\)'\$/\1/p"); HB1=$
 hbdoc() { printf '%s\n' "$out" | sed -n "/^	cat <<'$1'\$/,/^$1\$/p" | sed '1d;$d' | shasum -a 256 | cut -d' ' -f1; }   # hbdoc 结束行：安装脚本里那一段 here-document 的 SHA-256
 HBWEB=$(printf '%s\n' "$out" | sed -n 's/^	web_file "\$1" \([^ ]*\) \([0-9a-f]\{64\}\) .*/\1 \2/p' | while read -r n h; do [ "$h" = "$(shasum -a 256 < "$D/../server/web/$n" | cut -d' ' -f1)" ] && echo "$n"; done | wc -l | tr -d ' ')
 ok "cca team deploy --script：打出安装脚本（带着这一版的版本号，原样的服务端程序、证书助手，网页端的每个文件的校验和都对，sh -n 过得去；不带 team-deploy 给的那几项）" '[ $rc -eq 0 ] && [ "$HB1" = "#!/bin/sh" ] && [ "$HBV" = "$(ver)" ] && printf "%s\n" "$out" | /bin/dash -n && [ "$(hbdoc CCA_HUB_SERVER_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-presence.py" | cut -d" " -f1)" ] && [ "$(hbdoc CCA_HUB_ACME_PY_EOF)" = "$(shasum -a 256 < "$D/../server/cca-acme.py" | cut -d" " -f1)" ] && [ "$HBWEB" = "$(ls "$D/../server/web" | wc -l | tr -d " ")" ] && ! printf "%s\n" "$out" | grep -q "^CCA_HUB_MANAGED="'
-# 新建时问这台设备上哪些账号放进去（team-candidates 列出的：自己加的官方账号，和这台设备当管理员的 Team 给的；第三方 API 账号、维护者共享的不列）
+# 新建时问这台设备上哪些账号放进去（team-candidates 列出的：自己加的官方账号，和这台设备当管理员的 Team 给的；第三方 API 账号、只是成员的 Team 给的不列）
 TMCAND=$(run "$HELPER_BIN" team-candidates); TMCN=$(printf '%s\n' "$TMCAND" | grep -c .)
 TMCOWN=$(printf '%s\n' "$TMCAND" | awk -F '\t' '$5 == "-" { printf "%s%d", (n++ ? " " : ""), NR }')   # 自己加的是第几个：预先勾上
 out=$(sess '{"team.new":[{"name":"机房组"}],"team.accounts":[{"v":""}]}' -- cca team new 2>&1); rc=$?
@@ -3902,6 +3628,8 @@ runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>
 out=$(run CCA_TTY="$(ans 9 x 0)" cca team new 终端组 --device 书房的Mac 2>&1); rc=$?
 TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
 ok "终端里：列出能放的账号（编号，注着走哪个节点）；没有这个编号、不是编号的重问；0 是一个都不放" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "能放进「终端组」" && printf "%s" "$out" | grep -q "^    1\. .*走 " && printf "%s" "$out" | grep -q "没有编号 9" && printf "%s" "$out" | grep -q "「x」不是编号" && ! printf "%s" "$out" | grep -q "放进了" && [ "$(tmacc "$TMXID")" = "{}" ]'
+out=$(run cca team import 终端组 --mine 2>&1); rc=$?
+ok "cca team import Team --mine：把这台设备上自己加的官方账号（连同现在的节点）放进去，和新建时预先勾上的那几个一样；还没接上服务器：各台设备的配置不变" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "导入了 ${TMCON} 个账号、0 个节点；各台设备的配置没有变" && [ "$(tmacc "$TMXID")" = "$TMCO" ]'
 runev CCA_GRANT="team_delete:$TMXID" cca team leave "${TMXID:0:8}" >/dev/null 2>&1
 out=$(run CCA_TTY="$(ans '')" cca team new 终端组 --device 书房的Mac 2>&1); rc=$?
 TMXID=$(ls "$H/.cca/teams" | grep -E '^[0-9a-f]{32}$' | grep -v "$TMID" | grep -v "$TMDID")
@@ -3954,37 +3682,35 @@ runev CCA_GRANT="team_delete:$TMDID" cca team leave "${TMDID:0:8}" >/dev/null 2>
 ok "照文档卸载（cca team deploy --script | ssh 服务器 sh -s -- --uninstall --dir 目录）：停掉这个 Team 的服务、删掉程序和数据；这台设备上删掉了这个 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "卸载了 Team 的同步服务器" && [ ! -e "$TMDD" ] && [ ! -e "$T/hubbox/server.$TMDSVC.pid" ] && [ ! -e "$H/.cca/teams/$TMDID" ] && [ -d "$H/.cca/teams/$TMID" ]'
 out=$(runev CCA_GRANT="team_delete:$TMID" cca team leave 2>&1); rc=$?
 ok "管理员同意以后退出：这台设备上不再有这个 Team" '[ $rc -eq 0 ] && [ "$(lastres)" = team_left ] && [ ! -e "$H/.cca/teams/$TMID" ] && run cca team 2>&1 | grep -q "还不在任何 Team 里"'
-# --- 换了版本以后的第一条命令（update_after）：拉映射、同步配置这次不等间隔（都在后台）。照 update/ran（上一次运行的版本）认；以前的
-#     版本不记 ran：没有 ran、有更新留下的上一个版本（update/cca.prev.version）也算换了版本，全新安装的两样都没有，不算。这时这台 Mac
-#     不在任何 Team 里（像还没迁过来的机器），维护者的组（spec_wire 扮演管理员）还开着
+# --- 换了版本以后的第一条命令（update_after）：各个 Team 同步配置这次不等间隔（在后台）。照 update/ran（上一次运行的版本）认；以前的
+#     版本不记 ran：没有 ran、有更新留下的上一个版本（update/cca.prev.version）也算换了版本，全新安装的两样都没有，不算。这台 Mac
+#     先拿一个新的邀请重新加入客厅组（spec_wire 扮演管理员）
 TMUP="$H/.cca/update"; TMS3=$(printf '3a%.0s' $(seq 1 16))
-tmu_mt() { stat -f %m "$H/.cca/policy/checked" "$H/.cca/teams/checked" 2>/dev/null | tr '\n' ' '; }   # 上一次拉映射、同步配置的时候（钩子做了就会变）
-tmu_back() { touch -t "$(date -v-30M +%Y%m%d%H%M.%S)" "$H/.cca/policy/checked" "$H/.cca/teams/checked"; }   # 半个小时前刚做过：平时这时都不再做
-tmu_pulled() { local i; for i in $(seq 1 300); do [ -s "$H/.cca/policy/log" ] && [ ! -d "$H/.cca/policy/lock" ] && return 0; sleep 0.1; done; return 1; }   # 等后台拉映射那一次做完（记下了结果、放了锁：照邀请加入在这之间）
-tmu_seq() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seq"])' "$H/.cca/teams/$TMBID/doc.json" 2>/dev/null; }   # 这台设备手里维护者的组的配置是第几版
+tmu_mt() { stat -f %m "$H/.cca/teams/checked" 2>/dev/null; }   # 上一次同步配置的时候（钩子做了就会变）
+tmu_back() { touch -t "$(date -v-30M +%Y%m%d%H%M.%S)" "$H/.cca/teams/checked"; }   # 半个小时前刚做过：平时这时不再做
+tmu_seq() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["seq"])' "$H/.cca/teams/$TMBID/doc.json" 2>/dev/null; }   # 这台设备手里客厅组的配置是第几版
 tmu_seq_is() { local i; for i in $(seq 1 300); do [ "$(tmu_seq)" = "$1" ] && return 0; sleep 0.1; done; return 1; }   # 等后台同步到这一版（名字先写进 team.json、再写 doc.json）
 mv "$TMUP/cca.prev.version" "$T/tmu.prev" 2>/dev/null   # 更新留下的上一个版本下面自己摆（前面退回过的话本来就没有），最后放回原样
-rm -f "$H/.cca/teams/index.json" "$H/.cca/teams/adopt.json"   # 从来没在 Team 里过（前面自己退出过维护者的组：也当没退出过）
-TMB3LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 1 维护者的组 "$TMNODE" 2>&1)
-pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j["team"]={"v": 1, "invites": {sys.argv[2]: sys.argv[3]}}; print(json.dumps(j, ensure_ascii=False))' "$T/tmh.pr" "$TMMYFP" "$TMB3LINK")"
+TMB3LINK=$(tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 1 客厅组 "$TMNODE" 2>&1)
+out=$(run CCA_TTY="$(ans "$TMB3LINK")" cca team join --name 书房的Mac 2>&1); rc=$?
 tmu_back; mt0=$(tmu_mt); run cca ls >/dev/null 2>&1
-ok "版本没换（update/ran 就是现在的版本）：拉映射、同步配置照常按间隔，不提前" '[ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" = "$mt0" ]'
+ok "版本没换（update/ran 就是现在的版本）：同步配置照常按间隔，不提前" '[ $rc -eq 0 ] && [ "$(tmu_seq)" = 1 ] && [ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" = "$mt0" ]'
 rm -f "$TMUP/ran"; run cca ls >/dev/null 2>&1
 ok "全新安装（没有 update/ran，也没有更新留下的上一个版本）：不算换了版本，只记下现在的版本" '[ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" = "$mt0" ]'
-rm -f "$TMUP/ran"; echo 0.0.1 > "$TMUP/cca.prev.version"; : > "$H/.cca/policy/log"
-run cca ls >/dev/null 2>&1; tmu_pulled
-ok "从不记 update/ran 的旧版本更新上来（有更新留下的上一个版本）的第一条命令：不等一天，在后台拉映射、照里面给这台设备的邀请加入 Team（设备密钥是原来的 deploy key）；记下现在的版本" '[ "$(cat "$TMUP/ran")" = "$(ver)" ] && [ "$(tmu_mt)" != "$mt0" ] && grep -q "拉取成功" "$H/.cca/policy/log" && [ "$(tmu_seq)" = 1 ] && [ "$(cat "$H/.cca/teams/$TMBID/id_ed25519.pub")" = "$(cat "$H/.cca/policy/id_ed25519.pub")" ]'
 tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 2 换了版本的组 "$TMNODE" >/dev/null 2>&1   # 管理员发布了新的一版（改了名字）
-tmu_back; echo 0.0.1 > "$TMUP/ran"; : > "$H/.cca/policy/log"
-run cca ls >/dev/null 2>&1; tmu_seq_is 2; tmu_pulled
-ok "在 Team 里的：换了版本以后的第一条命令不等一个小时，在后台马上同步一次配置（拿到管理员刚发布的那一版，名字跟着改），映射也马上拉；记下现在的版本" '[ "$(tmu_seq)" = 2 ] && run cca team 2>&1 | grep -q "换了版本的组（${TMBID:0:8}）" && grep -q "拉取成功" "$H/.cca/policy/log" && [ "$(cat "$TMUP/ran")" = "$(ver)" ]'
+rm -f "$TMUP/ran"; echo 0.0.1 > "$TMUP/cca.prev.version"
+run cca ls >/dev/null 2>&1; tmu_seq_is 2
+ok "从不记 update/ran 的旧版本更新上来（有更新留下的上一个版本）的第一条命令：不等一个小时，在后台马上同步一次配置（拿到管理员刚发布的那一版，名字跟着改）；记下现在的版本" '[ "$(tmu_seq)" = 2 ] && [ "$(tmu_mt)" != "$mt0" ] && run cca team 2>&1 | grep -q "换了版本的组（${TMBID:0:8}）" && [ "$(cat "$TMUP/ran")" = "$(ver)" ]'
+tm_spec admin "$T/tm-root" "$TMBPORT" "https://127.0.0.1:$TMBPORT" "$TMBPIN" "$TMS3" 3 客厅组 "$TMNODE" >/dev/null 2>&1   # 又发布了一版（名字改回来）
+rm -f "$TMUP/cca.prev.version"; tmu_back; echo 0.0.1 > "$TMUP/ran"
+run cca ls >/dev/null 2>&1; tmu_seq_is 3
+ok "update/ran 记着的是别的版本（换了版本）：第一条命令同样在后台马上同步一次配置；记下现在的版本" '[ "$(tmu_seq)" = 3 ] && run cca team 2>&1 | grep -q "客厅组（${TMBID:0:8}）" && [ "$(cat "$TMUP/ran")" = "$(ver)" ]'
 runev CCA_GRANT="team_leave:$TMBID" cca team leave "${TMBID:0:8}" >/dev/null 2>&1
-cp -p "$T/tmh.pr" "$PR/policy.json"; cp -p "$T/tmh.pr.sig" "$PR/policy.json.sig"; cp -p "$T/tmh.local" "$H/.cca/policy/policy.json"; rm -f "$H/.cca/teams/adopt.json" "$TMUP/cca.prev.version"
 mv "$T/tmu.prev" "$TMUP/cca.prev.version" 2>/dev/null
 if command -v swiftc >/dev/null 2>&1 && [ -f "$D/../macos/test.sh" ]; then
 	ok "App 的契约测试：Swift 模型解码真实的带着 Team 的 _gui state、cca team ls --json、cca team devices --json、部署时的提问（macos/test.sh）" 'bash "$D/../macos/test.sh" "$T/guifx4" > "$T/contract4.log" 2>&1'
 fi
-kill "$TMAPID" "$TMBPID" 2>/dev/null; wait "$TMAPID" "$TMBPID" 2>/dev/null
+tm_stop "$TMAPID" "$TMBPID"
 rm -rf "$H/.cca/teams" "$TMA" "$TMB"
 cp "$T/tm-accounts.bak" "$H/.cca/accounts.json"; cp "$T/tm-config.bak" "$H/.cca/config.json"   # 账号表、配置照这一节开头的还原，路由器跟着同步回去
 run cca router sync >/dev/null 2>&1
@@ -3993,7 +3719,7 @@ fi
 if sect 11b4; then
 # 11b4. 内置代理：在外面、这台 Mac 上又没有 Clash 客户端时，用界面 App 托管的 mihomo 内核（假的：状态在 $T/core；假 open 打开
 #       界面 App 时像 App 那样在后台运行 cca _core run）。内核文件按写死的 SHA256 校验（mkver 换成了假内核的），节点定义在家时
-#       从路由器拷（core/nodes.json），再补维护者的参考节点。这一节不用映射（config.json 里的 policy、~/.cca/policy 先挪开），
+#       从路由器拷（core/nodes.json），再补 Team 的配置带的节点。这时这台 Mac 不在任何 Team 里（11b3d 收尾时都退出了），
 #       结束时都还原。这时路由器上的节点是 US-A～D 和 HK-A2（10a 里改过名），可选节点也是这几个
 CD="$T/core"; CN="$H/.cca/core"
 creloads() { grep -c '^RELOAD$' "$CD/core.log" 2>/dev/null || echo 0; }
@@ -4004,8 +3730,7 @@ core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; f
 nodes_wait() { local i; for i in $(seq 1 80); do [ -f "$CN/nodes.json" ] && [ ! -d "$H/.cca/core-nodes.lock" ] && return 0; sleep 0.1; done; return 1; }
 cp "$H/.cca/config.json" "$T/config.core"; cp "$H/.cca/accounts.json" "$T/accounts.core"
 run cca local off >/dev/null 2>&1
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('policy', None); c.pop('local', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"   # 连 local 一起清掉（上一句 cca local off 记的 core_off）：模拟全新机器，在家照样拷节点
-rm -rf "$T/policy.core"; mv "$H/.cca/policy" "$T/policy.core"; mkdir -p "$H/.cca/policy"
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c.pop('local', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"   # 连 local 一起清掉（上一句 cca local off 记的 core_off）：模拟全新机器，在家照样拷节点
 rm -f "$CN"/mihomo-v*   # 11b3d 实测 Team 的节点时已经下过内核：这一节从没下过内核的机器开始（同意之后第一次下载、校验）
 edit_table 'j["alice@example.com"] = "US-A"'
 mkdir -p "$GA/Contents/MacOS"
@@ -4108,12 +3833,12 @@ out=$(run cca @alice --version 2>&1); rc=$?
 ok "账号的节点内置代理里没有定义：重新加载（组里 REJECT 排第一），不启动，说明怎么补" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "内置代理里没有节点「US-D」的定义" && [ "$(csel CCA-1)" = REJECT ] && [ "$(creloads)" = $((n0 + 1)) ]'
 out=$(run cca local 2>&1)
 ok "cca local：内置代理的端口和选中的节点；节点定义从哪来、缺哪个" 'printf "%s" "$out" | grep -q "内置代理（控制接口 unix:" && printf "%s" "$out" | grep -q "CCA-1  127.0.0.1:7901  监听中  → REJECT" && printf "%s" "$out" | grep -q "节点定义：从路由器拷的 4 个" && printf "%s" "$out" | grep -q "没有定义的节点：US-D"'
-# 维护者的参考节点补上路由器那份里没有的（和往路由器里补的同一套规则：同名的以路由器的为准）；共享开着才认参考节点
-cfgset 'c["policy"] = "example/cca-policy"'
-printf '%s\n' '{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-D", "type": "ss", "server": "192.0.2.4", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}, {"name": "US-A", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "y"}, {"name": "AI-Z", "type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}' > "$H/.cca/policy/nodes.json"
+# Team 的配置带的节点补上路由器那份里没有的（和往路由器里补的同一套规则：同名的以路由器的为准）；在 Team 里才有（tm_fake 写一个
+# 加入了的 Team，它只带节点、不给账号）
+tm_fake 客厅组 '{"nodes": {"group": "OpenAi", "proxies": [{"name": "US-D", "type": "ss", "server": "192.0.2.4", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}, {"name": "US-A", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "y"}, {"name": "AI-Z", "type": "ss", "server": "192.0.2.29", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}]}}' >/dev/null
 out=$(run cca @alice --version 2>&1); rc=$?
-ok "维护者的参考节点补上缺的 US-D：重新加载一次，照常启动；同名的 US-A 以路由器的为准，不是可选节点的 AI-Z 不放" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = US-D ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"HK-A2\", \"US-D\"] and c[\"proxies\"][0][\"server\"] == \"192.0.2.1\""'
-rm -f "$H/.cca/policy/nodes.json"; cfgset 'c.pop("policy")'; edit_table 'j["alice@example.com"] = "US-A"'
+ok "Team 的配置带的节点补上缺的 US-D：重新加载一次，照常启动；同名的 US-A 以路由器的为准，不是可选节点的 AI-Z 不放" '[ $rc -eq 3 ] && [ "$(csel CCA-1)" = US-D ] && [ "$(creloads)" = $((n0 + 2)) ] && ccfg "[p[\"name\"] for p in c[\"proxies\"]] == [\"US-A\", \"US-B\", \"US-C\", \"HK-A2\", \"US-D\"] and c[\"proxies\"][0][\"server\"] == \"192.0.2.1\""'
+rm -rf "$H/.cca/teams"; edit_table 'j["alice@example.com"] = "US-A"'   # 不在 Team 里了
 cp "$T/nodes.core.complete" "$CN/nodes.json"   # 缺节点负例结束：恢复 dave 所需的 US-D，后续功能测试仍要求全池核验通过
 run cca @alice --version >/dev/null 2>&1
 edit_table 'j.update({"u%d@example.com" % i: "US-B" for i in range(3, 11)})'
@@ -4195,8 +3920,8 @@ python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); (c.get('local'
 : > env.log
 out=$(sess '{"local.builtin":[{"v":"y"}]}' -- cca local setup 2>&1); rc=$?
 ok "提问会话：配置本机出口：GUI 问用不用内置代理，答是就配好（有结果事件）" '[ $rc -eq 0 ] && [ "$(asks)" = local.builtin ] && evq "e.get(\"q\") == \"local.builtin\" and e[\"fields\"][0][\"kind\"] == \"confirm\"" && cfgok "c[\"local\"][\"client\"] == \"builtin\"" && evq "e[\"ev\"] == \"result\" and e[\"code\"] == \"local_ready\"" && [ -f "$CD/up" ]'
-# 还原：配置、账号表、映射还原
-core_stop; rm -rf "$GA" "$CN" "$H/.cca/policy"; mv "$T/policy.core" "$H/.cca/policy"
+# 还原：配置、账号表还原
+core_stop; rm -rf "$GA" "$CN"
 cp "$T/config.core" "$H/.cca/config.json"; cp "$T/accounts.core" "$H/.cca/accounts.json"
 
 fi
@@ -4216,9 +3941,8 @@ utmp() { sed -n 's/^S=//p' "$T/osascript.log" | tail -n 1 | tr -d "'"; }   # 最
 ustate() { gj state | jok "d[\"config\"][\"local\"][\"udp\"] == $1"; }
 core_stop() { [ -f "$CD/up" ] && kill "$(cat "$CD/pid")" 2>/dev/null; local i; for i in $(seq 1 30); do [ -f "$CD/up" ] || return 0; sleep 0.1; done; }
 cp "$H/.cca/config.json" "$T/config.udp"; cp "$H/.cca/accounts.json" "$T/accounts.udp"
-rm -rf "$T/policy.udp"; mv "$H/.cca/policy" "$T/policy.udp"; mkdir -p "$H/.cca/policy"   # 不用映射（它固定的节点会盖掉下面给 alice 设的）
 edit_table 'j["alice@example.com"] = "US-A"'
-python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; c.pop('policy', None); json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
+python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['local'] = {}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
 mkdir -p "$CN"; chmod 700 "$CN"
 python3 - "$CN/nodes.json" "$H/.cca/config.json" <<'P'
 import json, sys, time
@@ -4338,14 +4062,14 @@ out=$(ru cca local udp uninstall 2>&1 </dev/null); rc=$?
 ok "没装时 uninstall：说没装，不弹授权框" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "系统服务没装" && [ "$(admins)" = $((n + 1)) ]'
 kill "$STUN_PID" 2>/dev/null; wait "$STUN_PID" 2>/dev/null; STUN="" STUN_PID=""
 core_stop; rm -f "$T/away" "$T/stun_ip"; rm -rf "$GA" "$CN" "$UR" "$H/.cca/udp" "$T/launchd" "$CU"
-rm -rf "$H/.cca/policy"; mv "$T/policy.udp" "$H/.cca/policy"
 cp "$T/config.udp" "$H/.cca/config.json"; cp "$T/accounts.udp" "$H/.cca/accounts.json"
 
 fi
 if sect 11b5; then
 # 11b5. 辅助安装（cca [codex|agy] install-cli；终端里用到没装的命令时先问）：官方安装脚本（假 curl 给 $T/fake_installer.sh）先直连，
-#       不行时问过再经内置代理的一个节点装：另起的临时内核（假 mihomo，状态在 $T/core_install），节点由维护者映射的 install_node
-#       指定，没指定时现选。节点定义是内置代理的那些（这里直接写 core/nodes.json）。这一节结束时映射、配置、命令都还原
+#       不行时问过再经内置代理的一个节点装：另起的临时内核（假 mihomo，状态在 $T/core_install），节点由 Team 的配置的 install_node
+#       指定（tm_fake 写一个加入了的 Team），没指定时现选。节点定义是内置代理的那些（这里直接写 core/nodes.json）。这一节结束时
+#       Team、配置、命令都还原
 IL="$T/install.log"; ID="$T/core_install"; TI="$T/tmpi"; mkdir -p "$TI"; : > "$IL"
 NP="$T/bin:$H/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"   # 不带 /opt/homebrew/bin（那里可能装着真的 codex）
 ri() { run PATH="$NP" TMPDIR="$TI" "$@"; }
@@ -4354,12 +4078,10 @@ tback() { rm -f "$H/.local/bin/$1"; mv "$T/$1.off" "$T/bin/$1"; }
 ileft() { ls "$TI" | grep -c '^cca-cli\.'; }   # 留下的临时目录（应该都删了）
 icfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$ID/last_config.json" "$1"; }   # 临时内核收到的配置（c）
 istopped() { [ ! -f "$ID/up" ] && ! kill -0 "$(cat "$ID/pid")" 2>/dev/null && [ ! -e "$(cat "$ID/home")" ]; }   # 临时内核停了，它的目录（有节点密钥）删了
-ipol() {   # ipol 节点：映射照原来的，加上 install_node（空的就不加），签名后拉下来
-	pol "$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); j.update({"install_node": sys.argv[2]} if sys.argv[2] else {}); print(json.dumps(j, ensure_ascii=False))' "$T/pr.inst" "$1")"
-	run cca policy pull >/dev/null 2>&1
+ipol() {   # ipol 节点：这台设备在一个 Team 里，它的配置写着 install_node（不写节点：不在任何 Team 里）
+	rm -rf "$H/.cca/teams"; [ -z "${1:-}" ] || tm_fake 书房组 "{\"install_node\": \"$1\"}" >/dev/null
 }
-cp "$PR/policy.json" "$T/pr.inst"; rm -f "$T/pr.inst.sig"; [ ! -f "$PR/policy.json.sig" ] || cp "$PR/policy.json.sig" "$T/pr.inst.sig"
-rm -rf "$T/policy.inst"; cp -Rp "$H/.cca/policy" "$T/policy.inst"; cp "$H/.cca/config.json" "$T/config.inst"; cp "$H/.cca/accounts.json" "$T/accounts.inst"
+cp "$H/.cca/config.json" "$T/config.inst"; cp "$H/.cca/accounts.json" "$T/accounts.inst"
 ok "_gui hello：说明有辅助安装（App 据此在“没装 X 命令”的地方给「安装」，交给终端运行 cca install-cli）" 'gj hello | jok "d[\"install_cli\"] == 1"'
 out=$(run cca help 2>&1)
 ok "cca help 里有 cca install-cli" 'printf "%s" "$out" | grep -q "cca install-cli  *用官方安装脚本装 Claude Code"'
@@ -4384,7 +4106,7 @@ python3 -c 'import json,sys,time; json.dump({"version": 1, "saved_at": time.time
 chmod 600 "$CN/nodes.json"
 toff agy; touch "$T/install_direct_down"; : > "$IL"; : > gh.log
 out=$(ri cca agy install-cli 2>&1); rc=$?
-ok "直连拿不到安装脚本、映射没指定安装节点、非交互：说明要在终端里选一个，不起临时内核、不装；不建 agy 的账号表" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本" && printf "%s" "$out" | grep -q "维护者映射没指定安装用的节点，要在终端里选一个：运行 cca agy install-cli" && [ ! -e "$ID/pid" ] && [ ! -e "$H/.local/bin/agy" ] && [ ! -e "$H/.cca/agy.json" ]'
+ok "直连拿不到安装脚本、没有 Team 的配置指定安装节点、非交互：说明要在终端里选一个，不起临时内核、不装；不建 agy 的账号表" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本" && printf "%s" "$out" | grep -q "没有指定安装用的节点（Team 的配置里的 install_node），要在终端里选一个：运行 cca agy install-cli" && [ ! -e "$ID/pid" ] && [ ! -e "$H/.local/bin/agy" ] && [ ! -e "$H/.cca/agy.json" ]'
 out=$(ri CCA_TTY="$(ans 2)" cca agy install-cli 2>&1); rc=$?
 ok "终端里现选一个节点（选了就是同意，不记下）：经它的临时代理拿到安装脚本、运行（安装脚本自己下载也经它）；内核文件第一次用时下载" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "经内置代理的哪个节点安装 agy？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && grep -q "^INSTALL-RUN agy shell=/bin/bash proxy=http://127.0.0.1:[0-9]* .* leak=\[\]$" "$IL" && printf "%s" "$out" | grep -qF "装好了 agy：$H/.local/bin/agy" && grep -q "^GH mihomo" gh.log && [ ! -e "$H/.cca/agy.json" ]'
 ok "临时内核：只在 127.0.0.1 上开一个入站（直通只有这个节点的组），规则只有 MATCH,REJECT，不开控制接口、通用的代理端口、TUN、DNS；装完就停，它的目录（有节点密钥）和临时目录都删掉" 'icfg "[l[\"listen\"] for l in c[\"listeners\"]] == [\"127.0.0.1\"] and c[\"listeners\"][0][\"proxy\"] == \"CCA-INSTALL\" and c[\"proxy-groups\"] == [{\"name\": \"CCA-INSTALL\", \"type\": \"select\", \"proxies\": [\"US-B\"]}] and [p[\"name\"] for p in c[\"proxies\"]] == [\"US-B\"] and c[\"rules\"] == [\"MATCH,REJECT\"] and not any(k in c for k in (\"port\", \"mixed-port\", \"socks-port\", \"tun\", \"dns\", \"external-controller\", \"external-controller-unix\"))" && istopped && [ "$(ileft)" = 0 ]'
@@ -4392,14 +4114,12 @@ rm -f "$H/.local/bin/agy"; touch "$T/tun"; : > "$IL"
 out=$(ri CCA_TTY="$(ans 2)" cca agy install-cli 2>&1); rc=$?
 ok "开着 TUN（去公网的路由走 utun9）：临时内核和内置代理一样把出站绑定到物理网卡 en0，照常装好" '[ $rc -eq 0 ] && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && icfg "c[\"interface-name\"] == \"en0\" and \"dns\" not in c" && istopped'
 rm -f "$T/tun" "$H/.local/bin/agy"
-# 维护者在映射里指定安装用的节点（install_node）：路由器上改过名的（cca 记下的 node_renames）按现在的名字
+# Team 的配置指定安装用的节点（install_node）：路由器上改过名的（cca 记下的 node_renames）按现在的名字
 ipol US-OLD
 python3 -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); c['node_renames'] = {'US-OLD': 'US-B'}; json.dump(c, open(p, 'w'), indent=2, ensure_ascii=False)" "$H/.cca/config.json"
-out=$(run cca policy 2>&1)
-ok "映射里写了安装用的节点（install_node，旧版本的 cca 不认识它、照样用这份映射）：cca policy 说明；路由器上改过名的按现在的名字" 'grep -q "\"install_node\": \"US-OLD\"" "$H/.cca/policy/policy.json" && printf "%s" "$out" | grep -q "安装用的节点：US-B（直连装不上 claude / codex / agy 命令时，问过再经内置代理走它）"'
 : > "$IL"
 out=$(ri CCA_TTY="$(ans y)" cca agy install-cli 2>&1); rc=$?
-ok "映射指定了安装节点：直连拿不到时问过（默认是）再经它的临时代理装上" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本。经内置代理的节点 US-B 安装 agy 吗？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && istopped && [ "$(ileft)" = 0 ]'
+ok "Team 的配置指定了安装节点（写的是 US-OLD：路由器上改了名，按现在的名字 US-B）：直连拿不到时问过（默认是）再经它的临时代理装上" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "直连拿不到安装脚本。经内置代理的节点 US-B 安装 agy 吗？" && grep -qx "INSTALL-GET agy via US-B" "$IL" && grep -qx "INSTALL-DONE agy via=US-B" "$IL" && istopped && [ "$(ileft)" = 0 ]'
 rm -f "$H/.local/bin/agy" "$ID/pid"; : > "$IL"
 out=$(ri CCA_TTY="$(ans n)" cca agy install-cli 2>&1); rc=$?
 ok "不同意：不起临时内核，什么都不装" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "没有安装 agy（以后可以运行 cca agy install-cli）" && [ ! -e "$ID/pid" ] && ! grep -q " via" "$IL" && [ ! -e "$H/.local/bin/agy" ]'
@@ -4410,8 +4130,7 @@ ok "同意之后带着授权重跑：经 US-B 装上" '[ $rc -eq 0 ] && [ -L "$H
 rm -f "$H/.local/bin/agy"
 ipol US-Z; : > "$IL"
 out=$(ri CCA_TTY="$(ans 3)" cca agy install-cli 2>&1); rc=$?
-out2=$(run cca policy 2>&1)
-ok "映射指定的安装节点这台机器上没有定义：说一声，在终端里现选一个" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "维护者映射指定的安装节点 US-Z 在这台机器上没有定义" && grep -qx "INSTALL-GET agy via US-C" "$IL" && printf "%s" "$out2" | grep -q "安装用的节点：US-Z（这台机器的内置代理里没有它的定义：要装的时候现选一个）"'
+ok "Team 的配置指定的安装节点这台机器上没有定义：说一声，在终端里现选一个" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "Team 的配置指定的安装节点 US-Z 在这台机器上没有定义" && grep -qx "INSTALL-GET agy via US-C" "$IL"'
 rm -f "$H/.local/bin/agy"; ipol US-B
 # 拿得到安装脚本、它自己直连下载不了（实际最常见）：直连没装成，问过经 US-B 再装一次
 rm -f "$T/install_direct_down"; touch "$T/install_dl_down"; : > "$IL"
@@ -4443,87 +4162,67 @@ rm -f "$H/.local/bin/claude"; : > "$IL"
 out=$(runev PATH="$NP" cca @alice --version 2>&1); rc=$?
 ok "非交互（启动器、界面 App）没装 claude：不问不装，说明用 cca install-cli 装（原因码 tool_missing）" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "找不到 claude 命令：运行 cca install-cli 用官方安装脚本装上" && evq "e[\"ev\"] == \"fail\" and e[\"code\"] == \"tool_missing\"" && [ ! -s "$IL" ]'
 tback claude
-# 维护者发布前的严格检查认识 install_node
-printf '{"version": 1, "claude": {"alice@example.com": "US-C"}, "install_node": "US-B"}\n' > "$T/inst.ok.json"
-printf '{"version": 1, "claude": {"alice@example.com": "US-C"}, "install_node": ["US-B"]}\n' > "$T/inst.bad.json"
-out=$(run cca _policy-check "$T/inst.bad.json" 2>&1); rc=$?
-ok "维护者发布前的严格检查认识 install_node，也查它的格式" 'run cca _policy-check "$T/inst.ok.json" >/dev/null 2>&1 && [ $rc -ne 0 ] && printf "%s" "$out" | grep -q "install_node 应该是节点的名字"'
-# 还原：映射、配置、账号表，内置代理的目录（11b4 结束时就删了）
-cp "$T/pr.inst" "$PR/policy.json"; rm -f "$PR/policy.json.sig"; [ ! -f "$T/pr.inst.sig" ] || cp "$T/pr.inst.sig" "$PR/policy.json.sig"
-rm -rf "$H/.cca/policy" "$CN" "$ID"; mv "$T/policy.inst" "$H/.cca/policy"
+# 还原：Team（这一节开始时不在任何 Team 里）、配置、账号表，内置代理的目录（11b4 结束时就删了）
+rm -rf "$H/.cca/teams" "$CN" "$ID"
 cp "$T/config.inst" "$H/.cca/config.json"; cp "$T/accounts.inst" "$H/.cca/accounts.json"
 ok "辅助安装用完不留东西：没建 agy 的账号表，~/.local/bin 里只剩原来的" '[ ! -e "$H/.cca/agy.json" ] && [ ! -e "$H/.local/bin/agy" ] && [ ! -e "$H/.local/bin/claude" ] && [ ! -e "$H/.local/bin/codex" ]'
 
 fi
 if sect 11b6; then
 # 11b6. 服务器上安装（CCA_REMOTE_LOGIN=1：Mac 上走服务器的流程）：从没配置过路由器、直连不通（假 curl：direct_down 连不上，direct_loc 是
-#       直连的出口地区）时，cca install、cca add 不问路由器。打开着维护者的共享（一键安装时带了 CCA_POLICY_REPO）：给出维护者运行的一行命令
-#       （公钥和别名写在里面），之后每隔几秒自动拉映射（回车马上拉，s 先跳过）；维护者加上以后导入映射指定的安装节点和映射里账号的节点
-#       （参考节点），配置内置代理（假内核、假的界面 App），经它装 Claude Code（不再先直连、不另外问），映射里的账号自动加进来。别的先问
-#       有没有 Team 的邀请链接（默认没有；加入 Team 在 11b3d）。没有、到了那一步留空：粘贴一条自己的代理当可选节点，配置内置代理。直连通的
-#       照旧问路由器。这一节结束时映射仓库、假命令都还原
+#       直连的出口地区）时，cca install、cca add 不问路由器，先问有没有 Team 的邀请链接（默认没有）。有就加入（Team 的服务器是真的
+#       server/cca-presence.py --mode team，管理员由 spec_wire 扮演），导入 Team 的配置指定的安装节点和给这台设备的账号的节点，配置内置代理
+#       （假内核、假的界面 App），经安装节点装 Claude Code（不再先直连、不另外问），Team 给的账号自动加进来。没有、到了那一步留空：粘贴
+#       一条自己的代理当可选节点，配置内置代理。直连通的照旧问路由器。一键安装时带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：
+#       只说一声去掉了。这一节结束时停掉 Team 的服务器，假命令还原
 SH="$T/homes"; mkdir -p "$SH/Applications/cca.app/Contents/MacOS"
 printf '<plist><dict><key>CFBundleIdentifier</key><string>local.cca.app</string><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>' "$(ver)" > "$SH/Applications/cca.app/Contents/Info.plist"
-rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_REMOTE_LOGIN=1 CCA_POLICY_DEFAULT=example/cca-policy CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+rs() { env -i LANG=en_US.UTF-8 HOME="$SH" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" CCA_REMOTE_LOGIN=1 CCA_RETRY_WAIT=0 CCA_STUN=127.0.0.1:9 CCA_DOCK_PREFS="$T/dock/dock.plist" CCA_DOCK_SETTLE=0 TMPDIR="$TI" PATH="$T/bin:$SH/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 scfg() { python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$SH/.cca/config.json" "$1"; }   # 服务器那边的 config.json（c）
-spub() { cat "$SH/.cca/policy/id_ed25519.pub"; }
-cp "$PR/policy.json" "$T/pr.srv"; rm -f "$T/pr.srv.sig"; [ ! -f "$PR/policy.json.sig" ] || cp "$PR/policy.json.sig" "$T/pr.srv.sig"
-pol '{"version": 1, "claude": {"sam@example.com": "US-S"}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-I"}'
-python3 -c 'import json,sys; json.dump({"version": 1, "group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (81 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-I", "US-S", "US-X"])]}, open(sys.argv[1], "w"))' "$PR/nodes.json"; nodes_pub
-toff claude; touch "$T/policy_denied"; echo HK > "$T/direct_loc"; : > "$IL"; : > git.log; : > curl.log
-out=$(rs CCA_TTY="$(ans s)" CCA_POLICY_REPO=example/cca-policy "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上直连的出口在受限地区：不问路由器；打开着维护者的共享（一键安装时带了 CCA_POLICY_REPO）：不问有没有 Team 的邀请链接，给出维护者运行的那一行（公钥和别名写在里面）、等着拉映射；输入 s 先跳过，不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && ! printf "%s" "$out" | grep -q "有没有 Team 的邀请链接" && printf "%s" "$out" | grep -qF "    ./policy.sh key add '\''$(spub)'\'' $(cut -d@ -f2 "$SH/.cca/policy/id_ed25519.pub")" && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "先跳过：维护者运行上面那一行之后，再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号" && scfg "c.get(\"policy\") == \"example/cca-policy\" and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -f "$SH/.cca/policy/policy.json" ]'
-rm -f "$T/direct_loc"; touch "$T/direct_down"; k0=$(spub)
-out=$(rs CCA_TTY="$(ans s)" cca add 2>&1); rc=$?
-ok "cca add（还没有可选节点）：直连不通时同样不先要求配置路由器，接着等维护者（还是这把公钥）；先跳过时说明再运行 cca add" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连 claude.ai 不通：这台机器不用配置路由器" && printf "%s" "$out" | grep -qF "$k0" && [ "$(spub)" = "$k0" ] && printf "%s" "$out" | grep -q "再运行 cca add 接着配置" && ! printf "%s" "$out" | grep -q "先配置路由器"'
-# 维护者在 cca 的仓库里运行那一行（假 gh 存 deploy key；有 policy_keys 时假 git 照它认）
-line=$(printf '%s\n' "$out" | sed -n 's/^    \(\.\/policy\.sh key add .*\)$/\1/p' | tail -n 1)
-rm -f "$T/policy_denied"; touch "$T/policy_keys"; salias=$(cut -d@ -f2 "$SH/.cca/policy/id_ed25519.pub")
-out=$(cd "$D/.." && run $P $NOPD CCA_TTY="$(ans)" bash -c "$line" 2>&1); rc=$?
-ok "维护者原样运行那一行：公钥加成只读 deploy key，别名是那台机器的名字，不提问" '[ -n "$line" ] && [ $rc -eq 0 ] && [ "$(dkk "$salias")" = "$(cut -d" " -f1,2 "$SH/.cca/policy/id_ed25519.pub")" ] && ! printf "%s" "$out" | grep -q "起个别名"'
-: > "$IL"; : > git.log
-out=$(rs CCA_TTY="$(ans)" cca install 2>&1); rc=$?
-ok "维护者加上之后再运行 cca install：拉到映射，导入映射指定的安装节点和映射里账号的节点（参考节点里别的不导入），映射里的账号自动加进来" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "拉到了维护者的映射（Claude 1 个账号" && printf "%s" "$out" | grep -q "已导入维护者提供的节点：US-I、US-S（这台机器的可选节点）" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and sorted(c[\"node_ids\"]) == [\"US-I\", \"US-S\"]" && grep -q "\"sam(sam@example.com)\": \"US-S\"" "$SH/.cca/accounts.json" && printf "%s" "$out" | grep -q "按维护者的映射添加了 Claude 账号 sam"'
+# Team「云上组」：配置给 sam（走 US-S），指定安装节点 US-I，带着三个节点（US-X 没人用）
+SVT="$T/srv6"; tm_cert "$SVT"; ssh-keygen -q -t ed25519 -N '' -C root -f "$SVT/root" </dev/null >/dev/null 2>&1
+tm_srv "$SVT" "$(cut -d' ' -f1,2 "$SVT/root.pub")"; SVTPID=$TMPID; SVTPORT=$(cat "$SVT/port"); SVTPIN=$(tm_pin "$SVT")
+SVTDOC=$(python3 -c 'import json; print(json.dumps({"accounts": {"claude": {"sam@example.com": "US-S"}}, "aliases": {"sam@example.com": "sam"}, "install_node": "US-I", "nodes": {"group": "OpenAi", "proxies": [{"name": n, "type": "ss", "server": "192.0.2.%d" % (81 + i), "port": 8388, "cipher": "aes-128-gcm", "password": "x"} for i, n in enumerate(["US-I", "US-S", "US-X"])]}}))')
+toff claude; echo HK > "$T/direct_loc"; : > "$IL"; : > curl.log
+out=$(rs CCA_TTY="$(ans n)" CCA_POLICY_REPO=example/cca-policy "$H/.cca/bin/cca" install 2>&1); rc=$?
+ok "服务器上直连的出口在受限地区：不问路由器，先问有没有 Team 的邀请链接；带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：只说一声去掉了、改用 Team，不生成 deploy key；没有邀请链接、也没粘贴自己的代理：不装 Claude Code、不加账号，说明之后再运行 cca install" '[ $rc -eq 0 ] && grep -q "^CURL direct https://claude.ai/cdn-cgi/trace" curl.log && printf "%s" "$out" | grep -q "正在检测这台机器能不能直连 claude.ai" && printf "%s" "$out" | grep -q "直连 claude.ai 的出口在香港，不能用：这台机器不用配置路由器，改用 cca 内置的代理" && printf "%s" "$out" | grep -q "维护者的映射 3.6.0 起去掉了（CCA_POLICY_REPO 不再起作用）：向 Team 的管理员要一个邀请链接，装好后运行 cca team join 加入" && printf "%s" "$out" | grep -q "有没有 Team 的邀请链接？ \[y/N\]" && printf "%s" "$out" | grep -q "再运行 cca install 接着配置" && ! printf "%s" "$out" | grep -qE "现在配置路由器|没找到 Claude Code|新增第一个账号|policy\.sh" && scfg "not c.get(\"policy\") and not c.get(\"nodes\") and not c.get(\"router\")" && [ ! -e "$SH/.cca/policy" ]'
+rm -f "$T/direct_loc"; touch "$T/direct_down"
+out=$(rs CCA_TTY="$(ans n)" cca add 2>&1); rc=$?
+ok "cca add（还没有可选节点）：直连不通时同样不先要求配置路由器，先问有没有 Team 的邀请链接；都没有时说明再运行 cca add" '[ $rc -ne 0 ] && printf "%s" "$out" | grep -q "直连 claude.ai 不通：这台机器不用配置路由器" && printf "%s" "$out" | grep -q "有没有 Team 的邀请链接" && printf "%s" "$out" | grep -q "再运行 cca add 接着配置" && ! printf "%s" "$out" | grep -q "先配置路由器"'
+SLINK=$(tm_spec put "$SVT/root" "$SVTPORT" "https://127.0.0.1:$SVTPORT" "$SVTPIN" "$(printf '5d%.0s' $(seq 1 16))" 1 云上组 "$SVTDOC")
+: > "$IL"
+out=$(rs CCA_TTY="$(ans y "$SLINK")" cca install 2>&1); rc=$?
+ok "有 Team 的邀请链接：加入，导入 Team 的配置指定的安装节点和给这台设备的账号的节点（配置带的别的节点不导入），Team 给的账号自动加进来；邀请链接不在输出里" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "已加入「云上组」（127.0.0.1:${SVTPORT}）" && printf "%s" "$out" | grep -q "已导入 Team 的配置带的节点：US-I、US-S（这台机器的可选节点）" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and sorted(c[\"node_ids\"]) == [\"US-I\", \"US-S\"]" && grep -q "\"sam(sam@example.com)\": \"US-S\"" "$SH/.cca/accounts.json" && printf "%s" "$out" | grep -q "按「云上组」的配置添加了 Claude 账号 sam" && ! printf "%s" "$out" | grep -qF "$SLINK"'
 ok "接着配置好内置代理（假的界面 App 托管内核），sam 的端口切到 US-S" 'scfg "c[\"local\"][\"client\"] == \"builtin\"" && printf "%s" "$out" | grep -q "本机端口池已就绪：内置代理 127.0.0.1:7901" && [ -f "$CD/up" ] && [ "$(csel CCA-1)" = US-S ]'
-ok "经内置代理的安装节点装 Claude Code：问一句（默认是），不再先直连、不另外征求同意；装完临时内核停掉、临时目录删掉；有账号了不再问新增账号" 'printf "%s" "$out" | grep -q "没找到 Claude Code（claude 命令）。现在经内置代理用官方安装脚本装上吗？" && grep -qx "INSTALL-GET claude via US-I" "$IL" && grep -qx "INSTALL-DONE claude via=US-I" "$IL" && ! grep -q "INSTALL-GET claude direct" "$IL" && ! printf "%s" "$out" | grep -q "安装 claude 吗" && printf "%s" "$out" | grep -qF "装好了 claude：$SH/.local/bin/claude" && istopped && [ "$(ileft)" = 0 ] && ! printf "%s" "$out" | grep -qE "新增第一个账号|现在配置路由器"'
+ok "经内置代理的安装节点（Team 的配置指定的 US-I）装 Claude Code：问一句（默认是），不再先直连、不另外征求同意；装完临时内核停掉、临时目录删掉；有账号了不再问新增账号" 'printf "%s" "$out" | grep -q "没找到 Claude Code（claude 命令）。现在经内置代理用官方安装脚本装上吗？" && grep -qx "INSTALL-GET claude via US-I" "$IL" && grep -qx "INSTALL-DONE claude via=US-I" "$IL" && ! grep -q "INSTALL-GET claude direct" "$IL" && ! printf "%s" "$out" | grep -q "安装 claude 吗" && printf "%s" "$out" | grep -qF "装好了 claude：$SH/.local/bin/claude" && istopped && [ "$(ileft)" = 0 ] && ! printf "%s" "$out" | grep -qE "新增第一个账号|现在配置路由器"'
 core_stop; rm -f "$SH/.local/bin/claude"; tback claude
-# 不按回车也行：每隔几秒自动拉（CCA_POLICY_POLL=1 秒；答案是一直开着、没有内容的管道）
-SH="$T/homes2"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
-rm -f "$T/policy_keys"; printf 3 > "$T/policy_denied_n"; : > git.log   # 安装时打开共享拉一次、接着配置时再拉一次、开始等时又拉一次，都还没加上
-mkfifo "$T/tty.fifo"; exec 8<>"$T/tty.fifo"   # 等维护者时管道里没有内容
-out=$(rs CCA_TTY="$T/tty.fifo" CCA_POLICY_POLL=1 CCA_POLICY_REPO=example/cca-policy "$H/.cca/bin/cca" install 2>&1); rc=$?
-exec 8<&-; rm -f "$T/tty.fifo"
-ok "等维护者时不用按回车：每隔几秒自动重试，拉到了就接着导入节点、配置内置代理（装好了 Claude Code、有账号时不再问）" '[ $rc -eq 0 ] && [ "$(grep -c "^GIT clone" git.log)" = 4 ] && printf "%s" "$out" | grep -q "等维护者运行上面那一行" && printf "%s" "$out" | grep -q "拉到了维护者的映射" && scfg "c[\"nodes\"] == [\"US-I\", \"US-S\"] and c[\"local\"][\"client\"] == \"builtin\"" && [ -f "$CD/up" ] && ! printf "%s" "$out" | grep -qE "没找到 Claude Code|新增第一个账号"'
-core_stop
-SH="$T/homes3"; rm -f "$T/direct_down" "$T/policy_denied_n"; : > curl.log
+SH="$T/homes3"; rm -f "$T/direct_down"; : > curl.log
 out=$(rs CCA_TTY="$(ans n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上能直连：照旧问要不要配置路由器，不等维护者、不导入节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "这台机器能直连 claude.ai" && printf "%s" "$out" | grep -q "现在配置路由器" && ! printf "%s" "$out" | grep -q "policy.sh key add" && [ ! -e "$SH/.cca/policy/id_ed25519" ]'
-# 没有 Team 的邀请链接（默认）、没打开维护者的共享：粘贴一条自己的代理当可选节点，配置好内置代理；不生成 deploy key、不拉映射
+ok "服务器上能直连：照旧问要不要配置路由器，不问 Team 的邀请链接、不导入节点" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "这台机器能直连 claude.ai" && printf "%s" "$out" | grep -q "现在配置路由器" && ! printf "%s" "$out" | grep -q "有没有 Team 的邀请链接" && scfg "not c.get(\"nodes\")"'
+# 没有 Team 的邀请链接（默认）：粘贴一条自己的代理当可选节点，配置好内置代理
 SH="$T/homes4"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
-touch "$T/direct_down"; : > git.log
+touch "$T/direct_down"
 out=$(rs CCA_TTY="$(ans n 'socks5://u:p@198.51.100.7:1080' . n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理当可选节点（内核校验过），配置好内置代理；不生成 deploy key、不拉映射" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "有没有 Team 的邀请链接？ \[y/N\]" && printf "%s" "$out" | grep -q "节点用你自己的代理" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\" and not c.get(\"policy\")" && [ ! -e "$SH/.cca/policy/id_ed25519" ] && ! grep -q "^GIT clone" git.log && ! printf "%s" "$out" | grep -q "policy.sh key add"'
+ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理当可选节点（内核校验过），配置好内置代理；没加入 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "有没有 Team 的邀请链接？ \[y/N\]" && printf "%s" "$out" | grep -q "节点用你自己的代理" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\"" && [ -z "$(ls "$SH/.cca/teams" 2>/dev/null)" ] && [ ! -e "$SH/.cca/policy" ]'
 out=$(rs CCA_TTY="$(ans n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
 ok "再运行 cca install：已经有可选节点了，不再问有没有 Team 的邀请链接、不再要代理" '[ $rc -eq 0 ] && ! printf "%s" "$out" | grep -qE "有没有 Team 的邀请链接|节点用你自己的代理"'
 core_stop
 # 答了有邀请链接、到了那一步又留空（先不加入）：接着粘贴一条自己的代理
 SH="$T/homes5"; mkdir -p "$SH/Applications"; cp -R "$T/homes/Applications/cca.app" "$SH/Applications/"
 out=$(rs CCA_TTY="$(ans y '' 'socks5://u:p@198.51.100.8:1080' . n n)" "$H/.cca/bin/cca" install 2>&1); rc=$?
-ok "服务器上直连不通、答了有 Team 的邀请链接、到了那一步留空：先不加入（说之后运行 cca team join），接着粘贴一条自己的代理当可选节点，配置好内置代理；没加入 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "邀请链接（cca-team1. 开头，输入不显示；留空是先不加入）" && printf "%s" "$out" | grep -q "先不加入 Team：以后运行 cca team join 加入" && ! printf "%s" "$out" | grep -q "App 的「共享与同步」" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\" and not c.get(\"policy\")" && [ -z "$(ls "$SH/.cca/teams" 2>/dev/null)" ]'
+ok "服务器上直连不通、答了有 Team 的邀请链接、到了那一步留空：先不加入（说之后运行 cca team join），接着粘贴一条自己的代理当可选节点，配置好内置代理；没加入 Team" '[ $rc -eq 0 ] && printf "%s" "$out" | grep -q "邀请链接（cca-team1. 开头，输入不显示；留空是先不加入）" && printf "%s" "$out" | grep -q "先不加入 Team：以后运行 cca team join 加入" && ! printf "%s" "$out" | grep -q "App 的「共享与同步」" && printf "%s" "$out" | grep -q "已加上你的代理：" && scfg "len(c[\"nodes\"]) == 1 and c[\"local\"][\"client\"] == \"builtin\"" && [ -z "$(ls "$SH/.cca/teams" 2>/dev/null)" ]'
 core_stop; rm -f "$T/direct_down"
-# 还原：映射仓库、假 GitHub 上的 deploy key
-cp "$T/pr.srv" "$PR/policy.json"; rm -f "$PR/policy.json.sig" "$PR/nodes.json" "$PR/nodes.json.sig"; [ ! -f "$T/pr.srv.sig" ] || cp "$T/pr.srv.sig" "$PR/policy.json.sig"
-pks "$(ans)" rm -y "$salias" >/dev/null 2>&1
+tm_stop "$SVTPID"   # 还原：停掉云上组的服务器
 
 fi
 if sect 11c; then
 # 11c. 一键安装（install.sh）：全新的 HOME，下载最新版、验签、安装
 H3="$T/home3"; mkdir -p "$H3" "$T/tmp3"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$D/../install.sh" > "$T/install.sh"
-r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_POLICY_DEFAULT= CCA_HELPER="$HELPERWRAP" SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
+r3() { env -i LANG=en_US.UTF-8 HOME="$H3" TMPDIR="$T/tmp3" CCA_T="$T" CCA_COST=off CCA_GATEWAY= CCA_HELPER="$HELPERWRAP" SHELL=/bin/zsh PATH="$T/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb "$@"; }
 publish 9.9.20
 out=$(r3 CCA_TTY="$(ans y n n)" CCA_POLICY_REPO=example/cca-policy bash "$T/install.sh" 2>&1); rc=$?
-ok "一键安装时带 CCA_POLICY_REPO：配好映射仓库、生成这台机器的 deploy key，并拉到映射；仓库不是默认的那个时，给维护者的命令带上 -R" '[ -f "$H3/.cca/policy/id_ed25519" ] && [ -f "$H3/.cca/policy/policy.json" ] && printf "%s" "$out" | grep -q "映射仓库：example/cca-policy" && printf "%s" "$out" | grep -q "已更新映射" && printf "%s" "$out" | grep -q "    ./policy.sh key add -R example/cca-policy '\''ssh-ed25519 AAAA[^ ]* cca-policy@[^ ]*'\'' [^ ]*$"'
+ok "一键安装时带着 CCA_POLICY_REPO（3.6.0 以前打开维护者的共享）：只说一声去掉了、向 Team 的管理员要邀请链接，不生成 deploy key、不拉映射、不写进配置" 'printf "%s" "$out" | grep -q "维护者的映射 3.6.0 起去掉了（CCA_POLICY_REPO 不再起作用）：向 Team 的管理员要一个邀请链接，装好后运行 cca team join 加入" && [ ! -e "$H3/.cca/policy" ] && ! grep -q "\"policy\"" "$H3/.cca/config.json" && ! printf "%s" "$out" | grep -q "policy\.sh"'
 ok "一键安装：下载最新版、验签、装到 ~/.cca/bin 并链接" '[ $rc -eq 0 ] && [ "$("$H3/.cca/bin/cca" version)" = 9.9.20 ] && [ "$(readlink "$H3/.local/bin/cca")" = "$H3/.cca/bin/cca" ] && [ "$(readlink "$H3/.local/bin/cxa")" = cca ] && [ "$(readlink "$H3/.local/bin/aga")" = cca ] && printf "%s" "$out" | grep -q "已下载 cca 9.9.20，签名校验通过"'
 ok "一键安装：~/.local/bin 不在 PATH 里时，问过之后写进 ~/.zshrc" 'grep -qF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$H3/.zshrc" && printf "%s" "$out" | grep -q "打开一个新的终端标签，输入 cca 就能用"'
 out=$(r3 CCA_TTY="$(ans n n)" bash "$T/install.sh" 2>&1); rc=$?
@@ -4678,10 +4377,6 @@ K=$(cat "$H/.cca/router_ed25519.pub"); echo "$K" >> "$R/root/.ssh/authorized_key
 mkdir -p "$H/.cca/secrets" "$H/.cca/accounts/orphan-example-com/claude"
 echo '{"v": 1, "host": "api.example.com", "key": "sk-LEFTOVER-SECRET"}' > "$H/.cca/secrets/cca-api-orphan"
 echo '{"claudeAiOauth": {"accessToken": "cred-LEFTOVER-SECRET"}}' > "$H/.cca/accounts/orphan-example-com/claude/.credentials.json"
-# 维护者的参考节点里有节点密钥（连同拉取映射时留下的临时文件）：也不进备份；映射本身照样打包
-mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; [ -f "$H/.cca/policy/policy.json" ] || echo '{}' > "$H/.cca/policy/policy.json"
-NODEJ='{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}'
-for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do printf '%s\n' "$NODEJ" > "$H/.cca/policy/$f"; done
 # Antigravity 账号（10f2 收尾时删掉了 agy.json）：表里登录着的 gina 也退出登录；账号表里没有的账号目录（没退出登录）里的 token 同样不进备份
 echo '{"gina@example.com": "US-A"}' > "$H/.cca/agy.json"
 for a in "gina-example-com-$(printf %s gina@example.com | shasum | cut -c1-6)" orphan-example-com; do
@@ -4692,10 +4387,11 @@ ag_pre=$(readlink "$H/.local/bin/aga" 2>/dev/null)
 # 邮箱助手配置过：应用专用密码在钥匙串里
 python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mail"]={"user": "inbox@example.com"}; json.dump(c, open(p, "w"))' "$H/.cca/config.json"
 mkdir -p "$T/keychain/cca-mail"; printf abcdefghijklmnop > "$T/keychain/cca-mail/inbox@example.com"
-# 远程会话配对过一台机器（docs/dev/remote.md）：配对表在 ~/.cca/remote，密钥在钥匙串里
-RSP=$(printf 'ab%.0s' $(seq 1 16)); mkdir -p "$H/.cca/remote" "$T/keychain/cca-remote-$RSP"; chmod 700 "$H/.cca/remote"
-printf '%064d' 7 > "$T/keychain/cca-remote-$RSP/pair"
-printf '{"v":1,"peers":{"%s":{"fp":"SHA256:%s","name":"dan-air","incoming":"control","shown":true,"at":1794000000}}}\n' "$RSP" "$(printf 'A%.0s' $(seq 1 43))" > "$H/.cca/remote/peers.json"
+# 远程会话配对过一台机器（docs/dev/remote.md）：配对表在 ~/.cca/remote，密钥在钥匙串里。配对记在某个 Team 的服务器上（hub 是它的编号；
+# 这台设备已经不在那个 Team 里：只在这台机器上取消，不联网）。RSO 是 3.6.0 以前在维护者的服务器上配的（没有 hub）：不算配对了，密钥也删掉
+RSP=$(printf 'ab%.0s' $(seq 1 16)); RSO=$(printf 'ac%.0s' $(seq 1 16)); mkdir -p "$H/.cca/remote" "$T/keychain/cca-remote-$RSP" "$T/keychain/cca-remote-$RSO"; chmod 700 "$H/.cca/remote"
+printf '%064d' 7 > "$T/keychain/cca-remote-$RSP/pair"; printf '%064d' 8 > "$T/keychain/cca-remote-$RSO/pair"
+printf '{"v":1,"peers":{"%s":{"fp":"SHA256:%s","name":"dan-air","incoming":"control","shown":true,"at":1794000000,"hub":"%s"},"%s":{"fp":"SHA256:%s","name":"old-mini","incoming":"view","shown":false,"at":1793000000}}}\n' "$RSP" "$(printf 'A%.0s' $(seq 1 43))" "$(printf 'cd%.0s' $(seq 1 16))" "$RSO" "$(printf 'B%.0s' $(seq 1 43))" > "$H/.cca/remote/peers.json"
 # 3.5.3 去掉了自己的同步服务器：以前加入过的设备上留下的，升级以后第一条走默认那一支的命令就删掉（hub_leftovers）
 mkdir -p "$H/.cca/hub" "$H/.cca/presence" "$H/.cca/cost"; : > "$H/.cca/hub/hub.json"; : > "$H/.cca/hub-hosted.json"
 : > "$H/.cca/cost/own.remote.json"; : > "$H/.cca/cost/own.sync.json"; : > "$H/.cca/presence/own.status.json"
@@ -4712,6 +4408,11 @@ printf '{"v":1,"url":"https://127.0.0.1:9","pins":["sha256//%s="],"admit":"%s","
 printf '{"acc":{"x":"HUB-REMOTE-SECRET"}}\n' > "$H/.cca/cost/own.remote.json"
 # 经某个 Team 的服务器同步来的（那个 Team 的目录已经不在了，退出时删不到它：靠备份的排除清单）
 printf '{"acc":{"x":"TEAM-REMOTE-SECRET"}}\n' > "$H/.cca/cost/team.$(printf 'ab%.0s' $(seq 1 16)).remote.json"
+# 3.6.0 以前拉过维护者的映射、升级以后还没运行过别的命令（第一条走默认那一支的命令就删掉 ~/.cca/policy：policy_leftovers，所以放在
+# 上面的 cca ls 之后）：参考节点里有节点密钥（连同拉取映射时留下的临时文件），不进备份；映射本身照样打包
+mkdir -p "$H/.cca/policy/tmp.Ab12cd/repo"; echo '{}' > "$H/.cca/policy/policy.json"
+NODEJ='{"version": 1, "group": "OpenAi", "proxies": [{"name": "US-Z", "type": "ss", "server": "192.0.2.99", "port": 8388, "cipher": "aes-128-gcm", "password": "node-LEFTOVER-SECRET"}]}'
+for f in nodes.json nodes.json.4242 tmp.Ab12cd/repo/nodes.json; do printf '%s\n' "$NODEJ" > "$H/.cca/policy/$f"; done
 # macOS 26 以下由 cca 在后台托管内核时，配置内置代理时问过后在用户的 crontab 里加了开机起内核的那一行（假的 crontab：$T/crontab）。
 # 这次在 CCA_GUI_OS=15 下还原：要删掉它（以前只在 Linux 上删），别的行留着
 printf '%s\n' '0 3 * * * echo user-job' "@reboot '$H/.local/bin/cca' _core-keep >/dev/null 2>&1 # cca-core" > "$T/crontab"
@@ -4738,13 +4439,13 @@ ok "restore：第三方 API 账号的 key、官方账号记下备查的 key（Cl
 ok "restore：macOS 26 以下（内核由 cca 在后台托管）也删掉 crontab 里开机起内核的那一行，别的行留着" '! grep -qF "# cca-core" "$T/crontab" && grep -qx "0 3 \* \* \* echo user-job" "$T/crontab"'
 BK=$(ls "$H"/cca-backup-*.tar.gz | head -n 1)
 ok "restore：先说明 Codex 账号的 git 工作树会一起删；退出 Codex 账号的登录；备份里没有登录凭证（含 Linux 上的 .credentials.json、密钥文件）和工作树" 'printf "%s" "$out" | grep -qE "git 工作树（worktrees）会一起删掉：(.*、)?dave@example.com" && grep -q "LOGOUT $DD/codex" codex.log && ! tar -tzf "$BK" | grep -qE "auth\.json|/worktrees|/id_ed25519$|\.credentials\.json|secrets" && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "at-SECRET|LEFTOVER-SECRET" && tar -tzf "$BK" | grep -q "orphan-example-com/claude"'
-ok "restore：备份里没有维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件），映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
+ok "restore：3.6.0 以前留下、还没清掉的维护者参考节点的节点密钥（policy/nodes.json、拉取映射的临时文件）不进备份，映射本身在" '! tar -tzf "$BK" | grep -qE "policy/(nodes\.json|tmp\.)" && tar -tzf "$BK" | grep -q "policy/policy\.json"'
 ok "restore：备份里没有折合金额的缓存、别的设备同步来的（cost/scan.json、remote.json 这些），这台设备统计好的（cost/local.json）在" '! tar -tzf "$BK" | grep -qE "cost/(scan|remote|worker)\.json|cost/(last|scanned)$" && tar -tzf "$BK" | grep -q "cost/local\.json"'
 ok "restore：以前的自己的同步服务器留下的加入信息、私钥、经它同步来的折合金额，经 Team 同步来的，都不进备份；清单里不提它" '! printf "%s" "$out" | grep -q "自己的同步服务器" && ! tar -tzf "$BK" | grep -qE "hub/hub\.json|hub/id_ed25519$|cost/own\.|cost/team\." && ! tar -xzOf "$BK" 2>/dev/null | grep -qE "$RHA|$RHS|HUB-REMOTE-SECRET|TEAM-REMOTE-SECRET"'
 ok "restore：Codex 账号也一起还原：第三方 API 的 key、ChatGPT 启动器删掉，~/.codex 原来的登录和共享的内容不动" '[ -z "$(ls "$T/keychain" | grep "^cca-codex-api-")" ] && grep -q master "$X/auth.json" && [ -d "$X/skills/from-alice" ] && [ ! -e "$H/Applications/ChatGPT dave.app" ]'
 ok "restore：Antigravity 账号也一起还原：退出登录；备份里有 agy.json、没有登录 token（账号表里没有的账号目录里的也不带）；~/.gemini 原来的登录和共享的会话不动" 'printf "%s" "$out" | grep -q "已退出账号 gina@example.com" && tar -tzf "$BK" | grep -qx "\./agy\.json" && tar -tzf "$BK" | grep -q "agy/accounts/orphan-example-com/gemini" && ! tar -tzf "$BK" | grep -q antigravity-oauth-token && grep -q master "$H/.gemini/antigravity-cli/antigravity-oauth-token" && [ -f "$H/.gemini/antigravity-cli/conversations/from-alice.pb" ]'
 ok "restore：邮箱助手的应用专用密码也从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-mail" ] && printf "%s" "$out" | grep -q "邮箱助手：删掉钥匙串里 inbox@example.com 的应用专用密码"'
-ok "restore：远程会话的配对也取消，配对的密钥从钥匙串删掉（确认清单里说了）" '[ ! -e "$T/keychain/cca-remote-$RSP" ] && printf "%s" "$out" | grep -q "远程会话：取消和别的机器的配对"'
+ok "restore：远程会话的配对也取消，配对的密钥从钥匙串删掉（确认清单里说了）；3.6.0 以前在维护者的服务器上配的（配对表里没有 hub）留下的密钥也删掉" '[ ! -e "$T/keychain/cca-remote-$RSP" ] && [ ! -e "$T/keychain/cca-remote-$RSO" ] && printf "%s" "$out" | grep -q "远程会话：取消和别的机器的配对"'
 ok "所有重载前都用 OpenClash 的 SAFE_PATHS 做了 -t 校验" 'grep -q "CORE SAFE_PATHS=/usr/share/openclash:/etc/ssl -t" router.log'
 # --no-backup：不打包、直接删。上面已经卸载干净了：放一份只有空配置和空账号表的 ~/.cca，用仓库里的 cca 再卸载一次；
 # ~/.local/bin 这回是空的（前面各节装进去的假命令、keepme 都拿走），启动文件里那两行跟着去掉
