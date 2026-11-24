@@ -2685,11 +2685,11 @@ fi
 # 换代的那一次更新：还内嵌着 Python 的旧版本（cli/PORTED_FROM 记的那个主干提交的 cca）用它自己的更新流程装上接着辅助程序的
 # 新版本——下载、验签（旧版本要求新文件 bash -n 通过、有 VERSION 那一行）、换上；新版本第一次运行自己解出辅助程序。在另一个 HOME 里
 # 做（不动下面用的更新状态）。旧版本的 cca 从 git 里取（CCA_OLD_CCA=文件 可以另指一份）；取不到（不在 git 仓库里）就跳过。
-# 等没有还内嵌 Python 的版本在用了，这个用例就可以删掉
+# 等没有还内嵌 Python 的版本在用了，这个用例就可以删掉。回归里只有这一处还要 python3（旧版本自己要它）：这台机器上没有就跳过
 OLDCCA="$T/old-cca"
 if [ -n "${CCA_OLD_CCA:-}" ]; then cp "$CCA_OLD_CCA" "$OLDCCA"
 else git -C "$D/.." show "$(cut -d' ' -f1 "$D/../cli/PORTED_FROM" 2>/dev/null):cca" > "$OLDCCA" 2>/dev/null || rm -f "$OLDCCA"; fi
-if [ -s "$OLDCCA" ] && grep -q "^PY_SRC=" "$OLDCCA"; then
+if [ -s "$OLDCCA" ] && grep -q "^PY_SRC=" "$OLDCCA" && run python3 -c pass >/dev/null 2>&1; then
 	OH="$T/oldhome"; mkdir -p "$OH/.cca/bin" "$G/v9.9.1"
 	oldv=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$OLDCCA")
 	sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" "$OLDCCA" > "$OH/.cca/bin/cca"; chmod 755 "$OH/.cca/bin/cca"
@@ -2703,7 +2703,7 @@ if [ -s "$OLDCCA" ] && grep -q "^PY_SRC=" "$OLDCCA"; then
 	ok "换代的更新：退得回去（cca update --rollback 换回内嵌 Python 的那一版）" '[ "$(ro "$OH/.cca/bin/cca" version)" = "$oldv" ] && printf "%s" "$out" | grep -q "已退回 ${oldv}"'
 	rm -rf "$OH" "$G/v9.9.1"
 else
-	echo "SKIP  换代的更新（取不到内嵌 Python 的旧版本：不在 git 仓库里；CCA_OLD_CCA=文件 可以指一份）"
+	echo "SKIP  换代的更新（取不到内嵌 Python 的旧版本：不在 git 仓库里，CCA_OLD_CCA=文件 可以指一份；或者这台机器上没有 python3，旧版本要它）"
 fi
 rm -f "$OLDCCA"
 mkdir -p "$T/dl"; mkver 2.0.0 "$T/dl/cca"
