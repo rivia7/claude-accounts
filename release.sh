@@ -28,7 +28,7 @@ pub=$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' cca)
 	fail "cca 里的 RELEASE_KEY 和 $KEY.pub 不是一对"
 [ "$(sed -n 's/^RELEASE_KEY="\(.*\)"$/\1/p' install.sh)" = "$pub" ] || fail "install.sh 里的 RELEASE_KEY 和 cca 里的不一致"
 
-# 辅助程序（cli/ 的 Rust 程序，原来是 cca 里内嵌的 Python）：四种机器各编一份，签名前接到 cca 后面（cli/pack.py）。照 Cargo.lock 编
+# 辅助程序（cli/ 的 Rust 程序，原来是 cca 里内嵌的 Python）：四种机器各编一份，签名前接到 cca 后面（cca-core pack）。照 Cargo.lock 编
 # （--locked）；程序里不留这台机器的路径（--remap-path-prefix：依赖库出错位置的字符串里本来带着 ~/.cargo 的绝对路径）
 echo "• 编辅助程序（四种机器）…"
 TARGETS="aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl"
@@ -70,7 +70,7 @@ trap 'rm -rf "$out" "$chk"' EXIT
 # 发布的 cca：仓库里的 cca 后面接上四种机器的辅助程序。接好以后在一个空的 HOME、空的缓存目录里真的运行一次（解出这台机器的那一份、
 # 校验，经它报出版本号：cca _gui hello 只读，不联网），解出来的要和编出来的一字节不差。这台 Mac 能经 Rosetta 跑 Intel 的程序时，
 # 另一种芯片的那一份也这样跑一次
-python3 -I cli/pack.py cca "$out/cca" >/dev/null || fail "辅助程序没接上（cli/pack.py）"
+"cli/target/$host/release/cca-core" pack cca "$out/cca" >/dev/null || fail "辅助程序没接上（cca-core pack）"
 bash -n "$out/cca" || fail "接上辅助程序的 cca 语法不对"
 selfcheck() {   # selfcheck 目标 [arch 的参数]：按这种芯片运行一次接好的 cca
 	local t="$1" d="$chk/$1" sum; shift

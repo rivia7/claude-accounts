@@ -19,6 +19,20 @@ pub fn b64encode(data: &[u8]) -> String {
     out
 }
 
+/// `base64.encodebytes(data).decode('ascii')`：每 76 个字符一行，每一行（连最后一行）后面跟一个换行；空的是空串
+pub fn encodebytes(data: &[u8]) -> String {
+    let flat = b64encode(data);
+    let mut out = String::with_capacity(flat.len() + flat.len() / 76 + 1);
+    let mut i = 0;
+    while i < flat.len() {
+        let j = (i + 76).min(flat.len());
+        out.push_str(&flat[i..j]);
+        out.push('\n');
+        i = j;
+    }
+    out
+}
+
 /// `base64.urlsafe_b64encode(data).decode('ascii')`
 pub fn urlsafe_b64encode(data: &[u8]) -> String {
     b64encode(data).replace('+', "-").replace('/', "_")
@@ -140,6 +154,23 @@ mod tests {
             (got, ok, err) => {
                 panic!("{what} {input:?}：得到 {:?}，应该是 ok={ok:?} err={err:?}", got.map(|g| to_hex(&g)).map_err(|_| "别的错"))
             }
+        }
+    }
+
+    #[test]
+    fn encodebytes_like_cpython() {
+        // base64.encodebytes(bytes(range(130)))（CPython 3.14）
+        let want = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\n\
+                    OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\n\
+                    cnN0dXZ3eHl6e3x9fn+AgQ==\n";
+        assert_eq!(encodebytes(&(0..130).map(|b| b as u8).collect::<Vec<_>>()), want);
+        assert_eq!(encodebytes(b""), "");
+        // 57 个字节正好一整行
+        for n in [1, 56, 57, 58, 114, 1000] {
+            let s = encodebytes(&vec![0xab; n]);
+            let lines: Vec<&str> = s.strip_suffix('\n').unwrap().split('\n').collect();
+            assert!(lines[..lines.len() - 1].iter().all(|l| l.len() == 76) && lines.last().unwrap().len() <= 76, "{n}");
+            assert_eq!(lines.concat(), b64encode(&vec![0xab; n]), "{n}");
         }
     }
 

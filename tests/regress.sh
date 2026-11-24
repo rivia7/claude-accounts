@@ -15,7 +15,7 @@ cd "$T" || exit 1
 # 辅助程序（cli/ 的 Rust 程序）：仓库里的 cca 用 cli/target/release 里编出来的那一份，这里先编（没改过就是零点几秒；--locked --offline：
 # 照 Cargo.lock、不联网，依赖没下过的先在 cli/ 里 cargo fetch 一次）。CCA_HELPER=路径：不编，整套回归用这一份（release.sh 用它
 # 指到要发布的那一份）：仓库里的 cca 认这个变量，mkver 做的假发布版接的也是这一份（发布的 cca 不认这个变量，总是用自己接着的）。
-# HOST_TARGET：这台机器的目标（见 cli/pack.py）
+# HOST_TARGET：这台机器的目标（见 cli/src/cmd/pack.rs 的 TARGETS）
 HELPER_BIN="${CCA_HELPER:-}"
 if [ -z "$HELPER_BIN" ]; then
 	HELPER_BIN="$(dirname "$CCA")/cli/target/release/cca-core"
@@ -1865,7 +1865,7 @@ ok "_gui state：alice 登录着、套餐 Max、有上次的用量（缓存）�
 ok "_gui state：共享默认关着（config.policy 的 state 是 off，账号表里没有共享的账号，没有收起来的）" 'jok "d[\"config\"][\"policy\"] == {\"configured\": False, \"repo\": None, \"next_check_epoch\": None, \"state\": \"off\", \"accounts\": 0, \"parked\": 0}" < "$GF/state.json"'
 ok "_gui hello 没有 hub 了（3.5.3 去掉了自己的同步服务器），说有 Team（team 是 1）；_gui state：共享关着、不在 Team 里时 config.hubs 是空的，账号都不经服务器同步（hub 是 null，没有「设备」）" 'jok "\"hub\" not in d and d[\"team\"] == 1" < "$GF/hello.json" && jok "d[\"config\"][\"hubs\"] == [] and all(a[\"hub\"] is None and not a[\"can\"][\"devices\"] for t in d[\"tools\"] for a in t[\"accounts\"])" < "$GF/state.json"'
 ok "_gui state：不联网、不写文件（~/.cca 里一个文件都没变），也不经过自动更新" '[ "$(snap)" = "$s0" ] && ! grep -q "GH " gh.log 2>/dev/null'
-# 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cli/pack.py），第一次用时解到
+# 辅助程序（cca-core）在哪：仓库里的 cca 用 cli/target/release 里编出来的；发布的 cca 把它接在文件后面（cca-core pack），第一次用时解到
 # 这个用户的临时目录（TMPDIR 在 /var/folders 下时 cca 把缓存放在它里面）的 cca-helper 里，文件名是它的 SHA-256。
 # 缓存目录单独建一个（HC，退出时删），不碰真的。CCA_HELPER（TIMING、release.sh 跑回归时带着）只对仓库里的 cca 管用，发布的不认
 HC=$(mktemp -d "$(getconf DARWIN_USER_TEMP_DIR)cca-test-helper.XXXXXX"); HC=$(cd "$HC" && pwd -P); HCL=${HC#/private}
@@ -1876,8 +1876,8 @@ out=$(hrun "$T/hc/dev/cca" version 2>&1); rc=$?
 ok "辅助程序：仓库里的 cca（没接辅助程序）还没编出来时说清楚怎么编，不往下走" '[ $rc -eq 1 ] && [ "$out" = "cca: 这一份 cca 是仓库里的源码，没带辅助程序：先编出来（cd $T/hc/dev/cli && cargo build --release）" ]'
 out=$(run CCA_HELPER="$HELPER_BIN" "$T/hc/dev/cca" version 2>&1); rc=$?
 ok "辅助程序：仓库里的 cca 认 CCA_HELPER（指定用哪一份，测试用）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ]'
-python3 -I "$D/../cli/pack.py" "$CCA" "$T/hc/cca" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null
-ok "辅助程序：接上以后（cli/pack.py）还是一个语法正确的 bash 文件，校验值写在 HELPER_SUMS 里" 'bash -n "$T/hc/cca" && grep -qx "HELPER_SUMS=\"$HOST_TARGET=$HSUM\"" "$T/hc/cca" && [ "$(tail -n 1 "$T/hc/cca")" = CCA-HELPER-END ]'
+run "$HELPER_BIN" pack "$CCA" "$T/hc/cca" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null
+ok "辅助程序：接上以后（cca-core pack）还是一个语法正确的 bash 文件，校验值写在 HELPER_SUMS 里" 'bash -n "$T/hc/cca" && grep -qx "HELPER_SUMS=\"$HOST_TARGET=$HSUM\"" "$T/hc/cca" && [ "$(tail -n 1 "$T/hc/cca")" = CCA-HELPER-END ]'
 out=$(hrun "$T/hc/cca" version 2>&1); rc=$?
 ok "辅助程序：发布的 cca 第一次运行时解到缓存目录的 cca-helper 里（文件名是 SHA-256，校验过，只有自己能读写执行）" '[ $rc -eq 0 ] && [ "$out" = "$VER" ] && [ "$(ls "$HC/cca-helper")" = "$HSUM" ] && [ "$(stat -f %Lp "$HC/cca-helper/$HSUM")" = 700 ] && [ "$(stat -f %Lp "$HC/cca-helper")" = 700 ] && [ "$(shasum -a 256 "$HC/cca-helper/$HSUM" | cut -d" " -f1)" = "$HSUM" ]'
 out=$(run CCA_HELPER=/nonexistent/cca-core TMPDIR="$HCL/" "$T/hc/cca" _gui hello 2>&1); rc=$?
@@ -1916,7 +1916,7 @@ ok "辅助程序：PATH 里排在前面的 base64 不认 -D（GNU 的）也解�
 # 解好的那一份中途没了：py 自己再解一次。把发布的 cca 里找辅助程序的那一段和 py 取出来单独跑（就像一个开了很久的会话收尾时那样）：
 # ① 系统清了临时目录；② 这一份 cca 已经被新版本换掉了（新版本的辅助程序是另一份），上一个版本在 update/cca.prev；③ 哪里都没有了
 printf '#!/bin/sh\n[ "$1" = sh-re-escape ] && echo "$2"\n' > "$T/hc/other-helper"; chmod +x "$T/hc/other-helper"
-python3 -I "$D/../cli/pack.py" "$CCA" "$T/hc/newer" --only "$HOST_TARGET=$T/hc/other-helper" >/dev/null
+run "$HELPER_BIN" pack "$CCA" "$T/hc/newer" --only "$HOST_TARGET=$T/hc/other-helper" >/dev/null
 mkdir -p "$T/hc/heal/home/.cca/update"; cp "$T/hc/cca" "$T/hc/heal/cca"; cp "$T/hc/cca" "$T/hc/heal/home/.cca/update/cca.prev"
 cat > "$T/hc/heal.sh" <<'S'
 SELF="$1"; CCA_HOME="$2"; UPDATE_REPO=x; TOOL=claude; TOOL_BIN=""; CACHE_DIR="${TMPDIR%/}"
@@ -2639,7 +2639,7 @@ TESTPUB=$(cut -d' ' -f1,2 "$T/relkey.pub")
 mkver() {   # mkver 版本 输出文件 [路由器脚本标记]：换成测试密钥、改版本号，可在路由器脚本里加个标记
 	# 内置代理的内核换成假的 mihomo（setup.sh 打包、算好的校验值）。像发布的那样接着辅助程序（只接这台机器的那一份；$T/cca.packed
 	# 是仓库里的 cca 接好的：第一次用、或者 cca、辅助程序比它新（分节续跑时快照里那份是旧的）时做一份，之后只在它上面改这几行）
-	{ [ "$T/cca.packed" -nt "$CCA" ] && [ "$T/cca.packed" -nt "$HELPER_BIN" ]; } || python3 -I "$D/../cli/pack.py" "$CCA" "$T/cca.packed" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null || return 1
+	{ [ "$T/cca.packed" -nt "$CCA" ] && [ "$T/cca.packed" -nt "$HELPER_BIN" ]; } || run "$HELPER_BIN" pack "$CCA" "$T/cca.packed" --only "$HOST_TARGET=$HELPER_BIN" >/dev/null || return 1
 	sed -e "s|^VERSION=\".*\"$|VERSION=\"$1\"|" -e "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$TESTPUB test-release\"|" \
 		-e "s|^CORE_SHA256_ARM64=\".*\"$|CORE_SHA256_ARM64=\"$(cat "$T/mihomo/sha256")\"|" -e "s|^CORE_SHA256_AMD64=\".*\"$|CORE_SHA256_AMD64=\"$(cat "$T/mihomo/sha256")\"|" "$T/cca.packed" > "$2"
 	[ -n "${3:-}" ] && sed -i '' "s|^# cca-router：|# cca-router（$3）：|" "$2"

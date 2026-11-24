@@ -19,15 +19,16 @@
 #   Team 的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py：这个发行版的 sh、openssl、python3，假的 systemctl、docker 起真的服务端）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
 # 辅助程序（cli/ 的 Rust 程序）用静态链接的那一份：cli/target/<x86_64|aarch64>-unknown-linux-musl/release/cca-core。--docker 时在宿主机上
-# 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
+# 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml 和 cli/musl-env.sh）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
 set -u
 R=$(cd "$(dirname "$0")/.." && pwd)
 case "$(uname -m)" in x86_64|amd64) HT=x86_64-unknown-linux-musl ;; aarch64|arm64) HT=aarch64-unknown-linux-musl ;; *) HT="" ;; esac
 helper_build() {   # 这台机器（容器和宿主机是同一种芯片）的辅助程序：编出来；没有 cargo 时用已经编好的
 	[ -n "$HT" ] || { echo "辅助程序没有这种机器的（$(uname -m)）" >&2; return 1; }
 	if command -v cargo >/dev/null 2>&1; then
-		( cd "$R/cli" && cargo build --release --locked --target "$HT" ) >/dev/null 2>&1 ||
-			{ echo "辅助程序编不出来：cd cli && cargo build --release --locked --target ${HT}（没装这个目标就先 rustup target add ${HT}）" >&2; return 1; }
+		# Mac 上交叉编译（--docker）：ring 里的 C 代码要 musl-env.sh 指定编译器和归档工具；在 Linux 上它什么都不做
+		( cd "$R/cli" && . ./musl-env.sh && cargo build --release --locked --target "$HT" ) >/dev/null 2>&1 ||
+			{ echo "辅助程序编不出来：cd cli && . ./musl-env.sh && cargo build --release --locked --target ${HT}（没装这个目标就先 rustup target add ${HT}）" >&2; return 1; }
 	fi
 	[ -x "$R/cli/target/$HT/release/cca-core" ] || { echo "辅助程序还没编出来：cd cli && cargo build --release --locked --target $HT" >&2; return 1; }
 }
@@ -351,8 +352,8 @@ FPA=$(fp 'socks5|127.0.0.1|18080|')
 I="$D/i"; mkdir -p "$I/gh" "$I/bin" "$I/home" "$I/tmp"
 ssh-keygen -q -t ed25519 -N '' -C test-release -f "$I/relkey" </dev/null
 pub=$(cut -d' ' -f1-2 "$I/relkey.pub")
-# 像发布的那样接着辅助程序（cli/pack.py；这里只接这台机器的那一份）：第一次运行时解到 ~/.cache/cca-helper 里
-python3 -I "$R/cli/pack.py" "$R/cca" "$I/cca.packed" --only "$HT=$HB" >/dev/null || { echo "  ✗ 辅助程序没接上（cli/pack.py）"; echo "  结果：0 通过，1 失败"; exit 1; }
+# 像发布的那样接着辅助程序（cca-core pack：就是这一份辅助程序自己；这里只接这台机器的那一份）：第一次运行时解到 ~/.cache/cca-helper 里
+"$HB" pack "$R/cca" "$I/cca.packed" --only "$HT=$HB" >/dev/null || { echo "  ✗ 辅助程序没接上（cca-core pack）"; echo "  结果：0 通过，1 失败"; exit 1; }
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$I/cca.packed" > "$I/gh/cca"
 sed "s|^RELEASE_KEY=\".*\"$|RELEASE_KEY=\"$pub test-release\"|" "$R/install.sh" > "$I/install.sh"
 ssh-keygen -q -Y sign -f "$I/relkey" -n cca-release "$I/gh/cca" </dev/null

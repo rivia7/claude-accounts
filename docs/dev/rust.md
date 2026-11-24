@@ -9,12 +9,12 @@
 | | |
 |---|---|
 | `cli/src/main.rs` | 入口：按第一个参数找子命令（`cmd::find`），没人接的错误说一句、退出码 1 |
-| `cli/src/py/` | Python 兼容层：值（`obj::{V, Dict, List}`）、JSON、正则、文字、路径、文件、子进程、时间、摘要、属性列表、TOML、TLS、zlib……行为照 CPython（有从真的 Python 取的对照数据：`cli/tests/vectors/*.json`，`cli/tools/gen_vectors.py` 生成） |
+| `cli/src/py/` | Python 兼容层：值（`obj::{V, Dict, List}`）、JSON、正则、文字、路径、文件、子进程、时间、摘要、属性列表、TOML、TLS、zlib、gzip……行为照 CPython（有从真的 Python 取的对照数据：`cli/tests/vectors/*.json`，`cli/tools/gen_vectors.py` 生成） |
 | `cli/src/core/` | 地基：目录和常量（`base`）、三种工具（`tool`：原来的 `Tool` / `CodexTool` / `AgyTool`，`t()` 是当前工具）、账号表（`model`）、Team 的配置并进账号表（`policy`：名字是维护者的映射那时起的）、对账（`ctx`）、同步摘要（`sync`） |
 | `cli/src/cmd/<模块>.rs` | 子命令，一个模块一份，每份末尾有自己的 `CMDS` 表（子命令名 → 函数、哪几种工具能用） |
 | `cli/Cargo.toml`、`Cargo.lock` | 依赖是白名单（见下面「依赖」）；版本锁在 `Cargo.lock`，一律 `--locked` |
 | `cli/.cargo/config.toml` | 从 macOS 交叉编译 Linux（musl 静态链接，用 Rust 自带的 rust-lld）；`cargo test` 起的进程里 `CCA_HOME` 指到不存在的目录 |
-| `cli/pack.py` | 把四种机器的辅助程序接到 `cca` 后面（发布、回归的 `mkver`、`tests/linux.sh` 用） |
+| `cli/src/cmd/pack.rs` | `cca-core pack`：把四种机器的辅助程序接到 `cca` 后面（发布、回归的 `mkver`、`tests/linux.sh` 用；原来是 `cli/pack.py`） |
 | `cli/PORTING.md` | Python → Rust 的对照表和容易错的地方（`cli/src/py/` 的语义拿不准时查它） |
 | `cli/FINDINGS.md` | 移植时在原实现里发现的问题（照原样留着的）和有意不一样的地方 |
 | `cli/PORTED_FROM` | 最后一个还内嵌着 Python 的提交：回归里「换代的更新」拿那个提交的 `cca` 当旧版本；要看原来的 Python 也从它取（`git show $(cat cli/PORTED_FROM):cca`） |
@@ -23,7 +23,7 @@
 
 `cca` 开头的 `helper_find`（在定义 `py` 之前）定出 `HELPER`：
 
-- **发布的 cca**：`release.sh` 用 `cli/pack.py` 把四种机器的那一份（gzip 再 base64，各自包在一个 `: <<'CCA-HELPER-END'` 里）接在文件最后、`exit` 的后面——bash 读到 `exit` 就不往下读，`bash -n` 也照样通过；`HELPER_SUMS="目标=SHA-256 …"` 记着各自的校验值。第一次运行时把这台机器的那一份解到缓存目录的 `cca-helper/<SHA-256>`（`helper_unpack`：`sed` 切出来、`base64` 解码、`gunzip`，校验值对了、试着运行过才 `mv` 换上；目录 700、只认自己的、不是链接；顺手删掉 30 天前解出来的旧版本和没解完的临时文件）。以后每次只看一眼“文件在不在、是不是我的、不是空的”，**不为它起任何进程**。解好的那一份中途没了（macOS 会清临时目录里几天没碰过的文件，而一个会话可以开很多天）：`py` 每次调用前看一眼在不在（内建的判断），不在就再解一次；这一份 `cca` 已经被新版本换掉的（更新之前起的会话），从更新留下的上一个版本 `~/.cca/update/cca.prev` 里解。macOS 上解的时候用系统自带的 `/usr/bin/base64`、`/usr/bin/shasum`（PATH 里排在前面的可能是 Homebrew 的 GNU base64，不认 `-D`）缓存目录：macOS 是这个用户自己的临时目录（`/var/folders/…/T/`，`TMPDIR` 不是它时问 `getconf DARWIN_USER_TEMP_DIR`），Linux 是 `${XDG_CACHE_HOME:-~/.cache}`（不放 `XDG_RUNTIME_DIR`：那是内存盘，退出登录就清空）。缓存没了（系统清理、重启）下次运行自己再解，约 0.1 秒；`cca uninstall`（`cca restore`）最后把缓存目录里的 `cca-helper` 整个删掉（见 uninstall.md）
+- **发布的 cca**：`release.sh` 用 `cca-core pack`（这台机器的那一份辅助程序自己）把四种机器的那一份（gzip 再 base64，各自包在一个 `: <<'CCA-HELPER-END'` 里）接在文件最后、`exit` 的后面——bash 读到 `exit` 就不往下读，`bash -n` 也照样通过；`HELPER_SUMS="目标=SHA-256 …"` 记着各自的校验值（对原样的程序算的：gzip 是 `py/gzip.rs` 用 miniz_oxide 压的，字节和原来 Python 的 zlib 压的不一样，`gunzip` 照样解得开；同样的输入出同样的字节）。第一次运行时把这台机器的那一份解到缓存目录的 `cca-helper/<SHA-256>`（`helper_unpack`：`sed` 切出来、`base64` 解码、`gunzip`，校验值对了、试着运行过才 `mv` 换上；目录 700、只认自己的、不是链接；顺手删掉 30 天前解出来的旧版本和没解完的临时文件）。以后每次只看一眼“文件在不在、是不是我的、不是空的”，**不为它起任何进程**。解好的那一份中途没了（macOS 会清临时目录里几天没碰过的文件，而一个会话可以开很多天）：`py` 每次调用前看一眼在不在（内建的判断），不在就再解一次；这一份 `cca` 已经被新版本换掉的（更新之前起的会话），从更新留下的上一个版本 `~/.cca/update/cca.prev` 里解。macOS 上解的时候用系统自带的 `/usr/bin/base64`、`/usr/bin/shasum`（PATH 里排在前面的可能是 Homebrew 的 GNU base64，不认 `-D`）缓存目录：macOS 是这个用户自己的临时目录（`/var/folders/…/T/`，`TMPDIR` 不是它时问 `getconf DARWIN_USER_TEMP_DIR`），Linux 是 `${XDG_CACHE_HOME:-~/.cache}`（不放 `XDG_RUNTIME_DIR`：那是内存盘，退出登录就清空）。缓存没了（系统清理、重启）下次运行自己再解，约 0.1 秒；`cca uninstall`（`cca restore`）最后把缓存目录里的 `cca-helper` 整个删掉（见 uninstall.md）
 - **仓库里的 cca**（`HELPER_SUMS` 空着）：用 `cli/target/release/cca-core`，没有就说先 `cd cli && cargo build --release`。改了 Rust 要重新编才生效（`tests/regress.sh` 开头会编）
 - `CCA_HELPER=路径`：只对仓库里的 `cca` 管用（指定用哪一份：回归的 TIMING、`release.sh` 跑回归时用）。发布的 `cca` 不认它：一个环境变量不能让它去运行别的程序
 - 目标按 bash 的 `HOSTTYPE`、`OSTYPE` 定（不起 `uname`；`HOSTTYPE` 认不出来时才问 `uname -m`：32 位的 bash 跑在 64 位系统上）：`aarch64` / `x86_64` × `apple-darwin` / `unknown-linux-musl`。别的机器说没有这种机器用的辅助程序（`install.sh` 下载之前也查）
@@ -37,6 +37,7 @@ cargo build --release --locked        # cca（仓库里的）用的就是这一�
 cargo test --locked                   # 单元测试（回归的 unit 一节也跑）
 cargo fmt                             # 照 rustfmt.toml 排版（回归里有 cargo fmt --check；生成的数据表标着 #[rustfmt::skip]，不参与）
 cargo clippy --all-targets -- -D warnings
+. ./musl-env.sh                       # 交叉编译 Linux 的两个目标之前（ring 里有 C 代码：指定编译器和归档工具；在 Linux 上什么都不做）
 cargo clippy --all-targets --target x86_64-unknown-linux-musl -- -D warnings   # Linux 那一半的代码（连测试）也要干净
 cargo build --release --locked --target x86_64-unknown-linux-musl   # 交叉编译；四个目标先 rustup target add
 ```
@@ -55,7 +56,7 @@ cargo build --release --locked --target x86_64-unknown-linux-musl   # 交叉编�
 
 ## 依赖
 
-只用这几个常见的纯 Rust 库，加新的之前先问维护者：`libc`、`regex`（关掉了用不着的特性）、`sha1`、`sha2`、`miniz_oxide`（zlib：折合金额和别的设备交换的那一份是压缩的）、`unicode-normalization`；只有 macOS 的构建带 `rustls` + `ring`（邮箱助手连 Gmail 的 IMAP；证书照系统的 `/etc/ssl/cert.pem` 验）。HTTP 一律经 `curl`（和原来一样），不带 HTTP 库。JSON、属性列表、TOML、YAML 的一小部分、base64、URL、IP 地址都是 `cli/src/py/` 里自己照 CPython 写的（有对照数据）。
+只用这几个常见的纯 Rust 库，加新的之前先问维护者：`libc`、`regex`（关掉了用不着的特性）、`sha1`、`sha2`、`miniz_oxide`（zlib、gzip：折合金额和别的设备交换的那一份是压缩的，发布的 `cca` 后面接着的辅助程序是 gzip 压过的）、`unicode-normalization`；只有 macOS 的构建带 `rustls` + `ring`（邮箱助手连 Gmail 的 IMAP；证书照系统的 `/etc/ssl/cert.pem` 验）。HTTP 一律经 `curl`（和原来一样），不带 HTTP 库。JSON、属性列表、TOML、YAML 的一小部分、base64、URL、IP 地址都是 `cli/src/py/` 里自己照 CPython 写的（有对照数据）。
 
 发布的四份辅助程序：`aarch64-apple-darwin` 4.7 MB、`x86_64-apple-darwin` 5.6 MB、`x86_64-unknown-linux-musl` 5.3 MB、`aarch64-unknown-linux-musl` 4.1 MB（`opt-level = 2`、整体 LTO、`panic = "abort"`、去掉符号；macOS 的两份带 TLS）；接上以后发布的 `cca` 约 13 MB（原来 0.9 MB），大小由 `release.sh` 打出来。试过的减小体积的办法（没采用，要先整套验证）：依赖库按体积优化（`[profile.release.package.<库>] opt-level = "s"`）再去掉 `regex` 的 `perf` 特性，一份少 11%（4680 → 4179 KB），一次调用的用时没有变化；连自己的代码也按体积优化是少 24%。`release.sh` 编的时候带 `--remap-path-prefix`，程序里不留编译机器的路径。
 

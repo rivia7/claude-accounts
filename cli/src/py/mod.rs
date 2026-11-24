@@ -4,6 +4,7 @@
 pub mod base64;
 pub mod fail;
 pub mod fs;
+pub mod gzip;
 pub mod hash;
 pub mod io;
 pub mod ipaddr;

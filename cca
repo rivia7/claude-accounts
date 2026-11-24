@@ -456,7 +456,7 @@ AGY_ALIAS=aga     # aga …：等于 cca agy …（同上，~/.local/bin/aga）
 # 仓库里的 cca 没接辅助程序（HELPER_SUMS 空着）：用 cli/ 里编出来的那一份（cd cli && cargo build --release），
 # 或者 CCA_HELPER 指的那一份（测试用；发布的 cca 不认这个变量：环境变量不能让它去运行别的程序）。
 # ---------------------------------------------------------------------------
-HELPER_SUMS=""   # 发布时由 cli/pack.py 填上：「目标=SHA-256」，空格隔开
+HELPER_SUMS=""   # 发布时由 cca-core pack 填上：「目标=SHA-256」，空格隔开
 helper_find() {
 	local t sum d
 	if [ -z "$HELPER_SUMS" ]; then
