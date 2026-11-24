@@ -218,7 +218,25 @@ pub fn wait_for<R: Waited>(what: &str, timeout: Duration, mut cond: impl FnMut()
 /// 能让被测的程序自己挑端口（绑 0 号）再读回来的地方，优先那样做
 pub fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("在 127.0.0.1 上绑不了端口：{e}"));
-    listener.local_addr().unwrap_or_else(|e| panic!("问不到绑上的端口：{e}")).port()
+    let port = listener.local_addr().unwrap_or_else(|e| panic!("问不到绑上的端口：{e}")).port();
+    drop(listener);
+    settle_port(port);
+    port
+}
+
+/// 等 127.0.0.1 上这个端口连不上（没人听）为止，最多 5 秒；给出等没等到。这个进程刚关掉的监听端口不一定马上连不上：别的线程
+/// 正好在起子进程时，内核里那个还没换成新程序的子进程带着这边所有描述符的一份（换的时候才关），这一小会儿里连接照样接得进来、
+/// 随后被断开——对方看到的是 ConnectionReset、BrokenPipe，不是 ConnectionRefused；马上在这个端口上再绑也绑不上。
+/// macOS 上实测：四个线程不停地起子进程时，关掉就连的 3000 次里有 42 次连上了（没有别的线程起子进程时一次都没有）
+pub fn settle_port(port: u16) -> bool {
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::net::TcpStream::connect(("127.0.0.1", port)) {
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => return true,
+            _ if Instant::now() >= end => return false,
+            _ => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
 }
 
 #[cfg(test)]

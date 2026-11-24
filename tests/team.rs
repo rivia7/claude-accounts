@@ -15,7 +15,7 @@ use kit::sandbox::{splitlines, truthy};
 use kit::{case, crypto, list, obj, pki, spec};
 use regex::Regex;
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::CertificateDer;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -238,7 +238,7 @@ impl NotTeam {
     fn start(cert: &Path, key: &Path) -> NotTeam {
         let certs: Vec<CertificateDer<'static>> =
             CertificateDer::pem_slice_iter(&fsx::read(cert)).collect::<Result<_, _>>().expect("证书读得出来");
-        let key = PrivateKeyDer::from_pem_slice(&fsx::read(key)).expect("私钥读得出来");
+        let key = kit::tlsd::private_key(&fsx::read(key)).expect("私钥读得出来");
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let key = provider.key_provider.load_private_key(key).expect("私钥用得了");
         let cfg = ServerConfig::builder_with_provider(provider)

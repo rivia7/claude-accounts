@@ -322,7 +322,7 @@ impl Write for Stream {
 pub(crate) mod testkit {
     use crate::proc::Cmd;
     use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    use rustls::pki_types::CertificateDer;
     use rustls::server::{ClientHello, ResolvesServerCert};
     use rustls::sign::CertifiedKey;
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -390,7 +390,7 @@ pub(crate) mod testkit {
     pub fn serve(dir: &Path, handle: impl Fn(Served) + Send + 'static) -> u16 {
         let certs: Vec<CertificateDer<'static>> =
             CertificateDer::pem_slice_iter(&crate::fsx::read(dir.join("cert.pem"))).collect::<Result<_, _>>().expect("证书");
-        let key = PrivateKeyDer::from_pem_slice(&crate::fsx::read(dir.join("key.pem"))).expect("私钥");
+        let key = crate::tlsd::private_key(&crate::fsx::read(dir.join("key.pem"))).expect("私钥");
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let key = provider.key_provider.load_private_key(key).expect("私钥用得了");
         let cfg = ServerConfig::builder_with_provider(provider)
@@ -539,6 +539,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         // 没人听的端口
         drop(listener);
+        assert!(crate::fsx::settle_port(port), "关掉的端口还连得上");
         let err = Client::insecure().connect("127.0.0.1", port, WAIT).err().expect("连不上");
         assert_eq!(err.kind(), io::ErrorKind::ConnectionRefused, "{err}");
         // 说的不是 TLS 的服务器

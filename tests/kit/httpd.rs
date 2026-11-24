@@ -291,6 +291,10 @@ impl Server {
         self.shared.stop.store(true, Ordering::SeqCst);
         let Some(acceptor) = self.acceptor.take() else { return };
         let _ = acceptor.join();
+        // 监听的那个描述符关了；正好有别的线程在起子进程时端口还会多开一小会儿（fsx::settle_port）：等它真的关上
+        if self.addr.ip().is_loopback() && self.addr.is_ipv4() {
+            crate::fsx::settle_port(self.addr.port());
+        }
         // 接连接的线程已经退出了：不会再有新登记的连接
         for sock in locked(&self.shared.conns).values() {
             let _ = sock.shutdown(Shutdown::Both);

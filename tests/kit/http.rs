@@ -580,6 +580,7 @@ mod tests {
         assert!(err.to_string().starts_with(&format!("GET http://127.0.0.1:{quiet}/slow：")), "{err}");
         assert!(started.elapsed() < Duration::from_secs(5));
         drop(listener);
+        assert!(crate::fsx::settle_port(quiet), "关掉的端口还连得上");
         assert_eq!(get(quiet).unwrap_err().kind(), io::ErrorKind::ConnectionRefused);
         let split = Request::get(&format!("http://127.0.0.1:{port}/")).header("X-A", "1\r\nX-B: 2").send().unwrap_err();
         assert_eq!(split.kind(), io::ErrorKind::InvalidInput);
