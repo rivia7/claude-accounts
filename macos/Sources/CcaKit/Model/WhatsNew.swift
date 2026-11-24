@@ -20,6 +20,14 @@ struct ReleaseNote: Sendable, Equatable {
 enum WhatsNew {
     /// 最新的在前。
     static let all: [ReleaseNote] = [
+        ReleaseNote(version: "3.6.10", title: "Antigravity 更新到 1.5.16 以后照样能用，还能查额度", points: [
+            .init(symbol: "key",
+                  text: "agy 更新到 1.5.16 以后 cca agy 会停下：新版会让各账号共用钥匙串里的同一份登录。现在 cca 让它照旧把登录存在各账号自己的目录里，以前的登录接着用。"),
+            .init(symbol: "gauge.with.dots.needle.33percent",
+                  text: "新增 cca agy usage：查各个 Antigravity 账号的额度，Gemini 模型和 Claude、GPT 模型各有本周、5 小时两种；cca agy ls 里也列出来。App 里暂时还不显示。"),
+            .init(symbol: "person.badge.key",
+                  text: "查额度时登录已经失效会直接告诉你，用 cca agy login 重新登录；这次查不到时显示上次查到的，并注明原因。"),
+        ]),
         ReleaseNote(version: "3.6.9", title: "Claude App 里的会话也认得出账号", points: [
             .init(symbol: "person.crop.circle.badge.checkmark",
                   text: "这台设备有认不出账号的 Claude App 会话时，「折合金额」页合计下面有「记下账号…」（或者 cca cost hook on）：问过你以后在 ~/.claude/settings.json 里加一条 hook，App 里的 Code 会话开始时记下 App 登录的账号，以后的用量算进这个账号。"),
