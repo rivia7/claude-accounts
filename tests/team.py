@@ -1003,10 +1003,12 @@ class TeamTest(Sessions, unittest.TestCase):
                                                                  'um': {}, 'orphan': {}}))
         r = bob.cost_sync()
         self.assertEqual((r['state'], [(h['kind'], h.get('team'), h['state']) for h in r['hubs']]), ('ok', [('team', tid, 'ok')]), r)
-        self.assertEqual(set(asked('ledger')), {(fp, (aid,))})
-        slot = json.loads((self.d / 'srv' / 'cost-slots.json').read_text())['acc'][aid][fp]['blob']
-        doc = sw.cost_open(sw.team_keys(salt), aid, fp, slot)
+        oaid = sw.orphan_aid(salt)
+        self.assertEqual(set(asked('ledger')), {(fp, tuple(sorted((aid, oaid))))}, '这个账号的，和认不出是哪个账号的那一份')
+        slots = json.loads((self.d / 'srv' / 'cost-slots.json').read_text())['acc']
+        doc = sw.cost_open(sw.team_keys(salt), aid, fp, slots[aid][fp]['blob'])
         self.assertEqual(list(doc['h'].values()), [[1000000, 1, 1, 1, 0, 0, 0]])
+        self.assertEqual(sw.cost_open(sw.team_keys(salt), oaid, fp, slots[oaid][fp]['blob'])['h'], {}, '认不出的那一份：这台设备没有，传空的')
         self.assertTrue((bob.cca / 'cost' / ('team.%s.sync.json' % tid)).exists())
         # 设备统计
         v = json.loads(bob.ok('presence-view', '--json'))

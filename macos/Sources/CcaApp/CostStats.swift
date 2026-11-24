@@ -87,6 +87,7 @@ struct CostStatsContent: View {
                     message: "按 Anthropic、OpenAI 官方 API 的价格，把每个账号用掉的 token 折成美元，看哪个账号用得多；订阅不按这个收费。"
                         + "右上角选看哪台设备（所有设备、本机，或者另一台）、按周还是按天看。"
                         + "每个账号一行，一根竖条是一周（或一天），颜色淡的那一项开始时还没有记录；看所有设备时，有好几台设备的账号下面分台列出。"
+                        + "认不出是哪个账号的用量（Claude App 里的会话、旧版 Claude Code）不算进合计，单独列在最下面。"
                         + "点一行看这个账号的柱状图。")
             if model.state == nil {
                 HStack(spacing: 8) {
@@ -112,8 +113,15 @@ struct CostStatsContent: View {
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    // 认不出是哪个账号的、Claude Code 太旧：都是这台设备的，看另一台设备时不说
-                    if !scope.isOtherDevice, let u = Texts.costUnattributed(total.unattributed, currency: total.currency) {
+                    // 认不出是哪个账号的（看哪一方说哪一方的；旧版 cca 只有这台设备的，看另一台设备时不说）、还有哪几台没传它；
+                    // Claude Code 太旧是这台设备的，看另一台设备时不说
+                    if let u = Texts.costUnattributed(total.unattributed, scope: scope, total: total, currency: total.currency) {
+                        Label(u, systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let u = Texts.costUnsynced(total.unattributed, scope: scope) {
                         Label(u, systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -144,19 +152,30 @@ struct CostStatsContent: View {
         }
     }
 
+    /// 各组的账号，最下面是「认不出账号」（cca 给了、看的那一方有这种用量时）；看的那台设备一个账号都没用过时先说一句
     @ViewBuilder
     private var table: some View {
+        let total = model.state?.costTotal
         let groups = model.costGroups()
-        if groups.isEmpty {
-            Text(Texts.costNoAccounts(scope, total: model.state?.costTotal))
+        let orphan = CostChart.orphan(total, scope: scope)
+        if groups.isEmpty && orphan == nil {
+            Text(Texts.costNoAccounts(scope, total: total))
                 .foregroundStyle(.secondary)
         } else {
-            let scale = CostStatsScale.make(groups.flatMap(\.accounts), scope: scope, granularity: model.costGranularity, now: now)
+            let scale = CostStatsScale.make(groups.flatMap(\.accounts), extra: orphan.map { [$0] } ?? [], scope: scope,
+                                            granularity: model.costGranularity, now: now)
             let charts = tableWidth.wrappedValue.map { CostStatsColumns.fitsChart(tableWidth: $0) } ?? true
             VStack(alignment: .leading, spacing: 8) {
+                if groups.isEmpty {
+                    Text(Texts.costNoAccounts(scope, total: total))
+                        .foregroundStyle(.secondary)
+                }
                 CostStatsHeader(scale: scale, now: now, charts: charts)
                 ForEach(groups) { g in
                     CostStatsGroup(group: g, scale: scale, now: now, charts: charts)
+                }
+                if let orphan, let total {
+                    CostOrphanGroup(cost: orphan, total: total, scale: scale, now: now, charts: charts)
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tableWidth.wrappedValue = $0 }
@@ -171,8 +190,10 @@ private struct CostStatsScale {
     let domain: ClosedRange<Double>
     let top: Double
 
-    static func make(_ accounts: [Account], scope: CostScope, granularity g: CostGranularity, now: Double) -> CostStatsScale {
-        let costs = accounts.compactMap(\.cost)
+    /// extra：不是哪个账号的那几份（「认不出账号」），和账号那几行一起定纵轴、横轴
+    static func make(_ accounts: [Account], extra: [AccountCost] = [], scope: CostScope, granularity g: CostGranularity,
+                     now: Double) -> CostStatsScale {
+        let costs = accounts.compactMap(\.cost) + extra
         // 各台设备那几行的柱子不比整个账号的高，纵轴只看账号那几行
         let bars = costs.map { CostChart.bars($0, granularity: g, scope: scope) }
         return CostStatsScale(scope: scope, granularity: g, domain: CostChart.domain(costs.map { CostChart.periods($0, g) }, granularity: g, now: now),
@@ -256,6 +277,9 @@ private struct CostTotalTile: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+            }
+            if let rows = part?.models {
+                CostModelList(rows: CostChart.modelRows(rows, granularity: granularity), granularity: granularity, currency: total.currency)
             }
         }
         .padding(16)
@@ -497,10 +521,11 @@ private struct CostAccountRow: View {
 }
 
 /// 账号下面的一台设备（看所有设备时；cca 排好的：这台设备在前，别的按 30 天的金额从多到少）：缩进、灰字，小图和数字是这台设备的。
-/// 很久没同步上来的名字后面一个橙色的钟，有用量没算进来（cca 给的 diag.why）的一个橙色的三角。点了和点账号那一行一样，进账号页
+/// 很久没同步上来的名字后面一个橙色的钟，有用量没算进来（cca 给的 diag.why）的一个橙色的三角。点了和点账号那一行一样，进账号页。
+/// 「认不出账号」那一组的（account 是 nil）：不是哪个账号的，点了不跳转；认不出的原因只在悬停提示、读屏里（不是要处理的问题，没有三角）
 private struct CostDeviceRow: View {
     @Environment(AppModel.self) private var model
-    let account: Account
+    let account: Account?
     let cost: AccountCost
     let device: CostDevice
     let scale: CostStatsScale
@@ -511,44 +536,132 @@ private struct CostDeviceRow: View {
     var body: some View {
         let d = device
         let stale = Texts.costStale(d, now: now)
-        let why = Texts.costDeviceWhy(d)
-        let lines = [Texts.costCaption(d.summary, granularity: scale.granularity, currency: cost.currency)] + [stale, why].compactMap { $0 }
-        Button { model.showCost(account.ref) } label: {
-            HStack(spacing: CostStatsColumns.spacing) {
-                HStack(spacing: 5) {
-                    Text(Texts.costDeviceName(d)).lineLimit(1).truncationMode(.middle)
-                    if stale != nil {
-                        Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
-                    }
-                    if why != nil {
-                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                    }
+        let why = account == nil ? nil : Texts.costDeviceWhy(d)
+        let reasons = account == nil ? Texts.costOrphanDeviceWhy(d) : nil
+        let lines = [Texts.costCaption(d.summary, granularity: scale.granularity, currency: cost.currency)] + [stale, why, reasons].compactMap { $0 }
+        let row = HStack(spacing: CostStatsColumns.spacing) {
+            HStack(spacing: 5) {
+                Text(Texts.costDeviceName(d)).lineLimit(1).truncationMode(.middle)
+                if stale != nil {
+                    Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.leading, CostStatsColumns.deviceIndent)
-                .frame(width: CostStatsColumns.name, alignment: .leading)
-                if charts {
-                    CostStatsChart(bars: CostChart.bars(cost, granularity: scale.granularity, device: d), currency: cost.currency,
-                                   scale: scale, now: now)
-                } else {
-                    Spacer(minLength: 0)
+                if why != nil {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                 }
-                CostStatsFigures(summary: d.summary, currency: cost.currency, scale: scale, device: true)
             }
-            .padding(.horizontal, CostStatsColumns.inset)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(hovering.wrappedValue ? Color.primary.opacity(0.05) : .clear)
-                .padding(.horizontal, 4))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.leading, CostStatsColumns.deviceIndent)
+            .frame(width: CostStatsColumns.name, alignment: .leading)
+            if charts {
+                CostStatsChart(bars: CostChart.bars(cost, granularity: scale.granularity, device: d), currency: cost.currency,
+                               scale: scale, now: now)
+            } else {
+                Spacer(minLength: 0)
+            }
+            CostStatsFigures(summary: d.summary, currency: cost.currency, scale: scale, device: true)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering.wrappedValue = $0 }
+        .padding(.horizontal, CostStatsColumns.inset)
+        .padding(.vertical, 5)
+        Group {
+            if let account {
+                Button { model.showCost(account.ref) } label: {
+                    row
+                        .contentShape(Rectangle())
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(hovering.wrappedValue ? Color.primary.opacity(0.05) : .clear)
+                            .padding(.horizontal, 4))
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering.wrappedValue = $0 }
+                .accessibilityHint("打开这个账号的折合金额")
+            } else {
+                row
+            }
+        }
         .help(lines.joined(separator: "\n"))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Texts.costDeviceName(d))
         .accessibilityValue(lines.joined(separator: "；"))
-        .accessibilityHint("打开这个账号的折合金额")
+    }
+}
+
+/// 「认不出账号」（cca 给的 `unattributed.cost`，3.6.8 起）：会话记录里认不出是哪个账号的用量（Claude App 里的会话、旧版 Claude Code），
+/// 没算进上面的合计，单独一组放在最下面：一行是看的那一方的（所有设备 / 这台设备 / 那台设备），看所有设备、有两台以上设备有这种用量时
+/// 下面分台列出。小图、数字和账号那几行同一个纵轴、横轴。不是哪个账号的，点了不跳转；为什么认不出在悬停提示和读屏里
+private struct CostOrphanGroup: View {
+    let cost: AccountCost
+    let total: CostTotal
+    let scale: CostStatsScale
+    let now: Double
+    var charts = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("认不出账号")
+                .font(.title3.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+                .padding(.top, 10)
+            VStack(spacing: 0) {
+                CostOrphanRow(cost: cost, total: total, scale: scale, now: now, charts: charts)
+                if CostChart.listsOrphanDevices(cost, scope: scale.scope) {
+                    VStack(spacing: 0) {
+                        ForEach(cost.devices) { d in
+                            CostDeviceRow(account: nil, cost: cost, device: d, scale: scale, now: now, charts: charts)
+                        }
+                    }
+                    .padding(.bottom, 6)
+                }
+            }
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Surface.tile))
+        }
+    }
+}
+
+/// 「认不出账号」那一组的第一行：看的那一方（所有设备 / 这台设备 / 那台设备）认不出是哪个账号的用量。和账号那一行一样的几栏，
+/// 左边是一个问号（没有账号的头像）和「没算进合计」
+private struct CostOrphanRow: View {
+    let cost: AccountCost
+    let total: CostTotal
+    let scale: CostStatsScale
+    let now: Double
+    var charts = true
+
+    var body: some View {
+        let c = cost
+        let summary = CostChart.summary(c, scope: scale.scope)
+        let name = Texts.costOrphanRowName(scale.scope, total: total)
+        let lines = [Texts.costCaption(summary, granularity: scale.granularity, currency: c.currency),
+                     Texts.costUnattributed(total.unattributed, scope: scale.scope, total: total, currency: c.currency),
+                     Texts.costUnsynced(total.unattributed, scope: scale.scope)].compactMap { $0 }
+        HStack(spacing: CostStatsColumns.spacing) {
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.primary.opacity(0.08)))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name).font(.body.weight(.medium)).lineLimit(1)
+                    Text("没算进合计").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: CostStatsColumns.name, alignment: .leading)
+            if charts {
+                CostStatsChart(bars: CostChart.bars(c, granularity: scale.granularity, scope: scale.scope), currency: c.currency,
+                               requests: scale.scope == .all, scale: scale, now: now)
+            } else {
+                Spacer(minLength: 0)
+            }
+            CostStatsFigures(summary: summary, currency: c.currency, scale: scale)
+        }
+        .padding(.horizontal, CostStatsColumns.inset)
+        .padding(.vertical, 10)
+        .help(lines.joined(separator: "\n"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("认不出账号：" + name)
+        .accessibilityValue(lines.joined(separator: "；"))
     }
 }

@@ -175,6 +175,79 @@ struct CostTokens: Decodable, Sendable, Equatable {
     var total: Int { input + output + cacheRead + cacheWrite }
 }
 
+/// 按模型分开的一段（`models[].weeks`：列出的周期加起来；`models[].days`：30 天加起来）。
+struct CostModelRange: Decodable, Sendable, Equatable {
+    var usd = 0.0
+    var requests = 0
+    /// 其中没有公开价格的请求数（没有标价的模型：金额是 0，请求都在这里）
+    var unpricedRequests = 0
+    /// 只给账号的（设备、cost_total 的没有）
+    var tokens: CostTokens?
+
+    enum CodingKeys: String, CodingKey {
+        case usd, requests, tokens
+        case unpricedRequests = "unpriced_requests"
+    }
+
+    init(usd: Double = 0, requests: Int = 0, unpricedRequests: Int = 0, tokens: CostTokens? = nil) {
+        self.usd = usd
+        self.requests = requests
+        self.unpricedRequests = unpricedRequests
+        self.tokens = tokens
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        usd = max(c.double(.usd) ?? 0, 0)
+        requests = max(c.int(.requests) ?? 0, 0)
+        unpricedRequests = max(c.int(.unpricedRequests) ?? 0, 0)
+        tokens = c.lossy(CostTokens.self, .tokens)
+    }
+
+    /// 这一段里没有用量（没有请求、没有金额）
+    var isEmpty: Bool { requests == 0 && usd == 0 }
+    /// 都是没有公开价格的请求（没算钱）
+    var allUnpriced: Bool { usd == 0 && requests > 0 && unpricedRequests >= requests }
+}
+
+/// `models[]` 的一项（PROTOCOL 2.2，3.6.8 起）：一个模型在列出的周期、30 天里折了多少。cca 排好的：按列出的周期的金额从多到少，
+/// 没有按模型记下的那一项（`model` 是 null）在最后
+struct CostModelRow: Decodable, Sendable, Equatable, Identifiable {
+    /// 模型名（会话记录里的写法；空的：会话记录里没写）。nil：没有按模型记下的那一部分（以前的版本统计的、旧版 cca 的设备传来的）
+    var model: String?
+    var weeks: CostModelRange
+    var days: CostModelRange
+
+    var id: String { model.map { "m:" + $0 } ?? "rest" }
+
+    enum CodingKeys: String, CodingKey {
+        case model, weeks, days
+    }
+
+    init(model: String?, weeks: CostModelRange = CostModelRange(), days: CostModelRange = CostModelRange()) {
+        self.model = model
+        self.weeks = weeks
+        self.days = days
+    }
+
+    /// `model` 要么是字符串（模型名），要么是 null（没有按模型记下的）；缺了、别的类型：这一项不要
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if (try? c.decodeNil(forKey: .model)) == true {
+            model = nil
+        } else if let m = c.string(.model) {
+            model = m
+        } else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "cost model row without model"))
+        }
+        weeks = c.lossy(CostModelRange.self, .weeks) ?? CostModelRange()
+        days = c.lossy(CostModelRange.self, .days) ?? CostModelRange()
+    }
+
+    /// 按周看是列出的周期的那一段，按天看是 30 天的
+    func range(_ g: CostGranularity) -> CostModelRange { g == .week ? weeks : days }
+}
+
 /// 一个周期（`weeks[]`）或者一天（`days[]`、`cost_total.days[]`）：从 `start_epoch` 到 `end_epoch`。
 struct CostPeriod: Decodable, Sendable, Equatable, Identifiable {
     var startEpoch: Double
@@ -320,6 +393,8 @@ struct CostDevice: Sendable, Equatable, Identifiable {
     var diag: CostDiag? = nil
     /// 那台设备用过这个账号（cca 给的 `used`）：只为诊断列出来的设备是 false；旧版 cca 没有这一项，当作用过
     var used = true
+    /// 那台设备按模型分开的（没有 tokens）；旧版 cca 没有
+    var models: [CostModelRow]? = nil
 }
 
 /// `devices[]` 原样解码（数组按位置留着，交给 AccountCost 和 weeks、days 对齐）。
@@ -335,9 +410,10 @@ private struct RawCostDevice: Decodable {
     var summary: CostSummary
     var diag: CostDiag?
     var used: Bool
+    var models: [CostModelRow]?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, me, revoked, stale, summary, diag, used
+        case id, name, me, revoked, stale, summary, diag, used, models
         case syncedEpoch = "synced_epoch"
         case weeksUSD = "weeks_usd"
         case daysUSD = "days_usd"
@@ -360,6 +436,7 @@ private struct RawCostDevice: Decodable {
         summary = c.lossy(CostSummary.self, .summary) ?? CostSummary()
         diag = c.lossy(CostDiag.self, .diag)
         used = c.bool(.used) ?? true
+        models = c.lossyArray(CostModelRow.self, .models)
     }
 
     /// 按账号的 weeks、days 解码后留下的下标取值（缺的、坏的是 0）
@@ -368,7 +445,7 @@ private struct RawCostDevice: Decodable {
             order.map { i in i < raw.count ? max(raw[i] ?? 0, 0) : 0 }
         }
         return CostDevice(id: id, name: name, isMe: isMe, revoked: revoked, syncedEpoch: syncedEpoch, stale: stale,
-                          weeksUSD: pick(weeks, w), daysUSD: pick(days, d), summary: summary, diag: diag, used: used)
+                          weeksUSD: pick(weeks, w), daysUSD: pick(days, d), summary: summary, diag: diag, used: used, models: models)
     }
 }
 
@@ -474,9 +551,11 @@ struct AccountCost: Decodable, Sendable, Equatable {
     /// 没有公开价格的模型（只计了请求数）
     var unpricedModels: [String]
     var sync: CostSync?
+    /// 按模型分开的（带 tokens）；旧版 cca 没有（不显示按模型的那一块）
+    var models: [CostModelRow]?
 
     enum CodingKeys: String, CodingKey {
-        case currency, weeks, days, summary, devices, sync
+        case currency, weeks, days, summary, devices, sync, models
         case pricesDate = "prices_date"
         case sinceEpoch = "since_epoch"
         case unpricedModels = "unpriced_models"
@@ -484,7 +563,7 @@ struct AccountCost: Decodable, Sendable, Equatable {
 
     init(currency: String = "USD", pricesDate: String? = nil, sinceEpoch: Double? = nil, weeks: [CostPeriod] = [],
          days: [CostPeriod] = [], summary: CostSummary = CostSummary(), devices: [CostDevice] = [],
-         unpricedModels: [String] = [], sync: CostSync? = nil) {
+         unpricedModels: [String] = [], sync: CostSync? = nil, models: [CostModelRow]? = nil) {
         self.currency = currency
         self.pricesDate = pricesDate
         self.sinceEpoch = sinceEpoch
@@ -494,6 +573,7 @@ struct AccountCost: Decodable, Sendable, Equatable {
         self.devices = devices
         self.unpricedModels = unpricedModels
         self.sync = sync
+        self.models = models
     }
 
     init(from decoder: Decoder) throws {
@@ -510,6 +590,7 @@ struct AccountCost: Decodable, Sendable, Equatable {
         devices = (c.lossyArray(RawCostDevice.self, .devices) ?? []).map { $0.aligned(weeks: weekOrder, days: dayOrder) }
         unpricedModels = (c.lossyArray(String.self, .unpricedModels) ?? []).filter { !$0.isEmpty }
         sync = c.lossy(CostSync.self, .sync)
+        models = c.lossyArray(CostModelRow.self, .models)
     }
 
     /// 解码出来的项的下标，按结束时间排好（cca 排好了，这里只是保险；设备的数组跟着同样排）
@@ -558,18 +639,43 @@ struct CostScan: Decodable, Sendable, Equatable {
     }
 }
 
-/// `cost_total.unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（旧版 Claude Code、桌面 App 里的会话），没算进合计；
-/// 为什么认不出、命令行里最近用的 Claude Code 是不是太旧（旧版 cca 没有：why 空的、claudeCodeOld 是 false）。
+/// `cost_total.unattributed.unsynced[]`：设备菜单里还没传过认不出的用量的别的设备（cca 太旧，或者还没同步过）
+struct CostUnsyncedDevice: Decodable, Sendable, Equatable, Identifiable {
+    /// 和 `cost_total.devices[].id` 一样
+    var id: String
+    var name: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let id = nonEmpty(c.string(.id)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unsynced device without id"))
+        }
+        self.id = id
+        name = nonEmpty(c.string(.name)) ?? id
+    }
+}
+
+/// `cost_total.unattributed`：认不出是哪个账号的用量（旧版 Claude Code、Claude App 里的会话），没算进合计。
+/// `daysUSD`、`requests` 是这台设备最近 30 天的；为什么认不出、命令行里最近用的 Claude Code 是不是太旧（旧版 cca 没有：why 空的、
+/// claudeCodeOld 是 false）。3.6.8 起还有所有设备的（`cost`：和账号的折合金额一样的样子）和还没传过它的设备（`unsynced`）
 struct CostUnattributed: Decodable, Sendable, Equatable {
     var daysUSD: Double
     var requests: Int
     var why: [CostWhy]
     var claudeCode: String?
     var claudeCodeOld: Bool
+    /// 所有设备的（这台设备的和别的设备经 Team 的服务器传来的，按日历周）；哪台设备都没有、旧版 cca 时是 nil
+    var cost: AccountCost?
+    /// 设备菜单里还没传过它的别的设备；旧版 cca 没有，是空的
+    var unsynced: [CostUnsyncedDevice]
 
     enum CodingKeys: String, CodingKey {
         case daysUSD = "days_usd"
-        case requests, why
+        case requests, why, cost, unsynced
         case claudeCode = "claude_code"
         case claudeCodeOld = "claude_code_old"
     }
@@ -581,6 +687,8 @@ struct CostUnattributed: Decodable, Sendable, Equatable {
         why = c.lossyArray(CostWhy.self, .why) ?? []
         claudeCode = nonEmpty(c.string(.claudeCode))
         claudeCodeOld = c.bool(.claudeCodeOld) ?? false
+        cost = c.lossy(AccountCost.self, .cost)
+        unsynced = c.lossyArray(CostUnsyncedDevice.self, .unsynced) ?? []
     }
 }
 
@@ -592,16 +700,19 @@ struct CostTotalPart: Decodable, Sendable, Equatable {
     var days: [CostPeriod]
     /// 按工具分开的同样几项（只认识的工具：`by_tool` 的键就是数据）
     var byTool: [ToolID: CostSummary]
+    /// 按模型分开的（没有 tokens；不含认不出是哪个账号的）；旧版 cca 没有
+    var models: [CostModelRow]?
 
     enum CodingKeys: String, CodingKey {
-        case days
+        case days, models
         case byTool = "by_tool"
     }
 
-    init(summary: CostSummary = CostSummary(), days: [CostPeriod] = [], byTool: [ToolID: CostSummary] = [:]) {
+    init(summary: CostSummary = CostSummary(), days: [CostPeriod] = [], byTool: [ToolID: CostSummary] = [:], models: [CostModelRow]? = nil) {
         self.summary = summary
         self.days = days
         self.byTool = byTool
+        self.models = models
     }
 
     init(from decoder: Decoder) throws {
@@ -614,6 +725,7 @@ struct CostTotalPart: Decodable, Sendable, Equatable {
             if t.isKnown { tools[t] = v }
         }
         byTool = tools
+        models = c.lossyArray(CostModelRow.self, .models)
     }
 
     var today: CostPeriod? { days.last(where: \.current) }

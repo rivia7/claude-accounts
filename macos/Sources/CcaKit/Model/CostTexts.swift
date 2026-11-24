@@ -318,9 +318,23 @@ extension Texts {
         return scan.updatedEpoch.map { agoPhrase(now - $0) + "统计" }
     }
 
-    /// 认不出是哪个账号的用量（折合金额页的合计下面，这台设备的）：为什么（cca 给的原因；旧版 cca 没给时笼统地说）。没有时是 nil
-    static func costUnattributed(_ u: CostUnattributed?, currency: String) -> String? {
+    /// 认不出是哪个账号的用量（折合金额页的合计下面）。cca 给了所有设备的（`unattributed.cost`，3.6.8 起）：说没算进合计、单独列在
+    /// 最下面，为什么（看所有设备时是各台设备的原因，本机、另一台设备时是那一台的；它没有这种用量时不说）。旧版 cca 只有这台设备
+    /// 近 30 天的：照旧说这台设备的金额、为什么（cca 给的原因；没给时笼统地说），看另一台设备时不说。没有时是 nil
+    static func costUnattributed(_ u: CostUnattributed?, scope: CostScope = .me, total: CostTotal? = nil, currency: String) -> String? {
         guard let u else { return nil }
+        if let c = u.cost {
+            guard scope == .all || CostChart.device(c, scope: scope) != nil else { return nil }
+            let who: String
+            switch scope {
+            case .all: who = ""
+            case .me: who = "这台设备"
+            case .device: who = costOrphanRowName(scope, total: total) + " "
+            }
+            let why = costOrphanWhy(c, scope: scope)
+            return who + "认不出是哪个账号的用量没算进合计，单独列在最下面" + (why.isEmpty ? "" : "（" + why.joined(separator: "、") + "）") + "。"
+        }
+        guard !scope.isOtherDevice else { return nil }
         let what: String
         if u.daysUSD > 0 {
             what = money(u.daysUSD, currency: currency) + " "
@@ -331,6 +345,81 @@ extension Texts {
         }
         let why = u.why.isEmpty ? "旧版 Claude Code、桌面 App 里的会话" : u.why.map(costWhy).joined(separator: "、")
         return "近 30 天另有 \(what)认不出是哪个账号的（\(why)），没算进来。"
+    }
+
+    /// 还没传认不出的用量的设备（cca 给的 `unattributed.unsynced`，3.6.8 起）：看所有设备时
+    /// 「还有 2 台设备没传认不出账号的用量（a、b），可能 cca 太旧。」，看其中一台时「office-imac 还没传认不出账号的用量，可能 cca 太旧。」；
+    /// 本机、都传了时是 nil
+    static func costUnsynced(_ u: CostUnattributed?, scope: CostScope) -> String? {
+        guard let list = u?.unsynced, !list.isEmpty else { return nil }
+        switch scope {
+        case .all: return "还有 \(list.count) 台设备没传认不出账号的用量（\(names(list.map(\.name)))），可能 cca 太旧。"
+        case .me: return nil
+        case .device(let id): return list.first { $0.id == id }.map { $0.name + " 还没传认不出账号的用量，可能 cca 太旧。" }
+        }
+    }
+
+    /// 「认不出账号」那一行的名字：看所有设备时「所有设备」，本机「这台设备」，另一台设备是它的名字
+    static func costOrphanRowName(_ scope: CostScope, total: CostTotal?) -> String {
+        switch scope {
+        case .all: return "所有设备"
+        case .me: return "这台设备"
+        case .device(let id): return total?.device(id)?.name ?? total?.unattributed?.cost?.device(id)?.name ?? "那台设备"
+        }
+    }
+
+    /// 认不出的原因（cca 给的各台设备的诊断，去掉重复的）：看所有设备时是各台的，本机、另一台设备时是那一台的
+    static func costOrphanWhy(_ c: AccountCost, scope: CostScope) -> [String] {
+        let devices = scope == .all ? c.devices : (CostChart.device(c, scope: scope).map { [$0] } ?? [])
+        var out: [String] = []
+        for w in devices.compactMap(\.diag).flatMap(\.why) {
+            let s = costWhy(w)
+            if !out.contains(s) { out.append(s) }
+        }
+        return out
+    }
+
+    /// 「认不出账号」那一组里一台设备的原因（悬停提示、读屏；不是要处理的问题，不画橙色的三角）：「认不出的原因：Claude App 里的 Code 会话」
+    static func costOrphanDeviceWhy(_ d: CostDevice) -> String? {
+        guard let why = d.diag?.why, !why.isEmpty else { return nil }
+        return "认不出的原因：" + why.map(costWhy).joined(separator: "、")
+    }
+
+    // MARK: 按模型
+
+    /// 按模型那一块的小标题：「按模型 · 近 12 周」「按模型 · 近 30 天」
+    static func costModelsTitle(_ g: CostGranularity) -> String {
+        "按模型 · " + (g == .week ? "近 12 周" : "近 30 天")
+    }
+
+    /// 一个模型的叫法：模型名；会话记录里没写的「没写模型名」；没有按模型记下的那一部分「没按模型记下的」
+    static func costModelName(_ r: CostModelRow) -> String {
+        guard let m = r.model else { return "没按模型记下的" }
+        return m.isEmpty ? "没写模型名" : m
+    }
+
+    /// 金额那一栏：都没有公开价格的写「没有公开价格」
+    static func costModelMoney(_ x: CostModelRange, currency: String) -> String {
+        x.allUnpriced ? "没有公开价格" : money(x.usd, currency: currency)
+    }
+
+    /// 请求数那一栏：「8,804 次」
+    static func costModelRequests(_ x: CostModelRange) -> String {
+        grouped(x.requests) + " 次"
+    }
+
+    /// 读屏：「$790，8,804 次请求」「没有公开价格，316 次请求」；有一部分没算钱时补一句
+    static func costModelValue(_ r: CostModelRow, granularity g: CostGranularity, currency: String) -> String {
+        let x = r.range(g)
+        var s = costModelMoney(x, currency: currency) + "，" + grouped(x.requests) + " 次请求"
+        if !x.allUnpriced, x.unpricedRequests > 0 { s += "，其中 \(grouped(x.unpricedRequests)) 次没有公开价格、没算钱" }
+        return s
+    }
+
+    /// 悬停提示：读屏那一句；没按模型记下的那一行再说为什么
+    static func costModelHelp(_ r: CostModelRow, granularity g: CostGranularity, currency: String) -> String {
+        let value = costModelValue(r, granularity: g, currency: currency)
+        return r.model == nil ? value + "\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开" : value
     }
 
     /// 这台设备命令行里用的 Claude Code 太旧（cca 标的 claude_code_old，和有没有认不出的用量无关）：提醒更新，旁边是去「客户端更新」的按钮

@@ -88,17 +88,18 @@ func costFixtureTests() {
         check("cost_total.me：按工具、30 天", t.me?.byTool[.claude]?.currentUSD == 555.81 && t.me?.byTool[.codex]?.daysUSD == 3320.53
               && t.me?.days.count == 30 && t.me?.today?.usd == 82.47 && t.me?.days.first?.usd == 253.01)
         check("看哪一方：所有设备是顶层的，本机是 me", t.part(.all) == t.all && t.part(.me) == t.me)
-        check("cost_total.devices：这台设备在最前（数字和 me 一样），别的按 30 天的金额从多到少",
-              t.devices.map(\.name) == ["studio-mac", "alice-mini", "office-imac", "old-mini"] && t.devices.first?.isMe == true
+        check("cost_total.devices：这台设备在最前（数字和 me 一样），别的按 30 天的金额从多到少，只有认不出账号的用量的 lab-studio 在最后",
+              t.devices.map(\.name) == ["studio-mac", "alice-mini", "office-imac", "old-mini", "lab-studio"] && t.devices.first?.isMe == true
               && t.devices.first?.id == me && t.devices.first?.part == t.me, t.devices.map(\.name).joined(separator: ","))
         let mini = t.device(aliceMini)
         check("cost_total.devices：alice-mini 只用过 bob（数字是它在 bob 里的那一份；Codex 都是 0、没有平均）",
               mini?.part.summary.daysUSD == 1302.43 && mini?.part.summary.averageUSD == 266.16 && mini?.part.days.last?.usd == 14.36
               && mini?.part.byTool[.claude]?.weeksUSD == 2172.79 && mini?.part.byTool[.codex]?.daysUSD == 0 && mini?.part.byTool[.codex]?.averageUSD == nil,
               "\(String(describing: mini?.part.summary))")
-        check("cost_total.devices：很久没同步、撤销了", t.devices.map(\.stale) == [false, false, true, true] && t.devices.map(\.revoked) == [false, false, false, true])
+        check("cost_total.devices：很久没同步、撤销了", t.devices.map(\.stale) == [false, false, true, true, false]
+              && t.devices.map(\.revoked) == [false, false, false, true, false])
         check("看哪一方：另一台设备是 devices 里那一台的，cca 没列的设备没有", t.part(.device(aliceMini)) == mini?.part && t.part(.device("SHA256:x")) == nil)
-        check("设备菜单里分隔线下面的：别的设备", t.otherDevices.map(\.name) == ["alice-mini", "office-imac", "old-mini"])
+        check("设备菜单里分隔线下面的：别的设备", t.otherDevices.map(\.name) == ["alice-mini", "office-imac", "old-mini", "lab-studio"])
         check("账号页的设备菜单：只列用过这个账号的（顺序照 cost_total）；carol 只有这台设备用过，别的设备一台都不列",
               CostChart.menuDevices(t, account: s.account(bobRef)?.cost).map(\.name) == ["alice-mini", "office-imac", "old-mini"]
               && carol?.cost != nil && CostChart.menuDevices(t, account: carol?.cost).isEmpty
@@ -108,8 +109,49 @@ func costFixtureTests() {
             check("账号页的设备菜单：只为诊断列出来的（used 是 false）不列", CostChart.menuDevices(t, account: diag).map(\.name) == ["office-imac", "old-mini"])
         }
         check("账号里的设备：都用过这个账号（used）", s.tools.flatMap(\.accounts).allSatisfy { $0.cost?.devices.allSatisfy(\.used) ?? true })
-        check("cost_total：认不出是哪个账号的（旧版 cca 留下的，没有原因）", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40
+        check("cost_total：这台设备近 30 天认不出是哪个账号的（没有原因）", t.unattributed?.daysUSD == 12.3 && t.unattributed?.requests == 40
               && t.unattributed?.why == [] && t.unattributed?.claudeCode == "2.1.330" && t.unattributed?.claudeCodeOld == false)
+        // 按模型（3.6.8 起）
+        let bm = bob?.models ?? []
+        check("bob：按模型（列出的周期的金额从多到少，没有公开价格的只计请求数，old-mini 传来的没按模型记下，在最后）",
+              bm.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-research-preview", nil]
+              && bm.first?.weeks.usd == 4950.91 && bm.first?.weeks.requests == 22528 && bm.first?.days.usd == 2949.1
+              && bm.first?.weeks.tokens == CostTokens(input: 1401104, output: 11320203, cacheRead: 2015063698, cacheWrite: 50904069)
+              && bm.count == 5 && bm[3].weeks.allUnpriced && bm[3].days.requests == 1 && bm[4].weeks.usd == 772.26 && bm[4].days.isEmpty,
+              bm.map(\.id).joined(separator: ","))
+        check("bob：各台设备按模型的（没有 tokens；old-mini 是旧版 cca，只有没按模型记下的）",
+              bob?.me?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-research-preview"]
+              && bob?.device(aliceMini)?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5"]
+              && bob?.devices.last?.models?.map(\.model) == [nil]
+              && bob?.devices.allSatisfy { $0.models?.allSatisfy { $0.weeks.tokens == nil && $0.days.tokens == nil } == true } == true)
+        if let b = bob {
+            check("看哪一方的按模型：所有设备是整个账号的，本机、另一台设备是那一台的，没有那台设备时是空的",
+                  CostChart.models(b, scope: .all) == b.models && CostChart.models(b, scope: .me) == b.me?.models
+                  && CostChart.models(b, scope: .device(aliceMini)) == b.device(aliceMini)?.models
+                  && CostChart.models(b, scope: .device("SHA256:x")) == [] && CostChart.models(AccountCost(), scope: .all) == nil)
+        }
+        check("frank（Codex）：按模型（没有公开价格的 codex-auto-review 也列）", s.tool(.codex)?.accounts.first?.cost?.models?.map(\.model)
+              == ["gpt-6.2-astra", "gpt-6.1-sol", "codex-auto-review"])
+        check("cost_total：按模型（所有账号加起来，本机、各台设备的也有）", t.all.models?.map(\.model) == ["claude-opus-5-5", "gpt-6.2-astra",
+              "claude-sonnet-5-5", "gpt-6.1-sol", "claude-haiku-4-5", "codex-auto-review", "claude-research-preview", nil]
+              && t.all.models?.first?.weeks.usd == 8073.69 && t.me?.models?.count == 7 && t.devices.first?.part.models == t.me?.models
+              && t.device(aliceMini)?.part.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5"])
+        // 认不出账号（3.6.8 起，所有设备的）
+        let oc = t.unattributed?.cost, lab = "f0f0f0f0f0f0f0f0"
+        check("认不出账号的：所有设备的（按日历周，三台设备，这台在最前），按模型，还有两台没传",
+              oc?.summary.weeksUSD == 484.94 && oc?.summary.daysUSD == 175.1 && oc?.summary.requests == 3537
+              && oc?.weeks.allSatisfy { $0.basis == .calendar } == true && oc?.weeks.count == 13
+              && oc?.devices.map(\.name) == ["studio-mac", "lab-studio", "alice-mini"] && oc?.me?.id == me
+              && oc?.models?.map(\.model) == ["claude-opus-5-5", "claude-sonnet-5-5", nil]
+              && t.unattributed?.unsynced.map(\.name) == ["office-imac", "old-mini"], "\(String(describing: oc?.summary))")
+        check("只有认不出账号的用量的 lab-studio：设备菜单里在最后，账号的几项都是 0、按模型是空的，账号页的菜单里没有",
+              t.devices.last?.id == lab && t.device(lab)?.part.summary.weeksUSD == 0 && t.device(lab)?.part.models == []
+              && !CostChart.menuDevices(t, account: bob).contains { $0.id == lab })
+        check("「认不出账号」那一组看谁的：所有设备、本机、有这种用量的另一台设备；没有这种用量的设备、旧版 cca 不列",
+              CostChart.orphan(t, scope: .all) == oc && CostChart.orphan(t, scope: .me) == oc && CostChart.orphan(t, scope: .device(lab)) == oc
+              && CostChart.orphan(t, scope: .device(officeImac)) == nil && CostChart.orphan(nil, scope: .all) == nil
+              && CostChart.listsOrphanDevices(oc, scope: .all) && !CostChart.listsOrphanDevices(oc, scope: .me)
+              && !CostChart.listsOrphanDevices(oc, scope: .device(lab)))
         check("cost_total：价格表的日期", t.pricesDate == "2026-11-01" && t.currency == "USD")
     } else {
         check("state.json 有 cost_total", false)
@@ -127,6 +169,8 @@ func costFixtureTests() {
               && alice?.devices.first?.name == "test-mac" && alice?.syncState == .localOnly)
         check("state_cost：设备菜单只有这台设备（id 是 local）", x.costTotal?.devices.map(\.id) == ["local"]
               && x.costTotal?.otherDevices.isEmpty == true && x.costTotal?.devices.first?.part == x.costTotal?.me)
+        check("state_cost（3.6.7 的样子）：没有按模型的、所有设备的认不出账号", alice?.models == nil && x.costTotal?.all.models == nil
+              && x.costTotal?.unattributed?.cost == nil && x.costTotal?.unattributed?.unsynced.isEmpty == true)
         check("state_cost：开始时还没有记录的两项是 partial、第一项是 0", alice?.weeks.prefix(2).allSatisfy(\.partial) == true
               && alice?.weeks.first?.usd == 0 && alice?.weeks.count == 13)
         check("state_cost：Codex 账号还没有记录，Codex 的平均是 null", x.account(AccountRef(tool: .codex, key: "dave@example.com"))?.cost == nil
@@ -384,7 +428,9 @@ func costUnitTests() {
         check("合计那一块的读屏标签", Texts.costTotalLabel(.all, total: t) == "所有账号的折合金额"
               && Texts.costTotalLabel(.me, total: t) == "所有账号在这台设备上的折合金额"
               && Texts.costTotalLabel(.device(aliceMini), total: t) == "所有账号在 alice-mini 上的折合金额")
-        check("设备菜单里的叫法：撤销了的、很久没同步上来的标出来", t.otherDevices.map(Texts.costMenuName) == ["alice-mini", "office-imac（很久没同步）", "old-mini（已撤销）"])
+        check("设备菜单里的叫法：撤销了的、很久没同步上来的标出来", t.otherDevices.map(Texts.costMenuName)
+              == ["alice-mini", "office-imac（很久没同步）", "old-mini（已撤销）", "lab-studio"])
+        check("只有认不出账号的用量的设备：折合金额页一个账号都不列", Texts.costNoAccounts(.device("f0f0f0f0f0f0f0f0"), total: t) == "lab-studio 最近没有用过这里的账号。")
     }
     let syncFailed = decodeCost(#"{"weeks":[],"days":[],"devices":[{"id":"m","name":"m","me":true},{"id":"o","name":"o"}],"#
                                 + #""sync":{"state":"error","message":"x","missing":[{"name":"z"}]}}"#)
@@ -426,9 +472,64 @@ func costUnitTests() {
           && Texts.costFreshness(CostScan(state: .scanning, updatedEpoch: now - 120), now: now) == "正在统计…"
           && Texts.costFreshness(CostScan(state: .never), now: now) == "还没统计"
           && Texts.costFreshness(CostScan(state: .ready), now: now) == nil && Texts.costFreshness(nil, now: now) == nil)
-    check("认不出是哪个账号的", Texts.costUnattributed(s.costTotal?.unattributed, currency: "USD")
-          == "近 30 天另有 $12.30 认不出是哪个账号的（旧版 Claude Code、桌面 App 里的会话），没算进来。"
-          && Texts.costUnattributed(nil, currency: "USD") == nil)
+    let u = s.costTotal?.unattributed, lab = "f0f0f0f0f0f0f0f0"
+    check("认不出是哪个账号的（3.6.8 起有所有设备的）：说没算进合计、列在最下面；原因是各台设备的，本机、另一台设备时是那一台的，没有的设备不说",
+          Texts.costUnattributed(u, scope: .all, total: s.costTotal, currency: "USD")
+          == "认不出是哪个账号的用量没算进合计，单独列在最下面（Claude App 里的 Code 会话、Claude Code 2.1.316 太旧）。"
+          && Texts.costUnattributed(u, currency: "USD") == "这台设备认不出是哪个账号的用量没算进合计，单独列在最下面。"
+          && Texts.costUnattributed(u, scope: .device(aliceMini), total: s.costTotal, currency: "USD")
+          == "alice-mini 认不出是哪个账号的用量没算进合计，单独列在最下面（Claude Code 2.1.316 太旧）。"
+          && Texts.costUnattributed(u, scope: .device(lab), total: s.costTotal, currency: "USD")
+          == "lab-studio 认不出是哪个账号的用量没算进合计，单独列在最下面（Claude App 里的 Code 会话）。"
+          && Texts.costUnattributed(u, scope: .device(officeImac), total: s.costTotal, currency: "USD") == nil
+          && Texts.costUnattributed(nil, currency: "USD") == nil,
+          "\(String(describing: Texts.costUnattributed(u, scope: .all, total: s.costTotal, currency: "USD")))")
+    let oldU = try? JSONDecoder().decode(CostUnattributed.self, from: Data(#"{"days_usd":12.3,"requests":40,"why":[],"claude_code":"2.1.330"}"#.utf8))
+    check("旧版 cca（只有这台设备近 30 天的）：照旧说金额，看另一台设备时不说", oldU?.cost == nil && oldU?.unsynced == []
+          && Texts.costUnattributed(oldU, currency: "USD") == "近 30 天另有 $12.30 认不出是哪个账号的（旧版 Claude Code、桌面 App 里的会话），没算进来。"
+          && Texts.costUnattributed(oldU, scope: .all, currency: "USD") == Texts.costUnattributed(oldU, currency: "USD")
+          && Texts.costUnattributed(oldU, scope: .device(aliceMini), currency: "USD") == nil)
+    check("还没传认不出的用量的设备", Texts.costUnsynced(u, scope: .all) == "还有 2 台设备没传认不出账号的用量（office-imac、old-mini），可能 cca 太旧。"
+          && Texts.costUnsynced(u, scope: .me) == nil && Texts.costUnsynced(u, scope: .device(officeImac)) == "office-imac 还没传认不出账号的用量，可能 cca 太旧。"
+          && Texts.costUnsynced(u, scope: .device(aliceMini)) == nil && Texts.costUnsynced(oldU, scope: .all) == nil,
+          "\(String(describing: Texts.costUnsynced(u, scope: .all)))")
+    check("「认不出账号」那一行的名字", Texts.costOrphanRowName(.all, total: s.costTotal) == "所有设备" && Texts.costOrphanRowName(.me, total: s.costTotal) == "这台设备"
+          && Texts.costOrphanRowName(.device(aliceMini), total: s.costTotal) == "alice-mini" && Texts.costOrphanRowName(.device(lab), total: s.costTotal) == "lab-studio"
+          && Texts.costOrphanRowName(.device("SHA256:x"), total: s.costTotal) == "那台设备")
+    check("认不出账号那一组里一台设备的原因（不画三角，只在提示、读屏里说）",
+          u?.cost?.device(lab).flatMap(Texts.costOrphanDeviceWhy) == "认不出的原因：Claude App 里的 Code 会话"
+          && u?.cost?.me.flatMap(Texts.costOrphanDeviceWhy) == nil)
+    check("按模型的小标题、叫法", Texts.costModelsTitle(.week) == "按模型 · 近 12 周" && Texts.costModelsTitle(.day) == "按模型 · 近 30 天"
+          && Texts.costModelName(CostModelRow(model: nil)) == "没按模型记下的" && Texts.costModelName(CostModelRow(model: "")) == "没写模型名"
+          && Texts.costModelName(CostModelRow(model: "claude-opus-5-5")) == "claude-opus-5-5")
+    let opus = CostModelRow(model: "claude-opus-5-5", weeks: CostModelRange(usd: 790.1, requests: 8804))
+    let unpricedRow = CostModelRow(model: "claude-research-preview", weeks: CostModelRange(requests: 4, unpricedRequests: 4))
+    let restRow = CostModelRow(model: nil, weeks: CostModelRange(usd: 22.3, requests: 316, unpricedRequests: 4))
+    check("按模型那一行：金额、请求数、读屏、提示（都没有公开价格的写出来；没按模型记下的说为什么）",
+          Texts.costModelMoney(opus.weeks, currency: "USD") == "$790" && Texts.costModelRequests(opus.weeks) == "8,804 次"
+          && Texts.costModelMoney(unpricedRow.weeks, currency: "USD") == "没有公开价格"
+          && Texts.costModelValue(opus, granularity: .week, currency: "USD") == "$790，8,804 次请求"
+          && Texts.costModelValue(unpricedRow, granularity: .week, currency: "USD") == "没有公开价格，4 次请求"
+          && Texts.costModelValue(restRow, granularity: .week, currency: "USD") == "$22.30，316 次请求，其中 4 次没有公开价格、没算钱"
+          && Texts.costModelHelp(restRow, granularity: .week, currency: "USD")
+          == "$22.30，316 次请求，其中 4 次没有公开价格、没算钱\n以前的版本统计的、旧版 cca 的设备传来的，只有合计，没有按模型分开"
+          && Texts.costModelHelp(opus, granularity: .week, currency: "USD") == Texts.costModelValue(opus, granularity: .week, currency: "USD"),
+          "\(Texts.costModelValue(restRow, granularity: .week, currency: "USD")) / \(Texts.costModelRequests(opus.weeks))")
+    let mrows = [CostModelRow(model: "a", weeks: CostModelRange(usd: 9, requests: 9), days: CostModelRange(usd: 1, requests: 1)),
+                 CostModelRow(model: "b", weeks: CostModelRange(usd: 5, requests: 5), days: CostModelRange(usd: 4, requests: 4)),
+                 CostModelRow(model: "d", weeks: CostModelRange(usd: 2, requests: 2)),
+                 CostModelRow(model: "e", weeks: CostModelRange(usd: 0.5, requests: 5), days: CostModelRange(usd: 1, requests: 5)),
+                 CostModelRow(model: "c", weeks: CostModelRange(requests: 3, unpricedRequests: 3), days: CostModelRange(requests: 2, unpricedRequests: 2)),
+                 CostModelRow(model: nil, weeks: CostModelRange(usd: 1, requests: 1), days: CostModelRange(usd: 7, requests: 7))]
+    check("按模型列哪几行：按周照 cca 的顺序；按天按 30 天的金额、请求数重新排，没按模型记下的照旧在最后；这一段没有用量的不列",
+          CostChart.modelRows(mrows, granularity: .week).map(\.id) == ["m:a", "m:b", "m:d", "m:e", "m:c", "rest"]
+          && CostChart.modelRows(mrows, granularity: .day).map(\.id) == ["m:b", "m:e", "m:a", "m:c", "rest"],
+          CostChart.modelRows(mrows, granularity: .day).map(\.id).joined(separator: ","))
+    let weekRows = CostChart.modelRows(mrows, granularity: .week)
+    check("按模型那一行的条：金额占这几行加起来的多少；都没有金额时是 0",
+          abs(CostChart.modelShare(mrows[0], of: weekRows, granularity: .week) - 9 / 17.5) < 1e-9
+          && CostChart.modelShare(mrows[4], of: weekRows, granularity: .week) == 0
+          && CostChart.modelShare(unpricedRow, of: [unpricedRow], granularity: .week) == 0)
     let whyText = { (code: String, v: String?) in Texts.costWhy(CostWhy(code: CostWhyCode(rawValue: code), lastEpoch: 1, claudeCode: v)) }
     check("认不出的原因：旧版 Claude Code（带版本）、Claude App、别的；不认识的当别的说",
           whyText("old_claude_code", "2.1.300") == "Claude Code 2.1.300 太旧" && whyText("old_claude_code", nil) == "Claude Code 太旧"
@@ -516,6 +617,19 @@ func costUnitTests() {
           && withDevices?.devices[1].part.summary.currentUSD == 2 && withDevices?.devices[1].part.byTool[.claude]?.currentUSD == 2
           && withDevices?.part(.device("o")) == withDevices?.devices[1].part && withDevices?.otherDevices.map(\.id) == ["o", "n"],
           "\(String(describing: withDevices?.devices))")
+    let modelled = decodeCost(#"{"weeks":[],"days":[],"models":[{"model":"a","weeks":{"usd":"x","requests":-3,"unpriced_requests":2},"#
+                              + #""days":{"usd":1.5,"requests":2,"tokens":{"input":1,"output":2,"cache_read":3,"cache_write":4}}},"#
+                              + #"{"model":null},{"weeks":{}},{"model":3},{"model":""}],"devices":[{"id":"d","models":"bad"},{"id":"e","models":[{"model":"a"}]}]}"#)
+    check("按模型：宽容解码（model 缺了、不是字符串的那一项不要；数字坏了当 0；设备的坏了当没有）",
+          modelled?.models?.map(\.id) == ["m:a", "rest", "m:"] && modelled?.models?.first?.weeks == CostModelRange(unpricedRequests: 2)
+          && modelled?.models?.first?.days == CostModelRange(usd: 1.5, requests: 2, tokens: CostTokens(input: 1, output: 2, cacheRead: 3, cacheWrite: 4))
+          && modelled?.devices.map { $0.models?.count } == [nil, 1], "\(String(describing: modelled?.models))")
+    check("旧版 cca 没有按模型的：nil（不显示那一块）", decodeCost(#"{"weeks":[],"days":[]}"#)?.models == nil
+          && (try? JSONDecoder().decode(CostTotal.self, from: Data(#"{"me":{}}"#.utf8)))?.all.models == nil)
+    let unsyncedDoc = try? JSONDecoder().decode(CostUnattributed.self, from: Data(
+        #"{"days_usd":0,"requests":0,"unsynced":[{"id":"a","name":"x"},{"id":""},{"name":"y"},{"id":"b"}],"cost":{"weeks":[],"days":[]}}"#.utf8))
+    check("认不出的：unsynced 没有 id 的不要、没名字用 id；cost 照账号的解码", unsyncedDoc?.unsynced.map(\.id) == ["a", "b"]
+          && unsyncedDoc?.unsynced.map(\.name) == ["x", "b"] && unsyncedDoc?.cost != nil)
     let used = decodeCost(#"{"weeks":[],"days":[],"devices":[{"id":"a"},{"id":"b","used":false},{"id":"c","used":"no"}]}"#)
     check("账号里的设备：used 缺了、坏了当用过（旧版 cca）", used?.devices.map(\.used) == [true, false, true])
     let badMe = try? JSONDecoder().decode(CostTotal.self, from: Data(#"{"current_usd":3,"me":"x"}"#.utf8))

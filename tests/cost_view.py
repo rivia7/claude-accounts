@@ -39,7 +39,7 @@ U4 = 'user-' + 'd' * 24
 M = 1000000   # 一美元 = 这么多个百万分之一美元
 WEEK = 7 * 86400
 # cli/src/cmd/cost.rs 的同名常量
-COST_PRICES_DATE = '2026-11-13'
+COST_PRICES_DATE = '2026-11-24'
 COST_PUBLISH = 14 * WEEK   # 传给别的设备的留这么久
 
 # 假的 Team 的同步服务器（curl）：请求（签过名的 JSON）一个一个记进 ~/sent/，照 ~/server/get、~/server/put 里准备好的回（没有就是连不上）
@@ -707,8 +707,16 @@ class View(Base):
         self.assertEqual((len(me['days']), me['days'][-2]['usd'], me['days'][-1]['usd'], me['days'][-1]['date']), (30, 4.0, 5.0, '2026-11-13'),
                          '11 月 12 日只有 Codex 的 4（bob-mini 的不算）')
         self.assertEqual([d['start_epoch'] for d in me['days']], [d['start_epoch'] for d in t['days']])
-        self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1, 'why': [], 'claude_code': None, 'claude_code_old': False},
-                         '认不出是谁的：最近 30 天的')
+        u = t['unattributed']
+        self.assertEqual({k: u[k] for k in ('days_usd', 'requests', 'why', 'claude_code', 'claude_code_old')},
+                         {'days_usd': 0.5, 'requests': 1, 'why': [], 'claude_code': None, 'claude_code_old': False}, '认不出是谁的：这台设备最近 30 天的')
+        o = u['cost']
+        self.assertEqual((o['summary']['weeks_usd'], o['summary']['days_usd'], o['since_epoch'], [d['name'] for d in o['devices']], len(o['weeks'])),
+                         (100.5, 0.5, float(self.at(2026, 9, 1, 1)), ['alice-mbp'], 13),
+                         '所有设备的（这里只有这台设备的）：按日历周、按天，和账号的一样的样子')
+        self.assertTrue(all(w['basis'] == 'calendar' for w in o['weeks']), '没有额度窗口：按日历周')
+        self.assertEqual(u['unsynced'], [{'id': BOB, 'name': 'bob-mini'}, {'id': 'SHA256:carol', 'name': 'carol-air'}],
+                         '设备菜单里的别的设备都还没传认不出是哪个账号的那一份')
         self.assertEqual((devs[0]['diag'], devs[1]['diag']), ({'cca': None, 'claude_code': None, 'claude_code_old': False, 'why': []}, None),
                          '这台设备总有诊断（没有 local.json 的 diag 时是空的）；旧版 cca 的设备没有')
         self.assertEqual(t['scan']['state'], 'ready')
@@ -851,8 +859,11 @@ class View(Base):
         self.assertEqual((a['summary']['days_usd'], a['since_epoch']), (19.0, float(self.at(2026, 10, 1, 10))), '合计、从哪天有数据照旧')
         t = cv.total(['claude'])
         self.assertEqual([d['name'] for d in t['devices']], ['alice-mbp', 'bob-mini', 'carol-air'], '只为诊断列出来的设备没用过这个账号：设备菜单里没有它')
-        self.assertEqual(t['unattributed'], {'days_usd': 0.5, 'requests': 1, 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
-            {'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'}]})
+        u = t['unattributed']
+        self.assertEqual({k: u[k] for k in ('days_usd', 'requests', 'why', 'claude_code', 'claude_code_old')},
+                         {'days_usd': 0.5, 'requests': 1, 'claude_code': '2.1.330', 'claude_code_old': False, 'why': [
+                             {'code': 'old_claude_code', 'last_epoch': self.NOW - 86400, 'claude_code': '2.1.316'}]})
+        self.assertEqual(u['cost']['devices'][0]['diag']['why'], u['why'], '认不出是哪个账号的那一份里，这台设备带着同样的诊断')
         self.assertIsNone(cv.account('claude', 'bob@example.com', None, True), '整个账号都没有数据：照旧是 None')
         self.local['acc']['claude:' + U1] = {}
         self.write()
@@ -863,6 +874,100 @@ class View(Base):
         cv = self.view()
         cv.account('claude', 'alice(alice@example.com)', None, True)
         self.assertEqual(cv.total(['claude'])['unattributed']['why'], [], 'diag 不对：当没有')
+
+    def test_models(self):
+        """按模型分的（models）：local.json 的 hm、别的设备传来的 hm；合计减去各个模型的是没有按模型记下的（model 是 null：旧版 cca 的设备、
+        以前的版本算的）。账号的带 tokens，设备的不带；cost_total（所有设备、me、每台设备）按账号加起来"""
+        row = self.row
+        self.local['hm'] = {'claude:' + U1: {
+            self.at(2026, 11, 3, 10): {'claude-opus-5-5': row(7, 2), 'claude-unknown-1': row(0, 1, 1)},
+            self.at(2026, 11, 10, 10): {'claude-opus-5-5': row(3)},
+            self.at(2026, 11, 13, 9): {'claude-opus-5-5': row(4), 'claude-haiku-4-5': row(1)}}}
+        slot = self.remote['acc']['claude:alice@example.com']
+        slot['SHA256:bob']['hm'] = {self.at(2026, 11, 12, 10): {'claude-opus-5-5': row(2)}}
+        slot['SHA256:carol']['hm'] = {'x': {}}   # 坏的：当它没传
+        self.write()
+        cv = self.view()
+        a = cv.account('claude', 'alice(alice@example.com)', None, True)
+        pick = lambda ms, part: [(m['model'], m[part]['usd'], m[part]['requests'], m[part]['unpriced_requests']) for m in ms]
+        self.assertEqual(pick(a['models'], 'weeks'), [('claude-opus-5-5', 16.0, 5, 0), ('claude-haiku-4-5', 1.0, 1, 0),
+                                                      ('claude-unknown-1', 0.0, 1, 1), (None, 3.0, 3, 0)],
+                         '近 12 周：按金额排；没有按模型记下的（这台设备 10 月 1 日的、bob-mini 以前那把 key 的、carol-air 的）在最后')
+        self.assertEqual(pick(a['models'], 'days'), [('claude-opus-5-5', 16.0, 5, 0), ('claude-haiku-4-5', 1.0, 1, 0),
+                                                     ('claude-unknown-1', 0.0, 1, 1), (None, 2.0, 2, 0)], '近 30 天（10 月 1 日的不在里面）')
+        self.assertAlmostEqual(sum(m['weeks']['usd'] for m in a['models']), a['summary']['weeks_usd'])
+        self.assertAlmostEqual(sum(m['days']['usd'] for m in a['models']), a['summary']['days_usd'])
+        self.assertEqual(a['models'][0]['weeks']['tokens'], {'input': 5000, 'output': 500, 'cache_read': 0, 'cache_write': 0}, '账号的带 token')
+        devs = {d['name']: d for d in a['devices']}
+        self.assertEqual(pick(devs['alice-mbp']['models'], 'weeks'), [('claude-opus-5-5', 14.0, 4, 0), ('claude-haiku-4-5', 1.0, 1, 0),
+                                                                      ('claude-unknown-1', 0.0, 1, 1), (None, 1.0, 1, 0)])
+        self.assertEqual(pick(devs['alice-mbp']['models'], 'days')[-1], (None, 0.0, 0, 0), '近 30 天这台设备的都按模型记下了')
+        self.assertNotIn('tokens', devs['alice-mbp']['models'][0]['weeks'], '设备的不带 token')
+        self.assertEqual(pick(devs['bob-mini']['models'], 'weeks'), [('claude-opus-5-5', 2.0, 1, 0), (None, 1.0, 1, 0)],
+                         'bob-mini：现在的 key 传了按模型分的；以前那把 key 的没有')
+        self.assertEqual(pick(devs['carol-air']['models'], 'weeks'), [(None, 1.0, 1, 0)], 'hm 不对：当它没传')
+        cv.account('codex', 'alice@example.com', None, True)
+        t = cv.total(['claude', 'codex'])
+        self.assertEqual(pick(t['models'], 'weeks'), [('claude-opus-5-5', 16.0, 5, 0), ('claude-haiku-4-5', 1.0, 1, 0),
+                                                      ('claude-unknown-1', 0.0, 1, 1), (None, 7.0, 4, 0)], '所有账号加起来（Codex 的 4 没有按模型记下）')
+        self.assertEqual(pick(t['me']['models'], 'days'), [('claude-opus-5-5', 14.0, 4, 0), ('claude-haiku-4-5', 1.0, 1, 0),
+                                                           ('claude-unknown-1', 0.0, 1, 1), (None, 4.0, 1, 0)])
+        self.assertEqual(t['devices'][0]['models'], t['me']['models'], '这台设备的就是 me 的')
+        self.assertEqual(pick(t['devices'][1]['models'], 'weeks'), [('claude-opus-5-5', 2.0, 1, 0), (None, 1.0, 1, 0)])
+        self.assertNotIn('tokens', t['models'][0]['weeks'])
+
+    def test_unattributed_sync(self):
+        """认不出是哪个账号的（unattributed.cost）：这台设备的，和别的设备经各个 Team 的服务器传来的（remote.json 的 orphan）。同一台机器
+        经两个 Team 传的按机器认成一台（新的那份以前的小时才用旧的）；只有认不出的用量的设备也进设备菜单（账号的几项都是 0）；
+        菜单里没传过这一份的设备在 unsynced；合计（cost_total 的几项）不含认不出的"""
+        TID2 = 'cd' * 16
+        day = lambda t: t // 86400 * 86400
+        row = self.row
+        self.local['om'] = {self.at(2026, 11, 12, 1): {'claude-opus-5-5': row(0.5)}}
+        self.remote['acc']['orphan'] = {
+            'SHA256:bob': {'h': {self.at(2026, 11, 12, 3): row(2)}, 'hm': {self.at(2026, 11, 12, 3): {'claude-opus-5-5': row(2)}}, 'um': [],
+                           'at': self.NOW - 600, 'name': 'bob-mini', 'tag': 'o1', 'dv': BOB,
+                           'dg': {'why': [{'code': 'claude_app', 'last_epoch': day(self.NOW - 86400)}]}},
+            'SHA256:erin': {'h': {self.at(2026, 11, 13, 2): row(6)}, 'um': ['claude-zzz'], 'at': self.NOW - 600, 'name': 'erin-mini',
+                            'tag': 'o2', 'dv': 'e0e0e0e0e0e0e0e0'},
+            'SHA256:fay': {'h': {}, 'hm': {}, 'um': [], 'at': self.NOW - 600, 'name': 'fay-mini', 'tag': 'o3'}}
+        self.write()
+        # bob-mini 也在另一个 Team 里：经那台服务器传的是同一台机器（dv 一样），旧一些，多一个更早的小时
+        (self.cca / 'cost' / ('team.%s.remote.json' % TID2)).write_text(json.dumps({'v': 1, 'acc': {'orphan': {'SHA256:bob2': {
+            'h': {self.at(2026, 10, 20, 3): row(1), self.at(2026, 11, 12, 3): row(2)}, 'um': [], 'at': self.NOW - 7200, 'name': 'bob-mini',
+            'tag': 'o9', 'dv': BOB}}}}))
+
+        def total(c=None):
+            cv = self.view(c=c, team=[TID, TID2])
+            cv.account('claude', 'alice(alice@example.com)', None, TID)
+            return cv.total(['claude'])
+        t = total()
+        u = t['unattributed']
+        o = u['cost']
+        self.assertEqual([(d['name'], d['summary']['days_usd'], d['used']) for d in o['devices']],
+                         [('alice-mbp', 0.5, True), ('erin-mini', 6.0, True), ('bob-mini', 3.0, True)],
+                         '这台设备在最前，别的按 30 天的多少；bob-mini 两个 Team 的并成一台（10 月 20 日的只在旧的那份里）；没有数据的 fay-mini 不列')
+        self.assertEqual((o['summary']['days_usd'], o['summary']['weeks_usd'], o['unpriced_models']), (9.5, 109.5, ['claude-zzz']))
+        self.assertEqual([(m['model'], m['weeks']['usd'], m['days']['usd']) for m in o['models']],
+                         [('claude-opus-5-5', 2.5, 2.5), (None, 107.0, 7.0)],
+                         '按模型：这台设备、bob-mini 记下了；9 月 1 日的、erin-mini 的、bob-mini 旧的那份没有')
+        self.assertEqual(o['devices'][2]['diag']['why'][0]['code'], 'claude_app')
+        self.assertEqual(o['sync']['state'], 'pending', '这台设备还没同步过这一份')
+        self.assertEqual((t['days_usd'], t['by_tool']['claude']['days_usd']), (19.0, 19.0), '合计不含认不出的')
+        self.assertEqual([(d['name'], d['days_usd']) for d in t['devices']],
+                         [('alice-mbp', 15.0), ('bob-mini', 3.0), ('carol-air', 1.0), ('erin-mini', 0.0)],
+                         '只有认不出的用量的设备排在后面，账号的几项都是 0')
+        self.assertEqual(t['devices'][3]['id'], 'e0e0e0e0e0e0e0e0')
+        self.assertEqual(u['unsynced'], [{'id': 'SHA256:carol', 'name': 'carol-air'}], 'carol-air 还没传这一份（cca 太旧）')
+        self.sync['acc']['orphan'] = {'checked': self.NOW - 100}
+        self.remote['acc']['orphan']['SHA256:carol'] = {'h': {}, 'hm': {}, 'um': [], 'at': self.NOW - 600, 'name': 'carol-air', 'tag': 'o4'}
+        self.write()
+        t = total()
+        self.assertEqual(t['unattributed']['cost']['sync']['state'], 'ok')
+        self.assertEqual((t['unattributed']['unsynced'], [d['name'] for d in t['unattributed']['cost']['devices']]),
+                         ([], ['alice-mbp', 'erin-mini', 'bob-mini']), 'carol-air 传了空的：算传过；没有认不出的用量，不列')
+        o = total({'device_id': self.DV, 'presence': False})['unattributed']['cost']
+        self.assertEqual(([d['name'] for d in o['devices']], o['sync']['state']), (['alice-mbp'], 'off'), '关掉了设备统计：只有这台设备的')
 
     def test_sync_states(self):
         C, k = 'claude', 'alice(alice@example.com)'
@@ -935,18 +1040,20 @@ class Crypto(Base):
         return [json.loads(p.read_text()) for p in sorted((d.home / 'sent').glob('*.json'), key=lambda p: int(p.stem))]
 
     def upload(self, d):
-        """同步一次，返回这次传上去的那一份密文"""
+        """同步一次，返回这次传上去的这个账号的那一份密文（认不出是哪个账号的那一份在 self.orphan_blob）"""
         before = len(self.sent(d))
         self.assertEqual(d.sync('--now')['sync']['state'], 'ok')
         ask, put = self.sent(d)[before:]
-        self.assertEqual((ask['op'], ask['key'], ask['get'], put['key'], list(put['put'])), ('ledger', d.fp, [self.aid], d.fp, [self.aid]),
-                         '先问、再传；设备指纹、账号摘要和文档写的一样')
+        both = [self.aid, sw.orphan_aid(self.SALT)]
+        self.assertEqual((ask['op'], ask['key'], ask['get'], put['key'], list(put['put'])), ('ledger', d.fp, both, d.fp, both),
+                         '先问、再传；设备指纹、账号摘要和文档写的一样；认不出是哪个账号的那一份跟在后面')
+        self.orphan_blob = put['put'][both[1]]
         return put['put'][self.aid]
 
-    def local_rows(self, d, rows):
-        """这台设备以前统计好的（cost/local.json）：身份 U1 的小时数据。没有会话记录、没有 scan.json 时统计照它接上"""
+    def local_rows(self, d, rows, hm=None):
+        """这台设备以前统计好的（cost/local.json）：身份 U1 的小时数据（hm：按模型分的）。没有会话记录、没有 scan.json 时统计照它接上"""
         d.write(d.cca / 'cost' / 'local.json', {'v': 1, 'build': 'x', 'who': {'claude:' + U1: 'alice@example.com'}, 'acc': {'claude:' + U1: rows},
-                                                'um': {}, 'orphan': {}})
+                                                'um': {}, 'orphan': {}, 'hm': {'claude:' + U1: hm or {}}})
 
     def v1(self, ident):
         """3.6.5 及以前的密钥：还带着登录身份"""
@@ -979,7 +1086,7 @@ class Crypto(Base):
             before = len(self.sent(bob))
             self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
             sent = self.sent(bob)[before:]
-            return (sent[0]['have'].get(aid, {}), any('put' in r for r in sent),
+            return (sent[0]['have'].get(aid, {}), any(aid in r.get('put', {}) for r in sent),
                     bob.cost(LANE + 'remote.json')['acc']['claude:alice@example.com'].get(old))
 
         login(False)
@@ -1005,7 +1112,8 @@ class Crypto(Base):
         self.local_rows(carol, {hour: [3000000, 1, 0, 0, 0, 0, 0]})
         before = len(self.sent(carol))
         self.assertEqual(carol.sync('--now')['sync']['state'], 'ok')
-        self.assertEqual([sorted(r.get('put', {})) for r in self.sent(carol)[before:]], [[], [aid]], '没登录、用过（有记录）：照样传自己的那一份')
+        self.assertEqual([sorted(r.get('put', {})) for r in self.sent(carol)[before:]], [[], sorted([aid, sw.orphan_aid(self.SALT)])],
+                         '没登录、用过（有记录）：照样传自己的那一份；认不出是哪个账号的那一份（空的）也传')
 
     def test_seal_open(self):
         salt = self.SALT
@@ -1018,9 +1126,18 @@ class Crypto(Base):
         b = self.upload(a)
         now = time.time()
         doc = sw.cost_open(k, aid, a.fp, b)   # 和文档写的一样的密钥、认证里带的东西：照文档能解开
-        self.assertEqual(doc, {'v': 1, 'at': doc['at'], 'h': {str(hour): [6000, 2, 2000, 200, 0, 0, 1]}, 'um': ['claude-x'], 'dg': {'why': []}})
+        self.assertEqual(doc, {'v': 1, 'at': doc['at'], 'h': {str(hour): [6000, 2, 2000, 200, 0, 0, 1]}, 'um': ['claude-x'], 'dg': {'why': []},
+                               'hm': {str(hour): {'claude-opus-5-5': [6000, 1, 1000, 100, 0, 0, 0], 'claude-x': [0, 1, 1000, 100, 0, 0, 1]}}},
+                         '按模型分的（hm）加起来就是 h')
         self.assertTrue(now - 600 < doc['at'] <= now)   # 传的时候的时间
-        self.assertEqual((doc['h'], doc['um']), content(a.cost('local.json'), 'claude', 'alice@example.com'), '传的是这台设备统计好的那一份')
+        local = a.cost('local.json')
+        self.assertEqual((doc['h'], doc['um']), content(local, 'claude', 'alice@example.com'), '传的是这台设备统计好的那一份')
+        self.assertEqual(doc['hm'], local['hm']['claude:' + U1])
+        oaid = sw.orphan_aid(salt)
+        orphan = sw.cost_open(k, oaid, a.fp, self.orphan_blob)
+        self.assertEqual(orphan, {'v': 1, 'at': orphan['at'], 'h': {}, 'hm': {}, 'um': [], 'dg': {'why': []}},
+                         '认不出是哪个账号的那一份：同一把密钥、它自己的账号摘要；这台设备没有认不出的，传空的')
+        self.assertIsNone(sw.cost_open(k, aid, a.fp, self.orphan_blob), '挪不到账号的那一份上')
         self.assertIsNone(sw.unseal(sw.COST, sw.derive(sw.KEYSHARE, salt, 'claude', 'alice@example.com', U1), [aid, a.fp], b), '和共享 API key 的密钥不通')
         self.assertIsNone(sw.cost_open(self.v1(U1), aid, a.fp, b, label=sw.COST_V1), '传的是新的：以前的密钥解不开')
         self.assertEqual(srvmod.parse_blob(b, srvmod.MAX_COST_BLOB), b, '服务器收这个形状')
@@ -1039,7 +1156,7 @@ class Crypto(Base):
             if accept is not None:
                 want[f] = dict(accept, tag='t-' + label, name=label)
 
-        row('alice-mbp', b, a.fp, {'at': doc['at'], 'h': doc['h'], 'um': ['claude-x'], 'dg': {'why': []}})
+        row('alice-mbp', b, a.fp, {'at': doc['at'], 'h': doc['h'], 'um': ['claude-x'], 'dg': {'why': []}, 'hm': doc['hm']})
         seal = lambda name, d, keys=k, aid_=aid, fp_=None, **kw: sw.cost_seal(keys, aid_, fp_ or fp(name), d, **kw)
         spec = {'v': 1, 'at': now, 'h': {'1794567600': [1, 2, 3, 4, 5, 6, 0]}, 'um': ['claude-x']}
         row('spec', seal('spec', spec), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 照文档封的 cca 也认
@@ -1075,6 +1192,11 @@ class Crypto(Base):
         row('diag', seal('diag', dict(spec, dg=dg)), accept={'at': now, 'h': spec['h'], 'um': ['claude-x'], 'dg': {'cca': '3.6.0', 'why': [
             {'code': 'old_claude_code', 'last_epoch': 1794528000, 'claude_code': '2.1.316'}] + [{'code': 'unknown', 'last_epoch': 1794528000}] * 4}})
         row('bad-diag', seal('bad-diag', dict(spec, dg='x')), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})   # 诊断不对：只是不要它
+        hm = {'1794567600': {'claude-x': [1, 2, 3, 4, 5, 6, 0]}}
+        row('models-hm', seal('models-hm', dict(spec, hm=hm)), accept={'at': now, 'h': spec['h'], 'um': ['claude-x'], 'hm': hm})
+        for i, bad in enumerate(({'x': {}}, {'1794567600': {'m': [1] * 6}}, {'1794567600': {'bad\nname': [1] * 7}},
+                                 {'1794567600': {'m%d' % n: [0] * 7 for n in range(65)}}, [])):   # 按模型分的不对（一个小时 65 个模型也算）：只是不要它
+            row('bad-hm-%d' % i, seal('bad-hm-%d' % i, dict(spec, hm=bad)), accept={'at': now, 'h': spec['h'], 'um': ['claude-x']})
         row('bomb', seal('bomb', None, raw=zlib.compress(b'{"v":1,"um":["' + b'x' * (5 << 20) + b'"]}')))   # 解压出来太大的不要
         row('lie', sw.seal(sw.COST, k, [aid, fp('lie')], (5000).to_bytes(4, 'big') + bytes(1020)))   # 长度比内容长
         bob = self.device('bob-mini', 32)
@@ -1082,7 +1204,9 @@ class Crypto(Base):
         self.assertEqual(bob.sync('--now')['sync']['state'], 'ok')
         got = bob.cost(LANE + 'remote.json')['acc']['claude:alice@example.com']
         read = {f: e for f, e in got.items() if 'h' in e}
-        self.assertEqual(sorted(e['name'] for e in read.values()), ['alice-mbp', 'bad-diag', 'diag', 'models', 'old', 'spec'], '别的都不认')
+        self.assertEqual(sorted(e['name'] for e in read.values()),
+                         ['alice-mbp', 'bad-diag', 'bad-hm-0', 'bad-hm-1', 'bad-hm-2', 'bad-hm-3', 'bad-hm-4', 'diag', 'models', 'models-hm', 'old', 'spec'],
+                         '别的都不认')
         self.assertEqual(read, want)
         unread = {f: e for f, e in got.items() if 'h' not in e}
         self.assertEqual(unread[fp('other-salt')], {'tag': 't-other-salt', 'name': 'other-salt'}, '解不开的只记下认证码和名字（视图里没有它）')
@@ -1103,19 +1227,22 @@ class Crypto(Base):
         published = lambda rows, at: {k: v for k, v in rows.items() if int(k) >= at - COST_PUBLISH}   # 只传最近 14 周的（正好落在界线上的那个小时可能不在）
         full = self.device('carol-air', 64)
         h = {x: [123456789, 50, 5000000, 300000, 90000000, 2000000, 1] for x in hours}
-        self.local_rows(full, h)
+        hm = {x: {'claude-opus-5-5': [123456789, 49, 4900000, 290000, 90000000, 2000000, 0], 'claude-x': [0, 1, 100000, 10000, 0, 0, 1]} for x in hours}
+        self.local_rows(full, h, hm)
         big = self.upload(full)
-        self.assertLessEqual(len(big['c']), limit, '14 周每个小时都有记录也放得下')
+        self.assertLessEqual(len(big['c']), limit, '14 周每个小时都有记录也放得下（连同按模型分的）')
         opened = sw.cost_open(k, aid, full.fp, big)
         self.assertEqual(opened['h'], published(h, opened['at']))
+        self.assertEqual(opened['hm'], published(hm, opened['at']))
         self.assertGreaterEqual(len(opened['h']), len(hours) - 1)
         rnd = random.Random(7)   # 压缩不了的数字，小时又多：放不下，去掉最早的直到放得下
         huge = {'h': {x: [rnd.randrange(10 ** 12) for _ in range(7)] for x in hours}, 'um': []}
         self.assertGreater(len(sw.cost_seal(k, aid, full.fp, dict(huge, v=1, at=now))['c']), limit, '这份原样封放不下')
         dan = self.device('dan-air', 96)
-        self.local_rows(dan, huge['h'])
+        self.local_rows(dan, huge['h'], {x: {'m': [rnd.randrange(10 ** 12) for _ in range(7)]} for x in hours})
         fit = self.upload(dan)
         opened = sw.cost_open(k, aid, dan.fp, fit)
+        self.assertEqual(opened['hm'], {}, '先去掉按模型分的（只是明细），还放不下再去掉 h 里最早的')
         kept = opened['h']
         whole = published(huge['h'], opened['at'])
         newest = sorted(whole, key=int)[-len(kept):]

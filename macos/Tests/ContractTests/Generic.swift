@@ -120,6 +120,65 @@ private func near(_ a: Double, _ b: Double, terms: Int) -> Bool {
     abs(a - b) <= 0.01 * Double(max(terms, 1)) + 0.001
 }
 
+/// 按模型的各项按 id（模型名；没按模型记下的那一项）加起来：列出的周期的金额、请求数、没有公开价格的请求数，30 天的同样三项
+private func modelTotals(_ lists: [[CostModelRow]]) -> [String: [Double]] {
+    var out: [String: [Double]] = [:]
+    for rows in lists {
+        for r in rows {
+            let v = [r.weeks.usd, Double(r.weeks.requests), Double(r.weeks.unpricedRequests),
+                     r.days.usd, Double(r.days.requests), Double(r.days.unpricedRequests)]
+            out[r.id] = zip(out[r.id] ?? Array(repeating: 0, count: 6), v).map { $0 + $1 }
+        }
+    }
+    return out
+}
+
+/// rows 是不是 parts 按模型加起来的（金额差在四舍五入以内，请求数一样）
+private func sameModels(_ rows: [CostModelRow], _ parts: [[CostModelRow]]) -> Bool {
+    let a = modelTotals([rows]), b = modelTotals(parts), zero = Array(repeating: 0.0, count: 6)
+    return Set(a.keys).union(b.keys).allSatisfy { k in
+        let x = a[k] ?? zero, y = b[k] ?? zero
+        return near(x[0], y[0], terms: parts.count + 1) && near(x[3], y[3], terms: parts.count + 1)
+            && x[1] == y[1] && x[2] == y[2] && x[4] == y[4] && x[5] == y[5]
+    }
+}
+
+/// 按模型分开的（PROTOCOL 2.2 的 `models[]`，3.6.8 起）：每一项的样子、排法；各项加起来是 s 的金额（withRequests：还有请求数）。
+/// tokens：账号的带，设备、合计的不带
+private func modelInvariants(_ n: String, _ raw: Any?, _ rows: [CostModelRow]?, summary s: CostSummary, withRequests: Bool, tokens: Bool) {
+    guard let list = raw as? [[String: Any]], let rows else {
+        check("\(n) 是对象数组", false)
+        return
+    }
+    check("\(n) 每一项都解码了，model 是字符串或 null", list.count == rows.count && list.allSatisfy { $0["model"] is String || $0["model"] is NSNull },
+          "\(list.count) vs \(rows.count)")
+    let named = rows.filter { $0.model != nil }
+    check("\(n) 模型名不重复，没按模型记下的最多一项、在最后", Set(named.map(\.id)).count == named.count && rows.dropLast().allSatisfy { $0.model != nil })
+    let ranges = list.flatMap { r in ["weeks", "days"].map { r[$0] as? [String: Any] } }
+    check("\(n) weeks、days 的金额、请求数不小于 0", ranges.allSatisfy { r in
+        guard let r else { return false }
+        return nonNegative(r["usd"]) && wholeCount(r["requests"]) && wholeCount(r["unpriced_requests"])
+    })
+    check("\(n) " + (tokens ? "tokens 是四个不小于 0 的整数" : "没有 tokens"), ranges.allSatisfy { r in
+        guard let t = r?["tokens"] else { return !tokens }
+        guard tokens, let o = t as? [String: Any] else { return false }
+        return ["input", "output", "cache_read", "cache_write"].allSatisfy { wholeCount(o[$0]) }
+    })
+    check("\(n) 没有公开价格的请求不多于请求数", rows.allSatisfy {
+        $0.weeks.unpricedRequests <= $0.weeks.requests && $0.days.unpricedRequests <= $0.days.requests
+    })
+    check("\(n) 两段里都没有用量的不列", rows.allSatisfy { !$0.weeks.isEmpty || !$0.days.isEmpty })
+    check("\(n) 按列出的周期的金额从多到少", zip(named, named.dropFirst()).allSatisfy { $0.weeks.usd >= $1.weeks.usd })
+    check("\(n) 各项加起来是列出的周期、30 天的金额", near(rows.map(\.weeks.usd).reduce(0, +), s.weeksUSD, terms: rows.count + 1)
+          && near(rows.map(\.days.usd).reduce(0, +), s.daysUSD, terms: rows.count + 1),
+          "\(rows.map(\.weeks.usd).reduce(0, +)) vs \(s.weeksUSD), \(rows.map(\.days.usd).reduce(0, +)) vs \(s.daysUSD)")
+    if withRequests {
+        check("\(n) 各项的请求数加起来是 summary 的", rows.map(\.weeks.requests).reduce(0, +) == s.requests
+              && rows.map(\.weeks.unpricedRequests).reduce(0, +) == s.unpricedRequests,
+              "\(rows.map(\.weeks.requests).reduce(0, +)) vs \(s.requests)")
+    }
+}
+
 /// 周期、天（PROTOCOL 2.2 的 cost.weeks / days、cost_total.days）：首尾相接
 private func contiguous(_ list: [CostPeriod]) -> Bool {
     zip(list, list.dropFirst()).allSatisfy { $0.endEpoch == $1.startEpoch }
@@ -263,6 +322,18 @@ func costInvariants(_ n: String, _ raw: [String: Any], _ c: AccountCost?, now: D
     let devAvg = c.devices.compactMap(\.summary.averageUSD), devDay = c.devices.compactMap(\.summary.averageDayUSD)
     check("\(n) 各台设备的平均加起来是整个账号的", (s.averageUSD.map { near($0, devAvg.reduce(0, +), terms: devAvg.count + 1) } ?? devAvg.isEmpty)
           && (s.averageDayUSD.map { near($0, devDay.reduce(0, +), terms: devDay.count + 1) } ?? devDay.isEmpty))
+    // 按模型（3.6.8 起；旧版 cca 没有）：账号的带 tokens；每台设备都有自己的（没有 tokens），加起来是账号的
+    if raw["models"] != nil {
+        modelInvariants(n + " models", raw["models"], c.models, summary: s, withRequests: true, tokens: true)
+        check("\(n) 有 models 时每台设备都有", (rawDevices ?? []).allSatisfy { $0["models"] != nil } && c.devices.allSatisfy { $0.models != nil })
+        var parts: [[CostModelRow]] = []
+        for (j, rd) in (rawDevices ?? []).enumerated() where j < c.devices.count && rd["models"] != nil {
+            let dv = c.devices[j]
+            modelInvariants("\(n) \(dv.name) models", rd["models"], dv.models, summary: dv.summary, withRequests: false, tokens: false)
+            parts.append(dv.models ?? [])
+        }
+        check("\(n) models 是各台设备的加起来", sameModels(c.models ?? [], parts))
+    }
     // 没有公开价格的模型、同步
     check("\(n) unpriced_models 是字符串数组", (raw["unpriced_models"] as? [Any])?.allSatisfy { $0 is String } == true)
     check("\(n) 有没有公开价格的请求就列出模型", s.unpricedRequests == 0 || !c.unpricedModels.isEmpty)
@@ -326,7 +397,14 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
                   && near(p.summary.todayUSD, parts.map(\.todayUSD).reduce(0, +), terms: parts.count))
         }
     }
+    /// 按模型（3.6.8 起；旧版 cca 没有）：各项加起来是这一份的金额，是 parts（各账号的那一份）按模型加起来的
+    func models(_ label: String, _ raw: [String: Any], _ p: CostTotalPart, _ parts: [[CostModelRow]]) {
+        guard raw["models"] != nil else { return }
+        modelInvariants(label + " models", raw["models"], p.models, summary: p.summary, withRequests: false, tokens: false)
+        check("\(label) models 是各账号按模型加起来", sameModels(p.models ?? [], parts))
+    }
     part(n, raw, t.all, accounts.compactMap { a in a.cost.map { (a.tool, $0.summary, $0.days) } })
+    models(n, raw, t.all, accounts.compactMap { $0.cost?.models })
     // me：各账号里这台设备的那一份加起来（这台设备没有记录的账号不算）；按工具分开的工具和顶层一样
     guard let rawMe = raw["me"] as? [String: Any], let me = t.me else {
         check("\(n) 有 me", false)
@@ -339,6 +417,7 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
         }
     }
     part(n + " me", rawMe, me, accounts.compactMap { a in a.cost.flatMap { c in c.me.map { d in (a.tool, d.summary, deviceDays(c, d)) } } })
+    models(n + " me", rawMe, me, accounts.compactMap { $0.cost?.me?.models })
     check("\(n) me 和顶层的工具一样、天一样", Set(me.byTool.keys) == Set(t.all.byTool.keys) && me.days.map(\.startEpoch) == t.all.days.map(\.startEpoch))
     check("\(n) 这台设备的不比所有设备的多", me.summary.weeksUSD <= t.all.summary.weeksUSD + 0.01 && me.summary.daysUSD <= t.all.summary.daysUSD + 0.01
           && zip(me.days, t.all.days).allSatisfy { $0.usd <= $1.usd + 0.01 })
@@ -359,11 +438,20 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
         for (i, d) in t.devices.enumerated() where !d.isMe {
             let shares = accounts.compactMap { a in a.cost.flatMap { c in c.device(d.id).flatMap { x in x.used ? (a.tool, c, x) : nil } } }
             part("\(n) devices[\(i)]", rawDevices?[i] ?? [:], d.part, shares.map { ($0.0, $0.2.summary, deviceDays($0.1, $0.2)) })
-            check("\(n) devices[\(i)] 用过账号，撤销了（哪个账号里说了就算）、很久没同步（每个账号里都是）", !shares.isEmpty
-                  && d.revoked == shares.contains { $0.2.revoked } && d.stale == shares.allSatisfy { $0.2.stale }, d.name)
+            models("\(n) devices[\(i)]", rawDevices?[i] ?? [:], d.part, shares.map { $0.2.models ?? [] })
+            if shares.isEmpty, let o = t.unattributed?.cost?.device(d.id) {
+                // 3.6.8 起：只有认不出是哪个账号的用量的设备（账号的几项都是 0）
+                check("\(n) devices[\(i)] 只有认不出账号的用量：没撤销，很久没同步和它传来的那一份一样", !d.revoked && d.stale == o.stale, d.name)
+            } else {
+                check("\(n) devices[\(i)] 用过账号，撤销了（哪个账号里说了就算）、很久没同步（每个账号里都是）", !shares.isEmpty
+                      && d.revoked == shares.contains { $0.2.revoked } && d.stale == shares.allSatisfy { $0.2.stale }, d.name)
+            }
             check("\(n) devices[\(i)] 和顶层的工具一样、天一样", Set(d.part.byTool.keys) == Set(t.all.byTool.keys)
                   && d.part.days.map(\.startEpoch) == t.all.days.map(\.startEpoch))
         }
+        let orphanOnly = t.devices.map { d in !d.isMe && !accounts.contains { $0.cost?.device(d.id)?.used == true } }
+        check("\(n) 只有认不出账号的用量的设备排在最后", !zip(orphanOnly, orphanOnly.dropFirst()).contains { $0 && !$1 },
+              t.devices.map(\.name).joined(separator: ","))
         let listed = Set(t.devices.map(\.id))
         check("\(n) 在账号里用过（used）的设备都在 devices 里", accounts.allSatisfy { a in a.cost?.devices.allSatisfy { !$0.used || listed.contains($0.id) } ?? true })
         let parts = t.devices.map(\.part.summary)
@@ -378,6 +466,30 @@ func costTotalInvariants(_ n: String, _ raw: [String: Any], _ doc: StateDoc, now
     if let u = raw["unattributed"], !isNull(u) {
         let o = u as? [String: Any]
         check("\(n) unattributed 是不小于 0 的金额和请求数", nonNegative(o?["days_usd"]) && wholeCount(o?["requests"]))
+        // 3.6.8 起：所有设备的（和账号的 cost 一样的样子，按日历周切），设备菜单里还没传过它的设备
+        if let rc = o?["cost"], !isNull(rc) {
+            let c = t.unattributed?.cost
+            costInvariants(n + " unattributed.cost", rc as? [String: Any] ?? [:], c, now: now)
+            if let c {
+                check("\(n) unattributed.cost 按日历周切，sync.missing 是空的", c.weeks.allSatisfy { $0.basis == .calendar }
+                      && (c.sync?.missing.isEmpty ?? true))
+                if raw["devices"] != nil {
+                    let listed = Set(t.devices.map(\.id))
+                    check("\(n) unattributed.cost 里的设备都在 devices 里（这台设备的 id 一样）", c.devices.allSatisfy { listed.contains($0.id) }
+                          && (c.me.map { $0.id == t.devices.first?.id } ?? true), c.devices.map(\.name).joined(separator: ","))
+                }
+            }
+        }
+        if let ru = o?["unsynced"] {
+            let list = ru as? [[String: Any]], ids = t.unattributed?.unsynced.map(\.id) ?? []
+            check("\(n) unattributed.unsynced 是对象数组，都有 id、名字", list != nil && list?.count == ids.count && (list ?? []).allSatisfy {
+                !(($0["id"] as? String) ?? "").isEmpty && !(($0["name"] as? String) ?? "").isEmpty
+            })
+            let sent = Set(t.unattributed?.cost?.devices.map(\.id) ?? [])
+            check("\(n) unsynced 是设备菜单里别的设备，不重复，不在 unattributed.cost 里", Set(ids).count == ids.count && ids.allSatisfy { id in
+                !sent.contains(id) && (raw["devices"] == nil || t.devices.contains { $0.id == id && !$0.isMe })
+            }, ids.joined(separator: ","))
+        }
     }
 }
 
@@ -1196,7 +1308,9 @@ func stateCounts(_ s: StateDoc) -> [Int] {
     return [s.tools.count, s.routing?.slots.count ?? -1, s.routing?.nodes.count ?? -1, s.notices.count, s.errors.count]
         + s.tools.map(\.accounts.count)
         + [costs.count, costs.map(\.weeks.count).reduce(0, +), costs.map(\.days.count).reduce(0, +), costs.map(\.devices.count).reduce(0, +),
-           s.costTotal?.all.days.count ?? -1, s.costTotal?.all.byTool.count ?? -1, s.costTotal?.me?.days.count ?? -1, s.costTotal?.me?.byTool.count ?? -1]
+           s.costTotal?.all.days.count ?? -1, s.costTotal?.all.byTool.count ?? -1, s.costTotal?.me?.days.count ?? -1, s.costTotal?.me?.byTool.count ?? -1,
+           costs.map { $0.models?.count ?? -1 }.reduce(0, +), s.costTotal?.all.models?.count ?? -1,
+           s.costTotal?.unattributed?.cost?.devices.count ?? -1, s.costTotal?.unattributed?.unsynced.count ?? -1]
 }
 
 /// 目录里每个文件按 kind（usage 旧版没有 kind 时看文件名）分派。
@@ -1370,6 +1484,10 @@ func auditState(_ s: StateDoc) -> [String] {
         }
     }
     a.add("cost_total.scan.state", s.costTotal?.scan.state)
+    if let c = s.costTotal?.unattributed?.cost {
+        for (i, w) in c.weeks.enumerated() { a.add("cost_total.unattributed.cost.weeks[\(i)].basis", w.basis) }
+        a.add("cost_total.unattributed.cost.sync.state", c.sync?.state)
+    }
     return a.unknown
 }
 

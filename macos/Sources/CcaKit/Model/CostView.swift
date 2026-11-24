@@ -215,4 +215,48 @@ enum CostChart {
     static func listsDevices(_ c: AccountCost?) -> Bool {
         (c?.devices.count ?? 0) >= 2
     }
+
+    // MARK: 按模型
+
+    /// 按模型分开的（cca 给的 `models`）：看所有设备是整个账号的，本机、另一台设备是那一台的（那台设备没有这个账号的记录时是空的）。
+    /// 旧版 cca 没给时是 nil（不显示按模型的那一块）
+    static func models(_ c: AccountCost, scope: CostScope) -> [CostModelRow]? {
+        guard let all = c.models else { return nil }
+        guard scope != .all else { return all }
+        return device(c, scope: scope)?.models ?? []
+    }
+
+    /// 按模型的那一块列哪几行：这一段（按周：列出的周期；按天：30 天）里有用量的。按周照 cca 排的顺序；按天按 30 天的金额、请求数
+    /// 从多到少重新排（一样多照 cca 的顺序），没有按模型记下的那一项照旧在最后
+    static func modelRows(_ rows: [CostModelRow], granularity g: CostGranularity) -> [CostModelRow] {
+        let shown = rows.filter { !$0.range(g).isEmpty }
+        guard g == .day else { return shown }
+        let named = shown.enumerated().filter { $0.element.model != nil }.sorted { a, b in
+            let x = a.element.days, y = b.element.days
+            if x.usd != y.usd { return x.usd > y.usd }
+            if x.requests != y.requests { return x.requests > y.requests }
+            return a.offset < b.offset
+        }
+        return named.map(\.element) + shown.filter { $0.model == nil }
+    }
+
+    /// 一行的条有多长（0…1）：这一行的金额占这几行加起来的多少；都没有金额（都没有公开价格）时都是 0
+    static func modelShare(_ row: CostModelRow, of rows: [CostModelRow], granularity g: CostGranularity) -> Double {
+        let total = rows.reduce(0) { $0 + $1.range(g).usd }
+        return total > 0 ? min(max(row.range(g).usd / total, 0), 1) : 0
+    }
+
+    // MARK: 认不出账号
+
+    /// 折合金额页「认不出账号」那一组看谁的：所有设备的（cca 给的 `unattributed.cost`），本机、另一台设备时那一台在里面才列
+    /// （它没有这种用量时不列这一组）。cca 没给（旧版 cca、哪台设备都没有这种用量）时是 nil
+    static func orphan(_ total: CostTotal?, scope: CostScope) -> AccountCost? {
+        guard let c = total?.unattributed?.cost else { return nil }
+        return scope == .all || device(c, scope: scope) != nil ? c : nil
+    }
+
+    /// 「认不出账号」那一组下面要不要列各台设备（看所有设备时）：有这种用量的设备至少两台
+    static func listsOrphanDevices(_ c: AccountCost?, scope: CostScope) -> Bool {
+        scope == .all && listsDevices(c)
+    }
 }

@@ -51,10 +51,10 @@ pub const CMDS: &[Cmd] = &[
 
 pub static COST_DIR: LazyLock<String> = LazyLock::new(|| path::join(&CCA_HOME, "cost"));
 /// 价格表核实的日期（platform.claude.com/docs/en/about-claude/pricing、developers.openai.com/api/docs/pricing）
-pub const COST_PRICES_DATE: &str = "2026-11-13";
-/// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/第几版"；/2：按会话开始的记录认账号、
-/// 记下诊断，从头重算一遍，最近 30 天认不出账号的原因才全）
-pub const COST_BUILD: &str = "2026-11-13/2";
+pub const COST_PRICES_DATE: &str = "2026-11-24";
+/// 价格表、读会话记录的规则变了要改：scan.json 的 build 对不上就从头重算（COST_PRICES_DATE + "/第几版"；2026-11-13/2：按会话开始的
+/// 记录认账号、记下诊断；2026-11-24/1：补上 GPT-6.2 的标价，以前记成没有标价的请求按新价重算）
+pub const COST_BUILD: &str = "2026-11-24/1";
 /// 后台统计最多隔这么久起一次
 pub const COST_EVERY: f64 = 300.0;
 /// 和别的设备同步最多隔这么久一次（cca cost sync --now 不等）
@@ -76,6 +76,13 @@ pub const COST_LABEL: &str = "cca-cost-v2";
 /// 3.6.5 及以前的标签：密钥还由登录身份派生（keyshare_keys），登录着那个账号的设备才解得开。只用来读还没升级的设备传的
 /// （Item::keys_v1）；各台设备都升级到 3.6.6 以后连同它们一起去掉
 pub const COST_LABEL_V1: &str = "cca-cost-v1";
+/// 认不出是哪个账号的用量（会话记录里没有账号信息：Claude App 里的会话、旧版 Claude Code）每台设备也传一份：每个 Team 里一个
+/// 单独的账号摘要（presence_aid(盐, COST_ORPHAN, "")，和账号的碰不上），密钥、明文的格式和账号的一样。sync.json、remote.json
+/// 里的键是 COST_ORPHAN_SLOT
+pub const COST_ORPHAN: &str = "cca-cost-orphan";
+const COST_ORPHAN_SLOT: &str = "orphan";
+/// 别的设备传来的按模型分的小时数据：一个小时最多这么多个模型（多了这一项整个不要）
+const COST_MODELS_HOUR: usize = 64;
 /// 明文补齐到这么长的整数倍
 pub const COST_PAD: usize = 1024;
 /// 服务器收的一份密文最长多少个字符（base64）
@@ -144,6 +151,8 @@ type OpenAiPrice = (f64, f64, Option<f64>, f64);
 /// gpt-5.6-sol 是促销价（官方写着到 2026-11-30，没写之后的价）：官方改价以后要按请求的时间分段、以前的照这个价，
 /// 不能直接换掉（换了价要改 COST_BUILD，从头重算时以前的用量也会按新价算）
 const OPENAI_PRICES: &[(&str, OpenAiPrice, Option<OpenAiPrice>)] = &[
+    ("gpt-6.2-astra", (8.0, 0.40, Some(10.0), 40.0), Some((16.0, 0.80, Some(20.0), 60.0))),
+    ("gpt-6.2-sol", (2.0, 0.10, Some(2.50), 10.0), Some((4.0, 0.20, Some(5.0), 15.0))),
     ("gpt-6.1-sol", (2.0, 0.10, Some(2.50), 10.0), Some((4.0, 0.20, Some(5.0), 15.0))),
     ("gpt-6-astra", (10.0, 1.0, Some(12.50), 50.0), Some((20.0, 2.0, Some(25.0), 75.0))),
     ("gpt-6.1-terra", (1.0, 0.05, Some(1.25), 5.0), Some((2.0, 0.10, Some(2.50), 7.50))),
@@ -157,8 +166,12 @@ const OPENAI_PRICES: &[(&str, OpenAiPrice, Option<OpenAiPrice>)] = &[
 const OPENAI_LONG: i64 = 272000;
 /// Codex 的 service_tier → 标价的倍数（Priority 改名叫 Fast；Flex 半价）
 const OPENAI_TIERS: &[(&str, f64)] = &[("priority", 2.0), ("fast", 2.0), ("flex", 0.5)];
-/// Ultrafast 只有这两个模型有标价（6 倍），别的按 Fast 算
-const OPENAI_ULTRA: &[(&str, f64)] = &[("gpt-6.1-sol", 6.0), ("gpt-6-astra", 6.0)];
+/// Ultrafast 有标价的模型：(模型, ULTRA_PROMO_END 以前的倍数, 以后的倍数)，别的按 Fast 算。GPT-6.2 的两个是促销价：官方写着
+/// 到 2027-02-28（太平洋时间）是 3 倍，2027-03-01 起 6 倍——按请求的时间分段，以前的照以前的倍数
+const OPENAI_ULTRA: &[(&str, f64, f64)] =
+    &[("gpt-6.1-sol", 6.0, 6.0), ("gpt-6-astra", 6.0, 6.0), ("gpt-6.2-astra", 3.0, 6.0), ("gpt-6.2-sol", 3.0, 6.0)];
+/// 2027-03-01 00:00 太平洋时间（PST）：GPT-6.2 的 Ultrafast 从这时起是 6 倍
+const ULTRA_PROMO_END: f64 = 1803888000.0;
 
 /// 会话记录里的模型名 → 价格表里的写法：小写，去掉 [1m] 这类后缀和末尾的日期
 pub fn cost_model(m: Option<&V>) -> String {
@@ -215,8 +228,9 @@ pub fn cost_claude(model: &str, u: &Dict) -> (Option<f64>, [i64; 4]) {
     (Some(micro + searches as f64 * CLAUDE_WEB_SEARCH), tok)
 }
 
-/// 一次 Codex 请求（token_count 的 last_token_usage：input_tokens 含缓存读、缓存写，output_tokens 含推理）：同 cost_claude
-pub fn cost_codex(model: &str, tier: Option<&str>, u: &Dict) -> (Option<f64>, [i64; 4]) {
+/// 一次 Codex 请求（token_count 的 last_token_usage：input_tokens 含缓存读、缓存写，output_tokens 含推理）：同 cost_claude。
+/// ts 是请求的时间（有的标价按时间分段：OPENAI_ULTRA）
+pub fn cost_codex(model: &str, tier: Option<&str>, ts: f64, u: &Dict) -> (Option<f64>, [i64; 4]) {
     let (inp, cached, write, out) = (
         tokens(u, "input_tokens"),
         tokens(u, "cached_input_tokens"),
@@ -233,7 +247,10 @@ pub fn cost_codex(model: &str, tier: Option<&str>, u: &Dict) -> (Option<f64>, [i
         _ => *base,
     };
     let k = if tier == Some("ultrafast") {
-        OPENAI_ULTRA.iter().find(|(name, _)| *name == model).map_or(2.0, |(_, k)| *k)
+        OPENAI_ULTRA
+            .iter()
+            .find(|(name, _, _)| *name == model)
+            .map_or(2.0, |(_, before, after)| if ts < ULTRA_PROMO_END { *before } else { *after })
     } else {
         OPENAI_TIERS.iter().find(|(name, _)| Some(*name) == tier).map_or(1.0, |(_, k)| *k)
     };
@@ -348,10 +365,28 @@ pub fn cost_rows_ok(rows: Option<&V>) -> bool {
     rows.and_then(|r| r.as_dict()).is_some_and(|rows| rows.items().iter().all(|(k, r)| COST_HOUR_RE.matches(k) && counts_ok(r)))
 }
 
+/// 模型名：会话记录里的写法（cost_model 给的：小写，不超过 64 个字符），可以是空的（会话记录里没写）
+fn model_name_ok(m: &str) -> bool {
+    text::len(m) <= 64 && text::isprintable(m)
+}
+
+/// 按模型分的小时数据 {小时: {模型: [7 个计数]}}（scan.json 的 hm 每个身份一份、om 是认不出是谁的；local.json 同样；传来的明文的 hm）。
+/// 一个小时最多 cap 个模型：这台设备自己的不限（限了的话，多出来时从头重算会一直重算下去）
+pub fn cost_mrows_ok(rows: Option<&V>, cap: usize) -> bool {
+    rows.and_then(|r| r.as_dict()).is_some_and(|rows| {
+        rows.items().iter().all(|(k, ms)| {
+            COST_HOUR_RE.matches(k)
+                && ms
+                    .as_dict()
+                    .is_some_and(|ms| ms.len() <= cap && ms.items().iter().all(|(m, r)| model_name_ok(m) && counts_ok(r)))
+        })
+    })
+}
+
 fn cost_fresh() -> Dict {
     dict! {
         "v" => 1, "build" => COST_BUILD, "done" => false, "files" => Dict::new(), "seen" => Dict::new(), "owners" => Dict::new(),
-        "h" => Dict::new(), "orphan" => Dict::new(), "um" => Dict::new(), "who" => Dict::new(),
+        "h" => Dict::new(), "orphan" => Dict::new(), "um" => Dict::new(), "who" => Dict::new(), "hm" => Dict::new(), "om" => Dict::new(),
     }
 }
 
@@ -380,20 +415,30 @@ fn rows_of(h: Option<V>) -> Vec<(std::rc::Rc<str>, V)> {
 }
 
 /// 从头重算时先留着以前算好的小时数据（重算完由 cost_keep_old 挑着用）：旧的 scan.json 里的（最多 COST_KEEP；上一次重算
-/// 没算完又要从头来时是它留着的那份），scan.json 没了（restore 的备份不带它）就用 local.json 里的（最近 COST_PUBLISH）
+/// 没算完又要从头来时是它留着的那份），scan.json 没了（restore 的备份不带它）就用 local.json 里的（最近 COST_PUBLISH）。
+/// 按模型分的（hm、om）一起留着（以前的版本没有）
 fn cost_rows_kept(j: &Dict, loc: &Dict) -> Dict {
     let src = j.dict("old").unwrap_or_else(|| j.clone());
-    let (mut h, mut orphan) = (src.get("h"), src.get("orphan"));
+    let (mut h, mut orphan, mut hm, mut om) = (src.get("h"), src.get("orphan"), src.get("hm"), src.get("om"));
     if !h.as_ref().and_then(|h| h.as_dict()).is_some_and(|h| !h.is_empty()) {
-        (h, orphan) = (loc.get("acc"), loc.get("orphan"));
+        (h, orphan, hm, om) = (loc.get("acc"), loc.get("orphan"), loc.get("hm"), loc.get("om"));
     }
-    let kept = Dict::new();
+    let (kept, kept_m) = (Dict::new(), Dict::new());
     for (i, r) in rows_of(h) {
         if cost_ident_ok(&i) && cost_rows_ok(Some(&r)) {
             kept.set(i, r);
         }
     }
-    dict! { "h" => kept, "orphan" => orphan.filter(|o| cost_rows_ok(Some(o))).unwrap_or_else(|| V::Dict(Dict::new())) }
+    for (i, r) in rows_of(hm) {
+        if cost_ident_ok(&i) && cost_mrows_ok(Some(&r), usize::MAX) {
+            kept_m.set(i, r);
+        }
+    }
+    let empty = || V::Dict(Dict::new());
+    dict! {
+        "h" => kept, "orphan" => orphan.filter(|o| cost_rows_ok(Some(o))).unwrap_or_else(empty),
+        "hm" => kept_m, "om" => om.filter(|o| cost_mrows_ok(Some(o), usize::MAX)).unwrap_or_else(empty),
+    }
 }
 
 /// `int(k)`：小时的写法核对过是 9～11 位数字
@@ -425,6 +470,19 @@ fn cost_keep_old(j: &Dict, s: &CostScan) {
             }
         }
     }
+    // 按模型分的照样（以前的版本没有 hm、om）
+    let hm = j.dict("hm").expect("scan.json 核对过");
+    for (ident, rows) in rows_of(old.get("hm")) {
+        if cost_ident_ok(&ident) && cost_mrows_ok(Some(&rows), usize::MAX) {
+            let tool = text::partition(&ident, ":").0;
+            let lo = s.oldest.iter().find(|(t, _)| *t == tool).map_or(far, |(_, m)| *m);
+            for (k, r) in rows.as_dict().expect("cost_mrows_ok 核对过").items() {
+                if hour_of(&k) < lo {
+                    sub_dict(&hm, &ident).set(k, r);
+                }
+            }
+        }
+    }
     // 认不出是谁的不分工具：几个工具的会话记录都全了以后才照重算的
     let lo = s.oldest.iter().map(|(_, m)| *m).reduce(f64::max).unwrap_or(far);
     let orphan = j.dict("orphan").expect("scan.json 核对过");
@@ -432,6 +490,14 @@ fn cost_keep_old(j: &Dict, s: &CostScan) {
         for (k, r) in rows.as_dict().expect("cost_rows_ok 核对过").items() {
             if hour_of(&k) < lo {
                 orphan.set(k, r);
+            }
+        }
+    }
+    let om = j.dict("om").expect("scan.json 核对过");
+    if let Some(rows) = old.get("om").filter(|r| cost_mrows_ok(Some(r), usize::MAX)) {
+        for (k, r) in rows.as_dict().expect("cost_mrows_ok 核对过").items() {
+            if hour_of(&k) < lo {
+                om.set(k, r);
             }
         }
     }
@@ -816,7 +882,7 @@ fn is_int(x: &V) -> bool {
 fn cost_load_scan() -> (Dict, Seen) {
     let (j, seen) = scan_load();
     let base = cost_fresh();
-    let dicts = ["files", "owners", "h", "orphan", "um", "who"];
+    let dicts = ["files", "owners", "h", "orphan", "um", "who", "hm", "om"];
     let shape = j.get("build").is_some_and(|b| b.as_str() == Some(COST_BUILD))
         && j.get("v").is_some_and(|v| v.isinstance_int())
         && j.get("done").is_some_and(|d| d.is_bool())
@@ -833,6 +899,8 @@ fn cost_load_scan() -> (Dict, Seen) {
             && all("owners", &|x| x.is_list())
             && cost_rows_ok(j.get("orphan").as_ref())
             && all("h", &|r| cost_rows_ok(Some(r)))
+            && all("hm", &|r| cost_mrows_ok(Some(r), usize::MAX))
+            && cost_mrows_ok(j.get("om").as_ref(), usize::MAX)
             && all("um", &|m| m.as_dict().is_some_and(|m| m.values().iter().all(is_int)))
     }) {
         j.set("who", cost_who_kept(&[&j]));
@@ -1228,8 +1296,20 @@ impl CostScan {
         } else {
             self.j.dict("h").expect("scan.json 核对过").setdefault(&ident, Dict::new()).as_dict().expect("scan.json 核对过")
         };
-        let b = rows.setdefault(&hour.to_string(), list![0, 0, 0, 0, 0, 0, 0]).as_list().expect("scan.json 核对过");
-        let bump = |i: usize, by: i64| b.set(i, b.at(i as isize).as_int().unwrap_or(0) + by);
+        let key = hour.to_string();
+        let b = rows.setdefault(&key, list![0, 0, 0, 0, 0, 0, 0]).as_list().expect("scan.json 核对过");
+        // 按模型分的同一份（hm 里每个身份一份，认不出是谁的在 om）
+        let mrows = if ident.is_empty() {
+            self.j.dict("om").expect("scan.json 核对过")
+        } else {
+            sub_dict(&self.j.dict("hm").expect("scan.json 核对过"), &ident)
+        };
+        let mb = sub_dict(&mrows, &key).setdefault(model, list![0, 0, 0, 0, 0, 0, 0]).as_list().expect("scan.json 核对过");
+        let bump = |i: usize, by: i64| {
+            for r in [&b, &mb] {
+                r.set(i, r.at(i as isize).as_int().unwrap_or(0) + by);
+            }
+        };
         bump(1, 1);
         match micro {
             None => {
@@ -1438,7 +1518,7 @@ impl CostScan {
             let key = (b'x', sha1_head(format!("{}\0{}", stamp.unwrap_or(V::None).py_str(), tot).as_bytes()));
             let model = cur.get("model").filter(|m| m.truthy()).map_or(String::new(), |m| m.py_str());
             let tier = cur.get("tier");
-            let (micro, tok) = cost_codex(&model, tier.as_ref().and_then(|t| t.as_str()), &last);
+            let (micro, tok) = cost_codex(&model, tier.as_ref().and_then(|t| t.as_str()), ts, &last);
             self.add("codex", &cur.get("who").unwrap_or(V::None), Some(ts), key, micro, tok, &model);
         } else if has(head, b"\"session_meta\"") {
             if cur.has("meta") {
@@ -1597,9 +1677,11 @@ fn cost_scan(j: &Dict, seen: Seen, now: f64, checkpoint: &mut dyn FnMut(&Seen) -
 /// scan.json 只留 COST_KEEP 的小时数据、COST_SEEN 的去重记录
 fn cost_prune(j: &Dict, seen: &mut Seen, now: f64) {
     let lo = now - COST_KEEP;
-    let h = j.dict("h").expect("scan.json 核对过");
+    let (h, hm) = (j.dict("h").expect("scan.json 核对过"), j.dict("hm").expect("scan.json 核对过"));
     let mut tables: Vec<Dict> = h.values().iter().filter_map(|r| r.as_dict()).collect();
     tables.push(j.dict("orphan").expect("scan.json 核对过"));
+    tables.extend(hm.values().iter().filter_map(|r| r.as_dict()));
+    tables.push(j.dict("om").expect("scan.json 核对过"));
     for rows in tables {
         for k in rows.keys() {
             if hour_of(&k) < lo {
@@ -1614,6 +1696,13 @@ fn cost_prune(j: &Dict, seen: &mut Seen, now: f64) {
         }
     }
     j.set("h", kept);
+    let kept_m = Dict::new();
+    for (i, r) in hm.items() {
+        if r.truthy() {
+            kept_m.set(i, r);
+        }
+    }
+    j.set("hm", kept_m);
     seen.retain(now - COST_SEEN - 3600.0);
     let um = Dict::new();
     for (i, ms) in j.dict("um").expect("scan.json 核对过").items() {
@@ -1670,7 +1759,8 @@ fn cost_who(j: &Dict) {
     }
 }
 
-/// local.json（_gui state、同步读它）：最近 COST_PUBLISH 的小时数据、身份 → 邮箱、没有标价的模型、认不出是谁的最近 31 天。
+/// local.json（_gui state、同步读它）：最近 COST_PUBLISH 的小时数据（acc；按模型分的另一份在 hm）、身份 → 邮箱、没有标价的模型、
+/// 认不出是谁的（orphan，按模型分的在 om；3.6.7 及以前只留最近 31 天：只给这台设备说一句，现在也传给别的设备）。
 /// 内容变了才写（App 看它变了就重读 state）
 fn cost_publish(j: &Dict, now: f64) -> R<()> {
     let lo = now - COST_PUBLISH;
@@ -1705,9 +1795,16 @@ fn cost_publish(j: &Dict, now: f64) -> R<()> {
             um.set(i, V::List(List::from_vec(models.into_iter().map(V::from).collect())));
         }
     }
+    let hm = Dict::new();
+    for (i, rows) in j.dict("hm").expect("scan.json 核对过").items() {
+        let r = recent(&rows, lo);
+        if !r.is_empty() {
+            hm.set(i, r);
+        }
+    }
     let doc = dict! {
-        "v" => 1, "build" => COST_BUILD, "who" => j.at("who"), "acc" => acc, "um" => um,
-        "orphan" => recent(&j.at("orphan"), now - (COST_DAYS + 1) as f64 * 86400.0),
+        "v" => 1, "build" => COST_BUILD, "who" => j.at("who"), "acc" => acc, "um" => um, "orphan" => recent(&j.at("orphan"), lo),
+        "hm" => hm, "om" => recent(&j.at("om"), lo),
     };
     if let Some(diag) = cost_diag_view(j, now) {
         doc.set("diag", diag);
@@ -1801,7 +1898,8 @@ fn cost_seal(keys: &Keys, aid: &str, fp: &str, doc: &Dict) -> R<Dict> {
 }
 
 /// 别的设备传来的明文：{"v": 1, "at": 时间, "h": {小时: [7 个计数]}, "um": [没有标价的模型…], "dg": 诊断（cost_dg；以前的版本没有）,
-/// "dv": 那台机器的 device_id（以前的版本、没有 device_id 的设备没有）}；格式不对是 None（dg、dv 不对只是不要它）
+/// "dv": 那台机器的 device_id（以前的版本、没有 device_id 的设备没有）, "hm": 按模型分的 {小时: {模型: [7 个计数]}}（3.6.7 及以前没有）}；
+/// 格式不对是 None（dg、dv、hm 不对只是不要它）
 fn cost_doc(d: &V, now: f64) -> Option<Dict> {
     let d = d.as_dict()?;
     let at = d.get("at").filter(is_num)?.as_num()?;
@@ -1825,6 +1923,11 @@ fn cost_doc(d: &V, now: f64) -> Option<Dict> {
     if let Some(dv) = d.str("dv").filter(|v| DV_RE.fullmatch(v).is_some()) {
         out.set("dv", &*dv);
     }
+    let hm =
+        d.get("hm").filter(|x| cost_mrows_ok(Some(x), COST_MODELS_HOUR) && x.as_dict().is_some_and(|x| x.len() <= 24 * 7 * 20));
+    if let Some(hm) = hm {
+        out.set("hm", hm);
+    }
     Some(out)
 }
 
@@ -1847,10 +1950,20 @@ fn cost_open(keys: &Keys, label: &str, aid: &str, fp: &str, blob: &V, now: f64) 
     Ok(if n <= body.len() && !tail { cost_doc(&doc, now) } else { None })
 }
 
-/// 这台设备上这个账号的小时数据：这个工具的、登录的邮箱是它的身份加起来（新的列表，可以改）；和没有标价的模型
-pub fn cost_content(local: &Dict, tool: &Tool, email: &str) -> (Dict, Vec<String>) {
+/// 把一个小时的 7 个计数（核对过的）加进 into 的 k 那一项
+fn add_counts(into: &Dict, k: &str, r: &V) {
+    let r = r.as_list().expect("核对过");
+    let b = into.setdefault(k, list![0, 0, 0, 0, 0, 0, 0]).as_list().expect("刚放进去的");
+    for i in 0..7 {
+        b.set(i, b.at(i as isize).as_int().unwrap_or(0) + r.at(i as isize).as_int().unwrap_or(0));
+    }
+}
+
+/// 这台设备上这个账号的小时数据：这个工具的、登录的邮箱是它的身份加起来（新的，可以改）；按模型分的同样加起来
+/// （local.json 的 hm；以前的版本写的 local.json 没有，是空的）；和没有标价的模型
+pub fn cost_content(local: &Dict, tool: &Tool, email: &str) -> (Dict, Dict, Vec<String>) {
     let who = cost_who_kept(&[local]);
-    let h = Dict::new();
+    let (h, hm) = (Dict::new(), Dict::new());
     let mut um: Vec<String> = Vec::new();
     let prefix = format!("{}:", tool.name);
     // (local.get('acc') or {}).items()
@@ -1862,10 +1975,13 @@ pub fn cost_content(local: &Dict, tool: &Tool, email: &str) -> (Dict, Vec<String
     for (ident, rows) in acc {
         if ident.starts_with(&prefix) && who.get(&ident).is_some_and(|e| e.as_str() == Some(email)) && cost_rows_ok(Some(&rows)) {
             for (k, r) in rows.as_dict().expect("cost_rows_ok 核对过").items() {
-                let r = r.as_list().expect("cost_rows_ok 核对过");
-                let b = h.setdefault(&k, list![0, 0, 0, 0, 0, 0, 0]).as_list().expect("刚放进去的");
-                for i in 0..7 {
-                    b.set(i, b.at(i as isize).as_int().unwrap_or(0) + r.at(i as isize).as_int().unwrap_or(0));
+                add_counts(&h, &k, &r);
+            }
+            let mrows = local.dict("hm").and_then(|x| x.get(&ident)).filter(|r| cost_mrows_ok(Some(r), usize::MAX));
+            for (k, ms) in mrows.and_then(|r| r.as_dict()).map(|r| r.items()).unwrap_or_default() {
+                let dst = sub_dict(&hm, &k);
+                for (m, r) in ms.as_dict().expect("cost_mrows_ok 核对过").items() {
+                    add_counts(&dst, &m, &r);
                 }
             }
             // (local.get('um') or {}).get(ident) or []
@@ -1889,13 +2005,32 @@ pub fn cost_content(local: &Dict, tool: &Tool, email: &str) -> (Dict, Vec<String
         }
     }
     um.sort();
-    (h, um)
+    (h, hm, um)
+}
+
+/// 这台设备认不出是哪个账号的小时数据：local.json 的 orphan、按模型分的 om（格式不对的当没有）；和其中没有标价的模型
+fn orphan_content(local: &Dict) -> (Dict, Dict, Vec<String>) {
+    let pick = |k: &str, ok: &dyn Fn(&V) -> bool| local.get(k).filter(|x| ok(x)).and_then(|x| x.as_dict()).unwrap_or_default();
+    let h = pick("orphan", &|x| cost_rows_ok(Some(x)));
+    let hm = pick("om", &|x| cost_mrows_ok(Some(x), usize::MAX));
+    let mut um: Vec<String> = Vec::new();
+    for (_, ms) in hm.items() {
+        for (m, r) in ms.as_dict().expect("cost_mrows_ok 核对过").items() {
+            let unpriced = r.as_list().is_some_and(|r| r.at(6).as_int().unwrap_or(0) > 0);
+            if unpriced && !m.is_empty() && !um.iter().any(|x| **x == *m) {
+                um.push(m.to_string());
+            }
+        }
+    }
+    um.sort();
+    (h, hm, um)
 }
 
 /// 要同步的账号：(工具, 邮箱小写, slot（工具名:邮箱，sync.json、remote.json 里的键）, 账号摘要, 密钥（Team 共用的），
-/// 3.6.5 及以前的密钥（这台设备登录着这个账号时才有：还没升级的设备传的靠它解；有它也说明登录着）)
+/// 3.6.5 及以前的密钥（这台设备登录着这个账号时才有：还没升级的设备传的靠它解；有它也说明登录着）)。
+/// 认不出是哪个账号的那一份（cost_orphan_item）也是一项：工具是 None，邮箱是空的，slot 是 COST_ORPHAN_SLOT
 struct Item {
-    tool: &'static Tool,
+    tool: Option<&'static Tool>,
     email: String,
     slot: String,
     aid: String,
@@ -1932,7 +2067,7 @@ fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
             share_ident(tool, &key)
         };
         out.push(Item {
-            tool,
+            tool: Some(tool),
             slot: format!("{}:{}", tool.name, email),
             aid: presence_aid(&salt, tool.name, &email)?,
             keys: team_keys(&salt, COST_LABEL)?,
@@ -1941,6 +2076,19 @@ fn cost_items(hub: &Hub) -> R<Option<Vec<Item>>> {
         });
     }
     Ok(Some(out))
+}
+
+/// 认不出是哪个账号的那一份（COST_ORPHAN）：跟着这台服务器的账号一起同步，密钥是 Team 共用的那一把
+fn cost_orphan_item(hub: &Hub) -> R<Item> {
+    let salt = hub.salt();
+    Ok(Item {
+        tool: None,
+        email: String::new(),
+        slot: COST_ORPHAN_SLOT.to_string(),
+        aid: presence_aid(&salt, COST_ORPHAN, "")?,
+        keys: team_keys(&salt, COST_LABEL)?,
+        keys_v1: None,
+    })
 }
 
 /// 和别的设备交换：用得了的每一台同步服务器各一轮（cost_hub）。返回 PROTOCOL 3.5 的 sync：{"state", "message", "checked_epoch"} 是
@@ -1990,7 +2138,7 @@ fn cost_hub(hub: &Hub, force: bool) -> R<Dict> {
         };
         return Ok(res(state, if bad { st.get("error") } else { None }));
     }
-    let Some(items) = cost_items(hub)? else { return Ok(res("error", Some(V::from("读不了账号表")))) };
+    let Some(mut items) = cost_items(hub)? else { return Ok(res("error", Some(V::from("读不了账号表")))) };
     if items.is_empty() {
         // 没有要同步的账号了（Team 不再给、移走了）：上次没同步成的原因不再算数（不然 config.hubs 一直说没同步成）
         if st.str("state").as_deref() == Some("error") {
@@ -2000,6 +2148,8 @@ fn cost_hub(hub: &Hub, force: bool) -> R<Dict> {
         }
         return Ok(res("skipped", None));
     }
+    // 认不出是哪个账号的那一份：Team 给了这台设备账号时才传（各个这样的 Team 各传一份，别的设备按机器的标识认成一台）
+    items.push(cost_orphan_item(hub)?);
     let rem = Some(cost_json(&remote_file)).filter(|r| !r.is_empty()).unwrap_or_else(|| dict! { "v" => 1, "acc" => Dict::new() });
     if rem.dict("acc").is_none() {
         rem.set("acc", Dict::new());
@@ -2067,20 +2217,28 @@ fn cost_round(cfg: &Dict, items: &[Item], local: &Dict, st: &Dict, rem: &Dict, n
             racc.set(x.slot.as_str(), new);
         }
         a.set("missing", cost_missing_view(missing.get(&x.aid), now));
-        let (h, um) = cost_content(local, x.tool, &x.email);
-        if h.is_empty() && x.keys_v1.is_none() {
+        let (h, hm, um) = match x.tool {
+            Some(tool) => cost_content(local, tool, &x.email),
+            None => orphan_content(local),
+        };
+        if x.tool.is_some() && h.is_empty() && x.keys_v1.is_none() {
             // 自己的那一份只传用过（有记录）或者登录着的账号：没用过的传上去是空的，别的设备的账号页里会多出一台金额是 0 的
-            // （带着这台设备的诊断）；服务器给每台设备存的账号也有上限（COST_SLOTS）
+            // （带着这台设备的诊断）；服务器给每台设备存的账号也有上限（COST_SLOTS）。认不出是谁的那一份空的也传：
+            // 别的设备据此分得清这台设备没有认不出的用量，还是 cca 太旧、不传
             continue;
         }
-        let recent = Dict::new();
-        for (k, v) in h.items() {
-            if hour_of(&k) >= now - COST_PUBLISH {
-                recent.set(k, v);
+        let recent = |rows: &Dict| -> Dict {
+            let out = Dict::new();
+            for (k, v) in rows.items() {
+                if hour_of(&k) >= now - COST_PUBLISH {
+                    out.set(k, v);
+                }
             }
-        }
+            out
+        };
         let doc = dict! {
-            "h" => recent, "um" => V::List(List::from_vec(um.iter().map(|m| V::from(m.as_str())).collect())), "dg" => cost_dg(local, now),
+            "h" => recent(&h), "hm" => recent(&hm), "um" => V::List(List::from_vec(um.iter().map(|m| V::from(m.as_str())).collect())),
+            "dg" => cost_dg(local, now),
         };
         if let Some(dv) = &dv {
             doc.set("dv", dv.as_str()); // 这台机器（别的设备据此把它在两台服务器上的认成一台）
@@ -2167,7 +2325,7 @@ fn cost_take(cfg: &Dict, rows: Option<V>, x: &Item, last: &Dict, now: f64) -> R<
         let e = if let Some(blob) = row.get("blob").filter(|b| b.is_dict()) {
             let e = match x.open(&fp, &blob, now)? {
                 Some(doc) => doc,
-                None if x.keys_v1.is_none() => {
+                None if x.keys_v1.is_none() && x.tool.is_some() => {
                     let e = last.dict(&fp).filter(|p| p.has("h")).map(|p| p.copy()).unwrap_or_default();
                     e.set("no_v1", true);
                     e
@@ -2207,7 +2365,8 @@ fn cost_missing_view(ms: Option<V>, now: f64) -> V {
 }
 
 /// 封好这台设备这个账号的数据（cost_seal）；太大了（很少见：14 周里小时很多、又压缩不了）就去掉最早的四分之一的小时，
-/// 直到放得下 COST_BLOB_MAX
+/// 直到放得下 COST_BLOB_MAX。先去掉按模型分的（hm：只是明细，合计在 h 里；别的设备那里，少了的那一部分算作没有按模型记下的），
+/// 都去掉了还放不下再去掉 h 的
 fn cost_seal_fit(keys: &Keys, aid: &str, fp: &str, doc: &Dict, now: f64) -> R<Dict> {
     let doc = doc.copy();
     let seal = |doc: &Dict| -> R<Dict> {
@@ -2218,17 +2377,18 @@ fn cost_seal_fit(keys: &Keys, aid: &str, fp: &str, doc: &Dict, now: f64) -> R<Di
     };
     let mut blob = seal(&doc)?;
     loop {
-        let h = doc.dict("h").expect("调用的地方给的");
-        if text::len(&blob.at("c").py_str()) <= COST_BLOB_MAX || h.is_empty() {
+        let (h, hm) = (doc.dict("h").expect("调用的地方给的"), doc.dict("hm").unwrap_or_default());
+        if text::len(&blob.at("c").py_str()) <= COST_BLOB_MAX || (h.is_empty() && hm.is_empty()) {
             return Ok(blob);
         }
-        let mut ks = h.keys();
+        let (which, rows) = if hm.is_empty() { ("h", h) } else { ("hm", hm) };
+        let mut ks = rows.keys();
         ks.sort_by_key(|k| text::to_int(k).unwrap_or(0));
         let kept = Dict::new();
         for k in &ks[ks.len() / 4 + 1..] {
-            kept.set(k.clone(), h.at(k));
+            kept.set(k.clone(), rows.at(k));
         }
-        doc.set("h", kept);
+        doc.set(which, kept);
         blob = seal(&doc)?;
     }
 }
@@ -2518,6 +2678,8 @@ struct Money {
     average: Option<i128>,
     average_day: Option<i128>,
     day_list: Vec<i128>,
+    /// 按模型分的两段（view 算好以后放进来）
+    models: Models,
 }
 
 /// 一方（整个账号或者一台设备）加起来：(百万分之一美元的几项, PROTOCOL 2.2 的 summary)。wr、dr 是按周、按天的各项；good、
@@ -2538,6 +2700,7 @@ fn cost_summary(wr: &[Counts], dr: &[Counts], good: &[usize], good_days: &[usize
         average: avg(wr, good),
         average_day: avg(dr, good_days),
         day_list: dr.iter().map(|r| r[0]).collect(),
+        models: Models::new(),
     };
     let summary = dict! {
         "weeks_usd" => usd(m.weeks), "current_usd" => usd(m.current), "average_usd" => usd_opt(m.average), "average_weeks" => good.len(),
@@ -2563,18 +2726,125 @@ fn cost_period_view(p: &Period, t_: &Counts, last: bool, since: f64) -> Dict {
     }
 }
 
+/// 核对过的 [7 个计数] → 计数
+fn counts_of(r: &V) -> Counts {
+    let r = r.as_list().expect("核对过");
+    let mut c = [0i128; 7];
+    for (x, slot) in c.iter_mut().enumerate() {
+        *slot = r.at(x as isize).as_int().unwrap_or(0) as i128;
+    }
+    c
+}
+
 /// 核对过的 {小时: [7 个计数]} → 按小时查的表
 fn hours_of(rows: &Dict) -> Hours {
     let mut h = Hours::new();
     for (k, r) in rows.items() {
-        let r = r.as_list().expect("cost_rows_ok 核对过");
-        let mut c = [0i128; 7];
-        for (x, slot) in c.iter_mut().enumerate() {
-            *slot = r.at(x as isize).as_int().unwrap_or(0) as i128;
-        }
-        h.insert(text::to_int(&k).unwrap_or(0), c);
+        h.insert(text::to_int(&k).unwrap_or(0), counts_of(&r));
     }
     h
+}
+
+/// {小时: [(模型, 7 个计数)…]}：按模型分的小时数据
+type ModelHours = std::collections::BTreeMap<i64, Vec<(String, Counts)>>;
+
+/// 核对过的 {小时: {模型: [7 个计数]}} → 按小时查的表
+fn mhours_of(rows: &Dict) -> ModelHours {
+    let mut h = ModelHours::new();
+    for (k, ms) in rows.items() {
+        let ms = ms.as_dict().expect("cost_mrows_ok 核对过");
+        h.insert(text::to_int(&k).unwrap_or(0), ms.items().into_iter().map(|(m, r)| (m.to_string(), counts_of(&r))).collect());
+    }
+    h
+}
+
+/// 按模型加起来的两段（列出的周期、按天的那 30 天）：模型 → 两段各 7 个计数。None 是没有按模型记下的那一部分（合计减去各个模型的：
+/// 旧版 cca 的设备、以前的版本算的、传的时候为了放得下去掉了的）
+type Models = std::collections::BTreeMap<Option<String>, [Counts; 2]>;
+
+/// 按模型分的小时数据在这几个首尾相接的时段里加起来：跨过边界的小时和 cost_bin 一样整个算在中点所在的那一项
+fn cost_bin_models(periods: &[Period], hm: &ModelHours) -> std::collections::BTreeMap<String, Counts> {
+    let mut out: std::collections::BTreeMap<String, Counts> = std::collections::BTreeMap::new();
+    for (k, ms) in hm {
+        let mid = (*k + 1800) as f64;
+        let after = periods.partition_point(|p| p.s() <= mid);
+        if after > 0 && mid < periods[after - 1].e() {
+            for (m, r) in ms {
+                let b = out.entry(m.clone()).or_insert([0; 7]);
+                for x in 0..7 {
+                    b[x] += r[x];
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 一台设备按模型分的两段：各个模型的，和这一段的合计（wk、dy：它按周、按天的各项）减去各个模型的那一部分（None；不会是负的）
+fn device_models(weeks: &[Period], days: &[Period], hm: &ModelHours, wk: &[Counts], dy: &[Counts]) -> Models {
+    let mut out = Models::new();
+    for (n, (periods, rows)) in [(weeks, wk), (days, dy)].into_iter().enumerate() {
+        let mut rest = [0i128; 7];
+        for r in rows {
+            for x in 0..7 {
+                rest[x] += r[x];
+            }
+        }
+        for (m, c) in cost_bin_models(periods, hm) {
+            for x in 0..7 {
+                rest[x] -= c[x];
+            }
+            out.entry(Some(m)).or_insert([[0; 7]; 2])[n] = c;
+        }
+        if rest.iter().any(|v| *v > 0) {
+            out.entry(None).or_insert([[0; 7]; 2])[n] = rest.map(|v| v.max(0));
+        }
+    }
+    out
+}
+
+/// 把 m 加进 into
+fn add_models(into: &mut Models, m: &Models) {
+    for (k, v) in m {
+        let b = into.entry(k.clone()).or_insert([[0; 7]; 2]);
+        for n in 0..2 {
+            for x in 0..7 {
+                b[n][x] += v[n][x];
+            }
+        }
+    }
+}
+
+/// PROTOCOL 2.2 的 models[]：每个模型（没有按模型记下的那一部分 model 是 null）在列出的周期（weeks）、按天的那 30 天（days）里
+/// 折成多少美元、几次请求、其中没有标价的几次；tokens 只给整个账号的。按列出的周期的金额、请求数从多到少，再按 30 天的金额、
+/// 模型名排，没有按模型记下的在最后；两段里都没有请求、没有金额的不列
+fn models_view(ms: &Models, tokens: bool) -> Vec<V> {
+    let mut rows: Vec<(&Option<String>, &[Counts; 2])> =
+        ms.iter().filter(|(_, c)| c.iter().any(|c| c[1] != 0 || c[0] != 0)).collect();
+    rows.sort_by(|a, b| {
+        a.0.is_none()
+            .cmp(&b.0.is_none())
+            .then(b.1[0][0].cmp(&a.1[0][0]))
+            .then(b.1[0][1].cmp(&a.1[0][1]))
+            .then(b.1[1][0].cmp(&a.1[1][0]))
+            .then(a.0.cmp(b.0))
+    });
+    let range = |c: &Counts| -> Dict {
+        let d = dict! { "usd" => usd(c[0]), "requests" => count_v(c[1]), "unpriced_requests" => count_v(c[6]) };
+        if tokens {
+            d.set(
+                "tokens",
+                dict! { "input" => count_v(c[2]), "output" => count_v(c[3]), "cache_read" => count_v(c[4]), "cache_write" => count_v(c[5]) },
+            );
+        }
+        d
+    };
+    rows.into_iter()
+        .map(|(m, c)| {
+            let model = m.as_deref().map_or(V::None, V::from);
+            V::Dict(dict! { "model" => model, "weeks" => range(&c[0]), "days" => range(&c[1]) })
+        })
+        .collect()
 }
 
 /// 有数据的一台设备
@@ -2585,6 +2855,8 @@ struct Device {
     synced_epoch: V,
     stale: bool,
     h: Hours,
+    /// 按模型分的（旧版 cca 的设备没传：空的，都算作没有按模型记下的）
+    hm: ModelHours,
     /// 它的诊断（cost_diag_ok 的样子；这台设备的是 local.json 的 diag 加上 cca 的版本）
     diag: Option<Dict>,
 }
@@ -2756,7 +3028,34 @@ impl CostView {
     /// device_id）并进这台。从 Team 里移除了的设备（以前同步来的，标着 revoked）不算：服务器已经删了它传的。
     /// 第二个返回值：没有标价的模型（排好序）
     fn devices(&self, tool: &Tool, email: &str, slot: &str, hub: Option<&HubCost>) -> (Vec<Device>, Vec<String>) {
-        let (h, mut ums) = cost_content(&self.local, tool, email);
+        let (h, hm, ums) = cost_content(&self.local, tool, email);
+        let entries = hub.map(|hub| self.remote_entries(hub, slot)).unwrap_or_default();
+        self.devices_of(&h, &hm, ums, entries)
+    }
+
+    /// 别的设备经这台服务器传来的这一份（remote.json 的 acc 里 slot 那一项）：[(设备指纹, 那一项)]
+    fn remote_entries(&self, hub: &HubCost, slot: &str) -> Vec<(std::rc::Rc<str>, V)> {
+        // ((remote.get('acc') or {}).get(slot) or {}).items()
+        let acc = match hub.remote.get("acc").filter(|a| a.truthy()) {
+            None => None,
+            Some(V::Dict(acc)) => acc.get(slot).filter(|s| s.truthy()),
+            Some(other) => panic!("AttributeError: remote.json 的 acc 是 {}", other.py_repr()),
+        };
+        match acc {
+            None => Vec::new(),
+            Some(V::Dict(s)) => s.items(),
+            Some(other) => panic!("AttributeError: remote.json 里 {slot} 那一项是 {}", other.py_repr()),
+        }
+    }
+
+    /// devices 的后一半：h、hm、ums 是这台设备的，entries 是别的设备传来的（remote_entries；认不出是谁的那一份来自几台服务器）
+    fn devices_of(
+        &self,
+        h: &Dict,
+        hm: &Dict,
+        mut ums: Vec<String>,
+        entries: Vec<(std::rc::Rc<str>, V)>,
+    ) -> (Vec<Device>, Vec<String>) {
         let me_id = self.me_id();
         let me_diag = cost_diag_ok(self.local.get("diag"), self.now).unwrap_or_else(|| dict! { "why" => List::new() });
         if let Some(v) = getenv("CCA_VERSION").filter(|v| version_ok(v)) {
@@ -2768,21 +3067,11 @@ impl CostView {
             me: true,
             synced_epoch: V::from(self.updated),
             stale: false,
-            h: hours_of(&h),
+            h: hours_of(h),
+            hm: mhours_of(hm),
             diag: Some(me_diag),
         }];
-        if let Some(hub) = hub {
-            // ((remote.get('acc') or {}).get(slot) or {}).items()
-            let acc = match hub.remote.get("acc").filter(|a| a.truthy()) {
-                None => None,
-                Some(V::Dict(acc)) => acc.get(slot).filter(|s| s.truthy()),
-                Some(other) => panic!("AttributeError: remote.json 的 acc 是 {}", other.py_repr()),
-            };
-            let entries = match acc {
-                None => Vec::new(),
-                Some(V::Dict(s)) => s.items(),
-                Some(other) => panic!("AttributeError: remote.json 里 {slot} 那一项是 {}", other.py_repr()),
-            };
+        {
             for (fp, e) in entries {
                 let Some(e) = e.as_dict().filter(|e| !matches!(e.get("revoked"), Some(V::Bool(true)))) else { continue };
                 let (Some(rows), Some(at), Some(name)) =
@@ -2797,6 +3086,11 @@ impl CostView {
                     stale: self.now - at.as_num().unwrap_or(0.0) > COST_STALE,
                     synced_epoch: at,
                     h: hours_of(&rows.as_dict().expect("cost_rows_ok 核对过")),
+                    hm: e
+                        .get("hm")
+                        .filter(|x| cost_mrows_ok(Some(x), COST_MODELS_HOUR))
+                        .and_then(|x| x.as_dict())
+                        .map_or_else(ModelHours::new, |x| mhours_of(&x)),
                     diag: cost_diag_ok(e.get("dg"), self.now),
                 });
                 // e.get('um') or []
@@ -2838,6 +3132,21 @@ impl CostView {
                     b[x] += r[x];
                 }
             }
+            let extra_m: Vec<(i64, Vec<(String, Counts)>)> =
+                devs[i].hm.iter().filter(|(k, _)| first.is_none_or(|f| **k < f)).map(|(k, r)| (*k, r.clone())).collect();
+            for (k, ms) in extra_m {
+                let b = devs[a].hm.entry(k).or_default();
+                for (m, r) in ms {
+                    match b.iter_mut().find(|(x, _)| *x == m) {
+                        Some((_, c)) => {
+                            for x in 0..7 {
+                                c[x] += r[x];
+                            }
+                        }
+                        None => b.push((m, r)),
+                    }
+                }
+            }
         }
         let mut out = Vec::new();
         for (i, d) in devs.into_iter().enumerate() {
@@ -2862,17 +3171,39 @@ impl CostView {
         let (devs, ums) = self.devices(tool, &email, &slot, if share { self.hub(kind) } else { None });
         let quota = weeks_view.filter(|w| !w.is_empty()).map(|w| w.at("weeks"));
         let weeks = cost_weeks(quota.as_ref(), self.now);
-        let wk: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&weeks, &d.h)).collect();
+        match self.view(&devs, &ums, &weeks, sync, true) {
+            Some((out, m, shares)) => {
+                self.accounts.push((tool.name, Some(m), shares));
+                V::Dict(out)
+            }
+            None => {
+                self.accounts.push((tool.name, None, Vec::new()));
+                V::None
+            }
+        }
+    }
+
+    /// 一个账号（或者认不出是哪个账号的那些）的 cost，PROTOCOL 2.2 的样子：devs 是有数据的设备（devices 给的），ums 是没有标价的模型，
+    /// weeks 是按周的时段。还没有任何记录是 None；不然还给整个的各项、用过它的各台设备的那一份（cost_total 按设备加起来）。
+    /// diag_rows：没有数据、最近却有回复认不出账号的别的设备也列出来（账号的：它用这个账号的可能漏了；认不出是谁的那一份不用）
+    fn view(
+        &self,
+        devs: &[Device],
+        ums: &[String],
+        weeks: &[Period],
+        sync: Dict,
+        diag_rows: bool,
+    ) -> Option<(Dict, Money, Vec<DevMoney>)> {
+        let wk: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(weeks, &d.h)).collect();
         let dy: Vec<Vec<Counts>> = devs.iter().map(|d| cost_bin(&self.days, &d.h)).collect();
         let requests = |rows: &[Counts]| rows.iter().map(|r| r[1]).sum::<i128>();
         let data: Vec<usize> = (0..devs.len()).filter(|i| requests(&wk[*i]) != 0 || requests(&dy[*i]) != 0).collect();
         if data.is_empty() {
-            self.accounts.push((tool.name, None, Vec::new()));
-            return V::None;
+            return None;
         }
         // 这个账号没有数据、最近却有回复认不出账号的别的设备也列出来（金额是 0，带着诊断：它用这个账号的可能漏了）
         let keep: Vec<usize> =
-            (0..devs.len()).filter(|i| data.contains(i) || (!devs[*i].me && self.warns(&devs[*i].diag))).collect();
+            (0..devs.len()).filter(|i| data.contains(i) || (diag_rows && !devs[*i].me && self.warns(&devs[*i].diag))).collect();
         // data 里的设备都有数据
         let since = data.iter().filter_map(|i| devs[*i].h.keys().next()).min().copied().expect("data 里的设备都有数据") as f64;
         let good: Vec<usize> = weeks
@@ -2897,18 +3228,23 @@ impl CostView {
                 .collect()
         };
         let (wsum, dsum) = (total(&wk, weeks.len()), total(&dy, self.days.len()));
-        let (m, summary) = cost_summary(&wsum, &dsum, &good, &good_days);
+        let (mut m, summary) = cost_summary(&wsum, &dsum, &good, &good_days);
         summary.set("requests", count_v(wsum.iter().map(|r| r[1]).sum()));
         summary.set("unpriced_requests", count_v(wsum.iter().map(|r| r[6]).sum()));
-        let parts: Vec<(usize, Money, Dict)> = keep
+        let mut parts: Vec<(usize, Money, Dict)> = keep
             .iter()
             .map(|i| {
                 let (pm, ps) = cost_summary(&wk[*i], &dy[*i], &good, &good_days);
                 (*i, pm, ps)
             })
             .collect();
-        // 用过这个账号的各台设备的那一份（cost_total 的 me、devices 按设备加起来；只为诊断列出来的不算）。
-        // 这台设备没有这个账号的记录时没有它的
+        // 按模型分的：各台设备的，加起来是整个的
+        for (i, pm, _) in parts.iter_mut() {
+            pm.models = device_models(weeks, &self.days, &devs[*i].hm, &wk[*i], &dy[*i]);
+            add_models(&mut m.models, &pm.models);
+        }
+        // 用过它的各台设备的那一份（cost_total 的 me、devices 按设备加起来；只为诊断列出来的不算）。
+        // 这台设备没有记录时没有它的
         let shares: Vec<DevMoney> = parts
             .iter()
             .filter(|(i, _, _)| data.contains(i))
@@ -2917,10 +3253,9 @@ impl CostView {
                 DevMoney { id: d.id.py_str(), name: d.name.clone(), me: d.me, stale: d.stale, money: pm.clone() }
             })
             .collect();
-        self.accounts.push((tool.name, Some(m), shares));
         let mut devices: Vec<Dict> = parts
             .iter()
-            .map(|(i, _, ps)| {
+            .map(|(i, pm, ps)| {
                 let d = &devs[*i];
                 dict! {
                     // revoked：3.6.6 起总是 false（移除了的设备不列；接口只加不删）
@@ -2928,7 +3263,7 @@ impl CostView {
                     "used" => data.contains(i),
                     "weeks_usd" => wk[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
                     "days_usd" => dy[*i].iter().map(|r| V::from(usd(r[0]))).collect::<Vec<V>>(),
-                    "summary" => ps, "diag" => self.diag_view(&d.diag),
+                    "summary" => ps, "diag" => self.diag_view(&d.diag), "models" => models_view(&pm.models, false),
                 }
             })
             .collect();
@@ -2959,11 +3294,47 @@ impl CostView {
                 V::Dict(d)
             })
             .collect();
-        V::Dict(dict! {
+        let out = dict! {
             "currency" => "USD", "prices_date" => COST_PRICES_DATE, "since_epoch" => since, "weeks" => weeks_out, "days" => days_out,
             "summary" => summary, "devices" => devices.into_iter().map(V::Dict).collect::<Vec<V>>(),
             "unpriced_models" => ums.iter().map(|m| V::from(m.as_str())).collect::<Vec<V>>(), "sync" => sync,
-        })
+            "models" => models_view(&m.models, true),
+        };
+        Some((out, m, shares))
+    }
+
+    /// 认不出是哪个账号的那些（这台设备的，和别的设备经各个 Team 的服务器传来的 COST_ORPHAN）：(PROTOCOL 2.2 的 unattributed.cost，
+    /// 哪台设备都没有记录时是 None；各台设备的那一份；传过这一份的别的设备的 id)。同一台机器经几台服务器传的按机器的标识认成一台
+    /// （按周的时段是本地时间的日历周：没有额度窗口）
+    fn orphan(&self) -> (Option<Dict>, Vec<DevMoney>, Vec<String>) {
+        let (h, hm, ums) = orphan_content(&self.local);
+        let mut entries = Vec::new();
+        if !self.presence_off {
+            for hub in &self.hubs {
+                entries.extend(self.remote_entries(hub, COST_ORPHAN_SLOT));
+            }
+        }
+        let (devs, ums) = self.devices_of(&h, &hm, ums, entries);
+        let synced = devs.iter().filter(|d| !d.me).map(|d| d.id.py_str()).collect();
+        match self.view(&devs, &ums, &cost_weeks(None, self.now), self.orphan_sync(), false) {
+            Some((out, _, shares)) => (Some(out), shares, synced),
+            None => (None, Vec::new(), synced),
+        }
+    }
+
+    /// 认不出是哪个账号的那一份的 sync：经最近同步过它的那台服务器的（都还没同步过时是第一台；一台都没有时只有这台设备）
+    fn orphan_sync(&self) -> Dict {
+        let checked = |h: &HubCost| -> f64 {
+            let a = h.sync.dict("acc").and_then(|a| a.dict(COST_ORPHAN_SLOT));
+            a.and_then(|a| a.get("checked")).filter(is_num).and_then(|c| c.as_num()).unwrap_or(0.0)
+        };
+        let mut best: Option<&HubCost> = None;
+        for h in &self.hubs {
+            if best.is_none_or(|b| checked(h) > checked(b)) {
+                best = Some(h);
+            }
+        }
+        self.sync_view(COST_ORPHAN_SLOT, best.map(|h| h.kind))
     }
 
     /// 顶层的 cost_total（PROTOCOL 2.2）；tools 是启用了的工具名。折合金额关掉了、没有 Claude / Codex 的官方账号时是 None。
@@ -3004,6 +3375,11 @@ impl CostView {
                 by_tool.set(*tool, agg(&sel));
             }
             out.set("by_tool", by_tool);
+            let mut models = Models::new();
+            for (_, m) in ms {
+                add_models(&mut models, &m.models);
+            }
+            out.set("models", models_view(&models, false));
             out
         };
         let lo = self.days[0].s();
@@ -3052,6 +3428,21 @@ impl CostView {
             };
             devices.push(device(head, &ms));
         }
+        // 只有认不出是哪个账号的用量的设备也列出来（账号的几项都是 0；按认不出的那 30 天的多少排在后面）：看得到它用了多少
+        let (orphan, oshares, synced) = self.orphan();
+        let mut extra: Vec<&DevMoney> = oshares.iter().filter(|d| !d.me && !others.iter().any(|g| g[0].1.id == d.id)).collect();
+        extra.sort_by(|a, b| b.money.days.cmp(&a.money.days).then_with(|| a.name.cmp(&b.name)));
+        for d in extra {
+            let head =
+                dict! { "id" => d.id.as_str(), "name" => d.name.as_str(), "me" => false, "revoked" => false, "stale" => d.stale };
+            devices.push(device(head, &[]));
+        }
+        // 设备菜单里列着、却没传过认不出是哪个账号的那一份的别的设备（cca 太旧，或者还没同步过）
+        let unsynced: Vec<V> = others
+            .iter()
+            .filter(|g| !synced.contains(&g[0].1.id))
+            .map(|g| V::Dict(dict! { "id" => g[0].1.id.as_str(), "name" => g[0].1.name.as_str() }))
+            .collect();
         let out = part(&whole);
         out.set("currency", "USD");
         out.set("prices_date", COST_PRICES_DATE);
@@ -3066,6 +3457,7 @@ impl CostView {
                 "days_usd" => usd(orphan_micro), "requests" => count_v(orphan_requests),
                 "why" => diag.get("why").unwrap_or_else(|| V::List(List::new())), "claude_code" => diag.get("claude_code").unwrap_or(V::None),
                 "claude_code_old" => diag.get("claude_code_old").unwrap_or(V::Bool(false)),
+                "cost" => orphan.map_or(V::None, V::Dict), "unsynced" => unsynced,
             },
         );
         V::Dict(out)
@@ -3248,7 +3640,8 @@ mod tests {
     #[test]
     fn codex_prices_like_python_test() {
         // tests/cost_view.py 的 Prices.test_codex
-        let f = |model: &str, tier: Option<&str>, u: &str| cost_codex(model, tier, &d(u));
+        let now = 1795500000.0; // 2026-11-24：GPT-6.2 的 Ultrafast 还在促销
+        let f = |model: &str, tier: Option<&str>, u: &str| cost_codex(model, tier, now, &d(u));
         let u = r#"{"input_tokens": 10000, "cached_input_tokens": 8000, "cache_write_input_tokens": 0, "output_tokens": 500, "reasoning_output_tokens": 300}"#;
         let base = 2000.0 * 10.0 + 8000.0 * 1.0 + 500.0 * 50.0;
         assert_eq!(f("gpt-6-astra", Some("default"), u), (Some(base), [2000, 500, 8000, 0]), "输入含缓存读；推理算在输出里");
@@ -3272,6 +3665,22 @@ mod tests {
             "缓存不超过输入"
         );
         assert_eq!(f("codex-auto-review", None, u), (None, [2000, 500, 8000, 0]));
+        // GPT-6.2（2026-11-17 起）：标价、长上下文、缓存写；Ultrafast 到 2027-02-28 是 3 倍，2027-03-01（太平洋时间）起 6 倍
+        let astra = 2000.0 * 8.0 + 8000.0 * 0.40 + 500.0 * 40.0;
+        near(f("gpt-6.2-astra", None, u).0, astra, "gpt-6.2-astra");
+        near(f("gpt-6.2-sol", None, u).0, 2000.0 * 2.0 + 8000.0 * 0.10 + 500.0 * 10.0, "gpt-6.2-sol");
+        near(f("gpt-6.2-astra", None, r#"{"input_tokens": 300000}"#).0, 300000.0 * 16.0, "gpt-6.2-astra 长上下文");
+        near(f("gpt-6.2-sol", None, r#"{"input_tokens": 300000}"#).0, 300000.0 * 4.0, "gpt-6.2-sol 长上下文");
+        near(f("gpt-6.2-astra", None, write).0, 2000.0 * 8.0 + 1000.0 * 0.40 + 2000.0 * 10.0, "gpt-6.2-astra 缓存写");
+        near(f("gpt-6.2-astra", Some("fast"), u).0, astra * 2.0, "gpt-6.2-astra Fast");
+        near(f("gpt-6.2-astra", Some("ultrafast"), u).0, astra * 3.0, "促销期 Ultrafast 3 倍");
+        near(
+            cost_codex("gpt-6.2-astra", Some("ultrafast"), ULTRA_PROMO_END - 1.0, &d(u)).0,
+            astra * 3.0,
+            "2027-02-28 最后一秒还是 3 倍",
+        );
+        near(cost_codex("gpt-6.2-astra", Some("ultrafast"), ULTRA_PROMO_END, &d(u)).0, astra * 6.0, "2027-03-01 起 6 倍");
+        near(cost_codex("gpt-6-astra", Some("ultrafast"), ULTRA_PROMO_END, &d(u)).0, base * 6.0, "gpt-6-astra 一直 6 倍");
     }
 
     #[test]
@@ -3297,12 +3706,59 @@ mod tests {
                     "claude:aaaaaaaa-0000-4000-8000-000000000002": {"1794907200": [12000, 2, 2000, 200, 0, 0, 0]},
                     "codex:user-cccccccccccccccccccccccc": {"1794900000": [140000, 3, 5000, 600, 8000, 0, 0]}},
             "um": {"claude:aaaaaaaa-0000-4000-8000-000000000001": ["claude-unknown-1"]}, "orphan": {"1794900000": [6000, 1, 1000, 100, 0, 0, 0]}}"#);
-        let (h, um) = cost_content(&local, claude(), "alice@example.com");
+        let (h, _, um) = cost_content(&local, claude(), "alice@example.com");
         let usd: i64 = h.values().iter().map(|r| r.as_list().unwrap().at(0).as_int().unwrap()).sum();
         assert_eq!((usd, um), (12000, vec!["claude-unknown-1".to_string()]));
-        let (h, um) = cost_content(&local, codex(), "alice@example.com");
+        let (h, _, um) = cost_content(&local, codex(), "alice@example.com");
         assert!(h.is_empty() && um.is_empty(), "工具分开");
         assert_eq!(cost_content(&local, codex(), "carol@example.com").0.len(), 1);
+    }
+
+    #[test]
+    fn models_split_and_remainder() {
+        // 按模型分的两段（列出的周期、30 天）：各个模型的照中点归到时段里（时段以外的不算）；合计减去各个模型的是没有按模型记下的
+        // （None），不会是负的；排序：列出的周期的金额、请求数，再按 30 天的金额、模型名，None 在最后；两段都没有的不列
+        let period = |s: i64, e: i64| Period { start: V::Int(s * 3600), end: V::Int(e * 3600), tag: String::new() };
+        let (weeks, days) = ([period(0, 10), period(10, 20)], [period(10, 20)]);
+        let c = |usd: i128, req: i128| [usd, req, 10 * req, req, 0, 0, 0];
+        let hm: ModelHours = [
+            (2 * 3600, vec![("a".to_string(), c(5, 1)), ("b".to_string(), c(5, 2)), ("y".to_string(), c(5, 1))]),
+            (12 * 3600, vec![("a".to_string(), c(1, 1)), ("z".to_string(), c(0, 0))]),
+            (30 * 3600, vec![("c".to_string(), c(9, 9))]),
+        ]
+        .into_iter()
+        .collect();
+        let ms = device_models(&weeks, &days, &hm, &[c(17, 4), c(1, 1)], &[c(1, 1)]);
+        assert_eq!(ms.get(&None), Some(&[c(2, 0), [0; 7]]), "列出的周期剩下 2 美元没有按模型记下；30 天里都记下了");
+        assert!(!ms.contains_key(&Some("c".to_string())), "时段以外的不算");
+        let names = |rows: &[V]| -> Vec<Option<String>> {
+            rows.iter().map(|r| r.as_dict().unwrap().str("model").map(|m| m.to_string())).collect()
+        };
+        let rows = models_view(&ms, false);
+        assert_eq!(
+            names(&rows),
+            [Some("a".to_string()), Some("b".to_string()), Some("y".to_string()), None],
+            "金额一样时请求多的在前（b 比 y）；z 两段都没有：不列"
+        );
+        let a = rows[0].as_dict().unwrap();
+        assert_eq!(
+            json::dumps(&a.get("days").unwrap(), json::Fmt::new()),
+            r#"{"usd": 0.0, "requests": 1, "unpriced_requests": 0}"#,
+            "设备的不带 tokens"
+        );
+        let with = models_view(&ms, true);
+        let wk = with[0].as_dict().unwrap().get("weeks").unwrap();
+        assert_eq!(
+            json::dumps(&wk.as_dict().unwrap().get("tokens").unwrap(), json::Fmt::new()),
+            r#"{"input": 20, "output": 2, "cache_read": 0, "cache_write": 0}"#
+        );
+        let over = device_models(&weeks, &days, &hm, &[c(3, 9), c(0, 0)], &[c(0, 0)]);
+        assert_eq!(
+            over.get(&None).map(|x| x[0]),
+            Some([0, 4, 40, 4, 0, 0, 0]),
+            "各个模型的比合计多（传来的不一致）：剩下的按 0 算，不是负的"
+        );
+        assert!(!device_models(&weeks, &days, &hm, &[c(16, 5), c(0, 0)], &[c(1, 1)]).contains_key(&None), "都记下了：没有 None");
     }
 
     #[test]

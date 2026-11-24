@@ -130,6 +130,12 @@ enum Snapshot {
                 m.costGranularity = .day
                 m.selection = .costStats
             },
+            // 只有认不出账号的用量的那台设备（演示数据里是 lab-studio，设备菜单里的最后一台）：一个账号都不列，只有「认不出账号」那一组
+            Scene(name: "cost-orphan-device") { m in
+                m.costScope = m.state?.costTotal?.otherDevices.last.map { .device($0.id) } ?? .all
+                m.costGranularity = .week
+                m.selection = .costStats
+            },
             Scene(name: "account-cost") { m in
                 m.costScope = .all
                 m.costGranularity = .week

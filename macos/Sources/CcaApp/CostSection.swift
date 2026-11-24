@@ -220,6 +220,68 @@ struct CostGranularityPicker: View {
     }
 }
 
+/// 按模型分开的金额（cca 给的 `models[]`，3.6.8 起；旧版 cca 没有，不显示）：账号页「折合金额」、折合金额页合计那一块里。
+/// 一个模型一行：名字、一根细条（这一行的金额占这几行加起来的多少；中性色，和折合金额的柱子一样）、金额（都没有公开价格的写
+/// 「没有公开价格」）、请求数。按周看是列出的周期（近 12 周）的，按天看是 30 天的；没有按模型记下的那一部分在最后、灰字。
+/// 数字都是 cca 给的，App 只挑那一段、排版（rows 是 CostChart.modelRows 挑好、排好的）
+struct CostModelList: View {
+    let rows: [CostModelRow]
+    let granularity: CostGranularity
+    let currency: String
+
+    var body: some View {
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(Texts.costModelsTitle(granularity))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(rows) { r in
+                        let x = r.range(granularity)
+                        HStack(spacing: 12) {
+                            Text(Texts.costModelName(r))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(r.model == nil ? .secondary : .primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            CostShareBar(fraction: CostChart.modelShare(r, of: rows, granularity: granularity))
+                                .frame(width: 80)
+                            Text(Texts.costModelMoney(x, currency: currency))
+                                .foregroundStyle(x.allUnpriced || r.model == nil ? .secondary : .primary)
+                                .frame(width: 96, alignment: .trailing)
+                            Text(Texts.costModelRequests(x))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 84, alignment: .trailing)
+                        }
+                        .lineLimit(1)
+                        .help(Texts.costModelHelp(r, granularity: granularity, currency: currency))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Texts.costModelName(r))
+                        .accessibilityValue(Texts.costModelValue(r, granularity: granularity, currency: currency))
+                    }
+                }
+                .font(.callout.monospacedDigit())
+            }
+        }
+    }
+}
+
+/// 按模型那一块的细条：这一行的金额占多少（没有底槽：和折合金额的柱子一样只画有的那一段；很少时至少一个圆点那么长）
+private struct CostShareBar: View {
+    let fraction: Double
+
+    var body: some View {
+        GeometryReader { g in
+            Capsule().fill(CostBarChart.barColor)
+                .frame(width: fraction > 0 ? max(g.size.width * fraction, 4) : 0, height: 5)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+        .frame(height: 10)
+        .accessibilityHidden(true)
+    }
+}
+
 /// 同步的状态、还没算进来的设备（cca 给的，Texts.costNotes 写成一句一句的）：要处理的橙色，别的灰字
 struct CostNoteLine: View {
     let note: CostNote
@@ -235,7 +297,7 @@ struct CostNoteLine: View {
 /// 账号页的「折合金额」（在「每周用量」下面；cca 说这个账号有（`can.cost`）、cca 也有折合金额时才显示）：
 /// 这个账号（所有设备加起来，或者只算设备菜单里选的那一台）最近 12 周每周、最近 30 天每天按官方 API 的价格折成多少美元。不是实际花费：订阅不按这个收费。
 /// 标题右边是多久以前统计的、看哪台设备、按周 / 按日（这两个和折合金额页共用）和「刷新」。图下面一行是统计（鼠标指着一根柱子时换成那一项的细节），
-/// 再下面是同步的提示，显示细节时多几行（token、没有公开价格的模型、从什么时候开始有记录、上次同步）；最下面一直有一行小字：
+/// 再下面按模型分开列（CostModelList），然后是同步的提示，显示细节时多几行（token、没有公开价格的模型、从什么时候开始有记录、上次同步）；最下面一直有一行小字：
 /// 按谁的价格折算、价格表是哪天的。数字都是 cca 给的（PROTOCOL 2.2 的 `cost`），App 只排版。
 struct CostSection: View {
     @Environment(AppModel.self) private var model
@@ -328,6 +390,10 @@ struct CostSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                 // 图例：鼠标指着一项时也留着，这一块不变高矮
                 if bars.contains(where: { $0.period.partial && $0.usd > 0 }) { CostPartialLegend() }
+                if let rows = CostChart.models(c, scope: scope) {
+                    CostModelList(rows: CostChart.modelRows(rows, granularity: g), granularity: g, currency: c.currency)
+                        .padding(.top, 4)
+                }
             } else {
                 Text(Texts.costNoUsage(scope, total: model.state?.costTotal, granularity: g))
                     .foregroundStyle(.secondary)

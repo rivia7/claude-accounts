@@ -91,6 +91,14 @@ def aid_of(salt, tool, email):
     return hmac.new(bytes.fromhex(salt), ('%s\0%s' % (tool, email)).encode(), hashlib.sha256).hexdigest()[:32]
 
 
+ORPHAN = 'cca-cost-orphan'
+
+
+def orphan_aid(salt):
+    """折合金额里认不出是哪个账号的那一份的账号摘要：HMAC(盐, "cca-cost-orphan" \\0) 的前 32 个十六进制字符（和 aid_of 的工具写它、邮箱是空的一样）"""
+    return aid_of(salt, ORPHAN, '')
+
+
 def fp_of(pubfile):
     """设备在 Team 里的那把密钥（公钥文件）的指纹 SHA256:…"""
     with open(pubfile) as f:

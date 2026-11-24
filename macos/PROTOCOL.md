@@ -296,9 +296,25 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
        "summary": {"weeks_usd": 812.4, "current_usd": 182.41, "average_usd": 210.3, "average_weeks": 3,
                    "days_usd": 640.2, "today_usd": 31.2, "average_day_usd": 20.04, "average_days": 30},
        "diag": {"cca": "3.6.0", "claude_code": "2.1.316", "claude_code_old": true,
-                "why": [{"code": "old_claude_code", "last_epoch": 1793923200.0, "claude_code": "2.1.316"}]}}
+                "why": [{"code": "old_claude_code", "last_epoch": 1793923200.0, "claude_code": "2.1.316"}]},
+       "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 790.1, "requests": 8804, "unpriced_requests": 0},
+                   "days": {"usd": 620.0, "requests": 6102, "unpriced_requests": 0}},
+                  {"model": null, "weeks": {"usd": 22.3, "requests": 316, "unpriced_requests": 4},
+                   "days": {"usd": 20.2, "requests": 290, "unpriced_requests": 4}}]}
     ],
     "unpriced_models": ["codex-auto-review"],
+    "models": [
+      {"model": "claude-opus-5-5",
+       "weeks": {"usd": 790.1, "requests": 8804, "unpriced_requests": 0,
+                 "tokens": {"input": 110334, "output": 780112, "cache_read": 200334112, "cache_write": 3911223}},
+       "days": {"usd": 620.0, "requests": 6102, "unpriced_requests": 0,
+                "tokens": {"input": 80100, "output": 600200, "cache_read": 150100223, "cache_write": 2801100}}},
+      {"model": null,
+       "weeks": {"usd": 22.3, "requests": 316, "unpriced_requests": 4,
+                 "tokens": {"input": 10000, "output": 22000, "cache_read": 10000000, "cache_write": 100000}},
+       "days": {"usd": 20.2, "requests": 290, "unpriced_requests": 4,
+                "tokens": {"input": 9000, "output": 20000, "cache_read": 9000000, "cache_write": 90000}}}
+    ],
     "sync": {"state": "ok", "message": null, "checked_epoch": 1794041000.0, "hub": "team",
              "missing": [{"name": "carol-air", "used_epoch": 1794000000.0}]}
   }
@@ -340,6 +356,14 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
     Code 会话，从来不带账号信息）| `unknown`（别的：登录的不是 cca 里的账号、不是经 cca 启动的……；不认识的值也当它说）；`last_epoch`：最近一次
     （别的设备传来的只到 UTC 的天）；`claude_code`：那时的 Claude Code 版本（没有为 null）。认不出的用量不知道是哪个账号的，所以那台设备用的
     每个账号都带着同一份；App 在那台设备那一行、提示里说“有用量没算进来”和原因（撤销了的设备不说）。
+    `models`：那台设备按模型分开的（同下面的 `models[]`，没有 `tokens`）；各台设备的加起来就是账号的。旧版 cca 没有这一项，当作 `[]`。
+  - `models[]`：按模型分开的金额（3.6.8 起；旧版 cca 没有这一项，App 不显示按模型的那一块）。每一项：`model` 是模型名（会话记录里的写法：
+    小写，去掉了 `[1m]` 这类后缀和末尾的日期；会话记录里没写时是 `""`，App 写「没写模型名」），`null` 是没有按模型记下的那一部分（合计减去
+    各个模型的：3.6.7 及以前的 cca 统计的、旧版 cca 的设备传来的、传的时候为了放得下去掉了明细的；不会是负的）；`weeks`：列出的周期
+    （`weeks[]`）加起来，`days`：30 天（`days[]`）加起来，各有 `usd`、`requests`、`unpriced_requests`（没有标价的模型也列：`usd` 是 0、
+    `unpriced_requests` 是它的请求数），账号的另有 `tokens`（同上）。各项加起来就是 `summary` 的 `weeks_usd`、`days_usd`、`requests`、
+    `unpriced_requests`（四舍五入的差别以外）。按 `weeks.usd`、`weeks.requests` 从多到少，再按 `days.usd`、模型名排，`null` 那一项总在最后；
+    两段里都没有请求、没有金额的不列，没有记录时为 `[]`。
   - `sync`：设备间同步的状态。`hub`：经哪台服务器同步（和账号的 `hub` 一样：`team`；`local_only`、`off` 时是 null。
     App 不认识的值当 null：3.6.0 以前的 cca 还会给 `maintainer`；旧版 cca 没有这个字段，也当 null）。`state`：`ok`（同步过，
     `checked_epoch` 是最后一次成功的时间）| `pending`（会同步，还没同步过）|
@@ -410,27 +434,46 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 33.0}],
   "by_tool": {"claude": {"current_usd": 300.1, "weeks_usd": 2800.2, "average_usd": 760.0, "average_day_usd": 65.0, "days_usd": 1950.0, "today_usd": 31.2},
               "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "average_day_usd": 5.1, "days_usd": 151.0, "today_usd": 1.8}},
+  "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 2790.0, "requests": 29800, "unpriced_requests": 0},
+              "days": {"usd": 1945.0, "requests": 20500, "unpriced_requests": 0}},
+             {"model": "gpt-6.2-astra", "weeks": {"usd": 221.3, "requests": 2400, "unpriced_requests": 0},
+              "days": {"usd": 151.0, "requests": 1600, "unpriced_requests": 0}},
+             {"model": null, "weeks": {"usd": 10.2, "requests": 120, "unpriced_requests": 0},
+              "days": {"usd": 5.0, "requests": 60, "unpriced_requests": 0}}],
   "me": {
     "current_usd": 182.41, "weeks_usd": 1812.4, "average_usd": 430.3, "average_day_usd": 41.2, "days_usd": 1240.2, "today_usd": 31.2,
     "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 31.2}],
     "by_tool": {"claude": {"current_usd": 182.41, "weeks_usd": 1812.4, "average_usd": 430.3, "average_day_usd": 41.2, "days_usd": 1240.2, "today_usd": 31.2},
-                "codex": {"current_usd": 0.0, "weeks_usd": 0.0, "average_usd": null, "average_day_usd": null, "days_usd": 0.0, "today_usd": 0.0}}
+                "codex": {"current_usd": 0.0, "weeks_usd": 0.0, "average_usd": null, "average_day_usd": null, "days_usd": 0.0, "today_usd": 0.0}},
+    "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 1812.4, "requests": 19400, "unpriced_requests": 0},
+                "days": {"usd": 1240.2, "requests": 13300, "unpriced_requests": 0}}]
   },
   "devices": [
     {"id": "SHA256:…", "name": "studio-mac", "me": true, "revoked": false, "stale": false,
      "current_usd": 182.41, "weeks_usd": 1812.4, "average_usd": 430.3, "average_day_usd": 41.2, "days_usd": 1240.2, "today_usd": 31.2,
      "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 31.2}],
      "by_tool": {"claude": {"current_usd": 182.41, "weeks_usd": 1812.4, "average_usd": 430.3, "average_day_usd": 41.2, "days_usd": 1240.2, "today_usd": 31.2},
-                 "codex": {"current_usd": 0.0, "weeks_usd": 0.0, "average_usd": null, "average_day_usd": null, "days_usd": 0.0, "today_usd": 0.0}}},
+                 "codex": {"current_usd": 0.0, "weeks_usd": 0.0, "average_usd": null, "average_day_usd": null, "days_usd": 0.0, "today_usd": 0.0}},
+     "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 1812.4, "requests": 19400, "unpriced_requests": 0},
+                 "days": {"usd": 1240.2, "requests": 13300, "unpriced_requests": 0}}]},
     {"id": "SHA256:…", "name": "carol-air", "me": false, "revoked": false, "stale": true,
      "current_usd": 157.79, "weeks_usd": 1209.1, "average_usd": 381.7, "average_day_usd": 28.9, "days_usd": 860.8, "today_usd": 1.8,
      "days": [{"start_epoch": 1794009600.0, "end_epoch": 1794096000.0, "date": "2026-11-13", "current": true, "usd": 1.8}],
      "by_tool": {"claude": {"current_usd": 117.69, "weeks_usd": 987.8, "average_usd": 329.7, "average_day_usd": 23.8, "days_usd": 709.8, "today_usd": 0.0},
-                 "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "average_day_usd": 5.1, "days_usd": 151.0, "today_usd": 1.8}}}
+                 "codex": {"current_usd": 40.1, "weeks_usd": 221.3, "average_usd": 52.0, "average_day_usd": 5.1, "days_usd": 151.0, "today_usd": 1.8}},
+     "models": [{"model": "claude-opus-5-5", "weeks": {"usd": 977.6, "requests": 10400, "unpriced_requests": 0},
+                 "days": {"usd": 704.8, "requests": 7200, "unpriced_requests": 0}},
+                {"model": "gpt-6.2-astra", "weeks": {"usd": 221.3, "requests": 2400, "unpriced_requests": 0},
+                 "days": {"usd": 151.0, "requests": 1600, "unpriced_requests": 0}},
+                {"model": null, "weeks": {"usd": 10.2, "requests": 120, "unpriced_requests": 0},
+                 "days": {"usd": 5.0, "requests": 60, "unpriced_requests": 0}}]}
   ],
   "scan": {"state": "ready", "updated_epoch": 1794041000.0},
   "unattributed": {"days_usd": 12.3, "requests": 40, "claude_code": "2.1.330", "claude_code_old": false,
-                   "why": [{"code": "claude_app", "last_epoch": 1794031200.0, "claude_code": null}]}
+                   "why": [{"code": "claude_app", "last_epoch": 1794031200.0, "claude_code": null}],
+                   "cost": {"currency": "USD", "prices_date": "2026-11-13", "since_epoch": 1791158400.0, "weeks": […], "days": […],
+                            "summary": {…}, "devices": […], "unpriced_models": [], "models": […], "sync": {…}},
+                   "unsynced": [{"id": "SHA256:…", "name": "old-air"}]}
 }
 ```
 
@@ -438,6 +481,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `today_usd` 同理；`average_usd`、`average_day_usd` 是有平均值的账号的平均加起来（一个都没有为 null）。`days[]` 是最近 30 个本地日历日，
   各账号加起来（日期是共同的）。
 - `by_tool`：按工具分开的同样几项，只列启用了的工具。
+- `models[]`：所有账号按模型加起来（3.6.8 起），一项的样子、排法和账号的 `models[]` 一样，没有 `tokens`；`me`、`devices[]` 里也有，
+  各自的加起来（旧版 cca 没有：App 不显示按模型的那一块）。不含 `unattributed`。
 - `me`：只算这台设备的同样几项（`days`、`by_tool` 也有，工具和顶层的一样）：各账号里 `me` 为真的那台设备的 `summary`、`days_usd` 加起来，
   这台设备没有记录的账号不算（App 的「本机」）。顶层的几项是所有设备的。旧版 cca 没有这一项，App 的本机合计写「—」。
 - `devices[]`：按设备分开加起来的同样几项（App 的设备菜单），每台多几项：`id`、`name`、`me`（和账号里 `devices[]` 的一样）、
@@ -445,11 +490,23 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   一样的数字，哪个账号都没用过时都是 0）；别的设备按 `id` 归到一起，只算 `used` 的（只为诊断列出来的不算，一个账号都没用过的不列），
   按 30 天的金额从多到少排（一样多按名字、再按 id）。（3.6.5 及以前：撤销了的 key 只在一个账号里并进同名的那一台，别的账号里只有撤销了的那份时，它在这里单独一项。）
   各台设备加起来就是顶层的。旧版 cca 没有这一项（App 的菜单里只有所有设备、本机）。
+  3.6.8 起，只有认不出是哪个账号的用量的设备（`unattributed.cost.devices[]` 里有、哪个账号都没用过）也列在最后，按它认不出的那 30 天的
+  金额从多到少排：账号的几项都是 0、`models` 是 `[]`，App 看它时只有「认不出账号」那一部分有数字。
 - `scan.state`：`ready`（统计过，`updated_epoch` 是最后一次）| `scanning`（正在统计：第一次要把会话记录全读一遍，可能要一会儿）|
   `never`（还没统计过：App 显示“正在统计”并运行一次 `cost sync`）。
 - `unattributed`：这台设备最近 30 天里认不出是哪个账号的用量（会话记录里没有账号信息：旧版 Claude Code、桌面 App 里的会话），只给“另有多少没算进来”
   这一句用。`why`、`claude_code`、`claude_code_old` 和这台设备的 `devices[].diag` 一样（旧版 cca 没有：App 当作 `[]`、null、false，笼统地说原因）；
   `claude_code_old` 为真时 App 提醒这台设备更新 Claude Code（和有没有认不出的用量无关）。
+  - `cost`（3.6.8 起）：认不出是哪个账号的用量，所有设备的：每台设备经它在的各个 Team（有它用的账号的那几个）的服务器传一份
+    （和账号的那一份同一种密文、同一把密钥，账号摘要是固定的那一个，见 server/README.md「折合金额」），这里是这台设备的和别的设备传来的。
+    和账号的 `cost` 一样的样子（`weeks[]` 都按日历周切：`basis` 都是 `calendar`，没有额度窗口），`summary`、`devices[]`、`models[]`、
+    `unpriced_models`、`since_epoch` 的意思都一样，各台设备带着自己的 `diag`；`devices[]` 只列有这种用量的设备（这台设备没有时也不列），
+    同一台机器经几个 Team 传的并成一项。`sync`：最近同步过它的那台服务器的（`missing` 总是 `[]`；不在 Team 里是 `local_only`、
+    关了设备统计是 `off`：只有这台设备的）。哪台设备都没有这种用量时为 null。顶层、`me`、`devices[]` 的几项都不含它：
+    App 把它单独列一行「认不出账号」，看所有设备时用 `summary`、`days[]`，看某一台时用 `devices[]` 里 `id` 一样的那一项（没有就是 0）。
+    旧版 cca 没有这一项：App 只照 `days_usd`、`requests` 说这台设备的。
+  - `unsynced`（3.6.8 起）：设备菜单（`devices[]`）里还没传过认不出的用量的别的设备（cca 太旧，或者还没同步过）：`[{"id", "name"}]`，
+    App 说明这几台的没有算进来；没有为 `[]`，旧版 cca 没有这一项，当作 `[]`。传过、没有这种用量的设备不在这里，也不在 `cost.devices[]` 里。
 
 `can_why` 各项可能的值：`app`：`api_account` | `app_missing` | `tool_missing`（ChatGPT App 打开前要用 codex 命令检查设置）| `unsupported`（Antigravity）；
 `web`：`api_account` | `no_chrome`；`usage`：`api_account` | `tool_missing` | `not_logged_in` | `unsupported`（Antigravity，登没登录都是它）；`cli`：`tool_missing`；`check` 总是可用。
