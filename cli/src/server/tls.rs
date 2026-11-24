@@ -43,6 +43,18 @@ fn read(path: &Path) -> Result<Vec<u8>, Why> {
     })
 }
 
+/// SEC1 的私钥少了开头的 0 时补上（[`x509::sec1_padded`]：LibreSSL 写的里面偶尔有这样的，ring 不收）；别的原样
+fn whole_sec1(key: PrivateKeyDer<'static>) -> PrivateKeyDer<'static> {
+    let padded = match &key {
+        PrivateKeyDer::Sec1(sec1) => x509::sec1_padded(sec1.secret_sec1_der()),
+        _ => None,
+    };
+    match padded {
+        Some(der) => PrivateKeyDer::Sec1(der.into()),
+        None => key,
+    }
+}
+
 fn load(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, Why> {
     let (cert_pem, key_pem) = (read(cert)?, read(key)?);
     let (cert_name, key_name) = (cert.to_string_lossy(), key.to_string_lossy());
@@ -53,6 +65,7 @@ fn load(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, Why> {
         return Err(Why::Other(format!("{cert_name} 里没有证书")));
     };
     let key_der = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| Why::Other(format!("{key_name} 里的私钥读不了（{e}）")))?;
+    let key_der = whole_sec1(key_der);
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let signing =
         provider.key_provider.load_private_key(key_der).map_err(|e| Why::Other(format!("{key_name} 里的私钥用不了（{e}）")))?;
@@ -362,6 +375,29 @@ mod tests {
             .key_provider
             .load_private_key(PrivateKeyDer::from_pem_slice(pem("EC PRIVATE KEY", &sec1_of(&key)).as_bytes()).unwrap());
         assert!(CertifiedKey::new(vec![CertificateDer::from(cert)], signing.unwrap()).keys_match().is_err());
+    }
+
+    /// LibreSSL 写的少一个字节的私钥（开头正好是 0 的那种）：补齐了读，握得了手
+    #[test]
+    fn a_short_sec1_key_loads() {
+        // 现造到开头是 0 的那一把（256 把里一把）
+        let key = std::iter::repeat_with(new_key).find(|k| k[36] == 0).unwrap();
+        let full = sec1_of(&key);
+        // 30 77 02 01 01 04 20 <32 个字节>…：去掉私钥开头的 0，两处长度各减一
+        let mut short = full.clone();
+        short.remove(7);
+        short[1] -= 1;
+        short[6] -= 1;
+        assert_eq!(x509::sec1_padded(&short), Some(full.clone()));
+        assert_eq!(x509::sec1_padded(&full), None, "够长的不动");
+        let (f, cert) = (Files::new(), self_signed(&key, None));
+        let key_path = f.put("key.pem", &pem("EC PRIVATE KEY", &short));
+        let config = load_pair(&f.put("cert.pem", &pem("CERTIFICATE", &cert)), &key_path).unwrap();
+        handshake(&config, &pinned_client(&cert, BOTH), "team.example.com").unwrap();
+        // ring 自己不收这样的：哪天它收了，这里会提醒补的那一步可以去掉
+        let provider = rustls::crypto::ring::default_provider();
+        let raw = PrivateKeyDer::from_pem_slice(pem("EC PRIVATE KEY", &short).as_bytes()).unwrap();
+        assert!(provider.key_provider.load_private_key(raw).is_err());
     }
 
     /// 证书机构签的那种：PKCS#8 的私钥 + 带 subjectAltName 的 v3 证书。客户端照常校验：名字（域名、IPv4、IPv6）对得上才握得了手

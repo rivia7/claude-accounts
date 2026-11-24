@@ -14,6 +14,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 const BOOLEAN: u8 = 0x01;
 const INTEGER: u8 = 0x02;
+const BIT_STRING: u8 = 0x03;
 const OCTET_STRING: u8 = 0x04;
 const OID: u8 = 0x06;
 const UTC_TIME: u8 = 0x17;
@@ -22,6 +23,8 @@ const SEQUENCE: u8 = 0x30;
 /// TBSCertificate 里的 [0]（版本）、[3]（扩展）
 const VERSION: u8 = 0xa0;
 const EXTENSIONS: u8 = 0xa3;
+/// ECPrivateKey 里带着的公钥：[1]
+const EC_PUBLIC: u8 = 0xa1;
 /// GeneralName 里的 [2] dNSName、[7] iPAddress
 const DNS_NAME: u8 = 0x82;
 const IP_ADDRESS: u8 = 0x87;
@@ -253,6 +256,33 @@ pub fn cert_info(der: &[u8]) -> Option<CertInfo> {
 /// （Python 的 `load_cert_chain` 也只看这一对合不合）
 pub fn cert_spki(der: &[u8]) -> Option<Vec<u8>> {
     walk(der).map(|(_, spki, _)| spki.whole.to_vec())
+}
+
+/// SEC1 的私钥（RFC 5915 的 ECPrivateKey）里私钥那一段比曲线的长度短时，前面补上 0，给出补好的整份；不用补、看不懂的是 None。
+/// RFC 5915 要这一段正好是曲线的长度，ring 照这个查；LibreSSL（实测 3.3.6，macOS 自带的就是它）的 `openssl ecparam -genkey`
+/// 却照数值写：开头正好是 0 的私钥就少一个字节（实测 1500 把里 8 把），Python 的 ssl 读得了这样的。
+/// 曲线多长从后面带着的公钥看（04 X Y：去掉开头那个字节的一半）；没带公钥的不管
+pub fn sec1_padded(sec1: &[u8]) -> Option<Vec<u8>> {
+    let mut outer = Cur::new(sec1);
+    let seq = expect(&mut outer, SEQUENCE)?;
+    let mut cur = Cur::new(seq.body);
+    let version = expect(&mut cur, INTEGER)?;
+    let secret = expect(&mut cur, OCTET_STRING)?;
+    let tail = cur.rest();
+    let mut size = None;
+    while !cur.is_empty() {
+        let part = item(&mut cur)?;
+        if part.tag == EC_PUBLIC {
+            // BIT STRING：头一个字节是“最后有几位不用”，后面是那个点
+            let point = expect(&mut Cur::new(part.body), BIT_STRING)?.body.get(1..)?;
+            size = point.first().filter(|form| **form == 4).map(|_| point.len() / 2);
+        }
+    }
+    // 最长的曲线（P-521）是 66 个字节
+    let missing = size.filter(|n| *n <= 66)?.checked_sub(secret.body.len()).filter(|n| *n > 0)?;
+    let padded = [vec![0u8; missing].as_slice(), secret.body].concat();
+    let der = super::acme::der::der;
+    Some(der(SEQUENCE, &[version.whole, &der(OCTET_STRING, &[&padded]), tail]))
 }
 
 /// PEM 文件里的头一张证书（带中间证书的文件里它就是服务器自己的那张）
@@ -558,6 +588,36 @@ YTAKBggqhkjOPQQDAgNGADBDAiBm9BYzIACyoNc2Tajb5kqBuyjqycE37N0pkL7Y
         assert_eq!(read(&[0x04]), None);
         assert_eq!(read(&[0x1f, 0x01, 0x00]), None, "多字节的标签");
         assert_eq!(read(&[0x04, 0x85, 0, 0, 0, 0, 1, 7]), None, "长度写了 5 个字节");
+    }
+
+    /// 私钥那一段短了的 SEC1 补得回来（几种曲线、短几个字节都行）；够长的、没带公钥的、看不懂的不动
+    #[test]
+    fn short_sec1_scalars_are_padded() {
+        let d = testkit::der;
+        let build = |scalar: &[u8], tail: &[u8]| d(SEQUENCE, &[&d(INTEGER, &[&[1]]), &d(OCTET_STRING, &[scalar]), tail]);
+        let public = |size: usize| d(EC_PUBLIC, &[&d(BIT_STRING, &[&[0, 4], &vec![7u8; 2 * size]])]);
+        let curve = d(0xa0, &[&d(OID, &[&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]])]);
+        for size in [32usize, 48, 66] {
+            let scalar: Vec<u8> = (0..size).map(|i| if i < 2 { 0 } else { i as u8 }).collect();
+            let tail = [curve.clone(), public(size)].concat();
+            let full = build(&scalar, &tail);
+            assert_eq!(sec1_padded(&full), None, "{size}：够长的不动");
+            assert_eq!(sec1_padded(&build(&scalar[1..], &tail)), Some(full.clone()), "{size}：少一个字节");
+            assert_eq!(sec1_padded(&build(&scalar[2..], &tail)), Some(full.clone()), "{size}：少两个字节");
+            assert_eq!(sec1_padded(&build(&scalar[1..], &public(size))), Some(build(&scalar, &public(size))), "不带曲线的参数");
+            assert_eq!(sec1_padded(&build(&scalar[1..], &curve)), None, "{size}：没带公钥，不知道该多长");
+            assert_eq!(sec1_padded(&build(&[&[9u8][..], &scalar].concat(), &tail)), None, "{size}：比曲线还长的不管");
+        }
+        // P-256 的那一份就是 openssl ecparam -genkey -noout 写出来的大小
+        assert_eq!(build(&[1u8; 32], &[curve.clone(), public(32)].concat()).len(), 121);
+        let compressed = d(EC_PUBLIC, &[&d(BIT_STRING, &[&[0, 2], &[7u8; 32]])]);
+        assert_eq!(sec1_padded(&build(&[1u8; 31], &compressed)), None, "压缩写法的公钥：不猜");
+        let huge = build(&[1u8; 31], &public(100));
+        assert_eq!(sec1_padded(&huge), None, "没有这么长的曲线");
+        let short = build(&[1u8; 31], &[curve, public(32)].concat());
+        for junk in [&b""[..], b"\x30\x00", &short[..50], b"not der at all", &[&short[..], b"x"].concat()[1..]] {
+            assert_eq!(sec1_padded(junk), None, "{junk:?}");
+        }
     }
 
     /// 时间的两种写法、世纪怎么定；不合规矩的不认

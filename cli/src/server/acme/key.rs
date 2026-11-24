@@ -60,7 +60,8 @@ fn pkcs8_of(text: &str) -> Option<Vec<u8>> {
     }
     let (_, sec1, body) = first?;
     let der_bytes = base64::a2b_base64(body.as_bytes(), false).ok()?;
-    Some(if sec1 { wrap_sec1(&der_bytes) } else { der_bytes })
+    // LibreSSL 写的 SEC1 偶尔少了私钥开头的 0（x509::sec1_padded）：补上再包
+    Some(if sec1 { wrap_sec1(&crate::server::x509::sec1_padded(&der_bytes).unwrap_or(der_bytes)) } else { der_bytes })
 }
 
 /// SEC1 的私钥（RFC 5915 的 ECPrivateKey）包成 PKCS#8（ring 只读这一种）：前面加上“这是 P-256 的 EC 私钥”。
@@ -352,6 +353,13 @@ pub(super) mod tests {
         assert_eq!(wrap_sec1(&pkcs8[at + 2..]), pkcs8, "ring 生成的 PKCS#8 就是这个样子");
         let text = pem("EC PRIVATE KEY", &pkcs8[at + 2..]);
         assert_eq!(pkcs8_of(&text).unwrap(), pkcs8);
+        // 私钥开头是 0、LibreSSL 少写了那一个字节的：补上了，包出来的和原来的一样
+        let zero = std::iter::repeat_with(testkit::new_key).find(|k| k[36] == 0).unwrap();
+        let mut short = zero[at + 2..].to_vec();
+        short.remove(7);
+        short[1] -= 1;
+        short[6] -= 1;
+        assert_eq!(pkcs8_of(&pem("EC PRIVATE KEY", &short)).unwrap(), zero);
         // 两种都有时用前面的那个；一种都没有是 None
         let both = format!("{}{}", pem("PRIVATE KEY", b"first"), pem("EC PRIVATE KEY", b"second"));
         assert_eq!(pkcs8_of(&both).unwrap(), b"first");
