@@ -1290,7 +1290,7 @@ mod tests {
     fn t0_is_local_time() {
         let epoch = t0_epoch();
         // 换回去是同一个时刻（时区随这台机器）
-        let secs = epoch as libc::time_t;
+        let secs = epoch as _;
         // SAFETY: tm 是这里的，localtime_r 只往里写
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
         unsafe { libc::localtime_r(&secs, &mut tm) };

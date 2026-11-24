@@ -20,6 +20,9 @@ mod core_load;
 mod dock;
 mod gh;
 mod launchd;
+mod linux_claude;
+mod linux_codex;
+mod linux_netstat;
 mod oauth;
 mod stun;
 mod usage;
@@ -62,6 +65,10 @@ pub const CMDS: &[(&str, crate::Run)] = &[
     ("gh-releases", role!(gh::run)),      // $CCA_T/gh：假 GitHub 的发布列表
     ("dockpl", role!(dock::run)),         // dock.plist set|get|add …：程序坞的设置（原来的 dockpl.py）
     ("plist", role!(launchd::run)),       // get 文件 路径…：属性列表里的几个值，制表符隔开（假 launchctl 用）
+    // tests/linux.sh 的沙箱（原来是它现写的三段 Python）
+    ("linux-claude", role!(linux_claude::run)), // 沙箱目录 脚本的路径 参数…：假 claude（登录的回调、会话）
+    ("linux-codex", role!(linux_codex::run)),   // 沙箱目录 脚本的路径 参数…：假 codex（app-server 的登录和用量、会话）
+    ("netstat", role!(linux_netstat::run)),     // 文件… [-- 参数…]：假路由器上的 netstat，读 /proc/net/tcp
 ];
 
 // ---- 异常、stdout ----

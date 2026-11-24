@@ -308,7 +308,7 @@ fn touch_ago(args: &[String]) -> i32 {
     let nanos = ((t - t.floor()) * 1e9).floor().min(999_999_999.0);
     // SAFETY: timespec 全是数字，清零就是有效的值
     let mut stamp: libc::timespec = unsafe { std::mem::zeroed() };
-    stamp.tv_sec = t.floor() as libc::time_t;
+    stamp.tv_sec = t.floor() as _;
     stamp.tv_nsec = nanos as libc::c_long;
     let times = [stamp, stamp];
     // SAFETY: cpath 是以 NUL 结尾的字符串，times 是两个 timespec（访问时间、修改时间），调用期间都活着
@@ -684,7 +684,8 @@ mod tests {
     #[test]
     fn local_time_round_trips_through_mktime() {
         // 现在这一刻照本地时间拆开，再换回来还是它（夏令时交界的那一小时除外，这里用的是现在）
-        let stamp = now().floor() as libc::time_t;
+        // time_t 在这里要编的几种机器上都是 64 位的
+        let stamp = now().floor() as i64;
         // SAFETY: tm 清零就是有效的值；localtime_r 只在调用期间读 stamp、写 tm
         let tm = unsafe {
             let mut tm: libc::tm = std::mem::zeroed();
@@ -692,7 +693,7 @@ mod tests {
             tm
         };
         let fields = [tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec];
-        assert_eq!(local_secs(fields), Some(stamp as i64));
+        assert_eq!(local_secs(fields), Some(stamp));
     }
 
     #[test]

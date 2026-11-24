@@ -10,6 +10,7 @@ mod fx;
 mod gui_session;
 mod hubbox;
 mod lint;
+mod linux;
 mod mail;
 mod spec;
 mod util;
@@ -29,6 +30,7 @@ const TABLES: &[&[(&str, Run)]] = &[
     gui_session::CMDS,
     hubbox::CMDS,
     lint::CMDS,
+    linux::CMDS,
     mail::CMDS,
     spec::CMDS,
     util::CMDS,

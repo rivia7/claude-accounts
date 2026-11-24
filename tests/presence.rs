@@ -1314,7 +1314,7 @@ fn one_cli(report: &Value, aid: &str) -> (f64, f64) {
 fn utime(path: &Path, atime: f64, mtime: f64) {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("路径里没有 NUL");
-    let spec = |secs: f64| libc::timespec { tv_sec: secs.floor() as libc::time_t, tv_nsec: (secs.fract() * 1e9) as libc::c_long };
+    let spec = |secs: f64| libc::timespec { tv_sec: secs.floor() as _, tv_nsec: (secs.fract() * 1e9) as libc::c_long };
     let times = [spec(atime), spec(mtime)];
     // SAFETY: c 是以 NUL 结尾的路径，times 是两个有效的 timespec；utimensat 只读它们
     let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0) };

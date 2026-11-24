@@ -31,6 +31,9 @@
 //!                                more：s-cost-1.jsonl 后面追加一条回复 mc5：10 分钟前 claude-opus-5-5 进 1000 出 100
 //!                                dave：最后一个参数是 Codex 的 auth.json：tokens.id_token 中间那一段（base64url 的 JSON）里
 //!                                      ["https://api.openai.com/auth"]["chatgpt_user_id"] 设成 user-dave-0001，写回去
+//! linux-costlog 家目录           tests/linux.sh 的折合金额那一条要的会话记录（原来是它现写的一段 Python 的后一半）：先建
+//!                                家目录/.claude/projects/-linux，再写 s-linux.jsonl（整个重写）——session-owner 是 u-linux-alice-01 / o；
+//!                                一条回复 m1（requestId 是 r1）：1 小时前 claude-opus-5-5 进 1000 出 100
 //! router-occupy 账号表 owners 账号名 设备 节点 ck [custom]
 //!                                多设备共用一个路由器：扮演另一台设备（owners 里的值是 设备），直接改路由器上的 accounts.yaml 和 owners，
 //!                                让它的账号「账号名」占第一个空槽位（1 起），打出槽位号。先去掉账号表里原来叫这个名字的；新的一项是
@@ -63,6 +66,7 @@ const SUBS: &[(&str, Sub)] = &[
     ("claude-usage", claude_usage),
     ("text-prepend", text_prepend),
     ("costlog", costlog),
+    ("linux-costlog", linux_costlog),
     ("router-occupy", router_occupy),
 ];
 
@@ -651,6 +655,28 @@ fn costlog(a: &[String], _out: &mut String) -> R<i32> {
     Ok(0)
 }
 
+// ---- linux-costlog ----
+
+fn linux_costlog(a: &[String], _out: &mut String) -> R<i32> {
+    let home = arg(a, 0)?;
+    let d = fake::join(&[home, ".claude", "projects", "-linux"]);
+    fake::makedirs(&d)?;
+    let owner = obj! { "type" => "session-owner", "accountUuid" => "u-linux-alice-01", "organizationUuid" => "o", "sessionId" => "s-linux" };
+    let reply = obj! {
+        "type" => "assistant",
+        "timestamp" => iso(now()? - 3600.0),
+        "requestId" => "r1",
+        "sessionId" => "s-linux",
+        "message" => obj! {
+            "id" => "m1",
+            "model" => "claude-opus-5-5",
+            "usage" => obj! { "input_tokens" => 1000, "output_tokens" => 100 },
+        },
+    };
+    fake::write_text(&fake::join(&[&d, "s-linux.jsonl"]), &[line(&owner), line(&reply)].concat())?;
+    Ok(0)
+}
+
 // ---- router-occupy ----
 
 /// 槽位号 i 是不是和这个值相等（Python 的 ==：2.0、True 也算数）；列表、字典不能进集合（TypeError）
@@ -957,6 +983,28 @@ mod tests {
             format!("FileNotFoundError: [Errno 2] No such file or directory: '{missing}'")
         );
         assert!(!dir.join("nope.toml.test-new").exists());
+    }
+
+    // 期望的两行是原来 linux.sh 里那段 Python 在同一个时刻（NOW）写出来的
+    #[test]
+    fn linux_costlog_writes_what_python_wrote() {
+        let dir = TempDir::new("fx-linux-cost-");
+        let home = at(&dir, "home");
+        PINNED.with(|p| p.set(Some(NOW)));
+        assert_eq!(done(linux_costlog, &[&home]), "");
+        let file = dir.join("home/.claude/projects/-linux/s-linux.jsonl");
+        let want = concat!(
+            r#"{"type":"session-owner","accountUuid":"u-linux-alice-01","organizationUuid":"o","sessionId":"s-linux"}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-11-24T05:00:00.000Z","requestId":"r1","sessionId":"s-linux","message":{"id":"m1","model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":100}}}"#,
+            "\n",
+        );
+        assert_eq!(fsx::read_text(&file), want);
+        // 再来一次是整个重写（目录已经在了也行）
+        fsx::write(&file, "old\n");
+        done(linux_costlog, &[&home]);
+        assert_eq!(fsx::read_text(&file), want);
+        assert_eq!(raised(linux_costlog, &[]), "IndexError: list index out of range");
     }
 
     #[test]

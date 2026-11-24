@@ -8,7 +8,7 @@
 #   内置代理：cca local setup（下载、校验内核，后台托管，端口池，问过后在 crontab 里加开机起内核的一行）→ 经账号的端口访问本机的
 #     HTTP 服务 → 杀掉内核看托管进程拉起来 → 模拟重启（照 crontab 那一行、在 cron 的环境里起托管进程）
 #   登录（给出在 Mac 上运行的 cca login-page 那一行：带别名、节点和节点摘要；贴回验证码，转给假 claude 本机的回调）→ 启动账号 →
-#     API key 存成 600 的文件 → Team（真的 server/cca-presence.py --mode team，管理员由 tests/spec_wire.py 扮演：加入、照配置加账号、
+#     API key 存成 600 的文件 → Team（真的服务器：辅助程序的 team-server，管理员由 cca-test spec 扮演：加入、照配置加账号、
 #     不是根密钥签的一版不用）→ 设备统计（报给 Team 的服务器：会话开着报在用、关了报没在用；会话的登记、进程的启动时间从 /proc 读）
 #     → Codex（假的 codex 和 app-server：添加、服务器上登录、启动、查用量、cxa）→ 真实的出口和泄露检测（测试节点直连出去；服务器上
 #     不测 WebRTC）→ 只在 macOS 上的命令说清楚 → cca local off
@@ -16,10 +16,17 @@
 #     先跳过；再运行时贴上邀请链接：加入、导入 Team 的配置指定的节点、照配置加上账号，内置代理由 cca _core-keep 托管，经账号的端口出去
 #   在家走路由器（只在容器里：假路由器上跑真的 cca-router.sh / apply.rb，内核是真的 mihomo，端口池监听 0.0.0.0）：cca install 里配置
 #     路由器、选节点、加账号、问过后重载，经路由器的端口出去，启动账号，在家时给内置代理拷节点（路由器端自己写 JSON）
-#   Team 的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py：这个发行版的 sh、openssl、python3，假的 systemctl、docker 起真的服务端）
+#   远程会话、Team 的同步服务器的一键安装脚本：测试程序 suite 的几个模块（tests/remote_host.rs、remote_relay.rs、hub_deploy.rs；安装脚本那一个的
+#     假服务器是 tests/kit/hubbox.rs：这个发行版的 sh、openssl，假的 systemctl、docker 起真的服务端）
 # 测试节点是本机另一个 mihomo（socks5 → DIRECT）。端口池固定从 7901 起，被占用时不跑
 # 辅助程序（cli/ 的 Rust 程序）用静态链接的那一份：cli/target/<x86_64|aarch64>-unknown-linux-musl/release/cca-core。--docker 时在宿主机上
 # 先编（Mac 上是交叉编译，见 cli/.cargo/config.toml 和 cli/musl-env.sh）；直接在 Linux 上跑时没有就自己编（要 Rust 和这个目标），或者用 CCA_HELPER 指一份
+# 测试自己用的两个程序（tests/ 的 Rust 包 cca-tests，也是静态链接的，同一个目标）：小工具 cca-test（假的 claude / codex / netstat 要做的事、
+# 读写 JSON、扮演 Team 的管理员、两个小服务；这个脚本里是 KT）和测试程序 suite（上面那几个模块；这个脚本里是 KS）。有 cargo 就现编
+# （cd cli && cargo build --profile kit -p cca-tests --locked --target <目标> --bins --tests）。没有 cargo 的机器：在别的机器上编好拷过来，
+# 用 CCA_TEST_BIN、CCA_SUITE_BIN 指给它（辅助程序用 CCA_HELPER），或者把 cli/target/<目标>/kit/ 整个照原样拷过来（cca-test 在它下面；suite 的文件名
+# 带一串摘要、在哪一层随 cargo 的版本变，脚本找最新的那一个）。
+# --docker 时三个程序都在宿主机上先编好（仓库是只读挂进容器的），容器里不用 cargo
 set -u
 R=$(cd "$(dirname "$0")/.." && pwd)
 case "$(uname -m)" in x86_64|amd64) HT=x86_64-unknown-linux-musl ;; aarch64|arm64) HT=aarch64-unknown-linux-musl ;; *) HT="" ;; esac
@@ -32,6 +39,23 @@ helper_build() {   # 这台机器（容器和宿主机是同一种芯片）的�
 	fi
 	[ -x "$R/cli/target/$HT/release/cca-core" ] || { echo "辅助程序还没编出来：cd cli && cargo build --release --locked --target $HT" >&2; return 1; }
 }
+kit_build() {   # 测试自己用的两个程序：有 cargo 就编出来，没有时用已经编好的。找到的放进 KT（cca-test）、KS（suite）
+	local j out="$R/cli/target/$HT/kit"
+	[ -n "$HT" ] || { echo "测试用的程序没有这种机器的（$(uname -m)）" >&2; return 1; }
+	if command -v cargo >/dev/null 2>&1; then
+		# suite 是测试程序，文件名后面带着一串摘要：照 cargo 的 JSON 消息找编出来的是哪一个（和 regress.sh 一样）
+		j=$(cd "$R/cli" && . ./musl-env.sh && cargo build --profile kit -p cca-tests --locked --target "$HT" --bins --tests --message-format=json 2>/dev/null) ||
+			{ echo "测试用的程序编不出来：cd cli && . ./musl-env.sh && cargo build --profile kit -p cca-tests --locked --target ${HT} --bins --tests（没装这个目标就先 rustup target add ${HT}）" >&2; return 1; }
+		KS=$(printf '%s\n' "$j" | sed -n 's/.*"kind":\["test"\][^}]*"name":"suite".*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)
+	else
+		# 没有 cargo：用编好的里面最新的那一个。suite 的文件名带一串摘要，放在哪一层随 cargo 的版本变（deps/，新的是 build/cca-tests/<摘要>/out/）
+		KS=$(ls -t "$out"/deps/suite-* "$out"/build/cca-tests/*/out/suite-* 2>/dev/null | while IFS= read -r j; do
+			[ -f "$j" ] && [ -x "$j" ] && { printf '%s\n' "$j"; break; }; done)
+	fi
+	KT="$out/cca-test"
+	[ -x "$KT" ] && [ -n "$KS" ] && [ -x "$KS" ] ||
+		{ echo "测试用的程序还没编出来：cd cli && cargo build --profile kit -p cca-tests --locked --target $HT --bins --tests（要 Rust 和这个目标）；这台机器上没有 cargo 的话，在别的机器上编好拷过来，用 CCA_TEST_BIN、CCA_SUITE_BIN 指给它（cca-test 在 cli/target/$HT/kit/ 下；suite 的文件名带一串摘要，cargo build 加 --message-format=json 时 \"executable\" 那一项写着它在哪）" >&2; return 1; }
+}
 IMAGES="ubuntu:22.04 ubuntu:24.04 ubuntu:26.04 debian:12 debian:13 rockylinux/rockylinux:9 almalinux:10 fedora:43 amazonlinux:2023 alpine:3.22 archlinux:latest opensuse/leap:16.0"
 
 if [ "${1:-}" = --docker ]; then
@@ -39,6 +63,8 @@ if [ "${1:-}" = --docker ]; then
 	[ $# -gt 0 ] || set -- $IMAGES
 	command -v docker >/dev/null 2>&1 || { echo "没有 docker" >&2; exit 2; }
 	helper_build || exit 2   # 仓库是只读挂进容器的，辅助程序在这里先编好
+	kit_build || exit 2      # 测试用的两个程序也是：容器里没有 cargo，照挂进去以后的路径指给它们
+	case "$KS" in "$R"/*) ;; *) echo "测试程序 suite 编到仓库外面去了（${KS}）：容器里看不到它（CARGO_TARGET_DIR 指了别处？）" >&2; exit 2 ;; esac
 	L=$(mktemp -d "${TMPDIR:-/tmp}/cca-linux.XXXXXX"); mkdir -p "$L/core"
 	# 内置代理的内核只下载一次（GitHub 慢的时候十几个容器同时下容易超时），校验过放进 $L/core 给各个容器（CCA_LINUX_CORE_CACHE；
 	# cca 照样校验）。没下成就让各个容器自己下
@@ -52,6 +78,7 @@ if [ "${1:-}" = --docker ]; then
 	for img in "$@"; do   # 各用各的网络：端口池互不冲突，并行跑
 		n=$(printf '%s' "$img" | tr '/:.' '---')
 		docker run --rm --name "cca-linux-$n-$$" -v "$R":/cca:ro -v "$L/core":/cca-core:ro -e CCA_LINUX_CORE_CACHE=/cca-core \
+			-e CCA_TEST_BIN="/cca${KT#"$R"}" -e CCA_SUITE_BIN="/cca${KS#"$R"}" \
 			"$img" sh /cca/tests/linux.sh --in-container > "$L/$n.log" 2>&1 &
 	done
 	wait
@@ -74,15 +101,15 @@ if [ "${1:-}" = --in-container ]; then   # 容器里（sh 跑的，可能还没�
 		if command -v apt-get >/dev/null 2>&1; then
 			export DEBIAN_FRONTEND=noninteractive
 			# 不装 procps（Debian 的镜像里本来就没有，Ubuntu 的自带）：cca 在 Linux 上不靠 ps、pgrep、pkill
-			apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends bash python3 curl ca-certificates gzip perl netcat-openbsd openssh-client openssl >/dev/null 2>&1
+			apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends bash curl ca-certificates gzip perl netcat-openbsd openssh-client openssl >/dev/null 2>&1
 		elif command -v dnf >/dev/null 2>&1; then
-			dnf install -y -q python3 gzip perl nmap-ncat openssh-clients procps-ng findutils openssl >/dev/null 2>&1
+			dnf install -y -q gzip perl nmap-ncat openssh-clients procps-ng findutils openssl >/dev/null 2>&1
 		elif command -v apk >/dev/null 2>&1; then
-			apk add -q bash python3 curl perl openssh-client-default openssh-keygen openssl >/dev/null 2>&1
+			apk add -q bash curl perl openssh-client-default openssh-keygen openssl >/dev/null 2>&1
 		elif command -v pacman >/dev/null 2>&1; then
-			pacman -Sy --noconfirm --needed python curl perl openbsd-netcat openssh procps-ng openssl >/dev/null 2>&1
+			pacman -Sy --noconfirm --needed curl perl openbsd-netcat openssh procps-ng openssl >/dev/null 2>&1
 		elif command -v zypper >/dev/null 2>&1; then
-			zypper -q -n install python3 curl perl netcat-openbsd openssh-clients procps gzip findutils openssl >/dev/null 2>&1
+			zypper -q -n install curl perl netcat-openbsd openssh-clients procps gzip findutils openssl >/dev/null 2>&1
 		fi
 	}
 	ruby_dep() {   # 假路由器上的 cca 要 ruby（真的路由器上 OpenClash 自带）：装不上只是不测在家走路由器
@@ -99,7 +126,7 @@ if [ "${1:-}" = --in-container ]; then   # 容器里（sh 跑的，可能还没�
 	for i in 1 2 3; do deps && break; sleep 5; done   # 十几个容器同时装，软件源偶尔失败一次（Amazon Linux 遇到过）
 	ruby_dep
 	command -v bash >/dev/null 2>&1 || { echo "  ✗ 装不上 bash"; echo "  结果：0 通过，1 失败"; exit 1; }
-	command -v gzip >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || { echo "  ✗ 依赖没装齐（gzip、python3）"; echo "  结果：0 通过，1 失败"; exit 1; }
+	command -v gzip >/dev/null 2>&1 || { echo "  ✗ 依赖没装齐（gzip）"; echo "  结果：0 通过，1 失败"; exit 1; }
 	export CCA_LINUX_CONTAINER=1   # 在家走路由器只在容器里测
 	exec bash /cca/tests/linux.sh --here
 fi
@@ -111,6 +138,15 @@ if [ -z "$HB" ]; then
 	[ -x "$HB" ] || helper_build || exit 2
 fi
 [ -x "$HB" ] || { echo "辅助程序不在：$HB" >&2; exit 2; }
+# 测试自己用的两个程序：CCA_TEST_BIN、CCA_SUITE_BIN 指了就用指的（--docker 时宿主机编好、指给容器的也是它们），没指的编出来 / 找编好的。
+# 写成完整的路径：假命令的脚本里要写它，那些脚本在哪个目录下跑都得找得到
+tb="${CCA_TEST_BIN:-}"; sb="${CCA_SUITE_BIN:-}"; KT=""; KS=""
+if [ -z "$tb" ] || [ -z "$sb" ]; then kit_build || exit 2; fi
+KT="${tb:-$KT}"; KS="${sb:-$KS}"
+case "$KT" in /*) ;; *) KT="$PWD/$KT" ;; esac
+case "$KS" in /*) ;; *) KS="$PWD/$KS" ;; esac
+[ -x "$KT" ] || { echo "测试用的小工具 cca-test 不在：$KT" >&2; exit 2; }
+[ -x "$KS" ] || { echo "测试程序 suite 不在：$KS" >&2; exit 2; }
 pass=0; fail=0
 ok() { echo "  ✓ $*"; pass=$((pass + 1)); }
 no() { echo "  ✗ $*"; fail=$((fail + 1)); }
@@ -133,176 +169,15 @@ cleanup() {   # 停掉这次起的进程（测试服务、内核、托管进程�
 trap cleanup EXIT
 # 假的 claude：auth login 照真的 Claude Code 走（本机 127.0.0.1 开回调、经 BROWSER 交出登录网址，state 是 $D/oauth_state，
 # code 以 good 开头算换到了 token，凭证写成 600 的 .credentials.json），auth status / logout（凭证文件留给 cca 删），
-# 别的当作会话：记下拿到的代理（$D/hold 在时一直开着）；--settings 里有 apiKeyHelper 时像 Claude Code 一样执行它，取到的 key 写进 $D/claude.key
-cat > "$D/bin/claude" <<S
-#!/usr/bin/env python3
-D = '$D'
-S
-cat >> "$D/bin/claude" <<'S'
-import http.server, json, os, socketserver, subprocess, sys, threading, time, urllib.parse as up
-args = sys.argv[1:]
-P = os.path.join(os.environ.get('CLAUDE_CONFIG_DIR', '/nonexistent'), '.claude.json')
-def log(s):
-    open(os.path.join(D, 'claude.log'), 'a').write(s + '\n')
-def load():
-    try:
-        return json.load(open(P))
-    except Exception:
-        return {}
-if args[:1] == ['--version']:
-    print('9.9.9 (Claude Code)'); sys.exit(0)
-if args[:2] == ['auth', 'status']:
-    e = (load().get('oauthAccount') or {}).get('emailAddress')
-    print(json.dumps({'loggedIn': bool(e), 'email': e})); sys.exit(0)
-if args[:2] == ['auth', 'logout']:
-    j = load(); j.pop('oauthAccount', None); json.dump(j, open(P, 'w')); log('LOGOUT'); sys.exit(0)
-if args[:2] == ['auth', 'login']:
-    email = args[args.index('--email') + 1] if '--email' in args else 'someone@example.com'
-    state = open(os.path.join(D, 'oauth_state')).read().strip()
-    got, done = {}, threading.Event()
-    class H(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-        def do_GET(self):
-            u = up.urlsplit(self.path); q = dict(up.parse_qsl(u.query))
-            if u.path != '/callback' or q.get('state') != state:
-                self.send_response(400); self.end_headers(); got['err'] = 'Invalid state parameter'; done.set(); return
-            self.send_response(302); self.send_header('Location', 'https://platform.claude.com/oauth/code/success'); self.end_headers()
-            got['code'] = q.get('code', ''); done.set()
-    srv = socketserver.TCPServer(('127.0.0.1', 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    url = 'https://claude.com/cai/oauth/authorize?' + up.urlencode({'code': 'true', 'client_id': 'c', 'response_type': 'code',
-        'redirect_uri': 'http://localhost:%d/callback' % srv.server_address[1], 'code_challenge': 'CC', 'code_challenge_method': 'S256',
-        'state': state, 'login_hint': email})
-    print('Opening browser to sign in…'); sys.stdout.write('Paste code here if prompted > '); sys.stdout.flush()
-    subprocess.run([os.environ['BROWSER'], url], stdin=subprocess.DEVNULL)
-    if not done.wait(60) or 'err' in got:
-        print('Login failed: ' + got.get('err', 'timed out')); sys.exit(1)
-    log('EXCHANGE code=%s https_proxy=%s' % (got['code'], os.environ.get('https_proxy', 'unset')))
-    if not got['code'].startswith('good'):
-        print('Login failed: Request failed with status code 400'); sys.exit(1)
-    j = load(); j['oauthAccount'] = {'emailAddress': email}; json.dump(j, open(P, 'w'))
-    c = os.path.join(os.path.dirname(P), '.credentials.json')
-    fd = os.open(c, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, b'{"claudeAiOauth": {}}'); os.close(fd)
-    print('Login successful.'); sys.exit(0)
-if '--settings' in args:
-    s = json.loads(args[args.index('--settings') + 1])
-    if s.get('apiKeyHelper'):
-        r = subprocess.run(['/bin/sh', '-c', s['apiKeyHelper']], stdin=subprocess.DEVNULL, capture_output=True, text=True)
-        open(os.path.join(D, 'claude.key'), 'w').write(r.stdout)
-log('SESSION https_proxy=%s args=%s' % (os.environ.get('https_proxy', 'unset'), ' '.join(a for a in args if not a.startswith('--settings') and not a.startswith('{'))))
-while os.path.exists(os.path.join(D, 'hold')):
-    time.sleep(0.1)
-print('fake claude session')
-S
+# 别的当作会话：记下拿到的代理（$D/hold 在时一直开着）；--settings 里有 apiKeyHelper 时像 Claude Code 一样执行它，取到的 key 写进 $D/claude.key。
+# 这里只是两行 sh：要做的都交给 cca-test 的角色 linux-claude（tests/tool/fake/linux_claude.rs）。"$0" 也带过去：进程的命令行里就有
+# $D/bin/claude，下面读 /proc 认得出是它
+{ echo '#!/bin/sh'; echo "exec '$KT' linux-claude '$D' \"\$0\" \"\$@\""; } > "$D/bin/claude"
 # 假的 codex：--version / --help / features list 给 cca 探测参数；logout 删 auth.json；app-server（一行一个 JSON）照真的 codex 0.167
 # 登录：本机 127.0.0.1 开回调（redirect_uri 写 localhost）、回登录网址，state 不对回 400 接着等，对的“换 token”（code 以 good 开头算
 # 成功，写 auth.json，邮箱取 CCA_ACCOUNT 里的），再发 account/login/completed；account/rateLimits/read 回固定的用量。
-# 别的当作会话：记下参数、代理和 CODEX_HOME（$D/hold 在时一直开着）
-cat > "$D/bin/codex" <<S
-#!/usr/bin/env python3
-D = '$D'
-S
-cat >> "$D/bin/codex" <<'S'
-import base64, http.server, json, os, re, socketserver, sys, threading, time, urllib.parse as up
-args, home = sys.argv[1:], os.environ.get('CODEX_HOME', '')
-def log(s):
-    with open(os.path.join(D, 'codex.log'), 'a') as f:
-        f.write(s + '\n')
-i = 0
-while i < len(args):   # cca 加在前面的全局参数
-    if args[i] == '--no-daemon':
-        i += 1
-    elif args[i] in ('--disable', '--enable', '-c'):
-        i += 2
-    else:
-        break
-sub = args[i] if i < len(args) else ''
-if i == 0 and sub == '--version':
-    print('codex-cli 0.167.0'); sys.exit(0)
-if i == 0 and sub == '--help':
-    print('      --no-daemon'); sys.exit(0)
-if sub == 'features':
-    print('respect_system_proxy                     under development  false')
-    print('system_proxy_fallback                    stable             true')
-    sys.exit(0)
-if sub == 'logout':
-    try:
-        os.remove(os.path.join(home, 'auth.json'))
-    except OSError:
-        pass
-    sys.exit(0)
-if sub != 'app-server':
-    log('SESSION https_proxy=%s home=%s args=%s' % (os.environ.get('https_proxy', 'unset'), home, ' '.join(args)))
-    while os.path.exists(os.path.join(D, 'hold')):
-        time.sleep(0.1)
-    print('fake codex session'); sys.exit(0)
-def b64(d):
-    return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
-def email_now():
-    try:
-        tok = json.load(open(os.path.join(home, 'auth.json')))['tokens']['id_token'].split('.')[1]
-        return json.loads(base64.urlsafe_b64decode(tok + '=' * (-len(tok) % 4)))['email']
-    except Exception:
-        return ''
-def write_auth():
-    m = re.search(r'\(([^()]+@[^()]+)\)$', os.environ.get('CCA_ACCOUNT', ''))
-    email = m.group(1) if m else 'someone@example.com'
-    claims = {'email': email, 'https://api.openai.com/auth': {'chatgpt_plan_type': 'plus', 'chatgpt_account_id': 'ws-x'}}
-    json.dump({'auth_mode': 'chatgpt', 'OPENAI_API_KEY': None, 'tokens': {'id_token': '%s.%s.sig' % (b64({'alg': 'none'}), b64(claims)),
-               'access_token': 'at', 'refresh_token': 'rt', 'account_id': 'ws-x'}}, open(os.path.join(home, 'auth.json'), 'w'))
-LOCK = threading.Lock()
-def send(m):
-    with LOCK:
-        print(json.dumps(m), flush=True)
-def start_login(rid):
-    state = open(os.path.join(D, 'oauth_state')).read().strip()
-    class H(http.server.BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
-        def do_GET(self):
-            u = up.urlsplit(self.path); q = dict(up.parse_qsl(u.query))
-            if u.path != '/auth/callback':
-                self.send_response(404); self.end_headers(); return
-            if q.get('state') != state:
-                self.send_response(400); self.end_headers(); self.wfile.write(b'State mismatch'); return
-            log('EXCHANGE code=%s https_proxy=%s' % (q.get('code', ''), os.environ.get('https_proxy', 'unset')))
-            good = q.get('code', '').startswith('good')
-            if good:
-                write_auth()
-            self.send_response(200); self.end_headers(); self.wfile.write(b'ok' if good else b'failed')
-            send({'method': 'account/login/completed', 'params': {'loginId': 'L1', 'success': good, 'error': None if good else 'Token exchange failed'}})
-    srv = socketserver.TCPServer(('127.0.0.1', 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    q = up.urlencode({'response_type': 'code', 'client_id': 'app_x', 'redirect_uri': 'http://localhost:%d/auth/callback' % srv.server_address[1],
-                      'scope': 'openid profile email offline_access', 'code_challenge': 'CC', 'code_challenge_method': 'S256',
-                      'state': state, 'originator': 'codex_cli_rs'})
-    send({'id': rid, 'result': {'type': 'chatgpt', 'loginId': 'L1', 'authUrl': 'https://auth.openai.com/oauth/authorize?' + q}})
-for line in sys.stdin:
-    try:
-        m = json.loads(line)
-    except ValueError:
-        continue
-    meth, rid = m.get('method'), m.get('id')
-    if meth == 'initialize':
-        send({'id': rid, 'result': {'userAgent': 'x'}})
-    elif meth == 'account/login/start':
-        start_login(rid)
-    elif meth == 'account/login/cancel':
-        send({'id': rid, 'result': {}})
-    elif meth == 'account/rateLimits/read':
-        log('USAGE email=%s https_proxy=%s' % (email_now() or '-', os.environ.get('https_proxy', 'unset')))
-        if os.path.exists(os.path.join(D, 'usage_hang')):   # 卡住不回（照样读 stdin：和真的一样，stdin 一断就退出）
-            continue
-        if not email_now():
-            send({'id': rid, 'error': {'code': -32600, 'message': 'codex account authentication required'}}); continue
-        now = int(time.time())
-        rl = {'limitId': 'codex', 'primary': {'usedPercent': 13, 'windowDurationMins': 300, 'resetsAt': now + 7200},
-              'secondary': {'usedPercent': 41, 'windowDurationMins': 10080, 'resetsAt': now + 3 * 86400}, 'planType': 'plus'}
-        send({'id': rid, 'result': {'rateLimits': rl, 'rateLimitsByLimitId': {'codex': rl}}})
-    elif rid is not None:
-        send({'id': rid, 'error': {'code': -32601, 'message': 'Method not found: %s' % meth}})
-S
+# 别的当作会话：记下参数、代理和 CODEX_HOME（$D/hold 在时一直开着）。同样交给 cca-test 的角色 linux-codex（tests/tool/fake/linux_codex.rs）
+{ echo '#!/bin/sh'; echo "exec '$KT' linux-codex '$D' \"\$0\" \"\$@\""; } > "$D/bin/codex"
 # 假的 crontab：这次测试的用户 crontab 存在 $D/crontab 里（绝不碰这台机器上真的）
 cat > "$D/bin/crontab" <<S
 #!/bin/sh
@@ -342,10 +217,13 @@ S
 chmod 755 "$D/bin/curl"
 export HOME="$H" PATH="$D/bin:$H/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" LANG=C.UTF-8 CCA_COST=off
 unset CCA_HOME XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CACHE_HOME DISPLAY WAYLAND_DISPLAY   # XDG_CACHE_HOME：辅助程序解在它里面，不清掉就解到沙箱外面去了
-echo "  bash ${BASH_VERSION%%(*}，$(python3 --version 2>&1)，$(curl --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2)，nc：$(readlink -f "$(command -v nc)" 2>/dev/null || echo 无)，ps：$(readlink -f "$(command -v ps)" 2>/dev/null || echo 无)，ruby：$(ruby -e 'print RUBY_VERSION' 2>/dev/null || echo 无)"
+echo "  bash ${BASH_VERSION%%(*}，$(curl --version 2>/dev/null | head -n 1 | cut -d' ' -f1-2)，nc：$(readlink -f "$(command -v nc)" 2>/dev/null || echo 无)，ps：$(readlink -f "$(command -v ps)" 2>/dev/null || echo 无)，ruby：$(ruby -e 'print RUBY_VERSION' 2>/dev/null || echo 无)"
 ans() { local f; f=$(mktemp "$D/ans.XXXXXX"); printf '%s\n' "$@" > "$f"; printf '%s' "$f"; }
 fp() { printf '%s' "$1" | sha256sum | cut -c1-16; }   # 节点摘要（node_fp：类型|服务器|端口|TLS 域名 的 sha256 前 16 位）
 FPA=$(fp 'socks5|127.0.0.1|18080|')
+# kt 子命令 参数…：小工具 cca-test。读 JSON、写测试数据的那几处用它的求值器（check / val / edit / run，程序是 Python 的写法）和 fx；
+# 它遇到不认识的写法退出码是 2，并在 $D/trap 里记一行——最后看这个文件是空的
+kt() { CCA_TEST_TRAP="$D/trap" "$KT" "$@"; }
 
 # 一键安装：install.sh 从 GitHub 下载 cca 和签名、验签、运行 cca install。GitHub 换成本机的文件（假 curl 只认 GitHub 上 cca 的发布），
 # 发布密钥换成这次生成的（install.sh 和 cca 里的 RELEASE_KEY 一起换）；单独的 HOME，用 bash（PATH 该写进 ~/.bashrc）
@@ -416,18 +294,12 @@ out=$(CCA_TTY=$(ans n n) "$C" install 2>&1)
 if [ -f "$H/.cca/config.json" ]; then ok "cca install"; else no "cca install：$(printf '%s' "$out" | tail -n 3)"; echo "  结果：$pass 通过，$fail 失败"; exit 1; fi
 if [ "$(readlink "$H/.local/bin/cxa")" = cca ] && [ "$(readlink "$H/.local/bin/aga")" = cca ]; then ok "cca install：建好简写 cxa、aga（等于 cca codex、cca agy），指向同目录的 cca"
 else no "cca install 的简写：cxa → $(readlink "$H/.local/bin/cxa" 2>/dev/null)，aga → $(readlink "$H/.local/bin/aga" 2>/dev/null)"; fi
-python3 - "$H/.cca" <<'PY'
-import json, os, sys, time
-d = sys.argv[1]
-c = json.load(open(d + '/config.json'))
-c['nodes'] = ['US-A']
-json.dump(c, open(d + '/config.json', 'w'), ensure_ascii=False, indent=1)
-json.dump({'alice(alice@example.com)': 'US-A'}, open(d + '/accounts.json', 'w'), indent=1)
-os.makedirs(d + '/core', mode=0o700, exist_ok=True)
-json.dump({'version': 1, 'saved_at': time.time(), 'nodes': ['US-A'],
-           'proxies': [{'name': 'US-A', 'type': 'socks5', 'server': '127.0.0.1', 'port': 18080}]}, open(d + '/core/nodes.json', 'w'))
-os.chmod(d + '/core/nodes.json', 0o600)
-PY
+# 可选节点 US-A（本机的测试节点）、账号 alice 走它；内置代理要的节点定义直接写进 core/nodes.json（600）
+kt edit --indent 1 --unicode c="$H/.cca/config.json" 'c["nodes"] = ["US-A"]' &&
+	printf '{\n "alice(alice@example.com)": "US-A"\n}' > "$H/.cca/accounts.json" &&
+	mkdir -p -m 700 "$H/.cca/core" &&
+	printf '%s' "$(kt val --json '{"version": 1, "saved_at": time.time(), "nodes": ["US-A"], "proxies": [{"name": "US-A", "type": "socks5", "server": "127.0.0.1", "port": 18080}]}')" > "$H/.cca/core/nodes.json" &&
+	chmod 600 "$H/.cca/core/nodes.json"
 
 # 内置代理。用户自己的 crontab 里本来就有一行（cca 只动带 # cca-core 的那一行）
 echo '0 3 * * * echo user-job' > "$D/crontab"
@@ -450,7 +322,7 @@ core=$(ls "$H"/.cca/core/mihomo-v* 2>/dev/null | head -n 1)
 echo '{"mixed-port": 18080, "bind-address": "127.0.0.1", "allow-lan": false, "mode": "direct", "log-level": "warning"}' > "$D/up/config.yaml"
 [ -x "$D/mihomo" ] && { "$D/mihomo" -d "$D/up" -f "$D/up/config.yaml" > "$D/up.log" 2>&1 & echo $! >> "$D/pids"; }
 echo cca-linux-ok > "$D/www/ok.txt"
-( cd "$D/www" && exec python3 -m http.server 18081 --bind 127.0.0.1 > /dev/null 2>&1 ) & echo $! >> "$D/pids"
+"$KT" http-serve --dir "$D/www" --listen 127.0.0.1:18081 > /dev/null 2>&1 & echo $! >> "$D/pids"
 get() { curl -q -s -m 5 --noproxy '' -x "http://${2:-127.0.0.1}:${1:-7901}" http://127.0.0.1:18081/ok.txt 2>/dev/null; }   # --noproxy ''：环境里的 no_proxy 不算数
 listen() { (exec 3<>"/dev/tcp/${2:-127.0.0.1}/$1") 2>/dev/null; }
 for i in $(seq 1 40); do [ "$(get)" = cca-linux-ok ] && break; sleep 0.25; done
@@ -530,39 +402,20 @@ else no "第三方 API 账号（退出码 $rc）：$(printf '%s\n%s' "$out" "$ou
 CCA_TTY=$(ans y) "$C" rm kf >/dev/null 2>&1
 if [ -z "$(ls "$H"/.cca/secrets/cca-api-kf-* 2>/dev/null)" ]; then ok "cca rm：第三方 API 账号的 key 文件一起删掉"; else no "cca rm 之后 key 文件还在"; fi
 
-# Team「书房组」：真的 server/cca-presence.py --mode team（127.0.0.1 上随机端口、openssl 生成的 P-256 证书，ttl 10 秒），管理员由
-# tests/spec_wire.py 扮演（照 server/README.md 独立实现的那一头，不用 cca 的代码；签名用 ssh-keygen -Y）。后面服务器上不用路由器那一节
+# Team「书房组」：真的服务器（辅助程序的 team-server --mode team：127.0.0.1 上随机端口、openssl 生成的 P-256 证书，ttl 10 秒），管理员由
+# cca-test spec 扮演（tests/kit/spec.rs：照 server/README.md 独立实现的那一头，不用 cca 的代码；签名用 ssh-keygen -Y）。后面服务器上不用路由器那一节
 # 也用它（另一台设备）。没有 openssl 时生成不了服务器的证书：这几个用例跳过
 TV="$D/team"; TVPORT=""; TID=""
 team_put() {   # team_put 那串随机数 序号 'JSON' [签名的密钥]：管理员给那串随机数派生出来的设备存一版配置（accounts、aliases、nodes、install_node
 	         # 照 JSON），序号是 1 时先发邀请；写了签名的密钥时拿它签（不是根密钥签的：像服务器被人冒充）。打印邀请链接
-	python3 -B - "$R/tests" "$TV/root" "$TVPORT" "https://127.0.0.1:$TVPORT" "$TVPIN" "$@" <<'PY'
-import hashlib, json, sys
-sys.path.insert(0, sys.argv[1])
-import spec_wire as sw
-root, port, url, pin, secret, seq = sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], int(sys.argv[7])
-signer = sys.argv[9] if sys.argv[9:] else root
-pub = ' '.join(open(root + '.pub').read().split()[:2])
-token, dev, keys = sw.invite_parts(secret)
-tid = sw.team_id(pub)
-if seq == 1:
-    st, j = sw.post(root, port, 'team_invite', {'token': hashlib.sha256(token.encode()).hexdigest(), 'dev': dev, 'ttl': 600})
-    assert st == 200, (st, j)
-doc = {'v': 1, 'at': 1790000000 + seq, 'name': '书房组', 'salt': 'cd' * 16, 'server': {'u': url, 'p': [pin]},
-       'accounts': {}, 'aliases': {}, 'install_node': '', 'nodes': None}
-doc.update(json.loads(sys.argv[8]))
-ct = sw.team_doc_seal(keys, tid, dev, seq, doc)
-st, j = sw.post(root, port, 'team_put', {'docs': {dev: {'seq': seq, 'ct': ct, 'sig': sw.team_doc_sign(signer, tid, dev, seq, ct)}}})
-assert (st, j.get('stored')) == (200, [dev]), (st, j)
-print(sw.invite_encode(url, [pin], pub, secret, '书房组'))
-PY
+	kt spec put "$TV/root" "$TVPORT" "https://127.0.0.1:$TVPORT" "$TVPIN" "$1" "$2" 书房组 "${@:3}"
 }
 if command -v openssl >/dev/null 2>&1; then
 	mkdir -p "$TV"
 	openssl ecparam -name prime256v1 -genkey -noout -out "$TV/key.pem" 2>/dev/null
 	openssl req -new -x509 -key "$TV/key.pem" -subj /CN=cca-team -days 2 -out "$TV/cert.pem" 2>/dev/null
 	ssh-keygen -q -t ed25519 -N '' -C root -f "$TV/root" </dev/null; ssh-keygen -q -t ed25519 -N '' -C evil -f "$TV/evil" </dev/null
-	python3 -I "$R/server/cca-presence.py" --mode team --team-root "$(cut -d' ' -f1-2 "$TV/root.pub")" --listen 127.0.0.1:0 --port-file "$TV/port" \
+	"$HB" team-server --mode team --team-root "$(cut -d' ' -f1-2 "$TV/root.pub")" --listen 127.0.0.1:0 --port-file "$TV/port" \
 		--cert "$TV/cert.pem" --key "$TV/key.pem" --state "$TV/state.json" --ttl 10 >> "$TV/log" 2>&1 & echo $! >> "$D/pids"
 	for i in $(seq 1 50); do [ -s "$TV/port" ] && break; sleep 0.1; done
 	TVPORT=$(cat "$TV/port" 2>/dev/null)
@@ -594,16 +447,16 @@ fi
 # 设备统计（presence）：Team 给的账号开着会话时 cca 在后台起上报进程，报给这个 Team 的服务器（Linux 上没有 kqueue：每 5 秒看一次）；
 # 会话的登记（cli-<进程号>.json）、进程的启动时间从 /proc 读（busybox 的 ps 不认 -p、-x、lstart）
 if [ -n "$TID" ]; then
-	dstate() { "$C" devices alice@example.com --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"]))' 2>/dev/null; }
+	dstate() { "$C" devices alice@example.com --json 2>/dev/null | kt val -f d=- '",".join("%s:%s:%d" % (x["name"], x["state"], x["cli"]) for x in d["accounts"][0]["devices"])' 2>/dev/null; }
 	AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
 	touch "$D/hold"
 	CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi >/dev/null 2>&1 & S1=$!
 	for i in $(seq 1 40); do [ -f "$AD/cli-$S1.json" ] && break; sleep 0.25; done
-	mk=$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); print("%s:%s" % (j["pid"], j["tool"]))' "$AD/cli-$S1.json" 2>/dev/null)
+	mk=$(kt val -f j="$AD/cli-$S1.json" '"%s:%s" % (j["pid"], j["tool"])' 2>/dev/null)
 	# 一秒左右问一次：服务器给每台设备限了流（每秒 0.5 个请求、最多攒 30 个），问得太勤上报进程就报不上去了
 	for i in $(seq 1 60); do [ "$(dstate)" = linux-test:in_use:1 ] && break; sleep 0.8; done
 	st1=$(dstate)
-	ap=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$H/.cca/presence/agent.json" 2>/dev/null)
+	ap=$(kt val -f j="$H/.cca/presence/agent.json" 'j["pid"]' 2>/dev/null)
 	if [ "$mk" = "$S1:claude" ] && [ "$st1" = linux-test:in_use:1 ] && [ -n "$ap" ] && kill -0 "$ap" 2>/dev/null; then
 		ok "设备统计：Team 给的账号会话开着时登记 cli-<进程号>.json（启动时间从 /proc 读），后台的上报进程报给 Team 的服务器：在用、1 个会话"
 	else no "设备统计：登记 ${mk:-没有}，服务器上是「${st1:-空}」，上报进程 ${ap:-没有}；$(tail -n 2 "$TV/log" 2>/dev/null | tr '\n' ' ')$(cat "$H/.cca/presence/team.$TID.status.json" 2>/dev/null)"; fi
@@ -620,18 +473,46 @@ else
 	echo "  （跳过 Team 和设备统计：没有 openssl，生成不了服务器的证书）"
 fi
 
-# 远程会话（docs/dev/remote.md）：会话宿主和接入端、两台机器配对、经服务器中转接入。两份 Python 测试把辅助程序当黑盒跑
+# suite_run 模块：跑测试程序 suite 的一个模块（tests/<模块>.rs：把辅助程序当黑盒，自己的临时 HOME，不碰上面的沙箱）。服务器用辅助程序里的
+# 那一份（CCA_TEST_SERVER=rust）；--setsid：自己一个会话，没有控制终端（在终端里跑、经 ssh 跑、在容器里跑都一样）。跑了、用例都过了才
+# 返回 0，SN 是通过的用例数（有跳过的话后面带一句）；别的都算没过，SW 说哪里不对——suite 不认识这个模块（还没有这份测试）、一个
+# 用例都没跑也在里面：不能悄悄当成过了。结果和记录在 $D/suite-<模块>/
+suite_run() {
+	local m="$1" d="$D/suite-$1" rc name st p f s secs got=""
+	SN=""; SW=""
+	mkdir -p "$d"
+	# 放到后台再等它：suite 自己一个会话，终端上按 Ctrl-C 的信号到不了它；bash 等前台的命令时要等它跑完才理这个信号，等后台的（wait）
+	# 马上就退出，退出时的清理再把它停掉（它的命令行里带着沙箱的路径）
+	CCA_HELPER="$HB" CCA_TEST_BIN="$KT" CCA_REPO="$R" CCA_TEST_SERVER=rust "$KS" --setsid --module "$m" --results "$d/results.tsv" --logs "$d/logs" > "$d/out" 2>&1 </dev/null &
+	wait $!; rc=$?
+	[ ! -f "$d/results.tsv" ] || while IFS="$(printf '\t')" read -r name st p f s secs; do
+		[ "$name" = "$m" ] && got="$st $p $f $s"
+	done < "$d/results.tsv"
+	set -- $got
+	if [ $rc -eq 0 ] && [ "${1:-}" = pass ] && [ "${2:-0}" -gt 0 ] && [ "${3:-1}" -eq 0 ]; then
+		SN="$2 个用例"; [ "${4:-0}" -eq 0 ] || SN="${SN}，另有 $4 个跳过"
+		return 0
+	fi
+	SW=$(grep -E '^(FAIL|TIMEOUT|NOTRUN) ' "$d/logs/$m.log" 2>/dev/null | head -n 4 | cut -d' ' -f1-2 | tr '\n' ' ' | sed 's/ $//')
+	[ -n "$SW" ] || SW=$(tail -n 3 "$d/out" | tr '\n' ' ' | sed 's/ $//')
+	SW="退出码 ${rc}，${got:-没有这个模块的结果}：${SW}"
+	return 1
+}
+suite_more() {   # suite_more 模块：没过的用例连同它们的输出（最多 80 行；没有记录时是 suite 最后说的那几行）。沙箱退出时就删了，要看的打在这里
+	local d="$D/suite-$1" t
+	t=$(grep -E -A 40 '^(FAIL|TIMEOUT|NOTRUN) ' "$d/logs/$1.log" 2>/dev/null | grep -E '^(FAIL |TIMEOUT |NOTRUN |    )' | head -n 80)
+	[ -n "$t" ] || t=$(tail -n 15 "$d/out" 2>/dev/null)
+	[ -z "$t" ] || printf '%s\n' "$t" | sed 's/^/      /'
+}
+# 远程会话（docs/dev/remote.md）：会话宿主和接入端、两台机器配对、经服务器中转接入。suite 的两个模块把辅助程序当黑盒跑
 # （真的伪终端、真的服务器进程、每台设备一个临时 HOME 和自己在 Team 里的密钥），不碰上面的沙箱。只在宿主机上跑：容器里各发行版的
 # ps、pgrep 不一样（busybox 的 ps 没有 -p），还没在那一套上试过
 if [ -n "${CCA_LINUX_CONTAINER:-}" ]; then
 	echo "  （容器里不跑远程会话的测试）"
 elif command -v openssl >/dev/null 2>&1 && command -v ssh-keygen >/dev/null 2>&1 && command -v pgrep >/dev/null 2>&1; then
 	for rt in remote_host remote_relay; do
-		if out=$(CCA_HELPER="$HB" python3 "$R/tests/$rt.py" 2>&1); then
-			ok "远程会话：tests/$rt.py（$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p') 个用例）"
-		else
-			no "远程会话：tests/$rt.py：$(printf '%s\n' "$out" | grep -E '^(FAIL|ERROR):|^(FAILED|OK)' | head -n 4 | tr '\n' ' ')"
-		fi
+		if suite_run "$rt"; then ok "远程会话：tests/$rt.rs（${SN}）"
+		else no "远程会话：tests/$rt.rs：$SW"; suite_more "$rt"; fi
 	done
 else
 	echo "  （跳过远程会话的测试：要 openssl、ssh-keygen、pgrep）"
@@ -640,35 +521,22 @@ fi
 # 折合金额：共享的会话记录里的用量按官方 API 的标价折算，按登录的身份认是谁的（Linux 上没有 st_birthtime：按修改时间排；
 # 进程的启动时间从 /proc 读）。会话结束后在后台统计一次（CCA_COST 在这一步清掉：别处是 off）；cca cost sync --json 是 App 用的那一条
 AD=$(ls -d "$H"/.cca/accounts/alice-example-com-* 2>/dev/null | head -n 1)
-python3 - "$AD/claude/.claude.json" "$H" <<'PY'
-import json, os, sys, time
-p, home = sys.argv[1], sys.argv[2]
-j = json.load(open(p))
-j.setdefault('oauthAccount', {})['accountUuid'] = 'u-linux-alice-01'
-json.dump(j, open(p, 'w'))
-d = os.path.join(home, '.claude', 'projects', '-linux')
-os.makedirs(d, exist_ok=True)
-t = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() - 3600))
-line = lambda x: json.dumps(x, separators=(',', ':')) + '\n'
-open(os.path.join(d, 's-linux.jsonl'), 'w').write(
-    line({'type': 'session-owner', 'accountUuid': 'u-linux-alice-01', 'organizationUuid': 'o', 'sessionId': 's-linux'})
-    + line({'type': 'assistant', 'timestamp': t, 'requestId': 'r1', 'sessionId': 's-linux',
-            'message': {'id': 'm1', 'model': 'claude-opus-5-5', 'usage': {'input_tokens': 1000, 'output_tokens': 100}}}))
-PY
+# alice 登录的身份（accountUuid）记进账号的 .claude.json；共享的会话记录里放一份它的会话：1 小时前 claude-opus-5-5 进 1000 出 100（fx linux-costlog）
+kt edit j="$AD/claude/.claude.json" 'j.setdefault("oauthAccount", {})["accountUuid"] = "u-linux-alice-01"' && kt fx linux-costlog "$H"
 CCA_COST= CCA_SKIP_CHECK=1 CCA_TTY=$(ans) "$C" @alice -p hi >/dev/null 2>&1
 for i in $(seq 1 40); do [ -f "$H/.cca/cost/local.json" ] && break; sleep 0.25; done
 kicked=$([ -f "$H/.cca/cost/last" ] && [ -f "$H/.cca/cost/local.json" ] && echo yes)
 out=$("$C" cost sync --json 2>/dev/null); rc=$?
-got=$(python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); print("%s|%s" % (j["who"].get("claude:u-linux-alice-01"), sum(r[0] for r in j["acc"]["claude:u-linux-alice-01"].values())))' "$H/.cca/cost/local.json" 2>/dev/null)
+got=$(kt val -f j="$H/.cca/cost/local.json" '"%s|%s" % (j["who"].get("claude:u-linux-alice-01"), sum(r[0] for r in j["acc"]["claude:u-linux-alice-01"].values()))' 2>/dev/null)
 if [ $rc -eq 0 ] && [ "$kicked" = yes ] && [ "$got" = "alice@example.com|6000" ] && [ "$(stat -c %a "$H/.cca/cost")" = 700 ] && [ "$(stat -c %a "$H/.cca/cost/local.json")" = 600 ] &&
-	printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["kind"] == "cost_sync" and d["scan"]["state"] == "ready" else 1)'; then
+	printf '%s' "$out" | kt check -f d=- 'd["kind"] == "cost_sync" and d["scan"]["state"] == "ready"'; then
 	ok "折合金额：会话结束后在后台统计（cca _cost-sync），按登录的身份认出是 alice 的（折合 0.006 美元）；cca cost sync --json 照样能跑；只给自己读"
 else no "折合金额（退出码 $rc，后台统计${kicked:-没起}）：${got:-没统计出来}；$(printf '%s' "$out" | tail -c 300)"; fi
 
 # Codex：添加账号（服务器上没有路由器、只配置了内置代理：节点从可选节点里选，不用先配置路由器）、服务器上登录（login-page 那一行
 # 带别名、节点和节点摘要；换 token 经账号的端口）、启动（关掉会换出口的开关，经账号的端口）、查用量（经账号的端口）、cxa 是 cca codex 的简写
 out=$(CCA_TTY=$(ans carol@example.com carol 1) "$C" codex add 2>&1); rc=$?
-CP=$(python3 -c 'import json,sys; print(list(json.load(open(sys.argv[1]))["codex"]["ports"].values())[0])' "$H/.cca/config.json" 2>/dev/null)
+CP=$(kt val -f c="$H/.cca/config.json" 'list(c["codex"]["ports"].values())[0]' 2>/dev/null)
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '已添加 carol' && ! printf '%s' "$out" | grep -qE '先配置路由器|还没配置路由器|路由器同步没完成' &&
 	[ "$(readlink "$H/.local/bin/cxa")" = cca ] && [ -n "$CP" ]; then
 	ok "cca codex add：没有路由器也能加（节点从可选节点里选，不提路由器），端口 ${CP}，建好 cxa"
@@ -719,17 +587,8 @@ else no "cxa ls：$(printf '%s' "$out" | head -n 4)"; fi
 # 真实的出口和泄露检测：经账号的端口（内置代理 → US-A → 测试节点直连出去）查出口、纯净度，DNS 泄露经账号的端口测；服务器上没有账号专属的
 # 浏览器和桌面 App，不测 WebRTC。结果随这台机器的网络变（出口可能在不能用的地区、检测服务可能连不上），只核对测了、记下了、没说 WebRTC
 out=$("$C" check alice 2>&1); rc=$?
-hv=$(python3 - "$H"/.cca/accounts/alice-example-com-*/health.json <<'PY' 2>/dev/null
-import json, sys
-h = json.load(open(sys.argv[1]))
-lk = h.get('leak')
-good = (h.get('source') == 'check' and h.get('route') == 'local' and h.get('node') == 'US-A' and h.get('port') == 7901
-        and h.get('result') in ('ok', 'low_purity', 'restricted', 'no_exit', 'no_score')
-        and (lk is None or (lk.get('webrtc') is None and lk.get('dns') in ('ok', 'leak', 'failed') and 'WebRTC' not in (lk.get('line') or ''))))
-print('%s %s：%s · %s；DNS %s' % ('good' if good else 'bad', h.get('result'), h.get('ip') or '没拿到 IP', h.get('country') or '?',
-                               (lk or {}).get('dns') or '没测（出口不对时不等）'))
-PY
-)
+hf=$(ls "$H"/.cca/accounts/alice-example-com-*/health.json 2>/dev/null | head -n 1)
+hv=$(kt run -f h="$hf" 'lk = h.get("leak"); good = (h.get("source") == "check" and h.get("route") == "local" and h.get("node") == "US-A" and h.get("port") == 7901 and h.get("result") in ("ok", "low_purity", "restricted", "no_exit", "no_score") and (lk is None or (lk.get("webrtc") is None and lk.get("dns") in ("ok", "leak", "failed") and "WebRTC" not in (lk.get("line") or "")))); print("%s %s：%s · %s；DNS %s" % ("good" if good else "bad", h.get("result"), h.get("ip") or "没拿到 IP", h.get("country") or "?", (lk or {}).get("dns") or "没测（出口不对时不等）"))' 2>/dev/null)
 if [ $rc -eq 0 ] && [ "${hv%% *}" = good ] && ! printf '%s' "$out" | grep -q 'WebRTC' && printf '%s' "$out" | grep -q '^  alice  US-A  :7901  '; then
 	ok "cca check（真的联网）：经账号的端口测出口和 DNS 泄露，记进 health.json，不说 WebRTC（${hv#* }）"
 else no "cca check（退出码 $rc）：${hv:-没有 health.json}；$(printf '%s' "$out" | tail -n 3)"; fi
@@ -852,7 +711,7 @@ if [ -n "$TVPORT" ]; then
 	for i in $(seq 1 40); do [ "$(get)" = cca-linux-ok ] && break; sleep 0.25; done
 	boot=$(grep -F '# cca-core' "$D/crontab" 2>/dev/null)
 	if [ $rc -eq 0 ] && [ -n "$SLINK" ] && printf '%s' "$out" | grep -q '已加入「书房组」' && printf '%s' "$out" | grep -qF '已导入 Team 的配置带的节点：US-S（这台机器的可选节点）' &&
-		python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c["nodes"] == ["US-S"] and c["node_ids"].get("US-S") == sys.argv[2] and c["local"]["client"] == "builtin" else 1)' "$SH/.cca/config.json" "$FPA" 2>/dev/null &&
+		kt check -f c="$SH/.cca/config.json" 'c["nodes"] == ["US-S"] and c["node_ids"].get("US-S") == argv[0] and c["local"]["client"] == "builtin"' "$FPA" 2>/dev/null &&
 		grep -q '"sam(sam@example.com)": "US-S"' "$SH/.cca/accounts.json" && printf '%s' "$out" | grep -q '本机端口池已就绪：内置代理 127.0.0.1:7901' &&
 		[ "$boot" = "@reboot $C _core-keep >/dev/null 2>&1 # cca-core" ] && [ -n "$(keeper "$SH")" ] && [ "$(get)" = cca-linux-ok ] &&
 		! printf '%s' "$out" | grep -qE '现在配置路由器|新增第一个账号|没找到 Claude Code' && ! printf '%s' "$out" | grep -qF "$SLINK"; then
@@ -868,7 +727,7 @@ SH2="$D/shome2"; mkdir -p "$SH2/.local/bin"
 if [ -x "$D/mihomo" ]; then mkdir -p -m 700 "$SH2/.cca" "$SH2/.cca/core" && cp "$D/mihomo" "$SH2/.cca/core/mihomo-v$(sed -n 's/^CORE_VERSION="\(.*\)"$/\1/p' "$C")"; fi
 out=$(HOME="$SH2" PATH="$SH2/.local/bin:$PATH" CCA_TTY="$(ans n 'socks5://127.0.0.1:18080' . n n n)" "$C" install 2>&1); rc=$?
 if [ $rc -eq 0 ] && printf '%s' "$out" | grep -q '有没有 Team 的邀请链接？' && printf '%s' "$out" | grep -q '已加上你的代理：' &&
-	python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if len(c["nodes"]) == 1 and c["local"]["client"] == "builtin" else 1)' "$SH2/.cca/config.json" 2>/dev/null &&
+	kt check -f c="$SH2/.cca/config.json" 'len(c["nodes"]) == 1 and c["local"]["client"] == "builtin"' 2>/dev/null &&
 	[ -z "$(ls "$SH2/.cca/teams" 2>/dev/null)" ]; then
 	ok "服务器上直连不通、没有 Team 的邀请链接：粘贴一条自己的代理（内核校验过）当可选节点，配置好内置代理；没加入 Team"
 else no "服务器上直连不通、贴自己的代理（退出码 $rc）：$(printf '%s' "$out" | tail -n 4)"; fi
@@ -912,18 +771,8 @@ case "$*" in
 esac
 S
 	printf '#!/bin/sh\n[ "$1" = clash ] || exit 1\np=$(cat "%s/clash.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"\n' "$RT" > "$RB/pidof"
-	cat > "$RB/netstat" <<'S'
-#!/usr/bin/env python3
-for f in ('/proc/net/tcp', '/proc/net/tcp6'):
-    try:
-        rows = open(f).read().splitlines()[1:]
-    except OSError:
-        continue
-    for r in rows:
-        p = r.split()
-        if len(p) > 3 and p[3] == '0A':
-            print('tcp 0 0 0.0.0.0:%d 0.0.0.0:* LISTEN' % int(p[1].rsplit(':', 1)[1], 16))
-S
+	# 假的 netstat：每个在监听的端口一行（cca-test 的角色 netstat 读内核的表，见 tests/tool/fake/linux_netstat.rs）；路由器端给它的参数不看
+	{ echo '#!/bin/sh'; echo "exec '$KT' netstat /proc/net/tcp /proc/net/tcp6 -- \"\$@\""; } > "$RB/netstat"
 	cat > "$RT/etc/init.d/openclash" <<S
 #!/bin/sh
 [ "\$1" = restart ] || exit 0
@@ -952,10 +801,7 @@ S
 	cp "$D/mihomo" "$RT/etc/openclash/clash"
 	( exec "$RT/etc/openclash/clash" -d "$RT/etc/openclash" -f "$RT/etc/openclash/custom.yaml" > "$D/router-core.log" 2>&1 ) &
 	echo $! > "$RT/clash.pid"; echo $! >> "$D/pids"
-	python3 -c 'import socket
-s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.2", 12222)); s.listen(64)
-while True:
-    s.accept()[0].close()' & echo $! >> "$D/pids"
+	"$KT" accept-close 127.0.0.2:12222 & echo $! >> "$D/pids"
 	for i in $(seq 1 40); do curl -q -s -m 1 --noproxy '*' -H 'Authorization: Bearer test-secret' http://127.0.0.1:19390/version | grep -q version && listen 12222 127.0.0.2 && break; sleep 0.25; done
 	rr() { HOME="$RH" PATH="$SB:$RH/.local/bin:$PATH" "$@"; }   # ~/.local/bin 在 PATH 里：cca install 不问要不要写进 ~/.bashrc（一键安装那里测过）
 	out=$(rr env CCA_TTY="$(ans y 127.0.0.2 '' 12222 '1 2' y alice@example.com alice 1 y)" "$C" install 2>&1); rc=$?
@@ -976,7 +822,7 @@ while True:
 	if [ $rc -eq 0 ] && grep -q 'EXCHANGE code=good-home https_proxy=http://127.0.0.2:7901$' "$D/claude.log" && printf '%s' "$l" | grep -q 'https_proxy=http://127.0.0.2:7901 '; then
 		ok "在家启动账号：认出在家（nc 连得上路由器的 SSH 端口），登录时换 token、启动的 claude 都经路由器的端口"
 	else no "在家启动账号（退出码 $rc）：${l:-没有启动 claude}；$(grep '^EXCHANGE' "$D/claude.log" | tail -n 1)；$(printf '%s' "$out" | tail -n 3)"; fi
-	if python3 -c 'import json,sys; n={p["name"]: p for p in json.load(open(sys.argv[1]))["proxies"]}; sys.exit(0 if n["US-A"]["port"] == 18080 and n["US-B"]["port"] == 18082 else 1)' "$RH/.cca/core/nodes.json" 2>/dev/null &&
+	if kt check -f j="$RH/.cca/core/nodes.json" 'n = {p["name"]: p for p in j["proxies"]}; n["US-A"]["port"] == 18080 and n["US-B"]["port"] == 18082' 2>/dev/null &&
 		[ "$(stat -c %a "$RH/.cca/core/nodes.json")" = 600 ]; then
 		ok "在家时在后台给内置代理拷节点：路由器端自己写 JSON（这台机器不用 ruby），存成 600 的 core/nodes.json"
 	else no "给内置代理拷节点：$(head -c 200 "$RH/.cca/core/nodes.json" 2>/dev/null || echo 没有 core/nodes.json)"; fi
@@ -990,14 +836,16 @@ elif [ ! -x "$D/mihomo" ]; then
 else
 	router_test
 fi
-# Team 的同步服务器的一键安装脚本（tests/hub_deploy.py，假服务器在 tests/hub_box.py）：这个发行版的 sh、openssl、python3、coreutils / busybox，
+# Team 的同步服务器的一键安装脚本（suite 的 hub_deploy 模块，假服务器是 tests/kit/hubbox.rs）：这个发行版的 sh、openssl、coreutils / busybox，
 # 假的 systemctl、docker 起真的服务端（设备的密钥要 ssh-keygen）
 if ! command -v openssl >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
 	echo "  （跳过 Team 的同步服务器的安装脚本：要 openssl、ssh-keygen）"
-elif CCA_HELPER="$HB" python3 "$R/tests/hub_deploy.py" > "$D/hub_deploy.log" 2>&1; then
-	ok "Team 的同步服务器的安装脚本：在这个发行版的 sh（$(readlink -f /bin/sh 2>/dev/null || echo /bin/sh)）上装好、更新、卸载，网页端的证书助手，经 SSH 部署、接上"
+elif suite_run hub_deploy; then
+	ok "Team 的同步服务器的安装脚本：在这个发行版的 sh（$(readlink -f /bin/sh 2>/dev/null || echo /bin/sh)）上装好、更新、卸载，网页端的证书助手，经 SSH 部署、接上（${SN}）"
 else
-	no "Team 的同步服务器的安装脚本：$(grep -E '^(FAIL|ERROR|AssertionError|[A-Za-z]+Error)' "$D/hub_deploy.log" | head -n 6 | tr '\n' ' ')"
+	no "Team 的同步服务器的安装脚本：$SW"; suite_more hub_deploy
 fi
+# 小工具遇到过不认识的写法（退出码 2 的那种：上面哪一条用例里的判断其实没做成）：算失败，说出是哪一句
+[ ! -s "$D/trap" ] || no "cca-test 遇到了不认识的写法：$(head -n 3 "$D/trap" | tr '\n\t' '| ')"
 echo "  结果：$pass 通过，$fail 失败"
 [ $fail -eq 0 ]
