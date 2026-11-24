@@ -27,14 +27,23 @@ fi
 case "$(uname -m)" in arm64) HOST_TARGET=aarch64-apple-darwin ;; *) HOST_TARGET=x86_64-apple-darwin ;; esac
 # 测试用的小工具 cca-test（tests/ 的 Rust 包 cca-tests：断言的求值器、假命令扮演的角色、造测试数据……见 tests/CLAUDE.md），和辅助程序
 # 一样先编（--profile kit：见 cli/Cargo.toml）。CCA_TEST_BIN=路径：不编，用这一份。沙箱里的假命令经 $CCA_T/cca-test 找它
-TESTBIN="${CCA_TEST_BIN:-}"
-if [ -z "$TESTBIN" ]; then
-	TESTBIN="$(dirname "$CCA")/cli/target/kit/cca-test"
-	( cd "$(dirname "$CCA")/cli" && cargo build --profile kit -p cca-tests --locked --offline ) > "$T/cargo-kit.log" 2>&1 ||
-		{ tail -n 30 "$T/cargo-kit.log" >&2; echo "测试用的小工具编不出来（cd cli && cargo build --profile kit -p cca-tests）" >&2; exit 1; }
+# 同一个包里还有各份把 cca、辅助程序当黑盒的测试（tests/<模块>.rs）合成的程序 suite（运行器见 tests/kit/harness.rs 开头）：一条 cargo 命令
+# 两样都编出来，suite 编在哪要问 cargo（文件名里带着哈希）。CCA_SUITE_BIN=路径：用这一份
+TESTBIN="${CCA_TEST_BIN:-}"; SUITEBIN="${CCA_SUITE_BIN:-}"
+if [ -z "$TESTBIN" ] || [ -z "$SUITEBIN" ]; then
+	( cd "$(dirname "$CCA")/cli" && cargo test --profile kit -p cca-tests --no-run --locked --offline --message-format=json-render-diagnostics ) > "$T/cargo-kit.json" 2> "$T/cargo-kit.log" ||
+		{ tail -n 30 "$T/cargo-kit.log" >&2; echo "测试用的小工具编不出来（cd cli && cargo test --profile kit -p cca-tests --no-run）" >&2; exit 1; }
+	[ -n "$TESTBIN" ] || TESTBIN="$(dirname "$CCA")/cli/target/kit/cca-test"
+	[ -n "$SUITEBIN" ] || SUITEBIN=$(sed -n 's/.*"kind":\["test"\][^}]*"name":"suite".*"executable":"\([^"]*\)".*/\1/p' "$T/cargo-kit.json" | tail -n 1)
 fi
 [ -x "$TESTBIN" ] || { echo "测试用的小工具不在：$TESTBIN" >&2; exit 1; }
+[ -x "$SUITEBIN" ] || { echo "各份测试合成的那个程序（suite）不在：${SUITEBIN:-cargo 没说编在哪}" >&2; exit 1; }
 ln -sf "$TESTBIN" "$T/cca-test"
+suite_run() {   # suite_run 模块：只跑 suite 里的这一个模块（tests/<模块>.rs），它说的留在 $T/suite-<模块>.log；out 是最后几行（DEBUG_OUT 时附在失败的用例后面）
+	CCA_HELPER="$HELPER_BIN" CCA_TEST_BIN="$TESTBIN" CCA_REPO="$(dirname "$CCA")" "$SUITEBIN" --module "$1" > "$T/suite-$1.log" 2>&1; local rc=$?
+	out=$(tail -n 40 "$T/suite-$1.log")
+	return $rc
+}
 # 求值器不认识的写法（cca-test 的退出码 2）都记进这个文件，结尾有一条用例查它是空的：不然 ! cfgok '…' 这种取反的断言会悄悄通过。
 # 放在沙箱外面（分节续跑恢复快照时不会被换掉）
 export CCA_TEST_TRAP="$T.trap"; : > "$CCA_TEST_TRAP"
@@ -283,6 +292,10 @@ ok "辅助程序（cli/）自己的单元测试：cargo test" '( cd "$D/../cli" 
 # 代码照仓库根的 rustfmt.toml 排过（cli/ 和 tests/ 两个包都是；工具链是固定的，排出来哪台机器都一样）：没排过的改动一合进来，以后谁顺手 cargo fmt 就是一大片不相干的改动。
 # 生成的数据表标着 #[rustfmt::skip]，不参与
 ok "Rust 代码（cli/ 和 tests/）排过版：cargo fmt --all --check（没过就在 cli/ 里运行 cargo fmt --all）" '( cd "$D/../cli" && cargo fmt --all --check ) > "$T/cargo-fmt.log" 2>&1'
+# tests/ 那个包自己的检查：支持库 kit 和小工具 cca-test 的单元测试（断言的求值器对着从 CPython 取来的对照数据、属性列表、假命令的角色……），
+# 和底座的自测（suite 的 kit_selftest 模块：起进程不漏描述符和环境、伪终端和控制终端、运行器的超时、收尾、漏登记的用例）
+ok "测试工具自己的单元测试（tests/ 的支持库 kit 和小工具 cca-test）：cargo test --profile kit -p cca-tests --lib --bins" '( cd "$D/../cli" && cargo test --profile kit -p cca-tests --lib --bins --locked --offline ) > "$T/cargo-test-kit.log" 2>&1'
+ok "测试的底座自测（kit_selftest）：起的子进程只带写明的环境和文件描述符、新会话和控制终端、伪终端，运行器的时限、收尾、跳过、结果文件" 'suite_run kit_selftest'
 ok "设备标识：旧配置迁移、共享链接、客户端重置、改别名和并发初始化" 'python3 "$D/device_identity.py"'
 ok "共享资料：历史记忆配置跨账号可见，未知状态隔离，配置合并和冲突副本保留" 'python3 "$D/shared_state.py"'
 ok "浏览器隔离：不降级默认浏览器，预检和启动失败传递" 'python3 "$D/isolation_browser.py"'
