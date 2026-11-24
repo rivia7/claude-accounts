@@ -469,23 +469,20 @@ struct QuotaGroupsView: View {
             ForEach(Array(usage.quotaGroups.enumerated()), id: \.offset) { _, g in
                 group(g)
             }
-            if let d = usage.quotaDescription {
-                Text(d)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 
     private func group(_ g: QuotaGroup) -> some View {
         let tiles = Self.tiles(g)
-        let minor = Self.minor(g)
+        let solo = Self.solo(g)
+        let minor = solo == nil ? Self.minor(g) : []
         return VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(nonEmpty(g.name) ?? "额度").font(.callout.weight(.semibold))
-                if let d = nonEmpty(g.description) {
-                    Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(d)
+                HStack(spacing: 10) {
+                    Text(g.displayName).font(.callout.weight(.semibold))
+                    if let solo {
+                        Text(solo).font(.callout).foregroundStyle(.secondary)
+                    }
                 }
             }
             if !tiles.isEmpty {
@@ -508,24 +505,37 @@ struct QuotaGroupsView: View {
     static func tiles(_ g: QuotaGroup) -> [(title: String, bucket: QuotaBucket)] {
         let shown = g.buckets.filter { !$0.disabled && ($0.used.utilization != nil || $0.used.reset) }
         func rank(_ b: QuotaBucket) -> Int { b.slot.map { $0 == .fiveHour ? 0 : 1 } ?? 2 }
-        return shown.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map { (title($0.element), $0.element) }
+        return shown.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map { (title($0.element, in: g), $0.element) }
     }
 
-    static func title(_ b: QuotaBucket) -> String {
+    /// 认出窗口的叫 5 小时、本周（和 Claude 的一样）；认不出的不用 agy 给的英文名字，叫“其他额度”，一组里有几个时编上号
+    static func title(_ b: QuotaBucket, in g: QuotaGroup) -> String {
         switch b.slot {
         case .fiveHour?: return "5 小时"
         case .sevenDay?: return "本周"
-        case nil: return nonEmpty(b.name) ?? "额度"
+        case nil:
+            let others = g.buckets.filter { $0.slot == nil }
+            guard others.count > 1, let i = others.firstIndex(of: b) else { return "其他额度" }
+            return "其他额度 \(i + 1)"
         }
     }
 
     /// 没有百分比的：停用了的写“不可用”，agy 给了剩几次的写次数
+    static func minorValue(_ b: QuotaBucket) -> String? {
+        if b.disabled { return "不可用" }
+        guard b.used.utilization == nil, !b.used.reset, let n = b.remainingAmount else { return nil }
+        return "还剩 \(n) 次"
+    }
+
     static func minor(_ g: QuotaGroup) -> [MinorQuota] {
-        g.buckets.compactMap { b in
-            if b.disabled { return MinorQuota(title: title(b), value: "不可用") }
-            guard b.used.utilization == nil, !b.used.reset, let n = b.remainingAmount else { return nil }
-            return MinorQuota(title: title(b), value: "还剩 \(n) 次")
-        }
+        g.buckets.compactMap { b in minorValue(b).map { MinorQuota(title: title(b, in: g), value: $0) } }
+    }
+
+    /// 一组只有一个额度、认不出窗口、没有百分比（Gemini Flash 这一组只有一个停用的）：不另起一行，
+    /// “不可用”“还剩 N 次”直接写在组名后面
+    static func solo(_ g: QuotaGroup) -> String? {
+        guard g.buckets.count == 1, let b = g.buckets.first, b.slot == nil else { return nil }
+        return minorValue(b)
     }
 }
 
@@ -562,7 +572,6 @@ struct QuotaStack: View {
         // 窗口都认不出：写用得最多的那个额度（停用的、没有百分比的不算）
         let all = u.quotaGroups.flatMap { g in g.buckets.filter { !$0.disabled && $0.used.utilization != nil }.map { (g, $0) } }
         guard let (g, b) = all.max(by: { ($0.1.used.utilization ?? 0) < ($1.1.used.utilization ?? 0) }) else { return [] }
-        let name = [nonEmpty(g.name), nonEmpty(b.name)].compactMap { $0 }.joined(separator: " · ")
-        return [Row(label: "额度", spoken: "额度用量", window: b.used, note: name.isEmpty ? nil : name)]
+        return [Row(label: "额度", spoken: "额度用量", window: b.used, note: g.displayName)]
     }
 }

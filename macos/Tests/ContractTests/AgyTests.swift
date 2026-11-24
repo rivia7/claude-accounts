@@ -68,6 +68,15 @@ func agyFixtureTests() {
         check("usage_agy：没有百分比的额度带着还剩几次；停用的额度", requests?.remainingAmount == 12 && requests?.used.utilization == nil
               && requests?.id == nil && flash?.disabled == true && flash?.used.utilization == nil)
         check("usage_agy：没登录的账号没有额度", h?.source == UsageSource.none && h?.errorCode == .login && h?.quotaGroups.isEmpty == true)
+        // 界面上的组名不放没翻译的英文
+        do {
+            let j = #"[{"name": "Gemini Models", "buckets": []}, {"name": "Claude and GPT models", "buckets": []}, {"name": "Gemini Flash", "buckets": []}, {"name": " ", "buckets": []}]"#
+            let gs = try JSONDecoder().decode([QuotaGroup].self, from: Data(j.utf8))
+            check("组名：… models 写成 … 模型、and 写成顿号，模型名照写，没有名字叫额度",
+                  gs.map(\.displayName) == ["Gemini 模型", "Claude、GPT 模型", "Gemini Flash", "额度"])
+        } catch {
+            check("组名的样例解码：\(error)", false)
+        }
     }
     quotaPressureTests()
     check("没有桌面 App：不给下载 App 的补救", Remedy.forCode(.appMissing, tool: .agy, key: gina.key) == Remedy.none

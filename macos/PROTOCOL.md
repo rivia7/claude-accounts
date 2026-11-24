@@ -630,6 +630,8 @@ cca App（`macos/`）只经这里写的接口和 cca 打交道：**不读 `~/.cc
   `error`（`error_detail` 是 agy 的原话）。`_gui state` 里 agy 账号的 `usage` 是缓存里的这些（3.6.10 及以前的 cca 一直是 null）。
   App 怎么显示：账号页一组一块，每组照 Claude 的样子画 5 小时、本周；侧栏、菜单栏面板、总览卡片的小条写各组里同一个窗口用得最多的那个；
   算不算额度用完（总览、账号页那句话、菜单栏图标的标记）看用得最少的那个：一组一般是一类模型，一组用完了别的组的模型照样能用。
+  App 里不放 agy 给的英文：组名的 `… models` 写成“… 模型”、` and ` 写成顿号（`QuotaGroup.displayName`），组和额度的 `description`、
+  `quota_description` 不显示，认不出窗口的额度叫“其他额度”（不用 agy 给的 `name`）。
   旧版 cca 没有 `quota_groups`、`quota_description`（`cca agy usage` 只回 `unsupported`）。
 - 没有 5 小时限制的账号（Claude 的 Ultra 这类套餐，ChatGPT 的 Pro 500）：查到了用量（`source` 不是 `none`）、`seven_day` 有而 `five_hour` 是 null（接口没给 5 小时的窗口）。
   App 这时不画 5 小时那一行（侧栏、菜单栏面板、总览卡片、账号页）；没查到用量时照常画成“—”。5 小时的窗口还没开始计时（0%、没有重置时间）不算，照常画。

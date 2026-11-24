@@ -207,6 +207,19 @@ struct QuotaGroup: Decodable, Sendable, Equatable {
     }
 }
 
+extension QuotaGroup {
+    /// 界面上的组名：agy 给的是英文（Gemini Models、Claude and GPT models），App 里不放没翻译的英文——
+    /// “… models” 写成“… 模型”、“ and ”写成顿号；剩下的是模型的名字（Gemini Flash），照写；没有名字为“额度”。
+    var displayName: String {
+        guard var n = name?.trimmingCharacters(in: .whitespaces), !n.isEmpty else { return "额度" }
+        for suffix in [" models", " model"] where n.lowercased().hasSuffix(suffix) {
+            n = String(n.dropLast(suffix.count)) + " 模型"
+            break
+        }
+        return n.replacingOccurrences(of: " and ", with: "、", options: .caseInsensitive)
+    }
+}
+
 /// 一个账号的用量（`usage --json` 的 `accounts[]`，也是 `_gui state` 里账号的 `usage`）。
 struct UsageEntry: Decodable, Sendable, Equatable {
     var account: String?
@@ -453,7 +466,7 @@ extension UsageEntry {
     /// 各组里这个窗口的额度（停用的、没有百分比的不算），带着组名
     func quotaBuckets(_ slot: QuotaSlot) -> [(group: String?, bucket: QuotaBucket)] {
         quotaGroups.flatMap { g in
-            g.buckets.filter { $0.slot == slot && !$0.disabled && $0.used.utilization != nil }.map { (nonEmpty(g.name), $0) }
+            g.buckets.filter { $0.slot == slot && !$0.disabled && $0.used.utilization != nil }.map { (g.displayName, $0) }
         }
     }
 
